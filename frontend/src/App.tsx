@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchStatus, type AppStatus } from "./api";
+import { StudyList } from "./StudyList";
 
 export function App() {
   const [status, setStatus] = useState<AppStatus | null>(null);
@@ -22,8 +23,8 @@ export function App() {
     <main
       style={{
         fontFamily: "system-ui, sans-serif",
-        maxWidth: 560,
-        margin: "10vh auto",
+        maxWidth: 760,
+        margin: "8vh auto",
         padding: "0 1rem",
         color: "#1a1a1a",
       }}
@@ -50,6 +51,8 @@ export function App() {
           </tbody>
         </table>
       )}
+
+      <StudyList />
     </main>
   );
 }

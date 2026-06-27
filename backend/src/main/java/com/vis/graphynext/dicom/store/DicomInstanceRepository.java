@@ -25,4 +25,23 @@ public interface DicomInstanceRepository extends JpaRepository<DicomInstance, St
                                     @Param("studyUid") String studyUid,
                                     @Param("seriesUid") String seriesUid,
                                     @Param("sopUid") String sopUid);
+
+    /** スタディ単位の集計（一覧表示用）。 */
+    @Query("""
+            select i.studyInstanceUid as studyInstanceUid,
+                   i.patientId as patientId,
+                   count(i) as numberOfInstances
+            from DicomInstance i
+            group by i.studyInstanceUid, i.patientId
+            """)
+    List<StudySummary> findStudySummaries();
+
+    /** findStudySummaries の射影。 */
+    interface StudySummary {
+        String getStudyInstanceUid();
+
+        String getPatientId();
+
+        long getNumberOfInstances();
+    }
 }

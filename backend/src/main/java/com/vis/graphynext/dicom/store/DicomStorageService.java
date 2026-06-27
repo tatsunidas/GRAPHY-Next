@@ -96,6 +96,15 @@ public class DicomStorageService {
         return repo.findMatches(patientId, studyUid, seriesUid, sopUid);
     }
 
+    /** ローカル索引のスタディ一覧（UI 向け）。 */
+    @Transactional(readOnly = true)
+    public List<com.vis.graphynext.dicom.StudyDto> listStudies() {
+        return repo.findStudySummaries().stream()
+                .map(s -> new com.vis.graphynext.dicom.StudyDto(
+                        s.getStudyInstanceUid(), s.getPatientId(), null, s.getNumberOfInstances()))
+                .toList();
+    }
+
     private static String value(Attributes fmi, int fmiTag, Attributes ds, int dsTag) {
         if (fmi != null) {
             String v = fmi.getString(fmiTag);

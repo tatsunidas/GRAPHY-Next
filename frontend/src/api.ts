@@ -24,3 +24,18 @@ export async function fetchStatus(): Promise<AppStatus> {
   }
   return res.json();
 }
+
+export interface Study {
+  studyInstanceUid: string;
+  patientId: string;
+  patientName: string | null;
+  numberOfInstances: number;
+}
+
+export async function fetchStudies(): Promise<Study[]> {
+  const res = await fetch(`${apiBase()}/api/studies`);
+  if (!res.ok) {
+    throw new Error(`studies ${res.status}`);
+  }
+  return res.json();
+}

@@ -91,6 +91,19 @@ class DicomStoreIntegrationTest {
         }
     }
 
+    @Test
+    void listStudies_groupsInstancesByStudy() throws Exception {
+        storage.ingest(writePhantom(DicomPhantomFactory.scImage("PA", "ST.A", "SE.A", "SOP.A1")));
+        storage.ingest(writePhantom(DicomPhantomFactory.scImage("PA", "ST.A", "SE.A", "SOP.A2")));
+        storage.ingest(writePhantom(DicomPhantomFactory.scImage("PB", "ST.B", "SE.B", "SOP.B1")));
+
+        var studies = storage.listStudies();
+        var a = studies.stream().filter(s -> "ST.A".equals(s.studyInstanceUid())).findFirst().orElseThrow();
+        assertEquals(2, a.numberOfInstances(), "ST.A はインスタンス2件");
+        assertEquals("PA", a.patientId());
+        assertTrue(studies.stream().anyMatch(s -> "ST.B".equals(s.studyInstanceUid())), "ST.B も一覧に出る");
+    }
+
     private static Path writePhantom(Attributes ds) throws Exception {
         Path f = Files.createTempFile("phantom", ".dcm");
         return DicomPhantomFactory.writeFile(f, ds, UID.ExplicitVRLittleEndian);
