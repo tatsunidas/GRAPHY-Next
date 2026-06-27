@@ -1,5 +1,6 @@
 package com.vis.graphynext;
 
+import com.vis.graphynext.startup.StartupProgressListener;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
@@ -17,6 +18,9 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 public class GraphyNextApplication {
 
     public static void main(String[] args) {
-        SpringApplication.run(GraphyNextApplication.class, args);
+        SpringApplication app = new SpringApplication(GraphyNextApplication.class);
+        // standalone のスプラッシュ向けに起動進捗を stdout へ出すリスナー（早い段階のイベントを拾う）
+        app.addListeners(new StartupProgressListener());
+        app.run(args);
     }
 }

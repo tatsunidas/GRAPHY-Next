@@ -17,6 +17,9 @@ const { spawn } = require("node:child_process");
 const path = require("node:path");
 const http = require("node:http");
 const fs = require("node:fs");
+const readline = require("node:readline");
+
+const PROGRESS_PREFIX = "__GRAPHY_PROGRESS__";
 
 const cfg = require("./config.json");
 
@@ -76,12 +79,36 @@ function startBackend() {
       `--spring.profiles.active=${PROFILE}`,
       `--server.port=${PORT}`,
     ],
-    { stdio: "inherit" },
+    { stdio: ["ignore", "pipe", "pipe"] },
   );
+  wireBackendOutput(backendProc);
   backendProc.on("exit", (code) => {
     console.log(`[backend] exited (code=${code})`);
     backendProc = null;
   });
+}
+
+/** backend の stdout/stderr を行単位で読み、進捗行はスプラッシュへ、それ以外はログへ。 */
+function wireBackendOutput(proc) {
+  if (proc.stdout) {
+    readline.createInterface({ input: proc.stdout }).on("line", (line) => {
+      const i = line.indexOf(PROGRESS_PREFIX);
+      if (i >= 0) {
+        try {
+          forwardProgress(JSON.parse(line.slice(i + PROGRESS_PREFIX.length)));
+        } catch {
+          // 進捗行のパース失敗は無視
+        }
+      } else {
+        console.log("[backend]", line);
+      }
+    });
+  }
+  if (proc.stderr) {
+    readline.createInterface({ input: proc.stderr }).on("line", (line) => {
+      console.error("[backend]", line);
+    });
+  }
 }
 
 /** ヘルスチェックパスが 200 を返すまでポーリングする。 */
@@ -110,15 +137,66 @@ function waitForBackend(timeoutMs = HEALTH_TIMEOUT_MS) {
   });
 }
 
+// --- スプラッシュ（起動進捗表示）---
+let splashWin = null;
+let splashReady = false;
+const progressQueue = [];
+
+function createSplash() {
+  splashWin = new BrowserWindow({
+    width: 480,
+    height: 340,
+    frame: false,
+    resizable: false,
+    center: true,
+    show: true,
+    backgroundColor: "#0b1b2b",
+    webPreferences: {
+      preload: path.join(__dirname, "splash-preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  splashWin.loadFile(path.join(__dirname, "splash.html"));
+  splashWin.webContents.on("did-finish-load", () => {
+    splashReady = true;
+    for (const p of progressQueue) {
+      splashWin.webContents.send("progress", p);
+    }
+    progressQueue.length = 0;
+  });
+}
+
+function forwardProgress(obj) {
+  if (splashReady && splashWin && !splashWin.isDestroyed()) {
+    splashWin.webContents.send("progress", obj);
+  } else {
+    progressQueue.push(obj);
+  }
+}
+
+function closeSplash() {
+  if (splashWin && !splashWin.isDestroyed()) {
+    splashWin.close();
+  }
+  splashWin = null;
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: WINDOW.width,
     height: WINDOW.height,
+    show: false, // ロード完了まで隠す（スプラッシュからの切替えを滑らかに）
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
     },
+  });
+
+  win.once("ready-to-show", () => {
+    win.show();
+    closeSplash(); // メイン表示と同時にスプラッシュを閉じる
   });
 
   if (DEV) {
@@ -130,13 +208,15 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  createSplash();
   try {
     startBackend();
     await waitForBackend();
   } catch (e) {
     console.error("[startup]", e);
+    forwardProgress({ step: "error", state: "error", message: "起動に失敗しました: " + (e.message || e) });
   }
-  createWindow();
+  createWindow(); // スプラッシュは createWindow の ready-to-show で閉じる
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

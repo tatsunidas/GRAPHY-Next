@@ -21,6 +21,9 @@ server:
 # StatusController が返すバージョン（CI/リリースで上書き可能）
 graphy:
   version: 0.1.0
+  # プラグイン格納フォルダ（standalone）。読取専用バンドルを避け書込可能な場所を指す。
+  plugins:
+    dir: ./plugins
   cors:
     # /api/** に対する許可オリジン（dev の Vite と Electron file://=null を想定）
     allowed-origin-patterns:

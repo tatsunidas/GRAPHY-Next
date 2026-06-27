@@ -50,7 +50,9 @@ public class DicomScpLifecycle implements SmartLifecycle {
 
     @Override
     public void start() {
+        com.vis.graphynext.startup.StartupProgress.report("scp", "running", "DICOM 受信(SCP)を開始しています");
         server.start();
+        com.vis.graphynext.startup.StartupProgress.report("scp", "ok", "DICOM 受信(SCP)を開始しました");
     }
 
     @Override

@@ -15,7 +15,7 @@
   "build": {
     "appId": "com.vis.graphynext",
     "productName": "GRAPHY-Next",
-    "files": ["main.js", "preload.js", "config.json", "renderer/**"],
+    "files": ["main.js", "preload.js", "splash.html", "splash-preload.js", "config.json", "renderer/**"],
     "extraResources": [
       { "from": "resources/backend", "to": "backend" },
       { "from": "resources/jre", "to": "jre" }
