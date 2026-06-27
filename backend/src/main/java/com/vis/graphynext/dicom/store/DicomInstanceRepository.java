@@ -30,17 +30,65 @@ public interface DicomInstanceRepository extends JpaRepository<DicomInstance, St
     @Query("""
             select i.studyInstanceUid as studyInstanceUid,
                    i.patientId as patientId,
+                   max(i.patientName) as patientName,
+                   max(i.studyDate) as studyDate,
+                   max(i.studyDescription) as studyDescription,
+                   max(i.modality) as modality,
                    count(i) as numberOfInstances
             from DicomInstance i
             group by i.studyInstanceUid, i.patientId
+            order by max(i.studyDate) desc
             """)
     List<StudySummary> findStudySummaries();
+
+    /** スタディ内のシリーズ単位の集計。 */
+    @Query("""
+            select i.seriesInstanceUid as seriesInstanceUid,
+                   max(i.modality) as modality,
+                   max(i.seriesNumber) as seriesNumber,
+                   max(i.seriesDescription) as seriesDescription,
+                   count(i) as numberOfInstances
+            from DicomInstance i
+            where i.studyInstanceUid = :studyUid
+            group by i.seriesInstanceUid
+            order by max(i.seriesNumber)
+            """)
+    List<SeriesSummary> findSeriesSummaries(@Param("studyUid") String studyUid);
+
+    /** シリーズ内のインスタンス（InstanceNumber 順）。 */
+    @Query("""
+            select i from DicomInstance i
+            where i.studyInstanceUid = :studyUid and i.seriesInstanceUid = :seriesUid
+            order by i.instanceNumber
+            """)
+    List<DicomInstance> findBySeries(@Param("studyUid") String studyUid, @Param("seriesUid") String seriesUid);
 
     /** findStudySummaries の射影。 */
     interface StudySummary {
         String getStudyInstanceUid();
 
         String getPatientId();
+
+        String getPatientName();
+
+        String getStudyDate();
+
+        String getStudyDescription();
+
+        String getModality();
+
+        long getNumberOfInstances();
+    }
+
+    /** findSeriesSummaries の射影。 */
+    interface SeriesSummary {
+        String getSeriesInstanceUid();
+
+        String getModality();
+
+        Integer getSeriesNumber();
+
+        String getSeriesDescription();
 
         long getNumberOfInstances();
     }

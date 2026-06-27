@@ -73,8 +73,20 @@ public class DicomStorageService {
         // 冪等: 同一 SOPInstanceUID の再受信は上書き
         Files.move(tempFile, dest, StandardCopyOption.REPLACE_EXISTING);
 
-        DicomInstance entity = new DicomInstance(iuid, cuid, tsuid, patientId, studyUid, seriesUid,
-                dest.toUri().toString());
+        DicomInstance entity = new DicomInstance(iuid);
+        entity.setSopClassUid(cuid);
+        entity.setTransferSyntaxUid(tsuid);
+        entity.setPatientId(patientId);
+        entity.setPatientName(ds.getString(Tag.PatientName));
+        entity.setStudyInstanceUid(studyUid);
+        entity.setStudyDate(ds.getString(Tag.StudyDate));
+        entity.setStudyDescription(ds.getString(Tag.StudyDescription));
+        entity.setSeriesInstanceUid(seriesUid);
+        entity.setModality(ds.getString(Tag.Modality));
+        entity.setSeriesNumber(ds.getInt(Tag.SeriesNumber, 0));
+        entity.setSeriesDescription(ds.getString(Tag.SeriesDescription));
+        entity.setInstanceNumber(ds.getInt(Tag.InstanceNumber, 0));
+        entity.setUri(dest.toUri().toString());
         try {
             DicomInstance saved = repo.save(entity);
             log.info("INDEXED sop={} study={} -> {}", iuid, studyUid, dest);
@@ -101,7 +113,28 @@ public class DicomStorageService {
     public List<com.vis.graphynext.dicom.StudyDto> listStudies() {
         return repo.findStudySummaries().stream()
                 .map(s -> new com.vis.graphynext.dicom.StudyDto(
-                        s.getStudyInstanceUid(), s.getPatientId(), null, s.getNumberOfInstances()))
+                        s.getStudyInstanceUid(), s.getPatientId(), s.getPatientName(),
+                        s.getStudyDate(), s.getStudyDescription(), s.getModality(),
+                        s.getNumberOfInstances()))
+                .toList();
+    }
+
+    /** スタディ内のシリーズ一覧。 */
+    @Transactional(readOnly = true)
+    public List<com.vis.graphynext.dicom.SeriesDto> listSeries(String studyUid) {
+        return repo.findSeriesSummaries(studyUid).stream()
+                .map(s -> new com.vis.graphynext.dicom.SeriesDto(
+                        s.getSeriesInstanceUid(), s.getModality(), s.getSeriesNumber(),
+                        s.getSeriesDescription(), s.getNumberOfInstances()))
+                .toList();
+    }
+
+    /** シリーズ内のインスタンス一覧。 */
+    @Transactional(readOnly = true)
+    public List<com.vis.graphynext.dicom.InstanceDto> listInstances(String studyUid, String seriesUid) {
+        return repo.findBySeries(studyUid, seriesUid).stream()
+                .map(i -> new com.vis.graphynext.dicom.InstanceDto(
+                        i.getSopInstanceUid(), i.getInstanceNumber(), i.getSopClassUid()))
                 .toList();
     }
 

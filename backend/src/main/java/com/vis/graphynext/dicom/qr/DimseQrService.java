@@ -96,6 +96,9 @@ public class DimseQrService {
                             a.getString(Tag.StudyInstanceUID),
                             a.getString(Tag.PatientID),
                             a.getString(Tag.PatientName),
+                            a.getString(Tag.StudyDate),
+                            a.getString(Tag.StudyDescription),
+                            a.getString(Tag.ModalitiesInStudy),
                             a.getInt(Tag.NumberOfStudyRelatedInstances, 0)));
                 } catch (Exception e) {
                     log.warn("C-FIND 応答のパースに失敗: {} ({})", f, e.toString());
