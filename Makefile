@@ -13,6 +13,8 @@ SHELL := /bin/bash
 ROOT  := $(CURDIR)
 BACKEND_JAR := backend/target/graphy-next-backend.jar
 MVN ?= mvn
+# JRE 同梱用。CI では setup-java が JAVA_HOME を設定（?= は環境値を優先）。
+JAVA_HOME ?= /usr/lib/jvm/temurin-21-jdk-amd64
 
 .PHONY: install install-frontend install-desktop \
         build build-frontend build-backend build-desktop \
@@ -36,12 +38,14 @@ build-frontend:
 build-backend:
 	cd backend && $(MVN) -q clean package
 
-# --- desktop (backend が生成した frontend/dist と jar を同梱) ---
+# --- desktop (backend が生成した frontend/dist と jar、Java21 JRE を同梱) ---
 build-desktop: build-backend
-	rm -rf desktop/renderer desktop/resources/backend
+	rm -rf desktop/renderer desktop/resources/backend desktop/resources/jre
 	mkdir -p desktop/renderer desktop/resources/backend
 	cp -r frontend/dist/. desktop/renderer/
 	cp $(BACKEND_JAR) desktop/resources/backend/graphy-next-backend.jar
+	# このOS向けの最小化 Java21 ランタイムを同梱（システムJava不要にする）
+	"$(JAVA_HOME)/bin/jlink" --add-modules ALL-MODULE-PATH --strip-debug --no-man-pages --no-header-files --output desktop/resources/jre
 
 build: build-desktop
 
@@ -62,5 +66,5 @@ test:
 clean:
 	cd backend && $(MVN) -q clean || true
 	rm -rf backend/src/main/resources/static
-	rm -rf frontend/dist desktop/renderer desktop/resources/backend
+	rm -rf frontend/dist desktop/renderer desktop/resources/backend desktop/resources/jre
 	rm -rf frontend/node_modules desktop/node_modules

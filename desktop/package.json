@@ -17,7 +17,8 @@
     "productName": "GRAPHY-Next",
     "files": ["main.js", "preload.js", "config.json", "renderer/**"],
     "extraResources": [
-      { "from": "resources/backend", "to": "backend" }
+      { "from": "resources/backend", "to": "backend" },
+      { "from": "resources/jre", "to": "jre" }
     ],
     "linux": { "target": ["AppImage"] },
     "win": { "target": ["nsis"] },

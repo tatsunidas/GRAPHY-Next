@@ -51,6 +51,11 @@ jobs:
           mkdir -p desktop/renderer desktop/resources/backend
           cp -r frontend/dist/. desktop/renderer/
           cp backend/target/graphy-next-backend.jar desktop/resources/backend/graphy-next-backend.jar
+      - name: Bundle Java 21 runtime (jlink, このOS向け)
+        shell: bash
+        run: |
+          rm -rf desktop/resources/jre
+          "$JAVA_HOME/bin/jlink" --add-modules ALL-MODULE-PATH --strip-debug --no-man-pages --no-header-files --output desktop/resources/jre
       - name: Install desktop deps & build installer
         working-directory: desktop
         shell: bash

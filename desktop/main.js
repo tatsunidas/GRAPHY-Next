@@ -45,6 +45,16 @@ function resolveBackendJar() {
   return candidates.find((p) => p && fs.existsSync(p)) || null;
 }
 
+/** 同梱 JRE の java を優先し、無ければ PATH の java にフォールバック（GRAPHY の run.sh と同様）。 */
+function resolveJava() {
+  const exe = process.platform === "win32" ? "java.exe" : "java";
+  const candidates = [
+    path.join(process.resourcesPath || "", "jre", "bin", exe), // electron-builder で同梱
+    path.join(__dirname, "resources", "jre", "bin", exe),      // 開発時ステージング
+  ];
+  return candidates.find((p) => p && fs.existsSync(p)) || "java";
+}
+
 function startBackend() {
   if (EXTERNAL_BACKEND) {
     console.log("[backend] external mode — spawn をスキップ");
@@ -56,9 +66,10 @@ function startBackend() {
       "backend jar が見つかりません。`make build` で backend をビルドしてください。",
     );
   }
-  console.log(`[backend] starting: ${jar} (profile=${PROFILE}, port=${PORT})`);
+  const javaCmd = resolveJava();
+  console.log(`[backend] starting: ${jar} (java=${javaCmd}, profile=${PROFILE}, port=${PORT})`);
   backendProc = spawn(
-    "java",
+    javaCmd,
     [
       "-jar",
       jar,
