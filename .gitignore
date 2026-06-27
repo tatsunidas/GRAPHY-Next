@@ -25,3 +25,6 @@ desktop/dist/
 # --- misc ---
 *.log
 .DS_Store
+
+# standalone ランタイム生成物（H2 索引 / 受信 DICOM）
+backend/data/

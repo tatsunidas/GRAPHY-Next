@@ -1,4 +1,7 @@
 # standalone プロファイル: Electron デスクトップアプリモード
-# 将来: 組み込み DICOM サーバー / Derby DB / ローカル FS の設定をここに追加。
+# 将来: 組み込み DICOM サーバー / H2 索引 / ローカル FS の設定をここに追加。
 graphy:
   mode-description: "Standalone desktop mode (Electron, embedded resources)"
+  dicom:
+    scp:
+      enabled: true       # ローカル DIMSE リスナー（C-ECHO 応答）を起動

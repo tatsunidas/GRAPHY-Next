@@ -5,6 +5,15 @@ spring:
     name: graphy-next-backend
   profiles:
     default: web
+  datasource:
+    url: jdbc:h2:file:./data/graphy-index;AUTO_SERVER=TRUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
 
 server:
   port: 8080
@@ -24,6 +33,13 @@ graphy:
       - PUT
       - DELETE
       - OPTIONS
+  dicom:
+    local-ae-title: GRAPHYNEXT
+    storage-dir: ./data/dicom
+    scp:
+      enabled: false      # 既定は無効（web モード）。standalone で有効化する。
+      port: 11112
+      bind-address: 0.0.0.0
 
 management:
   endpoints:
