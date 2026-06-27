@@ -1,0 +1,124 @@
+# GRAPHY-Next DICOM データレイヤ設計
+
+> 作成日: 2026-06-27
+> ステータス: 確定（主要分岐を決定済み）
+> 関連: [`development-phases.md`](development-phases.md)（Phase 0/1）、旧 `GRAPHY/docs/web-migration-requirements.md`
+
+「DicomServer 問題」（standalone / web で DICOM データをどう保持・取得するか）の決定事項と設計。
+
+---
+
+## 1. 決定事項（サマリ）
+
+| 論点 | 決定 | 備考 |
+|---|---|---|
+| 全体の継ぎ目 | `DicomDataService` 抽象でモード差を吸収 | frontend は常に Spring Boot REST を叩く |
+| Web データ経路 | **Spring Boot 経由（BFF）** | CORS/認証/独自コーデック復号を集約。フロントは standalone と同一 |
+| Standalone 保管庫 | **新規に軽量ストア**（H2 推奨 + 自前 FS） | レガシー Swing 依存（`DatabaseHandler`）を断ち切る |
+| Standalone の DIMSE | GRAPHY の `DcmQRSCP`/`StoreSCP` を**移植**（dcm4che ベース、Swing 非依存） | ネットワーク入出力専用 |
+| Web の PACS 連携 | **dcm4chee 先行**（IHE IID URL 起動） | Orthanc は同じビューアに起動アダプタを足すだけ |
+| dcm4chee-arc 組み込み | **却下** | 重量級(WildFly/PostgreSQL)。`dcm4che`(ライブラリ)とは別物 |
+
+---
+
+## 2. アーキテクチャ
+
+```
+        ┌──────── frontend (React / Cornerstone3D) ────────┐
+        │      常に Spring Boot REST を叩く（モード非依存）      │
+        └───────────────────────┬───────────────────────────┘
+                                │  DicomDataService (REST)
+        ┌───────────────────────┴───────────────────────────┐
+        │  StandaloneDicomDataService     WebDicomDataService  │
+        │  → H2 索引 + ローカル FS を直接   → DICOMweb で PACS へ  │
+        │    読む（行き来させない）            (BFF プロキシ)        │
+        │  ← DcmQRSCP/StoreSCP が              ↓                 │
+        │    ネットワーク入出力を担当       dcm4chee / Orthanc      │
+        └─────────────────────────────────────────────────────┘
+```
+
+### モード別の振る舞い
+
+**standalone（Electron デスクトップ）**
+- `StandaloneDicomDataService` が **H2 索引 + ローカル FS を in-process で直接読む**。
+  自前サーバを DIMSE/DICOMweb で叩く round-trip はしない。
+- `DcmQRSCP`/`StoreSCP`（GRAPHY から移植）は **ネットワーク入出力専用**:
+  モダリティからの C-STORE 受信、外部 PACS との Query/Retrieve、送信。
+- ローカルファイル/フォルダ/CD インポートも索引へ取り込む。
+
+**web（ブラウザ）**
+- `WebDicomDataService` が DICOMweb クライアントとして PACS を叩く **BFF**。
+  frontend からは REST、PACS へは QIDO-RS / WADO-RS / STOW-RS。
+- 認証トークン注入・CORS 回避・メーカー独自圧縮のサーバ側復号をここで集約。
+- 接続先（dcm4chee / Orthanc）は**設定値**の違いだけ。コードは共通。
+
+---
+
+## 3. `DicomDataService` インターフェース（ドラフト）
+
+```java
+public interface DicomDataService {
+    // 検索（QIDO 相当）
+    List<PatientRecord>  findPatients(QueryParams q);
+    List<StudyRecord>    findStudies(String patientId, QueryParams q);
+    List<SeriesRecord>   findSeries(String studyUid, QueryParams q);
+    List<InstanceRecord> findInstances(String seriesUid);
+
+    // 取得（WADO 相当）
+    Attributes getMetadata(String sopUid);          // ピクセル無しメタデータ
+    PixelData  getPixelData(String sopUid, int frame);
+
+    // 保存（STOW 相当）
+    void storeInstance(Attributes obj);
+
+    // ROI
+    void             storeRoi(RoiContext roi);
+    List<RoiContext> loadRois(String sopUid);
+
+    void deleteInstance(String sopUid);
+}
+```
+
+| 実装 | profile | 内部 |
+|---|---|---|
+| `StandaloneDicomDataService` | standalone | H2 索引 + ローカル FS（dcm4che `Attributes` で読み書き） |
+| `WebDicomDataService` | web | DICOMweb クライアント（dcm4che / Spring WebClient）→ 外部 PACS |
+
+Spring DI（`@Profile`）でプロファイルに応じて自動注入。
+
+---
+
+## 4. Standalone ストア仕様
+
+- **DB**: H2（embedded / file モード、純 Java・ネイティブ依存なし）。Spring Data JPA で索引テーブルを管理。
+  - 代替: SQLite（xerial JDBC, ネイティブ同梱）。継続性より純 JVM を優先し H2 を既定とする。
+- **索引テーブル**: Patient / Study / Series / Instance（階層）＋ Instance 行に FS 上の DICOM ファイルパス。
+- **ピクセル本体**: DB に入れず FS に DICOM ファイルとして保存（GRAPHY 同様）。
+- **ROI**: 当面は DB テーブル。将来 DICOM SR/SEG への書き出しに対応。
+- **取り込み経路**: ① ローカルファイル/フォルダ/CD インポート ② `StoreSCP` による C-STORE 受信。
+
+---
+
+## 5. Web（BFF）仕様
+
+- frontend → `WebDicomDataService`(REST) → PACS の DICOMweb。
+- **接続設定**（`application-web.yml`）: PACS base URL、QIDO/WADO/STOW のパス、認証方式（Basic / Bearer）。
+- **dcm4chee 先行**: IHE IID（Invoke Image Display）で起動。
+  例: `/viewer?requestType=STUDY&studyUID=...` を受け、その study を web モードで開く。
+- **Orthanc**: 同じビューアに起動アダプタを追加（SPA を Orthanc にホスト / Explorer から起動）。
+- メーカー独自圧縮はサーバ側 `Decompressor` で非圧縮化して返す。標準圧縮はブラウザ(WASM)へ委譲。
+
+---
+
+## 6. 実装ステップ（Phase 0 内）
+
+1. backend に dcm4che 依存追加（`org.dcm4che:dcm4che-core` ほか、5.x 系）。
+2. `DicomDataService` インターフェース＋ DTO（PatientRecord 等）定義。
+3. `DicomPhantomFactory`（テスト用デジタルファントム生成）。
+4. `StandaloneDicomDataService` 骨格 + H2 索引スキーマ（JPA）+ FS 保存/読み出し。
+5. `DcmQRSCP`/`StoreSCP` を GRAPHY から移植（DB 部分は H2 索引に差し替え）。
+6. `WebDicomDataService` 骨格（QIDO/WADO/STOW クライアント、設定で接続先切替）。
+7. IID 起動エンドポイント（dcm4chee 連携）。
+8. `@Profile` による DI 結線。両モードで `GET /api/status` ＋ 簡単な検索が通ることを確認。
+
+> ピクセル経路の最適化（ブラウザ直 WADO ストリーミング）は将来課題。まずは BFF 一本で統一。
