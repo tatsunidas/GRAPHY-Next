@@ -122,3 +122,28 @@ Spring DI（`@Profile`）でプロファイルに応じて自動注入。
 8. `@Profile` による DI 結線。両モードで `GET /api/status` ＋ 簡単な検索が通ることを確認。
 
 > ピクセル経路の最適化（ブラウザ直 WADO ストリーミング）は将来課題。まずは BFF 一本で統一。
+
+---
+
+## 7. SCP の受理 SOP クラス設定 と 相互運用テスト
+
+### 受理 Storage SOP Class（standalone）
+- SCP は **all-storage（`"*"`/`"*"`）を使わない**。`backend/.../resources/dicom/storage-sop-classes.properties`
+  に **SOP クラスを明示列挙**し（`StorageSopClasses` ローダが `UID.forName` で解決）、それだけを受理する。
+  - 理由: all-storage は未知 SOP クラスまで受けてしまい、**C-GET/C-MOVE SCP が具体的な SOP クラスを提示できず破綻する**
+    （GRAPHY 自身も `DcmQRSCP.java` のコメントで警告している既知のアンチパターン）。
+- **Transfer Syntax は受信寛容に `*`**（圧縮オブジェクトもそのまま保存し、表示時に復号）。
+- リモート AE（C-MOVE 宛先 / Storage Commitment SCU）は **`graphy.dicom.remote-aes`（yaml）**。旧 `ae.properties` の後継。
+
+### 相互運用テスト（実機 dcm4che ツール）
+通信テストは自前 SCU↔自前 SCP だけでなく、**実機にインストールされた dcm4che ツール**とも検証する
+（`DicomInteropTest`、ツール未検出時は `assumeTrue` でスキップ）:
+- stock `storescu` → 自前 SCP → H2 索引（受信側の相互運用）
+- 自前 `DicomEchoScu` → stock `dcmqrscp`（発信側の相互運用）
+
+### GRAPHY 構成の調査所見
+- `query-/retrieve-/storage-sop-classes.properties` は **dcm4che 純正サンプル相当**（storage は SOP 明示列挙＋TS `:*` の正しい型）。
+- 実バグはプロパティではなく `DcmQRSCP.java` コード側にあり、**branch `fix/dcmqrscp-review` で修正済**
+  （cipher の `&&`/NPE、C-STORE 索引失敗時の孤児防止、直積マッチング、ThreadLocalRandom）。
+- `ae.properties` のみ CRLF だが `Properties.load` が行終端を吸収するため**機能影響なし**（cosmetic）。
+- GRAPHY の SOP クラス一覧は dcm4che 5.23.2 世代。新しめの SOP クラスは GRAPHY-Next(5.34.3) 側で網羅する。

@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.List;
 
 /**
  * SCP リスナーを Spring ライフサイクルに結びつける。
@@ -30,10 +31,12 @@ public class DicomScpLifecycle implements SmartLifecycle {
                 props.getScp().getPort());
 
         Path tempDir = Paths.get(props.getStorageDir(), "incoming");
+        // all-storage("*") は使わず、設定リソースに明示列挙した SOP クラスのみ受理する。
+        List<TransferCapability> storageCaps =
+                StorageSopClasses.scpCapabilities(props.getStorageSopClassesResource());
         server.addService(
                 new DicomStoreScp(storage, tempDir),
-                // 任意の Storage SOP Class / Transfer Syntax を SCP として受理
-                new TransferCapability(null, "*", TransferCapability.Role.SCP, "*"));
+                storageCaps.toArray(TransferCapability[]::new));
     }
 
     public DicomScpServer getServer() {

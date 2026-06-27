@@ -2,11 +2,14 @@ package com.vis.graphynext.dicom;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * {@code graphy.dicom.*}（application.yml）を束縛する DICOM 設定。
  *
- * <p>当面は Verification（C-ECHO）の疎通確認に必要な、自局 AE タイトルと
- * SCP リスナー設定のみを持つ。将来 C-STORE/C-FIND 等を足す際にここを拡張する。
+ * <p>standalone モードの DICOM ノードとしての設定（自局 AE、SCP リスナー、受理 SOP クラス、
+ * リモート AE 一覧）を保持する。これらは web モードでは未使用。
  */
 @ConfigurationProperties(prefix = "graphy.dicom")
 public class DicomProperties {
@@ -16,6 +19,15 @@ public class DicomProperties {
 
     /** ローカル保管庫のルートディレクトリ（standalone）。受信 DICOM はこの下に保存する。 */
     private String storageDir = "./data/dicom";
+
+    /**
+     * C-STORE で受理する Storage SOP Class 設定（クラスパスリソース）。
+     * all-storage("*") ではなく明示列挙にすることで C-GET/C-MOVE SCP と整合させる。
+     */
+    private String storageSopClassesResource = "/dicom/storage-sop-classes.properties";
+
+    /** リモート AE 一覧（旧 ae.properties の後継）。C-MOVE 宛先 / Storage Commitment SCU に使う。 */
+    private List<RemoteAe> remoteAes = new ArrayList<>();
 
     /** DIMSE リスナー（SCP）設定。 */
     private Scp scp = new Scp();
@@ -34,6 +46,53 @@ public class DicomProperties {
 
     public void setStorageDir(String storageDir) {
         this.storageDir = storageDir;
+    }
+
+    public String getStorageSopClassesResource() {
+        return storageSopClassesResource;
+    }
+
+    public void setStorageSopClassesResource(String storageSopClassesResource) {
+        this.storageSopClassesResource = storageSopClassesResource;
+    }
+
+    public List<RemoteAe> getRemoteAes() {
+        return remoteAes;
+    }
+
+    public void setRemoteAes(List<RemoteAe> remoteAes) {
+        this.remoteAes = remoteAes;
+    }
+
+    /** リモート AE（C-MOVE 宛先など）。形式は ae.properties の &lt;aet&gt;=&lt;host&gt;:&lt;port&gt; に相当。 */
+    public static class RemoteAe {
+        private String aeTitle;
+        private String host;
+        private int port;
+
+        public String getAeTitle() {
+            return aeTitle;
+        }
+
+        public void setAeTitle(String aeTitle) {
+            this.aeTitle = aeTitle;
+        }
+
+        public String getHost() {
+            return host;
+        }
+
+        public void setHost(String host) {
+            this.host = host;
+        }
+
+        public int getPort() {
+            return port;
+        }
+
+        public void setPort(int port) {
+            this.port = port;
+        }
     }
 
     public Scp getScp() {
