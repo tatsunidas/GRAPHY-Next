@@ -1,11 +1,13 @@
 package com.vis.graphynext.dicom;
 
+import com.vis.graphynext.dicom.qr.DimseQrService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.io.IOException;
 import java.util.Map;
 
 /**
@@ -17,12 +19,14 @@ public class DicomController {
 
     private final DicomEchoScu echoScu;
     private final DicomProperties props;
+    private final DimseQrService qr;
     private final DicomScpLifecycle scp; // scp.enabled=false のとき null
 
-    public DicomController(DicomEchoScu echoScu, DicomProperties props,
+    public DicomController(DicomEchoScu echoScu, DicomProperties props, DimseQrService qr,
                            org.springframework.beans.factory.ObjectProvider<DicomScpLifecycle> scpProvider) {
         this.echoScu = echoScu;
         this.props = props;
+        this.qr = qr;
         this.scp = scpProvider.getIfAvailable();
     }
 
@@ -45,6 +49,28 @@ public class DicomController {
                 "port", enabled ? scp.getServer().getPort() : props.getScp().getPort());
     }
 
+    /** C-GET: リモート PACS から study を取得しローカル索引へ取り込む。 */
+    @PostMapping("/qr/get")
+    public Map<String, Object> get(@RequestBody QrRequest req) throws IOException {
+        int n = qr.getStudy(req.host(), req.port(), req.calledAet(), req.studyUid());
+        return Map.of("retrieved", n, "studyUid", req.studyUid());
+    }
+
+    /** C-MOVE: リモート PACS から指定 AE（既定は自局）へ study を送らせる。 */
+    @PostMapping("/qr/move")
+    public Map<String, Object> move(@RequestBody QrMoveRequest req) throws IOException {
+        String dest = (req.destAet() == null || req.destAet().isBlank())
+                ? props.getLocalAeTitle() : req.destAet();
+        int exit = qr.moveStudy(req.host(), req.port(), req.calledAet(), req.studyUid(), dest);
+        return Map.of("exitCode", exit, "destAet", dest, "studyUid", req.studyUid());
+    }
+
     public record EchoRequest(String host, int port, String calledAet, String callingAet) {
+    }
+
+    public record QrRequest(String host, int port, String calledAet, String studyUid) {
+    }
+
+    public record QrMoveRequest(String host, int port, String calledAet, String studyUid, String destAet) {
     }
 }

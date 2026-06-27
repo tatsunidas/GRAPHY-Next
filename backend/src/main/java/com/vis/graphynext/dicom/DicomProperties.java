@@ -29,6 +29,13 @@ public class DicomProperties {
     /** リモート AE 一覧（旧 ae.properties の後継）。C-MOVE 宛先 / Storage Commitment SCU に使う。 */
     private List<RemoteAe> remoteAes = new ArrayList<>();
 
+    /**
+     * dcm4che バイナリ配布のホーム（{@code bin/getscu} 等がある場所）。
+     * standalone の C-GET/C-MOVE はこの CLI ツールをプロセス起動して解決する。
+     * 空のときは {@code ~/dcm4che-*} を自動検出する。
+     */
+    private String dcm4cheHome = "";
+
     /** DIMSE リスナー（SCP）設定。 */
     private Scp scp = new Scp();
 
@@ -62,6 +69,14 @@ public class DicomProperties {
 
     public void setRemoteAes(List<RemoteAe> remoteAes) {
         this.remoteAes = remoteAes;
+    }
+
+    public String getDcm4cheHome() {
+        return dcm4cheHome;
+    }
+
+    public void setDcm4cheHome(String dcm4cheHome) {
+        this.dcm4cheHome = dcm4cheHome;
     }
 
     /** リモート AE（C-MOVE 宛先など）。形式は ae.properties の &lt;aet&gt;=&lt;host&gt;:&lt;port&gt; に相当。 */

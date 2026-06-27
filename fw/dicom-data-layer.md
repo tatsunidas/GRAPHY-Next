@@ -141,6 +141,15 @@ Spring DI（`@Profile`）でプロファイルに応じて自動注入。
 - stock `storescu` → 自前 SCP → H2 索引（受信側の相互運用）
 - 自前 `DicomEchoScu` → stock `dcmqrscp`（発信側の相互運用）
 
+### standalone の C-GET / C-MOVE（dcm4che CLI ツールで解決）
+自前で DIMSE クライアントを再実装せず、**dcm4che の CLI ツールをプロセス起動**して解決する
+（`Dcm4cheTools` + `DimseQrService`、`com.vis.graphynext.dicom.qr`）:
+- **C-GET**: `getscu --directory <tmp>` で取得 → `DicomStorageService.ingest` でローカル索引へ。
+- **C-MOVE**: `movescu --dest <自局AE>` で、リモート PACS から**稼働中の自前 SCP**へ送らせ、受信側が索引化。
+- ツールの場所は `graphy.dicom.dcm4che-home`（未設定なら `~/dcm4che-*` を自動検出）。配布時は dcm4che バイナリ同梱が必要。
+- 検証: `DicomQrInteropTest` が stock `dcmqrscp` をピアに、`storescu` 投入→ get/move→ H2 索引を確認（ツール未検出はスキップ）。
+- 補足: これは「自局が外部 PACS から取得する」方向。外部ノードが自局索引を Q/R する（自局を C-FIND/C-GET/C-MOVE **SCP** にする）方向は別途 Java 実装が必要で、ビューア用途では優先度低。
+
 ### GRAPHY 構成の調査所見
 - `query-/retrieve-/storage-sop-classes.properties` は **dcm4che 純正サンプル相当**（storage は SOP 明示列挙＋TS `:*` の正しい型）。
 - 実バグはプロパティではなく `DcmQRSCP.java` コード側にあり、**branch `fix/dcmqrscp-review` で修正済**
