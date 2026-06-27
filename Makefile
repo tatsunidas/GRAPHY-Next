@@ -1,0 +1,66 @@
+# GRAPHY-Next ビルド/起動オーケストレーション
+#
+# 主要ターゲット:
+#   make install        … frontend / desktop の依存をインストール
+#   make build          … frontend → backend(jar, UI同梱) → desktop 同梱 まで一括
+#   make dev-web        … Web モード開発起動（backend[web] + Vite dev）
+#   make dev-desktop    … デスクトップモード開発起動（Electron + backend[standalone]）
+#   make run-web        … ビルド済み web jar を単体起動（http://localhost:8080）
+#   make test           … backend テスト
+#   make clean          … 生成物を削除
+
+SHELL := /bin/bash
+ROOT  := $(CURDIR)
+BACKEND_JAR := backend/target/graphy-next-backend.jar
+MVN ?= mvn
+
+.PHONY: install install-frontend install-desktop \
+        build build-frontend build-backend build-desktop \
+        dev-web dev-desktop run-web test clean
+
+install: install-frontend install-desktop
+
+install-frontend:
+	cd frontend && npm install
+
+install-desktop:
+	cd desktop && npm install
+
+# --- frontend 単体ビルド（任意。backend ビルドが内部で実行するので通常は不要） ---
+build-frontend:
+	cd frontend && npm run build
+
+# --- backend ---
+# frontend のビルドと static 同梱は pom(frontend-maven-plugin)が行うため、
+# ここは mvn package を呼ぶだけ。これだけで UI 同梱 jar が完成する。
+build-backend:
+	cd backend && $(MVN) -q clean package
+
+# --- desktop (backend が生成した frontend/dist と jar を同梱) ---
+build-desktop: build-backend
+	rm -rf desktop/renderer desktop/resources/backend
+	mkdir -p desktop/renderer desktop/resources/backend
+	cp -r frontend/dist/. desktop/renderer/
+	cp $(BACKEND_JAR) desktop/resources/backend/graphy-next-backend.jar
+
+build: build-desktop
+
+# --- 開発起動 ---
+dev-web:
+	bash scripts/dev-web.sh
+
+dev-desktop:
+	bash scripts/dev-desktop.sh
+
+# --- 本番 web jar 単体起動 ---
+run-web: build-backend
+	java -jar $(BACKEND_JAR) --spring.profiles.active=web
+
+test:
+	cd backend && $(MVN) -q test
+
+clean:
+	cd backend && $(MVN) -q clean || true
+	rm -rf backend/src/main/resources/static
+	rm -rf frontend/dist desktop/renderer desktop/resources/backend
+	rm -rf frontend/node_modules desktop/node_modules

@@ -1,0 +1,14 @@
+{
+  "backend": {
+    "port": 8080,
+    "profile": "standalone",
+    "healthPath": "/api/status",
+    "healthTimeoutMs": 60000,
+    "jarName": "graphy-next-backend.jar"
+  },
+  "devServerUrl": "http://localhost:5173",
+  "window": {
+    "width": 1280,
+    "height": 800
+  }
+}

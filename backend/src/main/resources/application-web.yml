@@ -1,0 +1,4 @@
+# web プロファイル: ブラウザ向け Web アプリモード
+# 将来: 外部 dcm4chee サーバー（DICOMweb）と連携する設定をここに追加。
+graphy:
+  mode-description: "Web application mode (browser, external DICOMweb)"

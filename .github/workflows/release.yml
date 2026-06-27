@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  # Web 配布物: UI を同梱した実行可能 jar
+  web-jar:
+    name: Web jar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Build web jar (UI 同梱 / frontend は Maven が内部ビルド)
+        working-directory: backend
+        run: mvn -B clean package
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: backend/target/graphy-next-backend.jar
+
+  # デスクトップ配布物: 各 OS で Electron インストーラをビルド
+  desktop:
+    name: Desktop (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Build backend jar + frontend (Maven 統合)
+        shell: bash
+        run: cd backend && mvn -B clean package
+      - name: Stage desktop resources
+        shell: bash
+        run: |
+          rm -rf desktop/renderer desktop/resources/backend
+          mkdir -p desktop/renderer desktop/resources/backend
+          cp -r frontend/dist/. desktop/renderer/
+          cp backend/target/graphy-next-backend.jar desktop/resources/backend/graphy-next-backend.jar
+      - name: Install desktop deps & build installer
+        working-directory: desktop
+        shell: bash
+        run: |
+          npm install
+          npm run dist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload installers
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            desktop/dist/*.AppImage
+            desktop/dist/*.exe
+            desktop/dist/*.dmg

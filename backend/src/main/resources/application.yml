@@ -1,0 +1,32 @@
+# GRAPHY-Next backend 共通設定
+# プロファイル未指定時は web で起動する。
+spring:
+  application:
+    name: graphy-next-backend
+  profiles:
+    default: web
+
+server:
+  port: 8080
+
+# StatusController が返すバージョン（CI/リリースで上書き可能）
+graphy:
+  version: 0.1.0
+  cors:
+    # /api/** に対する許可オリジン（dev の Vite と Electron file://=null を想定）
+    allowed-origin-patterns:
+      - "http://localhost:*"
+      - "http://127.0.0.1:*"
+      - "null"
+    allowed-methods:
+      - GET
+      - POST
+      - PUT
+      - DELETE
+      - OPTIONS
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

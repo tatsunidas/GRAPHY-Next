@@ -1,0 +1,4 @@
+# standalone プロファイル: Electron デスクトップアプリモード
+# 将来: 組み込み DICOM サーバー / Derby DB / ローカル FS の設定をここに追加。
+graphy:
+  mode-description: "Standalone desktop mode (Electron, embedded resources)"

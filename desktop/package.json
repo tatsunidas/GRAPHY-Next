@@ -1,0 +1,26 @@
+{
+  "name": "graphy-next-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GRAPHY-Next desktop (Electron) — standalone mode",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^31.7.3",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.vis.graphynext",
+    "productName": "GRAPHY-Next",
+    "files": ["main.js", "preload.js", "config.json", "renderer/**"],
+    "extraResources": [
+      { "from": "resources/backend", "to": "backend" }
+    ],
+    "linux": { "target": ["AppImage"] },
+    "win": { "target": ["nsis"] },
+    "mac": { "target": ["dmg"] }
+  }
+}
