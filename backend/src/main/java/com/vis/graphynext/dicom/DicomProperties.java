@@ -39,6 +39,9 @@ public class DicomProperties {
     /** DIMSE リスナー（SCP）設定。 */
     private Scp scp = new Scp();
 
+    /** web モードの DICOMweb 接続先（BFF が QIDO/WADO/STOW を中継する外部 PACS）。 */
+    private Dicomweb dicomweb = new Dicomweb();
+
     public String getLocalAeTitle() {
         return localAeTitle;
     }
@@ -116,6 +119,38 @@ public class DicomProperties {
 
     public void setScp(Scp scp) {
         this.scp = scp;
+    }
+
+    public Dicomweb getDicomweb() {
+        return dicomweb;
+    }
+
+    public void setDicomweb(Dicomweb dicomweb) {
+        this.dicomweb = dicomweb;
+    }
+
+    /** DICOMweb 接続設定（web モードの BFF 中継先）。 */
+    public static class Dicomweb {
+        /** RS ベース URL 例: http://host:8080/dcm4chee-arc/aets/DCM4CHEE/rs */
+        private String baseUrl = "";
+        /** Bearer トークン（任意）。 */
+        private String bearerToken = "";
+
+        public String getBaseUrl() {
+            return baseUrl;
+        }
+
+        public void setBaseUrl(String baseUrl) {
+            this.baseUrl = baseUrl;
+        }
+
+        public String getBearerToken() {
+            return bearerToken;
+        }
+
+        public void setBearerToken(String bearerToken) {
+            this.bearerToken = bearerToken;
+        }
     }
 
     public static class Scp {

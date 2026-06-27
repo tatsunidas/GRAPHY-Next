@@ -1,4 +1,10 @@
 # web プロファイル: ブラウザ向け Web アプリモード
-# 将来: 外部 dcm4chee サーバー（DICOMweb）と連携する設定をここに追加。
+# 外部 PACS（dcm4chee / Orthanc 等）と DICOMweb で連携する BFF。
 graphy:
   mode-description: "Web application mode (browser, external DICOMweb)"
+  dicom:
+    dicomweb:
+      # 接続先 PACS の RS ベース URL（例は dcm4chee-arc-light）。
+      # 例: http://localhost:8080/dcm4chee-arc/aets/DCM4CHEE/rs
+      base-url: ""
+      bearer-token: ""

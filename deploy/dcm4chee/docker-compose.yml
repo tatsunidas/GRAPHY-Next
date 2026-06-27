@@ -1,0 +1,67 @@
+# dcm4chee-arc-light（非セキュア構成）をローカル起動するための compose。
+# GRAPHY-Next の web モード（BFF）から DICOMweb で接続してテストするための実 PACS。
+#
+# 使い方:
+#   docker compose -f deploy/dcm4chee/docker-compose.yml up -d
+#   起動後 http://localhost:8080/dcm4chee-arc/ui2/ で UI、DICOMweb は
+#   http://localhost:8080/dcm4chee-arc/aets/DCM4CHEE/rs
+#
+# 注意: イメージタグは執筆時点（dcm4chee-arc 5.33.x 系）。最新は
+#   https://github.com/dcm4che-dockerfiles と Docker Hub: dcm4che/* を参照し合わせること。
+#
+# DIMSE: AE=DCM4CHEE, host=localhost, port=11112（C-STORE/C-FIND/C-MOVE/C-GET）
+# DICOMweb base: /dcm4chee-arc/aets/DCM4CHEE/rs（QIDO/WADO/STOW）
+
+services:
+  ldap:
+    image: dcm4che/slapd-dcm4chee:2.6.7-33.1
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+    ports:
+      - "389:389"
+    environment:
+      STORAGE_DIR: /storage/fs1
+    volumes:
+      - ./data/ldap:/var/lib/openldap/openldap-data
+      - ./data/slapd.d:/etc/openldap/slapd.d
+
+  db:
+    image: dcm4che/postgres-dcm4chee:17.4-33.1
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: pacsdb
+      POSTGRES_USER: pacs
+      POSTGRES_PASSWORD: pacs
+    volumes:
+      - ./data/db:/var/lib/postgresql/data
+
+  arc:
+    image: dcm4che/dcm4chee-arc-psql:5.33.1
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+    ports:
+      - "8080:8080"     # Web UI / DICOMweb (QIDO/WADO/STOW)
+      - "8443:8443"
+      - "9990:9990"     # WildFly mgmt
+      - "11112:11112"   # DIMSE
+      - "2762:2762"     # DIMSE TLS
+      - "2575:2575"     # HL7
+    environment:
+      WILDFLY_CHOWN: /opt/wildfly/standalone /storage
+      WILDFLY_WAIT_FOR: ldap:389 db:5432
+      JAVA_OPTS: -Xms256m -Xmx1024m -XX:MetaspaceSize=96M -XX:MaxMetaspaceSize=384m -Djava.net.preferIPv4Stack=true
+    depends_on:
+      - ldap
+      - db
+    volumes:
+      - ./data/storage:/storage
+      - ./data/wildfly:/opt/wildfly/standalone
