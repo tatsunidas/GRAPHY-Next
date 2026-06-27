@@ -35,6 +35,12 @@ public class DicomStoreScu {
     }
 
     public StoreResult store(String host, int port, String calledAet, String callingAet, Path dicomFile) {
+        return store(host, port, calledAet, callingAet, dicomFile, null);
+    }
+
+    /** TLS 付き C-STORE。{@code tls} が null/usable でないときは平文。 */
+    public StoreResult store(String host, int port, String calledAet, String callingAet, Path dicomFile,
+                             com.vis.graphynext.dicom.DicomProperties.Tls tls) {
         Attributes fmi;
         Attributes dataset;
         try (DicomInputStream din = new DicomInputStream(dicomFile.toFile())) {
@@ -64,6 +70,12 @@ public class DicomStoreScu {
         remote.setHostname(host);
         remote.setPort(port);
         remote.setConnectTimeout(CONNECT_TIMEOUT_MS);
+
+        if (tls != null && tls.isUsable()) {
+            com.vis.graphynext.dicom.DicomTls.applyKeyMaterial(device, tls);
+            com.vis.graphynext.dicom.DicomTls.applyToConnection(local, tls, false);
+            com.vis.graphynext.dicom.DicomTls.applyToConnection(remote, tls, false);
+        }
 
         AAssociateRQ rq = new AAssociateRQ();
         rq.setCalledAET(calledAet);

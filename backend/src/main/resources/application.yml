@@ -40,6 +40,16 @@ graphy:
       enabled: false      # 既定は無効（web モード）。standalone で有効化する。
       port: 11112
       bind-address: 0.0.0.0
+    tls:
+      enabled: false      # 相互TLS。key-store/trust-store を設定して有効化。
+      port: 2762
+      key-store: ""
+      key-store-password: ""
+      key-store-type: PKCS12
+      trust-store: ""
+      trust-store-password: ""
+      trust-store-type: PKCS12
+      need-client-auth: true
 
 management:
   endpoints:

@@ -39,6 +39,9 @@ public class DicomProperties {
     /** DIMSE リスナー（SCP）設定。 */
     private Scp scp = new Scp();
 
+    /** DIMSE の TLS（相互TLS）設定。SCP リスナーと SCU 送信の双方に適用。 */
+    private Tls tls = new Tls();
+
     /** web モードの DICOMweb 接続先（BFF が QIDO/WADO/STOW を中継する外部 PACS）。 */
     private Dicomweb dicomweb = new Dicomweb();
 
@@ -121,12 +124,139 @@ public class DicomProperties {
         this.scp = scp;
     }
 
+    public Tls getTls() {
+        return tls;
+    }
+
+    public void setTls(Tls tls) {
+        this.tls = tls;
+    }
+
     public Dicomweb getDicomweb() {
         return dicomweb;
     }
 
     public void setDicomweb(Dicomweb dicomweb) {
         this.dicomweb = dicomweb;
+    }
+
+    /**
+     * DIMSE TLS（相互TLS）設定。自局の鍵+証明書（key-store）と信頼する相手（trust-store）。
+     * SCP は平文ポートとは別の TLS ポートで待ち受ける。
+     */
+    public static class Tls {
+        private boolean enabled = false;
+        /** TLS リスナーのポート（平文 port とは別。DICOM 慣習は 2762）。 */
+        private int port = 2762;
+        private String keyStore = "";
+        private String keyStorePassword = "";
+        private String keyStoreType = "PKCS12";
+        private String trustStore = "";
+        private String trustStorePassword = "";
+        private String trustStoreType = "PKCS12";
+        private List<String> protocols = new ArrayList<>(List.of("TLSv1.2", "TLSv1.3"));
+        private List<String> cipherSuites = new ArrayList<>(List.of(
+                "TLS_AES_128_GCM_SHA256",
+                "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+                "TLS_RSA_WITH_AES_128_CBC_SHA"));
+        /** SCP リスナーで相互TLS（クライアント証明書要求）にするか。 */
+        private boolean needClientAuth = true;
+
+        /** TLS を張れる設定が揃っているか（enabled かつ key/trust store が実在）。 */
+        public boolean isUsable() {
+            if (!enabled || keyStore.isBlank() || trustStore.isBlank()) {
+                return false;
+            }
+            return new java.io.File(keyStore).isFile() && new java.io.File(trustStore).isFile();
+        }
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public int getPort() {
+            return port;
+        }
+
+        public void setPort(int port) {
+            this.port = port;
+        }
+
+        public String getKeyStore() {
+            return keyStore;
+        }
+
+        public void setKeyStore(String keyStore) {
+            this.keyStore = keyStore;
+        }
+
+        public String getKeyStorePassword() {
+            return keyStorePassword;
+        }
+
+        public void setKeyStorePassword(String keyStorePassword) {
+            this.keyStorePassword = keyStorePassword;
+        }
+
+        public String getKeyStoreType() {
+            return keyStoreType;
+        }
+
+        public void setKeyStoreType(String keyStoreType) {
+            this.keyStoreType = keyStoreType;
+        }
+
+        public String getTrustStore() {
+            return trustStore;
+        }
+
+        public void setTrustStore(String trustStore) {
+            this.trustStore = trustStore;
+        }
+
+        public String getTrustStorePassword() {
+            return trustStorePassword;
+        }
+
+        public void setTrustStorePassword(String trustStorePassword) {
+            this.trustStorePassword = trustStorePassword;
+        }
+
+        public String getTrustStoreType() {
+            return trustStoreType;
+        }
+
+        public void setTrustStoreType(String trustStoreType) {
+            this.trustStoreType = trustStoreType;
+        }
+
+        public List<String> getProtocols() {
+            return protocols;
+        }
+
+        public void setProtocols(List<String> protocols) {
+            this.protocols = protocols;
+        }
+
+        public List<String> getCipherSuites() {
+            return cipherSuites;
+        }
+
+        public void setCipherSuites(List<String> cipherSuites) {
+            this.cipherSuites = cipherSuites;
+        }
+
+        public boolean isNeedClientAuth() {
+            return needClientAuth;
+        }
+
+        public void setNeedClientAuth(boolean needClientAuth) {
+            this.needClientAuth = needClientAuth;
+        }
     }
 
     /** DICOMweb 接続設定（web モードの BFF 中継先）。 */

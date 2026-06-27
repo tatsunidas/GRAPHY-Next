@@ -37,6 +37,11 @@ public class DicomScpLifecycle implements SmartLifecycle {
         server.addService(
                 new DicomStoreScp(storage, tempDir),
                 storageCaps.toArray(TransferCapability[]::new));
+
+        // TLS が設定済みなら、平文に加えて TLS リスナーも有効化する。
+        if (props.getTls().isUsable()) {
+            server.enableTls(props.getTls());
+        }
     }
 
     public DicomScpServer getServer() {

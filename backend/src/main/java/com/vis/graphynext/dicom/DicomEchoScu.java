@@ -40,6 +40,11 @@ public class DicomEchoScu {
      * @param callingAet 自局の AE タイトル（Calling AE）
      */
     public EchoResult echo(String host, int port, String calledAet, String callingAet) {
+        return echo(host, port, calledAet, callingAet, null);
+    }
+
+    /** TLS 付き C-ECHO。{@code tls} が null/usable でないときは平文。 */
+    public EchoResult echo(String host, int port, String calledAet, String callingAet, DicomProperties.Tls tls) {
         long start = System.nanoTime();
 
         Device device = new Device("graphy-echo-scu");
@@ -59,6 +64,13 @@ public class DicomEchoScu {
         remote.setHostname(host);
         remote.setPort(port);
         remote.setConnectTimeout(CONNECT_TIMEOUT_MS);
+
+        // TLS: 鍵材料を Device へ、cipher/protocol を両 Connection へ（SCU は needClientAuth=false）。
+        if (tls != null && tls.isUsable()) {
+            DicomTls.applyKeyMaterial(device, tls);
+            DicomTls.applyToConnection(local, tls, false);
+            DicomTls.applyToConnection(remote, tls, false);
+        }
 
         AAssociateRQ rq = new AAssociateRQ();
         rq.setCalledAET(calledAet);

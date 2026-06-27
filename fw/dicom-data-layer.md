@@ -150,6 +150,14 @@ Spring DI（`@Profile`）でプロファイルに応じて自動注入。
 - 検証: `DicomQrInteropTest` が stock `dcmqrscp` をピアに、`storescu` 投入→ get/move→ H2 索引を確認（ツール未検出はスキップ）。
 - 補足: これは「自局が外部 PACS から取得する」方向。外部ノードが自局索引を Q/R する（自局を C-FIND/C-GET/C-MOVE **SCP** にする）方向は別途 Java 実装が必要で、ビューア用途では優先度低。
 
+### DIMSE TLS（相互TLS）
+`graphy.dicom.tls.*`（key-store / trust-store / port / ciphers / protocols / need-client-auth）で設定。
+GRAPHY の `DicomTlsConfig` と同方針で、`DicomTls` ヘルパが Device に鍵材料、Connection に cipher/protocol を適用する。
+- **SCP**: 平文ポートに加え、別ポート（既定 2762）で TLS リスナーを張る（`DicomScpServer.enableTls`）。echo/store 兼用。
+- **SCU**: `DicomEchoScu`/`DicomStoreScu` が TLS 接続に対応（`echo(...,tls)` 等）。REST は `/api/dicom/echo` の `tls:true`。
+- **Q/R ツール**: `DimseQrService` が getscu/movescu に `--key-store/--trust-store/--tls-cipher/--tls-protocol` を付与。
+- 検証: `DicomTlsTest` が keytool 生成の自己署名証明書で相互TLS C-ECHO を確認（平文→TLSポートは失敗）。
+
 ### GRAPHY 構成の調査所見
 - `query-/retrieve-/storage-sop-classes.properties` は **dcm4che 純正サンプル相当**（storage は SOP 明示列挙＋TS `:*` の正しい型）。
 - 実バグはプロパティではなく `DcmQRSCP.java` コード側にあり、**branch `fix/dcmqrscp-review` で修正済**

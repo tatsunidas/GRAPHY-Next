@@ -33,6 +33,7 @@ public class DicomScpServer {
 
     private final List<DicomService> extraServices = new ArrayList<>();
     private final List<TransferCapability> extraCapabilities = new ArrayList<>();
+    private DicomProperties.Tls tls; // null = 平文のみ
 
     private Device device;
     private ExecutorService executor;
@@ -58,6 +59,18 @@ public class DicomScpServer {
         }
     }
 
+    /** TLS リスナーを有効化する（平文ポートに加え、別ポートで相互TLSを待ち受ける）。start() 前に呼ぶ。 */
+    public synchronized void enableTls(DicomProperties.Tls tls) {
+        if (running) {
+            throw new IllegalStateException("起動後は TLS を有効化できません");
+        }
+        this.tls = tls;
+    }
+
+    public int getTlsPort() {
+        return tls != null ? tls.getPort() : -1;
+    }
+
     public synchronized void start() {
         if (running) {
             return;
@@ -77,6 +90,17 @@ public class DicomScpServer {
 
         device.addConnection(conn);
         device.addApplicationEntity(ae);
+
+        // TLS リスナー（平文とは別ポート）。鍵材料を Device へ、cipher/protocol を TLS Connection へ。
+        if (tls != null && tls.isUsable()) {
+            Connection tlsConn = new Connection("dicom-tls", bindAddress, tls.getPort());
+            DicomTls.applyToConnection(tlsConn, tls, tls.isNeedClientAuth());
+            DicomTls.applyKeyMaterial(device, tls);
+            device.addConnection(tlsConn);
+            ae.addConnection(tlsConn);
+            log.info("DICOM SCP TLS listener: {}:{} (needClientAuth={})",
+                    bindAddress, tls.getPort(), tls.isNeedClientAuth());
+        }
 
         DicomServiceRegistry registry = new DicomServiceRegistry();
         registry.addDicomService(new BasicCEchoSCP());

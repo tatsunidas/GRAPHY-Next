@@ -30,12 +30,13 @@ public class DicomController {
         this.scp = scpProvider.getIfAvailable();
     }
 
-    /** リモート AE へ C-ECHO（callingAet 省略時は自局 AE を使用）。 */
+    /** リモート AE へ C-ECHO（callingAet 省略時は自局 AE。tls=true で TLS 接続）。 */
     @PostMapping("/echo")
     public EchoResult echo(@RequestBody EchoRequest req) {
         String callingAet = (req.callingAet() == null || req.callingAet().isBlank())
                 ? props.getLocalAeTitle() : req.callingAet();
-        return echoScu.echo(req.host(), req.port(), req.calledAet(), callingAet);
+        DicomProperties.Tls tls = req.tls() ? props.getTls() : null;
+        return echoScu.echo(req.host(), req.port(), req.calledAet(), callingAet, tls);
     }
 
     /** ローカル SCP リスナーの状態。 */
@@ -65,7 +66,7 @@ public class DicomController {
         return Map.of("exitCode", exit, "destAet", dest, "studyUid", req.studyUid());
     }
 
-    public record EchoRequest(String host, int port, String calledAet, String callingAet) {
+    public record EchoRequest(String host, int port, String calledAet, String callingAet, boolean tls) {
     }
 
     public record QrRequest(String host, int port, String calledAet, String studyUid) {

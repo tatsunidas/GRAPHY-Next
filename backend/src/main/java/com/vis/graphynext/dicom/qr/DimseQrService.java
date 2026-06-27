@@ -6,9 +6,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import com.vis.graphynext.dicom.DicomProperties;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Stream;
 
@@ -46,13 +49,15 @@ public class DimseQrService {
     public int getStudy(String host, int port, String calledAet, String studyUid) throws IOException {
         Path tool = tools.require("getscu");
         Path outDir = Files.createTempDirectory("graphy-getscu-");
-        Dcm4cheTools.Result r = tools.run(List.of(
+        List<String> cmd = new ArrayList<>(List.of(
                 tool.toString(),
                 "-b", props.getLocalAeTitle(),
                 "-c", calledAet + "@" + host + ":" + port,
                 "-L", "STUDY",
                 "-m", "StudyInstanceUID=" + studyUid,
-                "--directory", outDir.toString()), TOOL_TIMEOUT_MS);
+                "--directory", outDir.toString()));
+        cmd.addAll(tlsArgs());
+        Dcm4cheTools.Result r = tools.run(cmd, TOOL_TIMEOUT_MS);
         if (!r.ok()) {
             throw new IOException("getscu 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
         }
@@ -82,18 +87,52 @@ public class DimseQrService {
     public int moveStudy(String host, int port, String calledAet, String studyUid, String destAet)
             throws IOException {
         Path tool = tools.require("movescu");
-        Dcm4cheTools.Result r = tools.run(List.of(
+        List<String> cmd = new ArrayList<>(List.of(
                 tool.toString(),
                 "-b", props.getLocalAeTitle(),
                 "-c", calledAet + "@" + host + ":" + port,
                 "--dest", destAet,
                 "-L", "STUDY",
-                "-m", "StudyInstanceUID=" + studyUid), TOOL_TIMEOUT_MS);
+                "-m", "StudyInstanceUID=" + studyUid));
+        cmd.addAll(tlsArgs());
+        Dcm4cheTools.Result r = tools.run(cmd, TOOL_TIMEOUT_MS);
         if (!r.ok()) {
             throw new IOException("movescu 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
         }
         log.info("C-MOVE 完了: study={} -> dest={}", studyUid, destAet);
         return r.exitCode();
+    }
+
+    /** TLS が設定済みなら getscu/movescu 用の TLS 引数を返す（鍵/信頼ストア + cipher/protocol）。 */
+    private List<String> tlsArgs() {
+        DicomProperties.Tls tls = props.getTls();
+        if (!tls.isUsable()) {
+            return List.of();
+        }
+        List<String> a = new ArrayList<>();
+        a.add("--key-store");
+        a.add(tls.getKeyStore());
+        a.add("--key-store-pass");
+        a.add(tls.getKeyStorePassword());
+        a.add("--key-store-type");
+        a.add(tls.getKeyStoreType());
+        a.add("--key-pass");
+        a.add(tls.getKeyStorePassword());
+        a.add("--trust-store");
+        a.add(tls.getTrustStore());
+        a.add("--trust-store-pass");
+        a.add(tls.getTrustStorePassword());
+        a.add("--trust-store-type");
+        a.add(tls.getTrustStoreType());
+        for (String c : tls.getCipherSuites()) {
+            a.add("--tls-cipher");
+            a.add(c);
+        }
+        for (String p : tls.getProtocols()) {
+            a.add("--tls-protocol");
+            a.add(p);
+        }
+        return a;
     }
 
     private static String tail(String s) {
