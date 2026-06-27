@@ -22,6 +22,7 @@ import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 
@@ -67,6 +68,22 @@ class DicomQrInteropTest {
     static void check(@Autowired Dcm4cheTools t) {
         toolsPresent = t.isAvailable("dcmqrscp") && t.isAvailable("storescu")
                 && t.isAvailable("getscu") && t.isAvailable("movescu");
+    }
+
+    @Test
+    void cFind_fromStockDcmqrscp_returnsStudies() throws Exception {
+        assumeTrue(toolsPresent, "dcm4che ツール未検出のためスキップ");
+
+        String study = "1.2.qr.find.study";
+        try (Peer peer = Peer.startWithPhantom("PIDF", study, "1.2.qr.find.series", "1.2.qr.find.sop", null)) {
+            var studies = qr.findStudies("127.0.0.1", peer.port, "DCMQRSCP", Map.of());
+            assertTrue(studies.stream().anyMatch(s -> study.equals(s.studyInstanceUid())),
+                    "C-FIND で投入した study が返るはず");
+            // 絞り込み（PatientID）でも返る
+            var byPid = qr.findStudies("127.0.0.1", peer.port, "DCMQRSCP", Map.of("PatientID", "PIDF"));
+            assertTrue(byPid.stream().anyMatch(s -> study.equals(s.studyInstanceUid())),
+                    "PatientID 絞り込みでも study が返るはず");
+        }
     }
 
     @Test

@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -50,6 +51,13 @@ public class DicomController {
                 "port", enabled ? scp.getServer().getPort() : props.getScp().getPort());
     }
 
+    /** C-FIND: リモート PACS をクエリしてスタディ一覧を返す。 */
+    @PostMapping("/qr/find")
+    public List<StudyDto> find(@RequestBody QrFindRequest req) throws IOException {
+        return qr.findStudies(req.host(), req.port(), req.calledAet(),
+                req.matchKeys() == null ? Map.of() : req.matchKeys());
+    }
+
     /** C-GET: リモート PACS から study を取得しローカル索引へ取り込む。 */
     @PostMapping("/qr/get")
     public Map<String, Object> get(@RequestBody QrRequest req) throws IOException {
@@ -67,6 +75,9 @@ public class DicomController {
     }
 
     public record EchoRequest(String host, int port, String calledAet, String callingAet, boolean tls) {
+    }
+
+    public record QrFindRequest(String host, int port, String calledAet, Map<String, String> matchKeys) {
     }
 
     public record QrRequest(String host, int port, String calledAet, String studyUid) {

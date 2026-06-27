@@ -7,12 +7,17 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import com.vis.graphynext.dicom.DicomProperties;
+import com.vis.graphynext.dicom.StudyDto;
+import org.dcm4che3.data.Attributes;
+import org.dcm4che3.data.Tag;
+import org.dcm4che3.io.DicomInputStream;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 
 /**
@@ -31,6 +36,11 @@ public class DimseQrService {
 
     private static final long TOOL_TIMEOUT_MS = 120_000;
 
+    /** STUDY レベル C-FIND の返却キー。 */
+    private static final List<String> STUDY_RETURN_KEYS = List.of(
+            "StudyInstanceUID", "PatientID", "PatientName", "StudyDate", "StudyDescription",
+            "ModalitiesInStudy", "NumberOfStudyRelatedInstances");
+
     private final Dcm4cheTools tools;
     private final DicomStorageService storage;
     private final DicomProperties props;
@@ -39,6 +49,63 @@ public class DimseQrService {
         this.tools = tools;
         this.storage = storage;
         this.props = props;
+    }
+
+    /**
+     * C-FIND（STUDY レベル）で外部 PACS をクエリし、マッチしたスタディ一覧を返す。
+     *
+     * @param matchKeys 絞り込みキー（例: PatientID=..., StudyDate=...）。空なら全件。
+     */
+    public List<StudyDto> findStudies(String host, int port, String calledAet, Map<String, String> matchKeys)
+            throws IOException {
+        Path tool = tools.require("findscu");
+        Path outDir = Files.createTempDirectory("graphy-findscu-");
+        List<String> cmd = new ArrayList<>(List.of(
+                tool.toString(),
+                "-b", props.getLocalAeTitle(),
+                "-c", calledAet + "@" + host + ":" + port,
+                "-L", "STUDY"));
+        for (String key : STUDY_RETURN_KEYS) {
+            cmd.add("-r");
+            cmd.add(key);
+        }
+        if (matchKeys != null) {
+            matchKeys.forEach((k, v) -> {
+                cmd.add("-m");
+                cmd.add(k + "=" + v);
+            });
+        }
+        cmd.add("--out-dir");
+        cmd.add(outDir.toString());
+        cmd.add("--out-file");
+        cmd.add("rsp-0000.dcm");
+        cmd.addAll(tlsArgs());
+
+        Dcm4cheTools.Result r = tools.run(cmd, TOOL_TIMEOUT_MS);
+        if (!r.ok()) {
+            throw new IOException("findscu 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
+        }
+        List<StudyDto> studies = new ArrayList<>();
+        try (Stream<Path> walk = Files.walk(outDir)) {
+            List<Path> files = walk.filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().endsWith(".dcm")).toList();
+            for (Path f : files) {
+                try (DicomInputStream in = new DicomInputStream(f.toFile())) {
+                    Attributes a = in.readDataset();
+                    studies.add(new StudyDto(
+                            a.getString(Tag.StudyInstanceUID),
+                            a.getString(Tag.PatientID),
+                            a.getString(Tag.PatientName),
+                            a.getInt(Tag.NumberOfStudyRelatedInstances, 0)));
+                } catch (Exception e) {
+                    log.warn("C-FIND 応答のパースに失敗: {} ({})", f, e.toString());
+                }
+            }
+        } finally {
+            deleteQuietly(outDir);
+        }
+        log.info("C-FIND 完了: {} 件", studies.size());
+        return studies;
     }
 
     /**

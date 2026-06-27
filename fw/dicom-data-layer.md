@@ -143,7 +143,8 @@ Spring DI（`@Profile`）でプロファイルに応じて自動注入。
 
 ### standalone の C-GET / C-MOVE（dcm4che CLI ツールで解決）
 自前で DIMSE クライアントを再実装せず、**dcm4che の CLI ツールをプロセス起動**して解決する
-（`Dcm4cheTools` + `DimseQrService`、`com.vis.graphynext.dicom.qr`）:
+（`Dcm4cheTools` + `DimseQrService`、`com.vis.graphynext.dicom.qr`）。Q/R は **find→get/move** で揃う:
+- **C-FIND**: `findscu -L STUDY -r ...` で外部 PACS をクエリ → 応答 DICOM をパースして `StudyDto` 一覧に。`-m` で絞り込み。
 - **C-GET**: `getscu --directory <tmp>` で取得 → `DicomStorageService.ingest` でローカル索引へ。
 - **C-MOVE**: `movescu --dest <自局AE>` で、リモート PACS から**稼働中の自前 SCP**へ送らせ、受信側が索引化。
 - ツールの場所は `graphy.dicom.dcm4che-home`（未設定なら `~/dcm4che-*` を自動検出）。配布時は dcm4che バイナリ同梱が必要。
