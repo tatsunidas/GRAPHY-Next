@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { fetchStatus, type AppStatus } from "./api";
 import { StudyList } from "./StudyList";
+import { SettingsDialog } from "./settings/SettingsDialog";
 
 export function App() {
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
     fetchStatus()
@@ -29,8 +31,26 @@ export function App() {
         color: "#1a1a1a",
       }}
     >
-      <h1 style={{ marginBottom: 4 }}>GRAPHY-Next</h1>
-      <p style={{ color: "#666", marginTop: 0 }}>最小構成 起動確認</p>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+        <div>
+          <h1 style={{ marginBottom: 4 }}>GRAPHY-Next</h1>
+          <p style={{ color: "#666", marginTop: 0 }}>最小構成 起動確認</p>
+        </div>
+        <button
+          onClick={() => setSettingsOpen(true)}
+          title="環境設定"
+          style={{
+            border: "1px solid #d0d7de",
+            background: "#fff",
+            borderRadius: 8,
+            padding: "6px 10px",
+            cursor: "pointer",
+            fontSize: 16,
+          }}
+        >
+          ⚙
+        </button>
+      </div>
 
       {error && (
         <div style={{ color: "#b00020" }}>
@@ -53,6 +73,8 @@ export function App() {
       )}
 
       <StudyList />
+
+      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </main>
   );
 }
