@@ -121,8 +121,33 @@ zoom / pan / flip(上下左右) / rotation は **Cornerstone3D の ViewPresentat
 - **未対応（次段）**: ① C/T 切替(別スタック)をまたぐ transform/VOI 維持（保存 presentation/voiRange 再適用）。
   ② Enhanced 多フレーム。③ web(wadors) の layout 導出。
 
+## C/T 切替テスト（手動検証チェックリスト）
+5D データが手元に無いため自動化前の手動確認項目として記録。実機（standalone）で確認する。
+
+### 準備
+- 5D 相当のシリーズを取り込む: **multi-echo MR**(Echo→C)、**dynamic/造影**(TemporalPositionIdentifier→T)、
+  **diffusion**(DiffusionBValue→C)、または echo×temporal の真の 5D。無ければ通常 CT(単一 Z)で退行のみ確認。
+
+### backend（layout エンドポイント）
+- [ ] `GET /api/studies/{study}/series/{series}/layout` が `nZ/nC/nT` と `cDimension/tDimension`、
+      `cells[(c,z,t)→sop]` を返す。
+- [ ] multi-echo → `nC>1, cDimension="Echo"`。dynamic → `nT>1, tDimension="Temporal"`。
+- [ ] 不整合（各 Z 枚数が不均一）→ 純 Z スタック（nC=nT=1）にフォールバック。
+- [ ] 単体テスト `SeriesLayoutBuilderTest`（6 件）が green（pure Z / 4D-T / 4D-C / 5D / generic / 不均一）。
+
+### frontend（SeriesViewer）
+- [ ] C/T 次元>1 のとき **C/T スライダーが出現**し、ラベルに DICOM 由来併記（例 `C 1/2 (Echo)`）。
+- [ ] **C を切替**→ 表示画像が該当チャンネルの Z スタックに変わる。**T を切替**→ 時相が変わる。
+- [ ] 各 (C,T) で **Z スライダー/↑↓/ホイール/シネ** が正しく動く。
+- [ ] レイアウト取得前・取得失敗時は単一次元（Z のみ）にフォールバックして従来どおり動作。
+- [ ] 通常 CT は C/T スライダーが出ず、Z のみ（退行なし）。
+
+### 既知の制限（次段で対応）
+- [ ] **C/T 切替（別スタック）をまたぐと zoom/pan/WW/WL/回転/反転がリセットされる**
+      （同一スタック内＝Z 送りでは維持される）。→ 保存 presentation/voiRange の再適用で対応予定。
+
 ## 次スコープ
-1. **5D ZCT 実派生**（backend layout エンドポイント）＋ C/T 切替時の transform/VOI 維持。
+1. **C/T 切替時の transform/VOI 維持**（保存 presentation/voiRange 再適用）。
 2. **PET SUV**（PT scaling: Radiopharmaceutical/体重/時刻）。
 3. **ROI/Length ツール**（ROI 管理は SeriesViewer に集約）＋既存キーボードショートカット配線。
 4. web(wadors) 対応。
