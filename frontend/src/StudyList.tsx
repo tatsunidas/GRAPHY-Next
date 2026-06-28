@@ -235,7 +235,12 @@ function InstanceList({ study, series, mode }: { study: Study; series: Series; m
       {/* シリーズビューア（スライス送り・シネ・5D・オーバーレイ On/Off のコントローラ）。 */}
       {hasImages && mode === "standalone" && instances && (
         <div style={{ marginTop: 10, maxWidth: 900 }}>
-          <SeriesViewer instances={instances} mode="standalone" />
+          <SeriesViewer
+            instances={instances}
+            mode="standalone"
+            studyUid={study.studyInstanceUid}
+            seriesUid={series.seriesInstanceUid}
+          />
         </div>
       )}
       {hasImages && mode === "web" && (

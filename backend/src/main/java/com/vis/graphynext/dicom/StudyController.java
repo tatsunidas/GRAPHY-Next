@@ -94,6 +94,18 @@ public class StudyController {
         return storage.listSeries(studyUid);
     }
 
+    /**
+     * シリーズの 5D(ZCT) レイアウト。standalone はローカルヘッダから導出。
+     * web は次段（QIDO メタからの導出）未対応のため空を返し、フロントは単一次元にフォールバックする。
+     */
+    @GetMapping("/studies/{studyUid}/series/{seriesUid}/layout")
+    public SeriesLayout layout(@PathVariable String studyUid, @PathVariable String seriesUid) {
+        if (webProvider.getIfAvailable() != null) {
+            return new SeriesLayout(0, 0, 0, null, null, List.of());
+        }
+        return storage.seriesLayout(studyUid, seriesUid);
+    }
+
     @GetMapping("/studies/{studyUid}/series/{seriesUid}/instances")
     public List<InstanceDto> instances(@PathVariable String studyUid, @PathVariable String seriesUid) {
         WebDicomDataService web = webProvider.getIfAvailable();

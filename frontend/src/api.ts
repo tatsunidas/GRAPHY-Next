@@ -65,6 +65,28 @@ export const fetchInstances = (studyUid: string, seriesUid: string) =>
     `/api/studies/${encodeURIComponent(studyUid)}/series/${encodeURIComponent(seriesUid)}/instances`,
   );
 
+export interface SeriesLayoutCell {
+  c: number;
+  z: number;
+  t: number;
+  sopInstanceUid: string;
+}
+
+/** シリーズの 5D(ZCT) レイアウト（backend がヘッダから導出）。 */
+export interface SeriesLayoutDto {
+  nZ: number;
+  nC: number;
+  nT: number;
+  cDimension: string | null;
+  tDimension: string | null;
+  cells: SeriesLayoutCell[];
+}
+
+export const fetchSeriesLayout = (studyUid: string, seriesUid: string) =>
+  httpGet<SeriesLayoutDto>(
+    `/api/studies/${encodeURIComponent(studyUid)}/series/${encodeURIComponent(seriesUid)}/layout`,
+  );
+
 export interface ImportResult {
   imported: number;
   skipped: number;

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Viewer2D, type ViewerOverlays } from "./Viewer2D";
-import { buildSeriesLayout } from "./seriesLayout";
+import { buildSeriesLayout, buildLayoutFromDto, type SeriesLayout } from "./seriesLayout";
 import { imageIdForInstance, type ViewerMode } from "./imageId";
-import { type Instance } from "../api";
+import { fetchSeriesLayout, type Instance } from "../api";
 import { useI18n } from "../i18n/i18n";
 
 interface OverlayState extends Required<ViewerOverlays> {
@@ -16,13 +16,46 @@ interface OverlayState extends Required<ViewerOverlays> {
  * <p>シリーズ全体での Zoom/Pan/コントラスト(WW/WL)/回転/反転は、同一スタック内では
  * Viewer2D（StackViewport）が自動的に維持する。
  */
-export function SeriesViewer({ instances, mode }: { instances: Instance[]; mode: ViewerMode }) {
+export function SeriesViewer({
+  instances,
+  mode,
+  studyUid,
+  seriesUid,
+}: {
+  instances: Instance[];
+  mode: ViewerMode;
+  studyUid: string;
+  seriesUid: string;
+}) {
   const { t } = useI18n();
   const imageIds = useMemo(
     () => instances.map((i) => imageIdForInstance(mode, i.sopInstanceUid)),
     [instances, mode],
   );
-  const layout = useMemo(() => buildSeriesLayout(imageIds), [imageIds]);
+  const imageIdBySop = useMemo(
+    () => new Map(instances.map((i) => [i.sopInstanceUid, imageIdForInstance(mode, i.sopInstanceUid)])),
+    [instances, mode],
+  );
+  const fallback = useMemo(() => buildSeriesLayout(imageIds), [imageIds]);
+
+  // backend の ZCT レイアウト（IPP→Z / Temporal→T / Echo・Bvalue→C）。取得まで/失敗時は単一次元。
+  const [layout, setLayout] = useState<SeriesLayout>(fallback);
+  useEffect(() => {
+    setLayout(fallback);
+    let cancelled = false;
+    fetchSeriesLayout(studyUid, seriesUid)
+      .then((dto) => {
+        if (cancelled) return;
+        const built = buildLayoutFromDto(dto, imageIdBySop);
+        if (built) setLayout(built);
+      })
+      .catch(() => {
+        /* フォールバックのまま */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [studyUid, seriesUid, fallback, imageIdBySop]);
 
   const [z, setZ] = useState(0);
   const [c, setC] = useState(0);
@@ -36,7 +69,9 @@ export function SeriesViewer({ instances, mode }: { instances: Instance[]; mode:
   const [playing, setPlaying] = useState(false);
   const [fps, setFps] = useState(10);
 
-  const zStack = layout.zStack(c, tIdx);
+  const cc = Math.min(Math.max(0, c), layout.nC - 1);
+  const tc = Math.min(Math.max(0, tIdx), layout.nT - 1);
+  const zStack = layout.zStack(cc, tc);
   const nZ = zStack.length;
   const zc = Math.min(Math.max(0, z), nZ - 1);
 
@@ -84,10 +119,10 @@ export function SeriesViewer({ instances, mode }: { instances: Instance[]; mode:
       <Viewer2D imageIds={zStack} imageIndex={zc} overlays={overlays} />
 
       <div style={controls}>
-        {/* 次元スライダー（5D 時は C/T も表示）。 */}
+        {/* 次元スライダー（5D 時は C/T も表示。DICOM 由来を併記）。 */}
         <DimSlider label="Z" idx={zc} count={nZ} onChange={setZ} />
-        {layout.nC > 1 && <DimSlider label="C" idx={c} count={layout.nC} onChange={setC} />}
-        {layout.nT > 1 && <DimSlider label="T" idx={tIdx} count={layout.nT} onChange={setTIdx} />}
+        {layout.nC > 1 && <DimSlider label="C" dim={layout.cDimension} idx={cc} count={layout.nC} onChange={setC} />}
+        {layout.nT > 1 && <DimSlider label="T" dim={layout.tDimension} idx={tc} count={layout.nT} onChange={setTIdx} />}
 
         {/* シネ再生。 */}
         <div style={row}>
@@ -120,11 +155,13 @@ export function SeriesViewer({ instances, mode }: { instances: Instance[]; mode:
 
 function DimSlider({
   label,
+  dim,
   idx,
   count,
   onChange,
 }: {
   label: string;
+  dim?: string | null;
   idx: number;
   count: number;
   onChange: (v: number) => void;
@@ -133,6 +170,7 @@ function DimSlider({
     <div style={row}>
       <span style={dimLabel}>
         {label} {idx + 1}/{count}
+        {dim ? ` (${dim})` : ""}
       </span>
       <input
         type="range"
