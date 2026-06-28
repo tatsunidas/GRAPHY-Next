@@ -215,6 +215,10 @@ function InstanceList({ study, series, mode }: { study: Study; series: Series; m
   }, [study.studyInstanceUid, series.seriesInstanceUid]);
 
   const first = instances && instances.length > 0 ? instances[0] : null;
+  const seriesImageIds =
+    instances && mode === "standalone"
+      ? instances.map((inst) => imageIdForInstance("standalone", inst.sopInstanceUid))
+      : undefined;
 
   return (
     <div style={{ marginTop: 10, color: "#445" }}>
@@ -234,8 +238,11 @@ function InstanceList({ study, series, mode }: { study: Study; series: Series; m
 
       {/* 2D ビューア（骨組み）: シリーズ先頭の 1 枚を表示。スタック/ツールは次スコープ。 */}
       {first && mode === "standalone" && (
-        <div style={{ marginTop: 10, maxWidth: 560 }}>
-          <Viewer2D imageId={imageIdForInstance("standalone", first.sopInstanceUid)} />
+        <div style={{ marginTop: 10, maxWidth: 820 }}>
+          <Viewer2D
+            imageId={imageIdForInstance("standalone", first.sopInstanceUid)}
+            seriesImageIds={seriesImageIds}
+          />
         </div>
       )}
       {first && mode === "web" && (

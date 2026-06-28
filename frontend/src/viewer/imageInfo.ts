@@ -1,4 +1,5 @@
-import { metaData, utilities as csUtils, type Types } from "@cornerstonejs/core";
+import { metaData, imageLoader, utilities as csUtils, type Types } from "@cornerstonejs/core";
+import dicomImageLoader from "@cornerstonejs/dicom-image-loader";
 
 /**
  * 表示中スライスのキャリブレーション情報（輝度=Modality LUT / ボクセル / FOV）。
@@ -13,6 +14,10 @@ export interface ImageInfo {
   /** 列間隔(横/X, mm) = PixelSpacing[1] */
   columnPixelSpacing?: number;
   sliceThickness?: number;
+  /** スライス方向のボクセル奥行(mm)。算出は computeSliceSpacing 参照。 */
+  sliceSpacing?: number;
+  /** sliceSpacing の導出元。 */
+  sliceSpacingSource?: SliceSpacingSource;
   /** FOV = columns × columnPixelSpacing（横, mm） */
   fovWidthMm?: number;
   /** FOV = rows × rowPixelSpacing（縦, mm） */
@@ -66,6 +71,90 @@ export function readImageInfo(imageId: string): ImageInfo {
     pixelRepresentation: pixel.pixelRepresentation,
     photometricInterpretation: pixel.photometricInterpretation,
   };
+}
+
+/** スライス方向ボクセル奥行きの導出元。 */
+export type SliceSpacingSource = "iop-ipp" | "spacingBetweenSlices" | "sliceThickness" | "default";
+
+function vsub(a: number[], b: number[]): number[] {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+function vcross(a: number[], b: number[]): number[] {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+function vdot(a: number[], b: number[]): number {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+function toNums(a: unknown): number[] | undefined {
+  if (!Array.isArray(a) || a.length < 3) return undefined;
+  const n = a.slice(0, 3).map((v) => Number(v));
+  return n.every((v) => Number.isFinite(v)) ? n : undefined;
+}
+
+/** wadouri のキャッシュ済データセットから SpacingBetweenSlices(0018,0088) を読む。 */
+function spacingBetweenSlicesOf(imageId: string): number | undefined {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const wadouri = (dicomImageLoader as any).wadouri;
+    const { url } = wadouri.parseImageId(imageId);
+    const ds = wadouri.dataSetCacheManager.get(url);
+    const v = ds?.floatString?.("x00180088");
+    return typeof v === "number" && v > 0 ? v : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * スライス方向のボクセル奥行き(mm)を求める。
+ *
+ * <ul>
+ *   <li>スライス 1 枚: SpacingBetweenSlices（優先）＞ SliceThickness ＞ 1mm。</li>
+ *   <li>2 枚以上: 隣接 2 スライスの IOP/IPP から面間距離を計算。
+ *       IOP/IPP が無ければ SpacingBetweenSlices ＞ SliceThickness ＞ 1mm にフォールバック。</li>
+ * </ul>
+ */
+export async function computeSliceSpacing(
+  displayedImageId: string,
+  seriesImageIds: string[] | undefined,
+  sliceThickness: number | undefined,
+): Promise<{ spacing: number; source: SliceSpacingSource }> {
+  const fallback = (): { spacing: number; source: SliceSpacingSource } => {
+    const sbs = spacingBetweenSlicesOf(displayedImageId);
+    if (sbs !== undefined) return { spacing: sbs, source: "spacingBetweenSlices" };
+    if (sliceThickness && sliceThickness > 0) return { spacing: sliceThickness, source: "sliceThickness" };
+    return { spacing: 1, source: "default" };
+  };
+
+  if (!seriesImageIds || seriesImageIds.length <= 1) {
+    return fallback();
+  }
+
+  try {
+    const id0 = seriesImageIds[0];
+    const id1 = seriesImageIds[1];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const plane = (id: string): any => metaData.get("imagePlaneModule", id);
+    if (!plane(id1)?.imagePositionPatient) {
+      await imageLoader.loadAndCacheImage(id1); // 隣接スライスのメタを揃える
+    }
+    const p0 = plane(id0);
+    const p1 = plane(id1);
+    const ipp0 = toNums(p0?.imagePositionPatient);
+    const ipp1 = toNums(p1?.imagePositionPatient);
+    const rowCos = toNums(p0?.rowCosines);
+    const colCos = toNums(p0?.columnCosines);
+    if (ipp0 && ipp1 && rowCos && colCos) {
+      const normal = vcross(rowCos, colCos);
+      const dist = Math.abs(vdot(vsub(ipp1, ipp0), normal)); // 面の法線方向に投影した距離
+      if (Number.isFinite(dist) && dist > 1e-4) {
+        return { spacing: dist, source: "iop-ipp" };
+      }
+    }
+  } catch {
+    /* フォールバックへ */
+  }
+  return fallback();
 }
 
 /** カーソル位置のサンプル値。 */

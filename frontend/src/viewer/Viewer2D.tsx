@@ -8,7 +8,7 @@ import {
 } from "@cornerstonejs/tools";
 import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
 import { applyTransform, isPanned, readTransform, type ViewTransform, FIT_TRANSFORM } from "./transform";
-import { readImageInfo, sampleAtCanvas, type ImageInfo, type PixelSample } from "./imageInfo";
+import { readImageInfo, sampleAtCanvas, computeSliceSpacing, type ImageInfo, type PixelSample } from "./imageInfo";
 import { ImageInfoPanel } from "./ImageInfoPanel";
 import { useI18n } from "../i18n/i18n";
 
@@ -41,11 +41,14 @@ let viewportSeq = 0;
  * <p>レイヤ: 深層に Cornerstone3D の StackViewport（canvas／WebGL）。上に DOM オーバーレイを
  * `pointer-events:none` で重ねる。入力はビューポート要素が処理（最前面の不透明イベント層は置かない）。
  */
-export function Viewer2D({ imageId }: { imageId: string }) {
+export function Viewer2D({ imageId, seriesImageIds }: { imageId: string; seriesImageIds?: string[] }) {
   const { t } = useI18n();
   const elementRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<Types.IStackViewport | null>(null);
   const viewportIdRef = useRef(`graphy-vp-${viewportSeq++}`);
+  // series 全 imageId（スライス奥行き算出用）。識別子は変わっても再初期化しないよう ref で持つ。
+  const seriesIdsRef = useRef<string[] | undefined>(seriesImageIds);
+  seriesIdsRef.current = seriesImageIds;
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [transform, setTransform] = useState<ViewTransform>(FIT_TRANSFORM);
@@ -93,6 +96,15 @@ export function Viewer2D({ imageId }: { imageId: string }) {
         const inf = readImageInfo(imageId);
         infoRef.current = inf;
         if (!disposed) setInfo(inf);
+
+        // スライス方向ボクセル奥行きは非同期（複数枚は隣接スライスのメタを要する）。後から合流。
+        void (async () => {
+          const r = await computeSliceSpacing(imageId, seriesIdsRef.current, inf.sliceThickness);
+          if (disposed) return;
+          const merged = { ...inf, sliceSpacing: r.spacing, sliceSpacingSource: r.source };
+          infoRef.current = merged;
+          setInfo(merged);
+        })();
 
         // affine 操作: 左ドラッグ=Pan、右ドラッグ/ホイール=Zoom（いずれも camera=affine 経由）。
         const tg = ToolGroupManager.getToolGroup(toolGroupId) ?? ToolGroupManager.createToolGroup(toolGroupId);

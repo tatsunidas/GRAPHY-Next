@@ -17,6 +17,23 @@ export function ImageInfoPanel({ info, sample }: { info: ImageInfo | null; sampl
   // マウスの画像(OffScreen)座標を小数1桁で。
   const mousePos = sample ? `${sample.fx.toFixed(1)}, ${sample.fy.toFixed(1)}` : "—";
 
+  // ボクセルサイズ = 列間隔 × 行間隔 × スライス奥行き。奥行きの導出元も併記。
+  const depthSrc: Record<string, string> = {
+    "iop-ipp": t("viewer.info.depth.iopIpp"),
+    spacingBetweenSlices: t("viewer.info.depth.sbs"),
+    sliceThickness: t("viewer.info.depth.thickness"),
+    default: t("viewer.info.depth.default"),
+  };
+  const voxel =
+    info.columnPixelSpacing !== undefined &&
+    info.rowPixelSpacing !== undefined &&
+    info.sliceSpacing !== undefined
+      ? `${num(info.columnPixelSpacing, 3)} × ${num(info.rowPixelSpacing, 3)} × ${num(info.sliceSpacing, 3)} mm`
+      : info.sliceSpacing !== undefined
+        ? `— × — × ${num(info.sliceSpacing, 3)} mm`
+        : "—";
+  const voxelDepthNote = info.sliceSpacingSource ? depthSrc[info.sliceSpacingSource] : undefined;
+
   const pixelSpacing =
     info.columnPixelSpacing !== undefined && info.rowPixelSpacing !== undefined
       ? `${num(info.columnPixelSpacing, 3)} × ${num(info.rowPixelSpacing, 3)} mm`
@@ -52,6 +69,12 @@ export function ImageInfoPanel({ info, sample }: { info: ImageInfo | null; sampl
       <Row label={t("viewer.info.pixelSpacing")} value={pixelSpacing} />
       <Row label={t("viewer.info.sliceThickness")} value={info.sliceThickness !== undefined ? `${num(info.sliceThickness, 2)} mm` : "—"} />
       <Row label={t("viewer.info.fov")} value={fov} />
+      <Row label={t("viewer.info.voxel")} value={voxel} />
+      {voxelDepthNote && (
+        <div style={{ textAlign: "right", color: "#9aa6b2", fontSize: 11, marginTop: -1 }}>
+          {t("viewer.info.depthBy", { src: voxelDepthNote })}
+        </div>
+      )}
       <div style={divider} />
       <Row label={t("viewer.info.rescale")} value={rescale} />
       <Row label={t("viewer.info.window")} value={windowCW} />
