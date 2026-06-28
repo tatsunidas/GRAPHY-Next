@@ -5,6 +5,7 @@ import { Viewer2D, ENGINE_ID, type ViewerOverlays } from "./Viewer2D";
 import { applyTransform, readTransform, FIT_TRANSFORM } from "./transform";
 import { buildSeriesLayout, buildLayoutFromDto, type SeriesLayout } from "./seriesLayout";
 import { imageIdForInstance, type ViewerMode } from "./imageId";
+import { matchesCombo } from "../shortcuts/registry";
 import { fetchSeriesLayout, type Instance } from "../api";
 import { useI18n } from "../i18n/i18n";
 
@@ -174,12 +175,29 @@ export function SeriesViewer({
     const el = rootRef.current;
     if (!el || gridOn) return;
     const step = (d: number) => setZ((p) => Math.max(0, Math.min(nZ - 1, p + d)));
+    // 既定ショートカット（registry）に従う。ArrowUp=前, ArrowDown=次, Home/End=先頭/末尾,
+    // Space=シネ, O=テキストオーバーレイ切替。
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "ArrowUp" || e.key === "ArrowRight") {
+      // コントロール（スライダー/ボタン/セレクト）操作中は誤爆させない。
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || tag === "BUTTON") return;
+      if (matchesCombo("ArrowUp", e)) {
+        step(-1);
+        e.preventDefault();
+      } else if (matchesCombo("ArrowDown", e)) {
         step(1);
         e.preventDefault();
-      } else if (e.key === "ArrowDown" || e.key === "ArrowLeft") {
-        step(-1);
+      } else if (matchesCombo("Home", e)) {
+        setZ(0);
+        e.preventDefault();
+      } else if (matchesCombo("End", e)) {
+        setZ(nZ - 1);
+        e.preventDefault();
+      } else if (matchesCombo("Space", e)) {
+        setPlaying((p) => !p);
+        e.preventDefault();
+      } else if (matchesCombo("O", e)) {
+        setOverlays((o) => ({ ...o, text: !o.text }));
         e.preventDefault();
       }
     };

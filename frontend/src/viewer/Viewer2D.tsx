@@ -16,7 +16,10 @@ import { getOrCreateCameraSync, getOrCreateVoiSync } from "./sync";
 import { resolveOverlay } from "./overlayText";
 import { useOverlayConfig } from "./overlayConfig";
 import { ImageInfoPanel } from "./ImageInfoPanel";
+import { matchesCombo } from "../shortcuts/registry";
 import { useI18n } from "../i18n/i18n";
+
+type ViewSnapshot = { transform: ViewTransform; voi: { lower: number; upper: number } | null };
 
 const { MouseBindings } = csToolsEnums;
 
@@ -96,6 +99,82 @@ export function Viewer2D({
   const [voi, setVoi] = useState<{ ww: number; wc: number } | null>(null);
   // 右の Image Info パネルの表示。Off で画像をその領域まで広げる。
   const [showInfo, setShowInfo] = useState(true);
+  // 表示状態の Undo/Redo（クライアント側履歴。DICOM 不要）。
+  const historyRef = useRef<ViewSnapshot[]>([]);
+  const histIdxRef = useRef(-1);
+  const applyingHistRef = useRef(false);
+  const captureTimerRef = useRef<number | null>(null);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+  const [inverted, setInverted] = useState(false);
+
+  // --- Undo/Redo（zoom/pan/rotate/flip/VOI のスナップショット） ---
+  const snapshot = (): ViewSnapshot | null => {
+    const vp = viewportRef.current;
+    if (!vp) return null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const range = (vp.getProperties() as any)?.voiRange ?? null;
+    return { transform: readTransform(vp), voi: range };
+  };
+  const updateUndoRedo = () => {
+    setCanUndo(histIdxRef.current > 0);
+    setCanRedo(histIdxRef.current < historyRef.current.length - 1);
+  };
+  const captureHistory = () => {
+    if (applyingHistRef.current) return;
+    const s = snapshot();
+    if (!s) return;
+    const h = historyRef.current;
+    h.length = histIdxRef.current + 1; // redo 側を破棄
+    h.push(s);
+    if (h.length > 50) h.shift();
+    histIdxRef.current = h.length - 1;
+    updateUndoRedo();
+  };
+  const scheduleCapture = () => {
+    if (applyingHistRef.current) return;
+    if (captureTimerRef.current) window.clearTimeout(captureTimerRef.current);
+    captureTimerRef.current = window.setTimeout(captureHistory, 350);
+  };
+  const applySnapshot = (s: ViewSnapshot | undefined) => {
+    const vp = viewportRef.current;
+    if (!vp || !s) return;
+    applyingHistRef.current = true;
+    if (captureTimerRef.current) window.clearTimeout(captureTimerRef.current);
+    applyTransform(vp, s.transform);
+    if (s.voi) {
+      vp.setProperties({ voiRange: s.voi });
+      vp.render();
+      setVoi({ ww: s.voi.upper - s.voi.lower, wc: (s.voi.upper + s.voi.lower) / 2 });
+    }
+    setTransform(readTransform(vp));
+    window.setTimeout(() => {
+      applyingHistRef.current = false;
+    }, 0);
+  };
+  const undo = () => {
+    if (histIdxRef.current > 0) {
+      histIdxRef.current -= 1;
+      applySnapshot(historyRef.current[histIdxRef.current]);
+      updateUndoRedo();
+    }
+  };
+  const redo = () => {
+    if (histIdxRef.current < historyRef.current.length - 1) {
+      histIdxRef.current += 1;
+      applySnapshot(historyRef.current[histIdxRef.current]);
+      updateUndoRedo();
+    }
+  };
+  const toggleInvert = () => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cur = Boolean((vp.getProperties() as any)?.invert);
+    vp.setProperties({ invert: !cur });
+    vp.render();
+    setInverted(!cur);
+  };
 
   useEffect(() => {
     let disposed = false;
@@ -123,6 +202,7 @@ export function Viewer2D({
       // スケールバー（Caliper）: 校正の有無で mm/cm・px と色(黄/グレー)を切替。FOV(ズーム)に追従。
       const calibrated = Boolean(infoRef.current?.columnPixelSpacing);
       setScaleBar(computeScaleBar(vp, element, calibrated));
+      if (!compact) scheduleCapture(); // Undo/Redo 履歴（操作確定後にデバウンス）
     };
 
     // VOI(WW/WL) を読み戻す。voiRange は [lower, upper]（モダリティ値）。WW=upper−lower, WL=中点。
@@ -134,6 +214,7 @@ export function Viewer2D({
       if (range && Number.isFinite(range.lower) && Number.isFinite(range.upper)) {
         setVoi({ ww: range.upper - range.lower, wc: (range.upper + range.lower) / 2 });
       }
+      scheduleCapture();
     };
 
     (async () => {
@@ -285,6 +366,28 @@ export function Viewer2D({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageIndex, stackKey]);
 
+  // 画像表示用キーボード（スライダー単独表示のみ）: I=階調反転, Mod+Z=Undo, Mod+Shift+Z=Redo。
+  useEffect(() => {
+    if (compact || syncGroupId) return;
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (matchesCombo("Mod+Shift+Z", e)) {
+        e.preventDefault();
+        redo();
+      } else if (matchesCombo("Mod+Z", e)) {
+        e.preventDefault();
+        undo();
+      } else if (matchesCombo("I", e)) {
+        e.preventDefault();
+        toggleInvert();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compact, syncGroupId]);
+
   // --- 操作（すべて affine = ViewPresentation 経由） ---
   const vp = () => viewportRef.current;
   // Fit: コンポーネントに合わせて 1.0・中央へ（回転/反転は保持）。
@@ -409,7 +512,13 @@ export function Viewer2D({
           <button onClick={rotate90} style={btn} title={t("viewer.rotate")}>⟳</button>
           <button onClick={flipH} style={btn} title={t("viewer.flipH")}>⇄</button>
           <button onClick={flipV} style={btn} title={t("viewer.flipV")}>⇅</button>
+          <button onClick={toggleInvert} style={{ ...btn, ...(inverted ? infoBtnOn : null) }} title={t("viewer.invert")}>
+            {t("viewer.invert")}
+          </button>
           <button onClick={reset} style={btn} title={t("viewer.reset")}>{t("viewer.reset")}</button>
+          <span style={{ width: 1, alignSelf: "stretch", background: "#dde4ea", margin: "0 2px" }} />
+          <button onClick={undo} disabled={!canUndo} style={btn} title={t("viewer.undo")}>↶</button>
+          <button onClick={redo} disabled={!canRedo} style={btn} title={t("viewer.redo")}>↷</button>
         </div>
       </div>
 

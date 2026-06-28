@@ -33,24 +33,24 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "tool-roi-ellipse", combo: "E", descriptionKey: "sc.toolRoiEllipse", group: "tools", planned: true },
   { id: "tool-crosshairs", combo: "C", descriptionKey: "sc.toolCrosshairs", group: "tools", planned: true },
 
-  // --- 画像ナビゲーション（将来・予約） ---
-  { id: "nav-next-slice", combo: "ArrowDown", descriptionKey: "sc.navNextSlice", group: "navigation", planned: true },
-  { id: "nav-prev-slice", combo: "ArrowUp", descriptionKey: "sc.navPrevSlice", group: "navigation", planned: true },
+  // --- 画像ナビゲーション ---
+  { id: "nav-next-slice", combo: "ArrowDown", descriptionKey: "sc.navNextSlice", group: "navigation" },
+  { id: "nav-prev-slice", combo: "ArrowUp", descriptionKey: "sc.navPrevSlice", group: "navigation" },
   { id: "nav-next-series", combo: "ArrowRight", descriptionKey: "sc.navNextSeries", group: "navigation", planned: true },
   { id: "nav-prev-series", combo: "ArrowLeft", descriptionKey: "sc.navPrevSeries", group: "navigation", planned: true },
-  { id: "nav-cine", combo: "Space", descriptionKey: "sc.navCine", group: "navigation", planned: true },
-  { id: "nav-first", combo: "Home", descriptionKey: "sc.navFirst", group: "navigation", planned: true },
-  { id: "nav-last", combo: "End", descriptionKey: "sc.navLast", group: "navigation", planned: true },
+  { id: "nav-cine", combo: "Space", descriptionKey: "sc.navCine", group: "navigation" },
+  { id: "nav-first", combo: "Home", descriptionKey: "sc.navFirst", group: "navigation" },
+  { id: "nav-last", combo: "End", descriptionKey: "sc.navLast", group: "navigation" },
 
-  // --- 表示調整・リセット（将来・予約） ---
+  // --- 表示調整・リセット ---
   { id: "disp-reset", combo: "Escape", descriptionKey: "sc.dispReset", group: "display", planned: true },
-  { id: "disp-invert", combo: "I", descriptionKey: "sc.dispInvert", group: "display", planned: true },
-  { id: "disp-overlay", combo: "O", descriptionKey: "sc.dispOverlay", group: "display", planned: true },
+  { id: "disp-invert", combo: "I", descriptionKey: "sc.dispInvert", group: "display" },
+  { id: "disp-overlay", combo: "O", descriptionKey: "sc.dispOverlay", group: "display" },
   { id: "disp-fullscreen", combo: "F", descriptionKey: "sc.dispFullscreen", group: "display", planned: true },
 
-  // --- 汎用・システム（将来・予約。Redo は Win:Ctrl+Y / Mac:Cmd+Shift+Z） ---
-  { id: "sys-undo", combo: "Mod+Z", descriptionKey: "sc.sysUndo", group: "system", planned: true },
-  { id: "sys-redo", combo: "Mod+Shift+Z", descriptionKey: "sc.sysRedo", group: "system", planned: true },
+  // --- 汎用・システム（Redo は Win:Ctrl+Y / Mac:Cmd+Shift+Z） ---
+  { id: "sys-undo", combo: "Mod+Z", descriptionKey: "sc.sysUndo", group: "system" },
+  { id: "sys-redo", combo: "Mod+Shift+Z", descriptionKey: "sc.sysRedo", group: "system" },
   { id: "sys-delete", combo: "Delete", descriptionKey: "sc.sysDelete", group: "system", planned: true },
 ];
 
