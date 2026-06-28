@@ -10,7 +10,15 @@ function num(v: number | undefined, digits = 2): string {
  * 右サイドのキャリブレーション情報パネル。
  * 輝度（Modality LUT=Rescale, VOI=Window）/ ボクセルサイズ / FOV / ビット深度・符号 を一覧表示。
  */
-export function ImageInfoPanel({ info, sample }: { info: ImageInfo | null; sample?: PixelSample | null }) {
+export function ImageInfoPanel({
+  info,
+  sample,
+  voi,
+}: {
+  info: ImageInfo | null;
+  sample?: PixelSample | null;
+  voi?: { ww: number; wc: number } | null;
+}) {
   const { t } = useI18n();
   if (!info) return null;
 
@@ -48,8 +56,10 @@ export function ImageInfoPanel({ info, sample }: { info: ImageInfo | null; sampl
     info.rescaleSlope !== undefined || info.rescaleIntercept !== undefined
       ? `${num(info.rescaleSlope ?? 1, 2)} / ${num(info.rescaleIntercept ?? 0, 2)}`
       : "—";
-  const windowCW =
-    info.windowCenter !== undefined && info.windowWidth !== undefined
+  // ライブ WW/WL（左ドラッグで変更）があればそれを、無ければ DICOM の初期値を表示。
+  const windowCW = voi
+    ? `${num(voi.wc, 0)} / ${num(voi.ww, 0)}`
+    : info.windowCenter !== undefined && info.windowWidth !== undefined
       ? `${num(info.windowCenter, 0)} / ${num(info.windowWidth, 0)}`
       : "—";
   const bits =

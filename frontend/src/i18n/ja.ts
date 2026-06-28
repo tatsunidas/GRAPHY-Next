@@ -77,6 +77,7 @@ export const ja: Record<string, string> = {
   "viewer.fit": "Fit",
   "viewer.reset": "リセット",
   "viewer.cursorValueUnit": "値",
+  "viewer.wl": "W {{w}} / L {{l}}",
   "viewer.info.title": "画像情報",
   "viewer.info.matrix": "マトリクス",
   "viewer.info.pixelSpacing": "ピクセル間隔",

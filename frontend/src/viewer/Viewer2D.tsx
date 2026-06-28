@@ -4,6 +4,7 @@ import {
   ToolGroupManager,
   PanTool,
   ZoomTool,
+  WindowLevelTool,
   Enums as csToolsEnums,
 } from "@cornerstonejs/tools";
 import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
@@ -59,6 +60,8 @@ export function Viewer2D({ imageId, seriesImageIds }: { imageId: string; seriesI
   const [sample, setSample] = useState<PixelSample | null>(null);
   const [markers, setMarkers] = useState<OrientationMarkers | null>(null);
   const [scaleBar, setScaleBar] = useState<ScaleBar | null>(null);
+  // ライブの WW/WL（左ドラッグで変更。モダリティ値=HU 等の単位）。
+  const [voi, setVoi] = useState<{ ww: number; wc: number } | null>(null);
 
   useEffect(() => {
     let disposed = false;
@@ -86,6 +89,17 @@ export function Viewer2D({ imageId, seriesImageIds }: { imageId: string; seriesI
       // スケールバー（Caliper）: 校正の有無で mm/cm・px と色(黄/グレー)を切替。FOV(ズーム)に追従。
       const calibrated = Boolean(infoRef.current?.columnPixelSpacing);
       setScaleBar(computeScaleBar(vp, element, calibrated));
+    };
+
+    // VOI(WW/WL) を読み戻す。voiRange は [lower, upper]（モダリティ値）。WW=upper−lower, WL=中点。
+    const onVoiModified = () => {
+      const vp = viewportRef.current;
+      if (!vp || disposed) return;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const range = (vp.getProperties() as any)?.voiRange;
+      if (range && Number.isFinite(range.lower) && Number.isFinite(range.upper)) {
+        setVoi({ ww: range.upper - range.lower, wc: (range.upper + range.lower) / 2 });
+      }
     };
 
     (async () => {
@@ -116,12 +130,14 @@ export function Viewer2D({ imageId, seriesImageIds }: { imageId: string; seriesI
           setInfo(merged);
         })();
 
-        // affine 操作: 左ドラッグ=Pan、右ドラッグ/ホイール=Zoom（いずれも camera=affine 経由）。
+        // 操作の割当: 左ドラッグ=WW/WL、中ドラッグ=Pan、右ドラッグ/ホイール=Zoom。
         const tg = ToolGroupManager.getToolGroup(toolGroupId) ?? ToolGroupManager.createToolGroup(toolGroupId);
         if (tg) {
+          tg.addTool(WindowLevelTool.toolName);
           tg.addTool(PanTool.toolName);
           tg.addTool(ZoomTool.toolName);
-          tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
+          tg.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
+          tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
           tg.setToolActive(ZoomTool.toolName, {
             bindings: [{ mouseButton: MouseBindings.Secondary }, { mouseButton: MouseBindings.Wheel }],
           });
@@ -130,9 +146,11 @@ export function Viewer2D({ imageId, seriesImageIds }: { imageId: string; seriesI
 
         // 操作（ツール）による変化を読み戻してオーバーレイ更新。
         element.addEventListener(EVENTS.CAMERA_MODIFIED, onCameraModified);
+        element.addEventListener(EVENTS.VOI_MODIFIED, onVoiModified);
         element.addEventListener("mousemove", onMove);
         element.addEventListener("mouseleave", onLeave);
         onCameraModified();
+        onVoiModified();
 
         // コンポーネント拡縮に追従。再 Fit したうえで相対 zoom/pan/rotation/flip を維持する。
         resizeObserver = new ResizeObserver(() => {
@@ -158,6 +176,7 @@ export function Viewer2D({ imageId, seriesImageIds }: { imageId: string; seriesI
       disposed = true;
       resizeObserver?.disconnect();
       element.removeEventListener(EVENTS.CAMERA_MODIFIED, onCameraModified);
+      element.removeEventListener(EVENTS.VOI_MODIFIED, onVoiModified);
       element.removeEventListener("mousemove", onMove);
       element.removeEventListener("mouseleave", onLeave);
       try {
@@ -217,6 +236,7 @@ export function Viewer2D({ imageId, seriesImageIds }: { imageId: string; seriesI
           <div style={overlayTL}>
             <span>{t("viewer.zoomLabel", { pct: Math.round(transform.zoom * 100) })}</span>
             {panned && <span style={panBadge}>{t("viewer.panned")}</span>}
+            {voi && <span>{t("viewer.wl", { w: Math.round(voi.ww), l: Math.round(voi.wc) })}</span>}
           </div>
           {/* カーソル位置の値: カラーは RGB、グレースケールはモダリティ値(HU 等)。 */}
           {sample && (
@@ -265,8 +285,8 @@ export function Viewer2D({ imageId, seriesImageIds }: { imageId: string; seriesI
         </div>
       </div>
 
-      {/* 右サイド: 輝度/ボクセル/FOV のキャリブレーション情報＋マウス座標。 */}
-      <ImageInfoPanel info={info} sample={sample} />
+      {/* 右サイド: 輝度/ボクセル/FOV のキャリブレーション情報＋マウス座標＋ライブ WW/WL。 */}
+      <ImageInfoPanel info={info} sample={sample} voi={voi} />
     </div>
   );
 }

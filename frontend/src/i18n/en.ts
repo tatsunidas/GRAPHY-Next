@@ -78,6 +78,7 @@ export const en: Record<string, string> = {
   "viewer.fit": "Fit",
   "viewer.reset": "Reset",
   "viewer.cursorValueUnit": "val",
+  "viewer.wl": "W {{w}} / L {{l}}",
   "viewer.info.title": "Image Info",
   "viewer.info.matrix": "Matrix",
   "viewer.info.pixelSpacing": "Pixel spacing",
