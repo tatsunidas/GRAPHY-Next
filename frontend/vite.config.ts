@@ -33,6 +33,26 @@ function cspPlugin(): Plugin {
   };
 }
 
+// dev 専用: Cornerstone3D の WASM コーデック(@cornerstonejs/codec-*)は UMD/CJS で、
+// `var <NAME> = (() => {...})()` ＋末尾の `module.exports = <NAME>` 形式。dev で素の ESM として
+// 配信されると `default` が無く「does not provide an export named 'default'」でデコードに失敗する。
+// dicom-image-loader 本体は worker のため exclude が必須なので、配下コーデックにだけ
+// ESM の default を付与して両立させる（build は Rollup の CJS interop が効くため不要＝serve 限定）。
+function cornerstoneCodecEsm(): Plugin {
+  const isCodec = (id: string) => /@cornerstonejs[\\/]codec-[^\\/]+[\\/]dist[\\/][^\\/]+\.js$/.test(id);
+  return {
+    name: "graphy-cs-codec-esm",
+    apply: "serve",
+    transform(code, id) {
+      const clean = id.split("?")[0];
+      if (!isCodec(clean) || /export\s+default/.test(code)) return null;
+      const m = code.match(/var\s+(\w+)\s*=\s*\(\(\)\s*=>/);
+      if (!m) return null;
+      return { code: `${code}\nexport default ${m[1]};\n`, map: null };
+    },
+  };
+}
+
 // 設定値は .env（VITE_DEV_PORT / VITE_BACKEND_URL）から読む。
 // base: "./" にすることで、Electron の file:// 読み込みでも資産パスが解決できる。
 export default defineConfig(({ mode }) => {
@@ -42,7 +62,7 @@ export default defineConfig(({ mode }) => {
 
   return {
     base: "./",
-    plugins: [react(), cspPlugin()],
+    plugins: [react(), cspPlugin(), cornerstoneCodecEsm()],
     // Cornerstone3D の dicom-image-loader はデコード用 Web Worker を ES module + 動的 import
     // （コーデックの遅延ロード）で構成するため、worker を ES 形式でバンドルする必要がある
     // （既定の iife はコード分割と非互換でビルドが失敗する）。
@@ -50,10 +70,10 @@ export default defineConfig(({ mode }) => {
       format: "es",
     },
     optimizeDeps: {
-      // dicom-image-loader と配下の WASM コーデック(UMD/CJS)を事前バンドルする。
-      // こうすると esbuild が CJS→ESM interop（default 付与）を行うため、dev で
-      // 「does not provide an export named 'default'」のデコードエラーを防げる。
-      include: ["@cornerstonejs/dicom-image-loader", "dicom-parser"],
+      // dicom-image-loader は Web Worker(?worker_file)を内包し dep-optimizer と非互換のため除外する
+      // （include すると "decodeImageFrameWorker.js が .vite/deps に無い" エラーになる）。
+      // 除外すると配下の UMD コーデックに default が無くなる問題は cornerstoneCodecEsm() で補う。
+      exclude: ["@cornerstonejs/dicom-image-loader"],
     },
     server: {
       port: devPort,
