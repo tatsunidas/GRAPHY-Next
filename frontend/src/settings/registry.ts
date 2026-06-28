@@ -89,6 +89,56 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
     ],
   },
   {
+    id: "data",
+    label: "データ管理",
+    icon: "🗂",
+    sections: [
+      {
+        title: "削除",
+        fields: [
+          { key: "data.confirmBeforeDelete", label: "削除前に確認する", type: "toggle", default: true },
+          {
+            key: "data.deleteFilesOnDisk",
+            label: "削除時にディスク上の DICOM ファイルも削除",
+            type: "toggle",
+            default: true,
+            help: "OFF にすると索引からのみ除外し、実ファイルは残ります。",
+          },
+        ],
+      },
+      {
+        title: "患者情報の編集",
+        fields: [
+          {
+            key: "data.applyPatientEditToFiles",
+            label: "患者情報の編集を元の DICOM ファイルにも反映",
+            type: "toggle",
+            default: true,
+            help: "ON で該当患者の全 DICOM ファイルのタグを書き換えます（重い・不可逆）。OFF は索引のみ更新。",
+          },
+        ],
+      },
+      {
+        title: "表示・統計",
+        fields: [
+          { key: "data.tableRowsPerPage", label: "DBテーブルの1ページ表示件数", type: "number", default: 100, min: 10, max: 1000 },
+          { key: "data.statsRangeMonths", label: "統計の既定期間（月）", type: "number", default: 12, min: 1, max: 120 },
+          {
+            key: "data.volumeUnit",
+            label: "データ容量の単位",
+            type: "select",
+            default: "auto",
+            options: [
+              { value: "auto", label: "自動(MB/GB)" },
+              { value: "MB", label: "MB" },
+              { value: "GB", label: "GB" },
+            ],
+          },
+        ],
+      },
+    ],
+  },
+  {
     id: "dicom",
     label: "DICOM通信",
     icon: "🌐",
@@ -102,6 +152,18 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
             type: "text",
             default: "GRAPHYNEXT",
             help: "現状は表示・保存のみ。将来 backend 設定への反映を予定。",
+          },
+        ],
+      },
+      {
+        title: "PACS 連携（web）",
+        fields: [
+          {
+            key: "dicom.pacsUiUrl",
+            label: "PACS 管理 UI の URL",
+            type: "text",
+            default: "",
+            help: "web 版で患者情報を編集する際に開く dcm4chee の UI。例: http://localhost:8080/dcm4chee-arc/ui2",
           },
         ],
       },

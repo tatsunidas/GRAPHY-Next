@@ -54,6 +54,23 @@ GRAPHY の MainScreen は**ローカル DB のスタディツリーテーブル*
 Phase 2 のツールバーは最初から [`plugin-architecture.md`](plugin-architecture.md) の `/api/plugins` 契約に
 乗せる（後付けより楽）。標準ツール（W/L・パン・ズーム・計測）も同じ拡張点で表現する。
 
+## 5.5 DB テーブルウィンドウ（standalone 専用）
+
+GRAPHY の DatabaseBrowser 相当。ローカル DB(H2索引) を対象とするため **standalone 専用**
+（web は自前 DB を持たない）。機能: 各テーブル表示・検索・患者情報編集（患者レベル）・削除・統計グラフ。
+
+- **削除**: 既定で DB 行＋ディスク上の DICOM ファイルを削除（設定 `data.deleteFilesOnDisk`）。
+- **患者編集**: 既定で索引＋該当患者の全 DICOM ファイルのタグを書換（設定 `data.applyPatientEditToFiles`）。
+- **統計**: 時系列スタディ数 / モダリティ別スタディ数(割合) / モダリティ別画像枚数 / モダリティ別データ容量。
+  容量は索引に `sizeBytes` を追加して集計。
+- REST: `/api/patients`(検索)、`PUT/DELETE /api/patients/{id}`、`DELETE /api/studies/{uid}`、`/api/stats`。
+
+### web の患者情報編集は dcm4chee に委ねる（誘導）
+web のデータは PACS の所有物（IOCM/監査/権限は PACS 側）。我々が WADO の写しを書き換えるのは不適切。
+- 既定: **ディープリンク誘導** — 「dcm4chee で編集」ボタンで dcm4chee-arc UI の患者ページを開く
+  （設定 `dicom.pacsUiUrl`）。
+- 任意: BFF が dcm4chee 患者 REST（`PUT /aets/{aet}/rs/patients/{id}`）を代理呼び出し（dcm4chee 限定）。
+
 ## 6. 実装順（Phase 2）
 
 1. **ナビゲーション**: 索引拡張 + series/instances エンドポイント + `StudyBrowser`→`SeriesNavigator`。

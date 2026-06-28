@@ -63,6 +63,79 @@ public interface DicomInstanceRepository extends JpaRepository<DicomInstance, St
             """)
     List<DicomInstance> findBySeries(@Param("studyUid") String studyUid, @Param("seriesUid") String seriesUid);
 
+    // --- 患者テーブル（DB 管理 UI 用）---
+
+    /** 患者単位の集計（検索可。q が null/空なら全件）。 */
+    @Query("""
+            select i.patientId as patientId,
+                   max(i.patientName) as patientName,
+                   max(i.patientBirthDate) as patientBirthDate,
+                   max(i.patientSex) as patientSex,
+                   count(distinct i.studyInstanceUid) as numberOfStudies,
+                   count(i) as numberOfInstances
+            from DicomInstance i
+            where (:q is null or lower(i.patientId) like lower(concat('%', :q, '%'))
+                              or lower(i.patientName) like lower(concat('%', :q, '%')))
+            group by i.patientId
+            order by max(i.patientName)
+            """)
+    List<PatientSummary> findPatientSummaries(@Param("q") String q);
+
+    List<DicomInstance> findByPatientId(String patientId);
+
+    List<DicomInstance> findByStudyInstanceUid(String studyUid);
+
+    // --- 統計 ---
+
+    @Query("""
+            select substring(i.studyDate, 1, 6) as k, count(distinct i.studyInstanceUid) as v
+            from DicomInstance i
+            where i.studyDate is not null and length(i.studyDate) >= 6
+            group by substring(i.studyDate, 1, 6)
+            order by k
+            """)
+    List<KeyValue> studyCountByMonth();
+
+    @Query("""
+            select i.modality as k, count(distinct i.studyInstanceUid) as v
+            from DicomInstance i group by i.modality order by v desc
+            """)
+    List<KeyValue> studyCountByModality();
+
+    @Query("""
+            select i.modality as k, count(i) as v
+            from DicomInstance i group by i.modality order by v desc
+            """)
+    List<KeyValue> instanceCountByModality();
+
+    @Query("""
+            select i.modality as k, coalesce(sum(i.sizeBytes), 0) as v
+            from DicomInstance i group by i.modality order by v desc
+            """)
+    List<KeyValue> volumeBytesByModality();
+
+    /** 患者集計の射影。 */
+    interface PatientSummary {
+        String getPatientId();
+
+        String getPatientName();
+
+        String getPatientBirthDate();
+
+        String getPatientSex();
+
+        long getNumberOfStudies();
+
+        long getNumberOfInstances();
+    }
+
+    /** 統計の汎用 {キー, 値} 射影。 */
+    interface KeyValue {
+        String getK();
+
+        long getV();
+    }
+
     /** findStudySummaries の射影。 */
     interface StudySummary {
         String getStudyInstanceUid();

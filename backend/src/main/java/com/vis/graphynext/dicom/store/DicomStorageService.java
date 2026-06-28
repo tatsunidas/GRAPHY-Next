@@ -78,6 +78,8 @@ public class DicomStorageService {
         entity.setTransferSyntaxUid(tsuid);
         entity.setPatientId(patientId);
         entity.setPatientName(ds.getString(Tag.PatientName));
+        entity.setPatientBirthDate(ds.getString(Tag.PatientBirthDate));
+        entity.setPatientSex(ds.getString(Tag.PatientSex));
         entity.setStudyInstanceUid(studyUid);
         entity.setStudyDate(ds.getString(Tag.StudyDate));
         entity.setStudyDescription(ds.getString(Tag.StudyDescription));
@@ -86,6 +88,7 @@ public class DicomStorageService {
         entity.setSeriesNumber(ds.getInt(Tag.SeriesNumber, 0));
         entity.setSeriesDescription(ds.getString(Tag.SeriesDescription));
         entity.setInstanceNumber(ds.getInt(Tag.InstanceNumber, 0));
+        entity.setSizeBytes(Files.size(dest));
         entity.setUri(dest.toUri().toString());
         try {
             DicomInstance saved = repo.save(entity);

@@ -30,6 +30,8 @@ public class DicomInstance {
     // 患者 / スタディ
     private String patientId;
     private String patientName;
+    private String patientBirthDate;
+    private String patientSex;
     private String studyInstanceUid;
     private String studyDate;
     private String studyDescription;
@@ -42,6 +44,9 @@ public class DicomInstance {
 
     // インスタンス
     private Integer instanceNumber;
+
+    /** 保存した DICOM ファイルのバイトサイズ（容量統計用）。 */
+    private Long sizeBytes;
 
     @Column(length = 1024)
     private String uri;
@@ -88,6 +93,22 @@ public class DicomInstance {
 
     public void setPatientName(String v) {
         this.patientName = v;
+    }
+
+    public String getPatientBirthDate() {
+        return patientBirthDate;
+    }
+
+    public void setPatientBirthDate(String v) {
+        this.patientBirthDate = v;
+    }
+
+    public String getPatientSex() {
+        return patientSex;
+    }
+
+    public void setPatientSex(String v) {
+        this.patientSex = v;
     }
 
     public String getStudyInstanceUid() {
@@ -152,6 +173,14 @@ public class DicomInstance {
 
     public void setInstanceNumber(Integer v) {
         this.instanceNumber = v;
+    }
+
+    public Long getSizeBytes() {
+        return sizeBytes;
+    }
+
+    public void setSizeBytes(Long v) {
+        this.sizeBytes = v;
     }
 
     public String getUri() {
