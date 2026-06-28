@@ -41,11 +41,35 @@ export function readTransform(vp: Types.IStackViewport): ViewTransform {
 
 /**
  * 部分更新を現在状態にマージして適用する。
- * displayArea を必ず現在値で埋めることで setViewPresentation の displayArea 誤適用を防ぐ。
+ *
+ * <p>flip は `setViewPresentation` 経由だと <b>OFF にできない</b>（Cornerstone の既知挙動:
+ * 内部の flip(false) が no-op のため一方通行になる）。そこで flip だけ `setCamera` で
+ * 双方向トグルし、残り（zoom/pan/rotation/displayArea）は presentation で適用する。
+ * displayArea は現在値で埋め、setViewPresentation の displayArea 誤適用を防ぐ。
  */
 export function applyTransform(vp: Types.IStackViewport, patch: Partial<ViewTransform>): void {
   const cur = vp.getViewPresentation();
-  vp.setViewPresentation({ ...cur, ...patch });
+
+  // 1) flip は setCamera で（現在値と異なるときだけ）適用＝双方向に効く。
+  const flip: { flipHorizontal?: boolean; flipVertical?: boolean } = {};
+  if (patch.flipHorizontal !== undefined && patch.flipHorizontal !== cur.flipHorizontal) {
+    flip.flipHorizontal = patch.flipHorizontal;
+  }
+  if (patch.flipVertical !== undefined && patch.flipVertical !== cur.flipVertical) {
+    flip.flipVertical = patch.flipVertical;
+  }
+  if (flip.flipHorizontal !== undefined || flip.flipVertical !== undefined) {
+    vp.setCamera(flip as Parameters<Types.IStackViewport["setCamera"]>[0]);
+  }
+
+  // 2) 残りは presentation で。flip は setCamera 後の実値に合わせて no-op にする。
+  const after = vp.getViewPresentation();
+  vp.setViewPresentation({
+    ...cur,
+    ...patch,
+    flipHorizontal: after.flipHorizontal,
+    flipVertical: after.flipVertical,
+  });
   vp.render();
 }
 

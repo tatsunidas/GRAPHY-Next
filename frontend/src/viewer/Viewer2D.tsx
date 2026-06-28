@@ -131,7 +131,16 @@ export function Viewer2D({ imageId }: { imageId: string }) {
 
   // --- 操作（すべて affine = ViewPresentation 経由） ---
   const vp = () => viewportRef.current;
-  const fit = () => vp() && applyTransform(vp()!, FIT_TRANSFORM);
+  // Fit: コンポーネントに合わせて 1.0・中央へ（回転/反転は保持）。
+  const fit = () => {
+    const v = vp();
+    if (v) applyTransform(v, { zoom: 1, pan: [0, 0] });
+  };
+  // Reset: zoom/pan/回転/反転をすべて初期状態へ。
+  const reset = () => {
+    const v = vp();
+    if (v) applyTransform(v, FIT_TRANSFORM);
+  };
   const zoomBy = (f: number) => {
     const v = vp();
     if (v) applyTransform(v, { zoom: readTransform(v).zoom * f });
@@ -173,6 +182,7 @@ export function Viewer2D({ imageId }: { imageId: string }) {
         <button onClick={rotate90} style={btn} title={t("viewer.rotate")}>⟳</button>
         <button onClick={flipH} style={btn} title={t("viewer.flipH")}>⇄</button>
         <button onClick={flipV} style={btn} title={t("viewer.flipV")}>⇅</button>
+        <button onClick={reset} style={btn} title={t("viewer.reset")}>{t("viewer.reset")}</button>
       </div>
     </div>
   );

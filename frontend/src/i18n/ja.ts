@@ -75,6 +75,7 @@ export const ja: Record<string, string> = {
   "viewer.zoomLabel": "{{pct}}%",
   "viewer.panned": "PAN",
   "viewer.fit": "Fit",
+  "viewer.reset": "リセット",
   "viewer.zoomIn": "拡大",
   "viewer.zoomOut": "縮小",
   "viewer.rotate": "90°回転",

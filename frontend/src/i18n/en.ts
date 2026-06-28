@@ -76,6 +76,7 @@ export const en: Record<string, string> = {
   "viewer.zoomLabel": "{{pct}}%",
   "viewer.panned": "PAN",
   "viewer.fit": "Fit",
+  "viewer.reset": "Reset",
   "viewer.zoomIn": "Zoom in",
   "viewer.zoomOut": "Zoom out",
   "viewer.rotate": "Rotate 90°",
