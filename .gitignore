@@ -33,3 +33,6 @@ backend/data/
 
 # dcm4chee compose のランタイムデータ
 deploy/dcm4chee/data/
+
+# Electron 起動時(CWD=desktop)に backend が作るランタイムデータ
+desktop/data/
