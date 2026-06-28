@@ -1,7 +1,7 @@
 // Electron preload（sandbox 互換）。レンダラ(React)が backend を叩けるよう API ベース URL を注入する。
 // sandbox 下では require が制限されるため、config.json を読まず process.argv（main.js が
 // additionalArguments で渡す --graphy-api-base）から受け取る。
-const { contextBridge } = require("electron");
+const { contextBridge, ipcRenderer } = require("electron");
 
 function argValue(name) {
   const prefix = `--${name}=`;
@@ -16,4 +16,9 @@ contextBridge.exposeInMainWorld("__GRAPHY_API_BASE__", apiBase);
 contextBridge.exposeInMainWorld("__GRAPHY_SECURITY__", {
   contextIsolation: process.contextIsolated === true,
   sandbox: process.sandboxed === true,
+});
+
+// デスクトップ専用 API（ネイティブダイアログ等）。main プロセスへ橋渡し。
+contextBridge.exposeInMainWorld("graphyDesktop", {
+  pickImportPaths: () => ipcRenderer.invoke("graphy:pick-import"),
 });

@@ -40,9 +40,13 @@ export const ja: Record<string, string> = {
   "field.studyCount": "検査数",
 
   // main screen
+  "main.menu.file": "ファイル",
   "main.menu.tools": "ツール",
   "main.menu.help": "ヘルプ",
   "main.toolbar.refresh": "更新",
+  "main.import.action": "インポート",
+  "main.import.running": "インポート中…",
+  "main.import.result": "取込 {{imported}} 件 / スキップ {{skipped}} / 失敗 {{failed}}",
   "main.search.title": "検索",
   "main.search.studyDate": "検査日",
   "main.search.accession": "受付番号",

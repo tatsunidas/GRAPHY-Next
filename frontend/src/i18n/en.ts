@@ -40,9 +40,13 @@ export const en: Record<string, string> = {
   "field.studyCount": "Studies",
 
   // main screen
+  "main.menu.file": "File",
   "main.menu.tools": "Tools",
   "main.menu.help": "Help",
   "main.toolbar.refresh": "Refresh",
+  "main.import.action": "Import",
+  "main.import.running": "Importing…",
+  "main.import.result": "Imported {{imported}} / Skipped {{skipped}} / Failed {{failed}}",
   "main.search.title": "Search",
   "main.search.studyDate": "Study Date",
   "main.search.accession": "Accession #",

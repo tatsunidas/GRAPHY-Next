@@ -2,12 +2,16 @@ import { useI18n } from "../i18n/i18n";
 
 export function Toolbar({
   isStandalone,
+  canImport,
+  onImport,
   onRefresh,
   onOpenDb,
   onOpenSettings,
   onOpenHelp,
 }: {
   isStandalone: boolean;
+  canImport: boolean;
+  onImport: () => void;
   onRefresh: () => void;
   onOpenDb: () => void;
   onOpenSettings: () => void;
@@ -16,6 +20,7 @@ export function Toolbar({
   const { t } = useI18n();
   return (
     <div style={bar}>
+      {canImport && <ToolButton icon="📁" label={t("main.import.action")} onClick={onImport} />}
       <ToolButton icon="🔄" label={t("main.toolbar.refresh")} onClick={onRefresh} />
       {isStandalone && <ToolButton icon="🗄" label={t("app.btn.dbTitle")} onClick={onOpenDb} />}
       <div style={{ flex: 1 }} />

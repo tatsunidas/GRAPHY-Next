@@ -1,5 +1,7 @@
 import { useState } from "react";
-import { type AppStatus, type StudyFilters } from "../api";
+import { importPaths, type AppStatus, type StudyFilters } from "../api";
+import { desktop } from "../desktopBridge";
+import { useI18n } from "../i18n/i18n";
 import { StudyList } from "../StudyList";
 import { MenuBar } from "./MenuBar";
 import { Toolbar } from "./Toolbar";
@@ -9,7 +11,7 @@ import { StatusBar } from "./StatusBar";
 /**
  * アプリの土台シェル（GRAPHY の MainScreen 相当）。
  * メニュー / ツールバー / 検索パネル / STUDY ツリーテーブル / 状態・時刻表示。
- * web 版はこのままポータル画面として使う（検索→スタディ一覧→ビューア起動）。
+ * web 版はそのままポータル画面として使う（検索→スタディ一覧→ビューア起動）。
  */
 export function MainScreen({
   status,
@@ -24,25 +26,49 @@ export function MainScreen({
   onOpenDb: () => void;
   onOpenHelp: () => void;
 }) {
+  const { t } = useI18n();
   const isStandalone = status?.mode === "standalone";
+  const canImport = isStandalone && !!desktop();
   const [filters, setFilters] = useState<StudyFilters>({});
   const [reloadKey, setReloadKey] = useState(0);
+  const [importMsg, setImportMsg] = useState<string | null>(null);
+
+  const handleImport = async () => {
+    const d = desktop();
+    if (!d) return;
+    const paths = await d.pickImportPaths();
+    if (!paths || paths.length === 0) return;
+    setImportMsg(t("main.import.running"));
+    try {
+      const r = await importPaths(paths);
+      setImportMsg(t("main.import.result", { imported: r.imported, skipped: r.skipped, failed: r.failed }));
+      setReloadKey((k) => k + 1);
+    } catch (e) {
+      setImportMsg(t("common.fetchError", { error: String(e) }));
+    }
+    setTimeout(() => setImportMsg(null), 6000);
+  };
 
   return (
     <div style={shell}>
       <MenuBar
         isStandalone={isStandalone}
+        canImport={canImport}
+        onImport={handleImport}
         onOpenSettings={onOpenSettings}
         onOpenDb={onOpenDb}
         onOpenHelp={onOpenHelp}
       />
       <Toolbar
         isStandalone={isStandalone}
+        canImport={canImport}
+        onImport={handleImport}
         onRefresh={() => setReloadKey((k) => k + 1)}
         onOpenDb={onOpenDb}
         onOpenSettings={onOpenSettings}
         onOpenHelp={onOpenHelp}
       />
+      {importMsg && <div style={banner}>{importMsg}</div>}
       <div style={middle}>
         <SearchPanel onSearch={setFilters} />
         <div style={treeArea}>
@@ -65,3 +91,10 @@ const shell: React.CSSProperties = {
 };
 const middle: React.CSSProperties = { flex: 1, display: "flex", minHeight: 0 };
 const treeArea: React.CSSProperties = { flex: 1, overflow: "auto", padding: "8px 18px" };
+const banner: React.CSSProperties = {
+  padding: "6px 14px",
+  background: "#eef6ec",
+  borderBottom: "1px solid #d6e6d0",
+  fontSize: 13,
+  color: "#2e5d27",
+};

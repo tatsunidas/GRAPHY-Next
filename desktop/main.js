@@ -12,7 +12,7 @@
 //   GRAPHY_BACKEND_PORT        … backend ポート（既定 config.backend.port）
 //   GRAPHY_BACKEND_PROFILE     … backend プロファイル（既定 config.backend.profile）
 
-const { app, BrowserWindow, shell } = require("electron");
+const { app, BrowserWindow, shell, dialog, ipcMain } = require("electron");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 const http = require("node:http");
@@ -237,6 +237,15 @@ function createWindow() {
     win.webContents.openDevTools();
   }
 }
+
+// インポート: ネイティブのファイル/フォルダ選択ダイアログ。選んだパスを返す。
+ipcMain.handle("graphy:pick-import", async () => {
+  const result = await dialog.showOpenDialog(BrowserWindow.getFocusedWindow(), {
+    title: "DICOM のインポート（ファイル / フォルダ）",
+    properties: ["openFile", "openDirectory", "multiSelections"],
+  });
+  return result.canceled ? [] : result.filePaths;
+});
 
 app.whenReady().then(async () => {
   createSplash();

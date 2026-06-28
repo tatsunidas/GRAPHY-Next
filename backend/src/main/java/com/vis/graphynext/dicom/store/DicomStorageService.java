@@ -107,6 +107,26 @@ public class DicomStorageService {
         }
     }
 
+    /**
+     * ローカルファイルを取り込む（原本はコピーして保持。ingest は temp を消費するため一時複製を使う）。
+     */
+    public DicomInstance importFromFile(Path source) throws IOException {
+        Path tmpDir = storageDir.resolve(".import");
+        Files.createDirectories(tmpDir);
+        Path tmp = Files.createTempFile(tmpDir, "imp-", ".dcm");
+        try {
+            Files.copy(source, tmp, StandardCopyOption.REPLACE_EXISTING);
+            return ingest(tmp); // 成功時 tmp は dest へ移動、失敗時は ingest 内で後始末
+        } catch (IOException | RuntimeException e) {
+            try {
+                Files.deleteIfExists(tmp);
+            } catch (IOException ignore) {
+                // ベストエフォート
+            }
+            throw e;
+        }
+    }
+
     @Transactional(readOnly = true)
     public List<DicomInstance> findMatches(String patientId, String studyUid, String seriesUid, String sopUid) {
         return repo.findMatches(patientId, studyUid, seriesUid, sopUid);

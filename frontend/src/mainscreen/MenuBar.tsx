@@ -9,11 +9,15 @@ interface MenuItem {
 
 export function MenuBar({
   isStandalone,
+  canImport,
+  onImport,
   onOpenSettings,
   onOpenDb,
   onOpenHelp,
 }: {
   isStandalone: boolean;
+  canImport: boolean;
+  onImport: () => void;
   onOpenSettings: () => void;
   onOpenDb: () => void;
   onOpenHelp: () => void;
@@ -28,6 +32,11 @@ export function MenuBar({
   }, []);
 
   const menus: { id: string; label: string; items: MenuItem[] }[] = [
+    {
+      id: "file",
+      label: t("main.menu.file"),
+      items: [{ label: t("main.import.action"), onClick: onImport, disabled: !canImport }],
+    },
     {
       id: "tools",
       label: t("main.menu.tools"),

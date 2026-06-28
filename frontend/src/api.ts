@@ -1,4 +1,4 @@
-import { httpGet } from "./http";
+import { httpGet, httpSend } from "./http";
 
 // apiBase は apiBase.ts へ分離（循環インポート回避）。互換のため再エクスポート。
 export { apiBase } from "./apiBase";
@@ -63,3 +63,13 @@ export const fetchInstances = (studyUid: string, seriesUid: string) =>
   httpGet<Instance[]>(
     `/api/studies/${encodeURIComponent(studyUid)}/series/${encodeURIComponent(seriesUid)}/instances`,
   );
+
+export interface ImportResult {
+  imported: number;
+  skipped: number;
+  failed: number;
+  errors: string[];
+}
+
+export const importPaths = (paths: string[]) =>
+  httpSend<ImportResult>("/api/import/paths", "POST", { paths });
