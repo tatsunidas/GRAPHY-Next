@@ -146,6 +146,16 @@ zoom / pan / flip(上下左右) / rotation は **Cornerstone3D の ViewPresentat
 - [ ] **C/T 切替（別スタック）をまたぐと zoom/pan/WW/WL/回転/反転がリセットされる**
       （同一スタック内＝Z 送りでは維持される）。→ 保存 presentation/voiRange の再適用で対応予定。
 
+## キーボード操作と Undo/Redo（実装済み）
+- 既定ショートカット（`shortcuts/registry.ts`）のうち**実装済み機能のみ配線**:
+  - ナビ: ↑=前/↓=次スライス、Home/End=先頭/末尾、Space=シネ、O=テキスト表示切替（SeriesViewer）。
+  - 表示: I=階調反転、Mod+Z=Undo、Mod+Shift+Z=Redo（Viewer2D・スライダーのみ）。
+  - 未対応（予約のまま）: シリーズ送り(←→)、Esc=表示リセット、F=フルスクリーン、ツール(W/P/Z/…)、Delete。
+- **表示状態の Undo/Redo は DICOM 不要**。`getViewPresentation()`＋`voiRange` のスナップショット履歴
+  （最大50・デバウンスで1手）。flip は `applyTransform(setCamera)` で双方向復元。
+  - **DICOM Presentation State(GSPS)** は「表示状態を DICOM として**保存・PACS 共有・他装置再現**」する
+    永続/相互運用の仕組みで、セッション内 Undo/Redo とは別。将来の保存機能で別途検討。
+
 ## GridView（FilmGrid）表示切替（実装済み）
 - 用語: **SliderView(SingleGridView)**=既定のスライダー表示、**GridView(FilmGrid)**=グリッド表示。
 - コントローラに「切替ボタン」＋「列数」セレクト（先頭に Slider に戻す選択肢）。Slider 復帰時は Z=0。
