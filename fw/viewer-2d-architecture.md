@@ -146,6 +146,15 @@ zoom / pan / flip(上下左右) / rotation は **Cornerstone3D の ViewPresentat
 - [ ] **C/T 切替（別スタック）をまたぐと zoom/pan/WW/WL/回転/反転がリセットされる**
       （同一スタック内＝Z 送りでは維持される）。→ 保存 presentation/voiRange の再適用で対応予定。
 
+## GridView（FilmGrid）表示切替（実装済み）
+- 用語: **SliderView(SingleGridView)**=既定のスライダー表示、**GridView(FilmGrid)**=グリッド表示。
+- コントローラに「切替ボタン」＋「列数」セレクト（先頭に Slider に戻す選択肢）。Slider 復帰時は Z=0。
+- GridView 中はスライダー/シネ/キー・ホイール送りを無効化し、グリッドはスクロール可。各セルは
+  **compact Viewer2D**（ツール/状態バー/情報パネル無し・画像＋オーバーレイのみ、`height`指定）。
+- **無効化条件**: マルチチャンネル(nC>1) / 動画(Video SOP Class) / スライス1枚。
+- ⚠️ 多数セルは各々が viewport を作るため、巨大シリーズではメモリ/描画負荷に注意（将来: 仮想化や
+  `loadImageToCanvas` 軽量描画、ContextPool/Tiled エンジンの活用を検討）。
+
 ## DICOM 属性テキストオーバーレイ（実装済み）
 - 既定: 左上=患者名/ID/性別/生年月日/年齢(生年月日と検査日から逆算)、右上=シリーズ記述/
   プロトコル名/体位/シリーズ番号/インスタンス番号。属性が無い項目は非表示。
