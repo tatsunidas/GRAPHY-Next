@@ -85,10 +85,19 @@ zoom / pan / flip(上下左右) / rotation は **Cornerstone3D の ViewPresentat
 - frontend: `StudyList.tsx` の InstanceList からシリーズ先頭 1 枚を表示（standalone のみ）
 - backend: `InstanceController`(`GET /api/instances/{sop}/file`) / `DicomStorageService.resolveInstanceFile`
 
+## ピクセルデータ(signed/unsigned)とキャリブレーション（実装済み）
+我々のコードは描画パイプラインをオーバーライドせず、**符号は Cornerstone(wadouri) のデフォルトで正しく扱われる**:
+- PixelRepresentation(0028,0103) で 0=符号なし(Uint)・1=符号あり(Int, 2の補数)。非圧縮は
+  `decodeLittleEndian` が Uint16/Int16 を切替、圧縮は codec へ `signed` を渡す。
+- **Modality LUT**(RescaleSlope/Intercept) と **VOI**(WindowCenter/Width)、MONOCHROME1 反転は
+  Cornerstone が GPU で自動適用＝表示は校正済み。
+- `viewer/imageInfo.ts` が metaData から値を集約し、`sampleAtCanvas` がカーソル位置の格納値→
+  モダリティ値(HU 等)を返す（preScale 済みなら二重適用しない）。`ImageInfoPanel.tsx` が右パネル表示。
+- 完了: ①輝度(HU 読取＋Rescale/Window 表示) ②ボクセルサイズ(PixelSpacing/SliceThickness)
+  ③FOV(Rows×rowSpacing × Cols×colSpacing)。**PET SUV は未対応**（要 PT scaling・追加タグ）。
+
 ## 次スコープ
-1. **輝度値キャリブレーション**（Modality LUT: RescaleSlope/Intercept、VOI LUT: WindowCenter/Width、PT は SUV）
-2. **ボクセルサイズ計算**（PixelSpacing / ImagerPixelSpacing / SliceThickness）
-3. **FOV 計算**（Rows×PixelSpacing, Columns×PixelSpacing）
-   → これらは Cornerstone の metaData プロバイダ（wadouri）から取得。
-4. その後: スタック（シリーズ全スライス＋矢印/ホイールスクロール）→ W/L・Length・ROI ツール
-   ＋既存キーボードショートカット配線 → メタデータ/向きオーバーレイ → web(wadors) 対応。
+1. **PET SUV**（PT scaling: Radiopharmaceutical/体重/時刻）。
+2. スタック（シリーズ全スライス＋矢印/ホイールスクロール）。
+3. W/L・Length・ROI ツール ＋既存キーボードショートカット配線。
+4. メタデータ/向き(A/P/L/R)オーバーレイ → web(wadors) 対応。
