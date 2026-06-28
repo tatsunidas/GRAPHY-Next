@@ -42,11 +42,12 @@ let backendProc = null;
 /** 同梱 / 開発時の backend jar のパスを解決する。 */
 function resolveBackendJar() {
   const candidates = [
-    // electron-builder で同梱した場合（extraResources → resources/backend）
+    // 1) パッケージ版（electron-builder extraResources → Contents/Resources/backend）
     path.join(process.resourcesPath || "", "backend", JAR_NAME),
-    // 開発時: リポジトリ内のビルド成果物
-    path.join(__dirname, "resources", "backend", JAR_NAME),
+    // 2) 開発時: 直近ビルドの成果物（dev-desktop が毎回ここを再ビルドする。最優先で参照）
     path.join(__dirname, "..", "backend", "target", JAR_NAME),
+    // 3) ステージ済みの同梱用コピー（古い可能性があるので最後のフォールバック）
+    path.join(__dirname, "resources", "backend", JAR_NAME),
   ];
   return candidates.find((p) => p && fs.existsSync(p)) || null;
 }

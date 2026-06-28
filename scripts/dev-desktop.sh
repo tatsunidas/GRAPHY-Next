@@ -9,6 +9,9 @@ cd "$ROOT"
 echo "[dev-desktop] backend jar を最新コードでビルドします（UIは Vite が配信）..."
 ( cd backend && ${MVN:-mvn} -q -Dfrontend.skip=true clean package )
 
+# 同梱用にステージされた古い jar が backend/target を隠さないよう、dev では除去する。
+rm -rf desktop/resources/backend
+
 echo "[dev-desktop] starting frontend (Vite) on :5173 ..."
 ( cd frontend && npm run dev ) &
 VITE_PID=$!
