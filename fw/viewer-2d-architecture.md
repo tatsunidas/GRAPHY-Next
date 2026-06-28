@@ -104,13 +104,22 @@ zoom / pan / flip(上下左右) / rotation は **Cornerstone3D の ViewPresentat
 - **スライス送り**: スライダー＋↑↓←→キー＋ホイール。**シネ再生**(fps)。
 - **5D(ZCT) モデル** `viewer/seriesLayout.ts`（GRAPHY Praparat 準拠の Z×C×T）。現状 nC=nT=1。
   5D 時に C/T スライダーを表示する UI は実装済み。
-- **未対応（次段）**: 実 5D 派生。GRAPHY は ImageJ hyperstack 次元に委譲しているため、Web版は
-  **backend のヘッダ読取エンドポイント**で導出する方針:
-  - Z = IPP を IOP 法線へ投影した距離で順序付け（または SliceLocation/InstanceNumber フォールバック）
-  - T = TemporalPositionIdentifier(0020,0100)
-  - C = EchoNumbers(0018,0086) 等
-  - nZ*nC*nT≠枚数なら純 Z スタックにフォールバック。
-  - C/T 切替(別スタック)をまたぐ transform/VOI 維持は、保存 presentation/voiRange の再適用で対応予定。
+- **5D(ZCT) 派生＝実装済み（DICOM 準拠・Classic 単一フレーム）**:
+  - backend `SeriesLayoutBuilder`（純アルゴリズム・単体テスト6件）＋ `seriesLayout()`（ヘッダ読取）
+    → `GET /api/studies/{study}/series/{series}/layout`。
+  - **Z** = IPP を IOP 法線へ投影（無ければ SliceLocation/InstanceNumber）。
+  - **T** = TemporalPositionIdentifier(0020,0100) / TriggerTime(0018,1060)。
+  - **C** = EchoNumbers(0018,0086) / DiffusionBValue(0018,9087) / EchoTime。DICOM の「channel」は
+    WSI の OpticalPathSequence のみのため、放射線では追加次元として解釈。
+  - Cornerstone の単一タグ4D分割(`splitImageIdsBy4DTags`)を **T×C の2次元へ拡張**。整合しなければ
+    純Z／総当たりC へ安全側フォールバック。
+  - frontend は `buildLayoutFromDto` で grid[c][t][z] を組み、C/T スライダーを次元>1 で表示
+    （ラベルは Z/C/T 維持＋DICOM 由来併記）。取得まで/失敗時は単一次元フォールバック。
+  - **DICOM 定義メモ**: Enhanced 多フレームは DimensionIndexValues(0020,9157)/StackID(0020,9056)/
+    InStackPositionNumber(0020,9057)/TemporalPositionIndex(0020,9128) が権威的。今回は Classic 対応で、
+    Enhanced 多フレーム＆フレーム取り出し(wadouri frame=) は次段。
+- **未対応（次段）**: ① C/T 切替(別スタック)をまたぐ transform/VOI 維持（保存 presentation/voiRange 再適用）。
+  ② Enhanced 多フレーム。③ web(wadors) の layout 導出。
 
 ## 次スコープ
 1. **5D ZCT 実派生**（backend layout エンドポイント）＋ C/T 切替時の transform/VOI 維持。
