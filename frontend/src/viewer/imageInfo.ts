@@ -70,20 +70,30 @@ export function readImageInfo(imageId: string): ImageInfo {
 
 /** カーソル位置のサンプル値。 */
 export interface PixelSample {
-  /** 画像内インデックス(列, 行) */
+  /** 画像内インデックス(列, 行) 整数（表示用） */
   i: number;
   j: number;
-  /** 格納値（生のピクセル値） */
-  stored: number;
-  /** モダリティ値（CT なら HU）。Rescale 適用後。 */
-  modalityValue: number;
+  /** 画像(OffScreen)座標 連続値（サブピクセル, 小数表示用） */
+  fx: number;
+  fy: number;
+  /** カラー画像か */
+  color: boolean;
+  /** カラー時の RGB（0–255 など格納値そのまま） */
+  rgb?: [number, number, number];
+  /** グレースケール時の格納値（生ピクセル値。符号付/符号なし・8/16bit いずれも typed array が正しい型） */
+  stored?: number;
+  /** グレースケール時のモダリティ値（CT なら HU）。Rescale 適用後。 */
+  modalityValue?: number;
 }
 
 /**
  * canvas 座標のピクセル値を取り出す。範囲外は null。
  *
- * <p>StackViewport の scalarData は通常「格納値」（GPU 側で Modality LUT を適用）。
- * preScale 済みならそのままモダリティ値なので二重適用しない。
+ * <p>scalarData は Cornerstone が信号の符号・ビット深度に応じた typed array
+ * （Uint8/Int8/Uint16/Int16/Float32）で保持するため、<b>グレースケールは符号付/符号なし・
+ * 8/16bit いずれもそのまま読めば正しい</b>。コンポーネント数で grayscale/color を分岐する。
+ * グレースケールは GPU 側 Modality LUT のため scalarData は「格納値」。preScale 済みなら
+ * モダリティ値なので二重適用しない。
  */
 export function sampleAtCanvas(
   viewport: Types.IStackViewport,
@@ -96,24 +106,37 @@ export function sampleAtCanvas(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const imgData = viewport.getImageData() as any;
     if (!imgData) return null;
-    // vtkImageData。world→index(連続)を丸めて格子点に。
-    const cont = csUtils.transformWorldToIndex(imgData.imageData, world);
-    const i = Math.round(cont[0]);
-    const j = Math.round(cont[1]);
+    // world→index(連続)。整数は最近傍格子点、連続は OffScreen 座標として保持。
+    const cont = csUtils.transformWorldToIndexContinuous(imgData.imageData, world);
+    const fx = cont[0];
+    const fy = cont[1];
+    const i = Math.round(fx);
+    const j = Math.round(fy);
     const cols = info.columns ?? imgData.dimensions?.[0] ?? 0;
     const rows = info.rows ?? imgData.dimensions?.[1] ?? 0;
     if (i < 0 || j < 0 || i >= cols || j >= rows) return null;
 
     const scalarData = imgData.getScalarData ? imgData.getScalarData() : imgData.scalarData;
-    if (!scalarData) return null;
-    const stored = scalarData[j * cols + i];
-    if (stored === undefined || Number.isNaN(stored)) return null;
+    if (!scalarData || !cols || !rows) return null;
 
+    // コンポーネント数（grayscale=1, RGB=3, RGBA=4）を scalarData 長から推定。
+    const comps = Math.max(1, Math.round(scalarData.length / (cols * rows)));
+    const pixelOffset = j * cols + i;
+
+    if (comps >= 3) {
+      const o = pixelOffset * comps;
+      const rgb: [number, number, number] = [scalarData[o], scalarData[o + 1], scalarData[o + 2]];
+      if (rgb.some((v) => v === undefined || Number.isNaN(v))) return null;
+      return { i, j, fx, fy, color: true, rgb };
+    }
+
+    const stored = scalarData[pixelOffset];
+    if (stored === undefined || Number.isNaN(stored)) return null;
     const alreadyScaled = Boolean(imgData.preScale?.scaled);
     const slope = info.rescaleSlope ?? 1;
     const intercept = info.rescaleIntercept ?? 0;
     const modalityValue = alreadyScaled ? stored : stored * slope + intercept;
-    return { i, j, stored, modalityValue };
+    return { i, j, fx, fy, color: false, stored, modalityValue };
   } catch {
     return null;
   }

@@ -90,6 +90,7 @@ export const ja: Record<string, string> = {
   "viewer.info.signed": "符号あり",
   "viewer.info.unsigned": "符号なし",
   "viewer.info.notCalibrated": "未校正",
+  "viewer.info.mousePos": "マウス(OffScreen)",
   "viewer.zoomIn": "拡大",
   "viewer.zoomOut": "縮小",
   "viewer.rotate": "90°回転",

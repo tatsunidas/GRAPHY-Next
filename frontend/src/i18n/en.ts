@@ -91,6 +91,7 @@ export const en: Record<string, string> = {
   "viewer.info.signed": "Signed",
   "viewer.info.unsigned": "Unsigned",
   "viewer.info.notCalibrated": "Not calibrated",
+  "viewer.info.mousePos": "Mouse (off-screen)",
   "viewer.zoomIn": "Zoom in",
   "viewer.zoomOut": "Zoom out",
   "viewer.rotate": "Rotate 90°",

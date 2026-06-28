@@ -196,10 +196,13 @@ export function Viewer2D({ imageId }: { imageId: string }) {
             <span>{t("viewer.zoomLabel", { pct: Math.round(transform.zoom * 100) })}</span>
             {panned && <span style={panBadge}>{t("viewer.panned")}</span>}
           </div>
-          {/* カーソル位置の輝度値（モダリティ値=HU 等）。 */}
+          {/* カーソル位置の値: カラーは RGB、グレースケールはモダリティ値(HU 等)。 */}
           {sample && (
             <div style={overlayTR}>
-              {valueUnit} {Math.round(sample.modalityValue)} ({sample.i},{sample.j})
+              {sample.color
+                ? `RGB(${sample.rgb?.[0]}, ${sample.rgb?.[1]}, ${sample.rgb?.[2]})`
+                : `${valueUnit} ${Math.round(sample.modalityValue ?? 0)}`}{" "}
+              ({sample.i},{sample.j})
             </div>
           )}
           {loading && !error && <div style={overlayCenter}>{t("common.loading")}</div>}
@@ -218,8 +221,8 @@ export function Viewer2D({ imageId }: { imageId: string }) {
         </div>
       </div>
 
-      {/* 右サイド: 輝度/ボクセル/FOV のキャリブレーション情報。 */}
-      <ImageInfoPanel info={info} />
+      {/* 右サイド: 輝度/ボクセル/FOV のキャリブレーション情報＋マウス座標。 */}
+      <ImageInfoPanel info={info} sample={sample} />
     </div>
   );
 }

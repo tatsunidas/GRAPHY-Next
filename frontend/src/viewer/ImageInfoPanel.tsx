@@ -1,4 +1,4 @@
-import { type ImageInfo } from "./imageInfo";
+import { type ImageInfo, type PixelSample } from "./imageInfo";
 import { useI18n } from "../i18n/i18n";
 
 /** 数値整形（桁数指定、未定義は "—"）。 */
@@ -10,9 +10,12 @@ function num(v: number | undefined, digits = 2): string {
  * 右サイドのキャリブレーション情報パネル。
  * 輝度（Modality LUT=Rescale, VOI=Window）/ ボクセルサイズ / FOV / ビット深度・符号 を一覧表示。
  */
-export function ImageInfoPanel({ info }: { info: ImageInfo | null }) {
+export function ImageInfoPanel({ info, sample }: { info: ImageInfo | null; sample?: PixelSample | null }) {
   const { t } = useI18n();
   if (!info) return null;
+
+  // マウスの画像(OffScreen)座標を小数1桁で。
+  const mousePos = sample ? `${sample.fx.toFixed(1)}, ${sample.fy.toFixed(1)}` : "—";
 
   const pixelSpacing =
     info.columnPixelSpacing !== undefined && info.rowPixelSpacing !== undefined
@@ -55,6 +58,8 @@ export function ImageInfoPanel({ info }: { info: ImageInfo | null }) {
       <Row label={t("viewer.info.bits")} value={bits} />
       <Row label={t("viewer.info.pixelRep")} value={signed} />
       <Row label={t("viewer.info.photometric")} value={info.photometricInterpretation || "—"} />
+      <div style={divider} />
+      <Row label={t("viewer.info.mousePos")} value={mousePos} />
     </div>
   );
 }
