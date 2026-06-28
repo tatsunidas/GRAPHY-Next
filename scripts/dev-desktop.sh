@@ -33,8 +33,17 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# Vite の立ち上がりを少し待つ
-sleep 3
+# Vite が応答するまで待つ（固定 sleep だと初回の依存最適化が間に合わず、Electron が
+# 空ページを掴んで「メニューだけ・真っ白」になることがある。最大 60s ポーリング）。
+DEV_URL="${GRAPHY_DEV_URL:-http://localhost:5173}"
+echo "[dev-desktop] Vite ($DEV_URL) の起動を待っています ..."
+for i in $(seq 1 120); do
+  if curl -fsS -o /dev/null "$DEV_URL" 2>/dev/null; then
+    echo "[dev-desktop] Vite 応答を確認（${i}回目）"
+    break
+  fi
+  sleep 0.5
+done
 
 echo "[dev-desktop] launching Electron (standalone backend を spawn) ..."
 cd desktop && GRAPHY_DEV=1 npm start

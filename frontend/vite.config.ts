@@ -74,6 +74,10 @@ export default defineConfig(({ mode }) => {
       // （include すると "decodeImageFrameWorker.js が .vite/deps に無い" エラーになる）。
       // 除外すると配下の UMD コーデックに default が無くなる問題は cornerstoneCodecEsm() で補う。
       exclude: ["@cornerstonejs/dicom-image-loader"],
+      // dicom-parser は UMD（package.json の module も UMD を指す）。明示 include しないと
+      // 「excluded loader の依存」として中途半端に最適化され、esbuild が top-level this を undefined に
+      // 書換えて UMD の global 分岐 `e.zlib` で落ちる。明示 include で CJS として正しく interop させる。
+      include: ["dicom-parser"],
     },
     server: {
       port: devPort,
