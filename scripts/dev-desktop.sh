@@ -12,6 +12,15 @@ echo "[dev-desktop] backend jar を最新コードでビルドします（UIは 
 # 同梱用にステージされた古い jar が backend/target を隠さないよう、dev では除去する。
 rm -rf desktop/resources/backend
 
+# このプロジェクトの vite だけを対象にしたパターン（他プロジェクトの vite は巻き込まない）。
+VITE_MATCH="$ROOT/frontend/node_modules/.bin/vite"
+
+# npm が spawn する実 vite は cleanup で orphan になりやすく、複数残ると .vite キャッシュを
+# 奪い合って "ENOENT .../deps_temp_*/_metadata.json" 競合を起こす。起動前に必ず掃除する。
+kill_stale_vite() { pkill -f "$VITE_MATCH" 2>/dev/null || true; }
+echo "[dev-desktop] 残存 vite を掃除します ..."
+kill_stale_vite
+
 echo "[dev-desktop] starting frontend (Vite) on :5173 ..."
 ( cd frontend && npm run dev ) &
 VITE_PID=$!
@@ -19,6 +28,8 @@ VITE_PID=$!
 cleanup() {
   echo "[dev-desktop] stopping vite ($VITE_PID)"
   kill "$VITE_PID" 2>/dev/null || true
+  # npm 経由で orphan になった実 vite も確実に終了させる。
+  kill_stale_vite
 }
 trap cleanup EXIT INT TERM
 
