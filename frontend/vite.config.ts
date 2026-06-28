@@ -49,10 +49,11 @@ export default defineConfig(({ mode }) => {
     worker: {
       format: "es",
     },
-    // codec(WASM/emscripten グルー) や dicom-image-loader を事前バンドルから除外し、
-    // ブラウザ向け解決に任せる（fs/path の node externalize 警告は無害）。
     optimizeDeps: {
-      exclude: ["@cornerstonejs/dicom-image-loader"],
+      // dicom-image-loader と配下の WASM コーデック(UMD/CJS)を事前バンドルする。
+      // こうすると esbuild が CJS→ESM interop（default 付与）を行うため、dev で
+      // 「does not provide an export named 'default'」のデコードエラーを防げる。
+      include: ["@cornerstonejs/dicom-image-loader", "dicom-parser"],
     },
     server: {
       port: devPort,
