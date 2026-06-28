@@ -83,6 +83,7 @@ public class DicomStorageService {
         entity.setStudyInstanceUid(studyUid);
         entity.setStudyDate(ds.getString(Tag.StudyDate));
         entity.setStudyDescription(ds.getString(Tag.StudyDescription));
+        entity.setAccessionNumber(ds.getString(Tag.AccessionNumber));
         entity.setSeriesInstanceUid(seriesUid);
         entity.setModality(ds.getString(Tag.Modality));
         entity.setSeriesNumber(ds.getInt(Tag.SeriesNumber, 0));
@@ -111,14 +112,22 @@ public class DicomStorageService {
         return repo.findMatches(patientId, studyUid, seriesUid, sopUid);
     }
 
-    /** ローカル索引のスタディ一覧（UI 向け）。 */
+    /** ローカル索引のスタディ一覧（全件）。 */
     @Transactional(readOnly = true)
     public List<com.vis.graphynext.dicom.StudyDto> listStudies() {
-        return repo.findStudySummaries().stream()
-                .map(s -> new com.vis.graphynext.dicom.StudyDto(
-                        s.getStudyInstanceUid(), s.getPatientId(), s.getPatientName(),
-                        s.getStudyDate(), s.getStudyDescription(), s.getModality(),
-                        s.getNumberOfInstances()))
+        return listStudies(new com.vis.graphynext.dicom.StudySearch(null, null, null, null, null));
+    }
+
+    /** ローカル索引のスタディ一覧（絞り込み）。 */
+    @Transactional(readOnly = true)
+    public List<com.vis.graphynext.dicom.StudyDto> listStudies(com.vis.graphynext.dicom.StudySearch search) {
+        com.vis.graphynext.dicom.StudySearch s = search.normalized();
+        return repo.findStudySummaries(s.patientId(), s.patientName(), s.studyDate(), s.modality(),
+                        s.accessionNumber()).stream()
+                .map(x -> new com.vis.graphynext.dicom.StudyDto(
+                        x.getStudyInstanceUid(), x.getPatientId(), x.getPatientName(),
+                        x.getStudyDate(), x.getStudyDescription(), x.getModality(),
+                        x.getNumberOfInstances()))
                 .toList();
     }
 

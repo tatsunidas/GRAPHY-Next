@@ -38,6 +38,7 @@ public class DicomInstance {
     private String studyInstanceUid;
     private String studyDate;
     private String studyDescription;
+    private String accessionNumber;
 
     // シリーズ
     private String seriesInstanceUid;
@@ -136,6 +137,14 @@ public class DicomInstance {
 
     public void setStudyDescription(String v) {
         this.studyDescription = v;
+    }
+
+    public String getAccessionNumber() {
+        return accessionNumber;
+    }
+
+    public void setAccessionNumber(String v) {
+        this.accessionNumber = v;
     }
 
     public String getSeriesInstanceUid() {

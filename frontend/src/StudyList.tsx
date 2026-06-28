@@ -6,20 +6,26 @@ import {
   type Study,
   type Series,
   type Instance,
+  type StudyFilters,
 } from "./api";
 import { useI18n } from "./i18n/i18n";
 
-export function StudyList() {
+export function StudyList({ filters, reloadKey }: { filters?: StudyFilters; reloadKey?: number }) {
   const { t } = useI18n();
   const [studies, setStudies] = useState<Study[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
 
+  const filterKey = JSON.stringify(filters ?? {});
   useEffect(() => {
-    fetchStudies()
+    setStudies(null);
+    setError(null);
+    setSelectedStudy(null);
+    fetchStudies(filters)
       .then(setStudies)
       .catch((e: unknown) => setError(String(e)));
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterKey, reloadKey]);
 
   return (
     <section style={{ marginTop: 28 }}>

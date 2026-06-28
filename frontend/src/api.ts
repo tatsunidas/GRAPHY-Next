@@ -35,9 +35,26 @@ export interface Instance {
   sopClassUid: string | null;
 }
 
+export interface StudyFilters {
+  patientId?: string;
+  patientName?: string;
+  studyDate?: string;
+  modality?: string;
+  accessionNumber?: string;
+}
+
 export const fetchStatus = () => httpGet<AppStatus>("/api/status");
 
-export const fetchStudies = () => httpGet<Study[]>("/api/studies");
+export const fetchStudies = (filters?: StudyFilters) => {
+  const params = new URLSearchParams();
+  if (filters) {
+    for (const [k, v] of Object.entries(filters)) {
+      if (v) params.set(k, v);
+    }
+  }
+  const qs = params.toString();
+  return httpGet<Study[]>(`/api/studies${qs ? `?${qs}` : ""}`);
+};
 
 export const fetchSeries = (studyUid: string) =>
   httpGet<Series[]>(`/api/studies/${encodeURIComponent(studyUid)}/series`);

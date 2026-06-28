@@ -26,7 +26,7 @@ public interface DicomInstanceRepository extends JpaRepository<DicomInstance, St
                                     @Param("seriesUid") String seriesUid,
                                     @Param("sopUid") String sopUid);
 
-    /** スタディ単位の集計（一覧表示用）。 */
+    /** スタディ単位の集計（一覧表示用・絞り込み可。各パラメータは null で無条件）。 */
     @Query("""
             select i.studyInstanceUid as studyInstanceUid,
                    i.patientId as patientId,
@@ -36,10 +36,19 @@ public interface DicomInstanceRepository extends JpaRepository<DicomInstance, St
                    max(i.modality) as modality,
                    count(i) as numberOfInstances
             from DicomInstance i
+            where (:patientId is null or lower(i.patientId) like lower(concat('%', :patientId, '%')))
+              and (:patientName is null or lower(i.patientName) like lower(concat('%', :patientName, '%')))
+              and (:studyDate is null or i.studyDate = :studyDate)
+              and (:modality is null or i.modality = :modality)
+              and (:accessionNumber is null or i.accessionNumber = :accessionNumber)
             group by i.studyInstanceUid, i.patientId
             order by max(i.studyDate) desc
             """)
-    List<StudySummary> findStudySummaries();
+    List<StudySummary> findStudySummaries(@Param("patientId") String patientId,
+                                          @Param("patientName") String patientName,
+                                          @Param("studyDate") String studyDate,
+                                          @Param("modality") String modality,
+                                          @Param("accessionNumber") String accessionNumber);
 
     /** スタディ内のシリーズ単位の集計。 */
     @Query("""

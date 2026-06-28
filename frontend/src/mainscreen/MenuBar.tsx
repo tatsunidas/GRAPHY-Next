@@ -1,0 +1,119 @@
+import { useEffect, useState } from "react";
+import { useI18n } from "../i18n/i18n";
+
+interface MenuItem {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+}
+
+export function MenuBar({
+  isStandalone,
+  onOpenSettings,
+  onOpenDb,
+  onOpenHelp,
+}: {
+  isStandalone: boolean;
+  onOpenSettings: () => void;
+  onOpenDb: () => void;
+  onOpenHelp: () => void;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState<string | null>(null);
+
+  useEffect(() => {
+    const close = () => setOpen(null);
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, []);
+
+  const menus: { id: string; label: string; items: MenuItem[] }[] = [
+    {
+      id: "tools",
+      label: t("main.menu.tools"),
+      items: [
+        { label: t("app.btn.settingsTitle"), onClick: onOpenSettings },
+        { label: t("app.btn.dbTitle"), onClick: onOpenDb, disabled: !isStandalone },
+      ],
+    },
+    {
+      id: "help",
+      label: t("main.menu.help"),
+      items: [{ label: t("sc.title"), onClick: onOpenHelp }],
+    },
+  ];
+
+  return (
+    <div style={bar}>
+      {menus.map((m) => (
+        <div key={m.id} style={{ position: "relative" }}>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(open === m.id ? null : m.id);
+            }}
+            style={{ ...menuBtn, background: open === m.id ? "#e6effa" : "transparent" }}
+          >
+            {m.label}
+          </button>
+          {open === m.id && (
+            <div style={dropdown} onClick={(e) => e.stopPropagation()}>
+              {m.items.map((it) => (
+                <button
+                  key={it.label}
+                  disabled={it.disabled}
+                  onClick={() => {
+                    setOpen(null);
+                    if (!it.disabled) it.onClick();
+                  }}
+                  style={{ ...item, color: it.disabled ? "#aab2bb" : "#222", cursor: it.disabled ? "default" : "pointer" }}
+                >
+                  {it.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const bar: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 2,
+  padding: "2px 8px",
+  borderBottom: "1px solid #e6eaee",
+  background: "#fff",
+  fontSize: 13,
+};
+const menuBtn: React.CSSProperties = {
+  border: "none",
+  borderRadius: 5,
+  padding: "5px 12px",
+  cursor: "pointer",
+  fontSize: 13,
+};
+const dropdown: React.CSSProperties = {
+  position: "absolute",
+  top: "100%",
+  left: 0,
+  minWidth: 200,
+  background: "#fff",
+  border: "1px solid #dfe3e8",
+  borderRadius: 6,
+  boxShadow: "0 6px 20px rgba(0,0,0,0.15)",
+  padding: 4,
+  zIndex: 50,
+};
+const item: React.CSSProperties = {
+  display: "block",
+  width: "100%",
+  textAlign: "left",
+  border: "none",
+  background: "transparent",
+  padding: "7px 10px",
+  borderRadius: 5,
+  fontSize: 13,
+};

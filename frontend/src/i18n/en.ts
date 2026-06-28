@@ -39,6 +39,16 @@ export const en: Record<string, string> = {
   "field.sex": "Sex",
   "field.studyCount": "Studies",
 
+  // main screen
+  "main.menu.tools": "Tools",
+  "main.menu.help": "Help",
+  "main.toolbar.refresh": "Refresh",
+  "main.search.title": "Search",
+  "main.search.studyDate": "Study Date",
+  "main.search.accession": "Accession #",
+  "main.search.clear": "Clear",
+  "main.status.disconnected": "Disconnected",
+
   // study browser
   "study.list.title": "Studies",
   "study.empty": "No studies (they appear after receiving/importing).",

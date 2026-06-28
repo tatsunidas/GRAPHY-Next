@@ -8,8 +8,10 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -33,12 +35,39 @@ public class StudyController {
     }
 
     @GetMapping("/studies")
-    public List<StudyDto> studies() {
+    public List<StudyDto> studies(
+            @RequestParam(required = false) String patientId,
+            @RequestParam(required = false) String patientName,
+            @RequestParam(required = false) String studyDate,
+            @RequestParam(required = false) String modality,
+            @RequestParam(required = false) String accessionNumber) {
+        StudySearch search = new StudySearch(patientId, patientName, studyDate, modality, accessionNumber).normalized();
         WebDicomDataService web = webProvider.getIfAvailable();
         if (web != null) {
-            return web.searchStudies(Map.of()).stream().map(StudyController::studyOf).toList();
+            return web.searchStudies(toQido(search)).stream().map(StudyController::studyOf).toList();
         }
-        return storage.listStudies();
+        return storage.listStudies(search);
+    }
+
+    /** 検索条件を QIDO-RS のクエリキーへ。 */
+    private static Map<String, String> toQido(StudySearch s) {
+        Map<String, String> q = new LinkedHashMap<>();
+        if (s.patientId() != null) {
+            q.put("PatientID", s.patientId());
+        }
+        if (s.patientName() != null) {
+            q.put("PatientName", s.patientName());
+        }
+        if (s.studyDate() != null) {
+            q.put("StudyDate", s.studyDate());
+        }
+        if (s.modality() != null) {
+            q.put("ModalitiesInStudy", s.modality());
+        }
+        if (s.accessionNumber() != null) {
+            q.put("AccessionNumber", s.accessionNumber());
+        }
+        return q;
     }
 
     @GetMapping("/studies/{studyUid}/series")

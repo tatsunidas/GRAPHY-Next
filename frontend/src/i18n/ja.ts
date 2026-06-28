@@ -39,6 +39,16 @@ export const ja: Record<string, string> = {
   "field.sex": "性別",
   "field.studyCount": "検査数",
 
+  // main screen
+  "main.menu.tools": "ツール",
+  "main.menu.help": "ヘルプ",
+  "main.toolbar.refresh": "更新",
+  "main.search.title": "検索",
+  "main.search.studyDate": "検査日",
+  "main.search.accession": "受付番号",
+  "main.search.clear": "クリア",
+  "main.status.disconnected": "切断",
+
   // study browser
   "study.list.title": "スタディ一覧",
   "study.empty": "スタディがありません（受信/取り込み後に表示されます）。",
