@@ -66,6 +66,14 @@ export function MainScreen({
     setTimeout(() => setImportMsg(null), 4000);
   };
 
+  // データ I/O・ユーティリティ（実装は fw に記録。今は告知バナー）。
+  const handleOpenTool = (
+    kind: "export" | "nonDicomImport" | "anonymizer" | "tagExtractor" | "seriesExtractor",
+  ) => {
+    setImportMsg(t("main.viewer.comingSoon", { name: t(`main.toolbar.${kind}`) }));
+    setTimeout(() => setImportMsg(null), 4000);
+  };
+
   return (
     <div style={shell}>
       <MenuBar
@@ -82,6 +90,7 @@ export function MainScreen({
         onImport={handleImport}
         onRefresh={() => setReloadKey((k) => k + 1)}
         onOpenDb={onOpenDb}
+        onOpenTool={handleOpenTool}
         onOpenViewer={handleOpenViewer}
         onOpenSettings={onOpenSettings}
         onOpenHelp={onOpenHelp}
