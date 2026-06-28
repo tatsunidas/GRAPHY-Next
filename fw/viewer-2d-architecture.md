@@ -146,6 +146,14 @@ zoom / pan / flip(上下左右) / rotation は **Cornerstone3D の ViewPresentat
 - [ ] **C/T 切替（別スタック）をまたぐと zoom/pan/WW/WL/回転/反転がリセットされる**
       （同一スタック内＝Z 送りでは維持される）。→ 保存 presentation/voiRange の再適用で対応予定。
 
+## DICOM 属性テキストオーバーレイ（実装済み）
+- 既定: 左上=患者名/ID/性別/生年月日/年齢(生年月日と検査日から逆算)、右上=シリーズ記述/
+  プロトコル名/体位/シリーズ番号/インスタンス番号。属性が無い項目は非表示。
+- 設定: 環境設定「画像オーバーレイ」で 4 隅×最大5項目を **DICOM タグ番号**で指定。タグ番号入力→
+  `GET /api/dicom/tag`（dcm4che 辞書）で keyword/VR を自動表示。「デフォルトに戻す」あり。値は最大20文字。
+- `viewer/overlayConfig.ts`(localStorage＋useSyncExternalStore) / `overlayText.ts`(VR整形/年齢/切詰め) /
+  `settings/OverlayConfigPanel.tsx`。Viewer2D が `text` トグルで 4 隅描画（viewer 状態行の下）。
+
 ## 次スコープ
 1. **C/T 切替時の transform/VOI 維持**（保存 presentation/voiRange 再適用）。
 2. **PET SUV**（PT scaling: Radiopharmaceutical/体重/時刻）。
