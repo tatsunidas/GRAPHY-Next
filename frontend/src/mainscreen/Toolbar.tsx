@@ -1,11 +1,14 @@
 import { useI18n } from "../i18n/i18n";
 
+export type ViewerKind = "2d" | "3d" | "mpr" | "slicer";
+
 export function Toolbar({
   isStandalone,
   canImport,
   onImport,
   onRefresh,
   onOpenDb,
+  onOpenViewer,
   onOpenSettings,
   onOpenHelp,
 }: {
@@ -14,6 +17,7 @@ export function Toolbar({
   onImport: () => void;
   onRefresh: () => void;
   onOpenDb: () => void;
+  onOpenViewer: (kind: ViewerKind) => void;
   onOpenSettings: () => void;
   onOpenHelp: () => void;
 }) {
@@ -23,6 +27,11 @@ export function Toolbar({
       {canImport && <ToolButton icon="📁" label={t("main.import.action")} onClick={onImport} />}
       <ToolButton icon="🔄" label={t("main.toolbar.refresh")} onClick={onRefresh} />
       {isStandalone && <ToolButton icon="🗄" label={t("app.btn.dbTitle")} onClick={onOpenDb} />}
+      <span style={sep} />
+      <ToolButton icon="🖼" label={t("main.toolbar.viewer2d")} onClick={() => onOpenViewer("2d")} />
+      <ToolButton icon="🧊" label={t("main.toolbar.viewer3d")} onClick={() => onOpenViewer("3d")} />
+      <ToolButton icon="➕" label={t("main.toolbar.mpr")} onClick={() => onOpenViewer("mpr")} />
+      <ToolButton icon="🔪" label={t("main.toolbar.slicer")} onClick={() => onOpenViewer("slicer")} />
       <div style={{ flex: 1 }} />
       <ToolButton icon="⌨" label={t("sc.title")} onClick={onOpenHelp} />
       <ToolButton icon="⚙" label={t("app.btn.settingsTitle")} onClick={onOpenSettings} />
@@ -47,6 +56,7 @@ const bar: React.CSSProperties = {
   borderBottom: "1px solid #e6eaee",
   background: "#f7f9fb",
 };
+const sep: React.CSSProperties = { width: 1, alignSelf: "stretch", background: "#dde4ea", margin: "2px 4px" };
 const btn: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
