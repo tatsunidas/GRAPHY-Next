@@ -24,6 +24,8 @@ export interface ImageInfo {
   fovHeightMm?: number;
   rescaleSlope?: number;
   rescaleIntercept?: number;
+  /** RescaleType(0028,1054): 校正済み画素値の単位（CT は "HU" 等）。 */
+  rescaleType?: string;
   windowCenter?: number;
   windowWidth?: number;
   bitsAllocated?: number;
@@ -66,6 +68,7 @@ export function readImageInfo(imageId: string): ImageInfo {
     fovHeightMm: rows && rowPixelSpacing ? rows * rowPixelSpacing : undefined,
     rescaleSlope: modalityLut.rescaleSlope ?? undefined,
     rescaleIntercept: modalityLut.rescaleIntercept ?? undefined,
+    rescaleType: typeof modalityLut.rescaleType === "string" ? modalityLut.rescaleType : undefined,
     windowCenter: firstNumber(voi.windowCenter),
     windowWidth: firstNumber(voi.windowWidth),
     bitsAllocated: pixel.bitsAllocated,

@@ -279,8 +279,10 @@ export function Viewer2D({
   };
 
   const panned = isPanned(transform);
-  const isCt = info?.modality === "CT";
-  const valueUnit = isCt ? "HU" : t("viewer.cursorValueUnit");
+  // 校正済み画素値の単位: RescaleType(0028,1054) があればそれ（"US"=未指定は除外）、
+  // 無ければ CT のみ "HU"、それ以外は単位なし。
+  const rt = info?.rescaleType?.trim();
+  const calUnit = rt && rt.toUpperCase() !== "US" ? rt : info?.modality === "CT" ? "HU" : "";
 
   // DICOM 属性テキストオーバーレイ（4 隅、設定可能）。設定 or スライス変化(info)で再解決。
   const overlayCfg = useOverlayConfig();
@@ -294,7 +296,7 @@ export function Viewer2D({
   const cursorValue = sample
     ? sample.color
       ? `RGB(${sample.rgb?.[0]},${sample.rgb?.[1]},${sample.rgb?.[2]})`
-      : `${valueUnit} ${Math.round(sample.modalityValue ?? 0)}`
+      : `${Math.round(sample.modalityValue ?? 0)}${calUnit ? " " + calUnit : ""}`
     : "—";
   const cursorXY = sample ? `${sample.fx.toFixed(1)}, ${sample.fy.toFixed(1)}` : "—";
 
