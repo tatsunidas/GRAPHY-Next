@@ -9,8 +9,8 @@ import {
   type StudyFilters,
 } from "./api";
 import { useI18n } from "./i18n/i18n";
-import { Viewer2D } from "./viewer/Viewer2D";
-import { imageIdForInstance, type ViewerMode } from "./viewer/imageId";
+import { SeriesViewer } from "./viewer/SeriesViewer";
+import { type ViewerMode } from "./viewer/imageId";
 
 const PAGE_SIZE = 50;
 
@@ -214,11 +214,7 @@ function InstanceList({ study, series, mode }: { study: Study; series: Series; m
       .catch((e: unknown) => setError(String(e)));
   }, [study.studyInstanceUid, series.seriesInstanceUid]);
 
-  const first = instances && instances.length > 0 ? instances[0] : null;
-  const seriesImageIds =
-    instances && mode === "standalone"
-      ? instances.map((inst) => imageIdForInstance("standalone", inst.sopInstanceUid))
-      : undefined;
+  const hasImages = !!instances && instances.length > 0;
 
   return (
     <div style={{ marginTop: 10, color: "#445" }}>
@@ -236,16 +232,13 @@ function InstanceList({ study, series, mode }: { study: Study; series: Series; m
         </div>
       )}
 
-      {/* 2D ビューア（骨組み）: シリーズ先頭の 1 枚を表示。スタック/ツールは次スコープ。 */}
-      {first && mode === "standalone" && (
-        <div style={{ marginTop: 10, maxWidth: 820 }}>
-          <Viewer2D
-            imageId={imageIdForInstance("standalone", first.sopInstanceUid)}
-            seriesImageIds={seriesImageIds}
-          />
+      {/* シリーズビューア（スライス送り・シネ・5D・オーバーレイ On/Off のコントローラ）。 */}
+      {hasImages && mode === "standalone" && instances && (
+        <div style={{ marginTop: 10, maxWidth: 900 }}>
+          <SeriesViewer instances={instances} mode="standalone" />
         </div>
       )}
-      {first && mode === "web" && (
+      {hasImages && mode === "web" && (
         <div style={{ marginTop: 10, fontSize: 12, color: "#8a6d3b" }}>{t("viewer.webTodo")}</div>
       )}
     </div>

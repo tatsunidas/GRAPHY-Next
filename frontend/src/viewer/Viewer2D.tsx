@@ -44,14 +44,34 @@ let viewportSeq = 0;
  * <p>レイヤ: 深層に Cornerstone3D の StackViewport（canvas／WebGL）。上に DOM オーバーレイを
  * `pointer-events:none` で重ねる。入力はビューポート要素が処理（最前面の不透明イベント層は置かない）。
  */
-export function Viewer2D({ imageId, seriesImageIds }: { imageId: string; seriesImageIds?: string[] }) {
+/** 画像上オーバーレイの表示可否。SeriesViewer から制御。 */
+export interface ViewerOverlays {
+  text?: boolean;
+  caliper?: boolean;
+  orientation?: boolean;
+}
+
+export function Viewer2D({
+  imageIds,
+  imageIndex,
+  overlays,
+}: {
+  imageIds: string[];
+  imageIndex: number;
+  overlays?: ViewerOverlays;
+}) {
   const { t } = useI18n();
+  const ov = { text: true, caliper: true, orientation: true, ...overlays };
   const elementRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<Types.IStackViewport | null>(null);
   const viewportIdRef = useRef(`graphy-vp-${viewportSeq++}`);
-  // series 全 imageId（スライス奥行き算出用）。識別子は変わっても再初期化しないよう ref で持つ。
-  const seriesIdsRef = useRef<string[] | undefined>(seriesImageIds);
-  seriesIdsRef.current = seriesImageIds;
+  // 識別子は再レンダで変わるが init を再実行しないよう ref で最新を持つ。
+  const imageIdsRef = useRef(imageIds);
+  imageIdsRef.current = imageIds;
+  const indexRef = useRef(imageIndex);
+  indexRef.current = imageIndex;
+  // 同じスタック(imageIds)なら init を再実行しない。C/T 切替で配列が変わると再 setStack。
+  const stackKey = imageIds.join("|");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [transform, setTransform] = useState<ViewTransform>(FIT_TRANSFORM);
@@ -113,17 +133,18 @@ export function Viewer2D({ imageId, seriesImageIds }: { imageId: string; seriesI
         engine.enableElement({ viewportId, type: Enums.ViewportType.STACK, element });
         const viewport = engine.getViewport(viewportId) as Types.IStackViewport;
         viewportRef.current = viewport;
-        await viewport.setStack([imageId], 0);
+        await viewport.setStack(imageIdsRef.current, indexRef.current);
         viewport.render();
 
         // 輝度/ボクセル/FOV のキャリブレーション情報（読み込み後にメタが揃う）。
-        const inf = readImageInfo(imageId);
+        const curId = imageIdsRef.current[indexRef.current];
+        const inf = readImageInfo(curId);
         infoRef.current = inf;
         if (!disposed) setInfo(inf);
 
         // スライス方向ボクセル奥行きは非同期（複数枚は隣接スライスのメタを要する）。後から合流。
         void (async () => {
-          const r = await computeSliceSpacing(imageId, seriesIdsRef.current, inf.sliceThickness);
+          const r = await computeSliceSpacing(curId, imageIdsRef.current, inf.sliceThickness);
           if (disposed) return;
           const merged = { ...inf, sliceSpacing: r.spacing, sliceSpacingSource: r.source };
           infoRef.current = merged;
@@ -138,9 +159,8 @@ export function Viewer2D({ imageId, seriesImageIds }: { imageId: string; seriesI
           tg.addTool(ZoomTool.toolName);
           tg.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
           tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
-          tg.setToolActive(ZoomTool.toolName, {
-            bindings: [{ mouseButton: MouseBindings.Secondary }, { mouseButton: MouseBindings.Wheel }],
-          });
+          // ホイールはスライス送り（SeriesViewer 側で処理）に充てるため Zoom から外す。
+          tg.setToolActive(ZoomTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary }] });
           tg.addViewport(viewportId, ENGINE_ID);
         }
 
@@ -191,7 +211,35 @@ export function Viewer2D({ imageId, seriesImageIds }: { imageId: string; seriesI
       }
       viewportRef.current = null;
     };
-  }, [imageId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stackKey]);
+
+  // スライス送り: imageIndex の変化を viewport へ反映（同一スタック内は setImageIdIndex が速い）。
+  useEffect(() => {
+    const v = viewportRef.current;
+    if (!v) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        if (v.getCurrentImageIdIndex() !== imageIndex) {
+          await v.setImageIdIndex(imageIndex);
+        }
+        if (cancelled) return;
+        // スライスごとに Rescale/Window/IPP 等が変わりうるので再読込（奥行きは据え置き）。
+        const base = readImageInfo(imageIds[imageIndex]);
+        const prev = infoRef.current;
+        const merged = { ...base, sliceSpacing: prev?.sliceSpacing, sliceSpacingSource: prev?.sliceSpacingSource };
+        infoRef.current = merged;
+        setInfo(merged);
+      } catch {
+        /* スライス切替の競合は無視 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imageIndex, stackKey]);
 
   // --- 操作（すべて affine = ViewPresentation 経由） ---
   const vp = () => viewportRef.current;
@@ -232,14 +280,16 @@ export function Viewer2D({ imageId, seriesImageIds }: { imageId: string; seriesI
         <div style={wrap}>
           {/* 深層: ピクセル canvas（Cornerstone3D が内部に canvas を生成） */}
           <div ref={elementRef} style={pixelLayer} onContextMenu={(e) => e.preventDefault()} />
-          {/* z3 オーバーレイ（pointer-events:none で入力を妨げない） */}
-          <div style={overlayTL}>
-            <span>{t("viewer.zoomLabel", { pct: Math.round(transform.zoom * 100) })}</span>
-            {panned && <span style={panBadge}>{t("viewer.panned")}</span>}
-            {voi && <span>{t("viewer.wl", { w: Math.round(voi.ww), l: Math.round(voi.wc) })}</span>}
-          </div>
+          {/* z3 オーバーレイ（pointer-events:none で入力を妨げない）。text トグルで表示。 */}
+          {ov.text && (
+            <div style={overlayTL}>
+              <span>{t("viewer.zoomLabel", { pct: Math.round(transform.zoom * 100) })}</span>
+              {panned && <span style={panBadge}>{t("viewer.panned")}</span>}
+              {voi && <span>{t("viewer.wl", { w: Math.round(voi.ww), l: Math.round(voi.wc) })}</span>}
+            </div>
+          )}
           {/* カーソル位置の値: カラーは RGB、グレースケールはモダリティ値(HU 等)。 */}
-          {sample && (
+          {ov.text && sample && (
             <div style={overlayTR}>
               {sample.color
                 ? `RGB(${sample.rgb?.[0]}, ${sample.rgb?.[1]}, ${sample.rgb?.[2]})`
@@ -248,7 +298,7 @@ export function Viewer2D({ imageId, seriesImageIds }: { imageId: string; seriesI
             </div>
           )}
           {/* 患者の向き（A/P・R/L・H/F）。四辺に表示。pointer-events:none。 */}
-          {markers && (
+          {ov.orientation && markers && (
             <>
               <div style={{ ...markerBase, top: 4, left: "50%", transform: "translateX(-50%)" }}>{markers.top}</div>
               <div style={{ ...markerBase, bottom: 4, left: "50%", transform: "translateX(-50%)" }}>{markers.bottom}</div>
@@ -257,7 +307,7 @@ export function Viewer2D({ imageId, seriesImageIds }: { imageId: string; seriesI
             </>
           )}
           {/* スケールバー（Caliper）。校正あり=黄/mm・cm、なし=グレー/px。バー右端隅に単位。 */}
-          {scaleBar && (
+          {ov.caliper && scaleBar && (
             <div style={{ ...scaleWrap, width: scaleBar.lengthPx }}>
               <div style={{ ...scaleLabel, color: scaleBar.calibrated ? CAL_COLOR : UNCAL_COLOR }}>
                 {scaleBar.label}
