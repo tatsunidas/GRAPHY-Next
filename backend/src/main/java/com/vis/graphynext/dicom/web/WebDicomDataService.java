@@ -40,7 +40,7 @@ public class WebDicomDataService {
             b.defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + cfg.getBearerToken());
         }
         this.client = b.build();
-        log.info("WebDicomDataService 初期化: baseUrl={}", cfg.getBaseUrl());
+        log.debug("WebDicomDataService initialized: baseUrl={}", cfg.getBaseUrl()); // 毎構築で出るため DEBUG
     }
 
     /** QIDO-RS: Study 検索。 */
@@ -59,6 +59,8 @@ public class WebDicomDataService {
     }
 
     private List<Attributes> qido(String path, Map<String, String> query) {
+        // 実 PACS 相手は未検証のため、リクエストと件数を DEBUG で残す（トラブル追跡用）。
+        log.debug("QIDO request: {} query={}", path, query);
         byte[] body = client.get()
                 .uri(ub -> {
                     ub.path(path);
@@ -70,7 +72,9 @@ public class WebDicomDataService {
                 .accept(DICOM_JSON)
                 .retrieve()
                 .body(byte[].class);
-        return parseDatasets(body);
+        List<Attributes> result = parseDatasets(body);
+        log.debug("QIDO response: {} -> {} datasets ({} bytes)", path, result.size(), body == null ? 0 : body.length);
+        return result;
     }
 
     /** DICOM JSON 配列（QIDO 応答）を Attributes のリストへ。204/空は空リスト。 */

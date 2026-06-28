@@ -1,13 +1,7 @@
-// API のベース URL を解決する。
-// - ブラウザ / Vite dev / Web 本番: 同一オリジン（相対パス）。空文字を返す。
-// - Electron(file://): preload が window.__GRAPHY_API_BASE__ に backend の URL を注入する。
-declare global {
-  interface Window {
-    __GRAPHY_API_BASE__?: string;
-  }
-}
+import { httpGet } from "./http";
 
-export const apiBase = (): string => window.__GRAPHY_API_BASE__ ?? "";
+// apiBase は apiBase.ts へ分離（循環インポート回避）。互換のため再エクスポート。
+export { apiBase } from "./apiBase";
 
 export interface AppStatus {
   app: string;
@@ -15,14 +9,6 @@ export interface AppStatus {
   mode: string;
   activeProfiles: string[];
   javaVersion: string;
-}
-
-export async function fetchStatus(): Promise<AppStatus> {
-  const res = await fetch(`${apiBase()}/api/status`);
-  if (!res.ok) {
-    throw new Error(`status ${res.status}`);
-  }
-  return res.json();
 }
 
 export interface Study {
@@ -49,20 +35,14 @@ export interface Instance {
   sopClassUid: string | null;
 }
 
-async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(`${apiBase()}${path}`);
-  if (!res.ok) {
-    throw new Error(`${path} ${res.status}`);
-  }
-  return res.json();
-}
+export const fetchStatus = () => httpGet<AppStatus>("/api/status");
 
-export const fetchStudies = () => getJson<Study[]>("/api/studies");
+export const fetchStudies = () => httpGet<Study[]>("/api/studies");
 
 export const fetchSeries = (studyUid: string) =>
-  getJson<Series[]>(`/api/studies/${encodeURIComponent(studyUid)}/series`);
+  httpGet<Series[]>(`/api/studies/${encodeURIComponent(studyUid)}/series`);
 
 export const fetchInstances = (studyUid: string, seriesUid: string) =>
-  getJson<Instance[]>(
+  httpGet<Instance[]>(
     `/api/studies/${encodeURIComponent(studyUid)}/series/${encodeURIComponent(seriesUid)}/instances`,
   );

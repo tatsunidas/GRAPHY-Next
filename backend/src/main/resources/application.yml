@@ -59,3 +59,9 @@ management:
     web:
       exposure:
         include: health,info
+
+logging:
+  level:
+    # 既定は INFO。トラブル時は com.vis.graphynext を DEBUG にすると
+    # リスク箇所（外部ツール起動・DICOMweb 通信・ファイル I/O 等）の詳細が出る。
+    com.vis.graphynext: INFO

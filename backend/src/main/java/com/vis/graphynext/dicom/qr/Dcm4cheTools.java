@@ -78,7 +78,7 @@ public class Dcm4cheTools {
 
     /** コマンドを実行し、標準出力/標準エラーを結合して返す。timeout 超過は例外。 */
     public Result run(List<String> command, long timeoutMs) throws IOException {
-        log.info("exec: {}", String.join(" ", command));
+        log.debug("exec: {}", String.join(" ", command)); // 外部ツール起動: トラブル時に DEBUG で確認
         Process p = new ProcessBuilder(command).redirectErrorStream(true).start();
         StringBuilder out = new StringBuilder();
         try (var r = p.inputReader()) {

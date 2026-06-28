@@ -92,7 +92,7 @@ public class DicomStorageService {
         entity.setUri(dest.toUri().toString());
         try {
             DicomInstance saved = repo.save(entity);
-            log.info("INDEXED sop={} study={} -> {}", iuid, studyUid, dest);
+            log.debug("indexed sop={} study={} -> {}", iuid, studyUid, dest); // 検証済み: 大量取込で冗長なため DEBUG
             return saved;
         } catch (RuntimeException ex) {
             // 索引に載らないファイルを残さない（トランザクションはロールバックされる）
