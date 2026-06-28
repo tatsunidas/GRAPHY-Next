@@ -79,6 +79,7 @@ export const en: Record<string, string> = {
   "series.view.grid": "Grid",
   "series.columns": "Columns",
   "series.grid.disabled": "Grid view is unavailable for multi-channel / video series",
+  "series.grid.warnMany": "This series has {{n}} slices. Grid view may be slow / memory-heavy. Switch anyway?",
   "series.fps": "fps",
   "series.ov.text": "Text",
   "series.ov.caliper": "Caliper",

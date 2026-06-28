@@ -18,6 +18,8 @@ const VIDEO_SOP_CLASSES = new Set([
 
 /** グリッドセルの高さ(px)。 */
 const CELL_HEIGHT = 200;
+/** これを超えるスライス数で GridView に切替える際は確認する（描画負荷が大きいため）。 */
+const GRID_WARN_THRESHOLD = 100;
 
 /**
  * シリーズ管理コントローラ。画像表示パネル(Viewer2D)を内包し、スライス送り（スライダー/キー/
@@ -104,6 +106,12 @@ export function SeriesViewer({
   }, [gridDisabled, gridCols]);
 
   const switchMode = (cols: number) => {
+    // 100 枚超で Grid に切替える場合は確認。キャンセルなら SliderView のまま変更しない。
+    if (cols > 0 && nZ > GRID_WARN_THRESHOLD) {
+      if (!window.confirm(t("series.grid.warnMany", { n: nZ }))) {
+        return;
+      }
+    }
     setGridCols(cols);
     if (cols === 0) {
       setZ(0); // Slider に戻ったら 1 枚目を表示
