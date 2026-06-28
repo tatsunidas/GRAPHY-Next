@@ -10,6 +10,7 @@ import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
 import { applyTransform, isPanned, readTransform, type ViewTransform, FIT_TRANSFORM } from "./transform";
 import { readImageInfo, sampleAtCanvas, computeSliceSpacing, type ImageInfo, type PixelSample } from "./imageInfo";
 import { computeOrientationMarkers, type OrientationMarkers } from "./orientation";
+import { computeScaleBar, type ScaleBar } from "./scaleBar";
 import { ImageInfoPanel } from "./ImageInfoPanel";
 import { useI18n } from "../i18n/i18n";
 
@@ -57,6 +58,7 @@ export function Viewer2D({ imageId, seriesImageIds }: { imageId: string; seriesI
   const infoRef = useRef<ImageInfo | null>(null);
   const [sample, setSample] = useState<PixelSample | null>(null);
   const [markers, setMarkers] = useState<OrientationMarkers | null>(null);
+  const [scaleBar, setScaleBar] = useState<ScaleBar | null>(null);
 
   useEffect(() => {
     let disposed = false;
@@ -81,6 +83,9 @@ export function Viewer2D({ imageId, seriesImageIds }: { imageId: string; seriesI
       setTransform(readTransform(vp));
       // 向きマーカーは IOP があるときだけ。canvasToWorld 経由で zoom/pan/flip/rotation に追従。
       setMarkers(infoRef.current?.hasOrientation ? computeOrientationMarkers(vp, element) : null);
+      // スケールバー（Caliper）: 校正の有無で mm/cm・px と色(黄/グレー)を切替。FOV(ズーム)に追従。
+      const calibrated = Boolean(infoRef.current?.columnPixelSpacing);
+      setScaleBar(computeScaleBar(vp, element, calibrated));
     };
 
     (async () => {
@@ -231,6 +236,19 @@ export function Viewer2D({ imageId, seriesImageIds }: { imageId: string; seriesI
               <div style={{ ...markerBase, right: 6, top: "50%", transform: "translateY(-50%)" }}>{markers.right}</div>
             </>
           )}
+          {/* スケールバー（Caliper）。校正あり=黄/mm・cm、なし=グレー/px。バー右端隅に単位。 */}
+          {scaleBar && (
+            <div style={{ ...scaleWrap, width: scaleBar.lengthPx }}>
+              <div style={{ ...scaleLabel, color: scaleBar.calibrated ? CAL_COLOR : UNCAL_COLOR }}>
+                {scaleBar.label}
+              </div>
+              <div style={{ position: "relative", height: 8 }}>
+                <div style={{ ...scaleLine, borderBottomColor: scaleBar.calibrated ? CAL_COLOR : UNCAL_COLOR }} />
+                <div style={{ ...scaleTickL, background: scaleBar.calibrated ? CAL_COLOR : UNCAL_COLOR }} />
+                <div style={{ ...scaleTickR, background: scaleBar.calibrated ? CAL_COLOR : UNCAL_COLOR }} />
+              </div>
+            </div>
+          )}
           {loading && !error && <div style={overlayCenter}>{t("common.loading")}</div>}
           {error && <div style={{ ...overlayCenter, color: "#ff8a80" }}>{t("common.fetchError", { error })}</div>}
         </div>
@@ -289,6 +307,32 @@ const panBadge: React.CSSProperties = {
   color: "#fff",
   fontSize: 11,
 };
+// スケールバー色: 校正あり=黄、校正なし(px)=グレー。
+const CAL_COLOR = "#ffeb3b";
+const UNCAL_COLOR = "#9e9e9e";
+const scaleWrap: React.CSSProperties = {
+  position: "absolute",
+  left: 12,
+  bottom: 12,
+  pointerEvents: "none",
+};
+const scaleLabel: React.CSSProperties = {
+  textAlign: "right",
+  fontSize: 11,
+  fontWeight: 600,
+  marginBottom: 2,
+  textShadow: "0 0 3px #000",
+  fontVariantNumeric: "tabular-nums",
+};
+const scaleLine: React.CSSProperties = {
+  position: "absolute",
+  left: 0,
+  right: 0,
+  bottom: 0,
+  borderBottom: "2px solid",
+};
+const scaleTickL: React.CSSProperties = { position: "absolute", left: 0, bottom: 0, width: 2, height: 8 };
+const scaleTickR: React.CSSProperties = { position: "absolute", right: 0, bottom: 0, width: 2, height: 8 };
 const markerBase: React.CSSProperties = {
   position: "absolute",
   color: "#ffd54f",
