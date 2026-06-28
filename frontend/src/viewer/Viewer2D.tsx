@@ -284,29 +284,28 @@ export function Viewer2D({
     [ov.text, overlayCfg, imageIds, imageIndex, info],
   );
 
+  // ビューア状態（必須情報）は画像外の上部ラベルエリアに常時表示する。
+  const cursorValue = sample
+    ? sample.color
+      ? `RGB(${sample.rgb?.[0]},${sample.rgb?.[1]},${sample.rgb?.[2]})`
+      : `${valueUnit} ${Math.round(sample.modalityValue ?? 0)}`
+    : "—";
+  const cursorXY = sample ? `${sample.fx.toFixed(1)}, ${sample.fy.toFixed(1)}` : "—";
+
   return (
     <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
       <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+        {/* 画像外の状態ラベルエリア（必須情報）。 */}
+        <div style={statusBar}>
+          <StatusItem label={t("viewer.status.zoom")} value={`${Math.round(transform.zoom * 100)}%`} />
+          {panned && <span style={panBadge}>{t("viewer.panned")}</span>}
+          <StatusItem label={t("viewer.status.wl")} value={voi ? `${Math.round(voi.wc)}/${Math.round(voi.ww)}` : "—"} />
+          <StatusItem label={t("viewer.status.value")} value={cursorValue} />
+          <StatusItem label={t("viewer.status.xy")} value={cursorXY} />
+        </div>
         <div style={wrap}>
           {/* 深層: ピクセル canvas（Cornerstone3D が内部に canvas を生成） */}
           <div ref={elementRef} style={pixelLayer} onContextMenu={(e) => e.preventDefault()} />
-          {/* z3 オーバーレイ（pointer-events:none で入力を妨げない）。text トグルで表示。 */}
-          {ov.text && (
-            <div style={overlayTL}>
-              <span>{t("viewer.zoomLabel", { pct: Math.round(transform.zoom * 100) })}</span>
-              {panned && <span style={panBadge}>{t("viewer.panned")}</span>}
-              {voi && <span>{t("viewer.wl", { w: Math.round(voi.ww), l: Math.round(voi.wc) })}</span>}
-            </div>
-          )}
-          {/* カーソル位置の値: カラーは RGB、グレースケールはモダリティ値(HU 等)。 */}
-          {ov.text && sample && (
-            <div style={overlayTR}>
-              {sample.color
-                ? `RGB(${sample.rgb?.[0]}, ${sample.rgb?.[1]}, ${sample.rgb?.[2]})`
-                : `${valueUnit} ${Math.round(sample.modalityValue ?? 0)}`}{" "}
-              ({sample.i},{sample.j})
-            </div>
-          )}
           {/* 患者の向き（A/P・R/L・H/F）。四辺に表示。pointer-events:none。 */}
           {ov.orientation && markers && (
             <>
@@ -384,24 +383,50 @@ const dicomBase: React.CSSProperties = {
   maxWidth: "46%",
   whiteSpace: "nowrap",
 };
-const dicomTL: React.CSSProperties = { ...dicomBase, top: 28, left: 10, alignItems: "flex-start", textAlign: "left" };
-const dicomTR: React.CSSProperties = { ...dicomBase, top: 28, right: 10, alignItems: "flex-end", textAlign: "right" };
+const dicomTL: React.CSSProperties = { ...dicomBase, top: 4, left: 6, alignItems: "flex-start", textAlign: "left" };
+const dicomTR: React.CSSProperties = { ...dicomBase, top: 4, right: 6, alignItems: "flex-end", textAlign: "right" };
 const dicomBL: React.CSSProperties = {
   ...dicomBase,
-  bottom: 50,
-  left: 12,
+  bottom: 4,
+  left: 6,
   flexDirection: "column-reverse",
   alignItems: "flex-start",
   textAlign: "left",
 };
 const dicomBR: React.CSSProperties = {
   ...dicomBase,
-  bottom: 12,
-  right: 10,
+  bottom: 4,
+  right: 6,
   flexDirection: "column-reverse",
   alignItems: "flex-end",
   textAlign: "right",
 };
+
+function StatusItem({ label, value }: { label: string; value: string }) {
+  return (
+    <span style={statusItem}>
+      <span style={statusKey}>{label}</span>
+      <span style={statusVal}>{value}</span>
+    </span>
+  );
+}
+
+const statusBar: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 14,
+  flexWrap: "wrap",
+  padding: "5px 10px",
+  marginBottom: 6,
+  background: "#eef2f6",
+  border: "1px solid #dde4ea",
+  borderRadius: 6,
+  fontSize: 12,
+  fontVariantNumeric: "tabular-nums",
+};
+const statusItem: React.CSSProperties = { display: "inline-flex", gap: 5, alignItems: "baseline" };
+const statusKey: React.CSSProperties = { color: "#6b7785" };
+const statusVal: React.CSSProperties = { color: "#1a2530", fontWeight: 600 };
 
 const wrap: React.CSSProperties = {
   position: "relative",
@@ -412,26 +437,6 @@ const wrap: React.CSSProperties = {
   overflow: "hidden",
 };
 const pixelLayer: React.CSSProperties = { position: "absolute", inset: 0 };
-const overlayTL: React.CSSProperties = {
-  position: "absolute",
-  top: 8,
-  left: 10,
-  display: "flex",
-  gap: 8,
-  alignItems: "center",
-  color: "#cfd8dc",
-  fontSize: 12,
-  pointerEvents: "none",
-};
-const overlayTR: React.CSSProperties = {
-  position: "absolute",
-  top: 8,
-  right: 10,
-  color: "#aee571",
-  fontSize: 12,
-  fontVariantNumeric: "tabular-nums",
-  pointerEvents: "none",
-};
 const panBadge: React.CSSProperties = {
   padding: "1px 6px",
   borderRadius: 4,
