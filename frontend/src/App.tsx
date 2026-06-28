@@ -3,6 +3,8 @@ import { fetchStatus, type AppStatus } from "./api";
 import { StudyList } from "./StudyList";
 import { SettingsDialog } from "./settings/SettingsDialog";
 import { DbAdminDialog } from "./dbadmin/DbAdminDialog";
+import { KeyboardHelp } from "./shortcuts/KeyboardHelp";
+import { useGlobalShortcuts } from "./shortcuts/useGlobalShortcuts";
 import { useI18n } from "./i18n/i18n";
 
 export function App() {
@@ -11,12 +13,27 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dbOpen, setDbOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   useEffect(() => {
     fetchStatus()
       .then(setStatus)
       .catch((e: unknown) => setError(String(e)));
   }, []);
+
+  useGlobalShortcuts({
+    "open-settings": () => setSettingsOpen(true),
+    "open-db": () => {
+      if (status?.mode === "standalone") setDbOpen(true);
+    },
+    "show-help": () => setHelpOpen(true),
+    // Esc: 開いているダイアログを閉じる（文脈依存。ビューア実装後はビューア側でリセットに割当）
+    "close-dialog": () => {
+      setSettingsOpen(false);
+      setDbOpen(false);
+      setHelpOpen(false);
+    },
+  });
 
   const modeLabel =
     status?.mode === "standalone"
@@ -46,6 +63,9 @@ export function App() {
               🗄 {t("app.btn.db")}
             </button>
           )}
+          <button onClick={() => setHelpOpen(true)} title={t("sc.title")} style={iconBtn}>
+            ⌨
+          </button>
           <button onClick={() => setSettingsOpen(true)} title={t("app.btn.settingsTitle")} style={iconBtn}>
             ⚙
           </button>
@@ -72,6 +92,7 @@ export function App() {
 
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <DbAdminDialog open={dbOpen} onClose={() => setDbOpen(false)} />
+      <KeyboardHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
     </main>
   );
 }
