@@ -72,6 +72,7 @@ export const en: Record<string, string> = {
   "series.empty": "No series.",
   "instance.count": "{{n}} instance(s)",
   "instance.range": "(#{{from}}–#{{to}})",
+  "viewer.webTodo": "2D viewing in web mode (via WADO-RS) is coming in the next phase.",
 
   // settings
   "settings.title": "Settings",

@@ -43,6 +43,17 @@ export default defineConfig(({ mode }) => {
   return {
     base: "./",
     plugins: [react(), cspPlugin()],
+    // Cornerstone3D の dicom-image-loader はデコード用 Web Worker を ES module + 動的 import
+    // （コーデックの遅延ロード）で構成するため、worker を ES 形式でバンドルする必要がある
+    // （既定の iife はコード分割と非互換でビルドが失敗する）。
+    worker: {
+      format: "es",
+    },
+    // codec(WASM/emscripten グルー) や dicom-image-loader を事前バンドルから除外し、
+    // ブラウザ向け解決に任せる（fs/path の node externalize 警告は無害）。
+    optimizeDeps: {
+      exclude: ["@cornerstonejs/dicom-image-loader"],
+    },
     server: {
       port: devPort,
       // dev では /api を backend にプロキシし、ブラウザから同一オリジンで叩けるようにする。
@@ -52,6 +63,8 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       outDir: "dist",
+      // WASM コーデックのトップレベル await を許可（esnext ターゲット）。
+      target: "esnext",
     },
   };
 });

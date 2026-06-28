@@ -71,6 +71,7 @@ export const ja: Record<string, string> = {
   "series.empty": "シリーズがありません。",
   "instance.count": "インスタンス {{n}} 件",
   "instance.range": "（#{{from}} 〜 #{{to}}）",
+  "viewer.webTodo": "web モードの 2D 表示（WADO-RS 経由）は次フェーズで対応します。",
 
   // settings
   "settings.title": "環境設定",

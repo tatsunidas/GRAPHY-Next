@@ -73,7 +73,7 @@ export function MainScreen({
       <div style={middle}>
         <SearchPanel onSearch={setFilters} />
         <div style={treeArea}>
-          <StudyList filters={filters} reloadKey={reloadKey} />
+          <StudyList filters={filters} reloadKey={reloadKey} mode={isStandalone ? "standalone" : "web"} />
         </div>
       </div>
       <StatusBar status={status} error={error} />

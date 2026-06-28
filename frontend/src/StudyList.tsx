@@ -9,10 +9,20 @@ import {
   type StudyFilters,
 } from "./api";
 import { useI18n } from "./i18n/i18n";
+import { Viewer2D } from "./viewer/Viewer2D";
+import { imageIdForInstance, type ViewerMode } from "./viewer/imageId";
 
 const PAGE_SIZE = 50;
 
-export function StudyList({ filters, reloadKey }: { filters?: StudyFilters | null; reloadKey?: number }) {
+export function StudyList({
+  filters,
+  reloadKey,
+  mode,
+}: {
+  filters?: StudyFilters | null;
+  reloadKey?: number;
+  mode: ViewerMode;
+}) {
   const { t } = useI18n();
   const [studies, setStudies] = useState<Study[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -112,7 +122,7 @@ export function StudyList({ filters, reloadKey }: { filters?: StudyFilters | nul
         </div>
       )}
 
-      {selectedStudy && <SeriesNavigator study={selectedStudy} />}
+      {selectedStudy && <SeriesNavigator study={selectedStudy} mode={mode} />}
     </section>
   );
 }
@@ -126,7 +136,7 @@ const pageBtn: React.CSSProperties = {
   fontSize: 13,
 };
 
-function SeriesNavigator({ study }: { study: Study }) {
+function SeriesNavigator({ study, mode }: { study: Study; mode: ViewerMode }) {
   const { t } = useI18n();
   const [series, setSeries] = useState<Series[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -185,13 +195,13 @@ function SeriesNavigator({ study }: { study: Study }) {
       )}
 
       {selectedSeries && (
-        <InstanceList study={study} series={selectedSeries} />
+        <InstanceList study={study} series={selectedSeries} mode={mode} />
       )}
     </div>
   );
 }
 
-function InstanceList({ study, series }: { study: Study; series: Series }) {
+function InstanceList({ study, series, mode }: { study: Study; series: Series; mode: ViewerMode }) {
   const { t } = useI18n();
   const [instances, setInstances] = useState<Instance[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -203,6 +213,8 @@ function InstanceList({ study, series }: { study: Study; series: Series }) {
       .then(setInstances)
       .catch((e: unknown) => setError(String(e)));
   }, [study.studyInstanceUid, series.seriesInstanceUid]);
+
+  const first = instances && instances.length > 0 ? instances[0] : null;
 
   return (
     <div style={{ marginTop: 10, color: "#445" }}>
@@ -217,8 +229,17 @@ function InstanceList({ study, series }: { study: Study; series: Series }) {
                 from: instances[0].instanceNumber ?? "?",
                 to: instances[instances.length - 1].instanceNumber ?? "?",
               })}
-          {/* 次フェーズ: ここから Cornerstone3D ビューポートで表示 */}
         </div>
+      )}
+
+      {/* 2D ビューア（骨組み）: シリーズ先頭の 1 枚を表示。スタック/ツールは次スコープ。 */}
+      {first && mode === "standalone" && (
+        <div style={{ marginTop: 10, maxWidth: 560 }}>
+          <Viewer2D imageId={imageIdForInstance("standalone", first.sopInstanceUid)} />
+        </div>
+      )}
+      {first && mode === "web" && (
+        <div style={{ marginTop: 10, fontSize: 12, color: "#8a6d3b" }}>{t("viewer.webTodo")}</div>
       )}
     </div>
   );

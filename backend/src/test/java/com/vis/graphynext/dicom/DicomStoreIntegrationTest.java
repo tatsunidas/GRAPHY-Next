@@ -155,6 +155,15 @@ class DicomStoreIntegrationTest {
         assertEquals(3, storage.listStudies(new StudySearch(null, name, null, null, null, null)).size());
     }
 
+    @Test
+    void resolveInstanceFile_returnsExistingPath_orNull() throws Exception {
+        storage.ingest(writePhantom(DicomPhantomFactory.scImage("PF", "ST.F", "SE.F", "SOP.F1")));
+
+        Path p = storage.resolveInstanceFile("SOP.F1");
+        assertTrue(p != null && Files.exists(p), "取り込んだ SOP のローカルファイルが解決できる");
+        assertEquals(null, storage.resolveInstanceFile("SOP.NOPE"), "未知の SOP は null");
+    }
+
     /** scImage を作って固有の患者名・StudyDate・Modality を設定する。 */
     private static Attributes study(String studyUid, String studyDate, String modality) {
         Attributes a = DicomPhantomFactory.scImage(studyUid + ".pid", studyUid, studyUid + ".se", studyUid + ".sop");
