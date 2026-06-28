@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { RenderingEngine, Enums, EVENTS, type Types } from "@cornerstonejs/core";
 import {
   ToolGroupManager,
@@ -12,6 +12,8 @@ import { applyTransform, isPanned, readTransform, type ViewTransform, FIT_TRANSF
 import { readImageInfo, sampleAtCanvas, computeSliceSpacing, type ImageInfo, type PixelSample } from "./imageInfo";
 import { computeOrientationMarkers, type OrientationMarkers } from "./orientation";
 import { computeScaleBar, type ScaleBar } from "./scaleBar";
+import { resolveOverlay } from "./overlayText";
+import { useOverlayConfig } from "./overlayConfig";
 import { ImageInfoPanel } from "./ImageInfoPanel";
 import { useI18n } from "../i18n/i18n";
 
@@ -274,6 +276,14 @@ export function Viewer2D({
   const isCt = info?.modality === "CT";
   const valueUnit = isCt ? "HU" : t("viewer.cursorValueUnit");
 
+  // DICOM 属性テキストオーバーレイ（4 隅、設定可能）。設定 or スライス変化(info)で再解決。
+  const overlayCfg = useOverlayConfig();
+  const dicomText = useMemo(
+    () => (ov.text ? resolveOverlay(overlayCfg, imageIds[imageIndex]) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [ov.text, overlayCfg, imageIds, imageIndex, info],
+  );
+
   return (
     <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
       <div style={{ flex: "1 1 auto", minWidth: 0 }}>
@@ -319,6 +329,15 @@ export function Viewer2D({
               </div>
             </div>
           )}
+          {/* DICOM 属性テキスト（4 隅・設定可能）。viewer 状態行(zoom/WL,cursor)の下に重ねる。 */}
+          {dicomText && (
+            <>
+              <CornerText lines={dicomText.topLeft} style={dicomTL} />
+              <CornerText lines={dicomText.topRight} style={dicomTR} />
+              <CornerText lines={dicomText.bottomLeft} style={dicomBL} />
+              <CornerText lines={dicomText.bottomRight} style={dicomBR} />
+            </>
+          )}
           {loading && !error && <div style={overlayCenter}>{t("common.loading")}</div>}
           {error && <div style={{ ...overlayCenter, color: "#ff8a80" }}>{t("common.fetchError", { error })}</div>}
         </div>
@@ -340,6 +359,49 @@ export function Viewer2D({
     </div>
   );
 }
+
+function CornerText({ lines, style }: { lines: string[]; style: React.CSSProperties }) {
+  if (!lines.length) return null;
+  return (
+    <div style={style}>
+      {lines.map((l, i) => (
+        <div key={i}>{l}</div>
+      ))}
+    </div>
+  );
+}
+
+const dicomBase: React.CSSProperties = {
+  position: "absolute",
+  display: "flex",
+  flexDirection: "column",
+  gap: 1,
+  color: "#e8eef3",
+  fontSize: 12,
+  lineHeight: 1.35,
+  textShadow: "0 0 3px #000, 0 0 2px #000",
+  pointerEvents: "none",
+  maxWidth: "46%",
+  whiteSpace: "nowrap",
+};
+const dicomTL: React.CSSProperties = { ...dicomBase, top: 28, left: 10, alignItems: "flex-start", textAlign: "left" };
+const dicomTR: React.CSSProperties = { ...dicomBase, top: 28, right: 10, alignItems: "flex-end", textAlign: "right" };
+const dicomBL: React.CSSProperties = {
+  ...dicomBase,
+  bottom: 50,
+  left: 12,
+  flexDirection: "column-reverse",
+  alignItems: "flex-start",
+  textAlign: "left",
+};
+const dicomBR: React.CSSProperties = {
+  ...dicomBase,
+  bottom: 12,
+  right: 10,
+  flexDirection: "column-reverse",
+  alignItems: "flex-end",
+  textAlign: "right",
+};
 
 const wrap: React.CSSProperties = {
   position: "relative",
