@@ -8,6 +8,8 @@ import {
 } from "@cornerstonejs/tools";
 import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
 import { applyTransform, isPanned, readTransform, type ViewTransform, FIT_TRANSFORM } from "./transform";
+import { readImageInfo, sampleAtCanvas, type ImageInfo, type PixelSample } from "./imageInfo";
+import { ImageInfoPanel } from "./ImageInfoPanel";
 import { useI18n } from "../i18n/i18n";
 
 const { MouseBindings } = csToolsEnums;
@@ -47,6 +49,9 @@ export function Viewer2D({ imageId }: { imageId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [transform, setTransform] = useState<ViewTransform>(FIT_TRANSFORM);
+  const [info, setInfo] = useState<ImageInfo | null>(null);
+  const infoRef = useRef<ImageInfo | null>(null);
+  const [sample, setSample] = useState<PixelSample | null>(null);
 
   useEffect(() => {
     let disposed = false;
@@ -55,6 +60,15 @@ export function Viewer2D({ imageId }: { imageId: string }) {
     const viewportId = viewportIdRef.current;
     const toolGroupId = `${viewportId}-tg`;
     let resizeObserver: ResizeObserver | null = null;
+
+    // カーソル位置の輝度値（モダリティ値=HU 等）を読む。tools の入力は妨げない（受動的）。
+    const onMove = (e: MouseEvent) => {
+      const v = viewportRef.current;
+      if (!v || !infoRef.current) return;
+      const rect = element.getBoundingClientRect();
+      setSample(sampleAtCanvas(v, [e.clientX - rect.left, e.clientY - rect.top], infoRef.current));
+    };
+    const onLeave = () => setSample(null);
 
     const onCameraModified = () => {
       const vp = viewportRef.current;
@@ -75,6 +89,11 @@ export function Viewer2D({ imageId }: { imageId: string }) {
         await viewport.setStack([imageId], 0);
         viewport.render();
 
+        // 輝度/ボクセル/FOV のキャリブレーション情報（読み込み後にメタが揃う）。
+        const inf = readImageInfo(imageId);
+        infoRef.current = inf;
+        if (!disposed) setInfo(inf);
+
         // affine 操作: 左ドラッグ=Pan、右ドラッグ/ホイール=Zoom（いずれも camera=affine 経由）。
         const tg = ToolGroupManager.getToolGroup(toolGroupId) ?? ToolGroupManager.createToolGroup(toolGroupId);
         if (tg) {
@@ -89,6 +108,8 @@ export function Viewer2D({ imageId }: { imageId: string }) {
 
         // 操作（ツール）による変化を読み戻してオーバーレイ更新。
         element.addEventListener(EVENTS.CAMERA_MODIFIED, onCameraModified);
+        element.addEventListener("mousemove", onMove);
+        element.addEventListener("mouseleave", onLeave);
         onCameraModified();
 
         // コンポーネント拡縮に追従。再 Fit したうえで相対 zoom/pan/rotation/flip を維持する。
@@ -115,6 +136,8 @@ export function Viewer2D({ imageId }: { imageId: string }) {
       disposed = true;
       resizeObserver?.disconnect();
       element.removeEventListener(EVENTS.CAMERA_MODIFIED, onCameraModified);
+      element.removeEventListener("mousemove", onMove);
+      element.removeEventListener("mouseleave", onLeave);
       try {
         ToolGroupManager.destroyToolGroup(toolGroupId);
       } catch {
@@ -159,31 +182,44 @@ export function Viewer2D({ imageId }: { imageId: string }) {
   };
 
   const panned = isPanned(transform);
+  const isCt = info?.modality === "CT";
+  const valueUnit = isCt ? "HU" : t("viewer.cursorValueUnit");
 
   return (
-    <div>
-      <div style={wrap}>
-        {/* 深層: ピクセル canvas（Cornerstone3D が内部に canvas を生成） */}
-        <div ref={elementRef} style={pixelLayer} onContextMenu={(e) => e.preventDefault()} />
-        {/* z3 オーバーレイ（pointer-events:none で入力を妨げない） */}
-        <div style={overlayTL}>
-          <span>{t("viewer.zoomLabel", { pct: Math.round(transform.zoom * 100) })}</span>
-          {panned && <span style={panBadge}>{t("viewer.panned")}</span>}
+    <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+      <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+        <div style={wrap}>
+          {/* 深層: ピクセル canvas（Cornerstone3D が内部に canvas を生成） */}
+          <div ref={elementRef} style={pixelLayer} onContextMenu={(e) => e.preventDefault()} />
+          {/* z3 オーバーレイ（pointer-events:none で入力を妨げない） */}
+          <div style={overlayTL}>
+            <span>{t("viewer.zoomLabel", { pct: Math.round(transform.zoom * 100) })}</span>
+            {panned && <span style={panBadge}>{t("viewer.panned")}</span>}
+          </div>
+          {/* カーソル位置の輝度値（モダリティ値=HU 等）。 */}
+          {sample && (
+            <div style={overlayTR}>
+              {valueUnit} {Math.round(sample.modalityValue)} ({sample.i},{sample.j})
+            </div>
+          )}
+          {loading && !error && <div style={overlayCenter}>{t("common.loading")}</div>}
+          {error && <div style={{ ...overlayCenter, color: "#ff8a80" }}>{t("common.fetchError", { error })}</div>}
         </div>
-        {loading && !error && <div style={overlayCenter}>{t("common.loading")}</div>}
-        {error && <div style={{ ...overlayCenter, color: "#ff8a80" }}>{t("common.fetchError", { error })}</div>}
+
+        {/* 操作バー（canvas の外＝ツール入力と競合しない） */}
+        <div style={toolbar}>
+          <button onClick={fit} style={btn} title={t("viewer.fit")}>{t("viewer.fit")}</button>
+          <button onClick={() => zoomBy(1 / 1.2)} style={btn} title={t("viewer.zoomOut")}>−</button>
+          <button onClick={() => zoomBy(1.2)} style={btn} title={t("viewer.zoomIn")}>＋</button>
+          <button onClick={rotate90} style={btn} title={t("viewer.rotate")}>⟳</button>
+          <button onClick={flipH} style={btn} title={t("viewer.flipH")}>⇄</button>
+          <button onClick={flipV} style={btn} title={t("viewer.flipV")}>⇅</button>
+          <button onClick={reset} style={btn} title={t("viewer.reset")}>{t("viewer.reset")}</button>
+        </div>
       </div>
 
-      {/* 操作バー（canvas の外＝ツール入力と競合しない） */}
-      <div style={toolbar}>
-        <button onClick={fit} style={btn} title={t("viewer.fit")}>{t("viewer.fit")}</button>
-        <button onClick={() => zoomBy(1 / 1.2)} style={btn} title={t("viewer.zoomOut")}>−</button>
-        <button onClick={() => zoomBy(1.2)} style={btn} title={t("viewer.zoomIn")}>＋</button>
-        <button onClick={rotate90} style={btn} title={t("viewer.rotate")}>⟳</button>
-        <button onClick={flipH} style={btn} title={t("viewer.flipH")}>⇄</button>
-        <button onClick={flipV} style={btn} title={t("viewer.flipV")}>⇅</button>
-        <button onClick={reset} style={btn} title={t("viewer.reset")}>{t("viewer.reset")}</button>
-      </div>
+      {/* 右サイド: 輝度/ボクセル/FOV のキャリブレーション情報。 */}
+      <ImageInfoPanel info={info} />
     </div>
   );
 }
@@ -206,6 +242,15 @@ const overlayTL: React.CSSProperties = {
   alignItems: "center",
   color: "#cfd8dc",
   fontSize: 12,
+  pointerEvents: "none",
+};
+const overlayTR: React.CSSProperties = {
+  position: "absolute",
+  top: 8,
+  right: 10,
+  color: "#aee571",
+  fontSize: 12,
+  fontVariantNumeric: "tabular-nums",
   pointerEvents: "none",
 };
 const panBadge: React.CSSProperties = {
