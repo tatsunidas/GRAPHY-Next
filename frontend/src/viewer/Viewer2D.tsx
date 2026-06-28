@@ -57,10 +57,16 @@ export function Viewer2D({
   imageIds,
   imageIndex,
   overlays,
+  compact,
+  height,
 }: {
   imageIds: string[];
   imageIndex: number;
   overlays?: ViewerOverlays;
+  /** グリッドセル用: ツール/状態バー/ツールバー/情報パネルを省き、画像＋オーバーレイのみ表示。 */
+  compact?: boolean;
+  /** 画像領域の高さ(px)。既定 512。 */
+  height?: number;
 }) {
   const { t } = useI18n();
   const ov = { text: true, caliper: true, orientation: true, ...overlays };
@@ -153,26 +159,26 @@ export function Viewer2D({
           setInfo(merged);
         })();
 
-        // 操作の割当: 左ドラッグ=WW/WL、中ドラッグ=Pan、右ドラッグ/ホイール=Zoom。
-        const tg = ToolGroupManager.getToolGroup(toolGroupId) ?? ToolGroupManager.createToolGroup(toolGroupId);
-        if (tg) {
-          tg.addTool(WindowLevelTool.toolName);
-          tg.addTool(PanTool.toolName);
-          tg.addTool(ZoomTool.toolName);
-          tg.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
-          tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
-          // ホイールはスライス送り（SeriesViewer 側で処理）に充てるため Zoom から外す。
-          tg.setToolActive(ZoomTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary }] });
-          tg.addViewport(viewportId, ENGINE_ID);
-        }
-
-        // 操作（ツール）による変化を読み戻してオーバーレイ更新。
+        // CAMERA_MODIFIED は compact でも必要（向きマーカー/スケールバーの初期計算・再Fit）。
         element.addEventListener(EVENTS.CAMERA_MODIFIED, onCameraModified);
-        element.addEventListener(EVENTS.VOI_MODIFIED, onVoiModified);
-        element.addEventListener("mousemove", onMove);
-        element.addEventListener("mouseleave", onLeave);
+        if (!compact) {
+          // 操作の割当: 左ドラッグ=WW/WL、中ドラッグ=Pan、右ドラッグ=Zoom（ホイールはスライス送り）。
+          const tg = ToolGroupManager.getToolGroup(toolGroupId) ?? ToolGroupManager.createToolGroup(toolGroupId);
+          if (tg) {
+            tg.addTool(WindowLevelTool.toolName);
+            tg.addTool(PanTool.toolName);
+            tg.addTool(ZoomTool.toolName);
+            tg.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
+            tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
+            tg.setToolActive(ZoomTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary }] });
+            tg.addViewport(viewportId, ENGINE_ID);
+          }
+          element.addEventListener(EVENTS.VOI_MODIFIED, onVoiModified);
+          element.addEventListener("mousemove", onMove);
+          element.addEventListener("mouseleave", onLeave);
+          onVoiModified();
+        }
         onCameraModified();
-        onVoiModified();
 
         // コンポーネント拡縮に追従。再 Fit したうえで相対 zoom/pan/rotation/flip を維持する。
         resizeObserver = new ResizeObserver(() => {
@@ -292,19 +298,9 @@ export function Viewer2D({
     : "—";
   const cursorXY = sample ? `${sample.fx.toFixed(1)}, ${sample.fy.toFixed(1)}` : "—";
 
-  return (
-    <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-      <div style={{ flex: "1 1 auto", minWidth: 0 }}>
-        {/* 画像外の状態ラベルエリア（必須情報）。 */}
-        <div style={statusBar}>
-          <StatusItem label={t("viewer.status.zoom")} value={`${Math.round(transform.zoom * 100)}%`} />
-          {panned && <span style={panBadge}>{t("viewer.panned")}</span>}
-          <StatusItem label={t("viewer.status.wl")} value={voi ? `${Math.round(voi.wc)}/${Math.round(voi.ww)}` : "—"} />
-          <StatusItem label={t("viewer.status.value")} value={cursorValue} />
-          <StatusItem label={t("viewer.status.xy")} value={cursorXY} />
-        </div>
-        <div style={wrap}>
-          {/* 深層: ピクセル canvas（Cornerstone3D が内部に canvas を生成） */}
+  const imagePanel = (
+    <div style={{ ...wrap, height: height ?? 512 }}>
+      {/* 深層: ピクセル canvas（Cornerstone3D が内部に canvas を生成） */}
           <div ref={elementRef} style={pixelLayer} onContextMenu={(e) => e.preventDefault()} />
           {/* 患者の向き（A/P・R/L・H/F）。四辺に表示。pointer-events:none。 */}
           {ov.orientation && markers && (
@@ -337,9 +333,26 @@ export function Viewer2D({
               <CornerText lines={dicomText.bottomRight} style={dicomBR} />
             </>
           )}
-          {loading && !error && <div style={overlayCenter}>{t("common.loading")}</div>}
-          {error && <div style={{ ...overlayCenter, color: "#ff8a80" }}>{t("common.fetchError", { error })}</div>}
+      {loading && !error && <div style={overlayCenter}>{t("common.loading")}</div>}
+      {error && <div style={{ ...overlayCenter, color: "#ff8a80" }}>{t("common.fetchError", { error })}</div>}
+    </div>
+  );
+
+  // グリッドセル用: 画像＋オーバーレイのみ。
+  if (compact) return imagePanel;
+
+  return (
+    <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+      <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+        {/* 画像外の状態ラベルエリア（必須情報）。 */}
+        <div style={statusBar}>
+          <StatusItem label={t("viewer.status.zoom")} value={`${Math.round(transform.zoom * 100)}%`} />
+          {panned && <span style={panBadge}>{t("viewer.panned")}</span>}
+          <StatusItem label={t("viewer.status.wl")} value={voi ? `${Math.round(voi.wc)}/${Math.round(voi.ww)}` : "—"} />
+          <StatusItem label={t("viewer.status.value")} value={cursorValue} />
+          <StatusItem label={t("viewer.status.xy")} value={cursorXY} />
         </div>
+        {imagePanel}
 
         {/* 操作バー（canvas の外＝ツール入力と競合しない） */}
         <div style={toolbar}>
