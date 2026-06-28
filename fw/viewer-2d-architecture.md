@@ -30,6 +30,18 @@ viewport <div> (position:relative, ここがイベントの受け口)
    React が再描画するのは軽い DOM オーバーレイのみ。
 7. （予定）オーバーレイ更新は**イベント駆動**（IMAGE_RENDERED / VOI_MODIFIED / CAMERA_MODIFIED / STACK_NEW_IMAGE）。
 
+## 表示変換の約束（実装済み）— `viewer/transform.ts` + `Viewer2D.tsx`
+zoom / pan / flip(上下左右) / rotation は **Cornerstone3D の ViewPresentation（内部 camera=affine）**で
+まとめて 1 つの affine 状態として管理する（`ViewTransform`）。
+- **表示倍率**: コンポーネントに Fit した状態を **1.0（100%）**。`getZoom()`/`setZoom()` がこの相対倍率。
+- **既定原点**: 画像がコンポーネント中央。pan=[0,0]。
+- **操作の写像**: 左ドラッグ=Pan、右ドラッグ/ホイール=Zoom（Cornerstone Tools の PanTool/ZoomTool）。
+  Fit/±Zoom/90°回転/左右反転/上下反転は `applyTransform()`→`setViewPresentation()`（全部 affine 経由）。
+- **再 Fit（レスポンシブ）**: ResizeObserver で `renderingEngine.resize(true,false)`（新サイズへ再 Fit）後、
+  退避した presentation を再適用して**相対 zoom/pan/rotation/flip を維持**。
+- **Pan 状態**: `isPanned()` = zoom≠1.0 または pan≠[0,0] のとき true。
+- 注意: `setViewPresentation` の partial 適用時は **displayArea を現在値で埋める**（誤適用防止）。`applyTransform` が担保。
+
 ## データ層シーム（imageId の作り方）— `viewer/imageId.ts`
 - **standalone**: `wadouri:<base>/api/instances/{sop}/file`
   - backend `InstanceController` が索引の `file:` URI を `application/dicom`（Part-10 丸ごと）で返す。
@@ -52,10 +64,15 @@ Cornerstone3D を Vite でバンドルするには以下が必要（これが無
 - バンドルが大きい（main ~1.6MB + wasm）。必要なら manualChunks で分割。
 
 ## 実装済みファイル
-- frontend: `viewer/cornerstoneSetup.ts`(init) / `viewer/imageId.ts`(モード別 imageId) / `viewer/Viewer2D.tsx`(StackViewport 単一表示)
+- frontend: `viewer/cornerstoneSetup.ts`(core+loader+tools init) / `viewer/imageId.ts`(モード別 imageId)
+- frontend: `viewer/transform.ts`(affine モデル) / `viewer/Viewer2D.tsx`(単一表示＋Pan/Zoom/wheel/flip/rotate/fit＋再Fit＋isPanned)
 - frontend: `StudyList.tsx` の InstanceList からシリーズ先頭 1 枚を表示（standalone のみ）
 - backend: `InstanceController`(`GET /api/instances/{sop}/file`) / `DicomStorageService.resolveInstanceFile`
 
-## 次スコープ候補
-スタック（シリーズ全スライス）→ ツールグループ（W/L・Pan・Zoom・Length・ROI）→ 既存キーボードショートカット配線
-→ メタデータ/向きオーバーレイ → web(wadors) 対応。
+## 次スコープ
+1. **輝度値キャリブレーション**（Modality LUT: RescaleSlope/Intercept、VOI LUT: WindowCenter/Width、PT は SUV）
+2. **ボクセルサイズ計算**（PixelSpacing / ImagerPixelSpacing / SliceThickness）
+3. **FOV 計算**（Rows×PixelSpacing, Columns×PixelSpacing）
+   → これらは Cornerstone の metaData プロバイダ（wadouri）から取得。
+4. その後: スタック（シリーズ全スライス＋矢印/ホイールスクロール）→ W/L・Length・ROI ツール
+   ＋既存キーボードショートカット配線 → メタデータ/向きオーバーレイ → web(wadors) 対応。

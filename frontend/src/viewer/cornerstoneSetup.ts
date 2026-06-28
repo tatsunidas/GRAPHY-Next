@@ -4,6 +4,7 @@
 //   CSP は wasm-unsafe-eval / worker-src blob: を許可済み（圧縮 TS はワーカ＋WASM でデコード）。
 import { init as coreInit } from "@cornerstonejs/core";
 import dicomImageLoader from "@cornerstonejs/dicom-image-loader";
+import { init as toolsInit, addTool, PanTool, ZoomTool } from "@cornerstonejs/tools";
 
 let initPromise: Promise<void> | null = null;
 
@@ -15,6 +16,10 @@ export function ensureCornerstoneInitialized(): Promise<void> {
       // メインスレッドを塞がないようワーカ数は CPU-1（最大 4）に抑える。
       const maxWebWorkers = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 4) - 1));
       dicomImageLoader.init({ maxWebWorkers });
+      // ツール基盤と、affine 変換（Pan/Zoom）を担うツールをグローバル登録（1 回だけ）。
+      toolsInit();
+      addTool(PanTool);
+      addTool(ZoomTool);
     })();
   }
   return initPromise;

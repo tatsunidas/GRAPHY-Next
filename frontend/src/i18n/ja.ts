@@ -72,6 +72,14 @@ export const ja: Record<string, string> = {
   "instance.count": "インスタンス {{n}} 件",
   "instance.range": "（#{{from}} 〜 #{{to}}）",
   "viewer.webTodo": "web モードの 2D 表示（WADO-RS 経由）は次フェーズで対応します。",
+  "viewer.zoomLabel": "{{pct}}%",
+  "viewer.panned": "PAN",
+  "viewer.fit": "Fit",
+  "viewer.zoomIn": "拡大",
+  "viewer.zoomOut": "縮小",
+  "viewer.rotate": "90°回転",
+  "viewer.flipH": "左右反転",
+  "viewer.flipV": "上下反転",
 
   // settings
   "settings.title": "環境設定",

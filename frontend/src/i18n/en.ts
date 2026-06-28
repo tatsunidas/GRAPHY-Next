@@ -73,6 +73,14 @@ export const en: Record<string, string> = {
   "instance.count": "{{n}} instance(s)",
   "instance.range": "(#{{from}}–#{{to}})",
   "viewer.webTodo": "2D viewing in web mode (via WADO-RS) is coming in the next phase.",
+  "viewer.zoomLabel": "{{pct}}%",
+  "viewer.panned": "PAN",
+  "viewer.fit": "Fit",
+  "viewer.zoomIn": "Zoom in",
+  "viewer.zoomOut": "Zoom out",
+  "viewer.rotate": "Rotate 90°",
+  "viewer.flipH": "Flip horizontal",
+  "viewer.flipV": "Flip vertical",
 
   // settings
   "settings.title": "Settings",
