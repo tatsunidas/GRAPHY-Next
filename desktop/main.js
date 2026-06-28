@@ -238,6 +238,48 @@ function createWindow() {
   }
 }
 
+// 2D/3D/MPR/Slicer 等の独立ビューアを新規ウィンドウで開く（マルチモニタ運用）。
+// 同じフロントを `#<screen>` のハッシュ付きで読み込み、React 側でルーティングする。
+function createViewerWindow(screen) {
+  const win = new BrowserWindow({
+    width: 1400,
+    height: 900,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      additionalArguments: [`--graphy-api-base=${API_BASE}`],
+    },
+  });
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//.test(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
+  win.webContents.on("will-navigate", (e, url) => {
+    // ハッシュ変更（同一ドキュメント）は許可。別ドキュメントへの遷移のみ禁止。
+    const current = win.webContents.getURL();
+    if (url.split("#")[0] !== current.split("#")[0]) {
+      e.preventDefault();
+      if (/^https?:\/\//.test(url)) shell.openExternal(url);
+    }
+  });
+  if (DEV) {
+    win.loadURL(`${DEV_URL}#${screen}`);
+  } else {
+    win.loadFile(path.join(__dirname, "renderer", "index.html"), { hash: screen });
+  }
+  if (DEV || SECURITY.devTools) {
+    win.webContents.openDevTools();
+  }
+  return win;
+}
+
+ipcMain.handle("graphy:open-viewer", (_e, screen) => {
+  createViewerWindow(String(screen || "2dviewer"));
+});
+
 // インポート: ネイティブのファイル/フォルダ選択ダイアログ。選んだパスを返す。
 ipcMain.handle("graphy:pick-import", async () => {
   const result = await dialog.showOpenDialog(BrowserWindow.getFocusedWindow(), {

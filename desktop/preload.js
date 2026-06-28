@@ -21,4 +21,5 @@ contextBridge.exposeInMainWorld("__GRAPHY_SECURITY__", {
 // デスクトップ専用 API（ネイティブダイアログ等）。main プロセスへ橋渡し。
 contextBridge.exposeInMainWorld("graphyDesktop", {
   pickImportPaths: () => ipcRenderer.invoke("graphy:pick-import"),
+  openViewer: (screen) => ipcRenderer.invoke("graphy:open-viewer", screen),
 });

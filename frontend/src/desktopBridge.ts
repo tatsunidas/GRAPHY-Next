@@ -3,6 +3,8 @@
 
 export interface GraphyDesktop {
   pickImportPaths: () => Promise<string[]>;
+  /** 2d/3d/mpr/slicer 等の独立ビューアを新規ウィンドウで開く。 */
+  openViewer?: (screen: string) => Promise<void>;
 }
 
 export function desktop(): GraphyDesktop | undefined {

@@ -5,6 +5,7 @@ import { DbAdminDialog } from "./dbadmin/DbAdminDialog";
 import { KeyboardHelp } from "./shortcuts/KeyboardHelp";
 import { useGlobalShortcuts } from "./shortcuts/useGlobalShortcuts";
 import { MainScreen } from "./mainscreen/MainScreen";
+import { Viewer2DScreen } from "./viewer2d/Viewer2DScreen";
 
 export function App() {
   const [status, setStatus] = useState<AppStatus | null>(null);
@@ -12,6 +13,14 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dbOpen, setDbOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  // 別ウィンドウ用ルーティング（#2dviewer 等）。
+  const [screen, setScreen] = useState(() => window.location.hash.replace(/^#/, ""));
+
+  useEffect(() => {
+    const onHash = () => setScreen(window.location.hash.replace(/^#/, ""));
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
 
   useEffect(() => {
     fetchStatus()
@@ -35,13 +44,17 @@ export function App() {
 
   return (
     <>
-      <MainScreen
-        status={status}
-        error={error}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onOpenDb={() => setDbOpen(true)}
-        onOpenHelp={() => setHelpOpen(true)}
-      />
+      {screen === "2dviewer" ? (
+        <Viewer2DScreen status={status} />
+      ) : (
+        <MainScreen
+          status={status}
+          error={error}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenDb={() => setDbOpen(true)}
+          onOpenHelp={() => setHelpOpen(true)}
+        />
+      )}
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <DbAdminDialog open={dbOpen} onClose={() => setDbOpen(false)} />
       <KeyboardHelp open={helpOpen} onClose={() => setHelpOpen(false)} />

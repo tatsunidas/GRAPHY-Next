@@ -50,9 +50,18 @@ export function MainScreen({
     setTimeout(() => setImportMsg(null), 6000);
   };
 
-  // 各ビューア起動。2D/3D/MPR/Slicer 画面は順次実装予定。今は告知バナーを出す。
+  // 各ビューア起動。2D Viewer は別ウィンドウ（desktop）/ ハッシュ（web）で開く。3D/MPR/Slicer は順次。
   const handleOpenViewer = (kind: "2d" | "3d" | "mpr" | "slicer") => {
-    const name = t(`main.toolbar.${kind === "2d" ? "viewer2d" : kind === "3d" ? "viewer3d" : kind}`);
+    if (kind === "2d") {
+      const d = desktop();
+      if (d?.openViewer) {
+        void d.openViewer("2dviewer");
+      } else {
+        window.open(`${window.location.pathname}#2dviewer`, "_blank");
+      }
+      return;
+    }
+    const name = t(`main.toolbar.${kind === "3d" ? "viewer3d" : kind}`);
     setImportMsg(t("main.viewer.comingSoon", { name }));
     setTimeout(() => setImportMsg(null), 4000);
   };
