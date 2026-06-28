@@ -1,4 +1,5 @@
 // 依存ライブラリ無しの軽量 SVG チャート（棒・横棒・円）。
+import { useI18n } from "../i18n/i18n";
 
 export interface Datum {
   label: string;
@@ -115,5 +116,6 @@ export function PieChart({ data, size = 160 }: { data: Datum[]; size?: number })
 }
 
 function Empty() {
-  return <div style={{ color: "#999", fontSize: 12, padding: "8px 0" }}>データがありません</div>;
+  const { t } = useI18n();
+  return <div style={{ color: "#999", fontSize: 12, padding: "8px 0" }}>{t("common.noData")}</div>;
 }

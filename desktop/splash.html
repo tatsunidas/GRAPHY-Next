@@ -31,12 +31,45 @@
   <body>
     <div class="wrap">
       <div class="brand">GRAPHY-Next</div>
-      <div class="sub">起動しています…</div>
+      <div class="sub" id="sub"></div>
       <ul id="steps"></ul>
       <div class="ver">standalone mode</div>
     </div>
 
     <script>
+      // localStorage の言語設定（React 側と共有）で日英切替。
+      let locale = "ja";
+      try {
+        const saved = localStorage.getItem("graphy.locale");
+        if (saved === "ja" || saved === "en") locale = saved;
+        else if (navigator.language && navigator.language.startsWith("en")) locale = "en";
+      } catch (e) {}
+
+      const I18N = {
+        ja: {
+          sub: "起動しています…",
+          init: "起動を開始しています",
+          folders: "必要なフォルダを確認しています",
+          database: "データベースを確認・マイグレーションしています",
+          scp: "DICOM 受信(SCP)を開始しています",
+          plugins: "プラグインを読み込んでいます",
+          ready: "起動が完了しました",
+          error: "起動に失敗しました",
+        },
+        en: {
+          sub: "Starting…",
+          init: "Starting up",
+          folders: "Checking required folders",
+          database: "Checking / migrating the database",
+          scp: "Starting DICOM receiver (SCP)",
+          plugins: "Loading plugins",
+          ready: "Startup complete",
+          error: "Startup failed",
+        },
+      };
+      const T = I18N[locale];
+      document.getElementById("sub").textContent = T.sub;
+
       const ul = document.getElementById("steps");
       const ICON = { running: "◴", ok: "✓", error: "✕" };
 
@@ -50,7 +83,8 @@
         }
         li.className = state || "running";
         li.querySelector(".icon").textContent = ICON[state] || ICON.running;
-        li.querySelector(".msg").textContent = message || step;
+        // step をローカライズ（未知の step は backend のメッセージにフォールバック）
+        li.querySelector(".msg").textContent = T[step] || message || step;
       }
 
       if (window.graphySplash) {

@@ -3,8 +3,10 @@ import { fetchStatus, type AppStatus } from "./api";
 import { StudyList } from "./StudyList";
 import { SettingsDialog } from "./settings/SettingsDialog";
 import { DbAdminDialog } from "./dbadmin/DbAdminDialog";
+import { useI18n } from "./i18n/i18n";
 
 export function App() {
+  const { t } = useI18n();
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -18,9 +20,9 @@ export function App() {
 
   const modeLabel =
     status?.mode === "standalone"
-      ? "Desktop (Electron / standalone)"
+      ? t("app.mode.desktop")
       : status?.mode === "web"
-        ? "Web (browser)"
+        ? t("app.mode.web")
         : status?.mode ?? "—";
 
   return (
@@ -36,40 +38,32 @@ export function App() {
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
         <div>
           <h1 style={{ marginBottom: 4 }}>GRAPHY-Next</h1>
-          <p style={{ color: "#666", marginTop: 0 }}>最小構成 起動確認</p>
+          <p style={{ color: "#666", marginTop: 0 }}>{t("app.subtitle")}</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           {status?.mode === "standalone" && (
-            <button
-              onClick={() => setDbOpen(true)}
-              title="DB テーブル管理"
-              style={iconBtn}
-            >
-              🗄 DB
+            <button onClick={() => setDbOpen(true)} title={t("app.btn.dbTitle")} style={iconBtn}>
+              🗄 {t("app.btn.db")}
             </button>
           )}
-          <button onClick={() => setSettingsOpen(true)} title="環境設定" style={iconBtn}>
+          <button onClick={() => setSettingsOpen(true)} title={t("app.btn.settingsTitle")} style={iconBtn}>
             ⚙
           </button>
         </div>
       </div>
 
-      {error && (
-        <div style={{ color: "#b00020" }}>
-          バックエンドに接続できません: {error}
-        </div>
-      )}
+      {error && <div style={{ color: "#b00020" }}>{t("app.backendError", { error })}</div>}
 
-      {!error && !status && <div>接続中…</div>}
+      {!error && !status && <div>{t("app.connecting")}</div>}
 
       {status && (
         <table style={{ borderCollapse: "collapse", marginTop: 16 }}>
           <tbody>
-            <Row label="起動モード" value={modeLabel} highlight />
-            <Row label="アプリ" value={status.app} />
-            <Row label="バージョン" value={status.version} />
-            <Row label="Active profiles" value={status.activeProfiles.join(", ") || "(default)"} />
-            <Row label="Java" value={status.javaVersion} />
+            <Row label={t("app.status.mode")} value={modeLabel} highlight />
+            <Row label={t("app.status.app")} value={status.app} />
+            <Row label={t("app.status.version")} value={status.version} />
+            <Row label={t("app.status.profiles")} value={status.activeProfiles.join(", ") || "(default)"} />
+            <Row label={t("app.status.java")} value={status.javaVersion} />
           </tbody>
         </table>
       )}

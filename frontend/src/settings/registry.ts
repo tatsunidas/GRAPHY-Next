@@ -1,34 +1,39 @@
 // 環境設定の項目定義（宣言的レジストリ）。
+// label/help/options/section.title/category.label は i18n キー（t() で解決）。
 // ここにカテゴリ/セクション/フィールドを追加するだけで、ダイアログ右パネルが自動描画する。
-// 値は backend に文字列 KV で保存し、型解釈はこの定義が担う。
 
 export type FieldType = "toggle" | "text" | "number" | "select";
 
 export interface FieldOption {
   value: string;
-  label: string;
+  /** i18n キー。 */
+  labelKey: string;
 }
 
 export interface FieldDef {
   /** 保存キー（名前空間付き推奨: "viewer.invertScroll"）。 */
   key: string;
-  label: string;
+  /** ラベルの i18n キー。 */
+  labelKey: string;
   type: FieldType;
   default: string | number | boolean;
-  help?: string;
+  /** 補足説明の i18n キー（任意）。 */
+  helpKey?: string;
   options?: FieldOption[]; // select 用
   min?: number; // number 用
   max?: number; // number 用
 }
 
 export interface SectionDef {
-  title: string;
+  /** セクション見出しの i18n キー。 */
+  titleKey: string;
   fields: FieldDef[];
 }
 
 export interface CategoryDef {
   id: string;
-  label: string;
+  /** カテゴリ名の i18n キー。 */
+  labelKey: string;
   icon?: string;
   sections: SectionDef[];
 }
@@ -36,31 +41,32 @@ export interface CategoryDef {
 export const SETTINGS_REGISTRY: CategoryDef[] = [
   {
     id: "general",
-    label: "一般",
+    labelKey: "settings.cat.general",
     icon: "⚙",
     sections: [
       {
-        title: "外観",
+        titleKey: "settings.sec.appearance",
         fields: [
           {
             key: "general.theme",
-            label: "テーマ",
+            labelKey: "settings.field.theme",
             type: "select",
             default: "system",
             options: [
-              { value: "system", label: "システムに従う" },
-              { value: "light", label: "ライト" },
-              { value: "dark", label: "ダーク" },
+              { value: "system", labelKey: "settings.opt.theme.system" },
+              { value: "light", labelKey: "settings.opt.theme.light" },
+              { value: "dark", labelKey: "settings.opt.theme.dark" },
             ],
           },
+          // 言語は i18n コンテキストに直結（SettingsDialog で特別扱い）
           {
             key: "general.language",
-            label: "言語",
+            labelKey: "settings.field.language",
             type: "select",
             default: "ja",
             options: [
-              { value: "ja", label: "日本語" },
-              { value: "en", label: "English" },
+              { value: "ja", labelKey: "settings.opt.lang.ja" },
+              { value: "en", labelKey: "settings.opt.lang.en" },
             ],
           },
         ],
@@ -69,69 +75,69 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
   },
   {
     id: "viewer",
-    label: "表示",
+    labelKey: "settings.cat.viewer",
     icon: "🖼",
     sections: [
       {
-        title: "ビューア",
+        titleKey: "settings.sec.viewer",
         fields: [
-          { key: "viewer.invertScroll", label: "スクロール方向を反転", type: "toggle", default: false },
+          { key: "viewer.invertScroll", labelKey: "settings.field.invertScroll", type: "toggle", default: false },
           {
             key: "viewer.showOverlay",
-            label: "オーバーレイ情報を表示",
+            labelKey: "settings.field.showOverlay",
             type: "toggle",
             default: true,
-            help: "患者名・スライス番号などを画像上に表示します。",
+            helpKey: "settings.field.showOverlay.help",
           },
-          { key: "viewer.defaultZoom", label: "初期ズーム(%)", type: "number", default: 100, min: 10, max: 800 },
+          { key: "viewer.defaultZoom", labelKey: "settings.field.defaultZoom", type: "number", default: 100, min: 10, max: 800 },
         ],
       },
     ],
   },
   {
     id: "data",
-    label: "データ管理",
+    labelKey: "settings.cat.data",
     icon: "🗂",
     sections: [
       {
-        title: "削除",
+        titleKey: "settings.sec.delete",
         fields: [
-          { key: "data.confirmBeforeDelete", label: "削除前に確認する", type: "toggle", default: true },
+          { key: "data.confirmBeforeDelete", labelKey: "settings.field.confirmBeforeDelete", type: "toggle", default: true },
           {
             key: "data.deleteFilesOnDisk",
-            label: "削除時にディスク上の DICOM ファイルも削除",
+            labelKey: "settings.field.deleteFilesOnDisk",
             type: "toggle",
             default: true,
-            help: "OFF にすると索引からのみ除外し、実ファイルは残ります。",
+            helpKey: "settings.field.deleteFilesOnDisk.help",
           },
         ],
       },
       {
-        title: "患者情報の編集",
+        titleKey: "settings.sec.patientEdit",
         fields: [
           {
             key: "data.applyPatientEditToFiles",
-            label: "患者情報の編集を元の DICOM ファイルにも反映",
+            labelKey: "settings.field.applyPatientEditToFiles",
             type: "toggle",
             default: true,
-            help: "ON で該当患者の全 DICOM ファイルのタグを書き換えます（重い・不可逆）。OFF は索引のみ更新。",
+            helpKey: "settings.field.applyPatientEditToFiles.help",
           },
         ],
       },
       {
-        title: "表示・統計",
+        titleKey: "settings.sec.displayStats",
         fields: [
-          { key: "data.tableRowsPerPage", label: "DBテーブルの1ページ表示件数", type: "number", default: 100, min: 10, max: 1000 },
-          { key: "data.statsRangeMonths", label: "統計の既定期間（月）", type: "number", default: 12, min: 1, max: 120 },
+          { key: "data.tableRowsPerPage", labelKey: "settings.field.tableRowsPerPage", type: "number", default: 100, min: 10, max: 1000 },
+          { key: "data.statsRangeMonths", labelKey: "settings.field.statsRangeMonths", type: "number", default: 12, min: 1, max: 120 },
           {
             key: "data.volumeUnit",
-            label: "データ容量の単位",
+            labelKey: "settings.field.volumeUnit",
             type: "select",
             default: "auto",
             options: [
-              { value: "auto", label: "自動(MB/GB)" },
-              { value: "MB", label: "MB" },
-              { value: "GB", label: "GB" },
+              { value: "auto", labelKey: "settings.opt.volume.auto" },
+              { value: "MB", labelKey: "settings.opt.volume.mb" },
+              { value: "GB", labelKey: "settings.opt.volume.gb" },
             ],
           },
         ],
@@ -140,30 +146,30 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
   },
   {
     id: "dicom",
-    label: "DICOM通信",
+    labelKey: "settings.cat.dicom",
     icon: "🌐",
     sections: [
       {
-        title: "自局",
+        titleKey: "settings.sec.localAe",
         fields: [
           {
             key: "dicom.localAeTitle",
-            label: "自局 AE タイトル",
+            labelKey: "settings.field.localAeTitle",
             type: "text",
             default: "GRAPHYNEXT",
-            help: "現状は表示・保存のみ。将来 backend 設定への反映を予定。",
+            helpKey: "settings.field.localAeTitle.help",
           },
         ],
       },
       {
-        title: "PACS 連携（web）",
+        titleKey: "settings.sec.pacs",
         fields: [
           {
             key: "dicom.pacsUiUrl",
-            label: "PACS 管理 UI の URL",
+            labelKey: "settings.field.pacsUiUrl",
             type: "text",
             default: "",
-            help: "web 版で患者情報を編集する際に開く dcm4chee の UI。例: http://localhost:8080/dcm4chee-arc/ui2",
+            helpKey: "settings.field.pacsUiUrl.help",
           },
         ],
       },

@@ -7,8 +7,10 @@ import {
   type Series,
   type Instance,
 } from "./api";
+import { useI18n } from "./i18n/i18n";
 
 export function StudyList() {
+  const { t } = useI18n();
   const [studies, setStudies] = useState<Study[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
@@ -21,23 +23,21 @@ export function StudyList() {
 
   return (
     <section style={{ marginTop: 28 }}>
-      <h2 style={{ fontSize: 18, marginBottom: 8 }}>スタディ一覧</h2>
+      <h2 style={{ fontSize: 18, marginBottom: 8 }}>{t("study.list.title")}</h2>
 
-      {error && <div style={{ color: "#b00020" }}>取得に失敗しました: {error}</div>}
-      {!error && !studies && <div>読み込み中…</div>}
-      {studies && studies.length === 0 && (
-        <div style={{ color: "#666" }}>スタディがありません（受信/取り込み後に表示されます）。</div>
-      )}
+      {error && <div style={{ color: "#b00020" }}>{t("common.fetchError", { error })}</div>}
+      {!error && !studies && <div>{t("common.loading")}</div>}
+      {studies && studies.length === 0 && <div style={{ color: "#666" }}>{t("study.empty")}</div>}
 
       {studies && studies.length > 0 && (
         <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
           <thead>
             <tr style={{ textAlign: "left", borderBottom: "2px solid #ddd" }}>
-              <Th>患者ID</Th>
-              <Th>患者名</Th>
-              <Th>検査日</Th>
-              <Th>説明</Th>
-              <Th>枚数</Th>
+              <Th>{t("field.patientId")}</Th>
+              <Th>{t("field.patientName")}</Th>
+              <Th>{t("field.studyDate")}</Th>
+              <Th>{t("field.description")}</Th>
+              <Th>{t("field.instanceCount")}</Th>
             </tr>
           </thead>
           <tbody>
@@ -71,6 +71,7 @@ export function StudyList() {
 }
 
 function SeriesNavigator({ study }: { study: Study }) {
+  const { t } = useI18n();
   const [series, setSeries] = useState<Series[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedSeries, setSelectedSeries] = useState<Series | null>(null);
@@ -87,20 +88,20 @@ function SeriesNavigator({ study }: { study: Study }) {
   return (
     <div style={{ marginTop: 16, padding: "12px 14px", background: "#f7f9fb", borderRadius: 6 }}>
       <h3 style={{ fontSize: 15, margin: "0 0 8px" }}>
-        シリーズ（{study.patientName || study.patientId || study.studyInstanceUid}）
+        {t("series.title", { name: study.patientName || study.patientId || study.studyInstanceUid })}
       </h3>
       {error && <div style={{ color: "#b00020" }}>{error}</div>}
-      {!error && !series && <div>読み込み中…</div>}
-      {series && series.length === 0 && <div style={{ color: "#666" }}>シリーズがありません。</div>}
+      {!error && !series && <div>{t("common.loading")}</div>}
+      {series && series.length === 0 && <div style={{ color: "#666" }}>{t("series.empty")}</div>}
 
       {series && series.length > 0 && (
         <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
           <thead>
             <tr style={{ textAlign: "left", borderBottom: "1px solid #dde3ea" }}>
-              <Th>#</Th>
-              <Th>モダリティ</Th>
-              <Th>説明</Th>
-              <Th>枚数</Th>
+              <Th>{t("field.number")}</Th>
+              <Th>{t("field.modality")}</Th>
+              <Th>{t("field.description")}</Th>
+              <Th>{t("field.instanceCount")}</Th>
             </tr>
           </thead>
           <tbody>
@@ -135,6 +136,7 @@ function SeriesNavigator({ study }: { study: Study }) {
 }
 
 function InstanceList({ study, series }: { study: Study; series: Series }) {
+  const { t } = useI18n();
   const [instances, setInstances] = useState<Instance[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -149,12 +151,16 @@ function InstanceList({ study, series }: { study: Study; series: Series }) {
   return (
     <div style={{ marginTop: 10, color: "#445" }}>
       {error && <div style={{ color: "#b00020" }}>{error}</div>}
-      {!error && !instances && <div>読み込み中…</div>}
+      {!error && !instances && <div>{t("common.loading")}</div>}
       {instances && (
         <div style={{ fontSize: 12 }}>
-          インスタンス {instances.length} 件
+          {t("instance.count", { n: instances.length })}
           {instances.length > 0 &&
-            `（#${instances[0].instanceNumber ?? "?"} 〜 #${instances[instances.length - 1].instanceNumber ?? "?"}）`}
+            " " +
+              t("instance.range", {
+                from: instances[0].instanceNumber ?? "?",
+                to: instances[instances.length - 1].instanceNumber ?? "?",
+              })}
           {/* 次フェーズ: ここから Cornerstone3D ビューポートで表示 */}
         </div>
       )}

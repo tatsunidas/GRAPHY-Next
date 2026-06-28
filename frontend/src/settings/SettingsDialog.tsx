@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { SETTINGS_REGISTRY, type CategoryDef, type FieldDef } from "./registry";
 import { fetchSettings, saveSettings, type SettingsMap } from "./settingsApi";
+import { useI18n, type Locale, type TFn } from "../i18n/i18n";
 
 export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { t, locale, setLocale } = useI18n();
   const [map, setMap] = useState<SettingsMap>({});
   const [selectedId, setSelectedId] = useState<string>(SETTINGS_REGISTRY[0]?.id ?? "");
   const [error, setError] = useState<string | null>(null);
@@ -20,24 +22,31 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
   const category = SETTINGS_REGISTRY.find((c) => c.id === selectedId) ?? SETTINGS_REGISTRY[0];
 
   const update = (field: FieldDef, value: string) => {
+    // 言語は i18n コンテキスト直結（即時切替）
+    if (field.key === "general.language") {
+      setLocale(value as Locale);
+      return;
+    }
     setMap((prev) => ({ ...prev, [field.key]: value }));
     saveSettings({ [field.key]: value }).catch((e: unknown) => setError(String(e)));
   };
+
+  const valueOf = (field: FieldDef): string =>
+    field.key === "general.language" ? locale : (map[field.key] ?? String(field.default));
 
   return (
     <div style={overlay} onClick={onClose}>
       <div style={dialog} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
-          <span style={{ fontWeight: 700 }}>環境設定</span>
-          <button style={closeBtn} onClick={onClose} aria-label="閉じる">
+          <span style={{ fontWeight: 700 }}>{t("settings.title")}</span>
+          <button style={closeBtn} onClick={onClose} aria-label={t("common.close")}>
             ✕
           </button>
         </div>
 
-        {error && <div style={{ color: "#b00020", padding: "6px 16px" }}>保存に失敗: {error}</div>}
+        {error && <div style={{ color: "#b00020", padding: "6px 16px" }}>{t("settings.saveError", { error })}</div>}
 
         <div style={body}>
-          {/* 左: カテゴリ一覧 */}
           <nav style={sidebar}>
             {SETTINGS_REGISTRY.map((c: CategoryDef) => (
               <button
@@ -51,19 +60,18 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
                 }}
               >
                 <span style={{ width: 20, display: "inline-block" }}>{c.icon ?? "•"}</span>
-                {c.label}
+                {t(c.labelKey)}
               </button>
             ))}
           </nav>
 
-          {/* 右: 設定パネル */}
           <div style={panel}>
-            <h2 style={{ fontSize: 18, margin: "0 0 12px" }}>{category.label}</h2>
+            <h2 style={{ fontSize: 18, margin: "0 0 12px" }}>{t(category.labelKey)}</h2>
             {category.sections.map((section) => (
-              <section key={section.title} style={{ marginBottom: 22 }}>
-                <h3 style={sectionTitle}>{section.title}</h3>
+              <section key={section.titleKey} style={{ marginBottom: 22 }}>
+                <h3 style={sectionTitle}>{t(section.titleKey)}</h3>
                 {section.fields.map((field) => (
-                  <Field key={field.key} field={field} map={map} onChange={update} />
+                  <Field key={field.key} field={field} t={t} value={valueOf(field)} onChange={update} />
                 ))}
               </section>
             ))}
@@ -76,27 +84,27 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
 
 function Field({
   field,
-  map,
+  t,
+  value,
   onChange,
 }: {
   field: FieldDef;
-  map: SettingsMap;
+  t: TFn;
+  value: string;
   onChange: (f: FieldDef, value: string) => void;
 }) {
-  const raw = map[field.key] ?? String(field.default);
-
   return (
     <div style={fieldRow}>
       <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 14 }}>{field.label}</div>
-        {field.help && <div style={{ fontSize: 12, color: "#6b7785", marginTop: 2 }}>{field.help}</div>}
+        <div style={{ fontSize: 14 }}>{t(field.labelKey)}</div>
+        {field.helpKey && <div style={{ fontSize: 12, color: "#6b7785", marginTop: 2 }}>{t(field.helpKey)}</div>}
       </div>
-      <div style={{ flex: "none" }}>{renderControl(field, raw, onChange)}</div>
+      <div style={{ flex: "none" }}>{renderControl(field, t, value, onChange)}</div>
     </div>
   );
 }
 
-function renderControl(field: FieldDef, raw: string, onChange: (f: FieldDef, v: string) => void) {
+function renderControl(field: FieldDef, t: TFn, raw: string, onChange: (f: FieldDef, v: string) => void) {
   switch (field.type) {
     case "toggle":
       return (
@@ -123,7 +131,7 @@ function renderControl(field: FieldDef, raw: string, onChange: (f: FieldDef, v: 
         <select value={raw} onChange={(e) => onChange(field, e.target.value)} style={input}>
           {field.options?.map((o) => (
             <option key={o.value} value={o.value}>
-              {o.label}
+              {t(o.labelKey)}
             </option>
           ))}
         </select>

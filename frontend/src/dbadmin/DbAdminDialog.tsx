@@ -9,10 +9,12 @@ import {
 } from "./dbAdminApi";
 import { fetchSettings } from "../settings/settingsApi";
 import { VBarChart, HBarChart, PieChart, formatBytes } from "./charts";
+import { useI18n } from "../i18n/i18n";
 
 type Tab = "patients" | "stats";
 
 export function DbAdminDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { t } = useI18n();
   const [tab, setTab] = useState<Tab>("patients");
   const [confirmDelete, setConfirmDelete] = useState(true);
 
@@ -29,18 +31,18 @@ export function DbAdminDialog({ open, onClose }: { open: boolean; onClose: () =>
     <div style={overlay} onClick={onClose}>
       <div style={dialog} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
-          <span style={{ fontWeight: 700 }}>DB テーブル管理</span>
-          <button style={closeBtn} onClick={onClose} aria-label="閉じる">
+          <span style={{ fontWeight: 700 }}>{t("dbadmin.title")}</span>
+          <button style={closeBtn} onClick={onClose} aria-label={t("common.close")}>
             ✕
           </button>
         </div>
 
         <div style={tabs}>
           <TabBtn active={tab === "patients"} onClick={() => setTab("patients")}>
-            患者
+            {t("dbadmin.tab.patients")}
           </TabBtn>
           <TabBtn active={tab === "stats"} onClick={() => setTab("stats")}>
-            統計
+            {t("dbadmin.tab.stats")}
           </TabBtn>
         </div>
 
@@ -53,6 +55,7 @@ export function DbAdminDialog({ open, onClose }: { open: boolean; onClose: () =>
 }
 
 function PatientsTab({ confirmDelete }: { confirmDelete: boolean }) {
+  const { t } = useI18n();
   const [q, setQ] = useState("");
   const [patients, setPatients] = useState<Patient[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -68,7 +71,7 @@ function PatientsTab({ confirmDelete }: { confirmDelete: boolean }) {
   useEffect(() => reload(""), []);
 
   const onDelete = async (p: Patient) => {
-    if (confirmDelete && !window.confirm(`患者「${p.patientName || p.patientId}」を削除します。よろしいですか？`)) {
+    if (confirmDelete && !window.confirm(t("dbadmin.delete.confirm", { name: p.patientName || p.patientId }))) {
       return;
     }
     try {
@@ -86,28 +89,28 @@ function PatientsTab({ confirmDelete }: { confirmDelete: boolean }) {
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && reload(q)}
-          placeholder="患者ID / 患者名で検索"
+          placeholder={t("dbadmin.search.placeholder")}
           style={input}
         />
         <button onClick={() => reload(q)} style={btn}>
-          検索
+          {t("common.search")}
         </button>
       </div>
 
       {error && <div style={{ color: "#b00020", marginBottom: 8 }}>{error}</div>}
-      {!patients && <div>読み込み中…</div>}
-      {patients && patients.length === 0 && <div style={{ color: "#666" }}>患者がいません。</div>}
+      {!patients && <div>{t("common.loading")}</div>}
+      {patients && patients.length === 0 && <div style={{ color: "#666" }}>{t("dbadmin.patients.empty")}</div>}
 
       {patients && patients.length > 0 && (
         <table style={table}>
           <thead>
             <tr style={{ textAlign: "left", borderBottom: "2px solid #ddd" }}>
-              <Th>患者ID</Th>
-              <Th>患者名</Th>
-              <Th>生年月日</Th>
-              <Th>性別</Th>
-              <Th>検査数</Th>
-              <Th>枚数</Th>
+              <Th>{t("field.patientId")}</Th>
+              <Th>{t("field.patientName")}</Th>
+              <Th>{t("field.birthDate")}</Th>
+              <Th>{t("field.sex")}</Th>
+              <Th>{t("field.studyCount")}</Th>
+              <Th>{t("field.instanceCount")}</Th>
               <Th></Th>
             </tr>
           </thead>
@@ -122,10 +125,10 @@ function PatientsTab({ confirmDelete }: { confirmDelete: boolean }) {
                 <Td>{p.numberOfInstances}</Td>
                 <Td>
                   <button onClick={() => setEditing(p)} style={smallBtn}>
-                    編集
+                    {t("common.edit")}
                   </button>
                   <button onClick={() => onDelete(p)} style={{ ...smallBtn, color: "#b00020" }}>
-                    削除
+                    {t("common.delete")}
                   </button>
                 </Td>
               </tr>
@@ -157,6 +160,7 @@ function PatientEditForm({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const { t } = useI18n();
   const [name, setName] = useState(patient.patientName ?? "");
   const [birth, setBirth] = useState(patient.patientBirthDate ?? "");
   const [sex, setSex] = useState(patient.patientSex ?? "");
@@ -184,17 +188,15 @@ function PatientEditForm({
   return (
     <div style={overlay} onClick={onClose}>
       <div style={{ ...editBox }} onClick={(e) => e.stopPropagation()}>
-        <h3 style={{ margin: "0 0 12px" }}>患者情報の編集</h3>
-        <p style={{ fontSize: 12, color: "#8a98a6", marginTop: 0 }}>
-          設定により、該当患者の全 DICOM ファイルのタグも書き換わります。
-        </p>
-        <Row label="患者名">
+        <h3 style={{ margin: "0 0 12px" }}>{t("dbadmin.edit.title")}</h3>
+        <p style={{ fontSize: 12, color: "#8a98a6", marginTop: 0 }}>{t("dbadmin.edit.note")}</p>
+        <Row label={t("field.patientName")}>
           <input value={name} onChange={(e) => setName(e.target.value)} style={input} />
         </Row>
-        <Row label="生年月日 (YYYYMMDD)">
+        <Row label={t("dbadmin.edit.birthDate")}>
           <input value={birth} onChange={(e) => setBirth(e.target.value)} style={input} placeholder="19800101" />
         </Row>
-        <Row label="性別">
+        <Row label={t("field.sex")}>
           <select value={sex} onChange={(e) => setSex(e.target.value)} style={input}>
             <option value="">—</option>
             <option value="M">M</option>
@@ -202,16 +204,16 @@ function PatientEditForm({
             <option value="O">O</option>
           </select>
         </Row>
-        <Row label="患者ID変更 (任意)">
+        <Row label={t("dbadmin.edit.newId")}>
           <input value={newId} onChange={(e) => setNewId(e.target.value)} style={input} placeholder={patient.patientId} />
         </Row>
         {error && <div style={{ color: "#b00020", marginTop: 6 }}>{error}</div>}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
           <button onClick={onClose} style={btn}>
-            キャンセル
+            {t("common.cancel")}
           </button>
           <button onClick={save} disabled={saving} style={{ ...btn, background: "#0b5cad", color: "#fff" }}>
-            {saving ? "保存中…" : "保存"}
+            {saving ? t("common.saving") : t("common.save")}
           </button>
         </div>
       </div>
@@ -220,6 +222,7 @@ function PatientEditForm({
 }
 
 function StatsTab() {
+  const { t } = useI18n();
   const [stats, setStats] = useState<Stats | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -230,22 +233,22 @@ function StatsTab() {
   }, []);
 
   if (error) return <div style={{ color: "#b00020" }}>{error}</div>;
-  if (!stats) return <div>読み込み中…</div>;
+  if (!stats) return <div>{t("common.loading")}</div>;
 
   const toData = (b: { key: string; value: number }[]) => b.map((x) => ({ label: x.key, value: x.value }));
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
-      <Card title="時系列スタディ数">
+      <Card title={t("dbadmin.stats.studyByMonth")}>
         <VBarChart data={toData(stats.studyCountByMonth)} />
       </Card>
-      <Card title="モダリティ割合（スタディ数）">
+      <Card title={t("dbadmin.stats.modalityRatio")}>
         <PieChart data={toData(stats.studyCountByModality)} />
       </Card>
-      <Card title="モダリティ別 画像枚数">
+      <Card title={t("dbadmin.stats.instanceByModality")}>
         <HBarChart data={toData(stats.instanceCountByModality)} />
       </Card>
-      <Card title="モダリティ別 データ容量">
+      <Card title={t("dbadmin.stats.volumeByModality")}>
         <HBarChart data={toData(stats.volumeBytesByModality)} formatValue={formatBytes} />
       </Card>
     </div>
