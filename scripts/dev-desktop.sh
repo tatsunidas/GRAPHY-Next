@@ -12,8 +12,10 @@ echo "[dev-desktop] backend jar を最新コードでビルドします（UIは 
 # 同梱用にステージされた古い jar が backend/target を隠さないよう、dev では除去する。
 rm -rf desktop/resources/backend
 
-# このプロジェクトの vite だけを対象にしたパターン（他プロジェクトの vite は巻き込まない）。
-VITE_MATCH="$ROOT/frontend/node_modules/.bin/vite"
+# このプロジェクトの vite / esbuild だけを対象にしたパターン（他プロジェクトは巻き込まない）。
+# 実体 vite は `node .../.bin/vite`、その子 esbuild は argv に "vite" を含まないため、
+# 両方を取りこぼさないよう alternation で拾う。
+VITE_MATCH="$ROOT/frontend/node_modules/.*(vite|esbuild)"
 
 # npm が spawn する実 vite は cleanup で orphan になりやすく、複数残ると .vite キャッシュを
 # 奪い合って "ENOENT .../deps_temp_*/_metadata.json" 競合を起こす。起動前に必ず掃除する。
@@ -22,13 +24,20 @@ echo "[dev-desktop] 残存 vite を掃除します ..."
 kill_stale_vite
 
 echo "[dev-desktop] starting frontend (Vite) on :5173 ..."
-( cd frontend && npm run dev ) &
-VITE_PID=$!
+# monitor モードを一時的に有効にし、Vite をスクリプトとは別のプロセスグループで起動する。
+# こうすると Electron 終了時に `kill -- -PGID` で npm→vite→esbuild の木をまとめて確実に
+# 止められる。個別 kill では npm が子 vite を、vite が子 esbuild を orphan 化して残り、
+# ターミナルが終了しない（"stopping vite" 後に残存する）原因になっていた。
+set -m
+( cd frontend && exec npm run dev ) &
+VITE_PGID=$!   # monitor モードでは $! がバックグラウンドジョブのプロセスグループ ID。
+set +m
 
 cleanup() {
-  echo "[dev-desktop] stopping vite ($VITE_PID)"
-  kill "$VITE_PID" 2>/dev/null || true
-  # npm 経由で orphan になった実 vite も確実に終了させる。
+  echo "[dev-desktop] stopping vite (pgid $VITE_PGID)"
+  # プロセスグループごと終了（npm→vite→esbuild をまとめて落とす）。
+  kill -TERM -"$VITE_PGID" 2>/dev/null || true
+  # 念のため、取りこぼした実体を名前一致で掃除。
   kill_stale_vite
 }
 trap cleanup EXIT INT TERM
