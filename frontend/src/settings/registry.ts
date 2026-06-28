@@ -175,4 +175,11 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
       },
     ],
   },
+  {
+    // セキュリティは専用パネル（実行時の値を確認）。SettingsDialog で特別扱い。
+    id: "security",
+    labelKey: "settings.cat.security",
+    icon: "🔒",
+    sections: [],
+  },
 ];

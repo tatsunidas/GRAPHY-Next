@@ -12,7 +12,7 @@
 //   GRAPHY_BACKEND_PORT        … backend ポート（既定 config.backend.port）
 //   GRAPHY_BACKEND_PROFILE     … backend プロファイル（既定 config.backend.profile）
 
-const { app, BrowserWindow } = require("electron");
+const { app, BrowserWindow, shell } = require("electron");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 const http = require("node:http");
@@ -30,6 +30,9 @@ const HEALTH_TIMEOUT_MS = cfg.backend.healthTimeoutMs;
 const JAR_NAME = cfg.backend.jarName;
 const DEV_URL = cfg.devServerUrl;
 const WINDOW = cfg.window;
+const API_BASE = `http://localhost:${PORT}`;
+// セキュリティ設定（config.json の security セクション、無ければ安全な既定）。
+const SECURITY = cfg.security || {};
 
 const DEV = process.env.GRAPHY_DEV === "1";
 const EXTERNAL_BACKEND = process.env.GRAPHY_BACKEND_EXTERNAL === "1";
@@ -155,6 +158,8 @@ function createSplash() {
       preload: path.join(__dirname, "splash-preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
     },
   });
   splashWin.loadFile(path.join(__dirname, "splash.html"));
@@ -189,9 +194,26 @@ function createWindow() {
     show: false, // ロード完了まで隠す（スプラッシュからの切替えを滑らかに）
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
+      // --- セキュリティ（安全な値に固定。無効化しない）---
+      contextIsolation: true, // レンダラと preload の world を分離
+      nodeIntegration: false, // レンダラに Node を露出しない
+      sandbox: true, // レンダラをサンドボックス化（preload は process.argv で API ベースを受領）
+      webSecurity: true,
+      additionalArguments: [`--graphy-api-base=${API_BASE}`],
     },
+  });
+
+  // 外部 URL は既定ブラウザで開き、新規ウィンドウは生成しない。
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//.test(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
+  // アプリ内（トップフレーム）の外部ナビゲーションを禁止。
+  win.webContents.on("will-navigate", (e, url) => {
+    if (url !== win.webContents.getURL()) {
+      e.preventDefault();
+      if (/^https?:\/\//.test(url)) shell.openExternal(url);
+    }
   });
 
   win.once("ready-to-show", () => {
@@ -201,9 +223,13 @@ function createWindow() {
 
   if (DEV) {
     win.loadURL(DEV_URL);
-    win.webContents.openDevTools();
   } else {
     win.loadFile(path.join(__dirname, "renderer", "index.html"));
+  }
+
+  // DevTools は dev か、明示的に許可した場合のみ（本番は既定で無効）。
+  if (DEV || SECURITY.devTools) {
+    win.webContents.openDevTools();
   }
 }
 

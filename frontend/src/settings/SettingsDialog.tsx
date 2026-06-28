@@ -67,14 +67,18 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
 
           <div style={panel}>
             <h2 style={{ fontSize: 18, margin: "0 0 12px" }}>{t(category.labelKey)}</h2>
-            {category.sections.map((section) => (
-              <section key={section.titleKey} style={{ marginBottom: 22 }}>
-                <h3 style={sectionTitle}>{t(section.titleKey)}</h3>
-                {section.fields.map((field) => (
-                  <Field key={field.key} field={field} t={t} value={valueOf(field)} onChange={update} />
-                ))}
-              </section>
-            ))}
+            {category.id === "security" ? (
+              <SecurityPanel t={t} />
+            ) : (
+              category.sections.map((section) => (
+                <section key={section.titleKey} style={{ marginBottom: 22 }}>
+                  <h3 style={sectionTitle}>{t(section.titleKey)}</h3>
+                  {section.fields.map((field) => (
+                    <Field key={field.key} field={field} t={t} value={valueOf(field)} onChange={update} />
+                  ))}
+                </section>
+              ))
+            )}
           </div>
         </div>
       </div>
@@ -100,6 +104,37 @@ function Field({
         {field.helpKey && <div style={{ fontSize: 12, color: "#6b7785", marginTop: 2 }}>{t(field.helpKey)}</div>}
       </div>
       <div style={{ flex: "none" }}>{renderControl(field, t, value, onChange)}</div>
+    </div>
+  );
+}
+
+/** セキュリティ状態の確認パネル（Electron が公開する実行時の値を表示。固定値・編集不可）。 */
+function SecurityPanel({ t }: { t: TFn }) {
+  const sec = (window as unknown as { __GRAPHY_SECURITY__?: { contextIsolation: boolean; sandbox: boolean } })
+    .__GRAPHY_SECURITY__;
+  if (!sec) {
+    return <p style={{ fontSize: 13, color: "#6b7785" }}>{t("settings.security.desktopOnly")}</p>;
+  }
+  const w = window as unknown as { process?: unknown; require?: unknown };
+  const nodeIntegrationOff = typeof w.process === "undefined" && typeof w.require === "undefined";
+  const rows: { label: string; ok: boolean }[] = [
+    { label: t("settings.security.contextIsolation"), ok: sec.contextIsolation },
+    { label: t("settings.security.nodeIntegration"), ok: nodeIntegrationOff },
+    { label: t("settings.security.sandbox"), ok: sec.sandbox },
+  ];
+  return (
+    <div>
+      <p style={{ fontSize: 13, color: "#6b7785", marginTop: 0 }}>{t("settings.security.note")}</p>
+      {rows.map((r) => (
+        <div key={r.label} style={fieldRow}>
+          <div style={{ flex: 1, fontSize: 14 }}>{r.label}</div>
+          <div style={{ color: r.ok ? "#2e7d32" : "#b00020", fontWeight: 600 }}>
+            {r.ok ? "✓ " : "✕ "}
+            {t(r.ok ? "settings.security.secure" : "settings.security.insecure")}
+          </div>
+        </div>
+      ))}
+      <p style={{ fontSize: 12, color: "#8a98a6", marginTop: 12 }}>{t("settings.security.devToolsNote")}</p>
     </div>
   );
 }

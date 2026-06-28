@@ -10,5 +10,9 @@
   "window": {
     "width": 1280,
     "height": 800
+  },
+  "security": {
+    "comment": "contextIsolation/nodeIntegration/sandbox は安全な値に固定（main.js）。ここで変更不可。",
+    "devTools": false
   }
 }
