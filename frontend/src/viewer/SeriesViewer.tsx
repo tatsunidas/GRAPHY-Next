@@ -1,5 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Viewer2D, type ViewerOverlays } from "./Viewer2D";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { getRenderingEngine, type Types } from "@cornerstonejs/core";
+import { ToolGroupManager } from "@cornerstonejs/tools";
+import { Viewer2D, ENGINE_ID, type ViewerOverlays } from "./Viewer2D";
+import { applyTransform, readTransform, FIT_TRANSFORM } from "./transform";
 import { buildSeriesLayout, buildLayoutFromDto, type SeriesLayout } from "./seriesLayout";
 import { imageIdForInstance, type ViewerMode } from "./imageId";
 import { fetchSeriesLayout, type Instance } from "../api";
@@ -120,6 +123,41 @@ export function SeriesViewer({
     }
   };
 
+  // GridView リンク用の同期グループ ID（このシリーズビューア内で一意）。
+  const rawId = useId();
+  const syncGroupId = useMemo(() => `graphy-grid-${rawId.replace(/[^a-zA-Z0-9]/g, "")}`, [rawId]);
+
+  // 先頭ビューポートに変換を適用 → camera/VOI 同期で全セルへ波及（シリーズ全体リンク）。
+  const firstLinkedViewport = (): Types.IStackViewport | undefined => {
+    const ids = ToolGroupManager.getToolGroup(syncGroupId)?.getViewportIds() ?? [];
+    const engine = getRenderingEngine(ENGINE_ID);
+    for (const id of ids) {
+      const vp = engine?.getViewport(id) as Types.IStackViewport | undefined;
+      if (vp) return vp;
+    }
+    return undefined;
+  };
+  const linkApply = (patch: Parameters<typeof applyTransform>[1]) => {
+    const vp = firstLinkedViewport();
+    if (vp) applyTransform(vp, patch);
+  };
+  const gRotate = () => {
+    const vp = firstLinkedViewport();
+    if (vp) applyTransform(vp, { rotation: (readTransform(vp).rotation + 90) % 360 });
+  };
+  const gFlipH = () => {
+    const vp = firstLinkedViewport();
+    if (vp) applyTransform(vp, { flipHorizontal: !readTransform(vp).flipHorizontal });
+  };
+  const gFlipV = () => {
+    const vp = firstLinkedViewport();
+    if (vp) applyTransform(vp, { flipVertical: !readTransform(vp).flipVertical });
+  };
+  const gZoom = (f: number) => {
+    const vp = firstLinkedViewport();
+    if (vp) applyTransform(vp, { zoom: readTransform(vp).zoom * f });
+  };
+
   // シネ再生（Z をループ送り）。
   useEffect(() => {
     if (!playing || nZ <= 1) return;
@@ -167,7 +205,14 @@ export function SeriesViewer({
             {zStack.map((id, i) => (
               <div key={id} style={cellBox}>
                 <div style={cellCaption}>{i + 1}</div>
-                <Viewer2D imageIds={[id]} imageIndex={0} overlays={overlays} compact height={CELL_HEIGHT} />
+                <Viewer2D
+                  imageIds={[id]}
+                  imageIndex={0}
+                  overlays={overlays}
+                  compact
+                  height={CELL_HEIGHT}
+                  syncGroupId={syncGroupId}
+                />
               </div>
             ))}
           </div>
@@ -203,6 +248,24 @@ export function SeriesViewer({
           </select>
           {gridDisabled && <span style={hint}>{t("series.grid.disabled")}</span>}
         </div>
+
+        {/* GridView の操作バー（W/L・Pan・Zoom はドラッグ、回転/反転/Fit はボタン。全セルにリンク）。 */}
+        {gridOn && (
+          <div style={row}>
+            <button onClick={() => linkApply({ zoom: 1, pan: [0, 0] })} style={btn} title={t("viewer.fit")}>
+              {t("viewer.fit")}
+            </button>
+            <button onClick={() => gZoom(1 / 1.2)} style={btn} title={t("viewer.zoomOut")}>−</button>
+            <button onClick={() => gZoom(1.2)} style={btn} title={t("viewer.zoomIn")}>＋</button>
+            <button onClick={gRotate} style={btn} title={t("viewer.rotate")}>⟳</button>
+            <button onClick={gFlipH} style={btn} title={t("viewer.flipH")}>⇄</button>
+            <button onClick={gFlipV} style={btn} title={t("viewer.flipV")}>⇅</button>
+            <button onClick={() => linkApply(FIT_TRANSFORM)} style={btn} title={t("viewer.reset")}>
+              {t("viewer.reset")}
+            </button>
+            <span style={hint}>{t("series.grid.linked")}</span>
+          </div>
+        )}
 
         {/* スライダー/シネは Slider モードのみ表示（Grid 中は非表示）。 */}
         {!gridOn && (

@@ -12,6 +12,7 @@ import { applyTransform, isPanned, readTransform, type ViewTransform, FIT_TRANSF
 import { readImageInfo, sampleAtCanvas, computeSliceSpacing, type ImageInfo, type PixelSample } from "./imageInfo";
 import { computeOrientationMarkers, type OrientationMarkers } from "./orientation";
 import { computeScaleBar, type ScaleBar } from "./scaleBar";
+import { getOrCreateCameraSync, getOrCreateVoiSync } from "./sync";
 import { resolveOverlay } from "./overlayText";
 import { useOverlayConfig } from "./overlayConfig";
 import { ImageInfoPanel } from "./ImageInfoPanel";
@@ -20,7 +21,7 @@ import { useI18n } from "../i18n/i18n";
 const { MouseBindings } = csToolsEnums;
 
 // 単一の RenderingEngine を全ビューポートで共有する（WebGL コンテキストを 1 つに保つ＝省メモリ）。
-const ENGINE_ID = "graphy-engine";
+export const ENGINE_ID = "graphy-engine";
 let sharedEngine: RenderingEngine | null = null;
 function getEngine(): RenderingEngine {
   if (!sharedEngine) {
@@ -59,6 +60,7 @@ export function Viewer2D({
   overlays,
   compact,
   height,
+  syncGroupId,
 }: {
   imageIds: string[];
   imageIndex: number;
@@ -67,6 +69,8 @@ export function Viewer2D({
   compact?: boolean;
   /** 画像領域の高さ(px)。既定 512。 */
   height?: number;
+  /** 指定すると、共有ツールグループ＋camera/VOI 同期に参加（GridView リンク）。 */
+  syncGroupId?: string;
 }) {
   const { t } = useI18n();
   const ov = { text: true, caliper: true, orientation: true, ...overlays };
@@ -161,18 +165,29 @@ export function Viewer2D({
 
         // CAMERA_MODIFIED は compact でも必要（向きマーカー/スケールバーの初期計算・再Fit）。
         element.addEventListener(EVENTS.CAMERA_MODIFIED, onCameraModified);
-        if (!compact) {
-          // 操作の割当: 左ドラッグ=WW/WL、中ドラッグ=Pan、右ドラッグ=Zoom（ホイールはスライス送り）。
-          const tg = ToolGroupManager.getToolGroup(toolGroupId) ?? ToolGroupManager.createToolGroup(toolGroupId);
-          if (tg) {
+
+        const wireTools = (tg: ReturnType<typeof ToolGroupManager.createToolGroup>) => {
+          if (!tg) return;
+          // 左ドラッグ=WW/WL、中ドラッグ=Pan、右ドラッグ=Zoom（ホイールはスライス送り）。
+          if (!tg.hasTool(WindowLevelTool.toolName)) {
             tg.addTool(WindowLevelTool.toolName);
             tg.addTool(PanTool.toolName);
             tg.addTool(ZoomTool.toolName);
             tg.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
             tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
             tg.setToolActive(ZoomTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary }] });
-            tg.addViewport(viewportId, ENGINE_ID);
           }
+          tg.addViewport(viewportId, ENGINE_ID);
+        };
+
+        if (syncGroupId) {
+          // GridView リンク: 共有ツールグループ＋camera/VOI 同期（シリーズ全体で連動）。
+          wireTools(ToolGroupManager.getToolGroup(syncGroupId) ?? ToolGroupManager.createToolGroup(syncGroupId));
+          getOrCreateCameraSync(`${syncGroupId}:cam`).add({ renderingEngineId: ENGINE_ID, viewportId });
+          getOrCreateVoiSync(`${syncGroupId}:voi`).add({ renderingEngineId: ENGINE_ID, viewportId });
+        } else if (!compact) {
+          // 単独ツールグループ（SliderView）。
+          wireTools(ToolGroupManager.getToolGroup(toolGroupId) ?? ToolGroupManager.createToolGroup(toolGroupId));
           element.addEventListener(EVENTS.VOI_MODIFIED, onVoiModified);
           element.addEventListener("mousemove", onMove);
           element.addEventListener("mouseleave", onLeave);
@@ -207,10 +222,29 @@ export function Viewer2D({
       element.removeEventListener(EVENTS.VOI_MODIFIED, onVoiModified);
       element.removeEventListener("mousemove", onMove);
       element.removeEventListener("mouseleave", onLeave);
-      try {
-        ToolGroupManager.destroyToolGroup(toolGroupId);
-      } catch {
-        /* 無ければ無視 */
+      if (syncGroupId) {
+        // 共有ツールグループ/同期からこのビューポートだけ外す（グループ自体は他セルが使用）。
+        try {
+          getOrCreateCameraSync(`${syncGroupId}:cam`).remove({ renderingEngineId: ENGINE_ID, viewportId });
+        } catch {
+          /* 無ければ無視 */
+        }
+        try {
+          getOrCreateVoiSync(`${syncGroupId}:voi`).remove({ renderingEngineId: ENGINE_ID, viewportId });
+        } catch {
+          /* 無ければ無視 */
+        }
+        try {
+          ToolGroupManager.getToolGroup(syncGroupId)?.removeViewports(ENGINE_ID, viewportId);
+        } catch {
+          /* 無ければ無視 */
+        }
+      } else {
+        try {
+          ToolGroupManager.destroyToolGroup(toolGroupId);
+        } catch {
+          /* 無ければ無視 */
+        }
       }
       try {
         getEngine().disableElement(viewportId);

@@ -79,6 +79,7 @@ export const ja: Record<string, string> = {
   "series.columns": "列数",
   "series.grid.disabled": "マルチチャンネル / 動画シリーズではグリッド表示は使用できません",
   "series.grid.warnMany": "このシリーズは {{n}} 枚あります。グリッド表示は描画/メモリ負荷が大きくなる可能性があります。切り替えますか？",
+  "series.grid.linked": "W/L・パン・ズーム・回転・反転はシリーズ全体にリンクします",
   "series.fps": "fps",
   "series.ov.text": "テキスト",
   "series.ov.caliper": "キャリパー",

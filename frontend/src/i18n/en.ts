@@ -80,6 +80,7 @@ export const en: Record<string, string> = {
   "series.columns": "Columns",
   "series.grid.disabled": "Grid view is unavailable for multi-channel / video series",
   "series.grid.warnMany": "This series has {{n}} slices. Grid view may be slow / memory-heavy. Switch anyway?",
+  "series.grid.linked": "W/L, pan, zoom, rotate and flip are linked across the series",
   "series.fps": "fps",
   "series.ov.text": "Text",
   "series.ov.caliper": "Caliper",
