@@ -32,15 +32,17 @@ public class WebDicomDataService {
     private static final MediaType DICOM_JSON = MediaType.valueOf("application/dicom+json");
 
     private final RestClient client;
+    private final String baseUrl;
 
     public WebDicomDataService(DicomProperties props) {
         DicomProperties.Dicomweb cfg = props.getDicomweb();
-        RestClient.Builder b = RestClient.builder().baseUrl(cfg.getBaseUrl());
+        this.baseUrl = cfg.getBaseUrl() == null ? "" : cfg.getBaseUrl().trim();
+        RestClient.Builder b = RestClient.builder().baseUrl(baseUrl);
         if (cfg.getBearerToken() != null && !cfg.getBearerToken().isBlank()) {
             b.defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + cfg.getBearerToken());
         }
         this.client = b.build();
-        log.debug("WebDicomDataService initialized: baseUrl={}", cfg.getBaseUrl()); // 毎構築で出るため DEBUG
+        log.debug("WebDicomDataService initialized: baseUrl={}", baseUrl); // 毎構築で出るため DEBUG
     }
 
     /** QIDO-RS: Study 検索。 */
@@ -59,6 +61,11 @@ public class WebDicomDataService {
     }
 
     private List<Attributes> qido(String path, Map<String, String> query) {
+        if (baseUrl.isEmpty()) {
+            throw new IllegalStateException(
+                    "DICOMweb 接続先が未設定です。環境設定の DICOM通信 で PACS の RS ベース URL"
+                    + "（graphy.dicom.dicomweb.base-url）を設定してください。");
+        }
         // 実 PACS 相手は未検証のため、リクエストと件数を DEBUG で残す（トラブル追跡用）。
         log.debug("QIDO request: {} query={}", path, query);
         byte[] body = client.get()
