@@ -51,11 +51,23 @@ export const en: Record<string, string> = {
   "main.search.studyDate": "Study Date",
   "main.search.accession": "Accession #",
   "main.search.clear": "Clear",
+  "main.search.partialHint": "partial match",
+  "main.search.today": "Today",
+  "main.search.yesterday": "Yesterday",
+  "main.search.week": "1 Week",
+  "main.search.modalitySelect": "Select…",
+  "main.search.noConditionWarn":
+    "No search conditions are set. This may return a large number of studies. Continue?",
   "main.status.disconnected": "Disconnected",
 
   // study browser
   "study.list.title": "Studies",
+  "study.list.total": "Total: {{n}}",
+  "study.prompt": "Set search conditions and run a search.",
   "study.empty": "No studies (they appear after receiving/importing).",
+  "page.prev": "Prev",
+  "page.next": "Next",
+  "page.indicator": "{{from}}–{{to}} of {{total}} (page {{page}}/{{pages}})",
   "series.title": "Series ({{name}})",
   "series.empty": "No series.",
   "instance.count": "{{n}} instance(s)",

@@ -38,16 +38,19 @@ public interface DicomInstanceRepository extends JpaRepository<DicomInstance, St
             from DicomInstance i
             where (:patientId is null or lower(i.patientId) like lower(concat('%', :patientId, '%')))
               and (:patientName is null or lower(i.patientName) like lower(concat('%', :patientName, '%')))
-              and (:studyDate is null or i.studyDate = :studyDate)
-              and (:modality is null or i.modality = :modality)
+              and (:studyDateFrom is null or i.studyDate >= :studyDateFrom)
+              and (:studyDateTo is null or i.studyDate <= :studyDateTo)
+              and (:filterModality = false or i.modality in :modalities)
               and (:accessionNumber is null or i.accessionNumber = :accessionNumber)
             group by i.studyInstanceUid, i.patientId
             order by max(i.studyDate) desc
             """)
     List<StudySummary> findStudySummaries(@Param("patientId") String patientId,
                                           @Param("patientName") String patientName,
-                                          @Param("studyDate") String studyDate,
-                                          @Param("modality") String modality,
+                                          @Param("studyDateFrom") String studyDateFrom,
+                                          @Param("studyDateTo") String studyDateTo,
+                                          @Param("filterModality") boolean filterModality,
+                                          @Param("modalities") List<String> modalities,
                                           @Param("accessionNumber") String accessionNumber);
 
     /** スタディ内のシリーズ単位の集計。 */

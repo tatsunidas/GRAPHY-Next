@@ -5,7 +5,9 @@ import com.vis.graphynext.dicom.store.DicomStorageService;
 import com.vis.graphynext.dicom.store.DicomStoreScp;
 import com.vis.graphynext.dicom.store.DicomStoreScu;
 import org.dcm4che3.data.Attributes;
+import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.UID;
+import org.dcm4che3.data.VR;
 import org.dcm4che3.net.TransferCapability;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -117,6 +119,49 @@ class DicomStoreIntegrationTest {
 
         var instances = storage.listInstances("ST.C", "SE.C1");
         assertEquals(2, instances.size(), "SE.C1 のインスタンス一覧は 2 件");
+    }
+
+    @Test
+    void listStudies_filtersByDateRangeAndModalities() throws Exception {
+        // 同一 H2 を他テストと共有するため、固有の患者名で自テストのデータだけを絞り込む。
+        storage.ingest(writePhantom(study("ST.D1", "20260101", "OT")));
+        storage.ingest(writePhantom(study("ST.D2", "20260615", "CT")));
+        storage.ingest(writePhantom(study("ST.D3", "20260620", "MR")));
+        String name = "RANGECASE";
+
+        // 日付レンジ: 20260610〜20260630 は D2,D3 のみ（D1=20260101 は範囲外）
+        var inRange = storage.listStudies(new StudySearch(null, name, "20260610", "20260630", null, null));
+        assertEquals(2, inRange.size(), "範囲内は 2 件");
+        assertTrue(inRange.stream().noneMatch(s -> "ST.D1".equals(s.studyInstanceUid())), "D1 は範囲外");
+
+        // 開始のみ（…以降）
+        assertEquals(2, storage.listStudies(new StudySearch(null, name, "20260610", null, null, null)).size());
+        // 終了のみ（…以前）→ D1 のみ
+        var beforeJun = storage.listStudies(new StudySearch(null, name, null, "20260101", null, null));
+        assertEquals(1, beforeJun.size());
+        assertEquals("ST.D1", beforeJun.get(0).studyInstanceUid());
+
+        // モダリティ単一
+        var ct = storage.listStudies(new StudySearch(null, name, null, null, "CT", null));
+        assertEquals(1, ct.size());
+        assertEquals("ST.D2", ct.get(0).studyInstanceUid());
+
+        // モダリティ複数（カンマ区切り）→ CT,MR の 2 件
+        assertEquals(2, storage.listStudies(new StudySearch(null, name, null, null, "CT,MR", null)).size());
+        // 空白混じりでも正規化される
+        assertEquals(2, storage.listStudies(new StudySearch(null, name, null, null, " CT , MR ", null)).size());
+
+        // 患者名の部分一致（自テストの 3 件）
+        assertEquals(3, storage.listStudies(new StudySearch(null, name, null, null, null, null)).size());
+    }
+
+    /** scImage を作って固有の患者名・StudyDate・Modality を設定する。 */
+    private static Attributes study(String studyUid, String studyDate, String modality) {
+        Attributes a = DicomPhantomFactory.scImage(studyUid + ".pid", studyUid, studyUid + ".se", studyUid + ".sop");
+        a.setString(Tag.PatientName, VR.PN, "RANGECASE^X");
+        a.setString(Tag.StudyDate, VR.DA, studyDate);
+        a.setString(Tag.Modality, VR.CS, modality);
+        return a;
     }
 
     private static Path writePhantom(Attributes ds) throws Exception {

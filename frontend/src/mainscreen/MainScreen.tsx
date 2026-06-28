@@ -29,7 +29,8 @@ export function MainScreen({
   const { t } = useI18n();
   const isStandalone = status?.mode === "standalone";
   const canImport = isStandalone && !!desktop();
-  const [filters, setFilters] = useState<StudyFilters>({});
+  // null = まだ検索していない。SearchPanel が初期条件(今日)で onSearch を呼ぶと埋まる。
+  const [filters, setFilters] = useState<StudyFilters | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [importMsg, setImportMsg] = useState<string | null>(null);
 

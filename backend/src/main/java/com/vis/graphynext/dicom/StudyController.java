@@ -38,10 +38,12 @@ public class StudyController {
     public List<StudyDto> studies(
             @RequestParam(required = false) String patientId,
             @RequestParam(required = false) String patientName,
-            @RequestParam(required = false) String studyDate,
+            @RequestParam(required = false) String studyDateFrom,
+            @RequestParam(required = false) String studyDateTo,
             @RequestParam(required = false) String modality,
             @RequestParam(required = false) String accessionNumber) {
-        StudySearch search = new StudySearch(patientId, patientName, studyDate, modality, accessionNumber).normalized();
+        StudySearch search = new StudySearch(patientId, patientName, studyDateFrom, studyDateTo, modality,
+                accessionNumber).normalized();
         WebDicomDataService web = webProvider.getIfAvailable();
         if (web != null) {
             return web.searchStudies(toQido(search)).stream().map(StudyController::studyOf).toList();
@@ -58,8 +60,10 @@ public class StudyController {
         if (s.patientName() != null) {
             q.put("PatientName", s.patientName());
         }
-        if (s.studyDate() != null) {
-            q.put("StudyDate", s.studyDate());
+        // QIDO StudyDate の範囲指定: "from-to" / "from-" / "-to" / 単一日 "yyyymmdd"。
+        String dateQuery = toQidoDateRange(s.studyDateFrom(), s.studyDateTo());
+        if (dateQuery != null) {
+            q.put("StudyDate", dateQuery);
         }
         if (s.modality() != null) {
             q.put("ModalitiesInStudy", s.modality());
@@ -68,6 +72,17 @@ public class StudyController {
             q.put("AccessionNumber", s.accessionNumber());
         }
         return q;
+    }
+
+    /** DICOM の日付レンジ書式へ。両端 null なら null。 */
+    private static String toQidoDateRange(String from, String to) {
+        if (from == null && to == null) {
+            return null;
+        }
+        if (from != null && from.equals(to)) {
+            return from;
+        }
+        return (from == null ? "" : from) + "-" + (to == null ? "" : to);
     }
 
     @GetMapping("/studies/{studyUid}/series")

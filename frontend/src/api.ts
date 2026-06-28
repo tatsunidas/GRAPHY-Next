@@ -38,8 +38,9 @@ export interface Instance {
 export interface StudyFilters {
   patientId?: string;
   patientName?: string;
-  studyDate?: string;
-  modality?: string;
+  studyDateFrom?: string;
+  studyDateTo?: string;
+  modality?: string; // カンマ区切りの複数モダリティ（例 "CT,MR"）
   accessionNumber?: string;
 }
 

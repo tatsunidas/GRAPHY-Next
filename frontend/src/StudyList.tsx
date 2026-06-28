@@ -10,29 +10,44 @@ import {
 } from "./api";
 import { useI18n } from "./i18n/i18n";
 
-export function StudyList({ filters, reloadKey }: { filters?: StudyFilters; reloadKey?: number }) {
+const PAGE_SIZE = 50;
+
+export function StudyList({ filters, reloadKey }: { filters?: StudyFilters | null; reloadKey?: number }) {
   const { t } = useI18n();
   const [studies, setStudies] = useState<Study[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
+  const [page, setPage] = useState(0);
 
-  const filterKey = JSON.stringify(filters ?? {});
+  const filterKey = JSON.stringify(filters ?? null);
   useEffect(() => {
-    setStudies(null);
-    setError(null);
     setSelectedStudy(null);
+    setPage(0);
+    setError(null);
+    setStudies(null);
+    // filters が null = まだ検索していない（初期描画）。フェッチしない。
+    if (filters == null) return;
     fetchStudies(filters)
       .then(setStudies)
       .catch((e: unknown) => setError(String(e)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterKey, reloadKey]);
 
+  const total = studies?.length ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const current = Math.min(page, pageCount - 1);
+  const pageStudies = studies ? studies.slice(current * PAGE_SIZE, current * PAGE_SIZE + PAGE_SIZE) : [];
+
   return (
     <section style={{ marginTop: 28 }}>
-      <h2 style={{ fontSize: 18, marginBottom: 8 }}>{t("study.list.title")}</h2>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8 }}>
+        <h2 style={{ fontSize: 18, margin: 0 }}>{t("study.list.title")}</h2>
+        {studies && <span style={{ fontSize: 13, color: "#5a6672" }}>{t("study.list.total", { n: total })}</span>}
+      </div>
 
+      {filters == null && <div style={{ color: "#888" }}>{t("study.prompt")}</div>}
       {error && <div style={{ color: "#b00020" }}>{t("common.fetchError", { error })}</div>}
-      {!error && !studies && <div>{t("common.loading")}</div>}
+      {filters != null && !error && !studies && <div>{t("common.loading")}</div>}
       {studies && studies.length === 0 && <div style={{ color: "#666" }}>{t("study.empty")}</div>}
 
       {studies && studies.length > 0 && (
@@ -43,11 +58,12 @@ export function StudyList({ filters, reloadKey }: { filters?: StudyFilters; relo
               <Th>{t("field.patientName")}</Th>
               <Th>{t("field.studyDate")}</Th>
               <Th>{t("field.description")}</Th>
+              <Th>{t("field.modality")}</Th>
               <Th>{t("field.instanceCount")}</Th>
             </tr>
           </thead>
           <tbody>
-            {studies.map((s) => {
+            {pageStudies.map((s) => {
               const selected = s.studyInstanceUid === selectedStudy?.studyInstanceUid;
               return (
                 <tr
@@ -63,6 +79,7 @@ export function StudyList({ filters, reloadKey }: { filters?: StudyFilters; relo
                   <Td>{s.patientName || "—"}</Td>
                   <Td>{formatDate(s.studyDate)}</Td>
                   <Td>{s.studyDescription || "—"}</Td>
+                  <Td>{s.modality || "—"}</Td>
                   <Td>{s.numberOfInstances}</Td>
                 </tr>
               );
@@ -71,10 +88,43 @@ export function StudyList({ filters, reloadKey }: { filters?: StudyFilters; relo
         </table>
       )}
 
+      {total > PAGE_SIZE && (
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 10, fontSize: 13 }}>
+          <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={current === 0} style={pageBtn}>
+            ‹ {t("page.prev")}
+          </button>
+          <span style={{ color: "#5a6672" }}>
+            {t("page.indicator", {
+              from: current * PAGE_SIZE + 1,
+              to: Math.min(total, current * PAGE_SIZE + PAGE_SIZE),
+              total,
+              page: current + 1,
+              pages: pageCount,
+            })}
+          </span>
+          <button
+            onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+            disabled={current >= pageCount - 1}
+            style={pageBtn}
+          >
+            {t("page.next")} ›
+          </button>
+        </div>
+      )}
+
       {selectedStudy && <SeriesNavigator study={selectedStudy} />}
     </section>
   );
 }
+
+const pageBtn: React.CSSProperties = {
+  padding: "4px 12px",
+  border: "1px solid #cdd5de",
+  borderRadius: 6,
+  background: "#fff",
+  cursor: "pointer",
+  fontSize: 13,
+};
 
 function SeriesNavigator({ study }: { study: Study }) {
   const { t } = useI18n();
