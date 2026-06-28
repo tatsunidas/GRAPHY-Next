@@ -48,12 +48,22 @@ zoom / pan / flip(上下左右) / rotation は **Cornerstone3D の ViewPresentat
   - `DicomStorageService.resolveInstanceFile(sop)`（無ければ null→404）。
 - **web**: `wadors:`（WADO-RS 経由）。**次フェーズ**。現状はガードして「次フェーズ」表示。
 
-## Vite 連携の必須設定（`vite.config.ts`）
-Cornerstone3D を Vite でバンドルするには以下が必要（これが無いとビルド失敗）:
-- `worker.format = "es"` … デコードワーカが ES module + 動的 import（コーデック遅延ロード）。既定の iife はコード分割と非互換。
-- `optimizeDeps.exclude = ["@cornerstonejs/dicom-image-loader"]`
+## Vite 連携の必須設定（`vite.config.ts`）— ハマりどころ多数
+- `worker.format = "es"` … デコードワーカが ES module + 動的 import（コーデック遅延ロード）。既定の iife はコード分割と非互換でビルド失敗。
+- `optimizeDeps.exclude = ["@cornerstonejs/dicom-image-loader"]` … loader は worker(`?worker_file`)を内包し
+  dep-optimizer と**非互換**。`include` すると dev で「decodeImageFrameWorker.js が .vite/deps に無い」エラー。
+- **`cornerstoneCodecEsm()` プラグイン（dev 専用）** … 上記 exclude の副作用で配下の UMD コーデック
+  (`@cornerstonejs/codec-*/dist/*.js`, `var <NAME>=(()=>…)()`+`module.exports`)に `default` が無くなり
+  「does not provide an export named 'default'」でデコード失敗する。これを補うため `export default <NAME>;`
+  を付与する。build は Rollup の CJS interop が効くので `apply:'serve'` 限定。
+  → **worker(exclude 必須) と codec(default 必須) の二律背反をこのプラグインで両立**。
 - `build.target = "esnext"` … WASM コーデックのトップレベル await 許可。
 - codec グルーの `fs/path externalized` 警告は無害（emscripten の node フォールバック）。
+
+## dev 起動の注意（`scripts/dev-desktop.sh`）
+`npm run dev` が spawn する実 vite は cleanup で orphan になりやすい。複数残ると `.vite` キャッシュ
+（`deps_temp_*/_metadata.json`）を奪い合い `ENOENT` で再最適化が壊れる。スクリプトは起動前と終了時に
+**プロジェクト固有パターンで残存 vite を pkill** する。**dev-desktop は常に 1 つだけ**起動すること。
 
 ## CSP（`vite.config.ts` cspPlugin・対応済み）
 `script-src 'wasm-unsafe-eval'` / `worker-src 'self' blob:` / `default-src 'self'`(wasm 取得) を先行許可済み。
