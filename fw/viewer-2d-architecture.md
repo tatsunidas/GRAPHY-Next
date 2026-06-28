@@ -57,8 +57,14 @@ zoom / pan / flip(上下左右) / rotation は **Cornerstone3D の ViewPresentat
   「does not provide an export named 'default'」でデコード失敗する。これを補うため `export default <NAME>;`
   を付与する。build は Rollup の CJS interop が効くので `apply:'serve'` 限定。
   → **worker(exclude 必須) と codec(default 必須) の二律背反をこのプラグインで両立**。
+- **`optimizeDeps.include = ["dicom-parser"]`** … dicom-parser は UMD（package.json の `module` も UMD を指す）。
+  明示 include しないと「excluded loader の依存」として中途半端に最適化され、esbuild が top-level `this` を
+  undefined に書換え → UMD の browser-global 分岐 `e.zlib` で**起動時 eval クラッシュ**（renderer 真っ白）。
+  明示 include で CJS interop され、`require("zlib")` は browser-external スタブ（遅延 throw・load 時無害）になる。
 - `build.target = "esnext"` … WASM コーデックのトップレベル await 許可。
 - codec グルーの `fs/path externalized` 警告は無害（emscripten の node フォールバック）。
+- 症状の対応表: `does not provide an export named 'default'`→codec（plugin）/ `decodeImageFrameWorker.js が deps に無い`
+  →loader を include した（exclude に戻す）/ `Cannot read ... 'zlib'`→dicom-parser を include。
 
 ## dev 起動の注意（`scripts/dev-desktop.sh`）
 `npm run dev` が spawn する実 vite は cleanup で orphan になりやすい。複数残ると `.vite` キャッシュ
