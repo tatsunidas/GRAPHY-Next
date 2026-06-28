@@ -9,6 +9,7 @@ import {
 import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
 import { applyTransform, isPanned, readTransform, type ViewTransform, FIT_TRANSFORM } from "./transform";
 import { readImageInfo, sampleAtCanvas, computeSliceSpacing, type ImageInfo, type PixelSample } from "./imageInfo";
+import { computeOrientationMarkers, type OrientationMarkers } from "./orientation";
 import { ImageInfoPanel } from "./ImageInfoPanel";
 import { useI18n } from "../i18n/i18n";
 
@@ -55,6 +56,7 @@ export function Viewer2D({ imageId, seriesImageIds }: { imageId: string; seriesI
   const [info, setInfo] = useState<ImageInfo | null>(null);
   const infoRef = useRef<ImageInfo | null>(null);
   const [sample, setSample] = useState<PixelSample | null>(null);
+  const [markers, setMarkers] = useState<OrientationMarkers | null>(null);
 
   useEffect(() => {
     let disposed = false;
@@ -75,7 +77,10 @@ export function Viewer2D({ imageId, seriesImageIds }: { imageId: string; seriesI
 
     const onCameraModified = () => {
       const vp = viewportRef.current;
-      if (vp && !disposed) setTransform(readTransform(vp));
+      if (!vp || disposed) return;
+      setTransform(readTransform(vp));
+      // 向きマーカーは IOP があるときだけ。canvasToWorld 経由で zoom/pan/flip/rotation に追従。
+      setMarkers(infoRef.current?.hasOrientation ? computeOrientationMarkers(vp, element) : null);
     };
 
     (async () => {
@@ -217,6 +222,15 @@ export function Viewer2D({ imageId, seriesImageIds }: { imageId: string; seriesI
               ({sample.i},{sample.j})
             </div>
           )}
+          {/* 患者の向き（A/P・R/L・H/F）。四辺に表示。pointer-events:none。 */}
+          {markers && (
+            <>
+              <div style={{ ...markerBase, top: 4, left: "50%", transform: "translateX(-50%)" }}>{markers.top}</div>
+              <div style={{ ...markerBase, bottom: 4, left: "50%", transform: "translateX(-50%)" }}>{markers.bottom}</div>
+              <div style={{ ...markerBase, left: 6, top: "50%", transform: "translateY(-50%)" }}>{markers.left}</div>
+              <div style={{ ...markerBase, right: 6, top: "50%", transform: "translateY(-50%)" }}>{markers.right}</div>
+            </>
+          )}
           {loading && !error && <div style={overlayCenter}>{t("common.loading")}</div>}
           {error && <div style={{ ...overlayCenter, color: "#ff8a80" }}>{t("common.fetchError", { error })}</div>}
         </div>
@@ -274,6 +288,15 @@ const panBadge: React.CSSProperties = {
   background: "#1565c0",
   color: "#fff",
   fontSize: 11,
+};
+const markerBase: React.CSSProperties = {
+  position: "absolute",
+  color: "#ffd54f",
+  fontSize: 13,
+  fontWeight: 700,
+  letterSpacing: 0.5,
+  textShadow: "0 0 3px #000",
+  pointerEvents: "none",
 };
 const overlayCenter: React.CSSProperties = {
   position: "absolute",

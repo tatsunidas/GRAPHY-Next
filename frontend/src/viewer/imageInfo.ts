@@ -31,6 +31,8 @@ export interface ImageInfo {
   /** 0=符号なし, 1=符号あり(2の補数) */
   pixelRepresentation?: number;
   photometricInterpretation?: string;
+  /** ImageOrientationPatient(IOP) が存在するか（向きマーカー表示の可否） */
+  hasOrientation?: boolean;
 }
 
 function firstNumber(v: unknown): number | undefined {
@@ -70,6 +72,7 @@ export function readImageInfo(imageId: string): ImageInfo {
     bitsStored: pixel.bitsStored,
     pixelRepresentation: pixel.pixelRepresentation,
     photometricInterpretation: pixel.photometricInterpretation,
+    hasOrientation: Array.isArray(plane.imageOrientationPatient) && plane.imageOrientationPatient.length >= 6,
   };
 }
 
