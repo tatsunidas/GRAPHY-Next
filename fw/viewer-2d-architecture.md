@@ -96,8 +96,24 @@ zoom / pan / flip(上下左右) / rotation は **Cornerstone3D の ViewPresentat
 - 完了: ①輝度(HU 読取＋Rescale/Window 表示) ②ボクセルサイズ(PixelSpacing/SliceThickness)
   ③FOV(Rows×rowSpacing × Cols×colSpacing)。**PET SUV は未対応**（要 PT scaling・追加タグ）。
 
+## SeriesViewer（シリーズ管理コントローラ・実装済み土台）
+`viewer/SeriesViewer.tsx` が画像パネル(Viewer2D)を内包し、シリーズを管理する。
+- **Viewer2D はスタック対応**: `imageIds[]`+`imageIndex`。`setStack` 後は `setImageIdIndex` で高速送り。
+  同一スタック内は **zoom/pan/WW/WL/回転/反転を自動維持**（=シリーズ全体での操作）。
+  `overlays`(text/caliper/orientation) で画像上オーバーレイを On/Off。ホイールは Zoom から外した。
+- **スライス送り**: スライダー＋↑↓←→キー＋ホイール。**シネ再生**(fps)。
+- **5D(ZCT) モデル** `viewer/seriesLayout.ts`（GRAPHY Praparat 準拠の Z×C×T）。現状 nC=nT=1。
+  5D 時に C/T スライダーを表示する UI は実装済み。
+- **未対応（次段）**: 実 5D 派生。GRAPHY は ImageJ hyperstack 次元に委譲しているため、Web版は
+  **backend のヘッダ読取エンドポイント**で導出する方針:
+  - Z = IPP を IOP 法線へ投影した距離で順序付け（または SliceLocation/InstanceNumber フォールバック）
+  - T = TemporalPositionIdentifier(0020,0100)
+  - C = EchoNumbers(0018,0086) 等
+  - nZ*nC*nT≠枚数なら純 Z スタックにフォールバック。
+  - C/T 切替(別スタック)をまたぐ transform/VOI 維持は、保存 presentation/voiRange の再適用で対応予定。
+
 ## 次スコープ
-1. **PET SUV**（PT scaling: Radiopharmaceutical/体重/時刻）。
-2. スタック（シリーズ全スライス＋矢印/ホイールスクロール）。
-3. W/L・Length・ROI ツール ＋既存キーボードショートカット配線。
-4. メタデータ/向き(A/P/L/R)オーバーレイ → web(wadors) 対応。
+1. **5D ZCT 実派生**（backend layout エンドポイント）＋ C/T 切替時の transform/VOI 維持。
+2. **PET SUV**（PT scaling: Radiopharmaceutical/体重/時刻）。
+3. **ROI/Length ツール**（ROI 管理は SeriesViewer に集約）＋既存キーボードショートカット配線。
+4. web(wadors) 対応。
