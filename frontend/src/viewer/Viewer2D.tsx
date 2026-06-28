@@ -94,6 +94,8 @@ export function Viewer2D({
   const [scaleBar, setScaleBar] = useState<ScaleBar | null>(null);
   // ライブの WW/WL（左ドラッグで変更。モダリティ値=HU 等の単位）。
   const [voi, setVoi] = useState<{ ww: number; wc: number } | null>(null);
+  // 右の Image Info パネルの表示。Off で画像をその領域まで広げる。
+  const [showInfo, setShowInfo] = useState(true);
 
   useEffect(() => {
     let disposed = false;
@@ -387,6 +389,15 @@ export function Viewer2D({
           <StatusItem label={t("viewer.status.wl")} value={voi ? `${Math.round(voi.wc)}/${Math.round(voi.ww)}` : "—"} />
           <StatusItem label={t("viewer.status.value")} value={cursorValue} />
           <StatusItem label={t("viewer.status.xy")} value={cursorXY} />
+          {/* 必須情報ラベル横の Info ボタン（右の情報パネルの On/Off）。 */}
+          <button
+            onClick={() => setShowInfo((v) => !v)}
+            aria-pressed={showInfo}
+            title={t("viewer.info.toggle")}
+            style={{ ...infoBtn, ...(showInfo ? infoBtnOn : null), marginLeft: "auto" }}
+          >
+            {t("viewer.info.btn")}
+          </button>
         </div>
         {imagePanel}
 
@@ -402,8 +413,9 @@ export function Viewer2D({
         </div>
       </div>
 
-      {/* 右サイド: 輝度/ボクセル/FOV のキャリブレーション情報＋マウス座標＋ライブ WW/WL。 */}
-      <ImageInfoPanel info={info} sample={sample} voi={voi} />
+      {/* 右サイド: 輝度/ボクセル/FOV のキャリブレーション情報＋マウス座標＋ライブ WW/WL。
+          Off にすると非表示になり、画像パネルがこの領域まで広がる。 */}
+      {showInfo && <ImageInfoPanel info={info} sample={sample} voi={voi} />}
     </div>
   );
 }
@@ -474,6 +486,16 @@ const statusBar: React.CSSProperties = {
   fontVariantNumeric: "tabular-nums",
 };
 const statusItem: React.CSSProperties = { display: "inline-flex", gap: 5, alignItems: "baseline" };
+const infoBtn: React.CSSProperties = {
+  padding: "2px 9px",
+  border: "1px solid #cdd5de",
+  borderRadius: 5,
+  background: "#fff",
+  color: "#33404d",
+  cursor: "pointer",
+  fontSize: 12,
+};
+const infoBtnOn: React.CSSProperties = { background: "#0b5cad", borderColor: "#0b5cad", color: "#fff" };
 const statusKey: React.CSSProperties = { color: "#6b7785" };
 const statusVal: React.CSSProperties = { color: "#1a2530", fontWeight: 600 };
 

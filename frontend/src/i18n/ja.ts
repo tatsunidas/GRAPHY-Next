@@ -95,6 +95,8 @@ export const ja: Record<string, string> = {
   "viewer.status.wl": "W/L",
   "viewer.status.value": "値",
   "viewer.status.xy": "XY",
+  "viewer.info.btn": "Info",
+  "viewer.info.toggle": "画像情報パネルの表示/非表示",
   "viewer.info.title": "画像情報",
   "viewer.info.matrix": "マトリクス",
   "viewer.info.pixelSpacing": "ピクセル間隔",

@@ -96,6 +96,8 @@ export const en: Record<string, string> = {
   "viewer.status.wl": "W/L",
   "viewer.status.value": "Value",
   "viewer.status.xy": "XY",
+  "viewer.info.btn": "Info",
+  "viewer.info.toggle": "Show/hide the image info panel",
   "viewer.info.title": "Image Info",
   "viewer.info.matrix": "Matrix",
   "viewer.info.pixelSpacing": "Pixel spacing",
