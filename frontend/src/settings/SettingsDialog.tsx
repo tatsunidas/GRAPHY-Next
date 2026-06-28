@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { SETTINGS_REGISTRY, type CategoryDef, type FieldDef } from "./registry";
 import { fetchSettings, saveSettings, type SettingsMap } from "./settingsApi";
+import { OverlayConfigPanel } from "./OverlayConfigPanel";
 import { useI18n, type Locale, type TFn } from "../i18n/i18n";
 
 export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -86,6 +87,8 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
             <h2 style={{ fontSize: 18, margin: "0 0 12px" }}>{t(category.labelKey)}</h2>
             {category.id === "security" ? (
               <SecurityPanel t={t} />
+            ) : category.id === "overlay" ? (
+              <OverlayConfigPanel />
             ) : (
               category.sections.map((section) => (
                 <section key={section.titleKey} style={{ marginBottom: 22 }}>

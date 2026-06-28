@@ -82,6 +82,16 @@ export interface SeriesLayoutDto {
   cells: SeriesLayoutCell[];
 }
 
+export interface TagInfo {
+  tag: string;
+  keyword: string;
+  vr: string;
+}
+
+/** タグ番号(8桁hex) → keyword/VR（dcm4che 辞書）。 */
+export const fetchTagInfo = (tag: string) =>
+  httpGet<TagInfo>(`/api/dicom/tag?tag=${encodeURIComponent(tag)}`);
+
 export const fetchSeriesLayout = (studyUid: string, seriesUid: string) =>
   httpGet<SeriesLayoutDto>(
     `/api/studies/${encodeURIComponent(studyUid)}/series/${encodeURIComponent(seriesUid)}/layout`,

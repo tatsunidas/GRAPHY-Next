@@ -86,6 +86,13 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
     ],
   },
   {
+    // 画像オーバーレイ（4 隅の表示属性）はカスタムパネル OverlayConfigPanel で編集。
+    id: "overlay",
+    labelKey: "settings.cat.overlay",
+    icon: "🅣",
+    sections: [],
+  },
+  {
     id: "viewer",
     labelKey: "settings.cat.viewer",
     icon: "🖼",
