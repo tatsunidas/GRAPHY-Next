@@ -2,11 +2,13 @@ import { useEffect, useState } from "react";
 import { fetchStatus, type AppStatus } from "./api";
 import { StudyList } from "./StudyList";
 import { SettingsDialog } from "./settings/SettingsDialog";
+import { DbAdminDialog } from "./dbadmin/DbAdminDialog";
 
 export function App() {
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [dbOpen, setDbOpen] = useState(false);
 
   useEffect(() => {
     fetchStatus()
@@ -36,20 +38,20 @@ export function App() {
           <h1 style={{ marginBottom: 4 }}>GRAPHY-Next</h1>
           <p style={{ color: "#666", marginTop: 0 }}>最小構成 起動確認</p>
         </div>
-        <button
-          onClick={() => setSettingsOpen(true)}
-          title="環境設定"
-          style={{
-            border: "1px solid #d0d7de",
-            background: "#fff",
-            borderRadius: 8,
-            padding: "6px 10px",
-            cursor: "pointer",
-            fontSize: 16,
-          }}
-        >
-          ⚙
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          {status?.mode === "standalone" && (
+            <button
+              onClick={() => setDbOpen(true)}
+              title="DB テーブル管理"
+              style={iconBtn}
+            >
+              🗄 DB
+            </button>
+          )}
+          <button onClick={() => setSettingsOpen(true)} title="環境設定" style={iconBtn}>
+            ⚙
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -75,9 +77,19 @@ export function App() {
       <StudyList />
 
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <DbAdminDialog open={dbOpen} onClose={() => setDbOpen(false)} />
     </main>
   );
 }
+
+const iconBtn: React.CSSProperties = {
+  border: "1px solid #d0d7de",
+  background: "#fff",
+  borderRadius: 8,
+  padding: "6px 10px",
+  cursor: "pointer",
+  fontSize: 14,
+};
 
 function Row({
   label,
