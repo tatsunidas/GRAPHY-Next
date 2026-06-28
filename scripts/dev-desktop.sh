@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
 # デスクトップモード開発起動: Vite dev を裏で起動し、Electron を GRAPHY_DEV=1 で起動。
 # Electron 側が backend(jar, standalone) を spawn するため、backend jar が必要。
-# jar が無ければ自動でビルドする。
+# 古い jar による 404 を避けるため、毎回 最新コードで再ビルドする（UI は Vite が配信するので frontend はスキップ）。
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-JAR="backend/target/graphy-next-backend.jar"
-if [[ ! -f "$JAR" ]]; then
-  echo "[dev-desktop] backend jar が無いのでビルドします ..."
-  make build-backend
-fi
+echo "[dev-desktop] backend jar を最新コードでビルドします（UIは Vite が配信）..."
+( cd backend && ${MVN:-mvn} -q -Dfrontend.skip=true clean package )
 
 echo "[dev-desktop] starting frontend (Vite) on :5173 ..."
 ( cd frontend && npm run dev ) &
