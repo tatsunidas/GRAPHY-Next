@@ -7,6 +7,7 @@ import { buildSeriesLayout, buildLayoutFromDto, type SeriesLayout } from "./seri
 import { imageIdForInstance, type ViewerMode } from "./imageId";
 import { matchesCombo } from "../shortcuts/registry";
 import { fetchSeriesLayout, type Instance } from "../api";
+import { fetchSettings } from "../settings/settingsApi";
 import { useI18n } from "../i18n/i18n";
 
 interface OverlayState extends Required<ViewerOverlays> {
@@ -83,7 +84,18 @@ export function SeriesViewer({
     roi: false,
   });
   const [playing, setPlaying] = useState(false);
+  // シネ速度は環境設定 viewer.cineFps から（既定 10）。
   const [fps, setFps] = useState(10);
+  useEffect(() => {
+    fetchSettings()
+      .then((m) => {
+        const v = Number(m["viewer.cineFps"]);
+        if (Number.isFinite(v) && v >= 1) setFps(v);
+      })
+      .catch(() => {
+        /* 既定のまま */
+      });
+  }, []);
   const [gridCols, setGridCols] = useState(0); // 0=Slider(SingleGridView), >0=Grid(FilmGrid) 列数
   const [lastCols, setLastCols] = useState(3);
 
@@ -285,27 +297,22 @@ export function SeriesViewer({
           </div>
         )}
 
-        {/* スライダー/シネは Slider モードのみ表示（Grid 中は非表示）。 */}
+        {/* スライダー/シネは Slider モードのみ表示（Grid 中は非表示）。再生ボタンは Z スライダー横。 */}
         {!gridOn && (
           <>
-            <DimSlider label="Z" idx={zc} count={nZ} onChange={setZ} />
+            <DimSlider
+              label="Z"
+              idx={zc}
+              count={nZ}
+              onChange={setZ}
+              trailing={
+                <button onClick={() => setPlaying((p) => !p)} disabled={nZ <= 1} style={btn} title={t("series.cine")}>
+                  {playing ? "⏸" : "▶"}
+                </button>
+              }
+            />
             {layout.nC > 1 && <DimSlider label="C" dim={layout.cDimension} idx={cc} count={layout.nC} onChange={setC} />}
             {layout.nT > 1 && <DimSlider label="T" dim={layout.tDimension} idx={tc} count={layout.nT} onChange={setTIdx} />}
-            <div style={row}>
-              <button onClick={() => setPlaying((p) => !p)} disabled={nZ <= 1} style={btn} title={t("series.cine")}>
-                {playing ? "⏸" : "▶"}
-              </button>
-              <span style={dimLabel}>{t("series.fps")}</span>
-              <input
-                type="range"
-                min={1}
-                max={30}
-                value={fps}
-                onChange={(e) => setFps(Number(e.target.value))}
-                style={{ flex: 1 }}
-              />
-              <span style={{ ...dimLabel, width: 26, textAlign: "right" }}>{fps}</span>
-            </div>
           </>
         )}
 
@@ -327,12 +334,14 @@ function DimSlider({
   idx,
   count,
   onChange,
+  trailing,
 }: {
   label: string;
   dim?: string | null;
   idx: number;
   count: number;
   onChange: (v: number) => void;
+  trailing?: React.ReactNode;
 }) {
   return (
     <div style={row}>
@@ -349,6 +358,7 @@ function DimSlider({
         onChange={(e) => onChange(Number(e.target.value))}
         style={{ flex: 1 }}
       />
+      {trailing}
     </div>
   );
 }

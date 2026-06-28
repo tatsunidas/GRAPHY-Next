@@ -175,6 +175,7 @@ export const ja: Record<string, string> = {
   "settings.field.showOverlay": "オーバーレイ情報を表示",
   "settings.field.showOverlay.help": "患者名・スライス番号などを画像上に表示します。",
   "settings.field.defaultZoom": "初期ズーム(%)",
+  "settings.field.cineFps": "シネ速度(fps)",
   "settings.sec.delete": "削除",
   "settings.field.confirmBeforeDelete": "削除前に確認する",
   "settings.field.deleteFilesOnDisk": "削除時にディスク上の DICOM ファイルも削除",

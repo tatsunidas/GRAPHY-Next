@@ -176,6 +176,7 @@ export const en: Record<string, string> = {
   "settings.field.showOverlay": "Show overlay info",
   "settings.field.showOverlay.help": "Show patient name, slice number, etc. on the image.",
   "settings.field.defaultZoom": "Default zoom (%)",
+  "settings.field.cineFps": "Cine speed (fps)",
   "settings.sec.delete": "Deletion",
   "settings.field.confirmBeforeDelete": "Confirm before delete",
   "settings.field.deleteFilesOnDisk": "Also delete DICOM files on disk",

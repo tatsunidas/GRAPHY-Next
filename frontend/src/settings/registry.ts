@@ -109,6 +109,7 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
             helpKey: "settings.field.showOverlay.help",
           },
           { key: "viewer.defaultZoom", labelKey: "settings.field.defaultZoom", type: "number", default: 100, min: 10, max: 800 },
+          { key: "viewer.cineFps", labelKey: "settings.field.cineFps", type: "number", default: 10, min: 1, max: 60 },
         ],
       },
     ],
