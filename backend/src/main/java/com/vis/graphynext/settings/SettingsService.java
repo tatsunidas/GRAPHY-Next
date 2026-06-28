@@ -15,10 +15,15 @@ import java.util.Map;
 @Service
 public class SettingsService {
 
-    private final SettingRepository repo;
+    /** デバッグモードのキー。値が変わったらログレベルを切り替える。 */
+    public static final String DEBUG_MODE_KEY = "general.debugMode";
 
-    public SettingsService(SettingRepository repo) {
+    private final SettingRepository repo;
+    private final DebugLogControl debugLogControl;
+
+    public SettingsService(SettingRepository repo, DebugLogControl debugLogControl) {
         this.repo = repo;
+        this.debugLogControl = debugLogControl;
     }
 
     @Transactional(readOnly = true)
@@ -39,6 +44,10 @@ public class SettingsService {
                 s.setValue(v);
                 repo.save(s);
             });
+            // デバッグモードが変わったらログレベルを即時反映
+            if (updates.containsKey(DEBUG_MODE_KEY)) {
+                debugLogControl.apply(Boolean.parseBoolean(updates.get(DEBUG_MODE_KEY)));
+            }
         }
         return getAll();
     }

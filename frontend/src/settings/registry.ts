@@ -71,6 +71,18 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
           },
         ],
       },
+      {
+        titleKey: "settings.sec.debug",
+        fields: [
+          {
+            key: "general.debugMode",
+            labelKey: "settings.field.debugMode",
+            type: "toggle",
+            default: false,
+            helpKey: "settings.field.debugMode.help",
+          },
+        ],
+      },
     ],
   },
   {

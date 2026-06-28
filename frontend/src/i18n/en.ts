@@ -71,6 +71,10 @@ export const en: Record<string, string> = {
   "settings.field.language": "Language",
   "settings.opt.lang.ja": "日本語",
   "settings.opt.lang.en": "English",
+  "settings.sec.debug": "Debug",
+  "settings.field.debugMode": "Debug mode",
+  "settings.field.debugMode.help":
+    "Emit debug-level logs (backend to standard output, frontend to the DevTools console).",
   "settings.sec.viewer": "Viewer",
   "settings.field.invertScroll": "Invert scroll direction",
   "settings.field.showOverlay": "Show overlay info",

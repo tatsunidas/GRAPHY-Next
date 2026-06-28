@@ -27,12 +27,29 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
       setLocale(value as Locale);
       return;
     }
+    // デバッグモードは frontend logger 用に localStorage も即時更新（backend へも保存し DEBUG 切替）
+    if (field.key === "general.debugMode") {
+      try {
+        localStorage.setItem("graphy.debug", value);
+      } catch {
+        // localStorage 不可でも backend 保存は続行
+      }
+    }
     setMap((prev) => ({ ...prev, [field.key]: value }));
     saveSettings({ [field.key]: value }).catch((e: unknown) => setError(String(e)));
   };
 
-  const valueOf = (field: FieldDef): string =>
-    field.key === "general.language" ? locale : (map[field.key] ?? String(field.default));
+  const valueOf = (field: FieldDef): string => {
+    if (field.key === "general.language") return locale;
+    if (field.key === "general.debugMode") {
+      try {
+        return localStorage.getItem("graphy.debug") === "true" ? "true" : "false";
+      } catch {
+        return "false";
+      }
+    }
+    return map[field.key] ?? String(field.default);
+  };
 
   return (
     <div style={overlay} onClick={onClose}>
