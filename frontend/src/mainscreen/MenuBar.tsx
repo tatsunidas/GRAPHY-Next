@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { type ToolKind, type ViewerKind } from "./Toolbar";
 import { useI18n } from "../i18n/i18n";
 
 interface MenuItem {
@@ -11,6 +12,8 @@ export function MenuBar({
   isStandalone,
   canImport,
   onImport,
+  onOpenTool,
+  onOpenViewer,
   onOpenSettings,
   onOpenDb,
   onOpenHelp,
@@ -18,6 +21,8 @@ export function MenuBar({
   isStandalone: boolean;
   canImport: boolean;
   onImport: () => void;
+  onOpenTool: (kind: ToolKind) => void;
+  onOpenViewer: (kind: ViewerKind) => void;
   onOpenSettings: () => void;
   onOpenDb: () => void;
   onOpenHelp: () => void;
@@ -35,11 +40,34 @@ export function MenuBar({
     {
       id: "file",
       label: t("main.menu.file"),
-      items: [{ label: t("main.import.action"), onClick: onImport, disabled: !canImport }],
+      items: [
+        { label: t("main.import.action"), onClick: onImport, disabled: !canImport },
+        { label: t("main.toolbar.export"), onClick: () => onOpenTool("export") },
+        { label: t("main.toolbar.nonDicomImport"), onClick: () => onOpenTool("nonDicomImport") },
+      ],
     },
     {
-      id: "tools",
-      label: t("main.menu.tools"),
+      id: "function",
+      label: t("main.menu.function"),
+      items: [
+        { label: t("main.toolbar.anonymizer"), onClick: () => onOpenTool("anonymizer") },
+        { label: t("main.toolbar.tagExtractor"), onClick: () => onOpenTool("tagExtractor") },
+        { label: t("main.toolbar.seriesExtractor"), onClick: () => onOpenTool("seriesExtractor") },
+      ],
+    },
+    {
+      id: "image",
+      label: t("main.menu.image"),
+      items: [
+        { label: t("main.toolbar.viewer2d"), onClick: () => onOpenViewer("2d") },
+        { label: t("main.toolbar.viewer3d"), onClick: () => onOpenViewer("3d") },
+        { label: t("main.toolbar.mpr"), onClick: () => onOpenViewer("mpr") },
+        { label: t("main.toolbar.slicer"), onClick: () => onOpenViewer("slicer") },
+      ],
+    },
+    {
+      id: "system",
+      label: t("main.menu.system"),
       items: [
         { label: t("app.btn.settingsTitle"), onClick: onOpenSettings },
         { label: t("app.btn.dbTitle"), onClick: onOpenDb, disabled: !isStandalone },

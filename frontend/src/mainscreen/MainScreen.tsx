@@ -80,6 +80,8 @@ export function MainScreen({
         isStandalone={isStandalone}
         canImport={canImport}
         onImport={handleImport}
+        onOpenTool={handleOpenTool}
+        onOpenViewer={handleOpenViewer}
         onOpenSettings={onOpenSettings}
         onOpenDb={onOpenDb}
         onOpenHelp={onOpenHelp}

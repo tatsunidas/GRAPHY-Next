@@ -41,6 +41,9 @@ export const en: Record<string, string> = {
 
   // main screen
   "main.menu.file": "File",
+  "main.menu.function": "Function",
+  "main.menu.image": "Image",
+  "main.menu.system": "System",
   "main.menu.tools": "Tools",
   "main.menu.help": "Help",
   "main.toolbar.refresh": "Refresh",

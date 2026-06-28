@@ -41,6 +41,9 @@ export const ja: Record<string, string> = {
 
   // main screen
   "main.menu.file": "ファイル",
+  "main.menu.function": "機能",
+  "main.menu.image": "画像",
+  "main.menu.system": "システム",
   "main.menu.tools": "ツール",
   "main.menu.help": "ヘルプ",
   "main.toolbar.refresh": "更新",
