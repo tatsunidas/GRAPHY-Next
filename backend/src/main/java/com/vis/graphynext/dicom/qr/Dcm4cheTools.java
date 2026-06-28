@@ -81,11 +81,15 @@ public class Dcm4cheTools {
         log.debug("exec: {}", String.join(" ", command)); // 外部ツール起動: トラブル時に DEBUG で確認
         Process p = new ProcessBuilder(command).redirectErrorStream(true).start();
         StringBuilder out = new StringBuilder();
+        // 暴走ツール対策: 取り込みは上限まで。超過分はドレインのみ（ブロック回避）し蓄積しない。
+        final int maxChars = 64 * 1024;
         try (var r = p.inputReader()) {
             char[] buf = new char[4096];
             int n;
             while ((n = r.read(buf)) != -1) {
-                out.append(buf, 0, n);
+                if (out.length() < maxChars) {
+                    out.append(buf, 0, Math.min(n, maxChars - out.length()));
+                }
             }
             if (!p.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) {
                 p.destroyForcibly();

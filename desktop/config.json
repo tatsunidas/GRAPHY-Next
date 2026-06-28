@@ -4,7 +4,8 @@
     "profile": "standalone",
     "healthPath": "/api/status",
     "healthTimeoutMs": 60000,
-    "jarName": "graphy-next-backend.jar"
+    "jarName": "graphy-next-backend.jar",
+    "maxHeapMb": 0
   },
   "devServerUrl": "http://localhost:5173",
   "window": {

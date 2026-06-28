@@ -16,7 +16,10 @@ import jakarta.persistence.Table;
 @Table(name = "dicom_instance", indexes = {
         @Index(name = "ix_patient", columnList = "patientId"),
         @Index(name = "ix_study", columnList = "studyInstanceUid"),
-        @Index(name = "ix_series", columnList = "seriesInstanceUid")
+        @Index(name = "ix_series", columnList = "seriesInstanceUid"),
+        // 統計集計用（モダリティ別・時系列）
+        @Index(name = "ix_modality", columnList = "modality"),
+        @Index(name = "ix_studydate", columnList = "studyDate")
 })
 public class DicomInstance {
 

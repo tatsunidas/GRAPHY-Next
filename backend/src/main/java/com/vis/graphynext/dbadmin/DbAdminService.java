@@ -7,6 +7,7 @@ import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.VR;
 import org.dcm4che3.io.DicomInputStream;
+import org.dcm4che3.io.DicomInputStream.IncludeBulkData;
 import org.dcm4che3.io.DicomOutputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -124,6 +125,9 @@ public class DbAdminService {
         Attributes fmi;
         Attributes ds;
         try (DicomInputStream in = new DicomInputStream(file.toFile())) {
+            // ピクセル等の bulk data はヒープに載せずファイル参照のまま扱う（メモリ削減）。
+            // 書込先は別ファイル(temp)なので、書込時に元ファイルから bulk をコピーできる。
+            in.setIncludeBulkData(IncludeBulkData.URI);
             fmi = in.readFileMetaInformation();
             ds = in.readDataset();
         }

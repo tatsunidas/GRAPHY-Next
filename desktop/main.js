@@ -73,10 +73,14 @@ function startBackend() {
     );
   }
   const javaCmd = resolveJava();
-  console.log(`[backend] starting: ${jar} (java=${javaCmd}, profile=${PROFILE}, port=${PORT})`);
+  // JVM ヒープ上限（config.backend.maxHeapMb、0/未設定なら JVM 既定）。画像処理に向けて調整可能。
+  const maxHeapMb = Number(process.env.GRAPHY_MAX_HEAP_MB || cfg.backend.maxHeapMb || 0);
+  const jvmArgs = maxHeapMb > 0 ? [`-Xmx${maxHeapMb}m`] : [];
+  console.log(`[backend] starting: ${jar} (java=${javaCmd}, profile=${PROFILE}, port=${PORT}, maxHeapMb=${maxHeapMb || "default"})`);
   backendProc = spawn(
     javaCmd,
     [
+      ...jvmArgs,
       "-jar",
       jar,
       `--spring.profiles.active=${PROFILE}`,
