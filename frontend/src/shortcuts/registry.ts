@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 // キーボードショートカットの単一ソース。fw/keyboard-shortcuts.md と同期すること。
 // combo: "Mod+," / "Mod+Shift+Z" / "Escape" / "?" / "ArrowUp" / "Space" / "W" など。
 //   Mod = Win/Linux:Ctrl, macOS:Cmd。

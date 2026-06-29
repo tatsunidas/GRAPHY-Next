@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 import { useEffect, useState } from "react";
 import {
   fetchStudies,
@@ -18,16 +22,26 @@ export function StudyList({
   filters,
   reloadKey,
   mode,
+  onSelectStudy,
+  onSelectSeries,
 }: {
   filters?: StudyFilters | null;
   reloadKey?: number;
   mode: ViewerMode;
+  onSelectStudy?: (s: Study | null) => void;
+  onSelectSeries?: (s: Series | null) => void;
 }) {
   const { t } = useI18n();
   const [studies, setStudies] = useState<Study[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
   const [page, setPage] = useState(0);
+
+  const handleSelectStudy = (s: Study | null) => {
+    setSelectedStudy(s);
+    onSelectStudy?.(s);
+    onSelectSeries?.(null); // スタディ変更時はシリーズ選択をリセット
+  };
 
   const filterKey = JSON.stringify(filters ?? null);
   useEffect(() => {
@@ -78,7 +92,7 @@ export function StudyList({
               return (
                 <tr
                   key={s.studyInstanceUid}
-                  onClick={() => setSelectedStudy(selected ? null : s)}
+                  onClick={() => handleSelectStudy(selected ? null : s)}
                   style={{
                     borderBottom: "1px solid #eee",
                     cursor: "pointer",
@@ -122,7 +136,7 @@ export function StudyList({
         </div>
       )}
 
-      {selectedStudy && <SeriesNavigator study={selectedStudy} mode={mode} />}
+      {selectedStudy && <SeriesNavigator study={selectedStudy} mode={mode} onSelectSeries={onSelectSeries} />}
     </section>
   );
 }
@@ -136,11 +150,24 @@ const pageBtn: React.CSSProperties = {
   fontSize: 13,
 };
 
-function SeriesNavigator({ study, mode }: { study: Study; mode: ViewerMode }) {
+function SeriesNavigator({
+  study,
+  mode,
+  onSelectSeries,
+}: {
+  study: Study;
+  mode: ViewerMode;
+  onSelectSeries?: (s: Series | null) => void;
+}) {
   const { t } = useI18n();
   const [series, setSeries] = useState<Series[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedSeries, setSelectedSeries] = useState<Series | null>(null);
+
+  const handleSelectSeries = (se: Series | null) => {
+    setSelectedSeries(se);
+    onSelectSeries?.(se);
+  };
 
   useEffect(() => {
     setSeries(null);
@@ -176,7 +203,7 @@ function SeriesNavigator({ study, mode }: { study: Study; mode: ViewerMode }) {
               return (
                 <tr
                   key={se.seriesInstanceUid}
-                  onClick={() => setSelectedSeries(selected ? null : se)}
+                  onClick={() => handleSelectSeries(selected ? null : se)}
                   style={{
                     borderBottom: "1px solid #eef1f4",
                     cursor: "pointer",

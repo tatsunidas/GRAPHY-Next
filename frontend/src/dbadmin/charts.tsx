@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 // 依存ライブラリ無しの軽量 SVG チャート（棒・横棒・円）。
 import { useI18n } from "../i18n/i18n";
 

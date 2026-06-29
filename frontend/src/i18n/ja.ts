@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 // 日本語辞書。キーは英語辞書(en.ts)と一致させること。
 export const ja: Record<string, string> = {
   // common
@@ -60,7 +64,12 @@ export const ja: Record<string, string> = {
   "viewer2d.title": "2D Viewer",
   "viewer2d.empty": "左のツリーからシリーズを選び（＋）でタイルを追加してください。",
   "viewer2d.removeTile": "タイルを削除",
-  "viewer2d.lastWeek": "直近1週間",
+  "viewer2d.removePatient": "患者を閉じる",
+  "viewer2d.searchPrompt": "患者IDまたは患者氏名を入力して検索してください。",
+  "viewer2d.layout": "レイアウト",
+  "viewer2d.layout.auto": "自動",
+  "viewer2d.layout.cols": "列",
+  "viewer2d.tileCount": "{{n}} タイル",
   "main.import.action": "インポート",
   "main.import.running": "インポート中…",
   "main.import.result": "取込 {{imported}} 件 / スキップ {{skipped}} / 失敗 {{failed}}",
@@ -94,6 +103,7 @@ export const ja: Record<string, string> = {
   "series.view.slider": "スライダー",
   "series.view.grid": "グリッド",
   "series.columns": "列数",
+  "series.grid.reset": "Default",
   "series.grid.disabled": "マルチチャンネル / 動画シリーズではグリッド表示は使用できません",
   "series.grid.warnMany": "このシリーズは {{n}} 枚あります。グリッド表示は描画/メモリ負荷が大きくなる可能性があります。切り替えますか？",
   "series.grid.linked": "W/L・パン・ズーム・回転・反転はシリーズ全体にリンクします",

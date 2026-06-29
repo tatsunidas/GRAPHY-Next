@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 import { apiBase } from "../apiBase";
 
 export type ViewerMode = "standalone" | "web";

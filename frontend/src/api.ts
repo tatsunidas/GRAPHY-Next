@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 import { httpGet, httpSend } from "./http";
 
 // apiBase は apiBase.ts へ分離（循環インポート回避）。互換のため再エクスポート。

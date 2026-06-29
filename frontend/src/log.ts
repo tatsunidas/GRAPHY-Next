@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 // 軽量ロガー。debug は dev または localStorage("graphy.debug")="true" のときのみ出力。
 // 過剰ログを避けつつ、リスク箇所・未検証箇所のトラブル追跡用に debug を残せる。
 

@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 import { useEffect, useState } from "react";
 import { SETTINGS_REGISTRY, type CategoryDef, type FieldDef } from "./registry";
 import { fetchSettings, saveSettings, type SettingsMap } from "./settingsApi";

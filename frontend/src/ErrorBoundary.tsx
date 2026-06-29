@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { log } from "./log";
 

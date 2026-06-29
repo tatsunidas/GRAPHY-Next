@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 import { useI18n } from "../i18n/i18n";
 
 export type ViewerKind = "2d" | "3d" | "mpr" | "slicer";

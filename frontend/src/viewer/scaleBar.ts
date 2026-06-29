@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 import { type Types } from "@cornerstonejs/core";
 
 /** 画面に重ねるスケールバー（Caliper）の算出結果。 */

@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 // API のベース URL を解決する。
 // - ブラウザ / Vite dev / Web 本番: 同一オリジン（相対パス）。空文字を返す。
 // - Electron(file://): preload が window.__GRAPHY_API_BASE__ に backend の URL を注入する。

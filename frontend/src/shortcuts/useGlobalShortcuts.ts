@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 import { useEffect } from "react";
 import { SHORTCUTS, matchesCombo } from "./registry";
 

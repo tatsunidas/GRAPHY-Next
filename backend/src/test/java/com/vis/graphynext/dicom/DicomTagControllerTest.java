@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 package com.vis.graphynext.dicom;
 
 import org.junit.jupiter.api.Test;

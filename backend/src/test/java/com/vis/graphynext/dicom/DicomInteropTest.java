@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 package com.vis.graphynext.dicom;
 
 import com.vis.graphynext.dicom.store.DicomStorageService;
@@ -22,6 +26,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -86,9 +91,9 @@ class DicomInteropTest {
             Path file = DicomPhantomFactory.writeFile(
                     Files.createTempFile("interop", ".dcm"), ds, UID.ExplicitVRLittleEndian);
 
-            int exit = run(storescu.toString(),
+            int exit = run(buildCmd(storescu,
                     "-c", "GRAPHYSTORE@127.0.0.1:" + port,
-                    file.toString());
+                    file.toString()));
 
             assertEquals(0, exit, "stock storescu の C-STORE は成功すべき");
             assertEquals(1, storage.findMatches(null, "1.2.interop.study", null, null).size(),
@@ -106,56 +111,118 @@ class DicomInteropTest {
         Path dicomdir = tmp.resolve("peer").resolve("DICOMDIR");
         Files.createDirectories(dicomdir.getParent());
 
-        Process peer = new ProcessBuilder(dcmqrscp.toString(),
+        Process peer = new ProcessBuilder(buildCmd(dcmqrscp,
                 "-b", "DCMQRSCP:" + port,
-                "--dicomdir", dicomdir.toString())
+                "--dicomdir", dicomdir.toString()))
                 .redirectErrorStream(true)
-                .redirectOutput(tmp.resolve("dcmqrscp.log").toFile())
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
                 .start();
         try {
             assertTrue(waitForPort(port, 10_000), "dcmqrscp が listen を開始しない");
             EchoResult r = new DicomEchoScu().echo("127.0.0.1", port, "DCMQRSCP", "GRAPHYNEXT");
             assertTrue(r.success(), () -> "stock dcmqrscp への C-ECHO は成功すべき: " + r.message());
         } finally {
-            peer.destroy();
-            peer.waitFor(10, TimeUnit.SECONDS);
-            if (peer.isAlive()) {
-                peer.destroyForcibly();
-            }
+            killProcess(peer);
         }
     }
 
     // --- helpers ---
 
+    private static boolean isWindows() {
+        return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+    }
+
+    /**
+     * dcm4che CLI ツールを検索する。
+     * Windows では .bat 拡張子付きファイルを優先し、DCM4CHE_HOME の他に
+     * Program Files 配下の dcm4che-* ディレクトリも探す。
+     */
     private static Path findTool(String name) {
-        List<Path> candidates = new ArrayList<>();
+        List<Path> dirs = new ArrayList<>();
+
+        // DCM4CHE_HOME 環境変数
         String home = System.getenv("DCM4CHE_HOME");
         if (home != null && !home.isBlank()) {
-            candidates.add(Path.of(home, "bin", name));
+            dirs.add(Path.of(home, "bin"));
         }
+
+        // $HOME/dcm4che-*/bin
         Path userHome = Path.of(System.getProperty("user.home"));
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(userHome, "dcm4che-*")) {
-            for (Path d : stream) {
-                candidates.add(d.resolve("bin").resolve(name));
+            for (Path d : stream) dirs.add(d.resolve("bin"));
+        } catch (IOException ignore) {}
+
+        // Windows: Program Files 配下の dcm4che-*/bin
+        if (isWindows()) {
+            for (String pf : new String[]{"ProgramFiles", "ProgramFiles(x86)"}) {
+                String pfDir = System.getenv(pf);
+                if (pfDir != null) {
+                    try (DirectoryStream<Path> stream =
+                                 Files.newDirectoryStream(Path.of(pfDir), "dcm4che-*")) {
+                        for (Path d : stream) dirs.add(d.resolve("bin"));
+                    } catch (IOException ignore) {}
+                }
             }
-        } catch (IOException ignore) {
-            // ホーム走査不可なら候補なし
         }
-        for (Path c : candidates) {
-            if (Files.isExecutable(c)) {
-                return c;
+
+        for (Path dir : dirs) {
+            // Windows は .bat を優先（Unix shell script より先に検索）
+            if (isWindows()) {
+                Path bat = dir.resolve(name + ".bat");
+                if (Files.exists(bat)) return bat;
             }
+            Path plain = dir.resolve(name);
+            if (Files.isExecutable(plain)) return plain;
         }
         return null;
     }
 
-    private static int run(String... cmd) throws Exception {
+    /**
+     * ツールパスとオプションからコマンドリストを構築する。
+     * Windows の .bat ファイルは ProcessBuilder では直接実行できないため cmd /c 経由にする。
+     */
+    private static List<String> buildCmd(Path tool, String... args) {
+        List<String> cmd = new ArrayList<>();
+        if (isWindows() && tool.toString().toLowerCase(Locale.ROOT).endsWith(".bat")) {
+            cmd.add("cmd");
+            cmd.add("/c");
+        }
+        cmd.add(tool.toString());
+        cmd.addAll(List.of(args));
+        return cmd;
+    }
+
+    private static int run(List<String> cmd) throws Exception {
         Process p = new ProcessBuilder(cmd).redirectErrorStream(true).inheritIO().start();
         if (!p.waitFor(30, TimeUnit.SECONDS)) {
-            p.destroyForcibly();
+            killProcess(p);
             throw new IllegalStateException("プロセスがタイムアウト: " + String.join(" ", cmd));
         }
         return p.exitValue();
+    }
+
+    /**
+     * プロセスを終了する。Windows では cmd /c 経由で孫プロセスが残るため
+     * taskkill /F /T でプロセスツリーごと強制終了し、ファイルロック解放を待つ。
+     */
+    private static void killProcess(Process p) throws InterruptedException {
+        if (isWindows()) {
+            try {
+                new ProcessBuilder("taskkill", "/F", "/T", "/PID", String.valueOf(p.pid()))
+                        .redirectErrorStream(true)
+                        .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                        .start()
+                        .waitFor(5, TimeUnit.SECONDS);
+            } catch (IOException ignore) {
+                p.destroyForcibly();
+            }
+        } else {
+            p.destroy();
+            p.waitFor(10, TimeUnit.SECONDS);
+            if (p.isAlive()) p.destroyForcibly();
+        }
+        // ファイルロックの解放を待つ
+        Thread.sleep(300);
     }
 
     private static boolean waitForPort(int port, long timeoutMs) {

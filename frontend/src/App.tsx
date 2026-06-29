@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 import { useEffect, useState } from "react";
 import { fetchStatus, type AppStatus } from "./api";
 import { SettingsDialog } from "./settings/SettingsDialog";

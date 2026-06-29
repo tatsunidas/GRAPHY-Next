@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 import { type ImageInfo, type PixelSample } from "./imageInfo";
 import { useI18n } from "../i18n/i18n";
 

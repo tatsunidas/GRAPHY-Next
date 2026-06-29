@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 // 環境設定の項目定義（宣言的レジストリ）。
 // label/help/options/section.title/category.label は i18n キー（t() で解決）。
 // ここにカテゴリ/セクション/フィールドを追加するだけで、ダイアログ右パネルが自動描画する。

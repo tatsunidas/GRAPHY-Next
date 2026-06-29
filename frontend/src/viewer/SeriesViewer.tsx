@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { getRenderingEngine, type Types } from "@cornerstonejs/core";
 import { ToolGroupManager } from "@cornerstonejs/tools";
@@ -38,11 +42,14 @@ export function SeriesViewer({
   mode,
   studyUid,
   seriesUid,
+  fillHeight = false,
 }: {
   instances: Instance[];
   mode: ViewerMode;
   studyUid: string;
   seriesUid: string;
+  /** タイル表示用: 親コンテナの高さに追従する（flex:1 レイアウト）。 */
+  fillHeight?: boolean;
 }) {
   const { t } = useI18n();
   const imageIds = useMemo(
@@ -97,7 +104,6 @@ export function SeriesViewer({
       });
   }, []);
   const [gridCols, setGridCols] = useState(0); // 0=Slider(SingleGridView), >0=Grid(FilmGrid) 列数
-  const [lastCols, setLastCols] = useState(3);
 
   const cc = Math.min(Math.max(0, c), layout.nC - 1);
   const tc = Math.min(Math.max(0, tIdx), layout.nT - 1);
@@ -131,8 +137,6 @@ export function SeriesViewer({
     setGridCols(cols);
     if (cols === 0) {
       setZ(0); // Slider に戻ったら 1 枚目を表示
-    } else {
-      setLastCols(cols);
     }
   };
 
@@ -228,7 +232,7 @@ export function SeriesViewer({
   const toggle = (k: keyof OverlayState) => setOverlays((o) => ({ ...o, [k]: !o[k] }));
 
   return (
-    <div ref={rootRef} tabIndex={0} style={root}>
+    <div ref={rootRef} tabIndex={0} style={fillHeight ? { ...root, flex: 1, display: "flex", flexDirection: "column", minHeight: 0 } : root}>
       {gridOn ? (
         <div style={gridScroll}>
           <div style={{ display: "grid", gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))`, gap: 6 }}>
@@ -248,37 +252,10 @@ export function SeriesViewer({
           </div>
         </div>
       ) : (
-        <Viewer2D imageIds={zStack} imageIndex={zc} overlays={overlays} />
+        <Viewer2D imageIds={zStack} imageIndex={zc} overlays={overlays} fill={fillHeight} />
       )}
 
       <div style={controls}>
-        {/* 表示モード切替（SliderView / FilmGrid 列数）。 */}
-        <div style={row}>
-          <button
-            onClick={() => switchMode(gridOn ? 0 : lastCols)}
-            disabled={gridDisabled}
-            style={btn}
-            title={t("series.view.toggle")}
-          >
-            {gridOn ? t("series.view.slider") : t("series.view.grid")}
-          </button>
-          <span style={dimLabel}>{t("series.columns")}</span>
-          <select
-            value={gridOn ? gridCols : 0}
-            disabled={gridDisabled}
-            onChange={(e) => switchMode(Number(e.target.value))}
-            style={selectBox}
-          >
-            <option value={0}>{t("series.view.slider")}</option>
-            {[2, 3, 4, 5, 6].map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
-          {gridDisabled && <span style={hint}>{t("series.grid.disabled")}</span>}
-        </div>
-
         {/* GridView の操作バー（W/L・Pan・Zoom はドラッグ、回転/反転/Fit はボタン。全セルにリンク）。 */}
         {gridOn && (
           <div style={row}>
@@ -316,12 +293,24 @@ export function SeriesViewer({
           </>
         )}
 
-        {/* オーバーレイ On/Off。 */}
+        {/* オーバーレイ On/Off。列数ドロップダウン（Reset=SliderView, 1〜7=GridView）。 */}
         <div style={row}>
           <Check label={t("series.ov.text")} checked={overlays.text} onChange={() => toggle("text")} />
           <Check label={t("series.ov.caliper")} checked={overlays.caliper} onChange={() => toggle("caliper")} />
           <Check label={t("series.ov.orientation")} checked={overlays.orientation} onChange={() => toggle("orientation")} />
           <Check label={t("series.ov.roi")} checked={overlays.roi} onChange={() => toggle("roi")} disabled />
+          <select
+            value={gridOn ? gridCols : 0}
+            disabled={gridDisabled}
+            onChange={(e) => switchMode(Number(e.target.value))}
+            style={selectBox}
+          >
+            <option value={0}>{t("series.grid.reset")}</option>
+            {[1, 2, 3, 4, 5, 6, 7].map((n) => (
+              <option key={n} value={n}>{n}</option>
+            ))}
+          </select>
+          {gridDisabled && <span style={hint}>{t("series.grid.disabled")}</span>}
         </div>
       </div>
     </div>

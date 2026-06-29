@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { RenderingEngine, Enums, EVENTS, type Types } from "@cornerstonejs/core";
 import {
@@ -63,6 +67,7 @@ export function Viewer2D({
   overlays,
   compact,
   height,
+  fill,
   syncGroupId,
 }: {
   imageIds: string[];
@@ -70,8 +75,10 @@ export function Viewer2D({
   overlays?: ViewerOverlays;
   /** グリッドセル用: ツール/状態バー/ツールバー/情報パネルを省き、画像＋オーバーレイのみ表示。 */
   compact?: boolean;
-  /** 画像領域の高さ(px)。既定 512。 */
+  /** 画像領域の高さ(px)。既定 512。fill=true のときは無視。 */
   height?: number;
+  /** タイル表示用: 親の高さに追従して canvas を伸縮する（flex:1 レイアウト）。 */
+  fill?: boolean;
   /** 指定すると、共有ツールグループ＋camera/VOI 同期に参加（GridView リンク）。 */
   syncGroupId?: string;
 }) {
@@ -98,7 +105,7 @@ export function Viewer2D({
   // ライブの WW/WL（左ドラッグで変更。モダリティ値=HU 等の単位）。
   const [voi, setVoi] = useState<{ ww: number; wc: number } | null>(null);
   // 右の Image Info パネルの表示。Off で画像をその領域まで広げる。
-  const [showInfo, setShowInfo] = useState(true);
+  const [showInfo, setShowInfo] = useState(false);
   // 表示状態の Undo/Redo（クライアント側履歴。DICOM 不要）。
   const historyRef = useRef<ViewSnapshot[]>([]);
   const histIdxRef = useRef(-1);
@@ -440,7 +447,7 @@ export function Viewer2D({
   const cursorXY = sample ? `${sample.fx.toFixed(1)}, ${sample.fy.toFixed(1)}` : "—";
 
   const imagePanel = (
-    <div style={{ ...wrap, height: height ?? 512 }}>
+    <div style={fill ? { ...wrap, flex: 1, height: "auto" } : { ...wrap, height: height ?? 512 }}>
       {/* 深層: ピクセル canvas（Cornerstone3D が内部に canvas を生成） */}
           <div ref={elementRef} style={pixelLayer} onContextMenu={(e) => e.preventDefault()} />
           {/* 患者の向き（A/P・R/L・H/F）。四辺に表示。pointer-events:none。 */}
@@ -483,8 +490,17 @@ export function Viewer2D({
   if (compact) return imagePanel;
 
   return (
-    <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-      <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+    <div style={{
+      display: "flex",
+      gap: 12,
+      alignItems: fill ? "stretch" : "flex-start",
+      ...(fill ? { flex: 1, minHeight: 0 } : {}),
+    }}>
+      <div style={{
+        flex: "1 1 auto",
+        minWidth: 0,
+        ...(fill ? { display: "flex", flexDirection: "column", minHeight: 0 } : {}),
+      }}>
         {/* 画像外の状態ラベルエリア（必須情報）。 */}
         <div style={statusBar}>
           <StatusItem label={t("viewer.status.zoom")} value={`${Math.round(transform.zoom * 100)}%`} />

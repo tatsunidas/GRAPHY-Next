@@ -1,5 +1,9 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 import { useState } from "react";
-import { importPaths, type AppStatus, type StudyFilters } from "../api";
+import { importPaths, type AppStatus, type Study, type Series, type StudyFilters } from "../api";
 import { desktop } from "../desktopBridge";
 import { useI18n } from "../i18n/i18n";
 import { StudyList } from "../StudyList";
@@ -33,6 +37,8 @@ export function MainScreen({
   const [filters, setFilters] = useState<StudyFilters | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [importMsg, setImportMsg] = useState<string | null>(null);
+  const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
+  const [selectedSeries, setSelectedSeries] = useState<Series | null>(null);
 
   const handleImport = async () => {
     const d = desktop();
@@ -53,11 +59,22 @@ export function MainScreen({
   // 各ビューア起動。2D Viewer は別ウィンドウ（desktop）/ ハッシュ（web）で開く。3D/MPR/Slicer は順次。
   const handleOpenViewer = (kind: "2d" | "3d" | "mpr" | "slicer") => {
     if (kind === "2d") {
+      // 選択中のスタディ/シリーズをコンテキストとして localStorage に書き込む。
+      // Viewer2DScreen がマウント時または storage イベントで読み取る。
+      if (selectedStudy) {
+        const ctx = {
+          study: selectedStudy,
+          series: selectedSeries ?? undefined,
+          ts: Date.now(),
+        };
+        localStorage.setItem("graphy-viewer-ctx", JSON.stringify(ctx));
+      }
       const d = desktop();
       if (d?.openViewer) {
         void d.openViewer("2dviewer");
       } else {
-        window.open(`${window.location.pathname}#2dviewer`, "_blank");
+        // named target でタブを再利用（既に開いていれば同タブにフォーカス）。
+        window.open(`${window.location.pathname}#2dviewer`, "graphy-2dviewer");
       }
       return;
     }
@@ -101,7 +118,13 @@ export function MainScreen({
       <div style={middle}>
         <SearchPanel onSearch={setFilters} />
         <div style={treeArea}>
-          <StudyList filters={filters} reloadKey={reloadKey} mode={isStandalone ? "standalone" : "web"} />
+          <StudyList
+            filters={filters}
+            reloadKey={reloadKey}
+            mode={isStandalone ? "standalone" : "web"}
+            onSelectStudy={(s) => { setSelectedStudy(s); setSelectedSeries(null); }}
+            onSelectSeries={setSelectedSeries}
+          />
         </div>
       </div>
       <StatusBar status={status} error={error} />

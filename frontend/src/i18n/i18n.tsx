@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 import { createContext, useContext, useState, type ReactNode } from "react";
 import { ja } from "./ja";
 import { en } from "./en";

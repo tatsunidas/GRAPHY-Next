@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 import { useEffect, useState } from "react";
 import { type ToolKind, type ViewerKind } from "./Toolbar";
 import { useI18n } from "../i18n/i18n";

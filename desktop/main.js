@@ -38,6 +38,8 @@ const DEV = process.env.GRAPHY_DEV === "1";
 const EXTERNAL_BACKEND = process.env.GRAPHY_BACKEND_EXTERNAL === "1";
 
 let backendProc = null;
+// 2D Viewer ウィンドウのシングルトン参照。既に開いている場合はフォーカスして再利用する。
+let viewer2dWin = null;
 
 /** 同梱 / 開発時の backend jar のパスを解決する。 */
 function resolveBackendJar() {
@@ -277,7 +279,18 @@ function createViewerWindow(screen) {
 }
 
 ipcMain.handle("graphy:open-viewer", (_e, screen) => {
-  createViewerWindow(String(screen || "2dviewer"));
+  const s = String(screen || "2dviewer");
+  if (s === "2dviewer") {
+    // 既に開いていればフォーカスして再利用（シングルトン）。
+    if (viewer2dWin && !viewer2dWin.isDestroyed()) {
+      viewer2dWin.focus();
+      return;
+    }
+    viewer2dWin = createViewerWindow("2dviewer");
+    viewer2dWin.on("closed", () => { viewer2dWin = null; });
+  } else {
+    createViewerWindow(s);
+  }
 });
 
 // インポート: ネイティブのファイル/フォルダ選択ダイアログ。選んだパスを返す。

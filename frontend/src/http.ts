@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 // API 共通の fetch ラッパ。backend の構造化エラー({status,error,message,path})を解析し、
 // 失敗は必ずログに残す。各 api モジュールはこれを使う。
 import { apiBase } from "./apiBase";

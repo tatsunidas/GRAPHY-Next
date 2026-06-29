@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 import { useSyncExternalStore } from "react";
 
 /** 画像上テキストの 1 項目。tag は 8 桁hex（例 "00100010"）か特殊トークン "AGE"。 */

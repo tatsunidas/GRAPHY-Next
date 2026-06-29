@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
 // English dictionary. Keys must match the Japanese dictionary (ja.ts).
 export const en: Record<string, string> = {
   // common
@@ -60,7 +64,12 @@ export const en: Record<string, string> = {
   "viewer2d.title": "2D Viewer",
   "viewer2d.empty": "Pick a series from the left tree (＋) to add a tile.",
   "viewer2d.removeTile": "Remove tile",
-  "viewer2d.lastWeek": "last week",
+  "viewer2d.removePatient": "Close patient",
+  "viewer2d.searchPrompt": "Enter patient ID or name to search.",
+  "viewer2d.layout": "Layout",
+  "viewer2d.layout.auto": "Auto",
+  "viewer2d.layout.cols": "cols",
+  "viewer2d.tileCount": "{{n}} tiles",
   "main.import.action": "Import",
   "main.import.running": "Importing…",
   "main.import.result": "Imported {{imported}} / Skipped {{skipped}} / Failed {{failed}}",
@@ -95,6 +104,7 @@ export const en: Record<string, string> = {
   "series.view.slider": "Slider",
   "series.view.grid": "Grid",
   "series.columns": "Columns",
+  "series.grid.reset": "Default",
   "series.grid.disabled": "Grid view is unavailable for multi-channel / video series",
   "series.grid.warnMany": "This series has {{n}} slices. Grid view may be slow / memory-heavy. Switch anyway?",
   "series.grid.linked": "W/L, pan, zoom, rotate and flip are linked across the series",
