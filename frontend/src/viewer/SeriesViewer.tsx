@@ -43,6 +43,8 @@ export function SeriesViewer({
   studyUid,
   seriesUid,
   fillHeight = false,
+  syncSlice,
+  onSliceChange,
 }: {
   instances: Instance[];
   mode: ViewerMode;
@@ -50,6 +52,10 @@ export function SeriesViewer({
   seriesUid: string;
   /** タイル表示用: 親コンテナの高さに追従する（flex:1 レイアウト）。 */
   fillHeight?: boolean;
+  /** Series Sync: 外部から受け取る比例スライス位置。自分が発火源のときは null。 */
+  syncSlice?: { z: number; nZ: number } | null;
+  /** Series Sync / Fusion: スライス変化を上位に通知するコールバック。imageId は現在スライスの Cornerstone3D imageId。 */
+  onSliceChange?: (z: number, nZ: number, imageId: string) => void;
 }) {
   const { t } = useI18n();
   const imageIds = useMemo(
@@ -109,6 +115,9 @@ export function SeriesViewer({
   const tc = Math.min(Math.max(0, tIdx), layout.nT - 1);
   const zStack = layout.zStack(cc, tc);
   const nZ = zStack.length;
+  // Fusion コールバック用: zStack の最新値をエフェクト内で参照するためのリーフ。
+  const zStackRef = useRef(zStack);
+  zStackRef.current = zStack;
   const zc = Math.min(Math.max(0, z), nZ - 1);
 
   // マルチチャンネル / 動画(ビデオ UID) / スライス1枚 では GridView を無効化。
@@ -228,6 +237,29 @@ export function SeriesViewer({
       el.removeEventListener("wheel", onWheel);
     };
   }, [nZ, gridOn]);
+
+  // ── シリーズ Sync ─────────────────────────────────────────
+
+  // 受信した syncSlice に比例するスライス位置へ移動する。
+  // ループ防止: setZ を呼ぶ前に syncDrivenRef を立て、onSliceChange コールバック側で落とす。
+  const syncDrivenRef = useRef(false);
+
+  useEffect(() => {
+    if (!syncSlice || syncSlice.nZ <= 0 || nZ <= 0) return;
+    const frac = syncSlice.z / Math.max(1, syncSlice.nZ - 1);
+    const targetZ = Math.round(frac * Math.max(0, nZ - 1));
+    syncDrivenRef.current = true;
+    setZ(Math.max(0, Math.min(nZ - 1, targetZ)));
+  }, [syncSlice, nZ]);
+
+  // スライス変化を上位に通知する。Sync 受信によって動いた場合は通知しない（ループ防止）。
+  useEffect(() => {
+    if (syncDrivenRef.current) {
+      syncDrivenRef.current = false;
+      return;
+    }
+    onSliceChange?.(zc, nZ, zStackRef.current[zc] ?? "");
+  }, [zc, nZ, onSliceChange]);
 
   const toggle = (k: keyof OverlayState) => setOverlays((o) => ({ ...o, [k]: !o[k] }));
 

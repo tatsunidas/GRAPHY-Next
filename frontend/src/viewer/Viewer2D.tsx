@@ -2,8 +2,8 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import { useEffect, useMemo, useRef, useState } from "react";
-import { RenderingEngine, Enums, EVENTS, type Types } from "@cornerstonejs/core";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { RenderingEngine, Enums, EVENTS, utilities, type Types } from "@cornerstonejs/core";
 import {
   ToolGroupManager,
   PanTool,
@@ -22,6 +22,8 @@ import { useOverlayConfig } from "./overlayConfig";
 import { ImageInfoPanel } from "./ImageInfoPanel";
 import { matchesCombo } from "../shortcuts/registry";
 import { useI18n } from "../i18n/i18n";
+import { LutDialog } from "./LutDialog";
+import type { LutData } from "../api";
 
 type ViewSnapshot = { transform: ViewTransform; voi: { lower: number; upper: number } | null };
 
@@ -182,6 +184,40 @@ export function Viewer2D({
     vp.render();
     setInverted(!cur);
   };
+
+  // ── LUT / カラーマップ ─────────────────────────────────────────
+
+  const [showLutDialog, setShowLutDialog] = useState(false);
+  const [activeLutName, setActiveLutName] = useState<string | null>(null);
+
+  /** LUT データを Cornerstone3D に登録して適用する。null でグレースケールにリセット。 */
+  const applyLut = useCallback((lut: LutData | null) => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    if (lut === null) {
+      // グレースケールにリセット
+      vp.setProperties({ colormap: undefined });
+      vp.render();
+      setActiveLutName(null);
+      return;
+    }
+    const colormapName = `graphy-lut-${lut.name}`;
+    // まだ登録されていなければ登録する
+    if (!utilities.colormap.getColormap(colormapName)) {
+      const rgbPoints: number[] = [];
+      for (let i = 0; i < 256; i++) {
+        rgbPoints.push(i / 255, lut.r[i] / 255, lut.g[i] / 255, lut.b[i] / 255);
+      }
+      utilities.colormap.registerColormap({
+        ColorSpace: "RGB",
+        Name: colormapName,
+        RGBPoints: rgbPoints,
+      });
+    }
+    vp.setProperties({ colormap: { name: colormapName } });
+    vp.render();
+    setActiveLutName(lut.name);
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -449,7 +485,7 @@ export function Viewer2D({
   const imagePanel = (
     <div style={fill ? { ...wrap, flex: 1, height: "auto" } : { ...wrap, height: height ?? 512 }}>
       {/* 深層: ピクセル canvas（Cornerstone3D が内部に canvas を生成） */}
-          <div ref={elementRef} style={pixelLayer} onContextMenu={(e) => e.preventDefault()} />
+          <div ref={elementRef} style={pixelLayer} />
           {/* 患者の向き（A/P・R/L・H/F）。四辺に表示。pointer-events:none。 */}
           {ov.orientation && markers && (
             <>
@@ -486,10 +522,20 @@ export function Viewer2D({
     </div>
   );
 
+  // LUT ダイアログ（position:fixed でツリー位置に依存しない）
+  const lutDialogEl = showLutDialog ? (
+    <LutDialog
+      currentLutName={activeLutName}
+      onSelect={applyLut}
+      onClose={() => setShowLutDialog(false)}
+    />
+  ) : null;
+
   // グリッドセル用: 画像＋オーバーレイのみ。
-  if (compact) return imagePanel;
+  if (compact) return <>{imagePanel}{lutDialogEl}</>;
 
   return (
+    <>
     <div style={{
       display: "flex",
       gap: 12,
@@ -531,6 +577,13 @@ export function Viewer2D({
           <button onClick={toggleInvert} style={{ ...btn, ...(inverted ? infoBtnOn : null) }} title={t("viewer.invert")}>
             {t("viewer.invert")}
           </button>
+          <button
+            onClick={() => setShowLutDialog(true)}
+            style={{ ...btn, ...(activeLutName ? infoBtnOn : null) }}
+            title={t("viewer.lut")}
+          >
+            {t("viewer.lut")}
+          </button>
           <button onClick={reset} style={btn} title={t("viewer.reset")}>{t("viewer.reset")}</button>
           <span style={{ width: 1, alignSelf: "stretch", background: "#dde4ea", margin: "0 2px" }} />
           <button onClick={undo} disabled={!canUndo} style={btn} title={t("viewer.undo")}>↶</button>
@@ -542,6 +595,8 @@ export function Viewer2D({
           Off にすると非表示になり、画像パネルがこの領域まで広がる。 */}
       {showInfo && <ImageInfoPanel info={info} sample={sample} voi={voi} />}
     </div>
+    {lutDialogEl}
+    </>
   );
 }
 
@@ -686,10 +741,14 @@ const overlayCenter: React.CSSProperties = {
 };
 const toolbar: React.CSSProperties = {
   display: "flex",
+  flexWrap: "nowrap",
   gap: 6,
   marginTop: 6,
+  overflowX: "auto",
+  paddingBottom: 2,
 };
 const btn: React.CSSProperties = {
+  flexShrink: 0,
   minWidth: 34,
   padding: "4px 8px",
   border: "1px solid #cdd5de",

@@ -35,7 +35,7 @@ public final class SeriesLayoutBuilder {
     public static SeriesLayout build(List<FrameMeta> frames) {
         int n = frames.size();
         if (n == 0) {
-            return new SeriesLayout(0, 0, 0, null, null, List.of());
+            return SeriesLayout.noSpatial(0, 0, 0, null, null, List.of());
         }
 
         // Z: zpos を 0.001 単位で量子化してグループ化、昇順インデックス化。
@@ -66,7 +66,7 @@ public final class SeriesLayoutBuilder {
             for (FrameMeta f : frames) {
                 cells.add(new SeriesLayout.Cell(0, zIndex.get(zKey(f.zpos())), 0, f.sopInstanceUid()));
             }
-            return new SeriesLayout(nZ, 1, 1, null, null, cells);
+            return SeriesLayout.noSpatial(nZ, 1, 1, null, null, cells);
         }
 
         // framesPerPos > 1: T/C の分割タグを探す。
@@ -134,7 +134,7 @@ public final class SeriesLayoutBuilder {
         }
         String cDim = cSplit != null ? cSplit.tag : (single != null && nC > 1 ? single.tag : null);
         String tDim = tSplit != null ? tSplit.tag : (single != null && nT > 1 ? single.tag : null);
-        return new SeriesLayout(zIndex.size(), nC, nT, cDim, tDim, cells);
+        return SeriesLayout.noSpatial(zIndex.size(), nC, nT, cDim, tDim, cells);
     }
 
     /** 各位置を InstanceNumber 順に並べ、その順位を C にする（総当たり）。 */
@@ -149,7 +149,7 @@ public final class SeriesLayoutBuilder {
                 cells.add(new SeriesLayout.Cell(c, z, 0, list.get(c).sopInstanceUid()));
             }
         }
-        return new SeriesLayout(zIndex.size(), framesPerPos, 1, null, null, cells);
+        return SeriesLayout.noSpatial(zIndex.size(), framesPerPos, 1, null, null, cells);
     }
 
     /** 純 Z スタック（多次元を諦めて InstanceNumber/zpos 順に 1 列）。 */
@@ -160,7 +160,7 @@ public final class SeriesLayoutBuilder {
         for (int z = 0; z < sorted.size(); z++) {
             cells.add(new SeriesLayout.Cell(0, z, 0, sorted.get(z).sopInstanceUid()));
         }
-        return new SeriesLayout(sorted.size(), 1, 1, null, null, cells);
+        return SeriesLayout.noSpatial(sorted.size(), 1, 1, null, null, cells);
     }
 
     // --- 分割タグの判定 ---

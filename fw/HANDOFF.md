@@ -1,6 +1,6 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
-> 更新日: 2026-06-29
+> 更新日: 2026-06-29（最終更新: Fusion / LUT / ツールバー改善）
 > 目的: 別の作業者（Claude 含む）がこのリポジトリの状況を把握し、続きを実装できるようにする。
 > このファイル＋ `fw/` 配下の各設計ドキュメントが「ソース・オブ・トゥルース」。
 
@@ -94,10 +94,58 @@ GRAPHY-Next/
     をシリーズ全体連動。
 - 各種ショートカットは `shortcuts/registry.ts`。**実装済み機能のみ配線**（nav/disp(I/O)/undo/redo）。
 
+### LUT（カラーマップ）機能（`frontend/src/viewer/LutDialog.tsx` / `Viewer2D.tsx`）
+- `backend/src/main/resources/luts/` に GRAPHY の .lut ファイル 106 枚をコピー。
+- **バックエンド**: `LutController.java`（`GET /api/luts`、`GET /api/luts/{name}`）+ `LutService.java`。
+  - フォーマット自動判別: **ICOL**（32 バイトヘッダ + R/G/B 各 256 バイト）、**Raw バイナリ**（768 バイト）、
+    **テキスト**（`index\tR\tG\tB` 4列 または `R\tG\tB` 3列、256 行）。
+- **フロントエンド `api.ts`**: `LutData { name, r[], g[], b[] }` 型、`fetchLutNames()` / `fetchLutData(name)`。
+- **`LutDialog.tsx`**: LUT 名＋カラーバー（256×1 canvas）並列リスト、IntersectionObserver で遅延ロード。
+  グレースケールリセット行を先頭に常時表示。ダブルクリック即適用、Esc/バックドロップで閉じる。
+  `ColorBar` コンポーネントは `export` 済み（FusionControlBar でも使用）。
+- **`Viewer2D.tsx`**: ツールバーに「LUT」ボタン（適用中は青ハイライト）。右クリックコンテキストメニューは削除済み。
+  `applyLut(lut | null)`: Cornerstone3D の `utilities.colormap.registerColormap` → `setProperties({colormap})` で適用。
+- **ツールバー横スクロール化**: `overflow-x: auto`, `flex-wrap: nowrap`, ボタン `flex-shrink: 0`。
+
+### Fusion（画像重畳合成）機能
+#### DnD によるトリガー（`Viewer2DScreen.tsx`）
+- `getDropZone`: タイル幅を左25%/右25%/中50% で分割。中央ドロップ → Fusion。
+- シリーズ行（左ツリー）は既ロード済みでも draggable（以前は未ロードのみ）。
+- タイルヘッダのドラッグも中央ドロップで Fusion トリガー（別タイル→Fusion）。
+- ドロップ時の視覚フィードバック: 「Fusion オーバーレイ」ラベル付き青枠ハイライト。
+
+#### FusionControlBar（`Viewer2DScreen.tsx`）
+- Fusion 設定時にタイル下部に表示: `🔀 [シリーズ名] / 透過度スライダー / LUTボタン / ×`。
+- **LUTボタン**: `LutDialog` を開き選択した LUT を Fusion オーバーレイに適用。選択中はカラーバーをプレビュー。
+- 透過度スライダー（0–100%）、C/T スライダー（マルチチャンネル/時系列時）、× で Fusion 解除。
+
+#### FusionImageViewer / FusionEngine（`FusionOverlayViewer.tsx` / `fusionEngine.ts`）
+- **精密 Fusion（Canvas）**: 前景シリーズの IOP/IPP・pixelSpacing が `SeriesLayout` に含まれる場合、
+  `computeFusionSlice`（trilinear 3D リサンプリング）で背景グリッドに前景ボリュームを投影。
+  結果を `<canvas>` に描画（背景と独立した絶対配置）。
+- **フォールバック（CSS opacity）**: 空間メタなし、または Canvas 初回描画が未完了の場合は
+  `<Viewer2D compact fill />` を比例 Z 追従で表示（`syncSlice` で スライス位置を同期）。
+- **`hasCanvasContent` state**: Canvas に少なくとも 1 フレーム描画されるまではフォールバックを維持。
+  背景の IOP/IPP が取れない場合（CR/DX 等）も常にフォールバック表示に留まる。
+- **LUT**: `toImageData(values, cols, rows, wc, ww, lut?)` の第 6 引数で LUT 適用。
+  `lut.r[g] / g[g] / b[g]` でグレースケール値をカラーマッピング。シリーズ切替で `hasCanvasContent` リセット。
+
+#### Fusion 設定（`settings/registry.ts`）
+- viewer カテゴリに「フュージョン」セクション追加:
+  - `viewer.fusionOpacity` (number 0–100, 既定 50): DnD 起動時のデフォルト透明度（参照値として保存、現状は自動適用なし）。
+  - `viewer.fusionLut` (text, 既定 ""): デフォルト LUT 名（同上）。
+- i18n: `settings.sec.fusion` / `settings.field.fusionOpacity(.help)` / `settings.field.fusionLut(.help)` / `viewer2d.fusion.lut`。
+
+#### Fusion FW（将来課題）
+- 2D/3D **剛体（Rigid）位置合わせ**（6 DOF または 3 DOF 最適化）: 未実装。
+- 2D/3D **非剛体（Deformable）位置合わせ**（B-spline / demons 等）: 未実装。
+- 詳細は `~/.claude/.../memory/project_fusion_fw.md` 参照。
+
 ### frontend 2D Viewer 画面（`frontend/src/viewer2d/Viewer2DScreen.tsx`）— Phase 1 のみ
 - **別 Electron ウィンドウ**で開く（`main.js` の `createViewerWindow` + ipc `graphy:open-viewer`、
   `preload` の `openViewer`、App は `location.hash==="#2dviewer"` で分岐）。
 - 左=スタディ/シリーズツリー（検索→展開→＋でタイル追加）、右=**タイル格子**（各タイル＝SeriesViewer）。
+- タイル: ヘッダ（DnD ハンドル / Sync トグル / ×）＋コンテンツ（SeriesViewer + Fusion オーバーレイ）＋ FusionControlBar。
 
 ## 4. 次にやること（優先度つき・未実装）
 1. **2D Viewer 画面 Phase 2: 同期**（`viewer-2d-screen.md`）
@@ -111,14 +159,28 @@ GRAPHY-Next/
 6. 3D Viewer / MPR Viewer / Slicer 画面（ツールバー/メニューのボタンは設置済み）。
 7. **web(wadors) 対応**: 画像 imageId・layout 導出（現状 standalone のみ。`imageId.ts` は web で throw）。
 8. Enhanced 多フレーム（DimensionIndexValues/StackID/InStackPositionNumber、wadouri `frame=`）。
+9. **Fusion 改善**:
+   - `viewer.fusionOpacity` / `viewer.fusionLut` を DnD 起動時に自動適用（現状は Settings に保存するのみ）。
+   - Canvas Fusion の LUT をフォールバック Viewer2D にも反映（現状は Cornerstone3D colormap が独立）。
+   - 2D/3D 剛体・非剛体位置合わせ（FW: `~/.claude/.../memory/project_fusion_fw.md` 参照）。
 
 ## 5. 重要な注意・既知の制限
 - **ブラウザ/Electron 実機での目視確認は未了の機能あり**（このセッションは build/tsc/backend test まで）。
   特に: 回転/反転の見え方、GridView リンクの同期、5D の C/T、Undo/Redo、別ウィンドウ起動。
+- **Fusion の実機確認状況**:
+  - DnD → FusionControlBar 表示 / 透過度スライダー / × 解除: 設計上正常のはず。
+  - Canvas trilinear Fusion（CT/MRI の IOP/IPP あり）: 初回描画が完了するまでフォールバック表示。
+  - フォールバック（CSS opacity Viewer2D）: CR/DX 等 IOP/IPP なしの場合に常用。
+  - LUT ボタン → LutDialog → 選択 → Fusion canvas / フォールバック Viewer2D に適用: 設計上正常。
+    ただしフォールバック Viewer2D への LUT 反映は Cornerstone3D colormap 経由で未対応（canvas 経由のみ）。
+- **LUT ファイル**: `backend/src/main/resources/luts/*.lut`（106 枚）。
+  フォーマット判別順: ICOL マジック確認 → 768 バイト Raw → テキスト（tab 区切り）。
 - **GridView/タイルは viewport を多数生成**するため巨大シリーズで負荷大。将来 仮想化/`loadImageToCanvas`
   軽量描画/ContextPool エンジンを検討（`viewer-2d-architecture.md` 参照）。
+- **Viewer2D ツールバー**: 横スクロール式（`overflow-x: auto`）。ボタン追加で自動スクロール対応。
 - `desktop/data/` はランタイムデータ（**.gitignore 済み**。誤コミット注意）。
 - 既存メモリ（`~/.claude/.../memory/`）にも GRAPHY/GRAPHY-Next の重要事項あり（UI操作・ビルド・テスト等）。
+  Fusion FW は `project_fusion_fw.md`、プロジェクト概要は `project_graphy_next.md` 参照。
 
 ## 6. 作業の進め方（このセッションの慣習）
 - 変更ごとに **frontend `npm run build`（tsc込）/ backend `mvn compile`・該当テスト**を通してからコミット。

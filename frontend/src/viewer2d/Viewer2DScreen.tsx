@@ -11,17 +11,31 @@ import {
   type Study,
   type Series,
   type Instance,
+  type LutData,
 } from "../api";
 import { SeriesViewer } from "../viewer/SeriesViewer";
+import { FusionImageViewer } from "../viewer/FusionOverlayViewer";
+import { buildSeriesLayout, type SeriesLayout } from "../viewer/seriesLayout";
+import { LutDialog, ColorBar } from "../viewer/LutDialog";
 import { useI18n } from "../i18n/i18n";
 
 // ── 型定義 ────────────────────────────────────────────────────
+
+/** Fusion オーバーレイ情報。センタードロップで設定される。 */
+interface FusionOverlay {
+  study: Study;
+  series: Series;
+  instances: Instance[];
+  opacity: number; // 0.0 – 1.0
+}
 
 interface Tile {
   id: string;        // `${studyUid}|${seriesUid}`
   study: Study;
   series: Series;
   instances: Instance[];
+  syncEnabled: boolean; // シリーズ Sync 参加フラグ
+  fusion?: FusionOverlay; // Fusion オーバーレイ（設定時）
 }
 
 interface PatientSession {
@@ -39,15 +53,104 @@ interface ViewerContext {
   ts: number; // 同一コンテキストの二重適用を防ぐタイムスタンプ
 }
 
-// 患者識別キー（DICOM patientId 優先、無ければ patientName、最終は studyUid）。
+/**
+ * DnD ペイロード。同一ウィンドウ内転送のみのため、モジュールスコープ変数で保持する。
+ * (dataTransfer は文字列しか運べないため、オブジェクト参照をここに保存する。)
+ */
+type DragPayload =
+  | { type: "series"; study: Study; series: Series; label: string }
+  | { type: "tile"; patientKey: string; tileId: string };
+
+// ── モジュールレベル DnD 状態 ──────────────────────────────────
+
+let _dragPayload: DragPayload | null = null;
+// ドラッグ中に最後にホバーしたタイルID（ウィンドウ外ドロップ時のキャプチャ対象決定用）
+let _lastHoveredTileId: string | null = null;
+// シェル全体の onDrop でウィンドウ内ドロップを検知する。
+let _dropHandledInWindow = false;
+// dragover の途絶からウィンドウ外を検出するためのタイムスタンプとタイマー群
+let _lastDragOverMs = 0;
+let _dragOverTimer: ReturnType<typeof setTimeout> | null = null;
+let _autoCaptureTimer: ReturnType<typeof setTimeout> | null = null;
+
+function _cancelDragTimers(): void {
+  if (_dragOverTimer) { clearTimeout(_dragOverTimer); _dragOverTimer = null; }
+  if (_autoCaptureTimer) { clearTimeout(_autoCaptureTimer); _autoCaptureTimer = null; }
+}
+
+function _resetDragState(): void {
+  _cancelDragTimers();
+  _dropHandledInWindow = false;
+  _dragPayload = null;
+  _lastHoveredTileId = null;
+  _lastDragOverMs = 0;
+}
+
+// ── ユーティリティ ────────────────────────────────────────────
+
 function derivePatientKey(study: Study): string {
   return study.patientId || study.patientName || study.studyInstanceUid;
 }
 
-// タイルグリッドの自動列数 ceil(√N)。1→1, 2→2, 3-4→2, 5-9→3, ...
 function autoTileCols(n: number): number {
   if (n <= 1) return 1;
   return Math.ceil(Math.sqrt(n));
+}
+
+/**
+ * タイルコンテナ上のカーソル位置からドロップゾーンを判定する。
+ *
+ * 左 25%  → "before"（手前に挿入）
+ * 右 25%  → "after"（後ろに挿入）
+ * 中央 50% → "center"（Fusion オーバーレイ）
+ */
+function getDropZone(e: React.DragEvent<HTMLElement>): "before" | "after" | "center" | "none" {
+  const rect = e.currentTarget.getBoundingClientRect();
+  const x = (e.clientX - rect.left) / rect.width;
+  if (x < 0.25) return "before";
+  if (x > 0.75) return "after";
+  return "center";
+}
+
+/**
+ * 指定タイルの canvas から PNG をキャプチャしてファイル保存する。
+ * Cornerstone3D の WebGL canvas に対して toDataURL を試みる。
+ * (preserveDrawingBuffer=false の場合は失敗することがある)
+ */
+function captureAndDownload(tileId: string): void {
+  console.log("[Capture] captureAndDownload called for tileId:", tileId);
+  const el = document.querySelector(`[data-tile-id="${CSS.escape(tileId)}"]`);
+  console.log("[Capture] tile element found:", !!el);
+  const canvas = el?.querySelector("canvas") as HTMLCanvasElement | null;
+  console.log("[Capture] canvas found:", !!canvas, canvas ? `${canvas.width}x${canvas.height}` : "");
+  if (!canvas) {
+    console.warn("[Capture] canvas not found in tile", tileId);
+    return;
+  }
+  try {
+    const url = canvas.toDataURL("image/png");
+    console.log("[Capture] toDataURL ok, length:", url.length);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `graphy-capture-${Date.now()}.png`;
+    a.click();
+    console.log("[Capture] download triggered");
+  } catch (err) {
+    console.error("[Capture] toDataURL failed:", err);
+  }
+}
+
+/** DnD ゴースト要素を生成して dataTransfer に設定する。呼び出し後すぐに DOM から除去。 */
+function setGhostImage(e: React.DragEvent, label: string): void {
+  const ghost = document.createElement("div");
+  ghost.textContent = label;
+  ghost.style.cssText =
+    "position:fixed;left:-9999px;top:-9999px;padding:4px 10px;" +
+    "background:#1a4a80;color:#fff;border-radius:4px;font-size:12px;" +
+    "white-space:nowrap;pointer-events:none;";
+  document.body.appendChild(ghost);
+  e.dataTransfer.setDragImage(ghost, 0, 0);
+  requestAnimationFrame(() => document.body.removeChild(ghost));
 }
 
 // ── メインコンポーネント ───────────────────────────────────────
@@ -97,7 +200,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
     } catch {
       /* インスタンス取得失敗時も空で追加 */
     }
-    const tile: Tile = { id: tileId, study, series, instances };
+    const tile: Tile = { id: tileId, study, series, instances, syncEnabled: false };
 
     setPatients((prev) => {
       const idx = prev.findIndex((p) => p.patientKey === pKey);
@@ -128,7 +231,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
     try {
       instances = await fetchInstances(study.studyInstanceUid, series.seriesInstanceUid);
     } catch {}
-    const tile: Tile = { id: tileId, study, series, instances };
+    const tile: Tile = { id: tileId, study, series, instances, syncEnabled: false };
     setPatients((prev) =>
       prev.map((p) => (p.patientKey === patientKey ? { ...p, tiles: [tile] } : p)),
     );
@@ -163,6 +266,73 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
       prev.map((p) => (p.patientKey === patientKey ? { ...p, gridCols: cols } : p)),
     );
   };
+
+  /** 対象タイルの前後に新しいシリーズタイルを挿入する（DnD 四隅ドロップ）。 */
+  const insertAdjacentTile = useCallback(async (
+    patientKey: string,
+    targetTileId: string,
+    before: boolean,
+    study: Study,
+    series: Series,
+  ) => {
+    const newId = `${study.studyInstanceUid}|${series.seriesInstanceUid}`;
+    let instances: Instance[] = [];
+    try {
+      instances = await fetchInstances(study.studyInstanceUid, series.seriesInstanceUid);
+    } catch {}
+    const tile: Tile = { id: newId, study, series, instances, syncEnabled: false };
+
+    setPatients((prev) =>
+      prev.map((p) => {
+        if (p.patientKey !== patientKey) return p;
+        if (p.tiles.some((t) => t.id === newId)) return p; // 重複スキップ
+        const idx = p.tiles.findIndex((t) => t.id === targetTileId);
+        if (idx < 0) return { ...p, tiles: [...p.tiles, tile] };
+        const next = [...p.tiles];
+        next.splice(before ? idx : idx + 1, 0, tile);
+        return { ...p, tiles: next };
+      }),
+    );
+    setActiveKey(patientKey);
+  }, []);
+
+  /** 同一患者内のタイルを配列上で入れ替える（DnD ヘッダードラッグによる並び替え）。 */
+  const swapTiles = useCallback((patientKey: string, fromId: string, toId: string) => {
+    setPatients((prev) =>
+      prev.map((p) => {
+        if (p.patientKey !== patientKey) return p;
+        const tiles = [...p.tiles];
+        const fi = tiles.findIndex((t) => t.id === fromId);
+        const ti = tiles.findIndex((t) => t.id === toId);
+        if (fi < 0 || ti < 0 || fi === ti) return p;
+        [tiles[fi], tiles[ti]] = [tiles[ti], tiles[fi]];
+        return { ...p, tiles };
+      }),
+    );
+  }, []);
+
+  /** タイルのシリーズ Sync 参加フラグを切り替える。 */
+  const setTileSync = useCallback((patientKey: string, tileId: string, enabled: boolean) => {
+    setPatients((prev) =>
+      prev.map((p) => {
+        if (p.patientKey !== patientKey) return p;
+        return { ...p, tiles: p.tiles.map((t) => (t.id === tileId ? { ...t, syncEnabled: enabled } : t)) };
+      }),
+    );
+  }, []);
+
+  /** タイルの Fusion オーバーレイを設定または解除する。 */
+  const setTileFusion = useCallback(
+    (patientKey: string, tileId: string, overlay: FusionOverlay | undefined) => {
+      setPatients((prev) =>
+        prev.map((p) => {
+          if (p.patientKey !== patientKey) return p;
+          return { ...p, tiles: p.tiles.map((t) => (t.id === tileId ? { ...t, fusion: overlay } : t)) };
+        }),
+      );
+    },
+    [],
+  );
 
   // ── コンテキスト適用 ──────────────────────────────────────
 
@@ -200,27 +370,22 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
     // シリーズが選択されている場合。
     const existingPatient = patients.find((p) => p.patientKey === pKey);
     if (existingPatient) {
-      // 同一患者 → タイルをクリアして新シリーズで置き換え。
       await replacePatientTiles(pKey, study, series);
     } else {
-      // 未登録患者 → 新しい患者タブを追加。
       await addTile(study, series);
     }
     setActiveKey(pKey);
   }, [patients, addTile, replacePatientTiles]);
 
-  // 常に最新の applyCtx を参照するための ref。
   const applyCtxRef = useRef(applyCtx);
   useEffect(() => {
     applyCtxRef.current = applyCtx;
   }, [applyCtx]);
 
-  // マウント時: 既存 localStorage コンテキストを読み取る（新規ウィンドウ用）。
   useEffect(() => {
     void applyCtxRef.current();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // storage イベント: 既存ウィンドウへのコンテキスト更新通知（MainScreen が別スタディを開いた場合）。
   useEffect(() => {
     const handler = (e: StorageEvent) => {
       if (e.key === "graphy-viewer-ctx") void applyCtxRef.current();
@@ -234,7 +399,40 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
   const activePatient = patients.find((p) => p.patientKey === activeKey) ?? null;
 
   return (
-    <div style={shell}>
+    <div
+      style={shell}
+      onDragOver={(e) => {
+        if (!_dragPayload) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        // dragover が届いている間はウィンドウ内。タイムスタンプを更新してタイマーをリセット。
+        _lastDragOverMs = Date.now();
+        _cancelDragTimers();
+        _dragOverTimer = setTimeout(() => {
+          if (!_dragPayload || _dropHandledInWindow) return;
+          // 200ms dragover が途絶 → カーソルがウィンドウ外へ。
+          // dragend が発火しない Electron の場合に備えて auto-capture タイマーを仕掛ける。
+          const captureTileId =
+            _dragPayload.type === "tile" ? _dragPayload.tileId : _lastHoveredTileId;
+          console.log("[DnD] dragover途絶 → ウィンドウ外判定。captureTileId:", captureTileId);
+          if (captureTileId) {
+            _autoCaptureTimer = setTimeout(() => {
+              if (!_dropHandledInWindow && _dragPayload) {
+                console.log("[DnD] auto-capture (dragend未発火):", captureTileId);
+                captureAndDownload(captureTileId);
+                _resetDragState();
+              }
+            }, 1500);
+          }
+        }, 200);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        _dropHandledInWindow = true;
+        _cancelDragTimers();
+        console.log("[DnD] shell.onDrop fired → _dropHandledInWindow = true");
+      }}
+    >
       <div style={header}>
         <strong style={{ fontSize: 14 }}>{t("viewer2d.title")}</strong>
         <span style={{ flex: 1 }} />
@@ -269,6 +467,10 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
                   mode={mode}
                   onRemoveTile={removeTile}
                   onSetCols={setPatientGridCols}
+                  onInsertAdjacent={insertAdjacentTile}
+                  onSwap={swapTiles}
+                  onSetSync={setTileSync}
+                  onSetFusion={setTileFusion}
                 />
               )}
             </>
@@ -325,15 +527,95 @@ function TileGrid({
   mode,
   onRemoveTile,
   onSetCols,
+  onInsertAdjacent,
+  onSwap,
+  onSetSync,
+  onSetFusion,
 }: {
   patient: PatientSession;
   mode: "standalone" | "web";
   onRemoveTile: (patientKey: string, tileId: string) => void;
   onSetCols: (patientKey: string, cols: number) => void;
+  onInsertAdjacent: (patientKey: string, targetId: string, before: boolean, study: Study, series: Series) => void;
+  onSwap: (patientKey: string, fromId: string, toId: string) => void;
+  onSetSync: (patientKey: string, tileId: string, enabled: boolean) => void;
+  onSetFusion: (patientKey: string, tileId: string, overlay: FusionOverlay | undefined) => void;
 }) {
   const { t } = useI18n();
   const n = patient.tiles.length;
   const cols = patient.gridCols > 0 ? patient.gridCols : autoTileCols(n);
+
+  // シリーズ Sync: 最後に送信されたスライスイベント { z, nZ, sourceId }
+  const [syncEvent, setSyncEvent] = useState<{ z: number; nZ: number; sourceId: string } | null>(null);
+
+  const syncedCount = useMemo(
+    () => patient.tiles.filter((t) => t.syncEnabled).length,
+    [patient.tiles],
+  );
+  const isSyncActive = syncedCount >= 2;
+
+  // ドロップ処理（DnD ペイロード種別によってタイル操作を振り分け）
+  const handleDrop = useCallback(
+    (targetTileId: string, zone: "before" | "after" | "center" | "none") => {
+      const payload = _dragPayload;
+      if (!payload || zone === "none") return;
+
+      if (payload.type === "series") {
+        if (zone === "center") {
+          // センタードロップ → Fusion オーバーレイに設定（既ロード済みシリーズも可）
+          void fetchInstances(payload.study.studyInstanceUid, payload.series.seriesInstanceUid)
+            .then((instances) => {
+              onSetFusion(patient.patientKey, targetTileId, {
+                study: payload.study,
+                series: payload.series,
+                instances,
+                opacity: 0.5,
+              });
+            })
+            .catch(() => {
+              onSetFusion(patient.patientKey, targetTileId, {
+                study: payload.study,
+                series: payload.series,
+                instances: [],
+                opacity: 0.5,
+              });
+            });
+        } else {
+          // 既にタイルに読み込まれているシリーズは重複挿入しない
+          const alreadyLoaded = patient.tiles.some(
+            (t) => t.series.seriesInstanceUid === payload.series.seriesInstanceUid,
+          );
+          if (!alreadyLoaded) {
+            void onInsertAdjacent(
+              patient.patientKey,
+              targetTileId,
+              zone === "before",
+              payload.study,
+              payload.series,
+            );
+          }
+        }
+      } else if (payload.type === "tile") {
+        if (payload.patientKey === patient.patientKey && payload.tileId !== targetTileId) {
+          if (zone === "center") {
+            // タイルヘッダを中央ドロップ → そのタイルのシリーズを Fusion に設定
+            const srcTile = patient.tiles.find((t) => t.id === payload.tileId);
+            if (srcTile) {
+              onSetFusion(patient.patientKey, targetTileId, {
+                study: srcTile.study,
+                series: srcTile.series,
+                instances: srcTile.instances,
+                opacity: 0.5,
+              });
+            }
+          } else {
+            onSwap(patient.patientKey, payload.tileId, targetTileId);
+          }
+        }
+      }
+    },
+    [patient.patientKey, onInsertAdjacent, onSwap, onSetFusion, t],
+  );
 
   return (
     <div style={tileArea}>
@@ -354,6 +636,11 @@ function TileGrid({
         <span style={{ fontSize: 12, color: "#9aa6b2" }}>
           {t("viewer2d.tileCount", { n })}
         </span>
+        {isSyncActive && (
+          <span style={{ fontSize: 11, color: "#0b5cad", marginLeft: "auto" }}>
+            🔗 {t("viewer2d.sync.active")}
+          </span>
+        )}
       </div>
       <div
         style={{
@@ -366,14 +653,34 @@ function TileGrid({
           overflowY: "auto",
         }}
       >
-        {patient.tiles.map((tile) => (
-          <TileCell
-            key={tile.id}
-            tile={tile}
-            mode={mode}
-            onRemove={() => onRemoveTile(patient.patientKey, tile.id)}
-          />
-        ))}
+        {patient.tiles.map((tile) => {
+          // このタイルが sync 受信すべきスライスイベントを決定。
+          // 自分が発火源（sourceId === tile.id）の場合は受信しない（ループ防止）。
+          const syncSlice =
+            isSyncActive && tile.syncEnabled && syncEvent && syncEvent.sourceId !== tile.id
+              ? { z: syncEvent.z, nZ: syncEvent.nZ }
+              : null;
+
+          return (
+            <TileCell
+              key={tile.id}
+              tile={tile}
+              mode={mode}
+              patientKey={patient.patientKey}
+              syncActive={isSyncActive && tile.syncEnabled}
+              syncSlice={syncSlice}
+              onRemove={() => onRemoveTile(patient.patientKey, tile.id)}
+              onSyncToggle={() => onSetSync(patient.patientKey, tile.id, !tile.syncEnabled)}
+              onSliceChange={(z, nZ) => {
+                if (tile.syncEnabled && isSyncActive) {
+                  setSyncEvent({ z, nZ, sourceId: tile.id });
+                }
+              }}
+              onFusionChange={(overlay) => onSetFusion(patient.patientKey, tile.id, overlay)}
+              onDrop={handleDrop}
+            />
+          );
+        })}
       </div>
     </div>
   );
@@ -384,39 +691,430 @@ function TileGrid({
 function TileCell({
   tile,
   mode,
+  patientKey,
+  syncActive,
+  syncSlice,
   onRemove,
+  onSyncToggle,
+  onSliceChange,
+  onFusionChange,
+  onDrop,
 }: {
   tile: Tile;
   mode: "standalone" | "web";
+  patientKey: string;
+  syncActive: boolean;
+  syncSlice: { z: number; nZ: number } | null;
   onRemove: () => void;
+  onSyncToggle: () => void;
+  onSliceChange: (z: number, nZ: number) => void;
+  onFusionChange: (overlay: FusionOverlay | undefined) => void;
+  onDrop: (targetTileId: string, zone: "before" | "after" | "center" | "none") => void;
 }) {
   const { t } = useI18n();
+  // ドラッグオーバー中のゾーン（ビジュアルオーバーレイ制御用）
+  const [dropZone, setDropZone] = useState<"before" | "after" | "center" | "none" | null>(null);
+
+  // Fusion: ベースビューアの現在スライス位置（フォールバック比例追従用）
+  const [baseSlice, setBaseSlice] = useState<{ z: number; nZ: number } | null>(null);
+  // Fusion: ベースビューアの現在スライス imageId（精密 Fusion の IOP/IPP 取得用）
+  const [baseImageId, setBaseImageId] = useState<string | null>(null);
+  // Fusion: オーバーレイの C/T インデックス（ユーザーが任意に選択）
+  const [fusionC, setFusionC] = useState(0);
+  const [fusionT, setFusionT] = useState(0);
+  // Fusion: オーバーレイのレイアウト（nC/nT の C/T スライダー制御用）
+  const [fusionLayout, setFusionLayout] = useState<SeriesLayout>(() => buildSeriesLayout([]));
+  // Fusion: オーバーレイの LUT（null でグレースケール）
+  const [fusionLut, setFusionLut] = useState<LutData | null>(null);
+  // fusion が切り替わったら C/T / LUT をリセット
+  const prevFusionSeriesUid = useRef<string | null>(null);
+  useEffect(() => {
+    const uid = tile.fusion?.series.seriesInstanceUid ?? null;
+    if (uid !== prevFusionSeriesUid.current) {
+      prevFusionSeriesUid.current = uid;
+      setFusionC(0);
+      setFusionT(0);
+      setFusionLut(null);
+    }
+  }, [tile.fusion?.series.seriesInstanceUid]);
+
   const seriesLabel =
     tile.series.seriesDescription ||
     `#${tile.series.seriesNumber ?? "?"} ${tile.series.modality ?? ""}`.trim();
   const dateLabel = tile.study.studyDate || "";
   const studyDesc = tile.study.studyDescription || "";
+
+  // ベースビューアのスライス変化を受け取る安定したコールバック。
+  // インライン関数にすると setBaseSlice → 再レンダ → 新関数 → SeriesViewer の useEffect 再発火
+  // という無限ループが起きるため useCallback でメモ化する。
+  const handleBaseSliceChange = useCallback(
+    (z: number, nZ: number, imageId: string) => {
+      setBaseSlice((prev) => (prev?.z === z && prev?.nZ === nZ ? prev : { z, nZ }));
+      if (imageId) setBaseImageId(imageId);
+      onSliceChange(z, nZ);
+    },
+    [onSliceChange],
+  );
+
+  // ── タイルヘッダー DnD（タイル並び替え） ──
+
+  const handleHeaderDragStart = (e: React.DragEvent<HTMLDivElement>) => {
+    _dragPayload = { type: "tile", patientKey, tileId: tile.id };
+    _dropHandledInWindow = false;
+    _lastDragOverMs = 0;
+    e.dataTransfer.effectAllowed = "move";
+    setGhostImage(e, seriesLabel);
+    console.log("[DnD] tile header dragStart:", tile.id);
+  };
+  const handleHeaderDragEnd = () => {
+    _cancelDragTimers();
+    const msSince = _lastDragOverMs > 0 ? Date.now() - _lastDragOverMs : Infinity;
+    const outsideWindow = !_dropHandledInWindow && msSince > 50;
+    console.log("[DnD] tile header dragEnd — _dropHandledInWindow:", _dropHandledInWindow,
+      "msSinceLastDragOver:", msSince, "outsideWindow:", outsideWindow);
+    if (outsideWindow) {
+      console.log("[DnD] → tile outside drop, capturing:", tile.id);
+      captureAndDownload(tile.id);
+    }
+    _resetDragState();
+  };
+
+  // ── タイルボディ ドロップゾーン ──
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!_dragPayload) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    const zone = getDropZone(e);
+    setDropZone(zone);
+    if (_lastHoveredTileId !== tile.id) {
+      console.log("[DnD] hovering tile:", tile.id, "zone:", zone);
+      _lastHoveredTileId = tile.id;
+    }
+  };
+  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+    setDropZone(null);
+    console.log("[DnD] left tile:", tile.id);
+  };
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const zone = getDropZone(e);
+    setDropZone(null);
+    console.log("[DnD] TileCell.onDrop tile:", tile.id, "zone:", zone);
+    onDrop(tile.id, zone);
+  };
+
+  // ドロップゾーンに応じたオーバーレイスタイル
+  const overlayStyle = ((): React.CSSProperties | null => {
+    if (!dropZone || dropZone === "none") return null;
+    const base: React.CSSProperties = {
+      position: "absolute", inset: 0, pointerEvents: "none", zIndex: 10, borderRadius: 7,
+    };
+    if (dropZone === "center") {
+      return { ...base, background: "rgba(11,92,173,0.15)", outline: "2px dashed #0b5cad" };
+    }
+    if (dropZone === "before") {
+      return {
+        ...base,
+        background: "linear-gradient(to right, rgba(11,92,173,0.22) 30%, transparent 70%)",
+        borderLeft: "4px solid #0b5cad",
+      };
+    }
+    return {
+      ...base,
+      background: "linear-gradient(to left, rgba(11,92,173,0.22) 30%, transparent 70%)",
+      borderRight: "4px solid #0b5cad",
+    };
+  })();
+
   return (
-    <div style={tileBox}>
-      <div style={tileHead}>
+    <div
+      data-tile-id={tile.id}
+      style={{
+        ...tileBox,
+        outline: syncActive ? "2px solid #0b5cad" : undefined,
+        position: "relative",
+      }}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {overlayStyle && (
+        <div style={overlayStyle}>
+          {dropZone === "center" && (
+            <div
+              style={{
+                position: "absolute",
+                top: "50%",
+                left: "50%",
+                transform: "translate(-50%, -50%)",
+                color: "#0b5cad",
+                fontSize: 12,
+                fontWeight: 600,
+                pointerEvents: "none",
+                whiteSpace: "nowrap",
+                background: "rgba(255,255,255,0.75)",
+                padding: "2px 8px",
+                borderRadius: 4,
+              }}
+            >
+              {t("viewer2d.drop.center")}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── ヘッダー（ドラッグハンドル） ── */}
+      <div
+        style={{ ...tileHead, cursor: "grab" }}
+        draggable
+        onDragStart={handleHeaderDragStart}
+        onDragEnd={handleHeaderDragEnd}
+      >
         <span style={tileTitle}>
           {[dateLabel, studyDesc, seriesLabel].filter(Boolean).join(" / ")}
         </span>
+
+        {/* Sync トグルボタン */}
+        <button
+          onClick={(e) => { e.stopPropagation(); onSyncToggle(); }}
+          style={{
+            ...xbtn,
+            color: tile.syncEnabled ? "#0b5cad" : "#8a98a6",
+            borderColor: tile.syncEnabled ? "#b0cce8" : "#cdd5de",
+            background: tile.syncEnabled ? "#eef4fc" : "#fff",
+            fontSize: 14,
+            lineHeight: 1,
+          }}
+          title={t("viewer2d.sync.toggle")}
+        >
+          🔗
+        </button>
+
         <button onClick={onRemove} style={xbtn} title={t("viewer2d.removeTile")}>
           ×
         </button>
       </div>
-      {mode === "standalone" ? (
-        <SeriesViewer
-          instances={tile.instances}
-          mode="standalone"
-          studyUid={tile.study.studyInstanceUid}
-          seriesUid={tile.series.seriesInstanceUid}
-          fillHeight
+
+      {/* ── コンテンツ（ベース＋ Fusion オーバーレイ） ── */}
+      <div style={{ flex: 1, minHeight: 0, position: "relative", display: "flex", flexDirection: "column" }}>
+        {mode === "standalone" ? (
+          <SeriesViewer
+            instances={tile.instances}
+            mode="standalone"
+            studyUid={tile.study.studyInstanceUid}
+            seriesUid={tile.series.seriesInstanceUid}
+            fillHeight
+            syncSlice={syncSlice}
+            onSliceChange={handleBaseSliceChange}
+          />
+        ) : (
+          <div style={{ padding: 12, fontSize: 12, color: "#8a6d3b" }}>{t("viewer.webTodo")}</div>
+        )}
+
+        {/* Fusion 画像オーバーレイ（透過、ポインタ透過） */}
+        {tile.fusion && mode === "standalone" && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              opacity: tile.fusion.opacity,
+              pointerEvents: "none",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            <FusionImageViewer
+              instances={tile.fusion.instances}
+              mode="standalone"
+              studyUid={tile.fusion.study.studyInstanceUid}
+              seriesUid={tile.fusion.series.seriesInstanceUid}
+              syncSlice={baseSlice}
+              syncImageId={baseImageId}
+              overlayC={fusionC}
+              overlayT={fusionT}
+              lut={fusionLut}
+              onLayoutChange={setFusionLayout}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Fusion コントロールバー */}
+      {tile.fusion && mode === "standalone" && (
+        <FusionControlBar
+          seriesLabel={
+            tile.fusion.series.seriesDescription ||
+            `#${tile.fusion.series.seriesNumber ?? "?"} ${tile.fusion.series.modality ?? ""}`.trim()
+          }
+          opacity={tile.fusion.opacity}
+          fusionC={fusionC}
+          fusionT={fusionT}
+          nC={fusionLayout.nC}
+          nT={fusionLayout.nT}
+          cDimension={fusionLayout.cDimension}
+          tDimension={fusionLayout.tDimension}
+          fusionLut={fusionLut}
+          onOpacityChange={(v) => onFusionChange({ ...tile.fusion!, opacity: v })}
+          onCChange={setFusionC}
+          onTChange={setFusionT}
+          onLutChange={setFusionLut}
+          onRemove={() => onFusionChange(undefined)}
         />
-      ) : (
-        <div style={{ padding: 12, fontSize: 12, color: "#8a6d3b" }}>{t("viewer.webTodo")}</div>
       )}
+    </div>
+  );
+}
+
+// ── FusionControlBar ─────────────────────────────────────────
+
+function FusionControlBar({
+  seriesLabel,
+  opacity,
+  fusionC,
+  fusionT,
+  nC,
+  nT,
+  cDimension,
+  tDimension,
+  fusionLut,
+  onOpacityChange,
+  onCChange,
+  onTChange,
+  onLutChange,
+  onRemove,
+}: {
+  seriesLabel: string;
+  opacity: number;
+  fusionC: number;
+  fusionT: number;
+  nC: number;
+  nT: number;
+  cDimension?: string | null;
+  tDimension?: string | null;
+  fusionLut: LutData | null;
+  onOpacityChange: (v: number) => void;
+  onCChange: (v: number) => void;
+  onTChange: (v: number) => void;
+  onLutChange: (lut: LutData | null) => void;
+  onRemove: () => void;
+}) {
+  const { t } = useI18n();
+  const [showLutDialog, setShowLutDialog] = useState(false);
+  return (
+    <div style={fusionBar}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+        <span style={{ fontSize: 11, color: "#0b5cad", flex: "none" }}>🔀</span>
+        <span
+          style={{
+            fontSize: 11,
+            color: "#33404d",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            flex: 1,
+            minWidth: 0,
+          }}
+        >
+          {seriesLabel}
+        </span>
+      </div>
+
+      {/* 透過度 */}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flex: "none" }}>
+        <span style={{ fontSize: 11, color: "#5a6672", flex: "none" }}>{t("viewer2d.fusion.opacity")}</span>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          value={Math.round(opacity * 100)}
+          onChange={(e) => onOpacityChange(Number(e.target.value) / 100)}
+          style={{ width: 70 }}
+        />
+        <span style={{ fontSize: 11, color: "#5a6672", minWidth: 28, textAlign: "right" }}>
+          {Math.round(opacity * 100)}%
+        </span>
+
+        {/* LUT ボタン */}
+        <div style={{ display: "flex", alignItems: "center", gap: 3, flex: "none" }}>
+          {fusionLut && (
+            <div
+              style={{
+                width: 36,
+                height: 11,
+                border: "1px solid #b0b8c4",
+                borderRadius: 2,
+                overflow: "hidden",
+                flexShrink: 0,
+              }}
+            >
+              <ColorBar lut={fusionLut} />
+            </div>
+          )}
+          <button
+            onClick={() => setShowLutDialog(true)}
+            style={{
+              fontSize: 11,
+              padding: "1px 6px",
+              borderRadius: 3,
+              border: "1px solid #c0c8d4",
+              background: fusionLut ? "#e8f0fc" : "#f5f7fa",
+              color: fusionLut ? "#0b5cad" : "#5a6672",
+              cursor: "pointer",
+              lineHeight: 1.4,
+            }}
+          >
+            {t("viewer2d.fusion.lut")}
+          </button>
+        </div>
+      </div>
+
+      {showLutDialog && (
+        <LutDialog
+          currentLutName={fusionLut?.name ?? null}
+          onSelect={(lut) => onLutChange(lut)}
+          onClose={() => setShowLutDialog(false)}
+        />
+      )}
+
+      {/* C スライダー（マルチチャンネルのとき） */}
+      {nC > 1 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 4, flex: "none" }}>
+          <span style={{ fontSize: 11, color: "#5a6672" }}>
+            C {fusionC + 1}/{nC}{cDimension ? ` (${cDimension})` : ""}
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={nC - 1}
+            value={fusionC}
+            onChange={(e) => onCChange(Number(e.target.value))}
+            style={{ width: 60 }}
+          />
+        </div>
+      )}
+
+      {/* T スライダー（時系列のとき） */}
+      {nT > 1 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 4, flex: "none" }}>
+          <span style={{ fontSize: 11, color: "#5a6672" }}>
+            T {fusionT + 1}/{nT}{tDimension ? ` (${tDimension})` : ""}
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={nT - 1}
+            value={fusionT}
+            onChange={(e) => onTChange(Number(e.target.value))}
+            style={{ width: 60 }}
+          />
+        </div>
+      )}
+
+      <button onClick={onRemove} style={fusionRemoveBtn} title={t("viewer2d.fusion.remove")}>
+        ×
+      </button>
     </div>
   );
 }
@@ -613,8 +1311,43 @@ function StudyNode({
         (series ?? []).map((se) => {
           const tileId = `${study.studyInstanceUid}|${se.seriesInstanceUid}`;
           const loaded = loadedTileIds.has(tileId);
+          const seriesLabel = `#${se.seriesNumber ?? "?"} ${se.modality ?? ""} ${se.seriesDescription ?? ""}`.trim();
+
           return (
-            <div key={se.seriesInstanceUid} style={seriesRow}>
+            <div
+              key={se.seriesInstanceUid}
+              style={{
+                ...seriesRow,
+                opacity: mode !== "standalone" ? 0.7 : loaded ? 0.75 : 1,
+                cursor: mode === "standalone" ? "grab" : "default",
+              }}
+              draggable={mode === "standalone"}
+              onDragStart={(e) => {
+                _dragPayload = { type: "series", study, series: se, label: seriesLabel };
+                _dropHandledInWindow = false;
+                _lastDragOverMs = 0;
+                e.dataTransfer.effectAllowed = "move";
+                setGhostImage(e, seriesLabel);
+                console.log("[DnD] series dragStart:", seriesLabel);
+              }}
+              onDragEnd={() => {
+                _cancelDragTimers();
+                const msSince = _lastDragOverMs > 0 ? Date.now() - _lastDragOverMs : Infinity;
+                const outsideWindow = !_dropHandledInWindow && msSince > 50;
+                console.log("[DnD] series dragEnd — _dropHandledInWindow:", _dropHandledInWindow,
+                  "_lastHoveredTileId:", _lastHoveredTileId,
+                  "msSinceLastDragOver:", msSince, "outsideWindow:", outsideWindow);
+                if (outsideWindow && _lastHoveredTileId) {
+                  console.log("[DnD] → series outside drop, capturing:", _lastHoveredTileId);
+                  captureAndDownload(_lastHoveredTileId);
+                } else if (_dropHandledInWindow) {
+                  console.log("[DnD] → in-window drop, no capture");
+                } else {
+                  console.log("[DnD] → outside but no hovered tile");
+                }
+                _resetDragState();
+              }}
+            >
               <span
                 style={{
                   flex: 1,
@@ -623,6 +1356,7 @@ function StudyNode({
                   whiteSpace: "nowrap",
                   fontSize: 12,
                   color: loaded ? "#0b5cad" : "#33404d",
+                  cursor: mode === "standalone" && !loaded ? "grab" : "default",
                 }}
               >
                 #{se.seriesNumber ?? "?"} {se.modality ?? ""} {se.seriesDescription ?? ""} (
@@ -838,11 +1572,12 @@ const tileBox: React.CSSProperties = {
 const tileHead: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 6,
-  padding: "4px 8px",
+  gap: 4,
+  padding: "4px 6px",
   background: "#f2f5f8",
   borderBottom: "1px solid #e1e7ee",
   flex: "none",
+  userSelect: "none",
 };
 const tileTitle: React.CSSProperties = {
   flex: 1,
@@ -861,5 +1596,26 @@ const xbtn: React.CSSProperties = {
   cursor: "pointer",
   fontSize: 13,
   lineHeight: 1,
-  padding: "1px 7px",
+  padding: "1px 6px",
+};
+const fusionBar: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: 8,
+  padding: "5px 10px",
+  borderTop: "1px solid #e1e7ee",
+  background: "#f0f5fb",
+  flex: "none",
+};
+const fusionRemoveBtn: React.CSSProperties = {
+  flex: "none",
+  border: "1px solid #cdd5de",
+  borderRadius: 5,
+  background: "#fff",
+  cursor: "pointer",
+  fontSize: 13,
+  lineHeight: 1,
+  padding: "1px 6px",
+  marginLeft: "auto",
 };

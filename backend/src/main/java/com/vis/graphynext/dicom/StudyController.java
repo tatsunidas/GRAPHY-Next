@@ -105,7 +105,7 @@ public class StudyController {
     @GetMapping("/studies/{studyUid}/series/{seriesUid}/layout")
     public SeriesLayout layout(@PathVariable String studyUid, @PathVariable String seriesUid) {
         if (webProvider.getIfAvailable() != null) {
-            return new SeriesLayout(0, 0, 0, null, null, List.of());
+            return SeriesLayout.noSpatial(0, 0, 0, null, null, List.of());
         }
         return storage.seriesLayout(studyUid, seriesUid);
     }

@@ -116,6 +116,27 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
           { key: "viewer.cineFps", labelKey: "settings.field.cineFps", type: "number", default: 10, min: 1, max: 60 },
         ],
       },
+      {
+        titleKey: "settings.sec.fusion",
+        fields: [
+          {
+            key: "viewer.fusionOpacity",
+            labelKey: "settings.field.fusionOpacity",
+            type: "number",
+            default: 50,
+            min: 0,
+            max: 100,
+            helpKey: "settings.field.fusionOpacity.help",
+          },
+          {
+            key: "viewer.fusionLut",
+            labelKey: "settings.field.fusionLut",
+            type: "text",
+            default: "",
+            helpKey: "settings.field.fusionLut.help",
+          },
+        ],
+      },
     ],
   },
   {

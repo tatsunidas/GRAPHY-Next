@@ -76,6 +76,12 @@ export interface SeriesLayoutCell {
   sopInstanceUid: string;
 }
 
+/** Z インデックスごとの ImagePositionPatient（Fusion trilinear 補間用）。 */
+export interface SeriesLayoutZSpatial {
+  z: number;
+  imagePositionPatient: [number, number, number];
+}
+
 /** シリーズの 5D(ZCT) レイアウト（backend がヘッダから導出）。 */
 export interface SeriesLayoutDto {
   nZ: number;
@@ -84,6 +90,16 @@ export interface SeriesLayoutDto {
   cDimension: string | null;
   tDimension: string | null;
   cells: SeriesLayoutCell[];
+  /** IOP 6 要素（行/列方向余弦）。Fusion 精密アライメント用。null なら未取得。 */
+  imageOrientationPatient: [number, number, number, number, number, number] | null;
+  /** 行間隔 [mm]。0 なら未取得。 */
+  pixelSpacingRow: number;
+  /** 列間隔 [mm]。0 なら未取得。 */
+  pixelSpacingCol: number;
+  imageWidth: number;
+  imageHeight: number;
+  /** Z インデックスごとの IPP リスト（z 昇順）。null なら未取得。 */
+  zSpatial: SeriesLayoutZSpatial[] | null;
 }
 
 export interface TagInfo {
@@ -110,3 +126,22 @@ export interface ImportResult {
 
 export const importPaths = (paths: string[]) =>
   httpSend<ImportResult>("/api/import/paths", "POST", { paths });
+
+// ── LUT ────────────────────────────────────────────────────────
+
+export interface LutData {
+  name: string;
+  /** 赤チャンネル 0-255（256 要素）。 */
+  r: number[];
+  /** 緑チャンネル 0-255（256 要素）。 */
+  g: number[];
+  /** 青チャンネル 0-255（256 要素）。 */
+  b: number[];
+}
+
+/** classpath の luts/ にある LUT 名の一覧を取得する。 */
+export const fetchLutNames = () => httpGet<string[]>("/api/luts");
+
+/** 指定名の LUT RGB データを取得する。 */
+export const fetchLutData = (name: string) =>
+  httpGet<LutData>(`/api/luts/${encodeURIComponent(name)}`);
