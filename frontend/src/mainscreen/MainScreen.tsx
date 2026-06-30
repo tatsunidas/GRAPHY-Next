@@ -13,6 +13,7 @@ import { SearchPanel } from "./SearchPanel";
 import { StatusBar } from "./StatusBar";
 import { TagExtractorDialog } from "./TagExtractorDialog";
 import { ExportDialog } from "./ExportDialog";
+import { SendDialog } from "./SendDialog";
 import { TagViewerDialog } from "./TagViewerDialog";
 import { NonDicomImportDialog } from "./NonDicomImportDialog";
 
@@ -47,7 +48,7 @@ export function MainScreen({
   const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
   const [selectedSeries, setSelectedSeries] = useState<Series | null>(null);
   const [openTool, setOpenTool] = useState<
-    "tagExtractor" | "export" | "tagViewer" | "nonDicomImport" | null
+    "tagExtractor" | "export" | "send" | "tagViewer" | "nonDicomImport" | null
   >(null);
 
   const handleImport = async () => {
@@ -67,7 +68,14 @@ export function MainScreen({
   };
 
   // 各ビューア起動。2D Viewer は別ウィンドウ（desktop）/ ハッシュ（web）で開く。3D/MPR/Slicer は順次。
-  const handleOpenViewer = (kind: "2d" | "3d" | "mpr" | "slicer") => {
+  const handleOpenViewer = (kind: "2d" | "3d" | "mpr" | "slicer" | "qr") => {
+    if (kind === "qr") {
+      // Query/Retrieve は常駐の別ウィンドウ。
+      const d = desktop();
+      if (d?.openViewer) void d.openViewer("qr");
+      else window.open(`${window.location.pathname}#qr`, "graphy-qr");
+      return;
+    }
     if (kind === "2d") {
       // 選択中のスタディ/シリーズをコンテキストとして localStorage に書き込む。
       // Viewer2DScreen がマウント時または storage イベントで読み取る。
@@ -95,7 +103,7 @@ export function MainScreen({
 
   // データ I/O・ユーティリティ。実装済みはダイアログを開き、未実装は告知バナー（実装は fw に記録）。
   const handleOpenTool = (
-    kind: "export" | "nonDicomImport" | "anonymizer" | "tagExtractor" | "seriesExtractor" | "tagViewer",
+    kind: "export" | "send" | "nonDicomImport" | "anonymizer" | "tagExtractor" | "seriesExtractor" | "tagViewer",
   ) => {
     if (kind === "tagExtractor") {
       setOpenTool("tagExtractor");
@@ -108,6 +116,15 @@ export function MainScreen({
         return;
       }
       setOpenTool("export");
+      return;
+    }
+    if (kind === "send") {
+      if (!selectedStudy) {
+        // 送信は患者特定が必要なため、スタディ選択を促す（Export と同じ）。
+        window.alert(t("export.noSelection"));
+        return;
+      }
+      setOpenTool("send");
       return;
     }
     if (kind === "tagViewer") {
@@ -171,6 +188,7 @@ export function MainScreen({
         series={selectedSeries}
       />
       <ExportDialog open={openTool === "export"} onClose={() => setOpenTool(null)} study={selectedStudy} />
+      <SendDialog open={openTool === "send"} onClose={() => setOpenTool(null)} study={selectedStudy} />
       <TagViewerDialog
         open={openTool === "tagViewer"}
         onClose={() => setOpenTool(null)}

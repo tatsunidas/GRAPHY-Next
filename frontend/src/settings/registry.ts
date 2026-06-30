@@ -97,6 +97,50 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
     sections: [],
   },
   {
+    // DICOM 送信先（Remote AE）はカスタムパネル RemoteAePanel で編集。
+    id: "dicomSend",
+    labelKey: "settings.cat.dicomSend",
+    icon: "📡",
+    sections: [],
+  },
+  {
+    id: "qr",
+    labelKey: "settings.cat.qr",
+    icon: "🔎",
+    sections: [
+      {
+        titleKey: "settings.sec.qr",
+        fields: [
+          {
+            key: "qr.autoRefreshOnStartup",
+            labelKey: "settings.field.qrAutoRefreshOnStartup",
+            type: "toggle",
+            default: false,
+            helpKey: "settings.field.qrAutoRefreshOnStartup.help",
+          },
+          {
+            key: "qr.autoRefreshIntervalSec",
+            labelKey: "settings.field.qrAutoRefreshIntervalSec",
+            type: "number",
+            default: 60,
+            min: 10,
+            max: 3600,
+            helpKey: "settings.field.qrAutoRefreshIntervalSec.help",
+          },
+          {
+            key: "qr.largeRetrieveThreshold",
+            labelKey: "settings.field.qrLargeRetrieveThreshold",
+            type: "number",
+            default: 500,
+            min: 1,
+            max: 100000,
+            helpKey: "settings.field.qrLargeRetrieveThreshold.help",
+          },
+        ],
+      },
+    ],
+  },
+  {
     id: "viewer",
     labelKey: "settings.cat.viewer",
     icon: "🖼",

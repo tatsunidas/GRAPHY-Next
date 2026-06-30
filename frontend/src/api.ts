@@ -283,3 +283,159 @@ export const exportZip = async (
   const filename = m ? m[1] : "graphy-export.zip";
   return { blob, filename };
 };
+
+// ── DICOM Send（C-STORE SCU で外部 PACS/AE へ送信） ─────────────
+
+/** 設定済みリモート AE（送信先候補）。application.yml の graphy.dicom.remote-aes 由来。 */
+export interface RemoteAe {
+  aeTitle: string;
+  host: string;
+  port: number;
+}
+
+/** 設定済みリモート AE 一覧を取得する。 */
+export const fetchRemoteAes = () => httpGet<RemoteAe[]>("/api/dicom/remote-aes");
+
+/** C-ECHO（疎通確認）の結果。 */
+export interface EchoResult {
+  success: boolean;
+  status: number;
+  elapsedMs: number;
+  message: string;
+}
+
+/** リモート AE へ C-ECHO で疎通確認する。 */
+export const echoDicom = (req: {
+  host: string;
+  port: number;
+  calledAet: string;
+  callingAet?: string;
+  tls?: boolean;
+}) =>
+  httpSend<EchoResult>("/api/dicom/echo", "POST", {
+    host: req.host,
+    port: req.port,
+    calledAet: req.calledAet,
+    callingAet: req.callingAet ?? "",
+    tls: req.tls ?? false,
+  });
+
+/** 送信対象（1 スタディと、その中で送る対象シリーズ。空ならスタディ全体）。 */
+export interface SendSelection {
+  studyUid: string;
+  seriesUids: string[];
+}
+
+export interface SendRequest {
+  selections: SendSelection[];
+  host: string;
+  port: number;
+  calledAet: string;
+  /** 自局 AE（空なら backend の既定 localAeTitle）。 */
+  callingAet?: string;
+  tls?: boolean;
+}
+
+/** 送信結果サマリ。 */
+export interface SendResult {
+  total: number;
+  sent: number;
+  failed: number;
+  messages: string[];
+}
+
+/** 選択スタディ/シリーズをリモート AE へ C-STORE で送信する（standalone のローカル索引が前提）。 */
+export const sendDicom = (req: SendRequest) =>
+  httpSend<SendResult>("/api/dicom/send", "POST", {
+    selections: req.selections,
+    host: req.host,
+    port: req.port,
+    calledAet: req.calledAet,
+    callingAet: req.callingAet ?? "",
+    tls: req.tls ?? false,
+  });
+
+// ── Query/Retrieve（QR ウィンドウ） ────────────────────────────
+
+/** リモート PACS の C-FIND（STUDY）結果行。年齢は studyDate−patientBirthDate から算出する。 */
+export interface QrStudyRow {
+  studyInstanceUid: string;
+  patientId: string | null;
+  patientName: string | null;
+  patientBirthDate: string | null;
+  patientSex: string | null;
+  studyDate: string | null;
+  studyDescription: string | null;
+  accessionNumber: string | null;
+  modality: string | null;
+  numberOfStudyRelatedSeries: number;
+  numberOfStudyRelatedInstances: number;
+}
+
+/** リモート PACS の C-FIND（SERIES）結果行。 */
+export interface QrSeriesRow {
+  seriesInstanceUid: string;
+  modality: string | null;
+  seriesNumber: number | null;
+  seriesDescription: string | null;
+  protocolName: string | null;
+  numberOfSeriesRelatedInstances: number;
+}
+
+/** リトリーブジョブの進捗。phase: retrieving | storing | done | error。 */
+export interface QrRetrieveJob {
+  expected: number;
+  received: number;
+  stored: number;
+  done: boolean;
+  success: boolean;
+  phase: string;
+  message: string;
+}
+
+interface QrDest {
+  host: string;
+  port: number;
+  calledAet: string;
+}
+
+/** QR: STUDY レベル C-FIND。matchKeys は C-FIND の検索キー（PatientID 等）。 */
+export const qrFindStudies = (dest: QrDest, matchKeys: Record<string, string>) =>
+  httpSend<QrStudyRow[]>("/api/dicom/qr/find-studies", "POST", { ...dest, matchKeys });
+
+/** QR: SERIES レベル C-FIND（指定スタディ内のシリーズ）。 */
+export const qrFindSeries = (dest: QrDest, studyUid: string, matchKeys: Record<string, string> = {}) =>
+  httpSend<QrSeriesRow[]>("/api/dicom/qr/find-series", "POST", { ...dest, studyUid, matchKeys });
+
+/** QR: リトリーブ開始。seriesUid 省略でスタディ全体。expected は進捗分母（C-FIND の件数）。 */
+export const qrRetrieve = (
+  dest: QrDest,
+  studyUid: string,
+  seriesUid: string | null,
+  expected: number,
+) =>
+  httpSend<{ jobId: string }>("/api/dicom/qr/retrieve", "POST", {
+    ...dest,
+    studyUid,
+    seriesUid: seriesUid ?? null,
+    expected,
+  });
+
+/** QR: リトリーブ進捗を取得。 */
+export const qrRetrieveStatus = (jobId: string) =>
+  httpGet<QrRetrieveJob>(`/api/dicom/qr/retrieve/${encodeURIComponent(jobId)}`);
+
+/** 保存済み件数の問い合わせ要素・結果。 */
+export interface StoredQuery {
+  studyUid: string;
+  seriesUid?: string | null;
+}
+export interface StoredResult {
+  studyUid: string;
+  seriesUid: string | null;
+  storedCount: number;
+}
+
+/** QR: 保存済み件数をバッチ問い合わせ（standalone=ローカル索引 / web=dcm4chee QIDO）。 */
+export const qrStored = (queries: StoredQuery[]) =>
+  httpSend<StoredResult[]>("/api/dicom/qr/stored", "POST", queries);

@@ -47,6 +47,7 @@ export function SeriesViewer({
   syncEnabled = false,
   referenceLinesEnabled = false,
   referenceLabel,
+  commandKey,
   onDimChange,
   renderFusionOverlay,
 }: {
@@ -62,6 +63,8 @@ export function SeriesViewer({
   referenceLinesEnabled?: boolean;
   /** リファレンスラインの凡例に使うシリーズ名。 */
   referenceLabel?: string;
+  /** 画面メニュー/ツールバーからの一括コマンドのキー（= tileId）。 */
+  commandKey?: string;
   /** 現在表示中の C/T インデックス変化を上位に通知（Fusion の初期 C/T 引き継ぎ用）。 */
   onDimChange?: (c: number, t: number) => void;
   /** Fusion オーバーレイ。スライダー表示時に base 画像へ重ねて描画する（GridView では無効）。 */
@@ -279,7 +282,7 @@ export function SeriesViewer({
         const n = nZRef.current;
         const lay = layoutRef.current;
         const ipps = Array.from({ length: n }, (_, z) => lay.ippAt?.(z) ?? null);
-        return { index: zcRef.current, nZ: n, ipps };
+        return { index: zcRef.current, nZ: n, ipps, normal: lay.normal ?? null };
       },
       applyIndex: (z) => {
         syncDrivenRef.current = true;
@@ -333,7 +336,7 @@ export function SeriesViewer({
           </div>
         </div>
       ) : (
-        <Viewer2D imageIds={zStack} imageIndex={zc} overlays={overlays} fill={fillHeight} viewSyncEnabled={syncOn} referenceLinesEnabled={referenceLinesEnabled} referenceLabel={referenceLabel} renderOverlay={renderFusionOverlay} />
+        <Viewer2D imageIds={zStack} imageIndex={zc} overlays={overlays} fill={fillHeight} viewSyncEnabled={syncOn} referenceLinesEnabled={referenceLinesEnabled} referenceLabel={referenceLabel} commandKey={commandKey} renderOverlay={renderFusionOverlay} />
       )}
 
       <div style={controls}>

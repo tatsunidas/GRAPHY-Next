@@ -47,6 +47,8 @@ export function MenuBar({
       items: [
         { label: t("main.import.action"), onClick: onImport, disabled: !canImport },
         { label: t("main.toolbar.export"), onClick: () => onOpenTool("export") },
+        { label: t("main.toolbar.send"), onClick: () => onOpenTool("send") },
+        { label: t("qr.title"), onClick: () => onOpenViewer("qr") },
         { label: t("main.toolbar.nonDicomImport"), onClick: () => onOpenTool("nonDicomImport") },
       ],
     },

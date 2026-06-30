@@ -13,6 +13,8 @@
 | **Export** | **実装済(standalone/web)** | 複数患者→スタディ/シリーズツリーで選択→ DICOM 交換メディア(PS3.10) ZIP を書き出し。
 |  |  | DICOMDIR / 2D Viewer(portable) / README の同梱オプション。詳細は `fw/export.md`・`fw/export-portable-viewer.md`。
 |  |  | 将来: Burn CD/DVD、匿名化 Export、ネイティブフォルダ出力。 |
+| **Send** | **実装済(standalone)** | 選択スタディ/シリーズを C-STORE SCU でリモート AE へ送信（DICOM Send）。
+|  |  | 送信先=設定済みリモート AE 選択 or 手動入力（AET/host/port/TLS）、C-ECHO 疎通確認、単一アソシエーション送信。下記参照。 |
 | **NonDicomImporter** | **実装済(standalone)** | 非 DICOM を DICOM 化して取込。PDF=Encapsulated PDF、
 |  |  | 画像(png,jpg,bmp,gif,tif)=Secondary Capture、**動画(MP4/AVI 等)=Video Photographic**。
 |  |  | 患者/スタディ紐付け UI（既存追加 or 新規）。下記参照。 |
@@ -77,6 +79,43 @@
 - frontend: `mainscreen/TagViewerDialog.tsx`（列 Tag/Name/VR/Value、`depth*16px` インデント＋`>` プレフィックス、
   検索バーで `<mark>` ハイライト・一致件数表示）、`api.ts` `fetchInstanceTags()`、i18n `tagview.*`。
   Menu(Function) と Toolbar に「タグ表示」ボタンを追加。
+
+## Send（DICOM Send / C-STORE SCU）実装（2026-06-30）
+- **方針**: 選択スタディ/シリーズに属するローカル DICOM ファイルを解決し、**単一アソシエーション**で
+  リモート AE へ C-STORE する。多数インスタンスのスタディで毎ファイル接続を張り直す非効率／PACS 側の
+  アソシエーション制限を避ける。standalone 専用（ローカル索引=H2+FS が送信対象解決の前提）。
+- **backend**: `com.vis.graphynext.dicom.store` / `com.vis.graphynext.dicom`
+  - `DicomStoreScu.storeAll(host, port, calledAet, callingAet, files, tls)` … 各ファイルの FMI から
+    (SOPClassUID, TransferSyntaxUID) を集めて Presentation Context を一括提示し、各ファイルを**自身の転送構文**で
+    送る（再エンコードしない＝圧縮 TS もそのまま）。ファイル単位で失敗を捕捉し 1 件失敗で全体を止めない。
+    成功(status 0)に加え警告(0xBxxx)も送信成功として数える。`BatchResult{total, sent, failed, messages}`。
+    既存の単発 `store`（C-ECHO 同様の 1 ファイル 1 アソシエーション）は温存（テスト/単発用）。
+  - `DicomStorageService.resolveFiles(studyUid, seriesUids)` … スタディ（必要ならシリーズ絞り込み）の
+    `file:` URI を実在パス一覧に解決。`seriesUids` 空でスタディ全体。
+  - `DicomSendService.send(selections, host, port, calledAet, callingAet, tls)` … 複数 selection を
+    まとめてファイル解決→`storeAll` で 1 アソシエーション送信。`SendSummary{total, sent, failed, messages}`。
+  - `DicomController`: `POST /api/dicom/send`（本文 `{selections:[{studyUid, seriesUids[]}], host, port, calledAet, callingAet?, tls}`）、
+    `GET /api/dicom/remote-aes`（設定済みリモート AE 一覧）。callingAet 省略時は `localAeTitle`。
+  - リモート AE 設定: `graphy.dicom.remote-aes`（`application-standalone.yml` にコメント例）。未設定でも手動入力で送信可。
+  - **送信先を Settings(GUI) から管理（2026-06-30 追加）**: `GET /api/dicom/remote-aes` は
+    `graphy.dicom.remote-aes`（YAML 既定値）＋ Settings(H2) 保存分（キー `DicomController.REMOTE_AES_KEY="dicom.remoteAes"`,
+    JSON 配列）を**マージ**して返す（AE タイトル重複は Settings 側で上書き）。保存は既存の `PUT /api/settings`
+    を再利用（新規書き込み API なし）。`ObjectMapper`/`SettingsService` を `DicomController` に注入。不正 JSON は
+    無視（500 にしない）。frontend は `settings/RemoteAePanel.tsx`（Settings カテゴリ「DICOM 送信先」、行追加/削除・
+    行ごと C-ECHO・保存）。`SettingsDialog` が `category.id==="dicomSend"` で描画。YAML 由来分は読み取り専用で参考表示。
+    i18n: `settings.cat.dicomSend` / `settings.remoteAe.*`。
+  - テスト: `DicomStoreIntegrationTest` に 2 件追加（`storeAll` 一括送信＝1 study/2 series/3 instances、
+    `DicomSendService` のシリーズ絞り込み/スタディ全体解決）。全 8 件 green。
+- **frontend**:
+  - `api.ts`: `RemoteAe`/`fetchRemoteAes`、`EchoResult`/`echoDicom`、`SendSelection`/`SendRequest`/`SendResult`/`sendDicom`。
+  - `mainscreen/SendDialog.tsx`: ExportDialog と同じ患者スタディ/シリーズツリー（チェックボックス・選択スタディは
+    展開＋全シリーズ初期チェック）＋送信先パネル（リモート AE ドロップダウン / 手動 AET・host・port・TLS）＋
+    **C-ECHO 疎通確認**ボタン＋送信。結果サマリ（成功件数 / 部分失敗時はメッセージ先頭 5 件）を表示。
+  - `MainScreen.tsx`: `handleOpenTool("send")`（未選択時は Export と同じく選択を促す）→ `<SendDialog>`。
+    Menu(File) と Toolbar に「送信」ボタン（📡）を追加。
+  - i18n: `send.*` / `main.toolbar.send` を ja/en に追加。
+- **未対応/将来**: web(STOW-RS) 経由の送信、匿名化してから送信、Storage Commitment（送信後の保管確認）、
+  進捗バー（現状は完了後にサマリ表示）、送信履歴/ログ画面。
 
 ## NonDicomImporter 実装（2026-06-30）
 - backend: `com.vis.graphynext.nondicom`

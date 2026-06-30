@@ -10,6 +10,7 @@ import { KeyboardHelp } from "./shortcuts/KeyboardHelp";
 import { useGlobalShortcuts } from "./shortcuts/useGlobalShortcuts";
 import { MainScreen } from "./mainscreen/MainScreen";
 import { Viewer2DScreen } from "./viewer2d/Viewer2DScreen";
+import { QRScreen } from "./qr/QRScreen";
 import { subscribeDbChanged, type DbChangedDetail } from "./dbEvents";
 import { useI18n } from "./i18n/i18n";
 
@@ -54,6 +55,8 @@ export function App() {
     <>
       {screen === "2dviewer" ? (
         <Viewer2DScreen status={status} />
+      ) : screen === "qr" ? (
+        <QRScreen status={status} />
       ) : (
         <MainScreen
           status={status}

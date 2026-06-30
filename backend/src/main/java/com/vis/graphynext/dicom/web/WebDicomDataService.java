@@ -64,6 +64,27 @@ public class WebDicomDataService {
         return qido("/studies/" + studyUid + "/series/" + seriesUid + "/instances", query);
     }
 
+    /**
+     * dcm4chee 等にそのスタディ（seriesUid != null ならそのシリーズ）が何インスタンス保存済みかを QIDO で数える
+     * （QR の保存済み判定）。インスタンス QIDO の件数を返す。未保存/未到達は 0。
+     */
+    public long storedCount(String studyUid, String seriesUid) {
+        try {
+            if (seriesUid != null && !seriesUid.isBlank()) {
+                return searchInstances(studyUid, seriesUid, Map.of()).size();
+            }
+            // スタディ全体は series ごとの NumberOfSeriesRelatedInstances を合算（インスタンス QIDO の全列挙を避ける）。
+            long sum = 0;
+            for (Attributes se : searchSeries(studyUid, Map.of())) {
+                sum += se.getInt(org.dcm4che3.data.Tag.NumberOfSeriesRelatedInstances, 0);
+            }
+            return sum;
+        } catch (Exception e) {
+            log.warn("QIDO 保存済み件数取得に失敗 study={} series={}: {}", studyUid, seriesUid, e.toString());
+            return 0;
+        }
+    }
+
     private List<Attributes> qido(String path, Map<String, String> query) {
         if (baseUrl.isEmpty()) {
             throw new IllegalStateException(

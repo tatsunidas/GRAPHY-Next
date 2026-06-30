@@ -5,6 +5,7 @@
 package com.vis.graphynext.dicom;
 
 import com.vis.graphynext.dicom.store.DicomInstance;
+import com.vis.graphynext.dicom.store.DicomSendService;
 import com.vis.graphynext.dicom.store.DicomStorageService;
 import com.vis.graphynext.dicom.store.DicomStoreScp;
 import com.vis.graphynext.dicom.store.DicomStoreScu;
@@ -52,6 +53,9 @@ class DicomStoreIntegrationTest {
     @Autowired
     DicomStorageService storage;
 
+    @Autowired
+    DicomSendService sendService;
+
     @Test
     void ingest_isIdempotent_and_indexed_with_fileUri() throws Exception {
         Attributes ds = DicomPhantomFactory.scImage("PID1", "1.2.study.1", "1.2.series.1", "1.2.sop.1");
@@ -92,6 +96,63 @@ class DicomStoreIntegrationTest {
             assertTrue(r.success(), () -> "C-STORE should succeed: " + r.message());
             List<DicomInstance> m = storage.findMatches(null, "1.2.study.2", null, null);
             assertEquals(1, m.size(), "受信したインスタンスが索引に載る");
+        } finally {
+            scp.stop();
+        }
+    }
+
+    @Test
+    void storeAll_sendsMultipleFilesOverSingleAssociation() throws Exception {
+        int port = freePort();
+        DicomScpServer scp = new DicomScpServer("GRAPHYSTORE", "127.0.0.1", port);
+        scp.addService(
+                new DicomStoreScp(storage, tmp.resolve("scp-batch")),
+                new TransferCapability(null, "*", TransferCapability.Role.SCP, "*"));
+        scp.start();
+        try {
+            // 1 スタディ・2 シリーズ・計 3 インスタンスを一括送信。
+            List<Path> files = List.of(
+                    writePhantom(DicomPhantomFactory.scImage("PSEND", "ST.SEND", "SE.S1", "SOP.S1a")),
+                    writePhantom(DicomPhantomFactory.scImage("PSEND", "ST.SEND", "SE.S1", "SOP.S1b")),
+                    writePhantom(DicomPhantomFactory.scImage("PSEND", "ST.SEND", "SE.S2", "SOP.S2a")));
+
+            DicomStoreScu.BatchResult r =
+                    new DicomStoreScu().storeAll("127.0.0.1", port, "GRAPHYSTORE", "SCU", files, null);
+
+            assertEquals(3, r.total());
+            assertEquals(3, r.sent(), () -> "全件送信成功のはず: " + r.messages());
+            assertEquals(0, r.failed());
+            assertEquals(3, storage.findMatches(null, "ST.SEND", null, null).size(), "受信側の索引に 3 件");
+        } finally {
+            scp.stop();
+        }
+    }
+
+    @Test
+    void sendService_resolvesStudyFiles_andSendsSelectedSeries() throws Exception {
+        // ローカル索引へ取り込む（送信対象の解決元）。1 スタディ・2 シリーズ。
+        storage.ingest(writePhantom(DicomPhantomFactory.scImage("PSVC", "ST.SVC", "SE.V1", "SOP.V1a")));
+        storage.ingest(writePhantom(DicomPhantomFactory.scImage("PSVC", "ST.SVC", "SE.V1", "SOP.V1b")));
+        storage.ingest(writePhantom(DicomPhantomFactory.scImage("PSVC", "ST.SVC", "SE.V2", "SOP.V2a")));
+
+        int port = freePort();
+        DicomScpServer scp = new DicomScpServer("GRAPHYSTORE", "127.0.0.1", port);
+        scp.addService(
+                new DicomStoreScp(storage, tmp.resolve("scp-svc")),
+                new TransferCapability(null, "*", TransferCapability.Role.SCP, "*"));
+        scp.start();
+        try {
+            // シリーズ SE.V1 のみ（2 件）を送る。
+            var sel = List.of(new DicomSendService.Selection("ST.SVC", List.of("SE.V1")));
+            DicomSendService.SendSummary s = sendService.send(sel, "127.0.0.1", port, "GRAPHYSTORE", "SCU", false);
+            assertEquals(2, s.total(), "SE.V1 の 2 件が解決される");
+            assertEquals(2, s.sent(), () -> "2 件送信成功: " + s.messages());
+
+            // シリーズ未指定はスタディ全体（3 件）。
+            var all = List.of(new DicomSendService.Selection("ST.SVC", List.of()));
+            DicomSendService.SendSummary sa = sendService.send(all, "127.0.0.1", port, "GRAPHYSTORE", "SCU", false);
+            assertEquals(3, sa.total(), "スタディ全体は 3 件");
+            assertEquals(3, sa.sent());
         } finally {
             scp.stop();
         }

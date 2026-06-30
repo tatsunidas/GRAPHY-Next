@@ -101,6 +101,12 @@ public interface DicomInstanceRepository extends JpaRepository<DicomInstance, St
 
     List<DicomInstance> findByStudyInstanceUid(String studyUid);
 
+    /** スタディ単位のローカル保存インスタンス数（QR の保存済み判定）。 */
+    long countByStudyInstanceUid(String studyUid);
+
+    /** シリーズ単位のローカル保存インスタンス数（QR の保存済み判定）。 */
+    long countByStudyInstanceUidAndSeriesInstanceUid(String studyUid, String seriesUid);
+
     // --- 統計 ---
 
     @Query("""

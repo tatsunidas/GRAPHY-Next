@@ -26,6 +26,8 @@ export interface SliceSyncState {
   nZ: number;
   /** Z ごとの IPP（無ければ null）。length=nZ。 */
   ipps: (readonly [number, number, number] | null)[];
+  /** スライス法線（IOP 外積・正規化）。座標同期で IPP をテーブル位置(mm)へ投影するのに使う。 */
+  normal: readonly [number, number, number] | null;
 }
 
 interface Entry {
@@ -70,21 +72,42 @@ function simpleTarget(st: SliceSyncState, delta: number): number {
   return clampIndex(st, st.index + delta);
 }
 
-/** 座標同期: source 位置 p に最近傍の Z（許容半径以内）。範囲外/IPP 無しは null。 */
-function coordinateTarget(st: SliceSyncState, p: readonly [number, number, number]): number | null {
+function dot3(a: readonly [number, number, number], b: readonly [number, number, number]): number {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+/** 法線がほぼ平行（同一オリエンテーション）か。 */
+function parallelNormals(a: readonly [number, number, number], b: readonly [number, number, number]): boolean {
+  return Math.abs(dot3(a, b)) > 0.999;
+}
+
+/**
+ * 座標同期: source のスライス位置(テーブル位置 mm = IPP·法線)に最も近い Z を返す。
+ * 面内原点(x,y)の違いに影響されないよう **法線へ投影したスカラ**で比較する。
+ * - フォロワーが非空間 / source と非共平面（向きが違う）→ null（呼び出し側で Δ 送り）。
+ * - 最近傍が許容半径(marginMm)外 → -1（呼び出し側で Δ 送り）。
+ */
+function coordinateTarget(
+  st: SliceSyncState,
+  srcPos: number,
+  srcNormal: readonly [number, number, number],
+): number | null {
+  if (!st.normal || !parallelNormals(st.normal, srcNormal)) {
+    return null; // 非共平面（AX×SAG 等）→ 投影比較不可
+  }
   let best = -1;
   let bestD = Infinity;
   for (let z = 0; z < st.ipps.length; z++) {
     const q = st.ipps[z];
     if (!q) continue;
-    const d = Math.hypot(q[0] - p[0], q[1] - p[1], q[2] - p[2]);
+    const d = Math.abs(dot3(q, srcNormal) - srcPos); // source 法線で投影して比較
     if (d < bestD) {
       bestD = d;
       best = z;
     }
   }
-  if (best < 0) return null; // フォロワーに IPP が無い
-  return bestD <= marginMm ? best : -1; // -1=範囲外（移動しない）の番兵
+  if (best < 0) return null;
+  return bestD <= marginMm ? best : -1; // -1=マージン外
 }
 
 /**
@@ -106,7 +129,10 @@ export function publishSlice(sourceId: string): void {
 
   if (entries.size < 2) return; // 同期は 2 つ以上で成立
 
+  // source の現在スライス位置（テーブル位置 mm = IPP·法線）。
   const srcIpp = srcState.ipps[srcState.index] ?? null;
+  const srcNormal = srcState.normal;
+  const srcPos = srcIpp && srcNormal ? dot3(srcIpp, srcNormal) : null;
 
   for (const [id, e] of entries) {
     if (id === sourceId) continue;
@@ -117,14 +143,13 @@ export function publishSlice(sourceId: string): void {
       continue;
     }
     let target: number | null = null;
-    if (mode === "coordinate" && srcIpp) {
-      const r = coordinateTarget(st, srcIpp);
-      if (r === null) {
-        target = simpleTarget(st, delta); // フォロワーが非空間 → 単純へフォールバック
-      } else if (r >= 0) {
-        target = r;
+    if (mode === "coordinate" && srcPos != null && srcNormal) {
+      const r = coordinateTarget(st, srcPos, srcNormal);
+      if (r != null && r >= 0) {
+        target = r; // マージン内 → スライス位置(±marginMm)で一致（面内原点の差は無視）
       } else {
-        target = null; // 範囲外 → 移動しない
+        // 非空間 / 非共平面(向き違い) / マージン外：位置一致しないため枚数差(Δ)送りにフォールバック。
+        target = simpleTarget(st, delta);
       }
     } else {
       // 単純同期、または source が非空間 → 単純

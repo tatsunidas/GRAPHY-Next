@@ -45,6 +45,17 @@ public class DimseQrService {
             "StudyInstanceUID", "PatientID", "PatientName", "StudyDate", "StudyDescription",
             "ModalitiesInStudy", "NumberOfStudyRelatedInstances");
 
+    /** QR ウィンドウ STUDY 行用の返却キー（基本＋生年月日/性別/受付番号/シリーズ数）。 */
+    private static final List<String> QR_STUDY_RETURN_KEYS = List.of(
+            "StudyInstanceUID", "PatientID", "PatientName", "PatientBirthDate", "PatientSex",
+            "StudyDate", "StudyDescription", "AccessionNumber", "ModalitiesInStudy",
+            "NumberOfStudyRelatedSeries", "NumberOfStudyRelatedInstances");
+
+    /** SERIES レベル C-FIND の返却キー。 */
+    private static final List<String> SERIES_RETURN_KEYS = List.of(
+            "SeriesInstanceUID", "Modality", "SeriesNumber", "SeriesDescription",
+            "ProtocolName", "NumberOfSeriesRelatedInstances");
+
     private final Dcm4cheTools tools;
     private final DicomStorageService storage;
     private final DicomProperties props;
@@ -175,6 +186,185 @@ public class DimseQrService {
         }
         log.info("C-MOVE 完了: study={} -> dest={}", studyUid, destAet);
         return r.exitCode();
+    }
+
+    /**
+     * QR ウィンドウ用 STUDY レベル C-FIND。{@link #findStudies} より多くの属性（生年月日/性別/受付番号/
+     * シリーズ数）を返す。
+     */
+    public List<QrStudyRow> findStudiesForQr(String host, int port, String calledAet, Map<String, String> matchKeys)
+            throws IOException {
+        Path tool = tools.require("findscu");
+        Path outDir = Files.createTempDirectory("graphy-qr-find-");
+        List<String> cmd = new ArrayList<>(List.of(
+                tool.toString(),
+                "-b", props.getLocalAeTitle(),
+                "-c", calledAet + "@" + host + ":" + port,
+                "-L", "STUDY"));
+        for (String key : QR_STUDY_RETURN_KEYS) {
+            cmd.add("-r");
+            cmd.add(key);
+        }
+        if (matchKeys != null) {
+            matchKeys.forEach((k, v) -> {
+                cmd.add("-m");
+                cmd.add(k + "=" + v);
+            });
+        }
+        cmd.add("--out-dir");
+        cmd.add(outDir.toString());
+        cmd.add("--out-file");
+        cmd.add("rsp-0000.dcm");
+        cmd.addAll(tlsArgs());
+
+        Dcm4cheTools.Result r = tools.run(cmd, TOOL_TIMEOUT_MS);
+        if (!r.ok()) {
+            deleteQuietly(outDir);
+            throw new IOException("findscu(STUDY) 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
+        }
+        List<QrStudyRow> rows = new ArrayList<>();
+        try (Stream<Path> walk = Files.walk(outDir)) {
+            List<Path> files = walk.filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().endsWith(".dcm")).toList();
+            for (Path f : files) {
+                try (DicomInputStream in = new DicomInputStream(f.toFile())) {
+                    Attributes a = in.readDataset();
+                    rows.add(new QrStudyRow(
+                            a.getString(Tag.StudyInstanceUID),
+                            a.getString(Tag.PatientID),
+                            a.getString(Tag.PatientName),
+                            a.getString(Tag.PatientBirthDate),
+                            a.getString(Tag.PatientSex),
+                            a.getString(Tag.StudyDate),
+                            a.getString(Tag.StudyDescription),
+                            a.getString(Tag.AccessionNumber),
+                            a.getString(Tag.ModalitiesInStudy),
+                            a.getInt(Tag.NumberOfStudyRelatedSeries, 0),
+                            a.getInt(Tag.NumberOfStudyRelatedInstances, 0)));
+                } catch (Exception e) {
+                    log.warn("C-FIND(STUDY) 応答のパースに失敗: {} ({})", f, e.toString());
+                }
+            }
+        } finally {
+            deleteQuietly(outDir);
+        }
+        log.info("QR C-FIND(STUDY) 完了: {} 件 ({}@{}:{})", rows.size(), calledAet, host, port);
+        return rows;
+    }
+
+    /** SERIES レベル C-FIND。指定スタディ内のシリーズ一覧を返す。 */
+    public List<QrSeriesRow> findSeries(String host, int port, String calledAet, String studyUid,
+                                        Map<String, String> matchKeys) throws IOException {
+        Path tool = tools.require("findscu");
+        Path outDir = Files.createTempDirectory("graphy-qr-findse-");
+        List<String> cmd = new ArrayList<>(List.of(
+                tool.toString(),
+                "-b", props.getLocalAeTitle(),
+                "-c", calledAet + "@" + host + ":" + port,
+                "-L", "SERIES",
+                "-m", "StudyInstanceUID=" + studyUid));
+        for (String key : SERIES_RETURN_KEYS) {
+            cmd.add("-r");
+            cmd.add(key);
+        }
+        if (matchKeys != null) {
+            matchKeys.forEach((k, v) -> {
+                cmd.add("-m");
+                cmd.add(k + "=" + v);
+            });
+        }
+        cmd.add("--out-dir");
+        cmd.add(outDir.toString());
+        cmd.add("--out-file");
+        cmd.add("rsp-0000.dcm");
+        cmd.addAll(tlsArgs());
+
+        Dcm4cheTools.Result r = tools.run(cmd, TOOL_TIMEOUT_MS);
+        if (!r.ok()) {
+            deleteQuietly(outDir);
+            throw new IOException("findscu(SERIES) 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
+        }
+        List<QrSeriesRow> rows = new ArrayList<>();
+        try (Stream<Path> walk = Files.walk(outDir)) {
+            List<Path> files = walk.filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().endsWith(".dcm")).toList();
+            for (Path f : files) {
+                try (DicomInputStream in = new DicomInputStream(f.toFile())) {
+                    Attributes a = in.readDataset();
+                    rows.add(new QrSeriesRow(
+                            a.getString(Tag.SeriesInstanceUID),
+                            a.getString(Tag.Modality),
+                            a.contains(Tag.SeriesNumber) ? a.getInt(Tag.SeriesNumber, 0) : null,
+                            a.getString(Tag.SeriesDescription),
+                            a.getString(Tag.ProtocolName),
+                            a.getInt(Tag.NumberOfSeriesRelatedInstances, 0)));
+                } catch (Exception e) {
+                    log.warn("C-FIND(SERIES) 応答のパースに失敗: {} ({})", f, e.toString());
+                }
+            }
+        } finally {
+            deleteQuietly(outDir);
+        }
+        rows.sort(java.util.Comparator.comparing(s -> s.seriesNumber() == null ? Integer.MAX_VALUE : s.seriesNumber()));
+        log.info("QR C-FIND(SERIES) 完了: study={} {} 件", studyUid, rows.size());
+        return rows;
+    }
+
+    /**
+     * C-GET でスタディ（seriesUid != null ならそのシリーズ）を<b>指定ディレクトリ</b>へ取得する（取込はしない）。
+     * 取得進捗はディレクトリ内ファイル数の監視で測れる。取込/STOW は呼び出し側の責務。
+     *
+     * @return getscu の終了コード（0 で成功）
+     */
+    public int retrieveTo(String host, int port, String calledAet, String studyUid, String seriesUid, Path outDir)
+            throws IOException {
+        Path tool = tools.require("getscu");
+        List<String> cmd = new ArrayList<>(List.of(
+                tool.toString(),
+                "-b", props.getLocalAeTitle(),
+                "-c", calledAet + "@" + host + ":" + port));
+        if (seriesUid != null && !seriesUid.isBlank()) {
+            cmd.addAll(List.of("-L", "SERIES",
+                    "-m", "StudyInstanceUID=" + studyUid,
+                    "-m", "SeriesInstanceUID=" + seriesUid));
+        } else {
+            cmd.addAll(List.of("-L", "STUDY", "-m", "StudyInstanceUID=" + studyUid));
+        }
+        cmd.add("--directory");
+        cmd.add(outDir.toString());
+        cmd.addAll(tlsArgs());
+        Dcm4cheTools.Result r = tools.run(cmd, TOOL_TIMEOUT_MS);
+        if (!r.ok()) {
+            throw new IOException("getscu 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
+        }
+        return r.exitCode();
+    }
+
+    /**
+     * 指定ディレクトリ配下の DICOM を STOW-RS で DICOMweb 受信側（dcm4chee 等）へ格納する（web モードの取得格納先）。
+     * 送信先は {@code graphy.dicom.dicomweb.base-url} + {@code /studies}。bearer トークンがあれば付与する。
+     */
+    public void stowDir(Path dir) throws IOException {
+        String baseUrl = props.getDicomweb().getBaseUrl();
+        if (baseUrl == null || baseUrl.isBlank()) {
+            throw new IOException("DICOMweb base-url 未設定のため STOW できません（graphy.dicom.dicomweb.base-url）");
+        }
+        Path tool = tools.require("stowrs");
+        String stowUrl = baseUrl.replaceAll("/+$", "") + "/studies";
+        List<String> cmd = new ArrayList<>(List.of(
+                tool.toString(),
+                "--url", stowUrl));
+        String token = props.getDicomweb().getBearerToken();
+        if (token != null && !token.isBlank()) {
+            cmd.add("--bearer");
+            cmd.add(token);
+        }
+        cmd.add(dir.toString());
+        Dcm4cheTools.Result r = tools.run(cmd, TOOL_TIMEOUT_MS);
+        if (!r.ok()) {
+            throw new IOException("stowrs 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
+        }
+        log.info("STOW-RS 完了: {} -> {}", dir, stowUrl);
     }
 
     /** TLS が設定済みなら getscu/movescu 用の TLS 引数を返す（鍵/信頼ストア + cipher/protocol）。 */

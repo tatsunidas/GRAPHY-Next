@@ -41,6 +41,8 @@ const EXTERNAL_BACKEND = process.env.GRAPHY_BACKEND_EXTERNAL === "1";
 let backendProc = null;
 // 2D Viewer ウィンドウのシングルトン参照。既に開いている場合はフォーカスして再利用する。
 let viewer2dWin = null;
+// QR（Query/Retrieve）ウィンドウのシングルトン参照。常駐させたいので 1 枚を再利用する。
+let qrWin = null;
 
 /** 同梱 / 開発時の backend jar のパスを解決する。 */
 function resolveBackendJar() {
@@ -289,6 +291,14 @@ ipcMain.handle("graphy:open-viewer", (_e, screen) => {
     }
     viewer2dWin = createViewerWindow("2dviewer");
     viewer2dWin.on("closed", () => { viewer2dWin = null; });
+  } else if (s === "qr") {
+    // QR ウィンドウは常駐想定のシングルトン。
+    if (qrWin && !qrWin.isDestroyed()) {
+      qrWin.focus();
+      return;
+    }
+    qrWin = createViewerWindow("qr");
+    qrWin.on("closed", () => { qrWin = null; });
   } else {
     createViewerWindow(s);
   }

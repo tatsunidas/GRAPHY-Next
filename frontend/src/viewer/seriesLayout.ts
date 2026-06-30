@@ -21,6 +21,8 @@ export interface SeriesLayout {
   zStack(c: number, t: number): string[];
   /** 指定 Z の物理座標 IPP（無ければ null）。シリーズ Sync の座標同期に使う。 */
   ippAt?(z: number): [number, number, number] | null;
+  /** スライス法線（IOP 外積・正規化）。座標同期で IPP をテーブル位置(mm)へ投影するのに使う。 */
+  normal?: [number, number, number] | null;
 }
 
 /** 単一次元フォールバック（nC=nT=1, nZ=スライス数）。backend 未取得時に使用。 */
@@ -62,6 +64,16 @@ export function buildLayoutFromDto(
   if (dto.zSpatial) {
     for (const zs of dto.zSpatial) ippByZ.set(zs.z, zs.imagePositionPatient);
   }
+  // スライス法線 = row×col（IOP 前半3×後半3）。座標同期の投影に使う。
+  let normal: [number, number, number] | null = null;
+  const iop = dto.imageOrientationPatient;
+  if (iop && iop.length >= 6) {
+    const nx = iop[1] * iop[5] - iop[2] * iop[4];
+    const ny = iop[2] * iop[3] - iop[0] * iop[5];
+    const nz = iop[0] * iop[4] - iop[1] * iop[3];
+    const len = Math.hypot(nx, ny, nz);
+    if (len > 0) normal = [nx / len, ny / len, nz / len];
+  }
   return {
     nZ: dto.nZ,
     nC: dto.nC,
@@ -80,5 +92,6 @@ export function buildLayoutFromDto(
       return out;
     },
     ippAt: (z) => ippByZ.get(z) ?? null,
+    normal,
   };
 }

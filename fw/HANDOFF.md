@@ -61,6 +61,8 @@ GRAPHY-Next/
 
 ### backend
 - ローカル保管庫（H2 索引 + FS）、C-STORE 受信、C-ECHO/GET/MOVE/FIND（dcm4che CLI 連携）。
+- **DICOM Send（C-STORE SCU）**: `DicomStoreScu.storeAll`（単一アソシエーションでスタディ一括送信）＋
+  `DicomSendService` ＋ `POST /api/dicom/send` / `GET /api/dicom/remote-aes`。詳細は `fw/mainscreen-tools.md`。
 - REST: `/api/studies`（検索: patientId/Name 部分一致, 日付範囲, modality複数, accession）、`/series`、
   `/instances`、`/instances/{sop}/file`（standalone の画像配信=wadouri 用）、
   `/studies/{study}/series/{series}/layout`（**5D ZCT 導出**）、`/dicom/tag`（タグ→keyword/VR）、
@@ -90,7 +92,7 @@ GRAPHY-Next/
 
 ### frontend MainScreen
 - スタディ検索（日付範囲・Today/Yesterday/1週間・モダリティ チェックグリッド・件数表示・50件ページング）。
-- **メニュー**: File(Import/Export/NonDicomImporter) / Function(Anonymizer/TagExtractor/SeriesExtractor) /
+- **メニュー**: File(Import/Export/**Send**/NonDicomImporter) / Function(Anonymizer/TagExtractor/SeriesExtractor) /
   Image(2D/3D/MPR/Slicer) / System(Settings/DB) / Help。
 - **ツールバー**: 同上のツール群＋ビューア群。**2D Viewer のみ実装**、他は「近日対応予定」バナー。
 - 環境設定（スキーマ駆動＋カスタムパネル: セキュリティ／**画像オーバーレイ**）。DB管理。i18n(ja/en)。

@@ -4,9 +4,10 @@
  */
 import { useI18n } from "../i18n/i18n";
 
-export type ViewerKind = "2d" | "3d" | "mpr" | "slicer";
+export type ViewerKind = "2d" | "3d" | "mpr" | "slicer" | "qr";
 export type ToolKind =
   | "export"
+  | "send"
   | "nonDicomImport"
   | "anonymizer"
   | "tagExtractor"
@@ -40,6 +41,7 @@ export function Toolbar({
       {/* データ I/O・ユーティリティ */}
       {canImport && <ToolButton icon="📁" label={t("main.import.action")} onClick={onImport} />}
       <ToolButton icon="📤" label={t("main.toolbar.export")} onClick={() => onOpenTool("export")} />
+      <ToolButton icon="📡" label={t("main.toolbar.send")} onClick={() => onOpenTool("send")} />
       <ToolButton icon="🎞" label={t("main.toolbar.nonDicomImport")} onClick={() => onOpenTool("nonDicomImport")} />
       <ToolButton icon="🕶" label={t("main.toolbar.anonymizer")} onClick={() => onOpenTool("anonymizer")} />
       <ToolButton icon="🏷" label={t("main.toolbar.tagExtractor")} onClick={() => onOpenTool("tagExtractor")} />
@@ -49,6 +51,7 @@ export function Toolbar({
       {isStandalone && <ToolButton icon="🗄" label={t("app.btn.dbTitle")} onClick={onOpenDb} />}
       <span style={sep} />
       {/* ビューア */}
+      <ToolButton icon="🔎" label={t("qr.title")} onClick={() => onOpenViewer("qr")} />
       <ToolButton icon="🖼" label={t("main.toolbar.viewer2d")} onClick={() => onOpenViewer("2d")} />
       <ToolButton icon="🧊" label={t("main.toolbar.viewer3d")} onClick={() => onOpenViewer("3d")} />
       <ToolButton icon="➕" label={t("main.toolbar.mpr")} onClick={() => onOpenViewer("mpr")} />

@@ -16,8 +16,9 @@ import { applyTransform, isPanned, readTransform, type ViewTransform, FIT_TRANSF
 import { readImageInfo, sampleAtCanvas, computeSliceSpacing, type ImageInfo, type PixelSample } from "./imageInfo";
 import { computeOrientationMarkers, type OrientationMarkers } from "./orientation";
 import { computeScaleBar, type ScaleBar } from "./scaleBar";
-import { getOrCreateCameraSync, getOrCreateVoiSync, getOrCreatePresentationSync, getOrCreateSeriesVoiSync } from "./sync";
+import { getOrCreateCameraSync, getOrCreateVoiSync, getOrCreatePresentationSync, getOrCreateSeriesVoiSync, broadcastSeriesProperties, captureVoiBaseline, clearVoiBaseline } from "./sync";
 import { registerReferenceSource, bumpReference, subscribeReference, computeReferenceSegments, type RefSegment } from "./referenceLines";
+import { registerViewerCommands, type ViewerCommands } from "./viewerCommands";
 import { resolveOverlay } from "./overlayText";
 import { useOverlayConfig } from "./overlayConfig";
 import { ImageInfoPanel } from "./ImageInfoPanel";
@@ -35,6 +36,10 @@ function isColorImage(inf: ImageInfo | null): boolean {
   const p = inf?.photometricInterpretation;
   return !!p && !/MONOCHROME/i.test(p);
 }
+
+// LUT 解除（グレースケール復帰）用の線形グレースケール colormap 名。
+// Cornerstone は colormap の明示「解除」手段を公開しないため、これを適用して戻す。
+const GRAY_COLORMAP = "graphy-gray";
 
 // 単一の RenderingEngine を全ビューポートで共有する（WebGL コンテキストを 1 つに保つ＝省メモリ）。
 export const ENGINE_ID = "graphy-engine";
@@ -131,6 +136,7 @@ export function Viewer2D({
   viewSyncEnabled,
   referenceLinesEnabled,
   referenceLabel,
+  commandKey,
   renderOverlay,
 }: {
   imageIds: string[];
@@ -151,6 +157,8 @@ export function Viewer2D({
   referenceLinesEnabled?: boolean;
   /** リファレンスラインのラベル（このシリーズ名。他ビューに描かれる線の凡例に使う）。 */
   referenceLabel?: string;
+  /** 指定すると、この tileId をキーに画面メニュー/ツールバーからの一括コマンドに参加する（base のみ）。 */
+  commandKey?: string;
   /** Fusion 等のオーバーレイを base 画像に重ねて描く。base 画像の表示矩形に追従する。 */
   renderOverlay?: RenderOverlay;
 }) {
@@ -197,6 +205,10 @@ export function Viewer2D({
   const [refSegments, setRefSegments] = useState<RefSegment[]>([]);
   const refLinesEnabledRef = useRef(referenceLinesEnabled);
   refLinesEnabledRef.current = referenceLinesEnabled;
+  // シリーズ Sync 参加状態（invert/LUT の直接ブロードキャスト判定用。applyLut が useCallback で
+  // stale クロージャになるため ref で最新を参照）。
+  const viewSyncEnabledRef = useRef(viewSyncEnabled);
+  viewSyncEnabledRef.current = viewSyncEnabled;
   // onCameraModified（init effect 内・stackKey 依存）から最新の再計算関数を呼ぶための間接参照。
   const recomputeRefLinesRef = useRef<() => void>(() => {});
 
@@ -304,6 +316,10 @@ export function Viewer2D({
       vp.setProperties({ invert: !cur });
       vp.render();
       setInverted(!cur);
+      // シリーズ Sync 中は他シリーズへ invert を伝播（VOI synchronizer は stack の invert を運ばない）。
+      if (viewSyncEnabledRef.current) {
+        broadcastSeriesProperties(viewportIdRef.current, { invert: !cur });
+      }
     } catch {
       /* 反転非対応の画像は無視 */
     }
@@ -321,10 +337,20 @@ export function Viewer2D({
     // カラー(RGB)画像には LUT(カラーマップ)を適用しない。
     if (isColorImage(infoRef.current)) return;
     if (lut === null) {
-      // グレースケールにリセット
-      vp.setProperties({ colormap: undefined });
+      // グレースケールにリセット。Cornerstone は setProperties({colormap: undefined}) を no-op
+      // とするため解除できない。そこで**線形グレースケール colormap を明示適用**して戻す。
+      // （スライス変更時の colormap 再適用・シリーズ Sync とも整合する。）
+      if (!utilities.colormap.getColormap(GRAY_COLORMAP)) {
+        const grayPoints: number[] = [];
+        for (let i = 0; i < 256; i++) grayPoints.push(i / 255, i / 255, i / 255, i / 255);
+        utilities.colormap.registerColormap({ ColorSpace: "RGB", Name: GRAY_COLORMAP, RGBPoints: grayPoints });
+      }
+      vp.setProperties({ colormap: { name: GRAY_COLORMAP } });
       vp.render();
       setActiveLutName(null);
+      if (viewSyncEnabledRef.current) {
+        broadcastSeriesProperties(viewportIdRef.current, { colormap: { name: GRAY_COLORMAP } });
+      }
       return;
     }
     const colormapName = `graphy-lut-${lut.name}`;
@@ -343,6 +369,10 @@ export function Viewer2D({
     vp.setProperties({ colormap: { name: colormapName } });
     vp.render();
     setActiveLutName(lut.name);
+    // シリーズ Sync 中は他シリーズへ LUT を伝播（colormap は global 登録済みなので名前で適用可能）。
+    if (viewSyncEnabledRef.current) {
+      broadcastSeriesProperties(viewportIdRef.current, { colormap: { name: colormapName } });
+    }
   }, []);
 
   useEffect(() => {
@@ -589,6 +619,13 @@ export function Viewer2D({
         const merged = { ...base, sliceSpacing: prev?.sliceSpacing, sliceSpacingSource: prev?.sliceSpacingSource };
         infoRef.current = merged;
         setInfo(merged);
+        // LUT(colormap) はスライス変更で actor の transfer function が grayscale に戻ることがある
+        // （特に未ロード画像の初回表示）。viewport が保持する現在の colormap を読み直して再適用する。
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const cmap = (v.getProperties() as any)?.colormap;
+        if (cmap?.name) {
+          try { v.setProperties({ colormap: cmap }); v.render(); } catch { /* ignore */ }
+        }
         // リファレンスライン: スライスが変わると面も変わるので他へ通知し自分も更新（ZCT 追従）。
         if (!compact && !syncGroupId) {
           bumpReference();
@@ -656,9 +693,12 @@ export function Viewer2D({
     const voi = getOrCreateSeriesVoiSync("graphy-series:voi");
     try { pres.add(target); } catch { /* 既参加なら無視 */ }
     try { voi.add(target); } catch { /* 既参加なら無視 */ }
+    // W/L 相対同期: 参加時点の W/L を基準値として記録（以降は変化量のみ適用）。
+    captureVoiBaseline(viewportIdRef.current, vp);
     return () => {
       try { pres.remove(target); } catch { /* 無ければ無視 */ }
       try { voi.remove(target); } catch { /* 無ければ無視 */ }
+      clearVoiBaseline(viewportIdRef.current);
     };
   }, [viewSyncEnabled, loading, compact, syncGroupId, stackKey]);
 
@@ -712,6 +752,48 @@ export function Viewer2D({
     const v = vp();
     if (v) applyTransform(v, { flipVertical: !readTransform(v).flipVertical });
   };
+
+  // W/L プリセット適用（モダリティ値=HU 等の windowCenter/Width）。
+  const setWindowLevel = (center: number, width: number) => {
+    const v = vp();
+    if (!v || !(width > 0)) return;
+    try {
+      v.setProperties({ voiRange: { lower: center - width / 2, upper: center + width / 2 } });
+      v.render();
+      setVoi({ ww: width, wc: center });
+    } catch {
+      /* ignore */
+    }
+  };
+  // DICOM 既定ウィンドウへ戻す（infoRef の WindowCenter/Width）。
+  const resetWindow = () => {
+    const inf = infoRef.current;
+    if (inf?.windowCenter !== undefined && inf?.windowWidth !== undefined && inf.windowWidth > 0) {
+      setWindowLevel(inf.windowCenter, inf.windowWidth);
+    }
+  };
+
+  // 画面メニュー/ツールバーからの一括コマンド。最新の実装を ref に保持し、登録は wrapper 経由で常に最新を呼ぶ。
+  const commandsRef = useRef<ViewerCommands>({
+    fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, setWindowLevel, resetWindow, undo, redo,
+  });
+  commandsRef.current = { fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, setWindowLevel, resetWindow, undo, redo };
+  useEffect(() => {
+    if (!commandKey || compact || syncGroupId) return;
+    return registerViewerCommands(commandKey, {
+      fit: () => commandsRef.current.fit(),
+      reset: () => commandsRef.current.reset(),
+      rotate90: () => commandsRef.current.rotate90(),
+      flipH: () => commandsRef.current.flipH(),
+      flipV: () => commandsRef.current.flipV(),
+      invert: () => commandsRef.current.invert(),
+      applyLut: (lut) => commandsRef.current.applyLut(lut),
+      setWindowLevel: (c, w) => commandsRef.current.setWindowLevel(c, w),
+      resetWindow: () => commandsRef.current.resetWindow(),
+      undo: () => commandsRef.current.undo(),
+      redo: () => commandsRef.current.redo(),
+    });
+  }, [commandKey, compact, syncGroupId]);
 
   const panned = isPanned(transform);
   // 校正済み画素値の単位: RescaleType(0028,1054) があればそれ（"US"=未指定は除外）、

@@ -18,6 +18,9 @@ import { FusionImageViewer } from "../viewer/FusionOverlayViewer";
 import type { RenderOverlay } from "../viewer/Viewer2D";
 import { buildSeriesLayout, type SeriesLayout } from "../viewer/seriesLayout";
 import { LutDialog, ColorBar } from "../viewer/LutDialog";
+import { runViewerCommand } from "../viewer/viewerCommands";
+import { Viewer2DToolbar, type ViewerActions } from "./Viewer2DToolbar";
+import { Viewer2DMenuBar } from "./Viewer2DMenuBar";
 import { useI18n } from "../i18n/i18n";
 import { desktop } from "../desktopBridge";
 
@@ -540,6 +543,20 @@ function TileGrid({
   // リファレンスライン表示の ON/OFF（このタブ内の全タイルに適用）。
   const [refLines, setRefLines] = useState(false);
 
+  // タイル選択状態（Shift+左クリックでトグル）。将来の一括操作の対象指定に使う。
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
   // シリーズ Sync は SeriesViewer がグローバル coordinator（sliceSync）＋
   // Cornerstone synchronizer（表示状態）で直接連動する。ここでは Sync ON 枚数のみ把握し、
   // 2 枚以上で枠線ハイライト（実同期の成立判定は coordinator 側）。
@@ -618,45 +635,70 @@ function TileGrid({
     [patient, onInsertAdjacent, onSwap, onSetFusion],
   );
 
+  // メニュー/ツールバーのコマンド対象: 選択タイル → 無ければ全タイル。
+  const resolveTargets = useCallback(
+    () => (selectedIds.size > 0 ? [...selectedIds] : patient.tiles.map((tl) => tl.id)),
+    [selectedIds, patient.tiles],
+  );
+  const [lutOpen, setLutOpen] = useState(false);
+  // 未実装メニューの「近日対応」トースト。
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<number | null>(null);
+  const comingSoon = useCallback(
+    (name: string) => {
+      setToast(t("main.viewer.comingSoon", { name }));
+      if (toastTimer.current) window.clearTimeout(toastTimer.current);
+      toastTimer.current = window.setTimeout(() => setToast(null), 2500);
+    },
+    [t],
+  );
+  const actions = useMemo<ViewerActions>(
+    () => ({
+      fit: () => runViewerCommand(resolveTargets(), (c) => c.fit()),
+      reset: () => runViewerCommand(resolveTargets(), (c) => c.reset()),
+      rotate90: () => runViewerCommand(resolveTargets(), (c) => c.rotate90()),
+      flipH: () => runViewerCommand(resolveTargets(), (c) => c.flipH()),
+      flipV: () => runViewerCommand(resolveTargets(), (c) => c.flipV()),
+      invert: () => runViewerCommand(resolveTargets(), (c) => c.invert()),
+      undo: () => runViewerCommand(resolveTargets(), (c) => c.undo()),
+      redo: () => runViewerCommand(resolveTargets(), (c) => c.redo()),
+      setWindowLevel: (cc, ww) => runViewerCommand(resolveTargets(), (c) => c.setWindowLevel(cc, ww)),
+      resetWindow: () => runViewerCommand(resolveTargets(), (c) => c.resetWindow()),
+      openLut: () => setLutOpen(true),
+      setLayoutCols: (c) => onSetCols(patient.patientKey, c),
+      toggleRefLines: () => setRefLines((v) => !v),
+      setSyncTargets: (sync) => resolveTargets().forEach((id) => onSetSync(patient.patientKey, id, sync)),
+      comingSoon,
+    }),
+    [resolveTargets, onSetCols, onSetSync, patient.patientKey, comingSoon],
+  );
+
   return (
     <div style={tileArea}>
-      <div style={tileToolbar}>
-        <span style={{ fontSize: 12, color: "#6b7785" }}>{t("viewer2d.layout")}</span>
-        <select
-          value={patient.gridCols}
-          onChange={(e) => onSetCols(patient.patientKey, Number(e.target.value))}
-          style={selectStyle}
-        >
-          <option value={0}>{t("viewer2d.layout.auto")}</option>
-          {[1, 2, 3, 4].map((c) => (
-            <option key={c} value={c}>
-              {c} {t("viewer2d.layout.cols")}
-            </option>
-          ))}
-        </select>
-        <span style={{ fontSize: 12, color: "#9aa6b2" }}>
-          {t("viewer2d.tileCount", { n })}
-        </span>
-        <button
-          onClick={() => setRefLines((v) => !v)}
-          aria-pressed={refLines}
-          style={{
-            ...selectStyle,
-            cursor: "pointer",
-            color: refLines ? "#fff" : "#33404d",
-            background: refLines ? "#0b5cad" : "#fff",
-            border: refLines ? "1px solid #0b5cad" : "1px solid #cdd5de",
-          }}
-          title={t("viewer2d.refLines.toggle")}
-        >
-          ┼ {t("viewer2d.refLines.label")}
-        </button>
-        {isSyncActive && (
-          <span style={{ fontSize: 11, color: "#0b5cad", marginLeft: "auto" }}>
-            🔗 {t("viewer2d.sync.active")}
-          </span>
-        )}
-      </div>
+      <Viewer2DMenuBar actions={actions} refLines={refLines} onClose={() => window.close()} />
+      <Viewer2DToolbar
+        actions={actions}
+        layoutCols={patient.gridCols}
+        refLines={refLines}
+        selectedCount={selectedIds.size}
+        targetCount={n}
+      />
+      {lutOpen && (
+        <LutDialog
+          currentLutName={null}
+          onSelect={(lut) => { runViewerCommand(resolveTargets(), (c) => c.applyLut(lut)); setLutOpen(false); }}
+          onClose={() => setLutOpen(false)}
+        />
+      )}
+      {toast && (
+        <div style={{
+          position: "fixed", top: 56, left: "50%", transform: "translateX(-50%)", zIndex: 60,
+          background: "rgba(33,40,48,0.92)", color: "#fff", padding: "6px 14px", borderRadius: 6,
+          fontSize: 12, pointerEvents: "none", boxShadow: "0 4px 14px rgba(0,0,0,0.3)",
+        }}>
+          {toast}
+        </div>
+      )}
       <div
         style={{
           display: "grid",
@@ -677,6 +719,9 @@ function TileGrid({
             syncActive={isSyncActive && tile.syncEnabled}
             syncEnabled={tile.syncEnabled}
             referenceLinesEnabled={refLines}
+            commandKey={tile.id}
+            selected={selectedIds.has(tile.id)}
+            onToggleSelect={() => toggleSelect(tile.id)}
             onRemove={() => onRemoveTile(patient.patientKey, tile.id)}
             onSyncToggle={() => onSetSync(patient.patientKey, tile.id, !tile.syncEnabled)}
             onFusionChange={(overlay) => onSetFusion(patient.patientKey, tile.id, overlay)}
@@ -698,6 +743,9 @@ function TileCell({
   syncActive,
   syncEnabled,
   referenceLinesEnabled,
+  commandKey,
+  selected,
+  onToggleSelect,
   onRemove,
   onSyncToggle,
   onFusionChange,
@@ -710,6 +758,9 @@ function TileCell({
   syncActive: boolean;
   syncEnabled: boolean;
   referenceLinesEnabled: boolean;
+  commandKey: string;
+  selected: boolean;
+  onToggleSelect: () => void;
   onRemove: () => void;
   onSyncToggle: () => void;
   onFusionChange: (overlay: FusionOverlay | undefined) => void;
@@ -830,7 +881,16 @@ function TileCell({
       style={{
         ...tileBox,
         outline: syncActive ? "2px solid #0b5cad" : undefined,
+        // 選択中はオレンジのリングで明示（sync の青アウトラインと併存可能）。
+        boxShadow: selected ? "0 0 0 3px #ff9800" : undefined,
         position: "relative",
+      }}
+      // Shift+左クリックで選択トグル（W/L 等のツールは単純クリックでは実質無変化）。
+      onClick={(e) => {
+        if (e.shiftKey && e.button === 0) {
+          e.preventDefault();
+          onToggleSelect();
+        }
       }}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -920,6 +980,7 @@ function TileCell({
             syncEnabled={syncEnabled}
             referenceLinesEnabled={referenceLinesEnabled}
             referenceLabel={seriesLabel}
+            commandKey={commandKey}
             onDimChange={onDimChange}
             renderFusionOverlay={renderFusionOverlay}
           />
@@ -1512,22 +1573,6 @@ const tileArea: React.CSSProperties = {
   flexDirection: "column",
   minHeight: 0,
   background: "#eef1f4",
-};
-const tileToolbar: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "6px 12px",
-  background: "#f2f5f8",
-  borderBottom: "1px solid #dde4ea",
-  flex: "none",
-};
-const selectStyle: React.CSSProperties = {
-  padding: "3px 6px",
-  border: "1px solid #cdd5de",
-  borderRadius: 6,
-  fontSize: 13,
-  background: "#fff",
 };
 const tileBox: React.CSSProperties = {
   border: "1px solid #d7dde3",

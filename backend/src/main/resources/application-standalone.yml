@@ -5,6 +5,15 @@ graphy:
   dicom:
     scp:
       enabled: true       # ローカル DIMSE リスナー（C-ECHO 応答）を起動
+    # DICOM Send（C-STORE）/ C-MOVE 宛先の候補。送信ダイアログのドロップダウンに出る。
+    # 送信ダイアログでは手動入力もできるため、未設定でも送信は可能。
+    # remote-aes:
+    #   - ae-title: DCM4CHEE
+    #     host: 127.0.0.1
+    #     port: 11112
+    #   - ae-title: ORTHANC
+    #     host: 192.168.1.50
+    #     port: 4242
 
 # NonDicomImporter の動画(AVI/非H.264 MP4)トランスコード用 ffmpeg。
 # 既定（空）の場合、FfmpegLocator が同梱物を自動探索する:
