@@ -13,6 +13,8 @@
  */
 import { imageLoader } from "@cornerstonejs/core";
 import { segmentation as csSeg, Enums as csToolsEnums } from "@cornerstonejs/tools";
+import { getViewerContext } from "./viewerContext";
+import { setRoiMaskMeta } from "./roiMaskStore";
 
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
 
@@ -62,6 +64,12 @@ export async function ensureStackSegmentation(
     csSeg.activeSegmentation.setActiveSegmentation(viewportId, segmentationId);
     csSeg.segmentIndex.setActiveSegmentIndex(segmentationId, 1);
     byViewport.set(viewportId, { segmentationId, stackKey });
+    // 患者・シリーズ・C/T を紐付け（z="all"＝3D ボリュームマスク）。
+    const ctx = getViewerContext(viewportId);
+    if (ctx) {
+      const sc = { studyUid: ctx.studyUid, seriesUid: ctx.seriesUid, z: "all" as const, c: ctx.c, t: ctx.t };
+      setRoiMaskMeta(segmentationId, { patientKey: ctx.patientKey, seriesLabel: ctx.seriesLabel, scope: sc, origin: sc });
+    }
     return segmentationId;
   } catch (e) {
     console.warn("[segmentation] ensureStackSegmentation failed", e);

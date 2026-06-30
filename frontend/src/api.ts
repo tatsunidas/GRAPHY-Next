@@ -309,6 +309,165 @@ export const exportZip = async (
   return { blob, filename };
 };
 
+// ── Anonymizer（PS3.15 匿名化） ────────────────────────────────
+
+/** 匿名化オプション（backend AnonymizeConfig.Option 名と一致）。 */
+export type AnonOption =
+  | "CleanPixelData"
+  | "CleanRecognizableVisualFeatures"
+  | "CleanGraphics"
+  | "CleanStructuredContent"
+  | "CleanDescriptors"
+  | "RetainLongitudinalTemporalInformationFullDates"
+  | "RetainLongitudinalTemporalInformationModifiedDates"
+  | "RetainPatientCharacteristics"
+  | "RetainDeviceIdentity"
+  | "RetainUIDs"
+  | "RetainSafePrivate"
+  | "RetainInstitutionIdentity";
+
+export interface AnonProfile {
+  name: string;
+  options: AnonOption[];
+}
+
+export interface AnonRequest {
+  studyUids: string[];
+  options: AnonOption[];
+  replacePatientName: string;
+  replacePatientId: string;
+  randomSeed?: number | null;
+  /** 個別保持タグ（8桁hex）。 */
+  manualRetainTags?: string[];
+  /** 個別カスタムダミー値（hex→値）。 */
+  customReplacements?: Record<string, string>;
+  /** Clean Pixel Data の焼き込みを実行するか（登録済みマスク使用）。 */
+  burnIn: boolean;
+  /** standalone copy の出力先絶対パス。 */
+  destination?: string;
+}
+
+export interface AnonResult {
+  studies: number;
+  series: number;
+  instances: number;
+  burnedInstances: number;
+  errors: string[];
+}
+
+/** 焼き込みマスク（画像ピクセル矩形）。frames 空=全フレーム/全インスタンス。 */
+export interface AnonSeriesMask {
+  seriesUid: string;
+  frames: number[];
+  rects: { x: number; y: number; w: number; h: number }[];
+}
+
+export const fetchAnonProfiles = () => httpGet<AnonProfile[]>("/api/anonymizer/profiles");
+
+/** 匿名化して ZIP を取得（standalone のローカルファイル）。 */
+export const anonymizeZip = async (req: AnonRequest): Promise<{ blob: Blob; filename: string }> => {
+  const res = await fetch(`${apiBase()}/api/anonymizer/zip`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  const cd = res.headers.get("content-disposition") ?? "";
+  const m = /filename="?([^"]+)"?/.exec(cd);
+  return { blob, filename: m ? m[1] : "anonymized.zip" };
+};
+
+/** standalone: 匿名化してフォルダへ書き出す。 */
+export const anonymizeCopy = (req: AnonRequest) =>
+  httpSend<AnonResult>("/api/anonymizer/copy", "POST", req);
+
+/** 焼き込みマスクを登録（2D viewer から）。 */
+export const registerAnonMask = (mask: AnonSeriesMask) =>
+  httpSend<void>("/api/anonymizer/masks", "POST", mask);
+
+/** 登録済み焼き込みマスクを取得。 */
+export const fetchAnonMasks = (seriesUids: string[]) =>
+  httpGet<AnonSeriesMask[]>(`/api/anonymizer/masks?seriesUids=${encodeURIComponent(seriesUids.join(","))}`);
+
+/** 焼き込みマスクを削除（seriesUid 省略で全消去）。 */
+export const clearAnonMask = (seriesUid?: string) =>
+  httpSend<void>(`/api/anonymizer/masks${seriesUid ? `?seriesUid=${encodeURIComponent(seriesUid)}` : ""}`, "DELETE");
+
+// ── SeriesExtractor（条件一致シリーズをフォルダ抽出/ZIP） ───────
+
+/** シリーズ抽出の 1 条件。op: EQUALS | CONTAINS | GE | LE | RANGE。 */
+export interface SeriesCondition {
+  segments: TagPathSegment[];
+  vr: string;
+  exclude: boolean;
+  op: string;
+  value1: string;
+  value2: string;
+}
+
+/** 条件に一致した 1 シリーズ。 */
+export interface SeriesMatch {
+  studyUid: string;
+  seriesUid: string;
+  patientId: string;
+  studyDate: string;
+  seriesDescription: string;
+  modality: string;
+  instances: number;
+  folderName: string;
+}
+
+export interface SeriesVerifyResult {
+  matched: SeriesMatch[];
+  studyCount: number;
+  seriesCount: number;
+  errors: string[];
+}
+
+export interface SeriesCopyResult {
+  copiedSeries: number;
+  copiedFiles: number;
+  folders: string[];
+  errors: string[];
+}
+
+export interface SeriesExtractRequest {
+  studyUids: string[];
+  conditions: SeriesCondition[];
+  /** 平面フィルタ（AXIAL/SAGITTAL/CORONAL）。空/未指定で無効。 */
+  planes?: string[];
+  /** コピー先の絶対パス（standalone の copy のみ）。 */
+  destination?: string;
+  sequentialRename?: boolean;
+}
+
+/** 条件に一致するシリーズを検証（プレビュー）。 */
+export const seriesExtractVerify = (req: SeriesExtractRequest) =>
+  httpSend<SeriesVerifyResult>("/api/series-extract/verify", "POST", req);
+
+/** standalone: 一致シリーズを destination 配下へコピー。 */
+export const seriesExtractCopy = (req: SeriesExtractRequest) =>
+  httpSend<SeriesCopyResult>("/api/series-extract/copy", "POST", req);
+
+/** 一致シリーズを ZIP で取得（standalone のローカルファイル）。 */
+export const seriesExtractZip = async (req: SeriesExtractRequest): Promise<{ blob: Blob; filename: string }> => {
+  const res = await fetch(`${apiBase()}/api/series-extract/zip`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  const cd = res.headers.get("content-disposition") ?? "";
+  const m = /filename="?([^"]+)"?/.exec(cd);
+  return { blob, filename: m ? m[1] : "series-extract.zip" };
+};
+
 // ── DICOM Send（C-STORE SCU で外部 PACS/AE へ送信） ─────────────
 
 /** 設定済みリモート AE（送信先候補）。application.yml の graphy.dicom.remote-aes 由来。 */

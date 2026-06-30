@@ -135,7 +135,8 @@ public class TagExtractService {
         }
     }
 
-    private static DicomInstance pickRepresentative(List<DicomInstance> insts) {
+    /** シリーズ代表インスタンス（非SC/KO/PR を優先、無ければ先頭）。SeriesExtractor 等から再利用。 */
+    public static DicomInstance pickRepresentative(List<DicomInstance> insts) {
         if (insts == null || insts.isEmpty()) {
             return null;
         }
@@ -182,7 +183,8 @@ public class TagExtractService {
         }
     }
 
-    private static Attributes pickRepresentativeAttrs(List<Attributes> insts) {
+    /** web（WADO metadata）用のシリーズ代表 Attributes（非SC/KO/PR を優先、無ければ先頭）。 */
+    public static Attributes pickRepresentativeAttrs(List<Attributes> insts) {
         if (insts == null || insts.isEmpty()) {
             return null;
         }
@@ -209,8 +211,8 @@ public class TagExtractService {
         return row;
     }
 
-    /** パス（中間 SQ を辿り末尾で値）を解決する。未検出/空は ""。 */
-    private static String resolvePath(Attributes header, List<Seg> segments) {
+    /** パス（中間 SQ を辿り末尾で値）を解決する。未検出/空は ""。SeriesExtractor 等から再利用。 */
+    public static String resolvePath(Attributes header, List<Seg> segments) {
         if (segments == null || segments.isEmpty()) {
             return "";
         }

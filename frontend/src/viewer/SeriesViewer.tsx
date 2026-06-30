@@ -48,6 +48,8 @@ export function SeriesViewer({
   referenceLinesEnabled = false,
   referenceLabel,
   commandKey,
+  patientKey,
+  seriesLabel,
   onDimChange,
   renderFusionOverlay,
 }: {
@@ -65,6 +67,9 @@ export function SeriesViewer({
   referenceLabel?: string;
   /** 画面メニュー/ツールバーからの一括コマンドのキー（= tileId）。 */
   commandKey?: string;
+  /** ROI/Mask 紐付け用: 患者キー・シリーズ表示名。 */
+  patientKey?: string;
+  seriesLabel?: string;
   /** 現在表示中の C/T インデックス変化を上位に通知（Fusion の初期 C/T 引き継ぎ用）。 */
   onDimChange?: (c: number, t: number) => void;
   /** Fusion オーバーレイ。スライダー表示時に base 画像へ重ねて描画する（GridView では無効）。 */
@@ -308,6 +313,12 @@ export function SeriesViewer({
 
   const toggle = (k: keyof OverlayState) => setOverlays((o) => ({ ...o, [k]: !o[k] }));
 
+  // ROI/Mask 作成時の紐付けコンテキスト（z は Viewer2D 側で現在 index を補う）。
+  const roiContext = useMemo(
+    () => ({ patientKey: patientKey ?? "", studyUid, seriesUid, seriesLabel: seriesLabel ?? "", c: cc, t: tc }),
+    [patientKey, studyUid, seriesUid, seriesLabel, cc, tc],
+  );
+
   // 各次元スライダー横のシネ再生ボタン（▶/⏸）。
   const cinePlayBtn = (on: boolean, onToggle: () => void, disabled: boolean) => (
     <button onClick={onToggle} disabled={disabled} style={btn} title={t("series.cine")}>
@@ -336,7 +347,7 @@ export function SeriesViewer({
           </div>
         </div>
       ) : (
-        <Viewer2D imageIds={zStack} imageIndex={zc} overlays={overlays} fill={fillHeight} viewSyncEnabled={syncOn} referenceLinesEnabled={referenceLinesEnabled} referenceLabel={referenceLabel} commandKey={commandKey} renderOverlay={renderFusionOverlay} />
+        <Viewer2D imageIds={zStack} imageIndex={zc} overlays={overlays} fill={fillHeight} viewSyncEnabled={syncOn} referenceLinesEnabled={referenceLinesEnabled} referenceLabel={referenceLabel} commandKey={commandKey} roiContext={roiContext} renderOverlay={renderFusionOverlay} />
       )}
 
       <div style={controls}>

@@ -7,6 +7,8 @@
 
 export interface GraphyDesktop {
   pickImportPaths: () => Promise<string[]>;
+  /** 単一の出力先フォルダを選ぶ（SeriesExtractor のコピー先など）。キャンセル時 null。 */
+  pickDirectory?: () => Promise<string | null>;
   /** 2d/3d/mpr/slicer 等の独立ビューアを新規ウィンドウで開く。 */
   openViewer?: (screen: string) => Promise<void>;
   /** PNG dataURL を OS のネイティブドラッグで外部（デスクトップ/他アプリ）へ書き出す。 */

@@ -12,6 +12,8 @@ import { Toolbar } from "./Toolbar";
 import { SearchPanel } from "./SearchPanel";
 import { StatusBar } from "./StatusBar";
 import { TagExtractorDialog } from "./TagExtractorDialog";
+import { SeriesExtractorDialog } from "./SeriesExtractorDialog";
+import { AnonymizerDialog } from "./AnonymizerDialog";
 import { ExportDialog } from "./ExportDialog";
 import { SendDialog } from "./SendDialog";
 import { TagViewerDialog } from "./TagViewerDialog";
@@ -48,7 +50,7 @@ export function MainScreen({
   const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
   const [selectedSeries, setSelectedSeries] = useState<Series | null>(null);
   const [openTool, setOpenTool] = useState<
-    "tagExtractor" | "export" | "send" | "tagViewer" | "nonDicomImport" | null
+    "tagExtractor" | "seriesExtractor" | "anonymizer" | "export" | "send" | "tagViewer" | "nonDicomImport" | null
   >(null);
 
   const handleImport = async () => {
@@ -107,6 +109,14 @@ export function MainScreen({
   ) => {
     if (kind === "tagExtractor") {
       setOpenTool("tagExtractor");
+      return;
+    }
+    if (kind === "seriesExtractor") {
+      setOpenTool("seriesExtractor");
+      return;
+    }
+    if (kind === "anonymizer") {
+      setOpenTool("anonymizer");
       return;
     }
     if (kind === "export") {
@@ -184,8 +194,19 @@ export function MainScreen({
       <TagExtractorDialog
         open={openTool === "tagExtractor"}
         onClose={() => setOpenTool(null)}
-        study={selectedStudy}
-        series={selectedSeries}
+        filters={filters}
+      />
+      <SeriesExtractorDialog
+        open={openTool === "seriesExtractor"}
+        onClose={() => setOpenTool(null)}
+        filters={filters}
+        mode={isStandalone ? "standalone" : "web"}
+      />
+      <AnonymizerDialog
+        open={openTool === "anonymizer"}
+        onClose={() => setOpenTool(null)}
+        filters={filters}
+        mode={isStandalone ? "standalone" : "web"}
       />
       <ExportDialog open={openTool === "export"} onClose={() => setOpenTool(null)} study={selectedStudy} />
       <SendDialog open={openTool === "send"} onClose={() => setOpenTool(null)} study={selectedStudy} />

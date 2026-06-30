@@ -1,0 +1,212 @@
+Code Meaning,Code Value,Coding Scheme Designator,Value Type,Retd. (from PS3.16),In Std. Tpl. (from PS3.16),Basic Prof.,Rtn. UIDs Opt.,Rtn. Dev. Id. Opt.,Rtn. Inst. Id. Opt.,Rtn. Pat. Chars. Opt.,Rtn. Long. Full Dates Opt.,Rtn. Long. Modif. Dates Opt.,Clean Desc. Opt.
+Accession Number,121022,DCM,TEXT,N,Y,X,,,,,,,
+Acquired Image,113795,DCM,IMAGE,N,Y,D,K,,,,,,
+Acquisition Date,126201,DCM,DATE,N,Y,X,,,,,K,C,
+Acquisition DateTime,130884,DCM,DATETIME,N,Y,X,,,,,K,C,
+Acquisition Protocol,125203,DCM,TEXT,N,Y,X,,,,,,,C
+Acquisition Time,126202,DCM,TIME,N,Y,X,,,,,K,C,
+Activity Session,C67447,NCIt,TEXT,N,Y,X,,,,,,,C
+Administration of radiopharmaceutical,440252007,SCT,TEXT,N,Y,D,,,,,,,C
+Admission DateTime,15,NCDR [2.0b],DATETIME,N,Y,X,,,,,K,C,
+Anatomic Identifier,112050,DCM,TEXT,N,Y,X,,,,,,,C
+Anesthesia Finish Time,398164008,SCT,DATETIME,N,Y,X,,,,,K,C,
+Anesthesia Start Time,398325003,SCT,DATETIME,N,Y,X,,,,,K,C,
+Best illustration of finding,121080,DCM,IMAGE,N,Y,X,K,,,,,,
+Best illustration of finding,121080,DCM,WAVEFORM,N,Y,X,K,,,,,,
+Calibration DateTime,113723,DCM,DATETIME,N,Y,D,,,,,K,C,
+Calibration Protocol,113720,DCM,TEXT,N,Y,X,,,,,,,C
+Calibration Responsible Party,113724,DCM,TEXT,N,Y,D,,,,,,,C
+Catheterization Operator,76,NCDR [2.0b],PNAME,N,Y,D,,,,,,,
+Cath Lab Procedure Log,121120,DCM,COMPOSITE,N,Y,X,K,,,,,,
+Clinical Report,371524004,SCT,COMPOSITE,N,Y,X,K,,,,,,
+Clinical Report,371524004,SCT,TEXT,N,Y,X,,,,,,,C
+Comment,121106,DCM,TEXT,N,Y,X,,,,,,,C
+Complication of Procedure,116224001,SCT,TEXT,N,Y,X,,,,,,,C
+Component ID,112347,DCM,TEXT,N,Y,D,,,,,,,
+Conclusion,121077,DCM,TEXT,N,Y,X,,,,,,,C
+Content Date,111018,DCM,DATE,N,Y,X/D,,,,,K,C,
+Content Time,111019,DCM,TIME,N,Y,X/D,,,,,K,C,
+Current procedure evidence,122073,DCM,COMPOSITE,N,Y,X,K,,,,,,
+Date of last menstrual period,11955-2,LN,DATE,N,Y,X,,,,,K,C,
+DateTime Concern Noted,121431,DCM,DATETIME,N,Y,X,,,,,K,C,
+DateTime Concern Resolved,121432,DCM,DATETIME,N,Y,X,,,,,K,C,
+DateTime Ended,111527,DCM,DATETIME,N,Y,X,,,,,K,C,
+DateTime of Death,122165,DCM,DATETIME,N,Y,X,,,,,K,C,
+DateTime of Intervention,122105,DCM,DATETIME,N,Y,X,,,,,K,C,
+DateTime of last evaluation,111536,DCM,DATETIME,N,Y,X,,,,,K,C,
+DateTime of processing,111702,DCM,DATETIME,N,Y,X,,,,,K,C,
+DateTime of Recording of Log Entry,121125,DCM,DATETIME,N,Y,X,,,,,K,C,
+DateTime problem observed,111535,DCM,DATETIME,N,Y,X,,,,,K,C,
+DateTime Problem Resolved,121433,DCM,DATETIME,N,Y,X,,,,,K,C,
+DateTime Started,111526,DCM,DATETIME,N,Y,X/D,,,,,K,C,
+Degree of Freedom ID,112363,DCM,TEXT,N,Y,D,,,,,,,
+Derived Fiducial,112357,DCM,UIDREF,N,Y,D,K,,,,,,
+Derived Planning Data,112373,DCM,COMPOSITE,N,Y,X,K,,,,,,
+Derived Planning Images,112372,DCM,COMPOSITE,N,Y,X,K,,,,,,
+Description of Change,111021,DCM,TEXT,N,Y,X,,,,,,,C
+Description of Material,121145,DCM,TEXT,N,Y,X,,,,,,,C
+Device Description,120999,DCM,TEXT,N,Y,X,,K,,,,,
+Device Name,113877,DCM,TEXT,N,Y,X,,K,,,,,
+Device Observer Name,121013,DCM,TEXT,N,Y,X,,K,,,,,
+Device Observer Physical Location During Observation,121017,DCM,TEXT,N,Y,X,,,K,,,,
+Device Observer Serial Number,121016,DCM,TEXT,N,Y,X,,K,,,,,
+Device Observer UID,121012,DCM,UIDREF,N,Y,X/D,K,K,,,,,
+Device Serial Number,113880,DCM,TEXT,N,Y,X/D,,K,,,,,
+Device Subject Name,121193,DCM,TEXT,N,Y,D,,K,,,,,
+Device Subject Physical Location during observation,121197,DCM,TEXT,N,Y,X,,,K,,,,
+Device Subject Serial Number,121196,DCM,TEXT,N,Y,X,,K,,,,,
+Device Subject UID,121198,DCM,UIDREF,N,Y,X,K,K,,,,,
+Discharge DateTime,122163,DCM,DATETIME,N,Y,X,,,,,K,C,
+Dose Image,121342,DCM,IMAGE,N,Y,X,K,,,,,,
+Drug administered,122083,DCM,TEXT,N,Y,X/D,,,,,,,C
+Drug end,122082,DCM,DATETIME,N,Y,X,,,,,K,C,
+Drug start,122081,DCM,DATETIME,N,Y,X,,,,,K,C,
+ECG Finding,271921002,SCT,TEXT,N,Y,X/D,,,,,,,C
+EDD,11778-8,LN,DATE,N,Y,X,,,,,K,C,
+End of X-Ray Irradiation,113810,DCM,DATETIME,N,Y,D,,,,,K,C,
+Equipment Identification,121122,DCM,TEXT,N,Y,X,,K,,,,,C
+Event UID Used,128429,DCM,UIDREF,N,Y,D,K,,,,,,
+Experience,C54627,NCIt,NUM,N,Y,X,,,,,,,
+Fellow,121088,DCM,PNAME,N,Y,X,,,,,,,
+Fetus ID,11951-1,LN,TEXT,N,Y,D,,,,,,,
+Filler Number,121021,DCM,TEXT,N,Y,X,,,,,,,
+Finding,121071,DCM,TEXT,N,Y,X/D,,,,,,,C
+Finding Site,363698007,SCT,TEXT,N,Y,D,,,,,,,C
+Frame of Reference UID,112227,DCM,UIDREF,N,Y,X/D,K,,,,,,
+Glucose Measurement Date,127857,DCM,DATE,N,Y,D,,,,,K,C,
+Glucose Measurement Time,127858,DCM,TIME,N,Y,D,,,,,K,C,
+History,11329-0,LN,TEXT,N,Y,X,,,,,,,C
+Identification of the Attenuator,130527,DCM,TEXT,N,Y,D,,,K,,,,
+Identification of the X-Ray Source,113832,DCM,TEXT,N,Y,D,,K,,,,,
+Identifier,125010,DCM,TEXT,N,Y,X,,,,,,,
+Identifier within Person Observer's Role,128775,DCM,TEXT,N,Y,X,,,,,,,
+Identifying Segment,112229,DCM,IMAGE,N,Y,D,K,,,,,,
+Illustration of Finding,125201,DCM,IMAGE,N,Y,X,K,,,,,,
+Illustration of ROI,121200,DCM,IMAGE,N,Y,X,K,,,,,,
+Image Acquired,121138,DCM,IMAGE,N,Y,D,K,,,,,,
+Imaging Start DateTime,122712,DCM,DATETIME,N,Y,D,,,,,K,C,
+Implant Assembly Template,112366,DCM,COMPOSITE,N,Y,X,K,,,,,,
+Impression Description,111033,DCM,TEXT,N,Y,D,,,,,,,C
+Indications for Procedure,18785-6,LN,TEXT,N,Y,D,,,,,,,C
+Intervention attempt identifier,121154,DCM,TEXT,N,Y,D,,,,,,,
+Irradiation Authorizing,113850,DCM,PNAME,N,Y,D,,,,,,,
+Irradiation Event Label,113605,DCM,TEXT,N,Y,X,,,,,,,
+Irradiation Event UID,113769,DCM,UIDREF,N,Y,D,K,,,,,,
+Issuer of Identifier,110190,DCM,TEXT,N,Y,X,,,,,,,
+Issuer of Parent Specimen Identifier,111706,DCM,TEXT,N,Y,X,,,,,,,
+Issuer of Specimen Identifier,111724,DCM,TEXT,N,Y,X,,,,,,,
+Key Object Description,113012,DCM,TEXT,N,Y,X,,,,,,,C
+LV Wall Motion Segmental Findings,18118-0,LN,TEXT,N,Y,X,,,,,,,C
+Manufacturer Implant Template,112371,DCM,COMPOSITE,N,Y,D,K,,,,,,
+Mating Feature ID,112352,DCM,TEXT,N,Y,D,,,,,,,
+Mating Feature Set ID,112351,DCM,TEXT,N,Y,D,,,,,,,
+Medication Type,111516,DCM,TEXT,N,Y,X,,,,,,,C
+Mother of fetus,121036,DCM,PNAME,N,Y,X,,,,,,,
+Organization Name,113873,DCM,TEXT,N,Y,X,,,K,,,,
+Original Source,111040,DCM,COMPOSITE,N,Y,D,K,,,,,,
+Parent Specimen Identifier,111705,DCM,TEXT,N,Y,D,,,,,,,
+Patient Data Used During Planning,112361,DCM,COMPOSITE,N,Y,X,K,,,,,,
+Patient Image,112354,DCM,IMAGE,N,Y,X,K,,,,,,
+Patient Model,113815,DCM,TEXT,N,Y,D,,,,,,,C
+Patient Presentation,121110,DCM,TEXT,N,Y,X,,,,,,,C
+Patient Radiation Dose Model Data,128425,DCM,COMPOSITE,N,Y,X,K,,,,,,
+Patient Radiation Dose Model Data,128425,DCM,IMAGE,N,Y,X,K,,,,,,
+Patient Radiation Dose Model Data,128425,DCM,UIDREF,N,Y,X,K,,,,,,
+Patient Radiation Dose Model Reference,128426,DCM,TEXT,N,Y,X,,,,,,,C
+Patient State,109054,DCM,TEXT,N,Y,X,,,,,,,C
+Patient Transferred From,122128,DCM,TEXT,N,Y,X,,,K,,,,
+Performed Procedure Step SOP Instance UID,121126,DCM,UIDREF,N,Y,D,K,,,,,,
+Performing Physician,121114,DCM,PNAME,N,Y,D,,,,,,,
+Person administering drug/contrast,121152,DCM,PNAME,N,Y,X,,,,,,,
+Person ID,113871,DCM,TEXT,N,Y,X,,,,,,,
+Person ID Issuer,113872,DCM,TEXT,N,Y,X,,,,,,,
+Person Name,113870,DCM,PNAME,N,Y,D,,,,,,,
+Person Observer's Login Name,128774,DCM,TEXT,N,Y,X,,,,,,,
+Person Observer's Organization Name,121009,DCM,TEXT,N,Y,X,,,K,,,,
+Person Observer Name,121008,DCM,PNAME,N,Y,D,,,,,,,
+Physician Note,121173,DCM,TEXT,N,Y,X,,,,,,,C
+Placer Number,121020,DCM,TEXT,N,Y,X,,,,,,,
+Prescription Identifier,113516,DCM,TEXT,N,Y,X,,,,,,,
+Prior report for current patient,122075,DCM,COMPOSITE,N,Y,X,K,,,,,,
+Procedure Action ID,121124,DCM,TEXT,N,Y,X/D,,,,,,,
+Procedure DateTime,122146,DCM,DATETIME,N,Y,X/D,,,,,K,C,
+Procedure DateTime,52,NCDR [2.0b],DATETIME,N,Y,D,,,,,K,C,
+Procedure Description,121065,DCM,TEXT,N,Y,X/D,,,,,,,C
+Procedure Number in this admission,53,NCDR [2.0b],TEXT,N,Y,X,,,,,,,
+Procedure Result,122177,DCM,TEXT,N,Y,X,,,,,,,C
+Procedure Study Component UID,121019,DCM,UIDREF,N,Y,X,K,,,,,,
+Procedure Study Instance UID,121018,DCM,UIDREF,N,Y,X,K,,,,,,
+Procedure Time Base,122701,DCM,DATETIME,N,Y,X,,,,,K,C,
+Processing step description,111703,DCM,TEXT,N,Y,X,,,,,,,C
+Protocol Time Point Identifier,126071,DCM,TEXT,N,Y,X,,,,,,,C
+Pulse Sequence Name,128230,DCM,TEXT,N,Y,X,,,,,,,C
+Quoted Source,121002,DCM,COMPOSITE,N,Y,D,K,,,,,,
+Radiation Dose Composite Parameters,128436,DCM,COMPOSITE,N,Y,D,K,,,,,,
+Radiation Dose Estimate Name,128403,DCM,TEXT,N,Y,D,,,,,,,C
+Radiation Dose Representation Data,128414,DCM,COMPOSITE,N,Y,D,K,,,,,,
+Radiation Dose Representation Data,128414,DCM,IMAGE,N,Y,D,K,,,,,,
+Radionuclide Identifier,113514,DCM,TEXT,N,Y,X,,,,,,,
+Radiopharmaceutical Administration Event UID,113503,DCM,UIDREF,N,Y,D,K,,,,,,
+Radiopharmaceutical Dispense Unit Identifier,113511,DCM,TEXT,N,Y,X,,,,,,,
+Radiopharmaceutical Lot Identifier,113512,DCM,TEXT,N,Y,X,,,,,,,
+Radiopharmaceutical Start DateTime,123003,DCM,DATETIME,N,Y,X/D,,,,,K,C,
+Radiopharmaceutical Stop DateTime,123004,DCM,DATETIME,N,Y,X,,,,,K,C,
+RDSR Frame of Reference Description,130507,DCM,TEXT,N,Y,X,,,,,,,C
+Reagent Vial Identifier,113513,DCM,TEXT,N,Y,X,,,,,,,
+Real World Value Map used for measurement,126100,DCM,COMPOSITE,N,Y,X,K,,,,,,
+Reason for Proceeding,113907,DCM,TEXT,N,Y,X,,,,,,,C
+Recent Physical Activity,113552,DCM,TEXT,N,Y,X,,,,,,,C
+Recommendation,121075,DCM,TEXT,N,Y,X,,,,,,,C
+Recommended Follow-up Date,111054,DCM,DATE,N,Y,X/D,,,,,K,C,
+Referenced Segment,121191,DCM,IMAGE,N,Y,X/D,K,,,,,,
+Referenced Segmentation Frame,121214,DCM,IMAGE,N,Y,D,K,,,,,,
+Related Patient Data Not Used During Planning,112364,DCM,COMPOSITE,N,Y,X,K,,,,,,
+Room Identification,121121,DCM,TEXT,N,Y,X,,,,,,,
+Sampling DateTime,111469,DCM,DATETIME,N,Y,D,,,,,K,C,
+Selected Region Description,111058,DCM,TEXT,N,Y,D,,,,,,,C
+Series Instance UID,112002,DCM,UIDREF,N,Y,D,K,,,,,,
+Series or Instance used for Water Equivalent Diameter estimation,113985,DCM,UIDREF,N,Y,D,K,,,,,,
+Service Delivery Location,121434,DCM,TEXT,N,Y,X,,,K,,,,
+Service Performer,121435,DCM,PNAME,N,Y,X,,,,,,,
+Service Performer,121435,DCM,TEXT,N,Y,X,,,,,,,
+Social History,160476009,SCT,TEXT,N,Y,X,,,,,,,C
+Source image for segmentation,121233,DCM,IMAGE,N,Y,D,K,,,,,,
+Source of Measurement,121112,DCM,IMAGE,N,Y,D,K,,,,,,
+Source of Measurement,121112,DCM,WAVEFORM,N,Y,X,K,,,,,,
+Source series for segmentation,121232,DCM,UIDREF,N,Y,D,K,,,,,,
+Spatial Fiducials,128447,DCM,COMPOSITE,N,Y,X,K,,,,,,
+Spatial Registration,112353,DCM,COMPOSITE,N,Y,X,K,,,,,,
+Spatial Registration Reference,128444,DCM,COMPOSITE,N,Y,D,K,,,,,,
+Specimen Container Identifier,111700,DCM,TEXT,N,Y,X,,,,,,,
+Specimen Identifier,121041,DCM,TEXT,N,Y,X,,,,,,,
+Specimen UID,121039,DCM,UIDREF,N,Y,X,K,,,,,,
+SR Instance Used,128416,DCM,COMPOSITE,N,Y,D,K,,,,,,
+Start DateTime,398201009,SCT,DATETIME,N,Y,D,,,,,K,C,
+Start of X-Ray Irradiation,113809,DCM,DATETIME,N,Y,D,,,,,K,C,
+Station AE Title,110119,DCM,TEXT,N,Y,X,,K,,,,,
+ST Elevation Onset DateTime,122173,DCM,DATETIME,N,Y,X,,,,,K,C,
+Stop DateTime,397898000,SCT,DATETIME,N,Y,D,,,,,K,C,
+Stress Protocol,109056,DCM,TEXT,N,Y,X,,,,,,,C
+Study Date,111060,DCM,DATE,N,Y,X/D,,,,,K,C,
+Study Instance UID,110180,DCM,UIDREF,N,Y,D,K,,,,,,
+Study Time,111061,DCM,TIME,N,Y,X/D,,,,,K,C,
+Subject Age,121033,DCM,NUM,N,Y,X,,,,K,,,
+Subject Birth Date,121031,DCM,DATE,N,Y,X,,,,,,,
+Subject ID,121030,DCM,TEXT,N,Y,X/D,,,,,,,
+Subject Name,121029,DCM,PNAME,N,Y,D,,,,,,,
+Subject Sex,121032,DCM,CODE,N,Y,X,,,,K,,,
+Subject Time Point Identifier,126070,DCM,TEXT,N,Y,X,,,,,,,C
+Subject UID,121028,DCM,UIDREF,N,Y,X,K,,,,,,
+Summary,121111,DCM,TEXT,N,Y,X,,,,,,,C
+Supporting Information,112359,DCM,COMPOSITE,N,Y,X,K,,,,,,
+Synchronization Frame of Reference UID,130885,DCM,UIDREF,N,Y,X,K,,,,,,
+Time Point,C2348792,UMLS,TEXT,N,Y,X/D,,,,,,,C
+Tracking Unique Identifier,112040,DCM,UIDREF,N,Y,D,K,,,,,,
+Unique Device Identifier,74711-3,LN,TEXT,N,Y,X,,K,,,,,
+Unique Device Identifiers,121000,DCM,CONTAINER,N,Y,X,,K,,,,,
+User Selected Fiducial,112356,DCM,UIDREF,N,Y,D,K,,,,,,
+Waveform Acquired,121143,DCM,WAVEFORM,N,Y,D,K,,,,,,
+X-Ray Attenuator Model Data,128470,DCM,COMPOSITE,N,Y,X,K,,,,,,
+X-Ray Attenuator Model Data,128470,DCM,IMAGE,N,Y,X,K,,,,,,
+X-Ray Attenuator Model Data,128470,DCM,UIDREF,N,Y,X,K,,,,,,
+X-Ray Radiation Dose Report,113701,DCM,COMPOSITE,N,Y,X,K,,,,,,

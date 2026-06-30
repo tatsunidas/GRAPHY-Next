@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld("__GRAPHY_SECURITY__", {
 // デスクトップ専用 API（ネイティブダイアログ等）。main プロセスへ橋渡し。
 contextBridge.exposeInMainWorld("graphyDesktop", {
   pickImportPaths: () => ipcRenderer.invoke("graphy:pick-import"),
+  // 単一の出力先フォルダを選ぶ（SeriesExtractor のコピー先など）。
+  pickDirectory: () => ipcRenderer.invoke("graphy:pick-directory"),
   openViewer: (screen) => ipcRenderer.invoke("graphy:open-viewer", screen),
   // PNG dataURL を OS のネイティブドラッグに乗せて外部へ書き出す。
   startDrag: (dataUrl, filename) => ipcRenderer.send("graphy:start-drag", { dataUrl, filename }),

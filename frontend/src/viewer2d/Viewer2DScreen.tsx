@@ -22,6 +22,7 @@ import { runViewerCommand } from "../viewer/viewerCommands";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { Viewer2DToolbar, type ViewerActions } from "./Viewer2DToolbar";
 import { Viewer2DMenuBar } from "./Viewer2DMenuBar";
+import { RoiManagerPanel } from "./RoiManagerPanel";
 import { useI18n } from "../i18n/i18n";
 import { desktop } from "../desktopBridge";
 
@@ -644,6 +645,8 @@ function TileGrid({
   const [lutOpen, setLutOpen] = useState(false);
   // 操作/計測ツール（左ドラッグ割当）。グローバル（タブ内全タイル）に適用。既定 W/L。
   const [activeTool, setActiveTool] = useState<string>(TOOL_IDS.windowLevel);
+  // ROI マネージャ（右サイドパネル）の表示。
+  const [showRoiMgr, setShowRoiMgr] = useState(false);
   // 未実装メニューの「近日対応」トースト。
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<number | null>(null);
@@ -679,6 +682,7 @@ function TileGrid({
           runViewerCommand(resolveTargets(), (c) => c.clearAnnotations());
         }
       },
+      toggleRoiManager: () => setShowRoiMgr((v) => !v),
       openLut: () => setLutOpen(true),
       setLayoutCols: (c) => onSetCols(patient.patientKey, c),
       toggleRefLines: () => setRefLines((v) => !v),
@@ -715,6 +719,7 @@ function TileGrid({
           {toast}
         </div>
       )}
+      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
       <div
         style={{
           display: "grid",
@@ -745,6 +750,8 @@ function TileGrid({
             onDrop={handleDrop}
           />
         ))}
+      </div>
+      {showRoiMgr && <RoiManagerPanel activePatientKey={patient.patientKey} onClose={() => setShowRoiMgr(false)} />}
       </div>
     </div>
   );
@@ -997,6 +1004,8 @@ function TileCell({
             referenceLinesEnabled={referenceLinesEnabled}
             referenceLabel={seriesLabel}
             commandKey={commandKey}
+            patientKey={patientKey}
+            seriesLabel={seriesLabel}
             onDimChange={onDimChange}
             renderFusionOverlay={renderFusionOverlay}
           />

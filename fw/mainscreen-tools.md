@@ -18,11 +18,10 @@
 | **NonDicomImporter** | **実装済(standalone)** | 非 DICOM を DICOM 化して取込。PDF=Encapsulated PDF、
 |  |  | 画像(png,jpg,bmp,gif,tif)=Secondary Capture、**動画(MP4/AVI 等)=Video Photographic**。
 |  |  | 患者/スタディ紐付け UI（既存追加 or 新規）。下記参照。 |
-| **Anonymizer** | 未実装 | 患者識別情報の匿名化（DICOM PS3.15 Confidentiality Profile 準拠のプロファイル/オプション選択）。
-|  |  | ピクセル内焼き込み除去（バーンイン）連携も検討。バッチ対応。 |
-| **TagExtractor** | **実装済(standalone)** | 指定タグ群を CSV/JSON で一括抽出（スタディ全体 or 選択シリーズ）。dcm4che ヘッダ読取。下記参照。 |
+| **Anonymizer** | **実装済(standalone)** | GRAPHY 移植。PS3.15 Basic Confidentiality Profile（X/Z/D/K/C/U・各オプション・UID一貫置換・safe-private・SR clean・method tagging・新PatientID）＋Pixel 焼き込み（矩形マスク）。検索リスト全体→ZIP/フォルダ。下記参照。 |
+| **TagExtractor** | **実装済(standalone/web*)** | GRAPHY 移植。タグ/シーケンス(パス)/Private を指定し検索リスト全体をシリーズ単位で抽出→テーブル→CSV。下記「再実装」参照（旧・単一スタディ版は置換）。 |
 | **TagViewer** | **実装済(standalone)** | 表示中の画像（選択シリーズ代表インスタンス）の DICOM 属性ダンプを表示（Read only）。SQ ネスト表示・検索ハイライト。下記参照。 |
-| **SeriesExtractor** | 未実装 | 条件（モダリティ/記述/タグ）でシリーズを抽出・分割・コピー/エクスポート。 |
+| **SeriesExtractor** | **実装済(standalone/web*)** | GRAPHY 移植。タグ条件(Include/Exclude・=,含む,≥,≤,範囲・SQ/Private)＋平面(AX/SAG/COR)で検索リスト全体から一致シリーズを検証→standalone はフォルダコピー(連番+mapping.csv)、web は ZIP。条件 .properties 保存/読込。下記参照。 |
 | Refresh / DB | 実装済 | 一覧更新 / DB テーブル管理。 |
 
 ## ビューア / 通信
@@ -38,7 +37,7 @@
 | Help（ショートカット一覧） | 実装済 |
 | **Settings** | 実装済（環境設定ダイアログ起動のみ）。 |
 
-## TagExtractor 実装（2026-06-30）
+## TagExtractor 実装（2026-06-30）※旧・単一スタディ簡易版。下記「再実装（GRAPHY 移植）」で置換済み。歴史記録として残置。
 - **backend**: `com.vis.graphynext.extract`
   - `TagExtractController` … `POST /api/extract/tags`。本文 `{studyUid(必須), seriesUid?(null=スタディ全体), tags[](8桁hex), format("csv"|"json")}`。
     `Content-Disposition: attachment` 付きでファイル本体を返す（CSV は先頭に UTF-8 BOM, RFC4180 クォート）。
@@ -53,6 +52,71 @@
   - `MainScreen.tsx`: `handleOpenTool("tagExtractor")` でダイアログを開く（選択中 study/series をコンテキスト供給）。
   - i18n: `tagext.*` / `common.add` を ja/en に追加。
 - **未対応/将来**: シーケンス(SQ)内タグの抽出、インスタンス単位以外の集計、web(wadors) でのヘッダ取得、抽出条件のプリセット保存。
+
+## TagExtractor 再実装（GRAPHY 移植・2026-06-30）
+GRAPHY `com.vis.core.search.DicomTagExtractorDialog`＋`NestedTagBuilderDialog` を忠実に移植。
+タグ／**シーケンスタグ（パス編集）**／**Private タグ**を指定し、**MainScreen の検索リスト全体**を
+**シリーズ単位（代表 1 枚）**で抽出してテーブル化・CSV 保存する。旧・単一スタディ簡易版は置き換え。
+- **対象**: standalone=ローカル索引／web=WADO-RS metadata（`spring.profiles.default=web`）。両モードとも
+  検索リスト（`fetchStudies(filters)` の studyUids 全件）が対象。シリーズごとに**非SC画像優先の代表**を選び 1 行。
+- **パス記法**: 各パスは `segments[{tag(8hex), creator?}]`。中間 SQ は `getNestedDataset`（先頭アイテム）で辿り、
+  末尾は `getStrings`（複数値 `\` 連結／無ければ `getString`）。Private は creator 指定 or raw タグ（GRAPHY 互換）。
+- **backend**: `extract/TagExtractService.extractTable(studyUids, paths)`＋`TableResult{columns,rows,errors}`、
+  `extract/TagExtractController`（`POST /api/extract/table`・`/csv`、旧 `/tags` 撤去）、
+  `web/WebDicomDataService.seriesMetadata`（WADO-RS）、`dicom/DicomTagController GET /api/dicom/tags`
+  （`org.dcm4che3.data.Tag` をリフレクションした辞書）。整形は既存 `TagExtractFormat`（BOM/RFC4180）再利用。
+- **frontend**: `mainscreen/TagExtractorDialog.tsx`（辞書検索・選択リスト・テーブル・CSV・タグリスト .properties
+  保存/読込・エラーログ）、`mainscreen/NestedTagBuilder.tsx`（パス編集・中間SQ/末尾非SQ検証）、`mainscreen/tagPathUtil.ts`、
+  `api.ts`（`fetchTagDictionary`/`extractTable`/`extractCsv`/型）。`MainScreen` は `filters` を渡す。i18n `tagext.*`。
+- **テスト**: `TagExtractServiceTest`（シーケンス／Private（creator）／複数値 `\`／未検出→空／管理列／代表1行）。
+  実機: 隔離 :8099 で実 MR を import→ `table`/`csv`/`tags` を検証（SQ・Private raw/creator・3シリーズ=3行）。
+- **web 未検証**: dcm4chee 不在のため WADO-RS 経路はコード実装のみ。
+
+## Anonymizer 実装（GRAPHY 移植・PS3.15・2026-07-01）
+DICOM PS3.15 Basic Application Confidentiality Profile の匿名化。GRAPHY
+`DicomAnonymizerEngine`/`AnonymizeConfig`/`AnonymizeTagDictionary`/`DicomTagRule` を dcm4che 上に移植。
+- **辞書**: GRAPHY の 3 CSV を `backend/src/main/resources/dicom_dict/` に複製（Table E.1-1 / E.3.10-1 / E.3.4-1）。
+  起動時ロード（rules≈699, safePrivate≈20, srCodes≈202）。dcm4che に PS3.15 DeIdentifier が無いため自前エンジン。
+- **アクション** X/Z/D/K/C/U。`determineFinalAction`: PatientID→D、PatientName→D/Z、手動Retain→K、カスタム→D、
+  オプション列→該当、既定→基本（combo は安全側 mapAction）。SQ 再帰、UID 一貫置換（保護UIDは不変）、
+  RetainSafePrivate、Clean Structured Content（E.3.4 概念コードの ContentSequence 除去）、method tagging
+  ((0012,0062)=YES,(0012,0063),(0012,0064))、新 PatientID/Name（単一=置換/複数=連番, seed 撹拌）。
+- **Pixel 焼き込み（CleanPixelData）**: `AnonymizeMaskStore`（seriesUid→矩形）に登録された rect を**非圧縮 TS**の
+  PixelData に 0 で塗り込み、BurnedInAnnotation=NO。圧縮 TS はスキップ。
+- **出力**: standalone のみ。ZIP（`/api/anonymizer/zip`）/ フォルダ（`/api/anonymizer/copy`＋`pickDirectory`）。
+  web は WADO 取得が必要なため未対応（501）。出力パスは（RetainUIDs 考慮で再取込せず）匿名化後の UID 階層。
+- **backend**: `com.vis.graphynext.anonymize`（`AnonymizeConfig`/`DicomTagRule`/`AnonymizeTagDictionary`/
+  `DicomAnonymizerEngine`/`AnonymizeMaskStore`/`AnonymizeService`/`AnonymizeController`）。
+  API: `/api/anonymizer/profiles|zip|copy|masks(POST/GET/DELETE)`。
+- **frontend**: `mainscreen/AnonymizerDialog.tsx`（Clean/Retain オプション・新PatientName/ID・seed・個別保持/カスタム値・
+  プロファイル JSON 保存/読込・ZIP/フォルダ出力）。`api.ts` anon 関数群。i18n `anon.*`。
+- **テスト**: `AnonymizeEngineTest`（辞書ロード・option→action・基本匿名化・RetainUIDs・UID 一貫）。全 81 green。
+  実機: 隔離 :8099 に実 MR import→`/zip` で PatientName/ID 置換・UID 置換/保持・(0012,0062)=YES を dcm2json 確認、
+  焼き込みマスク登録→該当 64x64 画素 0・BurnedInAnnotation=NO を確認。
+- **未対応/次段**: **2D viewer の「焼き込みに使用」ボタン（矩形ROI→`registerAnonMask`）は ROI/viewer 開発ストリームと
+  競合回避のため保留**（マスク API は完成・curl 検証済。viewer が落ち着いたら矩形ROIジオメトリ→画素rect 変換を追加）。
+  CleanRecognizableVisualFeatures（顔ぼかし）/圧縮TS焼き込み/web(WADO) は将来。
+
+## SeriesExtractor 実装（GRAPHY 移植・2026-06-30）
+条件一致シリーズを**シリーズフォルダ**として親フォルダへ抽出（コピー）。GRAPHY
+`SeriesConditionExtractorDialog`/`SeriesConditionEvaluator`/`SearchCondition`/`ConditionItemPanel` 移植。
+- **対象**: MainScreen の検索リスト全体（`fetchStudies(filters)` の studyUids）を**シリーズ単位（代表1枚）**で評価。
+- **条件**: `SeriesCondition{segments(TagPath), vr, exclude, op, value1, value2}`。op=EQUALS/CONTAINS/GE/LE/RANGE。
+  判定は **Exclude(OR・先)→Include(AND)→平面** の順（GRAPHY 準拠）。値解決は `TagExtractService.resolvePath`
+  再利用（SQ/Private 対応）。複数値はスキップ（不一致）。比較は VR で 数値/日時(辞書式)/文字列(CONTAINS=カンマOR)。
+- **平面フィルタ**: `PlaneUtil.planeOf`（IOP 法線優位軸→AXIAL/SAGITTAL/CORONAL）。
+- **出力**: standalone=ネイティブ親フォルダへコピー（フォルダ名 `PatientID_StudyDate_Protocol_<UID末尾4>` を
+  `ExportNaming.safeName` で無害化。連番 ON→`001..`＋`mapping_table.csv`、OFF→`extracted_series_list.csv`）。
+  web=一致シリーズを ZIP（**注: web ZIP は WADO-RS 取得が必要・現状 standalone のローカルファイルのみ対応**）。
+- **backend**: `com.vis.graphynext.seriesextract`（`SearchCondition`/`SeriesConditionEvaluator`/`PlaneUtil`/
+  `SeriesExtractService`(verify/copyToFolder/zipLocal)/`SeriesExtractController`：`/api/series-extract/verify|copy|zip`）。
+  `TagExtractService.resolvePath`/`pickRepresentative*` を public 化して再利用。
+- **frontend**: `mainscreen/SeriesExtractorDialog.tsx`（条件行・平面・連番・出力先・検証→抽出・条件保存/読込）、
+  `tagPathUtil`（`serializeConditions`/`parseConditions`）、`api.ts`、`NestedTagBuilder` 再利用。
+  desktop に `pickDirectory` IPC（`desktopBridge.pickDirectory`）。i18n `seriesext.*`。
+- **テスト**: `SeriesExtractServiceTest`(5: =/含む/≥/Exclude/平面・連番コピー+mapping.csv)。
+  実機: 隔離 :8099 に実MR import→verify(Modality=MR=3, AXIAL=1)→copy(連番3フォルダ/15ファイル/mapping.csv) 確認。
+- **web 未検証**: web ZIP（WADO-RS 取得）は未対応（standalone コピーが主）。
 
 ## Export 実装（2026-06-30）
 - 設計・詳細は **`fw/export.md`**（書き出し本体）と **`fw/export-portable-viewer.md`**（portable viewer FW）。

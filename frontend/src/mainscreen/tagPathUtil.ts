@@ -2,7 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import type { TagDictEntry, TagPath, TagPathSegment } from "../api";
+import type { SeriesCondition, TagDictEntry, TagPath, TagPathSegment } from "../api";
 
 /** 入力を 8 桁 hex（大文字）へ正規化。8 桁でなければ null。 */
 export function normHex(s: string): string | null {
@@ -92,4 +92,83 @@ export function dictMap(entries: TagDictEntry[]): Map<string, TagDictEntry> {
   const m = new Map<string, TagDictEntry>();
   for (const e of entries) m.set(e.tag, e);
   return m;
+}
+
+/** セグメント列 → "GGGG,EEEE{creator} > ..." 文字列。 */
+function segEncode(segments: TagPathSegment[]): string {
+  return segments
+    .map((s) => (s.creator ? `${ggggeeee(s.tag)}{${s.creator}}` : ggggeeee(s.tag)))
+    .join(" > ");
+}
+/** "GGGG,EEEE{creator} > ..." → セグメント列。 */
+function segDecode(str: string): TagPathSegment[] {
+  const out: TagPathSegment[] = [];
+  for (const part of str.split(">")) {
+    const seg = part.trim();
+    if (!seg) continue;
+    const cm = /^([0-9A-Fa-f]{4},[0-9A-Fa-f]{4})(?:\{(.+)\})?$/.exec(seg);
+    if (!cm) continue;
+    const hex = normHex(cm[1]);
+    if (!hex) continue;
+    out.push({ tag: hex, creator: cm[2] || undefined });
+  }
+  return out;
+}
+
+/** SeriesExtractor 条件＋平面を .properties 形式へ。 */
+export function serializeConditions(conditions: SeriesCondition[], planes: string[]): string {
+  const lines: string[] = ["# GRAPHY-Next SeriesExtractor conditions"];
+  if (planes.length > 0) lines.push(`plane=${planes.join(",")}`);
+  conditions.forEach((c, i) => {
+    lines.push(`condition.${i}.path=${segEncode(c.segments)}`);
+    lines.push(`condition.${i}.vr=${c.vr}`);
+    lines.push(`condition.${i}.exclude=${c.exclude}`);
+    lines.push(`condition.${i}.op=${c.op}`);
+    lines.push(`condition.${i}.v1=${c.value1}`);
+    lines.push(`condition.${i}.v2=${c.value2}`);
+  });
+  return lines.join("\n") + "\n";
+}
+
+/** .properties から SeriesExtractor 条件＋平面を復元。 */
+export function parseConditions(text: string): { conditions: SeriesCondition[]; planes: string[] } {
+  const byIdx = new Map<number, Partial<SeriesCondition>>();
+  let planes: string[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq < 0) continue;
+    const key = line.slice(0, eq).trim();
+    const val = line.slice(eq + 1);
+    if (key === "plane") {
+      planes = val.split(",").map((s) => s.trim()).filter(Boolean);
+      continue;
+    }
+    const m = /^condition\.(\d+)\.(path|vr|exclude|op|v1|v2)$/.exec(key);
+    if (!m) continue;
+    const idx = Number(m[1]);
+    const c = byIdx.get(idx) ?? {};
+    switch (m[2]) {
+      case "path": c.segments = segDecode(val); break;
+      case "vr": c.vr = val.trim(); break;
+      case "exclude": c.exclude = val.trim() === "true"; break;
+      case "op": c.op = val.trim(); break;
+      case "v1": c.value1 = val; break;
+      case "v2": c.value2 = val; break;
+    }
+    byIdx.set(idx, c);
+  }
+  const conditions: SeriesCondition[] = [...byIdx.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, c]) => ({
+      segments: c.segments ?? [],
+      vr: c.vr ?? "",
+      exclude: c.exclude ?? false,
+      op: c.op ?? "EQUALS",
+      value1: c.value1 ?? "",
+      value2: c.value2 ?? "",
+    }))
+    .filter((c) => c.segments.length > 0);
+  return { conditions, planes };
 }

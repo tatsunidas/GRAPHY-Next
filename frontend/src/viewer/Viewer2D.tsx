@@ -21,6 +21,9 @@ import {
 } from "@cornerstonejs/tools";
 import { ensureStackSegmentation, disposeViewportSegmentation } from "./segmentation";
 import { ERASER_TOOL_ID } from "./toolIds";
+import { setViewerContext, clearViewerContext, getViewerContext, type ViewerContext } from "./viewerContext";
+import { setRoiMaskMeta, subscribeRoiMaskStore } from "./roiMaskStore";
+import { reconcileGlobalAnnotations } from "./globalRoiSync";
 import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
 import { applyTransform, isPanned, readTransform, type ViewTransform, FIT_TRANSFORM } from "./transform";
 import { readImageInfo, sampleAtCanvas, computeSliceSpacing, type ImageInfo, type PixelSample } from "./imageInfo";
@@ -158,6 +161,7 @@ export function Viewer2D({
   referenceLinesEnabled,
   referenceLabel,
   commandKey,
+  roiContext,
   renderOverlay,
 }: {
   imageIds: string[];
@@ -180,6 +184,8 @@ export function Viewer2D({
   referenceLabel?: string;
   /** 指定すると、この tileId をキーに画面メニュー/ツールバーからの一括コマンドに参加する（base のみ）。 */
   commandKey?: string;
+  /** ROI/Mask 作成時に紐付ける患者・シリーズ・C/T コンテキスト（z は現在 imageIndex を使う）。 */
+  roiContext?: Omit<ViewerContext, "z">;
   /** Fusion 等のオーバーレイを base 画像に重ねて描く。base 画像の表示矩形に追従する。 */
   renderOverlay?: RenderOverlay;
 }) {
@@ -193,6 +199,8 @@ export function Viewer2D({
   imageIdsRef.current = imageIds;
   const indexRef = useRef(imageIndex);
   indexRef.current = imageIndex;
+  const roiContextRef = useRef(roiContext);
+  roiContextRef.current = roiContext;
   // 同じスタック(imageIds)なら init を再実行しない。C/T 切替で配列が変わると再 setStack。
   const stackKey = imageIds.join("|");
   const [error, setError] = useState<string | null>(null);
@@ -413,6 +421,16 @@ export function Viewer2D({
     };
     const onLeave = () => setSample(null);
 
+    // ROI（計測注釈）作成完了時に、このビューポートの現在コンテキストでメタ（患者・scope）を紐付ける。
+    const onAnnotationDone = (evt: Event) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const uid = (evt as any)?.detail?.annotation?.annotationUID as string | undefined;
+      const ctx = getViewerContext(viewportIdRef.current);
+      if (!uid || !ctx) return;
+      const sc = { studyUid: ctx.studyUid, seriesUid: ctx.seriesUid, z: ctx.z, c: ctx.c, t: ctx.t };
+      setRoiMaskMeta(uid, { patientKey: ctx.patientKey, seriesLabel: ctx.seriesLabel, scope: sc, origin: sc });
+    };
+
     // カメラ暴走の自己修復。共有 RenderingEngine 上でスライス/シリーズ切替時にまれに
     // parallelScale が画像フィット規模を大きく超え（真っ黒/点表示）ることがあるため、
     // 検知したら resetCamera + 再描画で復帰する。無限ループ防止に再入ガードと回数上限。
@@ -545,6 +563,7 @@ export function Viewer2D({
           element.addEventListener(EVENTS.VOI_MODIFIED, onVoiModified);
           element.addEventListener("mousemove", onMove);
           element.addEventListener("mouseleave", onLeave);
+          element.addEventListener(csToolsEnums.Events.ANNOTATION_COMPLETED, onAnnotationDone as EventListener);
           onVoiModified();
         }
         onCameraModified();
@@ -597,6 +616,7 @@ export function Viewer2D({
       element.removeEventListener(EVENTS.VOI_MODIFIED, onVoiModified);
       element.removeEventListener("mousemove", onMove);
       element.removeEventListener("mouseleave", onLeave);
+      element.removeEventListener(csToolsEnums.Events.ANNOTATION_COMPLETED, onAnnotationDone as EventListener);
       if (!compact && !syncGroupId) {
         disposeViewportSegmentation(viewportId);
       }
@@ -903,6 +923,38 @@ export function Viewer2D({
       redo: () => commandsRef.current.redo(),
     });
   }, [commandKey, compact, syncGroupId]);
+
+  // ROI/Mask 作成時に紐付ける現在コンテキスト（患者・シリーズ・現在 ZCT）をレジストリへ。
+  useEffect(() => {
+    if (compact || syncGroupId || !roiContext) return;
+    const id = viewportIdRef.current;
+    setViewerContext(id, { ...roiContext, z: imageIndex });
+    return () => clearViewerContext(id);
+  }, [roiContext, imageIndex, compact, syncGroupId]);
+
+  // global ROI（scope に "all" を含む）を現在スライス/チャンネルへ追従描画させる。
+  // 最新値は ref から読むため依存なしで安定（slice 変更・store 変更の両方から呼ぶ）。
+  const reconcileGlobalRois = useCallback(() => {
+    if (compact || syncGroupId) return;
+    const ctx = roiContextRef.current;
+    if (!ctx) return;
+    reconcileGlobalAnnotations(
+      { viewportId: viewportIdRef.current, seriesUid: ctx.seriesUid, c: ctx.c, t: ctx.t },
+      imageIdsRef.current,
+      indexRef.current,
+    );
+  }, [compact, syncGroupId]);
+
+  // scope 編集（ダイアログ/トグル）で store が変わったら追従を再評価。
+  useEffect(() => {
+    if (compact || syncGroupId || !roiContext) return;
+    return subscribeRoiMaskStore(reconcileGlobalRois);
+  }, [reconcileGlobalRois, compact, syncGroupId, roiContext]);
+
+  // スライス送り/スタック切替（C/T）・マウント時に global ROI の追従を反映。
+  useEffect(() => {
+    reconcileGlobalRois();
+  }, [imageIndex, stackKey, reconcileGlobalRois]);
 
   const panned = isPanned(transform);
   // 校正済み画素値の単位: RescaleType(0028,1054) があればそれ（"US"=未指定は除外）、

@@ -3,6 +3,10 @@
 > 更新日: 2026-06-30（最終更新: StrictMode 無効化でCT黒画面/スケールバー暴走を解消・カメラ自己修復 / Fusion整合表示 / IPP表示 / LUT404修正）
 > 目的: 別の作業者（Claude 含む）がこのリポジトリの状況を把握し、続きを実装できるようにする。
 > このファイル＋ `fw/` 配下の各設計ドキュメントが「ソース・オブ・トゥルース」。
+>
+> 🔵 **進行中（2026-07-01）の作業状況・次の一手は `fw/roi-mask-progress.md` を参照**
+> （シリーズ Sync / リファレンスライン / 2D Viewer メニュー・ツールバー / ROI 計測・ブラシ / ROI マネージャ）。
+> 関連設計: `viewer-2d-menu-toolbar.md` `roi-mask-model.md` `roi-manager-design.md` `series-sync-design.md`。
 
 ---
 
@@ -66,6 +70,18 @@ GRAPHY-Next/
 - **Query/Retrieve ウィンドウ**: 常駐別ウィンドウ（`#qr`）。Destination タブ・共有検索(Today既定)・AutoRefresh・
   保存済み判定・**Retrieve は C-MOVE**（standalone=自局SCP取込 / web=dcm4chee宛・QIDO判定）。`qr/DimseQrService`
   拡張＋`qr/QrRetrieveService`＋`/api/dicom/qr/*`、frontend `src/qr/`。設計・検証は **`fw/qr-window.md`**。
+- **TagExtractor（GRAPHY 移植）**: タグ/シーケンス(パス編集)/Private を指定し検索リスト全体をシリーズ単位で
+  抽出→テーブル→CSV。`extract/TagExtractService.extractTable`＋`/api/extract/table|csv`、
+  `/api/dicom/tags`（辞書）、`web/WebDicomDataService.seriesMetadata`（WADO-RS）。frontend
+  `mainscreen/TagExtractorDialog`＋`NestedTagBuilder`＋`tagPathUtil`。詳細 `fw/mainscreen-tools.md`。
+- **SeriesExtractor（GRAPHY 移植）**: タグ条件(Include/Exclude・=,含む,≥,≤,範囲・SQ/Private)＋平面(AX/SAG/COR)で
+  一致シリーズを検証→standalone はフォルダコピー(連番+mapping.csv)、web は ZIP(WADO 取得は未対応)。
+  `seriesextract/SeriesConditionEvaluator`/`SeriesExtractService`＋`/api/series-extract/verify|copy|zip`、
+  desktop `pickDirectory` IPC。frontend `mainscreen/SeriesExtractorDialog`。詳細 `fw/mainscreen-tools.md`。
+- **Anonymizer（GRAPHY 移植・PS3.15）**: Basic Confidentiality Profile（X/Z/D/K/C/U・各オプション・UID一貫・
+  safe-private・SR clean・method tagging・新PatientID）＋Pixel 焼き込み(矩形)。検索リスト全体→ZIP/フォルダ(standalone)。
+  `anonymize/*`＋`/api/anonymizer/*`、CSV辞書は `resources/dicom_dict/`。frontend `mainscreen/AnonymizerDialog`。
+  **焼き込みの viewer『焼き込みに使用』ボタンは保留**（マスクAPI完成・viewer競合回避）。詳細 `fw/mainscreen-tools.md`。
 - REST: `/api/studies`（検索: patientId/Name 部分一致, 日付範囲, modality複数, accession）、`/series`、
   `/instances`、`/instances/{sop}/file`（standalone の画像配信=wadouri 用）、
   `/studies/{study}/series/{series}/layout`（**5D ZCT 導出**）、`/dicom/tag`（タグ→keyword/VR）、

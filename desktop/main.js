@@ -334,6 +334,15 @@ ipcMain.handle("graphy:pick-import", async () => {
   return result.canceled ? [] : result.filePaths;
 });
 
+// 単一フォルダ選択（SeriesExtractor のコピー先など）。選んだ絶対パス（無ければ null）。
+ipcMain.handle("graphy:pick-directory", async () => {
+  const result = await dialog.showOpenDialog(BrowserWindow.getFocusedWindow(), {
+    title: "出力先フォルダを選択",
+    properties: ["openDirectory", "createDirectory"],
+  });
+  return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+});
+
 app.whenReady().then(async () => {
   createSplash();
   try {

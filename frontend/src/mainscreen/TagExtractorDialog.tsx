@@ -2,103 +2,136 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import { useState } from "react";
-import { extractTags, fetchTagInfo, type Study, type Series } from "../api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  extractCsv,
+  extractTable,
+  fetchStudies,
+  fetchTagDictionary,
+  type ExtractTableResult,
+  type StudyFilters,
+  type TagDictEntry,
+  type TagPath,
+} from "../api";
 import { useI18n } from "../i18n/i18n";
+import { NestedTagBuilder } from "./NestedTagBuilder";
+import {
+  dictMap,
+  ggggeeee,
+  normHex,
+  parseTagList,
+  pathDisplay,
+  pathLabel,
+  serializeTagList,
+} from "./tagPathUtil";
 
-/** 選択中タグ（番号＋解決済みキーワード/VR）。 */
-interface TagItem {
-  tag: string; // 8 桁 hex（大文字）
-  keyword: string;
-  vr: string;
-}
-
-/** よく使うタグのプリセット（クイック追加用）。 */
-const PRESET_TAGS = [
-  "00100020", // PatientID
-  "00100010", // PatientName
-  "00100030", // PatientBirthDate
-  "00100040", // PatientSex
-  "00080020", // StudyDate
-  "00081030", // StudyDescription
-  "00080050", // AccessionNumber
-  "00080060", // Modality
-  "00200011", // SeriesNumber
-  "0008103E", // SeriesDescription
-  "00200013", // InstanceNumber
-  "00180050", // SliceThickness
-  "00180060", // KVP
-  "00080070", // Manufacturer
-];
+/** よく使うタグのプリセット（クイック追加）。 */
+const PRESETS = ["00100010", "00100020", "00080060", "0008103E", "00180015", "00081030", "00080020"];
 
 /**
- * TagExtractor: 選択スタディ（または絞り込んだシリーズ）から指定タグ群を CSV/JSON で一括抽出する。
- * backend `/api/extract/tags` を叩き、返ってきたファイルをブラウザ/Electron でダウンロードする。
+ * TagExtractor（GRAPHY 移植）。タグ／シーケンス（パス編集）／Private を指定し、MainScreen の
+ * 検索リスト全体をシリーズ単位で抽出してテーブル化、CSV 保存する。タグリストの .properties 保存/読込も可。
  */
 export function TagExtractorDialog({
   open,
   onClose,
-  study,
-  series,
+  filters,
 }: {
   open: boolean;
   onClose: () => void;
-  study: Study | null;
-  series: Series | null;
+  filters: StudyFilters | null;
 }) {
   const { t } = useI18n();
-  const [tags, setTags] = useState<TagItem[]>([]);
-  const [input, setInput] = useState("");
-  const [scope, setScope] = useState<"study" | "series">("study");
-  const [format, setFormat] = useState<"csv" | "json">("csv");
+  const [dict, setDict] = useState<TagDictEntry[]>([]);
+  const dmap = useMemo(() => dictMap(dict), [dict]);
+
+  const [paths, setPaths] = useState<TagPath[]>([]);
+  const [query, setQuery] = useState("");
+  const [pvTag, setPvTag] = useState("");
+  const [pvName, setPvName] = useState("");
+  const [pvCreator, setPvCreator] = useState("");
+  const [nestedOpen, setNestedOpen] = useState(false);
+
+  const [result, setResult] = useState<ExtractTableResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+  const studyUidsRef = useRef<string[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open || dict.length > 0) return;
+    fetchTagDictionary().then(setDict).catch(() => setError(t("tagext.err.dict")));
+  }, [open, dict.length, t]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return dict.slice(0, 200);
+    return dict
+      .filter((e) => e.keyword.toLowerCase().includes(q) || e.tag.toLowerCase().includes(q) || ggggeeee(e.tag).includes(q))
+      .slice(0, 200);
+  }, [query, dict]);
 
   if (!open) return null;
 
-  const addTag = async (raw: string) => {
-    const hex = raw.replace(/[^0-9A-Fa-f]/g, "").toUpperCase();
-    if (hex.length !== 8) {
-      setError(t("tagext.error.invalidTag", { tag: raw }));
+  const addSingle = (hex: string) => {
+    const h = normHex(hex);
+    if (!h) {
+      setError(t("tagext.err.badTag", { tag: hex }));
       return;
     }
-    if (tags.some((x) => x.tag === hex)) {
-      setInput("");
-      return; // 重複は無視
+    setPaths((p) => [...p, { segments: [{ tag: h }], label: pathLabel(dmap, [{ tag: h }]) }]);
+  };
+  const addPrivateSingle = () => {
+    const h = normHex(pvTag);
+    if (!h) {
+      setError(t("tagext.err.badTag", { tag: pvTag }));
+      return;
     }
-    setError(null);
-    try {
-      const info = await fetchTagInfo(hex);
-      setTags((prev) => [...prev, { tag: hex, keyword: info.keyword, vr: info.vr }]);
-      setInput("");
-    } catch {
-      // 解決に失敗してもタグ自体は追加できる
-      setTags((prev) => [...prev, { tag: hex, keyword: "", vr: "" }]);
-      setInput("");
+    const seg = { tag: h, creator: pvCreator || undefined };
+    setPaths((p) => [...p, { segments: [seg], label: pvName || pathLabel(dmap, [seg]) }]);
+    setPvTag("");
+    setPvName("");
+    setPvCreator("");
+  };
+  const removePath = (i: number) => setPaths((p) => p.filter((_, idx) => idx !== i));
+  const movePath = (i: number, d: number) =>
+    setPaths((p) => {
+      const n = [...p];
+      const j = i + d;
+      if (j < 0 || j >= n.length) return n;
+      [n[i], n[j]] = [n[j], n[i]];
+      return n;
+    });
+
+  const resolveStudyUids = async (): Promise<string[] | null> => {
+    if (!filters) {
+      setError(t("tagext.err.noSearch"));
+      return null;
     }
+    const studies = await fetchStudies(filters);
+    if (studies.length === 0) {
+      setError(t("tagext.err.noStudies"));
+      return null;
+    }
+    return studies.map((s) => s.studyInstanceUid);
   };
 
-  const removeTag = (tag: string) => setTags((prev) => prev.filter((x) => x.tag !== tag));
-
   const run = async () => {
-    if (!study || tags.length === 0) return;
+    if (paths.length === 0) {
+      setError(t("tagext.err.noTags"));
+      return;
+    }
     setBusy(true);
     setError(null);
+    setInfo(null);
     try {
-      const { blob, filename } = await extractTags({
-        studyUid: study.studyInstanceUid,
-        seriesUid: scope === "series" && series ? series.seriesInstanceUid : undefined,
-        tags: tags.map((x) => x.tag),
-        format,
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      const studyUids = await resolveStudyUids();
+      if (!studyUids) return;
+      studyUidsRef.current = studyUids;
+      const r = await extractTable({ studyUids, paths });
+      setResult(r);
+      setInfo(t("tagext.result", { rows: r.rows.length, studies: studyUids.length }));
     } catch (e) {
       setError(t("common.fetchError", { error: String(e) }));
     } finally {
@@ -106,200 +139,193 @@ export function TagExtractorDialog({
     }
   };
 
-  const presetAvailable = PRESET_TAGS.filter((p) => !tags.some((x) => x.tag === p));
+  const saveCsv = async () => {
+    if (paths.length === 0) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const studyUids = studyUidsRef.current.length > 0 ? studyUidsRef.current : await resolveStudyUids();
+      if (!studyUids) return;
+      const { blob, filename } = await extractCsv({ studyUids, paths });
+      downloadBlob(blob, filename);
+    } catch (e) {
+      setError(t("common.fetchError", { error: String(e) }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveTagList = () => {
+    if (paths.length === 0) return;
+    downloadBlob(new Blob([serializeTagList(paths)], { type: "text/plain" }), "tag-list.properties");
+  };
+  const loadTagList = async (file: File) => {
+    try {
+      const text = await file.text();
+      const loaded = parseTagList(text, dmap);
+      setPaths(loaded);
+      setInfo(t("tagext.loaded", { count: loaded.length }));
+    } catch (e) {
+      setError(t("common.fetchError", { error: String(e) }));
+    }
+  };
+
+  const canRun = !busy && paths.length > 0;
 
   return (
     <div style={overlay} onClick={onClose}>
       <div style={dialog} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
           <span style={{ fontWeight: 700 }}>{t("tagext.title")}</span>
-          <button style={closeBtn} onClick={onClose} aria-label={t("common.close")}>
-            ✕
-          </button>
+          <button style={closeBtn} onClick={onClose}>✕</button>
         </div>
 
-        <div style={{ flex: 1, overflow: "auto", padding: "14px 18px" }}>
-          {!study ? (
-            <div style={{ color: "#b00020" }}>{t("tagext.noStudy")}</div>
-          ) : (
-            <>
-              {/* スコープ */}
-              <Section title={t("tagext.scope")}>
-                <div style={{ fontSize: 13, color: "#445", marginBottom: 8 }}>
-                  {study.patientName || study.patientId} / {study.studyDate || "—"} /{" "}
-                  {study.studyDescription || "—"}
+        <div style={bodyRow}>
+          {/* 左: タグ選択 */}
+          <div style={leftPane}>
+            <div style={{ fontSize: 12, color: "#6b7785" }}>{t("tagext.scope.searchList")}</div>
+            <input style={inp} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("tagext.dict.search")} spellCheck={false} />
+            <div style={listBox}>
+              {dict.length === 0 && <div style={{ padding: 8, color: "#888", fontSize: 12 }}>{t("common.loading")}</div>}
+              {filtered.map((e) => (
+                <div key={e.tag} style={dictRow} onDoubleClick={() => addSingle(e.tag)}>
+                  <span style={{ fontFamily: "monospace", color: "#556" }}>{ggggeeee(e.tag)}</span>
+                  <span style={{ flex: 1 }}>{e.keyword}</span>
+                  <span style={{ color: "#8a98a6", fontSize: 11 }}>{e.vr}</span>
+                  <button style={miniBtn} onClick={() => addSingle(e.tag)}>+</button>
                 </div>
-                <label style={radio}>
-                  <input
-                    type="radio"
-                    checked={scope === "study"}
-                    onChange={() => setScope("study")}
-                  />
-                  {t("tagext.scope.study", { count: study.numberOfInstances })}
-                </label>
-                <label style={{ ...radio, opacity: series ? 1 : 0.5 }}>
-                  <input
-                    type="radio"
-                    checked={scope === "series"}
-                    disabled={!series}
-                    onChange={() => setScope("series")}
-                  />
-                  {series
-                    ? t("tagext.scope.series", {
-                        name: series.seriesDescription || series.modality || series.seriesInstanceUid,
-                        count: series.numberOfInstances,
-                      })
-                    : t("tagext.scope.noSeries")}
-                </label>
-              </Section>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button style={btn} onClick={() => setNestedOpen(true)}>{t("tagext.addNested")}</button>
+            </div>
+            {/* Private 単独 */}
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+              <span style={{ fontSize: 12, color: "#556" }}>{t("tagext.private.label")}</span>
+              <input style={{ ...inp, width: 96 }} value={pvTag} onChange={(e) => setPvTag(e.target.value)} placeholder="0019,1001" />
+              <input style={{ ...inp, width: 96 }} value={pvName} onChange={(e) => setPvName(e.target.value)} placeholder={t("tagext.private.name")} />
+              <input style={{ ...inp, width: 110 }} value={pvCreator} onChange={(e) => setPvCreator(e.target.value)} placeholder={t("tagext.private.creator")} />
+              <button style={miniBtn} onClick={addPrivateSingle}>{t("common.add")}</button>
+            </div>
+            <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 11, color: "#8a98a6", alignSelf: "center" }}>{t("tagext.presets")}:</span>
+              {PRESETS.map((h) => (
+                <button key={h} style={chip} onClick={() => addSingle(h)}>{dmap.get(h)?.keyword ?? ggggeeee(h)}</button>
+              ))}
+            </div>
+          </div>
 
-              {/* タグ選択 */}
-              <Section title={t("tagext.tags")}>
-                <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-                  <input
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && addTag(input)}
-                    placeholder={t("tagext.tags.placeholder")}
-                    style={textInput}
-                  />
-                  <button onClick={() => addTag(input)} style={btn}>
-                    {t("common.add")}
-                  </button>
+          {/* 右: 選択済み */}
+          <div style={rightPane}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: "#33404d" }}>{t("tagext.selected", { n: paths.length })}</span>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button style={miniBtn} onClick={saveTagList} disabled={paths.length === 0} title={t("tagext.saveList")}>💾</button>
+                <button style={miniBtn} onClick={() => fileInputRef.current?.click()} title={t("tagext.loadList")}>📂</button>
+                <input ref={fileInputRef} type="file" accept=".properties,.txt" style={{ display: "none" }}
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) void loadTagList(f); e.target.value = ""; }} />
+              </div>
+            </div>
+            <div style={selBox}>
+              {paths.length === 0 && <div style={{ color: "#8a98a6", fontSize: 12, padding: 6 }}>{t("tagext.selected.empty")}</div>}
+              {paths.map((p, i) => (
+                <div key={i} style={selRow}>
+                  <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={pathDisplay(dmap, p)}>
+                    {pathDisplay(dmap, p)}
+                  </span>
+                  <button style={miniBtn} disabled={i === 0} onClick={() => movePath(i, -1)}>↑</button>
+                  <button style={miniBtn} disabled={i === paths.length - 1} onClick={() => movePath(i, 1)}>↓</button>
+                  <button style={{ ...miniBtn, color: "#b00020" }} onClick={() => removePath(i)}>✕</button>
                 </div>
+              ))}
+            </div>
+          </div>
+        </div>
 
-                {tags.length === 0 && (
-                  <div style={{ color: "#8a98a6", fontSize: 12, marginBottom: 8 }}>
-                    {t("tagext.tags.empty")}
-                  </div>
-                )}
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
-                  {tags.map((x) => (
-                    <span key={x.tag} style={chip}>
-                      <b>{x.keyword || `(${x.tag})`}</b>
-                      <span style={{ color: "#8a98a6", fontSize: 11 }}>
-                        {x.tag}
-                        {x.vr ? ` ${x.vr}` : ""}
-                      </span>
-                      <button style={chipX} onClick={() => removeTag(x.tag)} aria-label={t("common.delete")}>
-                        ✕
-                      </button>
-                    </span>
+        {/* 結果テーブル */}
+        <div style={resultPane}>
+          {!result && <div style={{ color: "#8a98a6", fontSize: 12 }}>{t("tagext.notRun")}</div>}
+          {result && (
+            <div style={{ overflow: "auto", height: "100%" }}>
+              <table style={tableStyle}>
+                <thead>
+                  <tr>{result.columns.map((c, i) => <th key={i} style={th}>{c}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {result.rows.map((row, ri) => (
+                    <tr key={ri} style={{ borderBottom: "1px solid #eef1f4" }}>
+                      {row.map((v, ci) => <td key={ci} style={td} title={v}>{v}</td>)}
+                    </tr>
                   ))}
+                </tbody>
+              </table>
+              {result.errors.length > 0 && (
+                <div style={errBox}>
+                  <div style={{ fontWeight: 600, marginBottom: 2 }}>{t("tagext.errors", { n: result.errors.length })}</div>
+                  {result.errors.slice(0, 50).map((e, i) => <div key={i}>{e}</div>)}
                 </div>
-
-                {presetAvailable.length > 0 && (
-                  <div>
-                    <div style={{ fontSize: 12, color: "#667", marginBottom: 4 }}>{t("tagext.presets")}</div>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                      {presetAvailable.map((p) => (
-                        <button key={p} onClick={() => addTag(p)} style={presetBtn}>
-                          + {p}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </Section>
-
-              {/* 出力形式 */}
-              <Section title={t("tagext.format")}>
-                <label style={radio}>
-                  <input type="radio" checked={format === "csv"} onChange={() => setFormat("csv")} />
-                  CSV
-                </label>
-                <label style={radio}>
-                  <input type="radio" checked={format === "json"} onChange={() => setFormat("json")} />
-                  JSON
-                </label>
-              </Section>
-
-              {error && <div style={{ color: "#b00020", marginTop: 8 }}>{error}</div>}
-            </>
+              )}
+            </div>
           )}
         </div>
 
         <div style={footer}>
-          <button onClick={onClose} style={btn}>
-            {t("common.close")}
-          </button>
+          <div style={{ flex: 1, minWidth: 0, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {info && <span style={{ color: "#2e5d27" }}>{info}</span>}
+            {error && <span style={{ color: "#b00020" }}>{error}</span>}
+          </div>
+          <button style={btn} onClick={onClose}>{t("common.close")}</button>
+          <button style={btn} onClick={saveCsv} disabled={busy || paths.length === 0}>{t("tagext.saveCsv")}</button>
           <button
+            style={{ ...btn, background: canRun ? "#0b5cad" : "#9fb6cf", color: "#fff", border: "none", cursor: canRun ? "pointer" : "default" }}
             onClick={run}
-            disabled={busy || !study || tags.length === 0}
-            style={{
-              ...btn,
-              background: busy || !study || tags.length === 0 ? "#9fb6cf" : "#0b5cad",
-              color: "#fff",
-              cursor: busy || !study || tags.length === 0 ? "default" : "pointer",
-            }}
+            disabled={!canRun}
           >
-            {busy ? t("tagext.running") : t("tagext.export")}
+            {busy ? t("tagext.running") : t("tagext.run")}
           </button>
         </div>
       </div>
+
+      <NestedTagBuilder
+        open={nestedOpen}
+        dict={dict}
+        dictMapByTag={dmap}
+        onClose={() => setNestedOpen(false)}
+        onConfirm={(p) => { setPaths((prev) => [...prev, p]); setNestedOpen(false); }}
+      />
     </div>
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div style={{ marginBottom: 16 }}>
-      <div style={{ fontSize: 13, fontWeight: 700, color: "#334", marginBottom: 8 }}>{title}</div>
-      {children}
-    </div>
-  );
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
-const overlay: React.CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  background: "rgba(0,0,0,0.35)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  zIndex: 1000,
-};
-const dialog: React.CSSProperties = {
-  width: 620,
-  maxWidth: "94vw",
-  height: 600,
-  maxHeight: "90vh",
-  background: "#fff",
-  borderRadius: 10,
-  boxShadow: "0 12px 40px rgba(0,0,0,0.3)",
-  display: "flex",
-  flexDirection: "column",
-  overflow: "hidden",
-  fontFamily: "system-ui, sans-serif",
-  color: "#1a1a1a",
-};
-const header: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  padding: "12px 16px",
-  borderBottom: "1px solid #eee",
-};
-const footer: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "flex-end",
-  gap: 8,
-  padding: "12px 16px",
-  borderTop: "1px solid #eee",
-};
+const overlay: React.CSSProperties = { position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 };
+const dialog: React.CSSProperties = { width: 980, maxWidth: "97vw", height: 720, maxHeight: "94vh", background: "#fff", borderRadius: 10, boxShadow: "0 12px 40px rgba(0,0,0,0.3)", display: "flex", flexDirection: "column", overflow: "hidden", fontFamily: "system-ui, sans-serif", color: "#1a1a1a" };
+const header: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: "1px solid #eee" };
 const closeBtn: React.CSSProperties = { border: "none", background: "transparent", fontSize: 16, cursor: "pointer", color: "#666" };
-const textInput: React.CSSProperties = { padding: "6px 8px", border: "1px solid #cdd5de", borderRadius: 6, fontSize: 13, flex: 1, boxSizing: "border-box" };
-const btn: React.CSSProperties = { padding: "6px 14px", border: "1px solid #cdd5de", borderRadius: 6, background: "#fff", cursor: "pointer", fontSize: 13 };
-const radio: React.CSSProperties = { display: "flex", alignItems: "center", gap: 6, fontSize: 13, margin: "4px 0", cursor: "pointer" };
-const chip: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 6,
-  padding: "3px 6px 3px 10px",
-  border: "1px solid #cdd9e6",
-  borderRadius: 14,
-  background: "#f2f7fc",
-  fontSize: 12,
-};
-const chipX: React.CSSProperties = { border: "none", background: "transparent", cursor: "pointer", color: "#88a", fontSize: 12, padding: 0 };
-const presetBtn: React.CSSProperties = { padding: "2px 8px", border: "1px dashed #c2cdd8", borderRadius: 12, background: "#fff", cursor: "pointer", fontSize: 11, color: "#456" };
+const bodyRow: React.CSSProperties = { display: "flex", gap: 12, padding: "10px 16px", borderBottom: "1px solid #eef1f4" };
+const leftPane: React.CSSProperties = { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 8 };
+const rightPane: React.CSSProperties = { width: 360, display: "flex", flexDirection: "column", gap: 6 };
+const inp: React.CSSProperties = { padding: "5px 8px", border: "1px solid #cdd5de", borderRadius: 5, fontSize: 13 };
+const listBox: React.CSSProperties = { height: 170, overflow: "auto", border: "1px solid #e1e7ee", borderRadius: 6 };
+const dictRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, padding: "3px 8px", fontSize: 12.5, borderBottom: "1px solid #f1f3f5", cursor: "pointer" };
+const selBox: React.CSSProperties = { flex: 1, minHeight: 150, overflow: "auto", border: "1px solid #e1e7ee", borderRadius: 6, background: "#fafbfc" };
+const selRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 4, padding: "3px 6px", fontSize: 12.5, borderBottom: "1px solid #f1f3f5" };
+const resultPane: React.CSSProperties = { flex: 1, minHeight: 0, padding: "8px 16px", overflow: "hidden" };
+const tableStyle: React.CSSProperties = { borderCollapse: "collapse", fontSize: 12, whiteSpace: "nowrap" };
+const th: React.CSSProperties = { position: "sticky", top: 0, background: "#f7f9fb", border: "1px solid #e1e7ee", padding: "4px 8px", textAlign: "left", fontWeight: 600 };
+const td: React.CSSProperties = { border: "1px solid #eef1f4", padding: "3px 8px", maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis" };
+const errBox: React.CSSProperties = { marginTop: 8, padding: 8, background: "#fff4f4", border: "1px solid #f0d0d0", borderRadius: 6, fontSize: 11.5, color: "#a11" };
+const footer: React.CSSProperties = { display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", borderTop: "1px solid #eee" };
+const btn: React.CSSProperties = { padding: "6px 14px", border: "1px solid #cdd5de", borderRadius: 6, background: "#fff", cursor: "pointer", fontSize: 13, whiteSpace: "nowrap" };
+const miniBtn: React.CSSProperties = { minWidth: 24, padding: "2px 7px", border: "1px solid #cdd5de", borderRadius: 4, background: "#fff", cursor: "pointer", fontSize: 12 };
+const chip: React.CSSProperties = { padding: "2px 8px", border: "1px solid #d7dde3", borderRadius: 10, background: "#fff", cursor: "pointer", fontSize: 11.5 };

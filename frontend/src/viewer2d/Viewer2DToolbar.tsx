@@ -26,6 +26,8 @@ export interface ViewerActions {
   setBrushSize(size: number): void;
   /** 計測 ROI を全消去（対象タイル）。 */
   clearRois(): void;
+  /** ROI マネージャ（右パネル）の表示切替。 */
+  toggleRoiManager(): void;
   /** LUT 選択ダイアログを開く（適用は選択時に対象タイルへ）。 */
   openLut(): void;
   /** レイアウト列数（0=自動）。 */
