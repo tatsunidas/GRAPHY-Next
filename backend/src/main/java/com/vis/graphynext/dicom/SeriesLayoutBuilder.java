@@ -24,10 +24,15 @@ public final class SeriesLayoutBuilder {
     public record FrameMeta(String sopInstanceUid, int instanceNumber, double zpos, Map<String, Double> dims) {
     }
 
+    // 次元の意味づけ:
+    //   T(時間) = 同じ対象を繰り返し/経時的に撮ったもの（Temporal/Trigger、および AcquisitionNumber=
+    //             「一定時間の連続データ収集」＝本質的に時間軸。造影フェーズ/fMRI 繰り返し等）。
+    //   C(チャンネル) = 同一空間位置・同一時相で「見ているもの」が違う（Echo/b値/EchoTime、
+    //             ComplexImageComponent=位相/実部/虚部 等）。
     /** T 次元の候補（優先順）。 */
-    private static final List<String> T_TAGS = List.of("Temporal", "Trigger");
+    private static final List<String> T_TAGS = List.of("Temporal", "Trigger", "Acq");
     /** C 次元の候補（優先順）。 */
-    private static final List<String> C_TAGS = List.of("Echo", "Bvalue", "EchoTime");
+    private static final List<String> C_TAGS = List.of("Echo", "Bvalue", "EchoTime", "Complex");
 
     private SeriesLayoutBuilder() {
     }
@@ -58,7 +63,10 @@ public final class SeriesLayoutBuilder {
         int framesPerPos = n / nZ;
         boolean uniform = (nZ * framesPerPos == n) && byPos.values().stream().allMatch(l -> l.size() == framesPerPos);
         if (!uniform) {
-            return pureStack(frames);
+            // 非均一でも、明確な判別キー（AcquisitionNumber=T、Echo/位相=C 等）があれば多次元化する。
+            // 端スライスが片方の収集のみ等の非均一構成に対応（無ければ純スタック）。
+            SeriesLayout byKey = globalDimKey(frames, zIndex, byPos);
+            return byKey != null ? byKey : pureStack(frames);
         }
 
         if (framesPerPos == 1) {
@@ -95,8 +103,81 @@ public final class SeriesLayoutBuilder {
                 }
             }
         }
+        // 明確な判別キー（AcquisitionNumber=T、Echo/位相=C 等）があればそれで割り当て（総当たりより正確）。
+        SeriesLayout byKey = globalDimKey(frames, zIndex, byPos);
+        if (byKey != null) {
+            return byKey;
+        }
         // どれも当てはまらなければ、各位置を InstanceNumber 順に並べた総当たり C 次元。
         return genericC(frames, zIndex, byPos, framesPerPos);
+    }
+
+    /**
+     * グローバルな判別キーで T または C 次元を割り当てる。T 候補（{@link #T_TAGS}, 例 Acq=時間）を先に、
+     * 次に C 候補（{@link #C_TAGS}, 例 Echo/位相=チャンネル）を試す。各キーは「全フレームに値があり、
+     * distinct≥2、各 Z 位置内で値が重複しない」場合に採用。値→index のグローバル写像で割り当てるため、
+     * 各位置の枚数が不揃い（非均一）でも成立する（GRAPHY の SeriesInstanceUID 多次元写像と同発想）。
+     * 採用できなければ null。
+     */
+    private static SeriesLayout globalDimKey(List<FrameMeta> frames, Map<Long, Integer> zIndex,
+                                             Map<Long, List<FrameMeta>> byPos) {
+        for (String tag : T_TAGS) {
+            SeriesLayout l = tryGlobalKey(frames, zIndex, byPos, tag, true); // 時間(T)として
+            if (l != null) {
+                return l;
+            }
+        }
+        for (String tag : C_TAGS) {
+            SeriesLayout l = tryGlobalKey(frames, zIndex, byPos, tag, false); // チャンネル(C)として
+            if (l != null) {
+                return l;
+            }
+        }
+        return null;
+    }
+
+    /** 1 つの判別キーを T(asTime=true) または C(false) 次元として割り当てる。不適なら null。 */
+    private static SeriesLayout tryGlobalKey(List<FrameMeta> frames, Map<Long, Integer> zIndex,
+                                             Map<Long, List<FrameMeta>> byPos, String tag, boolean asTime) {
+        boolean allHave = frames.stream().allMatch(f -> f.dims().containsKey(tag));
+        if (!allHave) {
+            return null;
+        }
+        TreeSet<Double> distinct = new TreeSet<>();
+        for (FrameMeta f : frames) {
+            distinct.add(f.dims().get(tag));
+        }
+        if (distinct.size() < 2) {
+            return null;
+        }
+        // 各位置内でキー値が重複しない（同一 z に同一 index が2枚来ない）こと。
+        for (List<FrameMeta> group : byPos.values()) {
+            TreeSet<Double> seen = new TreeSet<>();
+            for (FrameMeta f : group) {
+                if (!seen.add(f.dims().get(tag))) {
+                    return null;
+                }
+            }
+        }
+        Map<Double, Integer> idxRank = rank(new ArrayList<>(distinct));
+        int nKey = distinct.size();
+        int nZ = zIndex.size();
+        java.util.Set<Long> usedSlots = new java.util.HashSet<>();
+        List<SeriesLayout.Cell> cells = new ArrayList<>();
+        for (FrameMeta f : frames) {
+            int z = zIndex.get(zKey(f.zpos()));
+            int r = idxRank.get(f.dims().get(tag));
+            int c = asTime ? 0 : r;
+            int t = asTime ? r : 0;
+            long slot = ((long) c * 1_000_003L + z) * 1_000_003L + t; // (c,z,t) 一意キー
+            if (!usedSlots.add(slot)) {
+                return null;
+            }
+            cells.add(new SeriesLayout.Cell(c, z, t, f.sopInstanceUid()));
+        }
+        return asTime
+                ? SeriesLayout.noSpatial(nZ, 1, nKey, null, tag, cells)
+                : SeriesLayout.noSpatial(nZ, nKey, 1, tag, null, cells);
     }
 
     // --- 割り当て ---

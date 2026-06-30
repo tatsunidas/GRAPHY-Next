@@ -13,6 +13,8 @@ import { SearchPanel } from "./SearchPanel";
 import { StatusBar } from "./StatusBar";
 import { TagExtractorDialog } from "./TagExtractorDialog";
 import { ExportDialog } from "./ExportDialog";
+import { TagViewerDialog } from "./TagViewerDialog";
+import { NonDicomImportDialog } from "./NonDicomImportDialog";
 
 /**
  * アプリの土台シェル（GRAPHY の MainScreen 相当）。
@@ -22,12 +24,15 @@ import { ExportDialog } from "./ExportDialog";
 export function MainScreen({
   status,
   error,
+  dbVersion = 0,
   onOpenSettings,
   onOpenDb,
   onOpenHelp,
 }: {
   status: AppStatus | null;
   error: string | null;
+  /** DB 管理での編集成功時にインクリメントされ、スタディ一覧を再読込する。 */
+  dbVersion?: number;
   onOpenSettings: () => void;
   onOpenDb: () => void;
   onOpenHelp: () => void;
@@ -41,7 +46,9 @@ export function MainScreen({
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
   const [selectedSeries, setSelectedSeries] = useState<Series | null>(null);
-  const [openTool, setOpenTool] = useState<"tagExtractor" | "export" | null>(null);
+  const [openTool, setOpenTool] = useState<
+    "tagExtractor" | "export" | "tagViewer" | "nonDicomImport" | null
+  >(null);
 
   const handleImport = async () => {
     const d = desktop();
@@ -88,14 +95,32 @@ export function MainScreen({
 
   // データ I/O・ユーティリティ。実装済みはダイアログを開き、未実装は告知バナー（実装は fw に記録）。
   const handleOpenTool = (
-    kind: "export" | "nonDicomImport" | "anonymizer" | "tagExtractor" | "seriesExtractor",
+    kind: "export" | "nonDicomImport" | "anonymizer" | "tagExtractor" | "seriesExtractor" | "tagViewer",
   ) => {
     if (kind === "tagExtractor") {
       setOpenTool("tagExtractor");
       return;
     }
     if (kind === "export") {
+      if (!selectedStudy) {
+        // MainScreen でスタディ未選択のときは患者を特定できないため、選択を促す。
+        window.alert(t("export.noSelection"));
+        return;
+      }
       setOpenTool("export");
+      return;
+    }
+    if (kind === "tagViewer") {
+      // 表示中の画像＝選択中シリーズ。未選択（画像非表示）ならポップアップで促す。
+      if (!selectedSeries) {
+        window.alert(t("tagview.noImage"));
+        return;
+      }
+      setOpenTool("tagViewer");
+      return;
+    }
+    if (kind === "nonDicomImport") {
+      setOpenTool("nonDicomImport");
       return;
     }
     setImportMsg(t("main.viewer.comingSoon", { name: t(`main.toolbar.${kind}`) }));
@@ -131,7 +156,7 @@ export function MainScreen({
         <div style={treeArea}>
           <StudyList
             filters={filters}
-            reloadKey={reloadKey}
+            reloadKey={reloadKey + dbVersion}
             mode={isStandalone ? "standalone" : "web"}
             onSelectStudy={(s) => { setSelectedStudy(s); setSelectedSeries(null); }}
             onSelectSeries={setSelectedSeries}
@@ -145,7 +170,19 @@ export function MainScreen({
         study={selectedStudy}
         series={selectedSeries}
       />
-      <ExportDialog open={openTool === "export"} onClose={() => setOpenTool(null)} />
+      <ExportDialog open={openTool === "export"} onClose={() => setOpenTool(null)} study={selectedStudy} />
+      <TagViewerDialog
+        open={openTool === "tagViewer"}
+        onClose={() => setOpenTool(null)}
+        study={selectedStudy}
+        series={selectedSeries}
+      />
+      <NonDicomImportDialog
+        open={openTool === "nonDicomImport"}
+        onClose={() => setOpenTool(null)}
+        study={selectedStudy}
+        onImported={() => setReloadKey((k) => k + 1)}
+      />
     </div>
   );
 }

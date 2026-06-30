@@ -29,6 +29,9 @@ interface FusionOverlay {
   series: Series;
   instances: Instance[];
   opacity: number; // 0.0 – 1.0
+  /** ドロップ元タイルで表示中だった C/T。fusion オーバーレイの初期 C/T に使う（無ければ 0）。 */
+  initialC?: number;
+  initialT?: number;
 }
 
 interface Tile {
@@ -244,7 +247,6 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
   }, []);
 
   const removeTile = (patientKey: string, tileId: string) => {
-    console.log("[FusionDbg] removeTile() called — tileId:", tileId);
     setPatients((prev) => {
       const idx = prev.findIndex((p) => p.patientKey === patientKey);
       if (idx < 0) return prev;
@@ -331,7 +333,6 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
   /** タイルの Fusion オーバーレイを設定または解除する。 */
   const setTileFusion = useCallback(
     (patientKey: string, tileId: string, overlay: FusionOverlay | undefined) => {
-      console.log("[FusionDbg] setTileFusion() — tileId:", tileId, "overlay:", overlay ? "set" : "CLEAR");
       setPatients((prev) =>
         prev.map((p) => {
           if (p.patientKey !== patientKey) return p;
@@ -535,6 +536,10 @@ function TileGrid({
   // シリーズ Sync: 最後に送信されたスライスイベント { z, nZ, sourceId }
   const [syncEvent, setSyncEvent] = useState<{ z: number; nZ: number; sourceId: string } | null>(null);
 
+  // 各タイルが現在表示中の C/T インデックス（tileId → {c,t}）。
+  // Fusion で「ドロップ元タイルで表示中の C/T スタック」を引き継ぐために参照する。
+  const tileDimsRef = useRef<Map<string, { c: number; t: number }>>(new Map());
+
   const syncedCount = useMemo(
     () => patient.tiles.filter((t) => t.syncEnabled).length,
     [patient.tiles],
@@ -585,14 +590,18 @@ function TileGrid({
       } else if (payload.type === "tile") {
         if (payload.patientKey === patient.patientKey && payload.tileId !== targetTileId) {
           if (zone === "center") {
-            // タイルヘッダを中央ドロップ → そのタイルのシリーズを Fusion に設定
+            // タイルヘッダを中央ドロップ → そのタイルのシリーズを Fusion に設定。
+            // ドロップ元タイルで表示中だった C/T を引き継ぐ（1ch 目固定を避ける）。
             const srcTile = patient.tiles.find((t) => t.id === payload.tileId);
             if (srcTile) {
+              const dims = tileDimsRef.current.get(payload.tileId);
               onSetFusion(patient.patientKey, targetTileId, {
                 study: srcTile.study,
                 series: srcTile.series,
                 instances: srcTile.instances,
                 opacity: 0.5,
+                initialC: dims?.c ?? 0,
+                initialT: dims?.t ?? 0,
               });
             }
           } else {
@@ -666,6 +675,7 @@ function TileGrid({
                 }
               }}
               onFusionChange={(overlay) => onSetFusion(patient.patientKey, tile.id, overlay)}
+              onDimChange={(c, tIdx) => tileDimsRef.current.set(tile.id, { c, t: tIdx })}
               onDrop={handleDrop}
             />
           );
@@ -687,6 +697,7 @@ function TileCell({
   onSyncToggle,
   onSliceChange,
   onFusionChange,
+  onDimChange,
   onDrop,
 }: {
   tile: Tile;
@@ -698,6 +709,7 @@ function TileCell({
   onSyncToggle: () => void;
   onSliceChange: (z: number, nZ: number) => void;
   onFusionChange: (overlay: FusionOverlay | undefined) => void;
+  onDimChange: (c: number, t: number) => void;
   onDrop: (targetTileId: string, zone: "before" | "after" | "center" | "none") => void;
 }) {
   const { t } = useI18n();
@@ -717,8 +729,9 @@ function TileCell({
     const uid = tile.fusion?.series.seriesInstanceUid ?? null;
     if (uid !== prevFusionSeriesUid.current) {
       prevFusionSeriesUid.current = uid;
-      setFusionC(0);
-      setFusionT(0);
+      // ドロップ元タイルで表示中だった C/T を初期値に（無ければ 0）。
+      setFusionC(tile.fusion?.initialC ?? 0);
+      setFusionT(tile.fusion?.initialT ?? 0);
       setFusionLut(null);
     }
   }, [tile.fusion?.series.seriesInstanceUid]);
@@ -911,6 +924,7 @@ function TileCell({
             fillHeight
             syncSlice={syncSlice}
             onSliceChange={handleBaseSliceChange}
+            onDimChange={onDimChange}
             renderFusionOverlay={renderFusionOverlay}
           />
         ) : (
@@ -937,7 +951,7 @@ function TileCell({
           onCChange={setFusionC}
           onTChange={setFusionT}
           onLutChange={setFusionLut}
-          onRemove={() => { console.log("[FusionDbg] fusion bar × clicked"); onFusionChange(undefined); }}
+          onRemove={() => onFusionChange(undefined)}
         />
       )}
     </div>

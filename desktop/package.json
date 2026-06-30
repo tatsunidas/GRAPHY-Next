@@ -18,7 +18,8 @@
     "files": ["main.js", "preload.js", "splash.html", "splash-preload.js", "config.json", "renderer/**"],
     "extraResources": [
       { "from": "resources/backend", "to": "backend" },
-      { "from": "resources/jre", "to": "jre" }
+      { "from": "resources/jre", "to": "jre" },
+      { "from": "resources/ffmpeg", "to": "ffmpeg" }
     ],
     "linux": { "target": ["AppImage"] },
     "win": { "target": ["nsis"] },

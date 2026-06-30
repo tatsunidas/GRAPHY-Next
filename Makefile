@@ -49,6 +49,13 @@ build-desktop: build-backend
 
 build: build-desktop
 
+# --- 動画トランスコード用 ffmpeg を OS 別に取得し desktop/resources/ffmpeg へ配置（リリース同梱用） ---
+# 例: make ffmpeg                      … 全 OS/アーキ
+#     make ffmpeg FFMPEG_TARGETS=linux-x64  … 指定ターゲットのみ（その OS の installer 用）
+FFMPEG_TARGETS ?=
+ffmpeg:
+	bash scripts/fetch-ffmpeg.sh $(FFMPEG_TARGETS)
+
 # --- 開発起動 ---
 dev-web:
 	bash scripts/dev-web.sh

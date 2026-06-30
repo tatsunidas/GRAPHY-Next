@@ -11,6 +11,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.io.IOException;
 
@@ -33,6 +34,16 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> badRequest(IllegalArgumentException e, HttpServletRequest req) {
         log.warn("Bad request {} {}: {}", req.getMethod(), req.getRequestURI(), e.getMessage());
         return build(HttpStatus.BAD_REQUEST, e, req);
+    }
+
+    /**
+     * 未存在の静的リソース（favicon.ico 等）。404 として扱い、ERROR ではなく DEBUG に格下げ。
+     * PDF を別ウィンドウで開いた際にブラウザが自動要求する favicon でログが汚れるのを防ぐ。
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ErrorResponse> notFound(NoResourceFoundException e, HttpServletRequest req) {
+        log.debug("No static resource {} {}", req.getMethod(), req.getRequestURI());
+        return build(HttpStatus.NOT_FOUND, e, req);
     }
 
     /** I/O・状態異常（外部ツール/PACS/ファイル等。エラーが起こりやすい箇所）。 */

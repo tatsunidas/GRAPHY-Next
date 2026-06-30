@@ -147,10 +147,6 @@ export function FusionImageViewer({
     () => instances.map((i) => imageIdForInstance(mode, i.sopInstanceUid)),
     [instances, mode],
   );
-  const imageIdBySop = useMemo(
-    () => new Map(instances.map((i) => [i.sopInstanceUid, imageIdForInstance(mode, i.sopInstanceUid)])),
-    [instances, mode],
-  );
   const fallback = useMemo(() => buildSeriesLayout(imageIds), [imageIds]);
   const [layout, setLayout] = useState<SeriesLayout>(fallback);
   const [fgDto, setFgDto] = useState<SeriesLayoutDto | null>(null);
@@ -163,12 +159,12 @@ export function FusionImageViewer({
       .then((dto) => {
         if (cancelled) return;
         setFgDto(dto);
-        const built = buildLayoutFromDto(dto, imageIdBySop);
+        const built = buildLayoutFromDto(dto, mode, studyUid, seriesUid);
         if (built) setLayout(built);
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [studyUid, seriesUid, fallback, imageIdBySop]);
+  }, [studyUid, seriesUid, fallback, mode]);
 
   const layoutRef = useRef(layout);
   layoutRef.current = layout;

@@ -64,8 +64,9 @@ class ExportDicomDirTest {
             for (int im = 1; im <= 2; im++) {
                 String sopUid = seriesUid + "." + im;
                 Attributes ds = dataset(pid, studyUid, seriesUid, sopUid);
-                String[] fileIDs = {"DICOM", "PAT00001", MediaNaming.dirName("STU", st),
-                        MediaNaming.dirName("SER", st), MediaNaming.imageName(im)};
+                // 可読フォルダ名（長い/ハイフン/空白/.dcm）でも DICOMDIR が作れることを検証
+                String[] fileIDs = {"DICOM", "PID-1", "2026-06-3" + st, "CT Chest " + st,
+                        ExportNaming.imageName(im)};
                 ExportService.addDirRecords(writer, rf, ds, fmi(ds), fileIDs);
             }
         }

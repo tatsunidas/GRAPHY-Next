@@ -13,6 +13,7 @@ frontend/node/
 desktop/renderer/
 desktop/resources/backend/
 desktop/resources/jre/
+desktop/resources/ffmpeg/
 desktop/dist/
 
 # --- IDE ---

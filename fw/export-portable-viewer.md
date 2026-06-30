@@ -1,8 +1,11 @@
 # 2D Viewer Portable（FW・設計）
 
 > 作成日: 2026-06-30
-> ステータス: **FW（設計のみ）**。Export 側の配線（同梱トグル＋DICOMDIR 必須化）は実装済。
-> ランタイム本体は未実装。関連: `fw/export.md`, `fw/viewer-2d-screen.md`, `fw/viewer-2d-architecture.md`。
+> ステータス: **FW（設計のみ）／実装は保留中（TODO）**。Export 側の配線（同梱トグル＋DICOMDIR 必須化）は実装済。
+> ランタイム本体・同梱・同梱テストは未実装（`fw/export.md` §7 の TODO 参照）。
+> **保留理由**: 2D Viewer 本体が現在開発中（別インスタンスで進行）。本体はこの portable の母体になるため、
+> 本体の API/構成が固まってから着手する。
+> 関連: `fw/export.md`, `fw/viewer-2d-screen.md`, `fw/viewer-2d-architecture.md`。
 
 ## 0. 目的
 Export した DICOM 交換メディア（ZIP 展開後のフォルダ / CD・DVD・USB）に、**単体で動く 2D Viewer** を同梱し、

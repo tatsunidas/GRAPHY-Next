@@ -39,7 +39,17 @@ public record SeriesLayout(
         int imageHeight,
         List<ZSpatial> zSpatial) {
 
-    public record Cell(int c, int z, int t, String sopInstanceUid) {
+    /**
+     * 各 (c,z,t) に対応するフレーム。
+     *
+     * @param frame Siemens モザイクのタイル番号（0..N-1）。非モザイク（1 インスタンス=1 画像）は -1。
+     *              frontend は frame&gt;=0 のとき {@code /instances/{sop}/frames/{frame}/file} を読む。
+     */
+    public record Cell(int c, int z, int t, String sopInstanceUid, int frame) {
+        /** 非モザイク（通常の単一フレーム）セル。 */
+        public Cell(int c, int z, int t, String sopInstanceUid) {
+            this(c, z, t, sopInstanceUid, -1);
+        }
     }
 
     /** Z インデックス → ImagePositionPatient（Fusion trilinear 補間のスライス位置決定用）。 */

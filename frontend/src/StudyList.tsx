@@ -7,6 +7,9 @@ import {
   fetchStudies,
   fetchSeries,
   fetchInstances,
+  instanceDocumentUrl,
+  ENCAPSULATED_PDF_SOP_CLASS,
+  VIDEO_PHOTOGRAPHIC_SOP_CLASS,
   type Study,
   type Series,
   type Instance,
@@ -242,6 +245,10 @@ function InstanceList({ study, series, mode }: { study: Study; series: Series; m
   }, [study.studyInstanceUid, series.seriesInstanceUid]);
 
   const hasImages = !!instances && instances.length > 0;
+  // Encapsulated PDF はピクセルが無く 2D 画像ビューアで表示できないため、文書パネルで開く。
+  const isPdf = hasImages && instances![0].sopClassUid === ENCAPSULATED_PDF_SOP_CLASS;
+  // 動画(Video Photographic)も wadouri の画像ビューアでは表示できない（再生は 2D Viewer 側で今後対応）。
+  const isVideo = hasImages && instances![0].sopClassUid === VIDEO_PHOTOGRAPHIC_SOP_CLASS;
 
   return (
     <div style={{ marginTop: 10, color: "#445" }}>
@@ -259,8 +266,35 @@ function InstanceList({ study, series, mode }: { study: Study; series: Series; m
         </div>
       )}
 
+      {/* PDF（Encapsulated PDF）: 画像ビューアではなく文書として開く/保存する。 */}
+      {isPdf && instances && (
+        <div style={{ marginTop: 10 }}>
+          {instances.map((inst) => (
+            <div
+              key={inst.sopInstanceUid}
+              style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0" }}
+            >
+              <span style={{ fontSize: 13 }}>📄 PDF #{inst.instanceNumber ?? "?"}</span>
+              <button onClick={() => window.open(instanceDocumentUrl(inst.sopInstanceUid), "_blank")} style={docBtn}>
+                {t("doc.open")}
+              </button>
+              <a href={instanceDocumentUrl(inst.sopInstanceUid, true)} download style={docLink}>
+                {t("doc.download")}
+              </a>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 動画（Video Photographic）: 画像ビューア非対応。再生は 2D Viewer で今後対応。 */}
+      {isVideo && (
+        <div style={{ marginTop: 10, fontSize: 13, color: "#8a6d3b" }}>
+          🎞 {t("nondicom.video.needsFfmpeg")}
+        </div>
+      )}
+
       {/* シリーズビューア（スライス送り・シネ・5D・オーバーレイ On/Off のコントローラ）。 */}
-      {hasImages && mode === "standalone" && instances && (
+      {hasImages && !isPdf && !isVideo && mode === "standalone" && instances && (
         <div style={{ marginTop: 10, maxWidth: 900 }}>
           <SeriesViewer
             instances={instances}
@@ -270,12 +304,23 @@ function InstanceList({ study, series, mode }: { study: Study; series: Series; m
           />
         </div>
       )}
-      {hasImages && mode === "web" && (
+      {hasImages && !isPdf && !isVideo && mode === "web" && (
         <div style={{ marginTop: 10, fontSize: 12, color: "#8a6d3b" }}>{t("viewer.webTodo")}</div>
       )}
     </div>
   );
 }
+
+const docBtn: React.CSSProperties = {
+  padding: "4px 12px",
+  border: "1px solid #cdd5de",
+  borderRadius: 6,
+  background: "#0b5cad",
+  color: "#fff",
+  cursor: "pointer",
+  fontSize: 13,
+};
+const docLink: React.CSSProperties = { fontSize: 13, color: "#0b5cad" };
 
 function formatDate(d: string | null): string {
   if (!d || d.length !== 8) return d || "—";

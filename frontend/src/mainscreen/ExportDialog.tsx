@@ -11,30 +11,35 @@ import {
   type Series,
   type Study,
 } from "../api";
-import { fetchPatients, type Patient } from "../dbadmin/dbAdminApi";
 import { useI18n } from "../i18n/i18n";
 
 /**
- * Export: 複数患者を選択 → そのスタディ/シリーズをツリー表示 → 選択シリーズを
- * DICOM 交換メディア（PS3.10）形式の ZIP として書き出す。
+ * Export: MainScreen で選択中のスタディ<b>の患者</b>のスタディ/シリーズをツリー表示し、
+ * 選択シリーズを DICOM 交換メディア（PS3.10）形式の ZIP として書き出す。
  *
  * Export 対象の粒度は<b>シリーズ</b>。スタディのチェックは配下シリーズの一括選択トグル
  * （スタディが選択されていても、実際に Export されるのは選択中シリーズのみ）。
+ *
+ * 患者は MainScreen 選択スタディから一意に決まる（患者全件は表示しない）。未選択時は
+ * MainScreen 側でポップアップして本ダイアログを開かない。
  */
-export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function ExportDialog({
+  open,
+  onClose,
+  study,
+}: {
+  open: boolean;
+  onClose: () => void;
+  study: Study | null;
+}) {
   const { t } = useI18n();
 
-  // 患者検索・選択
-  const [pq, setPq] = useState("");
-  const [patients, setPatients] = useState<Patient[] | null>(null);
-  const [selectedPatients, setSelectedPatients] = useState<Set<string>>(new Set());
-
-  // ツリー（選択患者のスタディ/シリーズ）
-  const [studiesByPatient, setStudiesByPatient] = useState<Map<string, Study[]>>(new Map());
+  // 対象患者のスタディ/シリーズツリー
+  const [studies, setStudies] = useState<Study[] | null>(null);
   const [seriesByStudy, setSeriesByStudy] = useState<Map<string, Series[]>>(new Map());
   const [expandedStudies, setExpandedStudies] = useState<Set<string>>(new Set());
   const [checkedSeries, setCheckedSeries] = useState<Set<string>>(new Set());
-  const [seriesStudy] = useState<Map<string, string>>(() => new Map());
+  const seriesStudy = useRef<Map<string, string>>(new Map());
 
   // オプション
   const [includeDicomDir, setIncludeDicomDir] = useState(false);
@@ -44,57 +49,54 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const patientId = study?.patientId ?? null;
+  const patientName = study?.patientName ?? null;
+
+  // 開いた時／対象患者が変わった時にツリーを初期化し、選択スタディの患者の全スタディを読み込む。
   useEffect(() => {
-    if (!open) return;
+    if (!open || !patientId) return;
+    setStudies(null);
+    setSeriesByStudy(new Map());
+    setExpandedStudies(new Set());
+    setCheckedSeries(new Set());
+    seriesStudy.current = new Map();
     setError(null);
-    fetchPatients("")
-      .then(setPatients)
-      .catch((e: unknown) => setError(String(e)));
-  }, [open]);
+
+    let cancelled = false;
+    fetchStudies({ patientId })
+      .then(async (sts) => {
+        if (cancelled) return;
+        setStudies(sts);
+        // MainScreen で選択中のスタディは展開し、シリーズを先読みして<b>全選択状態</b>にする。
+        if (study) {
+          try {
+            const series = await fetchSeries(study.studyInstanceUid);
+            if (cancelled) return;
+            for (const s of series) seriesStudy.current.set(s.seriesInstanceUid, study.studyInstanceUid);
+            setSeriesByStudy((m) => new Map(m).set(study.studyInstanceUid, series));
+            setExpandedStudies(new Set([study.studyInstanceUid]));
+            // 選択スタディの全シリーズを初期チェック（その場で Export 実行できる状態にする）。
+            setCheckedSeries(new Set(series.map((s) => s.seriesInstanceUid)));
+          } catch {
+            // 先読み失敗は無視（展開時に再取得される）
+          }
+        }
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, patientId, study]);
 
   if (!open) return null;
-
-  const searchPatients = () => {
-    setError(null);
-    fetchPatients(pq)
-      .then(setPatients)
-      .catch((e: unknown) => setError(String(e)));
-  };
-
-  // 患者チェック → スタディ読み込み / 解除 → 配下選択を破棄
-  const togglePatient = async (pid: string) => {
-    const next = new Set(selectedPatients);
-    if (next.has(pid)) {
-      next.delete(pid);
-      setSelectedPatients(next);
-      // 配下スタディのシリーズ選択を破棄（隠れた選択で誤 Export を防ぐ）
-      const studies = studiesByPatient.get(pid) ?? [];
-      const cs = new Set(checkedSeries);
-      for (const st of studies) {
-        for (const ser of seriesByStudy.get(st.studyInstanceUid) ?? []) {
-          cs.delete(ser.seriesInstanceUid);
-        }
-      }
-      setCheckedSeries(cs);
-      return;
-    }
-    next.add(pid);
-    setSelectedPatients(next);
-    if (!studiesByPatient.has(pid)) {
-      try {
-        const studies = await fetchStudies({ patientId: pid });
-        setStudiesByPatient((m) => new Map(m).set(pid, studies));
-      } catch (e) {
-        setError(String(e));
-      }
-    }
-  };
 
   const loadSeries = async (studyUid: string): Promise<Series[]> => {
     const cached = seriesByStudy.get(studyUid);
     if (cached) return cached;
     const series = await fetchSeries(studyUid);
-    for (const s of series) seriesStudy.set(s.seriesInstanceUid, studyUid);
+    for (const s of series) seriesStudy.current.set(s.seriesInstanceUid, studyUid);
     setSeriesByStudy((m) => new Map(m).set(studyUid, series));
     return series;
   };
@@ -115,7 +117,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
   };
 
   const toggleSeries = (seriesUid: string, studyUid: string) => {
-    seriesStudy.set(seriesUid, studyUid);
+    seriesStudy.current.set(seriesUid, studyUid);
     const cs = new Set(checkedSeries);
     if (cs.has(seriesUid)) cs.delete(seriesUid);
     else cs.add(seriesUid);
@@ -144,7 +146,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
     const cs = new Set(checkedSeries);
     const allChecked = series.every((s) => cs.has(s.seriesInstanceUid));
     for (const s of series) {
-      seriesStudy.set(s.seriesInstanceUid, studyUid);
+      seriesStudy.current.set(s.seriesInstanceUid, studyUid);
       if (allChecked) cs.delete(s.seriesInstanceUid);
       else cs.add(s.seriesInstanceUid);
     }
@@ -154,7 +156,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
   const buildSelections = (): ExportSelection[] => {
     const byStudy = new Map<string, string[]>();
     for (const seriesUid of checkedSeries) {
-      const studyUid = seriesStudy.get(seriesUid);
+      const studyUid = seriesStudy.current.get(seriesUid);
       if (!studyUid) continue;
       if (!byStudy.has(studyUid)) byStudy.set(studyUid, []);
       byStudy.get(studyUid)!.push(seriesUid);
@@ -202,129 +204,61 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
           </button>
         </div>
 
-        <div style={body}>
-          {/* 左: 患者検索・選択 */}
-          <div style={leftPane}>
-            <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-              <input
-                value={pq}
-                onChange={(e) => setPq(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && searchPatients()}
-                placeholder={t("export.patient.search")}
-                style={input}
-              />
-              <button onClick={searchPatients} style={btn}>
-                {t("common.search")}
-              </button>
-            </div>
-            <div style={{ fontSize: 12, color: "#667", marginBottom: 6 }}>{t("export.patient.hint")}</div>
-            <div style={listScroll}>
-              {!patients && <div style={{ color: "#888" }}>{t("common.loading")}</div>}
-              {patients && patients.length === 0 && (
-                <div style={{ color: "#888" }}>{t("common.noData")}</div>
-              )}
-              {patients?.map((p) => (
-                <label key={p.patientId} style={patientRow}>
-                  <input
-                    type="checkbox"
-                    checked={selectedPatients.has(p.patientId)}
-                    onChange={() => void togglePatient(p.patientId)}
-                  />
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    <b>{p.patientName || "—"}</b>
-                    <span style={{ color: "#8a98a6", fontSize: 11 }}> {p.patientId}</span>
+        {/* 対象患者ヘッダ */}
+        <div style={patientBar}>
+          <span style={{ fontWeight: 700 }}>{patientName || "—"}</span>
+          <span style={{ color: "#8a98a6", fontSize: 12 }}> {patientId}</span>
+        </div>
+
+        {/* スタディ/シリーズツリー */}
+        <div style={treePane}>
+          {!studies && <div style={{ color: "#888" }}>{t("common.loading")}</div>}
+          {studies?.length === 0 && <div style={{ color: "#888" }}>{t("study.empty")}</div>}
+          {studies?.map((st) => {
+            const expanded = expandedStudies.has(st.studyInstanceUid);
+            const cstate = studyCheckState(st.studyInstanceUid);
+            const series = seriesByStudy.get(st.studyInstanceUid);
+            return (
+              <div key={st.studyInstanceUid}>
+                <div style={studyRow}>
+                  <button
+                    style={expander}
+                    onClick={() => void toggleExpand(st.studyInstanceUid)}
+                    aria-label="expand"
+                  >
+                    {expanded ? "▾" : "▸"}
+                  </button>
+                  <TriCheckbox state={cstate} onChange={() => void toggleStudy(st.studyInstanceUid)} />
+                  <span style={{ cursor: "pointer" }} onClick={() => void toggleExpand(st.studyInstanceUid)}>
+                    {st.studyDate || "—"} / {st.studyDescription || "—"}
                     <span style={{ color: "#8a98a6", fontSize: 11 }}>
                       {" "}
-                      ({t("field.studyCount")}: {p.numberOfStudies})
+                      {st.modality || ""} ({st.numberOfInstances})
                     </span>
                   </span>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          {/* 右: 選択患者のスタディ/シリーズツリー */}
-          <div style={rightPane}>
-            {selectedPatients.size === 0 ? (
-              <div style={{ color: "#888", padding: 12 }}>{t("export.tree.empty")}</div>
-            ) : (
-              [...selectedPatients].map((pid) => {
-                const studies = studiesByPatient.get(pid);
-                const pat = patients?.find((p) => p.patientId === pid);
-                return (
-                  <div key={pid} style={{ marginBottom: 10 }}>
-                    <div style={patientHead}>
-                      {pat?.patientName || pid}
-                      <span style={{ color: "#8a98a6", fontSize: 11 }}> {pid}</span>
-                    </div>
-                    {!studies && <div style={{ color: "#888", paddingLeft: 18 }}>{t("common.loading")}</div>}
-                    {studies?.length === 0 && (
-                      <div style={{ color: "#888", paddingLeft: 18 }}>{t("study.empty")}</div>
-                    )}
-                    {studies?.map((st) => {
-                      const expanded = expandedStudies.has(st.studyInstanceUid);
-                      const cstate = studyCheckState(st.studyInstanceUid);
-                      const series = seriesByStudy.get(st.studyInstanceUid);
-                      return (
-                        <div key={st.studyInstanceUid}>
-                          <div style={studyRow}>
-                            <button
-                              style={expander}
-                              onClick={() => void toggleExpand(st.studyInstanceUid)}
-                              aria-label="expand"
-                            >
-                              {expanded ? "▾" : "▸"}
-                            </button>
-                            <TriCheckbox
-                              state={cstate}
-                              onChange={() => void toggleStudy(st.studyInstanceUid)}
-                            />
-                            <span
-                              style={{ cursor: "pointer" }}
-                              onClick={() => void toggleExpand(st.studyInstanceUid)}
-                            >
-                              {st.studyDate || "—"} / {st.studyDescription || "—"}
-                              <span style={{ color: "#8a98a6", fontSize: 11 }}>
-                                {" "}
-                                {st.modality || ""} ({st.numberOfInstances})
-                              </span>
-                            </span>
-                          </div>
-                          {expanded && (
-                            <div style={{ paddingLeft: 40 }}>
-                              {!series && <div style={{ color: "#888" }}>{t("common.loading")}</div>}
-                              {series?.length === 0 && (
-                                <div style={{ color: "#888" }}>{t("series.empty")}</div>
-                              )}
-                              {series?.map((ser) => (
-                                <label key={ser.seriesInstanceUid} style={seriesRow}>
-                                  <input
-                                    type="checkbox"
-                                    checked={checkedSeries.has(ser.seriesInstanceUid)}
-                                    onChange={() =>
-                                      toggleSeries(ser.seriesInstanceUid, st.studyInstanceUid)
-                                    }
-                                  />
-                                  <span>
-                                    #{ser.seriesNumber ?? "—"} {ser.modality || ""}{" "}
-                                    {ser.seriesDescription || "—"}
-                                    <span style={{ color: "#8a98a6", fontSize: 11 }}>
-                                      {" "}
-                                      ({ser.numberOfInstances})
-                                    </span>
-                                  </span>
-                                </label>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
+                </div>
+                {expanded && (
+                  <div style={{ paddingLeft: 40 }}>
+                    {!series && <div style={{ color: "#888" }}>{t("common.loading")}</div>}
+                    {series?.length === 0 && <div style={{ color: "#888" }}>{t("series.empty")}</div>}
+                    {series?.map((ser) => (
+                      <label key={ser.seriesInstanceUid} style={seriesRow}>
+                        <input
+                          type="checkbox"
+                          checked={checkedSeries.has(ser.seriesInstanceUid)}
+                          onChange={() => toggleSeries(ser.seriesInstanceUid, st.studyInstanceUid)}
+                        />
+                        <span>
+                          #{ser.seriesNumber ?? "—"} {ser.modality || ""} {ser.seriesDescription || "—"}
+                          <span style={{ color: "#8a98a6", fontSize: 11 }}> ({ser.numberOfInstances})</span>
+                        </span>
+                      </label>
+                    ))}
                   </div>
-                );
-              })
-            )}
-          </div>
+                )}
+              </div>
+            );
+          })}
         </div>
 
         {/* オプション + 実行 */}
@@ -402,9 +336,9 @@ const overlay: React.CSSProperties = {
   zIndex: 1000,
 };
 const dialog: React.CSSProperties = {
-  width: 920,
+  width: 760,
   maxWidth: "96vw",
-  height: 640,
+  height: 600,
   maxHeight: "92vh",
   background: "#fff",
   borderRadius: 10,
@@ -422,27 +356,12 @@ const header: React.CSSProperties = {
   padding: "12px 16px",
   borderBottom: "1px solid #eee",
 };
-const body: React.CSSProperties = { flex: 1, display: "flex", minHeight: 0 };
-const leftPane: React.CSSProperties = {
-  width: 300,
-  borderRight: "1px solid #eee",
-  padding: "12px 14px",
-  display: "flex",
-  flexDirection: "column",
-  minHeight: 0,
+const patientBar: React.CSSProperties = {
+  padding: "8px 16px",
+  borderBottom: "1px solid #eef1f4",
+  background: "#f7f9fb",
 };
-const rightPane: React.CSSProperties = { flex: 1, overflow: "auto", padding: "12px 16px", fontSize: 13 };
-const listScroll: React.CSSProperties = { flex: 1, overflow: "auto", border: "1px solid #eef1f4", borderRadius: 6 };
-const patientRow: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "5px 8px",
-  fontSize: 13,
-  borderBottom: "1px solid #f3f5f7",
-  cursor: "pointer",
-};
-const patientHead: React.CSSProperties = { fontWeight: 700, fontSize: 13, padding: "2px 0", color: "#223" };
+const treePane: React.CSSProperties = { flex: 1, overflow: "auto", padding: "12px 16px", fontSize: 13 };
 const studyRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 6, padding: "3px 0" };
 const seriesRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, padding: "2px 0", cursor: "pointer" };
 const expander: React.CSSProperties = {
@@ -463,5 +382,4 @@ const footer: React.CSSProperties = {
 };
 const opt: React.CSSProperties = { display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" };
 const closeBtn: React.CSSProperties = { border: "none", background: "transparent", fontSize: 16, cursor: "pointer", color: "#666" };
-const input: React.CSSProperties = { padding: "6px 8px", border: "1px solid #cdd5de", borderRadius: 6, fontSize: 13, flex: 1, boxSizing: "border-box" };
 const btn: React.CSSProperties = { padding: "6px 14px", border: "1px solid #cdd5de", borderRadius: 6, background: "#fff", cursor: "pointer", fontSize: 13 };

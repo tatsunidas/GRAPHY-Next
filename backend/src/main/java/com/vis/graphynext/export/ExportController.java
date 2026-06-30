@@ -54,8 +54,10 @@ public class ExportController {
         }
         ExportService.Options opts = new ExportService.Options(
                 req.includeDicomDir(), req.includePortableViewer(), req.includeReadme());
-        Path zip = service.buildZip(req.selections(), opts);
+        ExportService.BuildResult result = service.buildZip(req.selections(), opts);
+        Path zip = result.zip();
         long size = Files.size(zip);
+        String filename = exportFilename(result.patientIds());
 
         StreamingResponseBody body = out -> {
             try {
@@ -68,8 +70,34 @@ public class ExportController {
         };
         return ResponseEntity.ok()
                 .contentType(ZIP)
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"graphy-export.zip\"")
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
                 .header(HttpHeaders.CONTENT_LENGTH, String.valueOf(size))
                 .body(body);
+    }
+
+    /**
+     * 保存ファイル名末尾に患者 ID を含める。1 名なら {@code graphy-export_<pid>.zip}、
+     * 複数なら {@code graphy-export_<pid>_+N.zip}。ファイル名に使えない文字は {@code _} へ置換。
+     */
+    static String exportFilename(List<String> patientIds) {
+        List<String> clean = patientIds == null ? List.of()
+                : patientIds.stream()
+                        .filter(p -> p != null && !p.isBlank())
+                        .map(ExportController::sanitize)
+                        .filter(s -> !s.isEmpty())
+                        .toList();
+        if (clean.isEmpty()) {
+            return "graphy-export.zip";
+        }
+        if (clean.size() == 1) {
+            return "graphy-export_" + clean.get(0) + ".zip";
+        }
+        return "graphy-export_" + clean.get(0) + "_+" + (clean.size() - 1) + ".zip";
+    }
+
+    private static String sanitize(String s) {
+        // ファイル名・ヘッダで安全な文字のみ残す（ASCII 英数字と . _ -）
+        String t = s.replaceAll("[^0-9A-Za-z._-]", "_");
+        return t.length() <= 64 ? t : t.substring(0, 64);
     }
 }

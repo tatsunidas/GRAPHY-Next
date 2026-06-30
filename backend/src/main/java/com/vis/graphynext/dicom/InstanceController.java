@@ -52,4 +52,21 @@ public class InstanceController {
                 .header(HttpHeaders.CACHE_CONTROL, "private, max-age=3600")
                 .body(body);
     }
+
+    /**
+     * マルチフレームの 1 フレームを単一フレーム DICOM として返す。
+     * Siemens モザイク→タイル切り出し、DICOM SEG/Enhanced→フレーム抽出（{@link DicomStorageService#frameDicom}）。
+     * frontend は {@code wadouri:.../instances/{sop}/frames/{frame}/file} で通常画像として読む。
+     */
+    @GetMapping("/{sopUid}/frames/{frame}/file")
+    public ResponseEntity<byte[]> frameFile(@PathVariable String sopUid, @PathVariable int frame) {
+        byte[] dicom = storage.frameDicom(sopUid, frame);
+        if (dicom == null) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok()
+                .contentType(APPLICATION_DICOM)
+                .header(HttpHeaders.CACHE_CONTROL, "private, max-age=3600")
+                .body(dicom);
+    }
 }

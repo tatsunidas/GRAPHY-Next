@@ -5,7 +5,13 @@
 import { useI18n } from "../i18n/i18n";
 
 export type ViewerKind = "2d" | "3d" | "mpr" | "slicer";
-export type ToolKind = "export" | "nonDicomImport" | "anonymizer" | "tagExtractor" | "seriesExtractor";
+export type ToolKind =
+  | "export"
+  | "nonDicomImport"
+  | "anonymizer"
+  | "tagExtractor"
+  | "seriesExtractor"
+  | "tagViewer";
 
 export function Toolbar({
   isStandalone,
@@ -37,6 +43,7 @@ export function Toolbar({
       <ToolButton icon="🎞" label={t("main.toolbar.nonDicomImport")} onClick={() => onOpenTool("nonDicomImport")} />
       <ToolButton icon="🕶" label={t("main.toolbar.anonymizer")} onClick={() => onOpenTool("anonymizer")} />
       <ToolButton icon="🏷" label={t("main.toolbar.tagExtractor")} onClick={() => onOpenTool("tagExtractor")} />
+      <ToolButton icon="🔖" label={t("main.toolbar.tagViewer")} onClick={() => onOpenTool("tagViewer")} />
       <ToolButton icon="🧬" label={t("main.toolbar.seriesExtractor")} onClick={() => onOpenTool("seriesExtractor")} />
       <ToolButton icon="🔄" label={t("main.toolbar.refresh")} onClick={onRefresh} />
       {isStandalone && <ToolButton icon="🗄" label={t("app.btn.dbTitle")} onClick={onOpenDb} />}

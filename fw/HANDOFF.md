@@ -1,6 +1,6 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
-> 更新日: 2026-06-30（最終更新: Fusion オーバーレイを base 画像矩形に整合表示・LUT/透過修正 / 画像の外部ドラッグ保存）
+> 更新日: 2026-06-30（最終更新: StrictMode 無効化でCT黒画面/スケールバー暴走を解消・カメラ自己修復 / Fusion整合表示 / IPP表示 / LUT404修正）
 > 目的: 別の作業者（Claude 含む）がこのリポジトリの状況を把握し、続きを実装できるようにする。
 > このファイル＋ `fw/` 配下の各設計ドキュメントが「ソース・オブ・トゥルース」。
 
@@ -36,11 +36,17 @@ GRAPHY-Next/
 - **backend コンパイル**: `cd backend && mvn -q -o compile -Dfrontend.skip=true`
   （`-Dfrontend.skip=true` を付けないと frontend-maven-plugin が走る）。
 - **backend テスト**: `cd backend && mvn -o test -Dfrontend.skip=true -Dtest='...'`。
-  - 主要: `SeriesLayoutBuilderTest`（ZCT 6件）、`DicomStoreIntegrationTest`、`DicomStorageRollbackTest`、
+  - 主要: `SeriesLayoutBuilderTest`（ZCT 8件）、`DicomStoreIntegrationTest`、`DicomStorageRollbackTest`、
     `DicomTagControllerTest`。全 green。
 - **standalone 起動**: `bash scripts/dev-desktop.sh`（Vite を別プロセスグループで起動し、Electron が
   backend jar を spawn）。**必ず 1 つだけ起動**（複数 vite は `.vite` 競合の原因）。
 - `mvn` は導入済み（3.6.3 / JDK 21）。
+- **⚠️ `main.tsx` を変更したら Vite を完全再起動**（HMR では反映されない。例: StrictMode の有無）。
+  `kill $(lsof -t -i :5173)` で停止 → 再起動。
+- **React StrictMode は無効（`main.tsx`）**。理由: StrictMode の dev 二重マウント（mount→cleanup→remount）が
+  Cornerstone3D（命令的 WebGL / 単一共有 RenderingEngine）と非互換で、同一 element への enableElement→setStack
+  競合により**ビューポートのカメラ fit が暴走（parallelScale が ~200倍）→ 真っ黒/点表示・スケールバー異常**になる。
+  本番は単一マウントなので影響なし。StrictMode を外し dev を本番挙動に揃えてある。**再導入しないこと**。
 
 ### ⚠️ Vite × Cornerstone3D の既知ハマり（`frontend/vite.config.ts` に対処済み・触る時は注意）
 1. `worker.format = "es"`（デコードワーカが ES module + 動的 import）。
@@ -59,8 +65,25 @@ GRAPHY-Next/
   `/instances`、`/instances/{sop}/file`（standalone の画像配信=wadouri 用）、
   `/studies/{study}/series/{series}/layout`（**5D ZCT 導出**）、`/dicom/tag`（タグ→keyword/VR）、
   `/import/paths`、`/settings`。
-- 5D ZCT 導出 = `SeriesLayoutBuilder`（純アルゴリズム・単体テスト済）+ `DicomStorageService.seriesLayout`
-  （ヘッダのみ読取）。IPP→Z / TemporalPositionIdentifier・TriggerTime→T / EchoNumbers・DiffusionBValue→C。
+- 5D ZCT 導出 = `SeriesLayoutBuilder`（純アルゴリズム・単体テスト済10件）+ `DicomStorageService.seriesLayout`（ヘッダのみ読取）。
+  - **次元の意味づけ**: **Z**=空間スライス（IPP·法線）。**T(時間)**=繰り返し/経時 = `TemporalPositionIdentifier/Index`・
+    `TriggerTime`・**`AcquisitionNumber`**（＝一定時間の連続データ収集＝本質的に時間軸。造影フェーズ/fMRI 繰り返し等）。
+    **C(チャンネル)**=同一位置・同一時相で「見ているものが違う」= `EchoNumbers`・`DiffusionBValue`・`EchoTime`・
+    `ComplexImageComponent`(MAGNITUDE/PHASE/REAL/IMAGINARY→"Complex" 数値コード)。`T_TAGS`/`C_TAGS` 参照。
+  - **Siemens MOSAIC 対応（GRAPHY Praparat 準拠 / Cornerstone は非対応なので自前デモザイク）**:
+    `DicomStorageService.mosaicLayoutIfApplicable` が `ImageType` に MOSAIC を含むシリーズを検出。
+    N=`NumberOfImagesInMosaic(0019,100a)`、grid=ceil(√N)、tile=Cols/grid×Rows/grid。
+    **各モザイク=1時相、N タイル=Z スライス → Z×T 4D**（nC=1, tDim=Temporal）。
+    per-tile IPP = mosaicIPP + index·spacing·normal。タイル配信は `mosaicTileDicom`＋
+    エンドポイント `GET /instances/{sop}/frames/{frame}/file`（タイルを切り出して単一フレーム DICOM で返す。
+    **非圧縮 TS のみ**）。frontend は `Cell.frame>=0` のとき `imageIdForFrame`→`/frames/{k}/file` を wadouri で読む。
+    既存の Cornerstone 描画経路は不変。※タイル毎に親モザイクを再パースするため巨大シリーズは将来キャッシュ検討。
+  - **グローバルキー判別**（`globalDimKey`）: 上記タグ分割（全位置で同一値集合が必要）に加え、
+    **値→index のグローバル写像**で割当（GRAPHY の SeriesInstanceUID 多次元写像と同発想）。**非均一**
+    （端スライスが片方の収集のみ等の CT 多収集）にも対応。T 候補(`T_TAGS`)を先に試して T へ、次に C 候補(`C_TAGS`)を C へ。
+    条件=全フレームに値あり・distinct≥2・各 Z 位置内で値重複なし。判別キーが無い非均一は純スタック
+    （テスト `pureStack_whenGroupsUneven`）。例: 物理範囲の違う CT 2収集 → `Acq` で **T=2**（断面は Z で揃い、
+    範囲外は frontend がブランク埋め）。magnitude/phase → `Complex` で **C=2**。
 
 ### frontend MainScreen
 - スタディ検索（日付範囲・Today/Yesterday/1週間・モダリティ チェックグリッド・件数表示・50件ページング）。
@@ -74,6 +97,12 @@ GRAPHY-Next/
   - 表示変換は **affine（ViewPresentation）**。Fit=1.0/中央、zoom/pan/flip/rotation/再Fit。
     flip は setViewPresentation がOFFにできないバグがあるため **setCamera で双方向**（`transform.ts`）。
   - 左ドラッグ=**W/L**(WindowLevelTool)、中=Pan、右=Zoom（ホイールはスライス送りに解放）。
+  - **初期 Window 明示適用**: `setStack` 後に DICOM の WindowCenter/Width を `setProperties({voiRange})` で適用
+    （CT は自動 VOI が生16bit パディング(-2048 等)に引っ張られ真っ黒になりやすいため）。
+  - **カメラ暴走の自己修復**: `onCameraModified` で parallelScale が画像フィット規模の 50倍超を検知したら
+    `resetCamera`+再描画で復帰（再入ガード＋最大3回）。スライス切替例外時も `resetCamera`+render フォールバック。
+  - **リサイズ追従**: 共有エンジンの自動再フィット(`engine.resize(true,false)`)は誤フィットするため、
+    `engine.resize(true,true)`(canvas のみ)＋viewport 単位 `resetCamera`＋妥当性ガードで処理。実サイズ変化時のみ。
   - 輝度キャリブレーション（Modality LUT/VOI は Cornerstone が GPU 自動適用）。カーソル値は
     **OffScreen 座標で逆変換**して取得（`canvasToWorld`→`transformWorldToIndexContinuous`）。
     signed/unsigned・8/16bit・カラーRGB 対応。値は RescaleType(0028,1054) の単位を併記。

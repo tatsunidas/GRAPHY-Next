@@ -8,16 +8,33 @@ import {
   fetchStats,
   savePatient,
   deletePatient,
+  deleteStudy,
+  deleteSeries,
+  updateStudyPatient,
+  mergeSeries,
+  splitSeries,
   type Patient,
   type Stats,
+  type SplitGroup,
 } from "./dbAdminApi";
 import { fetchSettings } from "../settings/settingsApi";
+import { fetchInstances, fetchSeries, fetchStudies, type Instance, type Series, type Study } from "../api";
+import { emitDbChanged, type DbChangedDetail } from "../dbEvents";
 import { VBarChart, HBarChart, PieChart, formatBytes } from "./charts";
 import { useI18n } from "../i18n/i18n";
 
 type Tab = "patients" | "stats";
 
-export function DbAdminDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function DbAdminDialog({
+  open,
+  onClose,
+  onChanged,
+}: {
+  open: boolean;
+  onClose: () => void;
+  /** 編集/削除の成功時に呼ばれる（同一ウィンドウの一覧再読込用）。 */
+  onChanged?: () => void;
+}) {
   const { t } = useI18n();
   const [tab, setTab] = useState<Tab>("patients");
   const [confirmDelete, setConfirmDelete] = useState(true);
@@ -30,6 +47,12 @@ export function DbAdminDialog({ open, onClose }: { open: boolean; onClose: () =>
   }, [open]);
 
   if (!open) return null;
+
+  // 他ウィンドウへ通知（dbEvents）＋同一ウィンドウへ通知（onChanged）。
+  const notify = (detail: Omit<DbChangedDetail, "ts">) => {
+    emitDbChanged(detail);
+    onChanged?.();
+  };
 
   return (
     <div style={overlay} onClick={onClose}>
@@ -51,35 +74,135 @@ export function DbAdminDialog({ open, onClose }: { open: boolean; onClose: () =>
         </div>
 
         <div style={{ flex: 1, overflow: "auto", padding: "14px 18px" }}>
-          {tab === "patients" ? <PatientsTab confirmDelete={confirmDelete} /> : <StatsTab />}
+          {tab === "patients" ? <PatientsTab confirmDelete={confirmDelete} notify={notify} /> : <StatsTab />}
         </div>
       </div>
     </div>
   );
 }
 
-function PatientsTab({ confirmDelete }: { confirmDelete: boolean }) {
+function PatientsTab({
+  confirmDelete,
+  notify,
+}: {
+  confirmDelete: boolean;
+  notify: (detail: Omit<DbChangedDetail, "ts">) => void;
+}) {
   const { t } = useI18n();
   const [q, setQ] = useState("");
   const [patients, setPatients] = useState<Patient[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [editing, setEditing] = useState<Patient | null>(null);
+
+  // ドリルダウン（Patient → Study → Series）
+  const [expandedPatients, setExpandedPatients] = useState<Set<string>>(new Set());
+  const [studiesByPatient, setStudiesByPatient] = useState<Map<string, Study[]>>(new Map());
+  const [expandedStudies, setExpandedStudies] = useState<Set<string>>(new Set());
+  const [seriesByStudy, setSeriesByStudy] = useState<Map<string, Series[]>>(new Map());
+
+  const [editingPatient, setEditingPatient] = useState<Patient | null>(null); // 患者全体編集
+  const [editingStudy, setEditingStudy] = useState<{ study: Study; patient: Patient } | null>(null); // スタディ単位編集
+  // シリーズ統合の選択（study 単位）と統合フォーム。
+  const [seriesSel, setSeriesSel] = useState<Map<string, Set<string>>>(new Map());
+  const [merging, setMerging] = useState<{ study: Study; series: Series[] } | null>(null);
+  const [splitting, setSplitting] = useState<{ study: Study; series: Series } | null>(null);
 
   const reload = (query: string) => {
     setError(null);
     fetchPatients(query)
-      .then(setPatients)
+      .then((ps) => {
+        setPatients(ps);
+        // 開いている患者のスタディは再取得（件数/移動を反映）
+        setStudiesByPatient(new Map());
+        setSeriesByStudy(new Map());
+      })
       .catch((e: unknown) => setError(String(e)));
   };
 
   useEffect(() => reload(""), []);
 
-  const onDelete = async (p: Patient) => {
-    if (confirmDelete && !window.confirm(t("dbadmin.delete.confirm", { name: p.patientName || p.patientId }))) {
-      return;
+  const togglePatient = async (pid: string) => {
+    const next = new Set(expandedPatients);
+    if (next.has(pid)) next.delete(pid);
+    else {
+      next.add(pid);
+      if (!studiesByPatient.has(pid)) {
+        try {
+          const studies = await fetchStudies({ patientId: pid });
+          setStudiesByPatient((m) => new Map(m).set(pid, studies));
+        } catch (e) {
+          setError(String(e));
+        }
+      }
     }
+    setExpandedPatients(next);
+  };
+
+  const toggleStudy = async (studyUid: string) => {
+    const next = new Set(expandedStudies);
+    if (next.has(studyUid)) next.delete(studyUid);
+    else {
+      next.add(studyUid);
+      if (!seriesByStudy.has(studyUid)) {
+        try {
+          const series = await fetchSeries(studyUid);
+          setSeriesByStudy((m) => new Map(m).set(studyUid, series));
+        } catch (e) {
+          setError(String(e));
+        }
+      }
+    }
+    setExpandedStudies(next);
+  };
+
+  const onDeletePatient = async (p: Patient) => {
+    if (confirmDelete && !window.confirm(t("dbadmin.delete.confirm", { name: p.patientName || p.patientId }))) return;
     try {
       await deletePatient(p.patientId);
+      notify({ reason: "patient-delete", patientId: p.patientId });
+      reload(q);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const onDeleteStudy = async (p: Patient, s: Study) => {
+    if (confirmDelete && !window.confirm(t("dbadmin.delete.studyConfirm", { desc: studyLabel(s) }))) return;
+    try {
+      await deleteStudy(s.studyInstanceUid);
+      notify({ reason: "study-delete", patientId: p.patientId, studyUids: [s.studyInstanceUid] });
+      setStudiesByPatient((m) => new Map(m).set(p.patientId, (m.get(p.patientId) ?? []).filter((x) => x.studyInstanceUid !== s.studyInstanceUid)));
+      reload(q);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const reloadSeries = async (studyUid: string) => {
+    try {
+      const series = await fetchSeries(studyUid);
+      setSeriesByStudy((m) => new Map(m).set(studyUid, series));
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const toggleSeriesSel = (studyUid: string, seriesUid: string) => {
+    setSeriesSel((prev) => {
+      const next = new Map(prev);
+      const set = new Set(next.get(studyUid) ?? []);
+      if (set.has(seriesUid)) set.delete(seriesUid);
+      else set.add(seriesUid);
+      next.set(studyUid, set);
+      return next;
+    });
+  };
+
+  const onDeleteSeries = async (p: Patient, s: Study, se: Series) => {
+    if (confirmDelete && !window.confirm(t("dbadmin.delete.seriesConfirm", { desc: seriesLabel(se) }))) return;
+    try {
+      await deleteSeries(s.studyInstanceUid, se.seriesInstanceUid);
+      notify({ reason: "series-delete", patientId: p.patientId, studyUids: [s.studyInstanceUid] });
+      setSeriesByStudy((m) => new Map(m).set(s.studyInstanceUid, (m.get(s.studyInstanceUid) ?? []).filter((x) => x.seriesInstanceUid !== se.seriesInstanceUid)));
       reload(q);
     } catch (e) {
       setError(String(e));
@@ -106,47 +229,172 @@ function PatientsTab({ confirmDelete }: { confirmDelete: boolean }) {
       {patients && patients.length === 0 && <div style={{ color: "#666" }}>{t("dbadmin.patients.empty")}</div>}
 
       {patients && patients.length > 0 && (
-        <table style={table}>
-          <thead>
-            <tr style={{ textAlign: "left", borderBottom: "2px solid #ddd" }}>
-              <Th>{t("field.patientId")}</Th>
-              <Th>{t("field.patientName")}</Th>
-              <Th>{t("field.birthDate")}</Th>
-              <Th>{t("field.sex")}</Th>
-              <Th>{t("field.studyCount")}</Th>
-              <Th>{t("field.instanceCount")}</Th>
-              <Th></Th>
-            </tr>
-          </thead>
-          <tbody>
-            {patients.map((p) => (
-              <tr key={p.patientId} style={{ borderBottom: "1px solid #eee" }}>
-                <Td>{p.patientId}</Td>
-                <Td>{p.patientName || "—"}</Td>
-                <Td>{formatDate(p.patientBirthDate)}</Td>
-                <Td>{p.patientSex || "—"}</Td>
-                <Td>{p.numberOfStudies}</Td>
-                <Td>{p.numberOfInstances}</Td>
-                <Td>
-                  <button onClick={() => setEditing(p)} style={smallBtn}>
-                    {t("common.edit")}
+        <div style={{ fontSize: 13 }}>
+          {patients.map((p) => {
+            const pExpanded = expandedPatients.has(p.patientId);
+            const studies = studiesByPatient.get(p.patientId);
+            return (
+              <div key={p.patientId} style={{ borderBottom: "1px solid #eef1f4" }}>
+                <div style={rowFlex}>
+                  <button style={expander} onClick={() => void togglePatient(p.patientId)} aria-label="expand">
+                    {pExpanded ? "▾" : "▸"}
                   </button>
-                  <button onClick={() => onDelete(p)} style={{ ...smallBtn, color: "#b00020" }}>
+                  <span style={{ flex: 1 }}>
+                    <b>{p.patientName || "—"}</b>
+                    <span style={muted}> {p.patientId}</span>
+                    <span style={muted}>
+                      {" "}
+                      ({t("field.studyCount")}: {p.numberOfStudies} / {t("field.instanceCount")}: {p.numberOfInstances})
+                    </span>
+                  </span>
+                  <button onClick={() => setEditingPatient(p)} style={smallBtn}>
+                    {t("dbadmin.edit.patientAll")}
+                  </button>
+                  <button onClick={() => void onDeletePatient(p)} style={{ ...smallBtn, color: "#b00020" }}>
                     {t("common.delete")}
                   </button>
-                </Td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                </div>
+
+                {pExpanded && (
+                  <div style={{ paddingLeft: 24, paddingBottom: 6 }}>
+                    {!studies && <div style={muted}>{t("common.loading")}</div>}
+                    {studies?.length === 0 && <div style={muted}>{t("study.empty")}</div>}
+                    {studies?.map((s) => {
+                      const sExpanded = expandedStudies.has(s.studyInstanceUid);
+                      const series = seriesByStudy.get(s.studyInstanceUid);
+                      return (
+                        <div key={s.studyInstanceUid}>
+                          <div style={rowFlex}>
+                            <button style={expander} onClick={() => void toggleStudy(s.studyInstanceUid)} aria-label="expand">
+                              {sExpanded ? "▾" : "▸"}
+                            </button>
+                            <span style={{ flex: 1 }}>
+                              {studyLabel(s)}
+                              <span style={muted}> ({s.numberOfInstances})</span>
+                            </span>
+                            <button onClick={() => setEditingStudy({ study: s, patient: p })} style={smallBtn}>
+                              {t("dbadmin.edit.patientStudy")}
+                            </button>
+                            <button onClick={() => void onDeleteStudy(p, s)} style={{ ...smallBtn, color: "#b00020" }}>
+                              {t("common.delete")}
+                            </button>
+                          </div>
+                          {sExpanded && (
+                            <div style={{ paddingLeft: 24 }}>
+                              {!series && <div style={muted}>{t("common.loading")}</div>}
+                              {series?.length === 0 && <div style={muted}>{t("series.empty")}</div>}
+                              {(() => {
+                                const sel = seriesSel.get(s.studyInstanceUid) ?? new Set<string>();
+                                return (
+                                  <>
+                                    {(series?.length ?? 0) >= 2 && (
+                                      <div style={mergeBar}>
+                                        <span style={{ fontSize: 12, color: "#556" }}>
+                                          {t("dbadmin.merge.selected", { count: sel.size })}
+                                        </span>
+                                        <button
+                                          disabled={sel.size < 2}
+                                          onClick={() =>
+                                            setMerging({
+                                              study: s,
+                                              series: (series ?? []).filter((x) => sel.has(x.seriesInstanceUid)),
+                                            })
+                                          }
+                                          style={{ ...smallBtn, opacity: sel.size < 2 ? 0.5 : 1 }}
+                                        >
+                                          {t("dbadmin.merge.button")}
+                                        </button>
+                                      </div>
+                                    )}
+                                    {series?.map((se) => (
+                                      <div key={se.seriesInstanceUid} style={rowFlex}>
+                                        <input
+                                          type="checkbox"
+                                          checked={sel.has(se.seriesInstanceUid)}
+                                          onChange={() => toggleSeriesSel(s.studyInstanceUid, se.seriesInstanceUid)}
+                                        />
+                                        <span style={{ flex: 1 }}>
+                                          {seriesLabel(se)}
+                                          <span style={muted}> ({se.numberOfInstances})</span>
+                                        </span>
+                                        {se.numberOfInstances >= 2 && (
+                                          <button onClick={() => setSplitting({ study: s, series: se })} style={smallBtn}>
+                                            {t("dbadmin.split.button")}
+                                          </button>
+                                        )}
+                                        <button onClick={() => void onDeleteSeries(p, s, se)} style={{ ...smallBtn, color: "#b00020" }}>
+                                          {t("common.delete")}
+                                        </button>
+                                      </div>
+                                    ))}
+                                  </>
+                                );
+                              })()}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       )}
 
-      {editing && (
+      {editingPatient && (
         <PatientEditForm
-          patient={editing}
-          onClose={() => setEditing(null)}
-          onSaved={() => {
-            setEditing(null);
+          patient={editingPatient}
+          onClose={() => setEditingPatient(null)}
+          onSaved={(detail) => {
+            setEditingPatient(null);
+            notify(detail);
+            reload(q);
+          }}
+        />
+      )}
+      {editingStudy && (
+        <StudyPatientEditForm
+          study={editingStudy.study}
+          patient={editingStudy.patient}
+          onClose={() => setEditingStudy(null)}
+          onSaved={(detail) => {
+            setEditingStudy(null);
+            notify(detail);
+            reload(q);
+          }}
+        />
+      )}
+      {merging && (
+        <MergeSeriesForm
+          study={merging.study}
+          series={merging.series}
+          onClose={() => setMerging(null)}
+          onMerged={async () => {
+            const studyUid = merging.study.studyInstanceUid;
+            setMerging(null);
+            setSeriesSel((prev) => {
+              const next = new Map(prev);
+              next.delete(studyUid);
+              return next;
+            });
+            notify({ reason: "series-merge", studyUids: [studyUid] });
+            await reloadSeries(studyUid);
+            reload(q);
+          }}
+        />
+      )}
+      {splitting && (
+        <SplitSeriesForm
+          study={splitting.study}
+          series={splitting.series}
+          onClose={() => setSplitting(null)}
+          onSplit={async () => {
+            const studyUid = splitting.study.studyInstanceUid;
+            setSplitting(null);
+            notify({ reason: "series-split", studyUids: [studyUid] });
+            await reloadSeries(studyUid);
             reload(q);
           }}
         />
@@ -155,6 +403,187 @@ function PatientsTab({ confirmDelete }: { confirmDelete: boolean }) {
   );
 }
 
+/** シリーズ分割フォーム（各インスタンスを群へ割当。どの群にも入れなければ元シリーズに残る）。 */
+function SplitSeriesForm({
+  study,
+  series,
+  onClose,
+  onSplit,
+}: {
+  study: Study;
+  series: Series;
+  onClose: () => void;
+  onSplit: () => void;
+}) {
+  const { t } = useI18n();
+  const [instances, setInstances] = useState<Instance[] | null>(null);
+  const [groupCount, setGroupCount] = useState(2);
+  const [assign, setAssign] = useState<Map<string, number>>(new Map()); // sop -> 0(=残す) / 1..N
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    fetchInstances(study.studyInstanceUid, series.seriesInstanceUid)
+      .then(setInstances)
+      .catch((e: unknown) => setError(String(e)));
+  }, [study.studyInstanceUid, series.seriesInstanceUid]);
+
+  const setGroup = (sop: string, g: number) => setAssign((prev) => new Map(prev).set(sop, g));
+
+  const run = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const groups: SplitGroup[] = [];
+      for (let g = 1; g <= groupCount; g++) {
+        const sops = (instances ?? [])
+          .filter((i) => (assign.get(i.sopInstanceUid) ?? 0) === g)
+          .map((i) => i.sopInstanceUid);
+        if (sops.length > 0) groups.push({ sopInstanceUids: sops });
+      }
+      if (groups.length === 0) {
+        setError(t("dbadmin.split.noGroups"));
+        setBusy(false);
+        return;
+      }
+      const r = await splitSeries(study.studyInstanceUid, series.seriesInstanceUid, groups);
+      if (r.failed > 0) {
+        setError(t("dbadmin.split.partial", { moved: r.moved, failed: r.failed }));
+        setBusy(false);
+        return;
+      }
+      onSplit();
+    } catch (e) {
+      setError(String(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={overlay} onClick={onClose}>
+      <div style={{ ...editBox, width: 540, maxHeight: "86vh", display: "flex", flexDirection: "column" }} onClick={(e) => e.stopPropagation()}>
+        <h3 style={{ margin: "0 0 6px" }}>{t("dbadmin.split.title")}</h3>
+        <p style={{ fontSize: 12, color: "#8a98a6", marginTop: 0 }}>{t("dbadmin.split.note")}</p>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+          <span style={{ fontSize: 13, color: "#445" }}>{t("dbadmin.split.groupCount")}</span>
+          <select value={groupCount} onChange={(e) => setGroupCount(Number(e.target.value))} style={{ ...input, width: 80 }}>
+            {[2, 3, 4, 5].map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div style={{ flex: 1, overflow: "auto", border: "1px solid #eef1f4", borderRadius: 6 }}>
+          {!instances && <div style={{ padding: 10, color: "#888" }}>{t("common.loading")}</div>}
+          {instances?.map((i) => (
+            <div key={i.sopInstanceUid} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 8px", borderBottom: "1px solid #f3f5f7", fontSize: 12 }}>
+              <span style={{ flex: 1 }}>#{i.instanceNumber ?? "?"}</span>
+              <select
+                value={assign.get(i.sopInstanceUid) ?? 0}
+                onChange={(e) => setGroup(i.sopInstanceUid, Number(e.target.value))}
+                style={{ ...input, width: 130 }}
+              >
+                <option value={0}>{t("dbadmin.split.keep")}</option>
+                {Array.from({ length: groupCount }, (_, k) => k + 1).map((g) => (
+                  <option key={g} value={g}>
+                    {t("dbadmin.split.group", { n: g })}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ))}
+        </div>
+        {error && <div style={{ color: "#b00020", marginTop: 6 }}>{error}</div>}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+          <button onClick={onClose} style={btn}>
+            {t("common.cancel")}
+          </button>
+          <button onClick={run} disabled={busy} style={{ ...btn, background: "#0b5cad", color: "#fff" }}>
+            {busy ? t("dbadmin.split.running") : t("dbadmin.split.button")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** シリーズ統合フォーム（統合先 SeriesNumber/Description）。 */
+function MergeSeriesForm({
+  study,
+  series,
+  onClose,
+  onMerged,
+}: {
+  study: Study;
+  series: Series[];
+  onClose: () => void;
+  onMerged: () => void;
+}) {
+  const { t } = useI18n();
+  const first = series[0];
+  const [number, setNumber] = useState(String(first?.seriesNumber ?? 1));
+  const [desc, setDesc] = useState(first?.seriesDescription ?? "Merged");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const run = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const n = Number.parseInt(number, 10);
+      const r = await mergeSeries(
+        study.studyInstanceUid,
+        series.map((s) => s.seriesInstanceUid),
+        { seriesNumber: Number.isFinite(n) ? n : undefined, seriesDescription: desc },
+      );
+      if (r.failed > 0) {
+        setError(t("dbadmin.merge.partial", { moved: r.moved, failed: r.failed }));
+        setBusy(false);
+        return;
+      }
+      onMerged();
+    } catch (e) {
+      setError(String(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={overlay} onClick={onClose}>
+      <div style={editBox} onClick={(e) => e.stopPropagation()}>
+        <h3 style={{ margin: "0 0 6px" }}>{t("dbadmin.merge.title")}</h3>
+        <p style={{ fontSize: 12, color: "#8a98a6", marginTop: 0 }}>
+          {t("dbadmin.merge.note", { count: series.length })}
+        </p>
+        <div style={{ maxHeight: 120, overflow: "auto", border: "1px solid #eef1f4", borderRadius: 6, padding: "6px 8px", marginBottom: 8 }}>
+          {series.map((s) => (
+            <div key={s.seriesInstanceUid} style={{ fontSize: 12, color: "#445" }}>
+              • {seriesLabel(s)} <span style={muted}>({s.numberOfInstances})</span>
+            </div>
+          ))}
+        </div>
+        <Row label={t("dbadmin.merge.seriesNumber")}>
+          <input value={number} onChange={(e) => setNumber(e.target.value)} style={input} />
+        </Row>
+        <Row label={t("field.description")}>
+          <input value={desc} onChange={(e) => setDesc(e.target.value)} style={input} />
+        </Row>
+        {error && <div style={{ color: "#b00020", marginTop: 6 }}>{error}</div>}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
+          <button onClick={onClose} style={btn}>
+            {t("common.cancel")}
+          </button>
+          <button onClick={run} disabled={busy} style={{ ...btn, background: "#0b5cad", color: "#fff" }}>
+            {busy ? t("dbadmin.merge.running") : t("dbadmin.merge.button")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 患者全体の編集（全スタディに適用）。 */
 function PatientEditForm({
   patient,
   onClose,
@@ -162,7 +591,7 @@ function PatientEditForm({
 }: {
   patient: Patient;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (detail: Omit<DbChangedDetail, "ts">) => void;
 }) {
   const { t } = useI18n();
   const [name, setName] = useState(patient.patientName ?? "");
@@ -176,13 +605,8 @@ function PatientEditForm({
     setSaving(true);
     setError(null);
     try {
-      await savePatient(patient.patientId, {
-        patientName: name,
-        patientBirthDate: birth,
-        patientSex: sex,
-        newPatientId: newId,
-      });
-      onSaved();
+      await savePatient(patient.patientId, { patientName: name, patientBirthDate: birth, patientSex: sex, newPatientId: newId });
+      onSaved({ reason: "patient-edit", patientId: newId || patient.patientId });
     } catch (e) {
       setError(String(e));
       setSaving(false);
@@ -191,36 +615,119 @@ function PatientEditForm({
 
   return (
     <div style={overlay} onClick={onClose}>
-      <div style={{ ...editBox }} onClick={(e) => e.stopPropagation()}>
-        <h3 style={{ margin: "0 0 12px" }}>{t("dbadmin.edit.title")}</h3>
+      <div style={editBox} onClick={(e) => e.stopPropagation()}>
+        <h3 style={{ margin: "0 0 6px" }}>{t("dbadmin.edit.title")}</h3>
         <p style={{ fontSize: 12, color: "#8a98a6", marginTop: 0 }}>{t("dbadmin.edit.note")}</p>
-        <Row label={t("field.patientName")}>
-          <input value={name} onChange={(e) => setName(e.target.value)} style={input} />
-        </Row>
-        <Row label={t("dbadmin.edit.birthDate")}>
-          <input value={birth} onChange={(e) => setBirth(e.target.value)} style={input} placeholder="19800101" />
-        </Row>
-        <Row label={t("field.sex")}>
-          <select value={sex} onChange={(e) => setSex(e.target.value)} style={input}>
-            <option value="">—</option>
-            <option value="M">M</option>
-            <option value="F">F</option>
-            <option value="O">O</option>
-          </select>
-        </Row>
+        <PatientFields {...{ name, setName, birth, setBirth, sex, setSex }} />
         <Row label={t("dbadmin.edit.newId")}>
           <input value={newId} onChange={(e) => setNewId(e.target.value)} style={input} placeholder={patient.patientId} />
         </Row>
         {error && <div style={{ color: "#b00020", marginTop: 6 }}>{error}</div>}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
-          <button onClick={onClose} style={btn}>
-            {t("common.cancel")}
-          </button>
-          <button onClick={save} disabled={saving} style={{ ...btn, background: "#0b5cad", color: "#fff" }}>
-            {saving ? t("common.saving") : t("common.save")}
-          </button>
-        </div>
+        <FormButtons onClose={onClose} onSave={save} saving={saving} />
       </div>
+    </div>
+  );
+}
+
+/** スタディ単位の患者編集（そのスタディのみ。PatientID 変更で別患者へ移動）。 */
+function StudyPatientEditForm({
+  study,
+  patient,
+  onClose,
+  onSaved,
+}: {
+  study: Study;
+  patient: Patient;
+  onClose: () => void;
+  onSaved: (detail: Omit<DbChangedDetail, "ts">) => void;
+}) {
+  const { t } = useI18n();
+  const [name, setName] = useState(study.patientName ?? patient.patientName ?? "");
+  const [birth, setBirth] = useState(patient.patientBirthDate ?? "");
+  const [sex, setSex] = useState(patient.patientSex ?? "");
+  const [newId, setNewId] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const moving = newId.trim() !== "" && newId.trim() !== patient.patientId;
+
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      await updateStudyPatient(study.studyInstanceUid, { patientName: name, patientBirthDate: birth, patientSex: sex, newPatientId: newId });
+      onSaved({ reason: "study-patient-edit", patientId: newId || patient.patientId, studyUids: [study.studyInstanceUid] });
+    } catch (e) {
+      setError(String(e));
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={overlay} onClick={onClose}>
+      <div style={editBox} onClick={(e) => e.stopPropagation()}>
+        <h3 style={{ margin: "0 0 6px" }}>{t("dbadmin.edit.studyTitle")}</h3>
+        <p style={{ fontSize: 12, color: "#8a98a6", marginTop: 0 }}>
+          {t("dbadmin.edit.studyNote", { desc: studyLabel(study) })}
+        </p>
+        <PatientFields {...{ name, setName, birth, setBirth, sex, setSex }} />
+        <Row label={t("dbadmin.edit.newId")}>
+          <input value={newId} onChange={(e) => setNewId(e.target.value)} style={input} placeholder={patient.patientId} />
+        </Row>
+        {moving && <div style={{ color: "#8a6d00", fontSize: 12, marginTop: 6 }}>{t("dbadmin.edit.moveWarn", { id: newId.trim() })}</div>}
+        {error && <div style={{ color: "#b00020", marginTop: 6 }}>{error}</div>}
+        <FormButtons onClose={onClose} onSave={save} saving={saving} />
+      </div>
+    </div>
+  );
+}
+
+function PatientFields({
+  name,
+  setName,
+  birth,
+  setBirth,
+  sex,
+  setSex,
+}: {
+  name: string;
+  setName: (v: string) => void;
+  birth: string;
+  setBirth: (v: string) => void;
+  sex: string;
+  setSex: (v: string) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <>
+      <Row label={t("field.patientName")}>
+        <input value={name} onChange={(e) => setName(e.target.value)} style={input} />
+      </Row>
+      <Row label={t("dbadmin.edit.birthDate")}>
+        <input value={birth} onChange={(e) => setBirth(e.target.value)} style={input} placeholder="19800101" />
+      </Row>
+      <Row label={t("field.sex")}>
+        <select value={sex} onChange={(e) => setSex(e.target.value)} style={input}>
+          <option value="">—</option>
+          <option value="M">M</option>
+          <option value="F">F</option>
+          <option value="O">O</option>
+        </select>
+      </Row>
+    </>
+  );
+}
+
+function FormButtons({ onClose, onSave, saving }: { onClose: () => void; onSave: () => void; saving: boolean }) {
+  const { t } = useI18n();
+  return (
+    <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
+      <button onClick={onClose} style={btn}>
+        {t("common.cancel")}
+      </button>
+      <button onClick={onSave} disabled={saving} style={{ ...btn, background: "#0b5cad", color: "#fff" }}>
+        {saving ? t("common.saving") : t("common.save")}
+      </button>
     </div>
   );
 }
@@ -260,6 +767,12 @@ function StatsTab() {
 }
 
 // --- 小物 ---
+function studyLabel(s: Study): string {
+  return `${formatDate(s.studyDate)} / ${s.studyDescription || "—"}${s.modality ? ` (${s.modality})` : ""}`;
+}
+function seriesLabel(se: Series): string {
+  return `#${se.seriesNumber ?? "—"} ${se.modality || ""} ${se.seriesDescription || "—"}`;
+}
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div style={{ border: "1px solid #eef1f4", borderRadius: 8, padding: 12 }}>
@@ -294,12 +807,6 @@ function TabBtn({ active, onClick, children }: { active: boolean; onClick: () =>
       {children}
     </button>
   );
-}
-function Th({ children }: { children?: React.ReactNode }) {
-  return <th style={{ padding: "6px 10px", color: "#666", fontWeight: 600 }}>{children}</th>;
-}
-function Td({ children }: { children: React.ReactNode }) {
-  return <td style={{ padding: "6px 10px" }}>{children}</td>;
 }
 function formatDate(d: string | null): string {
   if (!d || d.length !== 8) return d || "—";
@@ -338,8 +845,11 @@ const header: React.CSSProperties = {
 };
 const tabs: React.CSSProperties = { display: "flex", borderBottom: "1px solid #eee", padding: "0 8px" };
 const closeBtn: React.CSSProperties = { border: "none", background: "transparent", fontSize: 16, cursor: "pointer", color: "#666" };
-const table: React.CSSProperties = { borderCollapse: "collapse", width: "100%", fontSize: 13 };
 const input: React.CSSProperties = { padding: "6px 8px", border: "1px solid #cdd5de", borderRadius: 6, fontSize: 13, width: "100%", boxSizing: "border-box" };
 const btn: React.CSSProperties = { padding: "6px 12px", border: "1px solid #cdd5de", borderRadius: 6, background: "#fff", cursor: "pointer", fontSize: 13 };
-const smallBtn: React.CSSProperties = { padding: "3px 8px", border: "1px solid #d7dde3", borderRadius: 5, background: "#fff", cursor: "pointer", fontSize: 12, marginRight: 4 };
-const editBox: React.CSSProperties = { width: 440, maxWidth: "92vw", background: "#fff", borderRadius: 10, padding: 20, boxShadow: "0 12px 40px rgba(0,0,0,0.3)" };
+const smallBtn: React.CSSProperties = { padding: "3px 8px", border: "1px solid #d7dde3", borderRadius: 5, background: "#fff", cursor: "pointer", fontSize: 12, marginLeft: 4 };
+const editBox: React.CSSProperties = { width: 460, maxWidth: "92vw", background: "#fff", borderRadius: 10, padding: 20, boxShadow: "0 12px 40px rgba(0,0,0,0.3)" };
+const rowFlex: React.CSSProperties = { display: "flex", alignItems: "center", gap: 6, padding: "4px 0" };
+const mergeBar: React.CSSProperties = { display: "flex", alignItems: "center", gap: 10, padding: "4px 0 6px", marginBottom: 2 };
+const expander: React.CSSProperties = { border: "none", background: "transparent", cursor: "pointer", fontSize: 12, width: 16, color: "#667", padding: 0 };
+const muted: React.CSSProperties = { color: "#8a98a6", fontSize: 11 };

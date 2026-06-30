@@ -29,6 +29,12 @@ type ViewSnapshot = { transform: ViewTransform; voi: { lower: number; upper: num
 
 const { MouseBindings } = csToolsEnums;
 
+/** カラー（RGB/YBR/PALETTE）画像か。MONOCHROME 以外を色付きとみなす。LUT/Invert の可否判定に使う。 */
+function isColorImage(inf: ImageInfo | null): boolean {
+  const p = inf?.photometricInterpretation;
+  return !!p && !/MONOCHROME/i.test(p);
+}
+
 // 単一の RenderingEngine を全ビューポートで共有する（WebGL コンテキストを 1 つに保つ＝省メモリ）。
 export const ENGINE_ID = "graphy-engine";
 let sharedEngine: RenderingEngine | null = null;
@@ -174,6 +180,32 @@ export function Viewer2D({
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const [inverted, setInverted] = useState(false);
+  // Pan モード: ON で左ドラッグ=パン、OFF で左ドラッグ=W/L。中ドラッグは常にパン、右はズーム。
+  const [panMode, setPanMode] = useState(false);
+
+  /** 左ドラッグの割り当てを Pan↔W/L で切り替える。 */
+  const togglePan = () => {
+    const tg = ToolGroupManager.getToolGroup(`${viewportIdRef.current}-tg`);
+    const next = !panMode;
+    if (tg) {
+      try {
+        if (next) {
+          // 左＋中ドラッグ=Pan、W/L は無効化。
+          tg.setToolActive(PanTool.toolName, {
+            bindings: [{ mouseButton: MouseBindings.Primary }, { mouseButton: MouseBindings.Auxiliary }],
+          });
+          tg.setToolPassive(WindowLevelTool.toolName);
+        } else {
+          // 左=W/L、中=Pan に戻す。
+          tg.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
+          tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
+        }
+      } catch {
+        /* ツールグループ未準備時は無視 */
+      }
+    }
+    setPanMode(next);
+  };
 
   // --- Undo/Redo（zoom/pan/rotate/flip/VOI のスナップショット） ---
   const snapshot = (): ViewSnapshot | null => {
@@ -236,11 +268,17 @@ export function Viewer2D({
   const toggleInvert = () => {
     const vp = viewportRef.current;
     if (!vp) return;
+    // カラー(RGB)画像は階調反転を適用しない（Cornerstone3D が invert を解釈できずエラーになる）。
+    if (isColorImage(infoRef.current)) return;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const cur = Boolean((vp.getProperties() as any)?.invert);
-    vp.setProperties({ invert: !cur });
-    vp.render();
-    setInverted(!cur);
+    try {
+      vp.setProperties({ invert: !cur });
+      vp.render();
+      setInverted(!cur);
+    } catch {
+      /* 反転非対応の画像は無視 */
+    }
   };
 
   // ── LUT / カラーマップ ─────────────────────────────────────────
@@ -252,6 +290,8 @@ export function Viewer2D({
   const applyLut = useCallback((lut: LutData | null) => {
     const vp = viewportRef.current;
     if (!vp) return;
+    // カラー(RGB)画像には LUT(カラーマップ)を適用しない。
+    if (isColorImage(infoRef.current)) return;
     if (lut === null) {
       // グレースケールにリセット
       vp.setProperties({ colormap: undefined });
@@ -294,9 +334,33 @@ export function Viewer2D({
     };
     const onLeave = () => setSample(null);
 
+    // カメラ暴走の自己修復。共有 RenderingEngine 上でスライス/シリーズ切替時にまれに
+    // parallelScale が画像フィット規模を大きく超え（真っ黒/点表示）ることがあるため、
+    // 検知したら resetCamera + 再描画で復帰する。無限ループ防止に再入ガードと回数上限。
+    let healing = false;
+    let healAttempts = 0;
+    const sanitizeCamera = (vp: Types.IStackViewport): void => {
+      if (healing) return;
+      const ps = (vp.getCamera() as { parallelScale?: number })?.parallelScale;
+      if (!ps || !Number.isFinite(ps) || ps <= 0) return;
+      const inf = infoRef.current;
+      const hWorld = (inf?.rows ?? 512) * (inf?.rowPixelSpacing ?? 1);
+      const wWorld = (inf?.columns ?? 512) * (inf?.columnPixelSpacing ?? 1);
+      const fitGuess = Math.max(hWorld, wWorld) / 2; // 概略フィット規模
+      if (fitGuess > 0 && ps > fitGuess * 50) {
+        if (healAttempts >= 3) return; // これ以上は無限ループ回避のため諦める
+        healAttempts++;
+        healing = true;
+        try { vp.resetCamera(); vp.render(); } catch { /* ignore */ } finally { healing = false; }
+      } else {
+        healAttempts = 0; // 正常値を観測したらリセット
+      }
+    };
+
     const onCameraModified = () => {
       const vp = viewportRef.current;
       if (!vp || disposed) return;
+      sanitizeCamera(vp);
       setTransform(readTransform(vp));
       // 向きマーカーは IOP があるときだけ。canvasToWorld 経由で zoom/pan/flip/rotation に追従。
       setMarkers(infoRef.current?.hasOrientation ? computeOrientationMarkers(vp, element) : null);
@@ -352,43 +416,6 @@ export function Viewer2D({
         }
         viewport.render();
 
-        // 一時診断: 実際にキャンバスへ描画されているか（中心画素）を確認する。
-        if (!compact) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const vpAny = viewport as any;
-          const readback = (tag: string) => {
-            try {
-              const props = vpAny.getProperties?.();
-              const cnv: HTMLCanvasElement | undefined = vpAny.canvas ?? vpAny.getCanvas?.();
-              let centerPx: number[] | null = null;
-              if (cnv) {
-                const cctx = cnv.getContext("2d");
-                if (cctx) {
-                  const cx = Math.floor(cnv.width / 2), cy = Math.floor(cnv.height / 2);
-                  centerPx = Array.from(cctx.getImageData(cx, cy, 1, 1).data);
-                }
-              }
-              // world スケール（スケールバー異常の切り分け）。
-              let worldPerPx: number | null = null;
-              try {
-                const p0 = viewport.canvasToWorld([0, 10]);
-                const p1 = viewport.canvasToWorld([100, 10]);
-                worldPerPx = Math.hypot(p0[0] - p1[0], p0[1] - p1[1], p0[2] - p1[2]) / 100;
-              } catch { /* ignore */ }
-              const cam = vpAny.getCamera?.();
-              console.log(`[CTDbg/${tag}]`, inf.modality,
-                "pixSpacing(col/row):", inf.columnPixelSpacing, inf.rowPixelSpacing,
-                "rows/cols:", inf.rows, inf.columns,
-                "worldPerPx:", worldPerPx, "parallelScale:", cam?.parallelScale,
-                "voiRange:", props?.voiRange, "invert:", props?.invert,
-                "canvasSize:", cnv?.width, "x", cnv?.height, "centerPx:", centerPx);
-            } catch (e) { console.warn("[CTDbg] readback failed", e); }
-          };
-          readback("immediate");
-          // 描画/ブリット完了後にもう一度（render は非同期にGPUへ反映されるため）。
-          setTimeout(() => readback("delayed"), 200);
-        }
-
         // スライス方向ボクセル奥行きは非同期（複数枚は隣接スライスのメタを要する）。後から合流。
         void (async () => {
           const r = await computeSliceSpacing(curId, imageIdsRef.current, inf.sliceThickness);
@@ -431,12 +458,33 @@ export function Viewer2D({
         onCameraModified();
 
         // コンポーネント拡縮に追従。再 Fit したうえで相対 zoom/pan/rotation/flip を維持する。
+        // 注意: 共有 RenderingEngine では engine.resize(true,false) の自動再フィットが
+        // 複数ビューポート時に誤った巨大 parallelScale を返し（黒画面/スケールバー暴走）、
+        // さらに get/setViewPresentation で増幅される。これを避けるため、canvas のリサイズは
+        // keepCamera=true（自動フィットしない）にし、フィットは viewport 単位の resetCamera で行う。
+        // 実サイズが変化したときのみ実行（resize フィードバックループも防止）。
+        let lastRW = element.clientWidth;
+        let lastRH = element.clientHeight;
         resizeObserver = new ResizeObserver(() => {
           const vp = viewportRef.current;
           if (!vp || disposed) return;
+          const w = element.clientWidth;
+          const h = element.clientHeight;
+          if (!w || !h) return; // 退化サイズ（レイアウト途中）は無視
+          if (w === lastRW && h === lastRH) return; // 実サイズ変化なし
+          lastRW = w;
+          lastRH = h;
           const pres = vp.getViewPresentation();
-          engine.resize(true, false); // 新サイズへ再 Fit（camera リセット）
-          vp.setViewPresentation(pres); // 相対 zoom などを再適用
+          engine.resize(true, true); // canvas のみ新サイズへ（カメラ維持＝自動再フィットしない）
+          vp.resetCamera(); // この viewport を要素サイズへ正しくフィット
+          const fitScale = vp.getCamera().parallelScale ?? 0;
+          try { vp.setViewPresentation(pres); } catch { /* 相対 zoom/pan/rotation/flip を再適用 */ }
+          // 妥当性ガード: 再適用が異常な巨大/極小スケールを生んだら（共有エンジン由来の暴走）
+          // クリーンなフィットへ戻す。50倍/1/50 は通常の深いズームを許容しつつ暴走のみ捕捉。
+          const afterScale = vp.getCamera().parallelScale ?? 0;
+          if (fitScale > 0 && afterScale > 0 && (afterScale > fitScale * 50 || afterScale < fitScale / 50)) {
+            vp.resetCamera();
+          }
           vp.render();
         });
         resizeObserver.observe(element);
@@ -509,7 +557,12 @@ export function Viewer2D({
         infoRef.current = merged;
         setInfo(merged);
       } catch {
-        /* スライス切替の競合は無視 */
+        // スライス切替の競合・例外時はフォールバックとして再フィット＋再描画を試みる
+        // （まれに描画が崩れて真っ黒になるのを復帰させる）。
+        try {
+          const vp = viewportRef.current;
+          if (vp && !cancelled) { vp.resetCamera(); vp.render(); }
+        } catch { /* ignore */ }
       }
     })();
     return () => {
@@ -658,6 +711,9 @@ export function Viewer2D({
     />
   ) : null;
 
+  // カラー(RGB)画像は LUT/Invert を無効化（適用不可・エラー回避）。
+  const isColor = isColorImage(info);
+
   // グリッドセル用: 画像＋オーバーレイのみ。
   if (compact) return <>{imagePanel}{lutDialogEl}</>;
 
@@ -696,17 +752,31 @@ export function Viewer2D({
         {/* 操作バー（canvas の外＝ツール入力と競合しない） */}
         <div style={toolbar}>
           <button onClick={fit} style={btn} title={t("viewer.fit")}>{t("viewer.fit")}</button>
+          <button
+            onClick={togglePan}
+            style={{ ...btn, ...(panMode ? infoBtnOn : null) }}
+            aria-pressed={panMode}
+            title={t("viewer.pan")}
+          >
+            ✋
+          </button>
           <button onClick={() => zoomBy(1 / 1.2)} style={btn} title={t("viewer.zoomOut")}>−</button>
           <button onClick={() => zoomBy(1.2)} style={btn} title={t("viewer.zoomIn")}>＋</button>
           <button onClick={rotate90} style={btn} title={t("viewer.rotate")}>⟳</button>
           <button onClick={flipH} style={btn} title={t("viewer.flipH")}>⇄</button>
           <button onClick={flipV} style={btn} title={t("viewer.flipV")}>⇅</button>
-          <button onClick={toggleInvert} style={{ ...btn, ...(inverted ? infoBtnOn : null) }} title={t("viewer.invert")}>
+          <button
+            onClick={toggleInvert}
+            disabled={isColor}
+            style={{ ...btn, ...(inverted ? infoBtnOn : null), ...(isColor ? btnDisabled : null) }}
+            title={t("viewer.invert")}
+          >
             {t("viewer.invert")}
           </button>
           <button
             onClick={() => setShowLutDialog(true)}
-            style={{ ...btn, ...(activeLutName ? infoBtnOn : null) }}
+            disabled={isColor}
+            style={{ ...btn, ...(activeLutName ? infoBtnOn : null), ...(isColor ? btnDisabled : null) }}
             title={t("viewer.lut")}
           >
             {t("viewer.lut")}
@@ -802,7 +872,10 @@ const infoBtn: React.CSSProperties = {
   cursor: "pointer",
   fontSize: 12,
 };
-const infoBtnOn: React.CSSProperties = { background: "#0b5cad", borderColor: "#0b5cad", color: "#fff" };
+// border は基底ボタンと同じくショートハンドで指定する（borderColor 単独だと shorthand と混在し
+// React の「Removing a style property during rerender (borderColor)」警告が出るため）。
+const infoBtnOn: React.CSSProperties = { background: "#0b5cad", border: "1px solid #0b5cad", color: "#fff" };
+const btnDisabled: React.CSSProperties = { opacity: 0.45, cursor: "not-allowed" };
 const statusKey: React.CSSProperties = { color: "#6b7785" };
 const statusVal: React.CSSProperties = { color: "#1a2530", fontWeight: 600 };
 

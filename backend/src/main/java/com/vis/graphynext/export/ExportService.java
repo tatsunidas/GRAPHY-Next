@@ -7,6 +7,7 @@ package com.vis.graphynext.export;
 import com.vis.graphynext.dicom.store.DicomInstance;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
 import org.dcm4che3.data.Attributes;
+import org.dcm4che3.data.Tag;
 import org.dcm4che3.io.DicomInputStream;
 import org.dcm4che3.io.DicomInputStream.IncludeBulkData;
 import org.dcm4che3.media.DicomDirWriter;
@@ -57,6 +58,9 @@ public class ExportService {
     /** 集計（README / レスポンス用）。 */
     public record Summary(int patients, int studies, int series, int instances) {}
 
+    /** 書き出し結果（一時 ZIP パスと、含まれる患者 ID の一覧[挿入順]）。 */
+    public record BuildResult(Path zip, List<String> patientIds) {}
+
     private final DicomInstanceRepository repo;
 
     public ExportService(DicomInstanceRepository repo) {
@@ -64,10 +68,11 @@ public class ExportService {
     }
 
     /**
-     * 一時 ZIP ファイルを生成してそのパスを返す（呼び出し側がストリーム後に削除する）。
+     * 一時 ZIP ファイルを生成し、パスと含まれる患者 ID（挿入順）を返す
+     * （呼び出し側がストリーム後に ZIP を削除する）。
      */
     @Transactional(readOnly = true)
-    public Path buildZip(List<Selection> selections, Options opts) throws IOException {
+    public BuildResult buildZip(List<Selection> selections, Options opts) throws IOException {
         boolean withDicomDir = opts.effectiveDicomDir();
         Path work = Files.createTempDirectory("graphy-export-");
         Path zipPath = Files.createTempFile("graphy-export-", ".zip");
@@ -82,10 +87,11 @@ public class ExportService {
             rf.loadDefaultConfiguration();
         }
 
-        // 階層ディレクトリ名の割り当て（PatientID/StudyUID/SeriesUID 単位で一意）
-        Map<String, String> patDirByPid = new LinkedHashMap<>();
-        Map<String, String> styDirByUid = new LinkedHashMap<>();
-        int[] counters = new int[3]; // [pat, study, series]
+        // 可読フォルダ名の割り当て（患者=PatientID / 検査=検査日 / シリーズ=Description）。
+        Layout layout = new Layout();
+        java.util.Set<String> patientIds = new java.util.LinkedHashSet<>();
+        java.util.Set<String> studyUidsExported = new java.util.LinkedHashSet<>();
+        int seriesCount = 0;
         int instanceCount = 0;
 
         try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(zipPath))) {
@@ -98,7 +104,9 @@ public class ExportService {
                     if (insts.isEmpty()) {
                         continue;
                     }
-                    String serDir = MediaNaming.dirName("SER", ++counters[2]);
+                    String patDir = null;
+                    String styDir = null;
+                    String serDir = null; // 最初の解決済みインスタンスで確定（可読名はヘッダ依存）
                     int img = 0;
                     for (DicomInstance inst : insts) {
                         Path src = resolveFile(inst);
@@ -116,10 +124,18 @@ public class ExportService {
                             continue;
                         }
 
-                        String pid = inst.getPatientId() == null ? "" : inst.getPatientId();
-                        String patDir = patDirByPid.computeIfAbsent(pid, k -> MediaNaming.dirName("PAT", ++counters[0]));
-                        String styDir = styDirByUid.computeIfAbsent(sel.studyUid(), k -> MediaNaming.dirName("STU", ++counters[1]));
-                        String imgName = MediaNaming.imageName(++img);
+                        if (serDir == null) {
+                            String pid = inst.getPatientId() == null ? "" : inst.getPatientId();
+                            if (!pid.isEmpty()) {
+                                patientIds.add(pid);
+                            }
+                            patDir = layout.patient(pid);
+                            styDir = layout.study(sel.studyUid(), patDir, inst);
+                            studyUidsExported.add(sel.studyUid());
+                            serDir = layout.series(patDir, styDir, inst, ds.getString(Tag.ProtocolName));
+                            seriesCount++;
+                        }
+                        String imgName = ExportNaming.imageName(++img);
                         String[] fileIDs = {"DICOM", patDir, styDir, serDir, imgName};
                         String entryPath = String.join("/", fileIDs);
 
@@ -144,7 +160,7 @@ public class ExportService {
                 zip.closeEntry();
             }
 
-            Summary summary = new Summary(patDirByPid.size(), styDirByUid.size(), counters[2], instanceCount);
+            Summary summary = new Summary(layout.patDir.size(), studyUidsExported.size(), seriesCount, instanceCount);
             if (opts.includeReadme()) {
                 zip.putNextEntry(new ZipEntry("README.txt"));
                 zip.write(readme(opts, summary).getBytes(StandardCharsets.UTF_8));
@@ -160,7 +176,67 @@ public class ExportService {
             }
             deleteRecursively(work);
         }
-        return zipPath;
+        return new BuildResult(zipPath, new java.util.ArrayList<>(patientIds));
+    }
+
+    /**
+     * 1 回の Export 内で可読フォルダ名を一意に割り当てる補助（Spring シングルトンに状態を持たせないため
+     * buildZip 呼び出しごとにインスタンス化する）。
+     */
+    static final class Layout {
+        final Map<String, String> patDir = new LinkedHashMap<>();
+        private final Map<String, String> styDir = new java.util.HashMap<>();
+        private final java.util.Set<String> usedRoot = new java.util.HashSet<>();
+        private final Map<String, java.util.Set<String>> usedStudyByPatient = new java.util.HashMap<>();
+        private final Map<String, java.util.Set<String>> usedSeriesByStudy = new java.util.HashMap<>();
+
+        /** PatientID → 患者フォルダ名（ルート直下で一意）。 */
+        String patient(String pid) {
+            String existing = patDir.get(pid);
+            if (existing != null) {
+                return existing;
+            }
+            String name = ExportNaming.unique(ExportNaming.safeName(pid, "NoPatientID"), usedRoot);
+            patDir.put(pid, name);
+            return name;
+        }
+
+        /** StudyInstanceUID → 検査フォルダ名（検査日。患者フォルダ内で一意）。 */
+        String study(String studyUid, String patientDir, DicomInstance inst) {
+            String existing = styDir.get(studyUid);
+            if (existing != null) {
+                return existing;
+            }
+            java.util.Set<String> used = usedStudyByPatient.computeIfAbsent(patientDir, k -> new java.util.HashSet<>());
+            String base = ExportNaming.formatStudyDate(inst.getStudyDate());
+            if (base == null) {
+                base = ExportNaming.safeName(inst.getStudyDescription(), "NoDate");
+            }
+            String name = ExportNaming.unique(base, used);
+            styDir.put(studyUid, name);
+            return name;
+        }
+
+        /** シリーズフォルダ名（SeriesDescription→ProtocolName→Series番号。検査フォルダ内で一意）。 */
+        String series(String patientDir, String studyDir, DicomInstance inst, String protocolName) {
+            java.util.Set<String> used = usedSeriesByStudy.computeIfAbsent(patientDir + "/" + studyDir, k -> new java.util.HashSet<>());
+            String desc = firstNonBlank(inst.getSeriesDescription(), protocolName);
+            if (desc == null) {
+                Integer sn = inst.getSeriesNumber();
+                desc = "Series" + (sn != null ? sn : (inst.getModality() == null ? "" : inst.getModality()));
+            }
+            return ExportNaming.unique(ExportNaming.safeName(desc, "Series"), used);
+        }
+
+        private static String firstNonBlank(String a, String b) {
+            if (a != null && !a.isBlank()) {
+                return a;
+            }
+            if (b != null && !b.isBlank()) {
+                return b;
+            }
+            return null;
+        }
     }
 
     static void addDirRecords(DicomDirWriter dir, RecordFactory rf, Attributes ds, Attributes fmi, String[] fileIDs)
@@ -189,9 +265,10 @@ public class ExportService {
         sb.append("  Studies/検査:    ").append(s.studies()).append('\n');
         sb.append("  Series/シリーズ: ").append(s.series()).append('\n');
         sb.append("  Images/画像:     ").append(s.instances()).append("\n\n");
-        sb.append("Layout / 構成 (PS3.10):\n");
-        sb.append("  DICOM/PATxxxxx/STUxxxxx/SERxxxxx/00000001 ...\n");
-        sb.append("  (Patient > Study > Series > Image hierarchy; no extension)\n\n");
+        sb.append("Layout / 構成:\n");
+        sb.append("  DICOM/<PatientID>/<StudyDate>/<SeriesDescription>/00000001.dcm ...\n");
+        sb.append("  例 DICOM/PID-0001/2026-06-30/CT Chest/00000001.dcm\n");
+        sb.append("  (Patient > Study > Series > Image hierarchy)\n\n");
         if (opts.effectiveDicomDir()) {
             sb.append("DICOMDIR:\n");
             sb.append("  A DICOMDIR index is included at the root. Most DICOM viewers can\n");

@@ -70,11 +70,39 @@ export const fetchInstances = (studyUid: string, seriesUid: string) =>
     `/api/studies/${encodeURIComponent(studyUid)}/series/${encodeURIComponent(seriesUid)}/instances`,
   );
 
+/** TagViewer: DICOM 属性ダンプの 1 行（SQ ネストは depth で表現）。 */
+export interface TagDumpRow {
+  /** シーケンスのネスト深さ（0=トップレベル）。 */
+  depth: number;
+  /** {@code (gggg,eeee)} 形式のタグ番号。 */
+  tag: string;
+  /** キーワード（無ければ空）。 */
+  name: string;
+  vr: string;
+  value: string;
+}
+
+/** 単一インスタンス（SOP）の属性ダンプを取得する（standalone のローカル索引のみ）。 */
+export const fetchInstanceTags = (sopUid: string) =>
+  httpGet<TagDumpRow[]>(`/api/instances/${encodeURIComponent(sopUid)}/tags`);
+
+/** Encapsulated PDF Storage の SOP Class UID（ピクセル無し＝画像ビューア非対応）。 */
+export const ENCAPSULATED_PDF_SOP_CLASS = "1.2.840.10008.5.1.4.1.1.104.1";
+
+/** Video Photographic Image Storage の SOP Class UID（encapsulated 動画＝2D 画像ビューア非対応）。 */
+export const VIDEO_PHOTOGRAPHIC_SOP_CLASS = "1.2.840.10008.5.1.4.1.1.77.1.4.1";
+
+/** Encapsulated Document（PDF 等）の中身を配信する URL（inline / download）。 */
+export const instanceDocumentUrl = (sopUid: string, download = false) =>
+  `${apiBase()}/api/instances/${encodeURIComponent(sopUid)}/document${download ? "?download=true" : ""}`;
+
 export interface SeriesLayoutCell {
   c: number;
   z: number;
   t: number;
   sopInstanceUid: string;
+  /** Siemens モザイクのタイル番号（0..N-1）。非モザイクは -1。 */
+  frame?: number;
 }
 
 /** Z インデックスごとの ImagePositionPatient（Fusion trilinear 補間用）。 */
@@ -127,6 +155,41 @@ export interface ImportResult {
 
 export const importPaths = (paths: string[]) =>
   httpSend<ImportResult>("/api/import/paths", "POST", { paths });
+
+// ── NonDicomImport（PDF/画像/動画を DICOM 化して取込） ───────────
+
+export interface NonDicomRequest {
+  paths: string[];
+  patientId: string;
+  patientName?: string;
+  patientBirthDate?: string;
+  patientSex?: string;
+  /** 既存スタディに追加する場合に指定。空なら新規スタディを採番。 */
+  studyInstanceUid?: string;
+  studyDescription?: string;
+  accessionNumber?: string;
+  seriesDescription?: string;
+}
+
+export interface NonDicomFileOutcome {
+  filename: string;
+  /** imported | skipped | failed */
+  status: string;
+  sopClass: string;
+  message: string;
+}
+
+export interface NonDicomResult {
+  imported: number;
+  skipped: number;
+  failed: number;
+  studyInstanceUid: string;
+  files: NonDicomFileOutcome[];
+}
+
+/** 非 DICOM ファイルを DICOM 化して取り込む（standalone のローカル FS 前提）。 */
+export const importNonDicom = (req: NonDicomRequest) =>
+  httpSend<NonDicomResult>("/api/import/nondicom", "POST", req);
 
 // ── LUT ────────────────────────────────────────────────────────
 

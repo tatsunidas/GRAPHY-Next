@@ -5,3 +5,11 @@ graphy:
   dicom:
     scp:
       enabled: true       # ローカル DIMSE リスナー（C-ECHO 応答）を起動
+
+# NonDicomImporter の動画(AVI/非H.264 MP4)トランスコード用 ffmpeg。
+# 既定（空）の場合、FfmpegLocator が同梱物を自動探索する:
+#   jar 隣接の ffmpeg/ ・ ../ffmpeg/（Electron: resources/ffmpeg）→ <os-arch>/ffmpeg[.exe]
+# 明示パスや同梱ディレクトリを指定したい場合のみ設定する（環境変数 GRAPHY_FFMPEG / GRAPHY_FFMPEG_DIR も可）。
+nondicom:
+  ffmpeg: ""        # 実行ファイルの明示パス（例 C:\\tools\\ffmpeg.exe）
+  ffmpeg-dir: ""    # 同梱ディレクトリ（<os-arch>/ffmpeg[.exe] または直下に ffmpeg[.exe]）

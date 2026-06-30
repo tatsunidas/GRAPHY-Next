@@ -110,6 +110,37 @@ public class StudyController {
         return storage.seriesLayout(studyUid, seriesUid);
     }
 
+    /**
+     * 範囲外パディング用ブランク DICOM を生成して返す。複数スキャン混在シリーズで、ある C/T が覆わない
+     * Z 位置を物理座標に揃えて埋めるために frontend が wadouri で読む。
+     * {@code ipp}（"x,y,z"）でブランクの ImagePositionPatient を指定（穴の物理位置）。
+     */
+    @GetMapping("/studies/{studyUid}/series/{seriesUid}/blank/file")
+    public org.springframework.http.ResponseEntity<byte[]> blank(
+            @PathVariable String studyUid, @PathVariable String seriesUid,
+            @RequestParam(required = false) String ipp) {
+        double[] pos = null;
+        if (ipp != null && !ipp.isBlank()) {
+            String[] p = ipp.split("[,\\\\]");
+            if (p.length >= 3) {
+                try {
+                    pos = new double[] { Double.parseDouble(p[0].trim()), Double.parseDouble(p[1].trim()),
+                            Double.parseDouble(p[2].trim()) };
+                } catch (NumberFormatException ignore) {
+                    pos = null;
+                }
+            }
+        }
+        byte[] dicom = storage.blankDicom(studyUid, seriesUid, pos);
+        if (dicom == null) {
+            return org.springframework.http.ResponseEntity.notFound().build();
+        }
+        return org.springframework.http.ResponseEntity.ok()
+                .contentType(org.springframework.http.MediaType.parseMediaType("application/dicom"))
+                .header(org.springframework.http.HttpHeaders.CACHE_CONTROL, "private, max-age=3600")
+                .body(dicom);
+    }
+
     @GetMapping("/studies/{studyUid}/series/{seriesUid}/instances")
     public List<InstanceDto> instances(@PathVariable String studyUid, @PathVariable String seriesUid) {
         WebDicomDataService web = webProvider.getIfAvailable();

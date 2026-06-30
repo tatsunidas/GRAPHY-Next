@@ -56,6 +56,7 @@ export function MenuBar({
       items: [
         { label: t("main.toolbar.anonymizer"), onClick: () => onOpenTool("anonymizer") },
         { label: t("main.toolbar.tagExtractor"), onClick: () => onOpenTool("tagExtractor") },
+        { label: t("main.toolbar.tagViewer"), onClick: () => onOpenTool("tagViewer") },
         { label: t("main.toolbar.seriesExtractor"), onClick: () => onOpenTool("seriesExtractor") },
       ],
     },

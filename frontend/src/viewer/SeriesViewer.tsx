@@ -45,6 +45,7 @@ export function SeriesViewer({
   fillHeight = false,
   syncSlice,
   onSliceChange,
+  onDimChange,
   renderFusionOverlay,
 }: {
   instances: Instance[];
@@ -57,6 +58,8 @@ export function SeriesViewer({
   syncSlice?: { z: number; nZ: number } | null;
   /** Series Sync / Fusion: スライス変化を上位に通知するコールバック。imageId は現在スライスの Cornerstone3D imageId。 */
   onSliceChange?: (z: number, nZ: number, imageId: string) => void;
+  /** 現在表示中の C/T インデックス変化を上位に通知（Fusion の初期 C/T 引き継ぎ用）。 */
+  onDimChange?: (c: number, t: number) => void;
   /** Fusion オーバーレイ。スライダー表示時に base 画像へ重ねて描画する（GridView では無効）。 */
   renderFusionOverlay?: RenderOverlay;
 }) {
@@ -65,13 +68,10 @@ export function SeriesViewer({
     () => instances.map((i) => imageIdForInstance(mode, i.sopInstanceUid)),
     [instances, mode],
   );
-  const imageIdBySop = useMemo(
-    () => new Map(instances.map((i) => [i.sopInstanceUid, imageIdForInstance(mode, i.sopInstanceUid)])),
-    [instances, mode],
-  );
   const fallback = useMemo(() => buildSeriesLayout(imageIds), [imageIds]);
 
-  // backend の ZCT レイアウト（IPP→Z / Temporal→T / Echo・Bvalue→C）。取得まで/失敗時は単一次元。
+  // backend の ZCT レイアウト（IPP→Z / Temporal→T / Echo・Bvalue→C / モザイク Z×T）。
+  // 取得まで/失敗時は単一次元。
   const [layout, setLayout] = useState<SeriesLayout>(fallback);
   useEffect(() => {
     setLayout(fallback);
@@ -79,7 +79,7 @@ export function SeriesViewer({
     fetchSeriesLayout(studyUid, seriesUid)
       .then((dto) => {
         if (cancelled) return;
-        const built = buildLayoutFromDto(dto, imageIdBySop);
+        const built = buildLayoutFromDto(dto, mode, studyUid, seriesUid);
         if (built) setLayout(built);
       })
       .catch(() => {
@@ -88,7 +88,7 @@ export function SeriesViewer({
     return () => {
       cancelled = true;
     };
-  }, [studyUid, seriesUid, fallback, imageIdBySop]);
+  }, [studyUid, seriesUid, fallback, mode]);
 
   const [z, setZ] = useState(0);
   const [c, setC] = useState(0);
@@ -263,6 +263,11 @@ export function SeriesViewer({
     }
     onSliceChange?.(zc, nZ, zStackRef.current[zc] ?? "");
   }, [zc, nZ, onSliceChange]);
+
+  // 現在表示中の C/T を上位へ通知（Fusion の初期 C/T 引き継ぎ用）。
+  useEffect(() => {
+    onDimChange?.(cc, tc);
+  }, [cc, tc, onDimChange]);
 
   const toggle = (k: keyof OverlayState) => setOverlays((o) => ({ ...o, [k]: !o[k] }));
 
