@@ -311,60 +311,29 @@ public class DimseQrService {
     }
 
     /**
-     * C-GET でスタディ（seriesUid != null ならそのシリーズ）を<b>指定ディレクトリ</b>へ取得する（取込はしない）。
-     * 取得進捗はディレクトリ内ファイル数の監視で測れる。取込/STOW は呼び出し側の責務。
+     * C-MOVE で<b>シリーズ単位</b>を移動先 AE へ送らせる（{@link #moveStudy} のシリーズ版）。
+     * destAet を自局 AE にすれば自前 SCP が受信して索引化する。
      *
-     * @return getscu の終了コード（0 で成功）
+     * @return movescu の終了コード（0 で成功）
      */
-    public int retrieveTo(String host, int port, String calledAet, String studyUid, String seriesUid, Path outDir)
+    public int moveSeries(String host, int port, String calledAet, String studyUid, String seriesUid, String destAet)
             throws IOException {
-        Path tool = tools.require("getscu");
+        Path tool = tools.require("movescu");
         List<String> cmd = new ArrayList<>(List.of(
                 tool.toString(),
                 "-b", props.getLocalAeTitle(),
-                "-c", calledAet + "@" + host + ":" + port));
-        if (seriesUid != null && !seriesUid.isBlank()) {
-            cmd.addAll(List.of("-L", "SERIES",
-                    "-m", "StudyInstanceUID=" + studyUid,
-                    "-m", "SeriesInstanceUID=" + seriesUid));
-        } else {
-            cmd.addAll(List.of("-L", "STUDY", "-m", "StudyInstanceUID=" + studyUid));
-        }
-        cmd.add("--directory");
-        cmd.add(outDir.toString());
+                "-c", calledAet + "@" + host + ":" + port,
+                "--dest", destAet,
+                "-L", "SERIES",
+                "-m", "StudyInstanceUID=" + studyUid,
+                "-m", "SeriesInstanceUID=" + seriesUid));
         cmd.addAll(tlsArgs());
         Dcm4cheTools.Result r = tools.run(cmd, TOOL_TIMEOUT_MS);
         if (!r.ok()) {
-            throw new IOException("getscu 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
+            throw new IOException("movescu(SERIES) 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
         }
+        log.info("C-MOVE(SERIES) 完了: study={} series={} -> dest={}", studyUid, seriesUid, destAet);
         return r.exitCode();
-    }
-
-    /**
-     * 指定ディレクトリ配下の DICOM を STOW-RS で DICOMweb 受信側（dcm4chee 等）へ格納する（web モードの取得格納先）。
-     * 送信先は {@code graphy.dicom.dicomweb.base-url} + {@code /studies}。bearer トークンがあれば付与する。
-     */
-    public void stowDir(Path dir) throws IOException {
-        String baseUrl = props.getDicomweb().getBaseUrl();
-        if (baseUrl == null || baseUrl.isBlank()) {
-            throw new IOException("DICOMweb base-url 未設定のため STOW できません（graphy.dicom.dicomweb.base-url）");
-        }
-        Path tool = tools.require("stowrs");
-        String stowUrl = baseUrl.replaceAll("/+$", "") + "/studies";
-        List<String> cmd = new ArrayList<>(List.of(
-                tool.toString(),
-                "--url", stowUrl));
-        String token = props.getDicomweb().getBearerToken();
-        if (token != null && !token.isBlank()) {
-            cmd.add("--bearer");
-            cmd.add(token);
-        }
-        cmd.add(dir.toString());
-        Dcm4cheTools.Result r = tools.run(cmd, TOOL_TIMEOUT_MS);
-        if (!r.ok()) {
-            throw new IOException("stowrs 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
-        }
-        log.info("STOW-RS 完了: {} -> {}", dir, stowUrl);
     }
 
     /** TLS が設定済みなら getscu/movescu 用の TLS 引数を返す（鍵/信頼ストア + cipher/protocol）。 */
