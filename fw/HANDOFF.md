@@ -72,6 +72,9 @@ GRAPHY-Next/
     `ComplexImageComponent`(MAGNITUDE/PHASE/REAL/IMAGINARY→"Complex" 数値コード)。`T_TAGS`/`C_TAGS` 参照。
   - **Siemens MOSAIC 対応（GRAPHY Praparat 準拠 / Cornerstone は非対応なので自前デモザイク）**:
     `DicomStorageService.mosaicLayoutIfApplicable` が `ImageType` に MOSAIC を含むシリーズを検出。
+    **判定は ImageType に MOSAIC があることが必須**（`NumberOfImagesInMosaic(0019,100a)` 私的タグの
+    有無だけでは発火しない）。localizer 等が当該私的タグを持つ／creator ブロック走査が誤検出する場合の
+    誤デモザイク（例: 位置決め 5 枚が Z=53×T=5 と誤認）を防ぐ。frame 配信(`frameDicom`)の分岐も同条件。
     N=`NumberOfImagesInMosaic(0019,100a)`、grid=ceil(√N)、tile=Cols/grid×Rows/grid。
     **各モザイク=1時相、N タイル=Z スライス → Z×T 4D**（nC=1, tDim=Temporal）。
     per-tile IPP = mosaicIPP + index·spacing·normal。タイル配信は `mosaicTileDicom`＋

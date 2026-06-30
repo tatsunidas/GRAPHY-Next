@@ -91,6 +91,7 @@ function PatientsTab({
   const { t } = useI18n();
   const [q, setQ] = useState("");
   const [patients, setPatients] = useState<Patient[] | null>(null);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // ドリルダウン（Patient → Study → Series）
@@ -108,17 +109,23 @@ function PatientsTab({
 
   const reload = (query: string) => {
     setError(null);
-    fetchPatients(query)
-      .then((ps) => {
-        setPatients(ps);
-        // 開いている患者のスタディは再取得（件数/移動を反映）
-        setStudiesByPatient(new Map());
-        setSeriesByStudy(new Map());
-      })
-      .catch((e: unknown) => setError(String(e)));
+    setStudiesByPatient(new Map());
+    setSeriesByStudy(new Map());
+    setExpandedPatients(new Set());
+    setExpandedStudies(new Set());
+    // 全件取得は処理容量上危険なため、検索語が空のときは取得しない（初期は非表示）。
+    const qq = query.trim();
+    if (!qq) {
+      setPatients(null);
+      return;
+    }
+    setLoading(true);
+    fetchPatients(qq)
+      .then((ps) => setPatients(ps))
+      .catch((e: unknown) => setError(String(e)))
+      .finally(() => setLoading(false));
   };
-
-  useEffect(() => reload(""), []);
+  // 開いた直後は自動取得しない（検索を促す）。
 
   const togglePatient = async (pid: string) => {
     const next = new Set(expandedPatients);
@@ -225,10 +232,11 @@ function PatientsTab({
       </div>
 
       {error && <div style={{ color: "#b00020", marginBottom: 8 }}>{error}</div>}
-      {!patients && <div>{t("common.loading")}</div>}
-      {patients && patients.length === 0 && <div style={{ color: "#666" }}>{t("dbadmin.patients.empty")}</div>}
+      {loading && <div>{t("common.loading")}</div>}
+      {!loading && !patients && <div style={{ color: "#888" }}>{t("dbadmin.searchPrompt")}</div>}
+      {!loading && patients && patients.length === 0 && <div style={{ color: "#666" }}>{t("dbadmin.patients.empty")}</div>}
 
-      {patients && patients.length > 0 && (
+      {!loading && patients && patients.length > 0 && (
         <div style={{ fontSize: 13 }}>
           {patients.map((p) => {
             const pExpanded = expandedPatients.has(p.patientId);

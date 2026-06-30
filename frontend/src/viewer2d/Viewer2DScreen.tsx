@@ -533,13 +533,16 @@ function TileGrid({
   const n = patient.tiles.length;
   const cols = patient.gridCols > 0 ? patient.gridCols : autoTileCols(n);
 
-  // シリーズ Sync: 最後に送信されたスライスイベント { z, nZ, sourceId }
-  const [syncEvent, setSyncEvent] = useState<{ z: number; nZ: number; sourceId: string } | null>(null);
-
   // 各タイルが現在表示中の C/T インデックス（tileId → {c,t}）。
   // Fusion で「ドロップ元タイルで表示中の C/T スタック」を引き継ぐために参照する。
   const tileDimsRef = useRef<Map<string, { c: number; t: number }>>(new Map());
 
+  // リファレンスライン表示の ON/OFF（このタブ内の全タイルに適用）。
+  const [refLines, setRefLines] = useState(false);
+
+  // シリーズ Sync は SeriesViewer がグローバル coordinator（sliceSync）＋
+  // Cornerstone synchronizer（表示状態）で直接連動する。ここでは Sync ON 枚数のみ把握し、
+  // 2 枚以上で枠線ハイライト（実同期の成立判定は coordinator 側）。
   const syncedCount = useMemo(
     () => patient.tiles.filter((t) => t.syncEnabled).length,
     [patient.tiles],
@@ -634,6 +637,20 @@ function TileGrid({
         <span style={{ fontSize: 12, color: "#9aa6b2" }}>
           {t("viewer2d.tileCount", { n })}
         </span>
+        <button
+          onClick={() => setRefLines((v) => !v)}
+          aria-pressed={refLines}
+          style={{
+            ...selectStyle,
+            cursor: "pointer",
+            color: refLines ? "#fff" : "#33404d",
+            background: refLines ? "#0b5cad" : "#fff",
+            border: refLines ? "1px solid #0b5cad" : "1px solid #cdd5de",
+          }}
+          title={t("viewer2d.refLines.toggle")}
+        >
+          ┼ {t("viewer2d.refLines.label")}
+        </button>
         {isSyncActive && (
           <span style={{ fontSize: 11, color: "#0b5cad", marginLeft: "auto" }}>
             🔗 {t("viewer2d.sync.active")}
@@ -651,35 +668,22 @@ function TileGrid({
           overflowY: "auto",
         }}
       >
-        {patient.tiles.map((tile) => {
-          // このタイルが sync 受信すべきスライスイベントを決定。
-          // 自分が発火源（sourceId === tile.id）の場合は受信しない（ループ防止）。
-          const syncSlice =
-            isSyncActive && tile.syncEnabled && syncEvent && syncEvent.sourceId !== tile.id
-              ? { z: syncEvent.z, nZ: syncEvent.nZ }
-              : null;
-
-          return (
-            <TileCell
-              key={tile.id}
-              tile={tile}
-              mode={mode}
-              patientKey={patient.patientKey}
-              syncActive={isSyncActive && tile.syncEnabled}
-              syncSlice={syncSlice}
-              onRemove={() => onRemoveTile(patient.patientKey, tile.id)}
-              onSyncToggle={() => onSetSync(patient.patientKey, tile.id, !tile.syncEnabled)}
-              onSliceChange={(z, nZ) => {
-                if (tile.syncEnabled && isSyncActive) {
-                  setSyncEvent({ z, nZ, sourceId: tile.id });
-                }
-              }}
-              onFusionChange={(overlay) => onSetFusion(patient.patientKey, tile.id, overlay)}
-              onDimChange={(c, tIdx) => tileDimsRef.current.set(tile.id, { c, t: tIdx })}
-              onDrop={handleDrop}
-            />
-          );
-        })}
+        {patient.tiles.map((tile) => (
+          <TileCell
+            key={tile.id}
+            tile={tile}
+            mode={mode}
+            patientKey={patient.patientKey}
+            syncActive={isSyncActive && tile.syncEnabled}
+            syncEnabled={tile.syncEnabled}
+            referenceLinesEnabled={refLines}
+            onRemove={() => onRemoveTile(patient.patientKey, tile.id)}
+            onSyncToggle={() => onSetSync(patient.patientKey, tile.id, !tile.syncEnabled)}
+            onFusionChange={(overlay) => onSetFusion(patient.patientKey, tile.id, overlay)}
+            onDimChange={(c, tIdx) => tileDimsRef.current.set(tile.id, { c, t: tIdx })}
+            onDrop={handleDrop}
+          />
+        ))}
       </div>
     </div>
   );
@@ -692,10 +696,10 @@ function TileCell({
   mode,
   patientKey,
   syncActive,
-  syncSlice,
+  syncEnabled,
+  referenceLinesEnabled,
   onRemove,
   onSyncToggle,
-  onSliceChange,
   onFusionChange,
   onDimChange,
   onDrop,
@@ -704,10 +708,10 @@ function TileCell({
   mode: "standalone" | "web";
   patientKey: string;
   syncActive: boolean;
-  syncSlice: { z: number; nZ: number } | null;
+  syncEnabled: boolean;
+  referenceLinesEnabled: boolean;
   onRemove: () => void;
   onSyncToggle: () => void;
-  onSliceChange: (z: number, nZ: number) => void;
   onFusionChange: (overlay: FusionOverlay | undefined) => void;
   onDimChange: (c: number, t: number) => void;
   onDrop: (targetTileId: string, zone: "before" | "after" | "center" | "none") => void;
@@ -741,15 +745,6 @@ function TileCell({
     `#${tile.series.seriesNumber ?? "?"} ${tile.series.modality ?? ""}`.trim();
   const dateLabel = tile.study.studyDate || "";
   const studyDesc = tile.study.studyDescription || "";
-
-  // ベースビューアのスライス変化を受け取る安定したコールバック（タイル Sync 通知用）。
-  // Fusion オーバーレイへの base 情報（imageId/index/rect）は Viewer2D の renderOverlay 経由で渡る。
-  const handleBaseSliceChange = useCallback(
-    (z: number, nZ: number) => {
-      onSliceChange(z, nZ);
-    },
-    [onSliceChange],
-  );
 
   // Fusion オーバーレイ描画。base 画像の表示矩形(rect)・現在スライス(imageId/index)に重ねる。
   // useMemo で安定化（毎レンダ別関数だと Viewer2D 側の rect 初期計算 effect がループするため）。
@@ -898,7 +893,7 @@ function TileCell({
           style={{
             ...xbtn,
             color: tile.syncEnabled ? "#0b5cad" : "#8a98a6",
-            borderColor: tile.syncEnabled ? "#b0cce8" : "#cdd5de",
+            border: tile.syncEnabled ? "1px solid #b0cce8" : "1px solid #cdd5de",
             background: tile.syncEnabled ? "#eef4fc" : "#fff",
             fontSize: 14,
             lineHeight: 1,
@@ -922,8 +917,9 @@ function TileCell({
             studyUid={tile.study.studyInstanceUid}
             seriesUid={tile.series.seriesInstanceUid}
             fillHeight
-            syncSlice={syncSlice}
-            onSliceChange={handleBaseSliceChange}
+            syncEnabled={syncEnabled}
+            referenceLinesEnabled={referenceLinesEnabled}
+            referenceLabel={seriesLabel}
             onDimChange={onDimChange}
             renderFusionOverlay={renderFusionOverlay}
           />
@@ -1342,7 +1338,7 @@ function StudyNode({
                 style={{
                   ...addBtn,
                   ...(loaded
-                    ? { color: "#0b5cad", borderColor: "#b0cce8", background: "#eef4fc" }
+                    ? { color: "#0b5cad", border: "1px solid #b0cce8", background: "#eef4fc" }
                     : {}),
                 }}
                 title={loaded ? "表示中" : "タイルに追加"}
@@ -1481,8 +1477,8 @@ const tabItem: React.CSSProperties = {
 };
 const tabItemActive: React.CSSProperties = {
   background: "#fff",
-  borderColor: "#b0bcc8",
-  borderBottomColor: "#fff",
+  border: "1px solid #b0bcc8",
+  borderBottom: "1px solid #fff",
   marginBottom: -2,
 };
 const tabLabel: React.CSSProperties = {

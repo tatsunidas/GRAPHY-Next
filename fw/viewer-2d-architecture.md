@@ -108,6 +108,9 @@ zoom / pan / flip(上下左右) / rotation は **Cornerstone3D の ViewPresentat
   - backend `SeriesLayoutBuilder`（純アルゴリズム・単体テスト6件）＋ `seriesLayout()`（ヘッダ読取）
     → `GET /api/studies/{study}/series/{series}/layout`。
   - **Z** = IPP を IOP 法線へ投影（無ければ SliceLocation/InstanceNumber）。
+  - **複数オリエンテーション（3-plane localizer/scout 等）**: IOP が混在するシリーズは空間ボリュームでは
+    ないため、zpos（=IPP·各自の法線で軸が異なり無意味）でソートせず **instance 順の純スタック**にする
+    （zSpatial も付与しない）。これで fallback と並びが一致し、レイアウト確定時の Viewer2D 再 init／部分表示を防ぐ。
   - **T** = TemporalPositionIdentifier(0020,0100) / TriggerTime(0018,1060)。
   - **C** = EchoNumbers(0018,0086) / DiffusionBValue(0018,9087) / EchoTime。DICOM の「channel」は
     WSI の OpticalPathSequence のみのため、放射線では追加次元として解釈。

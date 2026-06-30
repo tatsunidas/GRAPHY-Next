@@ -8,6 +8,7 @@ import { ToolGroupManager } from "@cornerstonejs/tools";
 import { Viewer2D, ENGINE_ID, type ViewerOverlays, type RenderOverlay } from "./Viewer2D";
 import { applyTransform, readTransform, FIT_TRANSFORM } from "./transform";
 import { buildSeriesLayout, buildLayoutFromDto, type SeriesLayout } from "./seriesLayout";
+import { registerSliceSync, publishSlice, setSliceSyncConfig } from "./sliceSync";
 import { imageIdForInstance, type ViewerMode } from "./imageId";
 import { matchesCombo } from "../shortcuts/registry";
 import { fetchSeriesLayout, type Instance } from "../api";
@@ -43,8 +44,9 @@ export function SeriesViewer({
   studyUid,
   seriesUid,
   fillHeight = false,
-  syncSlice,
-  onSliceChange,
+  syncEnabled = false,
+  referenceLinesEnabled = false,
+  referenceLabel,
   onDimChange,
   renderFusionOverlay,
 }: {
@@ -54,10 +56,12 @@ export function SeriesViewer({
   seriesUid: string;
   /** タイル表示用: 親コンテナの高さに追従する（flex:1 レイアウト）。 */
   fillHeight?: boolean;
-  /** Series Sync: 外部から受け取る比例スライス位置。自分が発火源のときは null。 */
-  syncSlice?: { z: number; nZ: number } | null;
-  /** Series Sync / Fusion: スライス変化を上位に通知するコールバック。imageId は現在スライスの Cornerstone3D imageId。 */
-  onSliceChange?: (z: number, nZ: number, imageId: string) => void;
+  /** シリーズ Sync: このタイルの Sync トグルが ON か。ON かつ SliderView 時のみ同期に参加。 */
+  syncEnabled?: boolean;
+  /** リファレンスライン: 他シリーズの現在スライス面の交差線をこのビューに描画する。 */
+  referenceLinesEnabled?: boolean;
+  /** リファレンスラインの凡例に使うシリーズ名。 */
+  referenceLabel?: string;
   /** 現在表示中の C/T インデックス変化を上位に通知（Fusion の初期 C/T 引き継ぎ用）。 */
   onDimChange?: (c: number, t: number) => void;
   /** Fusion オーバーレイ。スライダー表示時に base 画像へ重ねて描画する（GridView では無効）。 */
@@ -99,7 +103,10 @@ export function SeriesViewer({
     orientation: true,
     roi: false,
   });
-  const [playing, setPlaying] = useState(false);
+  // シネ再生は Z/C/T それぞれ独立。各次元のインデックスをループ送りする。
+  const [playZ, setPlayZ] = useState(false);
+  const [playC, setPlayC] = useState(false);
+  const [playT, setPlayT] = useState(false);
   // シネ速度は環境設定 viewer.cineFps から（既定 10）。
   const [fps, setFps] = useState(10);
   useEffect(() => {
@@ -107,6 +114,10 @@ export function SeriesViewer({
       .then((m) => {
         const v = Number(m["viewer.cineFps"]);
         if (Number.isFinite(v) && v >= 1) setFps(v);
+        // シリーズ Sync の方式（座標/単純）と許容半径(mm)をグローバル coordinator に反映。
+        const coord = m["viewer.coordinateSync"] !== "false"; // 既定 true
+        const margin = Number(m["viewer.coordinateSyncMargin"]);
+        setSliceSyncConfig(coord ? "coordinate" : "simple", Number.isFinite(margin) ? margin : 2.5);
       })
       .catch(() => {
         /* 既定のまま */
@@ -118,9 +129,6 @@ export function SeriesViewer({
   const tc = Math.min(Math.max(0, tIdx), layout.nT - 1);
   const zStack = layout.zStack(cc, tc);
   const nZ = zStack.length;
-  // Fusion コールバック用: zStack の最新値をエフェクト内で参照するためのリーフ。
-  const zStackRef = useRef(zStack);
-  zStackRef.current = zStack;
   const zc = Math.min(Math.max(0, z), nZ - 1);
 
   // マルチチャンネル / 動画(ビデオ UID) / スライス1枚 では GridView を無効化。
@@ -187,15 +195,23 @@ export function SeriesViewer({
     if (vp) applyTransform(vp, { zoom: readTransform(vp).zoom * f });
   };
 
-  // シネ再生（Z をループ送り）。
+  // シネ再生（各次元を独立してループ送り）。
+  const cineInterval = Math.max(16, Math.round(1000 / fps));
   useEffect(() => {
-    if (!playing || nZ <= 1) return;
-    const id = window.setInterval(
-      () => setZ((p) => (p + 1) % nZ),
-      Math.max(16, Math.round(1000 / fps)),
-    );
+    if (!playZ || nZ <= 1) return;
+    const id = window.setInterval(() => setZ((p) => (p + 1) % nZ), cineInterval);
     return () => window.clearInterval(id);
-  }, [playing, fps, nZ]);
+  }, [playZ, cineInterval, nZ]);
+  useEffect(() => {
+    if (!playC || layout.nC <= 1) return;
+    const id = window.setInterval(() => setC((p) => (p + 1) % layout.nC), cineInterval);
+    return () => window.clearInterval(id);
+  }, [playC, cineInterval, layout.nC]);
+  useEffect(() => {
+    if (!playT || layout.nT <= 1) return;
+    const id = window.setInterval(() => setTIdx((p) => (p + 1) % layout.nT), cineInterval);
+    return () => window.clearInterval(id);
+  }, [playT, cineInterval, layout.nT]);
 
   // キー操作（↑/→ で次、↓/← で前スライス）とホイール送り。Grid 中は無効（グリッドをスクロール）。
   const rootRef = useRef<HTMLDivElement>(null);
@@ -222,7 +238,7 @@ export function SeriesViewer({
         setZ(nZ - 1);
         e.preventDefault();
       } else if (matchesCombo("Space", e)) {
-        setPlaying((p) => !p);
+        setPlayZ((p) => !p);
         e.preventDefault();
       } else if (matchesCombo("O", e)) {
         setOverlays((o) => ({ ...o, text: !o.text }));
@@ -242,27 +258,45 @@ export function SeriesViewer({
   }, [nZ, gridOn]);
 
   // ── シリーズ Sync ─────────────────────────────────────────
+  //
+  // SliderView かつ Sync ON のとき、グローバル coordinator（sliceSync）に参加する。
+  // ユーザー操作でスライスが動いたら publishSlice し、他タイルへ座標/単純同期で伝播する。
+  // coordinator からの移動（applyIndex）は syncDrivenRef で再 publish を抑止（ループ防止）。
 
-  // 受信した syncSlice に比例するスライス位置へ移動する。
-  // ループ防止: setZ を呼ぶ前に syncDrivenRef を立て、onSliceChange コールバック側で落とす。
   const syncDrivenRef = useRef(false);
+  const sliceSyncId = useMemo(() => `slicesync-${rawId.replace(/[^a-zA-Z0-9]/g, "")}`, [rawId]);
+  // getState/applyIndex が常に最新値を参照するためのリーフ。
+  const nZRef = useRef(nZ); nZRef.current = nZ;
+  const zcRef = useRef(zc); zcRef.current = zc;
+  const layoutRef = useRef(layout); layoutRef.current = layout;
 
+  const syncOn = syncEnabled && !gridOn;
   useEffect(() => {
-    if (!syncSlice || syncSlice.nZ <= 0 || nZ <= 0) return;
-    const frac = syncSlice.z / Math.max(1, syncSlice.nZ - 1);
-    const targetZ = Math.round(frac * Math.max(0, nZ - 1));
-    syncDrivenRef.current = true;
-    setZ(Math.max(0, Math.min(nZ - 1, targetZ)));
-  }, [syncSlice, nZ]);
+    if (!syncOn) return;
+    const unregister = registerSliceSync({
+      id: sliceSyncId,
+      getState: () => {
+        const n = nZRef.current;
+        const lay = layoutRef.current;
+        const ipps = Array.from({ length: n }, (_, z) => lay.ippAt?.(z) ?? null);
+        return { index: zcRef.current, nZ: n, ipps };
+      },
+      applyIndex: (z) => {
+        syncDrivenRef.current = true;
+        setZ(z);
+      },
+    });
+    return unregister;
+  }, [syncOn, sliceSyncId]);
 
-  // スライス変化を上位に通知する。Sync 受信によって動いた場合は通知しない（ループ防止）。
+  // スライス変化を coordinator に publish。Sync 受信由来（syncDrivenRef）は再 publish しない。
   useEffect(() => {
     if (syncDrivenRef.current) {
       syncDrivenRef.current = false;
       return;
     }
-    onSliceChange?.(zc, nZ, zStackRef.current[zc] ?? "");
-  }, [zc, nZ, onSliceChange]);
+    if (syncOn) publishSlice(sliceSyncId);
+  }, [zc, nZ, syncOn, sliceSyncId]);
 
   // 現在表示中の C/T を上位へ通知（Fusion の初期 C/T 引き継ぎ用）。
   useEffect(() => {
@@ -270,6 +304,13 @@ export function SeriesViewer({
   }, [cc, tc, onDimChange]);
 
   const toggle = (k: keyof OverlayState) => setOverlays((o) => ({ ...o, [k]: !o[k] }));
+
+  // 各次元スライダー横のシネ再生ボタン（▶/⏸）。
+  const cinePlayBtn = (on: boolean, onToggle: () => void, disabled: boolean) => (
+    <button onClick={onToggle} disabled={disabled} style={btn} title={t("series.cine")}>
+      {on ? "⏸" : "▶"}
+    </button>
+  );
 
   return (
     <div ref={rootRef} tabIndex={0} style={fillHeight ? { ...root, flex: 1, display: "flex", flexDirection: "column", minHeight: 0 } : root}>
@@ -292,7 +333,7 @@ export function SeriesViewer({
           </div>
         </div>
       ) : (
-        <Viewer2D imageIds={zStack} imageIndex={zc} overlays={overlays} fill={fillHeight} renderOverlay={renderFusionOverlay} />
+        <Viewer2D imageIds={zStack} imageIndex={zc} overlays={overlays} fill={fillHeight} viewSyncEnabled={syncOn} referenceLinesEnabled={referenceLinesEnabled} referenceLabel={referenceLabel} renderOverlay={renderFusionOverlay} />
       )}
 
       <div style={controls}>
@@ -314,7 +355,7 @@ export function SeriesViewer({
           </div>
         )}
 
-        {/* スライダー/シネは Slider モードのみ表示（Grid 中は非表示）。再生ボタンは Z スライダー横。 */}
+        {/* スライダー/シネは Slider モードのみ表示（Grid 中は非表示）。各次元に独立した再生ボタン。 */}
         {!gridOn && (
           <>
             <DimSlider
@@ -322,14 +363,28 @@ export function SeriesViewer({
               idx={zc}
               count={nZ}
               onChange={setZ}
-              trailing={
-                <button onClick={() => setPlaying((p) => !p)} disabled={nZ <= 1} style={btn} title={t("series.cine")}>
-                  {playing ? "⏸" : "▶"}
-                </button>
-              }
+              trailing={cinePlayBtn(playZ, () => setPlayZ((p) => !p), nZ <= 1)}
             />
-            {layout.nC > 1 && <DimSlider label="C" dim={layout.cDimension} idx={cc} count={layout.nC} onChange={setC} />}
-            {layout.nT > 1 && <DimSlider label="T" dim={layout.tDimension} idx={tc} count={layout.nT} onChange={setTIdx} />}
+            {layout.nC > 1 && (
+              <DimSlider
+                label="C"
+                dim={layout.cDimension}
+                idx={cc}
+                count={layout.nC}
+                onChange={setC}
+                trailing={cinePlayBtn(playC, () => setPlayC((p) => !p), layout.nC <= 1)}
+              />
+            )}
+            {layout.nT > 1 && (
+              <DimSlider
+                label="T"
+                dim={layout.tDimension}
+                idx={tc}
+                count={layout.nT}
+                onChange={setTIdx}
+                trailing={cinePlayBtn(playT, () => setPlayT((p) => !p), layout.nT <= 1)}
+              />
+            )}
           </>
         )}
 

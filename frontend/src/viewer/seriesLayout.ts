@@ -19,6 +19,8 @@ export interface SeriesLayout {
   tDimension?: string | null;
   /** 指定 (c, t) に対する Z スタック（imageId 配列, z 昇順）。 */
   zStack(c: number, t: number): string[];
+  /** 指定 Z の物理座標 IPP（無ければ null）。シリーズ Sync の座標同期に使う。 */
+  ippAt?(z: number): [number, number, number] | null;
 }
 
 /** 単一次元フォールバック（nC=nT=1, nZ=スライス数）。backend 未取得時に使用。 */
@@ -77,5 +79,6 @@ export function buildLayoutFromDto(
       }
       return out;
     },
+    ippAt: (z) => ippByZ.get(z) ?? null,
   };
 }

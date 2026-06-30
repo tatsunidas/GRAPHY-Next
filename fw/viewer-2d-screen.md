@@ -83,25 +83,65 @@ CSS `gridTemplateColumns: repeat(cols, minmax(0, 1fr))` で自動配置。最終
 
 ---
 
-## 同期機能（次フェーズ計画）
+## シリーズ Sync（実装済み）
 
-### 表示状態 Sync（Phase 2-a）
-camera/VOI Synchronizer（GridView で実装済み `sync.ts`）を流用し、タイル間でリンク。
+各タイルヘッダの 🔗 トグル（`tile.syncEnabled`）が ON のタイル同士を連動させる。2 枚以上で成立。
+同期集合は**グローバル**（モジュール coordinator ＋ Cornerstone synchronizer）で、スタディ跨ぎ可
+（患者跨ぎは複数タブ同時表示の将来対応時に自動で効く。現状 UI はアクティブ 1 患者タブのみ表示）。
+対象は **SliderView の base ビューポート**のみ（GridView セル・compact は非参加）。設計詳細は `series-sync-design.md`。
 
-### スライス空間同期（Phase 2-b）
-- 各シリーズの ImagePositionPatient を IOP 法線へ投影した**患者座標 Z(mm)** で対応付け。
-- スライス枚数・厚み・開始位置が**異なるシリーズでも正しく**連動（最近傍スライスへジャンプ）。
-- `synchronizers.createImageSliceSynchronizer`（stack image 同期）や FoR ベースのカスタム同期を利用。
+### A. スライス位置同期 — 自前 coordinator（`viewer/sliceSync.ts`）
+`SeriesViewer` が Sync ON 時に `registerSliceSync` で参加。ユーザー操作のスライス変化で `publishSlice`。
+coordinator が設定モードに応じて各フォロワーの目標 Z を算出し移動（`applyIndex`）。Sync 受信由来の
+移動は `syncDrivenRef` で再 publish 抑止（ループ防止）。
 
-### 同期モード 3 種
-| モード | 説明 |
-|---|---|
-| Off | 各シリーズ独立。 |
-| Absolute（空間） | mm 位置で揃える（既定）。 |
-| Relative（相対オフセット） | 同期 On 時の各シリーズ位置を基準に、以降は**同じ δ だけ全シリーズを送る**。「任意スライスから揃えて送りたい」を Off にせず実現。 |
+| モード | 設定 | 動作 |
+|---|---|---|
+| 座標同期 | `viewer.coordinateSync = true`（既定） | source の現在 IPP に **3D 距離最近傍**の Z を選択。最近傍距離 ≤ `viewer.coordinateSyncMargin`(mm, 既定 2.5=±2.5mm) なら移動、超過は不動。IPP 欠落シリーズは単純へフォールバック。 |
+| 単純同期 | `viewer.coordinateSync = false` | source の **Δindex** を各フォロワーへ同量加算（clamp）。初期オフセットを保持（任意位置から揃えて送る用途）。 |
 
-### リファレンスライン（Phase 3）
-Cornerstone `ReferenceLinesTool`: ソース面が他ビューポートに交差する線を描画。FoR が一致するシリーズ間で有効。
+IPP は `SeriesLayout.ippAt(z)`（backend `zSpatial` 由来）から取得。
+
+### B. 表示状態同期 — Cornerstone synchronizer（`viewer/sync.ts`）
+`Viewer2D` が `viewSyncEnabled` で base ビューポートをグローバル synchronizer に add/remove。
+
+| 同期内容 | synchronizer | グローバル ID |
+|---|---|---|
+| Zoom / Pan / Rotation / Flip | `createPresentationViewSynchronizer`（**相対** zoom。異サイズ/FOV でも破綻しない） | `graphy-series:pres` |
+| W/L + Invert + LUT(colormap) | `createVOISynchronizer({syncInvertState:true, syncColormap:true})` | `graphy-series:voi` |
+
+### Settings（`settings/registry.ts` viewer カテゴリ「シリーズ Sync」）
+- `viewer.coordinateSync`（toggle, 既定 true）: 座標同期 / 単純同期の切替。
+- `viewer.coordinateSyncMargin`（number mm, 既定 2.5）: 座標同期の許容半径。
+
+### 制限・備考
+- C/T 次元は同期しない（Z と表示状態のみ）。
+- GridView 中タイルは Sync 非参加。
+- 非共平面（軸位 vs 矢状）は 3D 距離＋マージンで暴走防止のみ（厳密対応断面ではない）。
+- 設定変更は SeriesViewer マウント時に反映（即時反映は将来対応）。
+
+## リファレンスライン（実装済み）
+
+TileGrid 上部の「参照線」トグル（`refLines`）で ON/OFF。**現在表示中の各シリーズ（base SliderView）の
+スライス面が、他シリーズの表示面と交差する線**を SVG オーバーレイで描画する（all-to-all・**ZCT 追従**）。
+
+### アーキテクチャ（`viewer/referenceLines.ts`）
+Cornerstone3D の `ReferenceLinesTool` は **単一 source→他全部・共有 toolGroup 前提**で、タイル毎に
+toolGroup を分けて W/L 等を独立バインドする本アプリの all-to-all には合わない。そこで **core の幾何
+ユーティリティのみ流用**し、DOM/SVG で自前描画する。
+
+- グローバル登録: 各 base `Viewer2D` が source として `registerReferenceSource({id, label, getViewport})`。
+- 面変化通知: スライス送り（ZCT 変更含む）/ camera 変更（pan/zoom/回転）で `bumpReference()` → 全 target が再計算。
+- 幾何（`computeReferenceSegments`）: `utilities.getViewportImageCornersInWorld(source)` で source 画像矩形を取得し、
+  `utilities.planar.planeEquation(targetNormal, targetFocal)` の target 平面に対し、source 矩形の左右辺（必要に応じ上下辺）を
+  `linePlaneIntersection` で交差させた 2 点を `worldToCanvas` → 線分（source FOV に収まる弦）。`ReferenceLinesTool.renderAnnotation` と同等。
+- **同一 FrameOfReference のみ**描画。平行（同一/コプレーナ）面は交線なしで非表示。
+- 色は source ごとに固定パレット割当、線の中点付近にシリーズ名ラベル。
+
+### 制限・備考
+- SliderView base のみ（GridView セル・compact は対象外）。
+- 設定（マージン等）不要（交差線そのものを描く）。`showFullDimension` 相当の target 画像端までの延長は未実装（source FOV 弦のみ）。
+- FoR が異なるシリーズ間（別患者・別 study で FoR 不一致）は描画しない。
 
 ---
 
@@ -154,10 +194,10 @@ CSS Grid の `grid-template-columns` をドラッグで調整。各列の幅を 
 | Phase | 内容 | 状態 |
 |---|---|---|
 | 1 | 骨組み（患者タブ・自動レイアウト・左パネル） | ✅ 実装済み |
-| 2a | 表示状態 Sync（camera/VOI、`sync.ts` 流用） | 未実装 |
-| 2b | スライス空間同期（FoR/IPP mm 位置） | 未実装 |
-| 2c | Relative モード | 未実装 |
-| 3 | リファレンスライン（ReferenceLinesTool） | 未実装 |
+| 2a | 表示状態 Sync（presentation/VOI synchronizer、W/L・Zoom・Pan・回転・反転・LUT） | ✅ 実装済み |
+| 2b | スライス位置同期（座標=IPP 3D 距離＋マージン） | ✅ 実装済み |
+| 2c | 単純同期（Δindex 相対オフセット） | ✅ 実装済み |
+| 3 | リファレンスライン（core 幾何流用・自前 SVG・all-to-all・ZCT 追従） | ✅ 実装済み |
 | 4 | ツールバー（ROI ツール/マネージャ・MPR/3D/Slicer 起動配線） | 未実装 |
 | FW | DAD（ドラッグ＆ドロップ・Fusion・タイル移動） | 設計のみ |
 | FW | レイアウト変更 UI（プリセットパレット・リサイズハンドル） | 設計のみ |

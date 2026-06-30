@@ -16,7 +16,8 @@ import { applyTransform, isPanned, readTransform, type ViewTransform, FIT_TRANSF
 import { readImageInfo, sampleAtCanvas, computeSliceSpacing, type ImageInfo, type PixelSample } from "./imageInfo";
 import { computeOrientationMarkers, type OrientationMarkers } from "./orientation";
 import { computeScaleBar, type ScaleBar } from "./scaleBar";
-import { getOrCreateCameraSync, getOrCreateVoiSync } from "./sync";
+import { getOrCreateCameraSync, getOrCreateVoiSync, getOrCreatePresentationSync, getOrCreateSeriesVoiSync } from "./sync";
+import { registerReferenceSource, bumpReference, subscribeReference, computeReferenceSegments, type RefSegment } from "./referenceLines";
 import { resolveOverlay } from "./overlayText";
 import { useOverlayConfig } from "./overlayConfig";
 import { ImageInfoPanel } from "./ImageInfoPanel";
@@ -127,6 +128,9 @@ export function Viewer2D({
   height,
   fill,
   syncGroupId,
+  viewSyncEnabled,
+  referenceLinesEnabled,
+  referenceLabel,
   renderOverlay,
 }: {
   imageIds: string[];
@@ -140,6 +144,13 @@ export function Viewer2D({
   fill?: boolean;
   /** 指定すると、共有ツールグループ＋camera/VOI 同期に参加（GridView リンク）。 */
   syncGroupId?: string;
+  /** シリーズ Sync: true で base ビューポートをグローバル presentation+VOI synchronizer に参加させ、
+   *  他タイルと W/L・Zoom・Pan・Rotation・Flip・Invert・LUT を連動させる（SliderView base 専用）。 */
+  viewSyncEnabled?: boolean;
+  /** リファレンスライン: true で他シリーズの現在スライス面が交差する線をこのビューに描画する。 */
+  referenceLinesEnabled?: boolean;
+  /** リファレンスラインのラベル（このシリーズ名。他ビューに描かれる線の凡例に使う）。 */
+  referenceLabel?: string;
   /** Fusion 等のオーバーレイを base 画像に重ねて描く。base 画像の表示矩形に追従する。 */
   renderOverlay?: RenderOverlay;
 }) {
@@ -182,6 +193,23 @@ export function Viewer2D({
   const [inverted, setInverted] = useState(false);
   // Pan モード: ON で左ドラッグ=パン、OFF で左ドラッグ=W/L。中ドラッグは常にパン、右はズーム。
   const [panMode, setPanMode] = useState(false);
+  // リファレンスライン: 他シリーズの現在スライス面がこのビューと交差する線分（CSS px）。
+  const [refSegments, setRefSegments] = useState<RefSegment[]>([]);
+  const refLinesEnabledRef = useRef(referenceLinesEnabled);
+  refLinesEnabledRef.current = referenceLinesEnabled;
+  // onCameraModified（init effect 内・stackKey 依存）から最新の再計算関数を呼ぶための間接参照。
+  const recomputeRefLinesRef = useRef<() => void>(() => {});
+
+  /** このビューに描く他シリーズの参照線分を再計算する。enabled でなければクリア。 */
+  const recomputeRefLines = useCallback(() => {
+    const v = viewportRef.current;
+    if (!v || !refLinesEnabledRef.current) {
+      setRefSegments((prev) => (prev.length ? [] : prev));
+      return;
+    }
+    setRefSegments(computeReferenceSegments(viewportIdRef.current, v));
+  }, []);
+  recomputeRefLinesRef.current = recomputeRefLines;
 
   /** 左ドラッグの割り当てを Pan↔W/L で切り替える。 */
   const togglePan = () => {
@@ -368,6 +396,11 @@ export function Viewer2D({
       const calibrated = Boolean(infoRef.current?.columnPixelSpacing);
       setScaleBar(computeScaleBar(vp, element, calibrated));
       if (renderOverlayRef.current) setImageRect(computeImageRect(vp)); // Fusion 等のオーバーレイ位置追従
+      // リファレンスライン: 自分の面変化を他へ通知し、自分の描画も更新（pan/zoom/回転で追従）。
+      if (!compact && !syncGroupId) {
+        bumpReference();
+        recomputeRefLinesRef.current();
+      }
       if (!compact) scheduleCapture(); // Undo/Redo 履歴（操作確定後にデバウンス）
     };
 
@@ -556,6 +589,11 @@ export function Viewer2D({
         const merged = { ...base, sliceSpacing: prev?.sliceSpacing, sliceSpacingSource: prev?.sliceSpacingSource };
         infoRef.current = merged;
         setInfo(merged);
+        // リファレンスライン: スライスが変わると面も変わるので他へ通知し自分も更新（ZCT 追従）。
+        if (!compact && !syncGroupId) {
+          bumpReference();
+          recomputeRefLinesRef.current();
+        }
       } catch {
         // スライス切替の競合・例外時はフォールバックとして再フィット＋再描画を試みる
         // （まれに描画が崩れて真っ黒になるのを復帰させる）。
@@ -581,6 +619,48 @@ export function Viewer2D({
     const vp = viewportRef.current;
     if (vp) setImageRect(computeImageRect(vp));
   }, [renderOverlay]);
+
+  // リファレンスライン: base ビューポートを source として常時登録（他ビューが参照）。
+  // ラベル（シリーズ名）変化・再構築で再登録。SliderView base のみ。
+  useEffect(() => {
+    if (compact || syncGroupId) return;
+    const unregister = registerReferenceSource({
+      id: viewportIdRef.current,
+      label: referenceLabel ?? "",
+      getViewport: () => viewportRef.current,
+    });
+    return unregister;
+  }, [compact, syncGroupId, referenceLabel]);
+
+  // リファレンスライン: 他 source の面変化を購読し、自分の描画を更新する。
+  useEffect(() => {
+    if (compact || syncGroupId) return;
+    const unsub = subscribeReference(() => recomputeRefLinesRef.current());
+    return unsub;
+  }, [compact, syncGroupId]);
+
+  // リファレンスライン: トグル変化・初期化完了で再計算（自分が target としての描画）。
+  useEffect(() => {
+    recomputeRefLines();
+  }, [referenceLinesEnabled, loading, stackKey, recomputeRefLines]);
+
+  // シリーズ Sync（表示状態）: base ビューポートをグローバル presentation+VOI synchronizer に
+  // add/remove する。SliderView base のみ（compact/grid セルは対象外）。viewSyncEnabled と
+  // 初期化完了(loading)・スタック再構築(stackKey)に追従する。
+  useEffect(() => {
+    if (compact || syncGroupId || !viewSyncEnabled || loading) return;
+    const vp = viewportRef.current;
+    if (!vp) return;
+    const target = { renderingEngineId: ENGINE_ID, viewportId: viewportIdRef.current };
+    const pres = getOrCreatePresentationSync("graphy-series:pres");
+    const voi = getOrCreateSeriesVoiSync("graphy-series:voi");
+    try { pres.add(target); } catch { /* 既参加なら無視 */ }
+    try { voi.add(target); } catch { /* 既参加なら無視 */ }
+    return () => {
+      try { pres.remove(target); } catch { /* 無ければ無視 */ }
+      try { voi.remove(target); } catch { /* 無ければ無視 */ }
+    };
+  }, [viewSyncEnabled, loading, compact, syncGroupId, stackKey]);
 
   // 画像表示用キーボード（スライダー単独表示のみ）: I=階調反転, Mod+Z=Undo, Mod+Shift+Z=Redo。
   useEffect(() => {
@@ -666,6 +746,25 @@ export function Viewer2D({
             index: imageIndex,
             count: imageIds.length,
           })}
+          {/* リファレンスライン: 他シリーズの現在スライス面がこのビューと交差する線。 */}
+          {referenceLinesEnabled && refSegments.length > 0 && (
+            <svg style={refLineSvg}>
+              {refSegments.map((s, i) => {
+                const mx = (s.x1 + s.x2) / 2;
+                const my = (s.y1 + s.y2) / 2;
+                return (
+                  <g key={i}>
+                    <line x1={s.x1} y1={s.y1} x2={s.x2} y2={s.y2} stroke={s.color} strokeWidth={1.5} strokeDasharray="5 4" opacity={0.9} />
+                    {s.label && (
+                      <text x={mx + 4} y={my - 4} fill={s.color} fontSize={11} style={refLineText}>
+                        {s.label}
+                      </text>
+                    )}
+                  </g>
+                );
+              })}
+            </svg>
+          )}
           {/* 患者の向き（A/P・R/L・H/F）。四辺に表示。pointer-events:none。 */}
           {ov.orientation && markers && (
             <>
@@ -888,6 +987,20 @@ const wrap: React.CSSProperties = {
   overflow: "hidden",
 };
 const pixelLayer: React.CSSProperties = { position: "absolute", inset: 0 };
+const refLineSvg: React.CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  width: "100%",
+  height: "100%",
+  pointerEvents: "none",
+  overflow: "visible",
+};
+const refLineText: React.CSSProperties = {
+  paintOrder: "stroke",
+  stroke: "#000",
+  strokeWidth: 2,
+  fontVariantNumeric: "tabular-nums",
+};
 const panBadge: React.CSSProperties = {
   padding: "1px 6px",
   borderRadius: 4,

@@ -117,6 +117,27 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
         ],
       },
       {
+        titleKey: "settings.sec.seriesSync",
+        fields: [
+          {
+            key: "viewer.coordinateSync",
+            labelKey: "settings.field.coordinateSync",
+            type: "toggle",
+            default: true,
+            helpKey: "settings.field.coordinateSync.help",
+          },
+          {
+            key: "viewer.coordinateSyncMargin",
+            labelKey: "settings.field.coordinateSyncMargin",
+            type: "number",
+            default: 2.5,
+            min: 0,
+            max: 100,
+            helpKey: "settings.field.coordinateSyncMargin.help",
+          },
+        ],
+      },
+      {
         titleKey: "settings.sec.fusion",
         fields: [
           {

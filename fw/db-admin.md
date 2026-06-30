@@ -113,5 +113,10 @@
    - frontend: `DbAdminDialog` のシリーズ行にチェックボックス＋「シリーズ統合」バー（≥2 選択）、`MergeSeriesForm`
      （統合先 SeriesNumber/Description）、`dbAdminApi.mergeSeries`、成功で `series-merge` 通知＋シリーズ再取得。
      i18n `dbadmin.merge.*`。
-3. **Phase 3**: シリーズ分割（手動選択）。
+3. **Phase 3（実装済）**: シリーズ分割（同一スタディ内 1→N・手動群・InstanceNumber 保持）。
+   - backend: `DbAdminService.splitSeries`（群ごとに新 SeriesUID、`relocateInstance` 共有ヘルパで move+書換+索引、
+     未割当は元シリーズに残す、SeriesNumber は `maxSeriesNumber+連番` 自動採番）、`POST /api/dbadmin/series/split`。
+     `DbAdminTest`(+1)。merge/split は `relocateInstance`/`rewriteSeriesToTemp` を共有。
+   - frontend: `DbAdminDialog` のシリーズ行に「シリーズ分割」（≥2 枚）、`SplitSeriesForm`（インスタンスを群へ割当・
+     群数 2–5・未割当は残す）、`dbAdminApi.splitSeries`、成功で `series-split` 通知＋シリーズ再取得。i18n `dbadmin.split.*`。
 4. **Phase 4**: 大量操作の進捗表示・整合性検証強化（属性分割・別スタディ移動は将来）。
