@@ -8,7 +8,18 @@
 //   CSP は wasm-unsafe-eval / worker-src blob: を許可済み（圧縮 TS はワーカ＋WASM でデコード）。
 import { init as coreInit } from "@cornerstonejs/core";
 import dicomImageLoader from "@cornerstonejs/dicom-image-loader";
-import { init as toolsInit, addTool, PanTool, ZoomTool, WindowLevelTool } from "@cornerstonejs/tools";
+import {
+  init as toolsInit,
+  addTool,
+  PanTool,
+  ZoomTool,
+  WindowLevelTool,
+  LengthTool,
+  AngleTool,
+  EllipticalROITool,
+  RectangleROITool,
+  ProbeTool,
+} from "@cornerstonejs/tools";
 
 let initPromise: Promise<void> | null = null;
 
@@ -25,6 +36,12 @@ export function ensureCornerstoneInitialized(): Promise<void> {
       addTool(PanTool);
       addTool(ZoomTool);
       addTool(WindowLevelTool);
+      // 計測（ROI）ツール。各 base ビューポートのツールグループへ後で追加し、setActiveTool で切替。
+      addTool(LengthTool);
+      addTool(AngleTool);
+      addTool(EllipticalROITool);
+      addTool(RectangleROITool);
+      addTool(ProbeTool);
     })();
   }
   return initPromise;
