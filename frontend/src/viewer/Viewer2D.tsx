@@ -63,6 +63,56 @@ export interface ViewerOverlays {
   orientation?: boolean;
 }
 
+/** 現在スライスの画像が画面上に描画されている矩形（wrap 内の CSS px）。 */
+export interface ImageRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/** renderOverlay に渡すコンテキスト（Fusion オーバーレイ等が base 画像に正確に重なるための情報）。 */
+export interface OverlayRenderContext {
+  /** base 画像の表示矩形。zoom/pan/fit/flip に追従。 */
+  rect: ImageRect;
+  /** 現在スライスの Cornerstone3D imageId（空間 Fusion 用）。 */
+  imageId: string;
+  /** 現在スライスのインデックスと総数（比例 Fusion フォールバック用）。 */
+  index: number;
+  count: number;
+}
+
+export type RenderOverlay = (ctx: OverlayRenderContext) => React.ReactNode;
+
+/**
+ * base ビューポートの画像表示矩形（wrap 内 CSS px）を算出する。
+ * 画像の四隅 index → world → canvas に変換した軸並行バウンディングボックス。
+ * （回転時は厳密でないが、fit/zoom/pan/flip には追従する）
+ */
+function computeImageRect(vp: Types.IStackViewport): ImageRect | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const imgData = vp.getImageData() as any;
+    const vtk = imgData?.imageData;
+    const dims = imgData?.dimensions;
+    if (!vtk || !dims) return null;
+    const cols = dims[0];
+    const rows = dims[1];
+    // ピクセル端（-0.5 .. dim-0.5）を画像の外形とする。
+    const tl = vp.worldToCanvas(utilities.transformIndexToWorld(vtk, [-0.5, -0.5, 0]));
+    const tr = vp.worldToCanvas(utilities.transformIndexToWorld(vtk, [cols - 0.5, -0.5, 0]));
+    const bl = vp.worldToCanvas(utilities.transformIndexToWorld(vtk, [-0.5, rows - 0.5, 0]));
+    const left = Math.min(tl[0], tr[0], bl[0]);
+    const top = Math.min(tl[1], tr[1], bl[1]);
+    const width = Math.max(Math.abs(tr[0] - tl[0]), Math.abs(bl[0] - tl[0]));
+    const height = Math.max(Math.abs(bl[1] - tl[1]), Math.abs(tr[1] - tl[1]));
+    if (!Number.isFinite(left) || !Number.isFinite(top) || width <= 0 || height <= 0) return null;
+    return { left, top, width, height };
+  } catch {
+    return null;
+  }
+}
+
 export function Viewer2D({
   imageIds,
   imageIndex,
@@ -71,6 +121,7 @@ export function Viewer2D({
   height,
   fill,
   syncGroupId,
+  renderOverlay,
 }: {
   imageIds: string[];
   imageIndex: number;
@@ -83,6 +134,8 @@ export function Viewer2D({
   fill?: boolean;
   /** 指定すると、共有ツールグループ＋camera/VOI 同期に参加（GridView リンク）。 */
   syncGroupId?: string;
+  /** Fusion 等のオーバーレイを base 画像に重ねて描く。base 画像の表示矩形に追従する。 */
+  renderOverlay?: RenderOverlay;
 }) {
   const { t } = useI18n();
   const ov = { text: true, caliper: true, orientation: true, ...overlays };
@@ -104,6 +157,11 @@ export function Viewer2D({
   const [sample, setSample] = useState<PixelSample | null>(null);
   const [markers, setMarkers] = useState<OrientationMarkers | null>(null);
   const [scaleBar, setScaleBar] = useState<ScaleBar | null>(null);
+  // base 画像の表示矩形（renderOverlay 用）。zoom/pan/fit に追従して更新。
+  const [imageRect, setImageRect] = useState<ImageRect | null>(null);
+  // onCameraModified の古いクロージャ問題を避けるため ref で最新の有無を参照。
+  const renderOverlayRef = useRef(renderOverlay);
+  renderOverlayRef.current = renderOverlay;
   // ライブの WW/WL（左ドラッグで変更。モダリティ値=HU 等の単位）。
   const [voi, setVoi] = useState<{ ww: number; wc: number } | null>(null);
   // 右の Image Info パネルの表示。Off で画像をその領域まで広げる。
@@ -245,6 +303,7 @@ export function Viewer2D({
       // スケールバー（Caliper）: 校正の有無で mm/cm・px と色(黄/グレー)を切替。FOV(ズーム)に追従。
       const calibrated = Boolean(infoRef.current?.columnPixelSpacing);
       setScaleBar(computeScaleBar(vp, element, calibrated));
+      if (renderOverlayRef.current) setImageRect(computeImageRect(vp)); // Fusion 等のオーバーレイ位置追従
       if (!compact) scheduleCapture(); // Undo/Redo 履歴（操作確定後にデバウンス）
     };
 
@@ -272,13 +331,63 @@ export function Viewer2D({
         const viewport = engine.getViewport(viewportId) as Types.IStackViewport;
         viewportRef.current = viewport;
         await viewport.setStack(imageIdsRef.current, indexRef.current);
-        viewport.render();
 
         // 輝度/ボクセル/FOV のキャリブレーション情報（読み込み後にメタが揃う）。
         const curId = imageIdsRef.current[indexRef.current];
         const inf = readImageInfo(curId);
         infoRef.current = inf;
         if (!disposed) setInfo(inf);
+
+        // 初期 Window: DICOM の WindowCenter/Width があれば明示適用する。
+        // CT 等は自動 VOI が生 16bit のパディング画素（例 -2048）や広いダイナミックレンジに
+        // 引っ張られて真っ黒になりやすいため、DICOM 既定ウィンドウを優先する
+        // （voiRange は Modality LUT 適用後＝CT は HU 空間。WindowCenter/Width も同空間）。
+        if (inf.windowCenter !== undefined && inf.windowWidth !== undefined && inf.windowWidth > 0) {
+          viewport.setProperties({
+            voiRange: {
+              lower: inf.windowCenter - inf.windowWidth / 2,
+              upper: inf.windowCenter + inf.windowWidth / 2,
+            },
+          });
+        }
+        viewport.render();
+
+        // 一時診断: 実際にキャンバスへ描画されているか（中心画素）を確認する。
+        if (!compact) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const vpAny = viewport as any;
+          const readback = (tag: string) => {
+            try {
+              const props = vpAny.getProperties?.();
+              const cnv: HTMLCanvasElement | undefined = vpAny.canvas ?? vpAny.getCanvas?.();
+              let centerPx: number[] | null = null;
+              if (cnv) {
+                const cctx = cnv.getContext("2d");
+                if (cctx) {
+                  const cx = Math.floor(cnv.width / 2), cy = Math.floor(cnv.height / 2);
+                  centerPx = Array.from(cctx.getImageData(cx, cy, 1, 1).data);
+                }
+              }
+              // world スケール（スケールバー異常の切り分け）。
+              let worldPerPx: number | null = null;
+              try {
+                const p0 = viewport.canvasToWorld([0, 10]);
+                const p1 = viewport.canvasToWorld([100, 10]);
+                worldPerPx = Math.hypot(p0[0] - p1[0], p0[1] - p1[1], p0[2] - p1[2]) / 100;
+              } catch { /* ignore */ }
+              const cam = vpAny.getCamera?.();
+              console.log(`[CTDbg/${tag}]`, inf.modality,
+                "pixSpacing(col/row):", inf.columnPixelSpacing, inf.rowPixelSpacing,
+                "rows/cols:", inf.rows, inf.columns,
+                "worldPerPx:", worldPerPx, "parallelScale:", cam?.parallelScale,
+                "voiRange:", props?.voiRange, "invert:", props?.invert,
+                "canvasSize:", cnv?.width, "x", cnv?.height, "centerPx:", centerPx);
+            } catch (e) { console.warn("[CTDbg] readback failed", e); }
+          };
+          readback("immediate");
+          // 描画/ブリット完了後にもう一度（render は非同期にGPUへ反映されるため）。
+          setTimeout(() => readback("delayed"), 200);
+        }
 
         // スライス方向ボクセル奥行きは非同期（複数枚は隣接スライスのメタを要する）。後から合流。
         void (async () => {
@@ -409,6 +518,17 @@ export function Viewer2D({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageIndex, stackKey]);
 
+  // renderOverlay が後から有効化されたとき（Fusion 設定時など）に矩形を初期計算する。
+  // renderOverlay は親で useCallback 安定化されている前提（毎レンダ別関数だとループするため）。
+  useEffect(() => {
+    if (!renderOverlay) {
+      setImageRect(null);
+      return;
+    }
+    const vp = viewportRef.current;
+    if (vp) setImageRect(computeImageRect(vp));
+  }, [renderOverlay]);
+
   // 画像表示用キーボード（スライダー単独表示のみ）: I=階調反転, Mod+Z=Undo, Mod+Shift+Z=Redo。
   useEffect(() => {
     if (compact || syncGroupId) return;
@@ -486,6 +606,13 @@ export function Viewer2D({
     <div style={fill ? { ...wrap, flex: 1, height: "auto" } : { ...wrap, height: height ?? 512 }}>
       {/* 深層: ピクセル canvas（Cornerstone3D が内部に canvas を生成） */}
           <div ref={elementRef} style={pixelLayer} />
+          {/* Fusion 等のオーバーレイ。base 画像の表示矩形に重ねる（wrap の overflow:hidden でクリップ）。 */}
+          {renderOverlay && imageRect && renderOverlay({
+            rect: imageRect,
+            imageId: imageIds[imageIndex] ?? "",
+            index: imageIndex,
+            count: imageIds.length,
+          })}
           {/* 患者の向き（A/P・R/L・H/F）。四辺に表示。pointer-events:none。 */}
           {ov.orientation && markers && (
             <>

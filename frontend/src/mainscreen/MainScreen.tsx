@@ -11,6 +11,8 @@ import { MenuBar } from "./MenuBar";
 import { Toolbar } from "./Toolbar";
 import { SearchPanel } from "./SearchPanel";
 import { StatusBar } from "./StatusBar";
+import { TagExtractorDialog } from "./TagExtractorDialog";
+import { ExportDialog } from "./ExportDialog";
 
 /**
  * アプリの土台シェル（GRAPHY の MainScreen 相当）。
@@ -39,6 +41,7 @@ export function MainScreen({
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
   const [selectedSeries, setSelectedSeries] = useState<Series | null>(null);
+  const [openTool, setOpenTool] = useState<"tagExtractor" | "export" | null>(null);
 
   const handleImport = async () => {
     const d = desktop();
@@ -83,10 +86,18 @@ export function MainScreen({
     setTimeout(() => setImportMsg(null), 4000);
   };
 
-  // データ I/O・ユーティリティ（実装は fw に記録。今は告知バナー）。
+  // データ I/O・ユーティリティ。実装済みはダイアログを開き、未実装は告知バナー（実装は fw に記録）。
   const handleOpenTool = (
     kind: "export" | "nonDicomImport" | "anonymizer" | "tagExtractor" | "seriesExtractor",
   ) => {
+    if (kind === "tagExtractor") {
+      setOpenTool("tagExtractor");
+      return;
+    }
+    if (kind === "export") {
+      setOpenTool("export");
+      return;
+    }
     setImportMsg(t("main.viewer.comingSoon", { name: t(`main.toolbar.${kind}`) }));
     setTimeout(() => setImportMsg(null), 4000);
   };
@@ -128,6 +139,13 @@ export function MainScreen({
         </div>
       </div>
       <StatusBar status={status} error={error} />
+      <TagExtractorDialog
+        open={openTool === "tagExtractor"}
+        onClose={() => setOpenTool(null)}
+        study={selectedStudy}
+        series={selectedSeries}
+      />
+      <ExportDialog open={openTool === "export"} onClose={() => setOpenTool(null)} />
     </div>
   );
 }

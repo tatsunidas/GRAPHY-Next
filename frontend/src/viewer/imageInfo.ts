@@ -39,6 +39,8 @@ export interface ImageInfo {
   photometricInterpretation?: string;
   /** ImageOrientationPatient(IOP) が存在するか（向きマーカー表示の可否） */
   hasOrientation?: boolean;
+  /** ImagePositionPatient(0020,0032): スライス左上画素のワールド座標 [x,y,z](mm, LPS)。 */
+  imagePositionPatient?: [number, number, number];
 }
 
 function firstNumber(v: unknown): number | undefined {
@@ -60,6 +62,7 @@ export function readImageInfo(imageId: string): ImageInfo {
   const columns: number | undefined = plane.columns ?? pixel.columns;
   const rowPixelSpacing: number | undefined = plane.rowPixelSpacing ?? undefined;
   const columnPixelSpacing: number | undefined = plane.columnPixelSpacing ?? undefined;
+  const ipp = toNums(plane.imagePositionPatient);
 
   return {
     modality: series.modality,
@@ -80,6 +83,7 @@ export function readImageInfo(imageId: string): ImageInfo {
     pixelRepresentation: pixel.pixelRepresentation,
     photometricInterpretation: pixel.photometricInterpretation,
     hasOrientation: Array.isArray(plane.imageOrientationPatient) && plane.imageOrientationPatient.length >= 6,
+    imagePositionPatient: ipp ? [ipp[0], ipp[1], ipp[2]] : undefined,
   };
 }
 

@@ -12,9 +12,10 @@
 //   GRAPHY_BACKEND_PORT        … backend ポート（既定 config.backend.port）
 //   GRAPHY_BACKEND_PROFILE     … backend プロファイル（既定 config.backend.profile）
 
-const { app, BrowserWindow, shell, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, shell, dialog, ipcMain, nativeImage } = require("electron");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
+const os = require("node:os");
 const http = require("node:http");
 const fs = require("node:fs");
 const readline = require("node:readline");
@@ -290,6 +291,27 @@ ipcMain.handle("graphy:open-viewer", (_e, screen) => {
     viewer2dWin.on("closed", () => { viewer2dWin = null; });
   } else {
     createViewerWindow(s);
+  }
+});
+
+// ビューアのタイル画像を外部（デスクトップ/他アプリ）へネイティブドラッグする。
+// renderer から PNG dataURL を受け取り、一時ファイルに書き出して startDrag を発火。
+// これにより OS が「本物のファイルドラッグ」として扱い、禁止カーソルが出ない。
+ipcMain.on("graphy:start-drag", (e, payload) => {
+  try {
+    const dataUrl = payload && payload.dataUrl;
+    if (typeof dataUrl !== "string") return;
+    const m = /^data:image\/png;base64,([\s\S]+)$/.exec(dataUrl);
+    if (!m) return;
+    const buf = Buffer.from(m[1], "base64");
+    const safeName = String((payload && payload.filename) || "graphy-capture.png")
+      .replace(/[^\w.\-]+/g, "_");
+    const filePath = path.join(os.tmpdir(), `graphy-drag-${Date.now()}-${safeName}`);
+    fs.writeFileSync(filePath, buf);
+    const icon = nativeImage.createFromBuffer(buf).resize({ width: 96 });
+    e.sender.startDrag({ file: filePath, icon });
+  } catch (err) {
+    console.error("[start-drag]", err);
   }
 });
 

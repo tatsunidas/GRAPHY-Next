@@ -3,6 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { httpGet, httpSend } from "./http";
+import { apiBase } from "./apiBase";
 
 // apiBase は apiBase.ts へ分離（循環インポート回避）。互換のため再エクスポート。
 export { apiBase } from "./apiBase";
@@ -145,3 +146,77 @@ export const fetchLutNames = () => httpGet<string[]>("/api/luts");
 /** 指定名の LUT RGB データを取得する。 */
 export const fetchLutData = (name: string) =>
   httpGet<LutData>(`/api/luts/${encodeURIComponent(name)}`);
+
+// ── TagExtractor（タグ一括抽出） ───────────────────────────────
+
+export interface TagExtractRequest {
+  /** 抽出対象スタディ（必須）。 */
+  studyUid: string;
+  /** シリーズに絞る場合に指定。未指定ならスタディ全体。 */
+  seriesUid?: string;
+  /** 抽出するタグ番号（8 桁 hex, 例 "00100010"）。 */
+  tags: string[];
+  format: "csv" | "json";
+}
+
+/**
+ * タグ抽出を実行し、ダウンロード用の Blob とサーバ提案ファイル名を返す。
+ * レスポンスはファイル本体（JSON ラッパではない）なので http ラッパは使わず直接 fetch する。
+ */
+export const extractTags = async (
+  req: TagExtractRequest,
+): Promise<{ blob: Blob; filename: string }> => {
+  const res = await fetch(`${apiBase()}/api/extract/tags`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  const cd = res.headers.get("content-disposition") ?? "";
+  const m = /filename="?([^"]+)"?/.exec(cd);
+  const filename = m ? m[1] : `tags.${req.format}`;
+  return { blob, filename };
+};
+
+// ── Export（DICOM 交換メディア ZIP） ──────────────────────────
+
+/** 1 スタディと、その中で Export 対象に選択されたシリーズ。 */
+export interface ExportSelection {
+  studyUid: string;
+  seriesUids: string[];
+}
+
+export interface ExportRequest {
+  selections: ExportSelection[];
+  /** DICOMDIR を同梱する（portable viewer ON 時は backend 側で強制 ON）。 */
+  includeDicomDir: boolean;
+  /** portable 2D viewer を同梱する（DICOMDIR を必須化）。 */
+  includePortableViewer: boolean;
+  /** README.txt を同梱する。 */
+  includeReadme: boolean;
+}
+
+/**
+ * 選択シリーズを PS3.10 階層（＋任意で DICOMDIR/README）の ZIP として取得する。
+ * TagExtractor と同じく blob 受信＋ファイル名抽出（http ラッパは JSON 前提のため不使用）。
+ */
+export const exportZip = async (
+  req: ExportRequest,
+): Promise<{ blob: Blob; filename: string }> => {
+  const res = await fetch(`${apiBase()}/api/export/zip`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  const cd = res.headers.get("content-disposition") ?? "";
+  const m = /filename="?([^"]+)"?/.exec(cd);
+  const filename = m ? m[1] : "graphy-export.zip";
+  return { blob, filename };
+};

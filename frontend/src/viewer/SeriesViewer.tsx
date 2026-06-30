@@ -5,7 +5,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { getRenderingEngine, type Types } from "@cornerstonejs/core";
 import { ToolGroupManager } from "@cornerstonejs/tools";
-import { Viewer2D, ENGINE_ID, type ViewerOverlays } from "./Viewer2D";
+import { Viewer2D, ENGINE_ID, type ViewerOverlays, type RenderOverlay } from "./Viewer2D";
 import { applyTransform, readTransform, FIT_TRANSFORM } from "./transform";
 import { buildSeriesLayout, buildLayoutFromDto, type SeriesLayout } from "./seriesLayout";
 import { imageIdForInstance, type ViewerMode } from "./imageId";
@@ -45,6 +45,7 @@ export function SeriesViewer({
   fillHeight = false,
   syncSlice,
   onSliceChange,
+  renderFusionOverlay,
 }: {
   instances: Instance[];
   mode: ViewerMode;
@@ -56,6 +57,8 @@ export function SeriesViewer({
   syncSlice?: { z: number; nZ: number } | null;
   /** Series Sync / Fusion: スライス変化を上位に通知するコールバック。imageId は現在スライスの Cornerstone3D imageId。 */
   onSliceChange?: (z: number, nZ: number, imageId: string) => void;
+  /** Fusion オーバーレイ。スライダー表示時に base 画像へ重ねて描画する（GridView では無効）。 */
+  renderFusionOverlay?: RenderOverlay;
 }) {
   const { t } = useI18n();
   const imageIds = useMemo(
@@ -284,7 +287,7 @@ export function SeriesViewer({
           </div>
         </div>
       ) : (
-        <Viewer2D imageIds={zStack} imageIndex={zc} overlays={overlays} fill={fillHeight} />
+        <Viewer2D imageIds={zStack} imageIndex={zc} overlays={overlays} fill={fillHeight} renderOverlay={renderFusionOverlay} />
       )}
 
       <div style={controls}>

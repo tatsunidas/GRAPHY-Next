@@ -22,4 +22,6 @@ contextBridge.exposeInMainWorld("__GRAPHY_SECURITY__", {
 contextBridge.exposeInMainWorld("graphyDesktop", {
   pickImportPaths: () => ipcRenderer.invoke("graphy:pick-import"),
   openViewer: (screen) => ipcRenderer.invoke("graphy:open-viewer", screen),
+  // PNG dataURL を OS のネイティブドラッグに乗せて外部へ書き出す。
+  startDrag: (dataUrl, filename) => ipcRenderer.send("graphy:start-drag", { dataUrl, filename }),
 });

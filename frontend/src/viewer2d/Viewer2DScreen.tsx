@@ -15,9 +15,11 @@ import {
 } from "../api";
 import { SeriesViewer } from "../viewer/SeriesViewer";
 import { FusionImageViewer } from "../viewer/FusionOverlayViewer";
+import type { RenderOverlay } from "../viewer/Viewer2D";
 import { buildSeriesLayout, type SeriesLayout } from "../viewer/seriesLayout";
 import { LutDialog, ColorBar } from "../viewer/LutDialog";
 import { useI18n } from "../i18n/i18n";
+import { desktop } from "../desktopBridge";
 
 // ── 型定義 ────────────────────────────────────────────────────
 
@@ -63,27 +65,13 @@ type DragPayload =
 
 // ── モジュールレベル DnD 状態 ──────────────────────────────────
 
+// ウィンドウ内 DnD（タイル並び替え / Fusion）のペイロード。
+// 外部へのドラッグ保存は Electron ネイティブドラッグ（startTileDrag）で行うため、
+// ここはウィンドウ内転送専用。
 let _dragPayload: DragPayload | null = null;
-// ドラッグ中に最後にホバーしたタイルID（ウィンドウ外ドロップ時のキャプチャ対象決定用）
-let _lastHoveredTileId: string | null = null;
-// シェル全体の onDrop でウィンドウ内ドロップを検知する。
-let _dropHandledInWindow = false;
-// dragover の途絶からウィンドウ外を検出するためのタイムスタンプとタイマー群
-let _lastDragOverMs = 0;
-let _dragOverTimer: ReturnType<typeof setTimeout> | null = null;
-let _autoCaptureTimer: ReturnType<typeof setTimeout> | null = null;
-
-function _cancelDragTimers(): void {
-  if (_dragOverTimer) { clearTimeout(_dragOverTimer); _dragOverTimer = null; }
-  if (_autoCaptureTimer) { clearTimeout(_autoCaptureTimer); _autoCaptureTimer = null; }
-}
 
 function _resetDragState(): void {
-  _cancelDragTimers();
-  _dropHandledInWindow = false;
   _dragPayload = null;
-  _lastHoveredTileId = null;
-  _lastDragOverMs = 0;
 }
 
 // ── ユーティリティ ────────────────────────────────────────────
@@ -113,31 +101,49 @@ function getDropZone(e: React.DragEvent<HTMLElement>): "before" | "after" | "cen
 }
 
 /**
- * 指定タイルの canvas から PNG をキャプチャしてファイル保存する。
+ * 指定タイルの canvas から PNG dataURL を取得する。
  * Cornerstone3D の WebGL canvas に対して toDataURL を試みる。
  * (preserveDrawingBuffer=false の場合は失敗することがある)
  */
-function captureAndDownload(tileId: string): void {
-  console.log("[Capture] captureAndDownload called for tileId:", tileId);
+function captureTileDataUrl(tileId: string): string | null {
   const el = document.querySelector(`[data-tile-id="${CSS.escape(tileId)}"]`);
-  console.log("[Capture] tile element found:", !!el);
   const canvas = el?.querySelector("canvas") as HTMLCanvasElement | null;
-  console.log("[Capture] canvas found:", !!canvas, canvas ? `${canvas.width}x${canvas.height}` : "");
   if (!canvas) {
     console.warn("[Capture] canvas not found in tile", tileId);
-    return;
+    return null;
   }
   try {
-    const url = canvas.toDataURL("image/png");
-    console.log("[Capture] toDataURL ok, length:", url.length);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `graphy-capture-${Date.now()}.png`;
-    a.click();
-    console.log("[Capture] download triggered");
+    return canvas.toDataURL("image/png");
   } catch (err) {
     console.error("[Capture] toDataURL failed:", err);
+    return null;
   }
+}
+
+/** 指定タイルの画像を PNG としてダウンロードする（クリック保存・web フォールバック）。 */
+function captureAndDownload(tileId: string): void {
+  const url = captureTileDataUrl(tileId);
+  if (!url) return;
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `graphy-capture-${Date.now()}.png`;
+  a.click();
+}
+
+/**
+ * タイル画像を外部（デスクトップ/他アプリ）へネイティブドラッグする。
+ * Electron では本物のファイルドラッグになり、禁止カーソルが出ず、
+ * ドロップ先に実 PNG ファイルが作成される。standalone(Electron) 専用。
+ */
+function startTileDrag(e: React.DragEvent, tileId: string, label: string): void {
+  const startDrag = desktop()?.startDrag;
+  if (!startDrag) return; // web: ネイティブドラッグ不可（HTML5 DnD のまま）
+  const url = captureTileDataUrl(tileId);
+  if (!url) return;
+  // HTML5 ドラッグをキャンセルし、OS ネイティブドラッグに引き継ぐ。
+  e.preventDefault();
+  const safe = label.replace(/[^\w.\-]+/g, "_") || "image";
+  startDrag(url, `${safe}.png`);
 }
 
 /** DnD ゴースト要素を生成して dataTransfer に設定する。呼び出し後すぐに DOM から除去。 */
@@ -238,6 +244,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
   }, []);
 
   const removeTile = (patientKey: string, tileId: string) => {
+    console.log("[FusionDbg] removeTile() called — tileId:", tileId);
     setPatients((prev) => {
       const idx = prev.findIndex((p) => p.patientKey === patientKey);
       if (idx < 0) return prev;
@@ -324,6 +331,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
   /** タイルの Fusion オーバーレイを設定または解除する。 */
   const setTileFusion = useCallback(
     (patientKey: string, tileId: string, overlay: FusionOverlay | undefined) => {
+      console.log("[FusionDbg] setTileFusion() — tileId:", tileId, "overlay:", overlay ? "set" : "CLEAR");
       setPatients((prev) =>
         prev.map((p) => {
           if (p.patientKey !== patientKey) return p;
@@ -402,35 +410,14 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
     <div
       style={shell}
       onDragOver={(e) => {
+        // ウィンドウ内 DnD（並び替え/Fusion）のみ移動カーソルにする。
         if (!_dragPayload) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = "move";
-        // dragover が届いている間はウィンドウ内。タイムスタンプを更新してタイマーをリセット。
-        _lastDragOverMs = Date.now();
-        _cancelDragTimers();
-        _dragOverTimer = setTimeout(() => {
-          if (!_dragPayload || _dropHandledInWindow) return;
-          // 200ms dragover が途絶 → カーソルがウィンドウ外へ。
-          // dragend が発火しない Electron の場合に備えて auto-capture タイマーを仕掛ける。
-          const captureTileId =
-            _dragPayload.type === "tile" ? _dragPayload.tileId : _lastHoveredTileId;
-          console.log("[DnD] dragover途絶 → ウィンドウ外判定。captureTileId:", captureTileId);
-          if (captureTileId) {
-            _autoCaptureTimer = setTimeout(() => {
-              if (!_dropHandledInWindow && _dragPayload) {
-                console.log("[DnD] auto-capture (dragend未発火):", captureTileId);
-                captureAndDownload(captureTileId);
-                _resetDragState();
-              }
-            }, 1500);
-          }
-        }, 200);
       }}
       onDrop={(e) => {
+        if (!_dragPayload) return;
         e.preventDefault();
-        _dropHandledInWindow = true;
-        _cancelDragTimers();
-        console.log("[DnD] shell.onDrop fired → _dropHandledInWindow = true");
       }}
     >
       <div style={header}>
@@ -614,7 +601,9 @@ function TileGrid({
         }
       }
     },
-    [patient.patientKey, onInsertAdjacent, onSwap, onSetFusion, t],
+    // patient 全体に依存させる。patient.patientKey だけだとタイル追加後も
+    // 古い patient.tiles を握ったままになり、srcTile / 重複判定が壊れる。
+    [patient, onInsertAdjacent, onSwap, onSetFusion],
   );
 
   return (
@@ -715,10 +704,6 @@ function TileCell({
   // ドラッグオーバー中のゾーン（ビジュアルオーバーレイ制御用）
   const [dropZone, setDropZone] = useState<"before" | "after" | "center" | "none" | null>(null);
 
-  // Fusion: ベースビューアの現在スライス位置（フォールバック比例追従用）
-  const [baseSlice, setBaseSlice] = useState<{ z: number; nZ: number } | null>(null);
-  // Fusion: ベースビューアの現在スライス imageId（精密 Fusion の IOP/IPP 取得用）
-  const [baseImageId, setBaseImageId] = useState<string | null>(null);
   // Fusion: オーバーレイの C/T インデックス（ユーザーが任意に選択）
   const [fusionC, setFusionC] = useState(0);
   const [fusionT, setFusionT] = useState(0);
@@ -744,38 +729,47 @@ function TileCell({
   const dateLabel = tile.study.studyDate || "";
   const studyDesc = tile.study.studyDescription || "";
 
-  // ベースビューアのスライス変化を受け取る安定したコールバック。
-  // インライン関数にすると setBaseSlice → 再レンダ → 新関数 → SeriesViewer の useEffect 再発火
-  // という無限ループが起きるため useCallback でメモ化する。
+  // ベースビューアのスライス変化を受け取る安定したコールバック（タイル Sync 通知用）。
+  // Fusion オーバーレイへの base 情報（imageId/index/rect）は Viewer2D の renderOverlay 経由で渡る。
   const handleBaseSliceChange = useCallback(
-    (z: number, nZ: number, imageId: string) => {
-      setBaseSlice((prev) => (prev?.z === z && prev?.nZ === nZ ? prev : { z, nZ }));
-      if (imageId) setBaseImageId(imageId);
+    (z: number, nZ: number) => {
       onSliceChange(z, nZ);
     },
     [onSliceChange],
   );
 
+  // Fusion オーバーレイ描画。base 画像の表示矩形(rect)・現在スライス(imageId/index)に重ねる。
+  // useMemo で安定化（毎レンダ別関数だと Viewer2D 側の rect 初期計算 effect がループするため）。
+  const renderFusionOverlay = useMemo<RenderOverlay | undefined>(() => {
+    if (!tile.fusion || mode !== "standalone") return undefined;
+    const fusion = tile.fusion;
+    return (ctx) => (
+      <FusionImageViewer
+        rect={ctx.rect}
+        baseImageId={ctx.imageId}
+        baseIndex={ctx.index}
+        baseCount={ctx.count}
+        instances={fusion.instances}
+        mode="standalone"
+        studyUid={fusion.study.studyInstanceUid}
+        seriesUid={fusion.series.seriesInstanceUid}
+        overlayC={fusionC}
+        overlayT={fusionT}
+        lut={fusionLut}
+        opacity={fusion.opacity}
+        onLayoutChange={setFusionLayout}
+      />
+    );
+  }, [tile.fusion, mode, fusionC, fusionT, fusionLut]);
+
   // ── タイルヘッダー DnD（タイル並び替え） ──
 
   const handleHeaderDragStart = (e: React.DragEvent<HTMLDivElement>) => {
     _dragPayload = { type: "tile", patientKey, tileId: tile.id };
-    _dropHandledInWindow = false;
-    _lastDragOverMs = 0;
     e.dataTransfer.effectAllowed = "move";
     setGhostImage(e, seriesLabel);
-    console.log("[DnD] tile header dragStart:", tile.id);
   };
   const handleHeaderDragEnd = () => {
-    _cancelDragTimers();
-    const msSince = _lastDragOverMs > 0 ? Date.now() - _lastDragOverMs : Infinity;
-    const outsideWindow = !_dropHandledInWindow && msSince > 50;
-    console.log("[DnD] tile header dragEnd — _dropHandledInWindow:", _dropHandledInWindow,
-      "msSinceLastDragOver:", msSince, "outsideWindow:", outsideWindow);
-    if (outsideWindow) {
-      console.log("[DnD] → tile outside drop, capturing:", tile.id);
-      captureAndDownload(tile.id);
-    }
     _resetDragState();
   };
 
@@ -787,21 +781,15 @@ function TileCell({
     e.dataTransfer.dropEffect = "move";
     const zone = getDropZone(e);
     setDropZone(zone);
-    if (_lastHoveredTileId !== tile.id) {
-      console.log("[DnD] hovering tile:", tile.id, "zone:", zone);
-      _lastHoveredTileId = tile.id;
-    }
   };
   const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
     if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
     setDropZone(null);
-    console.log("[DnD] left tile:", tile.id);
   };
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     const zone = getDropZone(e);
     setDropZone(null);
-    console.log("[DnD] TileCell.onDrop tile:", tile.id, "zone:", zone);
     onDrop(tile.id, zone);
   };
 
@@ -876,6 +864,21 @@ function TileCell({
           {[dateLabel, studyDesc, seriesLabel].filter(Boolean).join(" / ")}
         </span>
 
+        {/* 画像エクスポート用ドラッグハンドル。
+            ドラッグ → 外部(デスクトップ/他アプリ)へ PNG をネイティブドラッグ保存。
+            クリック → PNG ダウンロード（web フォールバック兼用）。 */}
+        <span
+          role="button"
+          tabIndex={0}
+          draggable
+          onDragStart={(e) => { e.stopPropagation(); startTileDrag(e, tile.id, seriesLabel); }}
+          onClick={(e) => { e.stopPropagation(); captureAndDownload(tile.id); }}
+          style={{ ...xbtn, cursor: "grab", fontSize: 13, lineHeight: 1, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+          title={t("viewer2d.exportDrag")}
+        >
+          ⤓
+        </span>
+
         {/* Sync トグルボタン */}
         <button
           onClick={(e) => { e.stopPropagation(); onSyncToggle(); }}
@@ -897,7 +900,7 @@ function TileCell({
         </button>
       </div>
 
-      {/* ── コンテンツ（ベース＋ Fusion オーバーレイ） ── */}
+      {/* ── コンテンツ（ベース＋ Fusion オーバーレイは Viewer2D 内で base 画像に重畳） ── */}
       <div style={{ flex: 1, minHeight: 0, position: "relative", display: "flex", flexDirection: "column" }}>
         {mode === "standalone" ? (
           <SeriesViewer
@@ -908,36 +911,10 @@ function TileCell({
             fillHeight
             syncSlice={syncSlice}
             onSliceChange={handleBaseSliceChange}
+            renderFusionOverlay={renderFusionOverlay}
           />
         ) : (
           <div style={{ padding: 12, fontSize: 12, color: "#8a6d3b" }}>{t("viewer.webTodo")}</div>
-        )}
-
-        {/* Fusion 画像オーバーレイ（透過、ポインタ透過） */}
-        {tile.fusion && mode === "standalone" && (
-          <div
-            style={{
-              position: "absolute",
-              inset: 0,
-              opacity: tile.fusion.opacity,
-              pointerEvents: "none",
-              display: "flex",
-              flexDirection: "column",
-            }}
-          >
-            <FusionImageViewer
-              instances={tile.fusion.instances}
-              mode="standalone"
-              studyUid={tile.fusion.study.studyInstanceUid}
-              seriesUid={tile.fusion.series.seriesInstanceUid}
-              syncSlice={baseSlice}
-              syncImageId={baseImageId}
-              overlayC={fusionC}
-              overlayT={fusionT}
-              lut={fusionLut}
-              onLayoutChange={setFusionLayout}
-            />
-          </div>
         )}
       </div>
 
@@ -960,7 +937,7 @@ function TileCell({
           onCChange={setFusionC}
           onTChange={setFusionT}
           onLutChange={setFusionLut}
-          onRemove={() => onFusionChange(undefined)}
+          onRemove={() => { console.log("[FusionDbg] fusion bar × clicked"); onFusionChange(undefined); }}
         />
       )}
     </div>
@@ -1324,27 +1301,10 @@ function StudyNode({
               draggable={mode === "standalone"}
               onDragStart={(e) => {
                 _dragPayload = { type: "series", study, series: se, label: seriesLabel };
-                _dropHandledInWindow = false;
-                _lastDragOverMs = 0;
                 e.dataTransfer.effectAllowed = "move";
                 setGhostImage(e, seriesLabel);
-                console.log("[DnD] series dragStart:", seriesLabel);
               }}
               onDragEnd={() => {
-                _cancelDragTimers();
-                const msSince = _lastDragOverMs > 0 ? Date.now() - _lastDragOverMs : Infinity;
-                const outsideWindow = !_dropHandledInWindow && msSince > 50;
-                console.log("[DnD] series dragEnd — _dropHandledInWindow:", _dropHandledInWindow,
-                  "_lastHoveredTileId:", _lastHoveredTileId,
-                  "msSinceLastDragOver:", msSince, "outsideWindow:", outsideWindow);
-                if (outsideWindow && _lastHoveredTileId) {
-                  console.log("[DnD] → series outside drop, capturing:", _lastHoveredTileId);
-                  captureAndDownload(_lastHoveredTileId);
-                } else if (_dropHandledInWindow) {
-                  console.log("[DnD] → in-window drop, no capture");
-                } else {
-                  console.log("[DnD] → outside but no hovered tile");
-                }
                 _resetDragState();
               }}
             >

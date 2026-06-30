@@ -86,6 +86,9 @@ export function LutDialog({
   // LUT データを遅延ロード（スクロール時/選択時）
   const loadLutIfNeeded = useCallback(
     (name: string) => {
+      // グレースケール（リセット）行の番兵名はバックエンドに存在しない。
+      // IntersectionObserver が data-lut="__gray__" を拾って fetch すると 404 になるため弾く。
+      if (name === GRAY_LUT.name) return;
       if (lutCache.has(name)) return;
       fetchLutData(name)
         .then((data) => setLutCache((prev) => new Map(prev).set(name, data)))

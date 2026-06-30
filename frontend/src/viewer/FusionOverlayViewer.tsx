@@ -9,7 +9,7 @@ import {
   buildLayoutFromDto,
   type SeriesLayout,
 } from "./seriesLayout";
-import { Viewer2D } from "./Viewer2D";
+import type { ImageRect } from "./Viewer2D";
 import { imageIdForInstance, type ViewerMode } from "./imageId";
 import { fetchSeriesLayout, type Instance, type SeriesLayoutDto } from "../api";
 import {
@@ -103,33 +103,44 @@ async function loadFusionSlice(imageId: string): Promise<FusionSlice | null> {
 /**
  * Fusion オーバーレイビューア。
  *
- * - 前景シリーズの SeriesLayout に IOP/IPP が含まれる場合: canvas trilinear 精密 Fusion
- * - 含まれない場合: CSS opacity Viewer2D（比例 Z 追従フォールバック）
+ * GRAPHY の FusionDisplay 同様、「base 画像と同じキャンバス（表示矩形）」に前景を重ねる。
+ * - 前景・背景に IOP/IPP がある場合: `computeFusionSlice` で前景を背景グリッドに再構成（実座標整合）
+ * - ない場合: 前景スライスを比例 Z で選び、base 画像矩形にストレッチ（GRAPHY Phase3 相当）
+ * いずれも単一 `<canvas>` を base 画像の表示矩形 `rect` に正確に重ねて描画するため、
+ * 原点が一致し、画像領域にクリップされ、zoom/pan/fit に追従する。LUT は常に canvas 経由で適用。
  */
 export function FusionImageViewer({
   instances,
   mode,
   studyUid,
   seriesUid,
-  syncSlice,
-  syncImageId,
+  rect,
+  baseImageId,
+  baseIndex,
+  baseCount,
   overlayC,
   overlayT,
   lut,
+  opacity,
   onLayoutChange,
 }: {
   instances: Instance[];
   mode: ViewerMode;
   studyUid: string;
   seriesUid: string;
-  /** ベースビューアのスライス位置（フォールバック比例追従用）。 */
-  syncSlice: { z: number; nZ: number } | null;
-  /** ベースビューアの現在スライス imageId（精密 Fusion 用）。 */
-  syncImageId: string | null;
+  /** base 画像の表示矩形（wrap 内 CSS px）。ここに正確に重ねる。 */
+  rect: ImageRect;
+  /** base の現在スライス imageId（空間 Fusion 用）。 */
+  baseImageId: string;
+  /** base の現在スライスインデックスと総数（非空間フォールバックの比例 Z 用）。 */
+  baseIndex: number;
+  baseCount: number;
   overlayC: number;
   overlayT: number;
   /** カラー LUT（null でグレースケール）。 */
   lut?: { r: number[]; g: number[]; b: number[] } | null;
+  /** 不透明度（0–1）。 */
+  opacity: number;
   onLayoutChange?: (layout: SeriesLayout) => void;
 }) {
   const imageIds = useMemo(
@@ -165,206 +176,180 @@ export function FusionImageViewer({
     onLayoutChange?.(layout);
   }, [layout, onLayoutChange]);
 
-  // ── CSS フォールバック用 Z 追従 ─────────────────────────────
-  const cc = Math.min(Math.max(0, overlayC), layout.nC - 1);
-  const tc = Math.min(Math.max(0, overlayT), layout.nT - 1);
-  const zStack = layout.zStack(cc, tc);
-  const nZ = zStack.length;
-  const [z, setZ] = useState(0);
-  useEffect(() => {
-    if (!syncSlice || syncSlice.nZ <= 0 || nZ <= 0) return;
-    const frac = syncSlice.z / Math.max(1, syncSlice.nZ - 1);
-    setZ(Math.round(frac * Math.max(0, nZ - 1)));
-  }, [syncSlice, nZ]);
-  const zc = Math.min(Math.max(0, z), nZ - 1);
-
-  // ── Canvas 精密 Fusion ──────────────────────────────────────
+  // ── Canvas（base 矩形に重ねる単一キャンバス） ──────────────────
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [canvasSize, setCanvasSize] = useState<{ w: number; h: number } | null>(null);
   const computingRef = useRef(false);
-  // キャンバスに少なくとも 1 フレーム描画されたかどうか。
-  // false の間はフォールバック Viewer2D を表示し、空白キャンバスが透けるのを防ぐ。
-  const [hasCanvasContent, setHasCanvasContent] = useState(false);
 
-  // シリーズが切り替わったらキャンバス状態をリセット。
-  useEffect(() => {
-    setHasCanvasContent(false);
-  }, [studyUid, seriesUid]);
+  /**
+   * 物理値配列 + W/L を canvas に描画する。
+   * canvas.width/height は **imperative にのみ**設定する（JSX 属性にすると再レンダ時に
+   * React が書き戻して canvas がクリアされ、描画済みオーバーレイが消えるため）。
+   */
+  const drawValues = useCallback(
+    (values: Float32Array, cols: number, rows: number, center: number, width: number, activeLut?: typeof lut) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      if (canvas.width !== cols) canvas.width = cols;
+      if (canvas.height !== rows) canvas.height = rows;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.putImageData(toImageData(values, cols, rows, center, width, activeLut), 0, 0);
+    },
+    [],
+  );
 
   const runFusion = useCallback(async () => {
     if (computingRef.current) return;
-    if (!syncImageId || !fgDto) return;
-    // lut は useCallback の外スコープから参照（依存配列に追加済み）
+    if (!fgDto) return;
     const activeLut = lut;
+    const currentLayout = layoutRef.current;
+    const cc = Math.min(Math.max(0, overlayC), currentLayout.nC - 1);
+    const tc = Math.min(Math.max(0, overlayT), currentLayout.nT - 1);
+    const fgZStack = currentLayout.zStack(cc, tc);
+    if (fgZStack.length === 0) return;
 
     const fgSkeleton = buildFgSkeleton(fgDto);
-    if (!fgSkeleton) return; // 空間メタなし → フォールバック
 
-    // 背景スライスのメタ取得
-    let bgPlane: AnyObj = metaData.get("imagePlaneModule", syncImageId) ?? {};
-    if (!bgPlane.imagePositionPatient) {
-      try { await imageLoader.loadAndCacheImage(syncImageId); } catch { return; }
-      bgPlane = metaData.get("imagePlaneModule", syncImageId) ?? {};
-    }
-    const bgPixel: AnyObj = metaData.get("imagePixelModule", syncImageId) ?? {};
-    const bgCols = (bgPlane.columns as number | undefined) ?? (bgPixel.columns as number | undefined) ?? 512;
-    const bgRows = (bgPlane.rows as number | undefined) ?? (bgPixel.rows as number | undefined) ?? 512;
-
-    const bgMeta = planeToMeta(bgPlane, bgCols, bgRows);
-    if (!bgMeta) return;
-
-    // 前景スライス法線 fRs = cross(fRr, fRc)
-    const iop = fgSkeleton.iop;
-    const fRr = [iop[0], iop[1], iop[2]];
-    const fRc = [iop[3], iop[4], iop[5]];
-    const fRs = [fRr[1] * fRc[2] - fRr[2] * fRc[1], fRr[2] * fRc[0] - fRr[0] * fRc[2], fRr[0] * fRc[1] - fRr[1] * fRc[0]];
-
-    // zSpatial を z 昇順に並べ、wPositions（前景 z 法線距離）を計算
-    const sortedZ = [...fgSkeleton.zSpatialByZ.entries()].sort((a, b) => a[0] - b[0]);
-    if (sortedZ.length === 0) return;
-    const fgIpp0 = sortedZ[0][1];
-    const wPositions = sortedZ.map(([, ipp]) => {
-      const d = [ipp[0] - fgIpp0[0], ipp[1] - fgIpp0[1], ipp[2] - fgIpp0[2]];
-      return d[0] * fRs[0] + d[1] * fRs[1] + d[2] * fRs[2];
-    });
-
-    // 背景スライス中心の前景 z 位置（どのスライスを読む必要があるか）
-    const bgIpp = bgMeta.ipp;
-    const bgToFg = [bgIpp[0] - fgIpp0[0], bgIpp[1] - fgIpp0[1], bgIpp[2] - fgIpp0[2]];
-    const w_center = bgToFg[0] * fRs[0] + bgToFg[1] * fRs[1] + bgToFg[2] * fRs[2];
-
-    // 必要な前景スライスインデックスを特定（center ± threshold の範囲）
-    const sliceSpacing = sortedZ.length > 1 ? Math.abs(wPositions[1] - wPositions[0]) : 5;
-    const threshold = Math.max(sliceSpacing * 2, 10); // mm
-    const neededZIndices: number[] = [];
-    const currentLayout = layoutRef.current;
-    const fgZStack = currentLayout.zStack(
-      Math.min(Math.max(0, overlayC), currentLayout.nC - 1),
-      Math.min(Math.max(0, overlayT), currentLayout.nT - 1),
-    );
-    for (let i = 0; i < sortedZ.length; i++) {
-      if (Math.abs(wPositions[i] - w_center) <= threshold) {
-        neededZIndices.push(i);
+    // base スライスの空間メタ（取得できれば空間 Fusion）。
+    let bgMeta: BackgroundSliceMeta | null = null;
+    let bgCols = 0, bgRows = 0;
+    if (baseImageId && fgSkeleton) {
+      let bgPlane: AnyObj = metaData.get("imagePlaneModule", baseImageId) ?? {};
+      if (!bgPlane.imagePositionPatient) {
+        try { await imageLoader.loadAndCacheImage(baseImageId); } catch { /* fallthrough */ }
+        bgPlane = metaData.get("imagePlaneModule", baseImageId) ?? {};
       }
-    }
-    if (neededZIndices.length === 0) {
-      // フォールバック: 最近傍スライスを 3 枚（trilinear のため前後も含む）
-      let best = 0, bestDist = Infinity;
-      for (let i = 0; i < wPositions.length; i++) {
-        const d = Math.abs(wPositions[i] - w_center);
-        if (d < bestDist) { bestDist = d; best = i; }
-      }
-      if (best > 0) neededZIndices.push(best - 1);
-      neededZIndices.push(best);
-      if (best < sortedZ.length - 1) neededZIndices.push(best + 1);
+      const bgPixel: AnyObj = metaData.get("imagePixelModule", baseImageId) ?? {};
+      bgCols = (bgPlane.columns as number | undefined) ?? (bgPixel.columns as number | undefined) ?? 512;
+      bgRows = (bgPlane.rows as number | undefined) ?? (bgPixel.rows as number | undefined) ?? 512;
+      bgMeta = planeToMeta(bgPlane, bgCols, bgRows);
     }
 
-    // 前景スライスのピクセルデータを並列ロード
     computingRef.current = true;
     try {
-      const sliceResults = await Promise.all(
-        neededZIndices.map(async (i) => {
-          const zIdx = sortedZ[i][0];
-          const imageId = fgZStack[zIdx];
-          if (!imageId) return null;
-          const slice = await loadFusionSlice(imageId);
-          if (!slice) return null;
-          return { zIdx, slice };
-        }),
-      );
+      if (fgSkeleton && bgMeta) {
+        // ── 空間 Fusion: 前景を背景グリッドに trilinear リサンプリング ──
+        const iop = fgSkeleton.iop;
+        const fRr = [iop[0], iop[1], iop[2]];
+        const fRc = [iop[3], iop[4], iop[5]];
+        const fRs = [fRr[1] * fRc[2] - fRr[2] * fRc[1], fRr[2] * fRc[0] - fRr[0] * fRc[2], fRr[0] * fRc[1] - fRr[1] * fRc[0]];
 
-      // ロードできたスライスで FusionVolume を構築
-      const loadedSlices: Array<{ zIdx: number; slice: FusionSlice }> =
-        sliceResults.filter((r): r is { zIdx: number; slice: FusionSlice } => r !== null);
-      if (loadedSlices.length === 0) return;
+        const sortedZ = [...fgSkeleton.zSpatialByZ.entries()].sort((a, b) => a[0] - b[0]);
+        if (sortedZ.length === 0) return;
+        const fgIpp0 = sortedZ[0][1];
+        const wPositions = sortedZ.map(([, ipp]) => {
+          const d = [ipp[0] - fgIpp0[0], ipp[1] - fgIpp0[1], ipp[2] - fgIpp0[2]];
+          return d[0] * fRs[0] + d[1] * fRs[1] + d[2] * fRs[2];
+        });
 
-      // z 昇順でソート
-      loadedSlices.sort((a, b) => a.zIdx - b.zIdx);
+        const bgIpp = bgMeta.ipp;
+        const bgToFg = [bgIpp[0] - fgIpp0[0], bgIpp[1] - fgIpp0[1], bgIpp[2] - fgIpp0[2]];
+        const w_center = bgToFg[0] * fRs[0] + bgToFg[1] * fRs[1] + bgToFg[2] * fRs[2];
 
-      const fgVolume: FusionVolume = {
-        iop: fgSkeleton.iop,
-        pixelSpacingCol: fgSkeleton.pixelSpacingCol,
-        pixelSpacingRow: fgSkeleton.pixelSpacingRow,
-        cols: fgSkeleton.cols,
-        rows: fgSkeleton.rows,
-        slices: loadedSlices.map(({ zIdx, slice }) => {
-          // IPP は backend zSpatial から使う（Cornerstone3D ロード済みなので上書き不要だが念のため）
-          const ipp = fgSkeleton.zSpatialByZ.get(zIdx);
-          return ipp ? { ...slice, ipp } : slice;
-        }),
-      };
+        const sliceSpacing = sortedZ.length > 1 ? Math.abs(wPositions[1] - wPositions[0]) : 5;
+        const threshold = Math.max(sliceSpacing * 2, 10); // mm
+        const neededZIndices: number[] = [];
+        for (let i = 0; i < sortedZ.length; i++) {
+          if (Math.abs(wPositions[i] - w_center) <= threshold) neededZIndices.push(i);
+        }
+        if (neededZIndices.length === 0) {
+          let best = 0, bestDist = Infinity;
+          for (let i = 0; i < wPositions.length; i++) {
+            const d = Math.abs(wPositions[i] - w_center);
+            if (d < bestDist) { bestDist = d; best = i; }
+          }
+          if (best > 0) neededZIndices.push(best - 1);
+          neededZIndices.push(best);
+          if (best < sortedZ.length - 1) neededZIndices.push(best + 1);
+        }
 
-      // Trilinear リサンプリング
-      const fusionPixels = computeFusionSlice(fgVolume, bgMeta);
+        const sliceResults = await Promise.all(
+          neededZIndices.map(async (i) => {
+            const zIdx = sortedZ[i][0];
+            const imageId = fgZStack[zIdx];
+            if (!imageId) return null;
+            const slice = await loadFusionSlice(imageId);
+            if (!slice) return null;
+            return { zIdx, slice };
+          }),
+        );
+        const loadedSlices = sliceResults.filter(
+          (r): r is { zIdx: number; slice: FusionSlice } => r !== null,
+        );
+        if (loadedSlices.length === 0) return;
+        loadedSlices.sort((a, b) => a.zIdx - b.zIdx);
 
-      // W/L 決定
-      const voiLut: AnyObj = metaData.get("voiLutModule", fgZStack[loadedSlices[0].zIdx] ?? "") ?? {};
-      let center: number, width: number;
-      const wc = voiLut.windowCenter;
-      const ww = voiLut.windowWidth;
-      if (typeof wc === "number" && typeof ww === "number" && ww > 0) {
-        center = wc; width = ww;
+        const fgVolume: FusionVolume = {
+          iop: fgSkeleton.iop,
+          pixelSpacingCol: fgSkeleton.pixelSpacingCol,
+          pixelSpacingRow: fgSkeleton.pixelSpacingRow,
+          cols: fgSkeleton.cols,
+          rows: fgSkeleton.rows,
+          slices: loadedSlices.map(({ zIdx, slice }) => {
+            const ipp = fgSkeleton.zSpatialByZ.get(zIdx);
+            return ipp ? { ...slice, ipp } : slice;
+          }),
+        };
+
+        const fusionPixels = computeFusionSlice(fgVolume, bgMeta);
+        const voiLut: AnyObj = metaData.get("voiLutModule", fgZStack[loadedSlices[0].zIdx] ?? "") ?? {};
+        let center: number, width: number;
+        if (typeof voiLut.windowCenter === "number" && typeof voiLut.windowWidth === "number" && voiLut.windowWidth > 0) {
+          center = voiLut.windowCenter; width = voiLut.windowWidth;
+        } else {
+          const auto = autoWindowLevel(fusionPixels);
+          center = auto.center; width = auto.width;
+        }
+        drawValues(fusionPixels, bgCols, bgRows, center, width, activeLut);
       } else {
-        const auto = autoWindowLevel(fusionPixels);
-        center = auto.center; width = auto.width;
+        // ── 非空間フォールバック: 比例 Z で前景スライスを base 矩形にストレッチ ──
+        const frac = baseCount > 1 ? baseIndex / (baseCount - 1) : 0;
+        const zi = Math.min(fgZStack.length - 1, Math.max(0, Math.round(frac * (fgZStack.length - 1))));
+        const fgId = fgZStack[zi];
+        if (!fgId) return;
+        let image;
+        try { image = await imageLoader.loadAndCacheImage(fgId); } catch { return; }
+        const img = image as AnyObj;
+        const cols = (img.columns as number | undefined) ?? (img.width as number | undefined) ?? 0;
+        const rows = (img.rows as number | undefined) ?? (img.height as number | undefined) ?? 0;
+        const pix = img.getPixelData() as ArrayLike<number>;
+        if (!cols || !rows || pix.length < cols * rows) return; // カラー等は非対応
+        const lutMod: AnyObj = metaData.get("modalityLutModule", fgId) ?? {};
+        const slope = (lutMod.rescaleSlope as number | undefined) ?? (img.slope as number | undefined) ?? 1;
+        const intercept = (lutMod.rescaleIntercept as number | undefined) ?? (img.intercept as number | undefined) ?? 0;
+        const values = new Float32Array(cols * rows);
+        for (let i = 0; i < values.length; i++) values[i] = pix[i] * slope + intercept;
+        const voiLut: AnyObj = metaData.get("voiLutModule", fgId) ?? {};
+        let center: number, width: number;
+        if (typeof voiLut.windowCenter === "number" && typeof voiLut.windowWidth === "number" && voiLut.windowWidth > 0) {
+          center = voiLut.windowCenter; width = voiLut.windowWidth;
+        } else {
+          const auto = autoWindowLevel(values);
+          center = auto.center; width = auto.width;
+        }
+        drawValues(values, cols, rows, center, width, activeLut);
       }
-
-      // Canvas への描画
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      setCanvasSize({ w: bgCols, h: bgRows });
-      // canvasSize の更新と canvas.width/height の設定は同期が必要
-      canvas.width = bgCols;
-      canvas.height = bgRows;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      const imgData = toImageData(fusionPixels, bgCols, bgRows, center, width, activeLut);
-      ctx.putImageData(imgData, 0, 0);
-      setHasCanvasContent(true);
     } finally {
       computingRef.current = false;
     }
-  }, [syncImageId, fgDto, overlayC, overlayT, lut]);
+  }, [baseImageId, baseIndex, baseCount, fgDto, overlayC, overlayT, lut, drawValues]);
 
   useEffect(() => {
     void runFusion();
   }, [runFusion]);
 
-  // ── Render ─────────────────────────────────────────────────
-
-  // IOP/IPP 空間メタの有無（前景シリーズ）。
-  const hasSpatial = !!(fgDto?.imageOrientationPatient && fgDto.zSpatial?.length);
-
-  // Canvas Fusion を表示するのは「空間メタあり & syncImageId あり & 1 フレーム描画済み」の場合のみ。
-  // それ以外（計算待ち・空間メタなし・背景 IOP/IPP なし）はフォールバック Viewer2D を表示する。
-  const showCanvas = hasSpatial && !!syncImageId && hasCanvasContent;
-
-  if (!showCanvas) {
-    // フォールバック: 比例 Z 追従 Viewer2D（常に何かを表示する）
-    if (zStack.length === 0) return null;
-    return (
-      <Viewer2D
-        imageIds={zStack}
-        imageIndex={zc}
-        compact
-        fill
-        overlays={{ text: false, caliper: false, orientation: false }}
-      />
-    );
-  }
-
+  // base 画像の表示矩形にぴったり重ねる。canvas 内部解像度（再構成 px）は CSS で矩形に伸縮。
   return (
     <canvas
       ref={canvasRef}
-      width={canvasSize?.w ?? 512}
-      height={canvasSize?.h ?? 512}
       style={{
         position: "absolute",
-        top: "50%",
-        left: "50%",
-        transform: "translate(-50%, -50%)",
-        maxWidth: "100%",
-        maxHeight: "100%",
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height,
+        opacity,
+        pointerEvents: "none",
         imageRendering: "pixelated",
       }}
     />

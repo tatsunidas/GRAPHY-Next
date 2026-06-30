@@ -1,6 +1,6 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
-> 更新日: 2026-06-29（最終更新: Fusion / LUT / ツールバー改善）
+> 更新日: 2026-06-30（最終更新: Fusion オーバーレイを base 画像矩形に整合表示・LUT/透過修正 / 画像の外部ドラッグ保存）
 > 目的: 別の作業者（Claude 含む）がこのリポジトリの状況を把握し、続きを実装できるようにする。
 > このファイル＋ `fw/` 配下の各設計ドキュメントが「ソース・オブ・トゥルース」。
 
@@ -120,15 +120,23 @@ GRAPHY-Next/
 - 透過度スライダー（0–100%）、C/T スライダー（マルチチャンネル/時系列時）、× で Fusion 解除。
 
 #### FusionImageViewer / FusionEngine（`FusionOverlayViewer.tsx` / `fusionEngine.ts`）
-- **精密 Fusion（Canvas）**: 前景シリーズの IOP/IPP・pixelSpacing が `SeriesLayout` に含まれる場合、
-  `computeFusionSlice`（trilinear 3D リサンプリング）で背景グリッドに前景ボリュームを投影。
-  結果を `<canvas>` に描画（背景と独立した絶対配置）。
-- **フォールバック（CSS opacity）**: 空間メタなし、または Canvas 初回描画が未完了の場合は
-  `<Viewer2D compact fill />` を比例 Z 追従で表示（`syncSlice` で スライス位置を同期）。
-- **`hasCanvasContent` state**: Canvas に少なくとも 1 フレーム描画されるまではフォールバックを維持。
-  背景の IOP/IPP が取れない場合（CR/DX 等）も常にフォールバック表示に留まる。
-- **LUT**: `toImageData(values, cols, rows, wc, ww, lut?)` の第 6 引数で LUT 適用。
-  `lut.r[g] / g[g] / b[g]` でグレースケール値をカラーマッピング。シリーズ切替で `hasCanvasContent` リセット。
+- **base 画像と同じ表示矩形に重畳（GRAPHY FusionDisplay 踏襲）**: オーバーレイは独立配置ではなく、
+  **base の Viewer2D 内（`wrap`, overflow:hidden）に単一 `<canvas>` を描画**し、base 画像の表示矩形
+  `rect` にぴったり重ねる。→ 原点一致・画像領域にクリップ・**zoom/pan/fit に追従**。
+  - `rect` は `Viewer2D` が `getImageData().imageData.indexToWorld(画像四隅) → worldToCanvas` で算出し、
+    `CAMERA_MODIFIED` ごとに更新（`renderOverlay` prop 経由で `{rect, imageId, index, count}` を供給）。
+  - 配線: `Viewer2DScreen`(useMemo `renderFusionOverlay`) → `SeriesViewer.renderFusionOverlay`
+    → `Viewer2D.renderOverlay` → `FusionImageViewer`。
+- **空間 Fusion**: 前景・背景に IOP/IPP がある場合、`computeFusionSlice`（trilinear）で前景を
+  **背景グリッド(bgCols×bgRows)に再構成**。canvas は CSS で `rect` に伸縮 → ピクセル単位で base に整合。
+- **非空間フォールバック**: IOP/IPP が無い場合（CR/DX 等）は比例 Z（`baseIndex/baseCount`）で前景スライスを
+  選び、`rect` にストレッチ。フォールバック Viewer2D は廃止 → **LUT が常に canvas 経由で効く**。
+- **値0は透明（`toImageData`）**: 8bit 化で 0（窓下限以下＝背景）になった画素は alpha=0。
+  GRAPHY の `ImageRoi.setZeroTransparent(true)` 相当。base が黒く暗転せず信号部のみ重畳。
+- **LUT**: `toImageData(values, cols, rows, wc, ww, lut?)` の第 6 引数。`fusionLut` 変更で再描画（即反映）。
+- **不透明度**: canvas の CSS `opacity`（再描画不要）。
+- **注意**: `rect` は軸並行 BBox 算出のため base を**回転**させると厳密でない（fit/zoom/pan/flip は追従）。
+  カラー(RGB)前景の非空間フォールバックは未対応。
 
 #### Fusion 設定（`settings/registry.ts`）
 - viewer カテゴリに「フュージョン」セクション追加:
@@ -145,7 +153,13 @@ GRAPHY-Next/
 - **別 Electron ウィンドウ**で開く（`main.js` の `createViewerWindow` + ipc `graphy:open-viewer`、
   `preload` の `openViewer`、App は `location.hash==="#2dviewer"` で分岐）。
 - 左=スタディ/シリーズツリー（検索→展開→＋でタイル追加）、右=**タイル格子**（各タイル＝SeriesViewer）。
-- タイル: ヘッダ（DnD ハンドル / Sync トグル / ×）＋コンテンツ（SeriesViewer + Fusion オーバーレイ）＋ FusionControlBar。
+- タイル: ヘッダ（DnD ハンドル / **エクスポート(⤓)** / Sync トグル / ×）＋コンテンツ（SeriesViewer + Fusion オーバーレイ）＋ FusionControlBar。
+- **画像の外部ドラッグ保存**: タイルヘッダの **⤓ ボタン**で、画像を PNG として外部（デスクトップ/他アプリ）へ
+  **Electron ネイティブドラッグ**保存。クリックでダウンロードも可（web フォールバック兼用）。
+  - 仕組み: `desktop()?.startDrag(dataUrl, filename)` → preload `graphy:start-drag` → main で一時 PNG 書出 +
+    `webContents.startDrag({file, icon})`。OS が本物のファイルドラッグとして扱うため **禁止カーソルが出ない**。
+  - 旧実装の「ウィンドウ外ドラッグ→dragover 途絶検出→auto-capture」タイマー群は撤去（禁止カーソル/不安定の原因）。
+    ヘッダ/シリーズ行の DnD はウィンドウ内（並び替え/Fusion）専用に簡素化。
 
 ## 4. 次にやること（優先度つき・未実装）
 1. **2D Viewer 画面 Phase 2: 同期**（`viewer-2d-screen.md`）
@@ -161,18 +175,18 @@ GRAPHY-Next/
 8. Enhanced 多フレーム（DimensionIndexValues/StackID/InStackPositionNumber、wadouri `frame=`）。
 9. **Fusion 改善**:
    - `viewer.fusionOpacity` / `viewer.fusionLut` を DnD 起動時に自動適用（現状は Settings に保存するのみ）。
-   - Canvas Fusion の LUT をフォールバック Viewer2D にも反映（現状は Cornerstone3D colormap が独立）。
+   - base 回転時の `rect` 厳密化（現状は軸並行 BBox。回転対応は CSS transform 行列が必要）。
+   - カラー(RGB)前景の非空間フォールバック対応。
    - 2D/3D 剛体・非剛体位置合わせ（FW: `~/.claude/.../memory/project_fusion_fw.md` 参照）。
 
 ## 5. 重要な注意・既知の制限
 - **ブラウザ/Electron 実機での目視確認は未了の機能あり**（このセッションは build/tsc/backend test まで）。
   特に: 回転/反転の見え方、GridView リンクの同期、5D の C/T、Undo/Redo、別ウィンドウ起動。
 - **Fusion の実機確認状況**:
-  - DnD → FusionControlBar 表示 / 透過度スライダー / × 解除: 設計上正常のはず。
-  - Canvas trilinear Fusion（CT/MRI の IOP/IPP あり）: 初回描画が完了するまでフォールバック表示。
-  - フォールバック（CSS opacity Viewer2D）: CR/DX 等 IOP/IPP なしの場合に常用。
-  - LUT ボタン → LutDialog → 選択 → Fusion canvas / フォールバック Viewer2D に適用: 設計上正常。
-    ただしフォールバック Viewer2D への LUT 反映は Cornerstone3D colormap 経由で未対応（canvas 経由のみ）。
+  - DnD → FusionControlBar 表示 / 透過度スライダー / × 解除: 動作確認済み（タイル→タイル, シリーズ→タイル）。
+  - オーバーレイ描画は base 画像の表示矩形に重畳（原点一致・画像領域クリップ・zoom/pan 追従）。**要実機目視**。
+  - LUT は canvas 経由で常時適用（フォールバック含む）。透過度・LUT とも即反映。
+  - 既知の限界: base 回転時の矩形は軸並行 BBox（厳密でない）。RGB 前景の非空間フォールバックは未対応。
 - **LUT ファイル**: `backend/src/main/resources/luts/*.lut`（106 枚）。
   フォーマット判別順: ICOL マジック確認 → 768 バイト Raw → テキスト（tab 区切り）。
 - **GridView/タイルは viewport を多数生成**するため巨大シリーズで負荷大。将来 仮想化/`loadImageToCanvas`

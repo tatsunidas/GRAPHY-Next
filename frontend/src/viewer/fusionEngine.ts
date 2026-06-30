@@ -208,6 +208,13 @@ export function toImageData(
       continue;
     }
     const g = Math.round(Math.max(0, Math.min(255, ((v - lo) / range) * 255)));
+    // 8bit 化で 0（=窓下限以下＝背景）になった画素は完全透明にする。
+    // GRAPHY の ImageRoi.setZeroTransparent(true) 相当。これにより背景が黒く
+    // 被って base が暗転するのを防ぎ、信号部分のみがオーバーレイされる。
+    if (g === 0) {
+      rgba[i * 4 + 3] = 0;
+      continue;
+    }
     rgba[i * 4] = lut ? lut.r[g] : g;
     rgba[i * 4 + 1] = lut ? lut.g[g] : g;
     rgba[i * 4 + 2] = lut ? lut.b[g] : g;

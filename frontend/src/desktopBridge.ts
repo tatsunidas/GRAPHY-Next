@@ -9,6 +9,8 @@ export interface GraphyDesktop {
   pickImportPaths: () => Promise<string[]>;
   /** 2d/3d/mpr/slicer 等の独立ビューアを新規ウィンドウで開く。 */
   openViewer?: (screen: string) => Promise<void>;
+  /** PNG dataURL を OS のネイティブドラッグで外部（デスクトップ/他アプリ）へ書き出す。 */
+  startDrag?: (dataUrl: string, filename: string) => void;
 }
 
 export function desktop(): GraphyDesktop | undefined {

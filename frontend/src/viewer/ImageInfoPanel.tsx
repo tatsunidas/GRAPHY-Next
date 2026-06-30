@@ -56,6 +56,10 @@ export function ImageInfoPanel({
       : "—";
   const matrix =
     info.columns !== undefined && info.rows !== undefined ? `${info.columns} × ${info.rows}` : "—";
+  // ImagePositionPatient(0020,0032): スライス左上画素のワールド座標 [x,y,z](mm, LPS)。
+  const ipp = info.imagePositionPatient
+    ? `${num(info.imagePositionPatient[0], 1)}, ${num(info.imagePositionPatient[1], 1)}, ${num(info.imagePositionPatient[2], 1)} mm`
+    : "—";
   const rescale =
     info.rescaleSlope !== undefined || info.rescaleIntercept !== undefined
       ? `${num(info.rescaleSlope ?? 1, 2)} / ${num(info.rescaleIntercept ?? 0, 2)}`
@@ -83,6 +87,7 @@ export function ImageInfoPanel({
       <Row label={t("viewer.info.pixelSpacing")} value={pixelSpacing} />
       <Row label={t("viewer.info.sliceThickness")} value={info.sliceThickness !== undefined ? `${num(info.sliceThickness, 2)} mm` : "—"} />
       <Row label={t("viewer.info.fov")} value={fov} />
+      <Row label={t("viewer.info.imagePosition")} value={ipp} />
       <Row label={t("viewer.info.voxel")} value={voxel} />
       {voxelDepthNote && (
         <div style={{ textAlign: "right", color: "#9aa6b2", fontSize: 11, marginTop: -1 }}>
