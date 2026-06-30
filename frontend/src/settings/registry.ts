@@ -136,6 +136,13 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
             max: 100000,
             helpKey: "settings.field.qrLargeRetrieveThreshold.help",
           },
+          {
+            key: "dicom.webMoveDestAet",
+            labelKey: "settings.field.webMoveDestAet",
+            type: "text",
+            default: "",
+            helpKey: "settings.field.webMoveDestAet.help",
+          },
         ],
       },
     ],

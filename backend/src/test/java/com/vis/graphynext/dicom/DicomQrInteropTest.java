@@ -91,6 +91,44 @@ class DicomQrInteropTest {
     }
 
     @Test
+    void qrFindSeries_returnsSeriesOfStudy() throws Exception {
+        assumeTrue(toolsPresent, "dcm4che ツール未検出のためスキップ");
+
+        String study = "1.2.qr.findse.study";
+        String series = "1.2.qr.findse.series";
+        try (Peer peer = Peer.startWithPhantom("PIDFS", study, series, "1.2.qr.findse.sop", null)) {
+            var rows = qr.findSeries("127.0.0.1", peer.port, "DCMQRSCP", study, Map.of());
+            assertTrue(rows.stream().anyMatch(r -> series.equals(r.seriesInstanceUid())),
+                    "SERIES C-FIND で投入したシリーズが返るはず");
+        }
+    }
+
+    @Test
+    void cMoveSeries_fromStockDcmqrscp_toOurScp_ingests() throws Exception {
+        assumeTrue(toolsPresent, "dcm4che ツール未検出のためスキップ");
+
+        int ourScpPort = freePort();
+        DicomScpServer ourScp = new DicomScpServer("GRAPHYNEXT", "127.0.0.1", ourScpPort);
+        List<TransferCapability> caps =
+                StorageSopClasses.scpCapabilities(dicomProps.getStorageSopClassesResource());
+        ourScp.addService(new DicomStoreScp(storage, tmp.resolve("movese-incoming")),
+                caps.toArray(TransferCapability[]::new));
+        ourScp.start();
+
+        String study = "1.2.qr.movese.study";
+        String series = "1.2.qr.movese.series";
+        Path aeConfig = tmp.resolve("peer-ae-se.properties");
+        Files.writeString(aeConfig, "GRAPHYNEXT=127.0.0.1:" + ourScpPort + "\n");
+        try (Peer peer = Peer.startWithPhantom("PIDMS", study, series, "1.2.qr.movese.sop", aeConfig)) {
+            qr.moveSeries("127.0.0.1", peer.port, "DCMQRSCP", study, series, "GRAPHYNEXT");
+            assertTrue(waitUntil(() -> storage.findMatches(null, study, series, null).size() >= 1, 15_000),
+                    "C-MOVE(SERIES) で自前 SCP が受信し索引に載るはず");
+        } finally {
+            ourScp.stop();
+        }
+    }
+
+    @Test
     void cGet_fromStockDcmqrscp_ingestsLocally() throws Exception {
         assumeTrue(toolsPresent, "dcm4che ツール未検出のためスキップ");
 

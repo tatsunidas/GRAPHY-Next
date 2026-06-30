@@ -26,6 +26,12 @@ export interface ViewerCommands {
   setWindowLevel(center: number, width: number): void;
   /** DICOM 既定ウィンドウ（WindowCenter/Width）に戻す。 */
   resetWindow(): void;
+  /** 左ドラッグに割り当てる操作/計測/ブラシツールを切替（toolName は Cornerstone のツール名 or 消しゴム id）。 */
+  setActiveTool(toolName: string): void;
+  /** ROI ブラシ径(px)。 */
+  setBrushSize(size: number): void;
+  /** 計測（ROI）注釈を全消去。 */
+  clearAnnotations(): void;
   undo(): void;
   redo(): void;
 }

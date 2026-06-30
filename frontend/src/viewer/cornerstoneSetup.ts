@@ -19,6 +19,7 @@ import {
   EllipticalROITool,
   RectangleROITool,
   ProbeTool,
+  BrushTool,
 } from "@cornerstonejs/tools";
 
 let initPromise: Promise<void> | null = null;
@@ -42,6 +43,8 @@ export function ensureCornerstoneInitialized(): Promise<void> {
       addTool(EllipticalROITool);
       addTool(RectangleROITool);
       addTool(ProbeTool);
+      // セグメンテーション（Mask）編集: ROI ブラシ/消しゴム。
+      addTool(BrushTool);
     })();
   }
   return initPromise;

@@ -85,6 +85,28 @@ public class WebDicomDataService {
         }
     }
 
+    /**
+     * WADO-RS: 指定シリーズの全インスタンスのメタデータ（全属性）を取得する（TagExtractor の web 取得元）。
+     * {@code GET {base}/studies/{study}/series/{series}/metadata}（application/dicom+json）。
+     * QIDO は要約属性しか返さないため、シーケンス/Private を含む全タグ抽出にはこちらを使う。
+     */
+    public List<Attributes> seriesMetadata(String studyUid, String seriesUid) {
+        if (baseUrl.isEmpty()) {
+            throw new IllegalStateException(
+                    "DICOMweb 接続先が未設定です（graphy.dicom.dicomweb.base-url）。");
+        }
+        String path = "/studies/" + studyUid + "/series/" + seriesUid + "/metadata";
+        log.debug("WADO-RS metadata request: {}", path);
+        byte[] body = client.get()
+                .uri(ub -> ub.path(path).build())
+                .accept(DICOM_JSON)
+                .retrieve()
+                .body(byte[].class);
+        List<Attributes> result = parseDatasets(body);
+        log.debug("WADO-RS metadata: {} -> {} instances", path, result.size());
+        return result;
+    }
+
     private List<Attributes> qido(String path, Map<String, String> query) {
         if (baseUrl.isEmpty()) {
             throw new IllegalStateException(

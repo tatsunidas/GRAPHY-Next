@@ -9,8 +9,18 @@ import {
   PanTool,
   ZoomTool,
   WindowLevelTool,
+  LengthTool,
+  AngleTool,
+  EllipticalROITool,
+  RectangleROITool,
+  ProbeTool,
+  BrushTool,
+  annotation as csAnnotation,
+  utilities as csToolsUtilities,
   Enums as csToolsEnums,
 } from "@cornerstonejs/tools";
+import { ensureStackSegmentation, disposeViewportSegmentation } from "./segmentation";
+import { ERASER_TOOL_ID } from "./toolIds";
 import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
 import { applyTransform, isPanned, readTransform, type ViewTransform, FIT_TRANSFORM } from "./transform";
 import { readImageInfo, sampleAtCanvas, computeSliceSpacing, type ImageInfo, type PixelSample } from "./imageInfo";
@@ -40,6 +50,17 @@ function isColorImage(inf: ImageInfo | null): boolean {
 // LUT 解除（グレースケール復帰）用の線形グレースケール colormap 名。
 // Cornerstone は colormap の明示「解除」手段を公開しないため、これを適用して戻す。
 const GRAY_COLORMAP = "graphy-gray";
+
+// 計測（ROI）ツール名。setActiveTool で左ドラッグに割り当てる。
+const MEASURE_TOOLS = [
+  LengthTool.toolName,
+  AngleTool.toolName,
+  EllipticalROITool.toolName,
+  RectangleROITool.toolName,
+  ProbeTool.toolName,
+];
+// 左ドラッグに割り当て可能なツール一覧（操作＋計測＋ブラシ）。
+const PRIMARY_TOOLS = [WindowLevelTool.toolName, PanTool.toolName, ZoomTool.toolName, ...MEASURE_TOOLS, BrushTool.toolName];
 
 // 単一の RenderingEngine を全ビューポートで共有する（WebGL コンテキストを 1 つに保つ＝省メモリ）。
 export const ENGINE_ID = "graphy-engine";
@@ -498,6 +519,14 @@ export function Viewer2D({
             tg.addTool(WindowLevelTool.toolName);
             tg.addTool(PanTool.toolName);
             tg.addTool(ZoomTool.toolName);
+            // 計測（ROI）ツールは passive で追加。setActiveTool で左ドラッグに割当。
+            for (const tn of MEASURE_TOOLS) {
+              tg.addTool(tn);
+              tg.setToolPassive(tn);
+            }
+            // ROI ブラシ（セグメンテーション編集）。passive で追加。
+            tg.addTool(BrushTool.toolName);
+            tg.setToolPassive(BrushTool.toolName);
             tg.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
             tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
             tg.setToolActive(ZoomTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary }] });
@@ -568,6 +597,9 @@ export function Viewer2D({
       element.removeEventListener(EVENTS.VOI_MODIFIED, onVoiModified);
       element.removeEventListener("mousemove", onMove);
       element.removeEventListener("mouseleave", onLeave);
+      if (!compact && !syncGroupId) {
+        disposeViewportSegmentation(viewportId);
+      }
       if (syncGroupId) {
         // 共有ツールグループ/同期からこのビューポートだけ外す（グループ自体は他セルが使用）。
         try {
@@ -717,6 +749,16 @@ export function Viewer2D({
       } else if (matchesCombo("I", e)) {
         e.preventDefault();
         toggleInvert();
+      } else if (e.key === "Delete" || e.key === "Backspace") {
+        // 選択中の ROI（計測注釈）を 1 つずつ削除。ROI をクリックで選択 → Delete/Backspace。
+        const sel = csAnnotation.selection.getAnnotationsSelected();
+        if (sel.length) {
+          e.preventDefault();
+          for (const uid of sel) {
+            try { csAnnotation.state.removeAnnotation(uid); } catch { /* ignore */ }
+          }
+          viewportRef.current?.render();
+        }
       }
     };
     window.addEventListener("keydown", onKey);
@@ -773,11 +815,75 @@ export function Viewer2D({
     }
   };
 
+  // 操作/計測/ブラシツールの切替（左ドラッグ割当）。中=Pan・右=Zoom はナビ用に常時維持。
+  // ブラシ/消しゴムは BrushTool に集約（消しゴム=ERASE ストラテジ）。選択時に labelmap を保証。
+  const setActiveTool = (toolName: string) => {
+    const tg = ToolGroupManager.getToolGroup(`${viewportIdRef.current}-tg`);
+    if (!tg) return;
+    const isBrush = toolName === BrushTool.toolName;
+    const isEraser = toolName === ERASER_TOOL_ID;
+    const primary = isEraser ? BrushTool.toolName : toolName;
+    const applyBindings = () => {
+      try {
+        for (const tn of PRIMARY_TOOLS) {
+          if (tn !== primary) tg.setToolPassive(tn);
+        }
+        const isPan = primary === PanTool.toolName;
+        const isZoom = primary === ZoomTool.toolName;
+        tg.setToolActive(primary, {
+          bindings: [
+            { mouseButton: MouseBindings.Primary },
+            ...(isPan ? [{ mouseButton: MouseBindings.Auxiliary }] : []),
+            ...(isZoom ? [{ mouseButton: MouseBindings.Secondary }] : []),
+          ],
+        });
+        if (!isPan) tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
+        if (!isZoom) tg.setToolActive(ZoomTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary }] });
+        if (isBrush || isEraser) {
+          tg.setToolConfiguration(BrushTool.toolName, {
+            activeStrategy: isEraser ? "ERASE_INSIDE_CIRCLE" : "FILL_INSIDE_CIRCLE",
+          });
+        }
+        setPanMode(isPan);
+      } catch {
+        /* ツールグループ未準備時は無視 */
+      }
+    };
+    if (isBrush || isEraser) {
+      // Mask(labelmap) を現在スタックに対し保証してからブラシを有効化。
+      void ensureStackSegmentation(viewportIdRef.current, imageIdsRef.current).then(applyBindings);
+    } else {
+      applyBindings();
+    }
+  };
+  // ブラシ径（px）。
+  const setBrushSize = (size: number) => {
+    try {
+      csToolsUtilities.segmentation.setBrushSizeForToolGroup(`${viewportIdRef.current}-tg`, size);
+    } catch {
+      /* ignore */
+    }
+  };
+  // この viewport の注釈（計測 ROI）を全消去。
+  const clearAnnotations = () => {
+    const v = vp();
+    try {
+      csAnnotation.state.removeAllAnnotations();
+      if (v) v.render();
+    } catch {
+      /* ignore */
+    }
+  };
+
   // 画面メニュー/ツールバーからの一括コマンド。最新の実装を ref に保持し、登録は wrapper 経由で常に最新を呼ぶ。
   const commandsRef = useRef<ViewerCommands>({
-    fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, setWindowLevel, resetWindow, undo, redo,
+    fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, setWindowLevel, resetWindow,
+    setActiveTool, setBrushSize, clearAnnotations, undo, redo,
   });
-  commandsRef.current = { fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, setWindowLevel, resetWindow, undo, redo };
+  commandsRef.current = {
+    fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, setWindowLevel, resetWindow,
+    setActiveTool, setBrushSize, clearAnnotations, undo, redo,
+  };
   useEffect(() => {
     if (!commandKey || compact || syncGroupId) return;
     return registerViewerCommands(commandKey, {
@@ -790,6 +896,9 @@ export function Viewer2D({
       applyLut: (lut) => commandsRef.current.applyLut(lut),
       setWindowLevel: (c, w) => commandsRef.current.setWindowLevel(c, w),
       resetWindow: () => commandsRef.current.resetWindow(),
+      setActiveTool: (n) => commandsRef.current.setActiveTool(n),
+      setBrushSize: (s) => commandsRef.current.setBrushSize(s),
+      clearAnnotations: () => commandsRef.current.clearAnnotations(),
       undo: () => commandsRef.current.undo(),
       redo: () => commandsRef.current.redo(),
     });

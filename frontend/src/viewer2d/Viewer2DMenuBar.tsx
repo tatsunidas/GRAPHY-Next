@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import { type ViewerActions } from "./Viewer2DToolbar";
 import { WL_PRESETS } from "./wlPresets";
+import { TOOL_IDS } from "../viewer/toolIds";
 
 interface MenuItem {
   label: string;
@@ -17,10 +18,12 @@ interface MenuItem {
 export function Viewer2DMenuBar({
   actions,
   refLines,
+  activeTool,
   onClose,
 }: {
   actions: ViewerActions;
   refLines: boolean;
+  activeTool: string;
   onClose: () => void;
 }) {
   const { t } = useI18n();
@@ -77,12 +80,20 @@ export function Viewer2DMenuBar({
       id: "roi",
       label: t("viewer2d.menu.roi"),
       items: [
-        { label: t("viewer2d.roi.length"), onClick: () => actions.comingSoon(t("viewer2d.roi.length")) },
-        { label: t("viewer2d.roi.angle"), onClick: () => actions.comingSoon(t("viewer2d.roi.angle")) },
-        { label: t("viewer2d.roi.ellipse"), onClick: () => actions.comingSoon(t("viewer2d.roi.ellipse")) },
-        { label: t("viewer2d.roi.rect"), onClick: () => actions.comingSoon(t("viewer2d.roi.rect")) },
-        { label: t("viewer2d.roi.probe"), onClick: () => actions.comingSoon(t("viewer2d.roi.probe")) },
-        { label: t("viewer2d.roi.clear"), onClick: () => actions.comingSoon(t("viewer2d.roi.clear")) },
+        { label: t("viewer2d.roi.length"), onClick: () => actions.setTool(TOOL_IDS.length), checked: activeTool === TOOL_IDS.length },
+        { label: t("viewer2d.roi.angle"), onClick: () => actions.setTool(TOOL_IDS.angle), checked: activeTool === TOOL_IDS.angle },
+        { label: t("viewer2d.roi.ellipse"), onClick: () => actions.setTool(TOOL_IDS.ellipse), checked: activeTool === TOOL_IDS.ellipse },
+        { label: t("viewer2d.roi.rect"), onClick: () => actions.setTool(TOOL_IDS.rect), checked: activeTool === TOOL_IDS.rect },
+        { label: t("viewer2d.roi.probe"), onClick: () => actions.setTool(TOOL_IDS.probe), checked: activeTool === TOOL_IDS.probe },
+        { label: t("viewer2d.roi.clear"), onClick: actions.clearRois },
+      ],
+    },
+    {
+      id: "tools",
+      label: t("main.menu.tools"),
+      items: [
+        { label: t("viewer2d.tool.brush"), onClick: () => actions.setTool(TOOL_IDS.brush), checked: activeTool === TOOL_IDS.brush },
+        { label: t("viewer2d.tool.eraser"), onClick: () => actions.setTool(TOOL_IDS.eraser), checked: activeTool === TOOL_IDS.eraser },
       ],
     },
     {

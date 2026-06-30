@@ -210,26 +210,51 @@ export const fetchLutNames = () => httpGet<string[]>("/api/luts");
 export const fetchLutData = (name: string) =>
   httpGet<LutData>(`/api/luts/${encodeURIComponent(name)}`);
 
-// ── TagExtractor（タグ一括抽出） ───────────────────────────────
+// ── TagExtractor（タグ一括抽出: シーケンス/Private 対応・検索リスト全体・テーブル/CSV） ──
 
-export interface TagExtractRequest {
-  /** 抽出対象スタディ（必須）。 */
-  studyUid: string;
-  /** シリーズに絞る場合に指定。未指定ならスタディ全体。 */
-  seriesUid?: string;
-  /** 抽出するタグ番号（8 桁 hex, 例 "00100010"）。 */
-  tags: string[];
-  format: "csv" | "json";
+/** 標準 DICOM タグ辞書の 1 エントリ。 */
+export interface TagDictEntry {
+  /** 8 桁 hex（例 "00100010"）。 */
+  tag: string;
+  keyword: string;
+  vr: string;
 }
 
-/**
- * タグ抽出を実行し、ダウンロード用の Blob とサーバ提案ファイル名を返す。
- * レスポンスはファイル本体（JSON ラッパではない）なので http ラッパは使わず直接 fetch する。
- */
-export const extractTags = async (
-  req: TagExtractRequest,
-): Promise<{ blob: Blob; filename: string }> => {
-  const res = await fetch(`${apiBase()}/api/extract/tags`, {
+/** 標準 DICOM タグ辞書一覧を取得する（辞書検索・SQ 判定用、起動後キャッシュ）。 */
+export const fetchTagDictionary = () => httpGet<TagDictEntry[]>("/api/dicom/tags");
+
+/** タグパスの 1 セグメント。tag=8桁hex、creator=Private creator（任意）。 */
+export interface TagPathSegment {
+  tag: string;
+  creator?: string;
+}
+
+/** 抽出する 1 つのタグパス（セグメント列＋表示ラベル）。単一タグは segments 長 1。 */
+export interface TagPath {
+  segments: TagPathSegment[];
+  label: string;
+}
+
+export interface ExtractRequest {
+  /** 対象＝検索リスト全体のスタディ UID 群。 */
+  studyUids: string[];
+  paths: TagPath[];
+}
+
+/** 画面テーブル用の抽出結果（列＋行＋エラーログ）。 */
+export interface ExtractTableResult {
+  columns: string[];
+  rows: string[][];
+  errors: string[];
+}
+
+/** 検索リスト全体をシリーズ単位で抽出し、テーブル（列/行/エラー）を返す。 */
+export const extractTable = (req: ExtractRequest) =>
+  httpSend<ExtractTableResult>("/api/extract/table", "POST", req);
+
+/** 同一条件で CSV を取得（Blob＋ファイル名）。http ラッパは JSON 前提のため直接 fetch。 */
+export const extractCsv = async (req: ExtractRequest): Promise<{ blob: Blob; filename: string }> => {
+  const res = await fetch(`${apiBase()}/api/extract/csv`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
@@ -240,7 +265,7 @@ export const extractTags = async (
   const blob = await res.blob();
   const cd = res.headers.get("content-disposition") ?? "";
   const m = /filename="?([^"]+)"?/.exec(cd);
-  const filename = m ? m[1] : `tags.${req.format}`;
+  const filename = m ? m[1] : "tags.csv";
   return { blob, filename };
 };
 

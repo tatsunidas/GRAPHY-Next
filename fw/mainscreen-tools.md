@@ -25,9 +25,10 @@
 | **SeriesExtractor** | 未実装 | 条件（モダリティ/記述/タグ）でシリーズを抽出・分割・コピー/エクスポート。 |
 | Refresh / DB | 実装済 | 一覧更新 / DB テーブル管理。 |
 
-## ビューア
+## ビューア / 通信
 | ボタン | 状態 |
 |---|---|
+| **Query/Retrieve** | **実装済**。常駐別ウィンドウ。Destination タブ・検索(Today既定)・AutoRefresh・C-MOVE 取得。`fw/qr-window.md`。 |
 | **2D Viewer** | Phase 1 実装済（別ウィンドウ・タイル）。`fw/viewer-2d-screen.md`。 |
 | **3D Viewer / MPR Viewer / Slicer** | 未実装（ボタンのみ。近日対応）。 |
 

@@ -2,7 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import {
   qrFindSeries,
   qrRetrieve,
@@ -186,8 +186,8 @@ export function QrTable({
             const series = seriesByStudy.get(s.studyInstanceUid);
             const age = ageAt(s.studyDate, s.patientBirthDate);
             return (
-              <>
-                <tr key={sk} style={studyRow}>
+              <Fragment key={sk}>
+                <tr style={studyRow}>
                   <Td>
                     <button style={expBtn} onClick={() => void toggleExpand(s.studyInstanceUid)} aria-label="expand">
                       {isOpen ? "▾" : "▸"}
@@ -206,7 +206,7 @@ export function QrTable({
                   <Td>{s.numberOfStudyRelatedSeries || (series ? series.length : "")}</Td>
                 </tr>
                 {isOpen && (
-                  <tr key={sk + "-se"}>
+                  <tr>
                     <td colSpan={12} style={{ padding: 0, background: "#fafbfc" }}>
                       {!series && <div style={{ ...pad, color: "#888" }}>{t("common.loading")}</div>}
                       {series && series.length === 0 && <div style={{ ...pad, color: "#888" }}>{t("qr.noSeries")}</div>}
@@ -245,7 +245,7 @@ export function QrTable({
                     </td>
                   </tr>
                 )}
-              </>
+              </Fragment>
             );
           })}
         </tbody>

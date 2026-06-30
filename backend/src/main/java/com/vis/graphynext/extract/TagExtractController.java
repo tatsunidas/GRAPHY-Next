@@ -16,11 +16,12 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 /**
- * TagExtractor: 指定タグ群を CSV/JSON で一括抽出して返す（ダウンロード用）。
+ * TagExtractor: タグ／シーケンス／Private を指定し、検索リスト全体をシリーズ単位で抽出する。
  *
- * <p>{@code POST /api/extract/tags} にスコープ（studyUid 必須、seriesUid 任意）と
- * tags（16 進タグ番号の配列）、format（csv|json）を渡す。レスポンスは
- * {@code Content-Disposition: attachment} 付きでフロントがそのまま保存できる。
+ * <ul>
+ *   <li>{@code POST /api/extract/table} … 画面テーブル用に {columns, rows, errors} を JSON で返す。</li>
+ *   <li>{@code POST /api/extract/csv} … 同一リクエストで CSV（{@code Content-Disposition: attachment}）。</li>
+ * </ul>
  */
 @RestController
 @RequestMapping("/api/extract")
@@ -34,27 +35,30 @@ public class TagExtractController {
         this.service = service;
     }
 
-    /** リクエスト本文。 */
-    public record TagExtractRequest(String studyUid, String seriesUid, List<String> tags, String format) {}
-
-    @PostMapping("/tags")
-    public ResponseEntity<byte[]> extract(@RequestBody TagExtractRequest req) {
-        if (req.studyUid() == null || req.studyUid().isBlank()
-                || req.tags() == null || req.tags().isEmpty()) {
-            return ResponseEntity.badRequest().build();
-        }
-        TagExtractService.ExtractResult result = service.extract(req.studyUid(), req.seriesUid(), req.tags());
-        boolean json = "json".equalsIgnoreCase(req.format());
-        String body = json ? TagExtractFormat.toJson(result) : TagExtractFormat.toCsv(result);
-        String filename = "tags-" + shortId(req.studyUid()) + (json ? ".json" : ".csv");
-        return ResponseEntity.ok()
-                .contentType(json ? MediaType.APPLICATION_JSON : TEXT_CSV)
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
-                .body(body.getBytes(StandardCharsets.UTF_8));
+    /** リクエスト本文。studyUids=検索リスト全体、paths=抽出するタグパス。 */
+    public record ExtractRequest(List<String> studyUids, List<TagExtractService.TagPath> paths) {
     }
 
-    private static String shortId(String uid) {
-        String s = uid.replaceAll("[^0-9A-Za-z]", "");
-        return s.length() <= 12 ? s : s.substring(s.length() - 12);
+    @PostMapping("/table")
+    public ResponseEntity<TagExtractService.TableResult> table(@RequestBody ExtractRequest req) {
+        if (req.studyUids() == null || req.studyUids().isEmpty()
+                || req.paths() == null) {
+            return ResponseEntity.badRequest().build();
+        }
+        return ResponseEntity.ok(service.extractTable(req.studyUids(), req.paths()));
+    }
+
+    @PostMapping("/csv")
+    public ResponseEntity<byte[]> csv(@RequestBody ExtractRequest req) {
+        if (req.studyUids() == null || req.studyUids().isEmpty() || req.paths() == null) {
+            return ResponseEntity.badRequest().build();
+        }
+        TagExtractService.TableResult result = service.extractTable(req.studyUids(), req.paths());
+        String body = TagExtractFormat.toCsv(TagExtractService.toExtractResult(result));
+        String filename = "tags-" + result.rows().size() + "rows.csv";
+        return ResponseEntity.ok()
+                .contentType(TEXT_CSV)
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                .body(body.getBytes(StandardCharsets.UTF_8));
     }
 }

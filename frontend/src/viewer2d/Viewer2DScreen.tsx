@@ -19,6 +19,7 @@ import type { RenderOverlay } from "../viewer/Viewer2D";
 import { buildSeriesLayout, type SeriesLayout } from "../viewer/seriesLayout";
 import { LutDialog, ColorBar } from "../viewer/LutDialog";
 import { runViewerCommand } from "../viewer/viewerCommands";
+import { TOOL_IDS } from "../viewer/toolIds";
 import { Viewer2DToolbar, type ViewerActions } from "./Viewer2DToolbar";
 import { Viewer2DMenuBar } from "./Viewer2DMenuBar";
 import { useI18n } from "../i18n/i18n";
@@ -641,6 +642,8 @@ function TileGrid({
     [selectedIds, patient.tiles],
   );
   const [lutOpen, setLutOpen] = useState(false);
+  // 操作/計測ツール（左ドラッグ割当）。グローバル（タブ内全タイル）に適用。既定 W/L。
+  const [activeTool, setActiveTool] = useState<string>(TOOL_IDS.windowLevel);
   // 未実装メニューの「近日対応」トースト。
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<number | null>(null);
@@ -664,22 +667,35 @@ function TileGrid({
       redo: () => runViewerCommand(resolveTargets(), (c) => c.redo()),
       setWindowLevel: (cc, ww) => runViewerCommand(resolveTargets(), (c) => c.setWindowLevel(cc, ww)),
       resetWindow: () => runViewerCommand(resolveTargets(), (c) => c.resetWindow()),
+      // ツールはグローバルモード（タブ内全タイルへ適用）。
+      setTool: (toolName) => {
+        setActiveTool(toolName);
+        runViewerCommand(patient.tiles.map((tl) => tl.id), (c) => c.setActiveTool(toolName));
+      },
+      setBrushSize: (size) => runViewerCommand(patient.tiles.map((tl) => tl.id), (c) => c.setBrushSize(size)),
+      clearRois: () => {
+        // 全消去は破壊的なので確認する。
+        if (window.confirm(t("viewer2d.roi.clearConfirm"))) {
+          runViewerCommand(resolveTargets(), (c) => c.clearAnnotations());
+        }
+      },
       openLut: () => setLutOpen(true),
       setLayoutCols: (c) => onSetCols(patient.patientKey, c),
       toggleRefLines: () => setRefLines((v) => !v),
       setSyncTargets: (sync) => resolveTargets().forEach((id) => onSetSync(patient.patientKey, id, sync)),
       comingSoon,
     }),
-    [resolveTargets, onSetCols, onSetSync, patient.patientKey, comingSoon],
+    [resolveTargets, onSetCols, onSetSync, patient.patientKey, patient.tiles, comingSoon, t],
   );
 
   return (
     <div style={tileArea}>
-      <Viewer2DMenuBar actions={actions} refLines={refLines} onClose={() => window.close()} />
+      <Viewer2DMenuBar actions={actions} refLines={refLines} activeTool={activeTool} onClose={() => window.close()} />
       <Viewer2DToolbar
         actions={actions}
         layoutCols={patient.gridCols}
         refLines={refLines}
+        activeTool={activeTool}
         selectedCount={selectedIds.size}
         targetCount={n}
       />

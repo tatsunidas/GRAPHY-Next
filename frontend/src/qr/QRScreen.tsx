@@ -19,7 +19,7 @@ import { fetchSettings } from "../settings/settingsApi";
 import { subscribeRemoteAesChanged } from "../remoteAeEvents";
 import { desktop } from "../desktopBridge";
 import { useI18n } from "../i18n/i18n";
-import { SearchPanel } from "../mainscreen/SearchPanel";
+import { QrSearchBar } from "./QrSearchBar";
 import { QrTable } from "./QrTable";
 import { filtersToMatchKeys } from "./qrUtil";
 
@@ -208,7 +208,7 @@ export function QRScreen({ status }: { status: AppStatus | null }) {
         </button>
       </div>
 
-      <SearchPanel onSearch={setFilters} />
+      <QrSearchBar value={filters} onChange={setFilters} />
 
       {banner && <div style={bannerStyle}>{banner}</div>}
 

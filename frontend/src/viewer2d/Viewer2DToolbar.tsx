@@ -4,6 +4,7 @@
  */
 import { useI18n } from "../i18n/i18n";
 import { WL_PRESETS } from "./wlPresets";
+import { TOOL_IDS } from "../viewer/toolIds";
 
 /** メニュー/ツールバー共通のアクション。対象は「選択タイル→無ければ全タイル」（TileGrid 側で解決）。 */
 export interface ViewerActions {
@@ -19,6 +20,12 @@ export interface ViewerActions {
   setWindowLevel(center: number, width: number): void;
   /** DICOM 既定ウィンドウに戻す。 */
   resetWindow(): void;
+  /** 左ドラッグの操作/計測/ブラシツールを切替（全タイルに適用＝グローバルなツールモード）。 */
+  setTool(toolName: string): void;
+  /** ROI ブラシ径(px)。 */
+  setBrushSize(size: number): void;
+  /** 計測 ROI を全消去（対象タイル）。 */
+  clearRois(): void;
   /** LUT 選択ダイアログを開く（適用は選択時に対象タイルへ）。 */
   openLut(): void;
   /** レイアウト列数（0=自動）。 */
@@ -35,12 +42,14 @@ export function Viewer2DToolbar({
   actions,
   layoutCols,
   refLines,
+  activeTool,
   selectedCount,
   targetCount,
 }: {
   actions: ViewerActions;
   layoutCols: number;
   refLines: boolean;
+  activeTool: string;
   selectedCount: number;
   targetCount: number;
 }) {
@@ -65,6 +74,25 @@ export function Viewer2DToolbar({
       <button onClick={() => actions.setSyncTargets(true)} style={btn} title={t("viewer2d.tb.syncOn")}>🔗 ON</button>
       <button onClick={() => actions.setSyncTargets(false)} style={btn} title={t("viewer2d.tb.syncOff")}>🔗 OFF</button>
       <button onClick={actions.toggleRefLines} style={{ ...btn, ...(refLines ? on : null) }} title={t("viewer2d.refLines.toggle")}>┼</button>
+
+      <Sep />
+      {/* 操作ツール（ラジオ・全タイルに適用） */}
+      <button onClick={() => actions.setTool(TOOL_IDS.windowLevel)} style={{ ...btn, ...(activeTool === TOOL_IDS.windowLevel ? on : null) }} title={t("viewer.status.wl")}>W/L</button>
+      <button onClick={() => actions.setTool(TOOL_IDS.pan)} style={{ ...btn, ...(activeTool === TOOL_IDS.pan ? on : null) }} title={t("viewer.pan")}>✋</button>
+      <button onClick={() => actions.setTool(TOOL_IDS.zoom)} style={{ ...btn, ...(activeTool === TOOL_IDS.zoom ? on : null) }} title={t("viewer.zoomIn")}>🔍</button>
+      {(activeTool === TOOL_IDS.brush || activeTool === TOOL_IDS.eraser) && (
+        <label style={{ fontSize: 11, color: "#33404d", display: "inline-flex", alignItems: "center", gap: 3 }} title={t("viewer2d.tool.brushSize")}>
+          🖌
+          <input
+            type="number"
+            min={1}
+            max={200}
+            defaultValue={25}
+            onChange={(e) => actions.setBrushSize(Number(e.target.value))}
+            style={{ width: 52, ...select }}
+          />
+        </label>
+      )}
 
       <Sep />
       {/* W/L プリセット（対象タイル） */}

@@ -172,6 +172,18 @@ class DicomStoreIntegrationTest {
     }
 
     @Test
+    void storedCount_byStudyAndSeries() throws Exception {
+        storage.ingest(writePhantom(DicomPhantomFactory.scImage("PSC", "ST.SC", "SE.SC1", "SOP.SC1a")));
+        storage.ingest(writePhantom(DicomPhantomFactory.scImage("PSC", "ST.SC", "SE.SC1", "SOP.SC1b")));
+        storage.ingest(writePhantom(DicomPhantomFactory.scImage("PSC", "ST.SC", "SE.SC2", "SOP.SC2a")));
+
+        assertEquals(3, storage.storedCount("ST.SC", null), "スタディ全体の保存件数");
+        assertEquals(2, storage.storedCount("ST.SC", "SE.SC1"), "SE.SC1 の保存件数");
+        assertEquals(1, storage.storedCount("ST.SC", "SE.SC2"), "SE.SC2 の保存件数");
+        assertEquals(0, storage.storedCount("ST.NOPE", null), "未保存スタディは 0");
+    }
+
+    @Test
     void listSeries_and_listInstances() throws Exception {
         storage.ingest(writePhantom(DicomPhantomFactory.scImage("PC", "ST.C", "SE.C1", "SOP.C1a")));
         storage.ingest(writePhantom(DicomPhantomFactory.scImage("PC", "ST.C", "SE.C1", "SOP.C1b")));

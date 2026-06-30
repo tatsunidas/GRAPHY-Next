@@ -63,6 +63,9 @@ GRAPHY-Next/
 - ローカル保管庫（H2 索引 + FS）、C-STORE 受信、C-ECHO/GET/MOVE/FIND（dcm4che CLI 連携）。
 - **DICOM Send（C-STORE SCU）**: `DicomStoreScu.storeAll`（単一アソシエーションでスタディ一括送信）＋
   `DicomSendService` ＋ `POST /api/dicom/send` / `GET /api/dicom/remote-aes`。詳細は `fw/mainscreen-tools.md`。
+- **Query/Retrieve ウィンドウ**: 常駐別ウィンドウ（`#qr`）。Destination タブ・共有検索(Today既定)・AutoRefresh・
+  保存済み判定・**Retrieve は C-MOVE**（standalone=自局SCP取込 / web=dcm4chee宛・QIDO判定）。`qr/DimseQrService`
+  拡張＋`qr/QrRetrieveService`＋`/api/dicom/qr/*`、frontend `src/qr/`。設計・検証は **`fw/qr-window.md`**。
 - REST: `/api/studies`（検索: patientId/Name 部分一致, 日付範囲, modality複数, accession）、`/series`、
   `/instances`、`/instances/{sop}/file`（standalone の画像配信=wadouri 用）、
   `/studies/{study}/series/{series}/layout`（**5D ZCT 導出**）、`/dicom/tag`（タグ→keyword/VR）、
