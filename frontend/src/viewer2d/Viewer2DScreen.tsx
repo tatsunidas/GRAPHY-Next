@@ -22,6 +22,7 @@ import { LutDialog, ColorBar } from "../viewer/LutDialog";
 import { runViewerCommand } from "../viewer/viewerCommands";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { subscribeToast } from "../viewer/toast";
+import { WandDialog } from "./WandDialog";
 import { fetchSettings } from "../settings/settingsApi";
 import { applyGlobalLabelmapStyle, applyGlobalAnnotationStyle } from "../viewer/cornerstoneSetup";
 import { Viewer2DToolbar, type ViewerActions } from "./Viewer2DToolbar";
@@ -735,6 +736,18 @@ function TileGrid({
         if (toastTimer.current) window.clearTimeout(toastTimer.current);
         toastTimer.current = window.setTimeout(() => setToast(null), 3500);
       },
+      // 対象（選択→無ければ先頭）タイルのシリーズで Curved MPR ウィンドウを開く（Slicer と同方式）。
+      launchCurvedMpr: () => {
+        const tid = resolveTargets()[0];
+        const tile = patient.tiles.find((tl) => tl.id === tid);
+        if (!tile) { comingSoon(t("curvedMpr.title")); return; }
+        const dims = tileDimsRef.current.get(tile.id);
+        const ctx = { study: tile.study, series: tile.series, c: dims?.c ?? 0, t: dims?.t ?? 0, ts: Date.now() };
+        localStorage.setItem("graphy-curvedmpr-ctx", JSON.stringify(ctx));
+        const d = desktop();
+        if (d?.openViewer) void d.openViewer("curvedmpr");
+        else window.open(`${window.location.pathname}#curvedmpr`, "graphy-curvedmpr");
+      },
     }),
     [resolveTargets, onSetCols, onSetSync, patient.patientKey, patient.tiles, comingSoon, t],
   );
@@ -766,6 +779,7 @@ function TileGrid({
           {toast}
         </div>
       )}
+      <WandDialog />
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
       <div
         style={{

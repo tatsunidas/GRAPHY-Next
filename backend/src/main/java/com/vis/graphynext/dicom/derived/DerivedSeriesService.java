@@ -94,8 +94,10 @@ public class DerivedSeriesService {
         if (req.rows() <= 0 || req.columns() <= 0) {
             throw new IllegalArgumentException("rows / columns が不正です");
         }
-        if (req.imageOrientationPatient() == null || req.imageOrientationPatient().length != 6) {
-            throw new IllegalArgumentException("imageOrientationPatient は 6 要素が必要です");
+        // IOP は「6 要素」または「省略（null/空）」のみ許可。省略時は幾何なし（Curved MPR 等）。
+        double[] iop = req.imageOrientationPatient();
+        if (iop != null && iop.length != 0 && iop.length != 6) {
+            throw new IllegalArgumentException("imageOrientationPatient は 6 要素または省略が必要です");
         }
         if (req.pixelSpacing() == null || req.pixelSpacing().length != 2) {
             throw new IllegalArgumentException("pixelSpacing は 2 要素が必要です");
@@ -126,19 +128,27 @@ public class DerivedSeriesService {
     private Attributes buildInstance(Attributes tmpl, DerivedSeriesRequest req, String newSeriesUid,
                                      int seriesNumber, String modality, DerivedSeriesRequest.Frame f, byte[] px) {
         Attributes a = new Attributes();
-        // 患者/検査/FrameOfReference を元シリーズから個別に確実に引き継ぐ。
+        // 幾何（IOP/IPP）を持つか。Curved MPR 等の曲面/平坦化再構成では省略される。
+        double[] iop = req.imageOrientationPatient();
+        boolean hasGeom = iop != null && iop.length == 6;
+
+        // 患者/検査属性を元シリーズから個別に確実に引き継ぐ。
         int[] inherit = {
                 Tag.SpecificCharacterSet,
                 Tag.PatientID, Tag.PatientName, Tag.PatientBirthDate, Tag.PatientSex, Tag.PatientAge,
                 Tag.StudyInstanceUID, Tag.StudyDate, Tag.StudyTime, Tag.StudyID,
                 Tag.AccessionNumber, Tag.StudyDescription, Tag.ReferringPhysicianName,
-                Tag.FrameOfReferenceUID, Tag.PositionReferenceIndicator,
                 Tag.Manufacturer, Tag.ManufacturerModelName,
                 Tag.PatientPosition,
                 Tag.WindowCenter, Tag.WindowWidth, Tag.VOILUTFunction,
         };
         for (int tag : inherit) {
             copyTag(tmpl, a, tag);
+        }
+        // FrameOfReferenceUID は幾何がある場合のみ引き継ぐ（IPP/IOP 無しで付けると空間登録を偽装するため）。
+        if (hasGeom) {
+            copyTag(tmpl, a, Tag.FrameOfReferenceUID);
+            copyTag(tmpl, a, Tag.PositionReferenceIndicator);
         }
         if (a.getString(Tag.SpecificCharacterSet) == null) {
             a.setSpecificCharacterSet("ISO_IR 192");
@@ -162,8 +172,16 @@ public class DerivedSeriesService {
         // インスタンス（新規）。
         a.setString(Tag.SOPInstanceUID, VR.UI, UIDUtils.createUID());
         a.setInt(Tag.InstanceNumber, VR.IS, f.instanceNumber());
-        a.setString(Tag.ImageType, VR.CS, "DERIVED", "SECONDARY", "RESLICE");
-        a.setString(Tag.DerivationDescription, VR.ST, "Oblique reslice (GRAPHY-Next Slicer)");
+        // 幾何ありは平面リスライス（RESLICE）、幾何なしは曲面/平坦化再構成（DERIVED\SECONDARY のみ）。
+        if (hasGeom) {
+            a.setString(Tag.ImageType, VR.CS, "DERIVED", "SECONDARY", "RESLICE");
+        } else {
+            a.setString(Tag.ImageType, VR.CS, "DERIVED", "SECONDARY");
+        }
+        String derivation = req.derivationDescription() != null && !req.derivationDescription().isBlank()
+                ? req.derivationDescription()
+                : "Oblique reslice (GRAPHY-Next Slicer)";
+        a.setString(Tag.DerivationDescription, VR.ST, derivation);
         copyTag(tmpl, a, Tag.ContentDate);
         copyTag(tmpl, a, Tag.ContentTime);
 
@@ -183,12 +201,17 @@ public class DerivedSeriesService {
             a.setString(Tag.RescaleType, VR.LO, "HU");
         }
 
-        // 幾何（再構成値で更新）。
-        a.setDouble(Tag.ImageOrientationPatient, VR.DS, req.imageOrientationPatient());
-        a.setDouble(Tag.ImagePositionPatient, VR.DS, f.imagePositionPatient());
+        // 幾何（再構成値で更新）。PixelSpacing は常に付与、IOP/IPP は幾何がある場合のみ。
+        if (hasGeom) {
+            a.setDouble(Tag.ImageOrientationPatient, VR.DS, iop);
+            double[] ipp = f.imagePositionPatient();
+            if (ipp != null && ipp.length == 3) {
+                a.setDouble(Tag.ImagePositionPatient, VR.DS, ipp);
+            }
+            a.setDouble(Tag.SpacingBetweenSlices, VR.DS, req.spacingBetweenSlices());
+        }
         a.setDouble(Tag.PixelSpacing, VR.DS, req.pixelSpacing());
         a.setDouble(Tag.SliceThickness, VR.DS, req.sliceThickness());
-        a.setDouble(Tag.SpacingBetweenSlices, VR.DS, req.spacingBetweenSlices());
 
         // トレーサビリティ: 元インスタンスへの参照。
         String srcSop = tmpl.getString(Tag.SOPInstanceUID);

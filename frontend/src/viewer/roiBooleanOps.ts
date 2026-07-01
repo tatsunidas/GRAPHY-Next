@@ -244,11 +244,28 @@ export async function roiToMask(annotationUid: string): Promise<string | null> {
   return res.segId;
 }
 
+/** 3D 連結性（6=面, 18=面+辺, 26=全て）。数字が大きいほど斜め接続もつなぎ、過分割が減る。 */
+export type SplitConnectivity = 6 | 18 | 26;
+
+/** 連結性に応じた 3D 近傍オフセット（[dx,dy,dz]）。累積: 6⊂18⊂26。 */
+function splitOffsets(conn: SplitConnectivity): [number, number, number][] {
+  const offs: [number, number, number][] = [];
+  for (let dz = -1; dz <= 1; dz++)
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0 && dz === 0) continue;
+        const manh = Math.abs(dx) + Math.abs(dy) + Math.abs(dz);
+        if (manh <= (conn === 6 ? 1 : conn === 18 ? 2 : 3)) offs.push([dx, dy, dz]);
+      }
+  return offs;
+}
+
 /**
- * 単一 Mask を 3D 連結成分（6 近傍）で分割し、成分ごとに segment index(1..N) を割り当てた新規 Mask を返す。
+ * 単一 Mask を 3D 連結成分で分割し、成分ごとに segment index(1..N) を割り当てた新規 Mask を返す。
+ * connectivity: 6(面)/18(面+辺)/26(全て)。既定 26（見た目の塊数に近い＝斜め接続もつなぐ）。
  * 前景が無ければ null。成分数は {@link MAX_SEGMENTS} で上限（超過分は最終 index にまとめる）。
  */
-export async function splitMask(maskId: string, viewportIds: string[]): Promise<string | null> {
+export async function splitMask(maskId: string, viewportIds: string[], connectivity: SplitConnectivity = 26): Promise<string | null> {
   const m = readMask(maskId);
   if (!m) return null;
   const first = img(m.labelmapIds[0]);
@@ -267,7 +284,8 @@ export async function splitMask(maskId: string, viewportIds: string[]): Promise<
     for (let i = 0; i < sliceLen; i++) if (vm.getAtIndex(i) > 0) fg[base + i] = 1;
   }
 
-  // 6 近傍連結成分ラベリング（明示スタックの反復 flood fill）。
+  // 連結成分ラベリング（明示スタックの反復 flood fill）。近傍は connectivity で決定。
+  const offs = splitOffsets(connectivity);
   const labels = new Int32Array(sliceLen * depth);
   const stack: number[] = [];
   let next = 0;
@@ -283,13 +301,12 @@ export async function splitMask(maskId: string, viewportIds: string[]): Promise<
       const rem = cur - z * sliceLen;
       const y = (rem / cols) | 0;
       const x = rem - y * cols;
-      // x-1, x+1, y-1, y+1, z-1, z+1
-      if (x > 0 && fg[cur - 1] && !labels[cur - 1]) { labels[cur - 1] = next; stack.push(cur - 1); }
-      if (x < cols - 1 && fg[cur + 1] && !labels[cur + 1]) { labels[cur + 1] = next; stack.push(cur + 1); }
-      if (y > 0 && fg[cur - cols] && !labels[cur - cols]) { labels[cur - cols] = next; stack.push(cur - cols); }
-      if (y < rows - 1 && fg[cur + cols] && !labels[cur + cols]) { labels[cur + cols] = next; stack.push(cur + cols); }
-      if (z > 0 && fg[cur - sliceLen] && !labels[cur - sliceLen]) { labels[cur - sliceLen] = next; stack.push(cur - sliceLen); }
-      if (z < depth - 1 && fg[cur + sliceLen] && !labels[cur + sliceLen]) { labels[cur + sliceLen] = next; stack.push(cur + sliceLen); }
+      for (const [dx, dy, dz] of offs) {
+        const nx = x + dx, ny = y + dy, nz = z + dz;
+        if (nx < 0 || ny < 0 || nx >= cols || ny >= rows || nz < 0 || nz >= depth) continue;
+        const ni = nz * sliceLen + (ny * cols + nx);
+        if (fg[ni] && !labels[ni]) { labels[ni] = next; stack.push(ni); }
+      }
     }
   }
   if (next === 0) return null;

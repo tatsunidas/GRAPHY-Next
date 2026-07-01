@@ -46,17 +46,20 @@ const planeByImageId = new Map<string, PlaneMeta>();
 const seriesByImageId = new Map<string, SeriesMeta>();
 /** seriesUid → そのシリーズの全 imageId（imagePixelModule を捕捉するためのロード済み画像探索用）。 */
 const imageIdsBySeriesUid = new Map<string, string[]>();
-/** seriesUid → 捕捉済み imagePixelModule（シリーズ内で均一）。ロード済み1枚から得て全スライスへ供給。 */
-const pixelModuleBySeriesUid = new Map<string, AnyObj>();
+/** `${moduleType}|${seriesUid}` → 捕捉済みモジュール（シリーズ内で均一）。ロード済み1枚から得て全スライスへ供給。 */
+const moduleCache = new Map<string, AnyObj>();
 
 /**
- * imagePixelModule 未捕捉のシリーズについて、ロード済み画像から捕捉する。
- * これが無いと、プリロード撤廃で未ロードのスライスへスクロールした際に
- * セグメンテーションの `imageChangeEventListener`→`buildMetadata` が pixelRepresentation を読めず落ちる。
+ * シリーズ内で均一なモジュール（imagePixelModule / generalSeriesModule など）を、ロード済み画像から捕捉して
+ * 未ロードスライスにも供給する。これが無いと:
+ * - imagePixelModule: 未ロードスライスへスクロール時に `buildMetadata` が pixelRepresentation を読めず落ちる。
+ * - generalSeriesModule: 未ロードスライスの modality が undefined になり、`isValidVolume` が
+ *   「ロード済み(=実 modality)」と不一致になって false → 3D ツールが「規則的ボリュームでない」と誤判定。
  */
 let capturing = false; // metaData.get 経由の自プロバイダ再入を防ぐガード。
-function capturePixelModule(seriesUid: string): AnyObj | undefined {
-  const cached = pixelModuleBySeriesUid.get(seriesUid);
+function captureModule(seriesUid: string, moduleType: string, valid: (m: AnyObj) => boolean): AnyObj | undefined {
+  const key = `${moduleType}|${seriesUid}`;
+  const cached = moduleCache.get(key);
   if (cached) return cached;
   if (capturing) return undefined;
   const ids = imageIdsBySeriesUid.get(seriesUid);
@@ -65,10 +68,10 @@ function capturePixelModule(seriesUid: string): AnyObj | undefined {
   try {
     for (const id of ids) {
       if (!cache.getImage(id)) continue; // ロード済みのみ（未ロードは実 metadata 無し。wadouri が高優先で先に返す）
-      const pm = metaData.get("imagePixelModule", id) as AnyObj | undefined;
-      if (pm && pm.pixelRepresentation !== undefined && pm.bitsAllocated !== undefined) {
-        pixelModuleBySeriesUid.set(seriesUid, pm);
-        return pm;
+      const m = metaData.get(moduleType, id) as AnyObj | undefined;
+      if (m && valid(m)) {
+        moduleCache.set(key, m);
+        return m;
       }
     }
   } finally {
@@ -85,10 +88,18 @@ export function registerSegMetadataProvider(): void {
   providerRegistered = true;
   metaData.addProvider((type: string, imageId: string) => {
     if (type === "imagePlaneModule") return planeByImageId.get(imageId);
-    if (type === "generalSeriesModule") return seriesByImageId.get(imageId);
+    if (type === "generalSeriesModule") {
+      const series = seriesByImageId.get(imageId);
+      if (!series) return undefined;
+      // ロード済み1枚の実 generalSeriesModule（modality/seriesInstanceUID）を優先して全スライスへ供給。
+      // → isValidVolume の modality 一致判定を通す。未捕捉時は最低限（seriesInstanceUID）を返す。
+      return captureModule(series.seriesInstanceUID, "generalSeriesModule", (m) => m.modality !== undefined) ?? series;
+    }
     if (type === "imagePixelModule") {
       const series = seriesByImageId.get(imageId);
-      return series ? capturePixelModule(series.seriesInstanceUID) : undefined;
+      return series
+        ? captureModule(series.seriesInstanceUID, "imagePixelModule", (m) => m.pixelRepresentation !== undefined && m.bitsAllocated !== undefined)
+        : undefined;
     }
     return undefined;
   }, -1);

@@ -21,7 +21,7 @@ import { ENGINE_ID } from "../viewer/Viewer2D";
 import { getRoiMaskMeta, setRoiMaskMeta, deleteRoiMaskMeta, subscribeRoiMaskStore, getSegEditTarget, getMaskSegments } from "../viewer/roiMaskStore";
 import { createNewMask, addSegmentToActiveMask, activateMask, getLastSegViewport } from "../viewer/segmentation";
 import { fetchSettings } from "../settings/settingsApi";
-import { combineMasks, splitMask, roiToMask, isAreaRoi, type BoolOp } from "../viewer/roiBooleanOps";
+import { combineMasks, splitMask, roiToMask, isAreaRoi, type BoolOp, type SplitConnectivity } from "../viewer/roiBooleanOps";
 import { sphereFromCircleRoi, createSphere3DFromCircleRoi, bakeSphere3D, splitMaskToSlices, maskVolumeStats, type MaskVolumeStats } from "../viewer/roi3d";
 import { listSpheres3D, updateSphere3D, deleteSphere3D, subscribeSphere3D, type Sphere3D } from "../viewer/sphere3dStore";
 import { annotationsToImageJDtos } from "../viewer/imagejExport";
@@ -81,6 +81,8 @@ export function RoiManagerPanel({ activePatientKey, onClose }: { activePatientKe
   const [busy, setBusy] = useState(false);
   const [stats, setStats] = useState<Record<string, MaskVolumeStats>>({});
   const [spheres, setSpheres] = useState<Sphere3D[]>([]);
+  // Split の 3D 連結性（6=面/18=面+辺/26=全て）。既定 26＝斜め接続もつなぎ過分割を抑える。
+  const [splitConn, setSplitConn] = useState<SplitConnectivity>(26);
   // マスク行の初期値（環境設定 viewer.maskFillOpacity / maskOutlineWidth に追従）。
   const [maskDefaults, setMaskDefaults] = useState({ fillOpacity: 0.5, outlineWidth: 1 });
   useEffect(() => {
@@ -378,7 +380,7 @@ export function RoiManagerPanel({ activePatientKey, onClose }: { activePatientKe
     if (ids.length !== 1 || busy) return;
     setBusy(true);
     try {
-      const res = await splitMask(ids[0], viewportsForMasks(ids));
+      const res = await splitMask(ids[0], viewportsForMasks(ids), splitConn);
       if (!res) { window.alert(t("roiMgr.opFailed")); return; }
       try { csSeg.removeSegmentation(ids[0]); } catch { /* ignore */ }
       deleteRoiMaskMeta(ids[0]);
@@ -430,7 +432,7 @@ export function RoiManagerPanel({ activePatientKey, onClose }: { activePatientKe
       {rois.length === 0 && <div style={empty}>{t("roiMgr.empty")}</div>}
       {rois.map((r) => (
         <div key={r.uid} style={row}>
-          <input type="checkbox" checked={r.visible} onChange={(e) => toggleRoi(r.uid, e.target.checked)} title={t("roiMgr.visible")} />
+          <button onClick={() => toggleRoi(r.uid, !r.visible)} style={eyeBtn} title={t("roiMgr.visible")}>{r.visible ? "👁" : "🚫"}</button>
           <input
             type="text" style={name} title={r.tool}
             defaultValue={getRoiMaskMeta(r.uid)?.label ?? r.tool}
@@ -533,11 +535,15 @@ export function RoiManagerPanel({ activePatientKey, onClose }: { activePatientKe
       {masks.length > 0 && (
         <div style={opsBar}>
           <span style={{ color: "#5a6672", marginRight: 2 }}>{t("roiMgr.ops")} ({selected.size})</span>
-          <button onClick={() => runCombine("or")} disabled={busy || selected.size < 2} style={opBtn} title={t("roiMgr.opOr")}>OR</button>
+          <button onClick={() => runCombine("or")} disabled={busy || selected.size < 2} style={opBtn} title={t("roiMgr.opMerge")}>{t("roiMgr.merge")}</button>
           <button onClick={() => runCombine("and")} disabled={busy || selected.size < 2} style={opBtn} title={t("roiMgr.opAnd")}>AND</button>
           <button onClick={() => runCombine("xor")} disabled={busy || selected.size < 2} style={opBtn} title={t("roiMgr.opXor")}>XOR</button>
-          <button onClick={() => runCombine("or")} disabled={busy || selected.size < 2} style={opBtn} title={t("roiMgr.opMerge")}>{t("roiMgr.merge")}</button>
           <button onClick={runSplit} disabled={busy || selected.size !== 1} style={opBtn} title={t("roiMgr.opSplit")}>{t("roiMgr.split")}</button>
+          <select value={splitConn} onChange={(e) => setSplitConn(Number(e.target.value) as SplitConnectivity)} title={t("roiMgr.splitConn")} style={{ ...opBtn, padding: "2px 4px" }}>
+            <option value={26}>26</option>
+            <option value={18}>18</option>
+            <option value={6}>6</option>
+          </select>
         </div>
       )}
 

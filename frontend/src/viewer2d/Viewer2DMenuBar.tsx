@@ -53,6 +53,7 @@ export function Viewer2DMenuBar({
         { label: t("main.toolbar.viewer3d"), onClick: () => actions.comingSoon(t("main.toolbar.viewer3d")) },
         { label: t("main.toolbar.mpr"), onClick: () => actions.comingSoon(t("main.toolbar.mpr")) },
         { label: t("main.toolbar.slicer"), onClick: () => actions.comingSoon(t("main.toolbar.slicer")) },
+        { label: `${t("curvedMpr.title")}…`, onClick: () => actions.launchCurvedMpr() },
       ],
     },
     {

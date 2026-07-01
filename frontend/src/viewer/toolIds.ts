@@ -13,12 +13,13 @@ import {
   RectangleROITool,
   ProbeTool,
   BrushTool,
-  RegionSegmentPlusTool,
 } from "@cornerstonejs/tools";
-import { Wand2DTool } from "./wand2d";
 
 /** 消しゴムの合成ツール ID（BrushTool の ERASE ストラテジに対応する内部値）。 */
 export const ERASER_TOOL_ID = "__graphy_eraser__";
+/** Wand（対話型リージョングロー）の合成 ID。実ツールは WandTool、mode でモード切替（2D/3D）。 */
+export const WAND2D_TOOL_ID = "__graphy_wand2d__";
+export const WAND3D_TOOL_ID = "__graphy_wand3d__";
 
 export const TOOL_IDS = {
   windowLevel: WindowLevelTool.toolName,
@@ -31,8 +32,8 @@ export const TOOL_IDS = {
   probe: ProbeTool.toolName,
   brush: BrushTool.toolName,
   eraser: ERASER_TOOL_ID,
-  /** 3D Wand（ワンクリック growCut 領域成長。GRAPHY の 3D Wand 相当）。 */
-  region3d: RegionSegmentPlusTool.toolName,
-  /** 2D Wand（単一スライスの輝度 flood fill。GRAPHY の 2D Wand 相当）。 */
-  wand2d: Wand2DTool.toolName,
+  /** 3D Wand（対話型・輝度領域成長。ダイアログで seed/connectivity/threshold）。 */
+  region3d: WAND3D_TOOL_ID,
+  /** 2D Wand（対話型・輝度領域成長。単一スライス）。 */
+  wand2d: WAND2D_TOOL_ID,
 } as const;

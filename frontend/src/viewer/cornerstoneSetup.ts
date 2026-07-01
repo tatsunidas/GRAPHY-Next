@@ -9,7 +9,7 @@
 import { init as coreInit } from "@cornerstonejs/core";
 import dicomImageLoader from "@cornerstonejs/dicom-image-loader";
 import { registerSegMetadataProvider } from "./segMetadata";
-import { Wand2DTool } from "./wand2d";
+import { WandTool } from "./wandTool";
 import { installSegDebug } from "./segDebug";
 import {
   init as toolsInit,
@@ -119,7 +119,7 @@ export function ensureCornerstoneInitialized(): Promise<void> {
       addTool(CircleScissorsTool);
       addTool(SphereScissorsTool); // 3D 球で fill/erase
       addTool(RectangleROIThresholdTool); // しきい値塗り
-      addTool(Wand2DTool); // 2D Wand（自作: 単一スライスの輝度 flood fill）
+      addTool(WandTool); // Wand（対話型リージョングロー: 2D/3D 輝度 flood, ダイアログ駆動）
       // MPR（VolumeViewport）: 連動十字線・ボリュームスライス送り。
       addTool(CrosshairsTool);
       addTool(StackScrollTool);

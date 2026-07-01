@@ -16,15 +16,14 @@ import {
   ProbeTool,
   PlanarFreehandROITool,
   BrushTool,
-  RegionSegmentPlusTool,
   annotation as csAnnotation,
   utilities as csToolsUtilities,
   Enums as csToolsEnums,
 } from "@cornerstonejs/tools";
 import { ensureStackSegmentation, disposeViewportSegmentation, noteSegViewport } from "./segmentation";
-import { Wand2DTool } from "./wand2d";
+import { WandTool, commitWand } from "./wandTool";
 import { emitToast } from "./toast";
-import { ERASER_TOOL_ID } from "./toolIds";
+import { ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID } from "./toolIds";
 import { setViewerContext, clearViewerContext, getViewerContext, type ViewerContext } from "./viewerContext";
 import { setRoiMaskMeta, subscribeRoiMaskStore } from "./roiMaskStore";
 import { reconcileGlobalAnnotations } from "./globalRoiSync";
@@ -68,10 +67,10 @@ const MEASURE_TOOLS = [
   ProbeTool.toolName,
 ];
 // 左ドラッグに割り当て可能なツール一覧（操作＋計測＋ブラシ＋3D Wand）。
-const PRIMARY_TOOLS = [WindowLevelTool.toolName, PanTool.toolName, ZoomTool.toolName, ...MEASURE_TOOLS, BrushTool.toolName, RegionSegmentPlusTool.toolName, Wand2DTool.toolName];
+const PRIMARY_TOOLS = [WindowLevelTool.toolName, PanTool.toolName, ZoomTool.toolName, ...MEASURE_TOOLS, BrushTool.toolName, WandTool.toolName];
 // 描画/計測/セグメンテーション系ツール（左ドラッグ占有）。これらが有効な間は per-tile の Pan↔W/L 切替を抑止し、
 // 先にツールバーで解除するよう促す（グローバルツールが優先＝ナビ切替が黙って効かないのを避ける）。
-const BLOCKING_TOOLS = new Set<string>([...MEASURE_TOOLS, BrushTool.toolName, ERASER_TOOL_ID, RegionSegmentPlusTool.toolName, Wand2DTool.toolName]);
+const BLOCKING_TOOLS = new Set<string>([...MEASURE_TOOLS, BrushTool.toolName, ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID]);
 
 // 単一の RenderingEngine を全ビューポートで共有する（WebGL コンテキストを 1 つに保つ＝省メモリ）。
 export const ENGINE_ID = "graphy-engine";
@@ -590,11 +589,9 @@ export function Viewer2D({
             tg.addTool(BrushTool.toolName);
             tg.setToolPassive(BrushTool.toolName);
             // 3D Wand（ワンクリック growCut 領域成長）。passive で追加、setActiveTool で Primary 割当。
-            tg.addTool(RegionSegmentPlusTool.toolName);
-            tg.setToolPassive(RegionSegmentPlusTool.toolName);
-            // 2D Wand（自作: 単一スライスの輝度 flood fill）。passive で追加。
-            tg.addTool(Wand2DTool.toolName);
-            tg.setToolPassive(Wand2DTool.toolName);
+            // Wand（対話型リージョングロー: 2D/3D）。passive で追加、setActiveTool で mode 設定＋Primary 割当。
+            tg.addTool(WandTool.toolName);
+            tg.setToolPassive(WandTool.toolName);
             tg.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
             tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
             tg.setToolActive(ZoomTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary }] });
@@ -908,9 +905,10 @@ export function Viewer2D({
     if (!tg) return;
     const isBrush = toolName === BrushTool.toolName;
     const isEraser = toolName === ERASER_TOOL_ID;
-    const isRegion3d = toolName === RegionSegmentPlusTool.toolName;
-    const isWand2d = toolName === Wand2DTool.toolName;
-    const primary = isEraser ? BrushTool.toolName : toolName;
+    const isWand2d = toolName === WAND2D_TOOL_ID;
+    const isWand3d = toolName === WAND3D_TOOL_ID;
+    const isWand = isWand2d || isWand3d;
+    const primary = isEraser ? BrushTool.toolName : isWand ? WandTool.toolName : toolName;
     const applyBindings = () => {
       try {
         for (const tn of PRIMARY_TOOLS) {
@@ -932,22 +930,24 @@ export function Viewer2D({
             activeStrategy: isEraser ? "ERASE_INSIDE_CIRCLE" : "FILL_INSIDE_CIRCLE",
           });
         }
+        if (isWand) {
+          tg.setToolConfiguration(WandTool.toolName, { mode: isWand3d ? "3d" : "2d" }, true);
+        }
         setPanMode(isPan);
       } catch {
         /* ツールグループ未準備時は無視 */
       }
     };
-    // 3D ツール（3D Wand/将来の球ブラシ・Scissors）は規則的ボリュームでないシリーズでは動かない
-    // （Cornerstone の isValidVolume=false → on-demand volume 化不可）。UI で弾いて理由を通知する。
-    if (isRegion3d && !utilities.isValidVolume(imageIdsRef.current)) {
+    // 3D Wand は規則的ボリュームでないシリーズでは動かない（source を volume 走査できない）。UI で弾く。
+    if (isWand3d && !utilities.isValidVolume(imageIdsRef.current)) {
       emitToast(t("viewer2d.tool.needVolume"));
       return;
     }
+    // Wand 以外のツールへ切り替えるときは、開いている Wand セッションを確定して閉じる。
+    if (!isWand) commitWand();
     activeToolRef.current = toolName; // per-tile Pan↔W/L 切替の抑止判定に使う。
-    if (isBrush || isEraser || isRegion3d || isWand2d) {
+    if (isBrush || isEraser || isWand) {
       // Mask(labelmap) を現在スタックに対し保証してからブラシ/Wand を有効化。
-      // 3D Wand（growCut）は内部で source を on-demand volume 化して領域成長する（規則的ボリューム前提）。
-      // 2D Wand は自作のクリック輝度 flood（現在スライスのみ）。
       void ensureStackSegmentation(viewportIdRef.current, imageIdsRef.current).then(applyBindings);
     } else {
       applyBindings();
@@ -961,11 +961,10 @@ export function Viewer2D({
       /* ignore */
     }
   };
-  // 2D Wand のトレランス（シード輝度からの許容差）。
-  const setWandTolerance = (tol: number) => {
+  // Wand のトレランスは Wand ダイアログ（seed 記憶＋動的 Update）へ移行したため、これは互換用の no-op。
+  const setWandTolerance = (_tol: number) => {
     try {
-      const tg = ToolGroupManager.getToolGroup(`${viewportIdRef.current}-tg`);
-      tg?.setToolConfiguration(Wand2DTool.toolName, { threshold: tol }, true);
+      void _tol;
     } catch {
       /* ignore */
     }

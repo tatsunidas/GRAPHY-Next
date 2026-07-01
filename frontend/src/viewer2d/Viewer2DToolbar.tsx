@@ -41,6 +41,8 @@ export interface ViewerActions {
   comingSoon(name: string): void;
   /** 対象シリーズを ImageJ の HyperStack として開く（ローカル ImageJ 起動）。 */
   bridgeImageJ(): void;
+  /** 対象タイルのシリーズで Curved MPR ウィンドウを開く。 */
+  launchCurvedMpr(): void;
 }
 
 /** 2D Viewer 画面ツールバー。グループ分けしたアイコン行（対象=選択 or 全）。 */
@@ -96,18 +98,6 @@ export function Viewer2DToolbar({
             defaultValue={25}
             onChange={(e) => actions.setBrushSize(Number(e.target.value))}
             style={{ width: 52, ...select }}
-          />
-        </label>
-      )}
-      {activeTool === TOOL_IDS.wand2d && (
-        <label style={{ fontSize: 11, color: "#33404d", display: "inline-flex", alignItems: "center", gap: 3 }} title={t("viewer2d.tool.wandTolerance")}>
-          🪄
-          <input
-            type="number"
-            min={0}
-            defaultValue={50}
-            onChange={(e) => actions.setWandTolerance(Number(e.target.value))}
-            style={{ width: 60, ...select }}
           />
         </label>
       )}

@@ -102,6 +102,7 @@ Cornerstone3D のセグメンテーション系ツール（stack/volume labelmap
 2. **M3 残り**: ① ROI→Mask は実装済（▦）。② AND/合成結果が**空のときの通知**（現状は空 Mask を生成）。③ 結果 Mask の**輪郭化**（kind:"shape" ベクタ復帰, 任意）。④ ラスタ化の **scope.z="all" 対応**（現状は作成スライスのみ。全スライス投影は未対応）。
 3. **M4 3D 残り**: ① **インタラクティブ球定義ツール**（現状は円 ROI 経由の間接定義。ビューポート上で中心ドラッグ＋半径ハンドルの直接作成/リサイズは未。移動/半径ドラッグ編集も未＝現状は数値のみ）。② 2D→3D の**補間オプション**（スライス間の欠損補間）。③ SPLIT/球/Mask の **3D 表示**（VolumeViewport/Surface 連携）。④ **FreeForm3D 相当のパラメトリック保持**（現状 Mask=labelmap で保持。球のような非破壊パラメトリック freeform は未＝labelmap 直編集）。※ ライブ球プレビュー・3D→2D split・2D→3D 積層(OR)・体積/HU 統計は実装済。
 4. **M5/保存 残り（任意）**: ① **Mask→ImageJ**（labelmap 輪郭トレース→polygon ROI、or ImageJ ラベル画像）。② **DICOM SEG 書込**（読込は実装済 `DicomStorageService.segLayoutIfApplicable`/`multiFrameDicom` と対称）。③ RTSTRUCT・JSON/CSV。※ ROI Import(.roi/.zip→Cornerstone) はユーザ要件として**完了**。
+   - **設計追加: `fw/dicom-seg-rtstruct-design.md`（2026-07-01）** — DICOM SEG（マスク＝BINARY, 多セグメント, 読込と対称）＋ RTSTRUCT（2D ベクタ ROI＝閉輪郭 ContourSequence）の書き出し設計。dcm4che 5.34.3、`/api/dicom/seg`・`/api/dicom/rtstruct`、参照シリーズ幾何/FoR 継承、DB 取込→新シリーズ。フェーズ S1(SEG 書込)→S2(RTSTRUCT 書込)→S3(RTSTRUCT 読込)→S4(GSPS/SR 任意)。**未実装（設計のみ）**。
 5. **ImageJ**: ✅ **ユーザ要件（①ROI .roi/.zip 入出力 ②HyperStack ブリッジ ③IJ ROI Import）3 点とも完了。これ以上の深掘り不要**（確定）。残は任意: Mask→ImageJ ラベル画像、ブリッジ編集 ROI の Next 往復。
 
 ## このワークストリームで追加した主なファイル（オリエンテーション用）
