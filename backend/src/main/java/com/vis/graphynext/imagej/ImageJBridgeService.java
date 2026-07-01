@@ -61,12 +61,20 @@ public class ImageJBridgeService {
         ImageProcessor[] procs = new ImageProcessor[total];
         int width = layout.imageWidth();
         int height = layout.imageHeight();
+        // 値(輝度)キャリブレーション: ImageJ の DICOM Opener が RescaleSlope/Intercept を読み、
+        // source ImagePlus に HU 等の直線キャリブレーションを設定する。合成 HyperStack はこれを
+        // 引き継がないため、最初に見つかった校正済み source の Calibration を控えて後で適用する。
+        Calibration valueCal = null;
 
         for (SeriesLayout.Cell cell : layout.cells()) {
-            ImageProcessor ip = loadProcessor(cell);
-            if (ip == null) continue;
+            Loaded loaded = loadProcessor(cell);
+            if (loaded == null || loaded.ip() == null) continue;
+            ImageProcessor ip = loaded.ip();
             width = ip.getWidth();
             height = ip.getHeight();
+            if (valueCal == null && loaded.cal() != null && loaded.cal().calibrated()) {
+                valueCal = loaded.cal();
+            }
             int idx = cell.c() + nC * (cell.z() + nZ * cell.t());
             if (idx >= 0 && idx < total) procs[idx] = ip;
         }
@@ -81,29 +89,45 @@ public class ImageJBridgeService {
             stack.addSlice(ip != null ? ip : new ShortProcessor(width, height));
         }
 
+        // ★ 重要: ImagePlus を生成する「前」に ImageJ を起動する（順序が肝）。
+        // ij.ImagePlus は `private ImageJ ij = IJ.getInstance();` というフィールド初期化子を持ち、
+        // これは new ImagePlus(...) した瞬間に一度だけ評価される。そのため ImagePlus 生成より後に
+        // ImageJ を起動すると、生成済み ImagePlus の内部 ij 参照が null 固定になり、カーソル移動時の
+        // IJ.showStatus() による輝度値ステータス表示が永久に動かなくなる（GRAPHY Viewer2DToolBar
+        // 「imagej」ボタンの知見）。openProcessor 内の一時 ImagePlus は表示しないので影響なし。
+        if (IJ.getInstance() == null) {
+            // EMBEDDED = ImageJ ウィンドウを閉じても System.exit() で backend(JVM) を落とさない。
+            // STANDALONE は quit 時に JVM を終了させ、Spring Boot backend を巻き込むため使わない。
+            ImageJ ij = new ImageJ(ImageJ.EMBEDDED);
+            ij.exitWhenQuitting(false);
+        }
+
         String label = (title == null || title.isBlank()) ? ("GRAPHY " + seriesUid) : title;
         ImagePlus imp = new ImagePlus(label, stack);
         imp.setDimensions(nC, nZ, nT);
         imp.setOpenAsHyperStack(nZ * nC * nT > 1);
+        // 値(HU 等)キャリブレーションを source から引き継ぎ（copy で函数/係数/単位を保持）、
+        // 空間キャリブレーション(pixelWidth/Height, mm)は layout の pixelSpacing で上書きする。
+        // これにより ImageJ ステータスバーに座標＋HU 値が表示される（GRAPHY と同方針）。
+        Calibration cal = (valueCal != null) ? valueCal.copy() : imp.getCalibration();
         if (layout.pixelSpacingCol() > 0 && layout.pixelSpacingRow() > 0) {
-            Calibration cal = imp.getCalibration();
             cal.pixelWidth = layout.pixelSpacingCol();
             cal.pixelHeight = layout.pixelSpacingRow();
             cal.setUnit("mm");
-            imp.setCalibration(cal);
         }
+        imp.setCalibration(cal);
 
-        // ローカル ImageJ を起動（未起動時のみ）して HyperStack を表示。
-        if (IJ.getInstance() == null) {
-            new ImageJ(ImageJ.STANDALONE);
-        }
+        // show() で ImageJ の WindowManager に自動登録され、ステータスバーに座標＋輝度値が出る。
         imp.show();
         log.info("[imagej] bridged series {} as HyperStack {}x{} Z{} C{} T{}", seriesUid, width, height, nZ, nC, nT);
         return new BridgeResult(nZ, nC, nT, width, height);
     }
 
-    /** セル（(c,z,t)→SOP, frame）から ImageJ の ImageProcessor を得る。 */
-    private ImageProcessor loadProcessor(SeriesLayout.Cell cell) throws IOException {
+    /** 読み込んだ 1 枚: ImageProcessor（画素）＋ source ImagePlus の Calibration（HU 等の値校正）。 */
+    private record Loaded(ImageProcessor ip, Calibration cal) {}
+
+    /** セル（(c,z,t)→SOP, frame）から ImageProcessor と Calibration を得る。 */
+    private Loaded loadProcessor(SeriesLayout.Cell cell) throws IOException {
         if (cell.frame() >= 0) {
             // マルチフレーム/モザイク: 単一フレーム DICOM を一時ファイルに書き出して開く。
             byte[] dicom = storage.frameDicom(cell.sopInstanceUid(), cell.frame());
@@ -121,13 +145,15 @@ public class ImageJBridgeService {
         return openProcessor(path, 0);
     }
 
-    /** ImageJ Opener で DICOM を開き、指定フレームの ImageProcessor を返す。 */
-    private ImageProcessor openProcessor(Path path, int frameIndex) {
+    /** ImageJ Opener で DICOM を開き、指定フレームの ImageProcessor と Calibration を返す。 */
+    private Loaded openProcessor(Path path, int frameIndex) {
         ImagePlus imp = new Opener().openImage(path.toString());
         if (imp == null) return null;
-        if (imp.getStackSize() > 1) {
-            return imp.getStack().getProcessor(Math.min(frameIndex + 1, imp.getStackSize()));
-        }
-        return imp.getProcessor();
+        // Calibration は ImagePlus 単位（全フレーム共通）。RescaleSlope/Intercept 由来の値校正を含む。
+        Calibration cal = imp.getCalibration();
+        ImageProcessor ip = (imp.getStackSize() > 1)
+                ? imp.getStack().getProcessor(Math.min(frameIndex + 1, imp.getStackSize()))
+                : imp.getProcessor();
+        return new Loaded(ip, cal);
     }
 }

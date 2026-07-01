@@ -11,6 +11,7 @@ import {
 } from "./seriesLayout";
 import type { ImageRect } from "./Viewer2D";
 import { imageIdForInstance, type ViewerMode } from "./imageId";
+import { getModalityCalibration } from "./pixelCalibration";
 import { fetchSeriesLayout, type Instance, type SeriesLayoutDto } from "../api";
 import {
   computeFusionSlice,
@@ -86,15 +87,18 @@ async function loadFusionSlice(imageId: string): Promise<FusionSlice | null> {
   }
 
   const plane: AnyObj = metaData.get("imagePlaneModule", imageId) ?? {};
-  const lut: AnyObj = metaData.get("modalityLutModule", imageId) ?? {};
   const ippArr = plane.imagePositionPatient;
   if (!Array.isArray(ippArr) || ippArr.length < 3) return null;
 
+  // 校正は pixelCalibration に一元化（preScale 二重適用を防ぐ）。fusionEngine は pixels*slope+intercept
+  // でモダリティ値を得るため、slope/intercept へ preScale 考慮済みの scale/offset を渡す
+  // （preScale 済みなら {1,0} = そのまま HU）。
+  const cal = getModalityCalibration(image, imageId);
   const slice: FusionSlice = {
     ipp: [Number(ippArr[0]), Number(ippArr[1]), Number(ippArr[2])],
     pixels: image.getPixelData(),
-    slope: (lut.rescaleSlope as number | undefined) ?? (image as AnyObj).slope ?? 1,
-    intercept: (lut.rescaleIntercept as number | undefined) ?? (image as AnyObj).intercept ?? 0,
+    slope: cal.scale,
+    intercept: cal.offset,
   };
   _sliceCache.set(imageId, slice);
   return slice;
@@ -310,11 +314,10 @@ export function FusionImageViewer({
         const rows = (img.rows as number | undefined) ?? (img.height as number | undefined) ?? 0;
         const pix = img.getPixelData() as ArrayLike<number>;
         if (!cols || !rows || pix.length < cols * rows) return; // カラー等は非対応
-        const lutMod: AnyObj = metaData.get("modalityLutModule", fgId) ?? {};
-        const slope = (lutMod.rescaleSlope as number | undefined) ?? (img.slope as number | undefined) ?? 1;
-        const intercept = (lutMod.rescaleIntercept as number | undefined) ?? (img.intercept as number | undefined) ?? 0;
+        // 校正は pixelCalibration に一元化（preScale 二重適用を防ぐ。preScale 済みなら scale/offset={1,0}）。
+        const { scale, offset } = getModalityCalibration(img, fgId);
         const values = new Float32Array(cols * rows);
-        for (let i = 0; i < values.length; i++) values[i] = pix[i] * slope + intercept;
+        for (let i = 0; i < values.length; i++) values[i] = pix[i] * scale + offset;
         const voiLut: AnyObj = metaData.get("voiLutModule", fgId) ?? {};
         let center: number, width: number;
         if (typeof voiLut.windowCenter === "number" && typeof voiLut.windowWidth === "number" && voiLut.windowWidth > 0) {

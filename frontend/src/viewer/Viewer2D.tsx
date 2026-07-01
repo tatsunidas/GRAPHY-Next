@@ -897,6 +897,23 @@ export function Viewer2D({
       setWindowLevel(inf.windowCenter, inf.windowWidth);
     }
   };
+  // 現在の表示 VOI と対象 imageId（W/L 調整ダイアログの初期化用）。
+  const getWindowState = (): { imageId: string; center: number; width: number } | null => {
+    const v = vp();
+    const imageId = imageIdsRef.current[indexRef.current];
+    if (!v || !imageId) return null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const range = (v.getProperties() as any)?.voiRange;
+    if (range && Number.isFinite(range.lower) && Number.isFinite(range.upper) && range.upper > range.lower) {
+      return { imageId, center: (range.upper + range.lower) / 2, width: range.upper - range.lower };
+    }
+    // まだ VOI 未確定なら DICOM 既定ウィンドウで代用。
+    const inf = infoRef.current;
+    if (inf?.windowCenter !== undefined && inf?.windowWidth !== undefined && inf.windowWidth > 0) {
+      return { imageId, center: inf.windowCenter, width: inf.windowWidth };
+    }
+    return { imageId, center: 0, width: 1 };
+  };
 
   // 操作/計測/ブラシツールの切替（左ドラッグ割当）。中=Pan・右=Zoom はナビ用に常時維持。
   // ブラシ/消しゴムは BrushTool に集約（消しゴム=ERASE ストラテジ）。選択時に labelmap を保証。
@@ -983,11 +1000,11 @@ export function Viewer2D({
   // 画面メニュー/ツールバーからの一括コマンド。最新の実装を ref に保持し、登録は wrapper 経由で常に最新を呼ぶ。
   const commandsRef = useRef<ViewerCommands>({
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, setWindowLevel, resetWindow,
-    setActiveTool, setBrushSize, setWandTolerance, clearAnnotations, undo, redo,
+    getWindowState, setActiveTool, setBrushSize, setWandTolerance, clearAnnotations, undo, redo,
   });
   commandsRef.current = {
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, setWindowLevel, resetWindow,
-    setActiveTool, setBrushSize, setWandTolerance, clearAnnotations, undo, redo,
+    getWindowState, setActiveTool, setBrushSize, setWandTolerance, clearAnnotations, undo, redo,
   };
   useEffect(() => {
     if (!commandKey || compact || syncGroupId) return;
@@ -1001,6 +1018,7 @@ export function Viewer2D({
       applyLut: (lut) => commandsRef.current.applyLut(lut),
       setWindowLevel: (c, w) => commandsRef.current.setWindowLevel(c, w),
       resetWindow: () => commandsRef.current.resetWindow(),
+      getWindowState: () => commandsRef.current.getWindowState(),
       setActiveTool: (n) => commandsRef.current.setActiveTool(n),
       setBrushSize: (s) => commandsRef.current.setBrushSize(s),
       setWandTolerance: (v) => commandsRef.current.setWandTolerance(v),

@@ -28,6 +28,7 @@ interface PatientSession {
   patientName: string;
   tiles: Tile[];
   gridCols: number;    // 0 = 自動（ceil(√N)）、>0 = 手動指定列数
+  gridRows: number;    // 0 = 自動（列から行が流れる）、>0 = 手動指定行数（Row×Col 固定）
 }
 ```
 
@@ -176,20 +177,20 @@ toolGroup を分けて W/L 等を独立バインドする本アプリの all-to-
 
 ---
 
-## FW: タイルレイアウト変更 UI（未実装・設計案）
+## タイルレイアウト変更 UI（一部実装済み・2026-07）
 
 タイルグリッドのより細かいレイアウト変更。
 
-### プリセットパレット
-ポップアップパレットでビジュアル的に選択。例:
-```
-[1×1]  [1×2]  [2×1]  [2×2]
-[1×3]  [3×1]  [2×3]  [3×2]
-[3×3]  [自動]
-```
-選択すると `gridCols` + `gridRows`（追加予定）に反映。
+### プリセット＋任意 Row×Col（実装済み — `View > Layout ▸`）
+`Viewer2DMenuBar` の View メニューに **Layout サブメニュー**を実装：自動 ＋ プリセット
+`1×1/1×2/2×1/2×2/1×3/3×1/2×3/3×3`（該当にチェック）＋ **任意（行×列）入力フォーム**（1–12、Enter/適用）。
+- 選択は `gridRows` + `gridCols` に反映。`setLayoutGrid(rows, cols)`（各 0=自動）。
+- `gridRows>0` で `gridTemplateRows: repeat(rows, minmax(0,1fr))`（可視領域を rows 等分。溢れは 200px
+  下限の追加行でスクロール）。行自動時は従来の `gridAutoRows: minmax(360px,1fr)`。
+- ツールバーの列セレクトは列のみ指定（`setLayoutCols(c)=setLayoutGrid(0,c)`）。
+- 詳細は `viewer-2d-menu-toolbar.md` §9.3。
 
-### タイルサイズ変更（リサイズハンドル）
+### タイルサイズ変更（リサイズハンドル・未実装）
 CSS Grid の `grid-template-columns` をドラッグで調整。各列の幅を `fr` 単位で動的変更。
 
 ---

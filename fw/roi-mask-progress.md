@@ -1,7 +1,28 @@
 # ROI/Mask・2D Viewer 拡張 進捗メモ（セッション引き継ぎ）
 
 更新: 2026-07-01。別セッションで再開するための作業状況サマリ。
-関連設計: `fw/viewer-2d-menu-toolbar.md` / `fw/roi-mask-model.md` / `fw/roi-manager-design.md` / `fw/viewer-2d-screen.md`。
+関連設計: `fw/viewer-2d-menu-toolbar.md` / `fw/roi-mask-model.md` / `fw/roi-manager-design.md` / `fw/viewer-2d-screen.md` / `fw/segmentation-tools-design.md` / `fw/dicom-seg-rtstruct-design.md` / 検証: `fw/segmentation-verification.md`。
+
+## 📌 セッション実装サマリ（2026-07-01・このセッションの成果一覧）
+すべて **build/compile green**。実機は一部確認済み（後述）。詳細は各節参照。
+
+**セグメンテーションツール（GRAPHY→Next 移植＋UX 改良, 設計 `segmentation-tools-design.md`）**
+- P0: D1 軽量ルート確定（VolumeViewport 大改修不要）。seg 系ツール登録。
+- P1: モードレス化＝アクティブ編集対象（`roiMaskStore` SegEditTarget）＋多セグメント。`segmentation.ts` 再構築（`createNewMask`/`addSegmentToActiveMask`/`activateMask`/`getLastSegViewport`）。パネル再設計（◉編集対象・◉活性 segment・＋新規マスク・＋セグメント・👁表示トグル・segment 色）。`isValidVolume` でツール可否＋理由トースト（`viewer/toast.ts`）。
+- **画素プリロード撤廃**（メタプロバイダ `viewer/segMetadata.ts`＝backend `SeriesLayoutDto` から imagePlaneModule 供給。imagePixelModule/generalSeriesModule も実ロード1枚から捕捉。backend `SeriesLayout` に FoR 追加）。
+- Wand 刷新（`viewer/wandTool.ts`＋`wandStore.ts`＋`WandDialog.tsx`）＝**ダイアログ駆動・シード記憶・Connectivity(2D:4/8, 3D:6/8/12/26)・Threshold スライダー＋手入力・動的 Update**。2D=面内/3D=ボリューム。旧 wand2d.ts 削除。
+- Split 改良（連結性 6/18/26 可変・既定26、元マスクを置換）。OR/MERGE を **MERGE(OR)** に統一。
+- Settings に **ROI・マスク**（マスク塗り不透明度・線幅）＋**計測 ROI**（既定色=color 型追加・線幅）。`applyGlobalLabelmapStyle`/`applyGlobalAnnotationStyle`。
+- 実機修正: 2D Viewer 開直後の縦長（ResizeObserver 初回フィット）、per-tile ✋ が ROI 解除しない→トースト、Split 後 Eraser 効かない（active 対象判定緩和）、+新規マスク後に塗れない（activateMask に viewportId 明示）、多数。ROI 可視トグルを Mask と同じ 👁 に統一。
+
+**DICOM 永続化（設計 `dicom-seg-rtstruct-design.md`）**
+- S1: マスク→**DICOM SEG**（`export/SegExport*`＋`viewer/segExport.ts`）。**dense（全スライス, Fusion 整合）**。読込は既存で往復。
+- S2/S3: 2D ROI→**RTSTRUCT** 書込＋読込往復（`export/RtStruct*`＋`viewer/rtstruct{Export,Import}.ts`）。`/api/dicom/{seg,rtstruct}`。
+- 生成後の 2D Viewer 検索ツリー自動更新（`viewer/viewerRefresh.ts`）。
+- 🐛 **ImageJ ブリッジ起動失敗を修正**: Spring Boot が `java.awt.headless=true` を強制し `GraphicsEnvironment.isHeadless()` が常に true→ImageJ 起動不可だった。`GraphyNextApplication.main` で **ディスプレイ有無に応じ `app.setHeadless(!hasDisplay())`**（Linux は DISPLAY/WAYLAND、mac/win は true）。**要 backend 再起動**。
+
+**実機確認済**: プリロード撤廃で Brush 即時・全スライス塗り／Wand 2D・3D／Split(26)／SEG 書出＋読込（Fusion 整合）／RTSTRUCT 書込＋読込往復。**未確認**: ImageJ headless 修正（再起動後）、細部。
+
 
 ## ★次セッションの主題: セグメンテーションツール
 **設計確定: `fw/segmentation-tools-design.md`（2026-07-01）。** GRAPHY「Image>Segmentation」を Next へ移植＋UX 改良。
@@ -102,7 +123,20 @@ Cornerstone3D のセグメンテーション系ツール（stack/volume labelmap
 2. **M3 残り**: ① ROI→Mask は実装済（▦）。② AND/合成結果が**空のときの通知**（現状は空 Mask を生成）。③ 結果 Mask の**輪郭化**（kind:"shape" ベクタ復帰, 任意）。④ ラスタ化の **scope.z="all" 対応**（現状は作成スライスのみ。全スライス投影は未対応）。
 3. **M4 3D 残り**: ① **インタラクティブ球定義ツール**（現状は円 ROI 経由の間接定義。ビューポート上で中心ドラッグ＋半径ハンドルの直接作成/リサイズは未。移動/半径ドラッグ編集も未＝現状は数値のみ）。② 2D→3D の**補間オプション**（スライス間の欠損補間）。③ SPLIT/球/Mask の **3D 表示**（VolumeViewport/Surface 連携）。④ **FreeForm3D 相当のパラメトリック保持**（現状 Mask=labelmap で保持。球のような非破壊パラメトリック freeform は未＝labelmap 直編集）。※ ライブ球プレビュー・3D→2D split・2D→3D 積層(OR)・体積/HU 統計は実装済。
 4. **M5/保存 残り（任意）**: ① **Mask→ImageJ**（labelmap 輪郭トレース→polygon ROI、or ImageJ ラベル画像）。② **DICOM SEG 書込**（読込は実装済 `DicomStorageService.segLayoutIfApplicable`/`multiFrameDicom` と対称）。③ RTSTRUCT・JSON/CSV。※ ROI Import(.roi/.zip→Cornerstone) はユーザ要件として**完了**。
-   - **設計追加: `fw/dicom-seg-rtstruct-design.md`（2026-07-01）** — DICOM SEG（マスク＝BINARY, 多セグメント, 読込と対称）＋ RTSTRUCT（2D ベクタ ROI＝閉輪郭 ContourSequence）の書き出し設計。dcm4che 5.34.3、`/api/dicom/seg`・`/api/dicom/rtstruct`、参照シリーズ幾何/FoR 継承、DB 取込→新シリーズ。フェーズ S1(SEG 書込)→S2(RTSTRUCT 書込)→S3(RTSTRUCT 読込)→S4(GSPS/SR 任意)。**未実装（設計のみ）**。
+   - **設計: `fw/dicom-seg-rtstruct-design.md`（2026-07-01）** — DICOM SEG（マスク＝BINARY）＋ RTSTRUCT（2D ベクタ ROI）の書き出し。dcm4che 5.34.3、`/api/dicom/seg`・`/api/dicom/rtstruct`、参照シリーズ幾何/FoR 継承、DB 取込→新シリーズ。
+   - ✅ **S1: マスク→DICOM SEG 書込 実装済（2026-07-01, GRAPHY SegWriter 移植）**。
+     - backend `com.vis.graphynext.dicom.export`: `SegExportRequest`（DTO: 参照 study/series・rows/cols・IOP・pixelSpacing[row,col]・FoR・segments[{number,label,color,frames[{sop,ipp,mask=Base64 0/1}]}）／`SegExportService`（BINARY SEG 生成: SegmentSequence＋RecommendedDisplayCIELabValue(RGB→CIELab)＋Shared(PlaneOrientation/PixelMeasures)＋PerFrame(FrameContent/PlanePosition/SegmentIdentification/DerivationImage)＋DimensionOrganization/Index＋**LSB-first ビットパック PixelData**＋ReferencedSeries、患者/検査を参照ヘッダから継承、`storage.ingest`）／`DicomExportController` `POST /api/dicom/seg`。**compile green**。
+     - front `viewer/segExport.ts`（`exportMaskAsSeg`＝labelmap 各 segment の非空スライスを 0/1 平面→Base64、referencedImageId から source の SOP/IPP/幾何を解決）／`api.ts` `exportDicomSeg`＋型／`RoiManagerPanel` 各マスク行 **SEG ボタン**＋トースト／i18n。**build green、実機未確認**。読込は既存 `segLayoutIfApplicable` で往復。
+   - ✅ **SEG は dense（全スライス分フレーム）を既定**に変更（2026-07-01, ユーザー指摘）。sparse（非空のみ）だと `segLayoutIfApplicable` の nZ が減り **Fusion 重ね合わせがズレる**ため。`segExport.ts` は幾何が引ける全 z を frame 化（マスク無しは全0平面）。設計 `dicom-seg-rtstruct-design.md` §3.1'。
+   - ✅ **SEG 作成後に 2D Viewer 検索ツリーを自動再取得**（`viewer/viewerRefresh.ts` emit/subscribe、`Viewer2DScreen` の TreePanel が再検索＋StudyNode 再マウント）。
+   - ✅ **S2: ROI→RTSTRUCT 書込 実装済（2026-07-01）**。
+     - backend `RtStructExportRequest`／`RtStructExportService`（StructureSetROI＋ROIContour[ContourGeometricType=CLOSED_PLANAR, ContourData=患者座標 mm]＋RTROIObservations＋ReferencedFrameOfReference→RTReferencedStudy/Series/ContourImage、患者/検査継承、`storage.ingest`）／`DicomExportController` `POST /api/dicom/rtstruct`。**compile green**。
+     - front `viewer/rtstructExport.ts`（面積型 ROI のみ: 楕円/円=ポリゴン近似、矩形=4隅角度ソート、freehand=polyline。world 3D 点列を flatten）／`api.ts` `exportDicomRtStruct`＋型／`RoiManagerPanel` ROI 見出しの **RT ⬇ ボタン**＋トースト＋ツリー再取得／i18n。**build green、実機未確認**。
+   - ✅ **S3: RTSTRUCT 読込→ROI 復元 実装済（2026-07-01）**。
+     - backend `RtStructRoiDto`／`RtStructReadService`（StructureSetROI/ROIContour/RTROIObservations を解析→ROI名/色/種別/輪郭[refSOP＋患者座標 mm]）／`DicomExportController` `GET /api/dicom/rtstruct?study&series`。compile green。
+     - front `viewer/rtstructImport.ts`（`importRtStructForCurrentView`＝表示中スタディの RTSTRUCT シリーズ[modality=RTSTRUCT]を全読み込み→表示中 source シリーズへ **PlanarFreehandROI(closed)** 復元。輪郭は既に world 座標。スライスは ContourImage の refSOP を表示中スタックの imageId に対応付け。色は `setAnnotationStyles`）／`api.ts` `readDicomRtStruct`＋型／`RoiManagerPanel` ROI 見出しの **RT ⬆ ボタン**＋トースト。**build green、実機未確認**。
+     - → **RTSTRUCT 往復（S2 書込＋S3 読込）完成**。SEG は書込(S1 dense)＋既存読込で往復済み。
+   - ⬜ S4: GSPS / DICOM SR（線/角度/点 ROI 用, 任意）。未実装。
 5. **ImageJ**: ✅ **ユーザ要件（①ROI .roi/.zip 入出力 ②HyperStack ブリッジ ③IJ ROI Import）3 点とも完了。これ以上の深掘り不要**（確定）。残は任意: Mask→ImageJ ラベル画像、ブリッジ編集 ROI の Next 往復。
 
 ## このワークストリームで追加した主なファイル（オリエンテーション用）

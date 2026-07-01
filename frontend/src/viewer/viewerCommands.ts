@@ -26,6 +26,8 @@ export interface ViewerCommands {
   setWindowLevel(center: number, width: number): void;
   /** DICOM 既定ウィンドウ（WindowCenter/Width）に戻す。 */
   resetWindow(): void;
+  /** 現在の表示 VOI（モダリティ値=HU 等の中心/幅）と対象 imageId を返す。取得不能なら null。 */
+  getWindowState(): { imageId: string; center: number; width: number } | null;
   /** 左ドラッグに割り当てる操作/計測/ブラシツールを切替（toolName は Cornerstone のツール名 or 消しゴム id）。 */
   setActiveTool(toolName: string): void;
   /** ROI ブラシ径(px)。 */
@@ -64,4 +66,15 @@ export function runViewerCommand(keys: string[], fn: (c: ViewerCommands) => void
 /** 指定キーが登録済みか。 */
 export function hasViewerCommands(key: string): boolean {
   return registry.has(key);
+}
+
+/** 単一 tileId のコマンドから値を取得する（未登録・例外なら null）。 */
+export function queryViewerCommand<T>(key: string, fn: (c: ViewerCommands) => T): T | null {
+  const c = registry.get(key);
+  if (!c) return null;
+  try {
+    return fn(c);
+  } catch {
+    return null;
+  }
 }

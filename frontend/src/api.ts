@@ -343,6 +343,78 @@ export const exportImageJRoiSet = async (
   return { blob, filename: m ? m[1] : "RoiSet.zip" };
 };
 
+// --- DICOM SEG 書き出し（マスク→Segmentation, fw/dicom-seg-rtstruct-design.md S1）---
+export interface SegExportFrame {
+  sopInstanceUid: string;
+  imagePositionPatient: [number, number, number];
+  mask: string; // rows*cols の 0/1 バイト列を Base64
+}
+export interface SegExportSegment {
+  number: number;
+  label: string;
+  color: [number, number, number] | null;
+  frames: SegExportFrame[];
+}
+export interface SegExportRequest {
+  studyInstanceUid: string;
+  seriesInstanceUid: string;
+  rows: number;
+  columns: number;
+  imageOrientationPatient: number[];
+  pixelSpacing: [number, number]; // [row, col]
+  sliceThickness: number;
+  frameOfReferenceUID?: string | null;
+  seriesDescription?: string | null;
+  segments: SegExportSegment[];
+}
+export interface SegExportResult {
+  seriesInstanceUid: string;
+  sopInstanceUid: string;
+}
+/** マスク群を DICOM SEG として保存し、新シリーズ UID を返す。 */
+export const exportDicomSeg = (req: SegExportRequest) =>
+  httpSend<SegExportResult>("/api/dicom/seg", "POST", req);
+
+// --- RTSTRUCT 書き出し（2D ベクタ ROI→RT Structure Set, S2）---
+export interface RtStructContour {
+  sopInstanceUid: string;
+  points: number[]; // [x,y,z,x,y,z,...] 患者座標 mm（閉輪郭）
+}
+export interface RtStructRoi {
+  number: number;
+  name: string;
+  color: [number, number, number] | null;
+  type?: string | null;
+  contours: RtStructContour[];
+}
+export interface RtStructExportRequest {
+  studyInstanceUid: string;
+  seriesInstanceUid: string;
+  frameOfReferenceUID: string;
+  structureSetLabel?: string | null;
+  rois: RtStructRoi[];
+}
+/** 2D ベクタ ROI 群を DICOM RTSTRUCT として保存し、新シリーズ UID を返す。 */
+export const exportDicomRtStruct = (req: RtStructExportRequest) =>
+  httpSend<SegExportResult>("/api/dicom/rtstruct", "POST", req);
+
+// --- RTSTRUCT 読込（S3: 輪郭→ROI 復元）---
+export interface RtStructImportContour {
+  referencedSopInstanceUid: string | null;
+  points: number[]; // [x,y,z,...] 患者座標 mm
+}
+export interface RtStructImportRoi {
+  name: string;
+  color: number[] | null; // [r,g,b]
+  type: string | null;
+  contours: RtStructImportContour[];
+}
+/** 指定 RTSTRUCT シリーズを読み、ROI 輪郭群を返す。 */
+export const readDicomRtStruct = (studyUid: string, seriesUid: string) =>
+  httpGet<RtStructImportRoi[]>(
+    `/api/dicom/rtstruct?study=${encodeURIComponent(studyUid)}&series=${encodeURIComponent(seriesUid)}`,
+  );
+
 /** .roi/.zip をアップロードして DTO 群にデコード。 */
 export const importImageJRoiSet = async (file: File): Promise<ImageJRoiDto[]> => {
   const form = new FormData();

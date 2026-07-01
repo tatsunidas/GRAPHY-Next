@@ -42,6 +42,7 @@ import {
 } from "./gantryTiltCorrect";
 import { getOrCreateVoiSync } from "./sync";
 import { computeOrientationMarkers, type OrientationMarkers } from "./orientation";
+import { getModalityCalibration } from "./pixelCalibration";
 
 /** MPR の VOI(W/L) 同期 ID。3 面は同一ボリュームを見るため VOI は絶対値同期でよい。 */
 export const MPR_VOI_SYNC_ID = "graphy-mpr-voi";
@@ -130,11 +131,11 @@ async function assembleCtSourceVolume(imageIds: string[]): Promise<TiltSourceVol
     const img = cache.getImage(recs[z].id) as AnyObj | undefined;
     if (!img) return null;
     const px = img.getPixelData() as ArrayLike<number>;
-    const lut: AnyObj = metaData.get("modalityLutModule", recs[z].id) ?? {};
-    const slope = Number(lut.rescaleSlope ?? img.slope ?? 1);
-    const intercept = Number(lut.rescaleIntercept ?? img.intercept ?? 0);
+    // 校正は pixelCalibration に一元化（preScale 二重適用を防ぐ）。scale/offset は
+    // preScale 済みなら {1,0} なので、そのまま px[i]*scale+offset でモダリティ値になる。
+    const { scale, offset } = getModalityCalibration(img, recs[z].id);
     const base = z * sliceLen;
-    for (let i = 0; i < sliceLen; i++) data[base + i] = Math.round(px[i] * slope + intercept);
+    for (let i = 0; i < sliceLen; i++) data[base + i] = Math.round(px[i] * scale + offset);
   }
 
   return {

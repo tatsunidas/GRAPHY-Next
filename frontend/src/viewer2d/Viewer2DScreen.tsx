@@ -19,10 +19,15 @@ import { FusionImageViewer } from "../viewer/FusionOverlayViewer";
 import type { RenderOverlay } from "../viewer/Viewer2D";
 import { buildSeriesLayout, type SeriesLayout } from "../viewer/seriesLayout";
 import { LutDialog, ColorBar } from "../viewer/LutDialog";
-import { runViewerCommand } from "../viewer/viewerCommands";
+import { runViewerCommand, queryViewerCommand } from "../viewer/viewerCommands";
+import { runSeriesCommand } from "../viewer/seriesCommands";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { subscribeToast } from "../viewer/toast";
+import { subscribeSeriesRefresh } from "../viewer/viewerRefresh";
 import { WandDialog } from "./WandDialog";
+import { HistogramDialog } from "./HistogramDialog";
+import { WwWlAdjustDialog, type WlTarget } from "./WwWlAdjustDialog";
+import { WlPresetDialog } from "./WlPresetDialog";
 import { fetchSettings } from "../settings/settingsApi";
 import { applyGlobalLabelmapStyle, applyGlobalAnnotationStyle } from "../viewer/cornerstoneSetup";
 import { Viewer2DToolbar, type ViewerActions } from "./Viewer2DToolbar";
@@ -59,6 +64,7 @@ interface PatientSession {
   patientName: string;
   tiles: Tile[];
   gridCols: number;   // 0 = 自動（ceil(√N)）、>0 = 手動指定列数
+  gridRows: number;   // 0 = 自動（列数から行が流れる）、>0 = 手動指定行数（Row×Col 固定レイアウト）
 }
 
 /** localStorage に保存するコンテキスト形式。MainScreen が書き込み、Viewer が読む。 */
@@ -237,6 +243,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
           patientName: study.patientName ?? "",
           tiles: [tile],
           gridCols: 0,
+          gridRows: 0,
         },
       ];
     });
@@ -280,9 +287,14 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
     });
   };
 
-  const setPatientGridCols = (patientKey: string, cols: number) => {
+  // Row×Col レイアウト設定（rows/cols とも 0=自動）。列のみ指定はツールバー用に rows=0 で呼ぶ。
+  const setPatientGrid = (patientKey: string, rows: number, cols: number) => {
     setPatients((prev) =>
-      prev.map((p) => (p.patientKey === patientKey ? { ...p, gridCols: cols } : p)),
+      prev.map((p) =>
+        p.patientKey === patientKey
+          ? { ...p, gridRows: Math.max(0, Math.floor(rows)), gridCols: Math.max(0, Math.floor(cols)) }
+          : p,
+      ),
     );
   };
 
@@ -464,7 +476,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
                   patient={activePatient}
                   mode={mode}
                   onRemoveTile={removeTile}
-                  onSetCols={setPatientGridCols}
+                  onSetGrid={setPatientGrid}
                   onInsertAdjacent={insertAdjacentTile}
                   onSwap={swapTiles}
                   onSetSync={setTileSync}
@@ -524,7 +536,7 @@ function TileGrid({
   patient,
   mode,
   onRemoveTile,
-  onSetCols,
+  onSetGrid,
   onInsertAdjacent,
   onSwap,
   onSetSync,
@@ -533,7 +545,7 @@ function TileGrid({
   patient: PatientSession;
   mode: "standalone" | "web";
   onRemoveTile: (patientKey: string, tileId: string) => void;
-  onSetCols: (patientKey: string, cols: number) => void;
+  onSetGrid: (patientKey: string, rows: number, cols: number) => void;
   onInsertAdjacent: (patientKey: string, targetId: string, before: boolean, study: Study, series: Series) => void;
   onSwap: (patientKey: string, fromId: string, toId: string) => void;
   onSetSync: (patientKey: string, tileId: string, enabled: boolean) => void;
@@ -541,11 +553,22 @@ function TileGrid({
 }) {
   const { t } = useI18n();
   const n = patient.tiles.length;
-  const cols = patient.gridCols > 0 ? patient.gridCols : autoTileCols(n);
+  // Row×Col レイアウト: どちらか未指定(0)なら他方 or タイル数から自動導出。
+  const rows = patient.gridRows > 0 ? patient.gridRows : 0;
+  const cols =
+    patient.gridCols > 0
+      ? patient.gridCols
+      : rows > 0
+        ? Math.max(1, Math.ceil(n / rows)) // 行だけ指定なら列はタイル数から算出
+        : autoTileCols(n);
 
   // 各タイルが現在表示中の C/T インデックス（tileId → {c,t}）。
   // Fusion で「ドロップ元タイルで表示中の C/T スタック」を引き継ぐために参照する。
-  const tileDimsRef = useRef<Map<string, { c: number; t: number }>>(new Map());
+  const tileDimsRef = useRef<Map<string, { c: number; t: number; z: number }>>(new Map());
+  // Histogram 解析ダイアログの対象（開いている時のみ non-null）。
+  const [histo, setHisto] = useState<{ tile: Tile; z: number; c: number; t: number } | null>(null);
+  // コントラスト調整（W/L）ダイアログの対象（開いている時のみ non-null）。
+  const [wlAdjust, setWlAdjust] = useState<WlTarget | null>(null);
 
   // リファレンスライン表示の ON/OFF（このタブ内の全タイルに適用）。
   const [refLines, setRefLines] = useState(false);
@@ -648,6 +671,7 @@ function TileGrid({
     [selectedIds, patient.tiles],
   );
   const [lutOpen, setLutOpen] = useState(false);
+  const [presetsOpen, setPresetsOpen] = useState(false);
   // 操作/計測ツール（左ドラッグ割当）。グローバル（タブ内全タイル）に適用。既定 W/L。
   const [activeTool, setActiveTool] = useState<string>(TOOL_IDS.windowLevel);
   // ROI マネージャ（右サイドパネル）の表示。
@@ -702,6 +726,9 @@ function TileGrid({
       redo: () => runViewerCommand(resolveTargets(), (c) => c.redo()),
       setWindowLevel: (cc, ww) => runViewerCommand(resolveTargets(), (c) => c.setWindowLevel(cc, ww)),
       resetWindow: () => runViewerCommand(resolveTargets(), (c) => c.resetWindow()),
+      editPresets: () => setPresetsOpen(true),
+      // Z 並べ替えはシリーズレベル（seriesCommands）。動画/IPP不在は SeriesViewer 側でブロック。
+      sort: (mode) => runSeriesCommand(resolveTargets(), (c) => c.setSortMode(mode)),
       // ツールはグローバルモード（タブ内全タイルへ適用）。
       setTool: (toolName) => {
         setActiveTool(toolName);
@@ -717,7 +744,19 @@ function TileGrid({
       },
       toggleRoiManager: () => setShowRoiMgr((v) => !v),
       openLut: () => setLutOpen(true),
-      setLayoutCols: (c) => onSetCols(patient.patientKey, c),
+      // コントラスト調整（W/L）: 対象タイル群の現在 VOI を先頭タイルから読み、ダイアログを開く。
+      openWindowLevel: () => {
+        const targets = resolveTargets();
+        const first = targets[0];
+        if (!first) { comingSoon(t("viewer2d.wl.adjust.title")); return; }
+        const st = queryViewerCommand(first, (c) => c.getWindowState());
+        if (!st) { comingSoon(t("viewer2d.wl.adjust.title")); return; }
+        setWlAdjust({ tileIds: targets, imageId: st.imageId, center: st.center, width: st.width });
+      },
+      // 列のみ指定（行は自動）。ツールバーのレイアウト選択から使う。
+      setLayoutCols: (c) => onSetGrid(patient.patientKey, 0, c),
+      // Row×Col 指定（0=自動）。メニューのレイアウトサブメニュー/カスタムから使う。
+      setLayoutGrid: (rows, cols) => onSetGrid(patient.patientKey, rows, cols),
       toggleRefLines: () => setRefLines((v) => !v),
       setSyncTargets: (sync) => resolveTargets().forEach((id) => onSetSync(patient.patientKey, id, sync)),
       comingSoon,
@@ -736,6 +775,28 @@ function TileGrid({
         if (toastTimer.current) window.clearTimeout(toastTimer.current);
         toastTimer.current = window.setTimeout(() => setToast(null), 3500);
       },
+      // 対象（選択→無ければ先頭）タイルのシリーズで MPR ウィンドウを開く（MainScreen と同方式）。
+      launchMpr: () => {
+        const tid = resolveTargets()[0];
+        const tile = patient.tiles.find((tl) => tl.id === tid);
+        if (!tile) { comingSoon(t("main.toolbar.mpr")); return; }
+        const ctx = { study: tile.study, series: tile.series, ts: Date.now() };
+        localStorage.setItem("graphy-mpr-ctx", JSON.stringify(ctx));
+        const d = desktop();
+        if (d?.openViewer) void d.openViewer("mpr");
+        else window.open(`${window.location.pathname}#mpr`, "graphy-mpr");
+      },
+      // 対象（選択→無ければ先頭）タイルのシリーズで Slicer ウィンドウを開く（MainScreen と同方式）。
+      launchSlicer: () => {
+        const tid = resolveTargets()[0];
+        const tile = patient.tiles.find((tl) => tl.id === tid);
+        if (!tile) { comingSoon(t("main.toolbar.slicer")); return; }
+        const ctx = { study: tile.study, series: tile.series, ts: Date.now() };
+        localStorage.setItem("graphy-slicer-ctx", JSON.stringify(ctx));
+        const d = desktop();
+        if (d?.openViewer) void d.openViewer("slicer");
+        else window.open(`${window.location.pathname}#slicer`, "graphy-slicer");
+      },
       // 対象（選択→無ければ先頭）タイルのシリーズで Curved MPR ウィンドウを開く（Slicer と同方式）。
       launchCurvedMpr: () => {
         const tid = resolveTargets()[0];
@@ -748,13 +809,28 @@ function TileGrid({
         if (d?.openViewer) void d.openViewer("curvedmpr");
         else window.open(`${window.location.pathname}#curvedmpr`, "graphy-curvedmpr");
       },
+      // 対象（選択→無ければ先頭）タイルのシリーズで Histogram 解析ダイアログを開く。
+      openHistogram: () => {
+        const tid = resolveTargets()[0];
+        const tile = patient.tiles.find((tl) => tl.id === tid);
+        if (!tile) { comingSoon(t("viewer2d.menu.histogram")); return; }
+        const dims = tileDimsRef.current.get(tile.id);
+        setHisto({ tile, z: dims?.z ?? 0, c: dims?.c ?? 0, t: dims?.t ?? 0 });
+      },
     }),
-    [resolveTargets, onSetCols, onSetSync, patient.patientKey, patient.tiles, comingSoon, t],
+    [resolveTargets, onSetGrid, onSetSync, patient.patientKey, patient.tiles, comingSoon, t],
   );
 
   return (
     <div style={tileArea}>
-      <Viewer2DMenuBar actions={actions} refLines={refLines} activeTool={activeTool} onClose={() => window.close()} />
+      <Viewer2DMenuBar
+        actions={actions}
+        refLines={refLines}
+        activeTool={activeTool}
+        gridRows={patient.gridRows}
+        gridCols={patient.gridCols}
+        onClose={() => window.close()}
+      />
       <Viewer2DToolbar
         actions={actions}
         layoutCols={patient.gridCols}
@@ -770,6 +846,7 @@ function TileGrid({
           onClose={() => setLutOpen(false)}
         />
       )}
+      <WlPresetDialog open={presetsOpen} onClose={() => setPresetsOpen(false)} />
       {toast && (
         <div style={{
           position: "fixed", top: 56, left: "50%", transform: "translateX(-50%)", zIndex: 60,
@@ -785,7 +862,11 @@ function TileGrid({
         style={{
           display: "grid",
           gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
-          gridAutoRows: "minmax(360px, 1fr)",
+          // 行数指定時は可視領域を rows 等分（各セルが高さの 1/rows）。溢れた分は
+          // 200px 下限の追加行にこぼれてスクロールする。行自動なら従来通り最小 360px。
+          ...(rows > 0
+            ? { gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`, gridAutoRows: "minmax(200px, 1fr)" }
+            : { gridAutoRows: "minmax(360px, 1fr)" }),
           gap: 8,
           padding: 8,
           flex: 1,
@@ -807,12 +888,42 @@ function TileGrid({
             onRemove={() => onRemoveTile(patient.patientKey, tile.id)}
             onSyncToggle={() => onSetSync(patient.patientKey, tile.id, !tile.syncEnabled)}
             onFusionChange={(overlay) => onSetFusion(patient.patientKey, tile.id, overlay)}
-            onDimChange={(c, tIdx) => tileDimsRef.current.set(tile.id, { c, t: tIdx })}
+            onDimChange={(c, tIdx, z) => tileDimsRef.current.set(tile.id, { c, t: tIdx, z })}
             onDrop={handleDrop}
           />
         ))}
       </div>
       {showRoiMgr && <RoiManagerPanel activePatientKey={patient.patientKey} onClose={() => setShowRoiMgr(false)} />}
+      {histo && (
+        <HistogramDialog
+          key={histo.tile.id}
+          study={histo.tile.study}
+          series={histo.tile.series}
+          instances={histo.tile.instances}
+          mode={mode}
+          initialZ={histo.z}
+          initialC={histo.c}
+          initialT={histo.t}
+          onClose={() => setHisto(null)}
+        />
+      )}
+      {wlAdjust && (
+        <WwWlAdjustDialog
+          key={wlAdjust.tileIds.join(",") + wlAdjust.imageId}
+          target={wlAdjust}
+          onApply={(center, width) =>
+            runViewerCommand(wlAdjust.tileIds, (c) => c.setWindowLevel(center, width))
+          }
+          onReset={() => {
+            runViewerCommand(wlAdjust.tileIds, (c) => c.resetWindow());
+            return queryViewerCommand(wlAdjust.tileIds[0], (c) => {
+              const s = c.getWindowState();
+              return s ? { center: s.center, width: s.width } : null;
+            });
+          }}
+          onClose={() => setWlAdjust(null)}
+        />
+      )}
       </div>
     </div>
   );
@@ -848,7 +959,7 @@ function TileCell({
   onRemove: () => void;
   onSyncToggle: () => void;
   onFusionChange: (overlay: FusionOverlay | undefined) => void;
-  onDimChange: (c: number, t: number) => void;
+  onDimChange: (c: number, t: number, z: number) => void;
   onDrop: (targetTileId: string, zone: "before" | "after" | "center" | "none") => void;
 }) {
   const { t } = useI18n();
@@ -1281,6 +1392,9 @@ function StudyBrowser({
   // undefined = 未検索, null = 検索中, Study[] = 結果（空配列含む）
   const [studies, setStudies] = useState<Study[] | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
+  // 直近の検索フィルタと、ツリー再マウント用バージョン（新シリーズ生成後の再取得に使う）。
+  const lastFiltersRef = useRef<Parameters<typeof fetchStudies>[0] | null>(null);
+  const [treeVersion, setTreeVersion] = useState(0);
 
   const loadedTileIds = useMemo(() => {
     const ids = new Set<string>();
@@ -1291,12 +1405,21 @@ function StudyBrowser({
   }, [patients]);
 
   const search = useCallback((filters: Parameters<typeof fetchStudies>[0]) => {
+    lastFiltersRef.current = filters;
     setStudies(null);
     setError(null);
     fetchStudies(filters)
       .then(setStudies)
       .catch((e: unknown) => setError(String(e)));
   }, []);
+
+  // 新シリーズ生成（SEG 書出など）後に検索ツリーを再取得（studies 再検索＋StudyNode 再マウントで series 再取得）。
+  useEffect(() => subscribeSeriesRefresh(() => {
+    if (lastFiltersRef.current !== null) {
+      search(lastFiltersRef.current);
+      setTreeVersion((v) => v + 1);
+    }
+  }), [search]);
 
   const searchManual = () => {
     const id = patientId.trim();
@@ -1357,7 +1480,7 @@ function StudyBrowser({
       {studies != null &&
         studies.map((s) => (
           <StudyNode
-            key={s.studyInstanceUid}
+            key={`${s.studyInstanceUid}:${treeVersion}`}
             study={s}
             mode={mode}
             loadedTileIds={loadedTileIds}

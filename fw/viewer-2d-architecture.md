@@ -82,6 +82,7 @@ zoom / pan / flip(上下左右) / rotation は **Cornerstone3D の ViewPresentat
 ## 実装済みファイル
 - frontend: `viewer/cornerstoneSetup.ts`(core+loader+tools init) / `viewer/imageId.ts`(モード別 imageId)
 - frontend: `viewer/transform.ts`(affine モデル) / `viewer/Viewer2D.tsx`(単一表示＋Pan/Zoom/wheel/flip/rotate/fit＋再Fit＋isPanned)
+- frontend: `viewer/pixelCalibration.ts`(モダリティ値 HU 読取の唯一の入口＝校正二重適用防止。`getModalityCalibration`/`readModalitySlice`)
 - frontend: `StudyList.tsx` の InstanceList からシリーズ先頭 1 枚を表示（standalone のみ）
 - backend: `InstanceController`(`GET /api/instances/{sop}/file`) / `DicomStorageService.resolveInstanceFile`
 
@@ -95,6 +96,22 @@ zoom / pan / flip(上下左右) / rotation は **Cornerstone3D の ViewPresentat
   モダリティ値(HU 等)を返す（preScale 済みなら二重適用しない）。`ImageInfoPanel.tsx` が右パネル表示。
 - 完了: ①輝度(HU 読取＋Rescale/Window 表示) ②ボクセルサイズ(PixelSpacing/SliceThickness)
   ③FOV(Rows×rowSpacing × Cols×colSpacing)。**PET SUV は未対応**（要 PT scaling・追加タグ）。
+
+### ⚠️ 校正(HU 等)の二重適用に注意 — 読取は `viewer/pixelCalibration.ts` に一元化
+CPU 側で画素をモダリティ値(HU)として読むコードは、**必ず `viewer/pixelCalibration.ts` を通す**こと。
+- **背景**: dicom-image-loader は `preScale.enabled` 既定 **true**。Rescale が必要な画像（CT は
+  Intercept≈−1024）では **`image.getPixelData()` が既に HU を返し** `image.preScale.scaled===true` が立つ。
+  ここで RescaleSlope/Intercept を**もう一度**掛けると二重適用になり、CT なら約 −1024 ずれる。
+  実際に W/L ダイアログでヒストグラム軸と WL ラインが不一致になる不具合として顕在化した（2026-07 修正）。
+- **ルール（再発防止）**:
+  - `getPixelData()` に直接 `* slope + intercept` を**書かない**。
+  - `getModalityCalibration(img, imageId)` を使う。preScale 済みなら `{scale:1, offset:0}` を返すので、
+    呼び出し側は常に `value = px[i] * scale + offset` と書けば正しい（分岐不要・二重適用不能）。
+  - スライス全体を読むだけなら `readModalitySlice(imageId)`（校正済み `Float32Array`＋単位を返す）。
+- **利用側（この方針に統一済み）**: `viewer/histogram.ts`(Histogram/W-L 調整), `viewer/mpr.ts`,
+  `viewer/roi3d.ts`(ROI 統計), `viewer/FusionOverlayViewer.tsx`。GPU 描画側（viewport の VOI）は
+  Cornerstone が自動適用するので対象外。`sampleAtCanvas`(imageInfo.ts) は viewport 画像データの
+  `preScale?.scaled` を見て同じ判定をしている。
 
 ## SeriesViewer（シリーズ管理コントローラ・実装済み土台）
 `viewer/SeriesViewer.tsx` が画像パネル(Viewer2D)を内包し、シリーズを管理する。

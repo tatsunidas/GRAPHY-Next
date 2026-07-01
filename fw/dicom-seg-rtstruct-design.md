@@ -64,8 +64,20 @@ SEG **読込**は実装済み（`DicomStorageService.segLayoutIfApplicable` / `m
   `SegmentSequence` の各 `SegmentNumber` に対応。
 - **Shared/Per-Frame Functional Groups**: `PixelMeasuresSequence`(PixelSpacing/SliceThickness), `PlaneOrientationSequence`(IOP),
   各フレーム `PlanePositionSequence`(IPP) と `SegmentIdentificationSequence`(ReferencedSegmentNumber)。
-- **Pixel Data**: BINARY（1bit/pixel, LSB パック）。非空フレームのみ出力（segment×slice）。
+- **Pixel Data**: BINARY（1bit/pixel, LSB パック）。フレーム順＝bit-pack 順を一致させる。
 - `ReferencedSeriesSequence`＋`FrameOfReferenceUID` で参照シリーズへ紐付け。CIE Lab の `RecommendedDisplayCIELabValue`＝segment 色。
+
+### 3.1' フレーム密度: sparse か dense か（★Fusion 整合の決定, 2026-07-01）
+
+- **sparse（非空スライスのみ出力）**: DICOM 標準としては正しく最小サイズ。しかし **本アプリの Fusion 重ね合わせが崩れる**。
+  Fusion/シリーズ Sync は SEG シリーズの **ZCT レイアウト（`segLayoutIfApplicable` の nZ＝distinct Z）** を使うため、
+  1 スライスだけ塗った SEG は nZ=1 になり、**元シリーズ（例 43 スライス）と Z 対応が取れず**重ね位置がずれる。
+- **dense（参照シリーズの全スライス分フレームを出力。空スライスも空フレームで含める）**: NumberOfFrames = segment数 × 元スライス数。
+  SEG の Z レイアウトが**元シリーズと 1:1 で一致**するため、**Fusion/オーバーレイ位置が合う**。GRAPHY の "Anchored mode" 相当。
+- **決定（2026-07-01, ユーザー指摘）**: **dense を既定**とする（Fusion 整合を優先）。
+  frontend `segExport.ts` は「幾何（IPP/SOP）が解決できる全 z」をフレーム化し、マスクが無いスライスは全 0 平面で出力。
+  ファイルは膨らむが（512²×全スライスの 1bit）、実用上許容。将来 sparse をオプション化しても良い（軽量保存用）。
+  - 本質的には Fusion 側を **IPP/FoR ベースの座標整合**にすれば sparse でも合うが、現状の Z インデックス整合を壊さないため dense を採用。
 
 ### 3.2 frontend → DTO
 ```ts

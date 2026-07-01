@@ -8,6 +8,16 @@ import { ToolGroupManager } from "@cornerstonejs/tools";
 import { Viewer2D, ENGINE_ID, type ViewerOverlays, type RenderOverlay } from "./Viewer2D";
 import { applyTransform, readTransform, FIT_TRANSFORM } from "./transform";
 import { buildSeriesLayout, buildLayoutFromDto, type SeriesLayout } from "./seriesLayout";
+import {
+  buildSortMeta,
+  computeZOrder,
+  applySortToLayout,
+  isIppMode,
+  type SortMeta,
+  type SortMode,
+} from "./seriesSort";
+import { registerSeriesCommands } from "./seriesCommands";
+import { emitToast } from "./toast";
 import { registerSegGeometryFromLayout } from "./segMetadata";
 import { registerSliceSync, publishSlice, setSliceSyncConfig } from "./sliceSync";
 import { imageIdForInstance, type ViewerMode } from "./imageId";
@@ -71,8 +81,8 @@ export function SeriesViewer({
   /** ROI/Mask 紐付け用: 患者キー・シリーズ表示名。 */
   patientKey?: string;
   seriesLabel?: string;
-  /** 現在表示中の C/T インデックス変化を上位に通知（Fusion の初期 C/T 引き継ぎ用）。 */
-  onDimChange?: (c: number, t: number) => void;
+  /** 現在表示中の Z/C/T インデックス変化を上位に通知（Fusion の初期 C/T 引き継ぎ・Histogram の初期 Z/C/T 用）。 */
+  onDimChange?: (c: number, t: number, z: number) => void;
   /** Fusion オーバーレイ。スライダー表示時に base 画像へ重ねて描画する（GridView では無効）。 */
   renderFusionOverlay?: RenderOverlay;
 }) {
@@ -85,16 +95,23 @@ export function SeriesViewer({
 
   // backend の ZCT レイアウト（IPP→Z / Temporal→T / Echo・Bvalue→C / モザイク Z×T）。
   // 取得まで/失敗時は単一次元。
-  const [layout, setLayout] = useState<SeriesLayout>(fallback);
+  const [baseLayout, setBaseLayout] = useState<SeriesLayout>(fallback);
+  // Z 並べ替え（InstanceNumber / IPP, 昇順・降順）。null=backend 既定順（IPP 昇順）。
+  const [sortMode, setSortMode] = useState<SortMode | null>(null);
+  const [sortMeta, setSortMeta] = useState<SortMeta | null>(null);
   useEffect(() => {
-    setLayout(fallback);
+    setBaseLayout(fallback);
+    // シリーズが変わったら並べ替え状態をリセット。
+    setSortMode(null);
+    setSortMeta(null);
     let cancelled = false;
     fetchSeriesLayout(studyUid, seriesUid)
       .then((dto) => {
         if (cancelled) return;
         const built = buildLayoutFromDto(dto, mode, studyUid, seriesUid);
         if (built) {
-          setLayout(built);
+          setBaseLayout(built);
+          setSortMeta(buildSortMeta(dto, instances, built.normal ?? null));
           // セグメンテーション labelmap 生成の画素プリロード撤廃用に、backend 幾何を
           // メタデータプロバイダへ登録（fw/segmentation-tools-design.md §3.4）。
           registerSegGeometryFromLayout(dto, built, seriesUid);
@@ -106,7 +123,13 @@ export function SeriesViewer({
     return () => {
       cancelled = true;
     };
-  }, [studyUid, seriesUid, fallback, mode]);
+  }, [studyUid, seriesUid, fallback, mode, instances]);
+
+  // 表示用レイアウト = 既定順に Z 並べ替えを適用（C/T 割当は保持）。
+  const layout = useMemo(() => {
+    if (!sortMode || !sortMeta) return baseLayout;
+    return applySortToLayout(baseLayout, computeZOrder(sortMeta, sortMode));
+  }, [baseLayout, sortMode, sortMeta]);
 
   const [z, setZ] = useState(0);
   const [c, setC] = useState(0);
@@ -152,6 +175,49 @@ export function SeriesViewer({
   );
   const gridDisabled = layout.nC > 1 || hasVideo || nZ <= 1;
   const gridOn = gridCols > 0 && !gridDisabled;
+
+  // ── Z 並べ替え（Image メニュー → seriesCommands）────────────────
+  // 動画 IOD はブロック。IPP 並べ替えは幾何が無いシリーズでは不可。並べ替え後は
+  // 表示中の画像（imageId）を追従させて同じスライスを保つ。
+  const currentImageId = zStack[zc];
+  const hasVideoRef = useRef(hasVideo); hasVideoRef.current = hasVideo;
+  const sortMetaRef = useRef<SortMeta | null>(sortMeta); sortMetaRef.current = sortMeta;
+  const currentImageIdRef = useRef(currentImageId); currentImageIdRef.current = currentImageId;
+  const pendingFollowRef = useRef<string | null>(null);
+
+  // 並べ替えで Z 配列が変わった後、直前に見ていた画像の新しい位置へ Z を合わせる。
+  useEffect(() => {
+    const id = pendingFollowRef.current;
+    if (id == null) return;
+    pendingFollowRef.current = null;
+    const idx = layout.zStack(cc, tc).indexOf(id);
+    if (idx >= 0) setZ(idx);
+  }, [layout, cc, tc]);
+
+  // 画面メニュー/ツールバーからの並べ替えコマンドを受ける（キー = tileId）。
+  useEffect(() => {
+    if (!commandKey) return;
+    return registerSeriesCommands(commandKey, {
+      setSortMode: (mode) => {
+        if (hasVideoRef.current) {
+          emitToast(t("viewer2d.sort.videoBlocked"));
+          return;
+        }
+        const meta = sortMetaRef.current;
+        if (isIppMode(mode)) {
+          if (!meta?.hasSpatial) {
+            emitToast(t("viewer2d.sort.noIpp"));
+            return;
+          }
+        } else if (!meta?.hasInstance) {
+          emitToast(t("viewer2d.sort.noInstance"));
+          return;
+        }
+        pendingFollowRef.current = currentImageIdRef.current ?? null;
+        setSortMode(mode);
+      },
+    });
+  }, [commandKey, t]);
 
   // 無効条件になったら Slider に戻し 1 枚目へ。
   useEffect(() => {
@@ -312,10 +378,10 @@ export function SeriesViewer({
     if (syncOn) publishSlice(sliceSyncId);
   }, [zc, nZ, syncOn, sliceSyncId]);
 
-  // 現在表示中の C/T を上位へ通知（Fusion の初期 C/T 引き継ぎ用）。
+  // 現在表示中の Z/C/T を上位へ通知（Fusion の初期 C/T 引き継ぎ・Histogram の初期 Z/C/T 用）。
   useEffect(() => {
-    onDimChange?.(cc, tc);
-  }, [cc, tc, onDimChange]);
+    onDimChange?.(cc, tc, zc);
+  }, [cc, tc, zc, onDimChange]);
 
   const toggle = (k: keyof OverlayState) => setOverlays((o) => ({ ...o, [k]: !o[k] }));
 

@@ -32,7 +32,8 @@ import {
   type MprOverlay,
   type MprProbe,
 } from "../viewer/mpr";
-import { WL_PRESETS } from "../viewer2d/wlPresets";
+import { presetLabel } from "../viewer2d/wlPresets";
+import { useWlPresets } from "../viewer2d/wlPresetStore";
 import { useI18n } from "../i18n/i18n";
 
 const ENGINE_ID = "graphy-mpr-engine";
@@ -53,6 +54,7 @@ type Phase = "idle" | "loading" | "ready" | "error" | "unsupported";
 
 export function MprScreen({ status }: { status: AppStatus | null }) {
   const { t } = useI18n();
+  const presets = useWlPresets();
   const axialRef = useRef<HTMLDivElement>(null);
   const sagittalRef = useRef<HTMLDivElement>(null);
   const coronalRef = useRef<HTMLDivElement>(null);
@@ -206,7 +208,7 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
     if (value === "default") {
       resetMprWl(engine, viewportIds);
     } else {
-      const p = WL_PRESETS.find((x) => x.key === value);
+      const p = presets.find((x) => x.key === value);
       if (p) applyMprWl(engine, viewportIds, p.center, p.width);
     }
   };
@@ -223,9 +225,9 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
             <span style={wlLabel}>{t("viewer2d.wl.preset")}</span>
             <select style={wlSelect} defaultValue="default" onChange={(e) => onPreset(e.target.value)}>
               <option value="default">{t("viewer2d.wl.default")}</option>
-              {WL_PRESETS.map((p) => (
+              {presets.map((p) => (
                 <option key={p.key} value={p.key}>
-                  {t(p.labelKey)}
+                  {presetLabel(p, t)}
                 </option>
               ))}
             </select>

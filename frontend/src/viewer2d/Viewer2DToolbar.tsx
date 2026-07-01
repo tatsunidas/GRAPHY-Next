@@ -3,8 +3,10 @@
  * Author: Tatsuaki Kobayashi
  */
 import { useI18n } from "../i18n/i18n";
-import { WL_PRESETS } from "./wlPresets";
+import { presetLabel } from "./wlPresets";
+import { useWlPresets } from "./wlPresetStore";
 import { TOOL_IDS } from "../viewer/toolIds";
+import { type SortMode } from "../viewer/seriesSort";
 
 /** メニュー/ツールバー共通のアクション。対象は「選択タイル→無ければ全タイル」（TileGrid 側で解決）。 */
 export interface ViewerActions {
@@ -20,6 +22,10 @@ export interface ViewerActions {
   setWindowLevel(center: number, width: number): void;
   /** DICOM 既定ウィンドウに戻す。 */
   resetWindow(): void;
+  /** W/L プリセット編集ダイアログを開く。 */
+  editPresets(): void;
+  /** Z 並べ替え（InstanceNumber / IPP, 昇順・降順）。対象タイルのシリーズに適用。 */
+  sort(mode: SortMode): void;
   /** 左ドラッグの操作/計測/ブラシツールを切替（全タイルに適用＝グローバルなツールモード）。 */
   setTool(toolName: string): void;
   /** ROI ブラシ径(px)。 */
@@ -32,8 +38,12 @@ export interface ViewerActions {
   toggleRoiManager(): void;
   /** LUT 選択ダイアログを開く（適用は選択時に対象タイルへ）。 */
   openLut(): void;
-  /** レイアウト列数（0=自動）。 */
+  /** コントラスト調整（W/L）ダイアログを開く（対象=選択→無ければ先頭タイル）。 */
+  openWindowLevel(): void;
+  /** レイアウト列数（0=自動）。行は自動。 */
   setLayoutCols(cols: number): void;
+  /** Row×Col レイアウト指定（各 0=自動）。任意レイアウト用。 */
+  setLayoutGrid(rows: number, cols: number): void;
   toggleRefLines(): void;
   /** 対象タイルの Sync を一括 ON/OFF。 */
   setSyncTargets(on: boolean): void;
@@ -41,8 +51,14 @@ export interface ViewerActions {
   comingSoon(name: string): void;
   /** 対象シリーズを ImageJ の HyperStack として開く（ローカル ImageJ 起動）。 */
   bridgeImageJ(): void;
+  /** 対象タイルのシリーズで MPR ウィンドウを開く。 */
+  launchMpr(): void;
+  /** 対象タイルのシリーズで Slicer ウィンドウを開く。 */
+  launchSlicer(): void;
   /** 対象タイルのシリーズで Curved MPR ウィンドウを開く。 */
   launchCurvedMpr(): void;
+  /** 対象タイルのシリーズで Histogram 解析ダイアログを開く。 */
+  openHistogram(): void;
 }
 
 /** 2D Viewer 画面ツールバー。グループ分けしたアイコン行（対象=選択 or 全）。 */
@@ -62,6 +78,7 @@ export function Viewer2DToolbar({
   targetCount: number;
 }) {
   const { t } = useI18n();
+  const presets = useWlPresets();
   return (
     <div style={bar}>
       {/* レイアウト */}
@@ -109,8 +126,9 @@ export function Viewer2DToolbar({
         onChange={(e) => {
           const v = e.target.value;
           if (v === "__default__") actions.resetWindow();
+          else if (v === "__edit__") actions.editPresets();
           else {
-            const p = WL_PRESETS.find((x) => x.key === v);
+            const p = presets.find((x) => x.key === v);
             if (p) actions.setWindowLevel(p.center, p.width);
           }
           e.target.value = "";
@@ -120,9 +138,10 @@ export function Viewer2DToolbar({
       >
         <option value="">{t("viewer2d.wl.preset")}</option>
         <option value="__default__">{t("viewer2d.wl.default")}</option>
-        {WL_PRESETS.map((p) => (
-          <option key={p.key} value={p.key}>{t(p.labelKey)}</option>
+        {presets.map((p) => (
+          <option key={p.key} value={p.key}>{presetLabel(p, t)}</option>
         ))}
+        <option value="__edit__">{t("viewer2d.wl.edit")}</option>
       </select>
 
       {/* 画像調整（対象タイル） */}

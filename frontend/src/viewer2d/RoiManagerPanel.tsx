@@ -21,6 +21,11 @@ import { ENGINE_ID } from "../viewer/Viewer2D";
 import { getRoiMaskMeta, setRoiMaskMeta, deleteRoiMaskMeta, subscribeRoiMaskStore, getSegEditTarget, getMaskSegments } from "../viewer/roiMaskStore";
 import { createNewMask, addSegmentToActiveMask, activateMask, getLastSegViewport } from "../viewer/segmentation";
 import { fetchSettings } from "../settings/settingsApi";
+import { exportMaskAsSeg } from "../viewer/segExport";
+import { exportRoisAsRtStruct } from "../viewer/rtstructExport";
+import { importRtStructForCurrentView } from "../viewer/rtstructImport";
+import { emitToast } from "../viewer/toast";
+import { emitSeriesRefresh } from "../viewer/viewerRefresh";
 import { combineMasks, splitMask, roiToMask, isAreaRoi, type BoolOp, type SplitConnectivity } from "../viewer/roiBooleanOps";
 import { sphereFromCircleRoi, createSphere3DFromCircleRoi, bakeSphere3D, splitMaskToSlices, maskVolumeStats, type MaskVolumeStats } from "../viewer/roi3d";
 import { listSpheres3D, updateSphere3D, deleteSphere3D, subscribeSphere3D, type Sphere3D } from "../viewer/sphere3dStore";
@@ -347,6 +352,37 @@ export function RoiManagerPanel({ activePatientKey, onClose }: { activePatientKe
       setBusy(false);
     }
   };
+  // ROI 群を DICOM RTSTRUCT として保存（新シリーズ）。
+  const runExportRtStruct = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const res = await exportRoisAsRtStruct(rois.map((r) => r.uid));
+      if (res) {
+        emitToast(t("roiMgr.exportRtDone"));
+        emitSeriesRefresh();
+      } else window.alert(t("roiMgr.exportRtFail"));
+    } catch {
+      window.alert(t("roiMgr.exportRtFail"));
+    } finally {
+      setBusy(false);
+    }
+  };
+  // 表示中スタディの RTSTRUCT を読み込み、表示中シリーズへ ROI を復元。
+  const runImportRtStruct = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const n = await importRtStructForCurrentView();
+      if (n === 0) window.alert(t("roiMgr.importRtEmpty"));
+      else emitToast(t("roiMgr.importRtDone", { n }));
+    } catch {
+      window.alert(t("roiMgr.opFailed"));
+    } finally {
+      setBusy(false);
+      refresh();
+    }
+  };
   // ImageJ .roi/.zip をインポートして Cornerstone ROI に復元。
   const runImportRois = async (file: File) => {
     if (busy) return;
@@ -371,6 +407,22 @@ export function RoiManagerPanel({ activePatientKey, onClose }: { activePatientKe
       if (v) n[id] = v;
       return n;
     });
+  };
+  // マスク → DICOM SEG 書き出し（新シリーズとして DB 保存）。
+  const runExportSeg = async (id: string) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const res = await exportMaskAsSeg(id);
+      if (res) {
+        emitToast(t("roiMgr.exportSegDone"));
+        emitSeriesRefresh(); // 2D Viewer の検索ツリーを再取得（新 SEG シリーズを出す）。
+      } else window.alert(t("roiMgr.exportSegFail"));
+    } catch {
+      window.alert(t("roiMgr.exportSegFail"));
+    } finally {
+      setBusy(false);
+    }
   };
   // SPLIT（連結成分分割）。選択 1 件で実行。
   // 元マスクを構成成分（segment 1..N）へ再ラベルして**置換**する（元を残すと同一位置で重なり、
@@ -427,7 +479,9 @@ export function RoiManagerPanel({ activePatientKey, onClose }: { activePatientKe
           onChange={(e) => { const f = e.target.files?.[0]; if (f) runImportRois(f); e.target.value = ""; }}
         />
         <button onClick={() => importInputRef.current?.click()} disabled={busy} style={opBtn} title={t("roiMgr.importIJ")}>IJ ⬆</button>
+        <button onClick={runImportRtStruct} disabled={busy} style={opBtn} title={t("roiMgr.importRt")}>RT ⬆</button>
         {rois.length > 0 && <button onClick={runExportRois} disabled={busy} style={opBtn} title={t("roiMgr.exportIJ")}>IJ ⬇</button>}
+        {rois.length > 0 && <button onClick={runExportRtStruct} disabled={busy} style={opBtn} title={t("roiMgr.exportRt")}>RT ⬇</button>}
       </div>
       {rois.length === 0 && <div style={empty}>{t("roiMgr.empty")}</div>}
       {rois.map((r) => (
@@ -481,6 +535,7 @@ export function RoiManagerPanel({ activePatientKey, onClose }: { activePatientKe
           {m.scope && <button onClick={() => toggleScopeZ(m.id)} style={scopeChip} title={t("roiMgr.scopeToggleMask")}>{m.scope}</button>}
           <button onClick={() => runStats(m.id)} style={editBtn} title={t("roiMgr.stats")}>Σ</button>
           <button onClick={() => runSplitToSlices(m.id)} disabled={busy} style={editBtn} title={t("roiMgr.toSlices")}>⬚</button>
+          <button onClick={() => runExportSeg(m.id)} disabled={busy} style={editBtn} title={t("roiMgr.exportSeg")}>SEG</button>
           <button onClick={() => setEditId(m.id)} style={editBtn} title={t("roiMgr.editTitle")}>✎</button>
           <button onClick={() => deleteMask(m.id)} style={delBtn} title={t("common.delete")}>🗑</button>
         </div>

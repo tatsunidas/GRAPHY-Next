@@ -7,6 +7,10 @@
 > 🔵 **進行中（2026-07-01）の作業状況・次の一手は `fw/roi-mask-progress.md` を参照**
 > （シリーズ Sync / リファレンスライン / 2D Viewer メニュー・ツールバー / ROI 計測・ブラシ / ROI マネージャ）。
 > 関連設計: `viewer-2d-menu-toolbar.md` `roi-mask-model.md` `roi-manager-design.md` `series-sync-design.md`。
+>
+> 🟢 **2026-07 追加（GRAPHY 機能移植）**: Analysis>Histogram / Image>コントラスト調整(W/L) / View>Layout(任意 Row×Col) を実装。
+> 併せて **HU 校正の二重適用バグ**を是正し `viewer/pixelCalibration.ts` に読取を一元化（再発防止）。
+> 詳細: `viewer-2d-menu-toolbar.md` §9 ／ 校正は `viewer-2d-architecture.md`「校正(HU 等)の二重適用に注意」。
 
 ---
 

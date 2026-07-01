@@ -18,6 +18,7 @@ import { annotation as csAnnotation, segmentation as csSeg, Enums as csToolsEnum
 import { createResultSeg, resolveRoiStack } from "./roiBooleanOps";
 import { getRoiMaskMeta, setRoiMaskMeta } from "./roiMaskStore";
 import { addSphere3D, getSphere3D } from "./sphere3dStore";
+import { getModalityCalibration } from "./pixelCalibration";
 
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
 const MAX_SLICE_MASKS = 64; // 3D→2D split の出力上限。
@@ -323,17 +324,17 @@ export function maskVolumeStats(segmentationId: string): MaskVolumeStats | null 
     const vm = img(labelmapIds[z])?.voxelManager;
     if (!vm) continue;
     const len = vm.getScalarDataLength();
-    // source 画素（modality LUT 適用後）。cache に無ければ画素値統計はスキップ。
+    // source 画素をモダリティ値（HU 等）で読む。cache に無ければ画素値統計はスキップ。
+    // 校正は pixelCalibration に一元化（preScale 二重適用を防ぐ。scale/offset は preScale 済みなら {1,0}）。
     const sImg = sourceIds[z] ? img(sourceIds[z]) : null;
     const px = sImg?.getPixelData?.() as ArrayLike<number> | undefined;
-    const slope = (sImg?.slope ?? 1) as number;
-    const intercept = (sImg?.intercept ?? 0) as number;
+    const { scale, offset } = getModalityCalibration(sImg, sourceIds[z] ?? "");
     let sliceCount = 0;
     for (let i = 0; i < len; i++) {
       if (vm.getAtIndex(i) <= 0) continue;
       sliceCount++;
       if (px && i < px.length) {
-        const v = px[i] * slope + intercept;
+        const v = px[i] * scale + offset;
         sum += v;
         sumSq += v * v;
         valCount++;

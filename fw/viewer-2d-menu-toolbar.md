@@ -118,4 +118,38 @@
 実装メモ:
 - 画像系コマンドは `viewer/viewerCommands.ts`（`tileId → {fit,reset,rotate90,flipH,flipV,invert,applyLut,undo,redo}`）。各 base `Viewer2D` が登録、`Viewer2DToolbar`/`Viewer2DMenuBar` が対象 tileId 群へ送出。
 - メニュー＆ツールバーは `TileGrid` 先頭に配置（選択状態・レイアウト・参照線・同期を保持しているため）。画面ヘッダ(タイトル/閉じる)は据え置き。
+
+---
+
+## 9. 実装追加（2026-07）— GRAPHY 機能移植・レイアウト強化
+
+いずれも GRAPHY(Swing) の 2D Viewer 機能を Next(React/Cornerstone3D) へ移植。型チェック green・i18n(ja/en) 追加済み。
+
+### 9.1 Histogram（Analysis メニュー）— `viewer2d/HistogramDialog.tsx`
+- GRAPHY `Process > Histogram`（`com.vis.core.histogram.*` + `HistogramDialog/PlotPanel/MaskOverlayPanel`）の移植。
+- **ZCT 対応**: `SeriesLayout`（nZ/nC/nT・`zStack(c,t)`）で Z/C/T スピナー切替。C/T は多次元時のみ表示（DICOM 由来次元名を併記）。
+- **Slice / Stack（全 Z 集約）** 切替、**ビン幅/ビン数**指定。ピーククリップ描画（突出ビン抑制）。
+- 一次統計量: Count/Min/Max/Mean/StdDev/Variance/Mode/Median/Skewness/Kurtosis(excess)/Entropy(bits)/Bins。
+- **選択ビンの強調表示**: プロットのバークリック→プレビュー中スライスで該当ボクセルを赤オーバーレイ。
+- 計算コアは `viewer/histogram.ts`（`analyze`/`computeBinMask`）。画素読取は `viewer/pixelCalibration.ts` 経由（HU 校正・二重適用防止）。
+
+### 9.2 コントラスト調整 W/L（Image メニュー）— `viewer2d/WwWlAdjustDialog.tsx`
+- GRAPHY `Image > Adjust contrast`（`WwWlAdjusterDialog` + `WwWlContrastPlot`）の移植。モーダルレス浮動パネル。
+- **コントラストプロット**: 256 ビンヒストグラム（ピーククリップ）＋現在ウィンドウの転送直線（枠内クリップ＋床/天井）。
+- **WL/WW スライダー**（0–1000, `calculateBaseRange` と同式の固定可動域）＋**数値直接入力/Set**＋**Auto**（データ実効レンジへストレッチ）＋**Reset**（DICOM 既定）。ラベルは校正値（HU 等・単位付き）。
+- 変更はスライダー/入力/Auto/Reset とも対象タイルへ**ライブ適用**。
+- Next の VOI は Modality LUT 適用後（HU 空間）なので GRAPHY の raw↔物理値変換は不要＝全て校正値で統一。
+- **相違点**: RGB のチャンネル別カラーバランス（All/R/G/B）は Next が per-channel VOI 非対応のため未移植（グレースケール=CT/MR/PET/US は完全移植、カラーは輝度扱い）。
+- 配線: `viewerCommands` に `getWindowState()`（現在 VOI＋imageId 取得）を追加、単一取得用 `queryViewerCommand()` を追加。`ViewerActions.openWindowLevel()`。
+
+### 9.3 View > Layout サブメニュー＋任意 Row×Col — `Viewer2DMenuBar.tsx` / `Viewer2DScreen.tsx`
+- フラットな「レイアウト: 自動/2列/3列」を **Layout ▸ サブメニュー**へ集約。
+- 内容: 自動 ＋ プリセット `1×1/1×2/2×1/2×2/1×3/3×1/2×3/3×3`（Row×Col、該当にチェック）＋ **任意（行×列）入力フォーム**（`MenuItem.render` で埋め込み、1–12、Enter/適用）。
+- 状態モデルに `PatientSession.gridRows` を追加（0=自動）。`gridRows>0` で `gridTemplateRows: repeat(rows, minmax(0,1fr))`（溢れは 200px 下限の追加行でスクロール）。
+- アクション: `setLayoutGrid(rows, cols)` 新設。ツールバー列選択は `setLayoutCols(c)=setLayoutGrid(0,c)`（行自動）で従来通り。→ `viewer-2d-screen.md` §「FW: タイルレイアウト変更 UI」のプリセットパレット案を一部実装。
+
+### 9.4 校正(HU)二重適用の是正と再発防止（横断）
+- 症状: W/L ダイアログでヒストグラム軸と WL ラインが不一致（CT で約 −1024 ずれ）。
+- 原因: dicom-image-loader の `preScale.enabled` 既定 true で `getPixelData()` が既に HU を返すのに、Rescale slope/intercept を再適用していた（Histogram/MPR/ROI 統計/Fusion にも同じ潜在バグ）。
+- 対策: `viewer/pixelCalibration.ts` を新設し全読取を一元化。詳細は `viewer-2d-architecture.md`「校正(HU 等)の二重適用に注意」節。
 </content>
