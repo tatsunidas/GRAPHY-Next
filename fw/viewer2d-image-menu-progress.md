@@ -1,15 +1,15 @@
 # 2D Viewer Image メニュー拡張 進捗メモ（セッション記録）
 
 > 記録日: 2026-07-02
-> 対象: `Viewer2DScreen`（マルチスタディ・タイル画面）の **メニュー/ツールバー**。
-> 関連設計: `fw/viewer-2d-menu-toolbar.md` / `fw/mpr-viewer-design.md` / `fw/slicer-design.md` /
-> GRAPHY 参照: `WwWlPresets.java`（プリセット）・`ViewerMenu.java` + `Praparat.java`（Sort）。
+> 対象: `Viewer2DScreen`（マルチスタディ・タイル画面）の **メニュー/ツールバー**、および **ImageJ ブリッジ**（backend）。
+> 関連設計: `fw/viewer-2d-menu-toolbar.md` / `fw/mpr-viewer-design.md` / `fw/slicer-design.md` / `fw/roi-mask-progress.md`（ImageJ 節）。
+> GRAPHY 参照: `WwWlPresets.java`（プリセット）・`ViewerMenu.java` + `Praparat.java`（Sort）・`Viewer2DToolBar.java`「imagej」ボタン（ImageJ 起動順）。
 > ⚠️ 本セッションは `viewer2d/*`・`i18n/*` を **別作業者が並行編集**（Histogram 実装・任意レイアウト）中に実施。
->    型チェック `tsc -b` は全体 green（exit 0）。**コミットは未実施**。fw も衝突回避で本ファイルのみ追加。
+>    フロント `tsc -b` / backend `mvn -o compile` とも green。**コミットは未実施**。fw も衝突回避で本ファイルのみ追加。
 
 ---
 
-## サマリ（本セッションで実施した 4 件）
+## サマリ（本セッションで実施した 5 件）
 
 | # | 機能 | 状態 | 実機確認 |
 |---|---|---|---|
@@ -17,8 +17,10 @@
 | 2 | Image メニューの **W/L プリセットをサブメニュー化** | 実装済 | ✅ |
 | 3 | **W/L プリセットの編集/追加/リセット**（GRAPHY WwWlPresets 移植・永続化） | 実装済 | ✅ |
 | 4 | Image メニューに **Sort 機能**（InstanceNumber / IPP 昇降順・動画ブロック・ZCT 対応） | 実装済 | ✅ |
+| 5 | **ImageJ ブリッジ修正**（カーソル輝度値＝起動順・HU キャリブレーション・EMBEDDED 化） | 実装済 | 一部✅ |
 
-すべて `tsc -b` green。ja/en i18n キー一致を確認済み。
+フロント `tsc -b` green（1〜4）／backend `mvn -o compile` green（5）。ja/en i18n キー一致を確認済み。
+5 は **backend 再ビルド＋再起動が必要**（稼働中 JVM への変更のため）。
 
 ---
 
@@ -114,12 +116,49 @@ GRAPHY「並べ替え（InstanceNumber / spatial-Z、各昇降順）」を移植
 
 ---
 
+## 5. ImageJ ブリッジ修正（backend `imagej/ImageJBridgeService`）
+
+2D Viewer > Analysis > ImageJ でシリーズを HyperStack としてローカル ImageJ にブリッジ表示する機能の不具合修正。
+GRAPHY `Viewer2DToolBar.java`「imagej」ボタンの知見を移植。
+
+### 5-1. カーソル輝度値が出ない → **ImageJ の起動順**
+- **原因**: `ij.ImagePlus` は `private ImageJ ij = IJ.getInstance();` を **コンストラクタで一度だけ**評価する。
+  旧コードは `new ImagePlus(...)` の**後**に `new ImageJ(...)` を起動していたため、表示 ImagePlus の内部 `ij`
+  参照が **null 固定**になり、`IJ.showStatus()` によるカーソル輝度値表示が永久に動かなかった。
+- **修正**: **ImageJ の起動を `new ImagePlus(...)` より前**に移動（`IJ.getInstance()==null` で起動）。
+  `openProcessor` 内の一時 ImagePlus は表示しないので影響なし。
+- お手元の記憶（ImagePlus 後に IJ 起動→Window 登録）は順序が逆で、正解は **IJ 起動 → ImagePlus 生成**。
+  Window 登録は `imp.show()` が WindowManager へ自動で行う。**実機で輝度値表示を確認済み**。
+
+### 5-2. 起動方式 → **EMBEDDED 化（backend 保護）**
+- `ImageJ.STANDALONE` は ImageJ ウィンドウを閉じると `System.exit()` で **JVM(=Spring Boot backend) ごと落ちる**。
+- `ImageJ.EMBEDDED` + `exitWhenQuitting(false)` に変更（GRAPHY と同方針。閉じても backend は生存）。
+
+### 5-3. HU 値が出ない → **値(輝度)キャリブレーションの引き継ぎ**
+- **原因**: 各 DICOM を ImageJ `Opener` で開いて **`ImageProcessor`（生画素）だけ**取り出し、新しい合成 ImagePlus に
+  積み直していた。ImageJ の DICOM リーダーが source 側に設定する **RescaleSlope/Intercept 由来の HU 直線
+  キャリブレーション**が合成側に引き継がれず、空間 mm（pixelWidth/Height）しか設定していなかった。
+- **修正**: `loadProcessor`/`openProcessor` を `record Loaded(ImageProcessor ip, Calibration cal)` を返すよう変更し、
+  source ImagePlus の `Calibration` を捕捉。ループ内で最初の `cal.calibrated()==true` を `valueCal` に保持。
+  合成 ImagePlus には **`valueCal.copy()`（関数/係数/単位を保持）をベース**にし、**空間 mm は layout の
+  pixelSpacing で上書き**して `setCalibration`。
+- 画素と Calibration を**同一 source から取得**するため符号付き16bit CT のオフセットとも整合し、正しい HU を表示。
+  値校正の無いシリーズ（US/内視鏡等）は `calibrated()==false` で従来どおり生値表示（妥当）。
+
+### 反映
+- backend `mvn -o compile` green。**稼働中 JVM への変更のため、backend 再ビルド＋再起動が必要**
+  （`fw/roi-mask-progress.md` の headless 修正と同様）。5-1（輝度値）はユーザー確認済み、5-2/5-3 は再起動後に確認。
+
+---
+
 ## ビルド/検証
-- フロント: `cd frontend && npx tsc -b`（全体 green）。フル `vite build` は並行編集の他ファイル状況に依存するため tsc で検証。
+- フロント（1〜4）: `cd frontend && npx tsc -b`（全体 green）。フル `vite build` は並行編集の他ファイル状況に依存するため tsc で検証。
+- backend（5）: `cd backend && mvn -q -o compile -Dfrontend.skip=true`（green）。
 - i18n: `wlPreset.*`・`viewer2d.wl.edit`・`viewer2d.sort.*` とも ja/en キー一致を確認。
-- 実機: 1〜4 すべてユーザー確認済み（「かくにんできました」）。
+- 実機: 1〜4 ＋ ImageJ 輝度値(5-1) はユーザー確認済み（「かくにんできました」「表示できるようになりました」）。
+  ImageJ の EMBEDDED 化(5-2)・HU キャリブレーション(5-3) は **backend 再起動後**に確認。
 
 ## 未コミット / 引き継ぎ
 - 本セッションの全変更は **未コミット**。`viewer2d/*`・`i18n/*` を並行編集する別セッションと共存中のため、
   コミット単位（本作業のみ / 一括）は要相談。`main` 直コミット＋`Co-Authored-By` 慣習に従う。
-- fw への正式反映（`viewer-2d-menu-toolbar.md` の「近日対応」表の更新など）は衝突回避で保留。落ち着いたら統合。
+- fw への正式反映は **完了**: `viewer-2d-menu-toolbar.md` に §9.5〜9.8（MPR/Slicer バイパス・W/L プリセット・Sort・ImageJ）を追記し、§7 Phase A の「近日対応」注記を更新（3D/PlugIns のみ近日対応に修正）。あわせて末尾の不要な `</content>` 断片を除去。

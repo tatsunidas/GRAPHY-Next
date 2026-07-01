@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import { type ToolKind, type ViewerKind } from "./Toolbar";
 import { useI18n } from "../i18n/i18n";
+import { usePluginMenu, runPluginBackend } from "../plugins/pluginRegistry";
 
 interface MenuItem {
   label: string;
@@ -15,6 +16,7 @@ interface MenuItem {
 export function MenuBar({
   isStandalone,
   canImport,
+  selectedStudyUid,
   onImport,
   onOpenTool,
   onOpenViewer,
@@ -24,6 +26,7 @@ export function MenuBar({
 }: {
   isStandalone: boolean;
   canImport: boolean;
+  selectedStudyUid: string | null;
   onImport: () => void;
   onOpenTool: (kind: ToolKind) => void;
   onOpenViewer: (kind: ViewerKind) => void;
@@ -32,6 +35,14 @@ export function MenuBar({
   onOpenHelp: () => void;
 }) {
   const { t } = useI18n();
+  const pluginItems = usePluginMenu("mainscreen.menu", (m) => ({
+    surface: "mainscreen.menu",
+    pluginId: m.id,
+    t,
+    notify: (msg) => window.alert(msg),
+    runBackend: (payload) => runPluginBackend(m.id, payload),
+    selectedStudyUid,
+  }));
   const [open, setOpen] = useState<string | null>(null);
 
   useEffect(() => {
@@ -71,6 +82,13 @@ export function MenuBar({
         { label: t("main.toolbar.mpr"), onClick: () => onOpenViewer("mpr") },
         { label: t("main.toolbar.slicer"), onClick: () => onOpenViewer("slicer") },
       ],
+    },
+    {
+      id: "plugins",
+      label: t("main.menu.plugins"),
+      items: pluginItems.length
+        ? pluginItems.map((p) => ({ label: p.label, onClick: p.onClick }))
+        : [{ label: t("main.menu.pluginsNone"), onClick: () => {}, disabled: true }],
     },
     {
       id: "system",

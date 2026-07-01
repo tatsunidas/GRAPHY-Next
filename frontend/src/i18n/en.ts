@@ -53,6 +53,8 @@ export const en: Record<string, string> = {
   "main.menu.image": "Image",
   "main.menu.system": "System",
   "main.menu.tools": "Tools",
+  "main.menu.plugins": "Plug-ins",
+  "main.menu.pluginsNone": "(no plug-ins)",
   "main.menu.help": "Help",
   "main.toolbar.refresh": "Refresh",
   "main.toolbar.export": "Export",

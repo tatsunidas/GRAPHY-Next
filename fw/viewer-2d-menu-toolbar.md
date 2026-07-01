@@ -92,7 +92,7 @@
 
 | Phase | 内容 | 規模 |
 |---|---|---|
-| **A** ✅ | メニューバー(`Viewer2DMenuBar`)＋ツールバー(`Viewer2DToolbar`)＋コマンドレジストリ(`viewerCommands.ts`)。全体操作（レイアウト/同期/参照線）集約。画像一括（Invert/LUT/回転/反転/Fit/Reset/Undo/Redo）を選択 or 全タイルへ。新メニュー Sort/解析(Histogram/ImageJ)/3D・MPR・Slicer/ROI/PlugIns は「近日対応」プレースホルダ。 | 済 |
+| **A** ✅ | メニューバー(`Viewer2DMenuBar`)＋ツールバー(`Viewer2DToolbar`)＋コマンドレジストリ(`viewerCommands.ts`)。全体操作（レイアウト/同期/参照線）集約。画像一括（Invert/LUT/回転/反転/Fit/Reset/Undo/Redo）を選択 or 全タイルへ。新メニュー Sort/解析(Histogram/ImageJ)/3D・MPR・Slicer/ROI/PlugIns は当初「近日対応」プレースホルダ（→ 現在は **Sort/Histogram/ImageJ/MPR/Slicer 実装済み**〔§9〕。**3D/PlugIns のみ近日対応**）。 | 済 |
 | **B** ✅ | W/L プリセット（`wlPresets.ts`: 脳/軟部/肺野/骨/腹部/肝＋既定。対象タイルへ voiRange 適用）。メニュー(画像)＋ツールバー(ドロップダウン)。 | 済 |
 | **C** ✅ | 操作ツール ラジオ（W/L/Pan/Zoom、ツールバー）＋計測ツール（Length/Angle/Ellipse/Rect/Probe）を **ROI メニュー**で機能化（Cornerstone annotation tools、左ドラッグ割当）＋ROI 全消去。**ツール(Tools)メニュー**に ROI ブラシ/消しゴム（segmentation は大規模のため当面プレースホルダ）。 | 大 |
 | **D** | エクスポート（選択/全 PNG）・全シネ・シリーズエクスポート。 | 小〜中 |
@@ -152,4 +152,24 @@
 - 症状: W/L ダイアログでヒストグラム軸と WL ラインが不一致（CT で約 −1024 ずれ）。
 - 原因: dicom-image-loader の `preScale.enabled` 既定 true で `getPixelData()` が既に HU を返すのに、Rescale slope/intercept を再適用していた（Histogram/MPR/ROI 統計/Fusion にも同じ潜在バグ）。
 - 対策: `viewer/pixelCalibration.ts` を新設し全読取を一元化。詳細は `viewer-2d-architecture.md`「校正(HU 等)の二重適用に注意」節。
-</content>
+
+### 9.5 「実態のない」メニューの棚卸しと MPR/Slicer バイパス
+- 全画面のメニュー/ツールバーを監査。`comingSoon` 項目のうち **MPR/Slicer は MainScreen 側で実装済み**（別ウィンドウ起動）だったため、2D Viewer の View メニューでも `launchCurvedMpr` と同方式で実装へ配線。
+- `ViewerActions.launchMpr()`/`launchSlicer()`＝対象タイルの study/series を `graphy-mpr-ctx`/`graphy-slicer-ctx` に書き `desktop.openViewer("mpr"|"slicer")`（web は `#mpr`/`#slicer`）。**3D/PlugIns は実装不在で近日対応のまま**。
+
+### 9.6 W/L プリセットのサブメニュー化＋編集/追加/リセット（GRAPHY WwWlPresets 移植）
+- Image ▸ 「W/L プリセット」を `MenuItem.submenu` でサブメニュー化。末尾に「プリセットを編集…」。
+- 永続化: `viewer2d/wlPresetStore.ts`（設定キー `viewer.wlPresets` に JSON。**ファイル H2＝Next 再起動後も保持**。BroadcastChannel＋localStorage で全ウィンドウ横断通知。フック `useWlPresets()`）。
+- 編集 UI: `viewer2d/WlPresetDialog.tsx`（新規/編集/削除/既定に戻す）。`wlPresets.ts` に自由入力 `name?`＋`presetLabel()`。MPR も同ストア参照。
+
+### 9.7 Sort（Image メニュー）— GRAPHY SeriesSortMode 移植
+- InstanceNumber / IPP（法線投影）× 昇降順。**Z 次元のみ**並べ替え、C/T 割当は保持（**ZCT インデックス対応**）。
+- `viewer/seriesSort.ts`（`buildSortMeta`/`computeZOrder`/`applySortToLayout`）＋`viewer/seriesCommands.ts`（tileId キーの別レジストリ）。`SeriesViewer` で `layout` を「並べ替え適用後の派生 memo」化し、並べ替え後は表示中 imageId を追従。
+- **動画 IOD はブロック**（トースト）。IPP/InstanceNumber 不在の並べ替えもブロック。
+
+### 9.8 ImageJ ブリッジ修正（backend `imagej/ImageJBridgeService`）
+- **カーソル輝度値**: `ij.ImagePlus` の `ij = IJ.getInstance()` フィールド初期化子が生成時に一度だけ評価されるため、**ImageJ を ImagePlus 生成より前に起動**（GRAPHY `Viewer2DToolBar` の知見）。
+- **HU 値**: source DICOM の `Calibration`（RescaleSlope/Intercept 由来）を `copy()` で合成 ImagePlus へ引き継ぎ、空間 mm は layout の pixelSpacing で上書き。
+- **安定化**: `ImageJ.STANDALONE`→`EMBEDDED`＋`exitWhenQuitting(false)`（閉じても backend JVM を落とさない）。**要 backend 再ビルド＋再起動**。
+
+> 9.5–9.8 の詳細・追加/変更ファイル一覧・未コミット状況は **`fw/viewer2d-image-menu-progress.md`** を参照。

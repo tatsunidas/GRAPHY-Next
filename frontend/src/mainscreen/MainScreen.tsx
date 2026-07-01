@@ -185,6 +185,7 @@ export function MainScreen({
       <MenuBar
         isStandalone={isStandalone}
         canImport={canImport}
+        selectedStudyUid={selectedStudy?.studyInstanceUid ?? null}
         onImport={handleImport}
         onOpenTool={handleOpenTool}
         onOpenViewer={handleOpenViewer}

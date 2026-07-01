@@ -53,6 +53,8 @@ export const ja: Record<string, string> = {
   "main.menu.image": "画像",
   "main.menu.system": "システム",
   "main.menu.tools": "ツール",
+  "main.menu.plugins": "プラグイン",
+  "main.menu.pluginsNone": "（プラグインなし）",
   "main.menu.help": "ヘルプ",
   "main.toolbar.refresh": "更新",
   "main.toolbar.export": "エクスポート",

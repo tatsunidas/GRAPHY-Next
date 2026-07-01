@@ -8,6 +8,7 @@ import { type ViewerActions } from "./Viewer2DToolbar";
 import { presetLabel } from "./wlPresets";
 import { useWlPresets } from "./wlPresetStore";
 import { TOOL_IDS } from "../viewer/toolIds";
+import { usePluginMenu, runPluginBackend } from "../plugins/pluginRegistry";
 
 interface MenuItem {
   label: string;
@@ -52,6 +53,14 @@ export function Viewer2DMenuBar({
 }) {
   const { t } = useI18n();
   const presets = useWlPresets();
+  const pluginItems = usePluginMenu("viewer2d.menu", (m) => ({
+    surface: "viewer2d.menu",
+    pluginId: m.id,
+    t,
+    notify: (msg) => window.alert(msg),
+    runBackend: (payload) => runPluginBackend(m.id, payload),
+    actions,
+  }));
   const [open, setOpen] = useState<string | null>(null);
   useEffect(() => {
     const close = () => setOpen(null);
@@ -172,9 +181,9 @@ export function Viewer2DMenuBar({
     {
       id: "plugins",
       label: t("viewer2d.menu.plugins"),
-      items: [
-        { label: t("viewer2d.menu.pluginsNone"), onClick: () => actions.comingSoon(t("viewer2d.menu.plugins")) },
-      ],
+      items: pluginItems.length
+        ? pluginItems.map((p) => ({ label: p.label, onClick: p.onClick }))
+        : [{ label: t("viewer2d.menu.pluginsNone"), onClick: () => actions.comingSoon(t("viewer2d.menu.plugins")) }],
     },
   ];
 
