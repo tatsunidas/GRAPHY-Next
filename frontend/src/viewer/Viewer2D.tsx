@@ -14,6 +14,7 @@ import {
   EllipticalROITool,
   RectangleROITool,
   ProbeTool,
+  PlanarFreehandROITool,
   BrushTool,
   annotation as csAnnotation,
   utilities as csToolsUtilities,
@@ -24,6 +25,7 @@ import { ERASER_TOOL_ID } from "./toolIds";
 import { setViewerContext, clearViewerContext, getViewerContext, type ViewerContext } from "./viewerContext";
 import { setRoiMaskMeta, subscribeRoiMaskStore } from "./roiMaskStore";
 import { reconcileGlobalAnnotations } from "./globalRoiSync";
+import { listSpheres3D, sphereCanvasCircle, subscribeSphere3D, type SphereCanvasCircle } from "./sphere3dStore";
 import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
 import { applyTransform, isPanned, readTransform, type ViewTransform, FIT_TRANSFORM } from "./transform";
 import { readImageInfo, sampleAtCanvas, computeSliceSpacing, type ImageInfo, type PixelSample } from "./imageInfo";
@@ -252,6 +254,26 @@ export function Viewer2D({
   }, []);
   recomputeRefLinesRef.current = recomputeRefLines;
 
+  // パラメトリック 3D 球のライブ断面円プレビュー（現在スライス/scope で交差する円）。
+  const [sphereCircles, setSphereCircles] = useState<SphereCanvasCircle[]>([]);
+  const recomputeSpheresRef = useRef<() => void>(() => {});
+  const recomputeSpheres = useCallback(() => {
+    const v = viewportRef.current;
+    const ctx = roiContextRef.current;
+    if (!v || !ctx || compact || syncGroupId) {
+      setSphereCircles((prev) => (prev.length ? [] : prev));
+      return;
+    }
+    const out: SphereCanvasCircle[] = [];
+    for (const s of listSpheres3D()) {
+      if (s.seriesUid && s.seriesUid !== ctx.seriesUid) continue;
+      const c = sphereCanvasCircle(v, s, ctx.c, ctx.t);
+      if (c) out.push(c);
+    }
+    setSphereCircles(out);
+  }, [compact, syncGroupId]);
+  recomputeSpheresRef.current = recomputeSpheres;
+
   /** 左ドラッグの割り当てを Pan↔W/L で切り替える。 */
   const togglePan = () => {
     const tg = ToolGroupManager.getToolGroup(`${viewportIdRef.current}-tg`);
@@ -469,6 +491,7 @@ export function Viewer2D({
       if (!compact && !syncGroupId) {
         bumpReference();
         recomputeRefLinesRef.current();
+        recomputeSpheresRef.current(); // 球プレビューも zoom/pan/回転に追従
       }
       if (!compact) scheduleCapture(); // Undo/Redo 履歴（操作確定後にデバウンス）
     };
@@ -542,6 +565,9 @@ export function Viewer2D({
               tg.addTool(tn);
               tg.setToolPassive(tn);
             }
+            // ImageJ インポートの polygon/freehand ROI 描画用（メニューには出さず passive で追加）。
+            tg.addTool(PlanarFreehandROITool.toolName);
+            tg.setToolPassive(PlanarFreehandROITool.toolName);
             // ROI ブラシ（セグメンテーション編集）。passive で追加。
             tg.addTool(BrushTool.toolName);
             tg.setToolPassive(BrushTool.toolName);
@@ -682,6 +708,7 @@ export function Viewer2D({
         if (!compact && !syncGroupId) {
           bumpReference();
           recomputeRefLinesRef.current();
+          recomputeSpheresRef.current(); // 球断面円もスライス追従
         }
       } catch {
         // スライス切替の競合・例外時はフォールバックとして再フィット＋再描画を試みる
@@ -732,6 +759,15 @@ export function Viewer2D({
   useEffect(() => {
     recomputeRefLines();
   }, [referenceLinesEnabled, loading, stackKey, recomputeRefLines]);
+
+  // 3D 球プレビュー: ストア変化を購読し、初期化完了・スライス・スタックで再計算。
+  useEffect(() => {
+    if (compact || syncGroupId) return;
+    return subscribeSphere3D(() => recomputeSpheresRef.current());
+  }, [compact, syncGroupId]);
+  useEffect(() => {
+    recomputeSpheres();
+  }, [loading, stackKey, imageIndex, recomputeSpheres]);
 
   // シリーズ Sync（表示状態）: base ビューポートをグローバル presentation+VOI synchronizer に
   // add/remove する。SliderView base のみ（compact/grid セルは対象外）。viewSyncEnabled と
@@ -1006,6 +1042,18 @@ export function Viewer2D({
                   </g>
                 );
               })}
+            </svg>
+          )}
+          {/* パラメトリック 3D 球のライブ断面円プレビュー。 */}
+          {sphereCircles.length > 0 && (
+            <svg style={refLineSvg}>
+              {sphereCircles.map((c, i) => (
+                <g key={i}>
+                  <circle cx={c.cx} cy={c.cy} r={c.r} fill="none" stroke={c.color} strokeWidth={1.5} strokeDasharray="4 3" opacity={0.9} />
+                  <circle cx={c.cx} cy={c.cy} r={1.5} fill={c.color} />
+                  {c.label && <text x={c.cx + c.r + 4} y={c.cy} fill={c.color} fontSize={11} style={refLineText}>{c.label}</text>}
+                </g>
+              ))}
             </svg>
           )}
           {/* 患者の向き（A/P・R/L・H/F）。四辺に表示。pointer-events:none。 */}

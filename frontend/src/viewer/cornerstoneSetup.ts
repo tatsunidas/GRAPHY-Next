@@ -19,7 +19,10 @@ import {
   EllipticalROITool,
   RectangleROITool,
   ProbeTool,
+  PlanarFreehandROITool,
   BrushTool,
+  CrosshairsTool,
+  StackScrollTool,
 } from "@cornerstonejs/tools";
 
 let initPromise: Promise<void> | null = null;
@@ -43,8 +46,13 @@ export function ensureCornerstoneInitialized(): Promise<void> {
       addTool(EllipticalROITool);
       addTool(RectangleROITool);
       addTool(ProbeTool);
+      // ImageJ 由来の polygon/freehand ROI 描画用（インポート再構築の受け皿）。
+      addTool(PlanarFreehandROITool);
       // セグメンテーション（Mask）編集: ROI ブラシ/消しゴム。
       addTool(BrushTool);
+      // MPR（VolumeViewport）: 連動十字線・ボリュームスライス送り。
+      addTool(CrosshairsTool);
+      addTool(StackScrollTool);
     })();
   }
   return initPromise;

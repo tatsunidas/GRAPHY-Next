@@ -309,6 +309,64 @@ export const exportZip = async (
   return { blob, filename };
 };
 
+// ── ImageJ ROI 入出力 ────────────────────────────────
+
+/** ImageJ ROI 交換 DTO（backend {@code ImageJRoiDto} と一致。画像ピクセル座標）。 */
+export interface ImageJRoiDto {
+  name?: string;
+  type: string; // polygon | freehand | polyline | oval | rect | point | angle
+  position: number; // スライス位置（1-based, 0=未指定）
+  xs?: number[];
+  ys?: number[];
+  bx?: number;
+  by?: number;
+  bw?: number;
+  bh?: number;
+  strokeColor?: number; // 0xAARRGGBB
+}
+
+/** ROI 群 → RoiSet.zip（blob＋ファイル名）。 */
+export const exportImageJRoiSet = async (
+  rois: ImageJRoiDto[],
+): Promise<{ blob: Blob; filename: string }> => {
+  const res = await fetch(`${apiBase()}/api/imagej/roiset`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(rois),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const blob = await res.blob();
+  const cd = res.headers.get("content-disposition") ?? "";
+  const m = /filename="?([^"]+)"?/.exec(cd);
+  return { blob, filename: m ? m[1] : "RoiSet.zip" };
+};
+
+/** .roi/.zip をアップロードして DTO 群にデコード。 */
+export const importImageJRoiSet = async (file: File): Promise<ImageJRoiDto[]> => {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${apiBase()}/api/imagej/import`, { method: "POST", body: form });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+};
+
+/** ブリッジ結果（次元）。 */
+export interface ImageJBridgeResult {
+  nZ: number;
+  nC: number;
+  nT: number;
+  width: number;
+  height: number;
+}
+
+/** 表示中シリーズを ImageJ の HyperStack として開く（ローカル ImageJ 起動）。 */
+export const bridgeImageJHyperStack = (
+  studyUid: string,
+  seriesUid: string,
+  title?: string,
+): Promise<ImageJBridgeResult> =>
+  httpSend<ImageJBridgeResult>("/api/imagej/bridge", "POST", { studyUid, seriesUid, title });
+
 // ── Anonymizer（PS3.15 匿名化） ────────────────────────────────
 
 /** 匿名化オプション（backend AnonymizeConfig.Option 名と一致）。 */

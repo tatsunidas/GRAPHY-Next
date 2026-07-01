@@ -102,7 +102,7 @@ export function Viewer2DMenuBar({
       label: t("viewer2d.menu.analysis"),
       items: [
         { label: t("viewer2d.menu.histogram"), onClick: () => actions.comingSoon(t("viewer2d.menu.histogram")) },
-        { label: t("viewer2d.menu.imagej"), onClick: () => actions.comingSoon(t("viewer2d.menu.imagej")) },
+        { label: t("viewer2d.menu.imagej"), onClick: () => actions.bridgeImageJ() },
       ],
     },
     {

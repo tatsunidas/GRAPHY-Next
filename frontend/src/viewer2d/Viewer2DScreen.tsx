@@ -7,6 +7,7 @@ import {
   fetchStudies,
   fetchSeries,
   fetchInstances,
+  bridgeImageJHyperStack,
   type AppStatus,
   type Study,
   type Series,
@@ -688,6 +689,21 @@ function TileGrid({
       toggleRefLines: () => setRefLines((v) => !v),
       setSyncTargets: (sync) => resolveTargets().forEach((id) => onSetSync(patient.patientKey, id, sync)),
       comingSoon,
+      // 対象（選択→無ければ先頭）タイルのシリーズを ImageJ HyperStack として開く。
+      bridgeImageJ: () => {
+        const tid = resolveTargets()[0];
+        const tile = patient.tiles.find((tl) => tl.id === tid);
+        if (!tile) { comingSoon(t("viewer2d.menu.imagej")); return; }
+        bridgeImageJHyperStack(
+          tile.study.studyInstanceUid,
+          tile.series.seriesInstanceUid,
+          tile.series.seriesDescription ?? undefined,
+        )
+          .then((r) => setToast(t("viewer2d.imagej.bridged", { z: r.nZ, c: r.nC, tt: r.nT })))
+          .catch(() => setToast(t("viewer2d.imagej.bridgeFailed")));
+        if (toastTimer.current) window.clearTimeout(toastTimer.current);
+        toastTimer.current = window.setTimeout(() => setToast(null), 3500);
+      },
     }),
     [resolveTargets, onSetCols, onSetSync, patient.patientKey, patient.tiles, comingSoon, t],
   );

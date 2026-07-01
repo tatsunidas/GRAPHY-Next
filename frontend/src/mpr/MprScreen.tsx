@@ -1,0 +1,363 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
+/**
+ * MPR ウィンドウ（P1）。1×3（AX | SAG | COR）で VolumeViewport を表示する。
+ *
+ * 起動: MainScreen が選択スタディ/シリーズを `localStorage("graphy-mpr-ctx")` に書き、
+ * desktop=`openViewer("mpr")` / web=`window.open("#mpr")` で本画面（`App` の #mpr ルート）を開く。
+ * ボリューム構築・チルト補正・ビューポート配線は `viewer/mpr.ts`。
+ */
+import { useCallback, useEffect, useRef, useState } from "react";
+import { RenderingEngine, Enums, eventTarget } from "@cornerstonejs/core";
+import {
+  fetchSeries,
+  fetchInstances,
+  type AppStatus,
+  type Study,
+  type Series,
+} from "../api";
+import { ensureCornerstoneInitialized } from "../viewer/cornerstoneSetup";
+import { imageIdForInstance } from "../viewer/imageId";
+import {
+  buildMprVolume,
+  setupMprViewports,
+  teardownMpr,
+  applyMprWl,
+  resetMprWl,
+  readMprOverlay,
+  type MprViewportIds,
+  type MprOverlay,
+} from "../viewer/mpr";
+import { WL_PRESETS } from "../viewer2d/wlPresets";
+import { useI18n } from "../i18n/i18n";
+
+const ENGINE_ID = "graphy-mpr-engine";
+const TOOL_GROUP_ID = "graphy-mpr-tg";
+const VIEWPORT_IDS: MprViewportIds = {
+  axial: "mpr-axial",
+  sagittal: "mpr-sagittal",
+  coronal: "mpr-coronal",
+};
+
+interface MprContext {
+  study: Study;
+  series?: Series;
+  ts: number;
+}
+
+type Phase = "idle" | "loading" | "ready" | "error" | "unsupported";
+
+export function MprScreen({ status }: { status: AppStatus | null }) {
+  const { t } = useI18n();
+  const axialRef = useRef<HTMLDivElement>(null);
+  const sagittalRef = useRef<HTMLDivElement>(null);
+  const coronalRef = useRef<HTMLDivElement>(null);
+  const engineRef = useRef<RenderingEngine | null>(null);
+  const startedRef = useRef(false);
+
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [message, setMessage] = useState<string>("");
+  const [title, setTitle] = useState<string>("");
+  const [tilt, setTilt] = useState<number | null>(null);
+  const [overlays, setOverlays] = useState<Record<string, MprOverlay>>({});
+
+  const mode = status?.mode === "standalone" ? "standalone" : "web";
+
+  const elFor = useCallback(
+    (id: string): HTMLDivElement | null => {
+      if (id === VIEWPORT_IDS.axial) return axialRef.current;
+      if (id === VIEWPORT_IDS.sagittal) return sagittalRef.current;
+      return coronalRef.current;
+    },
+    [],
+  );
+
+  // 方位ラベル/スライス番号のオーバーレイを 3 面ぶん再計算する。
+  const refreshOverlays = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    const next: Record<string, MprOverlay> = {};
+    for (const id of Object.values(VIEWPORT_IDS)) {
+      const el = elFor(id);
+      if (el) next[id] = readMprOverlay(engine, id, el);
+    }
+    setOverlays(next);
+  }, [elFor]);
+
+  const start = useCallback(async () => {
+    // ctx 読み取り。
+    let ctx: MprContext | null = null;
+    try {
+      const raw = localStorage.getItem("graphy-mpr-ctx");
+      if (raw) ctx = JSON.parse(raw) as MprContext;
+    } catch {
+      ctx = null;
+    }
+    if (!ctx?.study) {
+      setPhase("error");
+      setMessage(t("mpr.noContext"));
+      return;
+    }
+    if (mode !== "standalone") {
+      setPhase("unsupported");
+      setMessage(t("mpr.webUnsupported"));
+      return;
+    }
+
+    setPhase("loading");
+    setMessage(t("mpr.loading"));
+
+    try {
+      await ensureCornerstoneInitialized();
+
+      // シリーズ解決: ctx にあればそれ、無ければ最多インスタンスのシリーズ。
+      let series = ctx.series;
+      if (!series) {
+        const list = await fetchSeries(ctx.study.studyInstanceUid);
+        series = list.slice().sort((a, b) => b.numberOfInstances - a.numberOfInstances)[0];
+      }
+      if (!series) {
+        setPhase("error");
+        setMessage(t("mpr.noSeries"));
+        return;
+      }
+      setTitle(series.seriesDescription || series.seriesInstanceUid);
+
+      const instances = await fetchInstances(ctx.study.studyInstanceUid, series.seriesInstanceUid);
+      if (instances.length < 3) {
+        setPhase("error");
+        setMessage(t("mpr.needVolume"));
+        return;
+      }
+      const imageIds = instances.map((i) => imageIdForInstance(mode, i.sopInstanceUid));
+
+      const volumeId = `graphy-mpr-vol:${series.seriesInstanceUid}`;
+      const built = await buildMprVolume(imageIds, series.modality, volumeId);
+      setTilt(built.corrected ? (built.tiltAngleDeg ?? null) : null);
+
+      const els = axialRef.current && sagittalRef.current && coronalRef.current;
+      if (!els) {
+        setPhase("error");
+        setMessage(t("mpr.error"));
+        return;
+      }
+
+      const engine = new RenderingEngine(ENGINE_ID);
+      engineRef.current = engine;
+      await setupMprViewports(
+        engine,
+        ENGINE_ID,
+        { axial: axialRef.current!, sagittal: sagittalRef.current!, coronal: coronalRef.current! },
+        VIEWPORT_IDS,
+        volumeId,
+        TOOL_GROUP_ID,
+      );
+      setPhase("ready");
+      // 初回オーバーレイ計算（レイアウト確定後に読む）。
+      requestAnimationFrame(() => refreshOverlays());
+    } catch (e) {
+      setPhase("error");
+      setMessage(`${t("mpr.error")}: ${String(e)}`);
+    }
+  }, [mode, t]);
+
+  useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+    void start();
+    return () => {
+      teardownMpr(engineRef.current, TOOL_GROUP_ID);
+      engineRef.current = null;
+    };
+  }, [start]);
+
+  // カメラ変更（Crosshairs ジャンプ・スライス送り・pan/zoom）でオーバーレイを追従。
+  useEffect(() => {
+    if (phase !== "ready") return;
+    const onCam = () => refreshOverlays();
+    eventTarget.addEventListener(Enums.Events.CAMERA_MODIFIED, onCam);
+    return () => eventTarget.removeEventListener(Enums.Events.CAMERA_MODIFIED, onCam);
+  }, [phase, refreshOverlays]);
+
+  const viewportIds = [VIEWPORT_IDS.axial, VIEWPORT_IDS.sagittal, VIEWPORT_IDS.coronal];
+  const onPreset = (value: string) => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    if (value === "default") {
+      resetMprWl(engine, viewportIds);
+    } else {
+      const p = WL_PRESETS.find((x) => x.key === value);
+      if (p) applyMprWl(engine, viewportIds, p.center, p.width);
+    }
+  };
+
+  const busy = phase === "loading" || phase === "idle";
+
+  return (
+    <div style={root}>
+      <div style={header}>
+        <span style={hTitle}>{t("main.toolbar.mpr")}</span>
+        {title && <span style={hSeries}>{title}</span>}
+        {phase === "ready" && (
+          <label style={wlWrap}>
+            <span style={wlLabel}>{t("viewer2d.wl.preset")}</span>
+            <select style={wlSelect} defaultValue="default" onChange={(e) => onPreset(e.target.value)}>
+              <option value="default">{t("viewer2d.wl.default")}</option>
+              {WL_PRESETS.map((p) => (
+                <option key={p.key} value={p.key}>
+                  {t(p.labelKey)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {tilt !== null && (
+          <span style={tiltChip} title={t("mpr.tiltCorrectedHint")}>
+            {t("mpr.tiltCorrected", { deg: tilt.toFixed(1) })}
+          </span>
+        )}
+      </div>
+      <div style={body}>
+        <Cell label={t("mpr.axial")} color="#00dc00" refEl={axialRef} overlay={overlays[VIEWPORT_IDS.axial]} />
+        <Cell label={t("mpr.sagittal")} color="#dcdc00" refEl={sagittalRef} overlay={overlays[VIEWPORT_IDS.sagittal]} />
+        <Cell label={t("mpr.coronal")} color="#00a0ff" refEl={coronalRef} overlay={overlays[VIEWPORT_IDS.coronal]} />
+        {phase !== "ready" && (
+          <div style={overlay}>
+            <div style={overlayBox}>{busy ? t("mpr.loading") : message}</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Cell({
+  label,
+  color,
+  refEl,
+  overlay,
+}: {
+  label: string;
+  color: string;
+  refEl: React.RefObject<HTMLDivElement>;
+  overlay?: MprOverlay;
+}) {
+  const m = overlay?.markers ?? null;
+  return (
+    <div style={cell}>
+      <div ref={refEl} style={vpEl} onContextMenu={(e) => e.preventDefault()} />
+      <span style={{ ...cellLabel, color }}>{label}</span>
+      {overlay && overlay.total > 0 && (
+        <span style={sliceLabel}>
+          {overlay.slice + 1} / {overlay.total}
+        </span>
+      )}
+      {m && (
+        <>
+          <span style={{ ...markTop }}>{m.top}</span>
+          <span style={{ ...markBottom }}>{m.bottom}</span>
+          <span style={{ ...markLeft }}>{m.left}</span>
+          <span style={{ ...markRight }}>{m.right}</span>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── styles ────────────────────────────────────────────────────
+const root: React.CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  display: "flex",
+  flexDirection: "column",
+  background: "#000",
+  color: "#e6eaee",
+  fontFamily: "system-ui, sans-serif",
+};
+const header: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 12,
+  padding: "6px 12px",
+  background: "#14181c",
+  borderBottom: "1px solid #23292f",
+  fontSize: 13,
+};
+const hTitle: React.CSSProperties = { fontWeight: 600 };
+const hSeries: React.CSSProperties = { color: "#9aa6b2" };
+const wlWrap: React.CSSProperties = { display: "flex", alignItems: "center", gap: 5, marginLeft: 8 };
+const wlLabel: React.CSSProperties = { color: "#9aa6b2", fontSize: 12 };
+const wlSelect: React.CSSProperties = {
+  background: "#1b2126",
+  color: "#e6eaee",
+  border: "1px solid #2c343b",
+  borderRadius: 5,
+  fontSize: 12,
+  padding: "2px 6px",
+};
+const tiltChip: React.CSSProperties = {
+  marginLeft: "auto",
+  fontSize: 11,
+  color: "#ffd27a",
+  border: "1px solid #5a4a2a",
+  background: "#2a220f",
+  borderRadius: 4,
+  padding: "1px 7px",
+};
+const body: React.CSSProperties = { position: "relative", flex: 1, display: "flex", minHeight: 0 };
+const cell: React.CSSProperties = {
+  position: "relative",
+  flex: 1,
+  minWidth: 0,
+  borderRight: "1px solid #23292f",
+};
+const vpEl: React.CSSProperties = { position: "absolute", inset: 0 };
+const cellLabel: React.CSSProperties = {
+  position: "absolute",
+  top: 6,
+  left: 8,
+  fontSize: 12,
+  fontWeight: 600,
+  textShadow: "0 0 3px #000",
+  pointerEvents: "none",
+};
+const sliceLabel: React.CSSProperties = {
+  position: "absolute",
+  bottom: 6,
+  left: 8,
+  fontSize: 11,
+  color: "#c7d0d8",
+  textShadow: "0 0 3px #000",
+  pointerEvents: "none",
+};
+const markBase: React.CSSProperties = {
+  position: "absolute",
+  color: "#e6eaee",
+  fontSize: 12,
+  fontWeight: 700,
+  textShadow: "0 0 3px #000",
+  pointerEvents: "none",
+};
+const markTop: React.CSSProperties = { ...markBase, top: 4, left: "50%", transform: "translateX(-50%)" };
+const markBottom: React.CSSProperties = { ...markBase, bottom: 4, left: "50%", transform: "translateX(-50%)" };
+const markLeft: React.CSSProperties = { ...markBase, left: 4, top: "50%", transform: "translateY(-50%)" };
+const markRight: React.CSSProperties = { ...markBase, right: 4, top: "50%", transform: "translateY(-50%)" };
+const overlay: React.CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  background: "rgba(0,0,0,0.55)",
+};
+const overlayBox: React.CSSProperties = {
+  padding: "10px 18px",
+  background: "#1b2126",
+  border: "1px solid #2c343b",
+  borderRadius: 8,
+  fontSize: 13,
+  maxWidth: "80%",
+  textAlign: "center",
+};

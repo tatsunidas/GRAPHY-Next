@@ -37,6 +37,8 @@ export interface ViewerActions {
   setSyncTargets(on: boolean): void;
   /** 未実装機能の「近日対応」通知（メニュー用プレースホルダ）。 */
   comingSoon(name: string): void;
+  /** 対象シリーズを ImageJ の HyperStack として開く（ローカル ImageJ 起動）。 */
+  bridgeImageJ(): void;
 }
 
 /** 2D Viewer 画面ツールバー。グループ分けしたアイコン行（対象=選択 or 全）。 */
