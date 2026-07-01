@@ -19,6 +19,7 @@ import {
   imageLoader,
   metaData,
   volumeLoader,
+  utilities as csUtilities,
   Enums,
   type Types,
   type RenderingEngine,
@@ -337,6 +338,52 @@ export function readMprOverlay(engine: RenderingEngine, viewportId: string, elem
     /* ignore */
   }
   return { markers, slice, total };
+}
+
+/** マウス直下のプローブ結果（実空間座標＋輝度値）。 */
+export interface MprProbe {
+  /** 患者座標 [x,y,z]（mm, LPS）。 */
+  world: [number, number, number];
+  /** ボリュームの輝度値（CT=HU 等）。範囲外は null。 */
+  value: number | null;
+  /** ボクセル index [i,j,k]（範囲外時 null）。 */
+  ijk: [number, number, number] | null;
+  /** どの面か（viewportId）。 */
+  plane: string;
+}
+
+/**
+ * ビューポート上の canvas 座標（要素相対 CSS px）から、世界座標とボリューム輝度値を求める。
+ * canvasToWorld はカメラ逆変換（zoom/pan/回転/スライス位置を含む）なので、表示中の実空間位置になる。
+ */
+export function probeMpr(
+  engine: RenderingEngine,
+  viewportId: string,
+  canvasX: number,
+  canvasY: number,
+): MprProbe | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vp = engine.getViewport(viewportId) as any;
+    const w = vp.canvasToWorld([canvasX, canvasY]) as [number, number, number];
+    const world: [number, number, number] = [w[0], w[1], w[2]];
+    let value: number | null = null;
+    let ijk: [number, number, number] | null = null;
+    const data = vp.getImageData?.();
+    if (data?.imageData && data.voxelManager && data.dimensions) {
+      const idx = csUtilities.transformWorldToIndex(data.imageData, world) as number[];
+      const [i, j, k] = idx;
+      const [dx, dy, dz] = data.dimensions as [number, number, number];
+      if (i >= 0 && i < dx && j >= 0 && j < dy && k >= 0 && k < dz) {
+        ijk = [i, j, k];
+        const v = data.voxelManager.getAtIJK(i, j, k);
+        value = typeof v === "number" ? v : null;
+      }
+    }
+    return { world, value, ijk, plane: viewportId };
+  } catch {
+    return null;
+  }
 }
 
 /** MPR のツールグループ・同期・ビューポートを破棄する（アンマウント時）。 */

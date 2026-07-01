@@ -27,6 +27,8 @@ import java.util.List;
  * @param imageWidth             画像幅 [px]。0 なら未取得。
  * @param imageHeight            画像高さ [px]。0 なら未取得。
  * @param zSpatial               Z インデックスごとの ImagePositionPatient。Fusion 精密アライメント用。null なら未取得。
+ * @param frameOfReferenceUID    FrameOfReferenceUID。セグメンテーション labelmap のメタデータプロバイダ／
+ *                               volume 再構成（isValidVolume）の FoR 一致判定用。null なら未取得。
  */
 public record SeriesLayout(
         int nZ, int nC, int nT,
@@ -37,7 +39,8 @@ public record SeriesLayout(
         double pixelSpacingCol,
         int imageWidth,
         int imageHeight,
-        List<ZSpatial> zSpatial) {
+        List<ZSpatial> zSpatial,
+        String frameOfReferenceUID) {
 
     /**
      * 各 (c,z,t) に対応するフレーム。
@@ -58,6 +61,6 @@ public record SeriesLayout(
 
     /** 空間メタなしのレイアウト（{@link SeriesLayoutBuilder} の返り値用）。 */
     static SeriesLayout noSpatial(int nZ, int nC, int nT, String cDim, String tDim, List<Cell> cells) {
-        return new SeriesLayout(nZ, nC, nT, cDim, tDim, cells, null, 0, 0, 0, 0, null);
+        return new SeriesLayout(nZ, nC, nT, cDim, tDim, cells, null, 0, 0, 0, 0, null, null);
     }
 }

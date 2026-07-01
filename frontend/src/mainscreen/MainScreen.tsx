@@ -111,6 +111,19 @@ export function MainScreen({
       else window.open(`${window.location.pathname}#mpr`, "graphy-mpr");
       return;
     }
+    if (kind === "slicer") {
+      // 選択中スタディ/シリーズを Slicer ウィンドウへ受け渡す（MPR と同方式の localStorage コンテキスト）。
+      if (!selectedStudy) {
+        window.alert(t("export.noSelection"));
+        return;
+      }
+      const ctx = { study: selectedStudy, series: selectedSeries ?? undefined, ts: Date.now() };
+      localStorage.setItem("graphy-slicer-ctx", JSON.stringify(ctx));
+      const d = desktop();
+      if (d?.openViewer) void d.openViewer("slicer");
+      else window.open(`${window.location.pathname}#slicer`, "graphy-slicer");
+      return;
+    }
     const name = t(`main.toolbar.${kind === "3d" ? "viewer3d" : kind}`);
     setImportMsg(t("main.viewer.comingSoon", { name }));
     setTimeout(() => setImportMsg(null), 4000);

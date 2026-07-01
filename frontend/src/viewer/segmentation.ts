@@ -15,6 +15,7 @@ import { imageLoader } from "@cornerstonejs/core";
 import { segmentation as csSeg, Enums as csToolsEnums } from "@cornerstonejs/tools";
 import { getViewerContext } from "./viewerContext";
 import { setRoiMaskMeta } from "./roiMaskStore";
+import { hasPlaneMetadata } from "./segMetadata";
 
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
 
@@ -49,9 +50,13 @@ export async function ensureStackSegmentation(
 
   const segmentationId = `graphy-seg-${viewportId}-${stackKey.length}`;
   try {
-    // 派生 labelmap は全 source 画像のキャッシュ（rows/cols/型）を要する。表示中以外は未ロードのため
-    // 先にプリロードする（失敗スライスは無視）。大きなシリーズでは初回に時間がかかる。
-    await Promise.all(sourceImageIds.map((id) => imageLoader.loadAndCacheImage(id).catch(() => null)));
+    // 派生 labelmap は各スライスの `imagePlaneModule`（rows/cols）だけを要し、**source 画素は不要**。
+    // backend 幾何を供給する segMetadata プロバイダが登録済みなら、画素ロードゼロで即時生成できる（§3.4）。
+    // 幾何が未登録の imageId（レイアウト未取得の非空間シリーズ等）のみ、その 1 枚を遅延ロードして補う。
+    const missing = sourceImageIds.filter((id) => !hasPlaneMetadata(id));
+    if (missing.length) {
+      await Promise.all(missing.map((id) => imageLoader.loadAndCacheImage(id).catch(() => null)));
+    }
     const labelmaps = imageLoader.createAndCacheDerivedLabelmapImages(sourceImageIds);
     const labelmapImageIds = labelmaps.map((i) => i.imageId);
     csSeg.addSegmentations([

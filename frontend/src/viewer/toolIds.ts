@@ -13,6 +13,7 @@ import {
   RectangleROITool,
   ProbeTool,
   BrushTool,
+  RegionSegmentPlusTool,
 } from "@cornerstonejs/tools";
 
 /** 消しゴムの合成ツール ID（BrushTool の ERASE ストラテジに対応する内部値）。 */
@@ -29,4 +30,6 @@ export const TOOL_IDS = {
   probe: ProbeTool.toolName,
   brush: BrushTool.toolName,
   eraser: ERASER_TOOL_ID,
+  /** 3D Wand（ワンクリック growCut 領域成長。GRAPHY の 3D Wand 相当）。 */
+  region3d: RegionSegmentPlusTool.toolName,
 } as const;

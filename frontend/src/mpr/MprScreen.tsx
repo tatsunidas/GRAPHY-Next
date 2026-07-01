@@ -27,8 +27,10 @@ import {
   applyMprWl,
   resetMprWl,
   readMprOverlay,
+  probeMpr,
   type MprViewportIds,
   type MprOverlay,
+  type MprProbe,
 } from "../viewer/mpr";
 import { WL_PRESETS } from "../viewer2d/wlPresets";
 import { useI18n } from "../i18n/i18n";
@@ -62,6 +64,7 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
   const [title, setTitle] = useState<string>("");
   const [tilt, setTilt] = useState<number | null>(null);
   const [overlays, setOverlays] = useState<Record<string, MprOverlay>>({});
+  const [probe, setProbe] = useState<MprProbe | null>(null);
 
   const mode = status?.mode === "standalone" ? "standalone" : "web";
 
@@ -163,15 +166,21 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
     }
   }, [mode, t]);
 
+  // status(=mode) が確定してから 1 度だけ起動する。マウント時は status=null のことが多く、
+  // 早期に走らせると mode が "web" と誤判定されるため待つ。
   useEffect(() => {
-    if (startedRef.current) return;
+    if (startedRef.current || !status) return;
     startedRef.current = true;
     void start();
+  }, [status, start]);
+
+  // アンマウント時のみ後片付け（status 変化で破棄しないよう分離）。
+  useEffect(() => {
     return () => {
       teardownMpr(engineRef.current, TOOL_GROUP_ID);
       engineRef.current = null;
     };
-  }, [start]);
+  }, []);
 
   // カメラ変更（Crosshairs ジャンプ・スライス送り・pan/zoom）でオーバーレイを追従。
   useEffect(() => {
@@ -180,6 +189,15 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
     eventTarget.addEventListener(Enums.Events.CAMERA_MODIFIED, onCam);
     return () => eventTarget.removeEventListener(Enums.Events.CAMERA_MODIFIED, onCam);
   }, [phase, refreshOverlays]);
+
+  // マウス直下の実空間座標＋輝度値を上段に出す。
+  const onCellMove = useCallback((viewportId: string, e: React.MouseEvent<HTMLDivElement>) => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const r = probeMpr(engine, viewportId, e.clientX - rect.left, e.clientY - rect.top);
+    if (r) setProbe(r);
+  }, []);
 
   const viewportIds = [VIEWPORT_IDS.axial, VIEWPORT_IDS.sagittal, VIEWPORT_IDS.coronal];
   const onPreset = (value: string) => {
@@ -219,10 +237,38 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
           </span>
         )}
       </div>
+      {phase === "ready" && (
+        <div style={readout}>
+          {probe ? (
+            <>
+              <span style={roItem}>
+                <b style={roKey}>X</b> {probe.world[0].toFixed(1)}
+                <b style={roKey}>Y</b> {probe.world[1].toFixed(1)}
+                <b style={roKey}>Z</b> {probe.world[2].toFixed(1)}
+                <span style={roUnit}>mm</span>
+              </span>
+              {probe.ijk && (
+                <span style={roItem}>
+                  <b style={roKey}>{t("mpr.voxel")}</b> {probe.ijk[0]},{probe.ijk[1]},{probe.ijk[2]}
+                </span>
+              )}
+              <span style={roItem}>
+                <b style={roKey}>{t("mpr.value")}</b>{" "}
+                {probe.value === null ? "—" : Math.round(probe.value)}
+              </span>
+            </>
+          ) : (
+            <span style={roHint}>{t("mpr.probeHint")}</span>
+          )}
+        </div>
+      )}
       <div style={body}>
-        <Cell label={t("mpr.axial")} color="#00dc00" refEl={axialRef} overlay={overlays[VIEWPORT_IDS.axial]} />
-        <Cell label={t("mpr.sagittal")} color="#dcdc00" refEl={sagittalRef} overlay={overlays[VIEWPORT_IDS.sagittal]} />
-        <Cell label={t("mpr.coronal")} color="#00a0ff" refEl={coronalRef} overlay={overlays[VIEWPORT_IDS.coronal]} />
+        <Cell label={t("mpr.axial")} color="#00dc00" refEl={axialRef} overlay={overlays[VIEWPORT_IDS.axial]}
+          onMove={(e) => onCellMove(VIEWPORT_IDS.axial, e)} onLeave={() => setProbe(null)} />
+        <Cell label={t("mpr.sagittal")} color="#dcdc00" refEl={sagittalRef} overlay={overlays[VIEWPORT_IDS.sagittal]}
+          onMove={(e) => onCellMove(VIEWPORT_IDS.sagittal, e)} onLeave={() => setProbe(null)} />
+        <Cell label={t("mpr.coronal")} color="#00a0ff" refEl={coronalRef} overlay={overlays[VIEWPORT_IDS.coronal]}
+          onMove={(e) => onCellMove(VIEWPORT_IDS.coronal, e)} onLeave={() => setProbe(null)} />
         {phase !== "ready" && (
           <div style={overlay}>
             <div style={overlayBox}>{busy ? t("mpr.loading") : message}</div>
@@ -238,16 +284,26 @@ function Cell({
   color,
   refEl,
   overlay,
+  onMove,
+  onLeave,
 }: {
   label: string;
   color: string;
   refEl: React.RefObject<HTMLDivElement>;
   overlay?: MprOverlay;
+  onMove?: (e: React.MouseEvent<HTMLDivElement>) => void;
+  onLeave?: () => void;
 }) {
   const m = overlay?.markers ?? null;
   return (
     <div style={cell}>
-      <div ref={refEl} style={vpEl} onContextMenu={(e) => e.preventDefault()} />
+      <div
+        ref={refEl}
+        style={vpEl}
+        onContextMenu={(e) => e.preventDefault()}
+        onMouseMove={onMove}
+        onMouseLeave={onLeave}
+      />
       <span style={{ ...cellLabel, color }}>{label}</span>
       {overlay && overlay.total > 0 && (
         <span style={sliceLabel}>
@@ -306,6 +362,22 @@ const tiltChip: React.CSSProperties = {
   borderRadius: 4,
   padding: "1px 7px",
 };
+const readout: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 16,
+  padding: "3px 12px",
+  background: "#0d1013",
+  borderBottom: "1px solid #23292f",
+  fontSize: 12,
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  color: "#c7d0d8",
+  minHeight: 22,
+};
+const roItem: React.CSSProperties = { whiteSpace: "nowrap" };
+const roKey: React.CSSProperties = { color: "#7f8b96", fontWeight: 600, margin: "0 4px 0 0" };
+const roUnit: React.CSSProperties = { color: "#7f8b96", marginLeft: 4 };
+const roHint: React.CSSProperties = { color: "#5a6672" };
 const body: React.CSSProperties = { position: "relative", flex: 1, display: "flex", minHeight: 0 };
 const cell: React.CSSProperties = {
   position: "relative",

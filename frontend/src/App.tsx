@@ -11,6 +11,7 @@ import { useGlobalShortcuts } from "./shortcuts/useGlobalShortcuts";
 import { MainScreen } from "./mainscreen/MainScreen";
 import { Viewer2DScreen } from "./viewer2d/Viewer2DScreen";
 import { MprScreen } from "./mpr/MprScreen";
+import { SlicerScreen } from "./slicer/SlicerScreen";
 import { QRScreen } from "./qr/QRScreen";
 import { subscribeDbChanged, type DbChangedDetail } from "./dbEvents";
 import { useI18n } from "./i18n/i18n";
@@ -58,6 +59,8 @@ export function App() {
         <Viewer2DScreen status={status} />
       ) : screen === "mpr" ? (
         <MprScreen status={status} />
+      ) : screen === "slicer" ? (
+        <SlicerScreen status={status} />
       ) : screen === "qr" ? (
         <QRScreen status={status} />
       ) : (

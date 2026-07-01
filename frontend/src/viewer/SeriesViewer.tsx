@@ -8,6 +8,7 @@ import { ToolGroupManager } from "@cornerstonejs/tools";
 import { Viewer2D, ENGINE_ID, type ViewerOverlays, type RenderOverlay } from "./Viewer2D";
 import { applyTransform, readTransform, FIT_TRANSFORM } from "./transform";
 import { buildSeriesLayout, buildLayoutFromDto, type SeriesLayout } from "./seriesLayout";
+import { registerSegGeometryFromLayout } from "./segMetadata";
 import { registerSliceSync, publishSlice, setSliceSyncConfig } from "./sliceSync";
 import { imageIdForInstance, type ViewerMode } from "./imageId";
 import { matchesCombo } from "../shortcuts/registry";
@@ -92,7 +93,12 @@ export function SeriesViewer({
       .then((dto) => {
         if (cancelled) return;
         const built = buildLayoutFromDto(dto, mode, studyUid, seriesUid);
-        if (built) setLayout(built);
+        if (built) {
+          setLayout(built);
+          // セグメンテーション labelmap 生成の画素プリロード撤廃用に、backend 幾何を
+          // メタデータプロバイダへ登録（fw/segmentation-tools-design.md §3.4）。
+          registerSegGeometryFromLayout(dto, built, seriesUid);
+        }
       })
       .catch(() => {
         /* フォールバックのまま */

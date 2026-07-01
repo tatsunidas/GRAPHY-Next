@@ -129,6 +129,8 @@ export interface SeriesLayoutDto {
   imageHeight: number;
   /** Z インデックスごとの IPP リスト（z 昇順）。null なら未取得。 */
   zSpatial: SeriesLayoutZSpatial[] | null;
+  /** FrameOfReferenceUID。セグメンテーション labelmap のメタデータ供給／volume 再構成の FoR 判定用。null なら未取得。 */
+  frameOfReferenceUID: string | null;
 }
 
 export interface TagInfo {

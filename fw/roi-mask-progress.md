@@ -3,6 +3,31 @@
 更新: 2026-07-01。別セッションで再開するための作業状況サマリ。
 関連設計: `fw/viewer-2d-menu-toolbar.md` / `fw/roi-mask-model.md` / `fw/roi-manager-design.md` / `fw/viewer-2d-screen.md`。
 
+## ★次セッションの主題: セグメンテーションツール
+**設計確定: `fw/segmentation-tools-design.md`（2026-07-01）。** GRAPHY「Image>Segmentation」を Next へ移植＋UX 改良。
+**確定判断**: D1=**軽量ルート**（P0 完了）。当初の VolumeViewport 大改修は**不要**と判明＝Cornerstone3D 3.33.5 は
+stack labelmap から on-demand で volume 化して 3D ツール（SphereScissors/growCut/region grow/球ブラシ）を動かす
+（`EnsureSegmentationVolumeFor3DManipulation`／`isValidVolume` 不可なら 2D フォールバック）。**既存 stack 基盤・StackViewport のまま**進む。／
+D2=**マネージャ右パネル主導・モードレス**（＋新規マスク=即編集対象、◉で編集対象＆活性 segment を常時可視化、GRAPHY の New/Stop 廃止）／
+D3=**1 マスクに複数 segment**。
+**P0 完了**: セグメンテーション系ツール 7 種（`PaintFill/RegionSegment/RegionSegmentPlus/Rectangle・Circle・SphereScissors/RectangleROIThreshold`）を
+`viewer/cornerstoneSetup.ts` に登録済（ビルド green）。次は **P1(基盤+UX)**→P2(Wand2D/Threshold)→P3(3D ツール)→P4(ROI 結合/SEG 取込)→P5(SEG 書出)。詳細は設計書参照。
+
+**P1 進行中**:
+- ✅ **画素プリロード撤廃（メタデータプロバイダ）** — labelmap 生成に source 画素は不要（`createAndCacheDerivedImage` は `imagePlaneModule` のみ読む）。
+  - backend: `SeriesLayout` record に `frameOfReferenceUID` 追加＋3 経路（通常/mosaic/seg）の constructor と `noSpatial` を更新（`SeriesLayout.java`, `DicomStorageService.java`）。compile＋`SeriesLayoutBuilderTest` green。
+  - front: `viewer/segMetadata.ts` 新規（`registerSegMetadataProvider`＝低優先メタプロバイダ／`registerSegGeometryFromLayout`＝backend 幾何から全 imageId の `imagePlaneModule`・`generalSeriesModule` を供給、画素ロードゼロ）。`SeriesViewer` のレイアウト取得時に登録。`segmentation.ts` の `ensureStackSegmentation` は**全スライスプリロードを撤廃**し、幾何未登録の imageId のみ遅延ロード。`cornerstoneSetup` でプロバイダ登録。ビルド green。**実機未確認**（幾何あり CT/MR で初回ブラシが即時 & 全スライス塗れるか要確認。非空間シリーズは従来どおり遅延ロード）。
+- ⬜ 次: `roiMaskStore` にアクティブ対象（`activeSegmentationId/Index`）/多セグメント、パネル再設計（◉編集対象・◉活性 segment・＋新規マスク・＋セグメント）、Brush/Eraser 結線、`isValidVolume` 可否判定。
+
+Cornerstone3D のセグメンテーション系ツール（stack/volume labelmap 編集）を拡充する。現状は `BrushTool`（球ブラシ）
+＋消しゴムのみ。**利用可能な内蔵ツール**（`@cornerstonejs/tools`、調査済）:
+- **Scissors 系**: `RectangleScissorsTool` / `CircleScissorsTool` / `SphereScissorsTool`（3D 球で fill/erase。※ volume labelmap 前提＝`ensureSegmentationVolume` で stack→volume 化が要る）。
+- **しきい値/領域成長**: `RectangleROIThresholdTool` / `RectangleROIStartEndThresholdTool` / `CircleROIStartEndThresholdTool`、`PaintFillTool`（塗りつぶし）、`growCut`、`thresholdSegmentationByRange`。
+- **輪郭→labelmap**: `LabelmapEditWithContour`、`contourSegmentation`。
+- **補助**: `IslandRemoval`（島除去）、`getStatistics`、`SegmentSelectTool`/`SegmentLabelTool`/`SegmentBidirectionalTool`。
+- 既存基盤: `viewer/segmentation.ts`（`ensureStackSegmentation`）、`roiMaskStore`、`RoiManagerPanel`、`roiBooleanOps`/`roi3d`（ラスタ演算・体積統計）を土台に、UI は 2D Viewer の ROI メニュー＋ツールバー＋マネージャに追加していく。
+- 検討: stack 編集（現状）中心か、3D 操作時に一時 volume 化するか（`roi-mask-model.md` §確認事項 2）。SphereScissors 等は volume が要るため、VolumeViewport or on-demand volume 化の方針決めが最初の分岐。
+
 ## ビルド/検証
 - フロント: `cd frontend && npm run build`（`tsc -b && vite build`）。**現在 green**。
   - ⚠️ リポジトリ**ルートで `npm run build` を実行すると Maven が走りエラー**になる。必ず `frontend/` で実行。
@@ -57,15 +82,35 @@
 1. **global ROI 全スライス描画の複数ビューポート対応**（単一ビューポートは実装済）。同一シリーズを別スライスで同時表示する全ビューポートに同時描画するには、annotation の per-imageId 複製（または Mask 同様 FoR ボリューム化）が必要。あわせて **global Mask（z="all"）の全スライス labelmap 化**も検討。
 2. **M3 残り**: ① ROI→Mask は実装済（▦）。② AND/合成結果が**空のときの通知**（現状は空 Mask を生成）。③ 結果 Mask の**輪郭化**（kind:"shape" ベクタ復帰, 任意）。④ ラスタ化の **scope.z="all" 対応**（現状は作成スライスのみ。全スライス投影は未対応）。
 3. **M4 3D 残り**: ① **インタラクティブ球定義ツール**（現状は円 ROI 経由の間接定義。ビューポート上で中心ドラッグ＋半径ハンドルの直接作成/リサイズは未。移動/半径ドラッグ編集も未＝現状は数値のみ）。② 2D→3D の**補間オプション**（スライス間の欠損補間）。③ SPLIT/球/Mask の **3D 表示**（VolumeViewport/Surface 連携）。④ **FreeForm3D 相当のパラメトリック保持**（現状 Mask=labelmap で保持。球のような非破壊パラメトリック freeform は未＝labelmap 直編集）。※ ライブ球プレビュー・3D→2D split・2D→3D 積層(OR)・体積/HU 統計は実装済。
-4. **M5 残り**: ① **ImageJ Import のフロント適用**（backend `/api/imagej/import` は実装済。DTO(画素)→`imageToWorldCoords` で world 化し **Cornerstone アノテーション再構築**＝addAnnotation。position→スライス、oval/rect→bbox、polygon/freehand→頂点）。② **Mask→ImageJ**（labelmap 輪郭トレース→polygon ROI、or ImageJ ラベル画像）。③ **DICOM SEG 書込**（読込は実装済 `DicomStorageService.segLayoutIfApplicable`/`multiFrameDicom` と対称）。④ RTSTRUCT・JSON/CSV。
-5. **ImageJ ブリッジ**: ✅ HyperStack ブリッジ・ROI .roi/.zip 入出力は**完了（ユーザ要件充足、これ以上の深掘り不要）**。残は任意: Mask→ImageJ ラベル画像、ブリッジで編集した ROI を IJ から Next へ戻す往復。
+4. **M5/保存 残り（任意）**: ① **Mask→ImageJ**（labelmap 輪郭トレース→polygon ROI、or ImageJ ラベル画像）。② **DICOM SEG 書込**（読込は実装済 `DicomStorageService.segLayoutIfApplicable`/`multiFrameDicom` と対称）。③ RTSTRUCT・JSON/CSV。※ ROI Import(.roi/.zip→Cornerstone) はユーザ要件として**完了**。
+5. **ImageJ**: ✅ **ユーザ要件（①ROI .roi/.zip 入出力 ②HyperStack ブリッジ ③IJ ROI Import）3 点とも完了。これ以上の深掘り不要**（確定）。残は任意: Mask→ImageJ ラベル画像、ブリッジ編集 ROI の Next 往復。
 
-## 実機確認 TODO（次セッション最初に）
-- ROI マネージャ: マスク色/不透明度/線幅/塗り、ROI 色/線幅/塗り、ラベル保持、患者フィルタ、ZCT チップ＆Z トグル。
+## このワークストリームで追加した主なファイル（オリエンテーション用）
+フロント（`frontend/src/`）:
+- `viewer/roiMaskStore.ts` … ROI/Mask のアプリ側メタ（label/scope/patient/custom）。
+- `viewer/viewerContext.ts` … viewport→患者/シリーズ/現在 ZCT 捕捉。
+- `viewer/globalRoiSync.ts` … global(scope.z="all") ROI の現在スライス追従描画。
+- `viewer/roiBooleanOps.ts` … OR/AND/XOR/SPLIT、ROI→Mask ラスタ化、`createResultSeg`/`resolveRoiStack`（共有）。
+- `viewer/roi3d.ts` … 球→Mask ラスタ化、3D→2D split、体積/HU 統計。
+- `viewer/sphere3dStore.ts` … パラメトリック 3D 球ストア＋断面円幾何。
+- `viewer/imagejExport.ts` / `viewer/imagejImport.ts` … Cornerstone アノテーション ↔ ImageJ DTO。
+- `viewer2d/RoiManagerPanel.tsx` / `viewer2d/RoiMetaEditDialog.tsx` … 右パネル UI。
+- 既存改変: `viewer/Viewer2D.tsx`（球プレビュー/global 追従/PlanarFreehand 登録）、`viewer/cornerstoneSetup.ts`、`viewer2d/Viewer2DScreen.tsx`/`Viewer2DMenuBar.tsx`/`Viewer2DToolbar.tsx`、`api.ts`、`i18n/{ja,en}.ts`。
+バックエンド（`backend/src/main/java/com/vis/graphynext/imagej/`）:
+- `ImageJRoiDto` / `ImageJRoiService` / `ImageJBridgeService` / `ImageJController`、テスト `imagej/ImageJRoiServiceTest`。pom に `net.imagej:ij:1.54p`＋SciJava repo。
+
+## 実機確認 TODO（未実施。features は型/ビルドのみ green）
+- ROI マネージャ: マスク色/不透明度/線幅/塗り、ROI 色/線幅/塗り、ラベル保持、患者フィルタ、ZCT チップ＆Z トグル、✎ メタ編集ダイアログ。
 - ブラシ/消しゴム/計測の描画と削除（Delete キー個別削除、Clear 確認）。
+- **M3**: OR/AND/XOR/マージ/SPLIT の結果 Mask、ROI→Mask(▦)。
+- **M4**: 円→球(⬤/◎)、**球断面円ライブプレビュー**（zoom/pan/回転/スライス追従）、半径 mm 編集の即反映、体積/HU 統計(Σ)、3D→2D split(⬚)。
+- **global ROI**: scope.z="all" にした ROI が全スライスに追従表示されるか。
+- **ImageJ**: 「IJ ⬇」Export→ImageJ で開けるか、「IJ ⬆」Import→ROI 復元、解析メニュー「ImageJ…」で HyperStack がローカル ImageJ に開くか（**要デスクトップ表示環境。headless 不可**）。
 
 ## 注意・既知
 - React StrictMode は無効のまま（再導入不可）。`main.tsx` 変更時は Vite 完全再起動。
-- セグメンテーションの初回ブラシ起動は全スライスをプリロードするため大シリーズで重い（将来=遅延生成）。
+- セグメンテーションの初回ブラシ起動は全スライスをプリロードするため大シリーズで重い。**→ P1 で撤廃予定**: 空マスク作成に source 画素は不要（`createAndCacheDerivedLabelmapImage` は `imagePlaneModule` メタのみ読む）。backend `SeriesLayoutDto`（IOP/spacing/rows/cols/per-Z IPP、要 FoR 追加）から `metaData.addProvider` で `imagePlaneModule` を供給し画素ロードゼロで即時生成。詳細 `segmentation-tools-design.md` §3.4。
 - QRScreen は別作業者が編集中。エラーを見ても触らない。
+- 座標規約: `worldToImageCoords(imageId,[x,y,z])` は **[x=列, y=行]** を返す（`imageToWorldCoords` の逆算で確認済）。labelmap index = y*cols + x。
+- ビルド: フロントは必ず `frontend/` で `npm run build`（ルートだと Maven が走る）。backend は `backend/` で `mvn -q -o compile -Dfrontend.skip=true`、テストは `-Dtest=ImageJRoiServiceTest`。
 </content>
