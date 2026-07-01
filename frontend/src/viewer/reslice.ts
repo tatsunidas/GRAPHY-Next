@@ -40,6 +40,9 @@ export interface ResliceVolume {
 /** 再構成（Slab 集約）モード。旧 `Slicer.java` の定数に対応。 */
 export type ReconMode = "SLICECUT" | "MEAN" | "MAX" | "MIN" | "MEDIAN" | "MODE";
 
+/** 補間アルゴリズム（Settings で指定）。 */
+export type Interpolation = "linear" | "nearest";
+
 /**
  * 出力断面平面。DICOM 慣習に合わせる:
  * - `rowDir` = 列インデックス増加方向（行に沿う, IOP 第1三つ組）。
@@ -74,6 +77,8 @@ export interface SlabSpec {
   mode: ReconMode;
   /** スラブ内サブサンプル間隔（mm）。既定 = ボリュームの最小 spacing。SLICECUT では無視。 */
   subSampleSpacing?: number;
+  /** 補間アルゴリズム（既定 linear=トリリニア）。 */
+  interpolation?: Interpolation;
 }
 
 /** 出力スタック（frames＋DICOM 幾何）。 */
@@ -117,7 +122,7 @@ const normalize = (a: Vec3): Vec3 => {
  * 完全に範囲外なら airValue。境界近傍で一部近傍が範囲外の場合、その近傍は airValue で補間される
  * （旧 GRAPHY の境界=raw_min と同挙動）。
  */
-export function makeWorldSampler(vol: ResliceVolume): (w: Vec3) => number {
+export function makeWorldSampler(vol: ResliceVolume, interpolation: Interpolation = "linear"): (w: Vec3) => number {
   const [W, H, D] = vol.dimensions;
   const [sx, sy, sz] = vol.spacing;
   const d = vol.direction;
@@ -135,6 +140,19 @@ export function makeWorldSampler(vol: ResliceVolume): (w: Vec3) => number {
     if (i < 0 || i >= W || j < 0 || j >= H || k < 0 || k >= D) return air;
     return data[k * WH + j * W + i];
   };
+
+  // 最近傍法: 分数インデックスを四捨五入して直接サンプル（範囲外は airValue）。
+  if (interpolation === "nearest") {
+    return (w: Vec3): number => {
+      const dx = w[0] - ox;
+      const dy = w[1] - oy;
+      const dz = w[2] - oz;
+      const i = Math.round((dx * dirI[0] + dy * dirI[1] + dz * dirI[2]) / sx);
+      const j = Math.round((dx * dirJ[0] + dy * dirJ[1] + dz * dirJ[2]) / sy);
+      const k = Math.round((dx * dirK[0] + dy * dirK[1] + dz * dirK[2]) / sz);
+      return at(i, j, k);
+    };
+  }
 
   return (w: Vec3): number => {
     const dx = w[0] - ox;
@@ -277,34 +295,59 @@ function sliceCenterOffset(s: number, numSlices: number, thickness: number, gap:
 }
 
 /**
- * 任意断面平面 + Slab で参照ボリュームをリスライスし、出力スタック（frames + DICOM 幾何）を生成する。
- * 設計 `fw/slicer-design.md` §5.2。
+ * スライス単位で実行できるリスライサ。進捗バー付き生成（1 スライスずつ計算して yield）に使う。
+ * `sliceAt(s)` が重い per-pixel ループで、`imagePositionPatientAt(s)` は軽量な幾何のみ。
  */
-export function reslice(vol: ResliceVolume, plane: ReslicePlane, slab: SlabSpec): ResliceStack {
-  const sample = makeWorldSampler(vol);
+export interface Reslicer {
+  numSlices: number;
+  rows: number;
+  cols: number;
+  /** ImageOrientationPatient（6, 全スライス共通）。 */
+  imageOrientationPatient: number[];
+  /** DICOM PixelSpacing [rowSpacing, colSpacing]。 */
+  pixelSpacing: [number, number];
+  sliceThickness: number;
+  spacingBetweenSlices: number;
+  /** スライス s の左上ピクセル中心の world 座標。 */
+  imagePositionPatientAt(s: number): Vec3;
+  /** スライス s の画素（row-major, Int16, 長さ rows*cols）を計算する。 */
+  sliceAt(s: number): Int16Array;
+}
+
+/**
+ * 任意断面平面 + Slab のリスライサを構築する（スライス単位実行が可能）。設計 §5.2。
+ * `reslice()`（一括）はこれをループするだけ。進捗表示は `sliceAt` を 1 枚ずつ呼び出すこと。
+ */
+export function createReslicer(vol: ResliceVolume, plane: ReslicePlane, slab: SlabSpec): Reslicer {
+  const sample = makeWorldSampler(vol, slab.interpolation ?? "linear");
   const { origin, rowDir, colDir, cols, rows, colSpacing, rowSpacing } = plane;
   const numSlices = Math.max(1, Math.floor(slab.numSlices));
   const thickness = slab.thickness;
   const gap = slab.gap;
+  const mode = slab.mode;
   const normal = normalize(cross(rowDir, colDir));
 
   // スラブ内サブサンプル数と各オフセット（基準スライス中心からの相対 mm）。
   const minSpacing = Math.min(vol.spacing[0], vol.spacing[1], vol.spacing[2]) || 1;
   const subStep = slab.subSampleSpacing && slab.subSampleSpacing > 0 ? slab.subSampleSpacing : minSpacing;
-  const k = slab.mode === "SLICECUT" ? 1 : Math.max(1, Math.round(thickness / subStep));
+  const k = mode === "SLICECUT" ? 1 : Math.max(1, Math.round(thickness / subStep));
   const subOffsets = new Float64Array(k);
   for (let t = 0; t < k; t++) subOffsets[t] = (t - (k - 1) / 2) * (thickness / k);
-
-  const frames: Int16Array[] = [];
-  const ipps: Vec3[] = [];
   const vals = new Float64Array(k);
 
-  for (let s = 0; s < numSlices; s++) {
+  const imagePositionPatientAt = (s: number): Vec3 => {
+    const centerOff = sliceCenterOffset(s, numSlices, thickness, gap);
+    return [
+      origin[0] + normal[0] * centerOff,
+      origin[1] + normal[1] * centerOff,
+      origin[2] + normal[2] * centerOff,
+    ];
+  };
+
+  const sliceAt = (s: number): Int16Array => {
     const centerOff = sliceCenterOffset(s, numSlices, thickness, gap);
     const frame = new Int16Array(rows * cols);
-
     for (let r = 0; r < rows; r++) {
-      // 行原点（col=0）: origin + colDir*(r*rowSpacing)。
       const rx = origin[0] + colDir[0] * (r * rowSpacing);
       const ry = origin[1] + colDir[1] * (r * rowSpacing);
       const rz = origin[2] + colDir[2] * (r * rowSpacing);
@@ -317,28 +360,46 @@ export function reslice(vol: ResliceVolume, plane: ReslicePlane, slab: SlabSpec)
           const d = centerOff + subOffsets[t];
           vals[t] = sample([bx + normal[0] * d, by + normal[1] * d, bz + normal[2] * d]);
         }
-        frame[rowBase + c] = Math.round(aggregate(vals, k, slab.mode));
+        frame[rowBase + c] = Math.round(aggregate(vals, k, mode));
       }
     }
-
-    frames.push(frame);
-    // IPP = 基準平面左上(origin) を法線方向に centerOff 移動した位置。
-    ipps.push([
-      origin[0] + normal[0] * centerOff,
-      origin[1] + normal[1] * centerOff,
-      origin[2] + normal[2] * centerOff,
-    ]);
-  }
+    return frame;
+  };
 
   return {
-    frames,
+    numSlices,
     rows,
     cols,
-    numSlices,
     imageOrientationPatient: [rowDir[0], rowDir[1], rowDir[2], colDir[0], colDir[1], colDir[2]],
-    imagePositionPatient: ipps,
     pixelSpacing: [rowSpacing, colSpacing],
     sliceThickness: thickness,
     spacingBetweenSlices: thickness + gap,
+    imagePositionPatientAt,
+    sliceAt,
+  };
+}
+
+/**
+ * 任意断面平面 + Slab で参照ボリュームをリスライスし、出力スタック（frames + DICOM 幾何）を生成する（一括）。
+ * 設計 `fw/slicer-design.md` §5.2。
+ */
+export function reslice(vol: ResliceVolume, plane: ReslicePlane, slab: SlabSpec): ResliceStack {
+  const r = createReslicer(vol, plane, slab);
+  const frames: Int16Array[] = [];
+  const ipps: Vec3[] = [];
+  for (let s = 0; s < r.numSlices; s++) {
+    frames.push(r.sliceAt(s));
+    ipps.push(r.imagePositionPatientAt(s));
+  }
+  return {
+    frames,
+    rows: r.rows,
+    cols: r.cols,
+    numSlices: r.numSlices,
+    imageOrientationPatient: r.imageOrientationPatient,
+    imagePositionPatient: ipps,
+    pixelSpacing: r.pixelSpacing,
+    sliceThickness: r.sliceThickness,
+    spacingBetweenSlices: r.spacingBetweenSlices,
   };
 }

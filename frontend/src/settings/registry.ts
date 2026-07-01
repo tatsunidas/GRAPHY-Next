@@ -6,7 +6,7 @@
 // label/help/options/section.title/category.label は i18n キー（t() で解決）。
 // ここにカテゴリ/セクション/フィールドを追加するだけで、ダイアログ右パネルが自動描画する。
 
-export type FieldType = "toggle" | "text" | "number" | "select";
+export type FieldType = "toggle" | "text" | "number" | "select" | "color";
 
 export interface FieldOption {
   value: string;
@@ -168,6 +168,50 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
         ],
       },
       {
+        titleKey: "settings.sec.roiMeasure",
+        fields: [
+          {
+            key: "roi.defaultColor",
+            labelKey: "settings.field.roiDefaultColor",
+            type: "color",
+            default: "#ffff00",
+            helpKey: "settings.field.roiDefaultColor.help",
+          },
+          {
+            key: "roi.defaultLineWidth",
+            labelKey: "settings.field.roiDefaultLineWidth",
+            type: "number",
+            default: 1,
+            min: 1,
+            max: 10,
+            helpKey: "settings.field.roiDefaultLineWidth.help",
+          },
+        ],
+      },
+      {
+        titleKey: "settings.sec.roiMask",
+        fields: [
+          {
+            key: "viewer.maskFillOpacity",
+            labelKey: "settings.field.maskFillOpacity",
+            type: "number",
+            default: 50,
+            min: 0,
+            max: 100,
+            helpKey: "settings.field.maskFillOpacity.help",
+          },
+          {
+            key: "viewer.maskOutlineWidth",
+            labelKey: "settings.field.maskOutlineWidth",
+            type: "number",
+            default: 1,
+            min: 0,
+            max: 10,
+            helpKey: "settings.field.maskOutlineWidth.help",
+          },
+        ],
+      },
+      {
         titleKey: "settings.sec.seriesSync",
         fields: [
           {
@@ -185,6 +229,22 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
             min: 0,
             max: 100,
             helpKey: "settings.field.coordinateSyncMargin.help",
+          },
+        ],
+      },
+      {
+        titleKey: "settings.sec.slicer",
+        fields: [
+          {
+            key: "slicer.interpolation",
+            labelKey: "settings.field.slicerInterp",
+            type: "select",
+            default: "linear",
+            options: [
+              { value: "linear", labelKey: "settings.opt.interp.linear" },
+              { value: "nearest", labelKey: "settings.opt.interp.nearest" },
+            ],
+            helpKey: "settings.field.slicerInterp.help",
           },
         ],
       },

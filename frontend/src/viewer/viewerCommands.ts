@@ -30,6 +30,8 @@ export interface ViewerCommands {
   setActiveTool(toolName: string): void;
   /** ROI ブラシ径(px)。 */
   setBrushSize(size: number): void;
+  /** 2D Wand のトレランス（シード輝度からの許容差）。 */
+  setWandTolerance(tol: number): void;
   /** 計測（ROI）注釈を全消去。 */
   clearAnnotations(): void;
   undo(): void;

@@ -3,21 +3,22 @@
  * Author: Tatsuaki Kobayashi
  */
 /**
- * Slicer コア（P2）。任意断面リスライスの **ビューポート/プレビュー配線**（Cornerstone グルー）。
- * 設計: `fw/slicer-design.md` §3・§6。
+ * Slicer コア（P2 改2）。**MPR 3 面（AX/COR/SAG）＋ 独立スラブボックス**方式。
+ * リスライス断面（スラブ）は viewport カメラから独立した幾何（center/normal/rowDir/colDir）として持ち、
+ * 各面に描いたボックスの **中央ハンドル=平行移動 / 四隅ハンドル=回転** で直接操作する
+ * （旧 GRAPHY のリスライスライン方式）。設計 `fw/slicer-design.md` §3・§6。
  *
- * 二層構成:
- * - **プレビュー（本モジュール）**: base=AXIAL VolumeViewport ＋ recon=ORTHOGRAPHIC VolumeViewport。
- *   ベース断面上の「カットライン」から斜め断面を求め、recon カメラを向ける。Slab は cornerstone の
- *   `setSlabThickness` ＋ `setBlendMode`（MIP/MinIP/AVERAGE）で WYSIWYG プレビュー。
- * - **確定生成（`reslice.ts`）**: プレビューと同じ幾何を `buildReslicePlane`/`reslice` に渡して
- *   確定的な HU スタックを生成（P3）。ここでは幾何（center/normal/rowDir/up）を返して橋渡しする。
- *
- * ボリューム構築は MPR と共通（`buildMprVolume`＝CT チルト補正時 `createLocalVolume`／他 streaming）。
+ * - 各スライスの立方体を全 MPR 面へバンド（交差ポリゴン）投影（`computeSlabBands`）。
+ * - スラブ中心・FOV 四隅を canvas 座標のハンドルとして返す（`computeSlabHandles`）。
+ * - 平行移動 `translateGeomInPlane` / 面内回転 `rotateGeomInPlane`（対象面の法線軸まわり, Rodrigues）。
+ * - 再構成スタックはローカルボリューム化して右下ビューポートに表示（`displayReconStack`）。
+ * - 確定リスライスは `reslice.ts`（`createReslicer` でスライス単位＝進捗バー対応）。
  */
 import {
   Enums,
   utilities as csUtilities,
+  volumeLoader,
+  cache,
   type Types,
   type RenderingEngine,
 } from "@cornerstonejs/core";
@@ -32,40 +33,57 @@ import {
 } from "@cornerstonejs/tools";
 import { buildMprVolume, type BuildVolumeResult } from "./mpr";
 import { getOrCreateVoiSync } from "./sync";
-import type { ReconMode, ResliceVolume, Vec3 } from "./reslice";
+import type { ReslicePlane, ResliceVolume, Vec3 } from "./reslice";
 
 export { buildMprVolume };
 export type { BuildVolumeResult };
 
-const { ViewportType, OrientationAxis, BlendModes } = Enums;
+const { ViewportType, OrientationAxis } = Enums;
 const { MouseBindings } = csToolsEnums;
 
-/** Slicer の VOI(W/L) 同期 ID。base/recon は同一ボリュームなので絶対値同期でよい。 */
+/** Slicer の VOI(W/L) 同期 ID（元 3 面のみ）。 */
 export const SLICER_VOI_SYNC_ID = "graphy-slicer-voi";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
 
-export interface SlicerViewportIds {
-  base: string;
+export interface SlicerVpIds {
+  axial: string;
+  coronal: string;
+  sagittal: string;
   recon: string;
 }
-
-export interface SlicerElements {
-  base: HTMLDivElement;
+export interface SlicerEls {
+  axial: HTMLDivElement;
+  coronal: HTMLDivElement;
+  sagittal: HTMLDivElement;
   recon: HTMLDivElement;
 }
 
-/** カットラインから導出した断面幾何（world, LPS）。`reslice.ts` へ橋渡しする。 */
-export interface ResliceGeometry {
-  /** 断面中心（world, mm）。 */
-  center: Vec3;
-  /** 断面法線（world, 正規化）。recon の viewPlaneNormal。 */
-  normal: Vec3;
-  /** 出力の行方向（列インデックス増加＝カットライン方向, 正規化）。 */
-  rowDir: Vec3;
-  /** 面内 up（recon の viewUp＝ベース断面法線, 正規化）。colDir はこの反対（行は下方向）。 */
-  up: Vec3;
+/** リスライス基準の断面幾何（world, LPS）。viewport から独立して保持・操作する。 */
+export interface SlicerGeometry {
+  center: Vec3; // 断面中心（world, mm）
+  normal: Vec3; // スタック法線（正規化）
+  rowDir: Vec3; // 面内 行方向（正規化）
+  colDir: Vec3; // 面内 列方向（正規化）
+}
+
+/** スラブ（枚数・厚み・Gap）と面内 FOV。 */
+export interface SlabParams {
+  numSlices: number;
+  thickness: number;
+  gap: number;
+  fovWidth: number;
+  fovHeight: number;
+}
+
+/** canvas 座標のポリゴン。空配列＝交差なし。 */
+export type BandPolygon = Array<[number, number]>;
+
+/** 1 面ぶんの操作ハンドル（canvas 座標）。 */
+export interface SlabHandles {
+  center: [number, number] | null;
+  corners: Array<[number, number]>; // 中央スライス FOV 矩形の 4 隅（TL,TR,BR,BL）
 }
 
 // ── ベクトル小道具 ────────────────────────────────────────────
@@ -74,68 +92,46 @@ const cross = (a: Vec3, b: Vec3): Vec3 => [
   a[2] * b[0] - a[0] * b[2],
   a[0] * b[1] - a[1] * b[0],
 ];
+const dot = (a: Vec3, b: Vec3): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const add = (a: Vec3, b: Vec3): Vec3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const scale = (a: Vec3, s: number): Vec3 => [a[0] * s, a[1] * s, a[2] * s];
 const norm = (a: Vec3): number => Math.hypot(a[0], a[1], a[2]) || 1;
 const normalize = (a: Vec3): Vec3 => {
   const n = norm(a);
   return [a[0] / n, a[1] / n, a[2] / n];
 };
-const mid = (a: Vec3, b: Vec3): Vec3 => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
-
-/** 再構成モード → cornerstone BlendMode（プレビュー用）。MEDIAN/MODE は AVERAGE で近似。 */
-export function blendModeFor(mode: ReconMode): number {
-  switch (mode) {
-    case "MAX":
-      return BlendModes.MAXIMUM_INTENSITY_BLEND;
-    case "MIN":
-      return BlendModes.MINIMUM_INTENSITY_BLEND;
-    case "MEAN":
-    case "MEDIAN": // cornerstone に無いので AVERAGE 近似（UI で明示）
-    case "MODE":
-      return BlendModes.AVERAGE_INTENSITY_BLEND;
-    case "SLICECUT":
-    default:
-      return BlendModes.COMPOSITE;
-  }
-}
-
-/** MEDIAN/MODE はプレビューが AVERAGE 近似になる（確定生成は厳密）。 */
-export function isPreviewApprox(mode: ReconMode): boolean {
-  return mode === "MEDIAN" || mode === "MODE";
-}
+/** Rodrigues: 単位軸 k まわりに v を θ 回転。 */
+const rotateAboutAxis = (v: Vec3, k: Vec3, theta: number): Vec3 => {
+  const c = Math.cos(theta);
+  const s = Math.sin(theta);
+  const kv = cross(k, v);
+  const kd = dot(k, v) * (1 - c);
+  return [v[0] * c + kv[0] * s + k[0] * kd, v[1] * c + kv[1] * s + k[1] * kd, v[2] * c + kv[2] * s + k[2] * kd];
+};
 
 /**
- * base（AXIAL）＋ recon（ORTHOGRAPHIC）の 2 ビューポートを有効化し、ボリュームを設定、
- * ツール（W/L・Pan・Zoom・スライス送り）を配線する。カットライン操作は SVG オーバーレイ（画面側）で行い、
- * `setReslicePreview` で recon カメラを更新する。
+ * AX/COR/SAG（volume）＋ recon（空）の 4 ビューポートを有効化。W/L・Pan・Zoom・スライス送りを配線。
+ * Crosshairs は使わず、スラブ操作は SVG ハンドル（画面側）で行う。左ボタンは未割当（ハンドル専用）。
  */
-export async function setupSlicerViewports(
+export async function setupSlicerMpr(
   engine: RenderingEngine,
   engineId: string,
-  els: SlicerElements,
-  ids: SlicerViewportIds,
+  els: SlicerEls,
+  ids: SlicerVpIds,
   volumeId: string,
   toolGroupId: string,
 ): Promise<void> {
   engine.setViewports([
-    {
-      viewportId: ids.base,
-      type: ViewportType.ORTHOGRAPHIC,
-      element: els.base,
-      defaultOptions: { orientation: OrientationAxis.AXIAL, background: [0, 0, 0] as Types.Point3 },
-    },
-    {
-      viewportId: ids.recon,
-      type: ViewportType.ORTHOGRAPHIC,
-      element: els.recon,
-      // 初期は SAGITTAL。setReslicePreview で任意法線へ向ける。
-      defaultOptions: { orientation: OrientationAxis.SAGITTAL, background: [0, 0, 0] as Types.Point3 },
-    },
+    { viewportId: ids.axial, type: ViewportType.ORTHOGRAPHIC, element: els.axial, defaultOptions: { orientation: OrientationAxis.AXIAL, background: [0, 0, 0] as Types.Point3 } },
+    { viewportId: ids.coronal, type: ViewportType.ORTHOGRAPHIC, element: els.coronal, defaultOptions: { orientation: OrientationAxis.CORONAL, background: [0, 0, 0] as Types.Point3 } },
+    { viewportId: ids.sagittal, type: ViewportType.ORTHOGRAPHIC, element: els.sagittal, defaultOptions: { orientation: OrientationAxis.SAGITTAL, background: [0, 0, 0] as Types.Point3 } },
+    { viewportId: ids.recon, type: ViewportType.ORTHOGRAPHIC, element: els.recon, defaultOptions: { orientation: OrientationAxis.AXIAL, background: [0, 0, 0] as Types.Point3 } },
   ]);
 
-  const viewportIds = [ids.base, ids.recon];
+  const srcIds = [ids.axial, ids.coronal, ids.sagittal];
   await Promise.all(
-    viewportIds.map(async (id) => {
+    srcIds.map(async (id) => {
       const vp = engine.getViewport(id) as Types.IVolumeViewport;
       await vp.setVolumes([{ volumeId }]);
     }),
@@ -145,101 +141,357 @@ export async function setupSlicerViewports(
   if (tg) ToolGroupManager.destroyToolGroup(toolGroupId);
   tg = ToolGroupManager.createToolGroup(toolGroupId);
   if (!tg) return;
-
   tg.addTool(WindowLevelTool.toolName);
   tg.addTool(PanTool.toolName);
   tg.addTool(ZoomTool.toolName);
   tg.addTool(StackScrollTool.toolName);
-  for (const id of viewportIds) tg.addViewport(id, engineId);
-
-  // 右=W/L、中=Pan、ホイール=スライス送り。左ドラッグはカットライン操作（オーバーレイが処理）。
+  for (const id of [...srcIds, ids.recon]) tg.addViewport(id, engineId);
   tg.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary }] });
   tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
-  tg.setToolActive(ZoomTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary, modifierKey: csToolsEnums.KeyboardBindings.Ctrl }] });
   tg.setToolActive(StackScrollTool.toolName, { bindings: [{ mouseButton: MouseBindings.Wheel }] });
 
   const voiSync = getOrCreateVoiSync(SLICER_VOI_SYNC_ID);
-  for (const id of viewportIds) voiSync.add({ renderingEngineId: engineId, viewportId: id });
+  for (const id of srcIds) voiSync.add({ renderingEngineId: engineId, viewportId: id });
 
-  engine.renderViewports(viewportIds);
+  engine.renderViewports([...srcIds, ids.recon]);
 }
 
 /**
- * ベース断面上のカットライン（canvas 座標の 2 端点）から斜め断面を求め、recon ビューポートを向ける。
- * カットライン方向・ベース断面法線から plane を構成する（canvasToWorld を使うので base の
- * zoom/pan/回転・現在スライス位置を含む実 world 位置になる）。
- *
- * @returns 求めた断面幾何（`reslice.ts` の `buildReslicePlane` にそのまま渡せる）。失敗時 null。
+ * ビューポートのカメラから初期スラブ幾何を得る（Axial 整列）。
+ * DICOM 規約に合わせ **colDir = 画面下（row インデックス増加方向）= −viewUp** とする。こうすると
+ * 出力フレームが自然な向きになり、再構成表示が上下反転しない。normal = rowDir × colDir（右手系）。
  */
-export function setReslicePreview(
-  engine: RenderingEngine,
-  ids: SlicerViewportIds,
-  line: { x0: number; y0: number; x1: number; y1: number },
-  slab: { numSlices: number; thickness: number; gap: number; mode: ReconMode },
-): ResliceGeometry | null {
+export function readSlicerGeometry(engine: RenderingEngine, viewportId: string): SlicerGeometry | null {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const base = engine.getViewport(ids.base) as any;
-    const p0 = base.canvasToWorld([line.x0, line.y0]) as Vec3;
-    const p1 = base.canvasToWorld([line.x1, line.y1]) as Vec3;
-    const lineDir = normalize(sub(p1, p0));
-    const cam = base.getCamera() as AnyObj;
-    const axialNormal = normalize(cam.viewPlaneNormal as Vec3);
-    // recon 断面法線 = カットライン方向 × ベース断面法線（＝カットラインに垂直かつベース面内）。
-    const normal = normalize(cross(lineDir, axialNormal));
-    const center = mid(p0, p1);
-    // recon 面: viewUp = ベース断面法線（頭側 up）、rowDir = lineDir。
-    const up = axialNormal;
-
-    const recon = engine.getViewport(ids.recon) as Types.IVolumeViewport;
-    recon.setCamera({ focalPoint: center as Types.Point3, viewPlaneNormal: normal as Types.Point3, viewUp: up as Types.Point3 });
-
-    // Slab プレビュー: スラブ全深 = thickness*n + gap*(n-1)。
-    const slabDepth = slab.thickness * slab.numSlices + slab.gap * Math.max(0, slab.numSlices - 1);
-    recon.setBlendMode(blendModeFor(slab.mode));
-    if (slab.mode === "SLICECUT" || slabDepth <= 0) {
-      recon.resetSlabThickness();
-    } else {
-      recon.setSlabThickness(slabDepth);
-    }
-    recon.render();
-
-    return { center, normal, rowDir: lineDir, up };
+    const vp = engine.getViewport(viewportId) as any;
+    const cam = vp.getCamera() as AnyObj;
+    const vpn = normalize(cam.viewPlaneNormal as Vec3);
+    const up = normalize(cam.viewUp as Vec3);
+    const rowDir = normalize(cross(up, vpn)); // 画面右（列インデックス増加）
+    const colDir = normalize([-up[0], -up[1], -up[2]]); // 画面下（行インデックス増加）
+    const normal = normalize(cross(rowDir, colDir)); // 右手系
+    const fp = cam.focalPoint as Vec3;
+    return { center: [fp[0], fp[1], fp[2]], normal, rowDir, colDir };
   } catch {
     return null;
   }
 }
 
 /**
- * VolumeViewport から `reslice.ts` 用の `ResliceVolume`（world 幾何）を抽出する（P3 確定生成で使用）。
- * cornerstone の `getImageData().direction` は [rowCos, colCos, normal] の行優先 9 要素で、
- * `reslice.ts` の direction 規約と一致する。airValue は CT 空気の -1000（他は 0）。
+ * スラブ幾何から出力平面 `ReslicePlane` を直接構成する（buildReslicePlane の up 再導出を使わず、
+ * geom の rowDir/colDir/normal をそのまま採用＝バンド表示・番号・reslicer で完全一貫）。
+ * center が画像中心に来るよう左上(0,0)ピクセル中心へ origin を配置。
  */
-export function extractResliceVolume(
+export function planeFromGeometry(
+  geom: SlicerGeometry,
+  fovWidth: number,
+  fovHeight: number,
+  colSpacing: number,
+  rowSpacing: number,
+): ReslicePlane {
+  const cols = Math.max(1, Math.round(fovWidth / colSpacing));
+  const rows = Math.max(1, Math.round(fovHeight / rowSpacing));
+  const halfW = ((cols - 1) / 2) * colSpacing;
+  const halfH = ((rows - 1) / 2) * rowSpacing;
+  const origin: Vec3 = [
+    geom.center[0] - geom.rowDir[0] * halfW - geom.colDir[0] * halfH,
+    geom.center[1] - geom.rowDir[1] * halfW - geom.colDir[1] * halfH,
+    geom.center[2] - geom.rowDir[2] * halfW - geom.colDir[2] * halfH,
+  ];
+  return { origin, rowDir: geom.rowDir, colDir: geom.colDir, cols, rows, colSpacing, rowSpacing };
+}
+
+/** 平面(点 p0・法線 n)で線分(a,b)を切断した交点。無ければ null。 */
+function edgePlaneHit(a: Vec3, b: Vec3, p0: Vec3, n: Vec3): Vec3 | null {
+  const da = dot(n, sub(a, p0));
+  const db = dot(n, sub(b, p0));
+  if ((da > 0 && db > 0) || (da < 0 && db < 0)) return null;
+  const denom = da - db;
+  if (Math.abs(denom) < 1e-9) return null;
+  const t = da / denom;
+  return add(a, scale(sub(b, a), t));
+}
+
+// 立方体 8 頂点のビット (bit0=rowDir±, bit1=colDir±, bit2=normal±)。1 ビットだけ違う対を辺とする。
+const BOX_EDGES: Array<[number, number]> = (() => {
+  const edges: Array<[number, number]> = [];
+  for (let i = 0; i < 8; i++) for (const bit of [1, 2, 4]) {
+    const j = i | bit;
+    if (j !== i && j > i) edges.push([i, j]);
+  }
+  return edges;
+})();
+
+/** 各スライス箱を対象 MPR 面で切断し、交差ポリゴン（canvas 座標）を返す。 */
+export function computeSlabBands(
   engine: RenderingEngine,
   viewportId: string,
-): ResliceVolume | null {
+  geom: SlicerGeometry,
+  slab: SlabParams,
+): BandPolygon[] {
+  const out: BandPolygon[] = [];
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const vp = engine.getViewport(viewportId) as any;
-    const data = vp.getImageData?.() as AnyObj | undefined;
-    if (!data?.scalarData || !data.dimensions || !data.spacing || !data.origin || !data.direction) return null;
-    const modality = String(data.metadata?.Modality ?? "").toUpperCase();
-    const dir = Array.from(data.direction as ArrayLike<number>).map(Number);
+    const cam = vp.getCamera() as AnyObj;
+    const Pv = cam.focalPoint as Vec3;
+    const Nv = normalize(cam.viewPlaneNormal as Vec3);
+    const w2c = (w: Vec3): [number, number] => {
+      const p = vp.worldToCanvas(w as Types.Point3) as [number, number];
+      return [p[0], p[1]];
+    };
+    const n = Math.max(1, Math.floor(slab.numSlices));
+    const hr = scale(geom.rowDir, slab.fovWidth / 2);
+    const hc = scale(geom.colDir, slab.fovHeight / 2);
+    const step = slab.thickness + slab.gap;
+    for (let s = 0; s < n; s++) {
+      const centerOff = (s - (n - 1) / 2) * step;
+      const cp = add(geom.center, scale(geom.normal, centerOff));
+      const hn = scale(geom.normal, slab.thickness / 2);
+      const corners: Vec3[] = [];
+      for (let i = 0; i < 8; i++) {
+        const sr = i & 1 ? 1 : -1;
+        const sc = i & 2 ? 1 : -1;
+        const sn = i & 4 ? 1 : -1;
+        corners.push(add(add(add(cp, scale(hr, sr)), scale(hc, sc)), scale(hn, sn)));
+      }
+      const pts: Vec3[] = [];
+      for (const [i, j] of BOX_EDGES) {
+        const hit = edgePlaneHit(corners[i], corners[j], Pv, Nv);
+        if (hit) pts.push(hit);
+      }
+      if (pts.length < 3) {
+        out.push([]);
+        continue;
+      }
+      const cpts = pts.map(w2c);
+      let cx = 0;
+      let cy = 0;
+      for (const p of cpts) {
+        cx += p[0];
+        cy += p[1];
+      }
+      cx /= cpts.length;
+      cy /= cpts.length;
+      cpts.sort((a, b) => Math.atan2(a[1] - cy, a[0] - cx) - Math.atan2(b[1] - cy, b[0] - cx));
+      const dedup: BandPolygon = [];
+      for (const p of cpts) {
+        const last = dedup[dedup.length - 1];
+        if (!last || Math.hypot(p[0] - last[0], p[1] - last[1]) > 0.5) dedup.push(p);
+      }
+      out.push(dedup.length >= 3 ? dedup : []);
+    }
+  } catch {
+    /* ignore */
+  }
+  return out;
+}
+
+/** スラブ中央スライスの FOV 矩形の中心＋4 隅を canvas 座標のハンドルとして返す。 */
+export function computeSlabHandles(engine: RenderingEngine, viewportId: string, geom: SlicerGeometry, slab: SlabParams): SlabHandles {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vp = engine.getViewport(viewportId) as any;
+    const w2c = (w: Vec3): [number, number] => {
+      const p = vp.worldToCanvas(w as Types.Point3) as [number, number];
+      return [p[0], p[1]];
+    };
+    const hr = scale(geom.rowDir, slab.fovWidth / 2);
+    const hc = scale(geom.colDir, slab.fovHeight / 2);
+    const c = geom.center;
+    const corners: Array<[number, number]> = [
+      w2c(sub(sub(c, hr), hc)), // TL
+      w2c(sub(add(c, hr), hc)), // TR
+      w2c(add(add(c, hr), hc)), // BR
+      w2c(add(sub(c, hr), hc)), // BL  (c - hr + hc)
+    ];
+    return { center: w2c(c), corners };
+  } catch {
+    return { center: null, corners: [] };
+  }
+}
+
+/** 対象面内でスラブ中心を平行移動（canvas last→now の world 差分を center に加算）。 */
+export function translateGeomInPlane(engine: RenderingEngine, viewportId: string, geom: SlicerGeometry, last: [number, number], now: [number, number]): SlicerGeometry | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vp = engine.getViewport(viewportId) as any;
+    const wl = vp.canvasToWorld(last) as Vec3;
+    const wn = vp.canvasToWorld(now) as Vec3;
+    const delta = sub(wn, wl);
+    return { ...geom, center: add(geom.center, delta) };
+  } catch {
+    return null;
+  }
+}
+
+/** 対象面の法線軸まわりにスラブを回転（center は不動、canvas last→now の world 角度差で rowDir/colDir/normal を回す）。 */
+export function rotateGeomInPlane(engine: RenderingEngine, viewportId: string, geom: SlicerGeometry, last: [number, number], now: [number, number]): SlicerGeometry | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vp = engine.getViewport(viewportId) as any;
+    const cam = vp.getCamera() as AnyObj;
+    const axis = normalize(cam.viewPlaneNormal as Vec3);
+    const a = normalize(sub(vp.canvasToWorld(last) as Vec3, geom.center));
+    const b = normalize(sub(vp.canvasToWorld(now) as Vec3, geom.center));
+    const theta = Math.atan2(dot(cross(a, b), axis), dot(a, b));
+    if (!Number.isFinite(theta) || theta === 0) return geom;
     return {
-      data: data.scalarData as ArrayLike<number>,
-      dimensions: [data.dimensions[0], data.dimensions[1], data.dimensions[2]] as Vec3,
-      spacing: [data.spacing[0], data.spacing[1], data.spacing[2]] as Vec3,
-      origin: [data.origin[0], data.origin[1], data.origin[2]] as Vec3,
-      direction: dir,
-      airValue: modality === "CT" ? -1000 : 0,
+      center: geom.center,
+      normal: normalize(rotateAboutAxis(geom.normal, axis, theta)),
+      rowDir: normalize(rotateAboutAxis(geom.rowDir, axis, theta)),
+      colDir: normalize(rotateAboutAxis(geom.colDir, axis, theta)),
     };
   } catch {
     return null;
   }
 }
 
-/** ボリュームの spacing の最小値（サブサンプル既定間隔）。取得不可なら 1。 */
+/** 再構成スタック（frames+幾何）をローカルボリューム化して recon ビューポートに表示する。 */
+export async function displayReconStack(
+  engine: RenderingEngine,
+  viewportId: string,
+  volumeId: string,
+  recon: {
+    frames: Int16Array[];
+    cols: number;
+    rows: number;
+    numSlices: number;
+    origin: Vec3;
+    rowDir: Vec3;
+    colDir: Vec3;
+    normal: Vec3;
+    colSpacing: number;
+    rowSpacing: number;
+    spacingBetweenSlices: number;
+    modality: string;
+  },
+): Promise<void> {
+  const { frames, cols, rows, numSlices } = recon;
+  const sliceLen = cols * rows;
+  const data = new Int16Array(sliceLen * numSlices);
+  let min = Infinity;
+  let max = -Infinity;
+  for (let z = 0; z < numSlices; z++) {
+    data.set(frames[z], z * sliceLen);
+  }
+  for (let i = 0; i < data.length; i++) {
+    const v = data[i];
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+  if (!Number.isFinite(min)) {
+    min = 0;
+    max = 1;
+  }
+  const metadata: AnyObj = {
+    BitsAllocated: 16,
+    BitsStored: 16,
+    SamplesPerPixel: 1,
+    HighBit: 15,
+    PhotometricInterpretation: "MONOCHROME2",
+    PixelRepresentation: 1,
+    Modality: recon.modality || "OT",
+    ImageOrientationPatient: [recon.rowDir[0], recon.rowDir[1], recon.rowDir[2], recon.colDir[0], recon.colDir[1], recon.colDir[2]],
+    PixelSpacing: [recon.rowSpacing, recon.colSpacing],
+    Columns: cols,
+    Rows: rows,
+    voiLut: [{ windowWidth: Math.max(1, max - min), windowCenter: (max + min) / 2 }],
+  };
+  try {
+    if (cache.getVolume(volumeId)) cache.removeVolumeLoadObject(volumeId);
+  } catch {
+    /* ignore */
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (volumeLoader.createLocalVolume as any)(volumeId, {
+    metadata,
+    dimensions: [cols, rows, numSlices],
+    spacing: [recon.colSpacing, recon.rowSpacing, recon.spacingBetweenSlices],
+    origin: recon.origin,
+    direction: [recon.rowDir[0], recon.rowDir[1], recon.rowDir[2], recon.colDir[0], recon.colDir[1], recon.colDir[2], recon.normal[0], recon.normal[1], recon.normal[2]],
+    scalarData: data,
+  });
+  const vp = engine.getViewport(viewportId) as Types.IVolumeViewport;
+  await vp.setVolumes([{ volumeId }]);
+  // 再構成面の法線方向から見る（ACQUISITION）。AXIAL(world z) のままだと斜め束を横断してストライプ状に途切れる。
+  try {
+    vp.setOrientation(OrientationAxis.ACQUISITION);
+  } catch {
+    /* ignore */
+  }
+  try {
+    vp.setProperties({ voiRange: { lower: min, upper: max } });
+  } catch {
+    /* ignore */
+  }
+  try {
+    vp.resetCamera();
+  } catch {
+    /* ignore */
+  }
+  vp.render();
+}
+
+/** VolumeViewport から `reslice.ts` 用の `ResliceVolume`（world 幾何）を抽出する（確定生成で使用）。 */
+export function extractResliceVolume(engine: RenderingEngine, viewportId: string): ResliceVolume | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vp = engine.getViewport(viewportId) as any;
+    const data = vp.getImageData?.() as AnyObj | undefined;
+    if (!data || !data.dimensions || !data.spacing || !data.origin || !data.direction) return null;
+    // 全ボクセル配列を取得する。streaming volume では `scalarData` getter（=voxelManager.getScalarData()）が
+    // "No scalar data available" を throw するため、まず getCompleteScalarDataArray() を試す。
+    let scalarData: ArrayLike<number> | undefined;
+    try {
+      scalarData = data.voxelManager?.getCompleteScalarDataArray?.() as ArrayLike<number> | undefined;
+    } catch {
+      /* fall through */
+    }
+    if (!scalarData || (scalarData as ArrayLike<number>).length === 0) {
+      try {
+        scalarData = data.scalarData as ArrayLike<number> | undefined;
+      } catch {
+        scalarData = undefined;
+      }
+    }
+    if (!scalarData || (scalarData as ArrayLike<number>).length === 0) return null;
+    const dir = Array.from(data.direction as ArrayLike<number>).map(Number);
+    // FOV 外（ボリュームからはみ出す）ボクセルは「スタック内最小値」でパディングする（＝ソース最小値。
+    // 再構成スタックはソースの部分集合なので両者は一致）。境界のトリリニア混合もこの最小値に収束する。
+    const arr = scalarData;
+    let min = Infinity;
+    for (let i = 0; i < arr.length; i++) {
+      const v = arr[i];
+      if (v < min) min = v;
+    }
+    if (!Number.isFinite(min)) min = 0;
+    return {
+      data: scalarData,
+      dimensions: [data.dimensions[0], data.dimensions[1], data.dimensions[2]] as Vec3,
+      spacing: [data.spacing[0], data.spacing[1], data.spacing[2]] as Vec3,
+      origin: [data.origin[0], data.origin[1], data.origin[2]] as Vec3,
+      direction: dir,
+      airValue: min,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** ボリュームの Modality を得る。 */
+export function volumeModality(engine: RenderingEngine, viewportId: string): string {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vp = engine.getViewport(viewportId) as any;
+    return String(vp.getImageData?.()?.metadata?.Modality ?? "");
+  } catch {
+    return "";
+  }
+}
+
+/** ボリュームの spacing の最小値（サブサンプル/出力既定間隔）。取得不可なら 1。 */
 export function volumeMinSpacing(engine: RenderingEngine, viewportId: string): number {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -252,18 +504,7 @@ export function volumeMinSpacing(engine: RenderingEngine, viewportId: string): n
   }
 }
 
-/** ベース断面上の「現在スライス」中心の canvas 座標（カットライン初期位置に使う）。 */
-export function baseViewportCenter(engine: RenderingEngine, viewportId: string, el: HTMLElement): { cx: number; cy: number } {
-  const rect = el.getBoundingClientRect();
-  const cx = rect.width / 2;
-  const cy = rect.height / 2;
-  // world 依存なしの単純中心（canvas 相対 CSS px）。engine/viewportId は将来 focalPoint 追従用に受ける。
-  void engine;
-  void viewportId;
-  return { cx, cy };
-}
-
-/** transformWorldToIndex（P3 の範囲チェック等で使用）。 */
+/** transformWorldToIndex（ボクセル座標 IJK を得る）。 */
 export function worldToIndex(engine: RenderingEngine, viewportId: string, world: Vec3): number[] | null {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -276,12 +517,85 @@ export function worldToIndex(engine: RenderingEngine, viewportId: string, world:
   }
 }
 
+/** transformIndexToWorld（ボクセル座標 IJK → world）。 */
+export function indexToWorld(engine: RenderingEngine, viewportId: string, ijk: Vec3): Vec3 | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vp = engine.getViewport(viewportId) as any;
+    const data = vp.getImageData?.();
+    if (!data?.imageData) return null;
+    const w = csUtilities.transformIndexToWorld(data.imageData, ijk) as number[];
+    return [w[0], w[1], w[2]];
+  } catch {
+    return null;
+  }
+}
+
+// ── 回転角（XYZ Euler, deg）⇔ 断面ジオメトリ ────────────────────────────────
+// 基準フレーム base（起動時の Axial 整列 rowDir/colDir/normal）に対する回転を Euler(XYZ) で表す。
+// R = Rz(γ)·Ry(β)·Rx(α)（外因性 X→Y→Z）。current = R·base。
+
+type Mat3 = number[]; // 9, 行優先 R[row*3+col]
+
+/** Euler(度) → 回転行列 R = Rz·Ry·Rx。 */
+function eulerToMat(degX: number, degY: number, degZ: number): Mat3 {
+  const a = (degX * Math.PI) / 180;
+  const b = (degY * Math.PI) / 180;
+  const g = (degZ * Math.PI) / 180;
+  const ca = Math.cos(a), sa = Math.sin(a);
+  const cb = Math.cos(b), sb = Math.sin(b);
+  const cg = Math.cos(g), sg = Math.sin(g);
+  return [
+    cb * cg, sa * sb * cg - ca * sg, ca * sb * cg + sa * sg,
+    cb * sg, sa * sb * sg + ca * cg, ca * sb * sg - sa * cg,
+    -sb, sa * cb, ca * cb,
+  ];
+}
+const matVec = (m: Mat3, v: Vec3): Vec3 => [
+  m[0] * v[0] + m[1] * v[1] + m[2] * v[2],
+  m[3] * v[0] + m[4] * v[1] + m[5] * v[2],
+  m[6] * v[0] + m[7] * v[1] + m[8] * v[2],
+];
+
+/** 基準フレーム base に Euler(度) を適用して断面ジオメトリを作る（center は与えた値）。 */
+export function anglesToGeometry(base: SlicerGeometry, center: Vec3, deg: [number, number, number]): SlicerGeometry {
+  const R = eulerToMat(deg[0], deg[1], deg[2]);
+  return {
+    center,
+    rowDir: normalize(matVec(R, base.rowDir)),
+    colDir: normalize(matVec(R, base.colDir)),
+    normal: normalize(matVec(R, base.normal)),
+  };
+}
+
+/** 現在ジオメトリの base に対する Euler(XYZ) 回転角（度）を返す。R = current·baseᵀ を分解。 */
+export function geometryToAngles(base: SlicerGeometry, geom: SlicerGeometry): [number, number, number] {
+  const r0 = base.rowDir, c0 = base.colDir, n0 = base.normal;
+  const r1 = geom.rowDir, c1 = geom.colDir, n1 = geom.normal;
+  // R[i][j] = r1[i]r0[j] + c1[i]c0[j] + n1[i]n0[j]（= M1·M0ᵀ）。
+  const R: Mat3 = new Array(9).fill(0);
+  for (let i = 0; i < 3; i++)
+    for (let j = 0; j < 3; j++) R[i * 3 + j] = r1[i] * r0[j] + c1[i] * c0[j] + n1[i] * n0[j];
+  const clamp = (x: number) => Math.max(-1, Math.min(1, x));
+  const rad2deg = 180 / Math.PI;
+  let ax: number, ay: number, az: number;
+  const sy = -R[6]; // -R[2][0] = sin? → β=asin(-R20)
+  ay = Math.asin(clamp(sy));
+  if (Math.abs(R[6]) < 0.999999) {
+    ax = Math.atan2(R[7], R[8]); // atan2(R21,R22)
+    az = Math.atan2(R[3], R[0]); // atan2(R10,R00)
+  } else {
+    // ジンバルロック: β≈±90°。az=0 とし ax を合成から求める。
+    az = 0;
+    ax = Math.atan2(-R[5], R[4]);
+  }
+  return [ax * rad2deg, ay * rad2deg, az * rad2deg];
+}
+
 /** Slicer のツールグループ・同期・エンジンを破棄する（アンマウント時）。 */
 export function teardownSlicer(engine: RenderingEngine | null, toolGroupId: string): void {
   try {
-    if (SynchronizerManager.getSynchronizer(SLICER_VOI_SYNC_ID)) {
-      SynchronizerManager.destroySynchronizer(SLICER_VOI_SYNC_ID);
-    }
+    if (SynchronizerManager.getSynchronizer(SLICER_VOI_SYNC_ID)) SynchronizerManager.destroySynchronizer(SLICER_VOI_SYNC_ID);
   } catch {
     /* ignore */
   }

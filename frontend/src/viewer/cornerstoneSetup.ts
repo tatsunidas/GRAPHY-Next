@@ -9,6 +9,8 @@
 import { init as coreInit } from "@cornerstonejs/core";
 import dicomImageLoader from "@cornerstonejs/dicom-image-loader";
 import { registerSegMetadataProvider } from "./segMetadata";
+import { Wand2DTool } from "./wand2d";
+import { installSegDebug } from "./segDebug";
 import {
   init as toolsInit,
   addTool,
@@ -31,7 +33,56 @@ import {
   RectangleROIThresholdTool,
   CrosshairsTool,
   StackScrollTool,
+  segmentation as csSeg,
+  annotation as csAnnotation,
+  Enums as csToolsEnums,
 } from "@cornerstonejs/tools";
+
+/**
+ * マスク（labelmap）のグローバル既定スタイルを適用する。新規マスクの塗り不透明度（fillAlpha 0..1）・
+ * アウトライン幅（outlineWidth）の既定になる。環境設定（viewer.maskFillOpacity / maskOutlineWidth）を
+ * 読み込んだ後に呼び出して上書きする。
+ */
+export function applyGlobalLabelmapStyle(style: { outlineWidth?: number; fillAlpha?: number }): void {
+  try {
+    csSeg.segmentationStyle.setStyle(
+      { type: csToolsEnums.SegmentationRepresentations.Labelmap },
+      style,
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+/** "#rrggbb" → "rgb(r, g, b)"（Cornerstone annotation の色は rgb 文字列）。不正入力は null。 */
+function hexToRgbStr(hex: string): string | null {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+  if (!m) return null;
+  return `rgb(${parseInt(m[1], 16)}, ${parseInt(m[2], 16)}, ${parseInt(m[3], 16)})`;
+}
+
+/**
+ * 計測 ROI（annotation）のグローバル既定スタイルを適用する。新規に描く注釈の色・線幅の既定になる。
+ * `setDefaultToolStyles` は既定を丸ごと置換するため、既存既定にマージする。
+ */
+export function applyGlobalAnnotationStyle(style: { colorHex?: string; lineWidth?: number }): void {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cfg = csAnnotation.config.style as any;
+    const cur = cfg.getDefaultToolStyles?.() ?? {};
+    const next = { ...cur };
+    if (style.colorHex) {
+      const rgb = hexToRgbStr(style.colorHex);
+      if (rgb) next.color = rgb;
+    }
+    if (typeof style.lineWidth === "number" && style.lineWidth > 0) {
+      next.lineWidth = String(style.lineWidth);
+    }
+    cfg.setDefaultToolStyles?.(next);
+  } catch {
+    /* ignore */
+  }
+}
 
 let initPromise: Promise<void> | null = null;
 
@@ -68,11 +119,18 @@ export function ensureCornerstoneInitialized(): Promise<void> {
       addTool(CircleScissorsTool);
       addTool(SphereScissorsTool); // 3D 球で fill/erase
       addTool(RectangleROIThresholdTool); // しきい値塗り
+      addTool(Wand2DTool); // 2D Wand（自作: 単一スライスの輝度 flood fill）
       // MPR（VolumeViewport）: 連動十字線・ボリュームスライス送り。
       addTool(CrosshairsTool);
       addTool(StackScrollTool);
       // セグメンテーション: backend 幾何から imagePlaneModule を供給（labelmap 生成の画素プリロード撤廃）。
       registerSegMetadataProvider();
+      // 診断: Brush 無言停止時に Console で `__graphySegDebug()` を実行して状態を出力。
+      installSegDebug();
+      // マスク（labelmap）の既定スタイル（アウトライン幅・塗り不透明度）。Cornerstone 既定は
+      // outlineWidth:3 / fillAlpha:0.5。ここでは初期既定（1 / 0.5）を適用し、環境設定
+      // （viewer.maskOutlineWidth / viewer.maskFillOpacity）読込後に applyGlobalLabelmapStyle で上書きする。
+      applyGlobalLabelmapStyle({ outlineWidth: 1, fillAlpha: 0.5 });
     })();
   }
   return initPromise;

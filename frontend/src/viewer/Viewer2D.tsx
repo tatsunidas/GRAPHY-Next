@@ -16,11 +16,14 @@ import {
   ProbeTool,
   PlanarFreehandROITool,
   BrushTool,
+  RegionSegmentPlusTool,
   annotation as csAnnotation,
   utilities as csToolsUtilities,
   Enums as csToolsEnums,
 } from "@cornerstonejs/tools";
-import { ensureStackSegmentation, disposeViewportSegmentation } from "./segmentation";
+import { ensureStackSegmentation, disposeViewportSegmentation, noteSegViewport } from "./segmentation";
+import { Wand2DTool } from "./wand2d";
+import { emitToast } from "./toast";
 import { ERASER_TOOL_ID } from "./toolIds";
 import { setViewerContext, clearViewerContext, getViewerContext, type ViewerContext } from "./viewerContext";
 import { setRoiMaskMeta, subscribeRoiMaskStore } from "./roiMaskStore";
@@ -64,8 +67,11 @@ const MEASURE_TOOLS = [
   RectangleROITool.toolName,
   ProbeTool.toolName,
 ];
-// 左ドラッグに割り当て可能なツール一覧（操作＋計測＋ブラシ）。
-const PRIMARY_TOOLS = [WindowLevelTool.toolName, PanTool.toolName, ZoomTool.toolName, ...MEASURE_TOOLS, BrushTool.toolName];
+// 左ドラッグに割り当て可能なツール一覧（操作＋計測＋ブラシ＋3D Wand）。
+const PRIMARY_TOOLS = [WindowLevelTool.toolName, PanTool.toolName, ZoomTool.toolName, ...MEASURE_TOOLS, BrushTool.toolName, RegionSegmentPlusTool.toolName, Wand2DTool.toolName];
+// 描画/計測/セグメンテーション系ツール（左ドラッグ占有）。これらが有効な間は per-tile の Pan↔W/L 切替を抑止し、
+// 先にツールバーで解除するよう促す（グローバルツールが優先＝ナビ切替が黙って効かないのを避ける）。
+const BLOCKING_TOOLS = new Set<string>([...MEASURE_TOOLS, BrushTool.toolName, ERASER_TOOL_ID, RegionSegmentPlusTool.toolName, Wand2DTool.toolName]);
 
 // 単一の RenderingEngine を全ビューポートで共有する（WebGL コンテキストを 1 つに保つ＝省メモリ）。
 export const ENGINE_ID = "graphy-engine";
@@ -232,6 +238,8 @@ export function Viewer2D({
   const [inverted, setInverted] = useState(false);
   // Pan モード: ON で左ドラッグ=パン、OFF で左ドラッグ=W/L。中ドラッグは常にパン、右はズーム。
   const [panMode, setPanMode] = useState(false);
+  // 現在このタイルの左ドラッグに割り当てられている論理ツール（グローバルツールバー or per-tile 切替で更新）。
+  const activeToolRef = useRef<string>(WindowLevelTool.toolName);
   // リファレンスライン: 他シリーズの現在スライス面がこのビューと交差する線分（CSS px）。
   const [refSegments, setRefSegments] = useState<RefSegment[]>([]);
   const refLinesEnabledRef = useRef(referenceLinesEnabled);
@@ -276,6 +284,11 @@ export function Viewer2D({
 
   /** 左ドラッグの割り当てを Pan↔W/L で切り替える。 */
   const togglePan = () => {
+    // ROI/描画/セグメンテーション系ツールが有効な間は切替を抑止し、先に解除を促す。
+    if (BLOCKING_TOOLS.has(activeToolRef.current)) {
+      emitToast(t("viewer2d.tool.releaseRoiFirst"));
+      return;
+    }
     const tg = ToolGroupManager.getToolGroup(`${viewportIdRef.current}-tg`);
     const next = !panMode;
     if (tg) {
@@ -295,6 +308,7 @@ export function Viewer2D({
         /* ツールグループ未準備時は無視 */
       }
     }
+    activeToolRef.current = next ? PanTool.toolName : WindowLevelTool.toolName;
     setPanMode(next);
   };
 
@@ -442,6 +456,8 @@ export function Viewer2D({
       setSample(sampleAtCanvas(v, [e.clientX - rect.left, e.clientY - rect.top], infoRef.current));
     };
     const onLeave = () => setSample(null);
+    // フォーカス中タイルを記録（ROI マネージャの「＋新規マスク」対象）。
+    const onFocusPointerDown = () => noteSegViewport(viewportIdRef.current, imageIdsRef.current);
 
     // ROI（計測注釈）作成完了時に、このビューポートの現在コンテキストでメタ（患者・scope）を紐付ける。
     const onAnnotationDone = (evt: Event) => {
@@ -552,6 +568,8 @@ export function Viewer2D({
 
         // CAMERA_MODIFIED は compact でも必要（向きマーカー/スケールバーの初期計算・再Fit）。
         element.addEventListener(EVENTS.CAMERA_MODIFIED, onCameraModified);
+        // フォーカス中タイルを記録（ROI マネージャの「＋新規マスク」対象）。base ビューポートのみ。
+        if (!compact) element.addEventListener("pointerdown", onFocusPointerDown);
 
         const wireTools = (tg: ReturnType<typeof ToolGroupManager.createToolGroup>) => {
           if (!tg) return;
@@ -571,6 +589,12 @@ export function Viewer2D({
             // ROI ブラシ（セグメンテーション編集）。passive で追加。
             tg.addTool(BrushTool.toolName);
             tg.setToolPassive(BrushTool.toolName);
+            // 3D Wand（ワンクリック growCut 領域成長）。passive で追加、setActiveTool で Primary 割当。
+            tg.addTool(RegionSegmentPlusTool.toolName);
+            tg.setToolPassive(RegionSegmentPlusTool.toolName);
+            // 2D Wand（自作: 単一スライスの輝度 flood fill）。passive で追加。
+            tg.addTool(Wand2DTool.toolName);
+            tg.setToolPassive(Wand2DTool.toolName);
             tg.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
             tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
             tg.setToolActive(ZoomTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary }] });
@@ -600,8 +624,13 @@ export function Viewer2D({
         // さらに get/setViewPresentation で増幅される。これを避けるため、canvas のリサイズは
         // keepCamera=true（自動フィットしない）にし、フィットは viewport 単位の resetCamera で行う。
         // 実サイズが変化したときのみ実行（resize フィードバックループも防止）。
-        let lastRW = element.clientWidth;
-        let lastRH = element.clientHeight;
+        // ★初回フィット補正: seed を 0 にして、ResizeObserver が observe() 時に必ず配送する
+        // 「初回通知」で必ず補正フィットを走らせる。enableElement 時にコンテナが未確定サイズ
+        // （flex レイアウト途中等）だと canvas が誤アスペクトで作られ画像が縦長等に歪むため、
+        // レイアウト確定後の初回通知で canvas を実サイズへ同期＋再フィットして直す。
+        // （observe は container を監視。engine.resize は canvas を変えるだけでループしない。）
+        let lastRW = 0;
+        let lastRH = 0;
         resizeObserver = new ResizeObserver(() => {
           const vp = viewportRef.current;
           if (!vp || disposed) return;
@@ -639,6 +668,7 @@ export function Viewer2D({
       disposed = true;
       resizeObserver?.disconnect();
       element.removeEventListener(EVENTS.CAMERA_MODIFIED, onCameraModified);
+      element.removeEventListener("pointerdown", onFocusPointerDown);
       element.removeEventListener(EVENTS.VOI_MODIFIED, onVoiModified);
       element.removeEventListener("mousemove", onMove);
       element.removeEventListener("mouseleave", onLeave);
@@ -878,6 +908,8 @@ export function Viewer2D({
     if (!tg) return;
     const isBrush = toolName === BrushTool.toolName;
     const isEraser = toolName === ERASER_TOOL_ID;
+    const isRegion3d = toolName === RegionSegmentPlusTool.toolName;
+    const isWand2d = toolName === Wand2DTool.toolName;
     const primary = isEraser ? BrushTool.toolName : toolName;
     const applyBindings = () => {
       try {
@@ -905,8 +937,17 @@ export function Viewer2D({
         /* ツールグループ未準備時は無視 */
       }
     };
-    if (isBrush || isEraser) {
-      // Mask(labelmap) を現在スタックに対し保証してからブラシを有効化。
+    // 3D ツール（3D Wand/将来の球ブラシ・Scissors）は規則的ボリュームでないシリーズでは動かない
+    // （Cornerstone の isValidVolume=false → on-demand volume 化不可）。UI で弾いて理由を通知する。
+    if (isRegion3d && !utilities.isValidVolume(imageIdsRef.current)) {
+      emitToast(t("viewer2d.tool.needVolume"));
+      return;
+    }
+    activeToolRef.current = toolName; // per-tile Pan↔W/L 切替の抑止判定に使う。
+    if (isBrush || isEraser || isRegion3d || isWand2d) {
+      // Mask(labelmap) を現在スタックに対し保証してからブラシ/Wand を有効化。
+      // 3D Wand（growCut）は内部で source を on-demand volume 化して領域成長する（規則的ボリューム前提）。
+      // 2D Wand は自作のクリック輝度 flood（現在スライスのみ）。
       void ensureStackSegmentation(viewportIdRef.current, imageIdsRef.current).then(applyBindings);
     } else {
       applyBindings();
@@ -916,6 +957,15 @@ export function Viewer2D({
   const setBrushSize = (size: number) => {
     try {
       csToolsUtilities.segmentation.setBrushSizeForToolGroup(`${viewportIdRef.current}-tg`, size);
+    } catch {
+      /* ignore */
+    }
+  };
+  // 2D Wand のトレランス（シード輝度からの許容差）。
+  const setWandTolerance = (tol: number) => {
+    try {
+      const tg = ToolGroupManager.getToolGroup(`${viewportIdRef.current}-tg`);
+      tg?.setToolConfiguration(Wand2DTool.toolName, { threshold: tol }, true);
     } catch {
       /* ignore */
     }
@@ -934,11 +984,11 @@ export function Viewer2D({
   // 画面メニュー/ツールバーからの一括コマンド。最新の実装を ref に保持し、登録は wrapper 経由で常に最新を呼ぶ。
   const commandsRef = useRef<ViewerCommands>({
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, setWindowLevel, resetWindow,
-    setActiveTool, setBrushSize, clearAnnotations, undo, redo,
+    setActiveTool, setBrushSize, setWandTolerance, clearAnnotations, undo, redo,
   });
   commandsRef.current = {
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, setWindowLevel, resetWindow,
-    setActiveTool, setBrushSize, clearAnnotations, undo, redo,
+    setActiveTool, setBrushSize, setWandTolerance, clearAnnotations, undo, redo,
   };
   useEffect(() => {
     if (!commandKey || compact || syncGroupId) return;
@@ -954,6 +1004,7 @@ export function Viewer2D({
       resetWindow: () => commandsRef.current.resetWindow(),
       setActiveTool: (n) => commandsRef.current.setActiveTool(n),
       setBrushSize: (s) => commandsRef.current.setBrushSize(s),
+      setWandTolerance: (v) => commandsRef.current.setWandTolerance(v),
       clearAnnotations: () => commandsRef.current.clearAnnotations(),
       undo: () => commandsRef.current.undo(),
       redo: () => commandsRef.current.redo(),

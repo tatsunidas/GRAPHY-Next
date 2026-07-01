@@ -39,6 +39,12 @@ export function App() {
       .catch((e: unknown) => setError(String(e)));
   }, []);
 
+  // 他ウィンドウの DB 変更（Slicer の派生シリーズ保存・DbAdmin 編集等）を受けて、
+  // このウィンドウの一覧を現在の検索条件で再読込する（MainScreen は reloadKey+dbVersion で再検索）。
+  useEffect(() => {
+    return subscribeDbChanged(() => setDbVersion((v) => v + 1));
+  }, []);
+
   useGlobalShortcuts({
     "open-settings": () => setSettingsOpen(true),
     "open-db": () => {

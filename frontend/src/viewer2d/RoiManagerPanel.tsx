@@ -18,7 +18,9 @@ import {
   Enums as csToolsEnums,
 } from "@cornerstonejs/tools";
 import { ENGINE_ID } from "../viewer/Viewer2D";
-import { getRoiMaskMeta, setRoiMaskMeta, deleteRoiMaskMeta, subscribeRoiMaskStore } from "../viewer/roiMaskStore";
+import { getRoiMaskMeta, setRoiMaskMeta, deleteRoiMaskMeta, subscribeRoiMaskStore, getSegEditTarget, getMaskSegments } from "../viewer/roiMaskStore";
+import { createNewMask, addSegmentToActiveMask, activateMask, getLastSegViewport } from "../viewer/segmentation";
+import { fetchSettings } from "../settings/settingsApi";
 import { combineMasks, splitMask, roiToMask, isAreaRoi, type BoolOp } from "../viewer/roiBooleanOps";
 import { sphereFromCircleRoi, createSphere3DFromCircleRoi, bakeSphere3D, splitMaskToSlices, maskVolumeStats, type MaskVolumeStats } from "../viewer/roi3d";
 import { listSpheres3D, updateSphere3D, deleteSphere3D, subscribeSphere3D, type Sphere3D } from "../viewer/sphere3dStore";
@@ -43,7 +45,22 @@ function hexToRgb(hex: string): string {
 }
 
 interface RoiRow { uid: string; tool: string; visible: boolean; scope: string; }
-interface MaskRow { id: string; label: string; scope: string; }
+interface MaskRow { id: string; label: string; scope: string; visible: boolean; }
+
+/** マスク（segmentation representation）の表示状態を読む（先頭ビューポート基準。未取得は表示扱い）。 */
+function getMaskVisible(id: string): boolean {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vps = (csSeg.state as any).getViewportIdsWithSegmentation(id) as string[] | undefined;
+    const vp = vps?.[0];
+    if (!vp) return true;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const v = (csSeg.config.visibility as any).getSegmentationRepresentationVisibility(vp, { segmentationId: id, type: LABELMAP });
+    return v !== false;
+  } catch {
+    return true;
+  }
+}
 
 /** scope メタ → 表示文字列。 */
 function scopeText(itemId: string): string {
@@ -64,6 +81,22 @@ export function RoiManagerPanel({ activePatientKey, onClose }: { activePatientKe
   const [busy, setBusy] = useState(false);
   const [stats, setStats] = useState<Record<string, MaskVolumeStats>>({});
   const [spheres, setSpheres] = useState<Sphere3D[]>([]);
+  // マスク行の初期値（環境設定 viewer.maskFillOpacity / maskOutlineWidth に追従）。
+  const [maskDefaults, setMaskDefaults] = useState({ fillOpacity: 0.5, outlineWidth: 1 });
+  useEffect(() => {
+    fetchSettings()
+      .then((m) => {
+        const op = Number(m["viewer.maskFillOpacity"]);
+        const ow = Number(m["viewer.maskOutlineWidth"]);
+        setMaskDefaults({
+          fillOpacity: Number.isFinite(op) ? Math.min(1, Math.max(0, op / 100)) : 0.5,
+          outlineWidth: Number.isFinite(ow) ? ow : 1,
+        });
+      })
+      .catch(() => {
+        /* 既定のまま */
+      });
+  }, []);
   const importInputRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(() => {
@@ -101,6 +134,7 @@ export function RoiManagerPanel({ activePatientKey, onClose }: { activePatientKe
             id: s.segmentationId as string,
             label: (s.label as string) || (s.segmentationId as string),
             scope: scopeText(s.segmentationId),
+            visible: getMaskVisible(s.segmentationId as string),
           })),
       );
     } catch {
@@ -135,24 +169,54 @@ export function RoiManagerPanel({ activePatientKey, onClose }: { activePatientKe
     deleteRoiMaskMeta(uid);
     refresh();
   };
-  // マスク色: そのセグメンテーションを表示中の全ビューポートで segment 1 の色を変更。
-  const setMaskColor = (id: string, hex: string) => {
+  // マスク色: そのセグメンテーションを表示中の全ビューポートで、対象 segment の色を変更。
+  // アクティブマスクなら**アクティブ segment**、それ以外は segment 1 を対象にする（多セグメント D3）。
+  const setMaskColor = (id: string, hex: string, segIndex?: number) => {
     const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
     if (!m) return;
     const color: [number, number, number, number] = [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16), 255];
+    const idx = segIndex ?? (getSegEditTarget().segmentationId === id ? getSegEditTarget().segmentIndex : 1);
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const vps = (csSeg.state as any).getViewportIdsWithSegmentation(id) as string[] | undefined;
       for (const vpId of vps ?? []) {
-        try { csSeg.config.color.setSegmentIndexColor(vpId, id, 1, color); } catch { /* ignore */ }
+        try { csSeg.config.color.setSegmentIndexColor(vpId, id, idx, color); } catch { /* ignore */ }
       }
       renderAll();
     } catch {
       /* ignore */
     }
   };
+  // 指定 segment の現在色（#rrggbb）。segment チップの色表示用。
+  const segColorHex = (id: string, idx: number): string | null => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const vps = (csSeg.state as any).getViewportIdsWithSegmentation(id) as string[] | undefined;
+      const vp = vps?.[0];
+      if (!vp) return null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const c = (csSeg.config.color as any).getSegmentIndexColor(vp, id, idx) as number[] | undefined;
+      if (!c || c.length < 3) return null;
+      return `#${[c[0], c[1], c[2]].map((v) => Math.round(v).toString(16).padStart(2, "0")).join("")}`;
+    } catch {
+      return null;
+    }
+  };
   const toggleRoi = (uid: string, vis: boolean) => {
     try { csAnnotation.visibility.setAnnotationVisibility(uid, vis); } catch { /* ignore */ }
+    refresh();
+  };
+  // マスク（labelmap representation）の表示 On/Off。表示中の全ビューポートへ適用。
+  const setMaskVisible = (id: string, visible: boolean) => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const vps = (csSeg.state as any).getViewportIdsWithSegmentation(id) as string[] | undefined;
+      for (const vp of vps ?? []) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        try { (csSeg.config.visibility as any).setSegmentationRepresentationVisibility(vp, { segmentationId: id, type: LABELMAP }, visible); } catch { /* ignore */ }
+      }
+      renderAll();
+    } catch { /* ignore */ }
     refresh();
   };
   // scope の Z を global("all") ↔ local(原本 index) でトグル。
@@ -169,6 +233,17 @@ export function RoiManagerPanel({ activePatientKey, onClose }: { activePatientKe
     setSelected((s) => { const n = new Set(s); n.delete(id); return n; });
     refresh();
   };
+
+  // ── アクティブ編集対象（D2: モードレス）──
+  // 「＋新規マスク」= 直近でセグメンテーションツールを使ったタイルに新規マスクを作成しアクティブ化。
+  const addNewMask = async () => {
+    const vp = getLastSegViewport();
+    if (!vp) { window.alert(t("roiMgr.needSegViewport")); return; }
+    setBusy(true);
+    try { await createNewMask(vp.viewportId, vp.imageIds); } finally { setBusy(false); }
+    refresh();
+  };
+  const addSegment = () => { addSegmentToActiveMask(); refresh(); };
   const toggleSelect = (id: string) =>
     setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   // 演算結果を表示するビューポート: 選択 Mask を表示中のもの（union）。無ければエンジン全 viewport。
@@ -296,13 +371,19 @@ export function RoiManagerPanel({ activePatientKey, onClose }: { activePatientKe
     });
   };
   // SPLIT（連結成分分割）。選択 1 件で実行。
+  // 元マスクを構成成分（segment 1..N）へ再ラベルして**置換**する（元を残すと同一位置で重なり、
+  // 下のマスクが消せない・操作できない混乱を招くため）。元を削除し結果をアクティブ化。
   const runSplit = async () => {
     const ids = [...selected];
     if (ids.length !== 1 || busy) return;
     setBusy(true);
     try {
       const res = await splitMask(ids[0], viewportsForMasks(ids));
-      if (!res) window.alert(t("roiMgr.opFailed"));
+      if (!res) { window.alert(t("roiMgr.opFailed")); return; }
+      try { csSeg.removeSegmentation(ids[0]); } catch { /* ignore */ }
+      deleteRoiMaskMeta(ids[0]);
+      setSelected(new Set());
+      activateMask(res);
     } finally {
       setBusy(false);
       refresh();
@@ -367,11 +448,20 @@ export function RoiManagerPanel({ activePatientKey, onClose }: { activePatientKe
         </div>
       ))}
 
-      <div style={section}>{t("roiMgr.masks")} ({masks.length})</div>
+      <div style={{ ...section, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span>{t("roiMgr.masks")} ({masks.length})</span>
+        <button onClick={addNewMask} disabled={busy} style={editBtn} title={t("roiMgr.newMask")}>＋{t("roiMgr.newMaskShort")}</button>
+      </div>
       {masks.length === 0 && <div style={empty}>{t("roiMgr.empty")}</div>}
-      {masks.map((m) => (
-        <div key={m.id}>
+      {masks.map((m) => {
+        const isActive = getSegEditTarget().segmentationId === m.id;
+        const segs = getMaskSegments(m.id);
+        const activeSeg = getSegEditTarget().segmentIndex;
+        return (
+        <div key={m.id} style={isActive ? activeMaskBox : undefined}>
         <div style={row}>
+          <input type="radio" name="graphy-active-mask" checked={isActive} onChange={() => { activateMask(m.id); refresh(); }} title={t("roiMgr.activeMask")} />
+          <button onClick={() => setMaskVisible(m.id, !m.visible)} style={eyeBtn} title={t("roiMgr.visible")}>{m.visible ? "👁" : "🚫"}</button>
           <input type="checkbox" checked={selected.has(m.id)} onChange={() => toggleSelect(m.id)} title={t("roiMgr.select")} />
           <input
             type="text" style={name} title={m.id}
@@ -380,13 +470,13 @@ export function RoiManagerPanel({ activePatientKey, onClose }: { activePatientKe
           />
           <input type="color" defaultValue="#ff0000" onChange={(e) => setMaskColor(m.id, e.target.value)} title={t("roiMgr.color")} style={colorInput} />
           <input
-            type="range" min={0} max={1} step={0.05} defaultValue={0.5}
+            type="range" min={0} max={1} step={0.05} defaultValue={maskDefaults.fillOpacity}
             onChange={(e) => setMaskStyle(m.id, { fillAlpha: Number(e.target.value) })}
             style={{ width: 56 }} title={t("roiMgr.opacity")}
           />
-          <input type="number" min={0} max={10} defaultValue={0} onChange={(e) => setMaskStyle(m.id, { outlineWidth: Number(e.target.value) })} title={t("roiMgr.lineWidth")} style={numInput} />
+          <input type="number" min={0} max={10} defaultValue={maskDefaults.outlineWidth} onChange={(e) => setMaskStyle(m.id, { outlineWidth: Number(e.target.value) })} title={t("roiMgr.lineWidth")} style={numInput} />
           <input type="checkbox" defaultChecked onChange={(e) => setMaskStyle(m.id, { renderFill: e.target.checked })} title={t("roiMgr.fill")} />
-          {m.scope && <button onClick={() => toggleScopeZ(m.id)} style={scopeChip} title={t("roiMgr.scopeToggle")}>{m.scope}</button>}
+          {m.scope && <button onClick={() => toggleScopeZ(m.id)} style={scopeChip} title={t("roiMgr.scopeToggleMask")}>{m.scope}</button>}
           <button onClick={() => runStats(m.id)} style={editBtn} title={t("roiMgr.stats")}>Σ</button>
           <button onClick={() => runSplitToSlices(m.id)} disabled={busy} style={editBtn} title={t("roiMgr.toSlices")}>⬚</button>
           <button onClick={() => setEditId(m.id)} style={editBtn} title={t("roiMgr.editTitle")}>✎</button>
@@ -405,8 +495,27 @@ export function RoiManagerPanel({ activePatientKey, onClose }: { activePatientKe
             )}
           </div>
         )}
+        {isActive && (
+          <div style={segLine}>
+            <span style={{ color: "#5a6672" }}>{t("roiMgr.segments")}:</span>
+            {segs.map((si) => {
+              const col = segColorHex(m.id, si);
+              return (
+              <button
+                key={si}
+                onClick={() => { activateMask(m.id, si); refresh(); }}
+                style={{ ...(si === activeSeg ? segChipActive : segChip), ...(col ? { boxShadow: `inset 5px 0 0 ${col}` } : {}) }}
+                title={t("roiMgr.activeSegment")}
+              >{si}</button>
+              );
+            })}
+            <input type="color" value={segColorHex(m.id, activeSeg) ?? "#ff0000"} onChange={(e) => { setMaskColor(m.id, e.target.value, activeSeg); refresh(); }} title={t("roiMgr.color")} style={colorInput} />
+            <button onClick={addSegment} style={editBtn} title={t("roiMgr.addSegment")}>＋</button>
+          </div>
+        )}
         </div>
-      ))}
+        );
+      })}
 
       {spheres.length > 0 && <div style={section}>{t("roiMgr.spheres")} ({spheres.length})</div>}
       {spheres.map((s) => (
@@ -452,6 +561,7 @@ const name: React.CSSProperties = {
 };
 const delBtn: React.CSSProperties = { border: "1px solid #e3c2c2", borderRadius: 5, background: "#fff", cursor: "pointer", fontSize: 12, padding: "1px 6px" };
 const editBtn: React.CSSProperties = { border: "1px solid #cdd5de", borderRadius: 5, background: "#fff", cursor: "pointer", fontSize: 12, padding: "1px 6px" };
+const eyeBtn: React.CSSProperties = { border: "none", background: "transparent", cursor: "pointer", fontSize: 13, padding: 0, lineHeight: 1 };
 const colorInput: React.CSSProperties = { width: 22, height: 20, padding: 0, border: "1px solid #cdd5de", borderRadius: 3, background: "#fff", cursor: "pointer" };
 const numInput: React.CSSProperties = { width: 36, border: "1px solid #cdd5de", borderRadius: 4, fontSize: 11 };
 const scopeChip: React.CSSProperties = { fontSize: 10, color: "#5a6672", background: "#eef2f6", border: "1px solid #dde4ea", borderRadius: 4, padding: "1px 4px", whiteSpace: "nowrap", cursor: "pointer" };
@@ -460,3 +570,9 @@ const opBtn: React.CSSProperties = { border: "1px solid #cdd5de", borderRadius: 
 const statLine: React.CSSProperties = { padding: "0 10px 4px 28px", color: "#5a6672", fontSize: 11 };
 const empty: React.CSSProperties = { padding: "2px 10px", color: "#9aa6b2" };
 const note: React.CSSProperties = { marginTop: "auto", padding: 8, color: "#9aa6b2", fontSize: 11, borderTop: "1px solid #eef1f4" };
+// アクティブ編集対象（D2）のハイライトと segment チップ。
+const activeMaskBox: React.CSSProperties = { background: "#eef7ff", borderLeft: "3px solid #2b8aef" };
+const segLine: React.CSSProperties = { display: "flex", alignItems: "center", gap: 4, padding: "0 10px 4px 28px", fontSize: 11 };
+const segChip: React.CSSProperties = { minWidth: 20, border: "1px solid #cdd5de", borderRadius: 4, background: "#fff", cursor: "pointer", fontSize: 11, padding: "1px 6px" };
+// アクティブ枠は border shorthand に統一（borderColor 非shorthand との混在で React 警告が出るため）。
+const segChipActive: React.CSSProperties = { ...segChip, background: "#2b8aef", color: "#fff", border: "1px solid #2b8aef" };

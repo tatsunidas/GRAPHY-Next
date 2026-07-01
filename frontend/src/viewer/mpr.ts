@@ -152,6 +152,32 @@ async function assembleCtSourceVolume(imageIds: string[]): Promise<TiltSourceVol
   };
 }
 
+/**
+ * imageIds を IPP の法線投影で空間順にソートする。
+ * Cornerstone の `sortImageIdsAndGetSpacing` は **wadouri の場合フルソートせず入力順を信頼**する
+ * （先頭/中央の距離で全体の向きを反転するのみ）。`fetchInstances` は InstanceNumber 順で返すため、
+ * 空間順と一致しないシリーズ（例: 末尾スライスが最下部）では Z 方向に折り返る。これを防ぐため
+ * volume 構築前に空間順へ並べ替える。メタデータ（imagePlaneModule）がロード済みであること。
+ */
+function sortImageIdsByIpp(imageIds: string[]): string[] {
+  const plane0: AnyObj = metaData.get("imagePlaneModule", imageIds[0]) ?? {};
+  const iopRaw = plane0.imageOrientationPatient ?? [1, 0, 0, 0, 1, 0];
+  const iop = iopRaw.map(Number);
+  const nRaw = cross([iop[0], iop[1], iop[2]], [iop[3], iop[4], iop[5]]);
+  const nl = norm(nRaw) || 1;
+  const normal: Vec3 = [nRaw[0] / nl, nRaw[1] / nl, nRaw[2] / nl];
+  const withDist = imageIds.map((id) => {
+    const p: AnyObj = metaData.get("imagePlaneModule", id) ?? {};
+    const ipp = p.imagePositionPatient;
+    const d = Array.isArray(ipp) && ipp.length >= 3
+      ? dot([Number(ipp[0]), Number(ipp[1]), Number(ipp[2])], normal)
+      : Number.POSITIVE_INFINITY; // IPP 欠落は末尾へ
+    return { id, d };
+  });
+  withDist.sort((a, b) => a.d - b.d);
+  return withDist.map((x) => x.id);
+}
+
 /** 補正済みローカルボリューム用の metadata（`makeVolumeMetadata` と同形）。データは HU(Int16 signed)。 */
 function buildCorrectedMetadata(imageId0: string, spacing: Vec3, cols: number, rows: number): AnyObj {
   const gsm: AnyObj = metaData.get("generalSeriesModule", imageId0) ?? {};
@@ -203,7 +229,20 @@ export async function buildMprVolume(
       return { volumeId, corrected: true, tiltAngleDeg };
     }
   }
-  await volumeLoader.createAndCacheVolume(volumeId, { imageIds });
+  // CrosshairsTool（getClosestImageId）は各 imageId の imagePlaneModule(IPP) を要求する。
+  // streaming 経路では画像未ロード時にメタデータが未登録のことがあるため、先読みして登録する
+  // （CT 経路は assembleCtSourceVolume が既に先読み済み。キャッシュ済みなら実質 no-op）。
+  await Promise.all(imageIds.map((id) => imageLoader.loadAndCacheImage(id).catch(() => null)));
+  // wadouri は入力順を信頼するため、空間順（IPP 法線投影）に並べ替えてから volume 化する（Z 折り返り防止）。
+  const sortedImageIds = sortImageIdsByIpp(imageIds);
+  const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds: sortedImageIds });
+  // ピクセルデータのストリーミングを開始して待つ（未ロードだと VolumeViewport が黒のまま）。
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (volume as any)?.load?.();
+  } catch {
+    /* ignore */
+  }
   return { volumeId, corrected: false };
 }
 

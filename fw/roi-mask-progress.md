@@ -16,8 +16,27 @@ D3=**1 マスクに複数 segment**。
 **P1 進行中**:
 - ✅ **画素プリロード撤廃（メタデータプロバイダ）** — labelmap 生成に source 画素は不要（`createAndCacheDerivedImage` は `imagePlaneModule` のみ読む）。
   - backend: `SeriesLayout` record に `frameOfReferenceUID` 追加＋3 経路（通常/mosaic/seg）の constructor と `noSpatial` を更新（`SeriesLayout.java`, `DicomStorageService.java`）。compile＋`SeriesLayoutBuilderTest` green。
-  - front: `viewer/segMetadata.ts` 新規（`registerSegMetadataProvider`＝低優先メタプロバイダ／`registerSegGeometryFromLayout`＝backend 幾何から全 imageId の `imagePlaneModule`・`generalSeriesModule` を供給、画素ロードゼロ）。`SeriesViewer` のレイアウト取得時に登録。`segmentation.ts` の `ensureStackSegmentation` は**全スライスプリロードを撤廃**し、幾何未登録の imageId のみ遅延ロード。`cornerstoneSetup` でプロバイダ登録。ビルド green。**実機未確認**（幾何あり CT/MR で初回ブラシが即時 & 全スライス塗れるか要確認。非空間シリーズは従来どおり遅延ロード）。
-- ⬜ 次: `roiMaskStore` にアクティブ対象（`activeSegmentationId/Index`）/多セグメント、パネル再設計（◉編集対象・◉活性 segment・＋新規マスク・＋セグメント）、Brush/Eraser 結線、`isValidVolume` 可否判定。
+  - front: `viewer/segMetadata.ts` 新規（`registerSegMetadataProvider`＝低優先メタプロバイダ／`registerSegGeometryFromLayout`＝backend 幾何から全 imageId の `imagePlaneModule`・`generalSeriesModule` を供給、画素ロードゼロ）。
+  - 🐛 **実機修正（群A検証で発覚）**: 未ロードのスライスへスクロールすると seg の `imageChangeEventListener`→`buildMetadata` が `imagePixelModule.pixelRepresentation` を読めず `Cannot destructure ... undefined` でクラッシュ（従来はプリロードで全スライス登録済みだった）。→ プロバイダに **`imagePixelModule` 供給**を追加（シリーズ均一なのでロード済み1枚から捕捉し全スライスへ、優先度-1・再入ガード `capturing`）。`imageIdsBySeriesUid`／`pixelModuleBySeriesUid`／`capturePixelModule`。**実機で塗れること確認済**。
+  - ⚠️ **「数枚塗ると急にBrush無反応（ログ無し）」**を1度観測 → **フル再読込で解消**（機能修正はせず診断のみ追加）。原因は HMR 由来の古いモジュール状態（連続編集での二重登録等）がフル再読込でクリアされた可能性が高い。恒久修正は未。**再発時**は Console で `__graphySegDebug()`（`viewer/segDebug.ts`、`cornerstoneSetup` で `installSegDebug`）を実行し `activeSegHasRepresentationHere`/`activeSegmentColor`/`store_ vs cs_ activeSegmentation` を確認。根因は `getSegmentIndexColor` が null（=その viewport にアクティブ seg の representation が無い）→ `getOperationData` が無言 return。**検証完了後に segDebug は削除**。`SeriesViewer` のレイアウト取得時に登録。`segmentation.ts` の `ensureStackSegmentation` は**全スライスプリロードを撤廃**し、幾何未登録の imageId のみ遅延ロード。`cornerstoneSetup` でプロバイダ登録。ビルド green。**実機未確認**（幾何あり CT/MR で初回ブラシが即時 & 全スライス塗れるか要確認。非空間シリーズは従来どおり遅延ロード）。
+- ✅ **3D Wand（P3 前倒し, ユーザー要望=3D-ROI 検証用）** — `RegionSegmentPlusTool`（ワンクリック growCut 領域成長。GRAPHY 3D Wand 相当）を結線。
+  - `toolIds.ts` に `region3d`、`Viewer2D.tsx` の `PRIMARY_TOOLS`＋`wireTools`（passive 追加）＋`setActiveTool`（brush 同様 `ensureStackSegmentation` 後 Primary 割当）。Tools メニューに「3D Wand（領域成長）」、i18n(ja/en)。
+  - 挙動: クリック1点をシードに growCut で 3D 拡張（島除去自動）。内部で source を on-demand volume 化（`getLabelmapSegmentationData`→`getOrCreateImageVolume`、`isValidVolume` 前提、斜位は非対応）。= P0「stack labelmap＋on-demand volume」の実地検証パス。**実機未確認**。
+- ✅ **P1 本体: アクティブ対象＋多セグメント＋パネル再設計（モードレス化 D2/D3）** — **フロント build green**（Slicer の並行編集も解消済み）。
+  - `roiMaskStore.ts`: `SegEditTarget`（`segmentationId`/`segmentIndex`）＋ getter/setter（`getSegEditTarget`/`setActiveSegmentationId`/`setActiveSegmentIndexStore`）。多セグメント（`RoiMaskMeta.segments:number[]`＋`getMaskSegments`/`addMaskSegment`）。
+  - `segmentation.ts`: 再構築。viewport+stack ごとに複数マスク（`byViewport`＝stackKey＋segIds[]）。`ensureStackSegmentation`＝**アクティブ対象を保証**（既存アクティブがこのスタックにあれば再活性、無ければ先頭 or 新規作成）。`createNewMask`（明示新規＋アクティブ化）、`addSegmentToActiveMask`（次 index 追加）、`activateMask`（CS active＋ストア同期）、`getLastSegViewport`（パネルの新規マスク用）。Brush/Eraser/3D Wand は全て**アクティブ (mask, segment) へ塗る**。
+  - `RoiManagerPanel.tsx`: Masks 見出しに **＋新規マスク**、各マスク行に **◉編集対象ラジオ＋青ハイライト**、アクティブマスクに **segment チップ列（クリックで活性 index 切替）＋＋セグメント**。i18n(ja/en)。
+  - **実機未確認**（◉で対象切替→Brush が切替先に塗るか、＋新規マスク／＋セグメント、多セグメント塗り分け）。
+- ✅ **P1 残 完了**（build green・実機未確認）:
+  - **`isValidVolume` によるツール可否**: `Viewer2D.setActiveTool` で 3D Wand 選択時に `core.utilities.isValidVolume(imageIds)` を判定し、不可なら activation を弾いて理由トースト。トースト機構は `viewer/toast.ts`（emit/subscribe）新規＋`Viewer2DScreen` が購読表示。i18n `viewer2d.tool.needVolume`。
+  - **segment 単位の色**: `RoiManagerPanel.setMaskColor` が **アクティブ segment** を対象に色設定（非アクティブは #1）。segment チップに現在色（左ボーダー）を表示、アクティブマスク行に **アクティブ segment 用カラーピッカー**追加（`segColorHex`＝`getSegmentIndexColor`）。
+  - **フォーカス中タイル追跡**: `segmentation.noteSegViewport` を base ビューポートの `pointerdown` で呼び、`＋新規マスク` の対象を「直近クリックしたタイル」に。
+
+**P2: Wand 2D/3D**
+- **Cornerstone3D の region grow 調査（確定）**: growCut ベースの `RegionSegmentTool`（矩形→成長）/`RegionSegmentPlusTool`（1クリック→成長）が **region grow 本体**だが **3D 専用**（近傍探索に z を含む）。`PaintFillTool` は **labelmap の bucket fill**（輝度非依存）で 2D 輝度 Wand には不適。→ **2D 単一スライスの輝度 Wand は Cornerstone 既製に無い**。
+- ✅ **3D Wand** = `RegionSegmentPlusTool`（P1 で結線済み）。
+- ✅ **2D Wand（自作）** = `viewer/wand2d.ts` `Wand2DTool`（`BaseTool` 継承）。`preMouseDownCallback` でクリック地点をシードに、現在スライスの **source 画素輝度**が「シード値±トレランス」に収まる連結画素を `utilities.segmentation.floodFill`（PaintFill と同探索器、`equals(node,seed)`）で 2D 走査 → アクティブ (mask, segment) の labelmap（`getLabelmapImageIds`→voxelManager.setAtIndex, index=y*cols+x）へ書込 → `triggerSegmentationDataModified`。GRAPHY 2D Wand(ImageJ Wand) 相当。
+  - 結線: `cornerstoneSetup`(addTool)、`toolIds.wand2d`、`Viewer2D`（PRIMARY_TOOLS＋wireTools＋setActiveTool は brush 同様 `ensureStackSegmentation` 後 Primary、`setWandTolerance` コマンド）、`viewerCommands`/`Viewer2DScreen`/`Viewer2DToolbar`（🪄 トレランス入力、wand2d 選択時のみ表示、既定 50）、Tools メニュー「2D Wand（輝度領域成長）」、i18n。**ビルド green、実機未確認**。
 
 Cornerstone3D のセグメンテーション系ツール（stack/volume labelmap 編集）を拡充する。現状は `BrushTool`（球ブラシ）
 ＋消しゴムのみ。**利用可能な内蔵ツール**（`@cornerstonejs/tools`、調査済）:

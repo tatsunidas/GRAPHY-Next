@@ -15,6 +15,7 @@ import {
   BrushTool,
   RegionSegmentPlusTool,
 } from "@cornerstonejs/tools";
+import { Wand2DTool } from "./wand2d";
 
 /** 消しゴムの合成ツール ID（BrushTool の ERASE ストラテジに対応する内部値）。 */
 export const ERASER_TOOL_ID = "__graphy_eraser__";
@@ -32,4 +33,6 @@ export const TOOL_IDS = {
   eraser: ERASER_TOOL_ID,
   /** 3D Wand（ワンクリック growCut 領域成長。GRAPHY の 3D Wand 相当）。 */
   region3d: RegionSegmentPlusTool.toolName,
+  /** 2D Wand（単一スライスの輝度 flood fill。GRAPHY の 2D Wand 相当）。 */
+  wand2d: Wand2DTool.toolName,
 } as const;

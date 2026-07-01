@@ -312,5 +312,8 @@ export async function splitMask(maskId: string, viewportIds: string[]): Promise<
     if (touched) modified.push(z);
   }
   csSeg.triggerSegmentationEvents.triggerSegmentationDataModified(res.segId, modified, undefined);
+  // 成分ごとの segment index(1..N, MAX_SEGMENTS 上限) をパネルへ（segment チップ表示・選択用）。
+  const segCount = Math.min(next, MAX_SEGMENTS);
+  setRoiMaskMeta(res.segId, { segments: Array.from({ length: segCount }, (_, i) => i + 1) });
   return res.segId;
 }

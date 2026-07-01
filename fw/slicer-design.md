@@ -283,25 +283,45 @@ Response: { seriesInstanceUid, sopInstanceUids: string[] }
   数値検証 `scratchpad/verify_reslice.mjs`（esbuild で TS→ESM 変換）: **21/21 パス**
   （軸平行 AX リスライスが元スライスと厳密一致・トリリニア中間補間・Slab MAX/MIN/MEAN・IPP/IOP・
   マルチスライス幾何・buildReslicePlane 正規直交/法線一致・45° オブリークで in-range）。
-- **P2 UI/プレビュー** — ✔ 完了（要実機確認）。
-  - `frontend/src/viewer/slicer.ts`: `setupSlicerViewports`（base=AXIAL＋recon=ORTHOGRAPHIC）／
-    `setReslicePreview`（カットライン 2 端点を `canvasToWorld` で world 化→法線=lineDir×axialNormal、
-    recon カメラへ `setCamera`＋Slab を `setSlabThickness`/`setBlendMode` でプレビュー）／
-    `blendModeFor`（MAX→MAXIMUM, MIN→MINIMUM, MEAN/MEDIAN/MODE→AVERAGE）／`extractResliceVolume`
-    （VolumeViewport→`ResliceVolume`, direction は [rowCos,colCos,normal] で reslice.ts と一致）／
+- **P2 UI/プレビュー** — ✔ 完了（要実機確認）。**当初の base+recon 2 面案から、MPR 3 面＋
+  スラブバンド投影案へ作り替え**（ユーザー指定 2026-07-01: MPR 表示／各スライスを立方体で表示／
+  Thickness・Gap 連動／全断面にリファレンス表示／再構成進捗バー）。
+  - **断面操作 = Crosshairs で任意 3D オブリーク**（基準面 AX/SAG/COR を UI 選択、既定 AXIAL）。
+  - **各スライスの立方体 = 各 MPR 面へ断面バンド（交差ポリゴン）描画**（Thickness=帯幅・Gap=帯間隔・枚数=帯本数）。
+  - **進捗 = メインスレッドでスライス毎分割**（`createReslicer.sliceAt(s)` を 1 枚ずつ＋`requestAnimationFrame` yield）。
+  - `frontend/src/viewer/reslice.ts`: `createReslicer`（スライス単位実行＝進捗対応）を追加。`reslice`（一括）は
+    これをループするだけ（挙動不変・21 テスト維持）。
+  - `frontend/src/viewer/slicer.ts`: `setupSlicerMpr`（AX/SAG/COR ORTHOGRAPHIC×3＋CrosshairsTool＋W/L/Pan/Zoom/
+    スライス送り＋VOI 同期, Slicer 専用 ID）／`readSlicerGeometry`（基準面カメラ→center/normal/rowDir/colDir）／
+    `computeSlabBands`（各スライス箱の 8 頂点・12 辺を対象 MPR 面で切断→交差ポリゴンを `worldToCanvas`→
+    canvas 座標へ）／`extractResliceVolume`（direction=[rowCos,colCos,normal] で reslice.ts と一致）／
     `volumeMinSpacing`／`teardownSlicer`。volume 構築は `buildMprVolume`（MPR と共通）。
-  - `frontend/src/slicer/SlicerScreen.tsx`: 左=ベース断面＋カットライン SVG オーバーレイ（端点ドラッグ=回転、
-    本体ドラッグ=移動）、右=斜め断面プレビュー、下=コントロールパネル（FOV 幅/高・スライス厚・Gap・枚数・
-    再構成モード）。「再構成」ボタンは `extractResliceVolume`＋`buildReslicePlane`＋`reslice` で
-    **クライアント側スタック生成**まで実施（枚数/行×列を表示）。「保存」は P3 まで disabled。
-    MEDIAN/MODE 選択時は「プレビューは AVERAGE 近似」チップを表示。
-  - 配線: `App.tsx`（#slicer ルート）、`MainScreen.tsx`（`handleOpenViewer("slicer")`→`graphy-slicer-ctx`＋
-    openViewer/window.open）、`i18n(ja/en)`（`slicer.*`）。Toolbar/MenuBar の Slicer ボタンは既存。
-  - ビルド: `cd frontend && npx tsc -b && npx vite build` **green**。
-  - P2 既知の制約: standalone のみ（web は wadors 未対応, MPR と同じ）／単一シリーズ／カットラインは
-    「ベース断面に垂直な斜め断面」（ライン方向とベース法線が張る平面）のみ＝完全自由 3D 回転は P4。
-- **P3 保存**: backend `DerivedSeriesController`/`DerivedSeriesService`＋`POST /api/series/derived`。
-  属性引き継ぎ・UID 採番・ingest。フロント「保存」ボタン実体化＋一覧再取得。実 CT で往復検証（保存→再読込→MPR で幾何一致）。
+  - `frontend/src/slicer/SlicerScreen.tsx`: 1×3 MPR＋各セルに SVG バンドオーバーレイ（`pointerEvents:none`＝
+    Crosshairs は下のビューポートで操作）、基準面セレクタ、コントロールパネル（FOV 幅/高・スライス厚・Gap・
+    枚数・再構成モード）。`CAMERA_MODIFIED`（Crosshairs 回転・スライス送り）と Slab/基準面変更でバンド即時再計算。
+    「再構成」ボタンは `extractResliceVolume`＋`buildReslicePlane`＋`createReslicer` で**スライス毎に生成＋進捗バー**
+    （枚数/行×列を表示）。「保存」は P3 まで disabled。
+  - 配線: `App.tsx`（#slicer ルート）、`MainScreen.tsx`（`handleOpenViewer("slicer")`）、`i18n(ja/en)`（`slicer.*`）。
+    Toolbar/MenuBar の Slicer ボタンは既存。
+  - ビルド: `cd frontend && npx tsc -b && npx vite build` **green**。reslice 数値検証 21/21。
+  - P2 既知の制約: standalone のみ（MPR と同じ）／単一シリーズ／基準面カメラの現在向きに沿ってスタックを積む
+    （Crosshairs で任意回転可）。生成スタックの保存は P3。
+- **P3 保存** — ✔ 実装（要実機検証）。
+  - backend（新規パッケージ `com.vis.graphynext.dicom.derived`）:
+    - `DerivedSeriesRequest`（record, frames は Base64 Int16LE）／`DerivedSeriesService.create()`／
+      `DerivedSeriesController`（`POST /api/series/derived`, 検証失敗=400）。
+    - テンプレート=元シリーズ代表インスタンスのヘッダ（`storage.resolveFiles`→`DicomInputStream` no-bulk）。
+      **患者/検査/FrameOfReferenceUID/Modality/SOPClassUID/VOI を引き継ぎ**、SeriesInstanceUID/SOPInstanceUID
+      を `UIDUtils.createUID()` で新規、`ImageType=DERIVED\SECONDARY\RESLICE`、IOP/IPP/PixelSpacing/
+      SliceThickness/SpacingBetweenSlices を更新、`SourceImageSequence` で元へリンク。
+    - 画素=16bit signed MONOCHROME2、`RescaleSlope=1/Intercept=0`（フロント volume 値＝CT は HU をそのまま保存）。
+      保存は `DicomStorageService.ingest`（Part-10 一時ファイル→正規パス移動＋H2 索引, トランザクション）。
+  - frontend（`SlicerScreen`）: 「保存」ボタン実体化。再構成の canonical 結果を保持し、保存時に
+    **reverse を InstanceNumber と IPP の並び順で適用**（IOP 不変）、frames を Base64(Int16LE) 化して
+    `POST /api/series/derived`。成功トースト表示。i18n(ja/en) 追加。`backend mvn -o compile` green /
+    `tsc -b`＋`vite build` green。
+  - 要検証: 実 CT/MR で保存→メインスクリーン更新→2D/MPR で再読込し幾何一致（FrameOfReferenceUID 維持で
+    参照線整合）。**backend の再起動が必要**（新エンドポイント反映）。
 - **P4 拡張**: Curved MPR / CPR（`CurvedReformatter`）・Straightened（`StraightenedVolumeBuilder`）・Centerline 編集、
   完全自由 3D 回転（Crosshairs 連動）、複数シリーズ、web(wadors/STOW) 保存経路。
 
@@ -315,6 +335,37 @@ Response: { seriesInstanceUid, sopInstanceUids: string[] }
 - **SOPClassUID/Modality 維持**の妥当性: 一部 PACS が DERIVED CT を厳格検証する可能性 → `ImageType` と `SourceImageSequence` を正しく付与。
 - **web モード保存**: 初期は standalone のみ。web(STOW-RS) は P4。
 
+## 10.5 Reverse Order（スライス順逆転）の設計判断 — 記録（2026-07-01・ユーザー指示）
+
+**決定: Reverse は「IOP・視点（recon 幾何）を統一で固定し、再構成後に表示スライスの並び順だけを反転」する。**
+
+- 実装（`SlicerScreen.onGenerate`）: 再構成は**常に正順（canonical, s=0..N-1）**で実行。recon の
+  **IOP（rowDir/colDir）・積層方向 dir3・原点・カメラ視点は reverse に関係なく canonical で固定**
+  （dir3 は**正順 IPP の LPS 実空間座標差分** `normalize(ipp[1]−ipp[0])` から導出。スライス番号では決めない）。
+  Reverse は**表示フレーム列のみ反転** `displayFrames = reverse ? frames.slice().reverse() : frames`。
+- バンドのスライス番号は表示スクロール順に一致させる: `num = reverse ? i+1 : n-i`
+  （Cornerstone は volume index をスクロール上で逆向きに見せるため反転式）。
+
+**なぜこの仕様にしたか（重要・忘れないこと）:**
+
+1. **IOP は統一**（ユーザー指示 2026-07-01「ReverseOrderは、IOPは統一で、再構成後にスライスオーダーを
+   並び替えるだけ」）。派生シリーズの各スライスは同一 IOP を共有し、順序だけが変わるのが正しい直感。
+2. **幾何/視点を反転すると“見た目が変わる”不具合が出る**: 初期実装では reverse 時に積層法線を反転
+   （`buildReslicePlane` に −normal を渡す or IPP を反転して dir3=−normal）していた。すると
+   - `buildReslicePlane` は右手系維持のため **rowDir を反転 → 面内が 180°回転**、
+   - あるいは recon volume の direction 第3軸が反転 → **左手系 → ACQUISITION カメラが反対側から見る
+     → 左右ミラー**、
+   が発生し、「Reverse Off=上下フリップ / On=180°回転」「番号と画像順が逆」等の症状になった。
+   Reverse は**順序だけ**変えたいので、幾何・視点は動かさず表示列のみ反転する方式に確定した。
+3. **順序は LPS 実空間座標で決める**（ユーザー指示「スライス番号ではなく、LPSの実空間座標で比較調整」）。
+   dir3 を IPP 差分から導出することで、非等間隔・オブリークでも実空間に忠実な積層になる。
+4. 併せて `readSlicerGeometry` は **colDir=画面下（−viewUp, DICOM の row 増加方向）** に統一した
+   （これを怠ると出力フレームが上下反転する）。
+
+**P3（DICOM 保存）での適用方針:** 保存時も IOP は全スライス共通で固定し、Reverse は
+**InstanceNumber と IPP の並び順の反転**として表現する（各スライスは自身の IPP を保持）。幾何の反転や
+IOP 変更は行わない。
+
 ## 11. 決定事項（確定）
 
 - リスライス計算は**フロント TS**（`reslice.ts`、GRAPHY `VolumeSampler`/`SlicePlane` 移植）。プレビューは cornerstone
@@ -324,3 +375,71 @@ Response: { seriesInstanceUid, sopInstanceUids: string[] }
 - 初期スコープは**平面オブリークのみ**（Curved/CPR は P4）。
 - 保存は backend **`POST /api/series/derived`** ＋ `DerivedSeriesService`。UID 採番=`UIDUtils`、保存=`DicomStorageService.ingest`、
   属性引き継ぎ=`NonDicomConverter.common`/`blankDicom` パターン流用。**StudyInstanceUID / FrameOfReferenceUID / 患者・検査属性は維持**。
+
+## 12. 現況・作業記録（2026-07-01 完了時点）
+
+**状態: P0〜P3 ＋ 追加対応（マルチ C/T 単一スタック抽出・SAG/COR 妥当性確認）まで実装＋実機確認済み
+（断面調整→再構成→保存往復→MainScreen 自動更新まで動作確認）。P4 は未着手。全変更は未コミット。**
+
+**未コミット変更（2026-07-01 時点）:**
+- frontend（変更）: `viewer/reslice.ts`・`viewer/slicer.ts`・`slicer/SlicerScreen.tsx`・`viewer/mpr.ts`・
+  `App.tsx`・`mainscreen/MainScreen.tsx`・`settings/registry.ts`・`i18n/{ja,en}.ts`
+- backend（新規）: `dicom/derived/`（`DerivedSeriesRequest`/`DerivedSeriesService`/`DerivedSeriesController`）
+- doc: `fw/slicer-design.md`（本書）／メモリ `slicer-feature-status.md`・`slicer-reverse-order-decision.md`
+- ※ `frontend/src/viewer2d/*`・`wand2d.ts` 等の変更は**別ワーカーの 2D/3D Wand 作業**で Slicer とは無関係。
+
+### 完了フェーズ
+- **P0 設計**（本書）／**P1 リスライスコア**（`reslice.ts`, 数値検証 21/21）／**P2 UI・操作**（MPR 3面＋スラブ箱＋
+  ハンドル操作＋2×2＋再構成スタック表示＋進捗バー）／**P2追補**（XYZ回転角・中心IJK 表示＆手入力、
+  スライス番号、Reverse、Settings 補間指定、CT チルト自動補正）／**P3 DICOM 保存**（派生シリーズ生成＋
+  MainScreen 自動再検索）。
+
+### 実装ファイル一覧
+| ファイル | 役割 |
+|---|---|
+| `frontend/src/viewer/reslice.ts` | コア: `makeWorldSampler`(trilinear/nearest)・`buildReslicePlane`・`planeFromGeometry`・`createReslicer`(スライス単位=進捗)・`reslice` |
+| `frontend/src/viewer/slicer.ts` | cornerstone グルー: `setupSlicerMpr`・`readSlicerGeometry`(colDir=画面下)・`computeSlabBands`/`computeSlabHandles`・`translateGeomInPlane`/`rotateGeomInPlane`・`anglesToGeometry`/`geometryToAngles`・`worldToIndex`/`indexToWorld`・`extractResliceVolume`(voxelManager フォールバック)・`displayReconStack`(ACQUISITION 表示)・`teardownSlicer` |
+| `frontend/src/slicer/SlicerScreen.tsx` | 2×2 UI・ハンドル操作・回転/中心の表示&手入力・Reverse・進捗バー・保存(→`POST /api/series/derived`＋`emitDbChanged`) |
+| `frontend/src/viewer/mpr.ts` | 共有 `buildMprVolume`（streaming 経路に**メタ先読み＋IPP 空間ソート＋`volume.load()`** を追加＝Z折返し/未表示を解消） |
+| `frontend/src/App.tsx` | `#slicer` ルート＋`subscribeDbChanged`→`dbVersion` で全ウィンドウ一覧を現在条件で再検索 |
+| `frontend/src/mainscreen/MainScreen.tsx` | `handleOpenViewer("slicer")` 起動導線 |
+| `frontend/src/settings/registry.ts` | `slicer.interpolation`（linear/nearest） |
+| `frontend/src/i18n/{ja,en}.ts` | `slicer.*` キー |
+| `backend/.../dicom/derived/DerivedSeriesRequest.java` | 保存リクエスト DTO（frames=Base64 Int16LE） |
+| `backend/.../dicom/derived/DerivedSeriesService.java` | 属性引き継ぎ(`copyTag` 個別コピー)＋幾何/画素更新＋`ingest` |
+| `backend/.../dicom/derived/DerivedSeriesController.java` | `POST /api/series/derived`（検証失敗=400） |
+
+### 実機で解決した不具合（記録）
+- **stale HMR チャンク**（`cache is not defined`）→ dev サーバ再起動/ハードリロードで解消（並行作業由来）。
+- **streaming で Crosshairs が `Missing imagePositionPatient`／MPR 未表示** → `buildMprVolume` 先読み＋`volume.load()`。
+- **Z 方向の折り返し** → cornerstone は **wadouri を空間ソートしない**ため、`createAndCacheVolume` 前に **IPP 法線投影で空間ソート**。
+- **再構成が走らない（Failed to build）** → streaming の `getImageData().scalarData` は throw する getter。`voxelManager.getCompleteScalarDataArray()` を優先。
+- **再構成のストライプ状の途切れ** → recon 表示を `OrientationAxis.ACQUISITION` に（斜め束を world-Axial で切っていた）。
+- **上下反転／Reverse の見た目変化** → `readSlicerGeometry` colDir=画面下、`planeFromGeometry` 直接構成、Reverse は表示列のみ反転（§10.5）。
+- **保存 `study=null`** → `Attributes.addSelected(int...)` が期待通り copy せず。`copyTag` で個別コピー。
+- **保存後に MainScreen ツリーが更新されない** → `emitDbChanged`（Slicer）＋`subscribeDbChanged→dbVersion`（App）で現在条件のまま自動再検索。
+
+### 検証
+- `frontend`: `npx tsc -b` ＋ `npx vite build` green（Slicer 関連ファイルはエラー無し。並行作業の `wand2d.ts`/`Viewer2D.tsx` の型エラーは別担当・dev 実行は非ブロック）。
+- `backend`: `mvn -o compile` green。
+- reslice 数値検証: `scratchpad/verify_reslice.mjs` 21/21。
+- 実機（standalone）: MR「Gad Ax T2 Straight」で断面調整→再構成→保存→MainScreen 自動更新→新シリーズ出現を確認。CT チルトサンプルでチルト補正チップ表示。
+
+### 追加対応（2026-07-01・完了後）
+- **マルチ C/T シリーズのソース対応**: ソースが C(チャンネル)/T(時相) 次元を持つ場合、`fetchSeriesLayout`
+  （ZCT レイアウト, `cells[{c,z,t,sop,frame}]`）から **単一 (c,t) の Z スタックを抽出**してから volume 化・
+  リスライスする。初期 (c,t) は slicer ctx（`ctx.c`/`ctx.t`）→無ければ 0。マルチ次元時はコントロールバーに
+  **C/T セレクタ**を表示し `applyCT` で単一スタック差し替え（幾何は保持）。レイアウト取得失敗/セル不足は
+  `fetchInstances` 全件へフォールバック。実装: `SlicerScreen`（`imageIdsForCT`/`applyCT`）。
+  ※現状 MainScreen 起動では ctx に C/T が無いため初期 0。2D ビューアから表示中 C/T を渡す配線は将来対応。
+- **SAG/COR ソースの妥当性**: 設計上リスライス可能（volume は患者 LPS world 構築、`makeWorldSampler` は
+  任意正規直交 direction を内積で逆写像、geom は world axial 由来で取得方向非依存）。ただし **CT ガントリ
+  チルト補正は軸位収集前提**（SAG/COR CT は streaming 経路）。SAG/COR 実データは未検証（目視推奨）。
+
+### P4（未着手・残タスク）
+- Curved MPR / CPR（`CurvedReformatter`）・Straightened（`StraightenedVolumeBuilder`）・Centerline 編集。
+- 2D ビューアからの Slicer 起動で表示中 C/T を ctx 経由で渡す（現状は Slicer 内セレクタで選択）。
+- web(wadors/STOW-RS) の読込・保存経路（現状 standalone のみ）。
+- 複数シリーズ選択 UI。
+- recon プレビューのスクロール方向とバンド番号の厳密一致（現状は表示順に合わせた番号式で対応）。
+- 実 CT での保存往復（HU 一致）の追加検証。

@@ -198,6 +198,15 @@ function renderControl(field: FieldDef, t: TFn, raw: string, onChange: (f: Field
           ))}
         </select>
       );
+    case "color":
+      return (
+        <input
+          type="color"
+          value={/^#[0-9a-fA-F]{6}$/.test(raw) ? raw : String(field.default)}
+          onChange={(e) => onChange(field, e.target.value)}
+          style={{ width: 44, height: 26, padding: 0, border: "1px solid #cdd5de", borderRadius: 4, background: "#fff", cursor: "pointer" }}
+        />
+      );
     case "text":
     default:
       return <input type="text" value={raw} onChange={(e) => onChange(field, e.target.value)} style={input} />;

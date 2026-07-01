@@ -16,10 +16,12 @@
  *
  * 優先度は **低め（-1）** に登録し、実ファイルのロード後は wadouri の実メタデータ（高優先）が勝つ（整合性維持）。
  */
-import { metaData } from "@cornerstonejs/core";
+import { metaData, cache } from "@cornerstonejs/core";
 import type { SeriesLayoutDto } from "../api";
 import type { SeriesLayout } from "./seriesLayout";
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyObj = Record<string, any>;
 type Vec3 = [number, number, number];
 
 interface PlaneMeta {
@@ -42,6 +44,38 @@ interface SeriesMeta {
 
 const planeByImageId = new Map<string, PlaneMeta>();
 const seriesByImageId = new Map<string, SeriesMeta>();
+/** seriesUid → そのシリーズの全 imageId（imagePixelModule を捕捉するためのロード済み画像探索用）。 */
+const imageIdsBySeriesUid = new Map<string, string[]>();
+/** seriesUid → 捕捉済み imagePixelModule（シリーズ内で均一）。ロード済み1枚から得て全スライスへ供給。 */
+const pixelModuleBySeriesUid = new Map<string, AnyObj>();
+
+/**
+ * imagePixelModule 未捕捉のシリーズについて、ロード済み画像から捕捉する。
+ * これが無いと、プリロード撤廃で未ロードのスライスへスクロールした際に
+ * セグメンテーションの `imageChangeEventListener`→`buildMetadata` が pixelRepresentation を読めず落ちる。
+ */
+let capturing = false; // metaData.get 経由の自プロバイダ再入を防ぐガード。
+function capturePixelModule(seriesUid: string): AnyObj | undefined {
+  const cached = pixelModuleBySeriesUid.get(seriesUid);
+  if (cached) return cached;
+  if (capturing) return undefined;
+  const ids = imageIdsBySeriesUid.get(seriesUid);
+  if (!ids) return undefined;
+  capturing = true;
+  try {
+    for (const id of ids) {
+      if (!cache.getImage(id)) continue; // ロード済みのみ（未ロードは実 metadata 無し。wadouri が高優先で先に返す）
+      const pm = metaData.get("imagePixelModule", id) as AnyObj | undefined;
+      if (pm && pm.pixelRepresentation !== undefined && pm.bitsAllocated !== undefined) {
+        pixelModuleBySeriesUid.set(seriesUid, pm);
+        return pm;
+      }
+    }
+  } finally {
+    capturing = false;
+  }
+  return undefined;
+}
 
 let providerRegistered = false;
 
@@ -52,6 +86,10 @@ export function registerSegMetadataProvider(): void {
   metaData.addProvider((type: string, imageId: string) => {
     if (type === "imagePlaneModule") return planeByImageId.get(imageId);
     if (type === "generalSeriesModule") return seriesByImageId.get(imageId);
+    if (type === "imagePixelModule") {
+      const series = seriesByImageId.get(imageId);
+      return series ? capturePixelModule(series.seriesInstanceUID) : undefined;
+    }
     return undefined;
   }, -1);
 }
@@ -82,6 +120,7 @@ export function registerSegGeometryFromLayout(
   const nZ = layout.nZ;
   const nC = Math.max(1, layout.nC);
   const nT = Math.max(1, layout.nT);
+  const seriesIds: string[] = [];
   let registered = 0;
   for (let c = 0; c < nC; c++) {
     for (let t = 0; t < nT; t++) {
@@ -89,6 +128,7 @@ export function registerSegGeometryFromLayout(
       for (let z = 0; z < nZ && z < stack.length; z++) {
         const imageId = stack[z];
         if (!imageId) continue;
+        seriesIds.push(imageId);
         const ipp = (layout.ippAt?.(z) as Vec3 | null) ?? [0, 0, z];
         planeByImageId.set(imageId, {
           rows,
@@ -107,6 +147,7 @@ export function registerSegGeometryFromLayout(
       }
     }
   }
+  if (seriesIds.length) imageIdsBySeriesUid.set(seriesUid, seriesIds);
   return registered > 0;
 }
 

@@ -24,6 +24,8 @@ export interface ViewerActions {
   setTool(toolName: string): void;
   /** ROI ブラシ径(px)。 */
   setBrushSize(size: number): void;
+  /** 2D Wand のトレランス（シード輝度からの許容差）。 */
+  setWandTolerance(tol: number): void;
   /** 計測 ROI を全消去（対象タイル）。 */
   clearRois(): void;
   /** ROI マネージャ（右パネル）の表示切替。 */
@@ -94,6 +96,18 @@ export function Viewer2DToolbar({
             defaultValue={25}
             onChange={(e) => actions.setBrushSize(Number(e.target.value))}
             style={{ width: 52, ...select }}
+          />
+        </label>
+      )}
+      {activeTool === TOOL_IDS.wand2d && (
+        <label style={{ fontSize: 11, color: "#33404d", display: "inline-flex", alignItems: "center", gap: 3 }} title={t("viewer2d.tool.wandTolerance")}>
+          🪄
+          <input
+            type="number"
+            min={0}
+            defaultValue={50}
+            onChange={(e) => actions.setWandTolerance(Number(e.target.value))}
+            style={{ width: 60, ...select }}
           />
         </label>
       )}

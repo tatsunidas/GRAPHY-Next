@@ -33,10 +33,57 @@ export interface RoiMaskMeta {
   origin?: RoiScope;
   /** 任意のカスタム属性（DICOM/ImageJ 出力時に保持）。 */
   custom?: Record<string, string>;
+  /** このマスクに存在する segment index の一覧（多セグメント, D3）。Mask のみ。既定 [1]。 */
+  segments?: number[];
 }
 
 const metaById = new Map<string, RoiMaskMeta>();
 const listeners = new Set<() => void>();
+
+/**
+ * セグメンテーション編集の**アクティブ対象**（D2: モードレス化の核）。
+ * Brush/Eraser/3D Wand はこの (segmentationId, segmentIndex) に対して塗る。
+ * null = 未選択（塗りツール起動時に自動で新規マスク作成→ここへ設定）。
+ */
+export interface SegEditTarget {
+  segmentationId: string | null;
+  segmentIndex: number;
+}
+let editTarget: SegEditTarget = { segmentationId: null, segmentIndex: 1 };
+
+export function getSegEditTarget(): SegEditTarget {
+  return editTarget;
+}
+
+/** アクティブマスクを設定（null で解除）。segmentIndex は据え置き。 */
+export function setActiveSegmentationId(id: string | null): void {
+  if (editTarget.segmentationId === id) return;
+  editTarget = { ...editTarget, segmentationId: id };
+  notify();
+}
+
+/** アクティブ segment index を設定（1 以上）。 */
+export function setActiveSegmentIndexStore(idx: number): void {
+  const i = Math.max(1, Math.floor(idx) || 1);
+  if (editTarget.segmentIndex === i) return;
+  editTarget = { ...editTarget, segmentIndex: i };
+  notify();
+}
+
+/** マスクの segment index 一覧を取得（未登録は [1]）。 */
+export function getMaskSegments(segmentationId: string): number[] {
+  const segs = metaById.get(segmentationId)?.segments;
+  return segs && segs.length ? segs : [1];
+}
+
+/** マスクに segment index を追加登録（重複は無視）。追加後の一覧を返す。 */
+export function addMaskSegment(segmentationId: string, index: number): number[] {
+  const cur = getMaskSegments(segmentationId);
+  if (cur.includes(index)) return cur;
+  const next = [...cur, index].sort((a, b) => a - b);
+  setRoiMaskMeta(segmentationId, { segments: next });
+  return next;
+}
 
 function notify(): void {
   for (const l of [...listeners]) {

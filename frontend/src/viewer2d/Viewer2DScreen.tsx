@@ -21,6 +21,9 @@ import { buildSeriesLayout, type SeriesLayout } from "../viewer/seriesLayout";
 import { LutDialog, ColorBar } from "../viewer/LutDialog";
 import { runViewerCommand } from "../viewer/viewerCommands";
 import { TOOL_IDS } from "../viewer/toolIds";
+import { subscribeToast } from "../viewer/toast";
+import { fetchSettings } from "../settings/settingsApi";
+import { applyGlobalLabelmapStyle, applyGlobalAnnotationStyle } from "../viewer/cornerstoneSetup";
 import { Viewer2DToolbar, type ViewerActions } from "./Viewer2DToolbar";
 import { Viewer2DMenuBar } from "./Viewer2DMenuBar";
 import { RoiManagerPanel } from "./RoiManagerPanel";
@@ -659,6 +662,33 @@ function TileGrid({
     },
     [t],
   );
+  // ビューポート側（Viewer2D）からの理由トースト（例: 非規則ボリュームで 3D ツール不可）。
+  useEffect(() => subscribeToast((msg) => {
+    setToast(msg);
+    if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(null), 3000);
+  }), []);
+  // マスク（labelmap）の既定スタイル（塗り不透明度・アウトライン幅）を環境設定から適用。
+  useEffect(() => {
+    fetchSettings()
+      .then((m) => {
+        const op = Number(m["viewer.maskFillOpacity"]);
+        const ow = Number(m["viewer.maskOutlineWidth"]);
+        applyGlobalLabelmapStyle({
+          fillAlpha: Number.isFinite(op) ? Math.min(1, Math.max(0, op / 100)) : 0.5,
+          outlineWidth: Number.isFinite(ow) ? ow : 1,
+        });
+        // 計測 ROI（annotation）の既定色・線幅。
+        const lw = Number(m["roi.defaultLineWidth"]);
+        applyGlobalAnnotationStyle({
+          colorHex: m["roi.defaultColor"] || "#ffff00",
+          lineWidth: Number.isFinite(lw) && lw > 0 ? lw : 1,
+        });
+      })
+      .catch(() => {
+        /* 既定のまま */
+      });
+  }, []);
   const actions = useMemo<ViewerActions>(
     () => ({
       fit: () => runViewerCommand(resolveTargets(), (c) => c.fit()),
@@ -677,6 +707,7 @@ function TileGrid({
         runViewerCommand(patient.tiles.map((tl) => tl.id), (c) => c.setActiveTool(toolName));
       },
       setBrushSize: (size) => runViewerCommand(patient.tiles.map((tl) => tl.id), (c) => c.setBrushSize(size)),
+      setWandTolerance: (tol) => runViewerCommand(patient.tiles.map((tl) => tl.id), (c) => c.setWandTolerance(tol)),
       clearRois: () => {
         // 全消去は破壊的なので確認する。
         if (window.confirm(t("viewer2d.roi.clearConfirm"))) {
