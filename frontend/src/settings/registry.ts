@@ -42,6 +42,95 @@ export interface CategoryDef {
   sections: SectionDef[];
 }
 
+// Texture（Radiomics）: ビン系フィールドはファミリー共通なのでヘルパで生成する。
+// キーは backend が期待する GRAPHY Property キーに "texture." を付けたもの。
+function binFields(fam: string, opts: { delta?: boolean; alpha?: boolean } = {}): FieldDef[] {
+  const f: FieldDef[] = [
+    { key: `texture.BINCOUNT_${fam}_BOOL`, labelKey: "settings.tex.useBinCount", type: "toggle", default: true },
+    { key: `texture.BINCOUNT_${fam}_INT`, labelKey: "settings.tex.binCount", type: "number", default: 16, min: 2, max: 256 },
+    { key: `texture.BINWIDTH_${fam}_DOUBLE`, labelKey: "settings.tex.binWidth", type: "number", default: 0, min: 0, max: 100000 },
+  ];
+  if (opts.delta) f.push({ key: `texture.DELTA_${fam}_DOUBLE`, labelKey: "settings.tex.delta", type: "number", default: 1, min: 1, max: 20 });
+  if (opts.alpha) f.push({ key: `texture.ALPHA_${fam}_DOUBLE`, labelKey: "settings.tex.alpha", type: "number", default: 1, min: 0, max: 20 });
+  return f;
+}
+function familyToggle(key: string, labelKey: string, def: boolean): FieldDef {
+  return { key: `texture.${key}`, labelKey, type: "toggle", default: def };
+}
+
+// Texture（Radiomics 可視化マップ）設定＝GRAPHY RadiomicsSettings の全 62 パラメータをファミリー別に。
+const TEXTURE_CATEGORY: CategoryDef = {
+  id: "texture",
+  labelKey: "settings.cat.texture",
+  icon: "🧬",
+  sections: [
+    {
+      titleKey: "settings.sec.tex.computation",
+      fields: [{ key: "texture.D3Basis", labelKey: "settings.tex.d3basis", type: "toggle", default: false, helpKey: "settings.tex.d3basis.help" }],
+    },
+    {
+      titleKey: "settings.sec.tex.mask",
+      fields: [
+        { key: "texture.MASK_LABEL_INT", labelKey: "settings.tex.maskLabel", type: "number", default: 1, min: 1, max: 255 },
+        { key: "texture.RemoveOutliers_BOOL", labelKey: "settings.tex.removeOutliers", type: "toggle", default: false },
+        { key: "texture.Sigma_INT", labelKey: "settings.tex.sigma", type: "number", default: 3, min: 1, max: 10 },
+        { key: "texture.RangeFiltering_BOOL", labelKey: "settings.tex.rangeFilter", type: "toggle", default: false },
+        { key: "texture.ResamplingMin_DOUBLE", labelKey: "settings.tex.rangeMin", type: "number", default: 0, min: -100000, max: 100000 },
+        { key: "texture.ResamplingMax_DOUBLE", labelKey: "settings.tex.rangeMax", type: "number", default: 0, min: -100000, max: 100000 },
+      ],
+    },
+    {
+      titleKey: "settings.sec.tex.resample",
+      fields: [
+        { key: "texture.Resampling_BOOL", labelKey: "settings.tex.resample", type: "toggle", default: false },
+        { key: "texture.ResamplingX_DOUBLE", labelKey: "settings.tex.resampleX", type: "number", default: 1, min: 0, max: 100 },
+        { key: "texture.ResamplingY_DOUBLE", labelKey: "settings.tex.resampleY", type: "number", default: 1, min: 0, max: 100 },
+        { key: "texture.ResamplingZ_DOUBLE", labelKey: "settings.tex.resampleZ", type: "number", default: 1, min: 0, max: 100 },
+      ],
+    },
+    {
+      titleKey: "settings.sec.tex.families",
+      fields: [
+        familyToggle("Operational", "settings.tex.fam.operational", true),
+        familyToggle("Diagnostics", "settings.tex.fam.diagnostics", true),
+        familyToggle("Morphological", "settings.tex.fam.morphological", false),
+        familyToggle("LocalIntensity", "settings.tex.fam.localIntensity", true),
+        familyToggle("IntensityStats", "settings.tex.fam.intensityStats", true),
+        familyToggle("IntensityHistogram", "settings.tex.fam.histogram", true),
+        familyToggle("VolumeHistogram", "settings.tex.fam.ivh", true),
+        familyToggle("GLCM", "settings.tex.fam.glcm", true),
+        familyToggle("GLRLM", "settings.tex.fam.glrlm", true),
+        familyToggle("GLSZM", "settings.tex.fam.glszm", true),
+        familyToggle("GLDZM", "settings.tex.fam.gldzm", true),
+        familyToggle("NGTDM", "settings.tex.fam.ngtdm", true),
+        familyToggle("NGLDM", "settings.tex.fam.ngldm", true),
+        familyToggle("Fractal", "settings.tex.fam.fractal", true),
+        familyToggle("Shape2D", "settings.tex.fam.shape2d", false),
+      ],
+    },
+    { titleKey: "settings.sec.tex.glcm", fields: binFields("GLCM", { delta: true }) },
+    { titleKey: "settings.sec.tex.glrlm", fields: binFields("GLRLM") },
+    { titleKey: "settings.sec.tex.glszm", fields: binFields("GLSZM") },
+    { titleKey: "settings.sec.tex.gldzm", fields: binFields("GLDZM") },
+    { titleKey: "settings.sec.tex.ngtdm", fields: binFields("NGTDM", { delta: true }) },
+    { titleKey: "settings.sec.tex.ngldm", fields: binFields("NGLDM", { delta: true, alpha: true }) },
+    { titleKey: "settings.sec.tex.histogram", fields: binFields("HIST") },
+    {
+      titleKey: "settings.sec.tex.ivh",
+      fields: [
+        { key: "texture.USEORIGINAL_IVH_BOOL", labelKey: "settings.tex.ivhOriginal", type: "toggle", default: false },
+        { key: "texture.BINCOUNT_IVH_BOOL", labelKey: "settings.tex.useBinCount", type: "toggle", default: true },
+        { key: "texture.BINCOUNT_IVH_INT", labelKey: "settings.tex.binCount", type: "number", default: 16, min: 2, max: 256 },
+        { key: "texture.BINWIDTH_IVH_DOUBLE", labelKey: "settings.tex.binWidth", type: "number", default: 0, min: 0, max: 100000 },
+      ],
+    },
+    {
+      titleKey: "settings.sec.tex.fractal",
+      fields: [{ key: "texture.BOXSIZES_FRACTAL", labelKey: "settings.tex.boxSizes", type: "text", default: "2,3,4,6,8,12,16,32,64" }],
+    },
+  ],
+};
+
 export const SETTINGS_REGISTRY: CategoryDef[] = [
   {
     id: "general",
@@ -352,6 +441,7 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
       },
     ],
   },
+  TEXTURE_CATEGORY,
   {
     // セキュリティは専用パネル（実行時の値を確認）。SettingsDialog で特別扱い。
     id: "security",

@@ -25,6 +25,7 @@
  * </ul>
  */
 import { metaData, imageLoader, cache } from "@cornerstonejs/core";
+import { suvForImageId } from "./suvStore";
 
 /** モダリティ校正係数。px → 校正値は <code>px * scale + offset</code>（preScale 済みなら {1, 0}）。 */
 export interface ModalityCalibration {
@@ -60,9 +61,23 @@ export function getModalityCalibration(img: any, imageId: string): ModalityCalib
       ? lut.rescaleType
       : ""
     : "raw";
-  return preScaled
+  const base: ModalityCalibration = preScaled
     ? { scale: 1, offset: 0, preScaled: true, unit }
     : { scale: slope, offset: intercept, preScaled: false, unit };
+
+  // SUV 校正済みシリーズ（PET）は、モダリティ値(Bq/mL)へさらに SUV 乗数を合成する。
+  // これにより readModalitySlice を経由する ROI 統計・ヒストグラム・MPR が自動的に SUV 値になる。
+  // SUV = modalityValue × suv.scale = (px × scale + offset) × suv.scale。
+  const suv = suvForImageId(imageId);
+  if (suv) {
+    return {
+      scale: base.scale * suv.scale,
+      offset: base.offset * suv.scale,
+      preScaled: base.preScaled,
+      unit: suv.unit,
+    };
+  }
+  return base;
 }
 
 /** 校正済みの 1 スライス（row-major の float 値）。 */

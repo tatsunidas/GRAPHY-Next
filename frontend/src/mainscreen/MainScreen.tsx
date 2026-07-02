@@ -111,6 +111,19 @@ export function MainScreen({
       else window.open(`${window.location.pathname}#mpr`, "graphy-mpr");
       return;
     }
+    if (kind === "3d") {
+      // 選択中スタディ/シリーズを 3D Viewer ウィンドウへ受け渡す（MPR と同方式の localStorage コンテキスト）。
+      if (!selectedStudy) {
+        window.alert(t("export.noSelection"));
+        return;
+      }
+      const ctx = { study: selectedStudy, series: selectedSeries ?? undefined, ts: Date.now() };
+      localStorage.setItem("graphy-viewer3d-ctx", JSON.stringify(ctx));
+      const d = desktop();
+      if (d?.openViewer) void d.openViewer("viewer3d");
+      else window.open(`${window.location.pathname}#viewer3d`, "graphy-viewer3d");
+      return;
+    }
     if (kind === "slicer") {
       // 選択中スタディ/シリーズを Slicer ウィンドウへ受け渡す（MPR と同方式の localStorage コンテキスト）。
       if (!selectedStudy) {

@@ -65,10 +65,16 @@ export function ImageInfoPanel({
       ? `${num(info.rescaleSlope ?? 1, 2)} / ${num(info.rescaleIntercept ?? 0, 2)}`
       : "—";
   // ライブ WW/WL（左ドラッグで変更）があればそれを、無ければ DICOM の初期値を表示。
+  // SUV 校正済み(PET)なら SUV 空間で表示する。
+  const s = info.suvScale;
   const windowCW = voi
-    ? `${num(voi.wc, 0)} / ${num(voi.ww, 0)}`
+    ? s
+      ? `${num(voi.wc * s, 2)} / ${num(voi.ww * s, 2)}`
+      : `${num(voi.wc, 0)} / ${num(voi.ww, 0)}`
     : info.windowCenter !== undefined && info.windowWidth !== undefined
-      ? `${num(info.windowCenter, 0)} / ${num(info.windowWidth, 0)}`
+      ? s
+        ? `${num(info.windowCenter * s, 2)} / ${num(info.windowWidth * s, 2)}`
+        : `${num(info.windowCenter, 0)} / ${num(info.windowWidth, 0)}`
       : "—";
   const bits =
     info.bitsStored !== undefined ? `${info.bitsStored} / ${info.bitsAllocated ?? "—"}` : "—";
@@ -100,6 +106,15 @@ export function ImageInfoPanel({
       <Row label={t("viewer.info.bits")} value={bits} />
       <Row label={t("viewer.info.pixelRep")} value={signed} />
       <Row label={t("viewer.info.photometric")} value={info.photometricInterpretation || "—"} />
+      {info.suvScale !== undefined && (
+        <>
+          <div style={divider} />
+          <Row label={t("suv.info.type")} value={info.suvUnit || "SUV"} />
+          {sample?.suvValue !== undefined && (
+            <Row label={t("suv.info.value")} value={`${num(sample.suvValue, 2)} ${info.suvUnit || "SUV"}`} />
+          )}
+        </>
+      )}
       <div style={divider} />
       <Row label={t("viewer.info.mousePos")} value={mousePos} />
     </div>

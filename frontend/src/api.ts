@@ -441,6 +441,38 @@ export const bridgeImageJHyperStack = (
 ): Promise<ImageJBridgeResult> =>
   httpSend<ImageJBridgeResult>("/api/imagej/bridge", "POST", { studyUid, seriesUid, title });
 
+// ── Texture（Radiomics 可視化マップ） ────────────────────────────
+/** Texture マップ生成リクエスト（backend: POST /api/series/texture）。 */
+export interface TextureMapRequest {
+  studyInstanceUid: string;
+  sourceSeriesUid: string;
+  /** マスクシリーズ（任意, 未指定で全面マスク）。 */
+  maskSeriesUid?: string | null;
+  /** "GLCM_JointEntropy" 等（"FAMILY_FeatureName"）。 */
+  feature: string;
+  /** カーネル径（奇数）。 */
+  filterSize: number;
+  /** x,y,z 共通ストライド（1=等倍）。 */
+  stride: number;
+  /** true=2D パッチ, false=3D パッチ。 */
+  force2D: boolean;
+  /** マルチ次元スタックの C インデックス（既定 0）。 */
+  channel: number;
+  /** マルチ次元スタックの T インデックス（既定 0）。 */
+  timePoint: number;
+  /** Radiomics パラメータ（GRAPHY Property キー→文字列値）。 */
+  settings: Record<string, string>;
+  seriesDescription?: string | null;
+  seriesNumber?: number | null;
+}
+export interface TextureMapResult {
+  seriesInstanceUid: string;
+  sopInstanceUids: string[];
+}
+/** Texture 可視化マップを計算し派生シリーズとして保存する。返り値=新シリーズ UID。 */
+export const createTextureMap = (req: TextureMapRequest) =>
+  httpSend<TextureMapResult>("/api/series/texture", "POST", req);
+
 // ── Anonymizer（PS3.15 匿名化） ────────────────────────────────
 
 /** 匿名化オプション（backend AnonymizeConfig.Option 名と一致）。 */

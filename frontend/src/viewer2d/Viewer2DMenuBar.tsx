@@ -126,6 +126,7 @@ export function Viewer2DMenuBar({
           ],
         },
         { label: `${t("viewer2d.wl.adjust.title")}…`, onClick: () => actions.openWindowLevel() },
+        { label: `${t("suv.menu")}…`, onClick: () => actions.openSuv() },
         { label: t("viewer.invert"), onClick: actions.invert },
         { label: `${t("viewer.lut")}…`, onClick: actions.openLut },
         { label: t("viewer.rotate"), onClick: actions.rotate90 },
@@ -161,8 +162,8 @@ export function Viewer2DMenuBar({
       ],
     },
     {
-      id: "tools",
-      label: t("main.menu.tools"),
+      id: "roiTools",
+      label: t("viewer2d.menu.roiTools"),
       items: [
         { label: t("viewer2d.tool.brush"), onClick: () => actions.setTool(TOOL_IDS.brush), checked: activeTool === TOOL_IDS.brush },
         { label: t("viewer2d.tool.eraser"), onClick: () => actions.setTool(TOOL_IDS.eraser), checked: activeTool === TOOL_IDS.eraser },
@@ -171,10 +172,18 @@ export function Viewer2DMenuBar({
       ],
     },
     {
+      id: "tools",
+      label: t("main.menu.tools"),
+      items: [
+        { label: t("main.toolbar.tagViewer"), onClick: () => actions.openTagViewer() },
+      ],
+    },
+    {
       id: "analysis",
       label: t("viewer2d.menu.analysis"),
       items: [
         { label: t("viewer2d.menu.histogram"), onClick: () => actions.openHistogram() },
+        { label: `${t("texture.menu")}…`, onClick: () => actions.openTexture() },
         { label: t("viewer2d.menu.imagej"), onClick: () => actions.bridgeImageJ() },
       ],
     },

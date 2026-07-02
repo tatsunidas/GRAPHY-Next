@@ -59,6 +59,12 @@ export interface ViewerActions {
   launchCurvedMpr(): void;
   /** 対象タイルのシリーズで Histogram 解析ダイアログを開く。 */
   openHistogram(): void;
+  /** 対象タイル（PET のみ）で SUV 校正ダイアログを開く。 */
+  openSuv(): void;
+  /** 対象タイルのシリーズで Tag Viewer（DICOM 属性表示）を開く。 */
+  openTagViewer(): void;
+  /** 対象タイルのシリーズで Texture（Radiomics 可視化マップ）ダイアログを開く。 */
+  openTexture(): void;
 }
 
 /** 2D Viewer 画面ツールバー。グループ分けしたアイコン行（対象=選択 or 全）。 */

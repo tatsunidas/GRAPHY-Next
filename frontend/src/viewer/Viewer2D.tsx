@@ -36,6 +36,7 @@ import { computeScaleBar, type ScaleBar } from "./scaleBar";
 import { getOrCreateCameraSync, getOrCreateVoiSync, getOrCreatePresentationSync, getOrCreateSeriesVoiSync, broadcastSeriesProperties, captureVoiBaseline, clearVoiBaseline } from "./sync";
 import { registerReferenceSource, bumpReference, subscribeReference, computeReferenceSegments, type RefSegment } from "./referenceLines";
 import { registerViewerCommands, type ViewerCommands } from "./viewerCommands";
+import { subscribeSuvStore, suvForImageId, seriesUidOf } from "./suvStore";
 import { resolveOverlay } from "./overlayText";
 import { useOverlayConfig } from "./overlayConfig";
 import { ImageInfoPanel } from "./ImageInfoPanel";
@@ -752,6 +753,33 @@ export function Viewer2D({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageIndex, stackKey]);
 
+  // SUV 校正の変更を購読。校正が付与/解除されたら info を読み直し（suvScale/suvUnit が反映され、
+  // カーソル値・ROI 統計・W/L 表示が SUV へ切替）、本家同様に SUV 標準ウィンドウを自動適用する。
+  const suvScaleRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const refresh = () => {
+      const curId = imageIdsRef.current[indexRef.current];
+      if (!curId) return;
+      const scale = suvForImageId(curId)?.scale;
+      // info を再読込（readImageInfo は suvStore を参照して suvScale/suvUnit を含める）。
+      const base = readImageInfo(curId);
+      const prev = infoRef.current;
+      const merged = { ...base, sliceSpacing: prev?.sliceSpacing, sliceSpacingSource: prev?.sliceSpacingSource };
+      infoRef.current = merged;
+      setInfo(merged);
+      // 校正状態が変化したときだけウィンドウを操作する（ユーザーの手動 W/L を尊重）。
+      if (scale !== suvScaleRef.current) {
+        if (scale) applySuvWindow(scale);
+        else resetWindow();
+        suvScaleRef.current = scale;
+      }
+    };
+    // マウント時に既存校正を反映（購読前の初期同期）。
+    suvScaleRef.current = suvForImageId(imageIdsRef.current[indexRef.current])?.scale;
+    return subscribeSuvStore(refresh);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stackKey]);
+
   // renderOverlay が後から有効化されたとき（Fusion 設定時など）に矩形を初期計算する。
   // renderOverlay は親で useCallback 安定化されている前提（毎レンダ別関数だとループするため）。
   useEffect(() => {
@@ -915,6 +943,30 @@ export function Viewer2D({
     return { imageId, center: 0, width: 1 };
   };
 
+  // SUV 校正ダイアログ用コンテキスト（表示中スライスの imageId・SeriesUID・モダリティ）。
+  const getSuvContext = (): { imageId: string; seriesUid: string; modality: string } | null => {
+    const imageId = imageIdsRef.current[indexRef.current];
+    if (!imageId) return null;
+    const seriesUid = seriesUidOf(imageId);
+    if (!seriesUid) return null;
+    return { imageId, seriesUid, modality: infoRef.current?.modality ?? "" };
+  };
+
+  // SUV 化時に臨床標準ウィンドウ（SUV 0〜7）を適用する。voiRange はモダリティ値(Bq/mL)空間のため
+  // SUV=modalityValue×scale の逆算で modalityValue [0, 7/scale] を設定する（本家 setSUVFactor 準拠）。
+  const applySuvWindow = (scale: number) => {
+    const v = vp();
+    if (!v || !(scale > 0)) return;
+    const upper = 7 / scale;
+    try {
+      v.setProperties({ voiRange: { lower: 0, upper } });
+      v.render();
+      setVoi({ ww: upper, wc: upper / 2 });
+    } catch {
+      /* ignore */
+    }
+  };
+
   // 操作/計測/ブラシツールの切替（左ドラッグ割当）。中=Pan・右=Zoom はナビ用に常時維持。
   // ブラシ/消しゴムは BrushTool に集約（消しゴム=ERASE ストラテジ）。選択時に labelmap を保証。
   const setActiveTool = (toolName: string) => {
@@ -1000,11 +1052,11 @@ export function Viewer2D({
   // 画面メニュー/ツールバーからの一括コマンド。最新の実装を ref に保持し、登録は wrapper 経由で常に最新を呼ぶ。
   const commandsRef = useRef<ViewerCommands>({
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, setWindowLevel, resetWindow,
-    getWindowState, setActiveTool, setBrushSize, setWandTolerance, clearAnnotations, undo, redo,
+    getWindowState, getSuvContext, setActiveTool, setBrushSize, setWandTolerance, clearAnnotations, undo, redo,
   });
   commandsRef.current = {
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, setWindowLevel, resetWindow,
-    getWindowState, setActiveTool, setBrushSize, setWandTolerance, clearAnnotations, undo, redo,
+    getWindowState, getSuvContext, setActiveTool, setBrushSize, setWandTolerance, clearAnnotations, undo, redo,
   };
   useEffect(() => {
     if (!commandKey || compact || syncGroupId) return;
@@ -1019,6 +1071,7 @@ export function Viewer2D({
       setWindowLevel: (c, w) => commandsRef.current.setWindowLevel(c, w),
       resetWindow: () => commandsRef.current.resetWindow(),
       getWindowState: () => commandsRef.current.getWindowState(),
+      getSuvContext: () => commandsRef.current.getSuvContext(),
       setActiveTool: (n) => commandsRef.current.setActiveTool(n),
       setBrushSize: (s) => commandsRef.current.setBrushSize(s),
       setWandTolerance: (v) => commandsRef.current.setWandTolerance(v),
@@ -1074,11 +1127,16 @@ export function Viewer2D({
     [ov.text, overlayCfg, imageIds, imageIndex, info],
   );
 
+  // SUV 校正済み(PET)なら SUV 値・単位・W/L を SUV 空間で表示する（本家準拠）。
+  const suvScale = info?.suvScale;
+  const suvUnit = info?.suvUnit ?? "SUV";
   // ビューア状態（必須情報）は画像外の上部ラベルエリアに常時表示する。
   const cursorValue = sample
     ? sample.color
       ? `RGB(${sample.rgb?.[0]},${sample.rgb?.[1]},${sample.rgb?.[2]})`
-      : `${Math.round(sample.modalityValue ?? 0)}${calUnit ? " " + calUnit : ""}`
+      : sample.suvValue !== undefined
+        ? `${sample.suvValue.toFixed(2)} ${suvUnit}`
+        : `${Math.round(sample.modalityValue ?? 0)}${calUnit ? " " + calUnit : ""}`
     : "—";
   const cursorXY = sample ? `${sample.fx.toFixed(1)}, ${sample.fy.toFixed(1)}` : "—";
 
@@ -1192,7 +1250,16 @@ export function Viewer2D({
         <div style={statusBar}>
           <StatusItem label={t("viewer.status.zoom")} value={`${Math.round(transform.zoom * 100)}%`} />
           {panned && <span style={panBadge}>{t("viewer.panned")}</span>}
-          <StatusItem label={t("viewer.status.wl")} value={voi ? `${Math.round(voi.wc)}/${Math.round(voi.ww)}` : "—"} />
+          <StatusItem
+            label={t("viewer.status.wl")}
+            value={
+              voi
+                ? suvScale
+                  ? `${(voi.wc * suvScale).toFixed(2)}/${(voi.ww * suvScale).toFixed(2)}`
+                  : `${Math.round(voi.wc)}/${Math.round(voi.ww)}`
+                : "—"
+            }
+          />
           <StatusItem label={t("viewer.status.value")} value={cursorValue} />
           <StatusItem label={t("viewer.status.xy")} value={cursorXY} />
           {/* 必須情報ラベル横の Info ボタン（右の情報パネルの On/Off）。 */}

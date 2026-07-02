@@ -14,6 +14,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import { loadSlice, type Slice } from "../viewer/histogram";
+import { suvForImageId } from "../viewer/suvStore";
 
 const SLIDER_MAX = 1000;
 const PLOT_W = 260;
@@ -43,8 +44,20 @@ export function WwWlAdjustDialog({
   const { t } = useI18n();
 
   const [slice, setSlice] = useState<Slice | null>(null);
-  const [center, setCenter] = useState(target.center);
-  const [width, setWidth] = useState(Math.max(1, target.width));
+
+  // このダイアログは常に「校正輝度」空間で処理する。loadSlice(=readModalitySlice) は
+  // 校正済みなら HU/SUV、未校正なら raw を返す。一方 W/L (voiRange) はモダリティ値(Bq/mL 等)空間で
+  // 入出力されるため、SUV 校正時のみ両者がズレる。displayScale はモダリティ値→表示(校正)値の係数で、
+  //   ・SUV 校正あり: suvScale（例 Bq/mL → SUVbw）
+  //   ・CT/未SUV（voiRange が既に HU 等の校正値）: 1
+  //   ・未校正(raw): 1（voiRange も raw）
+  // により、ヒストグラム(校正値)と W/L(校正値)の空間を一致させる。
+  const displayScale = useMemo(() => suvForImageId(target.imageId)?.scale ?? 1, [target.imageId]);
+  // 幅の下限（0 割回避）。モダリティ空間の 1 単位を表示空間へ換算（CT/raw では 1、SUV では極小）。
+  const minW = displayScale;
+
+  const [center, setCenter] = useState(target.center * displayScale);
+  const [width, setWidth] = useState(Math.max(minW, target.width * displayScale));
 
   // 対象スライスの校正値を読み込む（ヒストグラム・データレンジ算出用）。
   useEffect(() => {
@@ -76,11 +89,12 @@ export function WwWlAdjustDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataMin, dataMax, target.center, target.width]);
 
+  // c/w は表示(校正値)空間。適用時にモダリティ値空間へ戻して voiRange に反映する。
   const applyBoth = (c: number, w: number) => {
-    const ww = Math.max(1, w);
+    const ww = Math.max(minW, w);
     setCenter(c);
     setWidth(ww);
-    onApply(c, ww);
+    onApply(c / displayScale, ww / displayScale);
   };
 
   // スライダー値（0..SLIDER_MAX）↔ 校正値。
@@ -93,7 +107,7 @@ export function WwWlAdjustDialog({
   };
   const onWwSlider = (v: number) => {
     const pct = v / SLIDER_MAX;
-    applyBoth(center, Math.max(1, pct * base.baseMaxWW));
+    applyBoth(center, Math.max(minW, pct * base.baseMaxWW));
   };
 
   // 直接入力（WL/WW）。下書きを保持し Set/Enter で確定。
@@ -111,17 +125,18 @@ export function WwWlAdjustDialog({
       setWwText(String(round1(width)));
       return;
     }
-    applyBoth(wl, Math.max(1, ww));
+    applyBoth(wl, Math.max(minW, ww));
   };
 
   const onAuto = () => {
     if (!hist) return;
     // データ実効範囲へ最大ストレッチ（グレースケール: 中心=中点, 幅=範囲）。
-    applyBoth((dataMin + dataMax) / 2, Math.max(1, dataMax - dataMin));
+    applyBoth((dataMin + dataMax) / 2, Math.max(minW, dataMax - dataMin));
   };
   const onResetClick = () => {
+    // onReset はモダリティ値空間の {center,width} を返すため、表示空間へ換算して反映。
     const s = onReset();
-    if (s) applyBoth(s.center, Math.max(1, s.width));
+    if (s) applyBoth(s.center * displayScale, Math.max(minW, s.width * displayScale));
   };
 
   return (

@@ -1,7 +1,7 @@
 # GRAPHY-Next プラグイン アーキテクチャ設計
 
-> 作成日: 2026-06-28（更新: 2026-07-02 — surface と 2 つの Plug-Ins メニューを追記）
-> ステータス: 設計確定（実装は未着手）
+> 作成日: 2026-06-28（更新: 2026-07-02 — surface と 2 つの Plug-Ins メニュー追記／骨格実装）
+> ステータス: 骨格実装済み（standalone/web の両モードで疎通確認済み。サンドボックス/署名は将来）
 > 関連: [`development-phases.md`](development-phases.md)、[`dicom-data-layer.md`](dicom-data-layer.md)
 
 GRAPHY のプラグイン機構を、standalone / web の 2 モードに対応する形で再設計する。
@@ -157,3 +157,28 @@ web は運営配備 / サンドボックス。
    - `mainscreen.menu` → MainScreen（Plug-Ins メニューを新規追加）。
 6. UI Phase 2 のツールバー／メニューは最初からこの契約に乗せる（後付けより楽）。
 7. （後続）サンドボックス実行・権限モデル・署名検証・WASM 対応。
+
+## 6. 実装状況（2026-07-02 時点）
+
+ステップ 1〜5 の骨格を実装し、standalone / web 両モードで疎通確認済み。
+
+**backend**（`com.vis.graphynext.plugin`）
+- `PluginRegistry`（継ぎ目）/ `PluginManifest`（配信 DTO）/ `PluginDescriptor`（ディスク上 `plugin.json`）
+- `FileSystemPluginRegistry`（フォルダ走査・UI 配信の共通基底）
+- `StandalonePluginRegistry`（`@Profile("standalone")`。`graphy.plugins.dir` を走査し
+  URLClassLoader で JAR ロード、`spi.GraphyPlugin` 実装を実行）
+- `WebPluginRegistry`（`@Profile("web")`。一覧＋UI 配信のみ。`run()` は 501=サンドボックス未実装）
+- `PluginController`: `GET /api/plugins`、`GET /api/plugins/{id}/ui.js`、`POST /api/plugins/{id}/run`
+- SPI: `com.vis.graphynext.plugin.spi.GraphyPlugin`（`Object run(Map args)`。プラグイン JAR が実装）
+- 設定: `graphy.plugins.{enabled,dir}`（`PluginProperties`、既定 `./plugins`）
+
+**ディスク上のプラグイン形式**: `<dir>/<pluginId>/plugin.json`（`id,name,version,contributes[],ui?,entrypoint?,permissions[]?`）＋任意で `ui.js` / `*.jar`。例: リポジトリ直下 `plugins/sample-hello/`（UI のみ・両モード動作）。
+
+**frontend**（`frontend/src/plugins/`）
+- `pluginTypes.ts`（`PluginManifest`/`PluginSurface`/ホスト型/`PluginModule`）
+- `pluginRegistry.ts`（起動時 `GET /api/plugins` 取得＋キャッシュ、動的 `import()`、`runPluginBackend`、
+  フック `usePluginManifests`/`usePluginMenu`）
+- `mockPlugins.ts`（backend 未起動時のフォールバックデモ。`MOCK_ENABLED`）
+- 配線: `Viewer2DMenuBar.tsx`（`viewer2d.menu`）、`mainscreen/MenuBar.tsx`（`mainscreen.menu` を新設）
+
+**残（将来）**: web のサンドボックス実行、権限モデルの強制、署名検証、WASM、ツールバー surface の描画。

@@ -28,6 +28,8 @@ export interface ViewerCommands {
   resetWindow(): void;
   /** 現在の表示 VOI（モダリティ値=HU 等の中心/幅）と対象 imageId を返す。取得不能なら null。 */
   getWindowState(): { imageId: string; center: number; width: number } | null;
+  /** SUV 校正ダイアログ用のコンテキスト（表示中 imageId・SeriesUID・モダリティ）。取得不能なら null。 */
+  getSuvContext(): { imageId: string; seriesUid: string; modality: string } | null;
   /** 左ドラッグに割り当てる操作/計測/ブラシツールを切替（toolName は Cornerstone のツール名 or 消しゴム id）。 */
   setActiveTool(toolName: string): void;
   /** ROI ブラシ径(px)。 */

@@ -306,6 +306,20 @@ Response: { seriesInstanceUid, sopInstanceUids: string[] }
   - ビルド: `cd frontend && npx tsc -b && npx vite build` **green**。reslice 数値検証 21/21。
   - P2 既知の制約: standalone のみ（MPR と同じ）／単一シリーズ／基準面カメラの現在向きに沿ってスタックを積む
     （Crosshairs で任意回転可）。生成スタックの保存は P3。
+  - **P2 改3（2026-07-02）: 3 面を cornerstone から world 自前描画へ全面移行**（旧 GRAPHY Slicer 方式に回帰）。
+    AX/COR/SAG は cornerstone のカメラ/座標変換に一切依存せず、**患者軸(LPS)直交平面を `viewer/orthoMpr.ts` で
+    自前 canvas 描画**する。cornerstone は **右下 recon プレビュー専用**（`setupReconViewport`＋`displayReconStack`）。
+    - `orthoMpr.ts`: `computePanelLayout`（bbox 固定フレーミング）／`renderPanelSlice`（world→トリリニア＋W/L→RGBA）／
+      `panelPixelToWorld`・`worldToPanelPixel`（面内線形写像, 深さ=center）／`computeSlabBandsPanel`・`computeSlabHandlesPanel`
+      （パネル画素座標）／`translateGeomInPlanePanel`・`rotateGeomInPlanePanel`（純関数の平行移動/法線軸回転）／
+      `worldToVoxel`・`voxelToWorld`・`volumeCenterWorld`。数値検証 `scratchpad/verify_ortho.mjs` 53/53。
+    - `slicer.ts`: `resliceVolumeFromCache`（cache 済みボリューム→`ResliceVolume`）／`setupReconViewport`／`volumeDefaultVoi`（voiLut）を追加。
+    - `SlicerScreen.tsx`: 3 面を `<canvas>`（object-fit:contain）＋SVG オーバーレイ（viewBox=widthPx×heightPx / preserveAspectRatio meet）。
+      操作＝中央ハンドル/背景左ドラッグ=移動 / 四隅=回転 / 右ドラッグ=W/L / ホイール=法線方向スクロール。パネル描画は rAF コアレス。
+      生成は `volRef` の `ResliceVolume` を直接 `createReslicer` へ（`extractResliceVolume` 経由をやめる）。
+    - 利点: 表示・座標・サンプルが同一 `ResliceVolume` の **1 幾何で完結**（旧 2×2 cornerstone 版のカメラ焦点/canvasToWorld 依存を排除）。
+      旧グルー（`setupSlicerMpr`/`readSlicerGeometry`/`computeSlabBands`/`translate|rotateGeomInPlane`/`syncViewsToCenter`/
+      `extractResliceVolume`/`worldToIndex`）は slicer.ts に残置（未使用エクスポート）。ビルド green・**実機未検証**。
 - **P3 保存** — ✔ 実装（要実機検証）。
   - backend（新規パッケージ `com.vis.graphynext.dicom.derived`）:
     - `DerivedSeriesRequest`（record, frames は Base64 Int16LE）／`DerivedSeriesService.create()`／
@@ -414,8 +428,10 @@ IOP 変更は行わない。
 - **streaming で Crosshairs が `Missing imagePositionPatient`／MPR 未表示** → `buildMprVolume` 先読み＋`volume.load()`。
 - **Z 方向の折り返し** → cornerstone は **wadouri を空間ソートしない**ため、`createAndCacheVolume` 前に **IPP 法線投影で空間ソート**。
 - **再構成が走らない（Failed to build）** → streaming の `getImageData().scalarData` は throw する getter。`voxelManager.getCompleteScalarDataArray()` を優先。
+- **streaming 生配列レイアウトの潜在不一致（旧 Curved MPR と同根）** → 検証の結果、`getCompleteScalarDataArray()` の layout は `index = i + j*W + k*W*H`（cornerstone `toIndex`）で `voxelManager.getAtIJK`/`makeWorldSampler` と一致するため通常経路は正しい。危険なのは streaming で getComplete… が空（未ロード）を返したとき vtk の `data.scalarData`（ステール/未確定）へフォールバックする点のみ。`extractResliceVolume` を「getCompleteScalarDataArray があれば専用（空なら null で失敗）／無ければ local volume として data.scalarData」に分岐修正して解消（cornerstone 3.33.x で検証）。
 - **再構成のストライプ状の途切れ** → recon 表示を `OrientationAxis.ACQUISITION` に（斜め束を world-Axial で切っていた）。
 - **上下反転／Reverse の見た目変化** → `readSlicerGeometry` colDir=画面下、`planeFromGeometry` 直接構成、Reverse は表示列のみ反転（§10.5）。
+- **カットライン/中心が面ごとにずれる（AX=脊髄, COR/SAG=椎体）** → AX/COR/SAG の表示スライスが volume 中心（index 中心）に固定で `geom.center`（world）へ追従していなかったため、center を別深さの断面へ投影して解剖が食い違って見えた。`syncViewsToCenter`（各面のカメラを viewPlaneNormal 方向にのみシフト＝面内 pan/zoom 保持のクロスヘア相当）を `recompute` 冒頭で呼び、実座標の center を通る断面に揃える。`computeSlabBands` の切断面（cam.focalPoint）も同時に整合。
 - **保存 `study=null`** → `Attributes.addSelected(int...)` が期待通り copy せず。`copyTag` で個別コピー。
 - **保存後に MainScreen ツリーが更新されない** → `emitDbChanged`（Slicer）＋`subscribeDbChanged→dbVersion`（App）で現在条件のまま自動再検索。
 

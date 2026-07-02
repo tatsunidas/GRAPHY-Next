@@ -11,6 +11,7 @@ import { useGlobalShortcuts } from "./shortcuts/useGlobalShortcuts";
 import { MainScreen } from "./mainscreen/MainScreen";
 import { Viewer2DScreen } from "./viewer2d/Viewer2DScreen";
 import { MprScreen } from "./mpr/MprScreen";
+import { Viewer3DScreen } from "./viewer3d/Viewer3DScreen";
 import { SlicerScreen } from "./slicer/SlicerScreen";
 import { CurvedMprScreen } from "./curvedmpr/CurvedMprScreen";
 import { QRScreen } from "./qr/QRScreen";
@@ -66,6 +67,8 @@ export function App() {
         <Viewer2DScreen status={status} />
       ) : screen === "mpr" ? (
         <MprScreen status={status} />
+      ) : screen === "viewer3d" ? (
+        <Viewer3DScreen status={status} />
       ) : screen === "slicer" ? (
         <SlicerScreen status={status} />
       ) : screen === "curvedmpr" ? (

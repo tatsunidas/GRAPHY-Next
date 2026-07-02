@@ -26,6 +26,10 @@ import { subscribeToast } from "../viewer/toast";
 import { subscribeSeriesRefresh } from "../viewer/viewerRefresh";
 import { WandDialog } from "./WandDialog";
 import { HistogramDialog } from "./HistogramDialog";
+import { SUVCalibrationDialog } from "../viewer/SUVCalibrationDialog";
+import { getSuv } from "../viewer/suvStore";
+import { TagViewerDialog } from "../mainscreen/TagViewerDialog";
+import { TextureDialog } from "../viewer/TextureDialog";
 import { WwWlAdjustDialog, type WlTarget } from "./WwWlAdjustDialog";
 import { WlPresetDialog } from "./WlPresetDialog";
 import { fetchSettings } from "../settings/settingsApi";
@@ -567,6 +571,9 @@ function TileGrid({
   const tileDimsRef = useRef<Map<string, { c: number; t: number; z: number }>>(new Map());
   // Histogram 解析ダイアログの対象（開いている時のみ non-null）。
   const [histo, setHisto] = useState<{ tile: Tile; z: number; c: number; t: number } | null>(null);
+  const [suvTarget, setSuvTarget] = useState<{ imageId: string; seriesUid: string } | null>(null);
+  const [tagTarget, setTagTarget] = useState<Tile | null>(null);
+  const [textureTarget, setTextureTarget] = useState<Tile | null>(null);
   // コントラスト調整（W/L）ダイアログの対象（開いている時のみ non-null）。
   const [wlAdjust, setWlAdjust] = useState<WlTarget | null>(null);
 
@@ -817,6 +824,30 @@ function TileGrid({
         const dims = tileDimsRef.current.get(tile.id);
         setHisto({ tile, z: dims?.z ?? 0, c: dims?.c ?? 0, t: dims?.t ?? 0 });
       },
+      // SUV 校正: 対象（選択→無ければ先頭）タイル。PET(Modality=PT) のみ有効。
+      openSuv: () => {
+        const first = resolveTargets()[0];
+        if (!first) { comingSoon(t("suv.menu")); return; }
+        const ctx = queryViewerCommand(first, (c) => c.getSuvContext());
+        if (!ctx) { comingSoon(t("suv.menu")); return; }
+        const mod = ctx.modality.toUpperCase();
+        if (mod !== "PT" && mod !== "PET") { setToast(t("suv.petOnly")); return; }
+        setSuvTarget({ imageId: ctx.imageId, seriesUid: ctx.seriesUid });
+      },
+      // Tag Viewer: 対象（選択→無ければ先頭）タイルのシリーズで既存の DICOM 属性ビューアを開く。
+      openTagViewer: () => {
+        const tid = resolveTargets()[0];
+        const tile = patient.tiles.find((tl) => tl.id === tid);
+        if (!tile) { comingSoon(t("main.toolbar.tagViewer")); return; }
+        setTagTarget(tile);
+      },
+      // Texture: 対象（選択→無ければ先頭）タイルのシリーズで Radiomics 可視化マップダイアログを開く。
+      openTexture: () => {
+        const tid = resolveTargets()[0];
+        const tile = patient.tiles.find((tl) => tl.id === tid);
+        if (!tile) { comingSoon(t("texture.menu")); return; }
+        setTextureTarget(tile);
+      },
     }),
     [resolveTargets, onSetGrid, onSetSync, patient.patientKey, patient.tiles, comingSoon, t],
   );
@@ -905,6 +936,44 @@ function TileGrid({
           initialC={histo.c}
           initialT={histo.t}
           onClose={() => setHisto(null)}
+        />
+      )}
+      {suvTarget && (
+        <SUVCalibrationDialog
+          key={suvTarget.seriesUid}
+          imageId={suvTarget.imageId}
+          seriesUid={suvTarget.seriesUid}
+          applied={getSuv(suvTarget.seriesUid)}
+          onClose={() => setSuvTarget(null)}
+        />
+      )}
+      {tagTarget && (
+        <TagViewerDialog
+          key={tagTarget.id}
+          open
+          study={tagTarget.study}
+          series={tagTarget.series}
+          onClose={() => setTagTarget(null)}
+        />
+      )}
+      {textureTarget && (
+        <TextureDialog
+          key={textureTarget.id}
+          study={textureTarget.study}
+          series={textureTarget.series}
+          onCreated={(seriesUid) => {
+            // 生成された可視化マップシリーズを取得し、対象タイルの隣に新規タイルとして表示。
+            const study = textureTarget.study;
+            const tid = textureTarget.id;
+            void fetchSeries(study.studyInstanceUid)
+              .then((list) => {
+                const created = list.find((s) => s.seriesInstanceUid === seriesUid);
+                if (created) onInsertAdjacent(patient.patientKey, tid, false, study, created);
+                else setToast(t("texture.saved"));
+              })
+              .catch(() => setToast(t("texture.saved")));
+          }}
+          onClose={() => setTextureTarget(null)}
         />
       )}
       {wlAdjust && (

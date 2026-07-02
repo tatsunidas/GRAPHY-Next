@@ -29,6 +29,8 @@
 
         <!-- DICOM ツールキット。新規プロジェクトのため最新安定版を使用。 -->
         <dcm4che.version>5.34.3</dcm4che.version>
+        <!-- Radiomics（Texture 可視化マップ）。ImageJ1(net.imagej:ij) に依存。 -->
+        <radiomicsj.version>2.1.18</radiomicsj.version>
     </properties>
 
     <repositories>
@@ -102,10 +104,20 @@
         </dependency>
 
         <!-- ImageJ: ROI(.roi / RoiSet.zip) エンコード/デコード（ij.gui.Roi, RoiEncoder/RoiDecoder） -->
+        <!-- RadiomicsJ も net.imagej:ij [1.54p,) に依存。ここで具体版 1.54p を直接宣言し（nearest-wins で優先・
+             再現性確保）、RadiomicsJ が要求する下限を満たす単一版に固定する（fw/texture-radiomics-design.md §3）。 -->
         <dependency>
             <groupId>net.imagej</groupId>
             <artifactId>ij</artifactId>
             <version>1.54p</version>
+        </dependency>
+
+        <!-- Radiomics（Texture 可視化マップ計算）。ij は上で固定済み。推移依存（vecmath / commons-math3 /
+             poi-ooxml 等）は自動取得。SciJava リポジトリ（上で登録済み）から解決。 -->
+        <dependency>
+            <groupId>io.github.tatsunidas</groupId>
+            <artifactId>radiomicsj</artifactId>
+            <version>${radiomicsj.version}</version>
         </dependency>
     </dependencies>
 

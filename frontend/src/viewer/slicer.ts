@@ -179,6 +179,36 @@ export function readSlicerGeometry(engine: RenderingEngine, viewportId: string):
 }
 
 /**
+ * 各 MPR 面（AX/COR/SAG）の表示スライスを world 座標の `center` に合わせる。
+ * カメラを **viewPlaneNormal（面奥行き）方向にだけ** 平行移動し、面内 pan/zoom は保持したまま
+ * 「center を通る断面」を表示する（クロスヘア相当）。これをしないと各面は volume 中心
+ * （＝index 中心）のスライスに固定され、AX で置いた center が COR/SAG では別深さの断面に
+ * 投影されて解剖学的にずれて見える。
+ *
+ * 併せて `computeSlabBands` の切断面（cam.focalPoint）も center 上へ移るため、バンドも整合する。
+ */
+export function syncViewsToCenter(engine: RenderingEngine, viewportIds: string[], center: Vec3): void {
+  for (const id of viewportIds) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const vp = engine.getViewport(id) as any;
+      const cam = vp.getCamera() as AnyObj;
+      const n = normalize(cam.viewPlaneNormal as Vec3);
+      const fp = cam.focalPoint as Vec3;
+      const pos = cam.position as Vec3;
+      // 現在の焦点面から center までの奥行き差（法線方向成分）だけシフトする。
+      const d = dot(sub(center, fp), n);
+      if (Math.abs(d) < 1e-6) continue;
+      const shift = scale(n, d);
+      vp.setCamera({ focalPoint: add(fp, shift), position: add(pos, shift) });
+      vp.render();
+    } catch {
+      /* ignore（当該面はスキップ） */
+    }
+  }
+}
+
+/**
  * スラブ幾何から出力平面 `ReslicePlane` を直接構成する（buildReslicePlane の up 再導出を使わず、
  * geom の rowDir/colDir/normal をそのまま採用＝バンド表示・番号・reslicer で完全一貫）。
  * center が画像中心に来るよう左上(0,0)ピクセル中心へ origin を配置。
@@ -434,29 +464,43 @@ export async function displayReconStack(
   vp.render();
 }
 
-/** VolumeViewport から `reslice.ts` 用の `ResliceVolume`（world 幾何）を抽出する（確定生成で使用）。 */
-export function extractResliceVolume(engine: RenderingEngine, viewportId: string): ResliceVolume | null {
+/**
+ * cornerstone のボリューム状データ（getImageData() の戻り、またはキャッシュ済み volume オブジェクト）から
+ * `reslice.ts` 用の `ResliceVolume`（world 幾何）を構築する。両者は dimensions/spacing/origin/direction/
+ * voxelManager/scalarData を同形に持つ。
+ */
+function resliceFromVolumeData(data: AnyObj | undefined | null): ResliceVolume | null {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const vp = engine.getViewport(viewportId) as any;
-    const data = vp.getImageData?.() as AnyObj | undefined;
     if (!data || !data.dimensions || !data.spacing || !data.origin || !data.direction) return null;
-    // 全ボクセル配列を取得する。streaming volume では `scalarData` getter（=voxelManager.getScalarData()）が
-    // "No scalar data available" を throw するため、まず getCompleteScalarDataArray() を試す。
+    // 全ボクセル配列の取得。ボリューム種別で権威ある取得元が異なる:
+    //  - streaming volume（createImageVolumeVoxelManager）: `voxelManager.getCompleteScalarDataArray()`。
+    //    その生配列レイアウトは index = i + j*W + k*W*H（cornerstone の `toIndex` そのもの）で、
+    //    `voxelManager.getAtIJK` / `probeMpr` と同一・`makeWorldSampler` の data[k*W*H + j*W + i] 仮定と一致する。
+    //    なお `scalarData` getter（=voxelManager.getScalarData()）は streaming では "No scalar data available"
+    //    を throw するため使えない。
+    //  - local volume（チルト補正 createLocalVolume）: getCompleteScalarDataArray は未定義なので、投入済みの
+    //    HU 配列 `data.scalarData` をそのまま使う（レイアウトは我々が構築したとおり）。
+    // 重要: streaming で getCompleteScalarDataArray が使えるのに空配列を返す場合（＝未ロード）は、
+    // vtk 側の `data.scalarData` が未確定/ステールでレイアウトが getAtIJK とずれることがある（旧 Curved MPR の
+    // 不具合原因）。そのステール読みは避け、fallback せず null を返して失敗させる。
     let scalarData: ArrayLike<number> | undefined;
-    try {
-      scalarData = data.voxelManager?.getCompleteScalarDataArray?.() as ArrayLike<number> | undefined;
-    } catch {
-      /* fall through */
-    }
-    if (!scalarData || (scalarData as ArrayLike<number>).length === 0) {
+    const getComplete = data.voxelManager?.getCompleteScalarDataArray;
+    if (typeof getComplete === "function") {
+      // streaming: 権威ある経路。空＝未ロードとみなし、ステールな data.scalarData にはフォールバックしない。
+      try {
+        scalarData = getComplete.call(data.voxelManager) as ArrayLike<number> | undefined;
+      } catch {
+        scalarData = undefined;
+      }
+    } else {
+      // local volume: getCompleteScalarDataArray を持たない。投入済み scalarData（getter は throw しない）。
       try {
         scalarData = data.scalarData as ArrayLike<number> | undefined;
       } catch {
         scalarData = undefined;
       }
     }
-    if (!scalarData || (scalarData as ArrayLike<number>).length === 0) return null;
+    if (!scalarData || scalarData.length === 0) return null;
     const dir = Array.from(data.direction as ArrayLike<number>).map(Number);
     // FOV 外（ボリュームからはみ出す）ボクセルは「スタック内最小値」でパディングする（＝ソース最小値。
     // 再構成スタックはソースの部分集合なので両者は一致）。境界のトリリニア混合もこの最小値に収束する。
@@ -478,6 +522,43 @@ export function extractResliceVolume(engine: RenderingEngine, viewportId: string
   } catch {
     return null;
   }
+}
+
+/** VolumeViewport から `reslice.ts` 用の `ResliceVolume`（world 幾何）を抽出する（確定生成で使用）。 */
+export function extractResliceVolume(engine: RenderingEngine, viewportId: string): ResliceVolume | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vp = engine.getViewport(viewportId) as any;
+    return resliceFromVolumeData(vp.getImageData?.() as AnyObj | undefined);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * cornerstone キャッシュ済みボリューム（volumeId）から `ResliceVolume` を構築する。
+ * ビューポート不要（world 座標だけで自前 MPR 描画する Slicer で使用）。
+ */
+export function resliceVolumeFromCache(volumeId: string): ResliceVolume | null {
+  try {
+    return resliceFromVolumeData(cache.getVolume(volumeId) as AnyObj | undefined);
+  } catch {
+    return null;
+  }
+}
+
+/** キャッシュ済みボリュームの既定 VOI（W/L）。voiLut があれば採用、無ければ null（呼び側でデータ範囲へフォールバック）。 */
+export function volumeDefaultVoi(volumeId: string): { center: number; width: number } | null {
+  try {
+    const v = cache.getVolume(volumeId) as AnyObj | undefined;
+    const voi = v?.metadata?.voiLut?.[0];
+    const ww = Number(voi?.windowWidth);
+    const wc = Number(voi?.windowCenter);
+    if (Number.isFinite(ww) && Number.isFinite(wc) && ww > 0) return { center: wc, width: ww };
+  } catch {
+    /* ignore */
+  }
+  return null;
 }
 
 /** ボリュームの Modality を得る。 */
@@ -590,6 +671,36 @@ export function geometryToAngles(base: SlicerGeometry, geom: SlicerGeometry): [n
     ax = Math.atan2(-R[5], R[4]);
   }
   return [ax * rad2deg, ay * rad2deg, az * rad2deg];
+}
+
+/**
+ * 再構成プレビュー用の単一 ORTHOGRAPHIC ビューポートだけを有効化する（world 自前描画版 Slicer 用）。
+ * 3 面（AX/COR/SAG）は cornerstone を使わず canvas 自前描画するため、cornerstone は recon 表示専用。
+ * W/L=右 / Pan=中 / スライス送り=ホイール / Zoom を配線。
+ */
+export async function setupReconViewport(
+  engine: RenderingEngine,
+  engineId: string,
+  el: HTMLDivElement,
+  viewportId: string,
+  toolGroupId: string,
+): Promise<void> {
+  engine.setViewports([
+    { viewportId, type: ViewportType.ORTHOGRAPHIC, element: el, defaultOptions: { orientation: OrientationAxis.AXIAL, background: [0, 0, 0] as Types.Point3 } },
+  ]);
+  let tg = ToolGroupManager.getToolGroup(toolGroupId);
+  if (tg) ToolGroupManager.destroyToolGroup(toolGroupId);
+  tg = ToolGroupManager.createToolGroup(toolGroupId);
+  if (!tg) return;
+  tg.addTool(WindowLevelTool.toolName);
+  tg.addTool(PanTool.toolName);
+  tg.addTool(ZoomTool.toolName);
+  tg.addTool(StackScrollTool.toolName);
+  tg.addViewport(viewportId, engineId);
+  tg.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary }] });
+  tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
+  tg.setToolActive(StackScrollTool.toolName, { bindings: [{ mouseButton: MouseBindings.Wheel }] });
+  engine.renderViewports([viewportId]);
 }
 
 /** Slicer のツールグループ・同期・エンジンを破棄する（アンマウント時）。 */

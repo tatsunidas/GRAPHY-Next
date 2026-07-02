@@ -4,6 +4,7 @@
  */
 import { metaData, imageLoader, utilities as csUtils, type Types } from "@cornerstonejs/core";
 import dicomImageLoader from "@cornerstonejs/dicom-image-loader";
+import { suvForImageId } from "./suvStore";
 
 /**
  * 表示中スライスのキャリブレーション情報（輝度=Modality LUT / ボクセル / FOV）。
@@ -41,6 +42,10 @@ export interface ImageInfo {
   hasOrientation?: boolean;
   /** ImagePositionPatient(0020,0032): スライス左上画素のワールド座標 [x,y,z](mm, LPS)。 */
   imagePositionPatient?: [number, number, number];
+  /** SUV 校正済み（PET）の乗数。SUV = modalityValue × suvScale。未校正は undefined。 */
+  suvScale?: number;
+  /** SUV 単位ラベル（"SUVbw" 等）。 */
+  suvUnit?: string;
 }
 
 function firstNumber(v: unknown): number | undefined {
@@ -63,9 +68,12 @@ export function readImageInfo(imageId: string): ImageInfo {
   const rowPixelSpacing: number | undefined = plane.rowPixelSpacing ?? undefined;
   const columnPixelSpacing: number | undefined = plane.columnPixelSpacing ?? undefined;
   const ipp = toNums(plane.imagePositionPatient);
+  const suv = suvForImageId(imageId);
 
   return {
     modality: series.modality,
+    suvScale: suv?.scale,
+    suvUnit: suv?.unit,
     rows,
     columns,
     rowPixelSpacing,
@@ -187,6 +195,8 @@ export interface PixelSample {
   stored?: number;
   /** グレースケール時のモダリティ値（CT なら HU）。Rescale 適用後。 */
   modalityValue?: number;
+  /** SUV 校正済み(PET)のときの SUV 値（= modalityValue × suvScale）。 */
+  suvValue?: number;
 }
 
 /**
@@ -239,7 +249,9 @@ export function sampleAtCanvas(
     const slope = info.rescaleSlope ?? 1;
     const intercept = info.rescaleIntercept ?? 0;
     const modalityValue = alreadyScaled ? stored : stored * slope + intercept;
-    return { i, j, fx, fy, color: false, stored, modalityValue };
+    // SUV 校正済み(PET)なら SUV 値も算出（SUV = modalityValue × suvScale）。
+    const suvValue = info.suvScale !== undefined ? modalityValue * info.suvScale : undefined;
+    return { i, j, fx, fy, color: false, stored, modalityValue, suvValue };
   } catch {
     return null;
   }

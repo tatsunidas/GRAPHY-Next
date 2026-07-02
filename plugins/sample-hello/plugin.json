@@ -1,0 +1,7 @@
+{
+  "id": "sample-hello",
+  "name": "Sample: Hello",
+  "version": "0.0.1",
+  "contributes": ["viewer2d.menu", "mainscreen.menu"],
+  "ui": "ui.js"
+}
