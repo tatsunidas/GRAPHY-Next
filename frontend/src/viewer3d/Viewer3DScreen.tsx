@@ -428,6 +428,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
               view={viewRef.current}
               lutName={lutName}
               modality={modalityRef.current}
+              corner="tr"
               onClose={() => setLegendOn(false)}
             />
           )}

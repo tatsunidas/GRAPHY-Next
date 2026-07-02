@@ -14,6 +14,8 @@
  * を world へ戻して視線レイを作る。dpr は CSS 換算で相殺されるため、必要なのはカメラ＋CSS 寸法のみ。
  */
 
+import { type VolumeGeom, voxelToWorld, worldToVoxel } from "../viewer/labelVolume";
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
 type V3 = [number, number, number];
@@ -133,6 +135,74 @@ export function inverseViewProj(renderer: Any, cssWidth: number, cssHeight: numb
   } catch {
     return null;
   }
+}
+
+/**
+ * ボリューム表面ピック（メッシュ/ROI が無い表示モードでも計測できるようにするフォールバック）。
+ * world レイをボクセル空間で march し、**現在の LUT/不透明度**（`lutRgba` の alpha）が閾値を超える最初の位置＝
+ * 表示上の「表面」を拾って world 点を返す。VR の見た目と整合。ヒットなしは null。
+ *
+ * @param scalars  imageData の生スカラー（z-major, 長さ dims[0]*dims[1]*dims[2]）。
+ * @param geom     ボリューム幾何（origin/spacing/direction/dims）。
+ * @param dataRange スカラーの [min,max]（正規化用）。
+ * @param lutRgba  256×4 RGBA（`VtkVolumeView.getLut256`＝W/L・LUT・不透明度カーブ焼き込み済）。
+ */
+export function pickVolumeSurface(
+  ray: Ray,
+  scalars: ArrayLike<number>,
+  geom: VolumeGeom,
+  dataRange: [number, number],
+  lutRgba: Uint8Array,
+  threshold = 0.15,
+): V3 | null {
+  const [nx, ny, nz] = geom.dims;
+  const frame = nx * ny;
+  if (!scalars || scalars.length < frame * nz) return null;
+  const [dmin, dmax] = dataRange;
+  const span = dmax - dmin || 1;
+
+  // world レイ → ボクセル空間（連続 index）。o + d*t が index 空間の直線。
+  const o = worldToVoxel(geom, ray.origin);
+  const p1 = worldToVoxel(geom, [ray.origin[0] + ray.dir[0], ray.origin[1] + ray.dir[1], ray.origin[2] + ray.dir[2]]);
+  const d: V3 = [p1[0] - o[0], p1[1] - o[1], p1[2] - o[2]]; // voxels / (1mm along dir)
+  const dLen = Math.hypot(d[0], d[1], d[2]);
+  if (dLen < 1e-9) return null;
+
+  // ボクセルセンター [0,dims-1] を含む箱 [-0.5, dims-0.5] とのスラブ交差（t は上記直線パラメータ）。
+  let tNear = -Infinity, tFar = Infinity;
+  const lo = [-0.5, -0.5, -0.5];
+  const hi = [nx - 0.5, ny - 0.5, nz - 0.5];
+  for (let a = 0; a < 3; a++) {
+    if (Math.abs(d[a]) < 1e-9) {
+      if (o[a] < lo[a] || o[a] > hi[a]) return null;
+    } else {
+      let t1 = (lo[a] - o[a]) / d[a];
+      let t2 = (hi[a] - o[a]) / d[a];
+      if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
+      if (t1 > tNear) tNear = t1;
+      if (t2 < tFar) tFar = t2;
+    }
+  }
+  if (tNear > tFar || tFar < 0) return null;
+  const t0 = Math.max(tNear, 0);
+
+  // 0.5 ボクセル刻みで march。
+  const dt = 0.5 / dLen;
+  const maxSteps = 4096;
+  let t = t0;
+  for (let s = 0; s < maxSteps && t <= tFar; s++, t += dt) {
+    const vi = o[0] + d[0] * t;
+    const vj = o[1] + d[1] * t;
+    const vk = o[2] + d[2] * t;
+    const i = Math.round(vi), j = Math.round(vj), k = Math.round(vk);
+    if (i < 0 || i >= nx || j < 0 || j >= ny || k < 0 || k >= nz) continue;
+    const raw = scalars[k * frame + j * nx + i];
+    let norm = (raw - dmin) / span;
+    norm = norm < 0 ? 0 : norm > 1 ? 1 : norm;
+    const alpha = lutRgba[(Math.round(norm * 255) | 0) * 4 + 3] / 255;
+    if (alpha >= threshold) return voxelToWorld(geom, vi, vj, vk);
+  }
+  return null;
 }
 
 /**

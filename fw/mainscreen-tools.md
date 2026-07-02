@@ -29,7 +29,7 @@
 |---|---|
 | **Query/Retrieve** | **実装済**。常駐別ウィンドウ。Destination タブ・検索(Today既定)・AutoRefresh・C-MOVE 取得。`fw/qr-window.md`。 |
 | **2D Viewer** | Phase 1 実装済（別ウィンドウ・タイル）。`fw/viewer-2d-screen.md`。 |
-| **3D Viewer / MPR Viewer / Slicer** | 未実装（ボタンのみ。近日対応）。 |
+| **3D Viewer / MPR Viewer / Slicer** | ✅ 実装済（別ウィンドウ起動＋`localStorage` ctx 受渡: `MainScreen.tsx` `handleOpenViewer`）。Curved MPR は 2D ビューア Image メニューから起動可。3D/Curved は実機検証が未。 |
 
 ## 右端
 | ボタン | 状態 |
@@ -228,6 +228,6 @@ DICOM PS3.15 Basic Application Confidentiality Profile の匿名化。GRAPHY
     再生（VideoViewport + `/rendered` mp4 供給）は 2D Viewer 側の将来対応。
 
 ## 実装メモ
-- 現状、未実装ボタンは押下で「近日対応予定」バナーを表示（MainScreen `handleOpenTool`/`handleOpenViewer`）。
+- **更新(2026-07-02 監査)**: 3D/MPR/Slicer ビューアは**配線済**（`handleOpenViewer` が別ウィンドウ起動）。まだ未実装のツールのみ押下で「近日対応予定」バナーを表示（MainScreen `handleOpenTool`）。
 - これらは standalone（Electron）前提の機能が多い（ネイティブ I/O・媒体書込）。web モードでの可否は機能ごとに判断。
 - 多くは backend(dcm4che) と新規エンドポイント＋フロント UI（ダイアログ）で構成予定。

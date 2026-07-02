@@ -95,7 +95,7 @@ zoom / pan / flip(上下左右) / rotation は **Cornerstone3D の ViewPresentat
 - `viewer/imageInfo.ts` が metaData から値を集約し、`sampleAtCanvas` がカーソル位置の格納値→
   モダリティ値(HU 等)を返す（preScale 済みなら二重適用しない）。`ImageInfoPanel.tsx` が右パネル表示。
 - 完了: ①輝度(HU 読取＋Rescale/Window 表示) ②ボクセルサイズ(PixelSpacing/SliceThickness)
-  ③FOV(Rows×rowSpacing × Cols×colSpacing)。**PET SUV は未対応**（要 PT scaling・追加タグ）。
+  ③FOV(Rows×rowSpacing × Cols×colSpacing)。**PET SUV は実装済**（`viewer/suv.ts`/`suvStore.ts`/`SUVCalibrationDialog`。輝度校正は単一入口で合成）。
 
 ### ⚠️ 校正(HU 等)の二重適用に注意 — 読取は `viewer/pixelCalibration.ts` に一元化
 CPU 側で画素をモダリティ値(HU)として読むコードは、**必ず `viewer/pixelCalibration.ts` を通す**こと。
@@ -195,6 +195,6 @@ CPU 側で画素をモダリティ値(HU)として読むコードは、**必ず 
 
 ## 次スコープ
 1. **C/T 切替時の transform/VOI 維持**（保存 presentation/voiRange 再適用）。
-2. **PET SUV**（PT scaling: Radiopharmaceutical/体重/時刻）。
+2. ~~PET SUV~~ → ✅ 実装済（`viewer/suv.ts` ほか）。
 3. **ROI/Length ツール**（ROI 管理は SeriesViewer に集約）＋既存キーボードショートカット配線。
 4. web(wadors) 対応。

@@ -393,7 +393,8 @@ IOP 変更は行わない。
 ## 12. 現況・作業記録（2026-07-01 完了時点）
 
 **状態: P0〜P3 ＋ 追加対応（マルチ C/T 単一スタック抽出・SAG/COR 妥当性確認）まで実装＋実機確認済み
-（断面調整→再構成→保存往復→MainScreen 自動更新まで動作確認）。P4 は未着手。全変更は未コミット。**
+（断面調整→再構成→保存往復→MainScreen 自動更新まで動作確認）。全変更は未コミット。**
+**更新(2026-07-02 監査)**: P4 の Curved MPR / CPR は**実装済**（`curvedmpr/CurvedMprScreen.tsx`＝独立ウィンドウ・派生保存）、Straightened（`StraightenedVolumeBuilder`）も**実装済**（`viewer/straightenedVolume.ts`＋3D Viewer の中心線ダイアログ経由）。いずれも tsc green・実機未検証。
 
 **未コミット変更（2026-07-01 時点）:**
 - frontend（変更）: `viewer/reslice.ts`・`viewer/slicer.ts`・`slicer/SlicerScreen.tsx`・`viewer/mpr.ts`・
@@ -452,8 +453,8 @@ IOP 変更は行わない。
   任意正規直交 direction を内積で逆写像、geom は world axial 由来で取得方向非依存）。ただし **CT ガントリ
   チルト補正は軸位収集前提**（SAG/COR CT は streaming 経路）。SAG/COR 実データは未検証（目視推奨）。
 
-### P4（未着手・残タスク）
-- Curved MPR / CPR（`CurvedReformatter`）・Straightened（`StraightenedVolumeBuilder`）・Centerline 編集。
+### P4（更新 2026-07-02 監査）
+- ✅ Curved MPR / CPR（`curvedmpr/CurvedMprScreen.tsx`）／✅ Straightened（`viewer/straightenedVolume.ts`＋3D 中心線ダイアログ）／✅ アンフォールド展開図（`unfoldReformat`）。Centerline 編集は 3D Viewer 側で実装（手動 endo 経路は区間挿入のみ残）。いずれも実機未検証。
 - 2D ビューアからの Slicer 起動で表示中 C/T を ctx 経由で渡す（現状は Slicer 内セレクタで選択）。
 - web(wadors/STOW-RS) の読込・保存経路（現状 standalone のみ）。
 - 複数シリーズ選択 UI。

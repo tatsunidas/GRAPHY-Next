@@ -399,7 +399,7 @@ FreeFormRoi3D マスク（実空間 vtkImageData labelmap）
     `i18n(ja/en)`（`viewer3d.*`）。
   - ビルド: `npx tsc -b` green ／ `npx vite build` green（2026-07-02）。**実機（standalone・GPU/DICOM）での VR/MIP 目視は未実施**。
   - P1 既知の制約: 単一シリーズ／standalone のみ／PET は CT プリセット流用（HU 前提のため近似）。色/不透明度の任意カーブ編集は P2。
-- **P2 Ortho ＋ LUT ＋ 3D LUT カーブ ＋ クリップ ＋ ギズモ** — 🔶 一部実装（P2-A 完了・要実機検証 / P2-B 未着手）。
+- **P2 Ortho ＋ LUT ＋ 3D LUT カーブ ＋ クリップ ＋ ギズモ** — ✅ 実装（P2-A・P2-B とも実装・要実機検証。Ortho は下記のとおり実装済）。
   - **P2-A（✔ 実装・tsc green / 実機未検証, 2026-07-02）**:
     - **LUT 変更**: `transferFunction.ts` に `registerLutColormap`（backend `LutData` r/g/b→Cornerstone `registerColormap`, RGBPoints 正規化 [0..1]・`ColorSpace:"RGB"`）＋`ensureGrayscaleColormap`（解除の戻り先）。
       `volumeRender.ts#applyColormap`（`setProperties({colormap:{name}})`, 色は VOI レンジへマップ）。既存 `viewer/LutDialog.tsx` を再利用（`onSelect(lut|null)`）。
@@ -425,7 +425,7 @@ FreeFormRoi3D マスク（実空間 vtkImageData labelmap）
       **重要な学び（§5.4 更新）**: cornerstone VOLUME_3D への重畳は生 `renderer.addActor` 不可・生 vtk widget 不可。
       mesh/ROI 等は cornerstone の Surface 表現（`addSurfaceRepresentationToViewport`）を使う。3D 操作の座標は透視投影の worldToCanvas を
       避け、**平行投影＋実空間（index/world）計算**で行う。
-    - **Ortho（3 直交スライス）— 未着手**: `vtkImageSlice`＋`vtkImageMapper`/`vtkImageResliceMapper` を VOLUME_3D の vtk renderer
+    - **Ortho（3 直交スライス）— ✅ 実装（`viewer/vtkOrthoSlices.ts`＋`vtkVolumeView` ORTHO モード・`setOrthoPositions`, 実機未検証）**: `vtkImageSlice`＋`vtkImageMapper`/`vtkImageResliceMapper` を VOLUME_3D の vtk renderer
       （`vp.getRenderer()`）へ addActor し、実空間 LPS 直交面をスライダ位置で表示。MIP/MinIP の真の投影・Ortho はこの後続で対応。
 - **P3 メッシュ & 3D ROI** — 🔶 実装（tsc/vite build green・実機未検証, 2026-07-02）。pure VTK.js アクターを `vtkVolumeView` の
   レンダラへ重畳（`getSceneParts()` を追加）。実装:
@@ -593,8 +593,10 @@ GRAPHY `view/D3/*`＋`centerline/*`＋`slicer/*` を GRAPHY-Next と照合した
      非アクティブ時は `pointerEvents:none`（表示のみ・回転は下の vtk へ透過）。
    - 配線: `SceneObjectPanel`（計測トグル＋計測リスト・削除）→`Viewer3DScreen`（`measureMode` state＋オーバーレイ、
      **カットと排他**）。i18n `measure.*`（en/ja）。
-   - 既知の制約/TODO: 実機目視未実施（ピック整合・再投影）。ピックは可視表面のみ（ボリューム内部/空中はヒットしない）。
-     actor 回転モードでは計測線が被写体に追従しない（カメラ回転モードでは追従＝既定）。ポリライン計測・角度計測は後続。
+   - **どの表示モードでも計測可**: シーン表面（メッシュ/ROI/中心線）を優先ピックし、無ければ `measure3d.pickVolumeSurface`
+     で**表示ボリューム表面**（現在の LUT/不透明度に従い最初の不透明ボクセル＝VR の見た目と整合）を拾う（2026-07-02 追加）。
+   - 既知の制約/TODO: 実機目視未実施（ピック整合・再投影）。MIP/MinIP は不透明度が全域 1 のため箱の入口面を拾う場合あり
+     （主用途は VR）。actor 回転モードでは計測線が被写体に追従しない（カメラ回転モードでは追従＝既定）。ポリライン/角度計測は後続。
 4. **中心線解析の拡充** — ✅ 実装（tsc/vite green・実機未検証, 2026-07-02）。`viewer3d/CenterlineDialog.tsx`（旧
    `CenterlineAnalysisDialog`）＝グラフ抽出（epsilon/prune）＋サマリ＋**分枝リスト選択・最長路・2 ノード間最短路
    （Dijkstra）**＋アクティブ中心線を **シーンオブジェクト化**／CPR プレビュー・保存／ストレート化保存。
@@ -619,8 +621,8 @@ GRAPHY `view/D3/*`＋`centerline/*`＋`slicer/*` を GRAPHY-Next と照合した
    既存の ▶ 内視鏡（fly-through）/ CPR にそのまま乗る。配線: `SceneObjectPanel`「手動内視鏡経路」トグル→`Viewer3DScreen`
    （cut/計測と**排他**）。i18n `endoPath.*`（en/ja）。全て患者 LPS mm・編集は Undo スタックに載る（§15-#1 方針）。
    既知の TODO: 実機での点配置整合・ドラッグ移動の目視未実施。点の挿入（区間中への割り込み）は未対応（末尾追加のみ）。
-7. **メッシュ修復/検証（`MeshRepairer`/`MeshValidator`）** — 🔶 最小（`triangulate`+法線のみ。`vtkCleanPolyData`/`vtkFeatureEdges` 相当の重複除去/非多様体・穴診断なし）。
-8. **カラーレジェンド（`LegendConfig`/`LegendPosition`）** — 未移植。
+7. **メッシュ修復/検証（`MeshRepairer`/`MeshValidator`）** — ✅ 実装（tsc green・実機未検証, 2026-07-02）。`viewer/meshRepair.ts`（`validateMesh`/`repairMesh`＝頂点溶接・退化/重複三角形除去・境界/非多様体エッジ診断・非参照頂点圧縮）＋`viewer3d/MeshRepairDialog.tsx`（検証レポート＋「修復→新規メッシュ」＝既存 `addMeshObject` 再利用）。
+8. **カラーレジェンド（`LegendConfig`/`LegendPosition`）** — ✅ 実装（tsc green・実機未検証, 2026-07-02）。`viewer3d/ColorLegend.tsx`（LUT/グレースケール・VOI を `getState`/`onStateChanged` で追従・単位 CT=HU/PT=SUV・四隅配置）＋`Viewer3DScreen` にレジェンドトグル。
 9. **AxesGizmo（向き軸キューブ）** — ✅ 実装（tsc/vite green・実機未検証, 2026-07-02）。調査の結果、旧 cornerstone
    `volumeRender.ts` の `OrientationMarkerTool` は pure-vtk 移行時に**引き継がれておらず未表示**だった。`vtkVolumeView.ts` に
    vtk.js 標準の **`vtkOrientationMarkerWidget` + `vtkAnnotatedCubeActor`** を追加（設計 §6.5）。患者 LPS ラベル

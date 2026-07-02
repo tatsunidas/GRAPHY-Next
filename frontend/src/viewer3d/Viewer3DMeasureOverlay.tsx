@@ -17,7 +17,8 @@ import type { VtkVolumeView } from "../viewer/vtkVolumeView";
 import { addMeasurement3D, pickSurfacePoint } from "./scene3d";
 import { useMeasurements } from "./measureStore";
 import { makeCameraProjector } from "./volumeCut";
-import { makeUnprojector } from "./measure3d";
+import { makeUnprojector, pickVolumeSurface, type Ray } from "./measure3d";
+import { geomFromImageData } from "../viewer/labelVolume";
 
 type V3 = [number, number, number];
 
@@ -63,6 +64,21 @@ export function Viewer3DMeasureOverlay({
   const parts = view.getSceneParts();
   const project = rect ? makeCameraProjector(parts.renderer, rect.width, rect.height) : null;
 
+  // 表示ボリューム表面のピック（メッシュ/ROI が無いモード用フォールバック）。
+  const pickVolumeSurfaceAt = (ray: Ray): V3 | null => {
+    try {
+      const img = parts.imageData;
+      const geom = geomFromImageData(img);
+      const scalars = img.getPointData().getScalars();
+      const data = scalars?.getData() as ArrayLike<number> | undefined;
+      const range = scalars?.getRange?.() as [number, number] | undefined;
+      if (!geom || !data || !range) return null;
+      return pickVolumeSurface(ray, data, geom, range, view.getLut256());
+    } catch {
+      return null;
+    }
+  };
+
   const onDown = (e: React.PointerEvent) => {
     if (!active || e.button !== 0 || !rect) return;
     e.preventDefault();
@@ -70,16 +86,19 @@ export function Viewer3DMeasureOverlay({
     if (!unproj) return;
     const ray = unproj(e.clientX - rect.left, e.clientY - rect.top);
     if (!ray) return;
-    const hit = pickSurfacePoint(ray);
-    if (!hit) {
+    // まずシーン表面（メッシュ/ROI/中心線）を拾い、無ければ表示ボリューム表面を拾う
+    // （どの表示モードでも計測できるよう＝現在の LUT/不透明度に従って最初の不透明ボクセルへ）。
+    let point = pickSurfacePoint(ray)?.point ?? null;
+    if (!point) point = pickVolumeSurfaceAt(ray);
+    if (!point) {
       setStatus(t("measure.miss"));
       return;
     }
     setStatus("");
     if (!pending) {
-      setPending(hit.point);
+      setPending(point);
     } else {
-      addMeasurement3D(pending, hit.point);
+      addMeasurement3D(pending, point);
       setPending(null);
     }
   };

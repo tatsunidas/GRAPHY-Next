@@ -29,6 +29,20 @@ export function EndoscopyControls({
     return controller.onChange(setS);
   }, [controller]);
 
+  // Escape で fly-through を終了（入力欄フォーカス時は無視）。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tgt = e.target as HTMLElement | null;
+      if (tgt && /^(INPUT|TEXTAREA|SELECT)$/.test(tgt.tagName)) return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onExit();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onExit]);
+
   const posMm = (s.u * s.lengthMm).toFixed(1);
 
   return (

@@ -92,9 +92,9 @@
 
 | Phase | 内容 | 規模 |
 |---|---|---|
-| **A** ✅ | メニューバー(`Viewer2DMenuBar`)＋ツールバー(`Viewer2DToolbar`)＋コマンドレジストリ(`viewerCommands.ts`)。全体操作（レイアウト/同期/参照線）集約。画像一括（Invert/LUT/回転/反転/Fit/Reset/Undo/Redo）を選択 or 全タイルへ。新メニュー Sort/解析(Histogram/ImageJ)/3D・MPR・Slicer/ROI/PlugIns は当初「近日対応」プレースホルダ（→ 現在は **Sort/Histogram/ImageJ/MPR/Slicer 実装済み**〔§9〕。**3D/PlugIns のみ近日対応**）。 | 済 |
+| **A** ✅ | メニューバー(`Viewer2DMenuBar`)＋ツールバー(`Viewer2DToolbar`)＋コマンドレジストリ(`viewerCommands.ts`)。全体操作（レイアウト/同期/参照線）集約。画像一括（Invert/LUT/回転/反転/Fit/Reset/Undo/Redo）を選択 or 全タイルへ。新メニュー Sort/解析(Histogram/ImageJ)/3D・MPR・Slicer/ROI/PlugIns は当初「近日対応」プレースホルダ（→ 現在は **Sort/Histogram/ImageJ/MPR/Slicer 実装済み**〔§9〕。**PlugIns も実装済**（動的メニュー `pluginItems`）。**3D のみ 2D メニューからは placeholder**〔MainScreen からは起動可〕）。 | 済 |
 | **B** ✅ | W/L プリセット（`wlPresets.ts`: 脳/軟部/肺野/骨/腹部/肝＋既定。対象タイルへ voiRange 適用）。メニュー(画像)＋ツールバー(ドロップダウン)。 | 済 |
-| **C** ✅ | 操作ツール ラジオ（W/L/Pan/Zoom、ツールバー）＋計測ツール（Length/Angle/Ellipse/Rect/Probe）を **ROI メニュー**で機能化（Cornerstone annotation tools、左ドラッグ割当）＋ROI 全消去。**ツール(Tools)メニュー**に ROI ブラシ/消しゴム（segmentation は大規模のため当面プレースホルダ）。 | 大 |
+| **C** ✅ | 操作ツール ラジオ（W/L/Pan/Zoom、ツールバー）＋計測ツール（Length/Angle/Ellipse/Rect/Probe）を **ROI メニュー**で機能化（Cornerstone annotation tools、左ドラッグ割当）＋ROI 全消去。**ツール(Tools)メニュー**に ROI ブラシ/消しゴム＋Wand(2D/3D, `wandTool.ts`) を実装（segmentation labelmap）。Threshold/Scissors は cornerstone 登録のみで未結線。 | 大 |
 | **D** | エクスポート（選択/全 PNG）・全シネ・シリーズエクスポート。 | 小〜中 |
 
 ### Phase C 実装メモ
@@ -102,7 +102,7 @@
 - `cornerstoneSetup` で Length/Angle/EllipticalROI/RectangleROI/Probe を `addTool`。各 base のツールグループへ passive 追加し、`setActiveTool` で左ドラッグ(Primary)へ割当（中=Pan・右=Zoom は維持）。
 - **操作/計測ツールはグローバルモード**（タブ内全タイルへ適用）。ツールバー W/L/Pan/Zoom と ROI メニューの計測がアクティブ表示で連動。
 - ROI 消去は `annotation.state.removeAllAnnotations()`。
-- **未対応**: segmentation（ROI ブラシ/消しゴム=labelmap）は別サブシステムのため Tools メニューはプレースホルダ。ROI 統計テキストは Cornerstone 既定表示に依存（カスタム統計パネルは将来）。新規追加タイルへの現在ツール自動適用は未対応（再選択で反映）。
+- **更新(2026-07-02 監査)**: segmentation（ブラシ/消しゴム/Wand=labelmap）は **Tools メニューで実装済**。未結線は Threshold/Scissors/RegionSegment（cornerstone 登録のみ）。ROI 統計テキストは Cornerstone 既定表示に依存（カスタム統計パネルは将来）。新規追加タイルへの現在ツール自動適用は未対応（再選択で反映）。
 
 各 Phase で型チェック green。i18n(ja/en) 追加。`fw/` 反映。
 > 注: フル `vite build`（`tsc -b`）は作業中の `qr/QRScreen.tsx`（未使用変数）で停止するため、当面は `tsc --noEmit` で検証。QRScreen 完了後にフルビルド確認。
