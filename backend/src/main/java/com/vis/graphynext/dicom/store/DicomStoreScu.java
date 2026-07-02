@@ -231,9 +231,15 @@ public class DicomStoreScu {
         try {
             as = ae.connect(local, remote, rq);
             for (Item it : items) {
-                try (DicomInputStream din = new DicomInputStream(it.file().toFile())) {
-                    din.readFileMetaInformation();
-                    Attributes dataset = din.readDataset();
+                try {
+                    // 送信元ファイルは cstore の前に読み切って閉じる。ネットワーク I/O 中にファイルハンドルを
+                    // 保持しないことで、受信側が同一パスへ書き戻す構成（自己送信）でも Windows のファイルロックで
+                    // 失敗しない（POSIX は開いたまま rename 置換可だが Windows は不可）。
+                    Attributes dataset;
+                    try (DicomInputStream din = new DicomInputStream(it.file().toFile())) {
+                        din.readFileMetaInformation();
+                        dataset = din.readDataset();
+                    }
                     DimseRSP rsp = as.cstore(it.cuid(), it.iuid(), 0, new DataWriterAdapter(dataset), it.tsuid());
                     rsp.next();
                     int status = rsp.getCommand().getInt(Tag.Status, -1);
