@@ -56,14 +56,21 @@ jobs:
         run: |
           rm -rf desktop/resources/jre
           "$JAVA_HOME/bin/jlink" --add-modules ALL-MODULE-PATH --strip-debug --no-man-pages --no-header-files --output desktop/resources/jre
+      - name: Fetch ffmpeg (このOS/アーキ向けのみ)
+        shell: bash
+        run: |
+          os=$(uname -s); arch=$(uname -m)
+          case "$os" in Linux) os=linux;; Darwin) os=mac;; *) os=win;; esac
+          case "$arch" in x86_64|amd64) arch=x64;; aarch64|arm64) arch=arm64;; *) arch=x64;; esac
+          bash scripts/fetch-ffmpeg.sh "$os-$arch"
       - name: Install desktop deps & build installer
         working-directory: desktop
         shell: bash
+        # アップロードは softprops が担うため electron-builder 側は publish しない
+        # （--publish never＋GH_TOKEN 非注入で app-update.yml 生成/repository 解決を回避）。
         run: |
           npm install
-          npm run dist
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          npm run dist -- --publish never
       - name: Upload installers
         uses: softprops/action-gh-release@v2
         with:
