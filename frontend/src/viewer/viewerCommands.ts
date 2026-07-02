@@ -22,6 +22,8 @@ export interface ViewerCommands {
   invert(): void;
   /** LUT 適用（null でグレースケールに戻す）。 */
   applyLut(lut: LutData | null): void;
+  /** 現在適用中の LUT データ（未適用/グレースケールは null）。Fusion への LUT 引き継ぎ用。 */
+  getLutData(): LutData | null;
   /** W/L プリセット適用（windowCenter / windowWidth、モダリティ値=HU 等）。 */
   setWindowLevel(center: number, width: number): void;
   /** DICOM 既定ウィンドウ（WindowCenter/Width）に戻す。 */

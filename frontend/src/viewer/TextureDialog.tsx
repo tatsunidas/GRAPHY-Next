@@ -35,6 +35,8 @@ export function TextureDialog({
   const [feature, setFeature] = useState(TEXTURE_FAMILIES[0].features[0]);
   const [targetSeriesUid, setTargetSeriesUid] = useState(series.seriesInstanceUid);
   const [maskSeriesUid, setMaskSeriesUid] = useState<string>("");
+  const [maskChannel, setMaskChannel] = useState(0);
+  const [maskNC, setMaskNC] = useState(1);
   const [kernel, setKernel] = useState(7);
   const [stride, setStride] = useState(1);
   const [force2D, setForce2D] = useState(false); // 既定は 3D base
@@ -95,6 +97,24 @@ export function TextureDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [study.studyInstanceUid, targetSeriesUid]);
 
+  // マスク変更でマスクの C 次元数（SEG マルチセグメント）を取得。未選択は 1。
+  useEffect(() => {
+    let cancelled = false;
+    setMaskChannel(0);
+    if (!maskSeriesUid) {
+      setMaskNC(1);
+      return;
+    }
+    void fetchSeriesLayout(study.studyInstanceUid, maskSeriesUid)
+      .then((layout) => {
+        if (!cancelled) setMaskNC(Math.max(1, layout.nC));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [study.studyInstanceUid, maskSeriesUid]);
+
   // ファミリー変更で特徴を先頭にリセット。
   useEffect(() => {
     setFeature(family.features[0]);
@@ -110,6 +130,7 @@ export function TextureDialog({
         studyInstanceUid: study.studyInstanceUid,
         sourceSeriesUid: targetSeriesUid,
         maskSeriesUid: maskSeriesUid || null,
+        maskChannel,
         feature: `${family.key}_${feature}`,
         filterSize: kernel,
         stride,
@@ -145,6 +166,26 @@ export function TextureDialog({
           </select>
         </Field>
 
+        {/* ターゲットが C/T 次元を持つ場合のみ、Target 直下に選択欄を表示。 */}
+        {nC > 1 && (
+          <Field label={t("texture.field.targetC")}>
+            <select value={channel} onChange={(e) => setChannel(Number(e.target.value))} disabled={busy} style={input}>
+              {Array.from({ length: nC }, (_, i) => (
+                <option key={i} value={i}>{i}</option>
+              ))}
+            </select>
+          </Field>
+        )}
+        {nT > 1 && (
+          <Field label={t("texture.field.targetT")}>
+            <select value={timePoint} onChange={(e) => setTimePoint(Number(e.target.value))} disabled={busy} style={input}>
+              {Array.from({ length: nT }, (_, i) => (
+                <option key={i} value={i}>{i}</option>
+              ))}
+            </select>
+          </Field>
+        )}
+
         <Field label={t("texture.field.mask")}>
           <select value={maskSeriesUid} onChange={(e) => setMaskSeriesUid(e.target.value)} disabled={busy} style={input}>
             <option value="">{t("texture.mask.none")}</option>
@@ -153,6 +194,17 @@ export function TextureDialog({
             ))}
           </select>
         </Field>
+
+        {/* マスクがマルチチャンネル（DICOM SEG マルチセグメント等）のときのみ選択可能に。 */}
+        {maskSeriesUid !== "" && maskNC > 1 && (
+          <Field label={t("texture.field.maskChannel")}>
+            <select value={maskChannel} onChange={(e) => setMaskChannel(Number(e.target.value))} disabled={busy} style={input}>
+              {Array.from({ length: maskNC }, (_, i) => (
+                <option key={i} value={i}>{i}</option>
+              ))}
+            </select>
+          </Field>
+        )}
 
         <Field label={t("texture.field.family")}>
           <select value={familyKey} onChange={(e) => setFamilyKey(e.target.value)} disabled={busy} style={input}>
@@ -183,26 +235,6 @@ export function TextureDialog({
             <option value="3d">{t("texture.dim.3d")}</option>
           </select>
         </Field>
-
-        {/* マルチ次元スタックのときのみ C/T を選択可能に。 */}
-        {nC > 1 && (
-          <Field label={t("texture.field.channel")}>
-            <select value={channel} onChange={(e) => setChannel(Number(e.target.value))} disabled={busy} style={input}>
-              {Array.from({ length: nC }, (_, i) => (
-                <option key={i} value={i}>{i}</option>
-              ))}
-            </select>
-          </Field>
-        )}
-        {nT > 1 && (
-          <Field label={t("texture.field.time")}>
-            <select value={timePoint} onChange={(e) => setTimePoint(Number(e.target.value))} disabled={busy} style={input}>
-              {Array.from({ length: nT }, (_, i) => (
-                <option key={i} value={i}>{i}</option>
-              ))}
-            </select>
-          </Field>
-        )}
 
         <div style={{ color: "#6b7785", fontSize: 11, marginTop: 6 }}>{t("texture.paramsNote")}</div>
         {error && <div style={errText}>{error}</div>}

@@ -13,6 +13,10 @@ export interface GraphyDesktop {
   openViewer?: (screen: string) => Promise<void>;
   /** PNG dataURL を OS のネイティブドラッグで外部（デスクトップ/他アプリ）へ書き出す。 */
   startDrag?: (dataUrl: string, filename: string) => void;
+  /** OS 標準のメモリ/システムモニタ（Windows=タスクマネージャ, macOS=アクティビティモニタ, Linux=システムモニタ）を起動する。 */
+  openMemoryMonitor?: () => Promise<void>;
+  /** 外部 URL / mailto を OS の既定アプリ（ブラウザ・メーラ）で開く。 */
+  openExternal?: (url: string) => void;
 }
 
 export function desktop(): GraphyDesktop | undefined {

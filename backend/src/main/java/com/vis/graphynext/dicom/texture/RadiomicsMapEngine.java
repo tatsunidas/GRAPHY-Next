@@ -8,18 +8,20 @@ import com.vis.graphynext.dicom.SeriesLayout;
 import com.vis.graphynext.dicom.store.DicomStorageService;
 import ij.ImagePlus;
 import ij.ImageStack;
-import ij.io.Opener;
 import ij.measure.Calibration;
 import ij.process.ByteProcessor;
 import ij.process.FloatProcessor;
 import ij.process.ImageProcessor;
 import io.github.tatsunidas.radiomics.main.FeatureVisualizationMap;
+import org.dcm4che3.data.Attributes;
+import org.dcm4che3.data.Tag;
+import org.dcm4che3.io.DicomInputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -63,40 +65,55 @@ public class RadiomicsMapEngine {
         if (layout == null || layout.cells().isEmpty()) {
             throw new IllegalArgumentException("ターゲットシリーズにフレームがありません: " + req.sourceSeriesUid());
         }
-        int nZ = Math.max(1, layout.nZ());
         int ch = clampDim(req.channel(), layout.nC());
         int tp = clampDim(req.timePoint(), layout.nT());
 
-        // z ごとの代表セル（指定 C/T）・SOP・IPP を収集。
-        String[] sopPerZ = new String[nZ];
-        int[] framePerZ = new int[nZ];
-        for (int i = 0; i < nZ; i++) framePerZ[i] = -1;
-        for (SeriesLayout.Cell cell : layout.cells()) {
-            if (cell.c() == ch && cell.t() == tp && cell.z() >= 0 && cell.z() < nZ && sopPerZ[cell.z()] == null) {
-                sopPerZ[cell.z()] = cell.sopInstanceUid();
-                framePerZ[cell.z()] = cell.frame();
-            }
-        }
-        Map<Integer, double[]> ippByZ = new HashMap<>();
+        // 指定 (C,T) に一致するセルを z 昇順で収集し、連続ボリュームとして扱う。
+        // （T/C が空間位置と一致しない＝各グローバル z にそのセルが無いシリーズでも成立する。）
+        Map<Integer, double[]> ippByZGlobal = new HashMap<>();
         if (layout.zSpatial() != null) {
             for (SeriesLayout.ZSpatial zs : layout.zSpatial()) {
-                if (zs.imagePositionPatient() != null) ippByZ.put(zs.z(), zs.imagePositionPatient());
+                if (zs.imagePositionPatient() != null) ippByZGlobal.put(zs.z(), zs.imagePositionPatient());
             }
         }
+        List<SeriesLayout.Cell> sel = new ArrayList<>();
+        for (SeriesLayout.Cell cell : layout.cells()) {
+            if (cell.c() == ch && cell.t() == tp) sel.add(cell);
+        }
+        sel.sort(java.util.Comparator.comparingInt(SeriesLayout.Cell::z));
+        if (sel.isEmpty()) {
+            throw new IllegalArgumentException("選択した C/T にフレームがありません (c=" + ch + ", t=" + tp
+                    + ", nC=" + layout.nC() + ", nT=" + layout.nT() + ")");
+        }
+        int nZ = sel.size();
+        String[] sopPerZ = new String[nZ];
+        int[] framePerZ = new int[nZ];
+        Map<Integer, double[]> ippByZ = new HashMap<>(); // k(連続) → IPP
+        for (int k = 0; k < nZ; k++) {
+            SeriesLayout.Cell c = sel.get(k);
+            sopPerZ[k] = c.sopInstanceUid();
+            framePerZ[k] = c.frame();
+            double[] ipp = ippByZGlobal.get(c.z());
+            if (ipp != null) ippByZ.put(k, ipp);
+        }
 
-        // ターゲットボリュームを積む（Opener で DICOM→ImageProcessor、校正=HU/SUV 直線を引き継ぐ）。
+        // ターゲットボリュームを積む（dcm4che でネイティブ画素をデコード）。
         int w = 0, h = 0;
         Calibration cal = null;
         List<ImageProcessor> procs = new ArrayList<>(nZ);
         for (int z = 0; z < nZ; z++) {
             Loaded loaded = openBySop(sopPerZ[z], framePerZ[z]);
-            if (loaded == null) throw new IllegalArgumentException("スライスを読み込めません z=" + z);
+            if (loaded == null) {
+                throw new IllegalArgumentException("スライスをデコードできません z=" + z + " sop=" + sopPerZ[z]
+                        + "（圧縮転送構文の可能性。backend ログを確認してください）");
+            }
             procs.add(loaded.ip());
             if (cal == null && loaded.cal() != null && loaded.cal().calibrated()) cal = loaded.cal();
             w = loaded.ip().getWidth();
             h = loaded.ip().getHeight();
         }
         if (w <= 0 || h <= 0) throw new IllegalStateException("画像サイズを取得できません");
+        log.info("[texture] target loaded: c={} t={} slices={} ({}x{})", ch, tp, nZ, w, h);
         ImageStack imgStack = new ImageStack(w, h);
         for (ImageProcessor ip : procs) imgStack.addSlice(ip);
         ImagePlus img = new ImagePlus("texture-src", imgStack);
@@ -153,61 +170,46 @@ public class RadiomicsMapEngine {
     }
 
     /**
-     * stride&gt;1: XY は RadiomicsJ が間引き、Z はここで間引いて低解像度 3D マップを作り、
-     * Trilinear 補間で source 次元（w×h×s）へ拡大する。
+     * stride&gt;1: XY のみ RadiomicsJ が間引く（<b>Z 方向は常に stride=1＝全スライス計算</b>）。
+     * 得られた各スライス（out_w×out_h）を <b>Bilinear 補間で source 次元（w×h）へ拡大</b>する。
+     * Z は 1:1 のため補間しない（ユーザー指定: Z stride は 1 固定）。
      */
     private float[][] computeStrided(ImagePlus img, ImagePlus mask, TextureFeatureCatalog.BuiltFeature built,
                                      int filterSize, boolean d2, int stride, int w, int h, int s) {
         int outW = (int) Math.ceil((double) w / stride);
         int outH = (int) Math.ceil((double) h / stride);
-        // 選択 z: 0, stride, 2*stride, ...
-        List<Integer> zsel = new ArrayList<>();
-        for (int z = 0; z < s; z += stride) zsel.add(z);
-        int depth = zsel.size();
-        float[][] low = new float[depth][];
-        for (int k = 0; k < depth; k++) {
-            int z = zsel.get(k);
-            ImagePlus one = FeatureVisualizationMap.generateFeatureMap(
-                    img, mask, z + 1, built.calculator(), filterSize, d2, stride);
-            low[k] = (float[]) one.getStack().getProcessor(1).convertToFloatProcessor().getPixels();
-        }
-        // Trilinear 拡大: source (sx,sy,sz) → 低解像度座標 (sx/stride, sy/stride, sz/stride)。
+        // 全スライスを一括計算（XY のみ間引き）。
+        ImagePlus lo = FeatureVisualizationMap.generateFeatureMap(img, mask, -1, built.calculator(), filterSize, d2, stride);
+        ImageStack st = lo.getStack();
+        int loN = lo.getNSlices();
         float[][] full = new float[s][w * h];
         for (int sz = 0; sz < s; sz++) {
-            double fz = (double) sz / stride;
+            // 万一スライス数が食い違っても範囲内に収める。
+            float[] lz = (float[]) st.getProcessor(Math.min(sz, loN - 1) + 1).convertToFloatProcessor().getPixels();
             float[] dst = full[sz];
             for (int sy = 0; sy < h; sy++) {
                 double fy = (double) sy / stride;
                 for (int sx = 0; sx < w; sx++) {
                     double fx = (double) sx / stride;
-                    dst[sy * w + sx] = trilinear(low, outW, outH, depth, fx, fy, fz);
+                    dst[sy * w + sx] = bilinear(lz, outW, outH, fx, fy);
                 }
             }
         }
         return full;
     }
 
-    /** 低解像度グリッド low[depth][outW*outH] を Trilinear 補間サンプルする。 */
-    private static float trilinear(float[][] low, int outW, int outH, int depth,
-                                   double fx, double fy, double fz) {
+    /** 低解像度スライス low[outW*outH] を Bilinear 補間サンプルする（XY のみ）。 */
+    private static float bilinear(float[] low, int outW, int outH, double fx, double fy) {
         int x0 = clamp((int) Math.floor(fx), 0, outW - 1);
         int y0 = clamp((int) Math.floor(fy), 0, outH - 1);
-        int z0 = clamp((int) Math.floor(fz), 0, depth - 1);
         int x1 = Math.min(x0 + 1, outW - 1);
         int y1 = Math.min(y0 + 1, outH - 1);
-        int z1 = Math.min(z0 + 1, depth - 1);
-        double dx = clamp01(fx - x0), dy = clamp01(fy - y0), dz = clamp01(fz - z0);
-        float c000 = low[z0][y0 * outW + x0], c100 = low[z0][y0 * outW + x1];
-        float c010 = low[z0][y1 * outW + x0], c110 = low[z0][y1 * outW + x1];
-        float c001 = low[z1][y0 * outW + x0], c101 = low[z1][y0 * outW + x1];
-        float c011 = low[z1][y1 * outW + x0], c111 = low[z1][y1 * outW + x1];
-        double c00 = c000 * (1 - dx) + c100 * dx;
-        double c10 = c010 * (1 - dx) + c110 * dx;
-        double c01 = c001 * (1 - dx) + c101 * dx;
-        double c11 = c011 * (1 - dx) + c111 * dx;
-        double c0 = c00 * (1 - dy) + c10 * dy;
-        double c1 = c01 * (1 - dy) + c11 * dy;
-        return (float) (c0 * (1 - dz) + c1 * dz);
+        double dx = clamp01(fx - x0), dy = clamp01(fy - y0);
+        float c00 = low[y0 * outW + x0], c10 = low[y0 * outW + x1];
+        float c01 = low[y1 * outW + x0], c11 = low[y1 * outW + x1];
+        double c0 = c00 * (1 - dx) + c10 * dx;
+        double c1 = c01 * (1 - dx) + c11 * dx;
+        return (float) (c0 * (1 - dy) + c1 * dy);
     }
 
     /**
@@ -227,30 +229,35 @@ public class RadiomicsMapEngine {
             log.warn("[texture] mask: series '{}' empty -> full-face mask", req.maskSeriesUid());
             return fullFaceMask(w, h, nZ, label);
         }
-        int mZ = Math.max(1, ml.nZ());
+        int mCh = clampDim(req.maskChannel(), ml.nC()); // SEG マルチセグメント=マルチ C の選択。
 
-        // マスクの z ごと SOP/frame/IPP。
-        String[] sop = new String[mZ];
-        int[] frame = new int[mZ];
-        for (int i = 0; i < mZ; i++) frame[i] = -1;
-        for (SeriesLayout.Cell cell : ml.cells()) {
-            if (cell.c() == 0 && cell.t() == 0 && cell.z() >= 0 && cell.z() < mZ && sop[cell.z()] == null) {
-                sop[cell.z()] = cell.sopInstanceUid();
-                frame[cell.z()] = cell.frame();
-            }
-        }
-        double[][] maskIpp = new double[mZ][];
+        // マスクの選択チャンネルのセルを z 昇順で収集（ターゲット同様、連続スタックとして扱う）。
+        Map<Integer, double[]> maskIppGlobal = new HashMap<>();
         if (ml.zSpatial() != null) {
             for (SeriesLayout.ZSpatial zs : ml.zSpatial()) {
-                if (zs.z() >= 0 && zs.z() < mZ) maskIpp[zs.z()] = zs.imagePositionPatient();
+                if (zs.imagePositionPatient() != null) maskIppGlobal.put(zs.z(), zs.imagePositionPatient());
             }
         }
-
-        // マスクスライスを事前ロード（ByteProcessor 化, ≥0.5→label で二値化）。
+        List<SeriesLayout.Cell> mSel = new ArrayList<>();
+        for (SeriesLayout.Cell cell : ml.cells()) {
+            if (cell.c() == mCh && cell.t() == 0) mSel.add(cell);
+        }
+        mSel.sort(java.util.Comparator.comparingInt(SeriesLayout.Cell::z));
+        if (mSel.isEmpty()) {
+            log.warn("[texture] mask channel c={} (nC={}) has no frames -> full-face mask", mCh, ml.nC());
+            return fullFaceMask(w, h, nZ, label);
+        }
+        int mZ = mSel.size();
+        if (ml.nC() > 1) {
+            log.info("[texture] mask channel selected: c={} of nC={} ({} slices, series={})", mCh, ml.nC(), mZ, req.maskSeriesUid());
+        }
+        double[][] maskIpp = new double[mZ][];
         ByteProcessor[] maskSlices = new ByteProcessor[mZ];
-        for (int z = 0; z < mZ; z++) {
-            Loaded l = openBySop(sop[z], frame[z]);
-            maskSlices[z] = (l != null) ? binarize(l.ip(), w, h, label) : null;
+        for (int k = 0; k < mZ; k++) {
+            SeriesLayout.Cell c = mSel.get(k);
+            maskIpp[k] = maskIppGlobal.get(c.z());
+            Loaded l = openBySop(c.sopInstanceUid(), c.frame());
+            maskSlices[k] = (l != null) ? binarize(l.ip(), w, h, label) : null;
         }
 
         // 幾何整列の可否: ターゲット法線＋両者 IPP が揃うか。
@@ -264,7 +271,9 @@ public class RadiomicsMapEngine {
             for (int z = 0; z < mZ; z++) {
                 if (maskIpp[z] != null && maskIpp[z].length == 3) { mProj[z] = dot(maskIpp[z], normal); mHas[z] = true; }
             }
-            double tol = targetSliceSpacing(targetIppByZ, normal, nZ);
+            // 許容差はスライス間隔の半分（最近傍マッチ）。これにより、マスク端の外側にある
+            // ターゲットスライス（≒1 スライス間隔だけ離れる）が端のマスクを拾わず空になる。
+            double tol = 0.5 * targetSliceSpacing(targetIppByZ, normal, nZ);
             int outOfRange = 0;
             for (int z = 0; z < nZ; z++) {
                 double tPos = dot(targetIppByZ.get(z), normal);
@@ -278,12 +287,13 @@ public class RadiomicsMapEngine {
                 if (best >= 0 && bestD <= tol) {
                     mapZ[z] = best;
                 } else {
-                    // OutOfRange → スライスオーダー（index）にフォールバック。
-                    mapZ[z] = (z < mZ && maskSlices[z] != null) ? z : -1;
+                    // 幾何整列あり かつ マスク範囲外（OutOfRange）: そこにマスクは無い → 空スライス。
+                    // （index フォールバックすると無関係なマスクを載せてしまうため採用しない。）
+                    mapZ[z] = -1;
                     outOfRange++;
                 }
             }
-            log.info("[texture] mask: IOP/IPP-aligned (srcZ={}, maskZ={}, tol={}mm, outOfRange={} -> slice-order)",
+            log.info("[texture] mask: IOP/IPP-aligned (srcZ={}, maskZ={}, tol={}mm, outOfRange={} -> empty)",
                     nZ, mZ, String.format("%.3f", tol), outOfRange);
         } else {
             for (int z = 0; z < nZ; z++) mapZ[z] = (z < mZ && maskSlices[z] != null) ? z : -1;
@@ -393,30 +403,86 @@ public class RadiomicsMapEngine {
     /** 読み込んだ 1 枚。 */
     private record Loaded(ImageProcessor ip, Calibration cal) {}
 
-    /** SOP（＋モザイクフレーム）から ImageProcessor と Calibration を得る。 */
+    /**
+     * SOP（＋モザイクフレーム）から ImageProcessor を得る。ImageJ の Opener はヘッドレス backend では
+     * DICOM を開けないことがあるため、<b>dcm4che でデータセットを読み、ネイティブ（非圧縮）画素を
+     * 直接デコード</b>する。Rescale を適用してモダリティ値（HU/SUV 等）の FloatProcessor を返す。
+     */
     private Loaded openBySop(String sop, int frame) throws IOException {
         if (sop == null) return null;
+        Attributes ds;
         if (frame >= 0) {
             byte[] dicom = storage.frameDicom(sop, frame);
             if (dicom == null) return null;
-            Path tmp = Files.createTempFile("graphy-tex-", ".dcm");
-            try {
-                Files.write(tmp, dicom);
-                return open(tmp);
-            } finally {
-                Files.deleteIfExists(tmp);
+            try (DicomInputStream in = new DicomInputStream(new ByteArrayInputStream(dicom))) {
+                in.setIncludeBulkData(DicomInputStream.IncludeBulkData.YES);
+                ds = in.readDataset();
+            }
+        } else {
+            Path path = storage.resolveInstanceFile(sop);
+            if (path == null) return null;
+            try (DicomInputStream in = new DicomInputStream(path.toFile())) {
+                in.setIncludeBulkData(DicomInputStream.IncludeBulkData.YES);
+                ds = in.readDataset();
             }
         }
-        Path path = storage.resolveInstanceFile(sop);
-        return path != null ? open(path) : null;
+        return processorFrom(ds, sop);
     }
 
-    private Loaded open(Path path) {
-        ImagePlus imp = new Opener().openImage(path.toString());
-        if (imp == null) return null;
-        Calibration cal = imp.getCalibration();
-        ImageProcessor ip = (imp.getStackSize() > 1) ? imp.getStack().getProcessor(1) : imp.getProcessor();
-        return new Loaded(ip, cal);
+    /** dcm4che データセットのネイティブ画素 → モダリティ値(Rescale 適用)の FloatProcessor。 */
+    private Loaded processorFrom(Attributes ds, String sop) throws IOException {
+        int rows = ds.getInt(Tag.Rows, 0);
+        int cols = ds.getInt(Tag.Columns, 0);
+        if (rows <= 0 || cols <= 0) {
+            log.warn("[texture] no Rows/Columns for {}", sop);
+            return null;
+        }
+        int spp = ds.getInt(Tag.SamplesPerPixel, 1);
+        if (spp != 1) {
+            log.warn("[texture] SamplesPerPixel={} (color) not supported: {}", spp, sop);
+            return null;
+        }
+        int ba = ds.getInt(Tag.BitsAllocated, 16);
+        int bs = ds.getInt(Tag.BitsStored, ba);
+        int pr = ds.getInt(Tag.PixelRepresentation, 0);
+        double slope = ds.getDouble(Tag.RescaleSlope, 1.0);
+        double intercept = ds.getDouble(Tag.RescaleIntercept, 0.0);
+        byte[] px = ds.getBytes(Tag.PixelData);
+        if (px == null) {
+            // 圧縮（カプセル化）画素はネイティブデコード不可。
+            log.warn("[texture] PixelData missing/encapsulated (compressed transfer syntax?) for {}", sop);
+            return null;
+        }
+        int n = rows * cols;
+        float[] f = new float[n];
+        if (ba == 16) {
+            if (px.length < n * 2) {
+                log.warn("[texture] PixelData too short ({}<{}) for {}", px.length, n * 2, sop);
+                return null;
+            }
+            int mask = (bs >= 16) ? 0xFFFF : ((1 << bs) - 1);
+            int signBit = 1 << (bs - 1);
+            int span = 1 << bs;
+            for (int i = 0; i < n; i++) {
+                int v = ((px[2 * i] & 0xFF) | ((px[2 * i + 1] & 0xFF) << 8)) & mask;
+                if (pr == 1 && (v & signBit) != 0) v -= span; // 符号付き 2 の補数（BitsStored 準拠）
+                f[i] = (float) (v * slope + intercept);
+            }
+        } else if (ba == 8) {
+            if (px.length < n) {
+                log.warn("[texture] PixelData too short ({}<{}) for {}", px.length, n, sop);
+                return null;
+            }
+            for (int i = 0; i < n; i++) {
+                f[i] = (float) ((px[i] & 0xFF) * slope + intercept);
+            }
+        } else {
+            log.warn("[texture] unsupported BitsAllocated={} for {}", ba, sop);
+            return null;
+        }
+        // 値は既にモダリティ値（HU/SUV 等）。Calibration は identity 扱い（radiomicsj は画素値で離散化）。
+        FloatProcessor fp = new FloatProcessor(cols, rows, f, null);
+        return new Loaded(fp, null);
     }
 
     private static int oddUp(int n) {

@@ -53,6 +53,9 @@
           database: "データベースを確認・マイグレーションしています",
           scp: "DICOM 受信(SCP)を開始しています",
           plugins: "プラグインを読み込んでいます",
+          pluginsDone: "プラグインを読み込みました",
+          pluginsNone: "プラグインはありません",
+          pluginsFailed: "プラグインの読み込みに失敗しました",
           ready: "起動が完了しました",
           error: "起動に失敗しました",
         },
@@ -63,6 +66,9 @@
           database: "Checking / migrating the database",
           scp: "Starting DICOM receiver (SCP)",
           plugins: "Loading plugins",
+          pluginsDone: "Plugins loaded",
+          pluginsNone: "No plugins",
+          pluginsFailed: "Failed to load plugins",
           ready: "Startup complete",
           error: "Startup failed",
         },
@@ -83,8 +89,24 @@
         }
         li.className = state || "running";
         li.querySelector(".icon").textContent = ICON[state] || ICON.running;
-        // step をローカライズ（未知の step は backend のメッセージにフォールバック）
-        li.querySelector(".msg").textContent = T[step] || message || step;
+        li.querySelector(".msg").textContent = labelFor(step, state, message);
+      }
+
+      // step 表示文言をローカライズ。plugins は状態＋件数から動的に組み立てる。
+      function labelFor(step, state, message) {
+        if (step === "plugins") {
+          if (state === "ok") {
+            const n = parseInt(message, 10);
+            if (!Number.isFinite(n)) return T.pluginsDone;
+            return n === 0 ? T.pluginsNone : `${T.pluginsDone} (${n})`;
+          }
+          if (state === "error") {
+            return message ? `${T.pluginsFailed}: ${message}` : T.pluginsFailed;
+          }
+          return T.plugins; // running
+        }
+        // その他: ローカライズ済みラベル（未知の step は backend メッセージにフォールバック）
+        return T[step] || message || step;
       }
 
       if (window.graphySplash) {

@@ -325,6 +325,48 @@ ipcMain.on("graphy:start-drag", (e, payload) => {
   }
 });
 
+// OS 標準のメモリ/システムモニタを起動する（System メニューの MemoryMonitor）。
+//   Windows … タスクマネージャ (taskmgr)
+//   macOS   … アクティビティモニタ (Activity Monitor)
+//   Linux   … 代表的なシステムモニタを順に試す
+// 子プロセスは detached + unref で親（Electron）から切り離す。
+function launchFirstAvailable(cmds) {
+  const [head, ...rest] = cmds;
+  if (!head) {
+    console.error("[memory-monitor] 起動可能なシステムモニタが見つかりません");
+    return;
+  }
+  const child = spawn(head, [], { detached: true, stdio: "ignore" });
+  child.on("error", () => launchFirstAvailable(rest)); // 未インストール(ENOENT)なら次候補へ
+  child.unref();
+}
+
+ipcMain.handle("graphy:open-memory-monitor", () => {
+  const opts = { detached: true, stdio: "ignore" };
+  if (process.platform === "win32") {
+    spawn("taskmgr.exe", [], opts).unref();
+  } else if (process.platform === "darwin") {
+    spawn("open", ["-a", "Activity Monitor"], opts).unref();
+  } else {
+    launchFirstAvailable([
+      "gnome-system-monitor",
+      "plasma-systemmonitor",
+      "ksysguard",
+      "mate-system-monitor",
+      "xfce4-taskmanager",
+      "lxtask",
+    ]);
+  }
+});
+
+// 外部 URL / mailto を OS の既定アプリ（ブラウザ・メーラ）で開く（Help メニューのリンク等）。
+// URL スキームは http(s) / mailto のみ許可（任意コマンド実行を避ける）。
+ipcMain.on("graphy:open-external", (_e, url) => {
+  if (typeof url === "string" && /^(https?:|mailto:)/i.test(url)) {
+    shell.openExternal(url);
+  }
+});
+
 // インポート: ネイティブのファイル/フォルダ選択ダイアログ。選んだパスを返す。
 ipcMain.handle("graphy:pick-import", async () => {
   const result = await dialog.showOpenDialog(BrowserWindow.getFocusedWindow(), {

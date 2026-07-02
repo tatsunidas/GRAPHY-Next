@@ -16,6 +16,8 @@ import { SlicerScreen } from "./slicer/SlicerScreen";
 import { CurvedMprScreen } from "./curvedmpr/CurvedMprScreen";
 import { QRScreen } from "./qr/QRScreen";
 import { subscribeDbChanged, type DbChangedDetail } from "./dbEvents";
+import { LogViewerHost } from "./system/LogViewer";
+import { DeveloperContactHost } from "./help/DeveloperContact";
 import { useI18n } from "./i18n/i18n";
 
 export function App() {
@@ -93,6 +95,10 @@ export function App() {
         onChanged={() => setDbVersion((v) => v + 1)}
       />
       <KeyboardHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
+      {/* System メニューの「Log」ビューア（全ウィンドウ共通・非モーダル）。 */}
+      <LogViewerHost />
+      {/* Help メニューの「Contact to developer」ダイアログ（全ウィンドウ共通）。 */}
+      <DeveloperContactHost />
       {/* 別ウィンドウ（2D Viewer）では DB 変更時に再読込/開き直しをポップアップで促す。 */}
       {screen === "2dviewer" && <DbChangeNotice />}
     </>

@@ -6,6 +6,10 @@ import { useEffect, useState } from "react";
 import { type ToolKind, type ViewerKind } from "./Toolbar";
 import { useI18n } from "../i18n/i18n";
 import { usePluginMenu, runPluginBackend } from "../plugins/pluginRegistry";
+import { openLogViewer } from "../system/LogViewer";
+import { openMemoryMonitor } from "../system/memoryMonitor";
+import { openUsersCommunity } from "../help/links";
+import { openDeveloperContact } from "../help/DeveloperContact";
 
 interface MenuItem {
   label: string;
@@ -96,12 +100,18 @@ export function MenuBar({
       items: [
         { label: t("app.btn.settingsTitle"), onClick: onOpenSettings },
         { label: t("app.btn.dbTitle"), onClick: onOpenDb, disabled: !isStandalone },
+        { label: t("system.log"), onClick: openLogViewer },
+        { label: t("system.memoryMonitor"), onClick: () => void openMemoryMonitor(t) },
       ],
     },
     {
       id: "help",
       label: t("main.menu.help"),
-      items: [{ label: t("sc.title"), onClick: onOpenHelp }],
+      items: [
+        { label: t("sc.title"), onClick: onOpenHelp },
+        { label: t("help.community"), onClick: openUsersCommunity },
+        { label: t("help.contact"), onClick: openDeveloperContact },
+      ],
     },
   ];
 

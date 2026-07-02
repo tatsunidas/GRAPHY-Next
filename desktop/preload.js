@@ -26,4 +26,8 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   openViewer: (screen) => ipcRenderer.invoke("graphy:open-viewer", screen),
   // PNG dataURL を OS のネイティブドラッグに乗せて外部へ書き出す。
   startDrag: (dataUrl, filename) => ipcRenderer.send("graphy:start-drag", { dataUrl, filename }),
+  // OS 標準のメモリ/システムモニタを起動する。
+  openMemoryMonitor: () => ipcRenderer.invoke("graphy:open-memory-monitor"),
+  // 外部 URL / mailto を OS の既定アプリで開く。
+  openExternal: (url) => ipcRenderer.send("graphy:open-external", url),
 });

@@ -6,8 +6,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-echo "[dev-desktop] backend jar を最新コードでビルドします（UIは Vite が配信）..."
-( cd backend && ${MVN:-mvn} -q -Dfrontend.skip=true clean package )
+echo "[dev-desktop] backend jar を最新コードでビルドします（UIは Vite が配信・テストはスキップ）..."
+( cd backend && ${MVN:-mvn} -q -Dfrontend.skip=true -DskipTests clean package )
 
 # 同梱用にステージされた古い jar が backend/target を隠さないよう、dev では除去する。
 rm -rf desktop/resources/backend

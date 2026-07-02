@@ -66,7 +66,7 @@ const TEXTURE_CATEGORY: CategoryDef = {
   sections: [
     {
       titleKey: "settings.sec.tex.computation",
-      fields: [{ key: "texture.D3Basis", labelKey: "settings.tex.d3basis", type: "toggle", default: false, helpKey: "settings.tex.d3basis.help" }],
+      fields: [{ key: "texture.D3Basis", labelKey: "settings.tex.d3basis", type: "toggle", default: true, helpKey: "settings.tex.d3basis.help" }],
     },
     {
       titleKey: "settings.sec.tex.mask",

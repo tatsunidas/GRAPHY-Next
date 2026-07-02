@@ -126,6 +126,9 @@ export function FusionImageViewer({
   overlayT,
   lut,
   opacity,
+  windowCenter,
+  windowWidth,
+  onAutoWL,
   onLayoutChange,
 }: {
   instances: Instance[];
@@ -145,6 +148,11 @@ export function FusionImageViewer({
   lut?: { r: number[]; g: number[]; b: number[] } | null;
   /** 不透明度（0–1）。 */
   opacity: number;
+  /** オーバーレイ W/L の上書き（未指定/null なら DICOM 既定 or 自動 W/L）。 */
+  windowCenter?: number | null;
+  windowWidth?: number | null;
+  /** 実際に用いた既定 W/L（DICOM or 自動）を親へ通知（コントロールバーの初期値シード用）。 */
+  onAutoWL?: (center: number, width: number) => void;
   onLayoutChange?: (layout: SeriesLayout) => void;
 }) {
   const imageIds = useMemo(
@@ -198,10 +206,33 @@ export function FusionImageViewer({
     [],
   );
 
+  /** オーバーレイを消去する（前景ボリューム範囲外のスライスなど、何も描かない場合に呼ぶ）。 */
+  const clearCanvas = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }, []);
+
   const runFusion = useCallback(async () => {
     if (computingRef.current) return;
     if (!fgDto) return;
     const activeLut = lut;
+
+    // W/L 解決: 上書き値があればそれを、無ければ DICOM 既定 or 自動を用い、既定値は親へ通知。
+    const resolveWL = (voiLut: AnyObj, values: Float32Array): { center: number; width: number } => {
+      if (typeof windowCenter === "number" && typeof windowWidth === "number" && windowWidth > 0) {
+        return { center: windowCenter, width: windowWidth };
+      }
+      let def: { center: number; width: number };
+      if (typeof voiLut.windowCenter === "number" && typeof voiLut.windowWidth === "number" && voiLut.windowWidth > 0) {
+        def = { center: voiLut.windowCenter, width: voiLut.windowWidth };
+      } else {
+        def = autoWindowLevel(values);
+      }
+      onAutoWL?.(def.center, def.width);
+      return def;
+    };
     const currentLayout = layoutRef.current;
     const cc = Math.min(Math.max(0, overlayC), currentLayout.nC - 1);
     const tc = Math.min(Math.max(0, overlayT), currentLayout.nT - 1);
@@ -247,6 +278,17 @@ export function FusionImageViewer({
         const w_center = bgToFg[0] * fRs[0] + bgToFg[1] * fRs[1] + bgToFg[2] * fRs[2];
 
         const sliceSpacing = sortedZ.length > 1 ? Math.abs(wPositions[1] - wPositions[0]) : 5;
+
+        // 背景スライスが前景ボリュームの z 範囲外なら、その断面に前景は存在しない → 消去して終了。
+        // （末端スライスへのクランプ描画で「実際にはない場所」にオーバーレイが残るのを防ぐ。）
+        let minW = wPositions[0], maxW = wPositions[0];
+        for (const wp of wPositions) { if (wp < minW) minW = wp; if (wp > maxW) maxW = wp; }
+        const margin = sliceSpacing / 2; // 末端スライスの厚み分だけ許容
+        if (w_center < minW - margin || w_center > maxW + margin) {
+          clearCanvas();
+          return;
+        }
+
         const threshold = Math.max(sliceSpacing * 2, 10); // mm
         const neededZIndices: number[] = [];
         for (let i = 0; i < sortedZ.length; i++) {
@@ -293,13 +335,7 @@ export function FusionImageViewer({
 
         const fusionPixels = computeFusionSlice(fgVolume, bgMeta);
         const voiLut: AnyObj = metaData.get("voiLutModule", fgZStack[loadedSlices[0].zIdx] ?? "") ?? {};
-        let center: number, width: number;
-        if (typeof voiLut.windowCenter === "number" && typeof voiLut.windowWidth === "number" && voiLut.windowWidth > 0) {
-          center = voiLut.windowCenter; width = voiLut.windowWidth;
-        } else {
-          const auto = autoWindowLevel(fusionPixels);
-          center = auto.center; width = auto.width;
-        }
+        const { center, width } = resolveWL(voiLut, fusionPixels);
         drawValues(fusionPixels, bgCols, bgRows, center, width, activeLut);
       } else {
         // ── 非空間フォールバック: 比例 Z で前景スライスを base 矩形にストレッチ ──
@@ -319,19 +355,13 @@ export function FusionImageViewer({
         const values = new Float32Array(cols * rows);
         for (let i = 0; i < values.length; i++) values[i] = pix[i] * scale + offset;
         const voiLut: AnyObj = metaData.get("voiLutModule", fgId) ?? {};
-        let center: number, width: number;
-        if (typeof voiLut.windowCenter === "number" && typeof voiLut.windowWidth === "number" && voiLut.windowWidth > 0) {
-          center = voiLut.windowCenter; width = voiLut.windowWidth;
-        } else {
-          const auto = autoWindowLevel(values);
-          center = auto.center; width = auto.width;
-        }
+        const { center, width } = resolveWL(voiLut, values);
         drawValues(values, cols, rows, center, width, activeLut);
       }
     } finally {
       computingRef.current = false;
     }
-  }, [baseImageId, baseIndex, baseCount, fgDto, overlayC, overlayT, lut, drawValues]);
+  }, [baseImageId, baseIndex, baseCount, fgDto, overlayC, overlayT, lut, windowCenter, windowWidth, onAutoWL, drawValues, clearCanvas]);
 
   useEffect(() => {
     void runFusion();

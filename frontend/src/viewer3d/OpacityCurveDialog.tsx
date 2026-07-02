@@ -70,6 +70,18 @@ export function OpacityCurveDialog({
     [onChange],
   );
 
+  // 空で開いたら範囲端の線形ランプで初期化（開いた時点で既定カーブを VR に反映）。
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (!seededRef.current && pts.length === 0) {
+      seededRef.current = true;
+      commit([
+        { value: lo, opacity: 0 },
+        { value: hi, opacity: 1 },
+      ]);
+    }
+  }, [lo, hi, pts.length, commit]);
+
   // 描画。
   useEffect(() => {
     const canvas = canvasRef.current;

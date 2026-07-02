@@ -159,3 +159,126 @@ function projectBand(
       return sum / n;
   }
 }
+
+// ── アンフォールド（回転）CPR ＝「展開図」 ────────────────────────
+/**
+ * アンフォールド CPR パラメータ。中心線の周りを 360° 掃引して筒を開いた展開図を作る
+ * （腸管の仮想展開 / 血管壁の全周展開）。
+ */
+export interface UnfoldParams {
+  /** 出力列間隔（曲線に沿う弧長, mm）。 */
+  arcStepMm: number;
+  /** 角度分割（度）。行数 = round(360/angleStepDeg)。 */
+  angleStepDeg: number;
+  frameMode: FrameMode;
+  /** 径方向サンプル範囲（mm, 中心線からの距離）。min<max で帯投影、min>=max なら単一半径 max。 */
+  radialMinMm: number;
+  radialMaxMm: number;
+  /** 径方向サンプル数（帯投影時, >=2）。 */
+  radialSampleCount: number;
+  projectionMode: ProjectionMode;
+  outOfBoundsValue: number;
+}
+
+/** アンフォールド CPR 結果。 */
+export interface UnfoldResult {
+  /** row-major, 長さ = width*height。行=角度（0..360°）、列=弧長。 */
+  pixels: Float32Array;
+  width: number; // 弧長方向
+  height: number; // 角度方向
+  /** 1 列あたり mm = arcStepMm。 */
+  pixelSpacingX: number;
+  /** 1 行あたりの近似周方向 mm = 2π·r/height（r=径範囲の中央値）。展開のため近似。 */
+  pixelSpacingY: number;
+  angleStepDeg: number;
+}
+
+/** 既定パラメータ（呼び出し側が上書きする土台）。 */
+export function defaultUnfoldParams(): UnfoldParams {
+  return {
+    arcStepMm: 1,
+    angleStepDeg: 2,
+    frameMode: "ROTATION_MINIMIZING",
+    radialMinMm: 0,
+    radialMaxMm: 10,
+    radialSampleCount: 8,
+    projectionMode: "CENTERLINE_ONLY",
+    outOfBoundsValue: 0,
+  };
+}
+
+/**
+ * 中心線の周りを 360° 掃引した展開図（X=弧長, Y=角度）を返す。
+ * 角度 θ ごとに方向 `dir(θ)=cosθ·normal + sinθ·binormal` を作り、径方向に
+ * 単一半径（`radialMaxMm`）または帯 [radialMinMm, radialMaxMm] を投影（MIP/MINIP/AVG）でサンプルする。
+ *
+ * @param sampleFn 任意の world→値サンプラ。省略時は `makeWorldSampler(vol)`（CPR と同方針）。
+ */
+export function unfoldReformat(
+  curve: Centerline3D,
+  vol: ResliceVolume,
+  params: UnfoldParams,
+  sampleFn?: (w: Vec3) => number,
+): UnfoldResult {
+  if (!curve || curve.size() < 2) {
+    throw new Error("curve must have at least 2 control points");
+  }
+  const arcStep = params.arcStepMm > 0 ? params.arcStepMm : 1;
+  const angleStep = params.angleStepDeg > 0 ? params.angleStepDeg : 2;
+
+  const sampleAt = sampleFn ?? makeWorldSampler(vol, "linear");
+
+  const length = curve.getTotalLength();
+  const width = Math.max(1, Math.round(length / arcStep) + 1);
+  const height = Math.max(1, Math.round(360 / angleStep)); // 0..360° を period なく一巡
+
+  const rMax = params.radialMaxMm;
+  const rMin = Math.max(0, params.radialMinMm);
+  const useBand =
+    params.projectionMode !== "CENTERLINE_ONLY" && rMax > rMin && params.radialSampleCount > 1;
+  const rMid = useBand ? (rMin + rMax) / 2 : rMax;
+
+  const pixels = new Float32Array(width * height);
+
+  for (let col = 0; col < width; col++) {
+    const s = Math.min(col * arcStep, length);
+    const frame = curve.frameAt(s, params.frameMode);
+    for (let row = 0; row < height; row++) {
+      const theta = (row * angleStep * Math.PI) / 180;
+      const ct = Math.cos(theta), st = Math.sin(theta);
+      // dir(θ) = cosθ·normal + sinθ·binormal（normal/binormal は正規直交＝単位方向）。
+      const dir: Vec3 = [
+        frame.normal[0] * ct + frame.binormal[0] * st,
+        frame.normal[1] * ct + frame.binormal[1] * st,
+        frame.normal[2] * ct + frame.binormal[2] * st,
+      ];
+      let value: number;
+      if (!useBand) {
+        value = sampleAt(add(frame.position, mul(dir, rMax)));
+      } else {
+        const n = params.radialSampleCount;
+        let sum = 0, max = -Number.MAX_VALUE, min = Number.MAX_VALUE;
+        for (let k = 0; k < n; k++) {
+          const r = rMin + ((rMax - rMin) * k) / (n - 1);
+          const val = sampleAt(add(frame.position, mul(dir, r)));
+          sum += val;
+          if (val > max) max = val;
+          if (val < min) min = val;
+        }
+        value =
+          params.projectionMode === "MIP" ? max : params.projectionMode === "MINIP" ? min : sum / n;
+      }
+      pixels[row * width + col] = value;
+    }
+  }
+
+  const circ = (2 * Math.PI * Math.max(rMid, 1e-3)) / height;
+  return {
+    pixels,
+    width,
+    height,
+    pixelSpacingX: arcStep,
+    pixelSpacingY: circ,
+    angleStepDeg: angleStep,
+  };
+}

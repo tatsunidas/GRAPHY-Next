@@ -87,6 +87,8 @@ export function ensureGrayscaleColormap(): string {
   if (!grayscaleRegistered) {
     try {
       csUtilities.colormap.registerColormap({
+        ColorSpace: "RGB",
+        Name: GRAYSCALE_COLORMAP,
         name: GRAYSCALE_COLORMAP,
         RGBPoints: [0, 0, 0, 0, 1, 1, 1, 1],
       });
@@ -111,7 +113,7 @@ export function registerLutColormap(lut: LutData): string {
   }
   const name = `GRAPHY-LUT-${lut.name}`;
   try {
-    csUtilities.colormap.registerColormap({ name, RGBPoints: pts });
+    csUtilities.colormap.registerColormap({ ColorSpace: "RGB", Name: name, name, RGBPoints: pts });
   } catch {
     /* ignore */
   }

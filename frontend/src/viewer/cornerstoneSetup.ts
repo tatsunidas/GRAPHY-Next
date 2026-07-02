@@ -34,6 +34,7 @@ import {
   CrosshairsTool,
   StackScrollTool,
   TrackballRotateTool,
+  OrientationMarkerTool,
   segmentation as csSeg,
   annotation as csAnnotation,
   Enums as csToolsEnums,
@@ -124,8 +125,9 @@ export function ensureCornerstoneInitialized(): Promise<void> {
       // MPR（VolumeViewport）: 連動十字線・ボリュームスライス送り。
       addTool(CrosshairsTool);
       addTool(StackScrollTool);
-      // 3D Viewer（VOLUME_3D）: アークボール回転（VR/MIP/Cinematic 共通の視点操作）。
+      // 3D Viewer（VOLUME_3D）: アークボール回転（VR/MIP/Cinematic 共通の視点操作）＋向きギズモ。
       addTool(TrackballRotateTool);
+      addTool(OrientationMarkerTool);
       // セグメンテーション: backend 幾何から imagePlaneModule を供給（labelmap 生成の画素プリロード撤廃）。
       registerSegMetadataProvider();
       // 診断: Brush 無言停止時に Console で `__graphySegDebug()` を実行して状態を出力。

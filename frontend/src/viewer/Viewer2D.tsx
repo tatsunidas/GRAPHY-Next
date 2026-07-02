@@ -55,6 +55,21 @@ function isColorImage(inf: ImageInfo | null): boolean {
   return !!p && !/MONOCHROME/i.test(p);
 }
 
+/**
+ * カーソル位置のモダリティ値を表示用に整形する。
+ * CT の HU（整数近傍・大きい値）は整数表示、テクスチャマップ等の<b>小さな小数（例 1e-5）は切り捨てず</b>
+ * 有効桁で表示、極端に小さい/大きい値は指数表記にする。
+ */
+function fmtValue(v: number): string {
+  if (!Number.isFinite(v)) return "—";
+  if (v === 0) return "0";
+  const a = Math.abs(v);
+  if (a >= 1e6 || a < 1e-4) return v.toExponential(3); // 例 1.000e-5
+  const digits = a >= 100 ? 1 : a >= 1 ? 3 : 6;
+  const s = v.toFixed(digits);
+  return s.includes(".") ? s.replace(/\.?0+$/, "") : s; // 末尾ゼロを除去
+}
+
 // LUT 解除（グレースケール復帰）用の線形グレースケール colormap 名。
 // Cornerstone は colormap の明示「解除」手段を公開しないため、これを適用して戻す。
 const GRAY_COLORMAP = "graphy-gray";
@@ -394,6 +409,8 @@ export function Viewer2D({
 
   const [showLutDialog, setShowLutDialog] = useState(false);
   const [activeLutName, setActiveLutName] = useState<string | null>(null);
+  // 現在適用中の LUT データ（r/g/b を含む全体）。Fusion への LUT 引き継ぎ用に保持。
+  const lutDataRef = useRef<LutData | null>(null);
 
   /** LUT データを Cornerstone3D に登録して適用する。null でグレースケールにリセット。 */
   const applyLut = useCallback((lut: LutData | null) => {
@@ -401,6 +418,7 @@ export function Viewer2D({
     if (!vp) return;
     // カラー(RGB)画像には LUT(カラーマップ)を適用しない。
     if (isColorImage(infoRef.current)) return;
+    lutDataRef.current = lut; // Fusion への引き継ぎ用に保持。
     if (lut === null) {
       // グレースケールにリセット。Cornerstone は setProperties({colormap: undefined}) を no-op
       // とするため解除できない。そこで**線形グレースケール colormap を明示適用**して戻す。
@@ -439,6 +457,9 @@ export function Viewer2D({
       broadcastSeriesProperties(viewportIdRef.current, { colormap: { name: colormapName } });
     }
   }, []);
+
+  // 現在適用中の LUT データ（Fusion へ引き継ぐため）。
+  const getLutData = (): LutData | null => lutDataRef.current;
 
   useEffect(() => {
     let disposed = false;
@@ -1051,11 +1072,11 @@ export function Viewer2D({
 
   // 画面メニュー/ツールバーからの一括コマンド。最新の実装を ref に保持し、登録は wrapper 経由で常に最新を呼ぶ。
   const commandsRef = useRef<ViewerCommands>({
-    fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, setWindowLevel, resetWindow,
+    fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
     getWindowState, getSuvContext, setActiveTool, setBrushSize, setWandTolerance, clearAnnotations, undo, redo,
   });
   commandsRef.current = {
-    fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, setWindowLevel, resetWindow,
+    fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
     getWindowState, getSuvContext, setActiveTool, setBrushSize, setWandTolerance, clearAnnotations, undo, redo,
   };
   useEffect(() => {
@@ -1068,6 +1089,7 @@ export function Viewer2D({
       flipV: () => commandsRef.current.flipV(),
       invert: () => commandsRef.current.invert(),
       applyLut: (lut) => commandsRef.current.applyLut(lut),
+      getLutData: () => commandsRef.current.getLutData(),
       setWindowLevel: (c, w) => commandsRef.current.setWindowLevel(c, w),
       resetWindow: () => commandsRef.current.resetWindow(),
       getWindowState: () => commandsRef.current.getWindowState(),
@@ -1136,7 +1158,7 @@ export function Viewer2D({
       ? `RGB(${sample.rgb?.[0]},${sample.rgb?.[1]},${sample.rgb?.[2]})`
       : sample.suvValue !== undefined
         ? `${sample.suvValue.toFixed(2)} ${suvUnit}`
-        : `${Math.round(sample.modalityValue ?? 0)}${calUnit ? " " + calUnit : ""}`
+        : `${fmtValue(sample.modalityValue ?? 0)}${calUnit ? " " + calUnit : ""}`
     : "—";
   const cursorXY = sample ? `${sample.fx.toFixed(1)}, ${sample.fy.toFixed(1)}` : "—";
 

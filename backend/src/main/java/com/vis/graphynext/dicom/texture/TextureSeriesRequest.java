@@ -16,6 +16,7 @@ import java.util.Map;
  * @param studyInstanceUid   対象 Study
  * @param sourceSeriesUid    ターゲット（計算元）シリーズ
  * @param maskSeriesUid      マスクシリーズ（任意, null/空なら全面マスク）
+ * @param maskChannel        マスクの C インデックス（DICOM SEG がマルチセグメント=マルチ C の場合の選択, 既定 0）
  * @param feature            {@code "<FAMILY>_<FeatureName>"}（例 "GLCM_JointEntropy"）
  * @param filterSize         カーネル径（奇数推奨, 3〜99）
  * @param stride             x,y,z 共通のストライド（1=等倍。&gt;1 は間引き→Trilinear 拡大）
@@ -31,6 +32,7 @@ public record TextureSeriesRequest(
         String studyInstanceUid,
         String sourceSeriesUid,
         String maskSeriesUid,
+        int maskChannel,
         String feature,
         int filterSize,
         int stride,

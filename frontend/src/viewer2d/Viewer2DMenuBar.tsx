@@ -9,6 +9,10 @@ import { presetLabel } from "./wlPresets";
 import { useWlPresets } from "./wlPresetStore";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { usePluginMenu, runPluginBackend } from "../plugins/pluginRegistry";
+import { openLogViewer } from "../system/LogViewer";
+import { openMemoryMonitor } from "../system/memoryMonitor";
+import { openUsersCommunity } from "../help/links";
+import { openDeveloperContact } from "../help/DeveloperContact";
 
 interface MenuItem {
   label: string;
@@ -193,6 +197,22 @@ export function Viewer2DMenuBar({
       items: pluginItems.length
         ? pluginItems.map((p) => ({ label: p.label, onClick: p.onClick }))
         : [{ label: t("viewer2d.menu.pluginsNone"), onClick: () => actions.comingSoon(t("viewer2d.menu.plugins")) }],
+    },
+    {
+      id: "system",
+      label: t("main.menu.system"),
+      items: [
+        { label: t("system.log"), onClick: () => openLogViewer() },
+        { label: t("system.memoryMonitor"), onClick: () => void openMemoryMonitor(t) },
+      ],
+    },
+    {
+      id: "help",
+      label: t("main.menu.help"),
+      items: [
+        { label: t("help.community"), onClick: () => openUsersCommunity() },
+        { label: t("help.contact"), onClick: () => openDeveloperContact() },
+      ],
     },
   ];
 

@@ -187,7 +187,7 @@ record TextureSeriesRequest(
 ## 8. 未決事項（実装前に要確認）
 
 1. **特徴族スコープ**: → **確定（ユーザー指定 2026-07-02）**: テクスチャ6族に加え **ヒストグラム等の非テクスチャ族もマップ対象に含める**。ヒストグラムは Map-ctor が無いため §4.1 のカスタム calculator で対応。実装スコープ＝テクスチャ6族＋一次統計＋ヒストグラム（＋余力で LocalIntensity/IVH/Fractal）。Shape/Morphology は除外。
-2. **stride と出力幾何**: → **確定**: stride は **x,y,z 共通の単一値**。RadiomicsJ の `generateFeatureMap` は XY のみ間引くため、**Z 方向はバックエンドで間引く**（対象スライスを stride 間隔で選択して計算）。得られた低解像度 3D マップを **Trilinear 補間で source 次元（rows×cols×nSlices）へ拡大**し、IOP/IPP/PixelSpacing/SliceThickness を **source と共有** → **Fusion 重畳・参照線が可能**。stride=1 なら等倍（補間なし）。
+2. **stride と出力幾何**: → **確定（2026-07-02 更新）**: stride は **XY のみ**（RadiomicsJ ネイティブ）。**Z 方向は常に 1（スキップなし＝全スライス計算）** — ユーザー指定。各スライス（out_w×out_h）を **Bilinear 補間で source 次元（rows×cols）へ拡大**し、Z は 1:1。IOP/IPP/PixelSpacing/SliceThickness を **source と共有** → **Fusion 重畳・参照線が可能**。stride=1 なら等倍（補間なし）。
 3. **SOP Class / Modality**: → **確定**: **Secondary Capture**（`SecondaryCaptureImageStorage`, GRAPHY 準拠）。`ImageType=DERIVED\SECONDARY\TEXTURE`。
 4. **計算負荷/非同期**: 全スライス×kernel の sliding-window は重い。同期 POST（ローディング）で開始し、必要なら将来ジョブ化。→ 初期は同期＋タイムアウト延長。
 5. **Settings 粒度**: → **確定**: **GRAPHY 全 62 パラメータをファミリー別カテゴリで対象**（§7.3 参照）。
@@ -203,9 +203,13 @@ record TextureSeriesRequest(
 
 - **backend** `dicom/texture/`: `TextureSeriesController`(`POST /api/series/texture`) / `TextureSeriesService`(32→16bit＋派生DICOM＋ingest) / `RadiomicsMapEngine`(ImagePlus 読込＋マップ計算＋Zstride＋Trilinear) / `TextureFeatureCatalog`(族→calculator, ヒストグラムはカスタムラムダ) / `TextureSeriesRequest`。pom に `radiomicsj:2.1.18` 追加（ij 1.54p 固定）。`mvn compile` 通過。
 - **frontend**: `viewer/TextureDialog.tsx`(SUV風) / `viewer/textureFeatures.ts`(族×特徴) / `api.ts createTextureMap` / Analysis メニュー「テクスチャ…」/ `Viewer2DScreen` で結果シリーズを隣接タイル表示 / `settings/registry.ts` に `texture` カテゴリ(全62パラメータ) / ja・en i18n。`tsc`・`vite build` 通過。
-- **マスク整列（2026-07-02 追加）**: マスクシリーズは **IOP/IPP ベースで Z 整列**（各ターゲットスライスに対し法線投影距離が最小のマスクスライスを採用、許容差=ターゲットスライス間隔）。マスク画素は **値 ≥ 0.5 を LABEL に二値化**。XY 寸法差は nearest 補間でリサイズ。**IOP/IPP 不明・OutOfRange 時はスライスオーダー（index）へフォールバック**。分岐は必ず `log.info`（`RadiomicsMapEngine.buildMask`）。
-- **ターゲット C/T 選択（2026-07-02 追加）**: マルチ次元スタック（nC>1 / nT>1）のとき、ダイアログで C/T を選択可（`TextureSeriesRequest.channel/timePoint`、既定 0）。
-- **残る制限**: SEG（マルチフレーム labelmap）の直接デコードは未対応（Opener で開ける通常画像/ラベルシリーズ前提）。計算は同期（重い）。族は GLCM/GLRLM/GLSZM/GLDZM/NGTDM/NGLDM＋一次統計＋ヒストグラムを提供（Shape/Morphology/IVH/Fractal はマップ UI 非提供）。
+- **マスク整列（2026-07-02 追加, 修正）**: マスクシリーズは **IOP/IPP ベースで Z 整列**（各ターゲットスライスに対し法線投影距離が最小のマスクスライスを採用、許容差=**スライス間隔の半分**）。マスク画素は **値 ≥ 0.5 を LABEL に二値化**。XY 寸法差は nearest 補間でリサイズ。**幾何整列あり かつ マスク範囲外（OutOfRange）のターゲットスライスは「空マスク」**（＝そこにマスクは無いので何も出さない）。**IOP/IPP 不明時のみスライスオーダー（index）へフォールバック**。分岐は必ず `log.info`（`RadiomicsMapEngine.buildMask`）。
+  - ★修正(2026-07-02): 従来は幾何整列ありでも OutOfRange を index フォールバックしていたため、マスクの無い末尾スライスに無関係なマスク（＝テクスチャ）が載る不具合があった。OutOfRange は空スライスに変更。許容差もスライス間隔の 1/2 に厳格化し、マスク端の外側 1 スライスへの染み出しを防止。
+- **ターゲット C/T 選択（2026-07-02 追加, 修正）**: マルチ次元スタック（nC>1 / nT>1）のとき、ダイアログで C/T を選択可（`TextureSeriesRequest.channel/timePoint`、既定 0）。**選択 (C,T) に一致するセルを z 昇順で収集し連続ボリュームとして扱う**（T/C が空間位置と一致しない＝各グローバル z にそのセルが無いシリーズでも成立。従来のグローバル z インデックス前提が「フレームが見つかりません」エラーを起こしていたのを修正）。マスクも選択チャンネルのセルを同様に z 昇順収集。
+- **ダイアログ UX（2026-07-02 追加）**: ターゲットシリーズを **ドロップダウンで選択可**（同一 study 全シリーズ、既定=起動タイル）。ターゲット変更で layout を再取得し C/T セレクタを出し分け、マスク候補はターゲットを除外。計算中は **不定プログレスバー**表示（同期 POST のため進捗は不定）。**計算次元の既定は 3D base**（`force2D=false` 初期値／Settings `texture.D3Basis` 既定 true）。
+- **マスクのチャンネル選択（2026-07-02 追加）**: DICOM SEG がマルチセグメント＝マルチ C の場合に、マスクの **C インデックスを選択可**（`TextureSeriesRequest.maskChannel`、既定 0）。マスク layout の nC>1 のときダイアログで表示。エンジンは `cell.c()==maskChannel` でセグメントを抽出（分岐を `log.info`）。
+- **画素ロード（2026-07-02 修正）**: ImageJ `Opener` はヘッドレス backend で DICOM を開けず null を返す事象があったため、**dcm4che でデータセットを読み、ネイティブ（非圧縮）画素を直接デコード**する方式に変更（`RadiomicsMapEngine.processorFrom`）。BitsStored 準拠の符号処理＋Rescale を適用しモダリティ値(HU/SUV 等)の FloatProcessor を返す。エラーは「フレーム無し(C/T 不一致)」と「デコード不可」を区別してメッセージ化。
+- **残る制限**: **圧縮転送構文（JPEG/JPEG2000/JPEG-LS 等）はネイティブデコード非対応**（`ds.getBytes(PixelData)`=null → ログ警告＋エラー）。必要になれば dcm4che-imageio の `DicomImageReader`（コーデック）経由に拡張。SEG のバイナリセグメント平面が SeriesLayout の C 次元に展開される前提。計算は同期（重い）。族は GLCM/GLRLM/GLSZM/GLDZM/NGTDM/NGLDM＋一次統計＋ヒストグラムを提供（Shape/Morphology/IVH/Fractal はマップ UI 非提供）。
 - **未検証**: 実 DICOM での動作（RadiomicsJ 計算・16bit マップの表示・幾何共有 Fusion）はアプリ起動での目視確認が必要。
 
 ## 10. 参照ファイル

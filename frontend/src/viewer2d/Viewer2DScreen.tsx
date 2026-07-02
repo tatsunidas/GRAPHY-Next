@@ -51,6 +51,8 @@ interface FusionOverlay {
   /** ドロップ元タイルで表示中だった C/T。fusion オーバーレイの初期 C/T に使う（無ければ 0）。 */
   initialC?: number;
   initialT?: number;
+  /** ドロップ元タイルで適用中だった LUT。fusion オーバーレイの初期 LUT に引き継ぐ（無ければグレースケール）。 */
+  initialLut?: LutData | null;
 }
 
 interface Tile {
@@ -652,6 +654,8 @@ function TileGrid({
             const srcTile = patient.tiles.find((t) => t.id === payload.tileId);
             if (srcTile) {
               const dims = tileDimsRef.current.get(payload.tileId);
+              // ドラッグ元タイルで適用中の LUT を Fusion オーバーレイへ引き継ぐ。
+              const srcLut = queryViewerCommand(payload.tileId, (c) => c.getLutData());
               onSetFusion(patient.patientKey, targetTileId, {
                 study: srcTile.study,
                 series: srcTile.series,
@@ -659,6 +663,7 @@ function TileGrid({
                 opacity: 0.5,
                 initialC: dims?.c ?? 0,
                 initialT: dims?.t ?? 0,
+                initialLut: srcLut,
               });
             }
           } else {
@@ -1042,7 +1047,10 @@ function TileCell({
   const [fusionLayout, setFusionLayout] = useState<SeriesLayout>(() => buildSeriesLayout([]));
   // Fusion: オーバーレイの LUT（null でグレースケール）
   const [fusionLut, setFusionLut] = useState<LutData | null>(null);
-  // fusion が切り替わったら C/T / LUT をリセット
+  // Fusion: オーバーレイ W/L の上書き（null で DICOM 既定/自動）と、その既定値（入力の初期表示用）。
+  const [fusionWL, setFusionWL] = useState<{ center: number; width: number } | null>(null);
+  const [fusionAutoWL, setFusionAutoWL] = useState<{ center: number; width: number } | null>(null);
+  // fusion が切り替わったら C/T / LUT / W/L をリセット
   const prevFusionSeriesUid = useRef<string | null>(null);
   useEffect(() => {
     const uid = tile.fusion?.series.seriesInstanceUid ?? null;
@@ -1051,7 +1059,10 @@ function TileCell({
       // ドロップ元タイルで表示中だった C/T を初期値に（無ければ 0）。
       setFusionC(tile.fusion?.initialC ?? 0);
       setFusionT(tile.fusion?.initialT ?? 0);
-      setFusionLut(null);
+      // ドロップ元タイルの LUT を引き継ぐ（無ければグレースケール）。
+      setFusionLut(tile.fusion?.initialLut ?? null);
+      setFusionWL(null);
+      setFusionAutoWL(null);
     }
   }, [tile.fusion?.series.seriesInstanceUid]);
 
@@ -1080,10 +1091,15 @@ function TileCell({
         overlayT={fusionT}
         lut={fusionLut}
         opacity={fusion.opacity}
+        windowCenter={fusionWL?.center ?? null}
+        windowWidth={fusionWL?.width ?? null}
+        onAutoWL={(center, width) =>
+          setFusionAutoWL((prev) => (prev && prev.center === center && prev.width === width ? prev : { center, width }))
+        }
         onLayoutChange={setFusionLayout}
       />
     );
-  }, [tile.fusion, mode, fusionC, fusionT, fusionLut]);
+  }, [tile.fusion, mode, fusionC, fusionT, fusionLut, fusionWL]);
 
   // ── タイルヘッダー DnD（タイル並び替え） ──
 
@@ -1270,10 +1286,13 @@ function TileCell({
           cDimension={fusionLayout.cDimension}
           tDimension={fusionLayout.tDimension}
           fusionLut={fusionLut}
+          wl={fusionWL ?? fusionAutoWL}
           onOpacityChange={(v) => onFusionChange({ ...tile.fusion!, opacity: v })}
           onCChange={setFusionC}
           onTChange={setFusionT}
           onLutChange={setFusionLut}
+          onWLChange={(center, width) => setFusionWL({ center, width })}
+          onWLAuto={() => setFusionWL(null)}
           onRemove={() => onFusionChange(undefined)}
         />
       )}
@@ -1293,10 +1312,13 @@ function FusionControlBar({
   cDimension,
   tDimension,
   fusionLut,
+  wl,
   onOpacityChange,
   onCChange,
   onTChange,
   onLutChange,
+  onWLChange,
+  onWLAuto,
   onRemove,
 }: {
   seriesLabel: string;
@@ -1308,14 +1330,32 @@ function FusionControlBar({
   cDimension?: string | null;
   tDimension?: string | null;
   fusionLut: LutData | null;
+  /** 現在のオーバーレイ W/L（上書き値 or 既定値）。 */
+  wl: { center: number; width: number } | null;
   onOpacityChange: (v: number) => void;
   onCChange: (v: number) => void;
   onTChange: (v: number) => void;
   onLutChange: (lut: LutData | null) => void;
+  /** オーバーレイ W/L を上書き。 */
+  onWLChange: (center: number, width: number) => void;
+  /** オーバーレイ W/L を自動（DICOM 既定）に戻す。 */
+  onWLAuto: () => void;
   onRemove: () => void;
 }) {
   const { t } = useI18n();
   const [showLutDialog, setShowLutDialog] = useState(false);
+  // W/L 入力の下書き（wl が更新されたら同期）。
+  const [wlText, setWlText] = useState("");
+  const [wwText, setWwText] = useState("");
+  useEffect(() => {
+    setWlText(wl ? String(Math.round(wl.center * 100) / 100) : "");
+    setWwText(wl ? String(Math.round(wl.width * 100) / 100) : "");
+  }, [wl?.center, wl?.width]);
+  const applyWL = () => {
+    const c = Number(wlText);
+    const w = Number(wwText);
+    if (Number.isFinite(c) && Number.isFinite(w) && w > 0) onWLChange(c, w);
+  };
   return (
     <div style={fusionBar}>
       <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
@@ -1391,6 +1431,33 @@ function FusionControlBar({
           onClose={() => setShowLutDialog(false)}
         />
       )}
+
+      {/* オーバーレイ W/L（Fusion 後に前景のコントラストを調整） */}
+      <div style={{ display: "flex", alignItems: "center", gap: 4, flex: "none" }}>
+        <span style={{ fontSize: 11, color: "#5a6672" }}>{t("viewer2d.fusion.wl")}</span>
+        <input
+          type="number"
+          value={wlText}
+          onChange={(e) => setWlText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") applyWL(); }}
+          onBlur={applyWL}
+          title="WL"
+          style={fusionNumInput}
+        />
+        <span style={{ fontSize: 11, color: "#8a94a2" }}>/</span>
+        <input
+          type="number"
+          value={wwText}
+          onChange={(e) => setWwText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") applyWL(); }}
+          onBlur={applyWL}
+          title="WW"
+          style={fusionNumInput}
+        />
+        <button onClick={onWLAuto} title={t("viewer2d.fusion.wlAuto")} style={fusionAutoBtn}>
+          {t("viewer2d.wl.adjust.auto")}
+        </button>
+      </div>
 
       {/* C スライダー（マルチチャンネルのとき） */}
       {nC > 1 && (
@@ -1900,6 +1967,23 @@ const fusionBar: React.CSSProperties = {
   borderTop: "1px solid #e1e7ee",
   background: "#f0f5fb",
   flex: "none",
+};
+const fusionNumInput: React.CSSProperties = {
+  width: 52,
+  border: "1px solid #cdd5de",
+  borderRadius: 3,
+  fontSize: 11,
+  padding: "1px 4px",
+};
+const fusionAutoBtn: React.CSSProperties = {
+  fontSize: 11,
+  padding: "1px 6px",
+  borderRadius: 3,
+  border: "1px solid #c0c8d4",
+  background: "#f5f7fa",
+  color: "#5a6672",
+  cursor: "pointer",
+  lineHeight: 1.4,
 };
 const fusionRemoveBtn: React.CSSProperties = {
   flex: "none",

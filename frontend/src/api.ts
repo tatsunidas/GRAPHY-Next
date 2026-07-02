@@ -448,6 +448,8 @@ export interface TextureMapRequest {
   sourceSeriesUid: string;
   /** マスクシリーズ（任意, 未指定で全面マスク）。 */
   maskSeriesUid?: string | null;
+  /** マスクの C インデックス（DICOM SEG マルチセグメント時の選択, 既定 0）。 */
+  maskChannel: number;
   /** "GLCM_JointEntropy" 等（"FAMILY_FeatureName"）。 */
   feature: string;
   /** カーネル径（奇数）。 */
