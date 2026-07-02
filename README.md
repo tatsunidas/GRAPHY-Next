@@ -63,7 +63,58 @@ scripts/    開発起動・バージョン更新スクリプト
 - JDK 21 / Maven 3.6.3+
 - Node.js 20+ / npm
 
-## クイックスタート
+## インストール / 起動（配布物）
+
+### スタンドアロン版（デスクトップ / Electron）
+
+[Releases](../../releases) から OS 別インストーラを入手して実行するだけ。バックエンド
+（H2 ＋ ファイルシステム）・Java ランタイム・ffmpeg をすべて同梱するので、追加インストールは不要。
+
+| OS | 成果物 | 備考 |
+|---|---|---|
+| Windows | `GRAPHY-Next Setup <ver>.exe`（NSIS） | 実行してインストール |
+| macOS | `GRAPHY-Next-<ver>.dmg` | マウントして Applications へ |
+| Linux | `GRAPHY-Next-<ver>.AppImage` | `chmod +x` して実行 |
+
+初回起動時にローカルへデータ保管フォルダ / H2 データベースを作成する。DICOM 受信(SCP)・
+ローカル保管・全ビューア機能がオフラインで動作する（`standalone` プロファイル）。
+
+### Web 版（dcm4chee 連携）
+
+Web 版は **UI 同梱 jar を `web` プロファイルで起動**し、外部 PACS（**dcm4chee**）に
+**DICOMweb（QIDO/WADO）** で接続する BFF。GRAPHY 自身は画像を保管せず、dcm4chee 側の
+Study を参照表示する。
+
+**前提**: JDK 21 ／ Docker（dcm4chee 用）。jar は Releases の `graphy-next-backend.jar`、
+または `cd backend && mvn -B clean package` で生成。
+
+**1) dcm4chee-arc を起動**（同梱 compose）
+
+```bash
+docker compose -f deploy/dcm4chee/docker-compose.yml up -d
+# 初回は WildFly 初期化に数分。UI: http://localhost:8080/dcm4chee-arc/ui2/
+```
+
+DICOMweb ベース URL: `http://localhost:8080/dcm4chee-arc/aets/DCM4CHEE/rs`
+（テストデータ投入・停止手順など詳細は [`deploy/dcm4chee/README.md`](deploy/dcm4chee/README.md)）
+
+**2) GRAPHY-Next（web）を起動**
+
+dcm4chee が 8080 を使うため、GRAPHY 側は**別ポート（例: 8090）**で起動し、接続先を指定する:
+
+```bash
+java -jar graphy-next-backend.jar \
+  --spring.profiles.active=web \
+  --server.port=8090 \
+  --graphy.dicom.dicomweb.base-url=http://localhost:8080/dcm4chee-arc/aets/DCM4CHEE/rs
+```
+
+> 恒久設定にするなら `backend/src/main/resources/application-web.yml` の
+> `graphy.dicom.dicomweb.base-url`（必要なら `bearer-token`）に記載する。
+
+**3) ブラウザでアクセス**: <http://localhost:8090/>（`GET /api/status` の mode が `web`）
+
+## クイックスタート（開発）
 
 ```bash
 make install        # frontend / desktop の依存をインストール

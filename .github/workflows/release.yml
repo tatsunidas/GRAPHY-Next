@@ -21,7 +21,8 @@ jobs:
           cache: maven
       - name: Build web jar (UI 同梱 / frontend は Maven が内部ビルド)
         working-directory: backend
-        run: mvn -B clean package
+        # パッケージング工程はテストをスキップ（テストのゲートは ci.yml が担う）。
+        run: mvn -B -DskipTests clean package
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
@@ -43,7 +44,8 @@ jobs:
           cache: maven
       - name: Build backend jar + frontend (Maven 統合)
         shell: bash
-        run: cd backend && mvn -B clean package
+        # パッケージング工程はテストをスキップ（テストのゲートは ci.yml が担う）。
+        run: cd backend && mvn -B -DskipTests clean package
       - name: Stage desktop resources
         shell: bash
         run: |
