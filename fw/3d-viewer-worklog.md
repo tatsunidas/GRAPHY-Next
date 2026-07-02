@@ -51,6 +51,18 @@
   - CPR 3 方式が出揃った: 投影/ストレッチ CPR（`reformat`）／ストレート化 3D（`straightenedVolume`）／**アンフォールド展開図（`unfoldReformat`）**。
 - **実機未検証**: 展開図の角度整合・半径既定値（血管 vs 腸管）・巻き込み（曲率が半径を超える箇所）の目視は未実施。
 
+### インスタンス C（このセッション）— 3D Cut(#2)/3D計測(#3)/手動endo経路(#6)/AxesGizmo(#9)＋Cinematic P4/P7＋UX修正
+- **共通投影基盤**（新規・他レーン非依存）: `viewer3d/volumeCut.ts`（`makeCameraProjector` world→CSS 順投影・`makeActorTransform`・`pointInPolygon`）／`viewer3d/measure3d.ts`（`makeUnprojector` 逆投影レイ・`inverseViewProj` NDC→world 行列[GPU用]・`rayTriangleIntersect` Möller-Trumbore・`pickVolumeSurface`）。pure-vtk カメラ行列を vtk `Renderer.worldToView→viewToProjection` で1:1再現。dpr は CSS 換算で相殺。要件11（cornerstone worldToCanvas 非依存）。
+- **✅ #2 3D Cut**: `scene3d.cutRoiLasso`（前景voxel→project→多角形内/外で labelmap 彫刻＋Undo）／`Viewer3DCutOverlay.tsx`（SVG 投げ縄・inside/outside）。
+- **✅ #3 3D計測**: `measureStore.ts`／`scene3d.pickSurfacePoint`（全可視表面に交差）＋`addMeasurement3D`/`removeMeasurement3D`（Undo）／`Viewer3DMeasureOverlay.tsx`（カメラ変化で再投影）。**どの表示モードでも計測可**＝`pickVolumeSurface`（現在 LUT/不透明度でボリューム表面を拾う）フォールバック。
+- **✅ #6 手動endo経路**: `endoPathStore.ts`／`scene3d.{pickPathPoint,applyEndoPath,commitEndoPath,commitEndoPathAsCenterline}`／`Viewer3DEndoPathOverlay.tsx`（クリック追加/ドラッグ移動/右クリック・Delete削除・Undo）。中心線化で ▶内視鏡/CPR に接続。
+- **✅ #9 AxesGizmo**: 旧 cornerstone `OrientationMarkerTool` は pure-vtk 移行で未表示だった→`vtkVolumeView.ts` に `vtkOrientationMarkerWidget`+`vtkAnnotatedCubeActor`（患者LPSラベル・右下・`setAxesEnabled`）。
+- **✅ P4 Cinematic v1 強化**: `vtkVolumeView.applyCinematic` に WebGL2 散乱（`setVolumetricScatteringBlending`/`setGlobalIlluminationReach`/`setAnisotropy`/`setLocalAmbientOcclusion`/`setComputeNormalFromOpacity`）。UI=CinematicSettingsDialog「シネマティック(散乱)」。
+- **✅ P7 Cinematic v2 パストレース**: `viewer/cinematicPathTracer.ts`（旧 `cinematic.frag`/`present.frag` を WebGL2 GLSL ES 3.00 に1:1移植。R32F 3Dテクスチャ[≤256³]・ping-pong RGBA32F 蓄積・HG+GGX+ソフトシャドウ）＋`vtkVolumeView.getLut256`＋`Viewer3DCinematicOverlay.tsx`（プログレッシブ・カメラ追従リセット）。Viewer3DScreen「パストレース(β)」。`EXT_color_buffer_float` 必須。
+- **UX修正**: ColorLegend 右上（`corner="tr"`・AxesGizmo と重なり回避）／EndoscopyControls に Escape 終了／3D計測を全モード対応。
+- 共有ファイル配線（相手の同時編集中に fresh-read＋追記で衝突回避）: `Viewer3DScreen.tsx`（各オーバーレイ mount・排他モード・トグル）／`SceneObjectPanel.tsx`（3D Cut/計測トグル/手動endo経路/中心線解析ボタン）／`i18n`（`cut.*`/`measure.*`/`endoPath.*`/`cine2.*`/`viewer3d.cine.scatter*`・en/ja）。
+- **実機未検証**（全項目）: 投影整合・カット/計測/経路の目視、AxesGizmo 追従、Cinematic 質感、**P7 は実機GPU必須（float FBO・パラメータチューニング要）**。
+
 ## 共有ファイル編集ルール
 - `SceneObjectPanel.tsx` / `scene3d.ts` を編集する直前に必ず `git diff <file>` で相手の未コミット変更を取り込み、
   自分の追加は**末尾または独立関数**に置く。衝突したら相手の変更を優先して再適用。
