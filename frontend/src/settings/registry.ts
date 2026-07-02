@@ -449,4 +449,11 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
     icon: "🔒",
     sections: [],
   },
+  {
+    // 情報（バージョン等）は専用パネル（/api/status を表示）。SettingsDialog で特別扱い。
+    id: "about",
+    labelKey: "settings.cat.about",
+    icon: "ℹ️",
+    sections: [],
+  },
 ];

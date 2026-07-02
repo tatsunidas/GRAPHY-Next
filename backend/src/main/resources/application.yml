@@ -18,9 +18,12 @@ spring:
 server:
   port: 8080
 
-# StatusController が返すバージョン（CI/リリースで上書き可能）
+# StatusController が返すバージョン。
+# '@project.version@' は Maven のリソースフィルタで pom.xml の <version> に置換される
+# （spring-boot-starter-parent が application.yml のフィルタリングを既定で有効化）。
+# → pom.xml が唯一のソース。frontend/desktop は scripts/set-version.mjs で同期する。
 graphy:
-  version: 0.1.0
+  version: '@project.version@'
   # プラグイン格納フォルダ（standalone）。読取専用バンドルを避け書込可能な場所を指す。
   plugins:
     dir: ./plugins

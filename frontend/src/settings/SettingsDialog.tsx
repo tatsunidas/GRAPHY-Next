@@ -7,6 +7,7 @@ import { SETTINGS_REGISTRY, type CategoryDef, type FieldDef } from "./registry";
 import { fetchSettings, saveSettings, type SettingsMap } from "./settingsApi";
 import { OverlayConfigPanel } from "./OverlayConfigPanel";
 import { RemoteAePanel } from "./RemoteAePanel";
+import { AboutPanel } from "./AboutPanel";
 import { useI18n, type Locale, type TFn } from "../i18n/i18n";
 
 export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -96,6 +97,8 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
               <OverlayConfigPanel />
             ) : category.id === "dicomSend" ? (
               <RemoteAePanel />
+            ) : category.id === "about" ? (
+              <AboutPanel />
             ) : (
               category.sections.map((section) => (
                 <section key={section.titleKey} style={{ marginBottom: 22 }}>

@@ -1,11 +1,13 @@
 {
   "private": true,
+  "version": "0.1.0",
   "scripts": {
     "dev-desktop": "scripts\\dev-desktop.bat",
-    "dev-web":     "bash scripts/dev-web.sh",
-    "build":       "npm run build:backend && npm run build:frontend",
-    "build:backend":  "cd backend && mvn -q -Dfrontend.skip=true clean package",
+    "dev-web": "bash scripts/dev-web.sh",
+    "build": "npm run build:backend && npm run build:frontend",
+    "build:backend": "cd backend && mvn -q -Dfrontend.skip=true clean package",
     "build:frontend": "cd frontend && npm run build",
-    "test":        "cd backend && mvn -q test -Dfrontend.skip=true"
+    "test": "cd backend && mvn -q test -Dfrontend.skip=true",
+    "set-version": "node scripts/set-version.mjs"
   }
 }
