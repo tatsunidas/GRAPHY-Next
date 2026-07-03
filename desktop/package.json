@@ -1,6 +1,6 @@
 {
   "name": "graphy-next-desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "GRAPHY-Next desktop (Electron) — standalone mode",
   "main": "main.js",
