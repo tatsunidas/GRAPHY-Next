@@ -18,6 +18,8 @@ import { QRScreen } from "./qr/QRScreen";
 import { subscribeDbChanged, type DbChangedDetail } from "./dbEvents";
 import { LogViewerHost } from "./system/LogViewer";
 import { DeveloperContactHost } from "./help/DeveloperContact";
+import { UninstallGuideHost } from "./help/UninstallGuide";
+import { UpdateNoticeHost, runUpdateCheck } from "./help/UpdateNotice";
 import { useI18n } from "./i18n/i18n";
 
 export function App() {
@@ -42,6 +44,13 @@ export function App() {
       .then(setStatus)
       .catch((e: unknown) => setError(String(e)));
   }, []);
+
+  // 起動時の更新確認（メインウィンドウのみ・デスクトップのみ）。新版があり未スキップの場合だけ通知する。
+  // 別ウィンドウ（#2dviewer 等）では二重通知を避けるため実行しない。
+  useEffect(() => {
+    if (screen !== "") return;
+    void runUpdateCheck(false);
+  }, [screen]);
 
   // 他ウィンドウの DB 変更（Slicer の派生シリーズ保存・DbAdmin 編集等）を受けて、
   // このウィンドウの一覧を現在の検索条件で再読込する（MainScreen は reloadKey+dbVersion で再検索）。
@@ -99,6 +108,10 @@ export function App() {
       <LogViewerHost />
       {/* Help メニューの「Contact to developer」ダイアログ（全ウィンドウ共通）。 */}
       <DeveloperContactHost />
+      {/* Help メニューの「Uninstall」ガイド（アンインストーラの場所・手順）。 */}
+      <UninstallGuideHost />
+      {/* Help メニューの「更新を確認」／起動時チェックの通知ダイアログ。 */}
+      <UpdateNoticeHost />
       {/* 別ウィンドウ（2D Viewer）では DB 変更時に再読込/開き直しをポップアップで促す。 */}
       {screen === "2dviewer" && <DbChangeNotice />}
     </>

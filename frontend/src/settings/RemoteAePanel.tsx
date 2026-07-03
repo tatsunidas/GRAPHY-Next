@@ -6,20 +6,23 @@ import { useEffect, useState } from "react";
 import { echoDicom, fetchRemoteAes, type RemoteAe } from "../api";
 import { fetchSettings, saveSettings } from "./settingsApi";
 import { emitRemoteAesChanged } from "../remoteAeEvents";
+import { DicomTlsSection } from "./DicomTlsSection";
 import { useI18n } from "../i18n/i18n";
 
-/** Settings(H2) に送信先 Remote AE を JSON 配列で保存するキー。backend の REMOTE_AES_KEY と一致。 */
+/** Settings(H2) にリモート DICOM ノードを JSON 配列で保存するキー。backend の REMOTE_AES_KEY と一致。 */
 const REMOTE_AES_KEY = "dicom.remoteAes";
 
-type Row = { aeTitle: string; host: string; port: string };
+type Row = { aeTitle: string; host: string; port: string; tls: boolean };
 type EchoState = "idle" | "running" | "ok" | "fail";
 
 /**
- * 環境設定の「DICOM 送信先（Remote AE）」カスタムパネル。
+ * 環境設定の「DICOM 通信ノード」カスタムパネル。
  *
- * <p>GUI から送信先（AE タイトル / ホスト / ポート）を追加・編集・削除し、Settings(H2) に保存する。
- * 保存分は backend で application.yml の {@code remote-aes} とマージされ、送信ダイアログの
- * ドロップダウンに出る。行ごとに C-ECHO 疎通確認ができる。
+ * <p>GUI からリモート DICOM ノード（AE タイトル / ホスト / ポート / TLS）を追加・編集・削除し、
+ * Settings(H2) に保存する。ここで登録したノードは <b>DICOM Send（C-STORE）の送信先</b>と
+ * <b>Query/Retrieve（C-FIND/C-MOVE）の接続先</b>の<b>両方</b>で共通に使われる。保存分は backend で
+ * application.yml の {@code remote-aes} とマージされる。行ごとに C-ECHO 疎通確認ができる。
+ * TLS を有効にしたノードへは鍵材料（グローバル TLS 設定）を用いて DIMSE TLS で接続する。
  */
 export function RemoteAePanel() {
   const { t } = useI18n();
@@ -47,7 +50,9 @@ export function RemoteAePanel() {
           }
         }
         const storedAets = new Set(stored.map((a) => a.aeTitle));
-        setRows(stored.map((a) => ({ aeTitle: a.aeTitle ?? "", host: a.host ?? "", port: String(a.port ?? "") })));
+        setRows(stored.map((a) => ({
+          aeTitle: a.aeTitle ?? "", host: a.host ?? "", port: String(a.port ?? ""), tls: !!a.tls,
+        })));
         // マージ結果のうち Settings に無い＝YAML 由来（読み取り専用で参考表示）。
         setYamlAes(merged.filter((a) => !storedAets.has(a.aeTitle)));
         setLoaded(true);
@@ -58,15 +63,22 @@ export function RemoteAePanel() {
     };
   }, []);
 
-  const update = (i: number, key: keyof Row, val: string) => {
+  const update = (i: number, key: "aeTitle" | "host" | "port", val: string) => {
     setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, [key]: val } : r)));
     setDirty(true);
     setSavedMsg(null);
     setEcho((e) => ({ ...e, [i]: "idle" }));
   };
 
+  const updateTls = (i: number, tls: boolean) => {
+    setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, tls } : r)));
+    setDirty(true);
+    setSavedMsg(null);
+    setEcho((e) => ({ ...e, [i]: "idle" }));
+  };
+
   const addRow = () => {
-    setRows((rs) => [...rs, { aeTitle: "", host: "", port: "104" }]);
+    setRows((rs) => [...rs, { aeTitle: "", host: "", port: "104", tls: false }]);
     setDirty(true);
     setSavedMsg(null);
   };
@@ -83,7 +95,7 @@ export function RemoteAePanel() {
     // 有効行だけを保存（空行は捨てる）。
     const clean = rows
       .filter(rowValid)
-      .map((r) => ({ aeTitle: r.aeTitle.trim(), host: r.host.trim(), port: Number(r.port) }));
+      .map((r) => ({ aeTitle: r.aeTitle.trim(), host: r.host.trim(), port: Number(r.port), tls: r.tls }));
     setSaving(true);
     setSavedMsg(null);
     try {
@@ -104,7 +116,7 @@ export function RemoteAePanel() {
     if (!rowValid(r)) return;
     setEcho((e) => ({ ...e, [i]: "running" }));
     try {
-      const res = await echoDicom({ host: r.host.trim(), port: Number(r.port), calledAet: r.aeTitle.trim() });
+      const res = await echoDicom({ host: r.host.trim(), port: Number(r.port), calledAet: r.aeTitle.trim(), tls: r.tls });
       setEcho((e) => ({ ...e, [i]: res.success ? "ok" : "fail" }));
     } catch {
       setEcho((e) => ({ ...e, [i]: "fail" }));
@@ -125,7 +137,8 @@ export function RemoteAePanel() {
         <span style={{ ...cell, flex: 2 }}>{t("send.aeTitle")}</span>
         <span style={{ ...cell, flex: 3 }}>{t("send.host")}</span>
         <span style={{ ...cell, width: 80, flex: "none" }}>{t("send.port")}</span>
-        <span style={{ width: 150, flex: "none" }} />
+        <span style={{ ...cell, width: 44, flex: "none", textAlign: "center" }}>{t("send.tls")}</span>
+        <span style={{ width: 100, flex: "none" }} />
       </div>
 
       {rows.length === 0 && <div style={{ color: "#888", fontSize: 13, padding: "6px 0" }}>{t("settings.remoteAe.empty")}</div>}
@@ -138,7 +151,11 @@ export function RemoteAePanel() {
             onChange={(e) => update(i, "host", e.target.value)} />
           <input style={{ ...input, width: 80, flex: "none" }} value={r.port} placeholder="104" spellCheck={false}
             onChange={(e) => update(i, "port", e.target.value)} />
-          <div style={{ width: 150, flex: "none", display: "flex", gap: 6, justifyContent: "flex-end" }}>
+          <div style={{ width: 44, flex: "none", display: "flex", justifyContent: "center" }}>
+            <input type="checkbox" checked={r.tls} title={t("send.tls")}
+              onChange={(e) => updateTls(i, e.target.checked)} />
+          </div>
+          <div style={{ width: 100, flex: "none", display: "flex", gap: 6, justifyContent: "flex-end" }}>
             <button style={{ ...smallBtn, color: echoColor(echo[i]) }} disabled={!rowValid(r) || echo[i] === "running"}
               title={t("send.echo")} onClick={() => void runEcho(i)}>
               {echoLabel(echo[i])}
@@ -163,6 +180,8 @@ export function RemoteAePanel() {
         {savedMsg && <span style={{ fontSize: 12, color: "#2e5d27" }}>{savedMsg}</span>}
       </div>
 
+      <DicomTlsSection />
+
       {yamlAes.length > 0 && (
         <div style={{ marginTop: 20 }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: "#33404d", marginBottom: 4 }}>
@@ -170,7 +189,7 @@ export function RemoteAePanel() {
           </div>
           {yamlAes.map((a) => (
             <div key={a.aeTitle} style={{ fontSize: 12, color: "#6b7785" }}>
-              {a.aeTitle} — {a.host}:{a.port}
+              {a.aeTitle} — {a.host}:{a.port}{a.tls ? " · TLS" : ""}
             </div>
           ))}
         </div>

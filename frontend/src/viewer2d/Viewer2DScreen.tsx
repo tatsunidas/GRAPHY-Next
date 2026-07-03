@@ -787,6 +787,17 @@ function TileGrid({
         if (toastTimer.current) window.clearTimeout(toastTimer.current);
         toastTimer.current = window.setTimeout(() => setToast(null), 3500);
       },
+      // 対象（選択→無ければ先頭）タイルのシリーズで 3D Viewer ウィンドウを開く（MainScreen と同方式）。
+      launchViewer3D: () => {
+        const tid = resolveTargets()[0];
+        const tile = patient.tiles.find((tl) => tl.id === tid);
+        if (!tile) { comingSoon(t("main.toolbar.viewer3d")); return; }
+        const ctx = { study: tile.study, series: tile.series, ts: Date.now() };
+        localStorage.setItem("graphy-viewer3d-ctx", JSON.stringify(ctx));
+        const d = desktop();
+        if (d?.openViewer) void d.openViewer("viewer3d");
+        else window.open(`${window.location.pathname}#viewer3d`, "graphy-viewer3d");
+      },
       // 対象（選択→無ければ先頭）タイルのシリーズで MPR ウィンドウを開く（MainScreen と同方式）。
       launchMpr: () => {
         const tid = resolveTargets()[0];

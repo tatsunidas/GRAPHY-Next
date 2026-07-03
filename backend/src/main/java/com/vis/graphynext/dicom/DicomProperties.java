@@ -89,11 +89,17 @@ public class DicomProperties {
         this.dcm4cheHome = dcm4cheHome;
     }
 
-    /** リモート AE（C-MOVE 宛先など）。形式は ae.properties の &lt;aet&gt;=&lt;host&gt;:&lt;port&gt; に相当。 */
+    /**
+     * リモート DICOM ノード（DICOM Send / QR の共通接続先）。形式は ae.properties の
+     * &lt;aet&gt;=&lt;host&gt;:&lt;port&gt; に相当。{@code tls} でこのノードへの接続を DIMSE TLS にする
+     * （鍵/信頼ストア等は自局のグローバル {@link Tls} 設定を共用）。
+     */
     public static class RemoteAe {
         private String aeTitle;
         private String host;
         private int port;
+        /** このノードへの接続を TLS にするか（鍵材料はグローバル {@link Tls} を共用）。 */
+        private boolean tls = false;
 
         public String getAeTitle() {
             return aeTitle;
@@ -117,6 +123,14 @@ public class DicomProperties {
 
         public void setPort(int port) {
             this.port = port;
+        }
+
+        public boolean isTls() {
+            return tls;
+        }
+
+        public void setTls(boolean tls) {
+            this.tls = tls;
         }
     }
 

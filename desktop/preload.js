@@ -30,4 +30,6 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   openMemoryMonitor: () => ipcRenderer.invoke("graphy:open-memory-monitor"),
   // 外部 URL / mailto を OS の既定アプリで開く。
   openExternal: (url) => ipcRenderer.send("graphy:open-external", url),
+  // GitHub Releases の最新版情報を取得（更新確認）。失敗時 null。
+  checkForUpdate: () => ipcRenderer.invoke("graphy:check-update"),
 });

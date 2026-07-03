@@ -59,7 +59,7 @@ export function QRScreen({ status }: { status: AppStatus | null }) {
     const checks = await Promise.all(
       aes.map(async (ae) => {
         try {
-          const r = await echoDicom({ host: ae.host, port: ae.port, calledAet: ae.aeTitle });
+          const r = await echoDicom({ host: ae.host, port: ae.port, calledAet: ae.aeTitle, tls: ae.tls });
           return r.success ? ae : null;
         } catch {
           return null;
@@ -74,7 +74,7 @@ export function QRScreen({ status }: { status: AppStatus | null }) {
     setResults((m) => new Map(m).set(ae.aeTitle, { studies: null, loading: true, error: null }));
     try {
       const rows = await qrFindStudies(
-        { host: ae.host, port: ae.port, calledAet: ae.aeTitle },
+        { host: ae.host, port: ae.port, calledAet: ae.aeTitle, tls: ae.tls },
         filtersToMatchKeys(filtersRef.current),
       );
       setResults((m) => new Map(m).set(ae.aeTitle, { studies: rows, loading: false, error: null }));

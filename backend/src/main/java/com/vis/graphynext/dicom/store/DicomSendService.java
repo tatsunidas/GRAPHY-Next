@@ -5,6 +5,7 @@
 package com.vis.graphynext.dicom.store;
 
 import com.vis.graphynext.dicom.DicomProperties;
+import com.vis.graphynext.dicom.DicomTlsService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -26,12 +27,12 @@ public class DicomSendService {
     private static final Logger log = LoggerFactory.getLogger(DicomSendService.class);
 
     private final DicomStorageService storage;
-    private final DicomProperties props;
+    private final DicomTlsService tlsService;
     private final DicomStoreScu scu = new DicomStoreScu();
 
-    public DicomSendService(DicomStorageService storage, DicomProperties props) {
+    public DicomSendService(DicomStorageService storage, DicomTlsService tlsService) {
         this.storage = storage;
-        this.props = props;
+        this.tlsService = tlsService;
     }
 
     /** 送信対象（1 スタディと、その中で送る対象シリーズ。空なら当該スタディ全体）。 */
@@ -67,7 +68,7 @@ public class DicomSendService {
             log.warn("DICOM Send: 送信対象ファイルが 0 件（selections={}）", selections.size());
             return new SendSummary(0, 0, 0, List.of("送信対象が見つかりませんでした"));
         }
-        DicomProperties.Tls tlsCfg = tls ? props.getTls() : null;
+        DicomProperties.Tls tlsCfg = tls ? tlsService.effective() : null;
         DicomStoreScu.BatchResult r = scu.storeAll(host, port, calledAet, callingAet, files, tlsCfg);
         return new SendSummary(r.total(), r.sent(), r.failed(), r.messages());
     }

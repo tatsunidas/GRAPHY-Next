@@ -51,6 +51,8 @@ export interface ViewerActions {
   comingSoon(name: string): void;
   /** 対象シリーズを ImageJ の HyperStack として開く（ローカル ImageJ 起動）。 */
   bridgeImageJ(): void;
+  /** 対象タイルのシリーズで 3D Viewer ウィンドウを開く。 */
+  launchViewer3D(): void;
   /** 対象タイルのシリーズで MPR ウィンドウを開く。 */
   launchMpr(): void;
   /** 対象タイルのシリーズで Slicer ウィンドウを開く。 */

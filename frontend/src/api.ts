@@ -636,15 +636,45 @@ export const seriesExtractZip = async (req: SeriesExtractRequest): Promise<{ blo
 
 // ── DICOM Send（C-STORE SCU で外部 PACS/AE へ送信） ─────────────
 
-/** 設定済みリモート AE（送信先候補）。application.yml の graphy.dicom.remote-aes 由来。 */
+/**
+ * 設定済みリモート DICOM ノード（DICOM Send / Query-Retrieve 共通の接続先）。
+ * application.yml の graphy.dicom.remote-aes ＋ Settings(H2) 由来。
+ * tls=true でこのノードへの DIMSE 接続を TLS にする（鍵材料はグローバル TLS 設定を共用）。
+ */
 export interface RemoteAe {
   aeTitle: string;
   host: string;
   port: number;
+  tls: boolean;
 }
 
 /** 設定済みリモート AE 一覧を取得する。 */
 export const fetchRemoteAes = () => httpGet<RemoteAe[]>("/api/dicom/remote-aes");
+
+/**
+ * グローバル DIMSE TLS 設定（自局の鍵材料）。TLS を有効にした通信先へ接続する際に共通で使う。
+ * usable は算出値（enabled かつ鍵/信頼ストアが実在するとき true）で、保存時は無視される。
+ */
+export interface TlsConfig {
+  enabled: boolean;
+  port: number;
+  keyStore: string;
+  keyStorePassword: string;
+  keyStoreType: string;
+  trustStore: string;
+  trustStorePassword: string;
+  trustStoreType: string;
+  protocols: string[];
+  cipherSuites: string[];
+  needClientAuth: boolean;
+  usable: boolean;
+}
+
+/** グローバル TLS 設定を取得する（保存が無ければ application.yml の既定）。 */
+export const fetchTlsConfig = () => httpGet<TlsConfig>("/api/dicom/tls-config");
+
+/** グローバル TLS 設定を保存する。SCU 送信は即時反映、SCP リスナーは再起動後に反映。 */
+export const saveTlsConfig = (cfg: TlsConfig) => httpSend<TlsConfig>("/api/dicom/tls-config", "POST", cfg);
 
 /** C-ECHO（疎通確認）の結果。 */
 export interface EchoResult {
@@ -747,6 +777,8 @@ interface QrDest {
   host: string;
   port: number;
   calledAet: string;
+  /** このノードへの C-FIND/C-MOVE を TLS 接続にする。 */
+  tls?: boolean;
 }
 
 /** QR: STUDY レベル C-FIND。matchKeys は C-FIND の検索キー（PatientID 等）。 */

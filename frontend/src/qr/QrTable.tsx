@@ -42,7 +42,7 @@ export function QrTable({
   onOpenInViewer: (study: QrStudyRow, series?: QrSeriesRow) => void;
 }) {
   const { t } = useI18n();
-  const destReq = { host: dest.host, port: dest.port, calledAet: dest.aeTitle };
+  const destReq = { host: dest.host, port: dest.port, calledAet: dest.aeTitle, tls: dest.tls };
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [seriesByStudy, setSeriesByStudy] = useState<Map<string, QrSeriesRow[]>>(new Map());

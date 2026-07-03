@@ -28,7 +28,7 @@ public class DicomScpLifecycle implements SmartLifecycle {
 
     private final DicomScpServer server;
 
-    public DicomScpLifecycle(DicomProperties props, DicomStorageService storage) {
+    public DicomScpLifecycle(DicomProperties props, DicomStorageService storage, DicomTlsService tlsService) {
         this.server = new DicomScpServer(
                 props.getLocalAeTitle(),
                 props.getScp().getBindAddress(),
@@ -42,9 +42,11 @@ public class DicomScpLifecycle implements SmartLifecycle {
                 new DicomStoreScp(storage, tempDir),
                 storageCaps.toArray(TransferCapability[]::new));
 
-        // TLS が設定済みなら、平文に加えて TLS リスナーも有効化する。
-        if (props.getTls().isUsable()) {
-            server.enableTls(props.getTls());
+        // TLS が設定済み（GUI 保存 or application.yml）なら、平文に加えて TLS リスナーも有効化する。
+        // リスナーは起動時バインドのため、GUI での TLS 変更は再起動後に反映される。
+        DicomProperties.Tls tls = tlsService.effective();
+        if (tls.isUsable()) {
+            server.enableTls(tls);
         }
     }
 

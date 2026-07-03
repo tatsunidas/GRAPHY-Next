@@ -12,6 +12,10 @@
     "width": 1280,
     "height": 800
   },
+  "update": {
+    "comment": "更新確認（Help＞更新を確認 / 起動時）で参照する GitHub リポジトリ（owner/repo）。",
+    "repo": "tatsunidas/GRAPHY-Next"
+  },
   "security": {
     "comment": "contextIsolation/nodeIntegration/sandbox は安全な値に固定（main.js）。ここで変更不可。",
     "devTools": false

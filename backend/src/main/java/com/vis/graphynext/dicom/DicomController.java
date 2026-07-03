@@ -42,6 +42,7 @@ public class DicomController {
 
     private final DicomEchoScu echoScu;
     private final DicomProperties props;
+    private final DicomTlsService tlsService;
     private final DimseQrService qr;
     private final QrRetrieveService qrRetrieve;
     private final DicomSendService send;
@@ -51,13 +52,14 @@ public class DicomController {
     private final org.springframework.beans.factory.ObjectProvider<WebDicomDataService> webProvider;
     private final DicomScpLifecycle scp; // scp.enabled=false のとき null
 
-    public DicomController(DicomEchoScu echoScu, DicomProperties props, DimseQrService qr,
+    public DicomController(DicomEchoScu echoScu, DicomProperties props, DicomTlsService tlsService, DimseQrService qr,
                            QrRetrieveService qrRetrieve, DicomSendService send, DicomStorageService storage,
                            SettingsService settings, ObjectMapper mapper,
                            org.springframework.beans.factory.ObjectProvider<WebDicomDataService> webProvider,
                            org.springframework.beans.factory.ObjectProvider<DicomScpLifecycle> scpProvider) {
         this.echoScu = echoScu;
         this.props = props;
+        this.tlsService = tlsService;
         this.qr = qr;
         this.qrRetrieve = qrRetrieve;
         this.send = send;
@@ -73,8 +75,21 @@ public class DicomController {
     public EchoResult echo(@RequestBody EchoRequest req) {
         String callingAet = (req.callingAet() == null || req.callingAet().isBlank())
                 ? props.getLocalAeTitle() : req.callingAet();
-        DicomProperties.Tls tls = req.tls() ? props.getTls() : null;
+        DicomProperties.Tls tls = req.tls() ? tlsService.effective() : null;
         return echoScu.echo(req.host(), req.port(), req.calledAet(), callingAet, tls);
+    }
+
+    /** グローバル DIMSE TLS 設定（自局の鍵材料）の取得。 */
+    @GetMapping("/tls-config")
+    public DicomTlsService.TlsConfigDto tlsConfig() {
+        return tlsService.get();
+    }
+
+    /** グローバル DIMSE TLS 設定の保存。SCU 送信は即時反映、SCP リスナーは再起動後に反映。 */
+    @PostMapping("/tls-config")
+    public DicomTlsService.TlsConfigDto saveTlsConfig(@RequestBody DicomTlsService.TlsConfigDto req)
+            throws com.fasterxml.jackson.core.JsonProcessingException {
+        return tlsService.save(req);
     }
 
     /** ローカル SCP リスナーの状態。 */
@@ -92,13 +107,13 @@ public class DicomController {
     @PostMapping("/qr/find")
     public List<StudyDto> find(@RequestBody QrFindRequest req) throws IOException {
         return qr.findStudies(req.host(), req.port(), req.calledAet(),
-                req.matchKeys() == null ? Map.of() : req.matchKeys());
+                req.matchKeys() == null ? Map.of() : req.matchKeys(), req.tls());
     }
 
     /** C-GET: リモート PACS から study を取得しローカル索引へ取り込む。 */
     @PostMapping("/qr/get")
     public Map<String, Object> get(@RequestBody QrRequest req) throws IOException {
-        int n = qr.getStudy(req.host(), req.port(), req.calledAet(), req.studyUid());
+        int n = qr.getStudy(req.host(), req.port(), req.calledAet(), req.studyUid(), req.tls());
         return Map.of("retrieved", n, "studyUid", req.studyUid());
     }
 
@@ -107,7 +122,7 @@ public class DicomController {
     public Map<String, Object> move(@RequestBody QrMoveRequest req) throws IOException {
         String dest = (req.destAet() == null || req.destAet().isBlank())
                 ? props.getLocalAeTitle() : req.destAet();
-        int exit = qr.moveStudy(req.host(), req.port(), req.calledAet(), req.studyUid(), dest);
+        int exit = qr.moveStudy(req.host(), req.port(), req.calledAet(), req.studyUid(), dest, req.tls());
         return Map.of("exitCode", exit, "destAet", dest, "studyUid", req.studyUid());
     }
 
@@ -117,14 +132,14 @@ public class DicomController {
     @PostMapping("/qr/find-studies")
     public List<QrStudyRow> qrFindStudies(@RequestBody QrFindRequest req) throws IOException {
         return qr.findStudiesForQr(req.host(), req.port(), req.calledAet(),
-                req.matchKeys() == null ? Map.of() : req.matchKeys());
+                req.matchKeys() == null ? Map.of() : req.matchKeys(), req.tls());
     }
 
     /** QR: SERIES レベル C-FIND（指定スタディ内のシリーズ）。 */
     @PostMapping("/qr/find-series")
     public List<QrSeriesRow> qrFindSeries(@RequestBody QrSeriesRequest req) throws IOException {
         return qr.findSeries(req.host(), req.port(), req.calledAet(), req.studyUid(),
-                req.matchKeys() == null ? Map.of() : req.matchKeys());
+                req.matchKeys() == null ? Map.of() : req.matchKeys(), req.tls());
     }
 
     /**
@@ -134,7 +149,7 @@ public class DicomController {
     @PostMapping("/qr/retrieve")
     public Map<String, String> qrRetrieve(@RequestBody QrRetrieveRequest req) {
         String jobId = qrRetrieve.start(req.host(), req.port(), req.calledAet(),
-                req.studyUid(), req.seriesUid(), req.expected());
+                req.studyUid(), req.seriesUid(), req.expected(), req.tls());
         return Map.of("jobId", jobId);
     }
 
@@ -177,7 +192,7 @@ public class DicomController {
         java.util.LinkedHashMap<String, RemoteAeDto> byAet = new java.util.LinkedHashMap<>();
         for (DicomProperties.RemoteAe a : props.getRemoteAes()) {
             if (a.getAeTitle() != null && !a.getAeTitle().isBlank()) {
-                byAet.put(a.getAeTitle(), new RemoteAeDto(a.getAeTitle(), a.getHost(), a.getPort()));
+                byAet.put(a.getAeTitle(), new RemoteAeDto(a.getAeTitle(), a.getHost(), a.getPort(), a.isTls()));
             }
         }
         String json = settings.getAll().get(REMOTE_AES_KEY);
@@ -215,7 +230,7 @@ public class DicomController {
     public record EchoRequest(String host, int port, String calledAet, String callingAet, boolean tls) {
     }
 
-    public record RemoteAeDto(String aeTitle, String host, int port) {
+    public record RemoteAeDto(String aeTitle, String host, int port, boolean tls) {
     }
 
     public record SendSelection(String studyUid, List<String> seriesUids) {
@@ -225,21 +240,21 @@ public class DicomController {
                               String callingAet, boolean tls) {
     }
 
-    public record QrFindRequest(String host, int port, String calledAet, Map<String, String> matchKeys) {
+    public record QrFindRequest(String host, int port, String calledAet, Map<String, String> matchKeys, boolean tls) {
     }
 
-    public record QrRequest(String host, int port, String calledAet, String studyUid) {
+    public record QrRequest(String host, int port, String calledAet, String studyUid, boolean tls) {
     }
 
-    public record QrMoveRequest(String host, int port, String calledAet, String studyUid, String destAet) {
+    public record QrMoveRequest(String host, int port, String calledAet, String studyUid, String destAet, boolean tls) {
     }
 
     public record QrSeriesRequest(String host, int port, String calledAet, String studyUid,
-                                  Map<String, String> matchKeys) {
+                                  Map<String, String> matchKeys, boolean tls) {
     }
 
     public record QrRetrieveRequest(String host, int port, String calledAet, String studyUid, String seriesUid,
-                                    int expected) {
+                                    int expected, boolean tls) {
     }
 
     public record StoredQuery(String studyUid, String seriesUid) {

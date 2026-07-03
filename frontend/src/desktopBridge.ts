@@ -17,6 +17,14 @@ export interface GraphyDesktop {
   openMemoryMonitor?: () => Promise<void>;
   /** 外部 URL / mailto を OS の既定アプリ（ブラウザ・メーラ）で開く。 */
   openExternal?: (url: string) => void;
+  /** GitHub Releases の最新リリース情報を取得（更新確認、デスクトップのみ）。失敗時 null。 */
+  checkForUpdate?: () => Promise<{
+    tagName: string;
+    name: string;
+    body: string;
+    htmlUrl: string;
+    publishedAt: string | null;
+  } | null>;
 }
 
 export function desktop(): GraphyDesktop | undefined {

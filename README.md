@@ -79,6 +79,38 @@ scripts/    開発起動・バージョン更新スクリプト
 初回起動時にローカルへデータ保管フォルダ / H2 データベースを作成する。DICOM 受信(SCP)・
 ローカル保管・全ビューア機能がオフラインで動作する（`standalone` プロファイル）。
 
+保存データ（DICOM 保管庫・H2 データベース・plugins）は OS 標準のユーザーデータ領域
+`GRAPHY-Next/` に作成される（インストール先ではなくユーザー領域なので、アンインストール時に
+巻き添えで消えない）:
+
+| OS | データ保管場所 |
+|---|---|
+| Windows | `%APPDATA%\GRAPHY-Next` |
+| macOS | `~/Library/Application Support/GRAPHY-Next` |
+| Linux | `~/.config/GRAPHY-Next` |
+
+#### アンインストール
+
+アプリ内の **Help ＞ アンインストール（Uninstall）** に、OS 別のアンインストーラの場所と手順を
+表示する。いずれも保存データは**既定で保持**され、削除するかどうかは確認のうえ選べる（誤削除防止）。
+
+| OS | アンインストーラ / 手順 |
+|---|---|
+| Windows | 「設定 ＞ アプリ ＞ GRAPHY-Next ＞ アンインストール」。ウィザードが保存データも削除するか確認する |
+| macOS | GRAPHY-Next.app をゴミ箱へ。保存データも消すには同梱スクリプト `Contents/Resources/uninstall/uninstall-macos.command` を実行 |
+| Linux | `.AppImage` を削除。保存データ / デスクトップ統合も消すには同梱スクリプト `resources/uninstall/uninstall-linux.sh` を実行 |
+
+#### 更新の確認
+
+起動時に GitHub Releases の最新版を確認し、新しいバージョンがあればダイアログで通知する
+（メニュー **Help ＞ 更新を確認（Check for updates）** から手動確認も可能）。通知のみで、
+入れ替えは新しいインストーラを実行しての**上書きアップグレード**（データは保持）で行う。
+「このバージョンをスキップ」を選ぶと、その版は起動時に再通知しない。
+
+> 参照リポジトリは `desktop/config.json` の `update.repo`。CSP の都合で最新版の取得は
+> Electron の main プロセス経由（`api.github.com`）で行う。差分ダウンロードを伴うアプリ内
+> 自動更新（electron-updater）は、コード署名体制の整備後に追加予定。
+
 ### Web 版（dcm4chee 連携）
 
 Web 版は **UI 同梱 jar を `web` プロファイルで起動**し、外部 PACS（**dcm4chee**）に

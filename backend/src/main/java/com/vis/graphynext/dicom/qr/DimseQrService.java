@@ -59,11 +59,14 @@ public class DimseQrService {
     private final Dcm4cheTools tools;
     private final DicomStorageService storage;
     private final DicomProperties props;
+    private final com.vis.graphynext.dicom.DicomTlsService tlsService;
 
-    public DimseQrService(Dcm4cheTools tools, DicomStorageService storage, DicomProperties props) {
+    public DimseQrService(Dcm4cheTools tools, DicomStorageService storage, DicomProperties props,
+                          com.vis.graphynext.dicom.DicomTlsService tlsService) {
         this.tools = tools;
         this.storage = storage;
         this.props = props;
+        this.tlsService = tlsService;
     }
 
     /**
@@ -71,8 +74,8 @@ public class DimseQrService {
      *
      * @param matchKeys 絞り込みキー（例: PatientID=..., StudyDate=...）。空なら全件。
      */
-    public List<StudyDto> findStudies(String host, int port, String calledAet, Map<String, String> matchKeys)
-            throws IOException {
+    public List<StudyDto> findStudies(String host, int port, String calledAet, Map<String, String> matchKeys,
+                                      boolean tls) throws IOException {
         Path tool = tools.require("findscu");
         Path outDir = Files.createTempDirectory("graphy-findscu-");
         List<String> cmd = new ArrayList<>(List.of(
@@ -94,7 +97,7 @@ public class DimseQrService {
         cmd.add(outDir.toString());
         cmd.add("--out-file");
         cmd.add("rsp-0000.dcm");
-        cmd.addAll(tlsArgs());
+        cmd.addAll(tlsArgs(tls));
 
         Dcm4cheTools.Result r = tools.run(cmd, TOOL_TIMEOUT_MS);
         if (!r.ok()) {
@@ -131,7 +134,7 @@ public class DimseQrService {
      *
      * @return 取り込んだインスタンス数
      */
-    public int getStudy(String host, int port, String calledAet, String studyUid) throws IOException {
+    public int getStudy(String host, int port, String calledAet, String studyUid, boolean tls) throws IOException {
         Path tool = tools.require("getscu");
         Path outDir = Files.createTempDirectory("graphy-getscu-");
         List<String> cmd = new ArrayList<>(List.of(
@@ -141,7 +144,7 @@ public class DimseQrService {
                 "-L", "STUDY",
                 "-m", "StudyInstanceUID=" + studyUid,
                 "--directory", outDir.toString()));
-        cmd.addAll(tlsArgs());
+        cmd.addAll(tlsArgs(tls));
         Dcm4cheTools.Result r = tools.run(cmd, TOOL_TIMEOUT_MS);
         if (!r.ok()) {
             throw new IOException("getscu 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
@@ -169,7 +172,7 @@ public class DimseQrService {
      *
      * @return movescu の終了コード（0 で成功）
      */
-    public int moveStudy(String host, int port, String calledAet, String studyUid, String destAet)
+    public int moveStudy(String host, int port, String calledAet, String studyUid, String destAet, boolean tls)
             throws IOException {
         Path tool = tools.require("movescu");
         List<String> cmd = new ArrayList<>(List.of(
@@ -179,7 +182,7 @@ public class DimseQrService {
                 "--dest", destAet,
                 "-L", "STUDY",
                 "-m", "StudyInstanceUID=" + studyUid));
-        cmd.addAll(tlsArgs());
+        cmd.addAll(tlsArgs(tls));
         Dcm4cheTools.Result r = tools.run(cmd, TOOL_TIMEOUT_MS);
         if (!r.ok()) {
             throw new IOException("movescu 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
@@ -192,8 +195,8 @@ public class DimseQrService {
      * QR ウィンドウ用 STUDY レベル C-FIND。{@link #findStudies} より多くの属性（生年月日/性別/受付番号/
      * シリーズ数）を返す。
      */
-    public List<QrStudyRow> findStudiesForQr(String host, int port, String calledAet, Map<String, String> matchKeys)
-            throws IOException {
+    public List<QrStudyRow> findStudiesForQr(String host, int port, String calledAet, Map<String, String> matchKeys,
+                                             boolean tls) throws IOException {
         Path tool = tools.require("findscu");
         Path outDir = Files.createTempDirectory("graphy-qr-find-");
         List<String> cmd = new ArrayList<>(List.of(
@@ -215,7 +218,7 @@ public class DimseQrService {
         cmd.add(outDir.toString());
         cmd.add("--out-file");
         cmd.add("rsp-0000.dcm");
-        cmd.addAll(tlsArgs());
+        cmd.addAll(tlsArgs(tls));
 
         Dcm4cheTools.Result r = tools.run(cmd, TOOL_TIMEOUT_MS);
         if (!r.ok()) {
@@ -254,7 +257,7 @@ public class DimseQrService {
 
     /** SERIES レベル C-FIND。指定スタディ内のシリーズ一覧を返す。 */
     public List<QrSeriesRow> findSeries(String host, int port, String calledAet, String studyUid,
-                                        Map<String, String> matchKeys) throws IOException {
+                                        Map<String, String> matchKeys, boolean tls) throws IOException {
         Path tool = tools.require("findscu");
         Path outDir = Files.createTempDirectory("graphy-qr-findse-");
         List<String> cmd = new ArrayList<>(List.of(
@@ -277,7 +280,7 @@ public class DimseQrService {
         cmd.add(outDir.toString());
         cmd.add("--out-file");
         cmd.add("rsp-0000.dcm");
-        cmd.addAll(tlsArgs());
+        cmd.addAll(tlsArgs(tls));
 
         Dcm4cheTools.Result r = tools.run(cmd, TOOL_TIMEOUT_MS);
         if (!r.ok()) {
@@ -316,8 +319,8 @@ public class DimseQrService {
      *
      * @return movescu の終了コード（0 で成功）
      */
-    public int moveSeries(String host, int port, String calledAet, String studyUid, String seriesUid, String destAet)
-            throws IOException {
+    public int moveSeries(String host, int port, String calledAet, String studyUid, String seriesUid, String destAet,
+                          boolean tls) throws IOException {
         Path tool = tools.require("movescu");
         List<String> cmd = new ArrayList<>(List.of(
                 tool.toString(),
@@ -327,7 +330,7 @@ public class DimseQrService {
                 "-L", "SERIES",
                 "-m", "StudyInstanceUID=" + studyUid,
                 "-m", "SeriesInstanceUID=" + seriesUid));
-        cmd.addAll(tlsArgs());
+        cmd.addAll(tlsArgs(tls));
         Dcm4cheTools.Result r = tools.run(cmd, TOOL_TIMEOUT_MS);
         if (!r.ok()) {
             throw new IOException("movescu(SERIES) 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
@@ -336,10 +339,13 @@ public class DimseQrService {
         return r.exitCode();
     }
 
-    /** TLS が設定済みなら getscu/movescu 用の TLS 引数を返す（鍵/信頼ストア + cipher/protocol）。 */
-    private List<String> tlsArgs() {
-        DicomProperties.Tls tls = props.getTls();
-        if (!tls.isUsable()) {
+    /**
+     * ノードが TLS 指定かつ自局のグローバル TLS 設定が揃っているとき、findscu/getscu/movescu 用の
+     * TLS 引数（鍵/信頼ストア + cipher/protocol）を返す。{@code useTls=false} や設定不備なら空。
+     */
+    private List<String> tlsArgs(boolean useTls) {
+        DicomProperties.Tls tls = tlsService.effective();
+        if (!useTls || !tls.isUsable()) {
             return List.of();
         }
         List<String> a = new ArrayList<>();

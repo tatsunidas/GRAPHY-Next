@@ -69,13 +69,14 @@ public class QrRetrieveService {
         volatile String message = "";
     }
 
-    /** リトリーブ要求。seriesUid が null/空ならスタディ全体。 */
-    public String start(String host, int port, String calledAet, String studyUid, String seriesUid, int expected) {
+    /** リトリーブ要求。seriesUid が null/空ならスタディ全体。tls でソース PACS への C-MOVE を TLS 接続にする。 */
+    public String start(String host, int port, String calledAet, String studyUid, String seriesUid, int expected,
+                        boolean tls) {
         String id = "qrjob-" + seq.incrementAndGet();
         Job job = new Job();
         job.expected = Math.max(0, expected);
         jobs.put(id, job);
-        exec.submit(() -> run(id, job, host, port, calledAet, studyUid, seriesUid));
+        exec.submit(() -> run(id, job, host, port, calledAet, studyUid, seriesUid, tls));
         return id;
     }
 
@@ -87,7 +88,8 @@ public class QrRetrieveService {
         return new JobStatus(j.expected, j.received, j.received, j.done, j.success, j.phase, j.message);
     }
 
-    private void run(String id, Job job, String host, int port, String calledAet, String studyUid, String seriesUid) {
+    private void run(String id, Job job, String host, int port, String calledAet, String studyUid, String seriesUid,
+                     boolean tls) {
         WebDicomDataService web = webProvider.getIfAvailable();
         Thread watcher = null;
         try {
@@ -121,9 +123,9 @@ public class QrRetrieveService {
 
             // C-MOVE 実行（スタディ全体 or シリーズ）。
             if (seriesUid != null && !seriesUid.isBlank()) {
-                qr.moveSeries(host, port, calledAet, studyUid, seriesUid, destAet);
+                qr.moveSeries(host, port, calledAet, studyUid, seriesUid, destAet, tls);
             } else {
-                qr.moveStudy(host, port, calledAet, studyUid, destAet);
+                qr.moveStudy(host, port, calledAet, studyUid, destAet, tls);
             }
 
             job.received = (int) countStored(web, studyUid, seriesUid);

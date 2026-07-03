@@ -123,6 +123,7 @@ export function SendDialog({
     setAeTitle(ae.aeTitle);
     setHost(ae.host);
     setPort(String(ae.port));
+    setTls(ae.tls);
   };
 
   const onSelectAe = (val: string) => {

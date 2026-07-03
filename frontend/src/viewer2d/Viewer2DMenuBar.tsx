@@ -13,6 +13,9 @@ import { openLogViewer } from "../system/LogViewer";
 import { openMemoryMonitor } from "../system/memoryMonitor";
 import { openUsersCommunity } from "../help/links";
 import { openDeveloperContact } from "../help/DeveloperContact";
+import { openUninstallGuide } from "../help/UninstallGuide";
+import { runUpdateCheck } from "../help/UpdateNotice";
+import { isDesktop } from "../desktopBridge";
 
 interface MenuItem {
   label: string;
@@ -108,7 +111,7 @@ export function Viewer2DMenuBar({
         },
         { label: t("viewer2d.tb.syncOn"), onClick: () => actions.setSyncTargets(true) },
         { label: t("viewer2d.tb.syncOff"), onClick: () => actions.setSyncTargets(false) },
-        { label: t("main.toolbar.viewer3d"), onClick: () => actions.comingSoon(t("main.toolbar.viewer3d")) },
+        { label: `${t("main.toolbar.viewer3d")}…`, onClick: () => actions.launchViewer3D() },
         { label: `${t("main.toolbar.mpr")}…`, onClick: () => actions.launchMpr() },
         { label: `${t("main.toolbar.slicer")}…`, onClick: () => actions.launchSlicer() },
         { label: `${t("curvedMpr.title")}…`, onClick: () => actions.launchCurvedMpr() },
@@ -210,8 +213,10 @@ export function Viewer2DMenuBar({
       id: "help",
       label: t("main.menu.help"),
       items: [
+        ...(isDesktop() ? [{ label: t("help.update"), onClick: () => void runUpdateCheck(true) }] : []),
         { label: t("help.community"), onClick: () => openUsersCommunity() },
         { label: t("help.contact"), onClick: () => openDeveloperContact() },
+        { label: t("help.uninstall"), onClick: () => openUninstallGuide() },
       ],
     },
   ];

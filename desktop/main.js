@@ -17,6 +17,7 @@ const { spawn } = require("node:child_process");
 const path = require("node:path");
 const os = require("node:os");
 const http = require("node:http");
+const https = require("node:https");
 const fs = require("node:fs");
 const readline = require("node:readline");
 
@@ -67,6 +68,36 @@ function resolveJava() {
   return candidates.find((p) => p && fs.existsSync(p)) || "java";
 }
 
+/**
+ * backend の作業ディレクトリ（＝ H2 DB `./data/graphy-index`・DICOM 保管庫 `./data/dicom`・
+ * `./plugins` が作られる場所）を解決する。backend は相対パスでこれらを作るため、CWD を固定する。
+ *
+ * パッケージ版: OS 標準のユーザーデータ領域直下の "GRAPHY-Next" に固定する。
+ *   Windows … %APPDATA%\GRAPHY-Next
+ *   macOS   … ~/Library/Application Support/GRAPHY-Next
+ *   Linux   … ~/.config/GRAPHY-Next
+ * これによりインストール先(≒プログラム本体)とユーザーデータが分離され、アンインストーラが
+ * データを「巻き添えで消す/取り残す」ことなく、明示的に（確認のうえ）削除できる。
+ *
+ * ⚠ フォルダ名は electron の app.getName()（= package.json "name"）ではなく、build.productName と
+ *   同じ "GRAPHY-Next" を明示指定する。これによりアンインストーラ側の $APPDATA\GRAPHY-Next
+ *   （desktop/build/installer.nsh）・Help＞Uninstall・uninstall スクリプトのパスと完全一致させる。
+ *   productName を変える場合はこれら 4 箇所を同時に更新すること。
+ *
+ * 開発時: 従来どおり CWD（通常 desktop/）をそのまま使い、既存の開発用 desktop/data を壊さない。
+ */
+const APP_DATA_FOLDER = "GRAPHY-Next";
+function resolveDataDir() {
+  if (!app.isPackaged) return process.cwd();
+  const dir = path.join(app.getPath("appData"), APP_DATA_FOLDER);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (e) {
+    console.error("[backend] データディレクトリの作成に失敗:", e);
+  }
+  return dir;
+}
+
 function startBackend() {
   if (EXTERNAL_BACKEND) {
     console.log("[backend] external mode — spawn をスキップ");
@@ -82,7 +113,9 @@ function startBackend() {
   // JVM ヒープ上限（config.backend.maxHeapMb、0/未設定なら JVM 既定）。画像処理に向けて調整可能。
   const maxHeapMb = Number(process.env.GRAPHY_MAX_HEAP_MB || cfg.backend.maxHeapMb || 0);
   const jvmArgs = maxHeapMb > 0 ? [`-Xmx${maxHeapMb}m`] : [];
-  console.log(`[backend] starting: ${jar} (java=${javaCmd}, profile=${PROFILE}, port=${PORT}, maxHeapMb=${maxHeapMb || "default"})`);
+  // データ(DB/DICOM/plugins)は CWD 相対で作られるため、CWD を固定する（パッケージ版は userData）。
+  const dataDir = resolveDataDir();
+  console.log(`[backend] starting: ${jar} (java=${javaCmd}, profile=${PROFILE}, port=${PORT}, maxHeapMb=${maxHeapMb || "default"}, dataDir=${dataDir})`);
   backendProc = spawn(
     javaCmd,
     [
@@ -92,7 +125,7 @@ function startBackend() {
       `--spring.profiles.active=${PROFILE}`,
       `--server.port=${PORT}`,
     ],
-    { stdio: ["ignore", "pipe", "pipe"] },
+    { cwd: dataDir, stdio: ["ignore", "pipe", "pipe"] },
   );
   wireBackendOutput(backendProc);
   backendProc.on("exit", (code) => {
@@ -364,6 +397,61 @@ ipcMain.handle("graphy:open-memory-monitor", () => {
 ipcMain.on("graphy:open-external", (_e, url) => {
   if (typeof url === "string" && /^(https?:|mailto:)/i.test(url)) {
     shell.openExternal(url);
+  }
+});
+
+// HTTPS GET → JSON（リダイレクト追従・タイムアウト付き）。更新確認用の最小実装。
+function httpsGetJson(url, redirects = 3) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(
+      url,
+      { headers: { "User-Agent": "GRAPHY-Next", Accept: "application/vnd.github+json" }, timeout: 8000 },
+      (res) => {
+        const { statusCode, headers } = res;
+        if (statusCode >= 300 && statusCode < 400 && headers.location && redirects > 0) {
+          res.resume();
+          return resolve(httpsGetJson(headers.location, redirects - 1));
+        }
+        if (statusCode !== 200) {
+          res.resume();
+          return reject(new Error(`HTTP ${statusCode}`));
+        }
+        let data = "";
+        res.setEncoding("utf8");
+        res.on("data", (c) => (data += c));
+        res.on("end", () => {
+          try {
+            resolve(JSON.parse(data));
+          } catch (e) {
+            reject(e);
+          }
+        });
+      },
+    );
+    req.on("error", reject);
+    req.on("timeout", () => req.destroy(new Error("timeout")));
+  });
+}
+
+// GitHub Releases の最新版情報を取得（Help＞更新を確認 / 起動時チェック）。
+// レンダラは CSP（connect-src が localhost のみ）で api.github.com を叩けないため、
+// main プロセスで取得して返す。バージョン比較・UI はレンダラ側で行う。失敗時 null。
+ipcMain.handle("graphy:check-update", async () => {
+  const repo = (cfg.update && cfg.update.repo) || "";
+  if (!repo) return null;
+  try {
+    const rel = await httpsGetJson(`https://api.github.com/repos/${repo}/releases/latest`);
+    if (!rel || !rel.tag_name) return null;
+    return {
+      tagName: String(rel.tag_name),
+      name: rel.name ? String(rel.name) : String(rel.tag_name),
+      body: rel.body ? String(rel.body) : "",
+      htmlUrl: rel.html_url ? String(rel.html_url) : `https://github.com/${repo}/releases/latest`,
+      publishedAt: rel.published_at ? String(rel.published_at) : null,
+    };
+  } catch (e) {
+    console.error("[update] check failed:", e && e.message);
+    return null;
   }
 });
 

@@ -10,6 +10,9 @@ import { openLogViewer } from "../system/LogViewer";
 import { openMemoryMonitor } from "../system/memoryMonitor";
 import { openUsersCommunity } from "../help/links";
 import { openDeveloperContact } from "../help/DeveloperContact";
+import { openUninstallGuide } from "../help/UninstallGuide";
+import { runUpdateCheck } from "../help/UpdateNotice";
+import { isDesktop } from "../desktopBridge";
 
 interface MenuItem {
   label: string;
@@ -109,8 +112,10 @@ export function MenuBar({
       label: t("main.menu.help"),
       items: [
         { label: t("sc.title"), onClick: onOpenHelp },
+        ...(isDesktop() ? [{ label: t("help.update"), onClick: () => void runUpdateCheck(true) }] : []),
         { label: t("help.community"), onClick: openUsersCommunity },
         { label: t("help.contact"), onClick: openDeveloperContact },
+        { label: t("help.uninstall"), onClick: openUninstallGuide },
       ],
     },
   ];
