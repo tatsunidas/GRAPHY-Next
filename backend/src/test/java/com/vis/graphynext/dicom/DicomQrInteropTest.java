@@ -80,11 +80,11 @@ class DicomQrInteropTest {
 
         String study = "1.2.qr.find.study";
         try (Peer peer = Peer.startWithPhantom("PIDF", study, "1.2.qr.find.series", "1.2.qr.find.sop", null)) {
-            var studies = qr.findStudies("127.0.0.1", peer.port, "DCMQRSCP", Map.of());
+            var studies = qr.findStudies("127.0.0.1", peer.port, "DCMQRSCP", Map.of(), false);
             assertTrue(studies.stream().anyMatch(s -> study.equals(s.studyInstanceUid())),
                     "C-FIND で投入した study が返るはず");
             // 絞り込み（PatientID）でも返る
-            var byPid = qr.findStudies("127.0.0.1", peer.port, "DCMQRSCP", Map.of("PatientID", "PIDF"));
+            var byPid = qr.findStudies("127.0.0.1", peer.port, "DCMQRSCP", Map.of("PatientID", "PIDF"), false);
             assertTrue(byPid.stream().anyMatch(s -> study.equals(s.studyInstanceUid())),
                     "PatientID 絞り込みでも study が返るはず");
         }
@@ -97,7 +97,7 @@ class DicomQrInteropTest {
         String study = "1.2.qr.findse.study";
         String series = "1.2.qr.findse.series";
         try (Peer peer = Peer.startWithPhantom("PIDFS", study, series, "1.2.qr.findse.sop", null)) {
-            var rows = qr.findSeries("127.0.0.1", peer.port, "DCMQRSCP", study, Map.of());
+            var rows = qr.findSeries("127.0.0.1", peer.port, "DCMQRSCP", study, Map.of(), false);
             assertTrue(rows.stream().anyMatch(r -> series.equals(r.seriesInstanceUid())),
                     "SERIES C-FIND で投入したシリーズが返るはず");
         }
@@ -120,7 +120,7 @@ class DicomQrInteropTest {
         Path aeConfig = tmp.resolve("peer-ae-se.properties");
         Files.writeString(aeConfig, "GRAPHYNEXT=127.0.0.1:" + ourScpPort + "\n");
         try (Peer peer = Peer.startWithPhantom("PIDMS", study, series, "1.2.qr.movese.sop", aeConfig)) {
-            qr.moveSeries("127.0.0.1", peer.port, "DCMQRSCP", study, series, "GRAPHYNEXT");
+            qr.moveSeries("127.0.0.1", peer.port, "DCMQRSCP", study, series, "GRAPHYNEXT", false);
             assertTrue(waitUntil(() -> storage.findMatches(null, study, series, null).size() >= 1, 15_000),
                     "C-MOVE(SERIES) で自前 SCP が受信し索引に載るはず");
         } finally {
@@ -134,7 +134,7 @@ class DicomQrInteropTest {
 
         String study = "1.2.qr.get.study";
         try (Peer peer = Peer.startWithPhantom("PIDG", study, "1.2.qr.get.series", "1.2.qr.get.sop", null)) {
-            int n = qr.getStudy("127.0.0.1", peer.port, "DCMQRSCP", study);
+            int n = qr.getStudy("127.0.0.1", peer.port, "DCMQRSCP", study, false);
             assertTrue(n >= 1, "C-GET で 1 件以上取得できるはず");
             assertTrue(storage.findMatches(null, study, null, null).size() >= 1, "取得分が索引に載る");
         }
@@ -158,7 +158,7 @@ class DicomQrInteropTest {
         Path aeConfig = tmp.resolve("peer-ae.properties");
         Files.writeString(aeConfig, "GRAPHYNEXT=127.0.0.1:" + ourScpPort + "\n");
         try (Peer peer = Peer.startWithPhantom("PIDM", study, "1.2.qr.move.series", "1.2.qr.move.sop", aeConfig)) {
-            qr.moveStudy("127.0.0.1", peer.port, "DCMQRSCP", study, "GRAPHYNEXT");
+            qr.moveStudy("127.0.0.1", peer.port, "DCMQRSCP", study, "GRAPHYNEXT", false);
             // 受信は非同期。索引に載るまで待つ。
             assertTrue(waitUntil(() -> storage.findMatches(null, study, null, null).size() >= 1, 15_000),
                     "C-MOVE で自前 SCP が受信し索引に載るはず");
