@@ -24,6 +24,7 @@ const readline = require("node:readline");
 const PROGRESS_PREFIX = "__GRAPHY_PROGRESS__";
 
 const cfg = require("./config.json");
+const { createWindowStateKeeper } = require("./windowState");
 
 const PORT = process.env.GRAPHY_BACKEND_PORT || String(cfg.backend.port);
 const PROFILE = process.env.GRAPHY_BACKEND_PROFILE || cfg.backend.profile;
@@ -40,10 +41,20 @@ const DEV = process.env.GRAPHY_DEV === "1";
 const EXTERNAL_BACKEND = process.env.GRAPHY_BACKEND_EXTERNAL === "1";
 
 let backendProc = null;
-// 2D Viewer ウィンドウのシングルトン参照。既に開いている場合はフォーカスして再利用する。
-let viewer2dWin = null;
-// QR（Query/Retrieve）ウィンドウのシングルトン参照。常駐させたいので 1 枚を再利用する。
+// 位置記憶対象ビューアのシングルトン参照（画面キー → BrowserWindow）。
+// 既に開いていればフォーカスして再利用し、キーごとに前回位置を 1 つ記憶する。
+const viewerWins = new Map();
+// QR（Query/Retrieve）ウィンドウのシングルトン参照。常駐させたいので 1 枚を再利用する（位置記憶は対象外）。
 let qrWin = null;
+
+// 位置記憶対象ビューアの既定サイズ（初回/保存なしのとき使う）。
+const VIEWER_DEFAULTS = {
+  "2dviewer": { width: 1400, height: 900 },
+  viewer3d: { width: 1400, height: 900 },
+  mpr: { width: 1400, height: 900 },
+  slicer: { width: 1400, height: 900 },
+  curvedmpr: { width: 1400, height: 900 },
+};
 
 /** 同梱 / 開発時の backend jar のパスを解決する。 */
 function resolveBackendJar() {
@@ -231,9 +242,12 @@ function closeSplash() {
 }
 
 function createWindow() {
-  const win = new BrowserWindow({
+  const keeper = createWindowStateKeeper("main", {
     width: WINDOW.width,
     height: WINDOW.height,
+  });
+  const win = new BrowserWindow({
+    ...keeper.initialBounds, // 前回位置を復元（迷子防止の検証済み）
     show: false, // ロード完了まで隠す（スプラッシュからの切替えを滑らかに）
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -245,6 +259,7 @@ function createWindow() {
       additionalArguments: [`--graphy-api-base=${API_BASE}`],
     },
   });
+  keeper.track(win); // 移動/リサイズ/最大化/閉じるを追従して位置を保存
 
   // 外部 URL は既定ブラウザで開き、新規ウィンドウは生成しない。
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -260,6 +275,8 @@ function createWindow() {
   });
 
   win.once("ready-to-show", () => {
+    if (keeper.isMaximized) win.maximize();
+    if (keeper.isFullScreen) win.setFullScreen(true);
     win.show();
     closeSplash(); // メイン表示と同時にスプラッシュを閉じる
   });
@@ -278,10 +295,12 @@ function createWindow() {
 
 // 2D/3D/MPR/Slicer 等の独立ビューアを新規ウィンドウで開く（マルチモニタ運用）。
 // 同じフロントを `#<screen>` のハッシュ付きで読み込み、React 側でルーティングする。
-function createViewerWindow(screen) {
+// keeper を渡すと前回位置を復元し、以後の移動/リサイズ/最大化を追従保存する（QR 等は未指定＝記憶なし）。
+function createViewerWindow(screen, keeper) {
+  const bounds = keeper ? keeper.initialBounds : { width: 1400, height: 900 };
   const win = new BrowserWindow({
-    width: 1400,
-    height: 900,
+    ...bounds,
+    show: keeper ? false : true, // keeper 有りは最大化復元後に表示（ちらつき防止）
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -291,6 +310,14 @@ function createViewerWindow(screen) {
       additionalArguments: [`--graphy-api-base=${API_BASE}`],
     },
   });
+  if (keeper) {
+    keeper.track(win);
+    win.once("ready-to-show", () => {
+      if (keeper.isMaximized) win.maximize();
+      if (keeper.isFullScreen) win.setFullScreen(true);
+      win.show();
+    });
+  }
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//.test(url)) shell.openExternal(url);
     return { action: "deny" };
@@ -316,25 +343,32 @@ function createViewerWindow(screen) {
 
 ipcMain.handle("graphy:open-viewer", (_e, screen) => {
   const s = String(screen || "2dviewer");
-  if (s === "2dviewer") {
-    // 既に開いていればフォーカスして再利用（シングルトン）。
-    if (viewer2dWin && !viewer2dWin.isDestroyed()) {
-      viewer2dWin.focus();
-      return;
-    }
-    viewer2dWin = createViewerWindow("2dviewer");
-    viewer2dWin.on("closed", () => { viewer2dWin = null; });
-  } else if (s === "qr") {
-    // QR ウィンドウは常駐想定のシングルトン。
+
+  // QR ウィンドウは常駐想定のシングルトン（位置記憶は対象外）。
+  if (s === "qr") {
     if (qrWin && !qrWin.isDestroyed()) {
       qrWin.focus();
       return;
     }
     qrWin = createViewerWindow("qr");
     qrWin.on("closed", () => { qrWin = null; });
-  } else {
-    createViewerWindow(s);
+    return;
   }
+
+  // 位置記憶対象ビューアは「1 画面キー = 1 ウィンドウ」のシングルトン。
+  // 既に開いていればフォーカスして再利用する。
+  const existing = viewerWins.get(s);
+  if (existing && !existing.isDestroyed()) {
+    existing.focus();
+    return;
+  }
+
+  const keeper = createWindowStateKeeper(s, VIEWER_DEFAULTS[s] || { width: 1400, height: 900 });
+  const win = createViewerWindow(s, keeper);
+  viewerWins.set(s, win);
+  win.on("closed", () => {
+    if (viewerWins.get(s) === win) viewerWins.delete(s);
+  });
 });
 
 // ビューアのタイル画像を外部（デスクトップ/他アプリ）へネイティブドラッグする。
