@@ -58,14 +58,15 @@ public class DimseQrService {
 
     private final Dcm4cheTools tools;
     private final DicomStorageService storage;
-    private final DicomProperties props;
+    private final com.vis.graphynext.dicom.DicomLocalAeService localAe;
     private final com.vis.graphynext.dicom.DicomTlsService tlsService;
 
-    public DimseQrService(Dcm4cheTools tools, DicomStorageService storage, DicomProperties props,
+    public DimseQrService(Dcm4cheTools tools, DicomStorageService storage,
+                          com.vis.graphynext.dicom.DicomLocalAeService localAe,
                           com.vis.graphynext.dicom.DicomTlsService tlsService) {
         this.tools = tools;
         this.storage = storage;
-        this.props = props;
+        this.localAe = localAe;
         this.tlsService = tlsService;
     }
 
@@ -80,7 +81,7 @@ public class DimseQrService {
         Path outDir = Files.createTempDirectory("graphy-findscu-");
         List<String> cmd = new ArrayList<>(List.of(
                 tool.toString(),
-                "-b", props.getLocalAeTitle(),
+                "-b", localAe.aeTitle(),
                 "-c", calledAet + "@" + host + ":" + port,
                 "-L", "STUDY"));
         for (String key : STUDY_RETURN_KEYS) {
@@ -139,7 +140,7 @@ public class DimseQrService {
         Path outDir = Files.createTempDirectory("graphy-getscu-");
         List<String> cmd = new ArrayList<>(List.of(
                 tool.toString(),
-                "-b", props.getLocalAeTitle(),
+                "-b", localAe.aeTitle(),
                 "-c", calledAet + "@" + host + ":" + port,
                 "-L", "STUDY",
                 "-m", "StudyInstanceUID=" + studyUid,
@@ -177,7 +178,7 @@ public class DimseQrService {
         Path tool = tools.require("movescu");
         List<String> cmd = new ArrayList<>(List.of(
                 tool.toString(),
-                "-b", props.getLocalAeTitle(),
+                "-b", localAe.aeTitle(),
                 "-c", calledAet + "@" + host + ":" + port,
                 "--dest", destAet,
                 "-L", "STUDY",
@@ -201,7 +202,7 @@ public class DimseQrService {
         Path outDir = Files.createTempDirectory("graphy-qr-find-");
         List<String> cmd = new ArrayList<>(List.of(
                 tool.toString(),
-                "-b", props.getLocalAeTitle(),
+                "-b", localAe.aeTitle(),
                 "-c", calledAet + "@" + host + ":" + port,
                 "-L", "STUDY"));
         for (String key : QR_STUDY_RETURN_KEYS) {
@@ -262,7 +263,7 @@ public class DimseQrService {
         Path outDir = Files.createTempDirectory("graphy-qr-findse-");
         List<String> cmd = new ArrayList<>(List.of(
                 tool.toString(),
-                "-b", props.getLocalAeTitle(),
+                "-b", localAe.aeTitle(),
                 "-c", calledAet + "@" + host + ":" + port,
                 "-L", "SERIES",
                 "-m", "StudyInstanceUID=" + studyUid));
@@ -324,7 +325,7 @@ public class DimseQrService {
         Path tool = tools.require("movescu");
         List<String> cmd = new ArrayList<>(List.of(
                 tool.toString(),
-                "-b", props.getLocalAeTitle(),
+                "-b", localAe.aeTitle(),
                 "-c", calledAet + "@" + host + ":" + port,
                 "--dest", destAet,
                 "-L", "SERIES",

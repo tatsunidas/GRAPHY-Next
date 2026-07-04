@@ -425,6 +425,22 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
             default: "GRAPHYNEXT",
             helpKey: "settings.field.localAeTitle.help",
           },
+          {
+            key: "dicom.localAePort",
+            labelKey: "settings.field.localAePort",
+            type: "number",
+            default: 11112,
+            min: 1,
+            max: 65535,
+            helpKey: "settings.field.localAePort.help",
+          },
+          {
+            key: "dicom.localAeBindAddress",
+            labelKey: "settings.field.localAeBindAddress",
+            type: "text",
+            default: "0.0.0.0",
+            helpKey: "settings.field.localAeBindAddress.help",
+          },
         ],
       },
       {

@@ -20,6 +20,8 @@ import { LogViewerHost } from "./system/LogViewer";
 import { DeveloperContactHost } from "./help/DeveloperContact";
 import { UninstallGuideHost } from "./help/UninstallGuide";
 import { UpdateNoticeHost, runUpdateCheck } from "./help/UpdateNotice";
+import { isRestartRequired, subscribeRestartRequired, clearRestartRequired } from "./restartRequiredEvents";
+import { desktop } from "./desktopBridge";
 import { useI18n } from "./i18n/i18n";
 
 export function App() {
@@ -114,7 +116,48 @@ export function App() {
       <UpdateNoticeHost />
       {/* 別ウィンドウ（2D Viewer）では DB 変更時に再読込/開き直しをポップアップで促す。 */}
       {screen === "2dviewer" && <DbChangeNotice />}
+      {/* DICOM 自局設定（SCP ポート/バインドアドレス等）を変更した後、全ウィンドウで再起動を促す。 */}
+      <RestartRequiredNotice />
     </>
+  );
+}
+
+/** SCP リスナー起動時にしか反映されない設定（自局 AE）の変更後、再起動を促すバナー。 */
+function RestartRequiredNotice() {
+  const { t } = useI18n();
+  const [required, setRequired] = useState(() => isRestartRequired());
+  const [relaunching, setRelaunching] = useState(false);
+
+  useEffect(() => subscribeRestartRequired(setRequired), []);
+
+  if (!required) return null;
+
+  const canRelaunch = !!desktop()?.relaunch;
+
+  const restart = async () => {
+    setRelaunching(true);
+    clearRestartRequired();
+    try {
+      await desktop()?.relaunch?.();
+    } catch {
+      setRelaunching(false);
+    }
+  };
+
+  return (
+    <div style={noticeBar}>
+      <span>{t("restartNotice.message")}</span>
+      {canRelaunch ? (
+        <button style={noticeBtn} onClick={() => void restart()} disabled={relaunching}>
+          {relaunching ? t("restartNotice.restarting") : t("restartNotice.restart")}
+        </button>
+      ) : (
+        <span style={{ color: "#8a7b3a" }}>{t("restartNotice.manual")}</span>
+      )}
+      <button style={noticeDismiss} onClick={() => setRequired(false)} aria-label={t("common.close")}>
+        ✕
+      </button>
+    </div>
   );
 }
 

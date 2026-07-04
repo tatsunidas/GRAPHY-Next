@@ -19,6 +19,10 @@ export const en: Record<string, string> = {
   "doc.download": "Download",
   "dbnotice.message": "The database was updated. Please reload the displayed data, or reopen it.",
   "dbnotice.reload": "Reload",
+  "restartNotice.message": "Local AE settings changed. Restart the app for the SCP listener to use the new settings.",
+  "restartNotice.restart": "Restart now",
+  "restartNotice.restarting": "Restarting…",
+  "restartNotice.manual": "Please restart the app manually.",
 
   // app
   "app.subtitle": "Minimal startup check",
@@ -832,7 +836,11 @@ export const en: Record<string, string> = {
   "settings.opt.volume.gb": "GB",
   "settings.sec.localAe": "Local AE",
   "settings.field.localAeTitle": "Local AE Title",
-  "settings.field.localAeTitle.help": "Currently display/save only; backend wiring planned.",
+  "settings.field.localAeTitle.help": "Calling AE for outgoing C-ECHO/C-STORE/C-FIND/C-MOVE and the SCP listener's AE Title. Applies immediately to outgoing calls; the SCP listener needs an app restart.",
+  "settings.field.localAePort": "SCP listener port",
+  "settings.field.localAePort.help": "Port the local DIMSE listener (C-STORE/C-ECHO receiver) binds to. Requires an app restart to take effect.",
+  "settings.field.localAeBindAddress": "SCP bind address",
+  "settings.field.localAeBindAddress.help": "Network interface the local DIMSE listener binds to (0.0.0.0 = all interfaces). Requires an app restart to take effect.",
   "settings.sec.pacs": "PACS Integration (web)",
   "settings.field.pacsUiUrl": "PACS admin UI URL",
   "settings.field.pacsUiUrl.help":

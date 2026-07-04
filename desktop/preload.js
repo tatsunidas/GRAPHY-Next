@@ -32,4 +32,6 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   openExternal: (url) => ipcRenderer.send("graphy:open-external", url),
   // GitHub Releases の最新版情報を取得（更新確認）。失敗時 null。
   checkForUpdate: () => ipcRenderer.invoke("graphy:check-update"),
+  // アプリ全体を再起動する（DICOM 自局設定などの反映用）。
+  relaunch: () => ipcRenderer.invoke("graphy:relaunch"),
 });

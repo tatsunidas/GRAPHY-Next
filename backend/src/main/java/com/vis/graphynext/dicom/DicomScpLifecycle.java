@@ -28,11 +28,12 @@ public class DicomScpLifecycle implements SmartLifecycle {
 
     private final DicomScpServer server;
 
-    public DicomScpLifecycle(DicomProperties props, DicomStorageService storage, DicomTlsService tlsService) {
+    public DicomScpLifecycle(DicomProperties props, DicomStorageService storage, DicomTlsService tlsService,
+                             DicomLocalAeService localAe) {
         this.server = new DicomScpServer(
-                props.getLocalAeTitle(),
-                props.getScp().getBindAddress(),
-                props.getScp().getPort());
+                localAe.aeTitle(),
+                localAe.bindAddress(),
+                localAe.scpPort());
 
         Path tempDir = Paths.get(props.getStorageDir(), "incoming");
         // all-storage("*") は使わず、設定リソースに明示列挙した SOP クラスのみ受理する。

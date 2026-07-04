@@ -19,6 +19,10 @@ export const ja: Record<string, string> = {
   "doc.download": "ダウンロード",
   "dbnotice.message": "データベースが更新されました。表示中のデータを再読込するか、一旦開き直してください。",
   "dbnotice.reload": "再読込",
+  "restartNotice.message": "自局の DICOM 設定が変更されました。SCP リスナーに反映するにはアプリの再起動が必要です。",
+  "restartNotice.restart": "今すぐ再起動",
+  "restartNotice.restarting": "再起動中…",
+  "restartNotice.manual": "手動でアプリを再起動してください。",
 
   // app
   "app.subtitle": "最小構成 起動確認",
@@ -831,7 +835,11 @@ export const ja: Record<string, string> = {
   "settings.opt.volume.gb": "GB",
   "settings.sec.localAe": "自局",
   "settings.field.localAeTitle": "自局 AE タイトル",
-  "settings.field.localAeTitle.help": "現状は表示・保存のみ。将来 backend 設定への反映を予定。",
+  "settings.field.localAeTitle.help": "C-ECHO/C-STORE/C-FIND/C-MOVE 発信時の Calling AE、および SCP リスナーの AE タイトル。発信は即時反映、SCP リスナーへの反映にはアプリの再起動が必要。",
+  "settings.field.localAePort": "SCP 待受ポート",
+  "settings.field.localAePort.help": "ローカル DIMSE リスナー（C-STORE/C-ECHO 受信）が待ち受けるポート。反映にはアプリの再起動が必要。",
+  "settings.field.localAeBindAddress": "SCP バインドアドレス",
+  "settings.field.localAeBindAddress.help": "ローカル DIMSE リスナーがバインドするネットワークインタフェース（0.0.0.0=全 NIC）。反映にはアプリの再起動が必要。",
   "settings.sec.pacs": "PACS 連携（web）",
   "settings.field.pacsUiUrl": "PACS 管理 UI の URL",
   "settings.field.pacsUiUrl.help":

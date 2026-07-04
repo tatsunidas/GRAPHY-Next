@@ -4,7 +4,7 @@
  */
 package com.vis.graphynext.dicom.qr;
 
-import com.vis.graphynext.dicom.DicomProperties;
+import com.vis.graphynext.dicom.DicomLocalAeService;
 import com.vis.graphynext.dicom.store.DicomStorageService;
 import com.vis.graphynext.dicom.web.WebDicomDataService;
 import com.vis.graphynext.settings.SettingsService;
@@ -38,7 +38,7 @@ public class QrRetrieveService {
 
     private final DimseQrService qr;
     private final DicomStorageService storage;
-    private final DicomProperties props;
+    private final DicomLocalAeService localAe;
     private final SettingsService settings;
     private final ObjectProvider<WebDicomDataService> webProvider;
 
@@ -46,11 +46,11 @@ public class QrRetrieveService {
     private final ConcurrentHashMap<String, Job> jobs = new ConcurrentHashMap<>();
     private final AtomicLong seq = new AtomicLong();
 
-    public QrRetrieveService(DimseQrService qr, DicomStorageService storage, DicomProperties props,
+    public QrRetrieveService(DimseQrService qr, DicomStorageService storage, DicomLocalAeService localAe,
                              SettingsService settings, ObjectProvider<WebDicomDataService> webProvider) {
         this.qr = qr;
         this.storage = storage;
-        this.props = props;
+        this.localAe = localAe;
         this.settings = settings;
         this.webProvider = webProvider;
     }
@@ -102,7 +102,7 @@ public class QrRetrieveService {
                             "web モードの C-MOVE 宛先 AE（dicom.webMoveDestAet）が未設定です（環境設定の Query/Retrieve）");
                 }
             } else {
-                destAet = props.getLocalAeTitle();
+                destAet = localAe.aeTitle();
             }
 
             // 進捗ウォッチャ: 移動先の保存件数を received に反映。

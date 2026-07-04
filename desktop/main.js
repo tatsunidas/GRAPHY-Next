@@ -473,6 +473,13 @@ ipcMain.handle("graphy:pick-directory", async () => {
   return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
 });
 
+// アプリ全体を再起動する（DICOM 自局設定など、SCP リスナー起動時にしか反映されない設定の変更後に使う）。
+// before-quit で stopBackend が走るため、次回起動時に新しい設定で backend が立ち上がる。
+ipcMain.handle("graphy:relaunch", () => {
+  app.relaunch();
+  app.quit();
+});
+
 app.whenReady().then(async () => {
   createSplash();
   try {

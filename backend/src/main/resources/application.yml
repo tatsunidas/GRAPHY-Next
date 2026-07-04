@@ -40,6 +40,9 @@ graphy:
       - DELETE
       - OPTIONS
   dicom:
+    # 自局 AE タイトル / SCP ポート・バインドアドレスの既定値。環境設定「DICOM通信」＞「自局」から
+    # 編集すると Settings(H2) に保存され、こことは独立にこちらの値を上書きする（DicomLocalAeService）。
+    # AE タイトルは発信（C-ECHO/C-STORE/C-FIND/C-MOVE）に即時反映、SCP リスナーはアプリ再起動後に反映。
     local-ae-title: GRAPHYNEXT
     storage-dir: ./data/dicom
     scp:

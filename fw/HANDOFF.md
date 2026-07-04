@@ -1,6 +1,6 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
-> 更新日: 2026-06-30（最終更新: StrictMode 無効化でCT黒画面/スケールバー暴走を解消・カメラ自己修復 / Fusion整合表示 / IPP表示 / LUT404修正）
+> 更新日: 2026-07-04（最終更新: DICOM 自局 AE（AET/ポート/バインドアドレス）を環境設定 UI から編集可能化・再起動促進バナー追加）
 > 目的: 別の作業者（Claude 含む）がこのリポジトリの状況を把握し、続きを実装できるようにする。
 > このファイル＋ `fw/` 配下の各設計ドキュメントが「ソース・オブ・トゥルース」。
 >
@@ -14,6 +14,14 @@
 > 🟢 **2026-07 追加（GRAPHY 機能移植）**: Analysis>Histogram / Image>コントラスト調整(W/L) / View>Layout(任意 Row×Col) を実装。
 > 併せて **HU 校正の二重適用バグ**を是正し `viewer/pixelCalibration.ts` に読取を一元化（再発防止）。
 > 詳細: `viewer-2d-menu-toolbar.md` §9 ／ 校正は `viewer-2d-architecture.md`「校正(HU 等)の二重適用に注意」。
+>
+> 🟢 **2026-07-04 追加（DICOM 自局 AE 設定の UI 編集・standalone のみ）**: 環境設定「DICOM通信」＞「自局」の
+> AET/SCP待受ポート/バインドアドレス欄を、backend の `DicomLocalAeService`（Settings(H2) 優先・無ければ
+> application.yml 既定）に接続。AET は発信（C-ECHO/C-STORE/C-FIND/C-MOVE）に即時反映、SCP リスナー本体は
+> 起動時バインドのためアプリ**再起動が必要**。変更検知で全ウィンドウに再起動促進バナー（`RestartRequiredNotice`,
+> `restartRequiredEvents.ts`）を表示し、「今すぐ再起動」ボタンから Electron `graphy:relaunch` IPC で実際に
+> 再起動できる（`desktop/main.js`/`preload.js`）。web モードは対象外（元々 backend 単一プロセスの
+> application.yml 管理のまま）。
 
 ---
 
@@ -77,6 +85,10 @@ GRAPHY-Next/
 - **Query/Retrieve ウィンドウ**: 常駐別ウィンドウ（`#qr`）。Destination タブ・共有検索(Today既定)・AutoRefresh・
   保存済み判定・**Retrieve は C-MOVE**（standalone=自局SCP取込 / web=dcm4chee宛・QIDO判定）。`qr/DimseQrService`
   拡張＋`qr/QrRetrieveService`＋`/api/dicom/qr/*`、frontend `src/qr/`。設計・検証は **`fw/qr-window.md`**。
+- **自局 AE 設定（DicomLocalAeService）**: 自局 AET / SCP待受ポート / バインドアドレスの実効値を解決
+  （`DicomTlsService` と同パターン: Settings(H2) 保存があれば application.yml 既定より優先）。
+  `DicomController`/`DicomScpLifecycle`/`DimseQrService`/`QrRetrieveService` が参照。環境設定 UI（standalone
+  のみ）から編集可能。AET は発信に即時反映、SCP リスナーは再起動後反映（再起動促進バナーあり、下記 frontend 参照）。
 - **TagExtractor（GRAPHY 移植）**: タグ/シーケンス(パス編集)/Private を指定し検索リスト全体をシリーズ単位で
   抽出→テーブル→CSV。`extract/TagExtractService.extractTable`＋`/api/extract/table|csv`、
   `/api/dicom/tags`（辞書）、`web/WebDicomDataService.seriesMetadata`（WADO-RS）。frontend
@@ -122,6 +134,10 @@ GRAPHY-Next/
   Image(2D/3D/MPR/Slicer) / System(Settings/DB) / Help。
 - **ツールバー**: 同上のツール群＋ビューア群。**2D Viewer のみ実装**、他は「近日対応予定」バナー。
 - 環境設定（スキーマ駆動＋カスタムパネル: セキュリティ／**画像オーバーレイ**）。DB管理。i18n(ja/en)。
+- **再起動促進バナー（`App.tsx` の `RestartRequiredNotice`）**: SCP リスナー起動時にしか反映されない設定
+  （自局 AE の AET/ポート/バインドアドレス）を変更すると `restartRequiredEvents.ts` が全ウィンドウへ通知し、
+  バナー表示。「今すぐ再起動」は `desktopBridge.ts` 経由で Electron `graphy:relaunch` を呼ぶ（standalone のみ、
+  web は手動再起動を促す文言）。`DbChangeNotice` と同じ見た目パターン。
 
 ### frontend 2D ビューア（`frontend/src/viewer/`）— ほぼここが主戦場
 - `Viewer2D.tsx`: Cornerstone StackViewport。`imageIds[]`+`imageIndex`。**単一 RenderingEngine 共有**。

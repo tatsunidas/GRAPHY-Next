@@ -9,6 +9,14 @@ import { OverlayConfigPanel } from "./OverlayConfigPanel";
 import { RemoteAePanel } from "./RemoteAePanel";
 import { AboutPanel } from "./AboutPanel";
 import { useI18n, type Locale, type TFn } from "../i18n/i18n";
+import { markRestartRequired } from "../restartRequiredEvents";
+
+/** 変更が SCP リスナー（自局 AE）に反映されるのにアプリ再起動が要るキー。 */
+const RESTART_REQUIRED_KEYS = new Set([
+  "dicom.localAeTitle",
+  "dicom.localAePort",
+  "dicom.localAeBindAddress",
+]);
 
 export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { t, locale, setLocale } = useI18n();
@@ -41,6 +49,9 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
       } catch {
         // localStorage 不可でも backend 保存は続行
       }
+    }
+    if (RESTART_REQUIRED_KEYS.has(field.key) && value !== valueOf(field)) {
+      markRestartRequired();
     }
     setMap((prev) => ({ ...prev, [field.key]: value }));
     saveSettings({ [field.key]: value }).catch((e: unknown) => setError(String(e)));
