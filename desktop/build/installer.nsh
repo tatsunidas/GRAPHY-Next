@@ -1,9 +1,49 @@
 ; GRAPHY-Next — NSIS カスタムスクリプト（electron-builder の nsis.include から読み込まれる）
 ;
-; 目的: アンインストール時に「ユーザーデータ（DICOM 保管庫・H2 データベース・plugins）も
-;       一緒に削除しますか?」と確認し、選ばれた場合のみユーザーデータを削除する。
+; 目的（2 つ）:
+;   (A) アップデート／アンインストール時に、同梱 JRE で動くバックエンド java.exe を確実に止める。
+;   (B) アンインストール時に「ユーザーデータ（DICOM 保管庫・H2・plugins）も消しますか?」を確認する。
 ;
-; 背景:
+; -------------------------------------------------------------------------
+; (A) 旧バージョン削除失敗（"Can't rename $INSTDIR ..." → 「旧バージョンの削除に失敗」）の対策
+; -------------------------------------------------------------------------
+;   electron-builder の CHECK_APP_RUNNING は GRAPHY-Next.exe（Electron 本体）しか kill しない。
+;   しかし main.js は同梱 JRE の java.exe を子プロセスとして spawn し
+;   （resources\jre\bin\java.exe -jar resources\backend\graphy-next-backend.jar ...）、
+;   Electron 本体をハードキルすると before-quit→stopBackend を経ず java が孤児化して生き残る。
+;   その java が $INSTDIR\resources\jre\... と backend jar をロックしたままなので、
+;   更新時に旧アンインストーラの un.atomicRMDir（$INSTDIR のリネーム）が失敗し、更新自体が失敗する。
+;   → ここでバックエンド java（と念のため同梱 ffmpeg）を、この install に属するものだけ確実に止める。
+;
+;   識別条件（無関係な Java を巻き込まないため両方で絞る）:
+;     ・CommandLine に "graphy-next-backend.jar" を含む（インストール先に依存せず一意。config.json の jarName と一致）
+;     ・または ExecutablePath が $INSTDIR 配下（同梱 java.exe / ffmpeg.exe）
+;   ⚠ "graphy-next-backend.jar" は desktop/config.json の backend.jarName と一致させること。
+
+!macro killGraphyBackend
+  DetailPrint "Stopping GRAPHY-Next backend process (bundled Java)..."
+  ; PowerShell は Win10/11 標準。失敗しても従来動作にフォールバックするだけなので無害。
+  nsExec::Exec 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$procs = @(Get-CimInstance Win32_Process | Where-Object { ($$_.Name -eq $\'java.exe$\' -or $$_.Name -eq $\'ffmpeg.exe$\') -and ( ($$_.CommandLine -and $$_.CommandLine -like $\'*graphy-next-backend.jar*$\') -or ($$_.ExecutablePath -and $$_.ExecutablePath -like $\'$INSTDIR\*$\') ) }); if ($$procs) { $$procs | Invoke-CimMethod -MethodName Terminate | Out-Null; Start-Sleep -Milliseconds 800 }"'
+  Pop $0
+  ; ロック解放を待つための小休止（ハンドルクローズ猶予）。
+  Sleep 500
+!macroend
+
+; インストーラ起動直後（.onInit）。CHECK_APP_RUNNING → uninstallOldVersion より前に走るので、
+; 旧バージョン削除（リネーム）の前にバックエンド java を止められる。更新失敗の本丸はここ。
+!macro customInit
+  !insertmacro killGraphyBackend
+!macroend
+
+; アンインストーラ起動直後（un.onInit）。ファイル削除（un.atomicRMDir / RMDir）の前に走る。
+; 通常アンインストールや将来の更新でも、実行中バックエンドのロックを解放しておく。
+!macro customUnInit
+  !insertmacro killGraphyBackend
+!macroend
+
+; -------------------------------------------------------------------------
+; (B) アンインストール時のユーザーデータ削除確認
+; -------------------------------------------------------------------------
 ;   backend が作るデータはインストール先ではなく %APPDATA%\GRAPHY-Next に置かれる
 ;   （main.js resolveDataDir。フォルダ名は build.productName と同じ "GRAPHY-Next" で固定）。
 ;   既定のアンインストーラは $INSTDIR（プログラム本体）しか消さないため、ここで明示的に扱う。
