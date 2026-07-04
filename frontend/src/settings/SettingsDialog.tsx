@@ -8,6 +8,7 @@ import { fetchSettings, saveSettings, type SettingsMap } from "./settingsApi";
 import { OverlayConfigPanel } from "./OverlayConfigPanel";
 import { RemoteAePanel } from "./RemoteAePanel";
 import { AboutPanel } from "./AboutPanel";
+import { MonitorQcPanel } from "./MonitorQcPanel";
 import { useI18n, type Locale, type TFn } from "../i18n/i18n";
 import { markRestartRequired } from "../restartRequiredEvents";
 
@@ -108,6 +109,8 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
               <OverlayConfigPanel />
             ) : category.id === "dicomSend" ? (
               <RemoteAePanel />
+            ) : category.id === "monitor" ? (
+              <MonitorQcPanel />
             ) : category.id === "about" ? (
               <AboutPanel />
             ) : (

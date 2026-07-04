@@ -24,6 +24,10 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   // 単一の出力先フォルダを選ぶ（SeriesExtractor のコピー先など）。
   pickDirectory: () => ipcRenderer.invoke("graphy:pick-directory"),
   openViewer: (screen) => ipcRenderer.invoke("graphy:open-viewer", screen),
+  // 接続中の全ディスプレイ情報を取得（モニター診断パネル用）。
+  listDisplays: () => ipcRenderer.invoke("graphy:list-displays"),
+  // 指定モニターに目視テストパターンをフルスクリーン表示する。
+  openMonitorQc: (displayId) => ipcRenderer.invoke("graphy:open-monitor-qc", displayId),
   // PNG dataURL を OS のネイティブドラッグに乗せて外部へ書き出す。
   startDrag: (dataUrl, filename) => ipcRenderer.send("graphy:start-drag", { dataUrl, filename }),
   // OS 標準のメモリ/システムモニタを起動する。

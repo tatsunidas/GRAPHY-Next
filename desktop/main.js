@@ -12,7 +12,7 @@
 //   GRAPHY_BACKEND_PORT        … backend ポート（既定 config.backend.port）
 //   GRAPHY_BACKEND_PROFILE     … backend プロファイル（既定 config.backend.profile）
 
-const { app, BrowserWindow, shell, dialog, ipcMain, nativeImage } = require("electron");
+const { app, BrowserWindow, shell, dialog, ipcMain, nativeImage, screen } = require("electron");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 const os = require("node:os");
@@ -46,6 +46,8 @@ let backendProc = null;
 const viewerWins = new Map();
 // QR（Query/Retrieve）ウィンドウのシングルトン参照。常駐させたいので 1 枚を再利用する（位置記憶は対象外）。
 let qrWin = null;
+// モニター診断（テストパターン）ウィンドウのシングルトン参照（指定モニターにフルスクリーン表示）。
+let monitorQcWin = null;
 
 // 位置記憶対象ビューアの既定サイズ（初回/保存なしのとき使う）。
 const VIEWER_DEFAULTS = {
@@ -369,6 +371,80 @@ ipcMain.handle("graphy:open-viewer", (_e, screen) => {
   win.on("closed", () => {
     if (viewerWins.get(s) === win) viewerWins.delete(s);
   });
+});
+
+// --- モニター診断（Monitor QC）---
+// 目的: 外部センサーを使わない簡易 QC。接続モニターの表示環境を可視化し、
+//       選んだモニターにフルスクリーンで目視テストパターンを表示する。
+//       絶対輝度/GSDF の定量測定は行わない（フォトメータ必須）。renderer 側 UI に明示する。
+
+// 接続中の全ディスプレイの情報を返す（Settings＞モニター診断パネル用）。
+ipcMain.handle("graphy:list-displays", () => {
+  const primaryId = screen.getPrimaryDisplay().id;
+  return screen.getAllDisplays().map((d) => ({
+    id: d.id,
+    label: d.label || "",
+    primary: d.id === primaryId,
+    internal: !!d.internal,
+    bounds: d.bounds,
+    workArea: d.workArea,
+    size: d.size, // 論理サイズ（DIP）
+    scaleFactor: d.scaleFactor,
+    rotation: d.rotation,
+    colorDepth: d.colorDepth,
+    colorSpace: d.colorSpace,
+    depthPerComponent: d.depthPerComponent,
+    displayFrequency: d.displayFrequency,
+    monochrome: d.monochrome,
+  }));
+});
+
+// 指定モニターにテストパターン用ウィンドウをフルスクリーン表示（シングルトン）。
+ipcMain.handle("graphy:open-monitor-qc", (_e, displayId) => {
+  const id = Number(displayId);
+  const target = screen.getAllDisplays().find((d) => d.id === id) || screen.getPrimaryDisplay();
+  const b = target.bounds;
+
+  if (monitorQcWin && !monitorQcWin.isDestroyed()) {
+    monitorQcWin.setFullScreen(false);
+    monitorQcWin.setBounds(b);
+    monitorQcWin.setFullScreen(true);
+    monitorQcWin.focus();
+    return;
+  }
+
+  monitorQcWin = new BrowserWindow({
+    x: b.x,
+    y: b.y,
+    width: b.width,
+    height: b.height,
+    frame: false,
+    show: false, // フルスクリーン確定後に表示（ちらつき防止）
+    backgroundColor: "#000000",
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      additionalArguments: [`--graphy-api-base=${API_BASE}`],
+    },
+  });
+  monitorQcWin.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//.test(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
+  monitorQcWin.once("ready-to-show", () => {
+    monitorQcWin.setFullScreen(true);
+    monitorQcWin.show();
+    monitorQcWin.focus();
+  });
+  if (DEV) {
+    monitorQcWin.loadURL(`${DEV_URL}#monitorqc`);
+  } else {
+    monitorQcWin.loadFile(path.join(__dirname, "renderer", "index.html"), { hash: "monitorqc" });
+  }
+  monitorQcWin.on("closed", () => { monitorQcWin = null; });
 });
 
 // ビューアのタイル画像を外部（デスクトップ/他アプリ）へネイティブドラッグする。

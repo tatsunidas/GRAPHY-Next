@@ -15,6 +15,7 @@ import { Viewer3DScreen } from "./viewer3d/Viewer3DScreen";
 import { SlicerScreen } from "./slicer/SlicerScreen";
 import { CurvedMprScreen } from "./curvedmpr/CurvedMprScreen";
 import { QRScreen } from "./qr/QRScreen";
+import { MonitorQcScreen } from "./monitorqc/MonitorQcScreen";
 import { subscribeDbChanged, type DbChangedDetail } from "./dbEvents";
 import { LogViewerHost } from "./system/LogViewer";
 import { DeveloperContactHost } from "./help/DeveloperContact";
@@ -73,6 +74,12 @@ export function App() {
       setHelpOpen(false);
     },
   });
+
+  // モニター診断（目視テストパターン）は専用フルスクリーンウィンドウ。
+  // 通常の chrome/オーバーレイを出さず、パターン画面のみを描画する。
+  if (screen === "monitorqc") {
+    return <MonitorQcScreen />;
+  }
 
   return (
     <>

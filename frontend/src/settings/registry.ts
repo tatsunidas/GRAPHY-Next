@@ -466,6 +466,13 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
     sections: [],
   },
   {
+    // モニター診断は専用パネル（表示環境の一覧＋目視テストパターン）。SettingsDialog で特別扱い。
+    id: "monitor",
+    labelKey: "settings.cat.monitor",
+    icon: "🖥️",
+    sections: [],
+  },
+  {
     // 情報（バージョン等）は専用パネル（/api/status を表示）。SettingsDialog で特別扱い。
     id: "about",
     labelKey: "settings.cat.about",
