@@ -123,6 +123,42 @@ Spring DI（`@Profile`）でプロファイルに応じて自動注入。
 
 > ピクセル経路の最適化（ブラウザ直 WADO ストリーミング）は将来課題。まずは BFF 一本で統一。
 
+### 実装状況（2026-07-05 更新）
+
+- ✅ 検索（QIDO-RS: studies/series/instances）＝ `WebDicomDataService` + `StudyController`。
+- ✅ **ピクセル取得（web 2D 表示）**: `WebDicomDataService.retrieveInstance(study,series,sop)` が WADO-RS
+  `GET .../instances/{sop}`（`multipart/related; type="application/dicom"`）を叩き、multipart を自前で
+  剥がして Part-10 を返す。エンドポイント `GET /api/studies/{study}/series/{series}/instances/{sop}/file`
+  （`StudyController.instanceFile`）。フロントは `imageIdForInstance(web,sop,study,series)` →
+  `wadouri:` で同一オリジン取得（CORS 不要）。標準圧縮 TS はブラウザ(WASM)で復号。
+  2D は `StudyList` / `Viewer2DScreen` で `SeriesViewer(mode="web")` を表示（standalone と同一経路）。
+- ✅ **web の ZCT レイアウト**: `SeriesLayoutAssembler.fromAttributes(List<Attributes>)`（新規・純関数）が
+  WADO-RS `/metadata`（`WebDicomDataService.seriesMetadata`）の全属性から、standalone と同一の
+  `SeriesLayoutBuilder` ＋ Z 投影/C-T 判定で 5D を導出。`StudyController.layout` の web 分岐で使用。
+  frontend の `imageIdForCell`/`imageIdForFrame` は study/series を受けて web の wadouri を組む。
+  ※ Siemens モザイク・DICOM SEG の per-frame 展開は web 非対応（classic 単一フレームのみ）。
+- ✅ **IHE IID 起動**（`?studyUID=...&seriesUID=...`）: `iid.ts` が URL クエリを解釈し、`App` が web メイン
+  ウィンドウ起動時に当該 study を `graphy-viewer-ctx` に書いて `#2dviewer` へ遷移（検索ポータルを介さず直接
+  表示）。study 直接取得は `/api/studies?studyInstanceUid=`（QIDO `StudyInstanceUID`）。
+- ✅ **MPR / 3D / Slicer / Curved MPR の web**: 各画面の web ゲートを撤去し、
+  `imageIdForInstance(mode,sop,study,series)` / `imageIdsForCT(...,study,series)` で BFF wadouri を組む。
+  ボリューム（`buildMprVolume` / `buildDicomResliceVolume`）は cornerstone が全スライスを BFF から読み込み
+  構築（standalone と同一経路。MPR=VolumeViewport、3D=pure vtk.js、Slicer/CurvedMPR=自前 canvas）。
+  起動は MainScreen/Viewer2DScreen の `#mpr`/`#viewer3d`/`#slicer`/`#curvedmpr`（web は `window.open`
+  フォールバック、既存）。⚠ 全スライスを個別に WADO-RS 取得するため大シリーズは遅い（将来: シリーズ一括取得）。
+- ✅ **シリーズ一括取得（prefetch・高速化）**: `WebDicomDataService.prefetchSeries`（WADO-RS シリーズ
+  `GET /studies/{study}/series/{series}` を 1 リクエスト → multipart 全パートを sop→bytes キャッシュへ。合計
+  512MB 上限 LRU）。`POST /api/studies/{study}/series/{series}/prefetch`（`StudyController`）。frontend は
+  MPR/3D/Slicer/CurvedMPR の volume 構築前に `prefetchSeries` を呼び、以降のスライス取得をキャッシュ即返しに。
+- ✅ **STOW-RS 書き戻し（★必須機能）**: `WebDicomDataService.storeDatasets(List<Attributes>)`／`storeInstances`
+  （`POST {base}/studies`、multipart/related を自前組み立て）。派生シリーズ（`DerivedSeriesService`）・
+  DICOM SEG（`SegExportService`）・RTSTRUCT（`RtStructExportService`）の 3 サービスを web 分岐（テンプレート＝
+  WADO-RS `/metadata` 先頭、保存＝STOW）。standalone は従来どおりローカル ingest。frontend の保存 POST は
+  モード非依存で変更なし。
+- ⏳ **未対応（次段）**: メーカー独自圧縮のサーバ側復号。web の Fusion。web のギャップ埋めブランク
+  （`/blank/file` は standalone のみ）。⚠ SEG/RTSTRUCT の web 書き戻しは per-frame 参照・幾何の実機検証が未
+  （テンプレートは web メタから取得だが、参照 SOP 群の整合は要確認）。
+
 ---
 
 ## 7. SCP の受理 SOP クラス設定 と 相互運用テスト

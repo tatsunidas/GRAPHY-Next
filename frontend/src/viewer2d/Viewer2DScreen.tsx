@@ -1261,25 +1261,24 @@ function TileCell({
 
       {/* ── コンテンツ（ベース＋ Fusion オーバーレイは Viewer2D 内で base 画像に重畳） ── */}
       <div style={{ flex: 1, minHeight: 0, position: "relative", display: "flex", flexDirection: "column" }}>
-        {mode === "standalone" ? (
-          <SeriesViewer
-            instances={tile.instances}
-            mode="standalone"
-            studyUid={tile.study.studyInstanceUid}
-            seriesUid={tile.series.seriesInstanceUid}
-            fillHeight
-            syncEnabled={syncEnabled}
-            referenceLinesEnabled={referenceLinesEnabled}
-            referenceLabel={seriesLabel}
-            commandKey={commandKey}
-            patientKey={patientKey}
-            seriesLabel={seriesLabel}
-            onDimChange={onDimChange}
-            renderFusionOverlay={renderFusionOverlay}
-          />
-        ) : (
-          <div style={{ padding: 12, fontSize: 12, color: "#8a6d3b" }}>{t("viewer.webTodo")}</div>
-        )}
+        {/* web/standalone とも SeriesViewer（StackViewport）で表示。web はピクセルを BFF(WADO-RS)経由で取得。
+            Fusion/ROI 等の一部機能は standalone 前提のため、props(renderFusionOverlay/patientKey) は
+            standalone のみ設定される（web では未設定＝無効）。 */}
+        <SeriesViewer
+          instances={tile.instances}
+          mode={mode}
+          studyUid={tile.study.studyInstanceUid}
+          seriesUid={tile.series.seriesInstanceUid}
+          fillHeight
+          syncEnabled={syncEnabled}
+          referenceLinesEnabled={referenceLinesEnabled}
+          referenceLabel={seriesLabel}
+          commandKey={commandKey}
+          patientKey={patientKey}
+          seriesLabel={seriesLabel}
+          onDimChange={onDimChange}
+          renderFusionOverlay={mode === "standalone" ? renderFusionOverlay : undefined}
+        />
       </div>
 
       {/* Fusion コントロールバー */}

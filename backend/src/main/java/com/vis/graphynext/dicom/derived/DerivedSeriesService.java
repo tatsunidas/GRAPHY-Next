@@ -5,6 +5,7 @@
 package com.vis.graphynext.dicom.derived;
 
 import com.vis.graphynext.dicom.store.DicomStorageService;
+import com.vis.graphynext.dicom.web.WebDicomDataService;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Sequence;
 import org.dcm4che3.data.Tag;
@@ -16,6 +17,7 @@ import org.dcm4che3.io.DicomOutputStream;
 import org.dcm4che3.util.UIDUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -41,9 +43,12 @@ public class DerivedSeriesService {
     private static final Logger log = LoggerFactory.getLogger(DerivedSeriesService.class);
 
     private final DicomStorageService storage;
+    /** web モードのときだけ存在（STOW-RS 書き戻し用）。standalone では null。 */
+    private final ObjectProvider<WebDicomDataService> webProvider;
 
-    public DerivedSeriesService(DicomStorageService storage) {
+    public DerivedSeriesService(DicomStorageService storage, ObjectProvider<WebDicomDataService> webProvider) {
         this.storage = storage;
+        this.webProvider = webProvider;
     }
 
     /** 生成結果。 */
@@ -53,13 +58,26 @@ public class DerivedSeriesService {
     public Result create(DerivedSeriesRequest req) throws IOException {
         validate(req);
 
+        WebDicomDataService web = webProvider != null ? webProvider.getIfAvailable() : null;
+
         // 属性テンプレート = 元シリーズの代表インスタンスのヘッダ。
-        List<Path> srcFiles = storage.resolveFiles(req.studyInstanceUid(), List.of(req.seriesInstanceUid()));
-        if (srcFiles.isEmpty()) {
-            throw new IllegalArgumentException("元シリーズが見つかりません (study=" + req.studyInstanceUid()
-                    + ", series=" + req.seriesInstanceUid() + ")");
+        // standalone はローカルファイルから、web は WADO-RS /metadata の先頭インスタンスから引き継ぐ。
+        Attributes tmpl;
+        if (web != null) {
+            List<Attributes> metas = web.seriesMetadata(req.studyInstanceUid(), req.seriesInstanceUid());
+            if (metas.isEmpty()) {
+                throw new IllegalArgumentException("元シリーズが見つかりません (web, study="
+                        + req.studyInstanceUid() + ", series=" + req.seriesInstanceUid() + ")");
+            }
+            tmpl = metas.get(0);
+        } else {
+            List<Path> srcFiles = storage.resolveFiles(req.studyInstanceUid(), List.of(req.seriesInstanceUid()));
+            if (srcFiles.isEmpty()) {
+                throw new IllegalArgumentException("元シリーズが見つかりません (study=" + req.studyInstanceUid()
+                        + ", series=" + req.seriesInstanceUid() + ")");
+            }
+            tmpl = readHeader(srcFiles.get(0));
         }
-        Attributes tmpl = readHeader(srcFiles.get(0));
 
         String newSeriesUid = UIDUtils.createUID();
         int seriesNumber = req.seriesNumber() != null ? req.seriesNumber()
@@ -68,6 +86,8 @@ public class DerivedSeriesService {
 
         int expectedBytes = req.rows() * req.columns() * 2;
         List<String> sops = new ArrayList<>(req.frames().size());
+        // web は STOW-RS 送信用に Attributes をまとめて 1 リクエストで書き戻す。standalone は逐次 ingest。
+        List<Attributes> stowBatch = web != null ? new ArrayList<>(req.frames().size()) : null;
         for (DerivedSeriesRequest.Frame f : req.frames()) {
             byte[] px = Base64.getDecoder().decode(f.pixels());
             if (px.length != expectedBytes) {
@@ -76,10 +96,17 @@ public class DerivedSeriesService {
             }
             Attributes a = buildInstance(tmpl, req, newSeriesUid, seriesNumber, modality, f, px);
             sops.add(a.getString(Tag.SOPInstanceUID));
-            ingest(a);
+            if (web != null) {
+                stowBatch.add(a);
+            } else {
+                ingest(a);
+            }
         }
-        log.info("derived series created: {} ({} instances) from {}", newSeriesUid, sops.size(),
-                req.seriesInstanceUid());
+        if (web != null) {
+            web.storeDatasets(stowBatch); // STOW-RS で PACS へ保存
+        }
+        log.info("derived series created: {} ({} instances) from {} [{}]", newSeriesUid, sops.size(),
+                req.seriesInstanceUid(), web != null ? "STOW-RS" : "local");
         return new Result(newSeriesUid, sops);
     }
 

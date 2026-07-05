@@ -5,6 +5,7 @@
 package com.vis.graphynext.dicom.export;
 
 import com.vis.graphynext.dicom.store.DicomStorageService;
+import com.vis.graphynext.dicom.web.WebDicomDataService;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Sequence;
 import org.dcm4che3.data.Tag;
@@ -16,6 +17,7 @@ import org.dcm4che3.io.DicomOutputStream;
 import org.dcm4che3.util.UIDUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -39,9 +41,12 @@ public class RtStructExportService {
     private static final String STUDY_COMPONENT_MGMT = "1.2.840.10008.3.1.2.3.1";
 
     private final DicomStorageService storage;
+    /** web モードのときだけ存在（STOW-RS 書き戻し用）。standalone では null。 */
+    private final ObjectProvider<WebDicomDataService> webProvider;
 
-    public RtStructExportService(DicomStorageService storage) {
+    public RtStructExportService(DicomStorageService storage, ObjectProvider<WebDicomDataService> webProvider) {
         this.storage = storage;
+        this.webProvider = webProvider;
     }
 
     public record Result(String seriesInstanceUid, String sopInstanceUid) {
@@ -49,12 +54,24 @@ public class RtStructExportService {
 
     public Result export(RtStructExportRequest req) throws IOException {
         validate(req);
-        List<Path> srcFiles = storage.resolveFiles(req.studyInstanceUid(), List.of(req.seriesInstanceUid()));
-        if (srcFiles.isEmpty()) {
-            throw new IllegalArgumentException("参照シリーズが見つかりません (study=" + req.studyInstanceUid()
-                    + ", series=" + req.seriesInstanceUid() + ")");
+        WebDicomDataService web = webProvider != null ? webProvider.getIfAvailable() : null;
+        // 参照シリーズ属性テンプレート: standalone はローカル、web は WADO-RS /metadata の先頭インスタンス。
+        Attributes tmpl;
+        if (web != null) {
+            List<Attributes> metas = web.seriesMetadata(req.studyInstanceUid(), req.seriesInstanceUid());
+            if (metas.isEmpty()) {
+                throw new IllegalArgumentException("参照シリーズが見つかりません (web, study="
+                        + req.studyInstanceUid() + ", series=" + req.seriesInstanceUid() + ")");
+            }
+            tmpl = metas.get(0);
+        } else {
+            List<Path> srcFiles = storage.resolveFiles(req.studyInstanceUid(), List.of(req.seriesInstanceUid()));
+            if (srcFiles.isEmpty()) {
+                throw new IllegalArgumentException("参照シリーズが見つかりません (study=" + req.studyInstanceUid()
+                        + ", series=" + req.seriesInstanceUid() + ")");
+            }
+            tmpl = readHeader(srcFiles.get(0));
         }
-        Attributes tmpl = readHeader(srcFiles.get(0));
         String srcClassUid = tmpl.getString(Tag.SOPClassUID);
         String forUid = req.frameOfReferenceUID();
 
@@ -152,7 +169,11 @@ public class RtStructExportService {
             obs.add(item);
         }
 
-        ingest(a);
+        if (web != null) {
+            web.storeDatasets(List.of(a)); // STOW-RS で PACS へ保存
+        } else {
+            ingest(a);
+        }
         log.info("RTSTRUCT exported: series={} sop={} rois={} from {}",
                 newSeriesUid, newSopUid, req.rois().size(), req.seriesInstanceUid());
         return new Result(newSeriesUid, newSopUid);

@@ -44,6 +44,14 @@ build-desktop: build-backend
 	mkdir -p desktop/renderer desktop/resources/backend
 	cp -r frontend/dist/. desktop/renderer/
 	cp $(BACKEND_JAR) desktop/resources/backend/graphy-next-backend.jar
+	# Release 同梱JRE の下限を Java 21 に強制（21未満の JDK で誤って同梱するのを弾く。
+	# backend jar は release=21 でコンパイルされ 21未満の JRE では起動しないため、ここで先に検出する）。
+	@MAJOR=`"$(JAVA_HOME)/bin/java" -version 2>&1 | sed -n 's/.* version "\([0-9][0-9]*\).*/\1/p' | head -1`; \
+		if [ -z "$$MAJOR" ] || [ "$$MAJOR" -lt 21 ]; then \
+			echo "ERROR: Release の同梱JRE は Java 21 以上が必要です（JAVA_HOME=$(JAVA_HOME)）"; \
+			"$(JAVA_HOME)/bin/java" -version 2>&1 | head -1; \
+			exit 1; \
+		fi
 	# このOS向けの最小化 Java21 ランタイムを同梱（システムJava不要にする）
 	"$(JAVA_HOME)/bin/jlink" --add-modules ALL-MODULE-PATH --strip-debug --no-man-pages --no-header-files --output desktop/resources/jre
 

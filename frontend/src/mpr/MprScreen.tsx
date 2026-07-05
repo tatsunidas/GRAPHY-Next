@@ -14,6 +14,7 @@ import { RenderingEngine, Enums, eventTarget } from "@cornerstonejs/core";
 import {
   fetchSeries,
   fetchInstances,
+  prefetchSeries,
   type AppStatus,
   type Study,
   type Series,
@@ -105,11 +106,8 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
       setMessage(t("mpr.noContext"));
       return;
     }
-    if (mode !== "standalone") {
-      setPhase("unsupported");
-      setMessage(t("mpr.webUnsupported"));
-      return;
-    }
+    // web も対応: imageId は BFF(WADO-RS) 経由の wadouri。ボリューム構築は cornerstone が
+    // 各スライスを BFF から読み込む（standalone と同一経路）。
 
     setPhase("loading");
     setMessage(t("mpr.loading"));
@@ -136,7 +134,18 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
         setMessage(t("mpr.needVolume"));
         return;
       }
-      const imageIds = instances.map((i) => imageIdForInstance(mode, i.sopInstanceUid));
+      const imageIds = instances.map((i) =>
+        imageIdForInstance(mode, i.sopInstanceUid, ctx.study.studyInstanceUid, series.seriesInstanceUid),
+      );
+
+      // web: 全スライスを 1 リクエストで BFF キャッシュに載せてから volume 構築（個別 WADO-RS 往復を回避）。
+      if (mode === "web") {
+        try {
+          await prefetchSeries(ctx.study.studyInstanceUid, series.seriesInstanceUid);
+        } catch {
+          /* prefetch は最適化。失敗しても個別取得で続行 */
+        }
+      }
 
       const volumeId = `graphy-mpr-vol:${series.seriesInstanceUid}`;
       const built = await buildMprVolume(imageIds, series.modality, volumeId);

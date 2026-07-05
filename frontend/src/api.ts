@@ -47,6 +47,8 @@ export interface StudyFilters {
   studyDateTo?: string;
   modality?: string; // カンマ区切りの複数モダリティ（例 "CT,MR"）
   accessionNumber?: string;
+  /** IHE IID 起動: StudyInstanceUID 直接指定（他条件は無視して当該 study を返す）。 */
+  studyInstanceUid?: string;
 }
 
 export const fetchStatus = () => httpGet<AppStatus>("/api/status");
@@ -68,6 +70,16 @@ export const fetchSeries = (studyUid: string) =>
 export const fetchInstances = (studyUid: string, seriesUid: string) =>
   httpGet<Instance[]>(
     `/api/studies/${encodeURIComponent(studyUid)}/series/${encodeURIComponent(seriesUid)}/instances`,
+  );
+
+/**
+ * web: シリーズ全インスタンスを BFF に WADO-RS 一括取得させてキャッシュに載せる（volume 構築前の高速化）。
+ * standalone は no-op（cached:0）。失敗しても呼び出し側は個別取得にフォールバックできる。
+ */
+export const prefetchSeries = (studyUid: string, seriesUid: string) =>
+  httpSend<{ cached: number }>(
+    `/api/studies/${encodeURIComponent(studyUid)}/series/${encodeURIComponent(seriesUid)}/prefetch`,
+    "POST",
   );
 
 /** TagViewer: DICOM 属性ダンプの 1 行（SQ ネストは depth で表現）。 */

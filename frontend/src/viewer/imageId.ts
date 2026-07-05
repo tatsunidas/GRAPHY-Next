@@ -9,34 +9,62 @@ export type ViewerMode = "standalone" | "web";
 /**
  * SOP インスタンスから Cornerstone3D の imageId を組み立てる。
  * - standalone: backend の Part-10 配信を wadouri で読む（`/api/instances/{sop}/file`）。
- * - web: WADO-RS（wadors）経由。次フェーズで実装するため、ここでは呼び出さない。
+ * - web: backend(BFF) が PACS の WADO-RS から取得した Part-10 を wadouri で読む
+ *   （`/api/studies/{study}/series/{series}/instances/{sop}/file`）。ピクセル経路も BFF 一本
+ *   （fw/dicom-data-layer.md §5）＝同一オリジンで CORS 不要。WADO-RS は study/series/sop を要するため
+ *   web は study/series が必須。
  */
-export function imageIdForInstance(mode: ViewerMode, sopUid: string): string {
+export function imageIdForInstance(
+  mode: ViewerMode,
+  sopUid: string,
+  studyUid?: string,
+  seriesUid?: string,
+): string {
   if (mode === "standalone") {
     return `wadouri:${apiBase()}/api/instances/${encodeURIComponent(sopUid)}/file`;
   }
-  throw new Error("web mode の 2D ビューアは次フェーズで実装します");
+  // web
+  if (!studyUid || !seriesUid) {
+    throw new Error("web mode の imageId には studyUid/seriesUid が必要です");
+  }
+  return `wadouri:${apiBase()}/api/studies/${encodeURIComponent(studyUid)}/series/${encodeURIComponent(
+    seriesUid,
+  )}/instances/${encodeURIComponent(sopUid)}/file`;
 }
 
 /**
  * Siemens モザイクの 1 タイル（デモザイク後の 1 スライス）の imageId。
  * backend が {@code /instances/{sop}/frames/{frame}/file} でタイルを単一フレーム DICOM として返す。
+ * <p>モザイクは standalone のみ（web の {@link SeriesLayoutAssembler} は frame=-1 の classic のみ返す）。
  */
-export function imageIdForFrame(mode: ViewerMode, sopUid: string, frame: number): string {
+export function imageIdForFrame(
+  mode: ViewerMode,
+  sopUid: string,
+  frame: number,
+  studyUid?: string,
+  seriesUid?: string,
+): string {
   if (frame < 0) {
-    return imageIdForInstance(mode, sopUid);
+    return imageIdForInstance(mode, sopUid, studyUid, seriesUid);
   }
   if (mode === "standalone") {
     return `wadouri:${apiBase()}/api/instances/${encodeURIComponent(sopUid)}/frames/${frame}/file`;
   }
-  throw new Error("web mode の 2D ビューアは次フェーズで実装します");
+  // web のモザイク（frame>=0）は現状発生しない（web レイアウトは classic 単一フレームのみ）。
+  throw new Error("web mode のモザイクフレーム取得は未対応です");
 }
 
-/** セル（モザイクなら frame>=0）から imageId を組み立てる。 */
-export function imageIdForCell(mode: ViewerMode, sopUid: string, frame: number | undefined): string {
+/** セル（モザイクなら frame>=0）から imageId を組み立てる。web は study/series が必須。 */
+export function imageIdForCell(
+  mode: ViewerMode,
+  sopUid: string,
+  frame: number | undefined,
+  studyUid?: string,
+  seriesUid?: string,
+): string {
   return frame !== undefined && frame >= 0
-    ? imageIdForFrame(mode, sopUid, frame)
-    : imageIdForInstance(mode, sopUid);
+    ? imageIdForFrame(mode, sopUid, frame, studyUid, seriesUid)
+    : imageIdForInstance(mode, sopUid, studyUid, seriesUid);
 }
 
 /**

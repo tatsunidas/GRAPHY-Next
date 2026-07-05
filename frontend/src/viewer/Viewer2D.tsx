@@ -186,6 +186,7 @@ export function Viewer2D({
   commandKey,
   roiContext,
   renderOverlay,
+  thickSlab,
 }: {
   imageIds: string[];
   imageIndex: number;
@@ -211,8 +212,14 @@ export function Viewer2D({
   roiContext?: Omit<ViewerContext, "z">;
   /** Fusion 等のオーバーレイを base 画像に重ねて描く。base 画像の表示矩形に追従する。 */
   renderOverlay?: RenderOverlay;
+  /** ThickSlab（デジタルスライス厚）が有効か。合成スライスは単一 SOP に紐づかないため、
+   *  ROI・計測の新規作成/編集ツールをブロックする（本家 Praparat 準拠）。 */
+  thickSlab?: boolean;
 }) {
   const { t } = useI18n();
+  // 合成スライス上でのアノテーション作成をブロックする判定を、setActiveTool から最新参照する。
+  const thickSlabRef = useRef(thickSlab);
+  thickSlabRef.current = thickSlab;
   const ov = { text: true, caliper: true, orientation: true, ...overlays };
   const elementRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<Types.IStackViewport | null>(null);
@@ -251,6 +258,17 @@ export function Viewer2D({
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const [inverted, setInverted] = useState(false);
+  // スタック再構築（C/T 切替・ThickSlab の ON/OFF・厚み変更）をまたいで表示状態（zoom/pan/rotation/
+  // flip＋VOI）を維持するための退避。setStack はカメラをリセットするため、同一シリーズ幾何
+  // （rows/cols/modality 一致）のときだけ再適用する（別シリーズには持ち越さない）。
+  const lastViewRef = useRef<{
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    pres: any;
+    voi: { lower: number; upper: number } | null;
+    rows?: number;
+    cols?: number;
+    modality?: string;
+  } | null>(null);
   // Pan モード: ON で左ドラッグ=パン、OFF で左ドラッグ=W/L。中ドラッグは常にパン、右はズーム。
   const [panMode, setPanMode] = useState(false);
   // 現在このタイルの左ドラッグに割り当てられている論理ツール（グローバルツールバー or per-tile 切替で更新）。
@@ -518,6 +536,18 @@ export function Viewer2D({
       if (!vp || disposed) return;
       sanitizeCamera(vp);
       setTransform(readTransform(vp));
+      // スタック再構築をまたいで再適用するため、現在の表示状態を退避する。
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const range = (vp.getProperties() as any)?.voiRange ?? null;
+        lastViewRef.current = {
+          pres: vp.getViewPresentation(),
+          voi: range,
+          rows: infoRef.current?.rows,
+          cols: infoRef.current?.columns,
+          modality: infoRef.current?.modality,
+        };
+      } catch { /* ignore */ }
       // 向きマーカーは IOP があるときだけ。canvasToWorld 経由で zoom/pan/flip/rotation に追従。
       setMarkers(infoRef.current?.hasOrientation ? computeOrientationMarkers(vp, element) : null);
       // スケールバー（Caliper）: 校正の有無で mm/cm・px と色(黄/グレー)を切替。FOV(ズーム)に追従。
@@ -575,6 +605,20 @@ export function Viewer2D({
               upper: inf.windowCenter + inf.windowWidth / 2,
             },
           });
+        }
+        // スタック再構築（C/T・ThickSlab 切替）前の表示状態を、同一シリーズ幾何なら再適用する。
+        // これにより「デフォルトでない表示状態のまま ThickSlab を ON にしても、その状態で表示」される。
+        const prevView = lastViewRef.current;
+        if (
+          prevView &&
+          prevView.rows === inf.rows &&
+          prevView.cols === inf.columns &&
+          prevView.modality === inf.modality
+        ) {
+          try { viewport.setViewPresentation(prevView.pres); } catch { /* ignore */ }
+          if (prevView.voi) {
+            try { viewport.setProperties({ voiRange: prevView.voi }); } catch { /* ignore */ }
+          }
         }
         viewport.render();
 
@@ -998,6 +1042,13 @@ export function Viewer2D({
     const isWand2d = toolName === WAND2D_TOOL_ID;
     const isWand3d = toolName === WAND3D_TOOL_ID;
     const isWand = isWand2d || isWand3d;
+    // ThickSlab（合成スライス）有効中は ROI・計測・ブラシ・Wand の作成/編集をブロックする。
+    // 合成画像は単一の実スライス(SOP)に一意対応せず、描いた注釈を安全に保存できないため。
+    const isAnnotationTool = MEASURE_TOOLS.includes(toolName) || isBrush || isEraser || isWand;
+    if (thickSlabRef.current && isAnnotationTool) {
+      emitToast(t("series.thickSlab.roiBlocked"));
+      return;
+    }
     const primary = isEraser ? BrushTool.toolName : isWand ? WandTool.toolName : toolName;
     const applyBindings = () => {
       try {

@@ -294,18 +294,16 @@ function InstanceList({ study, series, mode }: { study: Study; series: Series; m
       )}
 
       {/* シリーズビューア（スライス送り・シネ・5D・オーバーレイ On/Off のコントローラ）。 */}
-      {hasImages && !isPdf && !isVideo && mode === "standalone" && instances && (
+      {hasImages && !isPdf && !isVideo && instances && (
         <div style={{ marginTop: 10, maxWidth: 900 }}>
+          {/* web はピクセルを BFF(WADO-RS)経由で取得して表示（standalone と同一の StackViewport 経路）。 */}
           <SeriesViewer
             instances={instances}
-            mode="standalone"
+            mode={mode}
             studyUid={study.studyInstanceUid}
             seriesUid={series.seriesInstanceUid}
           />
         </div>
-      )}
-      {hasImages && !isPdf && !isVideo && mode === "web" && (
-        <div style={{ marginTop: 10, fontSize: 12, color: "#8a6d3b" }}>{t("viewer.webTodo")}</div>
       )}
     </div>
   );

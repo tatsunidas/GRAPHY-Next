@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   fetchSeries,
   fetchInstances,
+  prefetchSeries,
   type AppStatus,
   type Study,
   type Series,
@@ -151,11 +152,8 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
       setMessage(t("viewer3d.noContext"));
       return;
     }
-    if (mode2 !== "standalone") {
-      setPhase("unsupported");
-      setMessage(t("viewer3d.webUnsupported"));
-      return;
-    }
+    // web も対応: imageId は BFF(WADO-RS) 経由の wadouri。ボリューム構築は cornerstone が
+    // 各スライスを BFF から読み込む（standalone と同一経路）。描画は pure vtk.js。
 
     setPhase("loading");
     setMessage(t("viewer3d.loading"));
@@ -187,7 +185,18 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         setMessage(t("viewer3d.needVolume"));
         return;
       }
-      const imageIds = instances.map((i) => imageIdForInstance(mode2, i.sopInstanceUid));
+      const imageIds = instances.map((i) =>
+        imageIdForInstance(mode2, i.sopInstanceUid, ctx.study.studyInstanceUid, series.seriesInstanceUid),
+      );
+
+      // web: 全スライスを 1 リクエストで BFF キャッシュに載せてから volume 構築（個別 WADO-RS 往復を回避）。
+      if (mode2 === "web") {
+        try {
+          await prefetchSeries(ctx.study.studyInstanceUid, series.seriesInstanceUid);
+        } catch {
+          /* prefetch は最適化。失敗しても個別取得で続行 */
+        }
+      }
 
       const volId = `graphy-viewer3d-vol:${series.seriesInstanceUid}`;
       const built = await buildMprVolume(imageIds, series.modality, volId);

@@ -9,6 +9,7 @@
 import { init as coreInit } from "@cornerstonejs/core";
 import dicomImageLoader from "@cornerstonejs/dicom-image-loader";
 import { registerSegMetadataProvider } from "./segMetadata";
+import { registerThickSlabLoader } from "./thickSlab";
 import { WandTool } from "./wandTool";
 import { installSegDebug } from "./segDebug";
 import {
@@ -130,6 +131,8 @@ export function ensureCornerstoneInitialized(): Promise<void> {
       addTool(OrientationMarkerTool);
       // セグメンテーション: backend 幾何から imagePlaneModule を供給（labelmap 生成の画素プリロード撤廃）。
       registerSegMetadataProvider();
+      // ThickSlab（デジタルスライス厚）: graphy-thickslab: スキームの合成スライスローダ＋メタデータ委譲。
+      registerThickSlabLoader();
       // 診断: Brush 無言停止時に Console で `__graphySegDebug()` を実行して状態を出力。
       installSegDebug();
       // マスク（labelmap）の既定スタイル（アウトライン幅・塗り不透明度）。Cornerstone 既定は

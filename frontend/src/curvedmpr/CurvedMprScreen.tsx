@@ -19,7 +19,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { imageLoader, metaData, cache } from "@cornerstonejs/core";
-import { fetchSeries, fetchInstances, fetchSeriesLayout, type AppStatus, type Study, type Series, type SeriesLayoutDto } from "../api";
+import { fetchSeries, fetchInstances, fetchSeriesLayout, prefetchSeries, type AppStatus, type Study, type Series, type SeriesLayoutDto } from "../api";
 import { ensureCornerstoneInitialized } from "../viewer/cornerstoneSetup";
 import { imageIdForInstance, imageIdForCell } from "../viewer/imageId";
 import { type ResliceVolume, type Vec3 } from "../viewer/reslice";
@@ -102,12 +102,19 @@ function framePixelsBase64(frame: Int16Array): string {
 }
 
 /** レイアウトから (c,t) 固定の単一 Z スタック imageIds を取り出す（z 昇順）。 */
-function imageIdsForCT(layout: SeriesLayoutDto, mode: "standalone" | "web", c: number, t: number): string[] {
+function imageIdsForCT(
+  layout: SeriesLayoutDto,
+  mode: "standalone" | "web",
+  c: number,
+  t: number,
+  studyUid: string,
+  seriesUid: string,
+): string[] {
   return layout.cells
     .filter((cell) => cell.c === c && cell.t === t)
     .slice()
     .sort((a, b) => a.z - b.z)
-    .map((cell) => imageIdForCell(mode, cell.sopInstanceUid, cell.frame));
+    .map((cell) => imageIdForCell(mode, cell.sopInstanceUid, cell.frame, studyUid, seriesUid));
 }
 
 /**
@@ -414,11 +421,8 @@ export function CurvedMprScreen({ status }: { status: AppStatus | null }) {
       setMessage(t("curvedMpr.noContext"));
       return;
     }
-    if (mode !== "standalone") {
-      setPhase("unsupported");
-      setMessage(t("curvedMpr.webUnsupported"));
-      return;
-    }
+    // web も対応: imageId は BFF(WADO-RS) 経由の wadouri。reslice 用 volume は cornerstone が
+    // 各スライスを BFF から読み込んで構築する（standalone と同一経路。参照/展開は自前 canvas 描画）。
     setPhase("loading");
     setMessage(t("curvedMpr.loading"));
     try {
@@ -446,19 +450,32 @@ export function CurvedMprScreen({ status }: { status: AppStatus | null }) {
         c0 = Math.min(Math.max(0, ctx.c ?? 0), Math.max(0, layout.nC - 1));
         t0 = Math.min(Math.max(0, ctx.t ?? 0), Math.max(0, layout.nT - 1));
         setDimInfo({ nC: layout.nC, nT: layout.nT, c: c0, t: t0 });
-        imageIds = imageIdsForCT(layout, mode, c0, t0);
+        imageIds = imageIdsForCT(layout, mode, c0, t0, ctx.study.studyInstanceUid, series.seriesInstanceUid);
         if (imageIds.length < 3 && layout.nC <= 1 && layout.nT <= 1) {
           const instances = await fetchInstances(ctx.study.studyInstanceUid, series.seriesInstanceUid);
-          imageIds = instances.map((i) => imageIdForInstance(mode, i.sopInstanceUid));
+          imageIds = instances.map((i) =>
+            imageIdForInstance(mode, i.sopInstanceUid, ctx.study.studyInstanceUid, series.seriesInstanceUid),
+          );
         }
       } catch {
         const instances = await fetchInstances(ctx.study.studyInstanceUid, series.seriesInstanceUid);
-        imageIds = instances.map((i) => imageIdForInstance(mode, i.sopInstanceUid));
+        imageIds = instances.map((i) =>
+          imageIdForInstance(mode, i.sopInstanceUid, ctx.study.studyInstanceUid, series.seriesInstanceUid),
+        );
       }
       if (imageIds.length < 3) {
         setPhase("error");
         setMessage(t("curvedMpr.needVolume"));
         return;
+      }
+
+      // web: 全スライスを 1 リクエストで BFF キャッシュに載せてから volume 構築（個別 WADO-RS 往復を回避）。
+      if (mode === "web") {
+        try {
+          await prefetchSeries(ctx.study.studyInstanceUid, series.seriesInstanceUid);
+        } catch {
+          /* prefetch は最適化。失敗しても個別取得で続行 */
+        }
       }
 
       const vol = await buildDicomResliceVolume(imageIds);

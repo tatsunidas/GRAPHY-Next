@@ -17,7 +17,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RenderingEngine } from "@cornerstonejs/core";
-import { fetchSeries, fetchInstances, fetchSeriesLayout, type AppStatus, type Study, type Series, type SeriesLayoutDto } from "../api";
+import { fetchSeries, fetchInstances, fetchSeriesLayout, prefetchSeries, type AppStatus, type Study, type Series, type SeriesLayoutDto } from "../api";
 import { ensureCornerstoneInitialized } from "../viewer/cornerstoneSetup";
 import { imageIdForInstance, imageIdForCell } from "../viewer/imageId";
 import {
@@ -72,12 +72,19 @@ interface SlicerContext {
 }
 
 /** レイアウトから (c,t) 固定の単一 Z スタックの imageIds を取り出す（z 昇順、モザイク/多フレーム対応）。 */
-function imageIdsForCT(layout: SeriesLayoutDto, mode: "standalone" | "web", c: number, t: number): string[] {
+function imageIdsForCT(
+  layout: SeriesLayoutDto,
+  mode: "standalone" | "web",
+  c: number,
+  t: number,
+  studyUid: string,
+  seriesUid: string,
+): string[] {
   return layout.cells
     .filter((cell) => cell.c === c && cell.t === t)
     .slice()
     .sort((a, b) => a.z - b.z)
-    .map((cell) => imageIdForCell(mode, cell.sopInstanceUid, cell.frame));
+    .map((cell) => imageIdForCell(mode, cell.sopInstanceUid, cell.frame, studyUid, seriesUid));
 }
 type Phase = "idle" | "loading" | "ready" | "error" | "unsupported";
 
@@ -286,11 +293,8 @@ export function SlicerScreen({ status }: { status: AppStatus | null }) {
       setMessage(t("slicer.noContext"));
       return;
     }
-    if (mode !== "standalone") {
-      setPhase("unsupported");
-      setMessage(t("slicer.webUnsupported"));
-      return;
-    }
+    // web も対応: imageId は BFF(WADO-RS) 経由の wadouri。reslice 用 volume は cornerstone が
+    // 各スライスを BFF から読み込んで構築する（standalone と同一経路。3面は自前 canvas 描画）。
     setPhase("loading");
     setMessage(t("slicer.loading"));
     try {
@@ -323,20 +327,32 @@ export function SlicerScreen({ status }: { status: AppStatus | null }) {
         t0 = Math.min(Math.max(0, ctx.t ?? 0), Math.max(0, layout.nT - 1));
         setCSel(c0);
         setTSel(t0);
-        imageIds = imageIdsForCT(layout, mode, c0, t0);
+        imageIds = imageIdsForCT(layout, mode, c0, t0, ctx.study.studyInstanceUid, series.seriesInstanceUid);
         if (imageIds.length < 3) {
           const instances = await fetchInstances(ctx.study.studyInstanceUid, series.seriesInstanceUid);
-          imageIds = instances.map((i) => imageIdForInstance(mode, i.sopInstanceUid));
+          imageIds = instances.map((i) =>
+            imageIdForInstance(mode, i.sopInstanceUid, ctx.study.studyInstanceUid, series.seriesInstanceUid),
+          );
         }
       } catch {
         layoutRef.current = null;
         const instances = await fetchInstances(ctx.study.studyInstanceUid, series.seriesInstanceUid);
-        imageIds = instances.map((i) => imageIdForInstance(mode, i.sopInstanceUid));
+        imageIds = instances.map((i) =>
+          imageIdForInstance(mode, i.sopInstanceUid, ctx.study.studyInstanceUid, series.seriesInstanceUid),
+        );
       }
       if (imageIds.length < 3) {
         setPhase("error");
         setMessage(t("slicer.needVolume"));
         return;
+      }
+      // web: 全スライスを 1 リクエストで BFF キャッシュに載せてから volume 構築（個別 WADO-RS 往復を回避）。
+      if (mode === "web") {
+        try {
+          await prefetchSeries(ctx.study.studyInstanceUid, series.seriesInstanceUid);
+        } catch {
+          /* prefetch は最適化。失敗しても個別取得で続行 */
+        }
       }
       const volumeId = `graphy-slicer-vol:${series.seriesInstanceUid}:c${c0}t${t0}`;
       // CT はガントリチルトを必要に応じて自動補正（buildMprVolume 内で判定）。
@@ -636,7 +652,7 @@ export function SlicerScreen({ status }: { status: AppStatus | null }) {
     async (cIdx: number, tIdx: number) => {
       const layout = layoutRef.current;
       if (!layout) return;
-      const ids = imageIdsForCT(layout, mode, cIdx, tIdx);
+      const ids = imageIdsForCT(layout, mode, cIdx, tIdx, srcStudyRef.current ?? "", srcSeriesRef.current ?? "");
       if (ids.length < 3) return;
       const volId = `graphy-slicer-vol:${srcSeriesRef.current}:c${cIdx}t${tIdx}`;
       try {

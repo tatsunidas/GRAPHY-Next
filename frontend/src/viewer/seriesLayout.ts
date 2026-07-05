@@ -54,7 +54,8 @@ export function buildLayoutFromDto(
   );
   for (const cell of dto.cells) {
     // モザイクは frame>=0 → タイル imageId、非モザイクは whole-image imageId。
-    const id = imageIdForCell(mode, cell.sopInstanceUid, cell.frame);
+    // web は WADO-RS が study/series/sop を要するため study/series を渡す。
+    const id = imageIdForCell(mode, cell.sopInstanceUid, cell.frame, studyUid, seriesUid);
     if (id && grid[cell.c]?.[cell.t] && cell.z >= 0 && cell.z < dto.nZ) {
       grid[cell.c][cell.t][cell.z] = id;
     }

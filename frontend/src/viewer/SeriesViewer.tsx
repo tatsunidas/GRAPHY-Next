@@ -20,6 +20,19 @@ import { registerSeriesCommands } from "./seriesCommands";
 import { emitToast } from "./toast";
 import { registerSegGeometryFromLayout } from "./segMetadata";
 import { registerSliceSync, publishSlice, setSliceSyncConfig } from "./sliceSync";
+import { computeSliceSpacing } from "./imageInfo";
+import {
+  THICK_SLAB_THICKNESSES,
+  isThickSlabAvailable,
+  isOriginalThickness,
+  slicesPerStepOf,
+  digitalCountOf,
+  digitalToFractionalOriginalZ,
+  digitalToNativeZ,
+  originalToDigitalZ,
+  registerThickSlabSession,
+  thickSlabImageId,
+} from "./thickSlab";
 import { imageIdForInstance, type ViewerMode } from "./imageId";
 import { matchesCombo } from "../shortcuts/registry";
 import { fetchSeriesLayout, type Instance } from "../api";
@@ -88,8 +101,8 @@ export function SeriesViewer({
 }) {
   const { t } = useI18n();
   const imageIds = useMemo(
-    () => instances.map((i) => imageIdForInstance(mode, i.sopInstanceUid)),
-    [instances, mode],
+    () => instances.map((i) => imageIdForInstance(mode, i.sopInstanceUid, studyUid, seriesUid)),
+    [instances, mode, studyUid, seriesUid],
   );
   const fallback = useMemo(() => buildSeriesLayout(imageIds), [imageIds]);
 
@@ -166,7 +179,8 @@ export function SeriesViewer({
   const tc = Math.min(Math.max(0, tIdx), layout.nT - 1);
   const zStack = layout.zStack(cc, tc);
   const nZ = zStack.length;
-  const zc = Math.min(Math.max(0, z), nZ - 1);
+  // zStack は layout.zStack が毎レンダ新配列を返すため、依存キーは (layout, cc, tc) で安定化する。
+  const zStackKey = useMemo(() => zStack.join("|"), [layout, cc, tc]);
 
   // マルチチャンネル / 動画(ビデオ UID) / スライス1枚 では GridView を無効化。
   const hasVideo = useMemo(
@@ -176,10 +190,87 @@ export function SeriesViewer({
   const gridDisabled = layout.nC > 1 || hasVideo || nZ <= 1;
   const gridOn = gridCols > 0 && !gridDisabled;
 
+  // ── ThickSlab（デジタルスライス厚）─ 2D Slice(SliderView) のみ。動画(MPEG含む)/単一スライス/
+  //    カラーでは無効。実スライス厚に一致する厚みを選ぶと Original（合成しない）。─────────────
+  const [thickSlabOn, setThickSlabOn] = useState(false);
+  const [thickSlabMm, setThickSlabMm] = useState<number>(2.0);
+  const [spacingZ, setSpacingZ] = useState<number | null>(null);
+  const thickAvailable = isThickSlabAvailable({ hasVideo, nZ }) && !gridOn;
+
+  // 実スライス間隔(mm)を先頭2枚の IOP/IPP から算出（デジタル枚数換算・厚み範囲に使う）。
+  const spacingDep = `${nZ}|${zStack[0] ?? ""}|${zStack[1] ?? ""}`;
+  useEffect(() => {
+    if (nZ < 2) {
+      setSpacingZ(null);
+      return;
+    }
+    let cancelled = false;
+    computeSliceSpacing(zStack[0], zStack, undefined)
+      .then((r) => {
+        if (!cancelled) setSpacingZ(r.spacing);
+      })
+      .catch(() => {
+        if (!cancelled) setSpacingZ(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spacingDep]);
+
+  const thickOriginal = spacingZ != null && isOriginalThickness(thickSlabMm, spacingZ);
+  const effectiveThick =
+    thickSlabOn && thickAvailable && spacingZ != null && spacingZ > 0 && thickSlabMm > 0 && !thickOriginal;
+  const slicesPerStep = effectiveThick ? slicesPerStepOf(thickSlabMm, spacingZ!) : 1;
+  const digitalCount = effectiveThick ? digitalCountOf(nZ, slicesPerStep) : nZ;
+  // 送り(スライダー/キー/ホイール/シネ/同期)の母数。ThickSlab ON はデジタル枚数、OFF はネイティブ枚数。
+  const activeCount = effectiveThick ? digitalCount : nZ;
+
+  const zc = Math.min(Math.max(0, z), activeCount - 1);
+  // 現在位置に対応するネイティブ Z（currentImageId・ippAt・onDimChange・参照線に使う）。
+  const nativeZ = effectiveThick ? digitalToNativeZ(zc, slicesPerStep, nZ) : zc;
+
+  // ThickSlab セッション登録 → 合成 imageId 配列（graphy-thickslab:）。パラメータが同じなら
+  // 同一トークン＝配列安定＝StackViewport を再初期化しない。
+  const thickToken = useMemo(() => {
+    if (!effectiveThick) return null;
+    return registerThickSlabSession({
+      seriesUid,
+      c: cc,
+      t: tc,
+      thicknessMm: thickSlabMm,
+      spacingZmm: spacingZ!,
+      nativeIds: zStack,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveThick, seriesUid, cc, tc, thickSlabMm, spacingZ, zStackKey]);
+  const thickImageIds = useMemo(() => {
+    if (!thickToken) return null;
+    return Array.from({ length: digitalCount }, (_, dz) => thickSlabImageId(thickToken, dz));
+  }, [thickToken, digitalCount]);
+  // Viewer2D に渡す実表示スタック（ThickSlab ON なら合成 imageId、OFF なら native）。
+  const displayImageIds = thickImageIds ?? zStack;
+
+  // ThickSlab の ON/OFF・厚み変更で送りの母数（ドメイン）が変わる。同じ物理スライスを保つよう
+  // 直前ドメインの位置 → ネイティブ連続 Z → 新ドメインへ変換する（モード切替時のみ）。
+  const prevThickRef = useRef<{ on: boolean; sps: number }>({ on: false, sps: 1 });
+  useEffect(() => {
+    const prev = prevThickRef.current;
+    if (prev.on === effectiveThick && prev.sps === slicesPerStep) return;
+    setZ((cur) => {
+      const nativePos = prev.on ? digitalToFractionalOriginalZ(cur, prev.sps, nZ) : cur;
+      const next = effectiveThick
+        ? originalToDigitalZ(nativePos, slicesPerStep, digitalCount)
+        : Math.round(Math.min(Math.max(0, nativePos), nZ - 1));
+      return Math.min(Math.max(0, next), (effectiveThick ? digitalCount : nZ) - 1);
+    });
+    prevThickRef.current = { on: effectiveThick, sps: slicesPerStep };
+  }, [effectiveThick, slicesPerStep, nZ, digitalCount]);
+
   // ── Z 並べ替え（Image メニュー → seriesCommands）────────────────
   // 動画 IOD はブロック。IPP 並べ替えは幾何が無いシリーズでは不可。並べ替え後は
   // 表示中の画像（imageId）を追従させて同じスライスを保つ。
-  const currentImageId = zStack[zc];
+  const currentImageId = zStack[nativeZ];
   const hasVideoRef = useRef(hasVideo); hasVideoRef.current = hasVideo;
   const sortMetaRef = useRef<SortMeta | null>(sortMeta); sortMetaRef.current = sortMeta;
   const currentImageIdRef = useRef(currentImageId); currentImageIdRef.current = currentImageId;
@@ -191,7 +282,9 @@ export function SeriesViewer({
     if (id == null) return;
     pendingFollowRef.current = null;
     const idx = layout.zStack(cc, tc).indexOf(id);
-    if (idx >= 0) setZ(idx);
+    // ThickSlab ON 時は送りがデジタルドメインのため、ネイティブ位置 idx をデジタル Z に変換する。
+    if (idx >= 0) setZ(effectiveThick ? originalToDigitalZ(idx, slicesPerStep, digitalCount) : idx);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layout, cc, tc]);
 
   // 画面メニュー/ツールバーからの並べ替えコマンドを受ける（キー = tileId）。
@@ -278,10 +371,10 @@ export function SeriesViewer({
   // シネ再生（各次元を独立してループ送り）。
   const cineInterval = Math.max(16, Math.round(1000 / fps));
   useEffect(() => {
-    if (!playZ || nZ <= 1) return;
-    const id = window.setInterval(() => setZ((p) => (p + 1) % nZ), cineInterval);
+    if (!playZ || activeCount <= 1) return;
+    const id = window.setInterval(() => setZ((p) => (p + 1) % activeCount), cineInterval);
     return () => window.clearInterval(id);
-  }, [playZ, cineInterval, nZ]);
+  }, [playZ, cineInterval, activeCount]);
   useEffect(() => {
     if (!playC || layout.nC <= 1) return;
     const id = window.setInterval(() => setC((p) => (p + 1) % layout.nC), cineInterval);
@@ -298,7 +391,7 @@ export function SeriesViewer({
   useEffect(() => {
     const el = rootRef.current;
     if (!el || gridOn) return;
-    const step = (d: number) => setZ((p) => Math.max(0, Math.min(nZ - 1, p + d)));
+    const step = (d: number) => setZ((p) => Math.max(0, Math.min(activeCount - 1, p + d)));
     // 既定ショートカット（registry）に従う。ArrowUp=前, ArrowDown=次, Home/End=先頭/末尾,
     // Space=シネ, O=テキストオーバーレイ切替。
     const onKey = (e: KeyboardEvent) => {
@@ -315,7 +408,7 @@ export function SeriesViewer({
         setZ(0);
         e.preventDefault();
       } else if (matchesCombo("End", e)) {
-        setZ(nZ - 1);
+        setZ(activeCount - 1);
         e.preventDefault();
       } else if (matchesCombo("Space", e)) {
         setPlayZ((p) => !p);
@@ -335,7 +428,7 @@ export function SeriesViewer({
       el.removeEventListener("keydown", onKey);
       el.removeEventListener("wheel", onWheel);
     };
-  }, [nZ, gridOn]);
+  }, [activeCount, gridOn]);
 
   // ── シリーズ Sync ─────────────────────────────────────────
   //
@@ -346,9 +439,13 @@ export function SeriesViewer({
   const syncDrivenRef = useRef(false);
   const sliceSyncId = useMemo(() => `slicesync-${rawId.replace(/[^a-zA-Z0-9]/g, "")}`, [rawId]);
   // getState/applyIndex が常に最新値を参照するためのリーフ。
-  const nZRef = useRef(nZ); nZRef.current = nZ;
   const zcRef = useRef(zc); zcRef.current = zc;
   const layoutRef = useRef(layout); layoutRef.current = layout;
+  // ThickSlab のデジタル写像を sync(getState) から最新参照するためのリーフ。
+  const activeCountRef = useRef(activeCount); activeCountRef.current = activeCount;
+  const nZNativeRef = useRef(nZ); nZNativeRef.current = nZ;
+  const effectiveThickRef = useRef(effectiveThick); effectiveThickRef.current = effectiveThick;
+  const slicesPerStepRef = useRef(slicesPerStep); slicesPerStepRef.current = slicesPerStep;
 
   const syncOn = syncEnabled && !gridOn;
   useEffect(() => {
@@ -356,9 +453,18 @@ export function SeriesViewer({
     const unregister = registerSliceSync({
       id: sliceSyncId,
       getState: () => {
-        const n = nZRef.current;
         const lay = layoutRef.current;
-        const ipps = Array.from({ length: n }, (_, z) => lay.ippAt?.(z) ?? null);
+        // ThickSlab ON はデジタル枚数＋各デジタル Z→ネイティブ IPP 写像で座標同期する
+        // （他シリーズはテーブル位置 mm で一致判定するため native と整合）。
+        if (effectiveThickRef.current) {
+          const dc = activeCountRef.current;
+          const s = slicesPerStepRef.current;
+          const nn = nZNativeRef.current;
+          const ipps = Array.from({ length: dc }, (_, dz) => lay.ippAt?.(digitalToNativeZ(dz, s, nn)) ?? null);
+          return { index: zcRef.current, nZ: dc, ipps, normal: lay.normal ?? null };
+        }
+        const n = nZNativeRef.current;
+        const ipps = Array.from({ length: n }, (_, z2) => lay.ippAt?.(z2) ?? null);
         return { index: zcRef.current, nZ: n, ipps, normal: lay.normal ?? null };
       },
       applyIndex: (z) => {
@@ -376,12 +482,13 @@ export function SeriesViewer({
       return;
     }
     if (syncOn) publishSlice(sliceSyncId);
-  }, [zc, nZ, syncOn, sliceSyncId]);
+  }, [zc, activeCount, syncOn, sliceSyncId]);
 
   // 現在表示中の Z/C/T を上位へ通知（Fusion の初期 C/T 引き継ぎ・Histogram の初期 Z/C/T 用）。
+  // ThickSlab ON でも下流はネイティブ Z を前提とするため、native 位置で通知する。
   useEffect(() => {
-    onDimChange?.(cc, tc, zc);
-  }, [cc, tc, zc, onDimChange]);
+    onDimChange?.(cc, tc, nativeZ);
+  }, [cc, tc, nativeZ, onDimChange]);
 
   const toggle = (k: keyof OverlayState) => setOverlays((o) => ({ ...o, [k]: !o[k] }));
 
@@ -419,7 +526,7 @@ export function SeriesViewer({
           </div>
         </div>
       ) : (
-        <Viewer2D imageIds={zStack} imageIndex={zc} overlays={overlays} fill={fillHeight} viewSyncEnabled={syncOn} referenceLinesEnabled={referenceLinesEnabled} referenceLabel={referenceLabel} commandKey={commandKey} roiContext={roiContext} renderOverlay={renderFusionOverlay} />
+        <Viewer2D imageIds={displayImageIds} imageIndex={zc} overlays={overlays} fill={fillHeight} viewSyncEnabled={syncOn} referenceLinesEnabled={referenceLinesEnabled} referenceLabel={referenceLabel} commandKey={commandKey} roiContext={roiContext} renderOverlay={renderFusionOverlay} thickSlab={effectiveThick} />
       )}
 
       <div style={controls}>
@@ -447,9 +554,9 @@ export function SeriesViewer({
             <DimSlider
               label="Z"
               idx={zc}
-              count={nZ}
+              count={activeCount}
               onChange={setZ}
-              trailing={cinePlayBtn(playZ, () => setPlayZ((p) => !p), nZ <= 1)}
+              trailing={cinePlayBtn(playZ, () => setPlayZ((p) => !p), activeCount <= 1)}
             />
             {layout.nC > 1 && (
               <DimSlider
@@ -471,6 +578,32 @@ export function SeriesViewer({
                 trailing={cinePlayBtn(playT, () => setPlayT((p) => !p), layout.nT <= 1)}
               />
             )}
+            {/* ThickSlab（デジタルスライス厚）: On/Off ＋ 厚み選択。SliderView のみ。 */}
+            <div style={row}>
+              <Check
+                label={t("series.thickSlab")}
+                checked={thickSlabOn}
+                onChange={() => setThickSlabOn((v) => !v)}
+                disabled={!thickAvailable}
+              />
+              <select
+                value={thickSlabMm}
+                disabled={!thickSlabOn || !thickAvailable}
+                onChange={(e) => setThickSlabMm(Number(e.target.value))}
+                style={selectBox}
+                title={t("series.thickSlab.title")}
+              >
+                {THICK_SLAB_THICKNESSES.map((mm) => (
+                  <option key={mm} value={mm}>
+                    {mm.toFixed(1)} mm
+                  </option>
+                ))}
+              </select>
+              {thickSlabOn && thickAvailable && thickOriginal && (
+                <span style={hint}>{t("series.thickSlab.off")}</span>
+              )}
+              {!thickAvailable && <span style={hint}>{t("series.thickSlab.unavailable")}</span>}
+            </div>
           </>
         )}
 

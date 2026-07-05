@@ -1,6 +1,6 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
-> 更新日: 2026-07-04（最終更新: DICOM 自局 AE（AET/ポート/バインドアドレス）を環境設定 UI から編集可能化・再起動促進バナー追加）
+> 更新日: 2026-07-06（最終更新: web の高速化=シリーズ一括prefetch ＋ STOW-RS 書き戻し=派生/SEG/RTSTRUCT）
 > 目的: 別の作業者（Claude 含む）がこのリポジトリの状況を把握し、続きを実装できるようにする。
 > このファイル＋ `fw/` 配下の各設計ドキュメントが「ソース・オブ・トゥルース」。
 >
@@ -22,6 +22,82 @@
 > `restartRequiredEvents.ts`）を表示し、「今すぐ再起動」ボタンから Electron `graphy:relaunch` IPC で実際に
 > 再起動できる（`desktop/main.js`/`preload.js`）。web モードは対象外（元々 backend 単一プロセスの
 > application.yml 管理のまま）。
+>
+> 🟢 **2026-07-05 追加（GRAPHY 機能移植: ThickSlab＝デジタルスライス厚・2D Slice のみ）**: 本家
+> `Praparat.computeThickSlabProcessor` を移植。現在スライス中心に法線 ±(厚み/2) を近傍ネイティブスライスから
+> **Trilinear（面内格子共通のため Z 方向 1D 線形に縮退）でサブサンプル→平均合成（Average のみ・本家準拠。
+> MIP/MinIP なし）**。On/Off＋厚み選択（0.1/0.3/0.5/1.0〜5.0mm）、実スライス間隔一致で Original。
+> **Z モデルはデジタル再サンプル**（ON 時スライダー母数を `ceil(nZ/(厚み/間隔))` に）。合成は
+> **`graphy-thickslab:` カスタム画像ローダ**で `StackViewport` にオンデマンド注入し、メタデータは中心
+> ネイティブスライスへ委譲（ただし `modalityLutModule` を恒等化し **HU 二重適用を回避**＝`pixelCalibration`
+> 単一入口）。W/L・カーソル HU・affine・ROI・スライス同期・参照線の既存 2D 経路を流用。**動画(MPEG)/単一
+> スライス/カラーは無効**。**Zoom/Pan/Rotate は無効化せず、ROI・計測・ブラシ・Wand の作成/編集のみブロック**
+> （合成は単一 SOP 非対応）。**ON 時の非デフォルト表示状態は維持**（`Viewer2D` が `setStack` 前に
+> presentation+VOI を退避→同一シリーズ幾何 rows/cols/modality 一致時のみ再適用。C/T 切替の状態維持も副次改善）。
+> **他モード波及ゼロ**（Slicer/CurvedMPR は既存 slab に委譲、MPR は対象外）。実装: `viewer/thickSlab.ts`(新規)/
+> `cornerstoneSetup.ts`/`SeriesViewer.tsx`/`Viewer2D.tsx`/`i18n`。tsc・vite build 共に green、**standalone 実機
+> 確認は未**（Float32 合成 StackViewport 描画・HU/W-L 一致・デジタル送り/同期/参照線の追従）。設計: `fw/thickslab-design.md`。
+>
+> 🟢 **2026-07-05 追加（web モードの 2D 画像表示を実装＝Phase 1）**: これまで「次フェーズ」で止まっていた
+> web の 2D ビューアを、**ピクセル経路も BFF 一本**（fw/dicom-data-layer.md §5）で開通。backend
+> `WebDicomDataService.retrieveInstance(study,series,sop)` が PACS の **WADO-RS**
+> `GET .../instances/{sop}`（`multipart/related`）を叩き、**multipart を自前で剥がして Part-10** を返す
+> （`firstMultipartPart`。dcm4che に mime パーサ依存が無いため自前実装）。エンドポイント
+> `GET /api/studies/{study}/series/{series}/instances/{sop}/file`（`StudyController.instanceFile`、
+> standalone はローカルファイル配信にフォールバック）。フロントは `imageIdForInstance(web,sop,study,series)`
+> → `wadouri:` で同一オリジン取得（CORS 不要・標準圧縮 TS は WASM 復号）。`StudyList`/`Viewer2DScreen` が
+> `SeriesViewer(mode="web")` を表示（standalone と同一 StackViewport 経路。ThickSlab も web で有効）。
+> web QIDO instances は **InstanceNumber 昇順**にソート。**frontend tsc green。backend は JDK21 未導入の環境
+> のためコンパイル未検証**（コードは記述済み・要 `mvn compile`）。**未対応（次段）**: web の ZCT レイアウト
+> （現状 layout 空＝単一次元 Z）、MPR/3D/Slicer/Curved MPR の web、IID 起動（`?studyUID=`）、独自圧縮の
+> サーバ側復号、web の ROI/Fusion。実 dcm4chee での動作確認は Docker 環境が要（本サンドボックスは非対応）。
+>
+> 🟢 **2026-07-05 追加（web Phase 2: ZCT レイアウト ＋ Phase 3: IHE IID 起動）**:
+> **Phase 2**: `SeriesLayoutAssembler.fromAttributes(List<Attributes>)`（新規・純関数、standalone の classic
+> 経路と同一ロジック＝Z 投影/C-T 判定を一致）を追加し、`StudyController.layout` の web 分岐が
+> `WebDicomDataService.seriesMetadata`（WADO-RS `/metadata`）から 5D を導出。frontend の
+> `imageIdForCell`/`imageIdForFrame`/`buildLayoutFromDto` は study/series を受けて web の wadouri を組む
+> （モザイク/SEG の per-frame 展開は web 非対応＝classic 単一フレームのみ）。
+> **Phase 3**: `iid.ts`（`?studyUID=...&seriesUID=...` 解釈）＋ `App` の IID 起動導線（web メインウィンドウで
+> `graphy-viewer-ctx` に書いて `#2dviewer` へ遷移）＋ `/api/studies?studyInstanceUid=`（QIDO 直引き）。
+> **frontend tsc・vite build green。backend は JDK21 未導入のため未コンパイル**（`SeriesLayoutAssembler`/
+> `StudyController`/`WebDicomDataService` 記述済み、要 `mvn compile`）。**残り**: MPR/3D/Slicer/CurvedMPR の
+> web、独自圧縮のサーバ側復号、web の ROI/Fusion。実 dcm4chee 動作確認は Docker 環境要。
+>
+> 🟢 **2026-07-06 追加（MPR/3D の web 対応 ＋ JRE 下限 21 ガード）**:
+> **MPR/3D web**: `MprScreen`/`Viewer3DScreen` の web ゲート（`webUnsupported`）を撤去し、
+> `imageIdForInstance(mode,sop,study,series)` で BFF wadouri を組むよう修正。`buildMprVolume` が
+> cornerstone 経由で全スライスを BFF(WADO-RS) から読み込んで volume 化（standalone と同一経路。
+> MPR=VolumeViewport、3D=pure vtk.js）。起動導線（MainScreen/Viewer2DScreen の `#mpr`/`#viewer3d`）は
+> web の `window.open` フォールバックが既存で、ボタンも非 gating。backend 追加なし（Phase1 の instance-file＋
+> Phase2 の layout で足りる）。⚠ 大シリーズは全スライス個別 WADO-RS 取得で遅い（将来: シリーズ一括取得）。
+> **JRE 下限**: `Makefile` の `build-desktop` で jlink 直前に `$(JAVA_HOME)` の Java major を検査し、
+> **21未満ならビルドを失敗**させる（Release 同梱JRE の下限を 21 に強制。backend jar は release=21 で 21未満の
+> JRE では起動しないため先に検出）。Java バージョンは 21 のまま（下げない）。**frontend tsc green。backend は
+> JDK21 未導入環境のため未コンパイル**。Slicer/CurvedMPR の web は次段。
+>
+> 🟢 **2026-07-06 追加（Slicer / Curved MPR の web 対応）**: `SlicerScreen`/`CurvedMprScreen` の web ゲートを
+> 撤去し、`imageIdsForCT(...)` と fallback の `imageIdForInstance(...)` に study/series を通すよう修正
+> （C/T 切替の `applyCT` 含む）。reslice 用 volume は cornerstone が全スライスを BFF から読み構築
+> （standalone と同一。3面/参照/展開は自前 canvas）。backend 追加なし。これで **5 ビューモード全て（2D/MPR/
+> 3D/Slicer/CurvedMPR）が web で表示可能**に。⚠ 派生シリーズ保存（STOW-RS）・独自圧縮のサーバ側復号・
+> web の ROI/Fusion は次段。**frontend tsc・vite build green。実 dcm4chee 動作確認は Docker 環境要**。
+>
+> 🟢 **2026-07-06 追加（web 高速化=prefetch ＋ STOW-RS 書き戻し。書き戻しは★必須機能）**:
+> **#2 一括取得**: `WebDicomDataService.prefetchSeries`（WADO-RS シリーズ `GET /studies/{s}/series/{se}` を 1
+> リクエスト→multipart 全パートを sop→bytes キャッシュ、512MB 上限 LRU）＋ `POST .../prefetch`（StudyController）。
+> frontend の MPR/3D/Slicer/CurvedMPR が volume 構築前に `prefetchSeries` を呼び、以降のスライス取得を
+> キャッシュ即返しに（個別 WADO-RS 往復を回避）。`retrieveInstance` もキャッシュ優先。
+> **#3 STOW-RS 書き戻し**（standalone=ローカル FS/H2、web=STOW の対称化）: `storeDatasets(List<Attributes>)`/
+> `storeInstances(List<byte[]>)`（`POST {base}/studies`、multipart/related を `buildMultipartRelated` で自前組立）。
+> **派生シリーズ**（`DerivedSeriesService`）・**DICOM SEG**（`SegExportService`）・**RTSTRUCT**
+> （`RtStructExportService`）の 3 サービスを web 分岐（テンプレート＝WADO-RS `/metadata` 先頭、保存＝STOW。
+> `ObjectProvider<WebDicomDataService>` 注入）。frontend の保存 POST はモード非依存で無変更。
+> **frontend tsc・vite build green。backend も JDK21 で `mvn compile`／`mvn test` 成功（全 87 テスト green）。**
+> multipart 組立↔解析の往復・prefetch→キャッシュ→retrieve→STOW をインプロセス・スタブ PACS で検証する
+> `WebDicomTransferTest`（2 件）を追加。**実 dcm4chee 結合検証の手順は `deploy/dcm4chee/VERIFY-web.md`**
+> （dcm4chee 起動→データ投入→web 起動→2D/prefetch/STOW/IID を確認。Docker 要）。
+> ⚠ SEG/RTSTRUCT の web 書き戻しは per-frame 参照/幾何の実機目視が未。独自圧縮のサーバ側復号・web Fusion は次段。
 
 ---
 

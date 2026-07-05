@@ -8,17 +8,26 @@ import com.vis.graphynext.dicom.DicomProperties;
 import jakarta.json.Json;
 import jakarta.json.stream.JsonParser;
 import org.dcm4che3.data.Attributes;
+import org.dcm4che3.data.Tag;
+import org.dcm4che3.data.UID;
+import org.dcm4che3.io.DicomInputStream;
+import org.dcm4che3.io.DicomOutputStream;
 import org.dcm4che3.json.JSONReader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -37,6 +46,39 @@ public class WebDicomDataService {
 
     private final RestClient client;
     private final String baseUrl;
+
+    /**
+     * シリーズ一括取得（prefetch）で取り込んだインスタンス本体の簡易キャッシュ（sopUID→Part-10 バイト）。
+     * MPR/3D/Slicer 等が全スライスを個別に WADO-RS 取得すると遅いため、prefetch で 1 リクエストにまとめ、
+     * 以降の {@code /instances/{sop}/file} をここから即返す。合計バイト上限つき LRU（超過は古い順に破棄）。
+     * 単一利用者の BFF 前提の素朴な実装（マルチテナントでの共有は将来課題）。
+     */
+    private static final long CACHE_MAX_BYTES = 512L * 1024 * 1024; // 512MB
+    private final LinkedHashMap<String, byte[]> instanceCache = new LinkedHashMap<>(64, 0.75f, true);
+    private long cacheBytes = 0;
+
+    /** キャッシュ取得（アクセス順更新）。無ければ null。 */
+    private synchronized byte[] cacheGet(String sopUid) {
+        return instanceCache.get(sopUid);
+    }
+
+    /** キャッシュ投入。合計バイトが上限を超えたら古い順（LRU）に破棄する。 */
+    private synchronized void cachePut(String sopUid, byte[] dicom) {
+        if (sopUid == null || dicom == null) {
+            return;
+        }
+        byte[] prev = instanceCache.put(sopUid, dicom);
+        if (prev != null) {
+            cacheBytes -= prev.length;
+        }
+        cacheBytes += dicom.length;
+        var it = instanceCache.entrySet().iterator();
+        while (cacheBytes > CACHE_MAX_BYTES && it.hasNext()) {
+            Map.Entry<String, byte[]> eldest = it.next();
+            cacheBytes -= eldest.getValue().length;
+            it.remove();
+        }
+    }
 
     public WebDicomDataService(DicomProperties props) {
         DicomProperties.Dicomweb cfg = props.getDicomweb();
@@ -105,6 +147,259 @@ public class WebDicomDataService {
         List<Attributes> result = parseDatasets(body);
         log.debug("WADO-RS metadata: {} -> {} instances", path, result.size());
         return result;
+    }
+
+    /**
+     * WADO-RS: 1 インスタンスの本体（Part-10 DICOM）を取得する。
+     * {@code GET {base}/studies/{study}/series/{series}/instances/{sop}}
+     * （{@code Accept: multipart/related; type="application/dicom"}）。
+     *
+     * <p>ピクセル経路も BFF 一本に統一する方針（fw/dicom-data-layer.md §5）。フロントは
+     * {@code wadouri:.../instances/{sop}/file} として Cornerstone3D に読ませる。応答は multipart/related
+     * のため、単一パート（＝DICOM 本体）を抜き出して返す。標準圧縮 TS はブラウザ(WASM)側で復号する。
+     *
+     * @return Part-10 DICOM バイト列。取得不能なら {@code null}。
+     */
+    public byte[] retrieveInstance(String studyUid, String seriesUid, String sopUid) {
+        // prefetch 済みならキャッシュから即返す（個別 WADO-RS 往復を省く）。
+        byte[] cached = cacheGet(sopUid);
+        if (cached != null) {
+            return cached;
+        }
+        if (baseUrl.isEmpty()) {
+            throw new IllegalStateException(
+                    "DICOMweb 接続先が未設定です（graphy.dicom.dicomweb.base-url）。");
+        }
+        String path = "/studies/" + studyUid + "/series/" + seriesUid + "/instances/" + sopUid;
+        log.debug("WADO-RS instance request: {}", path);
+        ResponseEntity<byte[]> resp = client.get()
+                .uri(ub -> ub.path(path).build())
+                .accept(MediaType.parseMediaType("multipart/related;type=\"application/dicom\""))
+                .retrieve()
+                .toEntity(byte[].class);
+        byte[] body = resp.getBody();
+        if (body == null || body.length == 0) {
+            return null;
+        }
+        MediaType ct = resp.getHeaders().getContentType();
+        String boundary = ct == null ? null : ct.getParameter("boundary");
+        byte[] dicom = firstMultipartPart(body, boundary);
+        log.debug("WADO-RS instance: {} -> {} bytes (part {} bytes)", path, body.length,
+                dicom == null ? 0 : dicom.length);
+        if (dicom != null) {
+            cachePut(sopUid, dicom);
+        }
+        return dicom;
+    }
+
+    /**
+     * WADO-RS: シリーズ全インスタンスを 1 リクエストで一括取得し、キャッシュに投入する（prefetch）。
+     * {@code GET {base}/studies/{study}/series/{series}}（multipart/related; type="application/dicom"）。
+     * 以降の {@link #retrieveInstance} はキャッシュから即返る（MPR/3D/Slicer の高速化）。
+     *
+     * @return 取り込んだインスタンス数。
+     */
+    public int prefetchSeries(String studyUid, String seriesUid) {
+        if (baseUrl.isEmpty()) {
+            throw new IllegalStateException(
+                    "DICOMweb 接続先が未設定です（graphy.dicom.dicomweb.base-url）。");
+        }
+        String path = "/studies/" + studyUid + "/series/" + seriesUid;
+        log.debug("WADO-RS series request (prefetch): {}", path);
+        ResponseEntity<byte[]> resp = client.get()
+                .uri(ub -> ub.path(path).build())
+                .accept(MediaType.parseMediaType("multipart/related;type=\"application/dicom\""))
+                .retrieve()
+                .toEntity(byte[].class);
+        byte[] body = resp.getBody();
+        if (body == null || body.length == 0) {
+            return 0;
+        }
+        MediaType ct = resp.getHeaders().getContentType();
+        String boundary = ct == null ? null : ct.getParameter("boundary");
+        List<byte[]> parts = allMultipartParts(body, boundary);
+        int n = 0;
+        for (byte[] dicom : parts) {
+            String sop = sopInstanceUidOf(dicom);
+            if (sop != null) {
+                cachePut(sop, dicom);
+                n++;
+            }
+        }
+        log.info("WADO-RS series prefetch: {} -> {} instances cached (bulk retrieve)", path, n);
+        return n;
+    }
+
+    /** Part-10 バイト列から SOPInstanceUID を読む。読めなければ null。 */
+    private static String sopInstanceUidOf(byte[] dicom) {
+        try (DicomInputStream dis = new DicomInputStream(new ByteArrayInputStream(dicom))) {
+            Attributes fmi = dis.readFileMetaInformation();
+            String sop = fmi != null ? fmi.getString(Tag.MediaStorageSOPInstanceUID) : null;
+            if (sop != null && !sop.isBlank()) {
+                return sop;
+            }
+            Attributes ds = dis.readDataset();
+            return ds.getString(Tag.SOPInstanceUID);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * STOW-RS: Part-10 DICOM 群を PACS へ保存する（派生シリーズ・ROI の書き戻し）。
+     * {@code POST {base}/studies}（Content-Type: multipart/related; type="application/dicom"）。
+     *
+     * @throws IllegalStateException 接続先未設定
+     */
+    /**
+     * STOW-RS: dcm4che の {@link Attributes} 群を Part-10（Explicit VR LE）へ直列化して PACS へ保存する。
+     * 派生シリーズ・SEG・RTSTRUCT の書き戻し共通入口。
+     */
+    public void storeDatasets(List<Attributes> datasets) {
+        if (datasets == null || datasets.isEmpty()) {
+            return;
+        }
+        List<byte[]> parts = new ArrayList<>(datasets.size());
+        for (Attributes a : datasets) {
+            Attributes fmi = a.createFileMetaInformation(UID.ExplicitVRLittleEndian);
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            try (DicomOutputStream dos = new DicomOutputStream(bos, UID.ExplicitVRLittleEndian)) {
+                dos.writeDataset(fmi, a);
+            } catch (java.io.IOException e) {
+                throw new IllegalStateException("STOW 用の DICOM 直列化に失敗しました: " + e.getMessage(), e);
+            }
+            parts.add(bos.toByteArray());
+        }
+        storeInstances(parts);
+    }
+
+    public void storeInstances(List<byte[]> dicoms) {
+        if (baseUrl.isEmpty()) {
+            throw new IllegalStateException(
+                    "DICOMweb 接続先が未設定です（graphy.dicom.dicomweb.base-url）。");
+        }
+        if (dicoms == null || dicoms.isEmpty()) {
+            return;
+        }
+        String boundary = "graphyStow" + Integer.toHexString(System.identityHashCode(dicoms));
+        byte[] payload = buildMultipartRelated(dicoms, boundary, "application/dicom");
+        MediaType contentType = MediaType.parseMediaType(
+                "multipart/related; type=\"application/dicom\"; boundary=" + boundary);
+        log.debug("STOW-RS store: {} instances ({} bytes)", dicoms.size(), payload.length);
+        client.post()
+                .uri("/studies")
+                .contentType(contentType)
+                .accept(DICOM_JSON)
+                .body(payload)
+                .retrieve()
+                .toBodilessEntity();
+    }
+
+    /**
+     * multipart/related 応答から最初のパートの本体バイト列を抜き出す。単一インスタンス取得は
+     * パートが 1 つのため、これで DICOM 本体が得られる。boundary が無ければ本体をそのまま返す
+     * （サーバが単一パートを直接返した場合の保険）。
+     */
+    static byte[] firstMultipartPart(byte[] body, String boundary) {
+        if (body == null) {
+            return null;
+        }
+        if (boundary == null || boundary.isBlank()) {
+            return body; // multipart でない（単一 DICOM 直返し）とみなす
+        }
+        // boundary はダブルクオートで囲まれることがある。
+        String b = boundary.trim();
+        if (b.length() >= 2 && b.startsWith("\"") && b.endsWith("\"")) {
+            b = b.substring(1, b.length() - 1);
+        }
+        byte[] delim = ("--" + b).getBytes(StandardCharsets.US_ASCII);
+        int p = indexOf(body, delim, 0);
+        if (p < 0) {
+            return body;
+        }
+        // パートヘッダ終端（CRLF CRLF）の後ろが本体の先頭。
+        byte[] headerEnd = { 13, 10, 13, 10 };
+        int hs = indexOf(body, headerEnd, p);
+        if (hs < 0) {
+            return null;
+        }
+        int start = hs + headerEnd.length;
+        // 次の "CRLF --boundary" が本体の終端。無ければ末尾まで。
+        byte[] endDelim = ("\r\n--" + b).getBytes(StandardCharsets.US_ASCII);
+        int end = indexOf(body, endDelim, start);
+        if (end < 0) {
+            end = body.length;
+        }
+        return Arrays.copyOfRange(body, start, end);
+    }
+
+    /** multipart/related 応答の全パート本体を順に抜き出す（シリーズ一括取得用）。boundary 無しは body 1 個。 */
+    static List<byte[]> allMultipartParts(byte[] body, String boundary) {
+        List<byte[]> parts = new ArrayList<>();
+        if (body == null) {
+            return parts;
+        }
+        if (boundary == null || boundary.isBlank()) {
+            parts.add(body);
+            return parts;
+        }
+        String b = boundary.trim();
+        if (b.length() >= 2 && b.startsWith("\"") && b.endsWith("\"")) {
+            b = b.substring(1, b.length() - 1);
+        }
+        byte[] delim = ("--" + b).getBytes(StandardCharsets.US_ASCII);
+        byte[] headerEnd = { 13, 10, 13, 10 };
+        byte[] crlfDelim = ("\r\n--" + b).getBytes(StandardCharsets.US_ASCII);
+        int pos = indexOf(body, delim, 0);
+        while (pos >= 0) {
+            int afterDelim = pos + delim.length;
+            // 終端境界 "--boundary--" なら終了。
+            if (afterDelim + 1 < body.length && body[afterDelim] == '-' && body[afterDelim + 1] == '-') {
+                break;
+            }
+            int hs = indexOf(body, headerEnd, pos);
+            if (hs < 0) {
+                break;
+            }
+            int start = hs + headerEnd.length;
+            int end = indexOf(body, crlfDelim, start);
+            if (end < 0) {
+                end = body.length;
+            }
+            parts.add(Arrays.copyOfRange(body, start, end));
+            pos = indexOf(body, delim, end);
+        }
+        return parts;
+    }
+
+    /** Part-10 群を multipart/related バイト列に組み立てる（STOW-RS 送信ボディ）。 */
+    static byte[] buildMultipartRelated(List<byte[]> parts, String boundary, String partContentType) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        for (byte[] part : parts) {
+            out.writeBytes(("--" + boundary + "\r\n").getBytes(StandardCharsets.US_ASCII));
+            out.writeBytes(("Content-Type: " + partContentType + "\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+            out.writeBytes(part);
+            out.writeBytes("\r\n".getBytes(StandardCharsets.US_ASCII));
+        }
+        out.writeBytes(("--" + boundary + "--").getBytes(StandardCharsets.US_ASCII));
+        return out.toByteArray();
+    }
+
+    /** バイト列 {@code a} 中で {@code from} 以降に現れる部分列 {@code b} の先頭位置。無ければ -1。 */
+    private static int indexOf(byte[] a, byte[] b, int from) {
+        if (b.length == 0 || a.length - b.length < 0) {
+            return -1;
+        }
+        outer:
+        for (int i = Math.max(0, from); i <= a.length - b.length; i++) {
+            for (int j = 0; j < b.length; j++) {
+                if (a[i + j] != b[j]) {
+                    continue outer;
+                }
+            }
+            return i;
+        }
+        return -1;
     }
 
     private List<Attributes> qido(String path, Map<String, String> query) {

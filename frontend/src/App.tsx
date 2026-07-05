@@ -2,8 +2,9 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import { useEffect, useState } from "react";
-import { fetchStatus, type AppStatus } from "./api";
+import { useEffect, useRef, useState } from "react";
+import { fetchStatus, fetchStudies, fetchSeries, type AppStatus, type Study, type Series } from "./api";
+import { parseIidLaunch } from "./iid";
 import { SettingsDialog } from "./settings/SettingsDialog";
 import { DbAdminDialog } from "./dbadmin/DbAdminDialog";
 import { KeyboardHelp } from "./shortcuts/KeyboardHelp";
@@ -47,6 +48,51 @@ export function App() {
       .then(setStatus)
       .catch((e: unknown) => setError(String(e)));
   }, []);
+
+  // IHE IID 起動（web のみ・メインウィンドウのみ・1 回だけ）。URL `?studyUID=...` があれば、その study を
+  // 検索ポータルを介さず 2D ビューアで直接開く（graphy-viewer-ctx に書いて #2dviewer へ遷移）。
+  const iidHandledRef = useRef(false);
+  useEffect(() => {
+    if (iidHandledRef.current) return;
+    if (!status || status.mode !== "web") return; // IID は web モード限定
+    if (screen !== "") return; // メインウィンドウ（別ウィンドウ #2dviewer 等では実行しない）
+    const iid = parseIidLaunch(window.location.search);
+    if (!iid) return;
+    iidHandledRef.current = true;
+    void (async () => {
+      try {
+        // StudyInstanceUID で直接取得。取れなければ最小 Study を組み立てて続行。
+        let study: Study | null = null;
+        try {
+          const studies = await fetchStudies({ studyInstanceUid: iid.studyUID });
+          study = studies[0] ?? null;
+        } catch {
+          /* フォールバックへ */
+        }
+        if (!study) {
+          study = {
+            studyInstanceUid: iid.studyUID,
+            patientId: "",
+            patientName: null,
+            studyDate: null,
+            studyDescription: null,
+            modality: null,
+            numberOfInstances: 0,
+          };
+        }
+        // series: 指定があればそれ、無ければ先頭シリーズ。
+        const list = await fetchSeries(iid.studyUID).catch(() => [] as Series[]);
+        let series: Series | undefined = iid.seriesUID
+          ? list.find((s) => s.seriesInstanceUid === iid.seriesUID)
+          : undefined;
+        if (!series) series = list[0];
+        localStorage.setItem("graphy-viewer-ctx", JSON.stringify({ study, series, ts: Date.now() }));
+        window.location.hash = "2dviewer"; // Viewer2DScreen がマウント時に ctx を読んで開く
+      } catch {
+        /* 失敗時はメイン画面のまま（検索ポータルから開ける） */
+      }
+    })();
+  }, [status, screen]);
 
   // 起動時の更新確認（メインウィンドウのみ・デスクトップのみ）。新版があり未スキップの場合だけ通知する。
   // 別ウィンドウ（#2dviewer 等）では二重通知を避けるため実行しない。

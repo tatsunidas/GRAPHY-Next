@@ -5,6 +5,7 @@
 package com.vis.graphynext.dicom.export;
 
 import com.vis.graphynext.dicom.store.DicomStorageService;
+import com.vis.graphynext.dicom.web.WebDicomDataService;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Sequence;
 import org.dcm4che3.data.Tag;
@@ -16,6 +17,7 @@ import org.dcm4che3.io.DicomOutputStream;
 import org.dcm4che3.util.UIDUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -38,9 +40,12 @@ public class SegExportService {
     private static final Logger log = LoggerFactory.getLogger(SegExportService.class);
 
     private final DicomStorageService storage;
+    /** web モードのときだけ存在（STOW-RS 書き戻し用）。standalone では null。 */
+    private final ObjectProvider<WebDicomDataService> webProvider;
 
-    public SegExportService(DicomStorageService storage) {
+    public SegExportService(DicomStorageService storage, ObjectProvider<WebDicomDataService> webProvider) {
         this.storage = storage;
+        this.webProvider = webProvider;
     }
 
     public record Result(String seriesInstanceUid, String sopInstanceUid) {
@@ -48,12 +53,24 @@ public class SegExportService {
 
     public Result export(SegExportRequest req) throws IOException {
         validate(req);
-        List<Path> srcFiles = storage.resolveFiles(req.studyInstanceUid(), List.of(req.seriesInstanceUid()));
-        if (srcFiles.isEmpty()) {
-            throw new IllegalArgumentException("参照シリーズが見つかりません (study=" + req.studyInstanceUid()
-                    + ", series=" + req.seriesInstanceUid() + ")");
+        WebDicomDataService web = webProvider != null ? webProvider.getIfAvailable() : null;
+        // 参照シリーズ属性テンプレート: standalone はローカル、web は WADO-RS /metadata の先頭インスタンス。
+        Attributes tmpl;
+        if (web != null) {
+            List<Attributes> metas = web.seriesMetadata(req.studyInstanceUid(), req.seriesInstanceUid());
+            if (metas.isEmpty()) {
+                throw new IllegalArgumentException("参照シリーズが見つかりません (web, study="
+                        + req.studyInstanceUid() + ", series=" + req.seriesInstanceUid() + ")");
+            }
+            tmpl = metas.get(0);
+        } else {
+            List<Path> srcFiles = storage.resolveFiles(req.studyInstanceUid(), List.of(req.seriesInstanceUid()));
+            if (srcFiles.isEmpty()) {
+                throw new IllegalArgumentException("参照シリーズが見つかりません (study=" + req.studyInstanceUid()
+                        + ", series=" + req.seriesInstanceUid() + ")");
+            }
+            tmpl = readHeader(srcFiles.get(0));
         }
-        Attributes tmpl = readHeader(srcFiles.get(0));
 
         final int rows = req.rows();
         final int cols = req.columns();
@@ -188,7 +205,11 @@ public class SegExportService {
             refSeries.add(rsItem);
         }
 
-        ingest(a);
+        if (web != null) {
+            web.storeDatasets(List.of(a)); // STOW-RS で PACS へ保存
+        } else {
+            ingest(a);
+        }
         log.info("DICOM SEG exported: series={} sop={} frames={} segments={} from {}",
                 newSeriesUid, newSopUid, totalFrames, segs.size(), req.seriesInstanceUid());
         return new Result(newSeriesUid, newSopUid);
