@@ -15,6 +15,7 @@ export const en: Record<string, string> = {
   "common.cancel": "Cancel",
   "common.edit": "Edit",
   "common.delete": "Delete",
+  "common.standaloneOnlyFeature": "This feature is only available in the standalone (desktop) app. Please use your PACS server's standard functionality instead.",
   "doc.open": "Open",
   "doc.download": "Download",
   "dbnotice.message": "The database was updated. Please reload the displayed data, or reopen it.",

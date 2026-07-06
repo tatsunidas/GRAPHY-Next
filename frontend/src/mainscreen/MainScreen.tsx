@@ -168,6 +168,11 @@ export function MainScreen({
       return;
     }
     if (kind === "send") {
+      if (!isStandalone) {
+        // DICOM 送信（C-STORE）は standalone 専用（web にはローカル索引が無く送信対象を解決できない）。
+        window.alert(t("common.standaloneOnlyFeature"));
+        return;
+      }
       if (!selectedStudy) {
         // 送信は患者特定が必要なため、スタディ選択を促す（Export と同じ）。
         window.alert(t("export.noSelection"));
@@ -186,6 +191,11 @@ export function MainScreen({
       return;
     }
     if (kind === "nonDicomImport") {
+      if (!isStandalone) {
+        // 非DICOM取込はローカルファイルパス（Electron専用）が前提のため standalone 専用。
+        window.alert(t("common.standaloneOnlyFeature"));
+        return;
+      }
       setOpenTool("nonDicomImport");
       return;
     }

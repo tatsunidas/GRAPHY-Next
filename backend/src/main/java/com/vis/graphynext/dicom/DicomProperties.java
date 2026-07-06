@@ -34,9 +34,10 @@ public class DicomProperties {
     private List<RemoteAe> remoteAes = new ArrayList<>();
 
     /**
-     * dcm4che バイナリ配布のホーム（{@code bin/getscu} 等がある場所）。
+     * dcm4che バイナリ配布のホーム（{@code bin/getscu} 等がある場所）を明示指定するとき用。
      * standalone の C-GET/C-MOVE はこの CLI ツールをプロセス起動して解決する。
-     * 空のときは {@code ~/dcm4che-*} を自動検出する。
+     * 空のときは同梱ディレクトリ探索 → {@code ~/dcm4che-*} 自動検出
+     * （{@link com.vis.graphynext.dicom.qr.Dcm4cheTools} 参照）。
      */
     private String dcm4cheHome = "";
 

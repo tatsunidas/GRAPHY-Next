@@ -18,7 +18,7 @@ JAVA_HOME ?= /usr/lib/jvm/temurin-21-jdk-amd64
 
 .PHONY: install install-frontend install-desktop \
         build build-frontend build-backend build-desktop \
-        dev-web dev-desktop run-web test clean
+        dev-web dev-desktop run-web test clean ffmpeg dcm4che-tools
 
 install: install-frontend install-desktop
 
@@ -63,6 +63,11 @@ build: build-desktop
 FFMPEG_TARGETS ?=
 ffmpeg:
 	bash scripts/fetch-ffmpeg.sh $(FFMPEG_TARGETS)
+
+# --- QR(C-FIND/C-MOVE/C-GET) 用 dcm4che CLI ツールを desktop/resources/dcm4che へ配置（リリース同梱用） ---
+# Java 製ツールのため OS/アーキ別配布は不要（全 OS 共通の 1 セット）。
+dcm4che-tools:
+	bash scripts/fetch-dcm4che-tools.sh
 
 # --- 開発起動 ---
 dev-web:

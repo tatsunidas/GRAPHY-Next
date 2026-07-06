@@ -7,9 +7,9 @@ package com.vis.graphynext.nondicom;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.system.ApplicationHome;
 import org.springframework.stereotype.Component;
 
-import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -108,11 +108,16 @@ public class FfmpegLocator {
         }
     }
 
+    /**
+     * jar（このバックエンド jar）を含むディレクトリ。Spring Boot の実行可能 jar は
+     * {@code BOOT-INF/} 配下を {@code nested:} スキームの仮想 FS として読むため、
+     * {@code getProtectionDomain().getCodeSource()} から素朴に {@link Path#of} すると
+     * その仮想 FS 内のパスになってしまい、実ファイルシステム上の同梱ディレクトリと一致しない。
+     * {@link ApplicationHome} はこのケースを正しく解決する Spring Boot 提供のユーティリティ。
+     */
     private static Path jarDir() {
         try {
-            URI uri = FfmpegLocator.class.getProtectionDomain().getCodeSource().getLocation().toURI();
-            Path p = Path.of(uri);
-            return Files.isRegularFile(p) ? p.getParent() : p; // jar ならその親、classes ディレクトリならそのまま
+            return new ApplicationHome(FfmpegLocator.class).getDir().toPath();
         } catch (Exception e) {
             return null;
         }

@@ -15,6 +15,7 @@ export const ja: Record<string, string> = {
   "common.cancel": "キャンセル",
   "common.edit": "編集",
   "common.delete": "削除",
+  "common.standaloneOnlyFeature": "この機能はスタンドアロン版（デスクトップアプリ）専用です。PACSサーバの標準機能をご利用ください。",
   "doc.open": "開く",
   "doc.download": "ダウンロード",
   "dbnotice.message": "データベースが更新されました。表示中のデータを再読込するか、一旦開き直してください。",

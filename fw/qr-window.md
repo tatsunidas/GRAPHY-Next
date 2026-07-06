@@ -4,6 +4,14 @@
 > ステータス: 実装済み（backend は実機 dcmqrscp で C-FIND/C-MOVE/保存済み判定/進捗を検証済み）。
 > frontend は QR 画面・配線・設定・i18n 実装済み（tsc は QR ファイル単体では green。実機 GUI 目視は
 > Viewer2D.tsx の別作業の build 復旧後）。
+>
+> 2026-07-06 修正: リリースインストーラーに dcm4che CLI ツール（findscu/movescu/getscu/storescu）が
+> 同梱されておらず、`~/dcm4che-*` が無い環境（＝配布先の一般ユーザー機）では QR 起動時に
+> 「findscu が見つかりません」で失敗するバグを修正。`scripts/fetch-dcm4che-tools.sh` で
+> 必要 4 ツール分の jar のみ抽出（フル配布 170MB超 → 約 5MB）して `desktop/resources/dcm4che`
+> に配置し、`Dcm4cheTools.java` に `FfmpegLocator` と同様の同梱ディレクトリ探索を追加。
+> ツール実行時は同梱 JRE（`System.getProperty("java.home")`）を `JAVA_HOME` として注入するため
+> 追加の JRE 同梱は不要。CI（`release.yml`）にも取得ステップを追加済み。
 
 ## 目的
 外部 PACS への問い合わせ・取得を行う**常駐ウィンドウ**。複数 Destination(PACS) をタブ展開し、

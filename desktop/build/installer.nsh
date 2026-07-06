@@ -54,6 +54,44 @@
 !macroend
 
 ; -------------------------------------------------------------------------
+; (A') それでも終了できない場合のフォールバック（"GRAPHY Next が終了できません" 対策）
+; -------------------------------------------------------------------------
+;   環境によっては（原因未特定。管理者権限で実行しても再現する＝単純な権限不足ではない）
+;   killGraphyBackend を実行してもプロセスが残り続けるケースがある。
+;   electron-builder 標準の CHECK_APP_RUNNING は taskkill 失敗後に「手動で閉じて再試行」を
+;   無限に繰り返すだけで、ユーザーが手詰まりになりやすい。
+;   → customCheckAppRunning で置き換え、killGraphyBackend → 存在確認 を数回試し、
+;   それでも残っていれば「先にアンインストールしてから、再度インストーラーを実行してください」
+;   という具体的な行動を促すメッセージを出して素直に終了する（無限リトライさせない）。
+!macro customCheckAppRunning
+  StrCpy $R5 0
+  checkAppRunningRetry:
+    IntOp $R5 $R5 + 1
+    !insertmacro killGraphyBackend
+    !insertmacro FIND_PROCESS "${APP_EXECUTABLE_FILENAME}" $R0
+    ${if} $R0 != 0
+      ; 見つからない（＝終了できた）。通常フローへ進む。
+      Goto checkAppRunningDone
+    ${endIf}
+    ${if} $R5 < 3
+      DetailPrint "GRAPHY-Next is still running, retrying (attempt $R5)..."
+      Sleep 1500
+      Goto checkAppRunningRetry
+    ${endIf}
+
+    MessageBox MB_OK|MB_ICONEXCLAMATION \
+      "GRAPHY Next を自動的に終了できませんでした。$\r$\n\
+お手数ですが、いったんこのインストーラーを閉じたうえで、$\r$\n\
+「設定」→「アプリ」（または「コントロールパネル」→「プログラムのアンインストール」）から$\r$\n\
+GRAPHY-Next を先にアンインストールしてから、このインストーラーを再度実行してください。$\r$\n$\r$\n\
+GRAPHY Next could not be closed automatically.$\r$\n\
+Please close this installer, uninstall GRAPHY-Next first via Windows Settings > Apps$\r$\n\
+(or Control Panel > Programs), then run this installer again."
+    Quit
+  checkAppRunningDone:
+!macroend
+
+; -------------------------------------------------------------------------
 ; (B) アンインストール時のユーザーデータ削除確認
 ; -------------------------------------------------------------------------
 ;   backend が作るデータはインストール先ではなく %APPDATA%\GRAPHY-Next に置かれる

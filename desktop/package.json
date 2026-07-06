@@ -15,11 +15,12 @@
   "build": {
     "appId": "com.vis.graphynext",
     "productName": "GRAPHY-Next",
-    "files": ["main.js", "preload.js", "splash.html", "splash-preload.js", "config.json", "renderer/**"],
+    "files": ["main.js", "preload.js", "windowState.js", "splash.html", "splash-preload.js", "config.json", "renderer/**"],
     "extraResources": [
       { "from": "resources/backend", "to": "backend" },
       { "from": "resources/jre", "to": "jre" },
       { "from": "resources/ffmpeg", "to": "ffmpeg" },
+      { "from": "resources/dcm4che", "to": "dcm4che" },
       { "from": "uninstall", "to": "uninstall" }
     ],
     "linux": { "target": ["AppImage"] },
