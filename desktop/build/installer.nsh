@@ -19,11 +19,23 @@
 ;     ・CommandLine に "graphy-next-backend.jar" を含む（インストール先に依存せず一意。config.json の jarName と一致）
 ;     ・または ExecutablePath が $INSTDIR 配下（同梱 java.exe / ffmpeg.exe）
 ;   ⚠ "graphy-next-backend.jar" は desktop/config.json の backend.jarName と一致させること。
+;
+;   ⚠ 順序が重要: 旧版は「先に java だけ kill → 後で electron-builder 標準の CHECK_APP_RUNNING が
+;   GRAPHY-Next.exe を kill」という順序だったため、Electron 本体がまだ生きている間に java だけ死に、
+;   直後に Electron 本体が（生きている間の再接続・再起動ロジック等で）新しい java を再スポーンし得た。
+;   その新しい java は誰にも kill されないまま、後続の uninstallOldVersion が呼ぶ「旧バージョンの
+;   アンインストーラ（この kill ロジックを持たない旧ビルド）」の邪魔をしてファイル削除に失敗する
+;   （"古いアプリケーションファイルのアンインストールに失敗しました...: 2"）。
+;   → 先に GRAPHY-Next.exe（Electron 本体。メイン/レンダラ/GPU 等の全子プロセスが同じ実行ファイル名）
+;   を kill し、その直後（再スポーンの余地がない状態）で孤児 java/ffmpeg を掃除する。
+;   これにより後段の CHECK_APP_RUNNING は対象プロセスが既に無い状態で通過し、
+;   「GRAPHY Next が終了できません」の警告自体も出なくなる。
 
 !macro killGraphyBackend
-  DetailPrint "Stopping GRAPHY-Next backend process (bundled Java)..."
-  ; PowerShell は Win10/11 標準。失敗しても従来動作にフォールバックするだけなので無害。
-  nsExec::Exec 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$procs = @(Get-CimInstance Win32_Process | Where-Object { ($$_.Name -eq $\'java.exe$\' -or $$_.Name -eq $\'ffmpeg.exe$\') -and ( ($$_.CommandLine -and $$_.CommandLine -like $\'*graphy-next-backend.jar*$\') -or ($$_.ExecutablePath -and $$_.ExecutablePath -like $\'$INSTDIR\*$\') ) }); if ($$procs) { $$procs | Invoke-CimMethod -MethodName Terminate | Out-Null; Start-Sleep -Milliseconds 800 }"'
+  DetailPrint "Stopping GRAPHY-Next (app + bundled backend Java) before update/uninstall..."
+  ; PowerShell は Win10/11 標準。失敗しても従来動作（electron-builder 標準の CHECK_APP_RUNNING 等）に
+  ; フォールバックするだけなので無害。
+  nsExec::Exec 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$app = @(Get-CimInstance Win32_Process | Where-Object { $$_.Name -eq $\'${APP_EXECUTABLE_FILENAME}$\' }); if ($$app) { $$app | Invoke-CimMethod -MethodName Terminate | Out-Null; Start-Sleep -Milliseconds 500 }; $$procs = @(Get-CimInstance Win32_Process | Where-Object { ($$_.Name -eq $\'java.exe$\' -or $$_.Name -eq $\'ffmpeg.exe$\') -and ( ($$_.CommandLine -and $$_.CommandLine -like $\'*graphy-next-backend.jar*$\') -or ($$_.ExecutablePath -and $$_.ExecutablePath -like $\'$INSTDIR\*$\') ) }); if ($$procs) { $$procs | Invoke-CimMethod -MethodName Terminate | Out-Null; Start-Sleep -Milliseconds 800 }"'
   Pop $0
   ; ロック解放を待つための小休止（ハンドルクローズ猶予）。
   Sleep 500
