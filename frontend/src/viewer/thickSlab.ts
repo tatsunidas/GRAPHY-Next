@@ -23,7 +23,7 @@
  * そのまま継承するため、参照線・向きマーカー・座標同期は native と同一幾何で一致する
  * （fw/cornerstone-3d-geometry-caveat.md の「表示幾何と計算幾何を混ぜない」を満たす）。
  */
-import { metaData, registerImageLoader, utilities as csUtils, type Types } from "@cornerstonejs/core";
+import { metaData, registerImageLoader, utilities as csUtils } from "@cornerstonejs/core";
 import { readModalitySlice } from "./pixelCalibration";
 
 /** UI に出す厚み(mm)の選択肢。実スライス厚と一致した値が選ばれたら「Original（合成しない）」扱い。 */
@@ -315,7 +315,7 @@ export function registerThickSlabLoader(): void {
   registered = true;
 
   registerImageLoader(SCHEME, (imageId: string) => ({
-    promise: computeThickSlabImage(imageId) as Promise<Types.IImage>,
+    promise: computeThickSlabImage(imageId),
   }));
 
   metaData.addProvider((type: string, ...query: string[]): unknown => {
