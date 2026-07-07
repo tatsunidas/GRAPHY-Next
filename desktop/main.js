@@ -40,6 +40,14 @@ const SECURITY = cfg.security || {};
 const DEV = process.env.GRAPHY_DEV === "1";
 const EXTERNAL_BACKEND = process.env.GRAPHY_BACKEND_EXTERNAL === "1";
 
+// アプリアイコン（Linux/Windows のウィンドウ・タスクバー用。macOS は .icns を使うため無視される）。
+// 単一マスター = frontend/public/icons/app/app_icon.png。dev はそこから直接、packaged は
+// build 時に renderer へ同梱されたコピー（desktop/renderer/icons/app/app_icon.png）から読む。
+// インストーラ/アプリバンドル本体のアイコンは electron-builder が desktop/build/icon.png から生成する（別経路）。
+const APP_ICON = DEV
+  ? path.join(__dirname, "..", "frontend", "public", "icons", "app", "app_icon.png")
+  : path.join(__dirname, "renderer", "icons", "app", "app_icon.png");
+
 let backendProc = null;
 // 位置記憶対象ビューアのシングルトン参照（画面キー → BrowserWindow）。
 // 既に開いていればフォーカスして再利用し、キーごとに前回位置を 1 つ記憶する。
@@ -210,6 +218,7 @@ function createSplash() {
     center: true,
     show: true,
     backgroundColor: "#0b1b2b",
+    icon: APP_ICON,
     webPreferences: {
       preload: path.join(__dirname, "splash-preload.js"),
       contextIsolation: true,
@@ -251,6 +260,7 @@ function createWindow() {
   const win = new BrowserWindow({
     ...keeper.initialBounds, // 前回位置を復元（迷子防止の検証済み）
     show: false, // ロード完了まで隠す（スプラッシュからの切替えを滑らかに）
+    icon: APP_ICON,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       // --- セキュリティ（安全な値に固定。無効化しない）---
@@ -303,6 +313,7 @@ function createViewerWindow(screen, keeper) {
   const win = new BrowserWindow({
     ...bounds,
     show: keeper ? false : true, // keeper 有りは最大化復元後に表示（ちらつき防止）
+    icon: APP_ICON,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -421,6 +432,7 @@ ipcMain.handle("graphy:open-monitor-qc", (_e, displayId) => {
     frame: false,
     show: false, // フルスクリーン確定後に表示（ちらつき防止）
     backgroundColor: "#000000",
+    icon: APP_ICON,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,

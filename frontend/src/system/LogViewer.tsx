@@ -16,6 +16,7 @@ import {
   type LogEntry,
   type LogLevel,
 } from "../log";
+import { startBackendLogPolling } from "./backendLog";
 
 // ── モジュールレベルの開閉コントローラ（プロップ配線不要で任意のメニューから開ける）──
 let openFn: (() => void) | null = null;
@@ -82,6 +83,9 @@ function LogViewerDialog({ raise, onClose }: { raise: number; onClose: () => voi
       else setEntries((prev) => [...prev, e]);
     });
   }, []);
+
+  // 表示中だけバックエンド（DIMSE/DICOMweb 等）ログを取り込む。閉じると停止。
+  useEffect(() => startBackendLogPolling(), []);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();

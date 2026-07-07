@@ -18,8 +18,19 @@ import {
 import { useI18n } from "./i18n/i18n";
 import { SeriesViewer } from "./viewer/SeriesViewer";
 import { type ViewerMode } from "./viewer/imageId";
+import { useTableSort, applySort, sortIndicator, type SortState, type Accessor } from "./tableSort";
 
 const PAGE_SIZE = 50;
+
+// スタディ表の列ソート用アクセサ（numberOfInstances は数値=自然な数値順）。
+const STUDY_SORT: Record<string, Accessor<Study>> = {
+  patientId: (s) => s.patientId,
+  patientName: (s) => s.patientName,
+  studyDate: (s) => s.studyDate,
+  studyDescription: (s) => s.studyDescription,
+  modality: (s) => s.modality,
+  numberOfInstances: (s) => s.numberOfInstances,
+};
 
 export function StudyList({
   filters,
@@ -39,6 +50,12 @@ export function StudyList({
   const [error, setError] = useState<string | null>(null);
   const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
   const [page, setPage] = useState(0);
+  const { sort, toggleSort } = useTableSort();
+  // ソート変更時は先頭ページへ（並び替え後の上位が見えるように）。
+  const onSort = (key: string) => {
+    toggleSort(key);
+    setPage(0);
+  };
 
   const handleSelectStudy = (s: Study | null) => {
     setSelectedStudy(s);
@@ -60,10 +77,12 @@ export function StudyList({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterKey, reloadKey]);
 
-  const total = studies?.length ?? 0;
+  // ページ分割の前に全件ソートする（ページ内だけの並び替えにならないように）。
+  const sortedStudies = applySort(studies ?? [], sort, STUDY_SORT);
+  const total = sortedStudies.length;
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const current = Math.min(page, pageCount - 1);
-  const pageStudies = studies ? studies.slice(current * PAGE_SIZE, current * PAGE_SIZE + PAGE_SIZE) : [];
+  const pageStudies = studies ? sortedStudies.slice(current * PAGE_SIZE, current * PAGE_SIZE + PAGE_SIZE) : [];
 
   return (
     <section style={{ marginTop: 28 }}>
@@ -81,12 +100,12 @@ export function StudyList({
         <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
           <thead>
             <tr style={{ textAlign: "left", borderBottom: "2px solid #ddd" }}>
-              <Th>{t("field.patientId")}</Th>
-              <Th>{t("field.patientName")}</Th>
-              <Th>{t("field.studyDate")}</Th>
-              <Th>{t("field.description")}</Th>
-              <Th>{t("field.modality")}</Th>
-              <Th>{t("field.instanceCount")}</Th>
+              <Th sortKey="patientId" sort={sort} onSort={onSort}>{t("field.patientId")}</Th>
+              <Th sortKey="patientName" sort={sort} onSort={onSort}>{t("field.patientName")}</Th>
+              <Th sortKey="studyDate" sort={sort} onSort={onSort}>{t("field.studyDate")}</Th>
+              <Th sortKey="studyDescription" sort={sort} onSort={onSort}>{t("field.description")}</Th>
+              <Th sortKey="modality" sort={sort} onSort={onSort}>{t("field.modality")}</Th>
+              <Th sortKey="numberOfInstances" sort={sort} onSort={onSort}>{t("field.instanceCount")}</Th>
             </tr>
           </thead>
           <tbody>
@@ -325,8 +344,34 @@ function formatDate(d: string | null): string {
   return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
 }
 
-function Th({ children }: { children: React.ReactNode }) {
-  return <th style={{ padding: "6px 10px", color: "#666", fontWeight: 600 }}>{children}</th>;
+function Th({
+  children,
+  sortKey,
+  sort,
+  onSort,
+}: {
+  children?: React.ReactNode;
+  sortKey?: string;
+  sort?: SortState | null;
+  onSort?: (key: string) => void;
+}) {
+  const clickable = !!sortKey && !!onSort;
+  return (
+    <th
+      onClick={clickable ? () => onSort!(sortKey!) : undefined}
+      style={{
+        padding: "6px 10px",
+        color: "#666",
+        fontWeight: 600,
+        whiteSpace: "nowrap",
+        cursor: clickable ? "pointer" : undefined,
+        userSelect: clickable ? "none" : undefined,
+      }}
+    >
+      {children}
+      {sortKey ? sortIndicator(sort ?? null, sortKey) : ""}
+    </th>
+  );
 }
 
 function Td({ children }: { children: React.ReactNode }) {

@@ -22,6 +22,9 @@ import {
 } from "@cornerstonejs/tools";
 import { ensureStackSegmentation, disposeViewportSegmentation, noteSegViewport } from "./segmentation";
 import { WandTool, commitWand } from "./wandTool";
+import { TOOL_IDS } from "./toolIds";
+import { ToolIcon } from "../icons/ToolIcon";
+import { UI_ICON_FILES, ACTIVE_ICON_STYLE } from "../icons/toolIcons";
 import { emitToast } from "./toast";
 import { ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID } from "./toolIds";
 import { setViewerContext, clearViewerContext, getViewerContext, type ViewerContext } from "./viewerContext";
@@ -1349,27 +1352,27 @@ export function Viewer2D({
 
         {/* 操作バー（canvas の外＝ツール入力と競合しない） */}
         <div style={toolbar}>
-          <button onClick={fit} style={btn} title={t("viewer.fit")}>{t("viewer.fit")}</button>
+          <button onClick={fit} style={btn} title={t("viewer.fit")}><ToolIcon file={UI_ICON_FILES.fit} size={16} /></button>
           <button
             onClick={togglePan}
             style={{ ...btn, ...(panMode ? infoBtnOn : null) }}
             aria-pressed={panMode}
             title={t("viewer.pan")}
           >
-            ✋
+            <ToolIcon id={TOOL_IDS.pan} size={16} style={panMode ? ACTIVE_ICON_STYLE : undefined} />
           </button>
           <button onClick={() => zoomBy(1 / 1.2)} style={btn} title={t("viewer.zoomOut")}>−</button>
           <button onClick={() => zoomBy(1.2)} style={btn} title={t("viewer.zoomIn")}>＋</button>
-          <button onClick={rotate90} style={btn} title={t("viewer.rotate")}>⟳</button>
-          <button onClick={flipH} style={btn} title={t("viewer.flipH")}>⇄</button>
-          <button onClick={flipV} style={btn} title={t("viewer.flipV")}>⇅</button>
+          <button onClick={rotate90} style={btn} title={t("viewer.rotate")}><ToolIcon file={UI_ICON_FILES.rotate} size={16} /></button>
+          <button onClick={flipH} style={btn} title={t("viewer.flipH")}><ToolIcon file={UI_ICON_FILES.flipH} size={16} /></button>
+          <button onClick={flipV} style={btn} title={t("viewer.flipV")}><ToolIcon file={UI_ICON_FILES.flipV} size={16} /></button>
           <button
             onClick={toggleInvert}
             disabled={isColor}
             style={{ ...btn, ...(inverted ? infoBtnOn : null), ...(isColor ? btnDisabled : null) }}
             title={t("viewer.invert")}
           >
-            {t("viewer.invert")}
+            <ToolIcon file={UI_ICON_FILES.invert} size={16} style={inverted ? ACTIVE_ICON_STYLE : undefined} />
           </button>
           <button
             onClick={() => setShowLutDialog(true)}
@@ -1379,7 +1382,7 @@ export function Viewer2D({
           >
             {t("viewer.lut")}
           </button>
-          <button onClick={reset} style={btn} title={t("viewer.reset")}>{t("viewer.reset")}</button>
+          <button onClick={reset} style={btn} title={t("viewer.reset")}><ToolIcon file={UI_ICON_FILES.reset} size={16} /></button>
           <span style={{ width: 1, alignSelf: "stretch", background: "#dde4ea", margin: "0 2px" }} />
           <button onClick={undo} disabled={!canUndo} style={btn} title={t("viewer.undo")}>↶</button>
           <button onClick={redo} disabled={!canRedo} style={btn} title={t("viewer.redo")}>↷</button>

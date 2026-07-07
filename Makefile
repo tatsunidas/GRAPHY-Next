@@ -18,7 +18,7 @@ JAVA_HOME ?= /usr/lib/jvm/temurin-21-jdk-amd64
 
 .PHONY: install install-frontend install-desktop \
         build build-frontend build-backend build-desktop \
-        dev-web dev-desktop run-web test clean ffmpeg dcm4che-tools
+        dev-web dev-desktop run-web test clean ffmpeg dcm4che-tools dcm4che-tools-ensure
 
 install: install-frontend install-desktop
 
@@ -39,7 +39,9 @@ build-backend:
 	cd backend && $(MVN) -q clean package
 
 # --- desktop (backend が生成した frontend/dist と jar、Java21 JRE を同梱) ---
-build-desktop: build-backend
+# dcm4che-tools-ensure: QR 用 CLI を desktop/resources/dcm4che に確実に用意（未取得時のみ取得）。
+# これで build から dcm4che を取り忘れて QR が動かない配布物を作ってしまうのを防ぐ。
+build-desktop: build-backend dcm4che-tools-ensure
 	rm -rf desktop/renderer desktop/resources/backend desktop/resources/jre
 	mkdir -p desktop/renderer desktop/resources/backend
 	cp -r frontend/dist/. desktop/renderer/
@@ -68,6 +70,16 @@ ffmpeg:
 # Java 製ツールのため OS/アーキ別配布は不要（全 OS 共通の 1 セット）。
 dcm4che-tools:
 	bash scripts/fetch-dcm4che-tools.sh
+
+# build から呼ぶ冪等ガード: 既に取得済み（bin/movescu がある）ならスキップ、無ければ取得。
+# CI で事前ステージすれば再ダウンロードしない。DCM4CHE_TOOLS_VERSION で版を固定可。
+dcm4che-tools-ensure:
+	@if [ -x desktop/resources/dcm4che/bin/movescu ]; then \
+		echo "[bundle] dcm4che tools: 取得済み（スキップ）"; \
+	else \
+		echo "[bundle] dcm4che tools: 未取得 → 取得します"; \
+		bash scripts/fetch-dcm4che-tools.sh; \
+	fi
 
 # --- 開発起動 ---
 dev-web:

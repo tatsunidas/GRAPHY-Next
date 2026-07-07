@@ -14,8 +14,9 @@ import {
 } from "../api";
 import { useI18n } from "../i18n/i18n";
 import { ageAt, fmtDate, storedStatusOf, type StoredStatus } from "./qrUtil";
+import { useTableSort, applySort, sortIndicator, type SortState, type Accessor } from "../tableSort";
 
-type JobView = { received: number; expected: number; stored: number; phase: string; done: boolean; success: boolean };
+type JobView = { received: number; expected: number; stored: number; phase: string; done: boolean; success: boolean; message?: string };
 
 const keyOf = (studyUid: string, seriesUid?: string | null) =>
   seriesUid ? `${studyUid}|${seriesUid}` : studyUid;
@@ -48,6 +49,7 @@ export function QrTable({
   const [seriesByStudy, setSeriesByStudy] = useState<Map<string, QrSeriesRow[]>>(new Map());
   const [stored, setStored] = useState<Map<string, number>>(new Map());
   const [jobs, setJobs] = useState<Map<string, JobView>>(new Map());
+  const { sort, toggleSort } = useTableSort();
 
   // クエリ結果が変わったら展開・取得状況をリセットし、スタディ単位の保存済み件数を取得。
   useEffect(() => {
@@ -126,7 +128,7 @@ export function QrTable({
           const s = await qrRetrieveStatus(jobId);
           setJobs((m) => new Map(m).set(k, {
             received: s.received, expected: s.expected || expected, stored: s.stored,
-            phase: s.phase, done: s.done, success: s.success,
+            phase: s.phase, done: s.done, success: s.success, message: s.message,
           }));
           if (!s.done) {
             pollRef.current.set(k, window.setTimeout(poll, 700));
@@ -139,14 +141,14 @@ export function QrTable({
               if (ss) await refreshStored(ss.map((se) => ({ studyUid, seriesUid: se.seriesInstanceUid })));
             }
           }
-        } catch {
+        } catch (e) {
           pollRef.current.delete(k);
-          setJobs((m) => new Map(m).set(k, { received: 0, expected, stored: 0, phase: "error", done: true, success: false }));
+          setJobs((m) => new Map(m).set(k, { received: 0, expected, stored: 0, phase: "error", done: true, success: false, message: e instanceof Error ? e.message : String(e) }));
         }
       };
       void poll();
     } catch (e) {
-      setJobs((m) => new Map(m).set(k, { received: 0, expected, stored: 0, phase: "error", done: true, success: false }));
+      setJobs((m) => new Map(m).set(k, { received: 0, expected, stored: 0, phase: "error", done: true, success: false, message: e instanceof Error ? e.message : String(e) }));
     }
   };
 
@@ -159,27 +161,42 @@ export function QrTable({
     ? studies.filter((s) => storedStatusOf(stored.get(keyOf(s.studyInstanceUid)) ?? 0, s.numberOfStudyRelatedInstances) !== "full")
     : studies;
 
+  // 列ソート用アクセサ（stored/age/series は数値=自然な数値順、日付は YYYYMMDD で辞書順=時系列）。
+  const studySort: Record<string, Accessor<QrStudyRow>> = {
+    stored: (s) => stored.get(keyOf(s.studyInstanceUid)) ?? 0,
+    studyDate: (s) => s.studyDate,
+    patientId: (s) => s.patientId,
+    patientName: (s) => s.patientName,
+    patientBirthDate: (s) => s.patientBirthDate,
+    patientSex: (s) => s.patientSex,
+    age: (s) => ageAt(s.studyDate, s.patientBirthDate),
+    modality: (s) => s.modality,
+    studyDescription: (s) => s.studyDescription,
+    series: (s) => s.numberOfStudyRelatedSeries || (seriesByStudy.get(s.studyInstanceUid)?.length ?? 0),
+  };
+  const sortedStudies = applySort(visibleStudies, sort, studySort);
+
   return (
     <div style={{ overflow: "auto", height: "100%" }}>
       <table style={table}>
         <thead>
           <tr style={headRow}>
             <Th style={{ width: 22 }} />
-            <Th style={{ width: 78 }}>{t("qr.col.stored")}</Th>
+            <Th style={{ width: 78 }} sortKey="stored" sort={sort} onSort={toggleSort}>{t("qr.col.stored")}</Th>
             <Th style={{ width: 150 }}>{t("qr.col.retrieve")}</Th>
-            <Th>{t("qr.col.studyDate")}</Th>
-            <Th>{t("qr.col.patientId")}</Th>
-            <Th>{t("qr.col.patientName")}</Th>
-            <Th>{t("qr.col.birthDate")}</Th>
-            <Th>{t("qr.col.sex")}</Th>
-            <Th>{t("qr.col.age")}</Th>
-            <Th>{t("qr.col.modality")}</Th>
-            <Th>{t("qr.col.studyDesc")}</Th>
-            <Th>{t("qr.col.series")}</Th>
+            <Th sortKey="studyDate" sort={sort} onSort={toggleSort}>{t("qr.col.studyDate")}</Th>
+            <Th sortKey="patientId" sort={sort} onSort={toggleSort}>{t("qr.col.patientId")}</Th>
+            <Th sortKey="patientName" sort={sort} onSort={toggleSort}>{t("qr.col.patientName")}</Th>
+            <Th sortKey="patientBirthDate" sort={sort} onSort={toggleSort}>{t("qr.col.birthDate")}</Th>
+            <Th sortKey="patientSex" sort={sort} onSort={toggleSort}>{t("qr.col.sex")}</Th>
+            <Th sortKey="age" sort={sort} onSort={toggleSort}>{t("qr.col.age")}</Th>
+            <Th sortKey="modality" sort={sort} onSort={toggleSort}>{t("qr.col.modality")}</Th>
+            <Th sortKey="studyDescription" sort={sort} onSort={toggleSort}>{t("qr.col.studyDesc")}</Th>
+            <Th sortKey="series" sort={sort} onSort={toggleSort}>{t("qr.col.series")}</Th>
           </tr>
         </thead>
         <tbody>
-          {visibleStudies.map((s) => {
+          {sortedStudies.map((s) => {
             const sk = keyOf(s.studyInstanceUid);
             const st = storedStatusOf(stored.get(sk) ?? 0, s.numberOfStudyRelatedInstances);
             const isOpen = expanded.has(s.studyInstanceUid);
@@ -290,10 +307,17 @@ function RetrieveCell({
     );
   }
   if (job && job.done && !job.success) {
+    // 失敗理由（movescu の exit/末尾など）はツールチップで見せる。全文は System＞ログ で。
+    const reason = job.message?.trim();
     return (
-      <div style={{ width: 140 }}>
+      <div style={{ width: 140 }} title={reason || undefined}>
         <button style={retBtn} onClick={onClick}>{t("qr.retry")}</button>
-        <span style={{ color: "#b00020", fontSize: 11, marginLeft: 4 }}>✕</span>
+        <span style={{ color: "#b00020", fontSize: 11, marginLeft: 4, cursor: reason ? "help" : "default" }}>✕</span>
+        {reason && (
+          <div style={{ fontSize: 10, color: "#b00020", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 140 }}>
+            {reason}
+          </div>
+        )}
       </div>
     );
   }
@@ -307,8 +331,29 @@ function RetrieveCell({
   );
 }
 
-function Th({ children, style }: { children?: React.ReactNode; style?: React.CSSProperties }) {
-  return <th style={{ ...th, ...style }}>{children}</th>;
+function Th({
+  children,
+  style,
+  sortKey,
+  sort,
+  onSort,
+}: {
+  children?: React.ReactNode;
+  style?: React.CSSProperties;
+  sortKey?: string;
+  sort?: SortState | null;
+  onSort?: (key: string) => void;
+}) {
+  const clickable = !!sortKey && !!onSort;
+  return (
+    <th
+      onClick={clickable ? () => onSort!(sortKey!) : undefined}
+      style={{ ...th, ...(clickable ? { cursor: "pointer", userSelect: "none" } : null), ...style }}
+    >
+      {children}
+      {sortKey ? sortIndicator(sort ?? null, sortKey) : ""}
+    </th>
+  );
 }
 function Td({ children }: { children?: React.ReactNode }) {
   return <td style={td}>{children}</td>;

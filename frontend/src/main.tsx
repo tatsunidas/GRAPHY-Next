@@ -6,6 +6,10 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { I18nProvider } from "./i18n/i18n";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { verifyToolIcons } from "./icons/toolIcons";
+
+// dev のみ: アイコン未登録のツールを起動時に警告（本番では no-op）。
+verifyToolIcons();
 
 // 注意: React.StrictMode は付けない。
 // StrictMode は開発時に「mount → cleanup → remount」と effect を二重実行するが、

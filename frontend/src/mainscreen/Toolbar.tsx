@@ -3,6 +3,8 @@
  * Author: Tatsuaki Kobayashi
  */
 import { useI18n } from "../i18n/i18n";
+import { ToolIcon } from "../icons/ToolIcon";
+import { UI_ICON_FILES } from "../icons/toolIcons";
 
 export type ViewerKind = "2d" | "3d" | "mpr" | "slicer" | "qr";
 export type ToolKind =
@@ -39,34 +41,48 @@ export function Toolbar({
   return (
     <div style={bar}>
       {/* データ I/O・ユーティリティ */}
-      {canImport && <ToolButton icon="📁" label={t("main.import.action")} onClick={onImport} />}
-      <ToolButton icon="📤" label={t("main.toolbar.export")} onClick={() => onOpenTool("export")} />
-      <ToolButton icon="📡" label={t("main.toolbar.send")} onClick={() => onOpenTool("send")} />
-      <ToolButton icon="🎞" label={t("main.toolbar.nonDicomImport")} onClick={() => onOpenTool("nonDicomImport")} />
-      <ToolButton icon="🕶" label={t("main.toolbar.anonymizer")} onClick={() => onOpenTool("anonymizer")} />
-      <ToolButton icon="🏷" label={t("main.toolbar.tagExtractor")} onClick={() => onOpenTool("tagExtractor")} />
-      <ToolButton icon="🔖" label={t("main.toolbar.tagViewer")} onClick={() => onOpenTool("tagViewer")} />
-      <ToolButton icon="🧬" label={t("main.toolbar.seriesExtractor")} onClick={() => onOpenTool("seriesExtractor")} />
-      <ToolButton icon="🔄" label={t("main.toolbar.refresh")} onClick={onRefresh} />
-      {isStandalone && <ToolButton icon="🗄" label={t("app.btn.dbTitle")} onClick={onOpenDb} />}
+      {canImport && <ToolButton iconFile={UI_ICON_FILES.import} icon="📁" label={t("main.import.action")} onClick={onImport} />}
+      <ToolButton iconFile={UI_ICON_FILES.export} icon="📤" label={t("main.toolbar.export")} onClick={() => onOpenTool("export")} />
+      <ToolButton iconFile={UI_ICON_FILES.send} icon="📡" label={t("main.toolbar.send")} onClick={() => onOpenTool("send")} />
+      <ToolButton iconFile={UI_ICON_FILES.nonDicomImport} icon="🎞" label={t("main.toolbar.nonDicomImport")} onClick={() => onOpenTool("nonDicomImport")} />
+      <ToolButton iconFile={UI_ICON_FILES.anonymizer} icon="🕶" label={t("main.toolbar.anonymizer")} onClick={() => onOpenTool("anonymizer")} />
+      <ToolButton iconFile={UI_ICON_FILES.tagExtractor} icon="🏷" label={t("main.toolbar.tagExtractor")} onClick={() => onOpenTool("tagExtractor")} />
+      <ToolButton iconFile={UI_ICON_FILES.tagViewer} icon="🔖" label={t("main.toolbar.tagViewer")} onClick={() => onOpenTool("tagViewer")} />
+      <ToolButton iconFile={UI_ICON_FILES.seriesExtractor} icon="🧬" label={t("main.toolbar.seriesExtractor")} onClick={() => onOpenTool("seriesExtractor")} />
+      <ToolButton iconFile={UI_ICON_FILES.refresh} icon="🔄" label={t("main.toolbar.refresh")} onClick={onRefresh} />
+      {isStandalone && <ToolButton iconFile={UI_ICON_FILES.db} icon="🗄" label={t("app.btn.dbTitle")} onClick={onOpenDb} />}
       <span style={sep} />
       {/* ビューア */}
-      <ToolButton icon="🔎" label={t("qr.title")} onClick={() => onOpenViewer("qr")} />
-      <ToolButton icon="🖼" label={t("main.toolbar.viewer2d")} onClick={() => onOpenViewer("2d")} />
-      <ToolButton icon="🧊" label={t("main.toolbar.viewer3d")} onClick={() => onOpenViewer("3d")} />
+      <ToolButton iconFile={UI_ICON_FILES.qr} icon="🔎" label={t("qr.title")} onClick={() => onOpenViewer("qr")} />
+      <ToolButton iconFile={UI_ICON_FILES.viewer2d} icon="🖼" label={t("main.toolbar.viewer2d")} onClick={() => onOpenViewer("2d")} />
+      <ToolButton iconFile={UI_ICON_FILES.viewer3d} icon="🧊" label={t("main.toolbar.viewer3d")} onClick={() => onOpenViewer("3d")} />
+      {/* MPR は適切なアイコンが無いためグリフ（十字）を維持 */}
       <ToolButton icon="➕" label={t("main.toolbar.mpr")} onClick={() => onOpenViewer("mpr")} />
-      <ToolButton icon="🔪" label={t("main.toolbar.slicer")} onClick={() => onOpenViewer("slicer")} />
+      <ToolButton iconFile={UI_ICON_FILES.slicer} icon="🔪" label={t("main.toolbar.slicer")} onClick={() => onOpenViewer("slicer")} />
       <div style={{ flex: 1 }} />
+      {/* ショートカット一覧は適切なアイコンが無いためグリフ（キーボード）を維持 */}
       <ToolButton icon="⌨" label={t("sc.title")} onClick={onOpenHelp} />
-      <ToolButton icon="⚙" label={t("app.btn.settingsTitle")} onClick={onOpenSettings} />
+      <ToolButton iconFile={UI_ICON_FILES.settings} icon="⚙" label={t("app.btn.settingsTitle")} onClick={onOpenSettings} />
     </div>
   );
 }
 
-function ToolButton({ icon, label, onClick }: { icon: string; label: string; onClick: () => void }) {
+function ToolButton({
+  icon,
+  iconFile,
+  label,
+  onClick,
+}: {
+  /** アイコン未整備ボタン用のフォールバック絵文字。 */
+  icon: string;
+  /** tools/ 配下の PNG ファイル名（指定時はこちらを優先表示）。 */
+  iconFile?: string;
+  label: string;
+  onClick: () => void;
+}) {
   return (
     <button onClick={onClick} title={label} style={btn}>
-      <span style={{ fontSize: 15 }}>{icon}</span>
+      {iconFile ? <ToolIcon file={iconFile} size={16} /> : <span style={{ fontSize: 15 }}>{icon}</span>}
       <span style={{ fontSize: 12 }}>{label}</span>
     </button>
   );

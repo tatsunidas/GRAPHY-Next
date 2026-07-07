@@ -57,8 +57,9 @@ function fmt(args: unknown[]): string {
     .join(" ");
 }
 
-function record(level: LogLevel, args: unknown[]): void {
-  const entry: LogEntry = { seq: seq++, ts: Date.now(), level, text: fmt(args) };
+/** 1 行をバッファへ積み、購読者へ通知する（console は呼ばないので再帰しない）。 */
+function push(level: LogLevel, ts: number, text: string): void {
+  const entry: LogEntry = { seq: seq++, ts, level, text };
   buffer.push(entry);
   if (buffer.length > BUFFER_MAX) buffer.splice(0, buffer.length - BUFFER_MAX);
   for (const l of listeners) {
@@ -68,6 +69,18 @@ function record(level: LogLevel, args: unknown[]): void {
       // リスナ例外はログ収集を妨げない
     }
   }
+}
+
+function record(level: LogLevel, args: unknown[]): void {
+  push(level, Date.now(), fmt(args));
+}
+
+/**
+ * 外部（バックエンド等）由来のログを、発生時刻（ts）付きで取り込む。console 経由ではないため
+ * 二重記録・再帰は起きない。backendLog.ts がサーバログのポーリング結果をここへ流す。
+ */
+export function ingestExternal(level: LogLevel, ts: number, text: string): void {
+  push(level, ts, text);
 }
 
 /** 現在バッファに溜まっている全ログ（古い→新しい順）のスナップショット。 */

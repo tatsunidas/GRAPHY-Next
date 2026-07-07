@@ -7,6 +7,8 @@ import { getRenderingEngine, type Types } from "@cornerstonejs/core";
 import { ToolGroupManager } from "@cornerstonejs/tools";
 import { Viewer2D, ENGINE_ID, type ViewerOverlays, type RenderOverlay } from "./Viewer2D";
 import { applyTransform, readTransform, FIT_TRANSFORM } from "./transform";
+import { ToolIcon } from "../icons/ToolIcon";
+import { UI_ICON_FILES } from "../icons/toolIcons";
 import { buildSeriesLayout, buildLayoutFromDto, type SeriesLayout } from "./seriesLayout";
 import {
   buildSortMeta,
@@ -534,15 +536,15 @@ export function SeriesViewer({
         {gridOn && (
           <div style={row}>
             <button onClick={() => linkApply({ zoom: 1, pan: [0, 0] })} style={btn} title={t("viewer.fit")}>
-              {t("viewer.fit")}
+              <ToolIcon file={UI_ICON_FILES.fit} size={16} />
             </button>
             <button onClick={() => gZoom(1 / 1.2)} style={btn} title={t("viewer.zoomOut")}>−</button>
             <button onClick={() => gZoom(1.2)} style={btn} title={t("viewer.zoomIn")}>＋</button>
-            <button onClick={gRotate} style={btn} title={t("viewer.rotate")}>⟳</button>
-            <button onClick={gFlipH} style={btn} title={t("viewer.flipH")}>⇄</button>
-            <button onClick={gFlipV} style={btn} title={t("viewer.flipV")}>⇅</button>
+            <button onClick={gRotate} style={btn} title={t("viewer.rotate")}><ToolIcon file={UI_ICON_FILES.rotate} size={16} /></button>
+            <button onClick={gFlipH} style={btn} title={t("viewer.flipH")}><ToolIcon file={UI_ICON_FILES.flipH} size={16} /></button>
+            <button onClick={gFlipV} style={btn} title={t("viewer.flipV")}><ToolIcon file={UI_ICON_FILES.flipV} size={16} /></button>
             <button onClick={() => linkApply(FIT_TRANSFORM)} style={btn} title={t("viewer.reset")}>
-              {t("viewer.reset")}
+              <ToolIcon file={UI_ICON_FILES.reset} size={16} />
             </button>
             <span style={hint}>{t("series.grid.linked")}</span>
           </div>
