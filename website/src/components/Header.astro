@@ -7,7 +7,7 @@ const isActive = (href: string) => path === href || (href !== '/' && path.starts
 <header class="site-header">
   <div class="container site-header__inner">
     <a class="brand" href="/" aria-label={`${site.brand} ホーム`}>
-      <span class="brand__mark" aria-hidden="true">◈</span>
+      <img class="brand__mark" src="/graphy-icon.png" alt="" width="28" height="28" />
       <span class="brand__name">{site.brand}</span>
     </a>
 
@@ -75,7 +75,7 @@ const isActive = (href: string) => path === href || (href !== '/' && path.starts
   }
   .site-header__inner { display: flex; align-items: center; justify-content: space-between; height: var(--header-h); gap: 1rem; }
   .brand { display: inline-flex; align-items: center; gap: 0.5rem; color: var(--fg); font-weight: 800; font-size: 1.15rem; letter-spacing: 0.02em; }
-  .brand__mark { background: var(--grad-accent); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; font-size: 1.3rem; }
+  .brand__mark { width: 28px; height: 28px; background: #fff; border-radius: 7px; padding: 2px; display: block; }
   .site-nav { display: flex; align-items: center; gap: 1.5rem; }
   .site-nav__list { display: flex; align-items: center; gap: 0.3rem; list-style: none; margin: 0; padding: 0; }
   .site-nav__link { color: var(--fg); font-size: 0.94rem; font-weight: 600; padding: 0.45rem 0.7rem; border-radius: var(--radius-sm); display: inline-flex; align-items: center; gap: 0.35rem; }

@@ -1,0 +1,58 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import SupportSubscribe from '../components/SupportSubscribe.astro';
+import { site } from '../data/site';
+const price = site.subscription.priceJpy.toLocaleString('ja-JP');
+---
+
+<BaseLayout
+  title="サポート購読"
+  description="GRAPHY-Next の技術サポート＋アップデート案内への月額サポート購読（¥700／月）。いつでも解約でき、解約後もソフトは使えます。"
+  path="/support"
+>
+  <section class="section">
+    <div class="container support-page">
+      <div class="support-page__intro">
+        <span class="eyebrow">Support subscription</span>
+        <h1>サポート購読</h1>
+        <p class="lead">
+          GRAPHY-Next 本体は AGPL-3.0 で無料です。月額 <strong>¥{price}</strong> のサポート購読は、
+          <strong>技術サポート</strong>と<strong>アップデートのご案内</strong>への支援としてお申し込みいただけます。
+        </p>
+        <ul class="support-page__list">
+          <li>✔ 技術サポート（メール）</li>
+          <li>✔ 新バージョン・重要なお知らせのご案内</li>
+          <li>✔ いつでも解約可能（PayPal の購読管理から）</li>
+          <li>✔ 解約後も GRAPHY-Next は引き続き利用可能（サポート対象外になります）</li>
+        </ul>
+        <p class="support-page__note">
+          ※ 本購読はソフトウェアの使用料ではありません。ソフトウェアは無料で、購読は開発と
+          サポートを支えるためのものです。
+        </p>
+      </div>
+
+      <aside class="support-page__buy card">
+        <div class="support-page__price"><span>¥{price}</span> / {site.subscription.period}</div>
+        <p class="support-page__buytag">技術サポート ＋ アップデート案内</p>
+        <SupportSubscribe />
+        <p class="support-page__legal">
+          お申し込みで <a href="/legal/terms">利用規約</a> に同意したものとみなされます。
+          決済は PayPal を通じて処理されます。
+        </p>
+      </aside>
+    </div>
+  </section>
+
+  <style>
+    .support-page { display: grid; grid-template-columns: 1.3fr 1fr; gap: 2.5rem; align-items: start; }
+    .support-page__list { list-style: none; padding: 0; color: var(--fg); }
+    .support-page__list li { margin-bottom: 0.5rem; }
+    .support-page__note { color: var(--muted); font-size: 0.9rem; }
+    .support-page__buy { position: sticky; top: calc(var(--header-h) + 1rem); display: flex; flex-direction: column; gap: 0.4rem; }
+    .support-page__price { font-size: 2rem; font-weight: 800; }
+    .support-page__price span { background: var(--grad-accent); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+    .support-page__buytag { color: var(--muted); margin: 0 0 0.5rem; }
+    .support-page__legal { color: var(--muted); font-size: 0.8rem; margin: 0.75rem 0 0; }
+    @media (max-width: 860px) { .support-page { grid-template-columns: 1fr; } .support-page__buy { position: static; } }
+  </style>
+</BaseLayout>

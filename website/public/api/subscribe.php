@@ -41,8 +41,9 @@ $headers = "From: {$from}\r\nContent-Type: text/plain; charset=UTF-8\r\n";
 // Best-effort notify (do not fail the request if mail() is unavailable).
 @mail($to, $subject, $body, $headers);
 
-// Best-effort append to a CSV kept outside the document root.
-$dir = __DIR__ . '/../../graphy-data';
+// Best-effort append to a CSV kept OUTSIDE any web root (not downloadable).
+// View with:  ssh <server> cat ~/graphy-data/subscribers.csv
+$dir = getenv('GRAPHY_DATA_DIR') ?: '/home/tatsunidas76/graphy-data';
 if (!is_dir($dir)) { @mkdir($dir, 0700, true); }
 $line = sprintf("%s,%s,%s,\"%s\"\n", date('c'), $email, $source, str_replace('"', "'", $_SERVER['REMOTE_ADDR'] ?? ''));
 @file_put_contents($dir . '/subscribers.csv', $line, FILE_APPEND | LOCK_EX);

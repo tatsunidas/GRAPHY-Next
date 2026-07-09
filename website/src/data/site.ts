@@ -43,6 +43,20 @@ export const site = {
   sponsorsUrl: 'https://github.com/sponsors/tatsunidas',
   githubOrgUrl: 'https://github.com/tatsunidas',
   subscription: { priceJpy: 700, period: '月' },
+
+  // Support-subscription checkout via PayPal (hosted subscription button).
+  // Create a ¥700/month subscription plan in the PayPal dashboard, then set
+  // both values below to go live. While empty, the checkout shows a
+  // "準備中" fallback instead of a broken button.
+  payment: {
+    provider: 'paypal' as const,
+    // PayPal REST app client-id (use the LIVE id for production).
+    paypalClientId: '',
+    // Subscription plan id (P-XXXXXXXXXXXX) for the ¥700/month plan.
+    paypalPlanId: '',
+    // PayPal reports subscription amounts in this currency.
+    currency: 'JPY',
+  },
   tagline: '研究者のための、無料で始められる 3D DICOM ワークステーション',
   descriptionMeta:
     'GRAPHY は研究のための DICOM ワークステーション。2D・MPR・Curved MPR・3D シネマティックレンダリング・Radiomics 定量までオフラインで。Windows / macOS / Linux 対応、無料。',
@@ -148,6 +162,7 @@ export const footer = {
         { label: 'GRAPHY classic', href: '/classic' },
         { label: 'GRAPHY Lab', href: '/lab' },
         { label: 'ダウンロード', href: '/download' },
+        { label: 'サポート購読', href: '/support' },
       ],
     },
     {

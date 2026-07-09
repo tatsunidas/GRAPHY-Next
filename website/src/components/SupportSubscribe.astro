@@ -1,0 +1,66 @@
+---
+import EmailCapture from './EmailCapture.astro';
+import { site } from '../data/site';
+
+const { paypalClientId, paypalPlanId } = site.payment;
+const configured = Boolean(paypalClientId && paypalPlanId);
+const sdkSrc = configured
+  ? `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(paypalClientId)}&vault=true&intent=subscription&currency=${site.payment.currency}`
+  : '';
+---
+
+<div class="subscribe">
+  {configured ? (
+    <>
+      <div id="paypal-button-container" class="subscribe__paypal"></div>
+      <p id="subscribe-msg" class="subscribe__msg" role="status" aria-live="polite"></p>
+      <script is:inline src={sdkSrc}></script>
+      <script is:inline define:vars={{ planId: paypalPlanId }}>
+        (function () {
+          function mount() {
+            if (!window.paypal || !window.paypal.Buttons) return;
+            window.paypal
+              .Buttons({
+                style: { layout: 'vertical', color: 'blue', shape: 'pill', label: 'subscribe' },
+                createSubscription: function (data, actions) {
+                  return actions.subscription.create({ plan_id: planId });
+                },
+                onApprove: function (data) {
+                  var msg = document.getElementById('subscribe-msg');
+                  if (msg) {
+                    msg.textContent =
+                      'ご登録ありがとうございます。サポート購読を受け付けました（購読ID: ' +
+                      data.subscriptionID + '）。';
+                  }
+                  if (window.track) window.track('subscribe_success', { via: 'paypal' });
+                },
+                onError: function () {
+                  var msg = document.getElementById('subscribe-msg');
+                  if (msg) msg.textContent = '決済処理でエラーが発生しました。時間をおいて再度お試しください。';
+                },
+              })
+              .render('#paypal-button-container');
+          }
+          if (document.readyState !== 'loading') mount();
+          else document.addEventListener('DOMContentLoaded', mount);
+        })();
+      </script>
+    </>
+  ) : (
+    <div class="subscribe__pending">
+      <p><strong>決済の受付は準備中です。</strong>開始時にお知らせしますので、よろしければメールをご登録ください。</p>
+      <EmailCapture source="support-waitlist" />
+    </div>
+  )}
+</div>
+
+<style>
+  .subscribe { margin-top: 1rem; }
+  .subscribe__paypal { max-width: 380px; }
+  .subscribe__msg { margin-top: 0.75rem; color: var(--accent); font-weight: 600; }
+  .subscribe__pending {
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 1rem 1.1rem;
+  }
+  .subscribe__pending p { margin: 0 0 0.25rem; color: var(--muted); }
+</style>

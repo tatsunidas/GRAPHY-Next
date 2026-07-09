@@ -16,7 +16,7 @@ const {
   title,
   description = site.descriptionMeta,
   path = '',
-  ogImage = '/favicon.svg', // TODO(polish): replace with a 1200x630 raster OG image
+  ogImage = '/og-default.png',
 } = Astro.props;
 
 const fullTitle = title ? `${title} | ${site.brand}` : `${site.brand} — ${site.tagline}`;
@@ -36,7 +36,9 @@ const GA_ID = '';
     <title>{fullTitle}</title>
     <meta name="description" content={description} />
     <link rel="canonical" href={canonical} />
-    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" href="/favicon.png" type="image/png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content={site.brand} />
@@ -129,6 +131,8 @@ const GA_ID = '';
     </script>
 
     <style>
+      /* [hidden] must win over the flex display below, or the banner never hides. */
+      .cookie-consent[hidden] { display: none !important; }
       .cookie-consent {
         position: fixed; inset-inline: 1rem; bottom: 1rem; z-index: 900;
         max-width: 640px; margin-inline: auto;

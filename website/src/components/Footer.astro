@@ -8,7 +8,7 @@ const isExternal = (href: string) => href.startsWith('http') || href.startsWith(
   <hr class="spectrum-rule" />
   <div class="container site-footer__inner">
     <div class="site-footer__brand">
-      <a class="brand" href="/"><span class="brand__mark" aria-hidden="true">◈</span> {site.brand}</a>
+      <a class="brand" href="/"><img class="brand__mark" src="/graphy-icon.png" alt="" width="26" height="26" /> {site.brand}</a>
       <p class="site-footer__tag">{site.tagline}</p>
       <p class="badge badge--accent">{disclaimerShort}</p>
     </div>
@@ -53,7 +53,7 @@ const isExternal = (href: string) => href.startsWith('http') || href.startsWith(
     padding-block: 1.25rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.85rem;
   }
   .brand { display: inline-flex; align-items: center; gap: 0.4rem; color: var(--fg); font-weight: 800; }
-  .brand__mark { background: var(--grad-accent); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+  .brand__mark { width: 26px; height: 26px; background: #fff; border-radius: 6px; padding: 2px; display: block; }
   @media (max-width: 860px) {
     .site-footer__inner { grid-template-columns: 1fr; }
     .site-footer__cols { grid-template-columns: repeat(2, 1fr); }

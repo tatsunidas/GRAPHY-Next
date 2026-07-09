@@ -1,6 +1,5 @@
 ---
 import BaseLayout from '../../layouts/BaseLayout.astro';
-import EmailCapture from '../../components/EmailCapture.astro';
 import { nextFeatures, nextModes, site, disclaimerShort } from '../../data/site';
 const price = site.subscription.priceJpy.toLocaleString('ja-JP');
 ---
@@ -71,13 +70,12 @@ const price = site.subscription.priceJpy.toLocaleString('ja-JP');
           <li>解約後も GRAPHY-Next は引き続きご利用いただけます。</li>
           <li>解約すると技術サポートの対象外になります。</li>
         </ul>
-        <p class="support__note">※ 決済の受付は準備中です。開始時にお知らせします。</p>
       </div>
       <div class="card support__card">
         <div class="support__price"><span>¥{price}</span> / {site.subscription.period}</div>
         <p>技術サポート ＋ アップデート案内</p>
-        <a class="button button--primary" href="/next/download">まず無料で使う</a>
-        <EmailCapture source="next-support" />
+        <a class="button button--primary" href="/support">サポート購読を申し込む</a>
+        <a class="button button--ghost" href="/next/download">まず無料で使う</a>
       </div>
     </div>
   </section>
