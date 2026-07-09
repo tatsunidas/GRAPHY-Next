@@ -1,0 +1,34 @@
+GRAPHY-Next
+Copyright (C) 2026 Visionary Imaging Services, Inc.
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or (at your
+option) any later version. See the LICENSE file for the full license text.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License for more
+details.
+
+------------------------------------------------------------------------------
+DUAL LICENSING
+------------------------------------------------------------------------------
+GRAPHY-Next is dual-licensed. In addition to the AGPL-3.0 above, it is
+available under a separate commercial license for organizations that do not
+wish to comply with the terms of the AGPL-3.0 (for example, to embed GRAPHY-Next
+in a closed-source product or to operate a proprietary network service based on
+it). See COMMERCIAL-LICENSE.md for details and contact.
+
+------------------------------------------------------------------------------
+NOT FOR DIAGNOSTIC USE
+------------------------------------------------------------------------------
+GRAPHY-Next is provided for research and educational purposes only. It is NOT a
+medical device and is NOT intended for primary diagnostic use or for any
+clinical decision-making. See the documentation for the full disclaimer.
+
+------------------------------------------------------------------------------
+THIRD-PARTY SOFTWARE
+------------------------------------------------------------------------------
+This product bundles and/or depends on third-party software. Their copyright
+notices and license terms are collected in THIRD-PARTY-NOTICES.md.

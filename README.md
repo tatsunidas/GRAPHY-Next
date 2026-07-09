@@ -186,3 +186,18 @@ npm run set-version 1.2.3     # pom / frontend / desktop / root を一括更新
 npm run set-version 0.1.0 && git commit -am "release 0.1.0"
 git tag v0.1.0 && git push && git push origin v0.1.0
 ```
+
+## ライセンス
+
+GRAPHY-Next は **デュアルライセンス**で提供されます。
+
+1. **オープンソース — GNU AGPL-3.0**（[`LICENSE`](LICENSE)）。
+   自由に利用・改変・再配布できます。ただし AGPL-3.0 の条件（特に、**改変版をネットワーク越しのサービスとして提供する場合は、その完全な対応ソースコードを利用者に公開する義務**）に従う必要があります。研究・教育・評価目的の利用はこのライセンスで無償で行えます。
+2. **商用ライセンス**（[`COMMERCIAL-LICENSE.md`](COMMERCIAL-LICENSE.md)）。
+   AGPL-3.0 のコピーレフト義務を負わずに、クローズドソース製品への組み込みや独自 SaaS 提供を行いたい組織向けの有償ライセンス。クラウド/エンタープライズ機能や一部の高度プラグインは商用ライセンス下の**別配布**です。
+
+コントリビュートには [`CLA.md`](CLA.md) への同意が必要です（デュアルライセンス運用のため）。第三者ソフトウェアのライセンスは [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) を参照。
+
+商用ライセンスの問い合わせ: **customerservices@vis-ionary.com**
+
+> **医療機器ではありません / Not for diagnostic use** — GRAPHY-Next は研究・教育目的で提供され、一次診断や臨床的意思決定を目的としたものではありません。
