@@ -1,0 +1,145 @@
+---
+import '../styles/global.css';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import { site } from '../data/site';
+
+export interface Props {
+  title?: string;
+  description?: string;
+  /** absolute path for canonical + og:url, e.g. "/next" */
+  path?: string;
+  ogImage?: string;
+}
+
+const {
+  title,
+  description = site.descriptionMeta,
+  path = '',
+  ogImage = '/favicon.svg', // TODO(polish): replace with a 1200x630 raster OG image
+} = Astro.props;
+
+const fullTitle = title ? `${title} | ${site.brand}` : `${site.brand} — ${site.tagline}`;
+const canonical = new URL(path, site.domain).href;
+const ogImageUrl = new URL(ogImage, site.domain).href;
+
+// Set to your GA4 measurement id (e.g. "G-XXXXXXX") to enable analytics.
+// Left empty in Phase 1 so the build is analytics-clean until a real id is set.
+const GA_ID = '';
+---
+
+<!doctype html>
+<html lang="ja" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content={site.brand} />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={ogImageUrl} />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <script type="application/ld+json" set:html={JSON.stringify({
+      '@context': 'https://schema.org',
+      '@type': 'SoftwareApplication',
+      name: 'GRAPHY-Next',
+      applicationCategory: 'MedicalImaging (research use)',
+      operatingSystem: 'Windows, macOS, Linux',
+      offers: { '@type': 'Offer', price: '0', priceCurrency: 'JPY' },
+      publisher: { '@type': 'Organization', name: site.company, url: site.companyUrl },
+    })} />
+
+    <!-- Respect a stored theme preference before paint to avoid a flash. -->
+    <script is:inline>
+      (function () {
+        try {
+          var t = localStorage.getItem('graphy-theme');
+          if (t) document.documentElement.setAttribute('data-theme', t);
+        } catch (e) {}
+      })();
+    </script>
+
+    {GA_ID && (
+      <script is:inline define:vars={{ GA_ID }}>
+        window.__gaId = GA_ID;
+      </script>
+    )}
+  </head>
+  <body>
+    <a class="visually-hidden" href="#main">本文へスキップ</a>
+    <Header />
+    <main id="main">
+      <slot />
+    </main>
+    <Footer />
+
+    <!-- Cookie consent gate: GA only loads after explicit consent. -->
+    <div id="cookie-consent" class="cookie-consent" hidden>
+      <p>
+        当サイトはアクセス解析のため Cookie を使用します。詳しくは
+        <a href="/legal/privacy">プライバシーポリシー</a>をご覧ください。
+      </p>
+      <div class="cookie-consent__actions">
+        <button class="button button--ghost" data-consent="decline">拒否</button>
+        <button class="button button--primary" data-consent="accept">同意する</button>
+      </div>
+    </div>
+
+    <script is:inline>
+      (function () {
+        var KEY = 'graphy-consent';
+        var banner = document.getElementById('cookie-consent');
+        function loadGA() {
+          var id = window.__gaId;
+          if (!id) return;
+          var s = document.createElement('script');
+          s.async = true;
+          s.src = 'https://www.googletagmanager.com/gtag/js?id=' + id;
+          document.head.appendChild(s);
+          window.dataLayer = window.dataLayer || [];
+          window.gtag = function () { window.dataLayer.push(arguments); };
+          window.gtag('js', new Date());
+          window.gtag('config', id);
+        }
+        var state = null;
+        try { state = localStorage.getItem(KEY); } catch (e) {}
+        if (state === 'accept') { loadGA(); }
+        else if (state !== 'decline' && banner) { banner.hidden = false; }
+        if (banner) {
+          banner.addEventListener('click', function (e) {
+            var choice = e.target && e.target.getAttribute('data-consent');
+            if (!choice) return;
+            try { localStorage.setItem(KEY, choice); } catch (e2) {}
+            banner.hidden = true;
+            if (choice === 'accept') loadGA();
+          });
+        }
+        // Lightweight event helper for buttons/links across the site.
+        window.track = function (name, params) {
+          if (typeof window.gtag === 'function') window.gtag('event', name, params || {});
+        };
+      })();
+    </script>
+
+    <style>
+      .cookie-consent {
+        position: fixed; inset-inline: 1rem; bottom: 1rem; z-index: 900;
+        max-width: 640px; margin-inline: auto;
+        display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1rem;
+        justify-content: space-between;
+        background: var(--surface-2); border: 1px solid var(--border);
+        border-radius: var(--radius); padding: 0.9rem 1.1rem; box-shadow: var(--shadow-lg);
+      }
+      .cookie-consent p { margin: 0; font-size: 0.88rem; color: var(--muted); flex: 1 1 260px; }
+      .cookie-consent__actions { display: flex; gap: 0.5rem; }
+      .cookie-consent .button { padding: 0.5rem 0.9rem; font-size: 0.85rem; }
+    </style>
+  </body>
+</html>

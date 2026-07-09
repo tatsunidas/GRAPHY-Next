@@ -1,0 +1,50 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+---
+
+<BaseLayout title="ライセンス" path="/legal/licenses">
+  <section class="section">
+    <div class="container prose">
+      <h1>ライセンス</h1>
+
+      <h2>GRAPHY-Next</h2>
+      <p>
+        GRAPHY-Next は<strong>デュアルライセンス</strong>で提供されます。
+      </p>
+      <ul>
+        <li>
+          <strong>オープンソース: GNU AGPL-3.0</strong> ―
+          <a href="https://www.gnu.org/licenses/agpl-3.0.txt" rel="noopener" target="_blank">全文</a> /
+          <a href="https://github.com/tatsunidas/GRAPHY-Next/blob/main/LICENSE" rel="noopener" target="_blank">リポジトリの LICENSE</a>。
+          研究・教育での利用は無償です。改変版をネットワークサービスとして提供する場合は、対応ソースの公開義務があります。
+        </li>
+        <li>
+          <strong>商用ライセンス</strong> ― AGPL の義務を負わずに組み込み／SaaS 提供を行う組織向け。
+          <a href="https://github.com/tatsunidas/GRAPHY-Next/blob/main/COMMERCIAL-LICENSE.md" rel="noopener" target="_blank">詳細</a>。
+        </li>
+      </ul>
+
+      <h2>GRAPHY classic</h2>
+      <p>
+        GRAPHY classic は <strong>Mozilla Public License 2.0（MPL-2.0）</strong> で提供されます ―
+        <a href="https://www.mozilla.org/en-US/MPL/2.0/" rel="noopener" target="_blank">全文</a> /
+        <a href="https://github.com/tatsunidas/GRAPHY/blob/master/LICENSE" rel="noopener" target="_blank">リポジトリの LICENSE</a>。
+      </p>
+
+      <h2>第三者ソフトウェア</h2>
+      <p>
+        本ソフトウェアは第三者のオープンソースを利用しています（dcm4che、Cornerstone3D、VTK.js、Spring Boot ほか）。
+        各コンポーネントのライセンスは
+        <a href="https://github.com/tatsunidas/GRAPHY-Next/blob/main/THIRD-PARTY-NOTICES.md" rel="noopener" target="_blank">THIRD-PARTY-NOTICES</a>
+        をご覧ください。
+      </p>
+
+      <h2>使用許諾等の文書</h2>
+      <ul>
+        <li><a href="https://www.gnu.org/licenses/agpl-3.0.txt" rel="noopener" target="_blank">GNU AGPL-3.0 全文</a></li>
+        <li><a href="https://www.mozilla.org/en-US/MPL/2.0/" rel="noopener" target="_blank">MPL-2.0 全文</a></li>
+        <li><a href="/legal/disclaimer">免責事項</a></li>
+      </ul>
+    </div>
+  </section>
+</BaseLayout>

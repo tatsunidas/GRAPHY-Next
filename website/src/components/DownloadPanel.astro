@@ -1,0 +1,159 @@
+---
+import type { Release } from '../lib/releases';
+import { OS_LABEL, type OS } from '../lib/releases';
+
+export interface Props {
+  product: 'next' | 'classic';
+  productName: string;
+  release: Release;
+  licenseLabel: string;
+  /** license / disclaimer PDFs and links shown under the gate */
+  docs: { label: string; href: string }[];
+}
+
+const { product, productName, release, licenseLabel, docs } = Astro.props;
+
+// Order OS buttons; client JS promotes the visitor's OS to primary.
+const order: OS[] = ['windows', 'macos', 'linux', 'web'];
+const buttons = order
+  .map((os) => ({ os, asset: release.assets.find((a) => a.os === os) }))
+  .filter((b) => b.asset);
+---
+
+<div class="dl-panel" data-product={product}>
+  <div class="dl-panel__head">
+    <div>
+      <h2>{productName} をダウンロード</h2>
+      {release.available ? (
+        <p class="dl-panel__meta">
+          最新版 <strong>v{release.version || '—'}</strong>
+          {release.publishedAt && <> ・ {new Date(release.publishedAt).toLocaleDateString('ja-JP')}</>}
+          ・ <a href={release.htmlUrl} rel="noopener" target="_blank">変更履歴 / 全リリース</a>
+        </p>
+      ) : (
+        <p class="dl-panel__meta">
+          最新の配布物は <a href={release.htmlUrl} rel="noopener" target="_blank">GitHub Releases</a> をご覧ください。
+        </p>
+      )}
+    </div>
+    <span class="badge badge--accent">{licenseLabel}</span>
+  </div>
+
+  <!-- Terms gate: primary buttons enable after consent. Raw links remain
+       available below so this never removes the software's license rights. -->
+  <label class="dl-gate">
+    <input type="checkbox" class="dl-gate__check" />
+    <span>
+      本ソフトウェアが<strong>研究用途・非診断</strong>であること、<strong>無保証</strong>であること、および
+      <a href="/legal/terms">利用規約</a>・<a href="/legal/disclaimer">免責事項</a>・{licenseLabel}
+      （<a href="/legal/licenses">ライセンス</a>）に同意します。
+    </span>
+  </label>
+
+  {buttons.length > 0 ? (
+    <div class="dl-buttons">
+      {buttons.map(({ os, asset }) => (
+        <a
+          class="button button--primary dl-button"
+          data-os={os}
+          href={asset!.url}
+          rel="noopener"
+          aria-disabled="true"
+          tabindex="-1"
+        >
+          <span class="dl-button__os">{OS_LABEL[os]}</span>
+          <span class="dl-button__name">{asset!.name}</span>
+        </a>
+      ))}
+    </div>
+  ) : (
+    <p class="dl-panel__meta">
+      現在この場所からの直接ダウンロードは準備中です。
+      <a href={release.htmlUrl} rel="noopener" target="_blank">GitHub Releases</a> から入手してください。
+    </p>
+  )}
+
+  <details class="dl-fallback">
+    <summary>すべての配布物 / 直接リンク</summary>
+    <ul>
+      {release.assets.map((a) => (
+        <li><a href={a.url} rel="noopener">{a.name}</a> <span class="dl-fallback__os">({OS_LABEL[a.os]})</span></li>
+      ))}
+      <li><a href={release.htmlUrl} rel="noopener" target="_blank">GitHub Releases ページ</a></li>
+    </ul>
+  </details>
+
+  <div class="dl-docs">
+    <h3>使用許諾等</h3>
+    <ul>
+      {docs.map((d) => (
+        <li><a href={d.href} rel="noopener" {...(d.href.startsWith('http') ? { target: '_blank' } : {})}>{d.label}</a></li>
+      ))}
+    </ul>
+  </div>
+</div>
+
+<script is:inline>
+  (function () {
+    function detectOS() {
+      var p = (navigator.userAgent + ' ' + (navigator.platform || '')).toLowerCase();
+      if (p.indexOf('win') !== -1) return 'windows';
+      if (p.indexOf('mac') !== -1) return 'macos';
+      if (p.indexOf('linux') !== -1 || p.indexOf('x11') !== -1) return 'linux';
+      return null;
+    }
+    document.querySelectorAll('.dl-panel').forEach(function (panel) {
+      var check = panel.querySelector('.dl-gate__check');
+      var buttons = Array.prototype.slice.call(panel.querySelectorAll('.dl-button'));
+      var os = detectOS();
+      // Promote the visitor's OS button to first + mark as recommended.
+      if (os) {
+        var match = buttons.filter(function (b) { return b.dataset.os === os; })[0];
+        if (match) {
+          match.classList.add('is-recommended');
+          match.parentNode.insertBefore(match, match.parentNode.firstChild);
+        }
+      }
+      function setEnabled(on) {
+        buttons.forEach(function (b) {
+          if (on) { b.removeAttribute('aria-disabled'); b.removeAttribute('tabindex'); }
+          else { b.setAttribute('aria-disabled', 'true'); b.setAttribute('tabindex', '-1'); }
+        });
+      }
+      if (check) {
+        check.addEventListener('change', function () { setEnabled(check.checked); });
+      }
+      buttons.forEach(function (b) {
+        b.addEventListener('click', function (e) {
+          if (b.getAttribute('aria-disabled') === 'true') { e.preventDefault(); return; }
+          if (window.track) window.track('download_click', { product: panel.dataset.product, os: b.dataset.os });
+        });
+      });
+    });
+  })();
+</script>
+
+<style>
+  .dl-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 1.5rem; }
+  .dl-panel__head { display: flex; justify-content: space-between; align-items: start; gap: 1rem; flex-wrap: wrap; }
+  .dl-panel__head h2 { font-size: 1.3rem; margin: 0 0 0.3rem; }
+  .dl-panel__meta { color: var(--muted); font-size: 0.9rem; margin: 0; }
+  .dl-gate {
+    display: flex; gap: 0.6rem; align-items: start; margin: 1.25rem 0;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 0.9rem 1rem; font-size: 0.9rem;
+  }
+  .dl-gate input { margin-top: 0.25rem; width: 1.05rem; height: 1.05rem; accent-color: var(--accent); }
+  .dl-buttons { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+  .dl-button { flex-direction: column; align-items: flex-start; gap: 0.1rem; text-align: left; }
+  .dl-button[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
+  .dl-button__os { font-size: 0.95rem; }
+  .dl-button__name { font-size: 0.72rem; font-weight: 500; opacity: 0.85; font-family: var(--font-mono); }
+  .dl-button.is-recommended { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .dl-fallback { margin-top: 1rem; }
+  .dl-fallback summary { cursor: pointer; color: var(--muted); font-size: 0.88rem; }
+  .dl-fallback ul, .dl-docs ul { list-style: none; padding: 0.6rem 0 0; margin: 0; display: grid; gap: 0.35rem; }
+  .dl-fallback__os { color: var(--muted); font-size: 0.8rem; }
+  .dl-docs { margin-top: 1.25rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+  .dl-docs h3 { font-size: 0.95rem; margin: 0 0 0.2rem; }
+</style>

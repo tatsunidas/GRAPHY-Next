@@ -1,0 +1,96 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import EmailCapture from '../../components/EmailCapture.astro';
+import { nextFeatures, nextModes, site, disclaimerShort } from '../../data/site';
+const price = site.subscription.priceJpy.toLocaleString('ja-JP');
+---
+
+<BaseLayout
+  title="GRAPHY-Next"
+  description="GRAPHY-Next はスタンドアロン・Web 対応の次世代 DICOM ワークステーション。3D シネマティックレンダリング・Radiomics・PACS 連携。研究用途・無料。"
+  path="/next"
+>
+  <section class="section section--tight">
+    <div class="container">
+      <span class="eyebrow">GRAPHY-Next</span>
+      <h1>スタンドアロン・Web 対応の<br />次世代 DICOM ワークステーション</h1>
+      <p class="lead">
+        オフラインで完結するデスクトップ版と、外部 PACS に接続する Web 版。同じ UI で、研究の
+        2D〜3D〜定量解析までをカバーします。
+      </p>
+      <div class="hero__cta">
+        <a class="button button--primary" href="/next/download">▼ 無料ダウンロード</a>
+        <a class="button button--ghost" href="#support">サポート購読について</a>
+      </div>
+      <p class="badge badge--accent" style="margin-top:1rem">{disclaimerShort}</p>
+    </div>
+  </section>
+
+  <section class="section" style="background:var(--surface)">
+    <div class="container">
+      <h2>主な機能</h2>
+      <div class="grid grid--3" style="margin-top:1.5rem">
+        {nextFeatures.map((f) => (
+          <div class="card">
+            <div class="card__icon">{f.icon}</div>
+            <h3>{f.title}</h3>
+            <p>{f.desc}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="container">
+      <span class="eyebrow">Two modes</span>
+      <h2>2 つのモード</h2>
+      <div class="grid grid--2" style="margin-top:1.5rem">
+        {nextModes.map((m) => (
+          <div class="card">
+            <h3>{m.name}</h3>
+            <p>{m.desc}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <!-- SUPPORT SUBSCRIPTION (explanation only; checkout is Phase 2) -->
+  <section id="support" class="section" style="background:var(--surface)">
+    <div class="container support">
+      <div>
+        <span class="eyebrow">Support subscription</span>
+        <h2>ソフトは無料。サポートで開発を支える。</h2>
+        <p class="lead">
+          GRAPHY-Next 本体は AGPL-3.0 で無料です。月額 <strong>¥{price}</strong> のサポート購読は、
+          <strong>技術サポートとアップデートのご案内</strong>への支援です。
+        </p>
+        <ul class="support__list">
+          <li>いつでも解約できます（決済アプリの規定に従います）。</li>
+          <li>解約後も GRAPHY-Next は引き続きご利用いただけます。</li>
+          <li>解約すると技術サポートの対象外になります。</li>
+        </ul>
+        <p class="support__note">※ 決済の受付は準備中です。開始時にお知らせします。</p>
+      </div>
+      <div class="card support__card">
+        <div class="support__price"><span>¥{price}</span> / {site.subscription.period}</div>
+        <p>技術サポート ＋ アップデート案内</p>
+        <a class="button button--primary" href="/next/download">まず無料で使う</a>
+        <EmailCapture source="next-support" />
+      </div>
+    </div>
+  </section>
+
+  <style>
+    .hero__cta { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1rem; }
+    .support { display: grid; grid-template-columns: 1.4fr 1fr; gap: 2rem; align-items: center; }
+    .support__list { padding-left: 1.1rem; color: var(--muted); }
+    .support__list li { margin-bottom: 0.4rem; }
+    .support__note { color: var(--muted); font-size: 0.88rem; }
+    .support__card { display: flex; flex-direction: column; gap: 0.6rem; align-items: flex-start; }
+    .support__price { font-size: 1.8rem; font-weight: 800; }
+    .support__price span { background: var(--grad-accent); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+    @media (max-width: 860px) { .support { grid-template-columns: 1fr; } }
+  </style>
+</BaseLayout>

@@ -1,0 +1,49 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import DownloadPanel from '../../components/DownloadPanel.astro';
+import EmailCapture from '../../components/EmailCapture.astro';
+import { getLatestRelease } from '../../lib/releases';
+import { repos } from '../../data/site';
+
+const release = await getLatestRelease(repos.next);
+
+const docs = [
+  { label: 'GNU AGPL-3.0 全文', href: 'https://www.gnu.org/licenses/agpl-3.0.txt' },
+  { label: '商用ライセンス（デュアルライセンス）', href: 'https://github.com/tatsunidas/GRAPHY-Next/blob/main/COMMERCIAL-LICENSE.md' },
+  { label: '免責事項', href: '/legal/disclaimer' },
+  { label: 'ライセンス（サイト内まとめ）', href: '/legal/licenses' },
+];
+---
+
+<BaseLayout title="GRAPHY-Next ダウンロード" path="/next/download">
+  <section class="section section--tight">
+    <div class="container" style="max-width:820px">
+      <span class="eyebrow">Download</span>
+      <h1>GRAPHY-Next のダウンロード</h1>
+      <p class="lead">
+        インストーラにはバックエンド・Java ランタイム・ffmpeg を同梱。追加インストール不要で、
+        DICOM 受信・ローカル保管・全ビューア機能がオフラインで動作します。
+      </p>
+
+      <DownloadPanel
+        product="next"
+        productName="GRAPHY-Next"
+        release={release}
+        licenseLabel="AGPL-3.0"
+        docs={docs}
+      />
+
+      <div class="card" style="margin-top:1.5rem">
+        <h3>システム要件</h3>
+        <ul class="prose" style="margin:0">
+          <li>デスクトップ版（standalone）: Windows / macOS / Linux。ランタイム同梱で追加インストール不要。</li>
+          <li>Web 版（jar）: JDK 21 と外部 PACS（DICOMweb）。</li>
+        </ul>
+      </div>
+
+      <div style="margin-top:1.5rem">
+        <EmailCapture source="next-download" />
+      </div>
+    </div>
+  </section>
+</BaseLayout>

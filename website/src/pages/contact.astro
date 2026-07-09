@@ -1,0 +1,34 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { site } from '../data/site';
+---
+
+<BaseLayout
+  title="お問い合わせ"
+  description="GRAPHY の商用ライセンス・技術サポート・その他のお問い合わせ。"
+  path="/contact"
+>
+  <section class="section">
+    <div class="container" style="max-width:680px">
+      <span class="eyebrow">Contact</span>
+      <h1>お問い合わせ</h1>
+      <p class="lead">
+        商用ライセンス、技術サポート、そのほかのご相談は、以下のメールアドレスまでご連絡ください。
+      </p>
+
+      <div class="card" style="margin-top:1.25rem">
+        <h3>メール</h3>
+        <p>
+          <a href={`mailto:${site.contactEmail}`}>{site.contactEmail}</a>
+        </p>
+        <p class="prose" style="margin:0">
+          商用ライセンスのご相談では、組織名・想定用途・規模をお知らせいただけると、適切なご案内がしやすくなります。
+        </p>
+      </div>
+
+      <p class="prose" style="margin-top:1.5rem">
+        会社情報は <a href={site.companyUrl} rel="noopener" target="_blank">Visionary Imaging Services, Inc.</a> をご覧ください。
+      </p>
+    </div>
+  </section>
+</BaseLayout>

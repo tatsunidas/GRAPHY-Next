@@ -1,0 +1,40 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import DownloadPanel from '../../components/DownloadPanel.astro';
+import EmailCapture from '../../components/EmailCapture.astro';
+import { getLatestRelease } from '../../lib/releases';
+import { repos } from '../../data/site';
+
+const release = await getLatestRelease(repos.classic);
+
+const docs = [
+  { label: 'Mozilla Public License 2.0 全文', href: 'https://www.mozilla.org/en-US/MPL/2.0/' },
+  { label: '免責事項', href: '/legal/disclaimer' },
+  { label: 'ライセンス（サイト内まとめ）', href: '/legal/licenses' },
+];
+---
+
+<BaseLayout title="GRAPHY classic ダウンロード" path="/classic/download">
+  <section class="section section--tight">
+    <div class="container" style="max-width:820px">
+      <span class="eyebrow">Download</span>
+      <h1>GRAPHY classic のダウンロード</h1>
+      <p class="lead">
+        Java Swing 版のデスクトップアプリ。無料でご利用いただけます。開発の継続には
+        <a href="/classic/donate">寄付</a>で支援いただけます。
+      </p>
+
+      <DownloadPanel
+        product="classic"
+        productName="GRAPHY classic"
+        release={release}
+        licenseLabel="MPL-2.0"
+        docs={docs}
+      />
+
+      <div style="margin-top:1.5rem">
+        <EmailCapture source="classic-download" />
+      </div>
+    </div>
+  </section>
+</BaseLayout>
