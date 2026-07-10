@@ -60,7 +60,10 @@ done
 cp -r "$SRC/etc/certs" "$OUT_DIR/etc/certs"
 chmod +x "$OUT_DIR"/bin/* 2>/dev/null || true
 
-mapfile -t JARS < <(
+JARS=()
+while IFS= read -r j; do
+  JARS+=("$j")
+done < <(
   grep -h '\$DCM4CHE_HOME/lib/' "${TOOLS[@]/#/$SRC/bin/}" \
     | sed -nE 's#.*/lib/([A-Za-z0-9_.-]+\.jar)".*#\1#p' | sort -u
 )
