@@ -42,3 +42,6 @@ desktop/data/
 # 個人メモ（リポジトリに含めない）
 memorandum_76.txt
 CLAUDE.md
+
+# 社内向け価格プラン（非公開・リポジトリに含めない）
+PRICING-PLAN.md

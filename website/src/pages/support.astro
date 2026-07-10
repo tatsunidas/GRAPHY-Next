@@ -3,6 +3,8 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 import SupportSubscribe from '../components/SupportSubscribe.astro';
 import { site } from '../data/site';
 const price = site.subscription.priceJpy.toLocaleString('ja-JP');
+const { hours, channels, includes, onsite } = site.supportScope;
+const { enterprise } = site;
 ---
 
 <BaseLayout
@@ -20,11 +22,18 @@ const price = site.subscription.priceJpy.toLocaleString('ja-JP');
           <strong>技術サポート</strong>と<strong>アップデートのご案内</strong>への支援としてお申し込みいただけます。
         </p>
         <ul class="support-page__list">
-          <li>✔ 技術サポート（メール）</li>
-          <li>✔ 新バージョン・重要なお知らせのご案内</li>
+          {includes.map((i) => (
+            <li>
+              <strong>✔ {i.label}</strong>
+              <span class="support-page__desc">{i.desc}</span>
+            </li>
+          ))}
           <li>✔ いつでも解約可能（PayPal の購読管理から）</li>
           <li>✔ 解約後も GRAPHY-Next は引き続き利用可能（サポート対象外になります）</li>
         </ul>
+        <p class="support-page__hours">
+          対応時間: {hours} ／ 対応窓口: {channels}
+        </p>
         <p class="support-page__note">
           ※ 本購読はソフトウェアの使用料ではありません。ソフトウェアは無料で、購読は開発と
           サポートを支えるためのものです。
@@ -41,13 +50,35 @@ const price = site.subscription.priceJpy.toLocaleString('ja-JP');
         </p>
       </aside>
     </div>
+
+    <div class="container">
+      <div class="card support-page__onsite">
+        <h3>{onsite.label}</h3>
+        <p>{onsite.desc}。ご希望の場合は <a href="/contact">お問い合わせ</a> よりご相談ください。</p>
+      </div>
+
+      <div class="card support-page__enterprise" id="enterprise">
+        <span class="eyebrow">{enterprise.eyebrow}</span>
+        <h3>{enterprise.title}</h3>
+        <p>{enterprise.desc}</p>
+        <a class="button button--primary" href={enterprise.ctaHref}>{enterprise.ctaLabel}</a>
+      </div>
+    </div>
   </section>
 
   <style>
     .support-page { display: grid; grid-template-columns: 1.3fr 1fr; gap: 2.5rem; align-items: start; }
     .support-page__list { list-style: none; padding: 0; color: var(--fg); }
-    .support-page__list li { margin-bottom: 0.5rem; }
+    .support-page__list li { margin-bottom: 0.6rem; display: flex; flex-direction: column; gap: 0.1rem; }
+    .support-page__desc { color: var(--muted); font-size: 0.88rem; }
+    .support-page__hours { color: var(--muted); font-size: 0.88rem; margin-top: 1rem; }
     .support-page__note { color: var(--muted); font-size: 0.9rem; }
+    .support-page__onsite { margin-top: 1.75rem; }
+    .support-page__onsite h3 { font-size: 1.05rem; }
+    .support-page__onsite p { color: var(--muted); margin: 0; }
+    .support-page__enterprise { margin-top: 1.25rem; }
+    .support-page__enterprise h3 { font-size: 1.15rem; margin-top: 0.4rem; }
+    .support-page__enterprise p { color: var(--muted); max-width: 60ch; }
     .support-page__buy { position: sticky; top: calc(var(--header-h) + 1rem); display: flex; flex-direction: column; gap: 0.4rem; }
     .support-page__price { font-size: 2rem; font-weight: 800; }
     .support-page__price span { background: var(--grad-accent); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }

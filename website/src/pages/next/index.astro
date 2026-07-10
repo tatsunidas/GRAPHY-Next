@@ -2,6 +2,7 @@
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import { nextFeatures, nextModes, site, disclaimerShort } from '../../data/site';
 const price = site.subscription.priceJpy.toLocaleString('ja-JP');
+const { hours, channels } = site.supportScope;
 ---
 
 <BaseLayout
@@ -70,6 +71,13 @@ const price = site.subscription.priceJpy.toLocaleString('ja-JP');
           <li>解約後も GRAPHY-Next は引き続きご利用いただけます。</li>
           <li>解約すると技術サポートの対象外になります。</li>
         </ul>
+        <p class="support__note">
+          対応時間: {hours} ／ 対応窓口: {channels}。詳しい範囲は
+          <a href="/support">サポート購読ページ</a> をご覧ください。
+        </p>
+        <p class="support__note">
+          法人・教育機関向けプランもございます。<a href="/support#enterprise">お見積もりについて</a>
+        </p>
       </div>
       <div class="card support__card">
         <div class="support__price"><span>¥{price}</span> / {site.subscription.period}</div>

@@ -1,7 +1,6 @@
 ---
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import DownloadPanel from '../../components/DownloadPanel.astro';
-import EmailCapture from '../../components/EmailCapture.astro';
 import { getLatestRelease } from '../../lib/releases';
 import { repos } from '../../data/site';
 
@@ -30,11 +29,8 @@ const docs = [
         release={release}
         licenseLabel="MPL-2.0"
         docs={docs}
+        requireEmail
       />
-
-      <div style="margin-top:1.5rem">
-        <EmailCapture source="classic-download" />
-      </div>
     </div>
   </section>
 </BaseLayout>

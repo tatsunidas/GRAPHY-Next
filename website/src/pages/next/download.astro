@@ -1,7 +1,6 @@
 ---
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import DownloadPanel from '../../components/DownloadPanel.astro';
-import EmailCapture from '../../components/EmailCapture.astro';
 import { getLatestRelease } from '../../lib/releases';
 import { repos } from '../../data/site';
 
@@ -31,6 +30,7 @@ const docs = [
         release={release}
         licenseLabel="AGPL-3.0"
         docs={docs}
+        requireEmail
       />
 
       <div class="card" style="margin-top:1.5rem">
@@ -39,10 +39,6 @@ const docs = [
           <li>デスクトップ版（standalone）: Windows / macOS / Linux。ランタイム同梱で追加インストール不要。</li>
           <li>Web 版（jar）: JDK 21 と外部 PACS（DICOMweb）。</li>
         </ul>
-      </div>
-
-      <div style="margin-top:1.5rem">
-        <EmailCapture source="next-download" />
       </div>
     </div>
   </section>

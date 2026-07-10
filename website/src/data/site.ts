@@ -44,6 +44,33 @@ export const site = {
   githubOrgUrl: 'https://github.com/tatsunidas',
   subscription: { priceJpy: 700, period: '月' },
 
+  // Support-subscription scope shown on /support and /next (#support).
+  supportScope: {
+    hours: '営業時間内・随時対応',
+    channels: 'メール・チャット・Slack など（電話でのお問い合わせ対応は行っておりません）',
+    includes: [
+      { label: '技術サポート', desc: 'メール・チャット・Slack などでのお問い合わせ対応（電話は非対応）。' },
+      { label: 'Issue 優先対応', desc: 'GitHub Issue を優先的に確認・対応します。' },
+      { label: '導入支援（リモート）', desc: 'セットアップ・運用に関するご相談。' },
+      { label: 'アップデートのご案内', desc: '新バージョン・重要なお知らせをお届けします。' },
+    ],
+    onsite: {
+      label: '現地サポート（出張）',
+      desc: '出張費 ¥20,000 ＋ 交通費実費（別途お見積り・要事前調整）',
+    },
+  },
+
+  // Enterprise: intentionally no pricing/tier details here — this site does not
+  // publish Enterprise numbers. Show a teaser only and route inquiries to /contact
+  // for a custom quote (organization size, institution type, etc.).
+  enterprise: {
+    eyebrow: 'Enterprise',
+    title: '法人・教育機関向けプラン',
+    desc: '現地導入支援・操作レクチャー・優先サポートを含む年間契約です。ご利用規模に応じて個別にお見積りします。',
+    ctaLabel: 'お見積もりを依頼する',
+    ctaHref: '/contact',
+  },
+
   // Support-subscription checkout via PayPal (hosted subscription button).
   // Create a ¥700/month subscription plan in the PayPal dashboard, then set
   // both values below to go live. While empty, the checkout shows a

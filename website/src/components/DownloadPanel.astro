@@ -9,9 +9,11 @@ export interface Props {
   licenseLabel: string;
   /** license / disclaimer PDFs and links shown under the gate */
   docs: { label: string; href: string }[];
+  /** require a one-time email registration (per browser) before download buttons unlock */
+  requireEmail?: boolean;
 }
 
-const { product, productName, release, licenseLabel, docs } = Astro.props;
+const { product, productName, release, licenseLabel, docs, requireEmail = false } = Astro.props;
 
 // Order OS buttons; client JS promotes the visitor's OS to primary.
 const order: OS[] = ['windows', 'macos', 'linux', 'web'];
@@ -20,7 +22,7 @@ const buttons = order
   .filter((b) => b.asset);
 ---
 
-<div class="dl-panel" data-product={product}>
+<div class="dl-panel" data-product={product} data-require-email={requireEmail ? 'true' : 'false'}>
   <div class="dl-panel__head">
     <div>
       <h2>{productName} をダウンロード</h2>
@@ -39,9 +41,35 @@ const buttons = order
     <span class="badge badge--accent">{licenseLabel}</span>
   </div>
 
-  <!-- Terms gate: primary buttons enable after consent. Raw links remain
-       available below so this never removes the software's license rights. -->
-  <label class="dl-gate">
+  {requireEmail && (
+    <form class="dl-register" data-role="register-form">
+      <label class="dl-register__label" for={`dl-email-${product}`}>
+        メールアドレスをご登録のうえダウンロードください
+      </label>
+      <div class="dl-register__row">
+        <input
+          id={`dl-email-${product}`}
+          type="email"
+          name="email"
+          inputmode="email"
+          autocomplete="email"
+          placeholder="you@example.com"
+          required
+        />
+        <button type="submit" class="button button--primary">登録してダウンロードを開始</button>
+      </div>
+      <input type="hidden" name="source" value={`${product}-download-gate`} />
+      <input type="text" name="website" class="dl-register__hp" tabindex="-1" autocomplete="off" aria-hidden="true" />
+      <p class="dl-register__note" data-role="register-msg">
+        新バージョンの公開時にお知らせします。ダウンロードの前に一度だけご登録ください（このブラウザでは次回から不要です）。
+      </p>
+    </form>
+  )}
+
+  <!-- Terms gate: primary buttons enable after consent (and, if required, email
+       registration). Raw links remain available below so this never removes
+       the software's license rights. -->
+  <label class="dl-gate" data-role="terms-gate">
     <input type="checkbox" class="dl-gate__check" />
     <span>
       本ソフトウェアが<strong>研究用途・非診断</strong>であること、<strong>無保証</strong>であること、および
@@ -103,7 +131,11 @@ const buttons = order
       return null;
     }
     document.querySelectorAll('.dl-panel').forEach(function (panel) {
+      var product = panel.dataset.product;
+      var requireEmail = panel.dataset.requireEmail === 'true';
+      var storageKey = 'graphy_registered_' + product;
       var check = panel.querySelector('.dl-gate__check');
+      var registerForm = panel.querySelector('[data-role="register-form"]');
       var buttons = Array.prototype.slice.call(panel.querySelectorAll('.dl-button'));
       var os = detectOS();
       // Promote the visitor's OS button to first + mark as recommended.
@@ -114,19 +146,47 @@ const buttons = order
           match.parentNode.insertBefore(match, match.parentNode.firstChild);
         }
       }
-      function setEnabled(on) {
+
+      var termsOk = false;
+      var emailOk = !requireEmail || window.localStorage.getItem(storageKey) === '1';
+      if (emailOk && registerForm) registerForm.hidden = true;
+
+      function setEnabled() {
+        var on = termsOk && emailOk;
         buttons.forEach(function (b) {
           if (on) { b.removeAttribute('aria-disabled'); b.removeAttribute('tabindex'); }
           else { b.setAttribute('aria-disabled', 'true'); b.setAttribute('tabindex', '-1'); }
         });
       }
       if (check) {
-        check.addEventListener('change', function () { setEnabled(check.checked); });
+        termsOk = check.checked;
+        check.addEventListener('change', function () { termsOk = check.checked; setEnabled(); });
       }
+      if (registerForm) {
+        registerForm.addEventListener('submit', function (e) {
+          e.preventDefault();
+          var msg = registerForm.querySelector('[data-role="register-msg"]');
+          if (registerForm.querySelector('.dl-register__hp').value) return; // honeypot tripped
+          var data = new FormData(registerForm);
+          fetch('/api/subscribe.php', { method: 'POST', body: data })
+            .then(function (r) { return r.ok ? r : Promise.reject(r); })
+            .then(function () {
+              window.localStorage.setItem(storageKey, '1');
+              emailOk = true;
+              setEnabled();
+              if (msg) msg.textContent = 'ご登録ありがとうございます。下記の同意にチェックのうえダウンロードしてください。';
+              if (window.track) window.track('download_register', { product: product });
+            })
+            .catch(function () {
+              if (msg) msg.textContent = '送信に失敗しました。時間をおいて再度お試しください。';
+            });
+        });
+      }
+      setEnabled();
       buttons.forEach(function (b) {
         b.addEventListener('click', function (e) {
           if (b.getAttribute('aria-disabled') === 'true') { e.preventDefault(); return; }
-          if (window.track) window.track('download_click', { product: panel.dataset.product, os: b.dataset.os });
+          if (window.track) window.track('download_click', { product: product, os: b.dataset.os });
         });
       });
     });
@@ -138,6 +198,18 @@ const buttons = order
   .dl-panel__head { display: flex; justify-content: space-between; align-items: start; gap: 1rem; flex-wrap: wrap; }
   .dl-panel__head h2 { font-size: 1.3rem; margin: 0 0 0.3rem; }
   .dl-panel__meta { color: var(--muted); font-size: 0.9rem; margin: 0; }
+  .dl-register {
+    margin: 1.25rem 0; background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 0.9rem 1rem;
+  }
+  .dl-register__label { display: block; font-size: 0.92rem; font-weight: 700; margin-bottom: 0.5rem; }
+  .dl-register__row { display: flex; flex-wrap: wrap; gap: 0.6rem; }
+  .dl-register input[type="email"] {
+    flex: 1; min-width: 220px; padding: 0.6rem 0.8rem; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); background: var(--surface); color: var(--fg); font: inherit;
+  }
+  .dl-register__hp { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+  .dl-register__note { font-size: 0.82rem; color: var(--muted); margin: 0.6rem 0 0; }
   .dl-gate {
     display: flex; gap: 0.6rem; align-items: start; margin: 1.25rem 0;
     background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius);
