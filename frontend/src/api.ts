@@ -833,3 +833,124 @@ export interface StoredResult {
 /** QR: 保存済み件数をバッチ問い合わせ（standalone=ローカル索引 / web=dcm4chee QIDO）。 */
 export const qrStored = (queries: StoredQuery[]) =>
   httpSend<StoredResult[]>("/api/dicom/qr/stored", "POST", queries);
+
+// --- Report（`fw/report-design.md`） ---
+
+export type ReportType = "GENERAL" | "IMAGING_DIAGNOSTIC" | "TECHNOLOGIST" | "MEASUREMENT";
+export type ReportStatus = "DRAFT" | "FINAL" | "ADDENDUM";
+export type StaffRole = "PHYSICIAN" | "RADIOLOGIC_TECHNOLOGIST" | "MEDICAL_ASSISTANT" | "CLERICAL_WORKER" | "SCIENTIST";
+export type ParticipationType = "AUTHOR" | "VERIFIER" | "ENTERER" | "REVIEWER";
+
+export interface ReportSummary {
+  id: string;
+  patientId: string;
+  studyInstanceUid: string;
+  title: string | null;
+  reportType: ReportType;
+  status: ReportStatus;
+  lockedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReportParticipantDto {
+  id: string;
+  name: string;
+  staffRole: StaffRole;
+  participationType: ParticipationType;
+  organization: string | null;
+  participatedAt: string;
+}
+
+export interface ReportKeyImageDto {
+  id: string;
+  sopInstanceUid: string;
+  seriesInstanceUid: string;
+  frameNumber: number | null;
+  label: string | null;
+  annotation: string | null;
+  sortOrder: number;
+}
+
+export interface ReportDetail extends ReportSummary {
+  seriesInstanceUid: string | null;
+  bodyMarkdown: string;
+  clinicalHistory: string | null;
+  referringPhysician: string | null;
+  srSopInstanceUid: string | null;
+  koSopInstanceUid: string | null;
+  koSeriesInstanceUid: string | null;
+  predecessorReportId: string | null;
+  predecessorSrSopUid: string | null;
+  lockedAt: string | null;
+  participants: ReportParticipantDto[];
+  keyImages: ReportKeyImageDto[];
+}
+
+export interface CreateReportRequest {
+  patientId: string;
+  studyInstanceUid: string;
+  title?: string | null;
+  reportType?: ReportType | null;
+  clinicalHistory?: string | null;
+  referringPhysician?: string | null;
+  bodyMarkdown?: string | null;
+}
+
+export interface ReportParticipantInput {
+  name: string;
+  staffRole: StaffRole;
+  participationType: ParticipationType;
+  organization?: string | null;
+}
+
+export interface ReportKeyImageInput {
+  sopInstanceUid: string;
+  seriesInstanceUid: string;
+  frameNumber?: number | null;
+  label?: string | null;
+  annotation?: string | null;
+  sortOrder: number;
+}
+
+export interface UpdateReportRequest {
+  title?: string | null;
+  bodyMarkdown?: string | null;
+  clinicalHistory?: string | null;
+  referringPhysician?: string | null;
+  participants?: ReportParticipantInput[] | null;
+  keyImages?: ReportKeyImageInput[] | null;
+  editedBy?: string | null;
+}
+
+export interface StudyReportCount {
+  studyInstanceUid: string;
+  reportState: "none" | "draft" | "report";
+  reportCount: number;
+  draftCount: number;
+}
+
+export const listReportsByStudy = (studyUid: string) =>
+  httpGet<ReportSummary[]>(`/api/reports?studyUid=${encodeURIComponent(studyUid)}`);
+
+export const getReport = (id: string) => httpGet<ReportDetail>(`/api/reports/${encodeURIComponent(id)}`);
+
+export const createReport = (req: CreateReportRequest) => httpSend<ReportDetail>("/api/reports", "POST", req);
+
+export const updateReport = (id: string, req: UpdateReportRequest) =>
+  httpSend<ReportDetail>(`/api/reports/${encodeURIComponent(id)}`, "PUT", req);
+
+export const deleteReport = (id: string) => httpSend<void>(`/api/reports/${encodeURIComponent(id)}`, "DELETE");
+
+export const lockReport = (id: string, lockedBy: string) =>
+  httpSend<ReportDetail>(`/api/reports/${encodeURIComponent(id)}/lock`, "POST", { lockedBy });
+
+export const unlockReport = (id: string, lockedBy: string) =>
+  httpSend<ReportDetail>(`/api/reports/${encodeURIComponent(id)}/unlock`, "POST", { lockedBy });
+
+export const finalizeReport = (id: string) =>
+  httpSend<ReportDetail>(`/api/reports/${encodeURIComponent(id)}/finalize`, "POST");
+
+/** MainScreen 一覧の ●/○ 表示用（フェーズ R5 で StudyList に接続）。 */
+export const fetchReportStudyCounts = (studyUids: string[]) =>
+  httpGet<StudyReportCount[]>(`/api/reports/study-counts?studyUids=${encodeURIComponent(studyUids.join(","))}`);

@@ -14,7 +14,8 @@ export type ToolKind =
   | "anonymizer"
   | "tagExtractor"
   | "seriesExtractor"
-  | "tagViewer";
+  | "tagViewer"
+  | "report";
 
 export function Toolbar({
   isStandalone,
@@ -49,6 +50,7 @@ export function Toolbar({
       <ToolButton iconFile={UI_ICON_FILES.tagExtractor} icon="🏷" label={t("main.toolbar.tagExtractor")} onClick={() => onOpenTool("tagExtractor")} />
       <ToolButton iconFile={UI_ICON_FILES.tagViewer} icon="🔖" label={t("main.toolbar.tagViewer")} onClick={() => onOpenTool("tagViewer")} />
       <ToolButton iconFile={UI_ICON_FILES.seriesExtractor} icon="🧬" label={t("main.toolbar.seriesExtractor")} onClick={() => onOpenTool("seriesExtractor")} />
+      <ToolButton icon="📝" label={t("main.toolbar.report")} onClick={() => onOpenTool("report")} />
       <ToolButton iconFile={UI_ICON_FILES.refresh} icon="🔄" label={t("main.toolbar.refresh")} onClick={onRefresh} />
       {isStandalone && <ToolButton iconFile={UI_ICON_FILES.db} icon="🗄" label={t("app.btn.dbTitle")} onClick={onOpenDb} />}
       <span style={sep} />

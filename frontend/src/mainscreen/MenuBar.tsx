@@ -78,6 +78,7 @@ export function MenuBar({
         { label: t("main.toolbar.tagExtractor"), onClick: () => onOpenTool("tagExtractor") },
         { label: t("main.toolbar.tagViewer"), onClick: () => onOpenTool("tagViewer") },
         { label: t("main.toolbar.seriesExtractor"), onClick: () => onOpenTool("seriesExtractor") },
+        { label: t("main.toolbar.report"), onClick: () => onOpenTool("report") },
       ],
     },
     {

@@ -8,7 +8,7 @@ import { desktop } from "../desktopBridge";
 import { useI18n } from "../i18n/i18n";
 import { StudyList } from "../StudyList";
 import { MenuBar } from "./MenuBar";
-import { Toolbar } from "./Toolbar";
+import { Toolbar, type ToolKind } from "./Toolbar";
 import { SearchPanel } from "./SearchPanel";
 import { StatusBar } from "./StatusBar";
 import { TagExtractorDialog } from "./TagExtractorDialog";
@@ -18,6 +18,7 @@ import { ExportDialog } from "./ExportDialog";
 import { SendDialog } from "./SendDialog";
 import { TagViewerDialog } from "./TagViewerDialog";
 import { NonDicomImportDialog } from "./NonDicomImportDialog";
+import { ReportEditorDialog } from "../report/ReportEditorDialog";
 
 /**
  * アプリの土台シェル（GRAPHY の MainScreen 相当）。
@@ -50,7 +51,15 @@ export function MainScreen({
   const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
   const [selectedSeries, setSelectedSeries] = useState<Series | null>(null);
   const [openTool, setOpenTool] = useState<
-    "tagExtractor" | "seriesExtractor" | "anonymizer" | "export" | "send" | "tagViewer" | "nonDicomImport" | null
+    | "tagExtractor"
+    | "seriesExtractor"
+    | "anonymizer"
+    | "export"
+    | "send"
+    | "tagViewer"
+    | "nonDicomImport"
+    | "report"
+    | null
   >(null);
 
   const handleImport = async () => {
@@ -143,9 +152,7 @@ export function MainScreen({
   };
 
   // データ I/O・ユーティリティ。実装済みはダイアログを開き、未実装は告知バナー（実装は fw に記録）。
-  const handleOpenTool = (
-    kind: "export" | "send" | "nonDicomImport" | "anonymizer" | "tagExtractor" | "seriesExtractor" | "tagViewer",
-  ) => {
+  const handleOpenTool = (kind: ToolKind) => {
     if (kind === "tagExtractor") {
       setOpenTool("tagExtractor");
       return;
@@ -188,6 +195,15 @@ export function MainScreen({
         return;
       }
       setOpenTool("tagViewer");
+      return;
+    }
+    if (kind === "report") {
+      // レポートはスタディに紐づくため、患者/スタディ特定が必要（Export と同じ）。
+      if (!selectedStudy) {
+        window.alert(t("report.noSelection"));
+        return;
+      }
+      setOpenTool("report");
       return;
     }
     if (kind === "nonDicomImport") {
@@ -271,6 +287,12 @@ export function MainScreen({
         onClose={() => setOpenTool(null)}
         study={selectedStudy}
         onImported={() => setReloadKey((k) => k + 1)}
+      />
+      <ReportEditorDialog
+        open={openTool === "report"}
+        onClose={() => setOpenTool(null)}
+        study={selectedStudy}
+        series={selectedSeries}
       />
     </div>
   );
