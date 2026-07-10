@@ -1,8 +1,14 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
-> 更新日: 2026-07-06（最終更新: web の高速化=シリーズ一括prefetch ＋ STOW-RS 書き戻し=派生/SEG/RTSTRUCT）
+> 更新日: 2026-07-10（最終更新: 実 dcm4chee での web モード結合検証が完了）
 > 目的: 別の作業者（Claude 含む）がこのリポジトリの状況を把握し、続きを実装できるようにする。
 > このファイル＋ `fw/` 配下の各設計ドキュメントが「ソース・オブ・トゥルース」。
+>
+> ✅ **2026-07-10（実 dcm4chee 結合検証 完了）**: `deploy/dcm4chee/VERIFY-web.md` の手順で実機検証済み。
+> ①2D表示 ②prefetch一括取得 ③STOW-RS書き戻し（派生シリーズ・SEG/RTSTRUCTのエクスポート表示）④IHE IID起動。
+> **web モードは実 PACS 相手に一通り動作することを確認**。**唯一未確認のまま残っている項目**: SEG/RTSTRUCT
+> の per-frame 参照・幾何整合の目視確認（エクスポートされたシリーズが PACS に現れることは確認済みだが、
+> フレームごとの参照・幾何整合そのものは未確認）。詳細は `deploy/dcm4chee/VERIFY-web.md` を参照。
 >
 > 🚨 **3D/MPR/リスライス/計測/座標変換を触るなら着手前に必ず `fw/cornerstone-3d-geometry-caveat.md` を読む**
 > （Cornerstone3D の 3D ジオメトリはバグがあり、そのまま使うと実空間座標がずれる。確定計算は患者 LPS mm の自前・単一幾何で完結）。

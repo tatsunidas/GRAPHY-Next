@@ -12,6 +12,20 @@
 > に配置し、`Dcm4cheTools.java` に `FfmpegLocator` と同様の同梱ディレクトリ探索を追加。
 > ツール実行時は同梱 JRE（`System.getProperty("java.home")`）を `JAVA_HOME` として注入するため
 > 追加の JRE 同梱は不要。CI（`release.yml`）にも取得ステップを追加済み。
+>
+> 2026-07-10 修正: **Windows 実機で MOVESCU が `IllegalArgumentException: <値>` で必ず失敗する
+> バグを修正**（FINDSCU は絞り込み無しだと再現せず気付きにくい）。原因: 同梱の `movescu.bat`
+> 等（`bin/<tool>.bat`）は `%1`/`shift` で引数を読むが、cmd.exe のバッチパラメータ参照は引数中の
+> `=` `,` `;` を空白同様の区切り文字として**再分割**する既知の挙動があり、`-m
+> StudyInstanceUID=1.2.3...` が `StudyInstanceUID` と `1.2.3...` の 2 引数に割れてしまい、
+> dcm4che の `CLIUtils` が値側をタグ名として解釈しようとして例外で落ちていた（FINDSCU は
+> 絞り込み無しのクエリだと `=` を含む引数が無いため症状が出ない）。`Dcm4cheTools.run` で
+> `.bat` 起動時のみ、`=`/`,`/`;` を含む引数をダブルクォートで囲んでから渡すよう修正
+> （`quoteForWindowsBatchIfNeeded`。cmd.exe はクォート区間を 1 トークンとして扱うため
+> 再分割されず、java プロセスにはクォート無しの元の文字列がそのまま渡る）。findscu/getscu/
+> storescu も同じ `.bat` ローンチャー経由のため同種の不具合を予防的に回避（絞り込み条件に
+> `=`/`,`/`;` を含む値を使う C-FIND 等）。実機 `movescu.bat` に対する直接再現・修正確認済み
+> （非 Windows は対象外＝挙動変更なし）。
 
 ## 目的
 外部 PACS への問い合わせ・取得を行う**常駐ウィンドウ**。複数 Destination(PACS) をタブ展開し、

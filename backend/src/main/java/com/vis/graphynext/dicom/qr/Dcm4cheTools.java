@@ -50,7 +50,7 @@ public class Dcm4cheTools {
 
     /** 指定ツールの実行ファイルを解決する（Windows は .bat も考慮）。 */
     public Optional<Path> tool(String name) {
-        boolean win = System.getProperty("os.name", "").toLowerCase().contains("win");
+        boolean win = isWindows();
         for (Path base : candidateDirs()) {
             for (String exe : win ? new String[]{name + ".bat", name + ".exe", name} : new String[]{name}) {
                 Path p = base.resolve("bin").resolve(exe);
@@ -125,8 +125,9 @@ public class Dcm4cheTools {
 
     /** コマンドを実行し、標準出力/標準エラーを結合して返す。timeout 超過は例外。 */
     public Result run(List<String> command, long timeoutMs) throws IOException {
-        log.debug("exec: {}", String.join(" ", command)); // 外部ツール起動: トラブル時に DEBUG で確認
-        ProcessBuilder pb = new ProcessBuilder(command).redirectErrorStream(true);
+        List<String> command2 = quoteForWindowsBatchIfNeeded(command);
+        log.debug("exec: {}", String.join(" ", command2)); // 外部ツール起動: トラブル時に DEBUG で確認
+        ProcessBuilder pb = new ProcessBuilder(command2).redirectErrorStream(true);
         // ツール本体は同梱 jar を起動する Java 製ラッパー。実行環境にシステム Java が無くても
         // 動くよう、今このバックエンドを動かしている JVM 自身の home を JAVA_HOME として渡す。
         pb.environment().put("JAVA_HOME", System.getProperty("java.home"));
@@ -158,5 +159,36 @@ public class Dcm4cheTools {
             throw new IOException("ツール実行が中断されました", e);
         }
         return new Result(p.exitValue(), out.toString());
+    }
+
+    /**
+     * Windows の同梱 {@code .bat} ランチャーは {@code %1}/{@code shift} で引数を読むが、この
+     * cmd.exe のバッチパラメータ参照は引数中の {@code =} {@code ,} {@code ;} を（空白と同様に）
+     * 区切り文字として再分割してしまう（cmd.exe の既知の挙動）。そのため、例えば
+     * {@code -m StudyInstanceUID=1.2.3} は 1 引数のつもりでも movescu 側では
+     * "StudyInstanceUID" と "1.2.3" の 2 引数に分かれてしまい、CLIUtils が値側を
+     * タグ名として解釈しようとして {@code IllegalArgumentException} で落ちる
+     * （findscu は無絞り込みだと "=" を含む引数が無く症状が出ないため気付きにくい）。
+     * 該当文字を含む引数をダブルクォートで囲むと、cmd.exe のバッチパラメータ参照は
+     * クォート区間を 1 トークンとして扱うため分割されず、java プロセスにはクォート無しの
+     * 元の文字列がそのまま渡る（Windows のみ・{@code .bat} 起動時のみ適用。非 Windows や
+     * 直接実行ファイルには無関係の挙動のため適用しない）。
+     */
+    private static List<String> quoteForWindowsBatchIfNeeded(List<String> command) {
+        if (command.isEmpty() || !isWindows() || !command.get(0).toLowerCase().endsWith(".bat")) {
+            return command;
+        }
+        List<String> out = new ArrayList<>(command.size());
+        out.add(command.get(0));
+        for (int i = 1; i < command.size(); i++) {
+            String a = command.get(i);
+            boolean needsQuote = a.indexOf('=') >= 0 || a.indexOf(',') >= 0 || a.indexOf(';') >= 0;
+            out.add(needsQuote ? "\"" + a + "\"" : a);
+        }
+        return out;
+    }
+
+    private static boolean isWindows() {
+        return System.getProperty("os.name", "").toLowerCase().contains("win");
     }
 }
