@@ -11,6 +11,7 @@ import dicomImageLoader from "@cornerstonejs/dicom-image-loader";
 import { registerSegMetadataProvider } from "./segMetadata";
 import { registerThickSlabLoader } from "./thickSlab";
 import { WandTool } from "./wandTool";
+import { LevelSetTool } from "./levelSetsTool";
 import { installSegDebug } from "./segDebug";
 import {
   init as toolsInit,
@@ -123,6 +124,7 @@ export function ensureCornerstoneInitialized(): Promise<void> {
       addTool(SphereScissorsTool); // 3D 球で fill/erase
       addTool(RectangleROIThresholdTool); // しきい値塗り
       addTool(WandTool); // Wand（対話型リージョングロー: 2D/3D 輝度 flood, ダイアログ駆動）
+      addTool(LevelSetTool); // Level Sets（対話型・Fast Marching。L1 時点、fw/level-sets-design.md）
       // MPR（VolumeViewport）: 連動十字線・ボリュームスライス送り。
       addTool(CrosshairsTool);
       addTool(StackScrollTool);

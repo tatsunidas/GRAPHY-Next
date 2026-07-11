@@ -22,11 +22,12 @@ import {
 } from "@cornerstonejs/tools";
 import { ensureStackSegmentation, disposeViewportSegmentation, noteSegViewport } from "./segmentation";
 import { WandTool, commitWand } from "./wandTool";
+import { LevelSetTool, commitLevelSet } from "./levelSetsTool";
 import { TOOL_IDS } from "./toolIds";
 import { ToolIcon } from "../icons/ToolIcon";
 import { UI_ICON_FILES, ACTIVE_ICON_STYLE } from "../icons/toolIcons";
 import { emitToast } from "./toast";
-import { ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID } from "./toolIds";
+import { ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID } from "./toolIds";
 import { setViewerContext, clearViewerContext, getViewerContext, type ViewerContext } from "./viewerContext";
 import { setRoiMaskMeta, subscribeRoiMaskStore } from "./roiMaskStore";
 import { reconcileGlobalAnnotations } from "./globalRoiSync";
@@ -85,11 +86,11 @@ const MEASURE_TOOLS = [
   RectangleROITool.toolName,
   ProbeTool.toolName,
 ];
-// 左ドラッグに割り当て可能なツール一覧（操作＋計測＋ブラシ＋3D Wand）。
-const PRIMARY_TOOLS = [WindowLevelTool.toolName, PanTool.toolName, ZoomTool.toolName, ...MEASURE_TOOLS, BrushTool.toolName, WandTool.toolName];
+// 左ドラッグに割り当て可能なツール一覧（操作＋計測＋ブラシ＋3D Wand＋Level Sets）。
+const PRIMARY_TOOLS = [WindowLevelTool.toolName, PanTool.toolName, ZoomTool.toolName, ...MEASURE_TOOLS, BrushTool.toolName, WandTool.toolName, LevelSetTool.toolName];
 // 描画/計測/セグメンテーション系ツール（左ドラッグ占有）。これらが有効な間は per-tile の Pan↔W/L 切替を抑止し、
 // 先にツールバーで解除するよう促す（グローバルツールが優先＝ナビ切替が黙って効かないのを避ける）。
-const BLOCKING_TOOLS = new Set<string>([...MEASURE_TOOLS, BrushTool.toolName, ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID]);
+const BLOCKING_TOOLS = new Set<string>([...MEASURE_TOOLS, BrushTool.toolName, ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID]);
 
 // 単一の RenderingEngine を全ビューポートで共有する（WebGL コンテキストを 1 つに保つ＝省メモリ）。
 export const ENGINE_ID = "graphy-engine";
@@ -661,6 +662,9 @@ export function Viewer2D({
             // Wand（対話型リージョングロー: 2D/3D）。passive で追加、setActiveTool で mode 設定＋Primary 割当。
             tg.addTool(WandTool.toolName);
             tg.setToolPassive(WandTool.toolName);
+            // Level Sets（対話型・Fast Marching、L1 時点）。passive で追加、setActiveTool で Primary 割当。
+            tg.addTool(LevelSetTool.toolName);
+            tg.setToolPassive(LevelSetTool.toolName);
             tg.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
             tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
             tg.setToolActive(ZoomTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary }] });
@@ -1045,14 +1049,15 @@ export function Viewer2D({
     const isWand2d = toolName === WAND2D_TOOL_ID;
     const isWand3d = toolName === WAND3D_TOOL_ID;
     const isWand = isWand2d || isWand3d;
-    // ThickSlab（合成スライス）有効中は ROI・計測・ブラシ・Wand の作成/編集をブロックする。
+    const isLevelSet = toolName === LEVELSET2D_TOOL_ID;
+    // ThickSlab（合成スライス）有効中は ROI・計測・ブラシ・Wand・Level Sets の作成/編集をブロックする。
     // 合成画像は単一の実スライス(SOP)に一意対応せず、描いた注釈を安全に保存できないため。
-    const isAnnotationTool = MEASURE_TOOLS.includes(toolName) || isBrush || isEraser || isWand;
+    const isAnnotationTool = MEASURE_TOOLS.includes(toolName) || isBrush || isEraser || isWand || isLevelSet;
     if (thickSlabRef.current && isAnnotationTool) {
       emitToast(t("series.thickSlab.roiBlocked"));
       return;
     }
-    const primary = isEraser ? BrushTool.toolName : isWand ? WandTool.toolName : toolName;
+    const primary = isEraser ? BrushTool.toolName : isWand ? WandTool.toolName : isLevelSet ? LevelSetTool.toolName : toolName;
     const applyBindings = () => {
       try {
         for (const tn of PRIMARY_TOOLS) {
@@ -1087,11 +1092,12 @@ export function Viewer2D({
       emitToast(t("viewer2d.tool.needVolume"));
       return;
     }
-    // Wand 以外のツールへ切り替えるときは、開いている Wand セッションを確定して閉じる。
+    // Wand/Level Sets 以外のツールへ切り替えるときは、開いているセッションを確定して閉じる。
     if (!isWand) commitWand();
+    if (!isLevelSet) commitLevelSet();
     activeToolRef.current = toolName; // per-tile Pan↔W/L 切替の抑止判定に使う。
-    if (isBrush || isEraser || isWand) {
-      // Mask(labelmap) を現在スタックに対し保証してからブラシ/Wand を有効化。
+    if (isBrush || isEraser || isWand || isLevelSet) {
+      // Mask(labelmap) を現在スタックに対し保証してからブラシ/Wand/Level Sets を有効化。
       void ensureStackSegmentation(viewportIdRef.current, imageIdsRef.current).then(applyBindings);
     } else {
       applyBindings();

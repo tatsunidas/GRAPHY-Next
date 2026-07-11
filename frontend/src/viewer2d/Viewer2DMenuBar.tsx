@@ -176,6 +176,7 @@ export function Viewer2DMenuBar({
         { label: t("viewer2d.tool.eraser"), onClick: () => actions.setTool(TOOL_IDS.eraser), checked: activeTool === TOOL_IDS.eraser },
         { label: t("viewer2d.tool.wand2d"), onClick: () => actions.setTool(TOOL_IDS.wand2d), checked: activeTool === TOOL_IDS.wand2d },
         { label: t("viewer2d.tool.region3d"), onClick: () => actions.setTool(TOOL_IDS.region3d), checked: activeTool === TOOL_IDS.region3d },
+        { label: t("viewer2d.tool.levelset2d"), onClick: () => actions.setTool(TOOL_IDS.levelset2d), checked: activeTool === TOOL_IDS.levelset2d },
       ],
     },
     {

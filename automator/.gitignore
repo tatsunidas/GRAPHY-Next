@@ -1,0 +1,14 @@
+# 依存関係・ビルド成果物
+node_modules/
+dist/
+
+# 実データ（DICOM等）。フォルダ構成とREADMEだけ残す。
+fixtures/**
+!fixtures/manifest.yaml
+!fixtures/**/
+!fixtures/**/README.md
+
+# 実行証跡（スクリーンショット等）
+.results/
+
+*.log

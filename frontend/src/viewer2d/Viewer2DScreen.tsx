@@ -25,6 +25,7 @@ import { TOOL_IDS } from "../viewer/toolIds";
 import { subscribeToast } from "../viewer/toast";
 import { subscribeSeriesRefresh } from "../viewer/viewerRefresh";
 import { WandDialog } from "./WandDialog";
+import { LevelSetsDialog } from "./LevelSetsDialog";
 import { HistogramDialog } from "./HistogramDialog";
 import { SUVCalibrationDialog } from "../viewer/SUVCalibrationDialog";
 import { getSuv } from "../viewer/suvStore";
@@ -904,6 +905,7 @@ function TileGrid({
         </div>
       )}
       <WandDialog />
+      <LevelSetsDialog />
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
       <div
         style={{

@@ -104,6 +104,7 @@ export function SearchPanel({ onSearch }: { onSearch: (f: StudyFilters) => void 
 
       <Field label={t("field.patientId")}>
         <input
+          data-testid="search-patientid-input"
           value={patientId}
           onChange={(e) => setPatientId(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && runSearch()}
@@ -173,7 +174,11 @@ export function SearchPanel({ onSearch }: { onSearch: (f: StudyFilters) => void 
       </Field>
 
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-        <button onClick={runSearch} style={{ ...btn, background: "#0b5cad", color: "#fff", flex: 1 }}>
+        <button
+          data-testid="search-submit-button"
+          onClick={runSearch}
+          style={{ ...btn, background: "#0b5cad", color: "#fff", flex: 1 }}
+        >
           {t("common.search")}
         </button>
         <button onClick={clear} style={btn}>

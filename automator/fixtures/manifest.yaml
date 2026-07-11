@@ -1,0 +1,75 @@
+# automator が検証時に前提とするサンプルデータの定義。
+# 実データは automator/fixtures/<id>/ に手動配置する（.gitignore対象、git管理はこのmanifestとREADMEのみ）。
+# `automator check-fixtures` がこのファイルを読み、各カテゴリの配置有無を検証する。
+
+categories:
+  - id: ct-basic
+    dir: ct-basic
+    minFiles: 1
+    description: >
+      最も単純なCTシリーズ（複数スライス、等間隔、チルトなし）。
+      検証の最初の縦串（DBリセット→import→MainScreen検索→2Dビューア表示）の主データ。
+
+  - id: ct-gantry-tilt
+    dir: ct-gantry-tilt
+    minFiles: 1
+    description: CTシリーズ（ガントリチルトあり）。MPR/Slicerのチルト自動補正検証用。
+
+  - id: ct-nonuniform-spacing
+    dir: ct-nonuniform-spacing
+    minFiles: 1
+    description: >
+      CTシリーズ（非等間隔スライス、または複数収集/複数オリエンテーション混在）。
+      5D ZCT判定・純スタックフォールバックの検証用。
+
+  - id: mr-multiecho-diffusion
+    dir: mr-multiecho-diffusion
+    minFiles: 1
+    description: MRシリーズ（multi-echoまたはdiffusion、C次元を持つ）。5D C/T切替検証用。
+
+  - id: mr-siemens-mosaic
+    dir: mr-siemens-mosaic
+    minFiles: 1
+    description: MRシリーズ（Siemens MOSAIC形式）。デモザイク処理の検証用。
+
+  - id: pet-suv
+    dir: pet-suv
+    minFiles: 1
+    description: >
+      PET(PT)シリーズ。Radiopharmaceutical情報（投与量・半減期・体重等）付き。
+      SUV校正（SUVbw/SUL James/SUL Janmahasatian/SUVbsa）検証用。
+
+  - id: xa-no-geometry
+    dir: xa-no-geometry
+    minFiles: 1
+    description: XA/DX/CRシリーズ（ImageOrientationPatient/ImagePositionPatient無し）。Fusion非空間フォールバック検証用。
+
+  - id: rtstruct-seg-existing
+    dir: rtstruct-seg-existing
+    minFiles: 1
+    description: 既存のRTSTRUCT/DICOM SEGファイル一式（元画像シリーズ含む）。読込・往復検証用。
+
+  - id: nifti
+    dir: nifti
+    minFiles: 1
+    description: NIfTI形式ファイル（.nii/.nii.gz）。DICOM以外の取込対応状況の確認用。
+
+  - id: image-png-jpg-bmp-gif-tif
+    dir: image-png-jpg-bmp-gif-tif
+    minFiles: 1
+    description: NonDicomImporter用の静止画像（png/jpg/bmp/gif/tif）各種。
+
+  - id: video-mp4-avi
+    dir: video-mp4-avi
+    minFiles: 1
+    description: NonDicomImporter用の動画（MP4 H.264、および非H.264/AVIの両方を推奨）。
+
+  - id: pdf
+    dir: pdf
+    minFiles: 1
+    description: NonDicomImporter用のPDF文書。
+
+  - id: single-slice-localizer
+    dir: single-slice-localizer
+    minFiles: 1
+    description: 単一スライス/localizer/scoutシリーズ。3D不可ガード・GridView無効化条件の検証用。

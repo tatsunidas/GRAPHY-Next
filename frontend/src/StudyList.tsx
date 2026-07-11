@@ -138,6 +138,7 @@ export function StudyList({
               return (
                 <tr
                   key={s.studyInstanceUid}
+                  data-testid={`study-row-${s.studyInstanceUid}`}
                   onClick={() => handleSelectStudy(selected ? null : s)}
                   style={{
                     borderBottom: "1px solid #eee",
@@ -250,6 +251,7 @@ function SeriesNavigator({
               return (
                 <tr
                   key={se.seriesInstanceUid}
+                  data-testid={`series-row-${se.seriesInstanceUid}`}
                   onClick={() => handleSelectSeries(selected ? null : se)}
                   style={{
                     borderBottom: "1px solid #eef1f4",

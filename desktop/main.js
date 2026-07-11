@@ -11,6 +11,7 @@
 //   GRAPHY_BACKEND_EXTERNAL=1  … backend を spawn せず、既に起動済みのものに接続
 //   GRAPHY_BACKEND_PORT        … backend ポート（既定 config.backend.port）
 //   GRAPHY_BACKEND_PROFILE     … backend プロファイル（既定 config.backend.profile）
+//   GRAPHY_DEV_SERVER_URL      … Vite dev サーバの URL（既定 config.devServerUrl の 5173）
 
 const { app, BrowserWindow, shell, dialog, ipcMain, nativeImage, screen } = require("electron");
 const { spawn } = require("node:child_process");
@@ -31,7 +32,9 @@ const PROFILE = process.env.GRAPHY_BACKEND_PROFILE || cfg.backend.profile;
 const HEALTH_PATH = cfg.backend.healthPath;
 const HEALTH_TIMEOUT_MS = cfg.backend.healthTimeoutMs;
 const JAR_NAME = cfg.backend.jarName;
-const DEV_URL = cfg.devServerUrl;
+// GRAPHY_DEV_SERVER_URL … Vite dev サーバの URL を上書き（既定 5173 以外のポートで自前起動する
+// automator 等、複数の dev サーバを並行稼働させたいツール向け）。GRAPHY_DEV=1 のときのみ参照される。
+const DEV_URL = process.env.GRAPHY_DEV_SERVER_URL || cfg.devServerUrl;
 const WINDOW = cfg.window;
 const API_BASE = `http://localhost:${PORT}`;
 // セキュリティ設定（config.json の security セクション、無ければ安全な既定）。

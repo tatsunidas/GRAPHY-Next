@@ -36,6 +36,7 @@ import {
   thickSlabImageId,
 } from "./thickSlab";
 import { imageIdForInstance, type ViewerMode } from "./imageId";
+import { installDebugApi } from "./debugApi";
 import { matchesCombo } from "../shortcuts/registry";
 import { fetchSeriesLayout, type Instance } from "../api";
 import { fetchSettings } from "../settings/settingsApi";
@@ -102,6 +103,9 @@ export function SeriesViewer({
   renderFusionOverlay?: RenderOverlay;
 }) {
   const { t } = useI18n();
+  // automator（自律検証ツール）用デバッグAPI。dev ビルドのみ、冪等（fw/HANDOFF.md 参照なし・
+  // automator/checklist/10-viewer2d-core.md 参照）。
+  useEffect(() => { installDebugApi(); }, []);
   const imageIds = useMemo(
     () => instances.map((i) => imageIdForInstance(mode, i.sopInstanceUid, studyUid, seriesUid)),
     [instances, mode, studyUid, seriesUid],
@@ -508,7 +512,12 @@ export function SeriesViewer({
   );
 
   return (
-    <div ref={rootRef} tabIndex={0} style={fillHeight ? { ...root, flex: 1, display: "flex", flexDirection: "column", minHeight: 0 } : root}>
+    <div
+      ref={rootRef}
+      tabIndex={0}
+      data-testid="series-viewer-root"
+      style={fillHeight ? { ...root, flex: 1, display: "flex", flexDirection: "column", minHeight: 0 } : root}
+    >
       {gridOn ? (
         <div style={gridScroll}>
           <div style={{ display: "grid", gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))`, gap: 6 }}>

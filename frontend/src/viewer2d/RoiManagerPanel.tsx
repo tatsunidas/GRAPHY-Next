@@ -615,7 +615,7 @@ const panel: React.CSSProperties = {
 const head: React.CSSProperties = { display: "flex", alignItems: "center", gap: 4, padding: "6px 8px", borderBottom: "1px solid #e6eaee", background: "#fff" };
 const hbtn: React.CSSProperties = { border: "1px solid #cdd5de", borderRadius: 5, background: "#fff", cursor: "pointer", fontSize: 13, padding: "1px 7px" };
 const section: React.CSSProperties = { padding: "6px 8px 2px", fontWeight: 600, color: "#5a6672" };
-const row: React.CSSProperties = { display: "flex", alignItems: "center", gap: 6, padding: "3px 8px" };
+const row: React.CSSProperties = { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, padding: "3px 8px" };
 const name: React.CSSProperties = {
   flex: 1, minWidth: 0, color: "#33404d", fontSize: 12,
   border: "1px solid transparent", borderRadius: 4, background: "transparent", padding: "2px 4px",

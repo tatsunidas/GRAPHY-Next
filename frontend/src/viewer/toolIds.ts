@@ -20,6 +20,8 @@ export const ERASER_TOOL_ID = "__graphy_eraser__";
 /** Wand（対話型リージョングロー）の合成 ID。実ツールは WandTool、mode でモード切替（2D/3D）。 */
 export const WAND2D_TOOL_ID = "__graphy_wand2d__";
 export const WAND3D_TOOL_ID = "__graphy_wand3d__";
+/** Level Sets（L1: Fast Marching のみ、2D）の合成 ID。実ツールは LevelSetTool（fw/level-sets-design.md）。 */
+export const LEVELSET2D_TOOL_ID = "__graphy_levelset2d__";
 
 export const TOOL_IDS = {
   windowLevel: WindowLevelTool.toolName,
@@ -36,4 +38,6 @@ export const TOOL_IDS = {
   region3d: WAND3D_TOOL_ID,
   /** 2D Wand（対話型・輝度領域成長。単一スライス）。 */
   wand2d: WAND2D_TOOL_ID,
+  /** Level Sets（対話型・Fast Marching。単一スライス、L1 時点）。 */
+  levelset2d: LEVELSET2D_TOOL_ID,
 } as const;

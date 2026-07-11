@@ -7,9 +7,13 @@ import { App } from "./App";
 import { I18nProvider } from "./i18n/i18n";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { verifyToolIcons } from "./icons/toolIcons";
+import { installLevelSetDebug } from "./viewer/levelSetsDebug";
 
 // dev のみ: アイコン未登録のツールを起動時に警告（本番では no-op）。
 verifyToolIcons();
+// 診断: Level Sets Worker が起動するか Console で `__graphyLevelSetSelfTest()` を実行して確認。
+// Cornerstone 初期化に依存しないため、Viewer を開かなくても（起動直後から）呼べる。
+installLevelSetDebug();
 
 // 注意: React.StrictMode は付けない。
 // StrictMode は開発時に「mount → cleanup → remount」と effect を二重実行するが、
