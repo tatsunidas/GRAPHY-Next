@@ -51,6 +51,8 @@ export const en: Record<string, string> = {
   "field.birthDate": "Birth Date",
   "field.sex": "Sex",
   "field.studyCount": "Studies",
+  "field.report": "Report",
+  "field.status": "Status",
 
   // main screen
   "main.menu.file": "File",
@@ -118,6 +120,7 @@ export const en: Record<string, string> = {
   "main.toolbar.tagViewer": "Tag Viewer",
   "main.toolbar.seriesExtractor": "Series Extractor",
   "main.toolbar.report": "Report",
+  "main.toolbar.reportManager": "Report Manager",
   "main.toolbar.viewer2d": "2D Viewer",
   "main.toolbar.viewer3d": "3D Viewer",
   "main.toolbar.mpr": "MPR Viewer",
@@ -644,6 +647,8 @@ export const en: Record<string, string> = {
   "study.list.total": "Total: {{n}}",
   "study.prompt": "Set search conditions and run a search.",
   "study.empty": "No studies (they appear after receiving/importing).",
+  "study.report.final": "Finalized report ({{count}})",
+  "study.report.draft": "Draft report ({{count}})",
   "page.prev": "Prev",
   "page.next": "Next",
   "page.indicator": "{{from}}–{{to}} of {{total}} (page {{page}}/{{pages}})",
@@ -1372,4 +1377,9 @@ export const en: Record<string, string> = {
   "report.readOnlyFinal": "This report is finalized and read-only.",
   "report.sr.info": "SR SOP Instance: {{sop}}",
   "report.ko.info": "KO SOP Instance: {{sop}}",
+  "reportManager.title": "Reports",
+  "reportManager.empty": "No reports for this study yet.",
+  "reportManager.new": "New Report",
+  "reportManager.open": "Open",
+  "reportManager.updatedAt": "Updated",
 };

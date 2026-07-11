@@ -1,8 +1,9 @@
 # レポート機能 設計（Markdown レポート → DICOM-SR / Key Object 移植）
 
-> 作成日: 2026-07-10 / 更新日: 2026-07-10
-> ステータス: **R1〜R4 実装済み**（データモデル＋CRUD API＋Comprehensive SR/KO 確定書き出し＋frontend 編集ダイアログ一式）。
-> R5（MainScreen ●/○表示・ReportManagerDialog）以降は未着手。`fw/mainscreen-tools.md` には項目未追加。
+> 作成日: 2026-07-10 / 更新日: 2026-07-11
+> ステータス: **R1〜R5 実装済み**（データモデル＋CRUD API＋Comprehensive SR/KO 確定書き出し＋frontend 編集ダイアログ一式＋
+> MainScreen ●/○表示＋ReportManagerDialog）。R6（フェーズ2, StaffMember/ReportTemplate）以降は未着手。
+> `fw/mainscreen-tools.md` には項目未追加。
 
 GRAPHY（旧, `com.vis.core.reporting`）にある「Markdown でレポートを書き、DICOM-SR として保存し、
 キー画像を Key Object Selection Document(KO) として管理する」機能を GRAPHY-Next に移植する設計。
@@ -196,7 +197,7 @@ class KeyImageRef {
 | **R2** ✅ | `SrWriter`（Comprehensive SR 生成）＋ 生成物 ingest。単体でのSR確定（キー画像無し）まで通す | 大 |
 | **R3** ✅ | `KeyObjectWriter`（KO生成）＋ `KeyImageGrid` UI 連携 | 中 |
 | **R4** ✅ | `ReportEditorDialog`＋`MarkdownEditor`(react-markdown+remark-gfm)＋`ParticipantsPanel` のフロント実装一式 | 大 |
-| **R5** | MainScreen `StudyList` の ●/○ 表示、`ReportManagerDialog`（患者/スタディ単位一覧） | 中 |
+| **R5** ✅ | MainScreen `StudyList` の ●/○ 表示、`ReportManagerDialog`（患者/スタディ単位一覧） | 中 |
 | R6（フェーズ2） | `StaffMember`ディレクトリ＋管理UI、`ReportTemplate`（定型文）＋管理UI | 中 |
 | R7（フェーズ2以降） | TID 1500 計測レポート（`Tid1500Writer`）— `fw/roi-mask-progress.md`/`roi-manager-design.md` の
 ROI永続化計画と統合して設計し直す | 大 |
@@ -308,6 +309,55 @@ MainScreen 側は Toolbar/MenuBar に「レポート」ボタンを追加（`Too
 全フィールドが読み取り専用に切り替わることを確認。ブラウザ console エラーは 0 件。
 
 次の未着手: R5（MainScreen `StudyList` の ●/○ 表示、`ReportManagerDialog`）。
+
+## 8.5 R5 実装メモ（2026-07-11）
+
+`StudyList.tsx` にレポート列を追加: スタディ一覧取得後、表示中の `studyInstanceUid` をまとめて
+`fetchReportStudyCounts`（既存の `GET /api/reports/study-counts`、backend は R1 時点で実装済みだった）に渡し、
+`studyInstanceUid → StudyReportCount` の map を保持。取得失敗はスタディ一覧本体の表示を壊さないよう握りつぶす
+（バッジは補助情報という位置づけ）。セルは新規 `ReportBadge`（同ファイル内）で描画し、旧 `ReportCellRenderer`
+と同じ配色（確定=青●+件数、下書きのみ=橙○+件数、無し=「—」）。
+
+新規 `frontend/src/report/ReportManagerDialog.tsx`: 選択中スタディのレポート一覧（`listReportsByStudy`）を
+テーブル表示（タイトル/種別/状態/更新日時/開く・削除）。「新規レポート」は `ReportEditorDialog` の
+「下書き解決→無ければ作成」ヒーリスティックには頼らず、`createReport` を直接呼んで新規下書きを作り即座に
+開く設計にした（同一スタディに複数レポート＝別 `ReportType` や将来の addendum を作れるようにするため、
+「既存下書きがあれば流用」という R4 の自動解決とは意図的に分離）。既存レポートを開くために
+`ReportEditorDialog` に `reportId?: string | null` prop を追加し、指定時は `getReport(reportId)` を直接呼ぶ
+（未指定時は R4 通りの自動解決）。
+
+MainScreen には `openTool` に `"reportManager"` を追加し、Toolbar/MenuBar に「レポート管理」ボタンを追加
+（「レポート」ボタンと同じくスタディ未選択なら `report.noSelection` でアラート）。
+`ReportManagerDialog.onOpenReport(id)` → MainScreen が `reportEditorId` state を設定して `"report"` ツールを開く、
+という経路で両ダイアログをつなぐ。
+
+**バッジ更新のための `onChanged` コールバック追加**: `ReportEditorDialog`/`ReportManagerDialog` の両方に
+`onChanged?: () => void` を追加し、状態が変わる操作（新規下書き作成・確定・削除）の後に呼ぶ。MainScreen 側は
+これを既存の `NonDicomImportDialog.onImported` と同じパターンで `setReloadKey((k) => k + 1)` に接続。
+これが無いと、レポートを新規作成/確定/削除してもバッジが古いまま（手動更新ボタンを押すまで反映されない）
+UX 上の不整合が実機検証で見つかったため追加した。
+
+**実機検証で発見・修正した既存バグ（R5 のスコープ外だが今回の delete 動線で顕在化）**:
+`frontend/src/http.ts` の共通 fetch ラッパ `request()` が `res.status === 204` の場合しか空ボディを
+考慮しておらず、Spring MVC の `void` 返り値ハンドラ（`ReportController.delete`、および既存の
+`AnonymizeController.clearMask`）は実際には **200 OK + 空ボディ**を返すため、`res.json()` が
+`SyntaxError: Unexpected end of JSON input` を投げていた。ReportManagerDialog/ReportEditorDialog の
+削除ボタンを実際に押して確認したことで発覚（同じ形の匿名化マスク削除エンドポイントも同一バグを潜在的に
+持っていた）。`res.text()` を先に読み、空文字なら `undefined` を返すよう修正（`http.ts` 側の共通修正なので
+このバグを使う全 API で解消）。
+
+**実機検証（2026-07-11）**: backend を standalone プロファイルで起動（`desktop/data` の既存ローカル索引を
+使用）＋frontend を Vite dev で起動し、Playwright（スクラッチに `playwright` を一時インストール、R4 と同じ
+手法）で以下を確認・スクリーンショット取得: ①スタディ一覧に「レポート」列が表示される、②「レポート管理」
+ボタンでダイアログが開く、③「新規レポート」→ 下書き作成 → エディタが開く、④マネージャ再オープンで
+下書き（状態=下書き）が一覧に出る、⑤マネージャを閉じると StudyList のバッジが自動更新され「○2」
+（橙・下書き件数）が表示される、⑥マネージャから既存下書きを「開く」で `reportId` 指定オープンが機能する、
+⑦エディタの「下書きを削除」・マネージャの「下書きを削除」の両方が成功しリストから消える、
+⑧削除後バッジが「—」に戻る、⑨新規下書きを「確定（SR化）」すると SR SOP Instance UID が表示され
+読み取り専用に切り替わり、StudyList のバッジが青い「●1」に自動更新される。ブラウザ console エラーは
+全ステップを通じて 0 件。
+
+次の未着手: R6（フェーズ2, `StaffMember`ディレクトリ＋管理UI、`ReportTemplate`＋管理UI）。
 
 ---
 

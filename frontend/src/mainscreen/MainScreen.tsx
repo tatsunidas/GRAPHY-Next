@@ -19,6 +19,7 @@ import { SendDialog } from "./SendDialog";
 import { TagViewerDialog } from "./TagViewerDialog";
 import { NonDicomImportDialog } from "./NonDicomImportDialog";
 import { ReportEditorDialog } from "../report/ReportEditorDialog";
+import { ReportManagerDialog } from "../report/ReportManagerDialog";
 
 /**
  * アプリの土台シェル（GRAPHY の MainScreen 相当）。
@@ -59,8 +60,11 @@ export function MainScreen({
     | "tagViewer"
     | "nonDicomImport"
     | "report"
+    | "reportManager"
     | null
   >(null);
+  // ReportManagerDialog から特定レポートを開いたときだけ設定（新規/報告ボタンからの通常オープンは null=自動解決）。
+  const [reportEditorId, setReportEditorId] = useState<string | null>(null);
 
   const handleImport = async () => {
     const d = desktop();
@@ -203,7 +207,16 @@ export function MainScreen({
         window.alert(t("report.noSelection"));
         return;
       }
+      setReportEditorId(null);
       setOpenTool("report");
+      return;
+    }
+    if (kind === "reportManager") {
+      if (!selectedStudy) {
+        window.alert(t("report.noSelection"));
+        return;
+      }
+      setOpenTool("reportManager");
       return;
     }
     if (kind === "nonDicomImport") {
@@ -290,9 +303,18 @@ export function MainScreen({
       />
       <ReportEditorDialog
         open={openTool === "report"}
-        onClose={() => setOpenTool(null)}
+        onClose={() => { setOpenTool(null); setReportEditorId(null); }}
         study={selectedStudy}
         series={selectedSeries}
+        reportId={reportEditorId}
+        onChanged={() => setReloadKey((k) => k + 1)}
+      />
+      <ReportManagerDialog
+        open={openTool === "reportManager"}
+        onClose={() => setOpenTool(null)}
+        study={selectedStudy}
+        onOpenReport={(id) => { setReportEditorId(id); setOpenTool("report"); }}
+        onChanged={() => setReloadKey((k) => k + 1)}
       />
     </div>
   );

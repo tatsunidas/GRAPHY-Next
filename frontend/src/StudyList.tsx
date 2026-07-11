@@ -7,6 +7,7 @@ import {
   fetchStudies,
   fetchSeries,
   fetchInstances,
+  fetchReportStudyCounts,
   instanceDocumentUrl,
   ENCAPSULATED_PDF_SOP_CLASS,
   VIDEO_PHOTOGRAPHIC_SOP_CLASS,
@@ -14,6 +15,7 @@ import {
   type Series,
   type Instance,
   type StudyFilters,
+  type StudyReportCount,
 } from "./api";
 import { useI18n } from "./i18n/i18n";
 import { SeriesViewer } from "./viewer/SeriesViewer";
@@ -47,6 +49,7 @@ export function StudyList({
 }) {
   const { t } = useI18n();
   const [studies, setStudies] = useState<Study[] | null>(null);
+  const [reportCounts, setReportCounts] = useState<Record<string, StudyReportCount>>({});
   const [error, setError] = useState<string | null>(null);
   const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
   const [page, setPage] = useState(0);
@@ -69,11 +72,31 @@ export function StudyList({
     setPage(0);
     setError(null);
     setStudies(null);
+    setReportCounts({});
     // filters が null = まだ検索していない（初期描画）。フェッチしない。
     if (filters == null) return;
+    let cancelled = false;
     fetchStudies(filters)
-      .then(setStudies)
+      .then((list) => {
+        if (cancelled) return;
+        setStudies(list);
+        if (list.length === 0) return;
+        // レポート有無の●/○表示は補助情報のため、取得失敗してもスタディ一覧自体は表示する。
+        fetchReportStudyCounts(list.map((s) => s.studyInstanceUid))
+          .then((counts) => {
+            if (cancelled) return;
+            const map: Record<string, StudyReportCount> = {};
+            for (const c of counts) map[c.studyInstanceUid] = c;
+            setReportCounts(map);
+          })
+          .catch(() => {
+            // ignore
+          });
+      })
       .catch((e: unknown) => setError(String(e)));
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterKey, reloadKey]);
 
@@ -106,6 +129,7 @@ export function StudyList({
               <Th sortKey="studyDescription" sort={sort} onSort={onSort}>{t("field.description")}</Th>
               <Th sortKey="modality" sort={sort} onSort={onSort}>{t("field.modality")}</Th>
               <Th sortKey="numberOfInstances" sort={sort} onSort={onSort}>{t("field.instanceCount")}</Th>
+              <Th>{t("field.report")}</Th>
             </tr>
           </thead>
           <tbody>
@@ -127,6 +151,7 @@ export function StudyList({
                   <Td>{s.studyDescription || "—"}</Td>
                   <Td>{s.modality || "—"}</Td>
                   <Td>{s.numberOfInstances}</Td>
+                  <Td><ReportBadge count={reportCounts[s.studyInstanceUid]} /></Td>
                 </tr>
               );
             })}
@@ -338,6 +363,23 @@ const docBtn: React.CSSProperties = {
   fontSize: 13,
 };
 const docLink: React.CSSProperties = { fontSize: 13, color: "#0b5cad" };
+
+/** レポート有無セル（旧 GRAPHY `ReportCellRenderer` 相当）: 確定=青●、下書きのみ=橙○、件数併記。 */
+function ReportBadge({ count }: { count: StudyReportCount | undefined }) {
+  const { t } = useI18n();
+  if (!count || count.reportState === "none") return <span style={{ color: "#ccc" }}>—</span>;
+  const isFinal = count.reportState === "report";
+  const n = isFinal ? count.reportCount : count.draftCount;
+  return (
+    <span
+      title={t(isFinal ? "study.report.final" : "study.report.draft", { count: n })}
+      style={{ display: "inline-flex", alignItems: "center", gap: 5, color: isFinal ? "#0b5cad" : "#c67c00" }}
+    >
+      <span style={{ fontSize: 14, lineHeight: 1 }}>{isFinal ? "●" : "○"}</span>
+      <span style={{ fontSize: 12 }}>{n}</span>
+    </span>
+  );
+}
 
 function formatDate(d: string | null): string {
   if (!d || d.length !== 8) return d || "—";

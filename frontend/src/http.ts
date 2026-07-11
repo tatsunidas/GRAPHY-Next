@@ -22,9 +22,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     log.warn("api error", init?.method ?? "GET", url, res.status, message);
     throw new Error(message);
   }
-  // 204 No Content
+  // 204 No Content、および Spring の void ハンドラ（200 だが本文が空）の両方に対応する。
   if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
+  const text = await res.text();
+  return (text ? JSON.parse(text) : undefined) as T;
 }
 
 /** backend の {message} を優先し、無ければ HTTP ステータスを返す。 */

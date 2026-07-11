@@ -51,6 +51,8 @@ export const ja: Record<string, string> = {
   "field.birthDate": "生年月日",
   "field.sex": "性別",
   "field.studyCount": "検査数",
+  "field.report": "レポート",
+  "field.status": "状態",
 
   // main screen
   "main.menu.file": "ファイル",
@@ -118,6 +120,7 @@ export const ja: Record<string, string> = {
   "main.toolbar.tagViewer": "タグ表示",
   "main.toolbar.seriesExtractor": "シリーズ抽出",
   "main.toolbar.report": "レポート",
+  "main.toolbar.reportManager": "レポート管理",
   "main.toolbar.viewer2d": "2D Viewer",
   "main.toolbar.viewer3d": "3D Viewer",
   "main.toolbar.mpr": "MPR Viewer",
@@ -643,6 +646,8 @@ export const ja: Record<string, string> = {
   "study.list.total": "全 {{n}} 件",
   "study.prompt": "検索条件を指定して検索してください。",
   "study.empty": "スタディがありません（受信/取り込み後に表示されます）。",
+  "study.report.final": "確定レポートあり（{{count}}件）",
+  "study.report.draft": "下書きのみ（{{count}}件）",
   "page.prev": "前へ",
   "page.next": "次へ",
   "page.indicator": "{{from}}〜{{to}} / 全{{total}}件（{{page}}/{{pages}}ページ）",
@@ -1371,4 +1376,9 @@ export const ja: Record<string, string> = {
   "report.readOnlyFinal": "このレポートは確定済みのため読み取り専用です。",
   "report.sr.info": "SR SOP Instance: {{sop}}",
   "report.ko.info": "KO SOP Instance: {{sop}}",
+  "reportManager.title": "レポート一覧",
+  "reportManager.empty": "このスタディのレポートはまだありません。",
+  "reportManager.new": "新規レポート",
+  "reportManager.open": "開く",
+  "reportManager.updatedAt": "更新日時",
 };

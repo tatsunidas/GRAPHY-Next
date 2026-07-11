@@ -131,7 +131,7 @@ GRAPHY-Next/
 - `viewer-2d-architecture.md` … **2D ビューア（Cornerstone3D）の中核設計。最重要。**
 - `viewer-2d-screen.md` … 2D Viewer **画面**（マルチスタディ・タイル）の要件・**スライス同期改善案**・段階プラン
 - `mainscreen-tools.md` … MainScreen ツールバー/メニューの各機能の計画（Export/Anonymizer 等）
-- `report-design.md` … レポート機能（Markdown執筆→DICOM-SR/KO、GRAPHY移植）。**R1〜R4実装済み・R5未着手**（2026-07-10時点、下記4節参照）。
+- `report-design.md` … レポート機能（Markdown執筆→DICOM-SR/KO、GRAPHY移植）。**R1〜R5実装済み**（2026-07-11時点、下記4節参照）。
 
 ## 2. ビルド / 実行 / テスト
 - **frontend ビルド/型チェック**: `cd frontend && npm run build`（`tsc -b && vite build`）。
@@ -321,9 +321,9 @@ GRAPHY-Next/
     ヘッダ/シリーズ行の DnD はウィンドウ内（並び替え/Fusion）専用に簡素化。
 
 ## 4. 次にやること（優先度つき・未実装）
-0. **レポート機能 R5**（`report-design.md`）: MainScreen `StudyList` の●/○（下書き/確定）表示、
-   `ReportManagerDialog`（患者/スタディ単位のレポート一覧・既存レポートを開く/削除）。
-   R1〜R4（データモデル・CRUD・SR/KO確定書き出し・編集ダイアログ一式）は実装・実機検証済み。
+0. **レポート機能 R6**（フェーズ2, `report-design.md` §8）: `StaffMember`ディレクトリ＋管理UI、
+   `ReportTemplate`（定型文）＋管理UI。R1〜R5（データモデル・CRUD・SR/KO確定書き出し・編集ダイアログ一式・
+   MainScreen ●/○表示・ReportManagerDialog）は実装・実機検証済み。
 1. **2D Viewer 画面 Phase 2: 同期**（`viewer-2d-screen.md`）
    - 表示状態 Sync（camera/VOI Synchronizer 流用）→ **空間スライス同期(FoR/IPP, mm 位置)** →
      **Relative モード**（任意スライスから揃えて送る・Off 不要）。→ Phase 3 リファレンスライン(ReferenceLinesTool)。

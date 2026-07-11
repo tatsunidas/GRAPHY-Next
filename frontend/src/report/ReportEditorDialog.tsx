@@ -40,11 +40,17 @@ export function ReportEditorDialog({
   onClose,
   study,
   series,
+  reportId,
+  onChanged,
 }: {
   open: boolean;
   onClose: () => void;
   study: Study | null;
   series: Series | null;
+  /** 指定時はスタディの最新/下書き解決ではなく、この ID のレポートを直接開く（ReportManagerDialog から）。 */
+  reportId?: string | null;
+  /** 新規作成/確定/削除で状態が変わったときに呼ばれる（StudyList の ●/○ 表示を再取得させる）。 */
+  onChanged?: () => void;
 }) {
   const { t } = useI18n();
 
@@ -117,16 +123,25 @@ export function ReportEditorDialog({
     setLoading(true);
     (async () => {
       try {
-        const summaries = await listReportsByStudy(study.studyInstanceUid);
-        const draft = summaries.find((s) => s.status === "DRAFT");
-        const target = draft ?? summaries[0];
-        const detail = target
-          ? await getReport(target.id)
-          : await createReport({
+        let detail: ReportDetail;
+        if (reportId) {
+          // ReportManagerDialog から特定のレポートを直接開く。
+          detail = await getReport(reportId);
+        } else {
+          const summaries = await listReportsByStudy(study.studyInstanceUid);
+          const draft = summaries.find((s) => s.status === "DRAFT");
+          const target = draft ?? summaries[0];
+          if (target) {
+            detail = await getReport(target.id);
+          } else {
+            detail = await createReport({
               patientId: study.patientId,
               studyInstanceUid: study.studyInstanceUid,
               bodyMarkdown: t("report.body.placeholder"),
             });
+            onChanged?.();
+          }
+        }
         if (cancelled) return;
         applyDetail(detail);
         if (detail.status === "DRAFT" && editorName.trim()) {
@@ -147,7 +162,7 @@ export function ReportEditorDialog({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, study?.studyInstanceUid]);
+  }, [open, study?.studyInstanceUid, reportId]);
 
   if (!open) return null;
 
@@ -195,6 +210,7 @@ export function ReportEditorDialog({
       await saveInternal();
       const finalized = await finalizeReport(report.id);
       applyDetail(finalized);
+      onChanged?.();
     } catch (e) {
       setError(t("report.finalizeError", { error: String(e) }));
     } finally {
@@ -209,6 +225,7 @@ export function ReportEditorDialog({
     setError(null);
     try {
       await deleteReport(report.id);
+      onChanged?.();
       onClose();
     } catch (e) {
       setError(t("report.deleteError", { error: String(e) }));
