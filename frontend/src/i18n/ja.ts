@@ -971,6 +971,7 @@ export const ja: Record<string, string> = {
   "dbadmin.delete.confirm": "患者「{{name}}」を削除します。よろしいですか？",
   "dbadmin.delete.studyConfirm": "スタディ「{{desc}}」を削除します。よろしいですか？",
   "dbadmin.delete.seriesConfirm": "シリーズ「{{desc}}」を削除します。よろしいですか？",
+  "dbadmin.delete.instanceConfirm": "画像「{{desc}}」を削除します。よろしいですか？",
   "dbadmin.edit.title": "患者情報の編集（患者全体）",
   "dbadmin.edit.note": "設定により、該当患者の全 DICOM ファイルのタグも書き換わります。",
   "dbadmin.edit.studyTitle": "患者情報の編集（このスタディのみ）",

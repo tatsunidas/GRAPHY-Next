@@ -72,9 +72,72 @@ function getPixelStats(): PixelStats[] {
   return out;
 }
 
+/** 各ビューポートのカメラ/フィット幾何。フィット不良（極小/隅寄り）の原因切り分け用。 */
+export interface ViewportGeometry {
+  viewportId: string;
+  imageId: string | null;
+  canvas: { width: number; height: number; clientWidth: number; clientHeight: number };
+  camera: {
+    parallelScale: number | null;
+    position: number[] | null;
+    focalPoint: number[] | null;
+  };
+  image: {
+    dimensions: number[] | null; // [cols, rows, 1]
+    spacing: number[] | null; // [colSpacing, rowSpacing, sliceSpacing]
+    origin: number[] | null;
+    direction: number[] | null;
+  } | null;
+}
+
+function getViewportGeometry(): ViewportGeometry[] {
+  const engine = getRenderingEngine(ENGINE_ID);
+  if (!engine) return [];
+  const out: ViewportGeometry[] = [];
+  for (const vp of engine.getViewports()) {
+    const canvas = vp.canvas as HTMLCanvasElement | undefined;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const anyVp = vp as any;
+    let cam: ViewportGeometry["camera"] = { parallelScale: null, position: null, focalPoint: null };
+    try {
+      const c = anyVp.getCamera?.() ?? {};
+      cam = {
+        parallelScale: c.parallelScale ?? null,
+        position: c.position ?? null,
+        focalPoint: c.focalPoint ?? null,
+      };
+    } catch { /* ignore */ }
+    let image: ViewportGeometry["image"] = null;
+    try {
+      const d = anyVp.getImageData?.();
+      if (d) {
+        image = {
+          dimensions: d.dimensions ?? null,
+          spacing: d.spacing ?? null,
+          origin: d.origin ?? null,
+          direction: d.direction ? Array.from(d.direction as number[]) : null,
+        };
+      }
+    } catch { /* ignore */ }
+    out.push({
+      viewportId: vp.id,
+      imageId: (anyVp.getCurrentImageId?.() as string) ?? null,
+      canvas: {
+        width: canvas?.width ?? 0,
+        height: canvas?.height ?? 0,
+        clientWidth: canvas?.clientWidth ?? 0,
+        clientHeight: canvas?.clientHeight ?? 0,
+      },
+      camera: cam,
+      image,
+    });
+  }
+  return out;
+}
+
 declare global {
   interface Window {
-    __graphyDebug?: { getPixelStats: typeof getPixelStats };
+    __graphyDebug?: { getPixelStats: typeof getPixelStats; getViewportGeometry: typeof getViewportGeometry };
   }
 }
 
@@ -83,6 +146,6 @@ let installed = false;
 /** 冪等: 何度呼んでも安全（SeriesViewer マウントの都度呼ばれる想定）。 */
 export function installDebugApi(): void {
   if (installed || !import.meta.env.DEV) return;
-  window.__graphyDebug = { getPixelStats };
+  window.__graphyDebug = { getPixelStats, getViewportGeometry };
   installed = true;
 }

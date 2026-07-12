@@ -49,6 +49,8 @@ export interface GraphyDesktop {
   } | null>;
   /** アプリ全体を再起動する（DICOM 自局設定などの反映用、デスクトップのみ）。 */
   relaunch?: () => Promise<void>;
+  /** ネイティブダイアログ（confirm/alert/prompt）後にレンダラのキーボードフォーカスを復帰させる。 */
+  refocus?: () => void;
 }
 
 export function desktop(): GraphyDesktop | undefined {

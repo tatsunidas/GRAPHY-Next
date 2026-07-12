@@ -8,9 +8,13 @@ import { I18nProvider } from "./i18n/i18n";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { verifyToolIcons } from "./icons/toolIcons";
 import { installLevelSetDebug } from "./viewer/levelSetsDebug";
+import { installNativeDialogFocusFix } from "./desktopNativeDialogFix";
 
 // dev のみ: アイコン未登録のツールを起動時に警告（本番では no-op）。
 verifyToolIcons();
+// Electron: ネイティブダイアログ（confirm/alert/prompt）後に入力フォーカスが失われる
+// 既知挙動への対処（デスクトップのみ有効・web では no-op）。
+installNativeDialogFocusFix();
 // 診断: Level Sets Worker が起動するか Console で `__graphyLevelSetSelfTest()` を実行して確認。
 // Cornerstone 初期化に依存しないため、Viewer を開かなくても（起動直後から）呼べる。
 installLevelSetDebug();

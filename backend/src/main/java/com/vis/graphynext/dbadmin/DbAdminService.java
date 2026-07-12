@@ -87,6 +87,15 @@ public class DbAdminService {
         return deleteAll(repo.findBySeries(studyUid, seriesUid));
     }
 
+    /** インスタンス（画像）を 1 件削除。設定で実ファイルも削除。study+series で絞ってから SOP 一致を抽出。 */
+    @Transactional
+    public int deleteInstance(String studyUid, String seriesUid, String sopUid) {
+        List<DicomInstance> rows = repo.findBySeries(studyUid, seriesUid).stream()
+                .filter(r -> sopUid != null && sopUid.equals(r.getSopInstanceUid()))
+                .toList();
+        return deleteAll(rows);
+    }
+
     private int deleteAll(List<DicomInstance> rows) {
         boolean deleteFiles = boolSetting("data.deleteFilesOnDisk", true);
         for (DicomInstance r : rows) {

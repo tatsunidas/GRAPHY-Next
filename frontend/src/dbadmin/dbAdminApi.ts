@@ -52,6 +52,12 @@ export const deleteSeries = (studyUid: string, seriesUid: string) =>
     "DELETE",
   );
 
+export const deleteInstance = (studyUid: string, seriesUid: string, sopUid: string) =>
+  httpSend(
+    `/api/instances/${encodeURIComponent(studyUid)}/${encodeURIComponent(seriesUid)}/${encodeURIComponent(sopUid)}`,
+    "DELETE",
+  );
+
 /** スタディ単位の患者情報編集（そのスタディのみ。PatientID 変更で別患者へ移動）。 */
 export const updateStudyPatient = (studyUid: string, edit: PatientEdit) =>
   httpSend(`/api/studies/${encodeURIComponent(studyUid)}/patient`, "PUT", edit);

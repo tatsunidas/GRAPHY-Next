@@ -115,11 +115,18 @@ export function SeriesViewer({
   // backend の ZCT レイアウト（IPP→Z / Temporal→T / Echo・Bvalue→C / モザイク Z×T）。
   // 取得まで/失敗時は単一次元。
   const [baseLayout, setBaseLayout] = useState<SeriesLayout>(fallback);
+  // backend レイアウトが解決したか（then/catch=finally で true）。解決までは Viewer をマウントせず、
+  // モザイク/マルチフレームの「生画像1枚（＝モザイクグリッド）が一瞬見えてから分解パネルへ遷移」を防ぐ。
+  // フォールバック（imageIdForInstance=生インスタンス）はモザイクだと必ず生グリッドを描くため、
+  // instances 数に依らず解決待ちにする。レイアウトはメタデータのみで高速（実測 ~45ms）なので、
+  // 通常シリーズも Viewer 自身の初期ロード内に収まり体感差はほぼ無い。ハング対策に安全タイムアウトあり。
+  const [layoutReady, setLayoutReady] = useState(false);
   // Z 並べ替え（InstanceNumber / IPP, 昇順・降順）。null=backend 既定順（IPP 昇順）。
   const [sortMode, setSortMode] = useState<SortMode | null>(null);
   const [sortMeta, setSortMeta] = useState<SortMeta | null>(null);
   useEffect(() => {
     setBaseLayout(fallback);
+    setLayoutReady(false);
     // シリーズが変わったら並べ替え状態をリセット。
     setSortMode(null);
     setSortMeta(null);
@@ -138,11 +145,22 @@ export function SeriesViewer({
       })
       .catch(() => {
         /* フォールバックのまま */
+      })
+      .finally(() => {
+        if (!cancelled) setLayoutReady(true);
       });
     return () => {
       cancelled = true;
     };
   }, [studyUid, seriesUid, fallback, mode, instances]);
+
+  // 安全網: レイアウト取得がハング/極端に遅い場合でも、一定時間で Viewer 描画へ進む
+  // （その場合はフォールバック描画＝従来挙動）。通常は 45ms 程度で解決し先に ready になる。
+  useEffect(() => {
+    if (layoutReady) return;
+    const id = window.setTimeout(() => setLayoutReady(true), 1000);
+    return () => window.clearTimeout(id);
+  }, [layoutReady, studyUid, seriesUid]);
 
   // 表示用レイアウト = 既定順に Z 並べ替えを適用（C/T 割当は保持）。
   const layout = useMemo(() => {
@@ -518,7 +536,10 @@ export function SeriesViewer({
       data-testid="series-viewer-root"
       style={fillHeight ? { ...root, flex: 1, display: "flex", flexDirection: "column", minHeight: 0 } : root}
     >
-      {gridOn ? (
+      {!layoutReady ? (
+        // レイアウト解決までは Viewer をマウントしない（モザイク等の生画像フラッシュ防止）。
+        <div style={layoutPending}>{t("common.loading")}</div>
+      ) : gridOn ? (
         <div style={gridScroll}>
           <div style={{ display: "grid", gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))`, gap: 6 }}>
             {zStack.map((id, i) => (
@@ -697,6 +718,17 @@ function Check({
 }
 
 const root: React.CSSProperties = { outline: "none" };
+// レイアウト解決待ちのプレースホルダ（Viewer と同じ黒背景。生モザイクを描かないためのゲート）。
+const layoutPending: React.CSSProperties = {
+  flex: 1,
+  minHeight: 240,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  background: "#000",
+  color: "#5b6b7a",
+  fontSize: 13,
+};
 const controls: React.CSSProperties = {
   marginTop: 8,
   padding: "10px 12px",

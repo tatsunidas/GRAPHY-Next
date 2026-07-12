@@ -10,6 +10,7 @@ import {
   deletePatient,
   deleteStudy,
   deleteSeries,
+  deleteInstance,
   updateStudyPatient,
   mergeSeries,
   splitSeries,
@@ -99,6 +100,8 @@ function PatientsTab({
   const [studiesByPatient, setStudiesByPatient] = useState<Map<string, Study[]>>(new Map());
   const [expandedStudies, setExpandedStudies] = useState<Set<string>>(new Set());
   const [seriesByStudy, setSeriesByStudy] = useState<Map<string, Series[]>>(new Map());
+  const [expandedSeries, setExpandedSeries] = useState<Set<string>>(new Set());
+  const [instancesBySeries, setInstancesBySeries] = useState<Map<string, Instance[]>>(new Map());
 
   const [editingPatient, setEditingPatient] = useState<Patient | null>(null); // 患者全体編集
   const [editingStudy, setEditingStudy] = useState<{ study: Study; patient: Patient } | null>(null); // スタディ単位編集
@@ -111,8 +114,10 @@ function PatientsTab({
     setError(null);
     setStudiesByPatient(new Map());
     setSeriesByStudy(new Map());
+    setInstancesBySeries(new Map());
     setExpandedPatients(new Set());
     setExpandedStudies(new Set());
+    setExpandedSeries(new Set());
     // 全件取得は処理容量上危険なため、検索語が空のときは取得しない（初期は非表示）。
     const qq = query.trim();
     if (!qq) {
@@ -210,6 +215,40 @@ function PatientsTab({
       await deleteSeries(s.studyInstanceUid, se.seriesInstanceUid);
       notify({ reason: "series-delete", patientId: p.patientId, studyUids: [s.studyInstanceUid] });
       setSeriesByStudy((m) => new Map(m).set(s.studyInstanceUid, (m.get(s.studyInstanceUid) ?? []).filter((x) => x.seriesInstanceUid !== se.seriesInstanceUid)));
+      reload(q);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  // シリーズ → インスタンス（画像）のドリルダウン。展開時に未取得なら取得する。
+  const toggleSeriesInstances = async (studyUid: string, seriesUid: string) => {
+    const next = new Set(expandedSeries);
+    if (next.has(seriesUid)) next.delete(seriesUid);
+    else {
+      next.add(seriesUid);
+      if (!instancesBySeries.has(seriesUid)) {
+        try {
+          const insts = await fetchInstances(studyUid, seriesUid);
+          setInstancesBySeries((m) => new Map(m).set(seriesUid, insts));
+        } catch (e) {
+          setError(String(e));
+        }
+      }
+    }
+    setExpandedSeries(next);
+  };
+
+  const onDeleteInstance = async (p: Patient, s: Study, se: Series, inst: Instance) => {
+    if (confirmDelete && !window.confirm(t("dbadmin.delete.instanceConfirm", { desc: instanceLabel(inst) }))) return;
+    try {
+      await deleteInstance(s.studyInstanceUid, se.seriesInstanceUid, inst.sopInstanceUid);
+      notify({ reason: "instance-delete", patientId: p.patientId, studyUids: [s.studyInstanceUid] });
+      // ローカル更新: 当該シリーズのインスタンス一覧から除去 → シリーズ件数（0なら消える）→ 患者件数。
+      setInstancesBySeries((m) =>
+        new Map(m).set(se.seriesInstanceUid, (m.get(se.seriesInstanceUid) ?? []).filter((x) => x.sopInstanceUid !== inst.sopInstanceUid)),
+      );
+      await reloadSeries(s.studyInstanceUid);
       reload(q);
     } catch (e) {
       setError(String(e));
@@ -314,27 +353,57 @@ function PatientsTab({
                                         </button>
                                       </div>
                                     )}
-                                    {series?.map((se) => (
-                                      <div key={se.seriesInstanceUid} style={rowFlex}>
-                                        <input
-                                          type="checkbox"
-                                          checked={sel.has(se.seriesInstanceUid)}
-                                          onChange={() => toggleSeriesSel(s.studyInstanceUid, se.seriesInstanceUid)}
-                                        />
-                                        <span style={{ flex: 1 }}>
-                                          {seriesLabel(se)}
-                                          <span style={muted}> ({se.numberOfInstances})</span>
-                                        </span>
-                                        {se.numberOfInstances >= 2 && (
-                                          <button onClick={() => setSplitting({ study: s, series: se })} style={smallBtn}>
-                                            {t("dbadmin.split.button")}
-                                          </button>
-                                        )}
-                                        <button onClick={() => void onDeleteSeries(p, s, se)} style={{ ...smallBtn, color: "#b00020" }}>
-                                          {t("common.delete")}
-                                        </button>
-                                      </div>
-                                    ))}
+                                    {series?.map((se) => {
+                                      const seExpanded = expandedSeries.has(se.seriesInstanceUid);
+                                      const insts = instancesBySeries.get(se.seriesInstanceUid);
+                                      return (
+                                        <div key={se.seriesInstanceUid}>
+                                          <div style={rowFlex}>
+                                            <input
+                                              type="checkbox"
+                                              checked={sel.has(se.seriesInstanceUid)}
+                                              onChange={() => toggleSeriesSel(s.studyInstanceUid, se.seriesInstanceUid)}
+                                            />
+                                            <button
+                                              style={expander}
+                                              onClick={() => void toggleSeriesInstances(s.studyInstanceUid, se.seriesInstanceUid)}
+                                              aria-label="expand"
+                                            >
+                                              {seExpanded ? "▾" : "▸"}
+                                            </button>
+                                            <span style={{ flex: 1 }}>
+                                              {seriesLabel(se)}
+                                              <span style={muted}> ({se.numberOfInstances})</span>
+                                            </span>
+                                            {se.numberOfInstances >= 2 && (
+                                              <button onClick={() => setSplitting({ study: s, series: se })} style={smallBtn}>
+                                                {t("dbadmin.split.button")}
+                                              </button>
+                                            )}
+                                            <button onClick={() => void onDeleteSeries(p, s, se)} style={{ ...smallBtn, color: "#b00020" }}>
+                                              {t("common.delete")}
+                                            </button>
+                                          </div>
+                                          {seExpanded && (
+                                            <div style={{ paddingLeft: 24 }}>
+                                              {!insts && <div style={muted}>{t("common.loading")}</div>}
+                                              {insts?.length === 0 && <div style={muted}>{t("series.empty")}</div>}
+                                              {insts?.map((inst) => (
+                                                <div key={inst.sopInstanceUid} style={rowFlex}>
+                                                  <span style={{ flex: 1 }}>{instanceLabel(inst)}</span>
+                                                  <button
+                                                    onClick={() => void onDeleteInstance(p, s, se, inst)}
+                                                    style={{ ...smallBtn, color: "#b00020" }}
+                                                  >
+                                                    {t("common.delete")}
+                                                  </button>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
                                   </>
                                 );
                               })()}
@@ -780,6 +849,9 @@ function studyLabel(s: Study): string {
 }
 function seriesLabel(se: Series): string {
   return `#${se.seriesNumber ?? "—"} ${se.modality || ""} ${se.seriesDescription || "—"}`;
+}
+function instanceLabel(inst: Instance): string {
+  return `#${inst.instanceNumber ?? "—"}  ${inst.sopInstanceUid}`;
 }
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (

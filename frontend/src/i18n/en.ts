@@ -972,6 +972,7 @@ export const en: Record<string, string> = {
   "dbadmin.delete.confirm": 'Delete patient "{{name}}"? This cannot be undone.',
   "dbadmin.delete.studyConfirm": 'Delete study "{{desc}}"? This cannot be undone.',
   "dbadmin.delete.seriesConfirm": 'Delete series "{{desc}}"? This cannot be undone.',
+  "dbadmin.delete.instanceConfirm": 'Delete image "{{desc}}"? This cannot be undone.',
   "dbadmin.edit.title": "Edit Patient (whole patient)",
   "dbadmin.edit.note": "Depending on settings, tags in all of the patient's DICOM files will also be rewritten.",
   "dbadmin.edit.studyTitle": "Edit Patient (this study only)",

@@ -610,8 +610,17 @@ export function Viewer2D({
             },
           });
         }
+        // 現在フレームの imageData で確実にフィットさせる（parallelScale と focalPoint を再計算）。
+        // マルチフレーム/MOSAIC（例: fMRI の frames/N）では setStack 内部のカメラ設定が
+        // 現フレームの実幾何（64×64・origin）と異なる幾何でフィットし、parallelScale が過大（画像が
+        // 極小）・focalPoint がズレ（隅寄り）になることがある。しかも誤差が ResizeObserver の暴走ガード
+        // （50倍）未満だと setViewPresentation 再適用で保持され、リサイズしても直らない。ここで現フレーム
+        // へ明示的に resetCamera し、正しいフィットを土台にする（通常画像は setStack と同一フィットで無害）。
+        try { viewport.resetCamera(); } catch { /* ignore */ }
+
         // スタック再構築（C/T・ThickSlab 切替）前の表示状態を、同一シリーズ幾何なら再適用する。
         // これにより「デフォルトでない表示状態のまま ThickSlab を ON にしても、その状態で表示」される。
+        // 上の resetCamera（正しいフィット）を土台に相対ズーム/パン/回転/flip を重ねる（ResizeObserver と同順序）。
         const prevView = lastViewRef.current;
         if (
           prevView &&

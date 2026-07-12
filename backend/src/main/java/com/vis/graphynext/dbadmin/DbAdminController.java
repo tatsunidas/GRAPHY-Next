@@ -61,6 +61,13 @@ public class DbAdminController {
         return Map.of("deletedInstances", service.deleteSeries(studyUid, seriesUid));
     }
 
+    /** インスタンス（画像）の削除。 */
+    @DeleteMapping("/api/instances/{studyUid}/{seriesUid}/{sopUid}")
+    public Map<String, Object> deleteInstance(@PathVariable String studyUid, @PathVariable String seriesUid,
+                                              @PathVariable String sopUid) {
+        return Map.of("deletedInstances", service.deleteInstance(studyUid, seriesUid, sopUid));
+    }
+
     /** スタディ単位の患者情報編集（そのスタディのみ。PatientID 変更で別患者へ移動）。 */
     @PutMapping("/api/studies/{studyUid}/patient")
     public Map<String, Object> updateStudyPatient(@PathVariable String studyUid, @RequestBody PatientEdit edit) {

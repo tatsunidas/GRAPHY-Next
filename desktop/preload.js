@@ -38,4 +38,6 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   checkForUpdate: () => ipcRenderer.invoke("graphy:check-update"),
   // アプリ全体を再起動する（DICOM 自局設定などの反映用）。
   relaunch: () => ipcRenderer.invoke("graphy:relaunch"),
+  // ネイティブダイアログ後にレンダラのキーボードフォーカスを復帰させる。
+  refocus: () => ipcRenderer.send("graphy:refocus"),
 });

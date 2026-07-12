@@ -605,6 +605,27 @@ ipcMain.handle("graphy:relaunch", () => {
   app.quit();
 });
 
+// ネイティブダイアログ（window.confirm/alert/prompt）を閉じた後、レンダラのキーボード
+// フォーカスが失われて入力できなくなる Electron の既知挙動への対処（特に Linux/GTK ダイアログ）。
+// クローズ直後の即時 focus はダイアログの終了処理に上書きされがちなので、
+//   (1) blur→focus サイクルで WM にフォーカスを明示的に戻す
+//   (2) ダイアログのクローズ完了後にも効かせるため次tick でリトライ
+// を行う。DOM の activeElement は保持されるため、これで入力欄への打鍵が復帰する。
+ipcMain.on("graphy:refocus", (e) => {
+  const wc = e.sender;
+  if (!wc || wc.isDestroyed()) return;
+  const win = BrowserWindow.fromWebContents(wc);
+  const apply = () => {
+    if (win && !win.isDestroyed()) {
+      win.blur();
+      win.focus();
+    }
+    if (!wc.isDestroyed()) wc.focus();
+  };
+  apply();
+  setTimeout(apply, 60); // GTK ダイアログのクローズ完了後に再適用
+});
+
 app.whenReady().then(async () => {
   createSplash();
   try {

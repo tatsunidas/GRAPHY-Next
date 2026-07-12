@@ -1,6 +1,6 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
-> 更新日: 2026-07-10（最終更新: 実 dcm4chee での web モード結合検証が完了）
+> 更新日: 2026-07-12（最終更新: レポート依存修復・DbAdmin 画像削除・MOSAIC ビューア/検索UI 修正。ログ末尾の 2026-07-12 エントリ参照）
 > 目的: 別の作業者（Claude 含む）がこのリポジトリの状況を把握し、続きを実装できるようにする。
 > このファイル＋ `fw/` 配下の各設計ドキュメントが「ソース・オブ・トゥルース」。
 >
@@ -104,6 +104,37 @@
 > `WebDicomTransferTest`（2 件）を追加。**実 dcm4chee 結合検証の手順は `deploy/dcm4chee/VERIFY-web.md`**
 > （dcm4chee 起動→データ投入→web 起動→2D/prefetch/STOW/IID を確認。Docker 要）。
 > ⚠ SEG/RTSTRUCT の web 書き戻しは per-frame 参照/幾何の実機目視が未。独自圧縮のサーバ側復号・web Fusion は次段。
+>
+> 🟢 **2026-07-12 追加（レポート依存修復 ＋ DbAdmin 画像削除 ＋ ビューア/検索UI の不具合修正）**: 実機（standalone/Linux）で確認。
+> **① レポート依存**: `MarkdownEditor.tsx` の `react-markdown`/`remark-gfm` は `package.json`/lockfile 登録済みだが
+> node_modules 未展開だった → `frontend && npm install`。配布は Maven `frontend-maven-plugin` が `npm install`→build
+> するため漏れなし。
+> **② ネイティブダイアログ後のキーボードフォーカス喪失（Electron/特に Linux GTK）**: `window.confirm/alert` の後、
+> レンダラが OS キーボードフォーカスを失い入力欄に打てなくなる（DbAdmin 削除確認の後に検索欄へ入力不可で発覚。
+> `document.hasFocus()=false`/activeElement は正常/オーバーレイ無し で確定）。対処: `desktop/main.js` に
+> `graphy:refocus` IPC を追加し **blur→focus サイクル＋クローズ後の遅延リトライ**（`webContents.focus()` 単体では
+> Linux で不足）。`preload.js` で `refocus()` 公開、`frontend/src/desktopNativeDialogFix.ts`（新規）が起動時に
+> `window.confirm/alert/prompt` を一括ラップして呼ぶ（`main.tsx` で `installNativeDialogFocusFix()`。web は no-op）。
+> 呼び出し側（数十箇所）は無改修で全ダイアログに適用。
+> **③ DbAdmin 画像（インスタンス）削除**: `DELETE /api/instances/{study}/{series}/{sop}`（`DbAdminController`＋
+> `DbAdminService.deleteInstance`＝既存 `deleteAll` 再利用で実ファイルも設定連動削除）。UI は Series 行に展開トグルを
+> 追加し画像単位の削除（`dbAdminApi.deleteInstance`／i18n `dbadmin.delete.instanceConfirm`）。ツリーは
+> Patient▸Study▸Series▸**Image** の4階層。※ Series 行のチェックボックスは削除ではなく**統合(merge)用**。
+> **④ MOSAIC(fMRI) のフィット不良（極小・隅寄り）**: マルチフレーム（`/instances/{sop}/frames/N/file`）で `setStack`
+> 内部のカメラが現フレーム実幾何と別幾何でフィットし `parallelScale` 過大・`focalPoint` ズレ。しかも誤差が
+> ResizeObserver の暴走ガード(50倍)未満だと `setViewPresentation` 再適用で保持されリサイズでも直らない。対処:
+> `Viewer2D.tsx` の `setStack` 直後に **`viewport.resetCamera()`**（現フレーム imageData で再フィット。保存ビュー
+> 再適用時も resetCamera を土台にする＝ResizeObserver と同順序）。診断は dev 専用 `window.__graphyDebug.getViewportGeometry()`
+> （`viewer/debugApi.ts` に追加。`import.meta.env.DEV` ガード）。
+> **⑤ MOSAIC の生グリッド一瞬表示**: フォールバック `imageIdForInstance` は生インスタンス（＝モザイク全体）を描くため、
+> レイアウト解決前に生グリッドが一瞬見えていた。対処: `SeriesViewer.tsx` で **`layoutReady`（`fetchSeriesLayout`
+> 解決＝finally で true）まで Viewer2D をマウントしない**ゲート＋1秒安全タイムアウト。レイアウトはメタデータのみで
+> 高速（rsfMRI 197inst/nZ48×nT197 で実測 ~45ms）なので通常シリーズも体感差ほぼ無し・退行なし。`instances` は
+> useState 安定＋シリーズ変更で再マウントのため stuck しない。
+> **⑥ 検索パネル Study Date 見切れ**: `SearchPanel.tsx` の日付入力2つ＋「〜」を、幅250pxパネルで横並びだと右が
+> はみ出るため**縦積み（各フル幅）**に変更。
+> **状態**: すべて `frontend tsc --noEmit` green、backend(②③) `mvn compile` green、実機動作確認済み。
+> ②③はコミット未・ワーキングツリーのみ。②の main.js/preload.js と ③の backend は `make build` 同梱対象。
 
 ---
 

@@ -123,14 +123,16 @@ export function SearchPanel({ onSearch }: { onSearch: (f: StudyFilters) => void 
       </Field>
 
       <Field label={t("main.search.studyDate")}>
-        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        {/* ネイティブ日付入力は最小内容幅が広く、狭い検索パネル(250px)で横並びだと右側が
+            見切れる。各々フル幅で縦積みにして確実に収める（From 〜 To）。 */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <input
             type="date"
             value={toInputDate(dateFrom)}
             onChange={(e) => setDateFrom(fromInputDate(e.target.value))}
             style={{ ...input, padding: "5px 6px" }}
           />
-          <span style={{ color: "#9aa6b2" }}>〜</span>
+          <span style={{ color: "#9aa6b2", textAlign: "center", fontSize: 11, lineHeight: 1 }}>〜</span>
           <input
             type="date"
             value={toInputDate(dateTo)}
