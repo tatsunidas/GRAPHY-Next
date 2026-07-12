@@ -1,8 +1,7 @@
 # Web デモの公開ホスティング（FW・設計）
 
-> 作成日: 2026-07-10（更新: 同日、ホスティング先を PaaS → **Xserver VPS** に変更決定）
-> ステータス: **設計フェーズ完了。次のアクションはユーザーによる Xserver VPS 契約（§3 参照）。
-> 契約後にセットアップ・`demo` プロファイル実装等の着手を再開する。**
+> 作成日: 2026-07-10（更新: 2026-07-12、ホスティング先を Xserver VPS → **自前サーバー機 ＋ Cloudflare Tunnel** に変更決定）
+> ステータス: **Cloudflare Tunnel 方式に転換。着手中: サーバー機（ゲストWiFi・物理LAN非接続）への cloudflared インストール。**
 > 背景: `graphy.vis-ionary.com/demo` は現状プレースホルダー（`website/src/pages/demo/index.astro`）。
 > Xserver（`graphy.vis-ionary.com`の静的サイト配置先）は**共有ホスティング**のため、永続的な自前プロセス
 > （Spring Boot 等がポート待受し続ける形態）を置けない制約がある。
@@ -22,6 +21,16 @@
   - Sources: [Cost Management on Fly.io](https://fly.io/docs/about/cost-management/)、
     [Fly.io Billing](https://fly.io/docs/about/billing/)、
     [XServer VPS 料金一覧](https://vps.xserver.ne.jp/price.php)
+- **2026-07-12（変更）**: Xserver VPS を見送り、**自前のサーバー機 ＋ Cloudflare Tunnel** 方式に転換。
+  月額VPS費用が不要。サーバー機は **ゲストWiFi接続・物理LAN非接続**で運用し、**Cloudflare Tunnel**
+  （`cloudflared`）で公開する。トンネルは**アウトバウンド HTTPS(443) のみ**で成立するため、
+  ポート開放・ポートフォワード・固定IPが不要で、TLS証明書・エッジ配信・（ゾーンがCloudflareにあれば）
+  DNSも Cloudflare 側が担う。§1・§2（VPS前提の記述）は本方式で読み替えること。
+  - **未解決の前提**: 固定ホスト名 `demo.graphy.vis-ionary.com` で公開するには `vis-ionary.com` ゾーンが
+    Cloudflare 管理下である必要がある。現状 DNS は **Xserver**。選択肢:
+    (a) `vis-ionary.com` のネームサーバを Cloudflare へ移管（本業サイト/メールの全レコード移行を伴い要注意）、
+    (b) 既に Cloudflare にある別ドメイン/新規ドメインで `demo.example.com` として公開し `/demo` からリンク、
+    (c) 検証用に一時的な Quick Tunnel（`*.trycloudflare.com`）。→ §3 のタスクで確定する。
 
 ## 0. すでに決まっている制約
 
