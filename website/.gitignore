@@ -9,3 +9,6 @@ node_modules/
 .env.production
 npm-debug.log*
 .DS_Store
+# auto-deploy state / logs
+.deploy-state
+log/
