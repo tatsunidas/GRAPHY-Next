@@ -78,9 +78,9 @@ export const site = {
   payment: {
     provider: 'paypal' as const,
     // PayPal REST app client-id (use the LIVE id for production).
-    paypalClientId: '',
+    paypalClientId: 'AYaZVW2njkdqa95XnkELsSG1W4qqyH5xx4g8Dr3BQbLH01Vp_LhXzl3HARZyNJUW8_m-wcz2qJzopJqz',
     // Subscription plan id (P-XXXXXXXXXXXX) for the ¥700/month plan.
-    paypalPlanId: '',
+    paypalPlanId: 'P-4YL08685SB2073644NJJPMOA',
     // PayPal reports subscription amounts in this currency.
     currency: 'JPY',
   },
