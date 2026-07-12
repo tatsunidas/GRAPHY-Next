@@ -32,6 +32,14 @@ const sdkSrc = configured
                       'ご登録ありがとうございます。サポート購読を受け付けました（購読ID: ' +
                       data.subscriptionID + '）。';
                   }
+                  // Best-effort: hand the subscription id to the server so it can
+                  // pull the verified subscriber email from PayPal and notify the
+                  // team. Failure here must not affect the customer's success view.
+                  try {
+                    var body = new FormData();
+                    body.append('subscription_id', data.subscriptionID);
+                    fetch('/api/paypal-subscribed.php', { method: 'POST', body: body });
+                  } catch (e) {}
                   if (window.track) window.track('subscribe_success', { via: 'paypal' });
                 },
                 onError: function () {
