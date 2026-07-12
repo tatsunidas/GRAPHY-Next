@@ -1,0 +1,7 @@
+# demo プロファイル: 公開デモ用の追加ガード。
+# `web` と併用で起動する（--spring.profiles.active=web,demo）。
+# DemoModeFilter がこのフラグを見て、インポート/エクスポート/外部DICOM通信/DB管理系/
+# サーバー内部操作を一律 403 にする（詳細は DemoModeFilter のコメント参照）。
+graphy:
+  demo:
+    enabled: true

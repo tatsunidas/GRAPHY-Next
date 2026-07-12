@@ -1,131 +1,166 @@
 # Web デモの公開ホスティング（FW・設計）
 
-> 作成日: 2026-07-10（更新: 2026-07-12、ホスティング先を Xserver VPS → **自前サーバー機 ＋ Cloudflare Tunnel** に変更決定）
-> ステータス: **Cloudflare Tunnel 方式に転換。着手中: サーバー機（ゲストWiFi・物理LAN非接続）への cloudflared インストール。**
-> 背景: `graphy.vis-ionary.com/demo` は現状プレースホルダー（`website/src/pages/demo/index.astro`）。
-> Xserver（`graphy.vis-ionary.com`の静的サイト配置先）は**共有ホスティング**のため、永続的な自前プロセス
-> （Spring Boot 等がポート待受し続ける形態）を置けない制約がある。
+> 作成日: 2026-07-10（更新: 2026-07-12）
+
+## 現在のステータス（2026-07-12 時点・次回はここから読む）
+
+**方式確定**: 自前サーバー機 ＋ **Cloudflare Tunnel**（VPS/Fly.io は不採用、
+§改定履歴を参照）。デモスタックは **Docker Compose 化済み**（`deploy/demo/`）で、
+`docker compose -f deploy/demo/docker-compose.yml up -d` 一発で ldap/db/arc(dcm4chee) +
+graphy-backend(web,demo プロファイル) + cloudflared が立ち上がり、Cloudflare Tunnel 経由で
+外部公開できることを実機検証済み。サンプルデータもライセンス監査の上で投入済み。
+
+**唯一の残ブロッカー**: `vis-ionary.com` が Google Domains → Xserver へのレジストラ移管中
+（2026-07-12 時点、完了見込み数日〜1週間＝目安 **2026-07-19 頃**）。Xserver 側の DNS 編集が
+移管完了までロックされるため、Cloudflare 側で用意済みのネームサーバー（Cloudflareダッシュボードで確認）への切り替えができない。
+**次回セッションではまずこの移管が完了したか確認すること。**
+
+完了済み / 未完了の一覧は「## 3. 未確定・次のアクション」を参照。
+
+## ブロッカー: レジストラ移管との競合
+
+- `vis-ionary.com` は Google Domains → Xserver への受け入れ移管が進行中。移管中は Xserver 側で
+  DNS レコード編集がロックされる（「ドメインが移管申請中のため利用できません」と表示される）。
+- 移管処理中にネームサーバーを外部（Cloudflare）へ切り替えると、進行中のレジストラ移管が失敗・
+  キャンセルされるリスクがあるため、**レジストラ移管の完了を待ってから** Cloudflare 側の
+  ネームサーバー切り替え（Xserver管理画面での ns1-5.xserver.jp → Cloudflare 2件への置き換え）を行う。
+- Cloudflare へのゾーン追加自体（Free プラン、"Connect domain"、既存レコードは全て DNS only で
+  複製確認済み: A/MX/SPF/DKIM 各レコード）は完了済み。
+  移管完了後にやることは「Xserver 管理画面でネームサーバーを Cloudflare 割り当ての2件に変更する」だけ。
+
+## Docker 化・動作検証（2026-07-12・完了）
+
+`deploy/demo/`（Dockerfile + docker-compose.yml）で、公開デモ全体をコンテナ化した。
+`deploy/dcm4chee/docker-compose.yml`（ローカル手動検証用、既存）とは別ファイル。
+
+**ネットワーク設計**（多層防御の要）:
+- `demo_internal`（`internal: true`）: ldap / db / arc / graphy-backend / cloudflared が参加。
+  **`internal: true` はホストへの `ports:` publish と両立しない**（当初 graphy-backend に
+  `ports: ["8090:8090"]` を張ったが `docker ps` でホスト側に反映されず、`curl localhost:8090`
+  も到達不可だった。internal ネットワークはこの制約があると判明し、設計変更した）。
+- `demo_edge`（通常 bridge）: cloudflared のみ追加参加。Cloudflare エッジへのアウトバウンドは
+  ここ経由。
+- `demo_debug`（通常 bridge、`127.0.0.1` bind）: arc のみ追加参加。管理UI/DICOMweb(8080)の
+  デバッグ・データ投入アクセス用。
+- 結果: **graphy-backend コンテナはどのネットワークからもインターネットへの経路を持たない**
+  （`curl http://1.1.1.1` → `000`／`http://arc:8080` → `204` で確認済み）。cloudflared は
+  `http://graphy-backend:8090` を Docker DNS で直接叩く（ホストの ports: publish 不要）。
+  → `DemoModeFilter`（後述）に見落としがあっても、backend コンテナから外部への任意通信は
+  ネットワーク層で物理的に不可能、という多層防御が成立している。
+- backend コンテナは `read_only: true`・`cap_drop: [ALL]`・`no-new-privileges`・非root
+  （Dockerfile で uid 10001 の `graphy` ユーザー）・ホストパスのbind mountなし
+  （`/app/data` は named volume）。
+
+**動作確認済み**: `docker compose -f deploy/demo/docker-compose.yml up -d` で4サービス
+（ldap/db/arc/graphy-backend）+ cloudflared が起動し、cloudflared の Quick Tunnel URL経由で
+`/api/status`（`demo:true` 確認）・`/api/studies`（閲覧系、200）・`/api/patients`（403）・
+`/api/dicom/send`（403）の疎通・ガード動作を確認。dcm4chee への投入も
+`stowrs`（`~/dcm4che-5.33.1/bin/stowrs --url http://127.0.0.1:8080/dcm4chee-arc/aets/DCM4CHEE/rs/studies <path>`、
+`demo_debug` 経由でホストから到達）で成功。検証後、コンテナは `docker compose down` で停止済み
+（データは `deploy/demo/data/` と named volume に残っているので `up -d` で再開すれば復元される）。
+
+**残作業**: cloudflared は現状 Quick Tunnel（`*.trycloudflare.com`、再起動でURL変化）。本番は
+named tunnel（`cloudflared tunnel login` → `tunnel create` → DNS route）に切り替える。これは
+vis-ionary.com のネームサーバー移管完了後に対応する（移管完了で `vis-ionary.com` ゾーンが
+Cloudflare 管理下になり、`demo.graphy.vis-ionary.com` 等へ named tunnel の DNS route を張れる
+ようになる）。
+
+## demo Spring プロファイル（2026-07-12・実装完了）
+
+`backend/src/main/java/com/vis/graphynext/web/DemoModeFilter.java` +
+`backend/src/main/resources/application-demo.yml`（`graphy.demo.enabled=true`）。
+`--spring.profiles.active=web,demo` で有効化。
+
+個別コントローラへ `@Profile` を都度付けるのではなく、単一の集約フィルタが
+(HTTPメソッド, パスパターン) のブロックリストに一致するリクエストを一律 403 にする方式。
+理由: 実装前の監査で `ImportController`（任意サーバーパス読み取り）や
+`POST /api/dicom/send`（任意外部ホストへのDICOM送信）など、**`web` プロファイルに元々
+ガードが一切なかった**エンドポイントが複数見つかったため、個別対応より構造的に漏れを防げる
+集約方式を選んだ。
+
+ブロック対象: `/api/import/**`、`POST /api/dicom/send`、`/api/dicom/qr/**`、
+`POST /api/dicom/seg`・`/rtstruct`、`/api/series/**`（派生シリーズ書き戻し）、
+`/api/dbadmin/**`、`/api/patients`・`/api/patients/**`、`DELETE /api/studies/**`、
+`PUT /api/studies/**`、`DELETE /api/instances/**`、`/api/stats`、`/api/system/**`、
+`/api/imagej/**`、`POST /api/plugins/*/run`。閲覧系（検索・2D/MPR/3D/Slicer/CurvedMPR表示、
+`/api/dicom/rtstruct` の GET 等）は許可のまま。
+
+`GET /api/status` に `demo: true/false` を追加済み。**frontend 側でこのフラグを見て
+Import/Exportメニューを隠す対応はまだ未実装**（バックエンドで403にしているので実害はないが、
+UXとして押せてしまうボタンが残っている）。
+
+テスト: `DemoModeFilterTest`（ブロック19ケース・許可9ケース、全通過）、
+`StatusControllerTest`（更新済み）。
+
+## サンプルデータのライセンス監査・投入（2026-07-12・完了）
+
+配置場所: `~/graphy-demo-samples/`（リポジトリ外・gitにコミットしない。`~/graphy_sample_images/` は
+別目的の開発用テストデータのため混在させない）。各フォルダを個別に出典確認した結果:
+
+| フォルダ | 出所 | 判定 | 備考 |
+|---|---|---|---|
+| `HCC_001` | TCIA HCC-TACE-Seg | ✅ 使用可・投入済み | **CC BY 4.0**。引用: Moawad et al. (2021), TCIA, https://doi.org/10.7937/TCIA.5FNA-0924 |
+| `PSMA_0198cdca94fbb95f` | TCIA PSMA-PET-CT-Lesions | ✅ 使用可・投入済み | **CC BY 4.0**。引用: Jeblick et al. (2026), TCIA, https://doi.org/10.7937/r7ep-3x37 |
+| `HASSAKU_DCM` | ユーザー自身が撮影した果物のDICOM | ✅ 使用可・投入済み | 実患者データではないため PHI/ライセンスリスクなし |
+| `*_LEE_IR87a.dcm`, `*_LEE_IR6.dcm`（6ファイル） | JIRA（日本画像医療システム工業会）サンプルDICOM（https://www.jira-net.or.jp/dicom/dicom_data_01.html） | ⚠️ 条件付き使用可・投入済み | ページ上に自由利用ライセンスの明記はなく「著作権者の了解を得た上でご利用いただくよう」の記載のみ。**ユーザーが著作権者から利用許諾を取得済み（またはこれから取得）という前提で使用可**。公開前に許諾の証跡を残すこと |
+| `LGG-104` | TCIA LGG-1p19qDeletion | ❌ **除外（確定）・未投入** | **Controlled Access**。頭部MRIから顔面再構成が可能なため NIH Controlled Data Access Policy の申請・承認が必須。ローカルファイルは削除せず、単に demo PACS への投入対象から外すのみ |
+| `013_S_7097` | ADNI | ❌ **除外（確定）・未投入** | ADNI の Data Use Agreement により第三者再配布・公開展示が不可。ローカルファイルは削除せず、投入対象から外すのみ |
+
+投入結果: `stowrs` で6件（HCC_001, PSMA, HASSAKU, LEE×6ファイル→実質4件のstudy）を
+dcm4cheeへ POST、QIDO-RS で **6 studies** を確認。`LGG-104`・`013_S_7097` は未投入のまま。
+
+## 通信量制限（未着手）
+
+- サーバー機はゲストWiFi回線に接続して運用している。回線側の帯域上限が土台としてあるが、
+  安定運用・濫用対策のため**アプリ側の簡易レート制限**の実装が必要（IP単位、`Personal`
+  プランの Gemini AI ウィジェット同様の仕組みが `vis-ionary-web` 側に前例あり:
+  `VISIONARY_AI_RATELIMIT`）。**未実装**。
+
+## 決まっている制約（変更なし）
+
+- **通信量（帯域）を制限する** — 未実装（上記）
+- **データの Import / Export をさせない** — `DemoModeFilter` で実装済み
+- Web モード自体は実 dcm4chee で結合検証済み（`deploy/dcm4chee/VERIFY-web.md`）— 2D/MPR/3D/
+  Slicer/CurvedMPR 全モードが DICOMweb 経由で動作すること、prefetch・STOW-RS 書き戻しを確認済み。
+  SEG/RTSTRUCT の per-frame 幾何整合の目視確認のみ未（デモ公開のブロッカーではない）。
+
+## 3. 未確定・次のアクション
+
+- [ ] **vis-ionary.com のレジストラ移管完了を確認**（目安 2026-07-19 頃）→ 完了後、Xserver
+      管理画面でネームサーバーを Cloudflare 割り当ての2件に変更（値はCloudflareダッシュボードで確認）
+- [ ] cloudflared を Quick Tunnel → named tunnel に切り替え（`cloudflared tunnel login` →
+      `tunnel create` → `demo.graphy.vis-ionary.com` への DNS route。ネームサーバー移管完了が前提）
+- [ ] frontend 側で `GET /api/status` の `demo:true` を見て Import/Export メニューを隠す
+- [x] `demo` Spring プロファイルの実装（上記セクション参照）
+- [x] デモ用サンプルデータセットの選定・ライセンス監査・投入（上記セクション参照）
+- [x] デモ環境の Docker 化（上記セクション参照）
+- [ ] アプリ側レート制限の実装
+- [ ] `graphy.vis-ionary.com/demo`（Astro, `website/src/pages/demo/index.astro`）を
+      プレースホルダーから実リンクに差し替え
 
 ## 改定履歴
 
 - **2026-07-10（初版）**: web モードの実バックエンドを GitHub 連携の PaaS（Fly.io/Render/Railway）で
   動かす方針とし、Fly.io を軸に検討開始。
 - **2026-07-10（変更）**: Fly.io は**月額の上限額（ハードキャップ）を設定できない**（従量課金・
-  billing alerts も未実装。公式ドキュメント・コミュニティで確認、Sources 参照）ことが判明し、
-  「想定外の高額請求リスクがある」という理由で見送り。代わりに **Xserver VPS**（現行の
-  vis-ionary.com 共有ホスティングとは別製品・別契約。root 権限のある VPS で、Docker 公式アプリ
-  イメージあり＝Java/Spring Boot 実行の制約なし）を採用することで合意。
-  - 決め手: ①**完全固定月額**（従量課金の予算超過リスクがゼロ）、②**データ転送量無制限**
-    （契約あたりネットワーク 100Mbps 上限。超過課金なし＝「通信量制限」の要件と自然に合致）、
-    ③Docker が公式サポート対象、④vis-ionary.com で既に Xserver の SSH 運用実績がある。
+  billing alerts も未実装）ことが判明し、「想定外の高額請求リスクがある」という理由で見送り。
+  代わりに Xserver VPS（vis-ionary.com 共有ホスティングとは別契約）を検討したが、後述の通り
+  これも最終的に不採用。
   - Sources: [Cost Management on Fly.io](https://fly.io/docs/about/cost-management/)、
     [Fly.io Billing](https://fly.io/docs/about/billing/)、
     [XServer VPS 料金一覧](https://vps.xserver.ne.jp/price.php)
-- **2026-07-12（変更）**: Xserver VPS を見送り、**自前のサーバー機 ＋ Cloudflare Tunnel** 方式に転換。
-  月額VPS費用が不要。サーバー機は **ゲストWiFi接続・物理LAN非接続**で運用し、**Cloudflare Tunnel**
-  （`cloudflared`）で公開する。トンネルは**アウトバウンド HTTPS(443) のみ**で成立するため、
-  ポート開放・ポートフォワード・固定IPが不要で、TLS証明書・エッジ配信・（ゾーンがCloudflareにあれば）
-  DNSも Cloudflare 側が担う。§1・§2（VPS前提の記述）は本方式で読み替えること。
-  - **未解決の前提**: 固定ホスト名 `demo.graphy.vis-ionary.com` で公開するには `vis-ionary.com` ゾーンが
-    Cloudflare 管理下である必要がある。現状 DNS は **Xserver**。選択肢:
-    (a) `vis-ionary.com` のネームサーバを Cloudflare へ移管（本業サイト/メールの全レコード移行を伴い要注意）、
-    (b) 既に Cloudflare にある別ドメイン/新規ドメインで `demo.example.com` として公開し `/demo` からリンク、
-    (c) 検証用に一時的な Quick Tunnel（`*.trycloudflare.com`）。→ §3 のタスクで確定する。
-
-## 0. すでに決まっている制約
-
-- **通信量（帯域）を制限する**
-- **データの Import / Export をさせない**（デモ環境からの持ち出し・持ち込みを禁止）
-- Web モード自体は実 dcm4chee で結合検証済み（`deploy/dcm4chee/VERIFY-web.md`）— 2D/MPR/3D/Slicer/CurvedMPR
-  全モードが DICOMweb 経由で動作すること、prefetch・STOW-RS 書き戻し（派生シリーズ・SEG/RTSTRUCT）を確認済み。
-  ただし SEG/RTSTRUCT の per-frame 幾何整合の目視確認は未（デモの公開自体をブロックする話ではない）。
-
-## 1. ホスティング先: Xserver VPS（確定）
-
-現行の `vis-ionary.com` / `graphy.vis-ionary.com`（**共有ホスティング**）とは別製品・別契約の
-**Xserver VPS** を新規契約し、そこに Docker で backend（＋必要なら dcm4chee-arc）を直接デプロイする。
-GitHub 連携の自動デプロイ（PaaS 的な運用）は行わず、サーバー側で `git pull` → `docker compose up`
-のような手動〜半自動デプロイ運用にする（`vis-ionary-web` の `pull-deploy.sh` に近い運用イメージ）。
-
-### プラン（要確定・推奨は12GB）
-
-| プラン | vCPU | メモリ | ストレージ | 月額目安 |
-|---|---|---|---|---|
-| 6GB | 4 | 6GB | 150GB NVMe | ¥1,359〜1,700 |
-| **12GB（推奨）** | 6 | 12GB | 400GB NVMe | ¥2,560〜2,800 |
-
-`dcm4chee-arc`（WildFly＋DB込み）はメモリを比較的消費するため、backend・frontend静的配信と同居させて
-安定運用するなら 12GB プランを推奨。6GB はコスト優先の代替案（要検証）。
-
-### 主要な決め手（Fly.io との比較で優位だった点）
-
-- **完全固定月額**。従量課金ではないため、想定外のアクセス急増があっても請求額が青天井にならない。
-- **データ転送量無制限**（ネットワークは契約あたり100Mbps上限、超過課金なし）。「通信量制限」の
-  要件は、この帯域上限で自然にある程度満たされる（安定性・濫用対策のためアプリ側レート制限は別途必要）。
-- Docker が公式サポート対象（アプリイメージとして提供）。Java/Spring Boot 実行に制約なし
-  （制約があったのは共有ホスティングの方だった）。
-- vis-ionary.com で既に Xserver の SSH 運用・デプロイ運用の実績がある（学習コストが低い）。
-
-## 2. アーキテクチャ案
-
-```
-[ブラウザ] → graphy.vis-ionary.com/demo （既存の共有ホスティング・静的、外部リンクのみ）
-                 │ リンク
-                 ▼
-        demo.graphy.vis-ionary.com 等（Xserver VPS・新規契約、DNS で別途向ける）
-                 │
-   ┌─────────────┴─────────────┐
-   │  GRAPHY-Next backend       │  spring.profiles.active=web,demo
-   │  （既存 web プロファイル   │  ← 追加の "demo" プロファイルで下記を上書き
-   │  ＋ demo 用の追加ガード）  │  Docker コンテナとして稼働（VPS 上）
-   │  ＋ dcm4chee-arc（同一 VPS │
-   │    or 別コンテナ）         │
-   └─────────────┬─────────────┘
-                 │ DICOMweb (QIDO/WADO/STOW)
-                 ▼
-        デモ専用 PACS（固定のサンプルスタディのみ投入。書き込みは無効化 or 使い捨て）
-```
-
-**重要**: 既存の `vis-ionary.com` / `graphy.vis-ionary.com`（共有ホスティング）とは完全に別契約・別サーバー
-にする。デモが高負荷になっても本業のコーポレートサイトに影響を与えないための隔離。
-
-### 2.1 「Import/Export させない」の実現方針
-
-- **Import（データ持ち込み）を禁止**: デモ用 backend では non-DICOM 取り込み・DIMSE 受信(C-STORE SCP)
-  エンドポイントを無効化する `demo` プロファイルを追加。UI 側も `MainScreen` の
-  Import/NonDicomImporter メニューをデモモードで非表示にする（`GET /api/status` の mode/flag に
-  `demo: true` を足し、frontend がメニューを出し分ける想定）。
-- **Export（データ持ち出し）を禁止**: STOW-RS 書き戻し（派生シリーズ/SEG/RTSTRUCT/Send）を
-  デモプロファイルでは 403 を返すようガードするか、そもそも書き込み可能な PACS ではなく
-  **読み取り専用の DICOMweb ソース**（固定サンプルのみ）に向ける。理想は後者（バックエンド側の
-  ロジック変更が要らず、PACS 側の権限で担保できる）。
-- サンプルデータは **公開・再配布可能なライセンスの匿名化済み DICOM**（例: TCIA 等の公開データセット）
-  から選定する（要選定）。
-
-### 2.2 「通信量を制限する」の実現方針
-
-- VPS 契約自体のネットワーク上限（100Mbps・転送量無制限）が土台としてある。その上で、安定運用・
-  濫用対策のため**アプリ側の簡易レート制限**を実装（IP 単位、`Personal` プランの Gemini AI ウィジェット
-  同様の仕組みが `vis-ionary-web` 側に前例あり: `VISIONARY_AI_RATELIMIT`）。
-- 同時接続数・1 セッションあたりの取得容量に上限を設け、超過時は分かりやすいメッセージで案内する。
-- 必要なら VPS の手前に Cloudflare 等の CDN/WAF を挟み、ボット・スクレイパー由来の負荷を吸収する
-  （要検討）。
-
-## 3. 未確定・次のアクション
-
-- [ ] Xserver VPS プランの最終確定（12GB 推奨 / 6GB でコスト優先も検討）とユーザー側での契約
-- [ ] VPS 上のセットアップ（Docker 導入、ファイアウォール、リバースプロキシ＋TLS証明書＝Let's Encrypt、
-      systemd/docker compose での自動起動、`demo.graphy.vis-ionary.com` の DNS 設定）
-- [ ] `demo` Spring プロファイルの追加実装（Import/Export エンドポイントの無効化）
-- [ ] デモ用サンプルデータセットの選定・匿名化確認・投入
-- [ ] アプリ側レート制限の実装（VPS の帯域上限はあるが、安定運用・濫用対策のため別途必要）
-- [ ] `graphy.vis-ionary.com/demo`（Astro, `website/src/pages/demo/index.astro`）を
-      プレースホルダーから実リンクに差し替え
-- [ ] デプロイ運用の確立（`vis-ionary-web` の `pull-deploy.sh` に近い、手動〜半自動の
-      `git pull` → `docker compose up -d` 運用を想定。ユーザー側での VPS 契約が前提）
+- **2026-07-12（最終変更・確定）**: Xserver VPS も見送り、**自前のサーバー機 ＋ Cloudflare
+  Tunnel** 方式に確定。月額VPS費用が不要。サーバー機は **ゲストWiFi接続・物理LAN非接続**で運用し、
+  **Cloudflare Tunnel**（`cloudflared`）で公開する。トンネルは**アウトバウンド HTTPS(443) のみ**
+  で成立するため、ポート開放・ポートフォワード・固定IPが不要で、TLS証明書・エッジ配信・DNSも
+  Cloudflare 側が担う。同日中に Docker 化・demo プロファイル実装・サンプルデータ投入まで完了。
+  （旧 Xserver VPS 案の詳細な料金プラン比較・アーキテクチャ図は履歴として本ファイルの旧版の
+  git 差分に残っている。現行方式とは無関係なので割愛）
 
 ## 関連ドキュメント
 
 - `deploy/dcm4chee/VERIFY-web.md` — 実 dcm4chee での web モード結合検証（完了）
 - `fw/HANDOFF.md` — 全体の引き継ぎ状況
 - `fw/export-portable-viewer.md` — クライアントのみで動く別方式（今回は不採用、将来の別用途として保留）
+- `deploy/demo/Dockerfile`, `deploy/demo/docker-compose.yml` — 公開デモの実行構成
+- `backend/src/main/java/com/vis/graphynext/web/DemoModeFilter.java` — demo モードガード実装

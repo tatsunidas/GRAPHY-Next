@@ -36,11 +36,13 @@ public class StatusController {
     @GetMapping("/status")
     public Map<String, Object> status() {
         List<String> profiles = List.of(env.getActiveProfiles());
-        String mode = profiles.isEmpty() ? "web" : profiles.get(0);
+        String mode = profiles.contains("standalone") ? "standalone" : "web";
+        boolean demo = profiles.contains("demo");
         return Map.of(
                 "app", "GRAPHY-Next",
                 "version", version,
                 "mode", mode,
+                "demo", demo,
                 "activeProfiles", profiles,
                 "javaVersion", System.getProperty("java.version")
         );

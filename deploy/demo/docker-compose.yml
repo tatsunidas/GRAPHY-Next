@@ -1,0 +1,109 @@
+# 公開デモ用の完全なスタック定義（dcm4chee-arc ＋ GRAPHY-Next backend ＋ cloudflared）。
+# 開発検証用の deploy/dcm4chee/docker-compose.yml とは別ファイル
+# （あちらはローカルの手動検証向け、こちらは公開デモの本番構成）。
+#
+# ネットワーク設計:
+#   demo_internal は internal: true。ldap/db/arc/graphy-backend/cloudflared は全員この中にいて、
+#   コンテナ間通信はここで完結する。internal ネットワークは「ホストへの ports: publish」もできない
+#   （Docker の制約。当初 graphy-backend に ports: を張って動作確認したが host 側に反映されず、
+#   internal + 個別ポート公開は両立しないと判明。→ ports: は使わない設計に変更）。
+#
+#   cloudflared だけ demo_edge（通常の bridge、外部到達可）にも参加し、Cloudflare のエッジへ
+#   アウトバウンド接続する。cloudflared → graphy-backend は demo_internal 内の Docker DNS
+#   （http://graphy-backend:8090）で到達し、ホストの ports: publish は不要。
+#
+#   → graphy-backend コンテナ自体はどのネットワークからもインターネットへの経路を持たない。
+#     DemoModeFilter に見落としがあっても、backend から外部への任意の DICOM送信・通信は
+#     ネットワーク層で物理的に不可能。
+#
+#   arc の管理UI(8080)はデバッグ用に demo_debug（127.0.0.1 のみ bind）へ個別に公開。
+#
+# 使い方:
+#   docker compose -f deploy/demo/docker-compose.yml build graphy-backend
+#   docker compose -f deploy/demo/docker-compose.yml up -d
+#   docker compose -f deploy/demo/docker-compose.yml logs -f cloudflared   # 発行されたURLを確認
+
+networks:
+  demo_internal:
+    internal: true
+  demo_edge: {}
+  demo_debug: {}
+
+services:
+  ldap:
+    image: dcm4che/slapd-dcm4chee:2.6.7-33.1
+    networks: [demo_internal]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+    environment:
+      STORAGE_DIR: /storage/fs1
+    volumes:
+      - ./data/ldap:/var/lib/openldap/openldap-data
+      - ./data/slapd.d:/etc/openldap/slapd.d
+
+  db:
+    image: dcm4che/postgres-dcm4chee:17.1-33
+    networks: [demo_internal]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+    environment:
+      POSTGRES_DB: pacsdb
+      POSTGRES_USER: pacs
+      POSTGRES_PASSWORD: pacs
+    volumes:
+      - ./data/db:/var/lib/postgresql/data
+
+  arc:
+    image: dcm4che/dcm4chee-arc-psql:5.33.1
+    networks: [demo_internal, demo_debug]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+    ports:
+      # 管理UI/DICOMwebはホストloopbackのみ（外部非公開、デバッグ用）
+      - "127.0.0.1:8080:8080"
+    environment:
+      WILDFLY_CHOWN: /opt/wildfly/standalone /storage
+      WILDFLY_WAIT_FOR: ldap:389 db:5432
+      JAVA_OPTS: -Xms256m -Xmx1024m -XX:MetaspaceSize=96M -XX:MaxMetaspaceSize=384m -Djava.net.preferIPv4Stack=true
+    depends_on:
+      - ldap
+      - db
+    volumes:
+      - ./data/storage:/storage
+      - ./data/wildfly:/opt/wildfly/standalone
+
+  graphy-backend:
+    build:
+      context: ../..
+      dockerfile: deploy/demo/Dockerfile
+    networks: [demo_internal]
+    environment:
+      GRAPHY_DICOM_DICOMWEB_BASE_URL: http://arc:8080/dcm4chee-arc/aets/DCM4CHEE/rs
+    depends_on:
+      - arc
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - graphy_backend_data:/app/data
+    restart: unless-stopped
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate --url http://graphy-backend:8090
+    networks: [demo_internal, demo_edge]
+    depends_on:
+      - graphy-backend
+    restart: unless-stopped
+
+volumes:
+  graphy_backend_data:

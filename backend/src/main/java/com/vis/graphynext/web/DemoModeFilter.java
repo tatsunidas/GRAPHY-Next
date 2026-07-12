@@ -1,0 +1,79 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
+package com.vis.graphynext.web;
+
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.http.HttpMethod;
+import org.springframework.stereotype.Component;
+import org.springframework.util.AntPathMatcher;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+import java.io.IOException;
+import java.util.List;
+
+/**
+ * 公開デモ（{@code graphy.demo.enabled=true}）でのみ有効化されるガード。
+ *
+ * <p>閲覧（検索・2D/MPR/3D/Slicer/CurvedMPR 表示）は許可したまま、以下を一律で 403 にする:
+ * データの持ち込み（非DICOMインポート・任意パスインポート）、持ち出し（SEG/RTSTRUCT/派生シリーズの
+ * PACS 書き戻し）、外部 DICOM ノードへの通信（送信・Query/Retrieve）、DB 管理系の破壊的操作、
+ * サーバーログ・ImageJ ブリッジ・プラグイン実行などサーバー内部に触れる操作。
+ *
+ * <p>個別コントローラへ {@code @Profile}/{@code @ConditionalOnProperty} を都度付けるのではなく、
+ * 経路を一箇所のホワイトリスト外ブロックとして集約することで、新規エンドポイント追加時の
+ * ガード漏れ（実際に今回の調査で複数見つかった）を構造的に防ぐ。
+ */
+@Component
+@ConditionalOnProperty(prefix = "graphy.demo", name = "enabled", havingValue = "true")
+public class DemoModeFilter extends OncePerRequestFilter {
+
+    private record BlockedRoute(HttpMethod method, String pattern) {
+        boolean matches(HttpMethod requestMethod, String path, AntPathMatcher matcher) {
+            return (method == null || method == requestMethod) && matcher.match(pattern, path);
+        }
+    }
+
+    private static final List<BlockedRoute> BLOCKED = List.of(
+            new BlockedRoute(null, "/api/import/**"),
+            new BlockedRoute(HttpMethod.POST, "/api/dicom/send"),
+            new BlockedRoute(null, "/api/dicom/qr/**"),
+            new BlockedRoute(HttpMethod.POST, "/api/dicom/seg"),
+            new BlockedRoute(HttpMethod.POST, "/api/dicom/rtstruct"),
+            new BlockedRoute(null, "/api/series/**"),
+            new BlockedRoute(null, "/api/dbadmin/**"),
+            new BlockedRoute(null, "/api/patients"),
+            new BlockedRoute(null, "/api/patients/**"),
+            new BlockedRoute(HttpMethod.DELETE, "/api/studies/**"),
+            new BlockedRoute(HttpMethod.PUT, "/api/studies/**"),
+            new BlockedRoute(HttpMethod.DELETE, "/api/instances/**"),
+            new BlockedRoute(null, "/api/stats"),
+            new BlockedRoute(null, "/api/system/**"),
+            new BlockedRoute(null, "/api/imagej/**"),
+            new BlockedRoute(HttpMethod.POST, "/api/plugins/*/run")
+    );
+
+    private final AntPathMatcher matcher = new AntPathMatcher();
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
+            FilterChain chain) throws ServletException, IOException {
+        String path = request.getServletPath();
+        HttpMethod method = HttpMethod.valueOf(request.getMethod());
+
+        boolean blocked = BLOCKED.stream().anyMatch(route -> route.matches(method, path, matcher));
+        if (blocked) {
+            response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+            response.setContentType("application/json");
+            response.getWriter().write(
+                    "{\"error\":\"この操作は公開デモでは無効化されています\"}");
+            return;
+        }
+        chain.doFilter(request, response);
+    }
+}
