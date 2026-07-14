@@ -9,13 +9,21 @@
 # 「通信量制限」節と同じセクション（夜間リセット）を参照。
 set -euo pipefail
 
-COMPOSE_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/docker-compose.yml"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 SNAPSHOT_DIR="$HOME/graphy-demo-golden-snapshot"
 LOG_FILE="$HOME/graphy-demo-golden-snapshot/reset.log"
 
 log() {
   echo "[$(date -Iseconds)] $*" >> "$LOG_FILE"
 }
+
+# 別マシン（開発用Linux機・Windows等）に誤って cron を複製された場合の安全装置。
+# 詳細: deploy/demo/check-server-identity.sh
+if ! "$SCRIPT_DIR/check-server-identity.sh" >> "$LOG_FILE" 2>&1; then
+  log "ERROR: server identity check failed, aborting (see check-server-identity.sh output above)"
+  exit 1
+fi
 
 if [ ! -d "$SNAPSHOT_DIR/data" ] || [ ! -d "$SNAPSHOT_DIR/graphy_backend_data" ]; then
   log "ERROR: snapshot not found at $SNAPSHOT_DIR, aborting"

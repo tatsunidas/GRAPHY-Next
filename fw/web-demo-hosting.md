@@ -175,11 +175,32 @@ Cloudflare 管理下になり、`demo.vis-ionary.com` 等へ named tunnel の DN
   を、`ldap`/`db`/`arc`/`graphy-backend` を一旦停止した上で Docker ヘルパーコンテナ経由
   （ホスト側パーミッションに依存しない）で取得した
 - **スクリプト**: `deploy/demo/reset-demo.sh` — 4コンテナ停止 → スナップショットから
-  `deploy/demo/data/` とボリュームを上書きリストア → 4コンテナ再起動。`cloudflared` は
-  止めない（リストア中は502を返す程度に留め、トンネル接続自体は維持）。ログは
-  `~/graphy-demo-golden-snapshot/reset.log`
+  `deploy/demo/data/` とボリュームを上書きリストア → 4コンテナ再起動。`proxy`/`cloudflared` は
+  止めない（リストア中は「メンテナンス自動フォールバック」節の `proxy` が503+メンテナンスページを
+  自動的に返し、トンネル接続自体は維持される）。ログは `~/graphy-demo-golden-snapshot/reset.log`
 - **cron**: ユーザー権限（`tatsunidas` の crontab、sudo不要）で `0 0 * * *` に登録済み
 - 実機で試験実行済み（停止→リストア→再起動→3 study で復旧を確認）
+
+### サーバー機の識別チェック（2026-07-14・本採用）
+
+開発者は普段、公開デモをホストしている物理サーバー機（ホスト名 `pop-os`）とは別のLinux機や
+Windows機でも作業することがある。cron や `.env`/`docker-compose.yml` の変更が誤って別マシンに
+複製・実行されるのを防ぐため、`reset-demo.sh` の冒頭で `deploy/demo/check-server-identity.sh`
+を実行し、現在のマシンが本当にサーバー機かどうかを検証するようにした。
+
+- 識別情報: `deploy/demo/.server-identity`（ホスト名 ＋ `/etc/machine-id` の SHA-256ハッシュ。
+  本リポジトリは public のため生の machine-id は記録しない）
+- 判定方法はrootなしで読める `/etc/machine-id` ベース（`dmidecode`等のハードウェアシリアル取得は
+  sudoパスワードが必要で非対話的に使えないため不採用）
+- **一致しない場合**: `reset-demo.sh` は警告をログに残して `exit 1` で中断する
+- **このルールを守ること（人・Claude 双方）**: `deploy/demo/` 配下の設定・運用に触れる操作
+  （`docker compose -f deploy/demo/docker-compose.yml` の実行、`.env`/`docker-compose.yml`/
+  `reset-demo.sh`/`proxy/`の編集、cron・Cloudflare Tunnel/DNS設定の変更など）を行う前には、
+  必ず `deploy/demo/check-server-identity.sh` を手動でも実行し、`exit 1`（警告表示）になった
+  場合は作業を止めてサーバー機上で行うこと。ユーザーが別マシンでの操作を明示的に希望した場合のみ、
+  その意図を確認した上で続行してよい。
+  （`deploy/demo/CLAUDE.md` にも同内容を置いていたが、リポジトリの `.gitignore` が全 `CLAUDE.md`
+  を除外対象にしているため他マシンに同期されない。よってこの `fw/` ドキュメントを正とする）
 
 ## サンプルデータのライセンス監査・投入（2026-07-12・完了）
 
@@ -244,6 +265,7 @@ dcm4cheeへ POST、QIDO-RS で当初 **6 studies** を確認。うち LEE 由来
 - [x] メンテナンス自動フォールバック（proxy/nginx）の実装（上記セクション参照）
 - [x] `graphy.vis-ionary.com/demo`（Astro, `website/src/pages/demo/index.astro`）の文言更新
       （「近日公開」→「メンテナンス中」。実リンクへの差し替えは別判断で保留、上記セクション参照）
+- [x] サーバー機の識別チェックを`reset-demo.sh`に本採用（上記「夜間リセット」節参照）
 
 ## 改定履歴
 

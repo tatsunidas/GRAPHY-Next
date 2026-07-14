@@ -1,0 +1,11 @@
+# 公開デモ（deploy/demo/）を実際にホストしている物理サーバー機の識別情報。
+# deploy/demo/check-server-identity.sh がこのファイルと照合し、別マシンからの
+# 誤操作（cron改変・docker compose実行・.env編集など）に気づけるようにする。
+#
+# machine_id_sha256 は /etc/machine-id（systemd標準、rootなしで読める、OSインストール固有）
+# の SHA-256。このリポジトリは public のため、生の machine-id ではなくハッシュ値のみを記録する。
+#
+# 再インストール等でこのマシンの machine-id が変わった場合は、以下で再生成すること:
+#   printf '%s' "$(cat /etc/machine-id)" | sha256sum | awk '{print $1}'
+hostname=pop-os
+machine_id_sha256=2717e0bdf3c178b476242872dc7830d076d0c17b3d42ca36e50233f308195ec8
