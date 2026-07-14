@@ -2,12 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
 import type { ItemResult, StepRecorder } from "../checklist/types.js";
+import type { Mode } from "../driver/types.js";
 
 export const RESULTS_ROOT = path.join(AUTOMATOR_ROOT, ".results");
 
 export interface StoredRun {
   runId: string;
   itemId: string;
+  mode: Mode;
   timestamp: string;
   result: ItemResult;
   steps: StepRecorder["steps"];

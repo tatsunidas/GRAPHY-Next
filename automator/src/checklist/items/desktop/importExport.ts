@@ -1,11 +1,14 @@
-import type { ChecklistItem } from "../types.js";
-import { importFixtureCategory } from "../../fixtures/importFixtures.js";
+import type { ChecklistItem } from "../../types.js";
+import { importFixtureCategory } from "../../../fixtures/importFixtures.js";
 
 export const importExportItems: ChecklistItem[] = [
   {
     id: "04-import-export.item-01",
     title: "ローカルDICOMファイル/フォルダのImportができる",
     category: "04-import-export",
+    // standalone 専用 API(/api/import/paths, ローカルファイル読込)に依存するため desktop のみ。
+    // web はPACS/DICOMweb経由のデータ投入になり、別itemとして web/ 側に実装する。
+    modes: ["desktop"],
     requiresHuman: false,
     dependsOnFixtures: ["ct-basic"],
     async run(ctx) {

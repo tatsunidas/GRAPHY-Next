@@ -3,8 +3,14 @@ import path from "node:path";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
 import type { ItemResult, StepRecorder } from "../checklist/types.js";
 import type { ChecklistItem } from "../checklist/types.js";
+import type { Mode } from "../driver/types.js";
 
-const CHECKLIST_DIR = path.join(AUTOMATOR_ROOT, "checklist");
+const CHECKLIST_ROOT = path.join(AUTOMATOR_ROOT, "checklist");
+
+/** モード別チェックリストの格納ディレクトリ（checklist/<mode>/）。 */
+export function checklistDir(mode: Mode): string {
+  return path.join(CHECKLIST_ROOT, mode);
+}
 
 function statusLabel(result: ItemResult): string {
   if (result.status === "pass") return "自動PASS";
@@ -30,10 +36,10 @@ function todayStr(): string {
  *  2) `<!-- AUTOMATOR:BEGIN id -->`〜`<!-- AUTOMATOR:END id -->` の区間を手順ログで置き換える。
  * それ以外の人間が書いた文章はそのまま保持する（対象外の行・マーカー外の記述には触れない）。
  */
-export function recordResult(item: ChecklistItem, runId: string, result: ItemResult, steps: StepRecorder["steps"]): void {
-  const file = path.join(CHECKLIST_DIR, `${item.category}.md`);
+export function recordResult(item: ChecklistItem, mode: Mode, runId: string, result: ItemResult, steps: StepRecorder["steps"]): void {
+  const file = path.join(checklistDir(mode), `${item.category}.md`);
   if (!fs.existsSync(file)) {
-    throw new Error(`checklist ファイルが見つかりません: ${file}`);
+    throw new Error(`checklist ファイルが見つかりません: ${file}\n（${mode} モードの ${item.category} 用チェックリストが未作成です）`);
   }
   let text = fs.readFileSync(file, "utf8");
 

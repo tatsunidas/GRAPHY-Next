@@ -1,4 +1,4 @@
-import type { ChecklistItem } from "../types.js";
+import type { ChecklistItem } from "../../types.js";
 import { waitForMainScreenReady } from "./helpers.js";
 
 interface PixelStats {
@@ -14,6 +14,7 @@ export const viewer2dCoreItems: ChecklistItem[] = [
     id: "10-viewer2d-core.item-07",
     title: "シリーズを開くと画像（非ブランク）が描画される（土台検証）",
     category: "10-viewer2d-core",
+    modes: ["desktop", "web"],
     requiresHuman: false,
     dependsOnFixtures: ["ct-basic"],
     async run(ctx) {

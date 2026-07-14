@@ -1,4 +1,4 @@
-import type { ChecklistItem } from "../types.js";
+import type { ChecklistItem } from "../../types.js";
 import { waitForMainScreenReady } from "./helpers.js";
 
 export const mainscreenItems: ChecklistItem[] = [
@@ -6,6 +6,7 @@ export const mainscreenItems: ChecklistItem[] = [
     id: "02-mainscreen.item-01",
     title: "スタディ検索（日付範囲・Today/Yesterday/週・モダリティチェック）ができる",
     category: "02-mainscreen",
+    modes: ["desktop", "web"],
     requiresHuman: false,
     dependsOnFixtures: ["ct-basic"],
     async run(ctx) {

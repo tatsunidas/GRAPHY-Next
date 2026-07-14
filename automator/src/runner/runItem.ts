@@ -48,9 +48,9 @@ export async function runItem(item: ChecklistItem, opts: RunItemOptions): Promis
     result = { status: "fail", error: e instanceof Error ? e.message : String(e), screenshotPath };
   }
 
-  saveRunResult({ runId, itemId: item.id, timestamp: new Date().toISOString(), result, steps: recorder.steps });
+  saveRunResult({ runId, itemId: item.id, mode: opts.driver.mode, timestamp: new Date().toISOString(), result, steps: recorder.steps });
   if (opts.record !== false) {
-    recordResult(item, runId, result, recorder.steps);
+    recordResult(item, opts.driver.mode, runId, result, recorder.steps);
   }
   return result;
 }

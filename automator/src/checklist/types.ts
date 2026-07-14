@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import type { Driver } from "../driver/types.js";
+import type { Driver, Mode } from "../driver/types.js";
 
 export type ItemResult =
   | { status: "pass"; notes?: string }
@@ -23,8 +23,13 @@ export interface ChecklistItem {
   /** "03-db-admin.item-06" 形式。前半は checklist/<id>.md のファイル名(拡張子無し)と一致させる。 */
   id: string;
   title: string;
-  /** checklist/<category>.md のファイル名(拡張子無し)。例: "03-db-admin"。 */
+  /** checklist/<mode>/<category>.md のファイル名(拡張子無し)。例: "03-db-admin"。 */
   category: string;
+  /**
+   * この item が適用されるモード。desktop 専用/web 専用/両対応(shared)を宣言する。
+   * runner は driver.mode がこの配列に含まれる時だけ実行し、結果は checklist/<mode>/ 側に記録する。
+   */
+  modes: Mode[];
   /** true の項目は自動PASSにせず、証跡スクリーンショット付きで人間確認待ちにする。 */
   requiresHuman: boolean;
   /** 実行前に automator/fixtures/<id>/ の存在を要求する fixture カテゴリID一覧。 */

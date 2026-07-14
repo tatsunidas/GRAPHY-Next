@@ -1,15 +1,22 @@
 import type { ChecklistItem } from "./types.js";
-import { dbAdminItems } from "./items/dbAdmin.js";
-import { importExportItems } from "./items/importExport.js";
-import { mainscreenItems } from "./items/mainscreen.js";
-import { viewer2dCoreItems } from "./items/viewer2dCore.js";
+import type { Mode } from "../driver/types.js";
+import { dbAdminItems } from "./items/shared/dbAdmin.js";
+import { mainscreenItems } from "./items/shared/mainscreen.js";
+import { viewer2dCoreItems } from "./items/shared/viewer2dCore.js";
+import { importExportItems } from "./items/desktop/importExport.js";
 
-/** 実装済みの checklist item 一覧（他27大項目は automator/checklist/*.md のスケルトンのみで未実装）。 */
+/**
+ * 実装済みの checklist item 一覧（他大項目は automator/checklist/<mode>/*.md のスケルトンのみで未実装）。
+ * items/shared は desktop/web 両対応、items/desktop / items/web は各モード専用。
+ */
 export const ALL_ITEMS: ChecklistItem[] = [
+  // shared（両モード対応）
   ...dbAdminItems,
-  ...importExportItems,
   ...mainscreenItems,
   ...viewer2dCoreItems,
+  // desktop 専用
+  ...importExportItems,
+  // web 専用（未実装）
 ];
 
 export function getItem(id: string): ChecklistItem {
@@ -21,6 +28,12 @@ export function getItem(id: string): ChecklistItem {
   return item;
 }
 
-export function getItemsByCategory(category: string): ChecklistItem[] {
-  return ALL_ITEMS.filter((i) => i.category === category);
+/** 指定モードで実行可能な item のみ（modes に mode を含むもの）。 */
+export function getItemsForMode(mode: Mode): ChecklistItem[] {
+  return ALL_ITEMS.filter((i) => i.modes.includes(mode));
+}
+
+/** カテゴリで絞り込む。mode を渡すとさらにモードで絞る。 */
+export function getItemsByCategory(category: string, mode?: Mode): ChecklistItem[] {
+  return ALL_ITEMS.filter((i) => i.category === category && (mode == null || i.modes.includes(mode)));
 }

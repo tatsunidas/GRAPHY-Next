@@ -1,5 +1,5 @@
-import type { ChecklistItem } from "../types.js";
-import { resetDb } from "../../backend/dbReset.js";
+import type { ChecklistItem } from "../../types.js";
+import { resetDb } from "../../../backend/dbReset.js";
 import { waitForMainScreenReady } from "./helpers.js";
 
 export const dbAdminItems: ChecklistItem[] = [
@@ -7,6 +7,7 @@ export const dbAdminItems: ChecklistItem[] = [
     id: "03-db-admin.item-06",
     title: "DBを初期化して空の状態にできる（automator用reset）",
     category: "03-db-admin",
+    modes: ["desktop", "web"],
     requiresHuman: false,
     async run(ctx) {
       const { driver, recorder } = ctx;

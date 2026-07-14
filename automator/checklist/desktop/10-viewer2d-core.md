@@ -17,7 +17,7 @@
 | 4 | カーソル位置のHU/輝度値・Zoom%・W/L・座標のオーバーレイ表示 | 未着手 | |
 | 5 | DICOMテキスト四隅オーバーレイ・患者向きマーカー・スケールバー | 未着手 | |
 | 6 | GridView（列数指定の格子表示、マルチチャンネル/動画/単一枚は無効） | 未着手 | |
-| 7 | シリーズを開くと画像（非ブランク）が描画される（土台検証） | 自動PASS | 2026-07-11 |
+| 7 | シリーズを開くと画像（非ブランク）が描画される（土台検証） | 自動PASS | 2026-07-14 |
 
 ## 小項目詳細
 
@@ -85,13 +85,13 @@ MainScreen でシリーズを選択 → インラインの SeriesViewer（`data-
 - requiresHuman: false（ピクセル存在は機械的に判定可能。画質そのものの良否は別途 requiresHuman な項目で扱う）
 
 <!-- AUTOMATOR:BEGIN 10-viewer2d-core.item-07 -->
-#### 2026-07-11 (run 20260711-132615-o2nx2x)
+#### 2026-07-14 (run 20260714-105231-6d4qjy)
 1. MainScreen の初期マウントを確認
 2. 無条件検索でスタディ一覧を取得
 3. 先頭のスタディ行をクリック
 4. 先頭のシリーズ行をクリック
 5. series-viewer-root の表示を確認
-6. window.__graphyDebug.getPixelStats() を評価 `{"stats":[{"viewportId":"graphy-vp-0","width":712,"height":1024,"mean":15.826846690660112,"min":0,"max":255,"nonBlackFraction":0.1016722261235955}]}`
+6. window.__graphyDebug.getPixelStats() を評価 `{"stats":[{"viewportId":"graphy-vp-0","width":758,"height":512,"mean":18.899568663423484,"min":0,"max":255,"nonBlackFraction":0.14477345811345646}]}`
 Result: PASS — viewports=1
 <!-- AUTOMATOR:END 10-viewer2d-core.item-07 -->
 

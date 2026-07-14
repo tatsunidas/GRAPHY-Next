@@ -63,7 +63,9 @@ export class WebDriver implements Driver {
     this.viteProc = spawn(
       process.platform === "win32" ? "npm.cmd" : "npm",
       ["run", "dev", "--", "--port", String(this.ports.vite), "--strictPort"],
-      { cwd: FRONTEND_DIR, stdio: ["ignore", "pipe", "pipe"] },
+      // detached: npm→node(vite) をプロセスグループリーダー化し、stop() の killProcessTree が
+      // 負pid(グループ)で子孫ごと殺せるようにする（里子化した vite の残留とハングを防ぐ）。
+      { cwd: FRONTEND_DIR, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" },
     );
     this.viteProc.stdout?.on("data", () => {});
     this.viteProc.stderr?.on("data", () => {});

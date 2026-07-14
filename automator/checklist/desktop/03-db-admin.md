@@ -16,7 +16,7 @@
 | 3 | シリーズ統合（N→1、InstanceNumber再採番）ができる | 未着手 | |
 | 4 | シリーズ分割（1→N、手動群分け）ができる | 未着手 | |
 | 5 | 編集中に別ウィンドウ（2D Viewer）でポップアップ通知が出る | 未着手 | |
-| 6 | DBを初期化して空の状態にできる（automator用reset） | 自動PASS | 2026-07-11 |
+| 6 | DBを初期化して空の状態にできる（automator用reset） | 自動PASS | 2026-07-14 |
 
 ## 小項目詳細
 
@@ -71,7 +71,7 @@
 - requiresHuman: (未定義。実装時に判定方式を決める)
 
 <!-- AUTOMATOR:BEGIN 03-db-admin.item-06 -->
-#### 2026-07-11 (run 20260711-132221-mcsozi)
+#### 2026-07-14 (run 20260714-105227-orfe2i)
 1. MainScreen の初期マウントを確認
 2. POST /api/automator/reset `{"before":{"deletedInstances":0,"deletedReports":0}}`
 3. MainScreen をリロードし、再マウントを確認
