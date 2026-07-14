@@ -1,8 +1,8 @@
 # Web デモの公開ホスティング（FW・設計）
 
-> 作成日: 2026-07-10（更新: 2026-07-12）
+> 作成日: 2026-07-10（更新: 2026-07-14）
 
-## 現在のステータス（2026-07-12 時点・次回はここから読む）
+## 現在のステータス（2026-07-14 時点・次回はここから読む）
 
 **方式確定**: 自前サーバー機 ＋ **Cloudflare Tunnel**（VPS/Fly.io は不採用、
 §改定履歴を参照）。デモスタックは **Docker Compose 化済み**（`deploy/demo/`）で、
@@ -10,10 +10,17 @@
 graphy-backend(web,demo プロファイル) + cloudflared が立ち上がり、Cloudflare Tunnel 経由で
 外部公開できることを実機検証済み。サンプルデータもライセンス監査の上で投入済み。
 
-**唯一の残ブロッカー**: `vis-ionary.com` が Google Domains → Xserver へのレジストラ移管中
-（2026-07-12 時点、完了見込み数日〜1週間＝目安 **2026-07-19 頃**）。Xserver 側の DNS 編集が
-移管完了までロックされるため、Cloudflare 側で用意済みのネームサーバー（Cloudflareダッシュボードで確認）への切り替えができない。
-**次回セッションではまずこの移管が完了したか確認すること。**
+**レジストラ移管は完了（2026-07-14）**: `vis-ionary.com` の Google Domains → Xserver 移管が
+完了し、Xserver 管理画面（ネームサーバー設定＞「その他のサービスで利用する」）で
+ネームサーバーを Cloudflare 割り当ての2件（`anderson.ns.cloudflare.com` /
+`kia.ns.cloudflare.com`）に切替済み。**Cloudflare ダッシュボードでゾーンが Active** になったことを確認済み。
+
+**次のブロッカー**: cloudflared を Quick Tunnel → **named tunnel** に切替中。
+`deploy/demo/docker-compose.yml` の cloudflared は既に `tunnel --no-autoupdate run` ＋
+`env_file: .env`（`TUNNEL_TOKEN`）方式に変更済み。残るは Cloudflare Zero Trust で named tunnel
+を作成してトークンを `deploy/demo/.env`（gitignore 済み・`.env.example` あり）に入れ、
+Public Hostname `demo.graphy.vis-ionary.com` → `http://graphy-backend:8090` を設定して
+`up -d` で実機疎通を確認すること。**次回セッションではここから。**
 
 完了済み / 未完了の一覧は「## 3. 未確定・次のアクション」を参照。
 
@@ -126,10 +133,14 @@ dcm4cheeへ POST、QIDO-RS で **6 studies** を確認。`LGG-104`・`013_S_7097
 
 ## 3. 未確定・次のアクション
 
-- [ ] **vis-ionary.com のレジストラ移管完了を確認**（目安 2026-07-19 頃）→ 完了後、Xserver
-      管理画面でネームサーバーを Cloudflare 割り当ての2件に変更（値はCloudflareダッシュボードで確認）
-- [ ] cloudflared を Quick Tunnel → named tunnel に切り替え（`cloudflared tunnel login` →
-      `tunnel create` → `demo.graphy.vis-ionary.com` への DNS route。ネームサーバー移管完了が前提）
+- [x] **vis-ionary.com のレジストラ移管完了を確認**（2026-07-14 完了）→ Xserver 管理画面で
+      ネームサーバーを Cloudflare 割り当ての2件（`anderson.ns.cloudflare.com` /
+      `kia.ns.cloudflare.com`）に変更済み。Cloudflare ゾーン Active 確認済み
+- [ ] cloudflared を Quick Tunnel → named tunnel に切り替え（**残: トークン方式で進行中**）:
+      compose 側は `tunnel --no-autoupdate run` ＋ `env_file: .env`(`TUNNEL_TOKEN`) に変更済み。
+      Cloudflare Zero Trust ＞ Networks ＞ Tunnels で named tunnel 作成 → トークンを
+      `deploy/demo/.env` に投入 → Public Hostname `demo.graphy.vis-ionary.com` →
+      `http://graphy-backend:8090` 設定 → `up -d` で実機疎通確認
 - [ ] frontend 側で `GET /api/status` の `demo:true` を見て Import/Export メニューを隠す
 - [x] `demo` Spring プロファイルの実装（上記セクション参照）
 - [x] デモ用サンプルデータセットの選定・ライセンス監査・投入（上記セクション参照）

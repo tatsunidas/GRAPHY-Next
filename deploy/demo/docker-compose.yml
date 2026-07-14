@@ -99,7 +99,16 @@ services:
 
   cloudflared:
     image: cloudflare/cloudflared:latest
-    command: tunnel --no-autoupdate --url http://graphy-backend:8090
+    # named tunnel（本番）: トークンは deploy/demo/.env の TUNNEL_TOKEN から注入する
+    # （cloudflared は TUNNEL_TOKEN 環境変数を自動で読む）。ルーティング先
+    # （demo.graphy.vis-ionary.com → http://graphy-backend:8090）は Cloudflare
+    # ダッシュボードの Public Hostname 側で指定するため、ここでは --url を渡さない。
+    #
+    # Quick Tunnel（旧・使い捨てURL）に戻したい場合は下記1行に差し替える:
+    #   command: tunnel --no-autoupdate --url http://graphy-backend:8090
+    command: tunnel --no-autoupdate run
+    env_file:
+      - .env
     networks: [demo_internal, demo_edge]
     depends_on:
       - graphy-backend

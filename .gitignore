@@ -37,6 +37,9 @@ backend/data/
 deploy/dcm4chee/data/
 deploy/demo/data/
 
+# Cloudflare Tunnel トークン（コミット禁止。.env.example のみ追跡）
+deploy/demo/.env
+
 # Electron 起動時(CWD=desktop)に backend が作るランタイムデータ
 desktop/data/
 
