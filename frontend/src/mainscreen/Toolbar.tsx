@@ -21,6 +21,7 @@ export type ToolKind =
 export function Toolbar({
   isStandalone,
   canImport,
+  isDemo,
   onImport,
   onRefresh,
   onOpenDb,
@@ -31,6 +32,8 @@ export function Toolbar({
 }: {
   isStandalone: boolean;
   canImport: boolean;
+  /** 公開デモ（backendが該当APIを403にする）。Export/Anonymizer/SeriesExtractor/QRボタンを隠す。 */
+  isDemo: boolean;
   onImport: () => void;
   onRefresh: () => void;
   onOpenDb: () => void;
@@ -44,20 +47,20 @@ export function Toolbar({
     <div style={bar}>
       {/* データ I/O・ユーティリティ */}
       {canImport && <ToolButton iconFile={UI_ICON_FILES.import} icon="📁" label={t("main.import.action")} onClick={onImport} />}
-      <ToolButton iconFile={UI_ICON_FILES.export} icon="📤" label={t("main.toolbar.export")} onClick={() => onOpenTool("export")} />
+      {!isDemo && <ToolButton iconFile={UI_ICON_FILES.export} icon="📤" label={t("main.toolbar.export")} onClick={() => onOpenTool("export")} />}
       <ToolButton iconFile={UI_ICON_FILES.send} icon="📡" label={t("main.toolbar.send")} onClick={() => onOpenTool("send")} />
       <ToolButton iconFile={UI_ICON_FILES.nonDicomImport} icon="🎞" label={t("main.toolbar.nonDicomImport")} onClick={() => onOpenTool("nonDicomImport")} />
-      <ToolButton iconFile={UI_ICON_FILES.anonymizer} icon="🕶" label={t("main.toolbar.anonymizer")} onClick={() => onOpenTool("anonymizer")} />
+      {!isDemo && <ToolButton iconFile={UI_ICON_FILES.anonymizer} icon="🕶" label={t("main.toolbar.anonymizer")} onClick={() => onOpenTool("anonymizer")} />}
       <ToolButton iconFile={UI_ICON_FILES.tagExtractor} icon="🏷" label={t("main.toolbar.tagExtractor")} onClick={() => onOpenTool("tagExtractor")} />
       <ToolButton iconFile={UI_ICON_FILES.tagViewer} icon="🔖" label={t("main.toolbar.tagViewer")} onClick={() => onOpenTool("tagViewer")} />
-      <ToolButton iconFile={UI_ICON_FILES.seriesExtractor} icon="🧬" label={t("main.toolbar.seriesExtractor")} onClick={() => onOpenTool("seriesExtractor")} />
+      {!isDemo && <ToolButton iconFile={UI_ICON_FILES.seriesExtractor} icon="🧬" label={t("main.toolbar.seriesExtractor")} onClick={() => onOpenTool("seriesExtractor")} />}
       <ToolButton icon="📝" label={t("main.toolbar.report")} onClick={() => onOpenTool("report")} />
       <ToolButton icon="🗂" label={t("main.toolbar.reportManager")} onClick={() => onOpenTool("reportManager")} />
       <ToolButton iconFile={UI_ICON_FILES.refresh} icon="🔄" label={t("main.toolbar.refresh")} onClick={onRefresh} />
       {isStandalone && <ToolButton iconFile={UI_ICON_FILES.db} icon="🗄" label={t("app.btn.dbTitle")} onClick={onOpenDb} />}
       <span style={sep} />
       {/* ビューア */}
-      <ToolButton iconFile={UI_ICON_FILES.qr} icon="🔎" label={t("qr.title")} onClick={() => onOpenViewer("qr")} />
+      {!isDemo && <ToolButton iconFile={UI_ICON_FILES.qr} icon="🔎" label={t("qr.title")} onClick={() => onOpenViewer("qr")} />}
       <ToolButton iconFile={UI_ICON_FILES.viewer2d} icon="🖼" label={t("main.toolbar.viewer2d")} onClick={() => onOpenViewer("2d")} />
       <ToolButton iconFile={UI_ICON_FILES.viewer3d} icon="🧊" label={t("main.toolbar.viewer3d")} onClick={() => onOpenViewer("3d")} />
       {/* MPR は適切なアイコンが無いためグリフ（十字）を維持 */}

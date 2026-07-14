@@ -23,6 +23,7 @@ interface MenuItem {
 export function MenuBar({
   isStandalone,
   canImport,
+  isDemo,
   selectedStudyUid,
   onImport,
   onOpenTool,
@@ -33,6 +34,9 @@ export function MenuBar({
 }: {
   isStandalone: boolean;
   canImport: boolean;
+  /** 公開デモ（backendが該当APIを403にする）。Export/Anonymizer/SeriesExtractor/QR/プラグイン実行/
+   * システムログ・メモリモニタのメニュー項目を隠す。 */
+  isDemo: boolean;
   selectedStudyUid: string | null;
   onImport: () => void;
   onOpenTool: (kind: ToolKind) => void;
@@ -64,9 +68,9 @@ export function MenuBar({
       label: t("main.menu.file"),
       items: [
         { label: t("main.import.action"), onClick: onImport, disabled: !canImport },
-        { label: t("main.toolbar.export"), onClick: () => onOpenTool("export") },
+        ...(isDemo ? [] : [{ label: t("main.toolbar.export"), onClick: () => onOpenTool("export") }]),
         { label: t("main.toolbar.send"), onClick: () => onOpenTool("send") },
-        { label: t("qr.title"), onClick: () => onOpenViewer("qr") },
+        ...(isDemo ? [] : [{ label: t("qr.title"), onClick: () => onOpenViewer("qr") }]),
         { label: t("main.toolbar.nonDicomImport"), onClick: () => onOpenTool("nonDicomImport") },
       ],
     },
@@ -74,10 +78,10 @@ export function MenuBar({
       id: "function",
       label: t("main.menu.function"),
       items: [
-        { label: t("main.toolbar.anonymizer"), onClick: () => onOpenTool("anonymizer") },
+        ...(isDemo ? [] : [{ label: t("main.toolbar.anonymizer"), onClick: () => onOpenTool("anonymizer") }]),
         { label: t("main.toolbar.tagExtractor"), onClick: () => onOpenTool("tagExtractor") },
         { label: t("main.toolbar.tagViewer"), onClick: () => onOpenTool("tagViewer") },
-        { label: t("main.toolbar.seriesExtractor"), onClick: () => onOpenTool("seriesExtractor") },
+        ...(isDemo ? [] : [{ label: t("main.toolbar.seriesExtractor"), onClick: () => onOpenTool("seriesExtractor") }]),
         { label: t("main.toolbar.report"), onClick: () => onOpenTool("report") },
         { label: t("main.toolbar.reportManager"), onClick: () => onOpenTool("reportManager") },
       ],
@@ -95,9 +99,11 @@ export function MenuBar({
     {
       id: "plugins",
       label: t("main.menu.plugins"),
-      items: pluginItems.length
-        ? pluginItems.map((p) => ({ label: p.label, onClick: p.onClick }))
-        : [{ label: t("main.menu.pluginsNone"), onClick: () => {}, disabled: true }],
+      items: isDemo
+        ? [{ label: t("main.menu.pluginsNone"), onClick: () => {}, disabled: true }]
+        : pluginItems.length
+          ? pluginItems.map((p) => ({ label: p.label, onClick: p.onClick }))
+          : [{ label: t("main.menu.pluginsNone"), onClick: () => {}, disabled: true }],
     },
     {
       id: "system",
@@ -105,8 +111,12 @@ export function MenuBar({
       items: [
         { label: t("app.btn.settingsTitle"), onClick: onOpenSettings },
         { label: t("app.btn.dbTitle"), onClick: onOpenDb, disabled: !isStandalone },
-        { label: t("system.log"), onClick: openLogViewer },
-        { label: t("system.memoryMonitor"), onClick: () => void openMemoryMonitor(t) },
+        ...(isDemo
+          ? []
+          : [
+              { label: t("system.log"), onClick: openLogViewer },
+              { label: t("system.memoryMonitor"), onClick: () => void openMemoryMonitor(t) },
+            ]),
       ],
     },
     {

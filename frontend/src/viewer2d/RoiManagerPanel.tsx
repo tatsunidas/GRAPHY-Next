@@ -77,7 +77,16 @@ function scopeText(itemId: string): string {
   return `${z} ${c} ${tt}`;
 }
 
-export function RoiManagerPanel({ activePatientKey, onClose }: { activePatientKey: string; onClose: () => void }) {
+export function RoiManagerPanel({
+  activePatientKey,
+  isDemo,
+  onClose,
+}: {
+  activePatientKey: string;
+  /** 公開デモ（backendが該当APIを403にする）。IJインポート/IJ・RT・SEGエクスポートを隠す。 */
+  isDemo: boolean;
+  onClose: () => void;
+}) {
   const { t } = useI18n();
   const [rois, setRois] = useState<RoiRow[]>([]);
   const [masks, setMasks] = useState<MaskRow[]>([]);
@@ -478,10 +487,10 @@ export function RoiManagerPanel({ activePatientKey, onClose }: { activePatientKe
           ref={importInputRef} type="file" accept=".roi,.zip" style={{ display: "none" }}
           onChange={(e) => { const f = e.target.files?.[0]; if (f) runImportRois(f); e.target.value = ""; }}
         />
-        <button onClick={() => importInputRef.current?.click()} disabled={busy} style={opBtn} title={t("roiMgr.importIJ")}>IJ ⬆</button>
+        {!isDemo && <button onClick={() => importInputRef.current?.click()} disabled={busy} style={opBtn} title={t("roiMgr.importIJ")}>IJ ⬆</button>}
         <button onClick={runImportRtStruct} disabled={busy} style={opBtn} title={t("roiMgr.importRt")}>RT ⬆</button>
-        {rois.length > 0 && <button onClick={runExportRois} disabled={busy} style={opBtn} title={t("roiMgr.exportIJ")}>IJ ⬇</button>}
-        {rois.length > 0 && <button onClick={runExportRtStruct} disabled={busy} style={opBtn} title={t("roiMgr.exportRt")}>RT ⬇</button>}
+        {!isDemo && rois.length > 0 && <button onClick={runExportRois} disabled={busy} style={opBtn} title={t("roiMgr.exportIJ")}>IJ ⬇</button>}
+        {!isDemo && rois.length > 0 && <button onClick={runExportRtStruct} disabled={busy} style={opBtn} title={t("roiMgr.exportRt")}>RT ⬇</button>}
       </div>
       {rois.length === 0 && <div style={empty}>{t("roiMgr.empty")}</div>}
       {rois.map((r) => (
@@ -535,7 +544,7 @@ export function RoiManagerPanel({ activePatientKey, onClose }: { activePatientKe
           {m.scope && <button onClick={() => toggleScopeZ(m.id)} style={scopeChip} title={t("roiMgr.scopeToggleMask")}>{m.scope}</button>}
           <button onClick={() => runStats(m.id)} style={editBtn} title={t("roiMgr.stats")}>Σ</button>
           <button onClick={() => runSplitToSlices(m.id)} disabled={busy} style={editBtn} title={t("roiMgr.toSlices")}>⬚</button>
-          <button onClick={() => runExportSeg(m.id)} disabled={busy} style={editBtn} title={t("roiMgr.exportSeg")}>SEG</button>
+          {!isDemo && <button onClick={() => runExportSeg(m.id)} disabled={busy} style={editBtn} title={t("roiMgr.exportSeg")}>SEG</button>}
           <button onClick={() => setEditId(m.id)} style={editBtn} title={t("roiMgr.editTitle")}>✎</button>
           <button onClick={() => deleteMask(m.id)} style={delBtn} title={t("common.delete")}>🗑</button>
         </div>

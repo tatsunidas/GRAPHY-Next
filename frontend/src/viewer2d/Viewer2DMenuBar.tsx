@@ -49,6 +49,7 @@ export function Viewer2DMenuBar({
   activeTool,
   gridRows,
   gridCols,
+  isDemo,
   onClose,
 }: {
   actions: ViewerActions;
@@ -56,6 +57,8 @@ export function Viewer2DMenuBar({
   activeTool: string;
   gridRows: number;
   gridCols: number;
+  /** 公開デモ（backendが該当APIを403にする）。ImageJ/プラグイン実行/システムログ・メモリモニタを隠す。 */
+  isDemo: boolean;
   onClose: () => void;
 }) {
   const { t } = useI18n();
@@ -192,23 +195,27 @@ export function Viewer2DMenuBar({
       items: [
         { label: t("viewer2d.menu.histogram"), onClick: () => actions.openHistogram() },
         { label: `${t("texture.menu")}…`, onClick: () => actions.openTexture() },
-        { label: t("viewer2d.menu.imagej"), onClick: () => actions.bridgeImageJ() },
+        ...(isDemo ? [] : [{ label: t("viewer2d.menu.imagej"), onClick: () => actions.bridgeImageJ() }]),
       ],
     },
     {
       id: "plugins",
       label: t("viewer2d.menu.plugins"),
-      items: pluginItems.length
-        ? pluginItems.map((p) => ({ label: p.label, onClick: p.onClick }))
-        : [{ label: t("viewer2d.menu.pluginsNone"), onClick: () => actions.comingSoon(t("viewer2d.menu.plugins")) }],
+      items: isDemo
+        ? [{ label: t("viewer2d.menu.pluginsNone"), onClick: () => actions.comingSoon(t("viewer2d.menu.plugins")) }]
+        : pluginItems.length
+          ? pluginItems.map((p) => ({ label: p.label, onClick: p.onClick }))
+          : [{ label: t("viewer2d.menu.pluginsNone"), onClick: () => actions.comingSoon(t("viewer2d.menu.plugins")) }],
     },
     {
       id: "system",
       label: t("main.menu.system"),
-      items: [
-        { label: t("system.log"), onClick: () => openLogViewer() },
-        { label: t("system.memoryMonitor"), onClick: () => void openMemoryMonitor(t) },
-      ],
+      items: isDemo
+        ? []
+        : [
+            { label: t("system.log"), onClick: () => openLogViewer() },
+            { label: t("system.memoryMonitor"), onClick: () => void openMemoryMonitor(t) },
+          ],
     },
     {
       id: "help",
@@ -221,10 +228,11 @@ export function Viewer2DMenuBar({
       ],
     },
   ];
+  const visibleMenus = menus.filter((m) => m.items.length > 0);
 
   return (
     <div style={bar}>
-      {menus.map((m) => (
+      {visibleMenus.map((m) => (
         <div key={m.id} style={{ position: "relative" }}>
           <button
             onClick={(e) => { e.stopPropagation(); setOpen(open === m.id ? null : m.id); }}

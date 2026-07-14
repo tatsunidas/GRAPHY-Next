@@ -202,6 +202,7 @@ function setGhostImage(e: React.DragEvent, label: string): void {
 export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
   const { t } = useI18n();
   const mode = status?.mode === "standalone" ? "standalone" : "web";
+  const isDemo = status?.demo === true;
 
   const [patients, setPatients] = useState<PatientSession[]>([]);
   const [activeKey, setActiveKey] = useState<string>("");
@@ -482,6 +483,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
                 <TileGrid
                   patient={activePatient}
                   mode={mode}
+                  isDemo={isDemo}
                   onRemoveTile={removeTile}
                   onSetGrid={setPatientGrid}
                   onInsertAdjacent={insertAdjacentTile}
@@ -542,6 +544,7 @@ function PatientTabBar({
 function TileGrid({
   patient,
   mode,
+  isDemo,
   onRemoveTile,
   onSetGrid,
   onInsertAdjacent,
@@ -551,6 +554,8 @@ function TileGrid({
 }: {
   patient: PatientSession;
   mode: "standalone" | "web";
+  /** 公開デモ（backendが該当APIを403にする）。Viewer2DMenuBar/RoiManagerPanelへ伝播する。 */
+  isDemo: boolean;
   onRemoveTile: (patientKey: string, tileId: string) => void;
   onSetGrid: (patientKey: string, rows: number, cols: number) => void;
   onInsertAdjacent: (patientKey: string, targetId: string, before: boolean, study: Study, series: Series) => void;
@@ -877,6 +882,7 @@ function TileGrid({
         activeTool={activeTool}
         gridRows={patient.gridRows}
         gridCols={patient.gridCols}
+        isDemo={isDemo}
         onClose={() => window.close()}
       />
       <Viewer2DToolbar
@@ -942,7 +948,9 @@ function TileGrid({
           />
         ))}
       </div>
-      {showRoiMgr && <RoiManagerPanel activePatientKey={patient.patientKey} onClose={() => setShowRoiMgr(false)} />}
+      {showRoiMgr && (
+        <RoiManagerPanel activePatientKey={patient.patientKey} isDemo={isDemo} onClose={() => setShowRoiMgr(false)} />
+      )}
       {histo && (
         <HistogramDialog
           key={histo.tile.id}
