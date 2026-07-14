@@ -23,8 +23,12 @@ graphy-backend(web,demo プロファイル) + cloudflared が立ち上がり、C
 Public Hostname を **`demo.vis-ionary.com`**（1階層）に変更して解決。
 `https://demo.vis-ionary.com/api/status` が 200・`demo:true` で応答することを実機確認済み。
 
-**次のアクション**: frontend 側の `demo:true` 連動（Import/Export メニュー非表示）とアプリ側
-レート制限が未着手。**次回セッションではここから。**
+**アプリ側レート制限も実装完了（2026-07-14）**: IP単位・1分300リクエストで `429` を返す
+`RateLimitFilter` を追加し、実機で動作確認済み（詳細は「## 通信量制限」参照）。
+
+**次のアクション**: frontend 側の `demo:true` 連動（Import/Export メニュー非表示）、
+JIRA提供サンプルの利用許諾の証跡確認、`graphy.vis-ionary.com/demo` の実リンク差し替えが未着手。
+**次回セッションではここから。**
 
 完了済み / 未完了の一覧は「## 3. 未確定・次のアクション」を参照。
 
@@ -120,16 +124,25 @@ UXとして押せてしまうボタンが残っている）。
 投入結果: `stowrs` で6件（HCC_001, PSMA, HASSAKU, LEE×6ファイル→実質4件のstudy）を
 dcm4cheeへ POST、QIDO-RS で **6 studies** を確認。`LGG-104`・`013_S_7097` は未投入のまま。
 
-## 通信量制限（未着手）
+## 通信量制限（2026-07-14・実装完了）
 
 - サーバー機はゲストWiFi回線に接続して運用している。回線側の帯域上限が土台としてあるが、
-  安定運用・濫用対策のため**アプリ側の簡易レート制限**の実装が必要（IP単位、`Personal`
+  安定運用・濫用対策のため**アプリ側の簡易レート制限**を実装した（IP単位、`Personal`
   プランの Gemini AI ウィジェット同様の仕組みが `vis-ionary-web` 側に前例あり:
-  `VISIONARY_AI_RATELIMIT`）。**未実装**。
+  `VISIONARY_AI_RATELIMIT`）。
+- `backend/src/main/java/com/vis/graphynext/web/RateLimitFilter.java` +
+  `RateLimitProperties`（`graphy.ratelimit.*`）。`application-demo.yml` で
+  `graphy.ratelimit.enabled=true`・`requests-per-minute: 300` を設定し、`demo` プロファイルで
+  のみ有効化（`DemoModeFilter` と同じ `@ConditionalOnProperty` パターン）。
+  固定ウィンドウ（1分）で IP ごとにカウントし、超過分は `429` + `Retry-After: 60` を返す。
+  クライアント IP は `CF-Connecting-IP` ヘッダーを信頼（`demo_internal` は `internal: true` で
+  ホストへの ports: publish が存在せず、graphy-backend への到達経路が cloudflared 経由のみのため、
+  このヘッダーの偽装は経路上不可能）。
+  実機で301リクエスト目に `429` が返ることを `https://demo.vis-ionary.com` 経由で確認済み。
 
 ## 決まっている制約（変更なし）
 
-- **通信量（帯域）を制限する** — 未実装（上記）
+- **通信量（帯域）を制限する** — 実装済み（上記）
 - **データの Import / Export をさせない** — `DemoModeFilter` で実装済み
 - Web モード自体は実 dcm4chee で結合検証済み（`deploy/dcm4chee/VERIFY-web.md`）— 2D/MPR/3D/
   Slicer/CurvedMPR 全モードが DICOMweb 経由で動作すること、prefetch・STOW-RS 書き戻しを確認済み。
@@ -148,7 +161,7 @@ dcm4cheeへ POST、QIDO-RS で **6 studies** を確認。`LGG-104`・`013_S_7097
 - [x] `demo` Spring プロファイルの実装（上記セクション参照）
 - [x] デモ用サンプルデータセットの選定・ライセンス監査・投入（上記セクション参照）
 - [x] デモ環境の Docker 化（上記セクション参照）
-- [ ] アプリ側レート制限の実装
+- [x] アプリ側レート制限の実装（上記セクション参照）
 - [ ] `graphy.vis-ionary.com/demo`（Astro, `website/src/pages/demo/index.astro`）を
       プレースホルダーから実リンクに差し替え
 

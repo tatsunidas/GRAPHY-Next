@@ -5,3 +5,6 @@
 graphy:
   demo:
     enabled: true
+  ratelimit:
+    enabled: true
+    requests-per-minute: 300
