@@ -1,16 +1,18 @@
-# 公開デモ用の完全なスタック定義（dcm4chee-arc ＋ GRAPHY-Next backend ＋ cloudflared）。
+# 公開デモ用の完全なスタック定義（dcm4chee-arc ＋ GRAPHY-Next backend ＋ proxy ＋ cloudflared）。
 # 開発検証用の deploy/dcm4chee/docker-compose.yml とは別ファイル
 # （あちらはローカルの手動検証向け、こちらは公開デモの本番構成）。
 #
 # ネットワーク設計:
-#   demo_internal は internal: true。ldap/db/arc/graphy-backend/cloudflared は全員この中にいて、
+#   demo_internal は internal: true。ldap/db/arc/graphy-backend/proxy/cloudflared は全員この中にいて、
 #   コンテナ間通信はここで完結する。internal ネットワークは「ホストへの ports: publish」もできない
 #   （Docker の制約。当初 graphy-backend に ports: を張って動作確認したが host 側に反映されず、
 #   internal + 個別ポート公開は両立しないと判明。→ ports: は使わない設計に変更）。
 #
 #   cloudflared だけ demo_edge（通常の bridge、外部到達可）にも参加し、Cloudflare のエッジへ
-#   アウトバウンド接続する。cloudflared → graphy-backend は demo_internal 内の Docker DNS
-#   （http://graphy-backend:8090）で到達し、ホストの ports: publish は不要。
+#   アウトバウンド接続する。cloudflared → proxy（nginx） → graphy-backend は demo_internal 内の
+#   Docker DNS で到達し、ホストの ports: publish は不要。proxy は graphy-backend が落ちている
+#   （デプロイ中・夜間リセット中・クラッシュ）場合、502/503/504 を検知して静的な
+#   maintenance.html へ自動フォールバックする（deploy/demo/proxy/ 参照）。
 #
 #   → graphy-backend コンテナ自体はどのネットワークからもインターネットへの経路を持たない。
 #     DemoModeFilter に見落としがあっても、backend から外部への任意の DICOM送信・通信は
@@ -70,7 +72,7 @@ services:
     environment:
       WILDFLY_CHOWN: /opt/wildfly/standalone /storage
       WILDFLY_WAIT_FOR: ldap:389 db:5432
-      JAVA_OPTS: -Xms256m -Xmx1024m -XX:MetaspaceSize=96M -XX:MaxMetaspaceSize=384m -Djava.net.preferIPv4Stack=true
+      JAVA_OPTS: -Xms1024m -Xmx16384m -XX:MetaspaceSize=96M -XX:MaxMetaspaceSize=384m -Djava.net.preferIPv4Stack=true
     depends_on:
       - ldap
       - db
@@ -97,21 +99,36 @@ services:
       - graphy_backend_data:/app/data
     restart: unless-stopped
 
+  # graphy-backend が落ちている（デプロイ中・夜間リセット中・クラッシュ）場合に、cloudflared からの
+  # リクエストを静的な maintenance.html へ自動フォールバックさせる薄いリバースプロキシ。
+  # cloudflared の Public Hostname ターゲットは graphy-backend:8090 ではなく http://proxy:80 を指すよう
+  # Cloudflare ダッシュボード側で設定すること。
+  proxy:
+    image: nginx:alpine
+    networks: [demo_internal]
+    volumes:
+      - ./proxy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./proxy/maintenance.html:/usr/share/nginx/html/maintenance.html:ro
+    depends_on:
+      - graphy-backend
+    restart: unless-stopped
+
   cloudflared:
     image: cloudflare/cloudflared:latest
     # named tunnel（本番）: トークンは deploy/demo/.env の TUNNEL_TOKEN から注入する
     # （cloudflared は TUNNEL_TOKEN 環境変数を自動で読む）。ルーティング先
-    # （demo.vis-ionary.com → http://graphy-backend:8090）は Cloudflare
-    # ダッシュボードの Public Hostname 側で指定するため、ここでは --url を渡さない。
+    # （demo.vis-ionary.com → http://proxy:80、proxy が graphy-backend:8090 へ中継し
+    # 落ちていれば maintenance.html を返す）は Cloudflare ダッシュボードの Public Hostname
+    # 側で指定するため、ここでは --url を渡さない。
     #
     # Quick Tunnel（旧・使い捨てURL）に戻したい場合は下記1行に差し替える:
-    #   command: tunnel --no-autoupdate --url http://graphy-backend:8090
+    #   command: tunnel --no-autoupdate --url http://proxy:80
     command: tunnel --no-autoupdate run
     env_file:
       - .env
     networks: [demo_internal, demo_edge]
     depends_on:
-      - graphy-backend
+      - proxy
     restart: unless-stopped
 
 volumes:

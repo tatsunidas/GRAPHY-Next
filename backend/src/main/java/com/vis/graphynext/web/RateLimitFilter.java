@@ -28,9 +28,10 @@ import java.util.concurrent.ThreadLocalRandom;
  * リクエスト数を IP ごとに数え、超過分は 429 で拒否する。
  *
  * <p>クライアント IP は Cloudflare エッジが付与する {@code CF-Connecting-IP} を信頼する。
- * このデモ環境では graphy-backend への到達経路が cloudflared 経由のみ（Docker の
+ * このデモ環境では graphy-backend への到達経路が cloudflared → proxy(nginx) 経由のみ（Docker の
  * {@code internal: true} ネットワークでホストへの ports: publish 自体が存在しない）ため、
- * このヘッダーを第三者が偽装してこのフィルタに直接届けることはできない。
+ * このヘッダーを第三者が偽装してこのフィルタに直接届けることはできない
+ * （proxy はヘッダーを素通しするのみで書き換えない）。
  */
 @Component
 @ConditionalOnProperty(prefix = "graphy.ratelimit", name = "enabled", havingValue = "true")
