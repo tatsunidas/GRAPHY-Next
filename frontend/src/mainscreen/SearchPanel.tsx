@@ -26,14 +26,22 @@ function addDays(base: Date, days: number): Date {
 const toInputDate = (v: string) => (v.length === 8 ? `${v.slice(0, 4)}-${v.slice(4, 6)}-${v.slice(6, 8)}` : "");
 const fromInputDate = (v: string) => v.replace(/-/g, "");
 
-export function SearchPanel({ onSearch }: { onSearch: (f: StudyFilters) => void }) {
+export function SearchPanel({
+  onSearch,
+  isDemo = false,
+}: {
+  onSearch: (f: StudyFilters) => void;
+  /** 公開デモ。初期検索条件を「今日のみ」ではなく全期間（1900/01/01〜今日）にする。 */
+  isDemo?: boolean;
+}) {
   const { t } = useI18n();
   const todayStr = useMemo(() => ymd(new Date()), []);
 
-  // 初期検索条件は「今日のみ」。
+  // 初期検索条件は「今日のみ」。ただし公開デモはサンプルデータの撮影日が「今日」ではないため、
+  // 全期間（1900/01/01〜今日）をデフォルトにする。
   const [patientId, setPatientId] = useState("");
   const [patientName, setPatientName] = useState("");
-  const [dateFrom, setDateFrom] = useState(todayStr);
+  const [dateFrom, setDateFrom] = useState(isDemo ? "19000101" : todayStr);
   const [dateTo, setDateTo] = useState(todayStr);
   const [modalities, setModalities] = useState<string[]>([]);
   const [accession, setAccession] = useState("");

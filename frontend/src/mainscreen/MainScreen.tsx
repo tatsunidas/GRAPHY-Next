@@ -261,7 +261,7 @@ export function MainScreen({
       />
       {importMsg && <div style={banner}>{importMsg}</div>}
       <div style={middle}>
-        <SearchPanel onSearch={setFilters} />
+        <SearchPanel onSearch={setFilters} isDemo={isDemo} />
         <div style={treeArea}>
           <StudyList
             filters={filters}
