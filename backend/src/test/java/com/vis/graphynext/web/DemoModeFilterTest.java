@@ -40,6 +40,17 @@ class DemoModeFilterTest {
             "GET,/api/system/logs",
             "POST,/api/imagej/bridge",
             "POST,/api/plugins/foo/run",
+            "POST,/api/export/zip",
+            "POST,/api/series-extract/verify",
+            "POST,/api/series-extract/copy",
+            "POST,/api/series-extract/zip",
+            "POST,/api/anonymizer/zip",
+            "POST,/api/anonymizer/copy",
+            "POST,/api/anonymizer/masks",
+            "DELETE,/api/anonymizer/masks",
+            "POST,/api/dicom/echo",
+            "POST,/api/dicom/tls-config",
+            "PUT,/api/settings",
     })
     void blocksRiskyRoutes(String method, String path) throws Exception {
         MockHttpServletRequest req = new MockHttpServletRequest(method, path);
@@ -64,6 +75,15 @@ class DemoModeFilterTest {
             "GET,/api/instances/1.4/document",
             "GET,/api/plugins/foo/ui.js",
             "GET,/api/status",
+            "GET,/api/anonymizer/profiles",
+            "GET,/api/anonymizer/masks",
+            "GET,/api/settings",
+            "GET,/api/dicom/tls-config",
+            "GET,/api/reports",
+            "POST,/api/reports",
+            "PUT,/api/reports/1",
+            "DELETE,/api/reports/1",
+            "POST,/api/reports/1/finalize",
     })
     void allowsViewingRoutes(String method, String path) throws Exception {
         MockHttpServletRequest req = new MockHttpServletRequest(method, path);

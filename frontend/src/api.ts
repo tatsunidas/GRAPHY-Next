@@ -14,6 +14,7 @@ export interface AppStatus {
   mode: string;
   activeProfiles: string[];
   javaVersion: string;
+  demo?: boolean;
 }
 
 export interface Study {
