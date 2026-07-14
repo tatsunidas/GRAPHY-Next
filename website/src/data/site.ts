@@ -92,7 +92,7 @@ export const site = {
     { label: 'GRAPHY-Next', href: '/next' },
     { label: 'classic', href: '/classic' },
     { label: 'Lab', href: '/lab' },
-    { label: 'Demo', href: '/demo', comingSoon: true },
+    { label: 'Demo', href: '/demo' },
     { label: 'ダウンロード', href: '/download' },
   ] as NavItem[],
 } as const;
