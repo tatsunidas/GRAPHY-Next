@@ -86,6 +86,7 @@ export function SceneObjectPanel({
   onToggleEndoPath,
   studyUid,
   seriesUid,
+  isDemo,
 }: {
   geom: VolumeGeom | null;
   onStartCut?: (id: string) => void;
@@ -99,6 +100,9 @@ export function SceneObjectPanel({
    * `fw/mask-driven-pipelines-gap-analysis.md` 課題#1。 */
   studyUid?: string;
   seriesUid?: string;
+  /** 公開デモ。クライアント完結でバックエンドに来ないため DemoModeFilter では止められない
+   * STL/OBJ インポートボタンを隠す。 */
+  isDemo?: boolean;
 }) {
   const { t } = useI18n();
   const objects = useSceneObjects();
@@ -396,20 +400,24 @@ export function SceneObjectPanel({
             </option>
           ))}
         </select>
-        <button style={btn} disabled={busy} onClick={() => fileRef.current?.click()}>
-          {t("scene3d.importStl")}
-        </button>
-        <input
-          ref={fileRef}
-          type="file"
-          accept=".stl,.obj"
-          style={{ display: "none" }}
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) onImportFile(f);
-            e.currentTarget.value = "";
-          }}
-        />
+        {!isDemo && (
+          <>
+            <button style={btn} disabled={busy} onClick={() => fileRef.current?.click()}>
+              {t("scene3d.importStl")}
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".stl,.obj"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) onImportFile(f);
+                e.currentTarget.value = "";
+              }}
+            />
+          </>
+        )}
       </div>
 
       {/* オブジェクト一覧 */}

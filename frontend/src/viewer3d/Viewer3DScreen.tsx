@@ -93,6 +93,7 @@ function defaultWl(modality: string | null, range: [number, number]): { center: 
 }
 
 export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
+  const isDemo = status?.demo === true;
   const { t } = useI18n();
   const presets = useWlPresets();
   const vpRef = useRef<HTMLDivElement>(null);
@@ -597,6 +598,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
                 onToggleEndoPath={toggleEndoPath}
                 studyUid={seriesRef.current?.studyUid}
                 seriesUid={seriesRef.current?.seriesUid}
+                isDemo={isDemo}
               />
             </div>
 
