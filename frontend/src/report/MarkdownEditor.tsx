@@ -144,7 +144,8 @@ export function MarkdownEditor({
           readOnly={readOnly}
           style={textareaStyle}
         />
-        <div style={previewPane}>
+        <div style={previewPane} className="gp-md-preview">
+          <style>{markdownPreviewCss}</style>
           <MarkdownPreviewBoundary source={previewSource}>
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{previewSource || ""}</ReactMarkdown>
           </MarkdownPreviewBoundary>
@@ -224,3 +225,50 @@ const previewPane: React.CSSProperties = {
   fontSize: 13,
   lineHeight: 1.6,
 };
+
+// react-markdown の `code`/`pre` は inline style prop では pre>code の入れ子を区別できない
+// （fenced code の code 要素は言語未指定だと className を持たない）ため、ここだけ通常の CSS
+// による子孫セレクタでコードブロック/インラインコード/引用の見た目を Qiita 風に分ける。
+const MONOSPACE_FONT = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+const markdownPreviewCss = `
+.gp-md-preview pre {
+  margin: 8px 0;
+  padding: 12px 14px;
+  background: #2d333b;
+  color: #e6edf3;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-family: ${MONOSPACE_FONT};
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.gp-md-preview pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  border-radius: 0;
+  font-size: inherit;
+  font-family: inherit;
+}
+.gp-md-preview code {
+  background: #f0f2f5;
+  color: #c7254e;
+  padding: 2px 5px;
+  border-radius: 4px;
+  font-family: ${MONOSPACE_FONT};
+  font-size: 0.9em;
+}
+.gp-md-preview blockquote {
+  margin: 8px 0;
+  padding: 4px 14px;
+  border-left: 4px solid #c9d2da;
+  background: #f7f9fb;
+  color: #55606b;
+}
+.gp-md-preview blockquote > :first-child {
+  margin-top: 0;
+}
+.gp-md-preview blockquote > :last-child {
+  margin-bottom: 0;
+}
+`;
