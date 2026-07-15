@@ -23,6 +23,7 @@ import { useI18n } from "../i18n/i18n";
 import { KeyImageGrid } from "./KeyImageGrid";
 import { MarkdownEditor } from "./MarkdownEditor";
 import { ParticipantsPanel } from "./ParticipantsPanel";
+import { resolveDefaultReportType } from "./reportDefaults";
 import type { ViewerMode } from "../viewer/imageId";
 
 const REPORT_TYPES: ReportType[] = ["GENERAL", "IMAGING_DIAGNOSTIC", "TECHNOLOGIST", "MEASUREMENT"];
@@ -142,6 +143,7 @@ export function ReportEditorDialog({
               patientId: study.patientId,
               studyInstanceUid: study.studyInstanceUid,
               bodyMarkdown: t("report.body.placeholder"),
+              reportType: await resolveDefaultReportType(),
             });
             onChanged?.();
           }

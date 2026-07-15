@@ -237,6 +237,31 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
     ],
   },
   {
+    id: "report",
+    labelKey: "settings.cat.report",
+    icon: "📝",
+    sections: [
+      {
+        titleKey: "settings.sec.report",
+        fields: [
+          {
+            key: "report.defaultType",
+            labelKey: "settings.field.reportDefaultType",
+            type: "select",
+            default: "GENERAL",
+            helpKey: "settings.field.reportDefaultType.help",
+            options: [
+              { value: "GENERAL", labelKey: "report.type.GENERAL" },
+              { value: "IMAGING_DIAGNOSTIC", labelKey: "report.type.IMAGING_DIAGNOSTIC" },
+              { value: "TECHNOLOGIST", labelKey: "report.type.TECHNOLOGIST" },
+              { value: "MEASUREMENT", labelKey: "report.type.MEASUREMENT" },
+            ],
+          },
+        ],
+      },
+    ],
+  },
+  {
     id: "viewer",
     labelKey: "settings.cat.viewer",
     icon: "🖼",
