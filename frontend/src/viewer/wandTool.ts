@@ -15,6 +15,7 @@
 import { getEnabledElement, cache, imageLoader, utilities as csUtils } from "@cornerstonejs/core";
 import { BaseTool, segmentation as csSeg } from "@cornerstonejs/tools";
 import { getSegEditTarget } from "./roiMaskStore";
+import { ensureStackSegmentation } from "./segmentation";
 import { openWandSession, clearWandSession, getWandSession, type WandSession, type WandMode } from "./wandStore";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -184,13 +185,16 @@ export function cancelWand(): void {
 
 /** クリック位置（world）からシードを決めてセッションを開始（or 再シード）し、初回フラッドする。 */
 async function startWand(viewport: AnyObj, world: [number, number, number], mode: WandMode): Promise<void> {
-  const target = getSegEditTarget();
-  if (!target.segmentationId) return;
   const refImageId: string | undefined = viewport.getCurrentImageId?.();
   if (!refImageId) return;
   const stack = (viewport.getImageIds?.() as string[] | undefined) ?? [];
   const seedZ = stack.indexOf(refImageId);
   if (seedZ < 0) return;
+  // アクティブ編集対象はツール切替時のブロードキャスト（他タイルの activate）で上書きされ得るため、
+  // 実際にクリックされたこの viewport のスタックに対して都度再確認する（他シリーズへの誤描画防止）。
+  const segmentationId = await ensureStackSegmentation(viewport.id, stack);
+  if (!segmentationId) return;
+  const target = { segmentationId, segmentIndex: getSegEditTarget().segmentIndex };
   const src = cache.getImage(refImageId) as AnyObj | undefined;
   if (!src) return;
   const px = src.getPixelData() as ArrayLike<number>;
