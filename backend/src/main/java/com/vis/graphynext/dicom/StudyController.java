@@ -142,6 +142,10 @@ public class StudyController {
      * 範囲外パディング用ブランク DICOM を生成して返す。複数スキャン混在シリーズで、ある C/T が覆わない
      * Z 位置を物理座標に揃えて埋めるために frontend が wadouri で読む。
      * {@code ipp}（"x,y,z"）でブランクの ImagePositionPatient を指定（穴の物理位置）。
+     * <ul>
+     *   <li>web: {@link WebDicomDataService#blankDicom}（必須タグ（患者関係・UID・Image 属性）のみ引き継ぐ）。</li>
+     *   <li>standalone: {@link DicomStorageService#blankDicom}（ローカル索引の代表インスタンスを複製）。</li>
+     * </ul>
      */
     @GetMapping("/studies/{studyUid}/series/{seriesUid}/blank/file")
     public org.springframework.http.ResponseEntity<byte[]> blank(
@@ -159,7 +163,8 @@ public class StudyController {
                 }
             }
         }
-        byte[] dicom = storage.blankDicom(studyUid, seriesUid, pos);
+        WebDicomDataService web = webProvider.getIfAvailable();
+        byte[] dicom = web != null ? web.blankDicom(studyUid, seriesUid, pos) : storage.blankDicom(studyUid, seriesUid, pos);
         if (dicom == null) {
             return org.springframework.http.ResponseEntity.notFound().build();
         }

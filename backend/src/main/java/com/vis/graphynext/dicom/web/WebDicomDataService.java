@@ -10,9 +10,11 @@ import jakarta.json.stream.JsonParser;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.UID;
+import org.dcm4che3.data.VR;
 import org.dcm4che3.io.DicomInputStream;
 import org.dcm4che3.io.DicomOutputStream;
 import org.dcm4che3.json.JSONReader;
+import org.dcm4che3.util.UIDUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
@@ -76,6 +78,26 @@ public class WebDicomDataService {
         while (cacheBytes > CACHE_MAX_BYTES && it.hasNext()) {
             Map.Entry<String, byte[]> eldest = it.next();
             cacheBytes -= eldest.getValue().length;
+            it.remove();
+        }
+    }
+
+    /**
+     * ブランク生成用テンプレート（シリーズ代表インスタンスの属性）の簡易キャッシュ（seriesUID→Attributes）。
+     * シリーズ全体の {@link #seriesMetadata} は重いため、gap 埋めのたびに叩き直さないよう件数上限つき LRU で保持する。
+     */
+    private static final int BLANK_TEMPLATE_CACHE_MAX = 64;
+    private final LinkedHashMap<String, Attributes> blankTemplateCache = new LinkedHashMap<>(16, 0.75f, true);
+
+    private synchronized Attributes blankTemplateGet(String seriesUid) {
+        return blankTemplateCache.get(seriesUid);
+    }
+
+    private synchronized void blankTemplatePut(String seriesUid, Attributes tmpl) {
+        blankTemplateCache.put(seriesUid, tmpl);
+        var it = blankTemplateCache.entrySet().iterator();
+        while (blankTemplateCache.size() > BLANK_TEMPLATE_CACHE_MAX && it.hasNext()) {
+            it.next();
             it.remove();
         }
     }
@@ -147,6 +169,177 @@ public class WebDicomDataService {
         List<Attributes> result = parseDatasets(body);
         log.debug("WADO-RS metadata: {} -> {} instances", path, result.size());
         return result;
+    }
+
+    /** ブランク画像へ引き継ぐ「患者関係」タグ。 */
+    private static final int[] BLANK_PATIENT_TAGS = {
+            Tag.SpecificCharacterSet,
+            Tag.PatientID, Tag.PatientName, Tag.PatientBirthDate, Tag.PatientSex, Tag.PatientAge,
+    };
+
+    /** ブランク画像へ引き継ぐ「Image 属性」タグ（幾何・画素形式・表示パラメータ）。 */
+    private static final int[] BLANK_IMAGE_TAGS = {
+            Tag.Modality, Tag.Rows, Tag.Columns, Tag.SamplesPerPixel, Tag.PhotometricInterpretation,
+            Tag.BitsAllocated, Tag.BitsStored, Tag.HighBit, Tag.PixelRepresentation,
+            Tag.PixelSpacing, Tag.SliceThickness, Tag.SpacingBetweenSlices,
+            Tag.ImageOrientationPatient, Tag.FrameOfReferenceUID, Tag.PositionReferenceIndicator,
+            Tag.RescaleSlope, Tag.RescaleIntercept, Tag.RescaleType,
+            Tag.WindowCenter, Tag.WindowWidth,
+    };
+
+    /**
+     * web: 範囲外パディング用ブランク DICOM を生成する（standalone の
+     * {@link com.vis.graphynext.dicom.store.DicomStorageService#blankDicom} と同じ用途）。ある C/T が
+     * 覆わない Z 位置を、近傍スライスの代用ではなく物理座標に揃えたブランクで埋めるために frontend が
+     * wadouri で読む。
+     *
+     * <p>ローカル索引を持たないため、シリーズ代表インスタンス（WADO-RS {@code /metadata} の先頭）を
+     * テンプレートにするが、全属性を複製する standalone とは異なり、必須タグ（患者関係・UID・Image 属性）
+     * のみを引き継いだ最小構成で組み立てる。画素はシリーズ最小値（推定不能なら 0）で埋める。
+     *
+     * @return Part-10 DICOM バイト列。テンプレートが取得できない／幾何が不正なら {@code null}。
+     */
+    public byte[] blankDicom(String studyUid, String seriesUid, double[] ipp) {
+        Attributes src = blankTemplateGet(seriesUid);
+        if (src == null) {
+            List<Attributes> meta;
+            try {
+                meta = seriesMetadata(studyUid, seriesUid);
+            } catch (Exception e) {
+                log.warn("web blank: metadata取得失敗 series={}: {}", seriesUid, e.toString());
+                return null;
+            }
+            if (meta.isEmpty()) {
+                return null;
+            }
+            src = meta.get(0);
+            blankTemplatePut(seriesUid, src);
+        }
+        int rows = src.getInt(Tag.Rows, 0);
+        int cols = src.getInt(Tag.Columns, 0);
+        if (rows <= 0 || cols <= 0) {
+            return null;
+        }
+        try {
+            Attributes a = new Attributes();
+            for (int tag : BLANK_PATIENT_TAGS) {
+                copyTag(src, a, tag);
+            }
+            a.setString(Tag.StudyInstanceUID, VR.UI, studyUid);
+            a.setString(Tag.SeriesInstanceUID, VR.UI, seriesUid);
+            a.setString(Tag.SOPInstanceUID, VR.UI, UIDUtils.createUID());
+            a.setInt(Tag.InstanceNumber, VR.IS, 0);
+            a.setString(Tag.ImageType, VR.CS, "DERIVED", "SECONDARY", "BLANK");
+            if (ipp != null && ipp.length == 3) {
+                a.setDouble(Tag.ImagePositionPatient, VR.DS, ipp);
+            }
+            boolean seg = UID.SegmentationStorage.equals(src.getString(Tag.SOPClassUID));
+            byte[] px;
+            if (seg) {
+                // SEG は表示時 8bit MONOCHROME2(0/255) に展開されるため、gap ブランクも同形式（全0）で返す。
+                a.setString(Tag.SOPClassUID, VR.UI, UID.SegmentationStorage);
+                a.setInt(Tag.Rows, VR.US, rows);
+                a.setInt(Tag.Columns, VR.US, cols);
+                a.setInt(Tag.SamplesPerPixel, VR.US, 1);
+                a.setString(Tag.PhotometricInterpretation, VR.CS, "MONOCHROME2");
+                a.setInt(Tag.BitsAllocated, VR.US, 8);
+                a.setInt(Tag.BitsStored, VR.US, 8);
+                a.setInt(Tag.HighBit, VR.US, 7);
+                a.setInt(Tag.PixelRepresentation, VR.US, 0);
+                copyTag(src, a, Tag.ImageOrientationPatient);
+                copyTag(src, a, Tag.PixelSpacing);
+                a.setDouble(Tag.WindowCenter, VR.DS, 127.0);
+                a.setDouble(Tag.WindowWidth, VR.DS, 255.0);
+                px = new byte[rows * cols];
+                a.setBytes(Tag.PixelData, VR.OB, px);
+            } else {
+                for (int tag : BLANK_IMAGE_TAGS) {
+                    copyTag(src, a, tag);
+                }
+                String sopClass = src.getString(Tag.SOPClassUID);
+                a.setString(Tag.SOPClassUID, VR.UI, sopClass != null ? sopClass : UID.SecondaryCaptureImageStorage);
+                int bits = src.getInt(Tag.BitsAllocated, 16);
+                int samples = src.getInt(Tag.SamplesPerPixel, 1);
+                int pad = paddingValue(src);
+                int nSamples = rows * cols * samples;
+                int bytesPerSample = Math.max(1, bits / 8);
+                px = new byte[nSamples * bytesPerSample];
+                if (bytesPerSample >= 2) {
+                    short v = (short) pad;
+                    for (int i = 0; i < nSamples; i++) {
+                        px[i * 2] = (byte) (v & 0xff);
+                        px[i * 2 + 1] = (byte) ((v >> 8) & 0xff);
+                    }
+                } else if (pad != 0) {
+                    Arrays.fill(px, (byte) pad);
+                }
+                a.setBytes(Tag.PixelData, bits > 8 ? VR.OW : VR.OB, px);
+            }
+            if (a.getString(Tag.SpecificCharacterSet) == null) {
+                a.setSpecificCharacterSet("ISO_IR 192");
+            }
+
+            ByteArrayOutputStream bos = new ByteArrayOutputStream(px.length + 8192);
+            Attributes fmi = a.createFileMetaInformation(UID.ExplicitVRLittleEndian);
+            try (DicomOutputStream dos = new DicomOutputStream(bos, UID.ExplicitVRLittleEndian)) {
+                dos.writeDataset(fmi, a);
+            }
+            return bos.toByteArray();
+        } catch (Exception e) {
+            log.warn("web blank 生成失敗 series={}: {}", seriesUid, e.toString());
+            return null;
+        }
+    }
+
+    /** タグ 1 個を VR・多値を保ってコピーする（存在時のみ）。 */
+    private static void copyTag(Attributes from, Attributes to, int tag) {
+        if (!from.contains(tag)) {
+            return;
+        }
+        VR vr = from.getVR(tag);
+        String[] v = from.getStrings(tag);
+        if (v != null && v.length > 0) {
+            to.setString(tag, vr, v);
+        }
+    }
+
+    /**
+     * ブランク画素の埋め値（stored 値）。SmallestImagePixelValue → PixelPaddingValue →
+     * (WindowCenter-WindowWidth/2 を stored 換算) → 0 の順にフォールバック
+     * （{@link com.vis.graphynext.dicom.store.DicomStorageService#blankDicom} と同じ規則）。
+     */
+    private static int paddingValue(Attributes ds) {
+        if (ds.contains(Tag.SmallestImagePixelValue)) {
+            return ds.getInt(Tag.SmallestImagePixelValue, 0);
+        }
+        if (ds.contains(Tag.PixelPaddingValue)) {
+            return ds.getInt(Tag.PixelPaddingValue, 0);
+        }
+        Double wc = readNumeric(ds, Tag.WindowCenter);
+        Double ww = readNumeric(ds, Tag.WindowWidth);
+        if (wc == null || ww == null) {
+            return 0;
+        }
+        double slope = readNumeric(ds, Tag.RescaleSlope) != null ? readNumeric(ds, Tag.RescaleSlope) : 1.0;
+        double intercept = readNumeric(ds, Tag.RescaleIntercept) != null ? readNumeric(ds, Tag.RescaleIntercept) : 0.0;
+        double floorOut = wc - ww / 2.0;
+        return (int) Math.round((floorOut - intercept) / (slope == 0 ? 1 : slope));
+    }
+
+    /** 数値タグを VR 非依存で読む（IS/DS いずれも文字列表現から）。読めなければ null。 */
+    private static Double readNumeric(Attributes ds, int tag) {
+        if (!ds.contains(tag)) {
+            return null;
+        }
+        String s = ds.getString(tag);
+        if (s == null || s.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            return Double.parseDouble(s.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /**
