@@ -84,6 +84,7 @@ public class DemoModeFilter extends OncePerRequestFilter {
         boolean blocked = BLOCKED.stream().anyMatch(route -> route.matches(method, path, matcher));
         if (blocked) {
             response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+            response.setCharacterEncoding("UTF-8");
             response.setContentType("application/json");
             response.getWriter().write(
                     "{\"error\":\"この操作は公開デモでは無効化されています\"}");
