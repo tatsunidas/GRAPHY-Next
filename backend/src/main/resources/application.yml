@@ -17,6 +17,12 @@ spring:
 
 server:
   port: 8080
+  # リバースプロキシ配下（deploy/demo の nginx 等）で X-Forwarded-Proto/Host を信頼する。
+  # 無いと Tomcat が自身のスキームを常に http と認識し、https 経由のブラウザからの Origin
+  # ヘッダ（scheme 不一致）を同一オリジンと判定できず、CORS 未設定オリジン扱いで
+  # 403 "Invalid CORS request" になる（POST 等 Origin を送るリクエストで発生）。
+  # プロキシが無い（standalone 直起動）場合は X-Forwarded-* が来ないため無害。
+  forward-headers-strategy: framework
 
 # StatusController が返すバージョン。
 # '@project.version@' は Maven のリソースフィルタで pom.xml の <version> に置換される
