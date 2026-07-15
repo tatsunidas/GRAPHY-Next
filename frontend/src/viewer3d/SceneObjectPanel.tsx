@@ -17,9 +17,13 @@ import { useI18n } from "../i18n/i18n";
 import { getRoiMaskMeta } from "../viewer/roiMaskStore";
 import { buildLabelVolumeFromSegmentation, type VolumeGeom } from "../viewer/labelVolume";
 import { exportStlBinary, importObj, importStl } from "../viewer/mesh3d";
+import { listSpheres3D, subscribeSphere3D } from "../viewer/sphere3dStore";
+import { framesToLabelVolume } from "../viewer/maskFrames";
+import { requestRemoteMasks, requestRemoteMaskFrames, type RemoteMask } from "../viewer/maskBridge";
 import {
   addMeshObject,
   addRoiObject,
+  addSphereObject,
   convertMeshToRoi,
   convertRoiToMesh,
   extractCenterlineFromObject,
@@ -80,6 +84,8 @@ export function SceneObjectPanel({
   onToggleMeasure,
   endoPathMode,
   onToggleEndoPath,
+  studyUid,
+  seriesUid,
 }: {
   geom: VolumeGeom | null;
   onStartCut?: (id: string) => void;
@@ -89,6 +95,10 @@ export function SceneObjectPanel({
   onToggleMeasure?: () => void;
   endoPathMode?: boolean;
   onToggleEndoPath?: () => void;
+  /** 他ウィンドウ（2D Viewer 等）のマスクをウィンドウ間同期で取り込むためのスコープ。
+   * `fw/mask-driven-pipelines-gap-analysis.md` 課題#1。 */
+  studyUid?: string;
+  seriesUid?: string;
 }) {
   const { t } = useI18n();
   const objects = useSceneObjects();
@@ -144,6 +154,28 @@ export function SceneObjectPanel({
     // objects を依存に入れて、ROI 追加後にも再評価（新規マスク生成に追従）。
   }, [objects.length]);
 
+  // パラメトリック 3D 球（2D ビューアで定義、`sphere3dStore.ts`）。Mask 焼き込み→再インポートを経ずに直接追加できる。
+  const [sphereTick, setSphereTick] = useState(0);
+  useEffect(() => subscribeSphere3D(() => setSphereTick((n) => n + 1)), []);
+  const spheres = useMemo(() => listSpheres3D(), [sphereTick]);
+
+  // 他ウィンドウ（2D Viewer 等）が保持するマスク（ウィンドウ間同期, `maskBridge.ts`）。
+  const [remoteMasks, setRemoteMasks] = useState<RemoteMask[]>([]);
+  useEffect(() => {
+    if (!studyUid || !seriesUid) {
+      setRemoteMasks([]);
+      return;
+    }
+    let cancelled = false;
+    requestRemoteMasks(studyUid, seriesUid).then((list) => {
+      if (!cancelled) setRemoteMasks(list);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // objects.length: 他パネル操作でマスクが増減した後の再チェックに追従。
+  }, [studyUid, seriesUid, objects.length]);
+
   const withBusy = async (fn: () => void | Promise<void>) => {
     setBusy(true);
     setStatus("");
@@ -168,6 +200,37 @@ export function SceneObjectPanel({
       }
       const label = getRoiMaskMeta(segmentationId)?.label;
       const id = addRoiObject(lv, { name: label ? `${label}` : undefined });
+      if (!id) setStatus(t("scene3d.error"));
+    });
+  };
+
+  // 他ウィンドウのマスクを取り込む（`value` は remoteMasks の index）。
+  const onAddRoiFromRemoteMask = (value: string) => {
+    const idx = Number(value);
+    const rm = remoteMasks[idx];
+    if (!rm) return;
+    void withBusy(async () => {
+      if (!geom) {
+        setStatus(t("scene3d.error"));
+        return;
+      }
+      const frames = await requestRemoteMaskFrames(rm.windowId, rm.segmentationId);
+      const lv = frames ? framesToLabelVolume(frames, geom) : null;
+      if (!lv) {
+        setStatus(t("scene3d.remoteMaskFailed"));
+        return;
+      }
+      const id = addRoiObject(lv, { name: rm.label });
+      if (!id) setStatus(t("scene3d.error"));
+    });
+  };
+
+  const onAddSphereObject = (sphereId: string) => {
+    if (!sphereId) return;
+    const s = spheres.find((v) => v.id === sphereId);
+    if (!s) return;
+    void withBusy(() => {
+      const id = addSphereObject(s.center, s.radiusMm, { name: s.label || undefined });
       if (!id) setStatus(t("scene3d.error"));
     });
   };
@@ -294,6 +357,42 @@ export function SceneObjectPanel({
           {masks.map((m) => (
             <option key={m.id} value={m.id}>
               {m.label}
+            </option>
+          ))}
+        </select>
+        {remoteMasks.length > 0 && (
+          <select
+            style={select}
+            value=""
+            disabled={busy}
+            onChange={(e) => {
+              onAddRoiFromRemoteMask(e.target.value);
+              e.currentTarget.value = "";
+            }}
+          >
+            <option value="">{t("scene3d.importRemoteRoi")}</option>
+            {remoteMasks.map((m, idx) => (
+              <option key={`${m.windowId}-${m.segmentationId}`} value={idx}>
+                🔗 {m.label}
+              </option>
+            ))}
+          </select>
+        )}
+        <select
+          style={select}
+          value=""
+          disabled={busy || spheres.length === 0}
+          onChange={(e) => {
+            onAddSphereObject(e.target.value);
+            e.currentTarget.value = "";
+          }}
+        >
+          <option value="">
+            {spheres.length ? t("scene3d.importSphere") : t("scene3d.noSpheres")}
+          </option>
+          {spheres.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.label || s.id}
             </option>
           ))}
         </select>

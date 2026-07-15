@@ -42,6 +42,9 @@ import { fetchSeriesLayout, type Instance } from "../api";
 import { fetchSettings } from "../settings/settingsApi";
 import { useI18n } from "../i18n/i18n";
 import { LoadingSpinner } from "./LoadingSpinner";
+// 副作用インポート: このウィンドウが保持するマスクを、他ウィンドウからのウィンドウ間同期要求
+// （BroadcastChannel）に応答できるよう即座に待ち受け開始する（`fw/mask-driven-pipelines-gap-analysis.md` 課題#1）。
+import "./maskBridge";
 
 interface OverlayState extends Required<ViewerOverlays> {
   roi: boolean;

@@ -270,7 +270,11 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
       // mesh / 3D ROI アクターを同一 vtk シーンへ重畳するため renderer を接続。
       try {
         const parts = view.getSceneParts();
-        attachSceneRenderer({ renderer: parts.renderer, render: parts.render });
+        attachSceneRenderer({
+          renderer: parts.renderer,
+          render: parts.render,
+          setVolumeOpacityScale: (f) => view.setOpacityScale(f),
+        });
         const geom = geomFromImageData(parts.imageData);
         setSceneGeom(geom);
         // クリップ箱（埋め込み表示）の基準幾何を設定し、クロップ変化を購読して
@@ -591,6 +595,8 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
                 onToggleMeasure={toggleMeasure}
                 endoPathMode={endoPathMode}
                 onToggleEndoPath={toggleEndoPath}
+                studyUid={seriesRef.current?.studyUid}
+                seriesUid={seriesRef.current?.seriesUid}
               />
             </div>
 

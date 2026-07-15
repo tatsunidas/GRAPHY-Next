@@ -11,6 +11,7 @@
 import { cache, metaData } from "@cornerstonejs/core";
 import { segmentation as csSeg } from "@cornerstonejs/tools";
 import { getRoiMaskMeta, getMaskSegments } from "./roiMaskStore";
+import { maskVolumeStats } from "./roi3d";
 import { exportDicomSeg, type SegExportRequest, type SegExportSegment, type SegExportFrame, type SegExportResult } from "../api";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -135,7 +136,11 @@ export async function exportMaskAsSeg(segmentationId: string): Promise<SegExport
     }
     if (!frames.length || !anyOverall) continue; // 前景ゼロの segment は出さない
     const label = segIndices.length > 1 ? `${meta?.label ?? "Mask"} #${segIndex}` : (meta?.label ?? `Segment ${segIndex}`);
-    segments.push({ number: segIndex, label, color, frames });
+    // Volumetry（体積計測）結果を SegmentDescription として書き込み、SEG 単体で持ち運べるようにする
+    // （`fw/mask-driven-pipelines-gap-analysis.md` 課題#4。SEG インポート側で meta.custom へ復元）。
+    const vol = maskVolumeStats(segmentationId, segIndex);
+    const description = vol ? `Volume: ${vol.volumeMl.toFixed(2)} mL (${vol.voxels} voxels, ${vol.slices} slices)` : null;
+    segments.push({ number: segIndex, label, color, description, frames });
   }
   if (!segments.length) return null;
 

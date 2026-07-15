@@ -282,11 +282,11 @@ export interface MaskVolumeStats {
 }
 
 /**
- * Mask の体積統計（前景=非ゼロ）。ボクセル体積 = rowSp×colSp×sliceSp。
- * sliceSp は隣接スライス IPP の法線方向距離（無ければスライス厚→1）。取得不能なら null。
- * source 画像が cache にあれば前景の画素値統計（mean/SD/min/max, modality LUT 適用）も併せて返す。
+ * Mask の体積統計（前景=非ゼロ。`segmentIndex` を渡すとその segment のみに限定）。
+ * ボクセル体積 = rowSp×colSp×sliceSp。sliceSp は隣接スライス IPP の法線方向距離（無ければスライス厚→1）。
+ * 取得不能なら null。source 画像が cache にあれば前景の画素値統計（mean/SD/min/max, modality LUT 適用）も併せて返す。
  */
-export function maskVolumeStats(segmentationId: string): MaskVolumeStats | null {
+export function maskVolumeStats(segmentationId: string, segmentIndex?: number): MaskVolumeStats | null {
   let labelmapIds: string[];
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -331,7 +331,9 @@ export function maskVolumeStats(segmentationId: string): MaskVolumeStats | null 
     const { scale, offset } = getModalityCalibration(sImg, sourceIds[z] ?? "");
     let sliceCount = 0;
     for (let i = 0; i < len; i++) {
-      if (vm.getAtIndex(i) <= 0) continue;
+      const idx = vm.getAtIndex(i);
+      if (idx <= 0) continue;
+      if (segmentIndex != null && idx !== segmentIndex) continue;
       sliceCount++;
       if (px && i < px.length) {
         const v = px[i] * scale + offset;

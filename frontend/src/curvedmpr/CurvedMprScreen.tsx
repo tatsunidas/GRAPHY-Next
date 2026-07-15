@@ -38,6 +38,9 @@ interface CurvedMprContext {
   c?: number;
   t?: number;
   ts: number;
+  /** マスク由来中心線を 3D Viewer から渡す場合の制御点列（world mm, LPS）。
+   * `fw/mask-driven-pipelines-gap-analysis.md` 課題#5: マスク駆動 CPR の入口を単独 Curved MPR 画面に統合。 */
+  centerline?: [number, number, number][];
 }
 
 type Phase = "idle" | "loading" | "ready" | "error" | "unsupported";
@@ -485,6 +488,13 @@ export function CurvedMprScreen({ status }: { status: AppStatus | null }) {
         return;
       }
       volRef.current = vol;
+      // 3D Viewer からマスク由来中心線を受け取っていれば、手動クリック無しでそのまま初期曲線にする。
+      if (ctx.centerline && ctx.centerline.length >= 2) {
+        const cl = new Centerline3D();
+        for (const p of ctx.centerline) cl.addControlPoint(p);
+        curveRef.current = cl;
+        setCurveVersion((n) => n + 1);
+      }
       const inPlane = (vol.spacing[0] + vol.spacing[1]) / 2;
       outSpacingRef.current = Math.max(0.1, inPlane);
       const midZ = Math.floor(vol.dimensions[2] / 2);

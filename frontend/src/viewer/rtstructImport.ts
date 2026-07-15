@@ -14,6 +14,7 @@ import { getRenderingEngines } from "@cornerstonejs/core";
 import { annotation as csAnnotation, utilities as csToolsUtil } from "@cornerstonejs/tools";
 import { getViewerContext } from "./viewerContext";
 import { setRoiMaskMeta } from "./roiMaskStore";
+import { roiToMask } from "./roiBooleanOps";
 import { fetchSeries, readDicomRtStruct, type RtStructImportRoi } from "../api";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -46,10 +47,10 @@ function emptyTextBox() {
   };
 }
 
-/** DTO 群を表示中ビューポートへ復元。復元件数を返す。 */
-function reconstruct(rois: RtStructImportRoi[]): number {
+/** DTO 群を表示中ビューポートへ復元。復元した annotationUID 群を返す。 */
+function reconstruct(rois: RtStructImportRoi[]): string[] {
   const vp = firstBaseViewport();
-  if (!vp) return 0;
+  if (!vp) return [];
   const imageIds = vp.getImageIds() as string[];
   const camera = vp.getCamera();
   const ctx = getViewerContext(vp.id);
@@ -59,7 +60,7 @@ function reconstruct(rois: RtStructImportRoi[]): number {
     if (s) sopToId.set(s, { id, z });
   });
 
-  let count = 0;
+  const created: string[] = [];
   for (const roi of rois) {
     const colorStr = roi.color && roi.color.length >= 3 ? `rgb(${roi.color[0]}, ${roi.color[1]}, ${roi.color[2]})` : undefined;
     for (const c of roi.contours) {
@@ -113,13 +114,13 @@ function reconstruct(rois: RtStructImportRoi[]): number {
         const scope = { studyUid: ctx.studyUid, seriesUid: ctx.seriesUid, z: target.z, c: ctx.c, t: ctx.t };
         setRoiMaskMeta(annotationUID, { patientKey: ctx.patientKey, seriesLabel: ctx.seriesLabel, scope, origin: scope, label: roi.name });
       }
-      count++;
+      created.push(annotationUID);
     }
   }
-  if (count > 0) {
+  if (created.length > 0) {
     try { csToolsUtil.triggerAnnotationRenderForViewportIds([vp.id]); } catch { /* ignore */ }
   }
-  return count;
+  return created;
 }
 
 // csToolsUtil.uuidv4 or core; use a simple uuid.
@@ -130,21 +131,34 @@ function csToolsUtilUuid(): string {
   return "rtss-" + Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
+export interface RtStructImportResult {
+  /** 復元した ROI（注釈）総数。 */
+  roiCount: number;
+  /** そのうち自動的に Mask 化できた数（3D Viewer/中心線解析/Volumetry へそのまま渡せる）。 */
+  maskCount: number;
+}
+
 /**
  * 表示中スタディの RTSTRUCT シリーズをすべて読み、表示中 source シリーズへ ROI を復元する。
- * 復元した ROI 総数を返す（0 なら対象 RTSTRUCT 無し or 復元不可）。
+ * 復元した各 ROI は続けて自動的に Mask 化する（従来は手動の「▦」操作が必要だった。
+ * `fw/mask-driven-pipelines-gap-analysis.md` 課題#3）。roiCount=0 なら対象 RTSTRUCT 無し or 復元不可。
  */
-export async function importRtStructForCurrentView(): Promise<number> {
+export async function importRtStructForCurrentView(): Promise<RtStructImportResult> {
   const vp = firstBaseViewport();
   const ctx = vp ? getViewerContext(vp.id) : null;
-  if (!vp || !ctx?.studyUid) return 0;
+  if (!vp || !ctx?.studyUid) return { roiCount: 0, maskCount: 0 };
   const seriesList = await fetchSeries(ctx.studyUid).catch(() => []);
   const rtSeries = seriesList.filter((s) => (s.modality ?? "").toUpperCase() === "RTSTRUCT");
-  if (!rtSeries.length) return 0;
-  let total = 0;
+  if (!rtSeries.length) return { roiCount: 0, maskCount: 0 };
+  const createdUids: string[] = [];
   for (const s of rtSeries) {
     const rois = await readDicomRtStruct(ctx.studyUid, s.seriesInstanceUid).catch(() => []);
-    total += reconstruct(rois);
+    createdUids.push(...reconstruct(rois));
   }
-  return total;
+  let maskCount = 0;
+  for (const uid of createdUids) {
+    const res = await roiToMask(uid).catch(() => null);
+    if (res) maskCount++;
+  }
+  return { roiCount: createdUids.length, maskCount };
 }
