@@ -41,6 +41,7 @@ import { matchesCombo } from "../shortcuts/registry";
 import { fetchSeriesLayout, type Instance } from "../api";
 import { fetchSettings } from "../settings/settingsApi";
 import { useI18n } from "../i18n/i18n";
+import { LoadingSpinner } from "./LoadingSpinner";
 
 interface OverlayState extends Required<ViewerOverlays> {
   roi: boolean;
@@ -538,7 +539,11 @@ export function SeriesViewer({
     >
       {!layoutReady ? (
         // レイアウト解決までは Viewer をマウントしない（モザイク等の生画像フラッシュ防止）。
-        <div style={layoutPending}>{t("common.loading")}</div>
+        // この間はスライス送り操作が画面に反映されないため、円形スピナーでロード中と分かるようにする。
+        <div style={layoutPending}>
+          <LoadingSpinner size={32} />
+          <div>{t("common.loading")}</div>
+        </div>
       ) : gridOn ? (
         <div style={gridScroll}>
           <div style={{ display: "grid", gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))`, gap: 6 }}>
@@ -723,8 +728,10 @@ const layoutPending: React.CSSProperties = {
   flex: 1,
   minHeight: 240,
   display: "flex",
+  flexDirection: "column",
   alignItems: "center",
   justifyContent: "center",
+  gap: 10,
   background: "#000",
   color: "#5b6b7a",
   fontSize: 13,
