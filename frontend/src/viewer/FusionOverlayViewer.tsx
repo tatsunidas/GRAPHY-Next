@@ -187,6 +187,7 @@ export function FusionImageViewer({
   // ── Canvas（base 矩形に重ねる単一キャンバス） ──────────────────
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const computingRef = useRef(false);
+  const pendingRef = useRef(false);
 
   /**
    * 物理値配列 + W/L を canvas に描画する。
@@ -215,7 +216,10 @@ export function FusionImageViewer({
   }, []);
 
   const runFusion = useCallback(async () => {
-    if (computingRef.current) return;
+    if (computingRef.current) {
+      pendingRef.current = true;
+      return;
+    }
     if (!fgDto) return;
     const activeLut = lut;
 
@@ -360,6 +364,10 @@ export function FusionImageViewer({
       }
     } finally {
       computingRef.current = false;
+      if (pendingRef.current) {
+        pendingRef.current = false;
+        void runFusion();
+      }
     }
   }, [baseImageId, baseIndex, baseCount, fgDto, overlayC, overlayT, lut, windowCenter, windowWidth, onAutoWL, drawValues, clearCanvas]);
 
