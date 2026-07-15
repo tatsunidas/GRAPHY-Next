@@ -77,6 +77,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
         if (exceeded) {
             response.setStatus(429);
             response.setHeader("Retry-After", "60");
+            response.setCharacterEncoding("UTF-8");
             response.setContentType("application/json");
             response.getWriter().write(
                     "{\"error\":\"リクエストが多すぎます。しばらく待ってから再試行してください\"}");
