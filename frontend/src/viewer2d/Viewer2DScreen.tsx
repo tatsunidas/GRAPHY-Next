@@ -736,7 +736,14 @@ function TileGrid({
   const actions = useMemo<ViewerActions>(
     () => ({
       fit: () => runViewerCommand(resolveTargets(), (c) => c.fit()),
-      reset: () => runViewerCommand(resolveTargets(), (c) => c.reset()),
+      reset: () => {
+        runViewerCommand(resolveTargets(), (c) => c.reset());
+        // リセット時は Fusion オーバーレイも解除する。
+        resolveTargets().forEach((id) => {
+          const tile = patient.tiles.find((tl) => tl.id === id);
+          if (tile?.fusion) onSetFusion(patient.patientKey, id, undefined);
+        });
+      },
       rotate90: () => runViewerCommand(resolveTargets(), (c) => c.rotate90()),
       flipH: () => runViewerCommand(resolveTargets(), (c) => c.flipH()),
       flipV: () => runViewerCommand(resolveTargets(), (c) => c.flipV()),
@@ -879,7 +886,7 @@ function TileGrid({
         setReportTarget(tile);
       },
     }),
-    [resolveTargets, onSetGrid, onSetSync, patient.patientKey, patient.tiles, comingSoon, t],
+    [resolveTargets, onSetGrid, onSetSync, onSetFusion, patient.patientKey, patient.tiles, comingSoon, t],
   );
 
   return (
