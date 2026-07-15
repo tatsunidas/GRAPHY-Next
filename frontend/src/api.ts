@@ -95,9 +95,11 @@ export interface TagDumpRow {
   value: string;
 }
 
-/** 単一インスタンス（SOP）の属性ダンプを取得する（standalone のローカル索引のみ）。 */
-export const fetchInstanceTags = (sopUid: string) =>
-  httpGet<TagDumpRow[]>(`/api/instances/${encodeURIComponent(sopUid)}/tags`);
+/** 単一インスタンス（SOP）の属性ダンプを取得する（standalone/web どちらでも動く）。 */
+export const fetchInstanceTags = (studyUid: string, seriesUid: string, sopUid: string) =>
+  httpGet<TagDumpRow[]>(
+    `/api/studies/${encodeURIComponent(studyUid)}/series/${encodeURIComponent(seriesUid)}/instances/${encodeURIComponent(sopUid)}/tags`,
+  );
 
 /** Encapsulated PDF Storage の SOP Class UID（ピクセル無し＝画像ビューア非対応）。 */
 export const ENCAPSULATED_PDF_SOP_CLASS = "1.2.840.10008.5.1.4.1.1.104.1";

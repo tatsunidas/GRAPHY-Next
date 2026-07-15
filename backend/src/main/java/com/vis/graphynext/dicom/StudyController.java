@@ -6,6 +6,7 @@ package com.vis.graphynext.dicom;
 
 import com.vis.graphynext.dicom.store.DicomStorageService;
 import com.vis.graphynext.dicom.web.WebDicomDataService;
+import com.vis.graphynext.tagview.TagDumpService;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.springframework.beans.factory.ObjectProvider;
@@ -40,10 +41,13 @@ public class StudyController {
 
     private final DicomStorageService storage;
     private final ObjectProvider<WebDicomDataService> webProvider;
+    private final TagDumpService tagDump;
 
-    public StudyController(DicomStorageService storage, ObjectProvider<WebDicomDataService> webProvider) {
+    public StudyController(DicomStorageService storage, ObjectProvider<WebDicomDataService> webProvider,
+            TagDumpService tagDump) {
         this.storage = storage;
         this.webProvider = webProvider;
+        this.tagDump = tagDump;
     }
 
     @GetMapping("/studies")
@@ -233,6 +237,28 @@ public class StudyController {
                 .contentType(MediaType.parseMediaType("application/dicom"))
                 .header(HttpHeaders.CACHE_CONTROL, "private, max-age=3600")
                 .body(dicom);
+    }
+
+    /**
+     * TagViewer: 単一インスタンスの DICOM 属性ダンプ（Read only）。
+     * <ul>
+     *   <li>web: {@link WebDicomDataService#retrieveInstance} で WADO-RS 取得したバイト列をダンプ。</li>
+     *   <li>standalone: ローカル索引のファイルをダンプ（study/series は無視し sop で解決）。</li>
+     * </ul>
+     * {@link com.vis.graphynext.tagview.TagDumpController}（{@code /api/instances/{sop}/tags}）は
+     * standalone 専用のため、web でも動く共通の入口としてこちらを使う。
+     */
+    @GetMapping("/studies/{studyUid}/series/{seriesUid}/instances/{sopUid}/tags")
+    public ResponseEntity<List<TagDumpService.TagRow>> instanceTags(@PathVariable String studyUid,
+            @PathVariable String seriesUid, @PathVariable String sopUid) {
+        WebDicomDataService web = webProvider.getIfAvailable();
+        List<TagDumpService.TagRow> rows = web != null
+                ? tagDump.dump(web.retrieveInstance(studyUid, seriesUid, sopUid))
+                : tagDump.dump(sopUid);
+        if (rows == null) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(rows);
     }
 
     // --- QIDO Attributes -> DTO ---

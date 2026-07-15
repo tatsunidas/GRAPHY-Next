@@ -16,7 +16,9 @@ import java.util.List;
  * TagViewer: 単一インスタンスの DICOM 属性ダンプ（Read only）。
  *
  * <p>{@code GET /api/instances/{sop}/tags} → {@link TagDumpService.TagRow} の配列。
- * standalone のローカル索引にあるファイルのみ対象（web/WADO は将来対応）。
+ * standalone のローカル索引にあるファイルのみ対象。web では索引が無いため常に 404 になる。
+ * web でも動く入口は {@code GET /api/studies/{study}/series/{series}/instances/{sop}/tags}
+ * （{@link com.vis.graphynext.dicom.StudyController#instanceTags}）を使うこと。
  */
 @RestController
 @RequestMapping("/api/instances")

@@ -51,7 +51,7 @@ export function TagViewerDialog({
         }
         const sop = insts[0].sopInstanceUid;
         setSopUid(sop);
-        const dump = await fetchInstanceTags(sop);
+        const dump = await fetchInstanceTags(study.studyInstanceUid, series.seriesInstanceUid, sop);
         if (cancelled) return;
         setRows(dump);
       } catch (e) {

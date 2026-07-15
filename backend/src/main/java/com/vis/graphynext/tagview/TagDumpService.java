@@ -17,6 +17,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -45,6 +46,7 @@ public class TagDumpService {
 
     /**
      * sopUid のローカルファイルを読み、属性ダンプを返す。索引に無い／ファイルが無い場合は {@code null}。
+     * standalone 用（web は索引を持たないため常に {@code null}）。
      */
     @Transactional(readOnly = true)
     public List<TagRow> dump(String sopUid) {
@@ -52,14 +54,33 @@ public class TagDumpService {
         if (path == null) {
             return null;
         }
-        Attributes ds;
         try (DicomInputStream in = new DicomInputStream(path.toFile())) {
-            in.setIncludeBulkData(IncludeBulkData.NO);
-            ds = in.readDatasetUntilPixelData();
+            return dump(in);
         } catch (IOException e) {
             log.warn("tagview: 読取失敗 {}", sopUid, e);
             return null;
         }
+    }
+
+    /**
+     * web 用: WADO-RS 経由で取得済みの Part-10 DICOM バイト列から属性ダンプを返す。
+     * 取得失敗（{@code null}/空）や解析失敗の場合は {@code null}。
+     */
+    public List<TagRow> dump(byte[] dicom) {
+        if (dicom == null || dicom.length == 0) {
+            return null;
+        }
+        try (DicomInputStream in = new DicomInputStream(new ByteArrayInputStream(dicom))) {
+            return dump(in);
+        } catch (IOException e) {
+            log.warn("tagview: 読取失敗 (web)", e);
+            return null;
+        }
+    }
+
+    private static List<TagRow> dump(DicomInputStream in) throws IOException {
+        in.setIncludeBulkData(IncludeBulkData.NO);
+        Attributes ds = in.readDatasetUntilPixelData();
         List<TagRow> rows = new ArrayList<>();
         walk(ds, 0, rows);
         return rows;
