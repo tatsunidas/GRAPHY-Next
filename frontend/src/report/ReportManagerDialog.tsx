@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import { createReport, deleteReport, listReportsByStudy, type ReportSummary, type Study } from "../api";
 import { useI18n } from "../i18n/i18n";
+import { resolveDefaultReportType } from "./reportDefaults";
 
 /**
  * 対象スタディのレポート一覧（下書き/確定）をブラウズし、開く/削除する
@@ -57,6 +58,7 @@ export function ReportManagerDialog({
         patientId: study.patientId,
         studyInstanceUid: study.studyInstanceUid,
         bodyMarkdown: t("report.body.placeholder"),
+        reportType: await resolveDefaultReportType(),
       });
       onChanged?.();
       onOpenReport(created.id);
