@@ -48,6 +48,7 @@ import { matchesCombo } from "../shortcuts/registry";
 import { useI18n } from "../i18n/i18n";
 import { LutDialog } from "./LutDialog";
 import type { LutData } from "../api";
+import { LoadingSpinner } from "./LoadingSpinner";
 
 type ViewSnapshot = { transform: ViewTransform; voi: { lower: number; upper: number } | null };
 
@@ -239,6 +240,9 @@ export function Viewer2D({
   const stackKey = imageIds.join("|");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // スライス送り先の画素がまだ未取得で待ちが発生している間だけ true。体感の一瞬の待ちで
+  // 毎回チラつかせないよう、表示は一定時間の遅延読込が続いた場合のみに絞る（下の effect 参照）。
+  const [sliceLoading, setSliceLoading] = useState(false);
   const [transform, setTransform] = useState<ViewTransform>(FIT_TRANSFORM);
   const [info, setInfo] = useState<ImageInfo | null>(null);
   const infoRef = useRef<ImageInfo | null>(null);
@@ -794,9 +798,15 @@ export function Viewer2D({
     const v = viewportRef.current;
     if (!v) return;
     let cancelled = false;
+    let showTimer: number | undefined;
     (async () => {
       try {
         if (v.getCurrentImageIdIndex() !== imageIndex) {
+          // 未取得スライスへの移動は WADO 取得を伴い得る。120ms 以上かかった場合だけ
+          // スピナーを出し、キャッシュ済みスライスの高速切替ではチラつかせない。
+          showTimer = window.setTimeout(() => {
+            if (!cancelled) setSliceLoading(true);
+          }, 120);
           await v.setImageIdIndex(imageIndex);
         }
         if (cancelled) return;
@@ -826,10 +836,14 @@ export function Viewer2D({
           const vp = viewportRef.current;
           if (vp && !cancelled) { vp.resetCamera(); vp.render(); }
         } catch { /* ignore */ }
+      } finally {
+        if (showTimer !== undefined) window.clearTimeout(showTimer);
+        if (!cancelled) setSliceLoading(false);
       }
     })();
     return () => {
       cancelled = true;
+      if (showTimer !== undefined) window.clearTimeout(showTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageIndex, stackKey]);
@@ -1304,7 +1318,18 @@ export function Viewer2D({
               <CornerText lines={dicomText.bottomRight} style={dicomBR} />
             </>
           )}
-      {loading && !error && <div style={overlayCenter}>{t("common.loading")}</div>}
+      {loading && !error && (
+        <div style={overlayCenter}>
+          <LoadingSpinner size={28} />
+          <div>{t("common.loading")}</div>
+        </div>
+      )}
+      {/* 初回ロード後のスライス送りで、まだ未取得のスライスを待っている間の視覚フィードバック。 */}
+      {!loading && sliceLoading && !error && (
+        <div style={sliceLoadingBadge}>
+          <LoadingSpinner size={20} />
+        </div>
+      )}
       {error && <div style={{ ...overlayCenter, color: "#ff8a80" }}>{t("common.fetchError", { error })}</div>}
     </div>
   );
@@ -1565,8 +1590,24 @@ const overlayCenter: React.CSSProperties = {
   top: "50%",
   left: "50%",
   transform: "translate(-50%,-50%)",
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  gap: 8,
   color: "#cfd8dc",
   fontSize: 13,
+  pointerEvents: "none",
+};
+// スライス送り待ち中の円形インジケータ。タイル右上に小さく重ねて表示し、
+// 直前スライスの表示自体は隠さない（layoutPending/overlayCenter は初回ロード専用）。
+const sliceLoadingBadge: React.CSSProperties = {
+  position: "absolute",
+  top: 8,
+  right: 8,
+  background: "rgba(0,0,0,0.45)",
+  borderRadius: "50%",
+  padding: 4,
+  display: "flex",
   pointerEvents: "none",
 };
 const toolbar: React.CSSProperties = {
