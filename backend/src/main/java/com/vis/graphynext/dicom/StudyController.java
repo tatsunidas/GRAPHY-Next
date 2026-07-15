@@ -9,6 +9,8 @@ import com.vis.graphynext.dicom.web.WebDicomDataService;
 import com.vis.graphynext.tagview.TagDumpService;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
+import org.dcm4che3.data.UID;
+import org.dcm4che3.io.DicomInputStream;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -20,6 +22,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -242,6 +245,53 @@ public class StudyController {
                 .contentType(MediaType.parseMediaType("application/dicom"))
                 .header(HttpHeaders.CACHE_CONTROL, "private, max-age=3600")
                 .body(dicom);
+    }
+
+    /**
+     * マルチフレーム（DICOM SEG/Enhanced）の 1 フレームを単一フレーム DICOM として返す。フロントは
+     * {@code wadouri:.../instances/{sop}/frames/{frame}/file} で読む。
+     * <ul>
+     *   <li>web: {@link WebDicomDataService#retrieveInstance} で Part-10 を取得し、
+     *       {@link SegFrameExpander#extractFrame} でフレーム抽出する（standalone と同一ロジック）。</li>
+     *   <li>standalone: {@link DicomStorageService#frameDicom}（モザイク/SEG 両対応）。</li>
+     * </ul>
+     */
+    @GetMapping("/studies/{studyUid}/series/{seriesUid}/instances/{sopUid}/frames/{frame}/file")
+    public ResponseEntity<byte[]> instanceFrameFile(@PathVariable String studyUid,
+            @PathVariable String seriesUid, @PathVariable String sopUid, @PathVariable int frame) {
+        WebDicomDataService web = webProvider.getIfAvailable();
+        byte[] dicom;
+        if (web != null) {
+            byte[] full = web.retrieveInstance(studyUid, seriesUid, sopUid);
+            dicom = full == null ? null : extractWebFrame(full, frame);
+        } else {
+            dicom = storage.frameDicom(sopUid, frame);
+        }
+        if (dicom == null || dicom.length == 0) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("application/dicom"))
+                .header(HttpHeaders.CACHE_CONTROL, "private, max-age=3600")
+                .body(dicom);
+    }
+
+    /** WADO-RS で取得した Part-10 バイト列から、非圧縮転送構文の場合のみ指定フレームを抽出する。 */
+    private static byte[] extractWebFrame(byte[] dicom, int frame) {
+        try (DicomInputStream in = new DicomInputStream(new ByteArrayInputStream(dicom))) {
+            in.setIncludeBulkData(DicomInputStream.IncludeBulkData.YES);
+            in.readFileMetaInformation();
+            Attributes ds = in.readDataset(-1, -1);
+            String ts = in.getTransferSyntax();
+            if (ts == null || !(ts.equals(UID.ImplicitVRLittleEndian)
+                    || ts.equals(UID.ExplicitVRLittleEndian)
+                    || ts.equals(UID.ExplicitVRBigEndian))) {
+                return null;
+            }
+            return SegFrameExpander.extractFrame(ds, frame);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**

@@ -33,9 +33,13 @@ export function imageIdForInstance(
 }
 
 /**
- * Siemens モザイクの 1 タイル（デモザイク後の 1 スライス）の imageId。
- * backend が {@code /instances/{sop}/frames/{frame}/file} でタイルを単一フレーム DICOM として返す。
- * <p>モザイクは standalone のみ（web の {@link SeriesLayoutAssembler} は frame=-1 の classic のみ返す）。
+ * マルチフレーム（Siemens モザイクの 1 タイル、または DICOM SEG/Enhanced の 1 フレーム）の imageId。
+ * backend が {@code .../frames/{frame}/file} でフレームを単一フレーム DICOM として返す。
+ * - standalone: {@code /api/instances/{sop}/frames/{frame}/file}。
+ * - web: {@code /api/studies/{study}/series/{series}/instances/{sop}/frames/{frame}/file}
+ *   （{@link WebDicomDataService#retrieveInstance} で取得した Part-10 からフレーム抽出、BFF 一本）。
+ * <p>モザイクは standalone のみ（web の {@link SeriesLayoutAssembler} はモザイクをデモザイクしない）。
+ * DICOM SEG は両モードとも frame>=0 を返す。
  */
 export function imageIdForFrame(
   mode: ViewerMode,
@@ -50,8 +54,13 @@ export function imageIdForFrame(
   if (mode === "standalone") {
     return `wadouri:${apiBase()}/api/instances/${encodeURIComponent(sopUid)}/frames/${frame}/file`;
   }
-  // web のモザイク（frame>=0）は現状発生しない（web レイアウトは classic 単一フレームのみ）。
-  throw new Error("web mode のモザイクフレーム取得は未対応です");
+  // web
+  if (!studyUid || !seriesUid) {
+    throw new Error("web mode の imageId には studyUid/seriesUid が必要です");
+  }
+  return `wadouri:${apiBase()}/api/studies/${encodeURIComponent(studyUid)}/series/${encodeURIComponent(
+    seriesUid,
+  )}/instances/${encodeURIComponent(sopUid)}/frames/${frame}/file`;
 }
 
 /** セル（モザイクなら frame>=0）から imageId を組み立てる。web は study/series が必須。 */

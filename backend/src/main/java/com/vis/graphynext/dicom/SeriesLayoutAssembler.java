@@ -23,9 +23,11 @@ import java.util.TreeMap;
  * 導出する。zpos/dims/spatial 抽出ロジックは standalone の {@code DicomStorageService.seriesLayout}
  * （classic 経路）と<b>同一</b>にしてある（並び・Z 投影・C/T 判定を一致させ、モード差で表示が変わらないように）。
  *
- * <p><b>非対応</b>: Siemens モザイクのデモザイク展開・DICOM SEG の per-frame 展開は含まない
- * （ピクセル/フレーム操作が要るため。standalone は {@code DicomStorageService} 側で先に処理する。
- * web は当面 classic 単一フレームのみ）。
+ * <p>DICOM SEG（マルチフレーム）は {@link SegFrameExpander#layout} で per-frame 展開する（standalone の
+ * {@code DicomStorageService.segLayoutIfApplicable} と同一ロジック）。
+ *
+ * <p><b>非対応</b>: Siemens モザイクのデモザイク展開は含まない（ピクセル/タイル操作が要るため。standalone は
+ * {@code DicomStorageService} 側で先に処理する。web のモザイクは現状発生しない）。
  */
 public final class SeriesLayoutAssembler {
 
@@ -34,6 +36,17 @@ public final class SeriesLayoutAssembler {
 
     /** Attributes 列（各インスタンスの全属性）から ZCT レイアウトを組む。空なら noSpatial(0,0,0)。 */
     public static SeriesLayout fromAttributes(List<Attributes> instances) {
+        List<Attributes> segHeaders = new ArrayList<>();
+        for (Attributes ds : instances) {
+            if (SegFrameExpander.isSegDataset(ds)) {
+                segHeaders.add(ds);
+            }
+        }
+        SeriesLayout seg = SegFrameExpander.layout(segHeaders);
+        if (seg != null) {
+            return seg;
+        }
+
         List<SeriesLayoutBuilder.FrameMeta> frames = new ArrayList<>();
         double[] seriesIop = null;
         double seriesPxRow = 0, seriesPxCol = 0;
