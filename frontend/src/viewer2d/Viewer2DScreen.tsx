@@ -1731,7 +1731,7 @@ function StudyNode({
               key={se.seriesInstanceUid}
               style={{
                 ...seriesRow,
-                opacity: mode !== "standalone" ? 0.7 : loaded ? 0.75 : 1,
+                opacity: loaded ? 0.75 : 1,
                 cursor: mode === "standalone" ? "grab" : "default",
               }}
               draggable={mode === "standalone"}
@@ -1760,7 +1760,7 @@ function StudyNode({
               </span>
               <button
                 onClick={() => !loaded && onAdd(study, se)}
-                disabled={mode !== "standalone" || loaded}
+                disabled={loaded}
                 style={{
                   ...addBtn,
                   ...(loaded
