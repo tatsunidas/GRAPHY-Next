@@ -2,10 +2,49 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import { useRef } from "react";
+import { Component, useEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useI18n } from "../i18n/i18n";
+
+/** プレビュー再描画のデバウンス間隔(ms)。入力のたびに毎回パースし直すと、深いネスト箇条書き等の
+ * 病的な Markdown で remark のパース時間が入力サイズに対し急激に悪化し（O(n^2)超）、キー入力ごとに
+ * メインスレッドが長時間ブロックされてタブが「応答なし」になる（fw report bug: 記入中に強制終了）。
+ * 入力を止めてからまとめて 1 回だけパースすることで、通常のタイピングでは毎回のブロックを避ける。 */
+const PREVIEW_DEBOUNCE_MS = 400;
+
+/**
+ * Markdown プレビューの描画例外を本文入力から隔離する。アプリ全体を覆う {@link ErrorBoundary}
+ * だけだと、プレビュー側の例外で入力中の本文ごと画面全体がクラッシュ表示に置き換わってしまうため、
+ * ここでプレビュー欄だけに閉じ込める。{@code source} が変われば次の描画で自動的に再試行する。
+ */
+class MarkdownPreviewBoundary extends Component<
+  { source: string; children: ReactNode },
+  { error: Error | null; lastSource: string }
+> {
+  state = { error: null as Error | null, lastSource: this.props.source };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  static getDerivedStateFromProps(
+    props: { source: string },
+    state: { error: Error | null; lastSource: string },
+  ) {
+    if (props.source !== state.lastSource) {
+      return { error: null, lastSource: props.source };
+    }
+    return null;
+  }
+
+  render() {
+    if (this.state.error) {
+      return <div style={{ color: "#888", fontSize: 12 }}>プレビューを表示できませんでした</div>;
+    }
+    return this.props.children;
+  }
+}
 
 /**
  * レポート本文の Markdown エディタ。左: ソース(textarea)＋書式ツールバー、右: ライブプレビュー
@@ -25,6 +64,13 @@ export function MarkdownEditor({
 }) {
   const { t } = useI18n();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // プレビューは入力から切り離してデバウンスする（理由は PREVIEW_DEBOUNCE_MS のコメント参照）。
+  const [previewSource, setPreviewSource] = useState(value);
+  useEffect(() => {
+    const id = setTimeout(() => setPreviewSource(value), PREVIEW_DEBOUNCE_MS);
+    return () => clearTimeout(id);
+  }, [value]);
 
   /** 選択範囲を before/after で囲む（例: 太字 `**text**`）。 */
   const wrapSelection = (before: string, after: string = before) => {
@@ -99,7 +145,9 @@ export function MarkdownEditor({
           style={textareaStyle}
         />
         <div style={previewPane}>
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{value || ""}</ReactMarkdown>
+          <MarkdownPreviewBoundary source={previewSource}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{previewSource || ""}</ReactMarkdown>
+          </MarkdownPreviewBoundary>
         </div>
       </div>
     </div>
