@@ -15,14 +15,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   fetchSeries,
   fetchInstances,
+  fetchSeriesLayout,
   prefetchSeries,
   type AppStatus,
   type Study,
   type Series,
   type LutData,
+  type SeriesLayoutDto,
 } from "../api";
 import { ensureCornerstoneInitialized } from "../viewer/cornerstoneSetup";
-import { imageIdForInstance } from "../viewer/imageId";
+import { imageIdForInstance, imageIdForCell } from "../viewer/imageId";
 import { buildMprVolume } from "../viewer/mpr";
 import {
   createVtkVolumeView,
@@ -56,10 +58,30 @@ import { useI18n } from "../i18n/i18n";
 interface Viewer3DContext {
   study: Study;
   series?: Series;
+  /** 起動元 2D Viewer タイルで表示中だったチャンネルインデックス（無ければ 0）。 */
+  c?: number;
+  /** 起動元 2D Viewer タイルで表示中だったタイムフレームインデックス（無ければ 0）。 */
+  t?: number;
   ts: number;
 }
 
 type Phase = "idle" | "loading" | "ready" | "error" | "unsupported";
+
+/** レイアウトから (c,t) 固定の単一 Z スタック imageIds を取り出す（z 昇順）。 */
+function imageIdsForCT(
+  layout: SeriesLayoutDto,
+  mode: "standalone" | "web",
+  c: number,
+  t: number,
+  studyUid: string,
+  seriesUid: string,
+): string[] {
+  return layout.cells
+    .filter((cell) => cell.c === c && cell.t === t)
+    .slice()
+    .sort((a, b) => a.z - b.z)
+    .map((cell) => imageIdForCell(mode, cell.sopInstanceUid, cell.frame, studyUid, seriesUid));
+}
 
 const MODES: VtkRenderMode[] = ["VR", "MIP", "MINIP", "ORTHO"];
 
@@ -179,15 +201,31 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         seriesDesc: series.seriesDescription || series.seriesInstanceUid,
       };
 
-      const instances = await fetchInstances(ctx.study.studyInstanceUid, series.seriesInstanceUid);
-      if (instances.length < 3) {
+      // 起動元タイルで表示中だった C/T のスタックのみをボリューム化する（マルチチャンネル/
+      // マルチタイムフレームのシリーズで異なる C/T の画像が混在するのを防ぐ）。
+      let imageIds: string[];
+      try {
+        const layout = await fetchSeriesLayout(ctx.study.studyInstanceUid, series.seriesInstanceUid);
+        const c0 = Math.min(Math.max(0, ctx.c ?? 0), Math.max(0, layout.nC - 1));
+        const t0 = Math.min(Math.max(0, ctx.t ?? 0), Math.max(0, layout.nT - 1));
+        imageIds = imageIdsForCT(layout, mode2, c0, t0, ctx.study.studyInstanceUid, series.seriesInstanceUid);
+        if (imageIds.length < 3 && layout.nC <= 1 && layout.nT <= 1) {
+          const instances = await fetchInstances(ctx.study.studyInstanceUid, series.seriesInstanceUid);
+          imageIds = instances.map((i) =>
+            imageIdForInstance(mode2, i.sopInstanceUid, ctx.study.studyInstanceUid, series.seriesInstanceUid),
+          );
+        }
+      } catch {
+        const instances = await fetchInstances(ctx.study.studyInstanceUid, series.seriesInstanceUid);
+        imageIds = instances.map((i) =>
+          imageIdForInstance(mode2, i.sopInstanceUid, ctx.study.studyInstanceUid, series.seriesInstanceUid),
+        );
+      }
+      if (imageIds.length < 3) {
         setPhase("error");
         setMessage(t("viewer3d.needVolume"));
         return;
       }
-      const imageIds = instances.map((i) =>
-        imageIdForInstance(mode2, i.sopInstanceUid, ctx.study.studyInstanceUid, series.seriesInstanceUid),
-      );
 
       // web: 全スライスを 1 リクエストで BFF キャッシュに載せてから volume 構築（個別 WADO-RS 往復を回避）。
       if (mode2 === "web") {
