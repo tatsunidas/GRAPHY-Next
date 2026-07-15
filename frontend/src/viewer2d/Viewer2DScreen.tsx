@@ -462,7 +462,6 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
 
       <div style={body}>
         <StudyBrowser
-          mode={mode}
           patients={patients}
           onAdd={addTile}
           initialPatientId={initialPatientId}
@@ -1115,7 +1114,7 @@ function TileCell({
   // Fusion オーバーレイ描画。base 画像の表示矩形(rect)・現在スライス(imageId/index)に重ねる。
   // useMemo で安定化（毎レンダ別関数だと Viewer2D 側の rect 初期計算 effect がループするため）。
   const renderFusionOverlay = useMemo<RenderOverlay | undefined>(() => {
-    if (!tile.fusion || mode !== "standalone") return undefined;
+    if (!tile.fusion) return undefined;
     const fusion = tile.fusion;
     return (ctx) => (
       <FusionImageViewer
@@ -1124,7 +1123,7 @@ function TileCell({
         baseIndex={ctx.index}
         baseCount={ctx.count}
         instances={fusion.instances}
-        mode="standalone"
+        mode={mode}
         studyUid={fusion.study.studyInstanceUid}
         seriesUid={fusion.series.seriesInstanceUid}
         overlayC={fusionC}
@@ -1291,8 +1290,7 @@ function TileCell({
       {/* ── コンテンツ（ベース＋ Fusion オーバーレイは Viewer2D 内で base 画像に重畳） ── */}
       <div style={{ flex: 1, minHeight: 0, position: "relative", display: "flex", flexDirection: "column" }}>
         {/* web/standalone とも SeriesViewer（StackViewport）で表示。web はピクセルを BFF(WADO-RS)経由で取得。
-            Fusion/ROI 等の一部機能は standalone 前提のため、props(renderFusionOverlay/patientKey) は
-            standalone のみ設定される（web では未設定＝無効）。 */}
+            Fusion は web/standalone 共通で有効（imageId/layout 取得は mode を見て切り替わる）。 */}
         <SeriesViewer
           instances={tile.instances}
           mode={mode}
@@ -1306,12 +1304,12 @@ function TileCell({
           patientKey={patientKey}
           seriesLabel={seriesLabel}
           onDimChange={onDimChange}
-          renderFusionOverlay={mode === "standalone" ? renderFusionOverlay : undefined}
+          renderFusionOverlay={renderFusionOverlay}
         />
       </div>
 
       {/* Fusion コントロールバー */}
-      {tile.fusion && mode === "standalone" && (
+      {tile.fusion && (
         <FusionControlBar
           seriesLabel={
             tile.fusion.series.seriesDescription ||
@@ -1549,13 +1547,11 @@ function FusionControlBar({
  * - 手動検索フォームで別患者のスタディを追加検索することもできる。
  */
 function StudyBrowser({
-  mode,
   patients,
   onAdd,
   initialPatientId,
   initialStudyUid,
 }: {
-  mode: "standalone" | "web";
   patients: PatientSession[];
   onAdd: (study: Study, series: Series) => void;
   initialPatientId?: string | null;
@@ -1657,7 +1653,6 @@ function StudyBrowser({
           <StudyNode
             key={`${s.studyInstanceUid}:${treeVersion}`}
             study={s}
-            mode={mode}
             loadedTileIds={loadedTileIds}
             onAdd={onAdd}
             autoOpen={s.studyInstanceUid === initialStudyUid}
@@ -1671,13 +1666,11 @@ function StudyBrowser({
 
 function StudyNode({
   study,
-  mode,
   loadedTileIds,
   onAdd,
   autoOpen = false,
 }: {
   study: Study;
-  mode: "standalone" | "web";
   loadedTileIds: Set<string>;
   onAdd: (study: Study, series: Series) => void;
   autoOpen?: boolean;
@@ -1751,9 +1744,9 @@ function StudyNode({
               style={{
                 ...seriesRow,
                 opacity: loaded ? 0.75 : 1,
-                cursor: mode === "standalone" ? "grab" : "default",
+                cursor: "grab",
               }}
-              draggable={mode === "standalone"}
+              draggable
               onDragStart={(e) => {
                 _dragPayload = { type: "series", study, series: se, label: seriesLabel };
                 e.dataTransfer.effectAllowed = "move";
@@ -1771,7 +1764,7 @@ function StudyNode({
                   whiteSpace: "nowrap",
                   fontSize: 12,
                   color: loaded ? "#0b5cad" : "#33404d",
-                  cursor: mode === "standalone" && !loaded ? "grab" : "default",
+                  cursor: !loaded ? "grab" : "default",
                 }}
               >
                 #{se.seriesNumber ?? "?"} {se.modality ?? ""} {se.seriesDescription ?? ""} (
