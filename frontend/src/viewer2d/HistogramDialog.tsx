@@ -54,8 +54,13 @@ export function HistogramDialog({
 
   // シリーズ ZCT レイアウト（単一次元フォールバック → backend DTO で差し替え）。
   const fallback = useMemo(
-    () => buildSeriesLayout(instances.map((i) => imageIdForInstance(mode, i.sopInstanceUid))),
-    [instances, mode],
+    () =>
+      buildSeriesLayout(
+        instances.map((i) =>
+          imageIdForInstance(mode, i.sopInstanceUid, study.studyInstanceUid, series.seriesInstanceUid),
+        ),
+      ),
+    [instances, mode, study.studyInstanceUid, series.seriesInstanceUid],
   );
   const [layout, setLayout] = useState<SeriesLayout>(fallback);
   useEffect(() => {
