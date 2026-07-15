@@ -261,7 +261,9 @@ export function MainScreen({
       />
       {importMsg && <div style={banner}>{importMsg}</div>}
       <div style={middle}>
-        <SearchPanel onSearch={setFilters} isDemo={isDemo} />
+        {/* status（isDemo）は非同期取得のため、確定後に isDemo が変わったら SearchPanel を
+            再マウントして初期日付(1900/01/01〜当日)を再計算させる。 */}
+        <SearchPanel key={String(isDemo)} onSearch={setFilters} isDemo={isDemo} />
         <div style={treeArea}>
           <StudyList
             filters={filters}
