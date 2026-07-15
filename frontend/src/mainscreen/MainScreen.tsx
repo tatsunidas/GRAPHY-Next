@@ -311,6 +311,7 @@ export function MainScreen({
         onClose={() => { setOpenTool(null); setReportEditorId(null); }}
         study={selectedStudy}
         series={selectedSeries}
+        mode={isStandalone ? "standalone" : "web"}
         reportId={reportEditorId}
         onChanged={() => setReloadKey((k) => k + 1)}
       />

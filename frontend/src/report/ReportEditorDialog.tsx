@@ -23,6 +23,7 @@ import { useI18n } from "../i18n/i18n";
 import { KeyImageGrid } from "./KeyImageGrid";
 import { MarkdownEditor } from "./MarkdownEditor";
 import { ParticipantsPanel } from "./ParticipantsPanel";
+import type { ViewerMode } from "../viewer/imageId";
 
 const REPORT_TYPES: ReportType[] = ["GENERAL", "IMAGING_DIAGNOSTIC", "TECHNOLOGIST", "MEASUREMENT"];
 const EDITOR_NAME_KEY = "graphy.report.editorName";
@@ -40,6 +41,7 @@ export function ReportEditorDialog({
   onClose,
   study,
   series,
+  mode,
   reportId,
   onChanged,
 }: {
@@ -47,6 +49,8 @@ export function ReportEditorDialog({
   onClose: () => void;
   study: Study | null;
   series: Series | null;
+  /** キー画像サムネイル取得の imageId 組み立てに使う（standalone/web）。 */
+  mode: ViewerMode;
   /** 指定時はスタディの最新/下書き解決ではなく、この ID のレポートを直接開く（ReportManagerDialog から）。 */
   reportId?: string | null;
   /** 新規作成/確定/削除で状態が変わったときに呼ばれる（StudyList の ●/○ 表示を再取得させる）。 */
@@ -341,6 +345,7 @@ export function ReportEditorDialog({
                   onChange={setKeyImages}
                   selectedSeries={series}
                   studyUid={study?.studyInstanceUid ?? null}
+                  mode={mode}
                   readOnly={readOnly}
                 />
               </div>

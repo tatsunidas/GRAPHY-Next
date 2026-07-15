@@ -5,6 +5,8 @@
 import { useState } from "react";
 import { fetchInstances, type Instance, type ReportKeyImageInput, type Series } from "../api";
 import { useI18n } from "../i18n/i18n";
+import { KeyImageThumb } from "./KeyImageThumb";
+import type { ViewerMode } from "../viewer/imageId";
 
 /**
  * レポートのキー画像グリッド。MainScreen で選択中のシリーズからインスタンスを選んで追加する
@@ -15,12 +17,14 @@ export function KeyImageGrid({
   onChange,
   selectedSeries,
   studyUid,
+  mode,
   readOnly,
 }: {
   keyImages: ReportKeyImageInput[];
   onChange: (next: ReportKeyImageInput[]) => void;
   selectedSeries: Series | null;
   studyUid: string | null;
+  mode: ViewerMode;
   readOnly?: boolean;
 }) {
   const { t } = useI18n();
@@ -83,7 +87,17 @@ export function KeyImageGrid({
       <div style={grid}>
         {keyImages.map((k, i) => (
           <div key={`${k.sopInstanceUid}-${i}`} style={card}>
-            <div style={sopLine}>{k.sopInstanceUid}</div>
+            {studyUid && (
+              <KeyImageThumb
+                mode={mode}
+                studyUid={studyUid}
+                seriesUid={k.seriesInstanceUid}
+                sopUid={k.sopInstanceUid}
+                frameNumber={k.frameNumber}
+                width={164}
+                height={123}
+              />
+            )}
             <input
               style={inputSm}
               placeholder={t("report.keyImages.label")}
@@ -116,7 +130,18 @@ export function KeyImageGrid({
             <div style={{ maxHeight: 300, overflow: "auto" }}>
               {instances?.map((inst) => (
                 <div key={inst.sopInstanceUid} style={pickRow} onClick={() => addInstance(inst)}>
-                  {t("report.keyImages.instance", { number: inst.instanceNumber ?? "?" })}
+                  {studyUid && selectedSeries && (
+                    <KeyImageThumb
+                      mode={mode}
+                      studyUid={studyUid}
+                      seriesUid={selectedSeries.seriesInstanceUid}
+                      sopUid={inst.sopInstanceUid}
+                      frameNumber={null}
+                      width={60}
+                      height={45}
+                    />
+                  )}
+                  <span>{t("report.keyImages.instance", { number: inst.instanceNumber ?? "?" })}</span>
                 </div>
               ))}
             </div>
@@ -150,7 +175,6 @@ const card: React.CSSProperties = {
   gap: 4,
   background: "#fafbfc",
 };
-const sopLine: React.CSSProperties = { fontSize: 10, color: "#667", wordBreak: "break-all" };
 const inputSm: React.CSSProperties = {
   padding: "4px 6px",
   border: "1px solid #d7dde3",
@@ -194,6 +218,9 @@ const pickerDialog: React.CSSProperties = {
   color: "#1a1a1a",
 };
 const pickRow: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
   padding: "6px 8px",
   borderRadius: 4,
   cursor: "pointer",
