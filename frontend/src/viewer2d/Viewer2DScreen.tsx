@@ -30,6 +30,7 @@ import { HistogramDialog } from "./HistogramDialog";
 import { SUVCalibrationDialog } from "../viewer/SUVCalibrationDialog";
 import { getSuv } from "../viewer/suvStore";
 import { TagViewerDialog } from "../mainscreen/TagViewerDialog";
+import { ReportEditorDialog } from "../report/ReportEditorDialog";
 import { TextureDialog } from "../viewer/TextureDialog";
 import { WwWlAdjustDialog, type WlTarget } from "./WwWlAdjustDialog";
 import { WlPresetDialog } from "./WlPresetDialog";
@@ -581,6 +582,7 @@ function TileGrid({
   const [histo, setHisto] = useState<{ tile: Tile; z: number; c: number; t: number } | null>(null);
   const [suvTarget, setSuvTarget] = useState<{ imageId: string; seriesUid: string } | null>(null);
   const [tagTarget, setTagTarget] = useState<Tile | null>(null);
+  const [reportTarget, setReportTarget] = useState<Tile | null>(null);
   const [textureTarget, setTextureTarget] = useState<Tile | null>(null);
   // コントラスト調整（W/L）ダイアログの対象（開いている時のみ non-null）。
   const [wlAdjust, setWlAdjust] = useState<WlTarget | null>(null);
@@ -870,6 +872,13 @@ function TileGrid({
         if (!tile) { comingSoon(t("texture.menu")); return; }
         setTextureTarget(tile);
       },
+      // レポート: 対象（選択→無ければ先頭）タイルのスタディでレポート編集ダイアログを開く。
+      openReport: () => {
+        const tid = resolveTargets()[0];
+        const tile = patient.tiles.find((tl) => tl.id === tid);
+        if (!tile) { comingSoon(t("main.toolbar.report")); return; }
+        setReportTarget(tile);
+      },
     }),
     [resolveTargets, onSetGrid, onSetSync, patient.patientKey, patient.tiles, comingSoon, t],
   );
@@ -980,6 +989,16 @@ function TileGrid({
           study={tagTarget.study}
           series={tagTarget.series}
           onClose={() => setTagTarget(null)}
+        />
+      )}
+      {reportTarget && (
+        <ReportEditorDialog
+          key={reportTarget.id}
+          open
+          study={reportTarget.study}
+          series={reportTarget.series}
+          mode={mode}
+          onClose={() => setReportTarget(null)}
         />
       )}
       {textureTarget && (

@@ -187,6 +187,7 @@ export function Viewer2DMenuBar({
       label: t("main.menu.tools"),
       items: [
         { label: t("main.toolbar.tagViewer"), onClick: () => actions.openTagViewer() },
+        { label: t("main.toolbar.report"), onClick: () => actions.openReport() },
       ],
     },
     {

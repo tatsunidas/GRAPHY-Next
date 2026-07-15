@@ -72,6 +72,8 @@ export interface ViewerActions {
   openTagViewer(): void;
   /** 対象タイルのシリーズで Texture（Radiomics 可視化マップ）ダイアログを開く。 */
   openTexture(): void;
+  /** 対象タイルのスタディでレポート編集ダイアログを開く。 */
+  openReport(): void;
 }
 
 /** 2D Viewer 画面ツールバー。グループ分けしたアイコン行（対象=選択 or 全）。 */
