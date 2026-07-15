@@ -156,8 +156,8 @@ export function FusionImageViewer({
   onLayoutChange?: (layout: SeriesLayout) => void;
 }) {
   const imageIds = useMemo(
-    () => instances.map((i) => imageIdForInstance(mode, i.sopInstanceUid)),
-    [instances, mode],
+    () => instances.map((i) => imageIdForInstance(mode, i.sopInstanceUid, studyUid, seriesUid)),
+    [instances, mode, studyUid, seriesUid],
   );
   const fallback = useMemo(() => buildSeriesLayout(imageIds), [imageIds]);
   const [layout, setLayout] = useState<SeriesLayout>(fallback);
