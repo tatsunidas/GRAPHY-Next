@@ -7,15 +7,26 @@
 import { apiBase } from "./apiBase";
 import { log } from "./log";
 
+// バックエンド側（web モードの PACS 中継等）が応答なしのままハングすると、タイムアウトが無い fetch は
+// 無期限に pending になり、呼び出し元の busy/loading フラグが finally まで永久に到達できず、
+// 関連ボタンが恒久的にグレーアウトしたままになる（実機報告: 3D wand マスク編集後の SEG↓ で発生）。
+// それを避けるため、明示的な上限時間で必ず reject させる。
+const REQUEST_TIMEOUT_MS = 5 * 60 * 1000; // SEG 等の大きいペイロード転送も許容する余裕を持たせる。
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const url = `${apiBase()}${path}`;
+  const timeoutController = new AbortController();
+  const timer = setTimeout(() => timeoutController.abort(), REQUEST_TIMEOUT_MS);
   let res: Response;
   try {
-    res = await fetch(url, init);
+    res = await fetch(url, { ...init, signal: timeoutController.signal });
   } catch (e) {
-    // ネットワーク到達不可など（バックエンド未起動が疑われる）。
+    // ネットワーク到達不可、またはタイムアウト（AbortError）。
     log.error("network error", init?.method ?? "GET", url, e);
-    throw new Error(`network error: ${String(e)}`);
+    const timedOut = e instanceof DOMException && e.name === "AbortError";
+    throw new Error(timedOut ? `request timed out after ${REQUEST_TIMEOUT_MS / 1000}s: ${url}` : `network error: ${String(e)}`);
+  } finally {
+    clearTimeout(timer);
   }
   if (!res.ok) {
     const message = await extractErrorMessage(res);
