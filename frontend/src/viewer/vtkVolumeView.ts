@@ -715,11 +715,18 @@ export function createVtkVolumeView(
         styleClipHandles(cropWidget, clipViewWidget); // 面=黄/辺=シアン/角=青
         // ドラッグでハンドルが動く → crop 面（index extent）を crop フィルタへ渡してライブ切り出し。
         const planeState = cropWidget.getWidgetState().getCroppingPlanes();
-        clipSub = cropWidget.getWidgetState().onModified(() => {
+        const syncCropFromWidget = () => {
           const planes = planeState.getPlanes();
           if (Array.isArray(planes) && planes.length === 6) setCropExtent(planes as number[]);
+        };
+        clipSub = cropWidget.getWidgetState().onModified(() => {
+          syncCropFromWidget();
           render();
         });
+        // ウィジェットは Off 中もハンドル位置（前回ドラッグした extent）を内部に保持し続けるため、
+        // 再度 On にした直後にノードへ触れるまで crop フィルタ側が全域のまま更新されない不具合があった。
+        // 再有効化時に現在のボックス位置へ即同期し、最初からカットされた状態で表示されるようにする。
+        syncCropFromWidget();
       } else {
         try {
           clipSub?.unsubscribe?.();
