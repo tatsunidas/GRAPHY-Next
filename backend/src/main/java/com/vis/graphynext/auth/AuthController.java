@@ -39,13 +39,16 @@ public class AuthController {
     private final MailerClient mailerClient;
     private final MagicLinkTokenRepository tokenRepository;
     private final SessionTokenService sessionTokenService;
+    private final MailingListSubscriberRepository subscriberRepository;
 
     public AuthController(AuthProperties properties, MailerClient mailerClient,
-            MagicLinkTokenRepository tokenRepository, SessionTokenService sessionTokenService) {
+            MagicLinkTokenRepository tokenRepository, SessionTokenService sessionTokenService,
+            MailingListSubscriberRepository subscriberRepository) {
         this.properties = properties;
         this.mailerClient = mailerClient;
         this.tokenRepository = tokenRepository;
         this.sessionTokenService = sessionTokenService;
+        this.subscriberRepository = subscriberRepository;
     }
 
     @GetMapping(value = "/login", produces = MediaType.TEXT_HTML_VALUE)
@@ -60,8 +63,10 @@ public class AuthController {
             @RequestParam String email,
             @RequestParam("cf-turnstile-response") String turnstileToken,
             @RequestParam(required = false) String next,
+            @RequestParam(required = false) String subscribe,
             HttpServletRequest request) {
         String safeNext = sanitizeNext(next);
+        boolean wantsSubscribe = "true".equals(subscribe);
 
         if (!EMAIL_PATTERN.matcher(email).matches()) {
             return htmlResponse(renderLoginPage(safeNext, "メールアドレスの形式が正しくありません"));
@@ -77,8 +82,11 @@ public class AuthController {
         Instant expiresAt = Instant.now().plusSeconds(properties.getTokenTtlMinutes() * 60L);
         tokenRepository.save(new MagicLinkToken(tokenHash, email, expiresAt));
 
+        // お知らせメールへのオプトイン意思は、メールアドレスの実在が確認できる /auth/verify 側で
+        // 初めて登録する（この時点ではまだ本人がメールを受け取れるか確認できていない）。
         String verifyUrl = properties.getPublicBaseUrl() + "/auth/verify?token=" + rawToken
-                + (safeNext.equals("/") ? "" : "&next=" + urlEncode(safeNext));
+                + (safeNext.equals("/") ? "" : "&next=" + urlEncode(safeNext))
+                + (wantsSubscribe ? "&subscribe=1" : "");
         String body = "以下のリンクから" + properties.getTokenTtlMinutes() + "分以内にログインしてください:\n\n"
                 + verifyUrl + "\n\nこのメールに心当たりがない場合は無視してください。";
         mailerClient.send(email, "GRAPHY-Next デモへのログインリンク", body);
@@ -90,6 +98,7 @@ public class AuthController {
     public ResponseEntity<Void> verify(
             @RequestParam String token,
             @RequestParam(required = false) String next,
+            @RequestParam(required = false) String subscribe,
             HttpServletResponse response) {
         String safeNext = sanitizeNext(next);
         String tokenHash = SessionTokenService.hashToken(token);
@@ -102,6 +111,10 @@ public class AuthController {
         MagicLinkToken magicLinkToken = found.get();
         magicLinkToken.markUsed();
         tokenRepository.save(magicLinkToken);
+
+        if ("1".equals(subscribe) && !subscriberRepository.existsById(magicLinkToken.getEmail())) {
+            subscriberRepository.save(new MailingListSubscriber(magicLinkToken.getEmail()));
+        }
 
         String sessionCookieValue = sessionTokenService.issue(magicLinkToken.getEmail());
         ResponseCookie cookie = ResponseCookie.from("graphy_session", sessionCookieValue)
@@ -190,6 +203,8 @@ public class AuthController {
                   button { padding: 0.6rem 1.2rem; font-size: 1rem; cursor: pointer; }
                   .error { color: #b00020; }
                   .cf-turnstile { margin-bottom: 1rem; }
+                  .subscribe { display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.9rem; margin: 0 0 1rem; }
+                  .subscribe input { margin-top: 0.2rem; }
                 </style>
                 </head>
                 <body>
@@ -200,6 +215,10 @@ public class AuthController {
                   <label for="email">メールアドレス</label>
                   <input type="email" id="email" name="email" required autofocus>
                   <input type="hidden" name="next" value="%s">
+                  <label class="subscribe">
+                    <input type="checkbox" name="subscribe" value="true">
+                    <span>GRAPHY-Next のお知らせメールを受け取る（任意）</span>
+                  </label>
                   <div class="cf-turnstile" data-sitekey="%s"></div>
                   <button type="submit">ログインリンクを送る</button>
                 </form>
