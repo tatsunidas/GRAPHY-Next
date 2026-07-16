@@ -24,7 +24,7 @@ import java.util.Optional;
 import java.util.regex.Pattern;
 
 /**
- * 公開デモ（demo.vis-ionary.com）のログインゲートと、お知らせメールの配信停止。
+ * 公開デモ（demo.vis-ionary.com）のログインゲートと、お知らせメールの登録・配信停止。
  *
  * <p>メールアドレス宛のマジックリンクのみでログインする（パスワードは持たない）。
  * {@code AuthFilter} が未ログイン時にここへ誘導する。graphy-backend 自身は外部と通信できないため、
@@ -113,13 +113,7 @@ public class AuthController {
         tokenRepository.save(magicLinkToken);
 
         if ("1".equals(subscribe)) {
-            subscriberRepository.findById(magicLinkToken.getEmail())
-                    .ifPresentOrElse(existing -> {
-                        if (existing.isUnsubscribed()) {
-                            existing.resubscribe();
-                            subscriberRepository.save(existing);
-                        }
-                    }, () -> subscriberRepository.save(new MailingListSubscriber(magicLinkToken.getEmail())));
+            subscribeOrResubscribe(magicLinkToken.getEmail());
         }
 
         String sessionCookieValue = sessionTokenService.issue(magicLinkToken.getEmail());
@@ -174,6 +168,36 @@ public class AuthController {
         // リストに存在しない/既に停止済みのメールアドレスでも、内部の登録有無を外部に漏らさないため
         // 常に同じ「完了」画面を返す（メールアドレス列挙対策）。
         return htmlResponse(renderUnsubscribedPage());
+    }
+
+    /**
+     * graphy.vis-ionary.com（Xserver, subscribe.php）の更新通知登録フォームから、サーバー間通信で
+     * 呼ばれる。ここの mailing_list_subscriber テーブルに一本化することで、{@code /unsubscribe} が
+     * サイト本体からの登録者もカバーするようにする。ブラウザから直接叩かれる想定はないため
+     * CORSは設定せず、共有鍵（Authorization: Bearer）のみで保護する。
+     */
+    @PostMapping("/subscribe")
+    public ResponseEntity<Void> subscribe(@RequestParam String email, HttpServletRequest request) {
+        String auth = request.getHeader(HttpHeaders.AUTHORIZATION);
+        if (auth == null || !auth.equals("Bearer " + properties.getSubscribeApiKey())) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        if (!EMAIL_PATTERN.matcher(email).matches()) {
+            return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).build();
+        }
+
+        subscribeOrResubscribe(email);
+        return ResponseEntity.noContent().build();
+    }
+
+    private void subscribeOrResubscribe(String email) {
+        subscriberRepository.findById(email)
+                .ifPresentOrElse(existing -> {
+                    if (existing.isUnsubscribed()) {
+                        existing.resubscribe();
+                        subscriberRepository.save(existing);
+                    }
+                }, () -> subscriberRepository.save(new MailingListSubscriber(email)));
     }
 
     private static ResponseEntity<Void> redirect(String location) {

@@ -21,10 +21,12 @@ import java.nio.charset.StandardCharsets;
 /**
  * 公開デモ（{@code graphy.auth.enabled=true}）でのみ有効化される、マジックリンクログインのゲート。
  *
- * <p>{@code /login}・{@code /auth/**}・{@code /unsubscribe} 以外の全リクエストで
+ * <p>{@code /login}・{@code /auth/**}・{@code /unsubscribe}・{@code /subscribe} 以外の全リクエストで
  * {@code graphy_session} Cookie の署名・有効期限を検証する。未ログインの場合、ページ遷移
  * （HTML想定）は {@code /login} へリダイレクト、{@code /api/**}（フロントのXHR/fetch想定）は
- * 401 を返す。{@code /unsubscribe} は配信停止導線のため、ログイン状態に関係なく常に到達可能にする。
+ * 401 を返す。{@code /unsubscribe}・{@code /subscribe} はログイン状態に関係なく常に到達可能にする
+ * （前者は配信停止導線、後者はXserver側subscribe.phpからのサーバー間呼び出しで、
+ * どちらもセッションCookieを持たない）。
  */
 @Component
 @ConditionalOnProperty(prefix = "graphy.auth", name = "enabled", havingValue = "true")
@@ -66,6 +68,7 @@ public class AuthFilter extends OncePerRequestFilter {
         return path.equals("/login")
                 || path.startsWith("/auth/")
                 || path.equals("/unsubscribe")
+                || path.equals("/subscribe")
                 || path.equals("/actuator/health")
                 || path.equals("/actuator/info");
     }

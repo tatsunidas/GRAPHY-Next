@@ -36,6 +36,13 @@ public class AuthProperties {
     /** マジックリンクの検証URLを組み立てる際の公開ベースURL（例: https://demo.vis-ionary.com）。 */
     private String publicBaseUrl;
 
+    /**
+     * graphy.vis-ionary.com（Xserver, subscribe.php）からの {@code POST /subscribe} 呼び出しを
+     * 認証する共有鍵（Authorization: Bearer）。website側の更新通知登録フォームと、ここの
+     * mailing_list_subscriber テーブルを一本化するために使う。
+     */
+    private String subscribeApiKey;
+
     /** マジックリンクトークンの有効期限（分）。 */
     private int tokenTtlMinutes = 15;
 
@@ -88,6 +95,14 @@ public class AuthProperties {
 
     public void setPublicBaseUrl(String publicBaseUrl) {
         this.publicBaseUrl = publicBaseUrl;
+    }
+
+    public String getSubscribeApiKey() {
+        return subscribeApiKey;
+    }
+
+    public void setSubscribeApiKey(String subscribeApiKey) {
+        this.subscribeApiKey = subscribeApiKey;
     }
 
     public int getTokenTtlMinutes() {

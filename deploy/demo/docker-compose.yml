@@ -95,6 +95,9 @@ services:
       GRAPHY_AUTH_MAILER_BASE_URL: http://mailer:8081
       GRAPHY_AUTH_TURNSTILE_SITE_KEY: ${GRAPHY_AUTH_TURNSTILE_SITE_KEY}
       GRAPHY_AUTH_PUBLIC_BASE_URL: https://demo.vis-ionary.com
+      # graphy.vis-ionary.com（Xserver, subscribe.php）からの POST /subscribe を認証する共有鍵。
+      # Xserver側にも同じ値を配置する（website/public/api/subscribe.php参照）。
+      GRAPHY_AUTH_SUBSCRIBE_API_KEY: ${GRAPHY_AUTH_SUBSCRIBE_API_KEY}
     depends_on:
       - arc
       - mailer
