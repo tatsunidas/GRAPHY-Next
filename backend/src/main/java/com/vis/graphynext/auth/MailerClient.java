@@ -7,6 +7,7 @@ package com.vis.graphynext.auth;
 import com.vis.graphynext.config.AuthProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -17,8 +18,13 @@ import org.springframework.web.client.RestClient;
  * <p>graphy-backend コンテナは demo_internal（internal ネットワーク）にしか属さずインターネットに
  * 出られない設計のため、外部SMTP送信・Cloudflare Turnstile検証は、demo_edge にも属する mailer に
  * 中継させる。mailer はトークン・DICOM等の意味を一切知らない「送信/検証専用の薄い中継」に留める。
+ *
+ * <p>{@code graphy.auth.enabled=true} の環境でのみ有効化する（{@code AuthFilter}と同条件）。
+ * 未設定だと {@code AuthProperties} のシークレット類が null のままで、無条件にBean化すると
+ * 認証機能を使わない環境（CIのテストなど）でもコンストラクタが落ちてしまうため。
  */
 @Component
+@ConditionalOnProperty(prefix = "graphy.auth", name = "enabled", havingValue = "true")
 public class MailerClient {
 
     private static final Logger log = LoggerFactory.getLogger(MailerClient.class);

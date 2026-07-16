@@ -5,6 +5,7 @@
 package com.vis.graphynext.auth;
 
 import com.vis.graphynext.config.AuthProperties;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 import javax.crypto.Mac;
@@ -24,8 +25,13 @@ import java.util.Optional;
  * <p>JWTライブラリは使わず、JDK標準の HMAC-SHA256 だけで完結させる（このバックエンドは
  * 既存依存を最小限に保つ方針。ペイロードは {@code email|expiresEpochSeconds} をBase64url化した
  * ものに、その HMAC 署名（16進）を {@code .} で連結するだけの単純な形式）。
+ *
+ * <p>{@code graphy.auth.enabled=true} の環境でのみ有効化する（{@code AuthFilter}と同条件）。
+ * 未設定だと {@code session-secret} が null のままで、無条件にBean化するとコンストラクタが
+ * {@code NullPointerException} で落ちる（CIのテスト環境で実際に発生した）。
  */
 @Service
+@ConditionalOnProperty(prefix = "graphy.auth", name = "enabled", havingValue = "true")
 public class SessionTokenService {
 
     private static final String HMAC_ALGORITHM = "HmacSHA256";

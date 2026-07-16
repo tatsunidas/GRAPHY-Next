@@ -7,6 +7,7 @@ package com.vis.graphynext.auth;
 import com.vis.graphynext.config.AuthProperties;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -29,8 +30,13 @@ import java.util.regex.Pattern;
  * <p>メールアドレス宛のマジックリンクのみでログインする（パスワードは持たない）。
  * {@code AuthFilter} が未ログイン時にここへ誘導する。graphy-backend 自身は外部と通信できないため、
  * メール送信とCAPTCHA検証は {@link MailerClient} 経由で mailer サイドカーに中継させる。
+ *
+ * <p>{@code graphy.auth.enabled=true} の環境でのみ有効化する（{@code AuthFilter}と同条件）。
+ * 依存する {@link SessionTokenService}/{@link MailerClient} も同条件でしかBean化されないため、
+ * 揃えないと未設定環境でこの Bean 自体の解決に失敗する。
  */
 @RestController
+@ConditionalOnProperty(prefix = "graphy.auth", name = "enabled", havingValue = "true")
 public class AuthController {
 
     private static final Pattern EMAIL_PATTERN = Pattern.compile("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
