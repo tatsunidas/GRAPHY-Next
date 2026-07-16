@@ -656,7 +656,7 @@ export const en: Record<string, string> = {
   "roiMgr.exportEmpty": "No exportable ROIs (area/line/point measurement ROIs only).",
   "roiMgr.importIJ": "Import ImageJ ROIs (.roi/.zip) as ROIs",
   "roiMgr.importEmpty": "No ROIs could be imported (make sure the target series is open in 2D).",
-  "roiMgr.deleteMaskConfirm": "Delete this mask?",
+  "roiMgr.deleteMaskConfirm": "Remove this mask from the current view? This only removes it from the list here — it will not affect any SEG file already exported.",
   "roiMgr.m1note": "M1: list, show/delete, color/width/fill, opacity. Next: ZCT scope/meta, ops, 3D, save (ImageJ/DICOM). Mask color next.",
   "viewer2d.tb.syncOn": "Sync ON (selected, else all)",
   "viewer2d.tb.syncOff": "Sync OFF (selected, else all)",

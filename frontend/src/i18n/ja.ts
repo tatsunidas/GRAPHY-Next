@@ -656,7 +656,7 @@ export const ja: Record<string, string> = {
   "roiMgr.exportEmpty": "書き出せる ROI がありません（面積/線/点の計測 ROI が対象）。",
   "roiMgr.importIJ": "ImageJ ROI（.roi/.zip）を読み込んで ROI 復元",
   "roiMgr.importEmpty": "読み込める ROI がありませんでした（対象シリーズを 2D 表示中か確認）。",
-  "roiMgr.deleteMaskConfirm": "このマスクを削除します。よろしいですか？",
+  "roiMgr.deleteMaskConfirm": "このマスクを表示上のリストから削除します。よろしいですか？（エクスポート済みのSEGファイルには影響しません）",
   "roiMgr.m1note": "M1: 一覧・表示/削除・色/線幅/塗り・不透明度。次: ZCT scope/メタ・演算・3D・保存(ImageJ/DICOM)。マスク色は次段。",
   "viewer2d.tb.syncOn": "選択(無ければ全)を同期 ON",
   "viewer2d.tb.syncOff": "選択(無ければ全)を同期 OFF",
