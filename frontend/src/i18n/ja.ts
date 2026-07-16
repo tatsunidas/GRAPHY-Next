@@ -154,7 +154,7 @@ export const ja: Record<string, string> = {
   "viewer3d.orthoPos": "スライス位置",
   "viewer3d.preset": "VR プリセット",
   "viewer3d.presetNone": "なし（グレースケール / W-L）",
-  "viewer3d.resetView": "視点リセット",
+  "viewer3d.resetView": "表示リセット",
   "viewer3d.transfer": "転送関数",
   "viewer3d.lut": "LUT…",
   "viewer3d.opacityCurveBtn": "不透明度カーブ…",
