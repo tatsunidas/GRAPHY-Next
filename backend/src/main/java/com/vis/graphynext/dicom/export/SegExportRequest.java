@@ -49,7 +49,8 @@ public record SegExportRequest(
     /**
      * @param sopInstanceUid        参照 source スライスの SOPInstanceUID
      * @param imagePositionPatient  そのスライスの IPP [x,y,z]
-     * @param mask                  rows*cols の 0/1 バイト列（行優先）を Base64 エンコードした文字列
+     * @param mask                  rows*cols の 0/1 バイト列（行優先）を Base64 エンコードした文字列。
+     *                              前景ゼロの平面は転送量削減のため空文字列（全 0 平面として扱う）。
      */
     public record Frame(String sopInstanceUid, double[] imagePositionPatient, String mask) {
     }

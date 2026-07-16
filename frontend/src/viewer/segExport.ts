@@ -135,8 +135,15 @@ export async function exportMaskAsSeg(
       }
     } catch { /* ignore */ }
 
-    // dense: 幾何が解決できる全スライスをフレーム化（マスク無しは全 0 平面）。
-    // → SEG の Z レイアウトが元シリーズと 1:1 一致し、Fusion 重ね合わせが合う（fw §3.1'）。
+    // dense: 幾何が解決できる全スライスをフレーム化（フレーム数=元シリーズのスライス数と1:1）。
+    // Fusion 重ね合わせは SEG の ZCT レイアウト（`segLayoutIfApplicable` の nZ）が元シリーズと
+    // 一致することに依存するため、フレーム数自体は減らせない（`fw/dicom-seg-rtstruct-design.md` §3.1'）。
+    // ただし前景ゼロのスライスは平面バイト列を送らず空文字にする（backend が全 0 平面として扱う）。
+    // 以前は空スライスも 262144 バイトの平面をまるごと Base64 化して送っており、多セグメント×多スライスの
+    // マスク（SEG インポートで復元した実データの再エクスポート等）で数十〜100MB超の JSON になり、
+    // ブラウザが送信し続けたまま応答が返らず「ボタンが押せなくなる」ように見える障害になっていた
+    // （実機報告で発見）。前景を持つスライスのみ実データを送ることで、フレーム数は維持したまま
+    // 転送量を実質的な前景スライス数に比例させる。
     const frames: SegExportFrame[] = [];
     let anyOverall = false;
     for (let z = 0; z < labelmapIds.length; z++) {
@@ -145,17 +152,23 @@ export async function exportMaskAsSeg(
       const ipp = ippByZ[z];
       const sop = sopByZ[z];
       if (!ipp || !sop) continue; // 幾何が引けないスライスはスキップ（frame 化不可）
-      const plane = new Uint8Array(frameSize);
+      let mask = "";
       if (vm) {
+        const plane = new Uint8Array(frameSize);
+        let anyOnSlice = false;
         let data: ArrayLike<number> | undefined;
         try { data = vm.getScalarData?.() as ArrayLike<number> | undefined; } catch { /* ignore */ }
         if (data && data.length >= frameSize) {
-          for (let i = 0; i < frameSize; i++) if (data[i] === segIndex) { plane[i] = 1; anyOverall = true; }
+          for (let i = 0; i < frameSize; i++) if (data[i] === segIndex) { plane[i] = 1; anyOnSlice = true; }
         } else {
-          for (let i = 0; i < frameSize; i++) if (vm.getAtIndex(i) === segIndex) { plane[i] = 1; anyOverall = true; }
+          for (let i = 0; i < frameSize; i++) if (vm.getAtIndex(i) === segIndex) { plane[i] = 1; anyOnSlice = true; }
+        }
+        if (anyOnSlice) {
+          anyOverall = true;
+          mask = u8ToBase64(plane);
         }
       }
-      frames.push({ sopInstanceUid: sop, imagePositionPatient: ipp, mask: u8ToBase64(plane) });
+      frames.push({ sopInstanceUid: sop, imagePositionPatient: ipp, mask });
     }
     if (!frames.length || !anyOverall) continue; // 前景ゼロの segment は出さない
     const label = segIndices.length > 1 ? `${meta?.label ?? "Mask"} #${segIndex}` : (meta?.label ?? `Segment ${segIndex}`);
