@@ -608,10 +608,12 @@ export function RoiManagerPanel({
           <button onClick={() => setMaskVisible(m.id, !m.visible)} style={eyeBtn} title={t("roiMgr.visible")}>{m.visible ? "👁" : "🚫"}</button>
           <input type="checkbox" checked={selected.has(m.id)} onChange={() => toggleSelect(m.id)} title={t("roiMgr.select")} />
           <input
-            type="text" style={name} title={m.id}
+            type="text" style={nameFullLine} title={m.id}
             defaultValue={getRoiMaskMeta(m.id)?.label ?? m.label}
             onChange={(e) => setRoiMaskMeta(m.id, { label: e.target.value })}
           />
+        </div>
+        <div style={row}>
           <input type="color" defaultValue="#ff0000" onChange={(e) => setMaskColor(m.id, e.target.value)} title={t("roiMgr.color")} style={colorInput} />
           <input
             type="range" min={0} max={1} step={0.05} defaultValue={maskDefaults.fillOpacity}
@@ -710,6 +712,9 @@ const name: React.CSSProperties = {
   flex: 1, minWidth: 0, color: "#33404d", fontSize: 12,
   border: "1px solid transparent", borderRadius: 4, background: "transparent", padding: "2px 4px",
 };
+// マスク名は色/不透明度/各種操作ボタンと同じ行だと flex-wrap の詰め合いで幅を奪われ見切れるため、
+// マスク行では名前だけ幅いっぱいの専用行にする（flexBasis 指定で強制的に単独行にする）。
+const nameFullLine: React.CSSProperties = { ...name, flexBasis: "100%" };
 const delBtn: React.CSSProperties = { border: "1px solid #e3c2c2", borderRadius: 5, background: "#fff", cursor: "pointer", fontSize: 12, padding: "1px 6px" };
 const editBtn: React.CSSProperties = { border: "1px solid #cdd5de", borderRadius: 5, background: "#fff", cursor: "pointer", fontSize: 12, padding: "1px 6px" };
 const eyeBtn: React.CSSProperties = { border: "none", background: "transparent", cursor: "pointer", fontSize: 13, padding: 0, lineHeight: 1 };
