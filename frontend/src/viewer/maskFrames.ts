@@ -116,6 +116,7 @@ export async function importMaskFrames(
   vp: AnyObj,
   input: MaskFramesInput,
   label: string,
+  onProgress?: (frac: number) => void,
 ): Promise<{ segmentationId: string; segmentCount: number } | null> {
   const imageIds = vp.getImageIds() as string[];
   if (!imageIds.length || !input.segments.length) return null;
@@ -144,7 +145,7 @@ export async function importMaskFrames(
   const segIndices: number[] = [];
   const modifiedByZ = new Map<number, Set<number>>();
   const descByIdx: Record<string, string> = {};
-  for (const seg of input.segments) {
+  for (const [segNo, seg] of input.segments.entries()) {
     const segIndex = seg.number > 0 ? seg.number : segIndices.length + 1;
     segIndices.push(segIndex);
     if (seg.description) descByIdx[String(segIndex)] = seg.description;
@@ -174,6 +175,7 @@ export async function importMaskFrames(
         /* ignore */
       }
     }
+    onProgress?.((segNo + 1) / input.segments.length);
   }
 
   if (modifiedByZ.size === 0) {

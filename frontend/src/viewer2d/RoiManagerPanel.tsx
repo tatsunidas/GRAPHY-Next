@@ -25,6 +25,7 @@ import { exportMaskAsSeg } from "../viewer/segExport";
 import { exportRoisAsRtStruct } from "../viewer/rtstructExport";
 import { importRtStructForCurrentView } from "../viewer/rtstructImport";
 import { importSegForCurrentView } from "../viewer/segImport";
+import { LoadingSpinner } from "../viewer/LoadingSpinner";
 import { emitToast } from "../viewer/toast";
 import { emitSeriesRefresh } from "../viewer/viewerRefresh";
 import { emitDbChanged } from "../dbEvents";
@@ -98,6 +99,8 @@ export function RoiManagerPanel({
   const [editId, setEditId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  // SEG⬆ インポートの進捗率（0〜1）。null は非実行中（SEG⬆ ボタンの円形プログレス表示に使う）。
+  const [segImportProgress, setSegImportProgress] = useState<number | null>(null);
   const [stats, setStats] = useState<Record<string, MaskVolumeStats>>({});
   const [spheres, setSpheres] = useState<Sphere3D[]>([]);
   // Split の 3D 連結性（6=面/18=面+辺/26=全て）。既定 26＝斜め接続もつなぎ過分割を抑える。
@@ -406,14 +409,16 @@ export function RoiManagerPanel({
   const runImportSeg = async () => {
     if (busy) return;
     setBusy(true);
+    setSegImportProgress(0);
     try {
-      const n = await importSegForCurrentView();
+      const n = await importSegForCurrentView((frac) => setSegImportProgress(frac));
       if (n === 0) window.alert(t("roiMgr.importSegEmpty"));
       else emitToast(t("roiMgr.importSegDone", { n }));
     } catch {
       window.alert(t("roiMgr.opFailed"));
     } finally {
       setBusy(false);
+      setSegImportProgress(null);
       refresh();
     }
   };
@@ -528,7 +533,21 @@ export function RoiManagerPanel({
         />
         {!isDemo && <button onClick={() => importInputRef.current?.click()} disabled={busy} style={opBtn} title={t("roiMgr.importIJ")}>IJ ⬆</button>}
         <button onClick={runImportRtStruct} disabled={busy} style={opBtn} title={t("roiMgr.importRt")}>RT ⬆</button>
-        <button onClick={runImportSeg} disabled={busy} style={opBtn} title={t("roiMgr.importSeg")}>SEG ⬆</button>
+        <button
+          onClick={runImportSeg}
+          disabled={busy}
+          style={{ ...opBtn, display: "inline-flex", alignItems: "center", gap: 4 }}
+          title={segImportProgress != null ? `${t("roiMgr.importSeg")} ${Math.round(segImportProgress * 100)}%` : t("roiMgr.importSeg")}
+        >
+          {segImportProgress != null ? (
+            <>
+              <LoadingSpinner size={12} color="#2b8aef" trackColor="#dde4ea" progress={segImportProgress} />
+              {Math.round(segImportProgress * 100)}%
+            </>
+          ) : (
+            "SEG ⬆"
+          )}
+        </button>
         {!isDemo && rois.length > 0 && <button onClick={runExportRois} disabled={busy} style={opBtn} title={t("roiMgr.exportIJ")}>IJ ⬇</button>}
         {!isDemo && rois.length > 0 && <button onClick={runExportRtStruct} disabled={busy} style={opBtn} title={t("roiMgr.exportRt")}>RT ⬇</button>}
       </div>
