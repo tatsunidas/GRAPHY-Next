@@ -293,6 +293,10 @@ export interface AddOptions {
   name?: string;
   color?: V3;
   opacity?: number;
+  /** ROI の体積算出方式。既定 "voxel"（ボクセルカウント確定計算）。
+   * "mesh" はメッシュ（平滑化後）から算出した体積を使う（セグメント単位インポート等、
+   * 表示メッシュと数値を一致させたい用途向け）。 */
+  volumeFrom?: "voxel" | "mesh";
 }
 
 /** メッシュ（`vtkPolyData`, LPS mm）をシーンに追加。追加した id を返す。 */
@@ -350,8 +354,8 @@ export function addRoiObject(lv: LabelVolume, opts: AddOptions = {}): string | n
   const ma = makeSurfaceActor(surf, { color, opacity, visible: true });
   const data: SceneData = { polydata: surf, labelVolume: lv, ma };
   const voxels = countForeground(lv);
-  const volumeMm3 = voxels * lv.voxelMm3;
   const m = measureMesh(surf);
+  const volumeMm3 = opts.volumeFrom === "mesh" ? m.volumeMm3 : voxels * lv.voxelMm3;
   const obj: SceneObject = {
     id,
     kind: "roi",
