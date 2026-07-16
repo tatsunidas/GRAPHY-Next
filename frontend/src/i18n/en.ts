@@ -220,7 +220,6 @@ export const en: Record<string, string> = {
   "scene3d.mesh": "Mesh",
   "scene3d.roi": "ROI",
   "scene3d.importRoi": "Add 3D ROI from mask…",
-  "scene3d.noMasks": "No masks available",
   "scene3d.importSphere": "Add parametric sphere…",
   "scene3d.noSpheres": "No spheres available",
   "scene3d.importRemoteRoi": "🔗 Add 3D ROI from another window's mask…",

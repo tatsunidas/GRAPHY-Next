@@ -220,7 +220,6 @@ export const ja: Record<string, string> = {
   "scene3d.mesh": "メッシュ",
   "scene3d.roi": "ROI",
   "scene3d.importRoi": "マスクから 3D ROI を追加…",
-  "scene3d.noMasks": "利用可能なマスクがありません",
   "scene3d.importSphere": "パラメトリック球を追加…",
   "scene3d.noSpheres": "利用可能な球がありません",
   "scene3d.importRemoteRoi": "🔗 他ウィンドウのマスクから 3D ROI を追加…",
