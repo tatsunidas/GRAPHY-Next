@@ -280,6 +280,8 @@ export const ja: Record<string, string> = {
   "measure.hint1": "表面上の点をクリック（始点）。",
   "measure.hint2": "2 点目をクリックして計測。右クリックで取消。",
   "measure.miss": "カーソル下に表面なし — メッシュ/ROI をクリックしてください。",
+  "measure.move": "計測ラインを移動",
+  "measure.hint3": "クリックでライン追加。端点/ラインをドラッグして編集できます。",
   "scene3d.analyze": "中心線解析…",
   "scene3d.analyze.hint": "中心線グラフ全体を抽出: 分枝・ノード・最短路と CPR / ストレート化ビュー。",
   "scene3d.repair": "修復 / 検証…",

@@ -63,6 +63,7 @@ import {
   clearMeasurements,
   getMeasurements,
   nextMeasureId,
+  updateMeasurement,
   type Measurement3D,
 } from "./measureStore";
 
@@ -695,6 +696,31 @@ export function addMeasurement3D(a: V3, b: V3): string {
     },
   });
   return id;
+}
+
+/** ルーラー編集（端点/全体ドラッグ）をライブ更新（記録なし・ドラッグ中の連続反映に使う）。 */
+export function applyMeasurement(id: string, a: V3, b: V3): void {
+  updateMeasurement(id, a, b);
+  render();
+}
+
+/**
+ * ルーラー編集を確定して Undo に記録する（1 ドラッグ＝1 コマンド。down 時の before と up 時の after で 1 つ）。
+ */
+export function commitMeasurement(id: string, before: { a: V3; b: V3 }, after: { a: V3; b: V3 }, label: string): void {
+  updateMeasurement(id, after.a, after.b);
+  render();
+  record({
+    label,
+    undo: () => {
+      updateMeasurement(id, before.a, before.b);
+      render();
+    },
+    redo: () => {
+      updateMeasurement(id, after.a, after.b);
+      render();
+    },
+  });
 }
 
 /** 計測ラインを削除し Undo に記録。 */

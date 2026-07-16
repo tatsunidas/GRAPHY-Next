@@ -21,7 +21,9 @@ export interface Measurement3D {
 }
 
 let measures: Measurement3D[] = [];
+let selected: string | null = null;
 const listeners = new Set<() => void>();
+const selListeners = new Set<() => void>();
 let seq = 0;
 
 function notify(): void {
@@ -55,13 +57,43 @@ export function removeMeasurement(id: string): void {
   if (next.length !== measures.length) {
     measures = next;
     notify();
+    if (selected === id) setMeasureSelected(null);
   }
+}
+
+/** 端点を差し替えて距離を再計算（記録なし。ドラッグ中のライブ更新は scene3d 側で record する）。 */
+export function updateMeasurement(id: string, a: V3, b: V3): void {
+  const idx = measures.findIndex((m) => m.id === id);
+  if (idx < 0) return;
+  const distMm = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+  const next = measures.slice();
+  next[idx] = { ...next[idx], a, b, distMm };
+  measures = next;
+  notify();
 }
 
 export function clearMeasurements(): void {
   if (!measures.length) return;
   measures = [];
   notify();
+  setMeasureSelected(null);
+}
+
+/** 選択中の計測ライン id（ハイライト用。移動/端点ドラッグ開始時に設定）。 */
+export function getMeasureSelected(): string | null {
+  return selected;
+}
+
+export function setMeasureSelected(id: string | null): void {
+  if (selected === id) return;
+  selected = id;
+  for (const l of [...selListeners]) {
+    try {
+      l();
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 function subscribe(l: () => void): () => void {
@@ -71,7 +103,19 @@ function subscribe(l: () => void): () => void {
   };
 }
 
+function subscribeSel(l: () => void): () => void {
+  selListeners.add(l);
+  return () => {
+    selListeners.delete(l);
+  };
+}
+
 /** React フック: 計測一覧を購読。 */
 export function useMeasurements(): Measurement3D[] {
   return useSyncExternalStore(subscribe, getMeasurements, getMeasurements);
+}
+
+/** React フック: 選択中の計測ライン id を購読。 */
+export function useMeasureSelected(): string | null {
+  return useSyncExternalStore(subscribeSel, getMeasureSelected, getMeasureSelected);
 }

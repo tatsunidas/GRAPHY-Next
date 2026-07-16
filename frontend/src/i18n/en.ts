@@ -280,6 +280,8 @@ export const en: Record<string, string> = {
   "measure.hint1": "Click a point on a surface (start).",
   "measure.hint2": "Click the second point to measure. Right-click to cancel.",
   "measure.miss": "No surface under cursor — click on a mesh or ROI.",
+  "measure.move": "Move measurement",
+  "measure.hint3": "Click to add a line, or drag an endpoint/line to edit.",
   "scene3d.analyze": "Centerline analysis…",
   "scene3d.analyze.hint": "Extract the full centerline graph: branches, nodes, shortest paths, and CPR / straightened views.",
   "scene3d.repair": "Repair / validate…",
