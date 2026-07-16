@@ -17,6 +17,8 @@ import org.dcm4che3.json.JSONReader;
 import org.dcm4che3.util.UIDUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.web.client.ClientHttpRequestFactories;
+import org.springframework.boot.web.client.ClientHttpRequestFactorySettings;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -27,6 +29,7 @@ import org.springframework.web.client.RestClient;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -105,7 +108,15 @@ public class WebDicomDataService {
     public WebDicomDataService(DicomProperties props) {
         DicomProperties.Dicomweb cfg = props.getDicomweb();
         this.baseUrl = cfg.getBaseUrl() == null ? "" : cfg.getBaseUrl().trim();
-        RestClient.Builder b = RestClient.builder().baseUrl(baseUrl);
+        // 接続/読み取りタイムアウト未設定だと、PACS が応答なしのまま固まった場合に SEG エクスポート等の
+        // リクエストスレッドが無期限にブロックされ、フロントの busy フラグも解除されず操作不能になる
+        // （実機報告: 3D wand マスク編集後の SEG↓ で RT↑/SEG↑/SEG↓ が恒久的にグレーアウト）。
+        ClientHttpRequestFactorySettings settings = ClientHttpRequestFactorySettings.DEFAULTS
+                .withConnectTimeout(Duration.ofSeconds(10))
+                .withReadTimeout(Duration.ofMinutes(3));
+        RestClient.Builder b = RestClient.builder()
+                .baseUrl(baseUrl)
+                .requestFactory(ClientHttpRequestFactories.get(settings));
         if (cfg.getBearerToken() != null && !cfg.getBearerToken().isBlank()) {
             b.defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + cfg.getBearerToken());
         }
