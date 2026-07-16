@@ -169,7 +169,7 @@ export const en: Record<string, string> = {
   "viewer3d.clipOffBtn": "Enable clip box",
   "viewer3d.clipOnBtn": "Clip box: ON",
   "viewer3d.clipDragHint": "Drag the box faces/corners to crop.",
-  "viewer3d.navHint": "Left-drag: rotate · Middle-drag: pan · Wheel/Right-drag: zoom",
+  "viewer3d.navHint": "Left-drag: rotate · Middle-drag: pan · Wheel: zoom · Right-drag: window/level",
   "viewer3d.menu.view": "View",
   "viewer3d.menu.cinematic": "Cinematic rendering settings…",
   "viewer3d.menu.reprState": "Representation State",
