@@ -206,6 +206,21 @@ export function pickVolumeSurface(
 }
 
 /**
+ * レイと平面（点 `planePoint` を通り法線 `planeNormal`）の交差点。レイと平面がほぼ平行、または交点が
+ * レイの後方にある場合は null。ルーラー全体のドラッグ移動で、カメラ正面と平行な平面上に沿わせるのに使う。
+ */
+export function rayPlaneIntersect(ray: Ray, planePoint: V3, planeNormal: V3): V3 | null {
+  const denom = ray.dir[0] * planeNormal[0] + ray.dir[1] * planeNormal[1] + ray.dir[2] * planeNormal[2];
+  if (Math.abs(denom) < 1e-9) return null;
+  const dx = planePoint[0] - ray.origin[0];
+  const dy = planePoint[1] - ray.origin[1];
+  const dz = planePoint[2] - ray.origin[2];
+  const t = (dx * planeNormal[0] + dy * planeNormal[1] + dz * planeNormal[2]) / denom;
+  if (t < 0) return null;
+  return [ray.origin[0] + ray.dir[0] * t, ray.origin[1] + ray.dir[1] * t, ray.origin[2] + ray.dir[2] * t];
+}
+
+/**
  * レイと三角形 (v0,v1,v2) の交差（Möller-Trumbore）。
  * 交差すれば origin からの距離 t（>eps, dir 正規化なので mm）を返す。なければ null。
  */
