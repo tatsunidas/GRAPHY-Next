@@ -1,0 +1,15 @@
+{
+  "name": "graphy-demo-mailer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "graphy-backend にインターネット疎通を持たせないための、メール送信/CAPTCHA検証専用の薄い中継サービス。トークンやDICOM等の意味は一切知らない。",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "nodemailer": "^9.0.3"
+  }
+}
