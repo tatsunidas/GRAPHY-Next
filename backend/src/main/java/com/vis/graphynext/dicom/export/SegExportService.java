@@ -241,6 +241,9 @@ public class SegExportService {
         item.setInt(Tag.SegmentNumber, VR.US, s.number());
         item.setString(Tag.SegmentLabel, VR.LO, s.label() != null ? s.label() : "Segment " + s.number());
         item.setString(Tag.SegmentAlgorithmType, VR.CS, "MANUAL");
+        if (s.description() != null && !s.description().isBlank()) {
+            item.setString(Tag.SegmentDescription, VR.ST, s.description());
+        }
         if (s.color() != null && s.color().length >= 3) {
             item.setInt(Tag.RecommendedDisplayCIELabValue, VR.US, rgbToCieLab(s.color()[0], s.color()[1], s.color()[2]));
         }

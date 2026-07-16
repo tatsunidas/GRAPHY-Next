@@ -22,6 +22,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import { httpSend } from "../http";
 import { emitDbChanged } from "../dbEvents";
+import { fetchSeries, type Study } from "../api";
+import { desktop } from "../desktopBridge";
 import { getSceneObject } from "./scene3dStore";
 import {
   addCenterlineObject,
@@ -238,6 +240,30 @@ export function CenterlineDialog({
     if (id) setStatus(t("centerline.added"));
     else setStatus(t("centerline.addFailed"));
   }, [activeLabel, obj?.name, t]);
+
+  // アクティブ中心線（マスク由来）を単独 Curved MPR 画面へ渡して開く（`fw/mask-driven-pipelines-gap-analysis.md`
+  // 課題#5: 従来は参照スライスのダブルクリックでしか曲線を作れなかった導線に、マスク駆動の入口を追加）。
+  const onOpenCurvedMpr = useCallback(async () => {
+    const cl = activeRef.current;
+    if (!cl || cl.size() < 2) return;
+    try {
+      const seriesList = await fetchSeries(studyUid);
+      const series = seriesList.find((s) => s.seriesInstanceUid === seriesUid);
+      const ctx = {
+        // CurvedMprScreen は study.studyInstanceUid のみを参照するため最小構成で足りる。
+        study: { studyInstanceUid: studyUid } as Study,
+        series,
+        ts: Date.now(),
+        centerline: cl.getControlPointsSnapshot(),
+      };
+      localStorage.setItem("graphy-curvedmpr-ctx", JSON.stringify(ctx));
+      const d = desktop();
+      if (d?.openViewer) void d.openViewer("curvedmpr");
+      else window.open(`${window.location.pathname}#curvedmpr`, "graphy-curvedmpr");
+    } catch {
+      setStatus(t("centerline.curvedMprFailed"));
+    }
+  }, [studyUid, seriesUid, t]);
 
   // ── CPR プレビュー ──
   const cprCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -642,6 +668,9 @@ export function CenterlineDialog({
               </span>
               <button style={activeLabel ? miniBtn : btnDisabled} disabled={!activeLabel} onClick={onAddToScene}>
                 {t("centerline.addToScene")}
+              </button>
+              <button style={activeLabel ? miniBtn : btnDisabled} disabled={!activeLabel} onClick={() => void onOpenCurvedMpr()}>
+                {t("centerline.openCurvedMpr")}
               </button>
             </div>
           </section>

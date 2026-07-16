@@ -28,12 +28,14 @@ public class DicomExportController {
     private final SegExportService segService;
     private final RtStructExportService rtStructService;
     private final RtStructReadService rtStructReadService;
+    private final SegReadService segReadService;
 
     public DicomExportController(SegExportService segService, RtStructExportService rtStructService,
-            RtStructReadService rtStructReadService) {
+            RtStructReadService rtStructReadService, SegReadService segReadService) {
         this.segService = segService;
         this.rtStructService = rtStructService;
         this.rtStructReadService = rtStructReadService;
+        this.segReadService = segReadService;
     }
 
     /** マスク群を DICOM SEG（BINARY）として保存し、新 Series/SOP UID を返す。 */
@@ -71,6 +73,21 @@ public class DicomExportController {
         } catch (IOException e) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
                     "RTSTRUCT の読込に失敗しました: " + e.getMessage(), e);
+        }
+    }
+
+    /** 指定 SEG シリーズを読み、セグメント毎のマスク平面を返す（frontend が Cornerstone labelmap へ復元）。 */
+    @GetMapping("/seg")
+    public SegImportResult readSeg(@RequestParam("study") String studyUid,
+            @RequestParam("series") String seriesUid) {
+        try {
+            SegImportResult res = segReadService.read(studyUid, seriesUid);
+            return res != null ? res : new SegImportResult(0, 0, List.of());
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage(), e);
+        } catch (IOException e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
+                    "SEG の読込に失敗しました: " + e.getMessage(), e);
         }
     }
 }

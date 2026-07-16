@@ -30,6 +30,7 @@ import { extractCenterlineGraph, graphSummary, type CenterlineGraph } from "../v
 import { createEndoController, type EndoController } from "../viewer/endoscopy";
 import vtkPolyData from "@kitware/vtk.js/Common/DataModel/PolyData";
 import vtkTubeFilter from "@kitware/vtk.js/Filters/General/TubeFilter";
+import vtkSphereSource from "@kitware/vtk.js/Filters/Sources/SphereSource";
 import {
   addSceneObject,
   getSceneObject,
@@ -86,6 +87,8 @@ interface SceneData {
 
 let renderer: Any = null;
 let renderFn: (() => void) | null = null;
+/** ボリュームの不透明度を一律スケール（`vtkVolumeView.setOpacityScale`）。fly-through 減光用。 */
+let volumeOpacityScaleFn: ((factor: number) => void) | null = null;
 const dataById = new Map<string, SceneData>();
 let colorSeq = 0;
 
@@ -96,10 +99,16 @@ let clipGeom: VolumeGeom | null = null;
 let clipExtent: number[] | null = null; // [i0,i1,j0,j1,k0,k1]（index）
 let fullExtent: number[] | null = null;
 
-/** レンダラ（`vtkVolumeView.getSceneParts()`）を接続する。 */
-export function attachSceneRenderer(parts: { renderer: Any; render: () => void }): void {
+/** レンダラ（`vtkVolumeView.getSceneParts()`）を接続する。`setVolumeOpacityScale` を渡すと
+ * fly-through 開始時に生ボリュームを減光できる（`vtkVolumeView.setOpacityScale`）。 */
+export function attachSceneRenderer(parts: {
+  renderer: Any;
+  render: () => void;
+  setVolumeOpacityScale?: (factor: number) => void;
+}): void {
   renderer = parts.renderer;
   renderFn = parts.render;
+  volumeOpacityScaleFn = parts.setVolumeOpacityScale ?? null;
   // 接続時、既存オブジェクトのアクターを（あれば）付け直す。
   for (const [, d] of dataById) {
     if (d.ma && renderer) {
@@ -124,8 +133,10 @@ export function resetScene(): void {
   clearEndoPath();
   clearUndo();
   stopEndoscopy();
+  centerlineSourceId.clear();
   renderer = null;
   renderFn = null;
+  volumeOpacityScaleFn = null;
   colorSeq = 0;
   clipGeom = null;
   clipExtent = null;
@@ -310,6 +321,20 @@ export function addMeshObject(polydata: Any, opts: AddOptions = {}): string | nu
   attachObjectInternal(id, obj, data);
   recordAdd(id, obj, data);
   return id;
+}
+
+/**
+ * パラメトリック 3D 球（`sphere3dStore.ts` の `Sphere3D`）を、Mask への焼き込み・再インポートを
+ * 経由せず直接メッシュとしてシーンへ追加する（`fw/mask-driven-pipelines-gap-analysis.md` 課題#7）。
+ */
+export function addSphereObject(center: V3, radiusMm: number, opts: AddOptions = {}): string | null {
+  if (!(radiusMm > 0)) return null;
+  const src: Any = vtkSphereSource.newInstance();
+  src.setCenter(center[0], center[1], center[2]);
+  src.setRadius(radiusMm);
+  src.setThetaResolution(32);
+  src.setPhiResolution(32);
+  return addMeshObject(src.getOutputData(), opts);
 }
 
 /**
@@ -808,14 +833,27 @@ export function extractCenterlineFromObject(
   if (!cl || cl.size() < 2) return null;
   const centerlineId = addCenterlineObject(cl, { name: `${obj?.name ?? "Object"} centerline` });
   if (!centerlineId) return null;
+  // マスク由来の中心線であることを記録（fly-through 開始時に元 ROI/メッシュ表面を強調するため。
+  // 手動クリックの内視鏡パス（`commitEndoPathAsCenterline`）由来には元オブジェクトが無いので記録しない）。
+  centerlineSourceId.set(centerlineId, id);
   return { centerlineId, summary: graphSummary(graph) };
 }
 
 // ── 内視鏡（単一のアクティブコントローラ）──────────────────────
 let endo: EndoController | null = null;
 let endoCenterlineId: string | null = null;
+/** 中心線 id → 抽出元の ROI/メッシュ scene object id（`extractCenterlineFromObject` が記録）。 */
+const centerlineSourceId = new Map<string, string>();
+/** fly-through 中だけ強調表示している元オブジェクトの id（stop 時に外観を復元）。 */
+let endoHighlightObjectId: string | null = null;
+/** マスク由来 fly-through 中に生ボリュームを減光する係数（0.15＝ほぼ透明）。 */
+const ENDO_VOLUME_DIM = 0.15;
 
-/** 指定中心線オブジェクトで内視鏡（fly-through）を開始。 */
+/**
+ * 指定中心線オブジェクトで内視鏡（fly-through）を開始。マスク由来の中心線（`extractCenterlineFromObject`
+ * 経由）なら、抽出元の ROI/メッシュ表面を強調し生ボリュームを減光する（`fw/mask-driven-pipelines-gap-analysis.md`
+ * 課題#6）。手動クリックのパス由来（元オブジェクト無し）は減光/強調をスキップし、従来どおり生ボリュームを描画。
+ */
 export function startEndoscopy(centerlineId: string): EndoController | null {
   const cl = dataById.get(centerlineId)?.centerline;
   if (!cl || !renderer || !renderFn) return null;
@@ -824,6 +862,18 @@ export function startEndoscopy(centerlineId: string): EndoController | null {
   const d = dataById.get(centerlineId);
   if (d?.ma) updateActorAppearance(d.ma, { visible: false });
   endoCenterlineId = centerlineId;
+
+  const sourceId = centerlineSourceId.get(centerlineId);
+  if (sourceId) {
+    const srcData = dataById.get(sourceId);
+    const srcObj = getSceneObject(sourceId);
+    if (srcData?.ma && srcObj) {
+      updateActorAppearance(srcData.ma, { visible: true, opacity: Math.max(srcObj.opacity, 0.9) });
+      endoHighlightObjectId = sourceId;
+      volumeOpacityScaleFn?.(ENDO_VOLUME_DIM);
+    }
+  }
+
   endo = createEndoController({ renderer, render: renderFn }, cl);
   endo.start();
   return endo;
@@ -837,6 +887,14 @@ export function stopEndoscopy(): void {
       /* ignore */
     }
     endo = null;
+  }
+  if (endoHighlightObjectId) {
+    const d = dataById.get(endoHighlightObjectId);
+    const obj = getSceneObject(endoHighlightObjectId);
+    // fly-through 前の外観（store の opacity/visible）に戻す。
+    if (d?.ma && obj) updateActorAppearance(d.ma, { visible: obj.visible !== false, opacity: obj.opacity });
+    endoHighlightObjectId = null;
+    volumeOpacityScaleFn?.(1);
   }
   if (endoCenterlineId) {
     const d = dataById.get(endoCenterlineId);

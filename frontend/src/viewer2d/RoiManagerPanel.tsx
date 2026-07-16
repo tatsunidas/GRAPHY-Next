@@ -24,6 +24,7 @@ import { fetchSettings } from "../settings/settingsApi";
 import { exportMaskAsSeg } from "../viewer/segExport";
 import { exportRoisAsRtStruct } from "../viewer/rtstructExport";
 import { importRtStructForCurrentView } from "../viewer/rtstructImport";
+import { importSegForCurrentView } from "../viewer/segImport";
 import { emitToast } from "../viewer/toast";
 import { emitSeriesRefresh } from "../viewer/viewerRefresh";
 import { combineMasks, splitMask, roiToMask, isAreaRoi, type BoolOp, type SplitConnectivity } from "../viewer/roiBooleanOps";
@@ -382,9 +383,24 @@ export function RoiManagerPanel({
     if (busy) return;
     setBusy(true);
     try {
-      const n = await importRtStructForCurrentView();
-      if (n === 0) window.alert(t("roiMgr.importRtEmpty"));
-      else emitToast(t("roiMgr.importRtDone", { n }));
+      const { roiCount, maskCount } = await importRtStructForCurrentView();
+      if (roiCount === 0) window.alert(t("roiMgr.importRtEmpty"));
+      else emitToast(t("roiMgr.importRtDone", { n: roiCount, m: maskCount }));
+    } catch {
+      window.alert(t("roiMgr.opFailed"));
+    } finally {
+      setBusy(false);
+      refresh();
+    }
+  };
+  // 表示中スタディの SEG を読み込み、表示中シリーズへ Mask を復元。
+  const runImportSeg = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const n = await importSegForCurrentView();
+      if (n === 0) window.alert(t("roiMgr.importSegEmpty"));
+      else emitToast(t("roiMgr.importSegDone", { n }));
     } catch {
       window.alert(t("roiMgr.opFailed"));
     } finally {
@@ -413,7 +429,11 @@ export function RoiManagerPanel({
       const n = { ...s };
       if (n[id]) { delete n[id]; return n; }
       const v = maskVolumeStats(id);
-      if (v) n[id] = v;
+      if (v) {
+        n[id] = v;
+        // Volumetry 結果をメタへ持ち回す（SEG エクスポート時の SegmentDescription 生成にも利用）。
+        setRoiMaskMeta(id, { custom: { volumeMl: v.volumeMl.toFixed(2), volumeComputedAt: new Date().toISOString() } });
+      }
       return n;
     });
   };
@@ -489,6 +509,7 @@ export function RoiManagerPanel({
         />
         {!isDemo && <button onClick={() => importInputRef.current?.click()} disabled={busy} style={opBtn} title={t("roiMgr.importIJ")}>IJ ⬆</button>}
         <button onClick={runImportRtStruct} disabled={busy} style={opBtn} title={t("roiMgr.importRt")}>RT ⬆</button>
+        <button onClick={runImportSeg} disabled={busy} style={opBtn} title={t("roiMgr.importSeg")}>SEG ⬆</button>
         {!isDemo && rois.length > 0 && <button onClick={runExportRois} disabled={busy} style={opBtn} title={t("roiMgr.exportIJ")}>IJ ⬇</button>}
         {!isDemo && rois.length > 0 && <button onClick={runExportRtStruct} disabled={busy} style={opBtn} title={t("roiMgr.exportRt")}>RT ⬇</button>}
       </div>

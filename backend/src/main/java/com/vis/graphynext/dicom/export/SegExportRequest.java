@@ -37,12 +37,13 @@ public record SegExportRequest(
         List<Segment> segments) {
 
     /**
-     * @param number セグメント番号（1-based）
-     * @param label  セグメント名
-     * @param color  RGB [r,g,b]（0..255）。null 可。
-     * @param frames 非空スライスのフレーム群
+     * @param number      セグメント番号（1-based）
+     * @param label       セグメント名
+     * @param color       RGB [r,g,b]（0..255）。null 可。
+     * @param description SegmentDescription へ書き込む説明文（Volumetry 等の計測結果）。null/空なら省略。
+     * @param frames      非空スライスのフレーム群
      */
-    public record Segment(int number, String label, int[] color, List<Frame> frames) {
+    public record Segment(int number, String label, int[] color, String description, List<Frame> frames) {
     }
 
     /**

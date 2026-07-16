@@ -368,6 +368,7 @@ export interface SegExportSegment {
   number: number;
   label: string;
   color: [number, number, number] | null;
+  description?: string | null;
   frames: SegExportFrame[];
 }
 export interface SegExportRequest {
@@ -428,6 +429,30 @@ export interface RtStructImportRoi {
 export const readDicomRtStruct = (studyUid: string, seriesUid: string) =>
   httpGet<RtStructImportRoi[]>(
     `/api/dicom/rtstruct?study=${encodeURIComponent(studyUid)}&series=${encodeURIComponent(seriesUid)}`,
+  );
+
+// --- SEG 読込（マスク駆動パイプライン導線: fw/mask-driven-pipelines-gap-analysis.md 課題#2）---
+export interface SegImportFrame {
+  referencedSopInstanceUid: string | null;
+  imagePositionPatient: [number, number, number] | null;
+  mask: string; // rows*columns の 0/1 バイト列を Base64
+}
+export interface SegImportSegment {
+  number: number;
+  label: string;
+  color: [number, number, number] | null;
+  description: string | null;
+  frames: SegImportFrame[];
+}
+export interface SegImportResult {
+  rows: number;
+  columns: number;
+  segments: SegImportSegment[];
+}
+/** 指定 SEG シリーズを読み、セグメント毎のマスク平面群を返す。 */
+export const readDicomSeg = (studyUid: string, seriesUid: string) =>
+  httpGet<SegImportResult>(
+    `/api/dicom/seg?study=${encodeURIComponent(studyUid)}&series=${encodeURIComponent(seriesUid)}`,
   );
 
 /** .roi/.zip をアップロードして DTO 群にデコード。 */

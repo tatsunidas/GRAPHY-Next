@@ -102,6 +102,12 @@ export interface VtkVolumeView {
   applyPreset(name: string | null): void;
   /** 不透明度カーブ（HU 点）を適用。null でモード既定へ。 */
   setOpacityPoints(points: VtkOpacityPoint[] | null): void;
+  /**
+   * 不透明度カーブ全体を一律スケール（0..1、既定 1=無効）。VR プリセット適用中は無効。
+   * 仮想内視鏡 fly-through 中に生ボリュームを減光し、マスク由来のセグメンテーション表面を
+   * 見せるために使う（`viewer3d/scene3d.ts` の `startEndoscopy`）。
+   */
+  setOpacityScale(factor: number): void;
   /** クリップ箱（ドラッグ可能）ON/OFF。 */
   setClipEnabled(on: boolean): void;
   /** 向きギズモ（患者 LPS ラベル付き AnnotatedCube）ON/OFF。既定 ON。 */
@@ -298,32 +304,34 @@ function setLutColor(ctf: Any, lut: { r: number[]; g: number[]; b: number[] }, l
   }
 }
 
-/** モード既定の不透明度を otf に設定（W/L の [lo,hi] を基準）。 */
+/** モード既定の不透明度を otf に設定（W/L の [lo,hi] を基準）。scale（既定 1）で全点の opacity を一律減衰。 */
 function setModeOpacity(
   otf: Any,
   mode: VtkRenderMode,
   lo: number,
   hi: number,
   range: [number, number],
+  scale = 1,
 ): void {
   otf.removeAllPoints();
   const [mn, mx] = range;
+  const s = (v: number) => Math.max(0, Math.min(1, v * scale));
   if (mode === "MINIP") {
     // 体外空気/背景（最小近傍）を透過し、その上を不透明に（真っ暗回避）。
     const span = mx - mn || 1;
     otf.addPoint(mn, 0);
     otf.addPoint(mn + span * 0.02, 0);
-    otf.addPoint(mn + span * 0.05, 1);
-    otf.addPoint(mx, 1);
+    otf.addPoint(mn + span * 0.05, s(1));
+    otf.addPoint(mx, s(1));
   } else if (mode === "MIP") {
     // MIP: 全域不透明（最大値投影を素直に見せる。輝度は色 TF の W/L で）。
-    otf.addPoint(mn, 1);
-    otf.addPoint(mx, 1);
+    otf.addPoint(mn, s(1));
+    otf.addPoint(mx, s(1));
   } else {
     // VR: W/L 窓で 0→0.9 に立ち上げる（下は透明、上は不透明）ランプ。
     otf.addPoint(lo, 0);
-    otf.addPoint((lo + hi) / 2, 0.15);
-    otf.addPoint(hi, 0.9);
+    otf.addPoint((lo + hi) / 2, s(0.15));
+    otf.addPoint(hi, s(0.9));
   }
 }
 
@@ -404,6 +412,9 @@ export function createVtkVolumeView(
   let lut: { r: number[]; g: number[]; b: number[] } | null = null;
   let customOpacity: VtkOpacityPoint[] | null = null;
   let presetActive = false; // VR プリセット適用中は grayscale/W-L/opacity 既定で上書きしない
+  // 全域不透明度の一律減衰（既定 1=無効）。仮想内視鏡 fly-through 中に生ボリュームを減光し、
+  // マスク由来のセグメンテーション表面を見せるために使う（`fw/mask-driven-pipelines-gap-analysis.md` 課題#6）。
+  let opacityScale = 1;
 
   const rebuildColor = () => {
     if (presetActive) return;
@@ -421,9 +432,9 @@ export function createVtkVolumeView(
       customOpacity
         .slice()
         .sort((a, b) => a.value - b.value)
-        .forEach((p) => otf.addPoint(p.value, p.opacity));
+        .forEach((p) => otf.addPoint(p.value, Math.max(0, Math.min(1, p.opacity * opacityScale))));
     } else {
-      setModeOpacity(otf, mode, lo, hi, range);
+      setModeOpacity(otf, mode, lo, hi, range, opacityScale);
     }
   };
   const applyBlend = () => {
@@ -687,6 +698,11 @@ export function createVtkVolumeView(
     },
     setOpacityPoints(points) {
       customOpacity = points;
+      rebuildOpacity();
+      render();
+    },
+    setOpacityScale(factor) {
+      opacityScale = Math.max(0, Math.min(1, factor));
       rebuildOpacity();
       render();
     },
