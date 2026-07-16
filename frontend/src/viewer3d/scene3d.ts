@@ -127,6 +127,8 @@ export function attachSceneRenderer(parts: {
 
 /** レンダラを切り離し、全シーンを破棄する（ビューアのアンマウント時）。 */
 export function resetScene(): void {
+  for (const t of clipRecomputeTimers.values()) clearTimeout(t);
+  clipRecomputeTimers.clear();
   for (const [, d] of dataById) {
     disposeData(d);
   }
@@ -200,30 +202,65 @@ function computeClipPlanes(): Any[] {
   ];
 }
 
+/** `applyObjectClip` の重い実ジオメトリ再計算を間引くための保留タイマー（オブジェクト単位）。 */
+const clipRecomputeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/** クリップ箱をドラッグ中、連打される `updateClip` のたびに再三角形化しないための間引き時間（ms）。 */
+const CLIP_RECOMPUTE_DEBOUNCE_MS = 150;
+
+function cancelClipRecompute(id: string): void {
+  const t = clipRecomputeTimers.get(id);
+  if (t) {
+    clearTimeout(t);
+    clipRecomputeTimers.delete(id);
+  }
+}
+
 /**
  * オブジェクトの mapper に、表示モード＋現在のクリップ状態に応じて実ジオメトリのクリップを適用/解除。
  * `mapper.addClippingPlane`（GPU シェーダクリップ）は断面が塗り潰されず不自然なため、
  * `vtkClipClosedSurface` で実際にポリゴンを切断＋断面をキャップした新ジオメトリを生成して差し替える。
  * 常に元ジオメトリ（`d.polydata`）から再計算するため、クリップ箱の操作を何度繰り返しても破綻しない。
+ *
+ * `vtkClipClosedSurface` は三角形数に比例して重く、クリップ箱のドラッグ中は `updateClip` が
+ * マウス移動のたびに全 embedded オブジェクトへ発火する（→ 毎フレーム再三角形化で操作が重くなる）。
+ * そのためドラッグ中は再計算を `CLIP_RECOMPUTE_DEBOUNCE_MS` だけ遅延させ、ドラッグが落ち着いてから
+ * 一度だけ実行する（float への切替やクリップ解除は即時反映——重い処理ではないため）。
  */
 function applyObjectClip(id: string): void {
   const d = dataById.get(id);
   const obj = getSceneObject(id);
   const mapper = d?.ma?.mapper;
   if (!mapper || !d?.polydata) return;
-  try {
-    if (obj?.displayMode === "embedded" && isClipActive()) {
+  cancelClipRecompute(id);
+
+  if (!(obj?.displayMode === "embedded" && isClipActive())) {
+    try {
+      mapper.setInputData(d.polydata);
+    } catch {
+      /* ignore */
+    }
+    return;
+  }
+
+  const timer = setTimeout(() => {
+    clipRecomputeTimers.delete(id);
+    const dd = dataById.get(id);
+    const oo = getSceneObject(id);
+    const mm = dd?.ma?.mapper;
+    if (!mm || !dd?.polydata) return;
+    if (!(oo?.displayMode === "embedded" && isClipActive())) return; // 待機中に状態が変わっていれば何もしない
+    try {
       const clip: Any = vtkClipClosedSurface.newInstance({
         clippingPlanes: computeClipPlanes(),
       });
-      clip.setInputData(d.polydata);
-      mapper.setInputData(withNormals(clip.getOutputData()));
-    } else {
-      mapper.setInputData(d.polydata);
+      clip.setInputData(dd.polydata);
+      mm.setInputData(withNormals(clip.getOutputData()));
+    } catch {
+      mm.setInputData(dd.polydata);
     }
-  } catch {
-    mapper.setInputData(d.polydata);
-  }
+    render();
+  }, CLIP_RECOMPUTE_DEBOUNCE_MS);
+  clipRecomputeTimers.set(id, timer);
 }
 
 function disposeData(d: SceneData): void {
@@ -264,6 +301,7 @@ function attachObjectInternal(id: string, obj: SceneObject, data: SceneData): vo
   render();
 }
 function detachObjectInternal(id: string): void {
+  cancelClipRecompute(id);
   const d = dataById.get(id);
   if (d?.ma && renderer) {
     try {
