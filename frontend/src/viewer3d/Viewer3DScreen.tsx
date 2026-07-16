@@ -51,7 +51,7 @@ import { CinematicSettingsDialog } from "./CinematicSettingsDialog";
 import { RepresentationStateDialog } from "./RepresentationStateDialog";
 import { ViewInfoOverlay } from "./ViewInfoOverlay";
 import { fetchLutData } from "../api";
-import { attachSceneRenderer, resetScene, setClipContext, updateClip } from "./scene3d";
+import { attachSceneRenderer, resetScene, setClipContext, updateClip, setOrthoSlice } from "./scene3d";
 import { geomFromImageData, type VolumeGeom } from "../viewer/labelVolume";
 import { useI18n } from "../i18n/i18n";
 
@@ -322,6 +322,22 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
     ro.observe(vpRef.current);
     return () => ro.disconnect();
   }, [phase]);
+
+  // Ortho（3直交スライス）表示中は、embedded な ROI/メッシュをクリップ箱ではなく
+  // 現在のスライス位置でカットするため、モード/スライス位置/幾何の変化を scene3d へ通知する。
+  useEffect(() => {
+    if (mode !== "ORTHO" || !sceneGeom) {
+      setOrthoSlice(false, null);
+      return;
+    }
+    const dims = sceneGeom.dims;
+    const idx: [number, number, number] = [
+      Math.max(0, Math.min(dims[0] - 1, Math.round(orthoPos.x * (dims[0] - 1)))),
+      Math.max(0, Math.min(dims[1] - 1, Math.round(orthoPos.y * (dims[1] - 1)))),
+      Math.max(0, Math.min(dims[2] - 1, Math.round(orthoPos.z * (dims[2] - 1)))),
+    ];
+    setOrthoSlice(true, idx);
+  }, [mode, orthoPos, sceneGeom]);
 
   const onMode = (next: VtkRenderMode) => {
     setMode(next);

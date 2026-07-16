@@ -103,6 +103,12 @@ let clipGeom: VolumeGeom | null = null;
 let clipExtent: number[] | null = null; // [i0,i1,j0,j1,k0,k1]（index）
 let fullExtent: number[] | null = null;
 
+// ── Ortho（3直交スライス）表示中の共有状態（埋め込み表示のため）────────
+// Ortho モードでは embedded オブジェクトを「クリップ箱」ではなく現在の3直交スライス位置で
+// カットし、断面がスライス面ちょうどに揃って見えるようにする（旧 GRAPHY uIsEmbedded 相当）。
+let orthoActive = false;
+let orthoSliceIdx: [number, number, number] | null = null; // I/J/K（voxel index）
+
 /** レンダラ（`vtkVolumeView.getSceneParts()`）を接続する。`setVolumeOpacityScale` を渡すと
  * fly-through 開始時に生ボリュームを減光できる（`vtkVolumeView.setOpacityScale`）。 */
 export function attachSceneRenderer(parts: {
@@ -147,6 +153,8 @@ export function resetScene(): void {
   clipGeom = null;
   clipExtent = null;
   fullExtent = null;
+  orthoActive = false;
+  orthoSliceIdx = null;
 }
 
 /** クリップ箱の幾何（表示ボリュームの実空間幾何）を設定する（埋め込み表示の基準）。 */
@@ -163,6 +171,18 @@ export function setClipContext(geom: VolumeGeom | null): void {
  */
 export function updateClip(extent: number[] | null): void {
   clipExtent = extent && extent.length === 6 ? extent.slice() : null;
+  for (const [id] of dataById) applyObjectClip(id);
+  render();
+}
+
+/**
+ * Ortho（3直交スライス）表示の有効/現在位置（I/J/K, voxel index）を通知する。
+ * モード切替（VR⇔ORTHO）・スライス位置スライダ操作のたびに呼ぶ。embedded オブジェクトは
+ * Ortho 表示中はクリップ箱ではなくこのスライス位置でカットされる（`computeOrthoClipPlanes`）。
+ */
+export function setOrthoSlice(active: boolean, idx: [number, number, number] | null): void {
+  orthoActive = active;
+  orthoSliceIdx = active ? idx : null;
   for (const [id] of dataById) applyObjectClip(id);
   render();
 }
@@ -203,6 +223,33 @@ function computeClipPlanes(): Any[] {
   ];
 }
 
+/**
+ * 現在の Ortho 3直交スライス位置（I/J/K）から、その手前側の八分区画だけを残すクリップ平面（3枚）を作る。
+ * 6枚（クリップ箱）と違い平面は各軸1枚のみ＝境界の三面が必ず現在のスライス面ちょうどに一致するため、
+ * embedded オブジェクトの断面が Ortho の3直交スライスに揃って見える（クリップ箱ベースだと浮いて見える問題の対策）。
+ */
+function computeOrthoClipPlanes(): Any[] {
+  if (!orthoSliceIdx || !clipGeom) return [];
+  const g = clipGeom;
+  const d = g.direction;
+  const xAxis: V3 = [d[0], d[3], d[6]];
+  const yAxis: V3 = [d[1], d[4], d[7]];
+  const zAxis: V3 = [d[2], d[5], d[8]];
+  const [si, sj, sk] = orthoSliceIdx;
+  const neg = (v: V3): V3 => [-v[0], -v[1], -v[2]];
+  const plane = (origin: V3, normal: V3): Any => {
+    const p: Any = vtkPlane.newInstance();
+    p.setOrigin(origin[0], origin[1], origin[2]);
+    p.setNormal(normal[0], normal[1], normal[2]);
+    return p;
+  };
+  return [
+    plane(voxelToWorld(g, si, 0, 0), neg(xAxis)), // i<=si を残す
+    plane(voxelToWorld(g, 0, sj, 0), neg(yAxis)), // j<=sj を残す
+    plane(voxelToWorld(g, 0, 0, sk), neg(zAxis)), // k<=sk を残す
+  ];
+}
+
 /** `applyObjectClip` の重い実ジオメトリ再計算を間引くための保留タイマー（オブジェクト単位）。 */
 const clipRecomputeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 /** クリップ箱をドラッグ中、連打される `updateClip` のたびに再三角形化しないための間引き時間（ms）。 */
@@ -216,11 +263,23 @@ function cancelClipRecompute(id: string): void {
   }
 }
 
+/** embedded カットが今効くべきか（Ortho 表示中はスライス位置基準、それ以外はクリップ箱基準）。 */
+function embeddedClipEngaged(): boolean {
+  return orthoActive ? orthoSliceIdx != null : isClipActive();
+}
+
+/** 現在有効な embedded カットの平面群（Ortho 表示中はスライス面、それ以外はクリップ箱）。 */
+function currentEmbedPlanes(): Any[] {
+  return orthoActive ? computeOrthoClipPlanes() : computeClipPlanes();
+}
+
 /**
  * オブジェクトの mapper に、表示モード＋現在のクリップ状態に応じて実ジオメトリのクリップを適用/解除。
  * `mapper.addClippingPlane`（GPU シェーダクリップ）は断面が塗り潰されず不自然なため、
  * `vtkClipClosedSurface` で実際にポリゴンを切断＋断面をキャップした新ジオメトリを生成して差し替える。
  * 常に元ジオメトリ（`d.polydata`）から再計算するため、クリップ箱の操作を何度繰り返しても破綻しない。
+ * Ortho 表示中はクリップ箱ではなく現在の3直交スライス位置（`computeOrthoClipPlanes`）でカットし、
+ * 断面がスライス面ちょうどに揃って見えるようにする（クリップ箱ベースだと浮いて見えるため）。
  *
  * `vtkClipClosedSurface` は三角形数に比例して重く、クリップ箱のドラッグ中は `updateClip` が
  * マウス移動のたびに全 embedded オブジェクトへ発火する（→ 毎フレーム再三角形化で操作が重くなる）。
@@ -234,7 +293,7 @@ function applyObjectClip(id: string): void {
   if (!mapper || !d?.polydata) return;
   cancelClipRecompute(id);
 
-  if (!(obj?.displayMode === "embedded" && isClipActive())) {
+  if (!(obj?.displayMode === "embedded" && embeddedClipEngaged())) {
     try {
       mapper.setInputData(d.polydata);
     } catch {
@@ -249,10 +308,10 @@ function applyObjectClip(id: string): void {
     const oo = getSceneObject(id);
     const mm = dd?.ma?.mapper;
     if (!mm || !dd?.polydata) return;
-    if (!(oo?.displayMode === "embedded" && isClipActive())) return; // 待機中に状態が変わっていれば何もしない
+    if (!(oo?.displayMode === "embedded" && embeddedClipEngaged())) return; // 待機中に状態が変わっていれば何もしない
     try {
       const clip: Any = vtkClipClosedSurface.newInstance({
-        clippingPlanes: computeClipPlanes(),
+        clippingPlanes: currentEmbedPlanes(),
       });
       clip.setInputData(dd.polydata);
       mm.setInputData(withNormals(clip.getOutputData()));
