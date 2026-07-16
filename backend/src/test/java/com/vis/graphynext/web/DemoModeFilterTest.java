@@ -26,7 +26,6 @@ class DemoModeFilterTest {
             "POST,/api/dicom/send",
             "POST,/api/dicom/qr/find",
             "GET,/api/dicom/qr/retrieve/job1",
-            "POST,/api/dicom/seg",
             "POST,/api/dicom/rtstruct",
             "POST,/api/series/derived",
             "DELETE,/api/series/1.2/1.3",
@@ -72,6 +71,8 @@ class DemoModeFilterTest {
             "GET,/api/studies/1.2/series/1.3/instances/1.4/file",
             "POST,/api/studies/1.2/series/1.3/prefetch",
             "GET,/api/dicom/rtstruct",
+            // 毎晩の自動リストアで消えるため、デモ体験として意図的に許可（RTSTRUCT書き出しは対象外）。
+            "POST,/api/dicom/seg",
             "GET,/api/instances/1.4/document",
             "GET,/api/plugins/foo/ui.js",
             "GET,/api/status",
