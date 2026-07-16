@@ -384,24 +384,24 @@ export function SceneObjectPanel({
 
       {/* アクション: マスク→ROI, STL インポート */}
       <div style={actionsCol}>
-        <select
-          style={select}
-          value=""
-          disabled={busy || masks.length === 0}
-          onChange={(e) => {
-            onAddRoiFromMask(e.target.value);
-            e.currentTarget.value = "";
-          }}
-        >
-          <option value="">
-            {masks.length ? t("scene3d.importRoi") : t("scene3d.noMasks")}
-          </option>
-          {masks.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.label}
-            </option>
-          ))}
-        </select>
+        {masks.length > 0 && (
+          <select
+            style={select}
+            value=""
+            disabled={busy}
+            onChange={(e) => {
+              onAddRoiFromMask(e.target.value);
+              e.currentTarget.value = "";
+            }}
+          >
+            <option value="">{t("scene3d.importRoi")}</option>
+            {masks.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        )}
         {remoteMasks.length > 0 && (
           <select
             style={select}
