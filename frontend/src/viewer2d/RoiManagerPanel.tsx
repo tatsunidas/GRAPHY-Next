@@ -27,6 +27,7 @@ import { importRtStructForCurrentView } from "../viewer/rtstructImport";
 import { importSegForCurrentView } from "../viewer/segImport";
 import { emitToast } from "../viewer/toast";
 import { emitSeriesRefresh } from "../viewer/viewerRefresh";
+import { emitDbChanged } from "../dbEvents";
 import { combineMasks, splitMask, roiToMask, isAreaRoi, type BoolOp, type SplitConnectivity } from "../viewer/roiBooleanOps";
 import { sphereFromCircleRoi, createSphere3DFromCircleRoi, bakeSphere3D, splitMaskToSlices, maskVolumeStats, type MaskVolumeStats } from "../viewer/roi3d";
 import { listSpheres3D, updateSphere3D, deleteSphere3D, subscribeSphere3D, type Sphere3D } from "../viewer/sphere3dStore";
@@ -374,6 +375,11 @@ export function RoiManagerPanel({
       if (res) {
         emitToast(t("roiMgr.exportRtDone"));
         emitSeriesRefresh();
+        // 他ウィンドウ（メイン画面の検索リスト等）へ新規シリーズ発生を通知（CPR/中心線解析/Slicer と同様）。
+        const studyUids = [...new Set(
+          rois.map((r) => getRoiMaskMeta(r.uid)?.scope?.studyUid).filter((v): v is string => !!v),
+        )];
+        emitDbChanged({ reason: "series-create", studyUids });
       } else window.alert(t("roiMgr.exportRtFail"));
     } catch {
       window.alert(t("roiMgr.exportRtFail"));
@@ -450,6 +456,11 @@ export function RoiManagerPanel({
       if (res.ok) {
         emitToast(res.replacedPrevious ? t("roiMgr.exportSegUpdated") : t("roiMgr.exportSegDone"));
         emitSeriesRefresh(); // 2D Viewer の検索ツリーを再取得（新 SEG シリーズを出す）。
+        // 他ウィンドウ（メイン画面の検索リスト等）へ新規シリーズ発生を通知（CPR/中心線解析/Slicer と同様）。
+        // これが無いと、実際は保存されているのにメイン画面の検索結果には反映されず「保存されていない」
+        // ように見えるバグになる（実機報告により判明）。
+        const studyUid = getRoiMaskMeta(id)?.scope?.studyUid;
+        emitDbChanged({ reason: "series-create", studyUids: studyUid ? [studyUid] : undefined });
       } else if (res.reason === "empty") {
         window.alert(t("roiMgr.exportSegEmpty"));
       } else {
