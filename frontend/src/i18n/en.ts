@@ -635,6 +635,7 @@ export const en: Record<string, string> = {
   "roiMgr.statMean": "Mean",
   "roiMgr.toSlices": "3D→2D split (single-slice Mask per non-empty slice)",
   "roiMgr.exportSeg": "Save as DICOM SEG (new series to DB)",
+  "roiMgr.exportSegStandalone": "Save as DICOM SEG (acts as an update: the previous export of this mask is replaced with the new series)",
   "roiMgr.exportSegDone": "Saved DICOM SEG (a new series appears in the main screen).",
   "roiMgr.exportSegUpdated": "Updated DICOM SEG (the old series was deleted and replaced with the new one).",
   "roiMgr.exportSegEmpty": "Nothing is painted in this mask, so there is no SEG to export (paint it with the brush/wand first).",
