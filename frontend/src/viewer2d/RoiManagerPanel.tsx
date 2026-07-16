@@ -231,13 +231,33 @@ export function RoiManagerPanel({
     refresh();
   };
   // マスク（labelmap representation）の表示 On/Off。表示中の全ビューポートへ適用。
+  // Cornerstone は representation.segments に **登録済みの segment index** の visible しか
+  // 見ない（setSegmentIndexVisibility は未登録 index を無視する）ため、SEG import / split
+  // 由来など segment 1 以外が未登録のまま残るマスクでは segment 1 にしか反映されなかった。
+  // setActiveSegmentIndex は未登録の segment を自動登録する副作用があるため、
+  // それを使って全 segment を登録してから可視性を切り替える（アクティブ segment は復元）。
   const setMaskVisible = (id: string, visible: boolean) => {
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const vps = (csSeg.state as any).getViewportIdsWithSegmentation(id) as string[] | undefined;
+      const segs = getMaskSegments(id);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const prevActive = (csSeg.segmentIndex as any).getActiveSegmentIndex(id) as number | undefined;
+      for (const segIndex of segs) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        try { (csSeg.segmentIndex as any).setActiveSegmentIndex(id, segIndex); } catch { /* ignore */ }
+      }
+      if (prevActive != null) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        try { (csSeg.segmentIndex as any).setActiveSegmentIndex(id, prevActive); } catch { /* ignore */ }
+      }
       for (const vp of vps ?? []) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         try { (csSeg.config.visibility as any).setSegmentationRepresentationVisibility(vp, { segmentationId: id, type: LABELMAP }, visible); } catch { /* ignore */ }
+        for (const segIndex of segs) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          try { (csSeg.config.visibility as any).setSegmentIndexVisibility(vp, { segmentationId: id, type: LABELMAP }, segIndex, visible); } catch { /* ignore */ }
+        }
       }
       renderAll();
     } catch { /* ignore */ }
