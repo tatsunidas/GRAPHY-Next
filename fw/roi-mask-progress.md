@@ -160,6 +160,10 @@ Cornerstone3D のセグメンテーション系ツール（stack/volume labelmap
 - **M4**: 円→球(⬤/◎)、**球断面円ライブプレビュー**（zoom/pan/回転/スライス追従）、半径 mm 編集の即反映、体積/HU 統計(Σ)、3D→2D split(⬚)。
 - **global ROI**: scope.z="all" にした ROI が全スライスに追従表示されるか。
 - **ImageJ**: 「IJ ⬇」Export→ImageJ で開けるか、「IJ ⬆」Import→ROI 復元、解析メニュー「ImageJ…」で HyperStack がローカル ImageJ に開くか（**要デスクトップ表示環境。headless 不可**）。
+- **RTSTRUCT自動マスク化**: **サンプルデータ（RTSTRUCTを含むスタディ）が無いため未実施**。
+  1. RTSTRUCT を含むスタディを開く（無ければ既存の「RT⬇」でエクスポートして作成）。
+  2. ROI マネージャの「RT⬆」をクリック。
+  3. 期待結果: 従来は「RTSTRUCTから◯個のROIを復元しました。」のみだったのが、「…を復元し、◯個をMask化しました。」に変化。手動で「▦」を押さなくても、SceneObjectPanel の Mask ドロップダウンに即座に出現することを確認。
 
 ## 注意・既知
 - React StrictMode は無効のまま（再導入不可）。`main.tsx` 変更時は Vite 完全再起動。
