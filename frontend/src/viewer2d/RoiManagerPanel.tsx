@@ -565,7 +565,7 @@ export function RoiManagerPanel({
           {m.scope && <button onClick={() => toggleScopeZ(m.id)} style={scopeChip} title={t("roiMgr.scopeToggleMask")}>{m.scope}</button>}
           <button onClick={() => runStats(m.id)} style={editBtn} title={t("roiMgr.stats")}>Σ</button>
           <button onClick={() => runSplitToSlices(m.id)} disabled={busy} style={editBtn} title={t("roiMgr.toSlices")}>⬚</button>
-          {!isDemo && <button onClick={() => runExportSeg(m.id)} disabled={busy} style={editBtn} title={t("roiMgr.exportSeg")}>SEG</button>}
+          {!isDemo && <button onClick={() => runExportSeg(m.id)} disabled={busy} style={editBtn} title={t("roiMgr.exportSeg")}>SEG ⬇</button>}
           <button onClick={() => setEditId(m.id)} style={editBtn} title={t("roiMgr.editTitle")}>✎</button>
           <button onClick={() => deleteMask(m.id)} style={delBtn} title={t("common.delete")}>🗑</button>
         </div>
