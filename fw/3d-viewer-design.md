@@ -448,7 +448,10 @@ FreeFormRoi3D マスク（実空間 vtkImageData labelmap）
     右コントロールパネルに常設。i18n `scene3d.*`（en/ja）。`Viewer3DScreen` で `attachSceneRenderer`＋`geomFromImageData`。
   - **表示モード（float / embedded, 旧 GRAPHY `OrthoRoiMode` の Float Overlay(3D)/Embedded(3D) に対応）**: オブジェクト単位で切替。
     - `float`（浮き立たせ）= クリップ箱の影響を受けず**常に全体表示**（既定）。
-    - `embedded`（埋め込み）= ボリュームのクリップ箱と**一緒にカット**。実装 = mesh mapper に `addClippingPlane`（6 面）。
+    - `embedded`（埋め込み）= ボリュームのクリップ箱と**一緒にカット**。実装 = `vtkClipClosedSurface`（`computeClipPlanes` の
+      6 平面で元ポリゴン（`d.polydata`）を実ジオメトリとして切断＋断面キャップ）の出力を mapper に差し替え（2026-07-16 修正:
+      旧実装は mapper に `addClippingPlane` を積むだけで GPU シェーダクリップに頼っており、実機で視覚的に反映されない不具合が
+      あったため、実ジオメトリを切断する方式に置換。断面キャッピングも同時に解消）。
       クリップ箱（`vtkImageCropFilter` の index extent）を `vtkVolumeView.subscribeClip` で購読し、`scene3d.updateClip`→
       `computeClipPlanes`（extent+geom→world 平面。法線=direction 列の ±単位ベクトル、点=`voxelToWorld`）で live 反映。
       クリップ全域（未クロップ）時は無効化（`isClipActive`）。`scene3d.setClipContext`（基準 geom）/`setObjectDisplayMode`。
@@ -456,7 +459,7 @@ FreeFormRoi3D マスク（実空間 vtkImageData labelmap）
     ボリューム/ortho スライスの可視だけ切替え、シーンアクターは削除しない）。**Cinematic（P4）も同一 renderer 前提で同時描画可能に設計**。
   - **STL 入出力**: import（STL binary/ascii 自動判定・OBJ, `SceneObjectPanel` の「STL/OBJ 読込」）／export（選択オブジェクト→binary STL DL）。頂点は患者 LPS mm。
   - P3 既知の制約/TODO: 実機（GPU/DICOM）目視未実施。ROI↔メッシュ往復・STL 往復の数値検証（体積・座標一致）未実施。
-    **embedded の断面キャッピング（切断面を塗り潰す）未対応＝表面は開いた断面で表示 → 実機目視での要否判断が必要（§13 参照）。**
+    embedded の断面キャッピングは `vtkClipClosedSurface` 化（2026-07-16）で解消。
     ORTHO モードでの ortho スライス壁カット（旧 `uIsEmbedded`）はクリップ箱ベースで代替（ortho 壁カットは後続）。
     生成 3D ROI の Cornerstone SEG 逆書き出し・2D 連携（`roiMaskStore`/`segExport`）、ブール/連結成分（`roiBooleanOps`）連携も後続。
 - **P4 Cinematic v1（lit VR → シネマティック散乱）** — ✅ 実装（tsc/vite green・実機未検証, 2026-07-02）。
@@ -514,11 +517,9 @@ FreeFormRoi3D マスク（実空間 vtkImageData labelmap）
 
 ## 13. リスク・要検証
 
-- **【要・実機目視】embedded 表示の断面キャッピング（P3）**: embedded（クリップ箱と一緒にカット）オブジェクトは現状 `mapper.addClippingPlane` による
-  クリップのみで、**切断面が塗り潰されず開いた断面（中空）で表示される**。旧 GRAPHY は ROI をボリュームのレイマーチ内でソリッド描画するため切断面が充填される。
-  → **実機（standalone・GPU・実 DICOM）で embedded＋クリップ箱ドラッグ時の断面の見え方を目視確認し、キャッピングの要否を判断する**。
-  必要なら実装候補: (a) `vtkClipClosedSurface`（切断面を閉じたポリゴンで生成）、(b) クリップ平面ごとの cap ポリゴン自前生成、(c) ステンシル的手法。
-  判断・結果は本節に追記すること（未実施＝2026-07-02 時点）。
+- **embedded 表示の断面キャッピング（P3）— 解消済み（2026-07-16）**: `mapper.addClippingPlane` による GPU シェーダクリップは
+  実機で視覚的に反映されない不具合があった上、切断面が塗り潰されず開いた断面（中空）で表示される問題もあった。
+  `vtkClipClosedSurface`（`scene3d.applyObjectClip`）で実ジオメトリを切断＋断面キャップする方式に置換して両方を解消。
 - **メモリ/性能**: 大 volume の VR＋密 labelmap＋メッシュ同時保持。生成前概算＋上限ガード（slicer 同様）。marching cubes/骨格化は Web Worker 化検討。
 - **cornerstone `VolumeViewport3D` への自前アクター addActor**: 内部 renderer API の安定性・cornerstone 3.33.x での互換要検証。破綻時は
   **純 vtk.js の `vtkGenericRenderWindow` へ全面移行**（slicer が cornerstone 3 面から自前 world 描画へ回帰した前例あり・[[slicer-feature-status]]）をフォールバックに。
