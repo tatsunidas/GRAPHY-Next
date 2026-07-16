@@ -18,8 +18,10 @@ import { firstBaseViewport, importMaskFrames } from "./maskFrames";
 /**
  * 表示中スタディの SEG シリーズをすべて読み、表示中 source シリーズへ Mask を復元する。
  * 復元したセグメント総数を返す（0 なら対象 SEG 無し or 解像度不一致等で復元不可）。
+ * `onProgress`（0〜1）は SEG シリーズ数と各シリーズ内のセグメント処理数から進捗率を算出して通知する
+ * （RoiManagerPanel の SEG⬆ ボタンの円形プログレス表示向け）。
  */
-export async function importSegForCurrentView(): Promise<number> {
+export async function importSegForCurrentView(onProgress?: (frac: number) => void): Promise<number> {
   const vp = firstBaseViewport();
   const ctx = vp ? getViewerContext(vp.id) : null;
   if (!vp || !ctx?.studyUid) return 0;
@@ -28,12 +30,17 @@ export async function importSegForCurrentView(): Promise<number> {
   if (!segSeries.length) return 0;
 
   let total = 0;
-  for (const s of segSeries) {
+  const seriesCount = segSeries.length;
+  for (const [i, s] of segSeries.entries()) {
     const result = await readDicomSeg(ctx.studyUid, s.seriesInstanceUid).catch(() => null);
-    if (!result || !result.segments.length) continue;
+    if (!result || !result.segments.length) {
+      onProgress?.((i + 1) / seriesCount);
+      continue;
+    }
     const label = s.seriesDescription?.trim() || "SEG";
-    const res = await importMaskFrames(vp, result, label);
+    const res = await importMaskFrames(vp, result, label, (segFrac) => onProgress?.((i + segFrac) / seriesCount));
     if (res) total += res.segmentCount;
+    onProgress?.((i + 1) / seriesCount);
   }
   return total;
 }
