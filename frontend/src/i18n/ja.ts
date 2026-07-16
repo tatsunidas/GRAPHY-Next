@@ -169,7 +169,7 @@ export const ja: Record<string, string> = {
   "viewer3d.clipOffBtn": "クリップ箱を有効化",
   "viewer3d.clipOnBtn": "クリップ箱: ON",
   "viewer3d.clipDragHint": "箱の面/角をドラッグしてクロップ。",
-  "viewer3d.navHint": "左ドラッグ: 回転 / 中ドラッグ: 移動 / ホイール・右ドラッグ: 拡大縮小",
+  "viewer3d.navHint": "左ドラッグ: 回転 / 中ドラッグ: 移動 / ホイール: 拡大縮小 / 右ドラッグ: ウィンドウ/レベル調整",
   "viewer3d.menu.view": "表示",
   "viewer3d.menu.cinematic": "Cinematic レンダリング設定…",
   "viewer3d.menu.reprState": "Representation State",
