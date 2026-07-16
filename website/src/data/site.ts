@@ -214,6 +214,7 @@ export const footer = {
         { label: '利用規約', href: '/legal/terms' },
         { label: 'プライバシー', href: '/legal/privacy' },
         { label: 'ライセンス', href: '/legal/licenses' },
+        { label: 'お知らせメールの配信停止', href: 'https://demo.vis-ionary.com/unsubscribe' },
       ],
     },
   ],
