@@ -636,6 +636,8 @@ export const ja: Record<string, string> = {
   "roiMgr.toSlices": "3D→2D 分割（非空スライスごとに単一スライス Mask 化）",
   "roiMgr.exportSeg": "DICOM SEG で保存（新シリーズとして DB へ）",
   "roiMgr.exportSegDone": "DICOM SEG を保存しました（メイン画面に新シリーズが出現）。",
+  "roiMgr.exportSegUpdated": "DICOM SEG を更新しました（旧シリーズを削除し、新シリーズに置き換えました）。",
+  "roiMgr.exportSegEmpty": "マスクに何も描画されていないため SEG を書き出せません（先にブラシ/ワンド等で塗ってください）。",
   "roiMgr.exportSegFail": "DICOM SEG の保存に失敗しました（対象シリーズを 2D 表示中か・幾何が揃っているか確認）。",
   "roiMgr.exportRt": "面積型 ROI を DICOM RTSTRUCT で保存（新シリーズとして DB へ）",
   "roiMgr.exportRtDone": "RTSTRUCT を保存しました（メイン画面に新シリーズが出現）。",

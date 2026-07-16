@@ -35,6 +35,9 @@ export interface RoiMaskMeta {
   custom?: Record<string, string>;
   /** このマスクに存在する segment index の一覧（多セグメント, D3）。Mask のみ。既定 [1]。 */
   segments?: number[];
+  /** このマスクを直近 SEG 書き出しした先（再書き出し時、standalone なら旧シリーズを自動削除して
+   * 「更新」相当にするために使う。`segExport.ts` 参照）。 */
+  lastSegExport?: { studyUid: string; seriesUid: string; sopInstanceUid: string };
 }
 
 const metaById = new Map<string, RoiMaskMeta>();

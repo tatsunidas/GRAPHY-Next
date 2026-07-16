@@ -10,9 +10,9 @@
  */
 import { cache, metaData } from "@cornerstonejs/core";
 import { segmentation as csSeg } from "@cornerstonejs/tools";
-import { getRoiMaskMeta, getMaskSegments } from "./roiMaskStore";
+import { getRoiMaskMeta, setRoiMaskMeta, getMaskSegments } from "./roiMaskStore";
 import { maskVolumeStats } from "./roi3d";
-import { exportDicomSeg, type SegExportRequest, type SegExportSegment, type SegExportFrame, type SegExportResult } from "../api";
+import { exportDicomSeg, deleteSeries, type SegExportRequest, type SegExportSegment, type SegExportFrame, type SegExportResult } from "../api";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
@@ -44,11 +44,34 @@ function dist(a: V3, b: V3): number {
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 }
 
-/** マスクを DICOM SEG として書き出す。成功時 { seriesInstanceUid }、対象が空/幾何不明なら null。 */
-export async function exportMaskAsSeg(segmentationId: string): Promise<SegExportResult | null> {
+/** {@link exportMaskAsSeg} の失敗理由。UI 側で分かりやすいメッセージを出し分けるのに使う。 */
+export type SegExportFailReason =
+  | "noMask" // labelmap が存在しない（マスク未作成/破棄済み）
+  | "geometry" // source 画像の幾何（rows/cols/IOP/PixelSpacing）が解決できない
+  | "scope" // study/series スコープが不明
+  | "empty"; // 全 segment が前景ゼロ（マスクに何も描画されていない）
+
+export type SegExportOutcome =
+  | { ok: true; result: SegExportResult; replacedPrevious: boolean }
+  | { ok: false; reason: SegExportFailReason };
+
+/**
+ * マスクを DICOM SEG として書き出す。
+ *
+ * 同じマスクを再度書き出すと、常に**新規シリーズ**を作る（DICOM の SOPInstanceUID 不変性のため
+ * 同一 UID への上書きはしない）。ただし `opts.mode === "standalone"` のときは、直前にこのマスクを
+ * 書き出した旧 SEG シリーズ（`roiMaskStore` の `lastSegExport` に記録）を新規作成の直後に削除し、
+ * 実質的な「更新」として振る舞う（`replacedPrevious: true`）。web/デモは
+ * `DbAdminService.deleteSeries` がローカル索引専用で no-op のため対象外（新シリーズは残り続ける。
+ * デモは毎晩の自動リストアで結局消える）。
+ */
+export async function exportMaskAsSeg(
+  segmentationId: string,
+  opts: { mode?: string } = {},
+): Promise<SegExportOutcome> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const labelmapIds = (csSeg as any).getLabelmapImageIds?.(segmentationId) as string[] | undefined;
-  if (!labelmapIds?.length) return null;
+  if (!labelmapIds?.length) return { ok: false, reason: "noMask" };
 
   // 各 z の source imageId（派生 labelmap の referencedImageId）。
   const srcIds: (string | undefined)[] = labelmapIds.map((lm) => (cache.getImage(lm) as AnyObj | undefined)?.referencedImageId);
@@ -77,7 +100,7 @@ export async function exportMaskAsSeg(segmentationId: string): Promise<SegExport
     if (ipp) ippByZ[z] = [Number(ipp[0]), Number(ipp[1]), Number(ipp[2])];
     sopByZ[z] = sopOf(src) ?? undefined;
   }
-  if (!rows || !cols || !iop || iop.length < 6 || !ps) return null;
+  if (!rows || !cols || !iop || iop.length < 6 || !ps) return { ok: false, reason: "geometry" };
 
   // スライス厚 = 隣接 source IPP 間距離（無ければ metadata の sliceThickness）。
   let thickness = 1;
@@ -94,7 +117,7 @@ export async function exportMaskAsSeg(segmentationId: string): Promise<SegExport
   const gsm = firstSrc ? (metaData.get("generalSeriesModule", firstSrc) as AnyObj) ?? {} : {};
   const studyUid = meta?.scope?.studyUid ?? gsm.studyInstanceUID;
   const seriesUid = meta?.scope?.seriesUid ?? gsm.seriesInstanceUID;
-  if (!studyUid || !seriesUid) return null;
+  if (!studyUid || !seriesUid) return { ok: false, reason: "scope" };
 
   const frameSize = rows * cols;
   const segIndices = getMaskSegments(segmentationId);
@@ -142,7 +165,7 @@ export async function exportMaskAsSeg(segmentationId: string): Promise<SegExport
     const description = vol ? `Volume: ${vol.volumeMl.toFixed(2)} mL (${vol.voxels} voxels, ${vol.slices} slices)` : null;
     segments.push({ number: segIndex, label, color, description, frames });
   }
-  if (!segments.length) return null;
+  if (!segments.length) return { ok: false, reason: "empty" };
 
   const req: SegExportRequest = {
     studyInstanceUid: studyUid,
@@ -156,5 +179,21 @@ export async function exportMaskAsSeg(segmentationId: string): Promise<SegExport
     seriesDescription: meta?.label ? `SEG: ${meta.label}` : "Segmentation",
     segments,
   };
-  return exportDicomSeg(req);
+  const result = await exportDicomSeg(req);
+
+  const prev = meta?.lastSegExport;
+  setRoiMaskMeta(segmentationId, {
+    lastSegExport: { studyUid, seriesUid: result.seriesInstanceUid, sopInstanceUid: result.sopInstanceUid },
+  });
+
+  let replacedPrevious = false;
+  if (prev && prev.seriesUid !== result.seriesInstanceUid && opts.mode === "standalone") {
+    try {
+      await deleteSeries(prev.studyUid, prev.seriesUid);
+      replacedPrevious = true;
+    } catch {
+      // 削除失敗しても新規エクスポート自体は成功済みなので握りつぶす（旧シリーズが残るだけ）。
+    }
+  }
+  return { ok: true, result, replacedPrevious };
 }

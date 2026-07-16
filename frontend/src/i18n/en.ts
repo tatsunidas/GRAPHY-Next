@@ -636,6 +636,8 @@ export const en: Record<string, string> = {
   "roiMgr.toSlices": "3D→2D split (single-slice Mask per non-empty slice)",
   "roiMgr.exportSeg": "Save as DICOM SEG (new series to DB)",
   "roiMgr.exportSegDone": "Saved DICOM SEG (a new series appears in the main screen).",
+  "roiMgr.exportSegUpdated": "Updated DICOM SEG (the old series was deleted and replaced with the new one).",
+  "roiMgr.exportSegEmpty": "Nothing is painted in this mask, so there is no SEG to export (paint it with the brush/wand first).",
   "roiMgr.exportSegFail": "Failed to save DICOM SEG (check the series is shown in 2D and geometry is available).",
   "roiMgr.exportRt": "Save area ROIs as DICOM RTSTRUCT (new series to DB)",
   "roiMgr.exportRtDone": "Saved RTSTRUCT (a new series appears in the main screen).",
