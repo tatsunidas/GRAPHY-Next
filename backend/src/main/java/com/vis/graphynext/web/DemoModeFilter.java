@@ -21,13 +21,13 @@ import java.util.List;
  * 公開デモ（{@code graphy.demo.enabled=true}）でのみ有効化されるガード。
  *
  * <p>閲覧（検索・2D/MPR/3D/Slicer/CurvedMPR 表示）は許可したまま、以下を一律で 403 にする:
- * データの持ち込み（非DICOMインポート・任意パスインポート）、持ち出し（SEG/RTSTRUCT/派生シリーズの
+ * データの持ち込み（非DICOMインポート・任意パスインポート）、持ち出し（RTSTRUCT/派生シリーズの
  * PACS 書き戻し・study/シリーズ抽出のZIP/コピー・匿名化ツールのZIP/コピー/マスク書き込み）、
  * 外部 DICOM ノードへの通信（送信・Query/Retrieve・C-ECHO＝SSRF相当）、DB 管理系の破壊的操作、
  * サーバー設定（TLS設定・アプリ設定）の書き換え、サーバーログ・ImageJ ブリッジ・プラグイン実行など
- * サーバー内部に触れる操作。レポート機能（{@code /api/reports/**}）はデモ体験として意図的に許可
- * したままにしており、代わりに毎晩の自動リストアで荒らし・蓄積データをリセットする運用にしている
- * （fw/web-demo-hosting.md 参照）。
+ * サーバー内部に触れる操作。レポート機能（{@code /api/reports/**}）と SEG 書き出し
+ * （{@code POST /api/dicom/seg}）はデモ体験として意図的に許可したままにしており、代わりに
+ * 毎晩の自動リストアで荒らし・蓄積データをリセットする運用にしている（fw/web-demo-hosting.md 参照）。
  *
  * <p>個別コントローラへ {@code @Profile}/{@code @ConditionalOnProperty} を都度付けるのではなく、
  * 経路を一箇所のホワイトリスト外ブロックとして集約することで、新規エンドポイント追加時の
@@ -47,7 +47,9 @@ public class DemoModeFilter extends OncePerRequestFilter {
             new BlockedRoute(null, "/api/import/**"),
             new BlockedRoute(HttpMethod.POST, "/api/dicom/send"),
             new BlockedRoute(null, "/api/dicom/qr/**"),
-            new BlockedRoute(HttpMethod.POST, "/api/dicom/seg"),
+            // POST /api/dicom/seg（SEG書き出し）は毎晩の自動リストア（reset-demo.sh）で確実に
+            // 消えるため、他の「持ち出し」系と異なりデモ体験として意図的に許可している
+            // （fw/web-demo-hosting.md参照）。RTSTRUCT書き出しは対象外のままブロック継続。
             new BlockedRoute(HttpMethod.POST, "/api/dicom/rtstruct"),
             new BlockedRoute(null, "/api/series/**"),
             new BlockedRoute(null, "/api/dbadmin/**"),

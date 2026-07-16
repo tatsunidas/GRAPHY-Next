@@ -162,7 +162,6 @@ export function Viewer2DMenuBar({
       id: "roi",
       label: t("viewer2d.menu.roi"),
       items: [
-        { label: t("roiMgr.title"), onClick: actions.toggleRoiManager },
         { label: t("viewer2d.roi.length"), onClick: () => actions.setTool(TOOL_IDS.length), checked: activeTool === TOOL_IDS.length },
         { label: t("viewer2d.roi.angle"), onClick: () => actions.setTool(TOOL_IDS.angle), checked: activeTool === TOOL_IDS.angle },
         { label: t("viewer2d.roi.ellipse"), onClick: () => actions.setTool(TOOL_IDS.ellipse), checked: activeTool === TOOL_IDS.ellipse },
@@ -175,6 +174,7 @@ export function Viewer2DMenuBar({
       id: "roiTools",
       label: t("viewer2d.menu.roiTools"),
       items: [
+        { label: t("roiMgr.title"), onClick: actions.toggleRoiManager },
         { label: t("viewer2d.tool.brush"), onClick: () => actions.setTool(TOOL_IDS.brush), checked: activeTool === TOOL_IDS.brush },
         { label: t("viewer2d.tool.eraser"), onClick: () => actions.setTool(TOOL_IDS.eraser), checked: activeTool === TOOL_IDS.eraser },
         { label: t("viewer2d.tool.wand2d"), onClick: () => actions.setTool(TOOL_IDS.wand2d), checked: activeTool === TOOL_IDS.wand2d },
