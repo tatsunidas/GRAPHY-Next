@@ -540,7 +540,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
             )}
 
             <div style={panelSection}>
-              <div style={panelLabel}>{t("viewer2d.wl.preset")}</div>
+              <div style={panelLabel}>{mode === "VR" ? t("viewer3d.wlPresetVr") : t("viewer2d.wl.preset")}</div>
               <select style={select} defaultValue="default" onChange={(e) => onWlPreset(e.target.value)}>
                 <option value="default">{t("viewer2d.wl.default")}</option>
                 {presets.map((p) => (
