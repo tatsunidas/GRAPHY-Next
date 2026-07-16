@@ -87,8 +87,17 @@ services:
     networks: [demo_internal]
     environment:
       GRAPHY_DICOM_DICOMWEB_BASE_URL: http://arc:8080/dcm4chee-arc/aets/DCM4CHEE/rs
+      # マジックリンクログインゲート（AuthFilter, graphy.auth.*）。
+      # session-secret/internal-api-key はシークレットのため .env から注入する
+      # （生成例: openssl rand -base64 32）。internal-api-key は mailer 側と同じ値にすること。
+      GRAPHY_AUTH_SESSION_SECRET: ${GRAPHY_AUTH_SESSION_SECRET}
+      GRAPHY_AUTH_INTERNAL_API_KEY: ${GRAPHY_AUTH_INTERNAL_API_KEY}
+      GRAPHY_AUTH_MAILER_BASE_URL: http://mailer:8081
+      GRAPHY_AUTH_TURNSTILE_SITE_KEY: ${GRAPHY_AUTH_TURNSTILE_SITE_KEY}
+      GRAPHY_AUTH_PUBLIC_BASE_URL: https://demo.vis-ionary.com
     depends_on:
       - arc
+      - mailer
     read_only: true
     tmpfs:
       - /tmp
@@ -97,6 +106,31 @@ services:
       - no-new-privileges:true
     volumes:
       - graphy_backend_data:/app/data
+    restart: unless-stopped
+
+  # graphy-backend にインターネット疎通を持たせないための、メール送信/CAPTCHA検証専用の中継。
+  # demo_internal（graphy-backendからの内部APIコールを受ける）と demo_edge（外部SMTP・
+  # Cloudflare Turnstile siteverifyへ到達するため）の両方に属する唯一のアプリ側コンテナ。
+  # トークン・メール本文の意味・DICOM等は一切知らない薄い中継に留める（deploy/demo/mailer/参照）。
+  mailer:
+    build:
+      context: ./mailer
+    networks: [demo_internal, demo_edge]
+    environment:
+      INTERNAL_API_KEY: ${GRAPHY_AUTH_INTERNAL_API_KEY}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      SMTP_FROM: ${SMTP_FROM}
+      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY}
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
   # graphy-backend が落ちている（デプロイ中・夜間リセット中・クラッシュ）場合に、cloudflared からの

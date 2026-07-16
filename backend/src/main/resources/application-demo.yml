@@ -8,3 +8,13 @@ graphy:
   ratelimit:
     enabled: true
     requests-per-minute: 300
+  # マジックリンクによるログインゲート（AuthFilter）。
+  # session-secret / internal-api-key / mailer-base-url / turnstile-site-key / public-base-url は
+  # シークレット・環境固有値のためここには書かず、docker-compose の environment
+  # （deploy/demo/.env 由来、例: GRAPHY_AUTH_SESSION_SECRET）から relaxed binding で束縛する。
+  #
+  # Demoモード（DemoModeFilter）の検証中のため一時的に無効化。検証完了後にtrueへ戻す。
+  auth:
+    enabled: false
+    token-ttl-minutes: 15
+    session-ttl-days: 30

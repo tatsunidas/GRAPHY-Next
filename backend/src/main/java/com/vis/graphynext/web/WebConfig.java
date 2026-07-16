@@ -4,6 +4,7 @@
  */
 package com.vis.graphynext.web;
 
+import com.vis.graphynext.config.AuthProperties;
 import com.vis.graphynext.config.CorsProperties;
 import com.vis.graphynext.config.RateLimitProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -22,7 +23,7 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
  * </ul>
  */
 @Configuration
-@EnableConfigurationProperties({CorsProperties.class, RateLimitProperties.class})
+@EnableConfigurationProperties({CorsProperties.class, RateLimitProperties.class, AuthProperties.class})
 public class WebConfig implements WebMvcConfigurer {
 
     private final CorsProperties cors;
