@@ -154,7 +154,7 @@ export const en: Record<string, string> = {
   "viewer3d.orthoPos": "Slice position",
   "viewer3d.preset": "VR preset",
   "viewer3d.presetNone": "None (grayscale / W-L)",
-  "viewer3d.resetView": "Reset view",
+  "viewer3d.resetView": "Reset display",
   "viewer3d.transfer": "Transfer function",
   "viewer3d.lut": "LUT…",
   "viewer3d.opacityCurveBtn": "Opacity curve…",

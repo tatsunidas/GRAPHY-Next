@@ -740,8 +740,8 @@ export function createVtkVolumeView(
           /* ignore */
         }
         clipViewWidget = null;
-        // クロップ解除＝全域へ。
-        setCropExtent(imageData.getExtent());
+        // ウィジェット（ドラッグ操作用UI）を隠すだけで、クロップ自体は維持する。
+        // 全域へ戻すのは表示リセット（resetView）のタイミングのみ。
       }
       render();
     },
@@ -775,6 +775,14 @@ export function createVtkVolumeView(
         renderer.resetCameraClippingRange();
       } catch {
         renderer.resetCamera();
+      }
+      // クリップ箱は Off にしても維持されるため、表示リセット時に全域へ戻す
+      // （crop フィルタ本体＋ウィジェットが記憶しているハンドル位置の両方）。
+      try {
+        setCropExtent(imageData.getExtent());
+        cropWidget.copyImageDataDescription(imageData);
+      } catch {
+        /* ignore */
       }
       render();
       notifyState();
