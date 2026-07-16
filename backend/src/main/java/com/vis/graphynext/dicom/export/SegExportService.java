@@ -172,14 +172,21 @@ public class SegExportService {
             int spatialIdx = 0;
             for (SegExportRequest.Frame fr : s.frames()) {
                 spatialIdx++;
-                byte[] plane = Base64.getDecoder().decode(fr.mask());
-                if (plane.length != frameSize) {
-                    throw new IllegalArgumentException("mask バイト長が rows*cols と不一致 (got=" + plane.length
-                            + ", expected=" + frameSize + ")");
-                }
-                for (int idx = 0; idx < frameSize; idx++, bitPos++) {
-                    if (plane[idx] != 0) {
-                        packed[(int) (bitPos >> 3)] |= (byte) (1 << (int) (bitPos & 7));
+                // mask が空文字＝前景ゼロの平面（dense のプレースホルダ）。転送量削減のため frontend は
+                // 平面バイト列を省略してくる。packed は既定でゼロ初期化されているため、bitPos を
+                // frameSize 分進めるだけでよい（`fw/dicom-seg-rtstruct-design.md` §3.1'）。
+                if (fr.mask() == null || fr.mask().isEmpty()) {
+                    bitPos += frameSize;
+                } else {
+                    byte[] plane = Base64.getDecoder().decode(fr.mask());
+                    if (plane.length != frameSize) {
+                        throw new IllegalArgumentException("mask バイト長が rows*cols と不一致 (got=" + plane.length
+                                + ", expected=" + frameSize + ")");
+                    }
+                    for (int idx = 0; idx < frameSize; idx++, bitPos++) {
+                        if (plane[idx] != 0) {
+                            packed[(int) (bitPos >> 3)] |= (byte) (1 << (int) (bitPos & 7));
+                        }
                     }
                 }
                 perFrame.add(perFrameItem(s.number(), spatialIdx, fr, srcClassUid));

@@ -265,6 +265,9 @@ export function extractMaskFrames(segmentationId: string): MaskFramesInput | nul
     } catch {
       /* ignore */
     }
+    // ウィンドウ間同期は DICOM SEG ではない（Fusion の Z レイアウト整合制約が無い）ため、
+    // segExport.ts の dense 出力と異なり、前景を持つスライスのみ完全に疎で送る
+    // （多セグメント×多スライスのマスクで BroadcastChannel の転送量が肥大化するのを防ぐ）。
     const frames: MaskFrameSource[] = [];
     let any = false;
     for (let z = 0; z < labelmapIds.length; z++) {
@@ -274,6 +277,7 @@ export function extractMaskFrames(segmentationId: string): MaskFramesInput | nul
       const vm = (cache.getImage(labelmapIds[z]) as AnyObj | undefined)?.voxelManager;
       if (!vm) continue;
       const plane = new Uint8Array(frameSize);
+      let anyOnSlice = false;
       let data: ArrayLike<number> | undefined;
       try {
         data = vm.getScalarData?.() as ArrayLike<number> | undefined;
@@ -281,10 +285,12 @@ export function extractMaskFrames(segmentationId: string): MaskFramesInput | nul
         /* ignore */
       }
       if (data && data.length >= frameSize) {
-        for (let i = 0; i < frameSize; i++) if (data[i] === segIndex) { plane[i] = 1; any = true; }
+        for (let i = 0; i < frameSize; i++) if (data[i] === segIndex) { plane[i] = 1; anyOnSlice = true; }
       } else {
-        for (let i = 0; i < frameSize; i++) if (vm.getAtIndex(i) === segIndex) { plane[i] = 1; any = true; }
+        for (let i = 0; i < frameSize; i++) if (vm.getAtIndex(i) === segIndex) { plane[i] = 1; anyOnSlice = true; }
       }
+      if (!anyOnSlice) continue;
+      any = true;
       frames.push({ referencedSopInstanceUid: sop, imagePositionPatient: ipp, mask: u8ToBase64(plane) });
     }
     if (!frames.length || !any) continue;
