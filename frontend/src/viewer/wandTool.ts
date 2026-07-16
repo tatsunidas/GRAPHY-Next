@@ -37,7 +37,12 @@ function offsets2D(conn: number): [number, number][] {
   if (conn === 4) return four;
   return [...four, [1, 1], [1, -1], [-1, 1], [-1, -1]];
 }
-/** 3D 近傍オフセット。6=面(manh1), 12=辺(manh2), 8=角(manh3), 26=全て。 */
+/**
+ * 3D 近傍オフセット。6=面(manh1)、12=面+辺(manh1,2)、8=面+角(manh1,3)、26=全て。
+ * いずれも面(manh1)を必ず含める。面を含めない辺/角のみの近傍（旧実装のバグ）は、格子を
+ * パリティで2分割してしまい（市松模様）、フラッド結果がメッシュの網目状になる
+ * （`roiBooleanOps.ts` の `splitOffsets` と同様、面を基底として累積させるのが正しい）。
+ */
 function offsets3D(conn: number): [number, number, number][] {
   const all: { o: [number, number, number]; m: number }[] = [];
   for (let dz = -1; dz <= 1; dz++)
@@ -47,8 +52,8 @@ function offsets3D(conn: number): [number, number, number][] {
         all.push({ o: [dx, dy, dz], m: Math.abs(dx) + Math.abs(dy) + Math.abs(dz) });
       }
   if (conn === 6) return all.filter((a) => a.m === 1).map((a) => a.o);
-  if (conn === 12) return all.filter((a) => a.m === 2).map((a) => a.o);
-  if (conn === 8) return all.filter((a) => a.m === 3).map((a) => a.o);
+  if (conn === 12) return all.filter((a) => a.m === 1 || a.m === 2).map((a) => a.o);
+  if (conn === 8) return all.filter((a) => a.m === 1 || a.m === 3).map((a) => a.o);
   return all.map((a) => a.o);
 }
 
