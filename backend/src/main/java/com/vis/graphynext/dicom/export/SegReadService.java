@@ -6,13 +6,16 @@ package com.vis.graphynext.dicom.export;
 
 import com.vis.graphynext.dicom.SegFrameExpander;
 import com.vis.graphynext.dicom.store.DicomStorageService;
+import com.vis.graphynext.dicom.web.WebDicomDataService;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Sequence;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.UID;
 import org.dcm4che3.io.DicomInputStream;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -26,7 +29,9 @@ import java.util.Set;
 /**
  * DICOM SEG（BINARY/8bit FRACTIONAL）読込。PerFrameFunctionalGroupsSequence を解析して
  * セグメント毎のフレーム（0/1 マスク平面）を DTO 化する（書込 {@link SegExportService} と対称。
- * `fw/mask-driven-pipelines-gap-analysis.md` 対応課題#2）。
+ * `fw/mask-driven-pipelines-gap-analysis.md` 対応課題#2）。standalone/web 両対応
+ * （{@link SegExportService} と同じ分岐方式。web モードでは {@link DicomStorageService} のローカル索引が
+ * 空のため、これが無いと実在の SEG があっても常に空扱いになるバグになる。実機で発見・修正）。
  */
 @Service
 public class SegReadService {
@@ -36,19 +41,56 @@ public class SegReadService {
             UID.ImplicitVRLittleEndian, UID.ExplicitVRLittleEndian, UID.DeflatedExplicitVRLittleEndian);
 
     private final DicomStorageService storage;
+    /** web モードのときだけ存在（WADO-RS 読込用）。standalone では null。 */
+    private final ObjectProvider<WebDicomDataService> webProvider;
 
-    public SegReadService(DicomStorageService storage) {
+    public SegReadService(DicomStorageService storage, ObjectProvider<WebDicomDataService> webProvider) {
         this.storage = storage;
+        this.webProvider = webProvider;
     }
 
     /** 指定 SEG シリーズのセグメント/フレーム群を読む。SEG でなければ null。 */
     public SegImportResult read(String studyUid, String seriesUid) throws IOException {
+        WebDicomDataService web = webProvider != null ? webProvider.getIfAvailable() : null;
+        if (web != null) {
+            return readWeb(web, studyUid, seriesUid);
+        }
         List<Path> files = storage.resolveFiles(studyUid, List.of(seriesUid));
         for (Path f : files) {
             Attributes ds;
             String ts;
             try (DicomInputStream in = new DicomInputStream(f.toFile())) {
                 ds = in.readDataset();
+                ts = in.getTransferSyntax();
+            }
+            if (!SegFrameExpander.isSegDataset(ds)) {
+                continue;
+            }
+            if (ts != null && !NATIVE_TS.contains(ts)) {
+                throw new IllegalArgumentException("圧縮転送構文の SEG は未対応です (ts=" + ts + ")");
+            }
+            return parse(ds);
+        }
+        return null;
+    }
+
+    /** web モード: QIDO でインスタンス一覧→WADO-RS で Part-10 本体を取得し、standalone と同じ解析に合流する。 */
+    private SegImportResult readWeb(WebDicomDataService web, String studyUid, String seriesUid) throws IOException {
+        List<Attributes> instances = web.searchInstances(studyUid, seriesUid, Map.of());
+        for (Attributes inst : instances) {
+            String sopUid = inst.getString(Tag.SOPInstanceUID);
+            if (sopUid == null || sopUid.isBlank()) {
+                continue;
+            }
+            byte[] dicom = web.retrieveInstance(studyUid, seriesUid, sopUid);
+            if (dicom == null) {
+                continue;
+            }
+            Attributes ds;
+            String ts;
+            try (DicomInputStream in = new DicomInputStream(new ByteArrayInputStream(dicom))) {
+                in.setIncludeBulkData(DicomInputStream.IncludeBulkData.YES);
+                ds = in.readDataset(-1, -1);
                 ts = in.getTransferSyntax();
             }
             if (!SegFrameExpander.isSegDataset(ds)) {
