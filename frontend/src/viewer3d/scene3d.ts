@@ -34,6 +34,8 @@ import vtkTubeFilter from "@kitware/vtk.js/Filters/General/TubeFilter";
 import vtkSphereSource from "@kitware/vtk.js/Filters/Sources/SphereSource";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 import vtkClipClosedSurface from "@kitware/vtk.js/Filters/General/ClipClosedSurface";
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+import vtkAppendPolyData from "@kitware/vtk.js/Filters/General/AppendPolyData";
 import {
   addSceneObject,
   getSceneObject,
@@ -178,7 +180,7 @@ export function updateClip(extent: number[] | null): void {
 /**
  * Ortho（3直交スライス）表示の有効/現在位置（I/J/K, voxel index）を通知する。
  * モード切替（VR⇔ORTHO）・スライス位置スライダ操作のたびに呼ぶ。embedded オブジェクトは
- * Ortho 表示中はクリップ箱ではなくこのスライス位置でカットされる（`computeOrthoClipPlanes`）。
+ * Ortho 表示中はクリップ箱ではなくこのスライス位置でカットされる（`buildOrthoEmbeddedGeometry`）。
  */
 export function setOrthoSlice(active: boolean, idx: [number, number, number] | null): void {
   orthoActive = active;
@@ -223,19 +225,20 @@ function computeClipPlanes(): Any[] {
   ];
 }
 
+/** Ortho 断面クリップの薄いスラブの半厚み（voxel index 単位）。断面が面ちょうどに見える程度に薄く。 */
+const ORTHO_SLAB_HALF_THICKNESS = 0.75;
+
 /**
- * 現在の Ortho 3直交スライス位置（I/J/K）から、その手前側の八分区画だけを残すクリップ平面（3枚）を作る。
- * 6枚（クリップ箱）と違い平面は各軸1枚のみ＝境界の三面が必ず現在のスライス面ちょうどに一致するため、
- * embedded オブジェクトの断面が Ortho の3直交スライスに揃って見える（クリップ箱ベースだと浮いて見える問題の対策）。
+ * 現在の Ortho 直交スライス位置（1軸分, voxel index）を挟む薄いスラブ（2枚のクリップ平面）を作る。
+ * 8分区画カット（1軸1枚）だと厚い塊が残って「浮いて」見えるため、各軸ごとに面のごく近傍だけを
+ * 残す薄いスラブを3軸それぞれで作り、後で合成する（`buildOrthoEmbeddedGeometry`）。
  */
-function computeOrthoClipPlanes(): Any[] {
-  if (!orthoSliceIdx || !clipGeom) return [];
+function computeOrthoAxisSlabPlanes(axis: 0 | 1 | 2, sliceIdx: number): Any[] {
+  if (!clipGeom) return [];
   const g = clipGeom;
   const d = g.direction;
-  const xAxis: V3 = [d[0], d[3], d[6]];
-  const yAxis: V3 = [d[1], d[4], d[7]];
-  const zAxis: V3 = [d[2], d[5], d[8]];
-  const [si, sj, sk] = orthoSliceIdx;
+  const axisDir: V3 =
+    axis === 0 ? [d[0], d[3], d[6]] : axis === 1 ? [d[1], d[4], d[7]] : [d[2], d[5], d[8]];
   const neg = (v: V3): V3 => [-v[0], -v[1], -v[2]];
   const plane = (origin: V3, normal: V3): Any => {
     const p: Any = vtkPlane.newInstance();
@@ -243,11 +246,40 @@ function computeOrthoClipPlanes(): Any[] {
     p.setNormal(normal[0], normal[1], normal[2]);
     return p;
   };
-  return [
-    plane(voxelToWorld(g, si, 0, 0), neg(xAxis)), // i<=si を残す
-    plane(voxelToWorld(g, 0, sj, 0), neg(yAxis)), // j<=sj を残す
-    plane(voxelToWorld(g, 0, 0, sk), neg(zAxis)), // k<=sk を残す
-  ];
+  const lo = sliceIdx - ORTHO_SLAB_HALF_THICKNESS;
+  const hi = sliceIdx + ORTHO_SLAB_HALF_THICKNESS;
+  const at = (v: number): V3 =>
+    axis === 0 ? voxelToWorld(g, v, 0, 0) : axis === 1 ? voxelToWorld(g, 0, v, 0) : voxelToWorld(g, 0, 0, v);
+  return [plane(at(lo), axisDir), plane(at(hi), neg(axisDir))];
+}
+
+/**
+ * embedded オブジェクトの元ジオメトリを、現在の Ortho 3直交スライス位置それぞれの薄いスラブで
+ * クリップし、3軸分の断面片を1つのポリゴンに合成する。各軸の境界が現在のスライス面ちょうどに
+ * 一致する薄い断面になるため、クリップ箱ベースの塊状カット（浮いて見える）と違い、
+ * 多断面表示に重ねて表示されているように見える。
+ */
+function buildOrthoEmbeddedGeometry(polydata: Any): Any | null {
+  if (!orthoSliceIdx || !clipGeom) return null;
+  const append: Any = vtkAppendPolyData.newInstance();
+  let any = false;
+  orthoSliceIdx.forEach((sliceIdx, axis) => {
+    const planes = computeOrthoAxisSlabPlanes(axis as 0 | 1 | 2, sliceIdx);
+    if (!planes.length) return;
+    try {
+      const clip: Any = vtkClipClosedSurface.newInstance({ clippingPlanes: planes });
+      clip.setInputData(polydata);
+      const out = clip.getOutputData();
+      if (out && out.getNumberOfPoints() > 0) {
+        append.addInputData(out);
+        any = true;
+      }
+    } catch {
+      /* この軸の断面はスキップ */
+    }
+  });
+  if (!any) return null;
+  return append.getOutputData();
 }
 
 /** `applyObjectClip` の重い実ジオメトリ再計算を間引くための保留タイマー（オブジェクト単位）。 */
@@ -268,18 +300,13 @@ function embeddedClipEngaged(): boolean {
   return orthoActive ? orthoSliceIdx != null : isClipActive();
 }
 
-/** 現在有効な embedded カットの平面群（Ortho 表示中はスライス面、それ以外はクリップ箱）。 */
-function currentEmbedPlanes(): Any[] {
-  return orthoActive ? computeOrthoClipPlanes() : computeClipPlanes();
-}
-
 /**
  * オブジェクトの mapper に、表示モード＋現在のクリップ状態に応じて実ジオメトリのクリップを適用/解除。
  * `mapper.addClippingPlane`（GPU シェーダクリップ）は断面が塗り潰されず不自然なため、
  * `vtkClipClosedSurface` で実際にポリゴンを切断＋断面をキャップした新ジオメトリを生成して差し替える。
  * 常に元ジオメトリ（`d.polydata`）から再計算するため、クリップ箱の操作を何度繰り返しても破綻しない。
- * Ortho 表示中はクリップ箱ではなく現在の3直交スライス位置（`computeOrthoClipPlanes`）でカットし、
- * 断面がスライス面ちょうどに揃って見えるようにする（クリップ箱ベースだと浮いて見えるため）。
+ * Ortho 表示中はクリップ箱ではなく現在の3直交スライス位置の薄いスラブ断面（`buildOrthoEmbeddedGeometry`）
+ * でカットし、断面がスライス面ちょうどに重なって見えるようにする（塊状カットだと浮いて見えるため）。
  *
  * `vtkClipClosedSurface` は三角形数に比例して重く、クリップ箱のドラッグ中は `updateClip` が
  * マウス移動のたびに全 embedded オブジェクトへ発火する（→ 毎フレーム再三角形化で操作が重くなる）。
@@ -310,11 +337,16 @@ function applyObjectClip(id: string): void {
     if (!mm || !dd?.polydata) return;
     if (!(oo?.displayMode === "embedded" && embeddedClipEngaged())) return; // 待機中に状態が変わっていれば何もしない
     try {
-      const clip: Any = vtkClipClosedSurface.newInstance({
-        clippingPlanes: currentEmbedPlanes(),
-      });
-      clip.setInputData(dd.polydata);
-      mm.setInputData(withNormals(clip.getOutputData()));
+      if (orthoActive) {
+        const merged = buildOrthoEmbeddedGeometry(dd.polydata);
+        mm.setInputData(merged ? withNormals(merged) : vtkPolyData.newInstance());
+      } else {
+        const clip: Any = vtkClipClosedSurface.newInstance({
+          clippingPlanes: computeClipPlanes(),
+        });
+        clip.setInputData(dd.polydata);
+        mm.setInputData(withNormals(clip.getOutputData()));
+      }
     } catch {
       mm.setInputData(dd.polydata);
     }
