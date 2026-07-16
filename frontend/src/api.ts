@@ -455,6 +455,16 @@ export const readDicomSeg = (studyUid: string, seriesUid: string) =>
     `/api/dicom/seg?study=${encodeURIComponent(studyUid)}&series=${encodeURIComponent(seriesUid)}`,
   );
 
+export interface DeleteSeriesResult {
+  deletedInstances: number;
+}
+/** シリーズを削除（standalone のローカル DB 管理専用。web モードでは索引が空で実質no-op）。 */
+export const deleteSeries = (studyUid: string, seriesUid: string) =>
+  httpSend<DeleteSeriesResult>(
+    `/api/series/${encodeURIComponent(studyUid)}/${encodeURIComponent(seriesUid)}`,
+    "DELETE",
+  );
+
 /** .roi/.zip をアップロードして DTO 群にデコード。 */
 export const importImageJRoiSet = async (file: File): Promise<ImageJRoiDto[]> => {
   const form = new FormData();

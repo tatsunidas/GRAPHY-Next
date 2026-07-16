@@ -965,7 +965,7 @@ function TileGrid({
         ))}
       </div>
       {showRoiMgr && (
-        <RoiManagerPanel activePatientKey={patient.patientKey} isDemo={isDemo} onClose={() => setShowRoiMgr(false)} />
+        <RoiManagerPanel activePatientKey={patient.patientKey} isDemo={isDemo} mode={mode} onClose={() => setShowRoiMgr(false)} />
       )}
       {histo && (
         <HistogramDialog

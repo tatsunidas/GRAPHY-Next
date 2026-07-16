@@ -81,11 +81,14 @@ function scopeText(itemId: string): string {
 export function RoiManagerPanel({
   activePatientKey,
   isDemo,
+  mode,
   onClose,
 }: {
   activePatientKey: string;
-  /** 公開デモ（backendが該当APIを403にする）。IJインポート/IJ・RT・SEGエクスポートを隠す。 */
+  /** 公開デモ（backendが該当APIを403にする）。IJインポート/IJ・RTエクスポートを隠す。 */
   isDemo: boolean;
+  /** `AppStatus.mode`（"standalone"/"web"）。SEG 再書き出し時の旧シリーズ自動削除の可否判定に使う。 */
+  mode?: string;
   onClose: () => void;
 }) {
   const { t } = useI18n();
@@ -437,16 +440,21 @@ export function RoiManagerPanel({
       return n;
     });
   };
-  // マスク → DICOM SEG 書き出し（新シリーズとして DB 保存）。
+  // マスク → DICOM SEG 書き出し（新シリーズとして DB 保存）。同じマスクを再度書き出すと、
+  // standalone なら直前のエクスポート先シリーズを自動削除し「更新」相当にする（exportMaskAsSeg 参照）。
   const runExportSeg = async (id: string) => {
     if (busy) return;
     setBusy(true);
     try {
-      const res = await exportMaskAsSeg(id);
-      if (res) {
-        emitToast(t("roiMgr.exportSegDone"));
+      const res = await exportMaskAsSeg(id, { mode });
+      if (res.ok) {
+        emitToast(res.replacedPrevious ? t("roiMgr.exportSegUpdated") : t("roiMgr.exportSegDone"));
         emitSeriesRefresh(); // 2D Viewer の検索ツリーを再取得（新 SEG シリーズを出す）。
-      } else window.alert(t("roiMgr.exportSegFail"));
+      } else if (res.reason === "empty") {
+        window.alert(t("roiMgr.exportSegEmpty"));
+      } else {
+        window.alert(t("roiMgr.exportSegFail"));
+      }
     } catch {
       window.alert(t("roiMgr.exportSegFail"));
     } finally {
