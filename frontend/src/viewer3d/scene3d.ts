@@ -22,6 +22,7 @@ import {
   updateActorAppearance,
   measureMesh,
   getMeshArrays,
+  withNormals,
   type MeshActor,
 } from "../viewer/mesh3d";
 import { labelVolumeToMesh, meshToLabelVolume } from "../viewer/roiMesh";
@@ -31,6 +32,8 @@ import { createEndoController, type EndoController } from "../viewer/endoscopy";
 import vtkPolyData from "@kitware/vtk.js/Common/DataModel/PolyData";
 import vtkTubeFilter from "@kitware/vtk.js/Filters/General/TubeFilter";
 import vtkSphereSource from "@kitware/vtk.js/Filters/Sources/SphereSource";
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+import vtkClipClosedSurface from "@kitware/vtk.js/Filters/General/ClipClosedSurface";
 import {
   addSceneObject,
   getSceneObject,
@@ -197,19 +200,29 @@ function computeClipPlanes(): Any[] {
   ];
 }
 
-/** オブジェクトの mapper に、表示モード＋現在のクリップ状態に応じてクリップ平面を適用/解除。 */
+/**
+ * オブジェクトの mapper に、表示モード＋現在のクリップ状態に応じて実ジオメトリのクリップを適用/解除。
+ * `mapper.addClippingPlane`（GPU シェーダクリップ）は断面が塗り潰されず不自然なため、
+ * `vtkClipClosedSurface` で実際にポリゴンを切断＋断面をキャップした新ジオメトリを生成して差し替える。
+ * 常に元ジオメトリ（`d.polydata`）から再計算するため、クリップ箱の操作を何度繰り返しても破綻しない。
+ */
 function applyObjectClip(id: string): void {
   const d = dataById.get(id);
   const obj = getSceneObject(id);
   const mapper = d?.ma?.mapper;
-  if (!mapper) return;
+  if (!mapper || !d?.polydata) return;
   try {
-    mapper.removeAllClippingPlanes();
     if (obj?.displayMode === "embedded" && isClipActive()) {
-      for (const p of computeClipPlanes()) mapper.addClippingPlane(p);
+      const clip: Any = vtkClipClosedSurface.newInstance({
+        clippingPlanes: computeClipPlanes(),
+      });
+      clip.setInputData(d.polydata);
+      mapper.setInputData(withNormals(clip.getOutputData()));
+    } else {
+      mapper.setInputData(d.polydata);
     }
   } catch {
-    /* ignore */
+    mapper.setInputData(d.polydata);
   }
 }
 
