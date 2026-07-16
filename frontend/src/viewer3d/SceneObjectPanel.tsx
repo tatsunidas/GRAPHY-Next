@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { segmentation as csSeg } from "@cornerstonejs/tools";
 import { useI18n } from "../i18n/i18n";
-import { getRoiMaskMeta } from "../viewer/roiMaskStore";
+import { getRoiMaskMeta, getMaskSegments } from "../viewer/roiMaskStore";
 import { buildLabelVolumeFromSegmentation, type VolumeGeom } from "../viewer/labelVolume";
 import { exportStlBinary, importObj, importStl } from "../viewer/mesh3d";
 import { listSpheres3D, subscribeSphere3D } from "../viewer/sphere3dStore";
@@ -61,6 +61,24 @@ function hexToRgb(hex: string): [number, number, number] {
   const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex.trim());
   if (!m) return [1, 1, 1];
   return [parseInt(m[1], 16) / 255, parseInt(m[2], 16) / 255, parseInt(m[3], 16) / 255];
+}
+
+/** Cornerstone 上のセグメント表示色（0–255 RGBA）を [0..1] RGB へ変換して取得。無ければ undefined。 */
+function segColor01(segmentationId: string, segIndex: number): [number, number, number] | undefined {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vps = (csSeg.state as any).getViewportIdsWithSegmentation(segmentationId) as string[] | undefined;
+    const vp = vps?.[0];
+    if (!vp) return undefined;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const c = (csSeg.config.color as any).getSegmentIndexColor(vp, segmentationId, segIndex) as
+      | number[]
+      | undefined;
+    if (!c || c.length < 3) return undefined;
+    return [c[0] / 255, c[1] / 255, c[2] / 255];
+  } catch {
+    return undefined;
+  }
 }
 
 function download(name: string, buf: ArrayBuffer): void {
@@ -194,21 +212,29 @@ export function SceneObjectPanel({
     }
   };
 
+  // セグメントごとに独立した SceneObject（ROI）を作成する。1 セグメントのみの Mask でも
+  // このループで 1 回だけ回り、挙動は従来と変わらない。
   const onAddRoiFromMask = (segmentationId: string) => {
     if (!segmentationId) return;
     void withBusy(() => {
-      const lv = buildLabelVolumeFromSegmentation(segmentationId);
-      if (!lv) {
-        setStatus(t("scene3d.error"));
-        return;
+      const meta = getRoiMaskMeta(segmentationId);
+      const segIndices = getMaskSegments(segmentationId);
+      let added = 0;
+      for (const segIndex of segIndices) {
+        const lv = buildLabelVolumeFromSegmentation(segmentationId, segIndex);
+        if (!lv) continue;
+        const segLabel = meta?.custom?.[String(segIndex)];
+        const name = segLabel || (meta?.label ? `${meta.label} #${segIndex}` : undefined);
+        const color = segColor01(segmentationId, segIndex);
+        const id = addRoiObject(lv, { name, color, volumeFrom: "mesh" });
+        if (id) added++;
       }
-      const label = getRoiMaskMeta(segmentationId)?.label;
-      const id = addRoiObject(lv, { name: label ? `${label}` : undefined });
-      if (!id) setStatus(t("scene3d.error"));
+      if (added === 0) setStatus(t("scene3d.error"));
     });
   };
 
   // 他ウィンドウのマスクを取り込む（`value` は remoteMasks の index）。
+  // マスク内のセグメントごとに独立した SceneObject を作成する。
   const onAddRoiFromRemoteMask = (value: string) => {
     const idx = Number(value);
     const rm = remoteMasks[idx];
@@ -219,13 +245,25 @@ export function SceneObjectPanel({
         return;
       }
       const frames = await requestRemoteMaskFrames(rm.windowId, rm.segmentationId);
-      const lv = frames ? framesToLabelVolume(frames, geom) : null;
-      if (!lv) {
+      if (!frames) {
         setStatus(t("scene3d.remoteMaskFailed"));
         return;
       }
-      const id = addRoiObject(lv, { name: rm.label });
-      if (!id) setStatus(t("scene3d.error"));
+      let added = 0;
+      for (const seg of frames.segments) {
+        const lv = framesToLabelVolume(frames, geom, seg.number);
+        if (!lv) continue;
+        const color: [number, number, number] | undefined = seg.color
+          ? [seg.color[0] / 255, seg.color[1] / 255, seg.color[2] / 255]
+          : undefined;
+        const id = addRoiObject(lv, {
+          name: seg.label || seg.description || undefined,
+          color,
+          volumeFrom: "mesh",
+        });
+        if (id) added++;
+      }
+      if (added === 0) setStatus(t("scene3d.remoteMaskFailed"));
     });
   };
 

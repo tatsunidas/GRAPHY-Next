@@ -311,7 +311,11 @@ export function extractMaskFrames(segmentationId: string): MaskFramesInput | nul
  * 直接組み立てる。frame の IPP を `geom` のボクセル格子上へ投影し最近傍スライスへ書き込む
  * （面内解像度・向きが一致している前提。ウィンドウ間マスク同期 `maskBridge.ts` から使う）。
  */
-export function framesToLabelVolume(input: MaskFramesInput, geom: VolumeGeom): LabelVolume | null {
+export function framesToLabelVolume(
+  input: MaskFramesInput,
+  geom: VolumeGeom,
+  segmentIndex?: number,
+): LabelVolume | null {
   const [nx, ny, nz] = geom.dims;
   if (nx !== input.columns || ny !== input.rows) return null; // 面内解像度不一致
   const frameSize = input.rows * input.columns;
@@ -319,6 +323,7 @@ export function framesToLabelVolume(input: MaskFramesInput, geom: VolumeGeom): L
   let any = false;
   for (const seg of input.segments) {
     const segIndex = seg.number > 0 ? seg.number : 1;
+    if (segmentIndex != null && segIndex !== segmentIndex) continue;
     for (const fr of seg.frames) {
       if (!fr.imagePositionPatient) continue;
       const idx = worldToVoxel(geom, fr.imagePositionPatient);
@@ -329,9 +334,10 @@ export function framesToLabelVolume(input: MaskFramesInput, geom: VolumeGeom): L
       const plane = base64ToU8(fr.mask);
       if (plane.length !== frameSize) continue;
       const base = k * nx * ny;
+      const writeValue = segmentIndex != null ? 1 : segIndex;
       for (let i = 0; i < frameSize; i++) {
         if (plane[i] !== 0) {
-          data[base + i] = segIndex;
+          data[base + i] = writeValue;
           any = true;
         }
       }
