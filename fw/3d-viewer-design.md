@@ -460,10 +460,13 @@ FreeFormRoi3D マスク（実空間 vtkImageData labelmap）
   - **STL 入出力**: import（STL binary/ascii 自動判定・OBJ, `SceneObjectPanel` の「STL/OBJ 読込」）／export（選択オブジェクト→binary STL DL）。頂点は患者 LPS mm。
   - P3 既知の制約/TODO: 実機（GPU/DICOM）目視未実施。ROI↔メッシュ往復・STL 往復の数値検証（体積・座標一致）未実施。
     embedded の断面キャッピングは `vtkClipClosedSurface` 化（2026-07-16）で解消。
-    ORTHO モードでの ortho スライス壁カット（旧 `uIsEmbedded`）— 実装済み（2026-07-16）: Ortho 表示中は
-    embedded オブジェクトをクリップ箱ではなく現在の3直交スライス位置（I/J/K）でカットする
-    （`scene3d.setOrthoSlice`/`computeOrthoClipPlanes`、`Viewer3DScreen` のモード/スライス位置 useEffect から通知）。
-    クリップ箱ベースの断面だとスライス面から浮いて見える問題への対策。
+    ORTHO モードでの ortho スライス壁カット（旧 `uIsEmbedded`）— 実装済み（2026-07-16、同日中に八分区画カット→
+    薄いスラブ断面合成へ再修正）: Ortho 表示中は embedded オブジェクトをクリップ箱ではなく現在の3直交
+    スライス位置（I/J/K）でカットする（`scene3d.setOrthoSlice`、`Viewer3DScreen` のモード/スライス位置 useEffect
+    から通知）。初版は1軸1枚・計3枚のクリップ平面で八分区画を残す方式だったが、厚みのある塊が残って
+    依然「浮いて」見えたため、`buildOrthoEmbeddedGeometry` で3軸それぞれ薄いスラブ（`vtkClipClosedSurface`、
+    `ORTHO_SLAB_HALF_THICKNESS`）にクリップし `vtkAppendPolyData` で合成する方式に変更。各軸の断面が
+    スライス面ちょうどの薄い断片になるため、3直交スライスに重なって表示される。
     生成 3D ROI の Cornerstone SEG 逆書き出し・2D 連携（`roiMaskStore`/`segExport`）、ブール/連結成分（`roiBooleanOps`）連携も後続。
 - **P4 Cinematic v1（lit VR → シネマティック散乱）** — ✅ 実装（tsc/vite green・実機未検証, 2026-07-02）。
   当初の Phong lit-VR（`setShade`＋ambient/diffuse/specular＋勾配不透明度）は平坦で、添付参考画像（KaloLumen 風の
