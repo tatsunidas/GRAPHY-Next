@@ -13,7 +13,7 @@
 
     <groupId>com.vis</groupId>
     <artifactId>graphy-next-backend</artifactId>
-    <version>0.1.6</version>
+    <version>0.1.7</version>
     <name>GRAPHY-Next Backend</name>
     <description>GRAPHY-Next backend (Spring Boot) — web / standalone profiles</description>
 
