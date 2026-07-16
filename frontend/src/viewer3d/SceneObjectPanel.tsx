@@ -19,7 +19,9 @@ import { buildLabelVolumeFromSegmentation, type VolumeGeom } from "../viewer/lab
 import { exportStlBinary, importObj, importStl } from "../viewer/mesh3d";
 import { listSpheres3D, subscribeSphere3D } from "../viewer/sphere3dStore";
 import { framesToLabelVolume } from "../viewer/maskFrames";
+import { rtStructRoiToLabelVolume } from "../viewer/rtstructToLabelVolume";
 import { requestRemoteMasks, requestRemoteMaskFrames, type RemoteMask } from "../viewer/maskBridge";
+import { fetchSeries, readDicomSeg, readDicomRtStruct } from "../api";
 import {
   addMeshObject,
   addRoiObject,
@@ -267,6 +269,53 @@ export function SceneObjectPanel({
     });
   };
 
+  // 表示中スタディの SEG/RTSTRUCT シリーズをサーバ（dcm4chee 経由）からまとめて取り込む。
+  // 他ウィンドウが開いている必要がある BroadcastChannel 同期（remoteMasks）と異なり、永続化済みの
+  // SEG/RTSTRUCT があれば 3D Viewer 単体で取得できる。
+  const onFetchServerMasks = () => {
+    if (!studyUid || !geom) return;
+    void withBusy(async () => {
+      let added = 0;
+      const seriesList = await fetchSeries(studyUid).catch(() => []);
+
+      const segSeries = seriesList.filter((s) => (s.modality ?? "").toUpperCase() === "SEG");
+      for (const s of segSeries) {
+        const result = await readDicomSeg(studyUid, s.seriesInstanceUid).catch(() => null);
+        if (!result?.segments.length) continue;
+        for (const seg of result.segments) {
+          const lv = framesToLabelVolume(result, geom, seg.number);
+          if (!lv) continue;
+          const color: [number, number, number] | undefined = seg.color
+            ? [seg.color[0] / 255, seg.color[1] / 255, seg.color[2] / 255]
+            : undefined;
+          const id = addRoiObject(lv, {
+            name: seg.label || seg.description || undefined,
+            color,
+            volumeFrom: "mesh",
+          });
+          if (id) added++;
+        }
+      }
+
+      const rtSeries = seriesList.filter((s) => (s.modality ?? "").toUpperCase() === "RTSTRUCT");
+      for (const s of rtSeries) {
+        const rois = await readDicomRtStruct(studyUid, s.seriesInstanceUid).catch(() => []);
+        for (const roi of rois) {
+          const lv = rtStructRoiToLabelVolume(roi, geom);
+          if (!lv) continue;
+          const color: [number, number, number] | undefined =
+            roi.color && roi.color.length >= 3
+              ? [roi.color[0] / 255, roi.color[1] / 255, roi.color[2] / 255]
+              : undefined;
+          const id = addRoiObject(lv, { name: roi.name, color, volumeFrom: "mesh" });
+          if (id) added++;
+        }
+      }
+
+      setStatus(added > 0 ? t("scene3d.serverFetchDone", { count: String(added) }) : t("scene3d.serverFetchEmpty"));
+    });
+  };
+
   const onAddSphereObject = (sphereId: string) => {
     if (!sphereId) return;
     const s = spheres.find((v) => v.id === sphereId);
@@ -438,6 +487,11 @@ export function SceneObjectPanel({
             </option>
           ))}
         </select>
+        {studyUid && geom && (
+          <button style={btn} disabled={busy} title={t("scene3d.fetchServerMasks.hint")} onClick={onFetchServerMasks}>
+            {t("scene3d.fetchServerMasks")}
+          </button>
+        )}
         {!isDemo && (
           <>
             <button style={btn} disabled={busy} onClick={() => fileRef.current?.click()}>
@@ -530,7 +584,7 @@ export function SceneObjectPanel({
               title={t("scene3d.centerline.hint")}
               onClick={onExtractCenterline}
             >
-              {t("scene3d.centerline")}
+              {t("scene3d.extractCenterline")}
             </button>
           )}
           {onAnalyzeCenterline && (
