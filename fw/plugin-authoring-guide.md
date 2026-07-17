@@ -1,6 +1,6 @@
 # GRAPHY-Next プラグイン作成ガイド
 
-> 作成日: 2026-07-02
+> 作成日: 2026-07-02（更新: 2026-07-17 — §4-1 格納先ディレクトリを実装（resolveDataDir）に合わせて訂正）
 > 対象: プラグイン開発者
 > 関連: [`plugin-architecture.md`](plugin-architecture.md)（設計・全体像）
 
@@ -193,22 +193,36 @@ export function activate(host) {
 ### 4-1. 格納先ディレクトリ
 
 プラグインフォルダを `graphy.plugins.dir` の下に置く（既定 `./plugins`、`application.yml` / 引数 / 環境で変更可）。
+このパスは backend の **CWD からの相対パス**として解決される点に注意（`PluginProperties`、既定 `./plugins`）。
 
-- **standalone（Electron）**: AppImage 等は読み取り専用のため、**ユーザー書込可能な場所**を使う。
-  推奨は `~/.graphy-next/plugins`。Electron 起動時に backend へ `--graphy.plugins.dir=<path>` として渡す想定。
+- **standalone（Electron・インストール済みアプリ）**: `desktop/main.js` の `resolveDataDir()` が、
+  パッケージ版では backend の CWD を **OS 標準のユーザーデータ領域**（`app.getPath("appData")` 直下の
+  `GRAPHY-Next`）に固定する。`--graphy.plugins.dir` 起動引数は**渡していない**ため、実際の格納先は
+  常にこの固定パス配下の `plugins/` になる（Help＞Uninstall ダイアログに出る「保存データ」パスと同一）。
+
+  | OS | 実際の格納先 |
+  |---|---|
+  | Windows | `%APPDATA%\GRAPHY-Next\plugins`（実体は `C:\Users\<ユーザー名>\AppData\Roaming\GRAPHY-Next\plugins`） |
+  | macOS | `~/Library/Application Support/GRAPHY-Next/plugins` |
+  | Linux（AppImage） | `~/.config/GRAPHY-Next/plugins` |
+
+  開発時（`npm run dev-desktop` 等、未パッケージ）は `resolveDataDir()` が `process.cwd()`（通常 `desktop/`）を
+  そのまま使うため、`desktop/plugins/` が格納先になる。
+
 - **web（共有サーバー）**: 運営（サーバー管理者）が審査済みプラグインを配備するフォルダを指す。
   エンドユーザーによるアップロードは提供しない。
 
-配置例:
+配置例（Windows・インストール済みアプリ）:
 
 ```
-~/.graphy-next/plugins/
-└── sample-hello/
+%APPDATA%\GRAPHY-Next\plugins\
+└── sample-hello\
     ├── plugin.json
     └── ui.js
 ```
 
-設定で明示する場合（`application.yml` またはプロファイル別 yml）:
+`graphy.plugins.dir` を明示的に変えたい場合（standalone を独自ビルドで動かす場合など）は
+`application.yml` またはプロファイル別 yml で:
 
 ```yaml
 graphy:
@@ -217,7 +231,7 @@ graphy:
     dir: /home/me/.graphy-next/plugins
 ```
 
-または起動引数:
+または起動引数（`desktop/main.js` は現状これを渡さないため、backend を直接起動する場合のみ有効）:
 
 ```bash
 java -jar graphy-next-backend.jar --graphy.plugins.dir=/home/me/.graphy-next/plugins
@@ -225,11 +239,13 @@ java -jar graphy-next-backend.jar --graphy.plugins.dir=/home/me/.graphy-next/plu
 
 ### 4-2. 反映
 
-- マニフェスト一覧は `GET /api/plugins` を叩くたびにディレクトリを走査するので、**アプリ（ビューア画面）を
-  再読み込み**すれば新しいプラグインがメニューに出る（フロントは起動時に一覧を取得しキャッシュするため、
-  追加後はリロードが必要）。
-- backend プロセスの**再起動は不要**（走査は都度実行）。ただし同一 `id` の JAR を差し替えた場合は、
-  クラスローダをキャッシュしている都合上 backend の再起動が確実。
+- マニフェスト一覧は `GET /api/plugins` を叩くたびにディレクトリを走査するので、backend 自体の
+  **再起動は不要**（走査は都度実行）。
+- ただしフロントは起動時に一覧を取得してキャッシュするため、**画面のリロードが必要**。インストール済み
+  パッケージ版にはリロード用の UI 操作（開発者ツール等）が用意されていないため、実務上は
+  **GRAPHY-Next を完全に終了してから再起動する**のが確実な反映方法。
+- 同一 `id` の JAR を差し替えた場合は、クラスローダをキャッシュしている都合上 backend の再起動
+  （＝アプリの完全な終了→再起動）が確実に必要。
 
 ---
 
