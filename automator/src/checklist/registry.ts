@@ -5,10 +5,12 @@ import { mainscreenItems } from "./items/shared/mainscreen.js";
 import { viewer2dCoreItems } from "./items/shared/viewer2dCore.js";
 import { lutItems } from "./items/shared/lut.js";
 import { tagToolsItems } from "./items/shared/tagTools.js";
+import { viewer2dInteractionItems } from "./items/shared/viewer2dInteraction.js";
 import { importExportItems } from "./items/desktop/importExport.js";
 import { viewer2dMenuToolbarItems } from "./items/desktop/viewer2dMenuToolbar.js";
 import { dbAdminNotifyItems } from "./items/desktop/dbAdminNotify.js";
 import { seriesExtractorItems } from "./items/desktop/seriesExtractor.js";
+import { anonymizerItems } from "./items/desktop/anonymizer.js";
 
 /**
  * 実装済みの checklist item 一覧（他大項目は automator/checklist/<mode>/*.md のスケルトンのみで未実装）。
@@ -21,11 +23,13 @@ export const ALL_ITEMS: ChecklistItem[] = [
   ...viewer2dCoreItems,
   ...lutItems,
   ...tagToolsItems,
+  ...viewer2dInteractionItems,
   // desktop 専用
   ...importExportItems,
   ...viewer2dMenuToolbarItems,
   ...dbAdminNotifyItems,
   ...seriesExtractorItems,
+  ...anonymizerItems,
   // web 専用（未実装）
 ];
 

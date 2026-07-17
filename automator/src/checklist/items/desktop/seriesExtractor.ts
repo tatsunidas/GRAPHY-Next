@@ -3,25 +3,7 @@ import path from "node:path";
 import type { ChecklistItem } from "../../types.js";
 import { selectFirstStudy } from "../shared/helpers.js";
 import { AUTOMATOR_ROOT } from "../../../fixtures/manifest.js";
-
-/** destDir 配下（サブフォルダ含む）に少なくとも1ファイル現れるまで待つ（コピーは非同期で進む）。 */
-async function waitForAnyFile(destDir: string, timeoutMs = 10_000): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  const hasFile = (dir: string): boolean => {
-    if (!fs.existsSync(dir)) return false;
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name);
-      if (entry.isFile()) return true;
-      if (entry.isDirectory() && hasFile(full)) return true;
-    }
-    return false;
-  };
-  while (Date.now() < deadline) {
-    if (hasFile(destDir)) return true;
-    await new Promise((r) => setTimeout(r, 300));
-  }
-  return hasFile(destDir);
-}
+import { waitForAnyFile } from "../../../common/waitForFile.js";
 
 export const seriesExtractorItems: ChecklistItem[] = [
   {
