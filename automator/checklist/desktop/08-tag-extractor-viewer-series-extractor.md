@@ -23,14 +23,14 @@
 - requiresHuman: (未定義。実装時に判定方式を決める)
 
 <!-- AUTOMATOR:BEGIN 08-tag-extractor-viewer-series-extractor.item-01 -->
-#### 2026-07-17 (run 20260717-134453-875wpu)
+#### 2026-07-17 (run 20260717-150940-2p2gef)
 1. MainScreen の初期マウントを確認
 2. 無条件検索でスタディ一覧を取得
 3. 先頭のスタディ行をクリック
 4. TagExtractorダイアログを開く
 5. PatientIDタグをプリセットから追加
-6. 抽出結果テーブルの行数を確認 `{"rowCount":3}`
-Result: PASS — PatientIDタグで抽出、3行取得
+6. 抽出結果テーブルの行数を確認 `{"rowCount":12}`
+Result: PASS — PatientIDタグで抽出、12行取得
 <!-- AUTOMATOR:END 08-tag-extractor-viewer-series-extractor.item-01 -->
 
 ### 2. TagViewer: 現在画像のDICOM属性ダンプ表示（SQネスト・検索ハイライト）
