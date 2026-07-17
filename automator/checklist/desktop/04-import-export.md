@@ -24,7 +24,7 @@
 - requiresHuman: (未定義。実装時に判定方式を決める)
 
 <!-- AUTOMATOR:BEGIN 04-import-export.item-01 -->
-#### 2026-07-17 (run 20260717-145209-qbfuec)
+#### 2026-07-17 (run 20260717-165711-5mxoed)
 1. POST /api/import/paths で ct-basic フィクスチャを投入 `{"result":{"imported":110,"skipped":0,"failed":0,"errors":[]}}`
 Result: PASS — imported=110
 <!-- AUTOMATOR:END 04-import-export.item-01 -->

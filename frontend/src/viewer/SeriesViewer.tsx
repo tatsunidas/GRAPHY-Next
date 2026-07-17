@@ -527,8 +527,8 @@ export function SeriesViewer({
   );
 
   // 各次元スライダー横のシネ再生ボタン（▶/⏸）。
-  const cinePlayBtn = (on: boolean, onToggle: () => void, disabled: boolean) => (
-    <button onClick={onToggle} disabled={disabled} style={btn} title={t("series.cine")}>
+  const cinePlayBtn = (on: boolean, onToggle: () => void, disabled: boolean, testId?: string) => (
+    <button data-testid={testId} onClick={onToggle} disabled={disabled} style={btn} title={t("series.cine")}>
       {on ? "⏸" : "▶"}
     </button>
   );
@@ -551,7 +551,7 @@ export function SeriesViewer({
         <div style={gridScroll}>
           <div style={{ display: "grid", gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))`, gap: 6 }}>
             {zStack.map((id, i) => (
-              <div key={id} style={cellBox}>
+              <div key={id} data-testid="grid-cell" style={cellBox}>
                 <div style={cellCaption}>{i + 1}</div>
                 <Viewer2D
                   imageIds={[id]}
@@ -596,7 +596,8 @@ export function SeriesViewer({
               idx={zc}
               count={activeCount}
               onChange={setZ}
-              trailing={cinePlayBtn(playZ, () => setPlayZ((p) => !p), activeCount <= 1)}
+              trailing={cinePlayBtn(playZ, () => setPlayZ((p) => !p), activeCount <= 1, "cine-play-z")}
+              testId="dim-slider-z"
             />
             {layout.nC > 1 && (
               <DimSlider
@@ -649,11 +650,12 @@ export function SeriesViewer({
 
         {/* オーバーレイ On/Off。列数ドロップダウン（Reset=SliderView, 1〜7=GridView）。 */}
         <div style={row}>
-          <Check label={t("series.ov.text")} checked={overlays.text} onChange={() => toggle("text")} />
-          <Check label={t("series.ov.caliper")} checked={overlays.caliper} onChange={() => toggle("caliper")} />
-          <Check label={t("series.ov.orientation")} checked={overlays.orientation} onChange={() => toggle("orientation")} />
+          <Check testId="overlay-check-text" label={t("series.ov.text")} checked={overlays.text} onChange={() => toggle("text")} />
+          <Check testId="overlay-check-caliper" label={t("series.ov.caliper")} checked={overlays.caliper} onChange={() => toggle("caliper")} />
+          <Check testId="overlay-check-orientation" label={t("series.ov.orientation")} checked={overlays.orientation} onChange={() => toggle("orientation")} />
           <Check label={t("series.ov.roi")} checked={overlays.roi} onChange={() => toggle("roi")} disabled />
           <select
+            data-testid="grid-columns-select"
             value={gridOn ? gridCols : 0}
             disabled={gridDisabled}
             onChange={(e) => switchMode(Number(e.target.value))}
@@ -678,6 +680,7 @@ function DimSlider({
   count,
   onChange,
   trailing,
+  testId,
 }: {
   label: string;
   dim?: string | null;
@@ -685,6 +688,7 @@ function DimSlider({
   count: number;
   onChange: (v: number) => void;
   trailing?: React.ReactNode;
+  testId?: string;
 }) {
   return (
     <div style={row}>
@@ -693,6 +697,7 @@ function DimSlider({
         {dim ? ` (${dim})` : ""}
       </span>
       <input
+        data-testid={testId}
         type="range"
         min={0}
         max={Math.max(0, count - 1)}
@@ -711,15 +716,17 @@ function Check({
   checked,
   onChange,
   disabled,
+  testId,
 }: {
   label: string;
   checked: boolean;
   onChange: () => void;
   disabled?: boolean;
+  testId?: string;
 }) {
   return (
     <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: disabled ? "#9aa6b2" : "#33404d" }}>
-      <input type="checkbox" checked={checked} onChange={onChange} disabled={disabled} />
+      <input data-testid={testId} type="checkbox" checked={checked} onChange={onChange} disabled={disabled} />
       {label}
     </label>
   );
