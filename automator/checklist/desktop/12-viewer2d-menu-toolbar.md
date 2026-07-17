@@ -11,9 +11,9 @@
 
 | # | 小項目 | 状態 | 最終実行 |
 |---|---|---|---|
-| 1 | Layoutサブメニュー（プリセット＋任意行×列） | 未着手 | |
+| 1 | Layoutサブメニュー（プリセット＋任意行×列） | 自動PASS | 2026-07-17 |
 | 2 | Sort（InstanceNumber/IPP昇降順、動画IODはブロック） | 未着手 | |
-| 3 | W/Lプリセット（脳/肺/縦隔/骨/腹部等）の適用・編集/追加/削除・永続化 | 未着手 | |
+| 3 | W/Lプリセット（脳/肺/縦隔/骨/腹部等）の適用・編集/追加/削除・永続化 | 自動PASS | 2026-07-17 |
 | 4 | Histogram（Slice/Stack切替、ビン指定、ビンクリックでボクセルハイライト） | 未着手 | |
 | 5 | コントラスト調整（W/L）ダイアログ（プロット・スライダー・Auto/Reset） | 未着手 | |
 | 6 | ImageJブリッジ（HyperStack表示、カーソル輝度値・HU値が正しい） | 未着手 | |
@@ -26,7 +26,17 @@
 - requiresHuman: (未定義。実装時に判定方式を決める)
 
 <!-- AUTOMATOR:BEGIN 12-viewer2d-menu-toolbar.item-01 -->
-（未実装 — automator run で自動記録される手順ログがここに入る）
+#### 2026-07-17 (run 20260717-113937-u1gh0b)
+1. MainScreen の初期マウントを確認
+2. 無条件検索でスタディ一覧を取得
+3. 先頭のスタディ行をクリック
+4. 先頭のシリーズ行をクリック
+5. series-viewer-root の表示を確認
+6. ツールバーの2Dボタンから別ウィンドウを開く
+7. 2D Viewerウィンドウにシリーズがロードされたことを確認
+8. View > Layout > 2 × 2 を選択
+9. viewer2d-tile-grid の data-grid-rows/cols を確認 `{"rows":"2","cols":"2"}`
+Result: PASS — 2×2レイアウトを適用
 <!-- AUTOMATOR:END 12-viewer2d-menu-toolbar.item-01 -->
 
 ### 2. Sort（InstanceNumber/IPP昇降順、動画IODはブロック）
@@ -44,7 +54,17 @@
 - requiresHuman: (未定義。実装時に判定方式を決める)
 
 <!-- AUTOMATOR:BEGIN 12-viewer2d-menu-toolbar.item-03 -->
-（未実装 — automator run で自動記録される手順ログがここに入る）
+#### 2026-07-17 (run 20260717-114045-4lyhvw)
+1. MainScreen の初期マウントを確認
+2. 無条件検索でスタディ一覧を取得
+3. 先頭のスタディ行をクリック
+4. 先頭のシリーズ行をクリック
+5. series-viewer-root の表示を確認
+6. ツールバーの2Dボタンから別ウィンドウを開く
+7. 2D Viewerウィンドウにシリーズがロードされたことを確認
+8. Image > W/Lプリセット > 肺 を選択（center=-600, width=1500）
+9. window.__graphyDebug.getViewportProperties() を評価 `{"props":[{"viewportId":"graphy-vp-0","colormapName":null,"windowLevel":{"center":-600,"width":1500}}]}`
+Result: PASS — W/Lプリセット「肺」を適用
 <!-- AUTOMATOR:END 12-viewer2d-menu-toolbar.item-03 -->
 
 ### 4. Histogram（Slice/Stack切替、ビン指定、ビンクリックでボクセルハイライト）

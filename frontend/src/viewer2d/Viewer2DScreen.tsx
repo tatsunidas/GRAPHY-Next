@@ -930,6 +930,9 @@ function TileGrid({
       <LevelSetsDialog />
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
       <div
+        data-testid="viewer2d-tile-grid"
+        data-grid-rows={rows}
+        data-grid-cols={cols}
         style={{
           display: "grid",
           gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
