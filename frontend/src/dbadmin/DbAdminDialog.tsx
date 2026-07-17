@@ -57,10 +57,10 @@ export function DbAdminDialog({
 
   return (
     <div style={overlay} onClick={onClose}>
-      <div style={dialog} onClick={(e) => e.stopPropagation()}>
+      <div data-testid="dbadmin-dialog" style={dialog} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
           <span style={{ fontWeight: 700 }}>{t("dbadmin.title")}</span>
-          <button style={closeBtn} onClick={onClose} aria-label={t("common.close")}>
+          <button data-testid="dialog-close-button" style={closeBtn} onClick={onClose} aria-label={t("common.close")}>
             ✕
           </button>
         </div>
