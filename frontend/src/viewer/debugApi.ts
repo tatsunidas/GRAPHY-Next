@@ -135,9 +135,39 @@ function getViewportGeometry(): ViewportGeometry[] {
   return out;
 }
 
+/** 各ビューポートの LUT(colormap)・W/L(voiRange) 適用状態。LUT/W-L系 checklist item の検証用。 */
+export interface ViewportProperties {
+  viewportId: string;
+  /** 適用中の colormap 名。未適用（既定グレースケール）なら null。 */
+  colormapName: string | null;
+  /** 適用中の window/level（voiRange から算出）。取得不可なら null。 */
+  windowLevel: { center: number; width: number } | null;
+}
+
+function getViewportProperties(): ViewportProperties[] {
+  const engine = getRenderingEngine(ENGINE_ID);
+  if (!engine) return [];
+  const out: ViewportProperties[] = [];
+  for (const vp of engine.getViewports()) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const props = (vp as any).getProperties?.() ?? {};
+    const range = props.voiRange as { lower: number; upper: number } | undefined;
+    out.push({
+      viewportId: vp.id,
+      colormapName: props.colormap?.name ?? null,
+      windowLevel: range ? { center: (range.lower + range.upper) / 2, width: range.upper - range.lower } : null,
+    });
+  }
+  return out;
+}
+
 declare global {
   interface Window {
-    __graphyDebug?: { getPixelStats: typeof getPixelStats; getViewportGeometry: typeof getViewportGeometry };
+    __graphyDebug?: {
+      getPixelStats: typeof getPixelStats;
+      getViewportGeometry: typeof getViewportGeometry;
+      getViewportProperties: typeof getViewportProperties;
+    };
   }
 }
 
@@ -146,6 +176,6 @@ let installed = false;
 /** 冪等: 何度呼んでも安全（SeriesViewer マウントの都度呼ばれる想定）。 */
 export function installDebugApi(): void {
   if (installed || !import.meta.env.DEV) return;
-  window.__graphyDebug = { getPixelStats, getViewportGeometry };
+  window.__graphyDebug = { getPixelStats, getViewportGeometry, getViewportProperties };
   installed = true;
 }

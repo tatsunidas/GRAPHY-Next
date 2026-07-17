@@ -11,7 +11,7 @@
 
 | # | 小項目 | 状態 | 最終実行 |
 |---|---|---|---|
-| 1 | ローカルDICOMファイル/フォルダのImportができる | 自動PASS | 2026-07-14 |
+| 1 | ローカルDICOMファイル/フォルダのImportができる | 自動PASS | 2026-07-17 |
 | 2 | Export: 患者→スタディ/シリーズ選択→ZIPダウンロード（DICOMDIR/README同梱オプション） | 未着手 | |
 | 3 | Export ZIPがWindows安全なフォルダ名・DICOMDIR整合で生成される | 未着手 | |
 | 4 | 2D Viewer Portable（媒体同梱ビューア）は未実装（トグルのみ存在）— 未実装であることの確認 | 未着手 | |
@@ -24,9 +24,9 @@
 - requiresHuman: (未定義。実装時に判定方式を決める)
 
 <!-- AUTOMATOR:BEGIN 04-import-export.item-01 -->
-#### 2026-07-14 (run 20260714-105230-yscczd)
-1. POST /api/import/paths で ct-basic フィクスチャを投入 `{"result":{"imported":50,"skipped":0,"failed":0,"errors":[]}}`
-Result: PASS — imported=50
+#### 2026-07-17 (run 20260717-101921-qzkfoy)
+1. POST /api/import/paths で ct-basic フィクスチャを投入 `{"result":{"imported":110,"skipped":0,"failed":0,"errors":[]}}`
+Result: PASS — imported=110
 <!-- AUTOMATOR:END 04-import-export.item-01 -->
 
 ### 2. Export: 患者→スタディ/シリーズ選択→ZIPダウンロード（DICOMDIR/README同梱オプション）

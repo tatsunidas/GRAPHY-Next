@@ -16,7 +16,7 @@
 | 3 | シリーズ統合（N→1、InstanceNumber再採番）ができる | 未着手 | |
 | 4 | シリーズ分割（1→N、手動群分け）ができる | 未着手 | |
 | 5 | 編集中に別ウィンドウ（2D Viewer）でポップアップ通知が出る | 未着手 | |
-| 6 | DBを初期化して空の状態にできる（automator用reset） | 自動PASS | 2026-07-14 |
+| 6 | DBを初期化して空の状態にできる（automator用reset） | 自動PASS | 2026-07-17 |
 
 ## 小項目詳細
 
@@ -71,10 +71,10 @@
 - requiresHuman: (未定義。実装時に判定方式を決める)
 
 <!-- AUTOMATOR:BEGIN 03-db-admin.item-06 -->
-#### 2026-07-14 (run 20260714-105227-orfe2i)
+#### 2026-07-17 (run 20260717-101824-27rewh)
 1. MainScreen の初期マウントを確認
-2. POST /api/automator/reset `{"before":{"deletedInstances":0,"deletedReports":0}}`
+2. POST /api/automator/reset `{"before":{"deletedInstances":110,"deletedReports":0}}`
 3. MainScreen をリロードし、再マウントを確認
 4. study-row-* の件数を確認 `{"count":0}`
-Result: PASS — reset結果: {"deletedInstances":0,"deletedReports":0}
+Result: PASS — reset結果: {"deletedInstances":110,"deletedReports":0}
 <!-- AUTOMATOR:END 03-db-admin.item-06 -->

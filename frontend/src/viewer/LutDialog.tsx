@@ -162,6 +162,7 @@ export function LutDialog({
       {/* ダイアログ本体 */}
       <div
         ref={dialogRef}
+        data-testid="lut-dialog"
         style={{
           background: "#1e2530",
           border: "1px solid #3a4252",
@@ -240,12 +241,14 @@ export function LutDialog({
           }}
         >
           <button
+            data-testid="lut-cancel-button"
             style={btnStyle}
             onClick={onClose}
           >
             {t("common.cancel")}
           </button>
           <button
+            data-testid="lut-apply-button"
             style={{ ...btnStyle, background: "#0b5cad", color: "#fff", borderColor: "#0b5cad" }}
             onClick={handleApply}
           >

@@ -3,6 +3,7 @@ import type { Mode } from "../driver/types.js";
 import { dbAdminItems } from "./items/shared/dbAdmin.js";
 import { mainscreenItems } from "./items/shared/mainscreen.js";
 import { viewer2dCoreItems } from "./items/shared/viewer2dCore.js";
+import { lutItems } from "./items/shared/lut.js";
 import { importExportItems } from "./items/desktop/importExport.js";
 
 /**
@@ -14,6 +15,7 @@ export const ALL_ITEMS: ChecklistItem[] = [
   ...dbAdminItems,
   ...mainscreenItems,
   ...viewer2dCoreItems,
+  ...lutItems,
   // desktop 専用
   ...importExportItems,
   // web 専用（未実装）
