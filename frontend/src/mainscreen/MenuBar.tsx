@@ -18,6 +18,8 @@ interface MenuItem {
   label: string;
   onClick: () => void;
   disabled?: boolean;
+  /** E2E検証(automator)用の安定セレクタ。翻訳テキストに依存させたくない項目にのみ付与する。 */
+  testId?: string;
 }
 
 export function MenuBar({
@@ -69,7 +71,7 @@ export function MenuBar({
       items: [
         { label: t("main.import.action"), onClick: onImport, disabled: !canImport },
         ...(isDemo ? [] : [{ label: t("main.toolbar.export"), onClick: () => onOpenTool("export") }]),
-        { label: t("main.toolbar.send"), onClick: () => onOpenTool("send") },
+        { label: t("main.toolbar.send"), onClick: () => onOpenTool("send"), testId: "menu-item-send" },
         ...(isDemo ? [] : [{ label: t("qr.title"), onClick: () => onOpenViewer("qr") }]),
         { label: t("main.toolbar.nonDicomImport"), onClick: () => onOpenTool("nonDicomImport") },
       ],
@@ -109,8 +111,8 @@ export function MenuBar({
       id: "system",
       label: t("main.menu.system"),
       items: [
-        { label: t("app.btn.settingsTitle"), onClick: onOpenSettings },
-        { label: t("app.btn.dbTitle"), onClick: onOpenDb, disabled: !isStandalone },
+        { label: t("app.btn.settingsTitle"), onClick: onOpenSettings, testId: "menu-item-settings" },
+        { label: t("app.btn.dbTitle"), onClick: onOpenDb, disabled: !isStandalone, testId: "menu-item-dbadmin" },
         ...(isDemo
           ? []
           : [
@@ -137,6 +139,7 @@ export function MenuBar({
       {menus.map((m) => (
         <div key={m.id} style={{ position: "relative" }}>
           <button
+            data-testid={`mainscreen-menu-${m.id}`}
             onClick={(e) => {
               e.stopPropagation();
               setOpen(open === m.id ? null : m.id);
@@ -150,6 +153,7 @@ export function MenuBar({
               {m.items.map((it) => (
                 <button
                   key={it.label}
+                  data-testid={it.testId}
                   disabled={it.disabled}
                   onClick={() => {
                     setOpen(null);
