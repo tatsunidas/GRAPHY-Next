@@ -164,6 +164,27 @@ make run-web
 > ルートで `npm run build` は禁止（Maven が走る）。フロントの型/ビルド確認は
 > `cd frontend && npx tsc --noEmit` / `npx vite build`。
 
+### Windows（PowerShell / コマンドプロンプト）から起動する場合
+
+`make` は GNU Make 前提、`bash scripts/*.sh` は bash 前提のため、素の Windows
+（WSL 無し）ではどちらも動かない。**デスクトップモードは `npm run dev-desktop` を使う**
+（`scripts\dev-desktop.bat` を呼ぶので Windows ネイティブに動く）:
+
+```
+npm run dev-desktop
+```
+
+これで自動的に: ① backend を Maven でビルド（初回は数分） → ② `frontend`/`desktop` の
+npm 依存が無ければインストール → ③ Vite dev server を `:5173` で起動 → ④
+`GRAPHY_DEV=1` で Electron を起動（DevTools 付き）、まで行われる。Electron
+ウィンドウを閉じると Vite サーバーも自動停止する。
+
+**前提**: JDK 21 / Maven（`mvn` が PATH にある）、Node.js 20+ / npm。`JAVA_HOME` が
+設定されていればそちらの java が優先される（未設定でも PATH 上の java にフォールバック）。
+
+Web モード開発（`npm run dev-web`）は `bash scripts/dev-web.sh` を呼ぶため、Git Bash
+（Git for Windows 同梱）等の bash 実行環境が別途必要。
+
 ## バージョン変更
 
 唯一のソースは `backend/pom.xml` の `<version>`。1 コマンドで全体（pom /
