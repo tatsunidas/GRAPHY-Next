@@ -214,9 +214,15 @@ DICOM PS3.15 Basic Application Confidentiality Profile の匿名化。GRAPHY
     ストリームを解析（Rows/Columns/NumberOfFrames/FrameTime/転送構文）し、**MP4 全体を 1 フラグメントとして
     encapsulated PixelData に格納**した Part-10 を書き出す（`writeHeader` で `OB,-1` → 空 BOT → 1 フラグメント
     → SequenceDelimitation）。SOPClass=Video Photographic Image, Modality=XC。jpg2dcm と同じ正攻法。
-  - **AVI / 非 H.264 MP4** は `ffmpeg`（`-c:v libx264 -profile:v high -level:v 4.1 -pix_fmt yuv420p -an
+  - **AVI / 非 H.264 MP4** は `ffmpeg`（`-c:v libx264 -profile:v high -level:v 4.1 -bf 0 -pix_fmt yuv420p -an
     -movflags +faststart`）で MP4 にトランスコードしてから上記でラップ。**ffmpeg 不在時は MP4(H.264) のみ
     取込可**、AVI 等は skip（メッセージに ffmpeg）。
+  - **フレーム順序バグ対策（`-bf 0`）**: 旧 GRAPHY(Java Swing) で、B-frame ありでエンコードした動画をフレーム
+    リーダーが PTS 並び替えせず逐次デコードしたため再生時にフレーム順が入れ替わる不具合があった（`92a5a96f`
+    「BUG Fix: Show mp4 frame position correctly.」で `-bf 0`＝B-frame 無効化により decode order =
+    presentation order を保証して解消）。GRAPHY-Next は現状 MP4 をピクセルデコードせず 1 フラグメントとして
+    丸ごとラップするだけなので同じ症状は起きないが、将来のビューア側フレーム順次デコード実装での再発を防ぐため
+    エンコード時点で同じ保証（`VideoConverter.transcodeCommand` に `-bf 0`）を先に入れてある。
   - **ffmpeg 同梱/解決**: `FfmpegLocator` が `nondicom.ffmpeg` / 環境変数 / jar 隣接の `../ffmpeg/<os-arch>/`
     （Electron `Resources/ffmpeg`）/ PATH の順に解決。OS 別バイナリの取得自動化（`scripts/fetch-ffmpeg.sh`,
     `make ffmpeg`）＋ electron-builder 同梱は **`fw/nondicom-ffmpeg.md`**（ライセンス注意も）。

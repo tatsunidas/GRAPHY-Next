@@ -116,14 +116,7 @@ public final class VideoConverter {
     /** AVI / 非対応 MP4 → H.264 High@L4.1 の MP4 へトランスコード（音声無し, faststart）。 */
     private static Path transcodeToMp4(Path input, String ffmpeg) throws IOException {
         Path out = Files.createTempFile("nondicom-transcode-", ".mp4");
-        List<String> cmd = List.of(
-                ffmpeg, "-y", "-i", input.toString(),
-                "-an",                       // 音声を除去（DICOM video は映像のみ扱い）
-                "-c:v", "libx264",
-                "-profile:v", "high", "-level:v", "4.1",
-                "-pix_fmt", "yuv420p",
-                "-movflags", "+faststart",
-                out.toString());
+        List<String> cmd = transcodeCommand(ffmpeg, input, out);
         try {
             Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
             String log0;
@@ -146,6 +139,27 @@ public final class VideoConverter {
             Files.deleteIfExists(out);
             throw new IOException("ffmpeg interrupted", e);
         }
+    }
+
+    /**
+     * トランスコード用 ffmpeg コマンドを組み立てる。
+     *
+     * <p>{@code -bf 0} で B-frame を無効化し、decode order = presentation order を保証する。旧 GRAPHY
+     * (Java Swing) では B-frame ありのエンコードに対しフレームリーダーが PTS 並び替えをせず逐次デコード
+     * していたため、再生時にフレーム順が入れ替わる不具合があった（{@code -bf 0} で解消）。GRAPHY-Next 側は
+     * 動画をピクセルデコードせず MP4 を丸ごと 1 フラグメントとして DICOM にラップするだけだが、同じ不具合を
+     * 将来のビューア実装（フレーム順次デコード）で再発させないよう、エンコード側で同じ保証を先に入れておく。
+     */
+    static List<String> transcodeCommand(String ffmpeg, Path input, Path out) {
+        return List.of(
+                ffmpeg, "-y", "-i", input.toString(),
+                "-an",                       // 音声を除去（DICOM video は映像のみ扱い）
+                "-c:v", "libx264",
+                "-profile:v", "high", "-level:v", "4.1",
+                "-bf", "0",                  // frame順序保証（旧 GRAPHY のフレーム順序バグ対策）
+                "-pix_fmt", "yuv420p",
+                "-movflags", "+faststart",
+                out.toString());
     }
 
     /** ffmpeg が利用可能か（`ffmpeg -version` が 0 で終了するか）。 */
