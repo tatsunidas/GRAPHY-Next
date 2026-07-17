@@ -51,9 +51,9 @@ export function Toolbar({
       <ToolButton iconFile={UI_ICON_FILES.send} icon="📡" label={t("main.toolbar.send")} onClick={() => onOpenTool("send")} />
       <ToolButton iconFile={UI_ICON_FILES.nonDicomImport} icon="🎞" label={t("main.toolbar.nonDicomImport")} onClick={() => onOpenTool("nonDicomImport")} />
       {!isDemo && <ToolButton iconFile={UI_ICON_FILES.anonymizer} icon="🕶" label={t("main.toolbar.anonymizer")} onClick={() => onOpenTool("anonymizer")} />}
-      <ToolButton iconFile={UI_ICON_FILES.tagExtractor} icon="🏷" label={t("main.toolbar.tagExtractor")} onClick={() => onOpenTool("tagExtractor")} />
-      <ToolButton iconFile={UI_ICON_FILES.tagViewer} icon="🔖" label={t("main.toolbar.tagViewer")} onClick={() => onOpenTool("tagViewer")} />
-      {!isDemo && <ToolButton iconFile={UI_ICON_FILES.seriesExtractor} icon="🧬" label={t("main.toolbar.seriesExtractor")} onClick={() => onOpenTool("seriesExtractor")} />}
+      <ToolButton testId="toolbar-tag-extractor-btn" iconFile={UI_ICON_FILES.tagExtractor} icon="🏷" label={t("main.toolbar.tagExtractor")} onClick={() => onOpenTool("tagExtractor")} />
+      <ToolButton testId="toolbar-tag-viewer-btn" iconFile={UI_ICON_FILES.tagViewer} icon="🔖" label={t("main.toolbar.tagViewer")} onClick={() => onOpenTool("tagViewer")} />
+      {!isDemo && <ToolButton testId="toolbar-series-extractor-btn" iconFile={UI_ICON_FILES.seriesExtractor} icon="🧬" label={t("main.toolbar.seriesExtractor")} onClick={() => onOpenTool("seriesExtractor")} />}
       <ToolButton icon="📝" label={t("main.toolbar.report")} onClick={() => onOpenTool("report")} />
       <ToolButton icon="🗂" label={t("main.toolbar.reportManager")} onClick={() => onOpenTool("reportManager")} />
       <ToolButton iconFile={UI_ICON_FILES.refresh} icon="🔄" label={t("main.toolbar.refresh")} onClick={onRefresh} />

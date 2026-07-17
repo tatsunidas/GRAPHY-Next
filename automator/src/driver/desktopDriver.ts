@@ -128,4 +128,11 @@ export class DesktopDriver implements Driver {
     await win.waitForLoadState("domcontentloaded");
     return win;
   }
+
+  async mockNativeDirectoryPicker(path: string): Promise<void> {
+    if (!this.electronApp) throw new Error("DesktopDriver.start() がまだ完了していません");
+    await this.electronApp.evaluate(({ dialog }, dirPath) => {
+      dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [dirPath] })) as typeof dialog.showOpenDialog;
+    }, path);
+  }
 }

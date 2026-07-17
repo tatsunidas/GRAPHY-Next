@@ -174,7 +174,7 @@ export function TagExtractorDialog({
 
   return (
     <div style={overlay} onClick={onClose}>
-      <div style={dialog} onClick={(e) => e.stopPropagation()}>
+      <div data-testid="tag-extractor-dialog" style={dialog} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
           <span style={{ fontWeight: 700 }}>{t("tagext.title")}</span>
           <button style={closeBtn} onClick={onClose}>✕</button>
@@ -210,7 +210,7 @@ export function TagExtractorDialog({
             <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
               <span style={{ fontSize: 11, color: "#8a98a6", alignSelf: "center" }}>{t("tagext.presets")}:</span>
               {PRESETS.map((h) => (
-                <button key={h} style={chip} onClick={() => addSingle(h)}>{dmap.get(h)?.keyword ?? ggggeeee(h)}</button>
+                <button key={h} data-testid={`tagext-preset-${h}`} style={chip} onClick={() => addSingle(h)}>{dmap.get(h)?.keyword ?? ggggeeee(h)}</button>
               ))}
             </div>
           </div>
@@ -247,7 +247,7 @@ export function TagExtractorDialog({
           {!result && <div style={{ color: "#8a98a6", fontSize: 12 }}>{t("tagext.notRun")}</div>}
           {result && (
             <div style={{ overflow: "auto", height: "100%" }}>
-              <table style={tableStyle}>
+              <table data-testid="tag-extractor-result-table" style={tableStyle}>
                 <thead>
                   <tr>{result.columns.map((c, i) => <th key={i} style={th}>{c}</th>)}</tr>
                 </thead>
@@ -275,8 +275,9 @@ export function TagExtractorDialog({
             {error && <span style={{ color: "#b00020" }}>{error}</span>}
           </div>
           <button style={btn} onClick={onClose}>{t("common.close")}</button>
-          <button style={btn} onClick={saveCsv} disabled={busy || paths.length === 0}>{t("tagext.saveCsv")}</button>
+          <button data-testid="tag-extractor-save-csv-btn" style={btn} onClick={saveCsv} disabled={busy || paths.length === 0}>{t("tagext.saveCsv")}</button>
           <button
+            data-testid="tag-extractor-run-btn"
             style={{ ...btn, background: canRun ? "#0b5cad" : "#9fb6cf", color: "#fff", border: "none", cursor: canRun ? "pointer" : "default" }}
             onClick={run}
             disabled={!canRun}
