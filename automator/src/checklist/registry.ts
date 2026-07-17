@@ -5,6 +5,7 @@ import { mainscreenItems } from "./items/shared/mainscreen.js";
 import { viewer2dCoreItems } from "./items/shared/viewer2dCore.js";
 import { lutItems } from "./items/shared/lut.js";
 import { importExportItems } from "./items/desktop/importExport.js";
+import { viewer2dMenuToolbarItems } from "./items/desktop/viewer2dMenuToolbar.js";
 
 /**
  * 実装済みの checklist item 一覧（他大項目は automator/checklist/<mode>/*.md のスケルトンのみで未実装）。
@@ -18,6 +19,7 @@ export const ALL_ITEMS: ChecklistItem[] = [
   ...lutItems,
   // desktop 専用
   ...importExportItems,
+  ...viewer2dMenuToolbarItems,
   // web 専用（未実装）
 ];
 

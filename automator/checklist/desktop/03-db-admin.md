@@ -71,7 +71,7 @@
 - requiresHuman: (未定義。実装時に判定方式を決める)
 
 <!-- AUTOMATOR:BEGIN 03-db-admin.item-06 -->
-#### 2026-07-17 (run 20260717-101824-27rewh)
+#### 2026-07-17 (run 20260717-114825-ssm4cq)
 1. MainScreen の初期マウントを確認
 2. POST /api/automator/reset `{"before":{"deletedInstances":110,"deletedReports":0}}`
 3. MainScreen をリロードし、再マウントを確認

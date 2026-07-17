@@ -28,6 +28,8 @@ interface MenuItem {
   separatorBefore?: boolean;
   /** ボタンではなく任意の UI を描画する（例: レイアウトの行×列入力）。close で親メニューを閉じる。 */
   render?: (close: () => void) => React.ReactNode;
+  /** E2E検証(automator)用の安定セレクタ。翻訳テキストに依存させたくない項目にのみ付与する。 */
+  testId?: string;
 }
 
 /** レイアウトのプリセット（行 × 列）。 */
@@ -91,17 +93,20 @@ export function Viewer2DMenuBar({
         { label: t("viewer2d.refLines.label"), onClick: actions.toggleRefLines, checked: refLines },
         {
           label: t("viewer2d.layout"),
+          testId: "viewer2d-menu-layout",
           submenu: [
             {
               label: t("viewer2d.layout.auto"),
               checked: gridRows === 0 && gridCols === 0,
               onClick: () => actions.setLayoutGrid(0, 0),
+              testId: "layout-preset-auto",
             },
             ...LAYOUT_PRESETS.map(([r, c], i) => ({
               label: `${r} × ${c}`,
               checked: gridRows === r && gridCols === c,
               onClick: () => actions.setLayoutGrid(r, c),
               separatorBefore: i === 0,
+              testId: `layout-preset-${r}x${c}`,
             })),
             {
               label: t("viewer2d.layout.custom"),
@@ -126,11 +131,13 @@ export function Viewer2DMenuBar({
       items: [
         {
           label: t("viewer2d.wl.preset"),
+          testId: "viewer2d-menu-wl-preset",
           submenu: [
-            { label: t("viewer2d.wl.default"), onClick: actions.resetWindow },
+            { label: t("viewer2d.wl.default"), onClick: actions.resetWindow, testId: "wl-preset-default" },
             ...presets.map((p) => ({
               label: presetLabel(p, t),
               onClick: () => actions.setWindowLevel(p.center, p.width),
+              testId: `wl-preset-${p.key}`,
             })),
             { label: t("viewer2d.wl.edit"), onClick: actions.editPresets, separatorBefore: true },
           ],
@@ -236,6 +243,7 @@ export function Viewer2DMenuBar({
       {visibleMenus.map((m) => (
         <div key={m.id} style={{ position: "relative" }}>
           <button
+            data-testid={`viewer2d-menu-${m.id}`}
             onClick={(e) => { e.stopPropagation(); setOpen(open === m.id ? null : m.id); }}
             style={{ ...menuBtn, background: open === m.id ? "#e6effa" : "transparent" }}
           >
@@ -271,6 +279,7 @@ function MenuRow({ it, onClose }: { it: MenuItem; onClose: () => void }) {
       <>
         {sep}
         <div
+          data-testid={it.testId}
           style={{ position: "relative" }}
           onMouseEnter={() => setHover(true)}
           onMouseLeave={() => setHover(false)}
@@ -293,7 +302,7 @@ function MenuRow({ it, onClose }: { it: MenuItem; onClose: () => void }) {
   return (
     <>
       {sep}
-      <button onClick={() => { onClose(); it.onClick?.(); }} style={item}>
+      <button data-testid={it.testId} onClick={() => { onClose(); it.onClick?.(); }} style={item}>
         {it.checked ? "✓ " : ""}{it.label}
       </button>
     </>

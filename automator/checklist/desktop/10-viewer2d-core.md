@@ -85,7 +85,7 @@ MainScreen でシリーズを選択 → インラインの SeriesViewer（`data-
 - requiresHuman: false（ピクセル存在は機械的に判定可能。画質そのものの良否は別途 requiresHuman な項目で扱う）
 
 <!-- AUTOMATOR:BEGIN 10-viewer2d-core.item-07 -->
-#### 2026-07-17 (run 20260717-102014-9h7yt9)
+#### 2026-07-17 (run 20260717-114610-5scxb0)
 1. MainScreen の初期マウントを確認
 2. 無条件検索でスタディ一覧を取得
 3. 先頭のスタディ行をクリック

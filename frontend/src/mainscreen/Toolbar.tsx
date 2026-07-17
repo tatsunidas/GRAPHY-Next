@@ -61,7 +61,7 @@ export function Toolbar({
       <span style={sep} />
       {/* ビューア */}
       {!isDemo && <ToolButton iconFile={UI_ICON_FILES.qr} icon="🔎" label={t("qr.title")} onClick={() => onOpenViewer("qr")} />}
-      <ToolButton iconFile={UI_ICON_FILES.viewer2d} icon="🖼" label={t("main.toolbar.viewer2d")} onClick={() => onOpenViewer("2d")} />
+      <ToolButton testId="viewer2d-toolbar-button" iconFile={UI_ICON_FILES.viewer2d} icon="🖼" label={t("main.toolbar.viewer2d")} onClick={() => onOpenViewer("2d")} />
       <ToolButton iconFile={UI_ICON_FILES.viewer3d} icon="🧊" label={t("main.toolbar.viewer3d")} onClick={() => onOpenViewer("3d")} />
       {/* MPR は適切なアイコンが無いためグリフ（十字）を維持 */}
       <ToolButton icon="➕" label={t("main.toolbar.mpr")} onClick={() => onOpenViewer("mpr")} />
@@ -79,6 +79,7 @@ function ToolButton({
   iconFile,
   label,
   onClick,
+  testId,
 }: {
   /** アイコン未整備ボタン用のフォールバック絵文字。 */
   icon: string;
@@ -86,9 +87,11 @@ function ToolButton({
   iconFile?: string;
   label: string;
   onClick: () => void;
+  /** E2E検証(automator)用の安定セレクタ。 */
+  testId?: string;
 }) {
   return (
-    <button onClick={onClick} title={label} style={btn}>
+    <button data-testid={testId} onClick={onClick} title={label} style={btn}>
       {iconFile ? <ToolIcon file={iconFile} size={16} /> : <span style={{ fontSize: 15 }}>{icon}</span>}
       <span style={{ fontSize: 12 }}>{label}</span>
     </button>
