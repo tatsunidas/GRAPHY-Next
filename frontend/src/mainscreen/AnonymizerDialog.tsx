@@ -178,10 +178,10 @@ export function AnonymizerDialog({
 
   return (
     <div style={overlay} onClick={onClose}>
-      <div style={dialog} onClick={(e) => e.stopPropagation()}>
+      <div data-testid="anonymizer-dialog" style={dialog} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
           <span style={{ fontWeight: 700 }}>{t("anon.title")}</span>
-          <button style={closeBtn} onClick={onClose}>✕</button>
+          <button data-testid="dialog-close-button" style={closeBtn} onClick={onClose}>✕</button>
         </div>
 
         <div style={body}>
@@ -215,7 +215,7 @@ export function AnonymizerDialog({
               <div style={grpTitle}>{t("anon.retain")}</div>
               {RETAIN_OPTS.map((o) => (
                 <label key={o} style={opt}>
-                  <input type="checkbox" checked={options.has(o)} onChange={() => toggleOpt(o)} />
+                  <input data-testid={`anon-opt-${o}`} type="checkbox" checked={options.has(o)} onChange={() => toggleOpt(o)} />
                   {t(`anon.opt.${o}`)}
                 </label>
               ))}
@@ -225,9 +225,9 @@ export function AnonymizerDialog({
           {/* 患者置換 + seed */}
           <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
             <span style={lbl}>{t("anon.newName")}</span>
-            <input style={inp} value={patName} onChange={(e) => setPatName(e.target.value)} />
+            <input data-testid="anon-new-name-input" style={inp} value={patName} onChange={(e) => setPatName(e.target.value)} />
             <span style={lbl}>{t("anon.newId")}</span>
-            <input style={inp} value={patId} onChange={(e) => setPatId(e.target.value)} />
+            <input data-testid="anon-new-id-input" style={inp} value={patId} onChange={(e) => setPatId(e.target.value)} />
             <span style={lbl}>{t("anon.seed")}</span>
             <input style={{ ...inp, width: 90 }} value={seed} onChange={(e) => setSeed(e.target.value)} placeholder="(任意)" />
           </div>
@@ -266,18 +266,18 @@ export function AnonymizerDialog({
 
         <div style={footer}>
           <div style={{ flex: 1, minWidth: 0, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {info && <span style={{ color: "#2e5d27" }}>{info}</span>}
-            {error && <span style={{ color: "#b00020" }}>{error}</span>}
+            {info && <span data-testid="anon-info-message" style={{ color: "#2e5d27" }}>{info}</span>}
+            {error && <span data-testid="anon-error-message" style={{ color: "#b00020" }}>{error}</span>}
             {isWeb && <span style={{ color: "#a85b00" }}>{t("anon.webNote")}</span>}
           </div>
           {!isWeb && (
             <>
-              <button style={btn} onClick={() => void pickDest()} title={destination ?? ""}>{t("anon.pickDest")}</button>
-              <button style={btn} onClick={() => void runCopy()} disabled={busy || !destination}>{t("anon.copy")}</button>
+              <button data-testid="anon-pick-dest-btn" style={btn} onClick={() => void pickDest()} title={destination ?? ""}>{t("anon.pickDest")}</button>
+              <button data-testid="anon-copy-btn" style={btn} onClick={() => void runCopy()} disabled={busy || !destination}>{t("anon.copy")}</button>
             </>
           )}
           <button style={btn} onClick={onClose}>{t("common.close")}</button>
-          <button style={{ ...btn, background: busy ? "#9fb6cf" : "#0b5cad", color: "#fff", border: "none" }}
+          <button data-testid="anon-zip-btn" style={{ ...btn, background: busy ? "#9fb6cf" : "#0b5cad", color: "#fff", border: "none" }}
             onClick={() => void runZip()} disabled={busy}>
             {busy ? t("anon.running") : t("anon.zip")}
           </button>
