@@ -240,12 +240,17 @@ function DbChangeNotice() {
   if (!notice) return null;
 
   return (
-    <div style={noticeBar}>
+    <div data-testid="db-change-notice" style={noticeBar}>
       <span>{t("dbnotice.message")}</span>
       <button style={noticeBtn} onClick={() => window.location.reload()}>
         {t("dbnotice.reload")}
       </button>
-      <button style={noticeDismiss} onClick={() => setNotice(null)} aria-label={t("common.close")}>
+      <button
+        data-testid="db-change-notice-dismiss"
+        style={noticeDismiss}
+        onClick={() => setNotice(null)}
+        aria-label={t("common.close")}
+      >
         ✕
       </button>
     </div>

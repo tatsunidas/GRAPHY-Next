@@ -11,10 +11,10 @@ export async function waitForMainScreenReady(page: Page, timeoutMs = 20_000): Pr
 }
 
 /**
- * MainScreen で無条件検索 → 先頭スタディ → 先頭シリーズの順にクリックし、series-viewer-root の
- * 表示（＝Viewer2D マウント）まで待つ。`10-viewer2d-core.item-07` で確立した手順の共通化。
+ * MainScreen で無条件検索 → 先頭スタディの行クリックまで行う（selectedStudy を確定させる）。
+ * Export/Send 等、スタディ選択を前提とするメニュー項目の検証で共通に使う。
  */
-export async function openFirstSeriesInViewer(page: Page, recorder: StepRecorder): Promise<void> {
+export async function selectFirstStudy(page: Page, recorder: StepRecorder): Promise<void> {
   await waitForMainScreenReady(page);
   recorder.step("MainScreen の初期マウントを確認");
 
@@ -29,6 +29,14 @@ export async function openFirstSeriesInViewer(page: Page, recorder: StepRecorder
   await studyRow.waitFor({ state: "visible", timeout: 15_000 });
   await studyRow.click();
   recorder.step("先頭のスタディ行をクリック");
+}
+
+/**
+ * MainScreen で無条件検索 → 先頭スタディ → 先頭シリーズの順にクリックし、series-viewer-root の
+ * 表示（＝Viewer2D マウント）まで待つ。`10-viewer2d-core.item-07` で確立した手順の共通化。
+ */
+export async function openFirstSeriesInViewer(page: Page, recorder: StepRecorder): Promise<void> {
+  await selectFirstStudy(page, recorder);
 
   const seriesRow = page.locator('[data-testid^="series-row-"]').first();
   await seriesRow.waitFor({ state: "visible", timeout: 15_000 });
