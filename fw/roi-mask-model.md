@@ -145,10 +145,10 @@ segmentation.segmentIndex.setActiveSegmentIndex(segmentationId, 1);
 1. 本モデル定義（本書）＋決定事項。 ✅
 2. **Mask 基盤**（`viewer/segmentation.ts`: `ensureStackSegmentation`=stack labelmap 生成・representation 追加・active segment）。 ✅
 3. **ROI ブラシ**（`BrushTool`, 2D。Tools メニューで ブラシ/消しゴム＝FILL/ERASE ストラテジ、ツールバーにブラシ径入力）。 ✅
-4. **2D/3D ワンド**（`RegionSegmentTool`/`RegionSegmentPlusTool`。2D→3D）。 ⬜
-5. **ROI・マスク マネージャ**（右サイドパネル常設）＋統計＋ `roiMaskStore.ts`（ZCT 紐付け・再適用）。 ⬜
-6. **DICOM SEG 書込**（backend。バイナリ管理・往復）。 ⬜
-7. **ImageJ ブリッジ**（backend ij.jar。別ドキュメントで設計後）。 ⬜
+4. **2D/3D ワンド**（`RegionSegmentTool`/`RegionSegmentPlusTool`。2D→3D）。Cornerstone 登録済み・**メニュー/ツールバー未結線**。 ⬜
+5. **ROI・マスク マネージャ**（右サイドパネル常設）＋統計＋ `roiMaskStore.ts`（ZCT 紐付け・再適用）。 ✅
+6. **DICOM SEG 書込**（backend。バイナリ管理・往復）。 ✅
+7. **ImageJ ブリッジ**（backend ij.jar。別ドキュメントで設計後）。 ✅
 
-> ⚠️ セグメンテーションは実機（描画・ペイント）での確認が必要（型/ビルドは green）。3 まで実装済み。
+> 詳細な進捗・実機確認状況は `fw/roi-mask-progress.md` 参照。残る未実装は 4（ワンドの結線）のみ。
 </content>

@@ -359,14 +359,11 @@ GRAPHY-Next/
    - 表示状態 Sync（camera/VOI Synchronizer 流用）→ **空間スライス同期(FoR/IPP, mm 位置)** →
      **Relative モード**（任意スライスから揃えて送る・Off 不要）。→ Phase 3 リファレンスライン(ReferenceLinesTool)。
 2. **C/T 切替（別スタック）をまたぐ transform/VOI 維持**（保存 presentation/voiRange の再適用）。
-3. **PET SUV**（PT scaling: Radiopharmaceutical/体重/時刻）。
-4. **ROI / Length ツール**（ROI 管理は SeriesViewer に集約。GRAPHY のセグメンテーション設計はメモリ参照）。
-5. MainScreen ツール群の実装（`mainscreen-tools.md`）: Export(+Burn CD/DVD)、NonDicomImporter、Anonymizer、
-   TagExtractor、SeriesExtractor。
-6. 3D Viewer / MPR Viewer / Slicer 画面（ツールバー/メニューのボタンは設置済み）。
-7. **web(wadors) 対応**: 画像 imageId・layout 導出（現状 standalone のみ。`imageId.ts` は web で throw）。
-8. Enhanced 多フレーム（DimensionIndexValues/StackID/InStackPositionNumber、wadouri `frame=`）。
-9. **Fusion 改善**:
+3. MainScreen ツール群の残課題（`mainscreen-tools.md`）: **Burn CD/DVD**（Export 本体・NonDicomImporter・
+   Anonymizer・TagExtractor・SeriesExtractor は実装・実機検証済み、`mainscreen-progress.md` 参照）。
+4. **web(wadors) 対応**: 画像 imageId・layout 導出（現状 standalone のみ。`imageId.ts` は web で throw）。
+5. Enhanced 多フレーム（DimensionIndexValues/StackID/InStackPositionNumber、wadouri `frame=`）。
+6. **Fusion 改善**:
    - `viewer.fusionOpacity` / `viewer.fusionLut` を DnD 起動時に自動適用（現状は Settings に保存するのみ）。
    - base 回転時の `rect` 厳密化（現状は軸並行 BBox。回転対応は CSS transform 行列が必要）。
    - カラー(RGB)前景の非空間フォールバック対応。

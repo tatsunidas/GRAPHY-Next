@@ -230,14 +230,14 @@ GRAPHY `Image > Segmentation`（New/Import ROIs/Save SEG/Import SEG/Stop）は**
 | GRAPHY | 機能 | Next 実装 | 状態 |
 |---|---|---|---|
 | Brush（Alt=消去） | 手描き塗り/消去 | `BrushTool` FILL/ERASE（対象を選べるよう拡張） | ✅→拡張 |
-| Wand 2D（ImageJ Wand flood fill） | スライス内領域成長 | `PaintFillTool`（トレランス） | ⬜ |
+| Wand 2D（ImageJ Wand flood fill） | スライス内領域成長 | `PaintFillTool`（トレランス） | ✅ |
 | Wand 3D（BFS region grow） | ボリューム領域成長 | `RegionSegmentPlusTool`/`growCut`（内部 on-demand volume） | 登録済→未結線 |
 | （しきい値ダイアログ相当） | しきい値塗り | `RectangleROIThresholdTool`＋`thresholdSegmentationByRange` | 登録済→未結線 |
 | （Scissors 相当なし） | 矩形/円/球で fill-erase | `Rectangle/Circle/SphereScissorsTool`（球は内部 on-demand volume） | 登録済→未結線 |
 | Import selected ROIs→mask | ROI ラスタ化→結合 | 既存 `roiToMask` を「アクティブ segment へ結合」に拡張・複数選択バッチ | ◐ |
-| New segmentation | 空マスク作成 | パネル「＋新規マスク」＝作成＋アクティブ | ⬜ |
+| New segmentation | 空マスク作成 | パネル「＋新規マスク」＝作成＋アクティブ | ✅ |
 | Stop editing | 編集終了 | **廃止**（◉解除） | — |
-| Save as DICOM SEG | SEG 書込 | backend SEG writer（読込 SegReader と対称） | ⬜ |
+| Save as DICOM SEG | SEG 書込 | backend SEG writer（読込 SegReader と対称） | ✅（`SegExportService`, `roi-mask-progress.md` S1） |
 | Import DICOM SEG（編集可） | SEG→編集可マスク | backend SEG→stack labelmap 復元 | ◐（表示のみ→編集化） |
 | ROI Manager: AND/OR/XOR/Split | ブール演算 | 既存 `roiBooleanOps`（segment 粒度へ） | ✅ |
 | Sphere3D（パラメトリック保持） | 球 ROI 保持→焼込 | 既存 `sphere3dStore`/`roi3d`（volume へ焼込に統一） | ✅→調整 |
