@@ -1415,6 +1415,7 @@ export function Viewer2D({
             <ToolIcon file={UI_ICON_FILES.invert} size={16} style={inverted ? ACTIVE_ICON_STYLE : undefined} />
           </button>
           <button
+            data-testid="viewer-lut-button"
             onClick={() => setShowLutDialog(true)}
             disabled={isColor}
             style={{ ...btn, ...(activeLutName ? infoBtnOn : null), ...(isColor ? btnDisabled : null) }}
