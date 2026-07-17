@@ -259,13 +259,14 @@ function PatientsTab({
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
         <input
+          data-testid="dbadmin-search-input"
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && reload(q)}
           placeholder={t("dbadmin.search.placeholder")}
           style={input}
         />
-        <button onClick={() => reload(q)} style={btn}>
+        <button data-testid="dbadmin-search-button" onClick={() => reload(q)} style={btn}>
           {t("common.search")}
         </button>
       </div>
@@ -283,7 +284,12 @@ function PatientsTab({
             return (
               <div key={p.patientId} style={{ borderBottom: "1px solid #eef1f4" }}>
                 <div style={rowFlex}>
-                  <button style={expander} onClick={() => void togglePatient(p.patientId)} aria-label="expand">
+                  <button
+                    data-testid={`dbadmin-patient-expand-${p.patientId}`}
+                    style={expander}
+                    onClick={() => void togglePatient(p.patientId)}
+                    aria-label="expand"
+                  >
                     {pExpanded ? "▾" : "▸"}
                   </button>
                   <span style={{ flex: 1 }}>
@@ -312,14 +318,23 @@ function PatientsTab({
                       return (
                         <div key={s.studyInstanceUid}>
                           <div style={rowFlex}>
-                            <button style={expander} onClick={() => void toggleStudy(s.studyInstanceUid)} aria-label="expand">
+                            <button
+                              data-testid={`dbadmin-study-expand-${s.studyInstanceUid}`}
+                              style={expander}
+                              onClick={() => void toggleStudy(s.studyInstanceUid)}
+                              aria-label="expand"
+                            >
                               {sExpanded ? "▾" : "▸"}
                             </button>
                             <span style={{ flex: 1 }}>
                               {studyLabel(s)}
                               <span style={muted}> ({s.numberOfInstances})</span>
                             </span>
-                            <button onClick={() => setEditingStudy({ study: s, patient: p })} style={smallBtn}>
+                            <button
+                              data-testid={`dbadmin-study-edit-${s.studyInstanceUid}`}
+                              onClick={() => setEditingStudy({ study: s, patient: p })}
+                              style={smallBtn}
+                            >
                               {t("dbadmin.edit.patientStudy")}
                             </button>
                             <button onClick={() => void onDeleteStudy(p, s)} style={{ ...smallBtn, color: "#b00020" }}>
@@ -340,6 +355,7 @@ function PatientsTab({
                                           {t("dbadmin.merge.selected", { count: sel.size })}
                                         </span>
                                         <button
+                                          data-testid={`dbadmin-merge-open-${s.studyInstanceUid}`}
                                           disabled={sel.size < 2}
                                           onClick={() =>
                                             setMerging({
@@ -360,6 +376,7 @@ function PatientsTab({
                                         <div key={se.seriesInstanceUid}>
                                           <div style={rowFlex}>
                                             <input
+                                              data-testid={`dbadmin-series-checkbox-${se.seriesInstanceUid}`}
                                               type="checkbox"
                                               checked={sel.has(se.seriesInstanceUid)}
                                               onChange={() => toggleSeriesSel(s.studyInstanceUid, se.seriesInstanceUid)}
@@ -376,11 +393,19 @@ function PatientsTab({
                                               <span style={muted}> ({se.numberOfInstances})</span>
                                             </span>
                                             {se.numberOfInstances >= 2 && (
-                                              <button onClick={() => setSplitting({ study: s, series: se })} style={smallBtn}>
+                                              <button
+                                                data-testid={`dbadmin-series-split-${se.seriesInstanceUid}`}
+                                                onClick={() => setSplitting({ study: s, series: se })}
+                                                style={smallBtn}
+                                              >
                                                 {t("dbadmin.split.button")}
                                               </button>
                                             )}
-                                            <button onClick={() => void onDeleteSeries(p, s, se)} style={{ ...smallBtn, color: "#b00020" }}>
+                                            <button
+                                              data-testid={`dbadmin-series-delete-${se.seriesInstanceUid}`}
+                                              onClick={() => void onDeleteSeries(p, s, se)}
+                                              style={{ ...smallBtn, color: "#b00020" }}
+                                            >
                                               {t("common.delete")}
                                             </button>
                                           </div>
@@ -538,12 +563,21 @@ function SplitSeriesForm({
 
   return (
     <div style={overlay} onClick={onClose}>
-      <div style={{ ...editBox, width: 540, maxHeight: "86vh", display: "flex", flexDirection: "column" }} onClick={(e) => e.stopPropagation()}>
+      <div
+        data-testid="dbadmin-split-form"
+        style={{ ...editBox, width: 540, maxHeight: "86vh", display: "flex", flexDirection: "column" }}
+        onClick={(e) => e.stopPropagation()}
+      >
         <h3 style={{ margin: "0 0 6px" }}>{t("dbadmin.split.title")}</h3>
         <p style={{ fontSize: 12, color: "#8a98a6", marginTop: 0 }}>{t("dbadmin.split.note")}</p>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
           <span style={{ fontSize: 13, color: "#445" }}>{t("dbadmin.split.groupCount")}</span>
-          <select value={groupCount} onChange={(e) => setGroupCount(Number(e.target.value))} style={{ ...input, width: 80 }}>
+          <select
+            data-testid="dbadmin-split-groupcount"
+            value={groupCount}
+            onChange={(e) => setGroupCount(Number(e.target.value))}
+            style={{ ...input, width: 80 }}
+          >
             {[2, 3, 4, 5].map((n) => (
               <option key={n} value={n}>
                 {n}
@@ -557,6 +591,7 @@ function SplitSeriesForm({
             <div key={i.sopInstanceUid} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 8px", borderBottom: "1px solid #f3f5f7", fontSize: 12 }}>
               <span style={{ flex: 1 }}>#{i.instanceNumber ?? "?"}</span>
               <select
+                data-testid={`dbadmin-split-assign-${i.sopInstanceUid}`}
                 value={assign.get(i.sopInstanceUid) ?? 0}
                 onChange={(e) => setGroup(i.sopInstanceUid, Number(e.target.value))}
                 style={{ ...input, width: 130 }}
@@ -576,7 +611,7 @@ function SplitSeriesForm({
           <button onClick={onClose} style={btn}>
             {t("common.cancel")}
           </button>
-          <button onClick={run} disabled={busy} style={{ ...btn, background: "#0b5cad", color: "#fff" }}>
+          <button data-testid="dbadmin-split-run" onClick={run} disabled={busy} style={{ ...btn, background: "#0b5cad", color: "#fff" }}>
             {busy ? t("dbadmin.split.running") : t("dbadmin.split.button")}
           </button>
         </div>
@@ -628,7 +663,7 @@ function MergeSeriesForm({
 
   return (
     <div style={overlay} onClick={onClose}>
-      <div style={editBox} onClick={(e) => e.stopPropagation()}>
+      <div data-testid="dbadmin-merge-form" style={editBox} onClick={(e) => e.stopPropagation()}>
         <h3 style={{ margin: "0 0 6px" }}>{t("dbadmin.merge.title")}</h3>
         <p style={{ fontSize: 12, color: "#8a98a6", marginTop: 0 }}>
           {t("dbadmin.merge.note", { count: series.length })}
@@ -641,7 +676,7 @@ function MergeSeriesForm({
           ))}
         </div>
         <Row label={t("dbadmin.merge.seriesNumber")}>
-          <input value={number} onChange={(e) => setNumber(e.target.value)} style={input} />
+          <input data-testid="dbadmin-merge-seriesnumber" value={number} onChange={(e) => setNumber(e.target.value)} style={input} />
         </Row>
         <Row label={t("field.description")}>
           <input value={desc} onChange={(e) => setDesc(e.target.value)} style={input} />
@@ -651,7 +686,7 @@ function MergeSeriesForm({
           <button onClick={onClose} style={btn}>
             {t("common.cancel")}
           </button>
-          <button onClick={run} disabled={busy} style={{ ...btn, background: "#0b5cad", color: "#fff" }}>
+          <button data-testid="dbadmin-merge-run" onClick={run} disabled={busy} style={{ ...btn, background: "#0b5cad", color: "#fff" }}>
             {busy ? t("dbadmin.merge.running") : t("dbadmin.merge.button")}
           </button>
         </div>
@@ -742,14 +777,20 @@ function StudyPatientEditForm({
 
   return (
     <div style={overlay} onClick={onClose}>
-      <div style={editBox} onClick={(e) => e.stopPropagation()}>
+      <div data-testid="dbadmin-study-edit-form" style={editBox} onClick={(e) => e.stopPropagation()}>
         <h3 style={{ margin: "0 0 6px" }}>{t("dbadmin.edit.studyTitle")}</h3>
         <p style={{ fontSize: 12, color: "#8a98a6", marginTop: 0 }}>
           {t("dbadmin.edit.studyNote", { desc: studyLabel(study) })}
         </p>
         <PatientFields {...{ name, setName, birth, setBirth, sex, setSex }} />
         <Row label={t("dbadmin.edit.newId")}>
-          <input value={newId} onChange={(e) => setNewId(e.target.value)} style={input} placeholder={patient.patientId} />
+          <input
+            data-testid="dbadmin-study-edit-newid"
+            value={newId}
+            onChange={(e) => setNewId(e.target.value)}
+            style={input}
+            placeholder={patient.patientId}
+          />
         </Row>
         {moving && <div style={{ color: "#8a6d00", fontSize: 12, marginTop: 6 }}>{t("dbadmin.edit.moveWarn", { id: newId.trim() })}</div>}
         {error && <div style={{ color: "#b00020", marginTop: 6 }}>{error}</div>}
@@ -802,7 +843,7 @@ function FormButtons({ onClose, onSave, saving }: { onClose: () => void; onSave:
       <button onClick={onClose} style={btn}>
         {t("common.cancel")}
       </button>
-      <button onClick={onSave} disabled={saving} style={{ ...btn, background: "#0b5cad", color: "#fff" }}>
+      <button data-testid="dbadmin-form-save" onClick={onSave} disabled={saving} style={{ ...btn, background: "#0b5cad", color: "#fff" }}>
         {saving ? t("common.saving") : t("common.save")}
       </button>
     </div>

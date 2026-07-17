@@ -70,7 +70,7 @@ Result: PASS — 5メニューの起動とFile>Sendの起動を確認
 - requiresHuman: (未定義。実装時に判定方式を決める)
 
 <!-- AUTOMATOR:BEGIN 02-mainscreen.item-04 -->
-#### 2026-07-17 (run 20260717-121417-jqt00u)
+#### 2026-07-17 (run 20260717-132419-8lg7n1)
 1. MainScreen の初期マウントを確認
 2. System > 環境設定 から settings-dialog が開くことを確認
 3. System > DB管理 から dbadmin-dialog が開くことを確認
