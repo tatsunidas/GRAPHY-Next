@@ -73,7 +73,7 @@ export function TagViewerDialog({
 
   return (
     <div style={overlay} onClick={onClose}>
-      <div style={dialog} onClick={(e) => e.stopPropagation()}>
+      <div data-testid="tag-viewer-dialog" style={dialog} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
           <span style={{ fontWeight: 700 }}>{t("tagview.title")}</span>
           <button style={closeBtn} onClick={onClose} aria-label={t("common.close")}>
@@ -89,6 +89,7 @@ export function TagViewerDialog({
           </div>
           <label style={{ fontSize: 13, color: "#445" }}>{t("tagview.search")}</label>
           <input
+            data-testid="tag-viewer-search-input"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={t("tagview.search.placeholder")}
@@ -104,7 +105,7 @@ export function TagViewerDialog({
           {!rows && !error && <div style={{ padding: 14, color: "#888" }}>{t("common.loading")}</div>}
           {error && <div style={{ padding: 14, color: "#b00020" }}>{error}</div>}
           {rows && (
-            <table style={table}>
+            <table data-testid="tag-viewer-table" style={table}>
               <thead>
                 <tr>
                   <Th w={170}>{t("tagview.col.tag")}</Th>

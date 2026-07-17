@@ -204,7 +204,7 @@ export function SeriesExtractorDialog({
 
   return (
     <div style={overlay} onClick={onClose}>
-      <div style={dialog} onClick={(e) => e.stopPropagation()}>
+      <div data-testid="series-extractor-dialog" style={dialog} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
           <span style={{ fontWeight: 700 }}>{t("seriesext.title")}</span>
           <button style={closeBtn} onClick={onClose}>✕</button>
@@ -269,8 +269,11 @@ export function SeriesExtractorDialog({
               <span style={{ fontSize: 12, color: "#6b7785" }}>{t("seriesext.webZipNote")}</span>
             ) : (
               <>
-                <button style={btn} onClick={() => void pickDest()}>{t("seriesext.pickDest")}</button>
-                <span style={{ fontSize: 12, color: destination ? "#33404d" : "#8a98a6", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <button data-testid="series-extractor-pick-dest-btn" style={btn} onClick={() => void pickDest()}>{t("seriesext.pickDest")}</button>
+                <span
+                  data-testid="series-extractor-dest-label"
+                  style={{ fontSize: 12, color: destination ? "#33404d" : "#8a98a6", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                >
                   {destination ?? t("seriesext.noDest")}
                 </span>
               </>
@@ -283,7 +286,7 @@ export function SeriesExtractorDialog({
           {!result && <div style={{ color: "#8a98a6", fontSize: 12 }}>{t("seriesext.notVerified")}</div>}
           {result && (
             <div style={{ overflow: "auto", height: "100%" }}>
-              <table style={tableStyle}>
+              <table data-testid="series-extractor-result-table" style={tableStyle}>
                 <thead>
                   <tr>
                     <th style={th}>{t("qr.col.studyDate")}</th>
@@ -320,8 +323,9 @@ export function SeriesExtractorDialog({
             {error && <span style={{ color: "#b00020" }}>{error}</span>}
           </div>
           <button style={btn} onClick={onClose}>{t("common.close")}</button>
-          <button style={btn} onClick={() => void verify()} disabled={busy}>{busy ? t("seriesext.verifying") : t("seriesext.verify")}</button>
+          <button data-testid="series-extractor-verify-btn" style={btn} onClick={() => void verify()} disabled={busy}>{busy ? t("seriesext.verifying") : t("seriesext.verify")}</button>
           <button
+            data-testid="series-extractor-extract-btn"
             style={{ ...btn, background: canExtract ? "#0b5cad" : "#9fb6cf", color: "#fff", border: "none", cursor: canExtract ? "pointer" : "default" }}
             onClick={() => void extract()}
             disabled={!canExtract}

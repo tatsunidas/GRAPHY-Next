@@ -54,7 +54,7 @@ Result: PASS — 2×2レイアウトを適用
 - requiresHuman: (未定義。実装時に判定方式を決める)
 
 <!-- AUTOMATOR:BEGIN 12-viewer2d-menu-toolbar.item-03 -->
-#### 2026-07-17 (run 20260717-114045-4lyhvw)
+#### 2026-07-17 (run 20260717-140154-q75vom)
 1. MainScreen の初期マウントを確認
 2. 無条件検索でスタディ一覧を取得
 3. 先頭のスタディ行をクリック
