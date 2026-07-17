@@ -1248,7 +1248,7 @@ export function Viewer2D({
   const imagePanel = (
     <div style={fill ? { ...wrap, flex: 1, height: "auto" } : { ...wrap, height: height ?? 512 }}>
       {/* 深層: ピクセル canvas（Cornerstone3D が内部に canvas を生成） */}
-          <div ref={elementRef} style={pixelLayer} />
+          <div ref={elementRef} data-testid="viewer2d-canvas-host" style={pixelLayer} />
           {/* Fusion 等のオーバーレイ。base 画像の表示矩形に重ねる（wrap の overflow:hidden でクリップ）。 */}
           {renderOverlay && imageRect && renderOverlay({
             rect: imageRect,
@@ -1290,15 +1290,15 @@ export function Viewer2D({
           {/* 患者の向き（A/P・R/L・H/F）。四辺に表示。pointer-events:none。 */}
           {ov.orientation && markers && (
             <>
-              <div style={{ ...markerBase, top: 4, left: "50%", transform: "translateX(-50%)" }}>{markers.top}</div>
-              <div style={{ ...markerBase, bottom: 4, left: "50%", transform: "translateX(-50%)" }}>{markers.bottom}</div>
-              <div style={{ ...markerBase, left: 6, top: "50%", transform: "translateY(-50%)" }}>{markers.left}</div>
-              <div style={{ ...markerBase, right: 6, top: "50%", transform: "translateY(-50%)" }}>{markers.right}</div>
+              <div data-testid="orientation-marker-top" style={{ ...markerBase, top: 4, left: "50%", transform: "translateX(-50%)" }}>{markers.top}</div>
+              <div data-testid="orientation-marker-bottom" style={{ ...markerBase, bottom: 4, left: "50%", transform: "translateX(-50%)" }}>{markers.bottom}</div>
+              <div data-testid="orientation-marker-left" style={{ ...markerBase, left: 6, top: "50%", transform: "translateY(-50%)" }}>{markers.left}</div>
+              <div data-testid="orientation-marker-right" style={{ ...markerBase, right: 6, top: "50%", transform: "translateY(-50%)" }}>{markers.right}</div>
             </>
           )}
           {/* スケールバー（Caliper）。校正あり=黄/mm・cm、なし=グレー/px。バー右端隅に単位。 */}
           {ov.caliper && scaleBar && (
-            <div style={{ ...scaleWrap, width: scaleBar.lengthPx }}>
+            <div data-testid="scale-bar" style={{ ...scaleWrap, width: scaleBar.lengthPx }}>
               <div style={{ ...scaleLabel, color: scaleBar.calibrated ? CAL_COLOR : UNCAL_COLOR }}>
                 {scaleBar.label}
               </div>
@@ -1312,10 +1312,10 @@ export function Viewer2D({
           {/* DICOM 属性テキスト（4 隅・設定可能）。viewer 状態行(zoom/WL,cursor)の下に重ねる。 */}
           {dicomText && (
             <>
-              <CornerText lines={dicomText.topLeft} style={dicomTL} />
-              <CornerText lines={dicomText.topRight} style={dicomTR} />
-              <CornerText lines={dicomText.bottomLeft} style={dicomBL} />
-              <CornerText lines={dicomText.bottomRight} style={dicomBR} />
+              <CornerText lines={dicomText.topLeft} style={dicomTL} testId="corner-text-tl" />
+              <CornerText lines={dicomText.topRight} style={dicomTR} testId="corner-text-tr" />
+              <CornerText lines={dicomText.bottomLeft} style={dicomBL} testId="corner-text-bl" />
+              <CornerText lines={dicomText.bottomRight} style={dicomBR} testId="corner-text-br" />
             </>
           )}
       {loading && !error && (
@@ -1364,9 +1364,10 @@ export function Viewer2D({
       }}>
         {/* 画像外の状態ラベルエリア（必須情報）。 */}
         <div style={statusBar}>
-          <StatusItem label={t("viewer.status.zoom")} value={`${Math.round(transform.zoom * 100)}%`} />
+          <StatusItem testId="status-zoom" label={t("viewer.status.zoom")} value={`${Math.round(transform.zoom * 100)}%`} />
           {panned && <span style={panBadge}>{t("viewer.panned")}</span>}
           <StatusItem
+            testId="status-wl"
             label={t("viewer.status.wl")}
             value={
               voi
@@ -1376,8 +1377,8 @@ export function Viewer2D({
                 : "—"
             }
           />
-          <StatusItem label={t("viewer.status.value")} value={cursorValue} />
-          <StatusItem label={t("viewer.status.xy")} value={cursorXY} />
+          <StatusItem testId="status-value" label={t("viewer.status.value")} value={cursorValue} />
+          <StatusItem testId="status-xy" label={t("viewer.status.xy")} value={cursorXY} />
           {/* 必須情報ラベル横の Info ボタン（右の情報パネルの On/Off）。 */}
           <button
             onClick={() => setShowInfo((v) => !v)}
@@ -1401,8 +1402,8 @@ export function Viewer2D({
           >
             <ToolIcon id={TOOL_IDS.pan} size={16} style={panMode ? ACTIVE_ICON_STYLE : undefined} />
           </button>
-          <button onClick={() => zoomBy(1 / 1.2)} style={btn} title={t("viewer.zoomOut")}>−</button>
-          <button onClick={() => zoomBy(1.2)} style={btn} title={t("viewer.zoomIn")}>＋</button>
+          <button data-testid="viewer-zoom-out-btn" onClick={() => zoomBy(1 / 1.2)} style={btn} title={t("viewer.zoomOut")}>−</button>
+          <button data-testid="viewer-zoom-in-btn" onClick={() => zoomBy(1.2)} style={btn} title={t("viewer.zoomIn")}>＋</button>
           <button onClick={rotate90} style={btn} title={t("viewer.rotate")}><ToolIcon file={UI_ICON_FILES.rotate} size={16} /></button>
           <button onClick={flipH} style={btn} title={t("viewer.flipH")}><ToolIcon file={UI_ICON_FILES.flipH} size={16} /></button>
           <button onClick={flipV} style={btn} title={t("viewer.flipV")}><ToolIcon file={UI_ICON_FILES.flipV} size={16} /></button>
@@ -1425,8 +1426,8 @@ export function Viewer2D({
           </button>
           <button onClick={reset} style={btn} title={t("viewer.reset")}><ToolIcon file={UI_ICON_FILES.reset} size={16} /></button>
           <span style={{ width: 1, alignSelf: "stretch", background: "#dde4ea", margin: "0 2px" }} />
-          <button onClick={undo} disabled={!canUndo} style={btn} title={t("viewer.undo")}>↶</button>
-          <button onClick={redo} disabled={!canRedo} style={btn} title={t("viewer.redo")}>↷</button>
+          <button data-testid="viewer-undo-btn" onClick={undo} disabled={!canUndo} style={btn} title={t("viewer.undo")}>↶</button>
+          <button data-testid="viewer-redo-btn" onClick={redo} disabled={!canRedo} style={btn} title={t("viewer.redo")}>↷</button>
         </div>
       </div>
 
@@ -1439,10 +1440,10 @@ export function Viewer2D({
   );
 }
 
-function CornerText({ lines, style }: { lines: string[]; style: React.CSSProperties }) {
+function CornerText({ lines, style, testId }: { lines: string[]; style: React.CSSProperties; testId?: string }) {
   if (!lines.length) return null;
   return (
-    <div style={style}>
+    <div data-testid={testId} style={style}>
       {lines.map((l, i) => (
         <div key={i}>{l}</div>
       ))}
@@ -1482,11 +1483,11 @@ const dicomBR: React.CSSProperties = {
   textAlign: "right",
 };
 
-function StatusItem({ label, value }: { label: string; value: string }) {
+function StatusItem({ label, value, testId }: { label: string; value: string; testId?: string }) {
   return (
     <span style={statusItem}>
       <span style={statusKey}>{label}</span>
-      <span style={statusVal}>{value}</span>
+      <span data-testid={testId} style={statusVal}>{value}</span>
     </span>
   );
 }
