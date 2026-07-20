@@ -335,6 +335,42 @@ function setModeOpacity(
   }
 }
 
+/**
+ * WebGL コンテキストが取得できなかった（`canvas.getContext()` が null）ときに投げる。
+ * ⚠️ vtk.js は `get3DContext()` の結果を無検査で `new Proxy(result, handler)` に渡すため、
+ * 取得失敗時は `TypeError: Cannot create proxy with a non-object as target or handler` という
+ * 原因の分からない例外になる。ここで捕まえて「コンテキスト枯渇/GPU 喪失」だと分かる形にする。
+ */
+export class WebGLContextUnavailableError extends Error {
+  constructor(cause?: unknown) {
+    super(`WebGL context unavailable${cause ? `: ${String(cause)}` : ""}`);
+    this.name = "WebGLContextUnavailableError";
+  }
+}
+
+/** 例外が「WebGL コンテキストを取れなかった」由来か（vtk.js の Proxy TypeError も含む）。 */
+export function isWebGLContextUnavailable(e: unknown): boolean {
+  if (e instanceof WebGLContextUnavailableError) return true;
+  const m = e instanceof Error ? e.message : String(e ?? "");
+  return /Cannot create proxy with a non-object/i.test(m);
+}
+
+/**
+ * ⚠️ WebGL コンテキストを**明示的に破棄**する。
+ * vtk.js の `deleteGLContext()` は内部カウンタを減らすだけで `WEBGL_lose_context` を呼ばない。
+ * canvas が GC されるまで実コンテキストが生き残るため、3D ビューアの開閉を繰り返すと
+ * ブラウザ/Electron のコンテキスト上限（Chromium: 16/renderer）に達し、
+ * 「古いコンテキストが強制ロスト＝白画面」→「`getContext()` が null＝上記 Proxy TypeError」になる。
+ */
+function forceLoseContext(glLike: Any): void {
+  try {
+    const gl = glLike?.__getUnderlyingContext?.() ?? glLike;
+    gl?.getExtension?.("WEBGL_lose_context")?.loseContext?.();
+  } catch {
+    /* ignore */
+  }
+}
+
 export function createVtkVolumeView(
   container: HTMLDivElement,
   imageData: Any,
@@ -344,7 +380,17 @@ export function createVtkVolumeView(
 
   // ── レンダーウィンドウ（オンスクリーン＋本物の interactor）──
   const grw = vtkGenericRenderWindow.newInstance({ background: [0, 0, 0] });
-  grw.setContainer(container);
+  try {
+    grw.setContainer(container);
+  } catch (e) {
+    try {
+      grw.delete();
+    } catch {
+      /* ignore */
+    }
+    if (isWebGLContextUnavailable(e)) throw new WebGLContextUnavailableError(e);
+    throw e;
+  }
   const renderer = grw.getRenderer();
   const renderWindow = grw.getRenderWindow();
   const interactor = renderWindow.getInteractor();
@@ -951,6 +997,23 @@ export function createVtkVolumeView(
       }
       try {
         widgetManager.delete?.();
+      } catch {
+        /* ignore */
+      }
+      // ⚠️ 破棄順序が重要:
+      //   1) interactor のイベント解除（DOM 参照を切る）
+      //   2) WebGL コンテキストを明示ロスト（vtk.js は解放しない。上の forceLoseContext 参照）
+      //   3) grw.delete()（canvas を DOM から外す）
+      // 2 を省くと開閉のたびにコンテキストが積み上がり、上限超過で白画面→再オープン不能になる。
+      try {
+        interactor.unbindEvents?.();
+      } catch {
+        /* ignore */
+      }
+      try {
+        // macro.moveToProtected 済みのため accessor 名は getApiSpecificRenderWindow。
+        const openGLRw: Any = (grw as Any).getApiSpecificRenderWindow?.();
+        forceLoseContext(openGLRw?.getContext?.());
       } catch {
         /* ignore */
       }

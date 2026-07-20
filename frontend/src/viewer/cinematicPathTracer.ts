@@ -623,6 +623,14 @@ export function createCinematicPathTracer(
       } catch {
         /* ignore */
       }
+      // ⚠️ リソース削除だけでは WebGL コンテキスト自体が残る（canvas が GC されるまで生存）。
+      // 開閉を繰り返すとブラウザのコンテキスト上限に達し、古いコンテキストが強制ロスト＝白画面、
+      // 以降 getContext() が null を返して 3D 表示が起動不能になるため、明示的にロストさせる。
+      try {
+        gl.getExtension("WEBGL_lose_context")?.loseContext();
+      } catch {
+        /* ignore */
+      }
     },
   };
   return engine;
