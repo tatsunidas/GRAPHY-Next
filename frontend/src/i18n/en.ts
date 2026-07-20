@@ -146,6 +146,9 @@ export const en: Record<string, string> = {
   "viewer3d.needVolume": "3D rendering requires a volume (multiple slices).",
   "viewer3d.webUnsupported": "3D Viewer in web mode will be supported in a later phase.",
   "viewer3d.error": "Failed to build 3D view",
+  "viewer3d.glLost":
+    "The GPU (WebGL) context was lost, so the 3D view cannot continue. Press [Retry] or reopen the window; restart the application if the problem persists.",
+  "viewer3d.retry": "Retry",
   "viewer3d.mode": "Rendering mode",
   "viewer3d.mode.vr": "VR",
   "viewer3d.mode.mip": "MIP",

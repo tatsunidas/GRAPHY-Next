@@ -29,6 +29,7 @@ import { buildMprVolume } from "../viewer/mpr";
 import {
   createVtkVolumeView,
   vtkImageDataFromVolume,
+  isWebGLContextUnavailable,
   type VtkVolumeView,
   type VtkRenderMode,
   type VtkOpacityPoint,
@@ -288,7 +289,9 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
       setPhase("ready");
     } catch (e) {
       setPhase("error");
-      setMessage(`${t("viewer3d.error")}: ${String(e)}`);
+      // WebGL コンテキストを取れない場合は原因が分かる案内にする（vtk.js の生の
+      // "Cannot create proxy with a non-object..." では利用者が対処できない）。
+      setMessage(isWebGLContextUnavailable(e) ? t("viewer3d.glLost") : `${t("viewer3d.error")}: ${String(e)}`);
     }
   }, [mode2, t]);
 
@@ -314,6 +317,52 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
       viewRef.current = null;
     };
   }, []);
+
+  // 現在のビューを破棄して 3D 表示を作り直す（コンテキスト喪失やビルド失敗からの復帰）。
+  const retry = useCallback(() => {
+    try {
+      resetScene();
+    } catch {
+      /* ignore */
+    }
+    try {
+      viewRef.current?.destroy();
+    } catch {
+      /* ignore */
+    }
+    viewRef.current = null;
+    setSceneGeom(null);
+    setPhase("idle");
+    setMessage("");
+    void start();
+  }, [start]);
+
+  // WebGL コンテキスト喪失を検知して案内する。
+  // ⚠️ vtk.js は webglcontextlost を preventDefault するだけで復帰処理をしないため、
+  // 何もしないと「真っ白なパネル」のまま操作不能になる（原因が利用者に分からない）。
+  // 喪失したビューはここで破棄し、コンテキスト枠を解放してから再構築できるようにする。
+  useEffect(() => {
+    if (phase !== "ready" || !vpRef.current) return;
+    const canvas = vpRef.current.querySelector("canvas");
+    if (!canvas) return;
+    const onLost = () => {
+      setPhase("error");
+      setMessage(t("viewer3d.glLost"));
+      try {
+        resetScene();
+      } catch {
+        /* ignore */
+      }
+      try {
+        viewRef.current?.destroy();
+      } catch {
+        /* ignore */
+      }
+      viewRef.current = null;
+    };
+    canvas.addEventListener("webglcontextlost", onLost);
+    return () => canvas.removeEventListener("webglcontextlost", onLost);
+  }, [phase, t]);
 
   // コンテナのリサイズに追従。
   useEffect(() => {
@@ -505,7 +554,16 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
           )}
           {phase !== "ready" && (
             <div style={overlay}>
-              <div style={overlayBox}>{busy ? t("viewer3d.loading") : message}</div>
+              <div style={overlayBox}>
+                {busy ? t("viewer3d.loading") : message}
+                {phase === "error" && (
+                  <div style={{ marginTop: 12 }}>
+                    <button style={modeBtn} onClick={retry}>
+                      {t("viewer3d.retry")}
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>

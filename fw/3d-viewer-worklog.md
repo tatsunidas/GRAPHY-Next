@@ -67,3 +67,29 @@
 - `SceneObjectPanel.tsx` / `scene3d.ts` を編集する直前に必ず `git diff <file>` で相手の未コミット変更を取り込み、
   自分の追加は**末尾または独立関数**に置く。衝突したら相手の変更を優先して再適用。
 - `i18n/{en,ja}.ts` は名前空間で分離（A=`measure.*`, B=`centerline.*`/`cpr.*`/`straighten.*`）。
+
+## 不具合修正: 3D ビューアが白画面→再オープンで `Cannot create proxy with a non-object`（2026-07-20）
+
+**症状**: 3D 表示中に突然パネルが真っ白になり、以降ウィンドウを開き直しても
+`Failed to build 3D view: TypeError: Cannot create proxy with a non-object as target or handler`。
+
+**原因**: WebGL コンテキストのリーク（上限超過）。
+- vtk.js `Rendering/OpenGL/RenderWindow.js` の `get3DContext()` は
+  `canvas.getContext('webgl2'|'webgl')` の結果を**無検査で** `new Proxy(result, handler)` に渡す。
+  取得失敗（null）時にこの TypeError が出る＝**「WebGL コンテキストが作れない」の別名**。
+- vtk.js の `deleteGLContext()` は内部カウンタを減らすだけで `WEBGL_lose_context` を呼ばない。
+  `grw.delete()` してもコンテキストは canvas が GC されるまで生存する。
+- 同様に `viewer/cinematicPathTracer.ts` の `dispose()` も GL リソース削除のみでコンテキストを残していた。
+- 結果、3D ビューアの開閉（＋パストレース）を繰り返すと Chromium のコンテキスト上限（≈16/renderer）に達し、
+  ブラウザが古いコンテキストを強制ロスト＝**白画面**、以後 `getContext()` が null＝**上記 TypeError**。
+
+**対処**（`viewer/vtkVolumeView.ts` / `viewer/cinematicPathTracer.ts` / `viewer3d/Viewer3DScreen.tsx`）:
+1. `destroy()` で `interactor.unbindEvents()` →
+   `getApiSpecificRenderWindow().getContext()` から `WEBGL_lose_context.loseContext()` → `grw.delete()` の順で
+   **コンテキストを明示解放**（`forceLoseContext`）。パストレーサ `dispose()` も同様。
+2. `WebGLContextUnavailableError` / `isWebGLContextUnavailable()` を追加し、Proxy TypeError を
+   「GPU コンテキスト喪失」と分かるメッセージ（`viewer3d.glLost`）に変換。
+3. `webglcontextlost` を購読し、白画面のまま放置せずビューを破棄してエラー表示＋**［再試行］**ボタン
+   （`viewer3d.retry`）で再構築できるようにした。
+
+**注意**: vtk 由来の生の Proxy TypeError を見たら、まずコンテキスト枯渇/GPU プロセス喪失を疑うこと。

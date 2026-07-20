@@ -146,6 +146,9 @@ export const ja: Record<string, string> = {
   "viewer3d.needVolume": "3D レンダリングにはボリューム（複数スライス）が必要です。",
   "viewer3d.webUnsupported": "web モードの 3D Viewer は次フェーズで対応します。",
   "viewer3d.error": "3D 表示の構築に失敗しました",
+  "viewer3d.glLost":
+    "GPU（WebGL）コンテキストが失われたため 3D 表示を継続できません。［再試行］を押すか、ウィンドウを開き直してください。改善しない場合はアプリを再起動してください。",
+  "viewer3d.retry": "再試行",
   "viewer3d.mode": "レンダリングモード",
   "viewer3d.mode.vr": "VR",
   "viewer3d.mode.mip": "MIP",
