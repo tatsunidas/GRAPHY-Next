@@ -103,6 +103,52 @@ function getEngine(): RenderingEngine {
   return sharedEngine;
 }
 
+/**
+ * エンジン単位でまとめて 1 回だけリサイズする（タイルレイアウト変更時の zoom ずれ対策）。
+ *
+ * <p>問題: `engine.resize()` は共有エンジン上の<b>全</b>ビューポートに対して
+ * `resetCameraForResize()` を呼び、各ビューポートの `initialCamera`（＝Fit 基準＝zoom 100% の
+ * 基準スケール）を<b>新しいサイズの Fit 値へ差し替える</b>（`keepCamera` で戻るのは
+ * parallelScale だけ）。タイルごとの ResizeObserver がそれぞれ `engine.resize()` を呼ぶと、
+ * 最初に走ったタイル以外は「すでに新 Fit で再基準化された」相対 zoom を読んでしまい、
+ * それを再適用するので絶対スケールが据え置かれ、レイアウト変更のたびに表示倍率が
+ * newFit/oldFit 倍ずれる（タイルのアスペクト比が変わると Fit 値が変わるため顕在化する）。
+ *
+ * <p>対策: リサイズ要求を rAF で 1 回に束ね、<b>engine.resize の前に全ビューポートの
+ * ViewPresentation を退避</b>してから、リサイズ後に各ビューポートで再 Fit＋再適用する。
+ * これで「どのタイルの ResizeObserver が先に走ったか」に結果が依存しなくなる。
+ */
+let engineResizeScheduled = false;
+function scheduleEngineResize(engine: RenderingEngine): void {
+  if (engineResizeScheduled) return;
+  engineResizeScheduled = true;
+  requestAnimationFrame(() => {
+    engineResizeScheduled = false;
+    try {
+      // ★ engine.resize より前に退避する（この時点の zoom は旧 Fit 基準＝正しい相対値）。
+      const snaps: { vp: Types.IStackViewport; pres: ReturnType<Types.IStackViewport["getViewPresentation"]> }[] = [];
+      for (const vp of engine.getViewports() as Types.IStackViewport[]) {
+        try { snaps.push({ vp, pres: vp.getViewPresentation() }); } catch { /* 未初期化はスキップ */ }
+      }
+      engine.resize(true, true); // canvas のみ新サイズへ（カメラ維持＝自動再フィットしない）
+      for (const { vp, pres } of snaps) {
+        try {
+          vp.resetCamera(); // 各 viewport を現在の要素サイズへ正しくフィット（＝Fit 基準を更新）
+          const fitScale = vp.getCamera().parallelScale ?? 0;
+          try { vp.setViewPresentation(pres); } catch { /* 相対 zoom/pan/rotation/flip を再適用 */ }
+          // 妥当性ガード: 再適用が異常な巨大/極小スケールを生んだらクリーンなフィットへ戻す。
+          // 50倍/1/50 は通常の深いズームを許容しつつ暴走のみ捕捉。
+          const afterScale = vp.getCamera().parallelScale ?? 0;
+          if (fitScale > 0 && afterScale > 0 && (afterScale > fitScale * 50 || afterScale < fitScale / 50)) {
+            vp.resetCamera();
+          }
+          vp.render();
+        } catch { /* 破棄済み viewport は無視 */ }
+      }
+    } catch { /* エンジン破棄済み等は無視 */ }
+  });
+}
+
 let viewportSeq = 0;
 
 /**
@@ -710,6 +756,7 @@ export function Viewer2D({
         // さらに get/setViewPresentation で増幅される。これを避けるため、canvas のリサイズは
         // keepCamera=true（自動フィットしない）にし、フィットは viewport 単位の resetCamera で行う。
         // 実サイズが変化したときのみ実行（resize フィードバックループも防止）。
+        // 実処理は scheduleEngineResize（エンジン単位で 1 回に束ね、退避→resize→再Fit→再適用）。
         // ★初回フィット補正: seed を 0 にして、ResizeObserver が observe() 時に必ず配送する
         // 「初回通知」で必ず補正フィットを走らせる。enableElement 時にコンテナが未確定サイズ
         // （flex レイアウト途中等）だと canvas が誤アスペクトで作られ画像が縦長等に歪むため、
@@ -726,18 +773,9 @@ export function Viewer2D({
           if (w === lastRW && h === lastRH) return; // 実サイズ変化なし
           lastRW = w;
           lastRH = h;
-          const pres = vp.getViewPresentation();
-          engine.resize(true, true); // canvas のみ新サイズへ（カメラ維持＝自動再フィットしない）
-          vp.resetCamera(); // この viewport を要素サイズへ正しくフィット
-          const fitScale = vp.getCamera().parallelScale ?? 0;
-          try { vp.setViewPresentation(pres); } catch { /* 相対 zoom/pan/rotation/flip を再適用 */ }
-          // 妥当性ガード: 再適用が異常な巨大/極小スケールを生んだら（共有エンジン由来の暴走）
-          // クリーンなフィットへ戻す。50倍/1/50 は通常の深いズームを許容しつつ暴走のみ捕捉。
-          const afterScale = vp.getCamera().parallelScale ?? 0;
-          if (fitScale > 0 && afterScale > 0 && (afterScale > fitScale * 50 || afterScale < fitScale / 50)) {
-            vp.resetCamera();
-          }
-          vp.render();
+          // ★ここで直接 engine.resize しない。タイルごとに呼ぶと 2 番目以降のタイルが
+          // 「再基準化済みの zoom」を読んでしまい表示倍率がずれるため、エンジン単位で束ねる。
+          scheduleEngineResize(engine);
         });
         resizeObserver.observe(element);
 
