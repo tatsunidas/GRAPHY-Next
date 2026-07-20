@@ -466,6 +466,7 @@ export const en: Record<string, string> = {
   "viewer2d.sync.toggle": "Toggle series sync (slice position, W/L, zoom, pan, rotate, flip, LUT)",
   "viewer2d.sync.active": "Synced",
   "viewer2d.refLines.label": "Ref lines",
+  "viewer2d.toolPanel.label": "Show tool panel",
   "viewer2d.refLines.toggle": "Toggle reference lines (show where other series' current slices intersect this view)",
   "viewer2d.menu.view": "View",
   "viewer2d.menu.roi": "ROI",

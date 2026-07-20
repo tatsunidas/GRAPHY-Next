@@ -85,13 +85,14 @@ function parallelNormals(a: readonly [number, number, number], b: readonly [numb
  * 座標同期: source のスライス位置(テーブル位置 mm = IPP·法線)に最も近い Z を返す。
  * 面内原点(x,y)の違いに影響されないよう **法線へ投影したスカラ**で比較する。
  * - フォロワーが非空間 / source と非共平面（向きが違う）→ null（呼び出し側で Δ 送り）。
- * - 最近傍が許容半径(marginMm)外 → -1（呼び出し側で Δ 送り）。
+ * - 共平面なら常に最近傍 Z を返す。`within` はマージン(marginMm)内で位置一致したかの目安
+ *   （マージン外＝カバレッジ外などで最近傍エッジへクランプした状態。将来の位置ロック表示用）。
  */
 function coordinateTarget(
   st: SliceSyncState,
   srcPos: number,
   srcNormal: readonly [number, number, number],
-): number | null {
+): { z: number; within: boolean } | null {
   if (!st.normal || !parallelNormals(st.normal, srcNormal)) {
     return null; // 非共平面（AX×SAG 等）→ 投影比較不可
   }
@@ -106,8 +107,8 @@ function coordinateTarget(
       best = z;
     }
   }
-  if (best < 0) return null;
-  return bestD <= marginMm ? best : -1; // -1=マージン外
+  if (best < 0) return null; // 空間情報なし → 呼び出し側で Δ 送り
+  return { z: best, within: bestD <= marginMm };
 }
 
 /**
@@ -145,10 +146,15 @@ export function publishSlice(sourceId: string): void {
     let target: number | null = null;
     if (mode === "coordinate" && srcPos != null && srcNormal) {
       const r = coordinateTarget(st, srcPos, srcNormal);
-      if (r != null && r >= 0) {
-        target = r; // マージン内 → スライス位置(±marginMm)で一致（面内原点の差は無視）
+      if (r != null) {
+        // 共平面なら常に世界座標の最近傍スライスへスナップする。
+        // マージン内=位置一致、マージン外=最近傍エッジへクランプ（例: 一部Zしか持たない
+        // 派生シリーズ Radiomicsマップ↔CT で、CTをマップのカバレッジ外へスクロールした場合）。
+        // ここで枚数差(Δ)送りにフォールバックすると、共平面・同一フレームでも index 送りが
+        // 混ざってスクロールのたびにオフセットが累積し、位置がドリフトする（旧実装のバグ）。
+        target = r.z;
       } else {
-        // 非空間 / 非共平面(向き違い) / マージン外：位置一致しないため枚数差(Δ)送りにフォールバック。
+        // 非空間 / 非共平面(向き違い) のみ枚数差(Δ)送りにフォールバック。
         target = simpleTarget(st, delta);
       }
     } else {

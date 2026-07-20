@@ -48,6 +48,7 @@ const LAYOUT_PRESETS: [number, number][] = [
 export function Viewer2DMenuBar({
   actions,
   refLines,
+  panelVisible,
   activeTool,
   gridRows,
   gridCols,
@@ -56,6 +57,8 @@ export function Viewer2DMenuBar({
 }: {
   actions: ViewerActions;
   refLines: boolean;
+  /** 画像下ツールパネルの表示状態（View メニューのチェック表示用）。 */
+  panelVisible: boolean;
   activeTool: string;
   gridRows: number;
   gridCols: number;
@@ -91,6 +94,7 @@ export function Viewer2DMenuBar({
       label: t("viewer2d.menu.view"),
       items: [
         { label: t("viewer2d.refLines.label"), onClick: actions.toggleRefLines, checked: refLines },
+        { label: t("viewer2d.toolPanel.label"), onClick: actions.toggleToolPanel, checked: panelVisible },
         {
           label: t("viewer2d.layout"),
           testId: "viewer2d-menu-layout",

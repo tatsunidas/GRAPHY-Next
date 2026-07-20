@@ -589,6 +589,31 @@ function TileGrid({
   // リファレンスライン表示の ON/OFF（このタブ内の全タイルに適用）。
   const [refLines, setRefLines] = useState(false);
 
+  // 画像下のツールパネル（操作バー＋スライダー群＋Fusion バー）の表示 ON/OFF（このタブ内の全タイルに適用）。
+  // OFF にすると全タイルが同一サイズの画像パネルになり、次元数の違うシリーズも同じ大きさで比較できる。
+  // View メニューと右クリックメニューはこの単一の状態を共有するため、常に表示が一致する。
+  const [panelVisible, setPanelVisible] = useState(true);
+
+  // タイル枠の右クリックメニュー（画面座標）。null=非表示。
+  const [frameMenu, setFrameMenu] = useState<{ x: number; y: number } | null>(null);
+  const openFrameMenu = useCallback((e: React.MouseEvent) => {
+    // 画像キャンバス上は cornerstone の右ドラッグ Zoom を優先し、メニューを出さない。
+    if ((e.target as HTMLElement).closest?.("[data-graphy-image-panel]")) return;
+    e.preventDefault();
+    setFrameMenu({ x: e.clientX, y: e.clientY });
+  }, []);
+  useEffect(() => {
+    if (!frameMenu) return;
+    const close = () => setFrameMenu(null);
+    const onKey = (ev: KeyboardEvent) => { if (ev.key === "Escape") setFrameMenu(null); };
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [frameMenu]);
+
   // タイル選択状態（Shift+左クリックでトグル）。将来の一括操作の対象指定に使う。
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const toggleSelect = useCallback((id: string) => {
@@ -784,6 +809,7 @@ function TileGrid({
       // Row×Col 指定（0=自動）。メニューのレイアウトサブメニュー/カスタムから使う。
       setLayoutGrid: (rows, cols) => onSetGrid(patient.patientKey, rows, cols),
       toggleRefLines: () => setRefLines((v) => !v),
+      toggleToolPanel: () => setPanelVisible((v) => !v),
       setSyncTargets: (sync) => resolveTargets().forEach((id) => onSetSync(patient.patientKey, id, sync)),
       comingSoon,
       // 対象（選択→無ければ先頭）タイルのシリーズを ImageJ HyperStack として開く。
@@ -895,6 +921,7 @@ function TileGrid({
       <Viewer2DMenuBar
         actions={actions}
         refLines={refLines}
+        panelVisible={panelVisible}
         activeTool={activeTool}
         gridRows={patient.gridRows}
         gridCols={patient.gridCols}
@@ -956,6 +983,8 @@ function TileGrid({
             syncActive={isSyncActive && tile.syncEnabled}
             syncEnabled={tile.syncEnabled}
             referenceLinesEnabled={refLines}
+            showControls={panelVisible}
+            onFrameContextMenu={openFrameMenu}
             commandKey={tile.id}
             selected={selectedIds.has(tile.id)}
             onToggleSelect={() => toggleSelect(tile.id)}
@@ -967,6 +996,18 @@ function TileGrid({
           />
         ))}
       </div>
+      {/* タイル枠の右クリックメニュー。View メニューと同じ panelVisible を操作するため表示は常に一致。 */}
+      {frameMenu && (
+        <div style={{ ...ctxMenuBox, left: frameMenu.x, top: frameMenu.y }} onClick={(e) => e.stopPropagation()}>
+          <button
+            style={ctxMenuItem}
+            onClick={() => { setPanelVisible((v) => !v); setFrameMenu(null); }}
+          >
+            <span style={{ width: 14, display: "inline-block" }}>{panelVisible ? "✓" : ""}</span>
+            {t("viewer2d.toolPanel.label")}
+          </button>
+        </div>
+      )}
       {showRoiMgr && (
         <RoiManagerPanel activePatientKey={patient.patientKey} isDemo={isDemo} mode={mode} onClose={() => setShowRoiMgr(false)} />
       )}
@@ -1062,6 +1103,8 @@ function TileCell({
   syncActive,
   syncEnabled,
   referenceLinesEnabled,
+  showControls,
+  onFrameContextMenu,
   commandKey,
   selected,
   onToggleSelect,
@@ -1077,6 +1120,10 @@ function TileCell({
   syncActive: boolean;
   syncEnabled: boolean;
   referenceLinesEnabled: boolean;
+  /** 画像下のツールパネルを表示するか。全タイルで false にすると同一サイズの画像パネルで比較できる。 */
+  showControls: boolean;
+  /** タイル枠の右クリック（画像キャンバス上は除外）。ツールパネル切替メニューを開く。 */
+  onFrameContextMenu: (e: React.MouseEvent) => void;
   commandKey: string;
   selected: boolean;
   onToggleSelect: () => void;
@@ -1222,6 +1269,9 @@ function TileCell({
           onToggleSelect();
         }
       }}
+      // タイル枠の右クリックでツールパネル切替メニュー。画像キャンバス上は
+      // cornerstone の右ドラッグ Zoom を優先するため、ハンドラ側で除外する。
+      onContextMenu={onFrameContextMenu}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -1308,6 +1358,7 @@ function TileCell({
           studyUid={tile.study.studyInstanceUid}
           seriesUid={tile.series.seriesInstanceUid}
           fillHeight
+          showControls={showControls}
           syncEnabled={syncEnabled}
           referenceLinesEnabled={referenceLinesEnabled}
           referenceLabel={seriesLabel}
@@ -1319,8 +1370,10 @@ function TileCell({
         />
       </div>
 
-      {/* Fusion コントロールバー */}
-      {tile.fusion && (
+      {/* Fusion コントロールバー。ツールパネルの一部として扱い、showControls に追従させる
+          （Fusion 直後でもパネル非表示中はツールとして出さない）。
+          今後、画像に付随するツールパネルを追加する場合も同様に showControls で束ねること。 */}
+      {showControls && tile.fusion && (
         <FusionControlBar
           seriesLabel={
             tile.fusion.series.seriesDescription ||
@@ -1961,6 +2014,32 @@ const tileArea: React.CSSProperties = {
   flexDirection: "column",
   minHeight: 0,
   background: "#eef1f4",
+};
+/** タイル枠の右クリックメニュー（画面座標に fixed 配置）。 */
+const ctxMenuBox: React.CSSProperties = {
+  position: "fixed",
+  zIndex: 1000,
+  background: "#fff",
+  border: "1px solid #cfd8e0",
+  borderRadius: 6,
+  boxShadow: "0 4px 14px rgba(0,0,0,0.18)",
+  padding: 4,
+  minWidth: 190,
+};
+const ctxMenuItem: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  width: "100%",
+  padding: "6px 10px",
+  border: "none",
+  background: "transparent",
+  font: "inherit",
+  fontSize: 13,
+  color: "#22303c",
+  textAlign: "left",
+  cursor: "pointer",
+  borderRadius: 4,
 };
 const tileBox: React.CSSProperties = {
   border: "1px solid #d7dde3",

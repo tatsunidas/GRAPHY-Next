@@ -50,6 +50,8 @@ export interface ViewerActions {
   /** Row×Col レイアウト指定（各 0=自動）。任意レイアウト用。 */
   setLayoutGrid(rows: number, cols: number): void;
   toggleRefLines(): void;
+  /** 画像下のツールパネル（操作バー＋スライダー群）の表示切替。全タイル共通。 */
+  toggleToolPanel(): void;
   /** 対象タイルの Sync を一括 ON/OFF。 */
   setSyncTargets(on: boolean): void;
   /** 未実装機能の「近日対応」通知（メニュー用プレースホルダ）。 */

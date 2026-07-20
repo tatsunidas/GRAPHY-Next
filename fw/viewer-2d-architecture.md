@@ -113,6 +113,22 @@ CPU 側で画素をモダリティ値(HU)として読むコードは、**必ず 
   Cornerstone が自動適用するので対象外。`sampleAtCanvas`(imageInfo.ts) は viewport 画像データの
   `preScale?.scaled` を見て同じ判定をしている。
 
+## ツールパネルの表示トグル（実装済み・**新規ツールパネル追加時の運用ルール**）
+画像下に付く操作 UI は **すべて 1 つの `showControls` にぶら下げる**。次元数（C/T スライダーの有無）や
+Fusion の有無で画像描画領域の高さが変わり、**横並び比較時にタイルごとに画像サイズがズレる**のを防ぐため。
+
+- 状態は `Viewer2DScreen` の `panelVisible`（**タブ内の全タイル共通**）。OFF で全タイルが同一サイズの画像パネルになる。
+- 伝播: `TileGrid` → `TileCell`(`showControls`) → `SeriesViewer`(`showControls`) → `Viewer2D`(`showControls`)。
+- `showControls` が束ねる対象:
+  - `Viewer2D` の操作バー（fit/pan/zoom/回転/反転/LUT/undo…）
+  - `SeriesViewer` の `controls`（Z/C/T スライダー・ThickSlab・オーバーレイ行）
+  - **Fusion コントロールバー**（Fusion 直後でもパネル非表示中はツールとして出さない）
+- 残すもの: タイルヘッダ、`statusBar`(Zoom/W/L/Value/XY)。高さ一定で比較を崩さないため。
+- 切替 UI は 2 系統だが**状態は単一**なので常に一致する: **View メニュー「ツールパネルを表示」** と
+  **タイル枠の右クリックメニュー**。右クリックは `data-graphy-image-panel`（画像キャンバス）内では
+  開かない — cornerstone の**右ドラッグ Zoom を優先**するため。
+- 👉 **今後、画像に付随するツールパネルを追加する場合も必ず `showControls` に追従させること。**
+
 ## SeriesViewer（シリーズ管理コントローラ・実装済み土台）
 `viewer/SeriesViewer.tsx` が画像パネル(Viewer2D)を内包し、シリーズを管理する。
 - **Viewer2D はスタック対応**: `imageIds[]`+`imageIndex`。`setStack` 後は `setImageIdIndex` で高速送り。

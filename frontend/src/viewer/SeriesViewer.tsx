@@ -75,6 +75,7 @@ export function SeriesViewer({
   studyUid,
   seriesUid,
   fillHeight = false,
+  showControls = true,
   syncEnabled = false,
   referenceLinesEnabled = false,
   referenceLabel,
@@ -90,6 +91,13 @@ export function SeriesViewer({
   seriesUid: string;
   /** タイル表示用: 親コンテナの高さに追従する（flex:1 レイアウト）。 */
   fillHeight?: boolean;
+  /**
+   * 画像下のツールパネル（Viewer2D の操作バー＋スライダー/ThickSlab/オーバーレイ行）を表示するか。
+   * false にするとパネルを畳んで画像領域を全高まで拡張する。複数タイル比較時に全タイルで false に
+   * すれば、次元数（C/T スライダーの有無）に依らず全タイルが同一サイズの画像パネルになる。
+   * 既定 true（単独表示・StudyList では従来どおり）。
+   */
+  showControls?: boolean;
   /** シリーズ Sync: このタイルの Sync トグルが ON か。ON かつ SliderView 時のみ同期に参加。 */
   syncEnabled?: boolean;
   /** リファレンスライン: 他シリーズの現在スライス面の交差線をこのビューに描画する。 */
@@ -566,9 +574,10 @@ export function SeriesViewer({
           </div>
         </div>
       ) : (
-        <Viewer2D imageIds={displayImageIds} imageIndex={zc} overlays={overlays} fill={fillHeight} viewSyncEnabled={syncOn} referenceLinesEnabled={referenceLinesEnabled} referenceLabel={referenceLabel} commandKey={commandKey} roiContext={roiContext} renderOverlay={renderFusionOverlay} thickSlab={effectiveThick} />
+        <Viewer2D imageIds={displayImageIds} imageIndex={zc} overlays={overlays} fill={fillHeight} showControls={showControls} viewSyncEnabled={syncOn} referenceLinesEnabled={referenceLinesEnabled} referenceLabel={referenceLabel} commandKey={commandKey} roiContext={roiContext} renderOverlay={renderFusionOverlay} thickSlab={effectiveThick} />
       )}
 
+      {showControls && (
       <div style={controls}>
         {/* GridView の操作バー（W/L・Pan・Zoom はドラッグ、回転/反転/Fit はボタン。全セルにリンク）。 */}
         {gridOn && (
@@ -669,6 +678,7 @@ export function SeriesViewer({
           {gridDisabled && <span style={hint}>{t("series.grid.disabled")}</span>}
         </div>
       </div>
+      )}
     </div>
   );
 }

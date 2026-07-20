@@ -184,6 +184,7 @@ export function Viewer2D({
   compact,
   height,
   fill,
+  showControls = true,
   syncGroupId,
   viewSyncEnabled,
   referenceLinesEnabled,
@@ -202,6 +203,8 @@ export function Viewer2D({
   height?: number;
   /** タイル表示用: 親の高さに追従して canvas を伸縮する（flex:1 レイアウト）。 */
   fill?: boolean;
+  /** 画像下の操作バー（ツールボタン列）を表示するか。false で畳んで画像領域を広げる。既定 true。 */
+  showControls?: boolean;
   /** 指定すると、共有ツールグループ＋camera/VOI 同期に参加（GridView リンク）。 */
   syncGroupId?: string;
   /** シリーズ Sync: true で base ビューポートをグローバル presentation+VOI synchronizer に参加させ、
@@ -1246,7 +1249,9 @@ export function Viewer2D({
   const cursorXY = sample ? `${sample.fx.toFixed(1)}, ${sample.fy.toFixed(1)}` : "—";
 
   const imagePanel = (
-    <div style={fill ? { ...wrap, flex: 1, height: "auto" } : { ...wrap, height: height ?? 512 }}>
+    // data-graphy-image-panel: 画像キャンバス領域の目印。タイル枠の右クリックメニューは
+    // この内側では開かず、cornerstone の右ドラッグ Zoom を優先させる（Viewer2DScreen 参照）。
+    <div data-graphy-image-panel style={fill ? { ...wrap, flex: 1, height: "auto" } : { ...wrap, height: height ?? 512 }}>
       {/* 深層: ピクセル canvas（Cornerstone3D が内部に canvas を生成） */}
           <div ref={elementRef} data-testid="viewer2d-canvas-host" style={pixelLayer} />
           {/* Fusion 等のオーバーレイ。base 画像の表示矩形に重ねる（wrap の overflow:hidden でクリップ）。 */}
@@ -1391,7 +1396,8 @@ export function Viewer2D({
         </div>
         {imagePanel}
 
-        {/* 操作バー（canvas の外＝ツール入力と競合しない） */}
+        {/* 操作バー（canvas の外＝ツール入力と競合しない）。showControls=false で畳む。 */}
+        {showControls && (
         <div style={toolbar}>
           <button onClick={fit} style={btn} title={t("viewer.fit")}><ToolIcon file={UI_ICON_FILES.fit} size={16} /></button>
           <button
@@ -1429,6 +1435,7 @@ export function Viewer2D({
           <button data-testid="viewer-undo-btn" onClick={undo} disabled={!canUndo} style={btn} title={t("viewer.undo")}>↶</button>
           <button data-testid="viewer-redo-btn" onClick={redo} disabled={!canRedo} style={btn} title={t("viewer.redo")}>↷</button>
         </div>
+        )}
       </div>
 
       {/* 右サイド: 輝度/ボクセル/FOV のキャリブレーション情報＋マウス座標＋ライブ WW/WL。
