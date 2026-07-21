@@ -12,6 +12,24 @@ FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License for more
 details.
 
 ------------------------------------------------------------------------------
+SCOPE OF THE AGPL-3.0 GRANT
+------------------------------------------------------------------------------
+The AGPL-3.0 grant above applies to the SOFTWARE contained in this repository.
+
+It does NOT apply to the contents of the `legal/` directory. Those files are
+contract documents and terms of service (the "Legal Documents"). All rights in
+the Legal Documents are reserved by Visionary Imaging Services, Inc. They are
+published solely so that users and customers can review the terms that apply to
+them, and may not be copied, modified, adapted or redistributed without the
+prior written consent of Visionary Imaging Services, Inc. In particular, they
+may not be used as a template for another party's own agreements.
+
+日本語: 上記 AGPL-3.0 の許諾は、本リポジトリに含まれる「ソフトウェア」に適用されます。
+`legal/` ディレクトリ配下の契約書・利用条件等の法務文書には適用されません。
+これらの著作権は Visionary Imaging Services, Inc. に留保されており、当社の事前の書面による
+承諾なく複製・改変・翻案・再頒布することはできません（自社契約書のひな形としての利用を含む）。
+
+------------------------------------------------------------------------------
 DUAL LICENSING
 ------------------------------------------------------------------------------
 GRAPHY-Next is dual-licensed. In addition to the AGPL-3.0 above, it is
