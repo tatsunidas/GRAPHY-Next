@@ -212,6 +212,8 @@ export const footer = {
       links: [
         { label: '免責事項', href: '/legal/disclaimer' },
         { label: '利用規約', href: '/legal/terms' },
+        { label: 'サポート購読 利用条件', href: '/legal/subscription' },
+        { label: '法人・教育機関向けプラン 利用条件', href: '/legal/site-support' },
         { label: 'プライバシー', href: '/legal/privacy' },
         { label: 'ライセンス', href: '/legal/licenses' },
         { label: 'お知らせメールの配信停止', href: 'https://demo.vis-ionary.com/unsubscribe' },

@@ -1,0 +1,75 @@
+# legal/ — 使用許諾およびサポート契約
+
+GRAPHY-Next の使用許諾条件とサポート契約の一式です。日本語を正文とします。
+
+> **GRAPHY-Next 本体（OSSコア）は GNU AGPL-3.0 に基づき無償で公開されています。**
+> 本ディレクトリの文書は、AGPL-3.0 が付与する権利を制限するものではありません（[共通条項 第3条](ja/00-common-terms.md)）。
+> 有償プランでご購入いただくのは**テクニカルサポート（役務）**であり、ソフトウェアの使用権ではありません。
+
+## どの文書が適用されるか
+
+| ご利用形態 | 適用文書 |
+|---|---|
+| **無償で使う**（研究・教育・評価・業務利用を問わず） | [`LICENSE`](../LICENSE)（AGPL-3.0）＋ [別紙A 無償プラン 利用条件](ja/schedule-a-free.md) |
+| **サブスクリプション購読**（月額 700円・税込） | [別紙B サブスクリプション購読 個別条件書](ja/schedule-b-subscription.md)＋[サポート購読ページ](https://graphy.vis-ionary.com/support) |
+| **サイトサポート**（法人・教育機関向け／部門単位） | [法人・教育機関向けプラン 利用条件](https://graphy.vis-ionary.com/legal/site-support)（**正本**）<br>記名押印による契約書をご希望の場合は [別紙C](ja/schedule-c-site-license.md) |
+| **自社製品への組み込み・再頒布・SaaS 提供** | [`COMMERCIAL-LICENSE.md`](../COMMERCIAL-LICENSE.md)（個別契約） |
+
+どれに当たるか分からない場合は、[判定ガイド](ja/license-selection-guide.md) をご覧ください。
+
+## 構成
+
+1本の共通条項に、プラン別の個別条件書を組み合わせる2層構造です。
+
+```
+legal/
+  README.md                       このファイル
+  ja/
+    00-common-terms.md            共通条項（全プラン共通の本文・全24条）
+    schedule-a-free.md            別紙A 無償プラン 利用条件
+    schedule-b-subscription.md    別紙B サブスクリプション購読 個別条件書
+    schedule-c-site-license.md    別紙C サイトサポート 個別条件書（記名押印版）
+    schedule-d-support-spec.md    別紙D サポート仕様書（SLA）
+    site-support-terms-web.md     法人・教育機関向けプラン 利用条件（掲示版と同内容）
+    license-selection-guide.md    どのライセンスが必要か 判定ガイド
+```
+
+**別途の保守契約・サポート契約は締結しません。** サポート条件は別紙Dに定め、各個別条件書がこれを参照します。
+
+## サイトサポートの概要
+
+| 区分 | 実利用者数 | 年額（税込・1部門・12か月） |
+|---|---|---|
+| スモール | 1〜30名 | 350,000円 |
+| ミディアム | 31〜100名 | 700,000円 |
+| ラージ | 101名以上 | 1,200,000円〜（個別お見積り） |
+
+- **実利用者** ＝ 対象部門で GRAPHY-Next を実際に使用する方。**学生・大学院生は人数に含めません**（サポート対象には含まれます）
+- 問い合わせできる人数に制限はありません
+- 複数部門割引: 同一法人内で2部門以上を同時にお申し込みの場合、2部門目以降は定価の80%
+- 自動更新はありません。初回に限り年度末（3/31）までの短縮契約を選択できます
+- **契約書の締結・押印は不要**です（見積書 → 注文書 → 請求書 → 納品書で完結）
+
+詳細および最新の条件は [利用条件ページ](https://graphy.vis-ionary.com/legal/site-support) をご覧ください。
+ウェブ掲示版と本ディレクトリの記載に相違がある場合、**ウェブ掲示版が優先します。**
+
+## 重要なお知らせ
+
+**GRAPHY-Next は、薬機法上の医療機器としての承認・認証・届出を受けていません。**
+研究・教育・技術評価および参考目的で提供されるものであり、疾病の診断、治療または予防を目的として
+使用することはできません。詳しくは [免責事項](https://graphy.vis-ionary.com/legal/disclaimer) をご覧ください。
+
+## 関連ファイル
+
+| ファイル | 内容 |
+|---|---|
+| [`LICENSE`](../LICENSE) | AGPL-3.0 原文。OSSコアの使用許諾の実体 |
+| [`THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md) | 同梱する第三者ソフトウェアの一覧と各ライセンス |
+| [`COMMERCIAL-LICENSE.md`](../COMMERCIAL-LICENSE.md) | 商用ソースライセンス（組み込み・再頒布・SaaS 向け）のご案内 |
+| [`CLA.md`](../CLA.md) | コントリビュータ・ライセンス同意書 |
+
+---
+
+**Visionary Imaging Services, Inc.**
+〒225-0024 神奈川県横浜市青葉区市ヶ尾町1050-11
+お問い合わせ: customerservices@vis-ionary.com / https://graphy.vis-ionary.com
