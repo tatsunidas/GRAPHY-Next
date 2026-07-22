@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://graphy.vis-ionary.com/sitemap-index.xml
