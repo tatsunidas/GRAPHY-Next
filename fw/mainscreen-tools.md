@@ -231,7 +231,7 @@ DICOM PS3.15 Basic Application Confidentiality Profile の匿名化。GRAPHY
     （この環境に ffmpeg/サンプル動画が無く E2E 未検証）。
   - **表示**: Video Photographic はピクセル無し扱いで wadouri 画像ビューア非対応。`StudyList.tsx` で
     SOPClass=Video Photographic（`1.2.840.10008.5.1.4.1.1.77.1.4.1`）を検出し、画像ビューアではなく案内表示。
-    再生（VideoViewport + `/rendered` mp4 供給）は 2D Viewer 側の将来対応。
+    再生（VideoViewport + `/rendered` mp4 供給）は 2D Viewer 側の将来対応。**設計 → `fw/video-viewer-design.md`**。
 
 ## 実装メモ
 - **更新(2026-07-02 監査)**: 3D/MPR/Slicer ビューアは**配線済**（`handleOpenViewer` が別ウィンドウ起動）。まだ未実装のツールのみ押下で「近日対応予定」バナーを表示（MainScreen `handleOpenTool`）。
