@@ -498,6 +498,13 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
     sections: [],
   },
   {
+    // プラグイン（導入・有効無効・削除）は専用パネル（/api/plugin-manager/*）。SettingsDialog で特別扱い。
+    id: "plugins",
+    labelKey: "settings.cat.plugins",
+    icon: "🧩",
+    sections: [],
+  },
+  {
     // 情報（バージョン等）は専用パネル（/api/status を表示）。SettingsDialog で特別扱い。
     id: "about",
     labelKey: "settings.cat.about",

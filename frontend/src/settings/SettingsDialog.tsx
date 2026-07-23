@@ -9,6 +9,7 @@ import { OverlayConfigPanel } from "./OverlayConfigPanel";
 import { RemoteAePanel } from "./RemoteAePanel";
 import { AboutPanel } from "./AboutPanel";
 import { MonitorQcPanel } from "./MonitorQcPanel";
+import { PluginManagerPanel } from "./PluginManagerPanel";
 import { useI18n, type Locale, type TFn } from "../i18n/i18n";
 import { markRestartRequired } from "../restartRequiredEvents";
 
@@ -111,6 +112,8 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
               <RemoteAePanel />
             ) : category.id === "monitor" ? (
               <MonitorQcPanel />
+            ) : category.id === "plugins" ? (
+              <PluginManagerPanel />
             ) : category.id === "about" ? (
               <AboutPanel />
             ) : (
