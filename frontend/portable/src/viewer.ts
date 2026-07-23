@@ -6,7 +6,7 @@
 // 本体 viewer（frontend/src/viewer）とは独立した最小構成: 単一シリーズを StackViewport で表示し、
 // W/L・スタック送り・Zoom/Pan・回転/反転/諧調反転・Fit/実寸・4 隅オーバレイ・スケールバーを提供する。
 // ローカル File は dicom-image-loader の fileManager.add() で `dicomfile:` imageId 化して読む（サーバ不要）。
-import { RenderingEngine, Enums, eventTarget, init as coreInit, type Types } from "@cornerstonejs/core";
+import { RenderingEngine, Enums, eventTarget, metaData, init as coreInit, type Types } from "@cornerstonejs/core";
 import dicomImageLoader from "@cornerstonejs/dicom-image-loader";
 import {
   init as toolsInit,
@@ -60,15 +60,26 @@ export function ensureInit(): Promise<void> {
   return initPromise;
 }
 
+/** 現在の W/L（ウィンドウ中心/幅）。 */
+export interface WindowLevel {
+  center: number;
+  width: number;
+}
+
 export class PortableViewer {
   private engine: RenderingEngine | null = null;
   private els: ViewerElements;
   private imageCount = 0;
   private boundRefresh: () => void;
+  /** 画像・W/L・カメラ変更時に UI（スライダ/入力欄）を同期させる外部コールバック。 */
+  onChange: (() => void) | null = null;
 
   constructor(els: ViewerElements) {
     this.els = els;
-    this.boundRefresh = () => this.emitOverlay();
+    this.boundRefresh = () => {
+      this.emitOverlay();
+      this.onChange?.();
+    };
   }
 
   async setup(): Promise<void> {
@@ -188,6 +199,130 @@ export class PortableViewer {
     vp.setProperties({ invert: !cur });
     vp.render();
     this.emitOverlay();
+  }
+
+  // ── W/L ─────────────────────────────────────────────────────────────────
+  /** W/L を設定（center/width → voiRange）。 */
+  setWL(center: number, width: number): void {
+    if (!this.engine || !Number.isFinite(center) || !(width > 0)) return;
+    const vp = this.viewport();
+    const half = width / 2;
+    vp.setProperties({ voiRange: { lower: center - half, upper: center + half } });
+    vp.render();
+    this.emitOverlay();
+  }
+
+  /** 現在の W/L を返す（未設定なら null）。 */
+  getWL(): WindowLevel | null {
+    if (!this.engine) return null;
+    const voi = this.viewport().getProperties().voiRange;
+    if (!voi) return null;
+    return { center: Math.round((voi.upper + voi.lower) / 2), width: Math.round(voi.upper - voi.lower) };
+  }
+
+  /** 既定（DICOM の WindowCenter/Width）に戻す。無ければ resetProperties。 */
+  defaultWL(): void {
+    if (!this.engine) return;
+    const vp = this.viewport();
+    const imageId = vp.getCurrentImageId();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const voi = imageId ? (metaData.get("voiLutModule", imageId) as any) : null;
+    let wc = voi?.windowCenter;
+    let ww = voi?.windowWidth;
+    if (Array.isArray(wc)) wc = wc[0];
+    if (Array.isArray(ww)) ww = ww[0];
+    if (Number.isFinite(wc) && ww > 0) {
+      this.setWL(Number(wc), Number(ww));
+    } else {
+      vp.resetProperties();
+      vp.render();
+      this.emitOverlay();
+    }
+  }
+
+  // ── スライス送り ─────────────────────────────────────────────────────────
+  imageIndex(): number {
+    return this.engine ? this.viewport().getCurrentImageIdIndex() : 0;
+  }
+
+  imageTotal(): number {
+    return this.imageCount;
+  }
+
+  /** インデックス指定でスライスを表示（範囲外はクランプ）。 */
+  async setImageIndex(index: number): Promise<void> {
+    if (!this.engine || this.imageCount === 0) return;
+    const i = Math.max(0, Math.min(this.imageCount - 1, Math.round(index)));
+    if (i === this.viewport().getCurrentImageIdIndex()) return;
+    await this.viewport().setImageIdIndex(i);
+  }
+
+  // ── PNG 保存 ─────────────────────────────────────────────────────────────
+  /** 現在ビューを PNG で保存（オーバレイ／スケールバー焼き込み）。 */
+  savePng(filename: string): void {
+    if (!this.engine) return;
+    const vp = this.viewport();
+    const src = vp.getCanvas();
+    if (!src) return;
+    const out = document.createElement("canvas");
+    out.width = src.width;
+    out.height = src.height;
+    const ctx = out.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(src, 0, 0);
+    this.burnOverlays(ctx, src.width / this.els.viewport.clientWidth);
+    out.toBlob((blob) => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    }, "image/png");
+  }
+
+  /** オーバレイ4隅とスケールバーを出力 canvas に描画（scale = デバイスpx/CSSpx）。 */
+  private burnOverlays(ctx: CanvasRenderingContext2D, scale: number): void {
+    const W = ctx.canvas.width;
+    const H = ctx.canvas.height;
+    const pad = 10 * scale;
+    const fs = 12 * scale;
+    ctx.font = `${fs}px ui-monospace, Menlo, Consolas, monospace`;
+    ctx.textBaseline = "top";
+    ctx.shadowColor = "#000";
+    ctx.shadowBlur = 3 * scale;
+    ctx.fillStyle = "#d9f000";
+    const draw = (text: string, x: number, top: boolean, right: boolean) => {
+      if (!text) return;
+      const lines = text.split("\n");
+      ctx.textAlign = right ? "right" : "left";
+      lines.forEach((ln, i) => {
+        const y = top ? pad + i * fs * 1.4 : H - pad - (lines.length - i) * fs * 1.4;
+        ctx.fillText(ln, x, y);
+      });
+    };
+    draw(this.els.overlayTL.textContent ?? "", pad, true, false);
+    draw(this.els.overlayTR.textContent ?? "", W - pad, true, true);
+    draw(this.els.overlayBL.textContent ?? "", pad, false, false);
+    draw(this.els.overlayBR.textContent ?? "", W - pad, false, true);
+    // スケールバー（下辺中央）。
+    if (this.els.scalebarBar.style.display !== "none") {
+      const barCssPx = parseFloat(this.els.scalebarBar.style.width) || 0;
+      const barPx = barCssPx * scale;
+      const cx = W / 2;
+      const by = H - 8 * scale;
+      ctx.strokeStyle = this.els.scalebarBar.dataset.calibrated === "false" ? "#ff9f43" : "#d9f000";
+      ctx.lineWidth = 3 * scale;
+      ctx.beginPath();
+      ctx.moveTo(cx - barPx / 2, by);
+      ctx.lineTo(cx + barPx / 2, by);
+      ctx.stroke();
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.textAlign = "center";
+      ctx.fillText(this.els.scalebarLabel.textContent ?? "", cx, by - fs * 1.6);
+    }
+    ctx.shadowBlur = 0;
   }
 
   resize(): void {

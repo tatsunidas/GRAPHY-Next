@@ -21,6 +21,19 @@
         <input id="folder-input" type="file" webkitdirectory directory multiple hidden />
         <span id="status" data-kind="info"></span>
       </header>
+      <header id="toolbar2">
+        <label class="ctl" title="W/L プリセット">
+          W/L
+          <select id="wl-preset">
+            <option value="">既定 (DICOM)</option>
+          </select>
+        </label>
+        <label class="ctl" title="ウィンドウ幅">WW <input id="ww-input" type="number" step="1" /></label>
+        <label class="ctl" title="ウィンドウ中心">WL <input id="wc-input" type="number" step="1" /></label>
+        <button id="wl-set-btn" type="button" title="W/L を適用">設定</button>
+        <span class="sep"></span>
+        <button id="png-btn" type="button" title="現在ビューを PNG 保存">PNG 保存</button>
+      </header>
       <div id="body">
         <aside id="sidebar">
           <div id="tree"></div>
@@ -34,6 +47,12 @@
           <div id="scalebar">
             <div id="scalebar-bar"></div>
             <div id="scalebar-label"></div>
+          </div>
+          <div id="cinebar" hidden>
+            <button id="play-btn" type="button" title="シネ再生 / 停止">▶</button>
+            <input id="slice-slider" type="range" min="0" max="0" value="0" step="1" />
+            <span id="slice-label">0 / 0</span>
+            <label class="ctl" title="再生速度">fps <input id="fps-input" type="number" min="1" max="60" step="1" value="12" /></label>
           </div>
         </main>
       </div>

@@ -59,6 +59,48 @@ body {
   background: var(--line);
   margin: 2px 2px;
 }
+#toolbar2 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+#toolbar2 button {
+  background: var(--panel2);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+#toolbar2 button:hover {
+  border-color: var(--accent);
+}
+#toolbar2 .sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--line);
+}
+.ctl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+.ctl select,
+.ctl input {
+  background: var(--panel2);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 4px 6px;
+  font: inherit;
+}
+.ctl input[type="number"] {
+  width: 64px;
+}
 #status {
   color: var(--muted);
   margin-left: auto;
@@ -141,19 +183,64 @@ body {
   text-align: right;
 }
 .overlay.bl {
-  bottom: 28px;
+  bottom: 52px;
   left: 0;
 }
 .overlay.br {
-  bottom: 0;
+  bottom: 46px;
   right: 0;
   text-align: right;
+}
+
+/* シネ／スライス送りバー（下辺・ホバー時のみ不透明）。 */
+#cinebar {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: rgba(36, 39, 44, 0.72);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  opacity: 0.35;
+  transition: opacity 0.15s;
+}
+#cinebar:hover {
+  opacity: 1;
+}
+#cinebar[hidden] {
+  display: none;
+}
+#play-btn {
+  background: var(--panel2);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 12px;
+  cursor: pointer;
+  min-width: 40px;
+}
+#play-btn:hover {
+  border-color: var(--accent);
+}
+#slice-slider {
+  flex: 1;
+  accent-color: var(--accent);
+}
+#slice-label {
+  color: var(--muted);
+  min-width: 70px;
+  text-align: right;
+  font: 12px/1.2 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 }
 
 /* スケールバー（下辺中央やや左）。校正なしは色を変える。 */
 #scalebar {
   position: absolute;
-  bottom: 8px;
+  bottom: 50px;
   left: 50%;
   transform: translateX(-50%);
   pointer-events: none;

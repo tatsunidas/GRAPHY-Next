@@ -12,6 +12,7 @@ import {
   type SeriesRec,
 } from "./dicomdir";
 import { PortableViewer, type ViewerElements } from "./viewer";
+import { WL_PRESETS } from "./wlPresets";
 
 const $ = <T extends HTMLElement>(sel: string): T => {
   const el = document.querySelector<T>(sel);
@@ -30,6 +31,17 @@ const flipVBtn = $<HTMLButtonElement>("#flipv-btn");
 const invertBtn = $<HTMLButtonElement>("#invert-btn");
 const treeEl = $<HTMLDivElement>("#tree");
 const statusEl = $<HTMLDivElement>("#status");
+// P4.2 コントロール。
+const wlPresetSel = $<HTMLSelectElement>("#wl-preset");
+const wwInput = $<HTMLInputElement>("#ww-input");
+const wcInput = $<HTMLInputElement>("#wc-input");
+const wlSetBtn = $<HTMLButtonElement>("#wl-set-btn");
+const pngBtn = $<HTMLButtonElement>("#png-btn");
+const cinebar = $<HTMLDivElement>("#cinebar");
+const playBtn = $<HTMLButtonElement>("#play-btn");
+const sliceSlider = $<HTMLInputElement>("#slice-slider");
+const sliceLabel = $<HTMLSpanElement>("#slice-label");
+const fpsInput = $<HTMLInputElement>("#fps-input");
 
 const viewerEls: ViewerElements = {
   viewport: $<HTMLDivElement>("#viewport"),
@@ -44,10 +56,62 @@ const viewerEls: ViewerElements = {
 let viewer: PortableViewer | null = null;
 let model: DicomDirModel | null = null;
 let activeSeriesEl: HTMLElement | null = null;
+let cineTimer: number | null = null;
+let syncing = false; // onChange 由来の DOM 更新中は入力ハンドラを抑止。
 
 function setStatus(msg: string, kind: "info" | "error" = "info"): void {
   statusEl.textContent = msg;
   statusEl.dataset.kind = kind;
+}
+
+// W/L プリセット一覧を dropdown へ（先頭「既定 (DICOM)」は index.html の固定 option）。
+for (const p of WL_PRESETS) {
+  const opt = document.createElement("option");
+  opt.value = p.key;
+  opt.textContent = `${p.label}  (W${p.width}/L${p.center})`;
+  wlPresetSel.appendChild(opt);
+}
+
+/** ビューア状態 → UI（スライダ・WW/WC 入力・スライスラベル）を同期。 */
+function syncUi(): void {
+  if (!viewer) return;
+  syncing = true;
+  const total = viewer.imageTotal();
+  const idx = viewer.imageIndex();
+  cinebar.hidden = total <= 1;
+  sliceSlider.max = String(Math.max(0, total - 1));
+  sliceSlider.value = String(idx);
+  sliceLabel.textContent = `${idx + 1} / ${total}`;
+  const wl = viewer.getWL();
+  if (wl && document.activeElement !== wwInput && document.activeElement !== wcInput) {
+    wwInput.value = String(wl.width);
+    wcInput.value = String(wl.center);
+  }
+  syncing = false;
+}
+
+function stopCine(): void {
+  if (cineTimer !== null) {
+    clearInterval(cineTimer);
+    cineTimer = null;
+  }
+  playBtn.textContent = "▶";
+}
+
+function toggleCine(): void {
+  if (!viewer || viewer.imageTotal() <= 1) return;
+  if (cineTimer !== null) {
+    stopCine();
+    return;
+  }
+  const fps = Math.max(1, Math.min(60, Number(fpsInput.value) || 12));
+  playBtn.textContent = "⏸";
+  cineTimer = window.setInterval(() => {
+    if (!viewer) return;
+    const total = viewer.imageTotal();
+    const next = (viewer.imageIndex() + 1) % total;
+    void viewer.setImageIndex(next);
+  }, 1000 / fps);
 }
 
 async function ensureViewer(): Promise<PortableViewer> {
@@ -55,6 +119,7 @@ async function ensureViewer(): Promise<PortableViewer> {
     setStatus("ビューアを初期化しています…");
     viewer = new PortableViewer(viewerEls);
     await viewer.setup();
+    viewer.onChange = syncUi;
   }
   return viewer;
 }
@@ -62,9 +127,11 @@ async function ensureViewer(): Promise<PortableViewer> {
 async function showSeries(series: SeriesRec): Promise<void> {
   try {
     const v = await ensureViewer();
+    stopCine();
     const withFiles = series.images.filter((im) => im.file).length;
     setStatus(`表示中… (${withFiles}/${series.images.length} ファイル)`);
     await v.showSeries(series.images);
+    syncUi();
     setStatus(`${series.images.length} 画像を読み込みました`);
   } catch (e) {
     setStatus(e instanceof Error ? e.message : String(e), "error");
@@ -150,6 +217,48 @@ flipVBtn.addEventListener("click", () => viewer?.flipV());
 invertBtn.addEventListener("click", () => viewer?.invert());
 window.addEventListener("resize", () => viewer?.resize());
 
+// W/L プリセット選択（空値=既定 DICOM）。
+wlPresetSel.addEventListener("change", () => {
+  if (!viewer) return;
+  const key = wlPresetSel.value;
+  if (!key) {
+    viewer.defaultWL();
+  } else {
+    const p = WL_PRESETS.find((x) => x.key === key);
+    if (p) viewer.setWL(p.center, p.width);
+  }
+  wlPresetSel.value = ""; // プリセットは一度きり適用（以後は手動調整を反映）。
+});
+// WW/WC 直接入力。
+function applyWlInput(): void {
+  if (!viewer || syncing) return;
+  const ww = Number(wwInput.value);
+  const wc = Number(wcInput.value);
+  if (ww > 0 && Number.isFinite(wc)) viewer.setWL(wc, ww);
+}
+wlSetBtn.addEventListener("click", applyWlInput);
+wwInput.addEventListener("keydown", (e) => e.key === "Enter" && applyWlInput());
+wcInput.addEventListener("keydown", (e) => e.key === "Enter" && applyWlInput());
+// PNG 保存。
+pngBtn.addEventListener("click", () => {
+  if (!viewer) return;
+  const idx = viewer.imageIndex() + 1;
+  viewer.savePng(`graphy-portable-${String(idx).padStart(3, "0")}.png`);
+});
+// スライス送り／シネ。
+sliceSlider.addEventListener("input", () => {
+  if (!viewer || syncing) return;
+  stopCine();
+  void viewer.setImageIndex(Number(sliceSlider.value));
+});
+playBtn.addEventListener("click", toggleCine);
+fpsInput.addEventListener("change", () => {
+  if (cineTimer !== null) {
+    stopCine();
+    toggleCine(); // 新しい fps で再開。
+  }
+});
+
 /**
  * 自己検証モード（本番非影響。`?selfTest=<baseUrl>` 指定時のみ）。ネイティブのフォルダ選択ダイアログは
  * 自動化できないため、媒体ルート（VIEWER/ の親）から manifest.json と各ファイルを fetch して File[] を合成し、
@@ -171,6 +280,13 @@ async function runSelfTest(rawBase: string): Promise<void> {
     await handleFiles(files);
     const first = model?.patients[0]?.studies[0]?.series[0];
     if (first) await showSeries(first);
+    // P4.2 回帰: 肺野プリセット適用 → W/L が変わることを確認。
+    let wlAfterPreset = "";
+    if (viewer) {
+      viewer.setWL(-600, 1500);
+      const wl = viewer.getWL();
+      wlAfterPreset = wl ? `W${wl.width}/L${wl.center}` : "";
+    }
     w.__selfTest = {
       status: "ok",
       patients: model?.patients.length ?? 0,
@@ -178,6 +294,9 @@ async function runSelfTest(rawBase: string): Promise<void> {
       missingFiles: model?.missingFiles ?? -1,
       overlayTL: viewerEls.overlayTL.textContent ?? "",
       scalebar: viewerEls.scalebarLabel.textContent ?? "",
+      total: viewer?.imageTotal() ?? 0,
+      wlAfterPreset,
+      cinebarVisible: !cinebar.hidden,
     };
     console.log("SELFTEST_RESULT " + JSON.stringify(w.__selfTest));
   } catch (e) {
