@@ -75,7 +75,7 @@ GRAPHY-Next の 2D ビューアは **Cornerstone3D（wadouri / dicom-image-loade
    最小 vanilla TS で実装（RenderingEngine 単一・5D/タイル/LUT は P4 送り）。
 2. **P2** ✅: Export で `VIEWER/` 一式を ZIP 同梱（ビルド成果物のコピー）。README に使い方を記載。
 3. **P3**: 方式 B（Electron portable）を任意提供。OS 別パッケージング。
-4. **P4**: 複数シリーズ/タイル・オーバーレイ拡充・LUT・計測等、本体 viewer の機能を段階移植。
+4. **P4**: 複数シリーズ/タイル・オーバーレイ拡充・LUT・計測等、本体 viewer の機能を段階移植（**詳細は §7**）。
 
 ## 5. 留意点
 - 媒体サイズ: wasm codec（openjph 等）が大きい。portable では必要 codec のみ同梱を検討（現状は全同梱で ≒4.5MB）。
@@ -108,3 +108,44 @@ GRAPHY-Next の 2D ビューアは **Cornerstone3D（wadouri / dicom-image-loade
   実利用で確認（File API 読取は file:// で標準動作、レンダリング一式は上記で実証済み）。
 - **フォルダ選択の代替**: 現状 `webkitdirectory`（Chromium/Firefox 可）。`showDirectoryPicker` は未使用。
 - **同梱バージョン表記**: README にビルド版数を出す（P2 で未対応）。
+
+## 7. P4 計画（機能拡充・2026-07-23 立案）
+> **位置づけ**: P1/P2 で「受け取った相手が DICOM を閲覧できる」最小線は達成。P4 は**交換メディアの受け手
+> （紹介先医師・患者・QA 担当）が実務で使える 2D 閲覧機能**を、本体 2D ビューアから段階移植する。
+
+### 設計原則（P4 全体で不変）
+- **vanilla TS 維持・React 非依存**: 本体の該当ロジック（`overlayConfig.ts`/`overlayText.ts`/`scaleBar.ts`/
+  W/L プリセット等）は React フック前提の箇所を含むため、**共有せずロジックのみ切り出して脱 React 移植**する
+  （portable は別バンドル。コピー由来の乖離は許容し、本体の進化とは独立管理）。
+- **サーバ/JRE 不要・file:// 安全**を維持（P1/P2 で実証した範囲を出ない）。
+- **軽量維持**: 計測は `@cornerstonejs/tools` 同梱済みで増分小。重い依存追加は避ける。
+- **メタデータ取得**: 表示中インスタンスの値は Cornerstone の `metaData.get(type, imageId)`
+  （dicom-image-loader が populate する patient/generalSeries/generalStudy/imagePlane/imagePixel 各 module）を第一とし、
+  不足タグは手元の File を `dicom-parser` で読む（DICOMDIR 解析で既に読取実績あり）。
+
+### スコープ外（portable では扱わない）
+MPR / 3D / Curved / リスライス（`cornerstone-3d-geometry-caveat` 対象）、セグメンテーション/ROI マスク編集、
+Fusion、SUV 較正、RTSTRUCT/SEG、PACS/DICOMweb 連携、動画再生（別途 `fw/video-viewer-design.md`）。
+
+### 段階（優先度順・各サブフェーズ独立で出荷可能）
+- **P4.1 オーバレイ拡充＋スケールバー＋基本トランスフォーム**（価値大・工数小〜中／推奨初手）
+  - 4 隅タグベースオーバレイ（本体 `overlayConfig.ts` の DEFAULT を移植: 左上=患者、右上=シリーズ、
+    加えて StudyDate/Modality/Institution、SliceThickness/SliceLocation/kVp/mAs、PixelSpacing 等）。
+  - スケールバー（`scaleBar.ts` の PixelSpacing→mm 目盛ロジックを移植）。
+  - 回転 90°/反転 H・V、Fit/実寸(1:1)、諧調反転(invert)。現状の簡易 3 隅オーバレイを置換。
+- **P4.2 W/L プリセット＋スライダ/シネ＋PNG 保存**（価値中・工数小〜中）
+  - モダリティ別 W/L プリセット（CT: 肺/縦隔/骨/腹部/脳、汎用）＋数値直接入力。
+  - スライススライダ（スクロールバー）＋シネ再生（play/pause・fps 可変）。
+  - 現在ビューを PNG 保存（viewport canvas → `<a download>`。オーバレイ焼き込みは任意）。
+- **P4.3 計測ツール**（価値中・工数中）
+  - Length / Angle / Elliptical・Rectangle ROI / Probe（tools 同梱済み＝配線中心）。結果表示
+    （mm・面積・HU 平均/SD）。ツールバー切替、注釈クリア。
+- **P4.4 複数シリーズ／レイアウト／サムネイル**（価値中・工数中〜大）
+  - サイドバーにシリーズサムネイル（先頭スライス縮小描画）。2×1/2×2 タイルで複数シリーズ同時表示。
+    参照線は幾何注意のため任意（`cornerstone-3d-geometry-caveat` 準拠、無理はしない）。
+- **P4.5 付帯**（価値小・任意）
+  - i18n（日/英トグル。受け手が海外の可能性）／DICOM タグダンプパネル／ショートカット一覧。
+
+### 各サブフェーズ共通の検証
+`?selfTest` ハーネス（§6）を拡張し、http:// と file:// × 非圧縮/JPEG2000 で回帰（オーバレイ値・スケール・
+プリセット適用・計測数値のスナップショット）。ネイティブのフォルダ選択のみ人手確認。
