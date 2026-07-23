@@ -160,6 +160,10 @@ public class ExportService {
                 zip.closeEntry();
             }
 
+            if (opts.includePortableViewer()) {
+                copyPortableViewer(zip);
+            }
+
             Summary summary = new Summary(layout.patDir.size(), studyUidsExported.size(), seriesCount, instanceCount);
             if (opts.includeReadme()) {
                 zip.putNextEntry(new ZipEntry("README.txt"));
@@ -256,6 +260,48 @@ public class ExportService {
         return Files.exists(p) ? p : null;
     }
 
+    /**
+     * classpath の {@code portable-viewer/**}（ビルド時に frontend/portable-dist から同梱）を
+     * ZIP の {@code VIEWER/} 以下へ書き出す。成果物が同梱されていない（frontend.skip 等）場合は
+     * 警告のみで Export 自体は継続する（DICOMDIR は既に出力済みで他ビューアからは読める）。
+     */
+    static void copyPortableViewer(ZipOutputStream zip) throws IOException {
+        var resolver = new org.springframework.core.io.support.PathMatchingResourcePatternResolver();
+        org.springframework.core.io.Resource[] resources;
+        try {
+            resources = resolver.getResources("classpath*:/portable-viewer/**");
+        } catch (IOException e) {
+            log.warn("export: portable viewer 成果物の列挙に失敗（同梱をスキップ）", e);
+            return;
+        }
+        int copied = 0;
+        for (org.springframework.core.io.Resource res : resources) {
+            if (!res.isReadable()) {
+                continue; // ディレクトリエントリなど
+            }
+            String url = res.getURL().toString();
+            int idx = url.indexOf("portable-viewer/");
+            if (idx < 0) {
+                continue;
+            }
+            String rel = url.substring(idx + "portable-viewer/".length());
+            if (rel.isEmpty() || rel.endsWith("/")) {
+                continue;
+            }
+            zip.putNextEntry(new ZipEntry("VIEWER/" + rel));
+            try (java.io.InputStream in = res.getInputStream()) {
+                in.transferTo(zip);
+            }
+            zip.closeEntry();
+            copied++;
+        }
+        if (copied == 0) {
+            log.warn("export: portable viewer 成果物が classpath:/portable-viewer に見つかりません（VIEWER/ 同梱なし）");
+        } else {
+            log.info("export: portable viewer を同梱しました（{} ファイル）", copied);
+        }
+    }
+
     private static String readme(Options opts, Summary s) {
         StringBuilder sb = new StringBuilder();
         sb.append("GRAPHY DICOM Export\n");
@@ -276,10 +322,15 @@ public class ExportService {
             sb.append("  ルートの DICOMDIR を読み込むと一覧表示できます。\n\n");
         }
         if (opts.includePortableViewer()) {
-            sb.append("Portable 2D Viewer:\n");
-            sb.append("  A portable GRAPHY 2D Viewer is intended to ship with this media and\n");
-            sb.append("  auto-load the DICOMDIR on launch. (See fw/export-portable-viewer.md)\n");
-            sb.append("  付属の 2D Viewer は起動時に DICOMDIR を探索して表示します。\n\n");
+            sb.append("Portable 2D Viewer (VIEWER/):\n");
+            sb.append("  A standalone GRAPHY 2D Viewer is bundled under VIEWER/.\n");
+            sb.append("  1) Open VIEWER/index.html in a Chromium-based browser (Chrome/Edge).\n");
+            sb.append("  2) Click 'Select folder' and choose the root folder of this media\n");
+            sb.append("     (the folder that contains DICOMDIR and DICOM/).\n");
+            sb.append("  3) Pick a series from the list to view it (window/level, scroll, zoom).\n");
+            sb.append("  No installation or server is required.\n");
+            sb.append("  付属の 2D Viewer は VIEWER/index.html を Chromium 系ブラウザで開き、\n");
+            sb.append("  「フォルダを選択」でこのメディアのルート（DICOMDIR を含む）を選ぶと表示できます。\n\n");
         }
         sb.append("Exported by GRAPHY (Visionary Imaging Services, Inc.)\n");
         return sb.toString();

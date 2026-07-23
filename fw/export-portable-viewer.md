@@ -1,11 +1,34 @@
 # 2D Viewer Portable（FW・設計）
 
-> 作成日: 2026-06-30
-> ステータス: **FW（設計のみ）／実装は保留中（TODO）**。Export 側の配線（同梱トグル＋DICOMDIR 必須化）は実装済。
-> ランタイム本体・同梱・同梱テストは未実装（`fw/export.md` §7 の TODO 参照）。
-> **保留理由**: 2D Viewer 本体が現在開発中（別インスタンスで進行）。本体はこの portable の母体になるため、
-> 本体の API/構成が固まってから着手する。
+> 作成日: 2026-06-30 ／ 更新: 2026-07-23
+> ステータス: **P1（方式 A ランタイム MVP）実装済・P2（VIEWER/ の ZIP 同梱）実装済**。
+> 実機（Chromium・実 DICOMDIR）での表示検証は未実施（下記 §6 参照）。P3（Electron portable）/ P4（機能拡充）は未着手。
 > 関連: `fw/export.md`, `fw/viewer-2d-screen.md`, `fw/viewer-2d-architecture.md`。
+
+## 実装マップ（2026-07-23）
+- ランタイム本体（方式 A・vanilla TS・React 本体とは別バンドル）:
+  - `frontend/portable/index.html` … 単独 HTML（ツールバー＋サイドバー＋ビューポート）。
+  - `frontend/portable/src/main.ts` … フォルダ選択→DICOMDIR 解析→シリーズ木→表示の配線。
+  - `frontend/portable/src/dicomdir.ts` … `dicom-parser` で DICOMDIR を解析し Patient/Study/Series/Image 木を構築。
+    ReferencedFileID(x00041500) を "/" 連結し、`<input webkitdirectory>` の `webkitRelativePath`（先頭のルート
+    フォルダ名を除去）で実 File を引き当てる。basename フォールバックあり。
+  - `frontend/portable/src/viewer.ts` … Cornerstone3D StackViewport の薄いラッパ。ローカル File は
+    `dicomImageLoader.wadouri.fileManager.add(file)` で `dicomfile:` imageId 化（**カスタムローダ不要**）。
+    ツール = W/L(左)/Pan(中)/Zoom(右)/スタック送り(ホイール)。
+- ビルド: `frontend/vite.portable.config.ts`（root=`portable/`, out=`portable-dist/`, base `./`）。
+  npm scripts: `dev:portable` / `typecheck:portable` / `build:portable`。tsconfig=`frontend/tsconfig.portable.json`。
+  成果物サイズ ≒ 4.5MB（うち openjph WASM 2MB＝JPEG2000/HTJ2K コーデック）。
+- 同梱（P2）: `backend/pom.xml` が `npm run build:portable` を実行し `portable-dist` を classpath の
+  `portable-viewer/` へ配置（**static/ ではない＝web 配信しない**）。`ExportService.copyPortableViewer()` が
+  `classpath*:/portable-viewer/**` を ZIP の `VIEWER/` 以下へ相対パス保持で書き出す（`ExportPortableViewerTest`）。
+  成果物が無い（`-Dfrontend.skip`）場合は警告のみで Export は継続。
+
+## 方針決定（2026-07-23）: Weasis は使わない
+交換メディア同梱ビューアとして **Weasis を採用しない**（自前の Cornerstone3D ベース Portable 2D Viewer で完結する）。
+- **理由**: (1) Zero-install（ブラウザで `VIEWER/index.html` を開くだけ。Java ランタイム/OS 別バイナリ不要）、
+  (2) Weasis(EPL) の同梱に伴うライセンス表記・配布物肥大を回避、(3) 本体 viewer と表示挙動・見た目を一致させやすい。
+- **含意**: 成果物に Weasis 成分は無いため NOTICE 等への Weasis 記載は不要。P3（Electron portable）でも Weasis は使わない。
+- リポジトリ内の "weasis" 参照は `deploy/dcm4chee/README.md` の比較説明 1 箇所のみ（依存・同梱ではない）。
 
 ## 0. 目的
 Export した DICOM 交換メディア（ZIP 展開後のフォルダ / CD・DVD・USB）に、**単体で動く 2D Viewer** を同梱し、
@@ -47,13 +70,41 @@ GRAPHY-Next の 2D ビューアは **Cornerstone3D（wadouri / dicom-image-loade
     imageId 生成層（`imageId.ts`）に **media(DICOMDIR) ソース**を足す設計にする（web=wadors, standalone=wadouri と並ぶ第3の経路）。
 
 ## 4. 段階プラン
-1. **P1**: 方式 A の MVP。`VIEWER/index.html`（フォルダ選択→DICOMDIR 解析→シリーズ一覧→単一シリーズ表示）。
-   既存 SeriesViewer/Viewer2D の再利用範囲を切り出し（RenderingEngine 共有・5D は後回し）。
-2. **P2**: Export で `VIEWER/` 一式を ZIP 同梱（ビルド成果物のコピー）。README/autorun 整備。
+1. **P1** ✅: 方式 A の MVP。`VIEWER/index.html`（フォルダ選択→DICOMDIR 解析→シリーズ一覧→単一シリーズ表示）。
+   本体 SeriesViewer/Viewer2D は React で重いため**再利用せず**、Cornerstone3D StackViewport を直に叩く
+   最小 vanilla TS で実装（RenderingEngine 単一・5D/タイル/LUT は P4 送り）。
+2. **P2** ✅: Export で `VIEWER/` 一式を ZIP 同梱（ビルド成果物のコピー）。README に使い方を記載。
 3. **P3**: 方式 B（Electron portable）を任意提供。OS 別パッケージング。
-4. **P4**: 複数シリーズ/タイル・オーバーレイ・LUT 等、本体 viewer の機能を段階移植。
+4. **P4**: 複数シリーズ/タイル・オーバーレイ拡充・LUT・計測等、本体 viewer の機能を段階移植。
 
 ## 5. 留意点
-- 媒体サイズ: wasm codec（openjph 等）が大きい。portable では必要 codec のみ同梱を検討。
+- 媒体サイズ: wasm codec（openjph 等）が大きい。portable では必要 codec のみ同梱を検討（現状は全同梱で ≒4.5MB）。
 - セキュリティ: `file://` + worker + wasm の同一オリジン/CORS 制約。方式 A は実機検証が要（ブラウザ依存）。
 - バージョン整合: 同梱 viewer のバージョンを README に明記（媒体は不変・本体は進化するため）。
+
+## 6. 実機検証結果（2026-07-23・Chrome 149 ヘッドレス）
+実 DICOMDIR（CT 50 スライス）を用い、**http:// と `file://` の両オリジン × 非圧縮／JPEG2000 の計 4 パターン**で
+自己検証（`?selfTest` 経路）を実行し、**全て CT 画像の描画まで成功**（W249/L40, 50/50 解決, 未解決参照 0,
+ソフトウェア WebGL=swiftshader）。
+
+| データ | http:// | file:// |
+|---|---|---|
+| 非圧縮（Explicit VR LE） | ✅ 描画 | ✅ 描画 |
+| JPEG2000 Lossless（TS .90） | ✅ 描画 | ✅ 描画 |
+
+- ✅ **サーバ/JRE 不要**で静的バンドルが起動（方式 A の前提を実証）。
+- ✅ `dicom-parser` による DICOMDIR 解析 → Patient/Study/Series 木 → ReferencedFileID→実 File 引き当て（50/50）。
+- ✅ **`file://` オリジンで Cornerstone3D の Web Worker（blob:）+ WASM デコード + WebGL 描画が動作**
+  （懸念だった file:// の worker/WASM 制約はクリア）。
+- ✅ **JPEG2000（WASM コーデック openjph/openjpeg）のデコード経路も http/file 両方で動作**。J2K データは
+  `/home/tatsunidas/dcm4che-5.34.2/bin/dcm2dcm -t 1.2.840.10008.1.2.4.90` で非圧縮 CT から生成。
+- 検証ハーネス: `frontend/portable/src/main.ts` の `?selfTest=<base>`（本番非影響。ネイティブのフォルダ選択
+  ダイアログは自動化不可のため、媒体ルートから manifest.json+各ファイルを fetch して同一の handleFiles パイプラインへ
+  流す）。file:// では fetch 補助に `--allow-file-access-from-files` を付与（実利用のフォルダ選択は File API 直読み＝
+  当該フラグ不要。worker/WASM/WebGL 挙動の代理検証）。CDP 駆動は自作の最小 WebSocket クライアントで完了待ち→撮影。
+
+### 残タスク
+- **ネイティブのフォルダ選択ダイアログ**自体（`<input webkitdirectory>`）は OS ネイティブで自動化不可 → 人手確認 or
+  実利用で確認（File API 読取は file:// で標準動作、レンダリング一式は上記で実証済み）。
+- **フォルダ選択の代替**: 現状 `webkitdirectory`（Chromium/Firefox 可）。`showDirectoryPicker` は未使用。
+- **同梱バージョン表記**: README にビルド版数を出す（P2 で未対応）。

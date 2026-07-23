@@ -85,16 +85,19 @@ graphy-export.zip
 - `ExportFilenameTest`（患者 ID 付きファイル名・サニタイズ, 4 件）。
 - いずれもファイル非依存。`mvn -o test` 全 green。
 
-## 7. TODO（2D Viewer portable・**保留中**）
-> **保留理由**: 2D Viewer 本体が現在開発中（別インスタンスで進行）。本体が安定してから着手する。
-> portable viewer は本体の成果物を切り出して構築するため、本体の API/構成が固まるまで実装しない。
+## 7. 2D Viewer portable（P1/P2 実装済・2026-07-23）
+> 詳細は `fw/export-portable-viewer.md`。方式 A（静的バンドル＋ローカル File 読取）で実装。
 
-- [ ] **2D Viewer portable ランタイム本体の実装**（`fw/export-portable-viewer.md` の段階プラン P1〜）。
-      起動時に媒体内の `DICOMDIR` を探索→患者/スタディ/シリーズを一覧→表示する自己完結ビューア。
-- [ ] **portable viewer 同梱の実装**（Export 時に `VIEWER/` 一式を ZIP に同梱。現状は同梱トグル＋DICOMDIR
-      必須化＋README 記載のみで、ランタイム実体は未同梱）。
-- [ ] **同梱テスト**: portable viewer を同梱した ZIP を展開し、`DICOMDIR` 探索→起動→表示まで通ることの検証
-      （現状の Export テストは ZIP 構造/DICOMDIR 生成までで、portable viewer の起動確認は未カバー）。
+- [x] **2D Viewer portable ランタイム本体の実装**（P1）。`frontend/portable/`（vanilla TS＋Cornerstone3D
+      StackViewport）。フォルダ選択→`DICOMDIR` 解析→患者/スタディ/シリーズ一覧→表示。ローカル File は
+      `dicomImageLoader.wadouri.fileManager.add()` で `dicomfile:` 化。ビルド=`npm run build:portable`→`portable-dist/`。
+- [x] **portable viewer 同梱の実装**（P2）。`backend/pom.xml` が `build:portable` を実行し `portable-dist` を
+      classpath `portable-viewer/` に配置。`ExportService.copyPortableViewer()` が `VIEWER/` として ZIP へ同梱
+      （`ExportPortableViewerTest`）。
+- [x] **実機表示検証（2026-07-23 済）**: Chrome 149 ヘッドレスで http:// と `file://` × 非圧縮／JPEG2000 の 4 パターン
+      すべてで実 DICOMDIR（CT50）を表示成功（`file://` の worker+WASM+WebGL、J2K の WASM デコードともクリア）。
+      詳細=`fw/export-portable-viewer.md` §6。
+- [ ] **残**: ネイティブのフォルダ選択ダイアログ自体は自動化不可（人手/実利用で確認）。
 
 ## 8. その他の未対応 / 将来課題
 - **匿名化して Export**（基本デidentィファイ）。本格版は Anonymizer ツールと連携。

@@ -1,0 +1,139 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
+:root {
+  --bg: #1b1d21;
+  --panel: #24272c;
+  --panel2: #2c3036;
+  --line: #3a3f47;
+  --fg: #e6e8ea;
+  --muted: #9aa0a8;
+  --accent: #4c8dff;
+  --error: #ff6b6b;
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.5 system-ui, "Segoe UI", "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
+}
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+#brand {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+#toolbar button {
+  background: var(--panel2);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+#toolbar button:hover {
+  border-color: var(--accent);
+}
+#status {
+  color: var(--muted);
+  margin-left: auto;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#status[data-kind="error"] {
+  color: var(--error);
+}
+#body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+#sidebar {
+  width: 320px;
+  min-width: 220px;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  overflow: auto;
+}
+#tree {
+  padding: 8px 4px;
+}
+.node {
+  padding: 4px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.node.patient {
+  font-weight: 600;
+  margin-top: 6px;
+}
+.node.study {
+  color: var(--muted);
+  padding-left: 20px;
+}
+.node.series {
+  padding-left: 36px;
+  cursor: pointer;
+}
+.node.series:hover {
+  background: var(--panel2);
+}
+.node.series.active {
+  background: var(--accent);
+  color: #fff;
+}
+#stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  background: #000;
+}
+#viewport {
+  position: absolute;
+  inset: 0;
+}
+.overlay {
+  position: absolute;
+  color: #d9f000;
+  text-shadow: 0 0 3px #000;
+  font: 12px/1.4 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  pointer-events: none;
+  padding: 8px 10px;
+  white-space: pre;
+}
+.overlay.tl {
+  top: 0;
+  left: 0;
+}
+.overlay.bl {
+  bottom: 0;
+  left: 0;
+}
+.overlay.br {
+  bottom: 0;
+  right: 0;
+  text-align: right;
+}

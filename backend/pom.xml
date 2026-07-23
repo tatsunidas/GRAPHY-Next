@@ -175,6 +175,16 @@
                             <arguments>run build</arguments>
                         </configuration>
                     </execution>
+                    <!-- Portable 2D Viewer（Export の VIEWER/ 同梱用。fw/export-portable-viewer.md）を
+                         portable-dist/ へビルドする。 -->
+                    <execution>
+                        <id>npm-build-portable</id>
+                        <goals><goal>npm</goal></goals>
+                        <phase>generate-resources</phase>
+                        <configuration>
+                            <arguments>run build:portable</arguments>
+                        </configuration>
+                    </execution>
                 </executions>
             </plugin>
 
@@ -194,6 +204,22 @@
                             <resources>
                                 <resource>
                                     <directory>${frontend.dir}/dist</directory>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                    <!-- Portable 2D Viewer 成果物を classpath の portable-viewer/ へ同梱（static/ ではない＝
+                         web 配信しない。Export 時に ExportService が VIEWER/ として ZIP へ書き出す）。 -->
+                    <execution>
+                        <id>copy-portable-viewer</id>
+                        <phase>prepare-package</phase>
+                        <goals><goal>copy-resources</goal></goals>
+                        <configuration>
+                            <skip>${frontend.skip}</skip>
+                            <outputDirectory>${project.build.outputDirectory}/portable-viewer</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>${frontend.dir}/portable-dist</directory>
                                 </resource>
                             </resources>
                         </configuration>

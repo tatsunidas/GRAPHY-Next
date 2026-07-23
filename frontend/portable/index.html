@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GRAPHY Portable 2D Viewer</title>
+  </head>
+  <body>
+    <div id="app">
+      <header id="toolbar">
+        <span id="brand">GRAPHY Portable 2D Viewer</span>
+        <button id="pick-btn" type="button">フォルダを選択</button>
+        <button id="reset-btn" type="button">表示リセット</button>
+        <input id="folder-input" type="file" webkitdirectory directory multiple hidden />
+        <span id="status" data-kind="info"></span>
+      </header>
+      <div id="body">
+        <aside id="sidebar">
+          <div id="tree"></div>
+        </aside>
+        <main id="stage">
+          <div id="viewport"></div>
+          <div id="overlay-tl" class="overlay tl"></div>
+          <div id="overlay-bl" class="overlay bl"></div>
+          <div id="overlay-br" class="overlay br"></div>
+        </main>
+      </div>
+    </div>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

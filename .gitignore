@@ -5,6 +5,7 @@ backend/src/main/resources/static/
 # --- Node / frontend ---
 frontend/node_modules/
 frontend/dist/
+frontend/portable-dist/
 desktop/node_modules/
 # frontend-maven-plugin が配置する node ランタイム
 frontend/node/
