@@ -45,10 +45,26 @@ Cornerstone VideoViewport で再生できる MP4** であり、**サーバ側で
 | 実装コスト | 中（メタデータ配線・viewport 生成） | 小 |
 | ジオメトリバグの影響 | 無し（動画は 2D。VideoViewport は VTK 3D 経路を通らない） | 無し |
 
-**採用**: **A（VideoViewport）を本命**。理由 = 既存 2D ビューアのツール/ツールバー/cine と同じ土俵に載り、
-WW/WL・（将来）計測・注釈まで一貫して提供できる。ユーザ指定も VideoViewport。
+**採用**: **A（VideoViewport）を描画エンジンとして本命**。理由 = ツール（計測/注釈/Pan/Zoom）を
+`@cornerstonejs/tools` と同じ土俵に載せられ、WW/WL・（将来）計測・注釈まで一貫提供できる。
 **B は P1 のフォールバック/実機切り分け用**として残す（`<video>` が鳴れば「配信・コーデックは正常、
 残りは VideoViewport 配線」と切り分けられる。Portable Viewer での軽量再生にも流用可）。
+
+### 2.1 配置方針：**SeriesViewer とは独立した VideoViewer コンポーネント（決定）**
+描画に VideoViewport を使う一方で、**動画ビューアは `SeriesViewer`（ZCT 5D スタックビューア）の機構を
+通さない独立コンポーネント**とする。SeriesViewer にセル差し替えで埋め込む案（旧 §5.3）は採らない。
+
+**理由（決定の根拠）**:
+- 動画は将来 **サマライゼーション（要約・代表フレーム/ハイライト抽出）・クリッピング（トリミング/区間切り出し）**
+  など、**静止画シリーズには無い動画専用の操作**を追加する見込み。これらは ZCT スライス機構と無関係で、
+  SeriesViewer に同居させると特別扱いが増殖する。
+- 制御系が本質的に別（動画の再生/シーク/フレーム精度 vs ZCT シネ/スライス送り）、描画基盤も別
+  （VideoViewport は `useCustomRenderingPipeline=true` で共有 RenderingEngine のスタック前提リサイズ機構と噛み合わない）、
+  幾何前提も別（動画は FrameOfReference/患者 LPS 幾何を持たず、ROI/マスク窓間同期が意味を成さない）。
+- ⇒ **完全分離**の方が総保守コストが低い。詳細な同居デメリットは §5.5。
+
+**共有するのは薄い外殻のみ**（患者/スタディ/シリーズ情報の chrome・ウィンドウ枠）。ZCT スライダ・シネ・
+ThickSlab・Sort・GridView・オーバーレイ同期といった SeriesViewer 本体機構は**通さない**。
 
 ## 3. アーキテクチャ全体像
 
@@ -62,10 +78,12 @@ backend: VideoRenderController
   GET /api/instances/{sop}/video-metadata      … Rows/Columns/NumberOfFrames/FrameTime(→fps)/TransferSyntax
         │  HTTP Range (206)
         ▼
-frontend: VideoViewport（ViewportType.VIDEO）
-  ├ metadataProvider: imageId → { rendered URL, rows, cols, fps, numberOfFrames }
-  ├ SeriesViewer が SOPClass=video を検出 → <VideoViewer/> にルーティング（従来の案内表示を置換）
-  └ 再生 UI: 既存 cine コントロール（▶/⏸・fps・スライダ）を frame/time に接続
+frontend: 独立 VideoViewer コンポーネント（SeriesViewer/ZCT を経由しない）
+  ├ VideoViewport（ViewportType.VIDEO）を自前の RenderingEngine で生成
+  ├ metadataProvider: imageId → imageUrlModule{rendered} + generalSeriesModule{Modality} + cineModule{cineRate,numberOfFrames}
+  ├ InstanceList が SOPClass/転送構文=video を検出 → <VideoViewer/> へルーティング（従来の案内表示を置換）
+  ├ 動画専用の再生 UI（タイムライン・フレーム n/N・速度・ループ・mute）を自前で持つ
+  └ 将来: サマライゼーション / クリッピング等の動画専用操作をこのコンポーネントに追加
 ```
 
 ## 4. バックエンド設計：`/rendered` エンドポイント
@@ -120,40 +138,66 @@ frontend: VideoViewport（ViewportType.VIDEO）
 - 単一フラグメントが `Integer.MAX_VALUE` 超（取込側で拒否済みだが）→ ストリーミング連結で対応。
 - ffmpeg はタイムアウト付きプロセス（取込側の 10 分ガードを踏襲、配信は短めに）。
 
-## 5. フロントエンド設計：VideoViewport 統合
+## 5. フロントエンド設計：独立 VideoViewer コンポーネント
+
+**方針（§2.1 決定）**: `SeriesViewer`（ZCT 5D）を経由せず、動画専用の独立コンポーネント
+`VideoViewer.tsx` を新設し、そこで VideoViewport を**自前の RenderingEngine** で駆動する。
+SeriesViewer 本体機構（ZCT スライダ・シネ interval・ThickSlab・Sort・GridView・オーバーレイ同期）は通さない。
 
 ### 5.1 メタデータ配線
-- Cornerstone の VideoViewport は `imageId` から**動画 URL と諸元**をメタデータプロバイダ経由で解決する
-  （OHIF と同じパターン）。専用 `imageId` スキームを定義: `graphy-video:{sop}`。
-- `frontend/src/viewer/` に `videoMetadataProvider.ts` を追加し、`cornerstone.metaData.addProvider` で登録:
-  - `imageId → rendered URL`（`/api/instances/{sop}/rendered`）
-  - `imagePlaneModule`/`generalSeriesModule` 相当（rows/cols/fps/numberOfFrames を `video-metadata` から）
-- URL は既存の同一オリジン方針（`api.ts` の base）に合わせる。
+- Cornerstone の VideoViewport は `imageId` から動画 URL と諸元を**メタデータプロバイダ経由**で解決する。
+  実コード確認済み（`VideoViewport.js` `setVideo`）: 以下 3 モジュールを参照する。
+  - `imageUrlModule`（`MetadataModules.IMAGE_URL`）→ `{ rendered: <mp4 URL> }`（**必須**。内部で `videoElement.src` に入る）
+  - `generalSeriesModule`（`GENERAL_SERIES`）→ `{ Modality }`
+  - `cineModule`（`CINE`）→ `{ cineRate, numberOfFrames }`
+  - 加えて `getImageDataMetadata` が rows/columns/imagePlane を参照。
+- 専用 `imageId` スキーム: `graphy-video:{sop}`。`frontend/src/viewer/videoMetadataProvider.ts` を追加し
+  `cornerstone.metaData.addProvider` で上記モジュールを返す（URL=`/api/instances/{sop}/rendered`、諸元=`/video-metadata`）。
+- URL は既存の同一オリジン方針（`api.ts` の base）に合わせる。web は §8 で BFF 経路に差し替え。
 
-### 5.2 ビューアコンポーネント `VideoViewer.tsx`
-- `RenderingEngine.enableElement({ viewportId, type: ViewportType.VIDEO, element })` で VIDEO viewport を生成。
+### 5.2 ビューアコンポーネント `VideoViewer.tsx`（独立）
+- **自前 RenderingEngine** を持つ（Viewer2D の共有エンジンには相乗りしない。§5.5 の理由）。
+  `enableElement({ viewportId, type: ViewportType.VIDEO, element })` で VIDEO viewport を生成。
 - `viewport.setVideo("graphy-video:{sop}")` で読み込み → `play()`。
-- 既存 2D ビューアの **cine コントロール UI を流用**して以下を接続:
-  - ▶/⏸ = `togglePlayPause()`
-  - シークバー = `setTime(sec)` / 現在時刻は `timeupdate` 相当のイベント or ポーリング
-  - フレーム送り = `setFrameNumber(n)`（`numberOfFrames`/`fps` から総フレーム算出）
-  - 速度 = `setPlaybackRate()`、ループ = プロパティ
+- **動画専用の再生 UI を自前で持つ**（SeriesViewer の cine を流用しない）:
+  - ▶/⏸ = `togglePlayPause()`、シークバー = `setTime(sec)`（現在時刻は video の `timeupdate`）
+  - フレーム n/N 表示・フレーム送り = `setFrameNumber(n)`（`numberOfFrames`/`fps` から総フレーム）
+  - 速度 = `setPlaybackRate()`、ループ = プロパティ、mute（映像のみ運用だが UI は用意）
   - WW/WL = `setWindowLevel()`（DICOM VOI があれば初期適用）
 - **ツールは最小構成から**: P1 は Pan/Zoom のみ。計測/注釈は P3（VideoViewport はツールに対応）。
+- **薄い外殻のみ共有**: 患者/スタディ/シリーズ情報 chrome とウィンドウ枠は共通レイアウト部品として切り出し、
+  VideoViewer と SeriesViewer の双方から使う（chrome 部品のみ共有／本体機構は非共有）。
 
 ### 5.3 ルーティング（案内表示の置換）
-- `SeriesViewer.tsx`: 現在 `VIDEO_SOP_CLASSES` を GridView 無効化に使っている。ここで
-  「先頭インスタンスが video SOP」なら `<Viewer2D>` の代わりに `<VideoViewer sop=.../>` を表示。
-- `StudyList.tsx`(296-340): `isVideo` 時の案内表示（`nondicom.video.needsFfmpeg`）を、
-  **再生できる場合は VideoViewer 起動導線**に置換（ffmpeg 変換が必要で不在の場合のみ従来の案内）。
-- 対象 SOP: Video Photographic/Endoscopic/Microscopic（`SeriesViewer` の `VIDEO_SOP_CLASSES` に統一）
-  ＋ モダリティ由来の MPEG 転送構文（SOPClass ではなく TransferSyntax で判定される US/XA 等もあるため、
-  `video-metadata` の `transferSyntaxUid` でも動画判定できるようにする）。
+- 動画判定した時点で **`SeriesViewer` ではなく `VideoViewer` を出す**（`SeriesViewer` にセル差し替え分岐を足さない）。
+- `StudyList.tsx`(`InstanceList` 296-340): 先頭インスタンスが動画なら（現状 `isVideo` で案内表示している箇所）
+  `SeriesViewer` の代わりに **`<VideoViewer sop=.../>` を出す**（ffmpeg 変換が必要で不在の場合のみ従来の案内を残す）。
+- 動画判定は SOPClass（Video Photographic/Endoscopic/Microscopic）に加え、**モダリティ由来の MPEG 転送構文**
+  （SOPClass ではなく TransferSyntax で判定される US/XA 等）も対象。判定ヘルパを `api.ts` に集約
+  （`VIDEO_SOP_CLASSES` ＋ `video-metadata` の `transferSyntaxUid`）。
+- 複数インスタンスの video シリーズ（各 SOP=1 本の動画）は、**VideoViewer 内のクリップ選択 UI**（サムネイル/リスト）で
+  切替（ZCT の Z スライダは使わない）。
 
-### 5.4 既存挙動との整合
-- ThickSlab/Sort/GridView は動画で無効のまま（`SeriesViewer` 既存ガード維持）。
-- 複数インスタンスの video シリーズ（各 SOP が 1 本の動画）は、**インスタンス一覧＝動画リスト**として
-  選択切替（従来のスライダは「動画選択」に読み替え）。
+### 5.4 SeriesViewer 側の後始末
+- SeriesViewer からは**動画描画の責務を外す**（ルーティングで VideoViewer に振るため、SeriesViewer に動画が来ない）。
+- 既存の video ガード（GridView/ThickSlab/Sort 無効化・`VIDEO_SOP_CLASSES`）は、万一 video が渡った場合の
+  保険として残すが、通常経路では発火しない。将来の整理で撤去可否を判断。
+
+### 5.5 独立にする理由（同居＝A案のデメリット要約）
+SeriesViewer にセル差し替えで同居させると、以下の特別扱いが累積する（→ 分離で回避）:
+1. **再生制御の衝突**: SeriesViewer の▶は ZCT setInterval フレーム送り。動画は VideoViewport の `play/pause`。二重再生の危険。
+2. **入力の不一致**: ホイール/矢印＝スライス送り。動画で欲しいのは時間スクラブ（`setTime/setFrameNumber`）。振替の特別扱いが必要。
+3. **描画基盤の結合**: VideoViewport は `useCustomRenderingPipeline=true` で `Viewport` 直系。共有 RenderingEngine の
+   スタック前提リサイズ機構（`scheduleEngineResize`、`fw/cornerstone-shared-engine-resize` 参照）と噛み合わない。
+4. **幾何前提の不一致**: 動画は FrameOfReference/患者 LPS を持たない。オーバーレイ/ROI マスクの窓間同期（`maskBridge`）が無意味 → gate off が必要。
+5. **presentation 伝播の齟齬**: スタック横断の WW/WL/zoom 伝播と VideoViewport 独自 API が食い違う。
+6. **保守税**: `if (isVideo)` 分岐が増殖し、多数派の静止画経路と相互に regression リスク。
+
+### 5.6 将来の動画専用操作（分離の主目的）
+以下は**この VideoViewer に閉じて追加**する（SeriesViewer に影響させない）:
+- **サマライゼーション**: 代表フレーム/キーフレーム抽出、シーン分割、ハイライト要約（サムネイルストリップ、章立て）。
+- **クリッピング**: 区間選択（in/out 点）→ トリミング／区間書き出し（backend `/rendered?start=..&end=..` or ffmpeg 切り出し）。
+- これらは時間軸ネイティブの操作で、ZCT スライス機構とは無関係。UI（タイムライン/区間ハンドル）も VideoViewer 専用。
 
 ## 6. 段階的実装計画
 
@@ -161,12 +205,14 @@ frontend: VideoViewport（ViewportType.VIDEO）
 - **P1（配信＋最小再生）**:
   1. backend `VideoRenderController`（`/rendered` Range 配信＋`/video-metadata`）。無変換経路のみ（取込済み H.264）。
   2. frontend: まず **HTML5 `<video>`（方式 B）**で `/rendered` を鳴らし、配信・コーデック・Range を実機検証。
-  3. 続けて **VideoViewport（方式 A）** に差し替え、`videoMetadataProvider` ＋ `VideoViewer.tsx` ＋ ルーティング。
-  - 完了条件: 取込済み MP4 が 2D ビューア枠内で再生・一時停止・シークできる。backend test green。
-- **P2（cine/フレーム/VOI）**: フレーム送り・再生速度・ループ・WW/WL を cine UI に接続。
+  3. 続けて **独立 `VideoViewer.tsx`（VideoViewport）** を実装：`videoMetadataProvider` ＋ 自前 RenderingEngine
+     ＋ 動画専用再生 UI ＋ InstanceList からのルーティング（SeriesViewer は経由しない）。
+  - 完了条件: 取込済み MP4 が **独立 VideoViewer** で再生・一時停止・シークできる。backend test green。
+- **P2（フレーム/速度/VOI）**: フレーム送り・再生速度・ループ・WW/WL・クリップ選択 UI を接続。
 - **P3（ツール）**: Pan/Zoom に続き計測/注釈を VideoViewport 上で有効化（`@cornerstonejs/tools`）。
 - **P4（非 H.264 対応）**: `/rendered` に ffmpeg トランスコード分岐（MPEG2 等）＋キャッシュ（§4.3/4.4）。
 - **P5（Portable/web）**: §7/§8。
+- **P6（動画専用操作・将来）**: サマライゼーション／クリッピング（§5.6）。VideoViewer に閉じて追加。
 
 ## 7. Portable Viewer での動画
 
@@ -201,6 +247,9 @@ frontend: VideoViewport（ViewportType.VIDEO）
 
 - backend 新規: `dicom/VideoRenderController.java`（＋ 抽出ユーティリティ `VideoFragmentExtractor`）、`VideoRenderControllerTest`。
 - backend 既存: `FfmpegLocator`（P4 で再利用）。`application-standalone.yml`（キャッシュ dir 設定）。
-- frontend 新規: `viewer/VideoViewer.tsx`、`viewer/videoMetadataProvider.ts`、`api.ts`（`videoRenderedUrl(sop)`/`fetchVideoMetadata`）。
-- frontend 既存: `viewer/SeriesViewer.tsx`（video ルーティング）、`StudyList.tsx`（案内表示→再生導線）、i18n `video.*`。
+- frontend 新規: `viewer/VideoViewer.tsx`（独立・自前 RenderingEngine・動画専用再生 UI）、
+  `viewer/videoMetadataProvider.ts`、`api.ts`（`videoRenderedUrl(sop)`/`fetchVideoMetadata`/動画判定ヘルパ）。
+  （任意）患者/シリーズ chrome を共通レイアウト部品として切り出し（VideoViewer/SeriesViewer 双方から使用）。
+- frontend 既存: `StudyList.tsx`（`InstanceList` の案内表示 → **`<VideoViewer/>` へルーティング**）、i18n `video.*`。
+  `viewer/SeriesViewer.tsx` は**動画描画の責務を持たない**（既存 video ガードは保険として残置。§5.4）。
 - doc: `fw/mainscreen-tools.md` 234 行から本ドキュメントへリンク。`fw/development-phases.md` の Video 項更新。
