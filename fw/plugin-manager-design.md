@@ -152,9 +152,14 @@ DELETE /{id}                       アンインストール
 
 - **P1（実装済み・backend）**: 台帳／GitHub install（sha256）／オフライン zip／
   uninstall・reinstall・enable-disable／`engines` 互換／`/api/plugin-manager/*`／モードゲート。
-- **P2**: フロント Plugin Manager 画面／`graphy-plugin-api` 公開パッケージ＋テンプレリポジトリ＋
-  GitHub Action／公式索引 discovery／GitHub OAuth Device Flow／**minisign 署名＋3 信頼ティア＋
-  インストール時同意画面**／更新通知＋changelog／再起動反映（`graphy:relaunch`）。
+- **P2 進行中**:
+  - ✅ フロント Plugin Manager 画面（Settings＞プラグイン。`PluginManagerPanel.tsx` / `pluginManagerApi.ts`）
+  - ✅ `graphy-plugin-api` 薄い jar（backend が `spi/**` だけの副成果物を生成→Release 添付）＋
+    **テンプレート `examples/plugin-template/`**（`plugin.json`/`ui.js`/`graphy-plugin.d.ts`/GitHub Action/
+    `backend-optional/`）＝第三者が作り始められる状態
+  - 残: 公式索引 discovery／GitHub OAuth Device Flow／**minisign 署名＋3 信頼ティア＋
+    インストール時同意画面**／更新通知＋changelog／再起動反映（`graphy:relaunch`）／
+    `examples/plugin-template/` を独立「Use this template」リポジトリへ昇格
 - **P3**: フロント iframe/Worker サンドボックス／backend プロセス隔離／web サンドボックス
   （DICOMweb サイドカー）／商用ライセンスキー／ロールバック履歴／障害プラグインの自動無効化。
 

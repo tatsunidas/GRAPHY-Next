@@ -23,10 +23,17 @@ jobs:
         working-directory: backend
         # パッケージング工程はテストをスキップ（テストのゲートは ci.yml が担う）。
         run: mvn -B -DskipTests clean package
+      - name: Stage plugin API jar (第三者プラグイン開発者向け・fw/plugin-manager-design.md)
+        shell: bash
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          cp backend/target/graphy-next-backend-plugin-api.jar "backend/target/graphy-plugin-api-${ver}.jar"
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          files: backend/target/graphy-next-backend.jar
+          files: |
+            backend/target/graphy-next-backend.jar
+            backend/target/graphy-plugin-api-*.jar
 
   # デスクトップ配布物: 各 OS で Electron インストーラをビルド
   desktop:

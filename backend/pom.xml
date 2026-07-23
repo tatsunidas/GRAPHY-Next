@@ -227,6 +227,30 @@
                 </executions>
             </plugin>
 
+            <!-- 第三者プラグイン開発者が backend 全体に依存せず GraphyPlugin SPI に対して
+                 コンパイルできるよう、spi パッケージだけの薄い API jar を生成する。
+                 classifier 付き＝主成果物(fat jar)や spring-boot repackage に影響しない副成果物。
+                 生成物: target/graphy-next-backend-plugin-api.jar。Release では
+                 graphy-plugin-api-<version>.jar として添付する（.github/workflows/release.yml）。
+                 使い方・雛形: examples/plugin-template/、設計: fw/plugin-manager-design.md。 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>plugin-api-jar</id>
+                        <phase>package</phase>
+                        <goals><goal>jar</goal></goals>
+                        <configuration>
+                            <classifier>plugin-api</classifier>
+                            <includes>
+                                <include>com/vis/graphynext/plugin/spi/**</include>
+                            </includes>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
