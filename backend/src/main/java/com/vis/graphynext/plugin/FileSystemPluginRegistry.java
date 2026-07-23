@@ -26,6 +26,8 @@ abstract class FileSystemPluginRegistry implements PluginRegistry {
 
     private static final Logger log = LoggerFactory.getLogger(FileSystemPluginRegistry.class);
     private static final String MANIFEST_FILE = "plugin.json";
+    /** このマーカーがフォルダ直下にあると無効化扱い（PluginInstaller が enable/disable で管理）。 */
+    static final String DISABLED_MARKER = ".disabled";
 
     private final ObjectMapper mapper;
     private final boolean enabled;
@@ -85,6 +87,8 @@ abstract class FileSystemPluginRegistry implements PluginRegistry {
             for (Path dir : (Iterable<Path>) dirs.filter(Files::isDirectory)::iterator) {
                 Path manifest = dir.resolve(MANIFEST_FILE);
                 if (!Files.isRegularFile(manifest)) continue;
+                // マネージャが無効化したプラグインは走査対象外（削除せず一時停止）。
+                if (Files.isRegularFile(dir.resolve(DISABLED_MARKER))) continue;
                 try {
                     PluginDescriptor desc = mapper.readValue(manifest.toFile(), PluginDescriptor.class);
                     if (desc.id() == null || desc.id().isBlank()) {
