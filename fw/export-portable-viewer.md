@@ -128,11 +128,15 @@ MPR / 3D / Curved / リスライス（`cornerstone-3d-geometry-caveat` 対象）
 Fusion、SUV 較正、RTSTRUCT/SEG、PACS/DICOMweb 連携、動画再生（別途 `fw/video-viewer-design.md`）。
 
 ### 段階（優先度順・各サブフェーズ独立で出荷可能）
-- **P4.1 オーバレイ拡充＋スケールバー＋基本トランスフォーム**（価値大・工数小〜中／推奨初手）
-  - 4 隅タグベースオーバレイ（本体 `overlayConfig.ts` の DEFAULT を移植: 左上=患者、右上=シリーズ、
-    加えて StudyDate/Modality/Institution、SliceThickness/SliceLocation/kVp/mAs、PixelSpacing 等）。
-  - スケールバー（`scaleBar.ts` の PixelSpacing→mm 目盛ロジックを移植）。
-  - 回転 90°/反転 H・V、Fit/実寸(1:1)、諧調反転(invert)。現状の簡易 3 隅オーバレイを置換。
+- **P4.1 オーバレイ拡充＋スケールバー＋基本トランスフォーム** ✅（2026-07-23 実装・検証済）
+  - 4 隅タグオーバレイ（`portable/src/overlay.ts`。左上=患者[名/ID/性別/生年/年齢]、右上=モダリティ/検査日/
+    シリーズ記述/プロトコル/施設、左下=ST/SL/kV/mAs、右下=Image i/N・W/L・Zoom[viewer 動的値]）。値は
+    wadouri `dataSetCacheManager` の dicom-parser DataSet 直読み（本体 `overlayText.ts` ロジック移植）。
+  - スケールバー（`portable/src/scalebar.ts`＝本体 `scaleBar.ts` 移植。校正なしは橙色表示）。
+  - 回転 90°/反転 H・V/諧調反転、Fit/実寸(1:1)（`portable/src/transform.ts`＝本体 `transform.ts` 移植。
+    flip の setCamera 双方向トグルも踏襲）。ツールバーにボタン追加。
+  - 検証: `?selfTest` で http:// と file:// × 非圧縮/JPEG2000 の 4 パターンでオーバレイ値・スケール（"5 cm"）・
+    描画を確認済み（overlayTL/scalebar を selfTest 結果に含めスナップショット化）。
 - **P4.2 W/L プリセット＋スライダ/シネ＋PNG 保存**（価値中・工数小〜中）
   - モダリティ別 W/L プリセット（CT: 肺/縦隔/骨/腹部/脳、汎用）＋数値直接入力。
   - スライススライダ（スクロールバー）＋シネ再生（play/pause・fps 可変）。

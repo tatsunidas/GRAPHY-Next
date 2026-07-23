@@ -11,7 +11,7 @@ import {
   type DicomDirModel,
   type SeriesRec,
 } from "./dicomdir";
-import { PortableViewer, type OverlayInfo } from "./viewer";
+import { PortableViewer, type ViewerElements } from "./viewer";
 
 const $ = <T extends HTMLElement>(sel: string): T => {
   const el = document.querySelector<T>(sel);
@@ -22,51 +22,48 @@ const $ = <T extends HTMLElement>(sel: string): T => {
 const folderInput = $<HTMLInputElement>("#folder-input");
 const pickBtn = $<HTMLButtonElement>("#pick-btn");
 const resetBtn = $<HTMLButtonElement>("#reset-btn");
+const fitBtn = $<HTMLButtonElement>("#fit-btn");
+const actualBtn = $<HTMLButtonElement>("#actual-btn");
+const rotateBtn = $<HTMLButtonElement>("#rotate-btn");
+const flipHBtn = $<HTMLButtonElement>("#fliph-btn");
+const flipVBtn = $<HTMLButtonElement>("#flipv-btn");
+const invertBtn = $<HTMLButtonElement>("#invert-btn");
 const treeEl = $<HTMLDivElement>("#tree");
 const statusEl = $<HTMLDivElement>("#status");
-const viewportEl = $<HTMLDivElement>("#viewport");
-const overlayTL = $<HTMLDivElement>("#overlay-tl");
-const overlayBL = $<HTMLDivElement>("#overlay-bl");
-const overlayBR = $<HTMLDivElement>("#overlay-br");
+
+const viewerEls: ViewerElements = {
+  viewport: $<HTMLDivElement>("#viewport"),
+  overlayTL: $<HTMLDivElement>("#overlay-tl"),
+  overlayTR: $<HTMLDivElement>("#overlay-tr"),
+  overlayBL: $<HTMLDivElement>("#overlay-bl"),
+  overlayBR: $<HTMLDivElement>("#overlay-br"),
+  scalebarBar: $<HTMLDivElement>("#scalebar-bar"),
+  scalebarLabel: $<HTMLDivElement>("#scalebar-label"),
+};
 
 let viewer: PortableViewer | null = null;
 let model: DicomDirModel | null = null;
 let activeSeriesEl: HTMLElement | null = null;
-/** 現在表示中シリーズのオーバレイ左上見出し（患者/シリーズ名）。 */
-let headerText = "";
 
 function setStatus(msg: string, kind: "info" | "error" = "info"): void {
   statusEl.textContent = msg;
   statusEl.dataset.kind = kind;
 }
 
-function onOverlay(info: OverlayInfo): void {
-  overlayTL.textContent = headerText;
-  overlayBL.textContent =
-    info.imageCount > 0 ? `Image ${info.imageIndex + 1} / ${info.imageCount}` : "";
-  overlayBR.textContent =
-    info.windowWidth || info.windowCenter
-      ? `W ${info.windowWidth}  L ${info.windowCenter}   Zoom ${info.zoom}×`
-      : "";
-}
-
 async function ensureViewer(): Promise<PortableViewer> {
   if (!viewer) {
     setStatus("ビューアを初期化しています…");
-    viewer = new PortableViewer(viewportEl, onOverlay);
+    viewer = new PortableViewer(viewerEls);
     await viewer.setup();
   }
   return viewer;
 }
 
-async function showSeries(series: SeriesRec, patientName: string, patientId: string): Promise<void> {
+async function showSeries(series: SeriesRec): Promise<void> {
   try {
     const v = await ensureViewer();
     const withFiles = series.images.filter((im) => im.file).length;
     setStatus(`表示中… (${withFiles}/${series.images.length} ファイル)`);
-    const nameLine = patientName || patientId || "";
-    const serLine = series.description || `${series.modality} Series ${series.number ?? ""}`.trim();
-    headerText = [nameLine, serLine].filter(Boolean).join("  —  ");
     await v.showSeries(series.images);
     setStatus(`${series.images.length} 画像を読み込みました`);
   } catch (e) {
@@ -105,7 +102,7 @@ function buildTree(m: DicomDirModel): void {
           if (activeSeriesEl) activeSeriesEl.classList.remove("active");
           seNode.classList.add("active");
           activeSeriesEl = seNode;
-          void showSeries(se, pat.name, pat.id);
+          void showSeries(se);
         });
         treeEl.appendChild(seNode);
       }
@@ -145,6 +142,12 @@ folderInput.addEventListener("change", () => {
   void handleFiles(files);
 });
 resetBtn.addEventListener("click", () => viewer?.resetView());
+fitBtn.addEventListener("click", () => viewer?.fit());
+actualBtn.addEventListener("click", () => viewer?.actualSize());
+rotateBtn.addEventListener("click", () => viewer?.rotate90());
+flipHBtn.addEventListener("click", () => viewer?.flipH());
+flipVBtn.addEventListener("click", () => viewer?.flipV());
+invertBtn.addEventListener("click", () => viewer?.invert());
 window.addEventListener("resize", () => viewer?.resize());
 
 /**
@@ -166,16 +169,16 @@ async function runSelfTest(rawBase: string): Promise<void> {
       files.push(new File([buf], "media/" + rel)); // "media/" = 疑似ルートフォルダ名
     }
     await handleFiles(files);
-    const p = model?.patients[0];
-    const first = p?.studies[0]?.series[0];
-    if (p && first) await showSeries(first, p.name, p.id);
+    const first = model?.patients[0]?.studies[0]?.series[0];
+    if (first) await showSeries(first);
     w.__selfTest = {
       status: "ok",
       patients: model?.patients.length ?? 0,
       seriesImages: first?.images.length ?? 0,
       missingFiles: model?.missingFiles ?? -1,
+      overlayTL: viewerEls.overlayTL.textContent ?? "",
+      scalebar: viewerEls.scalebarLabel.textContent ?? "",
     };
-    // ヘッドレス検証がログから結果を拾えるよう明示出力（本番非影響: selfTest 時のみ到達）。
     console.log("SELFTEST_RESULT " + JSON.stringify(w.__selfTest));
   } catch (e) {
     w.__selfTest = { status: "error", error: e instanceof Error ? e.message : String(e) };

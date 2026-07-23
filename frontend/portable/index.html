@@ -10,7 +10,14 @@
       <header id="toolbar">
         <span id="brand">GRAPHY Portable 2D Viewer</span>
         <button id="pick-btn" type="button">フォルダを選択</button>
-        <button id="reset-btn" type="button">表示リセット</button>
+        <span class="sep"></span>
+        <button id="fit-btn" type="button" title="ウィンドウに合わせる">Fit</button>
+        <button id="actual-btn" type="button" title="実寸 (1:1)">1:1</button>
+        <button id="rotate-btn" type="button" title="90°回転">⟳</button>
+        <button id="fliph-btn" type="button" title="左右反転">⇋</button>
+        <button id="flipv-btn" type="button" title="上下反転">⇅</button>
+        <button id="invert-btn" type="button" title="諧調反転（白黒反転）">Inv</button>
+        <button id="reset-btn" type="button" title="表示を完全リセット">リセット</button>
         <input id="folder-input" type="file" webkitdirectory directory multiple hidden />
         <span id="status" data-kind="info"></span>
       </header>
@@ -21,8 +28,13 @@
         <main id="stage">
           <div id="viewport"></div>
           <div id="overlay-tl" class="overlay tl"></div>
+          <div id="overlay-tr" class="overlay tr"></div>
           <div id="overlay-bl" class="overlay bl"></div>
           <div id="overlay-br" class="overlay br"></div>
+          <div id="scalebar">
+            <div id="scalebar-bar"></div>
+            <div id="scalebar-label"></div>
+          </div>
         </main>
       </div>
     </div>

@@ -53,6 +53,12 @@ body {
 #toolbar button:hover {
   border-color: var(--accent);
 }
+#toolbar .sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--line);
+  margin: 2px 2px;
+}
 #status {
   color: var(--muted);
   margin-left: auto;
@@ -123,17 +129,50 @@ body {
   pointer-events: none;
   padding: 8px 10px;
   white-space: pre;
+  max-width: 48%;
 }
 .overlay.tl {
   top: 0;
   left: 0;
 }
+.overlay.tr {
+  top: 0;
+  right: 0;
+  text-align: right;
+}
 .overlay.bl {
-  bottom: 0;
+  bottom: 28px;
   left: 0;
 }
 .overlay.br {
   bottom: 0;
   right: 0;
   text-align: right;
+}
+
+/* スケールバー（下辺中央やや左）。校正なしは色を変える。 */
+#scalebar {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: none;
+  text-align: center;
+}
+#scalebar-bar {
+  height: 3px;
+  background: #d9f000;
+  box-shadow: 0 0 3px #000;
+  margin: 0 auto 3px;
+  border-left: 1px solid #d9f000;
+  border-right: 1px solid #d9f000;
+}
+#scalebar-bar[data-calibrated="false"] {
+  background: #ff9f43;
+  border-color: #ff9f43;
+}
+#scalebar-label {
+  color: #d9f000;
+  text-shadow: 0 0 3px #000;
+  font: 12px/1.2 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 }
