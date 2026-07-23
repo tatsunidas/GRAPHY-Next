@@ -16,6 +16,12 @@ import {
   PanTool,
   ZoomTool,
   StackScrollTool,
+  LengthTool,
+  AngleTool,
+  EllipticalROITool,
+  RectangleROITool,
+  ProbeTool,
+  annotation,
   Enums as ToolEnums,
 } from "@cornerstonejs/tools";
 import type { ImageRec } from "./dicomdir";
@@ -29,6 +35,15 @@ const { MouseBindings } = ToolEnums;
 const ENGINE_ID = "portable-engine";
 const VIEWPORT_ID = "portable-viewport";
 const TOOLGROUP_ID = "portable-toolgroup";
+
+/** 左ドラッグに割り当てられる計測ツール名（"" = W/L に戻す）。 */
+export const MEASURE_TOOLS = [
+  LengthTool.toolName,
+  AngleTool.toolName,
+  EllipticalROITool.toolName,
+  RectangleROITool.toolName,
+  ProbeTool.toolName,
+];
 
 /** 画像上オーバレイ／スケールバーの DOM 参照一式。 */
 export interface ViewerElements {
@@ -55,6 +70,11 @@ export function ensureInit(): Promise<void> {
       addTool(PanTool);
       addTool(ZoomTool);
       addTool(StackScrollTool);
+      addTool(LengthTool);
+      addTool(AngleTool);
+      addTool(EllipticalROITool);
+      addTool(RectangleROITool);
+      addTool(ProbeTool);
     })();
   }
   return initPromise;
@@ -99,6 +119,11 @@ export class PortableViewer {
       group.addTool(PanTool.toolName);
       group.addTool(ZoomTool.toolName);
       group.addTool(StackScrollTool.toolName);
+      // 計測ツールは passive で登録（setMeasureTool で左ドラッグに割当）。
+      for (const tn of MEASURE_TOOLS) {
+        group.addTool(tn);
+        group.setToolPassive(tn);
+      }
       group.setToolActive(WindowLevelTool.toolName, {
         bindings: [{ mouseButton: MouseBindings.Primary }],
       });
@@ -323,6 +348,48 @@ export class PortableViewer {
       ctx.fillText(this.els.scalebarLabel.textContent ?? "", cx, by - fs * 1.6);
     }
     ctx.shadowBlur = 0;
+  }
+
+  // ── 計測 ─────────────────────────────────────────────────────────────────
+  /**
+   * 左ドラッグの計測ツールを切替。空文字/未知名は W/L に戻す。
+   * 結果（長さ mm・角度・ROI 面積/平均/SD）はツール自身がアノテーション上に描画する
+   * （PixelSpacing とモダリティ LUT を dicom-image-loader が populate 済みのため mm・HU 表示）。
+   */
+  setMeasureTool(toolName: string): void {
+    if (!this.engine) return;
+    const group = ToolGroupManager.getToolGroup(TOOLGROUP_ID);
+    if (!group) return;
+    const measure = MEASURE_TOOLS.includes(toolName) ? toolName : "";
+    for (const tn of MEASURE_TOOLS) {
+      if (tn !== measure) group.setToolPassive(tn);
+    }
+    if (measure) {
+      group.setToolPassive(WindowLevelTool.toolName);
+      group.setToolActive(measure, { bindings: [{ mouseButton: MouseBindings.Primary }] });
+    } else {
+      group.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
+    }
+  }
+
+  /** すべての計測アノテーションを削除。 */
+  clearAnnotations(): void {
+    annotation.state.removeAllAnnotations();
+    this.engine?.getViewport(VIEWPORT_ID)?.render();
+  }
+
+  /** 選択中（クリック選択）のアノテーションを削除（Delete/Backspace 用）。削除件数を返す。 */
+  deleteSelected(): number {
+    const sel = annotation.selection.getAnnotationsSelected();
+    for (const uid of sel) {
+      try {
+        annotation.state.removeAnnotation(uid);
+      } catch {
+        /* ignore */
+      }
+    }
+    if (sel.length) this.engine?.getViewport(VIEWPORT_ID)?.render();
+    return sel.length;
   }
 
   resize(): void {

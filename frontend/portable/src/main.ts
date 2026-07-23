@@ -42,6 +42,8 @@ const playBtn = $<HTMLButtonElement>("#play-btn");
 const sliceSlider = $<HTMLInputElement>("#slice-slider");
 const sliceLabel = $<HTMLSpanElement>("#slice-label");
 const fpsInput = $<HTMLInputElement>("#fps-input");
+const measureBtns = Array.from(document.querySelectorAll<HTMLButtonElement>(".measure-btn"));
+const clearAnnotBtn = $<HTMLButtonElement>("#clear-annot-btn");
 
 const viewerEls: ViewerElements = {
   viewport: $<HTMLDivElement>("#viewport"),
@@ -90,6 +92,11 @@ function syncUi(): void {
   syncing = false;
 }
 
+/** 計測ボタンの選択を「選択」(W/L) に戻す。 */
+function resetMeasureButtons(): void {
+  measureBtns.forEach((b) => b.classList.toggle("active", (b.dataset.tool ?? "") === ""));
+}
+
 function stopCine(): void {
   if (cineTimer !== null) {
     clearInterval(cineTimer);
@@ -128,9 +135,12 @@ async function showSeries(series: SeriesRec): Promise<void> {
   try {
     const v = await ensureViewer();
     stopCine();
+    v.clearAnnotations();
+    resetMeasureButtons();
     const withFiles = series.images.filter((im) => im.file).length;
     setStatus(`表示中… (${withFiles}/${series.images.length} ファイル)`);
     await v.showSeries(series.images);
+    v.setMeasureTool(""); // 計測は W/L 既定に戻す。
     syncUi();
     setStatus(`${series.images.length} 画像を読み込みました`);
   } catch (e) {
@@ -257,6 +267,22 @@ fpsInput.addEventListener("change", () => {
     stopCine();
     toggleCine(); // 新しい fps で再開。
   }
+});
+// 計測ツール切替（data-tool="" は W/L に戻す）。
+for (const btn of measureBtns) {
+  btn.addEventListener("click", () => {
+    if (!viewer) return;
+    viewer.setMeasureTool(btn.dataset.tool ?? "");
+    measureBtns.forEach((b) => b.classList.toggle("active", b === btn));
+  });
+}
+clearAnnotBtn.addEventListener("click", () => viewer?.clearAnnotations());
+// 選択中の注釈を Delete/Backspace で削除（入力欄フォーカス時は無効）。
+window.addEventListener("keydown", (e) => {
+  if (e.key !== "Delete" && e.key !== "Backspace") return;
+  const tag = (document.activeElement?.tagName ?? "").toLowerCase();
+  if (tag === "input" || tag === "select" || tag === "textarea") return;
+  if (viewer && viewer.deleteSelected() > 0) e.preventDefault();
 });
 
 /**
