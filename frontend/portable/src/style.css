@@ -169,7 +169,26 @@ body {
   min-width: 0;
   background: #000;
 }
-#viewport {
+#grid {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 1), 1fr);
+  grid-template-rows: repeat(var(--rows, 1), 1fr);
+  gap: 2px;
+  background: var(--line);
+}
+.panel {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  background: #000;
+  border: 2px solid transparent;
+}
+.panel.active {
+  border-color: var(--accent);
+}
+.panel-viewport {
   position: absolute;
   inset: 0;
 }
@@ -247,8 +266,8 @@ body {
   font: 12px/1.2 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 }
 
-/* スケールバー（下辺中央やや左）。校正なしは色を変える。 */
-#scalebar {
+/* スケールバー（各タイル下辺中央）。校正なしは色を変える。 */
+.scalebar {
   position: absolute;
   bottom: 50px;
   left: 50%;
@@ -256,7 +275,7 @@ body {
   pointer-events: none;
   text-align: center;
 }
-#scalebar-bar {
+.scalebar-bar {
   height: 3px;
   background: #d9f000;
   box-shadow: 0 0 3px #000;
@@ -264,12 +283,41 @@ body {
   border-left: 1px solid #d9f000;
   border-right: 1px solid #d9f000;
 }
-#scalebar-bar[data-calibrated="false"] {
+.scalebar-bar[data-calibrated="false"] {
   background: #ff9f43;
   border-color: #ff9f43;
 }
-#scalebar-label {
+.scalebar-label {
   color: #d9f000;
   text-shadow: 0 0 3px #000;
   font: 12px/1.2 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+/* レイアウト切替ボタン。 */
+.layout-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+/* シリーズサムネイル（サイドバー）。 */
+.node.series {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.series-thumb {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  background: #000;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  object-fit: contain;
+}
+.series-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

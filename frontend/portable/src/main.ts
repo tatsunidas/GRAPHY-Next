@@ -2,16 +2,18 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-// Portable 2D Viewer — エントリ。フォルダ選択 → DICOMDIR 解析 → シリーズ一覧 → StackViewport 表示。
+// Portable 2D Viewer — エントリ。フォルダ選択 → DICOMDIR 解析 → シリーズ一覧（サムネイル付き）→ タイル表示。
 // サーバ不要・Cornerstone3D をローカル File から直接読む（fw/export-portable-viewer.md 方式 A）。
 import "./style.css";
+import { utilities as csUtilities } from "@cornerstonejs/core";
+import dicomImageLoader from "@cornerstonejs/dicom-image-loader";
 import {
   parseDicomDir,
   findDicomDirFile,
   type DicomDirModel,
   type SeriesRec,
 } from "./dicomdir";
-import { PortableViewer, type ViewerElements } from "./viewer";
+import { PortableViewer, ensureInit, LAYOUTS } from "./viewer";
 import { WL_PRESETS } from "./wlPresets";
 
 const $ = <T extends HTMLElement>(sel: string): T => {
@@ -31,7 +33,8 @@ const flipVBtn = $<HTMLButtonElement>("#flipv-btn");
 const invertBtn = $<HTMLButtonElement>("#invert-btn");
 const treeEl = $<HTMLDivElement>("#tree");
 const statusEl = $<HTMLDivElement>("#status");
-// P4.2 コントロール。
+const gridEl = $<HTMLDivElement>("#grid");
+// W/L・シネ・計測コントロール。
 const wlPresetSel = $<HTMLSelectElement>("#wl-preset");
 const wwInput = $<HTMLInputElement>("#ww-input");
 const wcInput = $<HTMLInputElement>("#wc-input");
@@ -44,16 +47,7 @@ const sliceLabel = $<HTMLSpanElement>("#slice-label");
 const fpsInput = $<HTMLInputElement>("#fps-input");
 const measureBtns = Array.from(document.querySelectorAll<HTMLButtonElement>(".measure-btn"));
 const clearAnnotBtn = $<HTMLButtonElement>("#clear-annot-btn");
-
-const viewerEls: ViewerElements = {
-  viewport: $<HTMLDivElement>("#viewport"),
-  overlayTL: $<HTMLDivElement>("#overlay-tl"),
-  overlayTR: $<HTMLDivElement>("#overlay-tr"),
-  overlayBL: $<HTMLDivElement>("#overlay-bl"),
-  overlayBR: $<HTMLDivElement>("#overlay-br"),
-  scalebarBar: $<HTMLDivElement>("#scalebar-bar"),
-  scalebarLabel: $<HTMLDivElement>("#scalebar-label"),
-};
+const layoutBtns = Array.from(document.querySelectorAll<HTMLButtonElement>(".layout-btn"));
 
 let viewer: PortableViewer | null = null;
 let model: DicomDirModel | null = null;
@@ -74,27 +68,23 @@ for (const p of WL_PRESETS) {
   wlPresetSel.appendChild(opt);
 }
 
-/** ビューア状態 → UI（スライダ・WW/WC 入力・スライスラベル）を同期。 */
+/** アクティブタイルの状態 → UI（スライダ・WW/WC 入力・スライスラベル）を同期。 */
 function syncUi(): void {
-  if (!viewer) return;
+  const panel = viewer?.active();
+  if (!panel) return;
   syncing = true;
-  const total = viewer.imageTotal();
-  const idx = viewer.imageIndex();
+  const total = panel.imageTotal();
+  const idx = panel.imageIndex();
   cinebar.hidden = total <= 1;
   sliceSlider.max = String(Math.max(0, total - 1));
   sliceSlider.value = String(idx);
   sliceLabel.textContent = `${idx + 1} / ${total}`;
-  const wl = viewer.getWL();
+  const wl = panel.getWL();
   if (wl && document.activeElement !== wwInput && document.activeElement !== wcInput) {
     wwInput.value = String(wl.width);
     wcInput.value = String(wl.center);
   }
   syncing = false;
-}
-
-/** 計測ボタンの選択を「選択」(W/L) に戻す。 */
-function resetMeasureButtons(): void {
-  measureBtns.forEach((b) => b.classList.toggle("active", (b.dataset.tool ?? "") === ""));
 }
 
 function stopCine(): void {
@@ -106,7 +96,8 @@ function stopCine(): void {
 }
 
 function toggleCine(): void {
-  if (!viewer || viewer.imageTotal() <= 1) return;
+  const panel = viewer?.active();
+  if (!panel || panel.imageTotal() <= 1) return;
   if (cineTimer !== null) {
     stopCine();
     return;
@@ -114,37 +105,60 @@ function toggleCine(): void {
   const fps = Math.max(1, Math.min(60, Number(fpsInput.value) || 12));
   playBtn.textContent = "⏸";
   cineTimer = window.setInterval(() => {
-    if (!viewer) return;
-    const total = viewer.imageTotal();
-    const next = (viewer.imageIndex() + 1) % total;
-    void viewer.setImageIndex(next);
+    const p = viewer?.active();
+    if (!p) return;
+    const total = p.imageTotal();
+    if (total <= 1) return;
+    void p.setImageIndex((p.imageIndex() + 1) % total);
   }, 1000 / fps);
 }
 
 async function ensureViewer(): Promise<PortableViewer> {
   if (!viewer) {
     setStatus("ビューアを初期化しています…");
-    viewer = new PortableViewer(viewerEls);
+    viewer = new PortableViewer(gridEl);
     await viewer.setup();
     viewer.onChange = syncUi;
+    viewer.onActiveChange = () => {
+      stopCine();
+      syncUi();
+    };
   }
   return viewer;
 }
 
+/** シリーズをアクティブタイルへ表示する。 */
 async function showSeries(series: SeriesRec): Promise<void> {
   try {
     const v = await ensureViewer();
     stopCine();
-    v.clearAnnotations();
-    resetMeasureButtons();
     const withFiles = series.images.filter((im) => im.file).length;
     setStatus(`表示中… (${withFiles}/${series.images.length} ファイル)`);
-    await v.showSeries(series.images);
-    v.setMeasureTool(""); // 計測は W/L 既定に戻す。
+    await v.showSeriesInActive(series.images);
     syncUi();
     setStatus(`${series.images.length} 画像を読み込みました`);
   } catch (e) {
     setStatus(e instanceof Error ? e.message : String(e), "error");
+  }
+}
+
+/** シリーズ先頭スライスのサムネイルを canvas へ描画（cornerstone の loadImageToCanvas）。 */
+async function renderThumb(canvas: HTMLCanvasElement, series: SeriesRec): Promise<void> {
+  const first = series.images.find((im) => im.file);
+  if (!first?.file) return;
+  try {
+    await ensureInit();
+    const imageId = dicomImageLoader.wadouri.fileManager.add(first.file);
+    await csUtilities.loadImageToCanvas({ canvas, imageId, thumbnail: true, imageAspect: true });
+    // loadImageToCanvas は canvas.style を実解像度基準で書き換えるため、44px 枠へ収め直す（アスペクト維持）。
+    const box = 44;
+    const w = canvas.width || 1;
+    const h = canvas.height || 1;
+    const s = box / Math.max(w, h);
+    canvas.style.width = `${Math.round(w * s)}px`;
+    canvas.style.height = `${Math.round(h * s)}px`;
+  } catch {
+    /* サムネイル生成失敗は無視（本体表示には影響しない） */
   }
 }
 
@@ -173,8 +187,17 @@ function buildTree(m: DicomDirModel): void {
         const missing = se.images.filter((im) => !im.file).length;
         const seLabel =
           se.description || `${se.modality} Series ${se.number ?? ""}`.trim() || "(series)";
-        seNode.textContent = `🖼 ${seLabel}  [${se.modality}] ${se.images.length}`;
+
+        const thumb = document.createElement("canvas");
+        thumb.className = "series-thumb";
+        thumb.width = 88;
+        thumb.height = 88;
+        const text = document.createElement("span");
+        text.className = "series-text";
+        text.textContent = `${seLabel}  [${se.modality}] ${se.images.length}`;
+        seNode.append(thumb, text);
         if (missing > 0) seNode.title = `${missing} 件の参照ファイルが見つかりません`;
+
         seNode.addEventListener("click", () => {
           if (activeSeriesEl) activeSeriesEl.classList.remove("active");
           seNode.classList.add("active");
@@ -182,6 +205,7 @@ function buildTree(m: DicomDirModel): void {
           void showSeries(se);
         });
         treeEl.appendChild(seNode);
+        void renderThumb(thumb, se);
       }
     }
   }
@@ -201,6 +225,7 @@ async function handleFiles(files: File[]): Promise<void> {
   try {
     setStatus("DICOMDIR を解析しています…");
     model = await parseDicomDir(dicomdir, files);
+    await ensureViewer(); // タイル初期化（サムネイル生成にも core init が要る）。
     buildTree(model);
     const totalSeries = model.patients.reduce(
       (n, p) => n + p.studies.reduce((k, s) => k + s.series.length, 0),
@@ -218,48 +243,67 @@ folderInput.addEventListener("change", () => {
   const files = folderInput.files ? Array.from(folderInput.files) : [];
   void handleFiles(files);
 });
-resetBtn.addEventListener("click", () => viewer?.resetView());
-fitBtn.addEventListener("click", () => viewer?.fit());
-actualBtn.addEventListener("click", () => viewer?.actualSize());
-rotateBtn.addEventListener("click", () => viewer?.rotate90());
-flipHBtn.addEventListener("click", () => viewer?.flipH());
-flipVBtn.addEventListener("click", () => viewer?.flipV());
-invertBtn.addEventListener("click", () => viewer?.invert());
+// トランスフォーム系はアクティブタイルへ委譲。
+resetBtn.addEventListener("click", () => viewer?.active()?.resetView());
+fitBtn.addEventListener("click", () => viewer?.active()?.fit());
+actualBtn.addEventListener("click", () => viewer?.active()?.actualSize());
+rotateBtn.addEventListener("click", () => viewer?.active()?.rotate90());
+flipHBtn.addEventListener("click", () => viewer?.active()?.flipH());
+flipVBtn.addEventListener("click", () => viewer?.active()?.flipV());
+invertBtn.addEventListener("click", () => viewer?.active()?.invert());
 window.addEventListener("resize", () => viewer?.resize());
+
+// レイアウト切替。
+for (const btn of layoutBtns) {
+  btn.addEventListener("click", async () => {
+    const key = btn.dataset.layout ?? "1x1";
+    const layout = LAYOUTS[key];
+    if (!layout) return;
+    stopCine();
+    const v = await ensureViewer();
+    await v.setLayout(layout);
+    layoutBtns.forEach((b) => b.classList.toggle("active", b === btn));
+    syncUi();
+  });
+}
 
 // W/L プリセット選択（空値=既定 DICOM）。
 wlPresetSel.addEventListener("change", () => {
-  if (!viewer) return;
+  const panel = viewer?.active();
+  if (!panel) return;
   const key = wlPresetSel.value;
   if (!key) {
-    viewer.defaultWL();
+    panel.defaultWL();
   } else {
     const p = WL_PRESETS.find((x) => x.key === key);
-    if (p) viewer.setWL(p.center, p.width);
+    if (p) panel.setWL(p.center, p.width);
   }
   wlPresetSel.value = ""; // プリセットは一度きり適用（以後は手動調整を反映）。
 });
 // WW/WC 直接入力。
 function applyWlInput(): void {
-  if (!viewer || syncing) return;
+  const panel = viewer?.active();
+  if (!panel || syncing) return;
   const ww = Number(wwInput.value);
   const wc = Number(wcInput.value);
-  if (ww > 0 && Number.isFinite(wc)) viewer.setWL(wc, ww);
+  if (ww > 0 && Number.isFinite(wc)) panel.setWL(wc, ww);
 }
 wlSetBtn.addEventListener("click", applyWlInput);
 wwInput.addEventListener("keydown", (e) => e.key === "Enter" && applyWlInput());
 wcInput.addEventListener("keydown", (e) => e.key === "Enter" && applyWlInput());
-// PNG 保存。
+// PNG 保存（アクティブタイル）。
 pngBtn.addEventListener("click", () => {
-  if (!viewer) return;
-  const idx = viewer.imageIndex() + 1;
-  viewer.savePng(`graphy-portable-${String(idx).padStart(3, "0")}.png`);
+  const panel = viewer?.active();
+  if (!panel) return;
+  const idx = panel.imageIndex() + 1;
+  panel.savePng(`graphy-portable-${String(idx).padStart(3, "0")}.png`);
 });
-// スライス送り／シネ。
+// スライス送り／シネ（アクティブタイル）。
 sliceSlider.addEventListener("input", () => {
-  if (!viewer || syncing) return;
+  const panel = viewer?.active();
+  if (!panel || syncing) return;
   stopCine();
-  void viewer.setImageIndex(Number(sliceSlider.value));
+  void panel.setImageIndex(Number(sliceSlider.value));
 });
 playBtn.addEventListener("click", toggleCine);
 fpsInput.addEventListener("change", () => {
@@ -268,7 +312,7 @@ fpsInput.addEventListener("change", () => {
     toggleCine(); // 新しい fps で再開。
   }
 });
-// 計測ツール切替（data-tool="" は W/L に戻す）。
+// 計測ツール切替（共有 ToolGroup＝ドラッグしたタイルに効く。data-tool="" は W/L に戻す）。
 for (const btn of measureBtns) {
   btn.addEventListener("click", () => {
     if (!viewer) return;
@@ -296,6 +340,8 @@ async function runSelfTest(rawBase: string): Promise<void> {
   const base = rawBase === "1" ? "../" : rawBase.endsWith("/") ? rawBase : rawBase + "/";
   const w = window as unknown as { __selfTest: Record<string, unknown> };
   w.__selfTest = { status: "loading", base };
+  const tileText = (sel: string): string =>
+    document.querySelector<HTMLElement>(`.panel ${sel}`)?.textContent ?? "";
   try {
     const manifest: string[] = await (await fetch(base + "manifest.json")).json();
     const files: File[] = [];
@@ -306,23 +352,34 @@ async function runSelfTest(rawBase: string): Promise<void> {
     await handleFiles(files);
     const first = model?.patients[0]?.studies[0]?.series[0];
     if (first) await showSeries(first);
-    // P4.2 回帰: 肺野プリセット適用 → W/L が変わることを確認。
+    // 回帰: 肺野プリセット適用 → W/L が変わることを確認。
     let wlAfterPreset = "";
-    if (viewer) {
-      viewer.setWL(-600, 1500);
-      const wl = viewer.getWL();
+    const panel = viewer?.active();
+    if (panel) {
+      panel.setWL(-600, 1500);
+      const wl = panel.getWL();
       wlAfterPreset = wl ? `W${wl.width}/L${wl.center}` : "";
     }
+    // 回帰(P4.4): 2x2 レイアウトへ切替 → タイル数を確認 → 1x1 に戻す（シリーズは復元される）。
+    let panelsAfter2x2 = 0;
+    if (viewer) {
+      await viewer.setLayout(LAYOUTS["2x2"]);
+      panelsAfter2x2 = viewer.panelCount();
+      await viewer.setLayout(LAYOUTS["1x1"]); // 元に戻す（restore 完了まで待つ）。
+    }
+    const thumbs = document.querySelectorAll(".series-thumb").length;
     w.__selfTest = {
       status: "ok",
       patients: model?.patients.length ?? 0,
       seriesImages: first?.images.length ?? 0,
       missingFiles: model?.missingFiles ?? -1,
-      overlayTL: viewerEls.overlayTL.textContent ?? "",
-      scalebar: viewerEls.scalebarLabel.textContent ?? "",
-      total: viewer?.imageTotal() ?? 0,
+      overlayTL: tileText(".overlay.tl"),
+      scalebar: tileText(".scalebar-label"),
+      total: viewer?.active()?.imageTotal() ?? 0,
       wlAfterPreset,
       cinebarVisible: !cinebar.hidden,
+      panelsAfter2x2,
+      thumbnails: thumbs,
     };
     console.log("SELFTEST_RESULT " + JSON.stringify(w.__selfTest));
   } catch (e) {

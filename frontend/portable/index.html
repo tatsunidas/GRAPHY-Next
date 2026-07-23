@@ -18,6 +18,10 @@
         <button id="flipv-btn" type="button" title="上下反転">⇅</button>
         <button id="invert-btn" type="button" title="諧調反転（白黒反転）">Inv</button>
         <button id="reset-btn" type="button" title="表示を完全リセット">リセット</button>
+        <span class="sep"></span>
+        <button class="layout-btn active" data-layout="1x1" type="button" title="1画面">▢</button>
+        <button class="layout-btn" data-layout="2x1" type="button" title="左右2分割">▢▢</button>
+        <button class="layout-btn" data-layout="2x2" type="button" title="2×2分割">⊞</button>
         <input id="folder-input" type="file" webkitdirectory directory multiple hidden />
         <span id="status" data-kind="info"></span>
       </header>
@@ -48,15 +52,7 @@
           <div id="tree"></div>
         </aside>
         <main id="stage">
-          <div id="viewport"></div>
-          <div id="overlay-tl" class="overlay tl"></div>
-          <div id="overlay-tr" class="overlay tr"></div>
-          <div id="overlay-bl" class="overlay bl"></div>
-          <div id="overlay-br" class="overlay br"></div>
-          <div id="scalebar">
-            <div id="scalebar-bar"></div>
-            <div id="scalebar-label"></div>
-          </div>
+          <div id="grid"></div>
           <div id="cinebar" hidden>
             <button id="play-btn" type="button" title="シネ再生 / 停止">▶</button>
             <input id="slice-slider" type="range" min="0" max="0" value="0" step="1" />

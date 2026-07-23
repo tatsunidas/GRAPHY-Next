@@ -2,11 +2,12 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-// Portable 2D Viewer — Cornerstone3D StackViewport の薄いラッパ。
-// 本体 viewer（frontend/src/viewer）とは独立した最小構成: 単一シリーズを StackViewport で表示し、
-// W/L・スタック送り・Zoom/Pan・回転/反転/諧調反転・Fit/実寸・4 隅オーバレイ・スケールバーを提供する。
-// ローカル File は dicom-image-loader の fileManager.add() で `dicomfile:` imageId 化して読む（サーバ不要）。
-import { RenderingEngine, Enums, eventTarget, metaData, init as coreInit, type Types } from "@cornerstonejs/core";
+// Portable 2D Viewer マネージャ — 共有 RenderingEngine ＋共有 ToolGroup を持ち、
+// 1×1 / 2×1 / 2×2 のタイルレイアウトで複数の ViewportPanel を並べる（P4.4）。
+// W/L・トランスフォーム・スライス送り・PNG はアクティブなタイルへ委譲。計測ツールは
+// 共有 ToolGroup 経由で「ドラッグしたタイル」に効く。ローカル File は dicom-image-loader の
+// fileManager.add() で `dicomfile:` imageId 化して読む（サーバ不要）。
+import { RenderingEngine, init as coreInit } from "@cornerstonejs/core";
 import dicomImageLoader from "@cornerstonejs/dicom-image-loader";
 import {
   init as toolsInit,
@@ -25,16 +26,25 @@ import {
   Enums as ToolEnums,
 } from "@cornerstonejs/tools";
 import type { ImageRec } from "./dicomdir";
-import { resolveOverlay, isCalibrated, pixelSpacingColumn } from "./overlay";
-import { computeScaleBar } from "./scalebar";
-import { applyTransform, readTransform, FIT_TRANSFORM } from "./transform";
+import { ViewportPanel } from "./panel";
 
-const { ViewportType } = Enums;
+export type { WindowLevel } from "./panel";
+
 const { MouseBindings } = ToolEnums;
 
 const ENGINE_ID = "portable-engine";
-const VIEWPORT_ID = "portable-viewport";
 const TOOLGROUP_ID = "portable-toolgroup";
+
+/** レイアウト定義（行×列）。 */
+export interface Layout {
+  rows: number;
+  cols: number;
+}
+export const LAYOUTS: Record<string, Layout> = {
+  "1x1": { rows: 1, cols: 1 },
+  "2x1": { rows: 1, cols: 2 },
+  "2x2": { rows: 2, cols: 2 },
+};
 
 /** 左ドラッグに割り当てられる計測ツール名（"" = W/L に戻す）。 */
 export const MEASURE_TOOLS = [
@@ -44,17 +54,6 @@ export const MEASURE_TOOLS = [
   RectangleROITool.toolName,
   ProbeTool.toolName,
 ];
-
-/** 画像上オーバレイ／スケールバーの DOM 参照一式。 */
-export interface ViewerElements {
-  viewport: HTMLDivElement;
-  overlayTL: HTMLElement;
-  overlayTR: HTMLElement;
-  overlayBL: HTMLElement;
-  overlayBR: HTMLElement;
-  scalebarBar: HTMLElement;
-  scalebarLabel: HTMLElement;
-}
 
 let initPromise: Promise<void> | null = null;
 
@@ -80,287 +79,143 @@ export function ensureInit(): Promise<void> {
   return initPromise;
 }
 
-/** 現在の W/L（ウィンドウ中心/幅）。 */
-export interface WindowLevel {
-  center: number;
-  width: number;
-}
-
 export class PortableViewer {
   private engine: RenderingEngine | null = null;
-  private els: ViewerElements;
-  private imageCount = 0;
-  private boundRefresh: () => void;
-  /** 画像・W/L・カメラ変更時に UI（スライダ/入力欄）を同期させる外部コールバック。 */
+  private grid: HTMLElement;
+  private panels: ViewportPanel[] = [];
+  private activeIndex = 0;
+  private layout: Layout = LAYOUTS["1x1"];
+  private nextVpSeq = 0;
+  /** 各タイルへ最後に割当てたシリーズ画像（レイアウト変更時の再表示用）。 */
+  private panelImages: (ImageRec[] | null)[] = [];
+  private measureTool = "";
+  /** アクティブタイルの状態変化（画像/W-L/カメラ）を UI へ伝えるコールバック。 */
   onChange: (() => void) | null = null;
+  /** アクティブタイルが切り替わったときのコールバック。 */
+  onActiveChange: (() => void) | null = null;
 
-  constructor(els: ViewerElements) {
-    this.els = els;
-    this.boundRefresh = () => {
-      this.emitOverlay();
-      this.onChange?.();
-    };
+  constructor(grid: HTMLElement) {
+    this.grid = grid;
   }
 
   async setup(): Promise<void> {
     await ensureInit();
     this.engine = new RenderingEngine(ENGINE_ID);
-    this.engine.enableElement({
-      viewportId: VIEWPORT_ID,
-      type: ViewportType.STACK,
-      element: this.els.viewport,
-    });
+    this.ensureToolGroup();
+    await this.setLayout(LAYOUTS["1x1"]);
+  }
 
-    // ツールグループ: W/L(左)・Pan(中)・Zoom(右)・スタック送り(ホイール)。
+  private ensureToolGroup(): void {
     let group = ToolGroupManager.getToolGroup(TOOLGROUP_ID);
-    if (!group) {
-      group = ToolGroupManager.createToolGroup(TOOLGROUP_ID)!;
-      group.addTool(WindowLevelTool.toolName);
-      group.addTool(PanTool.toolName);
-      group.addTool(ZoomTool.toolName);
-      group.addTool(StackScrollTool.toolName);
-      // 計測ツールは passive で登録（setMeasureTool で左ドラッグに割当）。
-      for (const tn of MEASURE_TOOLS) {
-        group.addTool(tn);
-        group.setToolPassive(tn);
+    if (group) return;
+    group = ToolGroupManager.createToolGroup(TOOLGROUP_ID)!;
+    group.addTool(WindowLevelTool.toolName);
+    group.addTool(PanTool.toolName);
+    group.addTool(ZoomTool.toolName);
+    group.addTool(StackScrollTool.toolName);
+    for (const tn of MEASURE_TOOLS) {
+      group.addTool(tn);
+      group.setToolPassive(tn);
+    }
+    group.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
+    group.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
+    group.setToolActive(ZoomTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary }] });
+    group.setToolActive(StackScrollTool.toolName, { bindings: [{ mouseButton: MouseBindings.Wheel }] });
+  }
+
+  private group() {
+    return ToolGroupManager.getToolGroup(TOOLGROUP_ID);
+  }
+
+  // ── レイアウト ────────────────────────────────────────────────────────
+  currentLayout(): Layout {
+    return this.layout;
+  }
+
+  /** タイルレイアウトを切替（既存タイルのシリーズ割当は可能な範囲で引き継ぐ）。 */
+  async setLayout(layout: Layout): Promise<void> {
+    if (!this.engine) return;
+    const group = this.group();
+    // 既存タイルを片付け（割当画像は保持済み）。
+    const preserved = this.panelImages.slice();
+    for (const p of this.panels) {
+      group?.removeViewports(ENGINE_ID, p.viewportId);
+      p.destroy();
+    }
+    this.panels = [];
+
+    this.layout = layout;
+    this.grid.style.setProperty("--rows", String(layout.rows));
+    this.grid.style.setProperty("--cols", String(layout.cols));
+
+    const count = layout.rows * layout.cols;
+    for (let i = 0; i < count; i++) {
+      const vpId = `portable-vp-${this.nextVpSeq++}`;
+      const panel = new ViewportPanel(this.engine, vpId, this.grid);
+      panel.onChange = () => this.onChange?.();
+      panel.root.addEventListener("pointerdown", () => this.setActiveIndex(i));
+      group?.addViewport(vpId, ENGINE_ID);
+      this.panels.push(panel);
+    }
+    this.panelImages = new Array(count).fill(null);
+    this.activeIndex = 0;
+    this.applyActiveHighlight();
+
+    // 割当済みシリーズを新レイアウトへ再表示（先頭から min(旧,新) 枚）。
+    await this.restore(preserved);
+  }
+
+  private async restore(preserved: (ImageRec[] | null)[]): Promise<void> {
+    for (let i = 0; i < this.panels.length && i < preserved.length; i++) {
+      const imgs = preserved[i];
+      if (imgs && imgs.length) {
+        try {
+          await this.panels[i].showSeries(imgs);
+          this.panelImages[i] = imgs;
+        } catch {
+          /* ignore */
+        }
       }
-      group.setToolActive(WindowLevelTool.toolName, {
-        bindings: [{ mouseButton: MouseBindings.Primary }],
-      });
-      group.setToolActive(PanTool.toolName, {
-        bindings: [{ mouseButton: MouseBindings.Auxiliary }],
-      });
-      group.setToolActive(ZoomTool.toolName, {
-        bindings: [{ mouseButton: MouseBindings.Secondary }],
-      });
-      group.setToolActive(StackScrollTool.toolName, {
-        bindings: [{ mouseButton: MouseBindings.Wheel }],
-      });
-    }
-    group.addViewport(VIEWPORT_ID, ENGINE_ID);
-
-    // オーバレイ更新: 画像描画・W/L 変更・スタック送り・カメラ変更で。
-    this.els.viewport.addEventListener(Enums.Events.IMAGE_RENDERED, this.boundRefresh);
-    eventTarget.addEventListener(Enums.Events.STACK_NEW_IMAGE, this.boundRefresh);
-    eventTarget.addEventListener(Enums.Events.VOI_MODIFIED, this.boundRefresh);
-    eventTarget.addEventListener(Enums.Events.CAMERA_MODIFIED, this.boundRefresh);
-  }
-
-  /** 1 シリーズの画像を表示する。File を dicomfile: imageId 化して StackViewport に流す。 */
-  async showSeries(images: ImageRec[]): Promise<void> {
-    const vp = this.viewport();
-    const imageIds = images
-      .filter((im) => im.file)
-      .map((im) => dicomImageLoader.wadouri.fileManager.add(im.file!));
-    this.imageCount = imageIds.length;
-    if (imageIds.length === 0) {
-      throw new Error("表示できるファイルがありません（DICOMDIR の参照先が見つかりません）");
-    }
-    await vp.setStack(imageIds, 0);
-    vp.resetCamera();
-    vp.render();
-    this.emitOverlay();
-  }
-
-  /** 表示を完全リセット（カメラ＋W/L＋変換）。 */
-  resetView(): void {
-    if (!this.engine) return;
-    const vp = this.viewport();
-    vp.resetCamera();
-    vp.resetProperties();
-    vp.render();
-    this.emitOverlay();
-  }
-
-  /** ウィンドウに合わせる（zoom/pan/回転/反転を Fit へ。W/L は保持）。 */
-  fit(): void {
-    if (!this.engine) return;
-    applyTransform(this.viewport(), FIT_TRANSFORM);
-    this.emitOverlay();
-  }
-
-  /** 実寸（1 CSS px = 1 画像 px）。 */
-  actualSize(): void {
-    if (!this.engine) return;
-    const vp = this.viewport();
-    const el = this.els.viewport;
-    const y = el.clientHeight / 2;
-    const p0 = vp.canvasToWorld([0, y]);
-    const p1 = vp.canvasToWorld([1, y]);
-    const worldPerPx = Math.hypot(p0[0] - p1[0], p0[1] - p1[1], p0[2] - p1[2]);
-    const spacing = pixelSpacingColumn(vp.getCurrentImageId());
-    if (!(worldPerPx > 0) || !(spacing > 0)) return;
-    const cur = readTransform(vp).zoom;
-    applyTransform(vp, { zoom: cur * (worldPerPx / spacing) });
-    this.emitOverlay();
-  }
-
-  rotate90(): void {
-    if (!this.engine) return;
-    const vp = this.viewport();
-    applyTransform(vp, { rotation: (readTransform(vp).rotation + 90) % 360 });
-    this.emitOverlay();
-  }
-
-  flipH(): void {
-    if (!this.engine) return;
-    const vp = this.viewport();
-    applyTransform(vp, { flipHorizontal: !readTransform(vp).flipHorizontal });
-    this.emitOverlay();
-  }
-
-  flipV(): void {
-    if (!this.engine) return;
-    const vp = this.viewport();
-    applyTransform(vp, { flipVertical: !readTransform(vp).flipVertical });
-    this.emitOverlay();
-  }
-
-  /** 諧調反転（白黒反転）トグル。 */
-  invert(): void {
-    if (!this.engine) return;
-    const vp = this.viewport();
-    const cur = vp.getProperties().invert ?? false;
-    vp.setProperties({ invert: !cur });
-    vp.render();
-    this.emitOverlay();
-  }
-
-  // ── W/L ─────────────────────────────────────────────────────────────────
-  /** W/L を設定（center/width → voiRange）。 */
-  setWL(center: number, width: number): void {
-    if (!this.engine || !Number.isFinite(center) || !(width > 0)) return;
-    const vp = this.viewport();
-    const half = width / 2;
-    vp.setProperties({ voiRange: { lower: center - half, upper: center + half } });
-    vp.render();
-    this.emitOverlay();
-  }
-
-  /** 現在の W/L を返す（未設定なら null）。 */
-  getWL(): WindowLevel | null {
-    if (!this.engine) return null;
-    const voi = this.viewport().getProperties().voiRange;
-    if (!voi) return null;
-    return { center: Math.round((voi.upper + voi.lower) / 2), width: Math.round(voi.upper - voi.lower) };
-  }
-
-  /** 既定（DICOM の WindowCenter/Width）に戻す。無ければ resetProperties。 */
-  defaultWL(): void {
-    if (!this.engine) return;
-    const vp = this.viewport();
-    const imageId = vp.getCurrentImageId();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const voi = imageId ? (metaData.get("voiLutModule", imageId) as any) : null;
-    let wc = voi?.windowCenter;
-    let ww = voi?.windowWidth;
-    if (Array.isArray(wc)) wc = wc[0];
-    if (Array.isArray(ww)) ww = ww[0];
-    if (Number.isFinite(wc) && ww > 0) {
-      this.setWL(Number(wc), Number(ww));
-    } else {
-      vp.resetProperties();
-      vp.render();
-      this.emitOverlay();
     }
   }
 
-  // ── スライス送り ─────────────────────────────────────────────────────────
-  imageIndex(): number {
-    return this.engine ? this.viewport().getCurrentImageIdIndex() : 0;
+  // ── アクティブタイル ──────────────────────────────────────────────────
+  private applyActiveHighlight(): void {
+    this.panels.forEach((p, i) => p.setActive(i === this.activeIndex && this.panels.length > 1));
   }
 
-  imageTotal(): number {
-    return this.imageCount;
-  }
-
-  /** インデックス指定でスライスを表示（範囲外はクランプ）。 */
-  async setImageIndex(index: number): Promise<void> {
-    if (!this.engine || this.imageCount === 0) return;
-    const i = Math.max(0, Math.min(this.imageCount - 1, Math.round(index)));
-    if (i === this.viewport().getCurrentImageIdIndex()) return;
-    await this.viewport().setImageIdIndex(i);
-  }
-
-  // ── PNG 保存 ─────────────────────────────────────────────────────────────
-  /** 現在ビューを PNG で保存（オーバレイ／スケールバー焼き込み）。 */
-  savePng(filename: string): void {
-    if (!this.engine) return;
-    const vp = this.viewport();
-    const src = vp.getCanvas();
-    if (!src) return;
-    const out = document.createElement("canvas");
-    out.width = src.width;
-    out.height = src.height;
-    const ctx = out.getContext("2d");
-    if (!ctx) return;
-    ctx.drawImage(src, 0, 0);
-    this.burnOverlays(ctx, src.width / this.els.viewport.clientWidth);
-    out.toBlob((blob) => {
-      if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
-    }, "image/png");
-  }
-
-  /** オーバレイ4隅とスケールバーを出力 canvas に描画（scale = デバイスpx/CSSpx）。 */
-  private burnOverlays(ctx: CanvasRenderingContext2D, scale: number): void {
-    const W = ctx.canvas.width;
-    const H = ctx.canvas.height;
-    const pad = 10 * scale;
-    const fs = 12 * scale;
-    ctx.font = `${fs}px ui-monospace, Menlo, Consolas, monospace`;
-    ctx.textBaseline = "top";
-    ctx.shadowColor = "#000";
-    ctx.shadowBlur = 3 * scale;
-    ctx.fillStyle = "#d9f000";
-    const draw = (text: string, x: number, top: boolean, right: boolean) => {
-      if (!text) return;
-      const lines = text.split("\n");
-      ctx.textAlign = right ? "right" : "left";
-      lines.forEach((ln, i) => {
-        const y = top ? pad + i * fs * 1.4 : H - pad - (lines.length - i) * fs * 1.4;
-        ctx.fillText(ln, x, y);
-      });
-    };
-    draw(this.els.overlayTL.textContent ?? "", pad, true, false);
-    draw(this.els.overlayTR.textContent ?? "", W - pad, true, true);
-    draw(this.els.overlayBL.textContent ?? "", pad, false, false);
-    draw(this.els.overlayBR.textContent ?? "", W - pad, false, true);
-    // スケールバー（下辺中央）。
-    if (this.els.scalebarBar.style.display !== "none") {
-      const barCssPx = parseFloat(this.els.scalebarBar.style.width) || 0;
-      const barPx = barCssPx * scale;
-      const cx = W / 2;
-      const by = H - 8 * scale;
-      ctx.strokeStyle = this.els.scalebarBar.dataset.calibrated === "false" ? "#ff9f43" : "#d9f000";
-      ctx.lineWidth = 3 * scale;
-      ctx.beginPath();
-      ctx.moveTo(cx - barPx / 2, by);
-      ctx.lineTo(cx + barPx / 2, by);
-      ctx.stroke();
-      ctx.fillStyle = ctx.strokeStyle;
-      ctx.textAlign = "center";
-      ctx.fillText(this.els.scalebarLabel.textContent ?? "", cx, by - fs * 1.6);
+  setActiveIndex(i: number): void {
+    if (i < 0 || i >= this.panels.length || i === this.activeIndex) {
+      if (i === this.activeIndex) return;
     }
-    ctx.shadowBlur = 0;
+    this.activeIndex = Math.max(0, Math.min(this.panels.length - 1, i));
+    this.applyActiveHighlight();
+    this.onActiveChange?.();
   }
 
-  // ── 計測 ─────────────────────────────────────────────────────────────────
-  /**
-   * 左ドラッグの計測ツールを切替。空文字/未知名は W/L に戻す。
-   * 結果（長さ mm・角度・ROI 面積/平均/SD）はツール自身がアノテーション上に描画する
-   * （PixelSpacing とモダリティ LUT を dicom-image-loader が populate 済みのため mm・HU 表示）。
-   */
+  active(): ViewportPanel | null {
+    return this.panels[this.activeIndex] ?? null;
+  }
+
+  panelCount(): number {
+    return this.panels.length;
+  }
+
+  // ── シリーズ表示 ──────────────────────────────────────────────────────
+  /** アクティブタイルにシリーズを表示する。 */
+  async showSeriesInActive(images: ImageRec[]): Promise<void> {
+    const panel = this.active();
+    if (!panel) return;
+    await panel.showSeries(images);
+    this.panelImages[this.activeIndex] = images;
+  }
+
+  // ── 計測（共有 ToolGroup） ────────────────────────────────────────────
   setMeasureTool(toolName: string): void {
-    if (!this.engine) return;
-    const group = ToolGroupManager.getToolGroup(TOOLGROUP_ID);
+    const group = this.group();
     if (!group) return;
     const measure = MEASURE_TOOLS.includes(toolName) ? toolName : "";
+    this.measureTool = measure;
     for (const tn of MEASURE_TOOLS) {
       if (tn !== measure) group.setToolPassive(tn);
     }
@@ -372,13 +227,15 @@ export class PortableViewer {
     }
   }
 
-  /** すべての計測アノテーションを削除。 */
-  clearAnnotations(): void {
-    annotation.state.removeAllAnnotations();
-    this.engine?.getViewport(VIEWPORT_ID)?.render();
+  currentMeasureTool(): string {
+    return this.measureTool;
   }
 
-  /** 選択中（クリック選択）のアノテーションを削除（Delete/Backspace 用）。削除件数を返す。 */
+  clearAnnotations(): void {
+    annotation.state.removeAllAnnotations();
+    this.panels.forEach((p) => p.render());
+  }
+
   deleteSelected(): number {
     const sel = annotation.selection.getAnnotationsSelected();
     for (const uid of sel) {
@@ -388,63 +245,18 @@ export class PortableViewer {
         /* ignore */
       }
     }
-    if (sel.length) this.engine?.getViewport(VIEWPORT_ID)?.render();
+    if (sel.length) this.panels.forEach((p) => p.render());
     return sel.length;
   }
 
   resize(): void {
     this.engine?.resize(true, false);
-    this.emitOverlay();
-  }
-
-  private viewport(): Types.IStackViewport {
-    if (!this.engine) throw new Error("setup() を先に呼んでください");
-    return this.engine.getViewport(VIEWPORT_ID) as Types.IStackViewport;
-  }
-
-  private emitOverlay(): void {
-    if (!this.engine) return;
-    const vp = this.viewport();
-    if (!vp) return;
-    const imageId = vp.getCurrentImageId();
-
-    // タグ由来の 3 隅。
-    const resolved = resolveOverlay(imageId);
-    this.els.overlayTL.textContent = resolved.topLeft.join("\n");
-    this.els.overlayTR.textContent = resolved.topRight.join("\n");
-    this.els.overlayBL.textContent = resolved.bottomLeft.join("\n");
-
-    // 動的値（右下）: Image i/N・W/L・Zoom。
-    const voi = vp.getProperties().voiRange;
-    const lines: string[] = [];
-    if (this.imageCount > 0) lines.push(`Image ${vp.getCurrentImageIdIndex() + 1} / ${this.imageCount}`);
-    if (voi) {
-      const ww = Math.round(voi.upper - voi.lower);
-      const wc = Math.round((voi.upper + voi.lower) / 2);
-      lines.push(`W ${ww}  L ${wc}`);
-    }
-    const zoom = vp.getZoom ? Math.round(vp.getZoom() * 100) / 100 : 1;
-    lines.push(`Zoom ${zoom}×`);
-    this.els.overlayBR.textContent = lines.join("\n");
-
-    // スケールバー。
-    const bar = computeScaleBar(vp, this.els.viewport, isCalibrated(imageId));
-    if (bar) {
-      this.els.scalebarBar.style.width = `${Math.round(bar.lengthPx)}px`;
-      this.els.scalebarBar.style.display = "block";
-      this.els.scalebarLabel.textContent = bar.label;
-      this.els.scalebarBar.dataset.calibrated = String(bar.calibrated);
-    } else {
-      this.els.scalebarBar.style.display = "none";
-      this.els.scalebarLabel.textContent = "";
-    }
+    this.panels.forEach((p) => p.refresh());
   }
 
   destroy(): void {
-    this.els.viewport.removeEventListener(Enums.Events.IMAGE_RENDERED, this.boundRefresh);
-    eventTarget.removeEventListener(Enums.Events.STACK_NEW_IMAGE, this.boundRefresh);
-    eventTarget.removeEventListener(Enums.Events.VOI_MODIFIED, this.boundRefresh);
-    eventTarget.removeEventListener(Enums.Events.CAMERA_MODIFIED, this.boundRefresh);
+    for (const p of this.panels) p.destroy();
+    this.panels = [];
     this.engine?.destroy();
     this.engine = null;
   }
