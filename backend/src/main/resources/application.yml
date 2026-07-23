@@ -14,6 +14,12 @@ spring:
     hibernate:
       ddl-auto: update
     open-in-view: false
+  servlet:
+    multipart:
+      # プラグイン zip（JAR 同梱で 1MB を超えうる）のオフライン導入に備え既定 1MB から引き上げ。
+      # fw/plugin-manager-design.md（POST /api/plugin-manager/install/file）。
+      max-file-size: 128MB
+      max-request-size: 128MB
 
 server:
   port: 8080
@@ -33,6 +39,14 @@ graphy:
   # プラグイン格納フォルダ（standalone）。読取専用バンドルを避け書込可能な場所を指す。
   plugins:
     dir: ./plugins
+    # プラグインマネージャ（取得・導入・更新・削除）。既定 false＝閲覧のみ。
+    # standalone かつ true のときだけ導入操作を許可する（web は運営キュレーション前提で 403）。
+    # 設計: fw/plugin-manager-design.md。
+    manager-enabled: false
+    # private リポジトリの列挙・資産取得に使う GitHub トークン（任意・PAT）。未設定なら公開のみ。
+    # github-token: ghp_xxx
+    # 公式キュレーション索引 URL（raw JSON・将来の discovery 用・任意）。
+    # index-url: https://raw.githubusercontent.com/vis-ionary/graphy-plugins-index/main/index.json
   cors:
     # /api/** に対する許可オリジン（dev の Vite と Electron file://=null を想定）
     allowed-origin-patterns:
