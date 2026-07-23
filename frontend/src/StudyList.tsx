@@ -10,7 +10,7 @@ import {
   fetchReportStudyCounts,
   instanceDocumentUrl,
   ENCAPSULATED_PDF_SOP_CLASS,
-  VIDEO_PHOTOGRAPHIC_SOP_CLASS,
+  isVideoSopClass,
   type Study,
   type Series,
   type Instance,
@@ -19,6 +19,7 @@ import {
 } from "./api";
 import { useI18n } from "./i18n/i18n";
 import { SeriesViewer } from "./viewer/SeriesViewer";
+import { VideoViewer } from "./viewer/VideoViewer";
 import { type ViewerMode } from "./viewer/imageId";
 import { useTableSort, applySort, sortIndicator, type SortState, type Accessor } from "./tableSort";
 
@@ -293,8 +294,8 @@ function InstanceList({ study, series, mode }: { study: Study; series: Series; m
   const hasImages = !!instances && instances.length > 0;
   // Encapsulated PDF はピクセルが無く 2D 画像ビューアで表示できないため、文書パネルで開く。
   const isPdf = hasImages && instances![0].sopClassUid === ENCAPSULATED_PDF_SOP_CLASS;
-  // 動画(Video Photographic)も wadouri の画像ビューアでは表示できない（再生は 2D Viewer 側で今後対応）。
-  const isVideo = hasImages && instances![0].sopClassUid === VIDEO_PHOTOGRAPHIC_SOP_CLASS;
+  // 動画(Video Photographic/Endoscopic/Microscopic)は独立 VideoViewer で再生する（SeriesViewer 非経由）。
+  const isVideo = hasImages && isVideoSopClass(instances![0].sopClassUid);
 
   return (
     <div style={{ marginTop: 10, color: "#445" }}>
@@ -332,11 +333,9 @@ function InstanceList({ study, series, mode }: { study: Study; series: Series; m
         </div>
       )}
 
-      {/* 動画（Video Photographic）: 画像ビューア非対応。再生は 2D Viewer で今後対応。 */}
-      {isVideo && (
-        <div style={{ marginTop: 10, fontSize: 13, color: "#8a6d3b" }}>
-          🎞 {t("nondicom.video.needsFfmpeg")}
-        </div>
+      {/* 動画（Video SOP）: SeriesViewer ではなく独立 VideoViewer で再生する。 */}
+      {isVideo && instances && (
+        <VideoViewer instances={instances.filter((i) => isVideoSopClass(i.sopClassUid))} />
       )}
 
       {/* シリーズビューア（スライス送り・シネ・5D・オーバーレイ On/Off のコントローラ）。 */}

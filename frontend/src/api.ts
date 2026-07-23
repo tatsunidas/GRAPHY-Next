@@ -107,9 +107,42 @@ export const ENCAPSULATED_PDF_SOP_CLASS = "1.2.840.10008.5.1.4.1.1.104.1";
 /** Video Photographic Image Storage の SOP Class UID（encapsulated 動画＝2D 画像ビューア非対応）。 */
 export const VIDEO_PHOTOGRAPHIC_SOP_CLASS = "1.2.840.10008.5.1.4.1.1.77.1.4.1";
 
+/** 動画（ビデオ）系 SOP Class。encapsulated video を独立 VideoViewer で再生する対象。 */
+export const VIDEO_SOP_CLASSES = new Set<string>([
+  "1.2.840.10008.5.1.4.1.1.77.1.1.1", // Video Endoscopic Image Storage
+  "1.2.840.10008.5.1.4.1.1.77.1.2.1", // Video Microscopic Image Storage
+  VIDEO_PHOTOGRAPHIC_SOP_CLASS, // Video Photographic Image Storage
+]);
+
+/** SOPClass が動画（ビデオ）系か。 */
+export const isVideoSopClass = (sopClassUid: string | null | undefined): boolean =>
+  !!sopClassUid && VIDEO_SOP_CLASSES.has(sopClassUid);
+
 /** Encapsulated Document（PDF 等）の中身を配信する URL（inline / download）。 */
 export const instanceDocumentUrl = (sopUid: string, download = false) =>
   `${apiBase()}/api/instances/${encodeURIComponent(sopUid)}/document${download ? "?download=true" : ""}`;
+
+/** encapsulated video を再生用 MP4 として配信する URL（`<video>.src` / VideoViewport の rendered）。 */
+export const videoRenderedUrl = (sopUid: string) =>
+  `${apiBase()}/api/instances/${encodeURIComponent(sopUid)}/rendered`;
+
+/** 動画再生 UI に必要な諸元（backend `/video-metadata`）。 */
+export interface VideoMetadata {
+  rows: number;
+  columns: number;
+  numberOfFrames: number;
+  frameTimeMs: number | null;
+  fps: number | null;
+  cineRate: number | null;
+  transferSyntaxUid: string;
+  /** ブラウザで無変換再生できるか（false=要 ffmpeg 変換、P4）。 */
+  playable: boolean;
+  durationSec: number | null;
+}
+
+/** encapsulated video の諸元を取得（索引に無ければ 404 で reject）。 */
+export const fetchVideoMetadata = (sopUid: string) =>
+  httpGet<VideoMetadata>(`/api/instances/${encodeURIComponent(sopUid)}/video-metadata`);
 
 export interface SeriesLayoutCell {
   c: number;
