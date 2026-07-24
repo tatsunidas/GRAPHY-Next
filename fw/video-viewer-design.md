@@ -195,10 +195,10 @@ frontend: VideoViewport（ViewportType.VIDEO）
   - ✅ **P3b（ツール）**: ToolGroup を video viewport に紐付け、Pan（中）/Zoom（右）固定＋Primary（左）切替で
     WW/WL・Length・Angle・RectangleROI・EllipticalROI・Probe を有効化＋ツールバー UI＋Fit。**実機検証済み
     （2026-07-24、Electron dev で WW/WL・Pan/Zoom・ROI 描画を確認）**。ツール配線は best-effort（失敗しても再生継続）。
-  - ⬜ **P3c（動画 ROI 解析・§12）**: フレーム指定 ROI／グローバル ROI（全フレーム適用＝時系列解析）＋
-    時系列カーブ＋CSV。**着手（2026-07-24）**。§12 未決の判断: 統計は**フロントで VideoViewport の canvas から
-    ROI 内画素を読む**（動画は 8bit RGB・無校正のため backend 再デコード不要）、時系列サンプルは
-    `setFrameNumber` ベース（フレーム精度）。
+  - ✅ **P3c v1（動画 ROI 解析・§12）**: **グローバル ROI（矩形/楕円）の時系列解析**（全フレームの ROI 内
+    平均輝度/RGB → time–intensity カーブ ＋ CSV）を実装・**実機検証済み（2026-07-24）**。統計は**フロント**で
+    オフスクリーン `<video crossOrigin=anonymous>` から canvas 読取（`/rendered` は CORS 許可済み）。
+    残: ROI 管理 UI（削除/一覧）、フレーム指定 ROI モードの明示切替、複数 ROI、統計拡張（§12 参照）。
 - **P4（非 H.264 対応）**: `/rendered` に ffmpeg トランスコード分岐（MPEG2 等）＋キャッシュ（§4.3/4.4）。
 - **P5（Portable/web）**: §7/§8。
 
@@ -243,12 +243,26 @@ frontend: VideoViewport（ViewportType.VIDEO）
   ※ `SeriesViewer.tsx` の `VIDEO_SOP_CLASSES` は GridView 無効化用に現状維持（動画は `StudyList` 側で分岐）。
 - doc: `fw/mainscreen-tools.md` 234 行から本ドキュメントへリンク。`fw/development-phases.md` の Video 項更新。
 
-## 12. 動画 ROI 解析（TODO・P3）
+## 12. 動画 ROI 解析（P3c）
 
-> ステータス: **未実装（TODO・P3）**。P1（再生）確立後の主要課題。方針は「通常のシリーズビューアの ROI を踏襲し、
-> スライス軸を**フレーム軸**に読み替えて動画用に組み上げる」。
+> ステータス: **P3c v1 実装済・実機検証済み（2026-07-24）**。グローバル ROI（矩形/楕円）の時系列解析
+> （全フレームの ROI 内平均輝度/RGB → time–intensity カーブ ＋ CSV）まで動作。
 > **前提**: ROI を動画フレームに載せるには方式 A（VideoViewport）が必須（方式 B の `<video>` はフレーム上に
-> ツール/ROI を重ねられない）。したがって P3 はまず **方式 B→A への移行**（P1.3 を統合、§6）から始める。
+> ツール/ROI を重ねられない）。P3a で移行済み。
+>
+> **実装（P3c v1）**: `viewer/videoRoiAnalysis.ts`（オフスクリーン `<video crossOrigin=anonymous>` を
+> フレーム時刻へシーク → native 解像度で canvas 描画 → `getImageData` で ROI 内画素の平均を算出。`/rendered`
+> は CORS 許可済みで canvas は汚染されない）＋ `viewer/TimeIntensityChart.tsx`（インライン SVG カーブ）＋
+> `VideoViewer.tsx`（「グローバルROI解析」ボタン・進捗・CSV）。統計はフロント計算・ROI 幾何は annotation の
+> world 点＝ピクセル座標（spacing=1/origin=0）をそのまま使用。
+>
+> **残タスク（後続・未実装）**:
+> - **ROI 管理 UI**: 削除（選択削除・全消去）、一覧/ラベル。現状は描くと溜まり、明示削除 UI が無い
+>   （cornerstone 既定のキーボード削除も video viewport では未配線）。
+> - **フレーム指定 ROI モードの明示切替**（現状は全 ROI をグローバル扱いで解析）。§12 の 2 モードのうち①が未実装。
+> - **複数 ROI の選択解析**（現状は直近 1 つの矩形/楕円のみ）。
+> - 統計拡張（max/min/SD/ヒストグラム、per-channel カーブ）、フレーム精度シーク（現状はオフスクリーン
+>   `<video>` の time シーク＝GOP 近似。厳密フレーム精度が要るなら `setFrameNumber`/`requestVideoFrameCallback` 経路）。
 
 動画では ROI を **2 つのモード**で扱う必要がある:
 
