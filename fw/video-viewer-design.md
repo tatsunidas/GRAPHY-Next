@@ -192,10 +192,13 @@ frontend: VideoViewport（ViewportType.VIDEO）
     primary に書き換え、cine コントロール自作（▶/⏸・**フレーム精度シークバー**・速度・ループ・フレーム◀▶）。
     VideoViewport 初期化失敗時は方式 B（`<video>`）へ**自動フォールバック**。**実機検証済み（2026-07-24、Electron dev
     で canvas 描画＋cine 操作を確認）**。frontend typecheck green。
-  - ⬜ **P3b（ツール）**: Pan/Zoom・WW/WL に続き計測/注釈を VideoViewport 上で有効化（`@cornerstonejs/tools`。
-    ToolGroup を video viewport に紐付け）。
+  - ✅ **P3b（ツール）**: ToolGroup を video viewport に紐付け、Pan（中）/Zoom（右）固定＋Primary（左）切替で
+    WW/WL・Length・Angle・RectangleROI・EllipticalROI・Probe を有効化＋ツールバー UI＋Fit。**実機検証済み
+    （2026-07-24、Electron dev で WW/WL・Pan/Zoom・ROI 描画を確認）**。ツール配線は best-effort（失敗しても再生継続）。
   - ⬜ **P3c（動画 ROI 解析・§12）**: フレーム指定 ROI／グローバル ROI（全フレーム適用＝時系列解析）＋
-    時系列カーブ＋CSV。ここで §12 未決事項を判断。
+    時系列カーブ＋CSV。**着手（2026-07-24）**。§12 未決の判断: 統計は**フロントで VideoViewport の canvas から
+    ROI 内画素を読む**（動画は 8bit RGB・無校正のため backend 再デコード不要）、時系列サンプルは
+    `setFrameNumber` ベース（フレーム精度）。
 - **P4（非 H.264 対応）**: `/rendered` に ffmpeg トランスコード分岐（MPEG2 等）＋キャッシュ（§4.3/4.4）。
 - **P5（Portable/web）**: §7/§8。
 
