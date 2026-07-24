@@ -3,145 +3,307 @@
  * Author: Tatsuaki Kobayashi
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { RenderingEngine, Enums, EVENTS } from "@cornerstonejs/core";
 import { useI18n } from "../i18n/i18n";
 import { fetchVideoMetadata, videoRenderedUrl, type VideoMetadata } from "../api";
+import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
+import { ensureVideoMetadataProvider, registerVideoMetadata } from "./videoMetadataProvider";
 
 /**
  * encapsulated 動画（Video Photographic/Endoscopic/Microscopic）を 2D ビューア枠内で再生する。
  *
- * <p>P1 実装は方式 B（HTML5 {@code <video>}）。backend の {@code /api/instances/{sop}/rendered}
- * （Range 対応 {@code video/mp4}）を src にして、ネイティブコントロール＋独自の再生速度/ループ/フレーム送りを
- * 提供する。設計（fw/video-viewer-design.md）では最終的に Cornerstone VideoViewport（方式 A）へ差し替える
- * 予定で、この {@code /rendered} 供給・諸元配線はそのまま流用できる。
+ * <p>P3: **方式 A（Cornerstone VideoViewport）を primary** とし、cine コントロール（再生/一時停止・
+ * シークバー・再生速度・ループ・フレーム精度送り）を自作で載せる。VideoViewport は WebGL キャンバスに
+ * 動画フレームを描くため、後続 P3 で Pan/Zoom・WW/WL・ROI/計測ツールをフレーム上に載せられる。
  *
- * <p>standalone 専用（{@code /rendered} は索引ローカルファイル前提）。web モードは呼び出し側で出し分ける。
+ * <p>VideoViewport の初期化に失敗した環境（WebGL 不可・HEVC 非対応等）は **方式 B（HTML5 `<video>`）に
+ * 自動フォールバック**する。standalone 専用（`/rendered` は索引ローカルファイル前提）。
  */
+
+/** VideoViewport の使用メソッドだけを型付けした最小インタフェース（Types 依存を避ける）。 */
+interface VideoVP {
+  setVideo(imageId: string, frame?: number): Promise<unknown>;
+  setProperties(p: { loop?: boolean; playbackRate?: number }): void;
+  play(): Promise<void>;
+  pause(): void;
+  togglePlayPause(): boolean;
+  setFrameNumber(f: number): Promise<void>;
+  setPlaybackRate(r?: number): void;
+  getFrameNumber(): number;
+  getNumberOfSlices(): number;
+}
+
+type Phase = "loading" | "viewport" | "fallback" | "transcode" | "error";
+
+let engineSeq = 0;
+
+const SPEEDS = [0.25, 0.5, 1, 1.5, 2, 4];
+
+function fmtTime(sec: number): string {
+  if (!Number.isFinite(sec) || sec < 0) {
+    return "0:00";
+  }
+  const s = Math.floor(sec % 60);
+  const m = Math.floor(sec / 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
 export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
   const { t } = useI18n();
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const engineRef = useRef<RenderingEngine | null>(null);
+  const vpRef = useRef<VideoVP | null>(null);
+
+  const [phase, setPhase] = useState<Phase>("loading");
   const [meta, setMeta] = useState<VideoMetadata | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const [frame, setFrame] = useState(1); // 1-based 現在フレーム
   const [rate, setRate] = useState(1);
   const [loop, setLoop] = useState(true);
 
   const src = useMemo(() => videoRenderedUrl(sopInstanceUid), [sopInstanceUid]);
+  const fps = meta && meta.fps > 0 ? meta.fps : 0;
+  const totalFrames = meta && meta.numberOfFrames > 0 ? meta.numberOfFrames : 1;
 
-  // 諸元（fps 等）はベストエフォート。取得できなくても再生は可能。ただし transcodeRequired の場合は
-  // /rendered が 415 を返すため、ネイティブ再生ではなく案内表示に切り替える。
   useEffect(() => {
-    let alive = true;
-    setMeta(null);
-    setFailed(false);
-    fetchVideoMetadata(sopInstanceUid)
-      .then((m) => {
-        if (alive) {
-          setMeta(m);
-        }
-      })
-      .catch(() => {
-        /* メタ取得失敗は致命ではない（video 要素の error で最終判定する） */
-      });
-    return () => {
-      alive = false;
+    let cancelled = false;
+    const host = hostRef.current;
+
+    // 高頻度（毎フレーム）の IMAGE_RENDERED で現在フレームを更新。整数フレームが変わった時だけ setState。
+    let lastFrame = 0;
+    const onRendered = () => {
+      const vp = vpRef.current;
+      if (!vp) {
+        return;
+      }
+      const f = vp.getFrameNumber();
+      if (f !== lastFrame) {
+        lastFrame = f;
+        setFrame(f);
+      }
     };
+
+    const cleanup = () => {
+      if (host) {
+        host.removeEventListener(EVENTS.IMAGE_RENDERED, onRendered);
+      }
+      const vp = vpRef.current;
+      if (vp) {
+        try {
+          vp.pause();
+        } catch {
+          /* 破棄済み等は無視 */
+        }
+      }
+      const engine = engineRef.current;
+      if (engine) {
+        try {
+          engine.destroy(); // enableElement した VIDEO viewport／WebGL コンテキストを解放
+        } catch {
+          /* 破棄済み等は無視 */
+        }
+      }
+      vpRef.current = null;
+      engineRef.current = null;
+    };
+
+    setPhase("loading");
+    setMeta(null);
+    setPlaying(false);
+    setFrame(1);
+
+    (async () => {
+      await ensureCornerstoneInitialized();
+      let m: VideoMetadata;
+      try {
+        m = await fetchVideoMetadata(sopInstanceUid);
+      } catch {
+        // メタ取得失敗 → <video> フォールバックで再生を試みる。
+        if (!cancelled) {
+          setPhase("fallback");
+        }
+        return;
+      }
+      if (cancelled) {
+        return;
+      }
+      setMeta(m);
+      if (m.transcodeRequired) {
+        setPhase("transcode");
+        return;
+      }
+      const imageId = registerVideoMetadata(sopInstanceUid, m);
+      ensureVideoMetadataProvider();
+
+      const el = hostRef.current;
+      if (!el) {
+        setPhase("fallback");
+        return;
+      }
+      const engineId = `graphy-video-engine-${engineSeq}`;
+      const viewportId = `graphy-video-vp-${engineSeq}`;
+      engineSeq += 1;
+      try {
+        const engine = new RenderingEngine(engineId);
+        engineRef.current = engine;
+        engine.enableElement({ viewportId, type: Enums.ViewportType.VIDEO, element: el });
+        const vp = engine.getViewport(viewportId) as unknown as VideoVP;
+        vpRef.current = vp;
+        await vp.setVideo(imageId, 1);
+        if (cancelled) {
+          cleanup();
+          return;
+        }
+        vp.setProperties({ loop });
+        vp.pause();
+        el.addEventListener(EVENTS.IMAGE_RENDERED, onRendered);
+        setPhase("viewport");
+      } catch (e) {
+        // VideoViewport 初期化失敗（WebGL 不可・コーデック非対応等）→ 方式 B にフォールバック。
+        console.warn("VideoViewport 初期化に失敗、<video> にフォールバックします", e);
+        cleanup();
+        if (!cancelled) {
+          setPhase("fallback");
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      cleanup();
+    };
+    // loop はマウント後に viewport へ反映（別 effect）。ここでの初期値のみ使用。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sopInstanceUid]);
 
-  // 再生速度・ループを video 要素へ反映。
+  // ループ／再生速度を viewport に反映。
   useEffect(() => {
-    const v = videoRef.current;
-    if (v) {
-      v.playbackRate = rate;
+    const vp = vpRef.current;
+    if (phase === "viewport" && vp) {
+      try {
+        vp.setProperties({ loop, playbackRate: rate });
+        vp.setPlaybackRate(rate);
+      } catch {
+        /* 未初期化はスキップ */
+      }
     }
-  }, [rate, src]);
+  }, [loop, rate, phase]);
 
-  const needsTranscode = meta?.transcodeRequired === true;
-
-  // フレーム送り（±1 フレーム）。fps 既知のときのみ。<video> の time シークは GOP 精度なので近似。
-  const fps = meta && meta.fps > 0 ? meta.fps : 0;
-  const stepFrame = (dir: 1 | -1) => {
-    const v = videoRef.current;
-    if (!v || fps <= 0) {
+  const togglePlay = () => {
+    const vp = vpRef.current;
+    if (!vp) {
       return;
     }
-    v.pause();
-    const dt = 1 / fps;
-    v.currentTime = Math.min(
-      Math.max(0, v.currentTime + dir * dt),
-      Number.isFinite(v.duration) ? v.duration : v.currentTime + dir * dt,
-    );
+    try {
+      setPlaying(vp.togglePlayPause());
+    } catch {
+      /* 無視 */
+    }
   };
 
-  if (needsTranscode) {
+  const seekToFrame = (f: number) => {
+    const vp = vpRef.current;
+    if (!vp) {
+      return;
+    }
+    const clamped = Math.min(Math.max(1, f), totalFrames);
+    try {
+      vp.pause();
+      setPlaying(false);
+      vp.setFrameNumber(clamped);
+      setFrame(clamped);
+    } catch {
+      /* 無視 */
+    }
+  };
+
+  if (phase === "transcode") {
+    return <div style={noticeStyle}>🎞 {t("video.needsFfmpeg")}</div>;
+  }
+
+  // 方式 B フォールバック（VideoViewport 不可時）。P1 と同じ <video> 直再生。
+  if (phase === "fallback") {
     return (
-      <div style={noticeStyle}>
-        🎞 {t("video.needsFfmpeg")}
+      <div style={{ marginTop: 10 }}>
+        <div style={frameStyle}>
+          <video key={src} src={src} controls loop={loop} playsInline preload="metadata" style={videoStyle} />
+        </div>
+        <div style={{ ...controlRowStyle }}>
+          <span style={{ color: "#889", fontSize: 12 }}>{t("video.fallbackMode")}</span>
+        </div>
       </div>
     );
   }
 
+  const curSec = fps > 0 ? (frame - 1) / fps : 0;
+  const totSec = fps > 0 ? (totalFrames - 1) / fps : 0;
+
   return (
     <div style={{ marginTop: 10 }}>
+      {/* VideoViewport のホスト。cornerstone が内部に canvas を生成する。常時マウントして ref を確保。 */}
       <div style={frameStyle}>
-        {!failed ? (
-          // key=src で SOP 切替時に確実に再ロード。crossOrigin 不要（同一オリジン方針）。
-          <video
-            key={src}
-            ref={videoRef}
-            src={src}
-            controls
-            loop={loop}
-            playsInline
-            preload="metadata"
-            style={videoStyle}
-            onError={() => setFailed(true)}
-          />
-        ) : (
-          <div style={{ ...noticeStyle, margin: 0 }}>⚠ {t("video.error")}</div>
-        )}
+        <div ref={hostRef} style={hostStyle} />
       </div>
 
-      {!failed && (
-        <div style={controlRowStyle}>
-          <label style={ctrlLabel}>
+      {phase === "loading" && <div style={{ ...noticeStyle, color: "#889" }}>{t("common.loading")}</div>}
+
+      {phase === "viewport" && (
+        <>
+          {/* シークバー（フレーム精度。1..totalFrames）。 */}
+          <div style={{ ...controlRowStyle, gap: 10 }}>
+            <button type="button" style={playBtn} onClick={togglePlay} title={t(playing ? "video.pause" : "video.play")}>
+              {playing ? "⏸" : "▶"}
+            </button>
             <input
-              type="checkbox"
-              checked={loop}
-              onChange={(e) => setLoop(e.target.checked)}
+              type="range"
+              min={1}
+              max={totalFrames}
+              step={1}
+              value={frame}
+              onChange={(e) => seekToFrame(Number(e.target.value))}
+              style={{ flex: 1, minWidth: 120 }}
             />
-            {t("video.loop")}
-          </label>
+            <span style={{ color: "#556", fontSize: 12, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
+              {fps > 0 ? `${fmtTime(curSec)} / ${fmtTime(totSec)}` : `${frame} / ${totalFrames}`}
+            </span>
+          </div>
 
-          <span style={ctrlLabel}>
-            {t("video.speed")}
-            <select value={rate} onChange={(e) => setRate(Number(e.target.value))} style={selectStyle}>
-              {[0.25, 0.5, 1, 1.5, 2, 4].map((r) => (
-                <option key={r} value={r}>
-                  {r}×
-                </option>
-              ))}
-            </select>
-          </span>
+          <div style={controlRowStyle}>
+            <label style={ctrlLabel}>
+              <input type="checkbox" checked={loop} onChange={(e) => setLoop(e.target.checked)} />
+              {t("video.loop")}
+            </label>
 
-          {fps > 0 && (
+            <span style={ctrlLabel}>
+              {t("video.speed")}
+              <select value={rate} onChange={(e) => setRate(Number(e.target.value))} style={selectStyle}>
+                {SPEEDS.map((r) => (
+                  <option key={r} value={r}>
+                    {r}×
+                  </option>
+                ))}
+              </select>
+            </span>
+
             <span style={ctrlLabel}>
               {t("video.frame")}
-              <button type="button" style={frameBtn} title={t("video.prevFrame")} onClick={() => stepFrame(-1)}>
+              <button type="button" style={frameBtn} title={t("video.prevFrame")} onClick={() => seekToFrame(frame - 1)}>
                 ◀
               </button>
-              <button type="button" style={frameBtn} title={t("video.nextFrame")} onClick={() => stepFrame(1)}>
+              <button type="button" style={frameBtn} title={t("video.nextFrame")} onClick={() => seekToFrame(frame + 1)}>
                 ▶
               </button>
             </span>
-          )}
 
-          {meta && (
-            <span style={{ color: "#889", fontSize: 12 }}>
-              {meta.columns}×{meta.rows}
-              {fps > 0 ? ` · ${fps.toFixed(fps % 1 === 0 ? 0 : 1)} fps` : ""}
-              {meta.numberOfFrames > 1 ? ` · ${meta.numberOfFrames} ${t("video.frame")}` : ""}
-            </span>
-          )}
-        </div>
+            {meta && (
+              <span style={{ color: "#889", fontSize: 12 }}>
+                {meta.columns}×{meta.rows}
+                {fps > 0 ? ` · ${fps.toFixed(fps % 1 === 0 ? 0 : 1)} fps` : ""}
+                {totalFrames > 1 ? ` · ${totalFrames} ${t("video.frame")}` : ""}
+              </span>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
@@ -156,6 +318,13 @@ const frameStyle: React.CSSProperties = {
   maxWidth: 900,
 };
 
+const hostStyle: React.CSSProperties = {
+  width: "100%",
+  height: "60vh",
+  maxHeight: 640,
+  minHeight: 240,
+};
+
 const videoStyle: React.CSSProperties = {
   width: "100%",
   maxHeight: "70vh",
@@ -168,22 +337,13 @@ const controlRowStyle: React.CSSProperties = {
   flexWrap: "wrap",
   gap: 16,
   marginTop: 8,
+  maxWidth: 900,
   fontSize: 13,
   color: "#445",
 };
 
-const ctrlLabel: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 6,
-};
-
-const selectStyle: React.CSSProperties = {
-  padding: "2px 4px",
-  borderRadius: 4,
-  border: "1px solid #cdd5de",
-};
-
+const ctrlLabel: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 6 };
+const selectStyle: React.CSSProperties = { padding: "2px 4px", borderRadius: 4, border: "1px solid #cdd5de" };
 const frameBtn: React.CSSProperties = {
   padding: "2px 8px",
   border: "1px solid #cdd5de",
@@ -191,9 +351,14 @@ const frameBtn: React.CSSProperties = {
   background: "#f4f7fa",
   cursor: "pointer",
 };
-
-const noticeStyle: React.CSSProperties = {
-  marginTop: 10,
-  fontSize: 13,
-  color: "#8a6d3b",
+const playBtn: React.CSSProperties = {
+  padding: "4px 12px",
+  border: "1px solid #cdd5de",
+  borderRadius: 6,
+  background: "#0b5cad",
+  color: "#fff",
+  cursor: "pointer",
+  fontSize: 14,
+  minWidth: 42,
 };
+const noticeStyle: React.CSSProperties = { marginTop: 10, fontSize: 13, color: "#8a6d3b" };

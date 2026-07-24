@@ -4,6 +4,9 @@
 > ステータス: **P1 完了**（2026-07-24, PR #61 マージ）。方式 B（HTML5 `<video>`）で配信＋再生を実装、
 > 実機 end-to-end 検証済み（実 H.264 MP4 を取込 → `/rendered` が byte-exact な再生可能 MP4 を Range 206 で配信、
 > ffprobe で decodable 確認、Electron で `<video>` プレイヤー表示確認）。
+> **P3a 完了（2026-07-24）**: 方式 A（VideoViewport）へ移行済み・実機検証済み（`videoMetadataProvider` ＋ cine
+> コントロール自作、VideoViewport 不可時は B へ自動フォールバック）。次は P3b（ツール）／P3c（ROI 解析）。§6 参照。
+>
 > **決定（2026-07-24）**: 方式 A（Cornerstone VideoViewport）への差し替えは **P3（ROI/ツール）へ統合して延期**する。
 > 理由 = 方式 B は再生（P1 の目的）を高い UI 完成度で満たす一方、方式 A の真価（WW/WL・Pan/Zoom・ROI/計測）は
 > ツールを作る P3 で初めて必要になる。P1.3 単体で差し替えると、ネイティブ `<video>` の高品質な再生 UI
@@ -183,9 +186,16 @@ frontend: VideoViewport（ViewportType.VIDEO）
   - 完了条件: 取込済み MP4 が 2D ビューア枠内で再生・一時停止・シークできる。backend test green。
     → **達成（方式 B、実機検証済み・PR #61 マージ）**。
 - **P2（cine/フレーム/VOI）**: フレーム送り・再生速度・ループ・WW/WL を cine UI に接続。
-- **P3（ツール／ROI 解析）**: **ここで方式 A（VideoViewport）へ移行**（P1.3 を統合）。`videoMetadataProvider`
-  ＋ VideoViewport 生成 ＋ cine コントロール自作を行い、Pan/Zoom・WW/WL に続き計測/注釈を有効化
-  （`@cornerstonejs/tools`）。**動画 ROI 解析（§12）**をここで組む。B はフォールバックとして残す。
+- **P3（ツール／ROI 解析）** — サブフェーズに分割:
+  - ✅ **P3a（方式 A 移行）**: `viewer/videoMetadataProvider.ts`（`graphy-video:{sop}` の imageId で
+    `imageUrlModule.rendered`／`cineModule`／`imagePlaneModule` を供給）＋ `VideoViewer.tsx` を VideoViewport
+    primary に書き換え、cine コントロール自作（▶/⏸・**フレーム精度シークバー**・速度・ループ・フレーム◀▶）。
+    VideoViewport 初期化失敗時は方式 B（`<video>`）へ**自動フォールバック**。**実機検証済み（2026-07-24、Electron dev
+    で canvas 描画＋cine 操作を確認）**。frontend typecheck green。
+  - ⬜ **P3b（ツール）**: Pan/Zoom・WW/WL に続き計測/注釈を VideoViewport 上で有効化（`@cornerstonejs/tools`。
+    ToolGroup を video viewport に紐付け）。
+  - ⬜ **P3c（動画 ROI 解析・§12）**: フレーム指定 ROI／グローバル ROI（全フレーム適用＝時系列解析）＋
+    時系列カーブ＋CSV。ここで §12 未決事項を判断。
 - **P4（非 H.264 対応）**: `/rendered` に ffmpeg トランスコード分岐（MPEG2 等）＋キャッシュ（§4.3/4.4）。
 - **P5（Portable/web）**: §7/§8。
 
@@ -223,8 +233,9 @@ frontend: VideoViewport（ViewportType.VIDEO）
 - backend 新規（P1 実装済）: `dicom/video/VideoRenderController.java`、`dicom/video/VideoFragmentExtractor.java`、
   `dicom/video/VideoFragmentExtractorTest.java`。
 - backend 既存: `FfmpegLocator`（P4 で再利用予定）。キャッシュは既定 `<storageDir>/.cache/video`（設定不要。将来 yml 化可）。
-- frontend 新規（P1 実装済）: `viewer/VideoViewer.tsx`（方式 B）。`api.ts`（`videoRenderedUrl`/`fetchVideoMetadata`/
-  `VideoMetadata`/`isVideoSopClass`）。P1.3 で `viewer/videoMetadataProvider.ts`（方式 A）を追加予定。
+- frontend 新規（P1 実装済）: `viewer/VideoViewer.tsx`（P3a で方式 A/VideoViewport primary ＋ B フォールバックに改修）。
+  `api.ts`（`videoRenderedUrl`/`fetchVideoMetadata`/`VideoMetadata`/`isVideoSopClass`）。
+  **P3a 実装済**: `viewer/videoMetadataProvider.ts`（VideoViewport 用メタデータプロバイダ）。
 - frontend 既存（P1 実装済）: `StudyList.tsx`（案内表示→再生導線）、i18n `video.*`。
   ※ `SeriesViewer.tsx` の `VIDEO_SOP_CLASSES` は GridView 無効化用に現状維持（動画は `StudyList` 側で分岐）。
 - doc: `fw/mainscreen-tools.md` 234 行から本ドキュメントへリンク。`fw/development-phases.md` の Video 項更新。
