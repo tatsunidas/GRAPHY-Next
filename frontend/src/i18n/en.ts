@@ -1284,6 +1284,7 @@ export const en: Record<string, string> = {
   "video.error": "Failed to play the video.",
   "video.webUnsupported": "Video playback is available in standalone mode only (web mode coming later).",
   "video.needsFfmpeg": "This video codec isn't supported by the browser. Transcoding (ffmpeg) support is coming later.",
+  "video.fallbackMode": "Basic playback (native fallback — viewer playback unavailable in this environment)",
   "nondicom.run": "Import",
   "nondicom.running": "Importing…",
   "nondicom.result": "Result",

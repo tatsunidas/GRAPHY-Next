@@ -1283,6 +1283,7 @@ export const ja: Record<string, string> = {
   "video.error": "動画を再生できませんでした。",
   "video.webUnsupported": "動画再生は standalone のみ対応です（web モードは今後対応）。",
   "video.needsFfmpeg": "この動画コーデックはブラウザ非対応です。変換対応（ffmpeg）は今後提供します。",
+  "video.fallbackMode": "簡易再生（この環境ではビューア再生が使えないためネイティブ再生）",
   "nondicom.run": "取込",
   "nondicom.running": "取込中…",
   "nondicom.result": "取込結果",
