@@ -1,0 +1,56 @@
+# GRAPHY-Next プラグインのリリース。タグ v<version> を push すると、
+# <id>-<version>.zip と .sha256 を作って GitHub Release に添付する。
+# GRAPHY-Next のプラグインマネージャはこの zip 資産（直下に plugin.json）を取得・検証・展開する。
+name: Release plugin
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 任意: バックエンド面（Java）を持つプラグインはここでビルドし、jar をルートへ置く。
+      # UI のみのプラグインはこのブロックを削除してよい。
+      - name: Build backend jar (optional)
+        if: hashFiles('backend-optional/pom.xml') != ''
+        run: |
+          echo "backend-optional/ を使う場合は README の手順で API jar を入れてから有効化してください。"
+          echo "デフォルトの雛形では UI のみのため、このステップはスキップされます。"
+
+      - name: Resolve id / version
+        id: meta
+        run: |
+          id=$(jq -r .id plugin.json)
+          pjver=$(jq -r .version plugin.json)
+          ver="${GITHUB_REF_NAME#v}"
+          if [ "$pjver" != "$ver" ]; then
+            echo "::error::plugin.json version ($pjver) != tag ($ver). 版とタグを一致させてください。"
+            exit 1
+          fi
+          echo "id=$id"   >> "$GITHUB_OUTPUT"
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Package zip (+ sha256)
+        run: |
+          name="${{ steps.meta.outputs.id }}-${{ steps.meta.outputs.ver }}"
+          mkdir -p pkg dist
+          cp plugin.json ui.js pkg/
+          # バックエンド面をビルドした場合は *.jar もルートに置かれる → 同梱。
+          for j in *.jar; do [ -e "$j" ] && cp "$j" pkg/; done
+          (cd pkg && zip -r "../dist/$name.zip" .)     # 直下に plugin.json を置く（マネージャの前提）
+          (cd dist && sha256sum "$name.zip" > "$name.zip.sha256")
+          ls -la dist
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/${{ steps.meta.outputs.id }}-${{ steps.meta.outputs.ver }}.zip
+            dist/${{ steps.meta.outputs.id }}-${{ steps.meta.outputs.ver }}.zip.sha256

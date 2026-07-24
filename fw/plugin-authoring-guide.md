@@ -285,9 +285,25 @@ UI 上では:
 
 ---
 
-## 7. 参考
+## 7. 配布（GitHub Release）とテンプレート
+
+第三者が自作プラグインを配布する場合は、**GitHub の Release タグ**で配る（GRAPHY-Next のプラグイン
+マネージャが `owner/repo` から取得・検証・導入する。設計: [`plugin-manager-design.md`](plugin-manager-design.md)）。
+
+- **雛形**: `examples/plugin-template/` を fork/コピーして始める（`plugin.json` / `ui.js` /
+  型補完用 `graphy-plugin.d.ts` / タグ push で `<id>-<version>.zip`+`.sha256` を作る GitHub Action /
+  任意の Java バックエンド面 `backend-optional/` 一式）。
+- **配布物**: リリース資産は**直下に `plugin.json` を置いたビルド済み zip**（`<id>-<version>.zip`）。
+  `.sha256` を添付するとマネージャが取得時に完全性検証する。
+- **Java バックエンド面**: backend 全体ではなく薄い **`graphy-plugin-api`** に対してコンパイルする。
+  GRAPHY-Next の Release に添付される `graphy-plugin-api-<version>.jar` を `provided` 依存として使う
+  （`examples/plugin-template/backend-optional/README.md`）。
+
+## 8. 参考
 
 - 設計・信頼モデル・両モードの違い: [`plugin-architecture.md`](plugin-architecture.md)
+- マネージャ（取得・導入・更新・削除）: [`plugin-manager-design.md`](plugin-manager-design.md)
+- テンプレート: `examples/plugin-template/`
 - フロント型定義・ローダ: `frontend/src/plugins/`（`pluginTypes.ts` / `pluginRegistry.ts`）
-- backend 実装: `backend/.../com/vis/graphynext/plugin/`（`PluginController` / `*PluginRegistry` / `spi/GraphyPlugin`）
+- backend 実装: `backend/.../com/vis/graphynext/plugin/`（`PluginController` / `*PluginRegistry` / `spi/GraphyPlugin` / `manager/`）
 - 同梱サンプル: `plugins/sample-hello/`
