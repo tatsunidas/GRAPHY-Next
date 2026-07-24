@@ -4,10 +4,37 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { RenderingEngine, Enums, EVENTS } from "@cornerstonejs/core";
+import {
+  ToolGroupManager,
+  PanTool,
+  ZoomTool,
+  WindowLevelTool,
+  LengthTool,
+  AngleTool,
+  EllipticalROITool,
+  RectangleROITool,
+  ProbeTool,
+  Enums as csToolsEnums,
+} from "@cornerstonejs/tools";
 import { useI18n } from "../i18n/i18n";
 import { fetchVideoMetadata, videoRenderedUrl, type VideoMetadata } from "../api";
 import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
 import { ensureVideoMetadataProvider, registerVideoMetadata } from "./videoMetadataProvider";
+
+const { MouseBindings } = csToolsEnums;
+
+/**
+ * 左ドラッグ（Primary）に割り当て可能な動画ツール。WW/WL と計測/ROI を切り替える
+ * （Pan=中ドラッグ・Zoom=右ドラッグは固定）。P3c で ROI 解析（時系列）を載せる土台。
+ */
+const VIDEO_PRIMARY_TOOLS: { name: string; key: string }[] = [
+  { name: WindowLevelTool.toolName, key: "wwwl" },
+  { name: LengthTool.toolName, key: "length" },
+  { name: AngleTool.toolName, key: "angle" },
+  { name: RectangleROITool.toolName, key: "rectangle" },
+  { name: EllipticalROITool.toolName, key: "ellipse" },
+  { name: ProbeTool.toolName, key: "probe" },
+];
 
 /**
  * encapsulated 動画（Video Photographic/Endoscopic/Microscopic）を 2D ビューア枠内で再生する。
@@ -31,6 +58,8 @@ interface VideoVP {
   setPlaybackRate(r?: number): void;
   getFrameNumber(): number;
   getNumberOfSlices(): number;
+  resetCamera(): boolean;
+  render(): void;
 }
 
 type Phase = "loading" | "viewport" | "fallback" | "transcode" | "error";
@@ -53,6 +82,7 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<RenderingEngine | null>(null);
   const vpRef = useRef<VideoVP | null>(null);
+  const toolGroupIdRef = useRef<string | null>(null);
 
   const [phase, setPhase] = useState<Phase>("loading");
   const [meta, setMeta] = useState<VideoMetadata | null>(null);
@@ -60,6 +90,7 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
   const [frame, setFrame] = useState(1); // 1-based 現在フレーム
   const [rate, setRate] = useState(1);
   const [loop, setLoop] = useState(true);
+  const [activeTool, setActiveTool] = useState<string>(WindowLevelTool.toolName);
 
   const src = useMemo(() => videoRenderedUrl(sopInstanceUid), [sopInstanceUid]);
   const fps = meta && meta.fps > 0 ? meta.fps : 0;
@@ -95,6 +126,14 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
           /* 破棄済み等は無視 */
         }
       }
+      const tgId = toolGroupIdRef.current;
+      if (tgId) {
+        try {
+          ToolGroupManager.destroyToolGroup(tgId);
+        } catch {
+          /* 破棄済み等は無視 */
+        }
+      }
       const engine = engineRef.current;
       if (engine) {
         try {
@@ -103,6 +142,7 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
           /* 破棄済み等は無視 */
         }
       }
+      toolGroupIdRef.current = null;
       vpRef.current = null;
       engineRef.current = null;
     };
@@ -157,6 +197,8 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
         vp.setProperties({ loop });
         vp.pause();
         el.addEventListener(EVENTS.IMAGE_RENDERED, onRendered);
+        // ここで再生（方式 A）は成立。以降のツール配線が失敗しても再生・ツールバー表示は維持する。
+        setActiveTool(WindowLevelTool.toolName);
         setPhase("viewport");
       } catch (e) {
         // VideoViewport 初期化失敗（WebGL 不可・コーデック非対応等）→ 方式 B にフォールバック。
@@ -165,6 +207,29 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
         if (!cancelled) {
           setPhase("fallback");
         }
+        return;
+      }
+
+      // ツール（Pan/Zoom/WW-WL ＋ 計測/ROI）を video viewport に紐付ける（best-effort。失敗しても再生は継続）。
+      // グローバルツール登録は ensureCornerstoneInitialized 済み。Pan=中ドラッグ・Zoom=右ドラッグ固定、Primary 切替式。
+      try {
+        const toolGroupId = `${viewportId}-tg`;
+        const tg = ToolGroupManager.getToolGroup(toolGroupId) ?? ToolGroupManager.createToolGroup(toolGroupId);
+        if (tg) {
+          tg.addTool(PanTool.toolName);
+          tg.addTool(ZoomTool.toolName);
+          for (const { name } of VIDEO_PRIMARY_TOOLS) {
+            tg.addTool(name);
+            tg.setToolPassive(name);
+          }
+          tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
+          tg.setToolActive(ZoomTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary }] });
+          tg.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
+          tg.addViewport(viewportId, engineId);
+          toolGroupIdRef.current = toolGroupId;
+        }
+      } catch (e) {
+        console.warn("動画ツールの初期化に失敗（再生は継続）", e);
       }
     })();
 
@@ -196,6 +261,46 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
     }
     try {
       setPlaying(vp.togglePlayPause());
+    } catch {
+      /* 無視 */
+    }
+  };
+
+  // Primary（左ドラッグ）ツールを切り替える。Pan/Zoom（中/右）は据え置き。
+  const selectPrimaryTool = (toolName: string) => {
+    const tgId = toolGroupIdRef.current;
+    if (!tgId) {
+      return;
+    }
+    const tg = ToolGroupManager.getToolGroup(tgId);
+    if (!tg) {
+      return;
+    }
+    for (const { name } of VIDEO_PRIMARY_TOOLS) {
+      if (name !== toolName) {
+        try {
+          tg.setToolPassive(name);
+        } catch {
+          /* 無視 */
+        }
+      }
+    }
+    try {
+      tg.setToolActive(toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
+      setActiveTool(toolName);
+    } catch {
+      /* 無視 */
+    }
+  };
+
+  const fitView = () => {
+    const vp = vpRef.current;
+    if (!vp) {
+      return;
+    }
+    try {
+      vp.resetCamera();
+      vp.render();
     } catch {
       /* 無視 */
     }
@@ -249,6 +354,25 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
 
       {phase === "viewport" && (
         <>
+          {/* ツールバー（左ドラッグ=WW/WL・計測/ROI 切替。中=Pan・右=Zoom は固定）。 */}
+          <div style={{ ...controlRowStyle, gap: 6 }}>
+            {VIDEO_PRIMARY_TOOLS.map(({ name, key }) => (
+              <button
+                key={key}
+                type="button"
+                style={activeTool === name ? toolBtnActive : toolBtn}
+                onClick={() => selectPrimaryTool(name)}
+                title={t(`video.tool.${key}`)}
+              >
+                {t(`video.tool.${key}`)}
+              </button>
+            ))}
+            <button type="button" style={toolBtn} onClick={fitView} title={t("video.tool.fit")}>
+              {t("video.tool.fit")}
+            </button>
+            <span style={{ color: "#889", fontSize: 11 }}>{t("video.tool.hint")}</span>
+          </div>
+
           {/* シークバー（フレーム精度。1..totalFrames）。 */}
           <div style={{ ...controlRowStyle, gap: 10 }}>
             <button type="button" style={playBtn} onClick={togglePlay} title={t(playing ? "video.pause" : "video.play")}>
@@ -360,5 +484,21 @@ const playBtn: React.CSSProperties = {
   cursor: "pointer",
   fontSize: 14,
   minWidth: 42,
+};
+const toolBtn: React.CSSProperties = {
+  padding: "3px 10px",
+  border: "1px solid #cdd5de",
+  borderRadius: 6,
+  background: "#f4f7fa",
+  color: "#334",
+  cursor: "pointer",
+  fontSize: 12,
+};
+const toolBtnActive: React.CSSProperties = {
+  ...toolBtn,
+  background: "#0b5cad",
+  color: "#fff",
+  // border は shorthand で上書き（toolBtn の border shorthand と borderColor を混在させない＝React 警告回避）。
+  border: "1px solid #0b5cad",
 };
 const noticeStyle: React.CSSProperties = { marginTop: 10, fontSize: 13, color: "#8a6d3b" };
