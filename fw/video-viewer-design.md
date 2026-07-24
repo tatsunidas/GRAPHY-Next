@@ -1,9 +1,15 @@
 # 動画再生ビューア設計（VideoViewport ＋ `/rendered` mp4 供給）
 
 > 作成日: 2026-07-23
-> ステータス: **P1 実装中**（2026-07-24）。方式 B（HTML5 `<video>`）で配信＋最小再生まで実装済み・ビルド green。
-> 方式 A（Cornerstone VideoViewport）差し替えは残（実機での再生確認が前提のため）。詳細は §6。
-> ※ 動画ファイル取込済みでの**実機再生検証は未実施**（インストールテストで確認予定）。
+> ステータス: **P1 完了**（2026-07-24, PR #61 マージ）。方式 B（HTML5 `<video>`）で配信＋再生を実装、
+> 実機 end-to-end 検証済み（実 H.264 MP4 を取込 → `/rendered` が byte-exact な再生可能 MP4 を Range 206 で配信、
+> ffprobe で decodable 確認、Electron で `<video>` プレイヤー表示確認）。
+> **決定（2026-07-24）**: 方式 A（Cornerstone VideoViewport）への差し替えは **P3（ROI/ツール）へ統合して延期**する。
+> 理由 = 方式 B は再生（P1 の目的）を高い UI 完成度で満たす一方、方式 A の真価（WW/WL・Pan/Zoom・ROI/計測）は
+> ツールを作る P3 で初めて必要になる。P1.3 単体で差し替えると、ネイティブ `<video>` の高品質な再生 UI
+> （シークバー/時間表示/音量/フルスクリーン）を自作品へ置換して**完成度を下げる代わりに、目に見える機能追加が
+> ゼロ**になる。よって A は P3 で cine コントロール＋ツールと**一括設計**し、B は HEVC 非対応環境等の
+> フォールバックとして残す。詳細は §6 / §12。
 > 関連: `fw/mainscreen-tools.md`（NonDicomImporter / 動画 DICOM 化・234 行「再生は 2D Viewer 側の将来対応」）、
 > `fw/nondicom-ffmpeg.md`（ffmpeg 同梱・解決）、`fw/viewer-2d-architecture.md`（2D ビューア中核）。
 > 前提モード: standalone（Electron ＋ ローカル H2/FS）。web(BFF) 対応は §8 で後追い方針のみ。
@@ -169,14 +175,17 @@ frontend: VideoViewport（ViewportType.VIDEO）
      `videoRenderedUrl` / `fetchVideoMetadata` / `VideoMetadata` / `isVideoSopClass` を追加。
      `StudyList.tsx` の動画案内表示を再生導線に置換（standalone のみ。web は案内）。i18n `video.*` 追加。
      frontend typecheck green。
-  3. ⬜ 続けて **VideoViewport（方式 A）** に差し替え、`videoMetadataProvider`（`imageUrlModule.rendered`
-     ／`cineModule`／`imagePlaneModule` を供給）＋ VideoViewport 生成。→ 実機で方式 B の再生が
-     確認できてから着手（設計順どおり）。
+  3. 🔀 **VideoViewport（方式 A）差し替えは P3 へ統合・延期**（2026-07-24 決定）。当初は P1 内で B→A と
+     差し替える計画だったが、A の利点（WW/WL・ツール・ROI）は P3 で初めて必要になるため、P3 で
+     `videoMetadataProvider`（`imageUrlModule.rendered`／`cineModule`／`imagePlaneModule` を供給。
+     ※ VideoViewport は `imagePlaneModule`/`cineModule` を undefined だと throw するため非 undefined を返すこと）
+     ＋ VideoViewport 生成を、cine コントロール自作＆ツールと**一括**で行う。B はフォールバックとして残す。
   - 完了条件: 取込済み MP4 が 2D ビューア枠内で再生・一時停止・シークできる。backend test green。
-    → **コード上は達成（方式 B）。残: 実機での再生確認＋方式 A 差し替え。**
+    → **達成（方式 B、実機検証済み・PR #61 マージ）**。
 - **P2（cine/フレーム/VOI）**: フレーム送り・再生速度・ループ・WW/WL を cine UI に接続。
-- **P3（ツール／ROI 解析）**: Pan/Zoom に続き計測/注釈を VideoViewport 上で有効化（`@cornerstonejs/tools`）。
-  **動画 ROI 解析（§12）**をここで組む。
+- **P3（ツール／ROI 解析）**: **ここで方式 A（VideoViewport）へ移行**（P1.3 を統合）。`videoMetadataProvider`
+  ＋ VideoViewport 生成 ＋ cine コントロール自作を行い、Pan/Zoom・WW/WL に続き計測/注釈を有効化
+  （`@cornerstonejs/tools`）。**動画 ROI 解析（§12）**をここで組む。B はフォールバックとして残す。
 - **P4（非 H.264 対応）**: `/rendered` に ffmpeg トランスコード分岐（MPEG2 等）＋キャッシュ（§4.3/4.4）。
 - **P5（Portable/web）**: §7/§8。
 
@@ -222,8 +231,10 @@ frontend: VideoViewport（ViewportType.VIDEO）
 
 ## 12. 動画 ROI 解析（TODO・P3）
 
-> ステータス: **未実装（TODO）**。P1（再生）確立後の主要課題。方針は「通常のシリーズビューアの ROI を踏襲し、
+> ステータス: **未実装（TODO・P3）**。P1（再生）確立後の主要課題。方針は「通常のシリーズビューアの ROI を踏襲し、
 > スライス軸を**フレーム軸**に読み替えて動画用に組み上げる」。
+> **前提**: ROI を動画フレームに載せるには方式 A（VideoViewport）が必須（方式 B の `<video>` はフレーム上に
+> ツール/ROI を重ねられない）。したがって P3 はまず **方式 B→A への移行**（P1.3 を統合、§6）から始める。
 
 動画では ROI を **2 つのモード**で扱う必要がある:
 
