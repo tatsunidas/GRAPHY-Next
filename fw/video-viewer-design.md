@@ -1,7 +1,9 @@
 # 動画再生ビューア設計（VideoViewport ＋ `/rendered` mp4 供給）
 
 > 作成日: 2026-07-23
-> ステータス: **設計（未実装）**。
+> ステータス: **P1 実装中**（2026-07-24）。方式 B（HTML5 `<video>`）で配信＋最小再生まで実装済み・ビルド green。
+> 方式 A（Cornerstone VideoViewport）差し替えは残（実機での再生確認が前提のため）。詳細は §6。
+> ※ 動画ファイル取込済みでの**実機再生検証は未実施**（インストールテストで確認予定）。
 > 関連: `fw/mainscreen-tools.md`（NonDicomImporter / 動画 DICOM 化・234 行「再生は 2D Viewer 側の将来対応」）、
 > `fw/nondicom-ffmpeg.md`（ffmpeg 同梱・解決）、`fw/viewer-2d-architecture.md`（2D ビューア中核）。
 > 前提モード: standalone（Electron ＋ ローカル H2/FS）。web(BFF) 対応は §8 で後追い方針のみ。
@@ -159,12 +161,22 @@ frontend: VideoViewport（ViewportType.VIDEO）
 
 - **P0（この設計）**: 本ドキュメント確定。既存 234 行 TODO をここへリンク。
 - **P1（配信＋最小再生）**:
-  1. backend `VideoRenderController`（`/rendered` Range 配信＋`/video-metadata`）。無変換経路のみ（取込済み H.264）。
-  2. frontend: まず **HTML5 `<video>`（方式 B）**で `/rendered` を鳴らし、配信・コーデック・Range を実機検証。
-  3. 続けて **VideoViewport（方式 A）** に差し替え、`videoMetadataProvider` ＋ `VideoViewer.tsx` ＋ ルーティング。
+  1. ✅ backend `VideoRenderController`（`/rendered` Range 配信＋`/video-metadata`）＋抽出ユーティリティ
+     `dicom/video/VideoFragmentExtractor`。無変換経路のみ（取込済み H.264/HEVC 系。MPEG2 等は 415）。
+     `VideoFragmentExtractorTest`（7 件）green。キャッシュ `<storageDir>/.cache/video/{sop}.mp4`。
+  2. ✅ frontend: **HTML5 `<video>`（方式 B）** で `/rendered` を再生する `viewer/VideoViewer.tsx`
+     （再生・一時停止・シークはネイティブ、＋独自の速度/ループ/フレーム送り）。`api.ts` に
+     `videoRenderedUrl` / `fetchVideoMetadata` / `VideoMetadata` / `isVideoSopClass` を追加。
+     `StudyList.tsx` の動画案内表示を再生導線に置換（standalone のみ。web は案内）。i18n `video.*` 追加。
+     frontend typecheck green。
+  3. ⬜ 続けて **VideoViewport（方式 A）** に差し替え、`videoMetadataProvider`（`imageUrlModule.rendered`
+     ／`cineModule`／`imagePlaneModule` を供給）＋ VideoViewport 生成。→ 実機で方式 B の再生が
+     確認できてから着手（設計順どおり）。
   - 完了条件: 取込済み MP4 が 2D ビューア枠内で再生・一時停止・シークできる。backend test green。
+    → **コード上は達成（方式 B）。残: 実機での再生確認＋方式 A 差し替え。**
 - **P2（cine/フレーム/VOI）**: フレーム送り・再生速度・ループ・WW/WL を cine UI に接続。
-- **P3（ツール）**: Pan/Zoom に続き計測/注釈を VideoViewport 上で有効化（`@cornerstonejs/tools`）。
+- **P3（ツール／ROI 解析）**: Pan/Zoom に続き計測/注釈を VideoViewport 上で有効化（`@cornerstonejs/tools`）。
+  **動画 ROI 解析（§12）**をここで組む。
 - **P4（非 H.264 対応）**: `/rendered` に ffmpeg トランスコード分岐（MPEG2 等）＋キャッシュ（§4.3/4.4）。
 - **P5（Portable/web）**: §7/§8。
 
@@ -199,8 +211,41 @@ frontend: VideoViewport（ViewportType.VIDEO）
 
 ## 11. 影響ファイル（実装時）
 
-- backend 新規: `dicom/VideoRenderController.java`（＋ 抽出ユーティリティ `VideoFragmentExtractor`）、`VideoRenderControllerTest`。
-- backend 既存: `FfmpegLocator`（P4 で再利用）。`application-standalone.yml`（キャッシュ dir 設定）。
-- frontend 新規: `viewer/VideoViewer.tsx`、`viewer/videoMetadataProvider.ts`、`api.ts`（`videoRenderedUrl(sop)`/`fetchVideoMetadata`）。
-- frontend 既存: `viewer/SeriesViewer.tsx`（video ルーティング）、`StudyList.tsx`（案内表示→再生導線）、i18n `video.*`。
+- backend 新規（P1 実装済）: `dicom/video/VideoRenderController.java`、`dicom/video/VideoFragmentExtractor.java`、
+  `dicom/video/VideoFragmentExtractorTest.java`。
+- backend 既存: `FfmpegLocator`（P4 で再利用予定）。キャッシュは既定 `<storageDir>/.cache/video`（設定不要。将来 yml 化可）。
+- frontend 新規（P1 実装済）: `viewer/VideoViewer.tsx`（方式 B）。`api.ts`（`videoRenderedUrl`/`fetchVideoMetadata`/
+  `VideoMetadata`/`isVideoSopClass`）。P1.3 で `viewer/videoMetadataProvider.ts`（方式 A）を追加予定。
+- frontend 既存（P1 実装済）: `StudyList.tsx`（案内表示→再生導線）、i18n `video.*`。
+  ※ `SeriesViewer.tsx` の `VIDEO_SOP_CLASSES` は GridView 無効化用に現状維持（動画は `StudyList` 側で分岐）。
 - doc: `fw/mainscreen-tools.md` 234 行から本ドキュメントへリンク。`fw/development-phases.md` の Video 項更新。
+
+## 12. 動画 ROI 解析（TODO・P3）
+
+> ステータス: **未実装（TODO）**。P1（再生）確立後の主要課題。方針は「通常のシリーズビューアの ROI を踏襲し、
+> スライス軸を**フレーム軸**に読み替えて動画用に組み上げる」。
+
+動画では ROI を **2 つのモード**で扱う必要がある:
+
+1. **フレーム指定 ROI（単一フレーム解析）**: 特定フレームに対して ROI を置き、そのフレームの統計
+   （面積・平均/最大/最小・SD・ヒストグラム等）を出す。通常の 2D ROI と同じ。ROI はそのフレームに紐づく。
+2. **グローバル ROI（全フレーム適用＝時系列解析）**: 1 つの ROI を**全フレームに適用**し、フレーム（=時間）ごとに
+   統計を算出して **時系列カーブ**（例: 平均輝度 vs フレーム/時刻。TIC 的な time–intensity curve）を得る。
+   造影/内視鏡/US シネの動態解析に相当。ROI は**時間非依存（全フレーム共有）**として持つ。
+
+### 設計方針（通常シリーズビューアの ROI を流用）
+- 既存の ROI ツール群（`@cornerstonejs/tools`、`SeriesViewer` / `Viewer2D` の ROI 実装、`roiContext` の紐付け）を
+  まねる。スライス index → **フレーム番号**（`fps`/`NumberOfFrames`）に読み替える。
+- **ROI の帰属を「フレーム紐付け」か「グローバル」か選べる UI**を用意（作成時のモード指定、または後から切替）。
+  - フレーム紐付け ROI: 現在フレームに保存。他フレームでは非表示（通常スライス ROI と同じ挙動）。
+  - グローバル ROI: 全フレームで表示・追従。再生/シークしても同じ位置に留まる。
+- **時系列統計の算出**: グローバル ROI に対し、各フレームのピクセルから統計を計算してカーブ化。
+  - 実装オプション: (a) フロントで VideoViewport の各フレームキャンバスから ROI 内画素を読む、
+    (b) backend にフレーム別画素供給/統計エンドポイントを足す（大量フレームや精度重視の場合）。→ P3 着手時に決定。
+- 出力: 時系列カーブ（グラフ）＋ CSV エクスポート（既存の抽出/CSV 経路と揃える）。
+
+### 未決（P3 着手時に判断）
+- 統計をフロント計算（VideoViewport キャンバス読取）か backend 供給かの分担。
+- グローバル ROI と計測（Length/Angle 等）の帰属モデル統一（計測もフレーム紐付け/グローバルを持つか）。
+- フレーム精度シーク（§10-3）が甘いと時系列サンプリングがずれる → ROI 時系列は**フレーム番号ベース**で
+  サンプルし、time シークの GOP 誤差に依存しない経路が要る（`setFrameNumber` 前提）。
