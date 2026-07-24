@@ -14,12 +14,15 @@ import {
   EllipticalROITool,
   RectangleROITool,
   ProbeTool,
+  annotation as csToolsAnnotation,
   Enums as csToolsEnums,
 } from "@cornerstonejs/tools";
 import { useI18n } from "../i18n/i18n";
 import { fetchVideoMetadata, videoRenderedUrl, type VideoMetadata } from "../api";
 import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
 import { ensureVideoMetadataProvider, registerVideoMetadata } from "./videoMetadataProvider";
+import { analyzeGlobalRoi, timeSeriesToCsv, type RoiPixels, type TimeSeriesPoint } from "./videoRoiAnalysis";
+import { TimeIntensityChart } from "./TimeIntensityChart";
 
 const { MouseBindings } = csToolsEnums;
 
@@ -92,6 +95,14 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
   const [loop, setLoop] = useState(true);
   const [activeTool, setActiveTool] = useState<string>(WindowLevelTool.toolName);
 
+  // グローバル ROI 時系列解析（P3c）。
+  const analysisAbortRef = useRef<AbortController | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysisProgress, setAnalysisProgress] = useState<{ done: number; total: number } | null>(null);
+  const [series, setSeries] = useState<TimeSeriesPoint[] | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [analyzedRoi, setAnalyzedRoi] = useState<RoiPixels | null>(null);
+
   const src = useMemo(() => videoRenderedUrl(sopInstanceUid), [sopInstanceUid]);
   const fps = meta && meta.fps > 0 ? meta.fps : 0;
   const totalFrames = meta && meta.numberOfFrames > 0 ? meta.numberOfFrames : 1;
@@ -151,6 +162,13 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
     setMeta(null);
     setPlaying(false);
     setFrame(1);
+    // 解析状態は SOP 切替でリセット（走行中なら中断）。
+    analysisAbortRef.current?.abort();
+    setAnalyzing(false);
+    setAnalysisProgress(null);
+    setSeries(null);
+    setAnalysisError(null);
+    setAnalyzedRoi(null);
 
     (async () => {
       await ensureCornerstoneInitialized();
@@ -241,6 +259,9 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sopInstanceUid]);
 
+  // アンマウント時に走行中の解析を中断。
+  useEffect(() => () => analysisAbortRef.current?.abort(), []);
+
   // ループ／再生速度を viewport に反映。
   useEffect(() => {
     const vp = vpRef.current;
@@ -304,6 +325,117 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
     } catch {
       /* 無視 */
     }
+  };
+
+  // 直近の Rectangle/Ellipse ROI をピクセル座標（world=pixel）で取り出す。無ければ null。
+  const currentRoiPixels = (): RoiPixels | null => {
+    const host = hostRef.current;
+    if (!host) {
+      return null;
+    }
+    const pick = (toolName: string, shape: "rect" | "ellipse"): RoiPixels | null => {
+      let anns: unknown[] = [];
+      try {
+        anns = (csToolsAnnotation.state.getAnnotations(toolName, host) as unknown[]) ?? [];
+      } catch {
+        anns = [];
+      }
+      if (!anns.length) {
+        return null;
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const ann = anns[anns.length - 1] as any;
+      const pts = ann?.data?.handles?.points as number[][] | undefined;
+      if (!pts || pts.length < 2) {
+        return null;
+      }
+      let x0 = Infinity;
+      let y0 = Infinity;
+      let x1 = -Infinity;
+      let y1 = -Infinity;
+      for (const p of pts) {
+        x0 = Math.min(x0, p[0]);
+        y0 = Math.min(y0, p[1]);
+        x1 = Math.max(x1, p[0]);
+        y1 = Math.max(y1, p[1]);
+      }
+      if (![x0, y0, x1, y1].every(Number.isFinite)) {
+        return null;
+      }
+      return { shape, x0, y0, x1, y1 };
+    };
+    const rect = pick(RectangleROITool.toolName, "rect");
+    const ell = pick(EllipticalROITool.toolName, "ellipse");
+    if (activeTool === RectangleROITool.toolName && rect) {
+      return rect;
+    }
+    if (activeTool === EllipticalROITool.toolName && ell) {
+      return ell;
+    }
+    return ell ?? rect;
+  };
+
+  const runAnalysis = async () => {
+    const roi = currentRoiPixels();
+    if (!roi || !meta) {
+      setSeries(null);
+      setAnalysisError(t("video.analyze.noRoi"));
+      return;
+    }
+    setAnalysisError(null);
+    setSeries(null);
+    setAnalyzedRoi(roi);
+    setAnalyzing(true);
+    setAnalysisProgress({ done: 0, total: totalFrames });
+    const ac = new AbortController();
+    analysisAbortRef.current = ac;
+    try {
+      vpRef.current?.pause();
+      setPlaying(false);
+    } catch {
+      /* noop */
+    }
+    try {
+      const s = await analyzeGlobalRoi(
+        src,
+        meta,
+        roi,
+        (done, total) => setAnalysisProgress({ done, total }),
+        ac.signal,
+      );
+      setSeries(s);
+    } catch (e) {
+      if ((e as Error)?.name !== "AbortError") {
+        setAnalysisError(String((e as Error)?.message ?? e));
+      }
+    } finally {
+      setAnalyzing(false);
+      setAnalysisProgress(null);
+      analysisAbortRef.current = null;
+    }
+  };
+
+  const cancelAnalysis = () => analysisAbortRef.current?.abort();
+
+  const downloadCsv = () => {
+    if (!series) {
+      return;
+    }
+    const blob = new Blob([timeSeriesToCsv(series)], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `video-roi-${sopInstanceUid}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const closeAnalysis = () => {
+    setSeries(null);
+    setAnalysisError(null);
+    setAnalyzedRoi(null);
   };
 
   const seekToFrame = (f: number) => {
@@ -370,6 +502,22 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
             <button type="button" style={toolBtn} onClick={fitView} title={t("video.tool.fit")}>
               {t("video.tool.fit")}
             </button>
+            <span style={{ width: 1, height: 18, background: "#dce2e9" }} aria-hidden />
+            {!analyzing ? (
+              <button
+                type="button"
+                style={analyzeBtn}
+                onClick={runAnalysis}
+                title={t("video.analyze.hint")}
+              >
+                {t("video.analyze.button")}
+              </button>
+            ) : (
+              <button type="button" style={toolBtn} onClick={cancelAnalysis}>
+                {t("common.cancel")}
+                {analysisProgress ? ` (${analysisProgress.done}/${analysisProgress.total})` : ""}
+              </button>
+            )}
             <span style={{ color: "#889", fontSize: 11 }}>{t("video.tool.hint")}</span>
           </div>
 
@@ -427,6 +575,38 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
               </span>
             )}
           </div>
+
+          {analysisError && (
+            <div style={{ ...controlRowStyle, color: "#b00020" }}>⚠ {analysisError}</div>
+          )}
+
+          {/* グローバル ROI 時系列解析パネル（P3c）。 */}
+          {series && series.length > 0 && analyzedRoi && (
+            <div style={analysisPanel}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 6 }}>
+                <strong style={{ fontSize: 13, color: "#334" }}>{t("video.analyze.title")}</strong>
+                <span style={{ color: "#889", fontSize: 12 }}>
+                  {t(analyzedRoi.shape === "ellipse" ? "video.analyze.roiEllipse" : "video.analyze.roiRect", {
+                    w: Math.abs(Math.round(analyzedRoi.x1 - analyzedRoi.x0)),
+                    h: Math.abs(Math.round(analyzedRoi.y1 - analyzedRoi.y0)),
+                  })}
+                  {` · ${series.length} ${t("video.frame")}`}
+                </span>
+                <span style={{ flex: 1 }} />
+                <button type="button" style={toolBtn} onClick={downloadCsv}>
+                  {t("video.analyze.csv")}
+                </button>
+                <button type="button" style={toolBtn} onClick={closeAnalysis}>
+                  {t("video.analyze.close")}
+                </button>
+              </div>
+              <TimeIntensityChart
+                series={series}
+                frameLabel={t("video.analyze.frameAxis")}
+                intensityLabel={t("video.analyze.intensityAxis")}
+              />
+            </div>
+          )}
         </>
       )}
     </div>
@@ -500,5 +680,23 @@ const toolBtnActive: React.CSSProperties = {
   color: "#fff",
   // border は shorthand で上書き（toolBtn の border shorthand と borderColor を混在させない＝React 警告回避）。
   border: "1px solid #0b5cad",
+};
+const analyzeBtn: React.CSSProperties = {
+  padding: "3px 10px",
+  border: "1px solid #0b5cad",
+  borderRadius: 6,
+  background: "#eaf2fb",
+  color: "#0b5cad",
+  cursor: "pointer",
+  fontSize: 12,
+  fontWeight: 600,
+};
+const analysisPanel: React.CSSProperties = {
+  marginTop: 10,
+  maxWidth: 900,
+  padding: 10,
+  border: "1px solid #e2e7ee",
+  borderRadius: 8,
+  background: "#fff",
 };
 const noticeStyle: React.CSSProperties = { marginTop: 10, fontSize: 13, color: "#8a6d3b" };
