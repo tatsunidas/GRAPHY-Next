@@ -104,12 +104,49 @@ export const fetchInstanceTags = (studyUid: string, seriesUid: string, sopUid: s
 /** Encapsulated PDF Storage の SOP Class UID（ピクセル無し＝画像ビューア非対応）。 */
 export const ENCAPSULATED_PDF_SOP_CLASS = "1.2.840.10008.5.1.4.1.1.104.1";
 
-/** Video Photographic Image Storage の SOP Class UID（encapsulated 動画＝2D 画像ビューア非対応）。 */
+/** Video Photographic Image Storage の SOP Class UID（encapsulated 動画）。 */
 export const VIDEO_PHOTOGRAPHIC_SOP_CLASS = "1.2.840.10008.5.1.4.1.1.77.1.4.1";
+
+/** encapsulated 動画系 SOP Class（Endoscopic / Microscopic / Photographic）。動画再生の対象判定に使う。 */
+export const VIDEO_SOP_CLASSES: ReadonlySet<string> = new Set([
+  "1.2.840.10008.5.1.4.1.1.77.1.1.1", // Video Endoscopic Image Storage
+  "1.2.840.10008.5.1.4.1.1.77.1.2.1", // Video Microscopic Image Storage
+  VIDEO_PHOTOGRAPHIC_SOP_CLASS, // Video Photographic Image Storage
+]);
+
+/** SOP Class UID が encapsulated 動画かどうか。 */
+export const isVideoSopClass = (sopClassUid: string | null | undefined): boolean =>
+  !!sopClassUid && VIDEO_SOP_CLASSES.has(sopClassUid);
 
 /** Encapsulated Document（PDF 等）の中身を配信する URL（inline / download）。 */
 export const instanceDocumentUrl = (sopUid: string, download = false) =>
   `${apiBase()}/api/instances/${encodeURIComponent(sopUid)}/document${download ? "?download=true" : ""}`;
+
+/**
+ * encapsulated 動画を {@code video/mp4} として配信する URL（standalone のみ。Range 対応）。
+ * {@code <video>} の src / Cornerstone VideoViewport のメタデータプロバイダから参照する。
+ */
+export const videoRenderedUrl = (sopUid: string) =>
+  `${apiBase()}/api/instances/${encodeURIComponent(sopUid)}/rendered`;
+
+/** 動画諸元（backend がヘッダから導出）。再生 UI とフレーム換算に使う。 */
+export interface VideoMetadata {
+  rows: number;
+  columns: number;
+  numberOfFrames: number;
+  /** 1 秒あたりフレーム数（FrameTime 優先、無ければ CineRate。不明なら 0）。 */
+  fps: number;
+  frameTimeMs: number | null;
+  cineRate: number | null;
+  durationSec: number | null;
+  transferSyntaxUid: string | null;
+  /** true の場合、ブラウザ非対応コーデックのため配信には ffmpeg 変換が必要（現状 /rendered は 415）。 */
+  transcodeRequired: boolean;
+}
+
+/** 動画諸元を取得する（standalone）。 */
+export const fetchVideoMetadata = (sopUid: string) =>
+  httpGet<VideoMetadata>(`/api/instances/${encodeURIComponent(sopUid)}/video-metadata`);
 
 export interface SeriesLayoutCell {
   c: number;
