@@ -21,8 +21,27 @@ import { useI18n } from "../i18n/i18n";
 import { fetchVideoMetadata, videoRenderedUrl, type VideoMetadata } from "../api";
 import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
 import { ensureVideoMetadataProvider, registerVideoMetadata } from "./videoMetadataProvider";
-import { analyzeGlobalRoi, timeSeriesToCsv, type RoiPixels, type TimeSeriesPoint } from "./videoRoiAnalysis";
+import {
+  analyzeFrameRoi,
+  analyzeGlobalRoi,
+  histogramToCsv,
+  timeSeriesToCsv,
+  type FrameRoiResult,
+  type RoiPixels,
+  type TimeSeriesPoint,
+} from "./videoRoiAnalysis";
+import {
+  assignScope,
+  frameScope,
+  isVisibleOnFrame,
+  pruneScopes,
+  scopeCounts,
+  scopeOf,
+  toggleScope,
+  type RoiScopeMap,
+} from "./videoRoiScope";
 import { TimeIntensityChart } from "./TimeIntensityChart";
+import { RoiHistogramChart } from "./RoiHistogramChart";
 
 const { MouseBindings } = csToolsEnums;
 
@@ -121,6 +140,22 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
   // ROI 管理（一覧・削除・全消去）。
   const [rois, setRois] = useState<RoiItem[]>([]);
 
+  // ROI の帰属モード（§12）。`scopes` は uid → スコープ、`newRoiFrameBound` は**新規作成時**の既定。
+  const [scopes, setScopes] = useState<RoiScopeMap>({});
+  const [newRoiFrameBound, setNewRoiFrameBound] = useState(false);
+  // 注釈イベントのリスナは sopInstanceUid 変更時にしか張り替えないため、
+  // 作成時に参照する「現在フレーム」「既定モード」は ref 経由で最新値を読む。
+  const newRoiFrameBoundRef = useRef(newRoiFrameBound);
+  newRoiFrameBoundRef.current = newRoiFrameBound;
+  const frameRef = useRef(frame);
+  frameRef.current = frame;
+  // 可視性を戻すため、この動画で触った uid を覚えておく（隠し集合は cornerstone のモジュール全体で共有）。
+  const managedUidsRef = useRef<Set<string>>(new Set());
+
+  // フレーム指定 ROI の単一フレーム解析（面積・平均/最大/最小・SD・ヒストグラム）。
+  const [frameResult, setFrameResult] = useState<FrameRoiResult | null>(null);
+  const [frameAnalyzing, setFrameAnalyzing] = useState(false);
+
   const src = useMemo(() => videoRenderedUrl(sopInstanceUid), [sopInstanceUid]);
   const fps = meta && meta.fps > 0 ? meta.fps : 0;
   const totalFrames = meta && meta.numberOfFrames > 0 ? meta.numberOfFrames : 1;
@@ -197,6 +232,18 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
     setAnalysisError(null);
     setAnalyzedRoi(null);
     setRois([]);
+    // 帰属表とフレーム解析も SOP 切替でリセット（隠していた注釈は戻してから捨てる）。
+    for (const uid of managedUidsRef.current) {
+      try {
+        csToolsAnnotation.visibility.setAnnotationVisibility(uid, true);
+      } catch {
+        /* 無視 */
+      }
+    }
+    managedUidsRef.current = new Set();
+    setScopes({});
+    setFrameResult(null);
+    setFrameAnalyzing(false);
 
     (async () => {
       await ensureCornerstoneInitialized();
@@ -308,6 +355,46 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
     }
   }, [loop, rate, phase]);
 
+  // 帰属モードに従って ROI の表示/非表示をフレームごとに切り替える（§12 モード①の中核）。
+  // setAnnotationVisibility は冪等で ANNOTATION_VISIBILITY_CHANGE しか出さない（購読していない）ため、
+  // ここから注釈イベント → refreshRois の連鎖は起きない。
+  useEffect(() => {
+    if (phase !== "viewport") {
+      return;
+    }
+    for (const r of rois) {
+      try {
+        csToolsAnnotation.visibility.setAnnotationVisibility(
+          r.uid,
+          isVisibleOnFrame(scopeOf(scopes, r.uid), frame),
+        );
+      } catch {
+        /* 破棄済み等は無視 */
+      }
+    }
+    try {
+      vpRef.current?.render();
+    } catch {
+      /* 無視 */
+    }
+  }, [rois, scopes, frame, phase]);
+
+  // アンマウント時に隠した ROI を戻す。cornerstone の隠し集合はモジュール全体で共有されるため、
+  // 放置すると他のビューアで同じ注釈が見えなくなる。
+  useEffect(() => {
+    const managed = managedUidsRef;
+    return () => {
+      for (const uid of managed.current) {
+        try {
+          csToolsAnnotation.visibility.setAnnotationVisibility(uid, true);
+        } catch {
+          /* 無視 */
+        }
+      }
+      managed.current = new Set();
+    };
+  }, []);
+
   const togglePlay = () => {
     const vp = vpRef.current;
     if (!vp) {
@@ -360,8 +447,13 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
     }
   };
 
-  // 直近の Rectangle/Ellipse ROI をピクセル座標（world=pixel）で取り出す。無ければ null。
-  const currentRoiPixels = (): RoiPixels | null => {
+  /**
+   * 直近の Rectangle/Ellipse ROI をピクセル座標（world=pixel）で取り出す。無ければ null。
+   *
+   * @param accept 対象にする ROI の uid 判定。現在フレームに表示されていない（別フレームに紐づく）
+   *               ROI を解析対象にしないために使う。
+   */
+  const currentRoiPixels = (accept?: (uid: string) => boolean): RoiPixels | null => {
     const host = hostRef.current;
     if (!host) {
       return null;
@@ -372,6 +464,10 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
         anns = (csToolsAnnotation.state.getAnnotations(toolName, host) as unknown[]) ?? [];
       } catch {
         anns = [];
+      }
+      if (accept) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        anns = anns.filter((a) => accept(((a as any)?.annotationUID as string) ?? ""));
       }
       if (!anns.length) {
         return null;
@@ -409,10 +505,11 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
   };
 
   const runAnalysis = async () => {
-    const roi = currentRoiPixels();
+    // 時系列解析はグローバル帰属の ROI のみ（フレーム指定 ROI は単一フレーム解析の対象）。
+    const roi = currentRoiPixels((uid) => scopeOf(scopes, uid).kind === "global");
     if (!roi || !meta) {
       setSeries(null);
-      setAnalysisError(t("video.analyze.noRoi"));
+      setAnalysisError(t("video.analyze.noGlobalRoi"));
       return;
     }
     setAnalysisError(null);
@@ -471,7 +568,48 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
     setAnalyzedRoi(null);
   };
 
-  // ROI 一覧を注釈状態から作り直す。
+  /** 現在フレームに表示されている ROI の単一フレーム統計（§12 モード①）。 */
+  const runFrameAnalysis = async () => {
+    const roi = currentRoiPixels((uid) => isVisibleOnFrame(scopeOf(scopes, uid), frame));
+    if (!roi || !meta) {
+      setFrameResult(null);
+      setAnalysisError(t("video.frameStats.noRoi"));
+      return;
+    }
+    setAnalysisError(null);
+    setFrameAnalyzing(true);
+    try {
+      vpRef.current?.pause();
+      setPlaying(false);
+    } catch {
+      /* noop */
+    }
+    try {
+      setFrameResult(await analyzeFrameRoi(src, meta, roi, frame));
+    } catch (e) {
+      setFrameResult(null);
+      setAnalysisError(String((e as Error)?.message ?? e));
+    } finally {
+      setFrameAnalyzing(false);
+    }
+  };
+
+  const downloadHistogramCsv = () => {
+    if (!frameResult) {
+      return;
+    }
+    const blob = new Blob([histogramToCsv(frameResult.histogram)], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `video-roi-${sopInstanceUid}-f${frameResult.frame}-histogram.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  // ROI 一覧を注釈状態から作り直す。併せて帰属表を同期する（新規 uid に既定スコープ、消えた uid を削除）。
   const refreshRois = () => {
     const host = hostRef.current;
     if (!host) {
@@ -495,9 +633,33 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
       }
     }
     setRois(out);
+
+    const uids = out.map((r) => r.uid);
+    const known = managedUidsRef.current;
+    // 新規作成された ROI（＝まだ見たことのない uid）に、作成時点の既定モードを割り当てる。
+    const created = uids.filter((u) => !known.has(u));
+    setScopes((prev) => {
+      let next = pruneScopes(prev, uids);
+      if (newRoiFrameBoundRef.current) {
+        for (const uid of created) {
+          next = assignScope(next, uid, frameScope(frameRef.current));
+        }
+      }
+      return next;
+    });
+    managedUidsRef.current = new Set(uids);
   };
 
+  /** ROI の帰属をグローバル ⇔ 現在フレーム で切り替える。 */
+  const toggleRoiScope = (uid: string) => setScopes((prev) => toggleScope(prev, uid, frame));
+
   const deleteRoi = (uid: string) => {
+    // 削除前に表示へ戻す。cornerstone の隠し集合は uid を保持し続けるため、隠したまま消すと取り残される。
+    try {
+      csToolsAnnotation.visibility.setAnnotationVisibility(uid, true);
+    } catch {
+      /* 無視 */
+    }
     try {
       csToolsAnnotation.state.removeAnnotation(uid);
     } catch {
@@ -513,6 +675,11 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
 
   const clearRois = () => {
     for (const r of rois) {
+      try {
+        csToolsAnnotation.visibility.setAnnotationVisibility(r.uid, true);
+      } catch {
+        /* 無視 */
+      }
       try {
         csToolsAnnotation.state.removeAnnotation(r.uid);
       } catch {
@@ -608,28 +775,93 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
                 {analysisProgress ? ` (${analysisProgress.done}/${analysisProgress.total})` : ""}
               </button>
             )}
+            <button
+              type="button"
+              style={analyzeBtn}
+              data-testid="video-frame-stats"
+              onClick={runFrameAnalysis}
+              disabled={frameAnalyzing}
+              title={t("video.frameStats.hint")}
+            >
+              {frameAnalyzing ? t("common.loading") : t("video.frameStats.button")}
+            </button>
             <span style={{ color: "#889", fontSize: 11 }}>{t("video.tool.hint")}</span>
+          </div>
+
+          {/* ROI の帰属モード（§12）。新規作成される ROI がどちらになるかを決める。 */}
+          <div style={{ ...controlRowStyle, gap: 6 }}>
+            <span style={{ color: "#667", fontSize: 12 }}>{t("video.roi.scopeLabel")}</span>
+            <button
+              type="button"
+              data-testid="video-roi-scope-global"
+              style={newRoiFrameBound ? toolBtn : toolBtnActive}
+              onClick={() => setNewRoiFrameBound(false)}
+            >
+              {t("video.roi.scopeGlobal")}
+            </button>
+            <button
+              type="button"
+              data-testid="video-roi-scope-frame"
+              style={newRoiFrameBound ? toolBtnActive : toolBtn}
+              onClick={() => setNewRoiFrameBound(true)}
+            >
+              {t("video.roi.scopeFrame")}
+            </button>
+            <span style={{ color: "#889", fontSize: 11 }}>
+              {t(newRoiFrameBound ? "video.roi.scopeHintFrame" : "video.roi.scopeHintGlobal", { f: frame })}
+            </span>
           </div>
 
           {/* ROI 一覧・管理（削除/全消去）。 */}
           {rois.length > 0 && (
             <div style={{ ...controlRowStyle, gap: 8 }} data-testid="video-roi-list">
               <span style={{ color: "#667", fontSize: 12 }}>{t("video.roi.list", { n: rois.length })}</span>
-              {rois.map((r, i) => (
-                <span key={r.uid} style={roiChip} data-testid="video-roi-chip">
-                  {t(`video.tool.${r.toolKey}`)} #{i + 1}
-                  <button
-                    type="button"
-                    style={roiChipDel}
-                    title={t("video.roi.delete")}
-                    aria-label={t("video.roi.delete")}
-                    data-testid={`video-roi-del-${r.uid}`}
-                    onClick={() => deleteRoi(r.uid)}
+              {(() => {
+                const c = scopeCounts(scopes, rois.map((r) => r.uid), frame);
+                return (
+                  <span style={{ color: "#889", fontSize: 11 }} data-testid="video-roi-scope-counts">
+                    {t("video.roi.scopeCounts", { g: c.global, cur: c.thisFrame, other: c.otherFrame })}
+                  </span>
+                );
+              })()}
+              {rois.map((r, i) => {
+                const sc = scopeOf(scopes, r.uid);
+                const visible = isVisibleOnFrame(sc, frame);
+                return (
+                  <span
+                    key={r.uid}
+                    style={visible ? roiChip : roiChipHidden}
+                    data-testid="video-roi-chip"
+                    title={
+                      sc.kind === "global"
+                        ? t("video.roi.scopeGlobal")
+                        : t("video.roi.boundToFrame", { f: sc.frame })
+                    }
                   >
-                    ×
-                  </button>
-                </span>
-              ))}
+                    {t(`video.tool.${r.toolKey}`)} #{i + 1}
+                    <button
+                      type="button"
+                      style={sc.kind === "global" ? roiScopeBadgeGlobal : roiScopeBadgeFrame}
+                      data-testid={`video-roi-scope-toggle-${r.uid}`}
+                      title={t("video.roi.scopeToggle")}
+                      aria-label={t("video.roi.scopeToggle")}
+                      onClick={() => toggleRoiScope(r.uid)}
+                    >
+                      {sc.kind === "global" ? t("video.roi.badgeGlobal") : `F${sc.frame}`}
+                    </button>
+                    <button
+                      type="button"
+                      style={roiChipDel}
+                      title={t("video.roi.delete")}
+                      aria-label={t("video.roi.delete")}
+                      data-testid={`video-roi-del-${r.uid}`}
+                      onClick={() => deleteRoi(r.uid)}
+                    >
+                      ×
+                    </button>
+                  </span>
+                );
+              })}
               <button type="button" style={toolBtn} onClick={clearRois} data-testid="video-roi-clear">
                 {t("video.roi.clear")}
               </button>
@@ -751,6 +983,42 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
               />
             </div>
           )}
+
+          {/* フレーム指定 ROI の単一フレーム統計パネル（§12 モード①）。 */}
+          {frameResult && (
+            <div style={analysisPanel} data-testid="video-frame-stats-panel">
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 6 }}>
+                <strong style={{ fontSize: 13, color: "#334" }}>
+                  {t("video.frameStats.title", { f: frameResult.frame })}
+                </strong>
+                <span style={{ color: "#889", fontSize: 12 }}>
+                  {`${frameResult.bbox.w}×${frameResult.bbox.h}px`}
+                </span>
+                <span style={{ flex: 1 }} />
+                <button type="button" style={toolBtn} onClick={downloadHistogramCsv}>
+                  {t("video.frameStats.csv")}
+                </button>
+                <button type="button" style={toolBtn} onClick={() => setFrameResult(null)}>
+                  {t("video.analyze.close")}
+                </button>
+              </div>
+              <div style={{ color: "#445", fontSize: 12, marginBottom: 6 }} data-testid="video-frame-stats-summary">
+                {t("video.frameStats.summary", {
+                  area: frameResult.nPixels,
+                  mean: frameResult.meanY.toFixed(1),
+                  min: frameResult.minY.toFixed(0),
+                  max: frameResult.maxY.toFixed(0),
+                  sd: frameResult.sdY.toFixed(1),
+                })}
+              </div>
+              <RoiHistogramChart
+                histogram={frameResult.histogram}
+                mean={frameResult.meanY}
+                intensityLabel={t("video.frameStats.intensityAxis")}
+                countLabel={t("video.frameStats.countAxis")}
+              />
+            </div>
+          )}
         </>
       )}
     </div>
@@ -845,6 +1113,32 @@ const roiChip: React.CSSProperties = {
   background: "#f4f7fa",
   fontSize: 12,
   color: "#334",
+};
+/** 現在フレームで非表示の ROI（別フレームに紐づく）。一覧には残すが淡く見せる。 */
+const roiChipHidden: React.CSSProperties = {
+  ...roiChip,
+  background: "#fbfcfd",
+  color: "#98a1ab",
+  borderStyle: "dashed",
+};
+const roiScopeBadge: React.CSSProperties = {
+  border: "none",
+  borderRadius: 8,
+  padding: "1px 6px",
+  fontSize: 10,
+  lineHeight: 1.6,
+  cursor: "pointer",
+  fontWeight: 600,
+};
+const roiScopeBadgeGlobal: React.CSSProperties = {
+  ...roiScopeBadge,
+  background: "#e3edf9",
+  color: "#0b5cad",
+};
+const roiScopeBadgeFrame: React.CSSProperties = {
+  ...roiScopeBadge,
+  background: "#e8f3ea",
+  color: "#2f7a45",
 };
 const roiChipDel: React.CSSProperties = {
   display: "inline-flex",
