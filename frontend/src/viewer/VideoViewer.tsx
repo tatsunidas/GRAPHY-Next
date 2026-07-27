@@ -3,7 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { RenderingEngine, Enums, EVENTS } from "@cornerstonejs/core";
+import { RenderingEngine, Enums, EVENTS, eventTarget } from "@cornerstonejs/core";
 import {
   ToolGroupManager,
   PanTool,
@@ -143,14 +143,18 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
     };
 
     // 注釈（ROI）の作成/削除で一覧を更新。
+    // 注意: cornerstone-tools の annotation 系イベント（ADDED/COMPLETED/MODIFIED/REMOVED）は
+    // host element ではなくグローバル `eventTarget` で発火する（tools/.../helpers/state.js が
+    // `triggerEvent(eventTarget, ...)`）。よって element ではなく eventTarget で購読する。
     const onAnnotationChanged = () => refreshRois();
 
     const cleanup = () => {
       if (host) {
         host.removeEventListener(EVENTS.IMAGE_RENDERED, onRendered);
-        host.removeEventListener(csToolsEnums.Events.ANNOTATION_COMPLETED, onAnnotationChanged);
-        host.removeEventListener(csToolsEnums.Events.ANNOTATION_REMOVED, onAnnotationChanged);
       }
+      eventTarget.removeEventListener(csToolsEnums.Events.ANNOTATION_COMPLETED, onAnnotationChanged);
+      eventTarget.removeEventListener(csToolsEnums.Events.ANNOTATION_MODIFIED, onAnnotationChanged);
+      eventTarget.removeEventListener(csToolsEnums.Events.ANNOTATION_REMOVED, onAnnotationChanged);
       const vp = vpRef.current;
       if (vp) {
         try {
@@ -269,9 +273,10 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
           tg.addViewport(viewportId, engineId);
           toolGroupIdRef.current = toolGroupId;
         }
-        // ROI 作成/削除で一覧を更新（描画完了・削除イベントを購読）。
-        el.addEventListener(csToolsEnums.Events.ANNOTATION_COMPLETED, onAnnotationChanged);
-        el.addEventListener(csToolsEnums.Events.ANNOTATION_REMOVED, onAnnotationChanged);
+        // ROI 作成/変更/削除で一覧を更新（グローバル eventTarget で購読。element では発火しない）。
+        eventTarget.addEventListener(csToolsEnums.Events.ANNOTATION_COMPLETED, onAnnotationChanged);
+        eventTarget.addEventListener(csToolsEnums.Events.ANNOTATION_MODIFIED, onAnnotationChanged);
+        eventTarget.addEventListener(csToolsEnums.Events.ANNOTATION_REMOVED, onAnnotationChanged);
         refreshRois();
       } catch (e) {
         console.warn("動画ツールの初期化に失敗（再生は継続）", e);
@@ -562,7 +567,7 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
     <div style={{ marginTop: 10 }}>
       {/* VideoViewport のホスト。cornerstone が内部に canvas を生成する。常時マウントして ref を確保。 */}
       <div style={frameStyle}>
-        <div ref={hostRef} style={hostStyle} />
+        <div ref={hostRef} data-testid="video-viewport-host" style={hostStyle} />
       </div>
 
       {phase === "loading" && <div style={{ ...noticeStyle, color: "#889" }}>{t("common.loading")}</div>}
@@ -575,6 +580,7 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
               <button
                 key={key}
                 type="button"
+                data-testid={`video-tool-${key}`}
                 style={activeTool === name ? toolBtnActive : toolBtn}
                 onClick={() => selectPrimaryTool(name)}
                 title={t(`video.tool.${key}`)}
@@ -606,23 +612,24 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
 
           {/* ROI 一覧・管理（削除/全消去）。 */}
           {rois.length > 0 && (
-            <div style={{ ...controlRowStyle, gap: 8 }}>
+            <div style={{ ...controlRowStyle, gap: 8 }} data-testid="video-roi-list">
               <span style={{ color: "#667", fontSize: 12 }}>{t("video.roi.list", { n: rois.length })}</span>
               {rois.map((r, i) => (
-                <span key={r.uid} style={roiChip}>
+                <span key={r.uid} style={roiChip} data-testid="video-roi-chip">
                   {t(`video.tool.${r.toolKey}`)} #{i + 1}
                   <button
                     type="button"
                     style={roiChipDel}
                     title={t("video.roi.delete")}
                     aria-label={t("video.roi.delete")}
+                    data-testid={`video-roi-del-${r.uid}`}
                     onClick={() => deleteRoi(r.uid)}
                   >
                     ×
                   </button>
                 </span>
               ))}
-              <button type="button" style={toolBtn} onClick={clearRois}>
+              <button type="button" style={toolBtn} onClick={clearRois} data-testid="video-roi-clear">
                 {t("video.roi.clear")}
               </button>
             </div>
