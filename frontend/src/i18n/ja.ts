@@ -1302,6 +1302,8 @@ export const ja: Record<string, string> = {
   "video.analyze.close": "閉じる",
   "video.analyze.frameAxis": "フレーム",
   "video.analyze.intensityAxis": "平均輝度",
+  "video.analyze.channels": "RGBチャンネル",
+  "video.analyze.summary": "平均 {{mean}} · 範囲 {{min}}–{{max}} · SD {{sd}}",
   "video.roi.list": "ROI ({{n}})",
   "video.roi.delete": "削除",
   "video.roi.clear": "全消去",

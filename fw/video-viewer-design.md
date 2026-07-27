@@ -272,10 +272,18 @@ frontend: VideoViewport（ViewportType.VIDEO）
 >   Playwright（automator の生 PointerEvent ドラッグ方式）で 実 H.264 MP4 を取込→描画→一覧チップ表示／個別削除／
 >   複数／全消去 の 5/5 チェック green＋スクショ目視確認。testid 追加（`video-viewport-host`/`video-tool-*`/
 >   `video-roi-list`/`video-roi-chip`/`video-roi-del-*`/`video-roi-clear`）で automator 化も容易に。
-> - **フレーム指定 ROI モードの明示切替**（現状は全 ROI をグローバル扱いで解析）。§12 の 2 モードのうち①が未実装。
+> - ✅ **統計拡張（時系列 min/max/SD ＋ per-channel カーブ）完了・検証済み（2026-07-27, ブランチ `feat/video-viewer-roi-stats`）**:
+>   ROI 内画素統計の算出を DOM 非依存の純粋関数 `computeRoiStats(data, bw, bh, shape)` に切り出し（`videoRoiAnalysis.ts`）、
+>   `TimeSeriesPoint` に `minY`/`maxY`/`sdY`（母集団 SD＝√(E[Y²]−E[Y]²)）を追加。`TimeIntensityChart` に min–max 帯
+>   （`showBand`, 既定 on）と per-channel R/G/B ライン（`showChannels`）を追加、`VideoViewer` に RGB トグル
+>   （`video-analyze-channels`）と系列要約（`video-analyze-summary`: 平均/全体 min–max/SD 平均）を表示。CSV に
+>   `min_luma`/`max_luma`/`sd_luma` 列を追加。**vitest** で `computeRoiStats`（uniform/2値/楕円マスク21px/1px）と
+>   `timeSeriesToCsv`（列順・整形）を 5 ケース追加（計 64 tests green）＋ typecheck/build green。i18n `video.analyze.channels`/`summary`（ja/en）。
+>   ヒストグラムは本質的に単一フレーム統計なので下記「フレーム指定 ROI モード」フェーズに送る。
+> - **フレーム指定 ROI モードの明示切替**（現状は全 ROI をグローバル扱いで解析）。§12 の 2 モードのうち①が未実装。ここで単一フレーム統計（面積・平均/最大/最小・SD・**ヒストグラム**）を出す。
 > - **複数 ROI の選択解析**（現状は直近 1 つの矩形/楕円のみ）。
-> - 統計拡張（max/min/SD/ヒストグラム、per-channel カーブ）、フレーム精度シーク（現状はオフスクリーン
->   `<video>` の time シーク＝GOP 近似。厳密フレーム精度が要るなら `setFrameNumber`/`requestVideoFrameCallback` 経路）。
+> - フレーム精度シーク（現状はオフスクリーン `<video>` の time シーク＝GOP 近似。厳密フレーム精度が要るなら
+>   `setFrameNumber`/`requestVideoFrameCallback` 経路）。
 
 動画では ROI を **2 つのモード**で扱う必要がある:
 
