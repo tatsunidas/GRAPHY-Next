@@ -1303,6 +1303,8 @@ export const en: Record<string, string> = {
   "video.analyze.close": "Close",
   "video.analyze.frameAxis": "Frame",
   "video.analyze.intensityAxis": "Mean luminance",
+  "video.analyze.channels": "RGB channels",
+  "video.analyze.summary": "Mean {{mean}} · Range {{min}}–{{max}} · SD {{sd}}",
   "video.roi.list": "ROI ({{n}})",
   "video.roi.delete": "Delete",
   "video.roi.clear": "Clear all",

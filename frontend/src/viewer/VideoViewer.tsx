@@ -116,6 +116,7 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
   const [series, setSeries] = useState<TimeSeriesPoint[] | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [analyzedRoi, setAnalyzedRoi] = useState<RoiPixels | null>(null);
+  const [showChannels, setShowChannels] = useState(false);
 
   // ROI 管理（一覧・削除・全消去）。
   const [rois, setRois] = useState<RoiItem[]>([]);
@@ -707,6 +708,10 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
                   {` · ${series.length} ${t("video.frame")}`}
                 </span>
                 <span style={{ flex: 1 }} />
+                <label style={{ display: "flex", alignItems: "center", gap: 4, color: "#667", fontSize: 12 }}>
+                  <input type="checkbox" checked={showChannels} onChange={(e) => setShowChannels(e.target.checked)} data-testid="video-analyze-channels" />
+                  {t("video.analyze.channels")}
+                </label>
                 <button type="button" style={toolBtn} onClick={downloadCsv}>
                   {t("video.analyze.csv")}
                 </button>
@@ -714,10 +719,35 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
                   {t("video.analyze.close")}
                 </button>
               </div>
+              {(() => {
+                // 系列全体の要約統計（平均輝度の平均／全体 min–max／SD の平均）。
+                let sumMean = 0;
+                let sumSd = 0;
+                let lo = Infinity;
+                let hi = -Infinity;
+                for (const p of series) {
+                  sumMean += p.meanY;
+                  sumSd += p.sdY;
+                  lo = Math.min(lo, p.minY);
+                  hi = Math.max(hi, p.maxY);
+                }
+                const inv = series.length > 0 ? 1 / series.length : 0;
+                return (
+                  <div style={{ color: "#667", fontSize: 12, marginBottom: 6 }} data-testid="video-analyze-summary">
+                    {t("video.analyze.summary", {
+                      mean: (sumMean * inv).toFixed(1),
+                      min: (Number.isFinite(lo) ? lo : 0).toFixed(0),
+                      max: (Number.isFinite(hi) ? hi : 0).toFixed(0),
+                      sd: (sumSd * inv).toFixed(1),
+                    })}
+                  </div>
+                );
+              })()}
               <TimeIntensityChart
                 series={series}
                 frameLabel={t("video.analyze.frameAxis")}
                 intensityLabel={t("video.analyze.intensityAxis")}
+                showChannels={showChannels}
               />
             </div>
           )}
