@@ -3,7 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { RenderingEngine, Enums, EVENTS } from "@cornerstonejs/core";
+import { RenderingEngine, Enums, EVENTS, eventTarget } from "@cornerstonejs/core";
 import {
   ToolGroupManager,
   PanTool,
@@ -38,6 +38,20 @@ const VIDEO_PRIMARY_TOOLS: { name: string; key: string }[] = [
   { name: EllipticalROITool.toolName, key: "ellipse" },
   { name: ProbeTool.toolName, key: "probe" },
 ];
+
+/** ROI 一覧・管理の対象（注釈系ツール。WW/WL・Pan/Zoom は注釈ではないので除く）。 */
+const ANNOTATION_TOOL_DEFS: { name: string; key: string }[] = [
+  { name: LengthTool.toolName, key: "length" },
+  { name: AngleTool.toolName, key: "angle" },
+  { name: RectangleROITool.toolName, key: "rectangle" },
+  { name: EllipticalROITool.toolName, key: "ellipse" },
+  { name: ProbeTool.toolName, key: "probe" },
+];
+
+interface RoiItem {
+  uid: string;
+  toolKey: string;
+}
 
 /**
  * encapsulated 動画（Video Photographic/Endoscopic/Microscopic）を 2D ビューア枠内で再生する。
@@ -103,6 +117,9 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [analyzedRoi, setAnalyzedRoi] = useState<RoiPixels | null>(null);
 
+  // ROI 管理（一覧・削除・全消去）。
+  const [rois, setRois] = useState<RoiItem[]>([]);
+
   const src = useMemo(() => videoRenderedUrl(sopInstanceUid), [sopInstanceUid]);
   const fps = meta && meta.fps > 0 ? meta.fps : 0;
   const totalFrames = meta && meta.numberOfFrames > 0 ? meta.numberOfFrames : 1;
@@ -125,10 +142,19 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
       }
     };
 
+    // 注釈（ROI）の作成/削除で一覧を更新。
+    // 注意: cornerstone-tools の annotation 系イベント（ADDED/COMPLETED/MODIFIED/REMOVED）は
+    // host element ではなくグローバル `eventTarget` で発火する（tools/.../helpers/state.js が
+    // `triggerEvent(eventTarget, ...)`）。よって element ではなく eventTarget で購読する。
+    const onAnnotationChanged = () => refreshRois();
+
     const cleanup = () => {
       if (host) {
         host.removeEventListener(EVENTS.IMAGE_RENDERED, onRendered);
       }
+      eventTarget.removeEventListener(csToolsEnums.Events.ANNOTATION_COMPLETED, onAnnotationChanged);
+      eventTarget.removeEventListener(csToolsEnums.Events.ANNOTATION_MODIFIED, onAnnotationChanged);
+      eventTarget.removeEventListener(csToolsEnums.Events.ANNOTATION_REMOVED, onAnnotationChanged);
       const vp = vpRef.current;
       if (vp) {
         try {
@@ -169,6 +195,7 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
     setSeries(null);
     setAnalysisError(null);
     setAnalyzedRoi(null);
+    setRois([]);
 
     (async () => {
       await ensureCornerstoneInitialized();
@@ -246,6 +273,11 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
           tg.addViewport(viewportId, engineId);
           toolGroupIdRef.current = toolGroupId;
         }
+        // ROI 作成/変更/削除で一覧を更新（グローバル eventTarget で購読。element では発火しない）。
+        eventTarget.addEventListener(csToolsEnums.Events.ANNOTATION_COMPLETED, onAnnotationChanged);
+        eventTarget.addEventListener(csToolsEnums.Events.ANNOTATION_MODIFIED, onAnnotationChanged);
+        eventTarget.addEventListener(csToolsEnums.Events.ANNOTATION_REMOVED, onAnnotationChanged);
+        refreshRois();
       } catch (e) {
         console.warn("動画ツールの初期化に失敗（再生は継続）", e);
       }
@@ -438,6 +470,62 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
     setAnalyzedRoi(null);
   };
 
+  // ROI 一覧を注釈状態から作り直す。
+  const refreshRois = () => {
+    const host = hostRef.current;
+    if (!host) {
+      setRois([]);
+      return;
+    }
+    const out: RoiItem[] = [];
+    for (const { name, key } of ANNOTATION_TOOL_DEFS) {
+      let anns: unknown[] = [];
+      try {
+        anns = (csToolsAnnotation.state.getAnnotations(name, host) as unknown[]) ?? [];
+      } catch {
+        anns = [];
+      }
+      for (const a of anns) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const uid = (a as any)?.annotationUID as string | undefined;
+        if (uid) {
+          out.push({ uid, toolKey: key });
+        }
+      }
+    }
+    setRois(out);
+  };
+
+  const deleteRoi = (uid: string) => {
+    try {
+      csToolsAnnotation.state.removeAnnotation(uid);
+    } catch {
+      /* 無視 */
+    }
+    try {
+      vpRef.current?.render();
+    } catch {
+      /* 無視 */
+    }
+    refreshRois();
+  };
+
+  const clearRois = () => {
+    for (const r of rois) {
+      try {
+        csToolsAnnotation.state.removeAnnotation(r.uid);
+      } catch {
+        /* 無視 */
+      }
+    }
+    try {
+      vpRef.current?.render();
+    } catch {
+      /* 無視 */
+    }
+    refreshRois();
+  };
+
   const seekToFrame = (f: number) => {
     const vp = vpRef.current;
     if (!vp) {
@@ -479,7 +567,7 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
     <div style={{ marginTop: 10 }}>
       {/* VideoViewport のホスト。cornerstone が内部に canvas を生成する。常時マウントして ref を確保。 */}
       <div style={frameStyle}>
-        <div ref={hostRef} style={hostStyle} />
+        <div ref={hostRef} data-testid="video-viewport-host" style={hostStyle} />
       </div>
 
       {phase === "loading" && <div style={{ ...noticeStyle, color: "#889" }}>{t("common.loading")}</div>}
@@ -492,6 +580,7 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
               <button
                 key={key}
                 type="button"
+                data-testid={`video-tool-${key}`}
                 style={activeTool === name ? toolBtnActive : toolBtn}
                 onClick={() => selectPrimaryTool(name)}
                 title={t(`video.tool.${key}`)}
@@ -520,6 +609,31 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
             )}
             <span style={{ color: "#889", fontSize: 11 }}>{t("video.tool.hint")}</span>
           </div>
+
+          {/* ROI 一覧・管理（削除/全消去）。 */}
+          {rois.length > 0 && (
+            <div style={{ ...controlRowStyle, gap: 8 }} data-testid="video-roi-list">
+              <span style={{ color: "#667", fontSize: 12 }}>{t("video.roi.list", { n: rois.length })}</span>
+              {rois.map((r, i) => (
+                <span key={r.uid} style={roiChip} data-testid="video-roi-chip">
+                  {t(`video.tool.${r.toolKey}`)} #{i + 1}
+                  <button
+                    type="button"
+                    style={roiChipDel}
+                    title={t("video.roi.delete")}
+                    aria-label={t("video.roi.delete")}
+                    data-testid={`video-roi-del-${r.uid}`}
+                    onClick={() => deleteRoi(r.uid)}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+              <button type="button" style={toolBtn} onClick={clearRois} data-testid="video-roi-clear">
+                {t("video.roi.clear")}
+              </button>
+            </div>
+          )}
 
           {/* シークバー（フレーム精度。1..totalFrames）。 */}
           <div style={{ ...controlRowStyle, gap: 10 }}>
@@ -690,6 +804,32 @@ const analyzeBtn: React.CSSProperties = {
   cursor: "pointer",
   fontSize: 12,
   fontWeight: 600,
+};
+const roiChip: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+  padding: "2px 4px 2px 8px",
+  border: "1px solid #d3dbe4",
+  borderRadius: 12,
+  background: "#f4f7fa",
+  fontSize: 12,
+  color: "#334",
+};
+const roiChipDel: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 16,
+  height: 16,
+  border: "none",
+  borderRadius: "50%",
+  background: "#dce2e9",
+  color: "#556",
+  cursor: "pointer",
+  fontSize: 12,
+  lineHeight: 1,
+  padding: 0,
 };
 const analysisPanel: React.CSSProperties = {
   marginTop: 10,

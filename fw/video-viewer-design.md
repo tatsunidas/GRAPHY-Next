@@ -257,8 +257,21 @@ frontend: VideoViewport（ViewportType.VIDEO）
 > world 点＝ピクセル座標（spacing=1/origin=0）をそのまま使用。
 >
 > **残タスク（後続・未実装）**:
-> - **ROI 管理 UI**: 削除（選択削除・全消去）、一覧/ラベル。現状は描くと溜まり、明示削除 UI が無い
->   （cornerstone 既定のキーボード削除も video viewport では未配線）。
+> - ✅ **ROI 管理 UI（削除/一覧）完了・実機検証済み（2026-07-27, ブランチ `feat/video-viewer-roi-management`）**:
+>   `VideoViewer.tsx` に ROI 一覧チップ（個別 `×` 削除・全消去）＋ `refreshRois`（tool ごとに `getAnnotations` 集計）
+>   ＋ `deleteRoi`/`clearRois`。**中断原因＝イベント購読先の誤り**を修正した:
+>   cornerstone-tools 3.33.5 の annotation 系イベント（ADDED/COMPLETED/MODIFIED/REMOVED）は **host element
+>   ではなくグローバル `eventTarget` で発火**する（`tools/.../stateManagement/annotation/helpers/state.js` が
+>   `triggerEvent(eventTarget, ...)`）。旧実装は `el.addEventListener(ANNOTATION_COMPLETED)` で購読していたため
+>   描画後に `refreshRois` が呼ばれず一覧が常に空だった。→ `eventTarget`（`@cornerstonejs/core`）で購読に変更
+>   （MODIFIED も追加）。`getAnnotations(toolName, host)` 側は書き込み・読み込みとも
+>   `getEnabledElement(host).FrameOfReferenceUID`（VideoViewport は `videoElement.src`）で同一キーに解決されるため
+>   変更不要（仮説2は無罪）。併せて i18n 補間バグも修正: `video.roi.list`/`analyze.roiRect`/`analyze.roiEllipse` が
+>   単一波括弧 `{n}`/`{w}`/`{h}` で、`t()` は `{{...}}` のみ置換するため字面表示になっていた（→ `{{...}}` に修正）。
+>   検証: standalone backend（要 jar 再ビルド。VideoRenderController は Jul 24 追加で旧 jar に無かった）＋ Vite ＋
+>   Playwright（automator の生 PointerEvent ドラッグ方式）で 実 H.264 MP4 を取込→描画→一覧チップ表示／個別削除／
+>   複数／全消去 の 5/5 チェック green＋スクショ目視確認。testid 追加（`video-viewport-host`/`video-tool-*`/
+>   `video-roi-list`/`video-roi-chip`/`video-roi-del-*`/`video-roi-clear`）で automator 化も容易に。
 > - **フレーム指定 ROI モードの明示切替**（現状は全 ROI をグローバル扱いで解析）。§12 の 2 モードのうち①が未実装。
 > - **複数 ROI の選択解析**（現状は直近 1 つの矩形/楕円のみ）。
 > - 統計拡張（max/min/SD/ヒストグラム、per-channel カーブ）、フレーム精度シーク（現状はオフスクリーン
