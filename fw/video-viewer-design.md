@@ -198,7 +198,8 @@ frontend: VideoViewport（ViewportType.VIDEO）
   - ✅ **P3c v1（動画 ROI 解析・§12）**: **グローバル ROI（矩形/楕円）の時系列解析**（全フレームの ROI 内
     平均輝度/RGB → time–intensity カーブ ＋ CSV）を実装・**実機検証済み（2026-07-24）**。統計は**フロント**で
     オフスクリーン `<video crossOrigin=anonymous>` から canvas 読取（`/rendered` は CORS 許可済み）。
-    残: ROI 管理 UI（削除/一覧）、フレーム指定 ROI モードの明示切替、複数 ROI、統計拡張（§12 参照）。
+    ROI 管理 UI（削除/一覧）・統計拡張・**フレーム指定 ROI モードの明示切替＋単一フレーム統計（面積/平均/最大/最小/SD/
+    ヒストグラム）** は実装済み（§12 の残タスク欄を参照。最後のものは UI 未検証）。残: 複数 ROI の選択解析、フレーム精度シーク。
 - **P4（非 H.264 対応）**: `/rendered` に ffmpeg トランスコード分岐（MPEG2 等）＋キャッシュ（§4.3/4.4）。
 - **P5（Portable/web）**: §7/§8。
 
@@ -280,7 +281,35 @@ frontend: VideoViewport（ViewportType.VIDEO）
 >   `min_luma`/`max_luma`/`sd_luma` 列を追加。**vitest** で `computeRoiStats`（uniform/2値/楕円マスク21px/1px）と
 >   `timeSeriesToCsv`（列順・整形）を 5 ケース追加（計 64 tests green）＋ typecheck/build green。i18n `video.analyze.channels`/`summary`（ja/en）。
 >   ヒストグラムは本質的に単一フレーム統計なので下記「フレーム指定 ROI モード」フェーズに送る。
-> - **フレーム指定 ROI モードの明示切替**（現状は全 ROI をグローバル扱いで解析）。§12 の 2 モードのうち①が未実装。ここで単一フレーム統計（面積・平均/最大/最小・SD・**ヒストグラム**）を出す。
+> - ✅ **フレーム指定 ROI モードの明示切替 ＋ 単一フレーム統計 実装完了（2026-07-27, ブランチ `feat/video-roi-frame-mode`）**:
+>   §12 の 2 モードのうち①（フレーム指定 ROI）を実装。**UI 動作は未検証**（typecheck / vitest のみ green。下記「未検証」参照）。
+>   - **帰属モデル**: `viewer/videoRoiScope.ts`（新規・DOM 非依存の純粋関数群）。`RoiScope = {kind:"global"} | {kind:"frame",frame}` を
+>     **uid → スコープの対応表**（`RoiScopeMap`）としてビューア側に保持する。annotation 側に持たせないのは、video viewport では
+>     全フレームが同一 FrameOfReferenceUID を共有し、cornerstone の annotation 自体はフレーム帰属を表現できないため。
+>     更新系（`assignScope`/`toggleScope`/`pruneScopes`）は**無変化なら同一参照を返す**（React state に入れるため、
+>     毎回新オブジェクトを返すと再描画が無限連鎖する）。既定はグローバルで、グローバルはキーを持たない表現に正規化する。
+>   - **表示の切替**: `annotation.visibility.setAnnotationVisibility(uid, visible)` を `[rois, scopes, frame, phase]` の
+>     effect で適用。この API は **`ANNOTATION_VISIBILITY_CHANGE` しか発火せず**（MODIFIED ではない）購読していないため、
+>     注釈イベント → `refreshRois` → 再描画 のループにはならない。**冪等**（隠し集合への add/delete で変化時のみ publish）。
+>     ただし隠し集合は **cornerstone のモジュール全体で共有**されるため、アンマウント時・SOP 切替時・ROI 削除時に
+>     `setAnnotationVisibility(uid, true)` で戻す（隠したまま消すと uid が集合に取り残される）。
+>   - **UI**: 新規 ROI の既定帰属を選ぶトグル（`video-roi-scope-global` / `video-roi-scope-frame`）、一覧チップの
+>     帰属バッジ兼切替ボタン（`video-roi-scope-toggle-{uid}`。グローバル=「全」／フレーム指定=`F{n}`）、内訳表示
+>     （`video-roi-scope-counts`）。**別フレームに紐づく ROI も一覧には残す**（破線・淡色）ので、非表示のまま迷子にならない。
+>     一覧からの切替は「フレーム指定 → グローバル」方向を常に許し、別フレームの ROI を黙って現在フレームへ**付け替えない**
+>     （利用者から見て「別の ROI が動いた」ように見えるため）。
+>   - **単一フレーム統計**: `analyzeFrameRoi()` が面積（`nPixels` px²。PixelSpacing 未供給のため px² 単位）・平均・最大・最小・SD・
+>     **ヒストグラム**を返す。`computeRoiHistogram(data, bw, bh, shape, bins=64)`（純粋関数。輝度 0–255 を等分、255 は最終ビンへ
+>     クランプ）＋ `viewer/RoiHistogramChart.tsx`（インライン SVG、平均位置に破線）＋ ヒストグラム CSV。
+>     解析対象は**現在フレームに表示中の ROI** に限定し、時系列解析（`analyzeGlobalRoi`）は**グローバル帰属の ROI のみ**を対象にした。
+>   - **リファクタ**: オフスクリーン `<video>` ＋ canvas の読取を `createFrameSampler()` に共通化し、`analyzeGlobalRoi`（全フレーム走査）と
+>     `analyzeFrameRoi`（単一フレーム）で共有。bbox 正規化を純粋関数 `roiBboxPixels()` に切り出した（端点順不同・画像外クランプ・最小 1px）。
+>   - **検証**: `npm run typecheck` green、`npm test` **90 tests green**（64 → +26: `videoRoiScope` 17／`computeRoiHistogram`・
+>     `histogramToCsv`・`roiBboxPixels` 9）、`npm run build` green。i18n ja/en 両方追加（`video.roi.scope*` / `video.frameStats.*`）。
+>     `video.analyze.noRoi` は `video.analyze.noGlobalRoi` に改称（グローバル帰属の ROI が要ることを明示するため）。
+>   - **未検証（要・実機確認）**: フレーム送りに追従した ROI の表示/非表示、帰属トグルの実挙動、ヒストグラム描画。
+>     UI の振る舞いは自動テストで守られていないため、standalone（backend jar ＋ Vite ＋ Electron）＋ 実 H.264 MP4 での
+>     目視確認が必要。testid は付与済みなので automator 化は容易。
 > - **複数 ROI の選択解析**（現状は直近 1 つの矩形/楕円のみ）。
 > - フレーム精度シーク（現状はオフスクリーン `<video>` の time シーク＝GOP 近似。厳密フレーム精度が要るなら
 >   `setFrameNumber`/`requestVideoFrameCallback` 経路）。

@@ -3,7 +3,14 @@
  * Author: Tatsuaki Kobayashi
  */
 import { describe, it, expect } from "vitest";
-import { computeRoiStats, timeSeriesToCsv, type TimeSeriesPoint } from "./videoRoiAnalysis";
+import {
+  computeRoiHistogram,
+  computeRoiStats,
+  histogramToCsv,
+  roiBboxPixels,
+  timeSeriesToCsv,
+  type TimeSeriesPoint,
+} from "./videoRoiAnalysis";
 
 /** bw*bh の RGBA バッファを作る。`pixel(px,py)` が [r,g,b]（a は 255 固定）。 */
 function makeRgba(bw: number, bh: number, pixel: (px: number, py: number) => [number, number, number]): Uint8ClampedArray {
@@ -65,6 +72,88 @@ describe("computeRoiStats", () => {
     expect(s.minY).toBeCloseTo(40, 6);
     expect(s.maxY).toBeCloseTo(40, 6);
     expect(s.sdY).toBeCloseTo(0, 6);
+  });
+});
+
+describe("computeRoiHistogram", () => {
+  it("uniform: 全画素が 1 つのビンに入る", () => {
+    const data = makeRgba(4, 3, () => [100, 100, 100]); // luma = 100
+    const h = computeRoiHistogram(data, 4, 3, "rect", 64);
+    expect(h.total).toBe(12);
+    expect(h.binCount).toBe(64);
+    expect(h.binWidth).toBeCloseTo(4, 12);
+    expect(h.counts[Math.floor(100 / 4)]).toBe(12);
+    expect(h.counts.reduce((a, b) => a + b, 0)).toBe(12);
+    expect(h.peakCount).toBe(12);
+  });
+
+  it("黒と白は 2 ビン構成の両端に分かれる", () => {
+    const data = makeRgba(2, 1, (px) => (px === 0 ? [0, 0, 0] : [255, 255, 255]));
+    const h = computeRoiHistogram(data, 2, 1, "rect", 2);
+    expect(h.counts).toEqual([1, 1]);
+    expect(h.binWidth).toBe(128);
+  });
+
+  it("輝度 255 は最終ビンに入れる（floor で溢れさせない）", () => {
+    const data = makeRgba(1, 1, () => [255, 255, 255]);
+    const h = computeRoiHistogram(data, 1, 1, "rect", 256);
+    expect(h.counts[255]).toBe(1);
+    expect(h.counts.length).toBe(256);
+  });
+
+  it("楕円マスクは統計と同じ画素集合を使う（5x5 → 21px）", () => {
+    const data = makeRgba(5, 5, () => [100, 100, 100]);
+    const h = computeRoiHistogram(data, 5, 5, "ellipse", 64);
+    expect(h.total).toBe(21);
+    expect(h.total).toBe(computeRoiStats(data, 5, 5, "ellipse").nPixels);
+  });
+
+  it("ビン数は最低 1 に丸める", () => {
+    const data = makeRgba(2, 1, () => [10, 10, 10]);
+    const h = computeRoiHistogram(data, 2, 1, "rect", 0);
+    expect(h.binCount).toBe(1);
+    expect(h.counts).toEqual([2]);
+  });
+});
+
+describe("histogramToCsv", () => {
+  it("ビン境界と度数を出す", () => {
+    const data = makeRgba(2, 1, (px) => (px === 0 ? [0, 0, 0] : [255, 255, 255]));
+    const csv = histogramToCsv(computeRoiHistogram(data, 2, 1, "rect", 2));
+    expect(csv.trimEnd().split("\r\n")).toEqual([
+      "bin_start,bin_end,count",
+      "0.00,128.00,1",
+      "128.00,256.00,1",
+    ]);
+  });
+});
+
+describe("roiBboxPixels", () => {
+  it("端点の順序によらず min/max を取る", () => {
+    expect(roiBboxPixels({ shape: "rect", x0: 30, y0: 20, x1: 10, y1: 5 }, 100, 100)).toEqual({
+      x: 10,
+      y: 5,
+      w: 21,
+      h: 16,
+    });
+  });
+
+  it("画像外にはみ出した ROI は画像内へクランプする", () => {
+    expect(roiBboxPixels({ shape: "rect", x0: -50, y0: -50, x1: 500, y1: 500 }, 64, 48)).toEqual({
+      x: 0,
+      y: 0,
+      w: 64,
+      h: 48,
+    });
+  });
+
+  it("退化した ROI でも 1px は確保する", () => {
+    expect(roiBboxPixels({ shape: "ellipse", x0: 7.2, y0: 3.4, x1: 7.2, y1: 3.4 }, 64, 48)).toEqual({
+      x: 7,
+      y: 3,
+      w: 1,
+      h: 1,
+    });
   });
 });
 

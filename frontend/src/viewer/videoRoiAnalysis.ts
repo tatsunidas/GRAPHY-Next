@@ -111,6 +111,95 @@ export function computeRoiStats(
   };
 }
 
+/** ROI 内輝度のヒストグラム（8bit 動画なので値域は 0–255 固定）。 */
+export interface RoiHistogram {
+  counts: number[];
+  binCount: number;
+  /** 1 ビンの輝度幅（= 256 / binCount）。 */
+  binWidth: number;
+  /** 総画素数（= RoiFrameStats.nPixels）。 */
+  total: number;
+  /** 最頻ビンの度数（縦軸スケール用）。 */
+  peakCount: number;
+}
+
+/**
+ * bbox の RGBA 画素列から ROI 内輝度ヒストグラムを作る純粋関数。値域は 0–255 を `binCount` 等分。
+ * 輝度 255 は最終ビンに入れる（`floor` だと 1 つ溢れるためクランプする）。
+ */
+export function computeRoiHistogram(
+  data: Uint8ClampedArray | number[],
+  bw: number,
+  bh: number,
+  shape: "rect" | "ellipse",
+  binCount = 64,
+): RoiHistogram {
+  const nBins = Math.max(1, Math.round(binCount));
+  const counts = new Array<number>(nBins).fill(0);
+  const cx = (bw - 1) / 2;
+  const cy = (bh - 1) / 2;
+  const rx = Math.max(0.5, bw / 2);
+  const ry = Math.max(0.5, bh / 2);
+
+  let total = 0;
+  for (let py = 0; py < bh; py++) {
+    for (let px = 0; px < bw; px++) {
+      if (shape === "ellipse") {
+        const nxp = (px - cx) / rx;
+        const nyp = (py - cy) / ry;
+        if (nxp * nxp + nyp * nyp > 1) {
+          continue;
+        }
+      }
+      const i = (py * bw + px) * 4;
+      const y = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      const bin = clamp(Math.floor((clamp(y, 0, 255) / 256) * nBins), 0, nBins - 1);
+      counts[bin]++;
+      total++;
+    }
+  }
+  return {
+    counts,
+    binCount: nBins,
+    binWidth: 256 / nBins,
+    total,
+    peakCount: counts.reduce((a, b) => Math.max(a, b), 0),
+  };
+}
+
+/**
+ * ヒストグラムを CSV にする。列: `bin_start,bin_end,count`（bin_end は開区間の上端）。
+ */
+export function histogramToCsv(hist: RoiHistogram): string {
+  const lines = hist.counts.map((c, i) => {
+    const lo = i * hist.binWidth;
+    return `${lo.toFixed(2)},${(lo + hist.binWidth).toFixed(2)},${c}`;
+  });
+  return ["bin_start,bin_end,count", ...lines].join("\r\n") + "\r\n";
+}
+
+/** ピクセル整数の bbox（`getImageData` に渡せる形）。 */
+export interface RoiBbox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * ROI（world=pixel の任意 2 点）を画像内に収まる整数 bbox に正規化する純粋関数。
+ * 端点の順序は問わない（min/max を取る）。画像外は画像内へクランプし、幅・高さは最低 1px。
+ */
+export function roiBboxPixels(roi: RoiPixels, cols: number, rows: number): RoiBbox {
+  const maxX = Math.max(0, cols - 1);
+  const maxY = Math.max(0, rows - 1);
+  const x0 = clamp(Math.round(Math.min(roi.x0, roi.x1)), 0, maxX);
+  const y0 = clamp(Math.round(Math.min(roi.y0, roi.y1)), 0, maxY);
+  const x1 = clamp(Math.round(Math.max(roi.x0, roi.x1)), 0, maxX);
+  const y1 = clamp(Math.round(Math.max(roi.y0, roi.y1)), 0, maxY);
+  return { x: x0, y: y0, w: Math.max(1, x1 - x0 + 1), h: Math.max(1, y1 - y0 + 1) };
+}
+
 function seekTo(v: HTMLVideoElement, t: number): Promise<void> {
   return new Promise((resolve) => {
     const onSeeked = () => {
@@ -122,22 +211,20 @@ function seekTo(v: HTMLVideoElement, t: number): Promise<void> {
   });
 }
 
+/** ROI の bbox 画素を任意フレームから取り出すサンプラ（オフスクリーン `<video>` ＋ canvas）。 */
+interface FrameSampler {
+  fps: number;
+  nFrames: number;
+  /** frame は 1-based。返る `data` は bbox 範囲の RGBA。 */
+  sample(roi: RoiPixels, frame: number): Promise<{ data: Uint8ClampedArray; bw: number; bh: number }>;
+  close(): void;
+}
+
 /**
- * グローバル ROI の時系列（全フレームの ROI 内平均輝度/平均 RGB）を算出する。
- *
- * @param renderedUrl `/api/instances/{sop}/rendered`
- * @param meta        動画諸元（columns/rows/fps/numberOfFrames）
- * @param roi         ピクセル座標の ROI（rect/ellipse）
- * @param onProgress  進捗コールバック（done, total）
- * @param signal      中断（AbortSignal）
+ * オフスクリーン `<video>` を開き、フレーム単位で ROI 画素を読めるようにする。
+ * `analyzeGlobalRoi`（全フレーム走査）と `analyzeFrameRoi`（単一フレーム）で共有する。
  */
-export async function analyzeGlobalRoi(
-  renderedUrl: string,
-  meta: VideoMetadata,
-  roi: RoiPixels,
-  onProgress?: (done: number, total: number) => void,
-  signal?: AbortSignal,
-): Promise<TimeSeriesPoint[]> {
+async function createFrameSampler(renderedUrl: string, meta: VideoMetadata): Promise<FrameSampler> {
   const cols = meta.columns;
   const rows = meta.rows;
   if (cols <= 0 || rows <= 0) {
@@ -167,47 +254,115 @@ export async function analyzeGlobalRoi(
       video.addEventListener("loadedmetadata", onMeta);
       video.addEventListener("error", onErr);
     });
+  } catch (e) {
+    video.removeAttribute("src");
+    video.load();
+    throw e;
+  }
 
-    const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
-    const fps = meta.fps > 0 ? meta.fps : duration > 0 ? meta.numberOfFrames / duration : 30;
-    const nFrames = Math.max(1, meta.numberOfFrames);
+  const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
+  const fps = meta.fps > 0 ? meta.fps : duration > 0 ? meta.numberOfFrames / duration : 30;
+  const nFrames = Math.max(1, meta.numberOfFrames);
 
-    // ROI bbox（ピクセル）をクランプ。
-    const bx0 = clamp(Math.round(Math.min(roi.x0, roi.x1)), 0, cols - 1);
-    const by0 = clamp(Math.round(Math.min(roi.y0, roi.y1)), 0, rows - 1);
-    const bx1 = clamp(Math.round(Math.max(roi.x0, roi.x1)), 0, cols - 1);
-    const by1 = clamp(Math.round(Math.max(roi.y0, roi.y1)), 0, rows - 1);
-    const bw = Math.max(1, bx1 - bx0 + 1);
-    const bh = Math.max(1, by1 - by0 + 1);
+  const canvas = document.createElement("canvas");
+  canvas.width = cols;
+  canvas.height = rows;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) {
+    video.removeAttribute("src");
+    video.load();
+    throw new Error("2d context unavailable");
+  }
 
-    const canvas = document.createElement("canvas");
-    canvas.width = cols;
-    canvas.height = rows;
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) {
-      throw new Error("2d context unavailable");
-    }
-
-    const series: TimeSeriesPoint[] = [];
-    for (let f = 0; f < nFrames; f++) {
-      if (signal?.aborted) {
-        throw new DOMException("aborted", "AbortError");
-      }
+  return {
+    fps,
+    nFrames,
+    async sample(roi, frame) {
+      const box = roiBboxPixels(roi, cols, rows);
       // フレーム中心の時刻へシーク（duration を僅かに超えないようクランプ）。
-      const tExact = (f + 0.5) / fps;
+      const tExact = (frame - 1 + 0.5) / fps;
       const t = duration > 0 ? Math.min(tExact, duration - 1e-3) : tExact;
       await seekTo(video, Math.max(0, t));
       ctx.drawImage(video, 0, 0, cols, rows);
-      const data = ctx.getImageData(bx0, by0, bw, bh).data; // RGBA
+      return { data: ctx.getImageData(box.x, box.y, box.w, box.h).data, bw: box.w, bh: box.h };
+    },
+    close() {
+      video.removeAttribute("src");
+      video.load(); // デコーダ解放
+    },
+  };
+}
 
+/**
+ * グローバル ROI の時系列（全フレームの ROI 内平均輝度/平均 RGB）を算出する。
+ *
+ * @param renderedUrl `/api/instances/{sop}/rendered`
+ * @param meta        動画諸元（columns/rows/fps/numberOfFrames）
+ * @param roi         ピクセル座標の ROI（rect/ellipse）
+ * @param onProgress  進捗コールバック（done, total）
+ * @param signal      中断（AbortSignal）
+ */
+export async function analyzeGlobalRoi(
+  renderedUrl: string,
+  meta: VideoMetadata,
+  roi: RoiPixels,
+  onProgress?: (done: number, total: number) => void,
+  signal?: AbortSignal,
+): Promise<TimeSeriesPoint[]> {
+  const sampler = await createFrameSampler(renderedUrl, meta);
+  try {
+    const series: TimeSeriesPoint[] = [];
+    for (let f = 1; f <= sampler.nFrames; f++) {
+      if (signal?.aborted) {
+        throw new DOMException("aborted", "AbortError");
+      }
+      const { data, bw, bh } = await sampler.sample(roi, f);
       const stats = computeRoiStats(data, bw, bh, roi.shape);
-      series.push({ frame: f + 1, timeSec: f / fps, ...stats });
-      onProgress?.(f + 1, nFrames);
+      series.push({ frame: f, timeSec: (f - 1) / sampler.fps, ...stats });
+      onProgress?.(f, sampler.nFrames);
     }
     return series;
   } finally {
-    video.removeAttribute("src");
-    video.load(); // デコーダ解放
+    sampler.close();
+  }
+}
+
+/** 単一フレーム解析の結果（統計＋ヒストグラム＋面積）。 */
+export interface FrameRoiResult extends RoiFrameStats {
+  frame: number;
+  timeSec: number;
+  /** ROI bbox（px）。面積は nPixels（PixelSpacing 未供給のため px² 単位）。 */
+  bbox: RoiBbox;
+  histogram: RoiHistogram;
+}
+
+/**
+ * フレーム指定 ROI の単一フレーム統計（面積・平均/最大/最小・SD・ヒストグラム）を算出する（§12 モード①）。
+ *
+ * @param frame 1-based フレーム番号
+ * @param bins  ヒストグラムのビン数
+ */
+export async function analyzeFrameRoi(
+  renderedUrl: string,
+  meta: VideoMetadata,
+  roi: RoiPixels,
+  frame: number,
+  bins = 64,
+): Promise<FrameRoiResult> {
+  const sampler = await createFrameSampler(renderedUrl, meta);
+  try {
+    const f = Math.min(Math.max(1, Math.round(frame)), sampler.nFrames);
+    const { data, bw, bh } = await sampler.sample(roi, f);
+    const stats = computeRoiStats(data, bw, bh, roi.shape);
+    return {
+      ...stats,
+      frame: f,
+      timeSec: (f - 1) / sampler.fps,
+      bbox: roiBboxPixels(roi, meta.columns, meta.rows),
+      histogram: computeRoiHistogram(data, bw, bh, roi.shape, bins),
+    };
+  } finally {
+    sampler.close();
   }
 }
 
