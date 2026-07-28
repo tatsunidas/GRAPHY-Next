@@ -107,7 +107,9 @@ public class PluginInstaller {
         InstalledPlugin rec = new InstalledPlugin(
                 desc.id(), desc.name(), desc.version(), source, sha,
                 true, false, Instant.now().toString(), trust == null ? "community" : trust,
-                signerKeyId, signerPublicKey);
+                signerKeyId, signerPublicKey,
+                // JAR の有無は「反映に再起動が要るか」の判断材料。導入時に確定するので台帳へ持たせる。
+                PluginPackage.contents(zip, base).jars());
         ledger.upsert(rec);
         Files.deleteIfExists(target.resolve(DISABLED_MARKER));
         log.info("[plugin-manager] installed {} v{} from {} ({})",

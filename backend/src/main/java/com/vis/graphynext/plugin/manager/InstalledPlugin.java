@@ -6,6 +6,8 @@ package com.vis.graphynext.plugin.manager;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
+import java.util.List;
+
 /**
  * インストール台帳（{@code <pluginsDir>/installed.json}）の 1 エントリ。
  *
@@ -39,7 +41,15 @@ public record InstalledPlugin(
          * <b>初回に見た鍵を固定する</b>のが目的。更新時はリリースが提示する鍵ではなく
          * これで検証するので、リポジトリを乗っ取って鍵ごと差し替える攻撃を更新時に弾ける。
          */
-        String signerPublicKey) {
+        String signerPublicKey,
+        /**
+         * 同梱 JAR のファイル名（無ければ空）。
+         *
+         * <p>JAR を含むプラグインは {@code StandalonePluginRegistry} がクラスローダを id 単位で
+         * キャッシュするため、導入/更新/削除の反映に<b>アプリ再起動</b>が要る。フロントはこれを見て
+         * 再起動バナーを出すか決める（UI のみなら画面リロードで足りる）。
+         */
+        List<String> jars) {
 
     /**
      * 取得元。

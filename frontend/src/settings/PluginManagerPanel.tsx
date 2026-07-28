@@ -21,6 +21,7 @@ import {
   type PluginPreview,
 } from "../plugins/pluginManagerApi";
 import { PluginConsentDialog } from "./PluginConsentDialog";
+import { markRestartRequired } from "../restartRequiredEvents";
 
 /**
  * 環境設定の「プラグイン」カスタムパネル。
@@ -129,8 +130,17 @@ export function PluginManagerPanel() {
     }
   };
 
-  const installConfirmed = (preview: PluginPreview, file: File | undefined, acknowledgeUnverified: boolean) =>
-    run(
+  /**
+   * JAR を含むプラグインは backend のクラスローダが id 単位でキャッシュされるため、
+   * 導入/更新/削除/有効無効の反映にアプリ再起動が要る。全ウィンドウに再起動バナーを出す。
+   * UI のみのプラグインは画面リロードで足りるので出さない（`pluginmgr.reloadNote` で案内）。
+   */
+  const markRestartIfJar = (jars: string[] | null | undefined) => {
+    if (jars && jars.length > 0) markRestartRequired("plugin");
+  };
+
+  const installConfirmed = async (preview: PluginPreview, file: File | undefined, acknowledgeUnverified: boolean) => {
+    const ok = await run(
       "confirm",
       () =>
         file
@@ -138,6 +148,9 @@ export function PluginManagerPanel() {
           : installPluginFromGitHub(repo.trim(), version.trim() || undefined, preview.sha256, acknowledgeUnverified),
       "pluginmgr.installed_result",
     );
+    if (ok) markRestartIfJar(preview.jars);
+    return ok;
+  };
 
   const installGithub = () => {
     if (!repoValid) return;
@@ -156,14 +169,17 @@ export function PluginManagerPanel() {
   };
 
   const toggleEnabled = (p: InstalledPlugin) =>
-    void run(p.id, () => (p.enabled ? disablePlugin(p.id) : enablePlugin(p.id)), "pluginmgr.updated");
+    void run(p.id, () => (p.enabled ? disablePlugin(p.id) : enablePlugin(p.id)), "pluginmgr.updated")
+      .then((ok) => ok && markRestartIfJar(p.jars));
 
   const doReinstall = (p: InstalledPlugin) =>
-    void run(p.id, () => reinstallPlugin(p.id), "pluginmgr.installed_result");
+    void run(p.id, () => reinstallPlugin(p.id), "pluginmgr.installed_result")
+      .then((ok) => ok && markRestartIfJar(p.jars));
 
   const doUninstall = (p: InstalledPlugin) => {
     if (!window.confirm(t("pluginmgr.confirmUninstall", { name: p.name || p.id }))) return;
-    void run(p.id, () => uninstallPlugin(p.id), "pluginmgr.removed");
+    void run(p.id, () => uninstallPlugin(p.id), "pluginmgr.removed")
+      .then((ok) => ok && markRestartIfJar(p.jars));
   };
 
   if (!loaded) return <div style={{ color: "#888" }}>{t("common.loading")}</div>;

@@ -22,7 +22,7 @@ import { LogViewerHost } from "./system/LogViewer";
 import { DeveloperContactHost } from "./help/DeveloperContact";
 import { UninstallGuideHost } from "./help/UninstallGuide";
 import { UpdateNoticeHost, runUpdateCheck } from "./help/UpdateNotice";
-import { isRestartRequired, subscribeRestartRequired, clearRestartRequired } from "./restartRequiredEvents";
+import { restartRequiredReason, subscribeRestartRequired, clearRestartRequired } from "./restartRequiredEvents";
 import { desktop } from "./desktopBridge";
 import { useI18n } from "./i18n/i18n";
 
@@ -169,21 +169,25 @@ export function App() {
       <UpdateNoticeHost />
       {/* 別ウィンドウ（2D Viewer）では DB 変更時に再読込/開き直しをポップアップで促す。 */}
       {screen === "2dviewer" && <DbChangeNotice />}
-      {/* DICOM 自局設定（SCP ポート/バインドアドレス等）を変更した後、全ウィンドウで再起動を促す。 */}
+      {/* 起動時にしか反映されない変更（DICOM 自局設定・JAR 入りプラグイン）後、全ウィンドウで再起動を促す。 */}
       <RestartRequiredNotice />
     </>
   );
 }
 
-/** SCP リスナー起動時にしか反映されない設定（自局 AE）の変更後、再起動を促すバナー。 */
+/**
+ * 起動時にしか反映されないものを変更した後、再起動を促すバナー。
+ * 対象: 自局 AE 設定（SCP リスナー）と、JAR を含むプラグインの導入/更新/削除
+ * （`StandalonePluginRegistry` がクラスローダを id 単位でキャッシュするため）。
+ */
 function RestartRequiredNotice() {
   const { t } = useI18n();
-  const [required, setRequired] = useState(() => isRestartRequired());
+  const [reason, setReason] = useState(() => restartRequiredReason());
   const [relaunching, setRelaunching] = useState(false);
 
-  useEffect(() => subscribeRestartRequired(setRequired), []);
+  useEffect(() => subscribeRestartRequired(setReason), []);
 
-  if (!required) return null;
+  if (!reason) return null;
 
   const canRelaunch = !!desktop()?.relaunch;
 
@@ -199,7 +203,7 @@ function RestartRequiredNotice() {
 
   return (
     <div style={noticeBar}>
-      <span>{t("restartNotice.message")}</span>
+      <span>{t(reason === "plugin" ? "restartNotice.messagePlugin" : "restartNotice.message")}</span>
       {canRelaunch ? (
         <button style={noticeBtn} onClick={() => void restart()} disabled={relaunching}>
           {relaunching ? t("restartNotice.restarting") : t("restartNotice.restart")}
@@ -207,7 +211,8 @@ function RestartRequiredNotice() {
       ) : (
         <span style={{ color: "#8a7b3a" }}>{t("restartNotice.manual")}</span>
       )}
-      <button style={noticeDismiss} onClick={() => setRequired(false)} aria-label={t("common.close")}>
+      {/* ✕ はこのウィンドウで隠すだけ（フラグは残す＝再起動するまで次回起動時にまた出る）。 */}
+      <button style={noticeDismiss} onClick={() => setReason(null)} aria-label={t("common.close")}>
         ✕
       </button>
     </div>

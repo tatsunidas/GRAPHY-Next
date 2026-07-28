@@ -242,6 +242,28 @@ BLAKE2b の自前実装は省略できない。
 
 ---
 
+## 5.3 反映（リロード / 再起動）— 2026-07-28 追加
+
+プラグインの変更が効くタイミングは**中身によって違う**。
+
+| 種類 | 反映に必要なもの | 理由 |
+|---|---|---|
+| UI のみ（`ui.js`） | 画面のリロード | フロントが起動時に `/api/plugins` を読んで動的 import するため |
+| **JAR を含む** | **アプリの再起動** | `StandalonePluginRegistry` が `URLClassLoader` を id 単位でキャッシュし、同 id の JAR 差し替えを拾わないため |
+
+JAR 入りを導入・更新・削除・有効無効した直後は、既存の再起動バナー（`App.tsx` の
+`RestartRequiredNotice` → Electron `graphy:relaunch`）を出す。判定材料として、導入時に
+**同梱 JAR のファイル名を台帳（`InstalledPlugin.jars`）に記録**しておき、フロントは
+`jars.length > 0` のときだけ `markRestartRequired("plugin")` を呼ぶ。
+
+- バナーは DICOM 自局設定でも使うため、`restartRequiredEvents` は**理由**（`dicom` / `plugin`）を
+  持つようにした。文言を取り違えると誤案内になる（旧形式 `"1"` は `dicom` として後方互換）。
+- 解除の合図 `"0"` を理由と誤解すると再起動不要なのにバナーが出続けるため、
+  `restartRequiredEvents.test.ts` で解釈を固定している。
+- ✕ で閉じてもフラグは残る（次回起動時にまた出る＝再起動するまで消えない安全側）。
+
+---
+
 ## 6. 私有・クローズドなプラグイン
 
 - **個人/組織内 private** → GitHub 認証で可視化。P1 は PAT（`github-token`）で private repo の
@@ -277,9 +299,11 @@ BLAKE2b の自前実装は省略できない。
     **テンプレート `examples/plugin-template/`**（`plugin.json`/`ui.js`/`graphy-plugin.d.ts`/GitHub Action/
     `backend-optional/`）＝第三者が作り始められる状態
   - ✅ minisign 署名（Ed25519）＋TOFU＋信頼ティアの実体化（2026-07-28・§5.2）
+  - ✅ 再起動反映（`graphy:relaunch`）＝JAR を含むプラグインの導入/更新/削除/有効無効の後に
+    再起動バナーを出す（2026-07-28・§5.3）
+  - ✅ 公式署名鍵の生成と `trusted-keys` への設定（2026-07-28・`plugin-signing-runbook.md`）
   - 残: 公式索引 discovery／GitHub OAuth Device Flow／更新通知＋changelog／
-    再起動反映（`graphy:relaunch`）／`examples/plugin-template/` を独立
-    「Use this template」リポジトリへ昇格／**公式署名鍵の生成と `trusted-keys` への設定**（運用）
+    `examples/plugin-template/` を独立「Use this template」リポジトリへ昇格
 - **P3**: フロント iframe/Worker サンドボックス／backend プロセス隔離／web サンドボックス
   （DICOMweb サイドカー）／商用ライセンスキー／ロールバック履歴／障害プラグインの自動無効化。
 
