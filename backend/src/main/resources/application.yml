@@ -51,8 +51,11 @@ graphy:
     # index-url: https://raw.githubusercontent.com/vis-ionary/graphy-plugins-index/main/index.json
     # 信頼する minisign 公開鍵（base64 行）。ここに載る鍵で署名検証できたプラグインは
     # verified 扱いになり、確認画面なしでそのまま導入できる。設計: fw/plugin-manager-design.md §5.2。
-    # trusted-keys:
-    #   - RWQ...（公式配布鍵）
+    # 公開鍵は秘密ではないのでコミットしてよい（秘密鍵とパスフレーズは配布側で厳重に保管する）。
+    # 鍵の生成・保管・ローテーション手順: fw/plugin-signing-runbook.md
+    trusted-keys:
+      # 公式プラグイン配布鍵（鍵 ID 98EA7C6BA2D50118・2026-07-28 登録）
+      - "RWQYAdWia3zqmCJxZSCcze0JrUzO5Qvs2oNuIt5a0QbWsoZTbjJqhjNT"
     # GitHub API のベース URL。GitHub Enterprise / 社内ミラー向け（既定は https://api.github.com）。
     # https のみ許可（平文 http や不正な URL は起動時にエラーで落とす）。
     # github-api-base: https://github.example.com/api/v3

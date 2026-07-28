@@ -44,6 +44,10 @@ minisign -G -p minisign.pub -s minisign.key
 
 ## 3. アプリ側に信頼鍵として登録する
 
+> ✅ **公式配布鍵は登録済み（2026-07-28）**: 鍵 ID `98EA7C6BA2D50118`。
+> `backend/src/main/resources/application.yml` の `graphy.plugins.trusted-keys` を参照。
+> 秘密鍵とパスフレーズは生成した本人が保管している（リポジトリにもエージェントにも渡していない）。
+
 `backend/src/main/resources/application.yml`:
 
 ```yaml
