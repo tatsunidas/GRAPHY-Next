@@ -5,6 +5,9 @@
 > 2026-07-28 に導入ゲートを「管理者ゲート＋ユーザーのオプトイン トグル」の 2 段に変更（§5）。
 > 署名 / discovery / OAuth は将来（§8 の P2 残）。
 > 関連: [`plugin-architecture.md`](plugin-architecture.md)（実行レイヤ＝継ぎ目）、[`plugin-authoring-guide.md`](plugin-authoring-guide.md)
+>
+> 📖 **全体像を先に掴むなら [`plugin-explainer.md`](plugin-explainer.md)**（2 レイヤ・導入の全経路・
+> 4 段の検証・web/desktop の違いを 1 本にまとめた解説。GRAPHY Lab 記事の原稿もここから）
 
 ImageJ/Fiji の "update site" に相当する、プラグインの**配布・取得・ライフサイクル管理**レイヤ。
 実行レイヤ（`PluginRegistry` / `/api/plugins` / `ui.js` 動的 import / JAR 実行）は
