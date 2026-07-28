@@ -192,7 +192,17 @@ public class PluginManagerService {
      * @param pluginId 判定対象の id（TOFU の照合に使う。検査時点で判明している）
      */
     private SignatureState evaluateSignature(byte[] content, String sigText, String offeredKeyText, String pluginId) {
-        if (sigText == null) return SignatureState.unsigned();
+        String pinnedKey = pinnedKeyOf(pluginId);
+        if (sigText == null) {
+            // 署名の剥がし対策: 前回は署名付きで入れたのに今回は署名が無い、というのは
+            // 乗っ取り側が TOFU を回避する最短経路なので拒否する（同意では通さない）。
+            if (pinnedKey != null) {
+                return SignatureState.invalid(null,
+                        "the installed version was signed (key " + Minisign.parseKey(pinnedKey).keyId()
+                        + ") but this package has no signature");
+            }
+            return SignatureState.unsigned();
+        }
         Minisign.Sig sig;
         try {
             sig = Minisign.parseSig(sigText);
@@ -216,11 +226,8 @@ public class PluginManagerService {
         }
 
         // ② 以前この id を入れたときの鍵（TOFU）。リリースが新しい鍵を出してきても、こちらを優先する。
-        Optional<InstalledPlugin> known = pluginId == null ? Optional.empty()
-                : installer.installed().stream().filter(p -> p.id().equals(pluginId)).findFirst();
-        String pinned = known.map(InstalledPlugin::signerPublicKey).orElse(null);
-        if (pinned != null) {
-            Minisign.Key key = Minisign.parseKey(pinned);
+        if (pinnedKey != null) {
+            Minisign.Key key = Minisign.parseKey(pinnedKey);
             if (!key.keyId().equalsIgnoreCase(sig.keyId())) {
                 return SignatureState.invalid(sig.keyId(),
                         "signed by a different key than the installed version (expected " + key.keyId() + ")");
@@ -243,6 +250,16 @@ public class PluginManagerService {
         return Minisign.verify(content, sig, key)
                 ? SignatureState.firstUse(key, sig)
                 : SignatureState.invalid(sig.keyId(), "signature does not match the published key");
+    }
+
+    /** 導入済みの同 id に固定されている署名鍵（未導入・未署名で入れていたなら null）。 */
+    private String pinnedKeyOf(String pluginId) {
+        if (pluginId == null) return null;
+        return installer.installed().stream()
+                .filter(p -> p.id().equals(pluginId))
+                .map(InstalledPlugin::signerPublicKey)
+                .filter(k -> k != null && !k.isBlank())
+                .findFirst().orElse(null);
     }
 
     /**

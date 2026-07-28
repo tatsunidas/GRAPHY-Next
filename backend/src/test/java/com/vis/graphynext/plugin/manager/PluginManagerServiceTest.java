@@ -409,6 +409,30 @@ class PluginManagerServiceTest {
         assertTrue(p.alreadyInstalled());
     }
 
+    /**
+     * 署名の剥がし対策。乗っ取り側が {@code .minisig} を出さないだけで TOFU を回避できてしまうと
+     * 署名の意味が無くなるため、以前署名付きで入れた id の未署名更新は拒否する。
+     */
+    @Test
+    void unsignedUpdateOfAPreviouslySignedPluginIsRejected(@TempDir Path dir) throws Exception {
+        byte[] zip = pluginZip();
+        MinisignFixture key = new MinisignFixture("00112233445566a0");
+        PluginManagerService signed = service(dir, signedClient(zip, key.sign(zip, "v1"), key.publicKey()),
+                true, "standalone", true, List.of());
+        signed.installFromGitHub("owner/acme", null, null, true);
+
+        // 同じ id を、署名を剥がしたリリースで更新しようとする。
+        PluginManagerService stripped = service(dir, fakeClient(zip), true, "standalone");
+
+        PluginManagerService.PluginPreview p = stripped.inspectGitHub("owner/acme", null);
+        assertEquals("invalid", p.signature());
+        assertTrue(p.signatureProblem().contains("no signature"), p.signatureProblem());
+
+        PluginInstallException e = assertThrows(PluginInstallException.class,
+                () -> stripped.installFromGitHub("owner/acme", null, null, true)); // 承知しても通さない
+        assertTrue(e.getMessage().contains("signature check failed"), e.getMessage());
+    }
+
     @Test
     void unsignedReleaseIsUnchangedFromBefore(@TempDir Path dir) throws Exception {
         PluginManagerService svc = service(dir, fakeClient(pluginZip()), true, "standalone");

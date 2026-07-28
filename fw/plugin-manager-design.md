@@ -209,6 +209,7 @@ POST /install/github | /install/file   confirmedSha256 付きで再取得 → �
 | ② | 台帳に固定済みの鍵（前回導入時） | `pinned` | **同意画面なしで導入**（更新は押すだけ） |
 | ③ | リリースが提示する `minisign.pub` | `first-use` | 同意画面を出す。導入時にその鍵を台帳へ固定 |
 | — | 上記いずれでも検証失敗・鍵 ID 不一致 | `invalid` | **無条件で拒否**（`acknowledgeUnverified` でも通さない） |
+| — | 固定鍵があるのに**署名が無い**（剥がし） | `invalid` | 同上。乗っ取り側が `.minisig` を出さないだけで TOFU を回避できてしまうため |
 
 ②が **TOFU**（trust on first use）の要。台帳（`InstalledPlugin.signerKeyId` / `signerPublicKey`）に
 初回の鍵を固定し、更新時は**リリースが同梱してくる鍵ではなく固定した鍵で**検証する。
@@ -226,7 +227,8 @@ POST /install/github | /install/file   confirmedSha256 付きで再取得 → �
 `PluginManagerServiceTest` が実行時生成の鍵で検証する。
 
 **運用上の注意**: 配布者が秘密鍵を失う／鍵を変えると、既存利用者は更新できなくなる（拒否される）。
-テンプレートの README に明記済み。
+復旧はアンインストール→再導入。鍵の生成・保管・ローテーション手順は
+[`plugin-signing-runbook.md`](plugin-signing-runbook.md) にまとめた（**公式鍵の生成はまだ未了**）。
 
 ---
 
