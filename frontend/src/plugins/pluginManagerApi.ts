@@ -26,6 +26,11 @@ export interface InstalledPlugin {
   pinned: boolean;
   installedAt: string | null;
   trust: string; // verified | community | local
+  /**
+   * 同梱 JAR のファイル名（無ければ空）。JAR を含むプラグインは backend のクラスローダが
+   * id 単位でキャッシュされるため、導入/更新/削除の反映にアプリ再起動が要る。
+   */
+  jars: string[] | null;
 }
 
 /** 導入操作の可否（フロントが導入 UI とオプトイン トグルを出すか判断する）。 */

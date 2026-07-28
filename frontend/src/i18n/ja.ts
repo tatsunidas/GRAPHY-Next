@@ -21,6 +21,7 @@ export const ja: Record<string, string> = {
   "dbnotice.message": "データベースが更新されました。表示中のデータを再読込するか、一旦開き直してください。",
   "dbnotice.reload": "再読込",
   "restartNotice.message": "自局の DICOM 設定が変更されました。SCP リスナーに反映するにはアプリの再起動が必要です。",
+  "restartNotice.messagePlugin": "プラグインの構成が変更されました。反映するにはアプリの再起動が必要です。",
   "restartNotice.restart": "今すぐ再起動",
   "restartNotice.restarting": "再起動中…",
   "restartNotice.manual": "手動でアプリを再起動してください。",

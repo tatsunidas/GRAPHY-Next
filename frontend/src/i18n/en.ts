@@ -21,6 +21,7 @@ export const en: Record<string, string> = {
   "dbnotice.message": "The database was updated. Please reload the displayed data, or reopen it.",
   "dbnotice.reload": "Reload",
   "restartNotice.message": "Local AE settings changed. Restart the app for the SCP listener to use the new settings.",
+  "restartNotice.messagePlugin": "Plugins changed. Restart the app for the change to take effect.",
   "restartNotice.restart": "Restart now",
   "restartNotice.restarting": "Restarting…",
   "restartNotice.manual": "Please restart the app manually.",

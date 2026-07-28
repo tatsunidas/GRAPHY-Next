@@ -12,6 +12,7 @@ import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.zip.ZipEntry;
@@ -59,6 +60,26 @@ class PluginInstallerTest {
         m.put("plugin.json", manifest(id, enginesRange).getBytes(StandardCharsets.UTF_8));
         m.put("ui.js", "export function activate(h){}".getBytes(StandardCharsets.UTF_8));
         return m;
+    }
+
+    /**
+     * 同梱 JAR を台帳に記録する。フロントはこれを見て「反映に再起動が要るか」を決めるので
+     * （JAR ありはクラスローダのキャッシュにより再起動必須・UI のみは画面リロードで足りる）、
+     * 記録が落ちると再起動バナーが出ず、更新したのに古い JAR が動き続ける。
+     */
+    @Test
+    void recordsBundledJarsInLedger(@TempDir Path dir) throws Exception {
+        Map<String, byte[]> withJar = flat("hello", null);
+        withJar.put("backend.jar", "not really a jar".getBytes(StandardCharsets.UTF_8));
+
+        InstalledPlugin rec = installer(dir, "0.2.5").install(zip(withJar), SRC, null, "local");
+        assertEquals(List.of("backend.jar"), rec.jars());
+        // 台帳から読み直しても保持されること（再起動判定はこちらを使う）。
+        assertEquals(List.of("backend.jar"), installer(dir, "0.2.5").installed().get(0).jars());
+
+        // UI のみなら空＝再起動不要。
+        InstalledPlugin uiOnly = installer(dir, "0.2.5").install(zip(flat("uionly", null)), SRC, null, "local");
+        assertTrue(uiOnly.jars().isEmpty());
     }
 
     @Test
