@@ -54,6 +54,7 @@ graphy:
     # trusted-keys:
     #   - RWQ...（公式配布鍵）
     # GitHub API のベース URL。GitHub Enterprise / 社内ミラー向け（既定は https://api.github.com）。
+    # https のみ許可（平文 http や不正な URL は起動時にエラーで落とす）。
     # github-api-base: https://github.example.com/api/v3
   cors:
     # /api/** に対する許可オリジン（dev の Vite と Electron file://=null を想定）

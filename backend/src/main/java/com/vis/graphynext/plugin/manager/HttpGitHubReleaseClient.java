@@ -33,16 +33,21 @@ public class HttpGitHubReleaseClient implements GitHubReleaseClient {
 
     private final ObjectMapper mapper;
     private final HttpClient http;
+    private static final String DEFAULT_API = "https://api.github.com";
+
     /**
      * API のベース URL。既定は {@code https://api.github.com}。
      * GitHub Enterprise や社内ミラーを使う施設向けに yml で差し替えられる（管理者設定）。
+     *
+     * <p><b>https のみ許可する</b>。ここから取得したものはアプリと同じ権限で動くコードになり得るため、
+     * 平文 HTTP での取得は認めない（誤設定は起動時に落として気づかせる）。
      */
     private final String api;
 
     public HttpGitHubReleaseClient(ObjectMapper mapper,
-                                   @Value("${graphy.plugins.github-api-base:https://api.github.com}") String api) {
+                                   @Value("${graphy.plugins.github-api-base:" + DEFAULT_API + "}") String api) {
         this.mapper = mapper;
-        this.api = api != null && !api.isBlank() ? api.replaceAll("/+$", "") : "https://api.github.com";
+        this.api = requireHttps(api);
         this.http = HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .connectTimeout(Duration.ofSeconds(10))
@@ -125,6 +130,30 @@ public class HttpGitHubReleaseClient implements GitHubReleaseClient {
     private static String text(JsonNode n, String field) {
         JsonNode v = n.get(field);
         return v == null || v.isNull() ? null : v.asText();
+    }
+
+    /**
+     * ベース URL を検証して末尾スラッシュを落とす。未設定・空は既定値。
+     *
+     * <p>https 以外（とくに平文 http）は<b>起動時に落とす</b>。ここから取得した配布物は
+     * アプリと同じ権限で動くコードを含み得るため、経路の保護を欠いたまま黙って動かさない。
+     *
+     * @throws IllegalStateException https 以外が設定されている場合（管理者の誤設定）
+     */
+    static String requireHttps(String configured) {
+        String url = configured == null || configured.isBlank() ? DEFAULT_API : configured.trim();
+        url = url.replaceAll("/+$", "");
+        URI uri;
+        try {
+            uri = URI.create(url);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException("graphy.plugins.github-api-base is not a valid URL: " + configured);
+        }
+        if (uri.getScheme() == null || !uri.getScheme().equalsIgnoreCase("https") || uri.getHost() == null) {
+            throw new IllegalStateException(
+                    "graphy.plugins.github-api-base must be an https URL (got: " + configured + ")");
+        }
+        return url;
     }
 
     /** {@code owner/repo} 以外を弾く（SSRF/パス注入対策）。 */
