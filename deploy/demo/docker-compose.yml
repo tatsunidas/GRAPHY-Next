@@ -98,6 +98,10 @@ services:
       # graphy.vis-ionary.com（Xserver, subscribe.php）からの POST /subscribe を認証する共有鍵。
       # Xserver側にも同じ値を配置する（website/public/api/subscribe.php参照）。
       GRAPHY_AUTH_SUBSCRIBE_API_KEY: ${GRAPHY_AUTH_SUBSCRIBE_API_KEY}
+      # 更新通知の一斉配信（POST /admin/announce）を認証する共有鍵。製品サイトの
+      # auto-deploy.sh（vis-ionary-web）から叩かれる。/subscribe 用とは別の値にすること。
+      GRAPHY_AUTH_ANNOUNCE_API_KEY: ${GRAPHY_AUTH_ANNOUNCE_API_KEY}
+      GRAPHY_AUTH_ANNOUNCE_RATE_PER_MINUTE: ${GRAPHY_AUTH_ANNOUNCE_RATE_PER_MINUTE:-30}
     depends_on:
       - arc
       - mailer
@@ -109,6 +113,10 @@ services:
       - no-new-privileges:true
     volumes:
       - graphy_backend_data:/app/data
+      # お知らせメール登録者だけを置く別ボリューム。reset-demo.sh は graphy_backend_data のみ
+      # 巻き戻し、こちらには一切触れない（＝夜間リセットで登録者が消えない）。
+      # 分離の経緯は MailingListSubscriberRepository のクラスコメントを参照。
+      - graphy_subscriber_data:/app/subscribers
     restart: unless-stopped
 
   # graphy-backend にインターネット疎通を持たせないための、メール送信/CAPTCHA検証専用の中継。
@@ -170,3 +178,5 @@ services:
 
 volumes:
   graphy_backend_data:
+  # 夜間リセット（reset-demo.sh）の対象外。ここだけは消さないこと。
+  graphy_subscriber_data:

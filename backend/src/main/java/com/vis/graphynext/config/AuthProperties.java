@@ -43,6 +43,40 @@ public class AuthProperties {
      */
     private String subscribeApiKey;
 
+    /**
+     * お知らせメール登録者だけを保管する専用DBのJDBC URL。
+     *
+     * <p>アプリ本体のH2（{@code ./data/graphy-index}）とは意図的に別ファイル・別ボリュームにする。
+     * 公開デモは毎晩 {@code deploy/demo/reset-demo.sh} が {@code /app/data} をゴールデンスナップショットへ
+     * 丸ごと戻すため、同居させると日中の登録が毎晩消えてしまう（実際に消えていた）。リセットが触らない
+     * 場所へ物理的に分けることで、リセット手順の書き方に依存せず登録者が守られる。
+     *
+     * <p>{@code AUTO_SERVER=TRUE} は {@code deploy/demo/export-subscribers.sh} が
+     * アプリを止めずに別プロセスから読み出すために必要。
+     */
+    private String subscriberDbUrl = "jdbc:h2:file:./subscribers/graphy-subscribers;AUTO_SERVER=TRUE";
+
+    /**
+     * {@code POST /admin/announce}（更新通知の一斉配信）を認証する共有鍵。
+     *
+     * <p>{@code subscribe-api-key} とは別にする。あちらは「1件足すだけ」だが、こちらは
+     * 登録者全員へメールを送れてしまう。権限の大きさが違うものを同じ鍵で守ると、
+     * 片方が漏れたときの被害範囲が跳ね上がる。
+     *
+     * <p>未設定（null/空）の場合、配信エンドポイントは常に 401 を返す（＝機能が無効）。
+     */
+    private String announceApiKey;
+
+    /**
+     * 更新通知の送信レート（通/分）。SMTP 側の送信上限に合わせて調整する。
+     * 上限を超えると一時的な拒否や、送信ドメインの評判低下につながるため、控えめな既定値にしてある。
+     * 0以下を指定すると間隔を空けない（テスト用。実環境では設定しないこと）。
+     */
+    private int announceRatePerMinute = 30;
+
+    /** 製品サイトの公開URL。更新通知メール本文のダウンロード導線に使う。 */
+    private String siteBaseUrl = "https://graphy.vis-ionary.com";
+
     /** マジックリンクトークンの有効期限（分）。 */
     private int tokenTtlMinutes = 15;
 
@@ -103,6 +137,38 @@ public class AuthProperties {
 
     public void setSubscribeApiKey(String subscribeApiKey) {
         this.subscribeApiKey = subscribeApiKey;
+    }
+
+    public String getSubscriberDbUrl() {
+        return subscriberDbUrl;
+    }
+
+    public void setSubscriberDbUrl(String subscriberDbUrl) {
+        this.subscriberDbUrl = subscriberDbUrl;
+    }
+
+    public String getAnnounceApiKey() {
+        return announceApiKey;
+    }
+
+    public void setAnnounceApiKey(String announceApiKey) {
+        this.announceApiKey = announceApiKey;
+    }
+
+    public int getAnnounceRatePerMinute() {
+        return announceRatePerMinute;
+    }
+
+    public void setAnnounceRatePerMinute(int announceRatePerMinute) {
+        this.announceRatePerMinute = announceRatePerMinute;
+    }
+
+    public String getSiteBaseUrl() {
+        return siteBaseUrl;
+    }
+
+    public void setSiteBaseUrl(String siteBaseUrl) {
+        this.siteBaseUrl = siteBaseUrl;
     }
 
     public int getTokenTtlMinutes() {
