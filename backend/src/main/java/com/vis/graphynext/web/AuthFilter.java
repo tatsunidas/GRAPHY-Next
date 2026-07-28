@@ -27,6 +27,13 @@ import java.nio.charset.StandardCharsets;
  * 401 を返す。{@code /unsubscribe}・{@code /subscribe} はログイン状態に関係なく常に到達可能にする
  * （前者は配信停止導線、後者はXserver側subscribe.phpからのサーバー間呼び出しで、
  * どちらもセッションCookieを持たない）。
+ *
+ * <p>{@code /admin/announce}（更新通知の一斉配信の起動）も同様に許可する。製品サイトの
+ * auto-deploy.sh からのサーバー間呼び出しで、セッションCookieを持たないため。
+ * ログイン不要にしているだけで無防備という意味ではなく、{@code /subscribe} と
+ * {@code /admin/announce} はそれぞれ別の共有鍵（{@code Authorization: Bearer}）で保護されており、
+ * 検証はコントローラ側で行う。なお許可リストは前方一致ではなく完全一致で並べること
+ * （{@code /admin/} を丸ごと開けると、将来 admin 配下に足したものが無認証で露出する）。
  */
 @Component
 @ConditionalOnProperty(prefix = "graphy.auth", name = "enabled", havingValue = "true")
@@ -69,6 +76,7 @@ public class AuthFilter extends OncePerRequestFilter {
                 || path.startsWith("/auth/")
                 || path.equals("/unsubscribe")
                 || path.equals("/subscribe")
+                || path.equals("/admin/announce")
                 || path.equals("/actuator/health")
                 || path.equals("/actuator/info");
     }

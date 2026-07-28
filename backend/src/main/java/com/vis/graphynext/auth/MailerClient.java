@@ -45,10 +45,19 @@ public class MailerClient {
     }
 
     public SendResult send(String to, String subject, String text) {
+        return send(to, subject, text, null);
+    }
+
+    /**
+     * @param listUnsubscribeUrl {@code List-Unsubscribe} ヘッダに載せる配信停止URL（任意）。
+     *                           更新通知の一斉配信でのみ使う。マジックリンクのような
+     *                           1対1のメールには付けない。
+     */
+    public SendResult send(String to, String subject, String text, String listUnsubscribeUrl) {
         try {
             restClient.post()
                     .uri("/send")
-                    .body(new SendRequest(to, subject, text))
+                    .body(new SendRequest(to, subject, text, listUnsubscribeUrl))
                     .retrieve()
                     .toBodilessEntity();
             return new SendResult(true);
@@ -72,7 +81,9 @@ public class MailerClient {
         }
     }
 
-    private record SendRequest(String to, String subject, String text) {
+    /** {@code listUnsubscribe} が null のときは項目ごと送らない（mailer 側は任意項目として扱う）。 */
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private record SendRequest(String to, String subject, String text, String listUnsubscribe) {
     }
 
     private record VerifyCaptchaRequest(String token, String remoteip) {

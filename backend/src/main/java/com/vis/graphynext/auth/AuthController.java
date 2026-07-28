@@ -21,7 +21,9 @@ import org.springframework.web.bind.annotation.RestController;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.EnumSet;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -119,7 +121,9 @@ public class AuthController {
         tokenRepository.save(magicLinkToken);
 
         if ("1".equals(subscribe)) {
-            subscribeOrResubscribe(magicLinkToken.getEmail());
+            // デモのログイン画面から来た人は GRAPHY-Next の利用者。Classic の更新通知まで
+            // 送ると「頼んでいないものが届いた」になるので、ここでは Next だけに絞る。
+            subscribeOrResubscribe(magicLinkToken.getEmail(), EnumSet.of(SubscriptionProduct.GRAPHY_NEXT));
         }
 
         String sessionCookieValue = sessionTokenService.issue(magicLinkToken.getEmail());
@@ -164,7 +168,7 @@ public class AuthController {
             return htmlResponse(renderUnsubscribePage(email, "メールアドレスの形式が正しくありません"));
         }
 
-        subscriberRepository.findById(email).ifPresent(subscriber -> {
+        subscriberRepository.findByEmail(email).ifPresent(subscriber -> {
             if (!subscriber.isUnsubscribed()) {
                 subscriber.unsubscribe();
                 subscriberRepository.save(subscriber);
@@ -181,9 +185,13 @@ public class AuthController {
      * 呼ばれる。ここの mailing_list_subscriber テーブルに一本化することで、{@code /unsubscribe} が
      * サイト本体からの登録者もカバーするようにする。ブラウザから直接叩かれる想定はないため
      * CORSは設定せず、共有鍵（Authorization: Bearer）のみで保護する。
+     *
+     * @param product 購読対象（{@code graphy} / {@code graphy-next} のカンマ区切り）。
+     *                省略時は全製品。登録フォームがどの製品のページに置かれているかで決まる。
      */
     @PostMapping("/subscribe")
-    public ResponseEntity<Void> subscribe(@RequestParam String email, HttpServletRequest request) {
+    public ResponseEntity<Void> subscribe(@RequestParam String email,
+            @RequestParam(required = false) String product, HttpServletRequest request) {
         String auth = request.getHeader(HttpHeaders.AUTHORIZATION);
         if (auth == null || !auth.equals("Bearer " + properties.getSubscribeApiKey())) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
@@ -192,18 +200,20 @@ public class AuthController {
             return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).build();
         }
 
-        subscribeOrResubscribe(email);
+        subscribeOrResubscribe(email, SubscriptionProduct.parse(product));
         return ResponseEntity.noContent().build();
     }
 
-    private void subscribeOrResubscribe(String email) {
-        subscriberRepository.findById(email)
+    private void subscribeOrResubscribe(String email, Set<SubscriptionProduct> products) {
+        subscriberRepository.findByEmail(email)
                 .ifPresentOrElse(existing -> {
+                    // 停止していなくても購読対象が増えることがあるので、常に保存し直す。
                     if (existing.isUnsubscribed()) {
                         existing.resubscribe();
-                        subscriberRepository.save(existing);
                     }
-                }, () -> subscriberRepository.save(new MailingListSubscriber(email)));
+                    existing.addProducts(products);
+                    subscriberRepository.save(existing);
+                }, () -> subscriberRepository.save(new MailingListSubscriber(email, products)));
     }
 
     private static ResponseEntity<Void> redirect(String location) {

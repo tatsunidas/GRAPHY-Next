@@ -4,45 +4,46 @@
  */
 package com.vis.graphynext.auth;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.Id;
-import jakarta.persistence.Table;
-
 import java.time.Instant;
+import java.util.EnumSet;
+import java.util.Set;
 
 /**
- * ログイン画面の任意チェックボックスでオプトインした、お知らせメール送付先。
+ * お知らせメール送付先。ログイン画面の任意チェックボックス、および graphy.vis-ionary.com の
+ * 更新通知登録フォーム（{@code POST /subscribe}）から登録される。
  *
- * <p>マジックリンク経由でメールアドレスの実在を検証できた時点（{@code /auth/verify}成功時）で
- * 初めて登録する。配信停止（{@code /unsubscribe}）は行を削除せず {@code unsubscribedAt} を
- * 立てるだけの方式にしている。削除してしまうと「一度止めた」という事実自体が消え、将来別ソースから
- * 再取り込みした際にうっかり復活させてしまうリスクがあるため。
+ * <p>ログイン画面経由の場合は、マジックリンクでメールアドレスの実在を検証できた時点
+ * （{@code /auth/verify}成功時）で初めて登録する。配信停止（{@code /unsubscribe}）は行を削除せず
+ * {@code unsubscribedAt} を立てるだけの方式にしている。削除してしまうと「一度止めた」という事実自体が
+ * 消え、将来別ソースから再取り込みした際にうっかり復活させてしまうリスクがあるため。
  *
  * <p>取り出しは公開HTTPエンドポイントを持たず、{@code deploy/demo/export-subscribers.sh} による
  * CLIエクスポートのみとする（公開デモにメーリングリストを読み出せるAPIを持たせない）。
+ *
+ * <p><b>JPAエンティティではない。</b> このテーブルだけはアプリ本体のH2とは別のDBファイルに保管しており
+ * （理由は {@link MailingListSubscriberRepository} のクラスコメント参照）、素のJDBCで読み書きする
+ * 単なるドメイン型として扱う。
  */
-@Entity
-@Table(name = "mailing_list_subscriber")
 public class MailingListSubscriber {
 
-    @Id
-    @Column(name = "email", length = 320)
-    private String email;
-
-    @Column(name = "subscribed_at", nullable = false)
+    private final String email;
     private Instant subscribedAt;
-
-    @Column(name = "unsubscribed_at")
     private Instant unsubscribedAt;
+    private final Set<SubscriptionProduct> products;
 
-    protected MailingListSubscriber() {
-        // JPA 用
+    public MailingListSubscriber(String email, Set<SubscriptionProduct> products) {
+        this(email, Instant.now(), null, products);
     }
 
-    public MailingListSubscriber(String email) {
+    /** DBの1行から復元する。 */
+    public MailingListSubscriber(String email, Instant subscribedAt, Instant unsubscribedAt,
+            Set<SubscriptionProduct> products) {
         this.email = email;
-        this.subscribedAt = Instant.now();
+        this.subscribedAt = subscribedAt;
+        this.unsubscribedAt = unsubscribedAt;
+        // EnumSet.copyOf は空コレクションを渡すと落ちるため、明示的に組み立てる。
+        this.products = EnumSet.noneOf(SubscriptionProduct.class);
+        this.products.addAll(products);
     }
 
     public String getEmail() {
@@ -55,6 +56,22 @@ public class MailingListSubscriber {
 
     public Instant getUnsubscribedAt() {
         return unsubscribedAt;
+    }
+
+    /** 更新通知を受け取る対象の製品。 */
+    public Set<SubscriptionProduct> getProducts() {
+        return EnumSet.copyOf(products);
+    }
+
+    /**
+     * 購読対象を追加する（差し替えではなく和集合）。
+     *
+     * <p>例えば GRAPHY-Next のページで登録済みの人が、後日 GRAPHY のページからも登録した場合、
+     * 上書きすると先に登録していた Next の通知が届かなくなる。本人は「増やした」つもりなので、
+     * 常に足す方向にしか動かさない。減らすのは配信停止（{@link #unsubscribe()}）だけ。
+     */
+    public void addProducts(Set<SubscriptionProduct> additional) {
+        this.products.addAll(additional);
     }
 
     public boolean isUnsubscribed() {

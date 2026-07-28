@@ -43,7 +43,7 @@ const transporter = nodemailer.createTransport({
 });
 
 app.post('/send', async (req, res) => {
-  const { to, subject, text } = req.body || {};
+  const { to, subject, text, listUnsubscribe } = req.body || {};
   if (typeof to !== 'string' || !EMAIL_PATTERN.test(to)) {
     return res.status(400).json({ error: 'invalid "to"' });
   }
@@ -53,9 +53,24 @@ app.post('/send', async (req, res) => {
   if (typeof text !== 'string' || text.length === 0 || text.length > 10000) {
     return res.status(400).json({ error: 'invalid "text"' });
   }
+  // 更新通知（一斉配信）だけが使う任意項目。本文中のリンクに加えてヘッダでも配信停止先を
+  // 示しておくと、メールクライアントの「配信停止」ボタンから解除でき、迷惑メール報告に
+  // 回されにくくなる（＝送信ドメインの評判を守れる）。https:// のみ受け付ける。
+  let headers;
+  if (listUnsubscribe !== undefined) {
+    if (typeof listUnsubscribe !== 'string' || !listUnsubscribe.startsWith('https://')
+        || listUnsubscribe.length > 500) {
+      return res.status(400).json({ error: 'invalid "listUnsubscribe"' });
+    }
+    headers = {
+      'List-Unsubscribe': `<${listUnsubscribe}>`,
+      // RFC 8058。ワンクリック解除はユーザーの明示操作でのみ POST される。
+      'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+    };
+  }
 
   try {
-    await transporter.sendMail({ from: SMTP_FROM, to, subject, text });
+    await transporter.sendMail({ from: SMTP_FROM, to, subject, text, headers });
     res.status(204).end();
   } catch (err) {
     console.error('sendMail failed:', err.message);

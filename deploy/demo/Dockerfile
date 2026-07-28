@@ -17,7 +17,12 @@ FROM eclipse-temurin:21-jre-jammy
 RUN useradd --system --create-home --uid 10001 graphy
 WORKDIR /app
 COPY --from=build /src/backend/target/graphy-next-backend.jar app.jar
-RUN mkdir -p /app/data /app/plugins && chown -R graphy:graphy /app
+# /app/subscribers は「お知らせメール登録者だけ」を置く別DB用のマウントポイント。
+# ここでディレクトリを作って graphy に chown しておかないと、Docker が作るマウント先が
+# root 所有になり、read_only なコンテナ内のアプリ（uid 10001）がDBを作れない。
+# /app/data と分けている理由は MailingListSubscriberRepository のクラスコメントを参照
+# （毎晩の reset-demo.sh が /app/data を丸ごと巻き戻すため、同居させると登録者が毎晩消える）。
+RUN mkdir -p /app/data /app/plugins /app/subscribers && chown -R graphy:graphy /app
 USER graphy
 EXPOSE 8090
 ENTRYPOINT ["java", "-jar", "/app/app.jar", \
