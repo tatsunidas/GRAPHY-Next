@@ -8,9 +8,41 @@ permissions:
   contents: write
 
 jobs:
+  # タグと各マニフェストの版数が一致していることを最初に検証する。
+  # 一致しないままビルドすると、インストーラ名が旧版のまま公開される
+  # （タグ v0.1.7 を package.json=0.1.6 のコミットに打つと 0.1.6 の資産が出る、の再発防止）。
+  verify-version:
+    name: Verify tag == code version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: タグと desktop/frontend/backend の版数を突き合わせる
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          desktop=$(jq -r .version desktop/package.json)
+          frontend=$(jq -r .version frontend/package.json)
+          # backend/pom.xml の <project> 直下の version（親 spring-boot の version は除外するため </parent> 以降を見る）
+          pom=$(sed -n '/<\/parent>/,$ s/.*<version>\(.*\)<\/version>.*/\1/p' backend/pom.xml | head -1)
+          echo "tag=$tag  desktop=$desktop  frontend=$frontend  backend/pom.xml=$pom"
+          fail=0
+          for pair in "desktop/package.json:$desktop" "frontend/package.json:$frontend" "backend/pom.xml:$pom"; do
+            name="${pair%%:*}"; val="${pair#*:}"
+            if [ "$val" != "$tag" ]; then
+              echo "::error::$name の version ($val) がタグ ($tag) と一致しません"
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "リリース中止: 3つの版数をタグ ($tag) に揃えてコミットしてから、そのコミットにタグを打ち直してください。"
+            exit 1
+          fi
+          echo "OK: すべての版数がタグ ($tag) と一致しています。"
+
   # Web 配布物: UI を同梱した実行可能 jar
   web-jar:
     name: Web jar
+    needs: verify-version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,6 +70,7 @@ jobs:
   # デスクトップ配布物: 各 OS で Electron インストーラをビルド
   desktop:
     name: Desktop (${{ matrix.os }})
+    needs: verify-version
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
