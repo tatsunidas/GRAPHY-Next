@@ -50,8 +50,11 @@
 > 公式配布と 2 回目以降の更新は「押すだけ」。同意画面が出るのは未署名・初回の第三者のみ。
 > 暗号の正しさは**別実装の固定ベクタ**で担保（`Blake2bTest`＝openssl/RFC 7693、
 > `MinisignTest`＝openssl 製 Ed25519 署名）。テンプレの release.yml に署名ステップを追加。
-> ⚠ 運用: **公式署名鍵の生成と `trusted-keys` への設定が未了**（これをやるまで公式配布は
-> `first-use` 扱いになる）。手順・保管・ローテーションは `fw/plugin-signing-runbook.md`。
+> ✅ 運用: **公式署名鍵を登録済み（2026-07-28・鍵 ID `98EA7C6BA2D50118`）**。`application.yml` の
+> `graphy.plugins.trusted-keys` に公開鍵を置いた。この鍵で署名したプラグインは `verified` 扱いになり、
+> 確認画面なしで導入される。**残**: プラグイン配布リポジトリ側の secrets 登録
+> （`MINISIGN_SECRET_KEY` / `MINISIGN_PASSWORD`）＝実際に署名を出し始める設定。
+> 手順・保管・ローテーションは `fw/plugin-signing-runbook.md`。
 > 鍵は無期限に使えるが、**失うと既存利用者は更新できなくなる**（バックアップが本体）。
 > **2026-07-28 追加修正**: 署名の剥がしを塞いだ。固定鍵があるのに `.minisig` が無い更新は
 > `invalid` として拒否する（従来は `unsigned` 扱いで、同意さえすれば通ってしまい TOFU を
