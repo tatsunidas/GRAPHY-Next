@@ -65,6 +65,16 @@ public class PluginInstaller {
      */
     public InstalledPlugin install(byte[] zip, InstalledPlugin.Source source, String expectedSha256, String trust)
             throws IOException {
+        return install(zip, source, expectedSha256, trust, null, null);
+    }
+
+    /**
+     * 署名情報つきの導入。{@code signerKeyId}/{@code signerPublicKey} は台帳に記録され、
+     * 次回更新時に<b>同じ鍵での署名を要求する</b>ための固定点になる（TOFU）。
+     */
+    public InstalledPlugin install(byte[] zip, InstalledPlugin.Source source, String expectedSha256, String trust,
+                                   String signerKeyId, String signerPublicKey)
+            throws IOException {
         String sha = PluginPackage.sha256(zip);
         if (expectedSha256 != null && !expectedSha256.isBlank()
                 && !expectedSha256.trim().equalsIgnoreCase(sha)) {
@@ -96,7 +106,8 @@ public class PluginInstaller {
 
         InstalledPlugin rec = new InstalledPlugin(
                 desc.id(), desc.name(), desc.version(), source, sha,
-                true, false, Instant.now().toString(), trust == null ? "community" : trust);
+                true, false, Instant.now().toString(), trust == null ? "community" : trust,
+                signerKeyId, signerPublicKey);
         ledger.upsert(rec);
         Files.deleteIfExists(target.resolve(DISABLED_MARKER));
         log.info("[plugin-manager] installed {} v{} from {} ({})",
@@ -132,11 +143,47 @@ public class PluginInstaller {
         ledger.setEnabled(id, enabled);
     }
 
+    /**
+     * 互換性（コア版数・対応 OS）を判定する。<b>例外を投げず結果を返す</b>ので、
+     * 導入前の同意画面で「なぜ入れられないか」を提示するのにも使える。
+     */
+    public Compat compat(PluginDescriptor desc) {
+        String range = desc.engines() == null ? null : desc.engines().graphy();
+        List<String> os = desc.engines() == null ? null : desc.engines().os();
+        String currentOs = OsCompat.current();
+        return new Compat(SemVer.satisfies(coreVersion, range), range, coreVersion,
+                OsCompat.satisfies(os, currentOs), os == null ? List.of() : os, currentOs);
+    }
+
+    /** 導入時のゲート。{@link #compat} が NG なら 422 相当で落とす（fail-closed）。 */
     private void checkCompat(PluginDescriptor desc) {
-        String range = desc.engines() == null ? null : desc.engines().get("graphy");
-        if (!SemVer.satisfies(coreVersion, range)) {
+        Compat c = compat(desc);
+        if (!c.graphyOk()) {
             throw new PluginInstallException(
-                    "incompatible: plugin requires graphy " + range + " but core is " + coreVersion);
+                    "incompatible: plugin requires graphy " + c.graphyRange() + " but core is " + c.coreVersion());
+        }
+        if (!c.osOk()) {
+            throw new PluginInstallException(
+                    "incompatible: plugin supports OS " + c.declaredOs() + " but this build runs on " + c.currentOs());
+        }
+    }
+
+    /**
+     * 互換判定の結果。
+     *
+     * @param graphyOk    コア版数が {@code engines.graphy} を満たすか
+     * @param graphyRange 宣言された範囲（未宣言なら null）
+     * @param coreVersion 実行中のコア版数
+     * @param osOk        実行中の OS が {@code engines.os} に含まれるか（未宣言なら true）
+     * @param declaredOs  宣言された対応 OS（未宣言なら空）
+     * @param currentOs   実行中の OS トークン（win32 / darwin / linux）
+     */
+    public record Compat(boolean graphyOk, String graphyRange, String coreVersion,
+                         boolean osOk, List<String> declaredOs, String currentOs) {
+
+        /** 導入可能か。 */
+        public boolean ok() {
+            return graphyOk && osOk;
         }
     }
 

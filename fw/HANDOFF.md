@@ -1,6 +1,7 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
-> 更新日: 2026-07-12（最終更新: レポート依存修復・DbAdmin 画像削除・MOSAIC ビューア/検索UI 修正。ログ末尾の 2026-07-12 エントリ参照）
+> 更新日: 2026-07-28（最終更新: プラグイン導入ゲートの 2 段化＝管理者ゲート＋ユーザー オプトイン。下記の
+> プラグインマネージャ エントリ参照）
 > 目的: 別の作業者（Claude 含む）がこのリポジトリの状況を把握し、続きを実装できるようにする。
 > このファイル＋ `fw/` 配下の各設計ドキュメントが「ソース・オブ・トゥルース」。
 >
@@ -20,6 +21,41 @@
 > **SMTP送信上限は確定済み（2026-07-28）**: 送信は Gmail（Google Workspace・`smtp.gmail.com`）。日次
 > 約2,000通/日が実質上限で、`GRAPHY_AUTH_ANNOUNCE_RATE_PER_MINUTE` は既定30/分のまま（明示設定なし）。
 > **残（ブロッカーでない）**: プライバシーポリシー（`graphy-site/.../privacy.astro`）への利用目的記載確認。
+>
+> 🟢 **2026-07-23〜24 プラグインマネージャ（ImageJ の update site 相当）**（`fw/plugin-manager-design.md`）:
+> P1 backend コア（PR#58・`plugin/manager/` 台帳/GitHub Release 取得/sha256/zip slip 対策/`engines` 互換/
+> `/api/plugin-manager/*`）、P2 フロント UI（PR#59・環境設定＞プラグイン）、開発キット（PR#60・
+> `graphy-plugin-api` jar＋`examples/plugin-template/`）まで main 済み。jar は Release に自動添付される
+> （v0.1.8 に `graphy-plugin-api-0.1.8.jar` を確認）。
+> **2026-07-28 追記**: v0.1.8 まで `graphy.plugins.manager-enabled` が既定 false のまま**どこでも true に
+> されておらず**（standalone プロファイルでも desktop の spawn でも）、配布物ではプラグイン画面が
+> 事実上「閲覧専用」で機能が死蔵していた。導入ゲートを 2 段に再設計して解消:
+> ①`manager-enabled`＝**管理者ゲート（既定 true）**、②環境設定＞プラグインの
+> **「プラグインの導入を許可する」トグル（設定キー `plugins.installEnabled`・既定 false）**＝ユーザーの
+> 明示的オプトイン。署名検証は未実装（P2）のため②に警告文を添える。詳細は同設計 §5。
+> **2026-07-28 追記2（盲目的な取り込みの是正）**: 入口ゲートを開けた後は任意のリリース zip を
+> そのまま展開していたため、取得と展開の間に**検査＋同意**を挟む 2 段構成にした（設計 §5.1）。
+> `POST /inspect/{github,file}` が展開せずに中身を返し（同梱 JAR・`ui.js`・宣言権限・
+> **対応 OS の突き合わせ**・sha256）、同意画面で承諾したときだけ install する。要点:
+> ①**`engines.os`（win32/darwin/linux）を新設**— 本体が OS 別リリースであり、プラグインも
+> ネイティブを含めば OS 専用になるため、**展開前に実行中 OS と突き合わせて非対応なら拒否**（fail-closed）。
+> ②同意画面で見せた zip の sha256 を `confirmedSha256` として install に渡し不一致なら拒否（TOCTOU）。
+> ③`<zip>.sha256` 資産が無ければ既定で拒否（明示承諾時のみ許可）＋資産名照合を完全一致に厳格化
+> （従来は無関係な `.sha256` を期待値にし得た）。
+> **2026-07-28 追記3（minisign 署名・P2 完了）**: Ed25519 署名の検証を実装（設計 §5.2）。外部依存は
+> 増やさず JDK 21 の `Signature("Ed25519")`＋自前 `Blake2b`（prehashed 署名用）。鍵の選択は
+> ①本体の信頼鍵 `graphy.plugins.trusted-keys` → ②台帳に固定した前回の鍵（**TOFU**）→
+> ③リリース同梱の `minisign.pub`（初回のみ）。**検証失敗・鍵 ID 不一致は無条件で拒否**。
+> **操作性は変えていない**: ①②で通れば同意画面を出さずそのまま導入（`autoInstallable`）＝
+> 公式配布と 2 回目以降の更新は「押すだけ」。同意画面が出るのは未署名・初回の第三者のみ。
+> 暗号の正しさは**別実装の固定ベクタ**で担保（`Blake2bTest`＝openssl/RFC 7693、
+> `MinisignTest`＝openssl 製 Ed25519 署名）。テンプレの release.yml に署名ステップを追加。
+> ⚠ 運用: **公式署名鍵の生成と `trusted-keys` への設定が未了**（これをやるまで公式配布は
+> `first-use` 扱いになる）。配布者が鍵を失うと利用者は更新できなくなる点も要周知。
+> **依然として守れないもの**: 未署名配布物の真正性、権限強制、実行時隔離（P3）。
+> プラグインはアプリと同じ権限で動く。
+> **残（P2）**: 公式索引 discovery／OAuth Device Flow／更新通知＋changelog／
+> `examples/plugin-template/` の独立リポジトリ昇格。
 >
 > 🚨 **3D/MPR/リスライス/計測/座標変換を触るなら着手前に必ず `fw/cornerstone-3d-geometry-caveat.md` を読む**
 > （Cornerstone3D の 3D ジオメトリはバグがあり、そのまま使うと実空間座標がずれる。確定計算は患者 LPS mm の自前・単一幾何で完結）。

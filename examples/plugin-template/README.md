@@ -37,6 +37,27 @@ backend-optional/               ← 任意。Java のバックエンド面（重
 | `name` | ✅ | メニュー表示名 |
 | `version` | ✅ | 版（semver）。**リリースタグ `v<version>` と一致必須** |
 | `engines.graphy` | 推奨 | 対応するコアの範囲（例 `">=0.1.0 <0.3.0"`）。マネージャが互換判定に使う |
+| `engines.os` | 推奨 | 対応 OS（`win32` / `darwin` / `linux`）。GRAPHY-Next は OS ごとにリリースが分かれるため、**導入前に実行中の OS と突き合わせて非対応なら拒否**する。JNI やネイティブバイナリを含むなら必ず絞る。省略＝OS 非依存 |
+
+## 署名（推奨）
+
+リリースに `<zip>.minisig` と `minisign.pub` を添えると、GRAPHY-Next 側で署名を自動検証します。
+
+```bash
+minisign -G -p minisign.pub -s minisign.key   # 鍵を作る（1 回だけ）
+git add minisign.pub && git commit -m "add signing public key"   # 公開鍵はコミットしてよい
+```
+
+`minisign.key` の中身を GitHub の secrets `MINISIGN_SECRET_KEY`、パスワードを `MINISIGN_PASSWORD`
+に登録すると、同梱の `release.yml` が署名まで行います（未設定なら署名ステップは自動でスキップ）。
+
+利用者側の挙動:
+
+- **初回導入**: 署名が検証され、その鍵が記録される（確認画面が出る）
+- **2 回目以降の更新**: 同じ鍵で署名されていれば**確認画面なしで導入**される
+- **鍵が変わった / 署名が壊れている**: 導入を**拒否**する（作者すり替え・改竄の検知）
+
+⚠ **秘密鍵を失う・変える＝利用者は更新できなくなります**（拒否されます）。鍵は必ず保管してください。
 | `contributes` | UI を出すなら | サーフェス配列。`"viewer2d.menu"` / `"mainscreen.menu"`（`"viewer2d.toolbar"` は予約） |
 | `ui` | UI を出すなら | フロント面 ES モジュールのファイル名（例 `ui.js`） |
 | `entrypoint` | backend 面を持つなら | `GraphyPlugin` 実装クラスの完全修飾名（`backend-optional/` 参照） |

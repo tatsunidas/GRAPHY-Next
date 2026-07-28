@@ -6,6 +6,9 @@ package com.vis.graphynext.plugin;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * {@code graphy.plugins.*}（application.yml）を束縛するプラグイン設定。
  *
@@ -22,10 +25,15 @@ public class PluginProperties {
     private String dir = "./plugins";
 
     /**
-     * プラグインマネージャ（取得・導入・更新・削除）の有効化。既定 false＝閲覧のみ。
-     * standalone でのみ実際の導入操作を許す（web は共有サーバーのため運営キュレーション前提）。
+     * プラグインマネージャ（取得・導入・更新・削除）を<b>この環境で許すか</b>という管理者ゲート。
+     * 既定 true。false にすると環境設定のオプトイン トグルごと封じられ、閲覧のみになる
+     * （施設が一律に禁止したい場合に使う）。
+     *
+     * <p>true でも実際の導入操作にはユーザーの明示的オプトイン
+     * （設定キー {@code plugins.installEnabled}）が別途要る。standalone 以外では常に不可
+     * （web は共有サーバーのため運営キュレーション前提）。設計: fw/plugin-manager-design.md §5。
      */
-    private boolean managerEnabled = false;
+    private boolean managerEnabled = true;
 
     /**
      * private リポジトリの列挙・資産取得に使う GitHub トークン（任意・PAT）。
@@ -35,6 +43,15 @@ public class PluginProperties {
 
     /** 公式キュレーション索引の URL（raw JSON）。将来の discovery 用（任意）。 */
     private String indexUrl;
+
+    /**
+     * 信頼する minisign 公開鍵（base64 blob もしくは公開鍵ファイルの中身）。
+     *
+     * <p>ここに載る鍵で署名が検証できたプラグインは {@code verified} 扱いになり、
+     * 導入時の同意画面を出さずにそのまま入る（＝公式配布の操作性を従来どおりにする）。
+     * ユーザーが鍵を扱う場面は無い。設計: fw/plugin-manager-design.md §5.2。
+     */
+    private List<String> trustedKeys = new ArrayList<>();
 
     public boolean isEnabled() {
         return enabled;
@@ -74,5 +91,13 @@ public class PluginProperties {
 
     public void setIndexUrl(String indexUrl) {
         this.indexUrl = indexUrl;
+    }
+
+    public List<String> getTrustedKeys() {
+        return trustedKeys;
+    }
+
+    public void setTrustedKeys(List<String> trustedKeys) {
+        this.trustedKeys = trustedKeys == null ? new ArrayList<>() : trustedKeys;
     }
 }

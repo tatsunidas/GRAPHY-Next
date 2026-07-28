@@ -22,6 +22,12 @@ public class SettingsService {
     /** デバッグモードのキー。値が変わったらログレベルを切り替える。 */
     public static final String DEBUG_MODE_KEY = "general.debugMode";
 
+    /**
+     * プラグイン導入のユーザーオプトイン（環境設定＞プラグインのトグル）。既定 false。
+     * 設計: fw/plugin-manager-design.md §5。
+     */
+    public static final String PLUGIN_INSTALL_ENABLED_KEY = "plugins.installEnabled";
+
     private final SettingRepository repo;
     private final DebugLogControl debugLogControl;
 

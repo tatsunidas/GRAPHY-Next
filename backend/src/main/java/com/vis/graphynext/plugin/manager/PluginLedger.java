@@ -68,7 +68,8 @@ class PluginLedger {
             InstalledPlugin p = list.get(i);
             if (p.id().equals(id) && p.enabled() != enabled) {
                 list.set(i, new InstalledPlugin(p.id(), p.name(), p.version(), p.source(),
-                        p.sha256(), enabled, p.pinned(), p.installedAt(), p.trust()));
+                        p.sha256(), enabled, p.pinned(), p.installedAt(), p.trust(),
+                        p.signerKeyId(), p.signerPublicKey()));
                 changed = true;
             }
         }

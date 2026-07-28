@@ -10,20 +10,29 @@ import {
   fetchInstalledPlugins,
   fetchManagerStatus,
   installPluginFromFile,
+  inspectPluginFromFile,
+  inspectPluginFromGitHub,
   installPluginFromGitHub,
   reinstallPlugin,
+  setPluginInstallEnabled,
   uninstallPlugin,
   type InstalledPlugin,
   type ManagerStatus,
+  type PluginPreview,
 } from "../plugins/pluginManagerApi";
+import { PluginConsentDialog } from "./PluginConsentDialog";
 
 /**
  * 環境設定の「プラグイン」カスタムパネル。
  *
  * <p>導入済みプラグインの一覧・有効無効・再インストール・削除と、GitHub（owner/repo）/ローカル zip
- * からの導入を行う（backend の {@code /api/plugin-manager/*}）。導入系は standalone かつ
- * {@code graphy.plugins.manager-enabled=true} のときのみ有効で、それ以外は閲覧のみ（backend が 403）。
- * 反映（メニューへの反映）にはアプリのリロード/再起動が要る点を明示する。設計: fw/plugin-manager-design.md。
+ * からの導入を行う（backend の {@code /api/plugin-manager/*}）。
+ *
+ * <p>導入系は standalone かつ管理者ゲート（{@code graphy.plugins.manager-enabled}）が開いており、
+ * さらにユーザーが「プラグインの導入を許可する」トグルを ON にしたときだけ有効
+ * （それ以外は閲覧のみ・backend が 403）。プラグインはアプリと同じ権限で動き署名検証は未実装のため、
+ * 既定は OFF でトグルに警告を添える。反映（メニューへの反映）にはアプリのリロード/再起動が要る点も明示する。
+ * 設計: fw/plugin-manager-design.md §5。
  */
 export function PluginManagerPanel() {
   const { t } = useI18n();
@@ -34,6 +43,8 @@ export function PluginManagerPanel() {
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const [repo, setRepo] = useState("");
   const [version, setVersion] = useState("");
+  /** 検査済みで、ユーザーの同意待ちになっている配布物（同意画面の入力）。 */
+  const [pending, setPending] = useState<{ preview: PluginPreview; file?: File } | null>(null);
 
   const reloadList = () => fetchInstalledPlugins().then(setRows);
 
@@ -56,14 +67,18 @@ export function PluginManagerPanel() {
   }, []);
 
   const canManage = status?.canManage ?? false;
+  const canOptIn = status?.canOptIn ?? false;
+  const optedIn = status?.installEnabled ?? false;
 
-  const run = async (key: string, action: () => Promise<unknown>, okKey: string) => {
-    setBusy(key);
+  /** 導入オプトインの切替。保存後に status を取り直して canManage を反映する。 */
+  const toggleOptIn = async () => {
+    const next = !optedIn;
+    setBusy("optin");
     setMsg(null);
     try {
-      await action();
-      await reloadList();
-      setMsg({ text: t(okKey), ok: true });
+      await setPluginInstallEnabled(next);
+      setStatus(await fetchManagerStatus());
+      setMsg({ text: t(next ? "pluginmgr.optIn.enabled" : "pluginmgr.optIn.disabled"), ok: true });
     } catch (e) {
       setMsg({ text: t("common.fetchError", { error: String(e) }), ok: false });
     } finally {
@@ -71,20 +86,73 @@ export function PluginManagerPanel() {
     }
   };
 
+  /** @returns 成功したか（同意画面を閉じてよいかの判断に使う）。 */
+  const run = async (key: string, action: () => Promise<unknown>, okKey: string): Promise<boolean> => {
+    setBusy(key);
+    setMsg(null);
+    try {
+      await action();
+      await reloadList();
+      setMsg({ text: t(okKey), ok: true });
+      return true;
+    } catch (e) {
+      setMsg({ text: t("common.fetchError", { error: String(e) }), ok: false });
+      return false;
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const repoValid = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repo.trim());
+
+  /**
+     導入は 2 段階。まず取得して中身を検査（展開しない）し、同意画面で対応 OS・同梱 JAR・
+     完全性を提示する。ユーザーが承諾したら、検査時の sha256 を添えて導入する
+     （同意した成果物と実際に入るものが一致することを backend が保証する）。
+   */
+  const inspect = async (key: string, action: () => Promise<PluginPreview>, file?: File) => {
+    setBusy(key);
+    setMsg(null);
+    try {
+      const preview = await action();
+      // 既知の鍵で署名が検証できたものは、中身を見せるまでもなくそのまま導入する
+      // （公式配布と 2 回目以降の更新は「押すだけ」）。それ以外は同意画面へ。
+      if (preview.autoInstallable) {
+        await installConfirmed(preview, file, false);
+      } else {
+        setPending({ preview, file });
+      }
+    } catch (e) {
+      setMsg({ text: t("common.fetchError", { error: String(e) }), ok: false });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const installConfirmed = (preview: PluginPreview, file: File | undefined, acknowledgeUnverified: boolean) =>
+    run(
+      "confirm",
+      () =>
+        file
+          ? installPluginFromFile(file, preview.sha256)
+          : installPluginFromGitHub(repo.trim(), version.trim() || undefined, preview.sha256, acknowledgeUnverified),
+      "pluginmgr.installed_result",
+    );
 
   const installGithub = () => {
     if (!repoValid) return;
-    void run(
-      "github",
-      () => installPluginFromGitHub(repo.trim(), version.trim() || undefined),
-      "pluginmgr.installed_result",
-    );
+    void inspect("github", () => inspectPluginFromGitHub(repo.trim(), version.trim() || undefined));
   };
 
   const installFile = (file: File | undefined) => {
     if (!file) return;
-    void run("file", () => installPluginFromFile(file), "pluginmgr.installed_result");
+    void inspect("file", () => inspectPluginFromFile(file), file);
+  };
+
+  /** 同意画面で「導入する」を押したときだけ、実際に展開・保存する。失敗時は画面を閉じない。 */
+  const confirmInstall = async (acknowledgeUnverified: boolean) => {
+    if (!pending) return;
+    if (await installConfirmed(pending.preview, pending.file, acknowledgeUnverified)) setPending(null);
   };
 
   const toggleEnabled = (p: InstalledPlugin) =>
@@ -104,7 +172,21 @@ export function PluginManagerPanel() {
     <div>
       <p style={{ fontSize: 13, color: "#6b7785", marginTop: 0 }}>{t("pluginmgr.help")}</p>
 
-      {!canManage && (
+      {/* 導入オプトイン（standalone かつ管理者ゲートが開いているときだけ操作できる）。 */}
+      {canOptIn ? (
+        <section style={optInBox}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: busy ? "default" : "pointer" }}>
+            <input
+              type="checkbox"
+              checked={optedIn}
+              disabled={busy !== null}
+              onChange={() => void toggleOptIn()}
+            />
+            <span style={{ fontSize: 13, fontWeight: 600, color: "#33404d" }}>{t("pluginmgr.optIn.label")}</span>
+          </label>
+          <p style={{ fontSize: 12, color: "#6b5a00", margin: "6px 0 0 24px" }}>⚠ {t("pluginmgr.optIn.warning")}</p>
+        </section>
+      ) : (
         <div style={notice}>
           {status && !status.standalone
             ? t("pluginmgr.webDisabled")
@@ -137,13 +219,13 @@ export function PluginManagerPanel() {
               disabled={!repoValid || busy !== null}
               style={{ ...primaryBtn, background: !repoValid || busy !== null ? "#9fb6cf" : "#0b5cad" }}
             >
-              {busy === "github" ? t("pluginmgr.installing") : t("pluginmgr.installGithub")}
+              {busy === "github" ? t("pluginmgr.inspecting") : t("pluginmgr.installGithub")}
             </button>
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <label style={{ ...secondaryBtn, opacity: busy !== null ? 0.6 : 1 }}>
-              {busy === "file" ? t("pluginmgr.installing") : t("pluginmgr.installFile")}
+              {busy === "file" ? t("pluginmgr.inspecting") : t("pluginmgr.installFile")}
               <input
                 type="file"
                 accept=".zip"
@@ -166,30 +248,44 @@ export function PluginManagerPanel() {
 
       {/* 導入済み一覧。 */}
       <h3 style={sectionTitle}>{t("pluginmgr.installed")}</h3>
+      {canOptIn && !optedIn && (
+        <div style={{ fontSize: 12, color: "#6b7785", marginBottom: 6 }}>{t("pluginmgr.optIn.viewOnly")}</div>
+      )}
       {rows.length === 0 ? (
         <div style={{ color: "#888", fontSize: 13, padding: "6px 0" }}>{t("pluginmgr.empty")}</div>
       ) : (
         <>
-          <div style={headerRow}>
-            <span style={{ ...cell, flex: 3 }}>{t("pluginmgr.col.name")}</span>
-            <span style={{ ...cell, width: 70, flex: "none" }}>{t("pluginmgr.col.version")}</span>
-            <span style={{ ...cell, flex: 2 }}>{t("pluginmgr.col.source")}</span>
-            <span style={{ ...cell, width: 74, flex: "none" }}>{t("pluginmgr.col.trust")}</span>
-            {canManage && <span style={{ width: 150, flex: "none" }} />}
-          </div>
+          {/*
+            設定パネルは幅が狭く、名前・版・取得元・信頼・操作ボタンを 1 行に並べると
+            名前が真っ先に省略されて読めなくなる（実機で確認）。名前を独立行に上げ、
+            版/取得元/信頼は副行のメタ情報として折り返す 2 段構成にする。
+          */}
           {rows.map((p) => (
             <div key={p.id} style={{ ...dataRow, opacity: p.enabled ? 1 : 0.55 }}>
-              <span style={{ ...cell, flex: 3 }} title={p.id}>
-                {p.name || p.id}
-                {!p.enabled && <span style={{ color: "#b00020", marginLeft: 6 }}>({t("pluginmgr.disabled")})</span>}
-              </span>
-              <span style={{ ...cell, width: 70, flex: "none" }}>{p.version}</span>
-              <span style={{ ...cell, flex: 2, color: "#6b7785" }} title={p.source?.ref ?? ""}>
-                {p.source ? `${p.source.type}: ${p.source.ref}` : "—"}
-              </span>
-              <span style={{ ...cell, width: 74, flex: "none", color: trustColor(p.trust) }}>{p.trust}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={nameLine} title={`${p.name || p.id}（${p.id}）`}>
+                  {p.name || p.id}
+                  {!p.enabled && (
+                    <span style={{ color: "#b00020", marginLeft: 6, fontWeight: 400 }}>
+                      ({t("pluginmgr.disabled")})
+                    </span>
+                  )}
+                </div>
+                <div style={metaLine}>
+                  <span title={t("pluginmgr.col.version")}>{p.version}</span>
+                  <span style={metaSep}>·</span>
+                  <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}
+                    title={`${t("pluginmgr.col.source")}: ${p.source ? `${p.source.type}: ${p.source.ref}` : "—"}`}>
+                    {p.source ? `${p.source.type}: ${p.source.ref}` : "—"}
+                  </span>
+                  <span style={metaSep}>·</span>
+                  <span style={{ color: trustColor(p.trust), flex: "none" }} title={t("pluginmgr.col.trust")}>
+                    {p.trust}
+                  </span>
+                </div>
+              </div>
               {canManage && (
-                <div style={{ width: 150, flex: "none", display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                <div style={{ flex: "none", display: "flex", gap: 6, justifyContent: "flex-end" }}>
                   <button style={smallBtn} disabled={busy !== null} onClick={() => toggleEnabled(p)}
                     title={p.enabled ? t("pluginmgr.disable") : t("pluginmgr.enable")}>
                     {p.enabled ? t("pluginmgr.disable") : t("pluginmgr.enable")}
@@ -210,6 +306,16 @@ export function PluginManagerPanel() {
       )}
 
       <p style={{ fontSize: 12, color: "#6b7785", marginTop: 16 }}>{t("pluginmgr.reloadNote")}</p>
+
+      {/* 検査済み・同意待ち。ここで承諾しない限り展開も保存もされない。 */}
+      {pending && (
+        <PluginConsentDialog
+          preview={pending.preview}
+          busy={busy === "confirm"}
+          onCancel={() => setPending(null)}
+          onConfirm={(ack) => void confirmInstall(ack)}
+        />
+      )}
     </div>
   );
 }
@@ -220,14 +326,25 @@ function trustColor(trust: string): string {
   return "#33404d"; // community
 }
 
+const optInBox: React.CSSProperties = {
+  border: "1px solid #e2e7ee", borderRadius: 6, padding: "10px 12px", marginBottom: 14, background: "#fbfcfe",
+};
 const notice: React.CSSProperties = {
   fontSize: 12, color: "#6b5a00", background: "#fff8e1", border: "1px solid #f0e2a8",
   borderRadius: 6, padding: "8px 10px", marginBottom: 14,
 };
 const sectionTitle: React.CSSProperties = { fontSize: 13, fontWeight: 600, color: "#33404d", margin: "0 0 8px" };
-const headerRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, marginBottom: 4, fontSize: 12, color: "#5a6672" };
-const dataRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, marginBottom: 6, fontSize: 13 };
-const cell: React.CSSProperties = { fontSize: 12, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+const dataRow: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: 8, padding: "6px 0", fontSize: 13, borderTop: "1px solid #eef1f5",
+};
+/** 名前は省略させない（長い名前は折り返す）。行が伸びても読めることを優先する。 */
+const nameLine: React.CSSProperties = {
+  fontSize: 13, fontWeight: 600, color: "#33404d", overflowWrap: "anywhere", lineHeight: 1.35,
+};
+const metaLine: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: 5, marginTop: 2, fontSize: 11, color: "#6b7785", minWidth: 0,
+};
+const metaSep: React.CSSProperties = { color: "#c2cad3", flex: "none" };
 const input: React.CSSProperties = { minWidth: 0, padding: "5px 8px", border: "1px solid #cdd5de", borderRadius: 5, fontSize: 13 };
 const smallBtn: React.CSSProperties = {
   minWidth: 30, padding: "4px 8px", border: "1px solid #cdd5de", borderRadius: 5, background: "#fff", cursor: "pointer", fontSize: 12,

@@ -13,6 +13,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -94,6 +96,39 @@ final class PluginPackage {
         }
         throw new PluginInstallException("plugin.json not found in package");
     }
+
+    /**
+     * 展開せずに中身を要約する（導入前の同意画面用）。
+     *
+     * <p>とくに {@code *.jar} の有無は「アプリと同じ権限で動くコードが含まれるか」を意味するため、
+     * ユーザーに提示して同意を取る。設計: fw/plugin-manager-design.md §5。
+     */
+    static Contents contents(byte[] zip, String base) {
+        boolean hasUi = false;
+        List<String> jars = new ArrayList<>();
+        List<String> files = new ArrayList<>();
+        long total = 0;
+        try (ZipInputStream in = new ZipInputStream(new ByteArrayInputStream(zip))) {
+            ZipEntry e;
+            while ((e = in.getNextEntry()) != null) {
+                String name = e.getName().replace('\\', '/');
+                if (!name.startsWith(base) || e.isDirectory()) { in.closeEntry(); continue; }
+                String rel = name.substring(base.length());
+                if (rel.isEmpty()) { in.closeEntry(); continue; }
+                files.add(rel);
+                if (rel.toLowerCase().endsWith(".jar")) jars.add(rel);
+                if (rel.equals("ui.js")) hasUi = true;
+                total += e.getSize() > 0 ? e.getSize() : in.readAllBytes().length;
+                in.closeEntry();
+            }
+        } catch (IOException ex) {
+            throw new PluginInstallException("invalid zip: " + ex.getMessage());
+        }
+        return new Contents(hasUi, List.copyOf(jars), List.copyOf(files), total);
+    }
+
+    /** 同意画面に見せる zip の中身要約。 */
+    record Contents(boolean hasUi, List<String> jars, List<String> files, long totalBytes) {}
 
     /**
      * 基準プレフィックス配下を {@code targetDir} に展開する（プレフィックスは除去）。

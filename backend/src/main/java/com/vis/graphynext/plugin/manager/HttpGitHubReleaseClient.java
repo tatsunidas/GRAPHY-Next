@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -28,14 +29,20 @@ import java.util.List;
 public class HttpGitHubReleaseClient implements GitHubReleaseClient {
 
     private static final Logger log = LoggerFactory.getLogger(HttpGitHubReleaseClient.class);
-    private static final String API = "https://api.github.com";
     private static final String UA = "GRAPHY-Next";
 
     private final ObjectMapper mapper;
     private final HttpClient http;
+    /**
+     * API のベース URL。既定は {@code https://api.github.com}。
+     * GitHub Enterprise や社内ミラーを使う施設向けに yml で差し替えられる（管理者設定）。
+     */
+    private final String api;
 
-    public HttpGitHubReleaseClient(ObjectMapper mapper) {
+    public HttpGitHubReleaseClient(ObjectMapper mapper,
+                                   @Value("${graphy.plugins.github-api-base:https://api.github.com}") String api) {
         this.mapper = mapper;
+        this.api = api != null && !api.isBlank() ? api.replaceAll("/+$", "") : "https://api.github.com";
         this.http = HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .connectTimeout(Duration.ofSeconds(10))
@@ -45,7 +52,7 @@ public class HttpGitHubReleaseClient implements GitHubReleaseClient {
     @Override
     public List<Release> listReleases(String repo, String token) {
         String safe = requireRepo(repo);
-        HttpRequest req = base(URI.create(API + "/repos/" + safe + "/releases?per_page=100"), token)
+        HttpRequest req = base(URI.create(api + "/repos/" + safe + "/releases?per_page=100"), token)
                 .header("Accept", "application/vnd.github+json")
                 .header("X-GitHub-Api-Version", "2022-11-28")
                 .GET().build();

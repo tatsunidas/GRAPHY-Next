@@ -43,6 +43,8 @@ deploy/demo/.env
 
 # Electron 起動時(CWD=desktop)に backend が作るランタイムデータ
 desktop/data/
+# プラグインの導入先（graphy.plugins.dir=./plugins が CWD 相対で作られる）と台帳
+desktop/plugins/
 
 # 個人メモ（リポジトリに含めない）
 memorandum_76.txt
