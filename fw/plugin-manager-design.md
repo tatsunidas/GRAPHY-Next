@@ -1,7 +1,9 @@
 # GRAPHY-Next プラグインマネージャ 設計
 
-> 作成日: 2026-07-23
-> ステータス: **P1 backend コア実装済み（standalone・テスト green）**。フロント UI / テンプレ配布 / 署名 / OAuth は将来。
+> 作成日: 2026-07-23（最終更新: 2026-07-28）
+> ステータス: **P1 backend コア＋P2 フロント UI＋開発キット 実装済み（standalone・テスト green）**。
+> 2026-07-28 に導入ゲートを「管理者ゲート＋ユーザーのオプトイン トグル」の 2 段に変更（§5）。
+> 署名 / discovery / OAuth は将来（§8 の P2 残）。
 > 関連: [`plugin-architecture.md`](plugin-architecture.md)（実行レイヤ＝継ぎ目）、[`plugin-authoring-guide.md`](plugin-authoring-guide.md)
 
 ImageJ/Fiji の "update site" に相当する、プラグインの**配布・取得・ライフサイクル管理**レイヤ。
@@ -98,11 +100,14 @@ folder 走査だけでは「どこから来たか・完全性・有効か」が�
 REST（`/api/plugin-manager`）:
 
 ```
-GET    /status                     導入操作の可否（canManage / standalone / managerEnabled / hasToken）
+GET    /status                     導入操作の可否（canManage / standalone / managerEnabled /
+                                   installEnabled / canOptIn / hasToken）
 GET    /installed                  導入済み一覧（台帳）※常に可
 GET    /versions?repo=owner/repo   リリース一覧（新しい順）
-POST   /install/github  {repo, version?}   version 未指定＝最新の非 prerelease
-POST   /install/file    (multipart)        ローカル zip（オフライン/エアギャップ導入）
+POST   /inspect/github {repo, version?}    取得して中身を検査（展開しない）→ PluginPreview
+POST   /inspect/file   (multipart)         同上（ローカル zip）
+POST   /install/github {repo, version?, confirmedSha256?, acknowledgeUnverified?}
+POST   /install/file   (multipart + confirmedSha256?)  ローカル zip（オフライン/エアギャップ導入）
 POST   /{id}/reinstall             取得元から再取得（github のみ。file は再アップロード）
 POST   /{id}/enable | /{id}/disable
 DELETE /{id}                       アンインストール
@@ -113,16 +118,115 @@ DELETE /{id}                       アンインストール
 **セキュリティ実装済み**: sha256 検証、zip slip 防止、id 検証（`[A-Za-z0-9._-]`・`..` 拒否）、
 `owner/repo` 形式検証（SSRF/注入対策）、展開サイズ/件数上限。
 
-**モードゲート**（`PluginManagerService.requireMutable`）: 導入系は
-`standalone` かつ `graphy.plugins.manager-enabled=true` のときのみ許可。web は 403
-（共有サーバー＝運営キュレーション前提、[`plugin-architecture.md §3`](plugin-architecture.md)）。
+**導入ゲート**（`PluginManagerService.requireMutable`）: 導入系は次の 3 条件が**すべて**揃ったときのみ許可。
 一覧・status は常に可。
 
-設定（`graphy.plugins.*` / `PluginProperties`）: `manager-enabled`（既定 false）、`github-token`（PAT・任意）、
-`index-url`（将来の discovery・任意）。
+| # | 条件 | 主体 | 既定 |
+|---|---|---|---|
+| 1 | `standalone` プロファイル | モード | web は常に 403（共有サーバー＝運営キュレーション前提、[`plugin-architecture.md §3`](plugin-architecture.md)） |
+| 2 | `graphy.plugins.manager-enabled=true` | **管理者ゲート**（yml） | **true**。false にすると 3 のトグルごと封じられ閲覧のみ（施設が一律禁止する用） |
+| 3 | 設定キー `plugins.installEnabled=true` | **ユーザーのオプトイン**（環境設定＞プラグインのトグル） | **false** |
 
-テスト: `SemVerTest`(6) / `PluginInstallerTest`(10) / `PluginManagerServiceTest`(5) = 21、全 green。
-ネットワーク非依存（zip はメモリ生成、GitHub は fake client）。
+3 を分けた理由: プラグインはアプリと同じ権限で動くが**署名検証が未実装**（P2）のため、既定で
+導入可能にはしない。一方 2 だけだと yml を手編集できないエンドユーザーには事実上開けられず、
+機能が死蔵する（v0.1.8 まで実際にそうなっていた）。よって「環境として許すか（管理者）」と
+「今それを使うか（ユーザー）」を分離した。
+
+- 継ぎ目: `InstallOptIn`（関数型 interface）。既定実装 `SettingsInstallOptIn` が設定ストアを読む。
+  書き込みは専用 API を作らず、フロントが `PUT /api/settings` に投げる（`setPluginInstallEnabled`）。
+- `status` は `canManage` / `standalone` / `managerEnabled` / `installEnabled` / `canOptIn` /
+  `hasGithubToken` を返す。フロントは `canOptIn` でトグルの表示可否、`installEnabled` でトグル状態、
+  `canManage` で導入 UI と行内操作の表示を決める。
+- トグルを OFF に戻しても**導入済みプラグインは動き続ける**（実行レイヤは疎結合。停止したいなら
+  各プラグインを無効化する）。
+
+設定（`graphy.plugins.*` / `PluginProperties`）: `manager-enabled`（既定 **true**＝管理者ゲート）、
+`github-token`（PAT・任意）、`index-url`（将来の discovery・任意）。
+
+テスト: `SemVerTest`(6) / `OsCompatTest`(5) / `PluginInstallerTest`(10) / `PluginManagerServiceTest`(14)
+= 35、全 green。ネットワーク非依存（zip はメモリ生成、GitHub は fake client、オプトインはラムダ）。
+
+---
+
+## 5.1 導入前の検査と同意（2026-07-28 追加）
+
+**背景**: 入口ゲート（§5）は「導入操作を許すか」を制御するだけで、許可後は任意の GitHub リリース
+zip を取得・展開していた。プラグインは**アプリと同じ権限で動く**（backend: `URLClassLoader` に
+親ローダ付きで同一 JVM ／ frontend: `import()` でレンダラのコンテキスト）ため、
+「何を受け入れるのか」を提示しないまま導入するのは危険と判断した。
+
+**導入は 2 段階**にした。取得と展開の間に検査と同意を挟む:
+
+```
+POST /inspect/github | /inspect/file   取得 → zip を展開せず読む → PluginPreview を返す
+   ↓（フロントが同意画面を表示・ユーザーが承諾）
+POST /install/github | /install/file   confirmedSha256 付きで再取得 → 一致確認 → 展開
+```
+
+`PluginPreview` が返すもの: id/name/version/説明/作者/ライセンス、**同梱 JAR の一覧**（＝アプリ権限で
+動くコードの有無）、`ui.js` の有無、ファイル数・総サイズ、宣言 `permissions`、
+**対応 OS の突き合わせ結果**、コア版数の互換、`sha256` と `integrityVerified`、同 id 導入済みか。
+
+- **対応 OS の突き合わせ**（`engines.os`・`OsCompat`）: GRAPHY-Next 本体は OS ごとにリリースが
+  分かれ、プラグインも JNI/ネイティブバイナリを含めば OS 専用になる。トークンは Node 互換の
+  `win32` / `darwin` / `linux`（`windows` / `mac` / `osx` 等の別名も受理）。未宣言＝OS 非依存。
+  **非対応なら同意しても導入できない**（`PluginInstaller.checkCompat` が展開前に落とす＝fail-closed）。
+- **TOCTOU 対策**: 同意画面で提示した zip の sha256 を `confirmedSha256` として install に渡し、
+  実際に取得したものと一致しなければ拒否する（同意〜導入の間にリリース資産が差し替わっても、
+  ユーザーが見ていない成果物は入らない）。
+- **完全性**: `<zip>.sha256` 資産が無ければ `integrityVerified=false` とし、
+  **既定で導入を拒否**する。同意画面のチェックボックス（`acknowledgeUnverified`）で明示的に
+  承知した場合のみ通す。あわせて資産名の照合を**完全一致のみ**に厳格化した
+  （以前は「末尾が `.sha256` の最初の資産」も拾い、無関係な資産のハッシュを期待値にしていた）。
+
+**sha256 だけでは守れないこと**: sha256 は同じリリースから取るため、**リポジトリを支配する側の
+改竄は検知できない**（＝完全性であって真正性ではない）。これに対する答えが §5.2 の署名で、
+署名がある配布物については乗っ取り・改竄を検知できる。**未署名の配布物については依然として
+「ユーザーが配布元を信頼し、中身を見たうえで同意する」ことが唯一の防御線**であり、同意画面は
+その判断材料を出すためのものである。権限の強制と実行時の隔離は未実装（P3）。
+
+---
+
+## 5.2 署名（minisign / Ed25519）と TOFU（2026-07-28 追加）
+
+**方針**: ユーザーは鍵を一切扱わない。検証は導入時に自動で走り、**通常操作は「導入を押すだけ」のまま**。
+摩擦が出るのは未署名・未知の配布者・検証失敗のときだけ。
+
+**実装**（外部依存なし・JDK 21 の `Signature("Ed25519")`）:
+
+| 型 | 役割 |
+|---|---|
+| `Blake2b` | BLAKE2b-512。minisign の prehashed 署名（algo `ED`）用。JDK にも既存依存にも無いため自前 |
+| `Minisign` | 公開鍵 / `.minisig` のパースと検証。本体署名＋**global 署名（trusted comment）**の両方を検証 |
+
+リリース資産は `<zip>.minisig`（署名）と `minisign.pub`（公開鍵）。資産名は完全一致で探す。
+
+**鍵の選び方は 3 段階**（`PluginManagerService.evaluateSignature`）:
+
+| # | 使う鍵 | 状態 | 結果 |
+|---|---|---|---|
+| ① | 本体設定 `graphy.plugins.trusted-keys` | `trusted` | `trust=verified`・**同意画面なしで導入** |
+| ② | 台帳に固定済みの鍵（前回導入時） | `pinned` | **同意画面なしで導入**（更新は押すだけ） |
+| ③ | リリースが提示する `minisign.pub` | `first-use` | 同意画面を出す。導入時にその鍵を台帳へ固定 |
+| — | 上記いずれでも検証失敗・鍵 ID 不一致 | `invalid` | **無条件で拒否**（`acknowledgeUnverified` でも通さない） |
+
+②が **TOFU**（trust on first use）の要。台帳（`InstalledPlugin.signerKeyId` / `signerPublicKey`）に
+初回の鍵を固定し、更新時は**リリースが同梱してくる鍵ではなく固定した鍵で**検証する。
+これによりリポジトリ乗っ取り・作者すり替えは**更新の時点で自動的に弾ける**。
+初回の作者が本人であることまでは保証しない（①の信頼鍵だけがそれを保証する）。
+
+**フロントの分岐**: `PluginPreview.autoInstallable`（＝`trusted`/`pinned` かつ互換 OK）が真なら
+`PluginManagerPanel` は同意画面を出さずにそのまま install する。署名で真正性が取れている場合は
+`<zip>.sha256` 資産の有無を問わない（署名の方が強い保証のため）。
+
+**テストの担保**: 暗号と書式の正しさは<b>別実装の固定ベクタ</b>で検証している。
+`Blake2bTest` は `openssl dgst -blake2b512`（＋RFC 7693 公表値）、`MinisignTest` は
+`openssl genpkey -algorithm ed25519` / `openssl pkeyutl -sign -rawin` で作った署名。
+自作で署名して自作で検証する循環になっていない。サービス側の方針（信頼鍵・TOFU・不正拒否）は
+`PluginManagerServiceTest` が実行時生成の鍵で検証する。
+
+**運用上の注意**: 配布者が秘密鍵を失う／鍵を変えると、既存利用者は更新できなくなる（拒否される）。
+テンプレートの README に明記済み。
 
 ---
 
@@ -154,22 +258,25 @@ DELETE /{id}                       アンインストール
   uninstall・reinstall・enable-disable／`engines` 互換／`/api/plugin-manager/*`／モードゲート。
 - **P2 進行中**:
   - ✅ フロント Plugin Manager 画面（Settings＞プラグイン。`PluginManagerPanel.tsx` / `pluginManagerApi.ts`）
+  - ✅ 導入ゲートの 2 段化＝管理者ゲート＋ユーザー オプトイン トグル（2026-07-28・§5）
+  - ✅ 導入前の検査＋同意画面／対応 OS（`engines.os`）の突き合わせ／sha256 の既定必須化・
+    資産照合の厳格化／同意した成果物との一致保証（2026-07-28・§5.1）
   - ✅ `graphy-plugin-api` 薄い jar（backend が `spi/**` だけの副成果物を生成→Release 添付）＋
     **テンプレート `examples/plugin-template/`**（`plugin.json`/`ui.js`/`graphy-plugin.d.ts`/GitHub Action/
     `backend-optional/`）＝第三者が作り始められる状態
-  - 残: 公式索引 discovery／GitHub OAuth Device Flow／**minisign 署名＋3 信頼ティア＋
-    インストール時同意画面**／更新通知＋changelog／再起動反映（`graphy:relaunch`）／
-    `examples/plugin-template/` を独立「Use this template」リポジトリへ昇格
+  - ✅ minisign 署名（Ed25519）＋TOFU＋信頼ティアの実体化（2026-07-28・§5.2）
+  - 残: 公式索引 discovery／GitHub OAuth Device Flow／更新通知＋changelog／
+    再起動反映（`graphy:relaunch`）／`examples/plugin-template/` を独立
+    「Use this template」リポジトリへ昇格／**公式署名鍵の生成と `trusted-keys` への設定**（運用）
 - **P3**: フロント iframe/Worker サンドボックス／backend プロセス隔離／web サンドボックス
   （DICOMweb サイドカー）／商用ライセンスキー／ロールバック履歴／障害プラグインの自動無効化。
 
 ---
 
-## 9. 既知の制約（P1）
+## 9. 既知の制約
 
 - **JAR 差し替えの反映**: `StandalonePluginRegistry` がクラスローダを id 単位でキャッシュするため、
   同 id の JAR 更新は backend 再起動（＝アプリ再起動）まで反映されない。UI-only は画面リロードで反映。
-- **フロント UI 未実装**: 現状 API のみ。`curl` / 将来の Plugin Manager 画面から叩く。
 - **署名・権限 enforce 未実装**: `trust` は github=community / file=local を機械的に付与。
   署名検証と権限の実強制は P2/P3。
 - **discovery 未実装**: `index-url` は設定のみ。索引取得＋トピック検索は P2。

@@ -65,20 +65,39 @@ public class PluginManagerController {
         return handle(() -> service.versions(repo));
     }
 
+    @PostMapping("/inspect/github")
+    public ResponseEntity<Object> inspectGithub(@RequestBody InstallRequest req) {
+        if (req == null || req.repo() == null || req.repo().isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "repo is required (owner/repo)"));
+        }
+        return handle(() -> service.inspectGitHub(req.repo(), req.version()));
+    }
+
+    @PostMapping("/inspect/file")
+    public ResponseEntity<Object> inspectFile(@RequestParam("file") MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "file is required"));
+        }
+        return handle(() -> service.inspectFile(file.getBytes(), file.getOriginalFilename()));
+    }
+
     @PostMapping("/install/github")
     public ResponseEntity<Object> installGithub(@RequestBody InstallRequest req) {
         if (req == null || req.repo() == null || req.repo().isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "repo is required (owner/repo)"));
         }
-        return handle(() -> service.installFromGitHub(req.repo(), req.version()));
+        return handle(() -> service.installFromGitHub(
+                req.repo(), req.version(), req.confirmedSha256(), req.acknowledgeUnverified()));
     }
 
     @PostMapping("/install/file")
-    public ResponseEntity<Object> installFile(@RequestParam("file") MultipartFile file) {
+    public ResponseEntity<Object> installFile(@RequestParam("file") MultipartFile file,
+                                              @RequestParam(value = "confirmedSha256", required = false)
+                                              String confirmedSha256) {
         if (file == null || file.isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("error", "file is required"));
         }
-        return handle(() -> service.installFromFile(file.getBytes(), file.getOriginalFilename()));
+        return handle(() -> service.installFromFile(file.getBytes(), file.getOriginalFilename(), confirmedSha256));
     }
 
     @PostMapping("/{id}/reinstall")
@@ -123,6 +142,12 @@ public class PluginManagerController {
         }
     }
 
-    /** {@code POST /install/github} のボディ。 */
-    public record InstallRequest(String repo, String version) {}
+    /**
+     * {@code POST /inspect/github} および {@code /install/github} のボディ。
+     *
+     * @param confirmedSha256       同意画面で提示された zip の sha256（TOCTOU 対策・検査を経た導入では必須運用）
+     * @param acknowledgeUnverified sha256 資産が無く完全性を検証できないことを承知で導入するか
+     */
+    public record InstallRequest(String repo, String version,
+                                 String confirmedSha256, boolean acknowledgeUnverified) {}
 }

@@ -2,7 +2,7 @@
   "id": "my-plugin",
   "name": "My Plugin",
   "version": "0.1.0",
-  "engines": { "graphy": ">=0.1.0" },
+  "engines": { "graphy": ">=0.1.0", "os": ["win32", "darwin", "linux"] },
   "description": "A GRAPHY-Next plugin created from the template.",
   "author": "Your Name",
   "homepage": "https://github.com/OWNER/REPO",

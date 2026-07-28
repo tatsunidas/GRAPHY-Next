@@ -28,7 +28,18 @@ public record InstalledPlugin(
         /** 導入日時（ISO-8601 文字列）。 */
         String installedAt,
         /** 信頼ティア: verified / community / local。 */
-        String trust) {
+        String trust,
+        /**
+         * 署名した鍵の ID（16 桁 hex・未署名なら null）。
+         * 次回更新時に同じ鍵を要求するために保持する（TOFU）。
+         */
+        String signerKeyId,
+        /**
+         * 署名した minisign 公開鍵（base64 blob・未署名なら null）。
+         * <b>初回に見た鍵を固定する</b>のが目的。更新時はリリースが提示する鍵ではなく
+         * これで検証するので、リポジトリを乗っ取って鍵ごと差し替える攻撃を更新時に弾ける。
+         */
+        String signerPublicKey) {
 
     /**
      * 取得元。

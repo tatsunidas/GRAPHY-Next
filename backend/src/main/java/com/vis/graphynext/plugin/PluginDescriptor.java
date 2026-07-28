@@ -7,7 +7,6 @@ package com.vis.graphynext.plugin;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 import java.util.List;
-import java.util.Map;
 
 /**
  * 各プラグインフォルダ直下の {@code plugin.json}（ディスク上の記述）。
@@ -30,8 +29,8 @@ public record PluginDescriptor(
         String entrypoint,
         /** 要求権限（情報用）。 */
         List<String> permissions,
-        /** コア互換範囲。例 {@code {"graphy": ">=0.2.0 <0.3.0"}}。マネージャの互換判定に使う。 */
-        Map<String, String> engines,
+        /** 互換宣言。例 {@code {"graphy": ">=0.2.0 <0.3.0", "os": ["win32","linux"]}}。 */
+        Engines engines,
         /** 説明（マネージャ一覧の表示用）。 */
         String description,
         /** 作者（表示用）。 */
@@ -40,4 +39,20 @@ public record PluginDescriptor(
         String homepage,
         /** ライセンス識別子（SPDX 等、表示・法務用）。 */
         String license) {
+
+    /**
+     * 互換宣言。
+     *
+     * <p>GRAPHY-Next は OS ごとにリリースを分けて配布しており、プラグインも JNI/ネイティブ
+     * バイナリを含めば OS 専用になる。{@code os} で対応 OS を宣言させ、導入前に実行中の OS と
+     * 突き合わせる（未宣言＝OS 非依存とみなし全 OS 可）。トークンは Node 互換の
+     * {@code win32} / {@code darwin} / {@code linux}（{@code windows} / {@code mac} 等の別名も受理）。
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record Engines(
+            /** コア互換範囲。例 {@code ">=0.2.0 <0.3.0"}。未指定は常に互換。 */
+            String graphy,
+            /** 対応 OS。未指定/空は OS 非依存。 */
+            List<String> os) {
+    }
 }

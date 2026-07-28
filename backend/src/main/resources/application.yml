@@ -39,14 +39,22 @@ graphy:
   # プラグイン格納フォルダ（standalone）。読取専用バンドルを避け書込可能な場所を指す。
   plugins:
     dir: ./plugins
-    # プラグインマネージャ（取得・導入・更新・削除）。既定 false＝閲覧のみ。
-    # standalone かつ true のときだけ導入操作を許可する（web は運営キュレーション前提で 403）。
-    # 設計: fw/plugin-manager-design.md。
-    manager-enabled: false
+    # プラグインマネージャ（取得・導入・更新・削除）を「この環境で許すか」の管理者ゲート。
+    # false にすると環境設定のトグルごと封じられ閲覧のみになる（施設が一律禁止したい場合）。
+    # true でも実際の導入には、環境設定＞プラグインでのユーザーの明示的オプトイン
+    # （設定キー plugins.installEnabled・既定 false）が別途要る。web は常に 403
+    # （共有サーバー＝運営キュレーション前提）。設計: fw/plugin-manager-design.md §5。
+    manager-enabled: true
     # private リポジトリの列挙・資産取得に使う GitHub トークン（任意・PAT）。未設定なら公開のみ。
     # github-token: ghp_xxx
     # 公式キュレーション索引 URL（raw JSON・将来の discovery 用・任意）。
     # index-url: https://raw.githubusercontent.com/vis-ionary/graphy-plugins-index/main/index.json
+    # 信頼する minisign 公開鍵（base64 行）。ここに載る鍵で署名検証できたプラグインは
+    # verified 扱いになり、確認画面なしでそのまま導入できる。設計: fw/plugin-manager-design.md §5.2。
+    # trusted-keys:
+    #   - RWQ...（公式配布鍵）
+    # GitHub API のベース URL。GitHub Enterprise / 社内ミラー向け（既定は https://api.github.com）。
+    # github-api-base: https://github.example.com/api/v3
   cors:
     # /api/** に対する許可オリジン（dev の Vite と Electron file://=null を想定）
     allowed-origin-patterns:
