@@ -10,13 +10,15 @@
 > の per-frame 参照・幾何整合の目視確認（エクスポートされたシリーズが PACS に現れることは確認済みだが、
 > フレームごとの参照・幾何整合そのものは未確認）。詳細は `deploy/dcm4chee/VERIFY-web.md` を参照。
 >
-> 🔴 **2026-07-28 実機作業が保留中（デモサーバー機・dev マシン）**: 更新通知メールを実装した
-> （`fw/update-notification-design.md`）。**コードは3リポジトリとも完了・テスト済みだが、デモ機での
-> 適用が未実施**。手順は同ファイルの「実機での作業手順」。**デモ機のセッションはまずそこを読むこと。**
-> 併せて重大な既存不具合を1件修正している: 夜間リセット（`deploy/demo/reset-demo.sh`）が
-> お知らせメール登録者テーブルごと巻き戻しており、**日中の登録が毎晩0:00に全消去されていた**。
-> 対策として登録者を別ボリュームへ分離済みだが、**旧DBに残っている登録者の移行
-> （`deploy/demo/migrate-subscribers-to-own-db.sh`）を夜間リセットより前に行う必要がある**。
+> ✅ **2026-07-28 更新通知メールをデモ機で有効化・実機適用 完了**（`fw/update-notification-design.md`）。
+> `.env` に `GRAPHY_AUTH_ANNOUNCE_API_KEY` を追加＋dev側 `~/.config/graphy/announce-api-key` に同値配置、
+> `graphy-backend`/`mailer` を新イメージで再ビルド・起動、登録者を別ボリューム `graphy_subscriber_data`
+> （`jdbc:h2:./subscribers/graphy-subscribers`）へ分離、移行スクリプト実行済み（旧DB 0件）。疎通確認は
+> 公開URL `POST /admin/announce` で 誤鍵→401 / 正鍵→202。次リリースから `auto-deploy.sh`（cron）が自動配信。
+> 併せて修正した重大不具合: 夜間リセット（`deploy/demo/reset-demo.sh`）がお知らせメール登録者テーブルごと
+> 巻き戻し、**日中の登録が毎晩0:00に全消去されていた**問題を、登録者DBの別ボリューム分離で解消（止血）。
+> **残（ブロッカーでない）**: SMTP送信上限に合わせた `GRAPHY_AUTH_ANNOUNCE_RATE_PER_MINUTE`（既定30/分）、
+> プライバシーポリシー（`graphy-site/.../privacy.astro`）への利用目的記載確認。
 >
 > 🚨 **3D/MPR/リスライス/計測/座標変換を触るなら着手前に必ず `fw/cornerstone-3d-geometry-caveat.md` を読む**
 > （Cornerstone3D の 3D ジオメトリはバグがあり、そのまま使うと実空間座標がずれる。確定計算は患者 LPS mm の自前・単一幾何で完結）。
