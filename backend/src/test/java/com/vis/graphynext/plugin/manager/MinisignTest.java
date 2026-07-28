@@ -16,10 +16,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * {@link Minisign}: minisign 署名（Ed25519）の検証。
  *
- * <p>固定ベクタは<b>別実装</b>で作った: 鍵生成と署名は OpenSSL 3.5
- * （{@code openssl genpkey -algorithm ed25519} / {@code openssl pkeyutl -sign -rawin}）、
- * prehash は {@code openssl dgst -blake2b512}。自作コードで作った署名を自作コードで検証する
+ * <p>固定ベクタは<b>すべて別実装</b>で作った。自作コードで作った署名を自作コードで検証する
  * 循環にならないようにしている。
+ * <ul>
+ *   <li><b>実物の minisign CLI</b>（0.12・使い捨て鍵）が出力した署名 … 実運用と同じ経路の担保</li>
+ *   <li>OpenSSL 3.5（{@code genpkey -algorithm ed25519} / {@code pkeyutl -sign -rawin} /
+ *       {@code dgst -blake2b512}）で組み立てた legacy・prehashed 両方の署名 … 分岐の網羅</li>
+ * </ul>
+ *
+ * <p>鍵 ID は minisign CLI の表示に合わせてバイト逆順・大文字 hex で持つ
+ * （利用者が同意画面と {@code minisign} の出力を見比べられるようにするため）。
  */
 class MinisignTest {
 
@@ -49,10 +55,45 @@ class MinisignTest {
         return "GRAPHY-Next plugin package fixture\n".repeat(10).getBytes(StandardCharsets.UTF_8);
     }
 
+    // --- 実物の minisign が出力したベクタ（minisign 0.12・使い捨て鍵） --------------
+    // 0.12 は -H を付けなくても prehashed（algo "ED"）で署名する。つまり BLAKE2b が無いと
+    // 実運用の署名を丸ごと弾いてしまう。この事実をテストで固定しておく。
+
+    private static final String REAL_PUBLIC_KEY = """
+            untrusted comment: minisign public key E8F18C554EEC1FE7
+            RWTnH+xOVYzx6MvEjdb4M3ZWyKrXSihjAFnTHBbgwwJM4k6DYzBIfZhv
+            """;
+
+    private static final String REAL_SIG = """
+            untrusted comment: signature from minisign secret key
+            RUTnH+xOVYzx6DLPicHIoImmpIKirA6LEyJJcqUzpEdq/9paKlsv7KRXWcHBYwu+oQZUxeJbXhWTW9n5HJUyUrIi6VKEXw02nwA=
+            trusted comment: graphy fixture
+            pmmI2XnkoRWtyIV53bvXaigroLafqx9mxwoN5N7S+AjlVtPRN7TUl7PfrBRFB+8YBueLzP94r7ZLzHOKnS4pAA==
+            """;
+
+    private static byte[] realPayload() {
+        return "GRAPHY-Next real-minisign fixture\n".getBytes(StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void verifiesSignatureProducedByTheRealMinisignCli() {
+        Minisign.Sig sig = Minisign.parseSig(REAL_SIG);
+        assertTrue(sig.prehashed(), "minisign 0.12 は既定で prehashed のはず");
+        assertEquals("E8F18C554EEC1FE7", sig.keyId());
+        assertTrue(Minisign.verify(realPayload(), sig, Minisign.parseKey(REAL_PUBLIC_KEY)));
+    }
+
+    @Test
+    void rejectsTamperedContentAgainstRealMinisignSignature() {
+        byte[] tampered = realPayload();
+        tampered[0] ^= 0x01;
+        assertFalse(Minisign.verify(tampered, Minisign.parseSig(REAL_SIG), Minisign.parseKey(REAL_PUBLIC_KEY)));
+    }
+
     @Test
     void parsesPublicKey() {
         Minisign.Key key = Minisign.parseKey(PUBLIC_KEY);
-        assertEquals("0102030405060708", key.keyId());
+        assertEquals("0807060504030201", key.keyId());
         assertEquals(32, key.raw().length);
     }
 

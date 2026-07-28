@@ -220,10 +220,20 @@ POST /install/github | /install/file   confirmedSha256 付きで再取得 → �
 `PluginManagerPanel` は同意画面を出さずにそのまま install する。署名で真正性が取れている場合は
 `<zip>.sha256` 資産の有無を問わない（署名の方が強い保証のため）。
 
-**テストの担保**: 暗号と書式の正しさは<b>別実装の固定ベクタ</b>で検証している。
-`Blake2bTest` は `openssl dgst -blake2b512`（＋RFC 7693 公表値）、`MinisignTest` は
-`openssl genpkey -algorithm ed25519` / `openssl pkeyutl -sign -rawin` で作った署名。
-自作で署名して自作で検証する循環になっていない。サービス側の方針（信頼鍵・TOFU・不正拒否）は
+**prehash（BLAKE2b）は必須**: 実物の **minisign 0.12 は `-H` を付けなくても prehashed（algo `ED`）で
+署名する**（2026-07-28 に実機で確認）。legacy（`Ed`）だけの対応では実運用の署名を丸ごと弾くため、
+BLAKE2b の自前実装は省略できない。
+
+**鍵 ID の表記**: minisign CLI は鍵 ID を**バイト逆順・大文字 hex** で表示する
+（`minisign public key E8F18C554EEC1FE7`）。同意画面の表示を CLI の出力と見比べられるよう、
+`Minisign.keyId()` で同じ表記に揃えている（内部比較は大小無視）。
+
+**テストの担保**: 暗号と書式の正しさは<b>別実装の固定ベクタ</b>で検証しており、自作で署名して
+自作で検証する循環になっていない。
+`Blake2bTest` は `openssl dgst -blake2b512`（＋RFC 7693 公表値）。
+`MinisignTest` は **実物の minisign 0.12 が出力した署名**（実運用と同じ経路）と、
+`openssl genpkey -algorithm ed25519` / `pkeyutl -sign -rawin` で組み立てた legacy・prehashed
+両方の署名（分岐の網羅）。サービス側の方針（信頼鍵・TOFU・不正拒否）は
 `PluginManagerServiceTest` が実行時生成の鍵で検証する。
 
 **運用上の注意**: 配布者が秘密鍵を失う／鍵を変えると、既存利用者は更新できなくなる（拒否される）。
