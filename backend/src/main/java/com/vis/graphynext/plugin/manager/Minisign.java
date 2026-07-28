@@ -54,8 +54,7 @@ final class Minisign {
         if (blob.length != 42) throw new PluginInstallException("invalid minisign public key length: " + blob.length);
         String algo = new String(blob, 0, 2, StandardCharsets.US_ASCII);
         if (!algo.equals("Ed")) throw new PluginInstallException("unsupported minisign key algorithm: " + algo);
-        return new Key(HexFormat.of().formatHex(Arrays.copyOfRange(blob, 2, 10)),
-                Arrays.copyOfRange(blob, 10, 42));
+        return new Key(keyId(blob), Arrays.copyOfRange(blob, 10, 42));
     }
 
     /** {@code .minisig} をパースする。 */
@@ -88,7 +87,7 @@ final class Minisign {
         if (global != null && global.length != 64) {
             throw new PluginInstallException("invalid .minisig global signature length: " + global.length);
         }
-        return new Sig(HexFormat.of().formatHex(Arrays.copyOfRange(blob, 2, 10)), prehashed,
+        return new Sig(keyId(blob), prehashed,
                 Arrays.copyOfRange(blob, 10, 74), trustedComment == null ? "" : trustedComment, global);
     }
 
@@ -122,6 +121,20 @@ final class Minisign {
         } catch (GeneralSecurityException e) {
             return false; // 壊れた鍵・壊れた署名は「検証できなかった」＝不正扱い
         }
+    }
+
+    /**
+     * blob（先頭 2 バイトが algo、続く 8 バイトが鍵 ID）から鍵 ID の表示文字列を作る。
+     *
+     * <p>minisign CLI は鍵 ID を<b>バイト逆順・大文字 hex</b>で表示する
+     * （例: 公開鍵コメントの {@code minisign public key E8F18C554EEC1FE7}）。
+     * 利用者が同意画面の表示と minisign の出力を見比べられるよう、同じ表記に揃える。
+     */
+    private static String keyId(byte[] blob) {
+        byte[] id = Arrays.copyOfRange(blob, 2, 10);
+        byte[] reversed = new byte[id.length];
+        for (int i = 0; i < id.length; i++) reversed[i] = id[id.length - 1 - i];
+        return HexFormat.of().withUpperCase().formatHex(reversed);
     }
 
     private static String lastNonCommentLine(String text) {

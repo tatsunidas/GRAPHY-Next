@@ -330,7 +330,7 @@ class PluginManagerServiceTest {
         PluginManagerService.PluginPreview p = svc.inspectGitHub("owner/acme", null);
 
         assertEquals("trusted", p.signature());
-        assertEquals("00112233445566aa", p.signerKeyId());
+        assertEquals("AA66554433221100", p.signerKeyId());
         assertEquals("file:acme.zip", p.signatureComment());
         assertEquals("verified", p.trust());
         // 既知の鍵で通ったので、同意画面を出さずにそのまま導入してよい。
@@ -338,7 +338,7 @@ class PluginManagerServiceTest {
 
         InstalledPlugin rec = svc.installFromGitHub("owner/acme", null, p.sha256(), false);
         assertEquals("verified", rec.trust());
-        assertEquals("00112233445566aa", rec.signerKeyId());
+        assertEquals("AA66554433221100", rec.signerKeyId());
     }
 
     @Test
@@ -381,7 +381,7 @@ class PluginManagerServiceTest {
         PluginManagerService first = service(dir, signedClient(zip, original.sign(zip, "v1"), original.publicKey()),
                 true, "standalone", true, List.of());
         InstalledPlugin rec = first.installFromGitHub("owner/acme", null, null, true);
-        assertEquals("00112233445566dd", rec.signerKeyId()); // 初回の鍵を固定（TOFU）
+        assertEquals("DD66554433221100", rec.signerKeyId()); // 初回の鍵を固定（TOFU）
 
         // 乗っ取り: 別の鍵で署名し、その鍵をリリースに同梱して正当に見せかける。
         MinisignFixture attacker = new MinisignFixture("00112233445566ee");
