@@ -4,6 +4,28 @@
 > 対象: GRAPHY-Next の**公式プラグイン配布鍵**、および第三者プラグイン作者への案内。
 > 設計: [`plugin-manager-design.md`](plugin-manager-design.md) §5.2（検証ロジック本体）
 
+## いまどこまで終わっているか（2026-07-28 時点）
+
+| # | 作業 | 状態 |
+|---|---|---|
+| 1 | アプリ側の署名検証の実装 | ✅ 完了（PR #71 / #73 / #74） |
+| 2 | 公式配布鍵の生成（`minisign -G`） | ✅ 完了。鍵 ID **`98EA7C6BA2D50118`** |
+| 3 | 公開鍵を `application.yml` の `trusted-keys` に登録 | ✅ 完了（PR #75）。`OfficialTrustedKeyTest` が退行を検知する |
+| 4 | **配布リポジトリへ secrets を登録**（`MINISIGN_SECRET_KEY` / `MINISIGN_PASSWORD`） | ⬜ **未了 → §6** |
+| 5 | 実際に署名付きリリースを出して動作確認 | ⬜ 未了 → §7 |
+
+**秘密鍵とパスフレーズは生成した本人の手元にのみある**（リポジトリにも CI にもエージェントにも渡していない）。
+④が終わるまで、公式プラグインを配布しても署名は付かない＝利用者には確認画面が出る（動作はする）。
+
+### 覚えておくべき事実（実機で確認済み）
+
+- **minisign 0.12 は `-H` 無しでも prehashed（algo `ED`）で署名する。** だからアプリ側は
+  BLAKE2b-512 を自前で持っている（無いと実運用の署名を全部弾く）。
+- **鍵 ID はバイト逆順・大文字で表示される。** アプリの同意画面も minisign CLI と同じ表記に
+  揃えてあるので、そのまま見比べてよい。
+- `minisign` は Ubuntu 22.04 / Pop!_OS のリポジトリには**無い**。公式のスタティックバイナリを
+  `/usr/local/bin` 等に置く（この開発機は導入済み・`minisign 0.12`）。
+
 ## 0. 鍵の寿命 — 一度作れば使い続けられるか
 
 **技術的には無期限に使える。** minisign（Ed25519）の鍵に有効期限の概念は無く、失効リスト（CRL）も
@@ -89,7 +111,50 @@ graphy:
 - **署名を剥がした更新も拒否される**（乗っ取り側が `.minisig` を出さないだけで TOFU を回避できて
   しまうため。2026-07-28 に塞いだ）。
 
-## 6. やってはいけないこと
+## 6. 残作業: 配布リポジトリに secrets を登録する
+
+プラグインを配布するリポジトリ（テンプレート由来の `release.yml` を持つもの）ごとに 1 回だけ。
+
+```bash
+cd <プラグインのリポジトリ>
+cp ~/graphy-signing/graphy-plugins.pub minisign.pub   # 公開鍵はコミットする
+git add minisign.pub && git commit -m "add signing public key" && git push
+
+gh secret set MINISIGN_SECRET_KEY < ~/graphy-signing/graphy-plugins.key
+gh secret set MINISIGN_PASSWORD            # プロンプトでパスフレーズを入力
+```
+
+組織で複数のプラグインを配るなら、リポジトリごとではなく **organization secret** にしてもよい
+（`gh secret set --org <ORG> MINISIGN_SECRET_KEY < ...`）。
+
+登録すると `release.yml` の署名ステップが有効になる（未登録なら自動でスキップされる仕様）。
+
+## 7. 動作確認（署名が効いているか）
+
+1. プラグインのリポジトリでタグを push してリリースを作る
+2. リリース資産に `<id>-<ver>.zip.minisig` と `minisign.pub` が付いていること
+3. 手元で検証できること:
+   ```bash
+   minisign -V -p minisign.pub -m <id>-<ver>.zip -x <id>-<ver>.zip.minisig
+   ```
+4. GRAPHY-Next（standalone）で 環境設定＞プラグイン＞「プラグインの導入を許可する」を ON にし、
+   `owner/repo` を入れて「GitHub から導入」→ **確認画面が出ずにそのまま導入されれば成功**
+   （一覧の信頼欄が `verified` になる）
+
+確認画面が出た場合は §8 を見る。
+
+## 8. 症状別の対処
+
+| 症状 | 原因 | 対処 |
+|---|---|---|
+| 確認画面が出る／信頼欄が `community` | 署名が無い、または鍵が `trusted-keys` に無い | リリースに `.minisig` が付いているか確認。付いているなら鍵 ID が `98EA7C6BA2D50118` か確認 |
+| `signature check failed: ... does not match` | 配布物が署名後に差し替わった、または別の鍵で署名した | リリースを作り直す。心当たりが無ければ**乗っ取りを疑う** |
+| `signature check failed: ... different key` | 前回と違う鍵で署名した（TOFU） | 意図的な鍵変更なら §4 のローテーション手順。利用者側の即時回避はアンインストール→再導入 |
+| `... but this package has no signature` | 以前は署名付きだったのに今回未署名 | 署名を復活させる。秘密鍵を失っているなら §0 の「紛失」欄 |
+| リリースに `.minisig` が付かない | secrets 未登録（ステップがスキップされた） | §6 |
+| `minisign.pub がリポジトリにありません` でジョブが失敗 | 公開鍵をコミットしていない | §6 の 1 行目 |
+
+## 9. やってはいけないこと
 
 - 秘密鍵をリポジトリにコミットする（公開鍵だけコミットする）
 - パスフレーズ無しの鍵を作る
