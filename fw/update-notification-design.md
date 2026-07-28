@@ -234,7 +234,11 @@ curl -i -X POST https://demo.vis-ionary.com/admin/announce \
 
 ## 要確認事項
 
-- **SMTP の送信上限**（Xserver 契約の1時間あたり通数）。既定は 30通/分にしてあるが、契約上の
-  上限が分かり次第 `GRAPHY_AUTH_ANNOUNCE_RATE_PER_MINUTE` を合わせること。
+- ✅ **SMTP の送信上限（2026-07-28 確定）**: 送信は **Gmail（Google Workspace・`smtp.gmail.com`、
+  認証 `t_kobayashi@vis-ionary.com`、送信元は `customerservices@` エイリアス）**。※設計当初の
+  「Xserver」は誤り。Gmail の制約は主に**日次で約 2,000 通/日**（Workspace）。分あたりの明示上限は
+  非公開だがバースト送信で一時スロットル（`421 4.7.0`）が出るため、`GRAPHY_AUTH_ANNOUNCE_RATE_PER_MINUTE`
+  は**既定 30 通/分のまま確定**（`.env` に明示設定なし）。**日次 2,000 はレートでは回避できない実質上限**
+  ——登録者が 2,000 を超える規模になったら SendGrid 等のリレーへ切替が必要。現状の登録者は 0 件で当面の実害なし。
 - **プライバシーポリシー**（`graphy-site/src/pages/legal/privacy.astro`）に、更新通知メールの
   利用目的が記載されているか。

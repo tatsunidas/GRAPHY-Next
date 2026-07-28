@@ -17,8 +17,9 @@
 > 公開URL `POST /admin/announce` で 誤鍵→401 / 正鍵→202。次リリースから `auto-deploy.sh`（cron）が自動配信。
 > 併せて修正した重大不具合: 夜間リセット（`deploy/demo/reset-demo.sh`）がお知らせメール登録者テーブルごと
 > 巻き戻し、**日中の登録が毎晩0:00に全消去されていた**問題を、登録者DBの別ボリューム分離で解消（止血）。
-> **残（ブロッカーでない）**: SMTP送信上限に合わせた `GRAPHY_AUTH_ANNOUNCE_RATE_PER_MINUTE`（既定30/分）、
-> プライバシーポリシー（`graphy-site/.../privacy.astro`）への利用目的記載確認。
+> **SMTP送信上限は確定済み（2026-07-28）**: 送信は Gmail（Google Workspace・`smtp.gmail.com`）。日次
+> 約2,000通/日が実質上限で、`GRAPHY_AUTH_ANNOUNCE_RATE_PER_MINUTE` は既定30/分のまま（明示設定なし）。
+> **残（ブロッカーでない）**: プライバシーポリシー（`graphy-site/.../privacy.astro`）への利用目的記載確認。
 >
 > 🚨 **3D/MPR/リスライス/計測/座標変換を触るなら着手前に必ず `fw/cornerstone-3d-geometry-caveat.md` を読む**
 > （Cornerstone3D の 3D ジオメトリはバグがあり、そのまま使うと実空間座標がずれる。確定計算は患者 LPS mm の自前・単一幾何で完結）。
