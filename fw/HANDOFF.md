@@ -52,9 +52,11 @@
 > `MinisignTest`＝openssl 製 Ed25519 署名）。テンプレの release.yml に署名ステップを追加。
 > ✅ 運用: **公式署名鍵を登録済み（2026-07-28・鍵 ID `98EA7C6BA2D50118`）**。`application.yml` の
 > `graphy.plugins.trusted-keys` に公開鍵を置いた。この鍵で署名したプラグインは `verified` 扱いになり、
-> 確認画面なしで導入される。**残**: プラグイン配布リポジトリ側の secrets 登録
-> （`MINISIGN_SECRET_KEY` / `MINISIGN_PASSWORD`）＝実際に署名を出し始める設定。
-> 手順・保管・ローテーションは `fw/plugin-signing-runbook.md`。
+> 確認画面なしで導入される。**この鍵は「当社が自分で配布する公式プラグイン」専用**で、
+> 第三者作者（＝配布者の大半）は自分の鍵を使う（当社の鍵は渡さない）。したがって
+> secrets 登録（`MINISIGN_SECRET_KEY` / `MINISIGN_PASSWORD`）は**当社が公式プラグインを
+> 配り始めるときに、当社所有のリポジトリで行う作業**であり、それまでは発生しない。
+> 手順・保管・ローテーション・誰の鍵かの整理は `fw/plugin-signing-runbook.md`。
 > 鍵は無期限に使えるが、**失うと既存利用者は更新できなくなる**（バックアップが本体）。
 > **2026-07-28 追加修正**: 署名の剥がしを塞いだ。固定鍵があるのに `.minisig` が無い更新は
 > `invalid` として拒否する（従来は `unsigned` 扱いで、同意さえすれば通ってしまい TOFU を
