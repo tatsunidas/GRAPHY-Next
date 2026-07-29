@@ -1,9 +1,18 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
-> 更新日: 2026-07-28（最終更新: プラグイン導入ゲートの 2 段化＝管理者ゲート＋ユーザー オプトイン。下記の
-> プラグインマネージャ エントリ参照）
+> 更新日: 2026-07-29（最終更新: ユーザーマニュアル（mkdocs / GitHub Pages）を追加。下記エントリ参照）
 > 目的: 別の作業者（Claude 含む）がこのリポジトリの状況を把握し、続きを実装できるようにする。
 > このファイル＋ `fw/` 配下の各設計ドキュメントが「ソース・オブ・トゥルース」。
+>
+> 🟢 **2026-07-29 ユーザーマニュアル（mkdocs / GitHub Pages）を追加**（`fw/user-manual-site.md`）。
+> 公開先 <https://tatsunidas.github.io/GRAPHY-Next/>。classic（`tatsunidas/GRAPHY`）と同じ構成
+> （リポジトリ内 `docs/` ＋ Pages）。**製品サイト本体（`graphy.vis-ionary.com`）は別リポジトリ
+> `tatsunidas/vis-ionary-web` の `graphy-site/` にあり、このリポジトリには置かない**。マニュアルだけが
+> 例外で、本文が実装と同じ PR で更新できることを優先した。現状は `index.md`（概要・2 モード・機能・
+> 動作環境）と `install.md`（デスクトップ / Web の導入手順）が書けていて、残り 8 章は見出しのみの
+> 「作成中」。**マージ後に一度だけ 設定 ＞ Pages ＞ Source を「GitHub Actions」にする必要がある**
+> （でないと deploy ジョブが失敗する）。`mkdocs build --strict` が CI（`.github/workflows/docs.yml`）で
+> 走り、PR ではビルド検証のみ・`main` push で公開。
 >
 > ✅ **2026-07-10（実 dcm4chee 結合検証 完了）**: `deploy/dcm4chee/VERIFY-web.md` の手順で実機検証済み。
 > ①2D表示 ②prefetch一括取得 ③STOW-RS書き戻し（派生シリーズ・SEG/RTSTRUCTのエクスポート表示）④IHE IID起動。

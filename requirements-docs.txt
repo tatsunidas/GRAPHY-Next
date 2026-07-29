@@ -1,0 +1,6 @@
+# ユーザーマニュアル (mkdocs) のビルドに必要な依存。CI: .github/workflows/docs.yml
+#
+# MkDocs 2.0 はプラグイン機構とテーマ機構が非互換になり、移行パスが無い（mkdocs-material の
+# アナウンス参照）。CI が黙って壊れないよう 1.x に固定しておく。
+mkdocs>=1.6,<2.0
+mkdocs-material>=9.5,<10.0

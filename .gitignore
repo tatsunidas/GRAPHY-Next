@@ -26,6 +26,9 @@ desktop/dist/
 .classpath
 .project
 
+# --- ユーザーマニュアル (mkdocs) のビルド成果物 ---
+/site/
+
 # --- misc ---
 *.log
 .DS_Store
