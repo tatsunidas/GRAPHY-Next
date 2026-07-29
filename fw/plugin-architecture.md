@@ -1,7 +1,11 @@
 # GRAPHY-Next プラグイン アーキテクチャ設計
 
-> 作成日: 2026-06-28（更新: 2026-07-17 — standalone のプラグイン格納先／web の実デプロイ制約（read_only・未マウント）を実装に合わせて訂正）
-> ステータス: 骨格実装済み（standalone/web の両モードで疎通確認済み。サンドボックス/署名は将来）
+> 作成日: 2026-06-28（更新: 2026-07-29 — **§7 host API の拡張（優先度 高・未着手）を追加**）
+> ステータス: 骨格実装済み（standalone/web の両モードで疎通確認済み。署名は実装済み、サンドボックスは将来）
+>
+> ⚠ **次に着手すべきはここ → [§7 host API の拡張](#7-host-api-の拡張優先度-高未着手)**。
+> 2D ビューアのプラグインが「いま何を見ているか」を問い合わせられない状態で、
+> 画像処理系プラグインが成立しない。
 > 関連: [`development-phases.md`](development-phases.md)、[`dicom-data-layer.md`](dicom-data-layer.md)
 
 GRAPHY のプラグイン機構を、standalone / web の 2 モードに対応する形で再設計する。
@@ -198,4 +202,78 @@ web は運営配備 / サンドボックス。
 - `mockPlugins.ts`（backend 未起動時のフォールバックデモ。`MOCK_ENABLED`）
 - 配線: `Viewer2DMenuBar.tsx`（`viewer2d.menu`）、`mainscreen/MenuBar.tsx`（`mainscreen.menu` を新設）
 
-**残（将来）**: web のサンドボックス実行、権限モデルの強制、署名検証、WASM、ツールバー surface の描画。
+**残（将来）**: web のサンドボックス実行、権限モデルの強制、WASM、ツールバー surface の描画。
+（署名検証は 2026-07-28 に実装済み → [`plugin-manager-design.md`](plugin-manager-design.md) §5.2）
+
+---
+
+## 7. host API の拡張（優先度 高・未着手）
+
+> 起票: 2026-07-29 ／ ステータス: **未着手**（設計のみ）／ 優先度: **高**
+> 経緯: プラグイン デモ 3 本（[`plugin-explainer.md`](plugin-explainer.md) §6）を書いた過程で、
+> **2D ビューアのプラグインには「いま何を見ているか」を答える手段が一つも無い**ことが判明した。
+
+### 7.1 問題
+
+`Viewer2DMenuBar.tsx` が組み立てる host の中身は次だけである。
+
+```ts
+{ surface, pluginId, t, notify, runBackend, actions }
+```
+
+`actions`（`Viewer2DToolbar.tsx` の `ViewerActions`）は 30 個ほどあるが、**すべて `void` を返すコマンド**で、
+「対象タイルにこれをやれ」と命令できるだけ。**問い合わせが一切できない。**
+
+| プラグインが知りたいこと | いまの host |
+|---|---|
+| どのシリーズを見ているか（study / series UID） | ✗ |
+| いま何スライス目か | ✗ |
+| 画素（生の HU / SUV、あるいは 8bit でも） | ✗ |
+| 適用中の W/L | ✗（`setWindowLevel` はあるが getter が無い） |
+| 描いた ROI / マスク | ✗ |
+| 処理結果をビューアへ戻す | ✗ |
+
+比較として `MainScreenPluginHost` には `selectedStudyUid` がある（`pluginTypes.ts`）。**2D ビューア側だけが
+それすら持っていない**という非対称になっている。
+
+**現に起きている実害**: デモ 2・3 は本体の内部 DOM（`data-tile-id` 属性）とキャンバス読み取りで
+代替している。これは公式契約ではないのでタイルの実装が変われば黙って壊れる。しかも canvas から取れるのは
+**W/L 適用後の 8bit RGBA** なので、平均化フィルタの結果は「見た目の平滑化」にしかならず、
+**HU に対する定量処理には使えない**（デモ 2 の README で断り書きにせざるを得なかった）。
+
+**能力自体は既にある**: `frontend/src/viewer/debugApi.ts` の `window.__graphyDebug` が、
+ビューポート列挙・現在 `imageId`・カメラ幾何・W/L・colormap の取得をすべて実装している。
+ただし `import.meta.env.DEV` ガード付きで**配布ビルドには入らない**（automator 専用のため）。
+H1・H2 は実質「これを本番向けの契約として切り出す」作業である。
+
+### 7.2 フェーズ
+
+| # | 内容 | 追加する host API | 依存・難所 | 両モード |
+|---|---|---|---|---|
+| **H1** | **対象タイルの識別情報**。DOM 依存（`data-tile-id`）を公式契約へ置換 | `targets: { tileId, studyUid, seriesUid, sliceIndex, frameIndex? }[]` | 「対象」の定義を `runViewerCommand` と揃える（選択タイル→無ければ全タイル） | ✅ |
+| **H2** | **表示状態の問い合わせ**。`debugApi` の相当機能を本番契約へ昇格 | `getViewState(tileId?) => { windowCenter, windowWidth, colormap, invert, flipH, flipV, camera }` | `debugApi.ts` から共有ロジックを切り出し、DEV ガードの外へ | ✅ |
+| **H3** | **画素の読み出し**（本命） | `getPixelData(tileId, opts?) => Promise<{ data: Float32Array, rows, cols, spacing, unit }>` | **必ず [`pixelCalibration.ts`](../frontend/src/viewer/pixelCalibration.ts) 経由**（`getPixelData()` に直接 slope/intercept を書かない。preScale 既定 ON による二重適用で CT が約 −1024 ずれる既知事故）。シリーズ全スライスは転送量が大きいのでスライス単位を既定にし、範囲指定を任意で | ✅ |
+| **H4** | **書き戻し** — 処理結果をオーバーレイ表示 / 新シリーズとして保管庫へ | 未定（`showOverlay()` / `saveDerivedSeries()`） | 設計判断が要る（派生シリーズの UID 生成・SEG との棲み分け・web での書き戻し先）。**H1〜H3 とは分けて扱う** | 要検討 |
+
+H1〜H3 は**フロント面だけで完結**するため、web モードでも同じように動く（backend の契約 `/api/plugins` は不変）。
+
+### 7.3 副作用（着手時に必ずセットで行うこと）
+
+- **型定義の同期**: `graphy-plugin.d.ts` は本体（`frontend/src/plugins/pluginTypes.ts`）の安定サブセットとして
+  **`examples/plugin-template/` と外部デモ 4 リポジトリに配布済み**。拡張したら 5 箇所すべてを更新する。
+- **`engines.graphy` の下限**: 新 API を使うデモ・プラグインは下限を上げる必要がある
+  （`engines` 互換判定は展開前に効くので、古い本体には入らなくなる＝正しい挙動）。
+- **デモの書き換え**: H1 が入ったら [mean-filter](https://github.com/tatsunidas/graphy-next-plugin-mean-filter) と
+  [gemini-findings](https://github.com/tatsunidas/graphy-next-plugin-gemini-findings) の
+  `findOpenTiles()`（DOM 依存）を差し替え、README の「できないこと」節を更新する。
+- **`fw/plugin-authoring-guide.md` §2-3 の host 表**と [`plugin-explainer.md`](plugin-explainer.md) §7 の
+  制約記述も同時に更新する。
+
+### 7.4 やらないこと（この範囲では）
+
+- **`ui.js` からの外部 API 呼び出し**は依然できない（本番 CSP の `connect-src` が localhost 限定。
+  [`security.md`](security.md)）。外部通信は JAR 側に置く方針を変えない。緩めると
+  「プラグインが任意の外部へ患者データを送れる」ことになり、CSP を置いた意味が消える。
+- **権限（`permissions`）の実強制**とサンドボックスは別課題（`plugin-manager-design.md` §8 の P3）。
+  H3 で画素が読めるようになるほど `read-pixels` の実強制の必要性は上がるので、**H3 と P3 の順序は
+  着手時に再検討する**。

@@ -277,7 +277,8 @@ GitHub secrets に登録するだけ。以後リリースごとの追加作業�
 - **host API が痩せている。** `viewer2d.*` の host が渡すのは `actions`（表示操作）だけで、
   **表示中シリーズの UID も生ピクセル（HU/SUV）も取れない**。デモ 2・3（§6）は
   タイルの `data-tile-id` 属性とキャンバス読み取りで代替しており、DOM 依存＝壊れやすい。
-  画像処理系プラグインを本気で書けるようにするなら、ここの拡張が先。
+  → **優先度 高の TODO として起票済み**: [`plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張優先度-高未着手)
+  （H1 対象タイルの識別 → H2 表示状態 → H3 画素読み出し → H4 書き戻し）
 - **`ui.js` から外部 API を叩けない。** 本番ビルドの CSP が `connect-src` を localhost に
   限っているため（`fw/security.md`）。外部通信は JAR 側に置くしかなく、結果として
   「UI だけで済む機能」まで standalone 限定になる。

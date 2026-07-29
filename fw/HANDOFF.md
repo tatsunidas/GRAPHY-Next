@@ -1,8 +1,24 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
-> 更新日: 2026-07-29（最終更新: プラグイン デモ リポジトリ 4 本を新設。下記エントリ参照）
+> 更新日: 2026-07-29（最終更新: プラグイン host API 拡張を **優先度 高の TODO** として起票。下記エントリ参照）
 > 目的: 別の作業者（Claude 含む）がこのリポジトリの状況を把握し、続きを実装できるようにする。
 > このファイル＋ `fw/` 配下の各設計ドキュメントが「ソース・オブ・トゥルース」。
+>
+> 🔴 **TODO（優先度 高・未着手）2026-07-29: プラグイン host API の拡張**
+> → 設計とフェーズ表は [`fw/plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張優先度-高未着手)
+>
+> **2D ビューアのプラグインには「いま何を見ているか」を答える手段が一つも無い。**
+> `Viewer2DMenuBar.tsx` が渡す host は `{ surface, pluginId, t, notify, runBackend, actions }` だけで、
+> `actions` は全部 `void` を返すコマンド（命令はできるが問い合わせができない）。シリーズ UID も
+> スライス番号も画素も W/L も取れず、`MainScreenPluginHost` にある `selectedStudyUid` 相当すら無い。
+> 実害として、デモ 2・3 は内部 DOM（`data-tile-id`）とキャンバス読み取りで代替しており、
+> **タイル実装が変われば黙って壊れる**うえ、取れるのは W/L 適用後の 8bit なので **HU への定量処理に使えない**。
+> フェーズは H1 対象タイルの識別情報 → H2 表示状態の問い合わせ → H3 画素の読み出し（本命）→ H4 書き戻し（別扱い）。
+> H1・H2 は `frontend/src/viewer/debugApi.ts`（automator 用・DEV ガード付き）に実装済みの機能を
+> **本番契約として切り出すだけ**なので着手コストは低い。H3 は必ず `pixelCalibration.ts` 経由で行うこと
+> （直接 slope/intercept を掛けると preScale と二重適用になり CT が約 −1024 ずれる既知事故）。
+> 着手時は `graphy-plugin.d.ts` の**配布先 5 箇所**（`examples/plugin-template/` ＋ 外部デモ 4 リポジトリ）の
+> 同期を忘れないこと。
 >
 > 🟢 **2026-07-29 プラグイン デモ リポジトリ 4 本を新設**（`fw/plugin-explainer.md` §6）。
 > 第三者がプラグインを書き始められるようにするため、**GRAPHY-Next の外に**独立リポジトリとして作成
