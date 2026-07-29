@@ -207,9 +207,9 @@ web は運営配備 / サンドボックス。
 
 ---
 
-## 7. host API の拡張（優先度 高・未着手）
+## 7. host API の拡張（優先度 高・H1/H2 実装済み）
 
-> 起票: 2026-07-29 ／ ステータス: **未着手**（設計のみ）／ 優先度: **高**
+> 起票: 2026-07-29 ／ ステータス: **H1・H2 実装済み（2026-07-29）／ H3・H4 未着手** ／ 優先度: **高**
 > 経緯: プラグイン デモ 3 本（[`plugin-explainer.md`](plugin-explainer.md) §6）を書いた過程で、
 > **2D ビューアのプラグインには「いま何を見ているか」を答える手段が一つも無い**ことが判明した。
 
@@ -250,24 +250,101 @@ H1・H2 は実質「これを本番向けの契約として切り出す」作業
 
 | # | 内容 | 追加する host API | 依存・難所 | 両モード |
 |---|---|---|---|---|
-| **H1** | **対象タイルの識別情報**。DOM 依存（`data-tile-id`）を公式契約へ置換 | `targets: { tileId, studyUid, seriesUid, sliceIndex, frameIndex? }[]` | 「対象」の定義を `runViewerCommand` と揃える（選択タイル→無ければ全タイル） | ✅ |
-| **H2** | **表示状態の問い合わせ**。`debugApi` の相当機能を本番契約へ昇格 | `getViewState(tileId?) => { windowCenter, windowWidth, colormap, invert, flipH, flipV, camera }` | `debugApi.ts` から共有ロジックを切り出し、DEV ガードの外へ | ✅ |
+| **H1** ✅ | **対象タイルの識別情報**。DOM 依存（`data-tile-id`）を公式契約へ置換 | `getTargets() => ViewerTarget[]` | 「対象」の定義を `runViewerCommand` と揃える（選択タイル→無ければ全タイル） | ✅ |
+| **H2** ✅ | **表示状態の問い合わせ**。`debugApi` の相当機能を本番契約へ昇格 | `getViewState(tileId?) => ViewerViewState \| null` | `debugApi.ts` から共有ロジックを切り出し、DEV ガードの外へ | ✅ |
 | **H3** | **画素の読み出し**（本命） | `getPixelData(tileId, opts?) => Promise<{ data: Float32Array, rows, cols, spacing, unit }>` | **必ず [`pixelCalibration.ts`](../frontend/src/viewer/pixelCalibration.ts) 経由**（`getPixelData()` に直接 slope/intercept を書かない。preScale 既定 ON による二重適用で CT が約 −1024 ずれる既知事故）。シリーズ全スライスは転送量が大きいのでスライス単位を既定にし、範囲指定を任意で | ✅ |
 | **H4** | **書き戻し** — 処理結果をオーバーレイ表示 / 新シリーズとして保管庫へ | 未定（`showOverlay()` / `saveDerivedSeries()`） | 設計判断が要る（派生シリーズの UID 生成・SEG との棲み分け・web での書き戻し先）。**H1〜H3 とは分けて扱う** | 要検討 |
 
 H1〜H3 は**フロント面だけで完結**するため、web モードでも同じように動く（backend の契約 `/api/plugins` は不変）。
 
+#### H1・H2 の実装（2026-07-29・GRAPHY-Next 0.1.9 以降）
+
+```ts
+host.getTargets(): ViewerTarget[]              // 選択タイル→無ければ全タイル（actions と同じ対象）
+host.getViewState(tileId?): ViewerViewState | null   // 省略時は対象の先頭タイル
+```
+
+| 型 | フィールド |
+|---|---|
+| `ViewerTarget` | `tileId` / `studyUid` / `seriesUid` / `seriesLabel` / `imageId` / `sliceIndex` / `sliceCount` / `c` / `t` / `modality` |
+| `ViewerViewState` | `tileId` / `windowCenter` / `windowWidth` / `unit` / `colormap` / `invert` / `flipH` / `flipV` / `rotation` / `zoom` / `pan` |
+
+**起票時の素案から変えた点（意図的）**:
+
+- `targets` を**配列プロパティではなく関数**にした。host はメニュークリック時に 1 度組み立てられるが、
+  プラグインはダイアログを開いたまま残る。スナップショットを配ると、ユーザーがスライスを送った後に
+  **黙って古いスライスを指す**。同じ理由で `getViewState` も毎回読む。
+- `frameIndex` の代わりに **ZCT モデルの `c` / `t`** を出す（本体の多次元モデルがそれ）。
+  併せて `seriesLabel` / `imageId` / `sliceCount` / `modality` を足した（いずれも取得コストゼロで、
+  プラグインが「何を見ているか」を人に見せる・H3 のキーにするのに要る）。
+- 表示状態は生の `camera` ではなく `zoom` / `pan` / `rotation` / `flipH` / `flipV`
+  （`viewer/transform.ts` の `ViewTransform`＝Fit を 1.0 とする本体のモデル）で出す。
+  Cornerstone のカメラをそのまま晒すと、3D ジオメトリの既知バグ（`cornerstone-3d-geometry-caveat.md`）と
+  同じ罠をプラグイン作者に押し付けることになる。
+- **W/L はモダリティ値空間**（CT なら HU、単位は `unit`）。表示 8bit ではない。
+- `colormap` は**本体の内部名を出さない**。①グレースケール（`graphy-gray`）は `null` に畳む
+  — 本体は「LUT 解除」を線形グレースケールの明示適用で表現しているが（Cornerstone が
+  `colormap: undefined` を no-op にするため）、プラグインから見ればそれは「LUT 未適用」である。
+  ②LUT は登録名 `graphy-lut-<LUT 名>` の接頭辞を剥がし、**ユーザーが LUT ダイアログで選んだ名前**
+  （`"10_Percent"` 等）で返す。接頭辞は本体の実装詳細（`LUT_COLORMAP_PREFIX`）で、
+  シリーズ Sync で伝播した colormap も同じ規則なので剥がすだけで済む。
+  automator 側（`debugApi`）は生の名前のまま。
+
+**実装（フロント面のみ・backend 変更なし）**:
+
+| ファイル | 役割 |
+|---|---|
+| `viewer/viewportRead.ts`（新規） | DEV ガードの外へ出した読み取り専用ヘルパ（`voiToWindow` / `readVoiWindow` / `readColormapName` / `readInvert` / `readCamera`）。`debugApi.ts` と共用。テストは `viewportRead.test.ts` |
+| `viewer/viewerCommands.ts` | タイル単位の問い合わせ `getTargetInfo()` / `getViewState()` をレジストリ契約に追加 |
+| `viewer/Viewer2D.tsx` | 上記の実装（`roiContext` ＋ `imageIdsRef`/`indexRef`/`infoRef` ＋ `readTransform`）。表示単位は `imageInfo.ts` の `calibratedUnit()` に一本化しカーソル表示と共用 |
+| `viewer2d/Viewer2DScreen.tsx` | `ViewerActions.getTargets` / `getViewState`（対象解決は `resolveTargets()` を命令系と共有） |
+| `viewer2d/Viewer2DMenuBar.tsx` | host へ配線 |
+| `plugins/pluginTypes.ts` | 公開契約 `ViewerTarget` / `ViewerTileViewState` を re-export し `Viewer2DPluginHost` に追加 |
+| `plugins/mockPlugins.ts` | 配線確認用デモ `demo-context`（DOM を見ずにシリーズ名・スライス・W/L を通知） |
+
+**未登録タイルは黙って除外される**（`queryViewerCommand` が null を返す）: Fusion の子ビューポートや
+アンマウント途中のタイルは `getTargets()` に現れない。プラグイン側は**空配列を必ず扱う**こと。
+
+#### 実機検証（2026-07-30・standalone / Linux）
+
+**本物の Electron ＋ 本物の backend ＋ 本物のプラグイン配信経路**（`plugins/` フォルダ直下に置いた
+第三者プラグインを `/api/plugins` から ES モジュールとして配信）で 26 項目すべて合格。
+ドライバは `automator/src/spike/hostApiCheck.ts`（`cd automator && npx tsx src/spike/hostApiCheck.ts`）、
+検証用プラグインは `automator/.results/run-data/desktop/plugins/hostapi-check/`（fixture は ct-basic）。
+
+確認できたこと:
+
+- Plug-ins メニューに出て、`ui.js` が **DOM を一切覗かずに** シリーズ/スライス/W/L を取得できる
+  （`data-tile-id` もキャンバス読み取りも使っていない）。
+- 値が画面表示と一致する: パネルの `slice=1/50` `W/L=250/40 HU` が
+  スライダー `Z 1/50`・オーバーレイ `W/L 40/250` と一致。
+- **毎回読み直している**: スライダーで 13 枚目へ送り、W/L プリセット（brain）と階調反転を当てて
+  再実行すると `sliceIndex=12` / `imageId` 変化 / `W/L=80/40` / `invert=true` に追従。
+  ＝ 素案のスナップショット方式なら古い値を返していた箇所。
+- LUT 適用後の `colormap` が `"10_Percent"`（内部名 `graphy-lut-10_Percent` ではない）。
+  **この実機確認で内部名の漏れを見つけて上記の接頭辞剥がしを入れた**。
+- 未知の `tileId` は `null`（例外にしない）。
+
+副産物の修正: `automator/src/driver/desktopDriver.ts` が **DevTools ウィンドウをメイン画面と
+誤認する**バグを直した（`window` イベント発火時の url が about:blank だと predicate に外れ、
+timeout → `firstWindow()` フォールバックが `devtools://…` を返していた。「MainScreen が出ない」と
+2 回誤検知した）。現存ウィンドウを url でポーリングして選ぶ方式に変更。
+
 ### 7.3 副作用（着手時に必ずセットで行うこと）
 
-- **型定義の同期**: `graphy-plugin.d.ts` は本体（`frontend/src/plugins/pluginTypes.ts`）の安定サブセットとして
-  **`examples/plugin-template/` と外部デモ 4 リポジトリに配布済み**。拡張したら 5 箇所すべてを更新する。
-- **`engines.graphy` の下限**: 新 API を使うデモ・プラグインは下限を上げる必要がある
+- ✅ **型定義の同期（本体側 1/5）**: `examples/plugin-template/graphy-plugin.d.ts` に `ViewerTarget` /
+  `ViewerViewState` / `getTargets` / `getViewState` を追加済み（README・`ui.js` のコメント例も）。
+- 🔴 **残: 外部デモ 4 リポジトリの `graphy-plugin.d.ts`**（[demos ハブ](https://github.com/tatsunidas/graphy-next-plugin-demos) /
+  hello / mean-filter / gemini-findings）。本体リポジトリからは触れないので**別作業**。
+- **`engines.graphy` の下限**: 新 API を使うプラグインは `">=0.1.9"` へ上げる
   （`engines` 互換判定は展開前に効くので、古い本体には入らなくなる＝正しい挙動）。
-- **デモの書き換え**: H1 が入ったら [mean-filter](https://github.com/tatsunidas/graphy-next-plugin-mean-filter) と
+  テンプレート自身は新 API を使っていないので `">=0.1.0"` のまま据え置いた。
+- 🔴 **残: デモの書き換え**: [mean-filter](https://github.com/tatsunidas/graphy-next-plugin-mean-filter) と
   [gemini-findings](https://github.com/tatsunidas/graphy-next-plugin-gemini-findings) の
-  `findOpenTiles()`（DOM 依存）を差し替え、README の「できないこと」節を更新する。
-- **`fw/plugin-authoring-guide.md` §2-3 の host 表**と [`plugin-explainer.md`](plugin-explainer.md) §7 の
-  制約記述も同時に更新する。
+  `findOpenTiles()`（DOM 依存）を `getTargets()` へ差し替え、README の「できないこと」節を更新する。
+  ただし**画素の定量処理は H3 が要る**ので、「canvas の 8bit しか読めない」旨の断り書きは H3 まで残る。
+- ✅ **`fw/plugin-authoring-guide.md` §2-3 の host 表**と [`plugin-explainer.md`](plugin-explainer.md) §7 の
+  制約記述を更新済み。
 
 ### 7.4 やらないこと（この範囲では）
 

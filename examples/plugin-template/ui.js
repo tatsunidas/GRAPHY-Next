@@ -15,5 +15,16 @@ export function activate(host) {
     // 2D Viewer 面（viewer2d.menu / viewer2d.toolbar）: 表示中タイルを白黒反転して通知。
     host.actions.invert();
     host.notify("my-plugin: inverted current tile(s)");
+
+    // 「いま何を見ているか」を問い合わせたい場合（GRAPHY-Next 0.1.9 以降）。
+    // 使うなら plugin.json の engines.graphy を ">=0.1.9" に上げること。
+    //
+    //   for (const target of host.getTargets()) {
+    //     const view = host.getViewState(target.tileId);
+    //     host.notify(
+    //       target.seriesLabel + " slice " + (target.sliceIndex + 1) + "/" + target.sliceCount +
+    //       (view ? " W/L " + view.windowWidth + "/" + view.windowCenter + " " + view.unit : "")
+    //     );
+    //   }
   }
 }

@@ -54,6 +54,18 @@ function firstNumber(v: unknown): number | undefined {
 }
 
 /** imageId から表示・キャリブレーション情報を集約する。 */
+/**
+ * 校正済み画素値の表示単位。
+ *
+ * <p>RescaleType(0028,1054) があればそれ（"US"＝未指定は除外）、無ければ CT のみ "HU"、
+ * それ以外は単位なし。画面のカーソル値表示と、プラグイン host API の `getViewState().unit` で共用する。
+ */
+export function calibratedUnit(info?: ImageInfo | null): string {
+  const rt = info?.rescaleType?.trim();
+  if (rt && rt.toUpperCase() !== "US") return rt;
+  return info?.modality === "CT" ? "HU" : "";
+}
+
 export function readImageInfo(imageId: string): ImageInfo {
   /* eslint-disable @typescript-eslint/no-explicit-any */
   const series: any = metaData.get("generalSeriesModule", imageId) ?? {};

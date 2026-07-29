@@ -777,6 +777,19 @@ function TileGrid({
       redo: () => runViewerCommand(resolveTargets(), (c) => c.redo()),
       setWindowLevel: (cc, ww) => runViewerCommand(resolveTargets(), (c) => c.setWindowLevel(cc, ww)),
       resetWindow: () => runViewerCommand(resolveTargets(), (c) => c.resetWindow()),
+      // 問い合わせ系（プラグイン host API H1/H2）。対象の解決は命令系と同一（選択→無ければ全）。
+      // 未登録タイル（fusion 子・アンマウント途中）は queryViewerCommand が null を返すので落ちる。
+      getTargets: () =>
+        resolveTargets().flatMap((tileId) => {
+          const info = queryViewerCommand(tileId, (c) => c.getTargetInfo());
+          return info ? [{ tileId, ...info }] : [];
+        }),
+      getViewState: (tileId) => {
+        const id = tileId ?? resolveTargets()[0];
+        if (!id) return null;
+        const st = queryViewerCommand(id, (c) => c.getViewState());
+        return st ? { tileId: id, ...st } : null;
+      },
       editPresets: () => setPresetsOpen(true),
       // Z 並べ替えはシリーズレベル（seriesCommands）。動画/IPP不在は SeriesViewer 側でブロック。
       sort: (mode) => runSeriesCommand(resolveTargets(), (c) => c.setSortMode(mode)),

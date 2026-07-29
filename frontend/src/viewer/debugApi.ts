@@ -4,6 +4,7 @@
  */
 import { getRenderingEngine } from "@cornerstonejs/core";
 import { ENGINE_ID } from "./Viewer2D";
+import { readCamera, readColormapName, readVoiWindow } from "./viewportRead";
 
 /**
  * automator（自律検証ツール）専用のデバッグAPI。`window.__graphyDebug` として公開し、
@@ -98,15 +99,7 @@ function getViewportGeometry(): ViewportGeometry[] {
     const canvas = vp.canvas as HTMLCanvasElement | undefined;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const anyVp = vp as any;
-    let cam: ViewportGeometry["camera"] = { parallelScale: null, position: null, focalPoint: null };
-    try {
-      const c = anyVp.getCamera?.() ?? {};
-      cam = {
-        parallelScale: c.parallelScale ?? null,
-        position: c.position ?? null,
-        focalPoint: c.focalPoint ?? null,
-      };
-    } catch { /* ignore */ }
+    const cam = readCamera(anyVp);
     let image: ViewportGeometry["image"] = null;
     try {
       const d = anyVp.getImageData?.();
@@ -149,13 +142,11 @@ function getViewportProperties(): ViewportProperties[] {
   if (!engine) return [];
   const out: ViewportProperties[] = [];
   for (const vp of engine.getViewports()) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const props = (vp as any).getProperties?.() ?? {};
-    const range = props.voiRange as { lower: number; upper: number } | undefined;
     out.push({
       viewportId: vp.id,
-      colormapName: props.colormap?.name ?? null,
-      windowLevel: range ? { center: (range.lower + range.upper) / 2, width: range.upper - range.lower } : null,
+      // checklist は「LUT を当てたか」を見るので、内部グレースケール名は畳まず生の名前を返す。
+      colormapName: readColormapName(vp),
+      windowLevel: readVoiWindow(vp),
     });
   }
   return out;

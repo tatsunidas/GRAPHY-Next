@@ -1,0 +1,11 @@
+{
+  "id": "hostapi-check",
+  "name": "Host API Check",
+  "version": "0.1.0",
+  "engines": { "graphy": ">=0.1.0", "os": ["win32", "darwin", "linux"] },
+  "description": "Verifies host.getTargets() / host.getViewState() (fw/plugin-architecture.md #7 H1/H2).",
+  "author": "automator",
+  "license": "MIT",
+  "contributes": ["viewer2d.menu"],
+  "ui": "ui.js"
+}

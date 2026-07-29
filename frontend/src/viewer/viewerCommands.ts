@@ -12,6 +12,63 @@
  */
 import type { LutData } from "../api";
 
+/**
+ * タイル 1 枚が「いま何を表示しているか」（プラグイン host API の H1・fw/plugin-architecture.md §7）。
+ *
+ * <p>`tileId` は付与しない: レジストリのキー＝tileId なので、問い合わせた側が知っている。
+ */
+export interface ViewerTargetInfo {
+  studyUid: string;
+  seriesUid: string;
+  /** 画面に出ているシリーズ名（"3: AXIAL CT" 等）。 */
+  seriesLabel: string;
+  /** 表示中スライスの imageId。 */
+  imageId: string;
+  /** 表示中スライス（Z）の 0 始まり index と、そのスタックの総数。 */
+  sliceIndex: number;
+  sliceCount: number;
+  /** ZCT モデルのチャンネル / 時相（多次元でないシリーズは 0）。 */
+  c: number;
+  t: number;
+  modality: string;
+}
+
+/**
+ * タイル 1 枚の表示状態（プラグイン host API の H2）。
+ *
+ * <p>W/L は**モダリティ値空間**（CT なら HU、SUV 校正済み PET なら Bq/mL）。表示単位は `unit`。
+ */
+export interface ViewerViewState {
+  windowCenter: number;
+  windowWidth: number;
+  /** 校正済み画素値の単位（RescaleType、無ければ CT のみ "HU"、それ以外は ""）。 */
+  unit: string;
+  /**
+   * 適用中の LUT 名（LUT ダイアログの名前。例 `"10_Percent"`）。グレースケール（未適用）なら null。
+   * 本体の内部登録名 `graphy-lut-…` / `graphy-gray` は出さない。
+   */
+  colormap: string | null;
+  invert: boolean;
+  flipH: boolean;
+  flipV: boolean;
+  /** 度。 */
+  rotation: number;
+  /** Fit を 1.0 とした相対倍率。 */
+  zoom: number;
+  /** 既定（画像が中央）からのオフセット（world mm）。 */
+  pan: [number, number];
+}
+
+/** 画面（複数タイル）視点での H1 の 1 件。どのタイルの話かが要るので tileId を持つ。 */
+export interface ViewerTarget extends ViewerTargetInfo {
+  tileId: string;
+}
+
+/** 画面視点での H2。 */
+export interface ViewerTileViewState extends ViewerViewState {
+  tileId: string;
+}
+
 export interface ViewerCommands {
   fit(): void;
   reset(): void;
@@ -32,6 +89,10 @@ export interface ViewerCommands {
   getWindowState(): { imageId: string; center: number; width: number } | null;
   /** SUV 校正ダイアログ用のコンテキスト（表示中 imageId・SeriesUID・モダリティ）。取得不能なら null。 */
   getSuvContext(): { imageId: string; seriesUid: string; modality: string } | null;
+  /** いま表示しているスタディ/シリーズ/スライス。プラグイン host API の H1。取得不能なら null。 */
+  getTargetInfo(): ViewerTargetInfo | null;
+  /** いまの表示状態（W/L・LUT・反転・affine）。プラグイン host API の H2。取得不能なら null。 */
+  getViewState(): ViewerViewState | null;
   /** 左ドラッグに割り当てる操作/計測/ブラシツールを切替（toolName は Cornerstone のツール名 or 消しゴム id）。 */
   setActiveTool(toolName: string): void;
   /** ROI ブラシ径(px)。 */

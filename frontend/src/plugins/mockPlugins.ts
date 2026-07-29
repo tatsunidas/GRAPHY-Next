@@ -18,6 +18,12 @@ export const MOCK_MANIFESTS: PluginManifest[] = [
     frontend: { bundleUrl: "", contributes: ["viewer2d.menu"] },
   },
   {
+    id: "demo-context",
+    name: "Demo: Context (2D)",
+    version: "0.0.0",
+    frontend: { bundleUrl: "", contributes: ["viewer2d.menu"] },
+  },
+  {
     id: "demo-hello-main",
     name: "Demo: Hello (MainScreen)",
     version: "0.0.0",
@@ -35,6 +41,24 @@ export const DEMO_MODULES: Record<string, PluginModule> = {
       if (host.surface === "viewer2d.menu" || host.surface === "viewer2d.toolbar") {
         host.actions.invert();
       }
+    },
+  },
+  // host API H1/H2（fw/plugin-architecture.md §7）の配線確認用。DOM を一切見ずに
+  // 「どのシリーズの何スライス目を、どの W/L で見ているか」を答えられることを示す。
+  "demo-context": {
+    activate: (host) => {
+      if (host.surface !== "viewer2d.menu" && host.surface !== "viewer2d.toolbar") return;
+      const targets = host.getTargets();
+      if (targets.length === 0) {
+        host.notify("no target tile");
+        return;
+      }
+      const lines = targets.map((tg) => {
+        const vs = host.getViewState(tg.tileId);
+        const wl = vs ? `W/L ${vs.windowWidth.toFixed(0)}/${vs.windowCenter.toFixed(0)} ${vs.unit}` : "W/L ?";
+        return `${tg.seriesLabel} [${tg.modality}] slice ${tg.sliceIndex + 1}/${tg.sliceCount} — ${wl}`;
+      });
+      host.notify(lines.join("\n"));
     },
   },
   "demo-hello-main": {

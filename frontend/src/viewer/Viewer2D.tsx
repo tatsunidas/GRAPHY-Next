@@ -34,12 +34,13 @@ import { reconcileGlobalAnnotations } from "./globalRoiSync";
 import { listSpheres3D, sphereCanvasCircle, subscribeSphere3D, type SphereCanvasCircle } from "./sphere3dStore";
 import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
 import { applyTransform, isPanned, readTransform, type ViewTransform, FIT_TRANSFORM } from "./transform";
-import { readImageInfo, sampleAtCanvas, computeSliceSpacing, type ImageInfo, type PixelSample } from "./imageInfo";
+import { readImageInfo, sampleAtCanvas, computeSliceSpacing, calibratedUnit, type ImageInfo, type PixelSample } from "./imageInfo";
+import { readColormapName, readInvert } from "./viewportRead";
 import { computeOrientationMarkers, type OrientationMarkers } from "./orientation";
 import { computeScaleBar, type ScaleBar } from "./scaleBar";
 import { getOrCreateCameraSync, getOrCreateVoiSync, getOrCreatePresentationSync, getOrCreateSeriesVoiSync, broadcastSeriesProperties, captureVoiBaseline, clearVoiBaseline } from "./sync";
 import { registerReferenceSource, bumpReference, subscribeReference, computeReferenceSegments, type RefSegment } from "./referenceLines";
-import { registerViewerCommands, type ViewerCommands } from "./viewerCommands";
+import { registerViewerCommands, type ViewerCommands, type ViewerTargetInfo, type ViewerViewState } from "./viewerCommands";
 import { subscribeSuvStore, suvForImageId, seriesUidOf } from "./suvStore";
 import { resolveOverlay } from "./overlayText";
 import { useOverlayConfig } from "./overlayConfig";
@@ -78,6 +79,8 @@ function fmtValue(v: number): string {
 // LUT 解除（グレースケール復帰）用の線形グレースケール colormap 名。
 // Cornerstone は colormap の明示「解除」手段を公開しないため、これを適用して戻す。
 const GRAY_COLORMAP = "graphy-gray";
+/** LUT を Cornerstone の colormap として登録するときの名前の接頭辞（`graphy-lut-<LUT 名>`）。 */
+const LUT_COLORMAP_PREFIX = "graphy-lut-";
 
 // 計測（ROI）ツール名。setActiveTool で左ドラッグに割り当てる。
 const MEASURE_TOOLS = [
@@ -511,7 +514,7 @@ export function Viewer2D({
       }
       return;
     }
-    const colormapName = `graphy-lut-${lut.name}`;
+    const colormapName = `${LUT_COLORMAP_PREFIX}${lut.name}`;
     // まだ登録されていなければ登録する
     if (!utilities.colormap.getColormap(colormapName)) {
       const rgbPoints: number[] = [];
@@ -1088,6 +1091,54 @@ export function Viewer2D({
     return { imageId, seriesUid, modality: infoRef.current?.modality ?? "" };
   };
 
+  // プラグイン host API（fw/plugin-architecture.md §7）の H1: いま何を表示しているか。
+  // 対象の識別は tileId（=commandKey）側が持つので、ここではその中身だけを返す。
+  const getTargetInfo = (): ViewerTargetInfo | null => {
+    const imageId = imageIdsRef.current[indexRef.current];
+    const ctx = roiContextRef.current;
+    if (!imageId || !ctx) return null;
+    return {
+      studyUid: ctx.studyUid,
+      seriesUid: ctx.seriesUid,
+      seriesLabel: ctx.seriesLabel,
+      imageId,
+      sliceIndex: indexRef.current,
+      sliceCount: imageIdsRef.current.length,
+      c: ctx.c,
+      t: ctx.t,
+      modality: infoRef.current?.modality ?? "",
+    };
+  };
+
+  // colormap の内部登録名 → 公開する LUT 名。`graphy-lut-` は本体の実装詳細なので剥がす
+  // （シリーズ Sync で他タイルから伝播した colormap も同じ規則の名前で来る）。
+  const lutNameForPlugins = (colormapName: string | null): string | null =>
+    colormapName?.startsWith(LUT_COLORMAP_PREFIX)
+      ? colormapName.slice(LUT_COLORMAP_PREFIX.length)
+      : colormapName;
+
+  // H2: いまの表示状態。W/L は getWindowState と同じ「voiRange → 無ければ DICOM 既定」で解決する。
+  const getViewState = (): ViewerViewState | null => {
+    const v = vp();
+    if (!v) return null;
+    const w = getWindowState();
+    const tr = readTransform(v);
+    return {
+      windowCenter: w?.center ?? 0,
+      windowWidth: w?.width ?? 1,
+      unit: calibratedUnit(infoRef.current),
+      // 内部のグレースケール colormap は「LUT 未適用」として畳み、LUT は
+      // 内部の登録名ではなく**ユーザーが選んだ LUT 名**（"10_Percent" 等）で返す。
+      colormap: lutNameForPlugins(readColormapName(v, GRAY_COLORMAP)),
+      invert: readInvert(v),
+      flipH: tr.flipHorizontal,
+      flipV: tr.flipVertical,
+      rotation: tr.rotation,
+      zoom: tr.zoom,
+      pan: tr.pan,
+    };
+  };
+
   // SUV 化時に臨床標準ウィンドウ（SUV 0〜7）を適用する。voiRange はモダリティ値(Bq/mL)空間のため
   // SUV=modalityValue×scale の逆算で modalityValue [0, 7/scale] を設定する（本家 setSUVFactor 準拠）。
   const applySuvWindow = (scale: number) => {
@@ -1197,11 +1248,13 @@ export function Viewer2D({
   // 画面メニュー/ツールバーからの一括コマンド。最新の実装を ref に保持し、登録は wrapper 経由で常に最新を呼ぶ。
   const commandsRef = useRef<ViewerCommands>({
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
-    getWindowState, getSuvContext, setActiveTool, setBrushSize, setWandTolerance, clearAnnotations, undo, redo,
+    getWindowState, getSuvContext, getTargetInfo, getViewState, setActiveTool, setBrushSize, setWandTolerance,
+    clearAnnotations, undo, redo,
   });
   commandsRef.current = {
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
-    getWindowState, getSuvContext, setActiveTool, setBrushSize, setWandTolerance, clearAnnotations, undo, redo,
+    getWindowState, getSuvContext, getTargetInfo, getViewState, setActiveTool, setBrushSize, setWandTolerance,
+    clearAnnotations, undo, redo,
   };
   useEffect(() => {
     if (!commandKey || compact || syncGroupId) return;
@@ -1218,6 +1271,8 @@ export function Viewer2D({
       resetWindow: () => commandsRef.current.resetWindow(),
       getWindowState: () => commandsRef.current.getWindowState(),
       getSuvContext: () => commandsRef.current.getSuvContext(),
+      getTargetInfo: () => commandsRef.current.getTargetInfo(),
+      getViewState: () => commandsRef.current.getViewState(),
       setActiveTool: (n) => commandsRef.current.setActiveTool(n),
       setBrushSize: (s) => commandsRef.current.setBrushSize(s),
       setWandTolerance: (v) => commandsRef.current.setWandTolerance(v),
@@ -1260,10 +1315,8 @@ export function Viewer2D({
   }, [imageIndex, stackKey, reconcileGlobalRois]);
 
   const panned = isPanned(transform);
-  // 校正済み画素値の単位: RescaleType(0028,1054) があればそれ（"US"=未指定は除外）、
-  // 無ければ CT のみ "HU"、それ以外は単位なし。
-  const rt = info?.rescaleType?.trim();
-  const calUnit = rt && rt.toUpperCase() !== "US" ? rt : info?.modality === "CT" ? "HU" : "";
+  // 校正済み画素値の単位（プラグインの getViewState().unit と同じ解決）。
+  const calUnit = calibratedUnit(info);
 
   // DICOM 属性テキストオーバーレイ（4 隅、設定可能）。設定 or スライス変化(info)で再解決。
   const overlayCfg = useOverlayConfig();
