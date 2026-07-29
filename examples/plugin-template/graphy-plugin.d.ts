@@ -39,6 +39,54 @@ export interface ViewerActions {
   resetWindow(): void;
 }
 
+/**
+ * 操作対象タイル 1 枚が「いま何を表示しているか」。`host.getTargets()` の要素。
+ *
+ * <p>**GRAPHY-Next 0.1.9 以降**。使うプラグインは plugin.json の
+ * `engines.graphy` を `">=0.1.9"` にすること（古い本体には導入させない＝正しい挙動）。
+ */
+export interface ViewerTarget {
+  /** タイルの識別子。`getViewState(tileId)` に渡せる。 */
+  tileId: string;
+  studyUid: string;
+  seriesUid: string;
+  /** 画面に出ているシリーズ名。 */
+  seriesLabel: string;
+  /** 表示中スライスの imageId。 */
+  imageId: string;
+  /** 表示中スライス（Z）の 0 始まり index と、そのスタックの総数。 */
+  sliceIndex: number;
+  sliceCount: number;
+  /** ZCT モデルのチャンネル / 時相（多次元でないシリーズは 0）。 */
+  c: number;
+  t: number;
+  modality: string;
+}
+
+/**
+ * タイル 1 枚の表示状態。`host.getViewState()` の戻り。
+ *
+ * <p>W/L は**モダリティ値空間**（CT なら HU）。表示単位は `unit`。**0.1.9 以降**。
+ */
+export interface ViewerViewState {
+  tileId: string;
+  windowCenter: number;
+  windowWidth: number;
+  /** 校正済み画素値の単位（CT は "HU"、無ければ ""）。 */
+  unit: string;
+  /** 適用中の LUT 名（LUT ダイアログの名前。例 "10_Percent"）。グレースケール（未適用）なら null。 */
+  colormap: string | null;
+  invert: boolean;
+  flipH: boolean;
+  flipV: boolean;
+  /** 度。 */
+  rotation: number;
+  /** Fit を 1.0 とした相対倍率。 */
+  zoom: number;
+  /** 既定（画像が中央）からのオフセット（world mm）。 */
+  pan: [number, number];
+}
+
 interface PluginHostBase {
   /** 自分の plugin.json の id。 */
   pluginId: string;
@@ -55,6 +103,19 @@ export interface Viewer2DPluginHost extends PluginHostBase {
   surface: "viewer2d.menu" | "viewer2d.toolbar";
   /** 表示中タイルへの操作。 */
   actions: ViewerActions;
+  /**
+   * 操作対象タイル（選択タイル→無ければ全タイル。`actions` の対象と同じ）が
+   * いま何を表示しているか。**0.1.9 以降**。
+   *
+   * <p>**呼ぶたびに現在値を読む**。ダイアログを開いている間にユーザーがスライスを送ることが
+   * あるので、活性化時に一度だけ読んだ値を持ち回らないこと。
+   */
+  getTargets: () => ViewerTarget[];
+  /**
+   * 対象タイルの表示状態。`tileId` を省略すると対象の先頭タイル。取得不能なら null。
+   * **0.1.9 以降**。
+   */
+  getViewState: (tileId?: string) => ViewerViewState | null;
 }
 
 /** MainScreen 系（mainscreen.menu）に渡るコンテキスト。 */

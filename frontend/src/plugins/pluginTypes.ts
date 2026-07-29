@@ -5,6 +5,9 @@
 // プラグイン契約の型定義。設計は fw/plugin-architecture.md を参照。
 // フロント面と /api/plugins の契約は standalone / web 両モード共通。
 import type { ViewerActions } from "../viewer2d/Viewer2DToolbar";
+import type { ViewerTarget, ViewerTileViewState } from "../viewer/viewerCommands";
+
+export type { ViewerTarget, ViewerTileViewState };
 
 /** プラグインを組み込む先（UI サーフェス）。fw/plugin-architecture.md §2.1。 */
 export type PluginSurface = "viewer2d.menu" | "viewer2d.toolbar" | "mainscreen.menu";
@@ -43,6 +46,19 @@ export interface Viewer2DPluginHost extends PluginHostBase {
   surface: "viewer2d.menu" | "viewer2d.toolbar";
   /** 表示中タイルへの操作（既存の runViewerCommand 経由）。 */
   actions: ViewerActions;
+  /**
+   * 操作対象タイルが「いま何を表示しているか」（fw/plugin-architecture.md §7 の H1）。
+   *
+   * <p>対象は `actions` の各コマンドと同一定義（選択タイル→無ければ全タイル）。
+   * **呼ぶたびに現在値を読む関数**である点に注意: プラグインがダイアログを開いたまま
+   * ユーザーがスライスを送ることがあるため、活性化時のスナップショットを配ってはいけない。
+   */
+  getTargets: () => ViewerTarget[];
+  /**
+   * 対象タイルの表示状態（H2）。`tileId` 省略時は対象の先頭タイル。取得不能なら null。
+   * W/L はモダリティ値空間（CT なら HU）。単位は `unit`。
+   */
+  getViewState: (tileId?: string) => ViewerTileViewState | null;
 }
 
 /** MainScreen 系プラグイン（mainscreen.menu）に渡すコンテキスト。 */

@@ -12,6 +12,11 @@ import type { Driver, DriverPorts } from "./types.js";
 import { DEFAULT_PORTS } from "./types.js";
 
 const ROOT = path.resolve(AUTOMATOR_ROOT, "..");
+/**
+ * desktop 実行時に backend の CWD にするディレクトリ（H2 DB `./data` / DICOM 保管庫 /
+ * `./plugins` がここに作られる）。プラグインを置いて検証する側もこの場所を知る必要がある。
+ */
+export const DESKTOP_RUN_DATA_DIR = path.join(AUTOMATOR_ROOT, ".results", "run-data", "desktop");
 const DESKTOP_DIR = path.join(ROOT, "desktop");
 const FRONTEND_DIR = path.join(ROOT, "frontend");
 const BACKEND_JAR = path.join(ROOT, "backend", "target", "graphy-next-backend.jar");
@@ -41,7 +46,7 @@ export class DesktopDriver implements Driver {
         `先に "cd backend && mvn -q -Dfrontend.skip=true -DskipTests clean package" を実行してください。`,
       );
     }
-    const dataDir = path.join(AUTOMATOR_ROOT, ".results", "run-data", "desktop");
+    const dataDir = DESKTOP_RUN_DATA_DIR;
     fs.mkdirSync(dataDir, { recursive: true });
 
     this.backendProc = spawn(
@@ -92,11 +97,31 @@ export class DesktopDriver implements Driver {
     });
 
     const viteOrigin = `http://localhost:${this.ports.vite}`;
-    const mainWin = await this.electronApp
-      .waitForEvent("window", { predicate: (w) => w.url().startsWith(viteOrigin), timeout: 30_000 })
-      .catch(() => this.electronApp!.firstWindow());
+    // window イベントの predicate だけに頼らない: イベント発火時点では url() が about:blank の
+    // ことがあり、そのまま待ち続けて timeout → firstWindow() にフォールバックすると
+    // **DevTools ウィンドウ**（GRAPHY_DEV=1 で開く devtools://…）を掴んでしまう。
+    // 実際にそれで「MainScreen が出ない」と誤検知した（2026-07-30）。現存ウィンドウを
+    // ポーリングして url が Vite オリジンのものを選ぶ。
+    const mainWin = await this.findWindow((url) => url.startsWith(viteOrigin), 60_000);
+    if (!mainWin) {
+      const urls = this.electronApp.windows().map((w) => w.url());
+      throw new Error(`アプリのメインウィンドウ（${viteOrigin}）が見つかりません。開いている url: ${JSON.stringify(urls)}`);
+    }
     await mainWin.waitForLoadState("domcontentloaded");
     this.mainPage = mainWin;
+  }
+
+  /** 条件に合う url を持つウィンドウが現れるまでポーリングする（about:blank 経過を吸収する）。 */
+  private async findWindow(match: (url: string) => boolean, timeoutMs: number): Promise<Page | null> {
+    const app = this.electronApp;
+    if (!app) return null;
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const found = app.windows().find((w) => match(w.url()));
+      if (found) return found;
+      if (Date.now() >= deadline) return null;
+      await new Promise((r) => setTimeout(r, 250));
+    }
   }
 
   async stop(): Promise<void> {
@@ -121,10 +146,15 @@ export class DesktopDriver implements Driver {
     timeoutMs = 30_000,
   ): Promise<Page> {
     if (!this.electronApp) throw new Error("DesktopDriver.start() がまだ完了していません");
+    // start() と同じ理由（イベント時点の url が about:blank になり得る）で、イベント待ちに
+    // 加えて現存ウィンドウのポーリングでも探す。
     const [win] = await Promise.all([
-      this.electronApp.waitForEvent("window", { predicate: (w) => urlPredicate(w.url()), timeout: timeoutMs }),
+      this.electronApp
+        .waitForEvent("window", { predicate: (w) => urlPredicate(w.url()), timeout: timeoutMs })
+        .catch(() => this.findWindow(urlPredicate, timeoutMs)),
       trigger(),
     ]);
+    if (!win) throw new Error("trigger() で開くはずのウィンドウが見つかりませんでした");
     await win.waitForLoadState("domcontentloaded");
     return win;
   }

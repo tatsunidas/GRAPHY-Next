@@ -68,8 +68,14 @@ git add minisign.pub && git commit -m "add signing public key"   # 公開鍵は�
 
 | サーフェス | 出る場所 | `host` の主なプロパティ |
 |---|---|---|
-| `viewer2d.menu` | 2D Viewer の Plug-ins メニュー | `actions`（`invert()` / `rotate90()` / `fit()` / `setWindowLevel()` …） |
+| `viewer2d.menu` | 2D Viewer の Plug-ins メニュー | `actions`（`invert()` / `rotate90()` / `fit()` / `setWindowLevel()` …）<br>`getTargets()` / `getViewState(tileId?)`（**0.1.9 以降**） |
 | `mainscreen.menu` | MainScreen の Plug-Ins メニュー | `selectedStudyUid`（選択中スタディ UID） |
+
+`getTargets()` は操作対象タイル（選択→無ければ全）の
+`{ tileId, studyUid, seriesUid, seriesLabel, imageId, sliceIndex, sliceCount, c, t, modality }` を、
+`getViewState(tileId?)` は `{ windowCenter, windowWidth, unit, colormap, invert, flipH, flipV, rotation, zoom, pan }`
+を返す。**呼ぶたびに現在値を読む**ので、活性化時のスナップショットを持ち回らないこと。
+使う場合は `engines.graphy` を `">=0.1.9"` に上げる（古い本体には導入されなくなる＝意図した挙動）。
 
 共通: `pluginId` / `t(key)`（i18n）/ `notify(msg)` / `runBackend(payload?)`（backend 面がある場合）。
 型は `graphy-plugin.d.ts` を参照（`ui.js` 先頭の `/// <reference ...>` + `// @ts-check` で補完が効く）。

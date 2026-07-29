@@ -75,6 +75,9 @@ export function Viewer2DMenuBar({
     notify: (msg) => window.alert(msg),
     runBackend: (payload) => runPluginBackend(m.id, payload),
     actions,
+    // 問い合わせ系は actions の実装へ委譲（対象の定義＝選択→無ければ全、を命令系と共有するため）。
+    getTargets: () => actions.getTargets(),
+    getViewState: (tileId) => actions.getViewState(tileId),
   }));
   const [open, setOpen] = useState<string | null>(null);
   useEffect(() => {
@@ -216,7 +219,8 @@ export function Viewer2DMenuBar({
       items: isDemo
         ? [{ label: t("viewer2d.menu.pluginsNone"), onClick: () => actions.comingSoon(t("viewer2d.menu.plugins")) }]
         : pluginItems.length
-          ? pluginItems.map((p) => ({ label: p.label, onClick: p.onClick }))
+          // testId は automator が個別プラグインを掴むため（表示名はプラグイン任せで安定しない）。
+          ? pluginItems.map((p) => ({ label: p.label, onClick: p.onClick, testId: `plugin-item-${p.id}` }))
           : [{ label: t("viewer2d.menu.pluginsNone"), onClick: () => actions.comingSoon(t("viewer2d.menu.plugins")) }],
     },
     {

@@ -7,6 +7,7 @@ import { presetLabel } from "./wlPresets";
 import { useWlPresets } from "./wlPresetStore";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { type SortMode } from "../viewer/seriesSort";
+import { type ViewerTarget, type ViewerTileViewState } from "../viewer/viewerCommands";
 import { ToolIcon } from "../icons/ToolIcon";
 import { UI_ICON_FILES } from "../icons/toolIcons";
 
@@ -27,6 +28,13 @@ export interface ViewerActions {
   setWindowLevel(center: number, width: number): void;
   /** DICOM 既定ウィンドウに戻す。 */
   resetWindow(): void;
+  /**
+   * 対象タイル（選択→無ければ全）の「いま何を表示しているか」を返す**問い合わせ**。
+   * プラグイン host API の H1（fw/plugin-architecture.md §7）。命令系と対象の定義を揃えてある。
+   */
+  getTargets(): ViewerTarget[];
+  /** 対象タイルの表示状態を返す問い合わせ（H2）。tileId 省略時は対象の先頭。無ければ null。 */
+  getViewState(tileId?: string): ViewerTileViewState | null;
   /** W/L プリセット編集ダイアログを開く。 */
   editPresets(): void;
   /** Z 並べ替え（InstanceNumber / IPP, 昇順・降順）。対象タイルのシリーズに適用。 */

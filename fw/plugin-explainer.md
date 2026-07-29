@@ -1,6 +1,7 @@
 # GRAPHY-Next プラグインの仕組み（解説）
 
-> 作成日: 2026-07-29（更新: 2026-07-29 — §6 にデモ リポジトリ 4 本、§7 に host API / CSP の制約を追記）
+> 作成日: 2026-07-29（更新: 2026-07-29 — §6 にデモ リポジトリ 4 本、§7 に host API / CSP の制約を追記。
+> さらに host API の H1/H2 実装を反映＝残る制約は H3 画素読み出しと CSP）
 > 目的: **この 1 本を読めば、別セッションのエージェントも初見の人も全体像を把握できる**ようにする。
 > GRAPHY Lab の解説ページの原稿もここから抽出する。
 >
@@ -223,8 +224,9 @@ JAR 入りを導入・更新・削除・有効無効したときは、全ウィ�
 | 2 | [`graphy-next-plugin-mean-filter`](https://github.com/tatsunidas/graphy-next-plugin-mean-filter) | 表示中シリーズに平均化フィルタ、before/after 表示 | UI のみ |
 | 3 | [`graphy-next-plugin-gemini-findings`](https://github.com/tatsunidas/graphy-next-plugin-gemini-findings) | 粗い所見＋画像を Gemini に渡して推敲（教育用）。**JAR から外部 API を呼ぶ** | UI ＋ Java |
 
-> デモ 2・3 は、**現状の host API には表示中シリーズの UID も生ピクセルも無い**ため、
-> タイルの `data-tile-id` 属性とキャンバスの読み取りで代替している（各 README に明記済み）。
+> デモ 2・3 は、タイルの `data-tile-id` 属性とキャンバスの読み取りで代替している（各 README に明記済み）。
+> **タイルの識別は 0.1.9 の `getTargets()` で公式契約に置き換えられる**（§7）が、
+> 生ピクセルは H3 待ちなので、画素処理の断り書きはそのまま残る。
 > デモ 3 が JAR を持つのは、レンダラの CSP（`connect-src` が localhost のみ）により
 > `ui.js` から外部 API を叩けないため。**ここは将来の host API 拡張の候補**。
 
@@ -274,11 +276,13 @@ GitHub secrets に登録するだけ。以後リリースごとの追加作業�
   1 回目に本人かどうかは①の公式鍵でしか担保されない。
 - **web でのユーザー導入は実現していない。** 実現するならクライアント WASM か、
   サーバー側サンドボックス（DICOMweb サイドカー）が必要。
-- **host API が痩せている。** `viewer2d.*` の host が渡すのは `actions`（表示操作）だけで、
-  **表示中シリーズの UID も生ピクセル（HU/SUV）も取れない**。デモ 2・3（§6）は
-  タイルの `data-tile-id` 属性とキャンバス読み取りで代替しており、DOM 依存＝壊れやすい。
-  → **優先度 高の TODO として起票済み**: [`plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張優先度-高未着手)
-  （H1 対象タイルの識別 → H2 表示状態 → H3 画素読み出し → H4 書き戻し）
+- **host API がまだ画素を渡せない。** 2026-07-29 に **H1（`getTargets()`＝表示中のスタディ/シリーズ/
+  スライスの識別）と H2（`getViewState()`＝W/L・LUT・反転・affine）を実装**したので、
+  「どのシリーズの何スライス目を見ているか」は公式契約で答えられるようになった（0.1.9 以降）。
+  **残っているのは本命の H3＝生ピクセル（HU/SUV）の読み出し**で、これが無い限り
+  デモ 2 のような定量処理は canvas の 8bit（W/L 適用後）に頼るしかない。
+  → [`plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張優先度-高h1h2-実装済み)
+  （H1 ✅ → H2 ✅ → **H3 画素読み出し（未）** → H4 書き戻し（未））
 - **`ui.js` から外部 API を叩けない。** 本番ビルドの CSP が `connect-src` を localhost に
   限っているため（`fw/security.md`）。外部通信は JAR 側に置くしかなく、結果として
   「UI だけで済む機能」まで standalone 限定になる。

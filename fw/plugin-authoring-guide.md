@@ -98,8 +98,23 @@ export function activate(host) {
 
 | サーフェス | 追加プロパティ |
 |---|---|
-| `viewer2d.menu` / `viewer2d.toolbar` | `actions`（表示中タイルへの操作。`invert()` / `rotate90()` / `fit()` 等。定義は `frontend/src/viewer2d/Viewer2DToolbar.tsx` の `ViewerActions`） |
+| `viewer2d.menu` / `viewer2d.toolbar` | `actions`（表示中タイルへの操作。`invert()` / `rotate90()` / `fit()` 等。定義は `frontend/src/viewer2d/Viewer2DToolbar.tsx` の `ViewerActions`）<br>`getTargets()` / `getViewState(tileId?)`（**0.1.9 以降**。下記） |
 | `mainscreen.menu` | `selectedStudyUid`（選択中スタディの UID、未選択なら `null`） |
+
+**問い合わせ系（0.1.9 以降・[`plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張) の H1/H2）**:
+
+| メソッド | 戻り |
+|---|---|
+| `getTargets()` | 操作対象タイル（選択→無ければ全＝`actions` と同じ対象）の配列。要素は `{ tileId, studyUid, seriesUid, seriesLabel, imageId, sliceIndex, sliceCount, c, t, modality }` |
+| `getViewState(tileId?)` | `{ tileId, windowCenter, windowWidth, unit, colormap, invert, flipH, flipV, rotation, zoom, pan }`。省略時は対象の先頭タイル。取得不能なら `null` |
+
+- **呼ぶたびに現在値を読む**。ダイアログを開いている間にユーザーがスライスを送るので、
+  活性化時に一度読んだ値を持ち回らないこと。
+- `colormap` は LUT ダイアログの名前（例 `"10_Percent"`）。未適用は `null`。
+- `getTargets()` は**空配列を返し得る**（Fusion の子や破棄途中のタイルは現れない）。必ず扱うこと。
+- W/L は**モダリティ値空間**（CT なら HU。単位は `unit`）。表示 8bit ではない。
+- 使うプラグインは `engines.graphy` を `">=0.1.9"` に上げる（古い本体には導入されない＝意図した挙動）。
+- **画素そのものはまだ読めない**（H3 未実装）。
 
 > 型定義の実体は `frontend/src/plugins/pluginTypes.ts`。
 

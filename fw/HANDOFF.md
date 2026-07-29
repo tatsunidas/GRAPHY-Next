@@ -1,24 +1,42 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
-> 更新日: 2026-07-29（最終更新: プラグイン host API 拡張を **優先度 高の TODO** として起票。下記エントリ参照）
+> 更新日: 2026-07-29（最終更新: プラグイン host API の **H1/H2 を実装**。下記エントリ参照）
 > 目的: 別の作業者（Claude 含む）がこのリポジトリの状況を把握し、続きを実装できるようにする。
 > このファイル＋ `fw/` 配下の各設計ドキュメントが「ソース・オブ・トゥルース」。
 >
-> 🔴 **TODO（優先度 高・未着手）2026-07-29: プラグイン host API の拡張**
-> → 設計とフェーズ表は [`fw/plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張優先度-高未着手)
+> 🟡 **2026-07-29 プラグイン host API 拡張: H1・H2 実装 / H3・H4 未着手（優先度 高のまま）**
+> → 設計・実装表・素案から変えた点は
+> [`fw/plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張優先度-高h1h2-実装済み)
 >
-> **2D ビューアのプラグインには「いま何を見ているか」を答える手段が一つも無い。**
-> `Viewer2DMenuBar.tsx` が渡す host は `{ surface, pluginId, t, notify, runBackend, actions }` だけで、
-> `actions` は全部 `void` を返すコマンド（命令はできるが問い合わせができない）。シリーズ UID も
-> スライス番号も画素も W/L も取れず、`MainScreenPluginHost` にある `selectedStudyUid` 相当すら無い。
-> 実害として、デモ 2・3 は内部 DOM（`data-tile-id`）とキャンバス読み取りで代替しており、
-> **タイル実装が変われば黙って壊れる**うえ、取れるのは W/L 適用後の 8bit なので **HU への定量処理に使えない**。
-> フェーズは H1 対象タイルの識別情報 → H2 表示状態の問い合わせ → H3 画素の読み出し（本命）→ H4 書き戻し（別扱い）。
-> H1・H2 は `frontend/src/viewer/debugApi.ts`（automator 用・DEV ガード付き）に実装済みの機能を
-> **本番契約として切り出すだけ**なので着手コストは低い。H3 は必ず `pixelCalibration.ts` 経由で行うこと
-> （直接 slope/intercept を掛けると preScale と二重適用になり CT が約 −1024 ずれる既知事故）。
-> 着手時は `graphy-plugin.d.ts` の**配布先 5 箇所**（`examples/plugin-template/` ＋ 外部デモ 4 リポジトリ）の
-> 同期を忘れないこと。
+> これまで 2D ビューアのプラグインには「いま何を見ているか」を答える手段が**一つも無かった**
+> （host は `{ surface, pluginId, t, notify, runBackend, actions }` のみ＝全部 `void` を返す命令で、
+> 問い合わせがゼロ）。**H1 `getTargets()`** と **H2 `getViewState(tileId?)`** を追加して解消した。
+>
+> - `getTargets()` … 対象タイル（選択→無ければ全＝`actions` と同じ対象）の
+>   `{ tileId, studyUid, seriesUid, seriesLabel, imageId, sliceIndex, sliceCount, c, t, modality }`。
+> - `getViewState(tileId?)` … `{ windowCenter, windowWidth, unit, colormap, invert, flipH, flipV, rotation, zoom, pan }`。
+>   **W/L はモダリティ値空間（CT なら HU）**、`unit` は `imageInfo.calibratedUnit()` に一本化。
+> - **どちらも「呼ぶたびに現在値を読む関数」**。起票時の素案は `targets` を配列プロパティにしていたが、
+>   host はクリック時に 1 度組まれるのに対しプラグインのダイアログは残るため、
+>   スナップショットを配ると**スライスを送った後に黙って古い値を指す**。同じ理由で素案の `camera` も
+>   本体の `ViewTransform`（Fit=1.0 の zoom/pan/rotation/flip）に置き換えた。
+> - 新規 `frontend/src/viewer/viewportRead.ts` に読み取り専用ヘルパを切り出し、
+>   automator 用 `debugApi.ts`（DEV ガード）と共用。純ロジックは `viewportRead.test.ts`。
+> - フロント面のみで完結＝**web モードでも同じ**（`/api/plugins` の契約は不変）。backend 変更なし。
+>
+> **残**: 🔴 **H3 画素の読み出し（本命）** … 必ず `pixelCalibration.ts` 経由（直接 slope/intercept を
+> 掛けると preScale と二重適用になり CT が約 −1024 ずれる既知事故）。H4 書き戻しは設計判断が要るので別扱い。
+> 🔴 **外部デモ 4 リポジトリの `graphy-plugin.d.ts` 同期**（本体側の `examples/plugin-template/` は更新済み）と、
+> mean-filter / gemini-findings の `findOpenTiles()`（DOM 依存）→ `getTargets()` 置換。
+> 新 API を使うプラグインは `engines.graphy` を `">=0.1.9"` にする。
+> ✅ **実機検証済み（2026-07-30・standalone/Linux・26 項目すべて合格）**: 本物の Electron ＋ backend ＋
+> `plugins/` に置いた第三者プラグイン（`/api/plugins` 配信）で、**DOM を覗かずに**シリーズ/スライス/W/L が
+> 取れること、画面表示と値が一致すること、スライス送り・W/L プリセット・階調反転・LUT に**追従する**ことを確認。
+> ドライバ `automator/src/spike/hostApiCheck.ts`。詳細は設計 §7 の「実機検証」。
+> この検証で見つけて直した 2 点: ①`colormap` が内部登録名 `graphy-lut-10_Percent` を漏らしていた
+> → ユーザーが選んだ LUT 名（`10_Percent`）を返す。②automator の `DesktopDriver` が
+> **DevTools ウィンドウをメイン画面と誤認**していた（url が about:blank の間に predicate を外し、
+> timeout → `firstWindow()` が `devtools://…` を返す）→ 現存ウィンドウを url でポーリングする方式へ。
 >
 > 🟢 **2026-07-29 プラグイン デモ リポジトリ 4 本を新設**（`fw/plugin-explainer.md` §6）。
 > 第三者がプラグインを書き始められるようにするため、**GRAPHY-Next の外に**独立リポジトリとして作成

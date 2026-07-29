@@ -17,6 +17,37 @@ automator（GRAPHY-Next 自律検証ツール）の開発記録。設計の要�
 
 ---
 
+## 2026-07-30 — DesktopDriver が DevTools を掴むバグ修正・host API H1/H2 の実機検証スパイク
+
+### 修正: `DesktopDriver` が DevTools ウィンドウをメイン画面と誤認していた
+
+`start()` は `waitForEvent("window", predicate: url.startsWith(viteOrigin))` でメイン画面を待ち、
+外れたら `.catch(() => firstWindow())` にフォールバックしていた。ところが **`window` イベント発火時点の
+`url()` は `about:blank` のことがある**ため predicate に外れ、timeout 後の `firstWindow()` が
+`GRAPHY_DEV=1` で開く **DevTools ウィンドウ**（`devtools://…`）を返す。その Page で
+`search-patientid-input` を待つので「MainScreen が出ない」と誤検知する（実際に 2 回踏んだ）。
+
+→ 現存ウィンドウ（`electronApp.windows()`）を **url でポーリングして選ぶ** `findWindow()` に変更。
+`waitForNewPage()` も同じ理由でイベント待ちに加えてポーリングでも探すようにした。
+**既存 item の実行安定性にも効く**（同じ race を踏んでいた可能性が高い）。
+
+### 追加: `src/spike/hostApiCheck.ts` — プラグイン host API H1/H2 の実機検証
+
+`fw/plugin-architecture.md` §7 の H1（`getTargets()`）/ H2（`getViewState()`）を、**本物の
+プラグイン配信経路**で検証するスパイク。`.results/run-data/desktop/plugins/hostapi-check/`
+（＝backend の plugins root）に `plugin.json` ＋ `ui.js` を置き、`/api/plugins` 経由で読み込ませる。
+プラグインは結果を `window.__hostApiCheck` と画面パネルの両方へ出し、前者を `page.evaluate` で検証、
+後者をスクリーンショット（`.results/hostapi-check/*.png`）で人が読める形に残す。26 項目すべて合格。
+
+DOM 依存ゼロで表示内容が取れること・**呼ぶたびに現在値を読むこと**（スライス送り／W/L プリセット／
+階調反転／LUT に追従）を確認し、本体側のバグ 1 件（`colormap` が内部登録名
+`graphy-lut-<名>` を漏らしていた）を検出して修正させた。
+
+**将来**: checklist item（`12-viewer2d-menu-toolbar` あたり）へ昇格させるとレポートに載る。
+現状はスパイクのままで、fixture は ct-basic に依存。
+
+---
+
 ## 2026-07-14 — web/desktop 分離・HTML レポート・desktop 縦串の実機 PASS・teardown 修正
 
 ### 決定
