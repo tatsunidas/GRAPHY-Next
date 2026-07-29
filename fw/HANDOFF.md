@@ -1,8 +1,24 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
-> 更新日: 2026-07-29（最終更新: ユーザーマニュアル（mkdocs / GitHub Pages）を追加。下記エントリ参照）
+> 更新日: 2026-07-29（最終更新: プラグイン デモ リポジトリ 4 本を新設。下記エントリ参照）
 > 目的: 別の作業者（Claude 含む）がこのリポジトリの状況を把握し、続きを実装できるようにする。
 > このファイル＋ `fw/` 配下の各設計ドキュメントが「ソース・オブ・トゥルース」。
+>
+> 🟢 **2026-07-29 プラグイン デモ リポジトリ 4 本を新設**（`fw/plugin-explainer.md` §6）。
+> 第三者がプラグインを書き始められるようにするため、**GRAPHY-Next の外に**独立リポジトリとして作成
+> （本体には DICOM ワークステーションのみを置く方針のため）。
+> ハブ [`graphy-next-plugin-demos`](https://github.com/tatsunidas/graphy-next-plugin-demos)（実質の開発ガイド）
+> ＋作例 3 本: [hello](https://github.com/tatsunidas/graphy-next-plugin-hello)（最小形・UI のみ）／
+> [mean-filter](https://github.com/tatsunidas/graphy-next-plugin-mean-filter)（表示中シリーズへの画素処理・UI のみ）／
+> [gemini-findings](https://github.com/tatsunidas/graphy-next-plugin-gemini-findings)（**JAR から外部 API**・
+> 所見推敲の教育用サンプル）。各 README は**単体で完結**（重複は意図的）。
+> GRAPHY Lab（`vis-ionary-web`）の「プラグインを作る」節から辿れる。
+> **この作業で判明した本体側の課題**（`plugin-explainer.md` §7 に追記済み）:
+> ①`viewer2d.*` の host が痩せていて**表示中シリーズの UID も生ピクセルも取れない**
+> （デモは `data-tile-id` 属性とキャンバス読み取りで代替＝DOM 依存で壊れやすい）。
+> ②本番 CSP の `connect-src` が localhost 限定のため **`ui.js` から外部 API を叩けず**、
+> UI だけで済むはずの機能まで JAR 同梱＝standalone 限定になる。
+> 画像処理系プラグインを本気で書けるようにするなら、①の host API 拡張が先。
 >
 > 🟢 **2026-07-29 ユーザーマニュアル（mkdocs / GitHub Pages）を追加**（`fw/user-manual-site.md`）。
 > 公開先 <https://tatsunidas.github.io/GRAPHY-Next/>。classic（`tatsunidas/GRAPHY`）と同じ構成

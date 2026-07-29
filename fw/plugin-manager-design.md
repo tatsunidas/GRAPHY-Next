@@ -305,8 +305,12 @@ JAR 入りを導入・更新・削除・有効無効した直後は、既存の�
   - ✅ 再起動反映（`graphy:relaunch`）＝JAR を含むプラグインの導入/更新/削除/有効無効の後に
     再起動バナーを出す（2026-07-28・§5.3）
   - ✅ 公式署名鍵の生成と `trusted-keys` への設定（2026-07-28・`plugin-signing-runbook.md`）
+  - ✅ **独立したデモ リポジトリ 4 本**（2026-07-29・`plugin-explainer.md` §6）。
+    ハブ `graphy-next-plugin-demos` ＋ 作例 3 本（hello / mean-filter / gemini-findings）。
+    各 README は単体で完結し、GRAPHY Lab の「プラグインを作る」節から辿れる
   - 残: 公式索引 discovery／GitHub OAuth Device Flow／更新通知＋changelog／
-    `examples/plugin-template/` を独立「Use this template」リポジトリへ昇格
+    `examples/plugin-template/` を「Use this template」リポジトリへ昇格
+    （デモ 3 本が実質その役割を担っているため優先度は下がった）
 - **P3**: フロント iframe/Worker サンドボックス／backend プロセス隔離／web サンドボックス
   （DICOMweb サイドカー）／商用ライセンスキー／ロールバック履歴／障害プラグインの自動無効化。
 
