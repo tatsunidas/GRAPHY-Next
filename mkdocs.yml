@@ -1,0 +1,77 @@
+site_name: GRAPHY-Next ユーザーマニュアル
+site_url: https://tatsunidas.github.io/GRAPHY-Next/
+repo_url: https://github.com/tatsunidas/GRAPHY-Next
+repo_name: tatsunidas/GRAPHY-Next
+site_author: Tatsuaki Kobayashi
+site_description: GRAPHY-Next（デスクトップ / Web の 2 モードで動く DICOM ワークステーション）のユーザーマニュアル
+
+# classic (tatsunidas/GRAPHY) の mkdocs 構成に合わせてある。
+# 違いは PDF 出力（mkdocs-with-pdf）を入れていないことだけ — 本文が揃ってから検討する。
+
+nav:
+  - はじめに: index.md
+  - インストールと起動: install.md
+  - データベースウィンドウ: main-screen.md
+  - 2D ビューア: viewer2d.md
+  - MPR / Slicer / Curved MPR: reformat.md
+  - 3D ビューア: viewer3d.md
+  - ROI・マスク・解析: analysis.md
+  - DICOM 通信: dicom-network.md
+  - プラグイン: plugins.md
+  - 環境設定: settings.md
+
+theme:
+  name: material
+  language: ja
+  logo: images/icon.png
+  favicon: images/icon.png
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - toc.follow
+    - search.highlight
+    - search.share
+    - content.code.copy
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: blue
+      toggle:
+        icon: material/brightness-7
+        name: ダークモードに切り替え
+    - scheme: slate
+      primary: indigo
+      accent: blue
+      toggle:
+        icon: material/brightness-4
+        name: ライトモードに切り替え
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - attr_list
+  - md_in_html
+  - tables
+  - footnotes
+  - toc:
+      permalink: true
+      title: このページの目次
+
+plugins:
+  - search:
+      lang: ja
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/tatsunidas/GRAPHY-Next

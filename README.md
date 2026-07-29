@@ -11,6 +11,9 @@ Java Swing の DICOM ワークステーション **GRAPHY** の Web 化（リフ
 Spring Boot バックエンド ＋ React フロントエンドを、**Web アプリ** と
 **Electron デスクトップアプリ** の 2 モードで動かす。
 
+**ユーザーマニュアル**: <https://tatsunidas.github.io/GRAPHY-Next/>（作成中。ソースは
+[`docs/`](docs/)、`mkdocs build` で生成し GitHub Pages へ公開）
+
 > 詳細設計は [`fw/`](fw/) を参照（`fw/HANDOFF.md` が起点）。開発計画は
 > [`fw/development-phases.md`](fw/development-phases.md)。
 
