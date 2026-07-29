@@ -301,6 +301,11 @@ UI 上では:
 
 ## 8. 参考
 
+- **動くデモ（2026-07-29 追加）**: [`graphy-next-plugin-demos`](https://github.com/tatsunidas/graphy-next-plugin-demos)
+  （ハブ＝実質の開発ガイド）／[hello](https://github.com/tatsunidas/graphy-next-plugin-hello)（最小形）／
+  [mean-filter](https://github.com/tatsunidas/graphy-next-plugin-mean-filter)（表示中シリーズへの画素処理）／
+  [gemini-findings](https://github.com/tatsunidas/graphy-next-plugin-gemini-findings)（JAR から外部 API）。
+  各 README は単体で完結する。全体像は [`plugin-explainer.md`](plugin-explainer.md) §6
 - 設計・信頼モデル・両モードの違い: [`plugin-architecture.md`](plugin-architecture.md)
 - マネージャ（取得・導入・更新・削除）: [`plugin-manager-design.md`](plugin-manager-design.md)
 - テンプレート: `examples/plugin-template/`
