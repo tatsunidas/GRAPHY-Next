@@ -5,6 +5,7 @@
 // プラグイン契約の型定義。設計は fw/plugin-architecture.md を参照。
 // フロント面と /api/plugins の契約は standalone / web 両モード共通。
 import type { ViewerActions } from "../viewer2d/Viewer2DToolbar";
+import type { PluginStoreDoc, PluginStoreSaveResult } from "./pluginStore";
 import type {
   ViewerDerivedSeriesRequest,
   ViewerDerivedSeriesResult,
@@ -16,6 +17,8 @@ import type {
   ViewerTileRoi,
   ViewerTileViewState,
 } from "../viewer/viewerCommands";
+
+export type { PluginStoreDoc, PluginStoreSaveResult };
 
 export type {
   ViewerDerivedSeriesRequest,
@@ -159,8 +162,9 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * ROI に**このプラグインの属性**を書く（H5）。既存キーはマージ更新。ROI が無ければ false。
    * 例: 病変の追跡 ID・標的/非標的の区分・測定ステータス。
    *
-   * <p>属性は ROI と同じ寿命しか持たない（本体に ROI の永続化が無いため、アプリ再起動で消える）。
-   * 永続化が要るならプラグイン側で保存すること。
+   * <p>属性は **ROI と同じ寿命**を持つ。本体は ROI を患者単位で永続化するので、
+   * アプリを再起動しても ROI と一緒に属性も戻る。ROI を消せば属性も消えるため、
+   * ROI に依存しない記録（評価履歴など）は `saveStore()`（H8）に置くこと。
    */
   setRoiMeta: (roiUid: string, patch: Record<string, string>) => boolean;
   /**
@@ -170,6 +174,31 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * 通知を受けたら `getRois()` を読み直すこと。ダイアログを閉じるときは必ず解除する。
    */
   subscribeRois: (listener: () => void) => () => void;
+  /**
+   * **このプラグイン専用の保存領域**を読む（H8）。患者単位・backend 保管。
+   * 未保存でもエラーにならず `json: null` が返る。
+   *
+   * <p>`patientKey` 省略時は対象タイルの患者。プラグイン id は host が入れるので、
+   * 別のプラグインの領域には触れない。
+   */
+  loadStore: (patientKey?: string) => Promise<PluginStoreDoc>;
+  /**
+   * **このプラグイン専用の保存領域**へ書く（H8）。
+   *
+   * <p>`version` は `loadStore()` で受け取った値をそのまま返送する規約。別ウィンドウ・別端末が
+   * 先に保存していたら `{ ok: false, conflict: true }` が返るので、**読み直して統合してから**
+   * 新しい版で再保存すること。単純な上書きは相手の記録を消す
+   * （数か月分の評価記録が消えると取り返しがつかない）。
+   *
+   * <p>初回保存は `version: null`。既に保存があるのに null を送ると衝突として弾かれる
+   * （読まずに上書きさせないため）。
+   */
+  saveStore: (
+    json: string,
+    opts?: { patientKey?: string; version?: number | null },
+  ) => Promise<PluginStoreSaveResult>;
+  /** **このプラグイン専用の保存領域**を消す（H8）。他プラグイン・本体の保存には影響しない。 */
+  deleteStore: (patientKey?: string) => Promise<boolean>;
 }
 
 /** MainScreen 系プラグイン（mainscreen.menu）に渡すコンテキスト。 */

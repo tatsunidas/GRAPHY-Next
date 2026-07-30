@@ -349,7 +349,41 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * **何が変わったかは渡さない**ので、通知を受けたら `getRois()` を読み直すこと。
    */
   subscribeRois: (listener: () => void) => () => void;
+  /**
+   * **このプラグイン専用の保存領域**を読む（患者単位・backend 保管）。**0.1.12 以降**。
+   * 未保存でもエラーにならず `json: null` が返る。`patientKey` 省略時は対象タイルの患者。
+   */
+  loadStore: (patientKey?: string) => Promise<PluginStoreDoc>;
+  /**
+   * **このプラグイン専用の保存領域**へ書く。**0.1.12 以降**。
+   *
+   * <p>`version` は `loadStore()` で受け取った値をそのまま返送する規約。別ウィンドウ・別端末が
+   * 先に保存していたら `{ ok: false, conflict: true }` が返るので、**読み直して統合してから**
+   * 新しい版で再保存すること（単純な上書きは相手の記録を消す）。初回保存は `version: null`。
+   */
+  saveStore: (
+    json: string,
+    opts?: { patientKey?: string; version?: number | null },
+  ) => Promise<PluginStoreSaveResult>;
+  /** **このプラグイン専用の保存領域**を消す。**0.1.12 以降**。 */
+  deleteStore: (patientKey?: string) => Promise<boolean>;
 }
+
+/** プラグイン保存領域の読み出し結果。**0.1.12 以降**。 */
+export interface PluginStoreDoc {
+  /** 保存されている JSON。未保存なら null。 */
+  json: string | null;
+  /** 楽観ロックの版。保存時にそのまま返送する。未保存なら null。 */
+  version: number | null;
+  /** 最終更新（ISO）。未保存なら null。 */
+  updatedAt: string | null;
+}
+
+/** プラグイン保存領域への保存結果。**衝突（conflict）を握り潰さないこと**。**0.1.12 以降**。 */
+export type PluginStoreSaveResult =
+  | { ok: true; version: number }
+  | { ok: false; conflict: true; message: string }
+  | { ok: false; conflict: false; message: string };
 
 /** MainScreen 系（mainscreen.menu）に渡るコンテキスト。 */
 export interface MainScreenPluginHost extends PluginHostBase {
