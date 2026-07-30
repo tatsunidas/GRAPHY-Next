@@ -1,6 +1,8 @@
 export interface ResetResult {
   deletedInstances: number;
   deletedReports: number;
+  /** ROI（幾何注釈）の保存ドキュメント件数。残すと次の検証が前回の ROI を復元してしまう。 */
+  deletedRoiDocuments: number;
 }
 
 /**

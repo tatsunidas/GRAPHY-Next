@@ -28,7 +28,7 @@ public class AutomatorController {
         this.service = service;
     }
 
-    /** 症例データ（DICOM索引・実ファイル・レポート）を全削除する。環境設定(Setting)は対象外。 */
+    /** 症例データ（DICOM索引・実ファイル・レポート・ROI 保存）を全削除する。環境設定(Setting)は対象外。 */
     @PostMapping("/reset")
     public AutomatorService.ResetResult reset() {
         return service.reset();

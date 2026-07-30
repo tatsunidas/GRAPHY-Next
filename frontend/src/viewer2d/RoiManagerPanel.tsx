@@ -35,7 +35,7 @@ import { listSpheres3D, updateSphere3D, deleteSphere3D, subscribeSphere3D, type 
 import { annotationsToImageJDtos } from "../viewer/imagejExport";
 import { importImageJDtos } from "../viewer/imagejImport";
 import { exportImageJRoiSet, importImageJRoiSet } from "../api";
-import { saveRoiNow, subscribeRoiSave } from "../viewer/roiSaveStore";
+import { saveRoiNow, scheduleRoiSave, subscribeRoiSave } from "../viewer/roiSaveStore";
 import { RoiMetaEditDialog } from "./RoiMetaEditDialog";
 import { useI18n } from "../i18n/i18n";
 
@@ -219,6 +219,8 @@ export function RoiManagerPanel({
   const deleteRoi = (uid: string) => {
     try { csAnnotation.state.removeAnnotation(uid); } catch { /* ignore */ }
     deleteRoiMaskMeta(uid);
+    // 削除も保存対象。イベント購読でも拾えるが、経路ごとの発火差に依存しないよう明示的に予約する。
+    scheduleRoiSave(activePatientKey);
     refresh();
   };
   // マスク色: そのセグメンテーションを表示中の全ビューポートで、対象 segment の色を変更。

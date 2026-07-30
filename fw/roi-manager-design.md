@@ -127,7 +127,7 @@ interface MaskItem {
 | M2 | 属性編集（RoiMeta）＋ scope 編集（global/local, ZCT） | 小〜中 |
 | M3 | ブール演算（OR/AND/XOR/SPLIT/マージ＝ラスタ化） | 大 |
 | M4 | 3D 変換（2D→3D / 3D→2D split）＋体積統計 | 大 |
-| M5 | 保存/入出力: DICOM SEG 書込 → ImageJ ROI(ij.jar) → DICOM RTSTRUCT → JSON/CSV | 大 |
+| M5 | 保存/入出力: DICOM SEG 書込 → ImageJ ROI(ij.jar) → DICOM RTSTRUCT → JSON/CSV<br>**うち「ROI のアプリ内 JSON 永続化」は実装済み（2026-07-30・下記 §11）** | 大 |
 | M6 | ImageJ ブリッジ連携（hyperStack＋ROI/Mask 往復） | 大 |
 
 各フェーズで `tsc`+`build`。i18n。`fw/` 反映。
@@ -151,3 +151,108 @@ interface MaskItem {
 5. **3D の実体**: マスクは 3D バイナリボリューム（`roi-mask-model.md` 決定どおり）。ベクタ 3D（積層輪郭）は持つか。
 6. **最初に着手するフェーズ**: M1（store＋UI 骨組み＋表示属性）から、で良いか。
 </content>
+
+---
+
+## 11. ROI（幾何注釈）のアプリ内 JSON 永続化（2026-07-30 実装）
+
+> 経緯: 本体の ROI は Cornerstone annotation state（メモリ）のみが権威で、**アプリを再起動すると
+> 消えていた**。書き出し（ImageJ ROI / RTSTRUCT / SEG）はあるが「同じ UID で読み戻す」経路が無く、
+> 時系列で同じ病変を追う用途（RECIST 1.1 のプラグイン等）が成立しなかった。
+> §10' の保存優先度（ImageJ 最優先）は**外部連携**の話で、往復の要件とは別物なので、
+> 先にアプリ内 JSON を入れた。標準形式への書き出しは既存のまま残る。
+
+### 11.1 契約
+
+`GET / PUT / DELETE /api/rois/{patientKey}` — **患者単位**の JSON ドキュメント 1 本。
+
+| 決めたこと | 理由 |
+|---|---|
+| **患者単位**（`patientKey` = PatientID → PatientName → StudyInstanceUID） | 時系列の突き合わせはスタディを跨ぐ。スタディ単位に割ると患者の全 ROI を得るのに何回も問い合わせることになり、「同じ病変か」の判断材料が分断される |
+| **backend は中身を解釈しない** | ROI の形は tool 種別ごとに違う。列に開くと tool を増やすたびにスキーマ移行が要る。スキーマの正本はフロントの `roiPersistence.ts` |
+| **楽観ロック**（`@Version`）。読まずに保存・版が古い・削除後の保存は 409 | 2D Viewer は患者ごとに別ウィンドウを開ける。後から来た保存が黙って前を消すと、数か月の計測が失われる |
+| **マスク（labelmap）は対象外** | DICOM SEG の往復が既にある。画素を JSON に入れるのは筋が悪い |
+
+### 11.2 フロント側で決めたこと（事故になり得た箇所）
+
+- **`referencedImageId` は保存しない**。imageId は `wadouri:http://localhost:<port>/...` で、
+  standalone の backend ポートは**起動ごとに変わる**。保存すると次回の復元で 1 件も一致しない。
+  **SOP Instance UID を鍵**にし、復元時に表示中スタックの imageId へ解決する。
+- **座標は患者座標(LPS mm)のまま保存**。画素座標へ落とすと往復で丸め誤差が入り、計測値が変わる
+  （`cornerstone-3d-geometry-caveat.md` と同じ「確定値は 1 つの幾何で完結させる」方針）。
+  SOP が同じなら IPP/IOP から決まる world 座標は再起動後も同一。
+- **`annotationUID` をそのまま復元する**。プラグイン（host API の H5 `getRois()`）が
+  時系列追跡の鍵に使えるようにするため。これが変わると縦断追跡が壊れる。
+- **壊れた要素は個別に落として残りを活かす**。1 件の破損で患者の全 ROI を失わない。
+  **未来の schema は読まない**（誤解釈して座標を壊すより取りこぼす方が安全）。
+- **SOP が現在のスタックに無い ROI は復元しない**（別シリーズへ載せると座標の意味が壊れる）。
+
+### 11.3 削除の伝播（墓標）
+
+同じ患者を別ウィンドウ（＝別レンダラ＝別 annotation state）で開くと、片方は相手の ROI を知らない。
+単純な上書きでは相手の計測が消え、単純な和では**片方で削除した ROI が復活する**。
+RECIST では「消したはずの病変が戻る」が判定を誤らせるので、**削除も記録して伝播させる**。
+
+- 保存に `deleted: [{ roiUid, at }]`（墓標）を持つ。マージは「ROI は和・墓標は和・**墓標に載った
+  UID は結果から除く**」。
+- **時刻比較は不要**: `annotationUID` は uuid で**再利用されない**（削除後に同じ場所を描き直しても
+  別 UID）。`at` は世代管理と監査のためだけに持ち、`MAX_TOMBSTONES` 件で新しい順に切る。
+- 削除の検出は**差分**（前回存在した UID − いま存在する UID）。削除の経路が複数ある
+  （個別 Delete / ROI マネージャ / 全消去 / undo）ため、操作を捕まえる方式では取りこぼす。
+
+### 11.4 ⚠ 表示していないシリーズの ROI を消さないための対策
+
+**この設計で最も危ういのはここ**。復元は「表示中スタックに属する ROI」だけを annotation state へ
+戻すので、**別シリーズの ROI はメモリ上に存在しない**。収集結果をそのまま保存すると、差分検出が
+それらを「消えた」と判定して墓標を立て、**実際に消える**。
+
+対策: 収集時に「その ROI の SOP が**いまどこかのビューポートに読み込まれているか**」を見る
+（`roiRestore.openStackSops()`）。読み込まれていなければ保存内容へそのまま持ち越し、
+**読み込まれているのに annotation が無い場合だけ削除と確定する**。
+
+### 11.5 実装
+
+| ファイル | 役割 |
+|---|---|
+| `backend/.../roi/RoiDocument` ＋ `Repository` / `Service` / `Controller` | 保管・版管理・入力検証。テスト `RoiDocumentServiceTest`（15 件） |
+| `frontend/src/viewer/roiPersistence.ts` | スキーマの正本と相互変換（純関数）。テスト 40 件 |
+| `frontend/src/viewer/roiSaveStore.ts` | デバウンス保存・版保持・409 マージ再試行・削除の差分検出。テスト 22 件 |
+| `frontend/src/viewer/roiRestore.ts` | Cornerstone に触る層（復元・収集・SOP 解決・開いているスタックの判定） |
+| `frontend/src/viewer/roiPersistenceApi.ts` | REST クライアント |
+| `frontend/src/viewer/Viewer2D.tsx` | スタック確定時の復元 |
+| `frontend/src/viewer2d/Viewer2DScreen.tsx` | 患者単位の収集関数登録と変更契機の自動保存 |
+| `frontend/src/viewer2d/RoiManagerPanel.tsx` | 明示保存ボタン（最終保存の時刻・件数・失敗理由） |
+
+### 11.5' 実機検証（2026-07-30・standalone / Linux）
+
+ドライバは `automator/src/spike/roiPersistCheck.ts`。**アプリを完全に終了して起動し直す**のが本題。
+読み出しはプラグインの `getRois()`（H5）＝公式契約だけを使う。
+
+確認できたこと:
+
+- 描くと自動保存され、`/api/rois/{patientKey}` に載る。保存内容に **imageId（`localhost` を含む URL）
+  が入っていない**＝backend のポートが変わっても復元できる。
+- **再起動後に復元される**。`annotationUID` が同一、計測値(mm)が **1e-6 以内で完全に同一**
+  （`length=83.44511518618044` が一致）。ツール種別・SOP 解決も復元される。二重復元もしない。
+- 全消去 → 墓標が保存される → **再起動後も復活しない**。
+
+**この検証で見つけた欠陥（いずれも単体テストでは出ない）**:
+
+1. **`removeAllAnnotations()` は個々の `ANNOTATION_REMOVED` を発火しない**。イベント購読だけに
+   任せていたため「ROI を全消去」が保存されず、再起動で**消したはずの ROI が戻っていた**。
+   削除経路（全消去・個別削除）で保存を**明示的に予約**するようにした。
+2. **`automator/reset`（症例データの全削除）が ROI 保存を消していなかった**。「症例データを全部消す」
+   と規定しているのに残るため、次の検証が前回の ROI を復元して汚染された。実運用でも
+   「症例を消したのに計測が残る」ことになるので対象に追加した（`AutomatorServiceResetTest`）。
+3. **automator の孤児プロセス**（本件とは別に automator 側の欠陥）: `killProcessTree` が SIGTERM の
+   みで待機も SIGKILL 昇格も無く、backend（非デーモンスレッドを持つ）が残っていた。残ったプロセスに
+   次の実行が繋がり、**古い jar が応答して 2 回分の検証結果が黙って汚染された**
+   （reset の応答に新フィールドが無いことで発覚）。SIGKILL への昇格と、
+   起動前のポート占有チェック（応答があれば**再利用せず中断**）を入れた。
+
+### 11.6 残っていること
+
+- **マスク（labelmap）の永続化**は未対応（DICOM SEG の往復で代替）。
+- **削除の墓標は上限で切る**ため、1 万件削除するあいだ開いたままのウィンドウがあれば
+  理論上は復活し得る（実運用では起こらない範囲と判断）。
+- ROI の**書き込み API はプラグインへ出していない**（読影医の計測をプラグインが書き換えられない）。

@@ -109,9 +109,10 @@ git add minisign.pub && git commit -m "add signing public key"   # 公開鍵は�
 楕円・矩形・自由曲線は `measurements.longAxisMm` / `shortAxisMm`（形状から本体が算出＝最遠 2 点と、
 それに直交する広がり）を使う。画素間隔が不明なら算出値は `undefined`（mm は捏造されない）。
 
-⚠ **`roiUid` はセッション内でしか安定しない**（本体に ROI の永続化が無い）。時系列で同じ病変を追うなら
-`sopInstanceUid` ＋ `points` ＋自分で振った ID を自分側に保存する。`zScope === "all"` の ROI は
-`sliceIndex` が「いま見ているスライス」を指すだけなので、計測記録では弾く。
+**`roiUid` はアプリを再起動しても同じ**（ROI は患者単位で永続化され、同じ `annotationUID` で
+復元される）。時系列追跡の鍵に使える。`setRoiMeta()` の属性も一緒に保存される。
+削除された ROI は復活しないので、`getRois()` に現れない `roiUid` は消えたものとして扱う。
+`zScope === "all"` の ROI は `sliceIndex` が「いま見ているスライス」を指すだけなので、計測記録では弾く。
 ROI の**書き込みはできない**（読影医の計測をプラグインが書き換えられないようにしてある）。
 
 共通: `pluginId` / `t(key)`（i18n）/ `notify(msg)` / `runBackend(payload?)`（backend 面がある場合）。

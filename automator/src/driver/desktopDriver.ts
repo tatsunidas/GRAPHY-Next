@@ -46,6 +46,11 @@ export class DesktopDriver implements Driver {
         `先に "cd backend && mvn -q -Dfrontend.skip=true -DskipTests clean package" を実行してください。`,
       );
     }
+    // **既に backend が待ち受けていたら、それを使わずに失敗させる**。
+    // 前回実行の孤児プロセスへ繋がると、古い jar が応答して検証結果が黙って汚染される
+    // （2026-07-30 に実際に 2 回分の結果を無駄にした。reset の応答に新フィールドが無いことで発覚）。
+    await assertPortFree(this.ports.http);
+
     const dataDir = DESKTOP_RUN_DATA_DIR;
     fs.mkdirSync(dataDir, { recursive: true });
 
@@ -164,5 +169,30 @@ export class DesktopDriver implements Driver {
     await this.electronApp.evaluate(({ dialog }, dirPath) => {
       dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [dirPath] })) as typeof dialog.showOpenDialog;
     }, path);
+  }
+}
+
+/**
+ * backend のポートが空いていることを確かめる。応答があれば**前回の孤児プロセス**なので、
+ * 黙って再利用せずに落とす（古い jar の応答で検証が汚染されるのを防ぐ）。
+ */
+async function assertPortFree(httpPort: number): Promise<void> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1500);
+  try {
+    const res = await fetch(`http://127.0.0.1:${httpPort}/api/status`, { signal: controller.signal });
+    if (res.ok) {
+      throw new Error(
+        `ポート ${httpPort} で既に backend が応答しています。前回実行の孤児プロセスの可能性が高いです。\n` +
+          `そのまま進めると**古い jar が応答して検証結果が汚染される**ため中断します。\n` +
+          `確認: ps -eo pid,lstart,args | grep graphy-next-backend.jar\n` +
+          `対処: そのプロセスを終了してから再実行してください。`,
+      );
+    }
+  } catch (e) {
+    // 接続できない = 正常（ポートが空いている）。中断メッセージだけは通す。
+    if (e instanceof Error && e.message.startsWith(`ポート ${httpPort}`)) throw e;
+  } finally {
+    clearTimeout(timer);
   }
 }

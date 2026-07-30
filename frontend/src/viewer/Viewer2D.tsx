@@ -32,7 +32,7 @@ import { ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID } fr
 import { setViewerContext, clearViewerContext, getViewerContext, type ViewerContext } from "./viewerContext";
 import { getRoiMaskMeta, setRoiMaskMeta, subscribeRoiMaskStore } from "./roiMaskStore";
 import { reconcileGlobalAnnotations } from "./globalRoiSync";
-import { loadRoisCached } from "./roiSaveStore";
+import { loadRoisCached, scheduleRoiSave } from "./roiSaveStore";
 import { restoreRoisIntoStack } from "./roiRestore";
 import { listSpheres3D, sphereCanvasCircle, subscribeSphere3D, type SphereCanvasCircle } from "./sphere3dStore";
 import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
@@ -1574,6 +1574,10 @@ export function Viewer2D({
     } catch {
       /* ignore */
     }
+    // 保存を**明示的に**予約する。`removeAllAnnotations()` は個々の ANNOTATION_REMOVED を
+    // 発火しないため、イベント購読だけに任せると全消去が保存されない（実機検証で判明）。
+    const pk = roiContextRef.current?.patientKey;
+    if (pk) scheduleRoiSave(pk);
   };
 
   // 画面メニュー/ツールバーからの一括コマンド。最新の実装を ref に保持し、登録は wrapper 経由で常に最新を呼ぶ。
