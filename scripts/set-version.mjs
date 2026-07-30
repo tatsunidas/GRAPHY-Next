@@ -35,6 +35,31 @@ function setJson(rel) {
   console.log(`  ✓ ${rel} -> ${v}`);
 }
 
+/**
+ * package-lock.json の「自分自身の版」だけを更新する。
+ * 依存ツリーには触らないので `npm install` の再実行は不要。
+ * version フィールドを持たない lock（依存の無いルート）は何もしない。
+ */
+function setLockVersion(rel) {
+  const f = resolve(root, rel);
+  let src;
+  try {
+    src = readFileSync(f, "utf8");
+  } catch {
+    console.log(`  - ${rel} は無いので飛ばします`);
+    return;
+  }
+  const lock = JSON.parse(src);
+  if (lock.version === undefined && lock.packages?.[""]?.version === undefined) {
+    console.log(`  - ${rel} は版を持たないので飛ばします`);
+    return;
+  }
+  if (lock.version !== undefined) lock.version = v;
+  if (lock.packages?.[""]?.version !== undefined) lock.packages[""].version = v;
+  writeFileSync(f, `${JSON.stringify(lock, null, 2)}\n`);
+  console.log(`  ✓ ${rel} -> ${v}`);
+}
+
 // pom.xml は artifact 直下の <version> のみ置換（親 spring-boot の version は触らない）。
 const pomPath = resolve(root, "backend/pom.xml");
 const pom = readFileSync(pomPath, "utf8");
@@ -49,5 +74,11 @@ console.log(`  ✓ backend/pom.xml -> ${v}`);
 setJson("package.json");
 setJson("frontend/package.json");
 setJson("desktop/package.json");
+
+// package-lock.json も揃える。**放っておくと版が置いていかれる**
+// （実際 desktop の lock は 0.1.8、frontend は 0.1.9 のまま取り残されていた）。
+// 触るのは自分自身の版を表す 2 箇所（トップレベルと packages[""]）だけで、依存は変えない。
+setLockVersion("frontend/package-lock.json");
+setLockVersion("desktop/package-lock.json");
 
 console.log(`\nバージョンを ${v} に更新しました。'npm run build' で全体に反映されます。`);
