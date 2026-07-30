@@ -127,10 +127,13 @@
 >   automator 用 `debugApi.ts`（DEV ガード）と共用。純ロジックは `viewportRead.test.ts`。
 > - フロント面のみで完結＝**web モードでも同じ**（`/api/plugins` の契約は不変）。backend 変更なし。
 >
-> **残**: 🔴 **H4b の web モード（外部 PACS への STOW-RS 書き戻し）が未検証**
-> （コードは既存 web 分岐に乗るだけで追加なし）。**手順は `deploy/dcm4chee/VERIFY-web.md` の
-> 「③-2 プラグインの派生シリーズ保存（H4b・web モード）」に追記済み**（2026-07-30）。
-> dcm4chee の compose を上げて実施する作業だけが残っている。
+> ✅ **H4b の web モード（外部 PACS への STOW-RS 書き戻し）も検証済み（2026-07-30・18 項目合格）**:
+> 実 dcm4chee を立てて確認した。**判定は UI ではなく PACS へ直接 QIDO / WADO-RS を投げて**行っている
+> （`automator/src/spike/h4bWebStowCheck.ts`。手順と実施環境は `deploy/dcm4chee/VERIFY-web.md` §③-2）。
+> 保存先の表示が「接続中の PACS（STOW-RS で書き戻し）」に切り替わること、拒否時に PACS へ増えないこと、
+> 承諾すると `[Plugin] Bone mask` が PACS に出現し `ImageType=DERIVED\SECONDARY`・
+> `DerivationDescription` のプラグイン id・`PixelPaddingValue=-1000`・Rescale 恒等が残ること、
+> **元シリーズが無変更**であることを確認。**これで §7 の H1〜H4b は実装・検証とも完了**。
 > ✅ **外部デモ 4 リポジトリの追従は PR 済み（2026-07-30）**: 各リポジトリの `feat/host-api-0.1.9`
 > ブランチで PR #1 を作成（[demos](https://github.com/tatsunidas/graphy-next-plugin-demos/pull/1) /
 > [hello](https://github.com/tatsunidas/graphy-next-plugin-hello/pull/1) /
