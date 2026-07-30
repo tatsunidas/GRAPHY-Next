@@ -8,6 +8,21 @@
 > ④IID起動を確認）。**未確認のまま残っている項目**: SEG/RTSTRUCT の **per-frame 参照・幾何整合の目視確認**
 > （下記 ⚠ 参照）。この1点は引き続き要検証。
 
+## 実施環境の記録
+
+**どのマシンで実施したかを必ず残す。** 2026-07-10 の検証はこれが無かったため、2026-07-30 に
+「以前 docker で動かした記録はないか」を調べ直す手間が発生した（結論: 別マシンだった）。
+
+| 日付 | 実施環境 | dcm4chee | 結果・備考 |
+|---|---|---|---|
+| 2026-07-10 | **不明**（記録なし。おそらく別 PC） | 起動できた | ①②③④ 合格。SEG/RTSTRUCT の per-frame 幾何整合のみ未確認 |
+| 2026-07-30 | Pop!_OS（`pop-os`・開発機） | ✅ 起動・検証完了 | **③-2（H4b の web）を実施し 18 項目すべて合格**（`automator/src/spike/h4bWebStowCheck.ts`）。この機は初回セットアップが必要だった: `docker compose` 未導入（apt に `docker-compose-plugin` が無いのでバイナリ v5.3.1 を `/usr/libexec/docker/cli-plugins/` へ直置き）、`dcm4che/*` 3 イメージを pull、`docker` グループ未参加（**`sudo docker` が必要**）、`:8080`/`:11112` を standalone backend が占有していたので停止してから起動 |
+
+> このマシンで実施するには: ①compose を導入（`sudo apt install -y docker-compose-plugin`）
+> ②`:8080` を空ける（standalone backend を停止。dcm4chee も 8080 を使う）
+> ③`docker compose ... up -d`（初回は 3 イメージの pull）。
+> `deploy/dcm4chee/data/` が出来ていれば「このマシンで起動した」証拠になる（全サービスがバインドマウント）。
+
 ## 0. 前提
 - JDK 21 / Docker / dcm4che CLI ツール（`storescu` 等、任意）。
 - web UI 同梱の jar が必要 → `make build`（frontend+backend）または `cd frontend && npx vite build` 後に
@@ -53,12 +68,26 @@ java -jar backend/target/graphy-next-backend.jar \
     `/metadata` 先頭から引き継ぎ）。エクスポートされたシリーズが PACS に現れることは確認済みだが、
     フレームごとの参照・幾何整合そのものはまだ目視確認していない。
 
-### ③-2 プラグインの派生シリーズ保存（H4b・web モード）— **未実施**
+### ③-2 プラグインの派生シリーズ保存（H4b・web モード）— ✅ **2026-07-30 完了（18 項目合格）**
 
-`fw/plugin-architecture.md` §7 の H4b（`host.saveDerivedSeries()`）は standalone で検証済みだが、
-**web（外部 PACS への STOW-RS 書き戻し）は未検証**。実装は既存の web 分岐
-（`DerivedSeriesService` がテンプレートを WADO-RS `/metadata` から取り、`storeDatasets` で STOW）
-にそのまま乗るだけでコード追加は無いが、実 PACS 相手の確認が残っている。
+`fw/plugin-architecture.md` §7 の H4b（`host.saveDerivedSeries()`）の web 分岐
+（`DerivedSeriesService` がテンプレートを WADO-RS `/metadata` から取り、`storeDatasets` で STOW）を
+実 dcm4chee で確認した。
+
+**自動化済み**: `cd automator && npx tsx src/spike/h4bWebStowCheck.ts`
+（ブラウザで web UI を操作し、**判定は dcm4chee へ直接 QIDO / WADO-RS を投げて**行う。
+UI の「保存しました」表示ではなく PACS の実体を見るのが要点）。
+接続先は環境変数 `GRAPHY_WEB_URL` / `GRAPHY_PACS_RS` で差し替え可。
+
+確認できたこと（18 項目）: web で 2D 表示（BFF 経由 WADO-RS）／**確認ダイアログの保存先が
+「接続中の PACS（STOW-RS で書き戻し）」**（standalone は「この PC の保管庫」＝分岐が効いている）／
+**拒否したとき PACS にシリーズが増えない**／承諾すると **PACS に新シリーズが出現**／
+`SeriesDescription` に `[Plugin] ` 接頭辞／`ImageType=DERIVED\SECONDARY`（RESLICE なし）／
+`DerivationDescription` にプラグイン id・版／`ContributingEquipmentSequence` あり／
+Rescale 恒等・`RescaleType=HU`／**`PixelPaddingValue=-1000`**（背景の明示指定が web でも効く）／
+Modality は元のまま／**元シリーズは無変更**／コンソールに `pixel data is missing` が出ない。
+
+以下は手で行う場合の手順（自動化スクリプトが無い環境向け）。
 
 準備（プラグインを 1 本置く。web は導入 UI が使えないため**手置き**する）:
 
