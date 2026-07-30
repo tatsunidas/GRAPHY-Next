@@ -31,6 +31,19 @@
   `classpath*:/portable-viewer/**` を ZIP の `VIEWER/` 以下へ相対パス保持で書き出す（`ExportPortableViewerTest`）。
   成果物が無い（`-Dfrontend.skip`）場合は警告のみで Export は継続。
 
+## 動画の同梱（2026-07-31 実装済み・P5a）
+- 媒体に **`VIDEO/{SOPInstanceUID}.mp4`** を同梱し（`ExportService.copyPlayableVideo`／portable viewer 同梱 ON の時のみ）、
+  portable viewer は DICOMDIR の ReferencedSOPClassUIDInFile(0004,1510) で動画シリーズを判定して
+  `URL.createObjectURL(File)` を `<video controls loop>` に渡す（**fetch 不要＝`file://` でも動く**）。
+- 変換は配信と同じ `VideoRenderService`（MP4 はそのまま／H.264・HEVC の基本ストリームは remux／MPEG2 等は再エンコード）
+  を通すので、モダリティ由来の動画も同梱できる。詳細と検証は `fw/video-viewer-design.md` §7。
+- 🚨 **CSP に `media-src 'self' blob:` が要る**（`vite.portable.config.ts`）。未指定だと `default-src 'self'` に
+  フォールバックして blob: の動画が**必ずブロックされる**。
+- 🚨 **`hidden` 属性は `display` 指定に負ける**。`#grid[hidden]{display:none}` を明示しないと、動画表示中も
+  画像タイルが見えたままになる（属性を見るだけの自己検証では気づけない。表示は矩形で判定すること）。
+- 検証: `automator/src/spike/portableVideoCheck.ts`（20/20）。Export → ZIP 展開 → 媒体をローカル HTTP で配って
+  **実 Google Chrome**（`channel: "chrome"`）で `?selfTest=` を通す。Playwright 同梱 Chromium は H.264 を持たないため使わない。
+
 ## 方針決定（2026-07-23）: Weasis は使わない
 交換メディア同梱ビューアとして **Weasis を採用しない**（自前の Cornerstone3D ベース Portable 2D Viewer で完結する）。
 - **理由**: (1) Zero-install（ブラウザで `VIEWER/index.html` を開くだけ。Java ランタイム/OS 別バイナリ不要）、
