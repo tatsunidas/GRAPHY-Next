@@ -10,10 +10,16 @@
  *    （面積・平均/最大/最小・SD・ヒストグラム）を出す。通常の 2D スライス ROI と同じ挙動。
  * <p>2. **グローバル ROI** … 全フレームに適用（時間非依存）。常に表示され、時系列解析の対象になる。
  *
- * <p>Cornerstone の annotation は video viewport では全フレームが同一 FrameOfReference を共有するため、
- * 素のままでは常に全フレームへ出る（＝実質グローバル固定）。そこで帰属を **uid → スコープの対応表**として
- * ビューア側に持ち、表示は `annotation.visibility` で切り替える。この対応表の操作はすべて純粋関数として
- * ここに置く（DOM も Cornerstone も参照しないので vitest で直接検証できる）。
+ * <p>Cornerstone の annotation は video viewport では全フレームが同一 FrameOfReference を共有するが、
+ * **表示は描いたフレームに固定される**。`AnnotationTool` は生成時に `viewport.getViewReference()` を
+ * metadata に入れ、`VideoViewport.isReferenceViewable()` が `sliceIndex === 現在フレーム` を要求するためで、
+ * 素の挙動は「全フレームに出る」ではなく「描いた 1 フレームだけに出る」（2026-07-30 の実機検証で判明。
+ * それまでは逆だと想定しており、グローバル ROI が他フレームで表示されない不具合になっていた）。
+ *
+ * <p>そこで帰属を **uid → スコープの対応表**としてビューア側に持ち、表示は
+ * {@link applyScopeToReference} で **annotation metadata の参照フレーム**へ反映する（＝Cornerstone の
+ * 表示フィルタを味方につける）。併せて `annotation.visibility` も揃えるが、そちらは補助でしかない。
+ * この対応表の操作はすべて純粋関数としてここに置く（DOM も Cornerstone も参照しないので vitest で直接検証できる）。
  *
  * <p>更新系（{@link assignScope} / {@link toggleScope} / {@link pruneScopes}）は**変化が無ければ同一参照を
  * 返す**。React state に入れるため、無変化で新オブジェクトを返すと再描画が無限に連鎖する。
@@ -98,6 +104,40 @@ export function pruneScopes(map: RoiScopeMap, aliveUids: readonly string[]): Roi
     }
   }
   return next;
+}
+
+/**
+ * Cornerstone の annotation metadata のうち、video viewport の表示フィルタが見る部分。
+ * （`@cornerstonejs/core` の `ViewReference` の部分型。ここでは型依存を持たないため自前で宣言する）
+ */
+export interface RoiAnnotationReference {
+  /** 0-based の参照フレーム。**undefined なら全フレームで表示**される。 */
+  sliceIndex?: number;
+  /** 範囲参照（再生中に作られることがある）。フレーム固定の邪魔になるので帰属反映時に落とす。 */
+  multiSliceReference?: unknown;
+}
+
+/**
+ * 帰属を annotation metadata に反映する（**表示フィルタの実体はこれ**。`visibility` ではない）。
+ *
+ * <p>`VideoViewport.isReferenceViewable()` は `sliceIndex` があればそのフレームだけを可視とし、
+ * 無ければ（かつ referencedImageId にフレーム番号が無ければ）全フレームで可視とする。よって
+ * グローバル ROI は `sliceIndex` を**消す**のが正しい。
+ *
+ * @returns 変更が生じたか（呼び側が再描画の要否を判断できるように）
+ */
+export function applyScopeToReference(ref: RoiAnnotationReference, scope: RoiScope): boolean {
+  if (scope.kind === "global") {
+    const changed = ref.sliceIndex !== undefined || ref.multiSliceReference !== undefined;
+    delete ref.sliceIndex;
+    delete ref.multiSliceReference;
+    return changed;
+  }
+  const sliceIndex = Math.max(0, Math.round(scope.frame) - 1);
+  const changed = ref.sliceIndex !== sliceIndex || ref.multiSliceReference !== undefined;
+  ref.sliceIndex = sliceIndex;
+  delete ref.multiSliceReference;
+  return changed;
 }
 
 /** frame（1-based）で表示すべき uid だけを、渡された順序のまま返す。 */

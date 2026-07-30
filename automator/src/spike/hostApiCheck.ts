@@ -35,6 +35,7 @@ import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
 
 interface Target {
   tileId: string;
+  patientKey: string;
   studyUid: string;
   studyDate: string | null;
   seriesUid: string;
@@ -293,6 +294,8 @@ async function main(): Promise<void> {
     check(!!t0?.imageId, "imageId を返す", t0?.imageId);
     check(t0?.c === 0 && t0?.t === 0, "単純シリーズは c=t=0", { c: t0?.c, t: t0?.t });
     check(!!t0?.seriesLabel, "seriesLabel が空でない", t0?.seriesLabel);
+    // H7: 患者キー（患者単位の記録を持つプラグインの鍵）。
+    check(!!t0?.patientKey, "patientKey が空でない", t0?.patientKey);
     // H6: スタディの検査日。ISO の日付として解釈できる形で返ること。
     check(
       /^\d{4}-\d{2}-\d{2}$/.test(t0?.studyDate ?? ""),

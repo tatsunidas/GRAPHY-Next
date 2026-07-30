@@ -1,9 +1,49 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
-> 更新日: 2026-07-30（最終更新: **モバイル UI とボリュームメモリガードの設計を新規追加**。
-> 下記エントリ参照）
+> 更新日: 2026-07-30（最終更新: **動画 ROI（P3c）を実機検証で完了させ、3 件の不具合を修正**
+> ＝グローバル ROI が他フレームで出ない／ループ時に最終フレームへシークできない／計測テキストが
+> フレームに追従しない。下記エントリ参照）
 > 目的: 別の作業者（Claude 含む）がこのリポジトリの状況を把握し、続きを実装できるようにする。
 > このファイル＋ `fw/` 配下の各設計ドキュメントが「ソース・オブ・トゥルース」。
+>
+> 🟢 **2026-07-30 動画 ROI のフレーム指定モードを実機検証 → 表示の不具合を修正**
+> （正本: [`fw/video-viewer-design.md`](video-viewer-design.md) §12）。
+> PR #69 で入れた「フレーム指定 ROI モード＋単一フレーム統計」は typecheck / vitest のみ green で
+> **UI 未検証**のまま残っていた項目。standalone（backend jar ＋ Vite ＋ 実 Electron）で通し、
+> 新規スパイク `automator/src/spike/videoRoiFrameModeCheck.ts` が **30/30 green**。
+> - 🚨 **見つかった本命の不具合: グローバル ROI が描いたフレーム以外で表示されない**。
+>   原因は cornerstone の前提の読み違い。`AnnotationTool` は生成時に `viewport.getViewReference()`
+>   （＝描いた瞬間のフレーム）を metadata に入れ、`VideoViewport.isReferenceViewable()` が
+>   **`metadata.sliceIndex === 現在フレーム` を要求する**ため、video viewport の annotation は素の状態で
+>   **描いた 1 フレームにしか出ない**。PR #69 は逆（「素では全フレームに出る」）と想定して
+>   `annotation.visibility` だけで隠していたので、グローバル化しても他フレームで描画されなかった。
+>   → 帰属の反映を **metadata の参照フレーム書き換え**に変更（`videoRoiScope.ts` の純粋関数
+>   `applyScopeToReference()`: グローバル=`sliceIndex` を消す／フレーム指定=`sliceIndex = frame-1`）。
+>   `visibility` は補助として残す。**同種の思い込みは他の viewport でも起きうる**ので、
+>   フレーム/スライス帰属を扱うときは `isReferenceViewable` の条件を先に読むこと。
+> - 併せて修正: ROI チップの枠線がショートハンド `border` と `borderStyle` 混在で React 警告
+>   （再描画時に枠が消えうる）→ `borderWidth/Style/Color` に分解。
+> - 検証の作り: フィクスチャ動画は **ffmpeg で合成**（無ければスパイクが自動生成）。
+>   `lum = 20 + (X/W)*100 + T*60` の全 I フレーム H.264 なので、**輝度が時間で単調増加**し
+>   「フレーム f の統計が本当に f のものか」を数値で判定できる（実測 F3 平均 85.7 → F28 平均 202.1）。
+>   表示/非表示は cornerstone の内部 API ではなく **SVG レイヤの DOM**で判定する（利用者に見えるもので判定）。
+> - 続けて **P3c の残タスクも実機検証で完了させた（同日）**。`videoRoiFrameModeCheck.ts` は 34/34、
+>   新規 `automator/src/spike/videoFrameAccuracyCheck.ts` は 11/11 green。
+>   - 🚨 **ループ有効だと最終フレームへシークできない不具合を発見・修正**。`loop` が真のとき最終フレームを
+>     要求すると **frame 1 へ巻き戻っていた**（VideoViewport はフレーム範囲を超えたと判断すると loop 時に先頭へ戻す）。
+>     利用者には「シークバーを端まで動かすと先頭に飛ぶ／最後のフレームが見られない」と見える。
+>     → `seekToFrame()` はシーク中だけループを外し、再生開始時に戻す。**ループ再生の挙動は変えていない**。
+>   - ✅ **計測テキストのフレーム追従**: cornerstone の `cachedStats` が作成フレームの値のままだったので、
+>     フレーム変更時に `invalidateAnnotation()` で無効化。パネル値と一致することを実測（F3 85.6 / F28 202）。
+>   - ✅ **複数 ROI の選択解析**: 一覧チップのラベルで解析対象を選べる。**選択した ROI が解析できない帰属なら
+>     黙って別の ROI を解析せず理由を出す**（選択が無視されたように見えるのを防ぐ）。
+>   - ✅ **フレーム精度シークは「対処不要」と決着**。キーフレームが先頭だけ・フレームごとに輝度が飛び飛びの動画で
+>     測ると `measured ≈ 1.165 * level − 18.69`（限定→フルレンジ変換そのもの）・**最大残差 0.44**・同定フレーム全件一致。
+>     `(frame-1+0.5)/fps` へシークする現実装で十分で、`requestVideoFrameCallback` 経路は要らない。
+>   - **automator のポートを環境変数で差し替え可能にした**（`GRAPHY_AUTOMATOR_HTTP_PORT` / `..._SCP_PORT` /
+>     `..._VITE_PORT`）。同じマシンの別 worktree から automator を並走させると既定ポートで衝突して
+>     `assertPortFree` で落ちる（実際に発生した）。並走時はどちらかで指定する。
+>   - → **P3c 完了**。動画で残るのは P4（MPEG2 等の ffmpeg 変換）と P5（Portable / web）。
 >
 > 📝 **2026-07-30 設計 2 本を新規追加（実装は未着手）**
 > → [`fw/volume-memory-guard.md`](volume-memory-guard.md) / [`fw/mobile-ui-design.md`](mobile-ui-design.md)

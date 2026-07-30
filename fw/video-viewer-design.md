@@ -199,7 +199,9 @@ frontend: VideoViewport（ViewportType.VIDEO）
     平均輝度/RGB → time–intensity カーブ ＋ CSV）を実装・**実機検証済み（2026-07-24）**。統計は**フロント**で
     オフスクリーン `<video crossOrigin=anonymous>` から canvas 読取（`/rendered` は CORS 許可済み）。
     ROI 管理 UI（削除/一覧）・統計拡張・**フレーム指定 ROI モードの明示切替＋単一フレーム統計（面積/平均/最大/最小/SD/
-    ヒストグラム）** は実装済み（§12 の残タスク欄を参照。最後のものは UI 未検証）。残: 複数 ROI の選択解析、フレーム精度シーク。
+    ヒストグラム）** も実装済み・**実機検証済み（2026-07-30、`automator/src/spike/videoRoiFrameModeCheck.ts` 30/30）**。
+    → 詳細と検証で直した不具合は §12 の残タスク欄。**複数 ROI の選択解析・計測テキストのフレーム追従・
+    フレーム精度シークの実測確認も完了（2026-07-30）＝ P3c は完了**。残るのは P4（非 H.264）と P5（Portable/web）。
 - **P4（非 H.264 対応）**: `/rendered` に ffmpeg トランスコード分岐（MPEG2 等）＋キャッシュ（§4.3/4.4）。
 - **P5（Portable/web）**: §7/§8。
 
@@ -228,7 +230,11 @@ frontend: VideoViewport（ViewportType.VIDEO）
 1. **HEVC の扱い**: ブラウザ対応が環境依存。無変換配信を試み、再生不可なら ffmpeg フォールバックにするか、
    最初から H.264 に正規化するか（→ P4 で実測して決定）。
 2. **複数フレーム DICOM video の BOT 連結**: 実データ（US/XA シネ）で BOT ありのサンプルを入手し検証（要フィクスチャ）。
-3. **フレーム精度シーク**: `<video>` の time シークは GOP 単位で不正確になりうる。フレーム精度が要る用途では
+3. ✅ **フレーム精度シーク（2026-07-30 決着: 対処不要）**: 実機で測ると**キーフレームが先頭だけの動画でもフレームは
+   正確に読めた**（`videoFrameAccuracyCheck.ts`。最大残差 0.44 / 同定フレーム全件一致）。フレーム中心
+   （`(frame-1+0.5)/fps`）へシークする現実装で十分で、下記の `-g 1` 変換や `requestVideoFrameCallback` は不要。
+   ただし**ループ有効時に最終フレームへシークできない**不具合が別にあり、そちらは修正した（§12）。
+   （以下は当時の懸念の記録）**フレーム精度シーク**: `<video>` の time シークは GOP 単位で不正確になりうる。フレーム精度が要る用途では
    `-g 1`（全 I フレーム）変換オプションを P4 で用意するか要検討（ファイルサイズ増とのトレードオフ）。
 4. **実機検証フィクスチャ**: 取込済み H.264 MP4（`automator/fixtures/video-mp4-avi/`）＋ 実 DICOM video サンプル。
 
@@ -246,8 +252,10 @@ frontend: VideoViewport（ViewportType.VIDEO）
 
 ## 12. 動画 ROI 解析（P3c）
 
-> ステータス: **P3c v1 実装済・実機検証済み（2026-07-24）**。グローバル ROI（矩形/楕円）の時系列解析
-> （全フレームの ROI 内平均輝度/RGB → time–intensity カーブ ＋ CSV）まで動作。
+> ステータス: **P3c 実装済・実機検証済み（時系列解析 2026-07-24／ROI 管理 UI 2026-07-27／
+> フレーム指定 ROI モードと単一フレーム統計・複数 ROI の選択解析・フレーム精度 2026-07-30）**。グローバル ROI（矩形/楕円）の時系列解析
+> （全フレームの ROI 内平均輝度/RGB → time–intensity カーブ ＋ CSV）と、フレーム指定 ROI の単一フレーム統計
+> （面積/平均/最大/最小/SD/ヒストグラム）まで動作。**§12 の 2 モードは両方とも実機で確認済み**。
 > **前提**: ROI を動画フレームに載せるには方式 A（VideoViewport）が必須（方式 B の `<video>` はフレーム上に
 > ツール/ROI を重ねられない）。P3a で移行済み。
 >
@@ -281,17 +289,27 @@ frontend: VideoViewport（ViewportType.VIDEO）
 >   `min_luma`/`max_luma`/`sd_luma` 列を追加。**vitest** で `computeRoiStats`（uniform/2値/楕円マスク21px/1px）と
 >   `timeSeriesToCsv`（列順・整形）を 5 ケース追加（計 64 tests green）＋ typecheck/build green。i18n `video.analyze.channels`/`summary`（ja/en）。
 >   ヒストグラムは本質的に単一フレーム統計なので下記「フレーム指定 ROI モード」フェーズに送る。
-> - ✅ **フレーム指定 ROI モードの明示切替 ＋ 単一フレーム統計 実装完了（2026-07-27, ブランチ `feat/video-roi-frame-mode`）**:
->   §12 の 2 モードのうち①（フレーム指定 ROI）を実装。**UI 動作は未検証**（typecheck / vitest のみ green。下記「未検証」参照）。
+> - ✅ **フレーム指定 ROI モードの明示切替 ＋ 単一フレーム統計 実装完了（2026-07-27, ブランチ `feat/video-roi-frame-mode`）
+>   ＋ 実機検証済み・不具合修正済み（2026-07-30, ブランチ `feat/video-roi-frame-mode-verify`。下記「実機検証」参照）**:
+>   §12 の 2 モードのうち①（フレーム指定 ROI）を実装。
 >   - **帰属モデル**: `viewer/videoRoiScope.ts`（新規・DOM 非依存の純粋関数群）。`RoiScope = {kind:"global"} | {kind:"frame",frame}` を
->     **uid → スコープの対応表**（`RoiScopeMap`）としてビューア側に保持する。annotation 側に持たせないのは、video viewport では
->     全フレームが同一 FrameOfReferenceUID を共有し、cornerstone の annotation 自体はフレーム帰属を表現できないため。
+>     **uid → スコープの対応表**（`RoiScopeMap`）としてビューア側に保持する。annotation 側に持たせないのは、cornerstone の
+>     annotation が「グローバル（全フレーム）」を素直に表現できないため。
 >     更新系（`assignScope`/`toggleScope`/`pruneScopes`）は**無変化なら同一参照を返す**（React state に入れるため、
 >     毎回新オブジェクトを返すと再描画が無限連鎖する）。既定はグローバルで、グローバルはキーを持たない表現に正規化する。
->   - **表示の切替**: `annotation.visibility.setAnnotationVisibility(uid, visible)` を `[rois, scopes, frame, phase]` の
->     effect で適用。この API は **`ANNOTATION_VISIBILITY_CHANGE` しか発火せず**（MODIFIED ではない）購読していないため、
->     注釈イベント → `refreshRois` → 再描画 のループにはならない。**冪等**（隠し集合への add/delete で変化時のみ publish）。
->     ただし隠し集合は **cornerstone のモジュール全体で共有**されるため、アンマウント時・SOP 切替時・ROI 削除時に
+>   - 🚨 **表示の切替（2026-07-30 に方式を修正）**: **表示フィルタの実体は annotation metadata の参照フレーム**であって
+>     `visibility` ではない。`AnnotationTool.createAnnotationForViewport` が生成時に `viewport.getViewReference()`
+>     （＝描いた瞬間のフレーム）を metadata に入れ、`VideoViewport.isReferenceViewable()` が
+>     **`metadata.sliceIndex === 現在フレーム` を要求する**（`filterAnnotationsForDisplay` 経由）。つまり video viewport の
+>     annotation は素の状態で**描いた 1 フレームにしか出ない**。当初は逆（「素では常に全フレームに出る」）と想定して
+>     `visibility` だけで隠していたため、**グローバル ROI が他フレームで表示されない**不具合になっていた（実機検証で判明）。
+>     → 現在は `applyScopeToReference(metadata, scope)`（`videoRoiScope.ts` の純粋関数）で
+>     **グローバル = `sliceIndex`（と `multiSliceReference`）を消す／フレーム指定 = `sliceIndex = frame - 1`** を
+>     `[rois, scopes, frame, phase]` の effect で反映し、`vp.render()`（→ `IMAGE_RENDERED` →
+>     cs-tools `imageRenderedEventDispatcher` → 注釈再描画）で反映させる。
+>     `setAnnotationVisibility` も併せて揃えるが**補助**でしかない（この API は `ANNOTATION_VISIBILITY_CHANGE` しか
+>     発火せず購読していないため、注釈イベント → `refreshRois` → 再描画 のループにはならない。冪等）。
+>     隠し集合は **cornerstone のモジュール全体で共有**されるため、アンマウント時・SOP 切替時・ROI 削除時に
 >     `setAnnotationVisibility(uid, true)` で戻す（隠したまま消すと uid が集合に取り残される）。
 >   - **UI**: 新規 ROI の既定帰属を選ぶトグル（`video-roi-scope-global` / `video-roi-scope-frame`）、一覧チップの
 >     帰属バッジ兼切替ボタン（`video-roi-scope-toggle-{uid}`。グローバル=「全」／フレーム指定=`F{n}`）、内訳表示
@@ -307,12 +325,48 @@ frontend: VideoViewport（ViewportType.VIDEO）
 >   - **検証**: `npm run typecheck` green、`npm test` **90 tests green**（64 → +26: `videoRoiScope` 17／`computeRoiHistogram`・
 >     `histogramToCsv`・`roiBboxPixels` 9）、`npm run build` green。i18n ja/en 両方追加（`video.roi.scope*` / `video.frameStats.*`）。
 >     `video.analyze.noRoi` は `video.analyze.noGlobalRoi` に改称（グローバル帰属の ROI が要ることを明示するため）。
->   - **未検証（要・実機確認）**: フレーム送りに追従した ROI の表示/非表示、帰属トグルの実挙動、ヒストグラム描画。
->     UI の振る舞いは自動テストで守られていないため、standalone（backend jar ＋ Vite ＋ Electron）＋ 実 H.264 MP4 での
->     目視確認が必要。testid は付与済みなので automator 化は容易。
-> - **複数 ROI の選択解析**（現状は直近 1 つの矩形/楕円のみ）。
-> - フレーム精度シーク（現状はオフスクリーン `<video>` の time シーク＝GOP 近似。厳密フレーム精度が要るなら
->   `setFrameNumber`/`requestVideoFrameCallback` 経路）。
+>   - ✅ **実機検証（2026-07-30）**: `automator/src/spike/videoRoiFrameModeCheck.ts` を追加（standalone: backend jar ＋
+>     Vite ＋ 実 Electron。`npx tsx src/spike/videoRoiFrameModeCheck.ts`）。**30/30 green**＋スクリーンショット目視
+>     （`automator/.results/video-roi-frame-mode/`）。確認したこと: フレーム送りに追従した表示/非表示（F5 に描いた ROI が
+>     F12 で消え、戻ると出る／一覧には破線で残る）・帰属トグル（別フレームで押してもグローバル化するだけで現在フレームへ
+>     付け替えない／もう一度押すと現在フレームに紐づく）・グローバル ROI が全フレームで表示される・単一フレーム統計と
+>     ヒストグラム描画・時系列解析がグローバル帰属のみを対象にすること・全消去。
+>     - **フィクスチャは ffmpeg で合成**（無ければスパイクが自動生成）: `lum = 20 + (X/W)*100 + T*60` の
+>       320×240 / 15fps / 2 秒 / 全 I フレーム（`-g 1`）H.264。**輝度が時間で単調増加**するので
+>       「フレーム f の統計が本当に f のものか」を数値で判定できる（実測 F3 平均 85.7 → F28 平均 202.1）。
+>       全 I フレームにしてあるため time シークの GOP 誤差（§10-3）に依存しない。
+>     - 表示/非表示の判定は cornerstone の内部 API ではなく **SVG レイヤの DOM**（`rect:not(.background)` /
+>       `ellipse`）で行う＝利用者に見えるもので判定する。フレーム指定 ROI を矩形、グローバル ROI を楕円で描き分けて識別。
+>     - 検証で見つけて直したもの: (a) 上記 🚨 **グローバル ROI が描いたフレーム以外で表示されない**（本命の不具合）、
+>       (b) チップの枠線がショートハンド `border` と `borderStyle` の混在で React 警告 → `borderWidth/Style/Color` へ分解。
+>       (c) automator 用に testid 追加（`video-seek` / `video-frame-prev|next` / `video-frame-indicator` /
+>       `video-analyze-run`）＋ 非 DICOM 取込ヘルパ `importNonDicomPaths()`（`/api/import/nondicom`）。
+>     - ✅ **計測テキストのフレーム追従（2026-07-30 修正）**: cornerstone が ROI に重ねる計測テキスト
+>       （Area/Mean/Max/Min/SD）は `cachedStats` のままで**作成フレームの値が残り続けていた**
+>       （我々の「フレーム統計」パネルと違う数字が出て紛らわしい）。フレームが変わったら
+>       `annotation.state.invalidateAnnotation()` で無効化して現在フレームの値へ更新させる
+>       （この API は `invalidated = true` を立てるだけでイベントを出さないので `refreshRois` の連鎖は起きない）。
+>       実測でパネル値と一致（F3: 85.6 / 85.7、F28: 202 / 202.1）。
+> - ✅ **複数 ROI の選択解析 完了（2026-07-30）**: 一覧チップのラベルを押すと**解析対象として選択**できる
+>   （`video-roi-select-{uid}`。もう一度押すと解除＝従来の「直近の ROI」動作）。選択中はチップを強調し
+>   （`data-selected="1"`）「◎ 選択中の ROI を解析します」（`video-roi-selected-note`）を出す。
+>   `currentRoiPixels()` の優先順は ① 選択中 → ② Primary ツールと同じ形の直近 → ③ 直近。
+>   **選択した ROI が解析できない帰属なら黙って別の ROI を解析しない**（選択が無視されたように見えるため）:
+>   時系列解析にフレーム指定 ROI を選んでいれば `video.analyze.selectedNotGlobal`、単一フレーム統計で
+>   現在フレームに出ていない ROI を選んでいれば `video.frameStats.selectedNotOnFrame` を出す。
+> - ✅ **フレーム精度シーク: 実測して「ずれない」ことを確認（2026-07-30）**。懸念（§10-3「time シークは GOP 単位で
+>   不正確になりうる」）は**実機では発生しなかった**。`automator/src/spike/videoFrameAccuracyCheck.ts`（11/11 green）で
+>   **キーフレームが先頭だけ**（`-g 250 -sc_threshold 0`）・**フレームごとに輝度が飛び飛び**
+>   （`geq=lum='16 + mod(N*13,30)*7'`）の動画を作り、9 フレームを測って符号化レベルへ線形当てはめ:
+>   `measured ≈ 1.165 * level − 18.69`（＝限定レンジ→フルレンジ変換 255/219 そのもの）、**最大残差 0.44**、
+>   測定値から同定されるフレームが要求フレームと全件一致。1 フレームずれれば残差は ~90 になる設計なので、
+>   `createFrameSampler` の**フレーム中心へシークする実装（`(frame-1+0.5)/fps`）で十分**と判断し、
+>   `requestVideoFrameCallback` 経路は**不要**（冷えた `<video>` を作って即シーク→即描画でも正しく読めることを別途確認）。
+> - 🚨 **その検証で見つけた不具合（修正済み）: ループ有効だと最終フレームへシークできない**。
+>   `loop` が真のとき frame 30 を要求すると **frame 1 に巻き戻っていた**（VideoViewport は再生位置がフレーム範囲を
+>   超えたと判断すると loop 時に先頭へ戻す）。利用者から見れば「シークバーを端まで動かすと先頭に飛ぶ／最後のフレームが
+>   見られない」。→ `seekToFrame()` は**シーク中だけループを外し**、再生開始時（`togglePlay`）に設定を戻す。
+>   ループ再生自体の挙動は変えない。
 
 動画では ROI を **2 つのモード**で扱う必要がある:
 

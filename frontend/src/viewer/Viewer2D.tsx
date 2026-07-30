@@ -1188,6 +1188,7 @@ export function Viewer2D({
     const ctx = roiContextRef.current;
     if (!imageId || !ctx) return null;
     return {
+      patientKey: ctx.patientKey,
       studyUid: ctx.studyUid,
       studyDate: studyDateOf(imageId),
       seriesUid: ctx.seriesUid,
@@ -1449,6 +1450,7 @@ export function Viewer2D({
         roiUid: uid,
         tool,
         label: meta?.label ?? null,
+        patientKey: ctx.patientKey,
         studyUid: ctx.studyUid,
         studyDate: studyDateOf(refId),
         seriesUid: ctx.seriesUid,

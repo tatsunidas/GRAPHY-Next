@@ -209,9 +209,9 @@ web は運営配備 / サンドボックス。
 
 ---
 
-## 7. host API の拡張（H1〜H6 実装済み）
+## 7. host API の拡張（H1〜H7 実装済み）
 
-> 起票: 2026-07-29 ／ ステータス: **H1・H2（2026-07-29）／ H3・H4a・H4b・H5・H6（2026-07-30）すべて実装済み**
+> 起票: 2026-07-29 ／ ステータス: **H1・H2（2026-07-29）／ H3〜H7（2026-07-30）すべて実装済み**
 > 経緯: プラグイン デモ 3 本（[`plugin-explainer.md`](plugin-explainer.md) §6）を書いた過程で、
 > **2D ビューアのプラグインには「いま何を見ているか」を答える手段が一つも無い**ことが判明した。
 
@@ -259,6 +259,7 @@ H1・H2 は実質「これを本番向けの契約として切り出す」作業
 | **H4b** ✅ | **派生シリーズ保存** — 新シリーズとして保管庫（standalone）/ PACS（web）へ | `saveDerivedSeries(tileId?, req)` | 既存 `POST /api/series/derived` を開ける形。**保存ポリシーが本体** | ✅（web も許可） |
 | **H5** ✅ | **ROI（計測）の読み出し** — ユーザーが描いた計測をプラグインが使う | `getRois(tileId?)` / `getRoiMeta(roiUid)` / `setRoiMeta(roiUid, patch)` / `subscribeRois(cb)` | 幾何を本体に閉じる（長径・短径をプラグインに算出させない）。**ROI 永続化が無いので `roiUid` はセッション内限定**。global ROI は `referencedImageId` が表示スライスへ追従する罠あり | ✅ |
 | **H6** ✅ | **スタディの検査日** — 時系列評価に要る | `ViewerTarget.studyDate` / `ViewerRoi.studyDate` | DICOM の StudyDate から解決（画面の prop を引き回さない）。**解釈できない値は null**（日付差で結論が変わる評価に怪しい値を渡さない） | ✅ |
+| **H7** ✅ | **患者キー** — 患者単位の記録を持つプラグインの鍵 | `ViewerTarget.patientKey` / `ViewerRoi.patientKey` | 本体が ROI を永続化する鍵と同じ値を出す。スタディ UID を鍵にすると同じ患者の別スタディで記録を見失う | ✅ |
 
 H1〜H3 は**フロント面だけで完結**するため、web モードでも同じように動く（backend の契約 `/api/plugins` は不変）。
 
@@ -686,6 +687,22 @@ host.getRois()[i].studyDate      // 同上
 
 **実装**: `viewer/viewportRead.ts`（`dicomDateToIso` ＋テスト 5 件）/ `viewer/viewerCommands.ts`（契約）/
 `viewer/Viewer2D.tsx`（`studyDateOf()`）/ `examples/plugin-template/graphy-plugin.d.ts` / 作成ガイド。
+
+#### H7 の実装（2026-07-30・GRAPHY-Next 0.1.11 以降）
+
+**動機**: 時系列のプラグインは「患者単位の記録」を持つ必要がある。`getRois()` は**開いている
+タイルの ROI しか返さない**ため、RECIST の nadir（全期間の和の最小値）と BOR を出すには、
+開いていない回をプラグイン自身の記録から補うしかない。その記録の鍵に患者が要る。
+
+スタディ UID を鍵にすると、**同じ患者の別スタディを開いた瞬間に記録を見失う**
+（RECIST プラグインの実装中にこの誤りを踏んだ）。本体は ROI 永続化でまさに `patientKey`
+（PatientID → PatientName → StudyInstanceUID）を使っているので、同じ値を公開する。
+
+**新たな情報の露出ではない**: プラグインは既に studyUid / seriesUid / SOP UID と生画素へ
+到達できる。PatientID はそれらと同じ区分の識別情報である。
+
+**実装**: `viewer/viewerCommands.ts`（契約）/ `viewer/Viewer2D.tsx`（`roiContext.patientKey` を出す）/
+`examples/plugin-template/graphy-plugin.d.ts` / 作成ガイド。
 
 #### スライス厚の追加（2026-07-30・GRAPHY-Next 0.1.12 以降）
 
