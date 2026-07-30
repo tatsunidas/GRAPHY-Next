@@ -8,6 +8,7 @@ import { useWlPresets } from "./wlPresetStore";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { type SortMode } from "../viewer/seriesSort";
 import {
+  type ViewerOverlay,
   type ViewerPixelDataOptions,
   type ViewerTarget,
   type ViewerTilePixelData,
@@ -42,6 +43,10 @@ export interface ViewerActions {
   getViewState(tileId?: string): ViewerTileViewState | null;
   /** 対象タイルのスライス 1 枚の校正済み画素（H3）。tileId 省略時は対象の先頭。無ければ null。 */
   getPixelData(tileId?: string, opts?: ViewerPixelDataOptions): Promise<ViewerTilePixelData | null>;
+  /** 値マップを対象タイルの表示中スライスへ重ねる（H4a）。tileId 省略時は対象の先頭。 */
+  showOverlay(tileId: string | undefined, overlay: ViewerOverlay): boolean;
+  /** プラグインオーバーレイを消す。tileId 省略時は対象タイル全部。 */
+  clearOverlay(tileId?: string): void;
   /** W/L プリセット編集ダイアログを開く。 */
   editPresets(): void;
   /** Z 並べ替え（InstanceNumber / IPP, 昇順・降順）。対象タイルのシリーズに適用。 */

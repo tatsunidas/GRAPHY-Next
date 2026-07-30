@@ -118,6 +118,21 @@ export interface PixelData {
   spacing: [number | null, number | null, number | null];
 }
 
+/** `showOverlay` に渡す値マップ。**0.1.9 以降**。 */
+export interface Overlay {
+  /** rows*cols, row-major。`NaN` は透明。 */
+  data: Float32Array;
+  /** 現在スライスの rows/cols と一致していること（不一致は拒否）。 */
+  rows: number;
+  cols: number;
+  /** 値 → 濃淡の窓。省略時は data の min/max（NaN 以外）で自動。 */
+  window?: { center: number; width: number };
+  /** 本体の LUT 名（例 "Hot_Iron"）。省略/null はグレースケール。 */
+  colormap?: string | null;
+  /** 不透明度 0〜1（既定 0.5）。 */
+  opacity?: number;
+}
+
 interface PluginHostBase {
   /** 自分の plugin.json の id。 */
   pluginId: string;
@@ -158,6 +173,20 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * `"read-pixels"` を宣言すること（導入時の同意画面に出る）。
    */
   getPixelData: (tileId?: string, opts?: PixelDataOptions) => Promise<PixelData | null>;
+  /**
+   * 処理結果（値マップ）を**表示中スライスへ重ねて見せる**。`tileId` 省略時は対象の先頭タイル。
+   * rows/cols が現在スライスと不一致なら false。**0.1.9 以降**。
+   *
+   * <p>渡すのは値だけ。色付け（`window` / `colormap` / `opacity`）は本体がする。
+   * `NaN` の画素は透明になるので、マスクや部分的なマップをそのまま渡せる。
+   * 本体が画像左下に「プラグイン: <名前>」のラベルを出す。
+   *
+   * <p>オーバーレイは**出したスライスに紐付く**（他スライスでは隠れ、戻ると再表示。
+   * シリーズ切替では破棄）。**保存はされない**（派生シリーズ保存は未実装）。
+   */
+  showOverlay: (tileId: string | undefined, overlay: Overlay) => boolean;
+  /** オーバーレイを消す。`tileId` 省略時は対象タイル全部。**0.1.9 以降**。 */
+  clearOverlay: (tileId?: string) => void;
 }
 
 /** MainScreen 系（mainscreen.menu）に渡るコンテキスト。 */

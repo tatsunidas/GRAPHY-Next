@@ -90,6 +90,29 @@ export interface ViewerPixelData {
   spacing: [number | null, number | null, number | null];
 }
 
+/**
+ * プラグインが表示中スライスへ重ねる値マップ（プラグイン host API の H4a）。
+ *
+ * <p>**画素ではなく値を渡す契約**にしてある: 色付け（window / colormap）は本体側で行うので、
+ * プラグインは RGBA を組み立てる必要がなく、本体の LUT 資産をそのまま使える。
+ * `NaN` の画素は**透明**になる（マスクや部分的なマップをそのまま渡せる）。
+ */
+export interface ViewerOverlay {
+  /** rows*cols, row-major。`NaN` は透明。 */
+  data: Float32Array;
+  /** 現在スライスの rows/cols と一致していること（不一致は拒否）。 */
+  rows: number;
+  cols: number;
+  /** 値 → 濃淡の窓。省略時は data の min/max（NaN 以外）で自動。 */
+  window?: { center: number; width: number };
+  /** 本体の LUT 名（`/api/luts` の名前。例 "10_Percent"）。省略/null はグレースケール。 */
+  colormap?: string | null;
+  /** 不透明度 0〜1（既定 0.5）。 */
+  opacity?: number;
+  /** 出所表示に使うラベル（host がプラグイン名を入れる）。 */
+  label?: string;
+}
+
 /** 画面（複数タイル）視点での H1 の 1 件。どのタイルの話かが要るので tileId を持つ。 */
 export interface ViewerTarget extends ViewerTargetInfo {
   tileId: string;
@@ -134,6 +157,13 @@ export interface ViewerCommands {
    * 読み出しは `pixelCalibration.readModalitySlice()` に委譲する（校正の単一入口）。
    */
   getPixelData(opts?: ViewerPixelDataOptions): Promise<ViewerPixelData | null>;
+  /**
+   * 値マップを表示中スライスへ重ねる（H4a）。rows/cols が現在スライスと不一致なら false。
+   * 表示中スライスに紐付き、他スライスでは自動的に隠れる（戻ると再表示）。
+   */
+  showOverlay(overlay: ViewerOverlay): boolean;
+  /** オーバーレイを消す（無ければ何もしない）。 */
+  clearOverlay(): void;
   /** 左ドラッグに割り当てる操作/計測/ブラシツールを切替（toolName は Cornerstone のツール名 or 消しゴム id）。 */
   setActiveTool(toolName: string): void;
   /** ROI ブラシ径(px)。 */

@@ -1,6 +1,7 @@
 # GRAPHY-Next プラグイン作成ガイド
 
-> 作成日: 2026-07-02（更新: 2026-07-17 — §4-1 格納先ディレクトリを実装（resolveDataDir）に合わせて訂正）
+> 作成日: 2026-07-02（更新: 2026-07-30 — §2-3 に host API の問い合わせ系（H1/H2）・画素読み出し（H3）・
+> オーバーレイ（H4a）を追記）
 > 対象: プラグイン開発者
 > 関連: [`plugin-architecture.md`](plugin-architecture.md)（設計・全体像）
 
@@ -98,16 +99,18 @@ export function activate(host) {
 
 | サーフェス | 追加プロパティ |
 |---|---|
-| `viewer2d.menu` / `viewer2d.toolbar` | `actions`（表示中タイルへの操作。`invert()` / `rotate90()` / `fit()` 等。定義は `frontend/src/viewer2d/Viewer2DToolbar.tsx` の `ViewerActions`）<br>`getTargets()` / `getViewState(tileId?)`（**0.1.9 以降**。下記） |
+| `viewer2d.menu` / `viewer2d.toolbar` | `actions`（表示中タイルへの操作。`invert()` / `rotate90()` / `fit()` 等。定義は `frontend/src/viewer2d/Viewer2DToolbar.tsx` の `ViewerActions`）<br>`getTargets()` / `getViewState()` / `getPixelData()` / `showOverlay()` / `clearOverlay()`（**0.1.9 以降**。下記） |
 | `mainscreen.menu` | `selectedStudyUid`（選択中スタディの UID、未選択なら `null`） |
 
-**問い合わせ系（0.1.9 以降・[`plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張) の H1/H2）**:
+**問い合わせ系・オーバーレイ（0.1.9 以降・[`plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張優先度-高h1h4a-実装済み) の H1〜H4a）**:
 
 | メソッド | 戻り |
 |---|---|
 | `getTargets()` | 操作対象タイル（選択→無ければ全＝`actions` と同じ対象）の配列。要素は `{ tileId, studyUid, seriesUid, seriesLabel, imageId, sliceIndex, sliceCount, c, t, modality }` |
 | `getViewState(tileId?)` | `{ tileId, windowCenter, windowWidth, unit, colormap, invert, flipH, flipV, rotation, zoom, pan }`。省略時は対象の先頭タイル。取得不能なら `null` |
 | `getPixelData(tileId?, opts?)` | `Promise<{ tileId, imageId, sliceIndex, rows, cols, data, unit, spacing } \| null>`。`data` は `Float32Array`（row-major・`data[y*cols+x]`）の**校正済み画素**（CT なら HU）。`opts.sliceIndex` で別スライス（既定は表示中） |
+| `showOverlay(tileId?, overlay)` | 処理結果（値マップ）を表示中スライスに重ねる。`overlay = { data, rows, cols, window?, colormap?, opacity? }`。格子が現在スライスと不一致なら `false` |
+| `clearOverlay(tileId?)` | オーバーレイを消す |
 
 - **呼ぶたびに現在値を読む**。ダイアログを開いている間にユーザーがスライスを送るので、
   活性化時に一度読んだ値を持ち回らないこと。
@@ -121,6 +124,26 @@ export function activate(host) {
 - 画素を読むプラグインは `plugin.json` の `permissions` に `"read-pixels"` を宣言する
   （導入時の同意画面に出る）。**現状これは強制ではない**（サンドボックスは P3）。
 
+**オーバーレイ（H4a）の要点**:
+
+- 渡すのは**値**（`Float32Array`）で、色付け（`window` / `colormap` / `opacity`）は本体がする。
+  `colormap` には本体の LUT 名（`/api/luts`。例 `"Hot_Iron"`）を指定できる。
+- **`NaN` は透明**。マスクや部分的なマップをそのまま渡せる。
+- `rows`/`cols` は**現在スライスと一致**していること（不一致は `false`）。
+- オーバーレイは**出したスライスに紐付く**（他スライスでは隠れ、戻ると再表示。シリーズ切替で破棄）。
+- 本体が画像左下に `プラグイン: <名前>` のラベルを必ず出す（出所の明示）。
+- **保存はされない**。派生シリーズとして保管庫や PACS へ書くのは H4b（未実装）。
+
+```js
+// 例: 300 HU 以上（骨・造影）だけを Hot_Iron で重ねる
+const px = await host.getPixelData();
+if (px) {
+  const mask = new Float32Array(px.data.length);
+  for (let i = 0; i < px.data.length; i++) mask[i] = px.data[i] >= 300 ? px.data[i] : NaN;
+  host.showOverlay(px.tileId, { data: mask, rows: px.rows, cols: px.cols, colormap: "Hot_Iron", opacity: 0.6 });
+}
+```
+
 ```js
 // 例: 表示中スライスの平均 HU
 const px = await host.getPixelData();
@@ -130,9 +153,13 @@ if (px) {
   host.notify(`mean = ${(sum / px.data.length).toFixed(1)} ${px.unit}`);
 }
 ```
-- W/L は**モダリティ値空間**（CT なら HU。単位は `unit`）。表示 8bit ではない。
-- 使うプラグインは `engines.graphy` を `">=0.1.9"` に上げる（古い本体には導入されない＝意図した挙動）。
-- **画素そのものはまだ読めない**（H3 未実装）。
+
+**共通の注意**:
+
+- `getViewState()` の W/L は**モダリティ値空間**（CT なら HU。単位は `unit`）。表示 8bit ではない。
+- これらを使うプラグインは `engines.graphy` を `">=0.1.9"` に上げる
+  （古い本体には導入されない＝意図した挙動）。
+- **処理結果の保存はまだできない**（H4b 未実装）。現状は `showOverlay()` で見せるところまで。
 
 > 型定義の実体は `frontend/src/plugins/pluginTypes.ts`。
 

@@ -38,6 +38,11 @@ backend-optional/               ← 任意。Java のバックエンド面（重
 | `version` | ✅ | 版（semver）。**リリースタグ `v<version>` と一致必須** |
 | `engines.graphy` | 推奨 | 対応するコアの範囲（例 `">=0.1.0 <0.3.0"`）。マネージャが互換判定に使う |
 | `engines.os` | 推奨 | 対応 OS（`win32` / `darwin` / `linux`）。GRAPHY-Next は OS ごとにリリースが分かれるため、**導入前に実行中の OS と突き合わせて非対応なら拒否**する。JNI やネイティブバイナリを含むなら必ず絞る。省略＝OS 非依存 |
+| `contributes` | UI を出すなら | サーフェス配列。`"viewer2d.menu"` / `"mainscreen.menu"`（`"viewer2d.toolbar"` は予約） |
+| `ui` | UI を出すなら | フロント面 ES モジュールのファイル名（例 `ui.js`） |
+| `entrypoint` | backend 面を持つなら | `GraphyPlugin` 実装クラスの完全修飾名（`backend-optional/` 参照） |
+| `permissions` | 任意 | 要求権限（例 `"read-pixels"`）。導入時の同意画面に表示される（**強制はまだ無い**） |
+| `description`/`author`/`homepage`/`license` | 任意 | マネージャ一覧の表示・法務用 |
 
 ## 署名（推奨）
 
@@ -58,17 +63,12 @@ git add minisign.pub && git commit -m "add signing public key"   # 公開鍵は�
 - **鍵が変わった / 署名が壊れている**: 導入を**拒否**する（作者すり替え・改竄の検知）
 
 ⚠ **秘密鍵を失う・変える＝利用者は更新できなくなります**（拒否されます）。鍵は必ず保管してください。
-| `contributes` | UI を出すなら | サーフェス配列。`"viewer2d.menu"` / `"mainscreen.menu"`（`"viewer2d.toolbar"` は予約） |
-| `ui` | UI を出すなら | フロント面 ES モジュールのファイル名（例 `ui.js`） |
-| `entrypoint` | backend 面を持つなら | `GraphyPlugin` 実装クラスの完全修飾名（`backend-optional/` 参照） |
-| `permissions` | 任意 | 要求権限（現状は表示のみ） |
-| `description`/`author`/`homepage`/`license` | 任意 | マネージャ一覧の表示・法務用 |
 
 ## サーフェス（`contributes`）と `host`
 
 | サーフェス | 出る場所 | `host` の主なプロパティ |
 |---|---|---|
-| `viewer2d.menu` | 2D Viewer の Plug-ins メニュー | `actions`（`invert()` / `rotate90()` / `fit()` / `setWindowLevel()` …）<br>`getTargets()` / `getViewState(tileId?)` / `getPixelData(tileId?, opts?)`（**0.1.9 以降**） |
+| `viewer2d.menu` | 2D Viewer の Plug-ins メニュー | `actions`（`invert()` / `rotate90()` / `fit()` / `setWindowLevel()` …）<br>`getTargets()` / `getViewState()` / `getPixelData()` / `showOverlay()` / `clearOverlay()`（**0.1.9 以降**） |
 | `mainscreen.menu` | MainScreen の Plug-Ins メニュー | `selectedStudyUid`（選択中スタディ UID） |
 
 `getTargets()` は操作対象タイル（選択→無ければ全）の
@@ -83,6 +83,13 @@ git add minisign.pub && git commit -m "add signing public key"   # 公開鍵は�
 **表示 W/L は掛かっていない**（W/L や LUT を変えても値は不変）。カラー画像は輝度で `unit="raw"`。
 **1 回 1 スライス**（`opts.sliceIndex` で指定。既定は表示中スライス、範囲外は `null`）。
 画素を読むなら `permissions` に `"read-pixels"` を宣言する（同意画面に出る。現状強制ではない）。
+
+`showOverlay(tileId?, { data, rows, cols, window?, colormap?, opacity? })` は処理結果を
+**表示中スライスに重ねて見せる**。渡すのは値だけで、色付けは本体がする（`colormap` に本体の LUT 名、
+例 `"Hot_Iron"`）。**`NaN` は透明**なのでマスクをそのまま渡せる。格子が現在スライスと不一致なら `false`。
+オーバーレイは出したスライスに紐付き（他スライスでは隠れる）、本体が画像左下に
+`プラグイン: <名前>` のラベルを出す。`clearOverlay(tileId?)` で消える。
+**保存はされない**（派生シリーズとして保管庫や PACS へ書く機能は未実装）。
 
 共通: `pluginId` / `t(key)`（i18n）/ `notify(msg)` / `runBackend(payload?)`（backend 面がある場合）。
 型は `graphy-plugin.d.ts` を参照（`ui.js` 先頭の `/// <reference ...>` + `// @ts-check` で補完が効く）。

@@ -55,6 +55,41 @@ export async function activate(host) {
     pixelsOutOfRange: await host.getPixelData(targets[0]?.tileId, { sliceIndex: 9999 }),
     pixelsUnknownTile: await host.getPixelData("no-such-tile"),
   };
+
+  // H4a: 読んだ画素から閾値マスクを作って重ねる（NaN=透明）。サイズ不一致は拒否されること。
+  const px = await host.getPixelData();
+  if (px) {
+    const mask = new Float32Array(px.data.length);
+    let hit = 0;
+    for (let i = 0; i < px.data.length; i++) {
+      if (px.data[i] >= 300) {
+        mask[i] = px.data[i];
+        hit++;
+      } else {
+        mask[i] = NaN;
+      }
+    }
+    payload.overlay = {
+      shown: host.showOverlay(px.tileId, {
+        data: mask,
+        rows: px.rows,
+        cols: px.cols,
+        window: { center: 800, width: 1000 },
+        // 本体の LUT 資産で色付けさせる（白い骨の上に白を重ねても人には見えないため）。
+        colormap: "Hot_Iron",
+        opacity: 0.6,
+      }),
+      hit,
+      // 格子が合わないマップは拒否されるべき（勝手に伸縮しない）。
+      mismatchRejected:
+        host.showOverlay(px.tileId, { data: new Float32Array(4), rows: 2, cols: 2 }) === false,
+      unknownTileRejected: host.showOverlay("no-such-tile", {
+        data: mask,
+        rows: px.rows,
+        cols: px.cols,
+      }) === false,
+    };
+  }
   window.__hostApiCheck = payload;
 
   const id = "hostapi-check-panel";

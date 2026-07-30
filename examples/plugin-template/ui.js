@@ -35,6 +35,13 @@ export function activate(host) {
     //     let sum = 0;
     //     for (const v of px.data) sum += v;              // data[y * px.cols + x]
     //     host.notify("mean = " + (sum / px.data.length).toFixed(1) + " " + px.unit);
+    //
+    //     // 結果を画像に重ねて見せる（値を渡すだけ。NaN は透明。色付けは本体がする）。
+    //     const mask = new Float32Array(px.data.length);
+    //     for (let i = 0; i < px.data.length; i++) mask[i] = px.data[i] >= 300 ? px.data[i] : NaN;
+    //     host.showOverlay(px.tileId, {
+    //       data: mask, rows: px.rows, cols: px.cols, colormap: "Hot_Iron", opacity: 0.6,
+    //     });
     //   });
   }
 }

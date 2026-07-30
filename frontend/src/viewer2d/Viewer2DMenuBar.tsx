@@ -79,6 +79,9 @@ export function Viewer2DMenuBar({
     getTargets: () => actions.getTargets(),
     getViewState: (tileId) => actions.getViewState(tileId),
     getPixelData: (tileId, opts) => actions.getPixelData(tileId, opts),
+    // 出所ラベルはプラグイン任せにしない: host が必ずマニフェストの表示名を入れる。
+    showOverlay: (tileId, overlay) => actions.showOverlay(tileId, { ...overlay, label: m.name }),
+    clearOverlay: (tileId) => actions.clearOverlay(tileId),
   }));
   const [open, setOpen] = useState<string | null>(null);
   useEffect(() => {

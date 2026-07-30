@@ -477,6 +477,7 @@ export const en: Record<string, string> = {
   "viewer2d.menu.roiTools": "ROI Tools",
   "viewer2d.menu.analysis": "Analysis",
   "viewer2d.menu.plugins": "Plug-ins",
+  "viewer2d.plugin.overlayLabel": "Plugin: {{name}}",
   "viewer2d.menu.pluginsNone": "(no plug-ins)",
   "viewer2d.wl.preset": "W/L preset",
   "viewer2d.wl.default": "Default (DICOM)",

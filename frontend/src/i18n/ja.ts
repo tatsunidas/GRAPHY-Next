@@ -477,6 +477,8 @@ export const ja: Record<string, string> = {
   "viewer2d.menu.roiTools": "ROI ツール",
   "viewer2d.menu.analysis": "解析",
   "viewer2d.menu.plugins": "プラグイン",
+  // プラグインの計算結果を画像に重ねているとき、出所が分かるように出すラベル（H4a）。
+  "viewer2d.plugin.overlayLabel": "プラグイン: {{name}}",
   "viewer2d.menu.pluginsNone": "（プラグインなし）",
   "viewer2d.wl.preset": "W/L プリセット",
   "viewer2d.wl.default": "既定 (DICOM)",

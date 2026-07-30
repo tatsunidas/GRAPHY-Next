@@ -1,11 +1,11 @@
 # GRAPHY-Next プラグイン アーキテクチャ設計
 
-> 作成日: 2026-06-28（更新: 2026-07-29 — **§7 host API の拡張（優先度 高・未着手）を追加**）
+> 作成日: 2026-06-28（更新: 2026-07-30 — **§7 host API の拡張: H1〜H4a 実装済み / H4b は方針確定・未実装**）
 > ステータス: 骨格実装済み（standalone/web の両モードで疎通確認済み。署名は実装済み、サンドボックスは将来）
 >
-> ⚠ **次に着手すべきはここ → [§7 host API の拡張](#7-host-api-の拡張優先度-高未着手)**。
-> 2D ビューアのプラグインが「いま何を見ているか」を問い合わせられない状態で、
-> 画像処理系プラグインが成立しない。
+> ⚠ **次に着手するのはここ → [§7 host API の拡張](#7-host-api-の拡張優先度-高h1h4a-実装済み)の H4b**
+> （プラグインの処理結果を派生シリーズとして保存する）。問い合わせ（H1/H2）・画素読み出し（H3）・
+> オーバーレイ表示（H4a）は実装済みで、画像処理系プラグインは既に成立する。
 > 関連: [`development-phases.md`](development-phases.md)、[`dicom-data-layer.md`](dicom-data-layer.md)
 
 GRAPHY のプラグイン機構を、standalone / web の 2 モードに対応する形で再設計する。
@@ -207,10 +207,10 @@ web は運営配備 / サンドボックス。
 
 ---
 
-## 7. host API の拡張（優先度 高・H1〜H3 実装済み）
+## 7. host API の拡張（優先度 高・H1〜H4a 実装済み）
 
-> 起票: 2026-07-29 ／ ステータス: **H1・H2 実装済み（2026-07-29）／ H3 実装済み（2026-07-30）／
-> H4 未着手** ／ 優先度: **高**
+> 起票: 2026-07-29 ／ ステータス: **H1・H2 実装済み（2026-07-29）／ H3・H4a 実装済み（2026-07-30）／
+> H4b（派生シリーズ保存）は方針確定・未実装** ／ 優先度: **高**
 > 経緯: プラグイン デモ 3 本（[`plugin-explainer.md`](plugin-explainer.md) §6）を書いた過程で、
 > **2D ビューアのプラグインには「いま何を見ているか」を答える手段が一つも無い**ことが判明した。
 
@@ -254,7 +254,8 @@ H1・H2 は実質「これを本番向けの契約として切り出す」作業
 | **H1** ✅ | **対象タイルの識別情報**。DOM 依存（`data-tile-id`）を公式契約へ置換 | `getTargets() => ViewerTarget[]` | 「対象」の定義を `runViewerCommand` と揃える（選択タイル→無ければ全タイル） | ✅ |
 | **H2** ✅ | **表示状態の問い合わせ**。`debugApi` の相当機能を本番契約へ昇格 | `getViewState(tileId?) => ViewerViewState \| null` | `debugApi.ts` から共有ロジックを切り出し、DEV ガードの外へ | ✅ |
 | **H3** ✅ | **画素の読み出し**（本命） | `getPixelData(tileId?, opts?) => Promise<ViewerPixelData \| null>` | **必ず [`pixelCalibration.ts`](../frontend/src/viewer/pixelCalibration.ts) 経由**（`getPixelData()` に直接 slope/intercept を書かない。preScale 既定 ON による二重適用で CT が約 −1024 ずれる既知事故）。シリーズ全スライスは転送量が大きいのでスライス単位を既定にし、範囲指定を任意で | ✅ |
-| **H4** | **書き戻し** — 処理結果をオーバーレイ表示 / 新シリーズとして保管庫へ | 未定（`showOverlay()` / `saveDerivedSeries()`） | 設計判断が要る（派生シリーズの UID 生成・SEG との棲み分け・web での書き戻し先）。**H1〜H3 とは分けて扱う** | 要検討 |
+| **H4a** ✅ | **オーバーレイ表示** — 処理結果を表示中スライスに重ねる（保存しない） | `showOverlay(tileId?, overlay)` / `clearOverlay(tileId?)` | 値マップを受け取り**色付けは本体側**で行う。imageId に紐付け | ✅ |
+| **H4b** | **派生シリーズ保存** — 新シリーズとして保管庫（standalone）/ PACS（web）へ | `saveDerivedSeries()`（未実装・方針は下記） | 既存 `POST /api/series/derived` を開ける形。**保存ポリシーが本体** | ✅（web も許可） |
 
 H1〜H3 は**フロント面だけで完結**するため、web モードでも同じように動く（backend の契約 `/api/plugins` は不変）。
 
@@ -346,10 +347,55 @@ UI 面もキャンバスから 8bit を読める）、H3 で増えるのは「�
 代わりに **`plugin.json` の `permissions` に `read-pixels` を宣言する運用**とする
 （導入時の同意画面に表示される既存の仕組みに乗る）。実強制は P3 とセットで行う。
 
+#### H4a の実装（2026-07-30・GRAPHY-Next 0.1.9 以降）
+
+```ts
+host.showOverlay(tileId?, overlay): boolean     // overlay = { data, rows, cols, window?, colormap?, opacity? }
+host.clearOverlay(tileId?): void
+```
+
+**プラグインは「値」を渡し、色付けは本体がする。** RGBA を組ませると W/L の意味・LUT・透明度の扱いが
+プラグインごとにばらつき、本体の LUT 資産（`/api/luts` の 106 種）も使えない。`colormap` に LUT 名を
+渡せば本体が `fetchLutData()` で取って色付けする（取得失敗時はグレースケールで描く＝結果は見える）。
+
+- **`NaN` は透明**。マスクや部分的なマップをそのまま渡せる（α は値で変調せず `opacity` 一定＝
+  マスクの縁が半端に薄くならない）。
+- `window` 省略時は `NaN` を除く min/max で自動。定数マップ（全部 1 のマスク等）は幅 0 になるので
+  一律最大濃度で描く。
+- **rows/cols が現在スライスと不一致なら拒否（false）**。勝手に伸縮すると座標の意味が壊れる。
+- **オーバーレイは「出したスライス」に紐付く**（`imageId` で束ねる）。他スライスでは自動的に隠れ、
+  戻ると再表示。シリーズ / C・T 切替（`stackKey` 変化）では破棄する。
+  送った先の画像に他スライスの計算結果が重なって見えるのが最悪なので、そこを構造で防いでいる。
+- **出所ラベルを本体が必ず出す**（画像左下に `プラグイン: <マニフェストの表示名>`）。
+  ラベル文字列はプラグインに触らせない（host が `m.name` を注入する）。i18n は ja/en 両方。
+- 純ロジックは `viewer/overlayRaster.ts`（`autoWindow` / `toGrayLevel` / `rasterizeOverlay`）に
+  切り出してテスト。描画は `Viewer2D` 内の canvas を `imageRect` に合わせて重ねるだけで、
+  Fusion の `renderOverlay` 経路とは独立（互いに干渉しない）。
+
+#### H4b（派生シリーズ保存）の方針 — 2026-07-30 に確定・未実装
+
+**土台は既にある**: `POST /api/series/derived`（`DerivedSeriesService`）が「元 Study/患者属性・Modality・
+SOPClassUID・FrameOfReference を維持、Series/SOP UID を新規採番、`ImageType=DERIVED\SECONDARY`、
+元 SOP への参照、`DerivationDescription`」まで実装済みで、Slicer の斜位リスライスと Curved MPR が使用中。
+**web も対応済み**（テンプレートを WADO-RS `/metadata` から取り、STOW-RS で PACS へ書き戻す）。
+つまり H4b は「DICOM を作る仕組みの新規実装」ではなく**既存経路をプラグインへ開ける作業**。
+
+決定事項:
+
+| 論点 | 決定 |
+|---|---|
+| 保存時の同意 | **本体が必ず確認ダイアログを出す（抑止不可）**。プラグイン名・バージョン・シリーズ説明・枚数を提示。プラグインが黙って書けるようにはしない |
+| 出所の明示 | **機械可読 ＋ 一覧で見える接頭辞**。`ImageType=DERIVED\SECONDARY` ＋ `DerivationDescription` / `ContributingEquipmentSequence` にプラグイン id・版、加えて **`SeriesDescription` に接頭辞**（例 `[Plugin] …`）。他システムで開いても人が気付ける |
+| web モード | **許可する**（standalone 限定にしない）。既存の STOW-RS 経路に乗る |
+| 画素の符号化 | Float32 → Int16 ＋ **自動 slope/intercept**（プラグインの min/max から算出、`RescaleType` は `unit`）。既存経路は Rescale 恒等固定だが、それだと確率マップやテクスチャ値（0〜1）が 0/1 に潰れる |
+
+**未着手の理由**: 上記は方針であり、UID 採番の実装・同意ダイアログ・自動 slope/intercept の実装と
+検証（特に web の STOW-RS 書き戻し）が残っている。H4a とは分けて別 PR で行う。
+
 #### 実機検証（2026-07-30・standalone / Linux）
 
 **本物の Electron ＋ 本物の backend ＋ 本物のプラグイン配信経路**（`plugins/` フォルダ直下に置いた
-第三者プラグインを `/api/plugins` から ES モジュールとして配信）で **H1〜H3 の 42 項目すべて合格**。
+第三者プラグインを `/api/plugins` から ES モジュールとして配信）で **H1〜H4a の 54 項目すべて合格**。
 ドライバは `automator/src/spike/hostApiCheck.ts`（`cd automator && npx tsx src/spike/hostApiCheck.ts`）、
 検証用プラグインの原本は `automator/plugins/hostapi-check/`（実行時に backend の plugins
 フォルダへコピーされる。fixture は ct-basic）。
@@ -374,6 +420,15 @@ UI 面もキャンバスから 8bit を読める）、H3 で増えるのは「�
   検証は**軟部組織の値**で行うようにした。
 - **W/L・階調反転・LUT を変えても同一スライスの画素値は不変**＝表示 8bit ではないことの直接確認。
 - `sliceIndex` 明示指定で別スライスが読め、範囲外は `null`。
+- **H4a のオーバーレイが実際に焼かれている**こと: `getPixelData()` で読んだ HU から閾値マスク
+  （≧300 HU）を作って `showOverlay()` し、**キャンバスの中身を読んで α>0 の画素数 4681 が
+  マスク該当数と完全一致**、指定 LUT（`Hot_Iron`）で色が付き、出所ラベルにマニフェストの表示名が出る。
+  格子不一致のマップと未知 tileId は拒否。別スライスへ送ると隠れ、戻ると再表示される。
+- **この検証で H4a のバグを 1 件検出**: オーバーレイのキャンバスが `imageRect` 確定後のレンダで
+  初めてマウントされるため、`useRef` だと描画 effect が先に走って ref が null のまま
+  deps も変わらず、**空のキャンバスが乗ったまま**になっていた（`300×150`・α>0 が 0 個）。
+  callback ref（state）へ変更して解消。**「要素が見えている」だけの検証では気付けず、
+  キャンバスの中身を読んだことで初めて分かった**。
 
 副産物の修正: `automator/src/driver/desktopDriver.ts` が **DevTools ウィンドウをメイン画面と
 誤認する**バグを直した（`window` イベント発火時の url が about:blank だと predicate に外れ、

@@ -24,6 +24,12 @@ export const MOCK_MANIFESTS: PluginManifest[] = [
     frontend: { bundleUrl: "", contributes: ["viewer2d.menu"] },
   },
   {
+    id: "demo-bone-overlay",
+    name: "Demo: Bone overlay (2D)",
+    version: "0.0.0",
+    frontend: { bundleUrl: "", contributes: ["viewer2d.menu"] },
+  },
+  {
     id: "demo-hello-main",
     name: "Demo: Hello (MainScreen)",
     version: "0.0.0",
@@ -77,6 +83,37 @@ export const DEMO_MODULES: Record<string, PluginModule> = {
         );
       }
       host.notify(lines.join("\n"));
+    },
+  },
+  // H3 → H4a の一気通貫デモ: 生 HU を読んで閾値マスクを作り、そのまま重ねて見せる。
+  // 「読む→計算する→見せる」がプラグイン側だけで完結することの確認。
+  "demo-bone-overlay": {
+    activate: async (host) => {
+      if (host.surface !== "viewer2d.menu" && host.surface !== "viewer2d.toolbar") return;
+      const px = await host.getPixelData();
+      if (!px) {
+        host.notify("no pixels");
+        return;
+      }
+      // 300 HU 以上（骨・造影）を残し、それ以外は NaN＝透明。
+      const mask = new Float32Array(px.data.length);
+      let hit = 0;
+      for (let i = 0; i < px.data.length; i++) {
+        if (px.data[i] >= 300) {
+          mask[i] = px.data[i];
+          hit++;
+        } else {
+          mask[i] = NaN;
+        }
+      }
+      const ok = host.showOverlay(px.tileId, {
+        data: mask,
+        rows: px.rows,
+        cols: px.cols,
+        window: { center: 800, width: 1000 },
+        opacity: 0.6,
+      });
+      host.notify(ok ? `overlay: ${hit} px >= 300 ${px.unit}` : "overlay rejected");
     },
   },
   "demo-hello-main": {

@@ -6,13 +6,14 @@
 // フロント面と /api/plugins の契約は standalone / web 両モード共通。
 import type { ViewerActions } from "../viewer2d/Viewer2DToolbar";
 import type {
+  ViewerOverlay,
   ViewerPixelDataOptions,
   ViewerTarget,
   ViewerTilePixelData,
   ViewerTileViewState,
 } from "../viewer/viewerCommands";
 
-export type { ViewerPixelDataOptions, ViewerTarget, ViewerTilePixelData, ViewerTileViewState };
+export type { ViewerOverlay, ViewerPixelDataOptions, ViewerTarget, ViewerTilePixelData, ViewerTileViewState };
 
 /** プラグインを組み込む先（UI サーフェス）。fw/plugin-architecture.md §2.1。 */
 export type PluginSurface = "viewer2d.menu" | "viewer2d.toolbar" | "mainscreen.menu";
@@ -80,6 +81,21 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * （導入時の同意画面に表示される）。
    */
   getPixelData: (tileId?: string, opts?: ViewerPixelDataOptions) => Promise<ViewerTilePixelData | null>;
+  /**
+   * 処理結果（値マップ）を対象タイルの**表示中スライスへ重ねて見せる**（H4a）。
+   * `tileId` 省略時は対象の先頭タイル。rows/cols が現在スライスと不一致なら false。
+   *
+   * <p>プラグインは**値だけ**渡し、色付け（window / LUT / 不透明度）は本体が行う。
+   * `NaN` の画素は透明になるので、マスクや部分的なマップをそのまま渡せる。
+   * 出所が分かるように、本体が画像の左下にプラグイン名のラベルを出す。
+   *
+   * <p>オーバーレイは**出したスライスに紐付く**（他スライスでは自動的に隠れ、戻ると再表示。
+   * シリーズ / C・T 切替では破棄）。**保存はしない**＝派生シリーズとして保管庫や PACS へ
+   * 書き戻す H4b は未実装。
+   */
+  showOverlay: (tileId: string | undefined, overlay: ViewerOverlay) => boolean;
+  /** プラグインオーバーレイを消す（H4a）。`tileId` 省略時は対象タイル全部。 */
+  clearOverlay: (tileId?: string) => void;
 }
 
 /** MainScreen 系プラグイン（mainscreen.menu）に渡すコンテキスト。 */

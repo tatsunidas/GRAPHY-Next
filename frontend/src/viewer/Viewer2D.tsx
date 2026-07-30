@@ -37,6 +37,7 @@ import { applyTransform, isPanned, readTransform, type ViewTransform, FIT_TRANSF
 import { readImageInfo, sampleAtCanvas, computeSliceSpacing, calibratedUnit, type ImageInfo, type PixelSample } from "./imageInfo";
 import { readColormapName, readInvert, resolveSliceIndex } from "./viewportRead";
 import { readModalitySlice } from "./pixelCalibration";
+import { autoWindow, rasterizeOverlay, type OverlayWindow } from "./overlayRaster";
 import { computeOrientationMarkers, type OrientationMarkers } from "./orientation";
 import { computeScaleBar, type ScaleBar } from "./scaleBar";
 import { getOrCreateCameraSync, getOrCreateVoiSync, getOrCreatePresentationSync, getOrCreateSeriesVoiSync, broadcastSeriesProperties, captureVoiBaseline, clearVoiBaseline } from "./sync";
@@ -44,6 +45,7 @@ import { registerReferenceSource, bumpReference, subscribeReference, computeRefe
 import {
   registerViewerCommands,
   type ViewerCommands,
+  type ViewerOverlay,
   type ViewerPixelData,
   type ViewerPixelDataOptions,
   type ViewerTargetInfo,
@@ -56,7 +58,7 @@ import { ImageInfoPanel } from "./ImageInfoPanel";
 import { matchesCombo } from "../shortcuts/registry";
 import { useI18n } from "../i18n/i18n";
 import { LutDialog } from "./LutDialog";
-import type { LutData } from "../api";
+import { fetchLutData, type LutData } from "../api";
 import { LoadingSpinner } from "./LoadingSpinner";
 
 type ViewSnapshot = { transform: ViewTransform; voi: { lower: number; upper: number } | null };
@@ -192,6 +194,18 @@ export interface ImageRect {
   height: number;
 }
 
+/** プラグインの値マップの保持形（`ViewerOverlay` ＋ 対象スライスの imageId ＋ 解決済み既定値）。 */
+interface PluginOverlayState {
+  imageId: string;
+  data: Float32Array;
+  rows: number;
+  cols: number;
+  window: OverlayWindow | null;
+  colormap: string | null;
+  opacity: number;
+  label?: string;
+}
+
 /** renderOverlay に渡すコンテキスト（Fusion オーバーレイ等が base 画像に正確に重なるための情報）。 */
 export interface OverlayRenderContext {
   /** base 画像の表示矩形。zoom/pan/fit/flip に追従。 */
@@ -311,6 +325,15 @@ export function Viewer2D({
   const [scaleBar, setScaleBar] = useState<ScaleBar | null>(null);
   // base 画像の表示矩形（renderOverlay 用）。zoom/pan/fit に追従して更新。
   const [imageRect, setImageRect] = useState<ImageRect | null>(null);
+  // プラグインの値マップ（H4a）。imageId で束ねて、そのスライスを見ているときだけ描く。
+  const [pluginOverlay, setPluginOverlay] = useState<PluginOverlayState | null>(null);
+  const pluginOverlayRef = useRef<PluginOverlayState | null>(null);
+  pluginOverlayRef.current = pluginOverlay;
+  // ⚠ ref ではなく state で持つ: オーバーレイのキャンバスは `imageRect` が確定した後の
+  // レンダで初めてマウントされるため、ref にすると「描画 effect が先に走って ref が null →
+  // deps が変わらず再実行されない」で**空のキャンバスが乗ったまま**になる（実機検証で踏んだ）。
+  // callback ref なら要素のマウントで state が変わり、描画 effect が確実に走る。
+  const [overlayCanvas, setOverlayCanvas] = useState<HTMLCanvasElement | null>(null);
   // onCameraModified の古いクロージャ問題を避けるため ref で最新の有無を参照。
   const renderOverlayRef = useRef(renderOverlay);
   renderOverlayRef.current = renderOverlay;
@@ -621,7 +644,8 @@ export function Viewer2D({
       // スケールバー（Caliper）: 校正の有無で mm/cm・px と色(黄/グレー)を切替。FOV(ズーム)に追従。
       const calibrated = Boolean(infoRef.current?.columnPixelSpacing);
       setScaleBar(computeScaleBar(vp, element, calibrated));
-      if (renderOverlayRef.current) setImageRect(computeImageRect(vp)); // Fusion 等のオーバーレイ位置追従
+      // Fusion / プラグイン（H4a）のオーバーレイ位置追従。
+      if (renderOverlayRef.current || pluginOverlayRef.current) setImageRect(computeImageRect(vp));
       // リファレンスライン: 自分の面変化を他へ通知し、自分の描画も更新（pan/zoom/回転で追従）。
       if (!compact && !syncGroupId) {
         bumpReference();
@@ -927,16 +951,52 @@ export function Viewer2D({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stackKey]);
 
-  // renderOverlay が後から有効化されたとき（Fusion 設定時など）に矩形を初期計算する。
+  // renderOverlay / プラグインオーバーレイが後から有効化されたとき（Fusion 設定時・
+  // プラグイン実行時）に矩形を初期計算する。
   // renderOverlay は親で useCallback 安定化されている前提（毎レンダ別関数だとループするため）。
   useEffect(() => {
-    if (!renderOverlay) {
+    if (!renderOverlay && !pluginOverlay) {
       setImageRect(null);
       return;
     }
     const vp = viewportRef.current;
     if (vp) setImageRect(computeImageRect(vp));
-  }, [renderOverlay]);
+  }, [renderOverlay, pluginOverlay]);
+
+  // スタック（シリーズ・C/T）が変わったらプラグインオーバーレイは破棄する。
+  // 別シリーズに他シリーズの計算結果が残るのを防ぐ（imageId 一致だけでは C/T 切替を跨げる）。
+  useEffect(() => {
+    setPluginOverlay(null);
+  }, [stackKey]);
+
+  // 値マップ → RGBA。LUT 名が指定されていれば本体の LUT を取ってきて色付けする。
+  useEffect(() => {
+    const canvas = overlayCanvas;
+    if (!canvas || !pluginOverlay) return;
+    let alive = true;
+    const draw = (lut: LutData | null) => {
+      if (!alive) return;
+      canvas.width = pluginOverlay.cols;
+      canvas.height = pluginOverlay.rows;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      const rgba = rasterizeOverlay(pluginOverlay.data, pluginOverlay.opacity, pluginOverlay.window, lut);
+      // createImageData 経由で詰める（new ImageData(rgba, …) は Uint8ClampedArray の
+      // ArrayBufferLike と lib.dom の ImageDataArray が噛み合わない）。
+      const img = ctx.createImageData(pluginOverlay.cols, pluginOverlay.rows);
+      img.data.set(rgba);
+      ctx.putImageData(img, 0, 0);
+    };
+    if (pluginOverlay.colormap) {
+      // 取得できなければグレースケールで描く（色が付かないだけで、結果は見える）。
+      fetchLutData(pluginOverlay.colormap).then(draw).catch(() => draw(null));
+    } else {
+      draw(null);
+    }
+    return () => {
+      alive = false;
+    };
+  }, [pluginOverlay, overlayCanvas]);
 
   // リファレンスライン: base ビューポートを source として常時登録（他ビューが参照）。
   // ラベル（シリーズ名）変化・再構築で再登録。SliderView base のみ。
@@ -1147,6 +1207,32 @@ export function Viewer2D({
     };
   };
 
+  // H4a: プラグインの値マップを表示中スライスへ重ねる。
+  // 「どのスライスに対する結果か」を imageId で束ねる: スライスを送ると隠れ、戻ると再表示される
+  // （送った先の画像に他スライスの計算結果が重なって見えるのが最悪なので、そこを構造で防ぐ）。
+  const showOverlay = (o: ViewerOverlay): boolean => {
+    const imageId = imageIdsRef.current[indexRef.current];
+    const inf = infoRef.current;
+    if (!imageId || !o?.data || !(o.rows > 0) || !(o.cols > 0)) return false;
+    if (o.data.length !== o.rows * o.cols) return false;
+    // 現在スライスの格子と一致しないマップは拒否する（勝手に伸縮すると座標の意味が壊れる）。
+    if (inf?.rows !== undefined && inf?.columns !== undefined && (inf.rows !== o.rows || inf.columns !== o.cols)) {
+      return false;
+    }
+    setPluginOverlay({
+      imageId,
+      data: o.data,
+      rows: o.rows,
+      cols: o.cols,
+      window: o.window ?? autoWindow(o.data),
+      colormap: o.colormap ?? null,
+      opacity: o.opacity ?? 0.5,
+      label: o.label,
+    });
+    return true;
+  };
+  const clearOverlay = () => setPluginOverlay(null);
+
   // H3: スライス 1 枚の校正済み画素。**読み出しは pixelCalibration に委譲する**
   // （getPixelData() へ直接 slope/intercept を掛けると preScale と二重適用になり CT が
   // 約 −1024 ずれる既知事故。校正の単一入口を必ず通す＝CLAUDE.md のルール 2）。
@@ -1286,13 +1372,13 @@ export function Viewer2D({
   // 画面メニュー/ツールバーからの一括コマンド。最新の実装を ref に保持し、登録は wrapper 経由で常に最新を呼ぶ。
   const commandsRef = useRef<ViewerCommands>({
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
-    getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, setActiveTool, setBrushSize,
-    setWandTolerance, clearAnnotations, undo, redo,
+    getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
+    setActiveTool, setBrushSize, setWandTolerance, clearAnnotations, undo, redo,
   });
   commandsRef.current = {
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
-    getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, setActiveTool, setBrushSize,
-    setWandTolerance, clearAnnotations, undo, redo,
+    getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
+    setActiveTool, setBrushSize, setWandTolerance, clearAnnotations, undo, redo,
   };
   useEffect(() => {
     if (!commandKey || compact || syncGroupId) return;
@@ -1312,6 +1398,8 @@ export function Viewer2D({
       getTargetInfo: () => commandsRef.current.getTargetInfo(),
       getViewState: () => commandsRef.current.getViewState(),
       getPixelData: (o) => commandsRef.current.getPixelData(o),
+      showOverlay: (o) => commandsRef.current.showOverlay(o),
+      clearOverlay: () => commandsRef.current.clearOverlay(),
       setActiveTool: (n) => commandsRef.current.setActiveTool(n),
       setBrushSize: (s) => commandsRef.current.setBrushSize(s),
       setWandTolerance: (v) => commandsRef.current.setWandTolerance(v),
@@ -1384,6 +1472,27 @@ export function Viewer2D({
     <div data-graphy-image-panel style={fill ? { ...wrap, flex: 1, height: "auto" } : { ...wrap, height: height ?? 512 }}>
       {/* 深層: ピクセル canvas（Cornerstone3D が内部に canvas を生成） */}
           <div ref={elementRef} data-testid="viewer2d-canvas-host" style={pixelLayer} />
+          {/* プラグインの値マップ（H4a）。base 画像の表示矩形に重ね、対象スライスのときだけ出す。
+              出所が分かるようにラベルを添える（プラグインの出力を本体の描画と混同させない）。 */}
+          {pluginOverlay && imageRect && pluginOverlay.imageId === imageIds[imageIndex] && (
+            <>
+              <canvas
+                ref={setOverlayCanvas}
+                data-testid="plugin-overlay-canvas"
+                style={{
+                  position: "absolute",
+                  left: imageRect.left,
+                  top: imageRect.top,
+                  width: imageRect.width,
+                  height: imageRect.height,
+                  pointerEvents: "none",
+                }}
+              />
+              <div data-testid="plugin-overlay-label" style={pluginOverlayLabel}>
+                {t("viewer2d.plugin.overlayLabel", { name: pluginOverlay.label ?? "plugin" })}
+              </div>
+            </>
+          )}
           {/* Fusion 等のオーバーレイ。base 画像の表示矩形に重ねる（wrap の overflow:hidden でクリップ）。 */}
           {renderOverlay && imageRect && renderOverlay({
             rect: imageRect,
@@ -1668,6 +1777,18 @@ const wrap: React.CSSProperties = {
   overflow: "hidden",
 };
 const pixelLayer: React.CSSProperties = { position: "absolute", inset: 0 };
+/** プラグインオーバーレイの出所ラベル（本体の描画と混同させないための表示）。 */
+const pluginOverlayLabel: React.CSSProperties = {
+  position: "absolute",
+  left: 8,
+  bottom: 8,
+  padding: "2px 6px",
+  borderRadius: 3,
+  background: "rgba(11,92,173,0.75)",
+  color: "#fff",
+  font: "11px/1.4 monospace",
+  pointerEvents: "none",
+};
 const refLineSvg: React.CSSProperties = {
   position: "absolute",
   inset: 0,

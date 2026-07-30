@@ -799,6 +799,15 @@ function TileGrid({
         const px = pending ? await pending : null;
         return px ? { tileId: id, ...px } : null;
       },
+      showOverlay: (tileId, overlay) => {
+        const id = tileId ?? resolveTargets()[0];
+        if (!id) return false;
+        return queryViewerCommand(id, (c) => c.showOverlay(overlay)) ?? false;
+      },
+      clearOverlay: (tileId) => {
+        const ids = tileId ? [tileId] : resolveTargets();
+        runViewerCommand(ids, (c) => c.clearOverlay());
+      },
       editPresets: () => setPresetsOpen(true),
       // Z 並べ替えはシリーズレベル（seriesCommands）。動画/IPP不在は SeriesViewer 側でブロック。
       sort: (mode) => runSeriesCommand(resolveTargets(), (c) => c.setSortMode(mode)),

@@ -77,6 +77,12 @@ interface Payload {
   pixelsSlice0: PixelSummary | null;
   pixelsOutOfRange: unknown;
   pixelsUnknownTile: unknown;
+  overlay?: {
+    shown: boolean;
+    hit: number;
+    mismatchRejected: boolean;
+    unknownTileRejected: boolean;
+  };
 }
 
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "hostapi-check");
@@ -209,10 +215,66 @@ async function main(): Promise<void> {
     check(first.pixelsOutOfRange === null, "範囲外 sliceIndex は null（末尾へ丸めない）", first.pixelsOutOfRange);
     check(first.pixelsUnknownTile === null, "未知の tileId は null", first.pixelsUnknownTile);
 
+    // --- H4a: オーバーレイ ---
+    console.log("\n[1-c] showOverlay()（H4a）");
+    check(first.overlay?.shown === true, "showOverlay() が受理される", first.overlay?.shown);
+    check((first.overlay?.hit ?? 0) > 0, "閾値マスクに該当画素がある（骨/造影 >=300 HU）", first.overlay?.hit);
+    check(first.overlay?.mismatchRejected === true, "格子が合わないマップは拒否（勝手に伸縮しない）", first.overlay?.mismatchRejected);
+    check(first.overlay?.unknownTileRejected === true, "未知の tileId への showOverlay は false", first.overlay?.unknownTileRejected);
+    const overlayCanvas = viewerPage.getByTestId("plugin-overlay-canvas");
+    const overlayLabel = viewerPage.getByTestId("plugin-overlay-label");
+    await overlayCanvas.waitFor({ state: "visible", timeout: 10_000 });
+    check(await overlayCanvas.isVisible(), "オーバーレイのキャンバスが実際に描画されている");
+    const labelText = (await overlayLabel.textContent())?.trim() ?? "";
+    check(
+      labelText.includes("Host API Check"),
+      "出所ラベルにプラグイン名（マニフェストの表示名）が出る",
+      labelText,
+    );
+    // キャンバスの中身を直接読む: 本体が本当にラスタライズしたか（可視要素の有無だけでは
+    // 「透明なキャンバスが乗っているだけ」を見逃す）。α>0 の画素数がマスク該当数と一致するはず。
+    const rasterized = await viewerPage.evaluate(() => {
+      const c = document.querySelector('[data-testid="plugin-overlay-canvas"]') as HTMLCanvasElement | null;
+      const ctx = c?.getContext("2d");
+      if (!c || !ctx) return null;
+      const d = ctx.getImageData(0, 0, c.width, c.height).data;
+      let opaque = 0;
+      let colored = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i + 3] > 0) {
+          opaque++;
+          // Hot_Iron を当てているので、灰色（R=G=B）ではない画素があるはず。
+          if (d[i] !== d[i + 1] || d[i + 1] !== d[i + 2]) colored++;
+        }
+      }
+      return { width: c.width, height: c.height, opaque, colored };
+    });
+    check(rasterized?.width === 512 && rasterized?.height === 512, "オーバーレイのキャンバスがマップの格子サイズ", rasterized);
+    check(
+      rasterized?.opaque === first.overlay?.hit,
+      "α>0 の画素数が閾値マスクの該当数と一致（本体が値マップを焼いている）",
+      { canvasOpaque: rasterized?.opaque, maskHit: first.overlay?.hit },
+    );
+    check((rasterized?.colored ?? 0) > 0, "指定した LUT（Hot_Iron）で色が付いている", rasterized?.colored);
+
+    // 画像矩形に重なっているか（base 画像より小さくなく、画面外でもない）。
+    const canvasBox = await overlayCanvas.boundingBox();
+    check((canvasBox?.width ?? 0) > 100 && (canvasBox?.height ?? 0) > 100, "オーバーレイが画像矩形の大きさで配置される", canvasBox);
+    await viewerPage.screenshot({ path: path.join(OUT_DIR, "1c-overlay.png") });
+
     // --- 表示を変える: スライス送り ＋ W/L プリセット ＋ 階調反転 ---
     // （invert / LUT のメニュー項目には testId が無いのでラベル文字列で掴む＝ja ロケール前提）
     console.log("\n[2] スライス送り・W/L プリセット・階調反転を適用してから再実行");
     const slider = viewerPage.getByTestId("dim-slider-z");
+    await slider.fill("12");
+    await viewerPage.waitForTimeout(400);
+    // オーバーレイは「出したスライス」に紐付く: 送った先では隠れる。
+    const afterMoveVisible = await viewerPage.getByTestId("plugin-overlay-canvas").isVisible();
+    check(afterMoveVisible === false, "別スライスへ送るとオーバーレイは隠れる", afterMoveVisible);
+    await slider.fill("0");
+    await viewerPage.waitForTimeout(400);
+    const backVisible = await viewerPage.getByTestId("plugin-overlay-canvas").isVisible();
+    check(backVisible === true, "元のスライスへ戻すとオーバーレイが再表示される", backVisible);
     await slider.fill("12");
     await viewerPage.waitForTimeout(400);
 
@@ -253,6 +315,10 @@ async function main(): Promise<void> {
     check(t1?.seriesUid === t0?.seriesUid, "シリーズは変わらない", t1?.seriesUid);
     // H3 も表示中スライスに追従し、明示指定なら別スライスを読める。
     check(second.pixels?.sliceIndex === 12, "getPixelData() も送った先のスライスを読む", second.pixels?.sliceIndex);
+    // 出したスライスに紐付くので、別スライスでは隠れていること（送った先に他スライスの
+    // 計算結果が重なって見えるのが最悪なので、そこを構造で防いでいることの確認）。
+    // ※ この時点では 2 回目の実行で slice 12 のオーバーレイが出ているため、
+    //   「隠れる」検証は slice 送り直後・再実行前に済ませてある（下の afterMoveVisible）。
     check(
       second.pixelsSlice0?.sliceIndex === 0 && second.pixelsSlice0?.imageId === px?.imageId,
       "sliceIndex 明示指定で別スライス（0 枚目）を読める",
