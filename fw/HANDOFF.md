@@ -1,9 +1,33 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
-> 更新日: 2026-07-30（最終更新: **モバイル UI とボリュームメモリガードの設計を新規追加**。
-> 下記エントリ参照）
+> 更新日: 2026-07-30（最終更新: **動画 ROI のフレーム指定モードを実機検証し、グローバル ROI が
+> 他フレームで表示されない不具合を修正**。下記エントリ参照）
 > 目的: 別の作業者（Claude 含む）がこのリポジトリの状況を把握し、続きを実装できるようにする。
 > このファイル＋ `fw/` 配下の各設計ドキュメントが「ソース・オブ・トゥルース」。
+>
+> 🟢 **2026-07-30 動画 ROI のフレーム指定モードを実機検証 → 表示の不具合を修正**
+> （正本: [`fw/video-viewer-design.md`](video-viewer-design.md) §12）。
+> PR #69 で入れた「フレーム指定 ROI モード＋単一フレーム統計」は typecheck / vitest のみ green で
+> **UI 未検証**のまま残っていた項目。standalone（backend jar ＋ Vite ＋ 実 Electron）で通し、
+> 新規スパイク `automator/src/spike/videoRoiFrameModeCheck.ts` が **30/30 green**。
+> - 🚨 **見つかった本命の不具合: グローバル ROI が描いたフレーム以外で表示されない**。
+>   原因は cornerstone の前提の読み違い。`AnnotationTool` は生成時に `viewport.getViewReference()`
+>   （＝描いた瞬間のフレーム）を metadata に入れ、`VideoViewport.isReferenceViewable()` が
+>   **`metadata.sliceIndex === 現在フレーム` を要求する**ため、video viewport の annotation は素の状態で
+>   **描いた 1 フレームにしか出ない**。PR #69 は逆（「素では全フレームに出る」）と想定して
+>   `annotation.visibility` だけで隠していたので、グローバル化しても他フレームで描画されなかった。
+>   → 帰属の反映を **metadata の参照フレーム書き換え**に変更（`videoRoiScope.ts` の純粋関数
+>   `applyScopeToReference()`: グローバル=`sliceIndex` を消す／フレーム指定=`sliceIndex = frame-1`）。
+>   `visibility` は補助として残す。**同種の思い込みは他の viewport でも起きうる**ので、
+>   フレーム/スライス帰属を扱うときは `isReferenceViewable` の条件を先に読むこと。
+> - 併せて修正: ROI チップの枠線がショートハンド `border` と `borderStyle` 混在で React 警告
+>   （再描画時に枠が消えうる）→ `borderWidth/Style/Color` に分解。
+> - 検証の作り: フィクスチャ動画は **ffmpeg で合成**（無ければスパイクが自動生成）。
+>   `lum = 20 + (X/W)*100 + T*60` の全 I フレーム H.264 なので、**輝度が時間で単調増加**し
+>   「フレーム f の統計が本当に f のものか」を数値で判定できる（実測 F3 平均 85.7 → F28 平均 202.1）。
+>   表示/非表示は cornerstone の内部 API ではなく **SVG レイヤの DOM**で判定する（利用者に見えるもので判定）。
+> - 残（既知）: cornerstone が ROI に重ねる計測テキスト（Area/Mean/…）は**作成フレームのキャッシュ値のまま**で
+>   フレームに追従しない（解析結果には影響しないが表示が紛らわしい）。複数 ROI の選択解析、フレーム精度シークも未着手。
 >
 > 📝 **2026-07-30 設計 2 本を新規追加（実装は未着手）**
 > → [`fw/volume-memory-guard.md`](volume-memory-guard.md) / [`fw/mobile-ui-design.md`](mobile-ui-design.md)

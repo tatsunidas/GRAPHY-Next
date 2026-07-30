@@ -31,6 +31,7 @@ import {
   type TimeSeriesPoint,
 } from "./videoRoiAnalysis";
 import {
+  applyScopeToReference,
   assignScope,
   frameScope,
   isVisibleOnFrame,
@@ -38,6 +39,7 @@ import {
   scopeCounts,
   scopeOf,
   toggleScope,
+  type RoiAnnotationReference,
   type RoiScopeMap,
 } from "./videoRoiScope";
 import { TimeIntensityChart } from "./TimeIntensityChart";
@@ -356,6 +358,13 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
   }, [loop, rate, phase]);
 
   // 帰属モードに従って ROI の表示/非表示をフレームごとに切り替える（§12 モード①の中核）。
+  //
+  // ⚠ **表示フィルタの実体は annotation metadata の参照フレーム**であって visibility ではない。
+  // AnnotationTool は生成時に `viewport.getViewReference()`（= 描いた瞬間のフレーム）を metadata に入れ、
+  // `VideoViewport.isReferenceViewable()` が `sliceIndex === 現在フレーム` を要求するため、素の annotation は
+  // **描いた 1 フレームにしか出ない**。よってグローバル帰属は `sliceIndex` を消して初めて全フレームに出る
+  // （2026-07-30 の実機検証で判明。visibility だけ true に戻しても他フレームでは描画されなかった）。
+  //
   // setAnnotationVisibility は冪等で ANNOTATION_VISIBILITY_CHANGE しか出さない（購読していない）ため、
   // ここから注釈イベント → refreshRois の連鎖は起きない。
   useEffect(() => {
@@ -363,16 +372,23 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
       return;
     }
     for (const r of rois) {
+      const scope = scopeOf(scopes, r.uid);
       try {
-        csToolsAnnotation.visibility.setAnnotationVisibility(
-          r.uid,
-          isVisibleOnFrame(scopeOf(scopes, r.uid), frame),
-        );
+        const ann = csToolsAnnotation.state.getAnnotation(r.uid);
+        if (ann?.metadata) {
+          applyScopeToReference(ann.metadata as RoiAnnotationReference, scope);
+        }
+      } catch {
+        /* 破棄済み等は無視 */
+      }
+      try {
+        csToolsAnnotation.visibility.setAnnotationVisibility(r.uid, isVisibleOnFrame(scope, frame));
       } catch {
         /* 破棄済み等は無視 */
       }
     }
     try {
+      // render() → IMAGE_RENDERED → cs-tools の imageRenderedEventDispatcher が注釈を再描画する。
       vpRef.current?.render();
     } catch {
       /* 無視 */
@@ -764,6 +780,7 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
               <button
                 type="button"
                 style={analyzeBtn}
+                data-testid="video-analyze-run"
                 onClick={runAnalysis}
                 title={t("video.analyze.hint")}
               >
@@ -875,6 +892,7 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
             </button>
             <input
               type="range"
+              data-testid="video-seek"
               min={1}
               max={totalFrames}
               step={1}
@@ -882,7 +900,10 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
               onChange={(e) => seekToFrame(Number(e.target.value))}
               style={{ flex: 1, minWidth: 120 }}
             />
-            <span style={{ color: "#556", fontSize: 12, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
+            <span
+              style={{ color: "#556", fontSize: 12, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}
+              data-testid="video-frame-indicator"
+            >
               {fps > 0 ? `${fmtTime(curSec)} / ${fmtTime(totSec)}` : `${frame} / ${totalFrames}`}
             </span>
           </div>
@@ -906,10 +927,22 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
 
             <span style={ctrlLabel}>
               {t("video.frame")}
-              <button type="button" style={frameBtn} title={t("video.prevFrame")} onClick={() => seekToFrame(frame - 1)}>
+              <button
+                type="button"
+                style={frameBtn}
+                data-testid="video-frame-prev"
+                title={t("video.prevFrame")}
+                onClick={() => seekToFrame(frame - 1)}
+              >
                 ◀
               </button>
-              <button type="button" style={frameBtn} title={t("video.nextFrame")} onClick={() => seekToFrame(frame + 1)}>
+              <button
+                type="button"
+                style={frameBtn}
+                data-testid="video-frame-next"
+                title={t("video.nextFrame")}
+                onClick={() => seekToFrame(frame + 1)}
+              >
                 ▶
               </button>
             </span>
@@ -1103,12 +1136,16 @@ const analyzeBtn: React.CSSProperties = {
   fontSize: 12,
   fontWeight: 600,
 };
+// 枠線は borderWidth/Style/Color を個別指定する。ショートハンド `border` と非表示側の `borderStyle` を
+// 混ぜると React が「shorthand と non-shorthand の混在」を警告し、実際に再描画時に枠が消えることがある。
 const roiChip: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: 4,
   padding: "2px 4px 2px 8px",
-  border: "1px solid #d3dbe4",
+  borderWidth: 1,
+  borderStyle: "solid",
+  borderColor: "#d3dbe4",
   borderRadius: 12,
   background: "#f4f7fa",
   fontSize: 12,

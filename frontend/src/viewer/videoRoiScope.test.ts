@@ -5,6 +5,7 @@
 import { describe, it, expect } from "vitest";
 import {
   GLOBAL_SCOPE,
+  applyScopeToReference,
   assignScope,
   frameScope,
   isVisibleOnFrame,
@@ -127,5 +128,33 @@ describe("scopeCounts", () => {
 
   it("空なら全て 0", () => {
     expect(scopeCounts({}, [], 1)).toEqual({ global: 0, thisFrame: 0, otherFrame: 0 });
+  });
+});
+
+describe("applyScopeToReference", () => {
+  // ここが表示フィルタの実体。VideoViewport.isReferenceViewable() は sliceIndex があればそのフレームのみ、
+  // 無ければ全フレームで可視と判定する（＝グローバルは sliceIndex を消す必要がある）。
+  it("グローバルは sliceIndex と範囲参照を落とす（全フレームで可視になる）", () => {
+    const ref = { sliceIndex: 4, multiSliceReference: { sliceIndex: 9 } };
+    expect(applyScopeToReference(ref, GLOBAL_SCOPE)).toBe(true);
+    expect("sliceIndex" in ref).toBe(false);
+    expect("multiSliceReference" in ref).toBe(false);
+  });
+
+  it("フレーム指定は 1-based frame を 0-based sliceIndex に落とす", () => {
+    const ref: { sliceIndex?: number } = {};
+    expect(applyScopeToReference(ref, frameScope(5))).toBe(true);
+    expect(ref.sliceIndex).toBe(4);
+  });
+
+  it("フレーム 1 以下は sliceIndex 0 に丸める", () => {
+    const ref: { sliceIndex?: number } = { sliceIndex: 7 };
+    applyScopeToReference(ref, frameScope(1));
+    expect(ref.sliceIndex).toBe(0);
+  });
+
+  it("既に一致していれば変更なしを返す（無駄な再描画を避ける）", () => {
+    expect(applyScopeToReference({ sliceIndex: 4 }, frameScope(5))).toBe(false);
+    expect(applyScopeToReference({}, GLOBAL_SCOPE)).toBe(false);
   });
 });
