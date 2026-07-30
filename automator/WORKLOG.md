@@ -17,6 +17,30 @@ automator（GRAPHY-Next 自律検証ツール）の開発記録。設計の要�
 
 ---
 
+## 2026-07-30（3）— H4b の web モード検証（`h4bWebStowCheck.ts`）実 dcm4chee で完了
+
+最後まで残っていた「H4b（プラグインの派生シリーズ保存）の web モード＝外部 PACS への STOW-RS
+書き戻し」を実 dcm4chee で通した（**18 項目すべて合格**）。desktop 用の `DesktopDriver` は使わず、
+**Playwright の chromium で UI 同梱 jar（:8090）を直接叩く**単独スパイクにしてある。
+
+**判定を UI に置かないのが要点**: 「保存しました」の表示ではなく、**dcm4chee へ直接 QIDO / WADO-RS を
+投げて**シリーズの実在と属性（`[Plugin] ` 接頭辞・`ImageType`・`DerivationDescription`・
+`ContributingEquipmentSequence`・Rescale・**`PixelPaddingValue`**）を確認する。拒否時に増えないこと、
+元シリーズが無変更であることも PACS 側で見る。
+
+環境の再現手順と、この機に必要だった初回セットアップは `deploy/dcm4chee/VERIFY-web.md` の
+「実施環境の記録」に残した（compose がこの機に無く、apt にも `docker-compose-plugin` が無いので
+バイナリ v5.3.1 を直置き／`sudo docker` 必須／`:8080` は standalone backend と衝突）。
+
+ここでも自分のスクリプト側のミスを 2 つ踏んだ（アプリは正しかった）:
+
+- ヘッダのコメントに `~/dcm4che-*/bin` と書き、**`*/` がブロックコメントを閉じていた**（esbuild が
+  構文エラー）。コメント内にパスのワイルドカードを書くときは `*/` を作らないこと。
+- **QIDO の IS 型は文字列で返る**（`NumberOfSeriesRelatedInstances` が `"1"`）。`=== 1`（number）で
+  比較すると必ず外れる。QIDO の値は必ず `Number()` を通す。
+
+---
+
 ## 2026-07-30（2）— 非画像 SOP クラスの検証スパイク（`nonImageSeriesCheck.ts`）
 
 RTSTRUCT のような**ピクセルを持たない SOP クラス**をシリーズ一覧から開くと、Cornerstone が

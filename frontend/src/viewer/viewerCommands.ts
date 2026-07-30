@@ -19,6 +19,13 @@ import type { LutData } from "../api";
  */
 export interface ViewerTargetInfo {
   studyUid: string;
+  /**
+   * スタディの検査日（ISO `YYYY-MM-DD`）。DICOM の StudyDate から解決する。
+   * 解釈できない・存在しないなら `null`（**怪しい日付を通さない**）。
+   *
+   * <p>時系列の評価（RECIST の BOR は「ベースラインから何週」「確認まで何日」で結論が変わる）に要る。
+   */
+  studyDate: string | null;
   seriesUid: string;
   /** 画面に出ているシリーズ名（"3: AXIAL CT" 等）。 */
   seriesLabel: string;
@@ -220,6 +227,8 @@ export interface ViewerRoi {
   label: string | null;
   /** この ROI が乗っている DICOM インスタンスの識別（時系列で ROI を再同定する鍵）。 */
   studyUid: string;
+  /** この ROI が属するスタディの検査日（ISO `YYYY-MM-DD`）。不明なら null。 */
+  studyDate: string | null;
   seriesUid: string;
   /** 解決できなければ null。ThickSlab 中は注釈を作れないので通常は取れる。 */
   sopInstanceUid: string | null;

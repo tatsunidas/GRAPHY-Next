@@ -209,9 +209,9 @@ web は運営配備 / サンドボックス。
 
 ---
 
-## 7. host API の拡張（H1〜H5 実装済み）
+## 7. host API の拡張（H1〜H6 実装済み）
 
-> 起票: 2026-07-29 ／ ステータス: **H1・H2（2026-07-29）／ H3・H4a・H4b・H5（2026-07-30）すべて実装済み**
+> 起票: 2026-07-29 ／ ステータス: **H1・H2（2026-07-29）／ H3・H4a・H4b・H5・H6（2026-07-30）すべて実装済み**
 > 経緯: プラグイン デモ 3 本（[`plugin-explainer.md`](plugin-explainer.md) §6）を書いた過程で、
 > **2D ビューアのプラグインには「いま何を見ているか」を答える手段が一つも無い**ことが判明した。
 
@@ -258,6 +258,7 @@ H1・H2 は実質「これを本番向けの契約として切り出す」作業
 | **H4a** ✅ | **オーバーレイ表示** — 処理結果を表示中スライスに重ねる（保存しない） | `showOverlay(tileId?, overlay)` / `clearOverlay(tileId?)` | 値マップを受け取り**色付けは本体側**で行う。imageId に紐付け | ✅ |
 | **H4b** ✅ | **派生シリーズ保存** — 新シリーズとして保管庫（standalone）/ PACS（web）へ | `saveDerivedSeries(tileId?, req)` | 既存 `POST /api/series/derived` を開ける形。**保存ポリシーが本体** | ✅（web も許可） |
 | **H5** ✅ | **ROI（計測）の読み出し** — ユーザーが描いた計測をプラグインが使う | `getRois(tileId?)` / `getRoiMeta(roiUid)` / `setRoiMeta(roiUid, patch)` / `subscribeRois(cb)` | 幾何を本体に閉じる（長径・短径をプラグインに算出させない）。**ROI 永続化が無いので `roiUid` はセッション内限定**。global ROI は `referencedImageId` が表示スライスへ追従する罠あり | ✅ |
+| **H6** ✅ | **スタディの検査日** — 時系列評価に要る | `ViewerTarget.studyDate` / `ViewerRoi.studyDate` | DICOM の StudyDate から解決（画面の prop を引き回さない）。**解釈できない値は null**（日付差で結論が変わる評価に怪しい値を渡さない） | ✅ |
 
 H1〜H3 は**フロント面だけで完結**するため、web モードでも同じように動く（backend の契約 `/api/plugins` は不変）。
 
@@ -660,6 +661,31 @@ timeout → `firstWindow()` フォールバックが `devtools://…` を返し�
 副産物の修正: `dragOnCanvasHost()` に**始点の指定**（canvas 内相対位置）を足した。既定の中央から
 引くと、2 本目以降のドラッグが**既存注釈のハンドルを掴んで「新規作成ではなく移動」になる**
 （1 回目の実行で楕円が作られず ROI が 1 本しか出ずに気付いた）。
+
+#### H6 の実装（2026-07-30・GRAPHY-Next 0.1.10 以降）
+
+```ts
+host.getTargets()[i].studyDate   // "YYYY-MM-DD" | null
+host.getRois()[i].studyDate      // 同上
+```
+
+**動機**: 時系列の評価は日付差で結論が変わる。RECIST 1.1 の BOR は「SD をベースラインから
+最短 N 週維持したか」「CR/PR が最短 N 日後の検査で維持されたか」で判定が変わるため、
+検査日が無いと計算できない。H1〜H5 は UID しか返しておらず、そこだけが埋まっていなかった。
+
+**決めたこと**:
+
+- **DICOM のメタ（`generalStudyModule.studyDate`）から読む**。画面の prop（`Study` オブジェクト）を
+  Viewer2D まで引き回す案もあったが、出所が 1 つに定まる方を採った。シリーズ/タイルの構成が
+  変わっても壊れず、表示していない情報に依存しない。
+- **解釈できない値は `null`**（`viewportRead.dicomDateToIso()`）。空・桁数違い・非数字・
+  存在しない日付（2 月 30 日等）はすべて `null`。RECIST の判定は日付差で変わるので、
+  怪しい値を通すより「日付が無い」とした方が安全。区切り入り（`YYYY-MM-DD`）も受ける。
+- **`ViewerRoi` にも持たせた**。ROI は `studyUid` を持つので `getTargets()` と結合すれば得られるが、
+  結合を各プラグインに書かせると取り違えの余地が残る。同じタイルから取るので追加コストはゼロ。
+
+**実装**: `viewer/viewportRead.ts`（`dicomDateToIso` ＋テスト 5 件）/ `viewer/viewerCommands.ts`（契約）/
+`viewer/Viewer2D.tsx`（`studyDateOf()`）/ `examples/plugin-template/graphy-plugin.d.ts` / 作成ガイド。
 
 ### 7.3 副作用（着手時に必ずセットで行うこと）
 

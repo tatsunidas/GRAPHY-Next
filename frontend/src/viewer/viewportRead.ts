@@ -120,3 +120,46 @@ export function readCamera(vp: CameraSource): {
     return { parallelScale: null, position: null, focalPoint: null };
   }
 }
+
+/**
+ * DICOM の DA → ISO の日付（`YYYY-MM-DD`）。純関数（テスト対象）。
+ *
+ * <p>プラグインへ日付を渡すのに使う（host API の H6）。**入力の形が 1 つに定まらない**ので両方受ける:
+ * - 文字列 `"YYYYMMDD"`（生のタグ値。区切り入り `"YYYY-MM-DD"` も受ける）
+ * - `{ year, month, day }` — **dicom-image-loader の metaData が返す形**。内部で
+ *   `dicomParser.parseDA()` を通しており、文字列ではなくこのオブジェクトになる
+ *   （実機検証で `null` になって判明。文字列だけを想定していると必ず取りこぼす）
+ *
+ * <p>**解釈できない値は null**: 空・桁数違い・非数字・存在しない日付（2 月 30 日等）はすべて null。
+ * RECIST の BOR は日付差（週数・日数）で判定が変わるため、怪しい値を通すくらいなら
+ * 「日付が無い」とした方が安全。
+ */
+export function dicomDateToIso(da: unknown): string | null {
+  let y: number;
+  let m: number;
+  let d: number;
+
+  if (typeof da === "string") {
+    const digits = da.trim().replace(/[-/.]/g, "");
+    if (!/^\d{8}$/.test(digits)) return null;
+    y = Number(digits.slice(0, 4));
+    m = Number(digits.slice(4, 6));
+    d = Number(digits.slice(6, 8));
+  } else if (da && typeof da === "object") {
+    const o = da as { year?: unknown; month?: unknown; day?: unknown };
+    if (typeof o.year !== "number" || typeof o.month !== "number" || typeof o.day !== "number") return null;
+    y = o.year;
+    m = o.month;
+    d = o.day;
+  } else {
+    return null;
+  }
+
+  if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) return null;
+  if (y < 1000 || m < 1 || m > 12 || d < 1 || d > 31) return null;
+  // 月ごとの日数まで検証する（2 月 30 日のような値を通さない）。
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${y}-${pad(m)}-${pad(d)}`;
+}
