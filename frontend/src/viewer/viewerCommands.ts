@@ -18,6 +18,14 @@ import type { LutData } from "../api";
  * <p>`tileId` は付与しない: レジストリのキー＝tileId なので、問い合わせた側が知っている。
  */
 export interface ViewerTargetInfo {
+  /**
+   * 同一患者の判定キー（PatientID → 無ければ PatientName → 無ければ StudyInstanceUID）。
+   * 本体が ROI を永続化するときの鍵と**同じ値**。
+   *
+   * <p>時系列のプラグインが「患者単位の記録」を持つのに要る。スタディ UID を鍵にすると、
+   * 同じ患者の別スタディを開いたときに記録を見失う。
+   */
+  patientKey: string;
   studyUid: string;
   /**
    * スタディの検査日（ISO `YYYY-MM-DD`）。DICOM の StudyDate から解決する。
@@ -225,6 +233,8 @@ export interface ViewerRoi {
   tool: string;
   /** ROI マネージャで付けたラベル。未設定なら null。 */
   label: string | null;
+  /** 同一患者の判定キー（本体が ROI を永続化する鍵と同じ値）。 */
+  patientKey: string;
   /** この ROI が乗っている DICOM インスタンスの識別（時系列で ROI を再同定する鍵）。 */
   studyUid: string;
   /** この ROI が属するスタディの検査日（ISO `YYYY-MM-DD`）。不明なら null。 */

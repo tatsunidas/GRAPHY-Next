@@ -106,13 +106,13 @@ export function activate(host) {
 
 | メソッド | 戻り |
 |---|---|
-| `getTargets()` | 操作対象タイル（選択→無ければ全＝`actions` と同じ対象）の配列。要素は `{ tileId, studyUid, studyDate, seriesUid, seriesLabel, imageId, sliceIndex, sliceCount, c, t, modality }` |
+| `getTargets()` | 操作対象タイル（選択→無ければ全＝`actions` と同じ対象）の配列。要素は `{ tileId, patientKey, studyUid, studyDate, seriesUid, seriesLabel, imageId, sliceIndex, sliceCount, c, t, modality }` |
 | `getViewState(tileId?)` | `{ tileId, windowCenter, windowWidth, unit, colormap, invert, flipH, flipV, rotation, zoom, pan }`。省略時は対象の先頭タイル。取得不能なら `null` |
 | `getPixelData(tileId?, opts?)` | `Promise<{ tileId, imageId, sliceIndex, rows, cols, data, unit, spacing } \| null>`。`data` は `Float32Array`（row-major・`data[y*cols+x]`）の**校正済み画素**（CT なら HU）。`opts.sliceIndex` で別スライス（既定は表示中） |
 | `showOverlay(tileId?, overlay)` | 処理結果（値マップ）を表示中スライスに重ねる。`overlay = { data, rows, cols, window?, colormap?, opacity? }`。格子が現在スライスと不一致なら `false` |
 | `clearOverlay(tileId?)` | オーバーレイを消す |
 | `saveDerivedSeries(tileId?, req)` | 処理結果を**派生シリーズとして保存**（standalone は保管庫、web は PACS）。`Promise<{ ok, cancelled?, seriesInstanceUid?, instanceCount?, error? }>`。**本体が必ず確認ダイアログを出す** |
-| `getRois(tileId?)` | ユーザーが描いた **ROI（計測）** の配列。要素は `{ roiUid, tool, label, tileId, studyUid, studyDate, seriesUid, sopInstanceUid, sliceIndex, zScope, c, t, points, spacing, measurements, visible }`。**省略時は対象タイル全部**（他と違う） |
+| `getRois(tileId?)` | ユーザーが描いた **ROI（計測）** の配列。要素は `{ roiUid, tool, label, tileId, patientKey, studyUid, studyDate, seriesUid, sopInstanceUid, sliceIndex, zScope, c, t, points, spacing, measurements, visible }`。**省略時は対象タイル全部**（他と違う） |
 | `getRoiMeta(roiUid)` | ROI に紐付けた**このプラグインの属性**（`Record<string,string>`）。未設定なら `{}` |
 | `setRoiMeta(roiUid, patch)` | 同属性を書く（マージ）。ROI が無ければ `false` |
 | `subscribeRois(cb)` | ROI の追加/変更/削除を購読。返り値で解除。**差分は渡さない**ので `getRois()` を読み直す |
@@ -122,6 +122,9 @@ export function activate(host) {
 - `colormap` は LUT ダイアログの名前（例 `"10_Percent"`）。未適用は `null`。
 - `studyDate` は DICOM の StudyDate 由来の ISO 日付（`YYYY-MM-DD`）。**解釈できない値は `null`**
   （日付差で結論が変わる評価——RECIST の BOR 等——に怪しい値を渡さないため）。
+- `patientKey` は本体が ROI を永続化する鍵と同じ値（PatientID → PatientName → StudyInstanceUID）。
+  **患者単位の記録を持つプラグインはこれを鍵にする**。スタディ UID を鍵にすると、
+  同じ患者の別スタディを開いたときに記録を見失う。
 - `getTargets()` は**空配列を返し得る**（Fusion の子や破棄途中のタイルは現れない）。必ず扱うこと。
 - `getPixelData()` の値は**表示 W/L を通していない定量値**（W/L や LUT を変えても不変）。
   カラー画像は輝度に落ちて `unit === "raw"`。
