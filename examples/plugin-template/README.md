@@ -96,8 +96,9 @@ git add minisign.pub && git commit -m "add signing public key"   # 公開鍵は�
 **本体が必ず確認ダイアログを出す**ので、プラグインが黙って保存することはできない（拒否されると
 `{ ok: false, cancelled: true }`）。幾何は本体が元シリーズから引き継ぐため、`frames` は
 「どの元スライスに対応するか」（`sliceIndex`）だけを申告する。画素は 16bit ＋ Rescale で保存され、
-`NaN` は値域の最小値になる。保存物には `[Plugin] ` 接頭辞とプラグイン id・版が必ず残り、
-**元シリーズは変更されない**。
+**`NaN`（データ無し）を含むなら `background` が必須**（未指定は拒否。CT のマスクなら空気の `-1000`
+が素直で、指定値は `PixelPaddingValue` にも書かれる）。保存物には `[Plugin] ` 接頭辞とプラグイン
+id・版が必ず残り、**元シリーズは変更されない**。
 
 共通: `pluginId` / `t(key)`（i18n）/ `notify(msg)` / `runBackend(payload?)`（backend 面がある場合）。
 型は `graphy-plugin.d.ts` を参照（`ui.js` 先頭の `/// <reference ...>` + `// @ts-check` で補完が効く）。

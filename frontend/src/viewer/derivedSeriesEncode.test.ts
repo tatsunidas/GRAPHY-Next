@@ -3,7 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { describe, expect, it } from "vitest";
-import { chooseRescale, encodeFrames, finiteRange, framePixelsBase64 } from "./derivedSeriesEncode";
+import { chooseRescale, encodeFrames, finiteRange, framePixelsBase64, hasNonFinite } from "./derivedSeriesEncode";
 
 describe("finiteRange", () => {
   it("NaN / Infinity を無視して値域を出す", () => {
@@ -44,6 +44,16 @@ describe("chooseRescale", () => {
   });
 });
 
+describe("hasNonFinite", () => {
+  it("NaN / Infinity を検出する（background の要否判定に使う）", () => {
+    expect(hasNonFinite([new Float32Array([1, NaN])])).toBe(true);
+    expect(hasNonFinite([new Float32Array([1, Infinity])])).toBe(true);
+    expect(hasNonFinite([new Float32Array([1, 2]), new Float32Array([3, NaN])])).toBe(true);
+    expect(hasNonFinite([new Float32Array([1, 2])])).toBe(false);
+    expect(hasNonFinite([])).toBe(false);
+  });
+});
+
 describe("encodeFrames", () => {
   it("HU のような整数はそのまま入る（量子化誤差を足さない）", () => {
     const { frames, slope, intercept, identity } = encodeFrames([new Float32Array([-1024, 0, 40, 1331])]);
@@ -61,15 +71,40 @@ describe("encodeFrames", () => {
     }
   });
 
-  it("NaN は値域の最小値（背景）になる", () => {
-    const { frames, slope, intercept } = encodeFrames([new Float32Array([NaN, 0.5, 1])]);
-    expect(frames[0][0] * slope + intercept).toBeCloseTo(0.5, 4);
-    // 有効値の最小が 0.5 なので、NaN もそこへ寄る（＝下端）。
-    expect(frames[0][0]).toBe(frames[0][1]);
+  it("NaN は指定した background になる（値域の最小値に寄せない）", () => {
+    // 回帰: かつて「有効値の最小値」を既定にしていたため、≧300 HU のマスクで背景が 300 HU
+    // になり「何も無い場所が骨と同程度の HU」になっていた（実機で発生）。
+    const mask = new Float32Array([NaN, 300, 800, 1331]);
+    const { frames, slope, intercept, paddingStored } = encodeFrames([mask], -1000);
+    const decode = (i: number) => frames[0][i] * slope + intercept;
+    expect(decode(0)).toBeCloseTo(-1000, 4);
+    expect(decode(1)).toBeCloseTo(300, 4);
+    expect(decode(3)).toBeCloseTo(1331, 4);
+    // 背景の格納値は PixelPaddingValue として書けるように返る。
+    expect(paddingStored).toBe(frames[0][0]);
+  });
+
+  it("背景も値域に含めるので飽和しない", () => {
+    // 背景を値域外に置くと、量子化の写像から外れて別の値に化ける危険がある。
+    const { frames, slope, intercept } = encodeFrames([new Float32Array([NaN, 0.25, 0.5])], -0.5);
+    expect(frames[0][0] * slope + intercept).toBeCloseTo(-0.5, 4);
+  });
+
+  it("NaN が無ければ paddingStored は null（パディングを書かない）", () => {
+    expect(encodeFrames([new Float32Array([1, 2, 3])]).paddingStored).toBeNull();
+    // background を渡しても、NaN が無ければパディングは書かない。
+    expect(encodeFrames([new Float32Array([1, 2, 3])], -1000).paddingStored).toBeNull();
+  });
+
+  it("整数マスク＋整数背景なら恒等（量子化誤差を足さない）", () => {
+    const { identity, slope, intercept } = encodeFrames([new Float32Array([NaN, 300, 1331])], -1000);
+    expect(identity).toBe(true);
+    expect(slope).toBe(1);
+    expect(intercept).toBe(0);
   });
 
   it("Int16 の範囲を超える値は飽和させる（溢れさせない）", () => {
-    const { frames } = encodeFrames([new Float32Array([-100000, 100000])]);
+    const { frames } = encodeFrames([new Float32Array([-100000, 100000])], 0);
     for (const v of frames[0]) {
       expect(v).toBeGreaterThanOrEqual(-32768);
       expect(v).toBeLessThanOrEqual(32767);

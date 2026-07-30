@@ -25,6 +25,15 @@ export async function activate(host) {
     cols: 2,
   });
 
+  // NaN を含むのに background を指定しない要求も、同意を求める前に拒否されるべき
+  // （かつて既定で「有効値の最小値」を埋めており、マスクの背景が閾値の値に化けていた）。
+  const saveNoBackground = await host.saveDerivedSeries(px.tileId, {
+    seriesDescription: "should be rejected (no background)",
+    frames: [{ sliceIndex: px.sliceIndex, data: mask }],
+    rows: px.rows,
+    cols: px.cols,
+  });
+
   const save = await host.saveDerivedSeries(px.tileId, {
     seriesDescription: "Bone mask",
     derivationDescription: "Threshold >= 300 HU",
@@ -32,7 +41,9 @@ export async function activate(host) {
     rows: px.rows,
     cols: px.cols,
     unit: px.unit,
+    // 閾値未満（NaN）は空気で埋める。PixelPaddingValue としても書かれる。
+    background: -1000,
   });
 
-  window.__hostApiCheck = { save, saveMismatch };
+  window.__hostApiCheck = { save, saveMismatch, saveNoBackground };
 }
