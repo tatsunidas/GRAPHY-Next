@@ -719,6 +719,8 @@ export const ja: Record<string, string> = {
   "page.indicator": "{{from}}〜{{to}} / 全{{total}}件（{{page}}/{{pages}}ページ）",
   "series.title": "シリーズ（{{name}}）",
   "series.empty": "シリーズがありません。",
+  // ピクセルを持たない SOP クラス（RTSTRUCT / SR / 表示状態 …）を画像として開こうとしたとき。
+  "series.nonImage": "このシリーズは画像ではありません（{{kind}}）。2D ビューアでは表示できません。",
   "instance.count": "インスタンス {{n}} 件",
   "instance.range": "（#{{from}} 〜 #{{to}}）",
   "viewer.webTodo": "web モードの 2D 表示（WADO-RS 経由）は次フェーズで対応します。",

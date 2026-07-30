@@ -718,6 +718,7 @@ export const en: Record<string, string> = {
   "page.indicator": "{{from}}–{{to}} of {{total}} (page {{page}}/{{pages}})",
   "series.title": "Series ({{name}})",
   "series.empty": "No series.",
+  "series.nonImage": "This series is not an image ({{kind}}). It cannot be shown in the 2D viewer.",
   "instance.count": "{{n}} instance(s)",
   "instance.range": "(#{{from}}–#{{to}})",
   "viewer.webTodo": "2D viewing in web mode (via WADO-RS) is coming in the next phase.",

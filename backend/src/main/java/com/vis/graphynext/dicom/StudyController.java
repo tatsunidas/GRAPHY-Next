@@ -335,6 +335,9 @@ public class StudyController {
                 a.getString(Tag.Modality),
                 a.getInt(Tag.SeriesNumber, 0),
                 a.getString(Tag.SeriesDescription),
+                // QIDO のシリーズ応答に SOP クラスは含まれないのが普通（インスタンス階層の属性）。
+                // 取れたら使い、取れなければ null（フロントは Modality で判定にフォールバックする）。
+                a.getString(Tag.SOPClassUID),
                 a.getInt(Tag.NumberOfSeriesRelatedInstances, 0));
     }
 

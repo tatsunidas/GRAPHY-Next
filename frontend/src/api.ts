@@ -32,6 +32,11 @@ export interface Series {
   modality: string | null;
   seriesNumber: number | null;
   seriesDescription: string | null;
+  /**
+   * 代表インスタンスの SOP クラス。「画像として開けるシリーズか」の判定に使う
+   * （`viewer/seriesRenderable.ts`）。**web（QIDO）では取れないことがある**ので null 可。
+   */
+  sopClassUid: string | null;
   numberOfInstances: number;
 }
 

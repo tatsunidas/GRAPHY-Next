@@ -22,7 +22,8 @@ import { LutDialog, ColorBar } from "../viewer/LutDialog";
 import { runViewerCommand, queryViewerCommand } from "../viewer/viewerCommands";
 import { runSeriesCommand } from "../viewer/seriesCommands";
 import { TOOL_IDS } from "../viewer/toolIds";
-import { subscribeToast } from "../viewer/toast";
+import { emitToast, subscribeToast } from "../viewer/toast";
+import { classifySeriesRenderability } from "../viewer/seriesRenderable";
 import { subscribeSeriesRefresh } from "../viewer/viewerRefresh";
 import { WandDialog } from "./WandDialog";
 import { LevelSetsDialog } from "./LevelSetsDialog";
@@ -234,6 +235,18 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
       instances = await fetchInstances(study.studyInstanceUid, series.seriesInstanceUid);
     } catch {
       /* インスタンス取得失敗時も空で追加 */
+    }
+    // ピクセルを持たない SOP クラス（RTSTRUCT / SR / PR …）はタイルにしない。
+    // 以前は開こうとして Cornerstone が "The pixel data is missing" で reject し、
+    // コンソールに未処理例外が出るだけでユーザーには何も起きていないように見えていた。
+    // 判定は取得できたインスタンスの SOP クラス優先、無ければシリーズの値（web は SOP クラスが無い）。
+    const kind = classifySeriesRenderability({
+      sopClassUid: instances[0]?.sopClassUid ?? series.sopClassUid,
+      modality: series.modality,
+    });
+    if (!kind.renderable) {
+      emitToast(t("series.nonImage", { kind: kind.kind ?? "" }));
+      return;
     }
     const tile: Tile = { id: tileId, study, series, instances, syncEnabled: false };
 

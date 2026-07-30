@@ -6,6 +6,24 @@
 > 目的: 別の作業者（Claude 含む）がこのリポジトリの状況を把握し、続きを実装できるようにする。
 > このファイル＋ `fw/` 配下の各設計ドキュメントが「ソース・オブ・トゥルース」。
 >
+> 🟢 **2026-07-30 非画像 SOP クラスを画像として開かせないようにした**（既存の欠陥の修正）。
+> RTSTRUCT / SR / 表示状態 / Encapsulated PDF 等は**ピクセルを持たない**ため、シリーズ一覧から開くと
+> Cornerstone の `createImage` が `The pixel data is missing` で reject し、**コンソールに未処理例外が
+> 出るだけでユーザーには何も起きていないように見えていた**（実機の RTSTRUCT で発生）。
+> - 判定は新規の純関数 `frontend/src/viewer/seriesRenderable.ts`（＋テスト）。
+>   **SOP クラス優先・無ければ Modality** で判定する（web の QIDO はシリーズ階層に SOP クラスが無い）。
+>   Modality だけでは足りない例がある: **Surface Segmentation(66.5) は Modality=SEG だがピクセル無し**、
+>   一方 DICOM SEG(66.4) は labelmap を持つので開ける。未知は**開ける扱い**（fail-open）。
+> - backend: `SeriesDto` に `sopClassUid` を追加（`findSeriesSummaries` で代表インスタンスの SOP クラス）。
+> - 適用箇所は 2 つ: MainScreen のインライン プレビュー（説明を出してビューアを出さない）と
+>   2D Viewer の左ツリー ＋（タイルにせずトーストで理由を出す）。i18n は ja/en。
+> - 実機検証 `automator/src/spike/nonImageSeriesCheck.ts`（8 項目合格）。**`pixel data is missing` が
+>   コンソールに出ないこと**まで確認。RTSTRUCT の DICOM はリポジトリに置けないため、
+>   `GRAPHY_NONIMAGE_FILE` か `fixtures/rtstruct-seg-existing/` が無ければ該当項目を skip する。
+> - 副産物: **`DicomStorageService.java` に生の NUL バイトが 1 個入っていて grep/rg がこのファイルを
+>   バイナリ扱いし、検索から丸ごと漏れていた**（`listSeries` が見つからず調査が空振りした）。
+>   `"\0"` エスケープへ直した（値は同一）。
+>
 > 🟢 **2026-07-29〜30 プラグイン host API 拡張: H1〜H4b すべて実装（§7 完了）**
 > → 設計・実装表・素案から変えた点は
 > [`fw/plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張h1h4b-実装済み)
