@@ -35,6 +35,7 @@ import { listSpheres3D, updateSphere3D, deleteSphere3D, subscribeSphere3D, type 
 import { annotationsToImageJDtos } from "../viewer/imagejExport";
 import { importImageJDtos } from "../viewer/imagejImport";
 import { exportImageJRoiSet, importImageJRoiSet } from "../api";
+import { saveRoiNow, subscribeRoiSave } from "../viewer/roiSaveStore";
 import { RoiMetaEditDialog } from "./RoiMetaEditDialog";
 import { useI18n } from "../i18n/i18n";
 
@@ -122,6 +123,33 @@ export function RoiManagerPanel({
       });
   }, []);
   const importInputRef = useRef<HTMLInputElement>(null);
+
+  // ROI の明示保存（自動保存は Viewer2DScreen が変更契機で走らせる）。
+  // 最終保存の時刻・件数を出して「本当に書けたか」を人が確認できるようにする。
+  const [saving, setSaving] = useState(false);
+  const [lastSave, setLastSave] = useState<{ ok: boolean; at: string; count?: number; error?: string } | null>(null);
+  useEffect(() => subscribeRoiSave((pk, r) => {
+    if (pk !== activePatientKey) return;
+    setLastSave({
+      ok: r.ok,
+      at: new Date().toLocaleTimeString(),
+      count: r.roiCount,
+      error: r.error,
+    });
+  }), [activePatientKey]);
+  const runSaveRois = async () => {
+    setSaving(true);
+    try {
+      await saveRoiNow(activePatientKey);
+    } finally {
+      setSaving(false);
+    }
+  };
+  const saveTitle = lastSave
+    ? lastSave.ok
+      ? `${t("roiMgr.save")} — ${t("roiMgr.saved")} ${lastSave.at} (${lastSave.count ?? 0})`
+      : `${t("roiMgr.save")} — ${t("roiMgr.saveFailed")}: ${lastSave.error ?? ""}`
+    : t("roiMgr.save");
 
   const refresh = useCallback(() => {
     try {
@@ -540,6 +568,17 @@ export function RoiManagerPanel({
       <div style={head}>
         <strong style={{ fontSize: 13 }}>{t("roiMgr.title")}</strong>
         <span style={{ flex: 1 }} />
+        {/* 明示保存。ROI は変更のたびに自動保存されるが、席を離れる前に確実に書いたと
+            分かるようにする（自動保存の完了は見えないため）。 */}
+        <button
+          onClick={runSaveRois}
+          disabled={saving}
+          style={hbtn}
+          title={saveTitle}
+          data-testid="roi-mgr-save"
+        >
+          {saving ? "…" : "💾"}
+        </button>
         <button onClick={refresh} style={hbtn} title={t("roiMgr.refresh")}>⟳</button>
         <button onClick={onClose} style={hbtn} title={t("common.close")}>×</button>
       </div>

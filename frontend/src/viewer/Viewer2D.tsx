@@ -32,6 +32,8 @@ import { ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID } fr
 import { setViewerContext, clearViewerContext, getViewerContext, type ViewerContext } from "./viewerContext";
 import { getRoiMaskMeta, setRoiMaskMeta, subscribeRoiMaskStore } from "./roiMaskStore";
 import { reconcileGlobalAnnotations } from "./globalRoiSync";
+import { loadRoisCached } from "./roiSaveStore";
+import { restoreRoisIntoStack } from "./roiRestore";
 import { listSpheres3D, sphereCanvasCircle, subscribeSphere3D, type SphereCanvasCircle } from "./sphere3dStore";
 import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
 import { applyTransform, isPanned, readTransform, type ViewTransform, FIT_TRANSFORM } from "./transform";
@@ -1654,6 +1656,36 @@ export function Viewer2D({
   useEffect(() => {
     reconcileGlobalRois();
   }, [imageIndex, stackKey, reconcileGlobalRois]);
+
+  // 保存済み ROI の復元（`fw/roi-manager-design.md` M5）。
+  // スタックが確定したタイミングで、**このスタックに属する ROI だけ**を戻す
+  // （SOP が一致しないものは別シリーズなので載せない＝座標の意味を壊さない）。
+  useEffect(() => {
+    if (compact || syncGroupId) return;
+    const patientKey = roiContext?.patientKey;
+    const seriesLabel = roiContext?.seriesLabel;
+    if (!patientKey || !imageIds.length) return;
+    let cancelled = false;
+    void loadRoisCached(patientKey).then((parsed) => {
+      if (cancelled || !parsed.rois.length) return;
+      const v = vp();
+      if (!v) return;
+      const n = restoreRoisIntoStack(parsed.rois, imageIdsRef.current, v, patientKey, seriesLabel);
+      if (n > 0) {
+        try {
+          csToolsUtilities.triggerAnnotationRenderForViewportIds([viewportIdRef.current]);
+        } catch {
+          /* 破棄途中は無視 */
+        }
+        // 復元した ROI にも global 追従の評価を通す（scope="all" が保存されていた場合）。
+        reconcileGlobalRois();
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roiContext?.patientKey, stackKey, imageIds.length, compact, syncGroupId]);
 
   const panned = isPanned(transform);
   // 校正済み画素値の単位（プラグインの getViewState().unit と同じ解決）。

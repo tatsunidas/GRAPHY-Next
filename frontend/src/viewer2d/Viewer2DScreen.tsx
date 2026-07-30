@@ -23,6 +23,8 @@ import { eventTarget } from "@cornerstonejs/core";
 import { Enums as csToolsEnums } from "@cornerstonejs/tools";
 import { runViewerCommand, queryViewerCommand } from "../viewer/viewerCommands";
 import { subscribeRoiMaskStore } from "../viewer/roiMaskStore";
+import { getLoadedRois, registerRoiCollector, scheduleRoiSave } from "../viewer/roiSaveStore";
+import { collectRoisForPatient } from "../viewer/roiRestore";
 import { runSeriesCommand } from "../viewer/seriesCommands";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { subscribeToast } from "../viewer/toast";
@@ -569,6 +571,31 @@ function TileGrid({
 }) {
   const { t } = useI18n();
   const n = patient.tiles.length;
+
+  // ROI（幾何注釈）の自動保存（`fw/roi-manager-design.md` M5）。
+  // 収集は患者単位（annotation state は本体でグローバル）。復元は各タイル（Viewer2D）が行う。
+  // **収集に `getLoadedRois()` を渡すのが要点**: 表示していないシリーズの ROI を持ち越さないと、
+  // 差分検出が「消えた」と判定して墓標を立て、実際に消えてしまう。
+  useEffect(() => {
+    const pk = patient.patientKey;
+    if (!pk) return;
+    const unregister = registerRoiCollector(pk, () => collectRoisForPatient(pk, getLoadedRois(pk)));
+    const ev = csToolsEnums.Events;
+    const names = [ev.ANNOTATION_ADDED, ev.ANNOTATION_MODIFIED, ev.ANNOTATION_REMOVED].filter(
+      Boolean,
+    ) as string[];
+    const onChange = () => scheduleRoiSave(pk);
+    for (const name of names) eventTarget.addEventListener(name, onChange);
+    // ラベル・scope・プラグイン属性の変更も保存対象なのでメタ store も見る。
+    const unsubMeta = subscribeRoiMaskStore(onChange);
+    return () => {
+      for (const name of names) eventTarget.removeEventListener(name, onChange);
+      unsubMeta();
+      // 解除時に保留中の保存を流し切る（ウィンドウを閉じて計測が消えるのを防ぐ）。
+      unregister();
+    };
+  }, [patient.patientKey]);
+
   // Row×Col レイアウト: どちらか未指定(0)なら他方 or タイル数から自動導出。
   const rows = patient.gridRows > 0 ? patient.gridRows : 0;
   const cols =
