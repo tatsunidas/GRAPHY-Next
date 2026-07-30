@@ -18,7 +18,8 @@
 > **P4 完了（2026-07-30）**: `/rendered` が中身を見て「MP4 はそのまま／H.264・HEVC の基本ストリームは remux／
 > MPEG2 等は再エンコード」に振り分ける（`VideoRenderService`）。MPEG2 の DICOM video を実機で再生確認（18/18）。
 > **P5a 完了（2026-07-31）**: Export した媒体に `VIDEO/{sop}.mp4` を同梱し、Portable 2D Viewer が
-> `<video>` で再生する（§7）。残るのは **P5b（web/BFF モードの動画）** のみ。
+> `<video>` で再生する（§7）。**standalone はこれで一通り使える**。残るのは **P5b（web/BFF モードの動画）** のみ
+> — 出発点は §8 と `fw/HANDOFF.md` 冒頭の「動画の現在地と次の一手」。
 > 前提モード: standalone（Electron ＋ ローカル H2/FS）。web(BFF) 対応は §8 で後追い方針のみ。
 
 ## 0. ゴールと非ゴール
