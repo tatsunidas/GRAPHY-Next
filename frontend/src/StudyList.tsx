@@ -19,6 +19,7 @@ import {
 } from "./api";
 import { useI18n } from "./i18n/i18n";
 import { SeriesViewer } from "./viewer/SeriesViewer";
+import { classifySeriesRenderability, type SeriesRenderability } from "./viewer/seriesRenderable";
 import { VideoViewer } from "./viewer/VideoViewer";
 import { type ViewerMode } from "./viewer/imageId";
 import { useTableSort, applySort, sortIndicator, type SortState, type Accessor } from "./tableSort";
@@ -278,6 +279,9 @@ function SeriesNavigator({
   );
 }
 
+/** instances 未取得の間は「開ける」として扱い、ビューア表示は hasImages 側で抑える。 */
+const RENDERABLE_UNKNOWN: SeriesRenderability = { renderable: true, kind: null, by: null };
+
 function InstanceList({ study, series, mode }: { study: Study; series: Series; mode: ViewerMode }) {
   const { t } = useI18n();
   const [instances, setInstances] = useState<Instance[] | null>(null);
@@ -294,6 +298,11 @@ function InstanceList({ study, series, mode }: { study: Study; series: Series; m
   const hasImages = !!instances && instances.length > 0;
   // Encapsulated PDF はピクセルが無く 2D 画像ビューアで表示できないため、文書パネルで開く。
   const isPdf = hasImages && instances![0].sopClassUid === ENCAPSULATED_PDF_SOP_CLASS;
+  // ピクセルを持たない SOP クラス（RTSTRUCT / SR / PR …）は画像ビューアで開けない。
+  // 判定は代表インスタンスの SOP クラスで行う（シリーズ一覧の値より確実）。
+  const nonImage = hasImages
+    ? classifySeriesRenderability({ sopClassUid: instances![0].sopClassUid, modality: series.modality })
+    : RENDERABLE_UNKNOWN;
   // 動画(Video Photographic/Endoscopic/Microscopic)は wadouri の画像ビューアでは表示できず、
   // 専用の VideoViewer（/rendered の video/mp4 を <video> 再生）で表示する。
   const isVideo = hasImages && isVideoSopClass(instances![0].sopClassUid);
@@ -351,8 +360,17 @@ function InstanceList({ study, series, mode }: { study: Study; series: Series; m
         </div>
       )}
 
+      {/* ピクセルを持たないシリーズ: 画像ビューアを出さず、何であるかを説明する。
+          （以前は開こうとして Cornerstone が "The pixel data is missing" で reject し、
+            コンソールに未処理例外が出るだけでユーザーには無反応に見えていた。） */}
+      {!nonImage.renderable && (
+        <div data-testid="series-non-image-notice" style={nonImageNotice}>
+          {t("series.nonImage", { kind: nonImage.kind ?? "" })}
+        </div>
+      )}
+
       {/* シリーズビューア（スライス送り・シネ・5D・オーバーレイ On/Off のコントローラ）。 */}
-      {hasImages && !isPdf && !isVideo && instances && (
+      {hasImages && !isPdf && !isVideo && nonImage.renderable && instances && (
         <div style={{ marginTop: 10, maxWidth: 900 }}>
           {/* web はピクセルを BFF(WADO-RS)経由で取得して表示（standalone と同一の StackViewport 経路）。 */}
           <SeriesViewer
@@ -366,6 +384,13 @@ function InstanceList({ study, series, mode }: { study: Study; series: Series; m
     </div>
   );
 }
+
+/** ピクセルを持たないシリーズの説明ボックス（PDF / 動画の案内と同じ調子）。 */
+const nonImageNotice: React.CSSProperties = {
+  marginTop: 10,
+  fontSize: 13,
+  color: "#8a6d3b",
+};
 
 const docBtn: React.CSSProperties = {
   padding: "4px 12px",

@@ -63,6 +63,7 @@ public interface DicomInstanceRepository extends JpaRepository<DicomInstance, St
                    max(i.modality) as modality,
                    max(i.seriesNumber) as seriesNumber,
                    max(i.seriesDescription) as seriesDescription,
+                   max(i.sopClassUid) as sopClassUid,
                    count(i) as numberOfInstances
             from DicomInstance i
             where i.studyInstanceUid = :studyUid
@@ -184,6 +185,12 @@ public interface DicomInstanceRepository extends JpaRepository<DicomInstance, St
         Integer getSeriesNumber();
 
         String getSeriesDescription();
+
+        /**
+         * 代表インスタンスの SOP クラス。フロントが「画像として開けるシリーズか」を判定するのに使う
+         * （RTSTRUCT / SR / PR 等はピクセルを持たない）。1 シリーズ内で混在は想定しないため max で代表を採る。
+         */
+        String getSopClassUid();
 
         long getNumberOfInstances();
     }

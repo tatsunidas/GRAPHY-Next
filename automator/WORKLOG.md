@@ -17,6 +17,30 @@ automator（GRAPHY-Next 自律検証ツール）の開発記録。設計の要�
 
 ---
 
+## 2026-07-30（2）— 非画像 SOP クラスの検証スパイク（`nonImageSeriesCheck.ts`）
+
+RTSTRUCT のような**ピクセルを持たない SOP クラス**をシリーズ一覧から開くと、Cornerstone が
+`The pixel data is missing` で reject し**未処理例外がコンソールに出るだけ**だった問題の検証。
+本体側の修正は `frontend/src/viewer/seriesRenderable.ts`（SOP クラス優先・Modality フォールバック）。
+
+検証項目（8 件・全合格）: MainScreen が説明を出してビューアを開かない／2D の左ツリー ＋ で
+タイルにならずトーストが出る／**`pixel data is missing` がコンソールに出ない**／
+画像シリーズ（CT）はこれまでどおり開ける（弾きすぎていない）。
+
+**RTSTRUCT の DICOM はリポジトリに置けない**ので、`GRAPHY_NONIMAGE_FILE`（ファイル/フォルダ）か
+`fixtures/rtstruct-seg-existing/*.dcm` があれば実行し、無ければ該当項目を skip する作りにした。
+
+ここでも**テスト側の照合ミス**を 2 つ踏んだ（アプリは正しかった）:
+
+- シリーズ行のテキストは連結されて `"2CT—50"` になるため `\bCT\b` に**一致しない**。
+  逆に `/CT/` は **RTSTRUCT**（…U-C-T）に一致してしまう。→ **Modality セル（表の 2 列目）を直接読む**。
+- スタディ行は**クリックでトグル**する（選択済みを押すと閉じてシリーズ行が消える）。
+  → 行が出なければ押し直す。かつ「見つけた時点で開く」（ループを抜けてから状態を頼らない）。
+- 2D ウィンドウは**タイルが 0 件だとメニューバーが出ない**（空状態）。準備完了の判定に
+  `viewer2d-menu-*` を使うと詰むので、左ツリーの検索ボタンで判定する。
+
+---
+
 ## 2026-07-30 — DesktopDriver が DevTools を掴むバグ修正・host API H1〜H4b の実機検証スパイク
 
 ### 修正: `DesktopDriver` が DevTools ウィンドウをメイン画面と誤認していた

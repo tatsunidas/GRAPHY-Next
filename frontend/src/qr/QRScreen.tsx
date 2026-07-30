@@ -172,6 +172,8 @@ export function QRScreen({ status }: { status: AppStatus | null }) {
           modality: series.modality,
           seriesNumber: series.seriesNumber,
           seriesDescription: series.seriesDescription,
+          // C-FIND のシリーズ応答に SOP クラスは無い（画像かどうかは Modality で判定される）。
+          sopClassUid: null,
           numberOfInstances: series.numberOfSeriesRelatedInstances,
         }
       : undefined;
