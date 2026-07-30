@@ -224,9 +224,11 @@ JAR 入りを導入・更新・削除・有効無効したときは、全ウィ�
 | 2 | [`graphy-next-plugin-mean-filter`](https://github.com/tatsunidas/graphy-next-plugin-mean-filter) | 表示中シリーズに平均化フィルタ、before/after 表示 | UI のみ |
 | 3 | [`graphy-next-plugin-gemini-findings`](https://github.com/tatsunidas/graphy-next-plugin-gemini-findings) | 粗い所見＋画像を Gemini に渡して推敲（教育用）。**JAR から外部 API を呼ぶ** | UI ＋ Java |
 
-> デモ 2・3 は、タイルの `data-tile-id` 属性とキャンバスの読み取りで代替している（各 README に明記済み）。
-> **0.1.9 でどちらも不要になった**（`getTargets()` ＋ `getPixelData()`＝§7 の H1・H3）。
-> デモ側の書き換えは別作業（外部リポジトリ）。
+> デモ 2・3 は当初、タイルの `data-tile-id` 属性とキャンバスの読み取りで代替していたが、
+> **0.1.9 でどちらも不要になり、各リポジトリに追従 PR を出した**（2026-07-30・各 PR #1）。
+> デモ 2 は HU に対する定量フィルタ＋重ね（`showOverlay`）＋保存（`saveDerivedSeries`）に、
+> デモ 3 は送信画像を「画素＋W/L で自前レンダ」に変えた（視覚モデル相手なので W/L は意図的に掛ける）。
+> **実機確認は 0.1.9 リリース後**。
 > デモ 3 が JAR を持つのは、レンダラの CSP（`connect-src` が localhost のみ）により
 > `ui.js` から外部 API を叩けないため。**ここは将来の host API 拡張の候補**。
 
@@ -283,7 +285,8 @@ GitHub secrets に登録するだけ。以後リリースごとの追加作業�
   読み取りも不要になった。→ [`plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張h1h4b-実装済み)
   **保存には本体が必ず確認ダイアログを出し**（抑止不可）、保存物には `SeriesDescription` の
   `[Plugin] ` 接頭辞と `DerivationDescription` / `ContributingEquipmentSequence` の id・版が必ず残る。
-  **元シリーズは変更されない。** ただし **web（外部 PACS への STOW-RS 書き戻し）は未検証**。
+  **元シリーズは変更されない。** ただし **web（外部 PACS への STOW-RS 書き戻し）は未検証**
+  （手順は `deploy/dcm4chee/VERIFY-web.md` の ③-2 に用意済み）。
 - **画素アクセスに強制が無い。** `getPixelData()` は患者の生画素をプラグインへ渡すが、
   `permissions` の `read-pixels` は**宣言（同意画面での表示）だけ**で強制していない。
   プラグインは本体と同じ権限で動くため（P3 サンドボックス未実装）、そもそも信頼境界が無い。

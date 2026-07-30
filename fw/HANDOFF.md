@@ -57,12 +57,20 @@
 > - フロント面のみで完結＝**web モードでも同じ**（`/api/plugins` の契約は不変）。backend 変更なし。
 >
 > **残**: 🔴 **H4b の web モード（外部 PACS への STOW-RS 書き戻し）が未検証**
-> （コードは既存 web 分岐に乗るだけで追加なし。実 PACS 相手の確認を
-> `deploy/dcm4chee/VERIFY-web.md` の手順に足す）。
-> 🔴 **外部デモ 4 リポジトリの `graphy-plugin.d.ts` 同期**（本体側の `examples/plugin-template/` は更新済み）と、
-> mean-filter / gemini-findings の `findOpenTiles()`（DOM 依存）→ `getTargets()`、
-> キャンバス読み取り → `getPixelData()` の置換。**「8bit しか読めない」断り書きは撤回できる**。
-> 新 API を使うプラグインは `engines.graphy` を `">=0.1.9"` にする。
+> （コードは既存 web 分岐に乗るだけで追加なし）。**手順は `deploy/dcm4chee/VERIFY-web.md` の
+> 「③-2 プラグインの派生シリーズ保存（H4b・web モード）」に追記済み**（2026-07-30）。
+> dcm4chee の compose を上げて実施する作業だけが残っている。
+> ✅ **外部デモ 4 リポジトリの追従は PR 済み（2026-07-30）**: 各リポジトリの `feat/host-api-0.1.9`
+> ブランチで PR #1 を作成（[demos](https://github.com/tatsunidas/graphy-next-plugin-demos/pull/1) /
+> [hello](https://github.com/tatsunidas/graphy-next-plugin-hello/pull/1) /
+> [mean-filter](https://github.com/tatsunidas/graphy-next-plugin-mean-filter/pull/1) /
+> [gemini-findings](https://github.com/tatsunidas/graphy-next-plugin-gemini-findings/pull/1)）。
+> 4 本すべてで `graphy-plugin.d.ts` を本体の `examples/plugin-template/` に同期し、
+> **mean-filter は DOM＋キャンバス 8bit をやめて HU に対する定量フィルタへ**（＋重ね・保存ボタン）、
+> **gemini-findings は DOM 走査をやめ、送信画像を「画素＋W/L で自前レンダ」へ**
+> （視覚モデル相手なので W/L は意図的に掛ける。注釈は含まれない旨を明記）。
+> どちらも `engines.graphy` を `">=0.1.9"`・版 0.2.0。**「8bit しか読めない / DOM 依存」の断り書きは撤回済み**。
+> 🔴 **残: これらデモの実機確認**（構文チェックのみ。0.1.9 リリース後に手置きして動作を見る）。
 > ✅ **実機検証済み（2026-07-30・standalone/Linux・H1〜H4b の 73 項目すべて合格）**: 本物の Electron ＋
 > backend ＋ `plugins/` に置いた第三者プラグイン（`/api/plugins` 配信）で、**DOM を覗かずに**
 > シリーズ/スライス/W/L/**画素**が取れること、画面表示と値が一致すること、スライス送り・W/L プリセット・

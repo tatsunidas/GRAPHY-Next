@@ -53,6 +53,38 @@ java -jar backend/target/graphy-next-backend.jar \
     `/metadata` 先頭から引き継ぎ）。エクスポートされたシリーズが PACS に現れることは確認済みだが、
     フレームごとの参照・幾何整合そのものはまだ目視確認していない。
 
+### ③-2 プラグインの派生シリーズ保存（H4b・web モード）— **未実施**
+
+`fw/plugin-architecture.md` §7 の H4b（`host.saveDerivedSeries()`）は standalone で検証済みだが、
+**web（外部 PACS への STOW-RS 書き戻し）は未検証**。実装は既存の web 分岐
+（`DerivedSeriesService` がテンプレートを WADO-RS `/metadata` から取り、`storeDatasets` で STOW）
+にそのまま乗るだけでコード追加は無いが、実 PACS 相手の確認が残っている。
+
+準備（プラグインを 1 本置く。web は導入 UI が使えないため**手置き**する）:
+
+```bash
+# backend の CWD 直下 plugins/ に置く（web 起動時の作業ディレクトリを確認して合わせる）
+mkdir -p plugins/hostapi-save
+cp <GRAPHY-Next>/automator/plugins/hostapi-save/{plugin.json,ui.js} plugins/hostapi-save/
+# 置いたあと backend を再起動（起動時に /api/plugins が走査する）
+```
+
+- [ ] 2D ビューアでシリーズを開き、Plug-ins ＞ **Host API Save** を実行。
+- [ ] **確認ダイアログの「保存先」が「接続中の PACS（STOW-RS で書き戻し）」**になっている
+      （standalone なら「この PC の保管庫」。ここが web/standalone の分岐の目視ポイント）。
+- [ ] 承諾すると backend ログに
+      `derived series created: <UID> (1 instances) from <src> [STOW-RS]`。
+- [ ] **dcm4chee UI2 を再読込 → 当該スタディに `[Plugin] Bone mask` のシリーズが現れる**。
+- [ ] そのインスタンスの属性（UI2 のタグ表示 or `dcmdump`）で出所が残っていること:
+      `ImageType=DERIVED\SECONDARY` / `DerivationDescription` に `hostapi-save` /
+      `ContributingEquipmentSequence` あり / `RescaleSlope=1`・`RescaleIntercept=0`（整数マスクなので恒等）/
+      `RescaleType=HU`。
+- [ ] 拒否（キャンセル）したときは PACS にシリーズが増えないこと。
+- [ ] 元シリーズが変更されていないこと。
+
+> standalone 側の同等確認は `automator/src/spike/hostApiCheck.ts` が自動で行う
+> （backend の一覧・タグダンプを直接読む）。web は driver が未対応なので当面この手動手順で行う。
+
 ### ④ IHE IID 起動
 - [x] `http://localhost:8090/?requestType=STUDY&studyUID=<StudyInstanceUID>` を開くと、検索を介さず
       2D ビューアが当該スタディで直接開く。
