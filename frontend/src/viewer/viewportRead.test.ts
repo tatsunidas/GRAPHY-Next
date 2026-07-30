@@ -3,7 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { describe, expect, it, vi } from "vitest";
-import { readColormapName, readInvert, readVoiWindow, resolveSliceIndex, voiToWindow } from "./viewportRead";
+import { dicomDateToIso, readColormapName, readInvert, readVoiWindow, resolveSliceIndex, voiToWindow } from "./viewportRead";
 import { calibratedUnit } from "./imageInfo";
 
 // imageInfo は Cornerstone 本体と dicom-image-loader を読み込む（後者は import しただけで
@@ -100,5 +100,55 @@ describe("calibratedUnit", () => {
     expect(calibratedUnit({ modality: "CT" })).toBe("HU");
     expect(calibratedUnit({ modality: "MR" })).toBe("");
     expect(calibratedUnit(undefined)).toBe("");
+  });
+});
+
+describe("dicomDateToIso", () => {
+  it("DICOM の DA を ISO 日付へ変換する", () => {
+    expect(dicomDateToIso("20260130")).toBe("2026-01-30");
+    expect(dicomDateToIso(" 20260130 ")).toBe("2026-01-30");
+  });
+
+  it("区切り入りでも読める（実装によっては入ってくる）", () => {
+    expect(dicomDateToIso("2026-01-30")).toBe("2026-01-30");
+    expect(dicomDateToIso("2026.01.30")).toBe("2026-01-30");
+  });
+
+  it("解釈できない値は null（怪しい日付を通さない）", () => {
+    expect(dicomDateToIso("")).toBeNull();
+    expect(dicomDateToIso("2026013")).toBeNull();
+    expect(dicomDateToIso("abcdefgh")).toBeNull();
+    expect(dicomDateToIso(undefined)).toBeNull();
+    expect(dicomDateToIso(20260130)).toBeNull();
+  });
+
+  it("存在しない日付は null（2 月 30 日を通さない）", () => {
+    expect(dicomDateToIso("20260230")).toBeNull();
+    expect(dicomDateToIso("20261301")).toBeNull();
+    expect(dicomDateToIso("20260100")).toBeNull();
+  });
+
+  it("うるう年は正しく通す/弾く", () => {
+    expect(dicomDateToIso("20240229")).toBe("2024-02-29");
+    expect(dicomDateToIso("20260229")).toBeNull();
+  });
+});
+
+describe("dicomDateToIso — dicom-image-loader が返すオブジェクト形", () => {
+  it("{year, month, day} を受ける（metaData は parseDA を通すので文字列ではない）", () => {
+    expect(dicomDateToIso({ year: 2026, month: 1, day: 30 })).toBe("2026-01-30");
+    expect(dicomDateToIso({ year: 2026, month: 12, day: 5 })).toBe("2026-12-05");
+  });
+
+  it("欠けた/非数値のフィールドは null", () => {
+    expect(dicomDateToIso({ year: 2026, month: 1 })).toBeNull();
+    expect(dicomDateToIso({ year: "2026", month: 1, day: 30 })).toBeNull();
+    expect(dicomDateToIso({})).toBeNull();
+    expect(dicomDateToIso(null)).toBeNull();
+  });
+
+  it("オブジェクト形でも存在しない日付は null", () => {
+    expect(dicomDateToIso({ year: 2026, month: 2, day: 30 })).toBeNull();
+    expect(dicomDateToIso({ year: 2026, month: 13, day: 1 })).toBeNull();
   });
 });

@@ -36,6 +36,7 @@ import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
 interface Target {
   tileId: string;
   studyUid: string;
+  studyDate: string | null;
   seriesUid: string;
   seriesLabel: string;
   imageId: string;
@@ -117,6 +118,7 @@ interface RoiSummary {
   label: string | null;
   tileId: string;
   studyUid: string;
+  studyDate: string | null;
   seriesUid: string;
   sopInstanceUid: string | null;
   sliceIndex: number;
@@ -289,6 +291,17 @@ async function main(): Promise<void> {
     check(!!t0?.imageId, "imageId を返す", t0?.imageId);
     check(t0?.c === 0 && t0?.t === 0, "単純シリーズは c=t=0", { c: t0?.c, t: t0?.t });
     check(!!t0?.seriesLabel, "seriesLabel が空でない", t0?.seriesLabel);
+    // H6: スタディの検査日。ISO の日付として解釈できる形で返ること。
+    check(
+      /^\d{4}-\d{2}-\d{2}$/.test(t0?.studyDate ?? ""),
+      "studyDate が ISO 日付（YYYY-MM-DD）で返る",
+      t0?.studyDate,
+    );
+    check(
+      !Number.isNaN(Date.parse(t0?.studyDate ?? "")),
+      "studyDate が実在する日付として解釈できる",
+      t0?.studyDate,
+    );
 
     const s0 = first.states[0];
     check(!!s0, "getViewState(tileId) が値を返す");
@@ -628,6 +641,11 @@ async function main(): Promise<void> {
       check(r.tileId === t0!.tileId, `${tag} tileId が対象タイル`, r.tileId);
       check(r.studyUid === t0!.studyUid, `${tag} studyUid が一致`, r.studyUid);
       check(r.seriesUid === t0!.seriesUid, `${tag} seriesUid が一致`, r.seriesUid);
+      check(
+        r.studyDate === t0!.studyDate,
+        `${tag} ROI にもスタディの検査日が付く（getTargets と一致）`,
+        { roi: r.studyDate, target: t0!.studyDate },
+      );
       check(
         /^\d+(\.\d+)+$/.test(r.sopInstanceUid ?? ""),
         `${tag} sopInstanceUid が DICOM UID（時系列で ROI を再同定する鍵）`,

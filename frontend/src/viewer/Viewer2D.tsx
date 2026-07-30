@@ -38,7 +38,7 @@ import { listSpheres3D, sphereCanvasCircle, subscribeSphere3D, type SphereCanvas
 import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
 import { applyTransform, isPanned, readTransform, type ViewTransform, FIT_TRANSFORM } from "./transform";
 import { readImageInfo, sampleAtCanvas, computeSliceSpacing, calibratedUnit, type ImageInfo, type PixelSample } from "./imageInfo";
-import { readColormapName, readInvert, resolveSliceIndex } from "./viewportRead";
+import { dicomDateToIso, readColormapName, readInvert, resolveSliceIndex } from "./viewportRead";
 import { readModalitySlice } from "./pixelCalibration";
 import { autoWindow, rasterizeOverlay, type OverlayWindow } from "./overlayRaster";
 import { encodeFrames, framePixelsBase64, hasNonFinite } from "./derivedSeriesEncode";
@@ -1170,6 +1170,17 @@ export function Viewer2D({
     return { imageId, seriesUid, modality: infoRef.current?.modality ?? "" };
   };
 
+  // スタディの検査日（H6）。**DICOM のメタから読む**（画面の prop を引き回さない）:
+  // 出所が 1 つになり、シリーズ/タイル構成が変わっても壊れない。解釈できない値は null。
+  const studyDateOf = (imageId: string): string | null => {
+    try {
+      const m = metaData.get("generalStudyModule", imageId) as { studyDate?: unknown } | undefined;
+      return dicomDateToIso(m?.studyDate);
+    } catch {
+      return null;
+    }
+  };
+
   // プラグイン host API（fw/plugin-architecture.md §7）の H1: いま何を表示しているか。
   // 対象の識別は tileId（=commandKey）側が持つので、ここではその中身だけを返す。
   const getTargetInfo = (): ViewerTargetInfo | null => {
@@ -1178,6 +1189,7 @@ export function Viewer2D({
     if (!imageId || !ctx) return null;
     return {
       studyUid: ctx.studyUid,
+      studyDate: studyDateOf(imageId),
       seriesUid: ctx.seriesUid,
       seriesLabel: ctx.seriesLabel,
       imageId,
@@ -1434,6 +1446,7 @@ export function Viewer2D({
         tool,
         label: meta?.label ?? null,
         studyUid: ctx.studyUid,
+        studyDate: studyDateOf(refId),
         seriesUid: ctx.seriesUid,
         sopInstanceUid: sop ?? null,
         sliceIndex,
