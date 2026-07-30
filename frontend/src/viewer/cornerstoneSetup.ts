@@ -20,6 +20,7 @@ import {
   ZoomTool,
   WindowLevelTool,
   LengthTool,
+  BidirectionalTool,
   AngleTool,
   EllipticalROITool,
   RectangleROITool,
@@ -105,6 +106,9 @@ export function ensureCornerstoneInitialized(): Promise<void> {
       addTool(WindowLevelTool);
       // 計測（ROI）ツール。各 base ビューポートのツールグループへ後で追加し、setActiveTool で切替。
       addTool(LengthTool);
+      // RECIST 1.1 の標準計測（長径＋それに直交する短径を 1 つの注釈で持つ）。
+      // プラグイン host API の H5 は、この 2 軸を measurements.length / shortAxis として返す。
+      addTool(BidirectionalTool);
       addTool(AngleTool);
       addTool(EllipticalROITool);
       addTool(RectangleROITool);

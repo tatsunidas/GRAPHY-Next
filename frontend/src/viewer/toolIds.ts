@@ -8,6 +8,7 @@ import {
   PanTool,
   ZoomTool,
   LengthTool,
+  BidirectionalTool,
   AngleTool,
   EllipticalROITool,
   RectangleROITool,
@@ -28,6 +29,8 @@ export const TOOL_IDS = {
   pan: PanTool.toolName,
   zoom: ZoomTool.toolName,
   length: LengthTool.toolName,
+  /** 双方向計測（長径＋直交短径）。RECIST 1.1 の計測はこれを使う。 */
+  bidirectional: BidirectionalTool.toolName,
   angle: AngleTool.toolName,
   ellipse: EllipticalROITool.toolName,
   rect: RectangleROITool.toolName,

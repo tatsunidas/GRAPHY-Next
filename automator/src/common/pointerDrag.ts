@@ -22,17 +22,23 @@ export async function dragOnCanvasHost(
   dy: number,
   button: 0 | 1 | 2,
   steps = 10,
+  /**
+   * ドラッグの始点（canvas 内の相対位置 0〜1）。既定は中央。
+   * 複数の注釈を作るときは**始点をずらす**こと: 既定の中央から引くと、既にそこにある注釈の
+   * ハンドルを掴んで「新規作成ではなく既存の移動」になる（実機で踏んだ）。
+   */
+  start: { fracX: number; fracY: number } = { fracX: 0.5, fracY: 0.5 },
 ): Promise<void> {
   const buttons = button === 0 ? 1 : button === 1 ? 4 : 2;
-  const args = JSON.stringify({ hostTestId, dx, dy, button, buttons, steps });
+  const args = JSON.stringify({ hostTestId, dx, dy, button, buttons, steps, start });
   await page.evaluate(`
     (function (args) {
       var host = document.querySelector('[data-testid="' + args.hostTestId + '"]');
       var canvas = host && host.querySelector("canvas");
       if (!canvas) throw new Error('canvas not found under [data-testid="' + args.hostTestId + '"]');
       var rect = canvas.getBoundingClientRect();
-      var cx = rect.left + rect.width / 2;
-      var cy = rect.top + rect.height / 2;
+      var cx = rect.left + rect.width * args.start.fracX;
+      var cy = rect.top + rect.height * args.start.fracY;
       function fire(type, x, y, btns) {
         var common = {
           bubbles: true, cancelable: true, composed: true,

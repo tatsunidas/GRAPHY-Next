@@ -554,6 +554,7 @@ export const ja: Record<string, string> = {
   "viewer2d.imagej.bridged": "ImageJ に HyperStack を送りました（Z{{z}} C{{c}} T{{tt}}）。",
   "viewer2d.imagej.bridgeFailed": "ImageJ ブリッジに失敗しました（表示環境が必要 / シリーズ未取得）。",
   "viewer2d.roi.length": "長さ",
+  "viewer2d.roi.bidirectional": "長径・短径（RECIST）",
   "viewer2d.roi.angle": "角度",
   "viewer2d.roi.ellipse": "楕円 ROI",
   "viewer2d.roi.rect": "矩形 ROI",

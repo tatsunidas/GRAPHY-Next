@@ -1,7 +1,7 @@
 # GRAPHY-Next プラグインの仕組み（解説）
 
 > 作成日: 2026-07-29（更新: 2026-07-29 — §6 にデモ リポジトリ 4 本、§7 に host API / CSP の制約を追記。
-> さらに host API の H1/H2 実装を反映＝残る制約は H3 画素読み出しと CSP）
+> さらに host API の H1〜H5 実装を反映＝残る制約は ROI/マスクの永続化と CSP）
 > 目的: **この 1 本を読めば、別セッションのエージェントも初見の人も全体像を把握できる**ようにする。
 > GRAPHY Lab の解説ページの原稿もここから抽出する。
 >
@@ -278,11 +278,14 @@ GitHub secrets に登録するだけ。以後リリースごとの追加作業�
   1 回目に本人かどうかは①の公式鍵でしか担保されない。
 - **web でのユーザー導入は実現していない。** 実現するならクライアント WASM か、
   サーバー側サンドボックス（DICOMweb サイドカー）が必要。
-- ✅ **host API は H1〜H4b まで揃った**（2026-07-29〜30・0.1.9 以降）。`getTargets()`（何を見ているか）/
+- ✅ **host API は H1〜H5 まで揃った**（2026-07-29〜30・0.1.9 以降）。`getTargets()`（何を見ているか）/
   `getViewState()`（W/L・LUT・affine）/ `getPixelData()`（**校正済み画素**＝CT なら HU。表示 8bit ではない）/
   `showOverlay()`（結果を重ねる）/ `saveDerivedSeries()`（**派生シリーズとして保存**）。
   画像処理プラグインは「読む→計算する→見せる→残す」まで公式契約だけで書け、DOM 依存もキャンバス
-  読み取りも不要になった。→ [`plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張h1h4b-実装済み)
+  読み取りも不要になった。さらに `getRois()`（**ユーザーが描いた計測**）が入り、計測ドリブンの
+  プラグイン（RECIST 1.1 等）も書けるようになった。長径・短径の算出は本体に閉じてある
+  （プラグインに幾何を書かせると本体の計測値とずれたときにどちらが正しいか言えなくなる）。
+  → [`plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張h1h5-実装済み)
   **保存には本体が必ず確認ダイアログを出し**（抑止不可）、保存物には `SeriesDescription` の
   `[Plugin] ` 接頭辞と `DerivationDescription` / `ContributingEquipmentSequence` の id・版が必ず残る。
   **元シリーズは変更されない。** ただし **web（外部 PACS への STOW-RS 書き戻し）は未検証**

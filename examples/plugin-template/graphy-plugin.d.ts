@@ -160,6 +160,72 @@ export interface DerivedSeriesResult {
   error?: string;
 }
 
+/**
+ * ROI 1 件の計測値。**取れない項目は `undefined`**（「測っていない」と「0 だった」を区別する）。
+ *
+ * <p>長径・短径が **2 系統ある**のは意図的で、黙って片方を代入しないため。
+ * `Bidirectional`（ROI メニューの「長径・短径（RECIST）」）はユーザーが 2 軸を明示的に引くので
+ * `length` / `shortAxis` を使い、楕円・矩形・自由曲線は `longAxisMm` / `shortAxisMm`
+ * （形状から本体が算出）を使う。**0.1.9 以降**。
+ */
+export interface ViewerRoiMeasurements {
+  /** ツール自身の主計測 (mm)。Length の長さ、Bidirectional の長軸。 */
+  length?: number;
+  /** Bidirectional の短軸 (mm)。ユーザーが長軸に直交して引いた軸。 */
+  shortAxis?: number;
+  /** 形状の頂点から本体が算出した最遠 2 点間距離 (mm)＝RECIST の「長径」。 */
+  longAxisMm?: number;
+  /** 上記の長径に**直交**する方向の広がり (mm)＝RECIST の「短径」。全方位の最小幅ではない。 */
+  shortAxisMm?: number;
+  /** 長径の両端（画素座標）。 */
+  longAxisEnds?: [[number, number], [number, number]];
+  /** 面 ROI の面積 (mm²)。 */
+  area?: number;
+  /** ROI 内のモダリティ値統計（CT なら HU。表示 W/L は掛かっていない）。 */
+  mean?: number;
+  stdDev?: number;
+  min?: number;
+  max?: number;
+  /** 統計値の単位（"HU" / "SUVbw" / ""）。 */
+  unit?: string;
+}
+
+/**
+ * ユーザーが描いた ROI（計測・幾何注釈）1 件。`host.getRois()` の要素。**0.1.9 以降**。
+ *
+ * <p>⚠ **`roiUid` はセッション内でのみ安定**（本体に ROI の永続化が無い）。時系列で同じ病変を
+ * 追うなら `sopInstanceUid` ＋ `points` ＋自分で振った ID で記録し、`roiUid` を鍵にしないこと。
+ */
+export interface ViewerRoi {
+  roiUid: string;
+  /** ツール種別（"Length" / "Bidirectional" / "EllipticalROI" / "PlanarFreehandROI" 等）。 */
+  tool: string;
+  /** ROI マネージャで付けたラベル。未設定なら null。 */
+  label: string | null;
+  /** どのタイルで読んだ ROI か。 */
+  tileId: string;
+  studyUid: string;
+  seriesUid: string;
+  /** 解決できなければ null。 */
+  sopInstanceUid: string | null;
+  /** 表示スタック内の 0 始まり index。 */
+  sliceIndex: number;
+  /**
+   * ROI の Z スコープ。**`"all"`（全スライス共通の global ROI）だと `sliceIndex` /
+   * `sopInstanceUid` は「いま見ているスライス」を指すだけで病変の位置ではない**。
+   * 計測を時系列で記録する用途では弾くこと。
+   */
+  zScope: number | "all" | null;
+  c: number;
+  t: number;
+  /** 頂点（画像画素座標。x=列, y=行, 0 始まり・サブピクセル可）。 */
+  points: Array<[number, number]>;
+  /** 面内画素間隔 [列方向(x), 行方向(y)] mm。不明な軸は null。 */
+  spacing: [number | null, number | null];
+  measurements: ViewerRoiMeasurements;
+  visible: boolean;
+}
+
 interface PluginHostBase {
   /** 自分の plugin.json の id。 */
   pluginId: string;
@@ -226,6 +292,33 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * 保存物には `[Plugin] ` 接頭辞とプラグイン id・版が必ず残る。**元シリーズは変更されない。**
    */
   saveDerivedSeries: (tileId: string | undefined, req: DerivedSeriesRequest) => Promise<DerivedSeriesResult>;
+  /**
+   * ユーザーが描いた **ROI（計測・幾何注釈）を読む**。`tileId` 省略時は**対象タイル全部**
+   * （他の問い合わせ系は「先頭タイル」だがこれだけ違う。ベースラインと追跡を並べて開く用途を想定）。
+   * ROI が無ければ空配列。**0.1.9 以降**。
+   *
+   * <p>**呼ぶたびに現在値を読む**。ユーザーは ROI を編集し続けるので、活性化時の
+   * スナップショットを持ち回らないこと。
+   */
+  getRois: (tileId?: string) => ViewerRoi[];
+  /**
+   * ROI に紐付けた**このプラグインの属性**を読む。未設定なら空オブジェクト。
+   * キーは自動で `plugin.<pluginId>.` 名前空間に置かれるので、他プラグインの属性とは混ざらない。
+   */
+  getRoiMeta: (roiUid: string) => Record<string, string>;
+  /**
+   * ROI に**このプラグインの属性**を書く（既存キーはマージ更新）。ROI が無ければ false。
+   * 例: 病変の追跡 ID・標的/非標的の区分・測定ステータス。
+   *
+   * <p>属性は ROI と同じ寿命しか持たない（本体に ROI の永続化が無いため、アプリ再起動で消える）。
+   * 永続化が要るならプラグイン側で保存すること。
+   */
+  setRoiMeta: (roiUid: string, patch: Record<string, string>) => boolean;
+  /**
+   * ROI の追加・変更・削除を購読する。返り値を呼ぶと解除（ダイアログを閉じるときは必ず解除する）。
+   * **何が変わったかは渡さない**ので、通知を受けたら `getRois()` を読み直すこと。
+   */
+  subscribeRois: (listener: () => void) => () => void;
 }
 
 /** MainScreen 系（mainscreen.menu）に渡るコンテキスト。 */

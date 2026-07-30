@@ -50,5 +50,17 @@ export function activate(host) {
     //       rows: px.rows, cols: px.cols, unit: px.unit,
     //     }).then((res) => host.notify(res.ok ? "saved" : res.cancelled ? "cancelled" : res.error));
     //   });
+    //
+    // ユーザーが描いた ROI（計測）を読みたい場合（H5）。長径・短径は 2 系統あるので注意:
+    // Bidirectional（ROI メニューの「長径・短径（RECIST）」）はユーザーが引いた軸
+    // = measurements.length / shortAxis、楕円・自由曲線は形状からの算出値
+    // = measurements.longAxisMm / shortAxisMm を使う。
+    //   for (const roi of host.getRois()) {
+    //     if (roi.zScope === "all") continue;   // global ROI はスライス位置を持たない
+    //     const long = roi.measurements.length ?? roi.measurements.longAxisMm;
+    //     host.notify(`${roi.tool} slice ${roi.sliceIndex + 1}: ${long?.toFixed(1)} mm`);
+    //   }
+    //   // 編集に追随する（差分は渡らないので読み直す。閉じるときに解除する）。
+    //   const unsub = host.subscribeRois(() => { /* getRois() を読み直す */ });
   }
 }

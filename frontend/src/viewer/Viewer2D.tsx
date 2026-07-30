@@ -10,6 +10,7 @@ import {
   ZoomTool,
   WindowLevelTool,
   LengthTool,
+  BidirectionalTool,
   AngleTool,
   EllipticalROITool,
   RectangleROITool,
@@ -29,7 +30,7 @@ import { UI_ICON_FILES, ACTIVE_ICON_STYLE } from "../icons/toolIcons";
 import { emitToast } from "./toast";
 import { ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID } from "./toolIds";
 import { setViewerContext, clearViewerContext, getViewerContext, type ViewerContext } from "./viewerContext";
-import { setRoiMaskMeta, subscribeRoiMaskStore } from "./roiMaskStore";
+import { getRoiMaskMeta, setRoiMaskMeta, subscribeRoiMaskStore } from "./roiMaskStore";
 import { reconcileGlobalAnnotations } from "./globalRoiSync";
 import { listSpheres3D, sphereCanvasCircle, subscribeSphere3D, type SphereCanvasCircle } from "./sphere3dStore";
 import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
@@ -53,9 +54,11 @@ import {
   type ViewerOverlay,
   type ViewerPixelData,
   type ViewerPixelDataOptions,
+  type ViewerRoi,
   type ViewerTargetInfo,
   type ViewerViewState,
 } from "./viewerCommands";
+import { buildPluginMeta, computeCalipers, hasShapeCalipers, pickPluginMeta, readRoiStats } from "./roiRead";
 import { subscribeSuvStore, suvForImageId, seriesUidOf } from "./suvStore";
 import { resolveOverlay } from "./overlayText";
 import { useOverlayConfig } from "./overlayConfig";
@@ -100,6 +103,7 @@ const LUT_COLORMAP_PREFIX = "graphy-lut-";
 // 計測（ROI）ツール名。setActiveTool で左ドラッグに割り当てる。
 const MEASURE_TOOLS = [
   LengthTool.toolName,
+  BidirectionalTool.toolName,
   AngleTool.toolName,
   EllipticalROITool.toolName,
   RectangleROITool.toolName,
@@ -1357,6 +1361,113 @@ export function Viewer2D({
     };
   };
 
+  // H5: このタイルが表示中のスタックに乗っている ROI（計測・幾何注釈）。
+  // **幾何の算出は roiRead に委譲する**（長径・短径をプラグイン側に書かせると本体の計測値と
+  // ずれたときどちらが正しいか言えなくなる＝計測の単一入口。CLAUDE.md のルール 3 と同趣旨）。
+  const getRois = (): ViewerRoi[] => {
+    const ctx = roiContextRef.current;
+    const ids = imageIdsRef.current;
+    if (!ctx || !ids.length) return [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let all: any[];
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      all = csAnnotation.state.getAllAnnotations() as any[];
+    } catch {
+      return [];
+    }
+    const out: ViewerRoi[] = [];
+    for (const a of all) {
+      const uid = a?.annotationUID as string | undefined;
+      const refId = a?.metadata?.referencedImageId as string | undefined;
+      if (!uid || !refId) continue;
+      // このタイルが表示中のスタックに乗っていない ROI（別シリーズ・別 c/t）は出さない。
+      const sliceIndex = ids.indexOf(refId);
+      if (sliceIndex < 0) continue;
+      const world = (a.data?.contour?.polyline ?? a.data?.handles?.points ?? []) as number[][];
+      if (!world.length) continue;
+      const points: Array<[number, number]> = [];
+      for (const w of world) {
+        try {
+          const ic = utilities.worldToImageCoords(refId, w as Types.Point3) as [number, number] | undefined;
+          if (ic && Number.isFinite(ic[0]) && Number.isFinite(ic[1])) points.push([ic[0], ic[1]]);
+        } catch {
+          /* 変換できない頂点は落とす（幾何が無いシリーズなど） */
+        }
+      }
+      if (!points.length) continue;
+      // 面内間隔は ROI が乗っているスライスの ImageInfo から（表示中スライスなら使い回す）。
+      const inf = sliceIndex === indexRef.current ? infoRef.current : readImageInfo(refId);
+      const sx = inf?.columnPixelSpacing ?? null;
+      const sy = inf?.rowPixelSpacing ?? null;
+      const stats = readRoiStats(a.data?.cachedStats, refId);
+      const tool = (a.metadata?.toolName as string) ?? "";
+      // 形状ベースの長径・短径は「輪郭として意味づけられるツール」だけに出す
+      // （Bidirectional の 4 ハンドルの最遠距離はユーザーが引いた長軸より長くなり得る）。
+      const cal = hasShapeCalipers(tool) ? computeCalipers(points, sx, sy) : null;
+      // ツール値の length / shortAxis は **mm のときだけ**出す。画素間隔が無いシリーズでは
+      // Cornerstone が px で計算するため、そのまま mm として渡すと単位が壊れる。
+      const toolMm = stats.lengthUnit === undefined || stats.lengthUnit === "mm";
+      const meta = getRoiMaskMeta(uid);
+      const sop = (metaData.get("sopCommonModule", refId) as { sopInstanceUID?: string } | undefined)
+        ?.sopInstanceUID;
+      let visible = true;
+      try {
+        visible = csAnnotation.visibility.isAnnotationVisible(uid) ?? true;
+      } catch {
+        /* 既定 true */
+      }
+      out.push({
+        roiUid: uid,
+        tool,
+        label: meta?.label ?? null,
+        studyUid: ctx.studyUid,
+        seriesUid: ctx.seriesUid,
+        sopInstanceUid: sop ?? null,
+        sliceIndex,
+        zScope: meta?.scope?.z ?? null,
+        c: ctx.c,
+        t: ctx.t,
+        points,
+        spacing: [sx, sy],
+        measurements: {
+          length: toolMm ? stats.length : undefined,
+          shortAxis: toolMm ? stats.width : undefined,
+          longAxisMm: cal?.longAxisMm,
+          shortAxisMm: cal?.shortAxisMm,
+          longAxisEnds: cal?.longAxisEnds as [[number, number], [number, number]] | undefined,
+          area: stats.area,
+          mean: stats.mean,
+          stdDev: stats.stdDev,
+          min: stats.min,
+          max: stats.max,
+          unit: stats.unit,
+        },
+        visible,
+      });
+    }
+    // プラグインが安定した順序を前提にできるよう、スライス→UID で並べる
+    // （Cornerstone の列挙順はツール登録順に依存し、契約として保証できない）。
+    out.sort((p, q) => (p.sliceIndex - q.sliceIndex) || (p.roiUid < q.roiUid ? -1 : p.roiUid > q.roiUid ? 1 : 0));
+    return out;
+  };
+
+  // H5: ROI に紐付くプラグイン属性。名前空間の付与/剥がしは roiRead の純関数へ委譲する
+  // （プラグインが本体や他プラグインのキーを踏めないようにするのは host の責任なので、
+  // その規則はテストで固定してある＝`roiRead.test.ts`）。
+  const getRoiMeta = (roiUid: string, pluginId: string): Record<string, string> =>
+    pickPluginMeta(getRoiMaskMeta(roiUid)?.custom, pluginId);
+
+  const setRoiMeta = (roiUid: string, pluginId: string, patch: Record<string, string>): boolean => {
+    try {
+      if (!csAnnotation.state.getAnnotation(roiUid)) return false;
+    } catch {
+      return false;
+    }
+    setRoiMaskMeta(roiUid, { custom: buildPluginMeta(pluginId, patch) });
+    return true;
+  };
+
   // SUV 化時に臨床標準ウィンドウ（SUV 0〜7）を適用する。voiRange はモダリティ値(Bq/mL)空間のため
   // SUV=modalityValue×scale の逆算で modalityValue [0, 7/scale] を設定する（本家 setSUVFactor 準拠）。
   const applySuvWindow = (scale: number) => {
@@ -1467,13 +1578,15 @@ export function Viewer2D({
   const commandsRef = useRef<ViewerCommands>({
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
     getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
-    validateDerivedSeries, saveDerivedSeries, setActiveTool, setBrushSize, setWandTolerance, clearAnnotations,
+    validateDerivedSeries, saveDerivedSeries, setActiveTool, setBrushSize, setWandTolerance,
+    getRois, getRoiMeta, setRoiMeta, clearAnnotations,
     undo, redo,
   });
   commandsRef.current = {
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
     getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
-    validateDerivedSeries, saveDerivedSeries, setActiveTool, setBrushSize, setWandTolerance, clearAnnotations,
+    validateDerivedSeries, saveDerivedSeries, setActiveTool, setBrushSize, setWandTolerance,
+    getRois, getRoiMeta, setRoiMeta, clearAnnotations,
     undo, redo,
   };
   useEffect(() => {
@@ -1501,6 +1614,9 @@ export function Viewer2D({
       setActiveTool: (n) => commandsRef.current.setActiveTool(n),
       setBrushSize: (s) => commandsRef.current.setBrushSize(s),
       setWandTolerance: (v) => commandsRef.current.setWandTolerance(v),
+      getRois: () => commandsRef.current.getRois(),
+      getRoiMeta: (u, p) => commandsRef.current.getRoiMeta(u, p),
+      setRoiMeta: (u, p, patch) => commandsRef.current.setRoiMeta(u, p, patch),
       clearAnnotations: () => commandsRef.current.clearAnnotations(),
       undo: () => commandsRef.current.undo(),
       redo: () => commandsRef.current.redo(),

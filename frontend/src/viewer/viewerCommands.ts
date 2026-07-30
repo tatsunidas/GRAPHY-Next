@@ -147,6 +147,95 @@ export interface ViewerDerivedSeriesResult {
   error?: string;
 }
 
+/**
+ * ROI 1 件の計測値（プラグイン host API の H5）。**取れない項目は `undefined`**
+ * ＝「測っていない」と「0 だった」を区別する（0 で埋めない）。
+ *
+ * <p>長径・短径が**2 系統ある**のは意図的で、黙って片方を代入しないためである。
+ * ユーザーが軸を明示的に引く Bidirectional では `length` / `shortAxis`（＝ユーザーの意図）を、
+ * 楕円・矩形・自由曲線では `longAxisMm` / `shortAxisMm`（＝形状から本体が算出）を使う。
+ */
+export interface ViewerRoiMeasurements {
+  /**
+   * ツール自身の主計測 (mm)。Length の長さ、Bidirectional の長軸。
+   * **画素間隔が無いシリーズでは `undefined`**（Cornerstone は px で計算するため、mm として出さない）。
+   */
+  length?: number;
+  /** Bidirectional の短軸 (mm)。ユーザーが長軸に直交して引いた軸。 */
+  shortAxis?: number;
+  /**
+   * 形状の頂点から本体が算出した最遠 2 点間距離 (mm)＝RECIST の「長径」。
+   * 画素間隔が不明なら `undefined`（mm を捏造しない）。算出は `roiRead.computeCalipers()`。
+   *
+   * <p>**輪郭として意味づけられるツールにだけ出る**（楕円・矩形・自由曲線・Length）。
+   * Bidirectional / Angle / Probe では `undefined` になる: Bidirectional は交差する 2 線分で、
+   * ハンドル 4 点の最遠距離が**ユーザーが引いた長軸より長くなり得る**ため（短軸を端寄りに引いた場合）。
+   * それらのツールでは `length` / `shortAxis` だけが正しい値である。
+   */
+  longAxisMm?: number;
+  /** 上記の長径に**直交**する方向の広がり (mm)＝RECIST の「短径」。全方位の最小幅ではない。 */
+  shortAxisMm?: number;
+  /** 長径の両端（画素座標）。プラグインが確認表示に使う。 */
+  longAxisEnds?: [[number, number], [number, number]];
+  /** 面 ROI の面積 (mm²)。 */
+  area?: number;
+  /** ROI 内のモダリティ値統計（CT なら HU。表示 W/L は掛かっていない）。 */
+  mean?: number;
+  stdDev?: number;
+  min?: number;
+  max?: number;
+  /**
+   * 上記の**統計値**（mean/stdDev/min/max）の単位（"HU" / "SUVbw"）。取れなければ `undefined`。
+   * 長さ・面積の単位ではない（長さは常に mm、面積は mm²）。
+   */
+  unit?: string;
+}
+
+/**
+ * ROI（計測・幾何注釈）1 件（プラグイン host API の H5）。
+ *
+ * <p>⚠ **`roiUid` はセッション内でのみ安定**である。本体に ROI の永続化が無く
+ * （`fw/roi-manager-design.md` の M5 が未完）、アプリを再起動すると別 UID の別 ROI になる。
+ * 時系列で同じ病変を追う（RECIST 等）プラグインは、`roiUid` ではなく
+ * **`sopInstanceUid` ＋ `points`（画素座標）＋プラグイン自身が付けた ID** で記録すること。
+ */
+export interface ViewerRoi {
+  /** Cornerstone annotation UID。**セッション内でのみ安定**（上記の注意を参照）。 */
+  roiUid: string;
+  /** ツール種別（"Length" / "Bidirectional" / "EllipticalROI" / "PlanarFreehandROI" 等）。 */
+  tool: string;
+  /** ROI マネージャで付けたラベル。未設定なら null。 */
+  label: string | null;
+  /** この ROI が乗っている DICOM インスタンスの識別（時系列で ROI を再同定する鍵）。 */
+  studyUid: string;
+  seriesUid: string;
+  /** 解決できなければ null。ThickSlab 中は注釈を作れないので通常は取れる。 */
+  sopInstanceUid: string | null;
+  /** 表示スタック内の 0 始まり index。 */
+  sliceIndex: number;
+  /**
+   * ROI の Z スコープ（`roiMaskStore` のメタ）。
+   *
+   * <p>⚠ `"all"`（全スライス共通の **global ROI**）の場合、本体は `referencedImageId` を
+   * 表示スライスへ追従させる（`globalRoiSync.ts`）ため、**`sliceIndex` / `sopInstanceUid` は
+   * 「いまユーザーが見ているスライス」を指すだけで、病変の位置ではない**。
+   * 計測を時系列で記録する用途（RECIST 等）では `"all"` の ROI を弾くこと。
+   * スコープ未登録は null。
+   */
+  zScope: number | "all" | null;
+  /** ZCT モデルのチャンネル / 時相。 */
+  c: number;
+  t: number;
+  /** 頂点（画像画素座標。x=列, y=行, 0 始まり・サブピクセル可）。 */
+  points: Array<[number, number]>;
+  /** 面内画素間隔 [列方向(x), 行方向(y)] mm。不明な軸は null。 */
+  spacing: [number | null, number | null];
+  /** 計測値。 */
+  measurements: ViewerRoiMeasurements;
+  /** ROI マネージャでの表示 ON/OFF。 */
+  visible: boolean;
+}
+
 /** 画面（複数タイル）視点での H1 の 1 件。どのタイルの話かが要るので tileId を持つ。 */
 export interface ViewerTarget extends ViewerTargetInfo {
   tileId: string;
@@ -159,6 +248,11 @@ export interface ViewerTileViewState extends ViewerViewState {
 
 /** 画面視点での H3。 */
 export interface ViewerTilePixelData extends ViewerPixelData {
+  tileId: string;
+}
+
+/** 画面視点での H5。どのタイルで読んだ ROI かが要るので tileId を持つ。 */
+export interface ViewerTileRoi extends ViewerRoi {
   tileId: string;
 }
 
@@ -217,6 +311,21 @@ export interface ViewerCommands {
   setBrushSize(size: number): void;
   /** 2D Wand のトレランス（シード輝度からの許容差）。 */
   setWandTolerance(tol: number): void;
+  /**
+   * このタイルが表示中のスタックに乗っている ROI（計測・幾何注釈）を読む（H5）。
+   * ROI が無ければ空配列。**呼ぶたびに現在値を読む**（ユーザーは編集を続けるため）。
+   */
+  getRois(): ViewerRoi[];
+  /**
+   * ROI に紐付くプラグイン属性を読む（H5）。キーは `plugin.<pluginId>.` を剥がして返す。
+   * 未登録なら空オブジェクト。
+   */
+  getRoiMeta(roiUid: string, pluginId: string): Record<string, string>;
+  /**
+   * ROI に紐付くプラグイン属性を書く（H5）。キーは `plugin.<pluginId>.` を前置して保存するので、
+   * プラグインが本体や他プラグインのキーを踏めない。ROI が存在しなければ false。
+   */
+  setRoiMeta(roiUid: string, pluginId: string, patch: Record<string, string>): boolean;
   /** 計測（ROI）注釈を全消去。 */
   clearAnnotations(): void;
   undo(): void;

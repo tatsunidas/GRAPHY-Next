@@ -10,8 +10,10 @@ import type {
   ViewerDerivedSeriesResult,
   ViewerOverlay,
   ViewerPixelDataOptions,
+  ViewerRoiMeasurements,
   ViewerTarget,
   ViewerTilePixelData,
+  ViewerTileRoi,
   ViewerTileViewState,
 } from "../viewer/viewerCommands";
 
@@ -20,8 +22,10 @@ export type {
   ViewerDerivedSeriesResult,
   ViewerOverlay,
   ViewerPixelDataOptions,
+  ViewerRoiMeasurements,
   ViewerTarget,
   ViewerTilePixelData,
+  ViewerTileRoi,
   ViewerTileViewState,
 };
 
@@ -126,6 +130,45 @@ export interface Viewer2DPluginHost extends PluginHostBase {
     tileId: string | undefined,
     req: ViewerDerivedSeriesRequest,
   ) => Promise<ViewerDerivedSeriesResult>;
+  /**
+   * ユーザーが描いた **ROI（計測・幾何注釈）を読む**（H5）。`tileId` 省略時は**対象タイル全部**
+   * （ベースラインと追跡を並べて開いている場合に両方読めるようにするため。H1〜H4 の「先頭タイル」と違う）。
+   * ROI が無ければ空配列。
+   *
+   * <p>長径・短径は**2 系統返る**（`measurements`）。Bidirectional はユーザーが軸を明示的に引くので
+   * `length` / `shortAxis`（ツール値）を、楕円・矩形・自由曲線は `longAxisMm` / `shortAxisMm`
+   * （形状から本体が算出＝最遠 2 点と、それに直交する広がり）を使う。**黙って片方を代入しない**。
+   * 画素間隔が不明なシリーズでは算出値は `undefined`（mm を捏造しない）。
+   *
+   * <p>⚠ **`roiUid` はセッション内でのみ安定**である（本体に ROI の永続化が無い）。
+   * 時系列で同じ病変を追うなら `sopInstanceUid` ＋ `points`（画素座標）＋プラグイン自身の ID で
+   * 記録し、`roiUid` を鍵にしないこと。また `zScope === "all"`（global ROI）は
+   * `sliceIndex` / `sopInstanceUid` が「いま見ているスライス」を指すだけなので、計測記録では弾くこと。
+   *
+   * <p>**呼ぶたびに現在値を読む**。ユーザーは ROI を編集し続けるので、活性化時の
+   * スナップショットを持ち回らないこと。
+   */
+  getRois: (tileId?: string) => ViewerTileRoi[];
+  /**
+   * ROI に紐付けた**このプラグインの属性**を読む（H5）。未設定なら空オブジェクト。
+   * キーは自動で `plugin.<pluginId>.` 名前空間に置かれるので、他プラグインや本体の属性とは混ざらない。
+   */
+  getRoiMeta: (roiUid: string) => Record<string, string>;
+  /**
+   * ROI に**このプラグインの属性**を書く（H5）。既存キーはマージ更新。ROI が無ければ false。
+   * 例: 病変の追跡 ID・標的/非標的の区分・測定ステータス。
+   *
+   * <p>属性は ROI と同じ寿命しか持たない（本体に ROI の永続化が無いため、アプリ再起動で消える）。
+   * 永続化が要るならプラグイン側で保存すること。
+   */
+  setRoiMeta: (roiUid: string, patch: Record<string, string>) => boolean;
+  /**
+   * ROI の追加・変更・削除を購読する（H5）。返り値を呼ぶと解除。
+   *
+   * <p>**何が変わったかは渡さない**（差分を契約にすると本体の内部表現に縛られる）。
+   * 通知を受けたら `getRois()` を読み直すこと。ダイアログを閉じるときは必ず解除する。
+   */
+  subscribeRois: (listener: () => void) => () => void;
 }
 
 /** MainScreen 系プラグイン（mainscreen.menu）に渡すコンテキスト。 */

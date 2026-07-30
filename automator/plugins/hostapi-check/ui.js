@@ -90,6 +90,82 @@ export async function activate(host) {
       }) === false,
     };
   }
+  // --- H5: ユーザーが描いた ROI（計測）の読み出し ---
+  // 購読は activate ごとに張り直さない（メニューは何度も押される）。1 本だけ張って発火回数を数える。
+  if (!window.__hostApiRoiWatch) {
+    var watch = { events: 0, unsub: null };
+    watch.unsub = host.subscribeRois(function () {
+      watch.events++;
+    });
+    window.__hostApiRoiWatch = watch;
+  }
+
+  var rois = host.getRois();
+  payload.rois = rois.map(function (r) {
+    // 長径・短径の自己整合を **プラグイン側でも** 検算する: points（画素座標）× spacing から
+    // 直接求めた最遠 2 点間距離が、本体が返す longAxisMm と一致するはず。
+    var sx = r.spacing[0];
+    var sy = r.spacing[1];
+    var maxSq = 0;
+    if (sx && sy) {
+      for (var i = 0; i < r.points.length; i++) {
+        for (var j = i + 1; j < r.points.length; j++) {
+          var dx = (r.points[j][0] - r.points[i][0]) * sx;
+          var dy = (r.points[j][1] - r.points[i][1]) * sy;
+          var d2 = dx * dx + dy * dy;
+          if (d2 > maxSq) maxSq = d2;
+        }
+      }
+    }
+    return {
+      roiUid: r.roiUid,
+      tool: r.tool,
+      label: r.label,
+      tileId: r.tileId,
+      studyUid: r.studyUid,
+      seriesUid: r.seriesUid,
+      sopInstanceUid: r.sopInstanceUid,
+      sliceIndex: r.sliceIndex,
+      zScope: r.zScope,
+      c: r.c,
+      t: r.t,
+      pointCount: r.points.length,
+      spacing: r.spacing,
+      measurements: r.measurements,
+      visible: r.visible,
+      // プラグイン側で独立に計算した長径（本体の longAxisMm と一致すべき）。
+      recomputedLongMm: maxSq > 0 ? Math.sqrt(maxSq) : null,
+    };
+  });
+  payload.roisUnknownTile = host.getRois("no-such-tile");
+  payload.roiEvents = window.__hostApiRoiWatch.events;
+
+  // ROI 属性の往復と、購読の解除が本当に効くか。
+  if (rois.length > 0) {
+    var uid = rois[0].roiUid;
+    var tmp = 0;
+    var un = host.subscribeRois(function () {
+      tmp++;
+    });
+    var wrote = host.setRoiMeta(uid, { trackingId: "1", lymphNode: "true" });
+    // **書いた直後**に読む（後段でもう一度書くので、順序を間違えると検証がずれる）。
+    var readBack = host.getRoiMeta(uid);
+    var afterSub = tmp;
+    un();
+    // 解除後の書き込み。既存キーはマージ更新（trackingId だけ変わり lymphNode は残る）。
+    host.setRoiMeta(uid, { trackingId: "2" });
+    payload.roiMeta = {
+      wrote: wrote,
+      readBack: readBack,
+      merged: host.getRoiMeta(uid),
+      writeUnknownRoi: host.setRoiMeta("no-such-roi", { a: "1" }),
+      readUnknownRoi: host.getRoiMeta("no-such-roi"),
+      subscribeFired: afterSub > 0,
+      // 解除後は増えないこと。
+      unsubscribeWorks: tmp === afterSub,
+    };
+  }
+
   window.__hostApiCheck = payload;
 
   const id = "hostapi-check-panel";
@@ -102,7 +178,18 @@ export async function activate(host) {
     "background:#111c;color:#e8e8e8;font:11px/1.5 monospace;border:1px solid #4a90d9;" +
     "border-radius:4px;white-space:pre-wrap";
   const p = payload.pixels;
-  const lines = ["[hostapi-check] targets=" + targets.length];
+  const lines = ["[hostapi-check] targets=" + targets.length + " rois=" + payload.rois.length];
+  for (const r of payload.rois) {
+    const m = r.measurements;
+    const mm = (v) => (v === undefined || v === null ? "-" : v.toFixed(2) + "mm");
+    lines.push(
+      "  roi[" + r.tool + "] slice=" + (r.sliceIndex + 1) + " zScope=" + r.zScope +
+      "\n    tool: length=" + mm(m.length) + " short=" + mm(m.shortAxis) +
+      "\n    shape: long=" + mm(m.longAxisMm) + " short=" + mm(m.shortAxisMm) +
+      " (recomputed long=" + mm(r.recomputedLongMm) + ")" +
+      "\n    sop=" + String(r.sopInstanceUid).slice(0, 48) + " points=" + r.pointCount,
+    );
+  }
   if (p) {
     lines.push(
       "  pixels: " + p.cols + "x" + p.rows + " " + p.unit +

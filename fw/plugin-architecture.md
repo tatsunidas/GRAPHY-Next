@@ -209,9 +209,9 @@ web は運営配備 / サンドボックス。
 
 ---
 
-## 7. host API の拡張（H1〜H4b 実装済み）
+## 7. host API の拡張（H1〜H5 実装済み）
 
-> 起票: 2026-07-29 ／ ステータス: **H1・H2（2026-07-29）／ H3・H4a・H4b（2026-07-30）すべて実装済み**
+> 起票: 2026-07-29 ／ ステータス: **H1・H2（2026-07-29）／ H3・H4a・H4b・H5（2026-07-30）すべて実装済み**
 > 経緯: プラグイン デモ 3 本（[`plugin-explainer.md`](plugin-explainer.md) §6）を書いた過程で、
 > **2D ビューアのプラグインには「いま何を見ているか」を答える手段が一つも無い**ことが判明した。
 
@@ -232,7 +232,7 @@ web は運営配備 / サンドボックス。
 | いま何スライス目か | ✗ |
 | 画素（生の HU / SUV、あるいは 8bit でも） | ✗ |
 | 適用中の W/L | ✗（`setWindowLevel` はあるが getter が無い） |
-| 描いた ROI / マスク | ✗ |
+| 描いた ROI / マスク | ROI=✅（H5）／ マスク（labelmap）=✗ |
 | 処理結果をビューアへ戻す | ✗ |
 
 比較として `MainScreenPluginHost` には `selectedStudyUid` がある（`pluginTypes.ts`）。**2D ビューア側だけが
@@ -257,6 +257,7 @@ H1・H2 は実質「これを本番向けの契約として切り出す」作業
 | **H3** ✅ | **画素の読み出し**（本命） | `getPixelData(tileId?, opts?) => Promise<ViewerPixelData \| null>` | **必ず [`pixelCalibration.ts`](../frontend/src/viewer/pixelCalibration.ts) 経由**（`getPixelData()` に直接 slope/intercept を書かない。preScale 既定 ON による二重適用で CT が約 −1024 ずれる既知事故）。シリーズ全スライスは転送量が大きいのでスライス単位を既定にし、範囲指定を任意で | ✅ |
 | **H4a** ✅ | **オーバーレイ表示** — 処理結果を表示中スライスに重ねる（保存しない） | `showOverlay(tileId?, overlay)` / `clearOverlay(tileId?)` | 値マップを受け取り**色付けは本体側**で行う。imageId に紐付け | ✅ |
 | **H4b** ✅ | **派生シリーズ保存** — 新シリーズとして保管庫（standalone）/ PACS（web）へ | `saveDerivedSeries(tileId?, req)` | 既存 `POST /api/series/derived` を開ける形。**保存ポリシーが本体** | ✅（web も許可） |
+| **H5** ✅ | **ROI（計測）の読み出し** — ユーザーが描いた計測をプラグインが使う | `getRois(tileId?)` / `getRoiMeta(roiUid)` / `setRoiMeta(roiUid, patch)` / `subscribeRois(cb)` | 幾何を本体に閉じる（長径・短径をプラグインに算出させない）。**ROI 永続化が無いので `roiUid` はセッション内限定**。global ROI は `referencedImageId` が表示スライスへ追従する罠あり | ✅ |
 
 H1〜H3 は**フロント面だけで完結**するため、web モードでも同じように動く（backend の契約 `/api/plugins` は不変）。
 
@@ -443,6 +444,99 @@ SOPClassUID・FrameOfReference を維持、Series/SOP UID を新規採番、`Ima
 `storeDatasets` で STOW）なので、コード上の追加はないが、実 PACS 相手の確認は
 `deploy/dcm4chee/VERIFY-web.md` の手順に足す必要がある。
 
+#### H5 の実装（2026-07-30・GRAPHY-Next 0.1.9 以降）
+
+```ts
+host.getRois(tileId?): ViewerTileRoi[]                       // 省略時は対象タイル全部
+host.getRoiMeta(roiUid): Record<string, string>              // プラグイン名前空間の属性
+host.setRoiMeta(roiUid, patch): boolean
+host.subscribeRois(cb): () => void                           // 追加/変更/削除。差分は渡さない
+```
+
+**動機**: 計測ドリブンのプラグイン（RECIST 1.1・Choi・mRECIST・PERCIST・RANO…）は例外なく
+「ユーザーが画像上に描いた計測値」を入力に取る。H1〜H4b が入っても**そこだけが埋まっていなかった**。
+GRAPHY(Java) では `RoiObj.addRoiListener` に相乗りして実現していた部分に対応する。
+
+| 型 | フィールド |
+|---|---|
+| `ViewerRoi` | `roiUid` / `tool` / `label` / `studyUid` / `seriesUid` / `sopInstanceUid` / `sliceIndex` / `zScope` / `c` / `t` / `points` / `spacing` / `measurements` / `visible` |
+| `ViewerRoiMeasurements` | `length` / `shortAxis`（ツール値）／ `longAxisMm` / `shortAxisMm` / `longAxisEnds`（形状から算出）／ `area` / `mean` / `stdDev` / `min` / `max` / `unit` |
+
+**決めたこと**:
+
+- **長径・短径を 2 系統返す**。`Bidirectional` はユーザーが 2 軸を明示的に引くので `length` /
+  `shortAxis`（ツール値＝読影医の意図）を、楕円・矩形・自由曲線は `longAxisMm` / `shortAxisMm`
+  （形状から本体が算出）を使う。**黙って片方を代入しない**——「ユーザーが引いた軸」と
+  「形状から機械的に出した軸」は臨床的に別物で、取り違えると測定値が変わる。
+- **形状ベースの長径・短径は「輪郭ツール」にだけ出す**（`roiRead.hasShapeCalipers()` の許可リスト
+  ＝ Length / 楕円 / 矩形 / 円 / 自由曲線 / スプライン / Livewire）。`Bidirectional` では出さない:
+  ユーザーが引いた 2 軸そのものが計測値であり、しかも交差する 2 線分なので**短軸を長軸の端に寄せて
+  引くとハンドル 4 点の最遠距離がユーザーの長軸を超える**（`sqrt(p²+(S/2)²) > L`。テストで実証）。
+  Angle / CobbAngle（折れ線）・Probe（1 点）・ArrowAnnotate（注記）も対象外。
+  **許可リストにしたのは除外リストで事故ったため**: `RectangleROI` は `angle` を部分一致で含む
+  （Rect**angle**ROI）ので、除外正規表現に `angle` を書くと**矩形 ROI が黙って計測不能になる**。
+  知らないツールには値を出さない（数値が出ないのは気付けるが、意味の違う数値は気付けない）。
+- **幾何は本体に閉じる**（`viewer/roiRead.ts`）。算出は GRAPHY(Java) の `RecistCalculator` と同一
+  アルゴリズム（①頂点を mm 空間へ ②最遠 2 点＝長径 ③長径に直交する方向の広がり＝短径）。
+  総当たりの前に**凸包へ落としてある**（結果は同一・自由曲線の数千頂点でも重くならない）。
+  プラグイン側に書かせると本体の計測値とずれたときどちらが正しいか言えなくなる。
+- **短径は「長径に直交する幅」**であって全方位の最小キャリパ幅（ImageJ の MinFeret）ではない。
+  RECIST が短径を長径に直交して測ると規定しているため。契約のコメントに明記した。
+- **画素間隔が不明なら算出値は `undefined`**（mm を捏造しない）。統計も**取れない項目は `undefined`**
+  にして 0 で埋めない（「測っていない」と「0 だった」を区別する）。`cachedStats` は
+  Cornerstone が**描画時に**計算するので、まだ描画されていない ROI では空になり得る。
+- **単位の取り違えを 2 箇所で塞いだ**（どちらも実機検証で発見）:
+  ① `measurements.unit` は**統計値**（mean/stdDev/min/max）の単位なので `modalityUnit` のみを見る。
+  Cornerstone の `cachedStats.unit` は**長さの単位**（"mm"）なので、フォールバックに入れると
+  「統計の単位が mm」という無意味な値がプラグインへ流れる。
+  ② **画素間隔が無いシリーズでは Cornerstone は length を px で計算する**。そのまま mm として
+  渡すと単位が壊れるので、`length` / `shortAxis` は `lengthUnit === "mm"` のときだけ出す。
+- **`getRois()` の既定対象は「対象タイル全部」**。H1〜H4b の「先頭タイル」と意図的に違える。
+  時系列の計測ではベースラインと追跡を並べて開くのが普通で、都度 `getTargets()` を回させるのは
+  この API の主用途に対して不便なため。単一タイルが欲しければ `tileId` を渡す。
+- **順序を保証する**（スライス → `roiUid`）。Cornerstone の列挙順はツール登録順に依存するので、
+  そのまま晒すと本体の内部事情がプラグインの表示順に漏れる。
+- **ROI 属性は `plugin.<pluginId>.` 名前空間へ強制的に入れる**（前置は host が行う）。
+  プラグインは本体や他プラグインのキーを踏めない。実体は `roiMaskStore` の `custom` で、
+  ImageJ / DICOM 書き出し時に保持される既存の仕組みにそのまま乗る（GRAPHY の
+  `lesionevanesco.*` プロパティと同じ発想）。
+- **`subscribeRois` は差分を渡さない**。何が変わったかを契約にすると本体の annotation 表現に
+  縛られるので、「変わった」だけ伝えて読み直させる（`RoiManagerPanel` と同じ流儀）。
+  Cornerstone の `ANNOTATION_ADDED/MODIFIED/REMOVED` ＋ `roiMaskStore` の購読を 1 本に束ねている。
+  プラグインの listener が投げた例外は host が飲む（本体を巻き込ませない）。
+
+**併せて入れたもの — `BidirectionalTool` の登録**: RECIST 1.1 の計測は「長径＋それに直交する短径」で、
+Cornerstone の `BidirectionalTool` がまさにそれなのに**未登録だった**（長さツール 2 本で代用すると
+2 軸の対応付けが人手になる）。ROI メニューに「長径・短径（RECIST）」として追加した
+（`cornerstoneSetup.ts` / `toolIds.ts` / `Viewer2D.tsx` の `MEASURE_TOOLS` / `toolIcons.ts` / i18n ja・en）。
+
+**⚠ 未解決の制約（プラグイン作者向け）**:
+
+- **ROI の永続化が無い**。本体の ROI は Cornerstone annotation state（メモリ）が権威で、
+  再起動すると消える（`roi-manager-design.md` の M5＝ImageJ ROI / RTSTRUCT 往復が未完。
+  書き出しはあるが「同じ UID で読み戻す」経路が無い）。したがって **`roiUid` はセッション内でのみ安定**。
+  時系列で同じ病変を追うプラグインは `sopInstanceUid` ＋ `points`（画素座標）＋自身が振った ID で
+  記録し、`roiUid` を鍵にしてはいけない。ROI 属性（`setRoiMeta`）も ROI と同じ寿命しか持たない。
+- **global ROI（`zScope === "all"`）の罠**。本体は scope.z="all" の注釈の `referencedImageId` を
+  表示スライスへ追従させる（`globalRoiSync.ts`）ため、`sliceIndex` / `sopInstanceUid` は
+  「いまユーザーが見ているスライス」を指すだけで病変の位置ではない。**計測記録では弾くこと**。
+  そのために `zScope` を契約に出してある。
+- **ROI の書き込み（プラグインから ROI を作る・動かす）は入れていない**。読影医が引いた計測を
+  プラグインが書き換えられると、計測の責任の所在が曖昧になる。必要になった時点で別途設計する。
+- **マスク（labelmap）の読み出しは未対応**。ROI（ベクタ注釈）のみ。
+
+**実装（フロント面のみ・backend 変更なし）**:
+
+| ファイル | 役割 |
+|---|---|
+| `viewer/roiRead.ts`（新規） | 純関数。`convexHull` / `computeCalipers`（長径・短径）/ `hasShapeCalipers` / `distanceMm` / `readRoiStats` / `pluginMetaPrefix` ＋ `pickPluginMeta` / `buildPluginMeta`（属性の名前空間）。テストは `roiRead.test.ts`（38 件・解析解と突き合わせ＋名前空間の分離） |
+| `viewer/viewerCommands.ts` | 契約 `ViewerRoi` / `ViewerRoiMeasurements` / `ViewerTileRoi`、レジストリに `getRois` / `getRoiMeta` / `setRoiMeta` |
+| `viewer/Viewer2D.tsx` | 実装。表示スタックに乗っている annotation だけを返す。幾何は `roiRead` へ委譲 |
+| `viewer2d/Viewer2DScreen.tsx` | `ViewerActions.getRois` / `getRoiMeta` / `setRoiMeta` / `subscribeRois`（対象解決は `resolveTargets()` を命令系と共有） |
+| `viewer2d/Viewer2DMenuBar.tsx` | host へ配線。**`pluginId` は host が入れる**（属性名前空間をプラグインに選ばせない） |
+| `plugins/pluginTypes.ts` | 公開契約に追加 |
+| `plugins/mockPlugins.ts` | 配線確認用デモ `demo-rois`（ROI の 2 系統の長径・短径と `zScope` 警告を通知） |
+
 #### 実機検証（2026-07-30・standalone / Linux）
 
 **本物の Electron ＋ 本物の backend ＋ 本物のプラグイン配信経路**（`plugins/` フォルダ直下に置いた
@@ -491,6 +585,43 @@ SOPClassUID・FrameOfReference を維持、Series/SOP UID を新規採番、`Ima
 誤認する**バグを直した（`window` イベント発火時の url が about:blank だと predicate に外れ、
 timeout → `firstWindow()` フォールバックが `devtools://…` を返していた。「MainScreen が出ない」と
 2 回誤検知した）。現存ウィンドウを url でポーリングして選ぶ方式に変更。
+
+#### H5 の実機検証（2026-07-30・standalone / Linux）
+
+同じドライバ（`automator/src/spike/hostApiCheck.ts`）に H5 の節を足した。**プラグインから ROI は
+作れない設計**なので、`dragOnCanvasHost()` で **canvas 上に実際に計測を描いてから** 読ませている
+（読影医の操作と同じ経路）。ROI メニューから Bidirectional と楕円 ROI を 1 本ずつ引いて確認。
+
+確認できたこと:
+
+- ROI が無い状態で **空配列**（null や例外ではない）。未知の `tileId` も空配列。
+- 描いた ROI が `sopInstanceUid`（DICOM UID）・`sliceIndex`（描いたスライス）・`spacing` 付きで返る。
+  `spacing` は `getPixelData()` の面内間隔と一致。
+- **座標系の意味が合っている**: プラグイン側で `points`（画素座標）×`spacing` から独立に計算した
+  最遠 2 点間距離が、本体の `longAxisMm` と一致（楕円で `111.26015472412108` 対 `111.2601547241211`）。
+- **Bidirectional はツール値だけを返し、形状値は返さない**（`length=83.4mm` / `shortAxis=55.6mm`、
+  `longAxisMm`/`shortAxisMm` は `undefined`）。楕円は逆に形状値＋`area`＋`mean` を返し、統計の
+  `unit="HU"`。**2 系統が別物として届くことの直接確認**。
+- 別スライスへ送っても ROI の `sliceIndex` は**描いたスライスのまま**（local ROI は追従しない）。
+  対話的に作った ROI は scope 未登録なので `zScope` は `null`（＝ローカル扱い）。
+- ROI 属性の往復とマージ更新（`trackingId` だけ更新して `lymphNode` は残る）、存在しない ROI への
+  書き込みは `false`、購読の**解除が効く**こと。
+
+**この検証で本体側の欠陥を 3 件検出した**（いずれも単体テストでは出ない種類）:
+
+1. **`RectangleROI` が除外正規表現の `angle` に部分一致**していた（Rect**angle**ROI）。矩形 ROI が
+   黙って長径・短径を返さなくなる。**許可リスト方式へ変更**（`hasShapeCalipers`）。
+   なお**同じ罠を検証スクリプト側でも踏んだ**（`/rect/` が Bidi**rect**ional に一致）。
+   ツール名の判定は部分一致で書かないこと。
+2. **統計値の単位欄に長さの単位 `"mm"` が漏れていた**。Cornerstone の `cachedStats.unit` は
+   長さの単位なので、`modalityUnit ?? unit` のフォールバックが「統計の単位は mm」を生んでいた。
+   `modalityUnit` のみを見るよう変更し、長さの単位は `lengthUnit` として分離。
+3. **画素間隔が無いシリーズでは Cornerstone は length を px で計算する**。そのまま mm として渡すと
+   単位が壊れるので、`length` / `shortAxis` は `lengthUnit === "mm"` のときだけ出すようにした。
+
+副産物の修正: `dragOnCanvasHost()` に**始点の指定**（canvas 内相対位置）を足した。既定の中央から
+引くと、2 本目以降のドラッグが**既存注釈のハンドルを掴んで「新規作成ではなく移動」になる**
+（1 回目の実行で楕円が作られず ROI が 1 本しか出ずに気付いた）。
 
 ### 7.3 副作用（着手時に必ずセットで行うこと）
 

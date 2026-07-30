@@ -19,7 +19,10 @@ import { FusionImageViewer } from "../viewer/FusionOverlayViewer";
 import type { RenderOverlay } from "../viewer/Viewer2D";
 import { buildSeriesLayout, type SeriesLayout } from "../viewer/seriesLayout";
 import { LutDialog, ColorBar } from "../viewer/LutDialog";
+import { eventTarget } from "@cornerstonejs/core";
+import { Enums as csToolsEnums } from "@cornerstonejs/tools";
 import { runViewerCommand, queryViewerCommand } from "../viewer/viewerCommands";
+import { subscribeRoiMaskStore } from "../viewer/roiMaskStore";
 import { runSeriesCommand } from "../viewer/seriesCommands";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { subscribeToast } from "../viewer/toast";
@@ -804,6 +807,50 @@ function TileGrid({
         const pending = queryViewerCommand(id, (c) => c.getPixelData(opts));
         const px = pending ? await pending : null;
         return px ? { tileId: id, ...px } : null;
+      },
+      // H5: ROI の読み出し。tileId 省略時は**対象タイル全部**を読む（H1〜H4 は「先頭タイル」だが、
+      // 時系列の計測ではベースラインと追跡を並べて開くのが普通なので、まとめて読める方が素直）。
+      getRois: (tileId) => {
+        const ids = tileId ? [tileId] : resolveTargets();
+        return ids.flatMap((id) => {
+          const rois = queryViewerCommand(id, (c) => c.getRois());
+          return (rois ?? []).map((r) => ({ tileId: id, ...r }));
+        });
+      },
+      // ROI メタはタイルに依存しない（annotation は本体でグローバル）。登録済みタイルのどれかで解決できればよい。
+      getRoiMeta: (roiUid, pluginId) => {
+        for (const id of resolveTargets()) {
+          const m = queryViewerCommand(id, (c) => c.getRoiMeta(roiUid, pluginId));
+          if (m) return m;
+        }
+        return {};
+      },
+      setRoiMeta: (roiUid, pluginId, patch) => {
+        for (const id of resolveTargets()) {
+          if (queryViewerCommand(id, (c) => c.setRoiMeta(roiUid, pluginId, patch))) return true;
+        }
+        return false;
+      },
+      // ROI 変更の購読。Cornerstone の annotation イベント＋メタ store を束ねて 1 本にする。
+      // **何が変わったかは渡さない**（差分を契約にすると本体の内部表現に縛られる）。受け手は読み直す。
+      subscribeRois: (listener) => {
+        const ev = csToolsEnums.Events;
+        const names = [ev.ANNOTATION_ADDED, ev.ANNOTATION_MODIFIED, ev.ANNOTATION_REMOVED].filter(
+          Boolean,
+        ) as string[];
+        const fire = () => {
+          try {
+            listener();
+          } catch {
+            /* プラグインの例外で本体を巻き込まない */
+          }
+        };
+        for (const n of names) eventTarget.addEventListener(n, fire);
+        const unsubMeta = subscribeRoiMaskStore(fire);
+        return () => {
+          for (const n of names) eventTarget.removeEventListener(n, fire);
+          unsubMeta();
+        };
       },
       showOverlay: (tileId, overlay) => {
         const id = tileId ?? resolveTargets()[0];

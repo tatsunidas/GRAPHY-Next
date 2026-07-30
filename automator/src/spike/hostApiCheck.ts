@@ -1,5 +1,5 @@
 /*
- * host API H1/H2（fw/plugin-architecture.md §7）の実機検証スパイク。
+ * host API H1〜H5（fw/plugin-architecture.md §7）の実機検証スパイク。
  *
  * 実行:  cd automator && npx tsx src/spike/hostApiCheck.ts
  *
@@ -10,6 +10,11 @@
  *   4. **毎回読み直している**こと ＝ スライスを送り W/L を変えて再実行すると値が追従する
  *      （素案の「配列プロパティ（スナップショット）」を関数に変えた理由の検証）
  *   5. 未知の tileId は null（例外にしない）
+ *   6. H3 の画素が定量値（HU）である＝ Rescale の二重適用が無い
+ *   7. H4a/H4b: 値マップを本体が焼いて重ねる／派生シリーズが本当に DICOM になる
+ *   8. H5: canvas 上で実際に計測を描き、getRois() がその mm 値・SOP UID・スライスを返す。
+ *      ツール値（Cornerstone の world 計算）と形状からの算出（画素×spacing）が一致すること、
+ *      Bidirectional には形状値を出さないこと、ROI 属性の名前空間往復と購読の解除。
  *
  * 前提: backend jar（`cd backend && mvn -q -Dfrontend.skip=true -DskipTests package`）と
  *       fixture ct-basic（`npx tsx src/cli.ts check-fixtures`）。
@@ -24,6 +29,7 @@ import { DesktopDriver, DESKTOP_RUN_DATA_DIR } from "../driver/desktopDriver.js"
 import { resetDb } from "../backend/dbReset.js";
 import { importFixtureCategory } from "../fixtures/importFixtures.js";
 import { openFirstSeriesInViewer } from "../checklist/items/shared/helpers.js";
+import { dragOnCanvasHost } from "../common/pointerDrag.js";
 import { createStepRecorder } from "../checklist/types.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
 
@@ -87,6 +93,52 @@ interface Payload {
   save?: { ok: boolean; cancelled?: boolean; seriesInstanceUid?: string; instanceCount?: number; error?: string };
   /** H4b: 幾何を偽装できないこと（格子不一致は拒否）。 */
   saveMismatch?: { ok: boolean; error?: string };
+  /** H5: ROI の読み出し。 */
+  rois?: RoiSummary[];
+  roisUnknownTile?: RoiSummary[];
+  roiEvents?: number;
+  roiMeta?: {
+    wrote: boolean;
+    readBack: Record<string, string>;
+    merged: Record<string, string>;
+    writeUnknownRoi: boolean;
+    readUnknownRoi: Record<string, string>;
+    subscribeFired: boolean;
+    unsubscribeWorks: boolean;
+  };
+}
+
+/** ui.js が返す ROI の要約（points 全体は運ばず、件数と検算値だけ返す）。 */
+interface RoiSummary {
+  roiUid: string;
+  tool: string;
+  label: string | null;
+  tileId: string;
+  studyUid: string;
+  seriesUid: string;
+  sopInstanceUid: string | null;
+  sliceIndex: number;
+  zScope: number | "all" | null;
+  c: number;
+  t: number;
+  pointCount: number;
+  spacing: (number | null)[];
+  measurements: {
+    length?: number;
+    shortAxis?: number;
+    longAxisMm?: number;
+    shortAxisMm?: number;
+    longAxisEnds?: [[number, number], [number, number]];
+    area?: number;
+    mean?: number;
+    stdDev?: number;
+    min?: number;
+    max?: number;
+    unit?: string;
+  };
+  visible: boolean;
+  /** プラグインが points×spacing から独立に計算した長径（本体の longAxisMm と一致すべき）。 */
+  recomputedLongMm: number | null;
 }
 
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "hostapi-check");
@@ -496,6 +548,201 @@ async function main(): Promise<void> {
       "元シリーズは残り、新シリーズが 1 本増える",
       { before: seriesBefore.length, after: seriesAfter.length },
     );
+
+    // --- H5: ユーザーが描いた ROI（計測）の読み出し ---
+    // 実際に canvas 上でドラッグして注釈を作る（プラグインから ROI は作れない＝作らせない設計なので、
+    // 読影医の操作をそのまま再現するしかない。これが本番と同じ経路）。
+    console.log("\n[5] getRois()（H5）");
+
+    // ROI が無い状態: 空配列を返すこと（null や例外ではない）。
+    const beforeDraw = await runPlugin(viewerPage);
+    check(Array.isArray(beforeDraw.rois) && beforeDraw.rois.length === 0, "ROI が無ければ空配列", beforeDraw.rois);
+    check(beforeDraw.roiMeta === undefined, "ROI が無ければ属性の検証はスキップされる");
+
+    // 現在のスライス（[2] で 12 に送ってある）と画素間隔を記録しておく。
+    const drawSlice = beforeDraw.targets[0]?.sliceIndex ?? 0;
+    const spX = beforeDraw.pixels?.spacing?.[0] ?? 0;
+    const spY = beforeDraw.pixels?.spacing?.[1] ?? 0;
+
+    // 1) Bidirectional（ROI メニューの「長径・短径（RECIST）」）— ユーザーが 2 軸を引く RECIST の標準計測。
+    await viewerPage.getByTestId("viewer2d-menu-roi").click();
+    const biItem = viewerPage.getByRole("button", { name: /長径・短径|Long\/short axis/ });
+    const biFound = (await biItem.count()) > 0;
+    check(biFound, "ROI メニューに「長径・短径（RECIST）」が出る（BidirectionalTool の登録）");
+    if (biFound) {
+      await biItem.first().click();
+      await viewerPage.waitForTimeout(300);
+      // 中央から水平に 120px ドラッグ（画面座標。画像画素との比は zoom 依存なので mm の期待値は
+      // 決め打ちにせず、後段で「本体の値」と「プラグインの再計算」の一致で検証する）。
+      // 始点を左上寄りにずらす（既定の中央から引くと、後続のドラッグが既存注釈のハンドルを掴む）。
+      await dragOnCanvasHost(viewerPage, "viewer2d-canvas-host", 120, 0, 0, 10, { fracX: 0.25, fracY: 0.3 });
+      await viewerPage.waitForTimeout(600);
+    }
+
+    // 2) 楕円 ROI — 形状から長径・短径を算出する側の経路。
+    await viewerPage.getByTestId("viewer2d-menu-roi").click();
+    const ellipseItem = viewerPage.getByRole("button", { name: /^(楕円 ROI|Ellipse ROI)$/ });
+    if (await ellipseItem.count()) {
+      await ellipseItem.first().click();
+      await viewerPage.waitForTimeout(300);
+      // Bidirectional から離れた位置に引く。
+      await dragOnCanvasHost(viewerPage, "viewer2d-canvas-host", 80, 60, 0, 10, { fracX: 0.3, fracY: 0.6 });
+      await viewerPage.waitForTimeout(600);
+    }
+
+    const drawn = await runPlugin(viewerPage);
+    console.log(JSON.stringify(drawn.rois, null, 2));
+    await viewerPage.screenshot({ path: path.join(OUT_DIR, "5-rois.png") });
+
+    const rois = drawn.rois ?? [];
+    check(rois.length === 2, "描いた 2 本の ROI が getRois() に現れる", rois.map((r) => r.tool));
+    check((drawn.roiEvents ?? 0) > 0, "subscribeRois() が ROI 作成で発火した", drawn.roiEvents);
+    check(
+      Array.isArray(drawn.roisUnknownTile) && drawn.roisUnknownTile.length === 0,
+      "未知の tileId は空配列（例外にしない）",
+      drawn.roisUnknownTile,
+    );
+
+    for (const r of rois) {
+      const tag = `[${r.tool}]`;
+      check(!!r.roiUid, `${tag} roiUid が空でない`, r.roiUid);
+      check(r.tileId === t0!.tileId, `${tag} tileId が対象タイル`, r.tileId);
+      check(r.studyUid === t0!.studyUid, `${tag} studyUid が一致`, r.studyUid);
+      check(r.seriesUid === t0!.seriesUid, `${tag} seriesUid が一致`, r.seriesUid);
+      check(
+        /^\d+(\.\d+)+$/.test(r.sopInstanceUid ?? ""),
+        `${tag} sopInstanceUid が DICOM UID（時系列で ROI を再同定する鍵）`,
+        r.sopInstanceUid,
+      );
+      check(r.sliceIndex === drawSlice, `${tag} 描いたスライスの index を返す`, { got: r.sliceIndex, expected: drawSlice });
+      check(r.c === 0 && r.t === 0, `${tag} c=t=0`, { c: r.c, t: r.t });
+      check(r.pointCount >= 2, `${tag} 頂点が 2 点以上`, r.pointCount);
+      check(r.visible === true, `${tag} visible=true`, r.visible);
+      check(
+        Math.abs((r.spacing[0] ?? 0) - spX) < 1e-9 && Math.abs((r.spacing[1] ?? 0) - spY) < 1e-9,
+        `${tag} spacing が getPixelData() と同じ面内間隔`,
+        { roi: r.spacing, pixels: [spX, spY] },
+      );
+    }
+
+    // Bidirectional: **ツール値だけ**が正しい。形状からの長径・短径は出さない
+    // （交差する 2 線分なので、短軸を長軸の端に寄せるとハンドル間の最遠距離が長軸を超える）。
+    const bi0 = rois.find((r) => /bidirectional/i.test(r.tool));
+    if (bi0) {
+      check(
+        bi0.measurements.longAxisMm === undefined && bi0.measurements.shortAxisMm === undefined,
+        "Bidirectional には形状からの長径・短径を出さない（ツール値だけが正しい）",
+        { long: bi0.measurements.longAxisMm, short: bi0.measurements.shortAxisMm },
+      );
+    }
+
+    // 輪郭ツール（楕円）: 形状からの長径・短径が返り、プラグイン側の再計算と一致する。
+    // **部分一致で絞らない**: Bidi**rect**ional が `rect` に一致してしまう（本体側でも同じ罠を踏んだ）。
+    const OUTLINE_TOOL_NAMES = new Set([
+      "Length",
+      "EllipticalROI",
+      "RectangleROI",
+      "CircleROI",
+      "PlanarFreehandROI",
+      "SplineROI",
+    ]);
+    for (const r of rois.filter((x) => OUTLINE_TOOL_NAMES.has(x.tool))) {
+      const tag = `[${r.tool}]`;
+      check((r.measurements.longAxisMm ?? 0) > 0, `${tag} longAxisMm > 0`, r.measurements.longAxisMm);
+      check(
+        (r.measurements.shortAxisMm ?? -1) >= 0 &&
+          (r.measurements.shortAxisMm ?? 9e9) <= (r.measurements.longAxisMm ?? 0) + 1e-6,
+        `${tag} shortAxisMm は 0 以上で longAxisMm 以下`,
+        { long: r.measurements.longAxisMm, short: r.measurements.shortAxisMm },
+      );
+      // **本体の算出とプラグインの再計算が一致する**＝ points（画素座標）と spacing の意味が合っている。
+      check(
+        r.recomputedLongMm !== null &&
+          Math.abs(r.recomputedLongMm - (r.measurements.longAxisMm ?? 0)) < 1e-6,
+        `${tag} longAxisMm が points×spacing の再計算と一致（座標系の意味が合っている）`,
+        { host: r.measurements.longAxisMm, recomputed: r.recomputedLongMm },
+      );
+      check(!!r.measurements.longAxisEnds, `${tag} longAxisEnds を返す`, r.measurements.longAxisEnds);
+    }
+
+    // Bidirectional は**ツール自身の 2 軸**を持ち、それが形状からの算出値と概ね一致するはず
+    // （長軸はユーザーが引いた線＝形状の最遠 2 点でもあるため）。2 系統が別物として返ることの確認。
+    const bi = rois.find((r) => /bidirectional/i.test(r.tool));
+    if (bi) {
+      check((bi.measurements.length ?? 0) > 0, "Bidirectional はツール値 length を持つ", bi.measurements.length);
+      check((bi.measurements.shortAxis ?? 0) > 0, "Bidirectional はツール値 shortAxis を持つ", bi.measurements.shortAxis);
+      check(
+        (bi.measurements.shortAxis ?? 9e9) <= (bi.measurements.length ?? 0) + 1e-6,
+        "Bidirectional の短軸は長軸以下",
+        { length: bi.measurements.length, shortAxis: bi.measurements.shortAxis },
+      );
+      // 統計の単位欄に**長さの単位 mm が漏れていない**こと（実機で踏んだ）。
+      check(
+        bi.measurements.unit === undefined || bi.measurements.unit === "HU",
+        "統計の単位欄に長さの単位（mm）が入らない",
+        bi.measurements.unit,
+      );
+    } else {
+      check(false, "Bidirectional の ROI が読めた", rois.map((r) => r.tool));
+    }
+
+    check(
+      rois.filter((x) => OUTLINE_TOOL_NAMES.has(x.tool)).length === 1,
+      "輪郭ツールの ROI が 1 本読めている（フィルタが空振りしていない）",
+      rois.map((r) => r.tool),
+    );
+
+    const ell = rois.find((r) => r.tool === "EllipticalROI");
+    if (ell) {
+      check((ell.measurements.area ?? 0) > 0, "楕円 ROI は面積 (mm²) を返す", ell.measurements.area);
+      check(ell.measurements.mean !== undefined, "楕円 ROI は ROI 内の平均値を返す", ell.measurements.mean);
+      check(ell.measurements.unit === "HU", "統計の単位が HU（モダリティ値）", ell.measurements.unit);
+      check(
+        ell.measurements.length === undefined,
+        "面 ROI にツール値の length は無い（0 で埋めない）",
+        ell.measurements.length,
+      );
+    }
+
+    // ROI 属性（プラグイン名前空間）の往復と購読解除。
+    check(drawn.roiMeta?.wrote === true, "setRoiMeta() が受理される", drawn.roiMeta?.wrote);
+    check(
+      drawn.roiMeta?.readBack?.trackingId === "1" && drawn.roiMeta?.readBack?.lymphNode === "true",
+      "getRoiMeta() が書いた値をそのまま返す（接頭辞は剥がれる）",
+      drawn.roiMeta?.readBack,
+    );
+    check(
+      drawn.roiMeta?.merged?.trackingId === "2" && drawn.roiMeta?.merged?.lymphNode === "true",
+      "setRoiMeta はマージ更新（指定キーだけ変わり、他は残る）",
+      drawn.roiMeta?.merged,
+    );
+    check(drawn.roiMeta?.writeUnknownRoi === false, "存在しない ROI への setRoiMeta は false", drawn.roiMeta?.writeUnknownRoi);
+    check(
+      JSON.stringify(drawn.roiMeta?.readUnknownRoi ?? null) === "{}",
+      "存在しない ROI の getRoiMeta は空オブジェクト",
+      drawn.roiMeta?.readUnknownRoi,
+    );
+    check(drawn.roiMeta?.subscribeFired === true, "属性の書き込みでも購読が発火する", drawn.roiMeta?.subscribeFired);
+    check(drawn.roiMeta?.unsubscribeWorks === true, "解除すると以後発火しない", drawn.roiMeta?.unsubscribeWorks);
+
+    // 別スライスへ送っても、ROI は**描いたスライス**を指し続けること（local ROI は追従しない）。
+    await slider.fill("20");
+    await viewerPage.waitForTimeout(500);
+    const moved = await runPlugin(viewerPage);
+    check(moved.targets[0]?.sliceIndex === 20, "スライスを 20 へ送った", moved.targets[0]?.sliceIndex);
+    const movedRois = moved.rois ?? [];
+    check(movedRois.length === rois.length, "別スライスでも ROI は列挙される（スタック単位）", movedRois.length);
+    check(
+      movedRois.every((r) => r.sliceIndex === drawSlice),
+      "ROI の sliceIndex は描いたスライスのまま（表示スライスに追従しない）",
+      movedRois.map((r) => r.sliceIndex),
+    );
+    check(
+      movedRois.every((r) => r.zScope !== "all"),
+      "既定はローカル ROI（zScope !== 'all'）",
+      movedRois.map((r) => r.zScope),
+    );
+    await viewerPage.screenshot({ path: path.join(OUT_DIR, "5b-rois-other-slice.png") });
   } finally {
     await viewerPage?.close().catch(() => {});
     await driver.stop();

@@ -68,7 +68,7 @@ git add minisign.pub && git commit -m "add signing public key"   # 公開鍵は�
 
 | サーフェス | 出る場所 | `host` の主なプロパティ |
 |---|---|---|
-| `viewer2d.menu` | 2D Viewer の Plug-ins メニュー | `actions`（`invert()` / `rotate90()` / `fit()` / `setWindowLevel()` …）<br>`getTargets()` / `getViewState()` / `getPixelData()` / `showOverlay()` / `clearOverlay()` / `saveDerivedSeries()`（**0.1.9 以降**） |
+| `viewer2d.menu` | 2D Viewer の Plug-ins メニュー | `actions`（`invert()` / `rotate90()` / `fit()` / `setWindowLevel()` …）<br>`getTargets()` / `getViewState()` / `getPixelData()` / `showOverlay()` / `clearOverlay()` / `saveDerivedSeries()` / `getRois()` / `getRoiMeta()` / `setRoiMeta()` / `subscribeRois()`（**0.1.9 以降**） |
 | `mainscreen.menu` | MainScreen の Plug-Ins メニュー | `selectedStudyUid`（選択中スタディ UID） |
 
 `getTargets()` は操作対象タイル（選択→無ければ全）の
@@ -98,6 +98,21 @@ git add minisign.pub && git commit -m "add signing public key"   # 公開鍵は�
 「どの元スライスに対応するか」（`sliceIndex`）だけを申告する。画素は 16bit ＋ Rescale で保存され、
 `NaN` は値域の最小値になる。保存物には `[Plugin] ` 接頭辞とプラグイン id・版が必ず残り、
 **元シリーズは変更されない**。
+
+`getRois(tileId?)` は**ユーザーが描いた ROI（計測）**の配列を返す（`tileId` 省略時は**対象タイル全部**。
+他の問い合わせ系と違う点に注意）。`subscribeRois(cb)` で編集に追随できる（**差分は渡らない**ので
+通知が来たら読み直す。閉じるときに解除する）。`getRoiMeta()` / `setRoiMeta()` で ROI に自分の属性
+（追跡 ID 等）を付けられる（キーは自動で `plugin.<id>.` 名前空間に入る）。
+
+長径・短径は **2 系統返る**ので、取り違えないこと。ROI メニューの「長径・短径（RECIST）」
+＝`Bidirectional` はユーザーが 2 軸を明示的に引くので `measurements.length` / `shortAxis` を使い、
+楕円・矩形・自由曲線は `measurements.longAxisMm` / `shortAxisMm`（形状から本体が算出＝最遠 2 点と、
+それに直交する広がり）を使う。画素間隔が不明なら算出値は `undefined`（mm は捏造されない）。
+
+⚠ **`roiUid` はセッション内でしか安定しない**（本体に ROI の永続化が無い）。時系列で同じ病変を追うなら
+`sopInstanceUid` ＋ `points` ＋自分で振った ID を自分側に保存する。`zScope === "all"` の ROI は
+`sliceIndex` が「いま見ているスライス」を指すだけなので、計測記録では弾く。
+ROI の**書き込みはできない**（読影医の計測をプラグインが書き換えられないようにしてある）。
 
 共通: `pluginId` / `t(key)`（i18n）/ `notify(msg)` / `runBackend(payload?)`（backend 面がある場合）。
 型は `graphy-plugin.d.ts` を参照（`ui.js` 先頭の `/// <reference ...>` + `// @ts-check` で補完が効く）。

@@ -36,6 +36,12 @@ export const MOCK_MANIFESTS: PluginManifest[] = [
     frontend: { bundleUrl: "", contributes: ["viewer2d.menu"] },
   },
   {
+    id: "demo-rois",
+    name: "Demo: ROIs (2D)",
+    version: "0.0.0",
+    frontend: { bundleUrl: "", contributes: ["viewer2d.menu"] },
+  },
+  {
     id: "demo-hello-main",
     name: "Demo: Hello (MainScreen)",
     version: "0.0.0",
@@ -149,6 +155,31 @@ export const DEMO_MODULES: Record<string, PluginModule> = {
             ? "cancelled by user"
             : `failed: ${res.error}`,
       );
+    },
+  },
+  // H5: ユーザーが描いた ROI を読む。RECIST のような時系列計測が「本体の計測値をそのまま使う」
+  // ことを示すデモ。長径・短径が 2 系統（ツール値 / 形状からの算出）返る点も確認できる。
+  "demo-rois": {
+    activate: (host) => {
+      if (host.surface !== "viewer2d.menu" && host.surface !== "viewer2d.toolbar") return;
+      const rois = host.getRois();
+      if (rois.length === 0) {
+        host.notify("no ROI — 先に ROI メニューで長径・短径（RECIST）等を描いてください");
+        return;
+      }
+      const mm = (v: number | undefined) => (v === undefined ? "-" : `${v.toFixed(1)}mm`);
+      const lines = rois.map((r) => {
+        const m = r.measurements;
+        const global = r.zScope === "all" ? " ⚠global(スライス位置は無意味)" : "";
+        return (
+          `[${r.tool}] slice ${r.sliceIndex + 1}${global}\n` +
+          `  tool: length=${mm(m.length)} short=${mm(m.shortAxis)}\n` +
+          `  shape: long=${mm(m.longAxisMm)} short=${mm(m.shortAxisMm)}` +
+          (m.mean !== undefined ? `\n  mean=${m.mean.toFixed(1)}${m.unit ?? ""}` : "") +
+          `\n  sop=${r.sopInstanceUid ?? "?"}`
+        );
+      });
+      host.notify(`${rois.length} ROI\n${lines.join("\n")}`);
     },
   },
   "demo-hello-main": {
