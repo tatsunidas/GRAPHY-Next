@@ -49,6 +49,11 @@ export interface ViewerTarget {
   /** タイルの識別子。`getViewState(tileId)` に渡せる。 */
   tileId: string;
   studyUid: string;
+  /**
+   * スタディの検査日（ISO `YYYY-MM-DD`）。DICOM の StudyDate 由来。
+   * 解釈できない・存在しないなら `null`（怪しい日付は通さない）。**0.1.10 以降**。
+   */
+  studyDate: string | null;
   seriesUid: string;
   /** 画面に出ているシリーズ名。 */
   seriesLabel: string;
@@ -213,6 +218,8 @@ export interface ViewerRoi {
   /** どのタイルで読んだ ROI か。 */
   tileId: string;
   studyUid: string;
+  /** この ROI が属するスタディの検査日（ISO `YYYY-MM-DD`）。不明なら null。**0.1.10 以降**。 */
+  studyDate: string | null;
   seriesUid: string;
   /** 解決できなければ null。 */
   sopInstanceUid: string | null;

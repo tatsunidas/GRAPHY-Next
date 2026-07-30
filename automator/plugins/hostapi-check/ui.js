@@ -123,6 +123,7 @@ export async function activate(host) {
       label: r.label,
       tileId: r.tileId,
       studyUid: r.studyUid,
+      studyDate: r.studyDate,
       seriesUid: r.seriesUid,
       sopInstanceUid: r.sopInstanceUid,
       sliceIndex: r.sliceIndex,
