@@ -177,6 +177,7 @@ export interface Viewer2DPluginHost extends PluginHostBase {
   /**
    * **このプラグイン専用の保存領域**を読む（H8）。患者単位・backend 保管。
    * 未保存でもエラーにならず `json: null` が返る。
+   * **`available: false` は「読めなかった」であって「空」ではない**（保存してはいけない）。
    *
    * <p>`patientKey` 省略時は対象タイルの患者。プラグイン id は host が入れるので、
    * 別のプラグインの領域には触れない。

@@ -371,6 +371,12 @@ export interface Viewer2DPluginHost extends PluginHostBase {
 
 /** プラグイン保存領域の読み出し結果。**0.1.12 以降**。 */
 export interface PluginStoreDoc {
+  /**
+   * **読み出せたか**。`false` は「読めなかった」であって「空」ではない。
+   * 混ぜると、到達できないときに「記録が無い」と判断して保存し、**サーバ側の記録を空で上書き**する。
+   * `false` のときは保存しないこと。
+   */
+  available: boolean;
   /** 保存されている JSON。未保存なら null。 */
   json: string | null;
   /** 楽観ロックの版。保存時にそのまま返送する。未保存なら null。 */

@@ -22,6 +22,15 @@ import {
 
 /** 読み出し結果。未保存でもエラーではなく `json: null` を返す。 */
 export interface PluginStoreDoc {
+  /**
+   * **読み出せたか**。`false` は「読めなかった」であって「空」ではない。
+   *
+   * <p>両者を混ぜると、保存領域に到達できないとき（本体が古い・backend 停止）に
+   * プラグインが「記録が無い」と判断して保存してしまい、**サーバ側の記録を空で上書きする**。
+   * 実際、H8 を持たない backend に対して空扱いになり、保存できていないのに
+   * 「共有されている」と表示された（2026-07-31 の実機検証）。
+   */
+  available: boolean;
   /** 保存されている JSON。未保存なら null。 */
   json: string | null;
   /** 楽観ロックの版。保存時にそのまま返送する。未保存なら null。 */
@@ -37,7 +46,7 @@ export type PluginStoreSaveResult =
   | { ok: false; conflict: true; message: string }
   | { ok: false; conflict: false; message: string };
 
-const EMPTY: PluginStoreDoc = { json: null, version: null, updatedAt: null };
+const UNAVAILABLE: PluginStoreDoc = { available: false, json: null, version: null, updatedAt: null };
 
 /** HTTP の失敗から状態番号を拾う（`http.ts` は status を持つ Error を投げる）。 */
 function statusOf(e: unknown): number | null {
@@ -50,16 +59,15 @@ function messageOf(e: unknown): string {
 }
 
 export async function loadPluginStore(pluginId: string, patientKey: string): Promise<PluginStoreDoc> {
-  if (!patientKey) return EMPTY;
+  if (!patientKey) return UNAVAILABLE;
   try {
     const dto = await fetchPluginDocument(pluginId, patientKey);
-    return { json: dto.json, version: dto.version, updatedAt: dto.updatedAt };
+    return { available: true, json: dto.json, version: dto.version, updatedAt: dto.updatedAt };
   } catch {
-    // 読めない（オフライン・backend 停止）。**空を返さない**方が良いが、プラグインからは
-    // 区別できないので、ここでは空を返しつつ version は null にしておく。
-    // 「読めていないのに空だと思って上書き保存する」ことは version=null の保存が
-    // backend に 409 で弾かれるため起きない。
-    return EMPTY;
+    // 読めない（backend 停止・古い backend でエンドポイントが無い等）。
+    // **空として返さない**。空と読めない を混ぜると、プラグインが「記録が無い」と判断して
+    // 保存し、サーバ側の記録を空で上書きする。
+    return UNAVAILABLE;
   }
 }
 
