@@ -149,6 +149,14 @@ export interface DerivedSeriesRequest {
   unit?: string;
   /** 派生内容の説明。プラグイン id・版は本体が併記する。 */
   derivationDescription?: string;
+  /**
+   * `NaN`（データ無し）の画素を埋める値。**`data` に `NaN` を含むなら必須**（未指定は拒否）。
+   *
+   * <p>本体が勝手に決めない: 閾値マスクのように「有効値がすべて閾値以上」の場合、最小値で埋めると
+   * **背景が閾値そのものの値**になり、何も無い場所が組織と同程度の値を持つ誤ったシリーズになる。
+   * CT のマスクなら空気の `-1000` が素直。指定した値は DICOM の `PixelPaddingValue` にも書かれる。
+   */
+  background?: number;
 }
 
 /** 保存結果。`cancelled` はユーザーが確認ダイアログで拒否した場合。**0.1.9 以降**。 */
@@ -288,7 +296,7 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * `{ ok: false, cancelled: true }` が返る。プラグインが黙って保存することはできない。
    *
    * <p>画素は 16bit signed ＋ Rescale で保存される（HU のような整数はそのまま、確率マップのような
-   * 小さい実数は値域から係数を決めて量子化）。`NaN` は「データ無し」として値域の最小値になる。
+   * 小さい実数は値域から係数を決めて量子化）。**`NaN` を含むなら `background` が必須**。
    * 保存物には `[Plugin] ` 接頭辞とプラグイン id・版が必ず残る。**元シリーズは変更されない。**
    */
   saveDerivedSeries: (tileId: string | undefined, req: DerivedSeriesRequest) => Promise<DerivedSeriesResult>;

@@ -41,7 +41,7 @@ import { readImageInfo, sampleAtCanvas, computeSliceSpacing, calibratedUnit, typ
 import { readColormapName, readInvert, resolveSliceIndex } from "./viewportRead";
 import { readModalitySlice } from "./pixelCalibration";
 import { autoWindow, rasterizeOverlay, type OverlayWindow } from "./overlayRaster";
-import { encodeFrames, framePixelsBase64 } from "./derivedSeriesEncode";
+import { encodeFrames, framePixelsBase64, hasNonFinite } from "./derivedSeriesEncode";
 import { httpSend } from "../http";
 import { emitDbChanged } from "../dbEvents";
 import { computeOrientationMarkers, type OrientationMarkers } from "./orientation";
@@ -1268,6 +1268,14 @@ export function Viewer2D({
         return "data length must be rows*cols";
       }
     }
+    // NaN（データ無し）を含むなら背景値の明示が必須。既定を持たせない理由は
+    // ViewerDerivedSeriesRequest.background の doc を参照（閾値マスクで背景が閾値に化ける事故）。
+    if (req.background === undefined && hasNonFinite(req.frames.map((f) => f.data))) {
+      return "frames contain NaN; specify `background` (the value to store where there is no data)";
+    }
+    if (req.background !== undefined && !Number.isFinite(req.background)) {
+      return "background must be a finite number";
+    }
     return null;
   };
 
@@ -1292,7 +1300,7 @@ export function Viewer2D({
       inf?.rowPixelSpacing ?? p0?.rowPixelSpacing ?? 1,
       inf?.columnPixelSpacing ?? p0?.columnPixelSpacing ?? 1,
     ];
-    const encoded = encodeFrames(req.frames.map((f) => f.data));
+    const encoded = encodeFrames(req.frames.map((f) => f.data), req.background);
     const frames = req.frames.map((f, k) => ({
       instanceNumber: k + 1,
       imagePositionPatient: (plane(ids[f.sliceIndex])?.imagePositionPatient as number[] | undefined) ?? null,
@@ -1318,6 +1326,8 @@ export function Viewer2D({
           rescaleSlope: encoded.slope,
           rescaleIntercept: encoded.intercept,
           rescaleType: req.unit ?? null,
+          // 背景（NaN 埋め）は DICOM のパディング値として明示する。
+          pixelPaddingValue: encoded.paddingStored,
           producer,
           frames,
         },

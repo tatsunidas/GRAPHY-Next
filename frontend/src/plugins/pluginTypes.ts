@@ -122,8 +122,9 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * 引き継ぐ。`rows`/`cols` は元スライスと一致していること。
    *
    * <p>画素は Float32 → 16bit signed ＋ Rescale で保存される（HU のような整数はそのまま、
-   * 確率マップのような小さい実数は値域から係数を決めて量子化）。`NaN` は「データ無し」として
-   * 値域の最小値になる。保存されたシリーズは `SeriesDescription` に `[Plugin] ` 接頭辞が付き、
+   * 確率マップのような小さい実数は値域から係数を決めて量子化）。**`NaN` を含むなら `background`
+   * が必須**（未指定は拒否。指定値は `PixelPaddingValue` にも書かれる）。
+   * 保存されたシリーズは `SeriesDescription` に `[Plugin] ` 接頭辞が付き、
    * `DerivationDescription` / `ContributingEquipmentSequence` にプラグイン id・版が記録される。
    */
   saveDerivedSeries: (

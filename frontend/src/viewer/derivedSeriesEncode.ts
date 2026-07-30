@@ -14,6 +14,12 @@
  *
  * <p>HU のような「もともと整数で Int16 に収まる」値はそのまま入れたい（余計な量子化誤差を足さない）ので、
  * その場合は恒等を選ぶ。
+ *
+ * <p><b>`NaN`（データ無し）の扱い</b>: 保存する画素に「透明」は無いので、呼び出し側が
+ * `background` を明示する。**既定値は用意しない**: かつて「有効値の最小値」を既定にしていたが、
+ * 閾値マスク（有効値がすべて閾値以上）では**背景が閾値そのものの値になり**、
+ * 「何も無い場所」が骨と同程度の HU を持つ誤ったシリーズが出来た（実機で発生）。
+ * 明示を必須にし、その値は DICOM の `PixelPaddingValue` としても書く。
  */
 
 /** Int16 の表現範囲。 */
@@ -30,6 +36,18 @@ export interface EncodedFrames {
   intercept: number;
   /** 恒等（量子化していない）か。 */
   identity: boolean;
+  /** `NaN` を埋めた背景の**格納値**（DICOM の PixelPaddingValue に書く）。背景が無ければ null。 */
+  paddingStored: number | null;
+}
+
+/** 非有限（NaN / Infinity）の画素が 1 つでもあるか。`background` の要否判定に使う。 */
+export function hasNonFinite(frames: Float32Array[]): boolean {
+  for (const f of frames) {
+    for (const v of f) {
+      if (!Number.isFinite(v)) return true;
+    }
+  }
+  return false;
 }
 
 /** NaN・Infinity を除いた値域。有効値が無ければ null。 */
@@ -83,23 +101,39 @@ export function chooseRescale(
 /**
  * 値マップ群 → Int16 画素 ＋ Rescale 係数。
  *
- * <p>**`NaN` は「データ無し」として値域の最小値**に落とす（H4a のオーバーレイでは透明だが、
- * 保存する画素に透明は無い。背景として最小値に寄せるのが表示上いちばん素直）。
+ * <p>`NaN` の画素は `background` で埋める（呼び出し側が明示する。`hasNonFinite()` が true なのに
+ * 未指定なら、そもそも保存要求を拒否するのが正しい＝`Viewer2D.validateDerivedSeries`）。
+ * 背景は**値域に含めて**係数を決めるので、背景自身も必ず表現できる。
+ *
+ * @param background `NaN` を埋める値。省略時は 0（非有限が無いときのみ意味を持たない）
  */
-export function encodeFrames(frames: Float32Array[]): EncodedFrames {
-  const range = finiteRange(frames);
-  const { slope, intercept, identity } = chooseRescale(range, allIntegral(frames));
-  const fallback = range ? range.min : 0;
+export function encodeFrames(frames: Float32Array[], background?: number): EncodedFrames {
+  const fill = Number.isFinite(background) ? (background as number) : 0;
+  const base = finiteRange(frames);
+  // 背景も格納するので値域に含める（含めないと背景が飽和して別の値に化ける）。
+  const range = base
+    ? { min: Math.min(base.min, fill), max: Math.max(base.max, fill) }
+    : { min: fill, max: fill };
+  const integral = allIntegral(frames) && Number.isInteger(fill);
+  const { slope, intercept, identity } = chooseRescale(range, integral);
+  const store = (v: number) => {
+    const stored = identity ? Math.round(v) : Math.round((v - intercept) / slope);
+    return stored < INT16_MIN ? INT16_MIN : stored > INT16_MAX ? INT16_MAX : stored;
+  };
   const out = frames.map((f) => {
     const dst = new Int16Array(f.length);
     for (let i = 0; i < f.length; i++) {
-      const v = Number.isFinite(f[i]) ? f[i] : fallback;
-      const stored = identity ? Math.round(v) : Math.round((v - intercept) / slope);
-      dst[i] = stored < INT16_MIN ? INT16_MIN : stored > INT16_MAX ? INT16_MAX : stored;
+      dst[i] = store(Number.isFinite(f[i]) ? f[i] : fill);
     }
     return dst;
   });
-  return { frames: out, slope, intercept, identity };
+  return {
+    frames: out,
+    slope,
+    intercept,
+    identity,
+    paddingStored: hasNonFinite(frames) ? store(fill) : null,
+  };
 }
 
 /** Int16Array → Base64（リトルエンディアン）。backend の `Frame.pixels` 形式。 */

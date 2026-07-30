@@ -398,19 +398,31 @@ host.saveDerivedSeries(tileId?, {
 | 整数かつ Int16 に収まる（HU 等） | **恒等**（`slope=1, intercept=0`）＝量子化誤差を足さない |
 | それ以外（確率マップ 0〜1、テクスチャ特徴量…） | 値域を Int16 全域へ線形写像し、`slope`/`intercept` を DICOM に書く |
 | 定数マップ・有効値なし | 恒等（量子化しても意味が無い） |
-| `NaN` | **値域の最小値**（＝背景）。H4a では透明だが、保存する画素に透明は無い |
+| `NaN` | プラグインが `background` で**明示した値**。未指定なら**保存要求を拒否**（下記） |
+
+**`NaN`（データ無し）は背景値を明示させる**（2026-07-30 の人手テストで修正）: 当初は
+「有効値の最小値」を既定にしていたが、**閾値マスクでは有効値がすべて閾値以上なので背景が閾値そのものの
+値になる**（≧300 HU のマスクで背景が 300 HU＝「何も無い場所」が骨と同程度の HU を持つ）。
+実機で保存したシリーズの画素が `[300\300\300…]` になっていて発覚した。
+何を背景と呼ぶかはプラグインしか知らないので、**`background` 未指定で `NaN` を含む要求は
+（同意を求める前に）拒否**する。範囲外 `sliceIndex` や格子不一致を拒否しているのと同じ方針。
+指定された背景は **`PixelPaddingValue`(0028,0120)** としても書くので、ビューアは「データ無し」として
+扱える（W/L 自動計算や統計から外せる）。CT のマスクなら空気の −1000 が素直。
 
 **backend 側の変更**（`DerivedSeriesRequest` / `DerivedSeriesService`）:
 
 - `rescaleSlope` / `rescaleIntercept` / `rescaleType` を任意フィールドとして追加
   （**null なら従来どおり恒等**＝Slicer / Curved MPR の既存呼び出しは無変更）。
+- `pixelPaddingValue` を追加（`NaN` を埋めた背景の格納値。null なら書かない）。
 - `producer`（プラグイン id / 表示名 / 版）を追加。付いていると
   ①`SeriesDescription` に **`[Plugin] ` 接頭辞**（LO 64 文字に収める。接頭辞を優先して末尾を切る）、
   ②`DerivationDescription` に id・版を併記、
   ③`ContributingEquipmentSequence` を書く。
   規則は純メソッドに切り出して `DerivedSeriesDescriptionTest` で固定した。
-- `ImageType=DERIVED\SECONDARY`・元 SOP への `SourceImageSequence`・Modality / SOPClassUID の維持は
-  **既存の派生シリーズ経路そのまま**（Slicer と同じ）。
+- `ImageType` は**プラグイン出力では `DERIVED\SECONDARY`**（幾何があっても `RESLICE` を付けない。
+  マスクや解析マップに `RESLICE` と書くと他システムを誤らせる）。本体機能（Slicer 等）は従来どおり
+  `DERIVED\SECONDARY\RESLICE`。元 SOP への `SourceImageSequence`・Modality / SOPClassUID の維持は
+  **既存の派生シリーズ経路そのまま**。
 
 **同意ダイアログ**（`viewer2d/PluginSaveConfirmDialog.tsx`）: **抑止不可**（「次回から表示しない」を
 用意しない）。プラグイン名・版・保存後の説明（接頭辞付き）・枚数・保存先（保管庫 / PACS）と、
@@ -575,6 +587,11 @@ Cornerstone の `BidirectionalTool` がまさにそれなのに**未登録だっ
   `hostapi-save`、`ContributingEquipmentSequence` あり、**整数マスクなので Rescale は恒等**
   （`slope=1` / `intercept=0`）、`RescaleType=HU`、Modality は元のまま CT、**元シリーズは無変更**。
   格子が合わないフレームは**ダイアログを出す前に**拒否。
+- **2026-07-30 の人手テストで H4b のバグを 1 件検出**（自動検証では気付けなかった）:
+  保存したマスクの**背景が 300 HU** になっていた（`NaN` → 有効値の最小値という既定が、
+  閾値マスクでは閾値そのものを指す）。`background` の明示必須化 ＋ `PixelPaddingValue` 書き出しへ変更し、
+  回帰テスト（`derivedSeriesEncode.test.ts` ＋ spike の `PixelPaddingValue` 検証）を追加。
+  **自動検証は「保存できたか・出所が残るか」を見ていたが、「背景が意味のある値か」を見ていなかった。**
 - **この検証で H4a のバグを 1 件検出**: オーバーレイのキャンバスが `imageRect` 確定後のレンダで
   初めてマウントされるため、`useRef` だと描画 effect が先に走って ref が null のまま
   deps も変わらず、**空のキャンバスが乗ったまま**になっていた（`300×150`・α>0 が 0 個）。
@@ -585,6 +602,27 @@ Cornerstone の `BidirectionalTool` がまさにそれなのに**未登録だっ
 誤認する**バグを直した（`window` イベント発火時の url が about:blank だと predicate に外れ、
 timeout → `firstWindow()` フォールバックが `devtools://…` を返していた。「MainScreen が出ない」と
 2 回誤検知した）。現存ウィンドウを url でポーリングして選ぶ方式に変更。
+
+#### 実在する重いプラグインでの通し確認（2026-07-30・standalone / Linux）
+
+上の `hostapi-check` は host API の**契約**を極小プラグインで網羅する検証だった。それとは別に、
+**実在する重いプラグイン 1 本を最初から最後まで動かす**スパイクを足した
+（ドライバ `automator/src/spike/aneurysmPluginCheck.ts`。検体は社内の CADe プラグイン
+"Aneurysm Detector"＝本体リポジトリ外。公開データ AneuriskWeb C0005 / 3D-RA 256³ を使用）。
+**23 項目すべて合格**。契約の網羅では出てこない、次の 3 点が確かめられた。
+
+- **`getPixelData()` の「1 回 1 スライス」設計がシリーズ全体の読み出しに耐える**:
+  256 スライスを 1 枚ずつ読んで積み直したボリュームが、取り込んだ枚数・spacing と一致した
+  （抜け・取り違え・spacing の欠落なし）。H3 で範囲指定を入れなかった判断（§H3「決めたこと」）は
+  実用上も問題ない、ということ。
+- **レンダラの Worker で分オーダーの計算を回しても本体の UI が壊れない**
+  （解析 100 秒。その間もスライス送り・メニュー操作が効く）。
+- **`showOverlay()` が読影に使える**: 候補のスライスへ送ってから重ね、
+  **重ねる前後のスクリーンショットが実際に変わる**ところまで確認した。
+
+この検証でプラグイン側のバグを 1 件検出している（オーバーレイに表面だけの値マップを渡していて、
+血管断面の内側が値 0 相当で塗り潰され原画像が見えなくなっていた）。
+**本体側の不具合は出ていない**＝ H1〜H4a の契約は実用に耐える、というのがこの回の結論。
 
 #### H5 の実機検証（2026-07-30・standalone / Linux）
 

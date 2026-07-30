@@ -1,9 +1,28 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
 > 更新日: 2026-07-30（最終更新: プラグイン host API の **H3（画素読み出し）・H4a（オーバーレイ）・
-> H4b（派生シリーズ保存）を実装**＝§7 は完了。下記エントリ参照）
+> H4b（派生シリーズ保存）を実装**＝§7 は完了。加えて**実在する重いプラグインでの通し確認**を追加。
+> 下記エントリ参照）
 > 目的: 別の作業者（Claude 含む）がこのリポジトリの状況を把握し、続きを実装できるようにする。
 > このファイル＋ `fw/` 配下の各設計ドキュメントが「ソース・オブ・トゥルース」。
+>
+> 🟢 **2026-07-30 非画像 SOP クラスを画像として開かせないようにした**（既存の欠陥の修正）。
+> RTSTRUCT / SR / 表示状態 / Encapsulated PDF 等は**ピクセルを持たない**ため、シリーズ一覧から開くと
+> Cornerstone の `createImage` が `The pixel data is missing` で reject し、**コンソールに未処理例外が
+> 出るだけでユーザーには何も起きていないように見えていた**（実機の RTSTRUCT で発生）。
+> - 判定は新規の純関数 `frontend/src/viewer/seriesRenderable.ts`（＋テスト）。
+>   **SOP クラス優先・無ければ Modality** で判定する（web の QIDO はシリーズ階層に SOP クラスが無い）。
+>   Modality だけでは足りない例がある: **Surface Segmentation(66.5) は Modality=SEG だがピクセル無し**、
+>   一方 DICOM SEG(66.4) は labelmap を持つので開ける。未知は**開ける扱い**（fail-open）。
+> - backend: `SeriesDto` に `sopClassUid` を追加（`findSeriesSummaries` で代表インスタンスの SOP クラス）。
+> - 適用箇所は 2 つ: MainScreen のインライン プレビュー（説明を出してビューアを出さない）と
+>   2D Viewer の左ツリー ＋（タイルにせずトーストで理由を出す）。i18n は ja/en。
+> - 実機検証 `automator/src/spike/nonImageSeriesCheck.ts`（8 項目合格）。**`pixel data is missing` が
+>   コンソールに出ないこと**まで確認。RTSTRUCT の DICOM はリポジトリに置けないため、
+>   `GRAPHY_NONIMAGE_FILE` か `fixtures/rtstruct-seg-existing/` が無ければ該当項目を skip する。
+> - 副産物: **`DicomStorageService.java` に生の NUL バイトが 1 個入っていて grep/rg がこのファイルを
+>   バイナリ扱いし、検索から丸ごと漏れていた**（`listSeries` が見つからず調査が空振りした）。
+>   `"\0"` エスケープへ直した（値は同一）。
 >
 > 🟢 **2026-07-29〜30 プラグイン host API 拡張: H1〜H4b すべて実装（§7 完了）**
 > → 設計・実装表・素案から変えた点は
@@ -45,8 +64,11 @@
 >   `ContributingEquipmentSequence` に id・版。規則は `DerivedSeriesDescriptionTest` で固定）
 >   ③**web も許可**（既存の STOW-RS 分岐に乗る。**ただし実 PACS での検証は未**）
 >   ④画素は Float32→Int16 ＋ **自動 slope/intercept**（`viewer/derivedSeriesEncode.ts`＋テスト。
->   **HU のような整数は恒等**で量子化誤差を足さず、確率マップ 0〜1 は値域を Int16 全域へ写像。
->   `NaN` は「データ無し」＝値域の最小値）。
+>   **HU のような整数は恒等**で量子化誤差を足さず、確率マップ 0〜1 は値域を Int16 全域へ写像）。
+>   **`NaN`（データ無し）は `background` の明示が必須**（未指定は同意を求める前に拒否。指定値は
+>   `PixelPaddingValue` にも書く）＝**2026-07-30 の人手テストで直した箇所**。当初「有効値の最小値」を
+>   既定にしていたため、≧300 HU の閾値マスクで**背景が 300 HU**（何も無い場所が骨と同程度）になっていた。
+>   併せて、プラグイン出力の `ImageType` から `RESLICE` を外した（マスクにリスライスと書かない）。
 >   **幾何はプラグインに書かせない**（`frames` は `sliceIndex` だけ申告し、IPP/IOP/PixelSpacing/厚みは
 >   本体が元シリーズから引き継ぐ。座標を組ませると実空間の意味が壊れた派生シリーズを作れてしまう）。
 >   **検証は同意より先**（`validateDerivedSeries` を分離＝通らない要求で確認を見せない）。
@@ -88,10 +110,30 @@
 > 承諾→保管庫に 1 本増え `[Plugin] Bone mask` / `ImageType=DERIVED` / `DerivationDescription` に
 > `hostapi-save` / `ContributingEquipmentSequence` あり / 整数マスクなので Rescale 恒等 /
 > `RescaleType=HU` / Modality は CT のまま / **元シリーズは無変更**。
-> ⑤**H4a のオーバーレイが空だったバグ**: キャンバスは `imageRect` 確定後のレンダで初めてマウントされる
+> ⑤**H4b の背景が閾値の値に化けていたバグ**（人手テストで発見・自動検証では気付けなかった）:
+> 保存したマスクの画素が `[300\300\300…]`。**自動検証は「保存できたか・出所が残るか」を見ていたが、
+> 「背景が意味のある値か」を見ていなかった**。回帰テストを追加済み。
+> ⑥**H4a のオーバーレイが空だったバグ**: キャンバスは `imageRect` 確定後のレンダで初めてマウントされる
 > ため、`useRef` だと描画 effect が先に走って ref が null・deps も変わらず、**空のキャンバスが乗ったまま**
 > になっていた（`300×150`・α>0 が 0 個）。callback ref（state）へ変更。**「要素が見えている」検証では
 > 気付けず、キャンバスの中身（α>0 の画素数がマスク該当数と一致するか）を読んで初めて分かった**。
+>
+> ✅ **実在する重いプラグインでの通し確認も済（2026-07-30・23 項目すべて合格）**: 上の `hostapi-check` は
+> host API の**契約**を極小プラグインで網羅する検証だった。それとは別に、**外部の重いプラグイン 1 本を
+> 最初から最後まで動かして契約が実用に耐えるか**を見るスパイクを足した
+> （ドライバ `automator/src/spike/aneurysmPluginCheck.ts`。検体は社内の CADe プラグイン
+> "Aneurysm Detector"＝**本体リポジトリ外の private リポジトリ**
+> `tatsunidas/graphy-next-plugin-aneurysm-detector`。公開データ AneuriskWeb C0005 /
+> 3D-RA 256³ を使用）。契約の網羅では出てこない次の 3 点が確かめられた。
+> ①**`getPixelData()` の「1 回 1 スライス」設計がシリーズ全体の読み出しに耐える**
+> — 256 枚を 1 枚ずつ読んで積み直したボリュームが取り込んだ枚数・spacing と一致
+> （**H3 で範囲指定を入れなかった判断が実用上も妥当**だったことの裏付け）。
+> ②レンダラの Worker で **100 秒の計算**を回しても本体の UI が壊れない。
+> ③`showOverlay()` が読影に使える（候補のスライスへ送ってから重ね、**画が実際に変わる**ことまで確認）。
+> **この回で見つかった不具合はプラグイン側の 1 件のみで、本体側は出ていない**
+> ＝ H1〜H4a の契約は実用に耐える、というのが結論。
+> スパイクは引数必須（`--plugin` / `--dicom` / `--truth=x,y,z`）なので、**検体を差し替えれば
+> そのまま「重いプラグインの通し確認」として使い回せる**。
 >
 > 🟢 **2026-07-29 プラグイン デモ リポジトリ 4 本を新設**（`fw/plugin-explainer.md` §6）。
 > 第三者がプラグインを書き始められるようにするため、**GRAPHY-Next の外に**独立リポジトリとして作成

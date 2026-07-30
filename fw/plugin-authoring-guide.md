@@ -170,7 +170,10 @@ if (px) {
     だけを申告し、IPP / IOP / PixelSpacing / 厚みは本体が元シリーズから引き継ぐ。
     `rows`/`cols` は元スライスと一致必須。
   - 画素は 16bit signed ＋ Rescale で保存される。**HU のような整数はそのまま**、確率マップのような
-    小さい実数は値域から係数を決めて量子化。`NaN` は「データ無し」として値域の最小値になる。
+    小さい実数は値域から係数を決めて量子化。
+  - **`data` に `NaN`（データ無し）を含むなら `background` が必須**。未指定だと拒否される
+    （背景を本体が勝手に決めない。CT のマスクなら空気の `-1000` が素直）。指定した値は
+    `PixelPaddingValue` にも書かれるので、ビューアは W/L 自動計算から外せる。
   - 保存されたシリーズは `SeriesDescription` に **`[Plugin] ` 接頭辞**が付き、
     `DerivationDescription` / `ContributingEquipmentSequence` にプラグイン id・版が残る（消せない）。
   - **元シリーズは変更されない**（新しいシリーズが 1 本増えるだけ）。
@@ -188,6 +191,7 @@ if (px) {
     rows: px.rows,
     cols: px.cols,
     unit: px.unit,
+    background: -1000, // NaN（閾値未満）を埋める値。NaN を含むなら必須
   });
   host.notify(res.ok ? `saved ${res.instanceCount}` : res.cancelled ? "cancelled" : `failed: ${res.error}`);
 }

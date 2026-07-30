@@ -93,6 +93,8 @@ interface Payload {
   save?: { ok: boolean; cancelled?: boolean; seriesInstanceUid?: string; instanceCount?: number; error?: string };
   /** H4b: 幾何を偽装できないこと（格子不一致は拒否）。 */
   saveMismatch?: { ok: boolean; error?: string };
+  /** H4b: NaN を含むのに background 未指定なら拒否されること。 */
+  saveNoBackground?: { ok: boolean; error?: string };
   /** H5: ROI の読み出し。 */
   rois?: RoiSummary[];
   roisUnknownTile?: RoiSummary[];
@@ -512,6 +514,11 @@ async function main(): Promise<void> {
     check(saved.save?.ok === true, "承諾すると保存が成功する", saved.save);
     check(saved.save?.instanceCount === 1, "保存された枚数が要求どおり", saved.save?.instanceCount);
     check(saved.saveMismatch?.ok === false, "格子が合わないフレームは拒否（幾何を偽装できない）", saved.saveMismatch);
+    check(
+      saved.saveNoBackground?.ok === false && /background/.test(saved.saveNoBackground?.error ?? ""),
+      "NaN を含むのに background 未指定なら拒否（背景を勝手に決めない）",
+      saved.saveNoBackground,
+    );
 
     // 3) 保管庫に実在するか（＝本当に DICOM になったか）を backend の一覧で確認する。
     const seriesAfter = await listSeries(driver.ports.http, t0!.studyUid);
@@ -541,6 +548,18 @@ async function main(): Promise<void> {
     // マスクは HU（整数）なので恒等 Rescale のはず（量子化誤差を足していない）。
     check(Number(tagValue("RescaleSlope")) === 1, "整数マスクは Rescale 恒等（量子化誤差を足さない）", tagValue("RescaleSlope"));
     check(Number(tagValue("RescaleIntercept")) === 0, "Rescale Intercept も恒等", tagValue("RescaleIntercept"));
+    // 回帰: 背景（NaN 埋め）が「有効値の最小値」＝閾値の値に化けていた事故の検証。
+    check(
+      Number(tagValue("PixelPaddingValue")) === -1000,
+      "背景がプラグイン指定の値（−1000）で、PixelPaddingValue にも書かれる",
+      tagValue("PixelPaddingValue"),
+    );
+    // プラグイン出力はリスライスではないので RESLICE を付けない。
+    check(
+      tagValue("ImageType") === "DERIVED\\SECONDARY",
+      "ImageType は DERIVED\\SECONDARY（RESLICE を付けない）",
+      tagValue("ImageType"),
+    );
     check(tagValue("RescaleType") === "HU", "RescaleType にプラグインが申告した単位が入る", tagValue("RescaleType"));
     // 元シリーズは変更されない（プラグインは新シリーズを足すだけ）。
     check(

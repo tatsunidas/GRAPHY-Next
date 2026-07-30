@@ -147,6 +147,9 @@ export const DEMO_MODULES: Record<string, PluginModule> = {
         rows: px.rows,
         cols: px.cols,
         unit: px.unit,
+        // NaN（閾値未満）を何で埋めるかは明示が必須。CT なら空気の −1000 が素直
+        // （PixelPaddingValue にも書かれるので、W/L 自動計算からも外れる）。
+        background: -1000,
       });
       host.notify(
         res.ok

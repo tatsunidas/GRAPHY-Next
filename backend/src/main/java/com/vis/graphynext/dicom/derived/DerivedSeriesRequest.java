@@ -34,6 +34,8 @@ import java.util.List;
  *                            Float32 を Int16 に量子化するため呼び出し側が係数を渡す）
  * @param rescaleIntercept    Rescale Intercept（null なら 0.0＝恒等）
  * @param rescaleType         RescaleType(0028,1054)（null なら CT のみ "HU"、他は書かない）
+ * @param pixelPaddingValue   PixelPaddingValue(0028,0120) の<b>格納値</b>（null なら書かない）。
+ *                            プラグイン出力で「データ無し」を埋めた背景値を明示するために使う
  * @param producer            プラグイン由来の場合の出所（null なら本体の機能による生成）
  * @param frames              スライス毎（InstanceNumber 昇順で並べる）
  */
@@ -52,6 +54,7 @@ public record DerivedSeriesRequest(
         Double rescaleSlope,
         Double rescaleIntercept,
         String rescaleType,
+        Integer pixelPaddingValue,
         Producer producer,
         List<Frame> frames) {
 
