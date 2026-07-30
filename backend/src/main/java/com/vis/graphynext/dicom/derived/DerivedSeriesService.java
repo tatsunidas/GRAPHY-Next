@@ -202,7 +202,9 @@ public class DerivedSeriesService {
         a.setString(Tag.SOPInstanceUID, VR.UI, UIDUtils.createUID());
         a.setInt(Tag.InstanceNumber, VR.IS, f.instanceNumber());
         // 幾何ありは平面リスライス（RESLICE）、幾何なしは曲面/平坦化再構成（DERIVED\SECONDARY のみ）。
-        if (hasGeom) {
+        // プラグイン出力は幾何があってもリスライスではないので RESLICE を付けない
+        // （マスクや解析マップに RESLICE と書くと他システムを誤らせる）。
+        if (hasGeom && req.producer() == null) {
             a.setString(Tag.ImageType, VR.CS, "DERIVED", "SECONDARY", "RESLICE");
         } else {
             a.setString(Tag.ImageType, VR.CS, "DERIVED", "SECONDARY");
@@ -241,6 +243,11 @@ public class DerivedSeriesService {
             a.setString(Tag.RescaleType, VR.LO, req.rescaleType());
         } else if ("CT".equalsIgnoreCase(modality)) {
             a.setString(Tag.RescaleType, VR.LO, "HU");
+        }
+        // 「データ無し」を埋めた背景値をパディングとして明示する（VR は signed 画素なので SS）。
+        // これがあると、ビューア側は W/L 自動計算や統計から背景を除外できる。
+        if (req.pixelPaddingValue() != null) {
+            a.setInt(Tag.PixelPaddingValue, VR.SS, req.pixelPaddingValue());
         }
 
         // 幾何（再構成値で更新）。PixelSpacing は常に付与、IOP/IPP は幾何がある場合のみ。

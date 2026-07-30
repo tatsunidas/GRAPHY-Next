@@ -24,7 +24,7 @@ class DerivedSeriesDescriptionTest {
     private static DerivedSeriesRequest req(String seriesDescription, String derivation,
                                             DerivedSeriesRequest.Producer producer) {
         return new DerivedSeriesRequest("1.2.3", "1.2.4", seriesDescription, null, 4, 4,
-                new double[] {1.0, 1.0}, 1.0, 1.0, null, derivation, null, null, null, producer,
+                new double[] {1.0, 1.0}, 1.0, 1.0, null, derivation, null, null, null, null, producer,
                 List.of(new DerivedSeriesRequest.Frame(1, null, "")));
     }
 

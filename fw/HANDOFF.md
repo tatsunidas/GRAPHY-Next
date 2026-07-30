@@ -45,8 +45,11 @@
 >   `ContributingEquipmentSequence` に id・版。規則は `DerivedSeriesDescriptionTest` で固定）
 >   ③**web も許可**（既存の STOW-RS 分岐に乗る。**ただし実 PACS での検証は未**）
 >   ④画素は Float32→Int16 ＋ **自動 slope/intercept**（`viewer/derivedSeriesEncode.ts`＋テスト。
->   **HU のような整数は恒等**で量子化誤差を足さず、確率マップ 0〜1 は値域を Int16 全域へ写像。
->   `NaN` は「データ無し」＝値域の最小値）。
+>   **HU のような整数は恒等**で量子化誤差を足さず、確率マップ 0〜1 は値域を Int16 全域へ写像）。
+>   **`NaN`（データ無し）は `background` の明示が必須**（未指定は同意を求める前に拒否。指定値は
+>   `PixelPaddingValue` にも書く）＝**2026-07-30 の人手テストで直した箇所**。当初「有効値の最小値」を
+>   既定にしていたため、≧300 HU の閾値マスクで**背景が 300 HU**（何も無い場所が骨と同程度）になっていた。
+>   併せて、プラグイン出力の `ImageType` から `RESLICE` を外した（マスクにリスライスと書かない）。
 >   **幾何はプラグインに書かせない**（`frames` は `sliceIndex` だけ申告し、IPP/IOP/PixelSpacing/厚みは
 >   本体が元シリーズから引き継ぐ。座標を組ませると実空間の意味が壊れた派生シリーズを作れてしまう）。
 >   **検証は同意より先**（`validateDerivedSeries` を分離＝通らない要求で確認を見せない）。
@@ -88,7 +91,10 @@
 > 承諾→保管庫に 1 本増え `[Plugin] Bone mask` / `ImageType=DERIVED` / `DerivationDescription` に
 > `hostapi-save` / `ContributingEquipmentSequence` あり / 整数マスクなので Rescale 恒等 /
 > `RescaleType=HU` / Modality は CT のまま / **元シリーズは無変更**。
-> ⑤**H4a のオーバーレイが空だったバグ**: キャンバスは `imageRect` 確定後のレンダで初めてマウントされる
+> ⑤**H4b の背景が閾値の値に化けていたバグ**（人手テストで発見・自動検証では気付けなかった）:
+> 保存したマスクの画素が `[300\300\300…]`。**自動検証は「保存できたか・出所が残るか」を見ていたが、
+> 「背景が意味のある値か」を見ていなかった**。回帰テストを追加済み。
+> ⑥**H4a のオーバーレイが空だったバグ**: キャンバスは `imageRect` 確定後のレンダで初めてマウントされる
 > ため、`useRef` だと描画 effect が先に走って ref が null・deps も変わらず、**空のキャンバスが乗ったまま**
 > になっていた（`300×150`・α>0 が 0 個）。callback ref（state）へ変更。**「要素が見えている」検証では
 > 気付けず、キャンバスの中身（α>0 の画素数がマスク該当数と一致するか）を読んで初めて分かった**。
