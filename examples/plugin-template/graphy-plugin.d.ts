@@ -48,6 +48,12 @@ export interface ViewerActions {
 export interface ViewerTarget {
   /** タイルの識別子。`getViewState(tileId)` に渡せる。 */
   tileId: string;
+  /**
+   * 同一患者の判定キー（PatientID → PatientName → StudyInstanceUID）。
+   * 本体が ROI を永続化する鍵と同じ値。**患者単位の記録を持つならこれを鍵にする**
+   * （スタディ UID を鍵にすると、同じ患者の別スタディを開いたときに記録を見失う）。**0.1.11 以降**。
+   */
+  patientKey: string;
   studyUid: string;
   /**
    * スタディの検査日（ISO `YYYY-MM-DD`）。DICOM の StudyDate 由来。
@@ -217,6 +223,8 @@ export interface ViewerRoi {
   label: string | null;
   /** どのタイルで読んだ ROI か。 */
   tileId: string;
+  /** 同一患者の判定キー（本体が ROI を永続化する鍵と同じ値）。**0.1.11 以降**。 */
+  patientKey: string;
   studyUid: string;
   /** この ROI が属するスタディの検査日（ISO `YYYY-MM-DD`）。不明なら null。**0.1.10 以降**。 */
   studyDate: string | null;
