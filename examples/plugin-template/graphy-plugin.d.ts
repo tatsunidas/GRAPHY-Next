@@ -133,6 +133,33 @@ export interface Overlay {
   opacity?: number;
 }
 
+/** `saveDerivedSeries` に渡す保存要求。**0.1.9 以降**。 */
+export interface DerivedSeriesRequest {
+  /** 新シリーズの説明。保存時に本体が `[Plugin] ` 接頭辞を付ける。 */
+  seriesDescription: string;
+  /**
+   * フレーム（1 枚以上）。`sliceIndex` は**元シリーズのどのスライスに対応するか**。
+   * 幾何（IPP/IOP/PixelSpacing/厚み）は本体が元シリーズから引き継ぐので、プラグインは書かない。
+   */
+  frames: Array<{ sliceIndex: number; data: Float32Array }>;
+  /** 元スライスと一致していること（不一致は拒否）。 */
+  rows: number;
+  cols: number;
+  /** 値の単位（`RescaleType` に入る。例 "HU"）。 */
+  unit?: string;
+  /** 派生内容の説明。プラグイン id・版は本体が併記する。 */
+  derivationDescription?: string;
+}
+
+/** 保存結果。`cancelled` はユーザーが確認ダイアログで拒否した場合。**0.1.9 以降**。 */
+export interface DerivedSeriesResult {
+  ok: boolean;
+  cancelled?: boolean;
+  seriesInstanceUid?: string;
+  instanceCount?: number;
+  error?: string;
+}
+
 interface PluginHostBase {
   /** 自分の plugin.json の id。 */
   pluginId: string;
@@ -187,6 +214,18 @@ export interface Viewer2DPluginHost extends PluginHostBase {
   showOverlay: (tileId: string | undefined, overlay: Overlay) => boolean;
   /** オーバーレイを消す。`tileId` 省略時は対象タイル全部。**0.1.9 以降**。 */
   clearOverlay: (tileId?: string) => void;
+  /**
+   * 処理結果を**派生シリーズとして保存する**（standalone はこの PC の保管庫、web は接続中の PACS）。
+   * **0.1.9 以降**。
+   *
+   * <p>**本体が必ず確認ダイアログを出す**（抑止不可）。ユーザーが拒否すると
+   * `{ ok: false, cancelled: true }` が返る。プラグインが黙って保存することはできない。
+   *
+   * <p>画素は 16bit signed ＋ Rescale で保存される（HU のような整数はそのまま、確率マップのような
+   * 小さい実数は値域から係数を決めて量子化）。`NaN` は「データ無し」として値域の最小値になる。
+   * 保存物には `[Plugin] ` 接頭辞とプラグイン id・版が必ず残る。**元シリーズは変更されない。**
+   */
+  saveDerivedSeries: (tileId: string | undefined, req: DerivedSeriesRequest) => Promise<DerivedSeriesResult>;
 }
 
 /** MainScreen 系（mainscreen.menu）に渡るコンテキスト。 */

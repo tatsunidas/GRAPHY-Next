@@ -68,7 +68,7 @@ git add minisign.pub && git commit -m "add signing public key"   # 公開鍵は�
 
 | サーフェス | 出る場所 | `host` の主なプロパティ |
 |---|---|---|
-| `viewer2d.menu` | 2D Viewer の Plug-ins メニュー | `actions`（`invert()` / `rotate90()` / `fit()` / `setWindowLevel()` …）<br>`getTargets()` / `getViewState()` / `getPixelData()` / `showOverlay()` / `clearOverlay()`（**0.1.9 以降**） |
+| `viewer2d.menu` | 2D Viewer の Plug-ins メニュー | `actions`（`invert()` / `rotate90()` / `fit()` / `setWindowLevel()` …）<br>`getTargets()` / `getViewState()` / `getPixelData()` / `showOverlay()` / `clearOverlay()` / `saveDerivedSeries()`（**0.1.9 以降**） |
 | `mainscreen.menu` | MainScreen の Plug-Ins メニュー | `selectedStudyUid`（選択中スタディ UID） |
 
 `getTargets()` は操作対象タイル（選択→無ければ全）の
@@ -89,7 +89,15 @@ git add minisign.pub && git commit -m "add signing public key"   # 公開鍵は�
 例 `"Hot_Iron"`）。**`NaN` は透明**なのでマスクをそのまま渡せる。格子が現在スライスと不一致なら `false`。
 オーバーレイは出したスライスに紐付き（他スライスでは隠れる）、本体が画像左下に
 `プラグイン: <名前>` のラベルを出す。`clearOverlay(tileId?)` で消える。
-**保存はされない**（派生シリーズとして保管庫や PACS へ書く機能は未実装）。
+`showOverlay()` は**表示だけ**。残したいときは次の保存を使う。
+
+`saveDerivedSeries(tileId?, { seriesDescription, frames: [{ sliceIndex, data }], rows, cols, unit?, derivationDescription? })`
+は処理結果を**派生シリーズとして保存**する（standalone はこの PC の保管庫、web は接続中の PACS）。
+**本体が必ず確認ダイアログを出す**ので、プラグインが黙って保存することはできない（拒否されると
+`{ ok: false, cancelled: true }`）。幾何は本体が元シリーズから引き継ぐため、`frames` は
+「どの元スライスに対応するか」（`sliceIndex`）だけを申告する。画素は 16bit ＋ Rescale で保存され、
+`NaN` は値域の最小値になる。保存物には `[Plugin] ` 接頭辞とプラグイン id・版が必ず残り、
+**元シリーズは変更されない**。
 
 共通: `pluginId` / `t(key)`（i18n）/ `notify(msg)` / `runBackend(payload?)`（backend 面がある場合）。
 型は `graphy-plugin.d.ts` を参照（`ui.js` 先頭の `/// <reference ...>` + `// @ts-check` で補完が効く）。

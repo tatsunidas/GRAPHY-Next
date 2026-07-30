@@ -30,6 +30,12 @@ export const MOCK_MANIFESTS: PluginManifest[] = [
     frontend: { bundleUrl: "", contributes: ["viewer2d.menu"] },
   },
   {
+    id: "demo-save-mask",
+    name: "Demo: Save mask (2D)",
+    version: "0.0.0",
+    frontend: { bundleUrl: "", contributes: ["viewer2d.menu"] },
+  },
+  {
     id: "demo-hello-main",
     name: "Demo: Hello (MainScreen)",
     version: "0.0.0",
@@ -114,6 +120,35 @@ export const DEMO_MODULES: Record<string, PluginModule> = {
         opacity: 0.6,
       });
       host.notify(ok ? `overlay: ${hit} px >= 300 ${px.unit}` : "overlay rejected");
+    },
+  },
+  // H3 → H4b: 生 HU から閾値マスクを作り、派生シリーズとして保存する。
+  // 保存前に本体が確認ダイアログを出す（プラグインは黙って書けない）。
+  "demo-save-mask": {
+    activate: async (host) => {
+      if (host.surface !== "viewer2d.menu" && host.surface !== "viewer2d.toolbar") return;
+      const px = await host.getPixelData();
+      if (!px) {
+        host.notify("no pixels");
+        return;
+      }
+      const mask = new Float32Array(px.data.length);
+      for (let i = 0; i < px.data.length; i++) mask[i] = px.data[i] >= 300 ? px.data[i] : NaN;
+      const res = await host.saveDerivedSeries(px.tileId, {
+        seriesDescription: "Bone mask (demo)",
+        derivationDescription: "Threshold >= 300 HU",
+        frames: [{ sliceIndex: px.sliceIndex, data: mask }],
+        rows: px.rows,
+        cols: px.cols,
+        unit: px.unit,
+      });
+      host.notify(
+        res.ok
+          ? `saved: ${res.instanceCount} instance(s), series ${res.seriesInstanceUid}`
+          : res.cancelled
+            ? "cancelled by user"
+            : `failed: ${res.error}`,
+      );
     },
   },
   "demo-hello-main": {

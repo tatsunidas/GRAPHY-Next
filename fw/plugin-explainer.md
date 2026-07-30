@@ -276,15 +276,14 @@ GitHub secrets に登録するだけ。以後リリースごとの追加作業�
   1 回目に本人かどうかは①の公式鍵でしか担保されない。
 - **web でのユーザー導入は実現していない。** 実現するならクライアント WASM か、
   サーバー側サンドボックス（DICOMweb サイドカー）が必要。
-- **プラグインの出力を保存できない。** 2026-07-29〜30 に **H1（`getTargets()`）・H2（`getViewState()`）・
-  H3（`getPixelData()`＝校正済み画素＝CT なら HU、表示 8bit ではない）・H4a（`showOverlay()`＝
-  結果を表示中スライスに重ねる）を実装**した（0.1.9 以降）。画像処理プラグインは
-  「読む→計算する→見せる」まで公式契約だけで書けるようになり、DOM 依存もキャンバス読み取りも不要。
-  **残るのは H4b＝派生シリーズとしての保存**（保管庫 / PACS へ書き戻す）。方針は確定済み
-  （本体が必ず確認ダイアログを出す・出所を機械可読＋`SeriesDescription` 接頭辞で明示・web も許可）で、
-  実装が未。
-  → [`plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張優先度-高h1h4a-実装済み)
-  （H1 ✅ → H2 ✅ → H3 ✅ → H4a ✅ → **H4b 保存（未）**）
+- ✅ **host API は H1〜H4b まで揃った**（2026-07-29〜30・0.1.9 以降）。`getTargets()`（何を見ているか）/
+  `getViewState()`（W/L・LUT・affine）/ `getPixelData()`（**校正済み画素**＝CT なら HU。表示 8bit ではない）/
+  `showOverlay()`（結果を重ねる）/ `saveDerivedSeries()`（**派生シリーズとして保存**）。
+  画像処理プラグインは「読む→計算する→見せる→残す」まで公式契約だけで書け、DOM 依存もキャンバス
+  読み取りも不要になった。→ [`plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張h1h4b-実装済み)
+  **保存には本体が必ず確認ダイアログを出し**（抑止不可）、保存物には `SeriesDescription` の
+  `[Plugin] ` 接頭辞と `DerivationDescription` / `ContributingEquipmentSequence` の id・版が必ず残る。
+  **元シリーズは変更されない。** ただし **web（外部 PACS への STOW-RS 書き戻し）は未検証**。
 - **画素アクセスに強制が無い。** `getPixelData()` は患者の生画素をプラグインへ渡すが、
   `permissions` の `read-pixels` は**宣言（同意画面での表示）だけ**で強制していない。
   プラグインは本体と同じ権限で動くため（P3 サンドボックス未実装）、そもそも信頼境界が無い。

@@ -1,13 +1,13 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
-> 更新日: 2026-07-30（最終更新: プラグイン host API の **H3（画素読み出し）・H4a（オーバーレイ）を実装**。
-> H4b（派生シリーズ保存）は方針確定・未実装。下記エントリ参照）
+> 更新日: 2026-07-30（最終更新: プラグイン host API の **H3（画素読み出し）・H4a（オーバーレイ）・
+> H4b（派生シリーズ保存）を実装**＝§7 は完了。下記エントリ参照）
 > 目的: 別の作業者（Claude 含む）がこのリポジトリの状況を把握し、続きを実装できるようにする。
 > このファイル＋ `fw/` 配下の各設計ドキュメントが「ソース・オブ・トゥルース」。
 >
-> 🟢 **2026-07-29〜30 プラグイン host API 拡張: H1・H2・H3・H4a 実装 / H4b（保存）は方針確定・未実装**
+> 🟢 **2026-07-29〜30 プラグイン host API 拡張: H1〜H4b すべて実装（§7 完了）**
 > → 設計・実装表・素案から変えた点は
-> [`fw/plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張優先度-高h1h4a-実装済み)
+> [`fw/plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張h1h4b-実装済み)
 >
 > これまで 2D ビューアのプラグインには「いま何を見ているか」を答える手段が**一つも無かった**
 > （host は `{ surface, pluginId, t, notify, runBackend, actions }` のみ＝全部 `void` を返す命令で、
@@ -37,23 +37,33 @@
 >   他スライスでは隠れ、シリーズ / C・T 切替で破棄（送った先に他スライスの結果が重なるのを構造で防ぐ）。
 >   **出所ラベル（`プラグイン: <表示名>`）を本体が必ず出す**（文字列はプラグインに触らせない）。
 >   純ロジックは `viewer/overlayRaster.ts`＋テスト。Fusion の `renderOverlay` 経路とは独立。
-> - **H4b（派生シリーズ保存）は方針を確定して未実装**（2026-07-30 に相談して決定）:
->   ①保存には**本体が必ず確認ダイアログ**（抑止不可）②出所は**機械可読＋`SeriesDescription` 接頭辞**
->   （`[Plugin] …`）③**web も許可**（既存の STOW-RS 書き戻しに乗る）④画素は Float32→Int16 ＋
->   **自動 slope/intercept**（既存経路は Rescale 恒等固定で、確率マップ 0〜1 が 0/1 に潰れるため）。
->   土台は既存の `POST /api/series/derived`（`DerivedSeriesService`。Slicer/Curved MPR が使用中、
->   web は STOW-RS 分岐あり）＝**新規に DICOM を作る話ではなく既存経路をプラグインへ開ける作業**。
+> - **H4b `saveDerivedSeries(tileId?, req)`**（2026-07-30）… 処理結果を派生シリーズとして保存
+>   （standalone は保管庫、web は PACS へ STOW-RS）。方針は相談のうえ確定し、そのまま実装:
+>   ①**本体が必ず確認ダイアログ**（抑止不可・`PluginSaveConfirmDialog`。`window.confirm` は
+>   Electron でフォーカスを奪い自動検証からも操作できないため使わない）
+>   ②出所は**機械可読＋`SeriesDescription` の `[Plugin] ` 接頭辞**（`DerivationDescription` と
+>   `ContributingEquipmentSequence` に id・版。規則は `DerivedSeriesDescriptionTest` で固定）
+>   ③**web も許可**（既存の STOW-RS 分岐に乗る。**ただし実 PACS での検証は未**）
+>   ④画素は Float32→Int16 ＋ **自動 slope/intercept**（`viewer/derivedSeriesEncode.ts`＋テスト。
+>   **HU のような整数は恒等**で量子化誤差を足さず、確率マップ 0〜1 は値域を Int16 全域へ写像。
+>   `NaN` は「データ無し」＝値域の最小値）。
+>   **幾何はプラグインに書かせない**（`frames` は `sliceIndex` だけ申告し、IPP/IOP/PixelSpacing/厚みは
+>   本体が元シリーズから引き継ぐ。座標を組ませると実空間の意味が壊れた派生シリーズを作れてしまう）。
+>   **検証は同意より先**（`validateDerivedSeries` を分離＝通らない要求で確認を見せない）。
+>   土台は既存の `POST /api/series/derived`＝backend は任意フィールド（`rescale*` / `producer`）追加のみで、
+>   Slicer / Curved MPR の既存呼び出しは無変更。
 > - 新規 `frontend/src/viewer/viewportRead.ts` に読み取り専用ヘルパを切り出し、
 >   automator 用 `debugApi.ts`（DEV ガード）と共用。純ロジックは `viewportRead.test.ts`。
 > - フロント面のみで完結＝**web モードでも同じ**（`/api/plugins` の契約は不変）。backend 変更なし。
 >
-> **残**: 🔴 **H4b 派生シリーズ保存**（上記の方針に沿って実装。UID 採番・同意ダイアログ・
-> 自動 slope/intercept と、特に **web の STOW-RS 書き戻しの検証**が残っている）。
+> **残**: 🔴 **H4b の web モード（外部 PACS への STOW-RS 書き戻し）が未検証**
+> （コードは既存 web 分岐に乗るだけで追加なし。実 PACS 相手の確認を
+> `deploy/dcm4chee/VERIFY-web.md` の手順に足す）。
 > 🔴 **外部デモ 4 リポジトリの `graphy-plugin.d.ts` 同期**（本体側の `examples/plugin-template/` は更新済み）と、
 > mean-filter / gemini-findings の `findOpenTiles()`（DOM 依存）→ `getTargets()`、
 > キャンバス読み取り → `getPixelData()` の置換。**「8bit しか読めない」断り書きは撤回できる**。
 > 新 API を使うプラグインは `engines.graphy` を `">=0.1.9"` にする。
-> ✅ **実機検証済み（2026-07-30・standalone/Linux・H1〜H4a の 54 項目すべて合格）**: 本物の Electron ＋
+> ✅ **実機検証済み（2026-07-30・standalone/Linux・H1〜H4b の 73 項目すべて合格）**: 本物の Electron ＋
 > backend ＋ `plugins/` に置いた第三者プラグイン（`/api/plugins` 配信）で、**DOM を覗かずに**
 > シリーズ/スライス/W/L/**画素**が取れること、画面表示と値が一致すること、スライス送り・W/L プリセット・
 > 階調反転・LUT に**追従する**こと、**W/L を変えても画素値は不変**（＝表示 8bit ではない）ことを確認。
@@ -66,7 +76,11 @@
 > timeout → `firstWindow()` が `devtools://…` を返す）→ 現存ウィンドウを url でポーリングする方式へ。
 > ③検証側の誤り: `min` が空気（−1000）でなく **GE の画素パディング（−3024＝raw −2000 ＋ intercept
 > −1024）**になるため、二重適用の判定は**軟部組織の値**で行うようにした。
-> ④**H4a のオーバーレイが空だったバグ**: キャンバスは `imageRect` 確定後のレンダで初めてマウントされる
+> ④保存（H4b）は **UI 越しでなく backend の一覧・タグダンプで確認**: 拒否→シリーズは作られない、
+> 承諾→保管庫に 1 本増え `[Plugin] Bone mask` / `ImageType=DERIVED` / `DerivationDescription` に
+> `hostapi-save` / `ContributingEquipmentSequence` あり / 整数マスクなので Rescale 恒等 /
+> `RescaleType=HU` / Modality は CT のまま / **元シリーズは無変更**。
+> ⑤**H4a のオーバーレイが空だったバグ**: キャンバスは `imageRect` 確定後のレンダで初めてマウントされる
 > ため、`useRef` だと描画 effect が先に走って ref が null・deps も変わらず、**空のキャンバスが乗ったまま**
 > になっていた（`300×150`・α>0 が 0 個）。callback ref（state）へ変更。**「要素が見えている」検証では
 > 気付けず、キャンバスの中身（α>0 の画素数がマスク該当数と一致するか）を読んで初めて分かった**。

@@ -8,6 +8,8 @@ import { useWlPresets } from "./wlPresetStore";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { type SortMode } from "../viewer/seriesSort";
 import {
+  type ViewerDerivedSeriesRequest,
+  type ViewerDerivedSeriesResult,
   type ViewerOverlay,
   type ViewerPixelDataOptions,
   type ViewerTarget,
@@ -47,6 +49,15 @@ export interface ViewerActions {
   showOverlay(tileId: string | undefined, overlay: ViewerOverlay): boolean;
   /** プラグインオーバーレイを消す。tileId 省略時は対象タイル全部。 */
   clearOverlay(tileId?: string): void;
+  /**
+   * プラグインの出力を派生シリーズとして保存する（H4b）。**確認ダイアログを必ず挟む**
+   * （抑止不可。ユーザーが拒否したら `cancelled: true`）。
+   */
+  saveDerivedSeries(
+    tileId: string | undefined,
+    req: ViewerDerivedSeriesRequest,
+    producer: { id: string; name: string; version: string },
+  ): Promise<ViewerDerivedSeriesResult>;
   /** W/L プリセット編集ダイアログを開く。 */
   editPresets(): void;
   /** Z 並べ替え（InstanceNumber / IPP, 昇順・降順）。対象タイルのシリーズに適用。 */

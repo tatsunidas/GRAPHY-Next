@@ -42,6 +42,13 @@ export function activate(host) {
     //     host.showOverlay(px.tileId, {
     //       data: mask, rows: px.rows, cols: px.cols, colormap: "Hot_Iron", opacity: 0.6,
     //     });
+    //
+    //     // 派生シリーズとして残す（本体が確認ダイアログを出す。元シリーズは変わらない）。
+    //     host.saveDerivedSeries(px.tileId, {
+    //       seriesDescription: "Bone mask",
+    //       frames: [{ sliceIndex: px.sliceIndex, data: mask }],
+    //       rows: px.rows, cols: px.cols, unit: px.unit,
+    //     }).then((res) => host.notify(res.ok ? "saved" : res.cancelled ? "cancelled" : res.error));
     //   });
   }
 }

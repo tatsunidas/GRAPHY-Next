@@ -3,7 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { RenderingEngine, Enums, EVENTS, utilities, type Types } from "@cornerstonejs/core";
+import { RenderingEngine, Enums, EVENTS, metaData, utilities, type Types } from "@cornerstonejs/core";
 import {
   ToolGroupManager,
   PanTool,
@@ -38,6 +38,9 @@ import { readImageInfo, sampleAtCanvas, computeSliceSpacing, calibratedUnit, typ
 import { readColormapName, readInvert, resolveSliceIndex } from "./viewportRead";
 import { readModalitySlice } from "./pixelCalibration";
 import { autoWindow, rasterizeOverlay, type OverlayWindow } from "./overlayRaster";
+import { encodeFrames, framePixelsBase64 } from "./derivedSeriesEncode";
+import { httpSend } from "../http";
+import { emitDbChanged } from "../dbEvents";
 import { computeOrientationMarkers, type OrientationMarkers } from "./orientation";
 import { computeScaleBar, type ScaleBar } from "./scaleBar";
 import { getOrCreateCameraSync, getOrCreateVoiSync, getOrCreatePresentationSync, getOrCreateSeriesVoiSync, broadcastSeriesProperties, captureVoiBaseline, clearVoiBaseline } from "./sync";
@@ -45,6 +48,8 @@ import { registerReferenceSource, bumpReference, subscribeReference, computeRefe
 import {
   registerViewerCommands,
   type ViewerCommands,
+  type ViewerDerivedSeriesRequest,
+  type ViewerDerivedSeriesResult,
   type ViewerOverlay,
   type ViewerPixelData,
   type ViewerPixelDataOptions,
@@ -1233,6 +1238,95 @@ export function Viewer2D({
   };
   const clearOverlay = () => setPluginOverlay(null);
 
+  // H4b: 処理結果を派生シリーズとして保存する。**同意は画面側で取ってから来る**。
+  // 幾何（IPP/IOP/PixelSpacing/厚み）はプラグインに書かせず、元シリーズから引き継ぐ
+  // （座標を組ませると実空間の意味が壊れた派生シリーズを保管庫に作れてしまう）。
+  // 保存要求の検証。**同意を求める前に**画面側がこれを呼ぶ（通らない要求で
+  // ユーザーに確認ダイアログを見せないため）。saveDerivedSeries でも再度通す（多重防御）。
+  const validateDerivedSeries = (req: ViewerDerivedSeriesRequest): string | null => {
+    const ctx = roiContextRef.current;
+    const ids = imageIdsRef.current;
+    if (!ctx) return "no series context";
+    if (!req?.frames?.length) return "frames is empty";
+    if (!(req.rows > 0) || !(req.cols > 0)) return "rows/cols is invalid";
+    const inf = infoRef.current;
+    // 元スライスと同じ格子でなければ拒否（幾何を引き継ぐ前提が崩れる）。
+    if (inf?.rows !== undefined && inf?.columns !== undefined && (inf.rows !== req.rows || inf.columns !== req.cols)) {
+      return `rows/cols must match the source slice (${inf.rows}x${inf.columns})`;
+    }
+    for (const f of req.frames) {
+      if (resolveSliceIndex(f.sliceIndex, indexRef.current, ids.length) === null) {
+        return `sliceIndex out of range: ${f.sliceIndex}`;
+      }
+      if (f.data?.length !== req.rows * req.cols) {
+        return "data length must be rows*cols";
+      }
+    }
+    return null;
+  };
+
+  const saveDerivedSeries = async (
+    req: ViewerDerivedSeriesRequest,
+    producer: { id: string; name: string; version: string },
+  ): Promise<ViewerDerivedSeriesResult> => {
+    const ctx = roiContextRef.current;
+    const ids = imageIdsRef.current;
+    const invalid = validateDerivedSeries(req);
+    if (invalid || !ctx) return { ok: false, error: invalid ?? "no series context" };
+    const inf = infoRef.current;
+    // 面内間隔・向きは元スライスの imagePlaneModule から。IOP が無いシリーズ（動画等）は
+    // 幾何なしで保存する（backend が IOP/IPP/FrameOfReference を書かない＝空間登録を偽装しない）。
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const plane = (id: string): any => metaData.get("imagePlaneModule", id);
+    const p0 = plane(ids[req.frames[0].sliceIndex]);
+    const rowCos = p0?.rowCosines as number[] | undefined;
+    const colCos = p0?.columnCosines as number[] | undefined;
+    const iop = rowCos && colCos ? [...rowCos, ...colCos] : [];
+    const pixelSpacing = [
+      inf?.rowPixelSpacing ?? p0?.rowPixelSpacing ?? 1,
+      inf?.columnPixelSpacing ?? p0?.columnPixelSpacing ?? 1,
+    ];
+    const encoded = encodeFrames(req.frames.map((f) => f.data));
+    const frames = req.frames.map((f, k) => ({
+      instanceNumber: k + 1,
+      imagePositionPatient: (plane(ids[f.sliceIndex])?.imagePositionPatient as number[] | undefined) ?? null,
+      pixels: framePixelsBase64(encoded.frames[k]),
+    }));
+    try {
+      const res = await httpSend<{ seriesInstanceUid: string; sopInstanceUids: string[] }>(
+        "/api/series/derived",
+        "POST",
+        {
+          studyInstanceUid: ctx.studyUid,
+          seriesInstanceUid: ctx.seriesUid,
+          seriesDescription: req.seriesDescription,
+          seriesNumber: null,
+          rows: req.rows,
+          columns: req.cols,
+          pixelSpacing,
+          sliceThickness: inf?.sliceThickness ?? inf?.sliceSpacing ?? 1,
+          spacingBetweenSlices: inf?.sliceSpacing ?? inf?.sliceThickness ?? 1,
+          imageOrientationPatient: iop,
+          derivationDescription: req.derivationDescription ?? null,
+          // 量子化した場合は係数を渡す（backend 既定は恒等）。
+          rescaleSlope: encoded.slope,
+          rescaleIntercept: encoded.intercept,
+          rescaleType: req.unit ?? null,
+          producer,
+          frames,
+        },
+      );
+      emitDbChanged({ reason: "series-create", studyUids: [ctx.studyUid] });
+      return {
+        ok: true,
+        seriesInstanceUid: res.seriesInstanceUid,
+        instanceCount: res.sopInstanceUids.length,
+      };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  };
+
   // H3: スライス 1 枚の校正済み画素。**読み出しは pixelCalibration に委譲する**
   // （getPixelData() へ直接 slope/intercept を掛けると preScale と二重適用になり CT が
   // 約 −1024 ずれる既知事故。校正の単一入口を必ず通す＝CLAUDE.md のルール 2）。
@@ -1373,12 +1467,14 @@ export function Viewer2D({
   const commandsRef = useRef<ViewerCommands>({
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
     getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
-    setActiveTool, setBrushSize, setWandTolerance, clearAnnotations, undo, redo,
+    validateDerivedSeries, saveDerivedSeries, setActiveTool, setBrushSize, setWandTolerance, clearAnnotations,
+    undo, redo,
   });
   commandsRef.current = {
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
     getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
-    setActiveTool, setBrushSize, setWandTolerance, clearAnnotations, undo, redo,
+    validateDerivedSeries, saveDerivedSeries, setActiveTool, setBrushSize, setWandTolerance, clearAnnotations,
+    undo, redo,
   };
   useEffect(() => {
     if (!commandKey || compact || syncGroupId) return;
@@ -1400,6 +1496,8 @@ export function Viewer2D({
       getPixelData: (o) => commandsRef.current.getPixelData(o),
       showOverlay: (o) => commandsRef.current.showOverlay(o),
       clearOverlay: () => commandsRef.current.clearOverlay(),
+      validateDerivedSeries: (r) => commandsRef.current.validateDerivedSeries(r),
+      saveDerivedSeries: (r, p) => commandsRef.current.saveDerivedSeries(r, p),
       setActiveTool: (n) => commandsRef.current.setActiveTool(n),
       setBrushSize: (s) => commandsRef.current.setBrushSize(s),
       setWandTolerance: (v) => commandsRef.current.setWandTolerance(v),

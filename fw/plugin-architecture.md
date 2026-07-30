@@ -1,11 +1,13 @@
 # GRAPHY-Next プラグイン アーキテクチャ設計
 
-> 作成日: 2026-06-28（更新: 2026-07-30 — **§7 host API の拡張: H1〜H4a 実装済み / H4b は方針確定・未実装**）
+> 作成日: 2026-06-28（更新: 2026-07-30 — **§7 host API の拡張: H1〜H4b すべて実装済み**）
 > ステータス: 骨格実装済み（standalone/web の両モードで疎通確認済み。署名は実装済み、サンドボックスは将来）
 >
-> ⚠ **次に着手するのはここ → [§7 host API の拡張](#7-host-api-の拡張優先度-高h1h4a-実装済み)の H4b**
-> （プラグインの処理結果を派生シリーズとして保存する）。問い合わせ（H1/H2）・画素読み出し（H3）・
-> オーバーレイ表示（H4a）は実装済みで、画像処理系プラグインは既に成立する。
+> ✅ **[§7 host API の拡張](#7-host-api-の拡張h1h4b-実装済み) は H1〜H4b すべて実装済み**
+> （問い合わせ・画素読み出し・オーバーレイ表示・派生シリーズ保存）。画像処理系プラグインは
+> 「読む → 計算する → 見せる → 残す」まで公式契約だけで書ける。
+> **残る制約は ①`ui.js` から外部 API を叩けない（本番 CSP）②権限の実強制とサンドボックス（P3）
+> ③H4b の web モード（STOW-RS 書き戻し）が未検証**。
 > 関連: [`development-phases.md`](development-phases.md)、[`dicom-data-layer.md`](dicom-data-layer.md)
 
 GRAPHY のプラグイン機構を、standalone / web の 2 モードに対応する形で再設計する。
@@ -207,10 +209,9 @@ web は運営配備 / サンドボックス。
 
 ---
 
-## 7. host API の拡張（優先度 高・H1〜H4a 実装済み）
+## 7. host API の拡張（H1〜H4b 実装済み）
 
-> 起票: 2026-07-29 ／ ステータス: **H1・H2 実装済み（2026-07-29）／ H3・H4a 実装済み（2026-07-30）／
-> H4b（派生シリーズ保存）は方針確定・未実装** ／ 優先度: **高**
+> 起票: 2026-07-29 ／ ステータス: **H1・H2（2026-07-29）／ H3・H4a・H4b（2026-07-30）すべて実装済み**
 > 経緯: プラグイン デモ 3 本（[`plugin-explainer.md`](plugin-explainer.md) §6）を書いた過程で、
 > **2D ビューアのプラグインには「いま何を見ているか」を答える手段が一つも無い**ことが判明した。
 
@@ -255,7 +256,7 @@ H1・H2 は実質「これを本番向けの契約として切り出す」作業
 | **H2** ✅ | **表示状態の問い合わせ**。`debugApi` の相当機能を本番契約へ昇格 | `getViewState(tileId?) => ViewerViewState \| null` | `debugApi.ts` から共有ロジックを切り出し、DEV ガードの外へ | ✅ |
 | **H3** ✅ | **画素の読み出し**（本命） | `getPixelData(tileId?, opts?) => Promise<ViewerPixelData \| null>` | **必ず [`pixelCalibration.ts`](../frontend/src/viewer/pixelCalibration.ts) 経由**（`getPixelData()` に直接 slope/intercept を書かない。preScale 既定 ON による二重適用で CT が約 −1024 ずれる既知事故）。シリーズ全スライスは転送量が大きいのでスライス単位を既定にし、範囲指定を任意で | ✅ |
 | **H4a** ✅ | **オーバーレイ表示** — 処理結果を表示中スライスに重ねる（保存しない） | `showOverlay(tileId?, overlay)` / `clearOverlay(tileId?)` | 値マップを受け取り**色付けは本体側**で行う。imageId に紐付け | ✅ |
-| **H4b** | **派生シリーズ保存** — 新シリーズとして保管庫（standalone）/ PACS（web）へ | `saveDerivedSeries()`（未実装・方針は下記） | 既存 `POST /api/series/derived` を開ける形。**保存ポリシーが本体** | ✅（web も許可） |
+| **H4b** ✅ | **派生シリーズ保存** — 新シリーズとして保管庫（standalone）/ PACS（web）へ | `saveDerivedSeries(tileId?, req)` | 既存 `POST /api/series/derived` を開ける形。**保存ポリシーが本体** | ✅（web も許可） |
 
 H1〜H3 は**フロント面だけで完結**するため、web モードでも同じように動く（backend の契約 `/api/plugins` は不変）。
 
@@ -372,7 +373,55 @@ host.clearOverlay(tileId?): void
   切り出してテスト。描画は `Viewer2D` 内の canvas を `imageRect` に合わせて重ねるだけで、
   Fusion の `renderOverlay` 経路とは独立（互いに干渉しない）。
 
-#### H4b（派生シリーズ保存）の方針 — 2026-07-30 に確定・未実装
+#### H4b の実装（2026-07-30・GRAPHY-Next 0.1.9 以降）
+
+```ts
+host.saveDerivedSeries(tileId?, {
+  seriesDescription, frames: [{ sliceIndex, data }], rows, cols, unit?, derivationDescription?,
+}): Promise<{ ok, cancelled?, seriesInstanceUid?, instanceCount?, error? }>
+```
+
+**幾何はプラグインに書かせない。** 各フレームは「元シリーズのどのスライスに対応するか」
+（`sliceIndex`）だけを申告し、IPP / IOP / PixelSpacing / スライス厚は本体が元シリーズから引き継ぐ。
+プラグインに座標を組ませると、**実空間の意味が壊れた派生シリーズを保管庫に作れてしまう**。
+`rows`/`cols` は元スライスと一致必須（不一致は拒否）。
+
+**検証は同意より先。** `validateDerivedSeries()` をレジストリに分けて、画面側が
+**確認ダイアログを出す前に**通すようにした（通らない要求でユーザーに確認を見せない）。
+保存本体でも再度検証する（多重防御）。
+
+**画素の符号化**（`viewer/derivedSeriesEncode.ts`・純関数＋テスト）:
+
+| 入力 | 扱い |
+|---|---|
+| 整数かつ Int16 に収まる（HU 等） | **恒等**（`slope=1, intercept=0`）＝量子化誤差を足さない |
+| それ以外（確率マップ 0〜1、テクスチャ特徴量…） | 値域を Int16 全域へ線形写像し、`slope`/`intercept` を DICOM に書く |
+| 定数マップ・有効値なし | 恒等（量子化しても意味が無い） |
+| `NaN` | **値域の最小値**（＝背景）。H4a では透明だが、保存する画素に透明は無い |
+
+**backend 側の変更**（`DerivedSeriesRequest` / `DerivedSeriesService`）:
+
+- `rescaleSlope` / `rescaleIntercept` / `rescaleType` を任意フィールドとして追加
+  （**null なら従来どおり恒等**＝Slicer / Curved MPR の既存呼び出しは無変更）。
+- `producer`（プラグイン id / 表示名 / 版）を追加。付いていると
+  ①`SeriesDescription` に **`[Plugin] ` 接頭辞**（LO 64 文字に収める。接頭辞を優先して末尾を切る）、
+  ②`DerivationDescription` に id・版を併記、
+  ③`ContributingEquipmentSequence` を書く。
+  規則は純メソッドに切り出して `DerivedSeriesDescriptionTest` で固定した。
+- `ImageType=DERIVED\SECONDARY`・元 SOP への `SourceImageSequence`・Modality / SOPClassUID の維持は
+  **既存の派生シリーズ経路そのまま**（Slicer と同じ）。
+
+**同意ダイアログ**（`viewer2d/PluginSaveConfirmDialog.tsx`）: **抑止不可**（「次回から表示しない」を
+用意しない）。プラグイン名・版・保存後の説明（接頭辞付き）・枚数・保存先（保管庫 / PACS）と、
+**診断用に検証されたものではない**旨を提示する。`window.confirm` を使わないのは、Electron の
+ネイティブダイアログがレンダラのキーボードフォーカスを奪う既知の問題（特に Linux/GTK）があり、
+自動検証からも操作できないため。i18n は ja/en 両方。
+
+**やらないこと**: プラグインが REST（`POST /api/series/derived`）を直接叩く経路は塞いでいない。
+プラグインは本体と同じ権限で動く（`ui.js` は同一オリジンに fetch できる）ため、
+**host API の外側は信頼境界ではない**。ここを塞ぐ意味が出るのは P3 サンドボックス以降。
+
+#### H4b の方針 — 2026-07-30 に確定（上記の実装はこれに沿っている）
 
 **土台は既にある**: `POST /api/series/derived`（`DerivedSeriesService`）が「元 Study/患者属性・Modality・
 SOPClassUID・FrameOfReference を維持、Series/SOP UID を新規採番、`ImageType=DERIVED\SECONDARY`、
@@ -389,16 +438,18 @@ SOPClassUID・FrameOfReference を維持、Series/SOP UID を新規採番、`Ima
 | web モード | **許可する**（standalone 限定にしない）。既存の STOW-RS 経路に乗る |
 | 画素の符号化 | Float32 → Int16 ＋ **自動 slope/intercept**（プラグインの min/max から算出、`RescaleType` は `unit`）。既存経路は Rescale 恒等固定だが、それだと確率マップやテクスチャ値（0〜1）が 0/1 に潰れる |
 
-**未着手の理由**: 上記は方針であり、UID 採番の実装・同意ダイアログ・自動 slope/intercept の実装と
-検証（特に web の STOW-RS 書き戻し）が残っている。H4a とは分けて別 PR で行う。
+**残っている検証**: **web モード（外部 PACS への STOW-RS 書き戻し）は未検証**。
+実装は既存の web 分岐に乗るだけ（`DerivedSeriesService` がテンプレートを WADO-RS `/metadata` から取り、
+`storeDatasets` で STOW）なので、コード上の追加はないが、実 PACS 相手の確認は
+`deploy/dcm4chee/VERIFY-web.md` の手順に足す必要がある。
 
 #### 実機検証（2026-07-30・standalone / Linux）
 
 **本物の Electron ＋ 本物の backend ＋ 本物のプラグイン配信経路**（`plugins/` フォルダ直下に置いた
-第三者プラグインを `/api/plugins` から ES モジュールとして配信）で **H1〜H4a の 54 項目すべて合格**。
+第三者プラグインを `/api/plugins` から ES モジュールとして配信）で **H1〜H4b の 73 項目すべて合格**。
 ドライバは `automator/src/spike/hostApiCheck.ts`（`cd automator && npx tsx src/spike/hostApiCheck.ts`）、
-検証用プラグインの原本は `automator/plugins/hostapi-check/`（実行時に backend の plugins
-フォルダへコピーされる。fixture は ct-basic）。
+検証用プラグインの原本は `automator/plugins/`（`hostapi-check`＝H1〜H4a、`hostapi-save`＝H4b。
+実行時に backend の plugins フォルダへコピーされる。fixture は ct-basic）。
 
 確認できたこと:
 
@@ -424,6 +475,12 @@ SOPClassUID・FrameOfReference を維持、Series/SOP UID を新規採番、`Ima
   （≧300 HU）を作って `showOverlay()` し、**キャンバスの中身を読んで α>0 の画素数 4681 が
   マスク該当数と完全一致**、指定 LUT（`Hot_Iron`）で色が付き、出所ラベルにマニフェストの表示名が出る。
   格子不一致のマップと未知 tileId は拒否。別スライスへ送ると隠れ、戻ると再表示される。
+- **H4b が本当に DICOM になっている**こと（UI 越しではなく backend の一覧・タグダンプで確認）:
+  確認ダイアログが出る → **拒否するとシリーズは作られない** → 承諾すると保管庫に 1 シリーズ増え、
+  `SeriesDescription` が `[Plugin] Bone mask`、`ImageType=DERIVED`、`DerivationDescription` に
+  `hostapi-save`、`ContributingEquipmentSequence` あり、**整数マスクなので Rescale は恒等**
+  （`slope=1` / `intercept=0`）、`RescaleType=HU`、Modality は元のまま CT、**元シリーズは無変更**。
+  格子が合わないフレームは**ダイアログを出す前に**拒否。
 - **この検証で H4a のバグを 1 件検出**: オーバーレイのキャンバスが `imageRect` 確定後のレンダで
   初めてマウントされるため、`useRef` だと描画 effect が先に走って ref が null のまま
   deps も変わらず、**空のキャンバスが乗ったまま**になっていた（`300×150`・α>0 が 0 個）。
@@ -447,9 +504,9 @@ timeout → `firstWindow()` フォールバックが `devtools://…` を返し�
 - 🔴 **残: デモの書き換え**: [mean-filter](https://github.com/tatsunidas/graphy-next-plugin-mean-filter) と
   [gemini-findings](https://github.com/tatsunidas/graphy-next-plugin-gemini-findings) の
   `findOpenTiles()`（DOM 依存）を `getTargets()` へ、キャンバス読み取りを `getPixelData()` へ
-  差し替える。**H3 が入ったので「canvas の 8bit しか読めない」断り書きは撤回できる**
-  （ただし結果を画面に戻すには H4 が要るので、mean-filter の before/after 表示は
-  プラグイン自前のキャンバスに描くまま）。
+  差し替える。**H3 が入ったので「canvas の 8bit しか読めない」断り書きは撤回できる**。
+  結果表示も自前キャンバスではなく `showOverlay()`（H4a）に、保存は `saveDerivedSeries()`（H4b）に
+  置き換えられる。
 - ✅ **`fw/plugin-authoring-guide.md` §2-3 の host 表**と [`plugin-explainer.md`](plugin-explainer.md) §7 の
   制約記述を更新済み。
 

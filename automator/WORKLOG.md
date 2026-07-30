@@ -17,7 +17,7 @@ automator（GRAPHY-Next 自律検証ツール）の開発記録。設計の要�
 
 ---
 
-## 2026-07-30 — DesktopDriver が DevTools を掴むバグ修正・host API H1〜H4a の実機検証スパイク
+## 2026-07-30 — DesktopDriver が DevTools を掴むバグ修正・host API H1〜H4b の実機検証スパイク
 
 ### 修正: `DesktopDriver` が DevTools ウィンドウをメイン画面と誤認していた
 
@@ -66,6 +66,21 @@ ct-basic fixture は **GE の画素パディング（raw −2000 ＋ intercept �
 `useRef` にしていたこと）。**描画結果の検証は「要素の有無」ではなく「画素」で行う**。
 併せて、白い骨の上に白いオーバーレイを重ねても人が見て分からないため、検証プラグインでは
 本体の LUT（`Hot_Iron`）を指定して色を付けている（スクリーンショットが証跡として機能する）。
+
+**追記 3（同日・H4b 対応で 73 項目に拡張）**: 派生シリーズ保存（`saveDerivedSeries()`）の検証を追加。
+保存は**確認ダイアログを本体が出す**ので、`plugins/hostapi-save/` を別プラグインとして分けた
+（`hostapi-check` はメニュークリックで毎回走るため、保存を混ぜるとダイアログが常に出てしまう）。
+
+検証の要点は **UI の見た目で終わらせないこと**: 「保存できたと表示された」ではなく
+**backend の `/api/studies/{study}/series` と `/instances/{sop}/tags` を直接読み**、
+シリーズが実在し `[Plugin] ` 接頭辞・`ImageType=DERIVED`・`DerivationDescription` のプラグイン id・
+`ContributingEquipmentSequence`・Rescale 恒等・`RescaleType=HU` が揃っていること、
+**拒否したときはシリーズが増えないこと**、**元シリーズが無変更であること**を確認している。
+
+ここでも自分の assertion 側の誤りを 2 つ踏んだ（コードは正しかった）: ①`SeriesDto` の枚数は
+`instances` ではなく `numberOfInstances` ②タグダンプの `name` は**DICOM キーワード**
+（`ImageType` / `RescaleSlope`。「Image Type」のような空白付きラベルではない）。
+**DTO とダンプのフィールド名は実物を確認してから assert する。**
 
 ---
 

@@ -83,26 +83,34 @@ interface Payload {
     mismatchRejected: boolean;
     unknownTileRejected: boolean;
   };
+  /** H4b: 保存の結果（プラグインが受け取った戻り）。 */
+  save?: { ok: boolean; cancelled?: boolean; seriesInstanceUid?: string; instanceCount?: number; error?: string };
+  /** H4b: 幾何を偽装できないこと（格子不一致は拒否）。 */
+  saveMismatch?: { ok: boolean; error?: string };
 }
 
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "hostapi-check");
-/** 検証用プラグインの原本（リポジトリ管理下）。 */
-const PLUGIN_SRC = path.join(AUTOMATOR_ROOT, "plugins", "hostapi-check");
-/** backend が走査する plugins root（= backend の CWD 直下）。 */
-const PLUGIN_DST = path.join(DESKTOP_RUN_DATA_DIR, "plugins", "hostapi-check");
+/** 検証用プラグインの原本（リポジトリ管理下）。H1〜H4a 用と H4b（保存）用の 2 本。 */
+const PLUGIN_IDS = ["hostapi-check", "hostapi-save"];
 
 /** 検証用プラグインを backend の plugins フォルダへ配置する（第三者プラグインの手置きと同じ形）。 */
-function installVerificationPlugin(): void {
-  fs.mkdirSync(PLUGIN_DST, { recursive: true });
-  for (const name of fs.readdirSync(PLUGIN_SRC)) {
-    fs.copyFileSync(path.join(PLUGIN_SRC, name), path.join(PLUGIN_DST, name));
+function installVerificationPlugins(): void {
+  for (const id of PLUGIN_IDS) {
+    const src = path.join(AUTOMATOR_ROOT, "plugins", id);
+    const dst = path.join(DESKTOP_RUN_DATA_DIR, "plugins", id);
+    fs.mkdirSync(dst, { recursive: true });
+    for (const name of fs.readdirSync(src)) {
+      fs.copyFileSync(path.join(src, name), path.join(dst, name));
+    }
+    console.log(`検証用プラグインを配置: ${dst}`);
   }
-  console.log(`検証用プラグインを配置: ${PLUGIN_DST}`);
 }
 
 const failures: string[] = [];
+let passed = 0;
 function check(cond: boolean, label: string, detail?: unknown): void {
   if (cond) {
+    passed++;
     console.log(`  [ok  ] ${label}`);
   } else {
     console.log(`  [FAIL] ${label}${detail === undefined ? "" : ` — ${JSON.stringify(detail)}`}`);
@@ -123,10 +131,60 @@ async function runPlugin(viewerPage: Page): Promise<Payload> {
   ) as Promise<Payload>;
 }
 
+interface SeriesRow {
+  seriesInstanceUid: string;
+  seriesDescription?: string;
+  modality?: string;
+  /** SeriesDto のフィールド名（枚数）。 */
+  numberOfInstances?: number;
+}
+
+/** backend の保管庫を直接見る（UI 越しではなく「本当に DICOM になったか」を確かめるため）。 */
+async function listSeries(httpPort: number, studyUid: string): Promise<SeriesRow[]> {
+  const res = await fetch(`http://localhost:${httpPort}/api/studies/${encodeURIComponent(studyUid)}/series`);
+  if (!res.ok) throw new Error(`series list failed: ${res.status}`);
+  return (await res.json()) as SeriesRow[];
+}
+
+/** 生成シリーズの先頭インスタンスのタグダンプ。 */
+async function instanceTags(
+  httpPort: number,
+  studyUid: string,
+  seriesUid: string,
+): Promise<Array<{ name?: string; value?: string }>> {
+  const base = `http://localhost:${httpPort}/api/studies/${encodeURIComponent(studyUid)}/series/${encodeURIComponent(seriesUid)}`;
+  const insts = (await (await fetch(`${base}/instances`)).json()) as Array<{ sopInstanceUid: string }>;
+  const sop = insts[0]?.sopInstanceUid;
+  if (!sop) throw new Error("no instance in created series");
+  return (await (await fetch(`${base}/instances/${encodeURIComponent(sop)}/tags`)).json()) as Array<{
+    name?: string;
+    value?: string;
+  }>;
+}
+
+/** 保存デモを起動する（ダイアログの応答は呼び出し側が行う）。戻りは payload。 */
+function runSavePlugin(viewerPage: Page): Promise<Payload> {
+  return (async () => {
+    await viewerPage.evaluate(() => {
+      delete (window as unknown as { __hostApiCheck?: unknown }).__hostApiCheck;
+    });
+    await viewerPage.getByTestId("viewer2d-menu-plugins").click();
+    await viewerPage.getByTestId("plugin-item-hostapi-save").click();
+    await viewerPage.waitForFunction(
+      () => (window as unknown as { __hostApiCheck?: { save?: unknown } }).__hostApiCheck?.save !== undefined,
+      undefined,
+      { timeout: 30_000 },
+    );
+    return viewerPage.evaluate(
+      () => (window as unknown as { __hostApiCheck: Payload }).__hostApiCheck,
+    ) as Promise<Payload>;
+  })();
+}
+
 async function main(): Promise<void> {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   // backend 起動前に置く（plugins は起動後も走査されるが、初回の /api/plugins に載せるため）。
-  installVerificationPlugin();
+  installVerificationPlugins();
   const driver = new DesktopDriver();
   const recorder = createStepRecorder();
   await driver.start();
@@ -365,6 +423,79 @@ async function main(): Promise<void> {
       "内部登録名（graphy-lut- 接頭辞）ではなくユーザーが選んだ LUT 名を返す",
       { expected: lutName, actual: third.states[0]?.colormap },
     );
+    // --- H4b: 派生シリーズ保存（確認ダイアログ → 保管庫に実在するか） ---
+    console.log("\n[4] saveDerivedSeries()（H4b）");
+    const seriesBefore = await listSeries(driver.ports.http, t0!.studyUid);
+
+    // 1) まず「拒否」を確認する（プラグインは黙って保存できない）。
+    const cancelledPromise = runSavePlugin(viewerPage);
+    await viewerPage.getByTestId("plugin-save-confirm").waitFor({ state: "visible", timeout: 10_000 });
+    check(true, "保存前に確認ダイアログが出る（抑止不可）");
+    const dlgText = (await viewerPage.getByTestId("plugin-save-confirm").textContent())?.replace(/\s+/g, " ") ?? "";
+    // 保存を行うのは hostapi-save プラグイン（版 0.2.0）。host がマニフェストから注入する。
+    check(
+      dlgText.includes("Host API Save") && dlgText.includes("0.2.0"),
+      "ダイアログにプラグイン名と版が出る",
+      dlgText.slice(0, 160),
+    );
+    const shownDesc = (await viewerPage.getByTestId("plugin-save-description").textContent())?.trim() ?? "";
+    check(shownDesc.startsWith("[Plugin] "), "ダイアログが保存後の接頭辞付き説明を見せる", shownDesc);
+    await viewerPage.getByTestId("plugin-save-cancel").click();
+    const cancelled = await cancelledPromise;
+    check(cancelled.save?.cancelled === true, "拒否すると cancelled が返る", cancelled.save);
+    const seriesAfterCancel = await listSeries(driver.ports.http, t0!.studyUid);
+    check(
+      seriesAfterCancel.length === seriesBefore.length,
+      "拒否したときシリーズは作られない",
+      { before: seriesBefore.length, after: seriesAfterCancel.length },
+    );
+
+    // 2) 承諾して保存する。
+    const savedPromise = runSavePlugin(viewerPage);
+    await viewerPage.getByTestId("plugin-save-confirm").waitFor({ state: "visible", timeout: 10_000 });
+    await viewerPage.screenshot({ path: path.join(OUT_DIR, "4-save-confirm.png") });
+    await viewerPage.getByTestId("plugin-save-confirm-button").click();
+    const saved = await savedPromise;
+    console.log(JSON.stringify(saved.save, null, 2));
+    check(saved.save?.ok === true, "承諾すると保存が成功する", saved.save);
+    check(saved.save?.instanceCount === 1, "保存された枚数が要求どおり", saved.save?.instanceCount);
+    check(saved.saveMismatch?.ok === false, "格子が合わないフレームは拒否（幾何を偽装できない）", saved.saveMismatch);
+
+    // 3) 保管庫に実在するか（＝本当に DICOM になったか）を backend の一覧で確認する。
+    const seriesAfter = await listSeries(driver.ports.http, t0!.studyUid);
+    const created = seriesAfter.find((x) => x.seriesInstanceUid === saved.save?.seriesInstanceUid);
+    check(!!created, "保管庫のシリーズ一覧に現れる", { uid: saved.save?.seriesInstanceUid, count: seriesAfter.length });
+    check(
+      (created?.seriesDescription ?? "").startsWith("[Plugin] "),
+      "SeriesDescription に [Plugin] 接頭辞が付く（一覧で人が気付ける）",
+      created?.seriesDescription,
+    );
+    check(created?.numberOfInstances === 1, "インスタンス数が 1", created?.numberOfInstances);
+    check(created?.modality === "CT", "モダリティは元シリーズを維持", created?.modality);
+
+    // 4) DICOM タグを読み、出所と Rescale が残っているか確認する。
+    const tags = await instanceTags(driver.ports.http, t0!.studyUid, created!.seriesInstanceUid);
+    const tagValue = (keyword: string) => tags.find((r) => r.name === keyword)?.value ?? "";
+    check(/DERIVED/.test(tagValue("ImageType")), "ImageType が DERIVED", tagValue("ImageType"));
+    check(
+      /hostapi-save/.test(tagValue("DerivationDescription")),
+      "DerivationDescription にプラグイン id が入る",
+      tagValue("DerivationDescription"),
+    );
+    check(
+      tags.some((r) => /ContributingEquipment/.test(r.name ?? "")),
+      "ContributingEquipmentSequence が書かれている",
+    );
+    // マスクは HU（整数）なので恒等 Rescale のはず（量子化誤差を足していない）。
+    check(Number(tagValue("RescaleSlope")) === 1, "整数マスクは Rescale 恒等（量子化誤差を足さない）", tagValue("RescaleSlope"));
+    check(Number(tagValue("RescaleIntercept")) === 0, "Rescale Intercept も恒等", tagValue("RescaleIntercept"));
+    check(tagValue("RescaleType") === "HU", "RescaleType にプラグインが申告した単位が入る", tagValue("RescaleType"));
+    // 元シリーズは変更されない（プラグインは新シリーズを足すだけ）。
+    check(
+      seriesAfter.length === seriesBefore.length + 1,
+      "元シリーズは残り、新シリーズが 1 本増える",
+      { before: seriesBefore.length, after: seriesAfter.length },
+    );
   } finally {
     await viewerPage?.close().catch(() => {});
     await driver.stop();
@@ -372,7 +503,7 @@ async function main(): Promise<void> {
 
   console.log("\n=== 結果 ===");
   if (failures.length === 0) {
-    console.log(`すべて OK。スクリーンショット: ${OUT_DIR}`);
+    console.log(`${passed} 項目すべて OK。スクリーンショット: ${OUT_DIR}`);
   } else {
     console.log(`FAIL ${failures.length} 件:`);
     for (const f of failures) console.log(`  - ${f}`);

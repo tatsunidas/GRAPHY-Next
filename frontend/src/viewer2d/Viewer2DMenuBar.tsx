@@ -82,6 +82,9 @@ export function Viewer2DMenuBar({
     // 出所ラベルはプラグイン任せにしない: host が必ずマニフェストの表示名を入れる。
     showOverlay: (tileId, overlay) => actions.showOverlay(tileId, { ...overlay, label: m.name }),
     clearOverlay: (tileId) => actions.clearOverlay(tileId),
+    // 出所（id/name/version）は host がマニフェストから入れる。プラグインに名乗らせない。
+    saveDerivedSeries: (tileId, req) =>
+      actions.saveDerivedSeries(tileId, req, { id: m.id, name: m.name, version: m.version }),
   }));
   const [open, setOpen] = useState<string | null>(null);
   useEffect(() => {

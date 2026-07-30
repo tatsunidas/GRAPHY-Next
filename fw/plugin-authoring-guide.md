@@ -1,7 +1,7 @@
 # GRAPHY-Next プラグイン作成ガイド
 
 > 作成日: 2026-07-02（更新: 2026-07-30 — §2-3 に host API の問い合わせ系（H1/H2）・画素読み出し（H3）・
-> オーバーレイ（H4a）を追記）
+> オーバーレイ（H4a）・派生シリーズ保存（H4b）を追記）
 > 対象: プラグイン開発者
 > 関連: [`plugin-architecture.md`](plugin-architecture.md)（設計・全体像）
 
@@ -99,10 +99,10 @@ export function activate(host) {
 
 | サーフェス | 追加プロパティ |
 |---|---|
-| `viewer2d.menu` / `viewer2d.toolbar` | `actions`（表示中タイルへの操作。`invert()` / `rotate90()` / `fit()` 等。定義は `frontend/src/viewer2d/Viewer2DToolbar.tsx` の `ViewerActions`）<br>`getTargets()` / `getViewState()` / `getPixelData()` / `showOverlay()` / `clearOverlay()`（**0.1.9 以降**。下記） |
+| `viewer2d.menu` / `viewer2d.toolbar` | `actions`（表示中タイルへの操作。`invert()` / `rotate90()` / `fit()` 等。定義は `frontend/src/viewer2d/Viewer2DToolbar.tsx` の `ViewerActions`）<br>`getTargets()` / `getViewState()` / `getPixelData()` / `showOverlay()` / `clearOverlay()` / `saveDerivedSeries()`（**0.1.9 以降**。下記） |
 | `mainscreen.menu` | `selectedStudyUid`（選択中スタディの UID、未選択なら `null`） |
 
-**問い合わせ系・オーバーレイ（0.1.9 以降・[`plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張優先度-高h1h4a-実装済み) の H1〜H4a）**:
+**問い合わせ・オーバーレイ・保存（0.1.9 以降・[`plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張h1h4b-実装済み) の H1〜H4b）**:
 
 | メソッド | 戻り |
 |---|---|
@@ -111,6 +111,7 @@ export function activate(host) {
 | `getPixelData(tileId?, opts?)` | `Promise<{ tileId, imageId, sliceIndex, rows, cols, data, unit, spacing } \| null>`。`data` は `Float32Array`（row-major・`data[y*cols+x]`）の**校正済み画素**（CT なら HU）。`opts.sliceIndex` で別スライス（既定は表示中） |
 | `showOverlay(tileId?, overlay)` | 処理結果（値マップ）を表示中スライスに重ねる。`overlay = { data, rows, cols, window?, colormap?, opacity? }`。格子が現在スライスと不一致なら `false` |
 | `clearOverlay(tileId?)` | オーバーレイを消す |
+| `saveDerivedSeries(tileId?, req)` | 処理結果を**派生シリーズとして保存**（standalone は保管庫、web は PACS）。`Promise<{ ok, cancelled?, seriesInstanceUid?, instanceCount?, error? }>`。**本体が必ず確認ダイアログを出す** |
 
 - **呼ぶたびに現在値を読む**。ダイアログを開いている間にユーザーがスライスを送るので、
   活性化時に一度読んだ値を持ち回らないこと。
@@ -159,7 +160,34 @@ if (px) {
 - `getViewState()` の W/L は**モダリティ値空間**（CT なら HU。単位は `unit`）。表示 8bit ではない。
 - これらを使うプラグインは `engines.graphy` を `">=0.1.9"` に上げる
   （古い本体には導入されない＝意図した挙動）。
-- **処理結果の保存はまだできない**（H4b 未実装）。現状は `showOverlay()` で見せるところまで。
+- **保存（`saveDerivedSeries`）の要点**:
+  - **本体が必ず確認ダイアログを出す**（抑止不可）。ユーザーが拒否すると `{ ok: false, cancelled: true }`。
+  - **幾何はプラグインが書かない**。各フレームは `sliceIndex`（元シリーズのどのスライスに対応するか）
+    だけを申告し、IPP / IOP / PixelSpacing / 厚みは本体が元シリーズから引き継ぐ。
+    `rows`/`cols` は元スライスと一致必須。
+  - 画素は 16bit signed ＋ Rescale で保存される。**HU のような整数はそのまま**、確率マップのような
+    小さい実数は値域から係数を決めて量子化。`NaN` は「データ無し」として値域の最小値になる。
+  - 保存されたシリーズは `SeriesDescription` に **`[Plugin] ` 接頭辞**が付き、
+    `DerivationDescription` / `ContributingEquipmentSequence` にプラグイン id・版が残る（消せない）。
+  - **元シリーズは変更されない**（新しいシリーズが 1 本増えるだけ）。
+
+```js
+// 例: 閾値マスクを派生シリーズとして保存する
+const px = await host.getPixelData();
+if (px) {
+  const mask = new Float32Array(px.data.length);
+  for (let i = 0; i < px.data.length; i++) mask[i] = px.data[i] >= 300 ? px.data[i] : NaN;
+  const res = await host.saveDerivedSeries(px.tileId, {
+    seriesDescription: "Bone mask",
+    derivationDescription: "Threshold >= 300 HU",
+    frames: [{ sliceIndex: px.sliceIndex, data: mask }],
+    rows: px.rows,
+    cols: px.cols,
+    unit: px.unit,
+  });
+  host.notify(res.ok ? `saved ${res.instanceCount}` : res.cancelled ? "cancelled" : `failed: ${res.error}`);
+}
+```
 
 > 型定義の実体は `frontend/src/plugins/pluginTypes.ts`。
 

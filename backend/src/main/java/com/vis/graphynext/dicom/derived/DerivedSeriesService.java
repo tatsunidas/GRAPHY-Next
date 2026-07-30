@@ -42,6 +42,9 @@ public class DerivedSeriesService {
 
     private static final Logger log = LoggerFactory.getLogger(DerivedSeriesService.class);
 
+    /** プラグイン出力の SeriesDescription 接頭辞（一覧で人が気付けるようにする）。 */
+    static final String PLUGIN_PREFIX = "[Plugin] ";
+
     private final DicomStorageService storage;
     /** web モードのときだけ存在（STOW-RS 書き戻し用）。standalone では null。 */
     private final ObjectProvider<WebDicomDataService> webProvider;
@@ -193,8 +196,7 @@ public class DerivedSeriesService {
         // シリーズ（新規）。
         a.setString(Tag.SeriesInstanceUID, VR.UI, newSeriesUid);
         a.setInt(Tag.SeriesNumber, VR.IS, seriesNumber);
-        a.setString(Tag.SeriesDescription, VR.LO,
-                req.seriesDescription() != null ? req.seriesDescription() : "Reslice");
+        a.setString(Tag.SeriesDescription, VR.LO, seriesDescription(req));
 
         // インスタンス（新規）。
         a.setString(Tag.SOPInstanceUID, VR.UI, UIDUtils.createUID());
@@ -205,10 +207,18 @@ public class DerivedSeriesService {
         } else {
             a.setString(Tag.ImageType, VR.CS, "DERIVED", "SECONDARY");
         }
-        String derivation = req.derivationDescription() != null && !req.derivationDescription().isBlank()
-                ? req.derivationDescription()
-                : "Oblique reslice (GRAPHY-Next Slicer)";
-        a.setString(Tag.DerivationDescription, VR.ST, derivation);
+        a.setString(Tag.DerivationDescription, VR.ST, derivationDescription(req));
+        // プラグイン出力は機械可読な出所も残す（一覧の接頭辞と二重に明示する）。
+        DerivedSeriesRequest.Producer producer = req.producer();
+        if (producer != null) {
+            Attributes eq = new Attributes(4);
+            eq.setString(Tag.Manufacturer, VR.LO, "GRAPHY-Next plugin");
+            eq.setString(Tag.ManufacturerModelName, VR.LO,
+                    producer.name() != null && !producer.name().isBlank() ? producer.name() : producer.id());
+            eq.setString(Tag.SoftwareVersions, VR.LO, producer.version() != null ? producer.version() : "");
+            eq.setString(Tag.ContributionDescription, VR.ST, "Derived series produced by plugin " + producer.id());
+            a.newSequence(Tag.ContributingEquipmentSequence, 1).add(eq);
+        }
         copyTag(tmpl, a, Tag.ContentDate);
         copyTag(tmpl, a, Tag.ContentTime);
 
@@ -221,10 +231,15 @@ public class DerivedSeriesService {
         a.setInt(Tag.SamplesPerPixel, VR.US, 1);
         a.setInt(Tag.PixelRepresentation, VR.US, 1); // signed
         a.setString(Tag.PhotometricInterpretation, VR.CS, "MONOCHROME2");
-        // 値はそのまま（フロントの volume 値＝CT は HU）→ Rescale は恒等。
-        a.setDouble(Tag.RescaleIntercept, VR.DS, 0.0);
-        a.setDouble(Tag.RescaleSlope, VR.DS, 1.0);
-        if ("CT".equalsIgnoreCase(modality)) {
+        // Rescale: 既定は恒等（フロントの volume 値＝CT は HU がそのまま入る）。
+        // プラグイン由来の値マップは Float32 を Int16 に量子化するため、呼び出し側が係数を渡す。
+        double slope = req.rescaleSlope() != null ? req.rescaleSlope() : 1.0;
+        double intercept = req.rescaleIntercept() != null ? req.rescaleIntercept() : 0.0;
+        a.setDouble(Tag.RescaleIntercept, VR.DS, intercept);
+        a.setDouble(Tag.RescaleSlope, VR.DS, slope);
+        if (req.rescaleType() != null && !req.rescaleType().isBlank()) {
+            a.setString(Tag.RescaleType, VR.LO, req.rescaleType());
+        } else if ("CT".equalsIgnoreCase(modality)) {
             a.setString(Tag.RescaleType, VR.LO, "HU");
         }
 
@@ -253,6 +268,36 @@ public class DerivedSeriesService {
         // 画素データ（16bit → VR.OW, リトルエンディアン）。
         a.setBytes(Tag.PixelData, VR.OW, px);
         return a;
+    }
+
+    /**
+     * シリーズ説明。プラグイン由来なら**一覧で見て分かる接頭辞**を必ず付ける
+     * （`SeriesDescription` は他システムのシリーズ一覧にも出るため、ここが人向けの主要な手掛かり）。
+     * 呼び出し側が既に接頭辞付きで渡してきた場合は二重に付けない。
+     */
+    static String seriesDescription(DerivedSeriesRequest req) {
+        String desc = req.seriesDescription() != null && !req.seriesDescription().isBlank()
+                ? req.seriesDescription().trim()
+                : "Reslice";
+        if (req.producer() == null || desc.startsWith(PLUGIN_PREFIX)) {
+            return desc;
+        }
+        String out = PLUGIN_PREFIX + desc;
+        // SeriesDescription は LO（64 文字）。接頭辞を優先して末尾を切る。
+        return out.length() <= 64 ? out : out.substring(0, 64);
+    }
+
+    /** 派生内容の説明。プラグイン由来なら id と版を必ず含める（機械可読な出所）。 */
+    static String derivationDescription(DerivedSeriesRequest req) {
+        String base = req.derivationDescription() != null && !req.derivationDescription().isBlank()
+                ? req.derivationDescription().trim()
+                : (req.producer() != null ? "Plugin output" : "Oblique reslice (GRAPHY-Next Slicer)");
+        DerivedSeriesRequest.Producer p = req.producer();
+        if (p == null) {
+            return base;
+        }
+        String ver = p.version() != null && !p.version().isBlank() ? " " + p.version() : "";
+        return base + " (GRAPHY-Next plugin: " + p.id() + ver + ")";
     }
 
     /** Part-10 一時ファイルに書き出してから保管庫へ取り込む。 */

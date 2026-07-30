@@ -6,6 +6,8 @@
 // フロント面と /api/plugins の契約は standalone / web 両モード共通。
 import type { ViewerActions } from "../viewer2d/Viewer2DToolbar";
 import type {
+  ViewerDerivedSeriesRequest,
+  ViewerDerivedSeriesResult,
   ViewerOverlay,
   ViewerPixelDataOptions,
   ViewerTarget,
@@ -13,7 +15,15 @@ import type {
   ViewerTileViewState,
 } from "../viewer/viewerCommands";
 
-export type { ViewerOverlay, ViewerPixelDataOptions, ViewerTarget, ViewerTilePixelData, ViewerTileViewState };
+export type {
+  ViewerDerivedSeriesRequest,
+  ViewerDerivedSeriesResult,
+  ViewerOverlay,
+  ViewerPixelDataOptions,
+  ViewerTarget,
+  ViewerTilePixelData,
+  ViewerTileViewState,
+};
 
 /** プラグインを組み込む先（UI サーフェス）。fw/plugin-architecture.md §2.1。 */
 export type PluginSurface = "viewer2d.menu" | "viewer2d.toolbar" | "mainscreen.menu";
@@ -90,12 +100,32 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * 出所が分かるように、本体が画像の左下にプラグイン名のラベルを出す。
    *
    * <p>オーバーレイは**出したスライスに紐付く**（他スライスでは自動的に隠れ、戻ると再表示。
-   * シリーズ / C・T 切替では破棄）。**保存はしない**＝派生シリーズとして保管庫や PACS へ
-   * 書き戻す H4b は未実装。
+   * シリーズ / C・T 切替では破棄）。**これは表示だけ**で保存はしない。
+   * 保管庫 / PACS へ残すなら `saveDerivedSeries()`（H4b）を使う。
    */
   showOverlay: (tileId: string | undefined, overlay: ViewerOverlay) => boolean;
   /** プラグインオーバーレイを消す（H4a）。`tileId` 省略時は対象タイル全部。 */
   clearOverlay: (tileId?: string) => void;
+  /**
+   * 処理結果を**派生シリーズとして保存する**（H4b）。standalone はローカル保管庫、
+   * web は外部 PACS（STOW-RS）へ書き戻す。
+   *
+   * <p>**本体が必ず確認ダイアログを出す**（抑止不可）。ユーザーが拒否すると
+   * `{ ok: false, cancelled: true }` が返る。プラグインが黙って保存することはできない。
+   *
+   * <p>**幾何はプラグインに書かせない**: 各フレームは「元シリーズのどのスライスに対応するか」
+   * （`sliceIndex`）だけを申告し、IPP / IOP / PixelSpacing / スライス厚は本体が元シリーズから
+   * 引き継ぐ。`rows`/`cols` は元スライスと一致していること。
+   *
+   * <p>画素は Float32 → 16bit signed ＋ Rescale で保存される（HU のような整数はそのまま、
+   * 確率マップのような小さい実数は値域から係数を決めて量子化）。`NaN` は「データ無し」として
+   * 値域の最小値になる。保存されたシリーズは `SeriesDescription` に `[Plugin] ` 接頭辞が付き、
+   * `DerivationDescription` / `ContributingEquipmentSequence` にプラグイン id・版が記録される。
+   */
+  saveDerivedSeries: (
+    tileId: string | undefined,
+    req: ViewerDerivedSeriesRequest,
+  ) => Promise<ViewerDerivedSeriesResult>;
 }
 
 /** MainScreen 系プラグイン（mainscreen.menu）に渡すコンテキスト。 */
