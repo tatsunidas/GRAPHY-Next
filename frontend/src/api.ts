@@ -145,8 +145,13 @@ export interface VideoMetadata {
   cineRate: number | null;
   durationSec: number | null;
   transferSyntaxUid: string | null;
-  /** true の場合、ブラウザ非対応コーデックのため配信には ffmpeg 変換が必要（現状 /rendered は 415）。 */
+  /** true の場合、転送構文から見てブラウザ非対応のため配信には サーバ側の ffmpeg 変換が必要。 */
   transcodeRequired: boolean;
+  /**
+   * サーバ側で変換できるか（ffmpeg があるか）。P4 以降 `/rendered` は MPEG2 等も変換して配信するので、
+   * **`transcodeRequired && !transcodeAvailable` の時だけ**再生不可の案内を出す。
+   */
+  transcodeAvailable: boolean;
 }
 
 /** 動画諸元を取得する（standalone）。 */

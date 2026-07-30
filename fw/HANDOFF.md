@@ -1,8 +1,29 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
-> 更新日: 2026-07-30（最終更新: **動画 ROI（P3c）を実機検証で完了させ、3 件の不具合を修正**
-> ＝グローバル ROI が他フレームで出ない／ループ時に最終フレームへシークできない／計測テキストが
-> フレームに追従しない。下記エントリ参照）
+> 更新日: 2026-07-30（最終更新: **動画の P4（非 H.264 対応）を実装・実機検証**＝MPEG2 の DICOM video が
+> 再生できるようになった。同日、動画 ROI（P3c）も実機検証で完了させ 3 件の不具合を修正済み。下記エントリ参照）
+
+> 🟢 **2026-07-30 動画 P4 完了: MPEG2 等も `/rendered` で配信できるようにした**
+> （正本: [`fw/video-viewer-design.md`](video-viewer-design.md) §4.3 / §6 P4）。新規 `VideoRenderService`。
+> - **判定は転送構文ではなくペイロードの中身**。取込済み動画は MP4 だが、**モダリティ由来の正規 DICOM video は
+>   コンテナ無しの基本ストリーム**（MPEG2=MPEG-2 video ES、MPEG-4 AVC=H.264 Annex-B）を入れてくるため、
+>   転送構文だけで「H.264 だから無変換で出せる」と判断すると後者が**再生できない**（P1 から残っていた穴）。
+>   → MP4 はそのまま／H.264・HEVC の ES は **remux（`-c:v copy`）＝再圧縮なし**／MPEG2 等は libx264 で再エンコード。
+> - 🚨 **基本ストリームには時間情報が無いので `-r <fps>` を入力側に必ず渡す**。省くと raw demuxer が 25fps を
+>   仮定し、さらに**先頭フレームの PTS が 1 フレーム分ずれて「フレーム f の統計が f−1 の値」になる**
+>   （実機検証で検出。実測 duration 2.067s / 先頭 PTS 0.066）。`-fps_mode` は ffmpeg 5.0 以降にしか無いので
+>   使わない（同梱 4.x で失敗）。⚠ 生 MPEG-2 は **muxer 名 `mpeg2video` / demuxer 名 `mpegvideo`** で異なる。
+> - キャッシュは `{sop}.{版}.mp4`。**版をファイル名に入れる**ので変換コマンドを変えたら上げるだけで古い成果物を
+>   捨てられる。加えて**元 DICOM より新しいことを要求**する（同じ SOP を削除→再取込した時に古い変換結果を
+>   配信し続けないため。automator の reset も実ファイルは消すがこのキャッシュは消さない）。
+> - `/video-metadata` に `transcodeAvailable` を追加し、UI の案内は **変換もできない時だけ**出す。
+> - 検証: backend `VideoRenderServiceTest` 16 件（ffmpeg 不在環境では実変換系を skip）＋ backend 全 **287 tests green**、
+>   実機 `automator/src/spike/videoMpeg2TranscodeCheck.ts` **18/18**。MPEG2 のままの DICOM は
+>   `automator/scripts/make-mpeg2-video-dicom.py`（ffmpeg ＋ pydicom）で組み立てる
+>   （取込経路は非 H.264 を取込時に H.264 化するので、取込では作れない）。
+> - 残: **P5（Portable / web）のみ**。小さな穴として、インスタンス削除時に `.cache/video/*.mp4` が消えない
+>   （孤児ファイル。配信の正しさは版＋mtime 判定で担保）。HEVC の remux 経路は実データ未検証。
+>
 > 目的: 別の作業者（Claude 含む）がこのリポジトリの状況を把握し、続きを実装できるようにする。
 > このファイル＋ `fw/` 配下の各設計ドキュメントが「ソース・オブ・トゥルース」。
 >

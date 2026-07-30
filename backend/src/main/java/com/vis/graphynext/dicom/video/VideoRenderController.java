@@ -4,7 +4,6 @@
  */
 package com.vis.graphynext.dicom.video;
 
-import com.vis.graphynext.dicom.DicomProperties;
 import com.vis.graphynext.dicom.store.DicomStorageService;
 import com.vis.graphynext.dicom.video.VideoFragmentExtractor.VideoMeta;
 import org.slf4j.Logger;
@@ -21,9 +20,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 
 /**
  * encapsulated video（PixelData=MP4）を <b>ブラウザ再生可能な {@code video/mp4}</b> として供給する
@@ -36,9 +33,10 @@ import java.nio.file.Paths;
  *   <li>{@code GET /api/instances/{sop}/video-metadata} … Rows/Columns/NumberOfFrames/fps 等を JSON で返す。</li>
  * </ul>
  *
- * <p>P1 スコープでは無変換で配信できる転送構文（H.264/HEVC 系）のみ対応。MPEG2 等ブラウザ非対応の
- * 転送構文は {@code 415 Unsupported Media Type} を返す（ffmpeg トランスコードは P4）。web モードでは
- * 索引が無いため 404（動画は WADO-RS 経由取得＝後追い）。
+ * <p>P4 でブラウザ非対応の中身（MPEG2 等）も配信できるようになった。実際の変換判断は
+ * {@link VideoRenderService} が<b>ペイロードの中身</b>で行う（MP4 はそのまま／H.264・HEVC の基本ストリームは
+ * remux／MPEG2 等は再エンコード）。ffmpeg が無くて変換できない時だけ {@code 415 Unsupported Media Type} を
+ * 返し、UI が案内を出す。web モードでは索引が無いため 404（動画は WADO-RS 経由取得＝後追い）。
  */
 @RestController
 @RequestMapping("/api/instances")
@@ -49,12 +47,12 @@ public class VideoRenderController {
     private static final MediaType VIDEO_MP4 = MediaType.parseMediaType("video/mp4");
 
     private final DicomStorageService storage;
-    /** 抽出/変換済み MP4 のキャッシュ（{@code <storageDir>/.cache/video/{sop}.mp4}）。 */
-    private final Path cacheDir;
+    /** 抽出/変換とキャッシュ（{@code <storageDir>/.cache/video/{sop}.mp4}）を担う。 */
+    private final VideoRenderService renderService;
 
-    public VideoRenderController(DicomStorageService storage, DicomProperties props) {
+    public VideoRenderController(DicomStorageService storage, VideoRenderService renderService) {
         this.storage = storage;
-        this.cacheDir = Paths.get(props.getStorageDir(), ".cache", "video");
+        this.renderService = renderService;
     }
 
     @GetMapping("/{sopUid}/video-metadata")
@@ -65,10 +63,13 @@ public class VideoRenderController {
         }
         try {
             VideoMeta m = VideoFragmentExtractor.readMeta(path);
+            // transcodeRequired は転送構文から見た「サーバ側変換が要るか」のヒント。
+            // transcodeAvailable が真なら /rendered が変換して配信できるので、UI は再生を試みてよい。
             return ResponseEntity.ok(new VideoMetadataDto(
                     m.rows(), m.columns(), m.numberOfFrames(), m.fps(),
                     m.frameTimeMs(), m.cineRate(), m.durationSec(),
-                    m.transferSyntaxUid(), m.transcodeRequired()));
+                    m.transferSyntaxUid(), m.transcodeRequired(),
+                    renderService.transcodeAvailable()));
         } catch (IOException e) {
             log.warn("video-metadata: 読取失敗 {}", sopUid, e);
             return ResponseEntity.notFound().build();
@@ -81,25 +82,15 @@ public class VideoRenderController {
         if (path == null) {
             return ResponseEntity.notFound().build();
         }
-        VideoMeta meta;
+        Path mp4;
         try {
-            meta = VideoFragmentExtractor.readMeta(path);
-        } catch (IOException e) {
-            log.warn("rendered: メタ読取失敗 {}", sopUid, e);
-            return ResponseEntity.notFound().build();
-        }
-        if (meta.transcodeRequired()) {
-            // P4: MPEG2 等は ffmpeg で H.264 MP4 にトランスコードして配信。現状は非対応を明示。
-            log.info("rendered: 無変換配信できない転送構文 {} (sop={})", meta.transferSyntaxUid(), sopUid);
+            mp4 = renderService.ensureRendered(path, sopUid);
+        } catch (VideoRenderService.TranscodeUnavailableException e) {
+            // ffmpeg が無いので変換できない（＝この環境では再生できない）。UI が案内を出す。
+            log.info("rendered: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE).build();
-        }
-        Path mp4 = cacheDir.resolve(sanitize(sopUid) + ".mp4");
-        try {
-            if (!Files.exists(mp4) || Files.size(mp4) == 0) {
-                VideoFragmentExtractor.extractTo(path, mp4);
-            }
         } catch (IOException e) {
-            log.warn("rendered: MP4 抽出失敗 {}", sopUid, e);
+            log.warn("rendered: MP4 の用意に失敗 {}", sopUid, e);
             return ResponseEntity.internalServerError().build();
         }
         Resource body = new FileSystemResource(mp4);
@@ -113,15 +104,9 @@ public class VideoRenderController {
                 .body(body);
     }
 
-    /** SOPInstanceUID をファイル名に使うためのサニタイズ（英数字とドットのみ許可、パストラバーサル防止）。 */
-    private static String sanitize(String sopUid) {
-        String s = sopUid.replaceAll("[^0-9A-Za-z.]", "_");
-        return s.length() <= 128 ? s : s.substring(0, 128);
-    }
-
     /** {@code /video-metadata} のレスポンス。 */
     public record VideoMetadataDto(
             int rows, int columns, int numberOfFrames, double fps,
             Double frameTimeMs, Double cineRate, Double durationSec,
-            String transferSyntaxUid, boolean transcodeRequired) {}
+            String transferSyntaxUid, boolean transcodeRequired, boolean transcodeAvailable) {}
 }

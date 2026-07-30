@@ -15,6 +15,9 @@
 > フォールバックとして残す。詳細は §6 / §12。
 > 関連: `fw/mainscreen-tools.md`（NonDicomImporter / 動画 DICOM 化・234 行「再生は 2D Viewer 側の将来対応」）、
 > `fw/nondicom-ffmpeg.md`（ffmpeg 同梱・解決）、`fw/viewer-2d-architecture.md`（2D ビューア中核）。
+> **P4 完了（2026-07-30）**: `/rendered` が中身を見て「MP4 はそのまま／H.264・HEVC の基本ストリームは remux／
+> MPEG2 等は再エンコード」に振り分ける（`VideoRenderService`）。MPEG2 の DICOM video を実機で再生確認（18/18）。
+> 残るのは **P5（Portable / web）** のみ。
 > 前提モード: standalone（Electron ＋ ローカル H2/FS）。web(BFF) 対応は §8 で後追い方針のみ。
 
 ## 0. ゴールと非ゴール
@@ -114,6 +117,11 @@ frontend: VideoViewport（ViewportType.VIDEO）
 | MPEG2 MP@ML / HL | `1.2.840.10008.1.2.4.100/101` | **ffmpeg で H.264 MP4 にトランスコード**（ブラウザは MPEG2 非対応）。`FfmpegLocator` を再利用 |
 | 我々の取込済み Video Photographic | 上記 H.264 High | 無変換（**主経路**） |
 
+> **2026-07-30（P4 実装で修正）**: 上の表は「転送構文 → 扱い」で書いてあるが、**実装はペイロードの中身で
+> 判定する**（`VideoRenderService.sniff()`）。同じ H.264 転送構文でも、我々の取込済みは MP4 コンテナ入り
+> （無変換）／モダリティ由来は Annex-B の基本ストリーム（**remux が必要**）で扱いが違うため。
+> 基本ストリームを変換する時は **`-r <fps>` を入力側に渡す**（渡さないとフレームが 1 つずれる。P4 の項参照）。
+
 - **ffmpeg 変換コマンド**は取込側 `VideoConverter.transcodeCommand` と揃える
   （`-c:v libx264 -profile:v high -level:v 4.1 -bf 0 -pix_fmt yuv420p -movflags +faststart -an`）。
   `+faststart` で moov を先頭に置き、Range シークを軽くする。
@@ -202,7 +210,33 @@ frontend: VideoViewport（ViewportType.VIDEO）
     ヒストグラム）** も実装済み・**実機検証済み（2026-07-30、`automator/src/spike/videoRoiFrameModeCheck.ts` 30/30）**。
     → 詳細と検証で直した不具合は §12 の残タスク欄。**複数 ROI の選択解析・計測テキストのフレーム追従・
     フレーム精度シークの実測確認も完了（2026-07-30）＝ P3c は完了**。残るのは P4（非 H.264）と P5（Portable/web）。
-- **P4（非 H.264 対応）**: `/rendered` に ffmpeg トランスコード分岐（MPEG2 等）＋キャッシュ（§4.3/4.4）。
+- ✅ **P4（非 H.264 対応）完了・実機検証済み（2026-07-30, ブランチ `feat/video-p4-transcode`）**:
+  `/rendered` に変換分岐＋キャッシュを実装（`dicom/video/VideoRenderService.java` 新規）。§4.3 を全面更新。
+  - **判定は転送構文ではなくペイロードの中身**（`sniff()`）。取込済み動画は MP4 だが、**モダリティ由来の正規
+    DICOM video はコンテナ無しの基本ストリーム**（MPEG2=MPEG-2 video ES、MPEG-4 AVC=H.264 Annex-B）を入れてくる。
+    転送構文だけで「H.264 だから無変換で出せる」と判断すると後者が**再生できない**（P1 から残っていた穴）。
+  - 3 経路: MP4 は**そのまま**（ffmpeg 不要・主経路）／H.264・HEVC の ES は **remux（`-c:v copy`）＝再圧縮なし**／
+    MPEG2 等は **libx264 で再エンコード**（取込側と同じ high@4.1・`-bf 0`）。いずれも `+faststart`。
+  - 🚨 **基本ストリームには時間情報が無いので入力側に `-r <fps>` を必ず渡す**（DICOM の FrameTime/CineRate 由来）。
+    省くと raw demuxer が既定 25fps を仮定し、さらに**先頭フレームの PTS が 1 フレーム分ずれる**
+    （実測: 30 フレームが duration 2.067s・先頭 PTS 0.066）。結果**「フレーム f の統計」が f−1 の値になる**
+    ことを実機検証で検出した。`-fps_mode` は ffmpeg 5.0 以降にしか無いので使わない（同梱 4.x で失敗する）。
+    ⚠ 生 MPEG-2 は **muxer 名 `mpeg2video` / demuxer 名 `mpegvideo`** と異なる（取り違え注意）。
+  - キャッシュは `<storageDir>/.cache/video/{sop}.{版}.mp4`。**版を名前に入れる**ので変換コマンドを変えたら
+    上げるだけで古い成果物を捨てられる。加えて**元 DICOM より新しいことを要求**する（同じ SOP を削除 →
+    再取込した時に古い変換結果を配信し続けないため。automator の reset も実ファイルは消すがキャッシュは消さない）。
+  - `/video-metadata` に **`transcodeAvailable`**（ffmpeg があるか）を追加。UI の「再生できません」案内は
+    **`transcodeRequired && !transcodeAvailable` の時だけ**出す（変換できる環境では素直に再生する）。
+    ffmpeg が無くて変換できない時だけ 415。
+  - 検証: backend `VideoRenderServiceTest` 16 件（判定・コマンド・実変換・キャッシュ・版/mtime 無効化。
+    実変換系は ffmpeg 不在環境では skip）＋ 実機 `automator/src/spike/videoMpeg2TranscodeCheck.ts` **18/18**。
+    フィクスチャは `automator/scripts/make-mpeg2-video-dicom.py`（ffmpeg ＋ pydicom）で **MPEG2 のままの
+    DICOM** を組み立てる（取込経路は非 H.264 を取込時に H.264 化してしまうので、取込では作れない）。
+    フレームごとに輝度が飛び飛びの動画なので、変換後も**フレームが入れ替わっていない**ことを数値で確認
+    （`measured ≈ 1.164 * level − 18.66`、最大残差 0.49）。
+  - **残る小さな穴**: インスタンス削除時に `.cache/video/*.mp4` が消えない（孤児ファイルがディスクに残る。
+    配信の正しさは上記の版＋mtime 判定で担保済み）。HEVC は remux 経路を用意したが**実データ未検証**
+    （ブラウザ側の HEVC 対応も環境依存。§10-1）。
 - **P5（Portable/web）**: §7/§8。
 
 ## 7. Portable Viewer での動画
@@ -221,7 +255,7 @@ frontend: VideoViewport（ViewportType.VIDEO）
 
 ## 9. ライセンス注意（配信時に ffmpeg 変換する場合）
 
-- P4 で MPEG2→H.264 変換に ffmpeg（GPL/x264, H.264 特許）を使う点は取込側と同じ論点
+- P4（実装済み）で MPEG2→H.264 変換に ffmpeg（GPL/x264, H.264 特許）を使う点は取込側と同じ論点
   （`fw/nondicom-ffmpeg.md` §4）。**別実行ファイルとして CLI 起動**（リンクしない）。
 - 無変換経路（取込済み H.264 の抽出配信）は ffmpeg 不要 = 追加ライセンス論点なし。
 
@@ -242,7 +276,8 @@ frontend: VideoViewport（ViewportType.VIDEO）
 
 - backend 新規（P1 実装済）: `dicom/video/VideoRenderController.java`、`dicom/video/VideoFragmentExtractor.java`、
   `dicom/video/VideoFragmentExtractorTest.java`。
-- backend 既存: `FfmpegLocator`（P4 で再利用予定）。キャッシュは既定 `<storageDir>/.cache/video`（設定不要。将来 yml 化可）。
+- backend 新規（P4 実装済）: `dicom/video/VideoRenderService.java`、`dicom/video/VideoRenderServiceTest.java`。
+- backend 既存: `FfmpegLocator`（P4 で再利用済み）。`VideoRenderController` は変換をサービスへ委譲。キャッシュは既定 `<storageDir>/.cache/video`（設定不要。将来 yml 化可）。
 - frontend 新規（P1 実装済）: `viewer/VideoViewer.tsx`（P3a で方式 A/VideoViewport primary ＋ B フォールバックに改修）。
   `api.ts`（`videoRenderedUrl`/`fetchVideoMetadata`/`VideoMetadata`/`isVideoSopClass`）。
   **P3a 実装済**: `viewer/videoMetadataProvider.ts`（VideoViewport 用メタデータプロバイダ）。
