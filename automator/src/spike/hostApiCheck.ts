@@ -67,6 +67,8 @@ interface PixelSummary {
   cols: number;
   unit: string;
   spacing: (number | null)[];
+  /** スライス**厚**（間隔とは別物）。古い本体では欠けるので "undefined" 文字列も来る。 */
+  sliceThickness: number | null | "undefined";
   length: number;
   isFloat32: boolean;
   min: number;
@@ -335,6 +337,13 @@ async function main(): Promise<void> {
       (px?.spacing?.[0] ?? 0) > 0 && (px?.spacing?.[1] ?? 0) > 0 && (px?.spacing?.[2] ?? 0) === 5,
       "spacing が [x, y, 5mm]（fixture は 5mm 等間隔）",
       px?.spacing,
+    );
+    // スライス**厚**は間隔とは別物。fixture は厚 5mm・間隔 5mm（連続収集）なので両方 5 になる。
+    // ここが `undefined` なら本体が契約を満たしていない（欠損時は null を返す約束）。
+    check(
+      px?.sliceThickness === 5,
+      "sliceThickness が 5mm（DICOM SliceThickness。spacing[2] とは別経路で読めている）",
+      px?.sliceThickness,
     );
     check(px?.sliceIndex === 0, "既定は表示中スライス（index 0）", px?.sliceIndex);
     check(first.pixelsOutOfRange === null, "範囲外 sliceIndex は null（末尾へ丸めない）", first.pixelsOutOfRange);

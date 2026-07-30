@@ -119,8 +119,15 @@ export interface PixelData {
   data: Float32Array;
   /** 値の単位（"HU" / "SUVbw" / "" / カラーは "raw"）。 */
   unit: string;
-  /** 画素間隔 [列方向(x), 行方向(y), スライス方向(z)] mm。不明な軸は null。 */
+  /**
+   * 画素間隔 [列方向(x), 行方向(y), スライス方向(z)] mm。不明な軸は null。
+   * z は**スライス間隔**で、ギャップのある収集ではスライス厚と一致しない。
+   */
   spacing: [number | null, number | null, number | null];
+  /**
+   * DICOM SliceThickness (0018,0050) mm。無ければ null（間隔で代用しない）。**0.1.12 以降**。
+   */
+  sliceThickness: number | null;
 }
 
 /** `showOverlay` に渡す値マップ。**0.1.9 以降**。 */
