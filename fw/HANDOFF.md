@@ -1,7 +1,38 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
-> 更新日: 2026-07-31（最終更新: **動画 P5a＝Export 媒体に MP4 を同梱し Portable 2D Viewer で再生**。
-> 前日に P4（非 H.264 対応）と動画 ROI（P3c）を完了済み。下記エントリ参照）
+> 更新日: 2026-07-31（最終更新: **動画は P1〜P5a まで完了**。残るは P5b（web/BFF）だけ。下記「動画の現在地」参照）
+
+> 📍 **動画（DICOM video）の現在地と次の一手（2026-07-31 時点）**
+> 正本: [`fw/video-viewer-design.md`](video-viewer-design.md)。**standalone では一通り使える状態**になった。
+>
+> | フェーズ | 内容 | 状態 |
+> |---|---|---|
+> | P1 | `/rendered`（Range 配信）＋最小再生 | ✅ 実機検証済 |
+> | P2/P3a | VideoViewport（方式 A）＋自作 cine コントロール | ✅ 実機検証済 |
+> | P3b | ツール（W/L・Pan/Zoom・計測・ROI） | ✅ 実機検証済 |
+> | P3c | ROI 解析（時系列 TIC・単一フレーム統計・帰属モード・選択解析） | ✅ 実機検証済（PR #96） |
+> | P4 | 非 H.264（MPEG2 等）の配信時変換 | ✅ 実機検証済（PR #98） |
+> | P5a | Export 媒体へ MP4 同梱 → Portable 2D Viewer で再生 | ✅ 実機検証済（PR #99） |
+> | **P5b** | **web(BFF) モードの動画** | 🔴 **未着手（残りはこれだけ）** |
+>
+> **P5b の出発点**（設計は `fw/video-viewer-design.md` §8）:
+> - 現状 web モードは `/rendered` が使えず（索引がローカル前提）、UI は `video.webUnsupported` の案内を出すだけ
+>   （`StudyList.tsx`）。PACS から WADO-RS で Part-10 を取り、**P4 の `VideoRenderService` にそのまま流す**
+>   （MP4 化・キャッシュ・Range 配信は既にあるので、足すのは「取得」だけ）という筋が素直。
+> - 検証環境は揃っている: このマシンで **dcm4chee が動いている**（8080/11112）。動画の DICOM は
+>   `automator/scripts/make-mpeg2-video-dicom.py` で作れるので、STOW-RS で入れて BFF 経由の取得を確かめられる。
+>   web モードの実機検証の型は `automator/src/spike/h4bWebStowCheck.ts` が参考になる。
+>
+> **動画の実機検証スパイク（standalone）**— 変更したらこれらを回す:
+> - `automator/src/spike/videoRoiFrameModeCheck.ts`（34 項目）… ROI の帰属モード・選択解析・計測テキスト追従
+> - `automator/src/spike/videoFrameAccuracyCheck.ts`（11 項目）… フレーム精度（合成動画を線形当てはめで判定）
+> - `automator/src/spike/videoMpeg2TranscodeCheck.ts`（18 項目）… MPEG2 の配信時変換
+> - `automator/src/spike/portableVideoCheck.ts`（20 項目）… Export 媒体 → Portable Viewer 再生
+> - ⚠ **同じマシンで別 worktree の automator と並走すると既定ポートで衝突する**。片方で
+>   `GRAPHY_AUTOMATOR_HTTP_PORT` / `..._SCP_PORT` / `..._VITE_PORT` を指定すること。
+> - ⚠ **`portableVideoCheck` は `target/classes/portable-viewer` が無いと VIEWER/ 同梱に失敗する**。
+>   `-Dfrontend.skip=true` でパッケージしていると生成されないので、`cd frontend && npm run build:portable` の
+>   成果物（`portable-dist/`）を同ディレクトリへ置いてから jar を作り直す。
 
 > 🟢 **2026-07-31 動画 P5a 完了: Export した媒体だけで動画が見られるようにした**
 > （正本: [`fw/video-viewer-design.md`](video-viewer-design.md) §7、[`fw/export-portable-viewer.md`](export-portable-viewer.md)）。
