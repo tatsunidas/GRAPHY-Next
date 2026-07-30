@@ -1,16 +1,18 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
-> 更新日: 2026-07-29（最終更新: プラグイン host API の **H1/H2 を実装**。下記エントリ参照）
+> 更新日: 2026-07-30（最終更新: プラグイン host API の **H3（画素読み出し）・H4a（オーバーレイ）・
+> H4b（派生シリーズ保存）を実装**＝§7 は完了。下記エントリ参照）
 > 目的: 別の作業者（Claude 含む）がこのリポジトリの状況を把握し、続きを実装できるようにする。
 > このファイル＋ `fw/` 配下の各設計ドキュメントが「ソース・オブ・トゥルース」。
 >
-> 🟡 **2026-07-29 プラグイン host API 拡張: H1・H2 実装 / H3・H4 未着手（優先度 高のまま）**
+> 🟢 **2026-07-29〜30 プラグイン host API 拡張: H1〜H4b すべて実装（§7 完了）**
 > → 設計・実装表・素案から変えた点は
-> [`fw/plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張優先度-高h1h2-実装済み)
+> [`fw/plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張h1h4b-実装済み)
 >
 > これまで 2D ビューアのプラグインには「いま何を見ているか」を答える手段が**一つも無かった**
 > （host は `{ surface, pluginId, t, notify, runBackend, actions }` のみ＝全部 `void` を返す命令で、
-> 問い合わせがゼロ）。**H1 `getTargets()`** と **H2 `getViewState(tileId?)`** を追加して解消した。
+> 問い合わせがゼロ）。**H1〜H4a** を追加し、画像処理プラグインが「読む→計算する→見せる」まで
+> 公式契約だけで書ける状態にした。
 >
 > - `getTargets()` … 対象タイル（選択→無ければ全＝`actions` と同じ対象）の
 >   `{ tileId, studyUid, seriesUid, seriesLabel, imageId, sliceIndex, sliceCount, c, t, modality }`。
@@ -20,23 +22,68 @@
 >   host はクリック時に 1 度組まれるのに対しプラグインのダイアログは残るため、
 >   スナップショットを配ると**スライスを送った後に黙って古い値を指す**。同じ理由で素案の `camera` も
 >   本体の `ViewTransform`（Fit=1.0 の zoom/pan/rotation/flip）に置き換えた。
+> - **H3 `getPixelData(tileId?, {sliceIndex?})`**（2026-07-30）… `{ imageId, sliceIndex, rows, cols,
+>   data: Float32Array, unit, spacing }`。**読み出しは `pixelCalibration.readModalitySlice()` に委譲**
+>   （校正の単一入口。直接 slope/intercept は preScale と二重適用で CT が約 −1024 ずれる）。
+>   **1 回 1 スライス**（範囲指定は入れない＝512×512×500 で 500MB 超を安易に書けてしまう）、
+>   **範囲外 index は null**（末尾へ丸めない。`viewportRead.resolveSliceIndex()` に切り出してテスト）。
+>   `read-pixels` の**実強制はしない**（プラグインは既に本体と同じ権限で動き信頼境界が変わらないため。
+>   宣言だけの偽の強制は P3 サンドボックスがあるかのような誤解を生む）。`permissions` に宣言する運用。
+> - **H4a `showOverlay(tileId?, overlay)` / `clearOverlay(tileId?)`**（2026-07-30）… 処理結果を
+>   表示中スライスに重ねて見せる（**保存はしない**）。**プラグインは値マップを渡すだけで、色付け
+>   （window / LUT / 不透明度）は本体がする**（RGBA を組ませると W/L・LUT・透明度の扱いがばらつき、
+>   本体の LUT 資産 106 種も使えない）。`NaN` は透明＝マスクをそのまま渡せる。**格子が現在スライスと
+>   不一致なら拒否**（勝手に伸縮すると座標の意味が壊れる）。**出したスライスに `imageId` で紐付き**、
+>   他スライスでは隠れ、シリーズ / C・T 切替で破棄（送った先に他スライスの結果が重なるのを構造で防ぐ）。
+>   **出所ラベル（`プラグイン: <表示名>`）を本体が必ず出す**（文字列はプラグインに触らせない）。
+>   純ロジックは `viewer/overlayRaster.ts`＋テスト。Fusion の `renderOverlay` 経路とは独立。
+> - **H4b `saveDerivedSeries(tileId?, req)`**（2026-07-30）… 処理結果を派生シリーズとして保存
+>   （standalone は保管庫、web は PACS へ STOW-RS）。方針は相談のうえ確定し、そのまま実装:
+>   ①**本体が必ず確認ダイアログ**（抑止不可・`PluginSaveConfirmDialog`。`window.confirm` は
+>   Electron でフォーカスを奪い自動検証からも操作できないため使わない）
+>   ②出所は**機械可読＋`SeriesDescription` の `[Plugin] ` 接頭辞**（`DerivationDescription` と
+>   `ContributingEquipmentSequence` に id・版。規則は `DerivedSeriesDescriptionTest` で固定）
+>   ③**web も許可**（既存の STOW-RS 分岐に乗る。**ただし実 PACS での検証は未**）
+>   ④画素は Float32→Int16 ＋ **自動 slope/intercept**（`viewer/derivedSeriesEncode.ts`＋テスト。
+>   **HU のような整数は恒等**で量子化誤差を足さず、確率マップ 0〜1 は値域を Int16 全域へ写像。
+>   `NaN` は「データ無し」＝値域の最小値）。
+>   **幾何はプラグインに書かせない**（`frames` は `sliceIndex` だけ申告し、IPP/IOP/PixelSpacing/厚みは
+>   本体が元シリーズから引き継ぐ。座標を組ませると実空間の意味が壊れた派生シリーズを作れてしまう）。
+>   **検証は同意より先**（`validateDerivedSeries` を分離＝通らない要求で確認を見せない）。
+>   土台は既存の `POST /api/series/derived`＝backend は任意フィールド（`rescale*` / `producer`）追加のみで、
+>   Slicer / Curved MPR の既存呼び出しは無変更。
 > - 新規 `frontend/src/viewer/viewportRead.ts` に読み取り専用ヘルパを切り出し、
 >   automator 用 `debugApi.ts`（DEV ガード）と共用。純ロジックは `viewportRead.test.ts`。
 > - フロント面のみで完結＝**web モードでも同じ**（`/api/plugins` の契約は不変）。backend 変更なし。
 >
-> **残**: 🔴 **H3 画素の読み出し（本命）** … 必ず `pixelCalibration.ts` 経由（直接 slope/intercept を
-> 掛けると preScale と二重適用になり CT が約 −1024 ずれる既知事故）。H4 書き戻しは設計判断が要るので別扱い。
+> **残**: 🔴 **H4b の web モード（外部 PACS への STOW-RS 書き戻し）が未検証**
+> （コードは既存 web 分岐に乗るだけで追加なし。実 PACS 相手の確認を
+> `deploy/dcm4chee/VERIFY-web.md` の手順に足す）。
 > 🔴 **外部デモ 4 リポジトリの `graphy-plugin.d.ts` 同期**（本体側の `examples/plugin-template/` は更新済み）と、
-> mean-filter / gemini-findings の `findOpenTiles()`（DOM 依存）→ `getTargets()` 置換。
+> mean-filter / gemini-findings の `findOpenTiles()`（DOM 依存）→ `getTargets()`、
+> キャンバス読み取り → `getPixelData()` の置換。**「8bit しか読めない」断り書きは撤回できる**。
 > 新 API を使うプラグインは `engines.graphy` を `">=0.1.9"` にする。
-> ✅ **実機検証済み（2026-07-30・standalone/Linux・26 項目すべて合格）**: 本物の Electron ＋ backend ＋
-> `plugins/` に置いた第三者プラグイン（`/api/plugins` 配信）で、**DOM を覗かずに**シリーズ/スライス/W/L が
-> 取れること、画面表示と値が一致すること、スライス送り・W/L プリセット・階調反転・LUT に**追従する**ことを確認。
-> ドライバ `automator/src/spike/hostApiCheck.ts`。詳細は設計 §7 の「実機検証」。
-> この検証で見つけて直した 2 点: ①`colormap` が内部登録名 `graphy-lut-10_Percent` を漏らしていた
+> ✅ **実機検証済み（2026-07-30・standalone/Linux・H1〜H4b の 73 項目すべて合格）**: 本物の Electron ＋
+> backend ＋ `plugins/` に置いた第三者プラグイン（`/api/plugins` 配信）で、**DOM を覗かずに**
+> シリーズ/スライス/W/L/**画素**が取れること、画面表示と値が一致すること、スライス送り・W/L プリセット・
+> 階調反転・LUT に**追従する**こと、**W/L を変えても画素値は不変**（＝表示 8bit ではない）ことを確認。
+> 画素は 512×512・HU・`spacing=[0.644531, 0.644531, 5]`、腹部中央が **−21 HU（軟部組織）＝
+> Rescale の二重適用なし**。ドライバ `automator/src/spike/hostApiCheck.ts`
+> （検証用プラグインの原本は `automator/plugins/hostapi-check/`）。詳細は設計 §7 の「実機検証」。
+> この検証で見つけて直した 3 点: ①`colormap` が内部登録名 `graphy-lut-10_Percent` を漏らしていた
 > → ユーザーが選んだ LUT 名（`10_Percent`）を返す。②automator の `DesktopDriver` が
 > **DevTools ウィンドウをメイン画面と誤認**していた（url が about:blank の間に predicate を外し、
 > timeout → `firstWindow()` が `devtools://…` を返す）→ 現存ウィンドウを url でポーリングする方式へ。
+> ③検証側の誤り: `min` が空気（−1000）でなく **GE の画素パディング（−3024＝raw −2000 ＋ intercept
+> −1024）**になるため、二重適用の判定は**軟部組織の値**で行うようにした。
+> ④保存（H4b）は **UI 越しでなく backend の一覧・タグダンプで確認**: 拒否→シリーズは作られない、
+> 承諾→保管庫に 1 本増え `[Plugin] Bone mask` / `ImageType=DERIVED` / `DerivationDescription` に
+> `hostapi-save` / `ContributingEquipmentSequence` あり / 整数マスクなので Rescale 恒等 /
+> `RescaleType=HU` / Modality は CT のまま / **元シリーズは無変更**。
+> ⑤**H4a のオーバーレイが空だったバグ**: キャンバスは `imageRect` 確定後のレンダで初めてマウントされる
+> ため、`useRef` だと描画 effect が先に走って ref が null・deps も変わらず、**空のキャンバスが乗ったまま**
+> になっていた（`300×150`・α>0 が 0 個）。callback ref（state）へ変更。**「要素が見えている」検証では
+> 気付けず、キャンバスの中身（α>0 の画素数がマスク該当数と一致するか）を読んで初めて分かった**。
 >
 > 🟢 **2026-07-29 プラグイン デモ リポジトリ 4 本を新設**（`fw/plugin-explainer.md` §6）。
 > 第三者がプラグインを書き始められるようにするため、**GRAPHY-Next の外に**独立リポジトリとして作成

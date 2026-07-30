@@ -37,6 +37,7 @@ import { WlPresetDialog } from "./WlPresetDialog";
 import { fetchSettings } from "../settings/settingsApi";
 import { applyGlobalLabelmapStyle, applyGlobalAnnotationStyle } from "../viewer/cornerstoneSetup";
 import { Viewer2DToolbar, type ViewerActions } from "./Viewer2DToolbar";
+import { PluginSaveConfirmDialog, type PluginSaveRequest } from "./PluginSaveConfirmDialog";
 import { Viewer2DMenuBar } from "./Viewer2DMenuBar";
 import { RoiManagerPanel } from "./RoiManagerPanel";
 import { useI18n } from "../i18n/i18n";
@@ -714,6 +715,11 @@ function TileGrid({
     () => (selectedIds.size > 0 ? [...selectedIds] : patient.tiles.map((tl) => tl.id)),
     [selectedIds, patient.tiles],
   );
+  // プラグインの派生シリーズ保存の確認（H4b）。保存は同意が取れてから実行する。
+  const [pluginSave, setPluginSave] = useState<{
+    request: PluginSaveRequest;
+    onDecide: (accepted: boolean) => void;
+  } | null>(null);
   const [lutOpen, setLutOpen] = useState(false);
   const [presetsOpen, setPresetsOpen] = useState(false);
   // 操作/計測ツール（左ドラッグ割当）。グローバル（タブ内全タイル）に適用。既定 W/L。
@@ -789,6 +795,53 @@ function TileGrid({
         if (!id) return null;
         const st = queryViewerCommand(id, (c) => c.getViewState());
         return st ? { tileId: id, ...st } : null;
+      },
+      getPixelData: async (tileId, opts) => {
+        const id = tileId ?? resolveTargets()[0];
+        if (!id) return null;
+        // queryViewerCommand は同期の戻りしか包めないので、Promise はここで await する
+        // （未登録タイルなら null が返るのでそのまま素通し）。
+        const pending = queryViewerCommand(id, (c) => c.getPixelData(opts));
+        const px = pending ? await pending : null;
+        return px ? { tileId: id, ...px } : null;
+      },
+      showOverlay: (tileId, overlay) => {
+        const id = tileId ?? resolveTargets()[0];
+        if (!id) return false;
+        return queryViewerCommand(id, (c) => c.showOverlay(overlay)) ?? false;
+      },
+      clearOverlay: (tileId) => {
+        const ids = tileId ? [tileId] : resolveTargets();
+        runViewerCommand(ids, (c) => c.clearOverlay());
+      },
+      // H4b: プラグインの出力を派生シリーズとして保存する。**必ず確認ダイアログを挟む**
+      // （抑止不可）。ここで同意が取れてからタイル側の保存コマンドを呼ぶ。
+      saveDerivedSeries: (tileId, req, producer) => {
+        const id = tileId ?? resolveTargets()[0];
+        if (!id) return Promise.resolve({ ok: false, error: "no target tile" });
+        // 通らない要求で確認ダイアログを見せない（先にタイル側で検証する）。
+        const invalid = queryViewerCommand(id, (c) => c.validateDerivedSeries(req));
+        if (invalid) return Promise.resolve({ ok: false, error: invalid });
+        return new Promise((resolve) => {
+          setPluginSave({
+            request: {
+              pluginName: producer.name,
+              pluginVersion: producer.version,
+              seriesDescription: req.seriesDescription,
+              instanceCount: req.frames.length,
+              mode,
+            },
+            onDecide: async (accepted) => {
+              setPluginSave(null);
+              if (!accepted) {
+                resolve({ ok: false, cancelled: true });
+                return;
+              }
+              const pending = queryViewerCommand(id, (c) => c.saveDerivedSeries(req, producer));
+              resolve(pending ? await pending : { ok: false, error: "tile is not available" });
+            },
+          });
+        });
       },
       editPresets: () => setPresetsOpen(true),
       // Z 並べ替えはシリーズレベル（seriesCommands）。動画/IPP不在は SeriesViewer 側でブロック。
@@ -957,6 +1010,14 @@ function TileGrid({
         />
       )}
       <WlPresetDialog open={presetsOpen} onClose={() => setPresetsOpen(false)} />
+      {/* プラグインの派生シリーズ保存の確認（H4b・抑止不可）。 */}
+      {pluginSave && (
+        <PluginSaveConfirmDialog
+          request={pluginSave.request}
+          onConfirm={() => pluginSave.onDecide(true)}
+          onCancel={() => pluginSave.onDecide(false)}
+        />
+      )}
       {toast && (
         <div style={{
           position: "fixed", top: 56, left: "50%", transform: "translateX(-50%)", zIndex: 60,

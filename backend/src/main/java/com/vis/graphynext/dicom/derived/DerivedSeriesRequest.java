@@ -30,6 +30,11 @@ import java.util.List;
  * @param spacingBetweenSlices スライス中心間隔（mm）
  * @param imageOrientationPatient IOP 6 要素（全スライス共通）。null/空 なら幾何なし（Curved MPR 等）
  * @param derivationDescription   派生内容の説明（null なら既定の Oblique reslice 文言）
+ * @param rescaleSlope        Rescale Slope（null なら 1.0＝恒等。プラグイン由来の値マップは
+ *                            Float32 を Int16 に量子化するため呼び出し側が係数を渡す）
+ * @param rescaleIntercept    Rescale Intercept（null なら 0.0＝恒等）
+ * @param rescaleType         RescaleType(0028,1054)（null なら CT のみ "HU"、他は書かない）
+ * @param producer            プラグイン由来の場合の出所（null なら本体の機能による生成）
  * @param frames              スライス毎（InstanceNumber 昇順で並べる）
  */
 public record DerivedSeriesRequest(
@@ -44,7 +49,26 @@ public record DerivedSeriesRequest(
         double spacingBetweenSlices,
         double[] imageOrientationPatient,
         String derivationDescription,
+        Double rescaleSlope,
+        Double rescaleIntercept,
+        String rescaleType,
+        Producer producer,
         List<Frame> frames) {
+
+    /**
+     * プラグインが作ったシリーズであることの出所（`fw/plugin-architecture.md` §7 の H4b）。
+     *
+     * <p>これが付いていると、{@link DerivedSeriesService} は
+     * ①`SeriesDescription` に接頭辞（`[Plugin] `）を付け、
+     * ②`ContributingEquipmentSequence` と `DerivationDescription` に id・版を書く。
+     * **他システムで開いても人と機械の両方が「プラグイン出力」と分かる**ようにするため
+     * （プラグインは本体と同じ権限で動くので、出力の由来を消せる状態にしない）。
+     *
+     * @param id      plugin.json の id
+     * @param name    表示名
+     * @param version 版
+     */
+    public record Producer(String id, String name, String version) {}
 
     /**
      * 1 スライス。

@@ -1,0 +1,12 @@
+{
+  "id": "hostapi-save",
+  "name": "Host API Save",
+  "version": "0.2.0",
+  "engines": { "graphy": ">=0.1.0", "os": ["win32", "darwin", "linux"] },
+  "description": "Verifies host.saveDerivedSeries() (fw/plugin-architecture.md #7 H4b).",
+  "author": "automator",
+  "license": "MIT",
+  "contributes": ["viewer2d.menu"],
+  "ui": "ui.js",
+  "permissions": ["read-pixels"]
+}

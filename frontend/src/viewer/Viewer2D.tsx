@@ -3,7 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { RenderingEngine, Enums, EVENTS, utilities, type Types } from "@cornerstonejs/core";
+import { RenderingEngine, Enums, EVENTS, metaData, utilities, type Types } from "@cornerstonejs/core";
 import {
   ToolGroupManager,
   PanTool,
@@ -35,12 +35,27 @@ import { listSpheres3D, sphereCanvasCircle, subscribeSphere3D, type SphereCanvas
 import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
 import { applyTransform, isPanned, readTransform, type ViewTransform, FIT_TRANSFORM } from "./transform";
 import { readImageInfo, sampleAtCanvas, computeSliceSpacing, calibratedUnit, type ImageInfo, type PixelSample } from "./imageInfo";
-import { readColormapName, readInvert } from "./viewportRead";
+import { readColormapName, readInvert, resolveSliceIndex } from "./viewportRead";
+import { readModalitySlice } from "./pixelCalibration";
+import { autoWindow, rasterizeOverlay, type OverlayWindow } from "./overlayRaster";
+import { encodeFrames, framePixelsBase64 } from "./derivedSeriesEncode";
+import { httpSend } from "../http";
+import { emitDbChanged } from "../dbEvents";
 import { computeOrientationMarkers, type OrientationMarkers } from "./orientation";
 import { computeScaleBar, type ScaleBar } from "./scaleBar";
 import { getOrCreateCameraSync, getOrCreateVoiSync, getOrCreatePresentationSync, getOrCreateSeriesVoiSync, broadcastSeriesProperties, captureVoiBaseline, clearVoiBaseline } from "./sync";
 import { registerReferenceSource, bumpReference, subscribeReference, computeReferenceSegments, type RefSegment } from "./referenceLines";
-import { registerViewerCommands, type ViewerCommands, type ViewerTargetInfo, type ViewerViewState } from "./viewerCommands";
+import {
+  registerViewerCommands,
+  type ViewerCommands,
+  type ViewerDerivedSeriesRequest,
+  type ViewerDerivedSeriesResult,
+  type ViewerOverlay,
+  type ViewerPixelData,
+  type ViewerPixelDataOptions,
+  type ViewerTargetInfo,
+  type ViewerViewState,
+} from "./viewerCommands";
 import { subscribeSuvStore, suvForImageId, seriesUidOf } from "./suvStore";
 import { resolveOverlay } from "./overlayText";
 import { useOverlayConfig } from "./overlayConfig";
@@ -48,7 +63,7 @@ import { ImageInfoPanel } from "./ImageInfoPanel";
 import { matchesCombo } from "../shortcuts/registry";
 import { useI18n } from "../i18n/i18n";
 import { LutDialog } from "./LutDialog";
-import type { LutData } from "../api";
+import { fetchLutData, type LutData } from "../api";
 import { LoadingSpinner } from "./LoadingSpinner";
 
 type ViewSnapshot = { transform: ViewTransform; voi: { lower: number; upper: number } | null };
@@ -184,6 +199,18 @@ export interface ImageRect {
   height: number;
 }
 
+/** プラグインの値マップの保持形（`ViewerOverlay` ＋ 対象スライスの imageId ＋ 解決済み既定値）。 */
+interface PluginOverlayState {
+  imageId: string;
+  data: Float32Array;
+  rows: number;
+  cols: number;
+  window: OverlayWindow | null;
+  colormap: string | null;
+  opacity: number;
+  label?: string;
+}
+
 /** renderOverlay に渡すコンテキスト（Fusion オーバーレイ等が base 画像に正確に重なるための情報）。 */
 export interface OverlayRenderContext {
   /** base 画像の表示矩形。zoom/pan/fit/flip に追従。 */
@@ -303,6 +330,15 @@ export function Viewer2D({
   const [scaleBar, setScaleBar] = useState<ScaleBar | null>(null);
   // base 画像の表示矩形（renderOverlay 用）。zoom/pan/fit に追従して更新。
   const [imageRect, setImageRect] = useState<ImageRect | null>(null);
+  // プラグインの値マップ（H4a）。imageId で束ねて、そのスライスを見ているときだけ描く。
+  const [pluginOverlay, setPluginOverlay] = useState<PluginOverlayState | null>(null);
+  const pluginOverlayRef = useRef<PluginOverlayState | null>(null);
+  pluginOverlayRef.current = pluginOverlay;
+  // ⚠ ref ではなく state で持つ: オーバーレイのキャンバスは `imageRect` が確定した後の
+  // レンダで初めてマウントされるため、ref にすると「描画 effect が先に走って ref が null →
+  // deps が変わらず再実行されない」で**空のキャンバスが乗ったまま**になる（実機検証で踏んだ）。
+  // callback ref なら要素のマウントで state が変わり、描画 effect が確実に走る。
+  const [overlayCanvas, setOverlayCanvas] = useState<HTMLCanvasElement | null>(null);
   // onCameraModified の古いクロージャ問題を避けるため ref で最新の有無を参照。
   const renderOverlayRef = useRef(renderOverlay);
   renderOverlayRef.current = renderOverlay;
@@ -613,7 +649,8 @@ export function Viewer2D({
       // スケールバー（Caliper）: 校正の有無で mm/cm・px と色(黄/グレー)を切替。FOV(ズーム)に追従。
       const calibrated = Boolean(infoRef.current?.columnPixelSpacing);
       setScaleBar(computeScaleBar(vp, element, calibrated));
-      if (renderOverlayRef.current) setImageRect(computeImageRect(vp)); // Fusion 等のオーバーレイ位置追従
+      // Fusion / プラグイン（H4a）のオーバーレイ位置追従。
+      if (renderOverlayRef.current || pluginOverlayRef.current) setImageRect(computeImageRect(vp));
       // リファレンスライン: 自分の面変化を他へ通知し、自分の描画も更新（pan/zoom/回転で追従）。
       if (!compact && !syncGroupId) {
         bumpReference();
@@ -919,16 +956,52 @@ export function Viewer2D({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stackKey]);
 
-  // renderOverlay が後から有効化されたとき（Fusion 設定時など）に矩形を初期計算する。
+  // renderOverlay / プラグインオーバーレイが後から有効化されたとき（Fusion 設定時・
+  // プラグイン実行時）に矩形を初期計算する。
   // renderOverlay は親で useCallback 安定化されている前提（毎レンダ別関数だとループするため）。
   useEffect(() => {
-    if (!renderOverlay) {
+    if (!renderOverlay && !pluginOverlay) {
       setImageRect(null);
       return;
     }
     const vp = viewportRef.current;
     if (vp) setImageRect(computeImageRect(vp));
-  }, [renderOverlay]);
+  }, [renderOverlay, pluginOverlay]);
+
+  // スタック（シリーズ・C/T）が変わったらプラグインオーバーレイは破棄する。
+  // 別シリーズに他シリーズの計算結果が残るのを防ぐ（imageId 一致だけでは C/T 切替を跨げる）。
+  useEffect(() => {
+    setPluginOverlay(null);
+  }, [stackKey]);
+
+  // 値マップ → RGBA。LUT 名が指定されていれば本体の LUT を取ってきて色付けする。
+  useEffect(() => {
+    const canvas = overlayCanvas;
+    if (!canvas || !pluginOverlay) return;
+    let alive = true;
+    const draw = (lut: LutData | null) => {
+      if (!alive) return;
+      canvas.width = pluginOverlay.cols;
+      canvas.height = pluginOverlay.rows;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      const rgba = rasterizeOverlay(pluginOverlay.data, pluginOverlay.opacity, pluginOverlay.window, lut);
+      // createImageData 経由で詰める（new ImageData(rgba, …) は Uint8ClampedArray の
+      // ArrayBufferLike と lib.dom の ImageDataArray が噛み合わない）。
+      const img = ctx.createImageData(pluginOverlay.cols, pluginOverlay.rows);
+      img.data.set(rgba);
+      ctx.putImageData(img, 0, 0);
+    };
+    if (pluginOverlay.colormap) {
+      // 取得できなければグレースケールで描く（色が付かないだけで、結果は見える）。
+      fetchLutData(pluginOverlay.colormap).then(draw).catch(() => draw(null));
+    } else {
+      draw(null);
+    }
+    return () => {
+      alive = false;
+    };
+  }, [pluginOverlay, overlayCanvas]);
 
   // リファレンスライン: base ビューポートを source として常時登録（他ビューが参照）。
   // ラベル（シリーズ名）変化・再構築で再登録。SliderView base のみ。
@@ -1139,6 +1212,151 @@ export function Viewer2D({
     };
   };
 
+  // H4a: プラグインの値マップを表示中スライスへ重ねる。
+  // 「どのスライスに対する結果か」を imageId で束ねる: スライスを送ると隠れ、戻ると再表示される
+  // （送った先の画像に他スライスの計算結果が重なって見えるのが最悪なので、そこを構造で防ぐ）。
+  const showOverlay = (o: ViewerOverlay): boolean => {
+    const imageId = imageIdsRef.current[indexRef.current];
+    const inf = infoRef.current;
+    if (!imageId || !o?.data || !(o.rows > 0) || !(o.cols > 0)) return false;
+    if (o.data.length !== o.rows * o.cols) return false;
+    // 現在スライスの格子と一致しないマップは拒否する（勝手に伸縮すると座標の意味が壊れる）。
+    if (inf?.rows !== undefined && inf?.columns !== undefined && (inf.rows !== o.rows || inf.columns !== o.cols)) {
+      return false;
+    }
+    setPluginOverlay({
+      imageId,
+      data: o.data,
+      rows: o.rows,
+      cols: o.cols,
+      window: o.window ?? autoWindow(o.data),
+      colormap: o.colormap ?? null,
+      opacity: o.opacity ?? 0.5,
+      label: o.label,
+    });
+    return true;
+  };
+  const clearOverlay = () => setPluginOverlay(null);
+
+  // H4b: 処理結果を派生シリーズとして保存する。**同意は画面側で取ってから来る**。
+  // 幾何（IPP/IOP/PixelSpacing/厚み）はプラグインに書かせず、元シリーズから引き継ぐ
+  // （座標を組ませると実空間の意味が壊れた派生シリーズを保管庫に作れてしまう）。
+  // 保存要求の検証。**同意を求める前に**画面側がこれを呼ぶ（通らない要求で
+  // ユーザーに確認ダイアログを見せないため）。saveDerivedSeries でも再度通す（多重防御）。
+  const validateDerivedSeries = (req: ViewerDerivedSeriesRequest): string | null => {
+    const ctx = roiContextRef.current;
+    const ids = imageIdsRef.current;
+    if (!ctx) return "no series context";
+    if (!req?.frames?.length) return "frames is empty";
+    if (!(req.rows > 0) || !(req.cols > 0)) return "rows/cols is invalid";
+    const inf = infoRef.current;
+    // 元スライスと同じ格子でなければ拒否（幾何を引き継ぐ前提が崩れる）。
+    if (inf?.rows !== undefined && inf?.columns !== undefined && (inf.rows !== req.rows || inf.columns !== req.cols)) {
+      return `rows/cols must match the source slice (${inf.rows}x${inf.columns})`;
+    }
+    for (const f of req.frames) {
+      if (resolveSliceIndex(f.sliceIndex, indexRef.current, ids.length) === null) {
+        return `sliceIndex out of range: ${f.sliceIndex}`;
+      }
+      if (f.data?.length !== req.rows * req.cols) {
+        return "data length must be rows*cols";
+      }
+    }
+    return null;
+  };
+
+  const saveDerivedSeries = async (
+    req: ViewerDerivedSeriesRequest,
+    producer: { id: string; name: string; version: string },
+  ): Promise<ViewerDerivedSeriesResult> => {
+    const ctx = roiContextRef.current;
+    const ids = imageIdsRef.current;
+    const invalid = validateDerivedSeries(req);
+    if (invalid || !ctx) return { ok: false, error: invalid ?? "no series context" };
+    const inf = infoRef.current;
+    // 面内間隔・向きは元スライスの imagePlaneModule から。IOP が無いシリーズ（動画等）は
+    // 幾何なしで保存する（backend が IOP/IPP/FrameOfReference を書かない＝空間登録を偽装しない）。
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const plane = (id: string): any => metaData.get("imagePlaneModule", id);
+    const p0 = plane(ids[req.frames[0].sliceIndex]);
+    const rowCos = p0?.rowCosines as number[] | undefined;
+    const colCos = p0?.columnCosines as number[] | undefined;
+    const iop = rowCos && colCos ? [...rowCos, ...colCos] : [];
+    const pixelSpacing = [
+      inf?.rowPixelSpacing ?? p0?.rowPixelSpacing ?? 1,
+      inf?.columnPixelSpacing ?? p0?.columnPixelSpacing ?? 1,
+    ];
+    const encoded = encodeFrames(req.frames.map((f) => f.data));
+    const frames = req.frames.map((f, k) => ({
+      instanceNumber: k + 1,
+      imagePositionPatient: (plane(ids[f.sliceIndex])?.imagePositionPatient as number[] | undefined) ?? null,
+      pixels: framePixelsBase64(encoded.frames[k]),
+    }));
+    try {
+      const res = await httpSend<{ seriesInstanceUid: string; sopInstanceUids: string[] }>(
+        "/api/series/derived",
+        "POST",
+        {
+          studyInstanceUid: ctx.studyUid,
+          seriesInstanceUid: ctx.seriesUid,
+          seriesDescription: req.seriesDescription,
+          seriesNumber: null,
+          rows: req.rows,
+          columns: req.cols,
+          pixelSpacing,
+          sliceThickness: inf?.sliceThickness ?? inf?.sliceSpacing ?? 1,
+          spacingBetweenSlices: inf?.sliceSpacing ?? inf?.sliceThickness ?? 1,
+          imageOrientationPatient: iop,
+          derivationDescription: req.derivationDescription ?? null,
+          // 量子化した場合は係数を渡す（backend 既定は恒等）。
+          rescaleSlope: encoded.slope,
+          rescaleIntercept: encoded.intercept,
+          rescaleType: req.unit ?? null,
+          producer,
+          frames,
+        },
+      );
+      emitDbChanged({ reason: "series-create", studyUids: [ctx.studyUid] });
+      return {
+        ok: true,
+        seriesInstanceUid: res.seriesInstanceUid,
+        instanceCount: res.sopInstanceUids.length,
+      };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  };
+
+  // H3: スライス 1 枚の校正済み画素。**読み出しは pixelCalibration に委譲する**
+  // （getPixelData() へ直接 slope/intercept を掛けると preScale と二重適用になり CT が
+  // 約 −1024 ずれる既知事故。校正の単一入口を必ず通す＝CLAUDE.md のルール 2）。
+  const getPixelData = async (opts?: ViewerPixelDataOptions): Promise<ViewerPixelData | null> => {
+    const ids = imageIdsRef.current;
+    const index = resolveSliceIndex(opts?.sliceIndex, indexRef.current, ids.length);
+    if (index === null) return null;
+    const imageId = ids[index];
+    if (!imageId) return null;
+    const slice = await readModalitySlice(imageId);
+    if (!slice) return null;
+    // 幾何は表示中スライスの ImageInfo から。要求スライスが別でも面内間隔は同一シリーズで共通、
+    // スライス間隔もシリーズ単位の値なので流用できる（非等間隔シリーズは sliceSpacing の
+    // 導出元 sliceSpacingSource を参照する運用＝ImageInfoPanel と同じ扱い）。
+    const inf = index === indexRef.current ? infoRef.current : readImageInfo(imageId);
+    return {
+      imageId,
+      sliceIndex: index,
+      rows: slice.height,
+      cols: slice.width,
+      data: slice.values,
+      unit: slice.unit,
+      spacing: [
+        inf?.columnPixelSpacing ?? null,
+        inf?.rowPixelSpacing ?? null,
+        infoRef.current?.sliceSpacing ?? null,
+      ],
+    };
+  };
+
   // SUV 化時に臨床標準ウィンドウ（SUV 0〜7）を適用する。voiRange はモダリティ値(Bq/mL)空間のため
   // SUV=modalityValue×scale の逆算で modalityValue [0, 7/scale] を設定する（本家 setSUVFactor 準拠）。
   const applySuvWindow = (scale: number) => {
@@ -1248,13 +1466,15 @@ export function Viewer2D({
   // 画面メニュー/ツールバーからの一括コマンド。最新の実装を ref に保持し、登録は wrapper 経由で常に最新を呼ぶ。
   const commandsRef = useRef<ViewerCommands>({
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
-    getWindowState, getSuvContext, getTargetInfo, getViewState, setActiveTool, setBrushSize, setWandTolerance,
-    clearAnnotations, undo, redo,
+    getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
+    validateDerivedSeries, saveDerivedSeries, setActiveTool, setBrushSize, setWandTolerance, clearAnnotations,
+    undo, redo,
   });
   commandsRef.current = {
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
-    getWindowState, getSuvContext, getTargetInfo, getViewState, setActiveTool, setBrushSize, setWandTolerance,
-    clearAnnotations, undo, redo,
+    getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
+    validateDerivedSeries, saveDerivedSeries, setActiveTool, setBrushSize, setWandTolerance, clearAnnotations,
+    undo, redo,
   };
   useEffect(() => {
     if (!commandKey || compact || syncGroupId) return;
@@ -1273,6 +1493,11 @@ export function Viewer2D({
       getSuvContext: () => commandsRef.current.getSuvContext(),
       getTargetInfo: () => commandsRef.current.getTargetInfo(),
       getViewState: () => commandsRef.current.getViewState(),
+      getPixelData: (o) => commandsRef.current.getPixelData(o),
+      showOverlay: (o) => commandsRef.current.showOverlay(o),
+      clearOverlay: () => commandsRef.current.clearOverlay(),
+      validateDerivedSeries: (r) => commandsRef.current.validateDerivedSeries(r),
+      saveDerivedSeries: (r, p) => commandsRef.current.saveDerivedSeries(r, p),
       setActiveTool: (n) => commandsRef.current.setActiveTool(n),
       setBrushSize: (s) => commandsRef.current.setBrushSize(s),
       setWandTolerance: (v) => commandsRef.current.setWandTolerance(v),
@@ -1345,6 +1570,27 @@ export function Viewer2D({
     <div data-graphy-image-panel style={fill ? { ...wrap, flex: 1, height: "auto" } : { ...wrap, height: height ?? 512 }}>
       {/* 深層: ピクセル canvas（Cornerstone3D が内部に canvas を生成） */}
           <div ref={elementRef} data-testid="viewer2d-canvas-host" style={pixelLayer} />
+          {/* プラグインの値マップ（H4a）。base 画像の表示矩形に重ね、対象スライスのときだけ出す。
+              出所が分かるようにラベルを添える（プラグインの出力を本体の描画と混同させない）。 */}
+          {pluginOverlay && imageRect && pluginOverlay.imageId === imageIds[imageIndex] && (
+            <>
+              <canvas
+                ref={setOverlayCanvas}
+                data-testid="plugin-overlay-canvas"
+                style={{
+                  position: "absolute",
+                  left: imageRect.left,
+                  top: imageRect.top,
+                  width: imageRect.width,
+                  height: imageRect.height,
+                  pointerEvents: "none",
+                }}
+              />
+              <div data-testid="plugin-overlay-label" style={pluginOverlayLabel}>
+                {t("viewer2d.plugin.overlayLabel", { name: pluginOverlay.label ?? "plugin" })}
+              </div>
+            </>
+          )}
           {/* Fusion 等のオーバーレイ。base 画像の表示矩形に重ねる（wrap の overflow:hidden でクリップ）。 */}
           {renderOverlay && imageRect && renderOverlay({
             rect: imageRect,
@@ -1629,6 +1875,18 @@ const wrap: React.CSSProperties = {
   overflow: "hidden",
 };
 const pixelLayer: React.CSSProperties = { position: "absolute", inset: 0 };
+/** プラグインオーバーレイの出所ラベル（本体の描画と混同させないための表示）。 */
+const pluginOverlayLabel: React.CSSProperties = {
+  position: "absolute",
+  left: 8,
+  bottom: 8,
+  padding: "2px 6px",
+  borderRadius: 3,
+  background: "rgba(11,92,173,0.75)",
+  color: "#fff",
+  font: "11px/1.4 monospace",
+  pointerEvents: "none",
+};
 const refLineSvg: React.CSSProperties = {
   position: "absolute",
   inset: 0,

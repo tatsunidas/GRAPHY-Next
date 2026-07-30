@@ -26,5 +26,29 @@ export function activate(host) {
     //       (view ? " W/L " + view.windowWidth + "/" + view.windowCenter + " " + view.unit : "")
     //     );
     //   }
+    //
+    // 画素（HU / SUV。表示 8bit ではない）が要る場合。permissions に "read-pixels" を宣言する。
+    // activate を async にして await するか、下のように then で受ける。
+    //
+    //   host.getPixelData().then((px) => {
+    //     if (!px) return;
+    //     let sum = 0;
+    //     for (const v of px.data) sum += v;              // data[y * px.cols + x]
+    //     host.notify("mean = " + (sum / px.data.length).toFixed(1) + " " + px.unit);
+    //
+    //     // 結果を画像に重ねて見せる（値を渡すだけ。NaN は透明。色付けは本体がする）。
+    //     const mask = new Float32Array(px.data.length);
+    //     for (let i = 0; i < px.data.length; i++) mask[i] = px.data[i] >= 300 ? px.data[i] : NaN;
+    //     host.showOverlay(px.tileId, {
+    //       data: mask, rows: px.rows, cols: px.cols, colormap: "Hot_Iron", opacity: 0.6,
+    //     });
+    //
+    //     // 派生シリーズとして残す（本体が確認ダイアログを出す。元シリーズは変わらない）。
+    //     host.saveDerivedSeries(px.tileId, {
+    //       seriesDescription: "Bone mask",
+    //       frames: [{ sliceIndex: px.sliceIndex, data: mask }],
+    //       rows: px.rows, cols: px.cols, unit: px.unit,
+    //     }).then((res) => host.notify(res.ok ? "saved" : res.cancelled ? "cancelled" : res.error));
+    //   });
   }
 }

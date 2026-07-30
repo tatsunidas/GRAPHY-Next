@@ -477,6 +477,18 @@ export const ja: Record<string, string> = {
   "viewer2d.menu.roiTools": "ROI ツール",
   "viewer2d.menu.analysis": "解析",
   "viewer2d.menu.plugins": "プラグイン",
+  // プラグインの計算結果を画像に重ねているとき、出所が分かるように出すラベル（H4a）。
+  "viewer2d.plugin.overlayLabel": "プラグイン: {{name}}",
+  // プラグインが派生シリーズを保存する前の確認ダイアログ（H4b・抑止不可）。
+  "viewer2d.plugin.save.title": "プラグインによるシリーズ保存の確認",
+  "viewer2d.plugin.save.lead": "プラグイン「{{name}} {{version}}」が処理結果を新しいシリーズとして保存しようとしています。",
+  "viewer2d.plugin.save.seriesDescription": "シリーズ説明",
+  "viewer2d.plugin.save.instances": "枚数",
+  "viewer2d.plugin.save.destination": "保存先",
+  "viewer2d.plugin.save.destination.standalone": "この PC の保管庫",
+  "viewer2d.plugin.save.destination.web": "接続中の PACS（STOW-RS で書き戻し）",
+  "viewer2d.plugin.save.notice": "保存される画像はプラグインが生成したもので、診断用に検証されたものではありません。元の画像は変更されません。",
+  "viewer2d.plugin.save.confirm": "保存する",
   "viewer2d.menu.pluginsNone": "（プラグインなし）",
   "viewer2d.wl.preset": "W/L プリセット",
   "viewer2d.wl.default": "既定 (DICOM)",

@@ -24,6 +24,18 @@ export const MOCK_MANIFESTS: PluginManifest[] = [
     frontend: { bundleUrl: "", contributes: ["viewer2d.menu"] },
   },
   {
+    id: "demo-bone-overlay",
+    name: "Demo: Bone overlay (2D)",
+    version: "0.0.0",
+    frontend: { bundleUrl: "", contributes: ["viewer2d.menu"] },
+  },
+  {
+    id: "demo-save-mask",
+    name: "Demo: Save mask (2D)",
+    version: "0.0.0",
+    frontend: { bundleUrl: "", contributes: ["viewer2d.menu"] },
+  },
+  {
     id: "demo-hello-main",
     name: "Demo: Hello (MainScreen)",
     version: "0.0.0",
@@ -43,22 +55,100 @@ export const DEMO_MODULES: Record<string, PluginModule> = {
       }
     },
   },
-  // host API H1/H2（fw/plugin-architecture.md §7）の配線確認用。DOM を一切見ずに
-  // 「どのシリーズの何スライス目を、どの W/L で見ているか」を答えられることを示す。
+  // host API H1/H2/H3（fw/plugin-architecture.md §7）の配線確認用。DOM を一切見ずに
+  // 「どのシリーズの何スライス目を、どの W/L で見ているか」と、その**生の HU** を答えられることを示す。
   "demo-context": {
-    activate: (host) => {
+    activate: async (host) => {
       if (host.surface !== "viewer2d.menu" && host.surface !== "viewer2d.toolbar") return;
       const targets = host.getTargets();
       if (targets.length === 0) {
         host.notify("no target tile");
         return;
       }
-      const lines = targets.map((tg) => {
+      const lines: string[] = [];
+      for (const tg of targets) {
         const vs = host.getViewState(tg.tileId);
         const wl = vs ? `W/L ${vs.windowWidth.toFixed(0)}/${vs.windowCenter.toFixed(0)} ${vs.unit}` : "W/L ?";
-        return `${tg.seriesLabel} [${tg.modality}] slice ${tg.sliceIndex + 1}/${tg.sliceCount} — ${wl}`;
-      });
+        const px = await host.getPixelData(tg.tileId);
+        let stats = "pixels ?";
+        if (px) {
+          let min = Infinity;
+          let max = -Infinity;
+          let sum = 0;
+          for (const v of px.data) {
+            if (v < min) min = v;
+            if (v > max) max = v;
+            sum += v;
+          }
+          stats =
+            `${px.cols}×${px.rows} ${px.unit} ` +
+            `min=${min.toFixed(0)} max=${max.toFixed(0)} mean=${(sum / px.data.length).toFixed(1)}`;
+        }
+        lines.push(
+          `${tg.seriesLabel} [${tg.modality}] slice ${tg.sliceIndex + 1}/${tg.sliceCount} — ${wl}\n  ${stats}`,
+        );
+      }
       host.notify(lines.join("\n"));
+    },
+  },
+  // H3 → H4a の一気通貫デモ: 生 HU を読んで閾値マスクを作り、そのまま重ねて見せる。
+  // 「読む→計算する→見せる」がプラグイン側だけで完結することの確認。
+  "demo-bone-overlay": {
+    activate: async (host) => {
+      if (host.surface !== "viewer2d.menu" && host.surface !== "viewer2d.toolbar") return;
+      const px = await host.getPixelData();
+      if (!px) {
+        host.notify("no pixels");
+        return;
+      }
+      // 300 HU 以上（骨・造影）を残し、それ以外は NaN＝透明。
+      const mask = new Float32Array(px.data.length);
+      let hit = 0;
+      for (let i = 0; i < px.data.length; i++) {
+        if (px.data[i] >= 300) {
+          mask[i] = px.data[i];
+          hit++;
+        } else {
+          mask[i] = NaN;
+        }
+      }
+      const ok = host.showOverlay(px.tileId, {
+        data: mask,
+        rows: px.rows,
+        cols: px.cols,
+        window: { center: 800, width: 1000 },
+        opacity: 0.6,
+      });
+      host.notify(ok ? `overlay: ${hit} px >= 300 ${px.unit}` : "overlay rejected");
+    },
+  },
+  // H3 → H4b: 生 HU から閾値マスクを作り、派生シリーズとして保存する。
+  // 保存前に本体が確認ダイアログを出す（プラグインは黙って書けない）。
+  "demo-save-mask": {
+    activate: async (host) => {
+      if (host.surface !== "viewer2d.menu" && host.surface !== "viewer2d.toolbar") return;
+      const px = await host.getPixelData();
+      if (!px) {
+        host.notify("no pixels");
+        return;
+      }
+      const mask = new Float32Array(px.data.length);
+      for (let i = 0; i < px.data.length; i++) mask[i] = px.data[i] >= 300 ? px.data[i] : NaN;
+      const res = await host.saveDerivedSeries(px.tileId, {
+        seriesDescription: "Bone mask (demo)",
+        derivationDescription: "Threshold >= 300 HU",
+        frames: [{ sliceIndex: px.sliceIndex, data: mask }],
+        rows: px.rows,
+        cols: px.cols,
+        unit: px.unit,
+      });
+      host.notify(
+        res.ok
+          ? `saved: ${res.instanceCount} instance(s), series ${res.seriesInstanceUid}`
+          : res.cancelled
+            ? "cancelled by user"
+            : `failed: ${res.error}`,
+      );
     },
   },
   "demo-hello-main": {

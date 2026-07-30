@@ -5,9 +5,25 @@
 // プラグイン契約の型定義。設計は fw/plugin-architecture.md を参照。
 // フロント面と /api/plugins の契約は standalone / web 両モード共通。
 import type { ViewerActions } from "../viewer2d/Viewer2DToolbar";
-import type { ViewerTarget, ViewerTileViewState } from "../viewer/viewerCommands";
+import type {
+  ViewerDerivedSeriesRequest,
+  ViewerDerivedSeriesResult,
+  ViewerOverlay,
+  ViewerPixelDataOptions,
+  ViewerTarget,
+  ViewerTilePixelData,
+  ViewerTileViewState,
+} from "../viewer/viewerCommands";
 
-export type { ViewerTarget, ViewerTileViewState };
+export type {
+  ViewerDerivedSeriesRequest,
+  ViewerDerivedSeriesResult,
+  ViewerOverlay,
+  ViewerPixelDataOptions,
+  ViewerTarget,
+  ViewerTilePixelData,
+  ViewerTileViewState,
+};
 
 /** プラグインを組み込む先（UI サーフェス）。fw/plugin-architecture.md §2.1。 */
 export type PluginSurface = "viewer2d.menu" | "viewer2d.toolbar" | "mainscreen.menu";
@@ -59,6 +75,57 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * W/L はモダリティ値空間（CT なら HU）。単位は `unit`。
    */
   getViewState: (tileId?: string) => ViewerTileViewState | null;
+  /**
+   * 対象タイルのスライス 1 枚の**校正済み画素**（H3）。`tileId` 省略時は対象の先頭タイル。
+   * 取得不能・`sliceIndex` が範囲外なら null。
+   *
+   * <p>値はモダリティ値（CT なら HU、SUV 校正済み PET なら SUV。単位は `unit`）で、
+   * **表示 W/L は掛かっていない**＝定量処理に使える。カラー画像は輝度で `unit="raw"`。
+   *
+   * <p>1 回 1 スライス。シリーズ全体が要るなら `sliceIndex` を変えて回すこと
+   * （512×512×500 で Float32 なら 500MB を超えるので、必要な範囲だけ読む設計にする）。
+   *
+   * <p>⚠ これは患者の生画素をプラグインへ渡す API である。プラグインは本体と同じ権限で動くため
+   * （`plugin-manager-design.md` §8 の P3 サンドボックスは未実装）、**強制はまだ無い**。
+   * 使うプラグインは `plugin.json` の `permissions` に `read-pixels` を宣言すること
+   * （導入時の同意画面に表示される）。
+   */
+  getPixelData: (tileId?: string, opts?: ViewerPixelDataOptions) => Promise<ViewerTilePixelData | null>;
+  /**
+   * 処理結果（値マップ）を対象タイルの**表示中スライスへ重ねて見せる**（H4a）。
+   * `tileId` 省略時は対象の先頭タイル。rows/cols が現在スライスと不一致なら false。
+   *
+   * <p>プラグインは**値だけ**渡し、色付け（window / LUT / 不透明度）は本体が行う。
+   * `NaN` の画素は透明になるので、マスクや部分的なマップをそのまま渡せる。
+   * 出所が分かるように、本体が画像の左下にプラグイン名のラベルを出す。
+   *
+   * <p>オーバーレイは**出したスライスに紐付く**（他スライスでは自動的に隠れ、戻ると再表示。
+   * シリーズ / C・T 切替では破棄）。**これは表示だけ**で保存はしない。
+   * 保管庫 / PACS へ残すなら `saveDerivedSeries()`（H4b）を使う。
+   */
+  showOverlay: (tileId: string | undefined, overlay: ViewerOverlay) => boolean;
+  /** プラグインオーバーレイを消す（H4a）。`tileId` 省略時は対象タイル全部。 */
+  clearOverlay: (tileId?: string) => void;
+  /**
+   * 処理結果を**派生シリーズとして保存する**（H4b）。standalone はローカル保管庫、
+   * web は外部 PACS（STOW-RS）へ書き戻す。
+   *
+   * <p>**本体が必ず確認ダイアログを出す**（抑止不可）。ユーザーが拒否すると
+   * `{ ok: false, cancelled: true }` が返る。プラグインが黙って保存することはできない。
+   *
+   * <p>**幾何はプラグインに書かせない**: 各フレームは「元シリーズのどのスライスに対応するか」
+   * （`sliceIndex`）だけを申告し、IPP / IOP / PixelSpacing / スライス厚は本体が元シリーズから
+   * 引き継ぐ。`rows`/`cols` は元スライスと一致していること。
+   *
+   * <p>画素は Float32 → 16bit signed ＋ Rescale で保存される（HU のような整数はそのまま、
+   * 確率マップのような小さい実数は値域から係数を決めて量子化）。`NaN` は「データ無し」として
+   * 値域の最小値になる。保存されたシリーズは `SeriesDescription` に `[Plugin] ` 接頭辞が付き、
+   * `DerivationDescription` / `ContributingEquipmentSequence` にプラグイン id・版が記録される。
+   */
+  saveDerivedSeries: (
+    tileId: string | undefined,
+    req: ViewerDerivedSeriesRequest,
+  ) => Promise<ViewerDerivedSeriesResult>;
 }
 
 /** MainScreen 系プラグイン（mainscreen.menu）に渡すコンテキスト。 */

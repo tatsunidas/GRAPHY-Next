@@ -7,7 +7,15 @@ import { presetLabel } from "./wlPresets";
 import { useWlPresets } from "./wlPresetStore";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { type SortMode } from "../viewer/seriesSort";
-import { type ViewerTarget, type ViewerTileViewState } from "../viewer/viewerCommands";
+import {
+  type ViewerDerivedSeriesRequest,
+  type ViewerDerivedSeriesResult,
+  type ViewerOverlay,
+  type ViewerPixelDataOptions,
+  type ViewerTarget,
+  type ViewerTilePixelData,
+  type ViewerTileViewState,
+} from "../viewer/viewerCommands";
 import { ToolIcon } from "../icons/ToolIcon";
 import { UI_ICON_FILES } from "../icons/toolIcons";
 
@@ -35,6 +43,21 @@ export interface ViewerActions {
   getTargets(): ViewerTarget[];
   /** 対象タイルの表示状態を返す問い合わせ（H2）。tileId 省略時は対象の先頭。無ければ null。 */
   getViewState(tileId?: string): ViewerTileViewState | null;
+  /** 対象タイルのスライス 1 枚の校正済み画素（H3）。tileId 省略時は対象の先頭。無ければ null。 */
+  getPixelData(tileId?: string, opts?: ViewerPixelDataOptions): Promise<ViewerTilePixelData | null>;
+  /** 値マップを対象タイルの表示中スライスへ重ねる（H4a）。tileId 省略時は対象の先頭。 */
+  showOverlay(tileId: string | undefined, overlay: ViewerOverlay): boolean;
+  /** プラグインオーバーレイを消す。tileId 省略時は対象タイル全部。 */
+  clearOverlay(tileId?: string): void;
+  /**
+   * プラグインの出力を派生シリーズとして保存する（H4b）。**確認ダイアログを必ず挟む**
+   * （抑止不可。ユーザーが拒否したら `cancelled: true`）。
+   */
+  saveDerivedSeries(
+    tileId: string | undefined,
+    req: ViewerDerivedSeriesRequest,
+    producer: { id: string; name: string; version: string },
+  ): Promise<ViewerDerivedSeriesResult>;
   /** W/L プリセット編集ダイアログを開く。 */
   editPresets(): void;
   /** Z 並べ替え（InstanceNumber / IPP, 昇順・降順）。対象タイルのシリーズに適用。 */

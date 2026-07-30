@@ -225,8 +225,8 @@ JAR 入りを導入・更新・削除・有効無効したときは、全ウィ�
 | 3 | [`graphy-next-plugin-gemini-findings`](https://github.com/tatsunidas/graphy-next-plugin-gemini-findings) | 粗い所見＋画像を Gemini に渡して推敲（教育用）。**JAR から外部 API を呼ぶ** | UI ＋ Java |
 
 > デモ 2・3 は、タイルの `data-tile-id` 属性とキャンバスの読み取りで代替している（各 README に明記済み）。
-> **タイルの識別は 0.1.9 の `getTargets()` で公式契約に置き換えられる**（§7）が、
-> 生ピクセルは H3 待ちなので、画素処理の断り書きはそのまま残る。
+> **0.1.9 でどちらも不要になった**（`getTargets()` ＋ `getPixelData()`＝§7 の H1・H3）。
+> デモ側の書き換えは別作業（外部リポジトリ）。
 > デモ 3 が JAR を持つのは、レンダラの CSP（`connect-src` が localhost のみ）により
 > `ui.js` から外部 API を叩けないため。**ここは将来の host API 拡張の候補**。
 
@@ -276,13 +276,17 @@ GitHub secrets に登録するだけ。以後リリースごとの追加作業�
   1 回目に本人かどうかは①の公式鍵でしか担保されない。
 - **web でのユーザー導入は実現していない。** 実現するならクライアント WASM か、
   サーバー側サンドボックス（DICOMweb サイドカー）が必要。
-- **host API がまだ画素を渡せない。** 2026-07-29 に **H1（`getTargets()`＝表示中のスタディ/シリーズ/
-  スライスの識別）と H2（`getViewState()`＝W/L・LUT・反転・affine）を実装**したので、
-  「どのシリーズの何スライス目を見ているか」は公式契約で答えられるようになった（0.1.9 以降）。
-  **残っているのは本命の H3＝生ピクセル（HU/SUV）の読み出し**で、これが無い限り
-  デモ 2 のような定量処理は canvas の 8bit（W/L 適用後）に頼るしかない。
-  → [`plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張優先度-高h1h2-実装済み)
-  （H1 ✅ → H2 ✅ → **H3 画素読み出し（未）** → H4 書き戻し（未））
+- ✅ **host API は H1〜H4b まで揃った**（2026-07-29〜30・0.1.9 以降）。`getTargets()`（何を見ているか）/
+  `getViewState()`（W/L・LUT・affine）/ `getPixelData()`（**校正済み画素**＝CT なら HU。表示 8bit ではない）/
+  `showOverlay()`（結果を重ねる）/ `saveDerivedSeries()`（**派生シリーズとして保存**）。
+  画像処理プラグインは「読む→計算する→見せる→残す」まで公式契約だけで書け、DOM 依存もキャンバス
+  読み取りも不要になった。→ [`plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張h1h4b-実装済み)
+  **保存には本体が必ず確認ダイアログを出し**（抑止不可）、保存物には `SeriesDescription` の
+  `[Plugin] ` 接頭辞と `DerivationDescription` / `ContributingEquipmentSequence` の id・版が必ず残る。
+  **元シリーズは変更されない。** ただし **web（外部 PACS への STOW-RS 書き戻し）は未検証**。
+- **画素アクセスに強制が無い。** `getPixelData()` は患者の生画素をプラグインへ渡すが、
+  `permissions` の `read-pixels` は**宣言（同意画面での表示）だけ**で強制していない。
+  プラグインは本体と同じ権限で動くため（P3 サンドボックス未実装）、そもそも信頼境界が無い。
 - **`ui.js` から外部 API を叩けない。** 本番ビルドの CSP が `connect-src` を localhost に
   限っているため（`fw/security.md`）。外部通信は JAR 側に置くしかなく、結果として
   「UI だけで済む機能」まで standalone 限定になる。

@@ -78,6 +78,13 @@ export function Viewer2DMenuBar({
     // 問い合わせ系は actions の実装へ委譲（対象の定義＝選択→無ければ全、を命令系と共有するため）。
     getTargets: () => actions.getTargets(),
     getViewState: (tileId) => actions.getViewState(tileId),
+    getPixelData: (tileId, opts) => actions.getPixelData(tileId, opts),
+    // 出所ラベルはプラグイン任せにしない: host が必ずマニフェストの表示名を入れる。
+    showOverlay: (tileId, overlay) => actions.showOverlay(tileId, { ...overlay, label: m.name }),
+    clearOverlay: (tileId) => actions.clearOverlay(tileId),
+    // 出所（id/name/version）は host がマニフェストから入れる。プラグインに名乗らせない。
+    saveDerivedSeries: (tileId, req) =>
+      actions.saveDerivedSeries(tileId, req, { id: m.id, name: m.name, version: m.version }),
   }));
   const [open, setOpen] = useState<string | null>(null);
   useEffect(() => {

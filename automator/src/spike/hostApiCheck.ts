@@ -52,32 +52,65 @@ interface ViewState {
   zoom: number;
   pan: [number, number];
 }
+/** ui.js が計算して返す画素の要約（Float32Array 自体は evaluate 越しに運ばない）。 */
+interface PixelSummary {
+  imageId: string;
+  sliceIndex: number;
+  rows: number;
+  cols: number;
+  unit: string;
+  spacing: (number | null)[];
+  length: number;
+  isFloat32: boolean;
+  min: number;
+  max: number;
+  mean: number;
+  center: number;
+}
 interface Payload {
   at: string;
   targets: Target[];
   states: (ViewState | null)[];
   defaultState: ViewState | null;
   unknownTile: ViewState | null;
+  pixels: PixelSummary | null;
+  pixelsSlice0: PixelSummary | null;
+  pixelsOutOfRange: unknown;
+  pixelsUnknownTile: unknown;
+  overlay?: {
+    shown: boolean;
+    hit: number;
+    mismatchRejected: boolean;
+    unknownTileRejected: boolean;
+  };
+  /** H4b: 保存の結果（プラグインが受け取った戻り）。 */
+  save?: { ok: boolean; cancelled?: boolean; seriesInstanceUid?: string; instanceCount?: number; error?: string };
+  /** H4b: 幾何を偽装できないこと（格子不一致は拒否）。 */
+  saveMismatch?: { ok: boolean; error?: string };
 }
 
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "hostapi-check");
-/** 検証用プラグインの原本（リポジトリ管理下）。 */
-const PLUGIN_SRC = path.join(AUTOMATOR_ROOT, "plugins", "hostapi-check");
-/** backend が走査する plugins root（= backend の CWD 直下）。 */
-const PLUGIN_DST = path.join(DESKTOP_RUN_DATA_DIR, "plugins", "hostapi-check");
+/** 検証用プラグインの原本（リポジトリ管理下）。H1〜H4a 用と H4b（保存）用の 2 本。 */
+const PLUGIN_IDS = ["hostapi-check", "hostapi-save"];
 
 /** 検証用プラグインを backend の plugins フォルダへ配置する（第三者プラグインの手置きと同じ形）。 */
-function installVerificationPlugin(): void {
-  fs.mkdirSync(PLUGIN_DST, { recursive: true });
-  for (const name of fs.readdirSync(PLUGIN_SRC)) {
-    fs.copyFileSync(path.join(PLUGIN_SRC, name), path.join(PLUGIN_DST, name));
+function installVerificationPlugins(): void {
+  for (const id of PLUGIN_IDS) {
+    const src = path.join(AUTOMATOR_ROOT, "plugins", id);
+    const dst = path.join(DESKTOP_RUN_DATA_DIR, "plugins", id);
+    fs.mkdirSync(dst, { recursive: true });
+    for (const name of fs.readdirSync(src)) {
+      fs.copyFileSync(path.join(src, name), path.join(dst, name));
+    }
+    console.log(`検証用プラグインを配置: ${dst}`);
   }
-  console.log(`検証用プラグインを配置: ${PLUGIN_DST}`);
 }
 
 const failures: string[] = [];
+let passed = 0;
 function check(cond: boolean, label: string, detail?: unknown): void {
   if (cond) {
+    passed++;
     console.log(`  [ok  ] ${label}`);
   } else {
     console.log(`  [FAIL] ${label}${detail === undefined ? "" : ` — ${JSON.stringify(detail)}`}`);
@@ -98,10 +131,60 @@ async function runPlugin(viewerPage: Page): Promise<Payload> {
   ) as Promise<Payload>;
 }
 
+interface SeriesRow {
+  seriesInstanceUid: string;
+  seriesDescription?: string;
+  modality?: string;
+  /** SeriesDto のフィールド名（枚数）。 */
+  numberOfInstances?: number;
+}
+
+/** backend の保管庫を直接見る（UI 越しではなく「本当に DICOM になったか」を確かめるため）。 */
+async function listSeries(httpPort: number, studyUid: string): Promise<SeriesRow[]> {
+  const res = await fetch(`http://localhost:${httpPort}/api/studies/${encodeURIComponent(studyUid)}/series`);
+  if (!res.ok) throw new Error(`series list failed: ${res.status}`);
+  return (await res.json()) as SeriesRow[];
+}
+
+/** 生成シリーズの先頭インスタンスのタグダンプ。 */
+async function instanceTags(
+  httpPort: number,
+  studyUid: string,
+  seriesUid: string,
+): Promise<Array<{ name?: string; value?: string }>> {
+  const base = `http://localhost:${httpPort}/api/studies/${encodeURIComponent(studyUid)}/series/${encodeURIComponent(seriesUid)}`;
+  const insts = (await (await fetch(`${base}/instances`)).json()) as Array<{ sopInstanceUid: string }>;
+  const sop = insts[0]?.sopInstanceUid;
+  if (!sop) throw new Error("no instance in created series");
+  return (await (await fetch(`${base}/instances/${encodeURIComponent(sop)}/tags`)).json()) as Array<{
+    name?: string;
+    value?: string;
+  }>;
+}
+
+/** 保存デモを起動する（ダイアログの応答は呼び出し側が行う）。戻りは payload。 */
+function runSavePlugin(viewerPage: Page): Promise<Payload> {
+  return (async () => {
+    await viewerPage.evaluate(() => {
+      delete (window as unknown as { __hostApiCheck?: unknown }).__hostApiCheck;
+    });
+    await viewerPage.getByTestId("viewer2d-menu-plugins").click();
+    await viewerPage.getByTestId("plugin-item-hostapi-save").click();
+    await viewerPage.waitForFunction(
+      () => (window as unknown as { __hostApiCheck?: { save?: unknown } }).__hostApiCheck?.save !== undefined,
+      undefined,
+      { timeout: 30_000 },
+    );
+    return viewerPage.evaluate(
+      () => (window as unknown as { __hostApiCheck: Payload }).__hostApiCheck,
+    ) as Promise<Payload>;
+  })();
+}
+
 async function main(): Promise<void> {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   // backend 起動前に置く（plugins は起動後も走査されるが、初回の /api/plugins に載せるため）。
-  installVerificationPlugin();
+  installVerificationPlugins();
   const driver = new DesktopDriver();
   const recorder = createStepRecorder();
   await driver.start();
@@ -163,10 +246,93 @@ async function main(): Promise<void> {
     check(first.defaultState?.tileId === t0?.tileId, "tileId 省略時は対象の先頭タイル", first.defaultState?.tileId);
     check(first.unknownTile === null, "未知の tileId は null（例外にしない）", first.unknownTile);
 
+    // --- H3: 校正済み画素 ---
+    console.log("\n[1-b] getPixelData()（H3）");
+    const px = first.pixels;
+    check(!!px, "getPixelData() が値を返す");
+    check(px?.isFloat32 === true, "data が Float32Array", px?.isFloat32);
+    check(px?.rows === 512 && px?.cols === 512, "rows/cols が 512×512（fixture）", { rows: px?.rows, cols: px?.cols });
+    check(px?.length === (px?.rows ?? 0) * (px?.cols ?? 0), "length === rows*cols", px?.length);
+    check(px?.unit === "HU", "unit が HU（校正済み＝表示 8bit ではない）", px?.unit);
+    // 二重適用（preScale 済みに Rescale を再適用＝約 −1024 のずれ）の検出は**軟部組織の値**で行う。
+    // 空気側で見ないのは、この fixture が GE の画素パディング（raw −2000 ＋ intercept −1024 =
+    // −3024）を持ち、min が空気(−1000)ではなくパディング値になるため。
+    check((px?.min ?? 0) <= -900, "min が空気/パディングの HU（≦ −900）", px?.min);
+    check((px?.max ?? 0) > 200, "max が骨/造影域の HU（>200）", px?.max);
+    check(
+      (px?.center ?? -9999) > -200 && (px?.center ?? 9999) < 300,
+      "腹部中央が軟部組織の HU（−200〜300）＝ Rescale の二重適用が無い",
+      px?.center,
+    );
+    check(
+      (px?.spacing?.[0] ?? 0) > 0 && (px?.spacing?.[1] ?? 0) > 0 && (px?.spacing?.[2] ?? 0) === 5,
+      "spacing が [x, y, 5mm]（fixture は 5mm 等間隔）",
+      px?.spacing,
+    );
+    check(px?.sliceIndex === 0, "既定は表示中スライス（index 0）", px?.sliceIndex);
+    check(first.pixelsOutOfRange === null, "範囲外 sliceIndex は null（末尾へ丸めない）", first.pixelsOutOfRange);
+    check(first.pixelsUnknownTile === null, "未知の tileId は null", first.pixelsUnknownTile);
+
+    // --- H4a: オーバーレイ ---
+    console.log("\n[1-c] showOverlay()（H4a）");
+    check(first.overlay?.shown === true, "showOverlay() が受理される", first.overlay?.shown);
+    check((first.overlay?.hit ?? 0) > 0, "閾値マスクに該当画素がある（骨/造影 >=300 HU）", first.overlay?.hit);
+    check(first.overlay?.mismatchRejected === true, "格子が合わないマップは拒否（勝手に伸縮しない）", first.overlay?.mismatchRejected);
+    check(first.overlay?.unknownTileRejected === true, "未知の tileId への showOverlay は false", first.overlay?.unknownTileRejected);
+    const overlayCanvas = viewerPage.getByTestId("plugin-overlay-canvas");
+    const overlayLabel = viewerPage.getByTestId("plugin-overlay-label");
+    await overlayCanvas.waitFor({ state: "visible", timeout: 10_000 });
+    check(await overlayCanvas.isVisible(), "オーバーレイのキャンバスが実際に描画されている");
+    const labelText = (await overlayLabel.textContent())?.trim() ?? "";
+    check(
+      labelText.includes("Host API Check"),
+      "出所ラベルにプラグイン名（マニフェストの表示名）が出る",
+      labelText,
+    );
+    // キャンバスの中身を直接読む: 本体が本当にラスタライズしたか（可視要素の有無だけでは
+    // 「透明なキャンバスが乗っているだけ」を見逃す）。α>0 の画素数がマスク該当数と一致するはず。
+    const rasterized = await viewerPage.evaluate(() => {
+      const c = document.querySelector('[data-testid="plugin-overlay-canvas"]') as HTMLCanvasElement | null;
+      const ctx = c?.getContext("2d");
+      if (!c || !ctx) return null;
+      const d = ctx.getImageData(0, 0, c.width, c.height).data;
+      let opaque = 0;
+      let colored = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i + 3] > 0) {
+          opaque++;
+          // Hot_Iron を当てているので、灰色（R=G=B）ではない画素があるはず。
+          if (d[i] !== d[i + 1] || d[i + 1] !== d[i + 2]) colored++;
+        }
+      }
+      return { width: c.width, height: c.height, opaque, colored };
+    });
+    check(rasterized?.width === 512 && rasterized?.height === 512, "オーバーレイのキャンバスがマップの格子サイズ", rasterized);
+    check(
+      rasterized?.opaque === first.overlay?.hit,
+      "α>0 の画素数が閾値マスクの該当数と一致（本体が値マップを焼いている）",
+      { canvasOpaque: rasterized?.opaque, maskHit: first.overlay?.hit },
+    );
+    check((rasterized?.colored ?? 0) > 0, "指定した LUT（Hot_Iron）で色が付いている", rasterized?.colored);
+
+    // 画像矩形に重なっているか（base 画像より小さくなく、画面外でもない）。
+    const canvasBox = await overlayCanvas.boundingBox();
+    check((canvasBox?.width ?? 0) > 100 && (canvasBox?.height ?? 0) > 100, "オーバーレイが画像矩形の大きさで配置される", canvasBox);
+    await viewerPage.screenshot({ path: path.join(OUT_DIR, "1c-overlay.png") });
+
     // --- 表示を変える: スライス送り ＋ W/L プリセット ＋ 階調反転 ---
     // （invert / LUT のメニュー項目には testId が無いのでラベル文字列で掴む＝ja ロケール前提）
     console.log("\n[2] スライス送り・W/L プリセット・階調反転を適用してから再実行");
     const slider = viewerPage.getByTestId("dim-slider-z");
+    await slider.fill("12");
+    await viewerPage.waitForTimeout(400);
+    // オーバーレイは「出したスライス」に紐付く: 送った先では隠れる。
+    const afterMoveVisible = await viewerPage.getByTestId("plugin-overlay-canvas").isVisible();
+    check(afterMoveVisible === false, "別スライスへ送るとオーバーレイは隠れる", afterMoveVisible);
+    await slider.fill("0");
+    await viewerPage.waitForTimeout(400);
+    const backVisible = await viewerPage.getByTestId("plugin-overlay-canvas").isVisible();
+    check(backVisible === true, "元のスライスへ戻すとオーバーレイが再表示される", backVisible);
     await slider.fill("12");
     await viewerPage.waitForTimeout(400);
 
@@ -205,6 +371,28 @@ async function main(): Promise<void> {
     check(t1?.sliceIndex === 12, "送った先の sliceIndex を返す（毎回読み直している）", t1?.sliceIndex);
     check(t1?.imageId !== t0?.imageId, "imageId も追従して変わる", { before: t0?.imageId, after: t1?.imageId });
     check(t1?.seriesUid === t0?.seriesUid, "シリーズは変わらない", t1?.seriesUid);
+    // H3 も表示中スライスに追従し、明示指定なら別スライスを読める。
+    check(second.pixels?.sliceIndex === 12, "getPixelData() も送った先のスライスを読む", second.pixels?.sliceIndex);
+    // 出したスライスに紐付くので、別スライスでは隠れていること（送った先に他スライスの
+    // 計算結果が重なって見えるのが最悪なので、そこを構造で防いでいることの確認）。
+    // ※ この時点では 2 回目の実行で slice 12 のオーバーレイが出ているため、
+    //   「隠れる」検証は slice 送り直後・再実行前に済ませてある（下の afterMoveVisible）。
+    check(
+      second.pixelsSlice0?.sliceIndex === 0 && second.pixelsSlice0?.imageId === px?.imageId,
+      "sliceIndex 明示指定で別スライス（0 枚目）を読める",
+      { sliceIndex: second.pixelsSlice0?.sliceIndex, sameImageIdAsFirstRun: second.pixelsSlice0?.imageId === px?.imageId },
+    );
+    check(
+      second.pixels?.mean !== px?.mean,
+      "別スライスなので画素統計も変わる",
+      { slice0Mean: px?.mean, slice12Mean: second.pixels?.mean },
+    );
+    // W/L を変えても画素は変わらない（表示 8bit ではないことの確認）。
+    check(
+      second.pixelsSlice0?.mean === px?.mean,
+      "W/L・階調反転を変えても同一スライスの画素値は不変（表示に影響されない）",
+      { before: px?.mean, after: second.pixelsSlice0?.mean },
+    );
     check(
       s1?.windowWidth !== s0?.windowWidth || s1?.windowCenter !== s0?.windowCenter,
       "W/L プリセット適用後の W/L を返す",
@@ -235,6 +423,79 @@ async function main(): Promise<void> {
       "内部登録名（graphy-lut- 接頭辞）ではなくユーザーが選んだ LUT 名を返す",
       { expected: lutName, actual: third.states[0]?.colormap },
     );
+    // --- H4b: 派生シリーズ保存（確認ダイアログ → 保管庫に実在するか） ---
+    console.log("\n[4] saveDerivedSeries()（H4b）");
+    const seriesBefore = await listSeries(driver.ports.http, t0!.studyUid);
+
+    // 1) まず「拒否」を確認する（プラグインは黙って保存できない）。
+    const cancelledPromise = runSavePlugin(viewerPage);
+    await viewerPage.getByTestId("plugin-save-confirm").waitFor({ state: "visible", timeout: 10_000 });
+    check(true, "保存前に確認ダイアログが出る（抑止不可）");
+    const dlgText = (await viewerPage.getByTestId("plugin-save-confirm").textContent())?.replace(/\s+/g, " ") ?? "";
+    // 保存を行うのは hostapi-save プラグイン（版 0.2.0）。host がマニフェストから注入する。
+    check(
+      dlgText.includes("Host API Save") && dlgText.includes("0.2.0"),
+      "ダイアログにプラグイン名と版が出る",
+      dlgText.slice(0, 160),
+    );
+    const shownDesc = (await viewerPage.getByTestId("plugin-save-description").textContent())?.trim() ?? "";
+    check(shownDesc.startsWith("[Plugin] "), "ダイアログが保存後の接頭辞付き説明を見せる", shownDesc);
+    await viewerPage.getByTestId("plugin-save-cancel").click();
+    const cancelled = await cancelledPromise;
+    check(cancelled.save?.cancelled === true, "拒否すると cancelled が返る", cancelled.save);
+    const seriesAfterCancel = await listSeries(driver.ports.http, t0!.studyUid);
+    check(
+      seriesAfterCancel.length === seriesBefore.length,
+      "拒否したときシリーズは作られない",
+      { before: seriesBefore.length, after: seriesAfterCancel.length },
+    );
+
+    // 2) 承諾して保存する。
+    const savedPromise = runSavePlugin(viewerPage);
+    await viewerPage.getByTestId("plugin-save-confirm").waitFor({ state: "visible", timeout: 10_000 });
+    await viewerPage.screenshot({ path: path.join(OUT_DIR, "4-save-confirm.png") });
+    await viewerPage.getByTestId("plugin-save-confirm-button").click();
+    const saved = await savedPromise;
+    console.log(JSON.stringify(saved.save, null, 2));
+    check(saved.save?.ok === true, "承諾すると保存が成功する", saved.save);
+    check(saved.save?.instanceCount === 1, "保存された枚数が要求どおり", saved.save?.instanceCount);
+    check(saved.saveMismatch?.ok === false, "格子が合わないフレームは拒否（幾何を偽装できない）", saved.saveMismatch);
+
+    // 3) 保管庫に実在するか（＝本当に DICOM になったか）を backend の一覧で確認する。
+    const seriesAfter = await listSeries(driver.ports.http, t0!.studyUid);
+    const created = seriesAfter.find((x) => x.seriesInstanceUid === saved.save?.seriesInstanceUid);
+    check(!!created, "保管庫のシリーズ一覧に現れる", { uid: saved.save?.seriesInstanceUid, count: seriesAfter.length });
+    check(
+      (created?.seriesDescription ?? "").startsWith("[Plugin] "),
+      "SeriesDescription に [Plugin] 接頭辞が付く（一覧で人が気付ける）",
+      created?.seriesDescription,
+    );
+    check(created?.numberOfInstances === 1, "インスタンス数が 1", created?.numberOfInstances);
+    check(created?.modality === "CT", "モダリティは元シリーズを維持", created?.modality);
+
+    // 4) DICOM タグを読み、出所と Rescale が残っているか確認する。
+    const tags = await instanceTags(driver.ports.http, t0!.studyUid, created!.seriesInstanceUid);
+    const tagValue = (keyword: string) => tags.find((r) => r.name === keyword)?.value ?? "";
+    check(/DERIVED/.test(tagValue("ImageType")), "ImageType が DERIVED", tagValue("ImageType"));
+    check(
+      /hostapi-save/.test(tagValue("DerivationDescription")),
+      "DerivationDescription にプラグイン id が入る",
+      tagValue("DerivationDescription"),
+    );
+    check(
+      tags.some((r) => /ContributingEquipment/.test(r.name ?? "")),
+      "ContributingEquipmentSequence が書かれている",
+    );
+    // マスクは HU（整数）なので恒等 Rescale のはず（量子化誤差を足していない）。
+    check(Number(tagValue("RescaleSlope")) === 1, "整数マスクは Rescale 恒等（量子化誤差を足さない）", tagValue("RescaleSlope"));
+    check(Number(tagValue("RescaleIntercept")) === 0, "Rescale Intercept も恒等", tagValue("RescaleIntercept"));
+    check(tagValue("RescaleType") === "HU", "RescaleType にプラグインが申告した単位が入る", tagValue("RescaleType"));
+    // 元シリーズは変更されない（プラグインは新シリーズを足すだけ）。
+    check(
+      seriesAfter.length === seriesBefore.length + 1,
+      "元シリーズは残り、新シリーズが 1 本増える",
+      { before: seriesBefore.length, after: seriesAfter.length },
+    );
   } finally {
     await viewerPage?.close().catch(() => {});
     await driver.stop();
@@ -242,7 +503,7 @@ async function main(): Promise<void> {
 
   console.log("\n=== 結果 ===");
   if (failures.length === 0) {
-    console.log(`すべて OK。スクリーンショット: ${OUT_DIR}`);
+    console.log(`${passed} 項目すべて OK。スクリーンショット: ${OUT_DIR}`);
   } else {
     console.log(`FAIL ${failures.length} 件:`);
     for (const f of failures) console.log(`  - ${f}`);

@@ -1,11 +1,13 @@
 # GRAPHY-Next プラグイン アーキテクチャ設計
 
-> 作成日: 2026-06-28（更新: 2026-07-29 — **§7 host API の拡張（優先度 高・未着手）を追加**）
+> 作成日: 2026-06-28（更新: 2026-07-30 — **§7 host API の拡張: H1〜H4b すべて実装済み**）
 > ステータス: 骨格実装済み（standalone/web の両モードで疎通確認済み。署名は実装済み、サンドボックスは将来）
 >
-> ⚠ **次に着手すべきはここ → [§7 host API の拡張](#7-host-api-の拡張優先度-高未着手)**。
-> 2D ビューアのプラグインが「いま何を見ているか」を問い合わせられない状態で、
-> 画像処理系プラグインが成立しない。
+> ✅ **[§7 host API の拡張](#7-host-api-の拡張h1h4b-実装済み) は H1〜H4b すべて実装済み**
+> （問い合わせ・画素読み出し・オーバーレイ表示・派生シリーズ保存）。画像処理系プラグインは
+> 「読む → 計算する → 見せる → 残す」まで公式契約だけで書ける。
+> **残る制約は ①`ui.js` から外部 API を叩けない（本番 CSP）②権限の実強制とサンドボックス（P3）
+> ③H4b の web モード（STOW-RS 書き戻し）が未検証**。
 > 関連: [`development-phases.md`](development-phases.md)、[`dicom-data-layer.md`](dicom-data-layer.md)
 
 GRAPHY のプラグイン機構を、standalone / web の 2 モードに対応する形で再設計する。
@@ -207,9 +209,9 @@ web は運営配備 / サンドボックス。
 
 ---
 
-## 7. host API の拡張（優先度 高・H1/H2 実装済み）
+## 7. host API の拡張（H1〜H4b 実装済み）
 
-> 起票: 2026-07-29 ／ ステータス: **H1・H2 実装済み（2026-07-29）／ H3・H4 未着手** ／ 優先度: **高**
+> 起票: 2026-07-29 ／ ステータス: **H1・H2（2026-07-29）／ H3・H4a・H4b（2026-07-30）すべて実装済み**
 > 経緯: プラグイン デモ 3 本（[`plugin-explainer.md`](plugin-explainer.md) §6）を書いた過程で、
 > **2D ビューアのプラグインには「いま何を見ているか」を答える手段が一つも無い**ことが判明した。
 
@@ -252,8 +254,9 @@ H1・H2 は実質「これを本番向けの契約として切り出す」作業
 |---|---|---|---|---|
 | **H1** ✅ | **対象タイルの識別情報**。DOM 依存（`data-tile-id`）を公式契約へ置換 | `getTargets() => ViewerTarget[]` | 「対象」の定義を `runViewerCommand` と揃える（選択タイル→無ければ全タイル） | ✅ |
 | **H2** ✅ | **表示状態の問い合わせ**。`debugApi` の相当機能を本番契約へ昇格 | `getViewState(tileId?) => ViewerViewState \| null` | `debugApi.ts` から共有ロジックを切り出し、DEV ガードの外へ | ✅ |
-| **H3** | **画素の読み出し**（本命） | `getPixelData(tileId, opts?) => Promise<{ data: Float32Array, rows, cols, spacing, unit }>` | **必ず [`pixelCalibration.ts`](../frontend/src/viewer/pixelCalibration.ts) 経由**（`getPixelData()` に直接 slope/intercept を書かない。preScale 既定 ON による二重適用で CT が約 −1024 ずれる既知事故）。シリーズ全スライスは転送量が大きいのでスライス単位を既定にし、範囲指定を任意で | ✅ |
-| **H4** | **書き戻し** — 処理結果をオーバーレイ表示 / 新シリーズとして保管庫へ | 未定（`showOverlay()` / `saveDerivedSeries()`） | 設計判断が要る（派生シリーズの UID 生成・SEG との棲み分け・web での書き戻し先）。**H1〜H3 とは分けて扱う** | 要検討 |
+| **H3** ✅ | **画素の読み出し**（本命） | `getPixelData(tileId?, opts?) => Promise<ViewerPixelData \| null>` | **必ず [`pixelCalibration.ts`](../frontend/src/viewer/pixelCalibration.ts) 経由**（`getPixelData()` に直接 slope/intercept を書かない。preScale 既定 ON による二重適用で CT が約 −1024 ずれる既知事故）。シリーズ全スライスは転送量が大きいのでスライス単位を既定にし、範囲指定を任意で | ✅ |
+| **H4a** ✅ | **オーバーレイ表示** — 処理結果を表示中スライスに重ねる（保存しない） | `showOverlay(tileId?, overlay)` / `clearOverlay(tileId?)` | 値マップを受け取り**色付けは本体側**で行う。imageId に紐付け | ✅ |
+| **H4b** ✅ | **派生シリーズ保存** — 新シリーズとして保管庫（standalone）/ PACS（web）へ | `saveDerivedSeries(tileId?, req)` | 既存 `POST /api/series/derived` を開ける形。**保存ポリシーが本体** | ✅（web も許可） |
 
 H1〜H3 は**フロント面だけで完結**するため、web モードでも同じように動く（backend の契約 `/api/plugins` は不変）。
 
@@ -305,12 +308,148 @@ host.getViewState(tileId?): ViewerViewState | null   // 省略時は対象の先
 **未登録タイルは黙って除外される**（`queryViewerCommand` が null を返す）: Fusion の子ビューポートや
 アンマウント途中のタイルは `getTargets()` に現れない。プラグイン側は**空配列を必ず扱う**こと。
 
+#### H3 の実装（2026-07-30・GRAPHY-Next 0.1.9 以降）
+
+```ts
+host.getPixelData(tileId?, opts?): Promise<ViewerPixelData | null>   // opts = { sliceIndex? }
+```
+
+| フィールド | 意味 |
+|---|---|
+| `data` | `Float32Array`（row-major・`data[y * cols + x]`）。**モダリティ値**＝CT なら HU、SUV 校正済み PET なら SUV。表示 W/L は掛かっていない |
+| `unit` | `"HU"` / `"SUVbw"` / `""` / カラーは `"raw"`（`imageInfo.calibratedUnit()` ではなく `readModalitySlice()` の判定） |
+| `rows` / `cols` | `data.length === rows * cols` |
+| `spacing` | `[列方向(x), 行方向(y), スライス方向(z)]` mm。不明な軸は `null` |
+| `imageId` / `sliceIndex` | 実際に読んだスライス |
+
+**読み出しは [`pixelCalibration.readModalitySlice()`](../frontend/src/viewer/pixelCalibration.ts) に委譲する**
+（＝校正の単一入口。`getPixelData()` に直接 slope/intercept を書くと preScale と二重適用になり
+CT が約 −1024 ずれる既知事故。CLAUDE.md のルール 2）。カラー（RGB）は同関数が輝度へ落とす。
+
+**決めたこと**:
+
+- **1 回 1 スライス**。素案にあった「範囲指定」は入れなかった。512×512×500 を Float32 で
+  一度に返すと 500MB を超え、プラグインが安易に全巻取得を書けてしまう。シリーズを回したいなら
+  `sliceIndex` を変えて `await` を繰り返す（1 枚ずつ解放できる）。
+- **範囲外の `sliceIndex` は `null`（拒否）**。`count-1` へ丸めると「999 枚目をくれ」と書いた
+  プラグインが末尾スライスの値を掴んだまま気付かない。純関数
+  `viewportRead.resolveSliceIndex()` に切り出してテストしてある。
+- 面内 spacing は要求スライスの `ImageInfo` から、**スライス間隔はシリーズ単位の値**を流用する
+  （非等間隔シリーズの扱いは `ImageInfoPanel` と同じ＝`sliceSpacingSource` を見る運用）。
+- **`Float32Array` はコピーせずそのまま渡す**（同一レンダラ内の ES モジュールなので構造化複製は
+  発生しない）。プラグインが書き換えても本体の表示には影響しないが、返り値を保持し続ければ
+  メモリは掴まれたままになる。
+
+**権限について（P3 との順序を再検討した結果）**: H3 は **`read-pixels` の強制を伴わない**。
+理由は、プラグインは既に本体と同じ権限で動いており（JAR 面はファイルシステムにも到達できる、
+UI 面もキャンバスから 8bit を読める）、H3 で増えるのは「生 HU が取りやすくなること」だけで、
+**信頼境界そのものは変わらない**から。ここで宣言ベースの偽の強制を足すと、
+サンドボックス（`plugin-manager-design.md` §8 の P3）が入っているかのような誤解を生む。
+代わりに **`plugin.json` の `permissions` に `read-pixels` を宣言する運用**とする
+（導入時の同意画面に表示される既存の仕組みに乗る）。実強制は P3 とセットで行う。
+
+#### H4a の実装（2026-07-30・GRAPHY-Next 0.1.9 以降）
+
+```ts
+host.showOverlay(tileId?, overlay): boolean     // overlay = { data, rows, cols, window?, colormap?, opacity? }
+host.clearOverlay(tileId?): void
+```
+
+**プラグインは「値」を渡し、色付けは本体がする。** RGBA を組ませると W/L の意味・LUT・透明度の扱いが
+プラグインごとにばらつき、本体の LUT 資産（`/api/luts` の 106 種）も使えない。`colormap` に LUT 名を
+渡せば本体が `fetchLutData()` で取って色付けする（取得失敗時はグレースケールで描く＝結果は見える）。
+
+- **`NaN` は透明**。マスクや部分的なマップをそのまま渡せる（α は値で変調せず `opacity` 一定＝
+  マスクの縁が半端に薄くならない）。
+- `window` 省略時は `NaN` を除く min/max で自動。定数マップ（全部 1 のマスク等）は幅 0 になるので
+  一律最大濃度で描く。
+- **rows/cols が現在スライスと不一致なら拒否（false）**。勝手に伸縮すると座標の意味が壊れる。
+- **オーバーレイは「出したスライス」に紐付く**（`imageId` で束ねる）。他スライスでは自動的に隠れ、
+  戻ると再表示。シリーズ / C・T 切替（`stackKey` 変化）では破棄する。
+  送った先の画像に他スライスの計算結果が重なって見えるのが最悪なので、そこを構造で防いでいる。
+- **出所ラベルを本体が必ず出す**（画像左下に `プラグイン: <マニフェストの表示名>`）。
+  ラベル文字列はプラグインに触らせない（host が `m.name` を注入する）。i18n は ja/en 両方。
+- 純ロジックは `viewer/overlayRaster.ts`（`autoWindow` / `toGrayLevel` / `rasterizeOverlay`）に
+  切り出してテスト。描画は `Viewer2D` 内の canvas を `imageRect` に合わせて重ねるだけで、
+  Fusion の `renderOverlay` 経路とは独立（互いに干渉しない）。
+
+#### H4b の実装（2026-07-30・GRAPHY-Next 0.1.9 以降）
+
+```ts
+host.saveDerivedSeries(tileId?, {
+  seriesDescription, frames: [{ sliceIndex, data }], rows, cols, unit?, derivationDescription?,
+}): Promise<{ ok, cancelled?, seriesInstanceUid?, instanceCount?, error? }>
+```
+
+**幾何はプラグインに書かせない。** 各フレームは「元シリーズのどのスライスに対応するか」
+（`sliceIndex`）だけを申告し、IPP / IOP / PixelSpacing / スライス厚は本体が元シリーズから引き継ぐ。
+プラグインに座標を組ませると、**実空間の意味が壊れた派生シリーズを保管庫に作れてしまう**。
+`rows`/`cols` は元スライスと一致必須（不一致は拒否）。
+
+**検証は同意より先。** `validateDerivedSeries()` をレジストリに分けて、画面側が
+**確認ダイアログを出す前に**通すようにした（通らない要求でユーザーに確認を見せない）。
+保存本体でも再度検証する（多重防御）。
+
+**画素の符号化**（`viewer/derivedSeriesEncode.ts`・純関数＋テスト）:
+
+| 入力 | 扱い |
+|---|---|
+| 整数かつ Int16 に収まる（HU 等） | **恒等**（`slope=1, intercept=0`）＝量子化誤差を足さない |
+| それ以外（確率マップ 0〜1、テクスチャ特徴量…） | 値域を Int16 全域へ線形写像し、`slope`/`intercept` を DICOM に書く |
+| 定数マップ・有効値なし | 恒等（量子化しても意味が無い） |
+| `NaN` | **値域の最小値**（＝背景）。H4a では透明だが、保存する画素に透明は無い |
+
+**backend 側の変更**（`DerivedSeriesRequest` / `DerivedSeriesService`）:
+
+- `rescaleSlope` / `rescaleIntercept` / `rescaleType` を任意フィールドとして追加
+  （**null なら従来どおり恒等**＝Slicer / Curved MPR の既存呼び出しは無変更）。
+- `producer`（プラグイン id / 表示名 / 版）を追加。付いていると
+  ①`SeriesDescription` に **`[Plugin] ` 接頭辞**（LO 64 文字に収める。接頭辞を優先して末尾を切る）、
+  ②`DerivationDescription` に id・版を併記、
+  ③`ContributingEquipmentSequence` を書く。
+  規則は純メソッドに切り出して `DerivedSeriesDescriptionTest` で固定した。
+- `ImageType=DERIVED\SECONDARY`・元 SOP への `SourceImageSequence`・Modality / SOPClassUID の維持は
+  **既存の派生シリーズ経路そのまま**（Slicer と同じ）。
+
+**同意ダイアログ**（`viewer2d/PluginSaveConfirmDialog.tsx`）: **抑止不可**（「次回から表示しない」を
+用意しない）。プラグイン名・版・保存後の説明（接頭辞付き）・枚数・保存先（保管庫 / PACS）と、
+**診断用に検証されたものではない**旨を提示する。`window.confirm` を使わないのは、Electron の
+ネイティブダイアログがレンダラのキーボードフォーカスを奪う既知の問題（特に Linux/GTK）があり、
+自動検証からも操作できないため。i18n は ja/en 両方。
+
+**やらないこと**: プラグインが REST（`POST /api/series/derived`）を直接叩く経路は塞いでいない。
+プラグインは本体と同じ権限で動く（`ui.js` は同一オリジンに fetch できる）ため、
+**host API の外側は信頼境界ではない**。ここを塞ぐ意味が出るのは P3 サンドボックス以降。
+
+#### H4b の方針 — 2026-07-30 に確定（上記の実装はこれに沿っている）
+
+**土台は既にある**: `POST /api/series/derived`（`DerivedSeriesService`）が「元 Study/患者属性・Modality・
+SOPClassUID・FrameOfReference を維持、Series/SOP UID を新規採番、`ImageType=DERIVED\SECONDARY`、
+元 SOP への参照、`DerivationDescription`」まで実装済みで、Slicer の斜位リスライスと Curved MPR が使用中。
+**web も対応済み**（テンプレートを WADO-RS `/metadata` から取り、STOW-RS で PACS へ書き戻す）。
+つまり H4b は「DICOM を作る仕組みの新規実装」ではなく**既存経路をプラグインへ開ける作業**。
+
+決定事項:
+
+| 論点 | 決定 |
+|---|---|
+| 保存時の同意 | **本体が必ず確認ダイアログを出す（抑止不可）**。プラグイン名・バージョン・シリーズ説明・枚数を提示。プラグインが黙って書けるようにはしない |
+| 出所の明示 | **機械可読 ＋ 一覧で見える接頭辞**。`ImageType=DERIVED\SECONDARY` ＋ `DerivationDescription` / `ContributingEquipmentSequence` にプラグイン id・版、加えて **`SeriesDescription` に接頭辞**（例 `[Plugin] …`）。他システムで開いても人が気付ける |
+| web モード | **許可する**（standalone 限定にしない）。既存の STOW-RS 経路に乗る |
+| 画素の符号化 | Float32 → Int16 ＋ **自動 slope/intercept**（プラグインの min/max から算出、`RescaleType` は `unit`）。既存経路は Rescale 恒等固定だが、それだと確率マップやテクスチャ値（0〜1）が 0/1 に潰れる |
+
+**残っている検証**: **web モード（外部 PACS への STOW-RS 書き戻し）は未検証**。
+実装は既存の web 分岐に乗るだけ（`DerivedSeriesService` がテンプレートを WADO-RS `/metadata` から取り、
+`storeDatasets` で STOW）なので、コード上の追加はないが、実 PACS 相手の確認は
+`deploy/dcm4chee/VERIFY-web.md` の手順に足す必要がある。
+
 #### 実機検証（2026-07-30・standalone / Linux）
 
 **本物の Electron ＋ 本物の backend ＋ 本物のプラグイン配信経路**（`plugins/` フォルダ直下に置いた
-第三者プラグインを `/api/plugins` から ES モジュールとして配信）で 26 項目すべて合格。
+第三者プラグインを `/api/plugins` から ES モジュールとして配信）で **H1〜H4b の 73 項目すべて合格**。
 ドライバは `automator/src/spike/hostApiCheck.ts`（`cd automator && npx tsx src/spike/hostApiCheck.ts`）、
-検証用プラグインは `automator/.results/run-data/desktop/plugins/hostapi-check/`（fixture は ct-basic）。
+検証用プラグインの原本は `automator/plugins/`（`hostapi-check`＝H1〜H4a、`hostapi-save`＝H4b。
+実行時に backend の plugins フォルダへコピーされる。fixture は ct-basic）。
 
 確認できたこと:
 
@@ -324,6 +463,29 @@ host.getViewState(tileId?): ViewerViewState | null   // 省略時は対象の先
 - LUT 適用後の `colormap` が `"10_Percent"`（内部名 `graphy-lut-10_Percent` ではない）。
   **この実機確認で内部名の漏れを見つけて上記の接頭辞剥がしを入れた**。
 - 未知の `tileId` は `null`（例外にしない）。
+- **H3 の画素が定量値である**こと: `512×512`・`unit="HU"`・`Float32Array`・
+  `spacing=[0.644531, 0.644531, 5]`。腹部中央の画素が **−21 HU（軟部組織）** ＝
+  **Rescale の二重適用が起きていない**（二重なら約 −1045 になる）。
+  `min=−3024` は空気ではなく **GE の画素パディング**（raw −2000 ＋ intercept −1024）で、
+  この fixture の性質。空気側で二重適用を判定しようとして最初に誤検知したので、
+  検証は**軟部組織の値**で行うようにした。
+- **W/L・階調反転・LUT を変えても同一スライスの画素値は不変**＝表示 8bit ではないことの直接確認。
+- `sliceIndex` 明示指定で別スライスが読め、範囲外は `null`。
+- **H4a のオーバーレイが実際に焼かれている**こと: `getPixelData()` で読んだ HU から閾値マスク
+  （≧300 HU）を作って `showOverlay()` し、**キャンバスの中身を読んで α>0 の画素数 4681 が
+  マスク該当数と完全一致**、指定 LUT（`Hot_Iron`）で色が付き、出所ラベルにマニフェストの表示名が出る。
+  格子不一致のマップと未知 tileId は拒否。別スライスへ送ると隠れ、戻ると再表示される。
+- **H4b が本当に DICOM になっている**こと（UI 越しではなく backend の一覧・タグダンプで確認）:
+  確認ダイアログが出る → **拒否するとシリーズは作られない** → 承諾すると保管庫に 1 シリーズ増え、
+  `SeriesDescription` が `[Plugin] Bone mask`、`ImageType=DERIVED`、`DerivationDescription` に
+  `hostapi-save`、`ContributingEquipmentSequence` あり、**整数マスクなので Rescale は恒等**
+  （`slope=1` / `intercept=0`）、`RescaleType=HU`、Modality は元のまま CT、**元シリーズは無変更**。
+  格子が合わないフレームは**ダイアログを出す前に**拒否。
+- **この検証で H4a のバグを 1 件検出**: オーバーレイのキャンバスが `imageRect` 確定後のレンダで
+  初めてマウントされるため、`useRef` だと描画 effect が先に走って ref が null のまま
+  deps も変わらず、**空のキャンバスが乗ったまま**になっていた（`300×150`・α>0 が 0 個）。
+  callback ref（state）へ変更して解消。**「要素が見えている」だけの検証では気付けず、
+  キャンバスの中身を読んだことで初めて分かった**。
 
 副産物の修正: `automator/src/driver/desktopDriver.ts` が **DevTools ウィンドウをメイン画面と
 誤認する**バグを直した（`window` イベント発火時の url が about:blank だと predicate に外れ、
@@ -341,8 +503,10 @@ timeout → `firstWindow()` フォールバックが `devtools://…` を返し�
   テンプレート自身は新 API を使っていないので `">=0.1.0"` のまま据え置いた。
 - 🔴 **残: デモの書き換え**: [mean-filter](https://github.com/tatsunidas/graphy-next-plugin-mean-filter) と
   [gemini-findings](https://github.com/tatsunidas/graphy-next-plugin-gemini-findings) の
-  `findOpenTiles()`（DOM 依存）を `getTargets()` へ差し替え、README の「できないこと」節を更新する。
-  ただし**画素の定量処理は H3 が要る**ので、「canvas の 8bit しか読めない」旨の断り書きは H3 まで残る。
+  `findOpenTiles()`（DOM 依存）を `getTargets()` へ、キャンバス読み取りを `getPixelData()` へ
+  差し替える。**H3 が入ったので「canvas の 8bit しか読めない」断り書きは撤回できる**。
+  結果表示も自前キャンバスではなく `showOverlay()`（H4a）に、保存は `saveDerivedSeries()`（H4b）に
+  置き換えられる。
 - ✅ **`fw/plugin-authoring-guide.md` §2-3 の host 表**と [`plugin-explainer.md`](plugin-explainer.md) §7 の
   制約記述を更新済み。
 
@@ -352,5 +516,8 @@ timeout → `firstWindow()` フォールバックが `devtools://…` を返し�
   [`security.md`](security.md)）。外部通信は JAR 側に置く方針を変えない。緩めると
   「プラグインが任意の外部へ患者データを送れる」ことになり、CSP を置いた意味が消える。
 - **権限（`permissions`）の実強制**とサンドボックスは別課題（`plugin-manager-design.md` §8 の P3）。
-  H3 で画素が読めるようになるほど `read-pixels` の実強制の必要性は上がるので、**H3 と P3 の順序は
-  着手時に再検討する**。
+  「H3 と P3 の順序を着手時に再検討する」と書いていたが、**再検討の結果 H3 を先に入れた**:
+  プラグインは既に本体と同じ権限で動く（JAR 面はファイルシステムへ、UI 面はキャンバスへ到達できる）
+  ため、H3 で信頼境界は変わらず、宣言ベースの偽の強制はサンドボックスがあるかのような誤解を生む。
+  **`plugin.json` の `permissions` に `read-pixels` を宣言する運用**（同意画面に出る）とし、
+  実強制は P3 とセットで行う。上記「H3 の実装」の権限の節も参照。

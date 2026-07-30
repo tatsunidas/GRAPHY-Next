@@ -59,6 +59,94 @@ export interface ViewerViewState {
   pan: [number, number];
 }
 
+/** `getPixelData` の任意指定。 */
+export interface ViewerPixelDataOptions {
+  /**
+   * 読み出すスライス（Z）の 0 始まり index。既定は表示中スライス。
+   * **範囲外は拒否（null）**＝黙って別のスライスを返さない。
+   */
+  sliceIndex?: number;
+}
+
+/**
+ * タイル 1 枚の画素（プラグイン host API の H3）。
+ *
+ * <p>値は **`pixelCalibration.readModalitySlice()` 経由のモダリティ値**（CT なら HU、
+ * SUV 校正済み PET なら SUV）。カラー（RGB）画像は輝度（ITU-R BT.601）で `unit="raw"`。
+ * 表示 W/L は掛かっていない（8bit の見た目ではなく定量値）。
+ */
+export interface ViewerPixelData {
+  imageId: string;
+  /** 実際に読み出したスライスの index（要求を省略したときは表示中スライス）。 */
+  sliceIndex: number;
+  /** 行数（height）・列数（width）。`data.length === rows * cols`。 */
+  rows: number;
+  cols: number;
+  /** row-major。`data[y * cols + x]`。 */
+  data: Float32Array;
+  /** 値の単位（"HU" / "SUVbw" / "" / カラーは "raw"）。 */
+  unit: string;
+  /** 画素間隔 [列方向(x), 行方向(y), スライス方向(z)] mm。不明な軸は null。 */
+  spacing: [number | null, number | null, number | null];
+}
+
+/**
+ * プラグインが表示中スライスへ重ねる値マップ（プラグイン host API の H4a）。
+ *
+ * <p>**画素ではなく値を渡す契約**にしてある: 色付け（window / colormap）は本体側で行うので、
+ * プラグインは RGBA を組み立てる必要がなく、本体の LUT 資産をそのまま使える。
+ * `NaN` の画素は**透明**になる（マスクや部分的なマップをそのまま渡せる）。
+ */
+export interface ViewerOverlay {
+  /** rows*cols, row-major。`NaN` は透明。 */
+  data: Float32Array;
+  /** 現在スライスの rows/cols と一致していること（不一致は拒否）。 */
+  rows: number;
+  cols: number;
+  /** 値 → 濃淡の窓。省略時は data の min/max（NaN 以外）で自動。 */
+  window?: { center: number; width: number };
+  /** 本体の LUT 名（`/api/luts` の名前。例 "10_Percent"）。省略/null はグレースケール。 */
+  colormap?: string | null;
+  /** 不透明度 0〜1（既定 0.5）。 */
+  opacity?: number;
+  /** 出所表示に使うラベル（host がプラグイン名を入れる）。 */
+  label?: string;
+}
+
+/**
+ * プラグインの処理結果を派生シリーズとして保存する要求（プラグイン host API の H4b）。
+ *
+ * <p>**幾何はプラグインに書かせない**: 各フレームは「元シリーズのどのスライスに対応するか」
+ * （`sliceIndex`）だけを申告し、IPP / IOP / PixelSpacing / スライス厚は本体が元シリーズから引き継ぐ。
+ * プラグインに座標を組ませると、実空間の意味が壊れた派生シリーズを保管庫に作れてしまう。
+ */
+export interface ViewerDerivedSeriesRequest {
+  /** 新シリーズの説明。保存時に本体が `[Plugin] ` 接頭辞を付ける。 */
+  seriesDescription: string;
+  /** フレーム（1 枚以上）。`rows`/`cols` は全フレーム共通で、元スライスと一致していること。 */
+  frames: Array<{
+    /** 元シリーズのスライス index（この結果が対応する元スライス）。 */
+    sliceIndex: number;
+    /** rows*cols, row-major。`NaN` は「データ無し」として値域の最小値で保存される。 */
+    data: Float32Array;
+  }>;
+  rows: number;
+  cols: number;
+  /** 値の単位（`RescaleType` に入る。例 "HU"）。省略時は元モダリティ由来の既定。 */
+  unit?: string;
+  /** 派生内容の説明（`DerivationDescription`）。プラグイン id・版は本体が併記する。 */
+  derivationDescription?: string;
+}
+
+/** 保存結果。`cancelled` はユーザーが確認ダイアログで拒否した場合。 */
+export interface ViewerDerivedSeriesResult {
+  ok: boolean;
+  cancelled?: boolean;
+  seriesInstanceUid?: string;
+  instanceCount?: number;
+  error?: string;
+}
+
 /** 画面（複数タイル）視点での H1 の 1 件。どのタイルの話かが要るので tileId を持つ。 */
 export interface ViewerTarget extends ViewerTargetInfo {
   tileId: string;
@@ -66,6 +154,11 @@ export interface ViewerTarget extends ViewerTargetInfo {
 
 /** 画面視点での H2。 */
 export interface ViewerTileViewState extends ViewerViewState {
+  tileId: string;
+}
+
+/** 画面視点での H3。 */
+export interface ViewerTilePixelData extends ViewerPixelData {
   tileId: string;
 }
 
@@ -93,6 +186,31 @@ export interface ViewerCommands {
   getTargetInfo(): ViewerTargetInfo | null;
   /** いまの表示状態（W/L・LUT・反転・affine）。プラグイン host API の H2。取得不能なら null。 */
   getViewState(): ViewerViewState | null;
+  /**
+   * スライス 1 枚の校正済み画素。プラグイン host API の H3。取得不能・範囲外なら null。
+   * 読み出しは `pixelCalibration.readModalitySlice()` に委譲する（校正の単一入口）。
+   */
+  getPixelData(opts?: ViewerPixelDataOptions): Promise<ViewerPixelData | null>;
+  /**
+   * 値マップを表示中スライスへ重ねる（H4a）。rows/cols が現在スライスと不一致なら false。
+   * 表示中スライスに紐付き、他スライスでは自動的に隠れる（戻ると再表示）。
+   */
+  showOverlay(overlay: ViewerOverlay): boolean;
+  /** オーバーレイを消す（無ければ何もしない）。 */
+  clearOverlay(): void;
+  /**
+   * 保存要求が通るか検証する（H4b）。エラー理由の文字列、問題なければ null。
+   * **同意を求める前**に画面側が呼ぶ（通らない要求で確認ダイアログを見せないため）。
+   */
+  validateDerivedSeries(req: ViewerDerivedSeriesRequest): string | null;
+  /**
+   * 処理結果を派生シリーズとして保存する（H4b）。**確認は画面側で取ってからここへ来る**
+   * （このメソッド自身は同意を取らない）。幾何は元シリーズから引き継ぐ。
+   */
+  saveDerivedSeries(
+    req: ViewerDerivedSeriesRequest,
+    producer: { id: string; name: string; version: string },
+  ): Promise<ViewerDerivedSeriesResult>;
   /** 左ドラッグに割り当てる操作/計測/ブラシツールを切替（toolName は Cornerstone のツール名 or 消しゴム id）。 */
   setActiveTool(toolName: string): void;
   /** ROI ブラシ径(px)。 */

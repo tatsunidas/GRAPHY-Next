@@ -3,7 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { describe, expect, it, vi } from "vitest";
-import { readColormapName, readInvert, readVoiWindow, voiToWindow } from "./viewportRead";
+import { readColormapName, readInvert, readVoiWindow, resolveSliceIndex, voiToWindow } from "./viewportRead";
 import { calibratedUnit } from "./imageInfo";
 
 // imageInfo は Cornerstone 本体と dicom-image-loader を読み込む（後者は import しただけで
@@ -61,6 +61,32 @@ describe("readVoiWindow / readColormapName / readInvert", () => {
     };
     expect(readVoiWindow(boom)).toBeNull();
     expect(readInvert(boom)).toBe(false);
+  });
+});
+
+describe("resolveSliceIndex", () => {
+  it("省略時は表示中スライス", () => {
+    expect(resolveSliceIndex(undefined, 7, 50)).toBe(7);
+  });
+
+  it("指定が範囲内ならそれを使う", () => {
+    expect(resolveSliceIndex(0, 7, 50)).toBe(0);
+    expect(resolveSliceIndex(49, 7, 50)).toBe(49);
+  });
+
+  it("範囲外・非整数は null（末尾へ丸めない）", () => {
+    // 丸めると「999 枚目をくれ」と言ったプラグインが末尾スライスを掴んで気付かない。
+    expect(resolveSliceIndex(50, 7, 50)).toBeNull();
+    expect(resolveSliceIndex(999, 7, 50)).toBeNull();
+    expect(resolveSliceIndex(-1, 7, 50)).toBeNull();
+    expect(resolveSliceIndex(1.5, 7, 50)).toBeNull();
+    expect(resolveSliceIndex(NaN, 7, 50)).toBeNull();
+  });
+
+  it("スタックが空・表示 index が壊れている場合は null", () => {
+    expect(resolveSliceIndex(undefined, 0, 0)).toBeNull();
+    expect(resolveSliceIndex(0, 0, 0)).toBeNull();
+    expect(resolveSliceIndex(undefined, 50, 50)).toBeNull();
   });
 });
 

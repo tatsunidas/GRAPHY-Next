@@ -17,7 +17,7 @@ automator（GRAPHY-Next 自律検証ツール）の開発記録。設計の要�
 
 ---
 
-## 2026-07-30 — DesktopDriver が DevTools を掴むバグ修正・host API H1/H2 の実機検証スパイク
+## 2026-07-30 — DesktopDriver が DevTools を掴むバグ修正・host API H1〜H4b の実機検証スパイク
 
 ### 修正: `DesktopDriver` が DevTools ウィンドウをメイン画面と誤認していた
 
@@ -31,11 +31,11 @@ automator（GRAPHY-Next 自律検証ツール）の開発記録。設計の要�
 `waitForNewPage()` も同じ理由でイベント待ちに加えてポーリングでも探すようにした。
 **既存 item の実行安定性にも効く**（同じ race を踏んでいた可能性が高い）。
 
-### 追加: `src/spike/hostApiCheck.ts` — プラグイン host API H1/H2 の実機検証
+### 追加: `src/spike/hostApiCheck.ts` — プラグイン host API の実機検証（H1/H2 で開始、H4a まで拡張）
 
 `fw/plugin-architecture.md` §7 の H1（`getTargets()`）/ H2（`getViewState()`）を、**本物の
-プラグイン配信経路**で検証するスパイク。`.results/run-data/desktop/plugins/hostapi-check/`
-（＝backend の plugins root）に `plugin.json` ＋ `ui.js` を置き、`/api/plugins` 経由で読み込ませる。
+プラグイン配信経路**で検証するスパイク（後に H3/H4a まで拡張。下記の追記参照）。
+backend の plugins root に `plugin.json` ＋ `ui.js` を置き、`/api/plugins` 経由で読み込ませる。
 プラグインは結果を `window.__hostApiCheck` と画面パネルの両方へ出し、前者を `page.evaluate` で検証、
 後者をスクリーンショット（`.results/hostapi-check/*.png`）で人が読める形に残す。26 項目すべて合格。
 
@@ -45,6 +45,42 @@ DOM 依存ゼロで表示内容が取れること・**呼ぶたびに現在値�
 
 **将来**: checklist item（`12-viewer2d-menu-toolbar` あたり）へ昇格させるとレポートに載る。
 現状はスパイクのままで、fixture は ct-basic に依存。
+
+**追記（同日・H3 対応で 42 項目に拡張）**: 画素読み出し（`getPixelData()`）の検証を追加。
+`Float32Array` を `page.evaluate` 越しに運ばず、**プラグイン側で min/max/mean/中央画素に要約**して
+から検証する形にした。ここで検証側の誤りを 1 つ踏んでいる: 「min は空気の約 −1000 HU」と書いたが、
+ct-basic fixture は **GE の画素パディング（raw −2000 ＋ intercept −1024 = −3024）**を持つため min が
+パディング値になる。**Rescale の二重適用の判定は軟部組織の値**（腹部中央が −200〜300 HU）で行うのが正しい。
+併せて「W/L・階調反転・LUT を変えても同一スライスの画素値は不変」を検証項目にした
+（＝表示 8bit ではないことの直接確認）。
+
+検証用プラグインの原本は `.results/`（gitignore 対象）ではなく **`automator/plugins/hostapi-check/`**
+に置き、実行時に backend の plugins フォルダへコピーする。パスは `DesktopDriver` が
+`DESKTOP_RUN_DATA_DIR` として export する。
+
+**追記 2（同日・H4a 対応で 54 項目に拡張）**: オーバーレイ表示（`showOverlay()`）の検証を追加。
+ここで**「要素が見えている」検証の限界**を踏んだ: `plugin-overlay-canvas` は visible だが
+**中身が空**（`300×150`・α>0 が 0 個）というバグを、可視判定では検出できなかった。
+`page.evaluate` で**キャンバスの `getImageData()` を読み、α>0 の画素数が閾値マスクの該当数と
+一致するか**を検証項目にして初めて捕まえた（本体側の原因は callback ref にすべきところを
+`useRef` にしていたこと）。**描画結果の検証は「要素の有無」ではなく「画素」で行う**。
+併せて、白い骨の上に白いオーバーレイを重ねても人が見て分からないため、検証プラグインでは
+本体の LUT（`Hot_Iron`）を指定して色を付けている（スクリーンショットが証跡として機能する）。
+
+**追記 3（同日・H4b 対応で 73 項目に拡張）**: 派生シリーズ保存（`saveDerivedSeries()`）の検証を追加。
+保存は**確認ダイアログを本体が出す**ので、`plugins/hostapi-save/` を別プラグインとして分けた
+（`hostapi-check` はメニュークリックで毎回走るため、保存を混ぜるとダイアログが常に出てしまう）。
+
+検証の要点は **UI の見た目で終わらせないこと**: 「保存できたと表示された」ではなく
+**backend の `/api/studies/{study}/series` と `/instances/{sop}/tags` を直接読み**、
+シリーズが実在し `[Plugin] ` 接頭辞・`ImageType=DERIVED`・`DerivationDescription` のプラグイン id・
+`ContributingEquipmentSequence`・Rescale 恒等・`RescaleType=HU` が揃っていること、
+**拒否したときはシリーズが増えないこと**、**元シリーズが無変更であること**を確認している。
+
+ここでも自分の assertion 側の誤りを 2 つ踏んだ（コードは正しかった）: ①`SeriesDto` の枚数は
+`instances` ではなく `numberOfInstances` ②タグダンプの `name` は**DICOM キーワード**
+（`ImageType` / `RescaleSlope`。「Image Type」のような空白付きラベルではない）。
+**DTO とダンプのフィールド名は実物を確認してから assert する。**
 
 ---
 
