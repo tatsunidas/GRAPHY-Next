@@ -20,6 +20,25 @@ export interface ImageRec {
   fileId: string;
   /** 引き当てた実ファイル（見つからなければ undefined）。 */
   file?: File;
+  /** ReferencedSOPClassUIDInFile(0004,1510)。動画かどうかの判定に使う。 */
+  sopClassUid?: string;
+  /**
+   * 同梱された再生用 MP4（`VIDEO/{sop}.mp4`）。動画 DICOM は encapsulated で 2D 画像として描けないため、
+   * Export が MP4 実体を媒体へ入れる（`fw/video-viewer-design.md` §7 / P5）。
+   */
+  videoFile?: File;
+}
+
+/** encapsulated video の SOP クラス（Video Photographic / Endoscopic / Microscopic）。 */
+const VIDEO_SOP_CLASSES = new Set([
+  "1.2.840.10008.5.1.4.1.1.77.1.4.1",
+  "1.2.840.10008.5.1.4.1.1.77.1.1.1",
+  "1.2.840.10008.5.1.4.1.1.77.1.2.1",
+]);
+
+/** そのシリーズが動画か（先頭の解決済みインスタンスの SOP クラスで判定）。 */
+export function isVideoSeries(series: SeriesRec): boolean {
+  return series.images.some((im) => im.sopClassUid && VIDEO_SOP_CLASSES.has(im.sopClassUid));
 }
 
 export interface SeriesRec {
@@ -192,6 +211,7 @@ export async function parseDicomDir(dicomdir: File, allFiles: File[]): Promise<D
             sopUid: (ds.string("x00041511") || ds.string("x00080018") || "").trim(),
             instanceNumber: inum === undefined || Number.isNaN(inum) ? 0 : inum,
             fileId: relPath,
+            sopClassUid: (ds.string("x00041510") || "").trim() || undefined,
           };
           // 実ファイル引き当て: 相対パス一致 → 末端 basename 一致（フォールバック）。
           let file = byPath.get(relPath.toLowerCase());
@@ -202,6 +222,10 @@ export async function parseDicomDir(dicomdir: File, allFiles: File[]): Promise<D
           }
           if (file) rec.file = file;
           else missingFiles++;
+          // 動画は同梱 MP4（VIDEO/{sop}.mp4）を引き当てる。無い媒体（旧 Export）もあるので任意扱い。
+          if (rec.sopClassUid && VIDEO_SOP_CLASSES.has(rec.sopClassUid) && rec.sopUid) {
+            rec.videoFile = byPath.get(`video/${rec.sopUid}.mp4`.toLowerCase());
+          }
           ensureSeries().images.push(rec);
           break;
         }

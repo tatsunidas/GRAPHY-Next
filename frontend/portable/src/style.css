@@ -169,6 +169,11 @@ body {
   min-width: 0;
   background: #000;
 }
+/* ⚠ `display` を指定した要素は `hidden` 属性（UA の display:none）を**上書きしてしまう**。
+   動画表示に切り替えた時にタイルが消えるよう、明示的に隠す（2026-07-31 の実機検証で発覚）。 */
+#grid[hidden] {
+  display: none;
+}
 #grid {
   position: absolute;
   inset: 0;
@@ -320,4 +325,30 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 動画シリーズ（同梱 MP4 の <video> 再生）。grid と排他で表示する。 */
+#video-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: #000;
+}
+#video-stage[hidden] {
+  display: none;
+}
+#video-player {
+  max-width: 100%;
+  max-height: calc(100% - 28px);
+  background: #000;
+}
+#video-note {
+  color: #c9d3de;
+  font-size: 12px;
+  padding: 0 8px 6px;
+  text-align: center;
 }

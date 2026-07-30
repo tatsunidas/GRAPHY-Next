@@ -1,7 +1,28 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
-> 更新日: 2026-07-30（最終更新: **動画の P4（非 H.264 対応）を実装・実機検証**＝MPEG2 の DICOM video が
-> 再生できるようになった。同日、動画 ROI（P3c）も実機検証で完了させ 3 件の不具合を修正済み。下記エントリ参照）
+> 更新日: 2026-07-31（最終更新: **動画 P5a＝Export 媒体に MP4 を同梱し Portable 2D Viewer で再生**。
+> 前日に P4（非 H.264 対応）と動画 ROI（P3c）を完了済み。下記エントリ参照）
+
+> 🟢 **2026-07-31 動画 P5a 完了: Export した媒体だけで動画が見られるようにした**
+> （正本: [`fw/video-viewer-design.md`](video-viewer-design.md) §7、[`fw/export-portable-viewer.md`](export-portable-viewer.md)）。
+> - Export が **`VIDEO/{SOPInstanceUID}.mp4`** を同梱し（portable viewer 同梱 ON の時のみ）、Portable 2D Viewer が
+>   DICOMDIR の ReferencedSOPClassUIDInFile で動画シリーズを判定して `<video>` で再生する。
+>   変換は配信と同じ `VideoRenderService`（P4）を通すので **MPEG2 等モダリティ由来の動画も同梱できる**。
+>   作れない時は警告のみで Export は続行（DICOM 本体は入っている）。
+> - 🚨 **検証で見つけて直した 2 件**: (1) portable viewer の CSP に `media-src` が無く、blob: の動画が
+>   **必ずブロックされていた**（`default-src 'self'` へフォールバックするため）。(2) `#grid` の
+>   `display: grid` が `hidden` 属性を上書きし、**動画表示中も画像タイルが見えたまま**だった。
+>   後者は `el.hidden` を見る自己検証では素通りし、**スクリーンショット目視で気づいた**
+>   → 表示の検証は `getBoundingClientRect()` で行うこと（自己検証もそう直した）。
+> - ついでに既存の穴も 1 件: `copyPortableViewer` が classpath の重複エントリで
+>   `ZipException("duplicate entry")` を投げ **Export 全体を落としていた**（実ビルド成果物とテスト用
+>   フィクスチャが同時に classpath にある時）。先勝ちで重複を捨てるようにし、
+>   `ExportPortableViewerTest` の「ちょうど 2 件」固定（実成果物があると必ず落ちる）も止めた。
+> - 検証: `automator/src/spike/portableVideoCheck.ts` **20/20**（Export → ZIP 展開 → ローカル HTTP で配って
+>   **実 Google Chrome** で `?selfTest=`。Playwright 同梱 Chromium は H.264 を持たないので使わない）。
+>   backend **290 tests** / frontend typecheck・vitest 253・build・portable typecheck/build すべて green。
+> - 動画で残るのは **P5b（web/BFF モード）** のみ。
+>
 
 > 🟢 **2026-07-30 動画 P4 完了: MPEG2 等も `/rendered` で配信できるようにした**
 > （正本: [`fw/video-viewer-design.md`](video-viewer-design.md) §4.3 / §6 P4）。新規 `VideoRenderService`。

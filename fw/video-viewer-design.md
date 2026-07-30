@@ -17,7 +17,8 @@
 > `fw/nondicom-ffmpeg.md`（ffmpeg 同梱・解決）、`fw/viewer-2d-architecture.md`（2D ビューア中核）。
 > **P4 完了（2026-07-30）**: `/rendered` が中身を見て「MP4 はそのまま／H.264・HEVC の基本ストリームは remux／
 > MPEG2 等は再エンコード」に振り分ける（`VideoRenderService`）。MPEG2 の DICOM video を実機で再生確認（18/18）。
-> 残るのは **P5（Portable / web）** のみ。
+> **P5a 完了（2026-07-31）**: Export した媒体に `VIDEO/{sop}.mp4` を同梱し、Portable 2D Viewer が
+> `<video>` で再生する（§7）。残るのは **P5b（web/BFF モードの動画）** のみ。
 > 前提モード: standalone（Electron ＋ ローカル H2/FS）。web(BFF) 対応は §8 で後追い方針のみ。
 
 ## 0. ゴールと非ゴール
@@ -237,14 +238,41 @@ frontend: VideoViewport（ViewportType.VIDEO）
   - **残る小さな穴**: インスタンス削除時に `.cache/video/*.mp4` が消えない（孤児ファイルがディスクに残る。
     配信の正しさは上記の版＋mtime 判定で担保済み）。HEVC は remux 経路を用意したが**実データ未検証**
     （ブラウザ側の HEVC 対応も環境依存。§10-1）。
-- **P5（Portable/web）**: §7/§8。
+- **P5（Portable/web）**: §7/§8。**§7（Portable）は完了（2026-07-31・20/20 実機検証済み）**。残るは §8（web/BFF）。
 
 ## 7. Portable Viewer での動画
 
-- Portable 2D Viewer（`frontend/portable/`、`fw/export-portable-viewer.md`）は backend 非同伴（file://）。
-  → `/rendered` エンドポイントが無い。**方式 B（`<video>`）で、ZIP 同梱時に MP4 を実ファイルとして書き出し**て
-  相対パス参照する経路が現実的（`ExportService.copyPortableViewer` の同梱物に mp4 を追加）。VideoViewport は
-  P5 で検討。まずは同梱動画の `<video>` 再生を最小提供。
+> ✅ **実装済み・実機検証済み（2026-07-31, ブランチ `feat/video-p5-portable`。P5a）**。
+> 検証 = `automator/src/spike/portableVideoCheck.ts`（**20/20**）。
+
+- Portable 2D Viewer（`frontend/portable/`、`fw/export-portable-viewer.md`）は backend 非同伴（file://）で
+  `/rendered` が無い。→ **Export が再生可能な MP4 を媒体へ同梱**し、方式 B（`<video>`）で再生する。
+- **同梱先**: `VIDEO/{SOPInstanceUID}.mp4`（`ExportService.copyPlayableVideo`）。portable viewer 同梱を
+  ON にした時だけ書き出す（viewer の付随データなので、OFF の媒体を無駄に太らせない）。
+  変換は配信と同じ {@code VideoRenderService}（P4）を通すので、**MPEG2 等モダリティ由来の動画も同梱できる**。
+  作れない場合（ffmpeg 不在等）は**警告だけ出して Export は続行**する（DICOM 本体は既に入っている）。
+- **引き当て**: portable viewer は DICOMDIR の IMAGE レコードから
+  ReferencedSOPClassUIDInFile(0004,1510) を読んで動画 SOP クラスを判定し、
+  同じ媒体の `VIDEO/{sop}.mp4` を `webkitdirectory` の File 一覧から拾って
+  `URL.createObjectURL` で `<video>` に渡す（**fetch 不要＝`file://` 直開きでも動く**）。
+- **UI**: 動画シリーズを選ぶとタイル（`#grid`）を隠して `<video controls loop>` に切り替える。
+  ツリーには 🎞 を出し、サムネイルは cornerstone に投げない（encapsulated video は 2D 画像として描けない）。
+  画像シリーズを選べばタイル表示へ戻る。
+- 🚨 **検証で見つけて直した 2 件**:
+  1. **CSP に `media-src` が無く blob: の動画が再生できなかった**（`vite.portable.config.ts`）。
+     `media-src` 未指定だと `default-src 'self'` へフォールバックし、
+     `Loading media from 'blob:…' violates …` で**必ず失敗する**。→ `media-src 'self' blob:` を追加。
+  2. **`hidden` 属性が効かず、動画表示中もタイルが見えていた**。`#grid` に `display: grid` があるため
+     UA の `[hidden]{display:none}` を上書きしていた。→ `#grid[hidden]{display:none}` を明示。
+     この 2 件目は**属性（`el.hidden`）を見る自己検証では素通り**した。表示の検証は
+     **レイアウト矩形（`getBoundingClientRect`）で判定**すること（スクリーンショット目視で気づいた）。
+- ついでに直した既存の穴: `copyPortableViewer` が **classpath 上の重複エントリで
+  `ZipException("duplicate entry")` を投げ、Export 全体を落としていた**
+  （実ビルド成果物 `target/classes/portable-viewer` とテスト用フィクスチャ
+  `target/test-classes/portable-viewer` が同時にある時に発生）。→ 先勝ちで重複を捨てる。
+  併せて `ExportPortableViewerTest` の「エントリはちょうど 2 件」固定を止めた
+  （**実成果物がある環境では必ず落ちる**アサーションだった）。
+- VideoViewport（方式 A）を portable へ載せるのは引き続き将来課題（計測・W/L が要るなら）。
 
 ## 8. web(BFF) モードでの動画
 

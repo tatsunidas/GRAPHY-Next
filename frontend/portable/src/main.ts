@@ -10,6 +10,7 @@ import dicomImageLoader from "@cornerstonejs/dicom-image-loader";
 import {
   parseDicomDir,
   findDicomDirFile,
+  isVideoSeries,
   type DicomDirModel,
   type SeriesRec,
 } from "./dicomdir";
@@ -34,6 +35,9 @@ const invertBtn = $<HTMLButtonElement>("#invert-btn");
 const treeEl = $<HTMLDivElement>("#tree");
 const statusEl = $<HTMLDivElement>("#status");
 const gridEl = $<HTMLDivElement>("#grid");
+const videoStage = $<HTMLDivElement>("#video-stage");
+const videoPlayer = $<HTMLVideoElement>("#video-player");
+const videoNote = $<HTMLDivElement>("#video-note");
 // W/L・シネ・計測コントロール。
 const wlPresetSel = $<HTMLSelectElement>("#wl-preset");
 const wwInput = $<HTMLInputElement>("#ww-input");
@@ -53,6 +57,7 @@ let viewer: PortableViewer | null = null;
 let model: DicomDirModel | null = null;
 let activeSeriesEl: HTMLElement | null = null;
 let cineTimer: number | null = null;
+let videoObjectUrl: string | null = null; // 再生中の blob URL（切替時に revoke する）
 let syncing = false; // onChange 由来の DOM 更新中は入力ハンドラを抑止。
 
 function setStatus(msg: string, kind: "info" | "error" = "info"): void {
@@ -75,7 +80,8 @@ function syncUi(): void {
   syncing = true;
   const total = panel.imageTotal();
   const idx = panel.imageIndex();
-  cinebar.hidden = total <= 1;
+  // 動画表示中はスライス cine（画像シリーズ用）を出さない。<video> 側のコントロールを使う。
+  cinebar.hidden = !videoStage.hidden || total <= 1;
   sliceSlider.max = String(Math.max(0, total - 1));
   sliceSlider.value = String(idx);
   sliceLabel.textContent = `${idx + 1} / ${total}`;
@@ -127,8 +133,60 @@ async function ensureViewer(): Promise<PortableViewer> {
   return viewer;
 }
 
+/**
+ * 動画シリーズを同梱 MP4（`VIDEO/{sop}.mp4`）で再生する（`fw/video-viewer-design.md` §7 / P5）。
+ * DICOM の encapsulated video は 2D 画像として描けないので、媒体に入っている MP4 実体を
+ * `URL.createObjectURL` で `<video>` に渡す（file:// でも fetch 不要で動く）。
+ */
+function showVideoSeries(series: SeriesRec): void {
+  stopCine();
+  const withVideo = series.images.filter((im) => im.videoFile);
+  gridEl.hidden = true;
+  cinebar.hidden = true;
+  videoStage.hidden = false;
+  if (videoObjectUrl) {
+    URL.revokeObjectURL(videoObjectUrl);
+    videoObjectUrl = null;
+  }
+  if (withVideo.length === 0) {
+    videoPlayer.removeAttribute("src");
+    videoPlayer.load();
+    videoNote.textContent =
+      "この媒体には再生用の動画（VIDEO/）が同梱されていません。Export 時に「2D Viewer (portable) を同梱」を有効にしてください。";
+    setStatus("動画シリーズですが再生用ファイルがありません", "error");
+    return;
+  }
+  videoObjectUrl = URL.createObjectURL(withVideo[0].videoFile as File);
+  videoPlayer.src = videoObjectUrl;
+  videoPlayer.load();
+  videoNote.textContent =
+    withVideo.length > 1
+      ? `動画 ${withVideo.length} 本のうち 1 本目を再生しています`
+      : "同梱の動画を再生しています";
+  setStatus(`動画シリーズを表示しました（${withVideo.length} 本）`);
+}
+
+/** 画像シリーズ表示へ戻す（動画表示から切り替える時）。 */
+function hideVideoStage(): void {
+  if (videoStage.hidden) return;
+  videoPlayer.pause();
+  videoPlayer.removeAttribute("src");
+  videoPlayer.load();
+  if (videoObjectUrl) {
+    URL.revokeObjectURL(videoObjectUrl);
+    videoObjectUrl = null;
+  }
+  videoStage.hidden = true;
+  gridEl.hidden = false;
+}
+
 /** シリーズをアクティブタイルへ表示する。 */
 async function showSeries(series: SeriesRec): Promise<void> {
+  if (isVideoSeries(series)) {
+    showVideoSeries(series);
+    return;
+  }
+  hideVideoStage();
   try {
     const v = await ensureViewer();
     stopCine();
@@ -144,6 +202,20 @@ async function showSeries(series: SeriesRec): Promise<void> {
 
 /** シリーズ先頭スライスのサムネイルを canvas へ描画（cornerstone の loadImageToCanvas）。 */
 async function renderThumb(canvas: HTMLCanvasElement, series: SeriesRec): Promise<void> {
+  // 動画は 2D 画像として描けない（encapsulated video）。cornerstone に投げると失敗するので出さない。
+  if (isVideoSeries(series)) {
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.fillStyle = "#1b2530";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#c9d3de";
+      ctx.font = "40px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("🎞", canvas.width / 2, canvas.height / 2);
+    }
+    return;
+  }
   const first = series.images.find((im) => im.file);
   if (!first?.file) return;
   try {
@@ -194,7 +266,9 @@ function buildTree(m: DicomDirModel): void {
         thumb.height = 88;
         const text = document.createElement("span");
         text.className = "series-text";
-        text.textContent = `${seLabel}  [${se.modality}] ${se.images.length}`;
+        text.textContent = isVideoSeries(se)
+          ? `${seLabel}  [${se.modality}] 🎞 ${se.images.length}`
+          : `${seLabel}  [${se.modality}] ${se.images.length}`;
         seNode.append(thumb, text);
         if (missing > 0) seNode.title = `${missing} 件の参照ファイルが見つかりません`;
 
@@ -352,6 +426,64 @@ async function runSelfTest(rawBase: string): Promise<void> {
     await handleFiles(files);
     const first = model?.patients[0]?.studies[0]?.series[0];
     if (first) await showSeries(first);
+
+    // 動画シリーズ（あれば）を開いて、同梱 MP4 が実際に再生できるところまで確かめる（P5）。
+    const allSeries = (model?.patients ?? []).flatMap((p) => p.studies.flatMap((st) => st.series));
+    const videoSeries = allSeries.filter((se) => isVideoSeries(se));
+    let video: Record<string, unknown> = { count: videoSeries.length };
+    if (videoSeries.length > 0) {
+      await showSeries(videoSeries[0]);
+      const bundled = videoSeries[0].images.filter((im) => im.videoFile).length;
+      // メタデータが読めるまで待つ（読めれば再生可能なコーデック/コンテナと判る）。
+      const ready = await new Promise<boolean>((resolve) => {
+        if (videoPlayer.readyState >= 1) return resolve(true);
+        const done = (ok: boolean) => {
+          videoPlayer.removeEventListener("loadedmetadata", onMeta);
+          videoPlayer.removeEventListener("error", onErr);
+          resolve(ok);
+        };
+        const onMeta = () => done(true);
+        const onErr = () => done(false);
+        videoPlayer.addEventListener("loadedmetadata", onMeta);
+        videoPlayer.addEventListener("error", onErr);
+        window.setTimeout(() => done(videoPlayer.readyState >= 1), 10_000);
+      });
+      // 1 フレーム分だけ進めて、デコードして絵が出ることまで見る。
+      let advanced = false;
+      if (ready) {
+        await new Promise<void>((resolve) => {
+          const onSeeked = () => {
+            videoPlayer.removeEventListener("seeked", onSeeked);
+            resolve();
+          };
+          videoPlayer.addEventListener("seeked", onSeeked);
+          videoPlayer.currentTime = Math.min(0.2, (videoPlayer.duration || 1) / 2);
+          window.setTimeout(() => resolve(), 5_000);
+        });
+        advanced = videoPlayer.currentTime > 0;
+      }
+      // ⚠ `hidden` 属性ではなく**実際に見えているか**（レイアウト矩形）で報告する。
+      // `display` を持つ要素は hidden 属性を上書きするので、属性だけ見ると「隠したつもり」を見逃す。
+      const visible = (el: HTMLElement): boolean => el.getBoundingClientRect().height > 1;
+      video = {
+        count: videoSeries.length,
+        bundledFiles: bundled,
+        stageVisible: visible(videoStage),
+        gridHidden: !visible(gridEl),
+        ready,
+        duration: Number.isFinite(videoPlayer.duration) ? Number(videoPlayer.duration.toFixed(3)) : null,
+        videoWidth: videoPlayer.videoWidth,
+        videoHeight: videoPlayer.videoHeight,
+        advanced,
+        note: videoNote.textContent ?? "",
+      };
+      // 画像シリーズへ戻せることも確認（動画 → 画像の切替）。
+      const imageSeries = allSeries.find((se) => !isVideoSeries(se));
+      if (imageSeries) {
+        await showSeries(imageSeries);
+        video.backToImage = !visible(videoStage) && visible(gridEl);
+      }
+    }
     // 回帰: 肺野プリセット適用 → W/L が変わることを確認。
     let wlAfterPreset = "";
     const panel = viewer?.active();
@@ -380,6 +512,7 @@ async function runSelfTest(rawBase: string): Promise<void> {
       cinebarVisible: !cinebar.hidden,
       panelsAfter2x2,
       thumbnails: thumbs,
+      video,
     };
     console.log("SELFTEST_RESULT " + JSON.stringify(w.__selfTest));
   } catch (e) {

@@ -6,8 +6,10 @@ package com.vis.graphynext.export;
 
 import com.vis.graphynext.dicom.store.DicomInstance;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
+import com.vis.graphynext.dicom.video.VideoRenderService;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
+import org.dcm4che3.data.UID;
 import org.dcm4che3.io.DicomInputStream;
 import org.dcm4che3.io.DicomInputStream.IncludeBulkData;
 import org.dcm4che3.media.DicomDirWriter;
@@ -25,6 +27,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Set;
 import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -55,6 +58,15 @@ public class ExportService {
         }
     }
 
+    /**
+     * encapsulated video の SOP クラス。この 3 つは 2D 画像として描けないので、portable viewer 用に
+     * <b>再生できる MP4</b> を媒体へ同梱する（{@code VIDEO/{sop}.mp4}）。
+     */
+    private static final Set<String> VIDEO_SOP_CLASSES = Set.of(
+            UID.VideoPhotographicImageStorage,
+            UID.VideoEndoscopicImageStorage,
+            UID.VideoMicroscopicImageStorage);
+
     /** 集計（README / レスポンス用）。 */
     public record Summary(int patients, int studies, int series, int instances) {}
 
@@ -62,9 +74,12 @@ public class ExportService {
     public record BuildResult(Path zip, List<String> patientIds) {}
 
     private final DicomInstanceRepository repo;
+    /** 動画の MP4 化（P5: portable viewer は backend 非同伴なので媒体に MP4 実体を同梱する）。 */
+    private final VideoRenderService videoRender;
 
-    public ExportService(DicomInstanceRepository repo) {
+    public ExportService(DicomInstanceRepository repo, VideoRenderService videoRender) {
         this.repo = repo;
+        this.videoRender = videoRender;
     }
 
     /**
@@ -93,6 +108,7 @@ public class ExportService {
         java.util.Set<String> studyUidsExported = new java.util.LinkedHashSet<>();
         int seriesCount = 0;
         int instanceCount = 0;
+        int videoCount = 0; // 媒体へ同梱した再生可能 MP4 の数（VIDEO/{sop}.mp4）
 
         try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(zipPath))) {
             for (Selection sel : selections) {
@@ -146,6 +162,13 @@ public class ExportService {
 
                         if (dir != null) {
                             addDirRecords(dir, rf, ds, fmi, fileIDs);
+                        }
+
+                        // 動画は portable viewer が DICOM のままでは再生できない（backend 非同伴で
+                        // /rendered が使えない）ため、再生可能な MP4 を VIDEO/{sop}.mp4 として同梱する。
+                        if (opts.includePortableViewer()
+                                && VIDEO_SOP_CLASSES.contains(ds.getString(Tag.SOPClassUID, ""))) {
+                            videoCount += copyPlayableVideo(zip, src, inst.getSopInstanceUid()) ? 1 : 0;
                         }
                     }
                 }
@@ -265,6 +288,30 @@ public class ExportService {
      * ZIP の {@code VIEWER/} 以下へ書き出す。成果物が同梱されていない（frontend.skip 等）場合は
      * 警告のみで Export 自体は継続する（DICOMDIR は既に出力済みで他ビューアからは読める）。
      */
+    /**
+     * 動画インスタンスを <b>再生可能な MP4</b> にして {@code VIDEO/{sop}.mp4} へ同梱する。
+     *
+     * <p>portable viewer は backend 非同伴（{@code file://}）で {@code /rendered} が使えないため、
+     * 媒体の中に MP4 実体が要る。変換は配信と同じ {@link VideoRenderService}（MP4 はそのまま／
+     * H.264・HEVC の基本ストリームは remux／MPEG2 等は再エンコード）を通すので、モダリティ由来の
+     * 動画も同梱できる。ffmpeg が無い等で作れない場合は<b>警告だけ出して Export は続行</b>する
+     * （DICOM 本体は既に書き出しており、他ビューアでは開けるため）。
+     *
+     * @return 同梱できたら true
+     */
+    boolean copyPlayableVideo(ZipOutputStream zip, Path src, String sopUid) {
+        try {
+            Path mp4 = videoRender.ensureRendered(src, sopUid);
+            zip.putNextEntry(new ZipEntry("VIDEO/" + sopUid + ".mp4"));
+            Files.copy(mp4, zip);
+            zip.closeEntry();
+            return true;
+        } catch (IOException e) {
+            log.warn("export: 動画の MP4 同梱に失敗しました（DICOM 本体のみ同梱） sop={}: {}", sopUid, e.toString());
+            return false;
+        }
+    }
+
     static void copyPortableViewer(ZipOutputStream zip) throws IOException {
         var resolver = new org.springframework.core.io.support.PathMatchingResourcePatternResolver();
         org.springframework.core.io.Resource[] resources;
@@ -275,6 +322,10 @@ public class ExportService {
             return;
         }
         int copied = 0;
+        // ⚠ 同じ相対パスが classpath 上に 2 つ現れることがある（例: 実ビルド成果物の
+        // target/classes/portable-viewer と、テスト用フィクスチャの target/test-classes/portable-viewer）。
+        // 素直に書くと ZipException("duplicate entry") で **Export 全体が落ちる**ので、先勝ちで重複を捨てる。
+        java.util.Set<String> written = new java.util.HashSet<>();
         for (org.springframework.core.io.Resource res : resources) {
             if (!res.isReadable()) {
                 continue; // ディレクトリエントリなど
@@ -286,6 +337,10 @@ public class ExportService {
             }
             String rel = url.substring(idx + "portable-viewer/".length());
             if (rel.isEmpty() || rel.endsWith("/")) {
+                continue;
+            }
+            if (!written.add(rel)) {
+                log.debug("export: portable viewer の重複エントリを無視: {}", rel);
                 continue;
             }
             zip.putNextEntry(new ZipEntry("VIEWER/" + rel));
@@ -330,7 +385,10 @@ public class ExportService {
             sb.append("  3) Pick a series from the list to view it (window/level, scroll, zoom).\n");
             sb.append("  No installation or server is required.\n");
             sb.append("  付属の 2D Viewer は VIEWER/index.html を Chromium 系ブラウザで開き、\n");
-            sb.append("  「フォルダを選択」でこのメディアのルート（DICOMDIR を含む）を選ぶと表示できます。\n\n");
+            sb.append("  「フォルダを選択」でこのメディアのルート（DICOMDIR を含む）を選ぶと表示できます。\n");
+            sb.append("  Videos (if any) are also bundled as playable MP4 under VIDEO/<SOPInstanceUID>.mp4,\n");
+            sb.append("  because DICOM encapsulated video cannot be drawn as a 2D image.\n");
+            sb.append("  動画がある場合は VIDEO/<SOPInstanceUID>.mp4 として再生可能な MP4 も同梱しています。\n\n");
         }
         sb.append("Exported by GRAPHY (Visionary Imaging Services, Inc.)\n");
         return sb.toString();

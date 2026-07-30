@@ -53,6 +53,11 @@
         </aside>
         <main id="stage">
           <div id="grid"></div>
+          <!-- 動画シリーズ用（同梱 MP4 を <video> で再生。DICOM の encapsulated video は 2D 画像として描けない）。 -->
+          <div id="video-stage" hidden>
+            <video id="video-player" controls loop playsinline preload="metadata"></video>
+            <div id="video-note"></div>
+          </div>
           <div id="cinebar" hidden>
             <button id="play-btn" type="button" title="シネ再生 / 停止">▶</button>
             <input id="slice-slider" type="range" min="0" max="0" value="0" step="1" />

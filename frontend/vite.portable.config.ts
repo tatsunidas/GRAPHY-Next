@@ -30,6 +30,10 @@ function cspPlugin(): Plugin {
     "script-src 'self' 'wasm-unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
+    // 同梱動画（VIDEO/*.mp4）は File → URL.createObjectURL で <video> に渡すため blob: が要る。
+    // これが無いと "Loading media from 'blob:…' violates … default-src 'self'" で**再生できない**
+    // （2026-07-31 の実機検証で判明。media-src 未指定だと default-src へフォールバックする）。
+    "media-src 'self' blob:",
     "worker-src 'self' blob:",
     "font-src 'self'",
     "object-src 'none'",
