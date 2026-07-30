@@ -7,6 +7,7 @@ package com.vis.graphynext.automator;
 import com.vis.graphynext.dicom.store.DicomInstance;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
 import com.vis.graphynext.report.ReportRepository;
+import com.vis.graphynext.roi.RoiDocumentRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -22,6 +23,9 @@ import java.util.List;
  * 呼び出し口は {@code GRAPHY_AUTOMATOR=1} が設定されているときだけ有効化される
  * （{@link AutomatorController} の {@code @ConditionalOnProperty} 参照）。
  *
+ * <p>削除対象は「患者に属するデータ」全部。ROI（幾何注釈）の保存も症例データなので含める
+ * （含めないと、次の検証で前回の ROI が復元されてテストが前の実行に汚染される。実際に踏んだ）。
+ *
  * <p>H2 ファイルを OS レベルで削除する（プロセス再起動を要する）方式ではなく、実行中の JVM 内で
  * リポジトリ経由の全削除に留める。理由: (1) H2 は {@code AUTO_SERVER=TRUE} でファイルロックを持つため、
  * Windows ではプロセスを止めてからでないと安全に削除できずレースが起きやすい、(2) プロセス再起動無しで
@@ -35,16 +39,24 @@ public class AutomatorService {
 
     private final DicomInstanceRepository dicomRepo;
     private final ReportRepository reportRepo;
+    private final RoiDocumentRepository roiRepo;
 
-    public AutomatorService(DicomInstanceRepository dicomRepo, ReportRepository reportRepo) {
+    public AutomatorService(
+            DicomInstanceRepository dicomRepo,
+            ReportRepository reportRepo,
+            RoiDocumentRepository roiRepo) {
         this.dicomRepo = dicomRepo;
         this.reportRepo = reportRepo;
+        this.roiRepo = roiRepo;
     }
 
-    public record ResetResult(int deletedInstances, int deletedReports) {
+    public record ResetResult(int deletedInstances, int deletedReports, int deletedRoiDocuments) {
     }
 
-    /** 症例データ（DICOMインスタンス索引＋実ファイル、レポート）を全削除する。環境設定(Setting)は対象外。 */
+    /**
+     * 症例データ（DICOMインスタンス索引＋実ファイル、レポート、ROI 保存）を全削除する。
+     * 環境設定(Setting)は対象外。
+     */
     @Transactional
     public ResetResult reset() {
         List<DicomInstance> instances = dicomRepo.findAll();
@@ -62,7 +74,11 @@ public class AutomatorService {
         long reportCount = reportRepo.count();
         reportRepo.deleteAll();
 
-        log.info("[automator] reset: instances={}, reports={}", instances.size(), reportCount);
-        return new ResetResult(instances.size(), (int) reportCount);
+        long roiCount = roiRepo.count();
+        roiRepo.deleteAll();
+
+        log.info("[automator] reset: instances={}, reports={}, roiDocuments={}",
+                instances.size(), reportCount, roiCount);
+        return new ResetResult(instances.size(), (int) reportCount, (int) roiCount);
     }
 }

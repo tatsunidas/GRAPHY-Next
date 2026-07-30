@@ -14,6 +14,7 @@ import {
   type ViewerPixelDataOptions,
   type ViewerTarget,
   type ViewerTilePixelData,
+  type ViewerTileRoi,
   type ViewerTileViewState,
 } from "../viewer/viewerCommands";
 import { ToolIcon } from "../icons/ToolIcon";
@@ -45,6 +46,20 @@ export interface ViewerActions {
   getViewState(tileId?: string): ViewerTileViewState | null;
   /** 対象タイルのスライス 1 枚の校正済み画素（H3）。tileId 省略時は対象の先頭。無ければ null。 */
   getPixelData(tileId?: string, opts?: ViewerPixelDataOptions): Promise<ViewerTilePixelData | null>;
+  /**
+   * 対象タイルに乗っている ROI（計測・幾何注釈）を読む問い合わせ（H5）。
+   * tileId 省略時は**対象タイル全部**（ベースラインと追跡を並べて開いている場合に両方読めるよう）。
+   */
+  getRois(tileId?: string): ViewerTileRoi[];
+  /** ROI に紐付くプラグイン属性を読む（H5）。 */
+  getRoiMeta(roiUid: string, pluginId: string): Record<string, string>;
+  /** ROI に紐付くプラグイン属性を書く（H5）。ROI が無ければ false。 */
+  setRoiMeta(roiUid: string, pluginId: string, patch: Record<string, string>): boolean;
+  /**
+   * ROI の追加・変更・削除を購読する（H5）。返り値で解除。
+   * 通知はまとめられる（**何が変わったかは渡さない**ので、受け取ったら `getRois()` を読み直す）。
+   */
+  subscribeRois(listener: () => void): () => void;
   /** 値マップを対象タイルの表示中スライスへ重ねる（H4a）。tileId 省略時は対象の先頭。 */
   showOverlay(tileId: string | undefined, overlay: ViewerOverlay): boolean;
   /** プラグインオーバーレイを消す。tileId 省略時は対象タイル全部。 */

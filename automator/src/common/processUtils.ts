@@ -17,14 +17,35 @@ export function killProcessTree(proc: ChildProcess): void {
   // 残った vite の stdout/stderr パイプが親 node のイベントループを生かし、stop() 後にプロセスが
   // 終了できずハングする）。負の pid（プロセスグループ）へ送ると子孫ごと巻き込める。これが効くよう、
   // 呼び出し側は spawn 時に detached:true でプロセスをグループリーダー化しておくこと。
-  try {
-    process.kill(-proc.pid, "SIGTERM");
-  } catch {
-    // 自前グループが無い/既に終了している場合は単体killにフォールバック
+  const signal = (sig: NodeJS.Signals): void => {
     try {
-      proc.kill("SIGTERM");
+      process.kill(-proc.pid!, sig);
     } catch {
-      /* already dead */
+      // 自前グループが無い/既に終了している場合は単体killにフォールバック
+      try {
+        proc.kill(sig);
+      } catch {
+        /* already dead */
+      }
     }
+  };
+  signal("SIGTERM");
+  // **SIGKILL へ昇格する**。Spring Boot の backend は非デーモンスレッド（DIMSE SCP 等）を持ち、
+  // SIGTERM では落ちきらないことがある。残ると次の実行がその**古い jar のプロセス**へ繋がり、
+  // 検証結果が黙って前の実行に汚染される（2026-07-30 に 2 回分の結果を無駄にした）。
+  const deadline = Date.now() + 5000;
+  const alive = (): boolean => {
+    try {
+      process.kill(proc.pid!, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  while (Date.now() < deadline && alive()) {
+    spawnSync("sleep", ["0.2"], { stdio: "ignore" });
+  }
+  if (alive()) {
+    signal("SIGKILL");
   }
 }

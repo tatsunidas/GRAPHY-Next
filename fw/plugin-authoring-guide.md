@@ -1,7 +1,7 @@
 # GRAPHY-Next プラグイン作成ガイド
 
 > 作成日: 2026-07-02（更新: 2026-07-30 — §2-3 に host API の問い合わせ系（H1/H2）・画素読み出し（H3）・
-> オーバーレイ（H4a）・派生シリーズ保存（H4b）を追記）
+> オーバーレイ（H4a）・派生シリーズ保存（H4b）・**ROI（計測）の読み出し（H5）**を追記）
 > 対象: プラグイン開発者
 > 関連: [`plugin-architecture.md`](plugin-architecture.md)（設計・全体像）
 
@@ -99,10 +99,10 @@ export function activate(host) {
 
 | サーフェス | 追加プロパティ |
 |---|---|
-| `viewer2d.menu` / `viewer2d.toolbar` | `actions`（表示中タイルへの操作。`invert()` / `rotate90()` / `fit()` 等。定義は `frontend/src/viewer2d/Viewer2DToolbar.tsx` の `ViewerActions`）<br>`getTargets()` / `getViewState()` / `getPixelData()` / `showOverlay()` / `clearOverlay()` / `saveDerivedSeries()`（**0.1.9 以降**。下記） |
+| `viewer2d.menu` / `viewer2d.toolbar` | `actions`（表示中タイルへの操作。`invert()` / `rotate90()` / `fit()` 等。定義は `frontend/src/viewer2d/Viewer2DToolbar.tsx` の `ViewerActions`）<br>`getTargets()` / `getViewState()` / `getPixelData()` / `showOverlay()` / `clearOverlay()` / `saveDerivedSeries()` / `getRois()` / `getRoiMeta()` / `setRoiMeta()` / `subscribeRois()`（**0.1.9 以降**。下記） |
 | `mainscreen.menu` | `selectedStudyUid`（選択中スタディの UID、未選択なら `null`） |
 
-**問い合わせ・オーバーレイ・保存（0.1.9 以降・[`plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張h1h4b-実装済み) の H1〜H4b）**:
+**問い合わせ・オーバーレイ・保存・ROI（0.1.9 以降・[`plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張h1h5-実装済み) の H1〜H5）**:
 
 | メソッド | 戻り |
 |---|---|
@@ -112,6 +112,10 @@ export function activate(host) {
 | `showOverlay(tileId?, overlay)` | 処理結果（値マップ）を表示中スライスに重ねる。`overlay = { data, rows, cols, window?, colormap?, opacity? }`。格子が現在スライスと不一致なら `false` |
 | `clearOverlay(tileId?)` | オーバーレイを消す |
 | `saveDerivedSeries(tileId?, req)` | 処理結果を**派生シリーズとして保存**（standalone は保管庫、web は PACS）。`Promise<{ ok, cancelled?, seriesInstanceUid?, instanceCount?, error? }>`。**本体が必ず確認ダイアログを出す** |
+| `getRois(tileId?)` | ユーザーが描いた **ROI（計測）** の配列。要素は `{ roiUid, tool, label, tileId, studyUid, seriesUid, sopInstanceUid, sliceIndex, zScope, c, t, points, spacing, measurements, visible }`。**省略時は対象タイル全部**（他と違う） |
+| `getRoiMeta(roiUid)` | ROI に紐付けた**このプラグインの属性**（`Record<string,string>`）。未設定なら `{}` |
+| `setRoiMeta(roiUid, patch)` | 同属性を書く（マージ）。ROI が無ければ `false` |
+| `subscribeRois(cb)` | ROI の追加/変更/削除を購読。返り値で解除。**差分は渡さない**ので `getRois()` を読み直す |
 
 - **呼ぶたびに現在値を読む**。ダイアログを開いている間にユーザーがスライスを送るので、
   活性化時に一度読んだ値を持ち回らないこと。
@@ -133,7 +137,7 @@ export function activate(host) {
 - `rows`/`cols` は**現在スライスと一致**していること（不一致は `false`）。
 - オーバーレイは**出したスライスに紐付く**（他スライスでは隠れ、戻ると再表示。シリーズ切替で破棄）。
 - 本体が画像左下に `プラグイン: <名前>` のラベルを必ず出す（出所の明示）。
-- **保存はされない**。派生シリーズとして保管庫や PACS へ書くのは H4b（未実装）。
+- **保存はされない**。派生シリーズとして保管庫や PACS へ書くのは `saveDerivedSeries()`（H4b）。
 
 ```js
 // 例: 300 HU 以上（骨・造影）だけを Hot_Iron で重ねる
@@ -190,6 +194,64 @@ if (px) {
     background: -1000, // NaN（閾値未満）を埋める値。NaN を含むなら必須
   });
   host.notify(res.ok ? `saved ${res.instanceCount}` : res.cancelled ? "cancelled" : `failed: ${res.error}`);
+}
+```
+
+**ROI（H5）の要点** — 計測ドリブンのプラグイン（RECIST 1.1 等）を書くならここが本題:
+
+- **長径・短径は 2 系統返る**。取り違えると測定値が変わるので、どちらを使うか意識して選ぶ。
+  - ROI メニューの **「長径・短径（RECIST）」＝`Bidirectional`** … ユーザーが 2 軸を明示的に引く。
+    `measurements.length`（長軸）/ `measurements.shortAxis`（短軸）を使う。**読影医の意図がこれ**。
+  - 楕円・矩形・円・自由曲線・スプライン・Length … `measurements.longAxisMm` / `shortAxisMm`
+    （形状から本体が算出。最遠 2 点と、それに**直交**する方向の広がり）。
+  - **Bidirectional では形状値（`longAxisMm` / `shortAxisMm`）は `undefined`**。ユーザーが引いた
+    2 軸そのものが計測値であり、交差する 2 線分から形状の長径を出すと（短軸を端に寄せた場合）
+    ユーザーの長軸を超える値が出るため、意図的に出していない。
+  - Angle / Probe / ArrowAnnotate、および本体が知らないツールにも形状値は出ない。
+  - 短径は「長径に直交する幅」で、全方位の最小キャリパ幅（ImageJ の MinFeret）**ではない**
+    （RECIST が長径に直交して測ると規定しているため）。
+- **画素間隔が不明なシリーズでは算出値が `undefined`**（mm を捏造しない）。ツール値の
+  `length` / `shortAxis` も同様に出ない（本体が px で計算した値を mm として渡さないため）。
+  統計も取れない項目は `undefined` で、**0 では埋まらない**（「測っていない」と「0 だった」は別）。
+  `mean` 等は Cornerstone が**描画時に**計算するので、画面に出ていない ROI では空になり得る。
+- `measurements.unit` は**統計値**（`mean` / `stdDev` / `min` / `max`）の単位（"HU" / "SUVbw"）。
+  長さは常に mm、面積は mm² なので、そこの単位ではない。
+- **`roiUid` はアプリを再起動しても同じ**（2026-07-30 に ROI の永続化が入った。
+  `fw/roi-manager-design.md` §11）。ROI は患者単位で保存され、同じシリーズを開き直すと
+  **同じ `annotationUID` で復元される**ので、時系列追跡の鍵に使える。
+  `setRoiMeta()` で付けた属性も一緒に保存される。
+  - ただし**保存されるのは 2D Viewer が開いている患者の ROI**で、書き出し形式
+    （ImageJ ROI / RTSTRUCT / SEG）とは別系統。外部へ渡すならそれらの書き出しを使う。
+  - 消された ROI は**復活しない**（削除は墓標として記録され、別ウィンドウにも伝播する）。
+    プラグイン側の記録が「もう無い ROI」を指すことはあるので、`getRois()` に現れない
+    `roiUid` は消えたものとして扱うこと。
+- ⚠ **`zScope === "all"`（global ROI）は弾く**。本体は全スライス共通 ROI の参照先を表示スライスへ
+  追従させるので、`sliceIndex` / `sopInstanceUid` は「いま見ているスライス」を指すだけで
+  病変の位置ではない。
+- `getRois()` の既定対象は**対象タイル全部**（他の問い合わせ系は「先頭タイル」）。
+  ベースラインと追跡を並べて開く用途を想定している。単一タイルなら `tileId` を渡す。
+- `subscribeRois()` は**何が変わったかを渡さない**。通知が来たら `getRois()` を読み直す。
+  ダイアログを閉じるときは**必ず解除**する。
+- ROI の**書き込み（プラグインから ROI を作る・動かす）はできない**。読影医が引いた計測を
+  プラグインが書き換えられないようにしてある。マスク（labelmap）の読み出しも未対応。
+
+```js
+// 例: RECIST の標的病変の和（SLD）— リンパ節は短径、それ以外は長径で足す
+const unsub = host.subscribeRois(() => refresh());   // 編集に追随。閉じるときに unsub()
+function refresh() {
+  let sld = 0;
+  for (const r of host.getRois()) {
+    if (r.zScope === "all") continue;                // global ROI は病変位置を持たない
+    const meta = host.getRoiMeta(r.roiUid);          // 自分が付けた属性（追跡 ID・リンパ節か 等）
+    const isNode = meta.lymphNode === "true";
+    // Bidirectional はユーザーが引いた軸、それ以外は形状からの算出値。
+    const long = r.measurements.length ?? r.measurements.longAxisMm;
+    const short = r.measurements.shortAxis ?? r.measurements.shortAxisMm;
+    const size = isNode ? short : long;
+    if (size === undefined) continue;                // 画素間隔不明などで測れないものは足さない
+    sld += size;
+  }
+  host.notify(`SLD = ${sld.toFixed(1)} mm`);
 }
 ```
 

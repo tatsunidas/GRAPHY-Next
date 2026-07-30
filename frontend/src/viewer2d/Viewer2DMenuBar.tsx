@@ -85,6 +85,12 @@ export function Viewer2DMenuBar({
     // 出所（id/name/version）は host がマニフェストから入れる。プラグインに名乗らせない。
     saveDerivedSeries: (tileId, req) =>
       actions.saveDerivedSeries(tileId, req, { id: m.id, name: m.name, version: m.version }),
+    // H5: ROI の読み出しと、ROI に紐付くプラグイン属性。**pluginId は host が入れる**ので、
+    // プラグインは他プラグイン（や本体）の属性名前空間に触れない。
+    getRois: (tileId) => actions.getRois(tileId),
+    getRoiMeta: (roiUid) => actions.getRoiMeta(roiUid, m.id),
+    setRoiMeta: (roiUid, patch) => actions.setRoiMeta(roiUid, m.id, patch),
+    subscribeRois: (listener) => actions.subscribeRois(listener),
   }));
   const [open, setOpen] = useState<string | null>(null);
   useEffect(() => {
@@ -184,6 +190,7 @@ export function Viewer2DMenuBar({
       label: t("viewer2d.menu.roi"),
       items: [
         { label: t("viewer2d.roi.length"), onClick: () => actions.setTool(TOOL_IDS.length), checked: activeTool === TOOL_IDS.length },
+        { label: t("viewer2d.roi.bidirectional"), onClick: () => actions.setTool(TOOL_IDS.bidirectional), checked: activeTool === TOOL_IDS.bidirectional },
         { label: t("viewer2d.roi.angle"), onClick: () => actions.setTool(TOOL_IDS.angle), checked: activeTool === TOOL_IDS.angle },
         { label: t("viewer2d.roi.ellipse"), onClick: () => actions.setTool(TOOL_IDS.ellipse), checked: activeTool === TOOL_IDS.ellipse },
         { label: t("viewer2d.roi.rect"), onClick: () => actions.setTool(TOOL_IDS.rect), checked: activeTool === TOOL_IDS.rect },
