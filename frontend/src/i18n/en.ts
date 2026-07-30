@@ -1333,7 +1333,7 @@ export const en: Record<string, string> = {
   "video.nextFrame": "Next frame",
   "video.error": "Failed to play the video.",
   "video.webUnsupported": "Video playback is available in standalone mode only (web mode coming later).",
-  "video.needsFfmpeg": "This video codec isn't supported by the browser. Transcoding (ffmpeg) support is coming later.",
+  "video.needsFfmpeg": "This video codec is not supported by the browser, and ffmpeg (needed for server-side conversion) was not found, so it cannot be played.",
   "video.fallbackMode": "Basic playback (native fallback — viewer playback unavailable in this environment)",
   "video.tool.wwwl": "W/L",
   "video.tool.length": "Length",

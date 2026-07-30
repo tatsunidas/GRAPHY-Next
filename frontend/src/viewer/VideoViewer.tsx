@@ -269,7 +269,9 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
         return;
       }
       setMeta(m);
-      if (m.transcodeRequired) {
+      // ブラウザ非対応コーデックでも、サーバに ffmpeg があれば /rendered が変換して配信する（P4）。
+      // 変換できない環境だけ案内を出す。
+      if (m.transcodeRequired && !m.transcodeAvailable) {
         setPhase("transcode");
         return;
       }

@@ -1335,7 +1335,7 @@ export const ja: Record<string, string> = {
   "video.nextFrame": "次フレーム",
   "video.error": "動画を再生できませんでした。",
   "video.webUnsupported": "動画再生は standalone のみ対応です（web モードは今後対応）。",
-  "video.needsFfmpeg": "この動画コーデックはブラウザ非対応です。変換対応（ffmpeg）は今後提供します。",
+  "video.needsFfmpeg": "この動画コーデックはブラウザ非対応です。サーバ側で変換するための ffmpeg が見つからないため再生できません。",
   "video.fallbackMode": "簡易再生（この環境ではビューア再生が使えないためネイティブ再生）",
   "video.tool.wwwl": "W/L",
   "video.tool.length": "長さ",
