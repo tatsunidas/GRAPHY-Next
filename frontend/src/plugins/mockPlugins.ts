@@ -43,21 +43,39 @@ export const DEMO_MODULES: Record<string, PluginModule> = {
       }
     },
   },
-  // host API H1/H2（fw/plugin-architecture.md §7）の配線確認用。DOM を一切見ずに
-  // 「どのシリーズの何スライス目を、どの W/L で見ているか」を答えられることを示す。
+  // host API H1/H2/H3（fw/plugin-architecture.md §7）の配線確認用。DOM を一切見ずに
+  // 「どのシリーズの何スライス目を、どの W/L で見ているか」と、その**生の HU** を答えられることを示す。
   "demo-context": {
-    activate: (host) => {
+    activate: async (host) => {
       if (host.surface !== "viewer2d.menu" && host.surface !== "viewer2d.toolbar") return;
       const targets = host.getTargets();
       if (targets.length === 0) {
         host.notify("no target tile");
         return;
       }
-      const lines = targets.map((tg) => {
+      const lines: string[] = [];
+      for (const tg of targets) {
         const vs = host.getViewState(tg.tileId);
         const wl = vs ? `W/L ${vs.windowWidth.toFixed(0)}/${vs.windowCenter.toFixed(0)} ${vs.unit}` : "W/L ?";
-        return `${tg.seriesLabel} [${tg.modality}] slice ${tg.sliceIndex + 1}/${tg.sliceCount} — ${wl}`;
-      });
+        const px = await host.getPixelData(tg.tileId);
+        let stats = "pixels ?";
+        if (px) {
+          let min = Infinity;
+          let max = -Infinity;
+          let sum = 0;
+          for (const v of px.data) {
+            if (v < min) min = v;
+            if (v > max) max = v;
+            sum += v;
+          }
+          stats =
+            `${px.cols}×${px.rows} ${px.unit} ` +
+            `min=${min.toFixed(0)} max=${max.toFixed(0)} mean=${(sum / px.data.length).toFixed(1)}`;
+        }
+        lines.push(
+          `${tg.seriesLabel} [${tg.modality}] slice ${tg.sliceIndex + 1}/${tg.sliceCount} — ${wl}\n  ${stats}`,
+        );
+      }
       host.notify(lines.join("\n"));
     },
   },

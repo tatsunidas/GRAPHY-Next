@@ -68,7 +68,7 @@ git add minisign.pub && git commit -m "add signing public key"   # 公開鍵は�
 
 | サーフェス | 出る場所 | `host` の主なプロパティ |
 |---|---|---|
-| `viewer2d.menu` | 2D Viewer の Plug-ins メニュー | `actions`（`invert()` / `rotate90()` / `fit()` / `setWindowLevel()` …）<br>`getTargets()` / `getViewState(tileId?)`（**0.1.9 以降**） |
+| `viewer2d.menu` | 2D Viewer の Plug-ins メニュー | `actions`（`invert()` / `rotate90()` / `fit()` / `setWindowLevel()` …）<br>`getTargets()` / `getViewState(tileId?)` / `getPixelData(tileId?, opts?)`（**0.1.9 以降**） |
 | `mainscreen.menu` | MainScreen の Plug-Ins メニュー | `selectedStudyUid`（選択中スタディ UID） |
 
 `getTargets()` は操作対象タイル（選択→無ければ全）の
@@ -76,6 +76,13 @@ git add minisign.pub && git commit -m "add signing public key"   # 公開鍵は�
 `getViewState(tileId?)` は `{ windowCenter, windowWidth, unit, colormap, invert, flipH, flipV, rotation, zoom, pan }`
 を返す。**呼ぶたびに現在値を読む**ので、活性化時のスナップショットを持ち回らないこと。
 使う場合は `engines.graphy` を `">=0.1.9"` に上げる（古い本体には導入されなくなる＝意図した挙動）。
+
+`getPixelData(tileId?, opts?)` は `Promise` で
+`{ tileId, imageId, sliceIndex, rows, cols, data, unit, spacing }` を返す。`data` は
+`Float32Array`（row-major・`data[y * cols + x]`）の**校正済み画素**＝CT なら HU で、
+**表示 W/L は掛かっていない**（W/L や LUT を変えても値は不変）。カラー画像は輝度で `unit="raw"`。
+**1 回 1 スライス**（`opts.sliceIndex` で指定。既定は表示中スライス、範囲外は `null`）。
+画素を読むなら `permissions` に `"read-pixels"` を宣言する（同意画面に出る。現状強制ではない）。
 
 共通: `pluginId` / `t(key)`（i18n）/ `notify(msg)` / `runBackend(payload?)`（backend 面がある場合）。
 型は `graphy-plugin.d.ts` を参照（`ui.js` 先頭の `/// <reference ...>` + `// @ts-check` で補完が効く）。

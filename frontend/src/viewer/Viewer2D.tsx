@@ -35,12 +35,20 @@ import { listSpheres3D, sphereCanvasCircle, subscribeSphere3D, type SphereCanvas
 import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
 import { applyTransform, isPanned, readTransform, type ViewTransform, FIT_TRANSFORM } from "./transform";
 import { readImageInfo, sampleAtCanvas, computeSliceSpacing, calibratedUnit, type ImageInfo, type PixelSample } from "./imageInfo";
-import { readColormapName, readInvert } from "./viewportRead";
+import { readColormapName, readInvert, resolveSliceIndex } from "./viewportRead";
+import { readModalitySlice } from "./pixelCalibration";
 import { computeOrientationMarkers, type OrientationMarkers } from "./orientation";
 import { computeScaleBar, type ScaleBar } from "./scaleBar";
 import { getOrCreateCameraSync, getOrCreateVoiSync, getOrCreatePresentationSync, getOrCreateSeriesVoiSync, broadcastSeriesProperties, captureVoiBaseline, clearVoiBaseline } from "./sync";
 import { registerReferenceSource, bumpReference, subscribeReference, computeReferenceSegments, type RefSegment } from "./referenceLines";
-import { registerViewerCommands, type ViewerCommands, type ViewerTargetInfo, type ViewerViewState } from "./viewerCommands";
+import {
+  registerViewerCommands,
+  type ViewerCommands,
+  type ViewerPixelData,
+  type ViewerPixelDataOptions,
+  type ViewerTargetInfo,
+  type ViewerViewState,
+} from "./viewerCommands";
 import { subscribeSuvStore, suvForImageId, seriesUidOf } from "./suvStore";
 import { resolveOverlay } from "./overlayText";
 import { useOverlayConfig } from "./overlayConfig";
@@ -1139,6 +1147,36 @@ export function Viewer2D({
     };
   };
 
+  // H3: スライス 1 枚の校正済み画素。**読み出しは pixelCalibration に委譲する**
+  // （getPixelData() へ直接 slope/intercept を掛けると preScale と二重適用になり CT が
+  // 約 −1024 ずれる既知事故。校正の単一入口を必ず通す＝CLAUDE.md のルール 2）。
+  const getPixelData = async (opts?: ViewerPixelDataOptions): Promise<ViewerPixelData | null> => {
+    const ids = imageIdsRef.current;
+    const index = resolveSliceIndex(opts?.sliceIndex, indexRef.current, ids.length);
+    if (index === null) return null;
+    const imageId = ids[index];
+    if (!imageId) return null;
+    const slice = await readModalitySlice(imageId);
+    if (!slice) return null;
+    // 幾何は表示中スライスの ImageInfo から。要求スライスが別でも面内間隔は同一シリーズで共通、
+    // スライス間隔もシリーズ単位の値なので流用できる（非等間隔シリーズは sliceSpacing の
+    // 導出元 sliceSpacingSource を参照する運用＝ImageInfoPanel と同じ扱い）。
+    const inf = index === indexRef.current ? infoRef.current : readImageInfo(imageId);
+    return {
+      imageId,
+      sliceIndex: index,
+      rows: slice.height,
+      cols: slice.width,
+      data: slice.values,
+      unit: slice.unit,
+      spacing: [
+        inf?.columnPixelSpacing ?? null,
+        inf?.rowPixelSpacing ?? null,
+        infoRef.current?.sliceSpacing ?? null,
+      ],
+    };
+  };
+
   // SUV 化時に臨床標準ウィンドウ（SUV 0〜7）を適用する。voiRange はモダリティ値(Bq/mL)空間のため
   // SUV=modalityValue×scale の逆算で modalityValue [0, 7/scale] を設定する（本家 setSUVFactor 準拠）。
   const applySuvWindow = (scale: number) => {
@@ -1248,13 +1286,13 @@ export function Viewer2D({
   // 画面メニュー/ツールバーからの一括コマンド。最新の実装を ref に保持し、登録は wrapper 経由で常に最新を呼ぶ。
   const commandsRef = useRef<ViewerCommands>({
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
-    getWindowState, getSuvContext, getTargetInfo, getViewState, setActiveTool, setBrushSize, setWandTolerance,
-    clearAnnotations, undo, redo,
+    getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, setActiveTool, setBrushSize,
+    setWandTolerance, clearAnnotations, undo, redo,
   });
   commandsRef.current = {
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
-    getWindowState, getSuvContext, getTargetInfo, getViewState, setActiveTool, setBrushSize, setWandTolerance,
-    clearAnnotations, undo, redo,
+    getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, setActiveTool, setBrushSize,
+    setWandTolerance, clearAnnotations, undo, redo,
   };
   useEffect(() => {
     if (!commandKey || compact || syncGroupId) return;
@@ -1273,6 +1311,7 @@ export function Viewer2D({
       getSuvContext: () => commandsRef.current.getSuvContext(),
       getTargetInfo: () => commandsRef.current.getTargetInfo(),
       getViewState: () => commandsRef.current.getViewState(),
+      getPixelData: (o) => commandsRef.current.getPixelData(o),
       setActiveTool: (n) => commandsRef.current.setActiveTool(n),
       setBrushSize: (s) => commandsRef.current.setBrushSize(s),
       setWandTolerance: (v) => commandsRef.current.setWandTolerance(v),

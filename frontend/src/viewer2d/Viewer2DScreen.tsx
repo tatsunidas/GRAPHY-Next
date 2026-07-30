@@ -790,6 +790,15 @@ function TileGrid({
         const st = queryViewerCommand(id, (c) => c.getViewState());
         return st ? { tileId: id, ...st } : null;
       },
+      getPixelData: async (tileId, opts) => {
+        const id = tileId ?? resolveTargets()[0];
+        if (!id) return null;
+        // queryViewerCommand は同期の戻りしか包めないので、Promise はここで await する
+        // （未登録タイルなら null が返るのでそのまま素通し）。
+        const pending = queryViewerCommand(id, (c) => c.getPixelData(opts));
+        const px = pending ? await pending : null;
+        return px ? { tileId: id, ...px } : null;
+      },
       editPresets: () => setPresetsOpen(true),
       // Z 並べ替えはシリーズレベル（seriesCommands）。動画/IPP不在は SeriesViewer 側でブロック。
       sort: (mode) => runSeriesCommand(resolveTargets(), (c) => c.setSortMode(mode)),

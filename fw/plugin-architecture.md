@@ -207,9 +207,10 @@ web は運営配備 / サンドボックス。
 
 ---
 
-## 7. host API の拡張（優先度 高・H1/H2 実装済み）
+## 7. host API の拡張（優先度 高・H1〜H3 実装済み）
 
-> 起票: 2026-07-29 ／ ステータス: **H1・H2 実装済み（2026-07-29）／ H3・H4 未着手** ／ 優先度: **高**
+> 起票: 2026-07-29 ／ ステータス: **H1・H2 実装済み（2026-07-29）／ H3 実装済み（2026-07-30）／
+> H4 未着手** ／ 優先度: **高**
 > 経緯: プラグイン デモ 3 本（[`plugin-explainer.md`](plugin-explainer.md) §6）を書いた過程で、
 > **2D ビューアのプラグインには「いま何を見ているか」を答える手段が一つも無い**ことが判明した。
 
@@ -252,7 +253,7 @@ H1・H2 は実質「これを本番向けの契約として切り出す」作業
 |---|---|---|---|---|
 | **H1** ✅ | **対象タイルの識別情報**。DOM 依存（`data-tile-id`）を公式契約へ置換 | `getTargets() => ViewerTarget[]` | 「対象」の定義を `runViewerCommand` と揃える（選択タイル→無ければ全タイル） | ✅ |
 | **H2** ✅ | **表示状態の問い合わせ**。`debugApi` の相当機能を本番契約へ昇格 | `getViewState(tileId?) => ViewerViewState \| null` | `debugApi.ts` から共有ロジックを切り出し、DEV ガードの外へ | ✅ |
-| **H3** | **画素の読み出し**（本命） | `getPixelData(tileId, opts?) => Promise<{ data: Float32Array, rows, cols, spacing, unit }>` | **必ず [`pixelCalibration.ts`](../frontend/src/viewer/pixelCalibration.ts) 経由**（`getPixelData()` に直接 slope/intercept を書かない。preScale 既定 ON による二重適用で CT が約 −1024 ずれる既知事故）。シリーズ全スライスは転送量が大きいのでスライス単位を既定にし、範囲指定を任意で | ✅ |
+| **H3** ✅ | **画素の読み出し**（本命） | `getPixelData(tileId?, opts?) => Promise<ViewerPixelData \| null>` | **必ず [`pixelCalibration.ts`](../frontend/src/viewer/pixelCalibration.ts) 経由**（`getPixelData()` に直接 slope/intercept を書かない。preScale 既定 ON による二重適用で CT が約 −1024 ずれる既知事故）。シリーズ全スライスは転送量が大きいのでスライス単位を既定にし、範囲指定を任意で | ✅ |
 | **H4** | **書き戻し** — 処理結果をオーバーレイ表示 / 新シリーズとして保管庫へ | 未定（`showOverlay()` / `saveDerivedSeries()`） | 設計判断が要る（派生シリーズの UID 生成・SEG との棲み分け・web での書き戻し先）。**H1〜H3 とは分けて扱う** | 要検討 |
 
 H1〜H3 は**フロント面だけで完結**するため、web モードでも同じように動く（backend の契約 `/api/plugins` は不変）。
@@ -305,12 +306,53 @@ host.getViewState(tileId?): ViewerViewState | null   // 省略時は対象の先
 **未登録タイルは黙って除外される**（`queryViewerCommand` が null を返す）: Fusion の子ビューポートや
 アンマウント途中のタイルは `getTargets()` に現れない。プラグイン側は**空配列を必ず扱う**こと。
 
+#### H3 の実装（2026-07-30・GRAPHY-Next 0.1.9 以降）
+
+```ts
+host.getPixelData(tileId?, opts?): Promise<ViewerPixelData | null>   // opts = { sliceIndex? }
+```
+
+| フィールド | 意味 |
+|---|---|
+| `data` | `Float32Array`（row-major・`data[y * cols + x]`）。**モダリティ値**＝CT なら HU、SUV 校正済み PET なら SUV。表示 W/L は掛かっていない |
+| `unit` | `"HU"` / `"SUVbw"` / `""` / カラーは `"raw"`（`imageInfo.calibratedUnit()` ではなく `readModalitySlice()` の判定） |
+| `rows` / `cols` | `data.length === rows * cols` |
+| `spacing` | `[列方向(x), 行方向(y), スライス方向(z)]` mm。不明な軸は `null` |
+| `imageId` / `sliceIndex` | 実際に読んだスライス |
+
+**読み出しは [`pixelCalibration.readModalitySlice()`](../frontend/src/viewer/pixelCalibration.ts) に委譲する**
+（＝校正の単一入口。`getPixelData()` に直接 slope/intercept を書くと preScale と二重適用になり
+CT が約 −1024 ずれる既知事故。CLAUDE.md のルール 2）。カラー（RGB）は同関数が輝度へ落とす。
+
+**決めたこと**:
+
+- **1 回 1 スライス**。素案にあった「範囲指定」は入れなかった。512×512×500 を Float32 で
+  一度に返すと 500MB を超え、プラグインが安易に全巻取得を書けてしまう。シリーズを回したいなら
+  `sliceIndex` を変えて `await` を繰り返す（1 枚ずつ解放できる）。
+- **範囲外の `sliceIndex` は `null`（拒否）**。`count-1` へ丸めると「999 枚目をくれ」と書いた
+  プラグインが末尾スライスの値を掴んだまま気付かない。純関数
+  `viewportRead.resolveSliceIndex()` に切り出してテストしてある。
+- 面内 spacing は要求スライスの `ImageInfo` から、**スライス間隔はシリーズ単位の値**を流用する
+  （非等間隔シリーズの扱いは `ImageInfoPanel` と同じ＝`sliceSpacingSource` を見る運用）。
+- **`Float32Array` はコピーせずそのまま渡す**（同一レンダラ内の ES モジュールなので構造化複製は
+  発生しない）。プラグインが書き換えても本体の表示には影響しないが、返り値を保持し続ければ
+  メモリは掴まれたままになる。
+
+**権限について（P3 との順序を再検討した結果）**: H3 は **`read-pixels` の強制を伴わない**。
+理由は、プラグインは既に本体と同じ権限で動いており（JAR 面はファイルシステムにも到達できる、
+UI 面もキャンバスから 8bit を読める）、H3 で増えるのは「生 HU が取りやすくなること」だけで、
+**信頼境界そのものは変わらない**から。ここで宣言ベースの偽の強制を足すと、
+サンドボックス（`plugin-manager-design.md` §8 の P3）が入っているかのような誤解を生む。
+代わりに **`plugin.json` の `permissions` に `read-pixels` を宣言する運用**とする
+（導入時の同意画面に表示される既存の仕組みに乗る）。実強制は P3 とセットで行う。
+
 #### 実機検証（2026-07-30・standalone / Linux）
 
 **本物の Electron ＋ 本物の backend ＋ 本物のプラグイン配信経路**（`plugins/` フォルダ直下に置いた
-第三者プラグインを `/api/plugins` から ES モジュールとして配信）で 26 項目すべて合格。
+第三者プラグインを `/api/plugins` から ES モジュールとして配信）で **H1〜H3 の 42 項目すべて合格**。
 ドライバは `automator/src/spike/hostApiCheck.ts`（`cd automator && npx tsx src/spike/hostApiCheck.ts`）、
-検証用プラグインは `automator/.results/run-data/desktop/plugins/hostapi-check/`（fixture は ct-basic）。
+検証用プラグインの原本は `automator/plugins/hostapi-check/`（実行時に backend の plugins
+フォルダへコピーされる。fixture は ct-basic）。
 
 確認できたこと:
 
@@ -324,6 +366,14 @@ host.getViewState(tileId?): ViewerViewState | null   // 省略時は対象の先
 - LUT 適用後の `colormap` が `"10_Percent"`（内部名 `graphy-lut-10_Percent` ではない）。
   **この実機確認で内部名の漏れを見つけて上記の接頭辞剥がしを入れた**。
 - 未知の `tileId` は `null`（例外にしない）。
+- **H3 の画素が定量値である**こと: `512×512`・`unit="HU"`・`Float32Array`・
+  `spacing=[0.644531, 0.644531, 5]`。腹部中央の画素が **−21 HU（軟部組織）** ＝
+  **Rescale の二重適用が起きていない**（二重なら約 −1045 になる）。
+  `min=−3024` は空気ではなく **GE の画素パディング**（raw −2000 ＋ intercept −1024）で、
+  この fixture の性質。空気側で二重適用を判定しようとして最初に誤検知したので、
+  検証は**軟部組織の値**で行うようにした。
+- **W/L・階調反転・LUT を変えても同一スライスの画素値は不変**＝表示 8bit ではないことの直接確認。
+- `sliceIndex` 明示指定で別スライスが読め、範囲外は `null`。
 
 副産物の修正: `automator/src/driver/desktopDriver.ts` が **DevTools ウィンドウをメイン画面と
 誤認する**バグを直した（`window` イベント発火時の url が about:blank だと predicate に外れ、
@@ -341,8 +391,10 @@ timeout → `firstWindow()` フォールバックが `devtools://…` を返し�
   テンプレート自身は新 API を使っていないので `">=0.1.0"` のまま据え置いた。
 - 🔴 **残: デモの書き換え**: [mean-filter](https://github.com/tatsunidas/graphy-next-plugin-mean-filter) と
   [gemini-findings](https://github.com/tatsunidas/graphy-next-plugin-gemini-findings) の
-  `findOpenTiles()`（DOM 依存）を `getTargets()` へ差し替え、README の「できないこと」節を更新する。
-  ただし**画素の定量処理は H3 が要る**ので、「canvas の 8bit しか読めない」旨の断り書きは H3 まで残る。
+  `findOpenTiles()`（DOM 依存）を `getTargets()` へ、キャンバス読み取りを `getPixelData()` へ
+  差し替える。**H3 が入ったので「canvas の 8bit しか読めない」断り書きは撤回できる**
+  （ただし結果を画面に戻すには H4 が要るので、mean-filter の before/after 表示は
+  プラグイン自前のキャンバスに描くまま）。
 - ✅ **`fw/plugin-authoring-guide.md` §2-3 の host 表**と [`plugin-explainer.md`](plugin-explainer.md) §7 の
   制約記述を更新済み。
 
@@ -352,5 +404,8 @@ timeout → `firstWindow()` フォールバックが `devtools://…` を返し�
   [`security.md`](security.md)）。外部通信は JAR 側に置く方針を変えない。緩めると
   「プラグインが任意の外部へ患者データを送れる」ことになり、CSP を置いた意味が消える。
 - **権限（`permissions`）の実強制**とサンドボックスは別課題（`plugin-manager-design.md` §8 の P3）。
-  H3 で画素が読めるようになるほど `read-pixels` の実強制の必要性は上がるので、**H3 と P3 の順序は
-  着手時に再検討する**。
+  「H3 と P3 の順序を着手時に再検討する」と書いていたが、**再検討の結果 H3 を先に入れた**:
+  プラグインは既に本体と同じ権限で動く（JAR 面はファイルシステムへ、UI 面はキャンバスへ到達できる）
+  ため、H3 で信頼境界は変わらず、宣言ベースの偽の強制はサンドボックスがあるかのような誤解を生む。
+  **`plugin.json` の `permissions` に `read-pixels` を宣言する運用**（同意画面に出る）とし、
+  実強制は P3 とセットで行う。上記「H3 の実装」の権限の節も参照。

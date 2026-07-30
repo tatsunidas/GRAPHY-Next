@@ -5,9 +5,14 @@
 // プラグイン契約の型定義。設計は fw/plugin-architecture.md を参照。
 // フロント面と /api/plugins の契約は standalone / web 両モード共通。
 import type { ViewerActions } from "../viewer2d/Viewer2DToolbar";
-import type { ViewerTarget, ViewerTileViewState } from "../viewer/viewerCommands";
+import type {
+  ViewerPixelDataOptions,
+  ViewerTarget,
+  ViewerTilePixelData,
+  ViewerTileViewState,
+} from "../viewer/viewerCommands";
 
-export type { ViewerTarget, ViewerTileViewState };
+export type { ViewerPixelDataOptions, ViewerTarget, ViewerTilePixelData, ViewerTileViewState };
 
 /** プラグインを組み込む先（UI サーフェス）。fw/plugin-architecture.md §2.1。 */
 export type PluginSurface = "viewer2d.menu" | "viewer2d.toolbar" | "mainscreen.menu";
@@ -59,6 +64,22 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * W/L はモダリティ値空間（CT なら HU）。単位は `unit`。
    */
   getViewState: (tileId?: string) => ViewerTileViewState | null;
+  /**
+   * 対象タイルのスライス 1 枚の**校正済み画素**（H3）。`tileId` 省略時は対象の先頭タイル。
+   * 取得不能・`sliceIndex` が範囲外なら null。
+   *
+   * <p>値はモダリティ値（CT なら HU、SUV 校正済み PET なら SUV。単位は `unit`）で、
+   * **表示 W/L は掛かっていない**＝定量処理に使える。カラー画像は輝度で `unit="raw"`。
+   *
+   * <p>1 回 1 スライス。シリーズ全体が要るなら `sliceIndex` を変えて回すこと
+   * （512×512×500 で Float32 なら 500MB を超えるので、必要な範囲だけ読む設計にする）。
+   *
+   * <p>⚠ これは患者の生画素をプラグインへ渡す API である。プラグインは本体と同じ権限で動くため
+   * （`plugin-manager-design.md` §8 の P3 サンドボックスは未実装）、**強制はまだ無い**。
+   * 使うプラグインは `plugin.json` の `permissions` に `read-pixels` を宣言すること
+   * （導入時の同意画面に表示される）。
+   */
+  getPixelData: (tileId?: string, opts?: ViewerPixelDataOptions) => Promise<ViewerTilePixelData | null>;
 }
 
 /** MainScreen 系プラグイン（mainscreen.menu）に渡すコンテキスト。 */

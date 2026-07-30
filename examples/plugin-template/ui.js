@@ -26,5 +26,15 @@ export function activate(host) {
     //       (view ? " W/L " + view.windowWidth + "/" + view.windowCenter + " " + view.unit : "")
     //     );
     //   }
+    //
+    // 画素（HU / SUV。表示 8bit ではない）が要る場合。permissions に "read-pixels" を宣言する。
+    // activate を async にして await するか、下のように then で受ける。
+    //
+    //   host.getPixelData().then((px) => {
+    //     if (!px) return;
+    //     let sum = 0;
+    //     for (const v of px.data) sum += v;              // data[y * px.cols + x]
+    //     host.notify("mean = " + (sum / px.data.length).toFixed(1) + " " + px.unit);
+    //   });
   }
 }

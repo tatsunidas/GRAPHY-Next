@@ -46,6 +46,18 @@ DOM 依存ゼロで表示内容が取れること・**呼ぶたびに現在値�
 **将来**: checklist item（`12-viewer2d-menu-toolbar` あたり）へ昇格させるとレポートに載る。
 現状はスパイクのままで、fixture は ct-basic に依存。
 
+**追記（同日・H3 対応で 42 項目に拡張）**: 画素読み出し（`getPixelData()`）の検証を追加。
+`Float32Array` を `page.evaluate` 越しに運ばず、**プラグイン側で min/max/mean/中央画素に要約**して
+から検証する形にした。ここで検証側の誤りを 1 つ踏んでいる: 「min は空気の約 −1000 HU」と書いたが、
+ct-basic fixture は **GE の画素パディング（raw −2000 ＋ intercept −1024 = −3024）**を持つため min が
+パディング値になる。**Rescale の二重適用の判定は軟部組織の値**（腹部中央が −200〜300 HU）で行うのが正しい。
+併せて「W/L・階調反転・LUT を変えても同一スライスの画素値は不変」を検証項目にした
+（＝表示 8bit ではないことの直接確認）。
+
+検証用プラグインの原本は `.results/`（gitignore 対象）ではなく **`automator/plugins/hostapi-check/`**
+に置き、実行時に backend の plugins フォルダへコピーする。パスは `DesktopDriver` が
+`DESKTOP_RUN_DATA_DIR` として export する。
+
 ---
 
 ## 2026-07-14 — web/desktop 分離・HTML レポート・desktop 縦串の実機 PASS・teardown 修正

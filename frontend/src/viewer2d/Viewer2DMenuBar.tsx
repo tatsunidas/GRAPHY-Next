@@ -78,6 +78,7 @@ export function Viewer2DMenuBar({
     // 問い合わせ系は actions の実装へ委譲（対象の定義＝選択→無ければ全、を命令系と共有するため）。
     getTargets: () => actions.getTargets(),
     getViewState: (tileId) => actions.getViewState(tileId),
+    getPixelData: (tileId, opts) => actions.getPixelData(tileId, opts),
   }));
   const [open, setOpen] = useState<string | null>(null);
   useEffect(() => {

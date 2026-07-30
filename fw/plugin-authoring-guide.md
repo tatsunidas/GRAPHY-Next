@@ -107,11 +107,29 @@ export function activate(host) {
 |---|---|
 | `getTargets()` | 操作対象タイル（選択→無ければ全＝`actions` と同じ対象）の配列。要素は `{ tileId, studyUid, seriesUid, seriesLabel, imageId, sliceIndex, sliceCount, c, t, modality }` |
 | `getViewState(tileId?)` | `{ tileId, windowCenter, windowWidth, unit, colormap, invert, flipH, flipV, rotation, zoom, pan }`。省略時は対象の先頭タイル。取得不能なら `null` |
+| `getPixelData(tileId?, opts?)` | `Promise<{ tileId, imageId, sliceIndex, rows, cols, data, unit, spacing } \| null>`。`data` は `Float32Array`（row-major・`data[y*cols+x]`）の**校正済み画素**（CT なら HU）。`opts.sliceIndex` で別スライス（既定は表示中） |
 
 - **呼ぶたびに現在値を読む**。ダイアログを開いている間にユーザーがスライスを送るので、
   活性化時に一度読んだ値を持ち回らないこと。
 - `colormap` は LUT ダイアログの名前（例 `"10_Percent"`）。未適用は `null`。
 - `getTargets()` は**空配列を返し得る**（Fusion の子や破棄途中のタイルは現れない）。必ず扱うこと。
+- `getPixelData()` の値は**表示 W/L を通していない定量値**（W/L や LUT を変えても不変）。
+  カラー画像は輝度に落ちて `unit === "raw"`。
+- **1 回 1 スライス**。シリーズを回すなら `sliceIndex` を変えて `await` を繰り返す
+  （512×512×500 を Float32 で全部持つと 500MB を超える）。範囲外の `sliceIndex` は `null`
+  ＝末尾へ丸めたりしない。
+- 画素を読むプラグインは `plugin.json` の `permissions` に `"read-pixels"` を宣言する
+  （導入時の同意画面に出る）。**現状これは強制ではない**（サンドボックスは P3）。
+
+```js
+// 例: 表示中スライスの平均 HU
+const px = await host.getPixelData();
+if (px) {
+  let sum = 0;
+  for (const v of px.data) sum += v;
+  host.notify(`mean = ${(sum / px.data.length).toFixed(1)} ${px.unit}`);
+}
+```
 - W/L は**モダリティ値空間**（CT なら HU。単位は `unit`）。表示 8bit ではない。
 - 使うプラグインは `engines.graphy` を `">=0.1.9"` に上げる（古い本体には導入されない＝意図した挙動）。
 - **画素そのものはまだ読めない**（H3 未実装）。

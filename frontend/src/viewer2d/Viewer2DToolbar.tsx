@@ -7,7 +7,12 @@ import { presetLabel } from "./wlPresets";
 import { useWlPresets } from "./wlPresetStore";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { type SortMode } from "../viewer/seriesSort";
-import { type ViewerTarget, type ViewerTileViewState } from "../viewer/viewerCommands";
+import {
+  type ViewerPixelDataOptions,
+  type ViewerTarget,
+  type ViewerTilePixelData,
+  type ViewerTileViewState,
+} from "../viewer/viewerCommands";
 import { ToolIcon } from "../icons/ToolIcon";
 import { UI_ICON_FILES } from "../icons/toolIcons";
 
@@ -35,6 +40,8 @@ export interface ViewerActions {
   getTargets(): ViewerTarget[];
   /** 対象タイルの表示状態を返す問い合わせ（H2）。tileId 省略時は対象の先頭。無ければ null。 */
   getViewState(tileId?: string): ViewerTileViewState | null;
+  /** 対象タイルのスライス 1 枚の校正済み画素（H3）。tileId 省略時は対象の先頭。無ければ null。 */
+  getPixelData(tileId?: string, opts?: ViewerPixelDataOptions): Promise<ViewerTilePixelData | null>;
   /** W/L プリセット編集ダイアログを開く。 */
   editPresets(): void;
   /** Z 並べ替え（InstanceNumber / IPP, 昇順・降順）。対象タイルのシリーズに適用。 */

@@ -52,12 +52,31 @@ interface ViewState {
   zoom: number;
   pan: [number, number];
 }
+/** ui.js が計算して返す画素の要約（Float32Array 自体は evaluate 越しに運ばない）。 */
+interface PixelSummary {
+  imageId: string;
+  sliceIndex: number;
+  rows: number;
+  cols: number;
+  unit: string;
+  spacing: (number | null)[];
+  length: number;
+  isFloat32: boolean;
+  min: number;
+  max: number;
+  mean: number;
+  center: number;
+}
 interface Payload {
   at: string;
   targets: Target[];
   states: (ViewState | null)[];
   defaultState: ViewState | null;
   unknownTile: ViewState | null;
+  pixels: PixelSummary | null;
+  pixelsSlice0: PixelSummary | null;
+  pixelsOutOfRange: unknown;
+  pixelsUnknownTile: unknown;
 }
 
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "hostapi-check");
@@ -163,6 +182,33 @@ async function main(): Promise<void> {
     check(first.defaultState?.tileId === t0?.tileId, "tileId 省略時は対象の先頭タイル", first.defaultState?.tileId);
     check(first.unknownTile === null, "未知の tileId は null（例外にしない）", first.unknownTile);
 
+    // --- H3: 校正済み画素 ---
+    console.log("\n[1-b] getPixelData()（H3）");
+    const px = first.pixels;
+    check(!!px, "getPixelData() が値を返す");
+    check(px?.isFloat32 === true, "data が Float32Array", px?.isFloat32);
+    check(px?.rows === 512 && px?.cols === 512, "rows/cols が 512×512（fixture）", { rows: px?.rows, cols: px?.cols });
+    check(px?.length === (px?.rows ?? 0) * (px?.cols ?? 0), "length === rows*cols", px?.length);
+    check(px?.unit === "HU", "unit が HU（校正済み＝表示 8bit ではない）", px?.unit);
+    // 二重適用（preScale 済みに Rescale を再適用＝約 −1024 のずれ）の検出は**軟部組織の値**で行う。
+    // 空気側で見ないのは、この fixture が GE の画素パディング（raw −2000 ＋ intercept −1024 =
+    // −3024）を持ち、min が空気(−1000)ではなくパディング値になるため。
+    check((px?.min ?? 0) <= -900, "min が空気/パディングの HU（≦ −900）", px?.min);
+    check((px?.max ?? 0) > 200, "max が骨/造影域の HU（>200）", px?.max);
+    check(
+      (px?.center ?? -9999) > -200 && (px?.center ?? 9999) < 300,
+      "腹部中央が軟部組織の HU（−200〜300）＝ Rescale の二重適用が無い",
+      px?.center,
+    );
+    check(
+      (px?.spacing?.[0] ?? 0) > 0 && (px?.spacing?.[1] ?? 0) > 0 && (px?.spacing?.[2] ?? 0) === 5,
+      "spacing が [x, y, 5mm]（fixture は 5mm 等間隔）",
+      px?.spacing,
+    );
+    check(px?.sliceIndex === 0, "既定は表示中スライス（index 0）", px?.sliceIndex);
+    check(first.pixelsOutOfRange === null, "範囲外 sliceIndex は null（末尾へ丸めない）", first.pixelsOutOfRange);
+    check(first.pixelsUnknownTile === null, "未知の tileId は null", first.pixelsUnknownTile);
+
     // --- 表示を変える: スライス送り ＋ W/L プリセット ＋ 階調反転 ---
     // （invert / LUT のメニュー項目には testId が無いのでラベル文字列で掴む＝ja ロケール前提）
     console.log("\n[2] スライス送り・W/L プリセット・階調反転を適用してから再実行");
@@ -205,6 +251,24 @@ async function main(): Promise<void> {
     check(t1?.sliceIndex === 12, "送った先の sliceIndex を返す（毎回読み直している）", t1?.sliceIndex);
     check(t1?.imageId !== t0?.imageId, "imageId も追従して変わる", { before: t0?.imageId, after: t1?.imageId });
     check(t1?.seriesUid === t0?.seriesUid, "シリーズは変わらない", t1?.seriesUid);
+    // H3 も表示中スライスに追従し、明示指定なら別スライスを読める。
+    check(second.pixels?.sliceIndex === 12, "getPixelData() も送った先のスライスを読む", second.pixels?.sliceIndex);
+    check(
+      second.pixelsSlice0?.sliceIndex === 0 && second.pixelsSlice0?.imageId === px?.imageId,
+      "sliceIndex 明示指定で別スライス（0 枚目）を読める",
+      { sliceIndex: second.pixelsSlice0?.sliceIndex, sameImageIdAsFirstRun: second.pixelsSlice0?.imageId === px?.imageId },
+    );
+    check(
+      second.pixels?.mean !== px?.mean,
+      "別スライスなので画素統計も変わる",
+      { slice0Mean: px?.mean, slice12Mean: second.pixels?.mean },
+    );
+    // W/L を変えても画素は変わらない（表示 8bit ではないことの確認）。
+    check(
+      second.pixelsSlice0?.mean === px?.mean,
+      "W/L・階調反転を変えても同一スライスの画素値は不変（表示に影響されない）",
+      { before: px?.mean, after: second.pixelsSlice0?.mean },
+    );
     check(
       s1?.windowWidth !== s0?.windowWidth || s1?.windowCenter !== s0?.windowCenter,
       "W/L プリセット適用後の W/L を返す",

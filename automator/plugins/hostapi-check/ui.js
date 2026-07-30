@@ -8,7 +8,36 @@
  *   - 画面右上のパネル        … スクリーンショットで人が読む
  * の両方へ出す。
  */
-export function activate(host) {
+/** Float32Array の要約（生配列を全部持ち回らずに検証できるようにする）。 */
+function summarize(px) {
+  if (!px) return null;
+  let min = Infinity;
+  let max = -Infinity;
+  let sum = 0;
+  for (const v of px.data) {
+    if (v < min) min = v;
+    if (v > max) max = v;
+    sum += v;
+  }
+  const n = px.data.length;
+  return {
+    imageId: px.imageId,
+    sliceIndex: px.sliceIndex,
+    rows: px.rows,
+    cols: px.cols,
+    unit: px.unit,
+    spacing: px.spacing,
+    length: n,
+    isFloat32: px.data instanceof Float32Array,
+    min,
+    max,
+    mean: sum / n,
+    // 中央画素（body 内部＝空気ではないはず）。
+    center: px.data[Math.floor(px.rows / 2) * px.cols + Math.floor(px.cols / 2)],
+  };
+}
+
+export async function activate(host) {
   if (host.surface !== "viewer2d.menu" && host.surface !== "viewer2d.toolbar") return;
 
   const targets = host.getTargets();
@@ -20,6 +49,11 @@ export function activate(host) {
     states: targets.map((t) => host.getViewState(t.tileId)),
     defaultState: host.getViewState(),
     unknownTile: host.getViewState("no-such-tile"),
+    // H3: 校正済み画素。表示中スライス / 別スライス指定 / 範囲外 / 未知タイル。
+    pixels: summarize(await host.getPixelData()),
+    pixelsSlice0: summarize(await host.getPixelData(targets[0]?.tileId, { sliceIndex: 0 })),
+    pixelsOutOfRange: await host.getPixelData(targets[0]?.tileId, { sliceIndex: 9999 }),
+    pixelsUnknownTile: await host.getPixelData("no-such-tile"),
   };
   window.__hostApiCheck = payload;
 
@@ -32,7 +66,16 @@ export function activate(host) {
     "position:fixed;top:8px;right:8px;z-index:99999;max-width:520px;padding:8px 10px;" +
     "background:#111c;color:#e8e8e8;font:11px/1.5 monospace;border:1px solid #4a90d9;" +
     "border-radius:4px;white-space:pre-wrap";
+  const p = payload.pixels;
   const lines = ["[hostapi-check] targets=" + targets.length];
+  if (p) {
+    lines.push(
+      "  pixels: " + p.cols + "x" + p.rows + " " + p.unit +
+      " min=" + p.min.toFixed(0) + " max=" + p.max.toFixed(0) +
+      " mean=" + p.mean.toFixed(1) + " center=" + p.center.toFixed(0) +
+      "\n    spacing=[" + p.spacing.join(", ") + "] float32=" + p.isFloat32,
+    );
+  }
   for (const t of targets) {
     const v = host.getViewState(t.tileId);
     lines.push(

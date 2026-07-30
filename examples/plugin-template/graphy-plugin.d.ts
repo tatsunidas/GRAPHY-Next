@@ -87,6 +87,37 @@ export interface ViewerViewState {
   pan: [number, number];
 }
 
+/** `getPixelData` の任意指定。**0.1.9 以降**。 */
+export interface PixelDataOptions {
+  /**
+   * 読み出すスライス（Z）の 0 始まり index。既定は表示中スライス。
+   * 範囲外は拒否（null が返る）＝黙って別のスライスにはならない。
+   */
+  sliceIndex?: number;
+}
+
+/**
+ * スライス 1 枚の**校正済み画素**。`host.getPixelData()` の戻り。**0.1.9 以降**。
+ *
+ * <p>値はモダリティ値（CT なら HU、SUV 校正済み PET なら SUV）で、**表示 W/L は掛かっていない**
+ * ＝定量処理に使える。カラー（RGB）画像は輝度に落ちて `unit === "raw"`。
+ */
+export interface PixelData {
+  tileId: string;
+  imageId: string;
+  /** 実際に読み出したスライスの index。 */
+  sliceIndex: number;
+  /** 行数・列数。`data.length === rows * cols`。 */
+  rows: number;
+  cols: number;
+  /** row-major。`data[y * cols + x]`。 */
+  data: Float32Array;
+  /** 値の単位（"HU" / "SUVbw" / "" / カラーは "raw"）。 */
+  unit: string;
+  /** 画素間隔 [列方向(x), 行方向(y), スライス方向(z)] mm。不明な軸は null。 */
+  spacing: [number | null, number | null, number | null];
+}
+
 interface PluginHostBase {
   /** 自分の plugin.json の id。 */
   pluginId: string;
@@ -116,6 +147,17 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * **0.1.9 以降**。
    */
   getViewState: (tileId?: string) => ViewerViewState | null;
+  /**
+   * 対象タイルのスライス 1 枚の**校正済み画素**（HU / SUV。表示 8bit ではない）。
+   * `tileId` 省略時は対象の先頭タイル。取得不能・`sliceIndex` が範囲外なら null。**0.1.9 以降**。
+   *
+   * <p>1 回 1 スライス。シリーズ全体が要るなら `sliceIndex` を変えて回すこと
+   * （512×512×500 を Float32 で全部持つと 500MB を超える）。
+   *
+   * <p>患者の生画素を扱う API なので、使うプラグインは `plugin.json` の `permissions` に
+   * `"read-pixels"` を宣言すること（導入時の同意画面に出る）。
+   */
+  getPixelData: (tileId?: string, opts?: PixelDataOptions) => Promise<PixelData | null>;
 }
 
 /** MainScreen 系（mainscreen.menu）に渡るコンテキスト。 */

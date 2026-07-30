@@ -59,6 +59,37 @@ export interface ViewerViewState {
   pan: [number, number];
 }
 
+/** `getPixelData` の任意指定。 */
+export interface ViewerPixelDataOptions {
+  /**
+   * 読み出すスライス（Z）の 0 始まり index。既定は表示中スライス。
+   * **範囲外は拒否（null）**＝黙って別のスライスを返さない。
+   */
+  sliceIndex?: number;
+}
+
+/**
+ * タイル 1 枚の画素（プラグイン host API の H3）。
+ *
+ * <p>値は **`pixelCalibration.readModalitySlice()` 経由のモダリティ値**（CT なら HU、
+ * SUV 校正済み PET なら SUV）。カラー（RGB）画像は輝度（ITU-R BT.601）で `unit="raw"`。
+ * 表示 W/L は掛かっていない（8bit の見た目ではなく定量値）。
+ */
+export interface ViewerPixelData {
+  imageId: string;
+  /** 実際に読み出したスライスの index（要求を省略したときは表示中スライス）。 */
+  sliceIndex: number;
+  /** 行数（height）・列数（width）。`data.length === rows * cols`。 */
+  rows: number;
+  cols: number;
+  /** row-major。`data[y * cols + x]`。 */
+  data: Float32Array;
+  /** 値の単位（"HU" / "SUVbw" / "" / カラーは "raw"）。 */
+  unit: string;
+  /** 画素間隔 [列方向(x), 行方向(y), スライス方向(z)] mm。不明な軸は null。 */
+  spacing: [number | null, number | null, number | null];
+}
+
 /** 画面（複数タイル）視点での H1 の 1 件。どのタイルの話かが要るので tileId を持つ。 */
 export interface ViewerTarget extends ViewerTargetInfo {
   tileId: string;
@@ -66,6 +97,11 @@ export interface ViewerTarget extends ViewerTargetInfo {
 
 /** 画面視点での H2。 */
 export interface ViewerTileViewState extends ViewerViewState {
+  tileId: string;
+}
+
+/** 画面視点での H3。 */
+export interface ViewerTilePixelData extends ViewerPixelData {
   tileId: string;
 }
 
@@ -93,6 +129,11 @@ export interface ViewerCommands {
   getTargetInfo(): ViewerTargetInfo | null;
   /** いまの表示状態（W/L・LUT・反転・affine）。プラグイン host API の H2。取得不能なら null。 */
   getViewState(): ViewerViewState | null;
+  /**
+   * スライス 1 枚の校正済み画素。プラグイン host API の H3。取得不能・範囲外なら null。
+   * 読み出しは `pixelCalibration.readModalitySlice()` に委譲する（校正の単一入口）。
+   */
+  getPixelData(opts?: ViewerPixelDataOptions): Promise<ViewerPixelData | null>;
   /** 左ドラッグに割り当てる操作/計測/ブラシツールを切替（toolName は Cornerstone のツール名 or 消しゴム id）。 */
   setActiveTool(toolName: string): void;
   /** ROI ブラシ径(px)。 */

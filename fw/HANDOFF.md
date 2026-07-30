@@ -4,9 +4,9 @@
 > 目的: 別の作業者（Claude 含む）がこのリポジトリの状況を把握し、続きを実装できるようにする。
 > このファイル＋ `fw/` 配下の各設計ドキュメントが「ソース・オブ・トゥルース」。
 >
-> 🟡 **2026-07-29 プラグイン host API 拡張: H1・H2 実装 / H3・H4 未着手（優先度 高のまま）**
+> 🟢 **2026-07-29〜30 プラグイン host API 拡張: H1・H2・H3 実装 / H4（書き戻し）のみ未着手**
 > → 設計・実装表・素案から変えた点は
-> [`fw/plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張優先度-高h1h2-実装済み)
+> [`fw/plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張優先度-高h1h3-実装済み)
 >
 > これまで 2D ビューアのプラグインには「いま何を見ているか」を答える手段が**一つも無かった**
 > （host は `{ surface, pluginId, t, notify, runBackend, actions }` のみ＝全部 `void` を返す命令で、
@@ -20,23 +20,36 @@
 >   host はクリック時に 1 度組まれるのに対しプラグインのダイアログは残るため、
 >   スナップショットを配ると**スライスを送った後に黙って古い値を指す**。同じ理由で素案の `camera` も
 >   本体の `ViewTransform`（Fit=1.0 の zoom/pan/rotation/flip）に置き換えた。
+> - **H3 `getPixelData(tileId?, {sliceIndex?})`**（2026-07-30）… `{ imageId, sliceIndex, rows, cols,
+>   data: Float32Array, unit, spacing }`。**読み出しは `pixelCalibration.readModalitySlice()` に委譲**
+>   （校正の単一入口。直接 slope/intercept は preScale と二重適用で CT が約 −1024 ずれる）。
+>   **1 回 1 スライス**（範囲指定は入れない＝512×512×500 で 500MB 超を安易に書けてしまう）、
+>   **範囲外 index は null**（末尾へ丸めない。`viewportRead.resolveSliceIndex()` に切り出してテスト）。
+>   `read-pixels` の**実強制はしない**（プラグインは既に本体と同じ権限で動き信頼境界が変わらないため。
+>   宣言だけの偽の強制は P3 サンドボックスがあるかのような誤解を生む）。`permissions` に宣言する運用。
 > - 新規 `frontend/src/viewer/viewportRead.ts` に読み取り専用ヘルパを切り出し、
 >   automator 用 `debugApi.ts`（DEV ガード）と共用。純ロジックは `viewportRead.test.ts`。
 > - フロント面のみで完結＝**web モードでも同じ**（`/api/plugins` の契約は不変）。backend 変更なし。
 >
-> **残**: 🔴 **H3 画素の読み出し（本命）** … 必ず `pixelCalibration.ts` 経由（直接 slope/intercept を
-> 掛けると preScale と二重適用になり CT が約 −1024 ずれる既知事故）。H4 書き戻しは設計判断が要るので別扱い。
+> **残**: 🔴 **H4 書き戻し**（処理結果のオーバーレイ表示／派生シリーズとして保管庫へ）。
+> 派生 UID の生成・SEG との棲み分け・web での書き戻し先という設計判断が要るので別扱い。
 > 🔴 **外部デモ 4 リポジトリの `graphy-plugin.d.ts` 同期**（本体側の `examples/plugin-template/` は更新済み）と、
-> mean-filter / gemini-findings の `findOpenTiles()`（DOM 依存）→ `getTargets()` 置換。
+> mean-filter / gemini-findings の `findOpenTiles()`（DOM 依存）→ `getTargets()`、
+> キャンバス読み取り → `getPixelData()` の置換。**「8bit しか読めない」断り書きは撤回できる**。
 > 新 API を使うプラグインは `engines.graphy` を `">=0.1.9"` にする。
-> ✅ **実機検証済み（2026-07-30・standalone/Linux・26 項目すべて合格）**: 本物の Electron ＋ backend ＋
-> `plugins/` に置いた第三者プラグイン（`/api/plugins` 配信）で、**DOM を覗かずに**シリーズ/スライス/W/L が
-> 取れること、画面表示と値が一致すること、スライス送り・W/L プリセット・階調反転・LUT に**追従する**ことを確認。
-> ドライバ `automator/src/spike/hostApiCheck.ts`。詳細は設計 §7 の「実機検証」。
-> この検証で見つけて直した 2 点: ①`colormap` が内部登録名 `graphy-lut-10_Percent` を漏らしていた
+> ✅ **実機検証済み（2026-07-30・standalone/Linux・H1〜H3 の 42 項目すべて合格）**: 本物の Electron ＋
+> backend ＋ `plugins/` に置いた第三者プラグイン（`/api/plugins` 配信）で、**DOM を覗かずに**
+> シリーズ/スライス/W/L/**画素**が取れること、画面表示と値が一致すること、スライス送り・W/L プリセット・
+> 階調反転・LUT に**追従する**こと、**W/L を変えても画素値は不変**（＝表示 8bit ではない）ことを確認。
+> 画素は 512×512・HU・`spacing=[0.644531, 0.644531, 5]`、腹部中央が **−21 HU（軟部組織）＝
+> Rescale の二重適用なし**。ドライバ `automator/src/spike/hostApiCheck.ts`
+> （検証用プラグインの原本は `automator/plugins/hostapi-check/`）。詳細は設計 §7 の「実機検証」。
+> この検証で見つけて直した 3 点: ①`colormap` が内部登録名 `graphy-lut-10_Percent` を漏らしていた
 > → ユーザーが選んだ LUT 名（`10_Percent`）を返す。②automator の `DesktopDriver` が
 > **DevTools ウィンドウをメイン画面と誤認**していた（url が about:blank の間に predicate を外し、
 > timeout → `firstWindow()` が `devtools://…` を返す）→ 現存ウィンドウを url でポーリングする方式へ。
+> ③検証側の誤り: `min` が空気（−1000）でなく **GE の画素パディング（−3024＝raw −2000 ＋ intercept
+> −1024）**になるため、二重適用の判定は**軟部組織の値**で行うようにした。
 >
 > 🟢 **2026-07-29 プラグイン デモ リポジトリ 4 本を新設**（`fw/plugin-explainer.md` §6）。
 > 第三者がプラグインを書き始められるようにするため、**GRAPHY-Next の外に**独立リポジトリとして作成

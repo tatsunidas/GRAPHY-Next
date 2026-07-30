@@ -82,6 +82,27 @@ export function readInvert(vp: PropertiesSource): boolean {
   return Boolean(properties(vp).invert);
 }
 
+/**
+ * プラグインが要求したスライス index を解決する（H3 の `getPixelData`）。純関数（テスト対象）。
+ *
+ * <p>範囲外は **null（拒否）**。`count-1` へ丸めると「999 枚目をくれ」と言ったプラグインが
+ * 末尾スライスの値を掴んで気付かないため、黙って別のスライスを返すよりエラーにする。
+ *
+ * @param requested プラグイン指定（undefined なら表示中スライス）
+ * @param current 表示中スライスの index
+ * @param count スタックの枚数
+ */
+export function resolveSliceIndex(
+  requested: number | undefined,
+  current: number,
+  count: number,
+): number | null {
+  if (count <= 0) return null;
+  if (requested === undefined) return current >= 0 && current < count ? current : null;
+  if (!Number.isInteger(requested) || requested < 0 || requested >= count) return null;
+  return requested;
+}
+
 /** カメラ（parallelScale / position / focalPoint）。取得不能な項目は null。 */
 export function readCamera(vp: CameraSource): {
   parallelScale: number | null;
