@@ -1188,6 +1188,7 @@ export function Viewer2D({
     const ctx = roiContextRef.current;
     if (!imageId || !ctx) return null;
     return {
+      patientKey: ctx.patientKey,
       studyUid: ctx.studyUid,
       studyDate: studyDateOf(imageId),
       seriesUid: ctx.seriesUid,
@@ -1382,6 +1383,10 @@ export function Viewer2D({
         inf?.rowPixelSpacing ?? null,
         infoRef.current?.sliceSpacing ?? null,
       ],
+      // **間隔で代用しない**（sliceSpacing は IPP 差や SpacingBetweenSlices から導出するため
+      // ギャップのある収集で厚さと一致しない）。無ければ null を渡し、
+      // 「厚さが分からない」ことをプラグイン側が判断できるようにする。
+      sliceThickness: inf?.sliceThickness ?? null,
     };
   };
 
@@ -1445,6 +1450,7 @@ export function Viewer2D({
         roiUid: uid,
         tool,
         label: meta?.label ?? null,
+        patientKey: ctx.patientKey,
         studyUid: ctx.studyUid,
         studyDate: studyDateOf(refId),
         seriesUid: ctx.seriesUid,

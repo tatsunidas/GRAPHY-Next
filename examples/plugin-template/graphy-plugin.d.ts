@@ -48,6 +48,12 @@ export interface ViewerActions {
 export interface ViewerTarget {
   /** タイルの識別子。`getViewState(tileId)` に渡せる。 */
   tileId: string;
+  /**
+   * 同一患者の判定キー（PatientID → PatientName → StudyInstanceUID）。
+   * 本体が ROI を永続化する鍵と同じ値。**患者単位の記録を持つならこれを鍵にする**
+   * （スタディ UID を鍵にすると、同じ患者の別スタディを開いたときに記録を見失う）。**0.1.11 以降**。
+   */
+  patientKey: string;
   studyUid: string;
   /**
    * スタディの検査日（ISO `YYYY-MM-DD`）。DICOM の StudyDate 由来。
@@ -119,8 +125,15 @@ export interface PixelData {
   data: Float32Array;
   /** 値の単位（"HU" / "SUVbw" / "" / カラーは "raw"）。 */
   unit: string;
-  /** 画素間隔 [列方向(x), 行方向(y), スライス方向(z)] mm。不明な軸は null。 */
+  /**
+   * 画素間隔 [列方向(x), 行方向(y), スライス方向(z)] mm。不明な軸は null。
+   * z は**スライス間隔**で、ギャップのある収集ではスライス厚と一致しない。
+   */
   spacing: [number | null, number | null, number | null];
+  /**
+   * DICOM SliceThickness (0018,0050) mm。無ければ null（間隔で代用しない）。**0.1.12 以降**。
+   */
+  sliceThickness: number | null;
 }
 
 /** `showOverlay` に渡す値マップ。**0.1.9 以降**。 */
@@ -217,6 +230,8 @@ export interface ViewerRoi {
   label: string | null;
   /** どのタイルで読んだ ROI か。 */
   tileId: string;
+  /** 同一患者の判定キー（本体が ROI を永続化する鍵と同じ値）。**0.1.11 以降**。 */
+  patientKey: string;
   studyUid: string;
   /** この ROI が属するスタディの検査日（ISO `YYYY-MM-DD`）。不明なら null。**0.1.10 以降**。 */
   studyDate: string | null;
