@@ -200,8 +200,8 @@ frontend: VideoViewport（ViewportType.VIDEO）
     オフスクリーン `<video crossOrigin=anonymous>` から canvas 読取（`/rendered` は CORS 許可済み）。
     ROI 管理 UI（削除/一覧）・統計拡張・**フレーム指定 ROI モードの明示切替＋単一フレーム統計（面積/平均/最大/最小/SD/
     ヒストグラム）** も実装済み・**実機検証済み（2026-07-30、`automator/src/spike/videoRoiFrameModeCheck.ts` 30/30）**。
-    → 詳細と検証で直した不具合は §12 の残タスク欄。残: 複数 ROI の選択解析、フレーム精度シーク、cornerstone の
-    計測テキストがフレームに追従しない見た目の齟齬。
+    → 詳細と検証で直した不具合は §12 の残タスク欄。**複数 ROI の選択解析・計測テキストのフレーム追従・
+    フレーム精度シークの実測確認も完了（2026-07-30）＝ P3c は完了**。残るのは P4（非 H.264）と P5（Portable/web）。
 - **P4（非 H.264 対応）**: `/rendered` に ffmpeg トランスコード分岐（MPEG2 等）＋キャッシュ（§4.3/4.4）。
 - **P5（Portable/web）**: §7/§8。
 
@@ -230,7 +230,11 @@ frontend: VideoViewport（ViewportType.VIDEO）
 1. **HEVC の扱い**: ブラウザ対応が環境依存。無変換配信を試み、再生不可なら ffmpeg フォールバックにするか、
    最初から H.264 に正規化するか（→ P4 で実測して決定）。
 2. **複数フレーム DICOM video の BOT 連結**: 実データ（US/XA シネ）で BOT ありのサンプルを入手し検証（要フィクスチャ）。
-3. **フレーム精度シーク**: `<video>` の time シークは GOP 単位で不正確になりうる。フレーム精度が要る用途では
+3. ✅ **フレーム精度シーク（2026-07-30 決着: 対処不要）**: 実機で測ると**キーフレームが先頭だけの動画でもフレームは
+   正確に読めた**（`videoFrameAccuracyCheck.ts`。最大残差 0.44 / 同定フレーム全件一致）。フレーム中心
+   （`(frame-1+0.5)/fps`）へシークする現実装で十分で、下記の `-g 1` 変換や `requestVideoFrameCallback` は不要。
+   ただし**ループ有効時に最終フレームへシークできない**不具合が別にあり、そちらは修正した（§12）。
+   （以下は当時の懸念の記録）**フレーム精度シーク**: `<video>` の time シークは GOP 単位で不正確になりうる。フレーム精度が要る用途では
    `-g 1`（全 I フレーム）変換オプションを P4 で用意するか要検討（ファイルサイズ増とのトレードオフ）。
 4. **実機検証フィクスチャ**: 取込済み H.264 MP4（`automator/fixtures/video-mp4-avi/`）＋ 実 DICOM video サンプル。
 
@@ -249,7 +253,7 @@ frontend: VideoViewport（ViewportType.VIDEO）
 ## 12. 動画 ROI 解析（P3c）
 
 > ステータス: **P3c 実装済・実機検証済み（時系列解析 2026-07-24／ROI 管理 UI 2026-07-27／
-> フレーム指定 ROI モードと単一フレーム統計 2026-07-30）**。グローバル ROI（矩形/楕円）の時系列解析
+> フレーム指定 ROI モードと単一フレーム統計・複数 ROI の選択解析・フレーム精度 2026-07-30）**。グローバル ROI（矩形/楕円）の時系列解析
 > （全フレームの ROI 内平均輝度/RGB → time–intensity カーブ ＋ CSV）と、フレーム指定 ROI の単一フレーム統計
 > （面積/平均/最大/最小/SD/ヒストグラム）まで動作。**§12 の 2 モードは両方とも実機で確認済み**。
 > **前提**: ROI を動画フレームに載せるには方式 A（VideoViewport）が必須（方式 B の `<video>` はフレーム上に
@@ -337,13 +341,32 @@ frontend: VideoViewport（ViewportType.VIDEO）
 >       (b) チップの枠線がショートハンド `border` と `borderStyle` の混在で React 警告 → `borderWidth/Style/Color` へ分解。
 >       (c) automator 用に testid 追加（`video-seek` / `video-frame-prev|next` / `video-frame-indicator` /
 >       `video-analyze-run`）＋ 非 DICOM 取込ヘルパ `importNonDicomPaths()`（`/api/import/nondicom`）。
->     - **残る既知の見た目の齟齬**: cornerstone が ROI に重ねる計測テキスト（Area/Mean/Max/Min/SD）は**作成フレームの
->       キャッシュ値のまま**で、フレームを送っても更新されない（我々の「フレーム統計」パネルの値とは別物）。
->       動画では cornerstone 側の統計を使っていないため解析結果には影響しないが、表示としては紛らわしい。
->       将来 `invalidateAnnotation` でフレーム変更時に無効化するか、動画では計測テキストを消すか要判断。
-> - **複数 ROI の選択解析**（現状は直近 1 つの矩形/楕円のみ）。
-> - フレーム精度シーク（現状はオフスクリーン `<video>` の time シーク＝GOP 近似。厳密フレーム精度が要るなら
->   `setFrameNumber`/`requestVideoFrameCallback` 経路）。
+>     - ✅ **計測テキストのフレーム追従（2026-07-30 修正）**: cornerstone が ROI に重ねる計測テキスト
+>       （Area/Mean/Max/Min/SD）は `cachedStats` のままで**作成フレームの値が残り続けていた**
+>       （我々の「フレーム統計」パネルと違う数字が出て紛らわしい）。フレームが変わったら
+>       `annotation.state.invalidateAnnotation()` で無効化して現在フレームの値へ更新させる
+>       （この API は `invalidated = true` を立てるだけでイベントを出さないので `refreshRois` の連鎖は起きない）。
+>       実測でパネル値と一致（F3: 85.6 / 85.7、F28: 202 / 202.1）。
+> - ✅ **複数 ROI の選択解析 完了（2026-07-30）**: 一覧チップのラベルを押すと**解析対象として選択**できる
+>   （`video-roi-select-{uid}`。もう一度押すと解除＝従来の「直近の ROI」動作）。選択中はチップを強調し
+>   （`data-selected="1"`）「◎ 選択中の ROI を解析します」（`video-roi-selected-note`）を出す。
+>   `currentRoiPixels()` の優先順は ① 選択中 → ② Primary ツールと同じ形の直近 → ③ 直近。
+>   **選択した ROI が解析できない帰属なら黙って別の ROI を解析しない**（選択が無視されたように見えるため）:
+>   時系列解析にフレーム指定 ROI を選んでいれば `video.analyze.selectedNotGlobal`、単一フレーム統計で
+>   現在フレームに出ていない ROI を選んでいれば `video.frameStats.selectedNotOnFrame` を出す。
+> - ✅ **フレーム精度シーク: 実測して「ずれない」ことを確認（2026-07-30）**。懸念（§10-3「time シークは GOP 単位で
+>   不正確になりうる」）は**実機では発生しなかった**。`automator/src/spike/videoFrameAccuracyCheck.ts`（11/11 green）で
+>   **キーフレームが先頭だけ**（`-g 250 -sc_threshold 0`）・**フレームごとに輝度が飛び飛び**
+>   （`geq=lum='16 + mod(N*13,30)*7'`）の動画を作り、9 フレームを測って符号化レベルへ線形当てはめ:
+>   `measured ≈ 1.165 * level − 18.69`（＝限定レンジ→フルレンジ変換 255/219 そのもの）、**最大残差 0.44**、
+>   測定値から同定されるフレームが要求フレームと全件一致。1 フレームずれれば残差は ~90 になる設計なので、
+>   `createFrameSampler` の**フレーム中心へシークする実装（`(frame-1+0.5)/fps`）で十分**と判断し、
+>   `requestVideoFrameCallback` 経路は**不要**（冷えた `<video>` を作って即シーク→即描画でも正しく読めることを別途確認）。
+> - 🚨 **その検証で見つけた不具合（修正済み）: ループ有効だと最終フレームへシークできない**。
+>   `loop` が真のとき frame 30 を要求すると **frame 1 に巻き戻っていた**（VideoViewport は再生位置がフレーム範囲を
+>   超えたと判断すると loop 時に先頭へ戻す）。利用者から見れば「シークバーを端まで動かすと先頭に飛ぶ／最後のフレームが
+>   見られない」。→ `seekToFrame()` は**シーク中だけループを外し**、再生開始時（`togglePlay`）に設定を戻す。
+>   ループ再生自体の挙動は変えない。
 
 動画では ROI を **2 つのモード**で扱う必要がある:
 

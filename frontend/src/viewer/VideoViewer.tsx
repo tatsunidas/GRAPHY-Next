@@ -153,6 +153,12 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
   frameRef.current = frame;
   // 可視性を戻すため、この動画で触った uid を覚えておく（隠し集合は cornerstone のモジュール全体で共有）。
   const managedUidsRef = useRef<Set<string>>(new Set());
+  // 計測テキストを無効化した最後のフレーム（フレームが変わった時だけ再計算させるため）。
+  const statsFrameRef = useRef(0);
+
+  // 解析対象に選んだ ROI（null なら「直近に描いたもの」を使う従来動作）。複数 ROI を置いた時に
+  // どれを解析するかを利用者が決められるようにするため（§12 残タスク「複数 ROI の選択解析」）。
+  const [selectedRoiUid, setSelectedRoiUid] = useState<string | null>(null);
 
   // フレーム指定 ROI の単一フレーム解析（面積・平均/最大/最小・SD・ヒストグラム）。
   const [frameResult, setFrameResult] = useState<FrameRoiResult | null>(null);
@@ -371,18 +377,28 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
     if (phase !== "viewport") {
       return;
     }
+    // フレームが変わったら、cornerstone が ROI に重ねる計測テキスト（Area/Mean/Max/Min/SD）を
+    // 無効化して現在フレームの値へ更新させる。cachedStats は**作成フレームの値のまま**なので、
+    // 放置すると「フレーム統計」パネルと別の数字が出続けて紛らわしい（invalidateAnnotation は
+    // `invalidated = true` を立てるだけでイベントを出さないため、refreshRois の連鎖は起きない）。
+    const frameChanged = statsFrameRef.current !== frame;
+    statsFrameRef.current = frame;
     for (const r of rois) {
       const scope = scopeOf(scopes, r.uid);
+      const visible = isVisibleOnFrame(scope, frame);
       try {
         const ann = csToolsAnnotation.state.getAnnotation(r.uid);
         if (ann?.metadata) {
           applyScopeToReference(ann.metadata as RoiAnnotationReference, scope);
         }
+        if (ann && frameChanged && visible) {
+          csToolsAnnotation.state.invalidateAnnotation(ann);
+        }
       } catch {
         /* 破棄済み等は無視 */
       }
       try {
-        csToolsAnnotation.visibility.setAnnotationVisibility(r.uid, isVisibleOnFrame(scope, frame));
+        csToolsAnnotation.visibility.setAnnotationVisibility(r.uid, visible);
       } catch {
         /* 破棄済み等は無視 */
       }
@@ -417,6 +433,8 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
       return;
     }
     try {
+      // シーク中はループを外してある（{@link seekToFrame} 参照）ので、再生開始時に設定を戻す。
+      vp.setProperties({ loop, playbackRate: rate });
       setPlaying(vp.togglePlayPause());
     } catch {
       /* 無視 */
@@ -464,53 +482,68 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
   };
 
   /**
-   * 直近の Rectangle/Ellipse ROI をピクセル座標（world=pixel）で取り出す。無ければ null。
+   * 解析対象の Rectangle/Ellipse ROI をピクセル座標（world=pixel）で取り出す。無ければ null。
+   *
+   * <p>選び方の優先順: ① 一覧で**選択中**の ROI（`selectedRoiUid`。複数 ROI を置いた時にどれを解析するかを
+   * 利用者が決められる）→ ② 現在の Primary ツールと同じ形の直近の ROI → ③ 直近の ROI。
    *
    * @param accept 対象にする ROI の uid 判定。現在フレームに表示されていない（別フレームに紐づく）
-   *               ROI を解析対象にしないために使う。
+   *               ROI や、帰属が合わない ROI を解析対象にしないために使う。
    */
   const currentRoiPixels = (accept?: (uid: string) => boolean): RoiPixels | null => {
     const host = hostRef.current;
     if (!host) {
       return null;
     }
-    const pick = (toolName: string, shape: "rect" | "ellipse"): RoiPixels | null => {
+    /** ROI 候補（描かれた順）。uid つきで返すので選択との突き合わせができる。 */
+    const candidates = (toolName: string, shape: "rect" | "ellipse"): { uid: string; roi: RoiPixels }[] => {
       let anns: unknown[] = [];
       try {
         anns = (csToolsAnnotation.state.getAnnotations(toolName, host) as unknown[]) ?? [];
       } catch {
         anns = [];
       }
-      if (accept) {
+      const out: { uid: string; roi: RoiPixels }[] = [];
+      for (const a of anns) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        anns = anns.filter((a) => accept(((a as any)?.annotationUID as string) ?? ""));
+        const ann = a as any;
+        const uid = (ann?.annotationUID as string) ?? "";
+        if (accept && !accept(uid)) {
+          continue;
+        }
+        const pts = ann?.data?.handles?.points as number[][] | undefined;
+        if (!pts || pts.length < 2) {
+          continue;
+        }
+        let x0 = Infinity;
+        let y0 = Infinity;
+        let x1 = -Infinity;
+        let y1 = -Infinity;
+        for (const p of pts) {
+          x0 = Math.min(x0, p[0]);
+          y0 = Math.min(y0, p[1]);
+          x1 = Math.max(x1, p[0]);
+          y1 = Math.max(y1, p[1]);
+        }
+        if (![x0, y0, x1, y1].every(Number.isFinite)) {
+          continue;
+        }
+        out.push({ uid, roi: { shape, x0, y0, x1, y1 } });
       }
-      if (!anns.length) {
-        return null;
-      }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const ann = anns[anns.length - 1] as any;
-      const pts = ann?.data?.handles?.points as number[][] | undefined;
-      if (!pts || pts.length < 2) {
-        return null;
-      }
-      let x0 = Infinity;
-      let y0 = Infinity;
-      let x1 = -Infinity;
-      let y1 = -Infinity;
-      for (const p of pts) {
-        x0 = Math.min(x0, p[0]);
-        y0 = Math.min(y0, p[1]);
-        x1 = Math.max(x1, p[0]);
-        y1 = Math.max(y1, p[1]);
-      }
-      if (![x0, y0, x1, y1].every(Number.isFinite)) {
-        return null;
-      }
-      return { shape, x0, y0, x1, y1 };
+      return out;
     };
-    const rect = pick(RectangleROITool.toolName, "rect");
-    const ell = pick(EllipticalROITool.toolName, "ellipse");
+    const rects = candidates(RectangleROITool.toolName, "rect");
+    const ells = candidates(EllipticalROITool.toolName, "ellipse");
+    // ① 選択中の ROI（形は問わない）。
+    if (selectedRoiUid) {
+      const hit = [...rects, ...ells].find((c) => c.uid === selectedRoiUid);
+      if (hit) {
+        return hit.roi;
+      }
+    }
+    const rect = rects.length > 0 ? rects[rects.length - 1].roi : null;
+    const ell = ells.length > 0 ? ells[ells.length - 1].roi : null;
+    // ② Primary ツールと同じ形を優先 → ③ 直近。
     if (activeTool === RectangleROITool.toolName && rect) {
       return rect;
     }
@@ -521,6 +554,12 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
   };
 
   const runAnalysis = async () => {
+    // 選択した ROI が解析できない帰属なら、黙って別の ROI を解析しない（選択を無視したように見えるため）。
+    if (selectedRoiUid && scopeOf(scopes, selectedRoiUid).kind !== "global") {
+      setSeries(null);
+      setAnalysisError(t("video.analyze.selectedNotGlobal"));
+      return;
+    }
     // 時系列解析はグローバル帰属の ROI のみ（フレーム指定 ROI は単一フレーム解析の対象）。
     const roi = currentRoiPixels((uid) => scopeOf(scopes, uid).kind === "global");
     if (!roi || !meta) {
@@ -586,6 +625,12 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
 
   /** 現在フレームに表示されている ROI の単一フレーム統計（§12 モード①）。 */
   const runFrameAnalysis = async () => {
+    // 選択した ROI が現在フレームに出ていないなら、黙って別の ROI を解析しない。
+    if (selectedRoiUid && !isVisibleOnFrame(scopeOf(scopes, selectedRoiUid), frame)) {
+      setFrameResult(null);
+      setAnalysisError(t("video.frameStats.selectedNotOnFrame"));
+      return;
+    }
     const roi = currentRoiPixels((uid) => isVisibleOnFrame(scopeOf(scopes, uid), frame));
     if (!roi || !meta) {
       setFrameResult(null);
@@ -664,10 +709,15 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
       return next;
     });
     managedUidsRef.current = new Set(uids);
+    // 消えた ROI が選択されたままだと解析対象が迷子になる（選択は「無選択＝直近」に戻す）。
+    setSelectedRoiUid((prev) => (prev && uids.includes(prev) ? prev : null));
   };
 
   /** ROI の帰属をグローバル ⇔ 現在フレーム で切り替える。 */
   const toggleRoiScope = (uid: string) => setScopes((prev) => toggleScope(prev, uid, frame));
+
+  /** 解析対象の ROI を選ぶ（同じものを押したら選択解除＝直近を使う従来動作に戻す）。 */
+  const toggleRoiSelection = (uid: string) => setSelectedRoiUid((prev) => (prev === uid ? null : uid));
 
   const deleteRoi = (uid: string) => {
     // 削除前に表示へ戻す。cornerstone の隠し集合は uid を保持し続けるため、隠したまま消すと取り残される。
@@ -719,6 +769,10 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
     try {
       vp.pause();
       setPlaying(false);
+      // ⚠ **ループ有効のままだと最終フレームへシークできない**（frame 1 に巻き戻る。2026-07-30 実機検証）。
+      // VideoViewport は再生位置がフレーム範囲を超えたと判断すると loop 時に先頭へ戻すため、シーク中は
+      // ループを外す。再生を始めるときに {@link togglePlay} が設定を戻す（ループ再生の挙動は変えない）。
+      vp.setProperties({ loop: false });
       vp.setFrameNumber(clamped);
       setFrame(clamped);
     } catch {
@@ -841,21 +895,39 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
                   </span>
                 );
               })()}
+              {selectedRoiUid && (
+                <span style={{ color: "#0b5cad", fontSize: 11 }} data-testid="video-roi-selected-note">
+                  {t("video.roi.selectedNote")}
+                </span>
+              )}
               {rois.map((r, i) => {
                 const sc = scopeOf(scopes, r.uid);
                 const visible = isVisibleOnFrame(sc, frame);
+                const selected = selectedRoiUid === r.uid;
                 return (
                   <span
                     key={r.uid}
-                    style={visible ? roiChip : roiChipHidden}
+                    style={selected ? { ...(visible ? roiChip : roiChipHidden), ...roiChipSelected } : visible ? roiChip : roiChipHidden}
                     data-testid="video-roi-chip"
+                    data-selected={selected ? "1" : "0"}
                     title={
                       sc.kind === "global"
                         ? t("video.roi.scopeGlobal")
                         : t("video.roi.boundToFrame", { f: sc.frame })
                     }
                   >
-                    {t(`video.tool.${r.toolKey}`)} #{i + 1}
+                    {/* ラベル部分を押すと解析対象として選択（もう一度押すと解除＝直近を使う）。 */}
+                    <button
+                      type="button"
+                      style={selected ? roiChipLabelSelected : roiChipLabel}
+                      data-testid={`video-roi-select-${r.uid}`}
+                      title={t(selected ? "video.roi.deselect" : "video.roi.select")}
+                      aria-pressed={selected}
+                      onClick={() => toggleRoiSelection(r.uid)}
+                    >
+                      {selected ? "◎ " : ""}
+                      {t(`video.tool.${r.toolKey}`)} #{i + 1}
+                    </button>
                     <button
                       type="button"
                       style={sc.kind === "global" ? roiScopeBadgeGlobal : roiScopeBadgeFrame}
@@ -1031,7 +1103,12 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
                 <button type="button" style={toolBtn} onClick={downloadHistogramCsv}>
                   {t("video.frameStats.csv")}
                 </button>
-                <button type="button" style={toolBtn} onClick={() => setFrameResult(null)}>
+                <button
+                  type="button"
+                  style={toolBtn}
+                  data-testid="video-frame-stats-close"
+                  onClick={() => setFrameResult(null)}
+                >
                   {t("video.analyze.close")}
                 </button>
               </div>
@@ -1157,6 +1234,30 @@ const roiChipHidden: React.CSSProperties = {
   background: "#fbfcfd",
   color: "#98a1ab",
   borderStyle: "dashed",
+};
+/** 解析対象として選択中の ROI。 */
+const roiChipSelected: React.CSSProperties = {
+  borderColor: "#0b5cad",
+  boxShadow: "0 0 0 1px #0b5cad inset",
+};
+/**
+ * チップのラベル（選択ボタン兼用）。見た目は素のテキストに寄せる。
+ * ⚠ ショートハンド `font` は使わない（選択時に `fontWeight` を足すと React が混在を警告し、
+ * 再描画で片方が消えることがある。同じ理由で {@link roiChip} の枠線も分解してある）。
+ */
+const roiChipLabel: React.CSSProperties = {
+  border: "none",
+  background: "transparent",
+  padding: 0,
+  fontSize: "inherit",
+  fontFamily: "inherit",
+  color: "inherit",
+  cursor: "pointer",
+};
+const roiChipLabelSelected: React.CSSProperties = {
+  ...roiChipLabel,
+  color: "#0b5cad",
+  fontWeight: 600,
 };
 const roiScopeBadge: React.CSSProperties = {
   border: "none",

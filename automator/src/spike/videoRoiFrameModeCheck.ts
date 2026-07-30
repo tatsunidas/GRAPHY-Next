@@ -165,6 +165,15 @@ async function seekToFrame(page: Page, frame: number): Promise<number> {
   return Number(await seek.inputValue());
 }
 
+/** 単一フレーム統計パネルが開いていれば閉じる（読み取りが前回値を掴まないように）。 */
+async function closeFrameStats(page: Page): Promise<void> {
+  const close = page.getByTestId("video-frame-stats-close");
+  if ((await close.count()) > 0) {
+    await close.click();
+    await page.getByTestId("video-frame-stats-panel").waitFor({ state: "detached", timeout: 10_000 }).catch(() => {});
+  }
+}
+
 /** ROI の帰属モード（新規作成時の既定）を切り替える。 */
 async function setScopeMode(page: Page, mode: "global" | "frame"): Promise<void> {
   await page.getByTestId(`video-roi-scope-${mode}`).click();
@@ -287,6 +296,7 @@ async function main(): Promise<void> {
 
     // ── 6. 単一フレーム統計＋ヒストグラム（フレーム 5 の ROI で）
     await seekToFrame(page, 5);
+    await closeFrameStats(page);
     await page.getByTestId("video-frame-stats").click();
     await page.getByTestId("video-frame-stats-panel").waitFor({ state: "visible", timeout: 30_000 });
     const stat5 = ((await page.getByTestId("video-frame-stats-summary").textContent()) ?? "").trim();
@@ -350,6 +360,8 @@ async function main(): Promise<void> {
     //        （合成動画は時間とともに明るくなるので、後のフレームの平均が必ず大きい）
     const meanOfFrameStats = async (f: number): Promise<number> => {
       await seekToFrame(page, f);
+      // ⚠ 開いたままのパネルを読むと**前のフレーム/前の ROI の値**を掴む（実際に踏んだ）。必ず閉じてから開く。
+      await closeFrameStats(page);
       await page.getByTestId("video-frame-stats").click();
       await page.getByTestId("video-frame-stats-panel").waitFor({ state: "visible", timeout: 30_000 });
       const txt = ((await page.getByTestId("video-frame-stats-summary").textContent()) ?? "").trim();
@@ -366,6 +378,58 @@ async function main(): Promise<void> {
       { mEarly, mLate },
     );
     await shot(page, "06-frame28-histogram");
+
+    // ── 10b. cornerstone が ROI に重ねる計測テキストがフレームに追従する
+    //         （cachedStats は作成フレームの値のままになりがち。無効化して再計算させている）
+    const overlayMean = async (): Promise<number> => {
+      const txt = await page.evaluate(`
+        (function () {
+          var host = document.querySelector('[data-testid="${HOST}"]');
+          var svg = host && host.querySelector(".svg-layer");
+          return svg ? (svg.textContent || "") : "";
+        })()
+      `) as string;
+      const m = txt.match(/(?:Mean|平均)[^0-9-]*(-?\d+(?:\.\d+)?)/);
+      return m ? Number(m[1]) : NaN;
+    };
+    await seekToFrame(page, 3);
+    const ov3 = await overlayMean();
+    await seekToFrame(page, 28);
+    const ov28 = await overlayMean();
+    console.log(`    計測テキストの平均: frame3=${ov3} frame28=${ov28}`);
+    check(
+      Number.isFinite(ov3) && Number.isFinite(ov28) && ov28 > ov3 + 20,
+      "ROI に重なる計測テキストがフレームに追従して更新される",
+      { ov3, ov28 },
+    );
+    await shot(page, "06b-overlay-follows-frame");
+
+    // ── 10c. 複数 ROI から解析対象を選べる（選択した ROI が解析される）
+    //         いま frame 指定(F12)の矩形とグローバルの楕円があるので、矩形を選んで
+    //         「グローバルROI解析」を押すと帰属が合わず断られる＝選択が効いていることが分かる。
+    await seekToFrame(page, 12);
+    await page.getByTestId(`video-roi-select-${uid}`).click();
+    await page.waitForTimeout(300);
+    check(
+      (await page.getByTestId("video-roi-selected-note").count()) === 1,
+      "ROI を選択すると「選択中の ROI を解析します」が出る",
+    );
+    check(
+      (await page.locator('[data-testid="video-roi-chip"][data-selected="1"]').count()) === 1,
+      "選択中のチップが 1 つだけ強調される",
+    );
+    await page.getByTestId("video-analyze-run").click();
+    await page.waitForTimeout(1200);
+    check(
+      (await page.getByTestId("video-analyze-summary").count()) === 0,
+      "選択した ROI がフレーム指定なら時系列解析は断られる（＝直近ではなく選択が使われている）",
+    );
+    // 選択を楕円（グローバル）へ移すと今度は解析できる。
+    const gUid = chips.find((c) => c.uid !== uid)!.uid;
+    await page.getByTestId(`video-roi-select-${uid}`).click(); // いったん解除
+    await page.getByTestId(`video-roi-select-${gUid}`).click();
+    await page.waitForTimeout(300);
+    await shot(page, "06c-roi-selection");
 
     // ── 11. グローバル ROI があれば時系列解析が走る（右肩上がりの TIC）
     await page.getByTestId("video-analyze-run").click();
