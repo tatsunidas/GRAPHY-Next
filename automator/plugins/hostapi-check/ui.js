@@ -27,6 +27,8 @@ function summarize(px) {
     cols: px.cols,
     unit: px.unit,
     spacing: px.spacing,
+    // スライス**厚**（間隔とは別物）。無ければ null が返る契約。
+    sliceThickness: px.sliceThickness === undefined ? "undefined" : px.sliceThickness,
     length: n,
     isFloat32: px.data instanceof Float32Array,
     min,
@@ -196,7 +198,8 @@ export async function activate(host) {
       "  pixels: " + p.cols + "x" + p.rows + " " + p.unit +
       " min=" + p.min.toFixed(0) + " max=" + p.max.toFixed(0) +
       " mean=" + p.mean.toFixed(1) + " center=" + p.center.toFixed(0) +
-      "\n    spacing=[" + p.spacing.join(", ") + "] float32=" + p.isFloat32,
+      "\n    spacing=[" + p.spacing.join(", ") + "] sliceThickness=" + p.sliceThickness +
+      " float32=" + p.isFloat32,
     );
   }
   for (const t of targets) {

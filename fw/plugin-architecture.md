@@ -704,6 +704,30 @@ host.getRois()[i].studyDate      // 同上
 **実装**: `viewer/viewerCommands.ts`（契約）/ `viewer/Viewer2D.tsx`（`roiContext.patientKey` を出す）/
 `examples/plugin-template/graphy-plugin.d.ts` / 作成ガイド。
 
+#### スライス厚の追加（2026-07-30・GRAPHY-Next 0.1.12 以降）
+
+```ts
+(await host.getPixelData())!.sliceThickness   // number | null（DICOM SliceThickness 0018,0050）
+```
+
+**動機**: RECIST 1.1 の「測定可能病変の最小サイズは長径 10mm、ただし**スライス厚が 5mm を
+超える場合は厚さの 2 倍**」という規則を、プラグインが自分で判定できるようにする。
+既存の `spacing[2]` は**スライス間隔**（IPP の差 → `SpacingBetweenSlices` → `SliceThickness` の
+順に導出）であり、ギャップのある収集では厚さと一致しない。**規約が厚さを指している**用途で
+間隔を代用すると基準そのものが変わる（例: 厚 5mm・間隔 8mm を間隔で判定すると最小サイズが
+10mm ではなく 16mm になる）。
+
+**決めたこと**:
+
+- **間隔で代用せず、無ければ `null`。** プラグイン側が「厚さが分からない」と判断して規則の
+  適用を保留できるようにする（既定値を置くと、規則が静かに間違った基準で適用される）。
+- `spacing[2]` の意味（間隔であって厚さではない）を契約のコメントに明記した。読み違えは
+  こちら側の書き方の問題でもある。
+
+**実装**: `viewer/viewerCommands.ts`（契約）/ `viewer/Viewer2D.tsx`（`getPixelData()` の戻り。
+`ImageInfo.sliceThickness` から。`ViewerTilePixelData` は継承なので自動）/
+`examples/plugin-template/graphy-plugin.d.ts` / `automator/plugins/hostapi-check`。
+
 ### 7.3 副作用（着手時に必ずセットで行うこと）
 
 - ✅ **型定義の同期（本体側 1/5）**: `examples/plugin-template/graphy-plugin.d.ts` に `ViewerTarget` /

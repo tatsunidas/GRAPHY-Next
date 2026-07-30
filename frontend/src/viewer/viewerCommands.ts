@@ -101,8 +101,22 @@ export interface ViewerPixelData {
   data: Float32Array;
   /** 値の単位（"HU" / "SUVbw" / "" / カラーは "raw"）。 */
   unit: string;
-  /** 画素間隔 [列方向(x), 行方向(y), スライス方向(z)] mm。不明な軸は null。 */
+  /**
+   * 画素間隔 [列方向(x), 行方向(y), スライス方向(z)] mm。不明な軸は null。
+   *
+   * <p>z は**スライス間隔**（IPP の差 → SpacingBetweenSlices → SliceThickness の順に導出）。
+   * ギャップのある収集では**スライス厚と一致しない**ので、厚さが要る用途では
+   * `sliceThickness` を使う。
+   */
   spacing: [number | null, number | null, number | null];
+  /**
+   * DICOM SliceThickness (0018,0050) mm。無ければ null（**間隔で代用しない**）。
+   *
+   * <p>間隔（`spacing[2]`）とは別物として渡す。RECIST 1.1 の「測定可能病変の最小サイズは
+   * スライス厚 >5mm ならその 2 倍」のように、**規約が厚さを指している**用途があり、
+   * ギャップのある収集で間隔を厚さの代わりに使うと基準が変わってしまう。
+   */
+  sliceThickness: number | null;
 }
 
 /**
