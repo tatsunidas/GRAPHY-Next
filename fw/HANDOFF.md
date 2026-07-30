@@ -1,10 +1,59 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
-> 更新日: 2026-07-30（最終更新: プラグイン host API の **H3（画素読み出し）・H4a（オーバーレイ）・
-> H4b（派生シリーズ保存）を実装**＝§7 は完了。加えて**実在する重いプラグインでの通し確認**を追加。
+> 更新日: 2026-07-30（最終更新: **モバイル UI とボリュームメモリガードの設計を新規追加**。
 > 下記エントリ参照）
 > 目的: 別の作業者（Claude 含む）がこのリポジトリの状況を把握し、続きを実装できるようにする。
 > このファイル＋ `fw/` 配下の各設計ドキュメントが「ソース・オブ・トゥルース」。
+>
+> 📝 **2026-07-30 設計 2 本を新規追加（実装は未着手）**
+> → [`fw/volume-memory-guard.md`](volume-memory-guard.md) / [`fw/mobile-ui-design.md`](mobile-ui-design.md)
+>
+> **経緯**: 「Web 版にスマホ/タブレットでアクセスしたとき自動でモバイル UI に切り替えられるか」という
+> 問いから出発し、調査の結果**独立した 2 つの課題**に分かれた。片方はモバイルと無関係にワークステーション
+> 全体の問題なので、ドキュメントを分けている。
+>
+> 1. 🔴 **[`volume-memory-guard.md`](volume-memory-guard.md) — 先に入れるべき既存の欠陥**。
+>    **`cache.setMaxCacheSize()` の呼び出しが frontend 全体で 0 件**＝cornerstone 既定の **3GB** のまま。
+>    超過すると黙って evict し、最終的に `new Error("cacheSizeExceeded")`（`cache.js:379`）を投げるが、
+>    frontend はこれを識別せず **`MPR の構築に失敗しました: Error: cacheSizeExceeded` という生文字列**を
+>    出している（`mpr/MprScreen.tsx:174`）。事前予測も `MAX_3D_TEXTURE_SIZE` チェックも無い。
+>    - 実消費は volume 1 本分ではない: **CT ガントリチルト補正で ×2**（`viewer/mpr.ts:129` の自前
+>      `Int16Array` ＋ `volumeLoader.createLocalVolume` でもう 1 本）、**3D はさらに +1**
+>      （`viewer/vtkVolumeView.ts:170-183` が vtk 用にフルコピー）。しかも**自前確保と vtk コピーは
+>      cornerstone の会計に載らない**（volume cache は `sizeInBytes: 0` 固定＝`cache.js:543`）。
+>    - 🚨 **bytes/voxel は BitsAllocated だけでは決まらない**。RescaleSlope が非整数だと cornerstone が
+>      `Float32Array`（4B）に切り替えるため **PET で 2 倍見誤る**
+>      （`generateVolumePropsFromImageIds.js:43-80`）。`/layout` DTO にこの材料が無いので
+>      `SeriesLayout` record に 5 フィールド追加が必要（書き込み箇所は既存ループ 2 箇所だけ）。
+>    - **RAM と VRAM は代替関係ではない**（VRAM は RAM の退避先ではない）。両方を別々に消費し、
+>      CPU RAM 超過＝スワップ/タブ kill、VRAM 超過＝WebGL コンテキストロスと**別々に落ちる**。
+>      ブラウザから VRAM 容量を知る API は存在しないため、**必要量を計算して突き合わせる**設計にした。
+>    - `System＞メモリモニタ` は**何も測っていない**（`system/memoryMonitor.ts:13-28` は OS ツールを
+>      spawn するだけ）。流用できる計測資産はゼロで、物理メモリ取得には Electron IPC 追加が必要。
+> 2. 🟡 **[`mobile-ui-design.md`](mobile-ui-design.md) — モバイル専用シェルの追加**（既存 UI の
+>    レスポンシブ化ではない）。`frontend/src` に `.css` が 1 つも無く inline style **726 箇所**・
+>    `@media` **0 件**なので、共有スタイルの上書きで対応する余地が無い。
+>    - 対応範囲（合意済み）: 2D / 3D / MPR は**参照のみ**、ROI 計測は **2D と 3D のみ**（MPR は
+>      計測ツールが 1 つも登録されていないため対象外＝`viewer/mpr.ts:299-313`）、Fusion は **2D のみ**、
+>      レポートあり。**Slicer / 新規シリーズ作成 / マスク作成 / Analysis / プラグインは非対応**。
+>    - 除外はすべて依存が絡んでおらず容易（`viewer/slicer.ts` の import 元は 2 ファイルのみ、
+>      プラグインは注入点 2 箇所かつ遅延ロード）。⚠️ ただし `viewer/histogram.ts` は W/L 調整
+>      ダイアログも使うので**モジュール自体は残す**。
+>    - 追い風: **W/L・Pan・Zoom は既にラジオ式ボタンとして実装済み**
+>      （`viewer2d/Viewer2DToolbar.tsx:153-155`）、スライス送りもスライダーがある。
+>      ⚠️ 一方 **`numTouchPoints` の使用は 0 件**でタッチバインドは全面的に未実装。
+>    - 🚨 **web モードのレポート確定は現状 2 つの理由で破綻している**（`report-design.md:256` に既知）。
+>      **キー画像ありは 409**（`ReportService.java:189-194` がローカル H2 索引を引く）＋
+>      **SR/KO が PACS に届かない**（STOW-RS 未使用）。**STOW-RS を足すだけでは 409 は直らない**＝
+>      独立した 2 変更が必要。→ 両方実装する方針で合意。
+>    - `frontend/portable/` は土台にしない（ビルド時 CSP に `connect-src` が無くサーバへ繋がない
+>      設計＝`vite.portable.config.ts:26-47`）。
+>
+> **副産物: doc がコードに追随していない箇所を是正した**。MPR / 3D は**既に web モード対応済み**なのに
+> `mpr-viewer-design.md:166` / `3d-viewer-design.md:55,537` / 本ファイル §4 項目 4 が「standalone のみ」の
+> ままだった（`mpr/MprScreen.tsx:109-110` と `viewer3d/Viewer3DScreen.tsx:179-180` にコード側の
+> 「web も対応」コメントがある）。各所に日付付きの更新注記を入れた。**未使用の `Phase` 型
+> `"unsupported"` 4 箇所と i18n `*.webUnsupported` 4 キーはデッドコード**として整理対象に挙げてある。
 >
 > 🟢 **2026-07-30 非画像 SOP クラスを画像として開かせないようにした**（既存の欠陥の修正）。
 > RTSTRUCT / SR / 表示状態 / Encapsulated PDF 等は**ピクセルを持たない**ため、シリーズ一覧から開くと
@@ -573,7 +622,10 @@ GRAPHY-Next/
 2. **C/T 切替（別スタック）をまたぐ transform/VOI 維持**（保存 presentation/voiRange の再適用）。
 3. MainScreen ツール群の残課題（`mainscreen-tools.md`）: **Burn CD/DVD**（Export 本体・NonDicomImporter・
    Anonymizer・TagExtractor・SeriesExtractor は実装・実機検証済み、`mainscreen-progress.md` 参照）。
-4. **web(wadors) 対応**: 画像 imageId・layout 導出（現状 standalone のみ。`imageId.ts` は web で throw）。
+4. ~~**web(wadors) 対応**: 画像 imageId・layout 導出（現状 standalone のみ。`imageId.ts` は web で throw）。~~
+   → 📌 **2026-07-30: この項目は古い。完了扱い。** `viewer/imageId.ts:23-33` は web 分岐（BFF 経由
+   wadouri）を実装済みで、throw するのは `studyUid`/`seriesUid` が欠けた場合のみ。MPR / 3D も
+   web 対応済み（`fw/mpr-viewer-design.md` P1 の注記、`fw/3d-viewer-design.md` §13）。
 5. Enhanced 多フレーム（DimensionIndexValues/StackID/InStackPositionNumber、wadouri `frame=`）。
 6. **Fusion 改善**:
    - `viewer.fusionOpacity` / `viewer.fusionLut` を DnD 起動時に自動適用（現状は Settings に保存するのみ）。

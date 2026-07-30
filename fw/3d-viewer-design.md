@@ -52,7 +52,7 @@ DICOM ボリュームを 3D 表示・編集する GRAPHY の 3D Viewer を **Typ
 | 中心線 spline/フレーム | **既存 `viewer/centerline.ts` を再利用**（Catmull-Rom＋弧長＋RMF/FIXED_Z 実装済み） | 旧 `Centerline3D` は既に TS 移植済み。内視鏡カメラの up ベクトルにも RMF を流用 |
 | 中心線 自動抽出 | **`itk-wasm` の 3D thinning もしくは Lee-94 の WASM 移植**＋グラフ抽出/DP/Dijkstra は素の TS | 骨格化（`Skeletonize3D_`）のみ vtk.js に等価が無い唯一の重量級。他は直移植 |
 | W/L 単位 | **常に HU/SUV（モダリティ値空間）で保持**し TF レンジを駆動 | `pixelCalibration` 単一入口原則（Rescale 二重適用禁止）。旧の正規化 0–1 空間 WL は採らない |
-| 初期スコープ | **standalone のみ**（MPR/Slicer と同じ）。web は後続 | 既存パターン踏襲 |
+| 初期スコープ | ~~**standalone のみ**（MPR/Slicer と同じ）。web は後続~~ → **📌 2026-07-30: web 対応済み**（§13 参照） | 既存パターン踏襲 |
 
 ---
 
@@ -534,7 +534,14 @@ FreeFormRoi3D マスク（実空間 vtkImageData labelmap）
 - **骨格化**: itk-wasm 依存の追加・バンドルサイズ・実行時間。分岐血管での過剰分割/spur を prune で吸収できるか。
 - **STL 座標系**: 患者 LPS mm 出力への変更が旧 GRAPHY（ローカル mm）STL との相互運用に与える影響。UI 明示＋インポート基準の一貫。
 - **単一入口輝度校正**: TF/ヒストグラム/統計が全て `pixelCalibration` 経由で HU/SUV 一貫（Rescale 二重適用禁止）。
-- **web モード**: 初期 standalone のみ。WebGPU 可否でモード分岐。
+- **web モード**: ~~初期 standalone のみ。WebGPU 可否でモード分岐。~~
+  - 📌 **2026-07-30 更新: web モードは対応済み。** `viewer3d/Viewer3DScreen.tsx:179-180` に「web も対応」、
+    `mode === "web"` の分岐は `prefetchSeries` の呼び出し 1 箇所のみ（`:233-239`）。未使用の `Phase` 型
+    `"unsupported"`（`:69`）と i18n `viewer3d.webUnsupported`（`i18n/ja.ts:148`）はデッドコード。
+  - ⚠️ **残課題（web/モバイル共通）**: メモリガードが未実装。`vtkImageDataFromVolume`
+    （`viewer/vtkVolumeView.ts:170-183`）が vtk 用にボリュームをフルコピーするため実消費は
+    volume サイズの 2〜3 倍になるが、`cache.setMaxCacheSize()` が未設定（既定 3GB）で事前予測もない。
+    設計は [`volume-memory-guard.md`](volume-memory-guard.md)。
 
 ## 14. 決定事項（確定）
 

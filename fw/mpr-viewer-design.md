@@ -163,7 +163,13 @@ VolumeViewport」* と既に方針が明記されており、本採用は既定�
     `cornerstoneSetup.ts`（CrosshairsTool/StackScrollTool 登録）、`App.tsx`（#mpr ルート）、
     `MainScreen.tsx`（`handleOpenViewer("mpr")`→`graphy-mpr-ctx`＋openViewer/window.open）、i18n(ja/en)。
   - 検証: `tsc -b`＋`vite build` green、**実機で −23° チルト CT の補正後 MPR 表示を確認**（§5.5）。
-  - 既知の P1 制約: standalone のみ（web は wadors 未対応）／単一シリーズ／WL 手動／シリーズ未指定時は最多枚数を採用。
+  - 既知の P1 制約: ~~standalone のみ（web は wadors 未対応）~~／単一シリーズ／WL 手動／シリーズ未指定時は最多枚数を採用。
+    - 📌 **2026-07-30 更新: web モードは対応済み。** imageId は BFF(WADO-RS) 経由の wadouri で、
+      ボリューム構築は standalone と同一経路（`mpr/MprScreen.tsx:109-110`）。`mode === "web"` の分岐は
+      `prefetchSeries` の呼び出し 1 箇所のみ（`:142-148`）。未使用の `Phase` 型 `"unsupported"`（`:54`）と
+      i18n `mpr.webUnsupported`（`i18n/ja.ts:137`）はデッドコード。
+      ⚠️ web は 1 SOP = 1 リクエストなので全スライス分の往復が発生する。メモリ面の前提は
+      [`volume-memory-guard.md`](volume-memory-guard.md) を参照。
 - **P2 連動** ✔（実装済・要実機検証）: VOI(W/L) 同期・方位ラベル・スライス番号オーバーレイ・W/L プリセット。
   - VOI 同期: `sync.ts` `getOrCreateVoiSync("graphy-mpr-voi")` を 3 面に add（同一ボリュームゆえ絶対値同期でよい）。
     1 面の W/L 調整が 3 面へ反映。teardown で `destroySynchronizer`。
