@@ -33,9 +33,11 @@ import {
   resetMprWl,
   readMprOverlay,
   probeMpr,
+  setMprTouchTool,
   type MprViewportIds,
   type MprOverlay,
   type MprProbe,
+  type MprTouchTool,
 } from "../viewer/mpr";
 import { presetLabel } from "../viewer2d/wlPresets";
 import { useWlPresets } from "../viewer2d/wlPresetStore";
@@ -73,6 +75,8 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
   const { uiMode } = useDeviceClass();
   const singlePane = uiMode === "mobile";
   const [activePane, setActivePane] = useState<PaneId>("axial");
+  // モバイルの 1 本指タッチに割り当てるツール（ピンチ Zoom は常時有効・切替対象外）。
+  const [touchTool, setTouchTool] = useState<MprTouchTool>("scroll");
   const axialRef = useRef<HTMLDivElement>(null);
   const sagittalRef = useRef<HTMLDivElement>(null);
   const coronalRef = useRef<HTMLDivElement>(null);
@@ -247,6 +251,13 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
     return () => eventTarget.removeEventListener(Enums.Events.CAMERA_MODIFIED, onCam);
   }, [phase, refreshOverlays]);
 
+  // モバイル(singlePane)のみ: 1 本指タッチのツールをトグルに追従（ピンチ Zoom は常時）。
+  // desktop では呼ばない（Crosshairs を Active Primary のまま保つ）。ツールグループ生成後にのみ効く。
+  useEffect(() => {
+    if (!singlePane || phase !== "ready") return;
+    setMprTouchTool(TOOL_GROUP_ID, touchTool);
+  }, [singlePane, phase, touchTool]);
+
   // マウス直下の実空間座標＋輝度値を上段に出す。
   const onCellMove = useCallback((viewportId: string, e: React.MouseEvent<HTMLDivElement>) => {
     const engine = engineRef.current;
@@ -341,6 +352,25 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
               data-testid={`mpr-pane-${p.id}`}
             >
               {t(p.labelKey)}
+            </button>
+          ))}
+        </div>
+      )}
+      {/* モバイルのタッチ操作: 1 本指ツール（スライス送り/W-L/Pan）を切替。ピンチ=Zoom は常時（§3.3）。 */}
+      {singlePane && phase === "ready" && (
+        <div style={paneTabs} data-testid="mpr-touch-tools">
+          {([
+            ["scroll", "mpr.touch.scroll"],
+            ["wl", "mpr.touch.wl"],
+            ["pan", "mpr.touch.pan"],
+          ] as [MprTouchTool, string][]).map(([id, key]) => (
+            <button
+              key={id}
+              style={id === touchTool ? paneTabOn : paneTab}
+              onClick={() => setTouchTool(id)}
+              data-testid={`mpr-touch-${id}`}
+            >
+              {t(key)}
             </button>
           ))}
         </div>

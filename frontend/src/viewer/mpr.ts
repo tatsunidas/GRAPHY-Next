@@ -51,6 +51,44 @@ export const MPR_VOI_SYNC_ID = "graphy-mpr-voi";
 const { ViewportType, OrientationAxis } = Enums;
 const { MouseBindings } = csToolsEnums;
 
+/** モバイルのタッチで 1 本指に割り当てるツール（ピンチ Zoom は別枠で常時有効）。 */
+export type MprTouchTool = "scroll" | "wl" | "pan";
+
+type MprToolGroup = NonNullable<ReturnType<typeof ToolGroupManager.getToolGroup>>;
+
+/**
+ * 1 本指タッチのツールを切り替える。Cornerstone3D は 1 つの指本数（1/2/3）に 1 ツールしか
+ * 持てないため、3 候補（StackScroll=スライス送り / WindowLevel / Pan）を一旦マウス専用へ戻し、
+ * 選択したツールにだけ `numTouchPoints: 1` を併記する。Crosshairs はタッチ非対応なので touch には出さない。
+ */
+function applyMprTouchTool(tg: MprToolGroup, tool: MprTouchTool): void {
+  tg.setToolActive(StackScrollTool.toolName, { bindings: [{ mouseButton: MouseBindings.Wheel }] });
+  tg.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary }] });
+  tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
+  const chosen =
+    tool === "wl"
+      ? { name: WindowLevelTool.toolName, mouse: MouseBindings.Secondary }
+      : tool === "pan"
+        ? { name: PanTool.toolName, mouse: MouseBindings.Auxiliary }
+        : { name: StackScrollTool.toolName, mouse: MouseBindings.Wheel };
+  tg.setToolActive(chosen.name, { bindings: [{ mouseButton: chosen.mouse }, { numTouchPoints: 1 }] });
+}
+
+/**
+ * MPR モバイルのツールバートグルから 1 本指タッチのツールを切り替える（モバイルのみ呼ぶ）。
+ *
+ * <p>Cornerstone3D の 1 本指タッチは「`numTouchPoints:1` を持つツール**または** Primary マウスの
+ * ツール」にマッチし、登録順で最初の Active を採る。MPR は Crosshairs が Primary かつ最初なので、
+ * Active のままだと 1 本指が Crosshairs に取られる（＝タッチ非対応で無反応）。そこでモバイルでは
+ * Crosshairs を Passive にして 1 本指スロットを解放する（参照線は Passive でも描画される）。
+ */
+export function setMprTouchTool(toolGroupId: string, tool: MprTouchTool): void {
+  const tg = ToolGroupManager.getToolGroup(toolGroupId);
+  if (!tg) return;
+  tg.setToolPassive(CrosshairsTool.toolName);
+  applyMprTouchTool(tg, tool);
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
 
@@ -323,11 +361,11 @@ export async function setupMprViewports(
 
   for (const id of viewportIds) tg.addViewport(id, engineId);
 
-  // 左=Crosshairs（クリックで交点ジャンプ＝FSL eyes 風）、右=W/L、中=Pan、ホイール=スライス送り。
+  // マウス（デスクトップ）: 左=Crosshairs（クリックで交点ジャンプ＝FSL eyes 風）、右=W/L、中=Pan、ホイール=スライス送り。
   tg.setToolActive(CrosshairsTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
-  tg.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary }] });
-  tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
-  tg.setToolActive(StackScrollTool.toolName, { bindings: [{ mouseButton: MouseBindings.Wheel }] });
+  // タッチ（モバイル）: 2 本指ピンチ=Zoom は常時。1 本指ツールは既定でスライス送り、トグルで W-L / Pan に切替。
+  tg.setToolActive(ZoomTool.toolName, { bindings: [{ numTouchPoints: 2 }] });
+  applyMprTouchTool(tg, "scroll");
 
   // W/L 同期（1 面の調整を 3 面へ）。同一ボリュームなので絶対値同期でよい。
   const voiSync = getOrCreateVoiSync(MPR_VOI_SYNC_ID);
