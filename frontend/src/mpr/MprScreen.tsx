@@ -20,6 +20,7 @@ import {
   type Series,
 } from "../api";
 import { ensureCornerstoneInitialized } from "../viewer/cornerstoneSetup";
+import { getAppliedVolumeMaxMb, isCacheSizeExceeded } from "../viewer/volumeMemory";
 import { imageIdForInstance } from "../viewer/imageId";
 import {
   buildMprVolume,
@@ -173,7 +174,13 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
       requestAnimationFrame(() => refreshOverlays());
     } catch (e) {
       setPhase("error");
-      setMessage(`${t("mpr.error")}: ${String(e)}`);
+      // キャッシュ上限超過は cornerstone の生メッセージ（CACHE_SIZE_EXCEEDED / is not cacheable）では
+      // 利用者が対処できないため、対処を書いた案内に差し替える（fw/volume-memory-guard.md V1）。
+      setMessage(
+        isCacheSizeExceeded(e)
+          ? t("common.volumeMemExceeded", { budgetMb: String(getAppliedVolumeMaxMb()) })
+          : `${t("mpr.error")}: ${String(e)}`,
+      );
     }
   }, [mode, t]);
 

@@ -14,7 +14,7 @@
 
 | 事象 | 現状の見え方 |
 |---|---|
-| cornerstone のキャッシュ上限超過 | `MPR の構築に失敗しました: Error: cacheSizeExceeded` という生文字列 |
+| cornerstone のキャッシュ上限超過 | `MPR の構築に失敗しました: Error: CACHE_SIZE_EXCEEDED` という生文字列（V1 で解消） |
 | 3D テクスチャの寸法上限超過 | 無言の描画失敗（真っ黒） |
 | プロセスの実メモリ枯渇 | デスクトップは OS スワップで激重化、モバイル Safari はタブが無警告 kill |
 
@@ -26,6 +26,9 @@
 - **超過時の挙動は「黙って evict → 最終的に throw」**。
   - 画像 put 時: `cache.js:379` `throw new Error(Events.CACHE_SIZE_EXCEEDED)`（専用エラークラスは
     無く、メッセージは enum の文字列値そのもの）。geometry も同様（`cache.js:611`）。
+    ⚠️ **実際の文字列は大文字スネークケース `CACHE_SIZE_EXCEEDED`**（`enums/Events.js:4`）。
+    当初この文書に書いていた `cacheSizeExceeded` は誤り（2026-07-31 の V1 実装時に実物で確認）。
+    `isCacheSizeExceeded` は将来のキャメルケース化にも耐えるよう区切り無しでも拾う正規表現にした。
   - `createLocalVolume`（= CT チルト補正経路が使う）: `volumeLoader.js:171`
     `Cannot created derived volume: Volume with id ... is not cacheable.`（原文の typo 込み）
   - `createAndCacheVolume` 経路は `isCacheable` チェックを持たない。
@@ -116,26 +119,50 @@ Chrome 限定の非標準で JS heap のみ）。
 
 | Phase | 内容 | 依存 | 状態 |
 |---|---|---|---|
-| **V1** | 上限の明示設定 ＋ エラー識別（最小・即効） | なし | 未着手 |
+| **V1** | 上限の明示設定 ＋ エラー識別（最小・即効） | なし | ✅ 完了（2026-07-31） |
 | **V2** | 事前予測と警告（`SeriesLayout` 拡張を含む） | V1 | 未着手 |
 | **V3** | 物理メモリの調達（Electron IPC） | V2 | 未着手 |
 | **V4** | `MAX_3D_TEXTURE_SIZE` ハードガード | なし（独立） | 未着手 |
 
-### V1 — 上限の明示設定とエラー識別
+### V1 — 上限の明示設定とエラー識別 ✅ 完了（2026-07-31）
 
-1. `viewer/cornerstoneSetup.ts` の `coreInit()` 直後（現 `:96-98` 付近）で
-   `cache.setMaxCacheSize(bytes)` を呼ぶ。値は設定（§6）から。**現状は設定値と実際の上限が
-   乖離している**（設定に項目が無く、cache は既定 3GB）ので、まずここを一致させる。
+1. `viewer/cornerstoneSetup.ts` の `coreInit()` 直後で `cache.setMaxCacheSize(bytes)` を呼ぶ。
+   値は設定（§6）から。**従来は設定値と実際の上限が乖離していた**（設定に項目が無く、
+   cache は既定 3GB）ので、まずここを一致させる。
 2. `isCacheSizeExceeded(e: unknown): boolean` を新設する。**判別の流儀は既存の
    `isWebGLContextUnavailable`（`viewer/vtkVolumeView.ts:352-356`）に合わせる**
    （メッセージ正規表現で吸収する形）。判定対象は 2 種:
-   - `/cacheSizeExceeded/` （`cache.js:379,611`）
-   - `/is not cacheable/` （`volumeLoader.js:171`）
-3. catch-all の手前で識別して専用メッセージに落とす。差し込み先は
-   `mpr/MprScreen.tsx:174`、`viewer3d/Viewer3DScreen.tsx:290-295`、
-   `slicer/SlicerScreen.tsx`、`curvedmpr/CurvedMprScreen.tsx` の各 catch。
+   - `/cache[_\s-]?size[_\s-]?exceeded/i` （`cache.js:379,611`。実際の値は `CACHE_SIZE_EXCEEDED`）
+   - `/is not cacheable/i` （`volumeLoader.js:171`）
+3. catch-all の手前で識別して専用メッセージに落とす。
 
 > V1 だけでも「不可解な英文が出る」現状は解消する。V2 を待たずに入れられる。
+
+**実装（2026-07-31）**
+
+- `viewer/volumeMemory.ts`（新規）… **cornerstone を import しない**。vitest が `environment: "node"`
+  （`vitest.config.ts`）で走るため、cornerstone を読み込むモジュールは単体テストできない。
+  そこで純ロジック（`normalizeVolumeMaxMb` / `volumeMaxBytes` / `isCacheSizeExceeded` /
+  適用済み上限の記録）だけをここに置き、`cache.setMaxCacheSize()` の実呼び出しは
+  `cornerstoneSetup.ts` の `applyVolumeCacheLimit()` に置いた。同ファイルの
+  `applyGlobalLabelmapStyle` と同じ「設定読込後に適用する export 関数」の形。
+- 上限の適用は**二段**: `ensureCornerstoneInitialized` が既定値（2048MB）を即時適用し、
+  `fetchSettings()` が返ったら上書きする。設定取得の往復で初期表示を待たせないため。
+  設定到着前に始まったボリューム構築は既定値で走る（許容）。
+- エラー識別の差し込み先は 5 箇所: `mpr/MprScreen.tsx` の `start()`、
+  `viewer3d/Viewer3DScreen.tsx` の `start()`（`isWebGLContextUnavailable` の次に判定）、
+  `slicer/SlicerScreen.tsx` の `start()` と **C/T 切替の再構築**（`buildMprVolume` を再度呼ぶため）、
+  `curvedmpr/CurvedMprScreen.tsx` の `start()`。
+- テストは `viewer/volumeMemory.test.ts`（15 件）。`setMaxCacheSize` が falsy / 非 number を
+  throw する仕様に対して `volumeMaxBytes` が常に正数を返すことも含めて固定した。
+- 設定は §6 のうち `viewer.volumeMaxMb` のみ追加した。`viewer.volumeWarnBeforeBuild` は
+  V2 が入るまで効かないトグルになるため V2 で追加する。
+
+> ⚠️ **V2 で対処すべき積み残し**: `viewer/mpr.ts:91,236` の
+> `imageLoader.loadAndCacheImage(id).catch(() => null)` は**画像ロードの例外を握り潰す**。
+> 全スライス先読みの最中に上限を超えた場合、その場では何も起きず、後続の
+> `createAndCacheVolume` / `createLocalVolume` まで進んでから初めて throw する
+> （＝V1 の識別は効くが、原因の発生点はもっと手前）。事前予測（V2）を入れる本質的な理由の一つ。
 
 ### V2 — 事前予測と警告
 
@@ -249,8 +276,10 @@ frontend 型は `frontend/src/api.ts:172-191` に対応フィールドを追加�
 {
   titleKey: "settings.sec.volumeMemory",
   fields: [
+    // ✅ V1 で追加済み（2026-07-31）
     { key: "viewer.volumeMaxMb", labelKey: "settings.field.volumeMaxMb", type: "number",
       default: 2048, min: 128, max: 32768, helpKey: "settings.field.volumeMaxMb.help" },
+    // V2 で追加する（V1 時点では効かないトグルになるため見送り）
     { key: "viewer.volumeWarnBeforeBuild", labelKey: "settings.field.volumeWarnBeforeBuild",
       type: "toggle", default: true, helpKey: "settings.field.volumeWarnBeforeBuild.help" },
   ],
@@ -265,14 +294,14 @@ frontend 型は `frontend/src/api.ts:172-191` に対応フィールドを追加�
 
 ## 7. i18n（`ja` / `en` 両方必須）
 
-| キー | 用途 |
-|---|---|
-| `common.volumeMemWarn` | 事前警告の confirm 本文。`{{needMb}}` / `{{budgetMb}}` |
-| `common.volumeMemExceeded` | V1 のキャッシュ超過エラー（`cacheSizeExceeded` / `not cacheable` の置換） |
-| `viewer3d.texture3dTooLarge` | V4 の寸法上限超過。`{{dim}}` / `{{maxDim}}` |
-| `settings.sec.volumeMemory` | 設定セクション名 |
-| `settings.field.volumeMaxMb` ＋ `.help` | 設定項目 |
-| `settings.field.volumeWarnBeforeBuild` ＋ `.help` | 設定項目 |
+| キー | 用途 | 状態 |
+|---|---|---|
+| `common.volumeMemWarn` | 事前警告の confirm 本文。`{{needMb}}` / `{{budgetMb}}` | V2 |
+| `common.volumeMemExceeded` | V1 のキャッシュ超過エラー（`CACHE_SIZE_EXCEEDED` / `not cacheable` の置換）。`{{budgetMb}}` | ✅ V1 |
+| `viewer3d.texture3dTooLarge` | V4 の寸法上限超過。`{{dim}}` / `{{maxDim}}` | V4 |
+| `settings.sec.volumeMemory` | 設定セクション名 | ✅ V1 |
+| `settings.field.volumeMaxMb` ＋ `.help` | 設定項目 | ✅ V1 |
+| `settings.field.volumeWarnBeforeBuild` ＋ `.help` | 設定項目 | V2 |
 
 命名は既存の流儀（画面/機能プレフィクス＋キャメルケース、プレースホルダは `{{n}}` 形式）に合わせる。
 参考: `series.grid.warnMany`、`qr.confirmLarge`、`main.search.noConditionWarn`。
@@ -290,16 +319,18 @@ frontend 型は `frontend/src/api.ts:172-191` に対応フィールドを追加�
 ## 9. 実装対象ファイル一覧
 
 **frontend**
-- `viewer/cornerstoneSetup.ts` … `setMaxCacheSize` 呼び出し（V1）
-- `viewer/volumeMemory.ts` **（新規）** … 予測式・`isCacheSizeExceeded`・バジェット解決・寸法チェック
+- ✅ `viewer/cornerstoneSetup.ts` … `applyVolumeCacheLimit()`＝`setMaxCacheSize` 呼び出し（V1）
+- ✅ `viewer/volumeMemory.ts` **（新規）** … 予測式・`isCacheSizeExceeded`・バジェット解決・寸法チェック
+  （V1 時点では上限の正規化と `isCacheSizeExceeded` のみ。**cornerstone を import しない**方針）
+- ✅ `viewer/volumeMemory.test.ts` **（新規）** … 上記の単体テスト
 - `viewer/mpr.ts` … `buildMprVolume` に `opts?: { maxBytes?: number }`（V2 二重防御）
-- `mpr/MprScreen.tsx` … `fetchSeriesLayout` 追加 ＋ ガード ＋ エラー識別
-- `viewer3d/Viewer3DScreen.tsx` … ガード（`:230`–`:232` の間）＋ エラー識別 ＋ V4
-- `slicer/SlicerScreen.tsx` / `curvedmpr/CurvedMprScreen.tsx` … ガード ＋ エラー識別
+- `mpr/MprScreen.tsx` … `fetchSeriesLayout` 追加 ＋ ガード（V2）／✅ エラー識別（V1）
+- `viewer3d/Viewer3DScreen.tsx` … ガード（`:230`–`:232` の間・V2）＋ V4／✅ エラー識別（V1）
+- `slicer/SlicerScreen.tsx` / `curvedmpr/CurvedMprScreen.tsx` … ガード（V2）／✅ エラー識別（V1）
 - `desktopBridge.ts` … `getMemoryInfo?`（V3）
-- `settings/registry.ts` … 新セクション（§6）
-- `api.ts` … `SeriesLayout` 型の追加フィールド
-- `i18n/ja.ts` / `i18n/en.ts` … §7
+- ✅ `settings/registry.ts` … 新セクション（§6。V1 は `volumeMaxMb` のみ）
+- `api.ts` … `SeriesLayout` 型の追加フィールド（V2）
+- ✅ `i18n/ja.ts` / `i18n/en.ts` … §7（V1 分）
 
 **backend**
 - `dicom/SeriesLayout.java` … record に 5 フィールド ＋ `noSpatial` 更新

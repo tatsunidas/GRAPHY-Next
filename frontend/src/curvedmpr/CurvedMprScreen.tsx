@@ -22,6 +22,7 @@ import { imageLoader, metaData, cache } from "@cornerstonejs/core";
 import { fetchSeries, fetchInstances, fetchSeriesLayout, prefetchSeries, type AppStatus, type Study, type Series, type SeriesLayoutDto } from "../api";
 import { ensureCornerstoneInitialized } from "../viewer/cornerstoneSetup";
 import { imageIdForInstance, imageIdForCell } from "../viewer/imageId";
+import { getAppliedVolumeMaxMb, isCacheSizeExceeded } from "../viewer/volumeMemory";
 import { type ResliceVolume, type Vec3 } from "../viewer/reslice";
 import { Centerline3D, type FrameMode } from "../viewer/centerline";
 import { reformat, defaultCurvedParams, type ProjectionMode, type CurvedResult } from "../viewer/curvedReformat";
@@ -515,7 +516,13 @@ export function CurvedMprScreen({ status }: { status: AppStatus | null }) {
       });
     } catch (e) {
       setPhase("error");
-      setMessage(`${t("curvedMpr.error")}: ${String(e)}`);
+      // 全スライスを cornerstone のキャッシュに載せてから自前ボリュームを組むため、
+      // ここでもキャッシュ上限超過が出うる（fw/volume-memory-guard.md V1）。
+      setMessage(
+        isCacheSizeExceeded(e)
+          ? t("common.volumeMemExceeded", { budgetMb: String(getAppliedVolumeMaxMb()) })
+          : `${t("curvedMpr.error")}: ${String(e)}`,
+      );
     }
   }, [mode, t, redrawAll, recomputePreview]);
 

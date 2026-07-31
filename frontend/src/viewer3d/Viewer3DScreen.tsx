@@ -24,6 +24,7 @@ import {
   type SeriesLayoutDto,
 } from "../api";
 import { ensureCornerstoneInitialized } from "../viewer/cornerstoneSetup";
+import { getAppliedVolumeMaxMb, isCacheSizeExceeded } from "../viewer/volumeMemory";
 import { imageIdForInstance, imageIdForCell } from "../viewer/imageId";
 import { buildMprVolume } from "../viewer/mpr";
 import {
@@ -291,7 +292,14 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
       setPhase("error");
       // WebGL コンテキストを取れない場合は原因が分かる案内にする（vtk.js の生の
       // "Cannot create proxy with a non-object..." では利用者が対処できない）。
-      setMessage(isWebGLContextUnavailable(e) ? t("viewer3d.glLost") : `${t("viewer3d.error")}: ${String(e)}`);
+      // 同様に、キャッシュ上限超過も対処を書いた案内に差し替える（fw/volume-memory-guard.md V1）。
+      setMessage(
+        isWebGLContextUnavailable(e)
+          ? t("viewer3d.glLost")
+          : isCacheSizeExceeded(e)
+            ? t("common.volumeMemExceeded", { budgetMb: String(getAppliedVolumeMaxMb()) })
+            : `${t("viewer3d.error")}: ${String(e)}`,
+      );
     }
   }, [mode2, t]);
 

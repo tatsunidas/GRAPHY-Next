@@ -20,6 +20,7 @@ import { RenderingEngine } from "@cornerstonejs/core";
 import { fetchSeries, fetchInstances, fetchSeriesLayout, prefetchSeries, type AppStatus, type Study, type Series, type SeriesLayoutDto } from "../api";
 import { ensureCornerstoneInitialized } from "../viewer/cornerstoneSetup";
 import { imageIdForInstance, imageIdForCell } from "../viewer/imageId";
+import { getAppliedVolumeMaxMb, isCacheSizeExceeded } from "../viewer/volumeMemory";
 import {
   teardownSlicer,
   displayReconStack,
@@ -396,7 +397,12 @@ export function SlicerScreen({ status }: { status: AppStatus | null }) {
       requestAnimationFrame(() => recompute(g0));
     } catch (e) {
       setPhase("error");
-      setMessage(`${t("slicer.error")}: ${String(e)}`);
+      // キャッシュ上限超過は対処を書いた案内に差し替える（fw/volume-memory-guard.md V1）。
+      setMessage(
+        isCacheSizeExceeded(e)
+          ? t("common.volumeMemExceeded", { budgetMb: String(getAppliedVolumeMaxMb()) })
+          : `${t("slicer.error")}: ${String(e)}`,
+      );
     }
   }, [mode, t, recompute]);
 
@@ -677,7 +683,12 @@ export function SlicerScreen({ status }: { status: AppStatus | null }) {
         setGenInfo("");
         recompute(geomRef.current);
       } catch (e) {
-        setGenInfo(`${t("slicer.error")}: ${String(e)}`);
+        // C/T 切替もボリュームを組み直すので、同じくキャッシュ上限超過を識別する。
+        setGenInfo(
+          isCacheSizeExceeded(e)
+            ? t("common.volumeMemExceeded", { budgetMb: String(getAppliedVolumeMaxMb()) })
+            : `${t("slicer.error")}: ${String(e)}`,
+        );
       }
     },
     [mode, recompute, t],
