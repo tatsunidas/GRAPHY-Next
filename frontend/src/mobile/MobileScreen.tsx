@@ -25,17 +25,22 @@ import { useI18n } from "../i18n/i18n";
 import { readMobileCtx, writeMobileCtx } from "./mobileCtx";
 import { MobileSeriesList, MobileStudyList } from "./MobileStudyBrowser";
 import { MobileViewer } from "./MobileViewer";
+import { MobileReportEditor, type PendingKeyImage } from "./MobileReportEditor";
+import { useVisualViewportHeight } from "./useVisualViewport";
 import { mobileHash, parentView, type MobileView } from "./mobileRoute";
 import { useDeviceClass } from "./useDeviceClass";
 
 export function MobileScreen({ status, view }: { status: AppStatus | null; view: MobileView }) {
   const { t } = useI18n();
   const { deviceClass, setOverride } = useDeviceClass();
+  const viewportHeight = useVisualViewportHeight();
 
   // 初期値はリロード前の続き（`readMobileCtx`）。無ければ未検索・未選択。
   const [filters, setFilters] = useState<StudyFilters | null>(() => readMobileCtx().filters ?? null);
   const [study, setStudy] = useState<Study | null>(() => readMobileCtx().study ?? null);
   const [series, setSeries] = useState<Series | null>(() => readMobileCtx().series ?? null);
+  // ビューアの「レポートに添付」で溜めたキー画像。エディタが取り込んだら空にする。
+  const [pendingKeyImages, setPendingKeyImages] = useState<PendingKeyImage[]>([]);
 
   useEffect(() => {
     writeMobileCtx({ filters, study, series });
@@ -51,7 +56,8 @@ export function MobileScreen({ status, view }: { status: AppStatus | null; view:
   useEffect(() => {
     if ((view === "series" || view === "viewer" || view === "report") && !study) {
       window.location.replace(mobileHash("studies"));
-    } else if ((view === "viewer" || view === "report") && !series) {
+    } else if (view === "viewer" && !series) {
+      // レポートはスタディ単位なのでシリーズ未選択でも開ける（ビューアだけシリーズが要る）。
       window.location.replace(mobileHash("series"));
     }
   }, [view, study, series]);
@@ -72,7 +78,13 @@ export function MobileScreen({ status, view }: { status: AppStatus | null; view:
   }, [setOverride]);
 
   return (
-    <div style={shell} data-testid="mobile-shell" data-device-class={deviceClass}>
+    <div
+      // ソフトキーボードで縮んだ可視領域に合わせる（§5.3）。iOS Safari は layout viewport を
+      // 縮めないので、これが無いと入力欄や保存ボタンがキーボードの裏に隠れる。
+      style={viewportHeight === null ? shell : { ...shell, bottom: "auto", height: viewportHeight }}
+      data-testid="mobile-shell"
+      data-device-class={deviceClass}
+    >
       <header style={header}>
         {parentView(view) ? (
           <button style={backBtn} onClick={goBack} aria-label={t("mobile.back")} data-testid="mobile-back">
@@ -120,9 +132,21 @@ export function MobileScreen({ status, view }: { status: AppStatus | null; view:
             // 叩かれても描画自体は成立するので、status に従って imageId を組む。
             mode={status?.mode === "standalone" ? "standalone" : "web"}
             onChangeSeries={setSeries}
+            onAttachToReport={(k) => {
+              // 重複は載せない（同じスライスで何度も押されうる）。
+              setPendingKeyImages((prev) =>
+                prev.some((p) => p.sopInstanceUid === k.sopInstanceUid) ? prev : [...prev, k],
+              );
+              navigate("report");
+            }}
+          />
+        ) : view === "report" && study ? (
+          <MobileReportEditor
+            study={study}
+            pendingKeyImages={pendingKeyImages}
+            onConsumePending={() => setPendingKeyImages([])}
           />
         ) : (
-          // レポート（M8）はまだ中身が無い。
           <PlaceholderPanel status={status} />
         )}
       </main>

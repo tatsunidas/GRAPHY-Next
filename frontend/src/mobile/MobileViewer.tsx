@@ -23,6 +23,8 @@ import { SeriesViewer } from "../viewer/SeriesViewer";
 import { FusionImageViewer } from "../viewer/FusionOverlayViewer";
 import type { RenderOverlay } from "../viewer/Viewer2D";
 import { TOOL_IDS } from "../viewer/toolIds";
+import { runViewerCommand, type ViewerTargetInfo } from "../viewer/viewerCommands";
+import { sopOfImageId } from "../viewer/roiRestore";
 import type { ViewerMode } from "../viewer/imageId";
 import { launchMobileVolumeViewer } from "./launchViewer";
 import { MOBILE_TILE_ID, MobileToolbar } from "./MobileToolbar";
@@ -43,11 +45,14 @@ export function MobileViewer({
   series,
   mode,
   onChangeSeries,
+  onAttachToReport,
 }: {
   study: Study;
   series: Series;
   mode: ViewerMode;
   onChangeSeries: (s: Series) => void;
+  /** 表示中スライスをキー画像として渡す（M8・§5.4）。解決できなければ呼ばれない。 */
+  onAttachToReport: (k: { sopInstanceUid: string; seriesInstanceUid: string }) => void;
 }) {
   const { t } = useI18n();
   const { instances, error, loading } = useInstances(study.studyInstanceUid, series.seriesInstanceUid);
@@ -110,6 +115,25 @@ export function MobileViewer({
 
   const closeDrawer = useCallback(() => setDrawerOpen(false), []);
 
+  /**
+   * 表示中スライスをキー画像として親へ渡す。
+   *
+   * <p>SOPInstanceUID は `viewerCommands.getTargetInfo()` の `imageId` から
+   * `sopOfImageId`（cornerstone のメタデータ経由。SEG/マスク書き出しと同じ解決）で引く。
+   * まだメタデータが読めていない等で解決できなければ**何もしない**（誤った UID を載せない）。
+   */
+  const attachCurrentSlice = useCallback(() => {
+    let target: ViewerTargetInfo | null = null;
+    runViewerCommand([MOBILE_TILE_ID], (c) => {
+      target = c.getTargetInfo();
+    });
+    const info = target as ViewerTargetInfo | null;
+    if (!info) return;
+    const sop = sopOfImageId(info.imageId);
+    if (!sop) return;
+    onAttachToReport({ sopInstanceUid: sop, seriesInstanceUid: info.seriesUid });
+  }, [onAttachToReport]);
+
   return (
     <div style={wrap}>
       <div style={stage}>
@@ -167,6 +191,7 @@ export function MobileViewer({
         onChangeTool={setActiveTool}
         onOpenSeriesDrawer={() => setDrawerOpen(true)}
         onLaunchVolumeViewer={(kind) => launchMobileVolumeViewer(kind, study, series, Date.now())}
+        onAttachToReport={attachCurrentSlice}
       />
 
       {drawerOpen && (

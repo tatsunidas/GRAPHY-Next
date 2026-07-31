@@ -425,12 +425,42 @@ VolumeViewport では canvas overlay 方式が使えず、2 ボリューム同�
 > `MarkdownEditor.tsx:14` の `PREVIEW_DEBOUNCE_MS = 400` は「入力中にタブが応答なしになる」
 > 過去バグへの対策。**低スペック端末では 400ms でも不足する可能性がある**ので実機で確認する。
 
+**実装（2026-07-31 / M8）** — `mobile/MobileReportEditor.tsx`
+
+- **縦積みではなくタブ切替**（編集 / プレビュー）にした。縦積みだと 2 つに高さを割ることになり、
+  ソフトキーボードが出た残りの高さでは textarea が数行しか残らない。タブなら全高を渡せる。
+- ⚠️ **`visualViewport` 追随はシェル側で行う**（`mobile/useVisualViewport.ts`）。
+  iOS Safari は**ソフトキーボードが出ても layout viewport を縮めない**ので、
+  `position: fixed; inset: 0` のシェルは画面いっぱいのままで、下端（入力欄・保存ボタン）が
+  キーボードの裏に隠れる。可視領域の高さをシェルの `height` に反映して回避する。
+  `visualViewport` 非対応環境では従来どおり `inset: 0`（挙動を変えない）。
+- 入力欄は `fontSize: 16` 固定。**iOS Safari は 16px 未満の入力欄でフォーカス時に自動ズームする**。
+- 下書きはスタディ内の DRAFT を 1 件開く。無ければ空で始め、**作成は最初の保存時**
+  （画面を開いただけで空レポートを量産しない）。
+- 確定は「保存 → 確定」の順で行う（未保存の本文を落とさない）。確認は `window.confirm`。
+- 編集者名は `graphy.report.editorName` を**デスクトップと同じキー**で読む（§5.5 のとおり
+  作成者の記録方式は変更しない）。
+- プレビューのデバウンスはデスクトップと同じ 400ms。低スペック端末での過不足は M9 で確認する。
+- 未実装（意図的）: 参加者（`participants`）・臨床情報・依頼医の編集。参照用途では本文と
+  キー画像で足り、狭幅に載せると項目が多すぎるため。デスクトップのエディタで扱う。
+
 ### 5.4 キー画像の追加導線
 
 現状は「MainScreen で選択中のシリーズのインスタンス一覧から選ぶ」方式のみで、
 **表示中の画像から直接追加する導線がない**（`report/KeyImageGrid.tsx:12-13`、
 `report-design.md` §9 で将来対応とされている）。単画面ビューアでは
 「いま見ている画像を添付」が最も自然なので、**この導線を新規に実装する**。
+
+**実装（2026-07-31 / M8）**
+
+- モバイルツールバーの「レポートに添付」→ 表示中スライスをキー画像として溜め、
+  レポート画面へ遷移する（1 タップで添付＋移動）。
+- SOPInstanceUID は `viewerCommands.getTargetInfo()` の `imageId` から `sopOfImageId()`
+  （cornerstone のメタデータ経由。SEG/マスク書き出しと同じ解決）で引く。
+  ⚠️ **解決できなければ何もしない**（メタデータ未読の段階で誤った UID を載せない）。
+- 溜める先は `MobileScreen` の state。ビューアからレポート画面へ hash 遷移してもシェルは
+  アンマウントされないので受け渡せる。エディタが取り込んだら空にする。
+- 実際の保存はエディタの「保存」で `updateReport` の `keyImages` として送る。
 
 ### 5.5 作成者の記録は現状のまま（2026-07-30 決定）
 
@@ -454,7 +484,7 @@ VolumeViewport では canvas overlay 方式が使えず、2 ボリューム同�
 | **M5** | 3D / MPR（1 面＋面切替・ドロワー・Cinematic 非表示） | M0, M3 | ✅ 完了（2026-07-31）／実機未確認 |
 | **M6** | Fusion（タッチ用の重ね合わせ導線） | M3 | ✅ 完了（2026-07-31）／実機未確認 |
 | **M7** | レポート backend（キー画像 QIDO 解決 → STOW-RS 書き戻し） | — | ✅ 完了（2026-07-31）／実 PACS 未検証 |
-| **M8** | レポート モバイルエディタ（縦積み・visualViewport 追随・表示中画像の添付） | M7, M3 | 未着手 |
+| **M8** | レポート モバイルエディタ（縦積み・visualViewport 追随・表示中画像の添付） | M7, M3 | ✅ 完了（2026-07-31）／実機未確認 |
 | **M9** | 実機検証（iOS Safari / Android Chrome / iPad）＋ automator への追加 | 全部 | 未着手 |
 
 M7 は frontend に依存しないので M1〜M6 と並行できる。
@@ -501,7 +531,8 @@ M7 は frontend に依存しないので M1〜M6 と並行できる。
   Fusion の「重ねる」導線と不透明度バー（M6）
 - ✅ `frontend/src/mobile/launchViewer.ts` … 3D / MPR を同一タブで開く（M5。設計時には無かったファイル）
 - ✅ `frontend/src/mobile/MobileToolbar.tsx` … ツール切替・W/L プリセット・複合リセット（M3）
-- `frontend/src/mobile/MobileReportEditor.tsx` … 縦積みエディタ
+- ✅ `frontend/src/mobile/MobileReportEditor.tsx` … タブ切替エディタ（M8。縦積みから変更）
+- ✅ `frontend/src/mobile/useVisualViewport.ts` … ソフトキーボード追随（M8。設計時には無かったファイル）
 - ✅ `frontend/src/hooks/useStudies.ts` / `useSeries.ts` / `useInstances.ts` … 取得ロジック抽出（M2）
 - ✅ `frontend/src/hooks/useAsyncData.ts` … 上記 3 つの共通部分（M2。設計時には無かったファイル）
 
