@@ -1,6 +1,7 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
-> 更新日: 2026-07-31（最終更新: **動画は P1〜P5a まで完了**。残るは P5b（web/BFF）だけ。下記「動画の現在地」参照）
+> 更新日: 2026-07-31（最終更新: **ボリュームメモリガード V1〜V4 とモバイル UI M1〜M8 を実装**（PR #104）。
+> 残りは実機検証だけ。動画は P1〜P5a 完了で残るは P5b（web/BFF）。下記の各ログ参照）
 
 > 📍 **動画（DICOM video）の現在地と次の一手（2026-07-31 時点）**
 > 正本: [`fw/video-viewer-design.md`](video-viewer-design.md)。**standalone では一通り使える状態**になった。
@@ -33,6 +34,32 @@
 > - ⚠ **`portableVideoCheck` は `target/classes/portable-viewer` が無いと VIEWER/ 同梱に失敗する**。
 >   `-Dfrontend.skip=true` でパッケージしていると生成されないので、`cd frontend && npm run build:portable` の
 >   成果物（`portable-dist/`）を同ディレクトリへ置いてから jar を作り直す。
+
+> 🟢 **2026-07-31 ボリュームメモリガード（V1〜V4）とモバイル UI（M1〜M8）を実装**（PR #104）
+> 正本: [`fw/volume-memory-guard.md`](volume-memory-guard.md) ／ [`fw/mobile-ui-design.md`](mobile-ui-design.md)。
+> 両ドキュメントのフェーズ表とフェーズごとの実装メモ（設計から外した理由込み）が最新。
+>
+> - **メモリガード**: ボリューム構築は今まで**上限設定・事前予測・エラー識別のどれも無かった**。
+>   V1=`setMaxCacheSize` を明示（従来 cornerstone 既定 3GB 放置）＋超過エラーの識別、
+>   V2=構築前に必要量を予測して確認、V3=Electron IPC で実搭載量からバジェット決定、
+>   V4=`MAX_3D_TEXTURE_SIZE` 超過をエラーで停止（従来は無言で真っ黒）。
+>   backend の `SeriesLayout` に `PixelFormat`（bytes/voxel 予測用）を追加している。
+> - **モバイル UI**: `frontend/src/mobile/` に web モード専用の単画面シェルを新設（`#mobile`）。
+>   既存 UI はレスポンシブ化せず、描画コア（`SeriesViewer`/`Viewer2D`）は**無改変で再利用**。
+>   MPR/3D だけは既存画面を狭幅で作り分けた（元々 `fixed inset:0` の全画面で単画面シェル向きのため）。
+> - **併せて web モードのレポートの既存不具合 2 件を修正**（独立した別々の原因）:
+>   キー画像ありの確定が **409 で必ず失敗**していた（SOPClassUID をローカル H2 索引から引いていた）／
+>   SR/KO が PACS に届かない**「見えない SR」**（web でも `storage.ingest()` 固定だった）。
+> - タッチ対応で `viewer/Viewer2D.tsx`・`viewer/SeriesViewer.tsx`・`mpr/`・`viewer3d/` にも手が入っている
+>   （2 本指=ZoomTool のピンチ+Pan、3 本指=スライス送り、`touch-action: none`）。**デスクトップの既定挙動は不変**。
+>
+> 🔴 **残りは実機検証（M9）だけ。手順は `fw/mobile-ui-design.md` §10 に 19 項目の表。**
+> ⚠️ **実機確認前に自動振り分けを有効化してある**（`mobile/mobileRoute.ts` の `MOBILE_SHELL_READY = true`）。
+> web モードのスマホ利用者＝**公開デモの利用者も対象**。
+> 🔧 **不具合が出たらこの 1 行を `false` に戻す**（自動振り分けだけ止まり、System メニューの手動切替は残る）。
+> ⚠️ V3 の Electron IPC と M7 の STOW-RS は自動テスト対象外で未検証。
+> 📌 ローカルの `mvn test` で `AnnouncementServiceTest`（Mockito）と `VideoRenderServiceTest`（バイト数）が
+> 落ちるのは**ローカル環境（Java 25）固有**。GitHub Actions では 3 プラットフォームとも通っている。
 
 > 🟢 **2026-07-31 動画 P5a 完了: Export した媒体だけで動画が見られるようにした**
 > （正本: [`fw/video-viewer-design.md`](video-viewer-design.md) §7、[`fw/export-portable-viewer.md`](export-portable-viewer.md)）。
