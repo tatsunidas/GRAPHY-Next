@@ -385,6 +385,24 @@ VolumeViewport では canvas overlay 方式が使えず、2 ボリューム同�
 
 順序は 1 → 2。両方入って初めて「web でキー画像付きレポートを確定して PACS に返す」が成立する。
 
+**実装（2026-07-31 / M7）** — `report/ReportService.java`
+
+- 1.（409 の解消）`resolveKeyImageSopClassUids()` を新設。standalone はローカル索引、
+  web は QIDO-RS。**シリーズが分かっていればシリーズ配下で絞る**（`KeyImageRef.seriesInstanceUid`）。
+  分からない場合だけスタディ配下を横断する（そのために
+  `WebDicomDataService.searchStudyInstances()` を追加した）。
+  `includefield=00080016` を明示するのは、既定の返却属性が PACS 実装で異なるため。
+- 応答の選択は純関数 `pickSopClassUid()` に分けて単体テストを付けた。
+  ⚠️ **UID 一致が無くても 1 件だけなら採用する**（QIDO 応答に SOPInstanceUID を含めない PACS があり、
+  絞り込み条件が効いている前提でのフォールバック）。**2 件以上あって一致が無ければ null**＝409 にする。
+  推測して誤った SOP Class を SR に書くより止める方が安全。
+- 2.（見えない SR の解消）`store(List<Attributes>)` を新設。web は `storeDatasets()` で STOW-RS、
+  standalone は従来どおり `ingest()`。**SR と KO をまとめてから 1 リクエストで送る**
+  （`dicom/derived/DerivedSeriesService` と同型）。
+- PACS 未到達・タイムアウトは「見つからない」として扱い 409 にする（例外をそのまま 500 にしない）。
+- ⚠️ **実 PACS での検証は未実施。** 単体テストは QIDO 応答の選択部分と standalone の確定経路まで。
+  STOW-RS 送信自体はテストしていない（DICOMweb 層の他の機能と同じ扱い）。
+
 ### 5.3 モバイル用エディタは新規に書く
 
 既存 `report/ReportEditorDialog.tsx` をモバイルで使うのは不可:
@@ -435,7 +453,7 @@ VolumeViewport では canvas overlay 方式が使えず、2 ボリューム同�
 | **M4** | タッチバインド（`numTouchPoints` ＋ `touchAction: none`）＋ ROI 計測のタップターゲット調整 | M3 | ✅ 完了（2026-07-31）／実機未確認 |
 | **M5** | 3D / MPR（1 面＋面切替・ドロワー・Cinematic 非表示） | M0, M3 | ✅ 完了（2026-07-31）／実機未確認 |
 | **M6** | Fusion（タッチ用の重ね合わせ導線） | M3 | ✅ 完了（2026-07-31）／実機未確認 |
-| **M7** | レポート backend（キー画像 QIDO 解決 → STOW-RS 書き戻し） | — | 未着手 |
+| **M7** | レポート backend（キー画像 QIDO 解決 → STOW-RS 書き戻し） | — | ✅ 完了（2026-07-31）／実 PACS 未検証 |
 | **M8** | レポート モバイルエディタ（縦積み・visualViewport 追随・表示中画像の添付） | M7, M3 | 未着手 |
 | **M9** | 実機検証（iOS Safari / Android Chrome / iPad）＋ automator への追加 | 全部 | 未着手 |
 
@@ -504,9 +522,10 @@ M7 は frontend に依存しないので M1〜M6 と並行できる。
 - `i18n/ja.ts` / `i18n/en.ts` … モバイル UI 文言（**両方必須**）
 
 **変更（backend / レポート M7）**
-- `report/ReportService.java:189-194` … キー画像 SOPClassUID の QIDO 解決経路
-- `report/ReportService.java:197,203,268-` … web モードで STOW-RS 書き戻し
-  （`dicom/derived/DerivedSeriesService.java:92-110` を参考）
+- ✅ `report/ReportService.java` … `resolveKeyImageSopClassUids()`（QIDO 解決）＋
+  `store()`（web は STOW-RS）＋ `pickSopClassUid()`（応答選択の純関数）
+- ✅ `dicom/web/WebDicomDataService.java` … `searchStudyInstances()` を追加
+- ✅ `src/test/.../ReportKeyImageSopClassTest.java` **（新規）** … 応答選択の単体テスト
 
 **是正（§8）**
 - `fw/mpr-viewer-design.md` / `fw/3d-viewer-design.md` / `fw/HANDOFF.md`

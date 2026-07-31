@@ -251,9 +251,15 @@ NEMA PS3.3 の該当章を確認。記憶で書いた値はゼロ）:
   未対応、将来必要になったら追加）。
 
 設計からの補足・簡略化:
-- **キー画像の SOPClassUID は `KeyImageRef` に持たせず、確定時にローカル索引（`DicomInstanceRepository`）
-  から解決する**。クライアントに正しい値を送らせるより、backend が唯一の真実源から都度引く方が安全
-  （web モード等でローカル索引に無い場合は 409 で明示エラー）。
+- **キー画像の SOPClassUID は `KeyImageRef` に持たせず、確定時に backend が都度解決する**。
+  クライアントに正しい値を送らせるより、backend が唯一の真実源から引く方が安全。
+  **✅ 2026-07-31 更新（`fw/mobile-ui-design.md` M7）**: 当初はローカル索引固定で、
+  web では外部 PACS 由来のインスタンスが索引に無く**確定が必ず 409 で失敗していた**。
+  現在は識別情報の継承と同じ二重対応（standalone=ローカル索引、web=QIDO-RS）になっている。
+- **✅ 2026-07-31 追加**: 確定した SR/KO の保存先も二重対応になった。従来は web でも
+  `storage.ingest()` 固定で、生成した SR がローカル H2 にしか無く **web の検査一覧（QIDO）に
+  現れない「見えない SR」**だった。現在は web では STOW-RS で PACS へ書き戻す。
+  上記 2 つは**独立した別々の対応**で、どちらか片方だけでは web の確定は成立しない。
 - 参照インスタンス（患者/スタディ識別情報の継承元）の解決は `dicom/export/RtStructExportService` と同じ
   二重対応（standalone=ローカル索引、web=QIDO-RS 先頭シリーズ→WADO-RS metadata）を `ReportService` 内に実装。
 - `PredecessorDocumentsSequence` の書き込みは未実装（R8 の addendum UI と合わせて対応）。
