@@ -8,13 +8,13 @@
 //   CSP は wasm-unsafe-eval / worker-src blob: を許可済み（圧縮 TS はワーカ＋WASM でデコード）。
 import { init as coreInit, cache } from "@cornerstonejs/core";
 import dicomImageLoader from "@cornerstonejs/dicom-image-loader";
-import { fetchSettings } from "../settings/settingsApi";
 import {
   DEFAULT_VOLUME_MAX_MB,
   normalizeVolumeMaxMb,
   setAppliedVolumeMaxMb,
   volumeMaxBytes,
 } from "./volumeMemory";
+import { resolveVolumeBudgetMb } from "./volumeMemoryGuard";
 import { registerSegMetadataProvider } from "./segMetadata";
 import { registerThickSlabLoader } from "./thickSlab";
 import { WandTool } from "./wandTool";
@@ -120,11 +120,12 @@ export function ensureCornerstoneInitialized(): Promise<void> {
   if (!initPromise) {
     initPromise = (async () => {
       await coreInit();
-      // 画像キャッシュ上限を明示する。まず既定値を即時適用し、環境設定が取れたら上書きする
-      // （設定取得の往復で初期表示を待たせない）。設定到着前に始まったボリューム構築は既定値で走る。
+      // 画像キャッシュ上限を明示する。まず既定値を即時適用し、バジェットが解決したら上書きする
+      // （設定/IPC の往復で初期表示を待たせない）。解決前に始まったボリューム構築は既定値で走る。
+      // 決定順は resolveVolumeBudgetMb（設定 → 実搭載量×安全率 → 既定値）。
       applyVolumeCacheLimit(DEFAULT_VOLUME_MAX_MB);
-      void fetchSettings()
-        .then((m) => applyVolumeCacheLimit(Number(m["viewer.volumeMaxMb"])))
+      void resolveVolumeBudgetMb()
+        .then(applyVolumeCacheLimit)
         .catch(() => {
           /* 既定のまま */
         });

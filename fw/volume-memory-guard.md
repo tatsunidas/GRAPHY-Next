@@ -121,7 +121,7 @@ Chrome 限定の非標準で JS heap のみ）。
 |---|---|---|---|
 | **V1** | 上限の明示設定 ＋ エラー識別（最小・即効） | なし | ✅ 完了（2026-07-31） |
 | **V2** | 事前予測と警告（`SeriesLayout` 拡張を含む） | V1 | ✅ 完了（2026-07-31） |
-| **V3** | 物理メモリの調達（Electron IPC） | V2 | 未着手 |
+| **V3** | 物理メモリの調達（Electron IPC） | V2 | ✅ 完了（2026-07-31）／**実機確認は未** |
 | **V4** | `MAX_3D_TEXTURE_SIZE` ハードガード | なし（独立） | ✅ 完了（2026-07-31） |
 
 ### V1 — 上限の明示設定とエラー識別 ✅ 完了（2026-07-31）
@@ -245,7 +245,7 @@ if (projected > budget) {
 - キャンセル時は画面が空のままになるので `common.volumeMemCanceled` を出す
   （Slicer の C/T 切替だけは既存表示を保つので何も出さない）。
 
-### V3 — 物理メモリの調達（standalone のみ）
+### V3 — 物理メモリの調達（standalone のみ）✅ 完了（2026-07-31。実機確認は未）
 
 Electron main に IPC を追加する。**雛形は `listDisplays`**（3 点セット）:
 
@@ -264,6 +264,25 @@ Electron main に IPC を追加する。**雛形は `listDisplays`**（3 点セ�
 1. 設定値が明示されていればそれ（§6）
 2. standalone: `getMemoryInfo()` の実搭載量 × 安全率
 3. web: 保守的な固定既定値
+
+**実装（2026-07-31）**
+
+- 決定順は `volumeMemoryGuard.resolveVolumeBudgetMb()`。`cornerstoneSetup` は既定値を即時適用して
+  から、解決した値で `applyVolumeCacheLimit()` を上書きする（IPC/設定の往復で初期表示を待たせない）。
+- 🔑 **「設定値が明示されている」はキーの有無で判定する。** `SettingsService.getAll()` は保存済みの
+  キーしか返さず、`SettingsDialog` は**変更したフィールドだけを個別に PUT する**（`:59`）ので、
+  利用者が触っていない限りキーは存在しない。この性質に依存しているので、将来
+  「全項目を一括保存する」ように変えると自動判定が死ぬ点に注意。
+- 安全率は `VOLUME_BUDGET_SAFETY_RATIO = 0.4`（実搭載量の 40%）。レンダラは GPU プロセス・
+  backend(JVM)・OS と同居するため半分は取らない。結果は設定範囲 [128, 32768] MB に丸める。
+  16GB 機なら 6553MB、4GB 機なら 1638MB＝**既定の 2048 より小さくなる**（低メモリ機の保護が狙い）。
+- `main.js` は `os.totalmem()` を優先し、0 のときだけ `process.getSystemMemoryInfo()`（KB 単位）に
+  フォールバックする。
+- ⚠️ 設定ダイアログは未設定でもレジストリの `default: 2048` を表示するため、**自動決定された実値とは
+  一致しない**。help 文で「未設定のうちは搭載メモリから自動決定」と明記して埋めた。
+  実値を UI に出すなら別途表示手段が要る（未実装）。
+- ⚠️ **`desktop/` は自動テストの対象外。** IPC が実際に値を返すかは実機（`npm run dev-desktop`）で
+  確認すること。未確認。
 
 ### V4 — 3D テクスチャ寸法のハードガード ✅ 完了（2026-07-31）
 
@@ -380,10 +399,11 @@ frontend 型は `frontend/src/api.ts` の `SeriesLayoutDto` に `pixelFormat?: S
 - ✅ `viewer/volumeMemory.test.ts` **（新規）** … 上記の単体テスト
 - ✅ `viewer/mpr.ts` … `buildMprVolume` に `opts?: { maxBytes?: number }`（V2 二重防御）
 - ✅ `viewer/volumeMemoryGuard.ts` **（新規）** … 設定読み出し ＋ `window.confirm`（V2）
+  ＋ `resolveVolumeBudgetMb()`（V3 のバジェット決定順）
 - ✅ `mpr/MprScreen.tsx` … `fetchSeriesLayout` 追加 ＋ ガード（V2）／エラー識別（V1）
 - ✅ `viewer3d/Viewer3DScreen.tsx` … ガード（V2）／エラー識別（V1）／寸法ガード（V4）
 - ✅ `slicer/SlicerScreen.tsx`（起動・C/T 切替）/ `curvedmpr/CurvedMprScreen.tsx` … ガード（V2）／エラー識別（V1）
-- `desktopBridge.ts` … `getMemoryInfo?`（V3）
+- ✅ `desktopBridge.ts` … `MemoryInfo` ＋ `getMemoryInfo?`（V3）
 - ✅ `settings/registry.ts` … 新セクション（§6。V1=`volumeMaxMb` / V2=`volumeWarnBeforeBuild`）
 - ✅ `api.ts` … `SeriesPixelFormat` ＋ `SeriesLayoutDto.pixelFormat`（V2）
 - ✅ `i18n/ja.ts` / `i18n/en.ts` … §7（V1 / V2 / V4 分）
@@ -395,6 +415,18 @@ frontend 型は `frontend/src/api.ts` の `SeriesLayoutDto` に `pixelFormat?: S
 - ✅ `dicom/SegFrameExpander.java` … SEG は展開後の 8bit で返す
 - ✅ `src/test/.../SeriesLayoutPixelFormatTest.java` **（新規）** … 抽出の単体テスト
 
-**desktop**
-- `main.js` … `graphy:get-memory-info`（V3）
-- `preload.js` … `getMemoryInfo` 公開（V3）
+**desktop**（⚠️ 自動テスト対象外・実機確認が必要）
+- ✅ `main.js` … `graphy:get-memory-info`（V3）
+- ✅ `preload.js` … `getMemoryInfo` 公開（V3）
+
+---
+
+## 10. 残作業
+
+- [ ] **実機確認（standalone）**: `npm run dev-desktop` で
+  (1) `graphy:get-memory-info` が実搭載量を返すか、(2) 未設定時の上限が搭載メモリから決まるか、
+  (3) 大きなシリーズで警告が出て「キャンセル」が効くか。
+- [ ] MPR / Slicer / Curved MPR への 3D テクスチャ寸法ガード（V4 の横展開。§V4 の注記）。
+- [ ] 設定ダイアログに「現在適用中の上限」の実値表示（自動決定した値が UI に出ない）。
+- [ ] `viewer/mpr.ts` の `loadAndCacheImage(...).catch(() => null)` は画像ロードの例外を握り潰す。
+  予測が効かないシリーズでは、超過の発生点と例外の観測点がずれたままになっている。

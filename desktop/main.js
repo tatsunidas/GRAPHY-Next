@@ -517,6 +517,25 @@ ipcMain.handle("graphy:open-memory-monitor", () => {
   }
 });
 
+// OS の物理メモリ量を返す（ボリューム構築のバジェット決定用。fw/volume-memory-guard.md V3）。
+// ブラウザからは実搭載量を取る API が無いため、standalone ではここから受け取る。
+// process.getSystemMemoryInfo() は KB 単位・32bit 環境で頭打ちになることがあるので os を優先し、
+// os が 0 を返した場合だけフォールバックする。
+ipcMain.handle("graphy:get-memory-info", () => {
+  let totalBytes = os.totalmem();
+  let freeBytes = os.freemem();
+  if (!totalBytes) {
+    try {
+      const info = process.getSystemMemoryInfo();
+      totalBytes = (info.total || 0) * 1024;
+      freeBytes = (info.free || 0) * 1024;
+    } catch {
+      /* 取れなければ 0 のまま返す（renderer 側でフォールバックする） */
+    }
+  }
+  return { totalBytes, freeBytes };
+});
+
 // 外部 URL / mailto を OS の既定アプリ（ブラウザ・メーラ）で開く（Help メニューのリンク等）。
 // URL スキームは http(s) / mailto のみ許可（任意コマンド実行を避ける）。
 ipcMain.on("graphy:open-external", (_e, url) => {

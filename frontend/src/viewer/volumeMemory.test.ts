@@ -14,9 +14,11 @@ import {
   normalizeVolumeMaxMb,
   projectVolumeBytes,
   setAppliedVolumeMaxMb,
+  volumeBudgetFromTotalMemory,
   volumeBytesPerVoxel,
   volumeCopyCount,
   volumeMaxBytes,
+  VOLUME_BUDGET_SAFETY_RATIO,
   VolumeMemoryExceededError,
   type PixelFormatLike,
 } from "./volumeMemory";
@@ -68,6 +70,35 @@ describe("volumeMaxBytes", () => {
       expect(typeof b).toBe("number");
       expect(b).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("volumeBudgetFromTotalMemory", () => {
+  const GB = 1024 * 1024 * 1024;
+
+  it("実搭載量 × 安全率（40%）を MB で返す", () => {
+    expect(volumeBudgetFromTotalMemory(16 * GB)).toBe(Math.floor(16 * 1024 * 0.4)); // 6553
+    expect(volumeBudgetFromTotalMemory(8 * GB)).toBe(Math.floor(8 * 1024 * 0.4)); // 3276
+  });
+
+  it("低メモリ機では既定値(2048MB)より小さくなる（そこが狙い）", () => {
+    expect(volumeBudgetFromTotalMemory(4 * GB)).toBeLessThan(DEFAULT_VOLUME_MAX_MB);
+  });
+
+  it("設定の範囲に丸める", () => {
+    expect(volumeBudgetFromTotalMemory(1024)).toBe(MIN_VOLUME_MAX_MB);
+    expect(volumeBudgetFromTotalMemory(1024 * GB)).toBe(MAX_VOLUME_MAX_MB);
+  });
+
+  it("取得できない（0・非有限）なら既定値", () => {
+    expect(volumeBudgetFromTotalMemory(0)).toBe(DEFAULT_VOLUME_MAX_MB);
+    expect(volumeBudgetFromTotalMemory(-1)).toBe(DEFAULT_VOLUME_MAX_MB);
+    expect(volumeBudgetFromTotalMemory(NaN)).toBe(DEFAULT_VOLUME_MAX_MB);
+  });
+
+  it("安全率は 0.5 未満（GPU プロセス・backend と同居するため）", () => {
+    expect(VOLUME_BUDGET_SAFETY_RATIO).toBeLessThan(0.5);
+    expect(VOLUME_BUDGET_SAFETY_RATIO).toBeGreaterThan(0);
   });
 });
 

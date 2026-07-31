@@ -32,6 +32,8 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   startDrag: (dataUrl, filename) => ipcRenderer.send("graphy:start-drag", { dataUrl, filename }),
   // OS 標準のメモリ/システムモニタを起動する。
   openMemoryMonitor: () => ipcRenderer.invoke("graphy:open-memory-monitor"),
+  // OS の物理メモリ量を取得（ボリューム構築のバジェット決定用）。
+  getMemoryInfo: () => ipcRenderer.invoke("graphy:get-memory-info"),
   // 外部 URL / mailto を OS の既定アプリで開く。
   openExternal: (url) => ipcRenderer.send("graphy:open-external", url),
   // GitHub Releases の最新版情報を取得（更新確認）。失敗時 null。

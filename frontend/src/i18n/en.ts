@@ -996,7 +996,7 @@ export const en: Record<string, string> = {
   "settings.field.fusionLut.help": "LUT name to apply to the overlay (leave blank for grayscale). Type the exact name shown in the LUT dialog.",
   "settings.sec.volumeMemory": "Volume memory (3D / MPR)",
   "settings.field.volumeMaxMb": "Image cache limit (MB)",
-  "settings.field.volumeMaxMb.help": "Upper bound on the image cache used by 3D / MPR / Slicer / Curved MPR when building a volume. A larger value lets you open series with more slices, but exceeding available memory can make the app slow or unstable. Takes effect after restarting the app.",
+  "settings.field.volumeMaxMb.help": "Upper bound on the image cache used by 3D / MPR / Slicer / Curved MPR when building a volume. A larger value lets you open series with more slices, but exceeding available memory can make the app slow or unstable. While left unset, the desktop app derives it from installed RAM; once you change it, your value wins. Takes effect after restarting the app.",
   "settings.field.volumeWarnBeforeBuild": "Warn about memory before building",
   "settings.field.volumeWarnBeforeBuild.help": "Estimate the memory needed before opening 3D / MPR / Slicer / Curved MPR, and ask for confirmation when it exceeds the limit.",
   "viewer2d.fusion.lut": "LUT",

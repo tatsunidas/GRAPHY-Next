@@ -14,8 +14,51 @@
  * （`desktopNativeDialogFix.ts` のラッパ → `desktop().refocus()`）が自動で効く。
  */
 import type { SeriesLayoutDto } from "../api";
+import { desktop } from "../desktopBridge";
 import { fetchSettings } from "../settings/settingsApi";
-import { getAppliedVolumeMaxMb, projectVolumeBytes, type VolumeProjection } from "./volumeMemory";
+import {
+  DEFAULT_VOLUME_MAX_MB,
+  getAppliedVolumeMaxMb,
+  normalizeVolumeMaxMb,
+  projectVolumeBytes,
+  volumeBudgetFromTotalMemory,
+  type VolumeProjection,
+} from "./volumeMemory";
+
+/**
+ * ボリューム構築のバジェット（MB）を決める。**先に取れたものを採用する**
+ * （`fw/volume-memory-guard.md` V3 §3）:
+ *
+ * <ol>
+ *   <li>環境設定 `viewer.volumeMaxMb` が明示されていればそれ（利用者の指定が最優先）</li>
+ *   <li>standalone: Electron main から受け取った実搭載量 × 安全率</li>
+ *   <li>web: 保守的な固定既定値（ブラウザから実搭載量を取る API が無い）</li>
+ * </ol>
+ *
+ * <p>未設定キーは backend の KV に存在しない（`SettingsService.getAll` は保存済みのみ返す）ので、
+ * 「明示されているか」はキーの有無で判定できる。
+ */
+export async function resolveVolumeBudgetMb(): Promise<number> {
+  try {
+    const m = await fetchSettings();
+    const raw = m["viewer.volumeMaxMb"];
+    if (raw !== undefined && String(raw).trim() !== "" && Number.isFinite(Number(raw))) {
+      return normalizeVolumeMaxMb(raw);
+    }
+  } catch {
+    /* 設定が取れないときは下のフォールバックへ */
+  }
+  const getMemoryInfo = desktop()?.getMemoryInfo;
+  if (getMemoryInfo) {
+    try {
+      const info = await getMemoryInfo();
+      if (info && info.totalBytes > 0) return volumeBudgetFromTotalMemory(info.totalBytes);
+    } catch {
+      /* 旧バージョンの preload では未公開。既定値へ */
+    }
+  }
+  return DEFAULT_VOLUME_MAX_MB;
+}
 
 /** 環境設定の警告トグル（既定 ON）。取得できなければ ON 扱い（安全側）。 */
 async function isWarnEnabled(): Promise<boolean> {

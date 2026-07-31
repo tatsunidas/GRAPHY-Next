@@ -44,6 +44,27 @@ export function volumeMaxBytes(mb: number): number {
   return normalizeVolumeMaxMb(mb) * MB;
 }
 
+/**
+ * 実搭載量から上限を決めるときの安全率（`fw/volume-memory-guard.md` V3）。
+ *
+ * <p>レンダラは GPU プロセス・backend(JVM)・OS と同居するので、実搭載量の半分は取らない。
+ * ここで確保するのは CPU RAM 側だけで、**VRAM は別に消費される**点にも注意（§3.1）。
+ */
+export const VOLUME_BUDGET_SAFETY_RATIO = 0.4;
+
+/**
+ * OS の実搭載量からボリューム構築のバジェット（MB）を決める。
+ * 設定範囲 [{@link MIN_VOLUME_MAX_MB}, {@link MAX_VOLUME_MAX_MB}] に丸める。
+ * 実搭載量が取れない（0 以下・非有限）場合は既定値。
+ */
+export function volumeBudgetFromTotalMemory(totalBytes: number): number {
+  if (!Number.isFinite(totalBytes) || totalBytes <= 0) return DEFAULT_VOLUME_MAX_MB;
+  const mb = Math.floor((totalBytes * VOLUME_BUDGET_SAFETY_RATIO) / MB);
+  if (mb < MIN_VOLUME_MAX_MB) return MIN_VOLUME_MAX_MB;
+  if (mb > MAX_VOLUME_MAX_MB) return MAX_VOLUME_MAX_MB;
+  return mb;
+}
+
 let appliedMaxMb = DEFAULT_VOLUME_MAX_MB;
 
 /** 実際に cornerstone へ適用した上限（MB）を記録する。呼ぶのは `cornerstoneSetup` のみ。 */

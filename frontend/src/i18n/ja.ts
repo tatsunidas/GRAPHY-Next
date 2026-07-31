@@ -998,7 +998,7 @@ export const ja: Record<string, string> = {
   "settings.field.fusionLut.help": "オーバーレイに適用する LUT 名を入力します（空白でグレースケール）。LUT ダイアログに表示される名前をそのまま入力してください。",
   "settings.sec.volumeMemory": "ボリュームメモリ（3D / MPR）",
   "settings.field.volumeMaxMb": "画像キャッシュ上限（MB）",
-  "settings.field.volumeMaxMb.help": "3D / MPR / Slicer / Curved MPR がボリューム構築に使える画像キャッシュの上限です。大きくすると多スライスのシリーズを開けますが、超えると動作が重くなったり異常終了することがあります（変更はアプリの再起動後に反映）。",
+  "settings.field.volumeMaxMb.help": "3D / MPR / Slicer / Curved MPR がボリューム構築に使える画像キャッシュの上限です。大きくすると多スライスのシリーズを開けますが、超えると動作が重くなったり異常終了することがあります。未設定のうちはデスクトップ版が搭載メモリから自動で決めます（一度変更するとこの値が優先されます）。変更はアプリの再起動後に反映されます。",
   "settings.field.volumeWarnBeforeBuild": "構築前に必要メモリ量を警告する",
   "settings.field.volumeWarnBeforeBuild.help": "3D / MPR / Slicer / Curved MPR を開く前に必要メモリ量を見積もり、上限を超える場合に確認を表示します。",
   "viewer2d.fusion.lut": "LUT",
