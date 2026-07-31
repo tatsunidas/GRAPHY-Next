@@ -292,10 +292,18 @@ function SeriesDrawer({
 
 const wrap: React.CSSProperties = { display: "flex", flexDirection: "column", height: "100%", minHeight: 0 };
 
-/** 画像領域。`minHeight: 0` が無いと flex 子が縮まず、ツールバーが画面外へ出る。 */
+/**
+ * 画像領域。`minHeight: 0` が無いと flex 子が縮まず、ツールバーが画面外へ出る。
+ * `display:flex`/`flexDirection:column` は必須: `SeriesViewer fillHeight`→`Viewer2D fill` は
+ * 「高さの定まった flex カラムの子」であることに依存する（`Viewer2D.tsx:1771` が `flex:1;height:auto`）。
+ * これが無いと子の `flex:1` が効かず高さ0になり、canvas が描画されない（desktop はタイル親が
+ * flex カラムなので出る＝`Viewer2DScreen.tsx` の SeriesViewer 直親）。
+ */
 const stage: React.CSSProperties = {
   flex: 1,
   minHeight: 0,
+  display: "flex",
+  flexDirection: "column",
   overflow: "auto",
   WebkitOverflowScrolling: "touch",
   background: "#000",
