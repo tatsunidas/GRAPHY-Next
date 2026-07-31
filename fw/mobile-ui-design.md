@@ -90,6 +90,23 @@ matchMedia("(pointer: coarse)")      → タッチ主体
   必要量から判断する。端末で線引きすると、高性能タブレットで無用に制限され、低性能端末では
   結局落ちる。
 
+**実装（2026-07-31 / M1）** — `frontend/src/mobile/useDeviceClass.ts`
+
+| 端末クラス | 幅 | 自動判定 | 理由 |
+|---|---|---|---|
+| phone | ≤768px | **常にモバイル** | この幅にデスクトップ UI は入らない |
+| tablet | ≤1024px | **`pointer: coarse` のときだけ**モバイル | 1024px 以下に縮めただけのデスクトップブラウザを巻き込まない |
+| desktop | >1024px | 常にデスクトップ | **タッチ対応ノート PC を巻き込まない**（`coarsePointer` だけで判定すると誤爆する） |
+
+- 純関数（`classifyDevice` / `autoUiMode` / `resolveUiMode` / `normalizeOverride`）と React フックを
+  同じファイルに分けて置き、純関数側だけを vitest で固定した（`useDeviceClass.test.ts`）。
+- 手動切替の保存キーは `graphy.ui.modeOverride`（`auto` は保存せず削除）。
+  `storage` イベントも購読しているので、別タブでの切替が反映される。
+- `matchMedia` の購読は `addEventListener` と `addListener` の両対応
+  （Safari 13 以前は後者のみ。iOS を対象にするため）。
+- ⚠️ **フックは `status.mode` を見ない。** モバイルシェルを出してよいのは web モードだけだが、
+  それは呼び出し側（`App.tsx`）の判断。フックの責務はあくまで端末クラス。
+
 ### 3.2 マルチウィンドウ → 同一タブ hash 遷移
 
 現状すべてのビューアは別ウィンドウで開く。web モードでは
@@ -114,6 +131,25 @@ matchMedia("(pointer: coarse)")      → タッチ主体
 検索 → スタディ一覧 → シリーズ一覧 → ビューア（2D / 3D / MPR をタブ切替）
                                         └→ レポート（全画面）
 ```
+
+**実装（2026-07-31 / M1）** — `frontend/src/mobile/mobileRoute.ts` ＋ `MobileScreen.tsx`
+
+- ルートは `#mobile` / `#mobile/series` / `#mobile/viewer` / `#mobile/report`。
+  `App.tsx` の既存 hash ルータ（`#2dviewer` 等）と同じ名前空間に、`mobile` を親にして置いた。
+  `isMobileRoute` は `#mobilex` のような紛らわしい名前を弾く（前方一致だけにしない）。
+- 未知のサブパスは root に倒す（壊れた URL で白画面にしない）。
+- 前進は `location.hash` 代入（履歴に積まれる）、戻るは `history.back()` を優先。
+  直接 URL で深い画面に入った場合だけ親へ `location.replace`。
+- 🚧 **`MOBILE_SHELL_READY = false` の間は自動振り分けを行わない。**
+  M1 のシェルは骨格だけなので、スマホから来た利用者を自動でここへ送ると
+  「準備中の画面しか出ない」という**後退**になる。**M3（2D ビューア）完了時に true にする。**
+  手動切替（System メニューの「モバイル UI に切り替え」。web モードのみ表示）は `false` でも動く。
+- 自動振り分けの条件は「web モード ＋ メインウィンドウ ＋ IID 起動でない」。
+  IID 起動は `#2dviewer` へ遷移するので、取り合いになるのを避ける。
+  遷移は `location.replace` で行い履歴を汚さない（「戻る」でデスクトップ UI に戻れてしまうのを防ぐ）。
+- シェルの高さは `100vh` でも `100dvh` でもなく **`position: fixed; inset: 0`**。
+  `100vh` は iOS Safari のアドレスバー伸縮で下端が隠れ、`100dvh` は Safari 15.4 未満で効かない。
+  ヘッダ/フッタは `env(safe-area-inset-*)` を見る。タップターゲットは 44px 以上。
 
 ### 3.3 タッチバインドの追加
 
@@ -283,8 +319,8 @@ VolumeViewport では canvas overlay 方式が使えず、2 ボリューム同�
 
 | Phase | 内容 | 依存 | 状態 |
 |---|---|---|---|
-| **M0** | `volume-memory-guard.md` の V1・V2 | — | 未着手（別ドキュメント） |
-| **M1** | デバイス判定 `useDeviceClass()` ＋ 手動切替 ＋ `#mobile` ルート追加 ＋ シェル骨格 | — | 未着手 |
+| **M0** | `volume-memory-guard.md` の V1・V2 | — | ✅ 完了（2026-07-31。V1〜V4 すべて実装済み） |
+| **M1** | デバイス判定 `useDeviceClass()` ＋ 手動切替 ＋ `#mobile` ルート追加 ＋ シェル骨格 | — | ✅ 完了（2026-07-31） |
 | **M2** | データ取得フック抽出（`useStudies` / `useSeries` / `useInstances`）＋ 検索→スタディ→シリーズの単画面ナビゲーション | M1 | 未着手 |
 | **M3** | 2D ビューア（1×1 固定・ドロワー・モバイルツールバー・複合リセット） | M2 | 未着手 |
 | **M4** | タッチバインド（`numTouchPoints` ＋ `touchAction: none`）＋ ROI 計測のタップターゲット調整 | M3 | 未着手 |
@@ -325,8 +361,11 @@ M7 は frontend に依存しないので M1〜M6 と並行できる。
 ## 9. 実装対象ファイル一覧（新規 / 変更）
 
 **新規（モバイルシェル）**
-- `frontend/src/mobile/useDeviceClass.ts` … デバイス判定 ＋ 手動切替の永続化
-- `frontend/src/mobile/MobileScreen.tsx` … `#mobile` ルートのシェル（ナビゲーションスタック）
+- ✅ `frontend/src/mobile/useDeviceClass.ts` … デバイス判定 ＋ 手動切替の永続化（M1）
+- ✅ `frontend/src/mobile/mobileRoute.ts` … hash ルート ＋ ナビゲーションスタックの親子関係
+  ＋ `MOBILE_SHELL_READY` ゲート（M1。設計時には無かったファイル）
+- ✅ `frontend/src/mobile/MobileScreen.tsx` … `#mobile` ルートのシェル（ナビゲーションスタック）（M1）
+- ✅ `frontend/src/mobile/useDeviceClass.test.ts` / `mobileRoute.test.ts` … 上記純関数の単体テスト（M1）
 - `frontend/src/mobile/MobileStudyBrowser.tsx` … 検索 → スタディ → シリーズ
 - `frontend/src/mobile/MobileViewer.tsx` … 2D / 3D / MPR のタブ切替
 - `frontend/src/mobile/MobileToolbar.tsx` … ツール切替・W/L プリセット・複合リセット
@@ -334,8 +373,9 @@ M7 は frontend に依存しないので M1〜M6 と並行できる。
 - `frontend/src/hooks/useStudies.ts` / `useSeries.ts` / `useInstances.ts` … 取得ロジック抽出
 
 **変更（frontend）**
-- `App.tsx` … `#mobile` ルート追加 ＋ 初回アクセス時の自動振り分け
-- `mainscreen/MainScreen.tsx:87-157` … `handleOpenViewer` にモバイル分岐（hash 遷移）
+- ✅ `App.tsx` … `#mobile` ルート追加 ＋ 初回アクセス時の自動振り分け（M1。ゲートは `MOBILE_SHELL_READY`）
+- ✅ `mainscreen/MainScreen.tsx` / `mainscreen/MenuBar.tsx` … System メニューに手動切替を追加（M1。web のみ）
+- `mainscreen/MainScreen.tsx:87-157` … `handleOpenViewer` にモバイル分岐（hash 遷移）（M2/M3）
 - `StudyList.tsx` … 抽出したフックへ置き換え（重複解消）
 - `viewer/Viewer2D.tsx` … `numTouchPoints` バインド ＋ `pixelLayer` に `touchAction: "none"`
 - `viewer/mpr.ts:310-313` … `numTouchPoints` バインド

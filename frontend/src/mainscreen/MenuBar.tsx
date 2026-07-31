@@ -33,6 +33,7 @@ export function MenuBar({
   onOpenSettings,
   onOpenDb,
   onOpenHelp,
+  onOpenMobileUi,
 }: {
   isStandalone: boolean;
   canImport: boolean;
@@ -46,6 +47,8 @@ export function MenuBar({
   onOpenSettings: () => void;
   onOpenDb: () => void;
   onOpenHelp: () => void;
+  /** モバイル UI（`#mobile`）への手動切替。渡されなければ項目を出さない。 */
+  onOpenMobileUi?: () => void;
 }) {
   const { t } = useI18n();
   const pluginItems = usePluginMenu("mainscreen.menu", (m) => ({
@@ -119,6 +122,10 @@ export function MenuBar({
               { label: t("system.log"), onClick: openLogViewer },
               { label: t("system.memoryMonitor"), onClick: () => void openMemoryMonitor(t) },
             ]),
+        // モバイル UI への切替は web モードのみ（standalone は対象外。fw/mobile-ui-design.md §7）。
+        ...(!isStandalone && onOpenMobileUi
+          ? [{ label: t("mobile.switchToMobile"), onClick: onOpenMobileUi, testId: "menu-item-mobile-ui" }]
+          : []),
       ],
     },
     {
