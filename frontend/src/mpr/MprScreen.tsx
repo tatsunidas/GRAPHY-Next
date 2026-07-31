@@ -428,7 +428,9 @@ const cell: React.CSSProperties = {
   minWidth: 0,
   borderRight: "1px solid #23292f",
 };
-const vpEl: React.CSSProperties = { position: "absolute", inset: 0 };
+// touchAction: none — 無いとタッチ端末で画像上のドラッグがページスクロールに奪われる
+// （`fw/mobile-ui-design.md` §3.3）。マウス操作には影響しない。
+const vpEl: React.CSSProperties = { position: "absolute", inset: 0, touchAction: "none" };
 const cellLabel: React.CSSProperties = {
   position: "absolute",
   top: 6,

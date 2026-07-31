@@ -786,7 +786,9 @@ const tiltChip: React.CSSProperties = {
 };
 const bodyWrap: React.CSSProperties = { position: "relative", flex: 1, display: "flex", minHeight: 0 };
 const body: React.CSSProperties = { position: "relative", flex: 1, minWidth: 0 };
-const vpEl: React.CSSProperties = { position: "absolute", inset: 0 };
+// touchAction: none — 無いとタッチ端末で回転/ピンチがページスクロールに奪われる
+// （`fw/mobile-ui-design.md` §3.3）。実際の回転/ピンチは vtk.js の interactor が処理する。
+const vpEl: React.CSSProperties = { position: "absolute", inset: 0, touchAction: "none" };
 const panel: React.CSSProperties = {
   width: 240,
   flexShrink: 0,

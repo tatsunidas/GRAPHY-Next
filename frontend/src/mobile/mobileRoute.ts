@@ -34,9 +34,11 @@ const VIEW_SEGMENT: Record<MobileView, string> = {
  * ここへ送ると「まともに操作できない画面しか出ない」という後退になるため。
  * 手動切替（System メニュー）は `false` でも動く。
  *
- * <p>**true にするのは M4（タッチバインド）完了後。** M3 で 2D ビューアは載ったが、
- * `viewer/Viewer2D.tsx` の `pixelLayer` に `touch-action: none` が無いため、画像上のドラッグが
- * ページスクロールと競合して指では実質操作できない。
+ * <p>**M1〜M4 は実装済み（2026-07-31）。残るゲートは実機確認（M9）だけ。**
+ * 自動振り分けを有効にすると、公開デモを含む web モードの全スマホ利用者が対象になる
+ * ＝**最初の実機テストが本番の利用者になる**。iOS Safari / Android Chrome / iPad で
+ * 一度動作を確認してから、この 1 行を `true` にすること。
+ * それまでも System メニューの「モバイル UI に切り替え」で手動で入れる（＝確認はできる）。
  */
 export const MOBILE_SHELL_READY: boolean = false;
 

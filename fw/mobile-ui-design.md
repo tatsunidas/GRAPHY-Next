@@ -141,11 +141,12 @@ matchMedia("(pointer: coarse)")      → タッチ主体
 - 前進は `location.hash` 代入（履歴に積まれる）、戻るは `history.back()` を優先。
   直接 URL で深い画面に入った場合だけ親へ `location.replace`。
 - 🚧 **`MOBILE_SHELL_READY = false` の間は自動振り分けを行わない。**
-  骨格だけの段階でスマホから来た利用者を自動でここへ送ると「まともに操作できない画面しか出ない」
-  という**後退**になる。手動切替（System メニューの「モバイル UI に切り替え」。web モードのみ表示）は
-  `false` でも動く。
-  **true にするのは M4（タッチバインド）完了後**（当初は「M3 完了時」としていたが、
-  `touch-action: none` が無いと指で操作できないため先送りした）。
+  手動切替（System メニューの「モバイル UI に切り替え」。web モードのみ表示）は `false` でも動く。
+  **残るゲートは実機確認（M9）だけ**（M1〜M4 は 2026-07-31 に実装済み）。
+  自動振り分けを有効にすると**公開デモを含む web モードの全スマホ利用者が対象**になり、
+  最初の実機テストが本番の利用者になってしまう。iOS Safari / Android Chrome / iPad で一度
+  確認してからこの 1 行を `true` にする。
+  （当初は「M3 完了時に true」→「M4 完了後」と書いていたが、いずれも実機確認前なので上記に改めた。）
 - 自動振り分けの条件は「web モード ＋ メインウィンドウ ＋ IID 起動でない」。
   IID 起動は `#2dviewer` へ遷移するので、取り合いになるのを避ける。
   遷移は `location.replace` で行い履歴を汚さない（「戻る」でデスクトップ UI に戻れてしまうのを防ぐ）。
@@ -193,6 +194,27 @@ Cornerstone3D 3.33.5 は 1 本指タッチをアクティブツール（`MouseBi
 3. **ROI 計測のハンドル操作は実機検証が必須**。タップターゲットが小さいため、ハンドル半径の
    拡大が必要になる可能性が高い。
 4. 3D は vtk.js の interactor がタッチを処理するので回転/ピンチは動く見込み（要検証）。
+
+**実装（2026-07-31 / M4）**
+
+- **1 本指のバインドは書かない。** Cornerstone の `getActiveToolForTouchEvent` が
+  「1 タッチ かつ Primary バインド」を自動で拾うので、明示すると二重定義になるだけ。
+- **2 本指は `PanTool` ではなく `ZoomTool` に割り当てる。** ZoomTool は既定で
+  `pinchToZoom: true` かつ `pan: true` で、`_pinchCallback` が**ピンチ拡大縮小と平行移動を同時に**
+  処理する。PanTool を割り当てると平行移動しかできない。バインドは `Viewer2D` の 2 箇所
+  （初期配線と `setActiveTool`）に `TOUCH_ZOOM_BINDING` として入れた。
+- 🔑 **3 本指のスライス送りに `StackScrollTool` は使わない。** 表示スライスは
+  `SeriesViewer` の React state（z）が唯一の出所で、ツールが viewport の `imageIdIndex` を
+  直接動かすと次の再描画で巻き戻る。`SeriesViewer` に touch リスナを足し、既存のホイール送りと
+  同じ `step()` を呼ぶ。ジェスチャの解釈は `viewer/touchScroll.ts`（純関数・単体テスト付き）。
+  - 端数は `Math.trunc`（`Math.floor` だと上方向の微動で −1 が出て、指を止めても動く）
+  - 起点は送った分だけ進めて**端数を残す**（毎回現在位置へ丸めると連続送りが引っかかる）
+- ✅ **ROI ハンドルのタップターゲットは対処不要だった。** cornerstone の
+  `store/filterToolsWithMoveableHandles.js` が `interactionType === 'touch' ? 36 : 6` と、
+  **タッチ時は既に 36px** を使っている。設計時の「拡大が必要になる可能性が高い」は杞憂。
+  ただし**見た目のハンドル半径は変わらない**ので、掴めるが小さく見える。M9 で実機確認する。
+- `touchAction: "none"` は `Viewer2D.pixelLayer` / `MprScreen.vpEl` / `Viewer3DScreen.vpEl` の 3 箇所。
+  Slicer / Curved MPR は Pointer Events 実装で既に指定済み。
 
 ### 3.4 追い風 — 画像操作は既にボタン化されている
 
@@ -375,7 +397,7 @@ VolumeViewport では canvas overlay 方式が使えず、2 ボリューム同�
 | **M1** | デバイス判定 `useDeviceClass()` ＋ 手動切替 ＋ `#mobile` ルート追加 ＋ シェル骨格 | — | ✅ 完了（2026-07-31） |
 | **M2** | データ取得フック抽出（`useStudies` / `useSeries` / `useInstances`）＋ 検索→スタディ→シリーズの単画面ナビゲーション | M1 | ✅ 完了（2026-07-31） |
 | **M3** | 2D ビューア（1×1 固定・ドロワー・モバイルツールバー・複合リセット） | M2 | ✅ 完了（2026-07-31）／実機未確認 |
-| **M4** | タッチバインド（`numTouchPoints` ＋ `touchAction: none`）＋ ROI 計測のタップターゲット調整 | M3 | 未着手 |
+| **M4** | タッチバインド（`numTouchPoints` ＋ `touchAction: none`）＋ ROI 計測のタップターゲット調整 | M3 | ✅ 完了（2026-07-31）／実機未確認 |
 | **M5** | 3D / MPR（1 面＋面切替・ドロワー・Cinematic 非表示） | M0, M3 | 未着手 |
 | **M6** | Fusion（タッチ用の重ね合わせ導線） | M3 | 未着手 |
 | **M7** | レポート backend（キー画像 QIDO 解決 → STOW-RS 書き戻し） | — | 未着手 |
@@ -433,8 +455,13 @@ M7 は frontend に依存しないので M1〜M6 と並行できる。
 - ✅ `mainscreen/MainScreen.tsx` / `mainscreen/MenuBar.tsx` … System メニューに手動切替を追加（M1。web のみ）
 - `mainscreen/MainScreen.tsx:87-157` … `handleOpenViewer` にモバイル分岐（hash 遷移）（M2/M3）
 - ✅ `StudyList.tsx` … 抽出したフックへ置き換え（重複解消）（M2）
-- `viewer/Viewer2D.tsx` … `numTouchPoints` バインド ＋ `pixelLayer` に `touchAction: "none"`
-- `viewer/mpr.ts:310-313` … `numTouchPoints` バインド
+- ✅ `viewer/Viewer2D.tsx` … 2 本指 = ZoomTool（ピンチ＋Pan）バインド ＋ `pixelLayer` に
+  `touchAction: "none"`（M4）
+- ✅ `viewer/SeriesViewer.tsx` … 3 本指の縦ドラッグでスライス送り（M4）
+- ✅ `viewer/touchScroll.ts` / `touchScroll.test.ts` **（新規）** … 上記ジェスチャの純関数（M4）
+- ✅ `mpr/MprScreen.tsx` / `viewer3d/Viewer3DScreen.tsx` … viewport 要素に `touchAction: "none"`（M4）
+- `viewer/mpr.ts:310-313` … MPR のツールバインドは**変更していない**。MPR の 1 面表示は M5 の範囲で、
+  そこで Crosshairs/WindowLevel/Pan のタッチ割り当てを決める
 - `i18n/ja.ts` / `i18n/en.ts` … モバイル UI 文言（**両方必須**）
 
 **変更（backend / レポート M7）**
