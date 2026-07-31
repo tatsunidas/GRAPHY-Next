@@ -30,6 +30,7 @@ import vtkMouseCameraTrackballRotateManipulator from "@kitware/vtk.js/Interactio
 import vtkMouseCameraTrackballPanManipulator from "@kitware/vtk.js/Interaction/Manipulators/MouseCameraTrackballPanManipulator";
 import vtkMouseCameraTrackballZoomManipulator from "@kitware/vtk.js/Interaction/Manipulators/MouseCameraTrackballZoomManipulator";
 import vtkMouseRangeManipulator from "@kitware/vtk.js/Interaction/Manipulators/MouseRangeManipulator";
+import vtkGestureCameraManipulator from "@kitware/vtk.js/Interaction/Manipulators/GestureCameraManipulator";
 import vtkImageCropFilter from "@kitware/vtk.js/Filters/General/ImageCropFilter";
 import vtkWidgetManager from "@kitware/vtk.js/Widgets/Core/WidgetManager";
 import vtkImageCroppingWidget from "@kitware/vtk.js/Widgets/Widgets3D/ImageCroppingWidget";
@@ -638,6 +639,10 @@ export function createVtkVolumeView(
     installManipulators();
   };
   installManipulators();
+  // タッチ端末: ピンチ=Zoom / 2本指ドラッグ=Pan / 2本指ひねり=回転。マウスとは別系統の
+  // ジェスチャマニピュレータで、installManipulators の removeAllMouseManipulators では消えない
+  // ため 1 回だけ登録する（単指ドラッグは button1 に写像され回転として既に効く）。
+  iStyle.addGestureManipulator(vtkGestureCameraManipulator.newInstance());
   interactor.setInteractorStyle(iStyle);
 
   // ── 向きギズモ（AnnotatedCube・患者 LPS ラベル）──
