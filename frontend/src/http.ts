@@ -31,12 +31,26 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     const message = await extractErrorMessage(res);
     log.warn("api error", init?.method ?? "GET", url, res.status, message);
-    throw new Error(message);
+    throw new HttpError(message, res.status);
   }
   // 204 No Content、および Spring の void ハンドラ（200 だが本文が空）の両方に対応する。
   if (res.status === 204) return undefined as T;
   const text = await res.text();
   return (text ? JSON.parse(text) : undefined) as T;
+}
+
+/**
+ * API エラー。**状態番号を持つ**（メッセージの文字列照合で 409 を見分けると、
+ * backend の文言を変えた途端に競合検出が壊れる）。
+ */
+export class HttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "HttpError";
+  }
 }
 
 /** backend の {message} を優先し、無ければ HTTP ステータスを返す。 */

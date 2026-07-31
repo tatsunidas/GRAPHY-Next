@@ -209,9 +209,9 @@ web は運営配備 / サンドボックス。
 
 ---
 
-## 7. host API の拡張（H1〜H7 実装済み）
+## 7. host API の拡張（H1〜H8 実装済み）
 
-> 起票: 2026-07-29 ／ ステータス: **H1・H2（2026-07-29）／ H3〜H7（2026-07-30）すべて実装済み**
+> 起票: 2026-07-29 ／ ステータス: **H1・H2（2026-07-29）／ H3〜H7（2026-07-30）／ H8（2026-07-31）すべて実装済み**
 > 経緯: プラグイン デモ 3 本（[`plugin-explainer.md`](plugin-explainer.md) §6）を書いた過程で、
 > **2D ビューアのプラグインには「いま何を見ているか」を答える手段が一つも無い**ことが判明した。
 
@@ -257,9 +257,10 @@ H1・H2 は実質「これを本番向けの契約として切り出す」作業
 | **H3** ✅ | **画素の読み出し**（本命） | `getPixelData(tileId?, opts?) => Promise<ViewerPixelData \| null>` | **必ず [`pixelCalibration.ts`](../frontend/src/viewer/pixelCalibration.ts) 経由**（`getPixelData()` に直接 slope/intercept を書かない。preScale 既定 ON による二重適用で CT が約 −1024 ずれる既知事故）。シリーズ全スライスは転送量が大きいのでスライス単位を既定にし、範囲指定を任意で | ✅ |
 | **H4a** ✅ | **オーバーレイ表示** — 処理結果を表示中スライスに重ねる（保存しない） | `showOverlay(tileId?, overlay)` / `clearOverlay(tileId?)` | 値マップを受け取り**色付けは本体側**で行う。imageId に紐付け | ✅ |
 | **H4b** ✅ | **派生シリーズ保存** — 新シリーズとして保管庫（standalone）/ PACS（web）へ | `saveDerivedSeries(tileId?, req)` | 既存 `POST /api/series/derived` を開ける形。**保存ポリシーが本体** | ✅（web も許可） |
-| **H5** ✅ | **ROI（計測）の読み出し** — ユーザーが描いた計測をプラグインが使う | `getRois(tileId?)` / `getRoiMeta(roiUid)` / `setRoiMeta(roiUid, patch)` / `subscribeRois(cb)` | 幾何を本体に閉じる（長径・短径をプラグインに算出させない）。**ROI 永続化が無いので `roiUid` はセッション内限定**。global ROI は `referencedImageId` が表示スライスへ追従する罠あり | ✅ |
+| **H5** ✅ | **ROI（計測）の読み出し** — ユーザーが描いた計測をプラグインが使う | `getRois(tileId?)` / `getRoiMeta(roiUid)` / `setRoiMeta(roiUid, patch)` / `subscribeRois(cb)` | 幾何を本体に閉じる（長径・短径をプラグインに算出させない）。ROI は本体が永続化するので `roiUid` はアプリ再起動をまたいで有効。global ROI は `referencedImageId` が表示スライスへ追従する罠あり | ✅ |
 | **H6** ✅ | **スタディの検査日** — 時系列評価に要る | `ViewerTarget.studyDate` / `ViewerRoi.studyDate` | DICOM の StudyDate から解決（画面の prop を引き回さない）。**解釈できない値は null**（日付差で結論が変わる評価に怪しい値を渡さない） | ✅ |
 | **H7** ✅ | **患者キー** — 患者単位の記録を持つプラグインの鍵 | `ViewerTarget.patientKey` / `ViewerRoi.patientKey` | 本体が ROI を永続化する鍵と同じ値を出す。スタディ UID を鍵にすると同じ患者の別スタディで記録を見失う | ✅ |
+| **H8** ✅ | **プラグイン保存領域** — プラグインが計算した内容を患者単位で backend に保管 | `loadStore(patientKey?)` / `saveStore(json, opts?)` / `deleteStore(patientKey?)` | プラグイン id × 患者で領域を分け、**楽観ロックで上書き事故を防ぐ**。backend は中身を解釈しない。`localStorage` だと端末に閉じ、別 PC で過去の回が見えず判定が静かに変わる | ✅ |
 
 H1〜H3 は**フロント面だけで完結**するため、web モードでも同じように動く（backend の契約 `/api/plugins` は不変）。
 
@@ -727,6 +728,40 @@ host.getRois()[i].studyDate      // 同上
 **実装**: `viewer/viewerCommands.ts`（契約）/ `viewer/Viewer2D.tsx`（`getPixelData()` の戻り。
 `ImageInfo.sliceThickness` から。`ViewerTilePixelData` は継承なので自動）/
 `examples/plugin-template/graphy-plugin.d.ts` / `automator/plugins/hostapi-check`。
+
+#### H8 の実装（2026-07-31・GRAPHY-Next 0.1.12 以降）
+
+```ts
+await host.loadStore()                       // { json, version, updatedAt }
+await host.saveStore(json, { version })      // { ok:true, version } | { ok:false, conflict, message }
+await host.deleteStore()
+```
+
+**動機**: プラグインが自前で持てる保存先は `localStorage`（端末ローカル）しかない。時系列の評価
+（RECIST 等）は**数か月〜数年**にわたる記録なので、端末に閉じると別の PC で開いた読影医には
+過去の回が見えず、**判定（nadir・BOR）が静かに変わる**。ROI は本体が永続化するようになったが、
+プラグインが計算した内容（評価記録・ROI クロップ画像）はどこにも置き場が無かった。
+
+**決めたこと**:
+
+- **プラグイン id × 患者キーで領域を分ける**。id は host が入れる（プラグインに名乗らせない）。
+  分けないと、別プラグインの保存を上書きし得る。
+  ただしプラグインは本体と同じ権限で動くので REST を直接叩けば他の領域にも届く。
+  **多層防御の 1 枚であって隔離ではない**（サンドボックスは `plugin-manager-design.md` §8 の P3）。
+- **ROI 永続化とはテーブルを分ける**（`plugin_document` / `roi_document`）。混ぜると
+  「ROI を消す」操作でプラグインの記録まで消える巻き添えが起きる。
+- **楽観ロック**（ROI 永続化と同じ規約）。読まずに保存しようとしたら 409。
+  衝突は握り潰さず `conflict: true` で返し、プラグインが読み直して統合してから再保存する。
+- **backend は中身を解釈しない**。やるのは保管・版管理・壊れた JSON と巨大な入力の拒否だけ。
+- **automator の reset で消す**。消し残すと「症例を消したのに評価記録が残る」状態になり、
+  検証では前回の実行の記録が次に混ざる（ROI 保存で実際に起きた）。
+- 副産物: `http.ts` の失敗は `HttpError`（`status` つき）にした。**メッセージの文字列照合で
+  409 を見分けると、backend の文言を変えた途端に競合検出が壊れる**。
+
+**実装**: `plugin/store/`（backend。entity/service/controller ＋テスト 14 件）/
+`automator/AutomatorService`（reset で削除）/ `plugins/pluginStoreApi.ts`・`plugins/pluginStore.ts`
+（フロント）/ `plugins/pluginTypes.ts`（契約）/ `viewer2d/Viewer2DMenuBar.tsx`（host へ結線）/
+`examples/plugin-template/graphy-plugin.d.ts`。
 
 ### 7.3 副作用（着手時に必ずセットで行うこと）
 

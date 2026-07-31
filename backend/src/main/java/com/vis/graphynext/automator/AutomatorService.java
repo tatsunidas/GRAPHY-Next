@@ -7,6 +7,7 @@ package com.vis.graphynext.automator;
 import com.vis.graphynext.dicom.store.DicomInstance;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
 import com.vis.graphynext.report.ReportRepository;
+import com.vis.graphynext.plugin.store.PluginDocumentRepository;
 import com.vis.graphynext.roi.RoiDocumentRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,22 +41,29 @@ public class AutomatorService {
     private final DicomInstanceRepository dicomRepo;
     private final ReportRepository reportRepo;
     private final RoiDocumentRepository roiRepo;
+    private final PluginDocumentRepository pluginRepo;
 
     public AutomatorService(
             DicomInstanceRepository dicomRepo,
             ReportRepository reportRepo,
-            RoiDocumentRepository roiRepo) {
+            RoiDocumentRepository roiRepo,
+            PluginDocumentRepository pluginRepo) {
         this.dicomRepo = dicomRepo;
         this.reportRepo = reportRepo;
         this.roiRepo = roiRepo;
+        this.pluginRepo = pluginRepo;
     }
 
-    public record ResetResult(int deletedInstances, int deletedReports, int deletedRoiDocuments) {
+    public record ResetResult(
+            int deletedInstances, int deletedReports, int deletedRoiDocuments, int deletedPluginDocuments) {
     }
 
     /**
-     * 症例データ（DICOMインスタンス索引＋実ファイル、レポート、ROI 保存）を全削除する。
-     * 環境設定(Setting)は対象外。
+     * 症例データ（DICOMインスタンス索引＋実ファイル、レポート、ROI 保存、プラグイン保存領域）を
+     * 全削除する。環境設定(Setting)は対象外。
+     *
+     * <p><b>プラグイン保存領域も消す。</b> 消し残すと「症例を消したのに評価記録が残る」状態になり、
+     * 検証では前回の実行の記録が次の実行に混ざる（ROI 保存で実際に起きた）。
      */
     @Transactional
     public ResetResult reset() {
@@ -77,8 +85,11 @@ public class AutomatorService {
         long roiCount = roiRepo.count();
         roiRepo.deleteAll();
 
-        log.info("[automator] reset: instances={}, reports={}, roiDocuments={}",
-                instances.size(), reportCount, roiCount);
-        return new ResetResult(instances.size(), (int) reportCount, (int) roiCount);
+        long pluginCount = pluginRepo.count();
+        pluginRepo.deleteAll();
+
+        log.info("[automator] reset: instances={}, reports={}, roiDocuments={}, pluginDocuments={}",
+                instances.size(), reportCount, roiCount, pluginCount);
+        return new ResetResult(instances.size(), (int) reportCount, (int) roiCount, (int) pluginCount);
     }
 }

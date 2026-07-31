@@ -4,6 +4,9 @@
  */
 package com.vis.graphynext.automator;
 
+import com.vis.graphynext.plugin.store.PluginDocumentRepository;
+import com.vis.graphynext.plugin.store.PluginDocumentService;
+import com.vis.graphynext.plugin.store.SavePluginDocumentRequest;
 import com.vis.graphynext.roi.RoiDocumentRepository;
 import com.vis.graphynext.roi.RoiDocumentService;
 import com.vis.graphynext.roi.SaveRoiDocumentRequest;
@@ -38,6 +41,12 @@ class AutomatorServiceResetTest {
 
     @Autowired
     RoiDocumentRepository roiRepo;
+
+    @Autowired
+    PluginDocumentService pluginService;
+
+    @Autowired
+    PluginDocumentRepository pluginRepo;
 
     private static final String JSON = "{\"schema\":1,\"rois\":[{\"roiUid\":\"u1\",\"tool\":\"Length\"}]}";
 
@@ -74,9 +83,25 @@ class AutomatorServiceResetTest {
     }
 
     @Test
+    void reset_deletesPluginDocuments() {
+        // プラグイン保存領域（H8）も消す。消し残すと「症例を消したのに評価記録が残る」状態になり、
+        // 検証では前回の実行の記録が次の実行に混ざる（ROI 保存で実際に起きた）。
+        pluginService.save("lesion-evanesco", "PAT-RESET",
+                new SavePluginDocumentRequest("{\"schema\":1,\"timepoints\":[]}", null));
+        assertEquals(1, pluginRepo.count(), "前提: プラグイン保存がある");
+
+        AutomatorService.ResetResult r = automator.reset();
+
+        assertEquals(1, r.deletedPluginDocuments(), "削除件数が返る");
+        assertEquals(0, pluginRepo.count(), "プラグイン保存が消えている");
+        assertNull(pluginService.get("lesion-evanesco", "PAT-RESET").json());
+    }
+
+    @Test
     void reset_isIdempotent() {
         automator.reset();
         AutomatorService.ResetResult again = automator.reset();
         assertEquals(0, again.deletedRoiDocuments());
+        assertEquals(0, again.deletedPluginDocuments());
     }
 }

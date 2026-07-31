@@ -9,6 +9,7 @@ import { presetLabel } from "./wlPresets";
 import { useWlPresets } from "./wlPresetStore";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { usePluginMenu, runPluginBackend } from "../plugins/pluginRegistry";
+import { deletePluginStore, loadPluginStore, savePluginStore } from "../plugins/pluginStore";
 import { openLogViewer } from "../system/LogViewer";
 import { openMemoryMonitor } from "../system/memoryMonitor";
 import { openUsersCommunity } from "../help/links";
@@ -45,6 +46,14 @@ const LAYOUT_PRESETS: [number, number][] = [
 ];
 
 /** 2D Viewer 画面メニューバー。MainScreen の MenuBar と同じドロップダウン流儀。 */
+/**
+ * H8 の既定の患者キー。**対象タイル**（選択→無ければ先頭）から引く。
+ * プラグインに患者を名乗らせると、取り違えたときに別患者の記録へ書き込む事故になる。
+ */
+function currentPatientKey(actions: ViewerActions): string {
+  return actions.getTargets()[0]?.patientKey ?? "";
+}
+
 export function Viewer2DMenuBar({
   actions,
   refLines,
@@ -91,6 +100,18 @@ export function Viewer2DMenuBar({
     getRoiMeta: (roiUid) => actions.getRoiMeta(roiUid, m.id),
     setRoiMeta: (roiUid, patch) => actions.setRoiMeta(roiUid, m.id, patch),
     subscribeRois: (listener) => actions.subscribeRois(listener),
+    // H8: プラグイン専用の保存領域（患者単位・backend 保管）。**pluginId と patientKey は
+    // host が入れる**。患者は対象タイルから引くので、プラグインが別患者の領域を勝手に
+    // 触ることはない（明示指定した場合を除く）。
+    loadStore: (patientKey) => loadPluginStore(m.id, patientKey ?? currentPatientKey(actions)),
+    saveStore: (json, opts) =>
+      savePluginStore(
+        m.id,
+        opts?.patientKey ?? currentPatientKey(actions),
+        json,
+        opts?.version ?? null,
+      ),
+    deleteStore: (patientKey) => deletePluginStore(m.id, patientKey ?? currentPatientKey(actions)),
   }));
   const [open, setOpen] = useState<string | null>(null);
   useEffect(() => {
