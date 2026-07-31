@@ -28,6 +28,7 @@ export const ja: Record<string, string> = {
   "mobile.title.viewer": "ビューア",
   "mobile.title.report": "レポート",
   "mobile.resetAll": "リセット",
+  "mobile.fuse": "重ねる",
   "mobile.search.placeholder": "患者 ID または氏名",
   "mobile.range.today": "今日",
   "mobile.range.week": "1 週間",

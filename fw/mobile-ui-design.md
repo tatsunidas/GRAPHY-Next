@@ -349,6 +349,21 @@ VolumeViewport では canvas overlay 方式が使えず、2 ボリューム同�
 現状 Fusion の設定はセンタードロップ（`viewer2d/Viewer2DScreen.tsx:122,662-673`）で行うため、
 **タッチでは別の導線（シリーズ一覧から「重ねる」選択）が必要**。
 
+**実装（2026-07-31 / M6）** — `mobile/MobileViewer.tsx`
+
+- 導線は**シリーズドロワーの各行に「重ねる」ボタン**。行そのもののタップは従来どおり
+  「そのシリーズを開く」で、重ねるは別ボタンに分けた（タップ 1 つに 2 つの意味を持たせない）。
+  表示中のシリーズには出さない（自分自身に重ねても意味が無い）。
+- 描画は既存の `FusionImageViewer` を `SeriesViewer` の `renderFusionOverlay` へ渡すだけ。
+  デスクトップと**同じ経路**で、web / standalone の差は `mode` を渡すだけで吸収される。
+- ⚠️ `renderFusionOverlay` は **`useMemo` で安定化が必須**。毎レンダ別関数だと `Viewer2D` 側の
+  rect 初期計算 effect がループする（`Viewer2DScreen` の同等箇所にも同じ注意書きがある）。
+- 不透明度は画像下のバーにスライダー 1 本。初期値はデスクトップのセンタードロップと同じ 0.5。
+- base シリーズを切り替えたら Fusion は解除する（重ね合わせの意味が変わるため）。
+- **LUT と Fusion の W/L はモバイルでは出さない**（デスクトップの `FusionControls` 相当）。
+  参照用途では不透明度で足り、狭幅に載せると操作が細かくなりすぎるため。必要になったら M9 以降。
+- C/T は常に 0。モバイルシェルはマルチ C/T の切替 UI を持たない。
+
 ## 5. レポート
 
 ### 5.1 web モードでは現状 2 つの問題がある
@@ -419,7 +434,7 @@ VolumeViewport では canvas overlay 方式が使えず、2 ボリューム同�
 | **M3** | 2D ビューア（1×1 固定・ドロワー・モバイルツールバー・複合リセット） | M2 | ✅ 完了（2026-07-31）／実機未確認 |
 | **M4** | タッチバインド（`numTouchPoints` ＋ `touchAction: none`）＋ ROI 計測のタップターゲット調整 | M3 | ✅ 完了（2026-07-31）／実機未確認 |
 | **M5** | 3D / MPR（1 面＋面切替・ドロワー・Cinematic 非表示） | M0, M3 | ✅ 完了（2026-07-31）／実機未確認 |
-| **M6** | Fusion（タッチ用の重ね合わせ導線） | M3 | 未着手 |
+| **M6** | Fusion（タッチ用の重ね合わせ導線） | M3 | ✅ 完了（2026-07-31）／実機未確認 |
 | **M7** | レポート backend（キー画像 QIDO 解決 → STOW-RS 書き戻し） | — | 未着手 |
 | **M8** | レポート モバイルエディタ（縦積み・visualViewport 追随・表示中画像の添付） | M7, M3 | 未着手 |
 | **M9** | 実機検証（iOS Safari / Android Chrome / iPad）＋ automator への追加 | 全部 | 未着手 |
@@ -464,7 +479,8 @@ M7 は frontend に依存しないので M1〜M6 と並行できる。
 - ✅ `frontend/src/mobile/dateRange.ts` … 検索の期間プリセット（M2。同上）
 - ✅ `frontend/src/mobile/useDeviceClass.test.ts` / `mobileRoute.test.ts` / `dateRange.test.ts` … 単体テスト
 - ✅ `frontend/src/mobile/MobileStudyBrowser.tsx` … 検索 → スタディ → シリーズ（M2）
-- ✅ `frontend/src/mobile/MobileViewer.tsx` … 2D（M3）／シリーズ切替ドロワー／3D・MPR 起動（M5）
+- ✅ `frontend/src/mobile/MobileViewer.tsx` … 2D（M3）／シリーズ切替ドロワー／3D・MPR 起動（M5）／
+  Fusion の「重ねる」導線と不透明度バー（M6）
 - ✅ `frontend/src/mobile/launchViewer.ts` … 3D / MPR を同一タブで開く（M5。設計時には無かったファイル）
 - ✅ `frontend/src/mobile/MobileToolbar.tsx` … ツール切替・W/L プリセット・複合リセット（M3）
 - `frontend/src/mobile/MobileReportEditor.tsx` … 縦積みエディタ
