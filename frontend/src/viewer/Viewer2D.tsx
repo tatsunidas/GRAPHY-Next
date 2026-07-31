@@ -75,6 +75,18 @@ type ViewSnapshot = { transform: ViewTransform; voi: { lower: number; upper: num
 
 const { MouseBindings } = csToolsEnums;
 
+/**
+ * 2 本指タッチのバインド（`fw/mobile-ui-design.md` §3.3）。
+ *
+ * <p>**ZoomTool に割り当てる**のがポイント。ZoomTool は既定で `pinchToZoom: true` かつ `pan: true`
+ * なので、2 本指で**ピンチ拡大縮小と平行移動を同時に**扱う（`ZoomTool._pinchCallback`）。
+ * PanTool を割り当てると平行移動しかできない。
+ *
+ * <p>1 本指は Cornerstone が「Primary にバインドされたアクティブツール」へ暗黙フォールバックする
+ * （`getActiveToolForTouchEvent`）ので、明示的なバインドは要らない。
+ */
+const TOUCH_ZOOM_BINDING = { numTouchPoints: 2 } as const;
+
 /** カラー（RGB/YBR/PALETTE）画像か。MONOCHROME 以外を色付きとみなす。LUT/Invert の可否判定に使う。 */
 function isColorImage(inf: ImageInfo | null): boolean {
   const p = inf?.photometricInterpretation;
@@ -435,7 +447,7 @@ export function Viewer2D({
           });
           tg.setToolPassive(WindowLevelTool.toolName);
         } else {
-          // 左=W/L、中=Pan に戻す。
+          // 左=W/L、中=Pan に戻す。2 本指タッチの Zoom バインドは別ツールなので触らない。
           tg.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
           tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
         }
@@ -775,7 +787,10 @@ export function Viewer2D({
             tg.setToolPassive(LevelSetTool.toolName);
             tg.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
             tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
-            tg.setToolActive(ZoomTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary }] });
+            // 右クリック=Zoom に加えて、2 本指タッチでピンチ Zoom ＋ Pan（§3.3）。
+            tg.setToolActive(ZoomTool.toolName, {
+              bindings: [{ mouseButton: MouseBindings.Secondary }, TOUCH_ZOOM_BINDING],
+            });
           }
           tg.addViewport(viewportId, ENGINE_ID);
         };
@@ -1544,11 +1559,16 @@ export function Viewer2D({
           bindings: [
             { mouseButton: MouseBindings.Primary },
             ...(isPan ? [{ mouseButton: MouseBindings.Auxiliary }] : []),
-            ...(isZoom ? [{ mouseButton: MouseBindings.Secondary }] : []),
+            // Zoom を選んでいるときも 2 本指はここ（＝Zoom）に来るので二重登録しない。
+            ...(isZoom ? [{ mouseButton: MouseBindings.Secondary }, TOUCH_ZOOM_BINDING] : []),
           ],
         });
         if (!isPan) tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
-        if (!isZoom) tg.setToolActive(ZoomTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary }] });
+        if (!isZoom) {
+          tg.setToolActive(ZoomTool.toolName, {
+            bindings: [{ mouseButton: MouseBindings.Secondary }, TOUCH_ZOOM_BINDING],
+          });
+        }
         if (isBrush || isEraser) {
           tg.setToolConfiguration(BrushTool.toolName, {
             activeStrategy: isEraser ? "ERASE_INSIDE_CIRCLE" : "FILL_INSIDE_CIRCLE",
@@ -2055,7 +2075,14 @@ const wrap: React.CSSProperties = {
   borderRadius: 6,
   overflow: "hidden",
 };
-const pixelLayer: React.CSSProperties = { position: "absolute", inset: 0 };
+const pixelLayer: React.CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  // ⚠️ タッチ端末では、これが無いと画像上のドラッグがブラウザのページスクロール／ピンチズームに
+  // 奪われ、W/L も Pan も効かない（`fw/mobile-ui-design.md` §3.3）。ブラウザ既定のジェスチャを
+  // すべて止めて、Cornerstone のツールに渡す。マウス操作には影響しない。
+  touchAction: "none",
+};
 /** プラグインオーバーレイの出所ラベル（本体の描画と混同させないための表示）。 */
 const pluginOverlayLabel: React.CSSProperties = {
   position: "absolute",

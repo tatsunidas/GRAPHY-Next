@@ -263,6 +263,8 @@ public class DicomStorageService {
         double seriesPxRow = 0, seriesPxCol = 0;
         int seriesWidth = 0, seriesHeight = 0;
         String seriesFor = null;
+        // ボリューム構築前のメモリ量予測用（fw/volume-memory-guard.md V2）。
+        com.vis.graphynext.dicom.SeriesLayout.PixelFormat seriesPixelFormat = null;
         java.util.Map<String, double[]> sopToIpp = new java.util.HashMap<>();
         // 複数オリエンテーション検出（3-plane localizer 等）。IOP が混在するシリーズは
         // 空間ボリュームではないため zpos（=IPP·各自の法線、軸が異なり無意味）でソートせず、
@@ -315,6 +317,10 @@ public class DicomStorageService {
                 String fr = ds.getString(Tag.FrameOfReferenceUID);
                 if (fr != null && !fr.isBlank()) seriesFor = fr;
             }
+            // 予測式が standalone / web で一致している必要があるため、抽出は web 側と同じ 1 本を使う。
+            if (seriesPixelFormat == null) {
+                seriesPixelFormat = com.vis.graphynext.dicom.SeriesLayoutAssembler.readPixelFormat(ds);
+            }
         }
 
         // 複数オリエンテーション（localizer/scout 等）: 並び替えず instance 順の純スタックにする。
@@ -352,7 +358,7 @@ public class DicomStorageService {
                 basic.nZ(), basic.nC(), basic.nT(),
                 basic.cDimension(), basic.tDimension(), basic.cells(),
                 seriesIop, seriesPxRow, seriesPxCol, seriesWidth, seriesHeight,
-                zSpatials, seriesFor);
+                zSpatials, seriesFor, seriesPixelFormat);
     }
 
     /** Siemens 私的タグ NumberOfImagesInMosaic (0019,100a)。 */
@@ -517,7 +523,8 @@ public class DicomStorageService {
                 numImages, grid, tileW, tileH, nZ, nC, nT);
         return new com.vis.graphynext.dicom.SeriesLayout(
                 nZ, nC, nT, null, tDim, cells,
-                iop, pxRow, pxCol, tileW, tileH, zSpatials, head.getString(Tag.FrameOfReferenceUID));
+                iop, pxRow, pxCol, tileW, tileH, zSpatials, head.getString(Tag.FrameOfReferenceUID),
+                com.vis.graphynext.dicom.SeriesLayoutAssembler.readPixelFormat(head));
     }
 
     /**

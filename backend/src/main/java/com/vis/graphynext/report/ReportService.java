@@ -169,9 +169,14 @@ public class ReportService {
 
     /**
      * 下書きを Comprehensive SR として確定する。本文またはキー画像のいずれかが必要。
-     * 参照シリーズの識別情報はスタディ内の任意の既存インスタンスから継承し、生成した SR は
-     * 既存の取込パイプライン（{@link DicomStorageService#ingest}）へ登録する。キー画像があれば
-     * 続けて KO（Key Object Selection Document）も生成・ingest する。
+     * 参照シリーズの識別情報はスタディ内の任意の既存インスタンスから継承する。キー画像があれば
+     * 続けて KO（Key Object Selection Document）も生成する。
+     *
+     * <p>保存先はモードで分かれる（{@link #store}）:
+     * standalone は既存の取込パイプライン（{@link DicomStorageService#ingest}）、
+     * **web は STOW-RS で PACS へ書き戻す**。キー画像の SOPClassUID 解決も同様に分かれる
+     * （{@link #resolveKeyImageSopClassUids}）。この 2 つは**独立した別々の対応**で、
+     * どちらか片方だけでは web の確定は成立しない（`fw/mobile-ui-design.md` §5）。
      */
     @Transactional
     public ReportDto finalizeReport(String id) throws IOException {
@@ -184,26 +189,24 @@ public class ReportService {
         }
 
         Attributes referenceTemplate = resolveIdentityTemplate(r.getStudyInstanceUid());
+        Map<String, String> keyImageSopClassUids = resolveKeyImageSopClassUids(r);
 
-        Map<String, String> keyImageSopClassUids = new LinkedHashMap<>();
-        for (KeyImageRef k : r.getKeyImages()) {
-            DicomInstance inst = dicomInstanceRepo.findById(k.getSopInstanceUid())
-                    .orElseThrow(() -> new ResponseStatusException(
-                            HttpStatus.CONFLICT, "キー画像が見つかりません: " + k.getSopInstanceUid()));
-            keyImageSopClassUids.put(k.getSopInstanceUid(), inst.getSopClassUid());
-        }
+        // SR と（あれば）KO をまとめてから 1 度に保存する。web は STOW-RS を 1 リクエストで送る。
+        List<Attributes> outbound = new ArrayList<>(2);
 
         SrWriter.Result sr = srWriter.build(referenceTemplate, r, keyImageSopClassUids);
-        ingest(sr.dataset());
+        outbound.add(sr.dataset());
         r.setSeriesInstanceUid(sr.seriesInstanceUid());
         r.setSrSopInstanceUid(sr.sopInstanceUid());
 
         if (!r.getKeyImages().isEmpty()) {
             KeyObjectWriter.Result ko = keyObjectWriter.build(referenceTemplate, r, keyImageSopClassUids);
-            ingest(ko.dataset());
+            outbound.add(ko.dataset());
             r.setKoSeriesInstanceUid(ko.seriesInstanceUid());
             r.setKoSopInstanceUid(ko.sopInstanceUid());
         }
+
+        store(outbound);
 
         r.setStatus(ReportStatus.FINAL);
         r.setUpdatedAt(Instant.now());
@@ -258,10 +261,95 @@ public class ReportService {
         return readHeader(files.get(0));
     }
 
+    /**
+     * キー画像の SOPClassUID を解決する（SR/KO の参照 SOP Class 記述に要る）。
+     *
+     * <p>🚨 **web ではローカル H2 索引を引いてはいけない。** 外部 PACS 由来のインスタンスは
+     * `dicomInstanceRepo` に存在せず、確定が必ず 409 で失敗する（`fw/report-design.md` の既知事項、
+     * `fw/mobile-ui-design.md` §5.1）。web では QIDO-RS で引く。
+     * 経路は識別情報の継承（{@link #resolveIdentityTemplate}）と同じ二重対応パターン。
+     */
+    private Map<String, String> resolveKeyImageSopClassUids(Report r) {
+        Map<String, String> out = new LinkedHashMap<>();
+        WebDicomDataService web = webProvider.getIfAvailable();
+        for (KeyImageRef k : r.getKeyImages()) {
+            String sop = k.getSopInstanceUid();
+            String cls = web != null
+                    ? queryKeyImageSopClass(web, r.getStudyInstanceUid(), k)
+                    : dicomInstanceRepo.findById(sop).map(DicomInstance::getSopClassUid).orElse(null);
+            if (cls == null || cls.isBlank()) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "キー画像が見つかりません: " + sop);
+            }
+            out.put(sop, cls);
+        }
+        return out;
+    }
+
+    /**
+     * QIDO-RS でキー画像 1 枚の SOPClassUID を引く。取れなければ null。
+     *
+     * <p>シリーズが分かっていればシリーズ配下で絞る（PACS 側の検索が軽い）。分からない場合だけ
+     * スタディ配下を横断する。`includefield` で SOPClassUID を明示するのは、既定の返却属性が
+     * PACS 実装によって異なるため。
+     */
+    private static String queryKeyImageSopClass(WebDicomDataService web, String studyUid, KeyImageRef k) {
+        String sop = k.getSopInstanceUid();
+        Map<String, String> q = Map.of("SOPInstanceUID", sop, "includefield", "00080016");
+        List<Attributes> hits;
+        try {
+            String seriesUid = k.getSeriesInstanceUid();
+            hits = seriesUid != null && !seriesUid.isBlank()
+                    ? web.searchInstances(studyUid, seriesUid, q)
+                    : web.searchStudyInstances(studyUid, q);
+        } catch (RuntimeException e) {
+            // PACS 未到達・タイムアウトは「見つからない」として扱い、呼び出し側で 409 にする。
+            return null;
+        }
+        return pickSopClassUid(hits, sop);
+    }
+
+    /**
+     * QIDO 応答から目的の SOPInstanceUID の SOPClassUID を選ぶ。
+     *
+     * <p>UID 一致を優先する。**一致が無くても 1 件だけなら採用する**のは、QIDO の応答に
+     * SOPInstanceUID を含めない PACS があるため（絞り込み条件が効いている前提のフォールバック）。
+     * 2 件以上あって一致が無い場合は、どれを指すか決められないので null。
+     */
+    static String pickSopClassUid(List<Attributes> hits, String sopInstanceUid) {
+        if (hits == null || hits.isEmpty()) {
+            return null;
+        }
+        for (Attributes a : hits) {
+            if (sopInstanceUid.equals(a.getString(Tag.SOPInstanceUID))) {
+                return a.getString(Tag.SOPClassUID);
+            }
+        }
+        return hits.size() == 1 ? hits.get(0).getString(Tag.SOPClassUID) : null;
+    }
+
     private Attributes readHeader(Path p) throws IOException {
         try (DicomInputStream in = new DicomInputStream(p.toFile())) {
             in.setIncludeBulkData(IncludeBulkData.NO);
             return in.readDataset();
+        }
+    }
+
+    /**
+     * 生成した SR / KO を保存する。
+     *
+     * <p>🚨 **web では `storage.ingest()` ではなく STOW-RS で PACS へ書き戻す。**
+     * ingest 固定だと、生成した SR がローカル H2 にしか無く、web の検査一覧（QIDO）に現れない
+     * 「**見えない SR**」になる（`fw/mobile-ui-design.md` §5.1）。
+     * 実装は `dicom/derived/DerivedSeriesService` と同型（web はまとめて 1 リクエスト）。
+     */
+    private void store(List<Attributes> datasets) throws IOException {
+        WebDicomDataService web = webProvider.getIfAvailable();
+        if (web != null) {
+            web.storeDatasets(datasets);
+            return;
+        }
+        for (Attributes a : datasets) {
+            ingest(a);
         }
     }
 

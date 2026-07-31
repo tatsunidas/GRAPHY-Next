@@ -52,6 +52,7 @@ public final class SeriesLayoutAssembler {
         double seriesPxRow = 0, seriesPxCol = 0;
         int seriesWidth = 0, seriesHeight = 0;
         String seriesFor = null;
+        SeriesLayout.PixelFormat seriesPixelFormat = null;
         Map<String, double[]> sopToIpp = new HashMap<>();
         // 複数オリエンテーション（3-plane localizer 等）は空間ボリュームでないため純スタックにする。
         Set<String> iopKeys = new LinkedHashSet<>();
@@ -108,6 +109,9 @@ public final class SeriesLayoutAssembler {
                     seriesFor = fr;
                 }
             }
+            if (seriesPixelFormat == null) {
+                seriesPixelFormat = readPixelFormat(ds);
+            }
         }
 
         if (frames.isEmpty()) {
@@ -150,7 +154,7 @@ public final class SeriesLayoutAssembler {
                 basic.nZ(), basic.nC(), basic.nT(),
                 basic.cDimension(), basic.tDimension(), basic.cells(),
                 seriesIop, seriesPxRow, seriesPxCol, seriesWidth, seriesHeight,
-                zSpatials, seriesFor);
+                zSpatials, seriesFor, seriesPixelFormat);
     }
 
     // ── standalone(DicomStorageService) の classic 経路と同一ロジックのヘルパ ─────────────
@@ -167,6 +171,27 @@ public final class SeriesLayoutAssembler {
         }
         double sl = ds.getDouble(Tag.SliceLocation, Double.NaN);
         return Double.isNaN(sl) ? instanceNumber : sl;
+    }
+
+    /**
+     * ボクセルあたりのバイト数を決めるピクセル形式を読む（{@code fw/volume-memory-guard.md} V2）。
+     * BitsAllocated が無い（＝画素を持たないヘッダ）なら null。
+     *
+     * <p>standalone の {@code DicomStorageService.seriesLayout} からも呼ぶ。他の空間メタ抽出は
+     * 両経路で意図的に重複させているが、こちらは<b>「予測式が両モードで一致していること」自体が
+     * 要件</b>なので 1 本にまとめてある。
+     */
+    public static SeriesLayout.PixelFormat readPixelFormat(Attributes ds) {
+        int bits = ds.getInt(Tag.BitsAllocated, 0);
+        if (bits <= 0) {
+            return null;
+        }
+        return new SeriesLayout.PixelFormat(
+                bits,
+                ds.getInt(Tag.PixelRepresentation, 0),
+                Math.max(1, ds.getInt(Tag.SamplesPerPixel, 1)),
+                ds.getDouble(Tag.RescaleSlope, 1.0),
+                ds.getDouble(Tag.RescaleIntercept, 0.0));
     }
 
     private static void putFirstPresent(Map<String, Double> dims, String key, Attributes ds, int... tags) {

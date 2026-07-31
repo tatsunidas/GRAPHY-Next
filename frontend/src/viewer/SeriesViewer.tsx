@@ -36,6 +36,7 @@ import {
   thickSlabImageId,
 } from "./thickSlab";
 import { imageIdForInstance, type ViewerMode } from "./imageId";
+import { advanceAnchor, sliceStepsFromDrag } from "./touchScroll";
 import { installDebugApi } from "./debugApi";
 import { matchesCombo } from "../shortcuts/registry";
 import { fetchSeriesLayout, type Instance } from "../api";
@@ -458,11 +459,40 @@ export function SeriesViewer({
       e.preventDefault();
       step(e.deltaY > 0 ? 1 : -1);
     };
+
+    // ── 3 本指の縦ドラッグでスライス送り（タッチ端末。fw/mobile-ui-design.md §3.3） ──
+    // ⚠️ Cornerstone の StackScrollTool は使わない。表示スライスは**この React state（z）が唯一の
+    // 出所**で、ツールが viewport の imageIdIndex を直接動かすと次の再描画で巻き戻る。
+    // 1 本指＝アクティブツール、2 本指＝ピンチ Zoom+Pan は Cornerstone 側（Viewer2D のバインド）。
+    let scrollAnchorY: number | null = null;
+    const onTouchStart = (e: TouchEvent) => {
+      scrollAnchorY = e.touches.length === 3 ? e.touches[0].clientY : null;
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (scrollAnchorY === null || e.touches.length !== 3) return;
+      e.preventDefault(); // ページスクロールに奪われないようにする
+      const steps = sliceStepsFromDrag(e.touches[0].clientY - scrollAnchorY);
+      if (steps === 0) return;
+      step(steps); // 下へなぞる = 次のスライス（ホイールと同じ向き）
+      scrollAnchorY = advanceAnchor(scrollAnchorY, steps);
+    };
+    const onTouchEnd = () => {
+      scrollAnchorY = null;
+    };
+
     el.addEventListener("keydown", onKey);
     el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    el.addEventListener("touchend", onTouchEnd, { passive: true });
+    el.addEventListener("touchcancel", onTouchEnd, { passive: true });
     return () => {
       el.removeEventListener("keydown", onKey);
       el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchEnd);
     };
   }, [activeCount, gridOn]);
 

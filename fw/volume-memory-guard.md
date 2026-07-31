@@ -14,7 +14,7 @@
 
 | 事象 | 現状の見え方 |
 |---|---|
-| cornerstone のキャッシュ上限超過 | `MPR の構築に失敗しました: Error: cacheSizeExceeded` という生文字列 |
+| cornerstone のキャッシュ上限超過 | `MPR の構築に失敗しました: Error: CACHE_SIZE_EXCEEDED` という生文字列（V1 で解消） |
 | 3D テクスチャの寸法上限超過 | 無言の描画失敗（真っ黒） |
 | プロセスの実メモリ枯渇 | デスクトップは OS スワップで激重化、モバイル Safari はタブが無警告 kill |
 
@@ -26,6 +26,9 @@
 - **超過時の挙動は「黙って evict → 最終的に throw」**。
   - 画像 put 時: `cache.js:379` `throw new Error(Events.CACHE_SIZE_EXCEEDED)`（専用エラークラスは
     無く、メッセージは enum の文字列値そのもの）。geometry も同様（`cache.js:611`）。
+    ⚠️ **実際の文字列は大文字スネークケース `CACHE_SIZE_EXCEEDED`**（`enums/Events.js:4`）。
+    当初この文書に書いていた `cacheSizeExceeded` は誤り（2026-07-31 の V1 実装時に実物で確認）。
+    `isCacheSizeExceeded` は将来のキャメルケース化にも耐えるよう区切り無しでも拾う正規表現にした。
   - `createLocalVolume`（= CT チルト補正経路が使う）: `volumeLoader.js:171`
     `Cannot created derived volume: Volume with id ... is not cacheable.`（原文の typo 込み）
   - `createAndCacheVolume` 経路は `isCacheable` チェックを持たない。
@@ -116,28 +119,52 @@ Chrome 限定の非標準で JS heap のみ）。
 
 | Phase | 内容 | 依存 | 状態 |
 |---|---|---|---|
-| **V1** | 上限の明示設定 ＋ エラー識別（最小・即効） | なし | 未着手 |
-| **V2** | 事前予測と警告（`SeriesLayout` 拡張を含む） | V1 | 未着手 |
-| **V3** | 物理メモリの調達（Electron IPC） | V2 | 未着手 |
-| **V4** | `MAX_3D_TEXTURE_SIZE` ハードガード | なし（独立） | 未着手 |
+| **V1** | 上限の明示設定 ＋ エラー識別（最小・即効） | なし | ✅ 完了（2026-07-31） |
+| **V2** | 事前予測と警告（`SeriesLayout` 拡張を含む） | V1 | ✅ 完了（2026-07-31） |
+| **V3** | 物理メモリの調達（Electron IPC） | V2 | ✅ 完了（2026-07-31）／**実機確認は未** |
+| **V4** | `MAX_3D_TEXTURE_SIZE` ハードガード | なし（独立） | ✅ 完了（2026-07-31） |
 
-### V1 — 上限の明示設定とエラー識別
+### V1 — 上限の明示設定とエラー識別 ✅ 完了（2026-07-31）
 
-1. `viewer/cornerstoneSetup.ts` の `coreInit()` 直後（現 `:96-98` 付近）で
-   `cache.setMaxCacheSize(bytes)` を呼ぶ。値は設定（§6）から。**現状は設定値と実際の上限が
-   乖離している**（設定に項目が無く、cache は既定 3GB）ので、まずここを一致させる。
+1. `viewer/cornerstoneSetup.ts` の `coreInit()` 直後で `cache.setMaxCacheSize(bytes)` を呼ぶ。
+   値は設定（§6）から。**従来は設定値と実際の上限が乖離していた**（設定に項目が無く、
+   cache は既定 3GB）ので、まずここを一致させる。
 2. `isCacheSizeExceeded(e: unknown): boolean` を新設する。**判別の流儀は既存の
    `isWebGLContextUnavailable`（`viewer/vtkVolumeView.ts:352-356`）に合わせる**
    （メッセージ正規表現で吸収する形）。判定対象は 2 種:
-   - `/cacheSizeExceeded/` （`cache.js:379,611`）
-   - `/is not cacheable/` （`volumeLoader.js:171`）
-3. catch-all の手前で識別して専用メッセージに落とす。差し込み先は
-   `mpr/MprScreen.tsx:174`、`viewer3d/Viewer3DScreen.tsx:290-295`、
-   `slicer/SlicerScreen.tsx`、`curvedmpr/CurvedMprScreen.tsx` の各 catch。
+   - `/cache[_\s-]?size[_\s-]?exceeded/i` （`cache.js:379,611`。実際の値は `CACHE_SIZE_EXCEEDED`）
+   - `/is not cacheable/i` （`volumeLoader.js:171`）
+3. catch-all の手前で識別して専用メッセージに落とす。
 
 > V1 だけでも「不可解な英文が出る」現状は解消する。V2 を待たずに入れられる。
 
-### V2 — 事前予測と警告
+**実装（2026-07-31）**
+
+- `viewer/volumeMemory.ts`（新規）… **cornerstone を import しない**。vitest が `environment: "node"`
+  （`vitest.config.ts`）で走るため、cornerstone を読み込むモジュールは単体テストできない。
+  そこで純ロジック（`normalizeVolumeMaxMb` / `volumeMaxBytes` / `isCacheSizeExceeded` /
+  適用済み上限の記録）だけをここに置き、`cache.setMaxCacheSize()` の実呼び出しは
+  `cornerstoneSetup.ts` の `applyVolumeCacheLimit()` に置いた。同ファイルの
+  `applyGlobalLabelmapStyle` と同じ「設定読込後に適用する export 関数」の形。
+- 上限の適用は**二段**: `ensureCornerstoneInitialized` が既定値（2048MB）を即時適用し、
+  `fetchSettings()` が返ったら上書きする。設定取得の往復で初期表示を待たせないため。
+  設定到着前に始まったボリューム構築は既定値で走る（許容）。
+- エラー識別の差し込み先は 5 箇所: `mpr/MprScreen.tsx` の `start()`、
+  `viewer3d/Viewer3DScreen.tsx` の `start()`（`isWebGLContextUnavailable` の次に判定）、
+  `slicer/SlicerScreen.tsx` の `start()` と **C/T 切替の再構築**（`buildMprVolume` を再度呼ぶため）、
+  `curvedmpr/CurvedMprScreen.tsx` の `start()`。
+- テストは `viewer/volumeMemory.test.ts`（15 件）。`setMaxCacheSize` が falsy / 非 number を
+  throw する仕様に対して `volumeMaxBytes` が常に正数を返すことも含めて固定した。
+- 設定は §6 のうち `viewer.volumeMaxMb` のみ追加した。`viewer.volumeWarnBeforeBuild` は
+  V2 が入るまで効かないトグルになるため V2 で追加する。
+
+> ⚠️ **V2 で対処すべき積み残し**: `viewer/mpr.ts:91,236` の
+> `imageLoader.loadAndCacheImage(id).catch(() => null)` は**画像ロードの例外を握り潰す**。
+> 全スライス先読みの最中に上限を超えた場合、その場では何も起きず、後続の
+> `createAndCacheVolume` / `createLocalVolume` まで進んでから初めて throw する
+> （＝V1 の識別は効くが、原因の発生点はもっと手前）。事前予測（V2）を入れる本質的な理由の一つ。
+
+### V2 — 事前予測と警告 ✅ 完了（2026-07-31）
 
 **予測式**
 
@@ -186,7 +213,39 @@ if (projected > budget) {
   （`desktopNativeDialogFix.ts:34` のラッパ → `desktop().refocus()`）が自動で効く。
 - 専用ダイアログにしたい場合の先例は `viewer2d/PluginSaveConfirmDialog.tsx`。
 
-### V3 — 物理メモリの調達（standalone のみ）
+**実装（2026-07-31）**
+
+- **`SeriesLayout` の拡張は「5 フィールド追加」ではなく `PixelFormat` レコード 1 個にまとめた。**
+  理由は 2 つ: (1) 親 record の位置引数が 18 個になり、`int`／`double` が並ぶ末尾で取り違えても
+  型では気付けない、(2)「取得できた/できなかった」を null 1 つで表せる（0 をセンチネルにすると
+  `rescaleSlope=0` が未取得と区別できない）。JSON は `pixelFormat: {...}` のネストになる。
+- 抽出は `SeriesLayoutAssembler.readPixelFormat(Attributes)` の **1 本**にして standalone / web の
+  両方から呼ぶ。他の空間メタ抽出は両経路で意図的に重複させているが、ここは「予測式が両モードで
+  一致していること」自体が要件なので共有する。
+  - standalone: `store/DicomStorageService.seriesLayout`（classic 経路）と モザイク経路
+  - web: `SeriesLayoutAssembler.fromAttributes`
+  - SEG: `SegFrameExpander.layout` は**ヘッダの BitsAllocated=1 を返さず 8bit 固定**にする
+    （`extractFrame` が BINARY を 0/255 の 8bit マスクへ展開するため。生値だと予測が 8 分の 1 になる）
+- frontend の予測は `viewer/volumeMemory.ts` の `volumeBytesPerVoxel` / `volumeCopyCount` /
+  `projectVolumeBytes`。`canRenderFloatTextures()` は見ずに**未ロード時の最悪値**（float 可）で立てる。
+- **画面側の入口は `viewer/volumeMemoryGuard.ts`（新規）に分けた。** 設定の読み出しと
+  `window.confirm` という副作用を持ち込むと `volumeMemory.ts` が node 環境で単体テストできなくなるため。
+- **スライス数は `nZ` でも `cells` の絞り込みでもなく、構築に渡す `imageIds.length` を使う。**
+  それが定義上「実際に volume 化される枚数」で、フォールバック経路（layout が取れず
+  `fetchInstances` に落ちた場合）でも正しい。
+- 🔑 **二重防御は「呼び出し側が予測できなかったときだけ」効かせる。** `confirmVolumeMemory` は
+  `{ proceed, enforceMaxBytes }` を返し、`enforceMaxBytes` が入るのは**予測不能だった場合のみ**。
+  利用者が警告を見て「続行」を選んだのに `buildMprVolume` の二段目が無条件に止め直したら
+  筋が通らないため。二段目は `VolumeMemoryExceededError` を投げ、`isCacheSizeExceeded` が
+  true を返すので各画面は V1 と同じ案内を出す。
+- MPR は本来 `/layout` を取らないので、予測のために `fetchSeriesLayout` を 1 回足した
+  （失敗しても `.catch(() => null)` で予測を諦めるだけ）。
+- Curved MPR は `buildMprVolume` を通らない（自前の `buildDicomResliceVolume`）ため
+  **二段目の受け皿が無い**。予測が効かない場合は V1 の識別に委ねる。
+- キャンセル時は画面が空のままになるので `common.volumeMemCanceled` を出す
+  （Slicer の C/T 切替だけは既存表示を保つので何も出さない）。
+
+### V3 — 物理メモリの調達（standalone のみ）✅ 完了（2026-07-31。実機確認は未）
 
 Electron main に IPC を追加する。**雛形は `listDisplays`**（3 点セット）:
 
@@ -206,13 +265,51 @@ Electron main に IPC を追加する。**雛形は `listDisplays`**（3 点セ�
 2. standalone: `getMemoryInfo()` の実搭載量 × 安全率
 3. web: 保守的な固定既定値
 
-### V4 — 3D テクスチャ寸法のハードガード
+**実装（2026-07-31）**
+
+- 決定順は `volumeMemoryGuard.resolveVolumeBudgetMb()`。`cornerstoneSetup` は既定値を即時適用して
+  から、解決した値で `applyVolumeCacheLimit()` を上書きする（IPC/設定の往復で初期表示を待たせない）。
+- 🔑 **「設定値が明示されている」はキーの有無で判定する。** `SettingsService.getAll()` は保存済みの
+  キーしか返さず、`SettingsDialog` は**変更したフィールドだけを個別に PUT する**（`:59`）ので、
+  利用者が触っていない限りキーは存在しない。この性質に依存しているので、将来
+  「全項目を一括保存する」ように変えると自動判定が死ぬ点に注意。
+- 安全率は `VOLUME_BUDGET_SAFETY_RATIO = 0.4`（実搭載量の 40%）。レンダラは GPU プロセス・
+  backend(JVM)・OS と同居するため半分は取らない。結果は設定範囲 [128, 32768] MB に丸める。
+  16GB 機なら 6553MB、4GB 機なら 1638MB＝**既定の 2048 より小さくなる**（低メモリ機の保護が狙い）。
+- `main.js` は `os.totalmem()` を優先し、0 のときだけ `process.getSystemMemoryInfo()`（KB 単位）に
+  フォールバックする。
+- ⚠️ 設定ダイアログは未設定でもレジストリの `default: 2048` を表示するため、**自動決定された実値とは
+  一致しない**。help 文で「未設定のうちは搭載メモリから自動決定」と明記して埋めた。
+  実値を UI に出すなら別途表示手段が要る（未実装）。
+- ⚠️ **`desktop/` は自動テストの対象外。** IPC が実際に値を返すかは実機（`npm run dev-desktop`）で
+  確認すること。未確認。
+
+### V4 — 3D テクスチャ寸法のハードガード ✅ 完了（2026-07-31）
 
 `gl.getParameter(gl.MAX_3D_TEXTURE_SIZE)`（WebGL2。GPU により 1024〜16384、多くは 2048）を取得し、
 volume の `dimensions` のいずれかが超えるなら **警告ではなくエラーで止める**（続行しても
 無言の描画失敗になるため）。既存の GPU ケーパビリティ判定の流儀は
 `viewer/cinematicPathTracer.ts:388-391`（拡張の有無を見て `null` を返し、UI で
 `cine2.unsupported` を出す）に倣う。
+
+**実装（2026-07-31）**
+
+- `volumeMemory.ts` に 2 つ:
+  - `getMax3dTextureSize()` … 問い合わせ専用の使い捨て WebGL2 コンテキストを **1 度だけ**作って
+    値をキャッシュする。取得後すぐ `WEBGL_lose_context` で解放する（同時コンテキスト数は
+    多くのブラウザで 16 が上限で、ビューアは既にいくつも消費している）。取れなければ `null`。
+  - `findExceeding3dTextureDim(dims, maxDim)` … 超過している次元のうち**最大のもの**を返す純関数。
+    `maxDim` が `null` なら判定しない（＝取得不能な環境で誤検知して 3D を止めない）。
+- 判定位置は `viewer3d/Viewer3DScreen.tsx` の `vtkImageDataFromVolume()` 直後。
+  `imageData.getDimensions()` で寸法が確定する最初の地点。
+  ⚠️ この時点で vtk 用フルコピー（§2.2 の「+1」）は既に確保済みなので、**RAM は節約できない**。
+  節約するには V2 の事前予測側で `SeriesLayout` の `imageWidth/Height` ＋ スライス数から
+  同じ判定を先に行う必要がある（V2 で寄せる）。
+- **RAM のバジェットとは別の天井**である点が実装上の勘所。枚数が少なくても面内が大きければ超える。
+
+> **MPR / Slicer / Curved MPR は V4 の対象外**。これらも VolumeViewport 経由で 3D テクスチャを
+> 使うため原理的には同じ上限に当たるが、寸法が確定する地点が画面ごとに異なる。
+> V2 で `SeriesLayout` から事前に寸法が分かるようになった時点で 4 画面まとめて寄せる。
 
 ## 5. `SeriesLayout` の拡張（V2 の前提）
 
@@ -222,19 +319,22 @@ volume の `dimensions` のいずれかが超えるなら **警告ではなく�
 |---|---|---|
 | `nZ` / `nC` / `nT` / `cells[]` | ✅ あり | `SeriesLayout.java:34,36` |
 | `imageWidth` / `imageHeight` | ✅ あり | `SeriesLayout.java:40-41` |
-| **BitsAllocated** | ❌ なし | — |
-| **PixelRepresentation** | ❌ なし | — |
-| **SamplesPerPixel** | ❌ なし | — |
-| **RescaleSlope / RescaleIntercept** | ❌ なし | — |
+| **BitsAllocated** | ✅ 追加（2026-07-31） | `SeriesLayout.PixelFormat` |
+| **PixelRepresentation** | ✅ 追加 | 〃 |
+| **SamplesPerPixel** | ✅ 追加 | 〃 |
+| **RescaleSlope / RescaleIntercept** | ✅ 追加 | 〃 |
 
-**追加方針**: `SeriesLayout` record（`backend/.../dicom/SeriesLayout.java:33-43`）に上記 5 つを足す。
-書き込み箇所は「最初の有効インスタンスから空間メタを拾う」既存ループの 2 箇所だけで済む:
+**追加方針**: `SeriesLayout` record に **`PixelFormat pixelFormat` を 1 個**足す
+（当初案の「5 フィールドを平坦に足す」から変更。理由は V2 の実装メモ）。
+書き込み箇所は「最初の有効インスタンスから空間メタを拾う」既存ループ:
 
-- standalone: `backend/.../dicom/DicomStorageService.java:294-317`（`Tag.Columns`/`Tag.Rows` を読んでいる箇所）
-- web: `backend/.../dicom/web/SeriesLayoutAssembler.java:96-101`
+- standalone: `backend/.../dicom/store/DicomStorageService.java`（`Tag.Columns`/`Tag.Rows` を読んでいる箇所）
+  ＋ モザイク経路
+- web: `backend/.../dicom/SeriesLayoutAssembler.java`
+- SEG: `backend/.../dicom/SegFrameExpander.java`（8bit 固定）
 
-`SeriesLayout.noSpatial(...)`（`SeriesLayout.java:63-65`）のデフォルトも同時に更新する。
-frontend 型は `frontend/src/api.ts:172-191` に対応フィールドを追加。
+`SeriesLayout.noSpatial(...)` のデフォルトも同時に更新する。
+frontend 型は `frontend/src/api.ts` の `SeriesLayoutDto` に `pixelFormat?: SeriesPixelFormat | null` を追加。
 
 > 代替案として `fetchInstanceTags`（`api.ts:104-107`）で 1 インスタンスの全タグダンプを取る方法も
 > あるが、`TagDumpService.TagRow` の全件リストが返り重い。**`SeriesLayout` 拡張を採る。**
@@ -249,8 +349,10 @@ frontend 型は `frontend/src/api.ts:172-191` に対応フィールドを追加�
 {
   titleKey: "settings.sec.volumeMemory",
   fields: [
+    // ✅ V1 で追加済み（2026-07-31）
     { key: "viewer.volumeMaxMb", labelKey: "settings.field.volumeMaxMb", type: "number",
       default: 2048, min: 128, max: 32768, helpKey: "settings.field.volumeMaxMb.help" },
+    // ✅ V2 で追加済み（2026-07-31。V1 時点では効かないトグルになるため見送っていた）
     { key: "viewer.volumeWarnBeforeBuild", labelKey: "settings.field.volumeWarnBeforeBuild",
       type: "toggle", default: true, helpKey: "settings.field.volumeWarnBeforeBuild.help" },
   ],
@@ -265,14 +367,15 @@ frontend 型は `frontend/src/api.ts:172-191` に対応フィールドを追加�
 
 ## 7. i18n（`ja` / `en` 両方必須）
 
-| キー | 用途 |
-|---|---|
-| `common.volumeMemWarn` | 事前警告の confirm 本文。`{{needMb}}` / `{{budgetMb}}` |
-| `common.volumeMemExceeded` | V1 のキャッシュ超過エラー（`cacheSizeExceeded` / `not cacheable` の置換） |
-| `viewer3d.texture3dTooLarge` | V4 の寸法上限超過。`{{dim}}` / `{{maxDim}}` |
-| `settings.sec.volumeMemory` | 設定セクション名 |
-| `settings.field.volumeMaxMb` ＋ `.help` | 設定項目 |
-| `settings.field.volumeWarnBeforeBuild` ＋ `.help` | 設定項目 |
+| キー | 用途 | 状態 |
+|---|---|---|
+| `common.volumeMemWarn` | 事前警告の confirm 本文。`{{needMb}}` / `{{budgetMb}}` | ✅ V2 |
+| `common.volumeMemCanceled` | 確認をキャンセルしたときの画面メッセージ | ✅ V2 |
+| `common.volumeMemExceeded` | V1 のキャッシュ超過エラー（`CACHE_SIZE_EXCEEDED` / `not cacheable` の置換）。`{{budgetMb}}` | ✅ V1 |
+| `viewer3d.texture3dTooLarge` | V4 の寸法上限超過。`{{dim}}` / `{{maxDim}}` | ✅ V4 |
+| `settings.sec.volumeMemory` | 設定セクション名 | ✅ V1 |
+| `settings.field.volumeMaxMb` ＋ `.help` | 設定項目 | ✅ V1 |
+| `settings.field.volumeWarnBeforeBuild` ＋ `.help` | 設定項目 | ✅ V2 |
 
 命名は既存の流儀（画面/機能プレフィクス＋キャメルケース、プレースホルダは `{{n}}` 形式）に合わせる。
 参考: `series.grid.warnMany`、`qr.confirmLarge`、`main.search.noConditionWarn`。
@@ -290,22 +393,40 @@ frontend 型は `frontend/src/api.ts:172-191` に対応フィールドを追加�
 ## 9. 実装対象ファイル一覧
 
 **frontend**
-- `viewer/cornerstoneSetup.ts` … `setMaxCacheSize` 呼び出し（V1）
-- `viewer/volumeMemory.ts` **（新規）** … 予測式・`isCacheSizeExceeded`・バジェット解決・寸法チェック
-- `viewer/mpr.ts` … `buildMprVolume` に `opts?: { maxBytes?: number }`（V2 二重防御）
-- `mpr/MprScreen.tsx` … `fetchSeriesLayout` 追加 ＋ ガード ＋ エラー識別
-- `viewer3d/Viewer3DScreen.tsx` … ガード（`:230`–`:232` の間）＋ エラー識別 ＋ V4
-- `slicer/SlicerScreen.tsx` / `curvedmpr/CurvedMprScreen.tsx` … ガード ＋ エラー識別
-- `desktopBridge.ts` … `getMemoryInfo?`（V3）
-- `settings/registry.ts` … 新セクション（§6）
-- `api.ts` … `SeriesLayout` 型の追加フィールド
-- `i18n/ja.ts` / `i18n/en.ts` … §7
+- ✅ `viewer/cornerstoneSetup.ts` … `applyVolumeCacheLimit()`＝`setMaxCacheSize` 呼び出し（V1）
+- ✅ `viewer/volumeMemory.ts` **（新規）** … 予測式・`isCacheSizeExceeded`・バジェット解決・寸法チェック
+  （V1 時点では上限の正規化と `isCacheSizeExceeded` のみ。**cornerstone を import しない**方針）
+- ✅ `viewer/volumeMemory.test.ts` **（新規）** … 上記の単体テスト
+- ✅ `viewer/mpr.ts` … `buildMprVolume` に `opts?: { maxBytes?: number }`（V2 二重防御）
+- ✅ `viewer/volumeMemoryGuard.ts` **（新規）** … 設定読み出し ＋ `window.confirm`（V2）
+  ＋ `resolveVolumeBudgetMb()`（V3 のバジェット決定順）
+- ✅ `mpr/MprScreen.tsx` … `fetchSeriesLayout` 追加 ＋ ガード（V2）／エラー識別（V1）
+- ✅ `viewer3d/Viewer3DScreen.tsx` … ガード（V2）／エラー識別（V1）／寸法ガード（V4）
+- ✅ `slicer/SlicerScreen.tsx`（起動・C/T 切替）/ `curvedmpr/CurvedMprScreen.tsx` … ガード（V2）／エラー識別（V1）
+- ✅ `desktopBridge.ts` … `MemoryInfo` ＋ `getMemoryInfo?`（V3）
+- ✅ `settings/registry.ts` … 新セクション（§6。V1=`volumeMaxMb` / V2=`volumeWarnBeforeBuild`）
+- ✅ `api.ts` … `SeriesPixelFormat` ＋ `SeriesLayoutDto.pixelFormat`（V2）
+- ✅ `i18n/ja.ts` / `i18n/en.ts` … §7（V1 / V2 / V4 分）
 
 **backend**
-- `dicom/SeriesLayout.java` … record に 5 フィールド ＋ `noSpatial` 更新
-- `dicom/DicomStorageService.java:294-317` … standalone 側の書き込み
-- `dicom/web/SeriesLayoutAssembler.java:96-101` … web 側の書き込み
+- ✅ `dicom/SeriesLayout.java` … record に `PixelFormat` ＋ `noSpatial` 更新
+- ✅ `dicom/SeriesLayoutAssembler.java` … `readPixelFormat()`（standalone / web で共有）＋ web 側の書き込み
+- ✅ `dicom/store/DicomStorageService.java` … standalone 側の書き込み（classic ＋ モザイク）
+- ✅ `dicom/SegFrameExpander.java` … SEG は展開後の 8bit で返す
+- ✅ `src/test/.../SeriesLayoutPixelFormatTest.java` **（新規）** … 抽出の単体テスト
 
-**desktop**
-- `main.js` … `graphy:get-memory-info`（V3）
-- `preload.js` … `getMemoryInfo` 公開（V3）
+**desktop**（⚠️ 自動テスト対象外・実機確認が必要）
+- ✅ `main.js` … `graphy:get-memory-info`（V3）
+- ✅ `preload.js` … `getMemoryInfo` 公開（V3）
+
+---
+
+## 10. 残作業
+
+- [ ] **実機確認（standalone）**: `npm run dev-desktop` で
+  (1) `graphy:get-memory-info` が実搭載量を返すか、(2) 未設定時の上限が搭載メモリから決まるか、
+  (3) 大きなシリーズで警告が出て「キャンセル」が効くか。
+- [ ] MPR / Slicer / Curved MPR への 3D テクスチャ寸法ガード（V4 の横展開。§V4 の注記）。
+- [ ] 設定ダイアログに「現在適用中の上限」の実値表示（自動決定した値が UI に出ない）。
+- [ ] `viewer/mpr.ts` の `loadAndCacheImage(...).catch(() => null)` は画像ロードの例外を握り潰す。
+  予測が効かないシリーズでは、超過の発生点と例外の観測点がずれたままになっている。

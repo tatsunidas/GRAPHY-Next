@@ -90,6 +90,23 @@ matchMedia("(pointer: coarse)")      → タッチ主体
   必要量から判断する。端末で線引きすると、高性能タブレットで無用に制限され、低性能端末では
   結局落ちる。
 
+**実装（2026-07-31 / M1）** — `frontend/src/mobile/useDeviceClass.ts`
+
+| 端末クラス | 幅 | 自動判定 | 理由 |
+|---|---|---|---|
+| phone | ≤768px | **常にモバイル** | この幅にデスクトップ UI は入らない |
+| tablet | ≤1024px | **`pointer: coarse` のときだけ**モバイル | 1024px 以下に縮めただけのデスクトップブラウザを巻き込まない |
+| desktop | >1024px | 常にデスクトップ | **タッチ対応ノート PC を巻き込まない**（`coarsePointer` だけで判定すると誤爆する） |
+
+- 純関数（`classifyDevice` / `autoUiMode` / `resolveUiMode` / `normalizeOverride`）と React フックを
+  同じファイルに分けて置き、純関数側だけを vitest で固定した（`useDeviceClass.test.ts`）。
+- 手動切替の保存キーは `graphy.ui.modeOverride`（`auto` は保存せず削除）。
+  `storage` イベントも購読しているので、別タブでの切替が反映される。
+- `matchMedia` の購読は `addEventListener` と `addListener` の両対応
+  （Safari 13 以前は後者のみ。iOS を対象にするため）。
+- ⚠️ **フックは `status.mode` を見ない。** モバイルシェルを出してよいのは web モードだけだが、
+  それは呼び出し側（`App.tsx`）の判断。フックの責務はあくまで端末クラス。
+
 ### 3.2 マルチウィンドウ → 同一タブ hash 遷移
 
 現状すべてのビューアは別ウィンドウで開く。web モードでは
@@ -115,6 +132,43 @@ matchMedia("(pointer: coarse)")      → タッチ主体
                                         └→ レポート（全画面）
 ```
 
+**実装（2026-07-31 / M1）** — `frontend/src/mobile/mobileRoute.ts` ＋ `MobileScreen.tsx`
+
+- ルートは `#mobile` / `#mobile/series` / `#mobile/viewer` / `#mobile/report`。
+  `App.tsx` の既存 hash ルータ（`#2dviewer` 等）と同じ名前空間に、`mobile` を親にして置いた。
+  `isMobileRoute` は `#mobilex` のような紛らわしい名前を弾く（前方一致だけにしない）。
+- 未知のサブパスは root に倒す（壊れた URL で白画面にしない）。
+- 前進は `location.hash` 代入（履歴に積まれる）、戻るは `history.back()` を優先。
+  直接 URL で深い画面に入った場合だけ親へ `location.replace`。
+- **`MOBILE_SHELL_READY = true`（2026-07-31 に有効化）。** web モードのスマホ/タブレットは
+  自動でモバイルシェルへ入る。**実機確認（M9）は未実施のまま有効化した**
+  ＝最初の実機テストが本番の利用者になることを承知のうえでの判断。
+  公開デモを含む web モードの全スマホ利用者が対象。
+- 🔧 **不具合が出たときの緊急停止はこの 1 行を `false` に戻す。** 自動振り分けだけが止まり、
+  System メニューの「モバイル UI に切り替え」による手動切替は残る。
+- 自動振り分けの条件は「web モード ＋ メインウィンドウ ＋ IID 起動でない」。
+  IID 起動は `#2dviewer` へ遷移するので、取り合いになるのを避ける。
+  遷移は `location.replace` で行い履歴を汚さない（「戻る」でデスクトップ UI に戻れてしまうのを防ぐ）。
+- シェルの高さは `100vh` でも `100dvh` でもなく **`position: fixed; inset: 0`**。
+  `100vh` は iOS Safari のアドレスバー伸縮で下端が隠れ、`100dvh` は Safari 15.4 未満で効かない。
+  ヘッダ/フッタは `env(safe-area-inset-*)` を見る。タップターゲットは 44px 以上。
+
+**M2 の追加（2026-07-31）**
+
+- 選択状態（検索条件・スタディ・シリーズ）は `MobileScreen` が持つ。hash 遷移ではアンマウント
+  されないので state は生き残るが、**スマホはタブが裏に回ると破棄されて復帰＝リロードになる**ため
+  `graphy-mobile-ctx` にも書き出す。デスクトップのビューア起動コンテキスト（`graphy-viewer-ctx` 等）
+  とは別キー — あちらは「別ウィンドウへ渡す」、こちらは「自分の続きから開く」ためのもの。
+- 直接 URL / リロードで選択が無いまま深い画面にいる場合は、`location.replace` で親へ戻す
+  （履歴に「行けない画面」を残さない）。
+- 一覧はデスクトップの表（6〜7 列）ではなく **1 件 = 1 カード**の縦リスト。
+- 検索は入力 1 本＋期間プリセットのチップ。**数字だけなら患者 ID、それ以外は氏名**として送る
+  （狭幅ゆえの割り切り。backend はどちらも部分一致）。
+- ⚠️ **iOS Safari は 16px 未満の入力欄でフォーカス時に自動ズームする。** 検索欄は `fontSize: 16` を維持。
+- ⚠️ 期間プリセットで **`setMonth` / `setFullYear` の暦計算は使わない。** 7/31 の 1 か月前は
+  存在しない「6/31」なので JS が 7/1 へ**繰り上げ**、期間が狭まって 6 月末の検査を取りこぼす。
+  日数で引く（月 = 31 日、年 = 366 日）＝広めに外す。回帰防止テストあり。
+
 ### 3.3 タッチバインドの追加
 
 **`numTouchPoints` の使用が frontend 全体で 0 件。** バインドはすべて `MouseBindings` のみ
@@ -139,6 +193,27 @@ Cornerstone3D 3.33.5 は 1 本指タッチをアクティブツール（`MouseBi
 3. **ROI 計測のハンドル操作は実機検証が必須**。タップターゲットが小さいため、ハンドル半径の
    拡大が必要になる可能性が高い。
 4. 3D は vtk.js の interactor がタッチを処理するので回転/ピンチは動く見込み（要検証）。
+
+**実装（2026-07-31 / M4）**
+
+- **1 本指のバインドは書かない。** Cornerstone の `getActiveToolForTouchEvent` が
+  「1 タッチ かつ Primary バインド」を自動で拾うので、明示すると二重定義になるだけ。
+- **2 本指は `PanTool` ではなく `ZoomTool` に割り当てる。** ZoomTool は既定で
+  `pinchToZoom: true` かつ `pan: true` で、`_pinchCallback` が**ピンチ拡大縮小と平行移動を同時に**
+  処理する。PanTool を割り当てると平行移動しかできない。バインドは `Viewer2D` の 2 箇所
+  （初期配線と `setActiveTool`）に `TOUCH_ZOOM_BINDING` として入れた。
+- 🔑 **3 本指のスライス送りに `StackScrollTool` は使わない。** 表示スライスは
+  `SeriesViewer` の React state（z）が唯一の出所で、ツールが viewport の `imageIdIndex` を
+  直接動かすと次の再描画で巻き戻る。`SeriesViewer` に touch リスナを足し、既存のホイール送りと
+  同じ `step()` を呼ぶ。ジェスチャの解釈は `viewer/touchScroll.ts`（純関数・単体テスト付き）。
+  - 端数は `Math.trunc`（`Math.floor` だと上方向の微動で −1 が出て、指を止めても動く）
+  - 起点は送った分だけ進めて**端数を残す**（毎回現在位置へ丸めると連続送りが引っかかる）
+- ✅ **ROI ハンドルのタップターゲットは対処不要だった。** cornerstone の
+  `store/filterToolsWithMoveableHandles.js` が `interactionType === 'touch' ? 36 : 6` と、
+  **タッチ時は既に 36px** を使っている。設計時の「拡大が必要になる可能性が高い」は杞憂。
+  ただし**見た目のハンドル半径は変わらない**ので、掴めるが小さく見える。M9 で実機確認する。
+- `touchAction: "none"` は `Viewer2D.pixelLayer` / `MprScreen.vpEl` / `Viewer3DScreen.vpEl` の 3 箇所。
+  Slicer / Curved MPR は Pointer Events 実装で既に指定済み。
 
 ### 3.4 追い風 — 画像操作は既にボタン化されている
 
@@ -172,6 +247,18 @@ Cornerstone3D 3.33.5 は 1 本指タッチをアクティブツール（`MouseBi
 **`useStudies()` / `useSeries()` / `useInstances()` に抽出する**（各 20 行程度、合計 100 行未満）。
 既存 `StudyList.tsx` も同じフックに置き換えて重複を防ぐ。
 
+**実装（2026-07-31 / M2）**
+
+- 3 つとも `useState` ＋ `useEffect` ＋ `fetch` ＋ `cancelled` フラグという**同じ形**だったので、
+  設計に無かった `hooks/useAsyncData.ts` を 1 枚挟んだ。**取り違えると壊れる `cancelled` の扱いを
+  1 箇所に閉じる**のが目的で、3 つのフックはその薄いラッパになっている。
+- `data === null` が「未取得」、`loading` が「いま飛んでいる」。**「検索していないので空」と
+  「検索したが 0 件」を出し分ける**ために両方要る（既存 `StudyList` の `filters == null` 分岐と同じ意味）。
+- `useStudies` はレポート件数（●/○ 表示）を `withReportCounts` でオプトインにした。
+  モバイル側は M8 まで不要なので既定 OFF。取得失敗は握り潰す（補助情報）。
+- `StudyList.tsx` の 3 箇所（studies / series / instances）を置き換え済み。
+  選択・ページのリセットはコンポーネントに残し、**取得だけ**を移した。
+
 > HTTP 層（`api.ts` / `http.ts` / `apiBase.ts`）は既に完全分離されており、**web / standalone の差は
 > backend が吸収している**（`StudyController.java:38`）。フロントは同じ `/api/studies` を叩くだけなので、
 > 差分の再実装は不要。
@@ -190,6 +277,28 @@ IHE IID 起動（`App.tsx:52-95`、`:57` で web モード限定）が既に
 タイルは **1×1 固定**（マルチタイルは狭幅で成立しない）。左ツリー（`width: 280` 固定）と
 右 ROI パネル（`width: 260` 固定）はドロワー化する。
 
+**実装（2026-07-31 / M3）** — `mobile/MobileViewer.tsx` ＋ `mobile/MobileToolbar.tsx`
+
+- `SeriesViewer` は**無改変**。`fillHeight` ＋ `commandKey="mobile-tile"` で使い、操作は既存の
+  `viewerCommands` レジストリ経由で送る。`key={seriesInstanceUid}` を付けてシリーズ切替時に
+  内部状態（Z/C/T・ソート）を持ち越さない。
+- **`showControls` は `true` のまま**にした。設計文の「ツールバーを差し替える」に対して、
+  スライス送りスライダー／シネ／ThickSlab／オーバーレイ行が**すべてこのパネルにある**（§3.4）ためで、
+  `false` にすると**スライス送りの手段が無くなる**。`SeriesViewer` にスライス設定コマンドは無く、
+  追加すると 808 行の共有コンポーネントに手を入れることになるので、M3 では見送った。
+  → モバイルツールバーは**このパネルに無いもの**だけを担当する:
+  ツール切替（W/L / Pan / Zoom）・Fit・**複合リセット**・90°回転・W/L プリセット・シリーズドロワー。
+- **複合リセット**: `reset()` は camera（zoom/pan/rotation/flip）だけで W/L は戻らないので、
+  `reset()` ＋ `resetWindow()` を続けて呼ぶ 1 ボタンにした（既存コマンドは変更していない）。
+- ツールバーは折り返さず**横スクロール**（`overflow-x: auto` / `touch-action: pan-x`）。
+  折り返すと縦に伸びて画像が潰れるため。タップターゲットは 44px 以上。
+- 左ツリー相当は**下からせり上がるシート**のドロワー。ビューアを離れずシリーズを切り替えられる。
+- ⚠️ **既知の見た目の問題（M9 で扱う）**: `SeriesViewer` の操作パネルは明るいテーマ（`#f7f9fb`）で、
+  モバイルシェルの暗い背景の中に白いカードとして出る。機能はするが統一感が無い。
+- ⚠️ **M4（タッチバインド）が入るまで実用にならない。** `pixelLayer` に `touch-action: none` が
+  無いので、画像上のドラッグがページスクロールと競合する。`MOBILE_SHELL_READY` を true にするのは
+  **M4 完了後**（当初は「M3 完了時」と書いていたが、この理由で先送りした）。
+
 ### 4.2 3D / MPR
 
 - **`volume-memory-guard.md` の V1・V2 が入っていることが前提。** 入っていない状態でモバイルに
@@ -201,6 +310,26 @@ IHE IID 起動（`App.tsx:52-95`、`:57` で web モード限定）が既に
   （`viewer/vtkVolumeView.ts:545-546`、`viewer3d/Viewer3DScreen.tsx:139`）で、
   `viewer/cinematicPathTracer.ts:19` に「standalone(Electron) 前提」と明記されている。
 - WebGL コンテキストロス時の Retry は既存実装（`viewer3d/Viewer3DScreen.tsx:340-365`）が効く。
+
+**実装（2026-07-31 / M5）**
+
+- 🔑 **モバイル用の 3D/MPR 画面は新規に作らず、既存画面を狭幅で作り分ける。**
+  `MprScreen` / `Viewer3DScreen` は元々 `position: fixed; inset: 0` の全画面コンポーネントで、
+  これは**モバイルの単画面シェルにとって望ましい形そのもの**。モバイルシェルからは
+  `mobile/launchViewer.ts` が既存のコンテキスト（`graphy-mpr-ctx` / `graphy-viewer3d-ctx`）を書いて
+  **同一タブの hash 遷移**（`#mpr` / `#viewer3d`）で開く。ブラウザの「戻る」でシェルへ戻る。
+  → §1 の「既存 UI をレスポンシブ化しない」方針とは矛盾しない。あれは inline style 726 箇所の
+  メイン/2D 画面の話で、§4.2 は元々「MPR を 1 面にする / 3D の右パネルをドロワー化する」＝
+  これらの画面自体を作り分けよと指示している。
+- 判定は両画面が `useDeviceClass()` を直接呼ぶ（プロップの引き回し無し）。**手動でデスクトップ UI を
+  選んでいれば従来どおり**（3 面同時・常設パネル）。
+- ⚠️ **MPR の 1 面表示でも 3 つのビューポートは必ずマウントしたままにする。**
+  Crosshairs は 3 面が揃って初めて連動し、要素を外す/寸法 0 にすると cornerstone のリサイズが壊れる。
+  3 面を `position: absolute; inset: 0` で重ね、非表示は **`visibility` だけ**で行う（寸法は全面のまま）。
+- 3D の右パネル（`width: 240` 固定）は狭幅で右からのドロワー＋スクリムに。中身は共通で器だけ差し替え。
+- Cinematic / パストレーサの起動ボタンは狭幅で非表示。
+- MPR / 3D の両ヘッダに狭幅時だけ「戻る」（`history.back()`）を出す。デスクトップは別ウィンドウで
+  開くため戻る導線は不要（＝`narrow` でガードしている）。
 
 ### 4.3 Fusion — 2D のみ
 
@@ -218,6 +347,21 @@ VolumeViewport では canvas overlay 方式が使えず、2 ボリューム同�
 
 現状 Fusion の設定はセンタードロップ（`viewer2d/Viewer2DScreen.tsx:122,662-673`）で行うため、
 **タッチでは別の導線（シリーズ一覧から「重ねる」選択）が必要**。
+
+**実装（2026-07-31 / M6）** — `mobile/MobileViewer.tsx`
+
+- 導線は**シリーズドロワーの各行に「重ねる」ボタン**。行そのもののタップは従来どおり
+  「そのシリーズを開く」で、重ねるは別ボタンに分けた（タップ 1 つに 2 つの意味を持たせない）。
+  表示中のシリーズには出さない（自分自身に重ねても意味が無い）。
+- 描画は既存の `FusionImageViewer` を `SeriesViewer` の `renderFusionOverlay` へ渡すだけ。
+  デスクトップと**同じ経路**で、web / standalone の差は `mode` を渡すだけで吸収される。
+- ⚠️ `renderFusionOverlay` は **`useMemo` で安定化が必須**。毎レンダ別関数だと `Viewer2D` 側の
+  rect 初期計算 effect がループする（`Viewer2DScreen` の同等箇所にも同じ注意書きがある）。
+- 不透明度は画像下のバーにスライダー 1 本。初期値はデスクトップのセンタードロップと同じ 0.5。
+- base シリーズを切り替えたら Fusion は解除する（重ね合わせの意味が変わるため）。
+- **LUT と Fusion の W/L はモバイルでは出さない**（デスクトップの `FusionControls` 相当）。
+  参照用途では不透明度で足り、狭幅に載せると操作が細かくなりすぎるため。必要になったら M9 以降。
+- C/T は常に 0。モバイルシェルはマルチ C/T の切替 UI を持たない。
 
 ## 5. レポート
 
@@ -239,6 +383,24 @@ VolumeViewport では canvas overlay 方式が使えず、2 ボリューム同�
    web モードで STOW している（`SegExportService.java:216` / `RtStructExportService.java:173` も同型）。
 
 順序は 1 → 2。両方入って初めて「web でキー画像付きレポートを確定して PACS に返す」が成立する。
+
+**実装（2026-07-31 / M7）** — `report/ReportService.java`
+
+- 1.（409 の解消）`resolveKeyImageSopClassUids()` を新設。standalone はローカル索引、
+  web は QIDO-RS。**シリーズが分かっていればシリーズ配下で絞る**（`KeyImageRef.seriesInstanceUid`）。
+  分からない場合だけスタディ配下を横断する（そのために
+  `WebDicomDataService.searchStudyInstances()` を追加した）。
+  `includefield=00080016` を明示するのは、既定の返却属性が PACS 実装で異なるため。
+- 応答の選択は純関数 `pickSopClassUid()` に分けて単体テストを付けた。
+  ⚠️ **UID 一致が無くても 1 件だけなら採用する**（QIDO 応答に SOPInstanceUID を含めない PACS があり、
+  絞り込み条件が効いている前提でのフォールバック）。**2 件以上あって一致が無ければ null**＝409 にする。
+  推測して誤った SOP Class を SR に書くより止める方が安全。
+- 2.（見えない SR の解消）`store(List<Attributes>)` を新設。web は `storeDatasets()` で STOW-RS、
+  standalone は従来どおり `ingest()`。**SR と KO をまとめてから 1 リクエストで送る**
+  （`dicom/derived/DerivedSeriesService` と同型）。
+- PACS 未到達・タイムアウトは「見つからない」として扱い 409 にする（例外をそのまま 500 にしない）。
+- ⚠️ **実 PACS での検証は未実施。** 単体テストは QIDO 応答の選択部分と standalone の確定経路まで。
+  STOW-RS 送信自体はテストしていない（DICOMweb 層の他の機能と同じ扱い）。
 
 ### 5.3 モバイル用エディタは新規に書く
 
@@ -262,12 +424,42 @@ VolumeViewport では canvas overlay 方式が使えず、2 ボリューム同�
 > `MarkdownEditor.tsx:14` の `PREVIEW_DEBOUNCE_MS = 400` は「入力中にタブが応答なしになる」
 > 過去バグへの対策。**低スペック端末では 400ms でも不足する可能性がある**ので実機で確認する。
 
+**実装（2026-07-31 / M8）** — `mobile/MobileReportEditor.tsx`
+
+- **縦積みではなくタブ切替**（編集 / プレビュー）にした。縦積みだと 2 つに高さを割ることになり、
+  ソフトキーボードが出た残りの高さでは textarea が数行しか残らない。タブなら全高を渡せる。
+- ⚠️ **`visualViewport` 追随はシェル側で行う**（`mobile/useVisualViewport.ts`）。
+  iOS Safari は**ソフトキーボードが出ても layout viewport を縮めない**ので、
+  `position: fixed; inset: 0` のシェルは画面いっぱいのままで、下端（入力欄・保存ボタン）が
+  キーボードの裏に隠れる。可視領域の高さをシェルの `height` に反映して回避する。
+  `visualViewport` 非対応環境では従来どおり `inset: 0`（挙動を変えない）。
+- 入力欄は `fontSize: 16` 固定。**iOS Safari は 16px 未満の入力欄でフォーカス時に自動ズームする**。
+- 下書きはスタディ内の DRAFT を 1 件開く。無ければ空で始め、**作成は最初の保存時**
+  （画面を開いただけで空レポートを量産しない）。
+- 確定は「保存 → 確定」の順で行う（未保存の本文を落とさない）。確認は `window.confirm`。
+- 編集者名は `graphy.report.editorName` を**デスクトップと同じキー**で読む（§5.5 のとおり
+  作成者の記録方式は変更しない）。
+- プレビューのデバウンスはデスクトップと同じ 400ms。低スペック端末での過不足は M9 で確認する。
+- 未実装（意図的）: 参加者（`participants`）・臨床情報・依頼医の編集。参照用途では本文と
+  キー画像で足り、狭幅に載せると項目が多すぎるため。デスクトップのエディタで扱う。
+
 ### 5.4 キー画像の追加導線
 
 現状は「MainScreen で選択中のシリーズのインスタンス一覧から選ぶ」方式のみで、
 **表示中の画像から直接追加する導線がない**（`report/KeyImageGrid.tsx:12-13`、
 `report-design.md` §9 で将来対応とされている）。単画面ビューアでは
 「いま見ている画像を添付」が最も自然なので、**この導線を新規に実装する**。
+
+**実装（2026-07-31 / M8）**
+
+- モバイルツールバーの「レポートに添付」→ 表示中スライスをキー画像として溜め、
+  レポート画面へ遷移する（1 タップで添付＋移動）。
+- SOPInstanceUID は `viewerCommands.getTargetInfo()` の `imageId` から `sopOfImageId()`
+  （cornerstone のメタデータ経由。SEG/マスク書き出しと同じ解決）で引く。
+  ⚠️ **解決できなければ何もしない**（メタデータ未読の段階で誤った UID を載せない）。
+- 溜める先は `MobileScreen` の state。ビューアからレポート画面へ hash 遷移してもシェルは
+  アンマウントされないので受け渡せる。エディタが取り込んだら空にする。
+- 実際の保存はエディタの「保存」で `updateReport` の `keyImages` として送る。
 
 ### 5.5 作成者の記録は現状のまま（2026-07-30 決定）
 
@@ -283,16 +475,16 @@ VolumeViewport では canvas overlay 方式が使えず、2 ボリューム同�
 
 | Phase | 内容 | 依存 | 状態 |
 |---|---|---|---|
-| **M0** | `volume-memory-guard.md` の V1・V2 | — | 未着手（別ドキュメント） |
-| **M1** | デバイス判定 `useDeviceClass()` ＋ 手動切替 ＋ `#mobile` ルート追加 ＋ シェル骨格 | — | 未着手 |
-| **M2** | データ取得フック抽出（`useStudies` / `useSeries` / `useInstances`）＋ 検索→スタディ→シリーズの単画面ナビゲーション | M1 | 未着手 |
-| **M3** | 2D ビューア（1×1 固定・ドロワー・モバイルツールバー・複合リセット） | M2 | 未着手 |
-| **M4** | タッチバインド（`numTouchPoints` ＋ `touchAction: none`）＋ ROI 計測のタップターゲット調整 | M3 | 未着手 |
-| **M5** | 3D / MPR（1 面＋面切替・ドロワー・Cinematic 非表示） | M0, M3 | 未着手 |
-| **M6** | Fusion（タッチ用の重ね合わせ導線） | M3 | 未着手 |
-| **M7** | レポート backend（キー画像 QIDO 解決 → STOW-RS 書き戻し） | — | 未着手 |
-| **M8** | レポート モバイルエディタ（縦積み・visualViewport 追随・表示中画像の添付） | M7, M3 | 未着手 |
-| **M9** | 実機検証（iOS Safari / Android Chrome / iPad）＋ automator への追加 | 全部 | 未着手 |
+| **M0** | `volume-memory-guard.md` の V1・V2 | — | ✅ 完了（2026-07-31。V1〜V4 すべて実装済み） |
+| **M1** | デバイス判定 `useDeviceClass()` ＋ 手動切替 ＋ `#mobile` ルート追加 ＋ シェル骨格 | — | ✅ 完了（2026-07-31） |
+| **M2** | データ取得フック抽出（`useStudies` / `useSeries` / `useInstances`）＋ 検索→スタディ→シリーズの単画面ナビゲーション | M1 | ✅ 完了（2026-07-31） |
+| **M3** | 2D ビューア（1×1 固定・ドロワー・モバイルツールバー・複合リセット） | M2 | ✅ 完了（2026-07-31）／実機未確認 |
+| **M4** | タッチバインド（`numTouchPoints` ＋ `touchAction: none`）＋ ROI 計測のタップターゲット調整 | M3 | ✅ 完了（2026-07-31）／実機未確認 |
+| **M5** | 3D / MPR（1 面＋面切替・ドロワー・Cinematic 非表示） | M0, M3 | ✅ 完了（2026-07-31）／実機未確認 |
+| **M6** | Fusion（タッチ用の重ね合わせ導線） | M3 | ✅ 完了（2026-07-31）／実機未確認 |
+| **M7** | レポート backend（キー画像 QIDO 解決 → STOW-RS 書き戻し） | — | ✅ 完了（2026-07-31）／実 PACS 未検証 |
+| **M8** | レポート モバイルエディタ（縦積み・visualViewport 追随・表示中画像の添付） | M7, M3 | ✅ 完了（2026-07-31）／実機未確認 |
+| **M9** | 実機検証（iOS Safari / Android Chrome / iPad）＋ automator への追加 | 全部 | 🔴 **未着手（人手が要る）**。手順は §10 |
 
 M7 は frontend に依存しないので M1〜M6 と並行できる。
 
@@ -325,27 +517,106 @@ M7 は frontend に依存しないので M1〜M6 と並行できる。
 ## 9. 実装対象ファイル一覧（新規 / 変更）
 
 **新規（モバイルシェル）**
-- `frontend/src/mobile/useDeviceClass.ts` … デバイス判定 ＋ 手動切替の永続化
-- `frontend/src/mobile/MobileScreen.tsx` … `#mobile` ルートのシェル（ナビゲーションスタック）
-- `frontend/src/mobile/MobileStudyBrowser.tsx` … 検索 → スタディ → シリーズ
-- `frontend/src/mobile/MobileViewer.tsx` … 2D / 3D / MPR のタブ切替
-- `frontend/src/mobile/MobileToolbar.tsx` … ツール切替・W/L プリセット・複合リセット
-- `frontend/src/mobile/MobileReportEditor.tsx` … 縦積みエディタ
-- `frontend/src/hooks/useStudies.ts` / `useSeries.ts` / `useInstances.ts` … 取得ロジック抽出
+- ✅ `frontend/src/mobile/useDeviceClass.ts` … デバイス判定 ＋ 手動切替の永続化（M1）
+- ✅ `frontend/src/mobile/mobileRoute.ts` … hash ルート ＋ ナビゲーションスタックの親子関係
+  ＋ `MOBILE_SHELL_READY` ゲート（M1。設計時には無かったファイル）
+- ✅ `frontend/src/mobile/MobileScreen.tsx` … `#mobile` ルートのシェル（ナビゲーションスタック）（M1）
+  ＋ 選択状態（検索条件・スタディ・シリーズ）の保持（M2）
+- ✅ `frontend/src/mobile/mobileCtx.ts` … 選択状態の localStorage 永続化（M2。設計時には無かったファイル）
+- ✅ `frontend/src/mobile/dateRange.ts` … 検索の期間プリセット（M2。同上）
+- ✅ `frontend/src/mobile/useDeviceClass.test.ts` / `mobileRoute.test.ts` / `dateRange.test.ts` … 単体テスト
+- ✅ `frontend/src/mobile/MobileStudyBrowser.tsx` … 検索 → スタディ → シリーズ（M2）
+- ✅ `frontend/src/mobile/MobileViewer.tsx` … 2D（M3）／シリーズ切替ドロワー／3D・MPR 起動（M5）／
+  Fusion の「重ねる」導線と不透明度バー（M6）
+- ✅ `frontend/src/mobile/launchViewer.ts` … 3D / MPR を同一タブで開く（M5。設計時には無かったファイル）
+- ✅ `frontend/src/mobile/MobileToolbar.tsx` … ツール切替・W/L プリセット・複合リセット（M3）
+- ✅ `frontend/src/mobile/MobileReportEditor.tsx` … タブ切替エディタ（M8。縦積みから変更）
+- ✅ `frontend/src/mobile/useVisualViewport.ts` … ソフトキーボード追随（M8。設計時には無かったファイル）
+- ✅ `frontend/src/hooks/useStudies.ts` / `useSeries.ts` / `useInstances.ts` … 取得ロジック抽出（M2）
+- ✅ `frontend/src/hooks/useAsyncData.ts` … 上記 3 つの共通部分（M2。設計時には無かったファイル）
 
 **変更（frontend）**
-- `App.tsx` … `#mobile` ルート追加 ＋ 初回アクセス時の自動振り分け
-- `mainscreen/MainScreen.tsx:87-157` … `handleOpenViewer` にモバイル分岐（hash 遷移）
-- `StudyList.tsx` … 抽出したフックへ置き換え（重複解消）
-- `viewer/Viewer2D.tsx` … `numTouchPoints` バインド ＋ `pixelLayer` に `touchAction: "none"`
-- `viewer/mpr.ts:310-313` … `numTouchPoints` バインド
+- ✅ `App.tsx` … `#mobile` ルート追加 ＋ 初回アクセス時の自動振り分け（M1。ゲートは `MOBILE_SHELL_READY`）
+- ✅ `mainscreen/MainScreen.tsx` / `mainscreen/MenuBar.tsx` … System メニューに手動切替を追加（M1。web のみ）
+- `mainscreen/MainScreen.tsx:87-157` … `handleOpenViewer` にモバイル分岐（hash 遷移）（M2/M3）
+- ✅ `StudyList.tsx` … 抽出したフックへ置き換え（重複解消）（M2）
+- ✅ `viewer/Viewer2D.tsx` … 2 本指 = ZoomTool（ピンチ＋Pan）バインド ＋ `pixelLayer` に
+  `touchAction: "none"`（M4）
+- ✅ `viewer/SeriesViewer.tsx` … 3 本指の縦ドラッグでスライス送り（M4）
+- ✅ `viewer/touchScroll.ts` / `touchScroll.test.ts` **（新規）** … 上記ジェスチャの純関数（M4）
+- ✅ `mpr/MprScreen.tsx` … viewport に `touchAction: "none"`（M4）／狭幅で 1 面＋面切替タブ＋戻る（M5）
+- ✅ `viewer3d/Viewer3DScreen.tsx` … viewport に `touchAction: "none"`（M4）／狭幅で右パネルをドロワー化・
+  Cinematic 非表示・戻る（M5）
+- `viewer/mpr.ts:310-313` … MPR のツールバインドは**変更していない**。MPR の 1 面表示は M5 の範囲で、
+  そこで Crosshairs/WindowLevel/Pan のタッチ割り当てを決める
 - `i18n/ja.ts` / `i18n/en.ts` … モバイル UI 文言（**両方必須**）
 
 **変更（backend / レポート M7）**
-- `report/ReportService.java:189-194` … キー画像 SOPClassUID の QIDO 解決経路
-- `report/ReportService.java:197,203,268-` … web モードで STOW-RS 書き戻し
-  （`dicom/derived/DerivedSeriesService.java:92-110` を参考）
+- ✅ `report/ReportService.java` … `resolveKeyImageSopClassUids()`（QIDO 解決）＋
+  `store()`（web は STOW-RS）＋ `pickSopClassUid()`（応答選択の純関数）
+- ✅ `dicom/web/WebDicomDataService.java` … `searchStudyInstances()` を追加
+- ✅ `src/test/.../ReportKeyImageSopClassTest.java` **（新規）** … 応答選択の単体テスト
 
 **是正（§8）**
 - `fw/mpr-viewer-design.md` / `fw/3d-viewer-design.md` / `fw/HANDOFF.md`
 - 各画面の `Phase` 型と未使用 i18n キー
+
+---
+
+## 10. M9: 実機検証の手順（人手が要る）
+
+**M1〜M8 は実装済み（2026-07-31）。残るのは実機確認だけ。** 自動テストは純ロジックのみで、
+**UI の見た目・タッチの効き・iOS 固有の挙動は一切守られていない**。
+
+### 10.1 まず知っておくこと
+
+- モバイル UI は **web モード専用**。`make dev-web` か公開デモ（`demo.vis-ionary.com`）で確認する。
+  standalone（Electron）では対象外。
+- **自動振り分けは ON**（`mobile/mobileRoute.ts` の `MOBILE_SHELL_READY = true`）。
+  スマホ/タブレットでアクセスすればそのままモバイルシェルに入る。
+  デスクトップから確認するときは **System メニュー →「モバイル UI に切り替え」**。
+  戻るときはモバイルシェル右上の「デスクトップ UI」。
+- 🔧 **問題が出たら `MOBILE_SHELL_READY` を `false` に戻す**（自動振り分けだけ止まる）。
+- 端末が無くても、デスクトップブラウザの**デバイスエミュレーション**（DevTools）で
+  幅とポインタ精度を偽装すればおおむね追える。ただし
+  **iOS Safari 固有の 3 点（アドレスバーの伸縮・ソフトキーボード・16px 未満の自動ズーム）は
+  実機でしか出ない**ので、そこだけは実機が要る。
+
+### 10.2 確認する項目
+
+| # | 何を | どこ | 見るもの |
+|---|---|---|---|
+| 1 | 端末判定 | 初回アクセス | phone/tablet/desktop の分岐（§3.1 の表）。タッチ対応ノート PC が巻き込まれないこと |
+| 2 | 手動切替 | System メニュー ↔ シェル右上 | 双方向に切り替わる。選択が次回起動でも残る |
+| 3 | 検索 → スタディ → シリーズ | M2 | カードのタップ、期間プリセット、ブラウザの「戻る」 |
+| 4 | リロード復帰 | 深い画面で再読込 | 選択が復元される（`graphy-mobile-ctx`）。復元できない場合は親画面へ戻る |
+| 5 | **1 本指の W/L / Pan / Zoom** | M3/M4 | 画像上のドラッグが**ページスクロールに奪われない**こと |
+| 6 | **2 本指のピンチ Zoom ＋ Pan** | M4 | 拡大縮小と平行移動が同時に効く（ZoomTool の `pinchToZoom`） |
+| 7 | **3 本指の縦ドラッグでスライス送り** | M4 | 送り量・向き（下＝次）・指を止めたときに動かないこと |
+| 8 | 複合リセット | M3 | camera と W/L の**両方**が戻る |
+| 9 | ROI ハンドルの掴みやすさ | M4 | cornerstone は touch で proximity 36px を使う。**掴めるが見た目は小さい**はず。実用に足るか |
+| 10 | シリーズドロワー | M3 | 下からのシート、背面タップで閉じる |
+| 11 | Fusion | M6 | ドロワーの「重ねる」→ 不透明度スライダー → 解除 |
+| 12 | MPR の 1 面＋面切替 | M5 | 面を切り替えても**十字線が連動**していること（3 面を隠しているだけなので） |
+| 13 | 3D の設定ドロワー | M5 | 右からのドロワー、Cinematic が出ていないこと |
+| 14 | **メモリガードの警告** | V2 | 大きなシリーズで 3D/MPR を開き、確認ダイアログ →「キャンセル」で戻ること |
+| 15 | レポート編集 | M8 | 編集/プレビュー タブ、保存、確定 |
+| 16 | **ソフトキーボード** | M8 | textarea と保存ボタンが**キーボードの裏に隠れない**こと（`visualViewport` 追随） |
+| 17 | **入力欄の自動ズーム** | M2/M8 | 検索欄・本文にフォーカスしても**画面がズームしない**こと（`fontSize: 16`） |
+| 18 | プレビューの引っかかり | M8 | 低スペック端末で入力中に固まらないか（`PREVIEW_DEBOUNCE_MS = 400` の妥当性） |
+| 19 | 見た目の統一感 | M3 | `SeriesViewer` の操作パネルが**明るいテーマのまま**なのが許容できるか（既知） |
+
+### 10.3 確認できたら
+
+1. `MOBILE_SHELL_READY` は**既に `true`**（2026-07-31 に有効化済み）なので操作は不要。
+   問題が見つかった場合は `false` に戻して自動振り分けだけ止める。
+2. automator への追加は **`automator-lut-checklist` ワークツリーの作業と衝突する**ため、
+   そちらの再開時にまとめて行う（このセッションでは触っていない）。
+   置き場は `automator/checklist/desktop/` に対する `mobile/`（web モード用）が要る。
+
+### 10.4 実機以外の残作業
+
+- `SeriesViewer` の操作パネルのダークテーマ対応（10.2 の 19）。
+- MPR / Slicer / Curved MPR への 3D テクスチャ寸法ガード（`volume-memory-guard.md` の V4 横展開）。
+- §8 の「既存ドキュメントの是正」は**未着手**（本設計の着手時に直すとしていたが、
+  M1〜M8 では触っていない）。

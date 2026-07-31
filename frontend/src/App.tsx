@@ -17,6 +17,9 @@ import { SlicerScreen } from "./slicer/SlicerScreen";
 import { CurvedMprScreen } from "./curvedmpr/CurvedMprScreen";
 import { QRScreen } from "./qr/QRScreen";
 import { MonitorQcScreen } from "./monitorqc/MonitorQcScreen";
+import { MobileScreen } from "./mobile/MobileScreen";
+import { mobileHash, parseMobileRoute, MOBILE_SHELL_READY } from "./mobile/mobileRoute";
+import { useDeviceClass } from "./mobile/useDeviceClass";
 import { subscribeDbChanged, type DbChangedDetail } from "./dbEvents";
 import { LogViewerHost } from "./system/LogViewer";
 import { DeveloperContactHost } from "./help/DeveloperContact";
@@ -34,8 +37,10 @@ export function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   // DB 変更で同一ウィンドウの一覧を再読込するためのシグナル。
   const [dbVersion, setDbVersion] = useState(0);
-  // 別ウィンドウ用ルーティング（#2dviewer 等）。
+  // 別ウィンドウ用ルーティング（#2dviewer 等）。モバイルシェルは `#mobile[/sub]`。
   const [screen, setScreen] = useState(() => window.location.hash.replace(/^#/, ""));
+  const { uiMode, setOverride } = useDeviceClass();
+  const mobileView = parseMobileRoute(screen);
 
   useEffect(() => {
     const onHash = () => setScreen(window.location.hash.replace(/^#/, ""));
@@ -94,6 +99,25 @@ export function App() {
     })();
   }, [status, screen]);
 
+  // モバイル端末の自動振り分け（`fw/mobile-ui-design.md` §3.1）。
+  // 条件を絞っている理由:
+  //  - web モード限定 … standalone(Electron) はモバイル対象外（同 §7 非目標）
+  //  - メインウィンドウのみ … `#2dviewer` 等の別ウィンドウを横取りしない
+  //  - IID 起動時はスキップ … あちらが `#2dviewer` へ遷移するので取り合いになる
+  //  - `MOBILE_SHELL_READY` … シェルが実用になるまで（M3）は自動で送らない。手動切替は常に可能
+  const mobileRedirectRef = useRef(false);
+  useEffect(() => {
+    if (!MOBILE_SHELL_READY) return;
+    if (mobileRedirectRef.current) return;
+    if (!status || status.mode !== "web") return;
+    if (screen !== "") return;
+    if (uiMode !== "mobile") return;
+    if (parseIidLaunch(window.location.search)) return;
+    mobileRedirectRef.current = true;
+    // replace で入れて履歴を汚さない（「戻る」でデスクトップ UI に戻れてしまうのを避ける）。
+    window.location.replace(mobileHash("studies"));
+  }, [status, screen, uiMode]);
+
   // 起動時の更新確認（メインウィンドウのみ・デスクトップのみ）。新版があり未スキップの場合だけ通知する。
   // 別ウィンドウ（#2dviewer 等）では二重通知を避けるため実行しない。
   useEffect(() => {
@@ -127,6 +151,12 @@ export function App() {
     return <MonitorQcScreen />;
   }
 
+  // モバイルシェルは自前のヘッダ/ナビゲーションを持つ単画面 UI。
+  // デスクトップ用の共通ダイアログ群（設定・DB 管理・ショートカット等）は載せない。
+  if (mobileView) {
+    return <MobileScreen status={status} view={mobileView} />;
+  }
+
   return (
     <>
       {screen === "2dviewer" ? (
@@ -149,6 +179,11 @@ export function App() {
           onOpenSettings={() => setSettingsOpen(true)}
           onOpenDb={() => setDbOpen(true)}
           onOpenHelp={() => setHelpOpen(true)}
+          onOpenMobileUi={() => {
+            // 明示選択なので override も更新する（次回起動時もモバイルで開く）。
+            setOverride("mobile");
+            window.location.hash = mobileHash("studies");
+          }}
         />
       )}
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />

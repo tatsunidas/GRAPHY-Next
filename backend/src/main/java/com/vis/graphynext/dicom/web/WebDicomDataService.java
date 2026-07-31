@@ -140,6 +140,14 @@ public class WebDicomDataService {
     }
 
     /**
+     * QIDO-RS: スタディ配下の Instance 検索（シリーズ横断）。
+     * シリーズが分からない SOPInstanceUID を引くときに使う（レポートのキー画像解決など）。
+     */
+    public List<Attributes> searchStudyInstances(String studyUid, Map<String, String> query) {
+        return qido("/studies/" + studyUid + "/instances", query);
+    }
+
+    /**
      * dcm4chee 等にそのスタディ（seriesUid != null ならそのシリーズ）が何インスタンス保存済みかを QIDO で数える
      * （QR の保存済み判定）。インスタンス QIDO の件数を返す。未保存/未到達は 0。
      */

@@ -1,0 +1,271 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
+/**
+ * モバイルシェル（`#mobile`）の骨格。設計: `fw/mobile-ui-design.md`（M1）。
+ *
+ * <p>デスクトップ UI をレスポンシブ化するのではなく、**別シェルを足す**方針。`frontend/src` には
+ * `.css` が 1 つも無く、スタイルは inline style で `@media` は 0 件なので、共有スタイルの上書きで
+ * モバイル化する余地が無いため（§1）。既存 UI は一切触らないのでデスクトップは壊れない。
+ *
+ * <p>M1 で「ヘッダ ＋ 戻る導線 ＋ 単画面ナビゲーションスタック ＋ デスクトップ UI への逃げ道」、
+ * M2 で「検索 → スタディ → シリーズ」まで。残りは:
+ * <ul>
+ *   <li>M3 … 2D ビューア（1×1 固定・ドロワー・モバイルツールバー）</li>
+ *   <li>M5 … 3D / MPR、M6 … Fusion、M8 … レポート</li>
+ * </ul>
+ *
+ * <p>選択状態（検索条件・スタディ・シリーズ）は**このコンポーネントが持つ**。hash 遷移では
+ * アンマウントされないので state は生き残り、リロード対策として `mobileCtx` にも書き出す。
+ */
+import { useCallback, useEffect, useState } from "react";
+import type { AppStatus, Series, Study, StudyFilters } from "../api";
+import { useI18n } from "../i18n/i18n";
+import { readMobileCtx, writeMobileCtx } from "./mobileCtx";
+import { MobileSeriesList, MobileStudyList } from "./MobileStudyBrowser";
+import { MobileViewer } from "./MobileViewer";
+import { MobileReportEditor, type PendingKeyImage } from "./MobileReportEditor";
+import { useVisualViewportHeight } from "./useVisualViewport";
+import { mobileHash, parentView, type MobileView } from "./mobileRoute";
+import { useDeviceClass } from "./useDeviceClass";
+
+export function MobileScreen({ status, view }: { status: AppStatus | null; view: MobileView }) {
+  const { t } = useI18n();
+  const { deviceClass, setOverride } = useDeviceClass();
+  const viewportHeight = useVisualViewportHeight();
+
+  // 初期値はリロード前の続き（`readMobileCtx`）。無ければ未検索・未選択。
+  const [filters, setFilters] = useState<StudyFilters | null>(() => readMobileCtx().filters ?? null);
+  const [study, setStudy] = useState<Study | null>(() => readMobileCtx().study ?? null);
+  const [series, setSeries] = useState<Series | null>(() => readMobileCtx().series ?? null);
+  // ビューアの「レポートに添付」で溜めたキー画像。エディタが取り込んだら空にする。
+  const [pendingKeyImages, setPendingKeyImages] = useState<PendingKeyImage[]>([]);
+
+  useEffect(() => {
+    writeMobileCtx({ filters, study, series });
+  }, [filters, study, series]);
+
+  // 前進は hash 代入（履歴に積まれる）。
+  const navigate = useCallback((next: MobileView) => {
+    window.location.hash = mobileHash(next);
+  }, []);
+
+  // 直接 URL やリロードで、選択が無いのに深い画面にいる状態を戻す。
+  // replace なので履歴に「行けない画面」を残さない。
+  useEffect(() => {
+    if ((view === "series" || view === "viewer" || view === "report") && !study) {
+      window.location.replace(mobileHash("studies"));
+    } else if (view === "viewer" && !series) {
+      // レポートはスタディ単位なのでシリーズ未選択でも開ける（ビューアだけシリーズが要る）。
+      window.location.replace(mobileHash("series"));
+    }
+  }, [view, study, series]);
+
+  // 戻るはブラウザ履歴を優先する（利用者のスワイプバックと挙動を揃えるため）。
+  // 直接 URL で深い画面に入った場合は履歴が無いので、親画面へ置き換え遷移する。
+  const goBack = useCallback(() => {
+    const parent = parentView(view);
+    if (!parent) return;
+    if (window.history.length > 1) window.history.back();
+    else window.location.replace(mobileHash(parent));
+  }, [view]);
+
+  /** デスクトップ UI へ抜ける。選択は localStorage に残るので次回もデスクトップで開く。 */
+  const switchToDesktop = useCallback(() => {
+    setOverride("desktop");
+    window.location.hash = "";
+  }, [setOverride]);
+
+  return (
+    <div
+      // ソフトキーボードで縮んだ可視領域に合わせる（§5.3）。iOS Safari は layout viewport を
+      // 縮めないので、これが無いと入力欄や保存ボタンがキーボードの裏に隠れる。
+      style={viewportHeight === null ? shell : { ...shell, bottom: "auto", height: viewportHeight }}
+      data-testid="mobile-shell"
+      data-device-class={deviceClass}
+    >
+      <header style={header}>
+        {parentView(view) ? (
+          <button style={backBtn} onClick={goBack} aria-label={t("mobile.back")} data-testid="mobile-back">
+            ‹
+          </button>
+        ) : (
+          <span style={{ width: 28 }} />
+        )}
+        {/* ビューアでは何を見ているかが要るのでシリーズ名を出す（画面名は自明）。 */}
+        <h1 style={title}>
+          {view === "viewer" && series
+            ? series.seriesDescription || `#${series.seriesNumber ?? "—"}`
+            : t(VIEW_TITLE_KEY[view])}
+        </h1>
+        <button style={escapeBtn} onClick={switchToDesktop} data-testid="mobile-to-desktop">
+          {t("mobile.toDesktop")}
+        </button>
+      </header>
+
+      {/* ビューアは全面表示（余白なし・自前スクロール）。一覧系は読み物なので余白を付ける。 */}
+      <main style={view === "viewer" ? contentFlush : content}>
+        {view === "studies" ? (
+          <MobileStudyList
+            filters={filters}
+            onSearch={setFilters}
+            onSelect={(s) => {
+              setStudy(s);
+              setSeries(null); // スタディを変えたらシリーズ選択は捨てる
+              navigate("series");
+            }}
+          />
+        ) : view === "series" && study ? (
+          <MobileSeriesList
+            study={study}
+            onSelect={(s) => {
+              setSeries(s);
+              navigate("viewer");
+            }}
+          />
+        ) : view === "viewer" && study && series ? (
+          <MobileViewer
+            study={study}
+            series={series}
+            // モバイルシェルは web モード専用（§7 非目標）だが、standalone で直接 URL を
+            // 叩かれても描画自体は成立するので、status に従って imageId を組む。
+            mode={status?.mode === "standalone" ? "standalone" : "web"}
+            onChangeSeries={setSeries}
+            onAttachToReport={(k) => {
+              // 重複は載せない（同じスライスで何度も押されうる）。
+              setPendingKeyImages((prev) =>
+                prev.some((p) => p.sopInstanceUid === k.sopInstanceUid) ? prev : [...prev, k],
+              );
+              navigate("report");
+            }}
+          />
+        ) : view === "report" && study ? (
+          <MobileReportEditor
+            study={study}
+            pendingKeyImages={pendingKeyImages}
+            onConsumePending={() => setPendingKeyImages([])}
+          />
+        ) : (
+          <PlaceholderPanel status={status} />
+        )}
+      </main>
+    </div>
+  );
+}
+
+const VIEW_TITLE_KEY: Record<MobileView, string> = {
+  studies: "mobile.title.studies",
+  series: "mobile.title.series",
+  viewer: "mobile.title.viewer",
+  report: "mobile.title.report",
+};
+
+/**
+ * まだ中身の無い画面（ビューア = M3/M5、レポート = M8）の仮パネル。
+ * 「準備中」であることを隠さず、デスクトップ UI への導線はヘッダに常設してある
+ * （利用者を行き止まりにしない）。
+ */
+function PlaceholderPanel({ status }: { status: AppStatus | null }) {
+  const { t } = useI18n();
+  return (
+    <section style={panel}>
+      <p style={{ margin: 0 }}>{t("mobile.underConstruction")}</p>
+      {/* モバイルシェルは web モード専用（§2 の非目標）。standalone で開かれたら明示する。 */}
+      {status?.mode === "standalone" && <p style={noteText}>{t("mobile.webOnly")}</p>}
+    </section>
+  );
+}
+
+// ── スタイル（既存画面と同じく inline style。モバイル専用なので固定幅は使わない） ──
+
+const shell: React.CSSProperties = {
+  // ⚠️ `height: 100vh` は iOS Safari のアドレスバー伸縮で実高さとずれる（下端が隠れる）。
+  // `100dvh` は Safari 15.4 未満で効かないので、どちらにも依存しない fixed + inset にする。
+  position: "fixed",
+  inset: 0,
+  display: "flex",
+  flexDirection: "column",
+  background: "#101318",
+  color: "#e8ecf1",
+  fontFamily: "system-ui, sans-serif",
+  // ドラッグ操作がページスクロールと競合しないようにする（M4 で各ビューポートにも付与する）。
+  overscrollBehavior: "none",
+};
+
+const header: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "8px 10px",
+  // ノッチ/ホームバーの安全領域を避ける。
+  paddingTop: "calc(8px + env(safe-area-inset-top, 0px))",
+  borderBottom: "1px solid #262c35",
+  background: "#171b22",
+};
+
+const title: React.CSSProperties = {
+  flex: 1,
+  margin: 0,
+  fontSize: 16,
+  fontWeight: 600,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+// タップターゲットは 44px 以上（iOS HIG / Material の最小推奨）。
+const backBtn: React.CSSProperties = {
+  minWidth: 44,
+  minHeight: 44,
+  border: "none",
+  background: "transparent",
+  color: "#e8ecf1",
+  fontSize: 26,
+  lineHeight: 1,
+  cursor: "pointer",
+};
+
+const escapeBtn: React.CSSProperties = {
+  minHeight: 44,
+  padding: "0 12px",
+  border: "1px solid #39414d",
+  borderRadius: 8,
+  background: "transparent",
+  color: "#9fb2c9",
+  fontSize: 13,
+  cursor: "pointer",
+};
+
+const content: React.CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  overflowY: "auto",
+  WebkitOverflowScrolling: "touch",
+  padding: 16,
+  paddingBottom: "calc(16px + env(safe-area-inset-bottom, 0px))",
+};
+
+/** ビューア用。`minHeight: 0` が無いと flex 子が縮まず、ツールバーが画面外へ押し出される。 */
+const contentFlush: React.CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  display: "flex",
+  flexDirection: "column",
+  paddingBottom: "env(safe-area-inset-bottom, 0px)",
+};
+
+const panel: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 14,
+  padding: 16,
+  border: "1px solid #262c35",
+  borderRadius: 10,
+  background: "#171b22",
+  fontSize: 14,
+  lineHeight: 1.7,
+};
+
+const noteText: React.CSSProperties = { margin: 0, color: "#c9a227" };
+

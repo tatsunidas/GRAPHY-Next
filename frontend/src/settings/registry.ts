@@ -383,6 +383,29 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
           },
         ],
       },
+      {
+        // 3D / MPR / Slicer / Curved MPR が共有するボリューム構築のメモリ上限
+        // （fw/volume-memory-guard.md）。既定値は viewer/volumeMemory.ts と一致させること。
+        titleKey: "settings.sec.volumeMemory",
+        fields: [
+          {
+            key: "viewer.volumeMaxMb",
+            labelKey: "settings.field.volumeMaxMb",
+            type: "number",
+            default: 2048,
+            min: 128,
+            max: 32768,
+            helpKey: "settings.field.volumeMaxMb.help",
+          },
+          {
+            key: "viewer.volumeWarnBeforeBuild",
+            labelKey: "settings.field.volumeWarnBeforeBuild",
+            type: "toggle",
+            default: true,
+            helpKey: "settings.field.volumeWarnBeforeBuild.help",
+          },
+        ],
+      },
     ],
   },
   {

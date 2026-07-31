@@ -23,6 +23,17 @@ export interface DisplayInfo {
   monochrome: boolean;
 }
 
+/**
+ * OS の物理メモリ量（ボリューム構築のバジェット決定用。`fw/volume-memory-guard.md` V3）。
+ *
+ * <p>ブラウザからは実搭載量を取る API が無い（`navigator.deviceMemory` は Chromium 限定・
+ * 2 の冪に丸め・8GB で打ち止め）ため、standalone では Electron main から受け取る。
+ */
+export interface MemoryInfo {
+  totalBytes: number;
+  freeBytes: number;
+}
+
 export interface GraphyDesktop {
   pickImportPaths: () => Promise<string[]>;
   /** 単一の出力先フォルダを選ぶ（SeriesExtractor のコピー先など）。キャンセル時 null。 */
@@ -37,6 +48,8 @@ export interface GraphyDesktop {
   startDrag?: (dataUrl: string, filename: string) => void;
   /** OS 標準のメモリ/システムモニタ（Windows=タスクマネージャ, macOS=アクティビティモニタ, Linux=システムモニタ）を起動する。 */
   openMemoryMonitor?: () => Promise<void>;
+  /** OS の物理メモリ量を取得（ボリューム構築のバジェット決定用、デスクトップのみ）。 */
+  getMemoryInfo?: () => Promise<MemoryInfo>;
   /** 外部 URL / mailto を OS の既定アプリ（ブラウザ・メーラ）で開く。 */
   openExternal?: (url: string) => void;
   /** GitHub Releases の最新リリース情報を取得（更新確認、デスクトップのみ）。失敗時 null。 */

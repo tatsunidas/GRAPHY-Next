@@ -33,6 +33,7 @@ export function MainScreen({
   onOpenSettings,
   onOpenDb,
   onOpenHelp,
+  onOpenMobileUi,
 }: {
   status: AppStatus | null;
   error: string | null;
@@ -41,6 +42,8 @@ export function MainScreen({
   onOpenSettings: () => void;
   onOpenDb: () => void;
   onOpenHelp: () => void;
+  /** モバイル UI（`#mobile`）へ手動で切り替える。web モードでのみメニューに出す。 */
+  onOpenMobileUi?: () => void;
 }) {
   const { t } = useI18n();
   const isStandalone = status?.mode === "standalone";
@@ -246,6 +249,7 @@ export function MainScreen({
         onOpenSettings={onOpenSettings}
         onOpenDb={onOpenDb}
         onOpenHelp={onOpenHelp}
+        onOpenMobileUi={onOpenMobileUi}
       />
       <Toolbar
         isStandalone={isStandalone}

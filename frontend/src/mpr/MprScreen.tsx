@@ -14,12 +14,16 @@ import { RenderingEngine, Enums, eventTarget } from "@cornerstonejs/core";
 import {
   fetchSeries,
   fetchInstances,
+  fetchSeriesLayout,
   prefetchSeries,
   type AppStatus,
   type Study,
   type Series,
 } from "../api";
 import { ensureCornerstoneInitialized } from "../viewer/cornerstoneSetup";
+import { getAppliedVolumeMaxMb, isCacheSizeExceeded } from "../viewer/volumeMemory";
+import { confirmVolumeMemory } from "../viewer/volumeMemoryGuard";
+import { useDeviceClass } from "../mobile/useDeviceClass";
 import { imageIdForInstance } from "../viewer/imageId";
 import {
   buildMprVolume,
@@ -53,9 +57,22 @@ interface MprContext {
 
 type Phase = "idle" | "loading" | "ready" | "error" | "unsupported";
 
+/** 1 面表示のときに切り替える面（`fw/mobile-ui-design.md` §4.2）。 */
+type PaneId = "axial" | "sagittal" | "coronal";
+const PANES: { id: PaneId; labelKey: string }[] = [
+  { id: "axial", labelKey: "mpr.axial" },
+  { id: "sagittal", labelKey: "mpr.sagittal" },
+  { id: "coronal", labelKey: "mpr.coronal" },
+];
+
 export function MprScreen({ status }: { status: AppStatus | null }) {
   const { t } = useI18n();
   const presets = useWlPresets();
+  // 狭幅・タッチ端末では 3 面横並びが成立しないので 1 面＋面切替タブにする。
+  // 判定は端末クラス（`mobile/useDeviceClass`）。手動でデスクトップ UI を選んでいれば 3 面のまま。
+  const { uiMode } = useDeviceClass();
+  const singlePane = uiMode === "mobile";
+  const [activePane, setActivePane] = useState<PaneId>("axial");
   const axialRef = useRef<HTMLDivElement>(null);
   const sagittalRef = useRef<HTMLDivElement>(null);
   const coronalRef = useRef<HTMLDivElement>(null);
@@ -138,6 +155,27 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
         imageIdForInstance(mode, i.sopInstanceUid, ctx.study.studyInstanceUid, series.seriesInstanceUid),
       );
 
+      // ボリューム構築で確保しようとする量を先に見積もり、バジェットを超えるなら確認する
+      // （fw/volume-memory-guard.md V2）。MPR は本来 layout を取らないが、面内サイズと
+      // ピクセル形式が予測に要るためここで 1 回だけ取得する（失敗しても予測を諦めるだけ）。
+      const guardLayout = await fetchSeriesLayout(
+        ctx.study.studyInstanceUid,
+        series.seriesInstanceUid,
+      ).catch(() => null);
+      const memDecision = await confirmVolumeMemory({
+        layout: guardLayout,
+        sliceCount: imageIds.length,
+        modality: series.modality,
+        target: "mpr",
+        t18n: t,
+      });
+      if (!memDecision.proceed) {
+        // キャンセル時は画面が空のままになるので、理由を出しておく。
+        setPhase("error");
+        setMessage(t("common.volumeMemCanceled"));
+        return;
+      }
+
       // web: 全スライスを 1 リクエストで BFF キャッシュに載せてから volume 構築（個別 WADO-RS 往復を回避）。
       if (mode === "web") {
         try {
@@ -148,7 +186,9 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
       }
 
       const volumeId = `graphy-mpr-vol:${series.seriesInstanceUid}`;
-      const built = await buildMprVolume(imageIds, series.modality, volumeId);
+      const built = await buildMprVolume(imageIds, series.modality, volumeId, {
+        maxBytes: memDecision.enforceMaxBytes,
+      });
       setTilt(built.corrected ? (built.tiltAngleDeg ?? null) : null);
 
       const els = axialRef.current && sagittalRef.current && coronalRef.current;
@@ -173,7 +213,13 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
       requestAnimationFrame(() => refreshOverlays());
     } catch (e) {
       setPhase("error");
-      setMessage(`${t("mpr.error")}: ${String(e)}`);
+      // キャッシュ上限超過は cornerstone の生メッセージ（CACHE_SIZE_EXCEEDED / is not cacheable）では
+      // 利用者が対処できないため、対処を書いた案内に差し替える（fw/volume-memory-guard.md V1）。
+      setMessage(
+        isCacheSizeExceeded(e)
+          ? t("common.volumeMemExceeded", { budgetMb: String(getAppliedVolumeMaxMb()) })
+          : `${t("mpr.error")}: ${String(e)}`,
+      );
     }
   }, [mode, t]);
 
@@ -227,6 +273,17 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
   return (
     <div style={root}>
       <div style={header}>
+        {/* 狭幅では別ウィンドウではなく同一タブの hash 遷移で来るので、戻る導線を出す。 */}
+        {singlePane && (
+          <button
+            style={backBtn}
+            onClick={() => window.history.back()}
+            aria-label={t("mobile.back")}
+            data-testid="mpr-back"
+          >
+            ‹
+          </button>
+        )}
         <span style={hTitle}>{t("main.toolbar.mpr")}</span>
         {title && <span style={hSeries}>{title}</span>}
         {phase === "ready" && (
@@ -273,12 +330,35 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
           )}
         </div>
       )}
-      <div style={body}>
+      {/* 狭幅では 3 面横並びが成立しないので、面切替タブ＋1 面表示にする（fw/mobile-ui-design.md §4.2）。 */}
+      {singlePane && (
+        <div style={paneTabs} data-testid="mpr-pane-tabs">
+          {PANES.map((p) => (
+            <button
+              key={p.id}
+              style={p.id === activePane ? paneTabOn : paneTab}
+              onClick={() => setActivePane(p.id)}
+              data-testid={`mpr-pane-${p.id}`}
+            >
+              {t(p.labelKey)}
+            </button>
+          ))}
+        </div>
+      )}
+      <div style={singlePane ? bodyStacked : body}>
+        {/*
+         * ⚠️ 1 面表示でも 3 つのビューポートは**必ずマウントしたまま**にする。
+         * Crosshairs は 3 面が揃って初めて連動し、要素を外す/サイズ 0 にすると
+         * cornerstone のリサイズが壊れる。非表示は visibility だけで行い、寸法は保つ。
+         */}
         <Cell label={t("mpr.axial")} color="#00dc00" refEl={axialRef} overlay={overlays[VIEWPORT_IDS.axial]}
+          stacked={singlePane} hidden={singlePane && activePane !== "axial"}
           onMove={(e) => onCellMove(VIEWPORT_IDS.axial, e)} onLeave={() => setProbe(null)} />
         <Cell label={t("mpr.sagittal")} color="#dcdc00" refEl={sagittalRef} overlay={overlays[VIEWPORT_IDS.sagittal]}
+          stacked={singlePane} hidden={singlePane && activePane !== "sagittal"}
           onMove={(e) => onCellMove(VIEWPORT_IDS.sagittal, e)} onLeave={() => setProbe(null)} />
         <Cell label={t("mpr.coronal")} color="#00a0ff" refEl={coronalRef} overlay={overlays[VIEWPORT_IDS.coronal]}
+          stacked={singlePane} hidden={singlePane && activePane !== "coronal"}
           onMove={(e) => onCellMove(VIEWPORT_IDS.coronal, e)} onLeave={() => setProbe(null)} />
         {phase !== "ready" && (
           <div style={overlay}>
@@ -295,6 +375,8 @@ function Cell({
   color,
   refEl,
   overlay,
+  stacked = false,
+  hidden = false,
   onMove,
   onLeave,
 }: {
@@ -302,12 +384,22 @@ function Cell({
   color: string;
   refEl: React.RefObject<HTMLDivElement>;
   overlay?: MprOverlay;
+  /** 1 面表示: 3 面を重ねて配置する（寸法は全面のまま）。 */
+  stacked?: boolean;
+  /** 重ね配置のうち、いま表示しない面。**アンマウントも寸法 0 もしない**（上のコメント参照）。 */
+  hidden?: boolean;
   onMove?: (e: React.MouseEvent<HTMLDivElement>) => void;
   onLeave?: () => void;
 }) {
   const m = overlay?.markers ?? null;
   return (
-    <div style={cell}>
+    <div
+      style={
+        stacked
+          ? { ...cellStacked, visibility: hidden ? "hidden" : "visible", zIndex: hidden ? 0 : 1 }
+          : cell
+      }
+    >
       <div
         ref={refEl}
         style={vpEl}
@@ -390,13 +482,52 @@ const roKey: React.CSSProperties = { color: "#7f8b96", fontWeight: 600, margin: 
 const roUnit: React.CSSProperties = { color: "#7f8b96", marginLeft: 4 };
 const roHint: React.CSSProperties = { color: "#5a6672" };
 const body: React.CSSProperties = { position: "relative", flex: 1, display: "flex", minHeight: 0 };
+/** 1 面表示: 3 面を同じ場所に重ねる（display:flex にしない）。 */
+const bodyStacked: React.CSSProperties = { position: "relative", flex: 1, minHeight: 0 };
 const cell: React.CSSProperties = {
   position: "relative",
   flex: 1,
   minWidth: 0,
   borderRight: "1px solid #23292f",
 };
-const vpEl: React.CSSProperties = { position: "absolute", inset: 0 };
+/** 重ね配置のセル。**寸法は常に全面**（0 にすると cornerstone のリサイズが壊れる）。 */
+const cellStacked: React.CSSProperties = { position: "absolute", inset: 0 };
+const backBtn: React.CSSProperties = {
+  minWidth: 36,
+  minHeight: 36,
+  border: "none",
+  background: "transparent",
+  color: "#e6eaee",
+  fontSize: 22,
+  lineHeight: 1,
+  cursor: "pointer",
+};
+const paneTabs: React.CSSProperties = {
+  display: "flex",
+  gap: 6,
+  padding: "6px 8px",
+  background: "#14181c",
+  borderBottom: "1px solid #23292f",
+};
+const paneTab: React.CSSProperties = {
+  flex: 1,
+  minHeight: 44,
+  border: "1px solid #2c343b",
+  borderRadius: 8,
+  background: "transparent",
+  color: "#c7d0d8",
+  fontSize: 13,
+  cursor: "pointer",
+};
+const paneTabOn: React.CSSProperties = {
+  ...paneTab,
+  background: "#0b5cad",
+  borderColor: "#2f6db5",
+  color: "#fff",
+};
+// touchAction: none — 無いとタッチ端末で画像上のドラッグがページスクロールに奪われる
+// （`fw/mobile-ui-design.md` §3.3）。マウス操作には影響しない。
+const vpEl: React.CSSProperties = { position: "absolute", inset: 0, touchAction: "none" };
 const cellLabel: React.CSSProperties = {
   position: "absolute",
   top: 6,

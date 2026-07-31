@@ -6,8 +6,15 @@
 // - core.init(): レンダリング基盤。
 // - dicomImageLoader.init(): wadouri / wadors の画像ローダ登録＋デコード用 Web Worker 構成。
 //   CSP は wasm-unsafe-eval / worker-src blob: を許可済み（圧縮 TS はワーカ＋WASM でデコード）。
-import { init as coreInit } from "@cornerstonejs/core";
+import { init as coreInit, cache } from "@cornerstonejs/core";
 import dicomImageLoader from "@cornerstonejs/dicom-image-loader";
+import {
+  DEFAULT_VOLUME_MAX_MB,
+  normalizeVolumeMaxMb,
+  setAppliedVolumeMaxMb,
+  volumeMaxBytes,
+} from "./volumeMemory";
+import { resolveVolumeBudgetMb } from "./volumeMemoryGuard";
 import { registerSegMetadataProvider } from "./segMetadata";
 import { registerThickSlabLoader } from "./thickSlab";
 import { WandTool } from "./wandTool";
@@ -89,6 +96,23 @@ export function applyGlobalAnnotationStyle(style: { colorHex?: string; lineWidth
   }
 }
 
+/**
+ * Cornerstone の画像キャッシュ上限（＝ボリューム構築のバジェット）を明示設定する。
+ *
+ * <p>cornerstone の既定は 3GB（`cache.js` の `3 * ONE_GB`）で、これまで
+ * `setMaxCacheSize()` をどこからも呼んでいなかったため<b>設定値と実際の上限が乖離</b>していた。
+ * 環境設定 `viewer.volumeMaxMb` と一致させるのが目的（`fw/volume-memory-guard.md` V1）。
+ */
+export function applyVolumeCacheLimit(maxMb: number): void {
+  const mb = normalizeVolumeMaxMb(maxMb);
+  try {
+    cache.setMaxCacheSize(volumeMaxBytes(mb));
+    setAppliedVolumeMaxMb(mb);
+  } catch {
+    /* 上限設定に失敗しても初期化は続行（既定の 3GB のまま） */
+  }
+}
+
 let initPromise: Promise<void> | null = null;
 
 /** 冪等な初期化。複数の Viewer2D から呼ばれても 1 回だけ実行する。 */
@@ -96,6 +120,15 @@ export function ensureCornerstoneInitialized(): Promise<void> {
   if (!initPromise) {
     initPromise = (async () => {
       await coreInit();
+      // 画像キャッシュ上限を明示する。まず既定値を即時適用し、バジェットが解決したら上書きする
+      // （設定/IPC の往復で初期表示を待たせない）。解決前に始まったボリューム構築は既定値で走る。
+      // 決定順は resolveVolumeBudgetMb（設定 → 実搭載量×安全率 → 既定値）。
+      applyVolumeCacheLimit(DEFAULT_VOLUME_MAX_MB);
+      void resolveVolumeBudgetMb()
+        .then(applyVolumeCacheLimit)
+        .catch(() => {
+          /* 既定のまま */
+        });
       // メインスレッドを塞がないようワーカ数は CPU-1（最大 4）に抑える。
       const maxWebWorkers = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 4) - 1));
       dicomImageLoader.init({ maxWebWorkers });

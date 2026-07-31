@@ -29,6 +29,8 @@ import java.util.List;
  * @param zSpatial               Z インデックスごとの ImagePositionPatient。Fusion 精密アライメント用。null なら未取得。
  * @param frameOfReferenceUID    FrameOfReferenceUID。セグメンテーション labelmap のメタデータプロバイダ／
  *                               volume 再構成（isValidVolume）の FoR 一致判定用。null なら未取得。
+ * @param pixelFormat            ボクセルあたりのバイト数を決めるピクセル形式。ボリューム構築前の
+ *                               メモリ量予測（fw/volume-memory-guard.md V2）用。null なら未取得。
  */
 public record SeriesLayout(
         int nZ, int nC, int nT,
@@ -40,7 +42,8 @@ public record SeriesLayout(
         int imageWidth,
         int imageHeight,
         List<ZSpatial> zSpatial,
-        String frameOfReferenceUID) {
+        String frameOfReferenceUID,
+        PixelFormat pixelFormat) {
 
     /**
      * 各 (c,z,t) に対応するフレーム。
@@ -59,8 +62,34 @@ public record SeriesLayout(
     public record ZSpatial(int z, double[] imagePositionPatient) {
     }
 
+    /**
+     * ボクセルあたりのバイト数を決めるピクセル形式。
+     *
+     * <p>frontend がボリューム構築前に必要メモリ量を予測するために使う
+     * （設計: {@code fw/volume-memory-guard.md} §2.1・§5）。Cornerstone が確保する TypedArray の型は
+     * BitsAllocated だけでは決まらない — <b>RescaleSlope が非整数だと 16bit でも Float32Array
+     * （4B/voxel）に化ける</b>ため、PET を 2 倍見誤らないよう rescale も一緒に返す。
+     *
+     * <p>5 つを個別のフィールドではなく 1 つのレコードにまとめてあるのは、
+     * (1) 親 record の位置引数が 18 個になるのを避ける、(2)「取得できた/できなかった」を
+     * null 1 つで表せる（0 をセンチネルにすると rescaleSlope=0 が「未取得」と区別できない）ため。
+     *
+     * @param bitsAllocated       BitsAllocated(0028,0100)
+     * @param pixelRepresentation PixelRepresentation(0028,0103)。1 = signed
+     * @param samplesPerPixel     SamplesPerPixel(0028,0002)。RGB なら 3
+     * @param rescaleSlope        RescaleSlope(0028,1053)。未設定なら 1
+     * @param rescaleIntercept    RescaleIntercept(0028,1052)。未設定なら 0
+     */
+    public record PixelFormat(
+            int bitsAllocated,
+            int pixelRepresentation,
+            int samplesPerPixel,
+            double rescaleSlope,
+            double rescaleIntercept) {
+    }
+
     /** 空間メタなしのレイアウト（{@link SeriesLayoutBuilder} の返り値用）。 */
     static SeriesLayout noSpatial(int nZ, int nC, int nT, String cDim, String tDim, List<Cell> cells) {
-        return new SeriesLayout(nZ, nC, nT, cDim, tDim, cells, null, 0, 0, 0, 0, null, null);
+        return new SeriesLayout(nZ, nC, nT, cDim, tDim, cells, null, 0, 0, 0, 0, null, null, null);
     }
 }
