@@ -4,19 +4,17 @@
  */
 import { useEffect, useState } from "react";
 import {
-  fetchStudies,
-  fetchSeries,
-  fetchInstances,
-  fetchReportStudyCounts,
   instanceDocumentUrl,
   ENCAPSULATED_PDF_SOP_CLASS,
   isVideoSopClass,
   type Study,
   type Series,
-  type Instance,
   type StudyFilters,
   type StudyReportCount,
 } from "./api";
+import { useStudies } from "./hooks/useStudies";
+import { useSeries } from "./hooks/useSeries";
+import { useInstances } from "./hooks/useInstances";
 import { useI18n } from "./i18n/i18n";
 import { SeriesViewer } from "./viewer/SeriesViewer";
 import { classifySeriesRenderability, type SeriesRenderability } from "./viewer/seriesRenderable";
@@ -50,9 +48,8 @@ export function StudyList({
   onSelectSeries?: (s: Series | null) => void;
 }) {
   const { t } = useI18n();
-  const [studies, setStudies] = useState<Study[] | null>(null);
-  const [reportCounts, setReportCounts] = useState<Record<string, StudyReportCount>>({});
-  const [error, setError] = useState<string | null>(null);
+  // 取得は hooks/useStudies に集約（モバイルシェルと共有。fw/mobile-ui-design.md §3.5）。
+  const { studies, reportCounts, error } = useStudies(filters, { reloadKey, withReportCounts: true });
   const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
   const [page, setPage] = useState(0);
   const { sort, toggleSort } = useTableSort();
@@ -68,37 +65,11 @@ export function StudyList({
     onSelectSeries?.(null); // スタディ変更時はシリーズ選択をリセット
   };
 
+  // 検索条件・再読込キーが変わったら選択とページを初期化する（取得自体は useStudies が行う）。
   const filterKey = JSON.stringify(filters ?? null);
   useEffect(() => {
     setSelectedStudy(null);
     setPage(0);
-    setError(null);
-    setStudies(null);
-    setReportCounts({});
-    // filters が null = まだ検索していない（初期描画）。フェッチしない。
-    if (filters == null) return;
-    let cancelled = false;
-    fetchStudies(filters)
-      .then((list) => {
-        if (cancelled) return;
-        setStudies(list);
-        if (list.length === 0) return;
-        // レポート有無の●/○表示は補助情報のため、取得失敗してもスタディ一覧自体は表示する。
-        fetchReportStudyCounts(list.map((s) => s.studyInstanceUid))
-          .then((counts) => {
-            if (cancelled) return;
-            const map: Record<string, StudyReportCount> = {};
-            for (const c of counts) map[c.studyInstanceUid] = c;
-            setReportCounts(map);
-          })
-          .catch(() => {
-            // ignore
-          });
-      })
-      .catch((e: unknown) => setError(String(e)));
-    return () => {
-      cancelled = true;
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterKey, reloadKey]);
 
@@ -210,8 +181,7 @@ function SeriesNavigator({
   onSelectSeries?: (s: Series | null) => void;
 }) {
   const { t } = useI18n();
-  const [series, setSeries] = useState<Series[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { series, error } = useSeries(study.studyInstanceUid);
   const [selectedSeries, setSelectedSeries] = useState<Series | null>(null);
 
   const handleSelectSeries = (se: Series | null) => {
@@ -219,13 +189,9 @@ function SeriesNavigator({
     onSelectSeries?.(se);
   };
 
+  // スタディが変わったらシリーズ選択を捨てる（取得自体は useSeries が行う）。
   useEffect(() => {
-    setSeries(null);
     setSelectedSeries(null);
-    setError(null);
-    fetchSeries(study.studyInstanceUid)
-      .then(setSeries)
-      .catch((e: unknown) => setError(String(e)));
   }, [study.studyInstanceUid]);
 
   return (
@@ -284,16 +250,7 @@ const RENDERABLE_UNKNOWN: SeriesRenderability = { renderable: true, kind: null, 
 
 function InstanceList({ study, series, mode }: { study: Study; series: Series; mode: ViewerMode }) {
   const { t } = useI18n();
-  const [instances, setInstances] = useState<Instance[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setInstances(null);
-    setError(null);
-    fetchInstances(study.studyInstanceUid, series.seriesInstanceUid)
-      .then(setInstances)
-      .catch((e: unknown) => setError(String(e)));
-  }, [study.studyInstanceUid, series.seriesInstanceUid]);
+  const { instances, error } = useInstances(study.studyInstanceUid, series.seriesInstanceUid);
 
   const hasImages = !!instances && instances.length > 0;
   // Encapsulated PDF はピクセルが無く 2D 画像ビューアで表示できないため、文書パネルで開く。

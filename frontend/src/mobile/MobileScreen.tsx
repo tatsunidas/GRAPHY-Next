@@ -9,17 +9,21 @@
  * `.css` が 1 つも無く、スタイルは inline style で `@media` は 0 件なので、共有スタイルの上書きで
  * モバイル化する余地が無いため（§1）。既存 UI は一切触らないのでデスクトップは壊れない。
  *
- * <p>M1 の範囲は「ヘッダ ＋ 戻る導線 ＋ 単画面ナビゲーションスタック ＋ デスクトップ UI への
- * 逃げ道」まで。各画面の中身は M2 以降:
+ * <p>M1 で「ヘッダ ＋ 戻る導線 ＋ 単画面ナビゲーションスタック ＋ デスクトップ UI への逃げ道」、
+ * M2 で「検索 → スタディ → シリーズ」まで。残りは:
  * <ul>
- *   <li>M2 … 検索 → スタディ → シリーズ（`useStudies` / `useSeries` / `useInstances` を抽出して使う）</li>
  *   <li>M3 … 2D ビューア（1×1 固定・ドロワー・モバイルツールバー）</li>
  *   <li>M5 … 3D / MPR、M6 … Fusion、M8 … レポート</li>
  * </ul>
+ *
+ * <p>選択状態（検索条件・スタディ・シリーズ）は**このコンポーネントが持つ**。hash 遷移では
+ * アンマウントされないので state は生き残り、リロード対策として `mobileCtx` にも書き出す。
  */
-import { useCallback } from "react";
-import type { AppStatus } from "../api";
+import { useCallback, useEffect, useState } from "react";
+import type { AppStatus, Series, Study, StudyFilters } from "../api";
 import { useI18n } from "../i18n/i18n";
+import { readMobileCtx, writeMobileCtx } from "./mobileCtx";
+import { MobileSeriesList, MobileStudyList } from "./MobileStudyBrowser";
 import { mobileHash, parentView, type MobileView } from "./mobileRoute";
 import { useDeviceClass } from "./useDeviceClass";
 
@@ -27,10 +31,29 @@ export function MobileScreen({ status, view }: { status: AppStatus | null; view:
   const { t } = useI18n();
   const { deviceClass, setOverride } = useDeviceClass();
 
-  // 前進は hash 代入（履歴に積まれる）。M2 以降の各画面から呼ぶ。
+  // 初期値はリロード前の続き（`readMobileCtx`）。無ければ未検索・未選択。
+  const [filters, setFilters] = useState<StudyFilters | null>(() => readMobileCtx().filters ?? null);
+  const [study, setStudy] = useState<Study | null>(() => readMobileCtx().study ?? null);
+  const [series, setSeries] = useState<Series | null>(() => readMobileCtx().series ?? null);
+
+  useEffect(() => {
+    writeMobileCtx({ filters, study, series });
+  }, [filters, study, series]);
+
+  // 前進は hash 代入（履歴に積まれる）。
   const navigate = useCallback((next: MobileView) => {
     window.location.hash = mobileHash(next);
   }, []);
+
+  // 直接 URL やリロードで、選択が無いのに深い画面にいる状態を戻す。
+  // replace なので履歴に「行けない画面」を残さない。
+  useEffect(() => {
+    if ((view === "series" || view === "viewer" || view === "report") && !study) {
+      window.location.replace(mobileHash("studies"));
+    } else if ((view === "viewer" || view === "report") && !series) {
+      window.location.replace(mobileHash("series"));
+    }
+  }, [view, study, series]);
 
   // 戻るはブラウザ履歴を優先する（利用者のスワイプバックと挙動を揃えるため）。
   // 直接 URL で深い画面に入った場合は履歴が無いので、親画面へ置き換え遷移する。
@@ -64,7 +87,28 @@ export function MobileScreen({ status, view }: { status: AppStatus | null; view:
       </header>
 
       <main style={content}>
-        <PlaceholderPanel view={view} onNavigate={navigate} status={status} />
+        {view === "studies" ? (
+          <MobileStudyList
+            filters={filters}
+            onSearch={setFilters}
+            onSelect={(s) => {
+              setStudy(s);
+              setSeries(null); // スタディを変えたらシリーズ選択は捨てる
+              navigate("series");
+            }}
+          />
+        ) : view === "series" && study ? (
+          <MobileSeriesList
+            study={study}
+            onSelect={(s) => {
+              setSeries(s);
+              navigate("viewer");
+            }}
+          />
+        ) : (
+          // ビューア（M3/M5）とレポート（M8）はまだ中身が無い。
+          <PlaceholderPanel status={status} />
+        )}
       </main>
     </div>
   );
@@ -78,32 +122,17 @@ const VIEW_TITLE_KEY: Record<MobileView, string> = {
 };
 
 /**
- * M2 以降で中身が入るまでの仮パネル。
- * 「準備中」であることを隠さず、デスクトップ UI への導線を必ず出す（利用者を行き止まりにしない）。
+ * まだ中身の無い画面（ビューア = M3/M5、レポート = M8）の仮パネル。
+ * 「準備中」であることを隠さず、デスクトップ UI への導線はヘッダに常設してある
+ * （利用者を行き止まりにしない）。
  */
-function PlaceholderPanel({
-  view,
-  onNavigate,
-  status,
-}: {
-  view: MobileView;
-  onNavigate: (v: MobileView) => void;
-  status: AppStatus | null;
-}) {
+function PlaceholderPanel({ status }: { status: AppStatus | null }) {
   const { t } = useI18n();
-  const next: MobileView | null =
-    view === "studies" ? "series" : view === "series" ? "viewer" : view === "viewer" ? "report" : null;
-
   return (
     <section style={panel}>
       <p style={{ margin: 0 }}>{t("mobile.underConstruction")}</p>
       {/* モバイルシェルは web モード専用（§2 の非目標）。standalone で開かれたら明示する。 */}
       {status?.mode === "standalone" && <p style={noteText}>{t("mobile.webOnly")}</p>}
-      {next && (
-        <button style={navBtn} onClick={() => onNavigate(next)} data-testid="mobile-nav-next">
-          {t(VIEW_TITLE_KEY[next])} →
-        </button>
-      )}
     </section>
   );
 }
@@ -190,14 +219,3 @@ const panel: React.CSSProperties = {
 
 const noteText: React.CSSProperties = { margin: 0, color: "#c9a227" };
 
-const navBtn: React.CSSProperties = {
-  alignSelf: "flex-start",
-  minHeight: 44,
-  padding: "0 16px",
-  border: "1px solid #2f6db5",
-  borderRadius: 8,
-  background: "#0b5cad",
-  color: "#fff",
-  fontSize: 14,
-  cursor: "pointer",
-};

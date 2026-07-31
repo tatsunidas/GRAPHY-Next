@@ -151,6 +151,22 @@ matchMedia("(pointer: coarse)")      → タッチ主体
   `100vh` は iOS Safari のアドレスバー伸縮で下端が隠れ、`100dvh` は Safari 15.4 未満で効かない。
   ヘッダ/フッタは `env(safe-area-inset-*)` を見る。タップターゲットは 44px 以上。
 
+**M2 の追加（2026-07-31）**
+
+- 選択状態（検索条件・スタディ・シリーズ）は `MobileScreen` が持つ。hash 遷移ではアンマウント
+  されないので state は生き残るが、**スマホはタブが裏に回ると破棄されて復帰＝リロードになる**ため
+  `graphy-mobile-ctx` にも書き出す。デスクトップのビューア起動コンテキスト（`graphy-viewer-ctx` 等）
+  とは別キー — あちらは「別ウィンドウへ渡す」、こちらは「自分の続きから開く」ためのもの。
+- 直接 URL / リロードで選択が無いまま深い画面にいる場合は、`location.replace` で親へ戻す
+  （履歴に「行けない画面」を残さない）。
+- 一覧はデスクトップの表（6〜7 列）ではなく **1 件 = 1 カード**の縦リスト。
+- 検索は入力 1 本＋期間プリセットのチップ。**数字だけなら患者 ID、それ以外は氏名**として送る
+  （狭幅ゆえの割り切り。backend はどちらも部分一致）。
+- ⚠️ **iOS Safari は 16px 未満の入力欄でフォーカス時に自動ズームする。** 検索欄は `fontSize: 16` を維持。
+- ⚠️ 期間プリセットで **`setMonth` / `setFullYear` の暦計算は使わない。** 7/31 の 1 か月前は
+  存在しない「6/31」なので JS が 7/1 へ**繰り上げ**、期間が狭まって 6 月末の検査を取りこぼす。
+  日数で引く（月 = 31 日、年 = 366 日）＝広めに外す。回帰防止テストあり。
+
 ### 3.3 タッチバインドの追加
 
 **`numTouchPoints` の使用が frontend 全体で 0 件。** バインドはすべて `MouseBindings` のみ
@@ -207,6 +223,18 @@ Cornerstone3D 3.33.5 は 1 本指タッチをアクティブツール（`MouseBi
 
 **`useStudies()` / `useSeries()` / `useInstances()` に抽出する**（各 20 行程度、合計 100 行未満）。
 既存 `StudyList.tsx` も同じフックに置き換えて重複を防ぐ。
+
+**実装（2026-07-31 / M2）**
+
+- 3 つとも `useState` ＋ `useEffect` ＋ `fetch` ＋ `cancelled` フラグという**同じ形**だったので、
+  設計に無かった `hooks/useAsyncData.ts` を 1 枚挟んだ。**取り違えると壊れる `cancelled` の扱いを
+  1 箇所に閉じる**のが目的で、3 つのフックはその薄いラッパになっている。
+- `data === null` が「未取得」、`loading` が「いま飛んでいる」。**「検索していないので空」と
+  「検索したが 0 件」を出し分ける**ために両方要る（既存 `StudyList` の `filters == null` 分岐と同じ意味）。
+- `useStudies` はレポート件数（●/○ 表示）を `withReportCounts` でオプトインにした。
+  モバイル側は M8 まで不要なので既定 OFF。取得失敗は握り潰す（補助情報）。
+- `StudyList.tsx` の 3 箇所（studies / series / instances）を置き換え済み。
+  選択・ページのリセットはコンポーネントに残し、**取得だけ**を移した。
 
 > HTTP 層（`api.ts` / `http.ts` / `apiBase.ts`）は既に完全分離されており、**web / standalone の差は
 > backend が吸収している**（`StudyController.java:38`）。フロントは同じ `/api/studies` を叩くだけなので、
@@ -321,7 +349,7 @@ VolumeViewport では canvas overlay 方式が使えず、2 ボリューム同�
 |---|---|---|---|
 | **M0** | `volume-memory-guard.md` の V1・V2 | — | ✅ 完了（2026-07-31。V1〜V4 すべて実装済み） |
 | **M1** | デバイス判定 `useDeviceClass()` ＋ 手動切替 ＋ `#mobile` ルート追加 ＋ シェル骨格 | — | ✅ 完了（2026-07-31） |
-| **M2** | データ取得フック抽出（`useStudies` / `useSeries` / `useInstances`）＋ 検索→スタディ→シリーズの単画面ナビゲーション | M1 | 未着手 |
+| **M2** | データ取得フック抽出（`useStudies` / `useSeries` / `useInstances`）＋ 検索→スタディ→シリーズの単画面ナビゲーション | M1 | ✅ 完了（2026-07-31） |
 | **M3** | 2D ビューア（1×1 固定・ドロワー・モバイルツールバー・複合リセット） | M2 | 未着手 |
 | **M4** | タッチバインド（`numTouchPoints` ＋ `touchAction: none`）＋ ROI 計測のタップターゲット調整 | M3 | 未着手 |
 | **M5** | 3D / MPR（1 面＋面切替・ドロワー・Cinematic 非表示） | M0, M3 | 未着手 |
@@ -365,18 +393,22 @@ M7 は frontend に依存しないので M1〜M6 と並行できる。
 - ✅ `frontend/src/mobile/mobileRoute.ts` … hash ルート ＋ ナビゲーションスタックの親子関係
   ＋ `MOBILE_SHELL_READY` ゲート（M1。設計時には無かったファイル）
 - ✅ `frontend/src/mobile/MobileScreen.tsx` … `#mobile` ルートのシェル（ナビゲーションスタック）（M1）
-- ✅ `frontend/src/mobile/useDeviceClass.test.ts` / `mobileRoute.test.ts` … 上記純関数の単体テスト（M1）
-- `frontend/src/mobile/MobileStudyBrowser.tsx` … 検索 → スタディ → シリーズ
+  ＋ 選択状態（検索条件・スタディ・シリーズ）の保持（M2）
+- ✅ `frontend/src/mobile/mobileCtx.ts` … 選択状態の localStorage 永続化（M2。設計時には無かったファイル）
+- ✅ `frontend/src/mobile/dateRange.ts` … 検索の期間プリセット（M2。同上）
+- ✅ `frontend/src/mobile/useDeviceClass.test.ts` / `mobileRoute.test.ts` / `dateRange.test.ts` … 単体テスト
+- ✅ `frontend/src/mobile/MobileStudyBrowser.tsx` … 検索 → スタディ → シリーズ（M2）
 - `frontend/src/mobile/MobileViewer.tsx` … 2D / 3D / MPR のタブ切替
 - `frontend/src/mobile/MobileToolbar.tsx` … ツール切替・W/L プリセット・複合リセット
 - `frontend/src/mobile/MobileReportEditor.tsx` … 縦積みエディタ
-- `frontend/src/hooks/useStudies.ts` / `useSeries.ts` / `useInstances.ts` … 取得ロジック抽出
+- ✅ `frontend/src/hooks/useStudies.ts` / `useSeries.ts` / `useInstances.ts` … 取得ロジック抽出（M2）
+- ✅ `frontend/src/hooks/useAsyncData.ts` … 上記 3 つの共通部分（M2。設計時には無かったファイル）
 
 **変更（frontend）**
 - ✅ `App.tsx` … `#mobile` ルート追加 ＋ 初回アクセス時の自動振り分け（M1。ゲートは `MOBILE_SHELL_READY`）
 - ✅ `mainscreen/MainScreen.tsx` / `mainscreen/MenuBar.tsx` … System メニューに手動切替を追加（M1。web のみ）
 - `mainscreen/MainScreen.tsx:87-157` … `handleOpenViewer` にモバイル分岐（hash 遷移）（M2/M3）
-- `StudyList.tsx` … 抽出したフックへ置き換え（重複解消）
+- ✅ `StudyList.tsx` … 抽出したフックへ置き換え（重複解消）（M2）
 - `viewer/Viewer2D.tsx` … `numTouchPoints` バインド ＋ `pixelLayer` に `touchAction: "none"`
 - `viewer/mpr.ts:310-313` … `numTouchPoints` バインド
 - `i18n/ja.ts` / `i18n/en.ts` … モバイル UI 文言（**両方必須**）
