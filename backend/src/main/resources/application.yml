@@ -14,6 +14,14 @@ spring:
     hibernate:
       ddl-auto: update
     open-in-view: false
+  web:
+    resources:
+      cache:
+        cachecontrol:
+          # SPA の index.html 等は毎回再検証（304 で軽い）。デプロイ後に古い index.html→
+          # 古いハッシュ JS が居座る事故を防ぐ。ハッシュ付き資産 /assets/** だけは WebConfig で
+          # immutable の長期キャッシュに上書きする（内容が変われば名前が変わるので安全）。
+          no-cache: true
   servlet:
     multipart:
       # プラグイン zip（JAR 同梱で 1MB を超えうる）のオフライン導入に備え既定 1MB から引き上げ。

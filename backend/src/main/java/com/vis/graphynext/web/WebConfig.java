@@ -9,9 +9,13 @@ import com.vis.graphynext.config.CorsProperties;
 import com.vis.graphynext.config.RateLimitProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.CacheControl;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
+import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
 import org.springframework.web.servlet.config.annotation.ViewControllerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+
+import java.time.Duration;
 
 /**
  * Web 層の共通設定。
@@ -43,5 +47,15 @@ public class WebConfig implements WebMvcConfigurer {
     public void addViewControllers(ViewControllerRegistry registry) {
         // 拡張子を持たない（= ルーティングパス）かつ API でないパスを index.html へ。
         registry.addViewController("/{path:[^\\.]*}").setViewName("forward:/index.html");
+    }
+
+    @Override
+    public void addResourceHandlers(ResourceHandlerRegistry registry) {
+        // Vite のハッシュ付き資産（例: /assets/index-ab12cd34.js）は内容が変われば名前も変わるので、
+        // 無期限・immutable で再検証すら不要にする。index.html 等は application.yml の
+        // spring.web.resources...no-cache=true で毎回再検証され、デプロイが即反映される。
+        registry.addResourceHandler("/assets/**")
+                .addResourceLocations("classpath:/static/assets/")
+                .setCacheControl(CacheControl.maxAge(Duration.ofDays(365)).cachePublic().immutable());
     }
 }
