@@ -312,6 +312,26 @@ IHE IID 起動（`App.tsx:52-95`、`:57` で web モード限定）が既に
   `viewer/cinematicPathTracer.ts:19` に「standalone(Electron) 前提」と明記されている。
 - WebGL コンテキストロス時の Retry は既存実装（`viewer3d/Viewer3DScreen.tsx:340-365`）が効く。
 
+**実装（2026-07-31 / M5）**
+
+- 🔑 **モバイル用の 3D/MPR 画面は新規に作らず、既存画面を狭幅で作り分ける。**
+  `MprScreen` / `Viewer3DScreen` は元々 `position: fixed; inset: 0` の全画面コンポーネントで、
+  これは**モバイルの単画面シェルにとって望ましい形そのもの**。モバイルシェルからは
+  `mobile/launchViewer.ts` が既存のコンテキスト（`graphy-mpr-ctx` / `graphy-viewer3d-ctx`）を書いて
+  **同一タブの hash 遷移**（`#mpr` / `#viewer3d`）で開く。ブラウザの「戻る」でシェルへ戻る。
+  → §1 の「既存 UI をレスポンシブ化しない」方針とは矛盾しない。あれは inline style 726 箇所の
+  メイン/2D 画面の話で、§4.2 は元々「MPR を 1 面にする / 3D の右パネルをドロワー化する」＝
+  これらの画面自体を作り分けよと指示している。
+- 判定は両画面が `useDeviceClass()` を直接呼ぶ（プロップの引き回し無し）。**手動でデスクトップ UI を
+  選んでいれば従来どおり**（3 面同時・常設パネル）。
+- ⚠️ **MPR の 1 面表示でも 3 つのビューポートは必ずマウントしたままにする。**
+  Crosshairs は 3 面が揃って初めて連動し、要素を外す/寸法 0 にすると cornerstone のリサイズが壊れる。
+  3 面を `position: absolute; inset: 0` で重ね、非表示は **`visibility` だけ**で行う（寸法は全面のまま）。
+- 3D の右パネル（`width: 240` 固定）は狭幅で右からのドロワー＋スクリムに。中身は共通で器だけ差し替え。
+- Cinematic / パストレーサの起動ボタンは狭幅で非表示。
+- MPR / 3D の両ヘッダに狭幅時だけ「戻る」（`history.back()`）を出す。デスクトップは別ウィンドウで
+  開くため戻る導線は不要（＝`narrow` でガードしている）。
+
 ### 4.3 Fusion — 2D のみ
 
 **Fusion は 2 ボリューム同時ロードではなく 2D canvas のオーバレイ**なので、MPR/3D より桁違いに軽く、
@@ -398,7 +418,7 @@ VolumeViewport では canvas overlay 方式が使えず、2 ボリューム同�
 | **M2** | データ取得フック抽出（`useStudies` / `useSeries` / `useInstances`）＋ 検索→スタディ→シリーズの単画面ナビゲーション | M1 | ✅ 完了（2026-07-31） |
 | **M3** | 2D ビューア（1×1 固定・ドロワー・モバイルツールバー・複合リセット） | M2 | ✅ 完了（2026-07-31）／実機未確認 |
 | **M4** | タッチバインド（`numTouchPoints` ＋ `touchAction: none`）＋ ROI 計測のタップターゲット調整 | M3 | ✅ 完了（2026-07-31）／実機未確認 |
-| **M5** | 3D / MPR（1 面＋面切替・ドロワー・Cinematic 非表示） | M0, M3 | 未着手 |
+| **M5** | 3D / MPR（1 面＋面切替・ドロワー・Cinematic 非表示） | M0, M3 | ✅ 完了（2026-07-31）／実機未確認 |
 | **M6** | Fusion（タッチ用の重ね合わせ導線） | M3 | 未着手 |
 | **M7** | レポート backend（キー画像 QIDO 解決 → STOW-RS 書き戻し） | — | 未着手 |
 | **M8** | レポート モバイルエディタ（縦積み・visualViewport 追随・表示中画像の添付） | M7, M3 | 未着手 |
@@ -444,7 +464,8 @@ M7 は frontend に依存しないので M1〜M6 と並行できる。
 - ✅ `frontend/src/mobile/dateRange.ts` … 検索の期間プリセット（M2。同上）
 - ✅ `frontend/src/mobile/useDeviceClass.test.ts` / `mobileRoute.test.ts` / `dateRange.test.ts` … 単体テスト
 - ✅ `frontend/src/mobile/MobileStudyBrowser.tsx` … 検索 → スタディ → シリーズ（M2）
-- ✅ `frontend/src/mobile/MobileViewer.tsx` … 2D（M3）／シリーズ切替ドロワー。3D / MPR タブは M5
+- ✅ `frontend/src/mobile/MobileViewer.tsx` … 2D（M3）／シリーズ切替ドロワー／3D・MPR 起動（M5）
+- ✅ `frontend/src/mobile/launchViewer.ts` … 3D / MPR を同一タブで開く（M5。設計時には無かったファイル）
 - ✅ `frontend/src/mobile/MobileToolbar.tsx` … ツール切替・W/L プリセット・複合リセット（M3）
 - `frontend/src/mobile/MobileReportEditor.tsx` … 縦積みエディタ
 - ✅ `frontend/src/hooks/useStudies.ts` / `useSeries.ts` / `useInstances.ts` … 取得ロジック抽出（M2）
@@ -459,7 +480,9 @@ M7 は frontend に依存しないので M1〜M6 と並行できる。
   `touchAction: "none"`（M4）
 - ✅ `viewer/SeriesViewer.tsx` … 3 本指の縦ドラッグでスライス送り（M4）
 - ✅ `viewer/touchScroll.ts` / `touchScroll.test.ts` **（新規）** … 上記ジェスチャの純関数（M4）
-- ✅ `mpr/MprScreen.tsx` / `viewer3d/Viewer3DScreen.tsx` … viewport 要素に `touchAction: "none"`（M4）
+- ✅ `mpr/MprScreen.tsx` … viewport に `touchAction: "none"`（M4）／狭幅で 1 面＋面切替タブ＋戻る（M5）
+- ✅ `viewer3d/Viewer3DScreen.tsx` … viewport に `touchAction: "none"`（M4）／狭幅で右パネルをドロワー化・
+  Cinematic 非表示・戻る（M5）
 - `viewer/mpr.ts:310-313` … MPR のツールバインドは**変更していない**。MPR の 1 面表示は M5 の範囲で、
   そこで Crosshairs/WindowLevel/Pan のタッチ割り当てを決める
 - `i18n/ja.ts` / `i18n/en.ts` … モバイル UI 文言（**両方必須**）

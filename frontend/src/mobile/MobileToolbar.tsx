@@ -32,10 +32,13 @@ export function MobileToolbar({
   activeTool,
   onChangeTool,
   onOpenSeriesDrawer,
+  onLaunchVolumeViewer,
 }: {
   activeTool: string;
   onChangeTool: (toolId: string) => void;
   onOpenSeriesDrawer: () => void;
+  /** 3D / MPR を同一タブで開く（M5）。 */
+  onLaunchVolumeViewer: (kind: "mpr" | "viewer3d") => void;
 }) {
   const { t } = useI18n();
   const presets = useWlPresets();
@@ -98,6 +101,16 @@ export function MobileToolbar({
         </button>
         <button style={tab} onClick={onOpenSeriesDrawer} data-testid="mobile-open-series-drawer">
           {t("mobile.title.series")}
+        </button>
+
+        <span style={sep} />
+
+        {/* ボリューム系は同一タブで開く。メモリガード（V2）が必要量を見て確認を出す。 */}
+        <button style={tab} onClick={() => onLaunchVolumeViewer("mpr")} data-testid="mobile-open-mpr">
+          {t("main.toolbar.mpr")}
+        </button>
+        <button style={tab} onClick={() => onLaunchVolumeViewer("viewer3d")} data-testid="mobile-open-3d">
+          {t("main.toolbar.viewer3d")}
         </button>
       </div>
 

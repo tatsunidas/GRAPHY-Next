@@ -31,6 +31,7 @@ import {
   isCacheSizeExceeded,
 } from "../viewer/volumeMemory";
 import { confirmVolumeMemory } from "../viewer/volumeMemoryGuard";
+import { useDeviceClass } from "../mobile/useDeviceClass";
 import { imageIdForInstance, imageIdForCell } from "../viewer/imageId";
 import { buildMprVolume } from "../viewer/mpr";
 import {
@@ -121,6 +122,11 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
   const [lutOpen, setLutOpen] = useState(false);
   const [curveOpen, setCurveOpen] = useState(false);
   const [cinematicOpen, setCinematicOpen] = useState(false);
+  // 狭幅・タッチ端末では固定幅 240px の右パネルをドロワーに落とす（fw/mobile-ui-design.md §4.2）。
+  // 判定は端末クラス。手動でデスクトップ UI を選んでいれば従来どおり常設パネルのまま。
+  const { uiMode } = useDeviceClass();
+  const narrow = uiMode === "mobile";
+  const [panelOpen, setPanelOpen] = useState(false);
   const [reprOpen, setReprOpen] = useState(false);
   const [rotateMode, setRotateMode] = useState<"camera" | "actor">("camera");
   const [presetName, setPresetName] = useState<string>("none");
@@ -533,12 +539,32 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
   return (
     <div style={root}>
       <div style={header}>
+        {/* 狭幅では別ウィンドウではなく同一タブの hash 遷移で来るので、戻る導線を出す。 */}
+        {narrow && (
+          <button
+            style={backBtn}
+            onClick={() => window.history.back()}
+            aria-label={t("mobile.back")}
+            data-testid="viewer3d-back"
+          >
+            ‹
+          </button>
+        )}
         <span style={hTitle}>{t("main.toolbar.viewer3d")}</span>
         {title && <span style={hSeries}>{title}</span>}
         {tilt !== null && (
           <span style={tiltChip} title={t("mpr.tiltCorrectedHint")}>
             {t("mpr.tiltCorrected", { deg: tilt.toFixed(1) })}
           </span>
+        )}
+        {narrow && phase === "ready" && (
+          <button
+            style={panelOpenBtn}
+            onClick={() => setPanelOpen(true)}
+            data-testid="viewer3d-panel-open"
+          >
+            {t("viewer3d.panel")}
+          </button>
         )}
       </div>
       {phase === "ready" && (
@@ -615,8 +641,24 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
             </div>
           )}
         </div>
-        {phase === "ready" && (
-          <div style={panel}>
+        {/*
+         * 狭幅では固定幅 240px の右パネルが画像を潰すのでドロワーにする
+         * （fw/mobile-ui-design.md §4.2）。中身は共通で、器だけ差し替える。
+         */}
+        {phase === "ready" && (!narrow || panelOpen) && (
+          <>
+            {narrow && <div style={panelScrim} onClick={() => setPanelOpen(false)} />}
+          <div style={narrow ? panelDrawer : panel}>
+            {narrow && (
+              <button
+                style={panelCloseBtn}
+                onClick={() => setPanelOpen(false)}
+                aria-label={t("common.close")}
+                data-testid="viewer3d-panel-close"
+              >
+                ✕
+              </button>
+            )}
             <div style={panelSection}>
               <div style={panelLabel}>{t("viewer3d.mode")}</div>
               <div style={modeRow}>
@@ -699,13 +741,20 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
               <button style={resetBtn} onClick={() => setLegendOn((v) => !v)}>
                 {legendOn ? t("legend.hide") : t("legend.show")}
               </button>
-              <button
-                style={pathTraceOn ? modeBtnActive : resetBtn}
-                title={t("cine2.hint")}
-                onClick={() => setPathTraceOn((v) => !v)}
-              >
-                {pathTraceOn ? t("cine2.stop") : t("cine2.start")}
-              </button>
+              {/*
+               * Cinematic / パストレーサは狭幅では出さない（fw/mobile-ui-design.md §4.2）。
+               * どちらも既定 OFF の opt-in で、`viewer/cinematicPathTracer.ts` に
+               * 「standalone(Electron) 前提」と明記されている重い機能。
+               */}
+              {!narrow && (
+                <button
+                  style={pathTraceOn ? modeBtnActive : resetBtn}
+                  title={t("cine2.hint")}
+                  onClick={() => setPathTraceOn((v) => !v)}
+                >
+                  {pathTraceOn ? t("cine2.stop") : t("cine2.start")}
+                </button>
+              )}
             </div>
 
             <div style={panelSection}>
@@ -726,6 +775,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
 
             <div style={hint}>{t("viewer3d.navHint")}</div>
           </div>
+          </>
         )}
       </div>
       {lutOpen && (
@@ -799,6 +849,57 @@ const panel: React.CSSProperties = {
   flexDirection: "column",
   gap: 16,
   overflowY: "auto",
+};
+/** 狭幅時: 右からせり上がるドロワー（中身は `panel` と同じ）。 */
+const panelDrawer: React.CSSProperties = {
+  ...panel,
+  position: "absolute",
+  top: 0,
+  right: 0,
+  bottom: 0,
+  zIndex: 60,
+  width: "min(300px, 88%)",
+  paddingTop: 40, // 閉じるボタンぶん
+  boxShadow: "-8px 0 24px rgba(0,0,0,0.5)",
+};
+const panelScrim: React.CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  zIndex: 55,
+  background: "rgba(0,0,0,0.5)",
+};
+const panelCloseBtn: React.CSSProperties = {
+  position: "absolute",
+  top: 4,
+  right: 6,
+  minWidth: 44,
+  minHeight: 36,
+  border: "none",
+  background: "transparent",
+  color: "#9aa6b2",
+  fontSize: 15,
+  cursor: "pointer",
+};
+const backBtn: React.CSSProperties = {
+  minWidth: 36,
+  minHeight: 36,
+  border: "none",
+  background: "transparent",
+  color: "#e6eaee",
+  fontSize: 22,
+  lineHeight: 1,
+  cursor: "pointer",
+};
+const panelOpenBtn: React.CSSProperties = {
+  marginLeft: "auto",
+  minHeight: 36,
+  padding: "0 12px",
+  border: "1px solid #2c343b",
+  borderRadius: 8,
+  background: "transparent",
+  color: "#c7d0d8",
+  fontSize: 12,
+  cursor: "pointer",
 };
 const panelSection: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 6 };
 const panelLabel: React.CSSProperties = {

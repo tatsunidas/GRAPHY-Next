@@ -22,6 +22,7 @@ import { useI18n } from "../i18n/i18n";
 import { SeriesViewer } from "../viewer/SeriesViewer";
 import { TOOL_IDS } from "../viewer/toolIds";
 import type { ViewerMode } from "../viewer/imageId";
+import { launchMobileVolumeViewer } from "./launchViewer";
 import { MOBILE_TILE_ID, MobileToolbar } from "./MobileToolbar";
 
 export function MobileViewer({
@@ -82,6 +83,7 @@ export function MobileViewer({
         activeTool={activeTool}
         onChangeTool={setActiveTool}
         onOpenSeriesDrawer={() => setDrawerOpen(true)}
+        onLaunchVolumeViewer={(kind) => launchMobileVolumeViewer(kind, study, series, Date.now())}
       />
 
       {drawerOpen && (
