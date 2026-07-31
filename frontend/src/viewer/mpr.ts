@@ -62,6 +62,13 @@ type MprToolGroup = NonNullable<ReturnType<typeof ToolGroupManager.getToolGroup>
  * 選択したツールにだけ `numTouchPoints: 1` を併記する。Crosshairs はタッチ非対応なので touch には出さない。
  */
 function applyMprTouchTool(tg: MprToolGroup, tool: MprTouchTool): void {
+  // ⚠️ setToolActive はバインドを「マージ」する（既存に追加するだけで削除できない）。単純に貼り直すと
+  // 一度付いた numTouchPoints:1 が候補ツールに残り続け、1 本指が常に同じツール（登録キー順で最初の
+  // もの）に解決されてしまう。切替のたびに removeAllBindings で一旦全消去してから貼り直し、選択した
+  // ツールだけが numTouchPoints:1 を持つ状態にする。
+  for (const name of [StackScrollTool.toolName, WindowLevelTool.toolName, PanTool.toolName]) {
+    tg.setToolPassive(name, { removeAllBindings: true });
+  }
   tg.setToolActive(StackScrollTool.toolName, { bindings: [{ mouseButton: MouseBindings.Wheel }] });
   tg.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary }] });
   tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
