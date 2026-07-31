@@ -28,19 +28,18 @@ const VIEW_SEGMENT: Record<MobileView, string> = {
 };
 
 /**
- * 🚧 **モバイルシェルが実用に足るか**（`fw/mobile-ui-design.md` のフェーズ）。
+ * **モバイルシェルへ自動で振り分けるか**（`fw/mobile-ui-design.md` のフェーズ）。
  *
- * <p>`false` の間は**自動振り分けを行わない**。骨格だけの段階でスマホから来た利用者を自動で
- * ここへ送ると「まともに操作できない画面しか出ない」という後退になるため。
- * 手動切替（System メニュー）は `false` でも動く。
+ * <p>`true` の間は、web モードのスマホ/タブレットから来た利用者を自動でモバイルシェルへ送る。
+ * `false` にすると自動振り分けだけが止まり、System メニューの「モバイル UI に切り替え」による
+ * 手動切替は引き続き動く（＝不具合が出たときの緊急停止スイッチとして使える）。
  *
- * <p>**M1〜M4 は実装済み（2026-07-31）。残るゲートは実機確認（M9）だけ。**
- * 自動振り分けを有効にすると、公開デモを含む web モードの全スマホ利用者が対象になる
- * ＝**最初の実機テストが本番の利用者になる**。iOS Safari / Android Chrome / iPad で
- * 一度動作を確認してから、この 1 行を `true` にすること。
- * それまでも System メニューの「モバイル UI に切り替え」で手動で入れる（＝確認はできる）。
+ * <p>M1〜M8 は実装済み（2026-07-31）だが、**実機確認（M9）は未実施のまま有効化した**
+ * （最初の実機テストが本番の利用者になることを承知のうえでの判断。2026-07-31）。
+ * 公開デモを含む web モードの全スマホ利用者が対象になる。
+ * 確認すべき項目は `fw/mobile-ui-design.md` §10。
  */
-export const MOBILE_SHELL_READY: boolean = false;
+export const MOBILE_SHELL_READY: boolean = true;
 
 /** `location.hash`（`#` 有無どちらでも可）がモバイルシェルのルートか。 */
 export function isMobileRoute(hash: string): boolean {
