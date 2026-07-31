@@ -24,6 +24,7 @@ import type { AppStatus, Series, Study, StudyFilters } from "../api";
 import { useI18n } from "../i18n/i18n";
 import { readMobileCtx, writeMobileCtx } from "./mobileCtx";
 import { MobileSeriesList, MobileStudyList } from "./MobileStudyBrowser";
+import { MobileViewer } from "./MobileViewer";
 import { mobileHash, parentView, type MobileView } from "./mobileRoute";
 import { useDeviceClass } from "./useDeviceClass";
 
@@ -80,13 +81,19 @@ export function MobileScreen({ status, view }: { status: AppStatus | null; view:
         ) : (
           <span style={{ width: 28 }} />
         )}
-        <h1 style={title}>{t(VIEW_TITLE_KEY[view])}</h1>
+        {/* ビューアでは何を見ているかが要るのでシリーズ名を出す（画面名は自明）。 */}
+        <h1 style={title}>
+          {view === "viewer" && series
+            ? series.seriesDescription || `#${series.seriesNumber ?? "—"}`
+            : t(VIEW_TITLE_KEY[view])}
+        </h1>
         <button style={escapeBtn} onClick={switchToDesktop} data-testid="mobile-to-desktop">
           {t("mobile.toDesktop")}
         </button>
       </header>
 
-      <main style={content}>
+      {/* ビューアは全面表示（余白なし・自前スクロール）。一覧系は読み物なので余白を付ける。 */}
+      <main style={view === "viewer" ? contentFlush : content}>
         {view === "studies" ? (
           <MobileStudyList
             filters={filters}
@@ -105,8 +112,17 @@ export function MobileScreen({ status, view }: { status: AppStatus | null; view:
               navigate("viewer");
             }}
           />
+        ) : view === "viewer" && study && series ? (
+          <MobileViewer
+            study={study}
+            series={series}
+            // モバイルシェルは web モード専用（§7 非目標）だが、standalone で直接 URL を
+            // 叩かれても描画自体は成立するので、status に従って imageId を組む。
+            mode={status?.mode === "standalone" ? "standalone" : "web"}
+            onChangeSeries={setSeries}
+          />
         ) : (
-          // ビューア（M3/M5）とレポート（M8）はまだ中身が無い。
+          // レポート（M8）はまだ中身が無い。
           <PlaceholderPanel status={status} />
         )}
       </main>
@@ -199,10 +215,20 @@ const escapeBtn: React.CSSProperties = {
 
 const content: React.CSSProperties = {
   flex: 1,
+  minHeight: 0,
   overflowY: "auto",
   WebkitOverflowScrolling: "touch",
   padding: 16,
   paddingBottom: "calc(16px + env(safe-area-inset-bottom, 0px))",
+};
+
+/** ビューア用。`minHeight: 0` が無いと flex 子が縮まず、ツールバーが画面外へ押し出される。 */
+const contentFlush: React.CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  display: "flex",
+  flexDirection: "column",
+  paddingBottom: "env(safe-area-inset-bottom, 0px)",
 };
 
 const panel: React.CSSProperties = {

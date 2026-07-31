@@ -27,6 +27,7 @@ export const en: Record<string, string> = {
   "mobile.title.series": "Series",
   "mobile.title.viewer": "Viewer",
   "mobile.title.report": "Report",
+  "mobile.resetAll": "Reset",
   "mobile.search.placeholder": "Patient ID or name",
   "mobile.range.today": "Today",
   "mobile.range.week": "1 week",

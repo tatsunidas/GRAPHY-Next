@@ -30,9 +30,13 @@ const VIEW_SEGMENT: Record<MobileView, string> = {
 /**
  * 🚧 **モバイルシェルが実用に足るか**（`fw/mobile-ui-design.md` のフェーズ）。
  *
- * <p>`false` の間は**自動振り分けを行わない**。M1 時点のシェルは骨格だけで、スマホから来た
- * 利用者を自動でここへ送ると「準備中の画面しか出ない」という後退になるため。
- * **M3（2D ビューア）が入った時点で true にする。** 手動切替（メニュー）は `false` でも動く。
+ * <p>`false` の間は**自動振り分けを行わない**。骨格だけの段階でスマホから来た利用者を自動で
+ * ここへ送ると「まともに操作できない画面しか出ない」という後退になるため。
+ * 手動切替（System メニュー）は `false` でも動く。
+ *
+ * <p>**true にするのは M4（タッチバインド）完了後。** M3 で 2D ビューアは載ったが、
+ * `viewer/Viewer2D.tsx` の `pixelLayer` に `touch-action: none` が無いため、画像上のドラッグが
+ * ページスクロールと競合して指では実質操作できない。
  */
 export const MOBILE_SHELL_READY: boolean = false;
 

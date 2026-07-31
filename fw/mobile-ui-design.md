@@ -141,9 +141,11 @@ matchMedia("(pointer: coarse)")      → タッチ主体
 - 前進は `location.hash` 代入（履歴に積まれる）、戻るは `history.back()` を優先。
   直接 URL で深い画面に入った場合だけ親へ `location.replace`。
 - 🚧 **`MOBILE_SHELL_READY = false` の間は自動振り分けを行わない。**
-  M1 のシェルは骨格だけなので、スマホから来た利用者を自動でここへ送ると
-  「準備中の画面しか出ない」という**後退**になる。**M3（2D ビューア）完了時に true にする。**
-  手動切替（System メニューの「モバイル UI に切り替え」。web モードのみ表示）は `false` でも動く。
+  骨格だけの段階でスマホから来た利用者を自動でここへ送ると「まともに操作できない画面しか出ない」
+  という**後退**になる。手動切替（System メニューの「モバイル UI に切り替え」。web モードのみ表示）は
+  `false` でも動く。
+  **true にするのは M4（タッチバインド）完了後**（当初は「M3 完了時」としていたが、
+  `touch-action: none` が無いと指で操作できないため先送りした）。
 - 自動振り分けの条件は「web モード ＋ メインウィンドウ ＋ IID 起動でない」。
   IID 起動は `#2dviewer` へ遷移するので、取り合いになるのを避ける。
   遷移は `location.replace` で行い履歴を汚さない（「戻る」でデスクトップ UI に戻れてしまうのを防ぐ）。
@@ -254,6 +256,28 @@ IHE IID 起動（`App.tsx:52-95`、`:57` で web モード限定）が既に
 タイルは **1×1 固定**（マルチタイルは狭幅で成立しない）。左ツリー（`width: 280` 固定）と
 右 ROI パネル（`width: 260` 固定）はドロワー化する。
 
+**実装（2026-07-31 / M3）** — `mobile/MobileViewer.tsx` ＋ `mobile/MobileToolbar.tsx`
+
+- `SeriesViewer` は**無改変**。`fillHeight` ＋ `commandKey="mobile-tile"` で使い、操作は既存の
+  `viewerCommands` レジストリ経由で送る。`key={seriesInstanceUid}` を付けてシリーズ切替時に
+  内部状態（Z/C/T・ソート）を持ち越さない。
+- **`showControls` は `true` のまま**にした。設計文の「ツールバーを差し替える」に対して、
+  スライス送りスライダー／シネ／ThickSlab／オーバーレイ行が**すべてこのパネルにある**（§3.4）ためで、
+  `false` にすると**スライス送りの手段が無くなる**。`SeriesViewer` にスライス設定コマンドは無く、
+  追加すると 808 行の共有コンポーネントに手を入れることになるので、M3 では見送った。
+  → モバイルツールバーは**このパネルに無いもの**だけを担当する:
+  ツール切替（W/L / Pan / Zoom）・Fit・**複合リセット**・90°回転・W/L プリセット・シリーズドロワー。
+- **複合リセット**: `reset()` は camera（zoom/pan/rotation/flip）だけで W/L は戻らないので、
+  `reset()` ＋ `resetWindow()` を続けて呼ぶ 1 ボタンにした（既存コマンドは変更していない）。
+- ツールバーは折り返さず**横スクロール**（`overflow-x: auto` / `touch-action: pan-x`）。
+  折り返すと縦に伸びて画像が潰れるため。タップターゲットは 44px 以上。
+- 左ツリー相当は**下からせり上がるシート**のドロワー。ビューアを離れずシリーズを切り替えられる。
+- ⚠️ **既知の見た目の問題（M9 で扱う）**: `SeriesViewer` の操作パネルは明るいテーマ（`#f7f9fb`）で、
+  モバイルシェルの暗い背景の中に白いカードとして出る。機能はするが統一感が無い。
+- ⚠️ **M4（タッチバインド）が入るまで実用にならない。** `pixelLayer` に `touch-action: none` が
+  無いので、画像上のドラッグがページスクロールと競合する。`MOBILE_SHELL_READY` を true にするのは
+  **M4 完了後**（当初は「M3 完了時」と書いていたが、この理由で先送りした）。
+
 ### 4.2 3D / MPR
 
 - **`volume-memory-guard.md` の V1・V2 が入っていることが前提。** 入っていない状態でモバイルに
@@ -350,7 +374,7 @@ VolumeViewport では canvas overlay 方式が使えず、2 ボリューム同�
 | **M0** | `volume-memory-guard.md` の V1・V2 | — | ✅ 完了（2026-07-31。V1〜V4 すべて実装済み） |
 | **M1** | デバイス判定 `useDeviceClass()` ＋ 手動切替 ＋ `#mobile` ルート追加 ＋ シェル骨格 | — | ✅ 完了（2026-07-31） |
 | **M2** | データ取得フック抽出（`useStudies` / `useSeries` / `useInstances`）＋ 検索→スタディ→シリーズの単画面ナビゲーション | M1 | ✅ 完了（2026-07-31） |
-| **M3** | 2D ビューア（1×1 固定・ドロワー・モバイルツールバー・複合リセット） | M2 | 未着手 |
+| **M3** | 2D ビューア（1×1 固定・ドロワー・モバイルツールバー・複合リセット） | M2 | ✅ 完了（2026-07-31）／実機未確認 |
 | **M4** | タッチバインド（`numTouchPoints` ＋ `touchAction: none`）＋ ROI 計測のタップターゲット調整 | M3 | 未着手 |
 | **M5** | 3D / MPR（1 面＋面切替・ドロワー・Cinematic 非表示） | M0, M3 | 未着手 |
 | **M6** | Fusion（タッチ用の重ね合わせ導線） | M3 | 未着手 |
@@ -398,8 +422,8 @@ M7 は frontend に依存しないので M1〜M6 と並行できる。
 - ✅ `frontend/src/mobile/dateRange.ts` … 検索の期間プリセット（M2。同上）
 - ✅ `frontend/src/mobile/useDeviceClass.test.ts` / `mobileRoute.test.ts` / `dateRange.test.ts` … 単体テスト
 - ✅ `frontend/src/mobile/MobileStudyBrowser.tsx` … 検索 → スタディ → シリーズ（M2）
-- `frontend/src/mobile/MobileViewer.tsx` … 2D / 3D / MPR のタブ切替
-- `frontend/src/mobile/MobileToolbar.tsx` … ツール切替・W/L プリセット・複合リセット
+- ✅ `frontend/src/mobile/MobileViewer.tsx` … 2D（M3）／シリーズ切替ドロワー。3D / MPR タブは M5
+- ✅ `frontend/src/mobile/MobileToolbar.tsx` … ツール切替・W/L プリセット・複合リセット（M3）
 - `frontend/src/mobile/MobileReportEditor.tsx` … 縦積みエディタ
 - ✅ `frontend/src/hooks/useStudies.ts` / `useSeries.ts` / `useInstances.ts` … 取得ロジック抽出（M2）
 - ✅ `frontend/src/hooks/useAsyncData.ts` … 上記 3 つの共通部分（M2。設計時には無かったファイル）
