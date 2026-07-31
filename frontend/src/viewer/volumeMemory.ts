@@ -74,8 +74,126 @@ export function getAppliedVolumeMaxMb(): number {
  * </ul>
  */
 export function isCacheSizeExceeded(e: unknown): boolean {
+  if (e instanceof VolumeMemoryExceededError) return true;
   const m = e instanceof Error ? e.message : String(e ?? "");
   return /cache[_\s-]?size[_\s-]?exceeded/i.test(m) || /is not cacheable/i.test(m);
+}
+
+/**
+ * ボリューム構築の二重防御（V2）が、確定した寸法で上限超過を検出したときに投げる例外。
+ * 利用者から見れば cornerstone のキャッシュ超過と同じ事象なので {@link isCacheSizeExceeded} が
+ * true を返し、各画面は同じ案内（`common.volumeMemExceeded`）を出す。
+ */
+export class VolumeMemoryExceededError extends Error {
+  constructor(
+    readonly neededBytes: number,
+    readonly budgetBytes: number,
+  ) {
+    super(
+      `Volume memory exceeded: needs ${Math.ceil(neededBytes / MB)}MB > budget ${Math.ceil(
+        budgetBytes / MB,
+      )}MB`,
+    );
+    this.name = "VolumeMemoryExceededError";
+  }
+}
+
+// ── V2: 事前予測 ────────────────────────────────────────────────────────────
+
+/**
+ * ボクセルあたりのバイト数を決めるピクセル形式。`api.ts` の `SeriesPixelFormat` と同形だが、
+ * このモジュールを依存ゼロに保つため構造的に受ける（`api.ts` は `http.ts` を引き込む）。
+ */
+export interface PixelFormatLike {
+  bitsAllocated: number;
+  pixelRepresentation: number;
+  samplesPerPixel: number;
+  rescaleSlope: number;
+  rescaleIntercept: number;
+}
+
+/**
+ * cornerstone がボリューム用に確保する TypedArray の bytes/voxel を求める
+ * （`utilities/generateVolumePropsFromImageIds.js` の `_determineDataType` の写し）。
+ *
+ * <p>🚨 **BitsAllocated だけで判断すると PET で 2 倍見誤る。** RescaleSlope/Intercept が
+ * 非整数だと `floatAfterScale` が真になり、16bit でも `Float32Array`（4B/voxel）に化ける。
+ * CT は intercept −1024 が負なので `Int16Array`（2B）。
+ *
+ * <p>本家は `canRenderFloatTextures()` の結果と、キャッシュ済み画素の実型（`_getDataTypeFromCache`）も
+ * 見るが、予測は**未ロード時の最悪値**で立てればよいので float テクスチャは可とみなす。
+ *
+ * @returns bytes/voxel。BitsAllocated が未知（本家が throw する値）なら null。
+ */
+export function volumeBytesPerVoxel(pf: PixelFormatLike | null | undefined): number | null {
+  if (!pf || !Number.isFinite(pf.bitsAllocated)) return null;
+  const signed = pf.pixelRepresentation === 1;
+  const hasNegativeRescale = pf.rescaleIntercept < 0 || pf.rescaleSlope < 0;
+  const floatAfterScale =
+    !Number.isInteger(pf.rescaleSlope) || !Number.isInteger(pf.rescaleIntercept);
+  switch (pf.bitsAllocated) {
+    case 8:
+      return 1;
+    case 16:
+      if (floatAfterScale) return 4; // Float32Array（PET の非整数 slope など）
+      if (signed || hasNegativeRescale) return 2; // Int16Array（CT）
+      return 2; // Uint16Array
+    case 24:
+      return 1;
+    case 32:
+      return 4;
+    default:
+      return null; // 本家が throw する値。予測せず V1 のエラー識別に委ねる
+  }
+}
+
+/** ボリュームの同時生存コピー数（`fw/volume-memory-guard.md` §2.2）。 */
+export function volumeCopyCount(target: "mpr" | "viewer3d", modality: string | null): number {
+  // CT ガントリチルト補正は幾何を見るまで確定しないので、CT は常に ×2 側（保守）で見積もる。
+  const base = (modality ?? "").toUpperCase() === "CT" ? 2 : 1;
+  // 3D は vtkImageDataFromVolume が vtk 用にフルコピーを 1 本作る。
+  return target === "viewer3d" ? base + 1 : base;
+}
+
+/** {@link projectVolumeBytes} の結果。 */
+export interface VolumeProjection {
+  /** 予測される総消費バイト数（ボリュームのコピー群 ＋ 全スライスの image キャッシュ）。 */
+  bytes: number;
+  /** {@link bytes} を MB に切り上げたもの（案内文用）。 */
+  mb: number;
+  bytesPerVoxel: number;
+  copies: number;
+}
+
+/**
+ * ボリューム構築で消費するメモリ量を予測する。予測できない場合は null
+ * （＝警告をスキップし、V1 のエラー識別に委ねる。予測は best-effort、防御は二段）。
+ *
+ * <p>`projected = volumeBytes × copies + imageCacheBytes` で、image キャッシュは全スライス分が
+ * 別途乗る（どちらの経路も `loadAndCacheImage` で読み切ってから volume 化する）。
+ * per-slice の実型は volume と同じ型に倒して見積もる。
+ *
+ * @param sliceCount 実際に volume 化されるスライス数。⚠️ `nZ` をそのまま渡してはいけない
+ *                   （`cells` を (c0,t0) で絞った件数）。
+ */
+export function projectVolumeBytes(args: {
+  imageWidth: number;
+  imageHeight: number;
+  sliceCount: number;
+  pixelFormat: PixelFormatLike | null | undefined;
+  target: "mpr" | "viewer3d";
+  modality: string | null;
+}): VolumeProjection | null {
+  const { imageWidth, imageHeight, sliceCount } = args;
+  if (!(imageWidth > 0) || !(imageHeight > 0) || !(sliceCount > 0)) return null;
+  const bpv = volumeBytesPerVoxel(args.pixelFormat);
+  if (bpv === null) return null;
+  const samples = Math.max(1, args.pixelFormat?.samplesPerPixel ?? 1);
+  const voxels = imageWidth * imageHeight * sliceCount;
+  const volumeBytes = voxels * bpv * samples;
+  const copies = volumeCopyCount(args.target, args.modality);
+  const bytes = volumeBytes * (copies + 1); // +1 = 全スライスの image キャッシュ
+  return { bytes, mb: Math.ceil(bytes / MB), bytesPerVoxel: bpv, copies };
 }
 
 // ── V4: 3D テクスチャ寸法のハードガード ─────────────────────────────────────

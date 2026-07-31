@@ -173,6 +173,20 @@ export interface SeriesLayoutZSpatial {
   imagePositionPatient: [number, number, number];
 }
 
+/**
+ * ボクセルあたりのバイト数を決めるピクセル形式（ボリューム構築前のメモリ量予測用。
+ * `fw/volume-memory-guard.md` §2.1）。BitsAllocated だけでは型が決まらないため rescale も含む。
+ */
+export interface SeriesPixelFormat {
+  bitsAllocated: number;
+  /** 1 = signed。 */
+  pixelRepresentation: number;
+  /** RGB なら 3。 */
+  samplesPerPixel: number;
+  rescaleSlope: number;
+  rescaleIntercept: number;
+}
+
 /** シリーズの 5D(ZCT) レイアウト（backend がヘッダから導出）。 */
 export interface SeriesLayoutDto {
   nZ: number;
@@ -193,6 +207,8 @@ export interface SeriesLayoutDto {
   zSpatial: SeriesLayoutZSpatial[] | null;
   /** FrameOfReferenceUID。セグメンテーション labelmap のメタデータ供給／volume 再構成の FoR 判定用。null なら未取得。 */
   frameOfReferenceUID: string | null;
+  /** ピクセル形式。ボリューム構築前のメモリ量予測用。null なら未取得（予測をスキップする）。 */
+  pixelFormat?: SeriesPixelFormat | null;
 }
 
 export interface TagInfo {

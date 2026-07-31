@@ -30,6 +30,7 @@ import {
   getMax3dTextureSize,
   isCacheSizeExceeded,
 } from "../viewer/volumeMemory";
+import { confirmVolumeMemory } from "../viewer/volumeMemoryGuard";
 import { imageIdForInstance, imageIdForCell } from "../viewer/imageId";
 import { buildMprVolume } from "../viewer/mpr";
 import {
@@ -212,10 +213,13 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
       // 起動元タイルで表示中だった C/T のスタックのみをボリューム化する（マルチチャンネル/
       // マルチタイムフレームのシリーズで異なる C/T の画像が混在するのを防ぐ）。
       let imageIds: string[];
+      // メモリ量の事前予測に使う（layout が取れなかったフォールバック経路では予測しない）。
+      let guardLayout: SeriesLayoutDto | null = null;
       try {
         const layout = await fetchSeriesLayout(ctx.study.studyInstanceUid, series.seriesInstanceUid);
         const c0 = Math.min(Math.max(0, ctx.c ?? 0), Math.max(0, layout.nC - 1));
         const t0 = Math.min(Math.max(0, ctx.t ?? 0), Math.max(0, layout.nT - 1));
+        guardLayout = layout;
         imageIds = imageIdsForCT(layout, mode2, c0, t0, ctx.study.studyInstanceUid, series.seriesInstanceUid);
         if (imageIds.length < 3 && layout.nC <= 1 && layout.nT <= 1) {
           const instances = await fetchInstances(ctx.study.studyInstanceUid, series.seriesInstanceUid);
@@ -235,6 +239,22 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         return;
       }
 
+      // ボリューム構築で確保しようとする量を先に見積もり、バジェットを超えるなら確認する
+      // （fw/volume-memory-guard.md V2）。予測不能・警告 OFF・利用者が続行なら素通り。
+      const memDecision = await confirmVolumeMemory({
+        layout: guardLayout,
+        sliceCount: imageIds.length,
+        modality: series.modality,
+        target: "viewer3d",
+        t18n: t,
+      });
+      if (!memDecision.proceed) {
+        // キャンセル時はビューア画面が空のままになるので、理由を出しておく。
+        setPhase("error");
+        setMessage(t("common.volumeMemCanceled"));
+        return;
+      }
+
       // web: 全スライスを 1 リクエストで BFF キャッシュに載せてから volume 構築（個別 WADO-RS 往復を回避）。
       if (mode2 === "web") {
         try {
@@ -245,7 +265,9 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
       }
 
       const volId = `graphy-viewer3d-vol:${series.seriesInstanceUid}`;
-      const built = await buildMprVolume(imageIds, series.modality, volId);
+      const built = await buildMprVolume(imageIds, series.modality, volId, {
+        maxBytes: memDecision.enforceMaxBytes,
+      });
       setTilt(built.corrected ? (built.tiltAngleDeg ?? null) : null);
       setVolumeId(volId);
 

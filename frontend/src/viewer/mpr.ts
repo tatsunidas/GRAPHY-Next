@@ -43,6 +43,7 @@ import {
 import { getOrCreateVoiSync } from "./sync";
 import { computeOrientationMarkers, type OrientationMarkers } from "./orientation";
 import { getModalityCalibration } from "./pixelCalibration";
+import { VolumeMemoryExceededError } from "./volumeMemory";
 
 /** MPR の VOI(W/L) 同期 ID。3 面は同一ボリュームを見るため VOI は絶対値同期でよい。 */
 export const MPR_VOI_SYNC_ID = "graphy-mpr-voi";
@@ -86,7 +87,10 @@ const norm = (a: Vec3): number => Math.hypot(a[0], a[1], a[2]);
  * 画素は rescale を適用して HU（Int16）で格納（チルト補正の補間も HU 上で行う）。
  * 幾何が揃わない/スライス数不足なら null。
  */
-async function assembleCtSourceVolume(imageIds: string[]): Promise<TiltSourceVolume | null> {
+async function assembleCtSourceVolume(
+  imageIds: string[],
+  maxBytes?: number,
+): Promise<TiltSourceVolume | null> {
   if (imageIds.length < 2) return null;
   await Promise.all(imageIds.map((id) => imageLoader.loadAndCacheImage(id).catch(() => null)));
 
@@ -126,6 +130,13 @@ async function assembleCtSourceVolume(imageIds: string[]): Promise<TiltSourceVol
   const sliceSpacing = span / (depth - 1) || Number(plane0.sliceThickness) || 1;
 
   const sliceLen = cols * rows;
+  // 二重防御（fw/volume-memory-guard.md V2）: 呼び出し側の予測が漏れた場合に備え、ロード後に
+  // 確定した cols/rows/depth でも上限を見る。チルト補正経路はここの Int16 と correctGantryTilt の
+  // 出力（createLocalVolume）で 2 本生きるので ×2 で見積もる。
+  if (maxBytes !== undefined) {
+    const needed = sliceLen * depth * 2 * 2;
+    if (needed > maxBytes) throw new VolumeMemoryExceededError(needed, maxBytes);
+  }
   const data = new Int16Array(sliceLen * depth);
   for (let z = 0; z < depth; z++) {
     const img = cache.getImage(recs[z].id) as AnyObj | undefined;
@@ -204,16 +215,22 @@ function buildCorrectedMetadata(imageId0: string, spacing: Vec3, cols: number, r
 
 /**
  * MPR 用ボリュームを構築してキャッシュする。CT でチルトがあれば前処理補正を適用。
+ *
+ * @param opts.maxBytes 二重防御（`fw/volume-memory-guard.md` V2）。**呼び出し側が事前予測
+ *   できなかったときだけ渡す**。ロード後に確定した寸法で超過していれば
+ *   {@link VolumeMemoryExceededError} を投げる。利用者が警告を見て「続行」を選んだ場合は
+ *   渡さないこと（後段で無条件に止め直すことになるため）。
  * @returns 構築した volumeId と補正フラグ。
  */
 export async function buildMprVolume(
   imageIds: string[],
   modality: string | null,
   volumeId: string,
+  opts?: { maxBytes?: number },
 ): Promise<BuildVolumeResult> {
   const isCT = (modality ?? "").toUpperCase() === "CT";
   if (isCT) {
-    const src = await assembleCtSourceVolume(imageIds);
+    const src = await assembleCtSourceVolume(imageIds, opts?.maxBytes);
     if (src && needsTiltCorrection(src.ippFirst, src.ippLast, src.iop)) {
       // 符号付きチルト角を colCosine の Y-Z 成分から導出（tanA = Cz/Cy、設計 §3.5 の幾何）。
       const tiltAngleDeg = (Math.atan2(src.iop[5], src.iop[4]) * 180) / Math.PI;

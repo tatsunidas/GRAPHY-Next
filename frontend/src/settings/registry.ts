@@ -397,6 +397,13 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
             max: 32768,
             helpKey: "settings.field.volumeMaxMb.help",
           },
+          {
+            key: "viewer.volumeWarnBeforeBuild",
+            labelKey: "settings.field.volumeWarnBeforeBuild",
+            type: "toggle",
+            default: true,
+            helpKey: "settings.field.volumeWarnBeforeBuild.help",
+          },
         ],
       },
     ],

@@ -14,6 +14,7 @@ import { RenderingEngine, Enums, eventTarget } from "@cornerstonejs/core";
 import {
   fetchSeries,
   fetchInstances,
+  fetchSeriesLayout,
   prefetchSeries,
   type AppStatus,
   type Study,
@@ -21,6 +22,7 @@ import {
 } from "../api";
 import { ensureCornerstoneInitialized } from "../viewer/cornerstoneSetup";
 import { getAppliedVolumeMaxMb, isCacheSizeExceeded } from "../viewer/volumeMemory";
+import { confirmVolumeMemory } from "../viewer/volumeMemoryGuard";
 import { imageIdForInstance } from "../viewer/imageId";
 import {
   buildMprVolume,
@@ -139,6 +141,27 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
         imageIdForInstance(mode, i.sopInstanceUid, ctx.study.studyInstanceUid, series.seriesInstanceUid),
       );
 
+      // ボリューム構築で確保しようとする量を先に見積もり、バジェットを超えるなら確認する
+      // （fw/volume-memory-guard.md V2）。MPR は本来 layout を取らないが、面内サイズと
+      // ピクセル形式が予測に要るためここで 1 回だけ取得する（失敗しても予測を諦めるだけ）。
+      const guardLayout = await fetchSeriesLayout(
+        ctx.study.studyInstanceUid,
+        series.seriesInstanceUid,
+      ).catch(() => null);
+      const memDecision = await confirmVolumeMemory({
+        layout: guardLayout,
+        sliceCount: imageIds.length,
+        modality: series.modality,
+        target: "mpr",
+        t18n: t,
+      });
+      if (!memDecision.proceed) {
+        // キャンセル時は画面が空のままになるので、理由を出しておく。
+        setPhase("error");
+        setMessage(t("common.volumeMemCanceled"));
+        return;
+      }
+
       // web: 全スライスを 1 リクエストで BFF キャッシュに載せてから volume 構築（個別 WADO-RS 往復を回避）。
       if (mode === "web") {
         try {
@@ -149,7 +172,9 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
       }
 
       const volumeId = `graphy-mpr-vol:${series.seriesInstanceUid}`;
-      const built = await buildMprVolume(imageIds, series.modality, volumeId);
+      const built = await buildMprVolume(imageIds, series.modality, volumeId, {
+        maxBytes: memDecision.enforceMaxBytes,
+      });
       setTilt(built.corrected ? (built.tiltAngleDeg ?? null) : null);
 
       const els = axialRef.current && sagittalRef.current && coronalRef.current;

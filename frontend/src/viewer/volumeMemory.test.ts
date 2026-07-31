@@ -12,8 +12,13 @@ import {
   getMax3dTextureSize,
   isCacheSizeExceeded,
   normalizeVolumeMaxMb,
+  projectVolumeBytes,
   setAppliedVolumeMaxMb,
+  volumeBytesPerVoxel,
+  volumeCopyCount,
   volumeMaxBytes,
+  VolumeMemoryExceededError,
+  type PixelFormatLike,
 } from "./volumeMemory";
 
 describe("normalizeVolumeMaxMb", () => {
@@ -113,6 +118,142 @@ describe("isCacheSizeExceeded", () => {
     expect(isCacheSizeExceeded(new Error("Network error"))).toBe(false);
     expect(isCacheSizeExceeded(null)).toBe(false);
     expect(isCacheSizeExceeded(undefined)).toBe(false);
+  });
+});
+
+describe("volumeBytesPerVoxel", () => {
+  const pf = (o: Partial<PixelFormatLike>): PixelFormatLike => ({
+    bitsAllocated: 16,
+    pixelRepresentation: 0,
+    samplesPerPixel: 1,
+    rescaleSlope: 1,
+    rescaleIntercept: 0,
+    ...o,
+  });
+
+  it("8bit は 1 バイト", () => {
+    expect(volumeBytesPerVoxel(pf({ bitsAllocated: 8 }))).toBe(1);
+  });
+
+  it("CT（signed / intercept -1024）は Int16Array で 2 バイト", () => {
+    expect(
+      volumeBytesPerVoxel(pf({ pixelRepresentation: 1, rescaleSlope: 1, rescaleIntercept: -1024 })),
+    ).toBe(2);
+  });
+
+  it("unsigned・負の rescale 無しは Uint16Array で 2 バイト", () => {
+    expect(volumeBytesPerVoxel(pf({}))).toBe(2);
+  });
+
+  it("🚨 PET の非整数 RescaleSlope は 16bit でも Float32Array で 4 バイト", () => {
+    // BitsAllocated だけで判断すると 2 倍見誤る箇所。
+    expect(volumeBytesPerVoxel(pf({ rescaleSlope: 0.0123 }))).toBe(4);
+  });
+
+  it("非整数の RescaleIntercept でも 4 バイトになる", () => {
+    expect(volumeBytesPerVoxel(pf({ rescaleIntercept: -1024.5 }))).toBe(4);
+  });
+
+  it("24bit は 1 バイト、32bit は 4 バイト", () => {
+    expect(volumeBytesPerVoxel(pf({ bitsAllocated: 24 }))).toBe(1);
+    expect(volumeBytesPerVoxel(pf({ bitsAllocated: 32 }))).toBe(4);
+  });
+
+  it("未知の BitsAllocated・未取得は null（予測しない）", () => {
+    expect(volumeBytesPerVoxel(pf({ bitsAllocated: 12 }))).toBe(null);
+    expect(volumeBytesPerVoxel(null)).toBe(null);
+    expect(volumeBytesPerVoxel(undefined)).toBe(null);
+  });
+});
+
+describe("volumeCopyCount", () => {
+  it("MPR は非 CT が ×1、CT はチルト補正の可能性を見て ×2（保守側）", () => {
+    expect(volumeCopyCount("mpr", "MR")).toBe(1);
+    expect(volumeCopyCount("mpr", "CT")).toBe(2);
+    expect(volumeCopyCount("mpr", "ct")).toBe(2);
+    expect(volumeCopyCount("mpr", null)).toBe(1);
+  });
+
+  it("3D は vtk 用フルコピーの分だけ 1 本増える", () => {
+    expect(volumeCopyCount("viewer3d", "MR")).toBe(2);
+    expect(volumeCopyCount("viewer3d", "CT")).toBe(3);
+  });
+});
+
+describe("projectVolumeBytes", () => {
+  const ctPf: PixelFormatLike = {
+    bitsAllocated: 16,
+    pixelRepresentation: 1,
+    samplesPerPixel: 1,
+    rescaleSlope: 1,
+    rescaleIntercept: -1024,
+  };
+  const args = {
+    imageWidth: 512,
+    imageHeight: 512,
+    sliceCount: 400,
+    pixelFormat: ctPf,
+    modality: "CT",
+  };
+  // 512×512×400 の CT（2B/voxel）= 210MB（設計書 §2.4 の見積り例）。
+  const volumeMb = (512 * 512 * 400 * 2) / (1024 * 1024);
+
+  it("設計書 §2.4 の MPR（CT チルト補正あり）の見積りと一致する", () => {
+    // volume ×2 ＋ image キャッシュ ＝ 3 本ぶん ≒ 630MB。
+    const p = projectVolumeBytes({ ...args, target: "mpr" })!;
+    expect(p.copies).toBe(2);
+    expect(p.mb).toBe(Math.ceil(volumeMb * 3));
+  });
+
+  it("設計書 §2.4 の 3D の見積りと一致する", () => {
+    // volume ×2 ＋ vtk コピー ＋ image キャッシュ ＝ 4 本ぶん ≒ 840MB。
+    const p = projectVolumeBytes({ ...args, target: "viewer3d" })!;
+    expect(p.copies).toBe(3);
+    expect(p.mb).toBe(Math.ceil(volumeMb * 4));
+  });
+
+  it("チルト補正が無い（非 CT）なら volume ＋ image キャッシュの 2 本ぶん", () => {
+    const p = projectVolumeBytes({ ...args, modality: "MR", target: "mpr" })!;
+    expect(p.copies).toBe(1);
+    expect(p.mb).toBe(Math.ceil(volumeMb * 2));
+  });
+
+  it("SamplesPerPixel（RGB）を掛ける", () => {
+    const rgb: PixelFormatLike = {
+      bitsAllocated: 8,
+      pixelRepresentation: 0,
+      samplesPerPixel: 3,
+      rescaleSlope: 1,
+      rescaleIntercept: 0,
+    };
+    const p = projectVolumeBytes({
+      imageWidth: 100,
+      imageHeight: 100,
+      sliceCount: 10,
+      pixelFormat: rgb,
+      target: "mpr",
+      modality: "OT",
+    })!;
+    expect(p.bytes).toBe(100 * 100 * 10 * 1 * 3 * 2);
+  });
+
+  it("寸法やピクセル形式が欠けていれば null（予測せず V1 のエラー識別に委ねる）", () => {
+    expect(projectVolumeBytes({ ...args, target: "mpr", imageWidth: 0 })).toBe(null);
+    expect(projectVolumeBytes({ ...args, target: "mpr", imageHeight: 0 })).toBe(null);
+    expect(projectVolumeBytes({ ...args, target: "mpr", sliceCount: 0 })).toBe(null);
+    expect(projectVolumeBytes({ ...args, target: "mpr", pixelFormat: null })).toBe(null);
+  });
+});
+
+describe("VolumeMemoryExceededError", () => {
+  it("isCacheSizeExceeded が true を返す（利用者から見れば同じ事象）", () => {
+    expect(isCacheSizeExceeded(new VolumeMemoryExceededError(3e9, 2e9))).toBe(true);
+  });
+
+  it("必要量と上限を MB でメッセージに含む", () => {
+    const e = new VolumeMemoryExceededError(3 * 1024 * 1024 * 1024, 2 * 1024 * 1024 * 1024);
+    expect(e.message).toContain("3072MB");
+    expect(e.message).toContain("2048MB");
   });
 });
 

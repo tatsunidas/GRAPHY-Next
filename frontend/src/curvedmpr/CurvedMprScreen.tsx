@@ -23,6 +23,7 @@ import { fetchSeries, fetchInstances, fetchSeriesLayout, prefetchSeries, type Ap
 import { ensureCornerstoneInitialized } from "../viewer/cornerstoneSetup";
 import { imageIdForInstance, imageIdForCell } from "../viewer/imageId";
 import { getAppliedVolumeMaxMb, isCacheSizeExceeded } from "../viewer/volumeMemory";
+import { confirmVolumeMemory } from "../viewer/volumeMemoryGuard";
 import { type ResliceVolume, type Vec3 } from "../viewer/reslice";
 import { Centerline3D, type FrameMode } from "../viewer/centerline";
 import { reformat, defaultCurvedParams, type ProjectionMode, type CurvedResult } from "../viewer/curvedReformat";
@@ -449,8 +450,11 @@ export function CurvedMprScreen({ status }: { status: AppStatus | null }) {
       let imageIds: string[];
       let c0 = 0;
       let t0 = 0;
+      // メモリ量の事前予測に使う（layout が取れなかったフォールバック経路では予測しない）。
+      let guardLayout: SeriesLayoutDto | null = null;
       try {
         const layout = await fetchSeriesLayout(ctx.study.studyInstanceUid, series.seriesInstanceUid);
+        guardLayout = layout;
         c0 = Math.min(Math.max(0, ctx.c ?? 0), Math.max(0, layout.nC - 1));
         t0 = Math.min(Math.max(0, ctx.t ?? 0), Math.max(0, layout.nT - 1));
         setDimInfo({ nC: layout.nC, nT: layout.nT, c: c0, t: t0 });
@@ -470,6 +474,25 @@ export function CurvedMprScreen({ status }: { status: AppStatus | null }) {
       if (imageIds.length < 3) {
         setPhase("error");
         setMessage(t("curvedMpr.needVolume"));
+        return;
+      }
+
+      // ボリューム構築で確保しようとする量を先に見積もり、バジェットを超えるなら確認する
+      // （fw/volume-memory-guard.md V2）。Curved MPR は自前ボリュームだが、全スライスを
+      // cornerstone のキャッシュに載せてから組むため消費量は MPR 経路と同等に見積もる。
+      // Curved MPR は buildMprVolume を通らない（自前の buildDicomResliceVolume）ため、
+      // 二重防御（enforceMaxBytes）の受け皿はなく、予測が効かない場合は V1 の識別に委ねる。
+      const memDecision = await confirmVolumeMemory({
+        layout: guardLayout,
+        sliceCount: imageIds.length,
+        modality: series.modality,
+        target: "mpr",
+        t18n: t,
+      });
+      if (!memDecision.proceed) {
+        // キャンセル時は画面が空のままになるので、理由を出しておく。
+        setPhase("error");
+        setMessage(t("common.volumeMemCanceled"));
         return;
       }
 

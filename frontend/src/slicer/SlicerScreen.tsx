@@ -21,6 +21,7 @@ import { fetchSeries, fetchInstances, fetchSeriesLayout, prefetchSeries, type Ap
 import { ensureCornerstoneInitialized } from "../viewer/cornerstoneSetup";
 import { imageIdForInstance, imageIdForCell } from "../viewer/imageId";
 import { getAppliedVolumeMaxMb, isCacheSizeExceeded } from "../viewer/volumeMemory";
+import { confirmVolumeMemory } from "../viewer/volumeMemoryGuard";
 import {
   teardownSlicer,
   displayReconStack,
@@ -347,6 +348,21 @@ export function SlicerScreen({ status }: { status: AppStatus | null }) {
         setMessage(t("slicer.needVolume"));
         return;
       }
+      // ボリューム構築で確保しようとする量を先に見積もり、バジェットを超えるなら確認する
+      // （fw/volume-memory-guard.md V2）。layout 取得に失敗した経路では予測しない。
+      const memDecision = await confirmVolumeMemory({
+        layout: layoutRef.current,
+        sliceCount: imageIds.length,
+        modality: series.modality,
+        target: "mpr",
+        t18n: t,
+      });
+      if (!memDecision.proceed) {
+        // キャンセル時は画面が空のままになるので、理由を出しておく。
+        setPhase("error");
+        setMessage(t("common.volumeMemCanceled"));
+        return;
+      }
       // web: 全スライスを 1 リクエストで BFF キャッシュに載せてから volume 構築（個別 WADO-RS 往復を回避）。
       if (mode === "web") {
         try {
@@ -357,7 +373,9 @@ export function SlicerScreen({ status }: { status: AppStatus | null }) {
       }
       const volumeId = `graphy-slicer-vol:${series.seriesInstanceUid}:c${c0}t${t0}`;
       // CT はガントリチルトを必要に応じて自動補正（buildMprVolume 内で判定）。
-      const built = await buildMprVolume(imageIds, series.modality, volumeId);
+      const built = await buildMprVolume(imageIds, series.modality, volumeId, {
+        maxBytes: memDecision.enforceMaxBytes,
+      });
       setTilt(built.corrected ? (built.tiltAngleDeg ?? null) : null);
 
       const vol = resliceVolumeFromCache(volumeId);
@@ -660,9 +678,21 @@ export function SlicerScreen({ status }: { status: AppStatus | null }) {
       if (!layout) return;
       const ids = imageIdsForCT(layout, mode, cIdx, tIdx, srcStudyRef.current ?? "", srcSeriesRef.current ?? "");
       if (ids.length < 3) return;
+      // C/T 切替もボリュームを組み直すので、起動時と同じくメモリ量を先に確認する。
+      // キャンセル時は現在の表示をそのまま残す（状態を変えない）。
+      const memDecision = await confirmVolumeMemory({
+        layout,
+        sliceCount: ids.length,
+        modality: modalityRef.current,
+        target: "mpr",
+        t18n: t,
+      });
+      if (!memDecision.proceed) return;
       const volId = `graphy-slicer-vol:${srcSeriesRef.current}:c${cIdx}t${tIdx}`;
       try {
-        const built = await buildMprVolume(ids, modalityRef.current, volId);
+        const built = await buildMprVolume(ids, modalityRef.current, volId, {
+          maxBytes: memDecision.enforceMaxBytes,
+        });
         setTilt(built.corrected ? (built.tiltAngleDeg ?? null) : null);
         const vol = resliceVolumeFromCache(volId);
         if (!vol) {
