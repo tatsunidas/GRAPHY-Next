@@ -325,6 +325,7 @@ export const ja: Record<string, string> = {
   "cine2.hint": "プログレッシブ Monte-Carlo ボリューム・パストレーサ（シネマティック）。現在の LUT / W-L を使用。ボリュームのみ（メッシュ重畳なし）。GPU 負荷大。",
   "cine2.progress": "パストレース: {{n}} / {{max}} フレーム",
   "cine2.unsupported": "パストレースには WebGL2 float バッファが必要です（この GPU では未対応）。",
+  "viewer3d.texture3dTooLarge": "このシリーズはボリュームの寸法（{{dim}}）がこの GPU の 3D テクスチャ上限（{{maxDim}}）を超えるため、3D 表示できません。範囲を絞ったシリーズを作成してからお試しください。",
   "cine2.error": "パストレーサがボリュームを読み込めませんでした。",
   "centerline.title": "中心線解析",
   "centerline.extractTitle": "グラフ抽出",

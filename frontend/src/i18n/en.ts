@@ -325,6 +325,7 @@ export const en: Record<string, string> = {
   "cine2.hint": "Progressive Monte-Carlo volume path tracer (cinematic). Uses the current LUT / W-L; volume only (no mesh overlay). GPU-heavy.",
   "cine2.progress": "Path trace: {{n}} / {{max}} frames",
   "cine2.unsupported": "Path tracing needs WebGL2 float buffers (unavailable on this GPU).",
+  "viewer3d.texture3dTooLarge": "This series cannot be shown in 3D: its volume dimension ({{dim}}) exceeds this GPU's 3D texture limit ({{maxDim}}). Try creating a cropped series first.",
   "cine2.error": "Path tracer could not read the volume.",
   "centerline.title": "Centerline analysis",
   "centerline.extractTitle": "Extract graph",

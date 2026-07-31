@@ -7,7 +7,9 @@ import {
   DEFAULT_VOLUME_MAX_MB,
   MAX_VOLUME_MAX_MB,
   MIN_VOLUME_MAX_MB,
+  findExceeding3dTextureDim,
   getAppliedVolumeMaxMb,
+  getMax3dTextureSize,
   isCacheSizeExceeded,
   normalizeVolumeMaxMb,
   setAppliedVolumeMaxMb,
@@ -111,5 +113,51 @@ describe("isCacheSizeExceeded", () => {
     expect(isCacheSizeExceeded(new Error("Network error"))).toBe(false);
     expect(isCacheSizeExceeded(null)).toBe(false);
     expect(isCacheSizeExceeded(undefined)).toBe(false);
+  });
+});
+
+describe("findExceeding3dTextureDim", () => {
+  it("上限内なら null", () => {
+    expect(findExceeding3dTextureDim([512, 512, 400], 2048)).toBe(null);
+    // 境界（ちょうど上限）は超過ではない。
+    expect(findExceeding3dTextureDim([2048, 512, 400], 2048)).toBe(null);
+  });
+
+  it("超過している次元を返す", () => {
+    expect(findExceeding3dTextureDim([512, 512, 2049], 2048)).toBe(2049);
+  });
+
+  it("複数超過していれば最大のものを返す（案内に最悪値を出すため）", () => {
+    expect(findExceeding3dTextureDim([4096, 512, 3000], 2048)).toBe(4096);
+  });
+
+  it("上限が取得できない（null）なら判定しない", () => {
+    expect(findExceeding3dTextureDim([9999, 9999, 9999], null)).toBe(null);
+  });
+
+  it("不正な上限値では判定しない（誤検知でボリュームを止めない）", () => {
+    expect(findExceeding3dTextureDim([9999], 0)).toBe(null);
+    expect(findExceeding3dTextureDim([9999], -1)).toBe(null);
+    expect(findExceeding3dTextureDim([9999], NaN)).toBe(null);
+  });
+
+  it("寸法が空・未取得なら null", () => {
+    expect(findExceeding3dTextureDim([], 2048)).toBe(null);
+    expect(findExceeding3dTextureDim(null, 2048)).toBe(null);
+    expect(findExceeding3dTextureDim(undefined, 2048)).toBe(null);
+  });
+
+  it("非数の混入は無視する", () => {
+    expect(findExceeding3dTextureDim([NaN, 512, 512], 2048)).toBe(null);
+  });
+
+  it("TypedArray（vtk の getDimensions 戻り）でも動く", () => {
+    expect(findExceeding3dTextureDim(Int32Array.from([512, 512, 4096]), 2048)).toBe(4096);
+  });
+});
+
+describe("getMax3dTextureSize", () => {
+  it("WebGL が無い環境（node）では null を返し、例外を投げない", () => {
+    expect(getMax3dTextureSize()).toBe(null);
   });
 });

@@ -24,7 +24,12 @@ import {
   type SeriesLayoutDto,
 } from "../api";
 import { ensureCornerstoneInitialized } from "../viewer/cornerstoneSetup";
-import { getAppliedVolumeMaxMb, isCacheSizeExceeded } from "../viewer/volumeMemory";
+import {
+  findExceeding3dTextureDim,
+  getAppliedVolumeMaxMb,
+  getMax3dTextureSize,
+  isCacheSizeExceeded,
+} from "../viewer/volumeMemory";
 import { imageIdForInstance, imageIdForCell } from "../viewer/imageId";
 import { buildMprVolume } from "../viewer/mpr";
 import {
@@ -250,6 +255,19 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
       if (!vpRef.current || !imageData) {
         setPhase("error");
         setMessage(t("viewer3d.error"));
+        return;
+      }
+
+      // GPU の 3D テクスチャ寸法上限を超えるボリュームは、続行してもテクスチャ確保に失敗して
+      // 無言で真っ黒になるだけなので、警告ではなくエラーで止める（fw/volume-memory-guard.md V4）。
+      // RAM のバジェットとは別の天井であることに注意（枚数が少なくても面内が大きければ超える）。
+      const maxTexDim = getMax3dTextureSize();
+      const overDim = findExceeding3dTextureDim(imageData.getDimensions?.(), maxTexDim);
+      if (overDim !== null) {
+        setPhase("error");
+        setMessage(
+          t("viewer3d.texture3dTooLarge", { dim: String(overDim), maxDim: String(maxTexDim) }),
+        );
         return;
       }
 

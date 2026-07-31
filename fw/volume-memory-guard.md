@@ -122,7 +122,7 @@ Chrome 限定の非標準で JS heap のみ）。
 | **V1** | 上限の明示設定 ＋ エラー識別（最小・即効） | なし | ✅ 完了（2026-07-31） |
 | **V2** | 事前予測と警告（`SeriesLayout` 拡張を含む） | V1 | 未着手 |
 | **V3** | 物理メモリの調達（Electron IPC） | V2 | 未着手 |
-| **V4** | `MAX_3D_TEXTURE_SIZE` ハードガード | なし（独立） | 未着手 |
+| **V4** | `MAX_3D_TEXTURE_SIZE` ハードガード | なし（独立） | ✅ 完了（2026-07-31） |
 
 ### V1 — 上限の明示設定とエラー識別 ✅ 完了（2026-07-31）
 
@@ -233,13 +233,32 @@ Electron main に IPC を追加する。**雛形は `listDisplays`**（3 点セ�
 2. standalone: `getMemoryInfo()` の実搭載量 × 安全率
 3. web: 保守的な固定既定値
 
-### V4 — 3D テクスチャ寸法のハードガード
+### V4 — 3D テクスチャ寸法のハードガード ✅ 完了（2026-07-31）
 
 `gl.getParameter(gl.MAX_3D_TEXTURE_SIZE)`（WebGL2。GPU により 1024〜16384、多くは 2048）を取得し、
 volume の `dimensions` のいずれかが超えるなら **警告ではなくエラーで止める**（続行しても
 無言の描画失敗になるため）。既存の GPU ケーパビリティ判定の流儀は
 `viewer/cinematicPathTracer.ts:388-391`（拡張の有無を見て `null` を返し、UI で
 `cine2.unsupported` を出す）に倣う。
+
+**実装（2026-07-31）**
+
+- `volumeMemory.ts` に 2 つ:
+  - `getMax3dTextureSize()` … 問い合わせ専用の使い捨て WebGL2 コンテキストを **1 度だけ**作って
+    値をキャッシュする。取得後すぐ `WEBGL_lose_context` で解放する（同時コンテキスト数は
+    多くのブラウザで 16 が上限で、ビューアは既にいくつも消費している）。取れなければ `null`。
+  - `findExceeding3dTextureDim(dims, maxDim)` … 超過している次元のうち**最大のもの**を返す純関数。
+    `maxDim` が `null` なら判定しない（＝取得不能な環境で誤検知して 3D を止めない）。
+- 判定位置は `viewer3d/Viewer3DScreen.tsx` の `vtkImageDataFromVolume()` 直後。
+  `imageData.getDimensions()` で寸法が確定する最初の地点。
+  ⚠️ この時点で vtk 用フルコピー（§2.2 の「+1」）は既に確保済みなので、**RAM は節約できない**。
+  節約するには V2 の事前予測側で `SeriesLayout` の `imageWidth/Height` ＋ スライス数から
+  同じ判定を先に行う必要がある（V2 で寄せる）。
+- **RAM のバジェットとは別の天井**である点が実装上の勘所。枚数が少なくても面内が大きければ超える。
+
+> **MPR / Slicer / Curved MPR は V4 の対象外**。これらも VolumeViewport 経由で 3D テクスチャを
+> 使うため原理的には同じ上限に当たるが、寸法が確定する地点が画面ごとに異なる。
+> V2 で `SeriesLayout` から事前に寸法が分かるようになった時点で 4 画面まとめて寄せる。
 
 ## 5. `SeriesLayout` の拡張（V2 の前提）
 
@@ -298,7 +317,7 @@ frontend 型は `frontend/src/api.ts:172-191` に対応フィールドを追加�
 |---|---|---|
 | `common.volumeMemWarn` | 事前警告の confirm 本文。`{{needMb}}` / `{{budgetMb}}` | V2 |
 | `common.volumeMemExceeded` | V1 のキャッシュ超過エラー（`CACHE_SIZE_EXCEEDED` / `not cacheable` の置換）。`{{budgetMb}}` | ✅ V1 |
-| `viewer3d.texture3dTooLarge` | V4 の寸法上限超過。`{{dim}}` / `{{maxDim}}` | V4 |
+| `viewer3d.texture3dTooLarge` | V4 の寸法上限超過。`{{dim}}` / `{{maxDim}}` | ✅ V4 |
 | `settings.sec.volumeMemory` | 設定セクション名 | ✅ V1 |
 | `settings.field.volumeMaxMb` ＋ `.help` | 設定項目 | ✅ V1 |
 | `settings.field.volumeWarnBeforeBuild` ＋ `.help` | 設定項目 | V2 |
@@ -325,7 +344,7 @@ frontend 型は `frontend/src/api.ts:172-191` に対応フィールドを追加�
 - ✅ `viewer/volumeMemory.test.ts` **（新規）** … 上記の単体テスト
 - `viewer/mpr.ts` … `buildMprVolume` に `opts?: { maxBytes?: number }`（V2 二重防御）
 - `mpr/MprScreen.tsx` … `fetchSeriesLayout` 追加 ＋ ガード（V2）／✅ エラー識別（V1）
-- `viewer3d/Viewer3DScreen.tsx` … ガード（`:230`–`:232` の間・V2）＋ V4／✅ エラー識別（V1）
+- `viewer3d/Viewer3DScreen.tsx` … ガード（`:230`–`:232` の間・V2）／✅ エラー識別（V1）＋ ✅ 寸法ガード（V4）
 - `slicer/SlicerScreen.tsx` / `curvedmpr/CurvedMprScreen.tsx` … ガード（V2）／✅ エラー識別（V1）
 - `desktopBridge.ts` … `getMemoryInfo?`（V3）
 - ✅ `settings/registry.ts` … 新セクション（§6。V1 は `volumeMaxMb` のみ）
