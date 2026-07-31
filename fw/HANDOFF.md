@@ -1,7 +1,26 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
-> 更新日: 2026-07-31（最終更新: **ボリュームメモリガード V1〜V4 とモバイル UI M1〜M8 を実装**（PR #104）。
-> 残りは実機検証だけ。動画は P1〜P5a 完了で残るは P5b（web/BFF）。下記の各ログ参照）
+> 更新日: 2026-07-31（最終更新: **モバイル UI を実機検証（M9）し、見つかった不具合を修正・デプロイ**。下記エントリ参照）
+
+> 🟢 **2026-07-31 モバイル UI 実機検証（M9）＋修正をデモへ反映**（すべて main 直コミット・push・demo 再デプロイ済み）
+> スマホ実機で 2D/3D/MPR を確認し、以下を修正した（デモ機＝dev 機で `demo-deploy` 実行）。
+> - **2D シリーズビューで画像が出ない**（`fix c97f8c3`）: `mobile/MobileViewer.tsx` の画像領域 `stage` に
+>   `display:flex/flexDirection:column` が無く `SeriesViewer(fillHeight)→Viewer2D(fill)` の高さ連鎖が潰れていた。
+> - **デプロイしても古い UI のまま（キャッシュ）**（`fix ff0219b`）: SPA の `index.html` が no-cache 無しで配信され
+>   古い index.html→古いハッシュ JS が居座っていた。`spring.web.resources...no-cache=true`＋`/assets/**` を
+>   immutable に（`WebConfig`）。**以後のデプロイは利用者のキャッシュ削除不要で自動更新**。
+> - **3D の Zoom/Pan がタッチで効かない**（`feat f393507`）: `vtkVolumeView.ts` はマウス manipulator のみだった。
+>   `vtkGestureCameraManipulator` を 1 回登録し、ピンチ=Zoom / 2 本指=Pan / 2 本指ひねり=回転を有効化。
+> - **MPR がタッチで全く動かない**（`feat 1378407` ＋ `fix 6704ae3`）: `mpr.ts` にタッチバインドが無く、
+>   Crosshairs はタッチ非対応。ヘッダに **1 本指ツール切替[スライス送り/W-L/移動]** を追加、2 本指ピンチ=Zoom は常時。
+>   モバイルは Crosshairs を Passive にして 1 本指スロットを解放。**注意**: Cornerstone の `setToolActive` は
+>   バインドを**マージ（削除不可）**するので、切替時は `setToolPassive(name,{removeAllBindings:true})` で
+>   一旦全消去してから貼り直す（さもないと numTouchPoints:1 が残り常に同じツールに解決される）。
+> - **3D の機能はモバイルでも意図的にフル**（端末クラスで機能ゲートしない方針・`fw/mobile-ui-design.md` §L89）。
+>   narrow で隠すのは Cinematic/パストレーサのみ、右パネルはドロワー化。開閉可否はメモリガードが判断。
+
+> 更新日: 2026-07-31（**ボリュームメモリガード V1〜V4 とモバイル UI M1〜M8 を実装**（PR #104）。
+> 動画は P1〜P5a 完了で残るは P5b（web/BFF）。下記の各ログ参照）
 
 > 📍 **動画（DICOM video）の現在地と次の一手（2026-07-31 時点）**
 > 正本: [`fw/video-viewer-design.md`](video-viewer-design.md)。**standalone では一通り使える状態**になった。
