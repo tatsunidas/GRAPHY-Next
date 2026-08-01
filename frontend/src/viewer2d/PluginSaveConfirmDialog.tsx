@@ -11,6 +11,7 @@
  * <p>`window.confirm` を使わない理由: Electron のネイティブダイアログはレンダラのキーボード
  * フォーカスを奪う既知の問題があり（特に Linux/GTK）、自動検証からも操作できない。
  */
+import { createPortal } from "react-dom";
 import { useI18n } from "../i18n/i18n";
 
 export interface PluginSaveRequest {
@@ -41,8 +42,12 @@ export function PluginSaveConfirmDialog({
 }) {
   const { t } = useI18n();
   const isSr = request.kind === "sr";
+  // **document.body へ出し、最上位に置く。** プラグインの UI は本体の DOM とは別に
+  // body へ挿し込まれ、任意の z-index を持てる。同じツリー内で z-index を競わせると
+  // スタッキングコンテキスト次第で負ける（実機で SR 保存の同意ダイアログが
+  // プラグインのパネルに隠れた）。同意を求める画面が読めないのは同意の意味を損なう。
   const key = (name: string): string => `viewer2d.plugin.${isSr ? "sr" : "save"}.${name}`;
-  return (
+  return createPortal(
     <div style={backdrop} data-testid="plugin-save-confirm">
       <div style={panel}>
         <div style={title}>{t(key("title"))}</div>
@@ -95,7 +100,8 @@ export function PluginSaveConfirmDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -106,7 +112,8 @@ const backdrop: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  zIndex: 10000,
+  // プラグイン UI より確実に上（プラグインは任意の z-index を使える）。
+  zIndex: 2147483000,
 };
 const panel: React.CSSProperties = {
   width: 520,
