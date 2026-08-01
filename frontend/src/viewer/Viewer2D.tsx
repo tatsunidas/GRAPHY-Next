@@ -55,6 +55,8 @@ import {
   type ViewerDerivedSeriesResult,
   type ViewerOverlay,
   type ViewerPixelData,
+  type ViewerSrRequest,
+  type ViewerSrResult,
   type ViewerPixelDataOptions,
   type ViewerRoi,
   type ViewerTargetInfo,
@@ -1356,6 +1358,56 @@ export function Viewer2D({
     }
   };
 
+  /**
+   * H9: 計測レポート（DICOM SR）として保存する。
+   *
+   * <p>**DICOM はここでは組み立てない**（backend が作る）。フロントがやるのは
+   * 「どのスタディに付けるか」の解決と、シリーズ UID が欠けている計測グループの補完。
+   * ROI は表示中シリーズのものなので、プラグインが series/sop を省略しても本体が埋められる。
+   */
+  const saveStructuredReport = async (
+    req: ViewerSrRequest,
+    producer: { id: string; name: string; version: string },
+  ): Promise<ViewerSrResult> => {
+    const ctx = roiContextRef.current;
+    if (!ctx) return { ok: false, error: "no series context" };
+    if ((req.groups?.length ?? 0) === 0 && (req.findings?.length ?? 0) === 0) {
+      return { ok: false, error: "groups か findings のどちらかが必要です" };
+    }
+    try {
+      const res = await httpSend<{ seriesInstanceUid: string; sopInstanceUid: string }>(
+        "/api/sr/measurement-report",
+        "POST",
+        {
+          studyInstanceUid: ctx.studyUid,
+          seriesDescription: req.seriesDescription ?? "Measurement Report",
+          documentTitle: req.documentTitle ?? null,
+          observerName: req.observerName ?? null,
+          groups: (req.groups ?? []).map((g) => ({
+            trackingId: g.trackingId,
+            trackingUid: g.trackingUid ?? null,
+            findingText: g.findingText ?? null,
+            // 省略時は表示中シリーズ。**別シリーズの UID を勝手に補わない**
+            // （SOP が無いときは画像参照なしの計測グループになる）。
+            seriesInstanceUid: g.seriesInstanceUid ?? ctx.seriesUid,
+            sopInstanceUid: g.sopInstanceUid ?? null,
+            measurements: g.measurements.map((m) => ({
+              type: m.type,
+              value: m.value,
+              unit: m.unit ?? "mm",
+            })),
+          })),
+          findings: req.findings ?? [],
+          producer,
+        },
+      );
+      emitDbChanged({ reason: "series-create", studyUids: [ctx.studyUid] });
+      return { ok: true, seriesInstanceUid: res.seriesInstanceUid, sopInstanceUid: res.sopInstanceUid };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  };
+
   // H3: スライス 1 枚の校正済み画素。**読み出しは pixelCalibration に委譲する**
   // （getPixelData() へ直接 slope/intercept を掛けると preScale と二重適用になり CT が
   // 約 −1024 ずれる既知事故。校正の単一入口を必ず通す＝CLAUDE.md のルール 2）。
@@ -1613,14 +1665,14 @@ export function Viewer2D({
   const commandsRef = useRef<ViewerCommands>({
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
     getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
-    validateDerivedSeries, saveDerivedSeries, setActiveTool, setBrushSize, setWandTolerance,
+    validateDerivedSeries, saveDerivedSeries, saveStructuredReport, setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations,
     undo, redo,
   });
   commandsRef.current = {
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
     getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
-    validateDerivedSeries, saveDerivedSeries, setActiveTool, setBrushSize, setWandTolerance,
+    validateDerivedSeries, saveDerivedSeries, saveStructuredReport, setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations,
     undo, redo,
   };
@@ -1646,6 +1698,7 @@ export function Viewer2D({
       clearOverlay: () => commandsRef.current.clearOverlay(),
       validateDerivedSeries: (r) => commandsRef.current.validateDerivedSeries(r),
       saveDerivedSeries: (r, p) => commandsRef.current.saveDerivedSeries(r, p),
+      saveStructuredReport: (r, p) => commandsRef.current.saveStructuredReport(r, p),
       setActiveTool: (n) => commandsRef.current.setActiveTool(n),
       setBrushSize: (s) => commandsRef.current.setBrushSize(s),
       setWandTolerance: (v) => commandsRef.current.setWandTolerance(v),

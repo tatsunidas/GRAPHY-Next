@@ -367,6 +367,51 @@ export interface Viewer2DPluginHost extends PluginHostBase {
   ) => Promise<PluginStoreSaveResult>;
   /** **このプラグイン専用の保存領域**を消す。**0.1.12 以降**。 */
   deleteStore: (patientKey?: string) => Promise<boolean>;
+  /**
+   * 計測を **DICOM SR（構造化レポート）** として保存する。**0.1.12 以降**。
+   *
+   * <p>**本体が必ず確認ダイアログを出す**（抑止不可）。拒否されると `{ ok:false, cancelled:true }`。
+   * DICOM の構造・UID 採番・患者/検査属性の引き継ぎは本体が行うので、プラグインは
+   * 「何を測ったか」だけを渡す。計測種別は `longAxis` / `shortAxis` のみ
+   * （**未知の種別は拒否される**。黙って落とすと「入れたはずの計測が無いレポート」になるため）。
+   */
+  saveStructuredReport: (tileId: string | undefined, req: SrRequest) => Promise<SrResult>;
+}
+
+/** 計測レポートの保存要求。**0.1.12 以降**。 */
+export interface SrRequest {
+  /** シリーズ説明（一覧に出る。`[Plugin] ` が前置される）。 */
+  seriesDescription?: string;
+  /** 文書タイトル（自由文）。 */
+  documentTitle?: string;
+  /** 観測者名（読影医）。 */
+  observerName?: string;
+  /** 計測グループ（病変ごと）。 */
+  groups: SrMeasurementGroup[];
+  /** 所見テキスト（経時判定のまとめ等）。 */
+  findings?: { label: string; text: string }[];
+}
+
+export interface SrMeasurementGroup {
+  /** 病変の追跡 ID（時系列で同じ病変を結ぶ鍵。**必須**）。 */
+  trackingId: string;
+  /** 追跡 UID。省略時は本体が採番する。 */
+  trackingUid?: string;
+  /** 所見の説明（"Target lesion" 等）。 */
+  findingText?: string;
+  /** 計測した画像。省略時は表示中シリーズが使われる（SOP を省略すると画像参照なし）。 */
+  seriesInstanceUid?: string;
+  sopInstanceUid?: string;
+  measurements: { type: "longAxis" | "shortAxis"; value: number; unit?: string }[];
+}
+
+export interface SrResult {
+  ok: boolean;
+  /** ユーザーが確認ダイアログで拒否した。 */
+  cancelled?: boolean;
+  seriesInstanceUid?: string;
+  sopInstanceUid?: string;
+  error?: string;
 }
 
 /** プラグイン保存領域の読み出し結果。**0.1.12 以降**。 */

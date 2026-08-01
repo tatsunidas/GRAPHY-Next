@@ -487,6 +487,13 @@ export const en: Record<string, string> = {
   "viewer2d.plugin.save.destination.web": "Connected PACS (written back via STOW-RS)",
   "viewer2d.plugin.save.notice": "The images are produced by the plug-in and are not validated for diagnostic use. The original images are not modified.",
   "viewer2d.plugin.save.confirm": "Save",
+  // SR (measurement report) save confirmation. Different content from a series save.
+  "viewer2d.plugin.sr.title": "Confirm measurement report save by plug-in",
+  "viewer2d.plugin.sr.lead": "The plug-in \"{{name}} {{version}}\" wants to save its measurements as a DICOM Structured Report (SR).",
+  "viewer2d.plugin.sr.seriesDescription": "Series description",
+  "viewer2d.plugin.sr.groups": "Measurement groups (lesions)",
+  "viewer2d.plugin.sr.findings": "Finding texts",
+  "viewer2d.plugin.sr.notice": "The report is produced by the plug-in and is not validated for diagnostic use (it is recorded as unverified). The original images are not modified.",
   "viewer2d.menu.pluginsNone": "(no plug-ins)",
   "viewer2d.wl.preset": "W/L preset",
   "viewer2d.wl.default": "Default (DICOM)",

@@ -209,9 +209,9 @@ web は運営配備 / サンドボックス。
 
 ---
 
-## 7. host API の拡張（H1〜H8 実装済み）
+## 7. host API の拡張（H1〜H9 実装済み）
 
-> 起票: 2026-07-29 ／ ステータス: **H1・H2（2026-07-29）／ H3〜H7（2026-07-30）／ H8（2026-07-31）すべて実装済み**
+> 起票: 2026-07-29 ／ ステータス: **H1・H2（2026-07-29）／ H3〜H7（2026-07-30）／ H8（2026-07-31）／ H9（2026-08-02）すべて実装済み**
 > 経緯: プラグイン デモ 3 本（[`plugin-explainer.md`](plugin-explainer.md) §6）を書いた過程で、
 > **2D ビューアのプラグインには「いま何を見ているか」を答える手段が一つも無い**ことが判明した。
 
@@ -260,6 +260,7 @@ H1・H2 は実質「これを本番向けの契約として切り出す」作業
 | **H5** ✅ | **ROI（計測）の読み出し** — ユーザーが描いた計測をプラグインが使う | `getRois(tileId?)` / `getRoiMeta(roiUid)` / `setRoiMeta(roiUid, patch)` / `subscribeRois(cb)` | 幾何を本体に閉じる（長径・短径をプラグインに算出させない）。ROI は本体が永続化するので `roiUid` はアプリ再起動をまたいで有効。global ROI は `referencedImageId` が表示スライスへ追従する罠あり | ✅ |
 | **H6** ✅ | **スタディの検査日** — 時系列評価に要る | `ViewerTarget.studyDate` / `ViewerRoi.studyDate` | DICOM の StudyDate から解決（画面の prop を引き回さない）。**解釈できない値は null**（日付差で結論が変わる評価に怪しい値を渡さない） | ✅ |
 | **H7** ✅ | **患者キー** — 患者単位の記録を持つプラグインの鍵 | `ViewerTarget.patientKey` / `ViewerRoi.patientKey` | 本体が ROI を永続化する鍵と同じ値を出す。スタディ UID を鍵にすると同じ患者の別スタディで記録を見失う | ✅ |
+| **H9** ✅ | **計測レポート（DICOM SR）** — 計測を保管庫 / PACS へレポートとして残す | `saveStructuredReport(tileId?, req)` | DICOM はプラグインに書かせない（H4b と同じ）。**確認ダイアログ抑止不可**／未知の計測種別は拒否／UNVERIFIED で保存。TID 1500 の形に沿うが完全準拠は主張しない | ✅（standalone。web は未対応） |
 | **H8** ✅ | **プラグイン保存領域** — プラグインが計算した内容を患者単位で backend に保管 | `loadStore(patientKey?)` / `saveStore(json, opts?)` / `deleteStore(patientKey?)` | プラグイン id × 患者で領域を分け、**楽観ロックで上書き事故を防ぐ**。backend は中身を解釈しない。`localStorage` だと端末に閉じ、別 PC で過去の回が見えず判定が静かに変わる | ✅ |
 
 H1〜H3 は**フロント面だけで完結**するため、web モードでも同じように動く（backend の契約 `/api/plugins` は不変）。
@@ -762,6 +763,43 @@ await host.deleteStore()
 `automator/AutomatorService`（reset で削除）/ `plugins/pluginStoreApi.ts`・`plugins/pluginStore.ts`
 （フロント）/ `plugins/pluginTypes.ts`（契約）/ `viewer2d/Viewer2DMenuBar.tsx`（host へ結線）/
 `examples/plugin-template/graphy-plugin.d.ts`。
+
+#### H9 の実装（2026-08-02・GRAPHY-Next 0.1.12 以降）
+
+```ts
+await host.saveStructuredReport(tileId, {
+  seriesDescription: "RECIST 1.1",
+  groups: [{ trackingId: "1", findingText: "Target lesion",
+             sopInstanceUid, measurements: [{ type: "longAxis", value: 76.0 }] }],
+  findings: [{ label: "Best overall response", text: "PR" }],
+})   // → { ok, cancelled?, seriesInstanceUid, sopInstanceUid }
+```
+
+**動機**: 計測結果を**保管庫 / PACS に残す**手段が画像（H4b の派生シリーズ）しかなかった。
+計測は画像ではなくレポートなので、DICOM SR で出せないと他システムから数値として読めない
+（CSV はアプリの外では使えるが、PACS に載らない）。
+
+**決めたこと**:
+
+- **DICOM はプラグインに書かせない**（H4b と同じ）。プラグインは「何を測ったか」だけを渡し、
+  SR の構造・UID 採番・患者/検査属性の引き継ぎは backend が行う。
+- **確認ダイアログは抑止不可**。保管庫に診療データが増える操作なので毎回同意を取る。
+  シリーズ保存とは中身が違うので、ダイアログの文言も SR 用に分けた（計測グループ数・所見数）。
+- **未知の計測種別は拒否する**（`longAxis` / `shortAxis` のみ）。黙って落とすと
+  「入れたはずの計測が無いレポート」ができ、後から見た人には欠損と気付けない。
+- **VerificationFlag は UNVERIFIED**。アプリが読影医の確認行為を騙らない。
+- **TID 1500 完全準拠は主張しない**。構造は TID 1500 に沿えているが、
+  テンプレート識別を付けた完全な検証（dciodvfy 等）は通していない。
+  主眼は「計測値と追跡 ID が機械可読に残ること」。
+- **効果判定（CR/PR/SD/PD）はコード化していない**（自由文の所見として入れる）。
+  手元に PS3.16 の該当 CID を確認できていないため、**確認できないコードを書かない**
+  （誤ったコード値は、コードが無いことより有害）。
+- 長径・短径は実務で広く使われている SRT の `G-A185` / `G-A186`（dcmjs / OHIF と同じ）。
+
+**実装**: `dicom/sr/`（backend。要求 DTO / 構築 / 保存 ＋テスト 19 件）/
+`viewer/viewerCommands.ts`（契約）/ `viewer/Viewer2D.tsx`（中継）/
+`viewer2d/Viewer2DScreen.tsx`（同意）/ `viewer2d/PluginSaveConfirmDialog.tsx`（SR 用の文言）/
+`plugins/pluginTypes.ts` / `examples/plugin-template/graphy-plugin.d.ts` / i18n（ja・en）。
 
 ### 7.3 副作用（着手時に必ずセットで行うこと）
 

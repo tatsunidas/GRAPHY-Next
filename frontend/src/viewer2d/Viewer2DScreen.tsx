@@ -930,6 +930,39 @@ function TileGrid({
           });
         });
       },
+      // H9: 計測を DICOM SR として保存する。**必ず確認ダイアログを挟む**（抑止不可）。
+      // 保存されるのは画像ではなくレポートなので、ダイアログの中身も SR 用に切り替える。
+      saveStructuredReport: (tileId, req, producer) => {
+        const id = tileId ?? resolveTargets()[0];
+        if (!id) return Promise.resolve({ ok: false, error: "no target tile" });
+        if ((req.groups?.length ?? 0) === 0 && (req.findings?.length ?? 0) === 0) {
+          // 中身の無いレポートで同意を求めない。
+          return Promise.resolve({ ok: false, error: "groups か findings のどちらかが必要です" });
+        }
+        return new Promise((resolve) => {
+          setPluginSave({
+            request: {
+              kind: "sr",
+              pluginName: producer.name,
+              pluginVersion: producer.version,
+              seriesDescription: req.seriesDescription ?? "Measurement Report",
+              instanceCount: 1,
+              groupCount: req.groups?.length ?? 0,
+              findingCount: req.findings?.length ?? 0,
+              mode,
+            },
+            onDecide: async (accepted) => {
+              setPluginSave(null);
+              if (!accepted) {
+                resolve({ ok: false, cancelled: true });
+                return;
+              }
+              const pending = queryViewerCommand(id, (c) => c.saveStructuredReport(req, producer));
+              resolve(pending ? await pending : { ok: false, error: "tile is not available" });
+            },
+          });
+        });
+      },
       editPresets: () => setPresetsOpen(true),
       // Z 並べ替えはシリーズレベル（seriesCommands）。動画/IPP不在は SeriesViewer 側でブロック。
       sort: (mode) => runSeriesCommand(resolveTargets(), (c) => c.setSortMode(mode)),

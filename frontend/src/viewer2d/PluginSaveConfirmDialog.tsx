@@ -20,6 +20,14 @@ export interface PluginSaveRequest {
   instanceCount: number;
   /** 保存先（web は外部 PACS へ STOW-RS、standalone はローカル保管庫）。 */
   mode: "standalone" | "web";
+  /**
+   * 何を保存するか。**画像シリーズと計測レポート（SR）では中身が違う**ので、
+   * 「何がどこへ書かれるのか」を正しく提示するために分ける。
+   */
+  kind?: "series" | "sr";
+  /** SR のとき: 計測グループ（病変）数と所見テキスト数。 */
+  groupCount?: number;
+  findingCount?: number;
 }
 
 export function PluginSaveConfirmDialog({
@@ -32,25 +40,40 @@ export function PluginSaveConfirmDialog({
   onCancel: () => void;
 }) {
   const { t } = useI18n();
+  const isSr = request.kind === "sr";
+  const key = (name: string): string => `viewer2d.plugin.${isSr ? "sr" : "save"}.${name}`;
   return (
     <div style={backdrop} data-testid="plugin-save-confirm">
       <div style={panel}>
-        <div style={title}>{t("viewer2d.plugin.save.title")}</div>
+        <div style={title}>{t(key("title"))}</div>
         <div style={body}>
           <p style={lead}>
-            {t("viewer2d.plugin.save.lead", { name: request.pluginName, version: request.pluginVersion })}
+            {t(key("lead"), { name: request.pluginName, version: request.pluginVersion })}
           </p>
           <table style={table}>
             <tbody>
               <tr>
-                <th style={th}>{t("viewer2d.plugin.save.seriesDescription")}</th>
+                <th style={th}>{t(key("seriesDescription"))}</th>
                 {/* 保存時に本体が付ける接頭辞をそのまま見せる（一覧での見え方と一致させる）。 */}
                 <td style={td} data-testid="plugin-save-description">{`[Plugin] ${request.seriesDescription}`}</td>
               </tr>
-              <tr>
-                <th style={th}>{t("viewer2d.plugin.save.instances")}</th>
-                <td style={td}>{request.instanceCount}</td>
-              </tr>
+              {isSr ? (
+                <>
+                  <tr>
+                    <th style={th}>{t("viewer2d.plugin.sr.groups")}</th>
+                    <td style={td} data-testid="plugin-save-groups">{request.groupCount ?? 0}</td>
+                  </tr>
+                  <tr>
+                    <th style={th}>{t("viewer2d.plugin.sr.findings")}</th>
+                    <td style={td} data-testid="plugin-save-findings">{request.findingCount ?? 0}</td>
+                  </tr>
+                </>
+              ) : (
+                <tr>
+                  <th style={th}>{t("viewer2d.plugin.save.instances")}</th>
+                  <td style={td}>{request.instanceCount}</td>
+                </tr>
+              )}
               <tr>
                 <th style={th}>{t("viewer2d.plugin.save.destination")}</th>
                 <td style={td}>
@@ -61,7 +84,7 @@ export function PluginSaveConfirmDialog({
               </tr>
             </tbody>
           </table>
-          <p style={notice}>{t("viewer2d.plugin.save.notice")}</p>
+          <p style={notice}>{t(key("notice"))}</p>
         </div>
         <div style={buttons}>
           <button style={btn} onClick={onCancel} data-testid="plugin-save-cancel">
