@@ -16,6 +16,9 @@ import type {
   ViewerTilePixelData,
   ViewerTileRoi,
   ViewerTileViewState,
+  ViewerSrMeasurementGroup,
+  ViewerSrRequest,
+  ViewerSrResult,
 } from "../viewer/viewerCommands";
 
 export type { PluginStoreDoc, PluginStoreSaveResult };
@@ -30,6 +33,9 @@ export type {
   ViewerTilePixelData,
   ViewerTileRoi,
   ViewerTileViewState,
+  ViewerSrMeasurementGroup,
+  ViewerSrRequest,
+  ViewerSrResult,
 };
 
 /** プラグインを組み込む先（UI サーフェス）。fw/plugin-architecture.md §2.1。 */
@@ -134,6 +140,22 @@ export interface Viewer2DPluginHost extends PluginHostBase {
     tileId: string | undefined,
     req: ViewerDerivedSeriesRequest,
   ) => Promise<ViewerDerivedSeriesResult>;
+  /**
+   * 計測を **DICOM SR（構造化レポート）** として保存する（H9）。
+   *
+   * <p>**本体が必ず確認ダイアログを出す**（抑止不可）。ユーザーが拒否すると
+   * `{ ok: false, cancelled: true }` が返る。
+   *
+   * <p>**DICOM はプラグインに書かせない**: 「何を測ったか」（病変ごとの追跡 ID・長径/短径・
+   * 参照画像）と所見テキストを渡すだけで、SR の構造・UID 採番・患者/検査属性の引き継ぎは
+   * 本体が行う。計測種別は `longAxis` / `shortAxis` のみで、**未知の種別は拒否される**
+   * （黙って落とすと「入れたはずの計測が無いレポート」ができるため）。
+   *
+   * <p>保存された SR は `SeriesDescription` に `[Plugin] ` 接頭辞が付き、
+   * `ContributingEquipmentSequence` にプラグイン id・版が入る。文書は **UNVERIFIED**
+   * （アプリが読影医の確認行為を騙らない）。
+   */
+  saveStructuredReport: (tileId: string | undefined, req: ViewerSrRequest) => Promise<ViewerSrResult>;
   /**
    * ユーザーが描いた **ROI（計測・幾何注釈）を読む**（H5）。`tileId` 省略時は**対象タイル全部**
    * （ベースラインと追跡を並べて開いている場合に両方読めるようにするため。H1〜H4 の「先頭タイル」と違う）。

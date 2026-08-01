@@ -120,6 +120,48 @@ export interface ViewerPixelData {
 }
 
 /**
+ * 計測レポート（DICOM SR）の保存要求（プラグイン host API の H9）。
+ *
+ * <p><b>DICOM はプラグインに書かせない</b>。「何を測ったか」だけを渡し、SR の構造は本体（backend）
+ * が組み立てる。計測グループは**病変 1 つ**に対応し、時系列で同じ病変を結ぶ `trackingId` を必ず持つ。
+ */
+export interface ViewerSrRequest {
+  /** シリーズ説明（一覧に出る。プラグイン由来なら `[Plugin] ` が前置される）。 */
+  seriesDescription?: string;
+  /** 文書タイトル（自由文）。 */
+  documentTitle?: string;
+  /** 観測者名（読影医）。省略可。 */
+  observerName?: string;
+  /** 計測グループ（病変ごと）。 */
+  groups: ViewerSrMeasurementGroup[];
+  /** 所見テキスト（経時判定のまとめ等。画像参照を持たない）。 */
+  findings?: { label: string; text: string }[];
+}
+
+export interface ViewerSrMeasurementGroup {
+  /** 病変の追跡 ID（人が読む識別子。**必須**）。 */
+  trackingId: string;
+  /** 追跡 UID。省略時は backend が採番する。 */
+  trackingUid?: string;
+  /** 所見の説明（"Target lesion" 等）。 */
+  findingText?: string;
+  /** 計測した画像（省略時は SR に画像参照が入らない）。 */
+  seriesInstanceUid?: string;
+  sopInstanceUid?: string;
+  /** 計測値。`longAxis` / `shortAxis` のみ（未知の種別は backend が拒否する）。 */
+  measurements: { type: "longAxis" | "shortAxis"; value: number; unit?: string }[];
+}
+
+export interface ViewerSrResult {
+  ok: boolean;
+  /** ユーザーが確認ダイアログで拒否した。 */
+  cancelled?: boolean;
+  seriesInstanceUid?: string;
+  sopInstanceUid?: string;
+  error?: string;
+}
+
+/**
  * プラグインが表示中スライスへ重ねる値マップ（プラグイン host API の H4a）。
  *
  * <p>**画素ではなく値を渡す契約**にしてある: 色付け（window / colormap）は本体側で行うので、
@@ -350,6 +392,16 @@ export interface ViewerCommands {
     req: ViewerDerivedSeriesRequest,
     producer: { id: string; name: string; version: string },
   ): Promise<ViewerDerivedSeriesResult>;
+  /**
+   * 計測レポート（DICOM SR）として保存する（H9）。**確認は画面側で取ってからここへ来る**。
+   *
+   * <p>DICOM の構造・UID 採番・患者/検査属性の引き継ぎは backend が行う。ここは
+   * 「どのスタディに付けるか」だけを補って中継する。
+   */
+  saveStructuredReport(
+    req: ViewerSrRequest,
+    producer: { id: string; name: string; version: string },
+  ): Promise<ViewerSrResult>;
   /** 左ドラッグに割り当てる操作/計測/ブラシツールを切替（toolName は Cornerstone のツール名 or 消しゴム id）。 */
   setActiveTool(toolName: string): void;
   /** ROI ブラシ径(px)。 */

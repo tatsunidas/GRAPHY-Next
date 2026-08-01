@@ -11,6 +11,7 @@
  * <p>`window.confirm` を使わない理由: Electron のネイティブダイアログはレンダラのキーボード
  * フォーカスを奪う既知の問題があり（特に Linux/GTK）、自動検証からも操作できない。
  */
+import { createPortal } from "react-dom";
 import { useI18n } from "../i18n/i18n";
 
 export interface PluginSaveRequest {
@@ -20,6 +21,14 @@ export interface PluginSaveRequest {
   instanceCount: number;
   /** 保存先（web は外部 PACS へ STOW-RS、standalone はローカル保管庫）。 */
   mode: "standalone" | "web";
+  /**
+   * 何を保存するか。**画像シリーズと計測レポート（SR）では中身が違う**ので、
+   * 「何がどこへ書かれるのか」を正しく提示するために分ける。
+   */
+  kind?: "series" | "sr";
+  /** SR のとき: 計測グループ（病変）数と所見テキスト数。 */
+  groupCount?: number;
+  findingCount?: number;
 }
 
 export function PluginSaveConfirmDialog({
@@ -32,25 +41,44 @@ export function PluginSaveConfirmDialog({
   onCancel: () => void;
 }) {
   const { t } = useI18n();
-  return (
+  const isSr = request.kind === "sr";
+  // **document.body へ出し、最上位に置く。** プラグインの UI は本体の DOM とは別に
+  // body へ挿し込まれ、任意の z-index を持てる。同じツリー内で z-index を競わせると
+  // スタッキングコンテキスト次第で負ける（実機で SR 保存の同意ダイアログが
+  // プラグインのパネルに隠れた）。同意を求める画面が読めないのは同意の意味を損なう。
+  const key = (name: string): string => `viewer2d.plugin.${isSr ? "sr" : "save"}.${name}`;
+  return createPortal(
     <div style={backdrop} data-testid="plugin-save-confirm">
       <div style={panel}>
-        <div style={title}>{t("viewer2d.plugin.save.title")}</div>
+        <div style={title}>{t(key("title"))}</div>
         <div style={body}>
           <p style={lead}>
-            {t("viewer2d.plugin.save.lead", { name: request.pluginName, version: request.pluginVersion })}
+            {t(key("lead"), { name: request.pluginName, version: request.pluginVersion })}
           </p>
           <table style={table}>
             <tbody>
               <tr>
-                <th style={th}>{t("viewer2d.plugin.save.seriesDescription")}</th>
+                <th style={th}>{t(key("seriesDescription"))}</th>
                 {/* 保存時に本体が付ける接頭辞をそのまま見せる（一覧での見え方と一致させる）。 */}
                 <td style={td} data-testid="plugin-save-description">{`[Plugin] ${request.seriesDescription}`}</td>
               </tr>
-              <tr>
-                <th style={th}>{t("viewer2d.plugin.save.instances")}</th>
-                <td style={td}>{request.instanceCount}</td>
-              </tr>
+              {isSr ? (
+                <>
+                  <tr>
+                    <th style={th}>{t("viewer2d.plugin.sr.groups")}</th>
+                    <td style={td} data-testid="plugin-save-groups">{request.groupCount ?? 0}</td>
+                  </tr>
+                  <tr>
+                    <th style={th}>{t("viewer2d.plugin.sr.findings")}</th>
+                    <td style={td} data-testid="plugin-save-findings">{request.findingCount ?? 0}</td>
+                  </tr>
+                </>
+              ) : (
+                <tr>
+                  <th style={th}>{t("viewer2d.plugin.save.instances")}</th>
+                  <td style={td}>{request.instanceCount}</td>
+                </tr>
+              )}
               <tr>
                 <th style={th}>{t("viewer2d.plugin.save.destination")}</th>
                 <td style={td}>
@@ -61,7 +89,7 @@ export function PluginSaveConfirmDialog({
               </tr>
             </tbody>
           </table>
-          <p style={notice}>{t("viewer2d.plugin.save.notice")}</p>
+          <p style={notice}>{t(key("notice"))}</p>
         </div>
         <div style={buttons}>
           <button style={btn} onClick={onCancel} data-testid="plugin-save-cancel">
@@ -72,7 +100,8 @@ export function PluginSaveConfirmDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -83,7 +112,8 @@ const backdrop: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  zIndex: 10000,
+  // プラグイン UI より確実に上（プラグインは任意の z-index を使える）。
+  zIndex: 2147483000,
 };
 const panel: React.CSSProperties = {
   width: 520,

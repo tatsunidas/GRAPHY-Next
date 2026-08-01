@@ -12,6 +12,8 @@ import {
   type ViewerDerivedSeriesResult,
   type ViewerOverlay,
   type ViewerPixelDataOptions,
+  type ViewerSrRequest,
+  type ViewerSrResult,
   type ViewerTarget,
   type ViewerTilePixelData,
   type ViewerTileRoi,
@@ -73,6 +75,15 @@ export interface ViewerActions {
     req: ViewerDerivedSeriesRequest,
     producer: { id: string; name: string; version: string },
   ): Promise<ViewerDerivedSeriesResult>;
+  /**
+   * 計測を DICOM SR（構造化レポート）として保存する（H9）。**確認ダイアログを必ず挟む**
+   * （抑止不可。ユーザーが拒否したら `cancelled: true`）。
+   */
+  saveStructuredReport(
+    tileId: string | undefined,
+    req: ViewerSrRequest,
+    producer: { id: string; name: string; version: string },
+  ): Promise<ViewerSrResult>;
   /** W/L プリセット編集ダイアログを開く。 */
   editPresets(): void;
   /** Z 並べ替え（InstanceNumber / IPP, 昇順・降順）。対象タイルのシリーズに適用。 */

@@ -521,6 +521,13 @@ export const ja: Record<string, string> = {
   "viewer2d.plugin.save.destination.web": "接続中の PACS（STOW-RS で書き戻し）",
   "viewer2d.plugin.save.notice": "保存される画像はプラグインが生成したもので、診断用に検証されたものではありません。元の画像は変更されません。",
   "viewer2d.plugin.save.confirm": "保存する",
+  // SR（計測レポート）保存の確認。シリーズ保存とは中身が違うので文言を分ける。
+  "viewer2d.plugin.sr.title": "プラグインによる計測レポート保存の確認",
+  "viewer2d.plugin.sr.lead": "プラグイン「{{name}} {{version}}」が計測結果を DICOM 構造化レポート（SR）として保存しようとしています。",
+  "viewer2d.plugin.sr.seriesDescription": "シリーズ説明",
+  "viewer2d.plugin.sr.groups": "計測グループ（病変）",
+  "viewer2d.plugin.sr.findings": "所見テキスト",
+  "viewer2d.plugin.sr.notice": "保存されるレポートはプラグインが作成したもので、診断用に検証されたものではありません（未検証として記録されます）。元の画像は変更されません。",
   "viewer2d.menu.pluginsNone": "（プラグインなし）",
   "viewer2d.wl.preset": "W/L プリセット",
   "viewer2d.wl.default": "既定 (DICOM)",
