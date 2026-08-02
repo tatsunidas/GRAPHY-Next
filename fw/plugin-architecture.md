@@ -801,6 +801,27 @@ await host.saveStructuredReport(tileId, {
 `viewer2d/Viewer2DScreen.tsx`（同意）/ `viewer2d/PluginSaveConfirmDialog.tsx`（SR 用の文言）/
 `plugins/pluginTypes.ts` / `examples/plugin-template/graphy-plugin.d.ts` / i18n（ja・en）。
 
+#### 表示言語の公開（2026-08-02・GRAPHY-Next 0.1.12 以降）
+
+```ts
+host.locale   // "ja" | "en"（活性化した時点の値）
+```
+
+**動機**: プラグインの UI が**本体の言語に追従できなかった**。host が渡している `t()` は
+**本体のキーしか引けない**ため、プラグイン固有の文言（RECIST の用語・警告文）は自前で
+持つしかなく、その言語判定の手掛かりが無かった。実機の通し検証で、本体が英語表示なのに
+プラグインのパネルだけ日本語、という混在が出た。
+
+**決めたこと**:
+
+- **値は活性化した時点のもの**。プラグインの UI は本体の React ツリーの外（`document.body` 直下）
+  にあるため、言語を切り替えても自動では追従しない。**切り替えたら開き直す**契約にした
+  （購読 API を足すこともできるが、パネルはメニューから開く一時的な UI なので過剰）。
+- **文字列は渡さない**（本体の辞書をプラグインへ開かない）。プラグインは自分の辞書を持つ。
+
+**実装**: `plugins/pluginTypes.ts`（契約）/ `viewer2d/Viewer2DMenuBar.tsx`・`mainscreen/MenuBar.tsx`
+（host へ結線）/ `examples/plugin-template/graphy-plugin.d.ts`。
+
 ### 7.3 副作用（着手時に必ずセットで行うこと）
 
 - ✅ **型定義の同期（本体側 1/5）**: `examples/plugin-template/graphy-plugin.d.ts` に `ViewerTarget` /

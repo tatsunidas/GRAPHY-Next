@@ -148,6 +148,21 @@ async function openPanel(viewer: Page): Promise<void> {
   await viewer.waitForTimeout(1800);
 }
 
+/**
+ * 表示言語を指定して開く（`GRAPHY_LOCALE=ja|en`）。指定が無ければ本体の既定に任せる。
+ *
+ * <p>言語ごとに 1 回ずつ通すためにある。**本体の設定は localStorage `graphy.locale`** なので、
+ * 画面を開く前に書いてから読み込み直す。
+ */
+async function applyLocale(mainPage: Page): Promise<void> {
+  const want = process.env.GRAPHY_LOCALE;
+  if (want !== "ja" && want !== "en") return;
+  await mainPage.evaluate(`localStorage.setItem("graphy.locale", ${JSON.stringify(want)})`);
+  await mainPage.reload({ waitUntil: "domcontentloaded" });
+  await mainPage.getByTestId("search-patientid-input").waitFor({ state: "visible", timeout: 60_000 });
+  console.log(`  表示言語を ${want} にした`);
+}
+
 async function openViewer(driver: DesktopDriver): Promise<Page> {
   const mainPage = driver.page;
   mainPage.on("console", (m) => {
@@ -159,6 +174,7 @@ async function openViewer(driver: DesktopDriver): Promise<Page> {
     await mainPage.reload({ waitUntil: "domcontentloaded" });
     await mainPage.getByTestId("search-patientid-input").waitFor({ state: "visible", timeout: 60_000 });
   }
+  await applyLocale(mainPage);
   await openFirstSeriesInViewer(mainPage, createStepRecorder());
   const viewer = await driver.waitForNewPage(
     () => mainPage.getByTestId("viewer2d-toolbar-button").click(),
@@ -253,6 +269,8 @@ async function main(): Promise<void> {
 
     const viewer = await openViewer(driver);
     console.log(`  端末ローカルを掃除: ${await clearPluginStorage(viewer)} キー`);
+    const appLocale = (await viewer.evaluate('localStorage.getItem("graphy.locale") || "(既定)"')) as string;
+    console.log(`  本体の表示言語: ${appLocale}`);
 
     console.log("\n[1] 1 回目のスタディで病変を測り、属性を付ける");
     await drawBidirectional(viewer, 70, 24, { fracX: 0.3, fracY: 0.45 });
@@ -262,6 +280,19 @@ async function main(): Promise<void> {
     check(panel.rows.length === 1, "タイムポイントが 1 件出る", panel.rows);
     check(panel.lesions.length === 1, "病変表に 1 件出る", panel.lesions);
     check(panel.hasSrButton, "DICOM SR ボタンがある");
+
+    // **パネルの文言が本体の言語に追従しているか。** 本体が英語なのにパネルだけ日本語、
+    // という混在を実機で見つけたのでここで固定する。
+    const panelText = (await viewer.locator('[data-testid="lesion-evanesco-panel"]').textContent()) ?? "";
+    const hasJa = /[ぁ-んァ-ヶ一-龠]/.test(panelText);
+    const localeNow = (await viewer.evaluate(
+      '(function(){var l=localStorage.getItem("graphy.locale"); return l||((navigator.language||"").indexOf("en")===0?"en":"ja");})()',
+    )) as string;
+    check(
+      localeNow === "en" ? !hasJa : hasJa,
+      `パネルの文言が本体の言語（${localeNow}）に従う`,
+      { locale: localeNow, sample: panelText.slice(0, 60) },
+    );
 
     const edited = await setLesionAttributes(viewer, "1", "Liver");
     check(edited, "病変をクリックすると属性エディタが開く");

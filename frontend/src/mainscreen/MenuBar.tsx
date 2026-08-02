@@ -50,11 +50,13 @@ export function MenuBar({
   /** モバイル UI（`#mobile`）への手動切替。渡されなければ項目を出さない。 */
   onOpenMobileUi?: () => void;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const pluginItems = usePluginMenu("mainscreen.menu", (m) => ({
     surface: "mainscreen.menu",
     pluginId: m.id,
     t,
+    // プラグインが自前の文言を持つ場合の言語判定に使う（`t()` は本体のキーしか引けない）。
+    locale,
     notify: (msg) => window.alert(msg),
     runBackend: (payload) => runPluginBackend(m.id, payload),
     selectedStudyUid,
