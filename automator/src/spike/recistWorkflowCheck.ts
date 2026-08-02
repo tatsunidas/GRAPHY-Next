@@ -265,7 +265,7 @@ async function main(): Promise<void> {
   try {
     console.log(`  reset: ${JSON.stringify(await resetDb(driver.ports.http))}`);
     for (const f of FILES) await importPhantom(driver.ports.http, f);
-    const before = new Set(findSrFiles());
+    const srFilesBefore = new Set(findSrFiles());
 
     const viewer = await openViewer(driver);
     console.log(`  端末ローカルを掃除: ${await clearPluginStorage(viewer)} キー`);
@@ -304,6 +304,63 @@ async function main(): Promise<void> {
     check(panel.lesions[0]?.organ.includes("Liver"), "部位が反映される", panel.lesions[0]);
     const firstDate = panel.rows[0]?.date ?? "";
     const firstSld = panel.rows[0]?.sld ?? "";
+
+    console.log("\n[1b] パネルの大きさを変える（左下のつまみ）");
+    const rectOf = async () =>
+      (await viewer.evaluate(`
+        (function () {
+          var p = document.getElementById("lesion-evanesco-panel");
+          if (!p) return null;
+          var r = p.getBoundingClientRect();
+          return { left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top),
+                   width: Math.round(r.width), height: Math.round(r.height) };
+        })()
+      `)) as { left: number; right: number; top: number; width: number; height: number } | null;
+
+    const before = await rectOf();
+    const handle = viewer.getByTestId("le-resize");
+    check((await handle.count()) === 1, "リサイズのつまみがある", await handle.count());
+    const box = await handle.boundingBox();
+    if (box && before) {
+      // 左へ 120px・下へ 60px 引く（右端は動かない設計）。
+      await viewer.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await viewer.mouse.down();
+      await viewer.mouse.move(box.x + box.width / 2 - 120, box.y + box.height / 2 + 60, { steps: 12 });
+      await viewer.mouse.up();
+      await viewer.waitForTimeout(400);
+      const after = await rectOf();
+      console.log(`  before=${JSON.stringify(before)} after=${JSON.stringify(after)}`);
+      check(
+        !!after && after.width >= before.width + 100 && after.width <= before.width + 140,
+        "つまみを引いた分だけ横に広がる",
+        { before: before.width, after: after?.width },
+      );
+      check(
+        !!after && Math.abs(after.right - before.right) <= 2,
+        "**右端は動かない**（カーソルと角がずれない設計）",
+        { before: before.right, after: after?.right },
+      );
+      check(
+        !!after && after.height >= before.height + 40 && Math.abs(after.top - before.top) <= 2,
+        "下へ伸びる（上端は動かない）",
+        { before, after },
+      );
+      await viewer.screenshot({ path: path.join(OUT_DIR, "1b-resized.png") });
+
+      // 閉じて開き直すと、変えた大きさが復元される。
+      await viewer.evaluate('document.getElementById("lesion-evanesco-panel")?.remove()');
+      await viewer.waitForTimeout(300);
+      await openPanel(viewer);
+      const reopened = await rectOf();
+      check(
+        !!reopened && !!after && Math.abs(reopened.width - after.width) <= 2,
+        "開き直しても大きさが残る",
+        { after: after?.width, reopened: reopened?.width },
+      );
+    } else {
+      failures.push("リサイズのつまみを掴めなかった");
+      console.log("  [FAIL] リサイズのつまみを掴めなかった");
+    }
 
     console.log("\n[2] CSV を書き出す（画面の値と一致するか）");
     await armCsvTrap(viewer);
@@ -368,7 +425,7 @@ async function main(): Promise<void> {
     await viewer.waitForTimeout(2500);
     await viewer.screenshot({ path: path.join(OUT_DIR, "4-sr-saved.png") });
 
-    const after = findSrFiles().filter((f) => !before.has(f));
+    const after = findSrFiles().filter((f) => !srFilesBefore.has(f));
     console.log(`  新しく保管庫に入ったファイル: ${after.length} 件`);
     check(after.length === 1, "SR が 1 件保管庫に入る", after.length);
     if (after.length > 0) {
