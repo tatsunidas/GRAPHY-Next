@@ -64,6 +64,14 @@ interface PluginHostBase {
   pluginId: string;
   /** i18n 取得関数（プラグイン UI がホスト言語に追従できるよう渡す）。 */
   t: (key: string) => string;
+  /**
+   * いまの表示言語（`"ja"` / `"en"`）。**プラグインが自前の文言を持つ場合の言語判定に使う**
+   * （`t()` は本体のキーしか引けない）。
+   *
+   * <p>**値は活性化した時点のもの**。プラグインの UI は本体の React ツリーの外にあるため、
+   * 途中で言語を切り替えても自動では追従しない（切り替えたらプラグインを開き直す）。
+   */
+  locale: string;
   /** ユーザーへの簡易通知。 */
   notify: (message: string) => void;
   /** backend 面の実行: POST /api/plugins/{id}/run。 */
