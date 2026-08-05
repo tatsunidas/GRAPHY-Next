@@ -1,0 +1,8 @@
+{
+  "commit": "8c564856a15b735e8b3c9043ec98256b6d81d793",
+  "worktree_clean": true,
+  "jar": "/home/tatsunidas/graphy-paper/bench/.build/gn/backend/target/graphy-next-backend.jar",
+  "jar_md5": "9841ad3eb7c6c1fd712b6d4a44a99c75",
+  "app_version": "0.1.9",
+  "url": "http://localhost:8099"
+}

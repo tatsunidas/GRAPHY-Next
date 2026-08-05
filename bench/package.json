@@ -1,0 +1,15 @@
+{
+  "name": "gnbp-bench",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Performance and accuracy measurement harness for GRAPHY-Next (GNBP-1 phantom)",
+  "license": "AGPL-3.0-or-later",
+  "scripts": {
+    "discover": "node measure.mjs --discover",
+    "measure": "node measure.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.48.0"
+  }
+}
