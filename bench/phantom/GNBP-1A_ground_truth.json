@@ -1,0 +1,772 @@
+{
+  "phantom": "GNBP-1A",
+  "version": "1.0",
+  "purpose": "accuracy (volume / distance / HU) — analytic ground truth",
+  "source": "3D Shepp-Logan, Toft/Schabel intensities; geometry from Kak AC & Slaney M, Principles of Computerized Tomographic Imaging (1988), Table 3.2 p.102, errata applied",
+  "geometry": {
+    "rows": 512,
+    "columns": 512,
+    "slices": 180,
+    "pixel_spacing_mm": [
+      0.5,
+      0.5
+    ],
+    "slice_thickness_mm": 1.0,
+    "scale_mm_per_unit": 100.0,
+    "supersample_per_axis": 4
+  },
+  "hu_map": {
+    "formula": "HU = HU_SLOPE * net_intensity + HU_OFFSET",
+    "hu_slope": 1200.0,
+    "hu_offset": -200.0,
+    "air_hu_outside_phantom": -1000
+  },
+  "ellipsoids": [
+    {
+      "name": "outer skull",
+      "intensity": 1.0,
+      "semi_axes_mm": [
+        69.0,
+        92.0,
+        81.0
+      ],
+      "principal_axis_lengths_mm": [
+        138.0,
+        184.0,
+        162.0
+      ],
+      "center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "euler_deg_zxz": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "volume_mm3": 2153825.657818705,
+      "net_intensity_at_center": 0.19999999999999996,
+      "expected_hu": 39.99999999999994
+    },
+    {
+      "name": "inner skull",
+      "intensity": -0.8,
+      "semi_axes_mm": [
+        66.24,
+        87.4,
+        78.0
+      ],
+      "principal_axis_lengths_mm": [
+        132.48,
+        174.8,
+        156.0
+      ],
+      "center_mm": [
+        0.0,
+        -1.8399999999999999,
+        0.0
+      ],
+      "euler_deg_zxz": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "volume_mm3": 1891537.5554887822,
+      "net_intensity_at_center": 0.19999999999999996,
+      "expected_hu": 39.99999999999994
+    },
+    {
+      "name": "right ventricle",
+      "intensity": -0.2,
+      "semi_axes_mm": [
+        11.0,
+        31.0,
+        22.0
+      ],
+      "principal_axis_lengths_mm": [
+        22.0,
+        62.0,
+        44.0
+      ],
+      "center_mm": [
+        22.0,
+        0.0,
+        0.0
+      ],
+      "euler_deg_zxz": [
+        -18.0,
+        0.0,
+        10.0
+      ],
+      "volume_mm3": 31424.304116307503,
+      "net_intensity_at_center": -5.551115123125783e-17,
+      "expected_hu": -200.00000000000006
+    },
+    {
+      "name": "left ventricle",
+      "intensity": -0.2,
+      "semi_axes_mm": [
+        16.0,
+        41.0,
+        28.000000000000004
+      ],
+      "principal_axis_lengths_mm": [
+        32.0,
+        82.0,
+        56.00000000000001
+      ],
+      "center_mm": [
+        -22.0,
+        0.0,
+        0.0
+      ],
+      "euler_deg_zxz": [
+        18.0,
+        0.0,
+        10.0
+      ],
+      "volume_mm3": 76939.69848151643,
+      "net_intensity_at_center": -5.551115123125783e-17,
+      "expected_hu": -200.00000000000006
+    },
+    {
+      "name": "upper mass",
+      "intensity": 0.1,
+      "semi_axes_mm": [
+        21.0,
+        25.0,
+        41.0
+      ],
+      "principal_axis_lengths_mm": [
+        42.0,
+        50.0,
+        82.0
+      ],
+      "center_mm": [
+        0.0,
+        35.0,
+        -15.0
+      ],
+      "euler_deg_zxz": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "volume_mm3": 90163.70915802705,
+      "net_intensity_at_center": 0.29999999999999993,
+      "expected_hu": 159.99999999999994
+    },
+    {
+      "name": "nodule A",
+      "intensity": 0.1,
+      "semi_axes_mm": [
+        4.6,
+        4.6,
+        5.0
+      ],
+      "principal_axis_lengths_mm": [
+        9.2,
+        9.2,
+        10.0
+      ],
+      "center_mm": [
+        0.0,
+        10.0,
+        25.0
+      ],
+      "euler_deg_zxz": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "volume_mm3": 443.1740036664001,
+      "net_intensity_at_center": 0.29999999999999993,
+      "expected_hu": 159.99999999999994
+    },
+    {
+      "name": "nodule B",
+      "intensity": 0.1,
+      "semi_axes_mm": [
+        4.6,
+        4.6,
+        5.0
+      ],
+      "principal_axis_lengths_mm": [
+        9.2,
+        9.2,
+        10.0
+      ],
+      "center_mm": [
+        0.0,
+        -10.0,
+        25.0
+      ],
+      "euler_deg_zxz": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "volume_mm3": 443.1740036664001,
+      "net_intensity_at_center": 0.29999999999999993,
+      "expected_hu": 159.99999999999994
+    },
+    {
+      "name": "nodule C",
+      "intensity": 0.1,
+      "semi_axes_mm": [
+        4.6,
+        2.3,
+        5.0
+      ],
+      "principal_axis_lengths_mm": [
+        9.2,
+        4.6,
+        10.0
+      ],
+      "center_mm": [
+        -8.0,
+        -60.5,
+        0.0
+      ],
+      "euler_deg_zxz": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "volume_mm3": 221.58700183320005,
+      "net_intensity_at_center": 0.29999999999999993,
+      "expected_hu": 159.99999999999994
+    },
+    {
+      "name": "nodule D",
+      "intensity": 0.1,
+      "semi_axes_mm": [
+        2.3,
+        2.3,
+        2.0
+      ],
+      "principal_axis_lengths_mm": [
+        4.6,
+        4.6,
+        4.0
+      ],
+      "center_mm": [
+        0.0,
+        -60.6,
+        0.0
+      ],
+      "euler_deg_zxz": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "volume_mm3": 44.31740036664001,
+      "net_intensity_at_center": 0.29999999999999993,
+      "expected_hu": 159.99999999999994
+    },
+    {
+      "name": "nodule E",
+      "intensity": 0.1,
+      "semi_axes_mm": [
+        2.3,
+        4.6,
+        2.0
+      ],
+      "principal_axis_lengths_mm": [
+        4.6,
+        9.2,
+        4.0
+      ],
+      "center_mm": [
+        6.0,
+        -60.5,
+        0.0
+      ],
+      "euler_deg_zxz": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "volume_mm3": 88.63480073328002,
+      "net_intensity_at_center": 0.29999999999999993,
+      "expected_hu": 159.99999999999994
+    }
+  ],
+  "step_wedge": [
+    {
+      "index": 0,
+      "hu": -1000,
+      "center_mm": [
+        95.0,
+        -78.0,
+        null
+      ],
+      "size_mm": [
+        20.0,
+        20.0,
+        180.0
+      ]
+    },
+    {
+      "index": 1,
+      "hu": -500,
+      "center_mm": [
+        95.0,
+        -52.0,
+        null
+      ],
+      "size_mm": [
+        20.0,
+        20.0,
+        180.0
+      ]
+    },
+    {
+      "index": 2,
+      "hu": -100,
+      "center_mm": [
+        95.0,
+        -26.0,
+        null
+      ],
+      "size_mm": [
+        20.0,
+        20.0,
+        180.0
+      ]
+    },
+    {
+      "index": 3,
+      "hu": 0,
+      "center_mm": [
+        95.0,
+        0.0,
+        null
+      ],
+      "size_mm": [
+        20.0,
+        20.0,
+        180.0
+      ]
+    },
+    {
+      "index": 4,
+      "hu": 100,
+      "center_mm": [
+        95.0,
+        26.0,
+        null
+      ],
+      "size_mm": [
+        20.0,
+        20.0,
+        180.0
+      ]
+    },
+    {
+      "index": 5,
+      "hu": 400,
+      "center_mm": [
+        95.0,
+        52.0,
+        null
+      ],
+      "size_mm": [
+        20.0,
+        20.0,
+        180.0
+      ]
+    },
+    {
+      "index": 6,
+      "hu": 1000,
+      "center_mm": [
+        95.0,
+        78.0,
+        null
+      ],
+      "size_mm": [
+        20.0,
+        20.0,
+        180.0
+      ]
+    }
+  ],
+  "measurement_targets": [
+    {
+      "name": "skull (shell)",
+      "kind": "material",
+      "center_mm": [
+        0.0,
+        89.0,
+        0.0
+      ],
+      "sample_radius_mm": 2.0,
+      "expected_hu": 1000.0
+    },
+    {
+      "name": "parenchyma",
+      "kind": "material",
+      "center_mm": [
+        0.0,
+        0.0,
+        -50.0
+      ],
+      "sample_radius_mm": 8.0,
+      "expected_hu": 39.99999999999994
+    },
+    {
+      "name": "right ventricle",
+      "kind": "roi",
+      "center_mm": [
+        22.0,
+        0.0,
+        0.0
+      ],
+      "sample_radius_mm": 4.4,
+      "expected_hu": -200.00000000000006,
+      "volume_mm3": 31424.304116307503,
+      "principal_axis_lengths_mm": [
+        22.0,
+        62.0,
+        44.0
+      ]
+    },
+    {
+      "name": "left ventricle",
+      "kind": "roi",
+      "center_mm": [
+        -22.0,
+        0.0,
+        0.0
+      ],
+      "sample_radius_mm": 6.4,
+      "expected_hu": -200.00000000000006,
+      "volume_mm3": 76939.69848151643,
+      "principal_axis_lengths_mm": [
+        32.0,
+        82.0,
+        56.00000000000001
+      ]
+    },
+    {
+      "name": "upper mass",
+      "kind": "roi",
+      "center_mm": [
+        0.0,
+        35.0,
+        -15.0
+      ],
+      "sample_radius_mm": 8.4,
+      "expected_hu": 159.99999999999994,
+      "volume_mm3": 90163.70915802705,
+      "principal_axis_lengths_mm": [
+        42.0,
+        50.0,
+        82.0
+      ]
+    },
+    {
+      "name": "nodule A",
+      "kind": "roi",
+      "center_mm": [
+        0.0,
+        10.0,
+        25.0
+      ],
+      "sample_radius_mm": 1.8399999999999999,
+      "expected_hu": 159.99999999999994,
+      "volume_mm3": 443.1740036664001,
+      "principal_axis_lengths_mm": [
+        9.2,
+        9.2,
+        10.0
+      ]
+    },
+    {
+      "name": "nodule B",
+      "kind": "roi",
+      "center_mm": [
+        0.0,
+        -10.0,
+        25.0
+      ],
+      "sample_radius_mm": 1.8399999999999999,
+      "expected_hu": 159.99999999999994,
+      "volume_mm3": 443.1740036664001,
+      "principal_axis_lengths_mm": [
+        9.2,
+        9.2,
+        10.0
+      ]
+    },
+    {
+      "name": "nodule C",
+      "kind": "roi",
+      "center_mm": [
+        -8.0,
+        -60.5,
+        0.0
+      ],
+      "sample_radius_mm": 0.9199999999999999,
+      "expected_hu": 159.99999999999994,
+      "volume_mm3": 221.58700183320005,
+      "principal_axis_lengths_mm": [
+        9.2,
+        4.6,
+        10.0
+      ]
+    },
+    {
+      "name": "nodule D",
+      "kind": "roi",
+      "center_mm": [
+        0.0,
+        -60.6,
+        0.0
+      ],
+      "sample_radius_mm": 0.8,
+      "expected_hu": 159.99999999999994,
+      "volume_mm3": 44.31740036664001,
+      "principal_axis_lengths_mm": [
+        4.6,
+        4.6,
+        4.0
+      ]
+    },
+    {
+      "name": "nodule E",
+      "kind": "roi",
+      "center_mm": [
+        6.0,
+        -60.5,
+        0.0
+      ],
+      "sample_radius_mm": 0.8,
+      "expected_hu": 159.99999999999994,
+      "volume_mm3": 88.63480073328002,
+      "principal_axis_lengths_mm": [
+        4.6,
+        9.2,
+        4.0
+      ]
+    },
+    {
+      "name": "wedge -1000 HU",
+      "kind": "calibration",
+      "center_mm": [
+        95.0,
+        -78.0,
+        0.0
+      ],
+      "sample_radius_mm": 6.0,
+      "expected_hu": -1000.0
+    },
+    {
+      "name": "wedge -500 HU",
+      "kind": "calibration",
+      "center_mm": [
+        95.0,
+        -52.0,
+        0.0
+      ],
+      "sample_radius_mm": 6.0,
+      "expected_hu": -500.0
+    },
+    {
+      "name": "wedge -100 HU",
+      "kind": "calibration",
+      "center_mm": [
+        95.0,
+        -26.0,
+        0.0
+      ],
+      "sample_radius_mm": 6.0,
+      "expected_hu": -100.0
+    },
+    {
+      "name": "wedge +0 HU",
+      "kind": "calibration",
+      "center_mm": [
+        95.0,
+        0.0,
+        0.0
+      ],
+      "sample_radius_mm": 6.0,
+      "expected_hu": 0.0
+    },
+    {
+      "name": "wedge +100 HU",
+      "kind": "calibration",
+      "center_mm": [
+        95.0,
+        26.0,
+        0.0
+      ],
+      "sample_radius_mm": 6.0,
+      "expected_hu": 100.0
+    },
+    {
+      "name": "wedge +400 HU",
+      "kind": "calibration",
+      "center_mm": [
+        95.0,
+        52.0,
+        0.0
+      ],
+      "sample_radius_mm": 6.0,
+      "expected_hu": 400.0
+    },
+    {
+      "name": "wedge +1000 HU",
+      "kind": "calibration",
+      "center_mm": [
+        95.0,
+        78.0,
+        0.0
+      ],
+      "sample_radius_mm": 6.0,
+      "expected_hu": 1000.0
+    }
+  ],
+  "generator_self_check": [
+    {
+      "name": "skull (shell)",
+      "kind": "material",
+      "expected_hu": 1000.0,
+      "measured_hu_mean": 1000.0,
+      "measured_hu_sd": 0.0,
+      "n_voxels": 256
+    },
+    {
+      "name": "parenchyma",
+      "kind": "material",
+      "expected_hu": 39.99999999999994,
+      "measured_hu_mean": 40.0,
+      "measured_hu_sd": 0.0,
+      "n_voxels": 16384
+    },
+    {
+      "name": "right ventricle",
+      "kind": "roi",
+      "expected_hu": -200.00000000000006,
+      "measured_hu_mean": -200.0,
+      "measured_hu_sd": 0.0,
+      "n_voxels": 2592
+    },
+    {
+      "name": "left ventricle",
+      "kind": "roi",
+      "expected_hu": -200.00000000000006,
+      "measured_hu_mean": -200.0,
+      "measured_hu_sd": 0.0,
+      "n_voxels": 8112
+    },
+    {
+      "name": "upper mass",
+      "kind": "roi",
+      "expected_hu": 159.99999999999994,
+      "measured_hu_mean": 160.0,
+      "measured_hu_sd": 0.0,
+      "n_voxels": 18496
+    },
+    {
+      "name": "nodule A",
+      "kind": "roi",
+      "expected_hu": 159.99999999999994,
+      "measured_hu_mean": 160.0,
+      "measured_hu_sd": 0.0,
+      "n_voxels": 256
+    },
+    {
+      "name": "nodule B",
+      "kind": "roi",
+      "expected_hu": 159.99999999999994,
+      "measured_hu_mean": 160.0,
+      "measured_hu_sd": 0.0,
+      "n_voxels": 256
+    },
+    {
+      "name": "nodule C",
+      "kind": "roi",
+      "expected_hu": 159.99999999999994,
+      "measured_hu_mean": 160.0,
+      "measured_hu_sd": 0.0,
+      "n_voxels": 32
+    },
+    {
+      "name": "nodule D",
+      "kind": "roi",
+      "expected_hu": 159.99999999999994,
+      "measured_hu_mean": 160.0,
+      "measured_hu_sd": 0.0,
+      "n_voxels": 24
+    },
+    {
+      "name": "nodule E",
+      "kind": "roi",
+      "expected_hu": 159.99999999999994,
+      "measured_hu_mean": 160.0,
+      "measured_hu_sd": 0.0,
+      "n_voxels": 32
+    },
+    {
+      "name": "wedge -1000 HU",
+      "kind": "calibration",
+      "expected_hu": -1000.0,
+      "measured_hu_mean": -1000.0,
+      "measured_hu_sd": 0.0,
+      "n_voxels": 6912
+    },
+    {
+      "name": "wedge -500 HU",
+      "kind": "calibration",
+      "expected_hu": -500.0,
+      "measured_hu_mean": -500.0,
+      "measured_hu_sd": 0.0,
+      "n_voxels": 6912
+    },
+    {
+      "name": "wedge -100 HU",
+      "kind": "calibration",
+      "expected_hu": -100.0,
+      "measured_hu_mean": -100.0,
+      "measured_hu_sd": 0.0,
+      "n_voxels": 6912
+    },
+    {
+      "name": "wedge +0 HU",
+      "kind": "calibration",
+      "expected_hu": 0.0,
+      "measured_hu_mean": 0.0,
+      "measured_hu_sd": 0.0,
+      "n_voxels": 6912
+    },
+    {
+      "name": "wedge +100 HU",
+      "kind": "calibration",
+      "expected_hu": 100.0,
+      "measured_hu_mean": 100.0,
+      "measured_hu_sd": 0.0,
+      "n_voxels": 6912
+    },
+    {
+      "name": "wedge +400 HU",
+      "kind": "calibration",
+      "expected_hu": 400.0,
+      "measured_hu_mean": 400.0,
+      "measured_hu_sd": 0.0,
+      "n_voxels": 6912
+    },
+    {
+      "name": "wedge +1000 HU",
+      "kind": "calibration",
+      "expected_hu": 1000.0,
+      "measured_hu_mean": 1000.0,
+      "measured_hu_sd": 0.0,
+      "n_voxels": 6912
+    }
+  ],
+  "series_md5": "325737ca08213ffa5f9d024620f32d6a"
+}

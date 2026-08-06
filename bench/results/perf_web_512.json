@@ -1,0 +1,383 @@
+{
+  "phantom_series": "GNBP-1B_512",
+  "label": "GNBP-1B_512",
+  "mode": "web",
+  "url": "http://localhost:8099",
+  "browser": "151.0.7922.34",
+  "environment": {
+    "os": "Linux 7.0.11-76070011-generic",
+    "distro": "Pop!_OS 22.04 LTS",
+    "kernel": "7.0.11-76070011-generic",
+    "platform": "linux",
+    "arch": "x64",
+    "cpu_model": "Intel(R) Core(TM) i7-8550U CPU @ 1.80GHz",
+    "cpu_logical_cores": 8,
+    "cpu_physical_cores": 4,
+    "cpu_max_mhz": 4000,
+    "total_memory_bytes": 33526915072,
+    "free_memory_bytes_at_start": 19320823808,
+    "load_average_at_start": [
+      2,
+      2.19,
+      3.33
+    ],
+    "node": "v20.20.2",
+    "gpu": [
+      "00:02.0 VGA compatible controller: Intel Corporation UHD Graphics 620 (rev 07)"
+    ],
+    "disks": [
+      "sda     CT8000X10SSD9             7.3T    0",
+      "sdb     SanDisk Ultra II 960GB  894.3G    0",
+      "zram0                              16G    0",
+      "nvme0n1 Samsung SSD 970 EVO 1TB 931.5G    0"
+    ],
+    "displays": [
+      "eDP-1 connected primary 1600x900+2560+360 (normal left inverted right x axis y axis) 293mm x 165mm",
+      "1600x900      59.70*   60.00",
+      "HDMI-2 connected 2560x1440+0+0 (normal left inverted right x axis y axis) 597mm x 336mm",
+      "2560x1440     59.95*+"
+    ],
+    "display_env": ":1"
+  },
+  "build_info": {
+    "commit": "8c564856a15b735e8b3c9043ec98256b6d81d793",
+    "worktree_clean": true,
+    "jar": "/home/tatsunidas/graphy-paper/bench/.build/gn/backend/target/graphy-next-backend.jar",
+    "jar_md5": "9841ad3eb7c6c1fd712b6d4a44a99c75",
+    "app_version": "0.1.9",
+    "url": "http://localhost:8099"
+  },
+  "metric_definitions": {
+    "time_to_first_image_ms": "wall clock from the click that opens the series on the main screen to the first frame in which the largest canvas has more than 1% non-black pixels",
+    "time_to_viewer_first_image_ms": "wall clock from the click that opens the 2D Viewer to the first rendered image inside it",
+    "viewer_js_heap_bytes": "JSHeapUsedSize of the 2D Viewer context, read once after the scroll measurement",
+    "stack_scroll_fps": "requestAnimationFrame callbacks serviced by the application per second while real wheel events are delivered continuously through CDP Input.dispatchMouseEvent; the harness's own sampling loop uses an unpatched requestAnimationFrame and is not counted",
+    "slice_render_latency_ms": "cold-cache median time from a wheel event arriving in the page to the viewport's rendered content changing; measured in page time so it does not depend on how fast the harness can deliver events. The scroll is capped at one pass through the stack so that no slice is measured twice from cache",
+    "slice_latency_within_one_frame_fraction": "fraction of wheel events whose rendered result appeared within one display frame (16.7 ms at 60 Hz). This, not a slices-per-second figure, is what the measurement resolves: the sampler detects content changes once per frame, so latencies are quantised to frame multiples",
+    "observed_fps": "application frames per second actually observed during the scroll; bounded by the harness's CDP event delivery rate (~30/s) and therefore a lower bound, not a capability",
+    "wheel_events_serviced": "distinct images rendered divided by wheel events delivered. A value near 1 means the viewer kept up with every event it was given",
+    "rotation_fps": "requestAnimationFrame callbacks serviced per second while the pointer is dragged in a circle with the button held",
+    "peak_js_heap_bytes": "maximum JSHeapUsedSize reported by CDP Performance.getMetrics, sampled every 250 ms for the duration of the run",
+    "cine_images_per_second": "distinct rendered images per second during the viewer's own cine playback. This is the application's configured playback rate sustained without dropping images — NOT an upper bound on what the renderer could do. Neither this nor the wheel-driven figure measures a maximum: the harness cannot deliver wheel events faster than about 30/s, and cine runs at its configured rate",
+    "gpu_memory": "not measured — Chrome exposes no per-page GPU memory figure through CDP"
+  },
+  "runs": [
+    {
+      "run": 1,
+      "time_to_first_image_ms": 361,
+      "time_to_viewer_first_image_ms": 832,
+      "stack_scroll": {
+        "seconds": 5.017,
+        "wheelEventsDelivered": 149,
+        "frames": 246,
+        "observedFps": 49.03328682479569,
+        "distinctImages": 124,
+        "observedDistinctImagesPerSecond": 24.71596571656368,
+        "sliceRenderLatencyMs": {
+          "n": 122,
+          "median": 3,
+          "min": 2.199999988079071,
+          "max": 28.600000023841858,
+          "quantisation_ms": 16.666666666666668,
+          "within_one_frame": 80,
+          "within_one_frame_fraction": 0.6557377049180327
+        },
+        "impliedSlicesPerSecond": 333.3333333333333
+      },
+      "cine_throughput": {
+        "seconds": 5.053,
+        "frames": 103,
+        "fps": 20.383930338412824,
+        "distinctImages": 53,
+        "distinctImagesPerSecond": 10.488818523649318
+      },
+      "peak_js_heap_bytes": 33454836,
+      "viewer_js_heap_bytes": 24899220,
+      "canvases_at_measurement": [
+        {
+          "width": 1277,
+          "height": 616,
+          "mean": 20.78587818105966,
+          "nonBlackFraction": 0.16958698372966208,
+          "hash": 2953816676
+        }
+      ]
+    },
+    {
+      "run": 2,
+      "time_to_first_image_ms": 404,
+      "time_to_viewer_first_image_ms": 776,
+      "stack_scroll": {
+        "seconds": 5.019,
+        "wheelEventsDelivered": 149,
+        "frames": 290,
+        "observedFps": 57.780434349472,
+        "distinctImages": 146,
+        "observedDistinctImagesPerSecond": 29.089460051803147,
+        "sliceRenderLatencyMs": {
+          "n": 141,
+          "median": 2.600000023841858,
+          "min": 2.100000023841858,
+          "max": 30.600000023841858,
+          "quantisation_ms": 16.666666666666668,
+          "within_one_frame": 111,
+          "within_one_frame_fraction": 0.7872340425531915
+        },
+        "impliedSlicesPerSecond": 384.6153810884826
+      },
+      "cine_throughput": {
+        "seconds": 5.043,
+        "frames": 102,
+        "fps": 20.226055919095774,
+        "distinctImages": 52,
+        "distinctImagesPerSecond": 10.311322625421376
+      },
+      "peak_js_heap_bytes": 34002628,
+      "viewer_js_heap_bytes": 30377016,
+      "canvases_at_measurement": [
+        {
+          "width": 1277,
+          "height": 616,
+          "mean": 20.78587818105966,
+          "nonBlackFraction": 0.16958698372966208,
+          "hash": 2953816676
+        }
+      ]
+    },
+    {
+      "run": 3,
+      "time_to_first_image_ms": 340,
+      "time_to_viewer_first_image_ms": 665,
+      "stack_scroll": {
+        "seconds": 5.032,
+        "wheelEventsDelivered": 150,
+        "frames": 294,
+        "observedFps": 58.426073131955484,
+        "distinctImages": 148,
+        "observedDistinctImagesPerSecond": 29.41176470588235,
+        "sliceRenderLatencyMs": {
+          "n": 146,
+          "median": 2.599999964237213,
+          "min": 2.100000023841858,
+          "max": 23.600000023841858,
+          "quantisation_ms": 16.666666666666668,
+          "within_one_frame": 134,
+          "within_one_frame_fraction": 0.9178082191780822
+        },
+        "impliedSlicesPerSecond": 384.6153899057378
+      },
+      "cine_throughput": {
+        "seconds": 5.049,
+        "frames": 103,
+        "fps": 20.400079223608635,
+        "distinctImages": 53,
+        "distinctImagesPerSecond": 10.497128144186966
+      },
+      "peak_js_heap_bytes": 34499272,
+      "viewer_js_heap_bytes": 24096868,
+      "canvases_at_measurement": [
+        {
+          "width": 1277,
+          "height": 616,
+          "mean": 20.78587818105966,
+          "nonBlackFraction": 0.16958698372966208,
+          "hash": 2953816676
+        }
+      ]
+    },
+    {
+      "run": 4,
+      "time_to_first_image_ms": 395,
+      "time_to_viewer_first_image_ms": 718,
+      "stack_scroll": {
+        "seconds": 5.008,
+        "wheelEventsDelivered": 149,
+        "frames": 282,
+        "observedFps": 56.30990415335463,
+        "distinctImages": 142,
+        "observedDistinctImagesPerSecond": 28.354632587859424,
+        "sliceRenderLatencyMs": {
+          "n": 136,
+          "median": 2.599999964237213,
+          "min": 2.100000023841858,
+          "max": 26.30000001192093,
+          "quantisation_ms": 16.666666666666668,
+          "within_one_frame": 118,
+          "within_one_frame_fraction": 0.8676470588235294
+        },
+        "impliedSlicesPerSecond": 384.6153899057378
+      },
+      "cine_throughput": {
+        "seconds": 5.05,
+        "frames": 103,
+        "fps": 20.396039603960396,
+        "distinctImages": 53,
+        "distinctImagesPerSecond": 10.495049504950495
+      },
+      "peak_js_heap_bytes": 31597556,
+      "viewer_js_heap_bytes": 28982084,
+      "canvases_at_measurement": [
+        {
+          "width": 1277,
+          "height": 616,
+          "mean": 20.78587818105966,
+          "nonBlackFraction": 0.16958698372966208,
+          "hash": 2953816676
+        }
+      ]
+    },
+    {
+      "run": 5,
+      "time_to_first_image_ms": 339,
+      "time_to_viewer_first_image_ms": 751,
+      "stack_scroll": {
+        "seconds": 5.017,
+        "wheelEventsDelivered": 150,
+        "frames": 280,
+        "observedFps": 55.81024516643412,
+        "distinctImages": 141,
+        "observedDistinctImagesPerSecond": 28.104444887382897,
+        "sliceRenderLatencyMs": {
+          "n": 138,
+          "median": 2.699999988079071,
+          "min": 2.199999988079071,
+          "max": 22.19999998807907,
+          "quantisation_ms": 16.666666666666668,
+          "within_one_frame": 112,
+          "within_one_frame_fraction": 0.8115942028985508
+        },
+        "impliedSlicesPerSecond": 370.3703720056144
+      },
+      "cine_throughput": {
+        "seconds": 5.05,
+        "frames": 103,
+        "fps": 20.396039603960396,
+        "distinctImages": 53,
+        "distinctImagesPerSecond": 10.495049504950495
+      },
+      "peak_js_heap_bytes": 33492820,
+      "viewer_js_heap_bytes": 22409640,
+      "canvases_at_measurement": [
+        {
+          "width": 1277,
+          "height": 616,
+          "mean": 20.78587818105966,
+          "nonBlackFraction": 0.16958698372966208,
+          "hash": 2953816676
+        }
+      ]
+    }
+  ],
+  "runs_are_isolated": true,
+  "webgl_renderer": {
+    "vendor": "Google Inc. (Intel)",
+    "renderer": "ANGLE (Intel, Mesa Intel(R) UHD Graphics 620 (KBL GT2), OpenGL 4.6)",
+    "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)"
+  },
+  "summary": {
+    "time_to_first_image_ms": {
+      "n": 5,
+      "median": 361,
+      "min": 339,
+      "max": 404,
+      "values": [
+        361,
+        404,
+        340,
+        395,
+        339
+      ]
+    },
+    "time_to_viewer_first_image_ms": {
+      "n": 5,
+      "median": 751,
+      "min": 665,
+      "max": 832,
+      "values": [
+        832,
+        776,
+        665,
+        718,
+        751
+      ]
+    },
+    "viewer_js_heap_bytes": {
+      "n": 5,
+      "median": 24899220,
+      "min": 22409640,
+      "max": 30377016,
+      "values": [
+        24899220,
+        30377016,
+        24096868,
+        28982084,
+        22409640
+      ]
+    },
+    "slice_render_latency_ms": {
+      "n": 5,
+      "median": 2.600000023841858,
+      "min": 2.599999964237213,
+      "max": 3,
+      "values": [
+        3,
+        2.600000023841858,
+        2.599999964237213,
+        2.599999964237213,
+        2.699999988079071
+      ]
+    },
+    "observed_fps": {
+      "n": 5,
+      "median": 56.30990415335463,
+      "min": 49.03328682479569,
+      "max": 58.426073131955484,
+      "values": [
+        49.03328682479569,
+        57.780434349472,
+        58.426073131955484,
+        56.30990415335463,
+        55.81024516643412
+      ]
+    },
+    "peak_js_heap_bytes": {
+      "n": 5,
+      "median": 33492820,
+      "min": 31597556,
+      "max": 34499272,
+      "values": [
+        33454836,
+        34002628,
+        34499272,
+        31597556,
+        33492820
+      ]
+    },
+    "cine_images_per_second": {
+      "n": 5,
+      "median": 10.495049504950495,
+      "min": 10.311322625421376,
+      "max": 10.497128144186966,
+      "values": [
+        10.488818523649318,
+        10.311322625421376,
+        10.497128144186966,
+        10.495049504950495,
+        10.495049504950495
+      ]
+    },
+    "slice_latency_within_one_frame_fraction": {
+      "n": 5,
+      "median": 0.8115942028985508,
+      "min": 0.6557377049180327,
+      "max": 0.9178082191780822,
+      "values": [
+        0.6557377049180327,
+        0.7872340425531915,
+        0.9178082191780822,
+        0.8676470588235294,
+        0.8115942028985508
+      ]
+    }
+  }
+}

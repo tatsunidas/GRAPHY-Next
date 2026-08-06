@@ -1,0 +1,71 @@
+{
+  "phantom": "GNBP-1B",
+  "version": "1.0",
+  "purpose": "performance scaling with volume size",
+  "noise_sigma_hu": 20.0,
+  "noise_seed": 20260730,
+  "vessel_centreline": {
+    "model": "helix; x = Rx cos(2 pi z / L), y = Ry sin(2 pi z / L)",
+    "rx_mm": 52.0,
+    "ry_mm": 28.000000000000004,
+    "vessel_radius_mm": 8.0
+  },
+  "series": [
+    {
+      "series": "GNBP-1B_128",
+      "slices": 128,
+      "rows": 512,
+      "columns": 512,
+      "pixel_spacing_mm": [
+        0.78125,
+        0.78125
+      ],
+      "slice_thickness_mm": 5.0,
+      "transfer_syntax": "ExplicitVRLittleEndian",
+      "bytes_on_disk": 67362538,
+      "series_md5": "3027c530c11791c79fb72cfee0a7e0c4"
+    },
+    {
+      "series": "GNBP-1B_256",
+      "slices": 256,
+      "rows": 512,
+      "columns": 512,
+      "pixel_spacing_mm": [
+        0.78125,
+        0.78125
+      ],
+      "slice_thickness_mm": 5.0,
+      "transfer_syntax": "ExplicitVRLittleEndian",
+      "bytes_on_disk": 134725354,
+      "series_md5": "5bbd10354392e8efa448dca9b7c8267d"
+    },
+    {
+      "series": "GNBP-1B_512",
+      "slices": 512,
+      "rows": 512,
+      "columns": 512,
+      "pixel_spacing_mm": [
+        0.78125,
+        0.78125
+      ],
+      "slice_thickness_mm": 5.0,
+      "transfer_syntax": "ExplicitVRLittleEndian",
+      "bytes_on_disk": 269450986,
+      "series_md5": "19814798810c9d42fe0fe703f78e565b"
+    },
+    {
+      "series": "GNBP-1B_64",
+      "slices": 64,
+      "rows": 512,
+      "columns": 512,
+      "pixel_spacing_mm": [
+        0.78125,
+        0.78125
+      ],
+      "slice_thickness_mm": 5.0,
+      "transfer_syntax": "ExplicitVRLittleEndian",
+      "bytes_on_disk": 33680816,
+      "series_md5": "d2e21d18f4b984973e1cb6de2315869b"
+    }
+  ]
+}

@@ -1,0 +1,161 @@
+{
+  "phantom_series": "GNBP-1B_512",
+  "viewer": "3D",
+  "url": "http://localhost:8099",
+  "browser": "151.0.7922.34",
+  "environment": {
+    "os": "Linux 7.0.11-76070011-generic",
+    "distro": "Pop!_OS 22.04 LTS",
+    "kernel": "7.0.11-76070011-generic",
+    "cpu_model": "Intel(R) Core(TM) i7-8550U CPU @ 1.80GHz",
+    "cpu_logical_cores": 8,
+    "total_memory_bytes": 33526915072,
+    "free_memory_bytes_at_start": 19334184960,
+    "load_average_at_start": [
+      2.77,
+      1.55,
+      1.22
+    ],
+    "gpu": [
+      "00:02.0 VGA compatible controller: Intel Corporation UHD Graphics 620 (rev 07)"
+    ],
+    "displays": [
+      "eDP-1 connected primary 1600x900+2560+360 (normal left inverted right x axis y axis) 293mm x 165mm",
+      "   1600x900      59.70*   60.00  ",
+      "HDMI-2 connected 2560x1440+0+0 (normal left inverted right x axis y axis) 597mm x 336mm",
+      "   2560x1440     59.95*+"
+    ],
+    "node": "v20.20.2"
+  },
+  "build_info": {
+    "commit": "8c564856a15b735e8b3c9043ec98256b6d81d793",
+    "worktree_clean": true,
+    "jar": "/home/tatsunidas/graphy-paper/bench/.build/gn/backend/target/graphy-next-backend.jar",
+    "jar_md5": "9841ad3eb7c6c1fd712b6d4a44a99c75",
+    "app_version": "0.1.9",
+    "url": "http://localhost:8099"
+  },
+  "metric_definitions": {
+    "time_to_first_volume_ms": "wall clock from activating the 3D Viewer menu item to the first frame in which its canvas has more than 1% non-black pixels",
+    "rotation_fps": "requestAnimationFrame callbacks serviced by the application per second while the pointer is dragged in a circle with the left button held; capped by the display refresh rate (~60 Hz)",
+    "peak_js_heap_bytes": "maximum JSHeapUsedSize across the shell and 3D viewer contexts, sampled every 250 ms. NOT a memory figure for the application: V8 excludes external memory such as large ArrayBuffers, and it reported 26 MB while a 128 MB volume was loaded",
+    "peak_rss_bytes": "maximum summed proportional set size (PSS) of the browser process tree, sampled every 250 ms. PSS rather than RSS: summing RSS across the browser, GPU and renderer processes double-counts shared pages and inflated a 128 MB volume to 1.6 GB on a first attempt",
+    "rss_delta_bytes": "peak_rss_bytes minus the resident set size measured before the run started, i.e. the additional memory attributable to loading and rendering this volume",
+    "rotation_fps_caveat": "the rotation frame rate is bounded by how fast the harness can deliver pointer events through CDP (about 26/s); frames tracked events one-for-one, so this is a lower bound showing the viewer kept up, not a maximum"
+  },
+  "runs": [
+    {
+      "run": 1,
+      "time_to_first_volume_ms": 5503,
+      "rotation": {
+        "seconds": 5.019,
+        "frames": 112,
+        "fps": 22.31520223152022,
+        "moveEvents": 68
+      },
+      "viewer_js_heap_bytes": 29662356,
+      "peak_js_heap_bytes": 36943004,
+      "baseline_rss_bytes": 283382784,
+      "peak_rss_bytes": 2508224512,
+      "rss_delta_bytes": 2224841728
+    },
+    {
+      "run": 2,
+      "time_to_first_volume_ms": 5421,
+      "rotation": {
+        "seconds": 5.008,
+        "frames": 117,
+        "fps": 23.36261980830671,
+        "moveEvents": 67
+      },
+      "viewer_js_heap_bytes": 31791380,
+      "peak_js_heap_bytes": 31466452,
+      "baseline_rss_bytes": 357243904,
+      "peak_rss_bytes": 2516602880,
+      "rss_delta_bytes": 2159358976
+    },
+    {
+      "run": 3,
+      "time_to_first_volume_ms": 5203,
+      "rotation": {
+        "seconds": 5,
+        "frames": 118,
+        "fps": 23.6,
+        "moveEvents": 68
+      },
+      "viewer_js_heap_bytes": 30576228,
+      "peak_js_heap_bytes": 36967080,
+      "baseline_rss_bytes": 359434240,
+      "peak_rss_bytes": 2524037120,
+      "rss_delta_bytes": 2164602880
+    }
+  ],
+  "summary": {
+    "time_to_first_volume_ms": {
+      "n": 3,
+      "median": 5421,
+      "min": 5203,
+      "max": 5503,
+      "values": [
+        5503,
+        5421,
+        5203
+      ]
+    },
+    "rotation_fps": {
+      "n": 3,
+      "median": 23.36261980830671,
+      "min": 22.31520223152022,
+      "max": 23.6,
+      "values": [
+        22.31520223152022,
+        23.36261980830671,
+        23.6
+      ]
+    },
+    "peak_js_heap_bytes": {
+      "n": 3,
+      "median": 36943004,
+      "min": 31466452,
+      "max": 36967080,
+      "values": [
+        36943004,
+        31466452,
+        36967080
+      ]
+    },
+    "viewer_js_heap_bytes": {
+      "n": 3,
+      "median": 30576228,
+      "min": 29662356,
+      "max": 31791380,
+      "values": [
+        29662356,
+        31791380,
+        30576228
+      ]
+    },
+    "peak_rss_bytes": {
+      "n": 3,
+      "median": 2516602880,
+      "min": 2508224512,
+      "max": 2524037120,
+      "values": [
+        2508224512,
+        2516602880,
+        2524037120
+      ]
+    },
+    "rss_delta_bytes": {
+      "n": 3,
+      "median": 2164602880,
+      "min": 2159358976,
+      "max": 2224841728,
+      "values": [
+        2224841728,
+        2159358976,
+        2164602880
+      ]
+    }
+  }
+}

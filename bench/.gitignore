@@ -1,0 +1,17 @@
+# 計測ハーネスの依存（npm install で取得）
+node_modules/
+
+# 生成した DICOM ファントム（約 575 MB・バイト単位で決定的なので再生成する）
+phantom/GNBP-1A/
+phantom/GNBP-1B_64/
+phantom/GNBP-1B_128/
+phantom/GNBP-1B_256/
+phantom/GNBP-1B_512/
+
+# 測定用の専用ワークツリーと、その standalone ランタイムデータ
+.build/
+.run/
+
+# Python
+__pycache__/
+*.pyc
