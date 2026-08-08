@@ -10,9 +10,13 @@
  * 前景ボリュームを背景スライスの画素グリッドにリサンプリングする。
  *
  * アルゴリズム出典: GRAPHY/src/main/java/com/vis/core/fusion/ImagePairingEngine.java
+ *
+ * <p><b>レジストレーション</b>（`fw/registration-design.md` §2）: `computeFusionSlice` は元々
+ * 「背景ボクセル → 患者 world → 前景ボクセル」を実座標で回しているので、その真ん中に
+ * world→world の変換を 1 つ挟むだけで位置合わせに対応できる。それが第 3 引数 `xf`。
+ * **省略時は挟まないので、従来と完全に同一の結果になる**（Fusion にリグレッションを持ち込まない）。
  */
-
-type Vec3 = [number, number, number];
+import type { Vec3, WorldTransform } from "./regTransform";
 
 function dot(a: Vec3, b: Vec3): number {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -66,8 +70,17 @@ export interface BackgroundSliceMeta {
  * 前景範囲外の画素は NaN。
  *
  * 計算量: O(bg.rows × bg.cols × log(fg.slices.length))
+ *
+ * @param xf **fixed(背景) world → moving(前景) world** の変換（pull-back）。
+ *   `fw/registration-design.md` §2 のとおり向きに注意すること
+ *   （「前景をこう動かす」というユーザーの直感の**逆**）。
+ *   省略／恒等なら一切挟まないので従来と同一の結果になる。
  */
-export function computeFusionSlice(fg: FusionVolume, bg: BackgroundSliceMeta): Float32Array {
+export function computeFusionSlice(
+  fg: FusionVolume,
+  bg: BackgroundSliceMeta,
+  xf?: WorldTransform | null,
+): Float32Array {
   const nOut = bg.rows * bg.cols;
   const out = new Float32Array(nOut);
   out.fill(NaN);
@@ -92,6 +105,11 @@ export function computeFusionSlice(fg: FusionVolume, bg: BackgroundSliceMeta): F
   const bPy = bg.pixelSpacingRow;
   const bgIpp = bg.ipp;
 
+  // 変換の出力先。ホットループ内で割り付けないよう 1 本だけ使い回す
+  // （`WorldTransform.mapPoint` が out 引数を取る契約なのはこのため）。
+  const useXf = !!xf && xf.kind !== "identity";
+  const xp: Vec3 = [0, 0, 0];
+
   for (let by = 0; by < bg.rows; by++) {
     const Py0 = bgIpp[0] + by * bPy * bRc[0];
     const Py1 = bgIpp[1] + by * bPy * bRc[1];
@@ -99,9 +117,15 @@ export function computeFusionSlice(fg: FusionVolume, bg: BackgroundSliceMeta): F
 
     for (let bx = 0; bx < bg.cols; bx++) {
       // 背景画素 (bx=列, by=行) → ワールド座標
-      const Px = Py0 + bx * bPx * bRr[0];
-      const Py = Py1 + bx * bPx * bRr[1];
-      const Pz = Py2 + bx * bPx * bRr[2];
+      let Px = Py0 + bx * bPx * bRr[0];
+      let Py = Py1 + bx * bPx * bRr[1];
+      let Pz = Py2 + bx * bPx * bRr[2];
+
+      // ★ レジストレーション: fixed world → moving world（pull-back）。
+      if (useXf) {
+        xf!.mapPoint(Px, Py, Pz, xp);
+        Px = xp[0]; Py = xp[1]; Pz = xp[2];
+      }
 
       // ワールド → 前景座標
       const dx = Px - fgIpp0[0];

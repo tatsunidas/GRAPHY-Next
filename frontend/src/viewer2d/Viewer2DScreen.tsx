@@ -16,6 +16,7 @@ import {
 } from "../api";
 import { SeriesViewer } from "../viewer/SeriesViewer";
 import { FusionImageViewer } from "../viewer/FusionOverlayViewer";
+import { ZERO_ADJUST, isZeroAdjust, type ManualAdjust } from "../viewer/regTransform";
 import type { RenderOverlay } from "../viewer/Viewer2D";
 import { buildSeriesLayout, type SeriesLayout } from "../viewer/seriesLayout";
 import { LutDialog, ColorBar } from "../viewer/LutDialog";
@@ -1341,7 +1342,12 @@ function TileCell({
   // Fusion: オーバーレイ W/L の上書き（null で DICOM 既定/自動）と、その既定値（入力の初期表示用）。
   const [fusionWL, setFusionWL] = useState<{ center: number; width: number } | null>(null);
   const [fusionAutoWL, setFusionAutoWL] = useState<{ center: number; width: number } | null>(null);
-  // fusion が切り替わったら C/T / LUT / W/L をリセット
+  // Fusion: 手動位置合わせ（`fw/registration-design.md` R1）。moving をどう動かすかの 6 パラメータ。
+  // 座標・回転中心は持たない（幾何は FusionImageViewer 側で前景ボリュームから算出する）。
+  const [fusionAdjust, setFusionAdjust] = useState<ManualAdjust>(ZERO_ADJUST);
+  // 空間 Fusion（IOP/IPP あり）で描けているか。false のとき手動位置合わせは効かない。
+  const [fusionSpatial, setFusionSpatial] = useState(true);
+  // fusion が切り替わったら C/T / LUT / W/L / 位置合わせをリセット
   const prevFusionSeriesUid = useRef<string | null>(null);
   useEffect(() => {
     const uid = tile.fusion?.series.seriesInstanceUid ?? null;
@@ -1354,6 +1360,9 @@ function TileCell({
       setFusionLut(tile.fusion?.initialLut ?? null);
       setFusionWL(null);
       setFusionAutoWL(null);
+      // 別シリーズの調整量を引きずらない（前のシリーズ向けのズレが黙って適用される事故を防ぐ）。
+      setFusionAdjust(ZERO_ADJUST);
+      setFusionSpatial(true);
     }
   }, [tile.fusion?.series.seriesInstanceUid]);
 
@@ -1384,13 +1393,15 @@ function TileCell({
         opacity={fusion.opacity}
         windowCenter={fusionWL?.center ?? null}
         windowWidth={fusionWL?.width ?? null}
+        adjust={fusionAdjust}
         onAutoWL={(center, width) =>
           setFusionAutoWL((prev) => (prev && prev.center === center && prev.width === width ? prev : { center, width }))
         }
+        onSpatialChange={setFusionSpatial}
         onLayoutChange={setFusionLayout}
       />
     );
-  }, [tile.fusion, mode, fusionC, fusionT, fusionLut, fusionWL]);
+  }, [tile.fusion, mode, fusionC, fusionT, fusionLut, fusionWL, fusionAdjust]);
 
   // ── タイルヘッダー DnD（タイル並び替え） ──
 
@@ -1582,12 +1593,15 @@ function TileCell({
           tDimension={fusionLayout.tDimension}
           fusionLut={fusionLut}
           wl={fusionWL ?? fusionAutoWL}
+          adjust={fusionAdjust}
+          adjustEnabled={fusionSpatial}
           onOpacityChange={(v) => onFusionChange({ ...tile.fusion!, opacity: v })}
           onCChange={setFusionC}
           onTChange={setFusionT}
           onLutChange={setFusionLut}
           onWLChange={(center, width) => setFusionWL({ center, width })}
           onWLAuto={() => setFusionWL(null)}
+          onAdjustChange={setFusionAdjust}
           onRemove={() => onFusionChange(undefined)}
         />
       )}
@@ -1608,12 +1622,15 @@ function FusionControlBar({
   tDimension,
   fusionLut,
   wl,
+  adjust,
+  adjustEnabled,
   onOpacityChange,
   onCChange,
   onTChange,
   onLutChange,
   onWLChange,
   onWLAuto,
+  onAdjustChange,
   onRemove,
 }: {
   seriesLabel: string;
@@ -1627,6 +1644,10 @@ function FusionControlBar({
   fusionLut: LutData | null;
   /** 現在のオーバーレイ W/L（上書き値 or 既定値）。 */
   wl: { center: number; width: number } | null;
+  /** 手動位置合わせの 6 パラメータ（`fw/registration-design.md` R1）。 */
+  adjust: ManualAdjust;
+  /** 空間 Fusion のときだけ位置合わせが効く。false ならコントロールを無効化する。 */
+  adjustEnabled: boolean;
   onOpacityChange: (v: number) => void;
   onCChange: (v: number) => void;
   onTChange: (v: number) => void;
@@ -1635,10 +1656,14 @@ function FusionControlBar({
   onWLChange: (center: number, width: number) => void;
   /** オーバーレイ W/L を自動（DICOM 既定）に戻す。 */
   onWLAuto: () => void;
+  /** 手動位置合わせの更新。 */
+  onAdjustChange: (a: ManualAdjust) => void;
   onRemove: () => void;
 }) {
   const { t } = useI18n();
   const [showLutDialog, setShowLutDialog] = useState(false);
+  const [showAdjust, setShowAdjust] = useState(false);
+  const adjusted = !isZeroAdjust(adjust);
   // W/L 入力の下書き（wl が更新されたら同期）。
   const [wlText, setWlText] = useState("");
   const [wwText, setWwText] = useState("");
@@ -1754,6 +1779,23 @@ function FusionControlBar({
         </button>
       </div>
 
+      {/* 手動位置合わせ（fw/registration-design.md R1） */}
+      <button
+        onClick={() => setShowAdjust((v) => !v)}
+        disabled={!adjustEnabled}
+        title={adjustEnabled ? t("viewer2d.fusion.adjust.title") : t("viewer2d.fusion.adjust.unavailable")}
+        style={{
+          ...fusionAutoBtn,
+          flex: "none",
+          cursor: adjustEnabled ? "pointer" : "not-allowed",
+          opacity: adjustEnabled ? 1 : 0.5,
+          background: adjusted ? "#e8f0fc" : "#f5f7fa",
+          color: adjusted ? "#0b5cad" : "#5a6672",
+        }}
+      >
+        ⊹ {t("viewer2d.fusion.adjust")}{adjusted ? " •" : ""}
+      </button>
+
       {/* C スライダー（マルチチャンネルのとき） */}
       {nC > 1 && (
         <div style={{ display: "flex", alignItems: "center", gap: 4, flex: "none" }}>
@@ -1791,7 +1833,77 @@ function FusionControlBar({
       <button onClick={onRemove} style={fusionRemoveBtn} title={t("viewer2d.fusion.remove")}>
         ×
       </button>
+
+      {/* 位置合わせの数値入力。flexBasis:100% で独立した行になる（バーは flexWrap:wrap）。 */}
+      {showAdjust && adjustEnabled && (
+        <div style={fusionAdjustRow}>
+          <span style={{ fontSize: 11, color: "#5a6672", flex: "none" }}>
+            {t("viewer2d.fusion.adjust.translate")}
+          </span>
+          <AdjustNumber label="X" value={adjust.tx} step={1} onChange={(v) => onAdjustChange({ ...adjust, tx: v })} />
+          <AdjustNumber label="Y" value={adjust.ty} step={1} onChange={(v) => onAdjustChange({ ...adjust, ty: v })} />
+          <AdjustNumber label="Z" value={adjust.tz} step={1} onChange={(v) => onAdjustChange({ ...adjust, tz: v })} />
+
+          <span style={{ fontSize: 11, color: "#5a6672", flex: "none", marginLeft: 6 }}>
+            {t("viewer2d.fusion.adjust.rotate")}
+          </span>
+          <AdjustNumber label="X" value={adjust.rx} step={1} onChange={(v) => onAdjustChange({ ...adjust, rx: v })} />
+          <AdjustNumber label="Y" value={adjust.ry} step={1} onChange={(v) => onAdjustChange({ ...adjust, ry: v })} />
+          <AdjustNumber label="Z" value={adjust.rz} step={1} onChange={(v) => onAdjustChange({ ...adjust, rz: v })} />
+
+          <button
+            onClick={() => onAdjustChange(ZERO_ADJUST)}
+            disabled={!adjusted}
+            style={{ ...fusionAutoBtn, flex: "none", marginLeft: 6, opacity: adjusted ? 1 : 0.5 }}
+          >
+            {t("viewer2d.fusion.adjust.reset")}
+          </button>
+          <span style={{ fontSize: 10, color: "#8a94a2", flex: "none", marginLeft: 6 }}>
+            {t("viewer2d.fusion.adjust.hint")}
+          </span>
+        </div>
+      )}
     </div>
+  );
+}
+
+/**
+ * 位置合わせ用の数値入力。
+ *
+ * <p>プレビューを即時に効かせたいので `onChange` で親へ流すが、そのまま props を text へ書き戻すと
+ * 入力途中（`-` や `1.` や空文字）が潰れてマイナス値が打てなくなる。
+ * **フォーカス中は props からの同期を止める**ことで、即時反映と自由な入力を両立させている。
+ */
+function AdjustNumber({
+  label, value, step, onChange,
+}: {
+  label: string;
+  value: number;
+  step: number;
+  onChange: (v: number) => void;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  const [text, setText] = useState(String(value));
+  useEffect(() => {
+    if (document.activeElement !== ref.current) setText(String(value));
+  }, [value]);
+  return (
+    <label style={{ display: "flex", alignItems: "center", gap: 2, flex: "none" }}>
+      <span style={{ fontSize: 11, color: "#8a94a2" }}>{label}</span>
+      <input
+        ref={ref}
+        type="number"
+        step={step}
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          const n = Number(e.target.value);
+          if (e.target.value.trim() !== "" && Number.isFinite(n)) onChange(n);
+        }}
+        onBlur={() => setText(String(value))}
+        style={fusionAdjustInput}
+      />
+    </label>
   );
 }
 
@@ -2286,6 +2398,23 @@ const fusionBar: React.CSSProperties = {
 };
 const fusionNumInput: React.CSSProperties = {
   width: 52,
+  border: "1px solid #cdd5de",
+  borderRadius: 3,
+  fontSize: 11,
+  padding: "1px 4px",
+};
+const fusionAdjustRow: React.CSSProperties = {
+  flexBasis: "100%",
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: 4,
+  paddingTop: 4,
+  marginTop: 2,
+  borderTop: "1px dashed #cdd9e6",
+};
+const fusionAdjustInput: React.CSSProperties = {
+  width: 56,
   border: "1px solid #cdd5de",
   borderRadius: 3,
   fontSize: 11,

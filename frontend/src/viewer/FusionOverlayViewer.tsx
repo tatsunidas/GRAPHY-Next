@@ -21,6 +21,13 @@ import {
   type FusionSlice,
   type BackgroundSliceMeta,
 } from "./fusionEngine";
+import {
+  isZeroAdjust,
+  manualAdjustToTransform,
+  type ManualAdjust,
+  type Vec3,
+  type WorldTransform,
+} from "./regTransform";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
@@ -128,7 +135,9 @@ export function FusionImageViewer({
   opacity,
   windowCenter,
   windowWidth,
+  adjust,
   onAutoWL,
+  onSpatialChange,
   onLayoutChange,
 }: {
   instances: Instance[];
@@ -151,8 +160,16 @@ export function FusionImageViewer({
   /** オーバーレイ W/L の上書き（未指定/null なら DICOM 既定 or 自動 W/L）。 */
   windowCenter?: number | null;
   windowWidth?: number | null;
+  /**
+   * 手動位置合わせ（`fw/registration-design.md` R1）。moving（＝この前景）をどう動かすかの 6 パラメータ。
+   * **回転中心は前景ボリュームの中心**で、ここで幾何から算出する（UI に座標を組ませない）。
+   * 空間 Fusion（IOP/IPP あり）のときだけ効く。
+   */
+  adjust?: ManualAdjust | null;
   /** 実際に用いた既定 W/L（DICOM or 自動）を親へ通知（コントロールバーの初期値シード用）。 */
   onAutoWL?: (center: number, width: number) => void;
+  /** 空間 Fusion（実座標整合）で描けているかを親へ通知。false のとき手動位置合わせは効かない。 */
+  onSpatialChange?: (spatial: boolean) => void;
   onLayoutChange?: (layout: SeriesLayout) => void;
 }) {
   const imageIds = useMemo(
@@ -262,6 +279,8 @@ export function FusionImageViewer({
 
     computingRef.current = true;
     try {
+      // 手動位置合わせが使えるのは空間 Fusion のときだけ。UI が死んだコントロールを出さないよう通知する。
+      onSpatialChange?.(!!(fgSkeleton && bgMeta));
       if (fgSkeleton && bgMeta) {
         // ── 空間 Fusion: 前景を背景グリッドに trilinear リサンプリング ──
         const iop = fgSkeleton.iop;
@@ -277,23 +296,67 @@ export function FusionImageViewer({
           return d[0] * fRs[0] + d[1] * fRs[1] + d[2] * fRs[2];
         });
 
+        let minW = wPositions[0], maxW = wPositions[0];
+        for (const wp of wPositions) { if (wp < minW) minW = wp; if (wp > maxW) maxW = wp; }
+
+        // ── 手動位置合わせ（R1）: 回転中心＝前景ボリュームの中心を幾何から算出する ──
+        // UI は 6 つの数値しか持たない。座標を UI 側に組ませると実空間の意味が壊れるため
+        // （`fw/plugin-architecture.md` H4b の「幾何はプラグインに書かせない」と同じ方針）。
+        let xf: WorldTransform | null = null;
+        if (!isZeroAdjust(adjust)) {
+          const halfU = ((fgSkeleton.cols - 1) / 2) * fgSkeleton.pixelSpacingCol;
+          const halfV = ((fgSkeleton.rows - 1) / 2) * fgSkeleton.pixelSpacingRow;
+          const midW = (minW + maxW) / 2;
+          const fgCenter: Vec3 = [
+            fgIpp0[0] + halfU * fRr[0] + halfV * fRc[0] + midW * fRs[0],
+            fgIpp0[1] + halfU * fRr[1] + halfV * fRc[1] + midW * fRs[1],
+            fgIpp0[2] + halfU * fRr[2] + halfV * fRc[2] + midW * fRs[2],
+          ];
+          xf = manualAdjustToTransform(adjust, fgCenter);
+        }
+
+        // 背景スライス上の点を前景法線方向の位置 w に落とす（変換があれば通してから）。
+        const xp: Vec3 = [0, 0, 0];
+        const wOf = (x: number, y: number, z: number): number => {
+          let px = x, py = y, pz = z;
+          if (xf) { xf.mapPoint(px, py, pz, xp); px = xp[0]; py = xp[1]; pz = xp[2]; }
+          return (px - fgIpp0[0]) * fRs[0] + (py - fgIpp0[1]) * fRs[1] + (pz - fgIpp0[2]) * fRs[2];
+        };
+
         const bgIpp = bgMeta.ipp;
-        const bgToFg = [bgIpp[0] - fgIpp0[0], bgIpp[1] - fgIpp0[1], bgIpp[2] - fgIpp0[2]];
-        const w_center = bgToFg[0] * fRs[0] + bgToFg[1] * fRs[1] + bgToFg[2] * fRs[2];
+        const w_center = wOf(bgIpp[0], bgIpp[1], bgIpp[2]);
+
+        // 回転が入ると背景スライス内で w が一定でなくなるので、四隅の振れ幅 dev を許容幅に足す。
+        // **変換が無いときは dev=0** とし、従来の「IPP 1 点で判定」と完全に同じ挙動を保つ
+        // （非平行な背景スライスでの既存挙動を変えないため。厳密化は R3 以降で扱う）。
+        let dev = 0;
+        if (xf) {
+          const bRow = [bgMeta.iop[0], bgMeta.iop[1], bgMeta.iop[2]];
+          const bCol = [bgMeta.iop[3], bgMeta.iop[4], bgMeta.iop[5]];
+          const extU = (bgMeta.cols - 1) * bgMeta.pixelSpacingCol;
+          const extV = (bgMeta.rows - 1) * bgMeta.pixelSpacingRow;
+          for (const [u, v] of [[extU, 0], [0, extV], [extU, extV]]) {
+            const w = wOf(
+              bgIpp[0] + u * bRow[0] + v * bCol[0],
+              bgIpp[1] + u * bRow[1] + v * bCol[1],
+              bgIpp[2] + u * bRow[2] + v * bCol[2],
+            );
+            const d = Math.abs(w - w_center);
+            if (d > dev) dev = d;
+          }
+        }
 
         const sliceSpacing = sortedZ.length > 1 ? Math.abs(wPositions[1] - wPositions[0]) : 5;
 
         // 背景スライスが前景ボリュームの z 範囲外なら、その断面に前景は存在しない → 消去して終了。
         // （末端スライスへのクランプ描画で「実際にはない場所」にオーバーレイが残るのを防ぐ。）
-        let minW = wPositions[0], maxW = wPositions[0];
-        for (const wp of wPositions) { if (wp < minW) minW = wp; if (wp > maxW) maxW = wp; }
-        const margin = sliceSpacing / 2; // 末端スライスの厚み分だけ許容
+        const margin = sliceSpacing / 2 + dev; // 末端スライスの厚み分 ＋ 回転による振れ幅
         if (w_center < minW - margin || w_center > maxW + margin) {
           clearCanvas();
           return;
         }
 
-        const threshold = Math.max(sliceSpacing * 2, 10); // mm
+        const threshold = Math.max(sliceSpacing * 2, 10) + dev; // mm
         const neededZIndices: number[] = [];
         for (let i = 0; i < sortedZ.length; i++) {
           if (Math.abs(wPositions[i] - w_center) <= threshold) neededZIndices.push(i);
@@ -337,7 +400,7 @@ export function FusionImageViewer({
           }),
         };
 
-        const fusionPixels = computeFusionSlice(fgVolume, bgMeta);
+        const fusionPixels = computeFusionSlice(fgVolume, bgMeta, xf);
         const voiLut: AnyObj = metaData.get("voiLutModule", fgZStack[loadedSlices[0].zIdx] ?? "") ?? {};
         const { center, width } = resolveWL(voiLut, fusionPixels);
         drawValues(fusionPixels, bgCols, bgRows, center, width, activeLut);
@@ -369,7 +432,8 @@ export function FusionImageViewer({
         void runFusion();
       }
     }
-  }, [baseImageId, baseIndex, baseCount, fgDto, overlayC, overlayT, lut, windowCenter, windowWidth, onAutoWL, drawValues, clearCanvas]);
+  }, [baseImageId, baseIndex, baseCount, fgDto, overlayC, overlayT, lut, windowCenter, windowWidth,
+      adjust, onAutoWL, onSpatialChange, drawValues, clearCanvas]);
 
   useEffect(() => {
     void runFusion();
