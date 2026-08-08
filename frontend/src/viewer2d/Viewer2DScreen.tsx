@@ -17,6 +17,8 @@ import {
 import { SeriesViewer } from "../viewer/SeriesViewer";
 import { FusionImageViewer } from "../viewer/FusionOverlayViewer";
 import { ZERO_ADJUST, isZeroAdjust, type ManualAdjust } from "../viewer/regTransform";
+import { registrationToTransform, type RegistrationResult } from "../viewer/regResult";
+import { RegistrationPanel } from "./RegistrationPanel";
 import type { RenderOverlay } from "../viewer/Viewer2D";
 import { buildSeriesLayout, type SeriesLayout } from "../viewer/seriesLayout";
 import { LutDialog, ColorBar } from "../viewer/LutDialog";
@@ -1347,6 +1349,10 @@ function TileCell({
   const [fusionAdjust, setFusionAdjust] = useState<ManualAdjust>(ZERO_ADJUST);
   // 空間 Fusion（IOP/IPP あり）で描けているか。false のとき手動位置合わせは効かない。
   const [fusionSpatial, setFusionSpatial] = useState(true);
+  // 自動位置合わせ（R3）の結果。**手動の 6 値とは別に持つ**（設計 §12.1）。
+  // プレビューは composeTransforms(自動, 手動) で合成される。
+  const [fusionRegistration, setFusionRegistration] = useState<RegistrationResult | null>(null);
+  const [registrationOpen, setRegistrationOpen] = useState(false);
   // fusion が切り替わったら C/T / LUT / W/L / 位置合わせをリセット
   const prevFusionSeriesUid = useRef<string | null>(null);
   useEffect(() => {
@@ -1361,7 +1367,11 @@ function TileCell({
       setFusionWL(null);
       setFusionAutoWL(null);
       // 別シリーズの調整量を引きずらない（前のシリーズ向けのズレが黙って適用される事故を防ぐ）。
+      // 自動位置合わせの結果も同じ理由で必ず捨てる — こちらは「前のシリーズに対して
+      // 数十秒かけて求めた変換」なので、黙って残ると手動よりも気付きにくい。
       setFusionAdjust(ZERO_ADJUST);
+      setFusionRegistration(null);
+      setRegistrationOpen(false);
       setFusionSpatial(true);
     }
   }, [tile.fusion?.series.seriesInstanceUid]);
@@ -1381,6 +1391,13 @@ function TileCell({
 
   // Fusion オーバーレイ描画。base 画像の表示矩形(rect)・現在スライス(imageId/index)に重ねる。
   // useMemo で安定化（毎レンダ別関数だと Viewer2D 側の rect 初期計算 effect がループするため）。
+  // 自動結果 → 描画用の変換。結果が変わったときだけ作り直す（毎レンダ作ると
+  // FusionImageViewer の再計算が毎レンダ走る。§10 ① と同じ落とし穴）。
+  const registrationTransform = useMemo(
+    () => registrationToTransform(fusionRegistration),
+    [fusionRegistration],
+  );
+
   const renderFusionOverlay = useMemo<RenderOverlay | undefined>(() => {
     if (!tile.fusion) return undefined;
     const fusion = tile.fusion;
@@ -1401,12 +1418,14 @@ function TileCell({
         windowCenter={fusionWL?.center ?? null}
         windowWidth={fusionWL?.width ?? null}
         adjust={fusionAdjust}
+        registration={registrationTransform}
         onAutoWL={handleFusionAutoWL}
         onSpatialChange={setFusionSpatial}
         onLayoutChange={setFusionLayout}
       />
     );
-  }, [tile.fusion, mode, fusionC, fusionT, fusionLut, fusionWL, fusionAdjust, handleFusionAutoWL]);
+  }, [tile.fusion, mode, fusionC, fusionT, fusionLut, fusionWL, fusionAdjust,
+      registrationTransform, handleFusionAutoWL]);
 
   // ── タイルヘッダー DnD（タイル並び替え） ──
 
@@ -1607,7 +1626,27 @@ function TileCell({
           onWLChange={(center, width) => setFusionWL({ center, width })}
           onWLAuto={() => setFusionWL(null)}
           onAdjustChange={setFusionAdjust}
+          registered={!!fusionRegistration}
+          onOpenRegistration={() => setRegistrationOpen(true)}
           onRemove={() => onFusionChange(undefined)}
+        />
+      )}
+
+      {/* 自動位置合わせのパネル（設計 §12）。タイル内に絶対配置する。 */}
+      {registrationOpen && tile.fusion && (
+        <RegistrationPanel
+          mode={mode}
+          fixed={{
+            study: tile.study, series: tile.series, instances: tile.instances,
+            c: 0, t: 0,
+          }}
+          moving={{
+            study: tile.fusion.study, series: tile.fusion.series,
+            instances: tile.fusion.instances, c: fusionC, t: fusionT,
+          }}
+          result={fusionRegistration}
+          onResult={setFusionRegistration}
+          onClose={() => setRegistrationOpen(false)}
         />
       )}
     </div>
@@ -1629,6 +1668,8 @@ function FusionControlBar({
   wl,
   adjust,
   adjustEnabled,
+  registered,
+  onOpenRegistration,
   onOpacityChange,
   onCChange,
   onTChange,
@@ -1653,6 +1694,10 @@ function FusionControlBar({
   adjust: ManualAdjust;
   /** 空間 Fusion のときだけ位置合わせが効く。false ならコントロールを無効化する。 */
   adjustEnabled: boolean;
+  /** 自動位置合わせ（R3）の結果が適用されているか。行に表示を出すだけ。 */
+  registered: boolean;
+  /** 自動位置合わせのパネルを開く。 */
+  onOpenRegistration: () => void;
   onOpacityChange: (v: number) => void;
   onCChange: (v: number) => void;
   onTChange: (v: number) => void;
@@ -1863,6 +1908,18 @@ function FusionControlBar({
           >
             {t("viewer2d.fusion.adjust.reset")}
           </button>
+          <button
+            onClick={onOpenRegistration}
+            style={{ ...fusionAutoBtn, flex: "none", marginLeft: 6 }}
+            title={t("registration.openHint")}
+          >
+            {t("registration.open")}
+          </button>
+          {registered && (
+            <span style={{ fontSize: 10, color: "#2b6cb0", flex: "none", marginLeft: 4 }}>
+              {t("registration.applied")}
+            </span>
+          )}
           <span style={{ fontSize: 10, color: "#8a94a2", flex: "none", marginLeft: 6 }}>
             {t("viewer2d.fusion.adjust.hint")}
           </span>
