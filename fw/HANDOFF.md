@@ -757,10 +757,20 @@ GRAPHY-Next/
   - `viewer.fusionLut` (text, 既定 ""): デフォルト LUT 名（同上）。
 - i18n: `settings.sec.fusion` / `settings.field.fusionOpacity(.help)` / `settings.field.fusionLut(.help)` / `viewer2d.fusion.lut`。
 
-#### Fusion FW（将来課題）
-- 2D/3D **剛体（Rigid）位置合わせ**（6 DOF または 3 DOF 最適化）: 未実装。
-- 2D/3D **非剛体（Deformable）位置合わせ**（B-spline / demons 等）: 未実装。
-- 詳細は `~/.claude/.../memory/project_fusion_fw.md` 参照。
+#### Fusion FW（レジストレーション）
+- ✅ **R1 手動位置合わせ（2026-08-08）**: Fusion コントロールバーに「⊹ 位置調整」を追加。
+  実座標（mm・度）での平行移動・回転が即時プレビューされる。土台は
+  `computeFusionSlice(fg, bg, xf?)` の第 3 引数（省略時は従来と同一挙動）。
+  変換モデルは `frontend/src/viewer/regTransform.ts`（純関数・vitest 17 件）。
+  🔴 **実機目視は未了**（特に平行移動の符号の向き）。手順は設計書 §10「R1 の実装」。
+- 2D/3D **剛体（Rigid）位置合わせの自動最適化**（R3）: 未実装。
+- 2D/3D **非剛体（Deformable）位置合わせ**（R4）: 未実装。
+- 📐 **設計は [`fw/registration-design.md`](registration-design.md) が正本**（2026-08-08 起票）。
+  対象は PET-CT / PET-MR の骨盤・心臓。**GPU 前提にせず CPU で完結**、心臓 PET-MR は
+  シミュレーション（GNBP-3S）のみ。土台は `computeFusionSlice` に world→world 変換を
+  1 つ挟むこと（同 §2）。フェーズは R1〜R8（同 §10）。
+- ⚠️ 旧参照の `~/.claude/.../memory/project_fusion_fw.md` は**現在存在しない**
+  （メモリディレクトリごと無い）。上記設計書が後継。
 
 ### frontend 2D Viewer 画面（`frontend/src/viewer2d/Viewer2DScreen.tsx`）— Phase 1 のみ
 - **別 Electron ウィンドウ**で開く（`main.js` の `createViewerWindow` + ipc `graphy:open-viewer`、
@@ -793,7 +803,8 @@ GRAPHY-Next/
    - `viewer.fusionOpacity` / `viewer.fusionLut` を DnD 起動時に自動適用（現状は Settings に保存するのみ）。
    - base 回転時の `rect` 厳密化（現状は軸並行 BBox。回転対応は CSS transform 行列が必要）。
    - カラー(RGB)前景の非空間フォールバック対応。
-   - 2D/3D 剛体・非剛体位置合わせ（FW: `~/.claude/.../memory/project_fusion_fw.md` 参照）。
+   - 2D/3D 剛体・非剛体位置合わせ（設計: [`fw/registration-design.md`](registration-design.md)。
+     最初の一歩は R1 = `computeFusionSlice(fg, bg, xf?)` ＋ 手動オフセット）。
 
 ## 5. 重要な注意・既知の制限
 - **ブラウザ/Electron 実機での目視確認は未了の機能あり**（このセッションは build/tsc/backend test まで）。
