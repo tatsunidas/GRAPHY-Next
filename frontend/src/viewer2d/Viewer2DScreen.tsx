@@ -1372,6 +1372,13 @@ function TileCell({
   const dateLabel = tile.study.studyDate || "";
   const studyDesc = tile.study.studyDescription || "";
 
+  // 既定 W/L の受け取り。**useCallback で識別子を固定する**。
+  // renderFusionOverlay の戻り値（レンダプロップ）の内側で作ると `renderOverlay(ctx)` が
+  // 呼ばれるたびに別関数になり、FusionImageViewer 側の再計算が毎レンダ走る。
+  const handleFusionAutoWL = useCallback((center: number, width: number) => {
+    setFusionAutoWL((prev) => (prev && prev.center === center && prev.width === width ? prev : { center, width }));
+  }, []);
+
   // Fusion オーバーレイ描画。base 画像の表示矩形(rect)・現在スライス(imageId/index)に重ねる。
   // useMemo で安定化（毎レンダ別関数だと Viewer2D 側の rect 初期計算 effect がループするため）。
   const renderFusionOverlay = useMemo<RenderOverlay | undefined>(() => {
@@ -1394,14 +1401,12 @@ function TileCell({
         windowCenter={fusionWL?.center ?? null}
         windowWidth={fusionWL?.width ?? null}
         adjust={fusionAdjust}
-        onAutoWL={(center, width) =>
-          setFusionAutoWL((prev) => (prev && prev.center === center && prev.width === width ? prev : { center, width }))
-        }
+        onAutoWL={handleFusionAutoWL}
         onSpatialChange={setFusionSpatial}
         onLayoutChange={setFusionLayout}
       />
     );
-  }, [tile.fusion, mode, fusionC, fusionT, fusionLut, fusionWL, fusionAdjust]);
+  }, [tile.fusion, mode, fusionC, fusionT, fusionLut, fusionWL, fusionAdjust, handleFusionAutoWL]);
 
   // ── タイルヘッダー DnD（タイル並び替え） ──
 

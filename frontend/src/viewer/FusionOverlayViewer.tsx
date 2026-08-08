@@ -195,11 +195,32 @@ export function FusionImageViewer({
     return () => { cancelled = true; };
   }, [studyUid, seriesUid, fallback, mode]);
 
+  // 親から渡されるコールバックは ref 越しに呼ぶ（最新値を使いつつ、識別子を依存に載せない）。
+  // ⚠ このコンポーネントは `renderOverlay(ctx)` という**レンダプロップの戻り値**として生成される。
+  // 親がコールバックをその関数の内側で作っていると毎レンダ別関数になり、依存に載せた瞬間
+  // 「毎レンダ再計算 → その中で親へ setState → 再レンダ」の無限ループになる
+  // （実際に R1 で発生: Maximum update depth exceeded）。親の書き方に依存しないよう、
+  // ここで identity を断ち切る。
+  const onAutoWLRef = useRef(onAutoWL);
+  onAutoWLRef.current = onAutoWL;
+  const onSpatialChangeRef = useRef(onSpatialChange);
+  onSpatialChangeRef.current = onSpatialChange;
+  const onLayoutChangeRef = useRef(onLayoutChange);
+  onLayoutChangeRef.current = onLayoutChange;
+
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
   useEffect(() => {
-    onLayoutChange?.(layout);
-  }, [layout, onLayoutChange]);
+    onLayoutChangeRef.current?.(layout);
+  }, [layout]);
+
+  // 空間 Fusion 可否は**変化したときだけ**親へ通知する（毎回の再計算で setState を撃たない）。
+  const lastSpatialRef = useRef<boolean | null>(null);
+  const notifySpatial = useCallback((spatial: boolean) => {
+    if (lastSpatialRef.current === spatial) return;
+    lastSpatialRef.current = spatial;
+    onSpatialChangeRef.current?.(spatial);
+  }, []);
 
   // ── Canvas（base 矩形に重ねる単一キャンバス） ──────────────────
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -251,7 +272,7 @@ export function FusionImageViewer({
       } else {
         def = autoWindowLevel(values);
       }
-      onAutoWL?.(def.center, def.width);
+      onAutoWLRef.current?.(def.center, def.width);
       return def;
     };
     const currentLayout = layoutRef.current;
@@ -280,7 +301,7 @@ export function FusionImageViewer({
     computingRef.current = true;
     try {
       // 手動位置合わせが使えるのは空間 Fusion のときだけ。UI が死んだコントロールを出さないよう通知する。
-      onSpatialChange?.(!!(fgSkeleton && bgMeta));
+      notifySpatial(!!(fgSkeleton && bgMeta));
       if (fgSkeleton && bgMeta) {
         // ── 空間 Fusion: 前景を背景グリッドに trilinear リサンプリング ──
         const iop = fgSkeleton.iop;
@@ -432,8 +453,10 @@ export function FusionImageViewer({
         void runFusion();
       }
     }
+    // ⚠ 親のコールバック（onAutoWL / onSpatialChange）は**依存に入れない**。ref 経由で呼んでいる。
+    // 入れると、レンダプロップ内で毎レンダ生成される関数によって再計算が毎レンダ走る。
   }, [baseImageId, baseIndex, baseCount, fgDto, overlayC, overlayT, lut, windowCenter, windowWidth,
-      adjust, onAutoWL, onSpatialChange, drawValues, clearCanvas]);
+      adjust, notifySpatial, drawValues, clearCanvas]);
 
   useEffect(() => {
     void runFusion();

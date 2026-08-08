@@ -273,6 +273,17 @@ function computeImageRect(vp: Types.IStackViewport): ImageRect | null {
   }
 }
 
+/**
+ * 矩形の同値判定。`setImageRect` は毎回 `computeImageRect` の新しいオブジェクトを渡すため、
+ * これで弾かないと**値が同じでも再レンダが走る**（オーバーレイは rect を props で受けるので、
+ * その再レンダが Fusion 側の再計算まで波及しうる）。
+ */
+function sameRect(a: ImageRect | null, b: ImageRect | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.left === b.left && a.top === b.top && a.width === b.width && a.height === b.height;
+}
+
 export function Viewer2D({
   imageIds,
   imageIndex,
@@ -670,7 +681,10 @@ export function Viewer2D({
       const calibrated = Boolean(infoRef.current?.columnPixelSpacing);
       setScaleBar(computeScaleBar(vp, element, calibrated));
       // Fusion / プラグイン（H4a）のオーバーレイ位置追従。
-      if (renderOverlayRef.current || pluginOverlayRef.current) setImageRect(computeImageRect(vp));
+      if (renderOverlayRef.current || pluginOverlayRef.current) {
+        const next = computeImageRect(vp);
+        setImageRect((prev) => (sameRect(prev, next) ? prev : next));
+      }
       // リファレンスライン: 自分の面変化を他へ通知し、自分の描画も更新（pan/zoom/回転で追従）。
       if (!compact && !syncGroupId) {
         bumpReference();
@@ -988,7 +1002,10 @@ export function Viewer2D({
       return;
     }
     const vp = viewportRef.current;
-    if (vp) setImageRect(computeImageRect(vp));
+    if (vp) {
+      const next = computeImageRect(vp);
+      setImageRect((prev) => (sameRect(prev, next) ? prev : next));
+    }
   }, [renderOverlay, pluginOverlay]);
 
   // スタック（シリーズ・C/T）が変わったらプラグインオーバーレイは破棄する。
