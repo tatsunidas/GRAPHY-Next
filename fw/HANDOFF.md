@@ -778,7 +778,13 @@ GRAPHY-Next/
     ただし**手動位置合わせが入ったことで優先度が上がった**（ズレの原因が調整量か未追従か
     区別できなくなるため）。直し方は設計書 §10 ③。flip の追従も要検証。
   - 🧪 リサンプル結果での数値検証を追加: `frontend/src/viewer/fusionEngineTransform.test.ts`（5 件）。
-- 2D/3D **剛体（Rigid）位置合わせの自動最適化**（R3）: 未実装。
+- ✅ **R2 検証ファントム GNBP-2R（2026-08-08）**: `bench/make_phantom_2r.py` で
+  fixed / rigid / affine / deform / multimodal の 5 系列を生成（1 スタディ・約 5 分・約 92 MB）。
+  moving は**補間ではなく変換座標での解析評価**で作るので真値が厳密。採点は
+  `bench/score_registration.mjs`（アプリ非依存）。真値は `phantom/GNBP-2R_ground_truth.json`。
+  未位置合わせのベースラインは landmark TRE 平均 6.7〜15.1 mm で、**R3 はここから改善させる**。
+  詳細と設計からの逸脱（B-spline → 閉形式変位場ほか）は設計書 §10「R2 の実装」。
+- 2D/3D **剛体（Rigid）位置合わせの自動最適化**（R3）: 未実装。**土俵は R2 で用意済み**。
 - 2D/3D **非剛体（Deformable）位置合わせ**（R4）: 未実装。
 - 📐 **設計は [`fw/registration-design.md`](registration-design.md) が正本**（2026-08-08 起票）。
   対象は PET-CT / PET-MR の骨盤・心臓。**GPU 前提にせず CPU で完結**、心臓 PET-MR は
@@ -800,12 +806,11 @@ GRAPHY-Next/
     ヘッダ/シリーズ行の DnD はウィンドウ内（並び替え/Fusion）専用に簡素化。
 
 ## 4. 次にやること（優先度つき・未実装）
-0. 🟡 **レジストレーション R1 の実機目視の残り 3 点**（`registration-design.md` §10「R1 の実装」）。
-   2026-08-08 に PSMA whole-body PET/CT で開始し、**符号の向きと回転中心は確認済み**
-   （その過程で無限ループを 1 件修正。同 §10 ①）。残っているのは
-   「大きくずらすと範囲外でオーバーレイが消えること」「スライス送り・zoom/pan への追従」
-   「IOP/IPP の無いシリーズで無効化されること」。
-   併せて R2（検証ファントム GNBP-2R）を作れば、以後この種の確認は真値付きで機械化できる。
+0. 🟢 **レジストレーション R3（剛体エンジン）に着手できる状態**。R1（手動位置合わせ）は
+   実機確認済み、R2（検証ファントム GNBP-2R ＋ 採点ハーネス）は完了しており、
+   **未位置合わせのベースライン数値がある**ので改善を数値で示せる（`registration-design.md` §10）。
+   R1 の実機目視で 1 点だけ TODO が残っている: IOP/IPP の無いシリーズ（CR/DX 等）で
+   「位置調整」が無効化され理由が出ること（CR/DX を索引に入れる作業が要るため後回し）。
 0. **レポート機能 R6**（フェーズ2, `report-design.md` §8）: `StaffMember`ディレクトリ＋管理UI、
    `ReportTemplate`（定型文）＋管理UI。R1〜R5（データモデル・CRUD・SR/KO確定書き出し・編集ダイアログ一式・
    MainScreen ●/○表示・ReportManagerDialog）は実装・実機検証済み。
