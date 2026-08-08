@@ -762,7 +762,22 @@ GRAPHY-Next/
   実座標（mm・度）での平行移動・回転が即時プレビューされる。土台は
   `computeFusionSlice(fg, bg, xf?)` の第 3 引数（省略時は従来と同一挙動）。
   変換モデルは `frontend/src/viewer/regTransform.ts`（純関数・vitest 17 件）。
-  🔴 **実機目視は未了**（特に平行移動の符号の向き）。手順は設計書 §10「R1 の実装」。
+  🟡 **実機目視はほぼ完了**（2026-08-08、PSMA whole-body PET/CT）。符号の向き・回転中心・
+  範囲外での消去・スライス送り/zoom への追従まで確認済み。
+  🔴 **残り TODO 1 点**: IOP/IPP の無いシリーズ（CR/DX 等）で「位置調整」が無効化され
+  理由が出ること（CR/DX を索引に入れるところから必要なため後回し）。
+  手順と結果は設計書 §10「R1 の実装」。
+  - 🐛 **目視で見つけた無限ループを修正**（設計書 §10 ①）: 位置調整を動かすと
+    `Maximum update depth exceeded`。`renderOverlay` の**戻り値の内側**で作られていた
+    `onAutoWL` が毎レンダ別関数になり、`runFusion` が毎レンダ再実行 → R1 が足した
+    `onSpatialChange` の無条件 setState が自走していた。親コールバックを ref 化して
+    依存から外し、通知は変化時のみに。`Viewer2D` の `setImageRect` にも同値判定を追加。
+  - ℹ️ **「Rotate が Shift に見える」は仕様**（同 §10 ②）: 軸位で面内回転になるのは `rz` だけ。
+    `rx`/`ry` は面外傾斜なので 1 断面上では並進に見える。回転中心はボリューム中心のまま維持。
+  - ⚠️ **base 回転時にオーバーレイが追従しない**のは R1 以前からの既知の限界（下記「Fusion 改善」）。
+    ただし**手動位置合わせが入ったことで優先度が上がった**（ズレの原因が調整量か未追従か
+    区別できなくなるため）。直し方は設計書 §10 ③。flip の追従も要検証。
+  - 🧪 リサンプル結果での数値検証を追加: `frontend/src/viewer/fusionEngineTransform.test.ts`（5 件）。
 - 2D/3D **剛体（Rigid）位置合わせの自動最適化**（R3）: 未実装。
 - 2D/3D **非剛体（Deformable）位置合わせ**（R4）: 未実装。
 - 📐 **設計は [`fw/registration-design.md`](registration-design.md) が正本**（2026-08-08 起票）。
@@ -785,11 +800,11 @@ GRAPHY-Next/
     ヘッダ/シリーズ行の DnD はウィンドウ内（並び替え/Fusion）専用に簡素化。
 
 ## 4. 次にやること（優先度つき・未実装）
-0. 🔴 **レジストレーション R1 の実機目視**（`registration-design.md` §10「R1 の実装」に 5 項目）。
-   コードは main にマージ済みだが**画面での確認だけが残っている**。特に
-   **平行移動の符号の向き**は、pull-back（fixed→moving）の取り違えが
-   自動テストでは向きの定義そのものを固定しているだけなので、**実画面でしか発覚しない**。
-   `npm run dev-desktop` → PET/CT を Fusion → 「⊹ 位置調整」の X を動かす、が最短。
+0. 🟡 **レジストレーション R1 の実機目視の残り 3 点**（`registration-design.md` §10「R1 の実装」）。
+   2026-08-08 に PSMA whole-body PET/CT で開始し、**符号の向きと回転中心は確認済み**
+   （その過程で無限ループを 1 件修正。同 §10 ①）。残っているのは
+   「大きくずらすと範囲外でオーバーレイが消えること」「スライス送り・zoom/pan への追従」
+   「IOP/IPP の無いシリーズで無効化されること」。
    併せて R2（検証ファントム GNBP-2R）を作れば、以後この種の確認は真値付きで機械化できる。
 0. **レポート機能 R6**（フェーズ2, `report-design.md` §8）: `StaffMember`ディレクトリ＋管理UI、
    `ReportTemplate`（定型文）＋管理UI。R1〜R5（データモデル・CRUD・SR/KO確定書き出し・編集ダイアログ一式・
@@ -807,7 +822,11 @@ GRAPHY-Next/
 5. Enhanced 多フレーム（DimensionIndexValues/StackID/InStackPositionNumber、wadouri `frame=`）。
 6. **Fusion 改善**:
    - `viewer.fusionOpacity` / `viewer.fusionLut` を DnD 起動時に自動適用（現状は Settings に保存するのみ）。
-   - base 回転時の `rect` 厳密化（現状は軸並行 BBox。回転対応は CSS transform 行列が必要）。
+   - **base 回転時にオーバーレイが追従しない**（現状は軸並行 BBox。canvas に CSS transform が無い）。
+     2026-08-08 に実機で再確認。**手動位置合わせ（R1）が入って優先度が上がった** — 手で合わせて
+     いる最中に base を回すと、ズレが調整量由来か未追従由来か切り分けられない。
+     直し方は `registration-design.md` §10 ③（`OverlayRenderContext` に rotation/flip を載せ、
+     canvas 側を CSS transform で回す）。**flip の追従も要検証**（下記の記述は未確認）。
    - カラー(RGB)前景の非空間フォールバック対応。
    - 2D/3D 剛体・非剛体位置合わせ（設計: [`fw/registration-design.md`](registration-design.md)。
      最初の一歩は R1 = `computeFusionSlice(fg, bg, xf?)` ＋ 手動オフセット）。
