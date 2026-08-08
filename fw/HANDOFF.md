@@ -785,6 +785,12 @@ GRAPHY-Next/
     ヘッダ/シリーズ行の DnD はウィンドウ内（並び替え/Fusion）専用に簡素化。
 
 ## 4. 次にやること（優先度つき・未実装）
+0. 🔴 **レジストレーション R1 の実機目視**（`registration-design.md` §10「R1 の実装」に 5 項目）。
+   コードは main にマージ済みだが**画面での確認だけが残っている**。特に
+   **平行移動の符号の向き**は、pull-back（fixed→moving）の取り違えが
+   自動テストでは向きの定義そのものを固定しているだけなので、**実画面でしか発覚しない**。
+   `npm run dev-desktop` → PET/CT を Fusion → 「⊹ 位置調整」の X を動かす、が最短。
+   併せて R2（検証ファントム GNBP-2R）を作れば、以後この種の確認は真値付きで機械化できる。
 0. **レポート機能 R6**（フェーズ2, `report-design.md` §8）: `StaffMember`ディレクトリ＋管理UI、
    `ReportTemplate`（定型文）＋管理UI。R1〜R5（データモデル・CRUD・SR/KO確定書き出し・編集ダイアログ一式・
    MainScreen ●/○表示・ReportManagerDialog）は実装・実機検証済み。
