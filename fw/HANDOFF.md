@@ -784,7 +784,15 @@ GRAPHY-Next/
   `bench/score_registration.mjs`（アプリ非依存）。真値は `phantom/GNBP-2R_ground_truth.json`。
   未位置合わせのベースラインは landmark TRE 平均 6.7〜15.1 mm で、**R3 はここから改善させる**。
   詳細と設計からの逸脱（B-spline → 閉形式変位場ほか）は設計書 §10「R2 の実装」。
-- 2D/3D **剛体（Rigid）位置合わせの自動最適化**（R3）: 未実装。**土俵は R2 で用意済み**。
+- 🟡 **R3 剛体位置合わせの自動最適化（2026-08-08）**: エンジン・Worker・UI まで実装済み。
+  導線は「⊹ 位置調整」の行の **「詳細…」**（自動結果は手動 6 値と別に持ち、
+  `composeTransforms(自動, 手動)` で合成する）。GNBP-2R での実測は
+  **剛体 0.024mm/0.033°・マルチモーダル 0.271mm/0.184° で目標達成**
+  （`node bench/run_rigid_registration.mjs --series rigid,multimodal`）。
+  🔴 **実機目視が未了**。GNBP-2R は索引に取り込み済みなので、fixed と rigid を
+  Fusion して真値 `[7.3, −4.1, 11.6] mm` が出るか画面で確かめられる。
+  ⚠️ **非剛体（deform）に剛体を掛けると視野周縁では何もしないより悪くなる**
+  （変位 RMSE 12.13 → 24.49mm）。詳細は設計書 §10「R3 の実装」。
 - 2D/3D **非剛体（Deformable）位置合わせ**（R4）: 未実装。
 - 📐 **設計は [`fw/registration-design.md`](registration-design.md) が正本**（2026-08-08 起票）。
   対象は PET-CT / PET-MR の骨盤・心臓。**GPU 前提にせず CPU で完結**、心臓 PET-MR は
