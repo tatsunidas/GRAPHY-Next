@@ -1,12 +1,19 @@
 # 計測ハーネスの依存（npm install で取得）
 node_modules/
 
-# 生成した DICOM ファントム（約 575 MB・バイト単位で決定的なので再生成する）
+# 生成した DICOM ファントム（約 670 MB・バイト単位で決定的なので再生成する）
+# 真値 JSON（phantom/*_ground_truth.json / *_manifest.json）は追跡対象なので、
+# ここでは系列ディレクトリだけを無視する。`phantom/` ごと無視しないこと。
 phantom/GNBP-1A/
 phantom/GNBP-1B_64/
 phantom/GNBP-1B_128/
 phantom/GNBP-1B_256/
 phantom/GNBP-1B_512/
+phantom/GNBP-2R-fixed/
+phantom/GNBP-2R-rigid/
+phantom/GNBP-2R-affine/
+phantom/GNBP-2R-deform/
+phantom/GNBP-2R-multimodal/
 
 # 測定用の専用ワークツリーと、その standalone ランタイムデータ
 .build/

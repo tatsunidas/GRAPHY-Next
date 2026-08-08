@@ -1,0 +1,1394 @@
+{
+  "phantom": "GNBP-2R",
+  "version": "1.0",
+  "purpose": "registration accuracy (rigid / affine / deformable / multimodal) — analytic ground truth",
+  "content": "3D Shepp-Logan (see GNBP-1A_ground_truth.json for the ellipsoid table); no step wedge",
+  "direction_convention": "transform_fixed_to_moving maps a point of the FIXED series to the point of the MOVING series holding the same anatomy: q = T(p). This is the transform a registration must recover, and the one GRAPHY passes to computeFusionSlice as xf.",
+  "euler_convention": "R = Rz(rz) . Ry(ry) . Rx(rx), degrees, right-handed about patient LPS, about rotation_centre_mm; identical to mat4FromEulerDeg in frontend/src/viewer/regTransform.ts",
+  "acceptance_targets": {
+    "rigid_translation_error_mm": 0.5,
+    "rigid_rotation_error_deg": 0.2,
+    "deformable_displacement_rmse_mm": 1.0,
+    "jacobian_negative_fraction": 0.0,
+    "note": "from fw/registration-design.md §9.1/§9.4; revisit once R8 has measured numbers"
+  },
+  "series": {
+    "fixed": {
+      "series": "GNBP-2R-fixed",
+      "series_number": 1,
+      "kind": "identity",
+      "geometry": {
+        "rows": 256,
+        "columns": 256,
+        "slices": 176,
+        "pixel_spacing_mm": 1.0,
+        "slice_thickness_mm": 1.0
+      },
+      "transform_fixed_to_moving": {
+        "matrix_4x4_row_major": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "rotation_centre_mm": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "landmarks": [
+        {
+          "name": "outer skull",
+          "fixed_mm": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "moving_mm": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "name": "inner skull",
+          "fixed_mm": [
+            0.0,
+            -1.8399999999999999,
+            0.0
+          ],
+          "moving_mm": [
+            0.0,
+            -1.8399999999999999,
+            0.0
+          ]
+        },
+        {
+          "name": "right ventricle",
+          "fixed_mm": [
+            22.0,
+            0.0,
+            0.0
+          ],
+          "moving_mm": [
+            22.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "name": "left ventricle",
+          "fixed_mm": [
+            -22.0,
+            0.0,
+            0.0
+          ],
+          "moving_mm": [
+            -22.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "name": "upper mass",
+          "fixed_mm": [
+            0.0,
+            35.0,
+            -15.0
+          ],
+          "moving_mm": [
+            0.0,
+            35.0,
+            -15.0
+          ]
+        },
+        {
+          "name": "nodule A",
+          "fixed_mm": [
+            0.0,
+            10.0,
+            25.0
+          ],
+          "moving_mm": [
+            0.0,
+            10.0,
+            25.0
+          ]
+        },
+        {
+          "name": "nodule B",
+          "fixed_mm": [
+            0.0,
+            -10.0,
+            25.0
+          ],
+          "moving_mm": [
+            0.0,
+            -10.0,
+            25.0
+          ]
+        },
+        {
+          "name": "nodule C",
+          "fixed_mm": [
+            -8.0,
+            -60.5,
+            0.0
+          ],
+          "moving_mm": [
+            -8.0,
+            -60.5,
+            0.0
+          ]
+        },
+        {
+          "name": "nodule D",
+          "fixed_mm": [
+            0.0,
+            -60.6,
+            0.0
+          ],
+          "moving_mm": [
+            0.0,
+            -60.6,
+            0.0
+          ]
+        },
+        {
+          "name": "nodule E",
+          "fixed_mm": [
+            6.0,
+            -60.5,
+            0.0
+          ],
+          "moving_mm": [
+            6.0,
+            -60.5,
+            0.0
+          ]
+        }
+      ],
+      "displacement": {
+        "sampled_points": 45056,
+        "displacement_mm_mean": 0.0,
+        "displacement_mm_max": 0.0,
+        "displacement_mm_p95": 0.0
+      },
+      "series_md5": "a67bac27fa078ac69ce57a455e962a32",
+      "generator_self_check": [
+        {
+          "name": "nodule A",
+          "moving_mm": [
+            0.0,
+            10.0,
+            25.0
+          ],
+          "voxel": [
+            127,
+            137,
+            112
+          ],
+          "expected_hu": 159.99999999999994,
+          "measured_hu": 160.0,
+          "within_tolerance": true
+        },
+        {
+          "name": "nodule B",
+          "moving_mm": [
+            0.0,
+            -10.0,
+            25.0
+          ],
+          "voxel": [
+            127,
+            117,
+            112
+          ],
+          "expected_hu": 159.99999999999994,
+          "measured_hu": 160.0,
+          "within_tolerance": true
+        },
+        {
+          "name": "nodule C",
+          "moving_mm": [
+            -8.0,
+            -60.5,
+            0.0
+          ],
+          "voxel": [
+            119,
+            67,
+            87
+          ],
+          "expected_hu": 159.99999999999994,
+          "measured_hu": 160.0,
+          "within_tolerance": true
+        },
+        {
+          "name": "nodule D",
+          "moving_mm": [
+            0.0,
+            -60.6,
+            0.0
+          ],
+          "voxel": [
+            127,
+            67,
+            87
+          ],
+          "expected_hu": 159.99999999999994,
+          "measured_hu": 160.0,
+          "within_tolerance": true
+        },
+        {
+          "name": "nodule E",
+          "moving_mm": [
+            6.0,
+            -60.5,
+            0.0
+          ],
+          "voxel": [
+            133,
+            67,
+            87
+          ],
+          "expected_hu": 159.99999999999994,
+          "measured_hu": 160.0,
+          "within_tolerance": true
+        }
+      ]
+    },
+    "rigid": {
+      "series": "GNBP-2R-rigid",
+      "series_number": 2,
+      "kind": "rigid",
+      "geometry": {
+        "rows": 256,
+        "columns": 256,
+        "slices": 176,
+        "pixel_spacing_mm": 1.0,
+        "slice_thickness_mm": 1.0
+      },
+      "transform_fixed_to_moving": {
+        "matrix_4x4_row_major": [
+          0.994958084803264,
+          -0.09734469682045152,
+          -0.024133368715441778,
+          7.3,
+          0.09580356698215219,
+          0.9936854190159481,
+          -0.05840346384073574,
+          -4.1,
+          0.029666244085110757,
+          0.05579693572262031,
+          0.9980013105832318,
+          11.6,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "rotation_centre_mm": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "translation_mm": [
+          7.3,
+          -4.1,
+          11.6
+        ],
+        "euler_deg_rz_ry_rx_applied_as_Rz_Ry_Rx": [
+          3.2,
+          -1.7,
+          5.5
+        ]
+      },
+      "landmarks": [
+        {
+          "name": "outer skull",
+          "fixed_mm": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "moving_mm": [
+            7.3,
+            -4.1,
+            11.6
+          ]
+        },
+        {
+          "name": "inner skull",
+          "fixed_mm": [
+            0.0,
+            -1.8399999999999999,
+            0.0
+          ],
+          "moving_mm": [
+            7.479114242149631,
+            -5.9283811709893435,
+            11.497333638270378
+          ]
+        },
+        {
+          "name": "right ventricle",
+          "fixed_mm": [
+            22.0,
+            0.0,
+            0.0
+          ],
+          "moving_mm": [
+            29.18907786567181,
+            -1.9923215263926517,
+            12.252657369872436
+          ]
+        },
+        {
+          "name": "left ventricle",
+          "fixed_mm": [
+            -22.0,
+            0.0,
+            0.0
+          ],
+          "moving_mm": [
+            -14.589077865671808,
+            -6.207678473607348,
+            10.947342630127563
+          ]
+        },
+        {
+          "name": "upper mass",
+          "fixed_mm": [
+            0.0,
+            35.0,
+            -15.0
+          ],
+          "moving_mm": [
+            4.254936142015824,
+            31.555041623169217,
+            -1.4171269084567673
+          ]
+        },
+        {
+          "name": "nodule A",
+          "fixed_mm": [
+            0.0,
+            10.0,
+            25.0
+          ],
+          "moving_mm": [
+            5.72321881390944,
+            4.3767675941410875,
+            37.108002121807
+          ]
+        },
+        {
+          "name": "nodule B",
+          "fixed_mm": [
+            0.0,
+            -10.0,
+            25.0
+          ],
+          "moving_mm": [
+            7.670112750318471,
+            -15.496940786177875,
+            35.99206340735459
+          ]
+        },
+        {
+          "name": "nodule C",
+          "fixed_mm": [
+            -8.0,
+            -60.5,
+            0.0
+          ],
+          "moving_mm": [
+            5.229689479211205,
+            -64.98439638632208,
+            7.986955436100585
+          ]
+        },
+        {
+          "name": "nodule D",
+          "fixed_mm": [
+            0.0,
+            -60.6,
+            0.0
+          ],
+          "moving_mm": [
+            13.199088627319362,
+            -64.31733639236646,
+            8.21870569520921
+          ]
+        },
+        {
+          "name": "nodule E",
+          "fixed_mm": [
+            6.0,
+            -60.5,
+            0.0
+          ],
+          "moving_mm": [
+            19.159102666456903,
+            -63.64314644857195,
+            8.402282853292135
+          ]
+        }
+      ],
+      "displacement": {
+        "sampled_points": 45056,
+        "displacement_mm_mean": 18.262738501113475,
+        "displacement_mm_max": 27.453985816319996,
+        "displacement_mm_p95": 22.82390953706222
+      },
+      "series_md5": "53f43afd928d1f9e32b8ce5d2e84630d",
+      "generator_self_check": [
+        {
+          "name": "nodule A",
+          "moving_mm": [
+            5.72321881390944,
+            4.3767675941410875,
+            37.108002121807
+          ],
+          "voxel": [
+            133,
+            132,
+            125
+          ],
+          "expected_hu": 159.99999999999994,
+          "measured_hu": 160.0,
+          "within_tolerance": true
+        },
+        {
+          "name": "nodule B",
+          "moving_mm": [
+            7.670112750318471,
+            -15.496940786177875,
+            35.99206340735459
+          ],
+          "voxel": [
+            135,
+            112,
+            123
+          ],
+          "expected_hu": 159.99999999999994,
+          "measured_hu": 160.0,
+          "within_tolerance": true
+        },
+        {
+          "name": "nodule C",
+          "moving_mm": [
+            5.229689479211205,
+            -64.98439638632208,
+            7.986955436100585
+          ],
+          "voxel": [
+            133,
+            63,
+            95
+          ],
+          "expected_hu": 159.99999999999994,
+          "measured_hu": 160.0,
+          "within_tolerance": true
+        },
+        {
+          "name": "nodule D",
+          "moving_mm": [
+            13.199088627319362,
+            -64.31733639236646,
+            8.21870569520921
+          ],
+          "voxel": [
+            141,
+            63,
+            96
+          ],
+          "expected_hu": 159.99999999999994,
+          "measured_hu": 160.0,
+          "within_tolerance": true
+        },
+        {
+          "name": "nodule E",
+          "moving_mm": [
+            19.159102666456903,
+            -63.64314644857195,
+            8.402282853292135
+          ],
+          "voxel": [
+            147,
+            64,
+            96
+          ],
+          "expected_hu": 159.99999999999994,
+          "measured_hu": 160.0,
+          "within_tolerance": true
+        }
+      ]
+    },
+    "affine": {
+      "series": "GNBP-2R-affine",
+      "series_number": 3,
+      "kind": "affine",
+      "geometry": {
+        "rows": 256,
+        "columns": 256,
+        "slices": 176,
+        "pixel_spacing_mm": 1.0,
+        "slice_thickness_mm": 1.0
+      },
+      "transform_fixed_to_moving": {
+        "matrix_4x4_row_major": [
+          1.044622926166453,
+          0.10431545708829262,
+          0.04054870577339941,
+          -5.8,
+          -0.07093709473550447,
+          0.9667073516384728,
+          0.036671854038432795,
+          6.4,
+          -0.0551603892444708,
+          -0.042650663359338176,
+          1.0176139996940918,
+          -3.7,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "rotation_centre_mm": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "translation_mm": [
+          -5.8,
+          6.4,
+          -3.7
+        ],
+        "euler_deg_rz_ry_rx_applied_as_Rz_Ry_Rx": [
+          -2.4,
+          3.1,
+          -4.2
+        ],
+        "scale": [
+          1.05,
+          0.97,
+          1.02
+        ],
+        "shear_xy": 0.03,
+        "shear_xz": -0.02
+      },
+      "landmarks": [
+        {
+          "name": "outer skull",
+          "fixed_mm": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "moving_mm": [
+            -5.8,
+            6.4,
+            -3.7
+          ]
+        },
+        {
+          "name": "inner skull",
+          "fixed_mm": [
+            0.0,
+            -1.8399999999999999,
+            0.0
+          ],
+          "moving_mm": [
+            -5.991940441042458,
+            4.621258472985211,
+            -3.621522779418818
+          ]
+        },
+        {
+          "name": "right ventricle",
+          "fixed_mm": [
+            22.0,
+            0.0,
+            0.0
+          ],
+          "moving_mm": [
+            17.181704375661965,
+            4.839383915818902,
+            -4.913528563378358
+          ]
+        },
+        {
+          "name": "left ventricle",
+          "fixed_mm": [
+            -22.0,
+            0.0,
+            0.0
+          ],
+          "moving_mm": [
+            -28.781704375661967,
+            7.9606160841810985,
+            -2.4864714366216427
+          ]
+        },
+        {
+          "name": "upper mass",
+          "fixed_mm": [
+            0.0,
+            35.0,
+            -15.0
+          ],
+          "moving_mm": [
+            -2.7571895885107494,
+            39.68467949677006,
+            -20.456983212988213
+          ]
+        },
+        {
+          "name": "nodule A",
+          "fixed_mm": [
+            0.0,
+            10.0,
+            25.0
+          ],
+          "moving_mm": [
+            -3.7431277847820885,
+            16.983869867345547,
+            21.313843358758916
+          ]
+        },
+        {
+          "name": "nodule B",
+          "fixed_mm": [
+            0.0,
+            -10.0,
+            25.0
+          ],
+          "moving_mm": [
+            -5.829436926547941,
+            -2.3502771654239076,
+            22.166856625945677
+          ]
+        },
+        {
+          "name": "nodule C",
+          "fixed_mm": [
+            -8.0,
+            -60.5,
+            0.0
+          ],
+          "moving_mm": [
+            -20.46806856317333,
+            -51.51829801624357,
+            -0.6783517528042742
+          ]
+        },
+        {
+          "name": "nodule D",
+          "fixed_mm": [
+            0.0,
+            -60.6,
+            0.0
+          ],
+          "moving_mm": [
+            -12.121516699550533,
+            -52.182465509291454,
+            -1.1153698004241068
+          ]
+        },
+        {
+          "name": "nodule E",
+          "fixed_mm": [
+            6.0,
+            -60.5,
+            0.0
+          ],
+          "moving_mm": [
+            -5.843347596842985,
+            -52.51141734254063,
+            -1.4505972022268656
+          ]
+        }
+      ],
+      "displacement": {
+        "sampled_points": 45056,
+        "displacement_mm_mean": 14.33205641882148,
+        "displacement_mm_max": 33.56930302769632,
+        "displacement_mm_p95": 25.8678160974058
+      },
+      "series_md5": "a34a21b9c684b33a523a6b1ef069323b",
+      "generator_self_check": [
+        {
+          "name": "nodule A",
+          "moving_mm": [
+            -3.7431277847820885,
+            16.983869867345547,
+            21.313843358758916
+          ],
+          "voxel": [
+            124,
+            144,
+            109
+          ],
+          "expected_hu": 159.99999999999994,
+          "measured_hu": 160.0,
+          "within_tolerance": true
+        },
+        {
+          "name": "nodule B",
+          "moving_mm": [
+            -5.829436926547941,
+            -2.3502771654239076,
+            22.166856625945677
+          ],
+          "voxel": [
+            122,
+            125,
+            110
+          ],
+          "expected_hu": 159.99999999999994,
+          "measured_hu": 160.0,
+          "within_tolerance": true
+        },
+        {
+          "name": "nodule C",
+          "moving_mm": [
+            -20.46806856317333,
+            -51.51829801624357,
+            -0.6783517528042742
+          ],
+          "voxel": [
+            107,
+            76,
+            87
+          ],
+          "expected_hu": 159.99999999999994,
+          "measured_hu": 160.0,
+          "within_tolerance": true
+        },
+        {
+          "name": "nodule D",
+          "moving_mm": [
+            -12.121516699550533,
+            -52.182465509291454,
+            -1.1153698004241068
+          ],
+          "voxel": [
+            115,
+            75,
+            86
+          ],
+          "expected_hu": 159.99999999999994,
+          "measured_hu": 160.0,
+          "within_tolerance": true
+        },
+        {
+          "name": "nodule E",
+          "moving_mm": [
+            -5.843347596842985,
+            -52.51141734254063,
+            -1.4505972022268656
+          ],
+          "voxel": [
+            122,
+            75,
+            86
+          ],
+          "expected_hu": 159.99999999999994,
+          "measured_hu": 160.0,
+          "within_tolerance": true
+        }
+      ]
+    },
+    "deform": {
+      "series": "GNBP-2R-deform",
+      "series_number": 4,
+      "kind": "deformable",
+      "geometry": {
+        "rows": 256,
+        "columns": 256,
+        "slices": 176,
+        "pixel_spacing_mm": 1.0,
+        "slice_thickness_mm": 1.0
+      },
+      "transform_fixed_to_moving": {
+        "matrix_4x4_row_major": [
+          0.9987514790366167,
+          -0.045997744361444645,
+          -0.019485652050420063,
+          3.5,
+          0.04535303927632665,
+          0.9984477975594931,
+          -0.03232796586544891,
+          -2.6,
+          0.020942419883356957,
+          0.03140387017959481,
+          0.999287352060043,
+          4.9,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "rotation_centre_mm": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "translation_mm": [
+          3.5,
+          -2.6,
+          4.9
+        ],
+        "euler_deg_rz_ry_rx_applied_as_Rz_Ry_Rx": [
+          1.8,
+          -1.2,
+          2.6
+        ],
+        "deformation": {
+          "form": "u_x = Ax sin(k y) cos(k z); u_y = Ay sin(k z) cos(k x); u_z = Az sin(k x) cos(k y)",
+          "applied": "after the rigid part: T(p) = M p + u(M p)",
+          "k_per_mm": 0.03490658503988659,
+          "wavelength_mm": 180.0,
+          "amplitude_mm": [
+            9.0,
+            7.0,
+            11.0
+          ]
+        }
+      },
+      "landmarks": [
+        {
+          "name": "outer skull",
+          "fixed_mm": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "moving_mm": [
+            2.6962094565185217,
+            -1.4174145164097032,
+            6.235045555434343
+          ]
+        },
+        {
+          "name": "inner skull",
+          "fixed_mm": [
+            0.0,
+            -1.8399999999999999,
+            0.0
+          ],
+          "moving_mm": [
+            2.2160185763871914,
+            -3.268799278109676,
+            6.198595686944666
+          ]
+        },
+        {
+          "name": "right ventricle",
+          "fixed_mm": [
+            22.0,
+            0.0,
+            0.0
+          ],
+          "moving_mm": [
+            24.978220957768176,
+            -0.7817349545860007,
+            13.889341469819103
+          ]
+        },
+        {
+          "name": "left ventricle",
+          "fixed_mm": [
+            -22.0,
+            0.0,
+            0.0
+          ],
+          "moving_mm": [
+            -19.58632799355433,
+            -2.73431276741794,
+            -2.1202030556630334
+          ]
+        },
+        {
+          "name": "upper mass",
+          "fixed_mm": [
+            0.0,
+            35.0,
+            -15.0
+          ],
+          "moving_mm": [
+            9.982008533584217,
+            30.6760236816665,
+            -8.645155779979612
+          ]
+        },
+        {
+          "name": "nodule A",
+          "fixed_mm": [
+            0.0,
+            10.0,
+            25.0
+          ],
+          "moving_mm": [
+            3.5646604771667456,
+            12.638138813584264,
+            31.14948183011671
+          ]
+        },
+        {
+          "name": "nodule B",
+          "fixed_mm": [
+            0.0,
+            -10.0,
+            25.0
+          ],
+          "moving_mm": [
+            1.3921974893488733,
+            -7.428043604805417,
+            30.755624727268472
+          ]
+        },
+        {
+          "name": "nodule C",
+          "fixed_mm": [
+            -8.0,
+            -60.5,
+            0.0
+          ],
+          "moving_mm": [
+            -8.884350285404283,
+            -62.67915292708001,
+            3.224383445029605
+          ]
+        },
+        {
+          "name": "nodule D",
+          "fixed_mm": [
+            0.0,
+            -60.6,
+            0.0
+          ],
+          "moving_mm": [
+            -0.9343797928614492,
+            -62.39251841156355,
+            1.582096731186657
+          ]
+        },
+        {
+          "name": "nodule E",
+          "fixed_mm": [
+            6.0,
+            -60.5,
+            0.0
+          ],
+          "moving_mm": [
+            4.988997011743337,
+            -62.040642046386026,
+            0.47370590329392925
+          ]
+        }
+      ],
+      "displacement": {
+        "sampled_points": 45056,
+        "displacement_mm_mean": 11.121868458053857,
+        "displacement_mm_max": 21.439726029335006,
+        "displacement_mm_p95": 17.467542743658136,
+        "jacobian_det_min": 0.9397526469732792,
+        "jacobian_det_max": 1.0752224341460974,
+        "jacobian_negative_fraction": 0.0,
+        "inverse_residual_mm_max": 1.0437686807297574e-10
+      },
+      "series_md5": "883342f536fb9381c99c89567ba2cd87",
+      "generator_self_check": [
+        {
+          "name": "nodule A",
+          "moving_mm": [
+            3.5646604771667456,
+            12.638138813584264,
+            31.14948183011671
+          ],
+          "voxel": [
+            131,
+            140,
+            119
+          ],
+          "expected_hu": 159.99999999999994,
+          "measured_hu": 160.0,
+          "within_tolerance": true
+        },
+        {
+          "name": "nodule B",
+          "moving_mm": [
+            1.3921974893488733,
+            -7.428043604805417,
+            30.755624727268472
+          ],
+          "voxel": [
+            129,
+            120,
+            118
+          ],
+          "expected_hu": 159.99999999999994,
+          "measured_hu": 160.0,
+          "within_tolerance": true
+        },
+        {
+          "name": "nodule C",
+          "moving_mm": [
+            -8.884350285404283,
+            -62.67915292708001,
+            3.224383445029605
+          ],
+          "voxel": [
+            119,
+            65,
+            91
+          ],
+          "expected_hu": 159.99999999999994,
+          "measured_hu": 160.0,
+          "within_tolerance": true
+        },
+        {
+          "name": "nodule D",
+          "moving_mm": [
+            -0.9343797928614492,
+            -62.39251841156355,
+            1.582096731186657
+          ],
+          "voxel": [
+            127,
+            65,
+            89
+          ],
+          "expected_hu": 159.99999999999994,
+          "measured_hu": 160.0,
+          "within_tolerance": true
+        },
+        {
+          "name": "nodule E",
+          "moving_mm": [
+            4.988997011743337,
+            -62.040642046386026,
+            0.47370590329392925
+          ],
+          "voxel": [
+            132,
+            65,
+            88
+          ],
+          "expected_hu": 159.99999999999994,
+          "measured_hu": 160.0,
+          "within_tolerance": true
+        }
+      ]
+    },
+    "multimodal": {
+      "series": "GNBP-2R-multimodal",
+      "series_number": 5,
+      "kind": "rigid + non-monotonic intensity + PSF + Poisson",
+      "geometry": {
+        "rows": 128,
+        "columns": 128,
+        "slices": 88,
+        "pixel_spacing_mm": 2.0,
+        "slice_thickness_mm": 2.0
+      },
+      "transform_fixed_to_moving": {
+        "matrix_4x4_row_major": [
+          0.9952174164493804,
+          0.06624582634186961,
+          0.07178986340774979,
+          -6.2,
+          -0.06261377260094975,
+          0.9966970190025396,
+          -0.0517162236839464,
+          8.7,
+          -0.0749787268263277,
+          0.0469738523407893,
+          0.9960781333408383,
+          -9.4,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "rotation_centre_mm": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "translation_mm": [
+          -6.2,
+          8.7,
+          -9.4
+        ],
+        "euler_deg_rz_ry_rx_applied_as_Rz_Ry_Rx": [
+          2.7,
+          4.3,
+          -3.6
+        ]
+      },
+      "landmarks": [
+        {
+          "name": "outer skull",
+          "fixed_mm": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "moving_mm": [
+            -6.2,
+            8.7,
+            -9.4
+          ]
+        },
+        {
+          "name": "inner skull",
+          "fixed_mm": [
+            0.0,
+            -1.8399999999999999,
+            0.0
+          ],
+          "moving_mm": [
+            -6.32189232046904,
+            6.866077485035326,
+            -9.486431888307052
+          ]
+        },
+        {
+          "name": "right ventricle",
+          "fixed_mm": [
+            22.0,
+            0.0,
+            0.0
+          ],
+          "moving_mm": [
+            15.69478316188637,
+            7.322497002779105,
+            -11.04953199017921
+          ]
+        },
+        {
+          "name": "left ventricle",
+          "fixed_mm": [
+            -22.0,
+            0.0,
+            0.0
+          ],
+          "moving_mm": [
+            -28.09478316188637,
+            10.077502997220893,
+            -7.750468009820791
+          ]
+        },
+        {
+          "name": "upper mass",
+          "fixed_mm": [
+            0.0,
+            35.0,
+            -15.0
+          ],
+          "moving_mm": [
+            -4.95824402915081,
+            44.360139020348086,
+            -22.69708716818495
+          ]
+        },
+        {
+          "name": "nodule A",
+          "fixed_mm": [
+            0.0,
+            10.0,
+            25.0
+          ],
+          "moving_mm": [
+            -3.7427951513875595,
+            17.374064597926736,
+            15.971691856928851
+          ]
+        },
+        {
+          "name": "nodule B",
+          "fixed_mm": [
+            0.0,
+            -10.0,
+            25.0
+          ],
+          "moving_mm": [
+            -5.067711678224952,
+            -2.559875782124056,
+            15.032214810113063
+          ]
+        },
+        {
+          "name": "nodule C",
+          "fixed_mm": [
+            -8.0,
+            -60.5,
+            0.0
+          ],
+          "moving_mm": [
+            -18.169611825278153,
+            -51.09925946884604,
+            -11.642088252007131
+          ]
+        },
+        {
+          "name": "nodule D",
+          "fixed_mm": [
+            0.0,
+            -60.6,
+            0.0
+          ],
+          "moving_mm": [
+            -10.214497076317299,
+            -51.699839351553905,
+            -12.246615451851833
+          ]
+        },
+        {
+          "name": "nodule E",
+          "fixed_mm": [
+            6.0,
+            -60.5,
+            0.0
+          ],
+          "moving_mm": [
+            -4.236567994986829,
+            -51.97585228525935,
+            -12.69179042757572
+          ]
+        }
+      ],
+      "displacement": {
+        "sampled_points": 45056,
+        "displacement_mm_mean": 17.134452870450883,
+        "displacement_mm_max": 32.856522529211475,
+        "displacement_mm_p95": 26.110484080650995
+      },
+      "series_md5": "c2ad865f77eab00e2a3163fc029f5008",
+      "intensity_map": {
+        "note": "non-monotonic HU -> pseudo-activity; bone is low, nodules are highest",
+        "hu_knots": [
+          -1000.0,
+          -200.0,
+          0.0,
+          40.0,
+          160.0,
+          400.0,
+          1000.0
+        ],
+        "activity_knots": [
+          0.0,
+          90.0,
+          550.0,
+          700.0,
+          1200.0,
+          420.0,
+          140.0
+        ],
+        "psf_fwhm_mm": 5.0,
+        "poisson_scale": 0.02,
+        "noise_seed": 20260808,
+        "encoding": "written as CT (HU-encoded) — PT/MR series arrive with GNBP-3S"
+      },
+      "generator_self_check": [
+        {
+          "name": "nodule A",
+          "moving_mm": [
+            -3.7427951513875595,
+            17.374064597926736,
+            15.971691856928851
+          ],
+          "voxel": [
+            62,
+            72,
+            51
+          ],
+          "expected_hu": 159.99999999999994,
+          "measured_hu": 1000.0,
+          "within_tolerance": null
+        },
+        {
+          "name": "nodule B",
+          "moving_mm": [
+            -5.067711678224952,
+            -2.559875782124056,
+            15.032214810113063
+          ],
+          "voxel": [
+            61,
+            62,
+            51
+          ],
+          "expected_hu": 159.99999999999994,
+          "measured_hu": 1250.0,
+          "within_tolerance": null
+        },
+        {
+          "name": "nodule C",
+          "moving_mm": [
+            -18.169611825278153,
+            -51.09925946884604,
+            -11.642088252007131
+          ],
+          "voxel": [
+            54,
+            38,
+            38
+          ],
+          "expected_hu": 159.99999999999994,
+          "measured_hu": 950.0,
+          "within_tolerance": null
+        },
+        {
+          "name": "nodule D",
+          "moving_mm": [
+            -10.214497076317299,
+            -51.699839351553905,
+            -12.246615451851833
+          ],
+          "voxel": [
+            58,
+            38,
+            37
+          ],
+          "expected_hu": 159.99999999999994,
+          "measured_hu": 800.0,
+          "within_tolerance": null
+        },
+        {
+          "name": "nodule E",
+          "moving_mm": [
+            -4.236567994986829,
+            -51.97585228525935,
+            -12.69179042757572
+          ],
+          "voxel": [
+            61,
+            38,
+            37
+          ],
+          "expected_hu": 159.99999999999994,
+          "measured_hu": 750.0,
+          "within_tolerance": null
+        }
+      ]
+    }
+  }
+}

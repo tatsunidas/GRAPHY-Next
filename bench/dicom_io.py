@@ -53,6 +53,7 @@ def write_series(
     z_origin_mm: float = 0.0,
     body_part: str = "",
     protocol_name: str = "",
+    frame_of_reference_key: str | None = None,
 ) -> None:
     """Write `volume` (n_slices, rows, cols) of HU values as a CT series.
 
@@ -62,6 +63,13 @@ def write_series(
     while building content about the centre silently offsets every z in the
     truth table by half the stack length, which would invalidate any
     position-dependent accuracy measurement.
+
+    `frame_of_reference_key` overrides the key the FrameOfReferenceUID is derived
+    from. It defaults to `study_key`, i.e. every series of a study shares one
+    frame of reference, which is what GNBP-1 relies on. GNBP-2R needs to vary it
+    independently: a registration engine branches on whether the two series claim
+    the same frame of reference, and that branch has to be exercised by data that
+    keeps the series in one study while declaring different frames.
     """
     if volume.ndim != 3:
         raise ValueError("volume must be 3-D (slices, rows, columns)")
@@ -69,7 +77,7 @@ def write_series(
     n_slices, rows, columns = volume.shape
     study_uid = deterministic_uid("study", study_key)
     series_uid = deterministic_uid("series", uid_key)
-    frame_uid = deterministic_uid("for", study_key)
+    frame_uid = deterministic_uid("for", frame_of_reference_key or study_key)
 
     os.makedirs(out_dir, exist_ok=True)
 
