@@ -28,8 +28,13 @@ export interface VolumePayload {
   sliceStep: [number, number, number];
 }
 
+/** 変換の種類。UI の「変換」選択に対応する。 */
+export type RegistrationMode = "rigid" | "deformable" | "rigid+deformable";
+
 export interface RigidRequest {
   type: "rigid";
+  /** 既定は "rigid"（R3 と同じ挙動）。 */
+  mode?: RegistrationMode;
   requestId: number;
   fixed: VolumePayload;
   moving: VolumePayload;
@@ -61,10 +66,23 @@ export interface RegProgressMessage {
   metric: number;
 }
 
+/** 変位場（非剛体の結果）。制御格子上の変位で、`displacements` は x,y,z の順。 */
+export interface DvfPayload {
+  displacements: Float32Array;
+  dims: [number, number, number];
+  origin: [number, number, number];
+  spacing: [number, number, number];
+  /** 品質指標。負値率 > 0 は折り返しで、物理的にありえない（設計 §9.4）。 */
+  jacobian: { min: number; max: number; negativeFraction: number };
+  maxDisplacementMm: number;
+}
+
 export interface RegDoneMessage {
   type: "done";
   requestId: number;
-  /** fixed world → moving world の 4×4（row-major）。 */
+  /** 非剛体を実行した場合の変位場。剛体のみなら undefined。 */
+  dvf?: DvfPayload;
+  /** 剛体の 4×4（fixed world → moving world, row-major）。剛体を実行していなければ恒等。 */
   matrix: number[];
   center: [number, number, number];
   translationMm: [number, number, number];

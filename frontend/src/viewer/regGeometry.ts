@@ -185,6 +185,27 @@ export function sampleWorld(vol: RegVolume, x: number, y: number, z: number): nu
   return sampleTrilinear(vol, i, j, k);
 }
 
+/**
+ * world 座標でのサンプリング。**範囲外は端の値で外挿する**（clamp）。
+ *
+ * <p>`sampleWorld` が `NaN` を返すのは「視野の外」を類似度から除くためだが、
+ * **リサンプルして別の格子を作る用途では NaN も 0 も使えない**。埋め値が
+ * 元データの背景値（CT なら −1000）と違うと、そこに**元の画像には無いエッジ**が
+ * できる。記述子はエッジに強く反応するので、境界一周に偽の構造が生まれ、
+ * 非剛体がそれを合わせにいって外周が歪む（実際に多段化したときに発生した）。
+ */
+export function sampleWorldClamped(vol: RegVolume, x: number, y: number, z: number): number {
+  const m = vol.worldToIndex;
+  const [nx, ny, nz] = vol.dims;
+  let i = m[0] * x + m[1] * y + m[2] * z + m[3];
+  let j = m[4] * x + m[5] * y + m[6] * z + m[7];
+  let k = m[8] * x + m[9] * y + m[10] * z + m[11];
+  if (i < 0) i = 0; else if (i > nx - 1) i = nx - 1;
+  if (j < 0) j = 0; else if (j > ny - 1) j = ny - 1;
+  if (k < 0) k = 0; else if (k > nz - 1) k = nz - 1;
+  return sampleTrilinear(vol, i, j, k);
+}
+
 // ── 平滑化 ───────────────────────────────────────────────────────────────
 
 /**

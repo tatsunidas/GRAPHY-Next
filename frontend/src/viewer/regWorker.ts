@@ -24,8 +24,9 @@
  * 本ファイルの `abort` 処理は、実行前・実行後に届いた要求のためのもの。
  */
 import { registerRigid } from "./regCore";
+import { registerDeformable } from "./regDeformable";
 import { makeVolume } from "./regGeometry";
-import type { RegWorkerRequest, RegWorkerResponse, VolumePayload } from "./regProtocol";
+import type { DvfPayload, RegDoneMessage, RegWorkerRequest, RegWorkerResponse, VolumePayload } from "./regProtocol";
 import type { Vec3 } from "./regTransform";
 
 const aborted = new Set<number>();
@@ -50,7 +51,15 @@ self.onmessage = (ev: MessageEvent<RegWorkerRequest>) => {
   }
   try {
     const started = Date.now();
-    const result = registerRigid(toVolume(req.fixed), toVolume(req.moving), {
+    const mode = req.mode ?? "rigid";
+    const doRigid = mode === "rigid" || mode === "rigid+deformable";
+    const doDeform = mode === "deformable" || mode === "rigid+deformable";
+    const fixedVol = toVolume(req.fixed);
+    const movingVol = toVolume(req.moving);
+    // 剛体と非剛体で進捗を分ける（非剛体だけなら全部を非剛体に割り当てる）。
+    const rigidSpan = doRigid ? (doDeform ? 0.6 : 1) : 0;
+
+    const result = doRigid ? registerRigid(fixedVol, movingVol, {
       metric: req.metric,
       sameModality: req.sameModality,
       sameFrameOfReference: req.sameFrameOfReference,
@@ -64,7 +73,7 @@ self.onmessage = (ev: MessageEvent<RegWorkerRequest>) => {
         const msg: RegWorkerResponse = {
           type: "progress",
           requestId: req.requestId,
-          fraction: p.fraction,
+          fraction: p.fraction * rigidSpan,
           level: p.level,
           levelCount: p.levelCount,
           iteration: p.iteration,
@@ -72,24 +81,56 @@ self.onmessage = (ev: MessageEvent<RegWorkerRequest>) => {
         };
         self.postMessage(msg);
       },
-    });
+    }) : null;
 
-    const done: RegWorkerResponse = {
+    let dvf: DvfPayload | undefined;
+    if (doDeform && !aborted.has(req.requestId)) {
+      const d = registerDeformable(fixedVol, movingVol, result?.transform ?? null, {
+        shouldAbort: () => aborted.has(req.requestId),
+        onProgress: (f) => {
+          const msg: RegWorkerResponse = {
+            type: "progress",
+            requestId: req.requestId,
+            fraction: rigidSpan + f * (1 - rigidSpan),
+            level: 0,
+            levelCount: 1,
+            iteration: 0,
+            metric: NaN,
+          };
+          self.postMessage(msg);
+        },
+      });
+      if (!d.aborted) {
+        dvf = {
+          displacements: d.transform.displacements,
+          dims: [d.transform.dims[0], d.transform.dims[1], d.transform.dims[2]],
+          origin: [d.transform.origin[0], d.transform.origin[1], d.transform.origin[2]],
+          spacing: [d.transform.spacing[0], d.transform.spacing[1], d.transform.spacing[2]],
+          jacobian: d.jacobian,
+          maxDisplacementMm: d.maxDisplacementMm,
+        };
+      }
+    }
+
+    const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+    const done: RegDoneMessage = {
       type: "done",
       requestId: req.requestId,
-      matrix: Array.from(result.transform.matrix),
-      center: result.center as [number, number, number],
-      translationMm: result.parameters.translationMm as [number, number, number],
-      eulerDeg: result.parameters.eulerDeg as [number, number, number],
-      metric: result.metric,
-      metricValue: result.metricValue,
-      levels: result.levels,
-      seed: result.seed,
-      aborted: result.aborted,
-      initialization: result.initialization,
+      dvf,
+      matrix: result ? Array.from(result.transform.matrix) : identity,
+      center: (result?.center ?? [0, 0, 0]) as [number, number, number],
+      translationMm: (result?.parameters.translationMm ?? [0, 0, 0]) as [number, number, number],
+      eulerDeg: (result?.parameters.eulerDeg ?? [0, 0, 0]) as [number, number, number],
+      metric: result?.metric ?? "ncc",
+      metricValue: result?.metricValue ?? NaN,
+      levels: result?.levels ?? [],
+      seed: result?.seed ?? 0,
+      aborted: result?.aborted ?? false,
+      initialization: result?.initialization ?? "identity-same-for",
       elapsedMs: Date.now() - started,
     };
-    self.postMessage(done);
+    // 変位場は Transferable で返す（コピーしない）。
+    self.postMessage(done, dvf ? { transfer: [dvf.displacements.buffer] } : undefined);
   } catch (e) {
     const msg: RegWorkerResponse = {
       type: "error",

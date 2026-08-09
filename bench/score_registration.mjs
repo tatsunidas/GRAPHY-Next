@@ -25,15 +25,22 @@
 //   { "matrix_4x4_row_major": [ ...16 numbers... ] }
 // or
 //   { "translation_mm": [x,y,z], "euler_deg": [rx,ry,rz] }
+// or, for a deformable estimate (R4), a displacement field on a regular grid:
+//   {
+//     "matrix_4x4_row_major": [...],        // optional rigid part, applied FIRST
+//     "displacement_field": {
+//       "dims": [nx, ny, nz],
+//       "origin_mm": [x, y, z],
+//       "spacing_mm": [sx, sy, sz],
+//       "displacements_mm": [ux0, uy0, uz0, ux1, ...]   // control-point order i fastest
+//     }
+//   }
 //
-// LIMITATION: estimates are linear (rigid/affine) only. Scoring the deformable
-// series with a linear estimate is still useful — it measures how much of the
-// misalignment a rigid answer can remove, i.e. the ceiling any rigid engine
-// faces on that case — but it cannot pass the deformable target, and a FAIL
-// there does not mean the engine is broken. A dense displacement-field input
-// arrives with R4, when the engine that produces one exists and its output
-// format is settled; inventing that format before there is a producer would
-// only guarantee a rewrite.
+// COMPOSITION ORDER: the displacement field is applied BEFORE the matrix, i.e.
+//   q = M . (p + u(p))
+// which is the order the engine produces (see regDeformable.ts "合成の順序").
+// Getting this backwards changes the answer by a second-order amount that a
+// measurement cannot distinguish, so it is stated here rather than inferred.
 
 import { readFileSync } from "node:fs";
 import { argv, exit } from "node:process";
@@ -144,9 +151,47 @@ function truthTransform(entry) {
   };
 }
 
+/** Trilinear sampling of a control-point displacement field (edge-clamped). */
+function makeFieldSampler(field) {
+  const [nx, ny, nz] = field.dims;
+  const o = field.origin_mm, sp = field.spacing_mm;
+  const d = field.displacements_mm;
+  if (d.length !== nx * ny * nz * 3) {
+    console.error(`displacement_field: ${d.length} values do not match dims ${nx}x${ny}x${nz}`);
+    exit(2);
+  }
+  return (p) => {
+    let gi = (p[0] - o[0]) / sp[0], gj = (p[1] - o[1]) / sp[1], gk = (p[2] - o[2]) / sp[2];
+    gi = Math.min(nx - 1, Math.max(0, gi));
+    gj = Math.min(ny - 1, Math.max(0, gj));
+    gk = Math.min(nz - 1, Math.max(0, gk));
+    const i0 = Math.floor(gi), j0 = Math.floor(gj), k0 = Math.floor(gk);
+    const i1 = Math.min(nx - 1, i0 + 1), j1 = Math.min(ny - 1, j0 + 1), k1 = Math.min(nz - 1, k0 + 1);
+    const fi = gi - i0, fj = gj - j0, fk = gk - k0;
+    const at = (i, j, k, c) => d[((k * ny + j) * nx + i) * 3 + c];
+    const out = [0, 0, 0];
+    for (let c = 0; c < 3; c++) {
+      const c00 = at(i0, j0, k0, c) + (at(i1, j0, k0, c) - at(i0, j0, k0, c)) * fi;
+      const c10 = at(i0, j1, k0, c) + (at(i1, j1, k0, c) - at(i0, j1, k0, c)) * fi;
+      const c01 = at(i0, j0, k1, c) + (at(i1, j0, k1, c) - at(i0, j0, k1, c)) * fi;
+      const c11 = at(i0, j1, k1, c) + (at(i1, j1, k1, c) - at(i0, j1, k1, c)) * fi;
+      const c0 = c00 + (c10 - c00) * fj;
+      const c1 = c01 + (c11 - c01) * fj;
+      out[c] = p[c] + c0 + (c1 - c0) * fk;
+    }
+    return out;
+  };
+}
+
 function loadEstimate(spec) {
   if (spec === "identity") return { label: "identity (no registration)", matrix: IDENTITY4 };
   const raw = JSON.parse(readFileSync(spec, "utf8"));
+  if (raw.displacement_field) {
+    const matrix = Array.isArray(raw.matrix_4x4_row_major) ? raw.matrix_4x4_row_major : IDENTITY4;
+    const field = makeFieldSampler(raw.displacement_field);
+    // 変位場を先、行列を後（上の COMPOSITION ORDER）。
+    return { label: spec, matrix, deformable: true, map: (p) => applyMatrix(matrix, field(p)) };
+  }
   if (Array.isArray(raw.matrix_4x4_row_major)) {
     if (raw.matrix_4x4_row_major.length !== 16) {
       console.error("matrix_4x4_row_major must have 16 elements");
@@ -175,7 +220,7 @@ function loadEstimate(spec) {
 
 function score(entry, estimate) {
   const truth = truthTransform(entry);
-  const est = (p) => applyMatrix(estimate.matrix, p);
+  const est = estimate.map ?? ((p) => applyMatrix(estimate.matrix, p));
 
   // Target registration error at the published landmarks.
   const tre = entry.landmarks.map((lm) => {
@@ -193,6 +238,13 @@ function score(entry, estimate) {
   const halfY = ((g.rows - 1) / 2) * g.pixel_spacing_mm;
   const halfZ = ((g.slices - 1) / 2) * g.slice_thickness_mm;
   const errs = [];
+  const inside = [];   // 評価領域（＝ファントムの実体）内だけ
+  const region = truthDoc.evaluation_region;
+  const inRegion = (p) => {
+    if (!region || region.kind !== "ellipsoid") return true;
+    const c = region.centre_mm, a = region.semi_axes_mm;
+    return ((p[0] - c[0]) / a[0]) ** 2 + ((p[1] - c[1]) / a[1]) ** 2 + ((p[2] - c[2]) / a[2]) ** 2 <= 1;
+  };
   const STEP = 16;
   for (let i = 0; i <= STEP; i++) {
     for (let j = 0; j <= STEP; j++) {
@@ -203,12 +255,16 @@ function score(entry, estimate) {
           -halfZ + (2 * halfZ * k) / STEP,
         ];
         const a = truth(p), b = est(p);
-        errs.push(norm([b[0] - a[0], b[1] - a[1], b[2] - a[2]]));
+        const e = norm([b[0] - a[0], b[1] - a[1], b[2] - a[2]]);
+        errs.push(e);
+        if (inRegion(p)) inside.push(e);
       }
     }
   }
   const sq = errs.reduce((s, e) => s + e * e, 0) / errs.length;
   const errSorted = [...errs].sort((a, b) => a - b);
+  const insideSorted = [...inside].sort((a, b) => a - b);
+  const sqIn = inside.length ? inside.reduce((s, e) => s + e * e, 0) / inside.length : NaN;
 
   const result = {
     series: entry.series,
@@ -226,6 +282,14 @@ function score(entry, estimate) {
       p95: percentile(errSorted, 0.95),
       max: errSorted[errSorted.length - 1],
     },
+    // ★ 合否はこちらで見る。視野全体の RMSE は体の外（データが無く推定が外挿に
+    // なる領域）が支配するので、「体の中で合っているか」を表さない。
+    displacement_error_in_region_mm: inside.length ? {
+      sampled_points: inside.length,
+      rmse: Math.sqrt(sqIn),
+      p95: percentile(insideSorted, 0.95),
+      max: insideSorted[insideSorted.length - 1],
+    } : null,
   };
 
   // Parameter-space error, reported only where it means something: the truth
@@ -233,7 +297,7 @@ function score(entry, estimate) {
   // the same quantities the acceptance targets are written in. For the affine
   // and deformable cases the millimetre errors above are the honest measure.
   const t = entry.transform_fixed_to_moving;
-  const isRigidTruth = !t.deformation && !t.scale;
+  const isRigidTruth = !t.deformation && !t.scale && !estimate.deformable;
   if (isRigidTruth) {
     const tm = t.matrix_4x4_row_major;
     result.parameter_error = {
@@ -264,9 +328,10 @@ function verdict(result, targets) {
       unit: "deg",
     });
   } else {
+    const inRegion = result.displacement_error_in_region_mm;
     checks.push({
-      name: "displacement RMSE",
-      value: result.displacement_error_mm.rmse,
+      name: inRegion ? "displacement RMSE (in region)" : "displacement RMSE",
+      value: (inRegion ?? result.displacement_error_mm).rmse,
       limit: targets.deformable_displacement_rmse_mm,
       unit: "mm",
     });
@@ -307,7 +372,12 @@ console.log(`  estimate: ${result.estimate}`);
 console.log(`  landmark TRE   mean ${result.landmark_tre_mm.mean.toFixed(3)} mm  `
   + `p95 ${result.landmark_tre_mm.p95.toFixed(3)}  max ${result.landmark_tre_mm.max.toFixed(3)}`);
 console.log(`  displacement   rmse ${result.displacement_error_mm.rmse.toFixed(3)} mm  `
-  + `p95 ${result.displacement_error_mm.p95.toFixed(3)}  max ${result.displacement_error_mm.max.toFixed(3)}`);
+  + `p95 ${result.displacement_error_mm.p95.toFixed(3)}  max ${result.displacement_error_mm.max.toFixed(3)}  [視野全体]`);
+if (result.displacement_error_in_region_mm) {
+  const r = result.displacement_error_in_region_mm;
+  console.log(`                 rmse ${r.rmse.toFixed(3)} mm  p95 ${r.p95.toFixed(3)}  max ${r.max.toFixed(3)}`
+    + `  [評価領域内・n=${r.sampled_points}]`);
+}
 if (result.parameter_error) {
   console.log(`  parameters     translation ${result.parameter_error.translation_mm.toFixed(3)} mm  `
     + `rotation ${result.parameter_error.rotation_deg.toFixed(3)} deg`);
@@ -317,7 +387,7 @@ for (const c of checks) {
   console.log(`  ${c.pass ? "PASS" : "FAIL"}  ${c.name}: `
     + `${c.value.toFixed(3)} ${c.unit} (limit ${c.limit} ${c.unit})`);
 }
-if (entry.transform_fixed_to_moving.deformation) {
+if (entry.transform_fixed_to_moving.deformation && !estimate.deformable) {
   console.log("");
   console.log("  note: the estimate is linear, so this measures how much of the");
   console.log("        misalignment a rigid/affine answer can remove on a deformable");

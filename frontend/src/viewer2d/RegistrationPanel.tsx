@@ -19,13 +19,15 @@ import type { ViewerMode } from "../viewer/imageId";
 import { estimateRegVolume, loadRegVolume } from "../viewer/regVolumeLoader";
 import { runRigidInWorker, toPayload } from "../viewer/regWorkerClient";
 import type { MetricKind } from "../viewer/regMetrics";
+import type { RegistrationMode } from "../viewer/regProtocol";
 import type { RegistrationResult } from "../viewer/regResult";
 
 /** 見積りがこれを超えたら確認を挟む（設計 §7-1「黙って進めて OOM で落とさない」）。 */
 const CONFIRM_BYTES = 1_200_000_000; // 約 1.2 GB
 
 export interface RegistrationPanelProps {
-  mode: ViewerMode;
+  /** ビューアのモード（standalone / web）。位置合わせの「変換」とは別物。 */
+  viewerMode: ViewerMode;
   /** fixed = タイルの基準シリーズ（背景）。 */
   fixed: { study: Study; series: Series; instances: Instance[]; c: number; t: number };
   /** moving = Fusion で重ねているシリーズ（前景）。 */
@@ -39,7 +41,7 @@ export interface RegistrationPanelProps {
 type Phase = "idle" | "loading" | "running";
 
 export function RegistrationPanel({
-  mode, fixed, moving, result, onResult, onClose,
+  viewerMode, fixed, moving, result, onResult, onClose,
 }: RegistrationPanelProps) {
   const { t } = useI18n();
   const [phase, setPhase] = useState<Phase>("idle");
@@ -47,6 +49,8 @@ export function RegistrationPanel({
   const [status, setStatus] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [metricChoice, setMetricChoice] = useState<"auto" | MetricKind>("auto");
+  // 既定は剛体のみ（R3 と同じ。安全側）。非剛体は変形のある症例で選ぶ。
+  const [mode, setMode] = useState<RegistrationMode>("rigid");
   const abortRef = useRef<(() => void) | null>(null);
   const cancelledRef = useRef(false);
 
@@ -63,8 +67,8 @@ export function RegistrationPanel({
       // ── 事前の見積り（設計 §7-1） ──
       setStatus(t("registration.status.estimating"));
       const [ef, em] = await Promise.all([
-        estimateRegVolume(mode, fixed.study.studyInstanceUid, fixed.series.seriesInstanceUid, fixed.instances, fixed.c, fixed.t),
-        estimateRegVolume(mode, moving.study.studyInstanceUid, moving.series.seriesInstanceUid, moving.instances, moving.c, moving.t),
+        estimateRegVolume(viewerMode, fixed.study.studyInstanceUid, fixed.series.seriesInstanceUid, fixed.instances, fixed.c, fixed.t),
+        estimateRegVolume(viewerMode, moving.study.studyInstanceUid, moving.series.seriesInstanceUid, moving.instances, moving.c, moving.t),
       ]);
       if (!ef.spatial || !em.spatial) {
         setError(t("registration.error.notSpatial"));
@@ -83,11 +87,11 @@ export function RegistrationPanel({
 
       // ── 読み込み ──
       setStatus(t("registration.status.loadingFixed"));
-      const f = await loadRegVolume(mode, fixed.study.studyInstanceUid, fixed.series.seriesInstanceUid,
+      const f = await loadRegVolume(viewerMode, fixed.study.studyInstanceUid, fixed.series.seriesInstanceUid,
         fixed.instances, fixed.c, fixed.t, (n, all) => setProgress((n / all) * 0.4));
       if (cancelledRef.current) { setPhase("idle"); return; }
       setStatus(t("registration.status.loadingMoving"));
-      const m = await loadRegVolume(mode, moving.study.studyInstanceUid, moving.series.seriesInstanceUid,
+      const m = await loadRegVolume(viewerMode, moving.study.studyInstanceUid, moving.series.seriesInstanceUid,
         moving.instances, moving.c, moving.t, (n, all) => setProgress(0.4 + (n / all) * 0.2));
       if (cancelledRef.current) { setPhase("idle"); return; }
       if (!f || !m) {
@@ -104,6 +108,7 @@ export function RegistrationPanel({
         {
           fixed: toPayload(f.volume, f.iop, f.sliceStep),
           moving: toPayload(m.volume, m.iop, m.sliceStep),
+          mode,
           metric: metricChoice === "auto" ? undefined : metricChoice,
           sameModality,
           sameFrameOfReference: sameFor,
@@ -124,6 +129,8 @@ export function RegistrationPanel({
         elapsedMs: done.elapsedMs,
         sameFrameOfReference: sameFor,
         initialization: done.initialization,
+        dvf: done.dvf ?? null,
+        mode,
       });
       setPhase("idle");
       setProgress(1);
@@ -136,7 +143,7 @@ export function RegistrationPanel({
       setPhase("idle");
       setStatus("");
     }
-  }, [mode, fixed, moving, metricChoice, sameModality, onResult, t]);
+  }, [mode, viewerMode, fixed, moving, metricChoice, sameModality, onResult, t]);
 
   const cancel = () => {
     cancelledRef.current = true;
@@ -182,7 +189,24 @@ export function RegistrationPanel({
         </select>
       </div>
 
-      <div style={{ ...hint, marginBottom: 6 }}>{t("registration.rigidOnly")}</div>
+      <div style={row}>
+        <span style={key}>{t("registration.mode")}</span>
+        <select
+          value={mode}
+          disabled={busy}
+          onChange={(e) => setMode(e.target.value as RegistrationMode)}
+          style={select}
+        >
+          <option value="rigid">{t("registration.modeRigid")}</option>
+          <option value="deformable">{t("registration.modeDeformable")}</option>
+          <option value="rigid+deformable">{t("registration.modeBoth")}</option>
+        </select>
+      </div>
+      <div style={{ ...hint, marginBottom: 6 }}>
+        {mode === "rigid" ? t("registration.hintRigid")
+          : mode === "deformable" ? t("registration.hintDeformable")
+          : t("registration.hintBoth")}
+      </div>
 
       <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 4 }}>
         <button onClick={run} disabled={busy} style={runBtn}>{t("registration.run")}</button>
@@ -225,6 +249,26 @@ export function RegistrationPanel({
               ? t("registration.forSame")
               : t("registration.forDifferent")}
           </div>
+          {result.dvf && (
+            <>
+              <div style={row}>
+                <span style={key}>{t("registration.resultMaxDisp")}</span>
+                <span style={val}>{result.dvf.maxDisplacementMm.toFixed(1)} mm</span>
+              </div>
+              <div style={row}>
+                <span style={key}>{t("registration.resultJacobian")}</span>
+                <span style={val}>
+                  {result.dvf.jacobian.min.toFixed(2)}–{result.dvf.jacobian.max.toFixed(2)}
+                  {"  "}({t("registration.resultNegative", {
+                    pct: (result.dvf.jacobian.negativeFraction * 100).toFixed(2),
+                  })})
+                </span>
+              </div>
+              {result.dvf.jacobian.negativeFraction > 0 && (
+                <div style={errorBox}>{t("registration.foldingWarning")}</div>
+              )}
+            </>
+          )}
           <div style={hint}>{t("registration.manualOnTop")}</div>
         </div>
       )}

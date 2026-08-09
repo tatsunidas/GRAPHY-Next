@@ -19,6 +19,9 @@ import {
   type LinearTransform,
   type ManualAdjust,
   type Vec3,
+  dvfTransform,
+  dvfJacobianDeterminants,
+  dvfMagnitudeStats,
 } from "./regTransform";
 
 /** 手動微調整の「順方向」（moving をどう動かすか）。pull-back の正しさをこれと突き合わせる。 */
@@ -185,5 +188,104 @@ describe("補助判定", () => {
     expect(isIdentityTransform(null)).toBe(true);
     expect(isIdentityTransform(identityTransform())).toBe(true);
     expect(isIdentityTransform(linearTransform(mat4Identity()))).toBe(false); // 種別で判定する
+  });
+});
+
+// ── 変位場（DVF・R4） ────────────────────────────────────────────────────
+
+describe("dvfTransform", () => {
+  /** 4×4×4 の格子（間隔 10mm、原点 -15）に一様変位を置く。 */
+  function uniform(dx: number, dy: number, dz: number) {
+    const n = 4;
+    const d = new Float32Array(n * n * n * 3);
+    for (let i = 0; i < n * n * n; i++) { d[i * 3] = dx; d[i * 3 + 1] = dy; d[i * 3 + 2] = dz; }
+    return dvfTransform(d, [n, n, n], [-15, -15, -15], [10, 10, 10]);
+  }
+
+  it("一様変位は平行移動として効く", () => {
+    const t = uniform(2, -3, 4);
+    expect(applyTransform(t, [0, 0, 0])).toEqual([2, -3, 4]);
+    expect(applyTransform(t, [5, 5, 5])).toEqual([7, 2, 9]);
+  });
+
+  it("格子の外は縁の値で外挿する（0 に落とさない）", () => {
+    // 0 に落とすと格子の縁で変位が不連続になり、そこだけ画像が切れて見える。
+    const t = uniform(2, 0, 0);
+    expect(applyTransform(t, [1000, 0, 0])[0]).toBeCloseTo(1002, 6);
+    expect(applyTransform(t, [-1000, 0, 0])[0]).toBeCloseTo(-998, 6);
+  });
+
+  it("制御点の間は線形に補間される", () => {
+    const n = 4;
+    const d = new Float32Array(n * n * n * 3);
+    // x 方向の制御点インデックスに比例した x 変位（0, 6, 12, 18 mm）
+    for (let k = 0; k < n; k++) for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      d[((k * n + j) * n + i) * 3] = i * 6;
+    }
+    const t = dvfTransform(d, [n, n, n], [-15, -15, -15], [10, 10, 10]);
+    // world x=-15 は制御点 0、x=-5 は制御点 1、その中間 x=-10 は 3mm
+    expect(applyTransform(t, [-15, 0, 0])[0]).toBeCloseTo(-15, 6);
+    expect(applyTransform(t, [-5, 0, 0])[0]).toBeCloseTo(-5 + 6, 6);
+    expect(applyTransform(t, [-10, 0, 0])[0]).toBeCloseTo(-10 + 3, 6);
+  });
+
+  it("剛体と合成できる（剛体 → 非剛体 の順）", () => {
+    const rigid = manualAdjustToTransform({ ...ZERO_ADJUST, tx: 10 }, [0, 0, 0]);
+    const t = composeTransforms(rigid, uniform(1, 0, 0));
+    // manualAdjustToTransform は pull-back なので tx=10 は −10 の写像になる。
+    // ここで見たいのは「2 つが順に効くこと」。
+    const viaChain = applyTransform(t, [0, 0, 0]);
+    const viaSteps = applyTransform(uniform(1, 0, 0), applyTransform(rigid, [0, 0, 0]));
+    expect(viaChain[0]).toBeCloseTo(viaSteps[0], 9);
+  });
+
+  it("長さが格子と合わなければ例外", () => {
+    expect(() => dvfTransform(new Float32Array(5), [2, 2, 2], [0, 0, 0], [1, 1, 1])).toThrow();
+  });
+});
+
+describe("dvfJacobianDeterminants", () => {
+  it("一様変位（＝平行移動）では行列式が 1", () => {
+    const n = 4;
+    const d = new Float32Array(n * n * n * 3);
+    for (let i = 0; i < n * n * n; i++) { d[i * 3] = 3; d[i * 3 + 1] = -2; }
+    const t = dvfTransform(d, [n, n, n], [0, 0, 0], [10, 10, 10]);
+    for (const det of dvfJacobianDeterminants(t)) expect(det).toBeCloseTo(1, 6);
+  });
+
+  it("一様な伸長では行列式が 1 より大きい", () => {
+    const n = 5, sp = 10;
+    const d = new Float32Array(n * n * n * 3);
+    // x 方向に 10% 伸ばす: u_x = 0.1 * x
+    for (let k = 0; k < n; k++) for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      d[((k * n + j) * n + i) * 3] = 0.1 * (i * sp);
+    }
+    const t = dvfTransform(d, [n, n, n], [0, 0, 0], [sp, sp, sp]);
+    const dets = dvfJacobianDeterminants(t);
+    for (const det of dets) expect(det).toBeCloseTo(1.1, 5);
+  });
+
+  it("★折り返し（強い圧縮）は負値として検出される", () => {
+    const n = 5, sp = 10;
+    const d = new Float32Array(n * n * n * 3);
+    // u_x = -1.5 * x → 1 + du/dx = -0.5 < 0（物理的にありえない変形）
+    for (let k = 0; k < n; k++) for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      d[((k * n + j) * n + i) * 3] = -1.5 * (i * sp);
+    }
+    const t = dvfTransform(d, [n, n, n], [0, 0, 0], [sp, sp, sp]);
+    const dets = dvfJacobianDeterminants(t);
+    expect(Array.from(dets).some((v) => v <= 0)).toBe(true);
+  });
+});
+
+describe("dvfMagnitudeStats", () => {
+  it("最大・平均・95%ile を返す", () => {
+    const n = 2;
+    const d = new Float32Array(n * n * n * 3);
+    d[0] = 3; d[1] = 4;           // 制御点 0 の大きさ 5
+    const t = dvfTransform(d, [n, n, n], [0, 0, 0], [1, 1, 1]);
+    const s = dvfMagnitudeStats(t);
+    expect(s.max).toBeCloseTo(5, 6);
+    expect(s.mean).toBeCloseTo(5 / 8, 6);
   });
 });

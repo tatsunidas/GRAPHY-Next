@@ -1648,7 +1648,7 @@ function TileCell({
       {/* 自動位置合わせのパネル（設計 §12）。タイル内に絶対配置する。 */}
       {registrationOpen && tile.fusion && (
         <RegistrationPanel
-          mode={mode}
+          viewerMode={mode}
           fixed={{
             study: tile.study, series: tile.series, instances: tile.instances,
             c: 0, t: 0,

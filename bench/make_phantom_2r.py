@@ -731,6 +731,19 @@ def main() -> int:
             "R = Rz(rz) . Ry(ry) . Rx(rx), degrees, right-handed about patient LPS, about "
             "rotation_centre_mm; identical to mat4FromEulerDeg in frontend/src/viewer/regTransform.ts"
         ),
+        # 評価領域。変位場の誤差を**視野全体**で測ると、体の外（＝データが無く
+        # 推定が外挿になる領域）が支配してしまい、体の中で合っているかが見えない。
+        # GNBP-1A の外殻楕円体（Shepp-Logan の 1 番目）をそのまま評価領域とする。
+        "evaluation_region": {
+            "kind": "ellipsoid",
+            "centre_mm": [0.0, 0.0, 0.0],
+            "semi_axes_mm": [69.0, 92.0, 81.0],
+            "note": (
+                "Shepp-Logan outer ellipsoid = the phantom's material support. "
+                "Displacement error should be judged here; outside it the estimate is "
+                "an extrapolation into a region that contains no structure."
+            ),
+        },
         "acceptance_targets": {
             "rigid_translation_error_mm": 0.5,
             "rigid_rotation_error_deg": 0.2,

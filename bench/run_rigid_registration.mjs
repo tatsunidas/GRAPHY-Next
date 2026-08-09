@@ -37,6 +37,15 @@ const args = {
   iterations: 120,
   seed: 20260808,
   pyramid: null,
+  deformable: false,
+  controlSpacings: null,
+  skipRigid: false,
+  desc: null,
+  maxDisp: null,
+  step: null,
+  smooth: null,
+  reg: null,
+  iters: null,
 };
 for (let i = 2; i < argv.length; i++) {
   const a = argv[i];
@@ -48,6 +57,15 @@ for (let i = 2; i < argv.length; i++) {
   else if (a === "--iterations") args.iterations = Number(argv[++i]);
   else if (a === "--seed") args.seed = Number(argv[++i]);
   else if (a === "--pyramid") args.pyramid = argv[++i].split(",").map(Number);
+  else if (a === "--deformable") args.deformable = true;
+  else if (a === "--skip-rigid") { args.skipRigid = true; args.deformable = true; }
+  else if (a === "--control") args.controlSpacings = argv[++i].split(",").map(Number);
+  else if (a === "--desc") args.desc = Number(argv[++i]);
+  else if (a === "--max-disp") args.maxDisp = Number(argv[++i]);
+  else if (a === "--disp-step") args.step = Number(argv[++i]);
+  else if (a === "--smooth") args.smooth = Number(argv[++i]);
+  else if (a === "--reg") args.reg = Number(argv[++i]);
+  else if (a === "--iters") args.iters = Number(argv[++i]);
   else { console.error(`unknown argument: ${a}`); exit(2); }
 }
 const truthPath = args.truth ?? join(args.phantom, "GNBP-2R_ground_truth.json");
@@ -68,7 +86,8 @@ function loadEngine() {
   // 最適化本体と幾何の両方が要るので、まとめて再輸出する入口を作って束ねる。
   const entry = join(dir, "entry.ts");
   writeFileSync(entry, `export * from ${JSON.stringify(join(viewer, "regCore"))};\n`
-    + `export * from ${JSON.stringify(join(viewer, "regGeometry"))};\n`);
+    + `export * from ${JSON.stringify(join(viewer, "regGeometry"))};\n`
+    + `export * from ${JSON.stringify(join(viewer, "regDeformable"))};\n`);
   const outfile = join(dir, "engine.mjs");
   const esbuild = join(root, "frontend/node_modules/.bin/esbuild");
   execFileSync(esbuild, [entry, "--bundle", "--format=esm", "--platform=node", `--outfile=${outfile}`], {
@@ -229,7 +248,9 @@ for (const name of wanted) {
   const metric = name === "multimodal" ? "mi" : "ncc";
 
   const t0 = Date.now();
-  const r = engine.registerRigid(fixed.volume, moving.volume, {
+  // --skip-rigid: 剛体を飛ばして非剛体だけを見る。変形が主体の症例では
+  // 剛体段が変形に引っ張られて**かえって悪化する**ことがあるため、その切り分け用。
+  const r = args.skipRigid ? null : engine.registerRigid(fixed.volume, moving.volume, {
     metric,
     sameFrameOfReference: sameFor,
     samplesPerIteration: args.samples,
@@ -239,16 +260,46 @@ for (const name of wanted) {
   });
   const seconds = (Date.now() - t0) / 1000;
 
-  const m = r.transform.matrix;
-  const estimate = { matrix_4x4_row_major: Array.from(m) };
+  const estimate = r
+    ? { matrix_4x4_row_major: Array.from(r.transform.matrix) }
+    : {};
+
+  if (args.deformable) {
+    const t1 = Date.now();
+    const d = engine.registerDeformable(fixed.volume, moving.volume, r ? r.transform : null, {
+      ...(args.controlSpacings ? { controlSpacingsMm: args.controlSpacings } : {}),
+      ...(args.desc ? { descriptorSpacingMm: args.desc } : {}),
+      ...(args.maxDisp ? { maxDisplacementMm: args.maxDisp } : {}),
+      ...(args.step ? { displacementStepMm: args.step } : {}),
+      ...(args.smooth !== null ? { smoothingSigma: args.smooth } : {}),
+      ...(args.reg !== null ? { regularizationWeight: args.reg } : {}),
+      ...(args.iters !== null ? { iterations: args.iters } : {}),
+    });
+    const dSeconds = (Date.now() - t1) / 1000;
+    estimate.displacement_field = {
+      dims: Array.from(d.transform.dims),
+      origin_mm: Array.from(d.transform.origin),
+      spacing_mm: Array.from(d.transform.spacing),
+      displacements_mm: Array.from(d.transform.displacements),
+    };
+    console.log(`  非剛体 ${dSeconds.toFixed(1)} s  制御格子 ${d.controlDims.join("x")}`
+      + `  候補 ${d.candidateCount}  最大変位 ${d.maxDisplacementMm.toFixed(2)} mm`);
+    console.log(`       Jacobian ${d.jacobian.min.toFixed(3)}–${d.jacobian.max.toFixed(3)}`
+      + `  負値率 ${(d.jacobian.negativeFraction * 100).toFixed(2)} %`
+      + (d.jacobian.negativeFraction > 0 ? "  ← ★折り返しあり（不合格）" : ""));
+  }
   const estPath = args.out ?? join(mkdtempSync(join(tmpdir(), "gnbp-est-")), `${name}.json`);
   writeFileSync(estPath, JSON.stringify(estimate, null, 2));
 
   console.log(`\n=== ${entry.series} ===`);
-  console.log(`  FoR ${sameFor ? "一致" : "不一致"} / 指標 ${metric} / 初期化 ${r.initialization}`);
-  console.log(`  実行 ${seconds.toFixed(1)} s   段ごとの反復 ${r.levels.map((l) => `${l.spacingMm}mm:${l.iterations}`).join(" ")}`);
-  console.log(`  推定 平行移動 [${r.parameters.translationMm.map((v) => v.toFixed(2)).join(", ")}] mm`);
-  console.log(`       回転     [${r.parameters.eulerDeg.map((v) => v.toFixed(2)).join(", ")}] deg (中心まわり)`);
+  if (r) {
+    console.log(`  FoR ${sameFor ? "一致" : "不一致"} / 指標 ${metric} / 初期化 ${r.initialization}`);
+    console.log(`  剛体 ${seconds.toFixed(1)} s   段ごとの反復 ${r.levels.map((l) => `${l.spacingMm}mm:${l.iterations}`).join(" ")}`);
+    console.log(`  推定 平行移動 [${r.parameters.translationMm.map((v) => v.toFixed(2)).join(", ")}] mm`);
+    console.log(`       回転     [${r.parameters.eulerDeg.map((v) => v.toFixed(2)).join(", ")}] deg (中心まわり)`);
+  } else {
+    console.log(`  剛体はスキップ（--skip-rigid）`);
+  }
 
   // 採点器は不合格を終了コード 1 で返す。affine / deform を剛体で解く回は
   // **不合格が正しい結果**なので、ここで落ちてはいけない（落とすと残りの系列が
@@ -264,7 +315,7 @@ for (const name of wanted) {
   }
   console.log(out.split("\n").map((l) => (l ? `  ${l}` : l)).join("\n"));
 
-  results.push({ series: name, seconds, parameters: r.parameters, estimatePath: estPath });
+  results.push({ series: name, seconds, parameters: r?.parameters ?? null, estimatePath: estPath });
 }
 
 console.log("\n注: 上の PASS/FAIL は真値 JSON の acceptance_targets に対する判定。");
