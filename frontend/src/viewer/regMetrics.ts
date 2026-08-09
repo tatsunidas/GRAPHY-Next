@@ -23,12 +23,20 @@
  * 部分和はインデックス順に統合する。
  */
 
-/** 1 対のサンプル値。`fixed[i]` と `moving[i]` が対応する点。 */
+/**
+ * 1 対のサンプル値。`fixed[i]` と `moving[i]` が対応する点。
+ *
+ * <p>局所指標（LNCC）のときは **1 標本点あたり `patchSize` 個**の値が
+ * 連続して並ぶ（`[点0のパッチ..., 点1のパッチ...]`）。`count` は**値の総数**であり、
+ * 標本点の数は `count / patchSize`。
+ */
 export interface SamplePair {
   readonly fixed: Float64Array;
   readonly moving: Float64Array;
-  /** 有効な要素数（配列の先頭から `count` 個だけを使う）。 */
+  /** 有効な**値**の数（配列の先頭から `count` 個だけを使う）。 */
   readonly count: number;
+  /** 1 標本点あたりの値の数。大域指標では 1。 */
+  readonly patchSize?: number;
 }
 
 /**
@@ -102,6 +110,26 @@ function rangeOf(arr: Float64Array, count: number): [number, number] {
  * ここでは両側に掛けて対称にしてある（fixed の量子化に由来する偏りを避けるため）。
  */
 export function mattesMI(pairs: SamplePair, opts: MattesOptions = {}): number {
+  return mattesJoint(pairs, opts, false);
+}
+
+/**
+ * 正規化相互情報量（NMI）。**大きいほど良い**（値は 1 以上）。
+ *
+ * <p>`NMI = (H(F) + H(M)) / H(F,M)`（Studholme らの定義）。
+ *
+ * <p>MI は「重なっている領域の情報量」なので、**視野の重なりが変わると値そのものが動く**。
+ * 全身のように、少し動かすだけで重なる体積が大きく変わる場面では、
+ * 「よく合っている」と「たくさん重なっている」を取り違えることがある。
+ * NMI は同時エントロピーで割ることでその依存を弱める。
+ *
+ * <p>実装は MI と同じ Parzen 窓つき同時ヒストグラムを共有する。
+ */
+export function normalizedMI(pairs: SamplePair, opts: MattesOptions = {}): number {
+  return mattesJoint(pairs, opts, true);
+}
+
+function mattesJoint(pairs: SamplePair, opts: MattesOptions, normalized: boolean): number {
   const { fixed, moving, count } = pairs;
   const bins = Math.max(8, Math.floor(opts.bins ?? DEFAULT_BINS));
   if (count < 2) return 0;
@@ -156,6 +184,7 @@ export function mattesMI(pairs: SamplePair, opts: MattesOptions = {}): number {
   }
 
   let mi = 0;
+  let hJoint = 0;
   for (let fb = 0; fb < bins; fb++) {
     const pf = margF[fb];
     if (pf <= 0) continue;
@@ -163,18 +192,83 @@ export function mattesMI(pairs: SamplePair, opts: MattesOptions = {}): number {
     for (let mb = 0; mb < bins; mb++) {
       const pj = joint[base + mb];
       if (pj <= 0) continue;
+      hJoint -= pj * Math.log(pj);
       const pm = margM[mb];
       if (pm <= 0) continue;
       mi += pj * Math.log(pj / (pf * pm));
     }
   }
-  return mi;
+  if (!normalized) return mi;
+
+  // NMI = (H(F) + H(M)) / H(F,M)。周辺エントロピーは MI と同時エントロピーから
+  // 復元できる（H(F)+H(M) = MI + H(F,M)）ので、ここで足し直す必要はない。
+  if (!(hJoint > 1e-12)) return 0;
+  return (mi + hJoint) / hJoint;
+}
+
+/**
+ * 局所正規化相互相関（LNCC）。範囲は [−1, 1]、**大きいほど良い**。
+ *
+ * <p>大域 NCC は「**画像全体で強度関係が単一の線形式**」という強い仮定を置く。
+ * MR のバイアス場、造影の有無、PET の集積差ではこれが崩れ、体の一部が
+ * 合っていれば残りがずれていても高い値が出てしまう。LNCC は仮定を
+ * **各パッチの中だけ**に弱めるので、その種の破綻に強い。
+ * ANTs が同一モダリティの既定に使う `CC` も窓つきの局所相関である。
+ *
+ * <p>分散がほぼ 0 のパッチ（空気・一様な組織）は**寄与させない**。
+ * そこは相関が定義できず、含めると値が標本の取り方で揺れる。
+ * 有効パッチが 1 つも無ければ 0（無情報）を返す。
+ */
+export function localNcc(pairs: SamplePair): number {
+  const { fixed, moving, count } = pairs;
+  const patch = Math.max(1, Math.floor(pairs.patchSize ?? 1));
+  if (patch < 2) return ncc(pairs); // パッチが無ければ大域と同じ
+  const nPatches = Math.floor(count / patch);
+  if (nPatches < 1) return 0;
+
+  let sum = 0;
+  let used = 0;
+  for (let p = 0; p < nPatches; p++) {
+    const base = p * patch;
+    let sf = 0, sm = 0;
+    for (let i = 0; i < patch; i++) { sf += fixed[base + i]; sm += moving[base + i]; }
+    const mf = sf / patch, mm = sm / patch;
+    let num = 0, vf = 0, vm = 0;
+    for (let i = 0; i < patch; i++) {
+      const df = fixed[base + i] - mf;
+      const dm = moving[base + i] - mm;
+      num += df * dm; vf += df * df; vm += dm * dm;
+    }
+    const den = Math.sqrt(vf * vm);
+    if (!(den > 1e-9)) continue;
+    sum += num / den;
+    used++;
+  }
+  return used > 0 ? sum / used : 0;
 }
 
 /** 指標の種類。`auto` は呼び出し側がモダリティから決める。 */
-export type MetricKind = "mi" | "ncc";
+/**
+ * 指標の種類。
+ *
+ * <p><b>MIND-SSC は剛体の指標として入れていない</b>（一度実装して測ったうえで外した）。
+ * 記述子は 12 ペアを**格子軸方向**に定義するため方向依存で、moving の記述子を
+ * 回転前の格子で作って回転後の位置を引くと、**回転が大きいほど正しい答えが不利**になる。
+ * 合成ファントムでの実測: 並進のみなら NCC と同等（0.04mm）だが、回転 3°/8°/15° に対して
+ * 誤差 1.69°/4.00°/7.40°（真値の約半分しか戻せない）。
+ * 直すには moving の記述子を**現在の変換を通して作り直す**必要があり（非剛体側は
+ * そうしている）、外側の反復を足す構造変更になる。PET-MR で MI が実際に困っている
+ * という測定が出てから着手する。
+ */
+export type MetricKind = "mi" | "nmi" | "ncc" | "lncc";
 
-/** 指標を名前で評価する。**どちらも「大きいほど良い」**に揃えてある。 */
+/**
+ * 指標を名前で評価する。**いずれも「大きいほど良い」**に揃えてある。
+
+ */
 export function evaluateMetric(kind: MetricKind, pairs: SamplePair, opts?: MattesOptions): number {
-  return kind === "ncc" ? ncc(pairs) : mattesMI(pairs, opts);
+  if (kind === "ncc") return ncc(pairs);
+  if (kind === "lncc") return localNcc(pairs);
+  if (kind === "nmi") return normalizedMI(pairs, opts);
+  return mattesMI(pairs, opts);
 }

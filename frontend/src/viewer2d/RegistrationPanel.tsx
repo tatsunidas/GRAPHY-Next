@@ -185,7 +185,9 @@ export function RegistrationPanel({
             {t("registration.metricAuto", { metric: sameModality ? "NCC" : "MI" })}
           </option>
           <option value="mi">{t("registration.metricMi")}</option>
+          <option value="nmi">{t("registration.metricNmi")}</option>
           <option value="ncc">{t("registration.metricNcc")}</option>
+          <option value="lncc">{t("registration.metricLncc")}</option>
         </select>
       </div>
 

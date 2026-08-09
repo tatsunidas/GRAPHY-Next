@@ -1056,6 +1056,8 @@ export const en: Record<string, string> = {
   "registration.metricAuto": "Automatic ({{metric}})",
   "registration.metricMi": "Mutual information (MI) — different modalities",
   "registration.metricNcc": "Normalised cross-correlation (NCC) — same modality",
+  "registration.metricNmi": "Normalised mutual information (NMI) — whole-body, varying overlap",
+  "registration.metricLncc": "Local cross-correlation (LNCC) — bias field or contrast differences",
   "registration.mode": "Transform",
   "registration.modeRigid": "Rigid only (translation + rotation)",
   "registration.modeDeformable": "Deformable only",

@@ -1058,6 +1058,8 @@ export const ja: Record<string, string> = {
   "registration.metricAuto": "自動（{{metric}}）",
   "registration.metricMi": "相互情報量 (MI) — モダリティが違う組",
   "registration.metricNcc": "正規化相互相関 (NCC) — 同一モダリティ",
+  "registration.metricNmi": "正規化相互情報量 (NMI) — 重なりが大きく変わる全身向け",
+  "registration.metricLncc": "局所相互相関 (LNCC) — バイアス場・造影差があるとき",
   "registration.mode": "変換",
   "registration.modeRigid": "剛体のみ（平行移動＋回転）",
   "registration.modeDeformable": "非剛体のみ（変形）",

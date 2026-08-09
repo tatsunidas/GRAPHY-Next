@@ -11,7 +11,7 @@
  * そして値が**滑らかに**変化すること（階段状だと最適化が動かない）。
  */
 import { describe, it, expect } from "vitest";
-import { mattesMI, ncc, evaluateMetric, type SamplePair } from "./regMetrics";
+import { mattesMI, normalizedMI, ncc, localNcc, evaluateMetric, type SamplePair } from "./regMetrics";
 
 function pairs(f: number[], m: number[]): SamplePair {
   return { fixed: Float64Array.from(f), moving: Float64Array.from(m), count: f.length };
@@ -123,5 +123,112 @@ describe("regMetrics — evaluateMetric", () => {
     const bad = [5, 1, 8, 2, 7, 3, 6, 4];
     expect(evaluateMetric("ncc", pairs(f, good))).toBeGreaterThan(evaluateMetric("ncc", pairs(f, bad)));
     expect(evaluateMetric("mi", pairs(f, good))).toBeGreaterThanOrEqual(evaluateMetric("mi", pairs(f, bad)));
+  });
+});
+
+describe("regMetrics — 局所 NCC（LNCC）", () => {
+  /** パッチ構造を持つ標本を作る。 */
+  function patches(f: number[][], m: number[][]): SamplePair {
+    const patch = f[0].length;
+    return {
+      fixed: Float64Array.from(f.flat()),
+      moving: Float64Array.from(m.flat()),
+      count: f.length * patch,
+      patchSize: patch,
+    };
+  }
+
+  it("★空間的に変化する利得（バイアス場）に強い — 大域 NCC は落ちる", () => {
+    // 各パッチ内では構造が同じで、パッチごとに**利得と下駄が違う**状況。
+    // MR の表面コイル、造影の有無、PET の集積差がこの形になる。
+    const structure = [10, 40, 25, 60, 15];
+    const f: number[][] = [], m: number[][] = [];
+    for (let p = 0; p < 8; p++) {
+      const gain = 1 + p * 0.6;      // パッチごとに利得が変わる
+      const offset = p * 30;
+      f.push(structure);
+      m.push(structure.map((v) => v * gain + offset));
+    }
+    const pairs = patches(f, m);
+    // 各パッチの中では完全な線形関係なので LNCC は 1。
+    expect(localNcc(pairs)).toBeCloseTo(1, 6);
+    // 大域 NCC は「画像全体で単一の線形関係」を仮定するので、ここでは落ちる。
+    expect(ncc(pairs)).toBeLessThan(0.9);
+  });
+
+  it("分散のないパッチ（空気・一様な組織）は寄与しない", () => {
+    const pairs = patches(
+      [[5, 5, 5, 5], [1, 2, 3, 4]],
+      [[9, 9, 9, 9], [2, 4, 6, 8]],
+    );
+    // 1 つ目のパッチは相関が定義できない。2 つ目だけで 1 になる。
+    expect(localNcc(pairs)).toBeCloseTo(1, 6);
+  });
+
+  it("有効なパッチが無ければ 0（無情報）", () => {
+    expect(localNcc(patches([[3, 3, 3]], [[7, 7, 7]]))).toBe(0);
+  });
+
+  it("patchSize が 1 なら大域 NCC と同じ", () => {
+    const f = [1, 2, 3, 4, 5, 6];
+    const p: SamplePair = { fixed: Float64Array.from(f), moving: Float64Array.from(f), count: 6, patchSize: 1 };
+    expect(localNcc(p)).toBeCloseTo(ncc(p), 9);
+  });
+
+  it("evaluateMetric から呼べる", () => {
+    const pairs = patches([[1, 2, 3, 4]], [[2, 4, 6, 8]]);
+    expect(evaluateMetric("lncc", pairs)).toBeCloseTo(1, 6);
+  });
+});
+
+describe("regMetrics — NMI", () => {
+  it("完全一致のほうが無関係な組より大きい", () => {
+    const rnd = mulberry32(3);
+    const f: number[] = [];
+    for (let n = 0; n < 4000; n++) f.push(rnd() * 100);
+    const noise: number[] = [];
+    for (let n = 0; n < 4000; n++) noise.push(rnd() * 100);
+    expect(normalizedMI(pairs(f, f))).toBeGreaterThan(normalizedMI(pairs(f, noise)));
+  });
+
+  it("無関係な組では 1 に近づく（NMI の定義どおり）", () => {
+    const rnd = mulberry32(11);
+    const f: number[] = [], m: number[] = [];
+    for (let n = 0; n < 8000; n++) { f.push(rnd() * 100); m.push(rnd() * 100); }
+    const v = normalizedMI(pairs(f, m));
+    expect(v).toBeGreaterThan(1);
+    expect(v).toBeLessThan(1.35);
+  });
+
+  it("★重なりが変わっても MI ほど動かない", () => {
+    // 同じ「合い方」のまま、標本の量（＝重なる体積）だけを変える。
+    // MI は情報量そのものなので分布が変われば動くが、NMI は同時エントロピーで
+    // 割るぶん、重なりの変化に対して安定する。
+    const rnd = mulberry32(23);
+    const base: number[] = [];
+    for (let n = 0; n < 6000; n++) base.push(rnd() * 100);
+    const map = (v: number) => v * 0.8 + 15;
+
+    // 「重なりが小さい」= 標本の一部だけを使い、残りは無相関な組で埋める。
+    const mixed = (overlap: number) => {
+      const f: number[] = [], m: number[] = [];
+      const r2 = mulberry32(77);
+      for (let n = 0; n < base.length; n++) {
+        if (n < base.length * overlap) { f.push(base[n]); m.push(map(base[n])); }
+        else { f.push(base[n]); m.push(r2() * 100); }
+      }
+      return pairs(f, m);
+    };
+    const miRatio = mattesMI(mixed(1.0)) / mattesMI(mixed(0.5));
+    const nmiRatio = normalizedMI(mixed(1.0)) / normalizedMI(mixed(0.5));
+    // どちらも「よく合っている方」が大きいが、NMI の方が比が 1 に近い＝振れが小さい。
+    expect(miRatio).toBeGreaterThan(1);
+    expect(nmiRatio).toBeGreaterThan(1);
+    expect(nmiRatio).toBeLessThan(miRatio);
+  });
+
+  it("evaluateMetric から呼べる", () => {
+    const f = [1, 2, 3, 4, 5, 6, 7, 8];
+    expect(evaluateMetric("nmi", pairs(f, f.map((v) => v * 2)))).toBeGreaterThan(1);
   });
 });

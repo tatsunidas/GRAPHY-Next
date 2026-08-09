@@ -46,6 +46,7 @@ const args = {
   smooth: null,
   reg: null,
   iters: null,
+  metric: null,
 };
 for (let i = 2; i < argv.length; i++) {
   const a = argv[i];
@@ -66,6 +67,7 @@ for (let i = 2; i < argv.length; i++) {
   else if (a === "--smooth") args.smooth = Number(argv[++i]);
   else if (a === "--reg") args.reg = Number(argv[++i]);
   else if (a === "--iters") args.iters = Number(argv[++i]);
+  else if (a === "--metric") args.metric = argv[++i];
   else { console.error(`unknown argument: ${a}`); exit(2); }
 }
 const truthPath = args.truth ?? join(args.phantom, "GNBP-2R_ground_truth.json");
@@ -245,7 +247,7 @@ for (const name of wanted) {
   // GNBP-2R の全系列は Shepp-Logan の CT 符号化。multimodal だけは非単調な
   // 強度写像がかかっているので、そこだけ MI を使う（実運用では呼び出し側が
   // Modality から決める。ここでは系列の定義から分かる）。
-  const metric = name === "multimodal" ? "mi" : "ncc";
+  const metric = args.metric ?? (name === "multimodal" ? "mi" : "ncc");
 
   const t0 = Date.now();
   // --skip-rigid: 剛体を飛ばして非剛体だけを見る。変形が主体の症例では

@@ -23,6 +23,7 @@
  */
 
 import {
+  sampleWorldClamped,
   bodyMaskIndices,
   centroidOfIndices,
   buildPyramid,
@@ -157,8 +158,32 @@ interface SampleSet {
   readonly x: Float64Array;
   readonly y: Float64Array;
   readonly z: Float64Array;
+  /** fixed の値。パッチを使う場合は 1 点あたり `patchSize` 個が連続して並ぶ。 */
   readonly fixedValue: Float64Array;
   readonly n: number;
+  /** 1 点あたりの値の数（LNCC のときだけ > 1）。 */
+  readonly patchSize: number;
+  /**
+   * パッチのオフセット（world mm、`[dx,dy,dz]` × patchSize）。
+   *
+   * <p>剛体は線形なので `T(p + d) = T(p) + R·d`。オフセットを**1 評価につき 1 回だけ**
+   * 回せば済み、点ごとに変換を掛け直す必要がない。ここを素朴に書くと
+   * パッチの分だけそのまま遅くなる。
+   */
+  readonly patchOffsets: Float64Array;
+}
+
+/** LNCC のパッチ形状。中心 ＋ 3×3×3 の 27 点（段の間隔 1 つ分だけ離す）。 */
+function buildPatchOffsets(spacingMm: number, radius: number): Float64Array {
+  const offs: number[] = [];
+  for (let k = -radius; k <= radius; k++) {
+    for (let j = -radius; j <= radius; j++) {
+      for (let i = -radius; i <= radius; i++) {
+        offs.push(i * spacingMm, j * spacingMm, k * spacingMm);
+      }
+    }
+  }
+  return Float64Array.from(offs);
 }
 
 function drawSamples(
@@ -166,10 +191,12 @@ function drawSamples(
   mask: Int32Array,
   count: number,
   rnd: () => number,
+  patchOffsets: Float64Array,
 ): SampleSet {
+  const patchSize = Math.max(1, patchOffsets.length / 3);
   const n = Math.min(count, mask.length);
   const x = new Float64Array(n), y = new Float64Array(n), z = new Float64Array(n);
-  const fv = new Float64Array(n);
+  const fv = new Float64Array(n * patchSize);
   const [nx, ny] = level.dims;
   const sxy = nx * ny;
   const p: Vec3 = [0, 0, 0];
@@ -181,9 +208,19 @@ function drawSamples(
     const i = rem - j * nx;
     applyMat4(level.indexToWorld, i, j, k, p);
     x[s] = p[0]; y[s] = p[1]; z[s] = p[2];
-    fv[s] = level.data[flat];
+    if (patchSize === 1) {
+      fv[s] = level.data[flat];
+    } else {
+      for (let q = 0; q < patchSize; q++) {
+        // fixed 側は変換が掛からないので world で直接読む。範囲外は端の値
+        // （NaN にすると、パッチの一部が欠けただけで点全体が捨てられる）。
+        const v = sampleWorldClamped(level, p[0] + patchOffsets[q * 3],
+          p[1] + patchOffsets[q * 3 + 1], p[2] + patchOffsets[q * 3 + 2]);
+        fv[s * patchSize + q] = v;
+      }
+    }
   }
-  return { x, y, z, fixedValue: fv, n };
+  return { x, y, z, fixedValue: fv, n, patchSize, patchOffsets };
 }
 
 /**
@@ -202,23 +239,52 @@ function evaluate(
   params: Float64Array,
   center: Vec3,
   metric: MetricKind,
-  buf: { f: Float64Array; m: Float64Array },
+  buf: { f: Float64Array; m: Float64Array; rot: Float64Array },
 ): number {
   const mat = paramsToMatrix(params, center);
-  let valid = 0;
+  const ps = samples.patchSize;
+
+  // パッチのオフセットは剛体の回転部だけを掛ければよい（T(p+d) = T(p) + R·d）。
+  if (ps > 1) {
+    for (let q = 0; q < ps; q++) {
+      const dx = samples.patchOffsets[q * 3];
+      const dy = samples.patchOffsets[q * 3 + 1];
+      const dz = samples.patchOffsets[q * 3 + 2];
+      buf.rot[q * 3] = mat[0] * dx + mat[1] * dy + mat[2] * dz;
+      buf.rot[q * 3 + 1] = mat[4] * dx + mat[5] * dy + mat[6] * dz;
+      buf.rot[q * 3 + 2] = mat[8] * dx + mat[9] * dy + mat[10] * dz;
+    }
+  }
+
+  let valid = 0;      // 有効な**値**の数
+  let usedPoints = 0; // 有効な標本点の数
   for (let s = 0; s < samples.n; s++) {
     const px = samples.x[s], py = samples.y[s], pz = samples.z[s];
     const qx = mat[0] * px + mat[1] * py + mat[2] * pz + mat[3];
     const qy = mat[4] * px + mat[5] * py + mat[6] * pz + mat[7];
     const qz = mat[8] * px + mat[9] * py + mat[10] * pz + mat[11];
-    const v = sampleWorld(moving, qx, qy, qz);
-    if (!Number.isFinite(v)) continue;
-    buf.f[valid] = samples.fixedValue[s];
-    buf.m[valid] = v;
-    valid++;
+
+    if (ps === 1) {
+      const v = sampleWorld(moving, qx, qy, qz);
+      if (!Number.isFinite(v)) continue;
+      buf.f[valid] = samples.fixedValue[s];
+      buf.m[valid] = v;
+      valid++; usedPoints++;
+      continue;
+    }
+    // パッチ: 中心が視野外なら点ごと捨てる。中心が入っていれば、
+    // 周辺は端の値で読む（一部が欠けただけで点を捨てると標本が偏る）。
+    if (!Number.isFinite(sampleWorld(moving, qx, qy, qz))) continue;
+    for (let q = 0; q < ps; q++) {
+      buf.f[valid] = samples.fixedValue[s * ps + q];
+      buf.m[valid] = sampleWorldClamped(moving,
+        qx + buf.rot[q * 3], qy + buf.rot[q * 3 + 1], qz + buf.rot[q * 3 + 2]);
+      valid++;
+    }
+    usedPoints++;
   }
-  if (valid < Math.max(16, samples.n * 0.1)) return 0;
-  const pair: SamplePair = { fixed: buf.f, moving: buf.m, count: valid };
+  if (usedPoints < Math.max(16, samples.n * 0.1)) return 0;
+  const pair: SamplePair = { fixed: buf.f, moving: buf.m, count: valid, patchSize: ps };
   return evaluateMetric(metric, pair);
 }
 
@@ -305,9 +371,19 @@ export function registerRigid(
       continue;
     }
 
+    // LNCC はパッチを取るので、1 点あたり patchSize 個の値になる。
+    // 点数はその分減らす（総サンプル数を指標によらず概ね揃えるため）。
+    const patchOffsets = metric === "lncc"
+      ? buildPatchOffsets(fLevel.spacingMm, 1)
+      : new Float64Array(3); // 中心のみ
+    const patchSize = patchOffsets.length / 3;
+    const points = patchSize > 1
+      ? Math.max(120, Math.floor(samplesPerIteration / patchSize))
+      : samplesPerIteration;
     const buf = {
-      f: new Float64Array(samplesPerIteration),
-      m: new Float64Array(samplesPerIteration),
+      f: new Float64Array(points * patchSize),
+      m: new Float64Array(points * patchSize),
+      rot: new Float64Array(patchSize * 3),
     };
     const rnd = mulberry32(seed + li * 7919);
 
@@ -336,8 +412,9 @@ export function registerRigid(
     for (; iter < maxIter; iter++) {
       if (options.shouldAbort?.()) { aborted = true; break; }
 
-      const samples = drawSamples(fLevel.volume, mask, samplesPerIteration, rnd);
-      current = evaluate(samples, mLevel.volume, params, center, metric, buf);
+      const samples = drawSamples(fLevel.volume, mask, points, rnd, patchOffsets);
+      const score = (pp: Float64Array): number => evaluate(samples, mLevel.volume, pp, center, metric, buf);
+      current = score(params);
 
       // 有限差分の幅は**今から踏もうとしている歩幅に合わせる**。固定幅にすると、
       // 収束に近づいたとき「幅の中で平均された勾配」しか見えず、最適解の手前で
@@ -351,9 +428,9 @@ export function registerRigid(
         const delta = h * scale[d];
         trial.set(params);
         trial[d] = params[d] + delta;
-        const up = evaluate(samples, mLevel.volume, trial, center, metric, buf);
+        const up = score(trial);
         trial[d] = params[d] - delta;
-        const dn = evaluate(samples, mLevel.volume, trial, center, metric, buf);
+        const dn = score(trial);
         grad[d] = (up - dn) / (2 * delta);
         gnorm += grad[d] * grad[d];
       }
@@ -370,7 +447,7 @@ export function registerRigid(
           trial[d] = params[d] + (trialStep * scale[d] * grad[d]) / gnorm;
         }
         clampToLimits(trial, limits);
-        const cand = evaluate(samples, mLevel.volume, trial, center, metric, buf);
+        const cand = score(trial);
         if (cand > current) {
           params.set(trial);
           current = cand;
