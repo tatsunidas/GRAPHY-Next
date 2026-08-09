@@ -795,6 +795,14 @@ GRAPHY-Next/
   ⚠️ **非剛体（deform）に剛体を掛けると視野周縁では何もしないより悪くなる**
   （変位 RMSE 12.13 → 24.49mm）。詳細は設計書 §10「R3 の実装」。
 - 2D/3D **非剛体（Deformable）位置合わせ**（R4）: 未実装。
+- ✅ **派生シリーズの PET タグ引き継ぎを修正（2026-08-09）**: `POST /api/series/derived` は
+  患者・検査・表示系しか引き継いでおらず、**PET 固有のタグが 1 つも入っていなかった**。
+  リサンプルした PET を保存すると `Modality=PT` のまま **SUV だけ計算できない**シリーズが
+  できていた（画像は開けるので最も気付きにくい）。モダリティ別の引き継ぎ表
+  （`ModalityAttributeInheritance`）を入れ、必須タグが欠けたら**保存を拒否**する。
+  `FrameOfReferenceUID` は幾何リファレンスと分離できるよう `frameOfReferenceUid` を追加。
+  **Slicer / Curved MPR / 中心線 / プラグイン H4b も同じ経路なので全部に効く。**
+  詳細は `registration-design.md` §8.3。
 - 📐 **設計は [`fw/registration-design.md`](registration-design.md) が正本**（2026-08-08 起票）。
   対象は PET-CT / PET-MR の骨盤・心臓。**GPU 前提にせず CPU で完結**、心臓 PET-MR は
   シミュレーション（GNBP-3S）のみ。土台は `computeFusionSlice` に world→world 変換を

@@ -98,6 +98,20 @@ public class DerivedSeriesService {
                         + f.instanceNumber() + ", got=" + px.length + ", expected=" + expectedBytes + ")");
             }
             Attributes a = buildInstance(tmpl, req, newSeriesUid, seriesNumber, modality, f, px);
+            if (sops.isEmpty() && stowBatch == null || sops.isEmpty()) {
+                // 先頭インスタンスで 1 度だけ検査する（全フレームで同じ属性なので）。
+                // ★ 定量に必要なタグが欠けたまま保存しない（設計 §8.3）。
+                // Modality=PT のまま SUV だけ出せないシリーズは、開けてしまうぶん
+                // 「壊れている」と気付くのが最も遅い。作る前に落とす。
+                List<String> missing = ModalityAttributeInheritance.missingRequired(a, modality);
+                if (!missing.isEmpty()) {
+                    throw new IllegalArgumentException(
+                            "派生シリーズを作成できません: " + modality + " の定量に必要な属性が"
+                            + "元シリーズから引き継げませんでした（" + String.join(", ", missing) + "）。"
+                            + "このまま保存すると、見た目は " + modality + " なのに SUV が計算できない"
+                            + "シリーズになります。");
+                }
+            }
             sops.add(a.getString(Tag.SOPInstanceUID));
             if (web != null) {
                 stowBatch.add(a);
@@ -162,22 +176,20 @@ public class DerivedSeriesService {
         double[] iop = req.imageOrientationPatient();
         boolean hasGeom = iop != null && iop.length == 6;
 
-        // 患者/検査属性を元シリーズから個別に確実に引き継ぐ。
-        int[] inherit = {
-                Tag.SpecificCharacterSet,
-                Tag.PatientID, Tag.PatientName, Tag.PatientBirthDate, Tag.PatientSex, Tag.PatientAge,
-                Tag.StudyInstanceUID, Tag.StudyDate, Tag.StudyTime, Tag.StudyID,
-                Tag.AccessionNumber, Tag.StudyDescription, Tag.ReferringPhysicianName,
-                Tag.Manufacturer, Tag.ManufacturerModelName,
-                Tag.PatientPosition,
-                Tag.WindowCenter, Tag.WindowWidth, Tag.VOILUTFunction,
-        };
-        for (int tag : inherit) {
-            copyTag(tmpl, a, tag);
-        }
-        // FrameOfReferenceUID は幾何がある場合のみ引き継ぐ（IPP/IOP 無しで付けると空間登録を偽装するため）。
+        // 患者/検査属性に加え、**モダリティ固有の属性**を元シリーズから引き継ぐ
+        // （設計 fw/registration-design.md §8.3）。PET の Units / 放射性医薬品シーケンス /
+        // 体重 / 減衰補正の基準時刻が欠けると、Modality=PT のまま SUV だけが計算できない
+        // シリーズができてしまう。
+        ModalityAttributeInheritance.inherit(tmpl, a, modality);
+        // FrameOfReferenceUID は幾何がある場合のみ付ける（IPP/IOP 無しで付けると空間登録を偽装するため）。
+        // ★ 出どころは「属性テンプレート（元シリーズ）」とは限らない。位置合わせの結果は
+        //   fixed の座標系にあるので、その場合は呼び出し側が fixed の FoR を渡す。
         if (hasGeom) {
-            copyTag(tmpl, a, Tag.FrameOfReferenceUID);
+            if (req.frameOfReferenceUid() != null && !req.frameOfReferenceUid().isBlank()) {
+                a.setString(Tag.FrameOfReferenceUID, VR.UI, req.frameOfReferenceUid());
+            } else {
+                copyTag(tmpl, a, Tag.FrameOfReferenceUID);
+            }
             copyTag(tmpl, a, Tag.PositionReferenceIndicator);
         }
         if (a.getString(Tag.SpecificCharacterSet) == null) {
@@ -241,8 +253,12 @@ public class DerivedSeriesService {
         a.setDouble(Tag.RescaleSlope, VR.DS, slope);
         if (req.rescaleType() != null && !req.rescaleType().isBlank()) {
             a.setString(Tag.RescaleType, VR.LO, req.rescaleType());
-        } else if ("CT".equalsIgnoreCase(modality)) {
-            a.setString(Tag.RescaleType, VR.LO, "HU");
+        } else {
+            // モダリティと Units から決める。PET は画素が Units の示す量（BQML 等）なので、
+            // 「CT なら HU」だけでは PET に何も入らなかった。
+            ModalityAttributeInheritance.setString(
+                    a, Tag.RescaleType, VR.LO,
+                    ModalityAttributeInheritance.defaultRescaleType(modality, tmpl));
         }
         // 「データ無し」を埋めた背景値をパディングとして明示する（VR は signed 画素なので SS）。
         // これがあると、ビューア側は W/L 自動計算や統計から背景を除外できる。

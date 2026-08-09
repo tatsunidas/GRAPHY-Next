@@ -426,6 +426,24 @@ UI に明示し、`RegistrationResult.params` と `DerivationDescription` に必
 `SOPClassUID` も PET Image Storage のままなので、**見た目は PET なのに定量できない**という
 最も気付きにくい壊れ方をする。
 
+> ✅ **2026-08-09 実装済み**（`backend/.../dicom/derived/ModalityAttributeInheritance.java`、
+> テスト 11 件）。R5 を待たず、共有経路の欠陥として単独で直した。**設計から動かした点**:
+>
+> - `FrameOfReferenceUID` は「コピー」にしなかった。位置合わせの結果は **fixed の座標系**に
+>   あるので、元シリーズ（moving）の FoR を引き継ぐと「元の PET と同じ座標系だ」と偽ることになり、
+>   FoR を信じる他ツールが位置合わせ済みと誤解する。`DerivedSeriesRequest` に
+>   `frameOfReferenceUid` を足し、**属性の出どころ（moving）と幾何の出どころ（fixed）を
+>   分離できる**ようにした（未指定なら従来どおり元シリーズから引き継ぐ）。
+> - **シーケンスは深いコピー**にした。参照だけ渡すと元の `Attributes` の変更が派生側に漏れる。
+> - `SUVType` / `Units=GML` も引き継ぐ。これは「もう SUV 化済み」の印で、
+>   落とすと**二重に SUV 化される**。
+> - 必須チェックは**シーケンスの中身まで見る**（投与量・投与時刻・半減期）。
+>   表側の `RadiopharmaceuticalInformationSequence` が在るだけで通してしまうと、
+>   いちばん嫌らしい欠け方（中身が空）を素通りさせる。
+>
+> なお **幾何（IOP/IPP/PixelSpacing）は元々呼び出し側が渡す仕組み**で、欠陥ではなかった。
+> 直したのは属性の引き継ぎだけである。
+
 **対応（R5 で必須）**: `DerivedSeriesService` に **モダリティ別の引き継ぎタグ表**を導入する。
 
 - `PT` のとき上記を `tmpl` からコピーし、`RescaleType` の既定は `Units` の値に従う。

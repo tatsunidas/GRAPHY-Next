@@ -50,6 +50,15 @@ public record DerivedSeriesRequest(
         double sliceThickness,
         double spacingBetweenSlices,
         double[] imageOrientationPatient,
+        /**
+         * 出力の空間基準（FrameOfReferenceUID）を**元シリーズ以外**に置きたい場合に指定する。
+         *
+         * <p>位置合わせの結果を保存する場合（R5）、リサンプルした moving は
+         * <b>fixed の座標系にある</b>。元シリーズ（moving）の FoR を引き継ぐと
+         * 「元の PET と同じ座標系だ」と偽ることになり、FoR を信じる他ツールが
+         * 位置合わせ済みと誤解する。null なら従来どおり元シリーズから引き継ぐ。
+         */
+        String frameOfReferenceUid,
         String derivationDescription,
         Double rescaleSlope,
         Double rescaleIntercept,
