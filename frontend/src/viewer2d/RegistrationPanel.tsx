@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n/i18n";
-import type { Instance, Series, Study } from "../api";
+import { fetchSeriesLayout, type Instance, type Series, type Study } from "../api";
 import type { ViewerMode } from "../viewer/imageId";
 import { estimateRegVolume, loadRegVolume } from "../viewer/regVolumeLoader";
 import { runRigidInWorker, toPayload } from "../viewer/regWorkerClient";
@@ -25,6 +25,10 @@ import {
 } from "../viewer/regParams";
 import type { RegistrationMode } from "../viewer/regProtocol";
 import type { RegistrationResult } from "../viewer/regResult";
+import {
+  createSro, listSro, sroLabel, sroRequestFromResult, sroToRegistrationResult,
+  type ParsedSro,
+} from "../viewer/sro";
 
 /** 見積りがこれを超えたら確認を挟む（設計 §7-1「黙って進めて OOM で落とさない」）。 */
 const CONFIRM_BYTES = 1_200_000_000; // 約 1.2 GB
@@ -63,7 +67,90 @@ export function RegistrationPanel({
   const abortRef = useRef<(() => void) | null>(null);
   const cancelledRef = useRef(false);
 
+  // ── DICOM SRO（R5） ───────────────────────────────────────────────
+  // FrameOfReferenceUID は SRO の本体（FoR どうしの関係を書くのが SRO なので）。
+  // ボリュームを読むと数十秒かかるが、レイアウトなら metadata だけで済む。
+  const [fors, setFors] = useState<{ fixed: string | null; moving: string | null } | null>(null);
+  const [sroList, setSroList] = useState<ParsedSro[] | null>(null);
+  const [sroBusy, setSroBusy] = useState(false);
+  const [sroMsg, setSroMsg] = useState<string | null>(null);
+  const [sroError, setSroError] = useState<string | null>(null);
+
   useEffect(() => () => { abortRef.current?.(); }, []);
+
+  const refreshSroList = useCallback(async (studyUid: string) => {
+    try {
+      setSroList(await listSro(studyUid));
+    } catch {
+      // 一覧が引けないことで保存までできなくなるのは筋が悪い。空として続ける。
+      setSroList([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [f, m] = await Promise.all([
+          fetchSeriesLayout(fixed.study.studyInstanceUid, fixed.series.seriesInstanceUid),
+          fetchSeriesLayout(moving.study.studyInstanceUid, moving.series.seriesInstanceUid),
+        ]);
+        if (cancelled) return;
+        setFors({ fixed: f.frameOfReferenceUID ?? null, moving: m.frameOfReferenceUID ?? null });
+      } catch {
+        if (!cancelled) setFors({ fixed: null, moving: null });
+      }
+    })();
+    void refreshSroList(fixed.study.studyInstanceUid);
+    return () => { cancelled = true; };
+  }, [fixed.study.studyInstanceUid, fixed.series.seriesInstanceUid,
+      moving.study.studyInstanceUid, moving.series.seriesInstanceUid, refreshSroList]);
+
+  /**
+   * SRO を保存できない理由（できるなら null）。
+   *
+   * <p>**押せない理由を先に出す**。押してから backend の 400 で知らせると、
+   * 利用者は「壊れている」と受け取る。ここで挙げる条件は backend の検証と同じもの。
+   */
+  const sroBlockedReason = (): string | null => {
+    if (!result) return t("registration.sroNeedResult");
+    if (!fors) return t("registration.sroLoading");
+    if (!fors.fixed || !fors.moving) return t("registration.sroNeedFor");
+    // 同じ FoR どうしは SRO として表現できない（読み手が moving 側を見分けられない）。
+    if (fors.fixed === fors.moving) return t("registration.sroSameFor");
+    return null;
+  };
+
+  /** 一覧と保存メッセージで使う短い種別名。 */
+  const kindLabel = useCallback(
+    (deformable: boolean) => t(deformable ? "registration.kindDeformable" : "registration.kindRigid"),
+    [t],
+  );
+
+  const saveSro = useCallback(async () => {
+    if (!result || !fors?.fixed || !fors.moving) return;
+    setSroBusy(true);
+    setSroError(null);
+    setSroMsg(null);
+    try {
+      const label = moving.series.seriesDescription || moving.series.modality || "REG";
+      const created = await createSro(sroRequestFromResult(result, {
+        studyInstanceUid: fixed.study.studyInstanceUid,
+        fixedSeriesInstanceUid: fixed.series.seriesInstanceUid,
+        fixedFrameOfReferenceUid: fors.fixed,
+        movingFrameOfReferenceUid: fors.moving,
+        contentLabel: label,
+        contentDescription:
+          `${fixed.series.seriesDescription ?? "fixed"} ← ${moving.series.seriesDescription ?? "moving"}`,
+      }));
+      setSroMsg(t("registration.sroSaved", { kind: kindLabel(created.deformable) }));
+      await refreshSroList(fixed.study.studyInstanceUid);
+    } catch (e) {
+      setSroError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSroBusy(false);
+    }
+  }, [result, fors, fixed, moving, t, kindLabel, refreshSroList]);
 
   const sameModality = (fixed.series.modality ?? "") === (moving.series.modality ?? "");
 
@@ -316,13 +403,19 @@ export function RegistrationPanel({
             <span style={key}>{t("registration.resultRotation")}</span>
             <span style={val}>{result.eulerDeg.map((v) => v.toFixed(2)).join(", ")} °</span>
           </div>
-          <div style={row}>
-            <span style={key}>{t("registration.resultMetric")}</span>
-            <span style={val}>
-              {result.metric.toUpperCase()} = {result.metricValue.toFixed(4)}
-              {"  "}({(result.elapsedMs / 1000).toFixed(1)} s)
-            </span>
-          </div>
+          {/* SRO から読み込んだ結果は類似度も所要時間も持たない。0 を出すと
+              「測って 0 だった」ように見えるので、出自を書いて代える。 */}
+          {result.metric === "sro" ? (
+            <div style={hint}>{t("registration.fromSro")}</div>
+          ) : (
+            <div style={row}>
+              <span style={key}>{t("registration.resultMetric")}</span>
+              <span style={val}>
+                {result.metric.toUpperCase()} = {result.metricValue.toFixed(4)}
+                {"  "}({(result.elapsedMs / 1000).toFixed(1)} s)
+              </span>
+            </div>
+          )}
           <div style={hint}>
             {result.sameFrameOfReference
               ? t("registration.forSame")
@@ -330,27 +423,82 @@ export function RegistrationPanel({
           </div>
           {result.dvf && (
             <>
-              <div style={row}>
-                <span style={key}>{t("registration.resultMaxDisp")}</span>
-                <span style={val}>{result.dvf.maxDisplacementMm.toFixed(1)} mm</span>
-              </div>
-              <div style={row}>
-                <span style={key}>{t("registration.resultJacobian")}</span>
-                <span style={val}>
-                  {result.dvf.jacobian.min.toFixed(2)}–{result.dvf.jacobian.max.toFixed(2)}
-                  {"  "}({t("registration.resultNegative", {
-                    pct: (result.dvf.jacobian.negativeFraction * 100).toFixed(2),
-                  })})
-                </span>
-              </div>
-              {result.dvf.jacobian.negativeFraction > 0 && (
-                <div style={errorBox}>{t("registration.foldingWarning")}</div>
+              {/* SRO には品質指標が入らない。NaN のまま整形すると "NaN mm" と出るので、
+                  **測っていないことを書く**。0 で埋めて測ったように見せてはいけない。 */}
+              {Number.isFinite(result.dvf.maxDisplacementMm) && (
+                <div style={row}>
+                  <span style={key}>{t("registration.resultMaxDisp")}</span>
+                  <span style={val}>{result.dvf.maxDisplacementMm.toFixed(1)} mm</span>
+                </div>
+              )}
+              {Number.isFinite(result.dvf.jacobian.min) ? (
+                <>
+                  <div style={row}>
+                    <span style={key}>{t("registration.resultJacobian")}</span>
+                    <span style={val}>
+                      {result.dvf.jacobian.min.toFixed(2)}–{result.dvf.jacobian.max.toFixed(2)}
+                      {"  "}({t("registration.resultNegative", {
+                        pct: (result.dvf.jacobian.negativeFraction * 100).toFixed(2),
+                      })})
+                    </span>
+                  </div>
+                  {result.dvf.jacobian.negativeFraction > 0 && (
+                    <div style={errorBox}>{t("registration.foldingWarning")}</div>
+                  )}
+                </>
+              ) : (
+                <div style={hint}>{t("registration.qualityUnknown")}</div>
               )}
             </>
           )}
           <div style={hint}>{t("registration.manualOnTop")}</div>
         </div>
       )}
+
+      {/* ── DICOM SRO（設計 §12.4 の第 2 段） ──────────────────────────
+          アプリ内保存が「開き直せば同じ絵」を担うのに対し、こちらは患者記録として
+          可搬な形で残す。**どちらか一方では足りない**ので両方を出す。 */}
+      <div style={sroBox}>
+        <div style={sroHead}>{t("registration.sroTitle")}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <button
+            style={runBtn}
+            disabled={busy || sroBusy || sroBlockedReason() !== null}
+            title={sroBlockedReason() ?? t("registration.sroSaveTitle")}
+            onClick={() => void saveSro()}
+          >
+            {sroBusy ? t("registration.sroSaving") : t("registration.sroSave")}
+          </button>
+          {/* 押せないときは理由を常に見せる。tooltip だけだと気付かれない。 */}
+          {sroBlockedReason() && <span style={hint}>{sroBlockedReason()}</span>}
+        </div>
+        {sroMsg && <div style={hint}>{sroMsg}</div>}
+        {sroError && <div style={errorBox}>{sroError}</div>}
+
+        {sroList && sroList.length > 0 && (
+          <div style={{ marginTop: 6 }}>
+            <div style={hint}>{t("registration.sroExisting")}</div>
+            {sroList.map((s) => (
+              <div key={s.sopInstanceUid} style={sroRow}>
+                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {sroLabel(s, kindLabel(s.deformable))}
+                </span>
+                <button
+                  style={{ ...runBtn, flex: "none" }}
+                  disabled={busy || sroBusy}
+                  title={t("registration.sroLoadTitle")}
+                  onClick={() => {
+                    onResult(sroToRegistrationResult(s));
+                    setSroMsg(t("registration.sroLoaded"));
+                  }}
+                >
+                  {t("registration.sroLoad")}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -454,4 +602,13 @@ const paramLabel: React.CSSProperties = { flex: 1, fontSize: 11, color: "#5a6672
 const paramInput: React.CSSProperties = { width: 72, fontSize: 11, padding: "1px 3px" };
 const resultBox: React.CSSProperties = {
   marginTop: 8, paddingTop: 8, borderTop: "1px solid #e6ebf0",
+};
+const sroBox: React.CSSProperties = {
+  marginTop: 8, paddingTop: 8, borderTop: "1px solid #e6ebf0",
+};
+const sroHead: React.CSSProperties = {
+  fontSize: 11, fontWeight: 600, color: "#5a6672", marginBottom: 4,
+};
+const sroRow: React.CSSProperties = {
+  display: "flex", gap: 6, alignItems: "center", fontSize: 11, marginTop: 3,
 };
