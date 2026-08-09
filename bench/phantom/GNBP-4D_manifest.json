@@ -1,0 +1,31 @@
+{
+  "phantom": "GNBP-4D",
+  "version": "1.0",
+  "purpose": "degradation: deliberately incomplete data. The application must refuse the affected feature and say why, rather than produce a result that looks finished.",
+  "series": {
+    "nonspatial": {
+      "series": "GNBP-4D-nonspatial",
+      "series_number": 1,
+      "expects": "位置調整・自動位置合わせが無効化され、理由が表示されること",
+      "files": 1,
+      "bytes": 34594,
+      "series_md5": "9af9f62f2bc0a69c47726cdfd777aa13"
+    },
+    "pet-complete": {
+      "series": "GNBP-4D-pet-complete",
+      "series_number": 2,
+      "expects": "SUV が計算でき、派生シリーズも保存できること",
+      "files": 24,
+      "bytes": 840616,
+      "series_md5": "751a4fd5869495064aaebc10ec18b10c"
+    },
+    "pet-incomplete": {
+      "series": "GNBP-4D-pet-incomplete",
+      "series_number": 3,
+      "expects": "SUV が拒否され、派生シリーズの保存も拒否されること",
+      "files": 24,
+      "bytes": 835528,
+      "series_md5": "15da62a61cdb4ffcde877fe5bb483a3f"
+    }
+  }
+}

@@ -98,7 +98,7 @@ public class DerivedSeriesService {
                         + f.instanceNumber() + ", got=" + px.length + ", expected=" + expectedBytes + ")");
             }
             Attributes a = buildInstance(tmpl, req, newSeriesUid, seriesNumber, modality, f, px);
-            if (sops.isEmpty() && stowBatch == null || sops.isEmpty()) {
+            if (sops.isEmpty()) {
                 // 先頭インスタンスで 1 度だけ検査する（全フレームで同じ属性なので）。
                 // ★ 定量に必要なタグが欠けたまま保存しない（設計 §8.3）。
                 // Modality=PT のまま SUV だけ出せないシリーズは、開けてしまうぶん

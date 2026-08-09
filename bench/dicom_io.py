@@ -54,6 +54,10 @@ def write_series(
     body_part: str = "",
     protocol_name: str = "",
     frame_of_reference_key: str | None = None,
+    modality: str = "CT",
+    sop_class_uid: str = CT_IMAGE_STORAGE,
+    spatial: bool = True,
+    customize=None,
 ) -> None:
     """Write `volume` (n_slices, rows, cols) of HU values as a CT series.
 
@@ -63,6 +67,15 @@ def write_series(
     while building content about the centre silently offsets every z in the
     truth table by half the stack length, which would invalidate any
     position-dependent accuracy measurement.
+
+    `spatial=False` omits ImageOrientationPatient / ImagePositionPatient /
+    SliceLocation / FrameOfReferenceUID. Real CR and DX series look like this, and
+    so does anything a viewer must refuse to register: without a patient-space
+    frame there is nothing to align *to*. Producing such a series on purpose is
+    the only way to test that the refusal path works and says why.
+
+    `customize(ds, k)` runs just before the file is written, so a caller can add
+    (or deliberately omit) modality-specific attributes.
 
     `frame_of_reference_key` overrides the key the FrameOfReferenceUID is derived
     from. It defaults to `study_key`, i.e. every series of a study shares one
@@ -85,7 +98,7 @@ def write_series(
         sop_uid = deterministic_uid("sop", uid_key, k)
 
         fm = FileMetaDataset()
-        fm.MediaStorageSOPClassUID = CT_IMAGE_STORAGE
+        fm.MediaStorageSOPClassUID = sop_class_uid
         fm.MediaStorageSOPInstanceUID = sop_uid
         fm.TransferSyntaxUID = ExplicitVRLittleEndian
         # Fixed, never generated: a per-run UID here would break reproducibility.
@@ -97,7 +110,7 @@ def write_series(
 
         # --- SOP Common ---------------------------------------------------
         ds.SpecificCharacterSet = "ISO_IR 100"
-        ds.SOPClassUID = CT_IMAGE_STORAGE
+        ds.SOPClassUID = sop_class_uid
         ds.SOPInstanceUID = sop_uid
         ds.InstanceCreationDate = "20260730"
         ds.InstanceCreationTime = "120000"
@@ -122,7 +135,7 @@ def write_series(
         ds.StudyDescription = study_description
 
         # --- General Series -----------------------------------------------
-        ds.Modality = "CT"
+        ds.Modality = modality
         ds.SeriesInstanceUID = series_uid
         ds.SeriesNumber = series_number
         ds.SeriesDate = "20260730"
@@ -136,8 +149,9 @@ def write_series(
         ds.ProtocolName = protocol_name
 
         # --- Frame of Reference -------------------------------------------
-        ds.FrameOfReferenceUID = frame_uid
-        ds.PositionReferenceIndicator = ""
+        if spatial:
+            ds.FrameOfReferenceUID = frame_uid
+            ds.PositionReferenceIndicator = ""
 
         # --- General Equipment --------------------------------------------
         ds.Manufacturer = "GRAPHY-Next benchmark phantom"
@@ -167,15 +181,16 @@ def write_series(
         ds.PixelSpacing = list(pixel_spacing)
         # Axial, no obliquity: rows run left-to-right (+x), columns run
         # anterior-to-posterior (+y).
-        ds.ImageOrientationPatient = [1, 0, 0, 0, 1, 0]
-        # Centred on the origin in x/y. `z_origin_mm` places the first slice so
-        # that patient coordinates agree with the phantom's own ground truth.
-        ds.ImagePositionPatient = [
-            -(columns - 1) / 2.0 * pixel_spacing[0],
-            -(rows - 1) / 2.0 * pixel_spacing[1],
-            z_origin_mm + k * slice_thickness,
-        ]
-        ds.SliceLocation = z_origin_mm + k * slice_thickness
+        if spatial:
+            ds.ImageOrientationPatient = [1, 0, 0, 0, 1, 0]
+            # Centred on the origin in x/y. `z_origin_mm` places the first slice so
+            # that patient coordinates agree with the phantom's own ground truth.
+            ds.ImagePositionPatient = [
+                -(columns - 1) / 2.0 * pixel_spacing[0],
+                -(rows - 1) / 2.0 * pixel_spacing[1],
+                z_origin_mm + k * slice_thickness,
+            ]
+            ds.SliceLocation = z_origin_mm + k * slice_thickness
 
         # --- Image Pixel ---------------------------------------------------
         ds.SamplesPerPixel = 1
@@ -219,6 +234,9 @@ def write_series(
 
         stored = (volume[k].astype(np.int32) - RESCALE_INTERCEPT).astype(np.uint16)
         ds.PixelData = stored.tobytes()
+
+        if customize is not None:
+            customize(ds, k)
 
         ds.save_as(os.path.join(out_dir, f"{k + 1:04d}.dcm"), enforce_file_format=True)
 

@@ -14,6 +14,9 @@ phantom/GNBP-2R-rigid/
 phantom/GNBP-2R-affine/
 phantom/GNBP-2R-deform/
 phantom/GNBP-2R-multimodal/
+phantom/GNBP-4D-nonspatial/
+phantom/GNBP-4D-pet-complete/
+phantom/GNBP-4D-pet-incomplete/
 
 # 測定用の専用ワークツリーと、その standalone ランタイムデータ
 .build/

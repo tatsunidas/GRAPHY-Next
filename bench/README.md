@@ -10,6 +10,7 @@ GRAPHY-Next の性能・正確性を評価するためのデジタルファン�
 | :- | :- | :- |
 | **GNBP-1A / 1B** | 正確性（体積・距離・HU）／ 性能（負荷スケーリング） | この README |
 | **GNBP-2R** | **レジストレーション精度**（剛体・アフィン・非剛体・マルチモーダル） | この README ＋ `fw/registration-design.md` §9.1 |
+| **GNBP-4D** | **劣化系列**（属性をわざと欠落させたデータ） | この README |
 
 ## なぜ2系列あるのか
 
@@ -187,6 +188,32 @@ node score_registration.mjs --series deform --estimate est.json --json
 上限」が測れるが、非剛体の目標値には届かない（それは欠陥ではない）。密な変位場の入力は、
 それを出すエンジンができる R4 で追加する。
 
+## GNBP-4D — 劣化系列（属性欠落）
+
+他のファントムは「答えが合っているか」を測る。こちらは別の問いに答える:
+**データが機能を支えられないとき、アプリは間違った結果を出さずに「できない」と言うか。**
+
+この経路は普通テストされない。実データで欠落したものを用意するのが面倒で、
+持ち続けるのも面倒だからである。同時に、**失敗したときがいちばん悪い経路**でもある。
+患者座標系を持たないシリーズを黙って位置合わせしたり、SUV に必要な属性を失った PET を
+保存したりすると、**見た目は完了しているのに間違っている**結果ができる。
+
+| 系列 | 中身 | 期待する挙動 |
+| :- | :- | :- |
+| `GNBP-4D-nonspatial` | DX 様 1 枚。**IOP/IPP/FrameOfReferenceUID なし** | 位置調整・自動位置合わせが**無効化され、理由が出る** |
+| `GNBP-4D-pet-complete` | PET。SUV に必要な属性が揃っている | SUV が計算でき、派生シリーズも保存できる（**対照**） |
+| `GNBP-4D-pet-incomplete` | PET。`Units` / `PatientWeight` / 放射性医薬品シーケンスを削除 | SUV が拒否され、**派生シリーズの保存も拒否される**（`fw/registration-design.md` §8.3） |
+
+**対照（`pet-complete`）を必ず一緒に見ること。** 対照が無いと
+「SUV が出なかった」が「拒否が効いた」のか「別の理由で出なかっただけ」なのか区別できない。
+
+```bash
+python3 make_phantom_4d.py --out ./phantom
+```
+
+実測（2026-08-09、実機）: `pet-complete` からの派生シリーズ保存は **HTTP 200**、
+`pet-incomplete` は **HTTP 400** ＋ 欠けているタグ名を並べた理由。
+
 ## 使い方
 
 ```bash
@@ -195,6 +222,7 @@ python3 make_phantom_b.py --out ./phantom              # 性能系列 64/128/256
 python3 make_phantom_b.py --out ./phantom --slices 256 # 単一サイズ
 python3 make_phantom_b.py --out ./phantom --compress j2k  # JPEG2000 版（デコード負荷比較用）
 python3 make_phantom_2r.py --out ./phantom             # レジストレーション系列 5 本（約 5 分）
+python3 make_phantom_4d.py --out ./phantom             # 劣化系列 3 本（属性欠落・数秒）
 python3 make_phantom_2r.py --out ./phantom --series rigid --force  # 1 系列だけ作り直す
 python3 preview.py phantom/GNBP-1A --out /tmp/a.png    # 目視確認
 ```
