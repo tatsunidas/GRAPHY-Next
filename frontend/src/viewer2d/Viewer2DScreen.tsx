@@ -1366,6 +1366,7 @@ function TileCell({
       setFusionLut(tile.fusion?.initialLut ?? null);
       setFusionWL(null);
       setFusionAutoWL(null);
+      fusionAutoWLSeeded.current = false;
       // 別シリーズの調整量を引きずらない（前のシリーズ向けのズレが黙って適用される事故を防ぐ）。
       // 自動位置合わせの結果も同じ理由で必ず捨てる — こちらは「前のシリーズに対して
       // 数十秒かけて求めた変換」なので、黙って残ると手動よりも気付きにくい。
@@ -1385,8 +1386,20 @@ function TileCell({
   // 既定 W/L の受け取り。**useCallback で識別子を固定する**。
   // renderFusionOverlay の戻り値（レンダプロップ）の内側で作ると `renderOverlay(ctx)` が
   // 呼ばれるたびに別関数になり、FusionImageViewer 側の再計算が毎レンダ走る。
+  //
+  // ★ 通知は **シリーズごとに 1 回だけ**にする。
+  //
+  // 自動 W/L はスライスごとに違う値になるので、毎回通知すると **スライス送りのたびに
+  // 親が再レンダ**し、さらに FusionControlBar の W/L 入力同期 effect が走る。
+  // 連続してスライスを送ると更新が積み上がり、React の入れ子更新の上限に達して
+  // `Maximum update depth exceeded` になる（実際にこれが原因の 1 つだった）。
+  // このコールバックの用途はコメントのとおり**コントロールバーの初期値シード**なので、
+  // 毎スライス更新する必要はない。「Auto」を押したときは種を蒔き直す。
+  const fusionAutoWLSeeded = useRef(false);
   const handleFusionAutoWL = useCallback((center: number, width: number) => {
-    setFusionAutoWL((prev) => (prev && prev.center === center && prev.width === width ? prev : { center, width }));
+    if (fusionAutoWLSeeded.current) return;
+    fusionAutoWLSeeded.current = true;
+    setFusionAutoWL({ center, width });
   }, []);
 
   // Fusion オーバーレイ描画。base 画像の表示矩形(rect)・現在スライス(imageId/index)に重ねる。
@@ -1624,7 +1637,7 @@ function TileCell({
           onTChange={setFusionT}
           onLutChange={setFusionLut}
           onWLChange={(center, width) => setFusionWL({ center, width })}
-          onWLAuto={() => setFusionWL(null)}
+          onWLAuto={() => { setFusionWL(null); fusionAutoWLSeeded.current = false; }}
           onAdjustChange={setFusionAdjust}
           registered={!!fusionRegistration}
           onOpenRegistration={() => setRegistrationOpen(true)}
