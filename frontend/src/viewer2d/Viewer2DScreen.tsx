@@ -18,6 +18,12 @@ import { SeriesViewer } from "../viewer/SeriesViewer";
 import { FusionImageViewer } from "../viewer/FusionOverlayViewer";
 import { ZERO_ADJUST, isZeroAdjust, type ManualAdjust } from "../viewer/regTransform";
 import { registrationToTransform, type RegistrationResult } from "../viewer/regResult";
+import {
+  findRecord, fingerprintFromLayout, upsertRecord,
+  type RegistrationRecord, type SeriesRef,
+} from "../viewer/registrationRecord";
+import { loadRegistrations, saveRegistrations } from "../viewer/registrationPersistence";
+import { fetchSeriesLayout } from "../api";
 import { RegistrationPanel } from "./RegistrationPanel";
 import type { RenderOverlay } from "../viewer/Viewer2D";
 import { buildSeriesLayout, type SeriesLayout } from "../viewer/seriesLayout";
@@ -1353,6 +1359,20 @@ function TileCell({
   // プレビューは composeTransforms(自動, 手動) で合成される。
   const [fusionRegistration, setFusionRegistration] = useState<RegistrationResult | null>(null);
   const [registrationOpen, setRegistrationOpen] = useState(false);
+  /**
+   * 記録の復元状態。
+   *
+   * <p>`stale` は「記録はあるが入力が変わっている」。**この場合は黙って適用しない** —
+   * 同じ SeriesInstanceUID でも中身が入れ替わっていることがあり、当てると
+   * もっともらしいが間違った重ね合わせになる。画面上は完成して見えるので最も危ない。
+   */
+  const [restoreState, setRestoreState] = useState<
+    { kind: "none" } | { kind: "restored"; savedAt: string }
+    | { kind: "stale"; record: RegistrationRecord; changed: string[] }
+  >({ kind: "none" });
+  /** 保存に使う版（読まずに上書きしないため）。 */
+  const docVersionRef = useRef<number | null>(null);
+  const refsRef = useRef<{ fixed: SeriesRef; moving: SeriesRef } | null>(null);
   // fusion が切り替わったら C/T / LUT / W/L / 位置合わせをリセット
   const prevFusionSeriesUid = useRef<string | null>(null);
   useEffect(() => {
@@ -1374,6 +1394,8 @@ function TileCell({
       setFusionRegistration(null);
       setRegistrationOpen(false);
       setFusionSpatial(true);
+      setRestoreState({ kind: "none" });
+      refsRef.current = null;
     }
   }, [tile.fusion?.series.seriesInstanceUid]);
 
@@ -1404,6 +1426,90 @@ function TileCell({
 
   // Fusion オーバーレイ描画。base 画像の表示矩形(rect)・現在スライス(imageId/index)に重ねる。
   // useMemo で安定化（毎レンダ別関数だと Viewer2D 側の rect 初期計算 effect がループするため）。
+  /**
+   * Fusion の組み合わせが決まったら、保存済みの位置合わせを探して復元する。
+   *
+   * <p>**開き直しても同じ重ね合わせになる**ことが、この機能が使い物になる条件。
+   * エンジンは決定的だが、それはコードが同一である限りの話なので、
+   * 再現は「保存した変換を読み戻す」ことで担保する（再計算に依存させない）。
+   */
+  useEffect(() => {
+    const fusion = tile.fusion;
+    if (!fusion) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [fixedLayout, movingLayout] = await Promise.all([
+          fetchSeriesLayout(tile.study.studyInstanceUid, tile.series.seriesInstanceUid),
+          fetchSeriesLayout(fusion.study.studyInstanceUid, fusion.series.seriesInstanceUid),
+        ]);
+        if (cancelled) return;
+        const refs = {
+          fixed: {
+            studyInstanceUid: tile.study.studyInstanceUid,
+            seriesInstanceUid: tile.series.seriesInstanceUid,
+            c: 0, t: 0,
+            fingerprint: fingerprintFromLayout(tile.series.seriesInstanceUid, fixedLayout),
+          },
+          moving: {
+            studyInstanceUid: fusion.study.studyInstanceUid,
+            seriesInstanceUid: fusion.series.seriesInstanceUid,
+            c: fusion.initialC ?? 0, t: fusion.initialT ?? 0,
+            fingerprint: fingerprintFromLayout(fusion.series.seriesInstanceUid, movingLayout),
+          },
+        };
+        refsRef.current = refs;
+
+        const { doc, version } = await loadRegistrations(patientKey);
+        if (cancelled) return;
+        docVersionRef.current = version;
+        const found = findRecord(doc, refs.fixed, refs.moving);
+        if (found.status === "ok") {
+          setFusionRegistration(found.record.registration);
+          setFusionAdjust(found.record.adjust);
+          setRestoreState({ kind: "restored", savedAt: found.record.savedAt });
+        } else if (found.status === "stale") {
+          // ★ 当てない。理由を出して、利用者に判断させる。
+          setRestoreState({ kind: "stale", record: found.record, changed: found.changed });
+        }
+      } catch {
+        // 復元できないことで Fusion 自体が使えなくなるのは筋が悪い。黙って続行する。
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [tile.fusion, tile.study.studyInstanceUid, tile.series.seriesInstanceUid, patientKey]);
+
+  /** 現在の状態を保存する（自動結果 ＋ 手動 6 値 ＋ 表示）。 */
+  const persistRegistration = useCallback(async (
+    registration: RegistrationResult | null,
+    adjust: ManualAdjust,
+  ) => {
+    const refs = refsRef.current;
+    if (!refs || !patientKey) return;
+    try {
+      // 保存の直前に読み直す。別ウィンドウが同じ患者の記録を触っていることがある。
+      const { doc, version } = await loadRegistrations(patientKey);
+      const record: RegistrationRecord = {
+        version: 1,
+        savedAt: new Date().toISOString(),
+        fixed: refs.fixed,
+        moving: refs.moving,
+        registration,
+        adjust,
+        display: {
+          opacity: tile.fusion?.opacity ?? 0.5,
+          lutName: null,
+          wl: fusionWL,
+        },
+      };
+      await saveRegistrations(patientKey, upsertRecord(doc, record), version);
+      docVersionRef.current = null; // 次回は読み直す
+      setRestoreState({ kind: "restored", savedAt: record.savedAt });
+    } catch {
+      // 保存に失敗しても表示中の位置合わせは有効。次の操作でまた試みる。
+    }
+  }, [patientKey, tile.fusion?.opacity, fusionWL]);
+
   // 自動結果 → 描画用の変換。結果が変わったときだけ作り直す（毎レンダ作ると
   // FusionImageViewer の再計算が毎レンダ走る。§10 ① と同じ落とし穴）。
   const registrationTransform = useMemo(
@@ -1638,11 +1744,47 @@ function TileCell({
           onLutChange={setFusionLut}
           onWLChange={(center, width) => setFusionWL({ center, width })}
           onWLAuto={() => { setFusionWL(null); fusionAutoWLSeeded.current = false; }}
-          onAdjustChange={setFusionAdjust}
+          onAdjustChange={(a) => { setFusionAdjust(a); void persistRegistration(fusionRegistration, a); }}
           registered={!!fusionRegistration}
           onOpenRegistration={() => setRegistrationOpen(true)}
           onRemove={() => onFusionChange(undefined)}
         />
+      )}
+
+      {/* 保存済みの位置合わせの状態。★ stale は「当てていない」ことを必ず見せる。 */}
+      {showControls && tile.fusion && restoreState.kind !== "none" && (
+        <div style={restoreState.kind === "stale" ? restoreStaleBar : restoreBar}>
+          {restoreState.kind === "restored" ? (
+            <span>{t("registration.restored", { at: new Date(restoreState.savedAt).toLocaleString() })}</span>
+          ) : (
+            <>
+              <span>
+                {t("registration.staleWarning", {
+                  what: restoreState.changed
+                    .map((c) => (c === "fixed" ? t("registration.fixed") : t("registration.moving")))
+                    .join(" / "),
+                })}
+              </span>
+              <button
+                style={{ ...fusionAutoBtn, flex: "none", marginLeft: 6 }}
+                onClick={() => {
+                  const r = restoreState.record;
+                  setFusionRegistration(r.registration);
+                  setFusionAdjust(r.adjust);
+                  setRestoreState({ kind: "restored", savedAt: r.savedAt });
+                }}
+              >
+                {t("registration.applyAnyway")}
+              </button>
+              <button
+                style={{ ...fusionAutoBtn, flex: "none", marginLeft: 4 }}
+                onClick={() => setRestoreState({ kind: "none" })}
+              >
+                {t("registration.dismiss")}
+              </button>
+            </>
+          )}
+        </div>
       )}
 
       {/* 自動位置合わせのパネル（設計 §12）。タイル内に絶対配置する。 */}
@@ -1658,7 +1800,7 @@ function TileCell({
             instances: tile.fusion.instances, c: fusionC, t: fusionT,
           }}
           result={fusionRegistration}
-          onResult={setFusionRegistration}
+          onResult={(r) => { setFusionRegistration(r); void persistRegistration(r, fusionAdjust); }}
           onClose={() => setRegistrationOpen(false)}
         />
       )}
@@ -2477,6 +2619,13 @@ const fusionNumInput: React.CSSProperties = {
   borderRadius: 3,
   fontSize: 11,
   padding: "1px 4px",
+};
+const restoreBar: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: 4, padding: "2px 6px",
+  fontSize: 10, color: "#2b6cb0", background: "#eef5fc", borderTop: "1px solid #d7e4f2",
+};
+const restoreStaleBar: React.CSSProperties = {
+  ...restoreBar, color: "#8a5a00", background: "#fdf5e6", borderTop: "1px solid #f0dcb0",
 };
 const fusionAdjustRow: React.CSSProperties = {
   flexBasis: "100%",
