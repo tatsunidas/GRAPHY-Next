@@ -9,7 +9,7 @@ import {
   buildLayoutFromDto,
   type SeriesLayout,
 } from "./seriesLayout";
-import type { ImageRect } from "./Viewer2D";
+import { overlayPlacement, type ImageRect } from "./overlayPlacement";
 import { imageIdForInstance, type ViewerMode } from "./imageId";
 import { getModalityCalibration } from "./pixelCalibration";
 import { fetchSeriesLayout, type Instance, type SeriesLayoutDto } from "../api";
@@ -484,11 +484,7 @@ export function FusionImageViewer({
     <canvas
       ref={canvasRef}
       style={{
-        position: "absolute",
-        left: rect.left,
-        top: rect.top,
-        width: rect.width,
-        height: rect.height,
+        ...overlayPlacement(rect),
         opacity,
         pointerEvents: "none",
         imageRendering: "pixelated",

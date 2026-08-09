@@ -748,7 +748,8 @@ GRAPHY-Next/
   GRAPHY の `ImageRoi.setZeroTransparent(true)` 相当。base が黒く暗転せず信号部のみ重畳。
 - **LUT**: `toImageData(values, cols, rows, wc, ww, lut?)` の第 6 引数。`fusionLut` 変更で再描画（即反映）。
 - **不透明度**: canvas の CSS `opacity`（再描画不要）。
-- **注意**: `rect` は軸並行 BBox 算出のため base を**回転**させると厳密でない（fit/zoom/pan/flip は追従）。
+- **注意**: `rect` は**画像の平行四辺形**（左上隅・回転前の幅高さ・線形部）。
+  fit/zoom/pan/回転/反転のすべてに追従する（2026-08-09 以降。それ以前は軸並行 BBox だった）。
   カラー(RGB)前景の非空間フォールバックは未対応。
 
 #### Fusion 設定（`settings/registry.ts`）
@@ -835,11 +836,15 @@ GRAPHY-Next/
 5. Enhanced 多フレーム（DimensionIndexValues/StackID/InStackPositionNumber、wadouri `frame=`）。
 6. **Fusion 改善**:
    - `viewer.fusionOpacity` / `viewer.fusionLut` を DnD 起動時に自動適用（現状は Settings に保存するのみ）。
-   - **base 回転時にオーバーレイが追従しない**（現状は軸並行 BBox。canvas に CSS transform が無い）。
-     2026-08-08 に実機で再確認。**手動位置合わせ（R1）が入って優先度が上がった** — 手で合わせて
-     いる最中に base を回すと、ズレが調整量由来か未追従由来か切り分けられない。
-     直し方は `registration-design.md` §10 ③（`OverlayRenderContext` に rotation/flip を載せ、
-     canvas 側を CSS transform で回す）。**flip の追従も要検証**（下記の記述は未確認）。
+   - ✅ **base 回転・反転へのオーバーレイ追従（2026-08-09 実装済み）**。
+     `computeImageRect` が軸並行 BBox ではなく**画像の平行四辺形**（左上隅＋回転前の
+     幅高さ＋線形部 `[a,b,c,d]`）を返すようにし、`overlayPlacement()` が
+     `transform: matrix(...)` で配置する。回転も反転も無いときは線形部が恒等になるので、
+     **従来の配置と完全に同じ**。**flip も追従するようになった**（従来は BBox が同じなので
+     見逃していた＝オーバーレイだけ鏡像になっていなかった）。
+     配置の数値は `viewer/overlayPlacement.ts`（cornerstone 非依存）に切り出して
+     `overlayPlacement.test.ts` で固定した — 目視でしか分からなかった箇所なので、
+     ブラウザ無しで検証できる形にしてある。Fusion とプラグイン値マップの両方に効く。
    - カラー(RGB)前景の非空間フォールバック対応。
    - 2D/3D 剛体・非剛体位置合わせ（設計: [`fw/registration-design.md`](registration-design.md)。
      最初の一歩は R1 = `computeFusionSlice(fg, bg, xf?)` ＋ 手動オフセット）。
@@ -851,7 +856,8 @@ GRAPHY-Next/
   - DnD → FusionControlBar 表示 / 透過度スライダー / × 解除: 動作確認済み（タイル→タイル, シリーズ→タイル）。
   - オーバーレイ描画は base 画像の表示矩形に重畳（原点一致・画像領域クリップ・zoom/pan 追従）。**要実機目視**。
   - LUT は canvas 経由で常時適用（フォールバック含む）。透過度・LUT とも即反映。
-  - 既知の限界: base 回転時の矩形は軸並行 BBox（厳密でない）。RGB 前景の非空間フォールバックは未対応。
+  - 既知の限界: RGB 前景の非空間フォールバックは未対応。
+    （base 回転・反転への追従は 2026-08-09 に解消。上記「Fusion 改善」参照。）
 - **LUT ファイル**: `backend/src/main/resources/luts/*.lut`（106 枚）。
   フォーマット判別順: ICOL マジック確認 → 768 バイト Raw → テキスト（tab 区切り）。
 - **GridView/タイルは viewport を多数生成**するため巨大シリーズで負荷大。将来 仮想化/`loadImageToCanvas`

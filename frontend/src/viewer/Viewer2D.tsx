@@ -44,6 +44,9 @@ import { autoWindow, rasterizeOverlay, type OverlayWindow } from "./overlayRaste
 import { encodeFrames, framePixelsBase64, hasNonFinite } from "./derivedSeriesEncode";
 import { httpSend } from "../http";
 import { emitDbChanged } from "../dbEvents";
+import { overlayPlacement, type ImageRect } from "./overlayPlacement";
+// 配置の純関数は overlayPlacement.ts が正。ここは既存の import 元との互換のため再輸出する。
+export { overlayPlacement, type ImageRect } from "./overlayPlacement";
 import { computeOrientationMarkers, type OrientationMarkers } from "./orientation";
 import { computeScaleBar, type ScaleBar } from "./scaleBar";
 import { getOrCreateCameraSync, getOrCreateVoiSync, getOrCreatePresentationSync, getOrCreateSeriesVoiSync, broadcastSeriesProperties, captureVoiBaseline, clearVoiBaseline } from "./sync";
@@ -212,13 +215,6 @@ export interface ViewerOverlays {
 }
 
 /** 現在スライスの画像が画面上に描画されている矩形（wrap 内の CSS px）。 */
-export interface ImageRect {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}
-
 /** プラグインの値マップの保持形（`ViewerOverlay` ＋ 対象スライスの imageId ＋ 解決済み既定値）。 */
 interface PluginOverlayState {
   imageId: string;
@@ -262,12 +258,23 @@ function computeImageRect(vp: Types.IStackViewport): ImageRect | null {
     const tl = vp.worldToCanvas(utilities.transformIndexToWorld(vtk, [-0.5, -0.5, 0]));
     const tr = vp.worldToCanvas(utilities.transformIndexToWorld(vtk, [cols - 0.5, -0.5, 0]));
     const bl = vp.worldToCanvas(utilities.transformIndexToWorld(vtk, [-0.5, rows - 0.5, 0]));
-    const left = Math.min(tl[0], tr[0], bl[0]);
-    const top = Math.min(tl[1], tr[1], bl[1]);
-    const width = Math.max(Math.abs(tr[0] - tl[0]), Math.abs(bl[0] - tl[0]));
-    const height = Math.max(Math.abs(bl[1] - tl[1]), Math.abs(tr[1] - tl[1]));
-    if (!Number.isFinite(left) || !Number.isFinite(top) || width <= 0 || height <= 0) return null;
-    return { left, top, width, height };
+
+    // 画像の 2 辺ベクトル（canvas 座標）。回転・反転はここに全部入っている。
+    const ux = tr[0] - tl[0], uy = tr[1] - tl[1];
+    const vx = bl[0] - tl[0], vy = bl[1] - tl[1];
+    const width = Math.hypot(ux, uy);
+    const height = Math.hypot(vx, vy);
+    if (!Number.isFinite(tl[0]) || !Number.isFinite(tl[1]) || width <= 0 || height <= 0) return null;
+
+    // 単位箱 → 平行四辺形 の線形写像。軸並行 BBox ではなく**実際の形**を返すので、
+    // 回転させてもオーバーレイが画像に張り付いたままになる。
+    return {
+      left: tl[0],
+      top: tl[1],
+      width,
+      height,
+      linear: [ux / width, uy / width, vx / height, vy / height],
+    };
   } catch {
     return null;
   }
@@ -282,7 +289,9 @@ function sameRect(a: ImageRect | null, b: ImageRect | null): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
   return nearly(a.left, b.left) && nearly(a.top, b.top)
-    && nearly(a.width, b.width) && nearly(a.height, b.height);
+    && nearly(a.width, b.width) && nearly(a.height, b.height)
+    && nearly(a.linear[0], b.linear[0]) && nearly(a.linear[1], b.linear[1])
+    && nearly(a.linear[2], b.linear[2]) && nearly(a.linear[3], b.linear[3]);
 }
 
 /**
@@ -1981,14 +1990,7 @@ export function Viewer2D({
               <canvas
                 ref={setOverlayCanvas}
                 data-testid="plugin-overlay-canvas"
-                style={{
-                  position: "absolute",
-                  left: imageRect.left,
-                  top: imageRect.top,
-                  width: imageRect.width,
-                  height: imageRect.height,
-                  pointerEvents: "none",
-                }}
+                style={{ ...overlayPlacement(imageRect), pointerEvents: "none" }}
               />
               <div data-testid="plugin-overlay-label" style={pluginOverlayLabel}>
                 {t("viewer2d.plugin.overlayLabel", { name: pluginOverlay.label ?? "plugin" })}
