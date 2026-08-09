@@ -13,7 +13,7 @@
  */
 import { describe, it, expect } from "vitest";
 import {
-  seriesFingerprint, findRecord, upsertRecord, removeRecord,
+  seriesFingerprint, findRecord, upsertRecord, removeRecord, acceptRecordForCurrentInput,
   encodeFloat32, decodeFloat32, REGISTRATION_RECORD_VERSION,
   type RegistrationRecord, type SeriesFingerprintInput, type SeriesRef,
 } from "./registrationRecord";
@@ -154,5 +154,51 @@ describe("変位場の直列化", () => {
     const back = decodeFloat32(encodeFloat32(a));
     expect(back.length).toBe(a.length);
     expect(back[123456]).toBe(a[123456]);
+  });
+});
+
+describe("acceptRecordForCurrentInput — 指紋不一致のまま承認したとき", () => {
+  const oldFixed = ref("F", "fp-fixed-old");
+  const oldMoving = ref("M", "fp-moving-old");
+  const newFixed = ref("F", "fp-fixed-new");
+  const newMoving = ref("M", "fp-moving-new");
+  const NOW = "2026-08-09T12:00:00Z";
+
+  it("現在の入力に結び付け直すので、次に開いても stale にならない", () => {
+    // ★ これが目的。表示だけ戻して保存しないと、開き直すたびに同じ判断を求められる。
+    const accepted = acceptRecordForCurrentInput(
+      record(oldFixed, oldMoving), newFixed, newMoving, ["moving"], NOW,
+    );
+    const doc = upsertRecord(null, accepted);
+    expect(findRecord(doc, newFixed, newMoving).status).toBe("ok");
+  });
+
+  it("承認前の指紋を残す（変換がどの入力で計算されたかを追えるように）", () => {
+    // ★ 印を付けずに指紋だけ書き換えると、記録は「最初から合っていた」ようにしか
+    //    見えなくなる。変換が別の入力に対して計算された事実は、ここにしか残らない。
+    const accepted = acceptRecordForCurrentInput(
+      record(oldFixed, oldMoving), newFixed, newMoving, ["moving"], NOW,
+    );
+    expect(accepted.acceptedDespiteMismatch).toEqual({
+      at: NOW,
+      changed: ["moving"],
+      computedFor: { fixed: "fp-fixed-old", moving: "fp-moving-old" },
+    });
+  });
+
+  it("変換と手動調整は変えない（承認は結び付け先を変えるだけ）", () => {
+    const original = record(oldFixed, oldMoving);
+    const accepted = acceptRecordForCurrentInput(
+      original, newFixed, newMoving, ["fixed", "moving"], NOW,
+    );
+    expect(accepted.registration).toBe(original.registration);
+    expect(accepted.adjust).toEqual(original.adjust);
+  });
+
+  it("両方が変わっていたら両方を記録する", () => {
+    const accepted = acceptRecordForCurrentInput(
+      record(oldFixed, oldMoving), newFixed, newMoving, ["fixed", "moving"], NOW,
+    );
+    expect(accepted.acceptedDespiteMismatch?.changed).toEqual(["fixed", "moving"]);
   });
 });

@@ -1072,6 +1072,9 @@ export const ja: Record<string, string> = {
   "registration.staleWarning": "⚠ 保存済みの位置合わせがありますが、{{what}} のデータが保存時と変わっています。そのまま当てると誤った重ね合わせになる可能性があるため、適用していません。",
   "registration.applyAnyway": "それでも適用",
   "registration.dismiss": "使わない",
+  // 承認済みの記録であることを画面に出す。データに印だけ残して表示しないと、
+  // 利用者からは普通の復元と区別がつかない。
+  "registration.acceptedNote": "（{{at}} に、入力の相違を承知のうえで適用されたものです）",
   "registration.openHint": "自動位置合わせ（剛体・非剛体）を開きます。結果の上に、上の手動調整がそのまま乗ります。",
   "registration.applied": "自動適用中",
   "registration.title": "自動位置合わせ（剛体）",

@@ -19,8 +19,8 @@ import { FusionImageViewer } from "../viewer/FusionOverlayViewer";
 import { ZERO_ADJUST, isZeroAdjust, type ManualAdjust } from "../viewer/regTransform";
 import { registrationToTransform, type RegistrationResult } from "../viewer/regResult";
 import {
-  findRecord, fingerprintFromLayout, upsertRecord,
-  type RegistrationRecord, type SeriesRef,
+  acceptRecordForCurrentInput, findRecord, fingerprintFromLayout, upsertRecord,
+  type AcceptedDespiteMismatch, type RegistrationRecord, type SeriesRef,
 } from "../viewer/registrationRecord";
 import { loadRegistrations, saveRegistrations } from "../viewer/registrationPersistence";
 import { fetchSeriesLayout } from "../api";
@@ -1367,12 +1367,20 @@ function TileCell({
    * もっともらしいが間違った重ね合わせになる。画面上は完成して見えるので最も危ない。
    */
   const [restoreState, setRestoreState] = useState<
-    { kind: "none" } | { kind: "restored"; savedAt: string }
-    | { kind: "stale"; record: RegistrationRecord; changed: string[] }
+    { kind: "none" } | { kind: "restored"; savedAt: string; accepted?: AcceptedDespiteMismatch }
+    | { kind: "stale"; record: RegistrationRecord; changed: ("fixed" | "moving")[] }
   >({ kind: "none" });
   /** 保存に使う版（読まずに上書きしないため）。 */
   const docVersionRef = useRef<number | null>(null);
   const refsRef = useRef<{ fixed: SeriesRef; moving: SeriesRef } | null>(null);
+  /**
+   * 「指紋不一致のまま承認した」印。**以後の保存すべてに引き継ぐ**。
+   *
+   * <p>引き継がないと、承認したあと手動調整を少し動かしただけで印が消え、記録は
+   * 「最初から合っていた」顔をしてしまう。変換そのものは依然として**別の入力に対して
+   * 計算されたもの**なので、その事実は変換が入れ替わるまで残さなければならない。
+   */
+  const acceptedRef = useRef<AcceptedDespiteMismatch | null>(null);
   // fusion が切り替わったら C/T / LUT / W/L / 位置合わせをリセット
   const prevFusionSeriesUid = useRef<string | null>(null);
   useEffect(() => {
@@ -1396,6 +1404,7 @@ function TileCell({
       setFusionSpatial(true);
       setRestoreState({ kind: "none" });
       refsRef.current = null;
+      acceptedRef.current = null;
     }
   }, [tile.fusion?.series.seriesInstanceUid]);
 
@@ -1467,7 +1476,14 @@ function TileCell({
         if (found.status === "ok") {
           setFusionRegistration(found.record.registration);
           setFusionAdjust(found.record.adjust);
-          setRestoreState({ kind: "restored", savedAt: found.record.savedAt });
+          // 過去に承認された記録なら、その事実も一緒に戻す。ここで捨てると、
+          // 次の保存で印が消えて「合っていた記録」に化ける。
+          acceptedRef.current = found.record.acceptedDespiteMismatch ?? null;
+          setRestoreState({
+            kind: "restored",
+            savedAt: found.record.savedAt,
+            accepted: found.record.acceptedDespiteMismatch,
+          });
         } else if (found.status === "stale") {
           // ★ 当てない。理由を出して、利用者に判断させる。
           setRestoreState({ kind: "stale", record: found.record, changed: found.changed });
@@ -1479,36 +1495,47 @@ function TileCell({
     return () => { cancelled = true; };
   }, [tile.fusion, tile.study.studyInstanceUid, tile.series.seriesInstanceUid, patientKey]);
 
+  /** 出来上がった記録を保存する。書き込みの入口はここ 1 本に絞る。 */
+  const saveRecord = useCallback(async (record: RegistrationRecord) => {
+    if (!patientKey) return;
+    try {
+      // 保存の直前に読み直す。別ウィンドウが同じ患者の記録を触っていることがある。
+      const { doc, version } = await loadRegistrations(patientKey);
+      await saveRegistrations(patientKey, upsertRecord(doc, record), version);
+      docVersionRef.current = null; // 次回は読み直す
+      setRestoreState({
+        kind: "restored",
+        savedAt: record.savedAt,
+        accepted: record.acceptedDespiteMismatch,
+      });
+    } catch {
+      // 保存に失敗しても表示中の位置合わせは有効。次の操作でまた試みる。
+    }
+  }, [patientKey]);
+
   /** 現在の状態を保存する（自動結果 ＋ 手動 6 値 ＋ 表示）。 */
   const persistRegistration = useCallback(async (
     registration: RegistrationResult | null,
     adjust: ManualAdjust,
   ) => {
     const refs = refsRef.current;
-    if (!refs || !patientKey) return;
-    try {
-      // 保存の直前に読み直す。別ウィンドウが同じ患者の記録を触っていることがある。
-      const { doc, version } = await loadRegistrations(patientKey);
-      const record: RegistrationRecord = {
-        version: 1,
-        savedAt: new Date().toISOString(),
-        fixed: refs.fixed,
-        moving: refs.moving,
-        registration,
-        adjust,
-        display: {
-          opacity: tile.fusion?.opacity ?? 0.5,
-          lutName: null,
-          wl: fusionWL,
-        },
-      };
-      await saveRegistrations(patientKey, upsertRecord(doc, record), version);
-      docVersionRef.current = null; // 次回は読み直す
-      setRestoreState({ kind: "restored", savedAt: record.savedAt });
-    } catch {
-      // 保存に失敗しても表示中の位置合わせは有効。次の操作でまた試みる。
-    }
-  }, [patientKey, tile.fusion?.opacity, fusionWL]);
+    if (!refs) return;
+    await saveRecord({
+      version: 1,
+      savedAt: new Date().toISOString(),
+      fixed: refs.fixed,
+      moving: refs.moving,
+      registration,
+      adjust,
+      display: {
+        opacity: tile.fusion?.opacity ?? 0.5,
+        lutName: null,
+        wl: fusionWL,
+      },
+      // 承認の印は変換が入れ替わるまで引き継ぐ（`acceptedRef` の注記）。
+      ...(acceptedRef.current ? { acceptedDespiteMismatch: acceptedRef.current } : {}),
+    });
+  }, [saveRecord, tile.fusion?.opacity, fusionWL]);
 
   // 自動結果 → 描画用の変換。結果が変わったときだけ作り直す（毎レンダ作ると
   // FusionImageViewer の再計算が毎レンダ走る。§10 ① と同じ落とし穴）。
@@ -1755,7 +1782,18 @@ function TileCell({
       {showControls && tile.fusion && restoreState.kind !== "none" && (
         <div style={restoreState.kind === "stale" ? restoreStaleBar : restoreBar}>
           {restoreState.kind === "restored" ? (
-            <span>{t("registration.restored", { at: new Date(restoreState.savedAt).toLocaleString() })}</span>
+            <span>
+              {t("registration.restored", { at: new Date(restoreState.savedAt).toLocaleString() })}
+              {/* 承認済みの記録は、そうと分かるようにする。データに印だけ残して
+                  画面に出さないと、利用者からは普通の復元と区別がつかない。 */}
+              {restoreState.accepted && (
+                <span style={{ marginLeft: 6, opacity: 0.85 }}>
+                  {t("registration.acceptedNote", {
+                    at: new Date(restoreState.accepted.at).toLocaleString(),
+                  })}
+                </span>
+              )}
+            </span>
           ) : (
             <>
               <span>
@@ -1771,7 +1809,18 @@ function TileCell({
                   const r = restoreState.record;
                   setFusionRegistration(r.registration);
                   setFusionAdjust(r.adjust);
-                  setRestoreState({ kind: "restored", savedAt: r.savedAt });
+                  // 表示を戻すだけでは、次に開いたときにまた同じ判断を求められる。
+                  // 承認の事実ごと保存し直して、この問いを終わらせる。
+                  const refs = refsRef.current;
+                  if (refs) {
+                    const accepted = acceptRecordForCurrentInput(
+                      r, refs.fixed, refs.moving, restoreState.changed, new Date().toISOString(),
+                    );
+                    acceptedRef.current = accepted.acceptedDespiteMismatch ?? null;
+                    void saveRecord(accepted);
+                  } else {
+                    setRestoreState({ kind: "restored", savedAt: r.savedAt });
+                  }
                 }}
               >
                 {t("registration.applyAnyway")}
@@ -1800,7 +1849,13 @@ function TileCell({
             instances: tile.fusion.instances, c: fusionC, t: fusionT,
           }}
           result={fusionRegistration}
-          onResult={(r) => { setFusionRegistration(r); void persistRegistration(r, fusionAdjust); }}
+          onResult={(r) => {
+            setFusionRegistration(r);
+            // 新しい変換は**現在の入力に対して**計算されたものなので、
+            // 「他人の入力で計算された」という印はここで落とす。
+            acceptedRef.current = null;
+            void persistRegistration(r, fusionAdjust);
+          }}
           onClose={() => setRegistrationOpen(false)}
         />
       )}

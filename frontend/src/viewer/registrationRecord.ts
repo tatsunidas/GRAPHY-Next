@@ -63,6 +63,26 @@ export interface DisplayState {
   readonly wl: { center: number; width: number } | null;
 }
 
+/**
+ * 「指紋が合わないが、利用者が承知のうえで適用した」という事実。
+ *
+ * <p>指紋の不一致は**適用を拒む理由**であって、適用を禁じる根拠ではない。取り込み直しで
+ * 幾何がわずかに変わっただけ、と利用者が判断できる場面は現実にある。その判断を
+ * 受け入れる以上、**判断したこと自体を残さなければならない**。
+ *
+ * <p>印を付けずに指紋だけ書き換えると、記録は「最初から合っていた」ようにしか見えない。
+ * 実際には変換は<b>別の入力に対して計算されたもの</b>であり、その違いは後から復元できない。
+ * `computedFor` に承認前の指紋を残すのは、そこを追えるようにするためである。
+ */
+export interface AcceptedDespiteMismatch {
+  /** 承認した日時（ISO 8601）。 */
+  readonly at: string;
+  /** 何の指紋が食い違っていたか。 */
+  readonly changed: readonly ("fixed" | "moving")[];
+  /** **変換を計算したときの**指紋。承認によって上書きされる前の値。 */
+  readonly computedFor: { readonly fixed: string; readonly moving: string };
+}
+
 export interface RegistrationRecord {
   readonly version: number;
   /** ISO 8601。いつの結果かが分からないと、どれを信じるか決められない。 */
@@ -76,6 +96,13 @@ export interface RegistrationRecord {
   readonly display?: DisplayState;
   /** どのアプリ版で作ったか（再計算の可否を判断する材料）。 */
   readonly appVersion?: string;
+  /**
+   * 指紋不一致のまま承認されたなら、その事実。
+   *
+   * <p>**この変換は、いま結び付いている入力に対して計算されたものではない**という警告に
+   * あたる。新しく計算し直したら消す（`registration` が入れ替われば、もう他人の変換ではない）。
+   */
+  readonly acceptedDespiteMismatch?: AcceptedDespiteMismatch;
 }
 
 export interface RegistrationDocument {
@@ -160,6 +187,40 @@ export function findRecord(
   if (record.fixed.fingerprint !== fixed.fingerprint) changed.push("fixed");
   if (record.moving.fingerprint !== moving.fingerprint) changed.push("moving");
   return changed.length > 0 ? { status: "stale", record, changed } : { status: "ok", record };
+}
+
+/**
+ * 指紋の合わない記録を、利用者の承認のもとで現在の入力に結び付け直す。
+ *
+ * <p>これを呼ばずに「表示だけ復元して保存しない」とどうなるか: 記録の指紋は古いままなので、
+ * 開き直すたびに同じ警告が出て、同じ判断を何度も求められる。**判断を記録しない仕組みは、
+ * 利用者に同じ判断を繰り返させる**。
+ *
+ * <p>逆に、印を付けずに指紋だけ更新してもいけない（{@link AcceptedDespiteMismatch}）。
+ * この関数が両方を一度に行うのは、**片方だけ実施される余地を無くす**ためである。
+ */
+export function acceptRecordForCurrentInput(
+  record: RegistrationRecord,
+  fixed: SeriesRef,
+  moving: SeriesRef,
+  changed: readonly ("fixed" | "moving")[],
+  now: string,
+): RegistrationRecord {
+  return {
+    ...record,
+    fixed,
+    moving,
+    savedAt: now,
+    acceptedDespiteMismatch: {
+      at: now,
+      changed: [...changed],
+      // 承認前の指紋。**record 側**を採る（変換が計算されたときの入力だから）。
+      computedFor: {
+        fixed: record.fixed.fingerprint,
+        moving: record.moving.fingerprint,
+      },
+    },
+  };
 }
 
 /** 記録を差し替えて（同じ組があれば置換して）新しい文書を返す。 */

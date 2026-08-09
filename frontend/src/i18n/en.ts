@@ -1070,6 +1070,7 @@ export const en: Record<string, string> = {
   "registration.staleWarning": "⚠ A saved registration exists, but the {{what}} data has changed since it was saved. It has NOT been applied, because doing so could produce a wrong alignment.",
   "registration.applyAnyway": "Apply anyway",
   "registration.dismiss": "Ignore",
+  "registration.acceptedNote": "(applied on {{at}} despite a change in the input data)",
   "registration.openHint": "Open automatic registration (rigid and deformable). The manual adjustment above still applies on top of the result.",
   "registration.applied": "auto applied",
   "registration.title": "Automatic registration (rigid)",
