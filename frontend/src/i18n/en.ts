@@ -1086,6 +1086,7 @@ export const en: Record<string, string> = {
   "registration.sroLoading": "Checking FrameOfReferenceUID…",
   "registration.sroNeedFor": "A series without a FrameOfReferenceUID cannot be written as an SRO",
   "registration.sroSameFor": "Two series sharing one FrameOfReferenceUID cannot be expressed as an SRO",
+  "registration.fromRecord": "Transform restored from a saved record ({{at}}). It can be saved as it is, without re-running",
   "registration.fromSro": "Transform loaded from a DICOM SRO (metric and elapsed time are not recorded in an SRO)",
   "registration.qualityUnknown": "Displacement quality metrics are not recorded in an SRO",
   "registration.openHint": "Open automatic registration (rigid and deformable). The manual adjustment above still applies on top of the result.",

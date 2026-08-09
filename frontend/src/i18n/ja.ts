@@ -1090,6 +1090,7 @@ export const ja: Record<string, string> = {
   "registration.sroLoading": "FrameOfReferenceUID を確認しています…",
   "registration.sroNeedFor": "FrameOfReferenceUID の無いシリーズは SRO にできません",
   "registration.sroSameFor": "同じ FrameOfReferenceUID どうしは SRO として表現できません",
+  "registration.fromRecord": "保存済みの記録から復元した変換です（{{at}}）。実行し直さずにこのまま保存できます",
   "registration.fromSro": "DICOM SRO から読み込んだ変換です（類似度・所要時間は SRO に記録されません）",
   "registration.qualityUnknown": "変位の品質指標は SRO に記録されないため表示できません",
   "registration.openHint": "自動位置合わせ（剛体・非剛体）を開きます。結果の上に、上の手動調整がそのまま乗ります。",

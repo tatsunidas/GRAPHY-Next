@@ -42,6 +42,14 @@ export interface RegistrationPanelProps {
   moving: { study: Study; series: Series; instances: Instance[]; c: number; t: number };
   /** 現在の自動位置合わせ結果（無ければ null）。 */
   result: RegistrationResult | null;
+  /**
+   * 結果が**この場で計算されたものでない**とき、その出自。
+   *
+   * <p>保存済みの記録は Fusion した時点で自動復元されるので、**実行していないのに
+   * 結果があり、SRO も保存できる**状態が普通に起きる。復元の帯はタイル側に出るため、
+   * パネルだけを見ていると「なぜ押せるのか」が分からない（実際に分からなかった）。
+   */
+  restoredAt: string | null;
   onResult: (r: RegistrationResult | null) => void;
   onClose: () => void;
 }
@@ -49,7 +57,7 @@ export interface RegistrationPanelProps {
 type Phase = "idle" | "loading" | "running";
 
 export function RegistrationPanel({
-  viewerMode, fixed, moving, result, onResult, onClose,
+  viewerMode, fixed, moving, result, restoredAt, onResult, onClose,
 }: RegistrationPanelProps) {
   const { t } = useI18n();
   const [phase, setPhase] = useState<Phase>("idle");
@@ -403,10 +411,15 @@ export function RegistrationPanel({
             <span style={key}>{t("registration.resultRotation")}</span>
             <span style={val}>{result.eulerDeg.map((v) => v.toFixed(2)).join(", ")} °</span>
           </div>
-          {/* SRO から読み込んだ結果は類似度も所要時間も持たない。0 を出すと
-              「測って 0 だった」ように見えるので、出自を書いて代える。 */}
+          {/* 結果の出自を必ず 1 行出す。SRO から読み込んだものは類似度も所要時間も
+              持たないので、0 を出す代わりに出自を書く。復元されたものは「実行して
+              いないのに結果がある」理由そのものなので、同じ場所に出す。 */}
           {result.metric === "sro" ? (
             <div style={hint}>{t("registration.fromSro")}</div>
+          ) : restoredAt ? (
+            <div style={hint}>
+              {t("registration.fromRecord", { at: new Date(restoredAt).toLocaleString() })}
+            </div>
           ) : (
             <div style={row}>
               <span style={key}>{t("registration.resultMetric")}</span>

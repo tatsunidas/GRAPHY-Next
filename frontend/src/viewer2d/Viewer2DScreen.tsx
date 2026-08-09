@@ -1381,6 +1381,13 @@ function TileCell({
    * 計算されたもの**なので、その事実は変換が入れ替わるまで残さなければならない。
    */
   const acceptedRef = useRef<AcceptedDespiteMismatch | null>(null);
+  /**
+   * いま表示している自動結果が**復元されたもの**なら、その保存日時。
+   *
+   * <p>`restoreState` では代用できない。保存に成功したときも `restored` になるため、
+   * 計算したばかりの結果まで「復元」と表示されてしまう。
+   */
+  const [restoredResultAt, setRestoredResultAt] = useState<string | null>(null);
   // fusion が切り替わったら C/T / LUT / W/L / 位置合わせをリセット
   const prevFusionSeriesUid = useRef<string | null>(null);
   useEffect(() => {
@@ -1405,6 +1412,7 @@ function TileCell({
       setRestoreState({ kind: "none" });
       refsRef.current = null;
       acceptedRef.current = null;
+      setRestoredResultAt(null);
     }
   }, [tile.fusion?.series.seriesInstanceUid]);
 
@@ -1479,6 +1487,7 @@ function TileCell({
           // 過去に承認された記録なら、その事実も一緒に戻す。ここで捨てると、
           // 次の保存で印が消えて「合っていた記録」に化ける。
           acceptedRef.current = found.record.acceptedDespiteMismatch ?? null;
+          setRestoredResultAt(found.record.registration ? found.record.savedAt : null);
           setRestoreState({
             kind: "restored",
             savedAt: found.record.savedAt,
@@ -1817,6 +1826,7 @@ function TileCell({
                       r, refs.fixed, refs.moving, restoreState.changed, new Date().toISOString(),
                     );
                     acceptedRef.current = accepted.acceptedDespiteMismatch ?? null;
+                    setRestoredResultAt(r.registration ? r.savedAt : null);
                     void saveRecord(accepted);
                   } else {
                     setRestoreState({ kind: "restored", savedAt: r.savedAt });
@@ -1849,11 +1859,14 @@ function TileCell({
             instances: tile.fusion.instances, c: fusionC, t: fusionT,
           }}
           result={fusionRegistration}
+          restoredAt={restoredResultAt}
           onResult={(r) => {
             setFusionRegistration(r);
             // 新しい変換は**現在の入力に対して**計算されたものなので、
             // 「他人の入力で計算された」という印はここで落とす。
             acceptedRef.current = null;
+            // この場で計算した（あるいは SRO から読み込んだ）結果なので、もう復元ではない。
+            setRestoredResultAt(null);
             void persistRegistration(r, fusionAdjust);
           }}
           onClose={() => setRegistrationOpen(false)}
