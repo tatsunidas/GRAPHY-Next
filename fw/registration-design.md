@@ -556,7 +556,7 @@ SUV が同じ値で再計算できること、を通しで確認できる。
 | **R2** ✅ | **検証ファントム GNBP-2R**（剛体・アフィン・非剛体・マルチモーダル）＋ 計測ハーネス | 真値のある土俵ができる。**アルゴリズムより先に作る** | `bench/` |
 | **R3** 🟡 | **剛体エンジン**（Worker、確率的サンプリング ＋ MI / NCC、ピラミッド、FoR による初期化分岐） | 自動剛体。R2 で数値が出る | R1, R2 |
 | **R4** 🟡 | **非剛体エンジン**（MIND-SSC ＋ 離散最適化 ＋ Adam、半解像度 uint8 記述子、Jacobian 検査） | 自動非剛体 | R3 |
-| **R5** | **永続化**。DICOM SRO（66.1 / 66.3）の読み書き ＋ **§8.3 の PET タグ引き継ぎ修正** | 結果が患者記録として残る。§8.3 は**単独で先に入れて単独でテストする** | R3 |
+| **R5** 🟡 | **永続化**。DICOM SRO（66.1 / 66.3）の読み書き ＋ **§8.3 の PET タグ引き継ぎ修正** | 結果が患者記録として残る。§8.3 は**単独で先に入れて単独でテストする** | R3 |
 | **R6** | **領域プロファイル**（骨盤 PET-CT / 骨盤 PET-MR / 心臓 PET-CT）＋ ROI crop ＋ マスク誘導 ＋ 変位上限 | 領域ごとに「押すだけ」で妥当な既定値 | R4 |
 | **R7** | **GNBP-3S（心臓 PET-MR シミュレーション）** ＋ 心臓 PET-MR プロファイル | 心臓 PET-MR をシミュレーションで完結 | R2, R6 |
 | **R8** | **実データ検証**（PSMA-PET-CT-Lesions / SynthRAD2023 / autoPET）＋ 性能目標の確定 | 受け入れ基準の確定 | R6 |
@@ -925,6 +925,52 @@ R2 が無いとアルゴリズムの良し悪しを議論できない。逆順�
 - 🔴 **実機での目視が未了**（UI から「非剛体のみ」を選んで実行するところ）。
 - 観測可能領域に限った精度指標（上記②）は R8。
 - ROI での実行・領域プロファイル（R6）、SRO 保存（R5）は未着手。
+
+### R5 の実装（2026-08-09）— DICOM SRO
+
+| ファイル | 内容 |
+|---|---|
+| `backend/.../registration/SpatialRegistrationCodec.java`（新規） | SRO の組み立てと読み出し。**向きの規約はここが正本** |
+| `backend/.../registration/SpatialRegistrationService.java`（新規） | 保管庫への取り込みと、検査内の SRO 列挙 |
+| `backend/.../registration/SpatialRegistrationController.java`（新規） | `POST /api/sro` / `GET /api/sro?studyInstanceUid=…` |
+
+**★ 向きの規約（最重要）**
+
+GRAPHY 内部の変換 `T` は **fixed world → moving world**。一方 SRO の
+`FrameOfReferenceTransformationMatrix` は「その項目の FoR を**登録先 RCS へ**写す」行列で、
+慣行として **fixed を恒等**（＝ RCS を fixed 側に置く）とし、moving の項目に
+「moving → fixed」を入れる。したがって **SRO には `T` の逆行列を書く**。読むときは
+もう一度逆にして戻す。1 行の取り違えで「見た目は合っているのに他システムで反対にずれる」
+という最も厄介な壊れ方をするので、**往復テストで数値として固定**した
+（`SpatialRegistrationCodecTest`、11 件）。
+
+**非剛体の並び**: 66.3 は「pre 行列 → 変位格子 → post 行列」で source FoR を RCS へ写す。
+GRAPHY の合成は `q = R(p + u(p))`（変位が先・剛体が後）なので、**source を fixed 側**に置くと
+pre=恒等・格子=u・post=R がそのまま対応する。この向きで書き、同じ規約で読み戻す。
+
+**設計から動かした点**:
+
+- REST のパスを `/api/registrations/sro` に**しなかった**。それだと既存の
+  `/api/registrations/{patientKey}` と衝突し、**patientKey が "sro" の患者**を隠す。
+  実装途中に実際この URL を叩き、SRO ではなく「patientKey=sro のアプリ内保存」が
+  200 を返して**動作確認が嘘になりかけた**。`/api/sro` に分離してある。
+- FoR が無い／fixed と moving で同じ FoR の場合は**保存を拒否**する。SRO は FoR どうしの
+  関係なので、そもそも表現できない。
+
+**検証状況**:
+
+- ✅ 往復テスト 11 件（backend 合計 364 件全通過）。SRO に入るのが**逆行列**であることも直接検査。
+- ✅ **実機**: GNBP-2R の fixed と multimodal（FoR が別）で剛体 SRO を作成 →
+  読み戻して真値との最大差 **4.7e-13**。非剛体 SRO は変位の差 **0.000**。
+- ✅ **独立したパーサ（pydicom）で読めることを確認**。`Modality=REG`、
+  `RegistrationSequence` 2 項目（fixed=恒等 / moving=変換）、`type=RIGID`。
+
+🔴 **他ベンダとの相互運用は未検証**。とくに非剛体の変位格子がどの座標系で定義されるかは
+実装差がありうる。**保証しているのは GRAPHY 内での往復の一貫性まで**であり、
+外部システムと交換する前に参照実装との突き合わせが要る。
+
+**残っていること**: フロントからの導線（「SRO として保存」ボタン、SRO の一覧と読み込み）。
+現状は REST のみで、アプリ内保存（§12.4）が自動復元を担っている。
 
 ---
 
