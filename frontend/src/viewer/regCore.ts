@@ -34,6 +34,7 @@ import {
   type RegVolume,
 } from "./regGeometry";
 import { evaluateMetric, type MetricKind, type SamplePair } from "./regMetrics";
+import { DEFAULT_SEED } from "./regParams";
 import { linearTransform, type LinearTransform, type Vec3 } from "./regTransform";
 
 // ── 公開型 ───────────────────────────────────────────────────────────────
@@ -316,7 +317,7 @@ export function registerRigid(
   moving: RegVolume,
   options: RigidOptions = {},
 ): RigidResult {
-  const seed = options.seed ?? 20260808;
+  const seed = options.seed ?? DEFAULT_SEED;
   const metric: MetricKind =
     options.metric ?? (options.sameModality === false ? "mi" : options.sameModality ? "ncc" : "mi");
   const sameFor = options.sameFrameOfReference === true;

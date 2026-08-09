@@ -35,7 +35,7 @@ const args = {
   out: null,
   samples: 3000,
   iterations: 120,
-  seed: 20260808,
+  seed: 76,          // frontend/src/viewer/regParams.ts の DEFAULT_SEED と揃える
   pyramid: null,
   deformable: false,
   controlSpacings: null,

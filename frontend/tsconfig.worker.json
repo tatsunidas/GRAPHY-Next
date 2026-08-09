@@ -19,6 +19,7 @@
     "src/viewer/levelSetsWorker.ts", "src/viewer/levelSetsCore.ts", "src/viewer/levelSetsProtocol.ts",
     "src/viewer/regWorker.ts", "src/viewer/regCore.ts", "src/viewer/regGeometry.ts",
     "src/viewer/regMetrics.ts", "src/viewer/regTransform.ts", "src/viewer/regProtocol.ts",
-    "src/viewer/regDeformable.ts", "src/viewer/regDescriptors.ts"
+    "src/viewer/regDeformable.ts", "src/viewer/regDescriptors.ts",
+    "src/viewer/regParams.ts"
   ]
 }

@@ -29,7 +29,7 @@ export interface RegistrationParams {
   samplesPerIteration: number;
   /** 段ごとの最大反復数。 */
   maxIterationsPerLevel: number;
-  /** 乱数シード。**同じ値なら同じ結果**（設計 §6）。 */
+  /** 乱数シード。**同じ値なら同じ結果**（設計 §6）。既定は {@link DEFAULT_SEED}。 */
   seed: number;
   /**
    * 探索範囲。`null` なら FrameOfReferenceUID の一致から自動で決める
@@ -64,17 +64,38 @@ export interface RegistrationParams {
   regularizationWeight: number;
 }
 
+/**
+ * 既定の乱数シード。
+ *
+ * <p>値そのものに意味は無い。**固定されていること**だけが要件で、
+ * 同じ入力・同じシードなら同じ結果になる（設計 §6）。ここを変えると
+ * 剛体のサンプリングが変わるので、下に書いてある実測値も測り直すこと。
+ */
+export const DEFAULT_SEED = 76;
+
 export type PresetId = "standard" | "smooth" | "accurate";
 
 /**
  * 標準。R3/R4 の既定値そのもの。
- * GNBP-2R 実測: 剛体 0.024mm/0.033°、非剛体 landmark TRE 1.63mm・Jacobian 0.44–2.35。
+ *
+ * <p>GNBP-2R 実測（seed 76）:
+ * <ul>
+ *   <li>剛体・同一モダリティ: 並進 0.046mm / 回転 0.027°</li>
+ *   <li>剛体・マルチモーダル (MI): 並進 0.281mm / 回転 0.317°</li>
+ *   <li>非剛体（シードに依存しない）: landmark TRE 1.63mm・Jacobian 0.44–2.35</li>
+ * </ul>
+ *
+ * <p>⚠️ **マルチモーダルの回転は受け入れ目標 0.2° に届いていない**。5 シードで
+ * 0.088 / 0.184 / 0.259 / 0.317 / 0.435° とばらつき、目標を満たすかどうかが
+ * シードで決まる。以前 0.184° で PASS していたのは運であり、実力ではない
+ * （設計 §9.4 の目標そのものを見直すか、推定器を改善する必要がある）。
+ * 同一モダリティ側は 1 桁の余裕があるので、この問題は MI 特有。
  */
 export const STANDARD_PARAMS: RegistrationParams = {
   metric: "auto",
   samplesPerIteration: 3000,
   maxIterationsPerLevel: 120,
-  seed: 20260808,
+  seed: DEFAULT_SEED,
   limitTranslationMm: null,
   limitRotationDeg: null,
   controlSpacingsMm: [48, 24, 12],
