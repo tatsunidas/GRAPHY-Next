@@ -19,6 +19,10 @@ import type { ViewerMode } from "../viewer/imageId";
 import { estimateRegVolume, loadRegVolume } from "../viewer/regVolumeLoader";
 import { runRigidInWorker, toPayload } from "../viewer/regWorkerClient";
 import type { MetricKind } from "../viewer/regMetrics";
+import {
+  PRESETS, STANDARD_PARAMS, matchingPreset, parseSpacings, formatSpacings,
+  type PresetId, type RegistrationParams,
+} from "../viewer/regParams";
 import type { RegistrationMode } from "../viewer/regProtocol";
 import type { RegistrationResult } from "../viewer/regResult";
 
@@ -48,7 +52,12 @@ export function RegistrationPanel({
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [metricChoice, setMetricChoice] = useState<"auto" | MetricKind>("auto");
+  // ハイパーパラメータ一式。**そのままレシピとして結果に保存される**。
+  const [params, setParams] = useState<RegistrationParams>(STANDARD_PARAMS);
+  const [showDetails, setShowDetails] = useState(false);
+  const preset = matchingPreset(params);
+  const set = <K extends keyof RegistrationParams>(k: K, v: RegistrationParams[K]) =>
+    setParams((p) => ({ ...p, [k]: v }));
   // 既定は剛体のみ（R3 と同じ。安全側）。非剛体は変形のある症例で選ぶ。
   const [mode, setMode] = useState<RegistrationMode>("rigid");
   const abortRef = useRef<(() => void) | null>(null);
@@ -109,9 +118,23 @@ export function RegistrationPanel({
           fixed: toPayload(f.volume, f.iop, f.sliceStep),
           moving: toPayload(m.volume, m.iop, m.sliceStep),
           mode,
-          metric: metricChoice === "auto" ? undefined : metricChoice,
+          metric: params.metric === "auto" ? undefined : params.metric,
           sameModality,
           sameFrameOfReference: sameFor,
+          samplesPerIteration: params.samplesPerIteration,
+          maxIterationsPerLevel: params.maxIterationsPerLevel,
+          seed: params.seed,
+          ...(params.limitTranslationMm != null && params.limitRotationDeg != null
+            ? { limits: { translationMm: params.limitTranslationMm, rotationDeg: params.limitRotationDeg } }
+            : {}),
+          deformable: {
+            controlSpacingsMm: params.controlSpacingsMm,
+            smoothingSigma: params.smoothingSigma,
+            maxDisplacementMm: params.maxDisplacementMm,
+            displacementStepMm: params.displacementStepMm,
+            descriptorSpacingMm: params.descriptorSpacingMm,
+            regularizationWeight: params.regularizationWeight,
+          },
         },
         (p) => setProgress(0.6 + p.fraction * 0.4),
       );
@@ -131,6 +154,7 @@ export function RegistrationPanel({
         initialization: done.initialization,
         dvf: done.dvf ?? null,
         mode,
+        params,
       });
       setPhase("idle");
       setProgress(1);
@@ -143,7 +167,7 @@ export function RegistrationPanel({
       setPhase("idle");
       setStatus("");
     }
-  }, [mode, viewerMode, fixed, moving, metricChoice, sameModality, onResult, t]);
+  }, [mode, viewerMode, fixed, moving, params, sameModality, onResult, t]);
 
   const cancel = () => {
     cancelledRef.current = true;
@@ -176,9 +200,9 @@ export function RegistrationPanel({
       <div style={row}>
         <span style={key}>{t("registration.metric")}</span>
         <select
-          value={metricChoice}
+          value={params.metric}
           disabled={busy}
-          onChange={(e) => setMetricChoice(e.target.value as "auto" | MetricKind)}
+          onChange={(e) => set("metric", e.target.value as "auto" | MetricKind)}
           style={select}
         >
           <option value="auto">
@@ -209,6 +233,59 @@ export function RegistrationPanel({
           : mode === "deformable" ? t("registration.hintDeformable")
           : t("registration.hintBoth")}
       </div>
+
+      <div style={row}>
+        <span style={key}>{t("registration.preset")}</span>
+        <select
+          value={preset ?? "custom"}
+          disabled={busy}
+          onChange={(e) => {
+            const id = e.target.value as PresetId | "custom";
+            if (id !== "custom") setParams(PRESETS[id]);
+          }}
+          style={select}
+        >
+          <option value="standard">{t("registration.presetStandard")}</option>
+          <option value="smooth">{t("registration.presetSmooth")}</option>
+          <option value="accurate">{t("registration.presetAccurate")}</option>
+          {preset === null && <option value="custom">{t("registration.presetCustom")}</option>}
+        </select>
+      </div>
+
+      <button onClick={() => setShowDetails((v) => !v)} style={detailsToggle}>
+        {showDetails ? "▾" : "▸"} {t("registration.details")}
+      </button>
+      {showDetails && (
+        <div style={detailsBox}>
+          <div style={hint}>{t("registration.detailsHintRigid")}</div>
+          <Num label={t("registration.pSamples")} value={params.samplesPerIteration}
+               step={500} disabled={busy} onChange={(v) => set("samplesPerIteration", v)} />
+          <Num label={t("registration.pIterations")} value={params.maxIterationsPerLevel}
+               step={20} disabled={busy} onChange={(v) => set("maxIterationsPerLevel", v)} />
+          <Num label={t("registration.pSeed")} value={params.seed}
+               step={1} disabled={busy} onChange={(v) => set("seed", v)} />
+
+          <div style={{ ...hint, marginTop: 6 }}>{t("registration.detailsHintDeformable")}</div>
+          <Text label={t("registration.pControl")} value={formatSpacings(params.controlSpacingsMm)}
+                disabled={busy}
+                onChange={(v) => set("controlSpacingsMm", parseSpacings(v, params.controlSpacingsMm))} />
+          <Num label={t("registration.pSmoothing")} value={params.smoothingSigma}
+               step={0.1} disabled={busy} onChange={(v) => set("smoothingSigma", Math.max(0.1, v))} />
+          <Num label={t("registration.pMaxDisp")} value={params.maxDisplacementMm}
+               step={2} disabled={busy} onChange={(v) => set("maxDisplacementMm", v)} />
+          <Num label={t("registration.pDispStep")} value={params.displacementStepMm}
+               step={1} disabled={busy} onChange={(v) => set("displacementStepMm", v)} />
+          <Num label={t("registration.pDescriptor")} value={params.descriptorSpacingMm}
+               step={1} disabled={busy} onChange={(v) => set("descriptorSpacingMm", v)} />
+          <Num label={t("registration.pRegularization")} value={params.regularizationWeight}
+               step={2} disabled={busy} onChange={(v) => set("regularizationWeight", v)} />
+          <div style={hint}>{t("registration.pRegularizationNote")}</div>
+          <button onClick={() => setParams(STANDARD_PARAMS)} disabled={busy}
+                  style={{ ...btn, marginTop: 6 }}>
+            {t("registration.resetParams")}
+          </button>
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 4 }}>
         <button onClick={run} disabled={busy} style={runBtn}>{t("registration.run")}</button>
@@ -278,6 +355,54 @@ export function RegistrationPanel({
   );
 }
 
+/** 詳細設定の数値入力。フォーカス中は props からの同期を止める（`AdjustNumber` と同じ理由）。 */
+function Num({ label, value, step, disabled, onChange }: {
+  label: string; value: number; step: number; disabled: boolean; onChange: (v: number) => void;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  const [text, setText] = useState(String(value));
+  useEffect(() => {
+    if (document.activeElement !== ref.current) setText(String(value));
+  }, [value]);
+  return (
+    <label style={paramRow}>
+      <span style={paramLabel}>{label}</span>
+      <input
+        ref={ref} type="number" step={step} value={text} disabled={disabled}
+        onChange={(e) => {
+          setText(e.target.value);
+          const n = Number(e.target.value);
+          if (e.target.value.trim() !== "" && Number.isFinite(n)) onChange(n);
+        }}
+        onBlur={() => setText(String(value))}
+        style={paramInput}
+      />
+    </label>
+  );
+}
+
+/** 詳細設定の文字列入力（制御点間隔のような「1, 2, 3」形式）。 */
+function Text({ label, value, disabled, onChange }: {
+  label: string; value: string; disabled: boolean; onChange: (v: string) => void;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  const [text, setText] = useState(value);
+  useEffect(() => {
+    if (document.activeElement !== ref.current) setText(value);
+  }, [value]);
+  return (
+    <label style={paramRow}>
+      <span style={paramLabel}>{label}</span>
+      <input
+        ref={ref} type="text" value={text} disabled={disabled}
+        onChange={(e) => { setText(e.target.value); onChange(e.target.value); }}
+        onBlur={() => setText(value)}
+        style={{ ...paramInput, width: 96 }}
+      />
+    </label>
+  );
+}
+
 // ── styles ───────────────────────────────────────────────────────────────────
 
 const panel: React.CSSProperties = {
@@ -315,6 +440,18 @@ const barInner: React.CSSProperties = { height: "100%", background: "#2b6cb0", t
 const errorBox: React.CSSProperties = {
   marginTop: 6, padding: 6, background: "#fdecec", border: "1px solid #f3b7b7", borderRadius: 4, color: "#a33",
 };
+const detailsToggle: React.CSSProperties = {
+  border: "none", background: "transparent", cursor: "pointer", padding: "2px 0",
+  fontSize: 11, color: "#2b6cb0", textAlign: "left",
+};
+const detailsBox: React.CSSProperties = {
+  padding: "4px 0 2px 8px", borderLeft: "2px solid #e6ebf0", marginBottom: 4,
+};
+const paramRow: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: 6, marginBottom: 2,
+};
+const paramLabel: React.CSSProperties = { flex: 1, fontSize: 11, color: "#5a6672" };
+const paramInput: React.CSSProperties = { width: 72, fontSize: 11, padding: "1px 3px" };
 const resultBox: React.CSSProperties = {
   marginTop: 8, paddingTop: 8, borderTop: "1px solid #e6ebf0",
 };

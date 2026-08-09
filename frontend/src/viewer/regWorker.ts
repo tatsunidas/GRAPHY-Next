@@ -86,6 +86,7 @@ self.onmessage = (ev: MessageEvent<RegWorkerRequest>) => {
     let dvf: DvfPayload | undefined;
     if (doDeform && !aborted.has(req.requestId)) {
       const d = registerDeformable(fixedVol, movingVol, result?.transform ?? null, {
+        ...(req.deformable ?? {}),
         shouldAbort: () => aborted.has(req.requestId),
         onProgress: (f) => {
           const msg: RegWorkerResponse = {

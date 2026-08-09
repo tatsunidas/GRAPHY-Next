@@ -46,6 +46,15 @@ export interface RigidRequest {
   maxIterationsPerLevel?: number;
   seed?: number;
   limits?: { translationMm: number; rotationDeg: number };
+  /** 非剛体のハイパーパラメータ（`mode` が非剛体を含むときだけ使う）。 */
+  deformable?: {
+    controlSpacingsMm?: number[];
+    smoothingSigma?: number;
+    maxDisplacementMm?: number;
+    displacementStepMm?: number;
+    descriptorSpacingMm?: number;
+    regularizationWeight?: number;
+  };
 }
 
 /** 実行中の中止要求。`requestId` で対象を指定する。 */

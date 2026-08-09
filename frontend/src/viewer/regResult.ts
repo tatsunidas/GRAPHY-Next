@@ -12,6 +12,7 @@
  */
 
 import { composeTransforms, dvfTransform, linearTransform, type WorldTransform } from "./regTransform";
+import type { RegistrationParams } from "./regParams";
 
 /** 非剛体の結果（変位場）と、その品質。 */
 export interface RegistrationDvf {
@@ -39,6 +40,13 @@ export interface RegistrationResult {
   readonly dvf?: RegistrationDvf | null;
   /** どの変換を実行したか（表示用）。 */
   readonly mode?: string;
+  /**
+   * 実行に使ったハイパーパラメータ一式（**レシピ**）。
+   *
+   * <p>再現は保存した変換を読み戻すことで担保するが、**どうやって出したか**を
+   * 残しておかないと監査もやり直しもできない。結果と一緒に保存する。
+   */
+  readonly params?: RegistrationParams;
 }
 
 /**
