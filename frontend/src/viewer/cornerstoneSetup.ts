@@ -49,6 +49,12 @@ import {
   annotation as csAnnotation,
   Enums as csToolsEnums,
 } from "@cornerstonejs/tools";
+import {
+  FreeLineRoiTool,
+  FreehandRoiTool,
+  PolygonRoiTool,
+  PolylineRoiTool,
+} from "./roiContourTools";
 
 /**
  * マスク（labelmap）のグローバル既定スタイルを適用する。新規マスクの塗り不透明度（fillAlpha 0..1）・
@@ -148,6 +154,12 @@ export function ensureCornerstoneInitialized(): Promise<void> {
       addTool(ProbeTool);
       // ImageJ 由来の polygon/freehand ROI 描画用（インポート再構築の受け皿）。
       addTool(PlanarFreehandROITool);
+      // 輪郭系 ROI（ポリゴン/フリーハンド × 閉じる/閉じない）。同じクラスを別名で登録して
+      // 「閉じる／閉じない」を分けている（viewer/roiContourTools.ts）。
+      addTool(PolygonRoiTool);
+      addTool(PolylineRoiTool);
+      addTool(FreehandRoiTool);
+      addTool(FreeLineRoiTool);
       // セグメンテーション（Mask）編集: ROI ブラシ/消しゴム（2D 円 / 3D 球ストラテジ）。
       addTool(BrushTool);
       // セグメンテーション拡充（segmentation-tools-design.md）。3D 系ツールは stack labelmap から

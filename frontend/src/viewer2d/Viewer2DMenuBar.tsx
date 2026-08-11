@@ -8,6 +8,7 @@ import { type ViewerActions } from "./Viewer2DToolbar";
 import { presetLabel } from "./wlPresets";
 import { useWlPresets } from "./wlPresetStore";
 import { TOOL_IDS } from "../viewer/toolIds";
+import { isSplineFit, setSplineFit } from "../viewer/roiContourTools";
 import { usePluginMenu, runPluginBackend } from "../plugins/pluginRegistry";
 import { deletePluginStore, loadPluginStore, savePluginStore } from "../plugins/pluginStore";
 import { openLogViewer } from "../system/LogViewer";
@@ -220,6 +221,17 @@ export function Viewer2DMenuBar({
         { label: t("viewer2d.roi.angle"), onClick: () => actions.setTool(TOOL_IDS.angle), checked: activeTool === TOOL_IDS.angle },
         { label: t("viewer2d.roi.ellipse"), onClick: () => actions.setTool(TOOL_IDS.ellipse), checked: activeTool === TOOL_IDS.ellipse },
         { label: t("viewer2d.roi.rect"), onClick: () => actions.setTool(TOOL_IDS.rect), checked: activeTool === TOOL_IDS.rect },
+        // 輪郭系（Swing 版の POLYGON / FREEHAND / POLYLINE / FREELINE 相当）。
+        // **閉じる（面）と閉じない（線）を別項目にする**（後から閉じ忘れに気付けないため）。
+        { label: t("viewer2d.roi.polygon"), onClick: () => actions.setTool(TOOL_IDS.polygon), checked: activeTool === TOOL_IDS.polygon },
+        { label: t("viewer2d.roi.freehand"), onClick: () => actions.setTool(TOOL_IDS.freehand), checked: activeTool === TOOL_IDS.freehand },
+        { label: t("viewer2d.roi.polyline"), onClick: () => actions.setTool(TOOL_IDS.polyline), checked: activeTool === TOOL_IDS.polyline },
+        { label: t("viewer2d.roi.freeLine"), onClick: () => actions.setTool(TOOL_IDS.freeLine), checked: activeTool === TOOL_IDS.freeLine },
+        {
+          label: t("viewer2d.roi.splineFit"),
+          onClick: () => setSplineFit(!isSplineFit()),
+          checked: isSplineFit(),
+        },
         { label: t("viewer2d.roi.probe"), onClick: () => actions.setTool(TOOL_IDS.probe), checked: activeTool === TOOL_IDS.probe },
         { label: t("viewer2d.roi.clear"), onClick: actions.clearRois },
       ],

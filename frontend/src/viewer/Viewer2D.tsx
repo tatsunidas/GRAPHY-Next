@@ -63,6 +63,7 @@ import {
   type ViewerViewState,
 } from "./viewerCommands";
 import { buildPluginMeta, computeCalipers, hasShapeCalipers, pickPluginMeta, readRoiStats } from "./roiRead";
+import { CONTOUR_TOOL_NAMES, isSplineFit, splineTypeFor } from "./roiContourTools";
 import { subscribeSuvStore, suvForImageId, seriesUidOf } from "./suvStore";
 import { resolveOverlay } from "./overlayText";
 import { useOverlayConfig } from "./overlayConfig";
@@ -124,6 +125,11 @@ const MEASURE_TOOLS = [
   EllipticalROITool.toolName,
   RectangleROITool.toolName,
   ProbeTool.toolName,
+  // 輪郭系（ポリゴン/フリーハンド × 閉じる/閉じない）。viewer/roiContourTools.ts
+  CONTOUR_TOOL_NAMES.polygon,
+  CONTOUR_TOOL_NAMES.polyline,
+  CONTOUR_TOOL_NAMES.freehand,
+  CONTOUR_TOOL_NAMES.freeLine,
 ];
 // 左ドラッグに割り当て可能なツール一覧（操作＋計測＋ブラシ＋3D Wand＋Level Sets）。
 const PRIMARY_TOOLS = [WindowLevelTool.toolName, PanTool.toolName, ZoomTool.toolName, ...MEASURE_TOOLS, BrushTool.toolName, WandTool.toolName, LevelSetTool.toolName];
@@ -776,6 +782,11 @@ export function Viewer2D({
             }
             // ImageJ インポートの polygon/freehand ROI 描画用（メニューには出さず passive で追加）。
             tg.addTool(PlanarFreehandROITool.toolName);
+            // 輪郭系 ROI。開く方は「必ず開く」ので allowOpenContours を明示的に分ける。
+            tg.addTool(CONTOUR_TOOL_NAMES.polygon, { spline: { type: splineTypeFor(isSplineFit()) } });
+            tg.addTool(CONTOUR_TOOL_NAMES.polyline, { spline: { type: splineTypeFor(isSplineFit()) } });
+            tg.addTool(CONTOUR_TOOL_NAMES.freehand, { allowOpenContours: false });
+            tg.addTool(CONTOUR_TOOL_NAMES.freeLine, { allowOpenContours: true });
             tg.setToolPassive(PlanarFreehandROITool.toolName);
             // ROI ブラシ（セグメンテーション編集）。passive で追加。
             tg.addTool(BrushTool.toolName);

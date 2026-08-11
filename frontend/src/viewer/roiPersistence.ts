@@ -41,6 +41,13 @@ export interface SavedRoi {
   polyline?: number[][];
   /** 開いた輪郭か（PlanarFreehandROI 等）。 */
   isOpenContour?: boolean;
+  /**
+   * スプライン系ツールの補間方法（`"LINEAR"` / `"CATMULLROM"` 等）。
+   *
+   * <p>**ROI ごとに持たないと復元でカクカクに戻る**: 補間方法はツール側の設定から作られるため、
+   * 保存しないと「スプライン Fit を切った状態で読み直したら曲線が直線になる」ことになる。
+   */
+  splineType?: string;
   /** ROI マネージャのメタ（ラベル・説明・scope・プラグイン属性）。 */
   label?: string;
   description?: string;
@@ -156,6 +163,9 @@ export function toSavedRoi(ann: AnnotationLike, ctx: RoiSaveContext): SavedRoi |
     points,
   };
   if (polyline.length) out.polyline = polyline;
+  // スプライン系は補間方法も保存する（復元時に同じ形へ戻すため）
+  const splineType = (ann.data as { spline?: { type?: string } } | undefined)?.spline?.type;
+  if (typeof splineType === "string" && splineType) out.splineType = splineType;
   const open = ann.data?.isOpenContour ?? (ann.data?.contour?.closed === false ? true : undefined);
   if (open !== undefined) out.isOpenContour = open;
   if (ctx.ct?.studyUid) out.studyUid = ctx.ct.studyUid;
@@ -318,6 +328,10 @@ export function buildAnnotationData(roi: SavedRoi): Record<string, unknown> {
     data.contour = { polyline: roi.polyline, closed };
     data.polyline = roi.polyline;
     data.isOpenContour = !closed;
+  }
+  if (roi.splineType) {
+    // インスタンスは持たせない（ツールが type から作り直す）。type だけ復元する。
+    data.spline = { type: roi.splineType };
   }
   return data;
 }
