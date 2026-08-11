@@ -18,8 +18,10 @@
  * <p>そこで**同じクラスを別名で 2 つ登録**し（Cornerstone はツール名でインスタンスを持つ）、
  * 「開く方」は描き終わりに `contour.closed` を落として開いた輪郭に矯正する。
  *
- * <p>**スプライン Fit** は、ポリゴン系（閉・開の両方）の補間方法を直線 ↔ Catmull-Rom で切り替える。
- * 新規に描くものへ効くのに加え、**既にある輪郭も変換できる**（同じ制御点のまま曲線に張り替える）。
+ * <p>**スプライン Fit は描画モードではなく、描いた ROI への操作**として提供する
+ * （ROI Tools メニュー、または ROI 上の右クリック）。選択中の ROI のうちポリゴン系のものだけに
+ * 効き、制御点はそのままで補間だけ直線 ↔ Catmull-Rom に張り替える。
+ * 描くときのモードにすると「この輪郭はどちらで描いたか」が後から分からなくなる。
  */
 import {
   PlanarFreehandROITool,
@@ -27,11 +29,17 @@ import {
   ToolGroupManager,
   annotation as csAnnotation,
 } from "@cornerstonejs/tools";
-import { triggerAnnotationRenderForViewportIds } from "@cornerstonejs/tools/utilities";
+import { getAnnotationNearPoint, triggerAnnotationRenderForViewportIds } from "@cornerstonejs/tools/utilities";
 import { getRenderingEngines } from "@cornerstonejs/core";
 
-/** 直線補間（＝ポリゴン）。Cornerstone の `SplineTypesEnum.Linear` と同じ値。 */
-const SPLINE_LINEAR = "LINEAR";
+/**
+ * 直線補間（＝ポリゴン）。Cornerstone の `SplineTypesEnum.Linear` と同じ値。
+ *
+ * <p>⚠ `SplineROITool` の**既定は CatmullRom（曲線）**なので、ポリゴンとして登録するときは
+ * これを明示する（実機で「ポリゴンなのに曲線で描かれる」を踏んだ）。
+ */
+export const SPLINE_TYPE_LINEAR = "LINEAR";
+const SPLINE_LINEAR = SPLINE_TYPE_LINEAR;
 /** 曲線補間（スプライン Fit）。`SplineTypesEnum.CatmullRom` と同じ値。 */
 const SPLINE_CURVE = "CATMULLROM";
 
@@ -98,6 +106,42 @@ export const SPLINE_FIT_TOOLS: readonly string[] = [
   CONTOUR_TOOL_NAMES.polyline,
 ];
 
+/**
+ * ツールを ToolGroup へ登録するときの設定。純関数（テスト対象）。
+ *
+ * <p>⚠ **登録は 1 回きり**（Cornerstone は 2 度目の `addTool` を警告して無視する）ので、
+ * 設定はこの 1 か所で渡す。実機で「後から `addTool(name, config)` を足したが無視され、
+ * ポリゴンが曲線で描かれる」を踏んだ。
+ */
+export function contourToolConfig(toolName: string): Record<string, unknown> {
+  switch (toolName) {
+    // SplineROITool の既定は CatmullRom（曲線）なので、ポリゴンには直線を明示する
+    case CONTOUR_TOOL_NAMES.polygon:
+    case CONTOUR_TOOL_NAMES.polyline:
+      return { spline: { type: SPLINE_TYPE_LINEAR } };
+    // フリーハンドは「必ず閉じる／決して閉じない」を分ける
+    case CONTOUR_TOOL_NAMES.freehand:
+      return { allowOpenContours: false };
+    case CONTOUR_TOOL_NAMES.freeLine:
+      return { allowOpenContours: true };
+    default:
+      return {};
+  }
+}
+
+/** 輪郭系ツール（ポリゴン/フリーハンド、および Cornerstone 標準の輪郭ツール）か。純関数。 */
+export function isContourTool(toolName: string): boolean {
+  const t = (toolName ?? "").toLowerCase();
+  return (
+    CLOSED_CONTOUR_TOOLS.includes(toolName) ||
+    OPEN_CONTOUR_TOOLS.includes(toolName) ||
+    t.includes("freehand") ||
+    t.includes("spline") ||
+    t.includes("contour") ||
+    t.includes("livewire")
+  );
+}
+
 /** そのツールが「閉じた輪郭」を作るか。純関数（テスト対象）。 */
 export function isClosedContourTool(toolName: string): boolean {
   return CLOSED_CONTOUR_TOOLS.includes(toolName);
@@ -118,62 +162,193 @@ export function splineTypeFor(splineFit: boolean): string {
   return splineFit ? SPLINE_CURVE : SPLINE_LINEAR;
 }
 
-let splineFitEnabled = false;
+/**
+ * その ROI にスプライン Fit を適用できるか（ポリゴン系かつスプライン情報を持つ）。
+ *
+ * <p>**モードではなく ROI の属性**として扱う。描くときに決めさせると、後から
+ * 「この輪郭はどっちだったか」が分からなくなるため。
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function canSplineFit(annotation: any): boolean {
+  const tool = annotation?.metadata?.toolName as string | undefined;
+  return !!tool && supportsSplineFit(tool) && !!annotation?.data?.spline;
+}
 
-/** スプライン Fit が有効か。 */
-export function isSplineFit(): boolean {
-  return splineFitEnabled;
+/** その ROI が曲線補間になっているか。 */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function isSplineFitted(annotation: any): boolean {
+  return annotation?.data?.spline?.type === SPLINE_CURVE;
+}
+
+/** ツールグループに属さない予備インスタンス（補間インスタンスの生成にだけ使う）。 */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const spareTools = new Map<string, any>();
+
+/**
+ * ツール名からツール実体を引く（既定の解決方法）。
+ *
+ * <p>まず ToolGroup を探し、**見つからなければ自前のクラスから予備インスタンスを作る**。
+ * ROI の復元はツールグループの用意より先に走ることがあり、そこで解決できないと
+ * 補間インスタンスを作れずに描画・当たり判定で落ちる（実機で踏んだ）。
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function defaultResolveTool(toolName: string): any | null {
+  for (const tg of ToolGroupManager.getAllToolGroups?.() ?? []) {
+    const group = tg as unknown as { getToolInstance?: (name: string) => unknown };
+    const inst = group.getToolInstance?.(toolName);
+    if (inst) return inst;
+  }
+  const spare = spareTools.get(toolName);
+  if (spare) return spare;
+  const Ctor =
+    toolName === CONTOUR_TOOL_NAMES.polygon
+      ? PolygonRoiTool
+      : toolName === CONTOUR_TOOL_NAMES.polyline
+        ? PolylineRoiTool
+        : null;
+  if (!Ctor) return null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const inst = new (Ctor as any)({ configuration: contourToolConfig(toolName) });
+    spareTools.set(toolName, inst);
+    return inst;
+  } catch {
+    return null;
+  }
 }
 
 /**
- * スプライン Fit を切り替える。
+ * ROI 1 件の補間方法を切り替える。**制御点はそのまま**で、補間だけ張り替える。
  *
- * @param enabled  true で曲線補間（Catmull-Rom）、false で直線（ポリゴン）
- * @param applyToExisting 既にある**ポリゴン系の輪郭**も張り替えるか（既定 true）
+ * <p>補間インスタンスは**ツール自身に作らせる**（`createSplineObjectFromType`）。
+ * 理由: ①`_updateSplineInstance` は既存インスタンスを使い回すので type を書くだけでは形が変わらない
+ * ②インスタンスを消すだけだと、再描画前のヒットテスト（`isPointNearCurve`）が
+ * undefined を触って落ちる（実機で踏んだ）。
+ *
+ * @returns 変更したら true（対象外・変化なしは false）
  */
-export function setSplineFit(enabled: boolean, applyToExisting = true): void {
-  splineFitEnabled = enabled;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function setSplineFitOn(annotation: any, enabled: boolean, resolveTool = defaultResolveTool): boolean {
+  if (!canSplineFit(annotation)) return false;
   const type = splineTypeFor(enabled);
-
-  // これから描くもの: 各ツールグループの設定を更新する
-  for (const id of ToolGroupManager.getAllToolGroups?.() ?? []) {
-    const tg = id as unknown as {
-      setToolConfiguration?: (name: string, config: unknown, overwrite?: boolean) => void;
-      getToolInstance?: (name: string) => unknown;
-    };
-    for (const name of SPLINE_FIT_TOOLS) {
-      if (!tg.getToolInstance?.(name)) continue;
-      tg.setToolConfiguration?.(name, { spline: { type } }, false);
-    }
+  if (annotation.data.spline.type === type) return false;
+  const tool = resolveTool(annotation.metadata.toolName);
+  if (typeof tool?.createSplineObjectFromType === "function") {
+    // 正規の生成経路（type / instance / resolution を一式そろえてくれる）
+    tool.createSplineObjectFromType(annotation, type);
+  } else {
+    // ツールを引けない場合でも type だけは残す（**インスタンスは消さない**。
+    // 消すと次の描画までの間にヒットテストが落ちる）。
+    annotation.data.spline.type = type;
   }
-
-  if (applyToExisting) applySplineFitToExisting(type);
+  annotation.invalidated = true;
+  return true;
 }
 
-/** 既存のポリゴン系アノテーションを張り替える（制御点はそのまま）。 */
-function applySplineFitToExisting(type: string): void {
-  let changed = false;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let all: any[] = [];
+/**
+ * 複数 ROI へのスプライン Fit のトグル。
+ *
+ * <p>**全部が曲線なら直線へ、そうでなければ曲線へ**（混在は曲線に揃える）。
+ * 対象外（楕円・矩形・フリーハンド等）は黙って無視する。
+ *
+ * @returns 適用した件数と、適用後の状態（対象が無ければ `enabled: null`）
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function toggleSplineFit(annotations: any[]): { applied: number; enabled: boolean | null } {
+  const targets = annotations.filter(canSplineFit);
+  if (targets.length === 0) return { applied: 0, enabled: null };
+  const enabled = !targets.every(isSplineFitted);
+  let applied = 0;
+  for (const ann of targets) if (setSplineFitOn(ann, enabled)) applied++;
+  return { applied, enabled };
+}
+
+/** いま選択されている ROI（Cornerstone の annotation selection）。 */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function selectedAnnotations(): any[] {
+  let uids: string[] = [];
   try {
-    all = csAnnotation.state.getAllAnnotations() as unknown[] as any[];
+    uids = csAnnotation.selection.getAnnotationsSelected() ?? [];
   } catch {
-    return;
+    return [];
   }
-  for (const ann of all) {
-    const tool = ann?.metadata?.toolName as string | undefined;
-    if (!tool || !supportsSplineFit(tool)) continue;
-    if (!ann.data?.spline) continue;
-    ann.data.spline.type = type;
-    // インスタンスは type から作り直させる（残っていると古いクラスで描かれる）
-    delete ann.data.spline.instance;
-    ann.invalidated = true;
-    changed = true;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const out: any[] = [];
+  for (const uid of uids) {
+    try {
+      const ann = csAnnotation.state.getAnnotation(uid);
+      if (ann) out.push(ann);
+    } catch {
+      // 取得できないものは無視（別ウィンドウで消えた等）
+    }
   }
-  if (!changed) return;
+  return out;
+}
+
+/**
+ * スプライン系ツールの ROI に**補間インスタンスを用意する**（復元直後に必ず呼ぶ）。
+ *
+ * <p>スプライン系のアノテーションは `data.spline = { type, instance, resolution }` を前提に
+ * 描画・当たり判定が書かれている（`renderAnnotationInstance` が `type` を、
+ * `isPointNearTool` が `instance` を読む）。保存形から組み立てただけの ROI は
+ * **インスタンスを持たないので、復元した瞬間に描画で落ちる**（実機で踏んだ）。
+ *
+ * @returns 用意した（または既にあった）なら true
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function ensureSplineInstance(annotation: any, resolveTool = defaultResolveTool): boolean {
+  const tool = annotation?.metadata?.toolName as string | undefined;
+  if (!tool || !supportsSplineFit(tool)) return false;
+  if (!annotation.data) return false;
+  // 輪郭の入れ物が無いと `_updateSplineInstance` が `data.contour.closed` を読んで落ちる。
+  // 落ちるのは**描画ループの中**なので、以後 ROI が一切描けなくなる（実機で踏んだ）。
+  if (!annotation.data.contour) {
+    annotation.data.contour = { polyline: [], closed: !annotation.data.isOpenContour };
+  }
+  const current = annotation.data.spline;
+  if (current?.instance) return true;
+  const type = typeof current?.type === "string" ? current.type : SPLINE_TYPE_LINEAR;
+  const instance = resolveTool(tool);
+  if (typeof instance?.createSplineObjectFromType === "function") {
+    instance.createSplineObjectFromType(annotation, type);
+    return true;
+  }
+  // ツールを引けない場合でも type は残す（描画は次の機会に整う）
+  annotation.data.spline = { ...(current ?? {}), type };
+  return false;
+}
+
+/** UID からアノテーションを引く（見つからなければ null）。 */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function annotationByUid(uid: string): any | null {
+  try {
+    return csAnnotation.state.getAnnotation(uid) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 画面座標（clientX/clientY）の下にある ROI を返す。無ければ null。
+ *
+ * <p>右クリックメニューの対象を決めるのに使う。**当たらなければ何も出さない**
+ * （空きスペースの右ドラッグ Zoom を邪魔しないため）。
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function annotationAtClientPoint(element: HTMLDivElement, clientX: number, clientY: number): any | null {
+  const rect = element.getBoundingClientRect();
+  const canvasPoint: [number, number] = [clientX - rect.left, clientY - rect.top];
+  try {
+    return getAnnotationNearPoint(element, canvasPoint) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** 全ビューポートへ再描画を促す。 */
+export function renderAnnotations(): void {
   for (const engine of getRenderingEngines() ?? []) {
-    const viewports = engine.getViewports() ?? [];
-    const ids = viewports.map((v: { id: string }) => v.id);
+    const ids = (engine.getViewports() ?? []).map((v: { id: string }) => v.id);
     if (ids.length) triggerAnnotationRenderForViewportIds(ids);
   }
 }

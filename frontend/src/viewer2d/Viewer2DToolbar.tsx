@@ -96,6 +96,11 @@ export interface ViewerActions {
   setWandTolerance(tol: number): void;
   /** 計測 ROI を全消去（対象タイル）。 */
   clearRois(): void;
+  /**
+   * **選択中の ROI** にスプライン Fit を適用/解除する（ポリゴン系のみ。複数可）。
+   * 描画モードではないので ROI Tools 側に置いている。
+   */
+  splineFitSelection(): void;
   /** ROI マネージャ（右パネル）の表示切替。 */
   toggleRoiManager(): void;
   /** LUT 選択ダイアログを開く（適用は選択時に対象タイルへ）。 */

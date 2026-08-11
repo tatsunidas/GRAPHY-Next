@@ -13,6 +13,7 @@ import { getRenderingEngines, metaData } from "@cornerstonejs/core";
 import { annotation as csAnnotation } from "@cornerstonejs/tools";
 import { log } from "../log";
 import { getRoiMaskMeta, setRoiMaskMeta } from "./roiMaskStore";
+import { ensureSplineInstance } from "./roiContourTools";
 import {
   buildAnnotationData,
   buildRestoredMeta,
@@ -192,6 +193,8 @@ export function restoreRoisIntoStack(
       },
       data: buildAnnotationData(roi),
     };
+    // スプライン系は補間インスタンスが無いと描画・当たり判定で落ちる（保存形は type しか持たない）。
+    ensureSplineInstance(annotation);
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (csAnnotation.state as any).addAnnotation(annotation, viewport.element);

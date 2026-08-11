@@ -8,7 +8,6 @@ import { type ViewerActions } from "./Viewer2DToolbar";
 import { presetLabel } from "./wlPresets";
 import { useWlPresets } from "./wlPresetStore";
 import { TOOL_IDS } from "../viewer/toolIds";
-import { isSplineFit, setSplineFit } from "../viewer/roiContourTools";
 import { usePluginMenu, runPluginBackend } from "../plugins/pluginRegistry";
 import { deletePluginStore, loadPluginStore, savePluginStore } from "../plugins/pluginStore";
 import { openLogViewer } from "../system/LogViewer";
@@ -227,11 +226,6 @@ export function Viewer2DMenuBar({
         { label: t("viewer2d.roi.freehand"), onClick: () => actions.setTool(TOOL_IDS.freehand), checked: activeTool === TOOL_IDS.freehand },
         { label: t("viewer2d.roi.polyline"), onClick: () => actions.setTool(TOOL_IDS.polyline), checked: activeTool === TOOL_IDS.polyline },
         { label: t("viewer2d.roi.freeLine"), onClick: () => actions.setTool(TOOL_IDS.freeLine), checked: activeTool === TOOL_IDS.freeLine },
-        {
-          label: t("viewer2d.roi.splineFit"),
-          onClick: () => setSplineFit(!isSplineFit()),
-          checked: isSplineFit(),
-        },
         { label: t("viewer2d.roi.probe"), onClick: () => actions.setTool(TOOL_IDS.probe), checked: activeTool === TOOL_IDS.probe },
         { label: t("viewer2d.roi.clear"), onClick: actions.clearRois },
       ],
@@ -241,6 +235,8 @@ export function Viewer2DMenuBar({
       label: t("viewer2d.menu.roiTools"),
       items: [
         { label: t("roiMgr.title"), onClick: actions.toggleRoiManager },
+        // スプライン Fit は**描画モードではなく選択中 ROI への操作**なので ROI Tools 側に置く。
+        { label: t("viewer2d.roi.splineFit"), onClick: actions.splineFitSelection },
         { label: t("viewer2d.tool.brush"), onClick: () => actions.setTool(TOOL_IDS.brush), checked: activeTool === TOOL_IDS.brush },
         { label: t("viewer2d.tool.eraser"), onClick: () => actions.setTool(TOOL_IDS.eraser), checked: activeTool === TOOL_IDS.eraser },
         { label: t("viewer2d.tool.wand2d"), onClick: () => actions.setTool(TOOL_IDS.wand2d), checked: activeTool === TOOL_IDS.wand2d },

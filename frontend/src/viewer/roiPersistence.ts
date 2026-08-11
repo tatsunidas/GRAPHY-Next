@@ -18,6 +18,7 @@
  * （`fw/cornerstone-3d-geometry-caveat.md` と同じ「確定値は 1 つの幾何で完結させる」方針）。
  */
 import type { DimScope, RoiScope } from "./roiMaskStore";
+import { isContourTool } from "./roiContourTools";
 
 /** 保存フォーマットの版。互換性を壊す変更をしたら上げ、読み込み側で分岐する。 */
 export const ROI_SCHEMA_VERSION = 1;
@@ -328,9 +329,15 @@ export function buildAnnotationData(roi: SavedRoi): Record<string, unknown> {
     data.contour = { polyline: roi.polyline, closed };
     data.polyline = roi.polyline;
     data.isOpenContour = !closed;
+  } else if (isContourTool(roi.tool)) {
+    // polyline を保存できていない輪郭系 ROI でも**入れ物は必ず作る**。
+    // 無いと描画時に `data.contour.closed` を読んで落ち、以後 ROI が描けなくなる。
+    // 実際の輪郭は制御点から再計算される。
+    data.contour = { polyline: [], closed: !roi.isOpenContour };
+    data.isOpenContour = !!roi.isOpenContour;
   }
   if (roi.splineType) {
-    // インスタンスは持たせない（ツールが type から作り直す）。type だけ復元する。
+    // インスタンスはここでは作らない（ツールに作らせる＝ roiRestore の ensureSplineInstance）。
     data.spline = { type: roi.splineType };
   }
   return data;
