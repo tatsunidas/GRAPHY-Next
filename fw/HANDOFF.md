@@ -1,6 +1,25 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
-> 更新日: 2026-07-31（最終更新: **モバイル UI を実機検証（M9）し、見つかった不具合を修正・デプロイ**。下記エントリ参照）
+> 更新日: 2026-08-11（最終更新: **NIfTI インポートを追加**。下記エントリ参照）
+
+> 🟢 **2026-08-11 NIfTI インポートを追加（PR #111）＋ 実機確認で分かったこと**
+> - **NIfTI（.nii/.nii.gz）を DICOM 化して取り込めるようになった**（`fw/nifti-import.md` が正本）。
+>   Swing 版 `NIfTIToDicomConverter` の移植。4D は Z/T/C に展開し、時相は
+>   `TemporalPositionIndex`＋`TriggerTime`（`SeriesLayoutBuilder` の T 判定に合わせる）。
+>   **qform=sform=0 のファイルは向きを合成**し、その事実を `ImageComments` /
+>   `DerivationDescription` / UI 警告に残す。実データ（ACDC cine 216×256×10×30）で
+>   取り込み 300 枚 → 2D Viewer に Z=10 / T=30 を確認。
+> - 🔴 **TODO: JPEG-LS（1.2.840.10008.1.2.4.80/.81）の表示が未確認**。配布ビルドの CSP
+>   （`script-src 'self' 'wasm-unsafe-eval'`）が、dicom-image-loader 同梱の **charls / libjpeg-turbo の
+>   embind グルーが使う `new Function` をブロック**する（DevTools に警告が出る）。
+>   **JPEG Baseline / JPEG Lossless P14 / JPEG2000 (lossless・lossy) / RLE は実機で表示を確認済み**
+>   （エラー 0 件）で実害は無かったが、**手元に JPEG-LS のサンプルが無く charls だけ未検証**。
+>   サンプルが手に入ったら確認する。**CSP を緩める対応は取らない**（プラグインが同じレンダラで
+>   動く設計のため、文字列評価を開けると任意コード実行を許すことになる）。
+> - 実機確認中に気づいた本体の挙動 2 点（未修正・要判断）:
+>   1. **MainScreen で別シリーズを選んでも、既に開いている 2D Viewer は切り替わらない**（開き直しが要る）
+>   2. スタディ検索の初期条件が「本日」のため、**過去日付のデータは初期表示に出ない**
+>      （Clear だけでは再検索されず、日付を明示的に広げる必要がある）
 
 > 🟢 **2026-07-31 モバイル UI 実機検証（M9）＋修正をデモへ反映**（すべて main 直コミット・push・demo 再デプロイ済み）
 > スマホ実機で 2D/3D/MPR を確認し、以下を修正した（デモ機＝dev 機で `demo-deploy` 実行）。
