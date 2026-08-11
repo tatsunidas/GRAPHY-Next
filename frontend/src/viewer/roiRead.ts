@@ -89,6 +89,9 @@ const OUTLINE_TOOLS = new Set([
   "splineroi",
   "livewirecontour",
   "rectangleroithreshold",
+  // 追加した輪郭系（**閉じる方だけ**。開いた線に長径・短径の意味は無い）
+  "graphypolygonroi",
+  "graphyfreehandroi",
 ]);
 
 /**

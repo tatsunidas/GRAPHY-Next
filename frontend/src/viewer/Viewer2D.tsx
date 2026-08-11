@@ -63,6 +63,7 @@ import {
   type ViewerViewState,
 } from "./viewerCommands";
 import { buildPluginMeta, computeCalipers, hasShapeCalipers, pickPluginMeta, readRoiStats } from "./roiRead";
+import { CONTOUR_TOOL_NAMES, contourToolConfig } from "./roiContourTools";
 import { subscribeSuvStore, suvForImageId, seriesUidOf } from "./suvStore";
 import { resolveOverlay } from "./overlayText";
 import { useOverlayConfig } from "./overlayConfig";
@@ -124,6 +125,11 @@ const MEASURE_TOOLS = [
   EllipticalROITool.toolName,
   RectangleROITool.toolName,
   ProbeTool.toolName,
+  // 輪郭系（ポリゴン/フリーハンド × 閉じる/閉じない）。viewer/roiContourTools.ts
+  CONTOUR_TOOL_NAMES.polygon,
+  CONTOUR_TOOL_NAMES.polyline,
+  CONTOUR_TOOL_NAMES.freehand,
+  CONTOUR_TOOL_NAMES.freeLine,
 ];
 // 左ドラッグに割り当て可能なツール一覧（操作＋計測＋ブラシ＋3D Wand＋Level Sets）。
 const PRIMARY_TOOLS = [WindowLevelTool.toolName, PanTool.toolName, ZoomTool.toolName, ...MEASURE_TOOLS, BrushTool.toolName, WandTool.toolName, LevelSetTool.toolName];
@@ -771,7 +777,8 @@ export function Viewer2D({
             tg.addTool(ZoomTool.toolName);
             // 計測（ROI）ツールは passive で追加。setActiveTool で左ドラッグに割当。
             for (const tn of MEASURE_TOOLS) {
-              tg.addTool(tn);
+              // 輪郭系は登録時にしか設定を渡せない（2 度目の addTool は無視される）。
+              tg.addTool(tn, contourToolConfig(tn));
               tg.setToolPassive(tn);
             }
             // ImageJ インポートの polygon/freehand ROI 描画用（メニューには出さず passive で追加）。
@@ -1666,6 +1673,30 @@ export function Viewer2D({
       /* ignore */
     }
   };
+  /**
+   * ROI を選択状態にする（ハイライト）。`null` で選択解除。
+   *
+   * <p>選択の実体は Cornerstone の annotation selection なので、**本体の選択表示と一致する**
+   * （プラグイン独自のハイライトを重ねない）。結果一覧から「この ROI」を示す用途。
+   */
+  const selectRoi = (roiUid: string | null, exclusive = true) => {
+    try {
+      if (roiUid === null) {
+        for (const uid of csAnnotation.selection.getAnnotationsSelected() ?? []) {
+          csAnnotation.selection.setAnnotationSelected(uid, false);
+        }
+      } else {
+        csAnnotation.selection.setAnnotationSelected(roiUid, true, !exclusive);
+      }
+      vp()?.render();
+      // **注釈は別ループで描かれる**ので、画像の render だけでは選択解除された ROI の色が
+      // 更新されない（同じスライス内で選択を移すと、前の ROI が選択色のまま残る。実機で発覚）。
+      csToolsUtilities.triggerAnnotationRenderForViewportIds([viewportIdRef.current]);
+    } catch {
+      /* 選択できなくても致命的ではない */
+    }
+  };
+
   // この viewport の注釈（計測 ROI）を全消去。
   const clearAnnotations = () => {
     const v = vp();
@@ -1686,14 +1717,14 @@ export function Viewer2D({
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
     getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
     validateDerivedSeries, saveDerivedSeries, saveStructuredReport, setActiveTool, setBrushSize, setWandTolerance,
-    getRois, getRoiMeta, setRoiMeta, clearAnnotations,
+    getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
     undo, redo,
   });
   commandsRef.current = {
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
     getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
     validateDerivedSeries, saveDerivedSeries, saveStructuredReport, setActiveTool, setBrushSize, setWandTolerance,
-    getRois, getRoiMeta, setRoiMeta, clearAnnotations,
+    getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
     undo, redo,
   };
   useEffect(() => {
@@ -1721,6 +1752,7 @@ export function Viewer2D({
       saveStructuredReport: (r, p) => commandsRef.current.saveStructuredReport(r, p),
       setActiveTool: (n) => commandsRef.current.setActiveTool(n),
       setBrushSize: (s) => commandsRef.current.setBrushSize(s),
+      selectRoi: (u, ex) => commandsRef.current.selectRoi(u, ex),
       setWandTolerance: (v) => commandsRef.current.setWandTolerance(v),
       getRois: () => commandsRef.current.getRois(),
       getRoiMeta: (u, p) => commandsRef.current.getRoiMeta(u, p),

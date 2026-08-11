@@ -14,6 +14,13 @@ import { type SortMode } from "./seriesSort";
 export interface SeriesCommands {
   /** Z 並べ替えを適用（動画/IPP 不在などは実装側でブロック＋トースト）。 */
   setSortMode(mode: SortMode): void;
+  /**
+   * 表示位置（Z / C / T）を移動する。範囲外は端に丸める。
+   *
+   * <p>プラグイン host API の「表示の遷移」に使う（結果の行から該当スライスへ飛ぶ等）。
+   * **読み出し（getPixelData）とは別**にしてある: 読むたびに画面が動くのは事故のもと。
+   */
+  goTo(dims: { z?: number; c?: number; t?: number }): void;
 }
 
 const registry = new Map<string, SeriesCommands>();

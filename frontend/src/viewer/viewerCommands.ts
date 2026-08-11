@@ -404,6 +404,13 @@ export interface ViewerCommands {
   ): Promise<ViewerSrResult>;
   /** 左ドラッグに割り当てる操作/計測/ブラシツールを切替（toolName は Cornerstone のツール名 or 消しゴム id）。 */
   setActiveTool(toolName: string): void;
+  /**
+   * ROI を選択状態にする（`null` で選択解除）。**ハイライトの実体は Cornerstone の選択**。
+   *
+   * <p>プラグインの結果一覧から「この ROI はどれか」を示すのに使う。
+   * `exclusive` が true（既定）なら他の選択は外す。
+   */
+  selectRoi(roiUid: string | null, exclusive?: boolean): void;
   /** ROI ブラシ径(px)。 */
   setBrushSize(size: number): void;
   /** 2D Wand のトレランス（シード輝度からの許容差）。 */

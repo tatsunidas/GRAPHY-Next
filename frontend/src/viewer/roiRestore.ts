@@ -12,7 +12,9 @@
 import { getRenderingEngines, metaData } from "@cornerstonejs/core";
 import { annotation as csAnnotation } from "@cornerstonejs/tools";
 import { log } from "../log";
+import { sopFromImageId } from "./imageId";
 import { getRoiMaskMeta, setRoiMaskMeta } from "./roiMaskStore";
+import { ensureSplineInstance } from "./roiContourTools";
 import {
   buildAnnotationData,
   buildRestoredMeta,
@@ -38,6 +40,11 @@ export function sopOfImageId(imageId: string): string | null {
   } catch {
     sop = null;
   }
+  // メタデータは**その画像を読み込んだ後**にしか無い。復元はスタック確定時に 1 度だけ走るので、
+  // これだけだと表示中の 1 枚しか対応表に載らず、他スライスの ROI が永久に戻らない
+  // （実データで発覚。9 スライスに描いた ROI のうち 0 件しか復元されなかった）。
+  // imageId は自前で組み立てているため、URL から SOP を取り出せる。
+  if (!sop) sop = sopFromImageId(imageId);
   // 解決できた時だけ覚える（メタ未読の段階の null を固定化しないため）。
   if (sop) sopCache.set(imageId, sop);
   return sop;
@@ -192,6 +199,8 @@ export function restoreRoisIntoStack(
       },
       data: buildAnnotationData(roi),
     };
+    // スプライン系は補間インスタンスが無いと描画・当たり判定で落ちる（保存形は type しか持たない）。
+    ensureSplineInstance(annotation);
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (csAnnotation.state as any).addAnnotation(annotation, viewport.element);

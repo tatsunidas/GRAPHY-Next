@@ -328,6 +328,19 @@ export function SeriesViewer({
   useEffect(() => {
     if (!commandKey) return;
     return registerSeriesCommands(commandKey, {
+      // 表示位置の移動（プラグイン・結果パネルからの「そのスライスへ飛ぶ」）。
+      // 範囲外は端に丸める（黙って別の場所へ飛ばさない）。
+      goTo: ({ z: nz, c: nc, t: nt }) => {
+        if (typeof nz === "number" && Number.isFinite(nz)) {
+          setZ(() => Math.max(0, Math.min(Math.max(0, activeCountRef.current - 1), Math.round(nz))));
+        }
+        if (typeof nc === "number" && Number.isFinite(nc)) {
+          setC(() => Math.max(0, Math.min(Math.max(0, layoutRef.current.nC - 1), Math.round(nc))));
+        }
+        if (typeof nt === "number" && Number.isFinite(nt)) {
+          setTIdx(() => Math.max(0, Math.min(Math.max(0, layoutRef.current.nT - 1), Math.round(nt))));
+        }
+      },
       setSortMode: (mode) => {
         if (hasVideoRef.current) {
           emitToast(t("viewer2d.sort.videoBlocked"));
