@@ -77,6 +77,30 @@ export function imageIdForCell(
 }
 
 /**
+ * imageId から SOP Instance UID を取り出す（純関数・このファイルが組み立てた形の逆変換）。
+ *
+ * <p><b>なぜ要るか</b>: 通常は `metaData.get("sopCommonModule", imageId)` で引くが、これは
+ * **その画像を実際に読み込んだ後**にしか答えない。ROI の復元はスタックが確定した時点で走るため、
+ * 表示中の 1 枚以外はメタデータが無く、SOP → imageId の対応表が作れない
+ * （＝表示中スライス以外の保存 ROI が永久に復元されなかった。2026-08-11 に実データで発覚）。
+ * imageId は必ずここで組み立てているので、URL から確実に取り出せる。
+ *
+ * <p>他のローダ（`graphy-thickslab:` 等）や blank は対象外＝`null` を返す。
+ */
+export function sopFromImageId(imageId: string): string | null {
+  if (!imageId.startsWith("wadouri:")) return null;
+  // クエリ（blank の ?ipp=…）を落としてから照合する。
+  const path = imageId.slice("wadouri:".length).split("?")[0];
+  const m = /\/api\/instances\/([^/]+)\/(?:file|frames\/)/.exec(path) ?? /\/instances\/([^/]+)\/(?:file|frames\/)/.exec(path);
+  if (!m) return null;
+  try {
+    return decodeURIComponent(m[1]) || null;
+  } catch {
+    return m[1] || null;
+  }
+}
+
+/**
  * 範囲外パディング用ブランク画像の imageId。backend がシリーズ幾何を引き継いだ
  * 単一フレーム DICOM（最小値で塗りつぶし・Image 属性/UID 付き）を生成して返す。
  * ipp（[x,y,z]）で穴の物理位置を指定すると、その ImagePositionPatient を持つ。

@@ -53,6 +53,13 @@ export interface ViewerActions {
    * tileId 省略時は**対象タイル全部**（ベースラインと追跡を並べて開いている場合に両方読めるよう）。
    */
   getRois(tileId?: string): ViewerTileRoi[];
+  /**
+   * **表示位置を移動する**（H14）。結果の行から該当スライスへ飛ぶ用途。
+   * 範囲外は端に丸める。読み出し（getPixelData）とは別にしてある。
+   */
+  goTo(tileId: string | undefined, dims: { sliceIndex?: number; c?: number; t?: number }): void;
+  /** **ROI を選択状態にする**（H14）。`null` で解除。ハイライトの実体は本体の選択表示。 */
+  selectRoi(tileId: string | undefined, roiUid: string | null, exclusive?: boolean): void;
   /** ROI に紐付くプラグイン属性を読む（H5）。 */
   getRoiMeta(roiUid: string, pluginId: string): Record<string, string>;
   /** ROI に紐付くプラグイン属性を書く（H5）。ROI が無ければ false。 */

@@ -198,6 +198,19 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    */
   setRoiMeta: (roiUid: string, patch: Record<string, string>) => boolean;
   /**
+   * **表示位置を移動する**（H14）。結果の一覧から「その ROI のスライス」へ飛ぶ用途。
+   *
+   * <p>範囲外は端に丸める。**読み出し（`getPixelData`）とは別**にしてあるので、
+   * 読むだけで画面が動くことはない。`tileId` 省略時は対象タイル。
+   */
+  goTo: (tileId: string | undefined, dims: { sliceIndex?: number; c?: number; t?: number }) => void;
+  /**
+   * **ROI を選択状態にする**（H14）。`null` で解除。`exclusive` 既定 true（他の選択を外す）。
+   *
+   * <p>ハイライトの実体は本体の選択表示なので、プラグイン独自の強調とずれない。
+   */
+  selectRoi: (tileId: string | undefined, roiUid: string | null, exclusive?: boolean) => void;
+  /**
    * ROI の追加・変更・削除を購読する（H5）。返り値を呼ぶと解除。
    *
    * <p>**何が変わったかは渡さない**（差分を契約にすると本体の内部表現に縛られる）。

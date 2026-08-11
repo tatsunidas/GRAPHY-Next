@@ -241,6 +241,8 @@ export function parseSaveFile(json: string | null | undefined): ParsedRoiFile {
     const item: SavedRoi = { roiUid: s.roiUid, tool: s.tool, sopInstanceUid: s.sopInstanceUid, points };
     if (polyline.length) item.polyline = polyline;
     if (typeof s.isOpenContour === "boolean") item.isOpenContour = s.isOpenContour;
+    // スプライン Fit の状態。落とすと再読み込みで直線に戻る（そのための保存項目）。
+    if (typeof s.splineType === "string" && s.splineType) item.splineType = s.splineType;
     if (typeof s.studyUid === "string") item.studyUid = s.studyUid;
     if (typeof s.seriesUid === "string") item.seriesUid = s.seriesUid;
     if (typeof s.c === "number") item.c = s.c;

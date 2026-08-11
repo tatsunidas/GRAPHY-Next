@@ -102,6 +102,8 @@ export function Viewer2DMenuBar({
     // H5: ROI の読み出しと、ROI に紐付くプラグイン属性。**pluginId は host が入れる**ので、
     // プラグインは他プラグイン（や本体）の属性名前空間に触れない。
     getRois: (tileId) => actions.getRois(tileId),
+    goTo: (tileId, dims) => actions.goTo(tileId, dims),
+    selectRoi: (tileId, roiUid, exclusive) => actions.selectRoi(tileId, roiUid, exclusive),
     getRoiMeta: (roiUid) => actions.getRoiMeta(roiUid, m.id),
     setRoiMeta: (roiUid, patch) => actions.setRoiMeta(roiUid, m.id, patch),
     subscribeRois: (listener) => actions.subscribeRois(listener),

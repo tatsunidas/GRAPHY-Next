@@ -150,6 +150,23 @@ describe("保存 → 読み込みの往復", () => {
     expect(back[0].sopInstanceUid).toBe(SOP);
   });
 
+  it("スプライン Fit の状態が往復する（落とすと再読み込みで直線に戻る）", () => {
+    const spline = {
+      annotationUID: "uid-spline",
+      metadata: { toolName: "GraphyPolygonROI", referencedImageId: IMAGE_ID },
+      data: {
+        handles: { points: [[0, 0, 0], [1, 0, 0], [1, 1, 0]] },
+        contour: { polyline: [[0, 0, 0], [1, 0, 0], [1, 1, 0]], closed: true },
+        spline: { type: "CATMULLROM" },
+      },
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const saved = toSavedRoi(spline as any, ctx())!;
+    expect(saved.splineType).toBe("CATMULLROM");
+    const back = parseSaveFile(JSON.stringify(buildSaveFile([saved], [], "test"))).rois;
+    expect(back[0].splineType).toBe("CATMULLROM");
+  });
+
   it("保存ファイルは schema 版を持つ", () => {
     expect(buildSaveFile([]).schema).toBe(ROI_SCHEMA_VERSION);
   });

@@ -1673,6 +1673,27 @@ export function Viewer2D({
       /* ignore */
     }
   };
+  /**
+   * ROI を選択状態にする（ハイライト）。`null` で選択解除。
+   *
+   * <p>選択の実体は Cornerstone の annotation selection なので、**本体の選択表示と一致する**
+   * （プラグイン独自のハイライトを重ねない）。結果一覧から「この ROI」を示す用途。
+   */
+  const selectRoi = (roiUid: string | null, exclusive = true) => {
+    try {
+      if (roiUid === null) {
+        for (const uid of csAnnotation.selection.getAnnotationsSelected() ?? []) {
+          csAnnotation.selection.setAnnotationSelected(uid, false);
+        }
+      } else {
+        csAnnotation.selection.setAnnotationSelected(roiUid, true, !exclusive);
+      }
+      vp()?.render();
+    } catch {
+      /* 選択できなくても致命的ではない */
+    }
+  };
+
   // この viewport の注釈（計測 ROI）を全消去。
   const clearAnnotations = () => {
     const v = vp();
@@ -1693,14 +1714,14 @@ export function Viewer2D({
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
     getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
     validateDerivedSeries, saveDerivedSeries, saveStructuredReport, setActiveTool, setBrushSize, setWandTolerance,
-    getRois, getRoiMeta, setRoiMeta, clearAnnotations,
+    getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
     undo, redo,
   });
   commandsRef.current = {
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
     getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
     validateDerivedSeries, saveDerivedSeries, saveStructuredReport, setActiveTool, setBrushSize, setWandTolerance,
-    getRois, getRoiMeta, setRoiMeta, clearAnnotations,
+    getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
     undo, redo,
   };
   useEffect(() => {
@@ -1728,6 +1749,7 @@ export function Viewer2D({
       saveStructuredReport: (r, p) => commandsRef.current.saveStructuredReport(r, p),
       setActiveTool: (n) => commandsRef.current.setActiveTool(n),
       setBrushSize: (s) => commandsRef.current.setBrushSize(s),
+      selectRoi: (u, ex) => commandsRef.current.selectRoi(u, ex),
       setWandTolerance: (v) => commandsRef.current.setWandTolerance(v),
       getRois: () => commandsRef.current.getRois(),
       getRoiMeta: (u, p) => commandsRef.current.getRoiMeta(u, p),

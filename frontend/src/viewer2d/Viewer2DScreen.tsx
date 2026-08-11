@@ -1013,6 +1013,16 @@ function TileGrid({
           runViewerCommand(resolveTargets(), (c) => c.clearAnnotations());
         }
       },
+      // 表示位置の移動（プラグイン H14）。対象タイル省略時は現在の対象。
+      goTo: (tileId, dims) => {
+        const targets = tileId ? [tileId] : resolveTargets();
+        runSeriesCommand(targets, (c) => c.goTo({ z: dims.sliceIndex, c: dims.c, t: dims.t }));
+      },
+      // ROI の選択（ハイライト）。
+      selectRoi: (tileId, roiUid, exclusive) => {
+        const targets = tileId ? [tileId] : resolveTargets();
+        runViewerCommand(targets, (c) => c.selectRoi(roiUid, exclusive));
+      },
       toggleRoiManager: () => setShowRoiMgr((v) => !v),
       // 選択中の ROI（複数可）へスプライン Fit。対象が無ければ理由を出す（黙って何もしない、を避ける）。
       splineFitSelection: () => {
