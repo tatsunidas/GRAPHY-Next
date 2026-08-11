@@ -1689,6 +1689,9 @@ export function Viewer2D({
         csAnnotation.selection.setAnnotationSelected(roiUid, true, !exclusive);
       }
       vp()?.render();
+      // **注釈は別ループで描かれる**ので、画像の render だけでは選択解除された ROI の色が
+      // 更新されない（同じスライス内で選択を移すと、前の ROI が選択色のまま残る。実機で発覚）。
+      csToolsUtilities.triggerAnnotationRenderForViewportIds([viewportIdRef.current]);
     } catch {
       /* 選択できなくても致命的ではない */
     }
