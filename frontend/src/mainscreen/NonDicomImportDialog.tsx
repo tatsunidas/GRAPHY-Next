@@ -3,7 +3,14 @@
  * Author: Tatsuaki Kobayashi
  */
 import { useEffect, useRef, useState } from "react";
-import { importNonDicom, type NonDicomResult, type Study } from "../api";
+import {
+  importNifti,
+  importNonDicom,
+  probeNifti,
+  type NiftiProbe,
+  type NonDicomResult,
+  type Study,
+} from "../api";
 import { desktop } from "../desktopBridge";
 import { useI18n } from "../i18n/i18n";
 
@@ -16,9 +23,16 @@ function filePath(f: File): string | undefined {
 const IMAGE_EXT = ["png", "jpg", "jpeg", "bmp", "gif", "tif", "tiff"];
 const VIDEO_EXT = ["mp4", "m4v", "mov", "avi", "mpg", "mpeg", "mkv", "webm", "wmv"];
 
-type FileKind = "pdf" | "image" | "video" | "other";
+type FileKind = "pdf" | "image" | "video" | "nifti" | "other";
+
+/** `.nii` / `.nii.gz`（gzip は二重拡張子なので末尾だけ見ると取り違える）。 */
+function isNifti(path: string): boolean {
+  const lower = path.toLowerCase();
+  return lower.endsWith(".nii") || lower.endsWith(".nii.gz");
+}
 
 function kindOf(path: string): FileKind {
+  if (isNifti(path)) return "nifti";
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
   if (ext === "pdf") return "pdf";
   if (IMAGE_EXT.includes(ext)) return "image";
@@ -61,7 +75,13 @@ export function NonDicomImportDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<NonDicomResult | null>(null);
+  // NIfTI（.nii/.nii.gz）は DICOM へ変換して取り込む。ヘッダの下読み結果とサイドカー JSON を持つ。
+  const [niftiProbes, setNiftiProbes] = useState<Record<string, NiftiProbe>>({});
+  const [niftiModality, setNiftiModality] = useState("MR");
+  const [metadataPath, setMetadataPath] = useState<string | null>(null);
+  const [niftiSummary, setNiftiSummary] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const metaInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -76,6 +96,10 @@ export function NonDicomImportDialog({
     setPaths([]);
     setError(null);
     setResult(null);
+    setNiftiProbes({});
+    setNiftiModality("MR");
+    setMetadataPath(null);
+    setNiftiSummary(null);
   }, [open, study]);
 
   if (!open) return null;
@@ -94,6 +118,20 @@ export function NonDicomImportDialog({
     }
     setError(null);
     setPaths((prev) => [...new Set([...prev, ...picked])]);
+    // NIfTI は取り込み前にヘッダを読む（次元と「向きが入っているか」を先に見せる）
+    for (const p of picked.filter(isNifti)) {
+      probeNifti(p)
+        .then((probe) => setNiftiProbes((prev) => ({ ...prev, [p]: probe })))
+        .catch(() => undefined);
+    }
+  };
+
+  /** サイドカー JSON（dcm2niix / BIDS）を選ぶ。 */
+  const onMetadataChosen = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = Array.from(e.target.files ?? [])[0];
+    e.target.value = "";
+    const p = f ? filePath(f) : undefined;
+    if (p) setMetadataPath(p);
   };
 
   const removePath = (p: string) => setPaths((prev) => prev.filter((x) => x !== p));
@@ -112,7 +150,12 @@ export function NonDicomImportDialog({
     setBusy(true);
     setError(null);
     setResult(null);
+    setNiftiSummary(null);
     try {
+      if (kinds.has("nifti")) {
+        await runNifti();
+        return;
+      }
       const req =
         target === "existing" && study
           ? {
@@ -142,6 +185,47 @@ export function NonDicomImportDialog({
       setBusy(false);
     }
   };
+
+  /** NIfTI を 1 本ずつ変換して取り込む（1 ファイル＝1 シリーズ）。 */
+  async function runNifti(): Promise<void> {
+    const targets = paths.filter(isNifti);
+    let imported = 0;
+    let synthesized = 0;
+    let metaApplied = 0;
+    for (const p of targets) {
+      const r = await importNifti({
+        path: p,
+        metadataPath: metadataPath ?? undefined,
+        modality: niftiModality,
+        patientId: effectivePatientId,
+        patientName: target === "existing" ? study?.patientName ?? "" : pname,
+        patientBirthDate: target === "existing" ? "" : birth,
+        patientSex: target === "existing" ? "" : sex,
+        studyDescription: target === "existing" ? study?.studyDescription ?? "" : studyDesc,
+        seriesDescription: seriesDesc,
+        studyInstanceUid: target === "existing" ? study?.studyInstanceUid : undefined,
+      });
+      if (r.error) {
+        setError(r.error);
+        return;
+      }
+      imported += r.imported;
+      metaApplied += r.metadataApplied;
+      if (r.geometrySynthesized) synthesized++;
+    }
+    setNiftiSummary(
+      t("nifti.result", {
+        files: String(targets.length),
+        instances: String(imported),
+        metadata: String(metaApplied),
+      }),
+    );
+    if (synthesized > 0) {
+      // **向きを合成した**ことは黙って流さない（患者座標に依存する解析へ回されるため）
+      setError(t("nifti.warn.synthesized"));
+    }
+    if (imported > 0) onImported?.();
+  }
 
   return (
     <div style={overlay} onClick={onClose}>
@@ -201,6 +285,49 @@ export function NonDicomImportDialog({
             </Section>
           )}
 
+          {paths.some(isNifti) && (
+            <Section title={t("nifti.section")}>
+              <Field label={t("nifti.modality")}>
+                <select value={niftiModality} onChange={(e) => setNiftiModality(e.target.value)} style={input}>
+                  <option value="MR">MR</option>
+                  <option value="CT">CT</option>
+                  <option value="PT">PT</option>
+                  <option value="NM">NM</option>
+                </select>
+              </Field>
+              <Field label={t("nifti.metadata")}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <input ref={metaInputRef} type="file" accept=".json" onChange={onMetadataChosen} style={{ display: "none" }} />
+                  <button onClick={() => metaInputRef.current?.click()} disabled={!hasDesktop} style={btn}>
+                    {t("nifti.metadata.pick")}
+                  </button>
+                  <span style={{ fontSize: 12, color: "#667" }}>
+                    {metadataPath ? baseName(metadataPath) : t("nifti.metadata.none")}
+                  </span>
+                </div>
+              </Field>
+              {paths.filter(isNifti).map((p) => {
+                const probe = niftiProbes[p];
+                if (!probe) return null;
+                return (
+                  <div key={p} style={{ fontSize: 12, color: "#33404d", marginTop: 4 }}>
+                    <div>
+                      {baseName(p)}: {probe.columns}×{probe.rows}×{probe.slices}
+                      {probe.phases > 1 ? ` × ${probe.phases} ${t("nifti.phases")}` : ""}
+                      {" / "}
+                      {probe.spacingX.toFixed(2)}×{probe.spacingY.toFixed(2)}×{probe.spacingZ.toFixed(2)} mm
+                      {probe.pixelConversion ? ` / ${probe.pixelConversion}` : ""}
+                    </div>
+                    {!probe.supported && <div style={{ color: "#b00020" }}>{probe.error ?? probe.pixelConversion}</div>}
+                    {probe.geometrySynthesized && (
+                      <div style={{ color: "#7a4a00" }}>{t("nifti.warn.synthesized")}</div>
+                    )}
+                  </div>
+                );
+              })}
+            </Section>
+          )}
+
           <Section title={t("nondicom.series")}>
             <Field label={t("field.description")}>
               <input value={seriesDesc} onChange={(e) => setSeriesDesc(e.target.value)} style={input} />
@@ -216,7 +343,7 @@ export function NonDicomImportDialog({
                 multiple
                 // 拡張子と MIME ワイルドカードを混在させると Chromium/Electron が拡張子を無視し
                 // PDF 等が選べなくなるため、すべて明示的な拡張子で指定する。
-                accept=".pdf,.png,.jpg,.jpeg,.bmp,.gif,.tif,.tiff,.mp4,.m4v,.mov,.avi,.mpg,.mpeg,.mkv,.webm,.wmv"
+                accept=".pdf,.png,.jpg,.jpeg,.bmp,.gif,.tif,.tiff,.mp4,.m4v,.mov,.avi,.mpg,.mpeg,.mkv,.webm,.wmv,.nii,.gz"
                 onChange={onFilesChosen}
                 style={{ display: "none" }}
               />
@@ -250,6 +377,7 @@ export function NonDicomImportDialog({
             </div>
           </Section>
 
+          {niftiSummary && <div style={{ color: "#1c2733", marginTop: 6 }}>{niftiSummary}</div>}
           {error && <div style={{ color: "#b00020", marginTop: 6 }}>{error}</div>}
 
           {result && (
