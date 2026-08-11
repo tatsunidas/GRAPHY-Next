@@ -1354,7 +1354,7 @@ export const ja: Record<string, string> = {
   "tagview.col.value": "値",
 
   // NonDicomImporter（非DICOM取込）
-  "nondicom.title": "非DICOM取込（PDF / 画像 / 動画）",
+  "nondicom.title": "非DICOM取込（PDF / 画像 / 動画 / NIfTI）",
   "nondicom.standaloneOnly": "この機能はデスクトップ版（standalone）でのみ使用できます。",
   "nondicom.target": "取込先",
   "nondicom.target.existing": "選択中のスタディに追加: {{name}} / {{desc}}",

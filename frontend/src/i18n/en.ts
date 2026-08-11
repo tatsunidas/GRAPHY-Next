@@ -1352,7 +1352,7 @@ export const en: Record<string, string> = {
   "tagview.col.value": "Value",
 
   // NonDicomImporter
-  "nondicom.title": "Non-DICOM Import (PDF / Image / Video)",
+  "nondicom.title": "Non-DICOM Import (PDF / Image / Video / NIfTI)",
   "nondicom.standaloneOnly": "This feature is available only in the desktop (standalone) app.",
   "nondicom.target": "Import target",
   "nondicom.target.existing": "Add to selected study: {{name}} / {{desc}}",
