@@ -9,7 +9,7 @@ import {
   buildLayoutFromDto,
   type SeriesLayout,
 } from "./seriesLayout";
-import type { ImageRect } from "./Viewer2D";
+import { overlayPlacement, type ImageRect } from "./overlayPlacement";
 import { imageIdForInstance, type ViewerMode } from "./imageId";
 import { getModalityCalibration } from "./pixelCalibration";
 import { fetchSeriesLayout, type Instance, type SeriesLayoutDto } from "../api";
@@ -22,6 +22,7 @@ import {
   type BackgroundSliceMeta,
 } from "./fusionEngine";
 import {
+  composeTransforms,
   isZeroAdjust,
   manualAdjustToTransform,
   type ManualAdjust,
@@ -136,6 +137,7 @@ export function FusionImageViewer({
   windowCenter,
   windowWidth,
   adjust,
+  registration,
   onAutoWL,
   onSpatialChange,
   onLayoutChange,
@@ -166,6 +168,14 @@ export function FusionImageViewer({
    * 空間 Fusion（IOP/IPP あり）のときだけ効く。
    */
   adjust?: ManualAdjust | null;
+  /**
+   * 自動位置合わせ（R3）の結果。fixed world → moving world の変換。
+   *
+   * <p>手動調整とは**合成**する（`composeTransforms(自動, 手動)`）。手動の 6 値へ
+   * 畳み込まないのは、畳み込むと回転中心の幾何を UI 側に持たせることになり、
+   * さらに R4 の非剛体が 6 値で表現できないため（設計 §12.1）。
+   */
+  registration?: WorldTransform | null;
   /** 実際に用いた既定 W/L（DICOM or 自動）を親へ通知（コントロールバーの初期値シード用）。 */
   onAutoWL?: (center: number, width: number) => void;
   /** 空間 Fusion（実座標整合）で描けているかを親へ通知。false のとき手動位置合わせは効かない。 */
@@ -195,11 +205,32 @@ export function FusionImageViewer({
     return () => { cancelled = true; };
   }, [studyUid, seriesUid, fallback, mode]);
 
+  // 親から渡されるコールバックは ref 越しに呼ぶ（最新値を使いつつ、識別子を依存に載せない）。
+  // ⚠ このコンポーネントは `renderOverlay(ctx)` という**レンダプロップの戻り値**として生成される。
+  // 親がコールバックをその関数の内側で作っていると毎レンダ別関数になり、依存に載せた瞬間
+  // 「毎レンダ再計算 → その中で親へ setState → 再レンダ」の無限ループになる
+  // （実際に R1 で発生: Maximum update depth exceeded）。親の書き方に依存しないよう、
+  // ここで identity を断ち切る。
+  const onAutoWLRef = useRef(onAutoWL);
+  onAutoWLRef.current = onAutoWL;
+  const onSpatialChangeRef = useRef(onSpatialChange);
+  onSpatialChangeRef.current = onSpatialChange;
+  const onLayoutChangeRef = useRef(onLayoutChange);
+  onLayoutChangeRef.current = onLayoutChange;
+
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
   useEffect(() => {
-    onLayoutChange?.(layout);
-  }, [layout, onLayoutChange]);
+    onLayoutChangeRef.current?.(layout);
+  }, [layout]);
+
+  // 空間 Fusion 可否は**変化したときだけ**親へ通知する（毎回の再計算で setState を撃たない）。
+  const lastSpatialRef = useRef<boolean | null>(null);
+  const notifySpatial = useCallback((spatial: boolean) => {
+    if (lastSpatialRef.current === spatial) return;
+    lastSpatialRef.current = spatial;
+    onSpatialChangeRef.current?.(spatial);
+  }, []);
 
   // ── Canvas（base 矩形に重ねる単一キャンバス） ──────────────────
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -251,7 +282,7 @@ export function FusionImageViewer({
       } else {
         def = autoWindowLevel(values);
       }
-      onAutoWL?.(def.center, def.width);
+      onAutoWLRef.current?.(def.center, def.width);
       return def;
     };
     const currentLayout = layoutRef.current;
@@ -280,7 +311,7 @@ export function FusionImageViewer({
     computingRef.current = true;
     try {
       // 手動位置合わせが使えるのは空間 Fusion のときだけ。UI が死んだコントロールを出さないよう通知する。
-      onSpatialChange?.(!!(fgSkeleton && bgMeta));
+      notifySpatial(!!(fgSkeleton && bgMeta));
       if (fgSkeleton && bgMeta) {
         // ── 空間 Fusion: 前景を背景グリッドに trilinear リサンプリング ──
         const iop = fgSkeleton.iop;
@@ -303,6 +334,7 @@ export function FusionImageViewer({
         // UI は 6 つの数値しか持たない。座標を UI 側に組ませると実空間の意味が壊れるため
         // （`fw/plugin-architecture.md` H4b の「幾何はプラグインに書かせない」と同じ方針）。
         let xf: WorldTransform | null = null;
+        let manual: WorldTransform | null = null;
         if (!isZeroAdjust(adjust)) {
           const halfU = ((fgSkeleton.cols - 1) / 2) * fgSkeleton.pixelSpacingCol;
           const halfV = ((fgSkeleton.rows - 1) / 2) * fgSkeleton.pixelSpacingRow;
@@ -312,7 +344,13 @@ export function FusionImageViewer({
             fgIpp0[1] + halfU * fRr[1] + halfV * fRc[1] + midW * fRs[1],
             fgIpp0[2] + halfU * fRr[2] + halfV * fRc[2] + midW * fRs[2],
           ];
-          xf = manualAdjustToTransform(adjust, fgCenter);
+          manual = manualAdjustToTransform(adjust, fgCenter);
+        }
+        // 自動（R3）→ 手動（R1）の順に適用する。手動は「自動結果の上に乗せる
+        // 微調整」であり、逆順にすると自動をやり直すたびに手の分が別の場所に効く。
+        if (registration || manual) {
+          const composed = composeTransforms(registration, manual);
+          xf = composed.kind === "identity" ? null : composed;
         }
 
         // 背景スライス上の点を前景法線方向の位置 w に落とす（変換があれば通してから）。
@@ -432,8 +470,10 @@ export function FusionImageViewer({
         void runFusion();
       }
     }
+    // ⚠ 親のコールバック（onAutoWL / onSpatialChange）は**依存に入れない**。ref 経由で呼んでいる。
+    // 入れると、レンダプロップ内で毎レンダ生成される関数によって再計算が毎レンダ走る。
   }, [baseImageId, baseIndex, baseCount, fgDto, overlayC, overlayT, lut, windowCenter, windowWidth,
-      adjust, onAutoWL, onSpatialChange, drawValues, clearCanvas]);
+      adjust, registration, notifySpatial, drawValues, clearCanvas]);
 
   useEffect(() => {
     void runFusion();
@@ -444,11 +484,7 @@ export function FusionImageViewer({
     <canvas
       ref={canvasRef}
       style={{
-        position: "absolute",
-        left: rect.left,
-        top: rect.top,
-        width: rect.width,
-        height: rect.height,
+        ...overlayPlacement(rect),
         opacity,
         pointerEvents: "none",
         imageRendering: "pixelated",

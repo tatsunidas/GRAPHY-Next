@@ -53,6 +53,15 @@ def write_series(
     z_origin_mm: float = 0.0,
     body_part: str = "",
     protocol_name: str = "",
+    frame_of_reference_key: str | None = None,
+    modality: str = "CT",
+    sop_class_uid: str = CT_IMAGE_STORAGE,
+    spatial: bool = True,
+    rescale_intercept: float = RESCALE_INTERCEPT,
+    rescale_type: str = "HU",
+    window: Sequence[float] = (40, 400),
+    window_explanation: str = "SOFT TISSUE",
+    customize=None,
 ) -> None:
     """Write `volume` (n_slices, rows, cols) of HU values as a CT series.
 
@@ -62,6 +71,35 @@ def write_series(
     while building content about the centre silently offsets every z in the
     truth table by half the stack length, which would invalidate any
     position-dependent accuracy measurement.
+
+    `spatial=False` omits ImageOrientationPatient / ImagePositionPatient /
+    SliceLocation / FrameOfReferenceUID. Real CR and DX series look like this, and
+    so does anything a viewer must refuse to register: without a patient-space
+    frame there is nothing to align *to*. Producing such a series on purpose is
+    the only way to test that the refusal path works and says why.
+
+    `rescale_intercept` / `rescale_type` and `window` must be given *here* rather
+    than patched in `customize`, because the stored pixel values are encoded
+    against the intercept: stored = value - intercept. Overriding the tag
+    afterwards leaves the encoding pointing at the old intercept and shifts every
+    value by the difference, silently. That happened to GNBP-4D — a PET series
+    written with `RescaleIntercept = 0` in `customize` carried CT-encoded pixels
+    and read 1024 too high throughout.
+
+    `window` is likewise not cosmetic. The CT soft-tissue default puts 100 % of a
+    PET or DX histogram above the window, so the series opens pure white and the
+    only way to see anything is to reach for auto W/L. A phantom that cannot be
+    read without that step wastes the reader's first minute on the wrong problem.
+
+    `customize(ds, k)` runs just before the file is written, so a caller can add
+    (or deliberately omit) modality-specific attributes.
+
+    `frame_of_reference_key` overrides the key the FrameOfReferenceUID is derived
+    from. It defaults to `study_key`, i.e. every series of a study shares one
+    frame of reference, which is what GNBP-1 relies on. GNBP-2R needs to vary it
+    independently: a registration engine branches on whether the two series claim
+    the same frame of reference, and that branch has to be exercised by data that
+    keeps the series in one study while declaring different frames.
     """
     if volume.ndim != 3:
         raise ValueError("volume must be 3-D (slices, rows, columns)")
@@ -69,7 +107,7 @@ def write_series(
     n_slices, rows, columns = volume.shape
     study_uid = deterministic_uid("study", study_key)
     series_uid = deterministic_uid("series", uid_key)
-    frame_uid = deterministic_uid("for", study_key)
+    frame_uid = deterministic_uid("for", frame_of_reference_key or study_key)
 
     os.makedirs(out_dir, exist_ok=True)
 
@@ -77,7 +115,7 @@ def write_series(
         sop_uid = deterministic_uid("sop", uid_key, k)
 
         fm = FileMetaDataset()
-        fm.MediaStorageSOPClassUID = CT_IMAGE_STORAGE
+        fm.MediaStorageSOPClassUID = sop_class_uid
         fm.MediaStorageSOPInstanceUID = sop_uid
         fm.TransferSyntaxUID = ExplicitVRLittleEndian
         # Fixed, never generated: a per-run UID here would break reproducibility.
@@ -89,7 +127,7 @@ def write_series(
 
         # --- SOP Common ---------------------------------------------------
         ds.SpecificCharacterSet = "ISO_IR 100"
-        ds.SOPClassUID = CT_IMAGE_STORAGE
+        ds.SOPClassUID = sop_class_uid
         ds.SOPInstanceUID = sop_uid
         ds.InstanceCreationDate = "20260730"
         ds.InstanceCreationTime = "120000"
@@ -114,7 +152,7 @@ def write_series(
         ds.StudyDescription = study_description
 
         # --- General Series -----------------------------------------------
-        ds.Modality = "CT"
+        ds.Modality = modality
         ds.SeriesInstanceUID = series_uid
         ds.SeriesNumber = series_number
         ds.SeriesDate = "20260730"
@@ -128,8 +166,9 @@ def write_series(
         ds.ProtocolName = protocol_name
 
         # --- Frame of Reference -------------------------------------------
-        ds.FrameOfReferenceUID = frame_uid
-        ds.PositionReferenceIndicator = ""
+        if spatial:
+            ds.FrameOfReferenceUID = frame_uid
+            ds.PositionReferenceIndicator = ""
 
         # --- General Equipment --------------------------------------------
         ds.Manufacturer = "GRAPHY-Next benchmark phantom"
@@ -159,15 +198,16 @@ def write_series(
         ds.PixelSpacing = list(pixel_spacing)
         # Axial, no obliquity: rows run left-to-right (+x), columns run
         # anterior-to-posterior (+y).
-        ds.ImageOrientationPatient = [1, 0, 0, 0, 1, 0]
-        # Centred on the origin in x/y. `z_origin_mm` places the first slice so
-        # that patient coordinates agree with the phantom's own ground truth.
-        ds.ImagePositionPatient = [
-            -(columns - 1) / 2.0 * pixel_spacing[0],
-            -(rows - 1) / 2.0 * pixel_spacing[1],
-            z_origin_mm + k * slice_thickness,
-        ]
-        ds.SliceLocation = z_origin_mm + k * slice_thickness
+        if spatial:
+            ds.ImageOrientationPatient = [1, 0, 0, 0, 1, 0]
+            # Centred on the origin in x/y. `z_origin_mm` places the first slice so
+            # that patient coordinates agree with the phantom's own ground truth.
+            ds.ImagePositionPatient = [
+                -(columns - 1) / 2.0 * pixel_spacing[0],
+                -(rows - 1) / 2.0 * pixel_spacing[1],
+                z_origin_mm + k * slice_thickness,
+            ]
+            ds.SliceLocation = z_origin_mm + k * slice_thickness
 
         # --- Image Pixel ---------------------------------------------------
         ds.SamplesPerPixel = 1
@@ -179,40 +219,72 @@ def write_series(
         ds.HighBit = 15
         ds.PixelRepresentation = 0  # unsigned; HU recovered through the rescale pair
 
-        # --- CT Image ------------------------------------------------------
-        ds.RescaleIntercept = RESCALE_INTERCEPT
+        # --- Modality LUT / VOI LUT -----------------------------------------
+        ds.RescaleIntercept = rescale_intercept
         ds.RescaleSlope = 1
-        ds.RescaleType = "HU"
-        ds.WindowCenter = 40
-        ds.WindowWidth = 400
-        ds.WindowCenterWidthExplanation = "SOFT TISSUE"
-        # Nominal acquisition parameters. They describe no real exposure — the
-        # data is computed, not scanned — but they are the attributes a CT
-        # viewer expects to find, and their presence exercises the metadata
-        # paths that a bare minimum header would leave untested. The synthetic
-        # origin is declared in ImageType, ImageComments and
-        # DeidentificationMethod so the values cannot be read as measurements.
-        ds.KVP = 120
-        ds.GantryDetectorTilt = 0.0
-        ds.TableHeight = 0.0
-        ds.RotationDirection = "CW"
-        ds.ScanOptions = "HELICAL MODE"
-        ds.ConvolutionKernel = "STANDARD"
-        ds.FilterType = "NONE"
-        ds.DataCollectionDiameter = columns * pixel_spacing[0]
-        ds.ReconstructionDiameter = columns * pixel_spacing[0]
-        ds.DistanceSourceToDetector = 1000.0
-        ds.DistanceSourceToPatient = 550.0
-        ds.ExposureTime = 500
-        ds.XRayTubeCurrent = 200
-        ds.Exposure = 100
-        ds.GeneratorPower = 24
-        ds.FocalSpots = 0.7
+        ds.RescaleType = rescale_type
+        # 値をそのまま渡す。float() を噛ませると既定の 40 が "40.0" になり、
+        # 生成物が byte 単位で変わる（＝既存ファントムの md5 が動く）。
+        ds.WindowCenter = window[0]
+        ds.WindowWidth = window[1]
+        ds.WindowCenterWidthExplanation = window_explanation
 
-        stored = (volume[k].astype(np.int32) - RESCALE_INTERCEPT).astype(np.uint16)
+        # --- CT Image ------------------------------------------------------
+        # Only for CT. A PET image carrying KVP and "HELICAL MODE" is not merely
+        # untidy: this phantom exists to test whether the application reads
+        # modality attributes correctly, and seeding it with attributes of the
+        # wrong modality would let a wrong read look right.
+        if modality == "CT":
+            _write_ct_acquisition(ds, columns, pixel_spacing)
+
+        stored = _encode(volume[k], rescale_intercept)
         ds.PixelData = stored.tobytes()
 
+        if customize is not None:
+            customize(ds, k)
+
         ds.save_as(os.path.join(out_dir, f"{k + 1:04d}.dcm"), enforce_file_format=True)
+
+
+def _encode(slice_values: np.ndarray, intercept: float) -> np.ndarray:
+    """Stored values for one slice, checked against the 16-bit unsigned range.
+
+    Without the check an out-of-range value wraps silently and produces a phantom
+    whose content differs from its own ground truth in a way no test would catch.
+    """
+    stored = np.rint(slice_values.astype(np.float64) - intercept)
+    lo, hi = stored.min(), stored.max()
+    if lo < 0 or hi > 65535:
+        raise ValueError(
+            f"stored values {lo:.0f}..{hi:.0f} fall outside 16-bit unsigned range "
+            f"with intercept {intercept}; choose an intercept that brings them in"
+        )
+    return stored.astype(np.uint16)
+
+
+def _write_ct_acquisition(ds: Dataset, columns: int, pixel_spacing: Sequence[float]) -> None:
+    # Nominal acquisition parameters. They describe no real exposure — the
+    # data is computed, not scanned — but they are the attributes a CT
+    # viewer expects to find, and their presence exercises the metadata
+    # paths that a bare minimum header would leave untested. The synthetic
+    # origin is declared in ImageType, ImageComments and
+    # DeidentificationMethod so the values cannot be read as measurements.
+    ds.KVP = 120
+    ds.GantryDetectorTilt = 0.0
+    ds.TableHeight = 0.0
+    ds.RotationDirection = "CW"
+    ds.ScanOptions = "HELICAL MODE"
+    ds.ConvolutionKernel = "STANDARD"
+    ds.FilterType = "NONE"
+    ds.DataCollectionDiameter = columns * pixel_spacing[0]
+    ds.ReconstructionDiameter = columns * pixel_spacing[0]
+    ds.DistanceSourceToDetector = 1000.0
+    ds.DistanceSourceToPatient = 550.0
+    ds.ExposureTime = 500
+    ds.XRayTubeCurrent = 200
+    ds.Exposure = 100
+    ds.GeneratorPower = 24
+    ds.FocalSpots = 0.7
 
 
 def series_checksum(out_dir: str) -> str:

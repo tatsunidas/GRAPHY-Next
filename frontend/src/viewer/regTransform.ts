@@ -28,8 +28,8 @@
 /** 患者 LPS mm の 3 次元点／ベクトル。 */
 export type Vec3 = [number, number, number];
 
-/** 変換の種別。R4 で "dvf" / "bspline" / "svf" が加わる。 */
-export type TransformKind = "identity" | "linear" | "composite";
+/** 変換の種別。B-spline / 定常速度場（SVF）は必要になったときに足す。 */
+export type TransformKind = "identity" | "linear" | "composite" | "dvf";
 
 /**
  * fixed world → moving world の写像。すべての変換種はこれを実装する。
@@ -58,6 +58,27 @@ export interface LinearTransform extends WorldTransform {
 export interface CompositeTransform extends WorldTransform {
   readonly kind: "composite";
   readonly chain: readonly WorldTransform[];
+}
+
+/**
+ * 変位場（Dense Vector Field）。R4 の非剛体の出力。
+ *
+ * <p>変位は**制御格子上**に持ち、任意点では trilinear 補間する。格子は世界軸に平行で
+ * 等間隔（`origin` + `spacing` × index）。密なボクセル単位の場をそのまま持つと
+ * 512³ で 1.5 GB を超えるため、格子は粗く保つ（設計 §7）。
+ *
+ * <p>写像は `p → p + u(p)`。**剛体の後段に合成して使う**のが前提で、
+ * 大域的なズレは剛体側が取り、ここは残差だけを担う。
+ */
+export interface DvfTransform extends WorldTransform {
+  readonly kind: "dvf";
+  /** 制御点の変位 [mm]。`(k*ny + j)*nx + i` の順に x,y,z が並ぶ（長さ = nx*ny*nz*3）。 */
+  readonly displacements: Float32Array;
+  readonly dims: readonly [number, number, number];
+  /** 格子原点（world mm）。 */
+  readonly origin: Vec3;
+  /** 格子間隔（world mm、軸ごと）。 */
+  readonly spacing: Vec3;
 }
 
 /** 手動微調整の 6 パラメータ。UI が持つのはこれだけ（幾何は計算層に閉じる）。 */
@@ -286,6 +307,137 @@ export function composeTransforms(...parts: (WorldTransform | null | undefined)[
       out[0] = tmp[0]; out[1] = tmp[1]; out[2] = tmp[2];
     },
   } as CompositeTransform;
+}
+
+// ── 変位場（DVF） ─────────────────────────────────────────────────────────
+
+/**
+ * 制御格子上の変位から変位場変換を作る。
+ *
+ * <p>格子の外側は**最近傍の制御点の変位で外挿**する（クランプ）。0 に落とすと
+ * 格子の縁で変位が不連続になり、そこだけ画像が切れたように見える。実データでは
+ * 体の縁が格子の縁に近いことが多く、この不連続は必ず目に付く。
+ */
+export function dvfTransform(
+  displacements: Float32Array,
+  dims: readonly [number, number, number],
+  origin: Vec3,
+  spacing: Vec3,
+): DvfTransform {
+  const [nx, ny, nz] = dims;
+  if (displacements.length !== nx * ny * nz * 3) {
+    throw new Error(`dvfTransform: 変位の長さ ${displacements.length} が格子 ${nx}x${ny}x${nz} と合わない`);
+  }
+  const d = displacements;
+  const sxy = nx * ny;
+
+  return {
+    kind: "dvf",
+    displacements: d,
+    dims,
+    origin,
+    spacing,
+    mapPoint(x, y, z, out) {
+      // 格子座標へ（クランプ込み）
+      let gi = (x - origin[0]) / spacing[0];
+      let gj = (y - origin[1]) / spacing[1];
+      let gk = (z - origin[2]) / spacing[2];
+      if (gi < 0) gi = 0; else if (gi > nx - 1) gi = nx - 1;
+      if (gj < 0) gj = 0; else if (gj > ny - 1) gj = ny - 1;
+      if (gk < 0) gk = 0; else if (gk > nz - 1) gk = nz - 1;
+
+      const i0 = Math.floor(gi), j0 = Math.floor(gj), k0 = Math.floor(gk);
+      const i1 = i0 + 1 < nx ? i0 + 1 : i0;
+      const j1 = j0 + 1 < ny ? j0 + 1 : j0;
+      const k1 = k0 + 1 < nz ? k0 + 1 : k0;
+      const fi = gi - i0, fj = gj - j0, fk = gk - k0;
+
+      const o000 = ((k0 * ny + j0) * nx + i0) * 3;
+      const o100 = ((k0 * ny + j0) * nx + i1) * 3;
+      const o010 = ((k0 * ny + j1) * nx + i0) * 3;
+      const o110 = ((k0 * ny + j1) * nx + i1) * 3;
+      const o001 = ((k1 * ny + j0) * nx + i0) * 3;
+      const o101 = ((k1 * ny + j0) * nx + i1) * 3;
+      const o011 = ((k1 * ny + j1) * nx + i0) * 3;
+      const o111 = ((k1 * ny + j1) * nx + i1) * 3;
+
+      for (let c = 0; c < 3; c++) {
+        const c00 = d[o000 + c] + (d[o100 + c] - d[o000 + c]) * fi;
+        const c10 = d[o010 + c] + (d[o110 + c] - d[o010 + c]) * fi;
+        const c01 = d[o001 + c] + (d[o101 + c] - d[o001 + c]) * fi;
+        const c11 = d[o011 + c] + (d[o111 + c] - d[o011 + c]) * fi;
+        const c0 = c00 + (c10 - c00) * fj;
+        const c1 = c01 + (c11 - c01) * fj;
+        out[c] = (c === 0 ? x : c === 1 ? y : z) + c0 + (c1 - c0) * fk;
+      }
+      void sxy;
+    },
+  };
+}
+
+/**
+ * 変位場の Jacobian 行列式を制御格子上で評価する。
+ *
+ * <p>**負値は折り返し**であり、物理的にありえない（設計 §9.4: 負値率 > 0 は不合格）。
+ * ここでは中央差分で `det(I + ∂u/∂x)` を求める。格子の縁は片側差分。
+ *
+ * @returns 各制御点の行列式（長さ = nx*ny*nz）。
+ */
+export function dvfJacobianDeterminants(t: DvfTransform): Float32Array {
+  const [nx, ny, nz] = t.dims;
+  const d = t.displacements;
+  const out = new Float32Array(nx * ny * nz);
+  const at = (i: number, j: number, k: number, c: number): number =>
+    d[((k * ny + j) * nx + i) * 3 + c];
+
+  for (let k = 0; k < nz; k++) {
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        // 各軸の偏微分（縁は片側差分。格子間隔で割って mm あたりにする）
+        const ip = Math.min(nx - 1, i + 1), im = Math.max(0, i - 1);
+        const jp = Math.min(ny - 1, j + 1), jm = Math.max(0, j - 1);
+        const kp = Math.min(nz - 1, k + 1), km = Math.max(0, k - 1);
+        const hx = (ip - im) * t.spacing[0];
+        const hy = (jp - jm) * t.spacing[1];
+        const hz = (kp - km) * t.spacing[2];
+
+        const dux = hx > 0 ? (at(ip, j, k, 0) - at(im, j, k, 0)) / hx : 0;
+        const duy = hy > 0 ? (at(i, jp, k, 0) - at(i, jm, k, 0)) / hy : 0;
+        const duz = hz > 0 ? (at(i, j, kp, 0) - at(i, j, km, 0)) / hz : 0;
+        const dvx = hx > 0 ? (at(ip, j, k, 1) - at(im, j, k, 1)) / hx : 0;
+        const dvy = hy > 0 ? (at(i, jp, k, 1) - at(i, jm, k, 1)) / hy : 0;
+        const dvz = hz > 0 ? (at(i, j, kp, 1) - at(i, j, km, 1)) / hz : 0;
+        const dwx = hx > 0 ? (at(ip, j, k, 2) - at(im, j, k, 2)) / hx : 0;
+        const dwy = hy > 0 ? (at(i, jp, k, 2) - at(i, jm, k, 2)) / hy : 0;
+        const dwz = hz > 0 ? (at(i, j, kp, 2) - at(i, j, km, 2)) / hz : 0;
+
+        const a = 1 + dux, b = duy, c = duz;
+        const e = dvx, f = 1 + dvy, g = dvz;
+        const h = dwx, m = dwy, n = 1 + dwz;
+        out[(k * ny + j) * nx + i] = a * (f * n - g * m) - b * (e * n - g * h) + c * (e * m - f * h);
+      }
+    }
+  }
+  return out;
+}
+
+/** 変位の大きさ（mm）の統計。UI の品質表示（設計 §12.2）に使う。 */
+export function dvfMagnitudeStats(t: DvfTransform): { max: number; mean: number; p95: number } {
+  const d = t.displacements;
+  const n = d.length / 3;
+  const mags = new Float64Array(n);
+  let sum = 0;
+  for (let i = 0; i < n; i++) {
+    const m = Math.hypot(d[i * 3], d[i * 3 + 1], d[i * 3 + 2]);
+    mags[i] = m;
+    sum += m;
+  }
+  const sorted = Array.from(mags).sort((a, b) => a - b);
+  return {
+    max: sorted.length ? sorted[sorted.length - 1] : 0,
+    mean: n ? sum / n : 0,
+    p95: sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] : 0,
+  };
 }
 
 /** 恒等変換か（`computeFusionSlice` を素通りさせてよいかの判定）。 */

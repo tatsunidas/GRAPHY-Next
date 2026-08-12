@@ -1,9 +1,16 @@
-# GNBP-1 — GRAPHY-Next Benchmark Phantom
+# GNBP — GRAPHY-Next Benchmark Phantom
 
 GRAPHY-Next の性能・正確性を評価するためのデジタルファントムと、その生成器・計測ハーネス。
 
 読み込み時間・フレームレート・メモリといった負荷の測定だけでなく、**解析的に真値が既知**の
-データを使って計測そのものの正確性（HU 校正・座標変換・体積）も検証できるようにしてある。
+データを使って計測そのものの正確性（HU 校正・座標変換・体積・**レジストレーション**）も
+検証できるようにしてある。
+
+| 系列 | 目的 | 正本 |
+| :- | :- | :- |
+| **GNBP-1A / 1B** | 正確性（体積・距離・HU）／ 性能（負荷スケーリング） | この README |
+| **GNBP-2R** | **レジストレーション精度**（剛体・アフィン・非剛体・マルチモーダル） | この README ＋ `fw/registration-design.md` §9.1 |
+| **GNBP-4D** | **劣化系列**（属性をわざと欠落させたデータ） | この README |
 
 ## なぜ2系列あるのか
 
@@ -30,15 +37,21 @@ GRAPHY-Next の性能・正確性を評価するためのデジタルファン�
 検証済み: 同じコマンドで2回生成し、全ファイルの MD5 が一致することを確認。
 
 ```
-GNBP-1A       180 files   90.2 MiB  md5 325737ca08213ffa5f9d024620f32d6a
-GNBP-1B_64     64 files   32.1 MiB  md5 d2e21d18f4b984973e1cb6de2315869b
-GNBP-1B_128   128 files   64.2 MiB  md5 3027c530c11791c79fb72cfee0a7e0c4
-GNBP-1B_256   256 files  128.5 MiB  md5 5bbd10354392e8efa448dca9b7c8267d
-GNBP-1B_512   512 files  257.0 MiB  md5 19814798810c9d42fe0fe703f78e565b
+GNBP-1A            180 files   90.2 MiB  md5 325737ca08213ffa5f9d024620f32d6a
+GNBP-1B_64          64 files   32.1 MiB  md5 d2e21d18f4b984973e1cb6de2315869b
+GNBP-1B_128        128 files   64.2 MiB  md5 3027c530c11791c79fb72cfee0a7e0c4
+GNBP-1B_256        256 files  128.5 MiB  md5 5bbd10354392e8efa448dca9b7c8267d
+GNBP-1B_512        512 files  257.0 MiB  md5 19814798810c9d42fe0fe703f78e565b
+GNBP-2R-fixed      176 files   22.3 MiB  md5 a67bac27fa078ac69ce57a455e962a32
+GNBP-2R-rigid      176 files   22.3 MiB  md5 53f43afd928d1f9e32b8ce5d2e84630d
+GNBP-2R-affine     176 files   22.3 MiB  md5 a34a21b9c684b33a523a6b1ef069323b
+GNBP-2R-deform     176 files   22.3 MiB  md5 883342f536fb9381c99c89567ba2cd87
+GNBP-2R-multimodal  88 files    2.9 MiB  md5 c2ad865f77eab00e2a3163fc029f5008
 ```
 
 （MD5 は系列内の全ファイルをファイル名昇順に連結したものに対する値。
-正典は `phantom/GNBP-1A_ground_truth.json` と `phantom/GNBP-1B_manifest.json`。）
+正典は `phantom/GNBP-1A_ground_truth.json`・`phantom/GNBP-1B_manifest.json`・
+`phantom/GNBP-2R_ground_truth.json`。）
 
 第三者は外部データセットのダウンロードを要さず、生成器を実行するだけで同一のデータを得られる。
 
@@ -119,6 +132,88 @@ x(z) = Rx · cos(2π z / L),   y(z) = Ry · sin(2π z / L)
 ノイズがあっても中心線の真値は厳密なので、中心線抽出と CPR ストレート化の妥当性は
 この系列でも確認できる。
 
+## GNBP-2R — レジストレーション精度
+
+GNBP-1A と同じ 3D Shepp-Logan を、**既知の変換で動かした** 5 系列。変換が閉形式で分かっているので、
+TRE も変位場の誤差も厳密な真値を持つ。真値の正本は `phantom/GNBP-2R_ground_truth.json`。
+
+| 系列 | 変換 | 検証できること |
+| :- | :- | :- |
+| `GNBP-2R-fixed` | 恒等（基準） | — |
+| `GNBP-2R-rigid` | 並進 `[7.3, −4.1, 11.6]` mm ＋ 回転 `[3.2, −1.7, 5.5]`° | 剛体推定の残差 |
+| `GNBP-2R-affine` | 剛体 ＋ 異方スケール ＋ せん断 | アフィン推定の残差 |
+| `GNBP-2R-deform` | 剛体 ＋ 解析的変位場（最大 ~15 mm） | 変位場 RMSE、Jacobian 負値率 |
+| `GNBP-2R-multimodal` | 剛体 ＋ **非単調な強度写像** ＋ PSF ＋ Poisson ノイズ、2 mm 格子 | マルチモーダル指標の妥当性 |
+
+**moving は fixed を補間して作っていない。** 変換した座標で解析的に評価して生成している。
+補間で作ると真値が「補間についての真値」になってしまい、測っているのが実装の誤差なのか
+生成時の補間誤差なのか分からなくなる。
+
+**向きの規約**（これを取り違えると、間違った答えに満点を与えるファントムになる）:
+
+> `transform_fixed_to_moving` は **fixed の点 → 同じ解剖が写っている moving の点**（`q = T(p)`）。
+> これがレジストレーションの推定対象であり、GRAPHY が `computeFusionSlice(fg, bg, xf)` に
+> 渡す `xf` と同じ向き。生成時に使う逆写像は真値ではない。
+
+オイラー角は `R = Rz·Ry·Rx`（度・患者 LPS・右手系・体積中心まわり）で、
+`frontend/src/viewer/regTransform.ts` の `mat4FromEulerDeg` と同一。**この一致は保つこと** —
+一致していないと、GRAPHY が報告する数値と公開した数値を比較できない。
+
+### 非剛体を B-spline にしなかった理由
+
+設計の初稿は B-spline 制御点だったが、**閉形式の正弦テンソル積**にした。
+第三者が再現できることを優先したため: 3 行の式で任意の点を評価でき、
+Jacobian が解析的に出る（＝「折り返しが無い」がサンプリングではなく証明になる）、
+乱数シードも B-spline 評価器も要らない。R4 のエンジン側が B-spline/DVF を使うことは妨げない。
+
+### 生成器の自己検証
+
+生成後、**結節の中心が真値の示す moving 位置に本当にあるか**を測って HU で突き合わせる
+（結節 160 HU / 周囲実質 40 HU）。向きを取り違えていればここで落ちる。
+非剛体系列では併せて Jacobian 最小値（> 0）と逆写像の残差も真値 JSON に記録する。
+
+### 採点
+
+```bash
+node score_registration.mjs --series rigid --estimate identity     # 未位置合わせのベースライン
+node score_registration.mjs --series rigid --estimate est.json     # 推定を採点
+node score_registration.mjs --series deform --estimate est.json --json
+```
+
+推定は `{"matrix_4x4_row_major": [...]}` または `{"translation_mm": [...], "euler_deg": [...]}`。
+出力は landmark TRE・変位誤差（RMSE / p95 / max）と、真値が剛体のときは並進誤差・回転誤差。
+合否は真値 JSON の `acceptance_targets` に対して判定し、終了コードに出す。
+
+⚠️ **推定は線形（剛体・アフィン）のみ**。`deform` を線形推定で採点すると「剛体で取り除ける分の
+上限」が測れるが、非剛体の目標値には届かない（それは欠陥ではない）。密な変位場の入力は、
+それを出すエンジンができる R4 で追加する。
+
+## GNBP-4D — 劣化系列（属性欠落）
+
+他のファントムは「答えが合っているか」を測る。こちらは別の問いに答える:
+**データが機能を支えられないとき、アプリは間違った結果を出さずに「できない」と言うか。**
+
+この経路は普通テストされない。実データで欠落したものを用意するのが面倒で、
+持ち続けるのも面倒だからである。同時に、**失敗したときがいちばん悪い経路**でもある。
+患者座標系を持たないシリーズを黙って位置合わせしたり、SUV に必要な属性を失った PET を
+保存したりすると、**見た目は完了しているのに間違っている**結果ができる。
+
+| 系列 | 中身 | 期待する挙動 |
+| :- | :- | :- |
+| `GNBP-4D-nonspatial` | DX 様 1 枚。**IOP/IPP/FrameOfReferenceUID なし** | 位置調整・自動位置合わせが**無効化され、理由が出る** |
+| `GNBP-4D-pet-complete` | PET。SUV に必要な属性が揃っている | SUV が計算でき、派生シリーズも保存できる（**対照**） |
+| `GNBP-4D-pet-incomplete` | PET。`Units` / `PatientWeight` / 放射性医薬品シーケンスを削除 | SUV が拒否され、**派生シリーズの保存も拒否される**（`fw/registration-design.md` §8.3） |
+
+**対照（`pet-complete`）を必ず一緒に見ること。** 対照が無いと
+「SUV が出なかった」が「拒否が効いた」のか「別の理由で出なかっただけ」なのか区別できない。
+
+```bash
+python3 make_phantom_4d.py --out ./phantom
+```
+
+実測（2026-08-09、実機）: `pet-complete` からの派生シリーズ保存は **HTTP 200**、
+`pet-incomplete` は **HTTP 400** ＋ 欠けているタグ名を並べた理由。
+
 ## 使い方
 
 ```bash
@@ -126,6 +221,9 @@ python3 make_phantom_a.py --out ./phantom              # 正確性系列 + 真�
 python3 make_phantom_b.py --out ./phantom              # 性能系列 64/128/256/512
 python3 make_phantom_b.py --out ./phantom --slices 256 # 単一サイズ
 python3 make_phantom_b.py --out ./phantom --compress j2k  # JPEG2000 版（デコード負荷比較用）
+python3 make_phantom_2r.py --out ./phantom             # レジストレーション系列 5 本（約 5 分）
+python3 make_phantom_4d.py --out ./phantom             # 劣化系列 3 本（属性欠落・数秒）
+python3 make_phantom_2r.py --out ./phantom --series rigid --force  # 1 系列だけ作り直す
 python3 preview.py phantom/GNBP-1A --out /tmp/a.png    # 目視確認
 ```
 
@@ -136,8 +234,11 @@ python3 preview.py phantom/GNBP-1A --out /tmp/a.png    # 目視確認
   期待 HU、ステップウェッジ、計測ターゲット、生成器の自己検証結果、系列の MD5
 - `phantom/GNBP-1B_{64,128,256,512}/` … DICOM
 - `phantom/GNBP-1B_manifest.json` … 各系列のサイズ・MD5・中心線パラメータ
+- `phantom/GNBP-2R-{fixed,rigid,affine,deform,multimodal}/` … DICOM（1 スタディに 5 シリーズ）
+- `phantom/GNBP-2R_ground_truth.json` … 各系列の 4×4 変換・並進/回転パラメータ・ランドマーク
+  （fixed 空間と moving 空間の対応点）・変位統計・Jacobian・受け入れ基準・MD5
 
-依存: `pydicom`, `numpy`（プレビューのみ `pillow`）
+依存: `pydicom`, `numpy`（プレビューのみ `pillow`）。採点ハーネスは Node 標準のみ（依存なし）。
 
 ## ファイル
 
@@ -148,6 +249,7 @@ python3 preview.py phantom/GNBP-1A --out /tmp/a.png    # 目視確認
 | `dicom_io.py` | 決定的な CT DICOM 系列の書き出し（UID 導出・HU 符号化） |
 | `make_phantom_a.py` | GNBP-1A 生成＋真値 JSON＋自己検証 |
 | `make_phantom_b.py` | GNBP-1B 生成＋マニフェスト |
+| `make_phantom_2r.py` | GNBP-2R 生成＋真値 JSON＋自己検証（変換モデル・変位場もここ） |
 | `preview.py` | アキシャル/コロナル/サジタルの PNG プレビュー |
 | `canvas_stats.py` | 描画キャンバスの画素統計（黒画面検出用） |
 
@@ -162,6 +264,7 @@ python3 preview.py phantom/GNBP-1A --out /tmp/a.png    # 目視確認
 | `init_script.js` | ページ側の計測インストルメンテーション（アプリより先に注入） |
 | `proc_rss.mjs` | ブラウザプロセス木の PSS 集計 |
 | `probe_menus.mjs` / `probe_readout.mjs` | セレクタ・読み出し経路の事前調査 |
+| `score_registration.mjs` | GNBP-2R の真値に対して推定変換を採点（アプリ非依存） |
 
 同梱データ:
 

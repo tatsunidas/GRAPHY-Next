@@ -44,6 +44,9 @@ import { autoWindow, rasterizeOverlay, type OverlayWindow } from "./overlayRaste
 import { encodeFrames, framePixelsBase64, hasNonFinite } from "./derivedSeriesEncode";
 import { httpSend } from "../http";
 import { emitDbChanged } from "../dbEvents";
+import { overlayPlacement, type ImageRect } from "./overlayPlacement";
+// 配置の純関数は overlayPlacement.ts が正。ここは既存の import 元との互換のため再輸出する。
+export { overlayPlacement, type ImageRect } from "./overlayPlacement";
 import { computeOrientationMarkers, type OrientationMarkers } from "./orientation";
 import { computeScaleBar, type ScaleBar } from "./scaleBar";
 import { getOrCreateCameraSync, getOrCreateVoiSync, getOrCreatePresentationSync, getOrCreateSeriesVoiSync, broadcastSeriesProperties, captureVoiBaseline, clearVoiBaseline } from "./sync";
@@ -218,13 +221,6 @@ export interface ViewerOverlays {
 }
 
 /** 現在スライスの画像が画面上に描画されている矩形（wrap 内の CSS px）。 */
-export interface ImageRect {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}
-
 /** プラグインの値マップの保持形（`ViewerOverlay` ＋ 対象スライスの imageId ＋ 解決済み既定値）。 */
 interface PluginOverlayState {
   imageId: string;
@@ -268,15 +264,105 @@ function computeImageRect(vp: Types.IStackViewport): ImageRect | null {
     const tl = vp.worldToCanvas(utilities.transformIndexToWorld(vtk, [-0.5, -0.5, 0]));
     const tr = vp.worldToCanvas(utilities.transformIndexToWorld(vtk, [cols - 0.5, -0.5, 0]));
     const bl = vp.worldToCanvas(utilities.transformIndexToWorld(vtk, [-0.5, rows - 0.5, 0]));
-    const left = Math.min(tl[0], tr[0], bl[0]);
-    const top = Math.min(tl[1], tr[1], bl[1]);
-    const width = Math.max(Math.abs(tr[0] - tl[0]), Math.abs(bl[0] - tl[0]));
-    const height = Math.max(Math.abs(bl[1] - tl[1]), Math.abs(tr[1] - tl[1]));
-    if (!Number.isFinite(left) || !Number.isFinite(top) || width <= 0 || height <= 0) return null;
-    return { left, top, width, height };
+
+    // 画像の 2 辺ベクトル（canvas 座標）。回転・反転はここに全部入っている。
+    const ux = tr[0] - tl[0], uy = tr[1] - tl[1];
+    const vx = bl[0] - tl[0], vy = bl[1] - tl[1];
+    const width = Math.hypot(ux, uy);
+    const height = Math.hypot(vx, vy);
+    if (!Number.isFinite(tl[0]) || !Number.isFinite(tl[1]) || width <= 0 || height <= 0) return null;
+
+    // 単位箱 → 平行四辺形 の線形写像。軸並行 BBox ではなく**実際の形**を返すので、
+    // 回転させてもオーバーレイが画像に張り付いたままになる。
+    return {
+      left: tl[0],
+      top: tl[1],
+      width,
+      height,
+      linear: [ux / width, uy / width, vx / height, vy / height],
+    };
   } catch {
     return null;
   }
+}
+
+/**
+ * 矩形の同値判定。`setImageRect` は毎回 `computeImageRect` の新しいオブジェクトを渡すため、
+ * これで弾かないと**値が同じでも再レンダが走る**（オーバーレイは rect を props で受けるので、
+ * その再レンダが Fusion 側の再計算まで波及しうる）。
+ */
+function sameRect(a: ImageRect | null, b: ImageRect | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return nearly(a.left, b.left) && nearly(a.top, b.top)
+    && nearly(a.width, b.width) && nearly(a.height, b.height)
+    && nearly(a.linear[0], b.linear[0]) && nearly(a.linear[1], b.linear[1])
+    && nearly(a.linear[2], b.linear[2]) && nearly(a.linear[3], b.linear[3]);
+}
+
+/**
+ * ★ カメラ由来の state は「値が変わったときだけ」入れる。
+ *
+ * <p>`readTransform` / `computeOrientationMarkers` / `computeScaleBar` はいずれも
+ * **毎回新しいオブジェクト**を返す。それをそのまま state に入れると、Cornerstone が
+ * `CAMERA_MODIFIED` を投げるたびに無条件で再レンダが積まれる。1 枚のスライス表示でも
+ * `setViewPresentation` は zoom / pan / rotation / flip を個別に適用してその都度
+ * イベントを投げるので、スライス送りのような連続操作では更新が積み上がり、
+ * React の入れ子更新の上限（50）に達して
+ * `Maximum update depth exceeded` になる（実際にそうなった。スタックの発生源は
+ * `onCameraModified` の `setTransform`）。
+ *
+ * <p>値で比較して同じなら **前の参照をそのまま返す**（React は bail out する）。
+ */
+/** 浮動小数の微小な揺れを同値とみなす。スライスごとの最下位ビットの差で再レンダしない。 */
+function nearly(a: number, b: number, eps = 1e-6): boolean {
+  return a === b || Math.abs(a - b) <= eps;
+}
+
+function sameTransform(a: ViewTransform, b: ViewTransform): boolean {
+  return nearly(a.zoom, b.zoom)
+    && nearly(a.pan[0], b.pan[0]) && nearly(a.pan[1], b.pan[1])
+    && nearly(a.rotation, b.rotation)
+    && a.flipHorizontal === b.flipHorizontal
+    && a.flipVertical === b.flipVertical;
+}
+
+function sameMarkers(a: OrientationMarkers | null, b: OrientationMarkers | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.top === b.top && a.bottom === b.bottom && a.left === b.left && a.right === b.right;
+}
+
+/** 空配列は毎回作らず使い回す（新しい配列は「変化した」と誤判定される）。 */
+const EMPTY_SEGMENTS: RefSegment[] = [];
+const EMPTY_CIRCLES: SphereCanvasCircle[] = [];
+
+function sameSegments(a: RefSegment[], b: RefSegment[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const p = a[i], q = b[i];
+    if (!nearly(p.x1, q.x1) || !nearly(p.y1, q.y1) || !nearly(p.x2, q.x2) || !nearly(p.y2, q.y2)
+      || p.color !== q.color || p.label !== q.label) return false;
+  }
+  return true;
+}
+
+function sameCircles(a: SphereCanvasCircle[], b: SphereCanvasCircle[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const p = a[i], q = b[i];
+    if (!nearly(p.cx, q.cx) || !nearly(p.cy, q.cy) || !nearly(p.r, q.r)
+      || p.color !== q.color || p.label !== q.label) return false;
+  }
+  return true;
+}
+
+function sameScaleBar(a: ScaleBar | null, b: ScaleBar | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return nearly(a.lengthPx, b.lengthPx) && a.label === b.label && a.calibrated === b.calibrated;
 }
 
 export function Viewer2D({
@@ -349,6 +435,41 @@ export function Viewer2D({
   // 毎回チラつかせないよう、表示は一定時間の遅延読込が続いた場合のみに絞る（下の effect 参照）。
   const [sliceLoading, setSliceLoading] = useState(false);
   const [transform, setTransform] = useState<ViewTransform>(FIT_TRANSFORM);
+
+  /**
+   * ★ カメラ由来の state は「値が変わったときだけ **setState を呼ぶ**」。
+   *
+   * <p>関数型更新（`setX(prev => same ? prev : next)`）では再レンダは防げるが、
+   * React は `dispatchSetState` の時点で更新をスケジュールするため、
+   * **入れ子更新のカウントは進む**。連続操作（スライス送り）で上限 50 に達し
+   * `Maximum update depth exceeded` が出た原因がこれだった。
+   * 直前値を ref に持ち、同値なら setState 自体を呼ばない。
+   */
+  const lastTransformRef = useRef<ViewTransform>(FIT_TRANSFORM);
+  const lastMarkersRef = useRef<OrientationMarkers | null>(null);
+  const lastScaleBarRef = useRef<ScaleBar | null>(null);
+  const lastImageRectRef = useRef<ImageRect | null>(null);
+
+  const applyTransformState = useCallback((next: ViewTransform) => {
+    if (sameTransform(lastTransformRef.current, next)) return;
+    lastTransformRef.current = next;
+    setTransform(next);
+  }, []);
+  const applyMarkersState = useCallback((next: OrientationMarkers | null) => {
+    if (sameMarkers(lastMarkersRef.current, next)) return;
+    lastMarkersRef.current = next;
+    setMarkers(next);
+  }, []);
+  const applyScaleBarState = useCallback((next: ScaleBar | null) => {
+    if (sameScaleBar(lastScaleBarRef.current, next)) return;
+    lastScaleBarRef.current = next;
+    setScaleBar(next);
+  }, []);
+  const applyImageRectState = useCallback((next: ImageRect | null) => {
+    if (sameRect(lastImageRectRef.current, next)) return;
+    lastImageRectRef.current = next;
+    setImageRect(next);
+  }, []);
   const [info, setInfo] = useState<ImageInfo | null>(null);
   const infoRef = useRef<ImageInfo | null>(null);
   const [sample, setSample] = useState<PixelSample | null>(null);
@@ -412,14 +533,42 @@ export function Viewer2D({
   // onCameraModified（init effect 内・stackKey 依存）から最新の再計算関数を呼ぶための間接参照。
   const recomputeRefLinesRef = useRef<() => void>(() => {});
 
+  /**
+   * ★ 参照線・球断面円も「値が変わったときだけ setState を呼ぶ」。
+   *
+   * <p>`bumpReference()` は **カメライベントのたびに全ビューポートの購読者を叩く**。
+   * ここで `setState(prev => same ? prev : prev)` の形にしていると、再レンダは
+   * 防げても `dispatchSetState` は毎回走り、入れ子更新のカウントだけが積まれて
+   * スライス送りで `Maximum update depth exceeded` に達する（実際にここが原因だった）。
+   * 直前値を ref で持ち、同値なら setState を呼ばない。
+   */
+  const lastSliceLoadingRef = useRef(false);
+  const applySliceLoading = useCallback((next: boolean) => {
+    if (lastSliceLoadingRef.current === next) return;
+    lastSliceLoadingRef.current = next;
+    setSliceLoading(next);
+  }, []);
+  const lastRefSegmentsRef = useRef<RefSegment[]>(EMPTY_SEGMENTS);
+  const applyRefSegments = useCallback((next: RefSegment[]) => {
+    if (sameSegments(lastRefSegmentsRef.current, next)) return;
+    lastRefSegmentsRef.current = next;
+    setRefSegments(next);
+  }, []);
+  const lastSphereCirclesRef = useRef<SphereCanvasCircle[]>(EMPTY_CIRCLES);
+  const applySphereCircles = useCallback((next: SphereCanvasCircle[]) => {
+    if (sameCircles(lastSphereCirclesRef.current, next)) return;
+    lastSphereCirclesRef.current = next;
+    setSphereCircles(next);
+  }, []);
+
   /** このビューに描く他シリーズの参照線分を再計算する。enabled でなければクリア。 */
   const recomputeRefLines = useCallback(() => {
     const v = viewportRef.current;
     if (!v || !refLinesEnabledRef.current) {
-      setRefSegments((prev) => (prev.length ? [] : prev));
+      applyRefSegments(EMPTY_SEGMENTS);
       return;
     }
-    setRefSegments(computeReferenceSegments(viewportIdRef.current, v));
+    applyRefSegments(computeReferenceSegments(viewportIdRef.current, v));
   }, []);
   recomputeRefLinesRef.current = recomputeRefLines;
 
@@ -430,7 +579,7 @@ export function Viewer2D({
     const v = viewportRef.current;
     const ctx = roiContextRef.current;
     if (!v || !ctx || compact || syncGroupId) {
-      setSphereCircles((prev) => (prev.length ? [] : prev));
+      applySphereCircles(EMPTY_CIRCLES);
       return;
     }
     const out: SphereCanvasCircle[] = [];
@@ -439,7 +588,7 @@ export function Viewer2D({
       const c = sphereCanvasCircle(v, s, ctx.c, ctx.t);
       if (c) out.push(c);
     }
-    setSphereCircles(out);
+    applySphereCircles(out);
   }, [compact, syncGroupId]);
   recomputeSpheresRef.current = recomputeSpheres;
 
@@ -512,7 +661,7 @@ export function Viewer2D({
       vp.render();
       setVoi({ ww: s.voi.upper - s.voi.lower, wc: (s.voi.upper + s.voi.lower) / 2 });
     }
-    setTransform(readTransform(vp));
+    applyTransformState(readTransform(vp));
     window.setTimeout(() => {
       applyingHistRef.current = false;
     }, 0);
@@ -663,7 +812,9 @@ export function Viewer2D({
       const vp = viewportRef.current;
       if (!vp || disposed) return;
       sanitizeCamera(vp);
-      setTransform(readTransform(vp));
+      // 値が変わったときだけ入れる（同値なら React は再レンダしない）。
+      const nextTr = readTransform(vp);
+      applyTransformState(nextTr);
       // スタック再構築をまたいで再適用するため、現在の表示状態を退避する。
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -677,12 +828,17 @@ export function Viewer2D({
         };
       } catch { /* ignore */ }
       // 向きマーカーは IOP があるときだけ。canvasToWorld 経由で zoom/pan/flip/rotation に追従。
-      setMarkers(infoRef.current?.hasOrientation ? computeOrientationMarkers(vp, element) : null);
+      const nextMk = infoRef.current?.hasOrientation ? computeOrientationMarkers(vp, element) : null;
+      applyMarkersState(nextMk);
       // スケールバー（Caliper）: 校正の有無で mm/cm・px と色(黄/グレー)を切替。FOV(ズーム)に追従。
       const calibrated = Boolean(infoRef.current?.columnPixelSpacing);
-      setScaleBar(computeScaleBar(vp, element, calibrated));
+      const nextSb = computeScaleBar(vp, element, calibrated);
+      applyScaleBarState(nextSb);
       // Fusion / プラグイン（H4a）のオーバーレイ位置追従。
-      if (renderOverlayRef.current || pluginOverlayRef.current) setImageRect(computeImageRect(vp));
+      if (renderOverlayRef.current || pluginOverlayRef.current) {
+        const next = computeImageRect(vp);
+        applyImageRectState(next);
+      }
       // リファレンスライン: 自分の面変化を他へ通知し、自分の描画も更新（pan/zoom/回転で追従）。
       if (!compact && !syncGroupId) {
         bumpReference();
@@ -927,7 +1083,7 @@ export function Viewer2D({
           // 未取得スライスへの移動は WADO 取得を伴い得る。120ms 以上かかった場合だけ
           // スピナーを出し、キャッシュ済みスライスの高速切替ではチラつかせない。
           showTimer = window.setTimeout(() => {
-            if (!cancelled) setSliceLoading(true);
+            if (!cancelled) applySliceLoading(true);
           }, 120);
           await v.setImageIdIndex(imageIndex);
         }
@@ -960,7 +1116,7 @@ export function Viewer2D({
         } catch { /* ignore */ }
       } finally {
         if (showTimer !== undefined) window.clearTimeout(showTimer);
-        if (!cancelled) setSliceLoading(false);
+        if (!cancelled) applySliceLoading(false);
       }
     })();
     return () => {
@@ -1002,11 +1158,14 @@ export function Viewer2D({
   // renderOverlay は親で useCallback 安定化されている前提（毎レンダ別関数だとループするため）。
   useEffect(() => {
     if (!renderOverlay && !pluginOverlay) {
-      setImageRect(null);
+      applyImageRectState(null);
       return;
     }
     const vp = viewportRef.current;
-    if (vp) setImageRect(computeImageRect(vp));
+    if (vp) {
+      const next = computeImageRect(vp);
+      applyImageRectState(next);
+    }
   }, [renderOverlay, pluginOverlay]);
 
   // スタック（シリーズ・C/T）が変わったらプラグインオーバーレイは破棄する。
@@ -1876,14 +2035,7 @@ export function Viewer2D({
               <canvas
                 ref={setOverlayCanvas}
                 data-testid="plugin-overlay-canvas"
-                style={{
-                  position: "absolute",
-                  left: imageRect.left,
-                  top: imageRect.top,
-                  width: imageRect.width,
-                  height: imageRect.height,
-                  pointerEvents: "none",
-                }}
+                style={{ ...overlayPlacement(imageRect), pointerEvents: "none" }}
               />
               <div data-testid="plugin-overlay-label" style={pluginOverlayLabel}>
                 {t("viewer2d.plugin.overlayLabel", { name: pluginOverlay.label ?? "plugin" })}

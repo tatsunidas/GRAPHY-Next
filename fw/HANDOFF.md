@@ -797,7 +797,8 @@ GRAPHY-Next/
   GRAPHY の `ImageRoi.setZeroTransparent(true)` 相当。base が黒く暗転せず信号部のみ重畳。
 - **LUT**: `toImageData(values, cols, rows, wc, ww, lut?)` の第 6 引数。`fusionLut` 変更で再描画（即反映）。
 - **不透明度**: canvas の CSS `opacity`（再描画不要）。
-- **注意**: `rect` は軸並行 BBox 算出のため base を**回転**させると厳密でない（fit/zoom/pan/flip は追従）。
+- **注意**: `rect` は**画像の平行四辺形**（左上隅・回転前の幅高さ・線形部）。
+  fit/zoom/pan/回転/反転のすべてに追従する（2026-08-09 以降。それ以前は軸並行 BBox だった）。
   カラー(RGB)前景の非空間フォールバックは未対応。
 
 #### Fusion 設定（`settings/registry.ts`）
@@ -811,9 +812,46 @@ GRAPHY-Next/
   実座標（mm・度）での平行移動・回転が即時プレビューされる。土台は
   `computeFusionSlice(fg, bg, xf?)` の第 3 引数（省略時は従来と同一挙動）。
   変換モデルは `frontend/src/viewer/regTransform.ts`（純関数・vitest 17 件）。
-  🔴 **実機目視は未了**（特に平行移動の符号の向き）。手順は設計書 §10「R1 の実装」。
-- 2D/3D **剛体（Rigid）位置合わせの自動最適化**（R3）: 未実装。
+  🟡 **実機目視はほぼ完了**（2026-08-08、PSMA whole-body PET/CT）。符号の向き・回転中心・
+  範囲外での消去・スライス送り/zoom への追従まで確認済み。
+  🔴 **残り TODO 1 点**: IOP/IPP の無いシリーズ（CR/DX 等）で「位置調整」が無効化され
+  理由が出ること（CR/DX を索引に入れるところから必要なため後回し）。
+  手順と結果は設計書 §10「R1 の実装」。
+  - 🐛 **目視で見つけた無限ループを修正**（設計書 §10 ①）: 位置調整を動かすと
+    `Maximum update depth exceeded`。`renderOverlay` の**戻り値の内側**で作られていた
+    `onAutoWL` が毎レンダ別関数になり、`runFusion` が毎レンダ再実行 → R1 が足した
+    `onSpatialChange` の無条件 setState が自走していた。親コールバックを ref 化して
+    依存から外し、通知は変化時のみに。`Viewer2D` の `setImageRect` にも同値判定を追加。
+  - ℹ️ **「Rotate が Shift に見える」は仕様**（同 §10 ②）: 軸位で面内回転になるのは `rz` だけ。
+    `rx`/`ry` は面外傾斜なので 1 断面上では並進に見える。回転中心はボリューム中心のまま維持。
+  - ⚠️ **base 回転時にオーバーレイが追従しない**のは R1 以前からの既知の限界（下記「Fusion 改善」）。
+    ただし**手動位置合わせが入ったことで優先度が上がった**（ズレの原因が調整量か未追従か
+    区別できなくなるため）。直し方は設計書 §10 ③。flip の追従も要検証。
+  - 🧪 リサンプル結果での数値検証を追加: `frontend/src/viewer/fusionEngineTransform.test.ts`（5 件）。
+- ✅ **R2 検証ファントム GNBP-2R（2026-08-08）**: `bench/make_phantom_2r.py` で
+  fixed / rigid / affine / deform / multimodal の 5 系列を生成（1 スタディ・約 5 分・約 92 MB）。
+  moving は**補間ではなく変換座標での解析評価**で作るので真値が厳密。採点は
+  `bench/score_registration.mjs`（アプリ非依存）。真値は `phantom/GNBP-2R_ground_truth.json`。
+  未位置合わせのベースラインは landmark TRE 平均 6.7〜15.1 mm で、**R3 はここから改善させる**。
+  詳細と設計からの逸脱（B-spline → 閉形式変位場ほか）は設計書 §10「R2 の実装」。
+- 🟡 **R3 剛体位置合わせの自動最適化（2026-08-08）**: エンジン・Worker・UI まで実装済み。
+  導線は「⊹ 位置調整」の行の **「詳細…」**（自動結果は手動 6 値と別に持ち、
+  `composeTransforms(自動, 手動)` で合成する）。GNBP-2R での実測は
+  **剛体 0.024mm/0.033°・マルチモーダル 0.271mm/0.184° で目標達成**
+  （`node bench/run_rigid_registration.mjs --series rigid,multimodal`）。
+  🔴 **実機目視が未了**。GNBP-2R は索引に取り込み済みなので、fixed と rigid を
+  Fusion して真値 `[7.3, −4.1, 11.6] mm` が出るか画面で確かめられる。
+  ⚠️ **非剛体（deform）に剛体を掛けると視野周縁では何もしないより悪くなる**
+  （変位 RMSE 12.13 → 24.49mm）。詳細は設計書 §10「R3 の実装」。
 - 2D/3D **非剛体（Deformable）位置合わせ**（R4）: 未実装。
+- ✅ **派生シリーズの PET タグ引き継ぎを修正（2026-08-09）**: `POST /api/series/derived` は
+  患者・検査・表示系しか引き継いでおらず、**PET 固有のタグが 1 つも入っていなかった**。
+  リサンプルした PET を保存すると `Modality=PT` のまま **SUV だけ計算できない**シリーズが
+  できていた（画像は開けるので最も気付きにくい）。モダリティ別の引き継ぎ表
+  （`ModalityAttributeInheritance`）を入れ、必須タグが欠けたら**保存を拒否**する。
+  `FrameOfReferenceUID` は幾何リファレンスと分離できるよう `frameOfReferenceUid` を追加。
+  **Slicer / Curved MPR / 中心線 / プラグイン H4b も同じ経路なので全部に効く。**
+  詳細は `registration-design.md` §8.3。
 - 📐 **設計は [`fw/registration-design.md`](registration-design.md) が正本**（2026-08-08 起票）。
   対象は PET-CT / PET-MR の骨盤・心臓。**GPU 前提にせず CPU で完結**、心臓 PET-MR は
   シミュレーション（GNBP-3S）のみ。土台は `computeFusionSlice` に world→world 変換を
@@ -834,12 +872,11 @@ GRAPHY-Next/
     ヘッダ/シリーズ行の DnD はウィンドウ内（並び替え/Fusion）専用に簡素化。
 
 ## 4. 次にやること（優先度つき・未実装）
-0. 🔴 **レジストレーション R1 の実機目視**（`registration-design.md` §10「R1 の実装」に 5 項目）。
-   コードは main にマージ済みだが**画面での確認だけが残っている**。特に
-   **平行移動の符号の向き**は、pull-back（fixed→moving）の取り違えが
-   自動テストでは向きの定義そのものを固定しているだけなので、**実画面でしか発覚しない**。
-   `npm run dev-desktop` → PET/CT を Fusion → 「⊹ 位置調整」の X を動かす、が最短。
-   併せて R2（検証ファントム GNBP-2R）を作れば、以後この種の確認は真値付きで機械化できる。
+0. 🟢 **レジストレーション R3（剛体エンジン）に着手できる状態**。R1（手動位置合わせ）は
+   実機確認済み、R2（検証ファントム GNBP-2R ＋ 採点ハーネス）は完了しており、
+   **未位置合わせのベースライン数値がある**ので改善を数値で示せる（`registration-design.md` §10）。
+   R1 の実機目視で 1 点だけ TODO が残っている: IOP/IPP の無いシリーズ（CR/DX 等）で
+   「位置調整」が無効化され理由が出ること（CR/DX を索引に入れる作業が要るため後回し）。
 0. **レポート機能 R6**（フェーズ2, `report-design.md` §8）: `StaffMember`ディレクトリ＋管理UI、
    `ReportTemplate`（定型文）＋管理UI。R1〜R5（データモデル・CRUD・SR/KO確定書き出し・編集ダイアログ一式・
    MainScreen ●/○表示・ReportManagerDialog）は実装・実機検証済み。
@@ -856,7 +893,15 @@ GRAPHY-Next/
 5. Enhanced 多フレーム（DimensionIndexValues/StackID/InStackPositionNumber、wadouri `frame=`）。
 6. **Fusion 改善**:
    - `viewer.fusionOpacity` / `viewer.fusionLut` を DnD 起動時に自動適用（現状は Settings に保存するのみ）。
-   - base 回転時の `rect` 厳密化（現状は軸並行 BBox。回転対応は CSS transform 行列が必要）。
+   - ✅ **base 回転・反転へのオーバーレイ追従（2026-08-09 実装済み）**。
+     `computeImageRect` が軸並行 BBox ではなく**画像の平行四辺形**（左上隅＋回転前の
+     幅高さ＋線形部 `[a,b,c,d]`）を返すようにし、`overlayPlacement()` が
+     `transform: matrix(...)` で配置する。回転も反転も無いときは線形部が恒等になるので、
+     **従来の配置と完全に同じ**。**flip も追従するようになった**（従来は BBox が同じなので
+     見逃していた＝オーバーレイだけ鏡像になっていなかった）。
+     配置の数値は `viewer/overlayPlacement.ts`（cornerstone 非依存）に切り出して
+     `overlayPlacement.test.ts` で固定した — 目視でしか分からなかった箇所なので、
+     ブラウザ無しで検証できる形にしてある。Fusion とプラグイン値マップの両方に効く。
    - カラー(RGB)前景の非空間フォールバック対応。
    - 2D/3D 剛体・非剛体位置合わせ（設計: [`fw/registration-design.md`](registration-design.md)。
      最初の一歩は R1 = `computeFusionSlice(fg, bg, xf?)` ＋ 手動オフセット）。
@@ -868,7 +913,8 @@ GRAPHY-Next/
   - DnD → FusionControlBar 表示 / 透過度スライダー / × 解除: 動作確認済み（タイル→タイル, シリーズ→タイル）。
   - オーバーレイ描画は base 画像の表示矩形に重畳（原点一致・画像領域クリップ・zoom/pan 追従）。**要実機目視**。
   - LUT は canvas 経由で常時適用（フォールバック含む）。透過度・LUT とも即反映。
-  - 既知の限界: base 回転時の矩形は軸並行 BBox（厳密でない）。RGB 前景の非空間フォールバックは未対応。
+  - 既知の限界: RGB 前景の非空間フォールバックは未対応。
+    （base 回転・反転への追従は 2026-08-09 に解消。上記「Fusion 改善」参照。）
 - **LUT ファイル**: `backend/src/main/resources/luts/*.lut`（106 枚）。
   フォーマット判別順: ICOL マジック確認 → 768 バイト Raw → テキスト（tab 区切り）。
 - **GridView/タイルは viewport を多数生成**するため巨大シリーズで負荷大。将来 仮想化/`loadImageToCanvas`

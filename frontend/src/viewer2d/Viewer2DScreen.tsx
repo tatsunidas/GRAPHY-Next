@@ -17,6 +17,14 @@ import {
 import { SeriesViewer } from "../viewer/SeriesViewer";
 import { FusionImageViewer } from "../viewer/FusionOverlayViewer";
 import { ZERO_ADJUST, isZeroAdjust, type ManualAdjust } from "../viewer/regTransform";
+import { registrationToTransform, type RegistrationResult } from "../viewer/regResult";
+import {
+  acceptRecordForCurrentInput, findRecord, fingerprintFromLayout, upsertRecord,
+  type AcceptedDespiteMismatch, type RegistrationRecord, type SeriesRef,
+} from "../viewer/registrationRecord";
+import { loadRegistrations, saveRegistrations } from "../viewer/registrationPersistence";
+import { fetchSeriesLayout } from "../api";
+import { RegistrationPanel } from "./RegistrationPanel";
 import type { RenderOverlay } from "../viewer/Viewer2D";
 import { buildSeriesLayout, type SeriesLayout } from "../viewer/seriesLayout";
 import { LutDialog, ColorBar } from "../viewer/LutDialog";
@@ -1423,6 +1431,39 @@ function TileCell({
   const [fusionAdjust, setFusionAdjust] = useState<ManualAdjust>(ZERO_ADJUST);
   // 空間 Fusion（IOP/IPP あり）で描けているか。false のとき手動位置合わせは効かない。
   const [fusionSpatial, setFusionSpatial] = useState(true);
+  // 自動位置合わせ（R3）の結果。**手動の 6 値とは別に持つ**（設計 §12.1）。
+  // プレビューは composeTransforms(自動, 手動) で合成される。
+  const [fusionRegistration, setFusionRegistration] = useState<RegistrationResult | null>(null);
+  const [registrationOpen, setRegistrationOpen] = useState(false);
+  /**
+   * 記録の復元状態。
+   *
+   * <p>`stale` は「記録はあるが入力が変わっている」。**この場合は黙って適用しない** —
+   * 同じ SeriesInstanceUID でも中身が入れ替わっていることがあり、当てると
+   * もっともらしいが間違った重ね合わせになる。画面上は完成して見えるので最も危ない。
+   */
+  const [restoreState, setRestoreState] = useState<
+    { kind: "none" } | { kind: "restored"; savedAt: string; accepted?: AcceptedDespiteMismatch }
+    | { kind: "stale"; record: RegistrationRecord; changed: ("fixed" | "moving")[] }
+  >({ kind: "none" });
+  /** 保存に使う版（読まずに上書きしないため）。 */
+  const docVersionRef = useRef<number | null>(null);
+  const refsRef = useRef<{ fixed: SeriesRef; moving: SeriesRef } | null>(null);
+  /**
+   * 「指紋不一致のまま承認した」印。**以後の保存すべてに引き継ぐ**。
+   *
+   * <p>引き継がないと、承認したあと手動調整を少し動かしただけで印が消え、記録は
+   * 「最初から合っていた」顔をしてしまう。変換そのものは依然として**別の入力に対して
+   * 計算されたもの**なので、その事実は変換が入れ替わるまで残さなければならない。
+   */
+  const acceptedRef = useRef<AcceptedDespiteMismatch | null>(null);
+  /**
+   * いま表示している自動結果が**復元されたもの**なら、その保存日時。
+   *
+   * <p>`restoreState` では代用できない。保存に成功したときも `restored` になるため、
+   * 計算したばかりの結果まで「復元」と表示されてしまう。
+   */
+  const [restoredResultAt, setRestoredResultAt] = useState<string | null>(null);
   // fusion が切り替わったら C/T / LUT / W/L / 位置合わせをリセット
   const prevFusionSeriesUid = useRef<string | null>(null);
   useEffect(() => {
@@ -1436,9 +1477,18 @@ function TileCell({
       setFusionLut(tile.fusion?.initialLut ?? null);
       setFusionWL(null);
       setFusionAutoWL(null);
+      fusionAutoWLSeeded.current = false;
       // 別シリーズの調整量を引きずらない（前のシリーズ向けのズレが黙って適用される事故を防ぐ）。
+      // 自動位置合わせの結果も同じ理由で必ず捨てる — こちらは「前のシリーズに対して
+      // 数十秒かけて求めた変換」なので、黙って残ると手動よりも気付きにくい。
       setFusionAdjust(ZERO_ADJUST);
+      setFusionRegistration(null);
+      setRegistrationOpen(false);
       setFusionSpatial(true);
+      setRestoreState({ kind: "none" });
+      refsRef.current = null;
+      acceptedRef.current = null;
+      setRestoredResultAt(null);
     }
   }, [tile.fusion?.series.seriesInstanceUid]);
 
@@ -1448,8 +1498,137 @@ function TileCell({
   const dateLabel = tile.study.studyDate || "";
   const studyDesc = tile.study.studyDescription || "";
 
+  // 既定 W/L の受け取り。**useCallback で識別子を固定する**。
+  // renderFusionOverlay の戻り値（レンダプロップ）の内側で作ると `renderOverlay(ctx)` が
+  // 呼ばれるたびに別関数になり、FusionImageViewer 側の再計算が毎レンダ走る。
+  //
+  // ★ 通知は **シリーズごとに 1 回だけ**にする。
+  //
+  // 自動 W/L はスライスごとに違う値になるので、毎回通知すると **スライス送りのたびに
+  // 親が再レンダ**し、さらに FusionControlBar の W/L 入力同期 effect が走る。
+  // 連続してスライスを送ると更新が積み上がり、React の入れ子更新の上限に達して
+  // `Maximum update depth exceeded` になる（実際にこれが原因の 1 つだった）。
+  // このコールバックの用途はコメントのとおり**コントロールバーの初期値シード**なので、
+  // 毎スライス更新する必要はない。「Auto」を押したときは種を蒔き直す。
+  const fusionAutoWLSeeded = useRef(false);
+  const handleFusionAutoWL = useCallback((center: number, width: number) => {
+    if (fusionAutoWLSeeded.current) return;
+    fusionAutoWLSeeded.current = true;
+    setFusionAutoWL({ center, width });
+  }, []);
+
   // Fusion オーバーレイ描画。base 画像の表示矩形(rect)・現在スライス(imageId/index)に重ねる。
   // useMemo で安定化（毎レンダ別関数だと Viewer2D 側の rect 初期計算 effect がループするため）。
+  /**
+   * Fusion の組み合わせが決まったら、保存済みの位置合わせを探して復元する。
+   *
+   * <p>**開き直しても同じ重ね合わせになる**ことが、この機能が使い物になる条件。
+   * エンジンは決定的だが、それはコードが同一である限りの話なので、
+   * 再現は「保存した変換を読み戻す」ことで担保する（再計算に依存させない）。
+   */
+  useEffect(() => {
+    const fusion = tile.fusion;
+    if (!fusion) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [fixedLayout, movingLayout] = await Promise.all([
+          fetchSeriesLayout(tile.study.studyInstanceUid, tile.series.seriesInstanceUid),
+          fetchSeriesLayout(fusion.study.studyInstanceUid, fusion.series.seriesInstanceUid),
+        ]);
+        if (cancelled) return;
+        const refs = {
+          fixed: {
+            studyInstanceUid: tile.study.studyInstanceUid,
+            seriesInstanceUid: tile.series.seriesInstanceUid,
+            c: 0, t: 0,
+            fingerprint: fingerprintFromLayout(tile.series.seriesInstanceUid, fixedLayout),
+          },
+          moving: {
+            studyInstanceUid: fusion.study.studyInstanceUid,
+            seriesInstanceUid: fusion.series.seriesInstanceUid,
+            c: fusion.initialC ?? 0, t: fusion.initialT ?? 0,
+            fingerprint: fingerprintFromLayout(fusion.series.seriesInstanceUid, movingLayout),
+          },
+        };
+        refsRef.current = refs;
+
+        const { doc, version } = await loadRegistrations(patientKey);
+        if (cancelled) return;
+        docVersionRef.current = version;
+        const found = findRecord(doc, refs.fixed, refs.moving);
+        if (found.status === "ok") {
+          setFusionRegistration(found.record.registration);
+          setFusionAdjust(found.record.adjust);
+          // 過去に承認された記録なら、その事実も一緒に戻す。ここで捨てると、
+          // 次の保存で印が消えて「合っていた記録」に化ける。
+          acceptedRef.current = found.record.acceptedDespiteMismatch ?? null;
+          setRestoredResultAt(found.record.registration ? found.record.savedAt : null);
+          setRestoreState({
+            kind: "restored",
+            savedAt: found.record.savedAt,
+            accepted: found.record.acceptedDespiteMismatch,
+          });
+        } else if (found.status === "stale") {
+          // ★ 当てない。理由を出して、利用者に判断させる。
+          setRestoreState({ kind: "stale", record: found.record, changed: found.changed });
+        }
+      } catch {
+        // 復元できないことで Fusion 自体が使えなくなるのは筋が悪い。黙って続行する。
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [tile.fusion, tile.study.studyInstanceUid, tile.series.seriesInstanceUid, patientKey]);
+
+  /** 出来上がった記録を保存する。書き込みの入口はここ 1 本に絞る。 */
+  const saveRecord = useCallback(async (record: RegistrationRecord) => {
+    if (!patientKey) return;
+    try {
+      // 保存の直前に読み直す。別ウィンドウが同じ患者の記録を触っていることがある。
+      const { doc, version } = await loadRegistrations(patientKey);
+      await saveRegistrations(patientKey, upsertRecord(doc, record), version);
+      docVersionRef.current = null; // 次回は読み直す
+      setRestoreState({
+        kind: "restored",
+        savedAt: record.savedAt,
+        accepted: record.acceptedDespiteMismatch,
+      });
+    } catch {
+      // 保存に失敗しても表示中の位置合わせは有効。次の操作でまた試みる。
+    }
+  }, [patientKey]);
+
+  /** 現在の状態を保存する（自動結果 ＋ 手動 6 値 ＋ 表示）。 */
+  const persistRegistration = useCallback(async (
+    registration: RegistrationResult | null,
+    adjust: ManualAdjust,
+  ) => {
+    const refs = refsRef.current;
+    if (!refs) return;
+    await saveRecord({
+      version: 1,
+      savedAt: new Date().toISOString(),
+      fixed: refs.fixed,
+      moving: refs.moving,
+      registration,
+      adjust,
+      display: {
+        opacity: tile.fusion?.opacity ?? 0.5,
+        lutName: null,
+        wl: fusionWL,
+      },
+      // 承認の印は変換が入れ替わるまで引き継ぐ（`acceptedRef` の注記）。
+      ...(acceptedRef.current ? { acceptedDespiteMismatch: acceptedRef.current } : {}),
+    });
+  }, [saveRecord, tile.fusion?.opacity, fusionWL]);
+
+  // 自動結果 → 描画用の変換。結果が変わったときだけ作り直す（毎レンダ作ると
+  // FusionImageViewer の再計算が毎レンダ走る。§10 ① と同じ落とし穴）。
+  const registrationTransform = useMemo(
+    () => registrationToTransform(fusionRegistration),
+    [fusionRegistration],
+  );
+
   const renderFusionOverlay = useMemo<RenderOverlay | undefined>(() => {
     if (!tile.fusion) return undefined;
     const fusion = tile.fusion;
@@ -1470,14 +1649,14 @@ function TileCell({
         windowCenter={fusionWL?.center ?? null}
         windowWidth={fusionWL?.width ?? null}
         adjust={fusionAdjust}
-        onAutoWL={(center, width) =>
-          setFusionAutoWL((prev) => (prev && prev.center === center && prev.width === width ? prev : { center, width }))
-        }
+        registration={registrationTransform}
+        onAutoWL={handleFusionAutoWL}
         onSpatialChange={setFusionSpatial}
         onLayoutChange={setFusionLayout}
       />
     );
-  }, [tile.fusion, mode, fusionC, fusionT, fusionLut, fusionWL, fusionAdjust]);
+  }, [tile.fusion, mode, fusionC, fusionT, fusionLut, fusionWL, fusionAdjust,
+      registrationTransform, handleFusionAutoWL]);
 
   // ── タイルヘッダー DnD（タイル並び替え） ──
 
@@ -1676,9 +1855,97 @@ function TileCell({
           onTChange={setFusionT}
           onLutChange={setFusionLut}
           onWLChange={(center, width) => setFusionWL({ center, width })}
-          onWLAuto={() => setFusionWL(null)}
-          onAdjustChange={setFusionAdjust}
+          onWLAuto={() => { setFusionWL(null); fusionAutoWLSeeded.current = false; }}
+          onAdjustChange={(a) => { setFusionAdjust(a); void persistRegistration(fusionRegistration, a); }}
+          registered={!!fusionRegistration}
+          onOpenRegistration={() => setRegistrationOpen(true)}
           onRemove={() => onFusionChange(undefined)}
+        />
+      )}
+
+      {/* 保存済みの位置合わせの状態。★ stale は「当てていない」ことを必ず見せる。 */}
+      {showControls && tile.fusion && restoreState.kind !== "none" && (
+        <div style={restoreState.kind === "stale" ? restoreStaleBar : restoreBar}>
+          {restoreState.kind === "restored" ? (
+            <span>
+              {t("registration.restored", { at: new Date(restoreState.savedAt).toLocaleString() })}
+              {/* 承認済みの記録は、そうと分かるようにする。データに印だけ残して
+                  画面に出さないと、利用者からは普通の復元と区別がつかない。 */}
+              {restoreState.accepted && (
+                <span style={{ marginLeft: 6, opacity: 0.85 }}>
+                  {t("registration.acceptedNote", {
+                    at: new Date(restoreState.accepted.at).toLocaleString(),
+                  })}
+                </span>
+              )}
+            </span>
+          ) : (
+            <>
+              <span>
+                {t("registration.staleWarning", {
+                  what: restoreState.changed
+                    .map((c) => (c === "fixed" ? t("registration.fixed") : t("registration.moving")))
+                    .join(" / "),
+                })}
+              </span>
+              <button
+                style={{ ...fusionAutoBtn, flex: "none", marginLeft: 6 }}
+                onClick={() => {
+                  const r = restoreState.record;
+                  setFusionRegistration(r.registration);
+                  setFusionAdjust(r.adjust);
+                  // 表示を戻すだけでは、次に開いたときにまた同じ判断を求められる。
+                  // 承認の事実ごと保存し直して、この問いを終わらせる。
+                  const refs = refsRef.current;
+                  if (refs) {
+                    const accepted = acceptRecordForCurrentInput(
+                      r, refs.fixed, refs.moving, restoreState.changed, new Date().toISOString(),
+                    );
+                    acceptedRef.current = accepted.acceptedDespiteMismatch ?? null;
+                    setRestoredResultAt(r.registration ? r.savedAt : null);
+                    void saveRecord(accepted);
+                  } else {
+                    setRestoreState({ kind: "restored", savedAt: r.savedAt });
+                  }
+                }}
+              >
+                {t("registration.applyAnyway")}
+              </button>
+              <button
+                style={{ ...fusionAutoBtn, flex: "none", marginLeft: 4 }}
+                onClick={() => setRestoreState({ kind: "none" })}
+              >
+                {t("registration.dismiss")}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* 自動位置合わせのパネル（設計 §12）。タイル内に絶対配置する。 */}
+      {registrationOpen && tile.fusion && (
+        <RegistrationPanel
+          viewerMode={mode}
+          fixed={{
+            study: tile.study, series: tile.series, instances: tile.instances,
+            c: 0, t: 0,
+          }}
+          moving={{
+            study: tile.fusion.study, series: tile.fusion.series,
+            instances: tile.fusion.instances, c: fusionC, t: fusionT,
+          }}
+          result={fusionRegistration}
+          restoredAt={restoredResultAt}
+          onResult={(r) => {
+            setFusionRegistration(r);
+            // 新しい変換は**現在の入力に対して**計算されたものなので、
+            // 「他人の入力で計算された」という印はここで落とす。
+            acceptedRef.current = null;
+            // この場で計算した（あるいは SRO から読み込んだ）結果なので、もう復元ではない。
+            setRestoredResultAt(null);
+            void persistRegistration(r, fusionAdjust);
+          }}
+          onClose={() => setRegistrationOpen(false)}
         />
       )}
     </div>
@@ -1700,6 +1967,8 @@ function FusionControlBar({
   wl,
   adjust,
   adjustEnabled,
+  registered,
+  onOpenRegistration,
   onOpacityChange,
   onCChange,
   onTChange,
@@ -1724,6 +1993,10 @@ function FusionControlBar({
   adjust: ManualAdjust;
   /** 空間 Fusion のときだけ位置合わせが効く。false ならコントロールを無効化する。 */
   adjustEnabled: boolean;
+  /** 自動位置合わせ（R3）の結果が適用されているか。行に表示を出すだけ。 */
+  registered: boolean;
+  /** 自動位置合わせのパネルを開く。 */
+  onOpenRegistration: () => void;
   onOpacityChange: (v: number) => void;
   onCChange: (v: number) => void;
   onTChange: (v: number) => void;
@@ -1934,6 +2207,18 @@ function FusionControlBar({
           >
             {t("viewer2d.fusion.adjust.reset")}
           </button>
+          <button
+            onClick={onOpenRegistration}
+            style={{ ...fusionAutoBtn, flex: "none", marginLeft: 6 }}
+            title={t("registration.openHint")}
+          >
+            {t("registration.open")}
+          </button>
+          {registered && (
+            <span style={{ fontSize: 10, color: "#2b6cb0", flex: "none", marginLeft: 4 }}>
+              {t("registration.applied")}
+            </span>
+          )}
           <span style={{ fontSize: 10, color: "#8a94a2", flex: "none", marginLeft: 6 }}>
             {t("viewer2d.fusion.adjust.hint")}
           </span>
@@ -2478,6 +2763,13 @@ const fusionNumInput: React.CSSProperties = {
   borderRadius: 3,
   fontSize: 11,
   padding: "1px 4px",
+};
+const restoreBar: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: 4, padding: "2px 6px",
+  fontSize: 10, color: "#2b6cb0", background: "#eef5fc", borderTop: "1px solid #d7e4f2",
+};
+const restoreStaleBar: React.CSSProperties = {
+  ...restoreBar, color: "#8a5a00", background: "#fdf5e6", borderTop: "1px solid #f0dcb0",
 };
 const fusionAdjustRow: React.CSSProperties = {
   flexBasis: "100%",

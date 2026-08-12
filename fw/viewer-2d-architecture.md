@@ -42,6 +42,67 @@ zoom / pan / flip(上下左右) / rotation は **Cornerstone3D の ViewPresentat
 - **Pan 状態**: `isPanned()` = zoom≠1.0 または pan≠[0,0] のとき true。
 - 注意: `setViewPresentation` の partial 適用時は **displayArea を現在値で埋める**（誤適用防止）。`applyTransform` が担保。
 
+## 🚨 カメライベント経路の setState — `Maximum update depth exceeded` の罠（2026-08-09）
+
+スライスを連続して送ると `Maximum update depth exceeded` が出る不具合を追ったときの結論。
+**同じ罠を 4 回踏んだ**ので、ここに残す。
+
+### 罠 1: `setState(prev => same ? prev : next)` は「更新をスケジュールしない」わけではない
+
+React は関数型更新でも **`dispatchSetState` の時点で `scheduleUpdateOnFiber` を呼ぶ**。
+つまり:
+
+- ✅ 再レンダは防げる（レンダ時に前の値と同じなら bail out）
+- ❌ **入れ子更新のカウンタは進む**（保留中の更新があると eager bailout も効かない）
+
+連続操作で 1 コミットあたり 1 回ずつ積み上がり、上限 50 に達して警告が出る。
+
+**対処**: 直前値を `useRef` に持ち、**同値なら `setState` を呼ばない**。
+
+```ts
+const lastRef = useRef(initial);
+const apply = useCallback((next: T) => {
+  if (same(lastRef.current, next)) return;   // setState を呼ばない
+  lastRef.current = next;
+  setValue(next);
+}, []);
+```
+
+`Viewer2D.tsx` では `transform` / `markers` / `scaleBar` / `imageRect` / `refSegments` /
+`sphereCircles` / `sliceLoading` の 7 つをこの形に統一してある。**新しくカメラ由来の
+state を足すときも必ずこの形にすること。**
+
+### 罠 2: カメライベントは 1 スライスの表示で何度も飛ぶ
+
+Cornerstone の `setViewPresentation` は zoom / pan / rotation / flip を個別に適用し、
+その都度 `CAMERA_MODIFIED` を投げる。さらに `bumpReference()` は
+**全ビューポートの購読者**を叩くので、タイル数だけ倍加する。
+「1 スライス = 1 更新」のつもりで書くと桁が合わない。
+
+### 罠 3: 毎回新しい配列・オブジェクトを作る計算結果
+
+`readTransform()` / `computeOrientationMarkers()` / `computeScaleBar()` /
+`computeReferenceSegments()` はいずれも**毎回新しい値**を返す。そのまま state に入れると
+値が同じでも「変化した」ことになる。空配列も `[]` を毎回作らずモジュール定数を使い回す。
+座標の比較は**許容誤差つき**にする（最下位ビットの揺れで再レンダしない）。
+
+### 罠 4: 「シード用」のコールバックを毎フレーム呼ばない
+
+Fusion の自動 W/L（`onAutoWL`）は**コントロールバーの初期値シード**が用途なのに、
+スライスごとに呼ばれて毎回 state を更新していた。値が実際に変わるので同値ガードでは
+止まらない。**通知の頻度そのもの**を用途に合わせる（シリーズごとに 1 回。
+「Auto」を押したら蒔き直す）。
+
+### 調査の進め方（ここが一番時間を食った）
+
+- React が出すスタックは**スケジューラ内部のフレームばかり**で、原因のコンポーネントを
+  教えてくれないことが多い。
+- コンソールには過去の警告が残るため、**貼られたスタックが修正前のものか判別できず**
+  空振りを繰り返した。**警告にビルド ID を刻む**（`console.error` を dev で中継して
+  `BUILD=...` を先に出す）と一発で判別できる。**次に同種の問題を追うときは最初にこれをやる。**
+- 原因は 1 つではなく**数珠つなぎ**だった。1 つ潰すと次の setState がスタックに現れる。
+  「直った気がする」ではなく、スタックが指す行が変わったかで判断する。
+
 ## データ層シーム（imageId の作り方）— `viewer/imageId.ts`
 - **standalone**: `wadouri:<base>/api/instances/{sop}/file`
   - backend `InstanceController` が索引の `file:` URI を `application/dicom`（Part-10 丸ごと）で返す。

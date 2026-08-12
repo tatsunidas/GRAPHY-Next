@@ -11,6 +11,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.io.IOException;
@@ -51,6 +52,36 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> serverError(Exception e, HttpServletRequest req) {
         log.error("Error handling {} {}", req.getMethod(), req.getRequestURI(), e);
         return build(HttpStatus.INTERNAL_SERVER_ERROR, e, req);
+    }
+
+    /**
+     * {@link ResponseStatusException}（＝呼び出し側が status を宣言した例外）。
+     *
+     * <p>★ これが無いと、下の {@code Exception} 用フォールバックに拾われて
+     * <b>宣言した 400 / 404 が一律 500 になる</b>。本文にも
+     * {@code 400 BAD_REQUEST "…"} という文字列がそのまま入り、
+     * クライアントからは「入力が悪い」のか「サーバが壊れた」のか区別できない。
+     * リポジトリ全体で 57 箇所が {@code ResponseStatusException} を投げており、
+     * そのすべてが同じ影響を受けていた。
+     */
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<ErrorResponse> statusException(ResponseStatusException e, HttpServletRequest req) {
+        HttpStatus status = HttpStatus.resolve(e.getStatusCode().value());
+        if (status == null) status = HttpStatus.INTERNAL_SERVER_ERROR;
+        // 4xx はクライアント起因なので WARN、5xx はスタックトレース付き ERROR（既存方針）。
+        if (status.is4xxClientError()) {
+            log.warn("Request rejected {} {} -> {}: {}", req.getMethod(), req.getRequestURI(),
+                    status.value(), e.getReason());
+        } else {
+            log.error("Error handling {} {}", req.getMethod(), req.getRequestURI(), e);
+        }
+        // getMessage() は `400 BAD_REQUEST "…"` になるので、理由だけを返す。
+        String message = e.getReason() != null ? e.getReason()
+                : (e.getCause() != null ? e.getCause().getMessage() : status.getReasonPhrase());
+        Throwable cause = e.getCause() != null ? e.getCause() : e;
+        return ResponseEntity.status(status)
+                .body(new ErrorResponse(status.value(), cause.getClass().getSimpleName(), message,
+                        req.getRequestURI()));
     }
 
     /** 想定外。必ずスタックトレースを残す。 */
