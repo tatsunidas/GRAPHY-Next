@@ -2,7 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-package com.vis.graphynext.dicom.texture;
+package com.vis.graphynext.radiomics;
 
 import com.vis.graphynext.dicom.SeriesLayout;
 import com.vis.graphynext.dicom.store.DicomStorageService;
@@ -59,8 +59,13 @@ public class RadiomicsMapEngine {
             String frameOfReferenceUid) {
     }
 
-    /** ターゲット（＋任意マスク）から 1 特徴のマップを計算する。 */
+    /** ターゲット（＋任意マスク）から 1 特徴のマップを計算する（進み具合は見ない）。 */
     public MapResult compute(TextureSeriesRequest req) throws IOException {
+        return compute(req, TextureProgress.NONE);
+    }
+
+    /** ターゲット（＋任意マスク）から 1 特徴のマップを計算する。 */
+    public MapResult compute(TextureSeriesRequest req, TextureProgress progress) throws IOException {
         SeriesLayout layout = storage.seriesLayout(req.studyInstanceUid(), req.sourceSeriesUid());
         if (layout == null || layout.cells().isEmpty()) {
             throw new IllegalArgumentException("ターゲットシリーズにフレームがありません: " + req.sourceSeriesUid());
@@ -123,25 +128,51 @@ public class RadiomicsMapEngine {
             finalCal.pixelHeight = layout.pixelSpacingRow();
             finalCal.setUnit("mm");
         }
+        // スライス間隔。距離をボクセル格子で測る族（GLAM）は、これが無いと Z だけ 1mm 扱いになる。
+        double spacingZ = sliceSpacing(ippByZ, layout.imageOrientationPatient(), nZ);
+        if (spacingZ > 0) {
+            finalCal.pixelDepth = spacingZ;
+        }
         img.setCalibration(finalCal);
 
         // マスク（任意）。無ければ全面マスク（LABEL で塗り）。ある場合は IOP/IPP で Z 整列。
         int label = parseLabel(req);
+        boolean hasMask = req.maskSeriesUid() != null && !req.maskSeriesUid().isBlank();
         ImagePlus mask = buildMask(req, w, h, nZ, label, layout.imageOrientationPatient(), ippByZ);
-
-        // calculator（族→ラムダ）。
-        TextureFeatureCatalog.BuiltFeature built = TextureFeatureCatalog.build(req.feature(), req.settings());
 
         int filterSize = req.filterSize() > 0 ? oddUp(req.filterSize()) : 7;
         int stride = Math.max(1, req.stride());
         boolean d2 = req.force2D();
+        int margin = req.margin() != null ? Math.max(0, req.margin()) : FeatureVisualizationMap.DEFAULT_MARGIN;
 
+        boolean glam = GlamMapSupport.isGlam(req.feature());
+        if (glam) {
+            // 3D 専用・カーネル下限・マスク必須。ここで弾かないと RadiomicsJ の例外がボクセルごとに
+            // 握り潰され、全面ゼロのマップが黙って出来上がる。
+            GlamMapSupport.validate(req, nZ, hasMask, isotropyWarning(finalCal));
+            long windows = windowCount(mask, label, stride);
+            log.info("[texture][GLAM] {} windows, estimated {} s (kernel={}, maxRadius={})",
+                    windows, GlamMapSupport.estimateMillis(windows, filterSize) / 1000,
+                    filterSize, GlamMapSupport.maxRadiusFor(filterSize, req.settings()));
+            if (GlamMapSupport.dependsOnBoundaryCorrection(req.feature())) {
+                log.warn("[texture][GLAM] '{}' は境界補正が入ると 1 に張り付きます。"
+                        + "BOOL_GLAM_boundaryCorrection=0 での実行を検討してください。", req.feature());
+            }
+        }
+
+        // calculator（族→ラムダ）。GLAM は窓の大きさで maxRadius が決まるためカーネル径を渡す。
+        TextureFeatureCatalog.BuiltFeature built =
+                TextureFeatureCatalog.build(req.feature(), req.settings(), filterSize);
+
+        final int mapW = w;
+        final int mapH = h;
         long t0 = System.currentTimeMillis();
-        float[][] full = (stride <= 1)
-                ? computeFullRes(img, mask, built, filterSize, d2)
-                : computeStrided(img, mask, built, filterSize, d2, stride, w, h, nZ);
-        log.info("[texture] map '{}' {}x{}x{} stride={} filter={} in {} ms",
-                built.displayName(), w, h, nZ, stride, filterSize, System.currentTimeMillis() - t0);
+        TextureProgress sink = (progress != null) ? progress : TextureProgress.NONE;
+        float[][] full = runMap(glam, req, () -> (stride <= 1)
+                ? computeFullRes(img, mask, built, filterSize, d2, margin, sink)
+                : computeStrided(img, mask, built, filterSize, d2, stride, margin, mapW, mapH, nZ, sink));
+        log.info("[texture] map '{}' {}x{}x{} stride={} filter={} margin={} in {} ms",
+                built.displayName(), w, h, nZ, stride, filterSize, margin, System.currentTimeMillis() - t0);
 
         List<double[]> ippList = new ArrayList<>(nZ);
         List<String> sopList = new ArrayList<>(nZ);
@@ -156,10 +187,65 @@ public class RadiomicsMapEngine {
                 ippList, sopList, layout.frameOfReferenceUID());
     }
 
+    /**
+     * GLAM なら {@code RadiomicsJ.glam*} を設定で上書きしてから走らせ、必ず元へ戻す
+     * （プロセス広域の static なので直列化される）。それ以外の族はそのまま走らせる。
+     */
+    private float[][] runMap(boolean glam, TextureSeriesRequest req, java.util.function.Supplier<float[][]> body) {
+        if (!glam) {
+            return body.get();
+        }
+        try {
+            return GlamMapSupport.runWithSettings(req.settings(), body::get);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("GLAM マップの計算に失敗しました: " + e.getMessage(), e);
+        }
+    }
+
+    /** 非等方ボクセルの説明（等方なら null）。GLAM は距離をボクセル格子で測るため効いてくる。 */
+    private static String isotropyWarning(Calibration cal) {
+        double sx = cal.pixelWidth, sy = cal.pixelHeight, sz = cal.pixelDepth;
+        double tolerance = 1e-3 * Math.max(sx, Math.max(sy, sz));
+        if (Math.abs(sx - sy) <= tolerance && Math.abs(sx - sz) <= tolerance) {
+            return null;
+        }
+        return String.format("ボクセルが等方ではありません (%.4f, %.4f, %.4f mm)。"
+                + "GLAM は距離をボクセル格子で測るため、等方へリサンプリングした画像を使ってください。", sx, sy, sz);
+    }
+
+    /** 隣接スライスの法線投影距離＝スライス間隔。求まらなければ 0。 */
+    private static double sliceSpacing(Map<Integer, double[]> ippByZ, double[] iop, int nZ) {
+        double[] normal = normalOf(iop);
+        if (normal == null || nZ < 2) return 0;
+        double[] a = ippByZ.get(0), b = ippByZ.get(1);
+        if (a == null || b == null || a.length != 3 || b.length != 3) return 0;
+        double d = Math.abs(dot(a, normal) - dot(b, normal));
+        return d > 1e-4 ? d : 0;
+    }
+
+    /** stride を踏まえて実際に特徴計算が走る窓の数（＝マスク内のサンプル点）。 */
+    private static long windowCount(ImagePlus mask, int label, int stride) {
+        int v = Math.max(1, Math.min(255, label));
+        ImageStack st = mask.getStack();
+        long count = 0;
+        for (int z = 0; z < mask.getNSlices(); z++) {
+            ImageProcessor ip = st.getProcessor(z + 1);
+            for (int y = 0; y < ip.getHeight(); y += stride) {
+                for (int x = 0; x < ip.getWidth(); x += stride) {
+                    if (ip.getf(x, y) >= v) count++;
+                }
+            }
+        }
+        return count;
+    }
+
     /** stride<=1: RadiomicsJ に全スライスを一括計算させる（等倍・補間なし）。 */
     private float[][] computeFullRes(ImagePlus img, ImagePlus mask, TextureFeatureCatalog.BuiltFeature built,
-                                     int filterSize, boolean d2) {
-        ImagePlus lo = FeatureVisualizationMap.generateFeatureMap(img, mask, -1, built.calculator(), filterSize, d2, 1);
+                                     int filterSize, boolean d2, int margin, TextureProgress progress) {
+        ImagePlus lo = FeatureVisualizationMap.generateFeatureMap(img, mask, -1, built.calculator(), filterSize, d2, 1,
+                margin, progress::update);
         int s = lo.getNSlices();
         float[][] out = new float[s][];
         ImageStack st = lo.getStack();
@@ -175,11 +261,13 @@ public class RadiomicsMapEngine {
      * Z は 1:1 のため補間しない（ユーザー指定: Z stride は 1 固定）。
      */
     private float[][] computeStrided(ImagePlus img, ImagePlus mask, TextureFeatureCatalog.BuiltFeature built,
-                                     int filterSize, boolean d2, int stride, int w, int h, int s) {
+                                     int filterSize, boolean d2, int stride, int margin, int w, int h, int s,
+                                     TextureProgress progress) {
         int outW = (int) Math.ceil((double) w / stride);
         int outH = (int) Math.ceil((double) h / stride);
         // 全スライスを一括計算（XY のみ間引き）。
-        ImagePlus lo = FeatureVisualizationMap.generateFeatureMap(img, mask, -1, built.calculator(), filterSize, d2, stride);
+        ImagePlus lo = FeatureVisualizationMap.generateFeatureMap(img, mask, -1, built.calculator(), filterSize, d2,
+                stride, margin, progress::update);
         ImageStack st = lo.getStack();
         int loN = lo.getNSlices();
         float[][] full = new float[s][w * h];

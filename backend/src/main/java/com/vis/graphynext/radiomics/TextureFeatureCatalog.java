@@ -2,12 +2,14 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-package com.vis.graphynext.dicom.texture;
+package com.vis.graphynext.radiomics;
 
 import java.util.HashMap;
 import java.util.Map;
 
 import ij.ImagePlus;
+import io.github.tatsunidas.radiomics.features.GLAMFeatureType;
+import io.github.tatsunidas.radiomics.features.GLAMFeatures;
 import io.github.tatsunidas.radiomics.features.GLCMFeatureType;
 import io.github.tatsunidas.radiomics.features.GLCMFeatures;
 import io.github.tatsunidas.radiomics.features.GLDZMFeatureType;
@@ -51,7 +53,13 @@ final class TextureFeatureCatalog {
             String binPrefix,   // GRAPHY プロパティのビン系プレフィクス（GLCM/HIST 等）
             boolean hasDelta,
             boolean hasAlpha,
-            boolean customHistogram) {
+            boolean customHistogram,
+            boolean hasMaxRadius) {
+
+        Family(Class<? extends RadiomicsFeature> featClass, Class<? extends Enum<?>> enumType, String binPrefix,
+                boolean hasDelta, boolean hasAlpha, boolean customHistogram) {
+            this(featClass, enumType, binPrefix, hasDelta, hasAlpha, customHistogram, false);
+        }
     }
 
     private static final Map<String, Family> FAMILIES = new HashMap<>();
@@ -71,6 +79,10 @@ final class TextureFeatureCatalog {
         // ヒストグラム: Map コンストラクタ非対応 → カスタムラムダ。
         FAMILIES.put("HISTOGRAM",
                 new Family(IntensityHistogramFeatures.class, IntensityHistogramFeatureType.class, "HIST", false, false, true));
+        // GLAM: Map コンストラクタあり。ただし Map から届くのは maxRadius だけで、
+        // 残りは RadiomicsJ の static（GlamMapSupport が計算前後で面倒を見る）。
+        FAMILIES.put(GlamMapSupport.FAMILY,
+                new Family(GLAMFeatures.class, GLAMFeatureType.class, "GLAM", false, false, false, true));
     }
 
     /** 組み立て結果。 */
@@ -79,10 +91,13 @@ final class TextureFeatureCatalog {
     /**
      * {@code "GLCM_JointEntropy"} 形式の特徴文字列から calculator を組み立てる。
      *
-     * @param feature  "&lt;FAMILY&gt;_&lt;FeatureName&gt;"
-     * @param settings GRAPHY Property キー→値（文字列）マップ
+     * <p>GLAM のように窓の大きさに縛られるパラメータを持つ族があるので、カーネル径も受け取る。
+     *
+     * @param feature    "&lt;FAMILY&gt;_&lt;FeatureName&gt;"
+     * @param settings   GRAPHY Property キー→値（文字列）マップ
+     * @param filterSize カーネル径（奇数）
      */
-    static BuiltFeature build(String feature, Map<String, String> settings) {
+    static BuiltFeature build(String feature, Map<String, String> settings, int filterSize) {
         if (feature == null || !feature.contains("_")) {
             throw new IllegalArgumentException("feature は \"FAMILY_FeatureName\" 形式が必要です: " + feature);
         }
@@ -135,6 +150,11 @@ final class TextureFeatureCatalog {
         }
         if (fam.hasAlpha()) {
             radSettings.put(RadiomicsFeature.ALPHA, Integer.valueOf(intOf(settings, "ALPHA_" + famKey + "_DOUBLE", 1)));
+        }
+        if (fam.hasMaxRadius()) {
+            // 窓の外に届く半径を渡すと、値が変わらないまま [maxRadius+1][nBins][nBins] を無駄に確保する
+            radSettings.put(RadiomicsFeature.GLAM_MAX_RADIUS,
+                    Integer.valueOf(GlamMapSupport.maxRadiusFor(filterSize, settings)));
         }
 
         FeatureSpecifier<? extends RadiomicsFeature> spec =
