@@ -34,15 +34,27 @@ public final class NiftiGeometry {
     public final boolean synthesized;
     /** 幾何の出所（"sform" / "qform" / "pixdim"）。 */
     public final String source;
+    /**
+     * アフィン行列のスケールが pixdim と食い違ったため、**pixdim の大きさを採用した**か。
+     *
+     * <p>向き（方向ベクトル）はアフィンのまま、長さだけ pixdim に合わせている。
+     * true のときは呼び出し側が必ず警告として残すこと（黙って直すと、どちらが正しいか
+     * 追えなくなる）。
+     */
+    public final boolean spacingFromPixdim;
+    /** 食い違いの内容（警告文用。無ければ null）。 */
+    public final String spacingNote;
 
     private NiftiGeometry(double[] iop, double[] origin, double[] sliceStep, boolean flipRows,
-            boolean synthesized, String source) {
+            boolean synthesized, String source, boolean spacingFromPixdim, String spacingNote) {
         this.iop = iop;
         this.origin = origin;
         this.sliceStep = sliceStep;
         this.flipRows = flipRows;
         this.synthesized = synthesized;
         this.source = source;
+        this.spacingFromPixdim = spacingFromPixdim;
+        this.spacingNote = spacingNote;
     }
 
     /** ヘッダから幾何を作る。 */
@@ -74,6 +86,35 @@ public final class NiftiGeometry {
         }
 
         double scale = h.spatialUnitToMm();
+
+        // ⚠ アフィンが**向きだけ**でスケールを持たないファイルが実在する
+        // （EMIDEC の LGE は sform_code=2 で srow が ±1 の単位行列、実寸は pixdim 側に
+        //  1.5625 / 1.5625 / 10 mm。2026-08-12 に実データで発覚）。
+        // そのまま使うとスライス間隔が 1 mm になり、**容積が 10 倍狂う**。
+        // 向きはアフィンを信じ、大きさが食い違うときだけ pixdim に合わせる。
+        String spacingNote = null;
+        boolean spacingFromPixdim = false;
+        if (!synthesized) {
+            double[] want = { h.spacingX(), h.spacingY(), h.spacingZ() };
+            for (int col = 0; col < 3; col++) {
+                double len = Math.sqrt(m[0][col] * m[0][col] + m[1][col] * m[1][col] + m[2][col] * m[2][col]);
+                double target = Math.abs(want[col]);
+                if (len <= 1e-9 || target <= 1e-9) {
+                    continue;
+                }
+                // 1% を超えてずれていたら pixdim を採る（丸め誤差では起きない差）。
+                if (Math.abs(len - target) / target > 0.01) {
+                    double k = target / len;
+                    m[0][col] *= k;
+                    m[1][col] *= k;
+                    m[2][col] *= k;
+                    spacingFromPixdim = true;
+                    String axis = col == 0 ? "行" : col == 1 ? "列" : "スライス";
+                    String note = String.format("%s方向: %s=%.4f → pixdim=%.4f", axis, source, len, target);
+                    spacingNote = spacingNote == null ? note : spacingNote + " / " + note;
+                }
+            }
+        }
         // RAS → LPS（x 行と y 行を反転）＋ 単位を mm へ
         double m00 = -m[0][0] * scale;
         double m01 = -m[0][1] * scale;
@@ -117,7 +158,7 @@ public final class NiftiGeometry {
         return new NiftiGeometry(zeroNormalize(iop),
                 zeroNormalize(new double[] { m03, m13, m23 }),
                 zeroNormalize(new double[] { m02, m12, m22 }),
-                flip, synthesized, source);
+                flip, synthesized, source, spacingFromPixdim, spacingNote);
     }
 
     /**

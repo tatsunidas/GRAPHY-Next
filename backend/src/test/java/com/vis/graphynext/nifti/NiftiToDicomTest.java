@@ -139,6 +139,41 @@ class NiftiToDicomTest {
     }
 
     @Test
+    void sform_が単位行列でスケールを持たなければ_pixdim_の実寸を採る() throws IOException, Exception {
+        // EMIDEC（LGE 公開データ）の実物と同じ形: sform_code=2 だが srow は ±1 の向きだけで、
+        // 実寸は pixdim 側（面内 1.5625 mm・スライス 10 mm）。そのまま使うと
+        // スライス間隔が 1 mm になり容積が 10 倍狂う。
+        byte[] bytes = nifti1(4, 4, 3, 1, NiftiHeader.DT_INT16, 16,
+                new double[] { 1, 1.5625, 1.5625, 10, 0, 0, 0, 0 },
+                new double[] { -1, 0, 0, 0 }, new double[] { 0, -1, 0, 0 }, new double[] { 0, 0, 1, 0 }, 2,
+                int16Data(4 * 4 * 3, 0));
+        Path f = Files.createTempFile("t", ".nii");
+        Files.write(f, bytes);
+        List<Attributes> frames = convert(f, opts());
+
+        assertThat(frames.get(0).getDouble(Tag.SpacingBetweenSlices, 0)).isEqualTo(10.0);
+        assertThat(frames.get(0).getDouble(Tag.SliceThickness, 0)).isEqualTo(10.0);
+        assertThat(frames.get(0).getDoubles(Tag.PixelSpacing)).containsExactly(1.5625, 1.5625);
+        // スライスが進むと 10 mm ずつ動く（1 mm ではない）
+        double z0 = frames.get(0).getDoubles(Tag.ImagePositionPatient)[2];
+        double z1 = frames.get(1).getDoubles(Tag.ImagePositionPatient)[2];
+        assertThat(z1 - z0).isEqualTo(10.0);
+    }
+
+    @Test
+    void sform_が実寸を持つファイルは_pixdim_で上書きしない() throws IOException, Exception {
+        // srow が 2mm/5mm のスケールを持ち、pixdim と一致している通常のファイル。
+        byte[] bytes = nifti1(4, 4, 2, 1, NiftiHeader.DT_INT16, 16,
+                new double[] { 1, 2, 2, 5, 0, 0, 0, 0 },
+                new double[] { 2, 0, 0, 0 }, new double[] { 0, 2, 0, 0 }, new double[] { 0, 0, 5, 0 }, 1,
+                int16Data(4 * 4 * 2, 0));
+        Path f = Files.createTempFile("t", ".nii");
+        Files.write(f, bytes);
+        List<Attributes> frames = convert(f, opts());
+        assertThat(frames.get(0).getDouble(Tag.SpacingBetweenSlices, 0)).isEqualTo(5.0);
+    }
+
+    @Test
     void 幾何が無いファイルは合成したことを画像に残す() throws IOException, Exception {
         byte[] bytes = nifti1(4, 4, 2, 1, NiftiHeader.DT_INT16, 16,
                 new double[] { 1, 1.5, 1.5, 8, 0, 0, 0, 0 }, null, null, null, 0,

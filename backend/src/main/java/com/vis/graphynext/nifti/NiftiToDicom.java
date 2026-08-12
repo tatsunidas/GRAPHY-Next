@@ -63,7 +63,9 @@ public final class NiftiToDicom {
             int rows, int columns,
             String geometrySource, boolean geometrySynthesized,
             String studyInstanceUid, String seriesInstanceUid,
-            int metadataApplied, String pixelConversion) {
+            int metadataApplied, String pixelConversion,
+            /** アフィンのスケールが pixdim と食い違い、pixdim を採ったときの説明（無ければ null）。 */
+            String spacingNote) {
     }
 
     /** フレーム 1 枚ごとに呼ばれる出力先（ファイルへ書く / そのまま取り込む）。 */
@@ -161,7 +163,8 @@ public final class NiftiToDicom {
             }
         }
         return new Summary(instance - 1, nz, nt, nc, ny, nx,
-                geom.source, geom.synthesized, studyUid, seriesUid, metaApplied, spec.description);
+                geom.source, geom.synthesized, studyUid, seriesUid, metaApplied, spec.description,
+                geom.spacingNote);
     }
 
     /** ファイルへ書き出す sink。 */
@@ -209,6 +212,8 @@ public final class NiftiToDicom {
         ds.setDouble(Tag.ImagePositionPatient, VR.DS, ipp);
         ds.setDouble(Tag.ImageOrientationPatient, VR.DS, geom.iop);
         ds.setDouble(Tag.PixelSpacing, VR.DS, h.spacingY() * h.spatialUnitToMm(), h.spacingX() * h.spatialUnitToMm());
+        // ※ PixelSpacing は pixdim 由来。幾何側もスケールが食い違えば pixdim に合わせるので
+        //   （NiftiGeometry の spacingFromPixdim）、面内とスライス方向で源が割れることはない。
         ds.setDouble(Tag.SliceThickness, VR.DS, geom.sliceSpacing());
         ds.setDouble(Tag.SpacingBetweenSlices, VR.DS, geom.sliceSpacing());
         ds.setDouble(Tag.SliceLocation, VR.DS, geom.sliceSpacing() * z);

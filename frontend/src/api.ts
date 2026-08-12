@@ -330,6 +330,8 @@ export interface NiftiImportResult {
   /** サイドカー JSON から写せた属性の数。 */
   metadataApplied: number;
   pixelConversion: string | null;
+  /** アフィンのスケールが pixdim と食い違い、pixdim の実寸を採ったときの説明。 */
+  spacingNote: string | null;
   error: string | null;
 }
 

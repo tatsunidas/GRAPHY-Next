@@ -191,6 +191,7 @@ export function NonDicomImportDialog({
     const targets = paths.filter(isNifti);
     let imported = 0;
     let synthesized = 0;
+    const spacingNotes: string[] = [];
     let metaApplied = 0;
     for (const p of targets) {
       const r = await importNifti({
@@ -212,6 +213,7 @@ export function NonDicomImportDialog({
       imported += r.imported;
       metaApplied += r.metadataApplied;
       if (r.geometrySynthesized) synthesized++;
+      if (r.spacingNote) spacingNotes.push(r.spacingNote);
     }
     setNiftiSummary(
       t("nifti.result", {
@@ -223,6 +225,10 @@ export function NonDicomImportDialog({
     if (synthesized > 0) {
       // **向きを合成した**ことは黙って流さない（患者座標に依存する解析へ回されるため）
       setError(t("nifti.warn.synthesized"));
+    } else if (spacingNotes.length > 0) {
+      // スペーシングを pixdim から採り直したことも黙って流さない
+      // （容積・スライス厚が桁で変わる。EMIDEC の LGE で実際に 10 倍ずれていた）
+      setError(t("nifti.warn.spacing", { detail: spacingNotes[0] }));
     }
     if (imported > 0) onImported?.();
   }

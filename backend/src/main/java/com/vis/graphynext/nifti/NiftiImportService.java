@@ -42,6 +42,8 @@ public class NiftiImportService {
             String geometrySource, boolean geometrySynthesized,
             String studyInstanceUid, String seriesInstanceUid,
             int metadataApplied, String pixelConversion,
+            /** スライス間隔などを pixdim から採り直したときの説明（無ければ null）。 */
+            String spacingNote,
             String error) {
     }
 
@@ -82,14 +84,15 @@ public class NiftiImportService {
                 }
             });
 
-            log.info("[nifti] 取り込み完了: {} 枚（{}×{}×{} slices × {} phases, geometry={}{}）",
+            log.info("[nifti] 取り込み完了: {} 枚（{}×{}×{} slices × {} phases, geometry={}{}{}）",
                     counts[0], summary.columns(), summary.rows(), summary.slices(), summary.phases(),
-                    summary.geometrySource(), summary.geometrySynthesized() ? " SYNTHESIZED" : "");
+                    summary.geometrySource(), summary.geometrySynthesized() ? " SYNTHESIZED" : "",
+                    summary.spacingNote() == null ? "" : " spacing←pixdim: " + summary.spacingNote());
 
             return new Result(counts[0], counts[1], summary.slices(), summary.phases(), summary.channels(),
                     summary.rows(), summary.columns(), summary.geometrySource(), summary.geometrySynthesized(),
                     summary.studyInstanceUid(), summary.seriesInstanceUid(), summary.metadataApplied(),
-                    summary.pixelConversion(), null);
+                    summary.pixelConversion(), summary.spacingNote(), null);
         } catch (IOException | RuntimeException e) {
             log.warn("[nifti] 変換に失敗: {}", e.toString());
             return failure(e.getMessage() == null ? e.toString() : e.getMessage());
@@ -99,7 +102,7 @@ public class NiftiImportService {
     }
 
     private static Result failure(String message) {
-        return new Result(0, 0, 0, 0, 0, 0, 0, null, false, null, null, 0, null, message);
+        return new Result(0, 0, 0, 0, 0, 0, 0, null, false, null, null, 0, null, null, message);
     }
 
     private static void deleteQuietly(Path dir) {
