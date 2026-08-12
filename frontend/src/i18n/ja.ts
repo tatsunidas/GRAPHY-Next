@@ -1389,6 +1389,7 @@ export const ja: Record<string, string> = {
   "nifti.phases": "時相",
   "nifti.result": "NIfTI {{files}} 件を変換し、{{instances}} 枚を取り込みました（JSON から {{metadata}} 項目）。",
   "nifti.warn.synthesized": "⚠ このファイルは患者座標（qform/sform）を持たないため、向きを軸位断として合成しました。表示される向きは元データの向きではありません（面内・スライス間隔は正しい値です）。",
+  "nifti.warn.spacing": "このファイルは向きの行列に実寸が入っていないため、スペーシングを pixdim から採りました（{{detail}}）。容積・スライス厚を使う解析の前に確認してください。",
   "nondicom.supported": "対応: PDF / 画像(png,jpg,bmp,gif,tif) / 動画(MP4 は直接、AVI 等は ffmpeg が必要) / NIfTI(.nii, .nii.gz)。",
   "nondicom.video.needsFfmpeg": "動画です。再生は 2D Viewer で今後対応します。",
   "nondicom.noFiles": "ファイルが未選択です。",

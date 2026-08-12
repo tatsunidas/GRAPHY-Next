@@ -1387,6 +1387,7 @@ export const en: Record<string, string> = {
   "nifti.phases": "phases",
   "nifti.result": "Converted {{files}} NIfTI file(s) and imported {{instances}} instance(s) ({{metadata}} attributes from JSON).",
   "nifti.warn.synthesized": "⚠ This file has no patient coordinates (qform/sform), so the orientation was synthesized as axial. The displayed orientation is NOT the source orientation (in-plane and slice spacing are correct).",
+  "nifti.warn.spacing": "The affine carries no voxel size, so spacing was taken from pixdim ({{detail}}). Check this before any volume or thickness analysis.",
   "nondicom.supported": "Supported: PDF / images (png,jpg,bmp,gif,tif) / video (MP4 directly; AVI etc. need ffmpeg) / NIfTI (.nii, .nii.gz).",
   "nondicom.video.needsFfmpeg": "This is a video. Playback in the 2D Viewer is coming later.",
   "nondicom.noFiles": "No files selected.",
