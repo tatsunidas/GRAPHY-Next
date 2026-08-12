@@ -134,7 +134,7 @@ GRAPHY-Next/
 - [ ] Fusion
 - [ ] セグメンテーション
 - [ ] 核医学 (SUV)
-- [ ] NIfTI / PDF / Video インポート
+- [ ] NIfTI / PDF / Video インポート … NIfTI は実装済み（2026-08-11・設計: [nifti-import.md](nifti-import.md)）。PDF / 動画も実装済み
 - [ ] Plugin システム
 - [ ] DIMSE (C-FIND/C-MOVE/C-STORE) / TLS / 匿名化
 - [ ] ローカルファイル読み込み / CD・DVD 書き込み

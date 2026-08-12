@@ -15,6 +15,7 @@ import {
   ProbeTool,
   BrushTool,
 } from "@cornerstonejs/tools";
+import { CONTOUR_TOOL_NAMES } from "./roiContourTools";
 
 /** 消しゴムの合成ツール ID（BrushTool の ERASE ストラテジに対応する内部値）。 */
 export const ERASER_TOOL_ID = "__graphy_eraser__";
@@ -35,6 +36,14 @@ export const TOOL_IDS = {
   ellipse: EllipticalROITool.toolName,
   rect: RectangleROITool.toolName,
   probe: ProbeTool.toolName,
+  /** ポリゴン（閉）。クリックで頂点、ダブルクリック or 始点で閉じる。 */
+  polygon: CONTOUR_TOOL_NAMES.polygon,
+  /** ポリゴンライン（開）。ダブルクリックで閉じずに終える。 */
+  polyline: CONTOUR_TOOL_NAMES.polyline,
+  /** フリーハンド（閉）。ドラッグで描き、必ず閉じる。 */
+  freehand: CONTOUR_TOOL_NAMES.freehand,
+  /** フリーライン（開）。ドラッグで描き、閉じない。 */
+  freeLine: CONTOUR_TOOL_NAMES.freeLine,
   brush: BrushTool.toolName,
   eraser: ERASER_TOOL_ID,
   /** 3D Wand（対話型・輝度領域成長。ダイアログで seed/connectivity/threshold）。 */

@@ -271,6 +271,78 @@ export interface NonDicomResult {
 export const importNonDicom = (req: NonDicomRequest) =>
   httpSend<NonDicomResult>("/api/import/nondicom", "POST", req);
 
+// ── NIfTI インポート（standalone のローカル FS 前提） ──────────────
+
+/** NIfTI ヘッダの下読み結果。取り込み前に次元と幾何の出所を見せるために使う。 */
+export interface NiftiProbe {
+  columns: number;
+  rows: number;
+  slices: number;
+  /** 時相数（4D なら 2 以上）。 */
+  phases: number;
+  channels: number;
+  spacingX: number;
+  spacingY: number;
+  spacingZ: number;
+  datatype: number;
+  /** 画素の変換方法（例 "int16 → 16bit signed"）。 */
+  pixelConversion: string | null;
+  /** 幾何の出所（"sform" / "qform" / "pixdim"）。 */
+  geometrySource: string | null;
+  /**
+   * 患者座標が無く幾何を合成したか。**true のときは向きが本物ではない**ので、
+   * UI で必ず警告すること。
+   */
+  geometrySynthesized: boolean;
+  description: string | null;
+  supported: boolean;
+  error: string | null;
+}
+
+export interface NiftiImportRequest {
+  path: string;
+  /** サイドカー JSON（dcm2niix / BIDS）。任意。 */
+  metadataPath?: string;
+  modality?: string;
+  patientId?: string;
+  patientName?: string;
+  patientBirthDate?: string;
+  patientSex?: string;
+  studyDate?: string;
+  studyDescription?: string;
+  seriesDescription?: string;
+  seriesNumber?: number;
+  studyInstanceUid?: string;
+}
+
+export interface NiftiImportResult {
+  imported: number;
+  failed: number;
+  slices: number;
+  phases: number;
+  channels: number;
+  rows: number;
+  columns: number;
+  geometrySource: string | null;
+  geometrySynthesized: boolean;
+  studyInstanceUid: string | null;
+  seriesInstanceUid: string | null;
+  /** サイドカー JSON から写せた属性の数。 */
+  metadataApplied: number;
+  pixelConversion: string | null;
+  /** アフィンのスケールが pixdim と食い違い、pixdim の実寸を採ったときの説明。 */
+  spacingNote: string | null;
+  error: string | null;
+}
+
+/** NIfTI のヘッダだけ読む（取り込みはしない）。 */
+export const probeNifti = (path: string) =>
+  httpSend<NiftiProbe>("/api/nifti/probe", "POST", { path });
+
+/** NIfTI を DICOM 化して保管庫へ取り込む。 */
+export const importNifti = (req: NiftiImportRequest) =>
+  httpSend<NiftiImportResult>("/api/nifti/import", "POST", req);
+
 // ── LUT ────────────────────────────────────────────────────────
 
 export interface LutData {

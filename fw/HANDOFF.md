@@ -1,6 +1,55 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
-> 更新日: 2026-07-31（最終更新: **モバイル UI を実機検証（M9）し、見つかった不具合を修正・デプロイ**。下記エントリ参照）
+> 更新日: 2026-08-12（最終更新: **輪郭 ROI・ROI 復元の修正／NIfTI のスペーシング／実データ検証**。下記エントリ参照）
+
+> 🟢 **2026-08-12 実データ検証で見つけた不具合をまとめて直した（PR #113 / #114 / #115 いずれも merged）**
+> - **輪郭 ROI（ポリゴン・フリーハンド × 閉/開）＋ スプライン Fit**（PR #113、`fw/viewer-2d-menu-toolbar.md` §9）。
+>   スプライン Fit は ROI ごとに保存し、右クリック／ROI Tools（選択中の ROI へ適用）から切り替える。
+> - 🔴 **保存済み ROI が「表示中の 1 枚」以外は復元されていなかった**（`fw/roi-manager-design.md` §11.7）。
+>   `sopOfImageId()` が `metaData` 頼みで、**まだ読み込んでいないスライスの SOP を解決できない**ため、
+>   9 スライスに描いた 18 本の ROI が再読み込みで 0 本しか戻らなかった。imageId から SOP を取り出す
+>   `sopFromImageId()`（`viewer/imageId.ts`）をフォールバックに追加。
+>   併せて `parseSaveFile()` が `splineType` を落としており、**スプライン Fit が読み直しで直線に戻っていた**。
+> - **ROI 選択の再描画**（同 §11.8）: `host.selectRoi` で選択を移しても、同じスライス内では
+>   前の ROI が選択色のまま残っていた（注釈は別ループで描かれる）。
+> - **H14 を本体に実装**: `host.goTo` / `host.selectRoi`。プラグインの一覧行から
+>   「その ROI のスライスへ飛んで選択」ができる。
+> - 🔴 **NIfTI: 向きだけでスケールを持たないアフィン**（PR #114、`fw/nifti-import.md` 末尾）。
+>   EMIDEC は `sform_code=2` なのに `srow` が ±1 の単位行列で、実寸は pixdim 側（1.5625/1.5625/**10 mm**）。
+>   仕様どおり sform を使うと**スライス間隔 1 mm ＝ 容積が 10 倍狂う**。方向はアフィンのまま、
+>   長さが 1% を超えて食い違うときだけ pixdim に合わせ、**何をしたかを取込結果と UI 警告に残す**。
+> - 🔴 **位相（C/T）を変えると選択中の ROI ツールが効かなくなっていた**（PR #115、
+>   `fw/viewer-2d-menu-toolbar.md` §9.9）。`stackKey` 依存の effect がツールグループを
+>   破棄・再作成して既定（W/L）に戻るのに、メニューの選択表示はそのままだった。
+>   **4D cine でしか踏まない**ので実データを触るまで気づけなかった。
+> - 心臓解析プラグイン側（別リポジトリ `graphy-next-plugin-cardiac`）でも実データ検証を実施:
+>   **心機能は独立検算と一致**、**LGE は EMIDEC 100 症例で正解マスクと定量比較**し、
+>   FWHM の「最大値」の頑健化と「高信号なし」警告の判定基準（95 パーセンタイル）を修正。
+>   **T1/T2・ECV は実データ未検証（TODO）** — 造影後 T1 ＋ Hct が揃った公開データが無い
+>   （調べた候補と「何があれば閉じられるか」はプラグイン側 `docs/real-device-cmr.md` §9）。
+> - 使った公開データ（いずれも**リポジトリには入れない**）:
+>   **EMIDEC**（LGE・NIfTI・正解マスク付き・CC BY-NC-SA 4.0 の非商用）と、
+>   NIfTI 取込の実験に使った 4D cine。EMIDEC は非商用ライセンスなので、
+>   **社内でのアルゴリズム確認に留め、派生データや検証結果の同梱・配布はしない**。
+
+> 🟢 **2026-08-11 NIfTI インポートを追加（PR #111）＋ 実機確認で分かったこと**
+> - **NIfTI（.nii/.nii.gz）を DICOM 化して取り込めるようになった**（`fw/nifti-import.md` が正本）。
+>   Swing 版 `NIfTIToDicomConverter` の移植。4D は Z/T/C に展開し、時相は
+>   `TemporalPositionIndex`＋`TriggerTime`（`SeriesLayoutBuilder` の T 判定に合わせる）。
+>   **qform=sform=0 のファイルは向きを合成**し、その事実を `ImageComments` /
+>   `DerivationDescription` / UI 警告に残す。実データ（ACDC cine 216×256×10×30）で
+>   取り込み 300 枚 → 2D Viewer に Z=10 / T=30 を確認。
+> - 🔴 **TODO: JPEG-LS（1.2.840.10008.1.2.4.80/.81）の表示が未確認**。配布ビルドの CSP
+>   （`script-src 'self' 'wasm-unsafe-eval'`）が、dicom-image-loader 同梱の **charls / libjpeg-turbo の
+>   embind グルーが使う `new Function` をブロック**する（DevTools に警告が出る）。
+>   **JPEG Baseline / JPEG Lossless P14 / JPEG2000 (lossless・lossy) / RLE は実機で表示を確認済み**
+>   （エラー 0 件）で実害は無かったが、**手元に JPEG-LS のサンプルが無く charls だけ未検証**。
+>   サンプルが手に入ったら確認する。**CSP を緩める対応は取らない**（プラグインが同じレンダラで
+>   動く設計のため、文字列評価を開けると任意コード実行を許すことになる）。
+> - 実機確認中に気づいた本体の挙動 2 点（未修正・要判断）:
+>   1. **MainScreen で別シリーズを選んでも、既に開いている 2D Viewer は切り替わらない**（開き直しが要る）
+>   2. スタディ検索の初期条件が「本日」のため、**過去日付のデータは初期表示に出ない**
+>      （Clear だけでは再検索されず、日付を明示的に広げる必要がある）
 
 > 🟢 **2026-07-31 モバイル UI 実機検証（M9）＋修正をデモへ反映**（すべて main 直コミット・push・demo 再デプロイ済み）
 > スマホ実機で 2D/3D/MPR を確認し、以下を修正した（デモ機＝dev 機で `demo-deploy` 実行）。
