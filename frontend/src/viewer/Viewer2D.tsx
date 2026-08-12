@@ -395,6 +395,12 @@ export function Viewer2D({
   const [panMode, setPanMode] = useState(false);
   // 現在このタイルの左ドラッグに割り当てられている論理ツール（グローバルツールバー or per-tile 切替で更新）。
   const activeToolRef = useRef<string>(WindowLevelTool.toolName);
+  /**
+   * 選択中ツールの再適用口。**スタック（C/T）が変わるとツールグループを作り直す**ため、
+   * 選んでいた計測ツールが既定（W/L）へ戻ってしまう。メニューの表示は選んだままなので、
+   * 利用者には「ツールが効かなくなった」ようにしか見えない（実データの検証で発覚）。
+   */
+  const setActiveToolRef = useRef<((toolName: string) => void) | null>(null);
   // リファレンスライン: 他シリーズの現在スライス面がこのビューと交差する線分（CSS px）。
   const [refSegments, setRefSegments] = useState<RefSegment[]>([]);
   const refLinesEnabledRef = useRef(referenceLinesEnabled);
@@ -812,6 +818,11 @@ export function Viewer2D({
         } else if (!compact) {
           // 単独ツールグループ（SliderView）。
           wireTools(ToolGroupManager.getToolGroup(toolGroupId) ?? ToolGroupManager.createToolGroup(toolGroupId));
+          // 作り直したツールグループへ、選んでいたツールを戻す（上の setActiveToolRef 参照）。
+          const remembered = activeToolRef.current;
+          if (remembered && remembered !== WindowLevelTool.toolName && !thickSlabRef.current) {
+            queueMicrotask(() => setActiveToolRef.current?.(remembered));
+          }
           element.addEventListener(EVENTS.VOI_MODIFIED, onVoiModified);
           element.addEventListener("mousemove", onMove);
           element.addEventListener("mouseleave", onLeave);
@@ -1649,7 +1660,7 @@ export function Viewer2D({
     // Wand/Level Sets 以外のツールへ切り替えるときは、開いているセッションを確定して閉じる。
     if (!isWand) commitWand();
     if (!isLevelSet) commitLevelSet();
-    activeToolRef.current = toolName; // per-tile Pan↔W/L 切替の抑止判定に使う。
+    activeToolRef.current = toolName; // per-tile Pan↔W/L 切替の抑止判定＋スタック再構築時の復元に使う。
     if (isBrush || isEraser || isWand || isLevelSet) {
       // Mask(labelmap) を現在スタックに対し保証してからブラシ/Wand/Level Sets を有効化。
       void ensureStackSegmentation(viewportIdRef.current, imageIdsRef.current).then(applyBindings);
@@ -1657,6 +1668,8 @@ export function Viewer2D({
       applyBindings();
     }
   };
+  setActiveToolRef.current = setActiveTool;
+
   // ブラシ径（px）。
   const setBrushSize = (size: number) => {
     try {
