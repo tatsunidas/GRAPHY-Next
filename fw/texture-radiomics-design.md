@@ -25,7 +25,7 @@ Slicer 系の「派生セカンダリシリーズ DB 保存」パターン（`di
     ターゲット=現在タイルのシリーズ / マスク=任意選択 / 特徴選択 / kernel / stride / 2D3D
       │  POST /api/series/texture { studyUid, sourceSeriesUid, maskSeriesUid?, feature, filterSize, stride, force2D, settings }
       ▼
-[Backend] TextureSeriesService（新規, dicom/texture）
+[Backend] TextureSeriesService（新規, radiomics）
     1. source シリーズ → ij.ImagePlus（ImageJBridgeService）
     2. mask シリーズ → ij.ImagePlus（無ければ full-face mask）
     3. RadiomicsJ で特徴マップ計算（FeatureVisualizationMap.generateFeatureMap）
@@ -123,7 +123,7 @@ DICOM 属性:
 - **SeriesDescription** = `<featureName> <元 SeriesDescription>`、`SeriesNumber` は自動採番。
 - **保存**: 生成した Part-10 を `DicomStorageService.ingest()` で DB 索引（失敗時ファイル削除・トランザクションロールバック）。
 
-新規パッケージ案: `backend .../dicom/texture/`（`TextureSeriesController` `POST /api/series/texture`, `TextureSeriesService`, `TextureSeriesRequest`）。
+新規パッケージ: `backend .../radiomics/`（当初案は `dicom/texture/`。§11.9 で移設）（`TextureSeriesController` `POST /api/series/texture`, `TextureSeriesService`, `TextureSeriesRequest`）。
 `DerivedSeriesService.buildInstance` の画素フォーマット部（PixelRepresentation/BitsStored/Rescale/SOPClass/RescaleType）を引数化して共有化するのが望ましい。
 
 ### リクエスト DTO 案
@@ -201,7 +201,7 @@ record TextureSeriesRequest(
 
 ## 9.5 実装状況（2026-07-02 実装完了）
 
-- **backend** `dicom/texture/`: `TextureSeriesController`(`POST /api/series/texture`) / `TextureSeriesService`(32→16bit＋派生DICOM＋ingest) / `RadiomicsMapEngine`(ImagePlus 読込＋マップ計算＋Zstride＋Trilinear) / `TextureFeatureCatalog`(族→calculator, ヒストグラムはカスタムラムダ) / `TextureSeriesRequest`。pom に `radiomicsj:2.1.18` 追加（ij 1.54p 固定）。`mvn compile` 通過。
+- **backend** `radiomics/`（当初は `dicom/texture/`）: `TextureSeriesController`(`POST /api/series/texture`) / `TextureSeriesService`(32→16bit＋派生DICOM＋ingest) / `RadiomicsMapEngine`(ImagePlus 読込＋マップ計算＋Zstride＋Trilinear) / `TextureFeatureCatalog`(族→calculator, ヒストグラムはカスタムラムダ) / `TextureSeriesRequest`。pom に `radiomicsj:2.1.18` 追加（ij 1.54p 固定）。`mvn compile` 通過。
 - **frontend**: `viewer/TextureDialog.tsx`(SUV風) / `viewer/textureFeatures.ts`(族×特徴) / `api.ts createTextureMap` / Analysis メニュー「テクスチャ…」/ `Viewer2DScreen` で結果シリーズを隣接タイル表示 / `settings/registry.ts` に `texture` カテゴリ(全62パラメータ) / ja・en i18n。`tsc`・`vite build` 通過。
 - **マスク整列（2026-07-02 追加, 修正）**: マスクシリーズは **IOP/IPP ベースで Z 整列**（各ターゲットスライスに対し法線投影距離が最小のマスクスライスを採用、許容差=**スライス間隔の半分**）。マスク画素は **値 ≥ 0.5 を LABEL に二値化**。XY 寸法差は nearest 補間でリサイズ。**幾何整列あり かつ マスク範囲外（OutOfRange）のターゲットスライスは「空マスク」**（＝そこにマスクは無いので何も出さない）。**IOP/IPP 不明時のみスライスオーダー（index）へフォールバック**。分岐は必ず `log.info`（`RadiomicsMapEngine.buildMask`）。
   - ★修正(2026-07-02): 従来は幾何整列ありでも OutOfRange を index フォールバックしていたため、マスクの無い末尾スライスに無関係なマスク（＝テクスチャ）が載る不具合があった。OutOfRange は空スライスに変更。許容差もスライス間隔の 1/2 に厳格化し、マスク端の外側 1 スライスへの染み出しを防止。
@@ -218,3 +218,236 @@ record TextureSeriesRequest(
 - RadiomicsJ: `~/.m2/repository/io/github/tatsunidas/radiomicsj/2.1.18/`（jar/sources/pom）。API=`io.github.tatsunidas.radiomics.main.{FeatureVisualizationMap,FeatureSpecifier,FeatureCalculatorFactory,FeatureCalculator}` + `.features.*`。
 - Next backend: `dicom/derived/{DerivedSeriesController,DerivedSeriesService,DerivedSeriesRequest}`、`imagej/ImageJBridgeService`、`dicom/store/DicomStorageService`、`settings/{SettingsController,SettingsService,Setting}`。
 - Next frontend: `viewer2d/Viewer2DMenuBar.tsx`(analysis)、`Viewer2DScreen.tsx`、`settings/registry.ts`、`viewer/SUVCalibrationDialog.tsx`（ダイアログ先例）。
+
+---
+
+# 11. GLAM 対応（RadiomicsJ 2.3.0〜）— 2026-08-12 着手
+
+> RadiomicsJ 2.3.0 で追加された **GLAM（Gray Level Affinity Metrics）**ファミリーを
+> Texture 可視化マップで扱えるようにする。原著: *Physics-Informed Multiscale Decoding of
+> Tissue Microstructure: The GLAM Framework*, J Imaging Inform Med (2026),
+> doi:10.1007/s10278-026-02132-6。RadiomicsJ 側の解説は `RadiomicsJ/docs/GLAM_note_ja.md`。
+
+## 11.1 GLAM の性質（設計に効く事実）
+
+- **19 の親和性行列 × 8 統計 = 150 特徴**。`Compressibility` のみ diagonal-only のため 6 統計
+  （18×8 + 6 = 150）。行列＝記述子、特徴＝その要約という GLCM と同じ構図。
+- **`GLAMFeatures(ImagePlus, ImagePlus, Map<String,Object>)` コンストラクタがある**ので、
+  既存の `FeatureCalculatorFactory` 経路にそのまま乗る（Histogram のようなカスタムラムダは不要）。
+- ただし **Map から読むのは `GLAM_MAX_RADIUS` だけ**。残り 8 パラメータ
+  （boundaryCorrection / maxReferenceVoxels / numRandomisations / randomSeed /
+  savitzkyGolayWindow / savitzkyGolayPolynomial / peakProminence / maxLocalShellRadius）は
+  **`RadiomicsJ.glam*` の static フィールド**から読む（`applyGlobalAlgorithmSettings()`）。
+- **3D 専用**。`requireVolume()` が `nSlices < 2` で例外を投げる。
+- **等方ボクセル前提**。非等方は `IJ.log` の警告のみで計算は続行される。
+- **計算量は ROI ボクセル数の O(n²)**。さらに `compute()` が **19 行列をすべて構築**し、
+  `InverseCorrelationLength` は (α,β) ペアごとに非線形フィット（nBins² 回）を行う。
+- **`ConfigurationalDisorderIndex` と `FrustrationIndex` は boundaryCorrection=ON だと 1 に
+  張り付く**（分母が分子に一致するため）。使うなら OFF にする必要がある。
+
+## 11.2 Next 側の当たり所（既存コードの調査結果）
+
+- **特徴文字列はそのまま通る**。`TextureFeatureCatalog.build` は最初の `_` で分割するので
+  `"GLAM_SecondVirialCoefficient_Mean"` → family=`GLAM` / enum=`SecondVirialCoefficient_Mean`
+  と正しく解決される。**パーサ改修は不要**。
+- **`RadiomicsMapEngine` が `pixelDepth` を設定していない**（`finalCal` は pixelWidth/Height のみ）。
+  GLAM は距離をボクセル格子で測るため致命的。**GLAM 以前に直すべき既存の穴**。
+- **`FeatureVisualizationMap` はシングルスレッド**（並列化コードなし）。
+
+## 11.3 最大の論点＝計算コスト
+
+可視化マップは kernel を 1 ボクセルずつ滑らせ、**窓ごとに GLAM を丸ごと 1 回**回す。素直に繋ぐと成立しない。
+
+- `RadiomicsJ.glamMaxRadius` の既定は **100**。`ShellCounts` は `[maxRadius+1][nBins][nBins]` を
+  3 本確保するので、maxRadius=100 / nBins=16 で **1 窓あたり約 620 KB のアロケーション**。
+  窓が数十万〜数百万あるので GC で破綻する。
+- 7³ カーネル内の最大距離は約 6（対角で約 10）。**maxRadius=100 は無意味かつ致命的に遅い**。
+- 1 特徴しか要らないのに 19 行列＋nBins² 回の非線形フィットを毎窓行っている。
+
+| | 対策 | 効き | 実装先 |
+|---|---|---|---|
+| A | `maxRadius = min(設定値, floor(filterSize/2))` に強制（clamp 下限が 2 なので filterSize ≥ 5 必須） | 必須・大 | Next |
+| B | RadiomicsJ に「**要求された 1 行列だけ構築**」する経路を足す | 大 | RadiomicsJ |
+| C | `FeatureVisualizationMap` の並列化（GLAM 以外の全族も高速化） | 大 | RadiomicsJ |
+| D | マップ用に nBins を小さめ（8〜16）に誘導 | 中 | Next(UI) |
+| E | 推定時間ガード＋**非同期ジョブ化**（現状は同期 POST） | 実用性 | Next |
+
+> ⚠ **本質的な難所**: GLAM の売りは「数〜数十ボクセルの長距離構造」だが、7³ カーネルでは
+> r=1..3 しか見えず GLAM たる情報がほぼ落ちる。マップとしては kernel を大きく（11〜21）取る
+> 必要があり、コストは kernel³ で効く。Phase 0 の実測で実用範囲を先に確定させる。
+
+## 11.4 決定事項（2026-08-12 ユーザー承認）
+
+1. **radiomicsj 2.3.0 は Maven Central に公開済み**（`<release>2.3.0</release>` を確認）。
+2. **FVM の margin 既定 3 を受け入れる**。既存マップの ROI 端の値が変わる。
+   `TextureSeriesRequest.margin` を追加し、`0` で 2.3.0 以前の挙動に戻せるようにする。
+3. **RadiomicsJ 側に「単一行列モード」と「FVM 並列化」を入れる**（対策 B・C）。
+4. **Texture 計算を非同期ジョブ化する**（対策 E）。
+5. **Settings のキーは RadiomicsJ の `SettingParams` 名をそのまま使う**
+   （`INT_GLAM_maxRadius` 等）。本家ドキュメントと一致させるため、既存 Texture の
+   GRAPHY Properties 風命名（`BINCOUNT_GLCM_INT`）とは形が揃わないことを許容する。
+
+## 11.5 フェーズ
+
+| Phase | 内容 |
+|---|---|
+| **0** | 前提確定: ①Central 公開確認（済） ②2.1.18→2.3.0 の既存マップ回帰をゴールデン比較 ③GLAM 実測ベンチ（kernel 7/11/15 × nBins 8/16） |
+| **1** | RadiomicsJ: 単一行列モード＋FVM 並列化 → ローカル install |
+| **2** | Next backend: GLAM family 追加 / maxRadius 導出 / statics の単一実行ロックと復元 / force2D・nZ<2 の拒否 / `pixelDepth` 設定 / `margin` 追加 / DerivationDescription に GLAM パラメータ記録 |
+| **3** | Next backend: 非同期ジョブ化（投入＋進捗ポーリング） |
+| **4** | Next frontend: GLAM は**行列(19)×統計(8)の 2 段選択**。force2D を disable、kernel 下限引き上げ、`Compressibility` の OffDiagonal 系を除外、CDI/FrustrationIndex 選択時は boundaryCorrection=OFF を促す警告、進捗表示 |
+| **5** | Settings ▸ Texture に GLAM セクション（`SettingParams` 名）＋ ja/en i18n |
+| **6** | 検証: unit（カタログ解決・maxRadius 導出・force2D 拒否・statics 復元）/ 合成ファントム（blocks・onion 縮小版）/ 実機 CT+ROI で所要時間記録 / `/verify` |
+
+## 11.6 Phase 0 の実測結果（2026-08-12）
+
+### ① Maven Central
+`radiomicsj` は **2.3.0 が公開済み**（`maven-metadata.xml` の `<release>2.3.0</release>`）。
+
+### ② 既存マップの回帰（2.1.18 → 新版）
+
+同一ファントム（48×48×12、ROI 24×24×6）で同じ特徴マップを生成し、float 画素を全数比較した。
+
+| 比較 | 結果 |
+|---|---|
+| 2.1.18 → 2.2.0（IBSI 対応） | **完全一致** |
+| 2.2.0 → 2.4.0（`margin=0`） | **完全一致** |
+| `margin=0` → `margin=3`（2.3.0 の既定） | ROI 全 3456 セルが変化（最大相対差 **50%**、JointEntropy 3.77→5.25） |
+
+6 族（GLCM_JointEntropy / GLRLM_RunEntropy / GLSZM_ZoneSizeEntropy / NGTDM_Coarseness /
+NGLDM_DependenceCountEntropy / FIRSTORDER_Mean）で 2.1.18 vs 2.4.0(`margin=0`) を比較し、
+**全族で完全一致**。
+
+> **結論**: バージョン更新で値が変わるのは **margin 既定 3 だけ**。IBSI 対応も性能改修も値に影響しない。
+> margin は「ROI 端のボクセルが部分的にしか埋まっていない窓で測られる」問題の意図した修正なので受け入れる
+> （決定事項 2）。変化が全ボクセルに及ぶのは、ROI の Z 厚（6）がカーネル径（7）より薄く、
+> どのボクセルの窓も ROI 外へはみ出すため。**既存の Texture シリーズとは値が比較できなくなる**点に注意。
+
+### ③ 性能実測（8 コア、ROI 12288 ボクセル）
+
+RadiomicsJ 2.4.0 として以下を実装した（`RadiomicsJ/CHANGELOG.md` の 2.4.0 参照）。
+
+- **FVM のプレーンキャッシュ**: `getSubVolume` が窓ごとにスライス全体を float 変換していた
+  （512×512 なら 1 窓あたり 26 万回の変換）。ボリュームを一度だけ float 化して保持する方式に変更。
+- **FVM の行並列化**: スライス内の行を並列に測る（`FeatureVisualizationMap.parallel` で切替可）。
+- **GLAM の行列遅延構築**: 19 行列を一括構築していたのを、要求された行列（＋その依存）だけ作る方式に変更。
+  全特徴を取り出す経路のコストは不変（高価な処理を共有する行列が無いため）。
+
+| 施策 | 効果 |
+|---|---|
+| プレーンキャッシュ＋並列化 | GLCM kernel7 / stride1: **13241 → 3584 ms（3.7×）** |
+| GLAM 単一行列モード | **2.2×**（1429 → 660 ms） |
+
+GLAM マップの所要（stride 3、ROI 12288 ボクセル ≒ 1452 窓）:
+
+| kernel | nBins 8 | nBins 16 | 1 窓あたり |
+|---|---|---|---|
+| 7 | 448 ms | 463 ms | ≒0.31 ms |
+| 11 | 2726 ms | 3024 ms | ≒1.9 ms |
+| 15 | 17133 ms | 19635 ms | ≒11.8 ms |
+
+**カーネル径のほぼ 6 乗**で効く（実測比 7→11 で 6.1 倍、11→15 で 6.3 倍）。nBins の影響は小さい。
+
+> 🔴 **全面マスクで GLAM を回してはいけない**。512×512×100 を stride 3 の全面マスクで回すと
+> 窓数は約 290 万＝kernel 7 でも **15 分**、kernel 15 なら **9 時間**。
+> GLAM は **マスク必須**とし、窓数×実測単価から所要を見積もって閾値超過は拒否する。
+
+## 11.7 実装状況（2026-08-12）
+
+### RadiomicsJ 2.4.0（`~/radiomicsj-workspace/RadiomicsJ`, **ローカル install のみ・未公開**）
+
+- `FeatureVisualizationMap`: プレーンキャッシュ／行の並列化（`parallel` で切替）／
+  `ProgressListener`（スライス単位の進捗・例外を投げると中断＝キャンセル）。
+- `GLAMFeatures`: 親和性行列の**遅延構築**。`ensureMatrix` が要求された行列とその依存だけを作る。
+  依存の閉包は `withDependencies`（SHAPE 7 行列・SHELL 2 行列は 1 パス共有、
+  `AssemblyCoupling`←Wasserstein、`FrustrationIndex`←{StructuralPressureIndex, CDI}）。
+  親ジョブが既に並列なら行の並列化をやめる（`rowsShouldRunInParallel`）。
+- テスト: 既存 8 件すべて通過（GLAM 5 件は原著実装との突き合わせを含む）。
+- 🔴 **未公開**。GRAPHY-Next はローカル m2 の 2.4.0 に依存しているため、**他の PC / CI では
+  ビルドできない**。Maven Central への公開が必要（§11.9）。
+
+### GRAPHY-Next backend
+
+- `backend/pom.xml`: `radiomicsj.version` 2.1.18 → **2.4.0**。
+- **`GlamMapSupport`**（新規）: GLAM の前提と後始末を 1 箇所に集約。
+  - `maxRadiusFor` … カーネル半径で頭打ち（既定 100 のままだと 1 窓あたり約 620KB を捨てる）
+  - `validate` … force2D / スライス 1 枚 / カーネル < 5 / **マスク未指定**を拒否。
+    ここで弾かないと RadiomicsJ の例外がボクセルごとに握り潰され、**全面ゼロのマップが黙って出来る**
+  - `runWithSettings` … `RadiomicsJ.glam*` をロック下で上書きし、**必ず元へ戻す**
+  - `estimateMillis` … 実測単価（カーネル 7 で 0.31 ms/窓）をカーネル径の 6 乗で伸ばした見積り
+- `TextureFeatureCatalog`: `GLAM` family を追加（`Map` コンストラクタがあるので Factory 経路）。
+  `build()` は `filterSize` を受け取るようになった（maxRadius の導出に要る）。
+- `RadiomicsMapEngine`:
+  - **`finalCal.pixelDepth` をスライス間隔から設定**（従来 1mm 固定のままだった＝既存の穴の修正）
+  - GLAM の前提チェック・窓数ログ・境界補正の警告
+  - `margin` を要求から受け取り FVM へ渡す
+  - 進捗を `TextureProgress` で受けて FVM へ渡す
+- **`TextureJobService`**（新規）＋ `TextureProgress`: 投入→ポーリング。ワーカーは 1 本
+  （マップ計算は RadiomicsJ 側で既に全コアを使うので、同時実行は取り合いになるだけ。
+  GLAM は static を触るのでそもそも同時に走らせられない）。キャンセル可。終了ジョブは 50 件 / 1 時間で掃除。
+- `TextureSeriesController`: `POST /texture/jobs` / `GET /texture/jobs/{id}` / `DELETE /texture/jobs/{id}` を追加。
+  従来の同期 `POST /texture` は同じ実装を通す形で残す（スクリプト・テスト向け）。
+- `TextureSeriesService`: `DerivationDescription` に margin と、GLAM なら maxRadius・境界補正・
+  ランダム化回数を記録（**値の意味を決めるパラメータをシリーズ自身に書き残す**）。
+
+### GRAPHY-Next frontend
+
+- `api.ts`: `margin` / `submitTextureJob` / `getTextureJob` / `cancelTextureJob`。
+- `textureFeatures.ts`: `GLAM_MATRICES`(19) / `GLAM_STATISTICS`(8) / `glamStatisticsFor`
+  （`Compressibility` は自己ペアのみなので対角・非対角統計を出さない）/ `glamFeatureString`。
+- `TextureDialog.tsx`: GLAM のときだけ**行列×統計の 2 段選択**。3D 固定（2D を disable）、
+  カーネル下限 5、マスク未指定は送信前に拒否、CDI/FrustrationIndex 選択時は境界補正 OFF を促す警告、
+  **スライス単位の実進捗バー＋中止ボタン**。
+- `settings/registry.ts`: GLAM セクション（ビン 3 種＋アルゴリズム 9 種、**RadiomicsJ SettingParams 名**）。
+  ファミリー選択に `enableGLAM`（既定 OFF）。
+- i18n: ja / en 両方（行列 19 種の訳を含む）。
+
+### 検証結果
+
+| | 結果 |
+|---|---|
+| RadiomicsJ `mvn test` | **8/8 通過** |
+| backend `GlamMapSupportTest` | **16/16 通過** |
+| backend `TextureFeatureCatalogGlamTest` | **5/5 通過**（150 特徴すべての解決を含む） |
+| backend `GlamTextureSeriesIntegrationTest` | **4/4 通過**（保管庫→計算→派生シリーズの通し） |
+| frontend `npm run typecheck` | 通過 |
+| frontend `npm test` | **487/487 通過** |
+| frontend `npm run build` | 通過 |
+
+`TextureFeatureCatalogGlamTest` は、**同じヒストグラムで並び方だけ違う 2 つのファントム**
+（3 ボクセル角の塊 / ばらまき）で第二ビリアル係数が分離することを確かめている。
+判定は符号ではなく「偶然（0）からの隔たり」で見る — B2 は (g − g_random) を r² で重み付けして
+積分するため遠距離が効き、周期的な模様では近距離の引力を遠距離の反発が上回って正になりうる。
+「塊なら負」と決めつけると模様を少し変えただけで壊れる。
+
+## 11.8 残件
+
+1. 🔴 **RadiomicsJ 2.4.0 を Maven Central へ公開**（未実施）。GRAPHY-Next はローカル m2 の
+   2.4.0 に依存しているので、公開するまで**他の PC / CI ではビルドできない**。
+2. 🔴 **実機検証が未実施**。合成 DICOM でのヘッドレス通し（`GlamTextureSeriesIntegrationTest`）は
+   通っているが、アプリを起動しての確認は残っている。実 CT ＋ ROI で ①GLAM マップが生成できる
+   ②所要が見積りと合う ③**ジョブの進捗バーと中止ボタンが効く**（ここは自動テストが触れていない）
+   ④派生シリーズが元と同じ幾何で開け Fusion で重なる、を確認する。
+3. **既存 Texture シリーズとの非互換**（margin 既定 3）。以前生成したマップとは値が比較できない。
+   必要なら `margin=0` で再生成する。
+4. 等方リサンプリングは未実装。GLAM は非等方でも警告して続行する（設定 `texture.Resampling*` は
+   まだ消費されていない）。
+5. GLAM のバッチ抽出（ROI ごとの 150 特徴を表で出す）は未対応。可視化マップのみ。
+
+## 11.9 `radiomics` パッケージへの移設（2026-08-13）
+
+RadiomicsJ に絡む機能を 1 か所に集めるため、`com.vis.graphynext.dicom.texture` を
+**`com.vis.graphynext.radiomics`** へ移した（旧 GRAPHY の `com.vis.core.radiomics` に対応する位置）。
+
+- 移設したのは main 8 ファイル（`TextureSeriesController` / `TextureSeriesService` /
+  `TextureSeriesRequest` / `RadiomicsMapEngine` / `TextureFeatureCatalog` / `GlamMapSupport` /
+  `TextureJobService` / `TextureProgress`）と test 3 ファイル。**外部から参照している箇所は無かった**
+  ため、パッケージ宣言の付け替えだけで済んでいる（クラス名・API・エンドポイントは変更なし）。
+- `package-info.java` を新設し、「ここは RadiomicsJ と GRAPHY-Next を繋ぐ層であって、
+  特徴量の定義や数式は持たない」ことと、踏みやすい穴（static の戻し忘れ／例外が全面ゼロの
+  マップとして静かに成功する／値の意味を決めるパラメータは `DerivationDescription` に残す）を明記した。
+
+> **境界の方針**: 特徴量そのもの（GLAM を含む）は **RadiomicsJ 側にあり続ける**。
+> RadiomicsJ は Maven Central・PyPI・ImageJ プラグインとして独立に配布されており、
+> GRAPHY-Next はその利用者の 1 つという関係を保つ。したがってこのパッケージには
+> **ライブラリのソースを取り込まない**（`io.github.tatsunidas:radiomicsj` への依存のまま）。

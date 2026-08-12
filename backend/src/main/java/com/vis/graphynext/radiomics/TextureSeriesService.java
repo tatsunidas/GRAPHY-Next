@@ -2,7 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-package com.vis.graphynext.dicom.texture;
+package com.vis.graphynext.radiomics;
 
 import com.vis.graphynext.dicom.store.DicomStorageService;
 import org.dcm4che3.data.Attributes;
@@ -49,8 +49,13 @@ public class TextureSeriesService {
     /** 生成結果。 */
     public record Result(String seriesInstanceUid, List<String> sopInstanceUids) {}
 
-    /** マップを計算し派生シリーズとして保存する。 */
+    /** マップを計算し派生シリーズとして保存する（進み具合は見ない）。 */
     public Result create(TextureSeriesRequest req) throws IOException {
+        return create(req, TextureProgress.NONE);
+    }
+
+    /** マップを計算し派生シリーズとして保存する。 */
+    public Result create(TextureSeriesRequest req, TextureProgress progress) throws IOException {
         validate(req);
 
         // 属性テンプレート = 元シリーズ代表インスタンス。
@@ -61,7 +66,7 @@ public class TextureSeriesService {
         Attributes tmpl = readHeader(srcFiles.get(0));
 
         // マップ計算（重い）。
-        RadiomicsMapEngine.MapResult map = engine.compute(req);
+        RadiomicsMapEngine.MapResult map = engine.compute(req, progress);
 
         // 32bit float → 16bit unsigned のスケール係数（GRAPHY convertTo16BitWithCalibration 準拠）。
         double[] mm = minMax(map.data());
@@ -86,8 +91,7 @@ public class TextureSeriesService {
         double sliceThickness = tmpl.getDouble(Tag.SliceThickness, 0.0);
         double spacingBetween = tmpl.getDouble(Tag.SpacingBetweenSlices,
                 spacingFromIpp(map.ippPerZ(), sliceThickness));
-        String derivation = "Texture map " + featureName + " (GRAPHY-Next Radiomics; kernel=" + req.filterSize()
-                + ", stride=" + req.stride() + ", " + (req.force2D() ? "2D" : "3D") + ")";
+        String derivation = derivationDescription(req, featureName);
 
         List<String> sops = new ArrayList<>(map.slices());
         for (int z = 0; z < map.slices(); z++) {
@@ -100,6 +104,31 @@ public class TextureSeriesService {
         log.info("texture series created: {} ({} instances) feature={} from {}",
                 newSeriesUid, sops.size(), featureName, req.sourceSeriesUid());
         return new Result(newSeriesUid, sops);
+    }
+
+    /**
+     * DerivationDescription。<b>マップの値の意味を決めるパラメータを、シリーズ自身に書き残す</b>。
+     * 特に GLAM は maxRadius と境界補正で数値の意味が変わり、後から設定を辿る術が無い。
+     */
+    private static String derivationDescription(TextureSeriesRequest req, String featureName) {
+        StringBuilder sb = new StringBuilder("Texture map ").append(featureName)
+                .append(" (GRAPHY-Next Radiomics; kernel=").append(req.filterSize())
+                .append(", stride=").append(req.stride())
+                .append(", ").append(req.force2D() ? "2D" : "3D")
+                .append(", margin=").append(req.margin() != null ? req.margin().toString() : "default");
+        if (GlamMapSupport.isGlam(req.feature())) {
+            sb.append(", maxRadius=")
+                    .append(GlamMapSupport.maxRadiusFor(Math.max(1, req.filterSize()), req.settings()))
+                    .append(", boundaryCorrection=").append(setting(req, "BOOL_GLAM_boundaryCorrection", "1"))
+                    .append(", randomisations=").append(setting(req, "INT_GLAM_numRandomisations", "0"));
+        }
+        return sb.append(")").toString();
+    }
+
+    private static String setting(TextureSeriesRequest req, String key, String def) {
+        if (req.settings() == null) return def;
+        String v = req.settings().get(key);
+        return (v == null || v.isBlank()) ? def : v.trim();
     }
 
     private void validate(TextureSeriesRequest req) {

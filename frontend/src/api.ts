@@ -649,6 +649,12 @@ export interface TextureMapRequest {
   timePoint: number;
   /** Radiomics パラメータ（GRAPHY Property キー→文字列値）。 */
   settings: Record<string, string>;
+  /**
+   * 窓を切り出す前に ROI を広げるボクセル数（未指定で RadiomicsJ 既定の 3）。
+   * ROI 端のボクセルは窓が部分的にしか埋まらず、テクスチャの違いではなく「読んだ画素が
+   * 少ない」という理由だけで値がずれる。それを埋めるための余白。0 で 2.3.0 以前の挙動。
+   */
+  margin?: number | null;
   seriesDescription?: string | null;
   seriesNumber?: number | null;
 }
@@ -656,9 +662,38 @@ export interface TextureMapResult {
   seriesInstanceUid: string;
   sopInstanceUids: string[];
 }
-/** Texture 可視化マップを計算し派生シリーズとして保存する。返り値=新シリーズ UID。 */
+/**
+ * Texture 可視化マップを計算し派生シリーズとして保存する（**終わるまで待つ**）。
+ * UI からは {@link submitTextureJob} を使う。マップ計算は分単位になりうる。
+ */
 export const createTextureMap = (req: TextureMapRequest) =>
   httpSend<TextureMapResult>("/api/series/texture", "POST", req);
+
+export type TextureJobState = "QUEUED" | "RUNNING" | "DONE" | "FAILED" | "CANCELLED";
+
+/** Texture 計算ジョブの状態（backend: TextureJobService.Status）。 */
+export interface TextureJobStatus {
+  jobId: string;
+  state: TextureJobState;
+  feature: string;
+  slicesDone: number;
+  slicesTotal: number;
+  elapsedMs: number;
+  result?: TextureMapResult | null;
+  error?: string | null;
+}
+
+/** 計算を投入する。返るのは「まだ何も起きていない」状態。 */
+export const submitTextureJob = (req: TextureMapRequest) =>
+  httpSend<TextureJobStatus>("/api/series/texture/jobs", "POST", req);
+
+/** 進み具合と、終わっていれば結果。 */
+export const getTextureJob = (jobId: string) =>
+  httpGet<TextureJobStatus>(`/api/series/texture/jobs/${encodeURIComponent(jobId)}`);
+
+/** キャンセルを頼む。実際に止まるのは走っているスライスが終わったところ。 */
+export const cancelTextureJob = (jobId: string) =>
+  httpSend<TextureJobStatus>(`/api/series/texture/jobs/${encodeURIComponent(jobId)}`, "DELETE");
 
 // ── Anonymizer（PS3.15 匿名化） ────────────────────────────────
 
