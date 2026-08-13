@@ -3,6 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import dicomImageLoader from "@cornerstonejs/dicom-image-loader";
+import { readDicomString } from "./dicomText";
 import {
   type OverlayConfig,
   type OverlayCorner,
@@ -23,10 +24,16 @@ function dataSetOf(imageId: string): any | null {
   }
 }
 
+/**
+ * タグの文字列値。<b>SpecificCharacterSet を見て</b>デコードする。
+ *
+ * dicom-parser の {@code string()} を直接使うと、バイトを 1 つずつ文字にするだけなので
+ * UTF-8（ISO_IR 192）の日本語が化ける。シリーズ一覧が正しく出るのは backend の REST を
+ * 通っているためで、同じ値が場所によって化けたり化けなかったりしていた。
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function rawValue(ds: any, tag: string): string | null {
-  const v = ds?.string?.("x" + tag.toLowerCase());
-  return v == null || v === "" ? null : String(v);
+  return readDicomString(ds, tag);
 }
 
 function fmtDate(v: string): string {

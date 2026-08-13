@@ -275,3 +275,33 @@ Fusion の有無で画像描画領域の高さが変わり、**横並び比較�
 2. ~~PET SUV~~ → ✅ 実装済（`viewer/suv.ts` ほか）。
 3. **ROI/Length ツール**（ROI 管理は SeriesViewer に集約）＋既存キーボードショートカット配線。
 4. web(wadors) 対応。
+
+## SpecificCharacterSet（オーバーレイの文字化け）— 2026-08-13
+
+**症状**: 2D ビューアのオーバーレイで、`SpecificCharacterSet: ISO_IR 192` の日本語
+SeriesDescription が化ける。**シリーズ一覧は正しく出る**。
+
+**原因**: フロントは dicom-parser でタグを読むが、その `dataSet.string()` は
+バイトを 1 つずつ `String.fromCharCode` するだけで、**SpecificCharacterSet (0008,0005) を
+一切見ない**（`dicomParser.js` の `readFixedString`）。UTF-8 の日本語は必ず化ける。
+
+```
+"腹部 単純 CT"（UTF-8 16 バイト） → "è¹é¨ åç´ CT"
+```
+
+一覧が正しかったのは、**あちらが backend の REST を通っている**ため。dcm4che が文字セットを
+見て正しくデコードし、JSON は UTF-8 で届く。**同じ値が画面の場所によって化けたり化けなかったり
+する**のはこの差による。患者名など他のテキスト値も同様に化けていた。
+
+**対処**: `viewer/dicomText.ts` を新設し、生バイトを `SpecificCharacterSet` に従って
+`TextDecoder` でデコードする。dicom-parser の `string()` を直接使っていた 2 箇所
+（`overlayText.ts` / `suv.ts`）をこれに通した。
+
+- 単一バイト系（既定の ASCII / ISO_IR 100 等）と **UTF-8（ISO_IR 192）は正しく読む**
+- 日本語 ISO 2022 系（`ISO 2022 IR 87` 等）は `TextDecoder("iso-2022-jp")` に委ねる
+  **最善努力**。DICOM の使い方は ISO-2022-JP と完全には一致しない
+- デコードできなければ従来の読み方に落とす（表示が消えるより、化けたまま出た方が気づける）
+
+> **今後 dicom-parser でテキストを読むときは、必ず `readDicomString` を使うこと。**
+> `dataSet.string()` を直接呼ぶと同じ化け方が再発する。数値・日付・コード値は ASCII なので
+> 実害は出ないが、読み方を 1 か所に揃えておく方が間違いが起きない。
