@@ -44,6 +44,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.NONE,
         properties = {
+                // Radiomics は画素をローカル保管庫から直接読むため standalone 専用（RadiomicsMode）。
+                // このテストが検証しているのはまさにその経路なので、同じモードで動かす。
+                // 付ける前は既定（web 相当）で走っており、モードの前提を確かめないまま通っていた。
+                "spring.profiles.active=standalone",
                 "spring.datasource.url=jdbc:h2:mem:glamtex;DB_CLOSE_DELAY=-1",
                 "graphy.dicom.scp.enabled=false"
         })

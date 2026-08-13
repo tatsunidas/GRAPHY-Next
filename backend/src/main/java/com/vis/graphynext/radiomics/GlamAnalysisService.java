@@ -52,13 +52,16 @@ public class GlamAnalysisService {
     private static final double PAIRS_PER_SECOND = 7e8;
 
     private final RadiomicsMapEngine engine;
+    private final RadiomicsMode mode;
 
-    public GlamAnalysisService(RadiomicsMapEngine engine) {
+    public GlamAnalysisService(RadiomicsMapEngine engine, RadiomicsMode mode) {
         this.engine = engine;
+        this.mode = mode;
     }
 
     /** ROI 全体で GLAM を 1 回計算し、記述子を返す。 */
     public GlamAnalysis analyze(GlamAnalysisRequest req) throws IOException {
+        mode.require("GLAM 解析");
         validate(req);
 
         int label = labelOf(req.settings());
