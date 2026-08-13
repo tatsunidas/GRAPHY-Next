@@ -143,6 +143,8 @@ export interface ViewerActions {
   openTagViewer(): void;
   /** 対象タイルのシリーズで Texture（Radiomics 可視化マップ）ダイアログを開く。 */
   openTexture(): void;
+  /** GLAM 解析（ROI 全体の記述子）を別ウィンドウで開く。 */
+  openGlamAnalysis(): void;
   /** 対象タイルのスタディでレポート編集ダイアログを開く。 */
   openReport(): void;
 }

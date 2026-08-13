@@ -260,6 +260,7 @@ export function Viewer2DMenuBar({
       items: [
         { label: t("viewer2d.menu.histogram"), onClick: () => actions.openHistogram() },
         { label: `${t("texture.menu")}…`, onClick: () => actions.openTexture() },
+        { label: `${t("glam.menu")}…`, onClick: () => actions.openGlamAnalysis() },
         ...(isDemo ? [] : [{ label: t("viewer2d.menu.imagej"), onClick: () => actions.bridgeImageJ() }]),
       ],
     },
