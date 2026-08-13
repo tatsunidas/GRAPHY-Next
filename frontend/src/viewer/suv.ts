@@ -26,6 +26,7 @@
  */
 import { metaData } from "@cornerstonejs/core";
 import dicomImageLoader from "@cornerstonejs/dicom-image-loader";
+import { readDicomString } from "./dicomText";
 
 /** SUV 計算タイプ。 */
 export type SuvType = "bw" | "sul-james" | "sul-janma" | "bsa";
@@ -135,7 +136,8 @@ function seqItem(ds: any, tag: string): any | null {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function dsStr(ds: any, tag: string): string | undefined {
   try {
-    const v = ds?.string?.(tag);
+    // SUV 系のタグは ASCII だが、読み方は 1 か所（dicomText）に揃えておく。
+    const v = readDicomString(ds, tag.replace(/^x/i, ""));
     return v == null || v === "" ? undefined : String(v);
   } catch {
     return undefined;
