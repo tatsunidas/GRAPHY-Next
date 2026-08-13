@@ -20,6 +20,7 @@
 const { app } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
+const geometry = require("./windowGeometry");
 
 // screen モジュールは app 準備完了後にのみ参照できるため遅延取得する。
 function getScreen() {
@@ -84,73 +85,34 @@ function writeStore() {
 
 // --- 幾何ユーティリティ --------------------------------------------------
 
-function isFiniteRect(r) {
-  return (
-    r &&
-    ["x", "y", "width", "height"].every((k) => Number.isFinite(r[k])) &&
-    r.width > 0 &&
-    r.height > 0
-  );
-}
-
-/** 2 矩形の重なり寸法（見えている量の判定に使う）。 */
-function overlapSize(a, b) {
-  const x = Math.max(a.x, b.x);
-  const y = Math.max(a.y, b.y);
-  const right = Math.min(a.x + a.width, b.x + b.width);
-  const bottom = Math.min(a.y + a.height, b.y + b.height);
-  return { width: Math.max(0, right - x), height: Math.max(0, bottom - y) };
-}
+const isFiniteRect = geometry.isFiniteRect;
 
 /**
  * 迷子防止の中核。保存 bounds を現在のディスプレイ構成に照らして検証し、
- * 画面外/はみ出しなら可視域へクランプ、巨大なら workArea に収まるよう縮小する。
+ * workArea に収まるよう縮小したうえで、<b>全体が見えていなければ</b>可視域へクランプする。
+ *
+ * <p>判定そのものは Electron に依存しない {@code windowGeometry.js} にあり、単体テストで守っている。
+ * ここは「今のディスプレイ構成を渡す」だけ。
  *
  * @param {any} saved   保存された bounds（不正なら既定にフォールバック）
- * @param {{width:number,height:number,minVisible:number}} def
+ * @param {{width:number,height:number}} def
  * @returns {{x?:number,y?:number,width:number,height:number}}
  *          x,y を省略した場合は Electron がプライマリ中央に配置する。
  */
 function sanitizeBounds(saved, def) {
-  const dw = Math.round(def.width);
-  const dh = Math.round(def.height);
-
-  // 保存なし/不正 → 既定サイズのみ返し中央配置に委ねる。
   if (!isFiniteRect(saved)) {
-    return { width: dw, height: dh };
+    return { width: Math.round(def.width), height: Math.round(def.height) };
   }
-
   const screen = getScreen();
-  let x = Math.round(saved.x);
-  let y = Math.round(saved.y);
-  let width = Math.round(saved.width);
-  let height = Math.round(saved.height);
-
   // 最も重なるディスプレイ（全画面外なら最近傍/プライマリ）を基準にする。
-  const target = screen.getDisplayMatching({ x, y, width, height });
-  const wa = target.workArea; // タスクバー等を除いた作業領域（DIP 基準）
-
-  // ウィンドウが workArea より大きければ収まるよう縮小。
-  width = Math.min(width, wa.width);
-  height = Math.min(height, wa.height);
-
-  // いずれかのディスプレイ workArea と minVisible 以上重なっているか。
-  const minVisible = def.minVisible;
-  let visW = 0;
-  let visH = 0;
-  for (const d of screen.getAllDisplays()) {
-    const ov = overlapSize({ x, y, width, height }, d.workArea);
-    visW = Math.max(visW, ov.width);
-    visH = Math.max(visH, ov.height);
-  }
-
-  // ほぼ画面外（タイトルバーをつかめない）→ target の workArea 内へクランプ。
-  if (visW < minVisible || visH < minVisible) {
-    x = Math.max(wa.x, Math.min(x, wa.x + wa.width - width));
-    y = Math.max(wa.y, Math.min(y, wa.y + wa.height - height));
-  }
-
-  return { x, y, width, height };
+  const target = screen.getDisplayMatching({
+    x: Math.round(saved.x),
+    y: Math.round(saved.y),
+    width: Math.round(saved.width),
+    height: Math.round(saved.height),
+  });
+  const workAreas = screen.getAllDisplays().map((d) => d.workArea); // タスクバー等を除いた領域（DIP 基準）
+  return geometry.sanitizeBounds(saved, def, target.workArea, workAreas);
 }
 
 // --- ディスプレイ構成変化への追従 ---------------------------------------
@@ -170,6 +132,7 @@ function ensureScreenListeners() {
 }
 
 // 動作中にモニタ構成が変わった場合、生きているウィンドウを可視域へ引き戻す。
+// 解像度が下がった場合も（ディスプレイの増減が無くても）ここで収まり直す。
 function reclampTrackedWindows() {
   for (const entry of tracked) {
     const win = entry.win;
@@ -203,7 +166,6 @@ function debounce(fn, ms) {
  * @typedef WindowDefaults
  * @property {number}  width
  * @property {number}  height
- * @property {number}  [minVisible=48]        画面内に最低限見えているべき px
  * @property {boolean} [rememberMaximize=true]
  */
 
@@ -225,7 +187,6 @@ function createWindowStateKeeper(key, defaults) {
   const def = {
     width: defaults.width,
     height: defaults.height,
-    minVisible: defaults.minVisible == null ? 48 : defaults.minVisible,
     rememberMaximize: defaults.rememberMaximize !== false,
   };
 
