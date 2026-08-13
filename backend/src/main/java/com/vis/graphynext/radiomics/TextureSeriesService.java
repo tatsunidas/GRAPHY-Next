@@ -118,7 +118,9 @@ public class TextureSeriesService {
                 .append(" (GRAPHY-Next Radiomics; kernel=").append(req.filterSize())
                 .append(", stride=").append(req.stride())
                 .append(", ").append(req.force2D() ? "2D" : "3D")
-                .append(", margin=").append(req.margin() != null ? req.margin().toString() : "default");
+                .append(", margin=").append(req.margin() != null ? req.margin().toString() : "default")
+                // リサンプリングすると「距離 1」の意味が変わるので、値の意味を決めるパラメータに含まれる。
+                .append(", resampling=").append(TextureResampling.describe(req.settings()));
         if (GlamMapSupport.isGlam(req.feature())) {
             sb.append(", maxRadius=")
                     .append(GlamMapSupport.maxRadiusFor(Math.max(1, req.filterSize()), req.settings()))
