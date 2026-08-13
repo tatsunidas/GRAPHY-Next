@@ -52,6 +52,12 @@ public class DemoModeFilter extends OncePerRequestFilter {
             // （fw/web-demo-hosting.md参照）。RTSTRUCT書き出しは対象外のままブロック継続。
             new BlockedRoute(HttpMethod.POST, "/api/dicom/rtstruct"),
             new BlockedRoute(null, "/api/series/**"),
+            // 2026-08-13 追加: Radiomics（Texture 可視化マップ / GLAM 解析）。
+            // GLAM 解析は ROI のボクセル対を総当たりする O(n^2) の計算で、1 リクエストで数十秒
+            // CPU を占有できる。共有デモでは計算資源の持ち出しにあたるうえ、解析の保存は
+            // 共有 DB への書き込みになる。可視化マップは /api/series 配下なので元から塞がっていたが、
+            // 解析を /api/radiomics に切ったときにこちらへ足すのを忘れていた。
+            new BlockedRoute(null, "/api/radiomics/**"),
             new BlockedRoute(null, "/api/dbadmin/**"),
             new BlockedRoute(null, "/api/patients"),
             new BlockedRoute(null, "/api/patients/**"),

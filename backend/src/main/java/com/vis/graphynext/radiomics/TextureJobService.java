@@ -159,8 +159,8 @@ public class TextureJobService {
         } catch (CancelledException e) {
             job.state = State.CANCELLED;
             log.info("[texture] job {} cancelled after {} ms", job.id, job.elapsedMs());
-        } catch (IllegalArgumentException e) {
-            // 要求そのものが通らない（GLAM を 2D で頼んだ等）。利用者に見せてよい文言。
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            // 要求そのものが通らない（GLAM を 2D で頼んだ / web モードで呼んだ等）。利用者に見せてよい文言。
             job.state = State.FAILED;
             job.error = e.getMessage();
             log.warn("[texture] job {} rejected: {}", job.id, e.getMessage());

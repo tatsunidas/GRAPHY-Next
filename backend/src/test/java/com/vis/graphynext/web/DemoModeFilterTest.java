@@ -28,6 +28,15 @@ class DemoModeFilterTest {
             "GET,/api/dicom/qr/retrieve/job1",
             "POST,/api/dicom/rtstruct",
             "POST,/api/series/derived",
+            // Radiomics。可視化マップ(/api/series/texture)は /api/series/** で元から塞がるが、
+            // GLAM 解析は /api/radiomics に切ったため個別に必要。O(n^2) の計算を共有デモで
+            // 回されると CPU を持ち出せるうえ、保存は共有 DB への書き込みになる。
+            "POST,/api/series/texture",
+            "POST,/api/series/texture/jobs",
+            "POST,/api/radiomics/glam/analyze",
+            "GET,/api/radiomics/glam/saved",
+            "POST,/api/radiomics/glam/saved",
+            "DELETE,/api/radiomics/glam/saved/abc",
             "DELETE,/api/series/1.2/1.3",
             "POST,/api/dbadmin/series/merge",
             "GET,/api/patients",

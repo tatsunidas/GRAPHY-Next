@@ -40,10 +40,12 @@ public class TextureSeriesService {
 
     private final DicomStorageService storage;
     private final RadiomicsMapEngine engine;
+    private final RadiomicsMode mode;
 
-    public TextureSeriesService(DicomStorageService storage, RadiomicsMapEngine engine) {
+    public TextureSeriesService(DicomStorageService storage, RadiomicsMapEngine engine, RadiomicsMode mode) {
         this.storage = storage;
         this.engine = engine;
+        this.mode = mode;
     }
 
     /** 生成結果。 */
@@ -56,6 +58,7 @@ public class TextureSeriesService {
 
     /** マップを計算し派生シリーズとして保存する。 */
     public Result create(TextureSeriesRequest req, TextureProgress progress) throws IOException {
+        mode.require("テクスチャ可視化マップ");
         validate(req);
 
         // 属性テンプレート = 元シリーズ代表インスタンス。

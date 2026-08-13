@@ -47,6 +47,9 @@ public class TextureSeriesController {
             return service.create(req);
         } catch (IllegalArgumentException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage(), e);
+        } catch (IllegalStateException e) {
+            // モードが合わない（web で standalone 専用機能を呼んだ）。プラグイン管理と同じ 403。
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, e.getMessage(), e);
         } catch (IOException e) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Texture map generation failed", e);
         }
