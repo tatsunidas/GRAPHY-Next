@@ -1162,3 +1162,87 @@ export const finalizeReport = (id: string) =>
 /** MainScreen 一覧の ●/○ 表示用（フェーズ R5 で StudyList に接続）。 */
 export const fetchReportStudyCounts = (studyUids: string[]) =>
   httpGet<StudyReportCount[]>(`/api/reports/study-counts?studyUids=${encodeURIComponent(studyUids.join(","))}`);
+
+// ── GLAM 解析（ROI 全体・記述子そのもの） ───────────────────────
+
+/** GLAM 解析の要求（backend: POST /api/radiomics/glam/analyze）。 */
+export interface GlamAnalysisRequest {
+  studyInstanceUid: string;
+  sourceSeriesUid: string;
+  /** ROI マスクシリーズ（**必須**。全面では意味のある動径分布にならない）。 */
+  maskSeriesUid: string;
+  maskChannel: number;
+  channel: number;
+  timePoint: number;
+  /** 動径分布を見る最大距離（ボクセル, 未指定で 30）。 */
+  maxRadius?: number | null;
+  settings: Record<string, string>;
+}
+
+/**
+ * GLAM 解析の結果＝記述子そのもの。
+ *
+ * 特徴量 150 個は行列を要約した「答え」だが、解釈に効くのはその手前にある動径分布関数と
+ * 親和性行列（原著論文の図が見せているのはこちら）。
+ */
+export interface GlamAnalysis {
+  featureCount: number;
+  nBins: number;
+  maxRadius: number;
+  roiVoxelCount: number;
+  /** ビンごとのボクセル数。**稀なビンほど g(r) は跳ねる**ので曲線を読む前に見る。 */
+  binOccupancy: number[];
+  /** r の値（1..maxRadius）。 */
+  radii: number[];
+  /** 自己親和性 g(α,α,r)。`[α][r]`。**1.0 が「偶然と区別がつかない」水準**。 */
+  selfAffinity: number[][];
+  /** 同じ並びのランダム参照状態。 */
+  selfAffinityRandom: number[][];
+  /** 親和性行列 19 種。キーは GLAMMatrixType 名、値は nBins×nBins。 */
+  matrices: Record<string, number[][]>;
+  /** 自己ペアだけで定義される行列（非対角に意味が無い）。 */
+  diagonalOnly: string[];
+  /** ボクセル間隔 (x,y,z) mm。 */
+  voxelSpacing: number[];
+  isotropic: boolean;
+  settings: Record<string, string>;
+}
+
+/** 保存された解析の一覧行（JSON 本体は含まない）。 */
+export interface GlamSavedSummary {
+  id: string;
+  label: string;
+  sourceSeriesUid: string;
+  maskSeriesUid: string | null;
+  nBins: number;
+  maxRadius: number;
+  roiVoxelCount: number;
+  savedAt: string;
+}
+
+/** ROI 全体で GLAM を計算する（保存はしない）。 */
+export const analyzeGlam = (req: GlamAnalysisRequest) =>
+  httpSend<GlamAnalysis>("/api/radiomics/glam/analyze", "POST", req);
+
+/** 保存された解析の一覧（study 単位・新しい順）。 */
+export const listGlamAnalyses = (studyInstanceUid: string) =>
+  httpGet<GlamSavedSummary[]>(
+    `/api/radiomics/glam/saved?studyInstanceUid=${encodeURIComponent(studyInstanceUid)}`,
+  );
+
+/** 保存された解析を読み出す。 */
+export const loadGlamAnalysis = (id: string) =>
+  httpGet<GlamAnalysis>(`/api/radiomics/glam/saved/${encodeURIComponent(id)}`);
+
+/** 解析結果を保存する（利用者が保存を選んだときだけ）。 */
+export const saveGlamAnalysis = (body: {
+  studyInstanceUid: string;
+  sourceSeriesUid: string;
+  maskSeriesUid: string | null;
+  label: string;
+  analysis: GlamAnalysis;
+}) => httpSend<GlamSavedSummary>("/api/radiomics/glam/saved", "POST", body);
+
+/** 保存された解析を消す。 */
+export const deleteGlamAnalysis = (id: string) =>
+  httpSend<void>(`/api/radiomics/glam/saved/${encodeURIComponent(id)}`, "DELETE");

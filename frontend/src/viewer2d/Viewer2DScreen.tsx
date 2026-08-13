@@ -65,6 +65,7 @@ import { Viewer2DToolbar, type ViewerActions } from "./Viewer2DToolbar";
 import { PluginSaveConfirmDialog, type PluginSaveRequest } from "./PluginSaveConfirmDialog";
 import { Viewer2DMenuBar } from "./Viewer2DMenuBar";
 import { RoiManagerPanel } from "./RoiManagerPanel";
+import { GLAM_CTX_KEY } from "../radiomics/GlamAnalysisScreen";
 import { useI18n } from "../i18n/i18n";
 import { desktop } from "../desktopBridge";
 
@@ -1158,6 +1159,20 @@ function TileGrid({
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("texture.menu")); return; }
         setTextureTarget(tile);
+      },
+      // GLAM 解析: 別ウィンドウ（#glam）で開く。対象は localStorage 経由で渡す
+      // （ウィンドウを跨ぐため。2D ビューアの graphy-viewer-ctx とは別キーにして取り合わない）。
+      openGlamAnalysis: () => {
+        const tid = resolveTargets()[0];
+        const tile = patient.tiles.find((tl) => tl.id === tid);
+        if (!tile) { comingSoon(t("glam.menu")); return; }
+        localStorage.setItem(GLAM_CTX_KEY, JSON.stringify({
+          studyInstanceUid: tile.study.studyInstanceUid,
+          seriesInstanceUid: tile.series.seriesInstanceUid,
+        }));
+        const d = desktop();
+        if (d?.openViewer) void d.openViewer("glam");
+        else window.open(`${window.location.pathname}#glam`, "graphy-glam");
       },
       // レポート: 対象（選択→無ければ先頭）タイルのスタディでレポート編集ダイアログを開く。
       openReport: () => {

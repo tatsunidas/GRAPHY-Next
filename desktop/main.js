@@ -67,6 +67,8 @@ const VIEWER_DEFAULTS = {
   mpr: { width: 1400, height: 900 },
   slicer: { width: 1400, height: 900 },
   curvedmpr: { width: 1400, height: 900 },
+  // GLAM 解析は図を横に並べるので、やや幅広を既定にする。
+  glam: { width: 1250, height: 900 },
 };
 
 /** 同梱 / 開発時の backend jar のパスを解決する。 */

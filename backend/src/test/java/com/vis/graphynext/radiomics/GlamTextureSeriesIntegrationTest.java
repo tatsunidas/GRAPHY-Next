@@ -63,6 +63,9 @@ class GlamTextureSeriesIntegrationTest {
     @Autowired
     TextureSeriesService textureService;
 
+    @Autowired
+    GlamAnalysisService analysisService;
+
     private static final int COLS = 24;
     private static final int ROWS = 24;
     private static final int SLICES = 10;
@@ -307,5 +310,80 @@ class GlamTextureSeriesIntegrationTest {
         for (int i = 0; i < expected.length; i++) {
             assertEquals(expected[i], actual[i], 1e-6, "index " + i);
         }
+    }
+
+    // ── GLAM 解析（ROI 全体・記述子そのもの） ────────────────────
+
+    private static GlamAnalysisRequest analysisRequest(String maskSeriesUid, Integer maxRadius) {
+        return new GlamAnalysisRequest(STUDY_UID, SOURCE_SERIES_UID, maskSeriesUid, 0, 0, 0, maxRadius, settings());
+    }
+
+    @Test
+    void analysesTheWholeRoiAndReturnsTheDescriptorsThemselves() throws Exception {
+        ingestPhantom();
+        GlamAnalysis a = analysisService.analyze(analysisRequest(MASK_SERIES_UID, 6));
+
+        assertEquals(8, a.nBins(), "the request asked for 8 bins");
+        assertEquals(6, a.maxRadius());
+        assertEquals(6, a.radii().length);
+        assertEquals(1, a.radii()[0], "r starts at 1");
+
+        // 19 行列すべてが返ること（UI がどれを選んでも描けること）
+        assertEquals(19, a.matrices().size());
+        assertTrue(a.matrices().containsKey("SecondVirialCoefficient"));
+        assertTrue(a.diagonalOnly().contains("Compressibility"), "Compressibility is self pairs only");
+
+        // 自己親和性は [bin][r]
+        assertEquals(a.nBins(), a.selfAffinity().length);
+        assertEquals(a.maxRadius(), a.selfAffinity()[0].length);
+
+        // ビン占有数の合計 = ROI ボクセル数。ここがずれると曲線の読み方の前提が崩れる
+        long occupied = 0;
+        for (long n : a.binOccupancy()) occupied += n;
+        assertEquals(a.roiVoxelCount(), occupied, "every roi voxel lands in exactly one bin");
+        assertEquals(12 * 12 * (SLICES - 4), a.roiVoxelCount(), "the box mask");
+    }
+
+    @Test
+    void theRandomReferenceStateSitsExactlyAtTheChanceLevel() throws Exception {
+        /*
+         * 境界補正が入っていると、ランダム参照状態は距離によらず 1.0 に正規化される
+         * （RadiomicsJ の GLAM 解説 3.6 / 5.2）。実装が ROI の形の影響を正しく割り戻せているかは、
+         * ここを見るのが一番はっきりする。観測側の曲線と違い、期待値が理屈で決まっているため。
+         */
+        ingestPhantom();
+        GlamAnalysis a = analysisService.analyze(analysisRequest(MASK_SERIES_UID, 6));
+
+        int checked = 0;
+        for (int bin = 0; bin < a.nBins(); bin++) {
+            if (a.binOccupancy()[bin] == 0) continue; // 空のビンは曲線が定義されない
+            for (double v : a.selfAffinityRandom()[bin]) {
+                if (!Double.isFinite(v) || v == 0d) continue;
+                assertEquals(1.0, v, 0.05, "randomised reference should sit at chance, bin " + bin);
+                checked++;
+            }
+        }
+        assertTrue(checked > 0, "expected at least one defined random curve");
+    }
+
+    @Test
+    void refusesAnalysisWithoutAMask() throws Exception {
+        ingestPhantom();
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> analysisService.analyze(analysisRequest(null, 6)));
+        assertTrue(e.getMessage().contains("マスク"), e.getMessage());
+    }
+
+    @Test
+    void looksFurtherThanAMapCanSee() throws Exception {
+        /*
+         * これがこの機能の存在理由。可視化マップはカーネル半径で頭打ちになり、kernel 7 なら
+         * maxRadius は 3 までしか取れない。解析はカーネルが無いのでそれより遠くまで見られる。
+         */
+        ingestPhantom();
+        int mapCap = GlamMapSupport.maxRadiusFor(7, settings());
+        GlamAnalysis a = analysisService.analyze(analysisRequest(MASK_SERIES_UID, 8));
+        assertEquals(3, mapCap, "a kernel of 7 caps the map at r=3");
+        assertTrue(a.maxRadius() > mapCap, "the analysis is not bound by a kernel");
     }
 }

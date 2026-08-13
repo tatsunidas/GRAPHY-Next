@@ -64,14 +64,55 @@ public class RadiomicsMapEngine {
         return compute(req, TextureProgress.NONE);
     }
 
+    /**
+     * 読み込んだボリュームとマスク、そして幾何。
+     *
+     * <p>マップ生成（{@link #compute}）と GLAM 解析（{@link GlamAnalysisService}）は、
+     * <b>同じ材料</b>から出発する — 同じシリーズを同じ (C,T) で積み、同じ規則でマスクを Z 整列し、
+     * 同じ校正を載せる。違うのはそこから先だけなので、ここまでを 1 か所にまとめる。
+     */
+    public record LoadedVolume(
+            ImagePlus image,
+            ImagePlus mask,
+            int width, int height, int slices,
+            int label,
+            boolean hasMask,
+            Calibration calibration,
+            double[] imageOrientationPatient,
+            double pixelSpacingRow, double pixelSpacingCol,
+            Map<Integer, double[]> ippByZ,
+            String[] sopPerZ,
+            String frameOfReferenceUid) {
+    }
+
     /** ターゲット（＋任意マスク）から 1 特徴のマップを計算する。 */
     public MapResult compute(TextureSeriesRequest req, TextureProgress progress) throws IOException {
-        SeriesLayout layout = storage.seriesLayout(req.studyInstanceUid(), req.sourceSeriesUid());
+        LoadedVolume vol = load(req.studyInstanceUid(), req.sourceSeriesUid(), req.channel(), req.timePoint(),
+                req.maskSeriesUid(), req.maskChannel(), parseLabel(req));
+        ImagePlus img = vol.image();
+        ImagePlus mask = vol.mask();
+        int w = vol.width();
+        int h = vol.height();
+        int nZ = vol.slices();
+        int label = vol.label();
+        boolean hasMask = vol.hasMask();
+        Calibration finalCal = vol.calibration();
+        Map<Integer, double[]> ippByZ = vol.ippByZ();
+        String[] sopPerZ = vol.sopPerZ();
+        return computeFrom(req, progress, vol, img, mask, w, h, nZ, label, hasMask, finalCal, ippByZ, sopPerZ);
+    }
+
+    /**
+     * シリーズを {@code ij.ImagePlus} のボリュームに積み、マスクを Z 整列し、校正を載せる。
+     */
+    public LoadedVolume load(String studyInstanceUid, String sourceSeriesUid, int channel, int timePoint,
+                             String maskSeriesUid, int maskChannel, int label) throws IOException {
+        SeriesLayout layout = storage.seriesLayout(studyInstanceUid, sourceSeriesUid);
         if (layout == null || layout.cells().isEmpty()) {
-            throw new IllegalArgumentException("ターゲットシリーズにフレームがありません: " + req.sourceSeriesUid());
+            throw new IllegalArgumentException("ターゲットシリーズにフレームがありません: " + sourceSeriesUid);
         }
-        int ch = clampDim(req.channel(), layout.nC());
-        int tp = clampDim(req.timePoint(), layout.nT());
+        int ch = clampDim(channel, layout.nC());
+        int tp = clampDim(timePoint, layout.nT());
 
         // 指定 (C,T) に一致するセルを z 昇順で収集し、連続ボリュームとして扱う。
         // （T/C が空間位置と一致しない＝各グローバル z にそのセルが無いシリーズでも成立する。）
@@ -136,10 +177,20 @@ public class RadiomicsMapEngine {
         img.setCalibration(finalCal);
 
         // マスク（任意）。無ければ全面マスク（LABEL で塗り）。ある場合は IOP/IPP で Z 整列。
-        int label = parseLabel(req);
-        boolean hasMask = req.maskSeriesUid() != null && !req.maskSeriesUid().isBlank();
-        ImagePlus mask = buildMask(req, w, h, nZ, label, layout.imageOrientationPatient(), ippByZ);
+        boolean hasMask = maskSeriesUid != null && !maskSeriesUid.isBlank();
+        ImagePlus mask = buildMask(studyInstanceUid, maskSeriesUid, maskChannel, w, h, nZ, label,
+                layout.imageOrientationPatient(), ippByZ);
 
+        return new LoadedVolume(img, mask, w, h, nZ, label, hasMask, finalCal,
+                layout.imageOrientationPatient(), layout.pixelSpacingRow(), layout.pixelSpacingCol(),
+                ippByZ, sopPerZ, layout.frameOfReferenceUID());
+    }
+
+    /** {@link #load} で揃えた材料からマップを計算する（compute の後半）。 */
+    private MapResult computeFrom(TextureSeriesRequest req, TextureProgress progress, LoadedVolume vol,
+                                  ImagePlus img, ImagePlus mask, int w, int h, int nZ, int label,
+                                  boolean hasMask, Calibration finalCal,
+                                  Map<Integer, double[]> ippByZ, String[] sopPerZ) {
         int filterSize = req.filterSize() > 0 ? oddUp(req.filterSize()) : 7;
         int stride = Math.max(1, req.stride());
         boolean d2 = req.force2D();
@@ -182,9 +233,9 @@ public class RadiomicsMapEngine {
         }
         return new MapResult(w, h, nZ, full,
                 built.displayName(),
-                layout.imageOrientationPatient(),
-                layout.pixelSpacingRow(), layout.pixelSpacingCol(),
-                ippList, sopList, layout.frameOfReferenceUID());
+                vol.imageOrientationPatient(),
+                vol.pixelSpacingRow(), vol.pixelSpacingCol(),
+                ippList, sopList, vol.frameOfReferenceUid());
     }
 
     /**
@@ -306,18 +357,19 @@ public class RadiomicsMapEngine {
      * マスク画素は <b>値 ≥ 0.5 を LABEL</b> として二値化する。IOP/IPP 不明・OutOfRange の場合は
      * <b>スライスオーダー（index）</b>にフォールバックする。分岐は必ずログ出力する。マスク未指定は全面。
      */
-    private ImagePlus buildMask(TextureSeriesRequest req, int w, int h, int nZ, int label,
+    private ImagePlus buildMask(String studyInstanceUid, String maskSeriesUid, int maskChannel,
+                               int w, int h, int nZ, int label,
                                double[] targetIop, Map<Integer, double[]> targetIppByZ) throws IOException {
-        if (req.maskSeriesUid() == null || req.maskSeriesUid().isBlank()) {
+        if (maskSeriesUid == null || maskSeriesUid.isBlank()) {
             log.info("[texture] mask: none specified -> full-face mask (label={})", label);
             return fullFaceMask(w, h, nZ, label);
         }
-        SeriesLayout ml = storage.seriesLayout(req.studyInstanceUid(), req.maskSeriesUid());
+        SeriesLayout ml = storage.seriesLayout(studyInstanceUid, maskSeriesUid);
         if (ml == null || ml.cells().isEmpty()) {
-            log.warn("[texture] mask: series '{}' empty -> full-face mask", req.maskSeriesUid());
+            log.warn("[texture] mask: series '{}' empty -> full-face mask", maskSeriesUid);
             return fullFaceMask(w, h, nZ, label);
         }
-        int mCh = clampDim(req.maskChannel(), ml.nC()); // SEG マルチセグメント=マルチ C の選択。
+        int mCh = clampDim(maskChannel, ml.nC()); // SEG マルチセグメント=マルチ C の選択。
 
         // マスクの選択チャンネルのセルを z 昇順で収集（ターゲット同様、連続スタックとして扱う）。
         Map<Integer, double[]> maskIppGlobal = new HashMap<>();
@@ -337,7 +389,7 @@ public class RadiomicsMapEngine {
         }
         int mZ = mSel.size();
         if (ml.nC() > 1) {
-            log.info("[texture] mask channel selected: c={} of nC={} ({} slices, series={})", mCh, ml.nC(), mZ, req.maskSeriesUid());
+            log.info("[texture] mask channel selected: c={} of nC={} ({} slices, series={})", mCh, ml.nC(), mZ, maskSeriesUid);
         }
         double[][] maskIpp = new double[mZ][];
         ByteProcessor[] maskSlices = new ByteProcessor[mZ];
