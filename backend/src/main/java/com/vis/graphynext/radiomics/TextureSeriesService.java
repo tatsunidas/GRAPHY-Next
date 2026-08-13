@@ -249,6 +249,16 @@ public class TextureSeriesService {
         a.setDouble(Tag.RescaleSlope, VR.DS, slope);
         // RescaleType(LO, 64 桁): 校正済み画素値の意味＝特徴名。
         a.setString(Tag.RescaleType, VR.LO, featureName.length() > 64 ? featureName.substring(0, 64) : featureName);
+        /*
+         * 特徴値のとる範囲はモダリティ由来の W/L とは何の関係も無く、特徴ごとに桁も符号も違う。
+         * 何も書かないとビューアは既定の窓で開き、マップは一様な白に潰れて何も読めない
+         * （実機検証で実際にそうなった）。生成時に min/max は分かっているので、全域が見える窓を
+         * 初期値として置いておく。利用者が動かせばそちらが優先されるだけなので、害は無い。
+         */
+        // slope=(max-min)/65535, intercept=min で決めた係数なので、そこから元の範囲に戻せる。
+        double windowWidth = Math.max(1e-6, slope * 65535.0);
+        a.setDouble(Tag.WindowCenter, VR.DS, intercept + windowWidth / 2.0);
+        a.setDouble(Tag.WindowWidth, VR.DS, windowWidth);
 
         // 幾何（source と共有：Trilinear 拡大済みで 1:1）。
         if (hasGeom) {

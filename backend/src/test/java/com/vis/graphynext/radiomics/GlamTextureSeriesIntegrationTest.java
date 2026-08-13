@@ -242,6 +242,21 @@ class GlamTextureSeriesIntegrationTest {
 
         // マップに実際の値が乗っていること（全面ゼロで「成功」しないこと）
         assertTrue(hasNonZeroPixels(files), "the map should carry values inside the roi");
+
+        /*
+         * 値の全域が見える窓が入っていること。特徴値の範囲はモダリティ由来の W/L とは無関係で、
+         * 何も書かないとビューアは既定の窓で開き、マップは一様な白に潰れて何も読めない
+         * （実機検証で実際にそうなった）。
+         */
+        double windowWidth = first.getDouble(Tag.WindowWidth, 0);
+        double windowCenter = first.getDouble(Tag.WindowCenter, Double.NaN);
+        double slope = first.getDouble(Tag.RescaleSlope, 0);
+        double intercept = first.getDouble(Tag.RescaleIntercept, 0);
+        assertTrue(windowWidth > 0, "expected a window width, got " + windowWidth);
+        assertEquals(slope * 65535.0, windowWidth, Math.abs(windowWidth) * 1e-6,
+                "the window should span the whole range the pixels were scaled into");
+        assertEquals(intercept + windowWidth / 2.0, windowCenter,
+                Math.abs(windowCenter) * 1e-6 + 1e-9, "the window should be centred on that range");
     }
 
     @Test
