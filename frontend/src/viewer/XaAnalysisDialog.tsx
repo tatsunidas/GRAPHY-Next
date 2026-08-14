@@ -12,11 +12,57 @@
  * 既存の操作（計測を引く）をそのまま流用でき、道具を増やさない。
  */
 import { useEffect, useMemo, useState } from "react";
+import { getRenderingEngine } from "@cornerstonejs/core";
 import { annotation as csAnnotation } from "@cornerstonejs/tools";
+import {
+  createQcaSr,
+  createXaPresentationState,
+  type AngioPresentationRequest,
+} from "../api";
 import { useI18n } from "../i18n/i18n";
 import { readModalitySlice } from "./pixelCalibration";
 import { runQca, type QcaResult } from "./qca";
+import { ENGINE_ID } from "./Viewer2D";
+import { readVoiWindow } from "./viewportRead";
 import { calibrationForImageId, clearXaCalibrationCache, setXaUserCalibration } from "./xaCalibrationProvider";
+
+/** [x,y] の並びを GSPS 用のフラットな配列にする。 */
+function flatten(points: readonly (readonly [number, number])[]): number[] {
+  const out: number[] = [];
+  for (const p of points) {
+    out.push(p[0], p[1]);
+  }
+  return out;
+}
+
+function shortUid(uid: string): string {
+  return uid.length > 12 ? `…${uid.slice(-12)}` : uid;
+}
+
+/**
+ * 表示中ビューポートの実 VOI を読む。
+ *
+ * <p>メタデータ（voiLutModule）ではなく**実際に表示されている値**を保存する。
+ * ユーザが W/L を触った後にメタデータの値を保存すると、開き直したときに違う見え方になる。
+ * 対象が見つからなければ null（GSPS の VOI モジュールを省く）。
+ */
+function readVoiFor(imageId: string): { windowCenter: number; windowWidth: number } | null {
+  try {
+    const engine = getRenderingEngine(ENGINE_ID);
+    if (!engine) return null;
+    for (const vp of engine.getViewports()) {
+      const current = (vp as { getCurrentImageId?: () => string | undefined }).getCurrentImageId?.();
+      if (current !== imageId) continue;
+      const w = readVoiWindow(vp as never);
+      if (w && Number.isFinite(w.center) && Number.isFinite(w.width)) {
+        return { windowCenter: w.center, windowWidth: w.width };
+      }
+    }
+  } catch {
+    /* 読めなければ VOI は保存しない */
+  }
+  return null;
+}
 
 interface LengthPick {
   uid: string;
@@ -75,10 +121,22 @@ function collectLengthPicks(
   return out;
 }
 
+/** 保存（GSPS / SR）に必要な、表示中フレームの素性。SeriesViewer から渡す。 */
+export interface XaSaveContext {
+  studyUid: string;
+  /** 表示中フレームの元インスタンス（＝ラン）。 */
+  sopInstanceUid: string | null;
+  /** 表示中フレーム（**0 origin**。DICOM へ書くときに +1 する）。 */
+  frameIndex: number;
+  /** DSA 中ならその設定（マスクフレームは 0 origin）。 */
+  dsa?: { maskFrames: number[]; dx: number; dy: number } | null;
+}
+
 export function XaAnalysisDialog({
   imageId,
   seriesUid,
   isSubtracted,
+  saveContext,
   onClose,
   onCalibrated,
 }: {
@@ -87,6 +145,7 @@ export function XaAnalysisDialog({
   seriesUid: string;
   /** DSA 表示中か（血管が明るいか暗いかの判断に使う）。 */
   isSubtracted: boolean;
+  saveContext: XaSaveContext;
   onClose: () => void;
   onCalibrated?: () => void;
 }) {
@@ -101,11 +160,14 @@ export function XaAnalysisDialog({
   const [frSize, setFrSize] = useState("6");
   const [result, setResult] = useState<QcaResult | null>(null);
   const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setResult(null);
     setError(null);
+    setSaved(null);
   }, [imageId]);
 
   const pick = picks[selected] ?? null;
@@ -119,6 +181,99 @@ export function XaAnalysisDialog({
     clearXaCalibrationCache();
     setError(null);
     onCalibrated?.();
+  };
+
+  /**
+   * 表示状態を XA/XRF GSPS として保存する（非破壊）。
+   * QCA を実行済みなら、中心線とエッジ・%DS のラベルも図形として一緒に保存する。
+   */
+  const savePresentationState = () => {
+    const sop = saveContext.sopInstanceUid;
+    if (!sop) {
+      setError(t("xa.analysis.noReference"));
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    const c = calibrationForImageId(imageId);
+    const voi = readVoiFor(imageId);
+    const polylines: NonNullable<AngioPresentationRequest["polylines"]> = [];
+    const texts: NonNullable<AngioPresentationRequest["texts"]> = [];
+    if (result) {
+      polylines.push({ layer: "QCA", points: flatten(result.centerline) });
+      polylines.push({ layer: "QCA", points: flatten(result.edges.map((e) => e.left)) });
+      polylines.push({ layer: "QCA", points: flatten(result.edges.map((e) => e.right)) });
+      const mldPoint = result.centerline[result.mldIndex];
+      if (mldPoint) {
+        texts.push({
+          layer: "QCA",
+          text: `%DS ${result.percentDiameterStenosis.toFixed(1)} / MLD ${result.mld.toFixed(2)}${result.unit}`,
+          anchorX: mldPoint[0],
+          anchorY: mldPoint[1],
+        });
+      }
+    }
+    createXaPresentationState({
+      studyInstanceUid: saveContext.studyUid,
+      seriesInstanceUid: seriesUid,
+      sopInstanceUid: sop,
+      // DICOM のフレーム番号は 1 origin。
+      frameNumbers: [saveContext.frameIndex + 1],
+      label: "QCA",
+      description: result
+        ? `QCA %DS ${result.percentDiameterStenosis.toFixed(1)}`
+        : "GRAPHY-Next presentation state",
+      voi,
+      invert: false,
+      mask: saveContext.dsa
+        ? {
+            maskFrameNumbers: saveContext.dsa.maskFrames.map((i) => i + 1),
+            // DICOM の MaskSubPixelShift は [row, column]。内部の {dx=横, dy=縦} と並びが逆。
+            subPixelShiftRow: saveContext.dsa.dy,
+            subPixelShiftCol: saveContext.dsa.dx,
+          }
+        : null,
+      calibration:
+        c && c.mmPerPxRow != null && c.mmPerPxCol != null
+          ? {
+              mmPerPxRow: c.mmPerPxRow,
+              mmPerPxCol: c.mmPerPxCol,
+              type: c.source === "user-catheter" || c.source === "dicom-fiducial" ? "FIDUCIAL" : "GEOMETRY",
+              description: c.provenance,
+            }
+          : null,
+      polylines,
+      texts,
+    })
+      .then((r) => setSaved(t("xa.analysis.savedGsps", { uid: shortUid(r.sopInstanceUid) })))
+      .catch(() => setError(t("xa.analysis.saveFailed")))
+      .finally(() => setSaving(false));
+  };
+
+  /** QCA の計測値を Comprehensive SR として保存する。 */
+  const saveQca = () => {
+    const sop = saveContext.sopInstanceUid;
+    if (!sop || !result) return;
+    setSaving(true);
+    setError(null);
+    const c = calibrationForImageId(imageId);
+    createQcaSr({
+      studyInstanceUid: saveContext.studyUid,
+      seriesInstanceUid: seriesUid,
+      sopInstanceUid: sop,
+      frameNumber: saveContext.frameIndex + 1,
+      unit: result.unit,
+      calibration: c?.provenance ?? null,
+      vesselLabel: null,
+      mld: result.mld,
+      rvd: result.rvd,
+      percentDiameterStenosis: result.percentDiameterStenosis,
+      percentAreaStenosis: result.percentAreaStenosis,
+      lesionLength: result.lesionLength,
+    })
+      .then((r) => setSaved(t("xa.analysis.savedSr", { uid: shortUid(r.sopInstanceUid) })))
+      .catch(() => setError(t("xa.analysis.saveFailed")))
+      .finally(() => setSaving(false));
   };
 
   const runAnalysis = () => {
@@ -258,6 +413,25 @@ export function XaAnalysisDialog({
             <span style={hint}>{t("xa.analysis.researchOnly")}</span>
           </div>
           {result && <QcaReport result={result} />}
+        </div>
+
+        {/* 保存（非破壊: GSPS ＝表示状態と描画 / SR ＝計測値）。fw/angio-design.md §14 */}
+        <div style={section}>
+          <div style={sectionTitle}>{t("xa.analysis.save")}</div>
+          <div style={row}>
+            <button style={btn} disabled={saving || !saveContext.sopInstanceUid} onClick={savePresentationState}>
+              {t("xa.analysis.saveGsps")}
+            </button>
+            <button
+              style={btn}
+              disabled={saving || !result || !saveContext.sopInstanceUid}
+              onClick={saveQca}
+            >
+              {t("xa.analysis.saveSr")}
+            </button>
+            {saved && <span style={hint}>{saved}</span>}
+          </div>
+          <div style={hint}>{t("xa.analysis.saveHint")}</div>
         </div>
 
         {error && <div style={errorText}>{error}</div>}

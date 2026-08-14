@@ -13,6 +13,7 @@ import { buildSeriesLayout, buildLayoutFromDto, DEFAULT_AXES, type AxisSpec, typ
 import CineControls from "./CineControls";
 import { XaAnalysisDialog } from "./XaAnalysisDialog";
 import { prewarmXaDataset, readXaCineSource, type XaCineSource } from "./xaCine";
+import { downloadBytes, exportFramesAsZip } from "./xaFrameExport";
 import {
   autoAlignDsa,
   dsaImageId,
@@ -52,7 +53,7 @@ import {
   registerThickSlabSession,
   thickSlabImageId,
 } from "./thickSlab";
-import { imageIdForInstance, type ViewerMode } from "./imageId";
+import { imageIdForInstance, sopUidFromImageId, type ViewerMode } from "./imageId";
 import { advanceAnchor, sliceStepsFromDrag } from "./touchScroll";
 import { installDebugApi, countStackSwap } from "./debugApi";
 import { matchesCombo } from "../shortcuts/registry";
@@ -333,6 +334,9 @@ export function SeriesViewer({
   const [dsaBusy, setDsaBusy] = useState(false);
   // 校正 / QCA ダイアログ（fw/angio-design.md §7.3 / §8）。
   const [xaDialogOpen, setXaDialogOpen] = useState(false);
+  // 連番 PNG エクスポート（fw/angio-design.md §14.3）。
+  const [exportBusy, setExportBusy] = useState(false);
+  const [exportDone, setExportDone] = useState(0);
 
   const dsaImageIds = useMemo(() => {
     if (!dsaToken) return null;
@@ -422,6 +426,27 @@ export function SeriesViewer({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dsaOn, isFrameStack, zStackKey]);
+
+  /**
+   * 表示中のフレーム列を PNG にして ZIP で保存する（fw/angio-design.md §14.3）。
+   * DSA 表示中は差分画像がそのまま出る（displayImageIds を読むため）。
+   */
+  const exportFrames = () => {
+    if (!window.confirm(t("xa.export.burnedInWarning"))) return;
+    setExportBusy(true);
+    setExportDone(0);
+    const ids = [...displayImageIds];
+    exportFramesAsZip(ids, null, `${seriesLabel || "xa"}-frame`, (done) => setExportDone(done))
+      .then((zip) => {
+        if (!zip) {
+          emitToast(t("xa.export.failed"));
+          return;
+        }
+        downloadBytes(zip, `${seriesLabel || "xa"}-frames.zip`, "application/zip");
+      })
+      .catch(() => emitToast(t("xa.export.failed")))
+      .finally(() => setExportBusy(false));
+  };
 
   /** DSA のパラメータを変えた後に呼ぶ（再合成 → 状態と残差の更新）。 */
   const refreshDsa = (token: string, frame: number) => {
@@ -843,6 +868,17 @@ export function SeriesViewer({
                   >
                     {t("xa.analysis.open")}
                   </button>
+                  <button
+                    style={btn}
+                    data-testid="xa-export-frames"
+                    disabled={exportBusy || nZ < 1}
+                    title={t("xa.export.frames.title")}
+                    onClick={exportFrames}
+                  >
+                    {exportBusy
+                      ? t("xa.export.progress", { done: exportDone, total: nZ })
+                      : t("xa.export.frames")}
+                  </button>
                   {dsaState && (
                     <>
                       <span style={hint}>
@@ -981,6 +1017,13 @@ export function SeriesViewer({
           imageId={displayImageIds[zc]}
           seriesUid={seriesUid}
           isSubtracted={!!dsaToken}
+          saveContext={{
+            studyUid,
+            // 保存の参照先は**合成 imageId ではなくネイティブフレーム**の元インスタンス。
+            sopInstanceUid: sopUidFromImageId(zStack[zc] ?? ""),
+            frameIndex: zc,
+            dsa: dsaState ? { maskFrames: dsaState.maskFrames, dx: dsaState.dx, dy: dsaState.dy } : null,
+          }}
           onClose={() => setXaDialogOpen(false)}
           // 校正が変わったら表示（スケールバー・計測ラベル）を作り直す。
           onCalibrated={() => setDsaVersion((v) => v + 1)}

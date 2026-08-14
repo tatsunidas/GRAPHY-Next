@@ -94,6 +94,15 @@ export function imageIdForXaFrame(
 }
 
 /**
+ * imageId から SOPInstanceUID を取り出す（`/instances/{sop}/file` 形式の URL 前提）。
+ * 取れなければ null。GSPS/SR の参照を組むときに使う。
+ */
+export function sopUidFromImageId(imageId: string): string | null {
+  const m = /\/instances\/([^/?&]+)\//.exec(imageId);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+/**
  * XA フレーム imageId から、元インスタンスの取得 URL（＝loader の dataSet キャッシュキー）を取り出す。
  * プリウォーム（{@code viewer/xaCine.ts}）で使う。`wadouri:` スキームは剥がす。
  */

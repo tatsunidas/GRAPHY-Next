@@ -245,6 +245,64 @@ export const fetchSeriesLayout = (studyUid: string, seriesUid: string) =>
     `/api/studies/${encodeURIComponent(studyUid)}/series/${encodeURIComponent(seriesUid)}/layout`,
   );
 
+// ── アンギオの解析結果の保存（GSPS / QCA SR）。`fw/angio-design.md` §14 / A10 ──────
+
+/** XA/XRF GSPS 作成要求。座標は画像ピクセル座標（0 origin）、フレーム番号は 1 origin。 */
+export interface AngioPresentationRequest {
+  studyInstanceUid: string;
+  seriesInstanceUid: string;
+  sopInstanceUid: string;
+  frameNumbers?: number[] | null;
+  label?: string | null;
+  description?: string | null;
+  creator?: string | null;
+  voi?: { windowCenter: number; windowWidth: number } | null;
+  invert?: boolean | null;
+  rotation?: number | null;
+  flipHorizontal?: boolean | null;
+  mask?: {
+    maskFrameNumbers: number[];
+    subPixelShiftRow?: number | null;
+    subPixelShiftCol?: number | null;
+    operation?: string | null;
+  } | null;
+  calibration?: {
+    mmPerPxRow?: number | null;
+    mmPerPxCol?: number | null;
+    type?: string | null;
+    description?: string | null;
+  } | null;
+  polylines?: { layer: string; points: number[]; filled?: boolean; rgb?: number[] | null }[];
+  texts?: { layer: string; text: string; anchorX: number; anchorY: number }[];
+}
+
+export interface QcaSrRequest {
+  studyInstanceUid: string;
+  seriesInstanceUid: string;
+  sopInstanceUid: string;
+  frameNumber?: number | null;
+  unit: string;
+  calibration?: string | null;
+  vesselLabel?: string | null;
+  mld: number;
+  rvd: number;
+  percentDiameterStenosis: number;
+  percentAreaStenosis: number;
+  lesionLength: number;
+}
+
+export interface AngioCreated {
+  seriesInstanceUid: string;
+  sopInstanceUid: string;
+}
+
+/** 表示状態（DSA 設定・VOI・計測描画・空間校正）を XA/XRF GSPS として保存する。 */
+export const createXaPresentationState = (req: AngioPresentationRequest) =>
+  httpSend<AngioCreated>("/api/angio/presentation-state", "POST", req);
+
+/** QCA 計測値を Comprehensive SR として保存する。 */
+export const createQcaSr = (req: QcaSrRequest) => httpSend<AngioCreated>("/api/angio/qca-sr", "POST", req);
+
 // ── 被ばく線量レポート（RDSR）。`fw/angio-design.md` §14.2 / A9 ────────────────
 
 /** SR の 1 項目（NUM / TEXT / CODE / UIDREF / DATETIME）。 */

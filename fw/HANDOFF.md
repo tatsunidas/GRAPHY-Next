@@ -2,7 +2,7 @@
 
 > 更新日: 2026-07-31（最終更新: **モバイル UI を実機検証（M9）し、見つかった不具合を修正・デプロイ**。下記エントリ参照）
 
-> 🟢 **2026-08-14 アンギオ A1〜A4・A9 を実装**（ブランチ `feat/angio-a1`。正本: [`fw/angio-design.md`](angio-design.md) §17.1）
+> 🟢 **2026-08-14 アンギオ A1〜A4・A9・A10 を実装**（ブランチ `feat/angio-a1`。正本: [`fw/angio-design.md`](angio-design.md) §17.1）
 > A1 シネ表示 / A2 DSA / A3 空間校正 / A4 QCA。**実機検証はすべて未実施**（手順は同ドキュメント §5.8・§18）。
 > - 🚨 **`prewarmXaDataset()` を外すと最初の 1 枚だけ 1 フレームずれる**。dicom-image-loader は
 >   dataSet 未キャッシュの初回だけ 1 origin のフレーム番号を `getPixelData`（0 origin）へ渡すため。
@@ -12,9 +12,14 @@
 > - 🚨 **DSA は `voiLutModule` を差分の分布から作って返す**。元画像の VOI を継承すると真っ黒になる。
 > - **A9（RDSR）**も入れた。コード値の表をハードコードせず**ファイル自身の CodeMeaning で突き合わせる**
 >   （表を間違えると「何も見つからないが例外も出ない」パーサになるため）。
-> - 次は **A10（GSPS / QCA SR / エクスポート）**。A2・A4 の結果が**まだどこにも保存できない**。
->   QCA を「使える」と言うには**中心線・エッジの手修正**も要る。
-> 検証: backend 383 tests / frontend typecheck・vitest 549・build すべて green。
+> - **A10（保存）**も入れた。GSPS は **11.5（XA/XRF）**＝ Mask（マスク・ピクセルシフト）を持てるのが
+>   これだけだから。空間校正は **Presentation Pixel Spacing (0070,0101)** に入れて永続化した。
+>   ⚠️ **GSPS の PIXEL 単位は左上画素の中心が (0.5,0.5)** なので +0.5 して書いている（半画素・要実機確認）。
+>   ⚠️ **MaskSubPixelShift は [row, column]** で内部の {dx,dy} と逆順。
+>   QCA SR のコードは **private scheme**（標準コード未確認。当てずっぽうの標準コードは別の意味に解釈される）。
+> - 次は **QCA の中心線・エッジの手修正**（臨床 QCA は自動＋手修正が前提）。次いで GSPS の読み込み。
+>   **MP4 書き出しは未実装**（XA のフレーム列をサーバ側エンコードへ渡す口が無い）。
+> 検証: backend 402 tests / frontend typecheck・vitest 560・build すべて green。
 
 > 📐 **2026-08-14 アンギオ（XA）領域の設計を起票**（正本: [`fw/angio-design.md`](angio-design.md)）
 > シネ再生 / DSA / QCA / 2D→3D 再構成 / Angio-FFR IF / IVUS・OCT 同期 / RDSR を A1〜A12 のフェーズに分解した。
