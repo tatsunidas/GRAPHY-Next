@@ -183,7 +183,8 @@ public final class SegFrameExpander {
                 iop, pxRow, pxCol, cols, rows, zSpatials, first.getString(Tag.FrameOfReferenceUID),
                 // SEG は展開後 8bit マスク（extractFrame が BINARY を 0/255 へ展開する）。
                 // ヘッダの BitsAllocated=1 をそのまま返すと予測が過小になるため 8bit として返す。
-                new SeriesLayout.PixelFormat(8, 0, 1, 1.0, 0.0));
+                new SeriesLayout.PixelFormat(8, 0, 1, 1.0, 0.0),
+                null);
     }
 
     /**

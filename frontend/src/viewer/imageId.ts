@@ -63,6 +63,47 @@ export function imageIdForFrame(
   )}/instances/${encodeURIComponent(sopUid)}/frames/${frame}/file`;
 }
 
+/**
+ * XA/XRF シネの 1 フレームの imageId（**ローダ内フレーム指定**）。
+ *
+ * <p>{@link imageIdForFrame}（backend がフレームを単一フレーム DICOM に切り出す `/frames/{n}/file`）とは
+ * **別物**。XA では後者を使ってはいけない — 1 ラン数十〜数百フレームに対して**フレーム数ぶん HTTP が飛び**、
+ * サーバ側で毎回 Part-10 を再構成することになり 30fps に届かない。
+ * こちらは **Part-10 を 1 回だけ取得**し、dicom-image-loader がファイル内のフレームを切り出す
+ * （dataSet は URL 単位でキャッシュされ、フレーム間で共有される）。
+ *
+ * <p>🚨 **フレーム番号は 1 origin**（DICOM のフレーム番号と同じ）。ここが唯一の +1 地点。
+ * 呼び出し側は 0 origin の t をそのまま渡すこと。
+ *
+ * <p>🚨 **`&frame=` 区切りにすること**。loader の `parseImageId` は `frame=` の**直前 1 文字を
+ * 無条件に落として** URL を得る（`url.substring(0, frameIndex - 1)`）ので、区切り文字は 1 文字必要。
+ * `&` はライブラリ自身の慣行（`generateMultiframeWADOURIs`）に合わせてある。URL 自体は
+ * クエリを持たないので、剥がされた後は `.../file` になる。
+ *
+ * @param frame 0 origin のフレーム番号（内部で +1 する）
+ */
+export function imageIdForXaFrame(
+  mode: ViewerMode,
+  sopUid: string,
+  frame: number,
+  studyUid?: string,
+  seriesUid?: string,
+): string {
+  const base = imageIdForInstance(mode, sopUid, studyUid, seriesUid);
+  return `${base}&frame=${Math.max(0, Math.floor(frame)) + 1}`;
+}
+
+/**
+ * XA フレーム imageId から、元インスタンスの取得 URL（＝loader の dataSet キャッシュキー）を取り出す。
+ * プリウォーム（{@code viewer/xaCine.ts}）で使う。`wadouri:` スキームは剥がす。
+ */
+export function xaSourceUrlOf(imageId: string): string {
+  const colon = imageId.indexOf(":");
+  const withoutScheme = colon >= 0 ? imageId.slice(colon + 1) : imageId;
+  const at = withoutScheme.indexOf("frame=");
+  return at > 0 ? withoutScheme.slice(0, at - 1) : withoutScheme;
+}
+
 /** セル（モザイクなら frame>=0）から imageId を組み立てる。web は study/series が必須。 */
 export function imageIdForCell(
   mode: ViewerMode,

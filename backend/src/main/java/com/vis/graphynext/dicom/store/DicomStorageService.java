@@ -257,6 +257,11 @@ public class DicomStorageService {
         if (seg != null) {
             return seg;
         }
+        // XA/XRF の古典マルチフレーム（シネ）は ラン=Z・フレーム=T に展開する（fw/angio-design.md §5.2）。
+        com.vis.graphynext.dicom.SeriesLayout xa = xaLayoutIfApplicable(insts);
+        if (xa != null) {
+            return xa;
+        }
         java.util.List<SeriesLayoutBuilder.FrameMeta> frames = new java.util.ArrayList<>();
         // Fusion 空間メタ収集
         double[] seriesIop = null;
@@ -358,7 +363,26 @@ public class DicomStorageService {
                 basic.nZ(), basic.nC(), basic.nT(),
                 basic.cDimension(), basic.tDimension(), basic.cells(),
                 seriesIop, seriesPxRow, seriesPxCol, seriesWidth, seriesHeight,
-                zSpatials, seriesFor, seriesPixelFormat);
+                zSpatials, seriesFor, seriesPixelFormat, null);
+    }
+
+    /**
+     * XA/XRF の古典マルチフレーム（シネ）レイアウト。対象が無ければ null（従来経路へ）。
+     * ロジックは web モードと共有（{@link com.vis.graphynext.dicom.XaFrameExpander}）。
+     */
+    private com.vis.graphynext.dicom.SeriesLayout xaLayoutIfApplicable(java.util.List<DicomInstance> insts) {
+        java.util.List<Attributes> headers = new java.util.ArrayList<>();
+        for (DicomInstance inst : insts) {
+            Attributes ds = readHeaderQuietly(inst);
+            if (ds != null) {
+                headers.add(ds);
+            }
+        }
+        com.vis.graphynext.dicom.SeriesLayout xa = com.vis.graphynext.dicom.XaFrameExpander.layout(headers);
+        if (xa != null) {
+            log.debug("XA cine series: runs={} frames={}", xa.nZ(), xa.nT());
+        }
+        return xa;
     }
 
     /** Siemens 私的タグ NumberOfImagesInMosaic (0019,100a)。 */
@@ -524,7 +548,7 @@ public class DicomStorageService {
         return new com.vis.graphynext.dicom.SeriesLayout(
                 nZ, nC, nT, null, tDim, cells,
                 iop, pxRow, pxCol, tileW, tileH, zSpatials, head.getString(Tag.FrameOfReferenceUID),
-                com.vis.graphynext.dicom.SeriesLayoutAssembler.readPixelFormat(head));
+                com.vis.graphynext.dicom.SeriesLayoutAssembler.readPixelFormat(head), null);
     }
 
     /**

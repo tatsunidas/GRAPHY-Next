@@ -152,12 +152,53 @@ function getViewportProperties(): ViewportProperties[] {
   return out;
 }
 
+/**
+ * XA シネ再生の実測値（automator の受け入れ条件 §5.8-2 / §5.8-7 用）。
+ *
+ * <p>`setStackCalls` は「フレーム送りのたびにスタックを組み直していないか」を数値で示すためのもの。
+ * XA でここが増え続けるなら stackAxis の配線が壊れている（30fps に届かない）。
+ */
+export interface XaCineStats {
+  /** 直近 1 秒で進んだフレーム数（実測 fps）。 */
+  measuredFps: number;
+  /** 公称 fps（DICOM タグ由来）と、その決定根拠。 */
+  nominalFps: number;
+  fpsSource: string;
+  /** 再生中に描画したフレーム数の累計。 */
+  framesRendered: number;
+  /** Viewer2D に渡した imageIds が差し替わった回数（= setStack 相当）。 */
+  setStackCalls: number;
+}
+
+const xaCineStats: XaCineStats = {
+  measuredFps: 0,
+  nominalFps: 0,
+  fpsSource: "",
+  framesRendered: 0,
+  setStackCalls: 0,
+};
+
+/** シネ側から実測値を書き込む（DEV のみ意味を持つ。本番ビルドでも無害）。 */
+export function reportXaCineStats(patch: Partial<XaCineStats>): void {
+  Object.assign(xaCineStats, patch);
+}
+
+/** スタック差し替えを数える（XA でフレーム送りのたびに増えていたら配線ミス）。 */
+export function countStackSwap(): void {
+  xaCineStats.setStackCalls += 1;
+}
+
+function getXaCineStats(): XaCineStats {
+  return { ...xaCineStats };
+}
+
 declare global {
   interface Window {
     __graphyDebug?: {
       getPixelStats: typeof getPixelStats;
       getViewportGeometry: typeof getViewportGeometry;
       getViewportProperties: typeof getViewportProperties;
+      getXaCineStats: typeof getXaCineStats;
     };
   }
 }
@@ -167,6 +208,11 @@ let installed = false;
 /** 冪等: 何度呼んでも安全（SeriesViewer マウントの都度呼ばれる想定）。 */
 export function installDebugApi(): void {
   if (installed || !import.meta.env.DEV) return;
-  window.__graphyDebug = { getPixelStats, getViewportGeometry, getViewportProperties };
+  window.__graphyDebug = {
+    getPixelStats,
+    getViewportGeometry,
+    getViewportProperties,
+    getXaCineStats,
+  };
   installed = true;
 }

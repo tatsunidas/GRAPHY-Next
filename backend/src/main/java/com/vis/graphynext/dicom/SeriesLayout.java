@@ -31,6 +31,9 @@ import java.util.List;
  *                               volume 再構成（isValidVolume）の FoR 一致判定用。null なら未取得。
  * @param pixelFormat            ボクセルあたりのバイト数を決めるピクセル形式。ボリューム構築前の
  *                               メモリ量予測（fw/volume-memory-guard.md V2）用。null なら未取得。
+ * @param axes                   軸の提示（UI ラベル・種別）とスタック軸。null なら既定
+ *                               （Z=slice / C / T、stackAxis="z"）＝ CT/MR の従来動作。
+ *                               fw/angio-design.md §5.7。
  */
 public record SeriesLayout(
         int nZ, int nC, int nT,
@@ -43,7 +46,8 @@ public record SeriesLayout(
         int imageHeight,
         List<ZSpatial> zSpatial,
         String frameOfReferenceUID,
-        PixelFormat pixelFormat) {
+        PixelFormat pixelFormat,
+        Axes axes) {
 
     /**
      * 各 (c,z,t) に対応するフレーム。
@@ -88,8 +92,35 @@ public record SeriesLayout(
             double rescaleIntercept) {
     }
 
+    /**
+     * 1 つの軸の提示。
+     *
+     * @param label UI に出すラベル（"Z" / "Run" / "Frame" 等）
+     * @param kind  軸の種別（"slice" / "run" / "frame" / "echo" / "bvalue" / "temporal" / "generic"）。
+     *              UI はこれを見て ThickSlab・Sync・参照線など「空間スライス軸を前提とする機能」の
+     *              有効/無効を決める。
+     */
+    public record Axis(String label, String kind) {
+    }
+
+    /**
+     * 軸の提示モデル（fw/angio-design.md §5.7）。
+     *
+     * <p>UI 側に「XA なら…」という分岐を撒かないための仕組み。レイアウトが軸の意味を供給し、
+     * UI は「要素数 &gt; 1 の軸だけスライダーを描く」という汎用規則で描画する。
+     *
+     * @param z         Z 軸の提示。null なら既定（"Z" / slice）
+     * @param c         C 軸の提示。null なら既定（"C"）
+     * @param t         T 軸の提示。null なら既定（"T"）
+     * @param stackAxis 画像スタック（= Cornerstone StackViewport の imageIds ＝ホイール送り／
+     *                  Grid 表示／プリフェッチの単位）をどの軸に割り当てるか。{@code "z"}（既定）か {@code "t"}。
+     *                  XA シネは {@code "t"}（フレーム送りのたびに setStack が走るのを避ける）。
+     */
+    public record Axes(Axis z, Axis c, Axis t, String stackAxis) {
+    }
+
     /** 空間メタなしのレイアウト（{@link SeriesLayoutBuilder} の返り値用）。 */
     static SeriesLayout noSpatial(int nZ, int nC, int nT, String cDim, String tDim, List<Cell> cells) {
-        return new SeriesLayout(nZ, nC, nT, cDim, tDim, cells, null, 0, 0, 0, 0, null, null, null);
+        return new SeriesLayout(nZ, nC, nT, cDim, tDim, cells, null, 0, 0, 0, 0, null, null, null, null);
     }
 }

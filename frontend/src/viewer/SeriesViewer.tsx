@@ -9,7 +9,9 @@ import { Viewer2D, ENGINE_ID, type ViewerOverlays, type RenderOverlay } from "./
 import { applyTransform, readTransform, FIT_TRANSFORM } from "./transform";
 import { ToolIcon } from "../icons/ToolIcon";
 import { UI_ICON_FILES } from "../icons/toolIcons";
-import { buildSeriesLayout, buildLayoutFromDto, type SeriesLayout } from "./seriesLayout";
+import { buildSeriesLayout, buildLayoutFromDto, DEFAULT_AXES, type AxisSpec, type SeriesLayout } from "./seriesLayout";
+import CineControls from "./CineControls";
+import { prewarmXaDataset, readXaCineSource, type XaCineSource } from "./xaCine";
 import {
   buildSortMeta,
   computeZOrder,
@@ -37,7 +39,7 @@ import {
 } from "./thickSlab";
 import { imageIdForInstance, type ViewerMode } from "./imageId";
 import { advanceAnchor, sliceStepsFromDrag } from "./touchScroll";
-import { installDebugApi } from "./debugApi";
+import { installDebugApi, countStackSwap } from "./debugApi";
 import { matchesCombo } from "../shortcuts/registry";
 import { fetchSeriesLayout, type Instance } from "../api";
 import { fetchSettings } from "../settings/settingsApi";
@@ -212,14 +214,30 @@ export function SeriesViewer({
   }, []);
   const [gridCols, setGridCols] = useState(0); // 0=Slider(SingleGridView), >0=Grid(FilmGrid) 列数
 
+  // ── 軸の提示とスタック軸（fw/angio-design.md §5.7）───────────────────────────
+  // 「スタック」= Viewer2D に渡す imageIds ＝ホイール送り/Grid/プリフェッチの単位。
+  // 既定は Z（CT/MR）。XA シネは T（フレーム）で、その場合 z 状態＝フレーム位置・
+  // tIdx 状態＝ラン選択、という**役割の入れ替え**だけで既存の送り機構がそのまま効く。
+  const axes: { z: AxisSpec; c: AxisSpec; t: AxisSpec } = layout.axes ?? DEFAULT_AXES;
+  const isFrameStack = layout.stackAxis === "t" && typeof layout.tStack === "function";
+  /** スタック軸の提示（スライダーのラベル・種別）。 */
+  const stackAxisSpec = isFrameStack ? axes.t : axes.z;
+  /** スタック以外のもう 1 本（frame-stack ならラン、通常なら T=時相）。 */
+  const otherAxisSpec = isFrameStack ? axes.z : axes.t;
+  const otherCount = isFrameStack ? layout.nZ : layout.nT;
+  /** もう一方の軸の現在位置（frame-stack ではラン番号、通常は T）。状態は tIdx を共用する。 */
+  const otherIdx = Math.min(Math.max(0, tIdx), Math.max(0, otherCount - 1));
+
   const cc = Math.min(Math.max(0, c), layout.nC - 1);
-  const tc = Math.min(Math.max(0, tIdx), layout.nT - 1);
-  const zStack = layout.zStack(cc, tc);
+  const tc = isFrameStack ? 0 : otherIdx;
+  const zStack = isFrameStack ? (layout.tStack?.(otherIdx, cc) ?? []) : layout.zStack(cc, tc);
   const nZ = zStack.length;
-  // zStack は layout.zStack が毎レンダ新配列を返すため、依存キーは (layout, cc, tc) で安定化する。
-  const zStackKey = useMemo(() => zStack.join("|"), [layout, cc, tc]);
+  // zStack は layout.zStack が毎レンダ新配列を返すため、依存キーは (layout, cc, tc/otherIdx) で安定化する。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const zStackKey = useMemo(() => zStack.join("|"), [layout, cc, tc, otherIdx, isFrameStack]);
 
   // マルチチャンネル / 動画(ビデオ UID) / スライス1枚 では GridView を無効化。
+  // XA シネはスタック＝フレームなので Grid は「フレーム一覧」として意味が通る（無効化しない）。
   const hasVideo = useMemo(
     () => instances.some((i) => i.sopClassUid && VIDEO_SOP_CLASSES.has(i.sopClassUid)),
     [instances],
@@ -232,12 +250,14 @@ export function SeriesViewer({
   const [thickSlabOn, setThickSlabOn] = useState(false);
   const [thickSlabMm, setThickSlabMm] = useState<number>(2.0);
   const [spacingZ, setSpacingZ] = useState<number | null>(null);
-  const thickAvailable = isThickSlabAvailable({ hasVideo, nZ }) && !gridOn;
+  // スタックが空間スライスでない（XA のフレーム軸など）なら ThickSlab の概念が無い → 行ごと隠す。
+  const spatialStack = stackAxisSpec.kind === "slice";
+  const thickAvailable = spatialStack && isThickSlabAvailable({ hasVideo, nZ }) && !gridOn;
 
   // 実スライス間隔(mm)を先頭2枚の IOP/IPP から算出（デジタル枚数換算・厚み範囲に使う）。
-  const spacingDep = `${nZ}|${zStack[0] ?? ""}|${zStack[1] ?? ""}`;
+  const spacingDep = `${spatialStack ? 1 : 0}|${nZ}|${zStack[0] ?? ""}|${zStack[1] ?? ""}`;
   useEffect(() => {
-    if (nZ < 2) {
+    if (!spatialStack || nZ < 2) {
       setSpacingZ(null);
       return;
     }
@@ -287,6 +307,41 @@ export function SeriesViewer({
   }, [thickToken, digitalCount]);
   // Viewer2D に渡す実表示スタック（ThickSlab ON なら合成 imageId、OFF なら native）。
   const displayImageIds = thickImageIds ?? zStack;
+
+  // ── XA シネ: dataSet を先に温めてから表示する（fw/angio-design.md §5.5）──────────────
+  // 🚨 プリウォームは必須。dicom-image-loader は「dataSet 未キャッシュの初回だけ 1 origin の
+  //    フレーム番号を渡す」ため、温めずに描くと最初の 1 枚だけ 1 フレームずれた画像が
+  //    Cornerstone の画像キャッシュに載ってしまう（詳細は prewarmXaDataset の JSDoc）。
+  const [xaCineSource, setXaCineSource] = useState<XaCineSource | null>(null);
+  const isFrameStackRef = useRef(isFrameStack);
+  isFrameStackRef.current = isFrameStack;
+  useEffect(() => {
+    if (!isFrameStack) {
+      setXaCineSource(null);
+      return;
+    }
+    const first = zStack[0];
+    if (!first) return;
+    let cancelled = false;
+    prewarmXaDataset(first)
+      .then(() => {
+        if (!cancelled) setXaCineSource(readXaCineSource(first));
+      })
+      .catch(() => {
+        // 取得できなくても既定 fps で再生はできる（描画は通常の imageLoader が再試行する）。
+        if (!cancelled) setXaCineSource(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFrameStack, zStackKey]);
+
+  // スタックの差し替え回数を数える（XA でフレーム送りのたびに増えるなら stackAxis の配線ミス）。
+  const stackKeyForCount = displayImageIds[0] ?? "";
+  useEffect(() => {
+    if (stackKeyForCount) countStackSwap();
+  }, [stackKeyForCount, displayImageIds.length]);
 
   // ThickSlab の ON/OFF・厚み変更で送りの母数（ドメイン）が変わる。同じ物理スライスを保つよう
   // 直前ドメインの位置 → ネイティブ連続 Z → 新ドメインへ変換する（モード切替時のみ）。
@@ -418,10 +473,11 @@ export function SeriesViewer({
     return () => window.clearInterval(id);
   }, [playC, cineInterval, layout.nC]);
   useEffect(() => {
-    if (!playT || layout.nT <= 1) return;
-    const id = window.setInterval(() => setTIdx((p) => (p + 1) % layout.nT), cineInterval);
+    // tIdx は「スタック以外のもう 1 本」の状態（frame-stack ではラン軸）。母数は otherCount。
+    if (!playT || otherCount <= 1) return;
+    const id = window.setInterval(() => setTIdx((p) => (p + 1) % otherCount), cineInterval);
     return () => window.clearInterval(id);
-  }, [playT, cineInterval, layout.nT]);
+  }, [playT, cineInterval, otherCount]);
 
   // キー操作（↑/→ で次、↓/← で前スライス）とホイール送り。Grid 中は無効（グリッドをスクロール）。
   const rootRef = useRef<HTMLDivElement>(null);
@@ -513,7 +569,9 @@ export function SeriesViewer({
   const effectiveThickRef = useRef(effectiveThick); effectiveThickRef.current = effectiveThick;
   const slicesPerStepRef = useRef(slicesPerStep); slicesPerStepRef.current = slicesPerStep;
 
-  const syncOn = syncEnabled && !gridOn;
+  // スタックが空間スライスでない（XA のフレーム軸など）シリーズは同期に参加しない。
+  // 投影像には患者座標の断面が無く、他シリーズと突き合わせる意味がないため。
+  const syncOn = syncEnabled && !gridOn && spatialStack;
   useEffect(() => {
     if (!syncOn) return;
     const unregister = registerSliceSync({
@@ -552,9 +610,12 @@ export function SeriesViewer({
 
   // 現在表示中の Z/C/T を上位へ通知（Fusion の初期 C/T 引き継ぎ・Histogram の初期 Z/C/T 用）。
   // ThickSlab ON でも下流はネイティブ Z を前提とするため、native 位置で通知する。
+  // frame-stack（XA）では役割が入れ替わるので、レイアウト座標系（z=ラン, t=フレーム）へ戻して通知する。
+  const dimZ = isFrameStack ? otherIdx : nativeZ;
+  const dimT = isFrameStack ? zc : tc;
   useEffect(() => {
-    onDimChange?.(cc, tc, nativeZ);
-  }, [cc, tc, nativeZ, onDimChange]);
+    onDimChange?.(cc, dimT, dimZ);
+  }, [cc, dimT, dimZ, onDimChange]);
 
   const toggle = (k: keyof OverlayState) => setOverlays((o) => ({ ...o, [k]: !o[k] }));
 
@@ -627,20 +688,29 @@ export function SeriesViewer({
           </div>
         )}
 
-        {/* スライダー/シネは Slider モードのみ表示（Grid 中は非表示）。各次元に独立した再生ボタン。 */}
+        {/* スライダー/シネは Slider モードのみ表示（Grid 中は非表示）。
+            **要素数 > 1 の軸だけ描く**（fw/angio-design.md §5.7.4）。これにより単一スライスの
+            モダリティ（XA/CR/DX/MG/US 静止画）で「死んだ Z スライダー」が出なくなる。 */}
         {!gridOn && (
           <>
-            <DimSlider
-              label="Z"
-              idx={zc}
-              count={activeCount}
-              onChange={setZ}
-              trailing={cinePlayBtn(playZ, () => setPlayZ((p) => !p), activeCount <= 1, "cine-play-z")}
-              testId="dim-slider-z"
-            />
+            {/* スタック軸。実時間再生に意味がある軸（frame）はシネコントロールに差し替える。 */}
+            {activeCount > 1 &&
+              (stackAxisSpec.kind === "frame" ? (
+                <CineControls count={activeCount} index={zc} onIndex={setZ} source={xaCineSource} />
+              ) : (
+                <DimSlider
+                  label={axisLabel(t, stackAxisSpec)}
+                  dim={stackAxisSpec.dim}
+                  idx={zc}
+                  count={activeCount}
+                  onChange={setZ}
+                  trailing={cinePlayBtn(playZ, () => setPlayZ((p) => !p), activeCount <= 1, "cine-play-z")}
+                  testId="dim-slider-z"
+                />
+              ))}
             {layout.nC > 1 && (
               <DimSlider
-                label="C"
+                label={axisLabel(t, axes.c)}
                 dim={layout.cDimension}
                 idx={cc}
                 count={layout.nC}
@@ -648,17 +718,19 @@ export function SeriesViewer({
                 trailing={cinePlayBtn(playC, () => setPlayC((p) => !p), layout.nC <= 1)}
               />
             )}
-            {layout.nT > 1 && (
+            {otherCount > 1 && (
               <DimSlider
-                label="T"
-                dim={layout.tDimension}
-                idx={tc}
-                count={layout.nT}
+                label={axisLabel(t, otherAxisSpec)}
+                dim={otherAxisSpec.dim}
+                idx={otherIdx}
+                count={otherCount}
                 onChange={setTIdx}
-                trailing={cinePlayBtn(playT, () => setPlayT((p) => !p), layout.nT <= 1)}
+                trailing={cinePlayBtn(playT, () => setPlayT((p) => !p), otherCount <= 1)}
+                testId="dim-slider-other"
               />
             )}
-            {/* ThickSlab（デジタルスライス厚）: On/Off ＋ 厚み選択。SliderView のみ。 */}
+            {/* ThickSlab（デジタルスライス厚）: On/Off ＋ 厚み選択。SliderView かつ空間スライス軸のみ。 */}
+            {spatialStack && (
             <div style={row}>
               <Check
                 label={t("series.thickSlab")}
@@ -684,6 +756,7 @@ export function SeriesViewer({
               )}
               {!thickAvailable && <span style={hint}>{t("series.thickSlab.unavailable")}</span>}
             </div>
+            )}
           </>
         )}
 
@@ -711,6 +784,16 @@ export function SeriesViewer({
       )}
     </div>
   );
+}
+
+/**
+ * 軸ラベルの表示名。backend が供給する label（"Z"/"Run"/"Frame"）に訳があればそれを使い、
+ * 無ければ label をそのまま出す（未知の軸でも壊れない）。
+ */
+function axisLabel(t: (key: string) => string, axis: AxisSpec): string {
+  const key = `series.axis.${axis.label}`;
+  const translated = t(key);
+  return translated === key ? axis.label : translated;
 }
 
 function DimSlider({

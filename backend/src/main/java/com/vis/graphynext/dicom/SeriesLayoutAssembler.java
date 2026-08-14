@@ -46,6 +46,11 @@ public final class SeriesLayoutAssembler {
         if (seg != null) {
             return seg;
         }
+        // XA/XRF の古典マルチフレーム（シネ）は ラン=Z・フレーム=T に展開する（standalone と同一ロジック）。
+        SeriesLayout xa = XaFrameExpander.layout(instances);
+        if (xa != null) {
+            return xa;
+        }
 
         List<SeriesLayoutBuilder.FrameMeta> frames = new ArrayList<>();
         double[] seriesIop = null;
@@ -154,7 +159,7 @@ public final class SeriesLayoutAssembler {
                 basic.nZ(), basic.nC(), basic.nT(),
                 basic.cDimension(), basic.tDimension(), basic.cells(),
                 seriesIop, seriesPxRow, seriesPxCol, seriesWidth, seriesHeight,
-                zSpatials, seriesFor, seriesPixelFormat);
+                zSpatials, seriesFor, seriesPixelFormat, null);
     }
 
     // ── standalone(DicomStorageService) の classic 経路と同一ロジックのヘルパ ─────────────

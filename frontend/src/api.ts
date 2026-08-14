@@ -209,6 +209,25 @@ export interface SeriesLayoutDto {
   frameOfReferenceUID: string | null;
   /** ピクセル形式。ボリューム構築前のメモリ量予測用。null なら未取得（予測をスキップする）。 */
   pixelFormat?: SeriesPixelFormat | null;
+  /** 軸の提示とスタック軸。null なら既定（Z/C/T・stackAxis="z"）＝ CT/MR の従来動作。`fw/angio-design.md` §5.7。 */
+  axes?: SeriesAxesDto | null;
+}
+
+/** 1 つの軸の提示（UI ラベルと種別）。 */
+export interface SeriesAxisDto {
+  /** UI に出すラベル（"Z" / "Run" / "Frame" 等）。 */
+  label: string;
+  /** 軸の種別。UI は空間スライス軸前提の機能（ThickSlab/Sync/参照線）の可否をこれで決める。 */
+  kind: "slice" | "run" | "frame" | "echo" | "bvalue" | "temporal" | "generic";
+}
+
+/** 軸の提示モデル（`fw/angio-design.md` §5.7）。 */
+export interface SeriesAxesDto {
+  z: SeriesAxisDto | null;
+  c: SeriesAxisDto | null;
+  t: SeriesAxisDto | null;
+  /** 画像スタック（ホイール送り／Grid／プリフェッチの単位）をどの軸に割り当てるか。 */
+  stackAxis: "z" | "t";
 }
 
 export interface TagInfo {
