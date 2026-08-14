@@ -225,6 +225,15 @@ export function MainScreen({
       setOpenTool("reportManager");
       return;
     }
+    if (kind === "dose") {
+      // 線量レポートは検査単位（RDSR は検査に紐づく）。未選択なら促す。
+      if (!selectedStudy) {
+        window.alert(t("report.noSelection"));
+        return;
+      }
+      setOpenTool("dose");
+      return;
+    }
     if (kind === "nonDicomImport") {
       if (!isStandalone) {
         // 非DICOM取込はローカルファイルパス（Electron専用）が前提のため standalone 専用。
