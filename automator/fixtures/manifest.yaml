@@ -32,6 +32,20 @@ categories:
     minFiles: 1
     description: MRシリーズ（Siemens MOSAIC形式）。デモザイク処理の検証用。
 
+  - id: xa-angio
+    dir: xa-angio
+    minFiles: 5
+    description: >
+      XA/XRF（アンギオ）シリーズ。**マルチフレーム＝シネ**の展開・再生（A1）、DSA（A2）、
+      空間校正のフォールバック連鎖（A3）、QCA（A4）の実機検証用。
+      `automator/scripts/fetch-xa-samples.sh` で取得できる（Rubo Medical の公開サンプル）。
+      実データで確認した性質（fw/angio-design.md §16.2）:
+      96/17/17/137/70 フレーム・JPEG Baseline・8bit MONOCHROME2・FrameTime あり(33/66/40ms)。
+      **PixelSpacing も ImagerPixelSpacing も SID/SOD も無い**ため校正連鎖は「未校正」に落ちる
+      ＝ px 表示になるのが正しい挙動で、mm を出すにはカテーテル校正が要る。
+      PixelIntensityRelationship=LIN（＝DSA は対数変換が要る経路）。
+      0015 は単一フレーム RF で、**シネ展開の対象外**であることの確認に使う。
+
   - id: pet-suv
     dir: pet-suv
     minFiles: 1

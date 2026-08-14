@@ -22,7 +22,6 @@ import {
   backgroundRms,
   estimateShift,
   needsLogTransform,
-  parseFrameNumbers,
   pickMaskFrames,
   subtractFrames,
   type DsaOptions,
@@ -42,27 +41,68 @@ export interface XaDsaTags {
   dy: number;
 }
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
+/**
+ * US（符号なし 16bit）の全要素を読む。
+ *
+ * 🚨 **`dataSet.string()` で読んではいけない**。`MaskFrameNumbers (0028,6110)` は VR=US の
+ * **バイナリ**で、文字列として読むとバイト列がそのまま文字になり意味を成さない
+ * （実データ〈Rubo の XA サンプル〉で発覚）。
+ */
+function readUS(ds: any, tag: string): number[] | null {
+  const el = ds?.elements?.[tag];
+  if (!el || !el.length) return null;
+  const n = Math.floor(el.length / 2);
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const v = ds.uint16(tag, i);
+    if (typeof v === "number") out.push(v);
+  }
+  return out.length ? out : null;
+}
+
+/** FL（32bit 浮動小数）の全要素を読む。US と同じ理由で `string()` は使えない。 */
+function readFL(ds: any, tag: string): number[] | null {
+  const el = ds?.elements?.[tag];
+  if (!el || !el.length) return null;
+  const n = Math.floor(el.length / 4);
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const v = ds.float(tag, i);
+    if (typeof v === "number" && Number.isFinite(v)) out.push(v);
+  }
+  return out.length ? out : null;
+}
+
 /**
  * 装置が書いたサブトラクションの既定値を読む（`fw/angio-design.md` §6.3）。
  * 既定値として採用し、UI から上書きできるようにする。プリウォーム前は null。
+ *
+ * <p>⚠️ 実データでは <b>{@code MaskOperation = "NONE"}／{@code MaskFrameNumbers = 0}</b>
+ * （0 は 1 origin として不正）という「シーケンスはあるが中身は空」の書かれ方が普通にある。
+ * その場合は装置指定なしとして扱い、自動選択へ落とす。
  */
 export function readXaDsaTags(imageId: string): XaDsaTags | null {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ds: any = xaDataSetOf(imageId);
   if (!ds) return null;
   const seqItem = ds.elements?.x00286100?.items?.[0]?.dataSet;
-  const shiftRaw: string | undefined = seqItem?.string?.("x00286114");
-  let dx = 0;
-  let dy = 0;
-  if (shiftRaw) {
-    const parts = shiftRaw.split("\\").map((s: string) => Number.parseFloat(s));
-    // DICOM は [row(=縦), column(=横)]。内部表現は {dx=横, dy=縦}。
-    if (Number.isFinite(parts[0])) dy = parts[0];
-    if (Number.isFinite(parts[1])) dx = parts[1];
-  }
+  const operation: string | undefined = seqItem?.string?.("x00286101");
+  const usable = !!seqItem && (!operation || operation.trim().toUpperCase() !== "NONE");
+
+  // MaskSubPixelShift は FL [row(=縦), column(=横)]。内部表現は {dx=横, dy=縦}。
+  const shift = usable ? readFL(seqItem, "x00286114") : null;
+  const dy = shift && Number.isFinite(shift[0]) ? shift[0] : 0;
+  const dx = shift && Number.isFinite(shift[1]) ? shift[1] : 0;
+
+  // MaskFrameNumbers は US、**1 origin**。0 以下は不正なので捨てる（実データに 0 が入っていた）。
+  const rawFrames = usable ? readUS(seqItem, "x00286110") : null;
+  const maskFrames = rawFrames ? rawFrames.filter((v) => v >= 1).map((v) => v - 1) : null;
+
   return {
+    // PixelIntensityRelationship (0028,1040) は VR=CS なので文字列で正しい。
     pixelIntensityRelationship: ds.string?.("x00281040") ?? null,
-    maskFrames: parseFrameNumbers(seqItem?.string?.("x00286110")),
+    maskFrames: maskFrames && maskFrames.length ? maskFrames : null,
     dx,
     dy,
   };
