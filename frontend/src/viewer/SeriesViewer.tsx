@@ -334,6 +334,8 @@ export function SeriesViewer({
   const [dsaBusy, setDsaBusy] = useState(false);
   // 校正 / QCA ダイアログ（fw/angio-design.md §7.3 / §8）。
   const [xaDialogOpen, setXaDialogOpen] = useState(false);
+  // 空間校正の確定/解除は imageId を変えないため、Viewer2D にメタデータを読み直させる鍵。
+  const [calibVersion, setCalibVersion] = useState(0);
   // 連番 PNG エクスポート（fw/angio-design.md §14.3）。
   const [exportBusy, setExportBusy] = useState(false);
   const [exportDone, setExportDone] = useState(0);
@@ -789,7 +791,7 @@ export function SeriesViewer({
           </div>
         </div>
       ) : (
-        <Viewer2D imageIds={displayImageIds} imageIndex={zc} overlays={overlays} fill={fillHeight} showControls={showControls} viewSyncEnabled={syncOn} referenceLinesEnabled={referenceLinesEnabled} referenceLabel={referenceLabel} commandKey={commandKey} roiContext={roiContext} renderOverlay={renderFusionOverlay} thickSlab={effectiveThick} />
+        <Viewer2D imageIds={displayImageIds} imageIndex={zc} overlays={overlays} fill={fillHeight} showControls={showControls} viewSyncEnabled={syncOn} referenceLinesEnabled={referenceLinesEnabled} referenceLabel={referenceLabel} commandKey={commandKey} roiContext={roiContext} renderOverlay={renderFusionOverlay} thickSlab={effectiveThick} refreshKey={calibVersion} />
       )}
 
       {showControls && (
@@ -1032,7 +1034,11 @@ export function SeriesViewer({
           }}
           onClose={() => setXaDialogOpen(false)}
           // 校正が変わったら表示（スケールバー・計測ラベル）を作り直す。
-          onCalibrated={() => setDsaVersion((v) => v + 1)}
+          // DSA 中は合成 imageId の版番号、非 DSA でも refreshKey でスタックを初期化し直す。
+          onCalibrated={() => {
+            setDsaVersion((v) => v + 1);
+            setCalibVersion((v) => v + 1);
+          }}
         />
       )}
     </div>

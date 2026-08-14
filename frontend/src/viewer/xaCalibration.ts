@@ -264,6 +264,31 @@ function withAnisotropyCheck(c: XaCalibration): XaCalibration {
   return c;
 }
 
+/**
+ * Cornerstone の計測ツールへ渡す `calibration.scale`。
+ *
+ * <p>🚨 **world 座標は「ローダが作った画像オブジェクトの spacing」で決まる**。`imagePlaneModule` に
+ * 校正値を注入しても world は変わらない（実機で「スケールバーは mm・計測は px のまま」で発覚）。
+ * Cornerstone の計測ツールは `表示値 = world 長 / calibration.scale` で単位を作るので、
+ * ここに比を渡すのが**ライブラリが想定している経路**。
+ *
+ * <p>`world 長 = 画素数 × loaderSpacing` なので
+ * <ul>
+ *   <li>校正済み（mm 表示）: `scale = loaderSpacing / mmPerPx`</li>
+ *   <li>未校正（px 表示）:   `scale = loaderSpacing`</li>
+ * </ul>
+ * DICOM の `PixelSpacing` をそのまま使う場合（loaderSpacing === mmPerPx）は 1 になり、
+ * **二重適用にならない**。
+ *
+ * @param loaderSpacing ローダが画像に付けた列方向 spacing（`PixelSpacing` が無ければ 1）
+ * @param mmPerPx       解決した mm/px。未校正なら null
+ */
+export function calibrationScaleFor(loaderSpacing: number | null | undefined, mmPerPx: number | null): number {
+  const ls = loaderSpacing && loaderSpacing > 0 ? loaderSpacing : 1;
+  if (mmPerPx && mmPerPx > 0) return ls / mmPerPx;
+  return ls;
+}
+
 /** mm 表示してよいか（スケールバー・計測ラベルの判断）。 */
 export function isXaCalibrated(c: XaCalibration): boolean {
   return c.tier !== "uncalibrated" && c.mmPerPxCol != null;

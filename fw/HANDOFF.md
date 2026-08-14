@@ -4,8 +4,8 @@
 
 > 🟢 **2026-08-14 アンギオ A1〜A4・A9・A10 を実装し、A1 は実機検証 31/31 合格**（ブランチ `feat/angio-a1`。
 > 正本: [`fw/angio-design.md`](angio-design.md) §5.8・§17.1）
-> A1 シネ表示 / A2 DSA / A3 空間校正 / A4 QCA。**A1（31/31）と A2（18/18）は実機検証済み**、
-> A3/A4/A9/A10 は未検証。
+> A1 シネ表示 / A2 DSA / A3 空間校正 / A4 QCA。**A1（31/31）・A2（18/18）・A3（11/11）は実機検証済み**、
+> A4/A9/A10 は未検証。
 > 実データは `bash automator/scripts/fetch-xa-samples.sh` で取得（Rubo の XA サンプル）。
 > A1 の検証は `cd automator && npx tsx src/spike/xaCineCheck.ts`（実測 fps 29.95/公称 30.30・誤差 1.16%）。
 > - 🔑 **`fw/viewer-2d-architecture.md` の「左ドラッグ=Pan」は誤り**だった。実際は
@@ -19,6 +19,12 @@
 >   「判定材料が無ければ引き継ぐ」では直らず、**片側だけ既定ウィンドウを持つ＝別の値空間**と
 >   判定して初めて直った（`sameValueSpace()`）。**ThickSlab の引き継ぎは従来どおり効く**。
 >   なお「真っ黒でない」チェックは通っており（真っ**白**だった）、**目視で気づいた**。
+> - 🚨 **A3 でも 3 件**（設計 §7.6）。**未校正なのに計測ラベルが mm** と出ていた
+>   （`hasPixelSpacing` はこの版では実質常に true。px にする唯一の経路は
+>   `calibratedPixelSpacing` の `type:"Uncalibrated"`）。また **world 座標は
+>   `imagePlaneModule` への注入では変わらない**ので、計測の単位換算は
+>   **`calibration.scale`（= loaderSpacing / mmPerPx）**で渡す。これを外すと
+>   「単位は mm・数値は px」という最悪の表示になる。校正変更時は**注釈の invalidated** も必要。
 > - 🚨 **`prewarmXaDataset()` を外すと最初の 1 枚だけ 1 フレームずれる**。dicom-image-loader は
 >   dataSet 未キャッシュの初回だけ 1 origin のフレーム番号を `getPixelData`（0 origin）へ渡すため。
 > - 🔑 **QCA のエッジ検出は「1 次微分最大」ではなく「半値」**に決めた（設計の未決事項を実測で決着）。

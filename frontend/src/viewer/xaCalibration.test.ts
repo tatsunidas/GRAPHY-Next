@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { isXaCalibrated, resolveXaCalibration, type XaCalibTags } from "./xaCalibration";
+import {
+  calibrationScaleFor,
+  isXaCalibrated,
+  resolveXaCalibration,
+  type XaCalibTags,
+} from "./xaCalibration";
 
 /**
  * XA の空間校正フォールバック連鎖（fw/angio-design.md §7.2）。
@@ -204,5 +209,30 @@ describe("非等方 spacing", () => {
   it("1 要素しか無い spacing は 2 要素目を同値で補う（readXaCalibTags 側の契約）", () => {
     const c = resolveXaCalibration({ pixelSpacing: [0.2, 0.2], pixelSpacingCalibrationType: "FIDUCIAL" });
     expect(c.mmPerPxRow).toBe(c.mmPerPxCol);
+  });
+});
+
+describe("calibrationScaleFor — 計測ツールへ渡す倍率", () => {
+  it("PixelSpacing が無い（world=px）＋カテーテル校正 → px/mm 比になる", () => {
+    // 318px の線を 2mm と校正 → mmPerPx = 0.006289…。scale = 1 / 0.006289 = 159
+    const mmPerPx = 2 / 318;
+    expect(calibrationScaleFor(null, mmPerPx)).toBeCloseTo(159, 0);
+    // 表示値 = world(318) / scale = 2.0mm
+    expect(318 / calibrationScaleFor(null, mmPerPx)).toBeCloseTo(2, 6);
+  });
+
+  it("★DICOM の PixelSpacing をそのまま使う場合は 1（二重適用しない）", () => {
+    expect(calibrationScaleFor(0.2, 0.2)).toBeCloseTo(1, 12);
+  });
+
+  it("未校正なら loaderSpacing をそのまま返す（px 表示へ戻す）", () => {
+    // world が 0.279mm 刻みでも、px 表示にするには 0.279 で割る。
+    expect(calibrationScaleFor(0.279, null)).toBeCloseTo(0.279, 12);
+    expect(calibrationScaleFor(null, null)).toBe(1);
+  });
+
+  it("不正値は 1 として扱う", () => {
+    expect(calibrationScaleFor(0, null)).toBe(1);
+    expect(calibrationScaleFor(-1, 0.2)).toBeCloseTo(1 / 0.2, 12);
   });
 });

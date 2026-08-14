@@ -35,6 +35,24 @@ function flatten(points: readonly (readonly [number, number])[]): number[] {
   return out;
 }
 
+/**
+ * 全注釈の統計を無効化する。
+ *
+ * <p>🚨 空間校正を変えても、計測ラベルは **`cachedStats` に残った古い値のまま**になる
+ * （Cornerstone は `invalidated` が立つまで再計算しない）。実機で「スケールバーは mm に
+ * なったのに計測は px のまま」という形で出た。校正の確定/解除の直後に必ず呼ぶこと。
+ */
+function invalidateAnnotations(): void {
+  try {
+    const all = (csAnnotation.state.getAllAnnotations() as any[]) ?? [];
+    for (const a of all) {
+      if (a) a.invalidated = true;
+    }
+  } catch {
+    /* 注釈が無ければ何もしない */
+  }
+}
+
 function shortUid(uid: string): string {
   return uid.length > 12 ? `…${uid.slice(-12)}` : uid;
 }
@@ -150,7 +168,13 @@ export function XaAnalysisDialog({
   onCalibrated?: () => void;
 }) {
   const { t } = useI18n();
-  const calib = useMemo(() => calibrationForImageId(imageId), [imageId]);
+  // 校正を確定/解除したら自分の表示も更新する（imageId は変わらないので版番号で回す）。
+  const [calibVersion, setCalibVersion] = useState(0);
+  const calib = useMemo(
+    () => calibrationForImageId(imageId),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [imageId, calibVersion],
+  );
   const picks = useMemo(
     () => collectLengthPicks(imageId, calib?.mmPerPxRow ?? null, calib?.mmPerPxCol ?? null),
     [imageId, calib],
@@ -179,7 +203,9 @@ export function XaAnalysisDialog({
     }
     setXaUserCalibration(seriesUid, { mmPerPx: mm / pick.lengthPx, method, note });
     clearXaCalibrationCache();
+    invalidateAnnotations();
     setError(null);
+    setCalibVersion((v) => v + 1);
     onCalibrated?.();
   };
 
@@ -314,7 +340,7 @@ export function XaAnalysisDialog({
   return (
     <div style={backdrop} onClick={onClose}>
       <div style={panel} onClick={(e) => e.stopPropagation()}>
-        <div style={title}>{t("xa.analysis.title")}</div>
+        <div style={title} data-testid="xa-analysis-dialog">{t("xa.analysis.title")}</div>
 
         {/* 入力（Length 計測）の選択 */}
         <div style={section}>
@@ -335,7 +361,7 @@ export function XaAnalysisDialog({
         {/* 校正（C2 カテーテル法 / C3 ルーラー法） */}
         <div style={section}>
           <div style={sectionTitle}>{t("xa.analysis.calibration")}</div>
-          <div style={hint}>
+          <div style={hint} data-testid="xa-calib-status">
             {t("xa.calib.label")}: {calib ? t(`xa.calib.source.${calib.source}`) : "—"}
             {calib?.mmPerPxCol != null && ` (${calib.mmPerPxCol.toFixed(4)} mm/px)`}
           </div>
@@ -343,6 +369,7 @@ export function XaAnalysisDialog({
             <label style={label}>
               {t("xa.analysis.catheterFr")}
               <input
+                data-testid="xa-catheter-fr"
                 value={frSize}
                 onChange={(e) => setFrSize(e.target.value)}
                 style={input}
@@ -351,6 +378,7 @@ export function XaAnalysisDialog({
             </label>
             <button
               style={btn}
+              data-testid="xa-calibrate-catheter"
               disabled={!pick}
               onClick={() => {
                 const fr = Number(frSize);
@@ -369,6 +397,7 @@ export function XaAnalysisDialog({
             <label style={label}>
               {t("xa.analysis.knownMm")}
               <input
+                data-testid="xa-known-mm"
                 value={knownMm}
                 onChange={(e) => setKnownMm(e.target.value)}
                 style={input}
@@ -391,9 +420,12 @@ export function XaAnalysisDialog({
             </button>
             <button
               style={btn}
+              data-testid="xa-clear-calibration"
               onClick={() => {
                 setXaUserCalibration(seriesUid, null);
                 clearXaCalibrationCache();
+                invalidateAnnotations();
+                setCalibVersion((v) => v + 1);
                 onCalibrated?.();
               }}
             >
@@ -437,7 +469,7 @@ export function XaAnalysisDialog({
         {error && <div style={errorText}>{error}</div>}
 
         <div style={{ ...row, justifyContent: "flex-end" }}>
-          <button style={btn} onClick={onClose}>
+          <button style={btn} data-testid="xa-dialog-close" onClick={onClose}>
             {t("common.close")}
           </button>
         </div>

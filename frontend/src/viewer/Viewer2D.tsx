@@ -403,6 +403,7 @@ export function Viewer2D({
   roiContext,
   renderOverlay,
   thickSlab,
+  refreshKey,
 }: {
   imageIds: string[];
   imageIndex: number;
@@ -433,6 +434,11 @@ export function Viewer2D({
   /** ThickSlab（デジタルスライス厚）が有効か。合成スライスは単一 SOP に紐づかないため、
    *  ROI・計測の新規作成/編集ツールをブロックする（本家 Praparat 準拠）。 */
   thickSlab?: boolean;
+  /**
+   * imageId は同じままメタデータ（空間校正など）が変わったときに値を変えると、
+   * スタックを初期化し直してメタデータを読み直す。
+   */
+  refreshKey?: number | string;
 }) {
   const { t } = useI18n();
   // 合成スライス上でのアノテーション作成をブロックする判定を、setActiveTool から最新参照する。
@@ -450,7 +456,10 @@ export function Viewer2D({
   const roiContextRef = useRef(roiContext);
   roiContextRef.current = roiContext;
   // 同じスタック(imageIds)なら init を再実行しない。C/T 切替で配列が変わると再 setStack。
-  const stackKey = imageIds.join("|");
+  // refreshKey は「imageId は同じだがメタデータが変わった」ときの明示的な再初期化トリガ
+  // （空間校正の確定・解除。imageId を変えると画素キャッシュが捨てられ再デコードになるため、
+  //  キーの方を変える）。
+  const stackKey = `${imageIds.join("|")}#${refreshKey ?? ""}`;
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   // スライス送り先の画素がまだ未取得で待ちが発生している間だけ true。体感の一瞬の待ちで

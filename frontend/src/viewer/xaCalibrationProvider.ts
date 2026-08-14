@@ -19,9 +19,10 @@
  * <p>注入は「上書き」だけでなく「**取り消し**」も行う: 未校正と判定したら spacing を落として
  * px 表示に戻す。これが無いと「未校正なのに mm が出る」という一番危ない状態が残る。
  */
-import { metaData } from "@cornerstonejs/core";
+import { Enums, metaData } from "@cornerstonejs/core";
 import { xaDataSetOf } from "./xaCine";
 import {
+  calibrationScaleFor,
   resolveXaCalibration,
   type XaCalibTags,
   type XaCalibration,
@@ -46,12 +47,20 @@ interface MinimalDataSet {
 const userCalibrations = new Map<string, XaUserCalibration>();
 /** imageId → 解決結果（null = XA ではない）。override 変更時に破棄する。 */
 const resolved = new Map<string, XaCalibration | null>();
+/**
+ * imageId → Cornerstone へ渡す calibration オブジェクト。
+ * 🚨 **同一性を保つ**こと。`StackViewport.calibrateIfNecessary` は `this.calibration !== calibration`
+ * で更新を検知するため、毎回新しいオブジェクトを返すと**フレームごとに calibration イベントが飛ぶ**。
+ */
+const calibrationPayloads = new Map<string, { type: string; scale: number }>();
 
 /** 人が確定した校正を設定する（A4 のカテーテル校正 UI から呼ぶ）。 */
 export function setXaUserCalibration(seriesUid: string, calib: XaUserCalibration | null): void {
   if (calib) userCalibrations.set(seriesUid, calib);
   else userCalibrations.delete(seriesUid);
+  // calibration 種別（mm/px の別）も校正で変わるので**両方**捨てる。
   resolved.clear();
+  calibrationPayloads.clear();
 }
 
 /** 人が確定した校正を取り出す。 */
@@ -62,6 +71,45 @@ export function getXaUserCalibration(seriesUid: string): XaUserCalibration | nul
 /** テスト・シリーズ切替用。 */
 export function clearXaCalibrationCache(): void {
   resolved.clear();
+  calibrationPayloads.clear();
+}
+
+/**
+ * 解決結果を Cornerstone の calibration 種別へ写す。
+ *
+ * <p>🚨 **これが無いと「未校正なのに計測ラベルが mm」になる**（実機で発覚）。
+ * この版の `StackViewport` は `hasPixelSpacing` を `!imagePlaneModule.usingDefaultValues` で決めるが、
+ * `usingDefaultValues` を立てる実装が無いため**実質常に true**＝計測ツールは常に "mm" を出す。
+ * 単位を px にできる唯一の経路が **`calibratedPixelSpacing` メタデータの
+ * `type: "Uncalibrated"`**（`getCalibratedLengthUnitsAndScale` がここで短絡する）。
+ *
+ * <p>校正済みのときは種別を渡すと計測ラベルが `mm User` / `mm Proj` のようになり、
+ * **どの校正で測った値かが計測そのものに出る**（設計 §7.4 の「出自を必ず表示」と同じ狙い）。
+ */
+function calibrationPayloadFor(
+  imageId: string,
+  calib: XaCalibration,
+  tags: XaCalibTags | null,
+): { type: string; scale: number } {
+  const hit = calibrationPayloads.get(imageId);
+  if (hit) return hit;
+  const { CalibrationTypes } = Enums;
+  let type: string = CalibrationTypes.UNCALIBRATED;
+  if (calib.mmPerPxRow != null && calib.mmPerPxCol != null) {
+    if (calib.source === "user-catheter" || calib.source === "user-ruler") {
+      type = CalibrationTypes.USER;
+    } else if (calib.source === "geometric-sid-sod" || calib.source === "geometric-magfactor") {
+      // 幾何倍率による近似＝投影補正。
+      type = CalibrationTypes.PROJECTION;
+    } else {
+      type = CalibrationTypes.CALIBRATED;
+    }
+  }
+  // world 長 → 表示値の比。imagePlaneModule への注入だけでは world が変わらないのでここで渡す。
+  const scale = calibrationScaleFor(tags?.pixelSpacing?.[1] ?? null, calib.mmPerPxCol);
+  const payload = { type, scale };
+  calibrationPayloads.set(imageId, payload);
+  return payload;
 }
 
 function dataSetFor(imageId: string): MinimalDataSet | null {
@@ -125,12 +173,17 @@ export function registerXaCalibrationProvider(): void {
   registered = true;
 
   metaData.addProvider((type: string, ...query: unknown[]): unknown => {
-    if (type !== "imagePlaneModule") return undefined;
+    if (type !== "imagePlaneModule" && type !== "calibratedPixelSpacing") return undefined;
     if (reentrant) return undefined;
     const imageId = query[0];
     if (typeof imageId !== "string") return undefined;
     const calib = calibrationForImageId(imageId);
     if (!calib) return undefined;
+
+    // 計測ツールの単位（mm / px）はここで決まる。imagePlaneModule の spacing だけでは px にできない。
+    if (type === "calibratedPixelSpacing") {
+      return calibrationPayloadFor(imageId, calib, readXaCalibTags(imageId));
+    }
 
     reentrant = true;
     let base: Record<string, unknown> | undefined;
