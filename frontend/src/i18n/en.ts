@@ -800,6 +800,22 @@ export const en: Record<string, string> = {
   // Axis labels (values supplied by the backend SeriesLayout.axes)
   "series.axis.Run": "Run",
   "series.axis.Frame": "Frame",
+  // Radiation dose report (RDSR. fw/angio-design.md §14.2)
+  "dose.title": "Radiation Dose Report (RDSR)",
+  "dose.error": "Could not load the dose report.",
+  "dose.none": "This study has no radiation dose report (RDSR).",
+  "dose.summary": "Summary (all reports combined)",
+  "dose.dapTotal": "Dose Area Product total",
+  "dose.rpTotal": "Dose at reference point total",
+  "dose.fluoroTime": "Total fluoroscopy time",
+  "dose.eventCount": "Irradiation events",
+  "dose.summaryHint": "The summary matches on the concept names written by the device. \u201c\u2014\u201d means no item with that name was found \u2014 it does not mean zero. Units are shown as written in the report.",
+  "dose.accumulated": "Accumulated dose",
+  "dose.events": "Irradiation events",
+  "dose.eventType": "Type",
+  "dose.eventValues": "Values",
+  "dose.noItems": "No items.",
+  "dose.notADoseManagementSystem": "\u26a0 Read and display only. No skin-dose distribution, alert thresholds, or DRL comparison (this is not a substitute for a dose management system).",
   // DSA (subtraction. fw/angio-design.md §6)
   "dsa.enable": "DSA (subtraction)",
   "dsa.failed": "Could not build the subtraction (failed to read frames).",

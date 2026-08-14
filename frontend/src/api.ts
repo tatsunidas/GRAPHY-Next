@@ -245,6 +245,53 @@ export const fetchSeriesLayout = (studyUid: string, seriesUid: string) =>
     `/api/studies/${encodeURIComponent(studyUid)}/series/${encodeURIComponent(seriesUid)}/layout`,
   );
 
+// ── 被ばく線量レポート（RDSR）。`fw/angio-design.md` §14.2 / A9 ────────────────
+
+/** SR の 1 項目（NUM / TEXT / CODE / UIDREF / DATETIME）。 */
+export interface DoseItem {
+  /** ConceptNameCodeSequence の CodeValue。無ければ null。 */
+  code: string | null;
+  /** 同 CodeMeaning。突き合わせはこちらで行う（装置ごとのコード表差に強い）。 */
+  meaning: string | null;
+  valueType: string;
+  numericValue: number | null;
+  unit: string | null;
+  textValue: string | null;
+}
+
+/** 1 回の照射イベント。 */
+export interface IrradiationEvent {
+  index: number;
+  eventType: string | null;
+  eventUid: string | null;
+  items: DoseItem[];
+}
+
+export interface DoseReport {
+  sopInstanceUid: string;
+  studyInstanceUid: string;
+  seriesInstanceUid: string;
+  contentDateTime: string | null;
+  manufacturer: string | null;
+  accumulated: DoseItem[];
+  events: IrradiationEvent[];
+}
+
+export interface StudyDoseDto {
+  studyInstanceUid: string;
+  reports: DoseReport[];
+  summary: {
+    doseAreaProductTotal: number | null;
+    doseRpTotal: number | null;
+    fluoroTimeTotal: number | null;
+    irradiationEventCount: number;
+  };
+}
+
+/** 検査に含まれる RDSR を解析して返す。RDSR が無ければ reports は空配列（404 にはならない）。 */
+export const fetchStudyDose = (studyUid: string) =>
+  httpGet<StudyDoseDto>(`/api/studies/${encodeURIComponent(studyUid)}/dose`);
+
 export interface ImportResult {
   imported: number;
   skipped: number;

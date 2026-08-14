@@ -20,6 +20,7 @@ import { TagViewerDialog } from "./TagViewerDialog";
 import { NonDicomImportDialog } from "./NonDicomImportDialog";
 import { ReportEditorDialog } from "../report/ReportEditorDialog";
 import { ReportManagerDialog } from "../report/ReportManagerDialog";
+import { DoseReportDialog } from "./DoseReportDialog";
 
 /**
  * アプリの土台シェル（GRAPHY の MainScreen 相当）。
@@ -65,6 +66,7 @@ export function MainScreen({
     | "nonDicomImport"
     | "report"
     | "reportManager"
+    | "dose"
     | null
   >(null);
   // ReportManagerDialog から特定レポートを開いたときだけ設定（新規/報告ボタンからの通常オープンは null=自動解決）。
@@ -318,6 +320,11 @@ export function MainScreen({
         mode={isStandalone ? "standalone" : "web"}
         reportId={reportEditorId}
         onChanged={() => setReloadKey((k) => k + 1)}
+      />
+      <DoseReportDialog
+        open={openTool === "dose"}
+        onClose={() => setOpenTool(null)}
+        study={selectedStudy}
       />
       <ReportManagerDialog
         open={openTool === "reportManager"}

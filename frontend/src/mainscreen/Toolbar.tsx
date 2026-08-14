@@ -16,7 +16,9 @@ export type ToolKind =
   | "seriesExtractor"
   | "tagViewer"
   | "report"
-  | "reportManager";
+  | "reportManager"
+  /** 被ばく線量レポート（RDSR）。fw/angio-design.md §14.2 */
+  | "dose";
 
 export function Toolbar({
   isStandalone,

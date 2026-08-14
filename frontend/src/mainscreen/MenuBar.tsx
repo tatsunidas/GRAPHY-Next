@@ -91,6 +91,7 @@ export function MenuBar({
         ...(isDemo ? [] : [{ label: t("main.toolbar.seriesExtractor"), onClick: () => onOpenTool("seriesExtractor") }]),
         { label: t("main.toolbar.report"), onClick: () => onOpenTool("report") },
         { label: t("main.toolbar.reportManager"), onClick: () => onOpenTool("reportManager") },
+        { label: t("dose.title"), onClick: () => onOpenTool("dose"), testId: "menu-item-dose" },
       ],
     },
     {

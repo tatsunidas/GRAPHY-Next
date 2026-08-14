@@ -802,6 +802,22 @@ export const ja: Record<string, string> = {
   // 軸ラベル（backend の SeriesLayout.axes が供給する値の訳）
   "series.axis.Run": "ラン",
   "series.axis.Frame": "フレーム",
+  // 被ばく線量レポート（RDSR。fw/angio-design.md §14.2）
+  "dose.title": "被ばく線量レポート（RDSR）",
+  "dose.error": "線量レポートを取得できませんでした。",
+  "dose.none": "この検査に線量レポート（RDSR）はありません。",
+  "dose.summary": "サマリ（全レポート合算）",
+  "dose.dapTotal": "面積線量積 合計 (DAP)",
+  "dose.rpTotal": "基準点線量 合計 (RP)",
+  "dose.fluoroTime": "透視時間 合計",
+  "dose.eventCount": "照射イベント数",
+  "dose.summaryHint": "サマリは装置が書いた項目名で突き合わせています。「—」は「その名前の項目が無かった」という意味で、0 ではありません。単位はレポート内の表記のままです。",
+  "dose.accumulated": "積算線量",
+  "dose.events": "照射イベント",
+  "dose.eventType": "種別",
+  "dose.eventValues": "値",
+  "dose.noItems": "項目がありません。",
+  "dose.notADoseManagementSystem": "⚠ 読み取りと表示のみです。皮膚線量分布の計算・警告閾値・施設 DRL 比較は行いません（線量管理システムの代替ではありません）。",
   // DSA（サブトラクション。fw/angio-design.md §6）
   "dsa.enable": "DSA（サブトラクション）",
   "dsa.failed": "サブトラクションを作成できませんでした（フレームの読み込みに失敗）。",
