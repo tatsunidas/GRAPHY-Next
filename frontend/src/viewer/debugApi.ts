@@ -2,7 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import { getRenderingEngine } from "@cornerstonejs/core";
+import { cache, getRenderingEngine, metaData } from "@cornerstonejs/core";
 import { ENGINE_ID } from "./Viewer2D";
 import { readCamera, readColormapName, readVoiWindow } from "./viewportRead";
 
@@ -192,9 +192,64 @@ function getXaCineStats(): XaCineStats {
   return { ...xaCineStats };
 }
 
+/**
+ * 表示中画像の**実画素値**の範囲（キャンバスの見た目ではなくデータそのもの）。
+ *
+ * <p>「見た目が真っ白/真っ黒」なとき、原因が**データ**なのか **VOI の当て方**なのかを
+ * 切り分けるための唯一の手段。合成画像（ThickSlab / DSA）で値空間が変わるときに要る。
+ */
+export interface ImagePixelRange {
+  viewportId: string;
+  imageId: string | null;
+  min: number;
+  max: number;
+  mean: number;
+  /** ビューポートに適用中の voiRange（[lower, upper]）。未設定なら null。 */
+  voiRange: { lower: number; upper: number } | null;
+  /** この imageId に対して metaData が返す voiLutModule（プロバイダの解決結果）。 */
+  voiLutModule: unknown;
+}
+
+function getImagePixelRange(): ImagePixelRange[] {
+  const engine = getRenderingEngine(ENGINE_ID);
+  if (!engine) return [];
+  const out: ImagePixelRange[] = [];
+  for (const vp of engine.getViewports()) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const anyVp = vp as any;
+    const imageId: string | null = anyVp.getCurrentImageId?.() ?? null;
+    let min = NaN;
+    let max = NaN;
+    let mean = NaN;
+    try {
+      const img = imageId ? (cache.getImage(imageId) as unknown as { getPixelData?: () => ArrayLike<number> }) : null;
+      const px = img?.getPixelData?.();
+      if (px && px.length) {
+        min = Number.POSITIVE_INFINITY;
+        max = Number.NEGATIVE_INFINITY;
+        let sum = 0;
+        for (let i = 0; i < px.length; i++) {
+          const v = px[i];
+          if (v < min) min = v;
+          if (v > max) max = v;
+          sum += v;
+        }
+        mean = sum / px.length;
+      }
+    } catch {
+      /* 取得できなければ NaN のまま */
+    }
+    const range = (anyVp.getProperties?.() ?? {}).voiRange ?? null;
+    const voiLutModule = imageId ? (metaData.get("voiLutModule", imageId) ?? null) : null;
+    out.push({ viewportId: vp.id, imageId, min, max, mean, voiRange: range, voiLutModule });
+  }
+  return out;
+}
+
 declare global {
   interface Window {
     __graphyDebug?: {
+      getImagePixelRange: typeof getImagePixelRange;
       getPixelStats: typeof getPixelStats;
       getViewportGeometry: typeof getViewportGeometry;
       getViewportProperties: typeof getViewportProperties;
@@ -209,6 +264,7 @@ let installed = false;
 export function installDebugApi(): void {
   if (installed || !import.meta.env.DEV) return;
   window.__graphyDebug = {
+    getImagePixelRange,
     getPixelStats,
     getViewportGeometry,
     getViewportProperties,

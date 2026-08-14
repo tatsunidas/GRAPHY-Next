@@ -124,6 +124,40 @@ export function subtractFrames(
   return out;
 }
 
+/**
+ * 造影の到達を検出するための**フレーム 1 枚の代表値**（`fw/angio-design.md` §6.3）。
+ *
+ * <p>🚨 **全画素平均は実データでは使えない**（実機で発覚）。冠動脈造影では血管が画面の
+ * ごく一部しか占めないため、造影剤が入っても**全体平均はほとんど動かない**。
+ * 結果として「造影到達なし」と判定され、マスクが**ランの末尾**から選ばれていた。
+ *
+ * <p>代わりに**暗部のテール（低パーセンタイル）**を見る。造影剤は減衰を増やす＝
+ * MONOCHROME2 では暗くなるので、低パーセンタイルは造影の充満に敏感に反応する。
+ *
+ * <p>🚨 **ちょうど 0 の画素は除外する**。XA はコリメータの外側が 0 で埋まっており
+ * （実データでは画面の 20%）、除外しないと低パーセンタイルが**全フレームで 0**になり、
+ * この指標が何も検出しなくなる（実データを測って発覚）。
+ *
+ * @param quantile 見るパーセンタイル（既定 2%）
+ * @param stride   評価する画素の間引き（512² を 4 画素おきで 16k サンプル）
+ */
+export function contrastSignal(values: Float32Array, quantile = 0.02, stride = 4): number {
+  const st = Math.max(1, Math.floor(stride));
+  const n = Math.ceil(values.length / st);
+  if (n === 0) return 0;
+  const sample = new Float32Array(n);
+  let k = 0;
+  for (let i = 0; i < values.length; i += st) {
+    const v = values[i];
+    // コリメータ外（正確に 0）は情報を持たない。
+    if (v !== 0) sample[k++] = v;
+  }
+  if (k === 0) return 0;
+  const sorted = sample.subarray(0, k).slice().sort();
+  const idx = Math.max(0, Math.min(k - 1, Math.floor(k * quantile)));
+  return sorted[idx];
+}
+
 /** マスク自動選択の結果。 */
 export interface MaskPick {
   /** 平均してマスクにするフレーム番号（0 origin, 昇順）。 */
@@ -135,10 +169,11 @@ export interface MaskPick {
 /**
  * 造影剤到達前のフレームを自動で選ぶ（`fw/angio-design.md` §6.3）。
  *
- * <p>各フレームの平均輝度の時系列を見て、**最初に基線から大きく外れたフレーム（onset）の手前**を
- * マスクにする。自動＝提案であり、UI から必ず直せるようにすること。
+ * <p>各フレームの代表値（{@link contrastSignal}）の時系列を見て、**最初に基線から大きく外れた
+ * フレーム（onset）の手前**をマスクにする。自動＝提案であり、UI から必ず直せるようにすること。
+ * 見つからないときは**ランの先頭**を使う。
  *
- * @param mean    フレームごとの平均輝度
+ * @param mean    フレームごとの代表値（{@link contrastSignal} の出力を想定）
  * @param maxMask マスクに使う最大枚数（既定 5）
  * @param k       基線の標準偏差の何倍で「外れた」とみなすか（既定 4）
  */
@@ -166,8 +201,10 @@ export function pickMaskFrames(mean: readonly number[], maxMask = 5, k = 4): Mas
       break;
     }
   }
-  const end = onset != null ? onset - 1 : n - 1;
-  const start = Math.max(0, end - maxMask + 1);
+  // onset が見つからないときは**ランの先頭**を使う。造影前フレームは実質必ず先頭にあり、
+  // 末尾（＝造影が抜けきった後とは限らない）を既定にすると外したときの被害が大きい。
+  const end = onset != null ? onset - 1 : Math.min(maxMask - 1, n - 1);
+  const start = onset != null ? Math.max(0, end - maxMask + 1) : 0;
   const frames: number[] = [];
   for (let i = start; i <= end; i++) frames.push(i);
   return { frames: frames.length ? frames : [0], onset };
@@ -202,6 +239,82 @@ export function backgroundRms(diff: Float32Array, excludeTopFraction = 0.1): num
 }
 
 /**
+ * シフト量 (dx,dy) を試したときの背景 RMS を、**配列を確保せずに**その場で求める。
+ *
+ * <p>🚨 これが無いと自動位置合わせが**UI を数十秒フリーズさせる**（実機で発覚）。
+ * {@link estimateShift} は数百通りのシフトを試すが、素直に {@link subtractFrames} ＋
+ * {@link backgroundRms} を回すと **1 回ごとに 512×512 の Float32Array を確保して全画素ソート**する。
+ * 440 通り × (確保 + ソート) で数十秒かかり、しかもメインスレッドを占有する。
+ *
+ * <p>ここでは
+ * <ul>
+ *   <li>`stride` 間隔の**部分格子だけ**を評価する（シフト量の推定に全画素は要らない）</li>
+ *   <li>閾値（上位 10% 除外）も**その部分格子の中で**決める</li>
+ * </ul>
+ * ことで、探索 1 回を数百マイクロ秒に落とす。
+ */
+export function shiftResidual(
+  mask: Float32Array,
+  live: Float32Array,
+  width: number,
+  height: number,
+  opts: DsaOptions,
+  stride: number,
+  excludeTopFraction = 0.1,
+): number {
+  const st = Math.max(1, Math.floor(stride));
+  const cols = Math.floor((width + st - 1) / st);
+  const rows = Math.floor((height + st - 1) / st);
+  const n = cols * rows;
+  if (n === 0) return 0;
+  const vals = new Float32Array(n);
+  let k = 0;
+  for (let y = 0; y < height; y += st) {
+    for (let x = 0; x < width; x += st) {
+      // マスクを (dx,dy) ずらした位置＝出力 (x,y) には入力 (x-dx, y-dy) が来る。
+      const m = sampleBilinearAt(mask, width, height, x - opts.dx, y - opts.dy);
+      const l = live[y * width + x];
+      vals[k++] = opts.logarithmic
+        ? Math.log(Math.max(m, 0) + LOG_EPS) - Math.log(Math.max(l, 0) + LOG_EPS)
+        : m - l;
+    }
+  }
+  const used = vals.subarray(0, k);
+  const abs = Float32Array.from(used, Math.abs).sort();
+  const cutIdx = Math.max(0, Math.min(k - 1, Math.ceil(k * (1 - excludeTopFraction)) - 1));
+  const cut = abs[cutIdx];
+  let sum = 0;
+  let count = 0;
+  for (let i = 0; i < k; i++) {
+    if (Math.abs(used[i]) <= cut) {
+      sum += used[i] * used[i];
+      count++;
+    }
+  }
+  return count ? Math.sqrt(sum / count) : 0;
+}
+
+/** 双線形サンプリング（範囲外は端の値）。{@link shiftResidual} 用の 1 点版。 */
+function sampleBilinearAt(src: Float32Array, width: number, height: number, x: number, y: number): number {
+  const cl = (v: number, hi: number) => (v < 0 ? 0 : v > hi ? hi : v);
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const fx = x - x0;
+  const fy = y - y0;
+  const x0c = cl(x0, width - 1);
+  const x1c = cl(x0 + 1, width - 1);
+  const y0c = cl(y0, height - 1);
+  const y1c = cl(y0 + 1, height - 1);
+  const v00 = src[y0c * width + x0c];
+  const v01 = src[y0c * width + x1c];
+  const v10 = src[y1c * width + x0c];
+  const v11 = src[y1c * width + x1c];
+  const top = v00 + (v01 - v00) * fx;
+  const bottom = v10 + (v11 - v10) * fx;
+  return top + (bottom - top) * fy;
+}
+
+/**
  * ピクセルシフトの自動推定（背景 RMS 最小化）。
  *
  * <p>整数グリッドで粗探索 → 最良点の周りを 0.1px 刻みで詰める、の 2 段。血管領域は
@@ -217,10 +330,11 @@ export function estimateShift(
   logarithmic: boolean,
   range = 4,
 ): { dx: number; dy: number; rms: number } {
-  const evaluate = (dx: number, dy: number): number => {
-    const d = subtractFrames(mask, live, width, height, { dx, dy, logarithmic });
-    return d ? backgroundRms(d) : Number.POSITIVE_INFINITY;
-  };
+  // 評価は部分格子で行う（512² なら 4 画素おき ＝ 128²）。小さい画像では stride 1 に落ちるので
+  // 精度は変わらない。**全画素で回すと UI が数十秒固まる**（実機で発覚）。
+  const stride = Math.max(1, Math.floor(Math.min(width, height) / 128));
+  const evaluate = (dx: number, dy: number): number =>
+    shiftResidual(mask, live, width, height, { dx, dy, logarithmic }, stride);
   let best = { dx: 0, dy: 0, rms: evaluate(0, 0) };
   for (let dy = -range; dy <= range; dy++) {
     for (let dx = -range; dx <= range; dx++) {
@@ -229,11 +343,11 @@ export function estimateShift(
       if (rms < best.rms) best = { dx, dy, rms };
     }
   }
-  // 粗探索の周り ±0.9px を 0.1px 刻みで詰める。
+  // 粗探索の周り ±0.5px を 0.1px 刻みで詰める（整数格子で最良を取った後なので ±0.5 で足りる）。
   const cx = best.dx;
   const cy = best.dy;
-  for (let iy = -9; iy <= 9; iy++) {
-    for (let ix = -9; ix <= 9; ix++) {
+  for (let iy = -5; iy <= 5; iy++) {
+    for (let ix = -5; ix <= 5; ix++) {
       const dx = cx + ix / 10;
       const dy = cy + iy / 10;
       if (dx === cx && dy === cy) continue;

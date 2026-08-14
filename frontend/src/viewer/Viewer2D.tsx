@@ -359,6 +359,34 @@ function sameScaleBar(a: ScaleBar | null, b: ScaleBar | null): boolean {
   return nearly(a.lengthPx, b.lengthPx) && a.label === b.label && a.calibrated === b.calibrated;
 }
 
+/**
+ * 2 つの画像が「同じ値空間か」を、DICOM 既定ウィンドウの指紋で判定する。
+ *
+ * <p>スタック再構築をまたいでユーザの W/L を引き継いでよいかの判断に使う。
+ * 既定ウィンドウの幅が桁で違う（例 255 と 0.91）なら、それは別の値空間なので引き継がない。
+ */
+function sameValueSpace(
+  prev: { center?: number; width?: number } | undefined,
+  next: { windowCenter?: number; windowWidth?: number },
+): boolean {
+  const pw = prev?.width && prev.width > 0 ? prev.width : undefined;
+  const nw = next.windowWidth && next.windowWidth > 0 ? next.windowWidth : undefined;
+  // 両方とも既定ウィンドウを持たない（＝どちらも min/max 由来で表示される）なら同じ土俵。
+  // XA のフレーム間はこれ（古い装置は WindowCenter/Width を書かない）。
+  if (!pw && !nw) return true;
+  // 🚨 **片側だけ持つのは「値空間が変わった」合図**。実データの XA は WindowCenter/Width を
+  //    持たず min/max（0..255）で表示され、DSA 合成画像は差分用の既定ウィンドウを持つ。
+  //    ここを「判定材料が無いから引き継ぐ」にすると、**0..255 の窓が対数差分（±0.7）に当たって
+  //    画面が飽和する**（実機で発生し、目視で気づいた）。
+  if (!pw || !nw) return false;
+  const ratio = pw > nw ? pw / nw : nw / pw;
+  if (ratio > 4) return false;
+  const pc = prev?.center;
+  const nc = next.windowCenter;
+  if (pc === undefined || nc === undefined) return true;
+  return Math.abs(pc - nc) <= Math.max(pw, nw);
+}
+
 export function Viewer2D({
   imageIds,
   imageIndex,
@@ -505,6 +533,8 @@ export function Viewer2D({
     rows?: number;
     cols?: number;
     modality?: string;
+    /** DICOM 既定ウィンドウ（＝画素の値空間の指紋）。VOI を引き継いでよいかの判定に使う。 */
+    defaultWindow?: { center?: number; width?: number };
   } | null>(null);
   // Pan モード: ON で左ドラッグ=パン、OFF で左ドラッグ=W/L。中ドラッグは常にパン、右はズーム。
   const [panMode, setPanMode] = useState(false);
@@ -813,6 +843,10 @@ export function Viewer2D({
           rows: infoRef.current?.rows,
           cols: infoRef.current?.columns,
           modality: infoRef.current?.modality,
+          defaultWindow: {
+            center: infoRef.current?.windowCenter,
+            width: infoRef.current?.windowWidth,
+          },
         };
       } catch { /* ignore */ }
       // 向きマーカーは IOP があるときだけ。canvasToWorld 経由で zoom/pan/flip/rotation に追従。
@@ -898,7 +932,12 @@ export function Viewer2D({
           prevView.modality === inf.modality
         ) {
           try { viewport.setViewPresentation(prevView.pres); } catch { /* ignore */ }
-          if (prevView.voi) {
+          // 🚨 **VOI は「値空間が同じとき」だけ引き継ぐ**。
+          // ThickSlab（近傍スライスの平均）は値空間が変わらないので引き継いでよいが、
+          // DSA（差分）は 0..255 の生画素から対数差分 ±0.7 へ**値空間そのものが変わる**。
+          // 引き継ぐと元画像の W/L（例 127.5/255）が差分に当たり、**画面が真っ白に飽和する**
+          // （実機で発生。「真っ黒でない」チェックは通ってしまい、目視で気づいた）。
+          if (prevView.voi && sameValueSpace(prevView.defaultWindow, inf)) {
             try { viewport.setProperties({ voiRange: prevView.voi }); } catch { /* ignore */ }
           }
         }

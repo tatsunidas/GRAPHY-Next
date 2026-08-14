@@ -411,6 +411,10 @@ export function SeriesViewer({
         }
         setDsaToken(token);
         setDsaState(dsaSessionState(token));
+        // 残差は最初から出す（シフトを触るまで数値が出ないと「効いているか」が判断できない）。
+        measureDsaResidual(token, zc)
+          .then((r) => setDsaResidual(r))
+          .catch(() => setDsaResidual(null));
       })
       .catch(() => {
         if (!cancelled) {
@@ -881,7 +885,7 @@ export function SeriesViewer({
                   </button>
                   {dsaState && (
                     <>
-                      <span style={hint}>
+                      <span style={hint} data-testid="dsa-mask">
                         {t("dsa.mask", {
                           frames: dsaState.maskFrames.map((i) => i + 1).join(", "),
                         })}
@@ -904,7 +908,7 @@ export function SeriesViewer({
                 </div>
                 {dsaState && (
                   <div style={row}>
-                    <span style={hint}>
+                    <span style={hint} data-testid="dsa-shift">
                       {t("dsa.shift", { dx: dsaState.dx.toFixed(1), dy: dsaState.dy.toFixed(1) })}
                     </span>
                     {([
@@ -916,6 +920,7 @@ export function SeriesViewer({
                       <button
                         key={label}
                         style={btn}
+                        data-testid={`dsa-shift-${ddx}-${ddy}`}
                         title={t("dsa.shiftStep")}
                         onClick={() => {
                           if (!dsaToken || !dsaState) return;
@@ -942,6 +947,7 @@ export function SeriesViewer({
                       {t("dsa.autoAlign")}
                     </button>
                     <Check
+                      testId="dsa-log-check"
                       label={t("dsa.logarithmic")}
                       checked={dsaState.logarithmic}
                       onChange={() => {
@@ -951,8 +957,8 @@ export function SeriesViewer({
                       }}
                     />
                     {dsaResidual != null && (
-                      <span style={hint} title={t("dsa.residual.title")}>
-                        {t("dsa.residual", { v: dsaResidual.toFixed(1) })}
+                      <span style={hint} data-testid="dsa-residual" title={t("dsa.residual.title")}>
+                        {t("dsa.residual", { v: formatResidual(dsaResidual) })}
                       </span>
                     )}
                   </div>
@@ -1031,6 +1037,21 @@ export function SeriesViewer({
       )}
     </div>
   );
+}
+
+/**
+ * 背景残差の表示。
+ *
+ * <p>対数変換ありの DSA では差分が 0.0x のオーダーになるため、`toFixed(1)` だと**常に "0.0"** で
+ * シフトを変えても数値が動かない（実機で発覚）。有効数字 3 桁で出す。
+ */
+function formatResidual(v: number): string {
+  if (!Number.isFinite(v)) return "—";
+  if (v === 0) return "0";
+  const abs = Math.abs(v);
+  if (abs >= 100) return v.toFixed(0);
+  if (abs >= 1) return v.toFixed(2);
+  return v.toPrecision(3);
 }
 
 /**

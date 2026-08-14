@@ -20,6 +20,7 @@ import { readModalitySlice } from "./pixelCalibration";
 import {
   averageFrames,
   backgroundRms,
+  contrastSignal,
   estimateShift,
   needsLogTransform,
   pickMaskFrames,
@@ -168,11 +169,15 @@ async function readFrames(ids: string[]): Promise<{ values: Float32Array[]; widt
   return width && height ? { values, width, height } : null;
 }
 
-/** フレームの平均輝度（マスク自動選択用）。全画素の単純平均。 */
-function meanOf(v: Float32Array): number {
-  let sum = 0;
-  for (let i = 0; i < v.length; i++) sum += v[i];
-  return v.length ? sum / v.length : 0;
+/**
+ * マスク自動選択に使うフレーム代表値。
+ *
+ * <p>🚨 **全画素平均ではなく暗部テール**（{@link contrastSignal}）を使う。冠動脈造影では
+ * 血管が画面のごく一部しか占めず、**全体平均では造影の到達を検出できない**
+ * （実機で「マスクがランの末尾から選ばれる」形で発覚）。
+ */
+function contrastSignalOf(v: Float32Array): number {
+  return contrastSignal(v);
 }
 
 /**
@@ -197,7 +202,7 @@ export async function prepareDsaSession(params: DsaSessionParams): Promise<strin
   let maskFrames = params.maskFrames?.filter((i) => i >= 0 && i < values.length) ?? null;
   let onset: number | null = null;
   if (!maskFrames || maskFrames.length === 0) {
-    const picked = pickMaskFrames(values.map(meanOf));
+    const picked = pickMaskFrames(values.map(contrastSignalOf));
     maskFrames = picked.frames;
     onset = picked.onset;
   }

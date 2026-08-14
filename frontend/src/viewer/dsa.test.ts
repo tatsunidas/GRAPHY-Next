@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   averageFrames,
   backgroundRms,
+  contrastSignal,
   estimateShift,
   needsLogTransform,
   parseFrameNumbers,
@@ -130,11 +131,12 @@ describe("pickMaskFrames — マスクの自動選択", () => {
     expect(p.frames[p.frames.length - 1]).toBe(p.onset! - 1);
   });
 
-  it("造影が見つからなければ末尾側を使う（onset は null）", () => {
+  it("造影が見つからなければ**先頭**を使う（onset は null）", () => {
+    // 末尾を既定にすると、外したときに「造影が乗ったフレームをマスクにする」事故になる。
     const mean = [100, 100, 100, 100, 100, 100];
     const p = pickMaskFrames(mean);
     expect(p.onset).toBeNull();
-    expect(p.frames.length).toBeGreaterThan(0);
+    expect(p.frames).toEqual([0, 1, 2, 3, 4]);
   });
 
   it("基線が完全に平坦でも量子化ノイズで誤検出しない", () => {
@@ -146,6 +148,46 @@ describe("pickMaskFrames — マスクの自動選択", () => {
   it("空・1 フレームでも壊れない", () => {
     expect(pickMaskFrames([]).frames).toEqual([]);
     expect(pickMaskFrames([5]).frames).toEqual([0]);
+  });
+});
+
+describe("contrastSignal — 造影到達の検出信号", () => {
+  it("低パーセンタイルを返す（暗部のテール）", () => {
+    const v = Float32Array.from([100, 90, 80, 70, 60, 50, 40, 30, 20, 10]);
+    expect(contrastSignal(v, 0.02, 1)).toBe(10);
+    expect(contrastSignal(v, 0.5, 1)).toBe(60);
+  });
+
+  it("★造影が画面の一部にしか無くても反応する（全体平均は反応しない）", () => {
+    const n = 10_000;
+    const before = new Float32Array(n).fill(200);
+    const after = Float32Array.from(before);
+    // 画面の 3% だけが造影で暗くなる（冠動脈造影の実際に近い割合）。
+    for (let i = 0; i < n * 0.03; i++) after[i] = 40;
+    let sb = 0, sa = 0;
+    for (let i = 0; i < n; i++) { sb += before[i]; sa += after[i]; }
+    // 全体平均は 3% 未満しか動かない（基線のばらつきに埋もれる）。
+    expect(Math.abs(sa - sb) / sb).toBeLessThan(0.03);
+    // 低パーセンタイルははっきり動く。
+    expect(contrastSignal(before, 0.02, 1)).toBe(200);
+    expect(contrastSignal(after, 0.02, 1)).toBe(40);
+  });
+
+  it("★コリメータの黒縁（値 0）に支配されない", () => {
+    // 実データでは画面の 20% が正確に 0（コリメータ外）。除外しないと低パーセンタイルが
+    // 全フレームで 0 になり、造影の到達をまったく検出できなくなる。
+    const n = 1000;
+    const v = new Float32Array(n);
+    for (let i = 0; i < n; i++) v[i] = i < n * 0.2 ? 0 : 100; // 20% が黒縁
+    expect(contrastSignal(v, 0.02, 1)).toBe(100);
+  });
+
+  it("全部 0 でも壊れない", () => {
+    expect(contrastSignal(new Float32Array(100), 0.02, 1)).toBe(0);
+  });
+
+  it("空でも壊れない", () => {
+    expect(contrastSignal(new Float32Array(0))).toBe(0);
   });
 });
 
