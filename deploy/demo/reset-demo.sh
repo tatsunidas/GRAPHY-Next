@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# 公開デモを毎晩0:00にゴールデンスナップショットへリストアする。
+# 公開デモを毎晩0:00にゴールデンスナップショットへリストアし、あわせて main の最新版へ
+# 更新する（origin/main を ff-only で取り込み → graphy-backend を再ビルド → 差し替え）。
+#
+# 更新はリストアより前・コンテナ稼働中に行う。ビルドは数分かかることがあり、先に止めると
+# その間ずっとデモが落ちるため。更新に失敗した場合は現行イメージのまま素通りし、リストアだけ
+# 続行する（デモが古いのは許容できるが、止まるのは許容できない）。
 #
 # 対象: deploy/demo/data/（dcm4chee: ldap/db/storage/wildfly）＋
 #       demo_graphy_backend_data ボリューム（graphy-backend の H2 DB。レポート/設定/匿名化マスク）。
@@ -20,6 +25,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 SNAPSHOT_DIR="$HOME/graphy-demo-golden-snapshot"
 LOG_FILE="$HOME/graphy-demo-golden-snapshot/reset.log"
@@ -65,6 +71,49 @@ backup_subscribers() {
     | xargs -r rm -f
 }
 
+# origin/main の最新版を取り込んで graphy-backend イメージを焼き直す。
+# 失敗しても呼び出し側は止めない（現行イメージのまま夜間リストアだけ続ける）。
+#
+# Docker のビルドコンテキストは git の ref ではなく作業ツリーそのもの。つまりここで
+# チェックアウトされている中身がそのままデモに出る。よって:
+#   - 作業ツリーが汚れていたら更新しない（人が編集中のものを公開してしまう／
+#     ff-only が失敗して中途半端になる）
+#   - ff-only だけ。reset --hard や force pull で人の作業を消さない
+update_to_latest() {
+  local before after
+
+  if [ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]; then
+    log "  WARN: 作業ツリーに未コミットの変更があるため更新を見送り（現行イメージのまま）"
+    return
+  fi
+
+  if ! git -C "$REPO_ROOT" fetch origin main --quiet >> "$LOG_FILE" 2>&1; then
+    log "  WARN: git fetch に失敗（現行イメージのまま）"
+    return
+  fi
+
+  before="$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
+  after="$(git -C "$REPO_ROOT" rev-parse --short origin/main)"
+  if [ "$before" = "$after" ]; then
+    log "  update: 既に最新（$before）"
+    return
+  fi
+
+  if ! git -C "$REPO_ROOT" merge --ff-only origin/main >> "$LOG_FILE" 2>&1; then
+    log "  WARN: ff-only merge に失敗（$before → $after）。現行イメージのまま"
+    return
+  fi
+  log "  update: $before → $after、イメージを再ビルドする"
+
+  # ビルド失敗時は直前のイメージがそのまま残る（タグは付け替えられない）ので、
+  # 壊れた版が公開されることはない。次の晩に再挑戦される。
+  if ! docker compose -f "$COMPOSE_FILE" build graphy-backend >> "$LOG_FILE" 2>&1; then
+    log "  ERROR: イメージのビルドに失敗。現行イメージのまま続行する"
+    return
+  fi
+  log "  update: ビルド完了"
+}
+
 # 別マシン（開発用Linux機・Windows等）に誤って cron を複製された場合の安全装置。
 # 詳細: deploy/demo/check-server-identity.sh
 if ! "$SCRIPT_DIR/check-server-identity.sh" >> "$LOG_FILE" 2>&1; then
@@ -82,6 +131,9 @@ log "reset start"
 # コンテナが動いているうちに退避しておく（保険）。
 backup_subscribers
 
+# 最新版の取り込みとビルドも、まだデモが動いているうちに済ませる（ビルドは数分かかりうる）。
+update_to_latest
+
 docker compose -f "$COMPOSE_FILE" stop ldap db arc graphy-backend >> "$LOG_FILE" 2>&1
 
 DATA_DIR="$(dirname "$COMPOSE_FILE")/data"
@@ -97,6 +149,10 @@ docker run --rm \
   -v "$SNAPSHOT_DIR/graphy_backend_data":/src:ro \
   alpine sh -c "rm -rf /dst/* && cp -a /src/. /dst/" >> "$LOG_FILE" 2>&1
 
-docker compose -f "$COMPOSE_FILE" start ldap db arc graphy-backend >> "$LOG_FILE" 2>&1
+docker compose -f "$COMPOSE_FILE" start ldap db arc >> "$LOG_FILE" 2>&1
+# graphy-backend だけ up -d で起こす。イメージが焼き直されていればここで作り直され、
+# 変わっていなければ start と同じ挙動になる（前夜のビルドだけ通って差し替えに失敗した、
+# といった取りこぼしもここで解消される）。
+docker compose -f "$COMPOSE_FILE" up -d graphy-backend >> "$LOG_FILE" 2>&1
 
-log "reset done"
+log "reset done ($(git -C "$REPO_ROOT" rev-parse --short HEAD))"
