@@ -13,6 +13,20 @@ import { buildSeriesLayout, buildLayoutFromDto, DEFAULT_AXES, type AxisSpec, typ
 import CineControls from "./CineControls";
 import { prewarmXaDataset, readXaCineSource, type XaCineSource } from "./xaCine";
 import {
+  autoAlignDsa,
+  dsaImageId,
+  dsaSessionState,
+  measureDsaResidual,
+  prepareDsaSession,
+  readXaDsaTags,
+  rebuildDsaMask,
+  releaseDsaSession,
+  setDsaLogarithmic,
+  setDsaMaskFrames,
+  setDsaShift,
+  type DsaSessionState,
+} from "./dsaLoader";
+import {
   buildSortMeta,
   computeZOrder,
   applySortToLayout,
@@ -306,7 +320,23 @@ export function SeriesViewer({
     return Array.from({ length: digitalCount }, (_, dz) => thickSlabImageId(thickToken, dz));
   }, [thickToken, digitalCount]);
   // Viewer2D に渡す実表示スタック（ThickSlab ON なら合成 imageId、OFF なら native）。
-  const displayImageIds = thickImageIds ?? zStack;
+  // DSA ON（フレーム軸）のときは graphy-dsa: の合成 imageId に差し替える。
+  // 版番号を imageId に混ぜることで、シフト/マスクを変えたら別 imageId ＝ 再合成になる。
+  // ── DSA（サブトラクション）─ フレーム軸（XA/XRF）のときだけ（fw/angio-design.md §6）────
+  const [dsaOn, setDsaOn] = useState(false);
+  const [dsaToken, setDsaToken] = useState<string | null>(null);
+  const [dsaState, setDsaState] = useState<DsaSessionState | null>(null);
+  const [dsaResidual, setDsaResidual] = useState<number | null>(null);
+  // 合成パラメータ（シフト・マスク）を変えたら imageId を作り直して再合成させるための版番号。
+  const [dsaVersion, setDsaVersion] = useState(0);
+  const [dsaBusy, setDsaBusy] = useState(false);
+
+  const dsaImageIds = useMemo(() => {
+    if (!dsaToken) return null;
+    return zStack.map((_id, t) => dsaImageId(dsaToken, t, dsaVersion));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dsaToken, dsaVersion, zStackKey]);
+  const displayImageIds = dsaImageIds ?? thickImageIds ?? zStack;
 
   // ── XA シネ: dataSet を先に温めてから表示する（fw/angio-design.md §5.5）──────────────
   // 🚨 プリウォームは必須。dicom-image-loader は「dataSet 未キャッシュの初回だけ 1 origin の
@@ -336,6 +366,68 @@ export function SeriesViewer({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isFrameStack, zStackKey]);
+
+  // シリーズ/ランが変わったら DSA は解除する（別ランのマスクを引きずらない）。
+  useEffect(() => {
+    setDsaOn(false);
+  }, [seriesUid, otherIdx]);
+
+  useEffect(() => {
+    if (!dsaOn || !isFrameStack || zStack.length < 2) {
+      setDsaToken((prev) => {
+        if (prev) releaseDsaSession(prev);
+        return null;
+      });
+      setDsaState(null);
+      setDsaResidual(null);
+      return;
+    }
+    let cancelled = false;
+    setDsaBusy(true);
+    const tags = readXaDsaTags(zStack[0]);
+    prepareDsaSession({
+      frameIds: zStack,
+      maskFrames: tags?.maskFrames ?? null,
+      pixelIntensityRelationship: tags?.pixelIntensityRelationship ?? null,
+      dx: tags?.dx ?? 0,
+      dy: tags?.dy ?? 0,
+    })
+      .then((token) => {
+        if (cancelled) {
+          if (token) releaseDsaSession(token);
+          return;
+        }
+        if (!token) {
+          emitToast(t("dsa.failed"));
+          setDsaOn(false);
+          return;
+        }
+        setDsaToken(token);
+        setDsaState(dsaSessionState(token));
+      })
+      .catch(() => {
+        if (!cancelled) {
+          emitToast(t("dsa.failed"));
+          setDsaOn(false);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setDsaBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dsaOn, isFrameStack, zStackKey]);
+
+  /** DSA のパラメータを変えた後に呼ぶ（再合成 → 状態と残差の更新）。 */
+  const refreshDsa = (token: string, frame: number) => {
+    setDsaVersion((v) => v + 1);
+    setDsaState(dsaSessionState(token));
+    measureDsaResidual(token, frame)
+      .then((r) => setDsaResidual(r))
+      .catch(() => setDsaResidual(null));
+  };
 
   // スタックの差し替え回数を数える（XA でフレーム送りのたびに増えるなら stackAxis の配線ミス）。
   const stackKeyForCount = displayImageIds[0] ?? "";
@@ -728,6 +820,97 @@ export function SeriesViewer({
                 trailing={cinePlayBtn(playT, () => setPlayT((p) => !p), otherCount <= 1)}
                 testId="dim-slider-other"
               />
+            )}
+            {/* DSA（サブトラクション）: フレーム軸（XA/XRF）のときだけ。fw/angio-design.md §6 */}
+            {isFrameStack && (
+              <>
+                <div style={row}>
+                  <Check
+                    testId="dsa-check"
+                    label={t("dsa.enable")}
+                    checked={dsaOn}
+                    onChange={() => setDsaOn((v) => !v)}
+                    disabled={dsaBusy || nZ < 2}
+                  />
+                  {dsaState && (
+                    <>
+                      <span style={hint}>
+                        {t("dsa.mask", {
+                          frames: dsaState.maskFrames.map((i) => i + 1).join(", "),
+                        })}
+                      </span>
+                      <button
+                        style={btn}
+                        title={t("dsa.setMaskHere.title")}
+                        onClick={() => {
+                          if (!dsaToken) return;
+                          setDsaMaskFrames(dsaToken, [zc]);
+                          rebuildDsaMask(dsaToken).then((ok) => {
+                            if (ok) refreshDsa(dsaToken, zc);
+                          });
+                        }}
+                      >
+                        {t("dsa.setMaskHere")}
+                      </button>
+                    </>
+                  )}
+                </div>
+                {dsaState && (
+                  <div style={row}>
+                    <span style={hint}>
+                      {t("dsa.shift", { dx: dsaState.dx.toFixed(1), dy: dsaState.dy.toFixed(1) })}
+                    </span>
+                    {([
+                      ["←", -1, 0],
+                      ["→", 1, 0],
+                      ["↑", 0, -1],
+                      ["↓", 0, 1],
+                    ] as const).map(([label, ddx, ddy]) => (
+                      <button
+                        key={label}
+                        style={btn}
+                        title={t("dsa.shiftStep")}
+                        onClick={() => {
+                          if (!dsaToken || !dsaState) return;
+                          setDsaShift(dsaToken, dsaState.dx + ddx, dsaState.dy + ddy);
+                          refreshDsa(dsaToken, zc);
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                    <button
+                      style={btn}
+                      data-testid="dsa-auto-align"
+                      title={t("dsa.autoAlign.title")}
+                      onClick={() => {
+                        if (!dsaToken) return;
+                        setDsaBusy(true);
+                        autoAlignDsa(dsaToken, zc)
+                          .then(() => refreshDsa(dsaToken, zc))
+                          .finally(() => setDsaBusy(false));
+                      }}
+                      disabled={dsaBusy}
+                    >
+                      {t("dsa.autoAlign")}
+                    </button>
+                    <Check
+                      label={t("dsa.logarithmic")}
+                      checked={dsaState.logarithmic}
+                      onChange={() => {
+                        if (!dsaToken || !dsaState) return;
+                        setDsaLogarithmic(dsaToken, !dsaState.logarithmic);
+                        refreshDsa(dsaToken, zc);
+                      }}
+                    />
+                    {dsaResidual != null && (
+                      <span style={hint} title={t("dsa.residual.title")}>
+                        {t("dsa.residual", { v: dsaResidual.toFixed(1) })}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </>
             )}
             {/* ThickSlab（デジタルスライス厚）: On/Off ＋ 厚み選択。SliderView かつ空間スライス軸のみ。 */}
             {spatialStack && (

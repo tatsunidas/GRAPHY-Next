@@ -179,15 +179,23 @@ export function isXaDatasetReady(imageId: string): boolean {
 }
 
 /**
- * キャッシュ済み dataSet から fps 決定用のタグを読む。プリウォーム前は null。
- * Cornerstone の `cineModule` は FrameTime しか返さないため、生タグを直接読む。
+ * プリウォーム済みの dataSet を取り出す（XA 系のタグ読み出しの共通入口）。
+ * 未取得・非 wadouri の imageId では null。
  */
-export function readXaCineSource(imageId: string): XaCineSource | null {
+export function xaDataSetOf(imageId: string): ReturnType<typeof wadouri.dataSetCacheManager.get> | null {
   const url = xaSourceUrlOf(imageId);
   if (!url) return null;
   const cache = wadouri.dataSetCacheManager;
   if (!cache.isLoaded(url)) return null;
-  const ds = cache.get(url);
+  return cache.get(url) ?? null;
+}
+
+/**
+ * キャッシュ済み dataSet から fps 決定用のタグを読む。プリウォーム前は null。
+ * Cornerstone の `cineModule` は FrameTime しか返さないため、生タグを直接読む。
+ */
+export function readXaCineSource(imageId: string): XaCineSource | null {
+  const ds = xaDataSetOf(imageId);
   if (!ds) return null;
   const nf = ds.intString("x00280008");
   const rawVector = ds.string("x00181065");

@@ -18,6 +18,7 @@ import { resolveVolumeBudgetMb } from "./volumeMemoryGuard";
 import { registerSegMetadataProvider } from "./segMetadata";
 import { registerThickSlabLoader } from "./thickSlab";
 import { registerXaCalibrationProvider } from "./xaCalibrationProvider";
+import { registerDsaLoader } from "./dsaLoader";
 import { WandTool } from "./wandTool";
 import { LevelSetTool } from "./levelSetsTool";
 import { installSegDebug } from "./segDebug";
@@ -177,6 +178,9 @@ export function ensureCornerstoneInitialized(): Promise<void> {
       // imagePlaneModule へ注入する。未校正なら spacing を落として px 表示に戻す
       // （fw/angio-design.md §7）。
       registerXaCalibrationProvider();
+      // DSA（サブトラクション）: graphy-dsa: スキームの合成ローダ＋メタデータ委譲
+      // （modalityLUT 恒等・差分用 VOI）。fw/angio-design.md §6。
+      registerDsaLoader();
       // 診断: Brush 無言停止時に Console で `__graphySegDebug()` を実行して状態を出力。
       installSegDebug();
       // マスク（labelmap）の既定スタイル（アウトライン幅・塗り不透明度）。Cornerstone 既定は

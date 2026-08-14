@@ -800,6 +800,19 @@ export const en: Record<string, string> = {
   // Axis labels (values supplied by the backend SeriesLayout.axes)
   "series.axis.Run": "Run",
   "series.axis.Frame": "Frame",
+  // DSA (subtraction. fw/angio-design.md §6)
+  "dsa.enable": "DSA (subtraction)",
+  "dsa.failed": "Could not build the subtraction (failed to read frames).",
+  "dsa.mask": "Mask: frame {{frames}}",
+  "dsa.setMaskHere": "Use current frame as mask",
+  "dsa.setMaskHere.title": "Use the displayed frame as the mask (pre-contrast)",
+  "dsa.shift": "Pixel shift: {{dx}}, {{dy}} px",
+  "dsa.shiftStep": "Shift by 1 px",
+  "dsa.autoAlign": "Auto align",
+  "dsa.autoAlign.title": "Search the shift that minimizes background residual (sub-pixel)",
+  "dsa.logarithmic": "Log transform",
+  "dsa.residual": "Background residual {{v}}",
+  "dsa.residual.title": "RMS of the background after subtraction. Lower means the pixel shift fits better",
   // XA/XRF spatial calibration (fw/angio-design.md §7)
   "xa.calib.label": "Calibration",
   "xa.calib.source.user-catheter": "Catheter calibration (measured)",

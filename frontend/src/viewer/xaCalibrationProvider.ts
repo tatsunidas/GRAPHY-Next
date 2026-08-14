@@ -20,8 +20,7 @@
  * px 表示に戻す。これが無いと「未校正なのに mm が出る」という一番危ない状態が残る。
  */
 import { metaData } from "@cornerstonejs/core";
-import { wadouri } from "@cornerstonejs/dicom-image-loader";
-import { xaSourceUrlOf } from "./imageId";
+import { xaDataSetOf } from "./xaCine";
 import {
   resolveXaCalibration,
   type XaCalibTags,
@@ -66,12 +65,8 @@ export function clearXaCalibrationCache(): void {
 }
 
 function dataSetFor(imageId: string): MinimalDataSet | null {
-  const url = xaSourceUrlOf(imageId);
-  if (!url) return null;
-  const cache = wadouri.dataSetCacheManager;
-  // 未取得なら何もしない（プリウォーム前・非 wadouri の imageId はここで抜ける）。
-  if (!cache.isLoaded(url)) return null;
-  return (cache.get(url) as unknown as MinimalDataSet) ?? null;
+  // 未取得・非 wadouri の imageId はここで抜ける（プリウォーム前は解決しない）。
+  return (xaDataSetOf(imageId) as unknown as MinimalDataSet) ?? null;
 }
 
 function readPair(ds: MinimalDataSet, tag: string): [number, number] | null {

@@ -802,6 +802,19 @@ export const ja: Record<string, string> = {
   // 軸ラベル（backend の SeriesLayout.axes が供給する値の訳）
   "series.axis.Run": "ラン",
   "series.axis.Frame": "フレーム",
+  // DSA（サブトラクション。fw/angio-design.md §6）
+  "dsa.enable": "DSA（サブトラクション）",
+  "dsa.failed": "サブトラクションを作成できませんでした（フレームの読み込みに失敗）。",
+  "dsa.mask": "マスク: フレーム {{frames}}",
+  "dsa.setMaskHere": "現在フレームをマスクに",
+  "dsa.setMaskHere.title": "表示中のフレームをマスク（造影前）として使う",
+  "dsa.shift": "ピクセルシフト: {{dx}}, {{dy}} px",
+  "dsa.shiftStep": "1 px ずらす",
+  "dsa.autoAlign": "自動位置合わせ",
+  "dsa.autoAlign.title": "背景の残差が最小になるシフト量を探す（サブピクセル）",
+  "dsa.logarithmic": "対数変換",
+  "dsa.residual": "背景残差 {{v}}",
+  "dsa.residual.title": "差分後の背景の RMS。小さいほどピクセルシフトが合っている",
   // XA/XRF の空間校正（fw/angio-design.md §7）
   "xa.calib.label": "空間校正",
   "xa.calib.source.user-catheter": "カテーテル法（実測）",
