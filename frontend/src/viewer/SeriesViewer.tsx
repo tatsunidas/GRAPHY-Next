@@ -11,6 +11,7 @@ import { ToolIcon } from "../icons/ToolIcon";
 import { UI_ICON_FILES } from "../icons/toolIcons";
 import { buildSeriesLayout, buildLayoutFromDto, DEFAULT_AXES, type AxisSpec, type SeriesLayout } from "./seriesLayout";
 import CineControls from "./CineControls";
+import { XaAnalysisDialog } from "./XaAnalysisDialog";
 import { prewarmXaDataset, readXaCineSource, type XaCineSource } from "./xaCine";
 import {
   autoAlignDsa,
@@ -330,6 +331,8 @@ export function SeriesViewer({
   // 合成パラメータ（シフト・マスク）を変えたら imageId を作り直して再合成させるための版番号。
   const [dsaVersion, setDsaVersion] = useState(0);
   const [dsaBusy, setDsaBusy] = useState(false);
+  // 校正 / QCA ダイアログ（fw/angio-design.md §7.3 / §8）。
+  const [xaDialogOpen, setXaDialogOpen] = useState(false);
 
   const dsaImageIds = useMemo(() => {
     if (!dsaToken) return null;
@@ -832,6 +835,14 @@ export function SeriesViewer({
                     onChange={() => setDsaOn((v) => !v)}
                     disabled={dsaBusy || nZ < 2}
                   />
+                  <button
+                    style={btn}
+                    data-testid="xa-analysis-open"
+                    onClick={() => setXaDialogOpen(true)}
+                    title={t("xa.analysis.title")}
+                  >
+                    {t("xa.analysis.open")}
+                  </button>
                   {dsaState && (
                     <>
                       <span style={hint}>
@@ -964,6 +975,16 @@ export function SeriesViewer({
           {gridDisabled && <span style={hint}>{t("series.grid.disabled")}</span>}
         </div>
       </div>
+      )}
+      {xaDialogOpen && displayImageIds[zc] && (
+        <XaAnalysisDialog
+          imageId={displayImageIds[zc]}
+          seriesUid={seriesUid}
+          isSubtracted={!!dsaToken}
+          onClose={() => setXaDialogOpen(false)}
+          // 校正が変わったら表示（スケールバー・計測ラベル）を作り直す。
+          onCalibrated={() => setDsaVersion((v) => v + 1)}
+        />
       )}
     </div>
   );
