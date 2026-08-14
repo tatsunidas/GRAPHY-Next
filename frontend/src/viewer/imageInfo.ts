@@ -5,6 +5,8 @@
 import { metaData, imageLoader, utilities as csUtils, type Types } from "@cornerstonejs/core";
 import dicomImageLoader from "@cornerstonejs/dicom-image-loader";
 import { suvForImageId } from "./suvStore";
+import { calibrationForImageId } from "./xaCalibrationProvider";
+import type { XaCalibration } from "./xaCalibration";
 
 /**
  * 表示中スライスのキャリブレーション情報（輝度=Modality LUT / ボクセル / FOV）。
@@ -46,6 +48,11 @@ export interface ImageInfo {
   suvScale?: number;
   /** SUV 単位ラベル（"SUVbw" 等）。 */
   suvUnit?: string;
+  /**
+   * XA/XRF の空間校正の解決結果（`fw/angio-design.md` §7）。XA 以外は undefined。
+   * **出自を必ず画面に出す**ための情報で、mm/px 自体は既に imagePlaneModule へ注入済み。
+   */
+  xaCalibration?: XaCalibration;
 }
 
 function firstNumber(v: unknown): number | undefined {
@@ -104,6 +111,8 @@ export function readImageInfo(imageId: string): ImageInfo {
     photometricInterpretation: pixel.photometricInterpretation,
     hasOrientation: Array.isArray(plane.imageOrientationPatient) && plane.imageOrientationPatient.length >= 6,
     imagePositionPatient: ipp ? [ipp[0], ipp[1], ipp[2]] : undefined,
+    // XA/XRF はどの経路で mm/px が決まったかを併記する（幾何近似なのか装置校正なのか）。
+    xaCalibration: calibrationForImageId(imageId) ?? undefined,
   };
 }
 

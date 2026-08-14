@@ -100,6 +100,35 @@ export function ImageInfoPanel({
           {t("viewer.info.depthBy", { src: voxelDepthNote })}
         </div>
       )}
+      {/* XA/XRF: mm/px がどう決まったかを必ず出す（幾何近似なのか装置校正なのか人の校正なのか）。 */}
+      {info.xaCalibration && (
+        <>
+          <Row
+            label={t("xa.calib.label")}
+            value={t(`xa.calib.source.${info.xaCalibration.source}`)}
+          />
+          <div style={{ textAlign: "right", color: "#9aa6b2", fontSize: 11, marginTop: -1 }}>
+            {info.xaCalibration.provenance}
+          </div>
+          {info.xaCalibration.tier === "approximate" && (
+            <div style={{ textAlign: "right", color: "#d8b25a", fontSize: 11 }}>
+              {t("xa.calib.approximate")}
+            </div>
+          )}
+          {info.xaCalibration.tier === "uncalibrated" && (
+            <div style={{ textAlign: "right", color: "#d8b25a", fontSize: 11 }}>
+              {t("xa.calib.uncalibrated")}
+              {info.xaCalibration.detectorMmPerPx != null &&
+                ` (${t("xa.calib.detector", { v: num(info.xaCalibration.detectorMmPerPx, 3) })})`}
+            </div>
+          )}
+          {info.xaCalibration.warnings.map((w) => (
+            <div key={w} style={{ textAlign: "right", color: "#d8b25a", fontSize: 11 }}>
+              {t(`xa.calib.warn.${w}`)}
+            </div>
+          ))}
+        </>
+      )}
       <div style={divider} />
       <Row label={t("viewer.info.rescale")} value={rescale} />
       <Row label={t("viewer.info.window")} value={windowCW} />

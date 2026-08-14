@@ -17,6 +17,7 @@ import {
 import { resolveVolumeBudgetMb } from "./volumeMemoryGuard";
 import { registerSegMetadataProvider } from "./segMetadata";
 import { registerThickSlabLoader } from "./thickSlab";
+import { registerXaCalibrationProvider } from "./xaCalibrationProvider";
 import { WandTool } from "./wandTool";
 import { LevelSetTool } from "./levelSetsTool";
 import { installSegDebug } from "./segDebug";
@@ -172,6 +173,10 @@ export function ensureCornerstoneInitialized(): Promise<void> {
       registerSegMetadataProvider();
       // ThickSlab（デジタルスライス厚）: graphy-thickslab: スキームの合成スライスローダ＋メタデータ委譲。
       registerThickSlabLoader();
+      // XA/XRF の空間校正: PixelSpacing / ImagerPixelSpacing / SID・SOD から mm/px を解決して
+      // imagePlaneModule へ注入する。未校正なら spacing を落として px 表示に戻す
+      // （fw/angio-design.md §7）。
+      registerXaCalibrationProvider();
       // 診断: Brush 無言停止時に Console で `__graphySegDebug()` を実行して状態を出力。
       installSegDebug();
       // マスク（labelmap）の既定スタイル（アウトライン幅・塗り不透明度）。Cornerstone 既定は
