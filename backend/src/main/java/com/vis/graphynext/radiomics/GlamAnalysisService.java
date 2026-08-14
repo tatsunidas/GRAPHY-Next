@@ -51,6 +51,13 @@ public class GlamAnalysisService {
     /** 実測から得た処理速度（対/秒）。所要見積りの表示にだけ使う。 */
     private static final double PAIRS_PER_SECOND = 7e8;
 
+    /**
+     * 返す g(α,β,r) の要素数の上限。nBins² × maxRadius なのでビン数の 2 乗で増える
+     * （16 ビン・r=30 で 7,680、64 ビン・r=50 だと 204,800）。既定の 16 ビンなら遠く及ばない。
+     * 超えた場合は対角（自己親和性）だけを返し、理由を添える。
+     */
+    private static final long MAX_CROSS_AFFINITY_VALUES = 200_000L;
+
     private final RadiomicsMapEngine engine;
     private final RadiomicsMode mode;
 
@@ -66,7 +73,7 @@ public class GlamAnalysisService {
 
         int label = labelOf(req.settings());
         RadiomicsMapEngine.LoadedVolume vol = engine.load(req.studyInstanceUid(), req.sourceSeriesUid(),
-                req.channel(), req.timePoint(), req.maskSeriesUid(), req.maskChannel(), label);
+                req.channel(), req.timePoint(), req.maskSeriesUid(), req.maskChannel(), label, req.settings());
 
         if (vol.slices() < 2) {
             throw new IllegalArgumentException(
@@ -130,7 +137,8 @@ public class GlamAnalysisService {
             radii[r] = r + 1;
         }
 
-        // g[r][alpha][beta]（r は 1 始まりで、添字 0 は未使用）から自己ペアだけ取り出す。
+        // g[r][alpha][beta]（r は 1 始まりで、添字 0 は未使用）を [alpha][beta][r] へ組み替える。
+        // 自己ペア（対角）は読む頻度が桁違いなので、別配列にも取り出しておく。
         double[][][] rdf = glam.getRadialDistributionFunction();
         double[][][] rdfRandom = glam.getRandomRadialDistributionFunction();
         double[][] self = new double[bins][radius];
@@ -139,6 +147,24 @@ public class GlamAnalysisService {
             for (int r = 1; r <= radius; r++) {
                 self[alpha][r - 1] = rdf[r][alpha][alpha];
                 selfRandom[alpha][r - 1] = rdfRandom[r][alpha][alpha];
+            }
+        }
+        double[][][] cross = null;
+        String crossOmitted = null;
+        long crossValues = (long) bins * bins * radius;
+        if (crossValues > MAX_CROSS_AFFINITY_VALUES) {
+            crossOmitted = String.format("nBins=%d, maxRadius=%d では g(α,β,r) が %,d 個になるため返していません"
+                    + "（上限 %,d）。ビン数か maxRadius を下げてください。", bins, radius, crossValues,
+                    MAX_CROSS_AFFINITY_VALUES);
+            log.info("[glam-analysis] cross affinity omitted: {} values", crossValues);
+        } else {
+            cross = new double[bins][bins][radius];
+            for (int alpha = 0; alpha < bins; alpha++) {
+                for (int beta = 0; beta < bins; beta++) {
+                    for (int r = 1; r <= radius; r++) {
+                        cross[alpha][beta][r - 1] = rdf[r][alpha][beta];
+                    }
+                }
             }
         }
 
@@ -152,14 +178,31 @@ public class GlamAnalysisService {
             }
         }
 
+        // 特徴量 150 個。行列は上で全部組み上がっているので、ここは統計で潰すだけ＝安い。
+        Map<String, Double> features = new LinkedHashMap<>();
+        for (GLAMFeatureType type : GLAMFeatureType.values()) {
+            Double value;
+            try {
+                value = glam.calculate(type.name());
+            } catch (RuntimeException e) {
+                // 1 つの特徴が転んでも表全体を落とさない（定義されない組み合わせは null で出す）。
+                log.debug("[glam-analysis] feature '{}' not available: {}", type.name(), e.toString());
+                value = null;
+            }
+            features.put(type.name(), (value != null && Double.isNaN(value)) ? null : value);
+        }
+
         long[] occupancy = binOccupancy(glam, vol.mask(), label, bins);
 
         Map<String, String> used = new LinkedHashMap<>(requested == null ? Map.of() : requested);
         used.put("BINCOUNT_GLAM_INT", String.valueOf(bins));
         used.put("INT_GLAM_maxRadius", String.valueOf(radius));
 
+        double[] resampledFrom = (vol.resampling() != null) ? vol.resampling().sourceSpacing() : null;
+
         return new GlamAnalysis(GLAMFeatureType.values().length, bins, radius, roiVoxels, occupancy, radii,
-                self, selfRandom, matrices, diagonalOnly, spacing, isotropic, used);
+                self, selfRandom, cross, crossOmitted, matrices, diagonalOnly, features,
+                spacing, isotropic, resampledFrom, used);
     }
 
     /**

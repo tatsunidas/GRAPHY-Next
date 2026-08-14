@@ -590,6 +590,18 @@ export const readDicomSeg = (studyUid: string, seriesUid: string) =>
     `/api/dicom/seg?study=${encodeURIComponent(studyUid)}&series=${encodeURIComponent(seriesUid)}`,
   );
 
+/**
+ * セグメントの見出しだけを読む（`frames` は空で返る）。
+ *
+ * マスク平面はセグメントあたり 512×512×スライス数の Base64 になるので、名前を出すためだけに
+ * `readDicomSeg` を呼ばないこと。**セグメントは番号の昇順**で、i 番目がシリーズの
+ * チャンネル (C) i に対応する（backend `SegFrameExpander` が番号の rank を C にしている）。
+ */
+export const readDicomSegSegments = (studyUid: string, seriesUid: string) =>
+  httpGet<SegImportResult>(
+    `/api/dicom/seg/segments?study=${encodeURIComponent(studyUid)}&series=${encodeURIComponent(seriesUid)}`,
+  );
+
 export interface DeleteSeriesResult {
   deletedInstances: number;
 }
@@ -1198,13 +1210,24 @@ export interface GlamAnalysis {
   selfAffinity: number[][];
   /** 同じ並びのランダム参照状態。 */
   selfAffinityRandom: number[][];
+  /**
+   * 異なる濃度値どうしの親和性 g(α,β,r)。`[α][β][r]`（α=β の対角も含む）。
+   * nBins² × maxRadius が大きすぎる設定では `null`（理由は `crossAffinityOmitted`）。
+   */
+  crossAffinity: number[][][] | null;
+  /** `crossAffinity` を返さなかった理由（返した場合は null）。 */
+  crossAffinityOmitted: string | null;
   /** 親和性行列 19 種。キーは GLAMMatrixType 名、値は nBins×nBins。 */
   matrices: Record<string, number[][]>;
   /** 自己ペアだけで定義される行列（非対角に意味が無い）。 */
   diagonalOnly: string[];
-  /** ボクセル間隔 (x,y,z) mm。 */
+  /** 特徴量 150 個（GLAMFeatureType 名 → 値）。定義されない組み合わせは null。 */
+  features: Record<string, number | null>;
+  /** **計算に使った**ボクセル間隔 (x,y,z) mm。 */
   voxelSpacing: number[];
   isotropic: boolean;
+  /** リサンプリングした場合の**元の**ボクセル間隔 (x,y,z) mm。していなければ null。 */
+  resampledFrom: number[] | null;
   settings: Record<string, string>;
 }
 

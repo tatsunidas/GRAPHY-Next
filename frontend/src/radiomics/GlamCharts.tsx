@@ -6,10 +6,11 @@
  * GLAM 解析の図。手書き SVG（このリポジトリはグラフ用ライブラリを入れていない。
  * `viewer/RoiHistogramChart.tsx` と同じ流儀）。
  *
- * 描くのは 3 つ。原著論文および RadiomicsJ 同梱の `docs/make_glam_figures.py` が見せている図に対応する。
+ * 描くのは 4 つ。原著論文および RadiomicsJ 同梱の `docs/make_glam_figures.py` が見せている図に対応する。
  *  1. 自己親和性曲線 g(α,α,r) … 距離ごとの構造。**破線 1.0 が「偶然と区別がつかない」水準**
- *  2. 親和性行列のヒートマップ … α×β の関係。GLCM の共起行列にあたる記述子そのもの
- *  3. ビン占有数 … 稀なビンほど g(r) は跳ねるので、曲線を読む前の前提確認
+ *  2. 相互親和性曲線 g(α,β,r) … 選んだ濃度値 α から見た、他の濃度値 β との距離ごとの関係
+ *  3. 親和性行列のヒートマップ … α×β の関係。GLCM の共起行列にあたる記述子そのもの
+ *  4. ビン占有数 … 稀なビンほど g(r) は跳ねるので、曲線を読む前の前提確認
  */
 import { useMemo } from "react";
 
@@ -33,39 +34,41 @@ export function binColor(index: number, total: number): string {
 
 const PAD = { l: 52, r: 12, t: 14, b: 34 };
 
+/** 1 本の曲線。`bin` は色と凡例のためのビン番号。 */
+interface Curve {
+  bin: number;
+  values: number[];
+  /** 太く描く（相互親和性で「自分自身」を目立たせる）。 */
+  emphasis?: boolean;
+}
+
 /**
- * 自己親和性曲線。y は対数目盛（g は 1 の周りで数倍〜数十倍に振れるため、
+ * 親和性曲線の共通描画。y は対数目盛（g は 1 の周りで数倍〜数十倍に振れるため、
  * 線形だと近距離のピークに潰されて遠距離が読めない）。
  */
-export function SelfAffinityChart({
+function AffinityCurves({
   radii,
   curves,
-  occupancy,
-  width = 560,
-  height = 260,
+  totalBins,
+  width,
+  height,
   emptyLabel,
 }: {
   radii: number[];
-  curves: number[][];
-  occupancy: number[];
-  width?: number;
-  height?: number;
+  curves: Curve[];
+  totalBins: number;
+  width: number;
+  height: number;
   emptyLabel: string;
 }) {
   const iw = width - PAD.l - PAD.r;
   const ih = height - PAD.t - PAD.b;
 
-  const shown = useMemo(
-    // ボクセルが 1 つも無いビンは曲線が定義されない。描いても意味が無いので落とす。
-    () => curves.map((c, i) => ({ c, i })).filter(({ i }) => (occupancy[i] ?? 0) > 0),
-    [curves, occupancy],
-  );
-
   const { lo, hi } = useMemo(() => {
     let min = Number.POSITIVE_INFINITY;
     let max = Number.NEGATIVE_INFINITY;
-    for (const { c } of shown) {
-      for (const v of c) {
+    for (const { values } of curves) {
+      for (const v of values) {
         if (!Number.isFinite(v) || v <= 0) continue;
         if (v < min) min = v;
         if (v > max) max = v;
@@ -74,9 +77,9 @@ export function SelfAffinityChart({
     if (!Number.isFinite(min) || !Number.isFinite(max)) return { lo: 0.5, hi: 2 };
     // 1.0（偶然の水準）は必ず入れる。ここが読めないと曲線の意味が決まらない。
     return { lo: Math.min(min, 1) * 0.9, hi: Math.max(max, 1) * 1.1 };
-  }, [shown]);
+  }, [curves]);
 
-  if (!shown.length || !radii.length) {
+  if (!curves.length || !radii.length) {
     return <div style={{ color: "#6b7785", fontSize: 12, padding: 12 }}>{emptyLabel}</div>;
   }
 
@@ -101,11 +104,19 @@ export function SelfAffinityChart({
       ))}
       {/* 偶然の水準。GLAM の曲線はこの線からの隔たりで読む。 */}
       <line x1={PAD.l} x2={PAD.l + iw} y1={y(1)} y2={y(1)} stroke="#9aa5b1" strokeDasharray="4 3" />
-      {shown.map(({ c, i }) => {
-        const d = c
+      {curves.map(({ bin, values, emphasis }) => {
+        const d = values
           .map((v, k) => `${k === 0 ? "M" : "L"}${x(radii[k]).toFixed(1)},${y(v).toFixed(1)}`)
           .join(" ");
-        return <path key={i} d={d} fill="none" stroke={binColor(i, curves.length)} strokeWidth={1.4} />;
+        return (
+          <path
+            key={bin}
+            d={d}
+            fill="none"
+            stroke={binColor(bin, totalBins)}
+            strokeWidth={emphasis ? 2.6 : 1.4}
+          />
+        );
       })}
       {radii
         .filter((_, k) => k % Math.max(1, Math.floor(radii.length / 6)) === 0)
@@ -114,6 +125,73 @@ export function SelfAffinityChart({
         ))}
       <text x={PAD.l + iw / 2} y={height - 1} textAnchor="middle" fontSize={9} fill="#8a93a0">r [voxel]</text>
     </svg>
+  );
+}
+
+/** 自己親和性 g(α,α,r)。全 150 特徴の共通の源。 */
+export function SelfAffinityChart({
+  radii,
+  curves,
+  occupancy,
+  width = 560,
+  height = 260,
+  emptyLabel,
+}: {
+  radii: number[];
+  curves: number[][];
+  occupancy: number[];
+  width?: number;
+  height?: number;
+  emptyLabel: string;
+}) {
+  const shown = useMemo<Curve[]>(
+    // ボクセルが 1 つも無いビンは曲線が定義されない。描いても意味が無いので落とす。
+    () =>
+      curves
+        .map((values, bin) => ({ values, bin }))
+        .filter(({ bin }) => (occupancy[bin] ?? 0) > 0),
+    [curves, occupancy],
+  );
+  return (
+    <AffinityCurves radii={radii} curves={shown} totalBins={curves.length}
+      width={width} height={height} emptyLabel={emptyLabel} />
+  );
+}
+
+/**
+ * 相互親和性 g(α,β,r) — 選んだ濃度値 α から見た、他の濃度値 β との関係。
+ *
+ * 自己親和性（対角）は「同じ濃度値がどの距離で固まっているか」しか語らない。
+ * 異なる濃度値どうしの関係は**別の情報**で、これが親和性行列の非対角成分の中身にあたる。
+ * α 自身の曲線＝自己親和性なので、比較の基準として太く重ねて描く。
+ */
+export function CrossAffinityChart({
+  radii,
+  cross,
+  alpha,
+  occupancy,
+  width = 560,
+  height = 260,
+  emptyLabel,
+}: {
+  radii: number[];
+  cross: number[][][] | null;
+  alpha: number;
+  occupancy: number[];
+  width?: number;
+  height?: number;
+  emptyLabel: string;
+}) {
+  const shown = useMemo<Curve[]>(() => {
+    const row = cross?.[alpha];
+    if (!row) return [];
+    return row
+      .map((values, bin) => ({ values, bin, emphasis: bin === alpha }))
+      .filter(({ bin, values }) => (occupancy[bin] ?? 0) > 0 && values.some((v) => Number.isFinite(v) && v > 0));
+  }, [cross, alpha, occupancy]);
+  return (
+    <AffinityCurves radii={radii} curves={shown} totalBins={occupancy.length}
+      width={width} height={height} emptyLabel={emptyLabel} />
   );
 }
 

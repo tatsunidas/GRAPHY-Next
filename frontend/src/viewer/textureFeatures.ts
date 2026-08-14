@@ -96,6 +96,31 @@ export const glamStatisticsFor = (matrix: GlamMatrix | undefined): readonly stri
 export const glamFeatureString = (matrix: string, statistic: string) =>
   `${GLAM_FAMILY_KEY}_${matrix}_${statistic}`;
 
+/**
+ * 計算前リサンプリングの既定間隔（mm）。
+ * backend の `TextureResampling.DEFAULT_SPACING_MM` および
+ * `settings/registry.ts` の `texture.Resampling[XYZ]_DOUBLE` の既定と同じ値にすること。
+ */
+export const RESAMPLING_DEFAULT_MM = 1;
+
+/**
+ * 計算前リサンプリングの目標間隔 (x,y,z) mm。無効なら null。
+ *
+ * ⚠ **設定は利用者が触った項目しか保存されない**。チェックだけ入れた状態では
+ * `Resampling_BOOL` しか入っていないので、残りは既定値で補う（backend も同じ既定で補う）。
+ */
+export function resamplingSpacing(settings: Record<string, string>): [number, number, number] | null {
+  const on = settings.Resampling_BOOL;
+  if (on !== "1" && on !== "true") return null;
+  const read = (key: string) => {
+    const raw = settings[key];
+    if (raw == null || raw === "") return RESAMPLING_DEFAULT_MM;
+    const v = Number(raw);
+    return Number.isFinite(v) ? v : RESAMPLING_DEFAULT_MM;
+  };
+  return [read("ResamplingX_DOUBLE"), read("ResamplingY_DOUBLE"), read("ResamplingZ_DOUBLE")];
+}
+
 export const TEXTURE_FAMILIES: TextureFamily[] = [
   {
     key: "GLCM",

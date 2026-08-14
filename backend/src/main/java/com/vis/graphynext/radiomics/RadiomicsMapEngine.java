@@ -70,6 +70,11 @@ public class RadiomicsMapEngine {
      * <p>マップ生成（{@link #compute}）と GLAM 解析（{@link GlamAnalysisService}）は、
      * <b>同じ材料</b>から出発する — 同じシリーズを同じ (C,T) で積み、同じ規則でマスクを Z 整列し、
      * 同じ校正を載せる。違うのはそこから先だけなので、ここまでを 1 か所にまとめる。
+     *
+     * <p>{@code width}/{@code height}/{@code slices} と {@code calibration} は<b>計算に使う格子</b>
+     * のもの。リサンプリングが有効なら元シリーズの格子とは異なり、そのときだけ
+     * {@code resampling} に元の格子と逆変換が入る（{@link TextureResampling}）。
+     * 一方 {@code ippByZ}/{@code sopPerZ} は<b>常に元シリーズの z</b> で並ぶ。
      */
     public record LoadedVolume(
             ImagePlus image,
@@ -82,31 +87,24 @@ public class RadiomicsMapEngine {
             double pixelSpacingRow, double pixelSpacingCol,
             Map<Integer, double[]> ippByZ,
             String[] sopPerZ,
-            String frameOfReferenceUid) {
+            String frameOfReferenceUid,
+            TextureResampling.Grid resampling) {
     }
 
     /** ターゲット（＋任意マスク）から 1 特徴のマップを計算する。 */
     public MapResult compute(TextureSeriesRequest req, TextureProgress progress) throws IOException {
         LoadedVolume vol = load(req.studyInstanceUid(), req.sourceSeriesUid(), req.channel(), req.timePoint(),
-                req.maskSeriesUid(), req.maskChannel(), parseLabel(req));
-        ImagePlus img = vol.image();
-        ImagePlus mask = vol.mask();
-        int w = vol.width();
-        int h = vol.height();
-        int nZ = vol.slices();
-        int label = vol.label();
-        boolean hasMask = vol.hasMask();
-        Calibration finalCal = vol.calibration();
-        Map<Integer, double[]> ippByZ = vol.ippByZ();
-        String[] sopPerZ = vol.sopPerZ();
-        return computeFrom(req, progress, vol, img, mask, w, h, nZ, label, hasMask, finalCal, ippByZ, sopPerZ);
+                req.maskSeriesUid(), req.maskChannel(), parseLabel(req), req.settings());
+        return computeFrom(req, progress, vol);
     }
 
     /**
-     * シリーズを {@code ij.ImagePlus} のボリュームに積み、マスクを Z 整列し、校正を載せる。
+     * シリーズを {@code ij.ImagePlus} のボリュームに積み、マスクを Z 整列し、校正を載せ、
+     * 設定で要求されていればリサンプリングする。
      */
     public LoadedVolume load(String studyInstanceUid, String sourceSeriesUid, int channel, int timePoint,
-                             String maskSeriesUid, int maskChannel, int label) throws IOException {
+                             String maskSeriesUid, int maskChannel, int label,
+                             Map<String, String> settings) throws IOException {
         SeriesLayout layout = storage.seriesLayout(studyInstanceUid, sourceSeriesUid);
         if (layout == null || layout.cells().isEmpty()) {
             throw new IllegalArgumentException("ターゲットシリーズにフレームがありません: " + sourceSeriesUid);
@@ -181,16 +179,62 @@ public class RadiomicsMapEngine {
         ImagePlus mask = buildMask(studyInstanceUid, maskSeriesUid, maskChannel, w, h, nZ, label,
                 layout.imageOrientationPatient(), ippByZ);
 
+        // リサンプリング（環境設定 ▸ テクスチャ）。ここから先は計算格子で進み、
+        // マップは最後に元の格子へ戻す（幾何は元シリーズと一致させる）。
+        TextureResampling.Grid grid = null;
+        double[] target = TextureResampling.targetSpacing(settings);
+        double[] source = {finalCal.pixelWidth, finalCal.pixelHeight, finalCal.pixelDepth};
+        if (target != null && source[0] > 0 && source[1] > 0 && source[2] > 0
+                && !TextureResampling.alreadyMatches(source, target)) {
+            int[] planned = TextureResampling.plan(w, h, nZ, source, target);
+            ImagePlus[] resampled = TextureResampling.resample(img, mask, label, target);
+            img = resampled[0];
+            mask = resampled[1];
+            grid = TextureResampling.Grid.of(w, h, nZ, img.getWidth(), img.getHeight(), img.getNSlices(),
+                    source, target);
+            finalCal = img.getCalibration();
+            log.info("[texture] resampled: {}x{}x{} ({}, {}, {} mm) -> {}x{}x{} ({}, {}, {} mm)",
+                    w, h, nZ, source[0], source[1], source[2],
+                    img.getWidth(), img.getHeight(), img.getNSlices(), target[0], target[1], target[2]);
+            if (img.getWidth() != planned[0] || img.getHeight() != planned[1] || img.getNSlices() != planned[2]) {
+                // 見積りと実際がずれたら、ここで気づけるようにしておく（増加率のガードが空振りする）。
+                log.warn("[texture] resample grid differs from the estimate ({}x{}x{})",
+                        planned[0], planned[1], planned[2]);
+            }
+            w = img.getWidth();
+            h = img.getHeight();
+            nZ = img.getNSlices();
+            if (hasMask && windowCount(mask, label, 1) == 0) {
+                // 粗い格子へ落とすと薄い ROI は部分体積しきい値を通らずに消える。ここで気づかないと
+                // 「全面ゼロのマップが黙って出来上がる」側に落ちる（package-info の注意書き）。
+                throw new IllegalArgumentException(String.format(
+                        "リサンプリング (%s mm) で ROI が消えました。元の ROI が目標間隔に対して薄すぎます。"
+                                + "目標間隔を細かくするか、リサンプリングを無効にしてください。",
+                        String.join(", ", String.valueOf(target[0]), String.valueOf(target[1]),
+                                String.valueOf(target[2]))));
+            }
+        } else if (target != null) {
+            log.info("[texture] resampling requested but the volume is already ({}, {}, {} mm) -> skipped",
+                    source[0], source[1], source[2]);
+        }
+
         return new LoadedVolume(img, mask, w, h, nZ, label, hasMask, finalCal,
                 layout.imageOrientationPatient(), layout.pixelSpacingRow(), layout.pixelSpacingCol(),
-                ippByZ, sopPerZ, layout.frameOfReferenceUID());
+                ippByZ, sopPerZ, layout.frameOfReferenceUID(), grid);
     }
 
     /** {@link #load} で揃えた材料からマップを計算する（compute の後半）。 */
-    private MapResult computeFrom(TextureSeriesRequest req, TextureProgress progress, LoadedVolume vol,
-                                  ImagePlus img, ImagePlus mask, int w, int h, int nZ, int label,
-                                  boolean hasMask, Calibration finalCal,
-                                  Map<Integer, double[]> ippByZ, String[] sopPerZ) {
+    private MapResult computeFrom(TextureSeriesRequest req, TextureProgress progress, LoadedVolume vol) {
+        ImagePlus img = vol.image();
+        ImagePlus mask = vol.mask();
+        int w = vol.width();
+        int h = vol.height();
+        int nZ = vol.slices();
+        int label = vol.label();
+        boolean hasMask = vol.hasMask();
+        Calibration finalCal = vol.calibration();
+        Map<Integer, double[]> ippByZ = vol.ippByZ();
+        String[] sopPerZ = vol.sopPerZ();
         int filterSize = req.filterSize() > 0 ? oddUp(req.filterSize()) : 7;
         int stride = Math.max(1, req.stride());
         boolean d2 = req.force2D();
@@ -225,13 +269,27 @@ public class RadiomicsMapEngine {
         log.info("[texture] map '{}' {}x{}x{} stride={} filter={} margin={} in {} ms",
                 built.displayName(), w, h, nZ, stride, filterSize, margin, System.currentTimeMillis() - t0);
 
-        List<double[]> ippList = new ArrayList<>(nZ);
-        List<String> sopList = new ArrayList<>(nZ);
-        for (int z = 0; z < nZ; z++) {
+        // リサンプリングして計算した場合は、元シリーズの格子へ戻してから DICOM 化する
+        // （派生シリーズの幾何を元と一致させ、Fusion で重ねられる状態を保つ）。
+        int outW = w;
+        int outH = h;
+        int outZ = nZ;
+        if (vol.resampling() != null) {
+            TextureResampling.Grid grid = vol.resampling();
+            full = TextureResampling.toSourceGrid(full, w, h, nZ, grid);
+            outW = grid.sourceWidth();
+            outH = grid.sourceHeight();
+            outZ = grid.sourceSlices();
+            log.info("[texture] map mapped back to the source grid {}x{}x{}", outW, outH, outZ);
+        }
+
+        List<double[]> ippList = new ArrayList<>(outZ);
+        List<String> sopList = new ArrayList<>(outZ);
+        for (int z = 0; z < outZ; z++) {
             ippList.add(ippByZ.get(z));
             sopList.add(sopPerZ[z]);
         }
-        return new MapResult(w, h, nZ, full,
+        return new MapResult(outW, outH, outZ, full,
                 built.displayName(),
                 vol.imageOrientationPatient(),
                 vol.pixelSpacingRow(), vol.pixelSpacingCol(),
