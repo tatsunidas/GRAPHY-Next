@@ -142,6 +142,21 @@ export function readXaCalibTags(imageId: string): XaCalibTags | null {
   };
 }
 
+/**
+ * **Cornerstone の world 座標が使っている**列/行 spacing。
+ *
+ * <p>🚨 world は「ローダが画像オブジェクトに付けた spacing」で決まる（DICOM の `PixelSpacing`、
+ * 無ければ 1）。**`imagePlaneModule` へ注入した校正値ではない**。world ↔ 画像ピクセルの換算は
+ * 必ずこちらを使うこと。校正値で割ると、校正した瞬間に座標が桁違いになる
+ * （実機で「校正後に QCA が失敗し、古い結果が残る」形で出た）。
+ */
+export function loaderSpacingFor(imageId: string): { row: number; col: number } {
+  const ps = readXaCalibTags(imageId)?.pixelSpacing;
+  const row = ps && ps[0] > 0 ? ps[0] : 1;
+  const col = ps && ps[1] > 0 ? ps[1] : 1;
+  return { row, col };
+}
+
 /** imageId の校正を解決する（memo 付き）。XA でなければ null。 */
 export function calibrationForImageId(imageId: string): XaCalibration | null {
   const hit = resolved.get(imageId);

@@ -24,7 +24,12 @@ import { readModalitySlice } from "./pixelCalibration";
 import { runQca, type QcaResult } from "./qca";
 import { ENGINE_ID } from "./Viewer2D";
 import { readVoiWindow } from "./viewportRead";
-import { calibrationForImageId, clearXaCalibrationCache, setXaUserCalibration } from "./xaCalibrationProvider";
+import {
+  calibrationForImageId,
+  clearXaCalibrationCache,
+  loaderSpacingFor,
+  setXaUserCalibration,
+} from "./xaCalibrationProvider";
 
 /** [x,y] の並びを GSPS 用のフラットな配列にする。 */
 function flatten(points: readonly (readonly [number, number])[]): number[] {
@@ -96,8 +101,11 @@ interface LengthPick {
  * world 座標 → 画像ピクセル座標。
  *
  * <p>XA は IPP/IOP を持たないため、Cornerstone の StackViewport は既定平面
- * （原点 0・行/列方向が x/y 軸）を使う。よって world = (x·列spacing, y·行spacing) であり、
- * spacing で割れば画像ピクセルに戻る。spacing 未設定（未校正）なら world はそのまま px。
+ * （原点 0・行/列方向が x/y 軸）を使う。よって world = (x·列spacing, y·行spacing)。
+ *
+ * <p>🚨 ここで使う spacing は **ローダが画像に付けた値**（DICOM の `PixelSpacing`、無ければ 1）で
+ * あって、**我々が校正で決めた mm/px ではない**。校正値で割ると、校正した瞬間に座標が
+ * 桁違いになり解析が黙って失敗する（実機で「校正後に古い結果が残る」形で発覚）。
  */
 function worldToImagePx(
   w: readonly number[],
@@ -175,10 +183,11 @@ export function XaAnalysisDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [imageId, calibVersion],
   );
-  const picks = useMemo(
-    () => collectLengthPicks(imageId, calib?.mmPerPxRow ?? null, calib?.mmPerPxCol ?? null),
-    [imageId, calib],
-  );
+  // world → 画像ピクセルの換算は**ローダの spacing**で行う（校正値ではない）。
+  const picks = useMemo(() => {
+    const sp = loaderSpacingFor(imageId);
+    return collectLengthPicks(imageId, sp.row, sp.col);
+  }, [imageId, calibVersion]);
   const [selected, setSelected] = useState(0);
   const [knownMm, setKnownMm] = useState("");
   const [frSize, setFrSize] = useState("6");
@@ -309,6 +318,9 @@ export function XaAnalysisDialog({
     }
     setBusy(true);
     setError(null);
+    // 失敗したときに**古い結果が残らない**ようにする（前回値を見て「変わっていない」と
+    // 誤解する事故を防ぐ。実機で踏んだ）。
+    setResult(null);
     readModalitySlice(imageId)
       .then((slice) => {
         if (!slice) {

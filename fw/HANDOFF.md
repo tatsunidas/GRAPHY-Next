@@ -4,8 +4,11 @@
 
 > 🟢 **2026-08-14 アンギオ A1〜A4・A9・A10 を実装し、A1 は実機検証 31/31 合格**（ブランチ `feat/angio-a1`。
 > 正本: [`fw/angio-design.md`](angio-design.md) §5.8・§17.1）
-> A1 シネ表示 / A2 DSA / A3 空間校正 / A4 QCA。**A1（31/31）・A2（18/18）・A3（11/11）は実機検証済み**、
-> A4/A9/A10 は未検証。
+> A1 シネ表示 / A2 DSA / A3 空間校正 / A4 QCA。**A1（31/31）・A2（18/18）・A3（11/11）・
+> A4+A10（20/20）は実機検証済み**、A9 は未検証。
+> 🔴 **QCA は「内部整合」までしか検証できていない**。実データに真値が無く、しかも血管から外れた
+> 区間でも結果は必ず出る（実測で %DS 94.2% という無意味な値が出た）。**中心線・エッジの手修正が
+> 入るまで「使える」と言わないこと**。精度は bench の GNBP-XA（A4b・未着手）待ち。
 > 実データは `bash automator/scripts/fetch-xa-samples.sh` で取得（Rubo の XA サンプル）。
 > A1 の検証は `cd automator && npx tsx src/spike/xaCineCheck.ts`（実測 fps 29.95/公称 30.30・誤差 1.16%）。
 > - 🔑 **`fw/viewer-2d-architecture.md` の「左ドラッグ=Pan」は誤り**だった。実際は
