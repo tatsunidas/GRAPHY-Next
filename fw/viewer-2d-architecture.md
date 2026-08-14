@@ -35,7 +35,10 @@ zoom / pan / flip(上下左右) / rotation は **Cornerstone3D の ViewPresentat
 まとめて 1 つの affine 状態として管理する（`ViewTransform`）。
 - **表示倍率**: コンポーネントに Fit した状態を **1.0（100%）**。`getZoom()`/`setZoom()` がこの相対倍率。
 - **既定原点**: 画像がコンポーネント中央。pan=[0,0]。
-- **操作の写像**: 左ドラッグ=Pan、右ドラッグ/ホイール=Zoom（Cornerstone Tools の PanTool/ZoomTool）。
+- **操作の写像**: **左ドラッグ=W/L（WindowLevelTool）／中ボタンドラッグ=Pan／右ドラッグ=Zoom**、
+  ホイール=スライス（フレーム）送り。⚠️ 以前ここに「左ドラッグ=Pan」と書いてあったが**実装と違う**
+  （`Viewer2D.tsx` の `setToolActive`: Primary=WindowLevel / Auxiliary=Pan / Secondary=Zoom）。
+  2026-08-14 に automator の実機検証で発覚（この記述に従ってテストを書き、Pan が動かず失敗した）。
   Fit/±Zoom/90°回転/左右反転/上下反転は `applyTransform()`→`setViewPresentation()`（全部 affine 経由）。
 - **再 Fit（レスポンシブ）**: ResizeObserver で `renderingEngine.resize(true,false)`（新サイズへ再 Fit）後、
   退避した presentation を再適用して**相対 zoom/pan/rotation/flip を維持**。

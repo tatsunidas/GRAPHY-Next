@@ -2,8 +2,16 @@
 
 > 更新日: 2026-07-31（最終更新: **モバイル UI を実機検証（M9）し、見つかった不具合を修正・デプロイ**。下記エントリ参照）
 
-> 🟢 **2026-08-14 アンギオ A1〜A4・A9・A10 を実装**（ブランチ `feat/angio-a1`。正本: [`fw/angio-design.md`](angio-design.md) §17.1）
-> A1 シネ表示 / A2 DSA / A3 空間校正 / A4 QCA。**実機検証はすべて未実施**（手順は同ドキュメント §5.8・§18）。
+> 🟢 **2026-08-14 アンギオ A1〜A4・A9・A10 を実装し、A1 は実機検証 31/31 合格**（ブランチ `feat/angio-a1`。
+> 正本: [`fw/angio-design.md`](angio-design.md) §5.8・§17.1）
+> A1 シネ表示 / A2 DSA / A3 空間校正 / A4 QCA。**A1 以外の実機検証は未実施**。
+> 実データは `bash automator/scripts/fetch-xa-samples.sh` で取得（Rubo の XA サンプル）。
+> A1 の検証は `cd automator && npx tsx src/spike/xaCineCheck.ts`（実測 fps 29.95/公称 30.30・誤差 1.16%）。
+> - 🔑 **`fw/viewer-2d-architecture.md` の「左ドラッグ=Pan」は誤り**だった。実際は
+>   **左=W/L / 中=Pan / 右=Zoom**。この記述に従ってテストを書いて失敗し発覚。同ドキュメント修正済み。
+> - ⚠️ **空振りの合格を作りかけた**: `getViewportGeometry()` は `zoom`/`pan` を返さない
+>   （`camera.parallelScale` / `focalPoint`）。存在しないフィールド同士は常に「変化なし」になる。
+>   **「変わらない」を見る前に「操作が効いている」を確かめる**こと。
 > - 🚨 **`prewarmXaDataset()` を外すと最初の 1 枚だけ 1 フレームずれる**。dicom-image-loader は
 >   dataSet 未キャッシュの初回だけ 1 origin のフレーム番号を `getPixelData`（0 origin）へ渡すため。
 > - 🔑 **QCA のエッジ検出は「1 次微分最大」ではなく「半値」**に決めた（設計の未決事項を実測で決着）。

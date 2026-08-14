@@ -789,7 +789,7 @@ export function SeriesViewer({
       )}
 
       {showControls && (
-      <div style={controls}>
+      <div style={controls} data-testid="series-controls">
         {/* GridView の操作バー（W/L・Pan・Zoom はドラッグ、回転/反転/Fit はボタン。全セルにリンク）。 */}
         {gridOn && (
           <div style={row}>
