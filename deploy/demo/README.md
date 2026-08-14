@@ -24,12 +24,27 @@
 | `.env` | シークレット（Git管理外）。雛形は `.env.example` |
 | `Dockerfile` | graphy-backend のデモ公開用イメージ |
 | `check-server-identity.sh` | 実機かどうかの照合（他の操作の前に必ず） |
-| `reset-demo.sh` | 毎晩0:00の cron。ゴールデンスナップショットへ巻き戻す |
+| `reset-demo.sh` | 毎晩0:00の cron。**`origin/main` の最新版へ更新**してからゴールデンスナップショットへ巻き戻す |
 | `export-subscribers.sh` | お知らせメール送付先をCSVで書き出す（配信停止済みは常に除外） |
 | `migrate-subscribers-to-own-db.sh` | 登録者を旧DB→専用DBへ移す（1回だけ） |
 | `lib-h2.sh` | 上記スクリプトが共有するH2接続処理（単体実行しない） |
 | `mailer/` | 外部SMTP送信・Turnstile検証だけを中継するサイドカー |
 | `proxy/` | backend 停止中に maintenance.html を返す nginx |
+
+## 毎晩の自動更新（2026-08-14 導入）
+
+`reset-demo.sh` は夜間リストアの前に `origin/main` を ff-only で取り込み、`graphy-backend`
+イメージを焼き直す。したがって **main にマージされた変更は、翌 0:00 に自動でデモへ出る**。
+手動での即時反映が必要なときだけ `.claude/skills/demo-deploy` の手順を使う。
+
+更新をスキップする（＝現行イメージのまま夜間リストアだけ行う）条件:
+
+- 作業ツリーに未コミットの変更がある … このチェックアウトがそのままビルドコンテキストになるため
+- `git fetch` / ff-only merge に失敗した … 履歴を書き換えてまで追随はしない
+- イメージのビルドに失敗した … 直前のイメージが残るので、壊れた版は公開されない
+
+いずれも `$HOME/graphy-demo-golden-snapshot/reset.log` に `WARN` / `ERROR` として残る。
+更新が止まっていないかは同ファイルの `reset done (<commit>)` で確認できる。
 
 ## 関連ドキュメント
 
