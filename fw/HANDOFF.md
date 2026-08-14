@@ -2,7 +2,7 @@
 
 > 更新日: 2026-07-31（最終更新: **モバイル UI を実機検証（M9）し、見つかった不具合を修正・デプロイ**。下記エントリ参照）
 
-> 🟢 **2026-08-14 アンギオ A1〜A4 を実装**（ブランチ `feat/angio-a1`。正本: [`fw/angio-design.md`](angio-design.md) §17.1）
+> 🟢 **2026-08-14 アンギオ A1〜A4・A9 を実装**（ブランチ `feat/angio-a1`。正本: [`fw/angio-design.md`](angio-design.md) §17.1）
 > A1 シネ表示 / A2 DSA / A3 空間校正 / A4 QCA。**実機検証はすべて未実施**（手順は同ドキュメント §5.8・§18）。
 > - 🚨 **`prewarmXaDataset()` を外すと最初の 1 枚だけ 1 フレームずれる**。dicom-image-loader は
 >   dataSet 未キャッシュの初回だけ 1 origin のフレーム番号を `getPixelData`（0 origin）へ渡すため。
@@ -10,8 +10,11 @@
 >   画素境界のランプ上では 1 次微分がプラトーになり位置が決まらず、50% 狭窄で %DS が 4% 過大だった。
 >   半値法で健常部の径が真値ちょうど・%DS 誤差 1% 台。
 > - 🚨 **DSA は `voiLutModule` を差分の分布から作って返す**。元画像の VOI を継承すると真っ黒になる。
-> - 次に着手するなら **A9（RDSR）**（他と独立）。QCA を「使える」と言うには**中心線・エッジの手修正**が要る。
-> 検証: backend 375 tests / frontend typecheck・vitest 549・build すべて green。
+> - **A9（RDSR）**も入れた。コード値の表をハードコードせず**ファイル自身の CodeMeaning で突き合わせる**
+>   （表を間違えると「何も見つからないが例外も出ない」パーサになるため）。
+> - 次は **A10（GSPS / QCA SR / エクスポート）**。A2・A4 の結果が**まだどこにも保存できない**。
+>   QCA を「使える」と言うには**中心線・エッジの手修正**も要る。
+> 検証: backend 383 tests / frontend typecheck・vitest 549・build すべて green。
 
 > 📐 **2026-08-14 アンギオ（XA）領域の設計を起票**（正本: [`fw/angio-design.md`](angio-design.md)）
 > シネ再生 / DSA / QCA / 2D→3D 再構成 / Angio-FFR IF / IVUS・OCT 同期 / RDSR を A1〜A12 のフェーズに分解した。
