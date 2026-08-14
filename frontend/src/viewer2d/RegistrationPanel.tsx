@@ -283,6 +283,11 @@ export function RegistrationPanel({
         <button onClick={onClose} style={closeBtn} title={t("common.close")}>×</button>
       </div>
 
+      {/* 見出しと閉じるボタンは残したまま、中身だけをスクロールさせる。
+          パネルは画面下端に貼り付いて上へ伸びるので、SRO（REG）が増えると上端＝手法や指標の
+          選択が画面の外へ出て**触れなくなっていた**。 */}
+      <div style={body}>
+
       <div style={row}>
         <span style={key}>{t("registration.fixed")}</span>
         <span style={val}>{fixed.series.modality} {label(fixed.series)}</span>
@@ -490,7 +495,10 @@ export function RegistrationPanel({
 
         {sroList && sroList.length > 0 && (
           <div style={{ marginTop: 6 }}>
-            <div style={hint}>{t("registration.sroExisting")}</div>
+            <div style={hint}>{t("registration.sroExisting", { count: sroList.length })}</div>
+            {/* 一覧そのものにも上限を置く。件数が増えても他の項目の位置が動かないようにするため
+                （パネル全体のスクロールは、それでも足りないとき用の受け皿）。 */}
+            <div style={sroListBox}>
             {sroList.map((s) => (
               <div key={s.sopInstanceUid} style={sroRow}>
                 <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -509,8 +517,11 @@ export function RegistrationPanel({
                 </button>
               </div>
             ))}
+            </div>
           </div>
         )}
+      </div>
+
       </div>
     </div>
   );
@@ -579,6 +590,19 @@ const panel: React.CSSProperties = {
   boxShadow: "0 6px 24px rgba(0,0,0,0.18)",
   fontSize: 12,
   color: "#25303b",
+  // 画面より高くならないようにする。下端に貼り付いて上へ伸びる配置なので、
+  // 上限が無いと伸びた分だけ上端が画面の外へ出てしまう。
+  display: "flex",
+  flexDirection: "column",
+  maxHeight: "calc(100vh - 56px)",
+};
+/** スクロールするのは中身だけ（見出しと閉じるボタンは常に見える位置に残す）。 */
+const body: React.CSSProperties = {
+  flex: 1,
+  minHeight: 0, // これが無いと flex の子は縮まず、overflow が効かない
+  overflowY: "auto",
+  overflowX: "hidden",
+  paddingRight: 2,
 };
 const header: React.CSSProperties = {
   display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8,
@@ -625,3 +649,5 @@ const sroHead: React.CSSProperties = {
 const sroRow: React.CSSProperties = {
   display: "flex", gap: 6, alignItems: "center", fontSize: 11, marginTop: 3,
 };
+/** SRO 一覧の高さ上限（およそ 6 行）。件数が増えてもパネルの他の項目が押し上げられない。 */
+const sroListBox: React.CSSProperties = { maxHeight: 150, overflowY: "auto", overflowX: "hidden" };

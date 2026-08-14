@@ -51,9 +51,24 @@ public class SegReadService {
 
     /** 指定 SEG シリーズのセグメント/フレーム群を読む。SEG でなければ null。 */
     public SegImportResult read(String studyUid, String seriesUid) throws IOException {
+        return read(studyUid, seriesUid, false);
+    }
+
+    /**
+     * セグメントの見出しだけを読む（マスク平面は返さない）。
+     *
+     * <p>「どのセグメントを使うか選ばせたい」だけの画面のためのもの。マスク本体は
+     * 1 セグメント 512×512 × スライス数の Base64 になり、4 セグメントの SEG では数十 MB になる。
+     * 名前を出すためだけにそれを運ぶのは重すぎるので、平面を組み立てずに返す。
+     */
+    public SegImportResult readSegments(String studyUid, String seriesUid) throws IOException {
+        return read(studyUid, seriesUid, true);
+    }
+
+    private SegImportResult read(String studyUid, String seriesUid, boolean metadataOnly) throws IOException {
         WebDicomDataService web = webProvider != null ? webProvider.getIfAvailable() : null;
         if (web != null) {
-            return readWeb(web, studyUid, seriesUid);
+            return readWeb(web, studyUid, seriesUid, metadataOnly);
         }
         List<Path> files = storage.resolveFiles(studyUid, List.of(seriesUid));
         for (Path f : files) {
@@ -69,13 +84,14 @@ public class SegReadService {
             if (ts != null && !NATIVE_TS.contains(ts)) {
                 throw new IllegalArgumentException("圧縮転送構文の SEG は未対応です (ts=" + ts + ")");
             }
-            return parse(ds);
+            return parse(ds, metadataOnly);
         }
         return null;
     }
 
     /** web モード: QIDO でインスタンス一覧→WADO-RS で Part-10 本体を取得し、standalone と同じ解析に合流する。 */
-    private SegImportResult readWeb(WebDicomDataService web, String studyUid, String seriesUid) throws IOException {
+    private SegImportResult readWeb(WebDicomDataService web, String studyUid, String seriesUid,
+            boolean metadataOnly) throws IOException {
         List<Attributes> instances = web.searchInstances(studyUid, seriesUid, Map.of());
         for (Attributes inst : instances) {
             String sopUid = inst.getString(Tag.SOPInstanceUID);
@@ -99,12 +115,12 @@ public class SegReadService {
             if (ts != null && !NATIVE_TS.contains(ts)) {
                 throw new IllegalArgumentException("圧縮転送構文の SEG は未対応です (ts=" + ts + ")");
             }
-            return parse(ds);
+            return parse(ds, metadataOnly);
         }
         return null;
     }
 
-    private SegImportResult parse(Attributes ds) throws IOException {
+    private SegImportResult parse(Attributes ds, boolean metadataOnly) throws IOException {
         int rows = ds.getInt(Tag.Rows, 0);
         int cols = ds.getInt(Tag.Columns, 0);
         int nf = ds.getInt(Tag.NumberOfFrames, 1);
@@ -160,9 +176,13 @@ public class SegReadService {
                 if (b != 0) { any = true; break; }
             }
             if (!any) continue; // 前景ゼロのフレームは出さない（export と対称）
-            String mask = Base64.getEncoder().encodeToString(plane);
-            framesBySeg.computeIfAbsent(segNum, k -> new ArrayList<>())
-                    .add(new SegImportResult.Frame(refSop, ipp, mask));
+            List<SegImportResult.Frame> frames =
+                    framesBySeg.computeIfAbsent(segNum, k -> new ArrayList<>());
+            if (metadataOnly) {
+                continue; // セグメントが存在することだけ分かればよい（平面は運ばない）
+            }
+            frames.add(new SegImportResult.Frame(refSop, ipp,
+                    Base64.getEncoder().encodeToString(plane)));
         }
 
         List<SegImportResult.Segment> segments = new ArrayList<>();
@@ -172,6 +192,9 @@ public class SegReadService {
                     num, labels.getOrDefault(num, "Segment " + num), colors.get(num),
                     descriptions.get(num), e.getValue()));
         }
+        // セグメント番号の昇順。SeriesLayout の C はこの順の rank なので（SegFrameExpander）、
+        // 「i 番目のセグメント = チャンネル i」で読み替えられる状態にして返す。
+        segments.sort(java.util.Comparator.comparingInt(SegImportResult.Segment::number));
         return new SegImportResult(rows, cols, segments);
     }
 

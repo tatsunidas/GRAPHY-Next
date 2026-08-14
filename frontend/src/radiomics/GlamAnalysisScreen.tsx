@@ -13,21 +13,31 @@
  * <p>保存は任意。ROI が同じなら何度でも同じ数値が出るので、残すかどうかは利用者が決める。
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { NumberField } from "../hooks/NumberField";
 import { useI18n } from "../i18n/i18n";
 import {
   analyzeGlam,
   deleteGlamAnalysis,
   fetchSeries,
+  fetchSeriesLayout,
   listGlamAnalyses,
   loadGlamAnalysis,
+  readDicomSegSegments,
   saveGlamAnalysis,
   type GlamAnalysis,
   type GlamSavedSummary,
   type Series,
 } from "../api";
 import { fetchSettings } from "../settings/settingsApi";
-import { GLAM_MATRICES } from "../viewer/textureFeatures";
-import { BinOccupancyChart, MatrixHeatmap, SelfAffinityChart, binColor } from "./GlamCharts";
+import { GLAM_MATRICES, resamplingSpacing } from "../viewer/textureFeatures";
+import {
+  BinOccupancyChart,
+  CrossAffinityChart,
+  MatrixHeatmap,
+  SelfAffinityChart,
+  binColor,
+} from "./GlamCharts";
+import { GlamFeatureTable } from "./GlamFeatureTable";
 
 /** 2D ビューアから渡される対象（localStorage 経由。ウィンドウを跨ぐため）。 */
 interface GlamContext {
@@ -52,6 +62,11 @@ export function GlamAnalysisScreen() {
   const [allSeries, setAllSeries] = useState<Series[]>([]);
   const [sourceSeriesUid, setSourceSeriesUid] = useState(ctx?.seriesInstanceUid ?? "");
   const [maskSeriesUid, setMaskSeriesUid] = useState("");
+  /** マスクのチャンネル (C)。DICOM SEG のマルチセグメントは 1 セグメント = 1 チャンネル。 */
+  const [maskChannel, setMaskChannel] = useState(0);
+  const [maskNC, setMaskNC] = useState(1);
+  /** チャンネルに対応するセグメント名（番号昇順＝チャンネル順）。取れなければ空。 */
+  const [maskSegmentNames, setMaskSegmentNames] = useState<string[]>([]);
   const [maxRadius, setMaxRadius] = useState(30);
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
@@ -59,6 +74,8 @@ export function GlamAnalysisScreen() {
 
   const [analysis, setAnalysis] = useState<GlamAnalysis | null>(null);
   const [matrixName, setMatrixName] = useState("SecondVirialCoefficient");
+  /** 相互親和性 g(α,β,r) の基準となる濃度値ビン。 */
+  const [crossAlpha, setCrossAlpha] = useState(0);
   const [saved, setSaved] = useState<GlamSavedSummary[]>([]);
   const [saveLabel, setSaveLabel] = useState("");
 
@@ -90,10 +107,64 @@ export function GlamAnalysisScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studyUid]);
 
+  /** リサンプリングは環境設定で決まる（この画面には出さない）ので、有効なら実行前に知らせる。 */
+  const resamplingNote = useMemo(() => {
+    const spacing = resamplingSpacing(settings);
+    return spacing ? t("texture.resampling.on", { spacing: spacing.join(", ") }) : null;
+  }, [settings, t]);
+
+  /**
+   * マスクを選び直したら、そのシリーズのチャンネル数（SEG のマルチセグメント）を取り直す。
+   * SEG なら**セグメント名**まで取って、番号ではなく名前で選べるようにする
+   * （4 セグメントの SEG が「0/1/2/3」だけでは、肝臓と腫瘍のどちらを解析したのか後から分からない）。
+   */
+  useEffect(() => {
+    let cancelled = false;
+    setMaskChannel(0);
+    setMaskSegmentNames([]);
+    if (!studyUid || !maskSeriesUid) {
+      setMaskNC(1);
+      return;
+    }
+    void fetchSeriesLayout(studyUid, maskSeriesUid)
+      .then((layout) => {
+        if (cancelled) return;
+        const nc = Math.max(1, layout.nC);
+        setMaskNC(nc);
+        if (nc <= 1) return;
+        // 名前は「あれば嬉しい」もの。取れなくてもチャンネル番号で選べる状態は保つ。
+        return readDicomSegSegments(studyUid, maskSeriesUid)
+          .then((seg) => {
+            if (cancelled || seg.segments.length !== nc) return;
+            setMaskSegmentNames(seg.segments.map((s) => s.label || s.description || ""));
+          })
+          .catch(() => {});
+      })
+      .catch(() => {
+        if (!cancelled) setMaskNC(1);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [studyUid, maskSeriesUid]);
+
   const maskCandidates = useMemo(
     () => allSeries.filter((s) => s.seriesInstanceUid !== sourceSeriesUid),
     [allSeries, sourceSeriesUid],
   );
+
+  /**
+   * 結果を画面に載せる。相互親和性の基準ビンは**一番ボクセルが多いビン**にしておく
+   * （ビン 0 は空のことが多く、空だと曲線が 1 本も出ずに「壊れている」ように見える）。
+   */
+  const show = (result: GlamAnalysis) => {
+    let best = 0;
+    result.binOccupancy.forEach((n, i) => {
+      if (n > (result.binOccupancy[best] ?? 0)) best = i;
+    });
+    setCrossAlpha(best);
+    setAnalysis(result);
+  };
 
   const onRun = async () => {
     setError(null);
@@ -104,13 +175,13 @@ export function GlamAnalysisScreen() {
         studyInstanceUid: studyUid,
         sourceSeriesUid,
         maskSeriesUid,
-        maskChannel: 0,
+        maskChannel,
         channel: 0,
         timePoint: 0,
         maxRadius,
         settings,
       });
-      setAnalysis(result);
+      show(result);
     } catch (e) {
       setError(t("common.fetchError", { error: String(e) }));
     } finally {
@@ -140,7 +211,7 @@ export function GlamAnalysisScreen() {
     setError(null);
     setBusy(true);
     try {
-      setAnalysis(await loadGlamAnalysis(id));
+      show(await loadGlamAnalysis(id));
     } catch (e) {
       setError(t("common.fetchError", { error: String(e) }));
     } finally {
@@ -162,6 +233,8 @@ export function GlamAnalysisScreen() {
 
   const matrixMeta = GLAM_MATRICES.find((m) => m.name === matrixName);
   const matrix = analysis?.matrices?.[matrixName];
+  // CSV のファイル名。シリーズ番号が分かれば付ける（同じ ROI を何度も出すため）。
+  const fileLabel = String(allSeries.find((s) => s.seriesInstanceUid === sourceSeriesUid)?.seriesNumber ?? "roi");
 
   return (
     <div style={page}>
@@ -189,11 +262,25 @@ export function GlamAnalysisScreen() {
               ))}
             </select>
           </Field>
+          {/* マスクがマルチチャンネル（DICOM SEG マルチセグメント等）のときだけ出す。 */}
+          {maskSeriesUid !== "" && maskNC > 1 && (
+            <Field label={t("texture.field.maskChannel")}>
+              <select value={maskChannel} onChange={(e) => setMaskChannel(Number(e.target.value))}
+                disabled={busy} style={input}>
+                {Array.from({ length: maskNC }, (_, i) => (
+                  <option key={i} value={i}>
+                    {maskSegmentNames[i] ? `${i}: ${maskSegmentNames[i]}` : String(i)}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
           <Field label={t("glam.field.maxRadius")}>
-            <input type="number" min={2} max={200} value={maxRadius}
-              onChange={(e) => setMaxRadius(Number(e.target.value))} disabled={busy} style={input} />
+            <NumberField value={maxRadius} onChange={setMaxRadius} min={2} max={200}
+              disabled={busy} style={input} />
           </Field>
           <div style={note}>{t("glam.note")}</div>
+          {resamplingNote && <div style={note}>{resamplingNote}</div>}
           <div style={{ display: "flex", gap: 6, marginTop: 10, justifyContent: "flex-end" }}>
             <button onClick={onRun} disabled={busy || !studyUid} style={{ ...btnPrimary, opacity: busy ? 0.6 : 1 }}>
               {busy ? t("glam.running") : t("glam.run")}
@@ -252,6 +339,14 @@ export function GlamAnalysisScreen() {
                 })}
               </span>
             )}
+            {analysis.resampledFrom && (
+              <span style={infoPill}>
+                {t("glam.resampled", {
+                  from: analysis.resampledFrom.map((v) => Number(v.toPrecision(4))).join(", "),
+                  to: analysis.voxelSpacing.map((v) => Number(v.toPrecision(4))).join(", "),
+                })}
+              </span>
+            )}
           </div>
 
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 10 }}>
@@ -264,6 +359,31 @@ export function GlamAnalysisScreen() {
                 occupancy={analysis.binOccupancy}
                 emptyLabel={t("glam.chart.empty")}
               />
+            </div>
+
+            <div style={card}>
+              <div style={sectionTitle}>{t("glam.chart.crossAffinity")}</div>
+              <Field label={t("glam.chart.crossAffinity.alpha")}>
+                <select value={crossAlpha} onChange={(e) => setCrossAlpha(Number(e.target.value))} style={input}>
+                  {analysis.binOccupancy.map((n, i) => (
+                    <option key={i} value={i} disabled={n === 0}>
+                      {t("glam.chart.crossAffinity.bin", { bin: i + 1, voxels: n.toLocaleString() })}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <div style={note}>{t("glam.chart.crossAffinity.help")}</div>
+              {analysis.crossAffinity ? (
+                <CrossAffinityChart
+                  radii={analysis.radii}
+                  cross={analysis.crossAffinity}
+                  alpha={crossAlpha}
+                  occupancy={analysis.binOccupancy}
+                  emptyLabel={t("glam.chart.empty")}
+                />
+              ) : (
+                <div style={warnBox}>{analysis.crossAffinityOmitted ?? t("glam.chart.empty")}</div>
+              )}
             </div>
 
             <div style={card}>
@@ -299,6 +419,15 @@ export function GlamAnalysisScreen() {
               )}
             </div>
           </div>
+
+          {/* ── 特徴量（記述子を潰した「答え」） ── */}
+          <div style={{ ...card, marginTop: 16 }}>
+            <div style={sectionTitle}>{t("glam.features.title")}</div>
+            <div style={note}>{t("glam.features.help")}</div>
+            <div style={{ marginTop: 8 }}>
+              <GlamFeatureTable features={analysis.features ?? {}} fileLabel={fileLabel} />
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -332,6 +461,9 @@ const warnBox: React.CSSProperties = {
 };
 const warnPill: React.CSSProperties = {
   color: "#8a5300", background: "#fff6e5", border: "1px solid #f0d9a8", borderRadius: 999, padding: "2px 10px",
+};
+const infoPill: React.CSSProperties = {
+  color: "#0b5cad", background: "#eef5fc", border: "1px solid #c3daf1", borderRadius: 999, padding: "2px 10px",
 };
 const summaryRow: React.CSSProperties = { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" };
 const btn: React.CSSProperties = {

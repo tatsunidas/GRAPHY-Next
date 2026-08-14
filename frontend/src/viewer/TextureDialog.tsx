@@ -11,6 +11,7 @@
  * バッチ処理は対象外（単一マップのみ）。設計 {@code fw/texture-radiomics-design.md}。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { NumberField } from "../hooks/NumberField";
 import { useI18n } from "../i18n/i18n";
 import {
   fetchSeries,
@@ -30,6 +31,7 @@ import {
   GLAM_MIN_FILTER_SIZE,
   glamFeatureString,
   glamStatisticsFor,
+  resamplingSpacing,
 } from "./textureFeatures";
 
 /** ジョブの進み具合を見に行く間隔。 */
@@ -90,6 +92,15 @@ export function TextureDialog({
   const boundaryCorrectionOn = boundaryCorrectionRaw !== "0" && boundaryCorrectionRaw !== "false";
   const glamBoundaryWarning =
     isGlam && glamMatrix?.needsBoundaryCorrectionOff === true && boundaryCorrectionOn;
+
+  /**
+   * リサンプリングは環境設定で決まるので、この画面からは見えない。だが「距離 1 の意味」を
+   * 変えてしまう＝値の意味が変わるパラメータなので、有効なら計算前に見えるようにしておく。
+   */
+  const resamplingNote = useMemo(() => {
+    const spacing = resamplingSpacing(settings);
+    return spacing ? t("texture.resampling.on", { spacing: spacing.join(", ") }) : null;
+  }, [settings, t]);
 
   // ターゲット候補＝同一 study の全シリーズ。マスク候補はターゲットを除いたもの。
   const maskCandidates = useMemo(
@@ -343,12 +354,13 @@ export function TextureDialog({
         )}
 
         <Field label={t("texture.field.kernel")}>
-          <input type="number" min={minKernel} max={99} step={2} value={kernel}
-            onChange={(e) => setKernel(Number(e.target.value))} disabled={busy} style={input} />
+          {/* 確定時に奇数へ丸める（min から step=2 刻み）。backend も奇数へ切り上げる。 */}
+          <NumberField value={kernel} onChange={setKernel} min={minKernel} max={99} step={2}
+            disabled={busy} style={input} />
         </Field>
         <Field label={t("texture.field.stride")}>
-          <input type="number" min={1} max={32} value={stride}
-            onChange={(e) => setStride(Number(e.target.value))} disabled={busy} style={input} />
+          <NumberField value={stride} onChange={setStride} min={1} max={32}
+            disabled={busy} style={input} />
         </Field>
         <Field label={t("texture.field.dim")}>
           <select value={isGlam ? "3d" : force2D ? "2d" : "3d"}
@@ -360,6 +372,7 @@ export function TextureDialog({
 
         {isGlam && <div style={note}>{t("texture.glam.note")}</div>}
         {glamBoundaryWarning && <div style={warnText}>{t("texture.glam.boundaryWarn")}</div>}
+        {resamplingNote && <div style={note}>{resamplingNote}</div>}
 
         <div style={{ color: "#6b7785", fontSize: 11, marginTop: 6 }}>{t("texture.paramsNote")}</div>
         {error && <div style={errText}>{error}</div>}
