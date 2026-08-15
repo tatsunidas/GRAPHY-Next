@@ -17,6 +17,7 @@
  * だからステップ・レールでは端点だけの状態を `done` ではなく **`skipped`** にしてある。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createQca3dSr } from "../api";
 import { useI18n } from "../i18n/i18n";
 import { publishXa3dSnapshot } from "./debugApi";
 import { type Vec3, viewSeparationDeg } from "./xaGeometry";
@@ -56,6 +57,8 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
   const [profile, setProfile] = useState<CrossSectionProfile | null>(null);
   const [suggestions, setSuggestions] = useState<WorkingAngleSuggestion[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState<string | null>(null);
 
   const runA = runs.find((r) => r.imageId === keyA) ?? null;
   const runB = runs.find((r) => r.imageId === keyB) ?? null;
@@ -86,6 +89,7 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
     setRefinement(null);
     setProfile(null);
     setSuggestions([]);
+    setSaved(null);
     setError(null);
   };
 
@@ -144,6 +148,38 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
     setSuggestions(suggestWorkingAngles(r.points, runA.geometry, { stepDeg: 5, count: 3 }));
   };
 
+  /** 保存できるのは、2 方向とも元インスタンスが分かっていて、結果が品質基準を満たすとき。 */
+  const canSave = !!(runA?.sopInstanceUid && runB?.sopInstanceUid && result?.acceptable);
+
+  const save = () => {
+    if (!runA?.sopInstanceUid || !runB?.sopInstanceUid || !result) return;
+    setSaving(true);
+    setError(null);
+    createQca3dSr({
+      studyInstanceUid: runA.studyUid,
+      seriesInstanceUid: runA.seriesUid,
+      viewASopInstanceUid: runA.sopInstanceUid,
+      // DICOM のフレーム番号は 1 origin。
+      viewAFrameNumber: runA.frameIndex + 1,
+      viewBSopInstanceUid: runB.sopInstanceUid,
+      viewBFrameNumber: runB.frameIndex + 1,
+      separationDeg: result.separationDeg,
+      anchorCount: result.anchorCount,
+      anchorReprojectionPx: result.anchorReprojectionPx,
+      angleCorrected: refinement != null,
+      lengthMm: result.lengthMm,
+      // 🚨 未校正なら断面は送らない（px の径から作った mm² を保存しない）。
+      minAreaMm2: profile?.unavailable ? null : (profile?.minAreaMm2 ?? null),
+      minEquivalentDiameterMm: profile?.unavailable ? null : (profile?.minEquivalentDiameterMm ?? null),
+      visibleFractionA: result.foreshortening.a?.visibleFraction ?? null,
+      visibleFractionB: result.foreshortening.b?.visibleFraction ?? null,
+      calibration: profile?.unavailable ? null : `${runA.label} / ${runB.label}`,
+    })
+      .then((r) => setSaved(t("xa3d.saved", { uid: shortUid(r.sopInstanceUid) })))
+      .catch(() => setError(t("xa3d.saveFailed")))
+      .finally(() => setSaving(false));
+  };
+
   const steps = deriveQca3dSteps({
     viewCount: (runA ? 1 : 0) + (runB ? 1 : 0),
     separationDeg,
@@ -153,8 +189,8 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
     acceptable: result?.acceptable ?? false,
     blockingWarning: result?.warnings.find((w) => w.blocking)?.code ?? null,
     refined: refinement != null,
-    canSave: false,
-    saved: false,
+    canSave,
+    saved: saved != null,
   });
 
   // 実機検証（automator）が数値で突き合わせられるように公開する。DEV 以外では何もしない。
@@ -354,6 +390,24 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
               ) : null}
             </div>
 
+            {/* ── 保存 ─────────────────────────────────────── */}
+            {result ? (
+              <div style={section} data-step="save">
+                <div style={sectionTitle}>{t("xa3d.save")}</div>
+                <div style={row}>
+                  <button style={btn} data-testid="xa3d-save" disabled={!canSave || saving} onClick={save}>
+                    {saving ? t("xa3d.saving") : t("xa3d.saveSr")}
+                  </button>
+                  {saved ? (
+                    <span style={metric} data-testid="xa3d-saved">
+                      {saved}
+                    </span>
+                  ) : null}
+                </div>
+                <div style={hint}>{t("xa3d.saveHint")}</div>
+              </div>
+            ) : null}
+
             {/* ── 3D 表示 ──────────────────────────────────── */}
             {result?.acceptable ? (
               <div style={section} data-step="recon">
@@ -467,6 +521,10 @@ function ResultPanel({
 
 function fmt(v: number): string {
   return Number.isFinite(v) ? v.toFixed(2) : "—";
+}
+
+function shortUid(uid: string): string {
+  return uid.length > 12 ? `…${uid.slice(-12)}` : uid;
 }
 
 function pct(v: number | undefined): string {

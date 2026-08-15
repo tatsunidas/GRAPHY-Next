@@ -383,8 +383,9 @@ export function deriveQlvSteps(s: QlvTaskState): TaskStep[] {
  * <p>QCA / QLV と違い、**この段は 1 枚の画像の上では完結しない**（2 方向が要る）。
  * だから最初の段が「方向を選ぶ」になっている。
  *
- * <p>保存の段を「実装していない」という理由で `invalid` のまま置いてあるのは意図的。
- * 結果が出るのに保存できないことを、結果を出す前に見せておきたい。
+ * <p>保存の段は、品質基準を満たすまで `invalid` のまま。**保存できない理由を、結果を出す前に
+ * 見せておく**（品質基準を満たさない結果は保存させない＝§10.3 の「無言で歪んだモデルを出さない」を
+ * 保存物にも適用する）。
  */
 export const QCA3D_STEPS: readonly TaskStepDef[] = [
   {
@@ -414,7 +415,7 @@ export interface Qca3dTaskState {
   blockingWarning: string | null;
   /** 角度補正が掛かったか。 */
   refined: boolean;
-  /** 保存できるか（A6a では常に false＝未実装）。 */
+  /** 保存できるか（品質基準を満たし、2 方向の元インスタンスが分かっている）。 */
   canSave: boolean;
   saved: boolean;
 }

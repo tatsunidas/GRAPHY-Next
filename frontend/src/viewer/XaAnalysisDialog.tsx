@@ -425,6 +425,7 @@ export function XaAnalysisDialog({
     if (view.geometry) {
       registerQcaRun({
         imageId,
+        studyUid: saveContext.studyUid,
         seriesUid,
         sopInstanceUid: saveContext.sopInstanceUid,
         frameIndex: saveContext.frameIndex,

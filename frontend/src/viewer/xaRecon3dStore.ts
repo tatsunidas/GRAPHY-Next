@@ -33,6 +33,7 @@ import { type XaViewGeometry } from "./xaGeometry";
 export interface XaQcaRun {
   /** imageId（＝同じフレームを解析し直したら置き換える鍵）。 */
   imageId: string;
+  studyUid: string;
   seriesUid: string;
   sopInstanceUid: string | null;
   /** 0 origin。 */

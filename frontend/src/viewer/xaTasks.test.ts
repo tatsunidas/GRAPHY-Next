@@ -429,9 +429,15 @@ describe("deriveQca3dSteps", () => {
     expect(by(st({ refined: false })).recon.note).toEqual({ key: "xa3d.step.note.notRefined" });
   });
 
-  it("保存は未実装なので常に invalid（結果を出す前にそれが見える）", () => {
-    expect(by(st()).save.state).toBe("invalid");
-    expect(by(st()).save.reasonKey).toBe("xa3d.step.reason.saveNotImplemented");
+  it("保存できない条件では invalid（結果を出す前にそれが見える）", () => {
+    expect(by(st({ canSave: false })).save.state).toBe("invalid");
+    expect(by(st({ canSave: false })).save.reasonKey).toBe("xa3d.step.reason.saveNotImplemented");
+  });
+
+  it("保存できる条件なら active → 保存後は done", () => {
+    // 🚨 品質基準を満たさない結果は保存させない（歪んだモデルを保存物として残さない）。
+    expect(by(st({ canSave: true })).save.state).toBe("active");
+    expect(by(st({ canSave: true, saved: true })).save.state).toBe("done");
   });
 
   it("方向をやり直すとアンカーも捨てる（別の 2 方向の画素座標になるため）", () => {

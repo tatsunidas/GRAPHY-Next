@@ -509,6 +509,18 @@ async function main(): Promise<void> {
       check(ang != null && ang > 0 && ang <= 90, "[断面] 測定方向のなす角を出せている", ang == null ? null : Number(ang.toFixed(1)));
     }
 
+    // ── 保存（3D QCA SR）────────────────────────────────────
+    check(st.steps.save === "active", "[保存] 品質基準を満たしたので保存できる状態になる", st.steps);
+    await viewerB.getByTestId("xa3d-save").click();
+    await viewerB.getByTestId("xa3d-saved").waitFor({ state: "visible", timeout: 15_000 });
+    const savedText = await viewerB.getByTestId("xa3d-saved").textContent();
+    check(!!savedText && savedText.length > 0, "[保存] 保存に成功した", savedText);
+    const afterSave = await xa3dState(viewerB);
+    check(afterSave?.steps.save === "done", "[保存] レールの保存の段が done になる", afterSave?.steps);
+    // 🚨 数値だけでなく「どう作った結果か」が SR に入っていること（§10 の SR 方針）。
+    const srSeries = await listSrSeries(driver.ports.http, v1.exact.studyInstanceUid);
+    check(srSeries.some((x) => x.seriesDescription === "QCA 3D"), "[保存] SR シリーズが保管庫に入る", srSeries);
+
     // ── 2D 投影長より 3D のほうが真値に近いこと（3D にする実利）──
     const proj2dMm = polylineLengthPx(seg1) * 0.225;
     const err2d = (Math.abs(proj2dMm - feedableLengthMm) / feedableLengthMm) * 100;
@@ -558,6 +570,20 @@ async function clickOnCurve(
   const el = page.getByTestId(testId);
   await el.click({ position: { x: sx, y: sy } });
   await page.waitForTimeout(250);
+}
+
+/** スタディ内の SR シリーズ一覧（保存が保管庫まで届いたかの確認）。 */
+async function listSrSeries(
+  httpPort: number,
+  studyUid: string,
+): Promise<{ seriesInstanceUid: string; modality: string | null; seriesDescription: string | null }[]> {
+  const res = await fetch(`http://127.0.0.1:${httpPort}/api/studies/${encodeURIComponent(studyUid)}/series`);
+  const all = (await res.json()) as {
+    seriesInstanceUid: string;
+    modality: string | null;
+    seriesDescription: string | null;
+  }[];
+  return all.filter((s) => s.modality === "SR");
 }
 
 /** 折れ線が「両端を結ぶ弦」から最も離れる距離 [px]。自動追跡の探索窓に収まるかの指標。 */

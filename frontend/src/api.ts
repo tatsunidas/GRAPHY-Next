@@ -338,6 +338,39 @@ export interface QlvSrRequest {
 /** QLV 計測値を Comprehensive SR として保存する。 */
 export const createQlvSr = (req: QlvSrRequest) => httpSend<AngioCreated>("/api/angio/qlv-sr", "POST", req);
 
+/**
+ * 3D QCA の結果を保存する要求（`fw/angio-design.md` §10 / A6a）。
+ *
+ * 🚨 **2 方向の両方を渡す**。3D の値はどの 2 方向から作ったかで変わるので、片方だけでは再現できない。
+ * 🚨 **未校正なら `minAreaMm2` / `minEquivalentDiameterMm` / `calibration` を null にする**。
+ * 長さは幾何（SID/SOD と検出器ピッチ）だけで決まるので校正に依らないが、断面は径から作るため出せない。
+ */
+export interface Qca3dSrRequest {
+  studyInstanceUid: string;
+  seriesInstanceUid: string;
+  viewASopInstanceUid: string;
+  /** **1 origin**。 */
+  viewAFrameNumber: number;
+  viewBSopInstanceUid: string;
+  viewBFrameNumber: number;
+  separationDeg: number;
+  /** 3 未満なら角度補正が掛かっていない（§10.2.2）。 */
+  anchorCount: number;
+  anchorReprojectionPx: number;
+  angleCorrected: boolean;
+  lengthMm: number;
+  minAreaMm2: number | null;
+  minEquivalentDiameterMm: number | null;
+  /** 見えている長さの割合（短縮の指標。§10.2.5）。 */
+  visibleFractionA: number | null;
+  visibleFractionB: number | null;
+  calibration: string | null;
+}
+
+/** 3D QCA の結果を Comprehensive SR として保存する。 */
+export const createQca3dSr = (req: Qca3dSrRequest) =>
+  httpSend<AngioCreated>("/api/angio/qca3d-sr", "POST", req);
+
 // ── 被ばく線量レポート（RDSR）。`fw/angio-design.md` §14.2 / A9 ────────────────
 
 /** SR の 1 項目（NUM / TEXT / CODE / UIDREF / DATETIME）。 */

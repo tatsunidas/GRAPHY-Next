@@ -71,6 +71,18 @@ public class AngioController {
         }
     }
 
+    @PostMapping("/qca3d-sr")
+    public ResponseEntity<AngioStoreService.Created> createQca3dSr(@RequestBody Qca3dSrRequest req) {
+        requireText(req.viewASopInstanceUid(), "viewASopInstanceUid");
+        requireText(req.viewBSopInstanceUid(), "viewBSopInstanceUid");
+        try {
+            return ResponseEntity.ok(service.createQca3dSr(req));
+        } catch (IOException e) {
+            log.error("3D QCA SR の作成に失敗", e);
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "解析結果を保存できませんでした");
+        }
+    }
+
     private static void requireText(String v, String name) {
         if (v == null || v.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, name + " は必須です");

@@ -78,6 +78,22 @@ public class AngioStoreService {
         return new Created(r.seriesInstanceUid(), r.sopInstanceUid());
     }
 
+    /**
+     * 3D QCA（A6a）の結果を SR として保存する。
+     *
+     * <p>参照ヘッダは<b>方向 A の元インスタンス</b>から取る（患者・スタディは 2 方向で同じ）。
+     * 2 方向の参照そのものは {@link Qca3dSrWriter} が両方書く。
+     */
+    public Created createQca3dSr(Qca3dSrRequest req) throws IOException {
+        Attributes tmpl = readTemplate(req.viewASopInstanceUid());
+        Qca3dSrWriter.Result r = Qca3dSrWriter.build(tmpl, req);
+        store(r.dataset());
+        log.info("QCA3D SR created: series={} sop={} (length={}mm, anchors={}, corrected={})",
+                r.seriesInstanceUid(), r.sopInstanceUid(), req.lengthMm(), req.anchorCount(),
+                req.angleCorrected());
+        return new Created(r.seriesInstanceUid(), r.sopInstanceUid());
+    }
+
     /** 参照インスタンスのヘッダ（患者・スタディ識別情報の継承元）。取れなければ null。 */
     private Attributes readTemplate(String sopUid) {
         Path p = storage.resolveInstanceFile(sopUid);
