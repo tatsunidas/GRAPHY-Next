@@ -21,6 +21,7 @@ import { NonDicomImportDialog } from "./NonDicomImportDialog";
 import { ReportEditorDialog } from "../report/ReportEditorDialog";
 import { ReportManagerDialog } from "../report/ReportManagerDialog";
 import { DoseReportDialog } from "./DoseReportDialog";
+import { TaskLauncherDialog } from "./TaskLauncherDialog";
 
 /**
  * アプリの土台シェル（GRAPHY の MainScreen 相当）。
@@ -67,6 +68,7 @@ export function MainScreen({
     | "report"
     | "reportManager"
     | "dose"
+    | "taskLauncher"
     | null
   >(null);
   // ReportManagerDialog から特定レポートを開いたときだけ設定（新規/報告ボタンからの通常オープンは null=自動解決）。
@@ -234,6 +236,13 @@ export function MainScreen({
       setOpenTool("dose");
       return;
     }
+    if (kind === "taskLauncher") {
+      // 🔑 **スタディ未選択でも開く**。ここは「何ができるか」の一覧でもあるので、
+      //    選択を促して閉じると未実装タスクの存在すら見えない（§21.2）。
+      //    押せない理由はカードごとに出る。
+      setOpenTool("taskLauncher");
+      return;
+    }
     if (kind === "nonDicomImport") {
       if (!isStandalone) {
         // 非DICOM取込はローカルファイルパス（Electron専用）が前提のため standalone 専用。
@@ -334,6 +343,14 @@ export function MainScreen({
         open={openTool === "dose"}
         onClose={() => setOpenTool(null)}
         study={selectedStudy}
+      />
+      <TaskLauncherDialog
+        open={openTool === "taskLauncher"}
+        onClose={() => setOpenTool(null)}
+        study={selectedStudy}
+        series={selectedSeries}
+        isStandalone={isStandalone}
+        onOpenReport={() => handleOpenTool("report")}
       />
       <ReportManagerDialog
         open={openTool === "reportManager"}

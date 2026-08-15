@@ -1751,6 +1751,9 @@ function TileCell({
           seriesLabel={seriesLabel}
           onDimChange={onDimChange}
           renderFusionOverlay={renderFusionOverlay}
+          // タスク・ランチャー（A13-2）の依頼を引き受けるのは**このタイルだけ**
+          // （StudyList のプレビューに取られないようにする）。
+          acceptsTaskLaunch
         />
       </div>
 

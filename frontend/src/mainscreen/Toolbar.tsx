@@ -18,7 +18,9 @@ export type ToolKind =
   | "report"
   | "reportManager"
   /** 被ばく線量レポート（RDSR）。fw/angio-design.md §14.2 */
-  | "dose";
+  | "dose"
+  /** 解析タスク・ランチャー。fw/angio-design.md §21.2（A13-2） */
+  | "taskLauncher";
 
 export function Toolbar({
   isStandalone,

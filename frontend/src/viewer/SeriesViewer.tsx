@@ -15,6 +15,7 @@ import { XaAnalysisDialog } from "./XaAnalysisDialog";
 import { XaQlvDialog } from "./XaQlvDialog";
 import { Xa3dQcaDialog } from "./Xa3dQcaDialog";
 import { useQcaRuns } from "./xaRecon3dStore";
+import { consumeXaTask, isFreshRequest, matchesRequest, onXaTaskRequest, pullXaTask } from "./xaTaskLaunch";
 import { prewarmXaDataset, readXaCineSource, type XaCineSource } from "./xaCine";
 import { downloadBytes, exportFramesAsZip } from "./xaFrameExport";
 import {
@@ -109,6 +110,7 @@ export function SeriesViewer({
   seriesLabel,
   onDimChange,
   renderFusionOverlay,
+  acceptsTaskLaunch = false,
 }: {
   instances: Instance[];
   mode: ViewerMode;
@@ -138,6 +140,14 @@ export function SeriesViewer({
   onDimChange?: (c: number, t: number, z: number) => void;
   /** Fusion オーバーレイ。スライダー表示時に base 画像へ重ねて描画する（GridView では無効）。 */
   renderFusionOverlay?: RenderOverlay;
+  /**
+   * タスク・ランチャー（A13-2）からの依頼を引き受けるか。**2D ビューアのタイルだけ true**。
+   *
+   * <p>🚨 既定 false なのは、`StudyList` のプレビューも同じ `SeriesViewer` だからである。
+   * これを付けないと**メインウィンドウのプレビューが依頼を先に引き取り**、
+   * 開いたばかりの 2D ビューアには何も起きない（実機検証で実際にこうなった）。
+   */
+  acceptsTaskLaunch?: boolean;
 }) {
   const { t } = useI18n();
   // automator（自律検証ツール）用デバッグAPI。dev ビルドのみ、冪等（fw/HANDOFF.md 参照なし・
@@ -349,6 +359,36 @@ export function SeriesViewer({
   // 連番 PNG エクスポート（fw/angio-design.md §14.3）。
   const [exportBusy, setExportBusy] = useState(false);
   const [exportDone, setExportDone] = useState(0);
+
+  // タスク・ランチャー（A13-2）からの「このシリーズでこの解析を開け」を受ける。
+  // 🚨 **宛先と鮮度は受け手が判定する**（`viewer/xaTaskLaunch.ts`）。タイルは複数開けるので、
+  //    判定を省くと**依頼したのとは別のシリーズで解析ダイアログが開く**。
+  useEffect(() => {
+    // プレビュー（`StudyList`）は依頼を引き受けない。上の `acceptsTaskLaunch` を参照。
+    if (!acceptsTaskLaunch) return;
+    const off = onXaTaskRequest((req) => {
+      if (!matchesRequest(req, { studyUid, seriesUid })) return;
+      if (!isFreshRequest(req, Date.now())) return;
+      // 🚨 **まだ判断できない状態で引き取らない。** レイアウトが解決する前は `isFrameStack` が
+      //    false なので、ここで引き取ると「解析できないシリーズ」として捨ててしまう
+      //    （実際にこれで実機検証が落ちた）。レイアウトが決まると依存が変わって効果が張り直り、
+      //    もう一度 `pullXaTask()` が走るので取りこぼさない。
+      if (!layoutReady) return;
+      consumeXaTask(req.id);
+      if (!isFrameStack) {
+        // XA でもフレーム軸が無いシリーズ（単発の静止画など）は解析できない。
+        // 引き取った上で**黙って何も起きない状態にしない**。
+        emitToast(t("xa.task.reason.noFrames"));
+        return;
+      }
+      if (req.target === "xaAnalysis") setXaDialogOpen(true);
+      else if (req.target === "qlv") setQlvDialogOpen(true);
+      else if (req.target === "qca3d") setXa3dDialogOpen(true);
+    });
+    // ビューアのウィンドウは依頼より後に立ち上がる。保留分を取りに行く。
+    pullXaTask();
+    return off;
+  }, [acceptsTaskLaunch, studyUid, seriesUid, isFrameStack, layoutReady, t]);
 
   const dsaImageIds = useMemo(() => {
     if (!dsaToken) return null;

@@ -89,6 +89,8 @@ export function MenuBar({
         { label: t("main.toolbar.tagExtractor"), onClick: () => onOpenTool("tagExtractor") },
         { label: t("main.toolbar.tagViewer"), onClick: () => onOpenTool("tagViewer") },
         ...(isDemo ? [] : [{ label: t("main.toolbar.seriesExtractor"), onClick: () => onOpenTool("seriesExtractor") }]),
+        // 解析タスクの入口（A13-2）。2D ビューアのボタンからの導線は残したままの*追加*の入口。
+        { label: t("xa.task.title"), onClick: () => onOpenTool("taskLauncher"), testId: "menu-item-task-launcher" },
         { label: t("main.toolbar.report"), onClick: () => onOpenTool("report") },
         { label: t("main.toolbar.reportManager"), onClick: () => onOpenTool("reportManager") },
         { label: t("dose.title"), onClick: () => onOpenTool("dose"), testId: "menu-item-dose" },
