@@ -54,16 +54,24 @@ public final class XaFrameExpander {
             "1.2.840.10008.5.1.4.1.1.12.3"     // X-Ray Angiographic Bi-Plane (Retired)
     );
 
-    /** XA/XRF のマルチフレーム（＝シネ展開の対象）か。単一フレームの XA は対象外（従来経路でよい）。 */
+    /**
+     * XA/XRF か（＝フレーム軸として扱う対象）。
+     *
+     * <p><b>フレーム数では判定しない</b>。XA は投影像なので Z 軸に意味が無く、フレームが 1 枚でも
+     * 「時間軸に 1 枚」が正しい軸の意味になる（設計 §5.7）。フレーム数で切り分けていたため、
+     * <b>単一フレームの XA では校正・QCA の導線がまるごと出なかった</b>
+     * （GNBP-XA-4 の校正変種が 1 フレームで、実機検証で踏んだ）。単一フレームの
+     * アンギオ／XRF スポット像は実在するので、これは実データでも起きる。
+     *
+     * <p>フレーム数 1 のときスライダーは出ない（`count > 1` ガード）ので、UI 上の副作用は
+     * 「XA の操作行が出る」ことだけ。
+     */
     public static boolean isXaCine(Attributes ds) {
         if (ds == null) {
             return false;
         }
         String sopClass = ds.getString(Tag.SOPClassUID);
-        if (sopClass == null || !XA_SOP_CLASSES.contains(sopClass)) {
-            return false;
-        }
-        return ds.getInt(Tag.NumberOfFrames, 1) > 1;
+        return sopClass != null && XA_SOP_CLASSES.contains(sopClass);
     }
 
     /**

@@ -386,6 +386,10 @@ export function XaAnalysisDialog({
       // 失敗したときに**古い結果が残らない**ようにする（前回値を見て「変わっていない」と
       // 誤解する事故を防ぐ。実機で踏んだ）。
       setResult(null);
+      // 🚨 検証用スナップショットも必ず消す。ここを残すと automator は**前のフレームの
+      //    数値**を読んで合格してしまう（実際に「別フレームの結果が出ている」形で踏んだ）。
+      //    画面と同じ理由で、失敗は「値が無い」でなければならない。
+      publishQcaSnapshot(null);
       setError(t("xa.analysis.failed"));
       return;
     }
@@ -393,6 +397,7 @@ export function XaAnalysisDialog({
     setResult(r);
     // 実機検証（automator）が掴む対象を計算できるように公開する。DEV 以外では何もしない。
     publishQcaSnapshot({
+      imageId,
       centerline: r.centerline,
       edges: r.edges,
       pathIndices: r.pathIndices,
@@ -401,6 +406,8 @@ export function XaAnalysisDialog({
       mld: r.mld,
       rvd: r.rvd,
       percentDiameterStenosis: r.percentDiameterStenosis,
+      percentAreaStenosis: r.percentAreaStenosis,
+      lesionLength: r.lesionLength,
       points: r.diameters.length,
       referenceFirst: r.reference[0] ?? 0,
       referenceLast: r.reference[r.reference.length - 1] ?? 0,

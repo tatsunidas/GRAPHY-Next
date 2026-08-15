@@ -44,6 +44,20 @@ function makeVessel(width: number, height: number, cy: number, radiusAt: (x: num
   return { pixels, width, height };
 }
 
+/**
+ * 🚨 **このファントムは箱型（スラブ）断面**であって円柱ではない。
+ *
+ * <p>幅方向の減弱が一様なのでエッジは直線ランプになり、**半値法が厳密に正しく**なる。
+ * だからここでは「半値法が真値ちょうど」と出る。**実際の血管は円柱**で、投影プロファイルは
+ * p(d) ∝ −√(r²−d²) の形になり、半値をよぎるのは d = (√3/2)·r ≈ 0.866·r
+ * ——**真の半径ではない**。`bench/` の GNBP-XA（円柱・ビール則）で実測したところ、
+ * 径は一貫して 13% 過小に出た（設計 §16.4）。
+ *
+ * <p>つまり**このファイルの数値は「箱型断面に対する正しさ」しか保証しない**。
+ * 円柱に対する精度は bench 側でしか測れない。ここを混同しないこと
+ * （半値法を採用した判断そのものが、箱型ファントムの上でだけ正しかった）。
+ */
+
 /** 点と線分の距離。 */
 function distToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
   const vx = bx - ax;
@@ -306,6 +320,66 @@ describe("★runQca — 真値既知ファントムでの精度", () => {
  * 手修正で真値に戻ることを数値で示す**こと。実データでは真値が無いのでこれができない
  * （実機検証 §8.5 が「内部整合まで」で止まっているのはそのため）。
  */
+/**
+ * 円柱断面に対する半値法の系統誤差を**数式として**固定する（設計 §16.4）。
+ *
+ * <p>bench の実機測定（GNBP-XA、係数 0.870）と同じ現象を、画像を作らずプロファイル 1 本で
+ * 押さえておく。エッジ判定を作り直すときに「何がどう変わったか」を比較する基準になる。
+ */
+describe("★半値法の系統誤差（円柱断面）", () => {
+  /** 半径 rTrue の円柱をビール則で投影したプロファイル（背景 1.0）。 */
+  function cylinderProfile(rTrue: number, mu: number, half: number, step: number): number[] {
+    const out: number[] = [];
+    for (let k = -half; k <= half; k++) {
+      const d = Math.abs(k * step);
+      const path = d < rTrue ? 2 * Math.sqrt(rTrue * rTrue - d * d) : 0;
+      out.push(1000 * Math.exp(-mu * path));
+    }
+    return out;
+  }
+
+  /** 半値点の解析解 d/r。μ→0 で √3/2 = 0.8660 に収束する。 */
+  function halfMaxRatio(rTrue: number, mu: number): number {
+    const threshold = (Math.exp(-2 * mu * rTrue) + 1) / 2;
+    const chord = -Math.log(threshold) / (2 * mu); // = √(r²−d²)
+    return Math.sqrt(1 - (chord / rTrue) ** 2);
+  }
+
+  it.each([
+    [0.001, "弱吸収（√3/2 の極限に近い）"],
+    [0.02, "実用的な吸収"],
+  ])("円柱投影では半値点が真の半径に**ならない**（μ=%f, %s）", (mu) => {
+    const step = 0.25;
+    const half = 60;
+    const rTrue = 7.5;
+    const e = findEdgesInProfile(cylinderProfile(rTrue, mu, half, step), half, step)!;
+    expect(e).not.toBeNull();
+    const measured = (e.right - e.left) / 2 / rTrue;
+    // 解析解と一致すること（＝実装が理屈どおりに振る舞っていること）。
+    expect(Math.abs(measured - halfMaxRatio(rTrue, mu))).toBeLessThan(0.01);
+    // そして真の半径より**必ず小さい**。
+    expect(measured).toBeLessThan(0.95);
+  });
+
+  it("μ→0 の極限は √3/2 = 0.866（設計 §16.4 の導出）", () => {
+    expect(halfMaxRatio(7.5, 1e-6)).toBeCloseTo(Math.sqrt(3) / 2, 4);
+  });
+
+  it("箱型（スラブ）断面なら半値法は真値ちょうど — ファントム次第で結論が変わる", () => {
+    const step = 0.25;
+    const half = 60;
+    const rTrue = 7.5;
+    const profile: number[] = [];
+    for (let k = -half; k <= half; k++) {
+      const d = Math.abs(k * step);
+      const inside = Math.max(0, Math.min(1, rTrue + 0.5 - d));
+      profile.push(BG - (BG - VESSEL) * inside);
+    }
+    const e = findEdgesInProfile(profile, half, step)!;
+    expect(Math.abs((e.right - e.left) / 2 - rTrue)).toBeLessThan(0.15);
+  });
+});
+
 describe("★手修正 — 自動が外れる状況を作って真値に戻す", () => {
   const mmPerPx = 0.2;
 

@@ -15,6 +15,7 @@ import { resetDb } from "../backend/dbReset.js";
 import { importPaths } from "../fixtures/importFixtures.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
 import { waitForMainScreenReady } from "../checklist/items/shared/helpers.js";
+import { dismissStartupDialogs, findBlockingOverlay } from "../common/dismissDialogs.js";
 import { dragOnCanvasHost } from "../common/pointerDrag.js";
 
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "xa-qca");
@@ -106,16 +107,6 @@ async function qcaUnit(page: Page): Promise<string | null> {
   });
 }
 
-async function dismissStartupDialogs(page: Page): Promise<void> {
-  for (let i = 0; i < 3; i++) {
-    const dialog = page.locator('[role="dialog"]');
-    if ((await dialog.count()) === 0) return;
-    const close = dialog.first().getByRole("button", { name: /閉じる|Close/ });
-    if ((await close.count()) > 0) await close.first().click().catch(() => {});
-    else await page.mouse.click(5, 5).catch(() => {});
-    await page.waitForTimeout(400);
-  }
-}
 
 async function main(): Promise<void> {
   fs.mkdirSync(OUT_DIR, { recursive: true });

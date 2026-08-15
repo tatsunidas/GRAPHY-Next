@@ -124,11 +124,26 @@ class XaFrameExpanderTest {
         assertNotNull(XaFrameExpander.layout(List.of(run(ENHANCED_XA, "1.1", 1, 40))));
     }
 
+    /**
+     * 単一フレームの XA も<b>フレーム軸</b>として扱う（2026-08-15 に方針変更）。
+     *
+     * <p>以前はフレーム数 1 の XA を「従来の Z スタック経路でよい」として除外していた。
+     * しかし XA は投影像なので Z 軸に意味が無く、除外すると <b>校正・QCA の導線が
+     * まるごと出ない</b>（フロントの XA 操作行は {@code stackAxis=="t"} で出し分けている）。
+     * GNBP-XA-4 の校正変種が 1 フレームで、実機検証で踏んだ。単一フレームのアンギオや
+     * XRF スポット像は実在するので実データでも起きる。
+     *
+     * <p>フレーム数 1 ならスライダーは出ない（{@code count > 1} ガード）ので、
+     * 表示上の副作用は無い。
+     */
     @Test
-    void singleFrameXa_isNotCine() {
-        // 1 フレームの XA は従来の Z スタック経路でよい（軸の意味を変えない）。
-        assertFalse(XaFrameExpander.isXaCine(run(XA, "1.1", 1, 1)));
-        assertNull(XaFrameExpander.layout(List.of(run(XA, "1.1", 1, 1))));
+    void singleFrameXa_isStillFrameAxis() {
+        assertTrue(XaFrameExpander.isXaCine(run(XA, "1.1", 1, 1)));
+        SeriesLayout l = XaFrameExpander.layout(List.of(run(XA, "1.1", 1, 1)));
+        assertNotNull(l);
+        assertEquals(1, l.nZ());
+        assertEquals(1, l.nT());
+        assertEquals("t", l.axes().stackAxis());
     }
 
     @Test

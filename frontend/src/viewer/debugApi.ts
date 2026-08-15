@@ -254,6 +254,14 @@ function getImagePixelRange(): ImagePixelRange[] {
  * 変換そのものを公開する。
  */
 export interface QcaDebugSnapshot {
+  /**
+   * **どの画像を解析したか**（imageId）。
+   *
+   * <p>フレームを跨いで検証するとき、狙ったフレームを解析できているかは結果の数値からは
+   * 判別できない（別フレームの値がもっともらしく出る）。実際にファントム検証で
+   * 「1 フレーム目の結果が 2 フレーム目の値と一致する」形で踏んだ。
+   */
+  imageId: string;
   /** 計測点の中心線（画像 px）。 */
   centerline: [number, number][];
   /** 計測点のエッジ（画像 px）。 */
@@ -264,6 +272,8 @@ export interface QcaDebugSnapshot {
   mld: number;
   rvd: number;
   percentDiameterStenosis: number;
+  percentAreaStenosis: number;
+  lesionLength: number;
   points: number;
   /** 参照径の両端（1 区間指定なら定数になる＝両端が一致する、を確かめるため）。 */
   referenceFirst: number;

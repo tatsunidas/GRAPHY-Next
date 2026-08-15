@@ -88,6 +88,9 @@ const GRID_WARN_THRESHOLD = 100;
  * <p>シリーズ全体での Zoom/Pan/コントラスト(WW/WL)/回転/反転は、同一スタック内では
  * Viewer2D（StackViewport）が自動的に維持する。
  */
+/** 参照同一性を保つための空配列（毎回新しい [] を渡すと Viewer2D が組み直す）。 */
+const EMPTY_IMAGE_IDS: string[] = [];
+
 export function SeriesViewer({
   instances,
   mode,
@@ -345,13 +348,15 @@ export function SeriesViewer({
     return zStack.map((_id, t) => dsaImageId(dsaToken, t, dsaVersion));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dsaToken, dsaVersion, zStackKey]);
-  const displayImageIds = dsaImageIds ?? thickImageIds ?? zStack;
+  const rawDisplayImageIds = dsaImageIds ?? thickImageIds ?? zStack;
 
   // ── XA シネ: dataSet を先に温めてから表示する（fw/angio-design.md §5.5）──────────────
   // 🚨 プリウォームは必須。dicom-image-loader は「dataSet 未キャッシュの初回だけ 1 origin の
   //    フレーム番号を渡す」ため、温めずに描くと最初の 1 枚だけ 1 フレームずれた画像が
   //    Cornerstone の画像キャッシュに載ってしまう（詳細は prewarmXaDataset の JSDoc）。
   const [xaCineSource, setXaCineSource] = useState<XaCineSource | null>(null);
+  /** プリウォームが決着した（成功・失敗どちらでも）スタック。表示のゲートに使う。 */
+  const [xaPrewarmedKey, setXaPrewarmedKey] = useState<string | null>(null);
   const isFrameStackRef = useRef(isFrameStack);
   isFrameStackRef.current = isFrameStack;
   useEffect(() => {
@@ -369,12 +374,32 @@ export function SeriesViewer({
       .catch(() => {
         // 取得できなくても既定 fps で再生はできる（描画は通常の imageLoader が再試行する）。
         if (!cancelled) setXaCineSource(null);
+      })
+      .finally(() => {
+        // 失敗しても解除する。ここで止め続けると「何も映らない」ほうの事故になる。
+        if (!cancelled) setXaPrewarmedKey(zStackKey);
       });
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isFrameStack, zStackKey]);
+
+  /**
+   * プリウォームが終わるまでフレームを渡さない。
+   *
+   * <p>🚨 プリウォームを**始める**だけでは足りない。`Viewer2D` は同じマウントで即座に
+   * 1 枚目を読みに行くので、dataSet の取得と競走になる。画像ロードが先に立つと
+   * 1 origin の枝を通り、**1 枚目だけ「次のフレーム」の画素**が Cornerstone の画像
+   * キャッシュに載る。しかも表示は正しく見える（隣接フレームは似ているため）。
+   *
+   * <p>実データ（Rubo）では毎回プリウォームが競走に勝っていたので気づけず、
+   * **フレームごとに中身が違う GNBP-XA ファントム**で初めて露見した
+   * （1 フレーム目の QCA が 2 フレーム目の値を返した）。`isXaDatasetReady` は
+   * このために用意してあったのに、どこからも呼ばれていなかった。
+   */
+  const xaReady = !isFrameStack || xaPrewarmedKey === zStackKey;
+  const displayImageIds = xaReady ? rawDisplayImageIds : EMPTY_IMAGE_IDS;
 
   // シリーズ/ランが変わったら DSA は解除する（別ランのマスクを引きずらない）。
   useEffect(() => {

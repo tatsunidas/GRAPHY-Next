@@ -25,3 +25,6 @@ phantom/GNBP-4D-pet-incomplete/
 # Python
 __pycache__/
 *.pyc
+# GNBP-XA（アンギオ）。DICOM は決定的に再生成できるので追跡しない。
+# truth.json は真値なので**追跡する**（`!` で除外解除）。
+phantom/GNBP-XA/*.dcm
