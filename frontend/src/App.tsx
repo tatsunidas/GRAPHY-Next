@@ -13,6 +13,7 @@ import { MainScreen } from "./mainscreen/MainScreen";
 import { Viewer2DScreen } from "./viewer2d/Viewer2DScreen";
 import { MprScreen } from "./mpr/MprScreen";
 import { Viewer3DScreen } from "./viewer3d/Viewer3DScreen";
+import { Geometry3DScreen } from "./viewer3d/Geometry3DScreen";
 import { ensureQcaRunChannel } from "./viewer/xaRecon3dStore";
 import { SlicerScreen } from "./slicer/SlicerScreen";
 import { CurvedMprScreen } from "./curvedmpr/CurvedMprScreen";
@@ -172,6 +173,10 @@ export function App() {
         <MprScreen status={status} />
       ) : screen === "viewer3d" ? (
         <Viewer3DScreen status={status} />
+      ) : screen === "geometry3d" ? (
+        // ボリュームを持たない 3D（いまは 3D QCA の中心線）。#viewer3d と分けているのは、
+        // あちらがボリューム起点で初期化される作りだから（Geometry3DScreen の冒頭に理由）。
+        <Geometry3DScreen status={status} />
       ) : screen === "slicer" ? (
         <SlicerScreen status={status} />
       ) : screen === "curvedmpr" ? (

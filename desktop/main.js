@@ -67,6 +67,8 @@ const VIEWER_DEFAULTS = {
   mpr: { width: 1400, height: 900 },
   slicer: { width: 1400, height: 900 },
   curvedmpr: { width: 1400, height: 900 },
+  // ボリュームを持たない 3D（3D QCA の中心線など）。
+  geometry3d: { width: 1100, height: 800 },
 };
 
 /** 同梱 / 開発時の backend jar のパスを解決する。 */

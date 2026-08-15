@@ -628,6 +628,56 @@ async function analyseSegment(
     }
     }
 
+    // ── 3D ウィンドウへの受け渡し（幾何だけのビュー）────────────
+    if (seg.hasLesion) {
+      const geo = await driver.waitForNewPage(
+        () => viewerB.getByTestId("xa3d-open-3d").click(),
+        (url) => url.includes("geometry3d"),
+      );
+      await geo.getByTestId("geometry3d-root").waitFor({ state: "visible", timeout: 30_000 });
+      await geo.waitForTimeout(2_500);
+      const err = await geo.getByTestId("geometry3d-error").count();
+      check(err === 0, `[3D表示/${tag}] エラーを出さずに開ける`, err);
+      // 🚨 「開けた」だけでは描けていない。**シーンに物体が載り、canvas が黒一色でない**ことを見る。
+      const scene = await geo.evaluate(`(() => {
+        const host = document.querySelector('[data-testid="geometry3d-canvas-host"]');
+        const canvas = host && host.querySelector("canvas");
+        if (!canvas) return JSON.stringify({ canvas: false });
+        const gl = canvas.getContext("webgl2") || canvas.getContext("webgl");
+        return JSON.stringify({ canvas: true, gl: !!gl, w: canvas.width, h: canvas.height });
+      })()`);
+      const sc = JSON.parse(scene as string) as { canvas: boolean; gl?: boolean; w?: number; h?: number };
+      check(sc.canvas && !!sc.gl && (sc.w ?? 0) > 100, `[3D表示/${tag}] WebGL の canvas が用意されている`, sc);
+      // 🚨 **ここが本題。** canvas・WebGL・シーンの物体数・表示中の数値がすべて合格したまま
+      //    **3D が真っ黒**だったことがある（カメラの視線と view-up が平行で退化していた。
+      //    スクリーンショットを見て初めて分かった）。**描かれた画素を数える**。
+      const statsRaw = (await geo.evaluate(`(() => {
+        const g = window.__graphyDebug;
+        const s = g && g.getGeometry3dStats ? g.getGeometry3dStats() : null;
+        return s ? JSON.stringify(s) : null;
+      })()`)) as string | null;
+      const stats = statsRaw ? (JSON.parse(statsRaw) as { fraction: number; nonBackground: number }) : null;
+      check(
+        stats != null && stats.fraction > 0.001,
+        `[3D表示/${tag}] ★実際に描かれている（背景でない画素がある）`,
+        stats,
+      );
+      const title = await geo.getByTestId("geometry3d-title").textContent();
+      check(!!title && title.includes("3D QCA"), `[3D表示/${tag}] 何を出しているかが画面に出る`, title);
+      const lengthText = await geo.getByTestId("geometry3d-length").textContent();
+      check(
+        !!lengthText && lengthText.includes(st.result.lengthMm.toFixed(1)),
+        `[3D表示/${tag}] ダイアログと同じ長さを出す（再計算しない）`,
+        { shown: lengthText, want: st.result.lengthMm.toFixed(1) },
+      );
+      // シーン（既存の `scene3dStore`）に中心線が載っていること。
+      const objects = await geo.getByTestId("geometry3d-objects").getAttribute("data-count");
+      check(Number(objects) === 1, `[3D表示/${tag}] シーンに中心線が 1 本だけ載る（重ならない）`, objects);
+      await geo.screenshot({ path: path.join(OUT_DIR, `4-${tag}-geometry3d.png`) }).catch(() => {});
+      await geo.close().catch(() => {});
+      await viewerB.waitForTimeout(500);
+    }
+
     // ── 2D 投影長より 3D のほうが真値に近いこと（3D にする実利）──
     const proj2dMm = polylineLengthPx(seg1) * 0.225;
     const err2d = (Math.abs(proj2dMm - feedableLengthMm) / feedableLengthMm) * 100;

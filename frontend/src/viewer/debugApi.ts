@@ -437,6 +437,26 @@ function imagePixelsToCanvasFraction(
   return out;
 }
 
+/**
+ * 幾何 3D ウィンドウの画素統計を取るための口。
+ *
+ * <p>🚨 **DOM だけを見る検査は黒い画面を通す。** canvas の存在・WebGL コンテキスト・
+ * シーンの物体数・表示中の数値がすべて合格したまま 3D が真っ黒だったことがある
+ * （カメラの視線と view-up が平行になって退化していた）。**描かれた画素を数える**。
+ */
+let geometry3dProbe: (() => { total: number; nonBackground: number; fraction: number } | null) | null = null;
+
+export function publishGeometry3dProbe(
+  fn: (() => { total: number; nonBackground: number; fraction: number } | null) | null,
+): void {
+  if (!import.meta.env.DEV) return;
+  geometry3dProbe = fn;
+}
+
+function getGeometry3dStats(): { total: number; nonBackground: number; fraction: number } | null {
+  return geometry3dProbe ? geometry3dProbe() : null;
+}
+
 declare global {
   interface Window {
     __graphyDebug?: {
@@ -449,6 +469,7 @@ declare global {
       getQlvState: typeof getQlvState;
       getXa3dState: typeof getXa3dState;
       imagePixelsToCanvasFraction: typeof imagePixelsToCanvasFraction;
+      getGeometry3dStats: typeof getGeometry3dStats;
     };
   }
 }
@@ -468,6 +489,7 @@ export function installDebugApi(): void {
     getQlvState,
     getXa3dState,
     imagePixelsToCanvasFraction,
+    getGeometry3dStats,
   };
   installed = true;
 }

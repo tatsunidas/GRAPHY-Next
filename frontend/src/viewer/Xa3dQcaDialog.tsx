@@ -18,6 +18,8 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createQca3dSr } from "../api";
+import { desktop } from "../desktopBridge";
+import { writeGeometry3dContext } from "../viewer3d/geometry3dContext";
 import { useI18n } from "../i18n/i18n";
 import { publishXa3dSnapshot } from "./debugApi";
 import { type Vec3, viewSeparationDeg } from "./xaGeometry";
@@ -433,6 +435,36 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
               <div style={section} data-step="recon">
                 <div style={sectionTitle}>{t("xa3d.preview")}</div>
                 <Preview3D points={result.points} />
+                <div style={row}>
+                  <button
+                    style={btn}
+                    data-testid="xa3d-open-3d"
+                    onClick={() => {
+                      writeGeometry3dContext({
+                        kind: "xa-qca3d",
+                        name: `3D QCA — ${runA?.label ?? ""} / ${runB?.label ?? ""}`,
+                        centerlineLps: result.points.map((p) => [p[0], p[1], p[2]]),
+                        info: {
+                          lengthMm: result.lengthMm,
+                          percentDiameterStenosis: stenosis?.percentDiameterStenosis,
+                          minEquivalentDiameterMm: profile?.unavailable
+                            ? undefined
+                            : (profile?.minEquivalentDiameterMm ?? undefined),
+                          angleCorrected: refinement != null,
+                          visibleFractionA: result.foreshortening.a?.visibleFraction,
+                          visibleFractionB: result.foreshortening.b?.visibleFraction,
+                        },
+                      });
+                      // desktop は専用ウィンドウ（位置記憶つき）、web は named target のタブ。
+                      const d = desktop();
+                      if (d?.openViewer) void d.openViewer("geometry3d");
+                      else window.open(`${window.location.pathname}#geometry3d`, "graphy-geometry3d");
+                    }}
+                  >
+                    {t("xa3d.open3d")}
+                  </button>
+                  <span style={faint}>{t("xa3d.open3dHint")}</span>
+                </div>
               </div>
             ) : null}
           </div>
