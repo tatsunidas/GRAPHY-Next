@@ -92,7 +92,9 @@ export type ReconWarningCode =
   /** 端の対応が食い違う。2 本が同じ区間を辿っていない疑い。 */
   | "endpointMismatch"
   /** 対応が一部で退化（片方が停滞）。フォアショートニングが強いか、対応が破綻している。 */
-  | "degenerateCorrespondence";
+  | "degenerateCorrespondence"
+  /** どちらかの方向で血管が視線方向に潰れている。**長さが系統的に短く出る**（§10.3.1）。 */
+  | "severeForeshortening";
 
 export interface ReconWarning {
   code: ReconWarningCode;
@@ -138,6 +140,11 @@ export interface ReconOptions {
   samples?: number;
   /** 3D 点列の平滑化窓（奇数、1 で無効）。既定 5。 */
   smoothWindow?: number;
+  /**
+   * これを下回る「見えている長さの割合」を短縮として警告する。既定 0.8。
+   * 実機では方向 B の割合が下がった区間で 2D 中心線が 9.5% 短く出た（§10.3.1）。
+   */
+  minVisibleFraction?: number;
 }
 
 export interface CenterlineMatch {
@@ -175,6 +182,8 @@ export interface Recon3DResult {
   /** 3D 中心線の全長 [mm]。 */
   lengthMm: number;
   match: CenterlineMatch;
+  /** 各方向での短縮の度合い。**精度を一番左右する量**（§10.3.1）。 */
+  foreshortening: { a: ForeshorteningProfile | null; b: ForeshorteningProfile | null };
   warnings: ReconWarning[];
   /** blocking な警告が無いか。false なら**結果を表示しない**。 */
   acceptable: boolean;
@@ -500,6 +509,22 @@ export function reconstructCenterline3d(
     warnings.push({ code: "degenerateCorrespondence", value: match.maxStall, threshold: stallLimit, blocking: false });
   }
 
+  // 🔴 短縮は「結果を止める」のではなく「値が系統的に短いことを知らせる」種類の問題。
+  //    止めてしまうと、短縮している事実そのものが利用者に見えなくなる（次にどの角度で
+  //    撮り直せばよいかも分からない）。だから blocking にはせず、必ず数値で出す。
+  const minVisible = opts?.minVisibleFraction ?? 0.8;
+  const foreshortening = {
+    a: foreshorteningProfile(points, a.geometry),
+    b: foreshorteningProfile(points, b.geometry),
+  };
+  const worstVisible = Math.min(
+    foreshortening.a?.visibleFraction ?? 1,
+    foreshortening.b?.visibleFraction ?? 1,
+  );
+  if (worstVisible < minVisible) {
+    warnings.push({ code: "severeForeshortening", value: worstVisible, threshold: minVisible, blocking: false });
+  }
+
   return {
     points,
     residualMm,
@@ -509,6 +534,7 @@ export function reconstructCenterline3d(
     separationDeg,
     lengthMm: polylineLength(points),
     match,
+    foreshortening,
     warnings,
     acceptable: !warnings.some((w) => w.blocking),
   };
@@ -711,4 +737,248 @@ export function tangents3d(points: readonly Vec3[]): Vec3[] {
     const n = norm(v);
     return n > 1e-9 ? ([v[0] / n, v[1] / n, v[2] / n] as Vec3) : ([0, 0, 1] as Vec3);
   });
+}
+
+/* ------------------------------------------------------------------ */
+/* 短縮（フォアショートニング）— §10.3.1 の主因                        */
+/* ------------------------------------------------------------------ */
+
+export interface ForeshorteningProfile {
+  /**
+   * その方向で見えている長さの割合（0〜1）。
+   * 1 = 視線に完全に垂直（実長どおり見える）／0 = 視線に平行（点に潰れる）。
+   */
+  visibleFraction: number;
+  /** 局所で最も潰れている点の割合。 */
+  worstLocal: number;
+  /** 潰れている（局所割合が `severeBelow` 未満）区間の長さの割合。 */
+  severeFraction: number;
+}
+
+/**
+ * 3D 中心線が、ある方向でどれだけ短縮して見えるかを測る。
+ *
+ * <h3>なぜこれを出すのか — 精度を一番左右するのはここ</h3>
+ * 実機検証（§10.3.1）で分かったこと: **視線方向に潰れた区間では、2D の自動追跡が
+ * 原理的に弧長を取りこぼす**。抽出された中心線は真値から RMS 0.66px しか離れていない
+ * （＝血管の上には乗っている）のに、弧長が 9.5% 足りなかった。潰れた区間では
+ * **投影が自分自身の上を往復する**ので、直進する近道も最初から最後まで血管画素の上を通る。
+ * 人が見ても辿れない。**対策はアルゴリズムではなく、短縮しない 2 方向を選ぶこと**
+ * （＝臨床で言うワーキングアングル）。
+ *
+ * <p>局所の見え方は接線 t と視線 d のなす角で決まり、見える長さの割合は `|t × d|`。
+ * これを弧長で重み付けして平均したものが {@link ForeshorteningProfile.visibleFraction}。
+ *
+ * <p>⚠️ **これは 3D 中心線から計算するので、その中心線が既に短縮の影響で短いと過小評価になる。**
+ * 「大丈夫だと出たから正しい」ではなく、「危ないと出たら間違いなく危ない」向きの指標として読む。
+ */
+export function foreshorteningProfile(
+  points: readonly Vec3[],
+  g: XaViewGeometry,
+  opts?: { severeBelow?: number },
+): ForeshorteningProfile | null {
+  if (points.length < 2) return null;
+  const severeBelow = opts?.severeBelow ?? 0.5;
+  const d = viewDirection(g);
+  const tans = tangents3d(points);
+  let total = 0;
+  let visible = 0;
+  let severe = 0;
+  let worst = 1;
+  for (let i = 1; i < points.length; i++) {
+    const seg = Math.hypot(
+      points[i][0] - points[i - 1][0],
+      points[i][1] - points[i - 1][1],
+      points[i][2] - points[i - 1][2],
+    );
+    if (!(seg > 0)) continue;
+    // 区間の向きは端点の接線の平均で見る（中央差分の接線をそのまま使うより素直）。
+    const t: Vec3 = [
+      (tans[i - 1][0] + tans[i][0]) / 2,
+      (tans[i - 1][1] + tans[i][1]) / 2,
+      (tans[i - 1][2] + tans[i][2]) / 2,
+    ];
+    const n = norm(t);
+    if (!(n > 1e-9)) continue;
+    const local = Math.min(1, norm(cross([t[0] / n, t[1] / n, t[2] / n], d)));
+    total += seg;
+    visible += seg * local;
+    if (local < severeBelow) severe += seg;
+    if (local < worst) worst = local;
+  }
+  if (!(total > 0)) return null;
+  return { visibleFraction: visible / total, worstLocal: worst, severeFraction: severe / total };
+}
+
+export interface WorkingAngleSuggestion {
+  primaryAngleDeg: number;
+  secondaryAngleDeg: number;
+  /** その方向での見える割合。 */
+  visibleFraction: number;
+}
+
+/**
+ * 短縮が最も小さい撮影角度を探す（ワーキングアングルの提案）。
+ *
+ * <p>3D 中心線が一度でも得られれば、**任意の角度での見え方を計算できる**。
+ * 「次はこの角度で撮ると短縮が少ない」を数値で言えるのが 3D 再構成の実利のひとつ。
+ *
+ * <p>⚠️ **装置が到達できる角度かどうかは考えていない**（C アームの可動範囲・寝台・術者の立ち位置）。
+ * 提案であって指示ではない。また、**血管が他の血管と重ならないか**（オーバーラップ）は
+ * 別の問題で、ここでは見ていない。
+ *
+ * @param count 返す候補の数（見える割合の大きい順）
+ */
+export function suggestWorkingAngles(
+  points: readonly Vec3[],
+  base: XaViewGeometry,
+  opts?: { stepDeg?: number; primaryRangeDeg?: number; secondaryRangeDeg?: number; count?: number },
+): WorkingAngleSuggestion[] {
+  const step = Math.max(1, opts?.stepDeg ?? 5);
+  const pRange = opts?.primaryRangeDeg ?? 90;
+  const sRange = opts?.secondaryRangeDeg ?? 45;
+  const out: WorkingAngleSuggestion[] = [];
+  for (let p = -pRange; p <= pRange + 1e-9; p += step) {
+    for (let s = -sRange; s <= sRange + 1e-9; s += step) {
+      const prof = foreshorteningProfile(points, { ...base, primaryAngleDeg: p, secondaryAngleDeg: s });
+      if (!prof) continue;
+      out.push({ primaryAngleDeg: p, secondaryAngleDeg: s, visibleFraction: prof.visibleFraction });
+    }
+  }
+  out.sort((a, b) => b.visibleFraction - a.visibleFraction);
+  return out.slice(0, Math.max(1, opts?.count ?? 3));
+}
+
+/* ------------------------------------------------------------------ */
+/* 3D 断面プロファイル（§10.2 の ⑤ を中心線全体へ）                    */
+/* ------------------------------------------------------------------ */
+
+/** 1 方向の径プロファイル（QCA の出力そのまま）。 */
+export interface DiameterProfile {
+  /** 各計測点の径。単位は `unit`。 */
+  diameters: readonly number[];
+  /** 各計測点が対応する中心線インデックス（`XaCenterline2D.points` の添字）。 */
+  pathIndices: readonly number[];
+  /**
+   * 元の中心線の点数。
+   * 🚨 **これが要る。** 計測点は中心線の部分集合なので、`pathIndices` の最大値は
+   * 中心線の末尾とは限らない。「割合 → 中心線インデックス」の換算に末尾の計測点を使うと、
+   * **計測していない範囲まで測ったことにしてしまう**（テストで捕捉した）。
+   */
+  pointCount: number;
+  unit: "mm" | "px";
+}
+
+export interface CrossSectionProfile {
+  /** 3D 中心線の点ごとの断面。測れなかった点は null。 */
+  sections: (FusedCrossSection | null)[];
+  /** 最小の等価直径 [mm]（3D MLD）。測れなければ null。 */
+  minEquivalentDiameterMm: number | null;
+  /** その位置（`sections` の添字）。 */
+  minIndex: number | null;
+  /** 最小断面積 [mm²]。 */
+  minAreaMm2: number | null;
+  /** 2 方向の測定方向がなす角の中央値 [deg]。90° から離れるほど楕円の仮定が効く。 */
+  medianMeasurementAngleDeg: number | null;
+  /** 断面を出せなかった理由（出せたなら null）。 */
+  unavailable: "uncalibrated" | "noDiameters" | "noTangent" | null;
+}
+
+/**
+ * 2 方向の径プロファイルを、3D 中心線に沿った断面へ合成する。
+ *
+ * <h3>🚨 出せない条件は黙って埋めない</h3>
+ * どちらかの方向が**未校正（px）**なら断面積は出せない。px の径を掛け合わせると
+ * 「mm² に見える無意味な数」になる。`unavailable: "uncalibrated"` を返して**何も出さない**。
+ *
+ * <h3>🔴 系統誤差</h3>
+ * 入力の径は半値法由来で **約 13% 過小**（§16.4）。面積は 2 乗で効くので **約 24% 過小**。
+ * 合成しても消えない。§16.4 の作り直しが前提。
+ */
+export function fuseDiameterProfile(
+  points: readonly Vec3[],
+  a: { geometry: XaViewGeometry; profile: DiameterProfile },
+  b: { geometry: XaViewGeometry; profile: DiameterProfile },
+  match: CenterlineMatch,
+): CrossSectionProfile {
+  const empty: CrossSectionProfile = {
+    sections: points.map(() => null),
+    minEquivalentDiameterMm: null,
+    minIndex: null,
+    minAreaMm2: null,
+    medianMeasurementAngleDeg: null,
+    unavailable: null,
+  };
+  if (a.profile.unit !== "mm" || b.profile.unit !== "mm") return { ...empty, unavailable: "uncalibrated" };
+  if (a.profile.diameters.length === 0 || b.profile.diameters.length === 0) {
+    return { ...empty, unavailable: "noDiameters" };
+  }
+
+  const tans = tangents3d(points);
+  const sections: (FusedCrossSection | null)[] = [];
+  const angles: number[] = [];
+  let minEq: number | null = null;
+  let minIdx: number | null = null;
+  let minArea: number | null = null;
+
+  for (let k = 0; k < points.length; k++) {
+    // 3D 点 k は「曲線 A の標本 k」に対応する。標本は弧長等分なので、元の中心線の
+    // どの位置かは割合で戻せる（対応が付いた範囲だけを再標本化してある）。
+    const fracA = points.length > 1 ? k / (points.length - 1) : 0;
+    const idxB = match.indexB[k];
+    const fracB = match.indexB.length > 1 && idxB != null
+      ? idxB / (match.sampledB.length - 1 || 1)
+      : fracA;
+    const dA = sampleProfileByFraction(a.profile, fracA);
+    const dB = sampleProfileByFraction(b.profile, fracB);
+    if (dA == null || dB == null) {
+      sections.push(null);
+      continue;
+    }
+    const f = fuseCrossSection(dA, dB, tans[k], a.geometry, b.geometry);
+    sections.push(f);
+    if (!f) continue;
+    angles.push(f.measurementAngleDeg);
+    if (minEq == null || f.equivalentDiameterMm < minEq) {
+      minEq = f.equivalentDiameterMm;
+      minIdx = k;
+      minArea = f.areaMm2;
+    }
+  }
+  if (angles.length === 0) return { ...empty, sections, unavailable: "noTangent" };
+  const sorted = [...angles].sort((x, y) => x - y);
+  return {
+    sections,
+    minEquivalentDiameterMm: minEq,
+    minIndex: minIdx,
+    minAreaMm2: minArea,
+    medianMeasurementAngleDeg: sorted[Math.floor(sorted.length / 2)],
+    unavailable: null,
+  };
+}
+
+/**
+ * 径プロファイルを「中心線に沿った割合」で引く。
+ *
+ * <p>QCA の計測点は中心線の**部分集合**（`pathIndices`）なので、割合はその範囲で線形に読む。
+ * 範囲外（計測点が中心線の一部しか覆っていない領域）は null を返す —— **端を外挿しない**。
+ * 外挿した径は「測っていない値」なのに測ったのと同じ顔で出てしまう。
+ */
+function sampleProfileByFraction(p: DiameterProfile, frac: number): number | null {
+  const n = p.diameters.length;
+  if (n === 0) return null;
+  if (n === 1) return p.diameters[0];
+  const idx = p.pathIndices;
+  const lo = idx[0];
+  const hi = idx[n - 1];
+  if (!(hi > lo)) return p.diameters[0];
+  // frac は「中心線全体に対する割合」。中心線の添字へ写してから、計測点の範囲と比べる。
+  const targetPath = frac * Math.max(1, p.pointCount - 1);
+  if (targetPath < lo || targetPath > hi) return null;
+  let j = 1;
+  while (j < n - 1 && idx[j] < targetPath) j++;
+  const t0 = idx[j - 1];
+  const t1 = idx[j];
+  const u = t1 > t0 ? (targetPath - t0) / (t1 - t0) : 0;
+  return p.diameters[j - 1] + (p.diameters[j] - p.diameters[j - 1]) * u;
 }

@@ -40,6 +40,11 @@ const TARGET_LENGTH_ERROR_PCT = 3.0;
 const TARGET_ANCHOR_REPROJ_PX = 2.0;
 /** 抽出された 2D 中心線が真値からどれだけ離れてよいか [px]。 */
 const TOL_CENTERLINE_PX = 3.0;
+/**
+ * 🚨 **既知の系統誤差**: 半値法を円柱投影に当てると直径は約 13% 過小に出る（§16.4）。
+ * 断面積はその 2 乗で効く。**目標未達を「合格」に書き換えないための基準値**でもある。
+ */
+const KNOWN_DIAMETER_FACTOR = 0.870;
 
 /**
  * 解析する区間（主枝の真値点列のインデックス）。
@@ -103,7 +108,16 @@ interface Xa3dState {
     warnings: { code: string; value: number; threshold: number; blocking: boolean }[];
     firstPoint: [number, number, number];
     lastPoint: [number, number, number];
+    visibleFractionA: number | null;
+    visibleFractionB: number | null;
   } | null;
+  section: {
+    unavailable: string | null;
+    minAreaMm2: number | null;
+    minEquivalentDiameterMm: number | null;
+    medianMeasurementAngleDeg: number | null;
+  } | null;
+  workingAngles: { primary: number; secondary: number; visibleFraction: number }[];
   refinement: { beforePx: number; afterPx: number; primary: number; secondary: number } | null;
   steps: Record<string, string>;
 }
@@ -444,6 +458,56 @@ async function main(): Promise<void> {
         anchor: Number(st.result.anchorReprojectionPx.toFixed(3)),
       },
     );
+
+    // ── 短縮の指標（§10.3.1 の主因を数値で出せているか）────────
+    const visA = st.result.visibleFractionA;
+    const visB = st.result.visibleFractionB;
+    check(
+      visA != null && visB != null && visA > 0 && visA <= 1 && visB > 0 && visB <= 1,
+      "[短縮] 各方向の「見えている長さの割合」を出せている",
+      { a: visA, b: visB },
+    );
+    // 🚨 方向 B のほうが短縮している、という**向き**まで確かめる。実測で 2D 中心線の
+    //    弧長を取りこぼしたのは B（§10.3.1）。値が出るだけでは意味の検査にならない。
+    check(
+      visA != null && visB != null && visB < visA,
+      "[短縮] ★弧長を取りこぼした方向 B のほうが、短縮が強いと出る",
+      { a: Number((visA ?? 0).toFixed(3)), b: Number((visB ?? 0).toFixed(3)) },
+    );
+    check(
+      st.workingAngles.length >= 1 && st.workingAngles[0].visibleFraction >= (visA ?? 0),
+      "[短縮] 短縮の少ない撮影角度を提案できる（現在の方向 A 以上）",
+      st.workingAngles,
+    );
+
+    // ── 3D 断面（§10.2.5）──────────────────────────────────
+    check(st.section != null, "[断面] 断面の合成まで到達している", st.section);
+    if (st.section) {
+      check(
+        st.section.unavailable === null,
+        "[断面] 装置校正済みなので断面積が出る",
+        st.section.unavailable,
+      );
+      // 🔴 **既知の系統誤差と突き合わせる**（「妥当な範囲」で済ませない）。
+      //    主枝の径は 3.5mm → 2.0mm の線形テーパー。狭窄は t=0.66 で、この区間の外。
+      //    したがって区間内の最小径は遠位端 t=SEG_TO/59 の値。
+      //    径は半値法で約 13% 過小に出る（§16.4 の係数 0.870）ので、期待値はその積。
+      const tDistal = SEG_TO / (main1.pointsPx.length - 1);
+      const truthMinDiameterMm = 3.5 - 1.5 * tDistal;
+      const expectedMm = truthMinDiameterMm * KNOWN_DIAMETER_FACTOR;
+      const eq = st.section.minEquivalentDiameterMm;
+      check(
+        eq != null && Math.abs(eq - expectedMm) < 0.25,
+        `[断面] 最小等価直径が既知の系統誤差どおり（真値 × ${KNOWN_DIAMETER_FACTOR}）`,
+        {
+          truthMm: Number(truthMinDiameterMm.toFixed(3)),
+          expectedMm: Number(expectedMm.toFixed(3)),
+          measuredMm: eq == null ? null : Number(eq.toFixed(3)),
+        },
+      );
+      const ang = st.section.medianMeasurementAngleDeg;
+      check(ang != null && ang > 0 && ang <= 90, "[断面] 測定方向のなす角を出せている", ang == null ? null : Number(ang.toFixed(1)));
+    }
 
     // ── 2D 投影長より 3D のほうが真値に近いこと（3D にする実利）──
     const proj2dMm = polylineLengthPx(seg1) * 0.225;

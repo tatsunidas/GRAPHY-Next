@@ -366,7 +366,19 @@ export interface Xa3dDebugSnapshot {
     /** 3D 中心線の端点と重心（真値と突き合わせるために出す）。 */
     firstPoint: [number, number, number];
     lastPoint: [number, number, number];
+    /** 各方向で見えている長さの割合（短縮）。§10.3.1 の主因。 */
+    visibleFractionA: number | null;
+    visibleFractionB: number | null;
   } | null;
+  /** 3D 断面。出せないときは `unavailable` に理由が入る。 */
+  section: {
+    unavailable: string | null;
+    minAreaMm2: number | null;
+    minEquivalentDiameterMm: number | null;
+    medianMeasurementAngleDeg: number | null;
+  } | null;
+  /** 短縮の少ない撮影角度の候補。 */
+  workingAngles: { primary: number; secondary: number; visibleFraction: number }[];
   refinement: { beforePx: number; afterPx: number; primary: number; secondary: number } | null;
   /** ステップ・レールの状態（id → state）。 */
   steps: Record<string, string>;

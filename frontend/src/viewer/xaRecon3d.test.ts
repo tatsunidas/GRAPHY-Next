@@ -17,10 +17,13 @@ import { describe, expect, it } from "vitest";
 
 import { type Vec3, type XaViewGeometry, projectToPixel, viewSeparationDeg } from "./xaGeometry";
 import {
+  type DiameterProfile,
   type ReconAnchor,
   type XaCenterline2D,
   anchorReprojection,
+  foreshorteningProfile,
   fuseCrossSection,
+  fuseDiameterProfile,
   matchCenterlines,
   polylineLength,
   rayDistanceMm,
@@ -29,6 +32,7 @@ import {
   refineGeometryWithAnchors,
   resampleByArcLengthN,
   smoothPolyline3d,
+  suggestWorkingAngles,
   tangents3d,
 } from "./xaRecon3d";
 
@@ -457,5 +461,144 @@ describe.skipIf(!phantom)("GNBP-XA-3 の真値中心線で再構成する", () =
     const r = reconstructCenterline3d(centerline(truth, gA, 137), centerline(truth, gB, 211), { samples: 250 })!;
     expect(r.anchorCount).toBe(2);
     expect(r.warnings.some((w) => w.code === "tooFewAnchors")).toBe(true);
+  });
+});
+
+/* ---------------- 短縮（フォアショートニング） ---------------- */
+
+describe("foreshorteningProfile / suggestWorkingAngles", () => {
+  /** Z 軸（頭足方向）に真っ直ぐ伸びた血管。 */
+  const straightZ: Vec3[] = Array.from({ length: 41 }, (_, i): Vec3 => [0, 0, -40 + 2 * i]);
+
+  it("視線に垂直なら見える割合は 1", () => {
+    // α=β=0 は前方視（d=(0,−1,0)）。Z 軸の血管は視線に垂直＝完全に見える。
+    const p = foreshorteningProfile(straightZ, geom(0, 0))!;
+    expect(p.visibleFraction).toBeCloseTo(1, 6);
+    expect(p.severeFraction).toBeCloseTo(0, 6);
+  });
+
+  it("視線に平行なら見える割合は 0（点に潰れる）", () => {
+    // β=90 は頭側から見る（d=(0,0,1)）。Z 軸の血管は視線に平行。
+    const p = foreshorteningProfile(straightZ, geom(0, 90))!;
+    expect(p.visibleFraction).toBeCloseTo(0, 6);
+    expect(p.severeFraction).toBeCloseTo(1, 6);
+  });
+
+  it("45° 傾けると sin45 ぶんだけ見える", () => {
+    const p = foreshorteningProfile(straightZ, geom(0, 45))!;
+    expect(p.visibleFraction).toBeCloseTo(Math.SQRT1_2, 4);
+  });
+
+  it("最も短縮の少ない角度を提案できる", () => {
+    // Z 軸の血管は secondary=0（頭足方向に振らない）なら primary によらず完全に見える。
+    const best = suggestWorkingAngles(straightZ, geom(0, 0), { stepDeg: 5, count: 3 });
+    expect(best[0].visibleFraction).toBeCloseTo(1, 4);
+    for (const b of best) expect(Math.abs(b.secondaryAngleDeg)).toBeLessThan(1);
+  });
+
+  it("🔴 短縮していると再構成が警告を出す（ただし結果は止めない）", () => {
+    // 止めてしまうと「短縮している」という事実自体が見えなくなり、次にどの角度で
+    // 撮り直せばよいかも分からなくなる。だから blocking にしない。
+    const truth = helix(400);
+    const gA = geom(-30, 0);
+    const gB = geom(60, 20);
+    const r = reconstructCenterline3d(centerline(truth, gA, 200), centerline(truth, gB, 200), {
+      samples: 150,
+      // 実際には潰れていないので、閾値のほうを上げて警告経路を通す。
+      minVisibleFraction: 0.999,
+    })!;
+    const w = r.warnings.find((x) => x.code === "severeForeshortening");
+    expect(w).toBeDefined();
+    expect(w!.blocking).toBe(false);
+    expect(r.acceptable).toBe(true);
+    expect(r.foreshortening.a!.visibleFraction).toBeGreaterThan(0.5);
+  });
+});
+
+/* ---------------- 3D 断面プロファイル ---------------- */
+
+describe("fuseDiameterProfile", () => {
+  const truth = helix(200);
+  const gA = geom(-30, 0);
+  const gB = geom(60, 20);
+  const a = centerline(truth, gA, 200);
+  const b = centerline(truth, gB, 200);
+  const recon = reconstructCenterline3d(a, b, { samples: 120 })!;
+
+  /** 一定径のプロファイル（中心線全体を覆う）。 */
+  function flat(d: number, unit: "mm" | "px" = "mm"): DiameterProfile {
+    const n = 60;
+    return {
+      diameters: Array.from({ length: n }, () => d),
+      pathIndices: Array.from({ length: n }, (_, i) => Math.round((i / (n - 1)) * 199)),
+      pointCount: 200,
+      unit,
+    };
+  }
+
+  it("一定径 3mm どうしなら、断面は円として面積 π/4·9 になる", () => {
+    const p = fuseDiameterProfile(
+      recon.points,
+      { geometry: gA, profile: flat(3) },
+      { geometry: gB, profile: flat(3) },
+      recon.match,
+    );
+    expect(p.unavailable).toBeNull();
+    expect(p.minEquivalentDiameterMm).toBeCloseTo(3, 6);
+    expect(p.minAreaMm2).toBeCloseTo((Math.PI / 4) * 9, 6);
+  });
+
+  it("🚨 片方でも未校正なら断面を出さない（px の径を掛けない）", () => {
+    const p = fuseDiameterProfile(
+      recon.points,
+      { geometry: gA, profile: flat(3) },
+      { geometry: gB, profile: flat(30, "px") },
+      recon.match,
+    );
+    expect(p.unavailable).toBe("uncalibrated");
+    expect(p.minAreaMm2).toBeNull();
+    expect(p.sections.every((s) => s === null)).toBe(true);
+  });
+
+  it("狭窄を入れるとその位置で最小になる", () => {
+    const n = 60;
+    // 1 点だけの切れ込みにしない。線形内挿と対応付けのわずかなずれで薄まってしまい、
+    // 「合成が正しいか」ではなく「内挿の鋭さ」を測るテストになる（最初にそれで落ちた）。
+    const prof: DiameterProfile = {
+      diameters: Array.from({ length: n }, (_, i) => (Math.abs(i - 30) <= 2 ? 1.5 : 3)),
+      pathIndices: Array.from({ length: n }, (_, i) => Math.round((i / (n - 1)) * 199)),
+      pointCount: 200,
+      unit: "mm",
+    };
+    const p = fuseDiameterProfile(
+      recon.points,
+      { geometry: gA, profile: prof },
+      { geometry: gB, profile: prof },
+      recon.match,
+    );
+    expect(p.minEquivalentDiameterMm).toBeLessThan(2.2);
+    // 位置がおおよそ中央付近（対応付けでずれるので厳密一致は求めない）。
+    const frac = p.minIndex! / (p.sections.length - 1);
+    expect(frac).toBeGreaterThan(0.35);
+    expect(frac).toBeLessThan(0.65);
+  });
+
+  it("🚨 計測点が覆っていない範囲は外挿せず null", () => {
+    // 中心線の 40〜60% しか計測点が無いプロファイル。
+    const prof: DiameterProfile = {
+      diameters: [3, 3, 3],
+      pathIndices: [80, 100, 120],
+      pointCount: 200,
+      unit: "mm",
+    };
+    const p = fuseDiameterProfile(
+      recon.points,
+      { geometry: gA, profile: prof },
+      { geometry: gB, profile: prof },
+      recon.match,
+    );
+    expect(p.sections[0]).toBeNull();
+    expect(p.sections[p.sections.length - 1]).toBeNull();
+    expect(p.sections.some((s) => s !== null)).toBe(true);
   });
 });

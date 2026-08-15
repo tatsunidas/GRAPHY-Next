@@ -21,10 +21,14 @@ import { useI18n } from "../i18n/i18n";
 import { publishXa3dSnapshot } from "./debugApi";
 import { type Vec3, viewSeparationDeg } from "./xaGeometry";
 import {
+  type CrossSectionProfile,
   type ReconAnchor,
   type Recon3DResult,
+  type WorkingAngleSuggestion,
   type XaCenterline2D,
+  fuseDiameterProfile,
   reconstructWithRefinement,
+  suggestWorkingAngles,
   type GeometryRefinement,
 } from "./xaRecon3d";
 import { type XaQcaRun, useQcaRuns } from "./xaRecon3dStore";
@@ -49,6 +53,8 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
   const [pendingA, setPendingA] = useState<number | null>(null);
   const [result, setResult] = useState<Recon3DResult | null>(null);
   const [refinement, setRefinement] = useState<GeometryRefinement | null>(null);
+  const [profile, setProfile] = useState<CrossSectionProfile | null>(null);
+  const [suggestions, setSuggestions] = useState<WorkingAngleSuggestion[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const runA = runs.find((r) => r.imageId === keyA) ?? null;
@@ -78,6 +84,8 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
   const reset = () => {
     setResult(null);
     setRefinement(null);
+    setProfile(null);
+    setSuggestions([]);
     setError(null);
   };
 
@@ -99,14 +107,41 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
       minSeparationDeg: MIN_SEPARATION_DEG,
     });
     if (!r) {
-      setResult(null);
-      setRefinement(null);
+      reset();
       setError(t("xa3d.failed"));
       return;
     }
     setError(null);
     setResult(r);
     setRefinement(ref);
+    // 断面の合成（§10.2.5）。未校正なら `unavailable` が立って何も出さない。
+    const geomB = ref?.geometryB ?? runB.geometry;
+    setProfile(
+      fuseDiameterProfile(
+        r.points,
+        {
+          geometry: runA.geometry,
+          profile: {
+            diameters: runA.diameters,
+            pathIndices: runA.diameterPathIndices,
+            pointCount: runA.centerline.length,
+            unit: runA.unit,
+          },
+        },
+        {
+          geometry: geomB,
+          profile: {
+            diameters: runB.diameters,
+            pathIndices: runB.diameterPathIndices,
+            pointCount: runB.centerline.length,
+            unit: runB.unit,
+          },
+        },
+        r.match,
+      ),
+    );
+    // 「次はどの角度で撮ると短縮が少ないか」。3D が一度取れて初めて言えること。
+    setSuggestions(suggestWorkingAngles(r.points, runA.geometry, { stepDeg: 5, count: 3 }));
   };
 
   const steps = deriveQca3dSteps({
@@ -145,8 +180,23 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
             warnings: result.warnings.map((w) => ({ ...w })),
             firstPoint: [...result.points[0]] as [number, number, number],
             lastPoint: [...result.points[result.points.length - 1]] as [number, number, number],
+            visibleFractionA: result.foreshortening.a?.visibleFraction ?? null,
+            visibleFractionB: result.foreshortening.b?.visibleFraction ?? null,
           }
         : null,
+      section: profile
+        ? {
+            unavailable: profile.unavailable,
+            minAreaMm2: profile.minAreaMm2,
+            minEquivalentDiameterMm: profile.minEquivalentDiameterMm,
+            medianMeasurementAngleDeg: profile.medianMeasurementAngleDeg,
+          }
+        : null,
+      workingAngles: suggestions.map((x) => ({
+        primary: x.primaryAngleDeg,
+        secondary: x.secondaryAngleDeg,
+        visibleFraction: x.visibleFraction,
+      })),
       refinement: refinement
         ? {
             beforePx: refinement.beforePx,
@@ -294,7 +344,14 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
                 </button>
                 {error ? <span style={bad}>{error}</span> : null}
               </div>
-              {result ? <ResultPanel result={result} refinement={refinement} /> : null}
+              {result ? (
+                <ResultPanel
+                  result={result}
+                  refinement={refinement}
+                  profile={profile}
+                  suggestions={suggestions}
+                />
+              ) : null}
             </div>
 
             {/* ── 3D 表示 ──────────────────────────────────── */}
@@ -324,9 +381,13 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
 function ResultPanel({
   result,
   refinement,
+  profile,
+  suggestions,
 }: {
   result: Recon3DResult;
   refinement: GeometryRefinement | null;
+  profile: CrossSectionProfile | null;
+  suggestions: readonly WorkingAngleSuggestion[];
 }) {
   const { t } = useI18n();
   return (
@@ -374,6 +435,28 @@ function ResultPanel({
           </span>
         </div>
       ))}
+      {/* ── 短縮（精度を一番左右する。§10.3.1）───────────────── */}
+      <div style={row}>
+        <span style={metric} data-testid="xa3d-foreshortening">
+          {t("xa3d.foreshortening")}: A <b>{pct(result.foreshortening.a?.visibleFraction)}</b> / B{" "}
+          <b>{pct(result.foreshortening.b?.visibleFraction)}</b>
+        </span>
+      </div>
+      {suggestions.length > 0 ? (
+        <div style={row}>
+          <span style={faint} data-testid="xa3d-working-angles">
+            {t("xa3d.workingAngles", {
+              list: suggestions
+                .map((s) => `${angleLabel(s.primaryAngleDeg, s.secondaryAngleDeg)} (${pct(s.visibleFraction)})`)
+                .join(" / "),
+            })}
+          </span>
+        </div>
+      ) : null}
+
+      {/* ── 断面（§10.2.5）──────────────────────────────────── */}
+      {profile ? <CrossSectionPanel profile={profile} /> : null}
+
       {/* 姿勢は復元できないことを結果画面に必ず出す（§10.3）。 */}
       <div style={row}>
         <span style={faint}>{t("xa3d.poseCaveat")}</span>
@@ -384,6 +467,59 @@ function ResultPanel({
 
 function fmt(v: number): string {
   return Number.isFinite(v) ? v.toFixed(2) : "—";
+}
+
+function pct(v: number | undefined): string {
+  return v == null || !Number.isFinite(v) ? "—" : `${(v * 100).toFixed(0)}%`;
+}
+
+function angleLabel(primary: number, secondary: number): string {
+  const lr = `${primary >= 0 ? "LAO" : "RAO"} ${Math.abs(primary).toFixed(0)}°`;
+  const cc = Math.abs(secondary) < 0.5 ? "" : ` / ${secondary >= 0 ? "CRA" : "CAU"} ${Math.abs(secondary).toFixed(0)}°`;
+  return `${lr}${cc}`;
+}
+
+/** 3D 断面。**出せない条件を黙って埋めない**（§10.2.5）。 */
+function CrossSectionPanel({ profile }: { profile: CrossSectionProfile }) {
+  const { t } = useI18n();
+  if (profile.unavailable) {
+    return (
+      <div style={row}>
+        <span style={warn} data-testid={`xa3d-section-unavailable-${profile.unavailable}`}>
+          {t(`xa3d.section.unavailable.${profile.unavailable}`)}
+        </span>
+      </div>
+    );
+  }
+  const angle = profile.medianMeasurementAngleDeg;
+  return (
+    <>
+      <div style={row}>
+        <span style={metric} data-testid="xa3d-min-area">
+          {t("xa3d.minArea")}: <b>{fmt(profile.minAreaMm2 ?? NaN)} mm²</b>
+        </span>
+        <span style={metric} data-testid="xa3d-min-diameter">
+          {t("xa3d.minEquivalentDiameter")}: <b>{fmt(profile.minEquivalentDiameterMm ?? NaN)} mm</b>
+        </span>
+      </div>
+      <div style={row}>
+        <span style={faint}>{t("xa3d.section.assumption", { deg: angle != null ? angle.toFixed(0) : "—" })}</span>
+      </div>
+      {angle != null && Math.abs(angle - 90) > 20 ? (
+        <div style={row}>
+          <span style={warn} data-testid="xa3d-section-oblique">
+            {t("xa3d.section.oblique", { deg: angle.toFixed(0) })}
+          </span>
+        </div>
+      ) : null}
+      {/* 🔴 系統誤差を結果と同じ画面に出す。別ページの注記では読まれない。 */}
+      <div style={row}>
+        <span style={bad} data-testid="xa3d-section-bias">
+          {t("xa3d.section.bias")}
+        </span>
+      </div>
+    </>
+  );
 }
 
 /* ------------------------------------------------------------------ */
