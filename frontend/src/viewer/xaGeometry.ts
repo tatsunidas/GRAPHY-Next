@@ -262,7 +262,7 @@ export interface BundleAdjustResult {
  */
 export function bundleAdjustAngles(
   geometries: readonly XaViewGeometry[],
-  correspondences: readonly (readonly ([number, number] | null)[])[],
+  correspondences: readonly (readonly (readonly [number, number] | null)[])[],
   opts?: { maxAngleDeg?: number; iterations?: number },
 ): BundleAdjustResult | null {
   const nViews = geometries.length;
