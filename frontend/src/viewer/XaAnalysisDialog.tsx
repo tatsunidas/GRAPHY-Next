@@ -24,14 +24,17 @@ import { publishQcaSnapshot } from "./debugApi";
 import { readModalitySlice } from "./pixelCalibration";
 import { QcaEditor, type QcaEditMode } from "./QcaEditor";
 import { runQca, type QcaManualEdits, type QcaReferenceMode, type QcaResult } from "./qca";
+import { TaskStepRail } from "./TaskStepRail";
 import { ENGINE_ID } from "./Viewer2D";
 import { readVoiWindow } from "./viewportRead";
+import { isXaCalibrated } from "./xaCalibration";
 import {
   calibrationForImageId,
   clearXaCalibrationCache,
   loaderSpacingFor,
   setXaUserCalibration,
 } from "./xaCalibrationProvider";
+import { clearedBy, deriveQcaSteps, type ManualInputKey } from "./xaTasks";
 
 /** [x,y] の並びを GSPS 用のフラットな配列にする。 */
 function flatten(points: readonly (readonly [number, number])[]): number[] {
@@ -437,6 +440,67 @@ export function XaAnalysisDialog({
     analyzeWith(currentEdits(over), slice);
   };
 
+  // ── 段（ステップ・レール。§21.6）─────────────────────────────────
+  // 🚨 段の状態は**持たずに導出する**。フラグを別に持つと必ず実体とずれる。
+  //    結果があるときは `result.provenance`（＝実際に適用された手修正）を見る。
+  //    UI の状態を見ると「捨てられた手修正」を「適用済み」と表示してしまう。
+  const steps = useMemo(
+    () =>
+      deriveQcaSteps({
+        hasPick: !!pick,
+        calibrated: calib ? isXaCalibrated(calib) : false,
+        calibrationSource: calib?.source ?? null,
+        hasResult: !!result,
+        waypoints: result?.provenance.waypoints ?? 0,
+        editedEdges: result?.provenance.editedEdges.length ?? 0,
+        trimmed: result?.provenance.trimmed ?? false,
+        referenceKind: result?.provenance.reference ?? "auto",
+        edgeEditsDropped: result?.warnings.includes("edgeEditsDropped") ?? false,
+        canSave: !!saveContext.sopInstanceUid,
+        saved: !!saved,
+      }),
+    [pick, calib, result, saveContext.sopInstanceUid, saved],
+  );
+
+  /** 段に対応する節へスクロールする。節側は `data-step`（空白区切りで複数可）で名乗る。 */
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const goToStep = (id: string) => {
+    const el = bodyRef.current?.querySelector(`[data-step~="${id}"]`);
+    el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  };
+
+  /**
+   * その段からやり直す。**捨てる範囲は `clearedBy()` が決める**（ここで個別に判断しない）。
+   *
+   * <p>「無効になる段」と「捨てる手修正」は別物。校正をやり直しても通過点は残る（画素座標なので）。
+   */
+  const redoFrom = (id: string) => {
+    const keys: ManualInputKey[] = clearedBy(id);
+    if (keys.length === 0) {
+      goToStep(id);
+      return;
+    }
+    const over: Partial<QcaManualEdits> = {};
+    if (keys.includes("waypoints")) {
+      setWaypoints([]);
+      over.waypoints = [];
+    }
+    if (keys.includes("edges")) {
+      setEdgeEdits({});
+      over.edges = null;
+    }
+    if (keys.includes("trim")) {
+      setTrim(null);
+      over.trim = null;
+    }
+    if (keys.includes("reference")) {
+      setRefMode({ kind: "auto" });
+      over.reference = { kind: "auto" };
+    }
+    reanalyze(over);
+    goToStep(id);
+  };
+
   const runAnalysis = (edits?: QcaManualEdits) => {
     if (!pick) {
       setError(t("xa.analysis.needLength"));
@@ -468,8 +532,11 @@ export function XaAnalysisDialog({
       <div style={panel} onClick={(e) => e.stopPropagation()}>
         <div style={title} data-testid="xa-analysis-dialog">{t("xa.analysis.title")}</div>
 
+        <div style={body}>
+        <div style={content} ref={bodyRef}>
+
         {/* 入力（Length 計測）の選択 */}
-        <div style={section}>
+        <div style={section} data-step="input">
           <div style={sectionTitle}>{t("xa.analysis.input")}</div>
           {picks.length === 0 ? (
             <div style={hint}>{t("xa.analysis.needLength")}</div>
@@ -485,7 +552,7 @@ export function XaAnalysisDialog({
         </div>
 
         {/* 校正（C2 カテーテル法 / C3 ルーラー法） */}
-        <div style={section}>
+        <div style={section} data-step="calibration">
           <div style={sectionTitle}>{t("xa.analysis.calibration")}</div>
           <div style={hint} data-testid="xa-calib-status">
             {t("xa.calib.label")}: {calib ? t(`xa.calib.source.${calib.source}`) : "—"}
@@ -562,7 +629,7 @@ export function XaAnalysisDialog({
         </div>
 
         {/* QCA */}
-        <div style={section}>
+        <div style={section} data-step="analysis">
           <div style={sectionTitle}>{t("xa.analysis.qca")}</div>
           <div style={row}>
             <button style={primaryBtn} data-testid="xa-qca-run" onClick={() => runAnalysis()} disabled={!pick || busy}>
@@ -585,7 +652,8 @@ export function XaAnalysisDialog({
           </div>
 
           {result && sliceRef.current && (
-            <>
+            /* 中心線とエッジはどちらもこのパネルで直すので、両方の段がここを指す。 */
+            <div data-step="centerline edges">
               {/* 手修正（§8.6）。自動の中心線は外れていても必ず結果を出すので、ここが要る。 */}
               <div style={row}>
                 <span style={{ fontSize: 11, color: "#44586a" }}>{t("xa.qca.editMode")}:</span>
@@ -623,10 +691,11 @@ export function XaAnalysisDialog({
                   reanalyze({ edges: { token: edgeToken, byPathIndex: next } });
                 }}
               />
-            </>
+            </div>
           )}
 
           {result && (
+            <div data-step="range">
             <QcaReport
               result={result}
               chartMode={chartMode}
@@ -658,11 +727,12 @@ export function XaAnalysisDialog({
                 reanalyze({ reference: next });
               }}
             />
+            </div>
           )}
         </div>
 
         {/* 保存（非破壊: GSPS ＝表示状態と描画 / SR ＝計測値）。fw/angio-design.md §14 */}
-        <div style={section}>
+        <div style={section} data-step="save">
           <div style={sectionTitle}>{t("xa.analysis.save")}</div>
           <div style={row}>
             <button style={btn} disabled={saving || !saveContext.sopInstanceUid} onClick={savePresentationState}>
@@ -681,6 +751,10 @@ export function XaAnalysisDialog({
         </div>
 
         {error && <div style={errorText}>{error}</div>}
+
+        </div>
+        <TaskStepRail steps={steps} onGo={goToStep} onRedo={redoFrom} />
+        </div>
 
         <div style={{ ...row, justifyContent: "flex-end" }}>
           <button style={btn} data-testid="xa-dialog-close" onClick={onClose}>
@@ -897,9 +971,17 @@ const panel: React.CSSProperties = {
   padding: 16,
   minWidth: 520,
   maxHeight: "86vh",
-  overflowY: "auto",
+  // 中身（節の列）だけをスクロールさせ、**レールは常に見えている**ようにする。
+  // パネル全体をスクロールさせると、段の一覧が画面外に出て意味を成さない。
+  display: "flex",
+  flexDirection: "column",
+  overflow: "hidden",
   boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
 };
+/** 節の列 ＋ ステップ・レールの横並び。 */
+const body: React.CSSProperties = { display: "flex", gap: 10, minHeight: 0, flex: 1 };
+/** 節の列（ここだけスクロールする）。`minWidth:0` が無いと flex 子が縮まない。 */
+const content: React.CSSProperties = { flex: 1, minWidth: 0, overflowY: "auto", paddingRight: 2 };
 const title: React.CSSProperties = { fontWeight: 600, fontSize: 15, marginBottom: 10 };
 const section: React.CSSProperties = {
   border: "1px solid #d5dde4",
