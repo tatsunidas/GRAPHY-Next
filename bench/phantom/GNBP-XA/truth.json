@@ -17,342 +17,765 @@
     "photometricInterpretation": "MONOCHROME2 (vessel is dark)",
     "halfMaxCaveat": "For an unblurred cylinder projection the half-maximum crossing sits at sqrt(3)/2 * r ~= 0.866 r, not at r. Blur pushes it back out toward r. Frame 8 of GNBP-XA-1 is unblurred so this systematic effect can be isolated."
   },
-  "calibration": {
-    "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.138740358522061867744332119398682434",
-    "catheterFr": 6.0,
-    "catheterOuterDiameterMm": 2.0,
-    "catheterAxisRow": 316.0,
-    "vesselDiameterMm": 3.0,
-    "vesselAxisRow": 196.0,
-    "mmPerPx": 0.225,
-    "variants": [
+  "recon3d": {
+    "note": "Known 3D vessel tree projected from 4 known C-arm poses. The 'b-angle-error' study contains the SAME images but the positioner angle tags are offset by a known amount, so bundle adjustment has something to recover.",
+    "coordinateSystem": "patient LPS mm (X=left, Y=posterior, Z=head), isocenter at origin",
+    "projection": "d = (sin(primary)cos(secondary), -cos(primary)cos(secondary), sin(secondary)); source = -d*SOD; detector plane at SID from source; u = normalize(z x d) (image column, toward patient left), v = u x d (image row, toward feet)",
+    "caveat": "The generator and the reconstruction share this angle convention, so a WRONG convention would still agree. This phantom validates triangulation and bundle adjustment, NOT the DICOM angle definition itself.",
+    "views": [
       {
-        "key": "a-fiducial",
-        "file": "GNBP-XA-4-a-fiducial.dcm",
-        "md5": "f923480d4566cba4031175e48fa85cc9",
-        "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.274522562329625357601486218000170347",
-        "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.277636189589978882154094697160526806",
-        "pixelSpacingMm": 0.225,
-        "pixelSpacingCalibrationType": "FIDUCIAL",
-        "hasSidSod": true,
-        "expectedSource": "dicom-fiducial",
-        "expectedMmPerPx": 0.225
+        "view": 1,
+        "truePrimaryAngleDeg": -30.0,
+        "trueSecondaryAngleDeg": 0.0,
+        "exact": {
+          "file": "GNBP-XA-3-a-exact-view1.dcm",
+          "md5": "38c661d6201b61d75a4ddcd149b7f3ae",
+          "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.332161631037595271858820086910391832",
+          "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.341211171683550911784790038475155374",
+          "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.253607054590376990850491599398846748"
+        },
+        "angleError": {
+          "file": "GNBP-XA-3-b-angle-error-view1.dcm",
+          "md5": "5703afead1c24903fcec3eeebe13eea9",
+          "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.908001102989552091135002433882609785",
+          "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.123809006986345413182771556590235535",
+          "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.816665903825756677643176164571976924",
+          "taggedPrimaryAngleDeg": -28.5,
+          "taggedSecondaryAngleDeg": -1.0,
+          "primaryErrorDeg": 1.5,
+          "secondaryErrorDeg": -1.0
+        }
       },
       {
-        "key": "b-geometry",
-        "file": "GNBP-XA-4-b-geometry.dcm",
-        "md5": "1e0e8ad22d70d36347724eb2ee8a6b06",
-        "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.755714407853308270664012403163129113",
-        "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.324657952949662881422606726337511023",
-        "pixelSpacingMm": 0.225,
-        "pixelSpacingCalibrationType": "GEOMETRY",
-        "hasSidSod": true,
-        "expectedSource": "dicom-geometry",
-        "expectedMmPerPx": 0.225
+        "view": 2,
+        "truePrimaryAngleDeg": 60.0,
+        "trueSecondaryAngleDeg": 20.0,
+        "exact": {
+          "file": "GNBP-XA-3-a-exact-view2.dcm",
+          "md5": "8d66c7463e7d251b82c476ad767678e3",
+          "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.838285302005108997439432769687599531",
+          "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.153346009417674346452104870278880979",
+          "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.253607054590376990850491599398846748"
+        },
+        "angleError": {
+          "file": "GNBP-XA-3-b-angle-error-view2.dcm",
+          "md5": "ed8680ab7b1ceb7a1f75bcd3836957ff",
+          "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.470425915251940976182759614844446267",
+          "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.197783183140554667631295169881427583",
+          "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.816665903825756677643176164571976924",
+          "taggedPrimaryAngleDeg": 57.5,
+          "taggedSecondaryAngleDeg": 22.0,
+          "primaryErrorDeg": -2.5,
+          "secondaryErrorDeg": 2.0
+        }
       },
       {
-        "key": "c-equals-imager",
-        "file": "GNBP-XA-4-c-equals-imager.dcm",
-        "md5": "096200efd7f406594cf05144a16320e7",
-        "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.329998897006509199348557230777407041",
-        "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.129302664687084978203787435177899681",
-        "pixelSpacingMm": 0.3,
-        "pixelSpacingCalibrationType": null,
-        "hasSidSod": true,
-        "expectedSource": "geometric-sid-sod",
-        "expectedMmPerPx": 0.225
+        "view": 3,
+        "truePrimaryAngleDeg": -10.0,
+        "trueSecondaryAngleDeg": -30.0,
+        "exact": {
+          "file": "GNBP-XA-3-a-exact-view3.dcm",
+          "md5": "64a24c59b47fc43e230856c87f0155ea",
+          "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.288668520714399113732069097639923132",
+          "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.793898085680109298623842046135846454",
+          "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.253607054590376990850491599398846748"
+        },
+        "angleError": {
+          "file": "GNBP-XA-3-b-angle-error-view3.dcm",
+          "md5": "81723a4973ebddcc1d01472b0d9c1c41",
+          "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.327901220598993413946595542567907287",
+          "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.154523842846768303984172874662275591",
+          "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.816665903825756677643176164571976924",
+          "taggedPrimaryAngleDeg": -7.0,
+          "taggedSecondaryAngleDeg": -28.5,
+          "primaryErrorDeg": 3.0,
+          "secondaryErrorDeg": 1.5
+        }
       },
       {
-        "key": "d-geometry-only",
-        "file": "GNBP-XA-4-d-geometry-only.dcm",
-        "md5": "b25ec7162389376e5a23c0f8064fdfbc",
-        "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.970159898093626409515104498484423110",
-        "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.331865551111125286756446150285611959",
-        "pixelSpacingMm": null,
-        "pixelSpacingCalibrationType": null,
-        "hasSidSod": true,
-        "expectedSource": "geometric-sid-sod",
-        "expectedMmPerPx": 0.225
-      },
-      {
-        "key": "e-nothing",
-        "file": "GNBP-XA-4-e-nothing.dcm",
-        "md5": "e58a48299602b6f480e46c17d51dada6",
-        "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.328201450321714759235939036188392530",
-        "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.661606308379155463364252255096891202",
-        "pixelSpacingMm": null,
-        "pixelSpacingCalibrationType": null,
-        "hasSidSod": false,
-        "expectedSource": "detector-plane",
-        "expectedMmPerPx": null
+        "view": 4,
+        "truePrimaryAngleDeg": 30.0,
+        "trueSecondaryAngleDeg": 30.0,
+        "exact": {
+          "file": "GNBP-XA-3-a-exact-view4.dcm",
+          "md5": "5eef800e4d75ab158d2ac1865353af59",
+          "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.251180374948966783943776305988421938",
+          "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.278535176419594714893570491377216619",
+          "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.253607054590376990850491599398846748"
+        },
+        "angleError": {
+          "file": "GNBP-XA-3-b-angle-error-view4.dcm",
+          "md5": "a29c096da52ffcdabe66d8d56bece0d2",
+          "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.330148050612487943265395637317358058",
+          "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.242782631753288103260303395816069953",
+          "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.816665903825756677643176164571976924",
+          "taggedPrimaryAngleDeg": 29.0,
+          "taggedSecondaryAngleDeg": 27.5,
+          "primaryErrorDeg": -1.0,
+          "secondaryErrorDeg": -2.5
+        }
       }
-    ]
-  },
-  "dsa": {
-    "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.249858845979808808133778113598250107",
-    "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.325741874696725604880681971689250645",
-    "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.126658515504935125509118003178105094",
-    "file": "GNBP-XA-2.dcm",
-    "md5": "38d694474f9370b5b5ee469671470d1b",
-    "maskFrames": [
-      1,
-      2,
-      3,
-      4,
-      5
     ],
-    "contrastArrivalFrame": 6,
-    "photonsPerPixel": 8000.0,
-    "shifts": [
+    "branches": [
       {
-        "frame": 1,
-        "dxPx": 0.0,
-        "dyPx": 0.0
+        "id": "main",
+        "lengthMm": 175.29599975374626,
+        "diameterProximalMm": 3.5,
+        "diameterDistalMm": 2.0,
+        "minDiameterMm": 1.2552730355211994,
+        "pointsLps": [
+          [
+            25.0,
+            0.0,
+            40.0
+          ],
+          [
+            24.6018,
+            2.5314,
+            38.832
+          ],
+          [
+            23.8158,
+            5.0292,
+            37.6641
+          ],
+          [
+            22.6574,
+            7.4602,
+            36.4961
+          ],
+          [
+            21.1473,
+            9.7921,
+            35.3281
+          ],
+          [
+            19.3104,
+            11.9939,
+            34.1602
+          ],
+          [
+            17.1756,
+            14.0364,
+            32.9922
+          ],
+          [
+            14.7757,
+            15.8924,
+            31.8242
+          ],
+          [
+            12.1463,
+            17.5373,
+            30.6563
+          ],
+          [
+            9.3259,
+            18.9492,
+            29.4883
+          ],
+          [
+            6.3549,
+            20.1094,
+            28.3204
+          ],
+          [
+            3.2752,
+            21.0025,
+            27.1524
+          ],
+          [
+            0.1295,
+            21.6166,
+            25.9844
+          ],
+          [
+            -3.039,
+            21.9436,
+            24.8165
+          ],
+          [
+            -6.1876,
+            21.979,
+            23.6485
+          ],
+          [
+            -9.2744,
+            21.7225,
+            22.4805
+          ],
+          [
+            -12.259,
+            21.1774,
+            21.3126
+          ],
+          [
+            -15.1028,
+            20.351,
+            20.1446
+          ],
+          [
+            -17.7697,
+            19.2543,
+            18.9766
+          ],
+          [
+            -20.2267,
+            17.9017,
+            17.8087
+          ],
+          [
+            -22.4439,
+            16.3114,
+            16.6407
+          ],
+          [
+            -24.3952,
+            14.5044,
+            15.4727
+          ],
+          [
+            -26.0585,
+            12.5047,
+            14.3048
+          ],
+          [
+            -27.4159,
+            10.3389,
+            13.1368
+          ],
+          [
+            -28.4538,
+            8.0358,
+            11.9689
+          ],
+          [
+            -29.1634,
+            5.6259,
+            10.8009
+          ],
+          [
+            -29.5402,
+            3.1413,
+            9.6329
+          ],
+          [
+            -29.5844,
+            0.615,
+            8.465
+          ],
+          [
+            -29.3007,
+            -1.9196,
+            7.297
+          ],
+          [
+            -28.6983,
+            -4.4286,
+            6.129
+          ],
+          [
+            -27.7903,
+            -6.8788,
+            4.9611
+          ],
+          [
+            -26.594,
+            -9.2376,
+            3.7931
+          ],
+          [
+            -25.1302,
+            -11.4737,
+            2.6251
+          ],
+          [
+            -23.423,
+            -13.5573,
+            1.4572
+          ],
+          [
+            -21.4995,
+            -15.4609,
+            0.2892
+          ],
+          [
+            -19.3892,
+            -17.1591,
+            -0.8788
+          ],
+          [
+            -17.1237,
+            -18.6294,
+            -2.0467
+          ],
+          [
+            -14.7361,
+            -19.8522,
+            -3.2147
+          ],
+          [
+            -12.2608,
+            -20.8113,
+            -4.3826
+          ],
+          [
+            -9.7326,
+            -21.4939,
+            -5.5506
+          ],
+          [
+            -7.1866,
+            -21.891,
+            -6.7186
+          ],
+          [
+            -4.6573,
+            -21.9973,
+            -7.8865
+          ],
+          [
+            -2.1787,
+            -21.8114,
+            -9.0545
+          ],
+          [
+            0.2167,
+            -21.3357,
+            -10.2225
+          ],
+          [
+            2.4982,
+            -20.5766,
+            -11.3904
+          ],
+          [
+            4.6369,
+            -19.5442,
+            -12.5584
+          ],
+          [
+            6.6067,
+            -18.2522,
+            -13.7264
+          ],
+          [
+            8.3841,
+            -16.7177,
+            -14.8943
+          ],
+          [
+            9.9487,
+            -14.9611,
+            -16.0623
+          ],
+          [
+            11.2834,
+            -13.0058,
+            -17.2303
+          ],
+          [
+            12.3746,
+            -10.8777,
+            -18.3982
+          ],
+          [
+            13.2121,
+            -8.6051,
+            -19.5662
+          ],
+          [
+            13.7897,
+            -6.2182,
+            -20.7341
+          ],
+          [
+            14.1047,
+            -3.7487,
+            -21.9021
+          ],
+          [
+            14.158,
+            -1.2294,
+            -23.0701
+          ],
+          [
+            13.9543,
+            1.3062,
+            -24.238
+          ],
+          [
+            13.5015,
+            3.8245,
+            -25.406
+          ],
+          [
+            12.8109,
+            6.2919,
+            -26.574
+          ],
+          [
+            11.897,
+            8.6758,
+            -27.7419
+          ],
+          [
+            10.7767,
+            10.9445,
+            -28.9099
+          ]
+        ],
+        "pointStrideOfFull": 15,
+        "fullPointCount": 900
       },
       {
-        "frame": 2,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 3,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 4,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 5,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 6,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 7,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 8,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 9,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 10,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 11,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 12,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 13,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 14,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 15,
-        "dxPx": 3.0,
-        "dyPx": -2.0
-      },
-      {
-        "frame": 16,
-        "dxPx": 3.0,
-        "dyPx": -2.0
-      },
-      {
-        "frame": 17,
-        "dxPx": 3.0,
-        "dyPx": -2.0
-      },
-      {
-        "frame": 18,
-        "dxPx": 3.0,
-        "dyPx": -2.0
-      },
-      {
-        "frame": 19,
-        "dxPx": 3.0,
-        "dyPx": -2.0
-      },
-      {
-        "frame": 20,
-        "dxPx": 3.0,
-        "dyPx": -2.0
-      },
-      {
-        "frame": 21,
-        "dxPx": 3.0,
-        "dyPx": -2.0
-      },
-      {
-        "frame": 22,
-        "dxPx": 3.0,
-        "dyPx": -2.0
-      },
-      {
-        "frame": 23,
-        "dxPx": 3.0,
-        "dyPx": -2.0
-      },
-      {
-        "frame": 24,
-        "dxPx": 3.0,
-        "dyPx": -2.0
-      },
-      {
-        "frame": 25,
-        "dxPx": -4.0,
-        "dyPx": 5.0
+        "id": "daughter",
+        "lengthMm": 38.69902308400405,
+        "diameterProximalMm": 2.1,
+        "diameterDistalMm": 1.4000000000000001,
+        "minDiameterMm": 1.4000000000000001,
+        "pointsLps": [
+          [
+            -29.5917,
+            0.784,
+            8.5428
+          ],
+          [
+            -29.9955,
+            0.3881,
+            8.3663
+          ],
+          [
+            -30.3993,
+            -0.0066,
+            8.1869
+          ],
+          [
+            -30.8032,
+            -0.3999,
+            8.0047
+          ],
+          [
+            -31.2071,
+            -0.792,
+            7.8197
+          ],
+          [
+            -31.6111,
+            -1.1827,
+            7.6319
+          ],
+          [
+            -32.0151,
+            -1.5722,
+            7.4413
+          ],
+          [
+            -32.4192,
+            -1.9604,
+            7.2478
+          ],
+          [
+            -32.8233,
+            -2.3473,
+            7.0516
+          ],
+          [
+            -33.2275,
+            -2.7329,
+            6.8525
+          ],
+          [
+            -33.6317,
+            -3.1172,
+            6.6507
+          ],
+          [
+            -34.036,
+            -3.5002,
+            6.446
+          ],
+          [
+            -34.4403,
+            -3.8819,
+            6.2385
+          ],
+          [
+            -34.8447,
+            -4.2623,
+            6.0283
+          ],
+          [
+            -35.2491,
+            -4.6414,
+            5.8152
+          ],
+          [
+            -35.6536,
+            -5.0193,
+            5.5992
+          ],
+          [
+            -36.0582,
+            -5.3958,
+            5.3805
+          ],
+          [
+            -36.4627,
+            -5.7711,
+            5.159
+          ],
+          [
+            -36.8674,
+            -6.145,
+            4.9347
+          ],
+          [
+            -37.272,
+            -6.5177,
+            4.7075
+          ],
+          [
+            -37.6768,
+            -6.8891,
+            4.4775
+          ],
+          [
+            -38.0816,
+            -7.2591,
+            4.2448
+          ],
+          [
+            -38.4864,
+            -7.6279,
+            4.0092
+          ],
+          [
+            -38.8913,
+            -7.9954,
+            3.7708
+          ],
+          [
+            -39.2962,
+            -8.3616,
+            3.5296
+          ],
+          [
+            -39.7012,
+            -8.7266,
+            3.2856
+          ],
+          [
+            -40.1062,
+            -9.0902,
+            3.0388
+          ],
+          [
+            -40.5113,
+            -9.4525,
+            2.7891
+          ],
+          [
+            -40.9165,
+            -9.8135,
+            2.5367
+          ],
+          [
+            -41.3216,
+            -10.1733,
+            2.2814
+          ],
+          [
+            -41.7269,
+            -10.5317,
+            2.0234
+          ],
+          [
+            -42.1322,
+            -10.8889,
+            1.7625
+          ],
+          [
+            -42.5375,
+            -11.2447,
+            1.4988
+          ],
+          [
+            -42.9429,
+            -11.5993,
+            1.2323
+          ],
+          [
+            -43.3483,
+            -11.9526,
+            0.963
+          ],
+          [
+            -43.7538,
+            -12.3046,
+            0.6909
+          ],
+          [
+            -44.1594,
+            -12.6553,
+            0.416
+          ],
+          [
+            -44.565,
+            -13.0047,
+            0.1383
+          ],
+          [
+            -44.9706,
+            -13.3528,
+            -0.1423
+          ],
+          [
+            -45.3763,
+            -13.6996,
+            -0.4256
+          ],
+          [
+            -45.782,
+            -14.0451,
+            -0.7118
+          ],
+          [
+            -46.1878,
+            -14.3893,
+            -1.0008
+          ],
+          [
+            -46.5937,
+            -14.7323,
+            -1.2926
+          ],
+          [
+            -46.9996,
+            -15.0739,
+            -1.5872
+          ],
+          [
+            -47.4055,
+            -15.4143,
+            -1.8846
+          ],
+          [
+            -47.8115,
+            -15.7533,
+            -2.1848
+          ],
+          [
+            -48.2175,
+            -16.0911,
+            -2.4878
+          ],
+          [
+            -48.6236,
+            -16.4276,
+            -2.7936
+          ],
+          [
+            -49.0298,
+            -16.7628,
+            -3.1023
+          ],
+          [
+            -49.436,
+            -17.0967,
+            -3.4137
+          ],
+          [
+            -49.8422,
+            -17.4293,
+            -3.728
+          ],
+          [
+            -50.2485,
+            -17.7606,
+            -4.0451
+          ],
+          [
+            -50.6549,
+            -18.0906,
+            -4.365
+          ],
+          [
+            -51.0613,
+            -18.4193,
+            -4.6877
+          ],
+          [
+            -51.4677,
+            -18.7467,
+            -5.0132
+          ],
+          [
+            -51.8742,
+            -19.0729,
+            -5.3415
+          ],
+          [
+            -52.2808,
+            -19.3977,
+            -5.6726
+          ],
+          [
+            -52.6874,
+            -19.7212,
+            -6.0065
+          ],
+          [
+            -53.094,
+            -20.0435,
+            -6.3433
+          ],
+          [
+            -53.5007,
+            -20.3645,
+            -6.6828
+          ],
+          [
+            -53.9075,
+            -20.6841,
+            -7.0252
+          ],
+          [
+            -54.3143,
+            -21.0025,
+            -7.3704
+          ],
+          [
+            -54.7211,
+            -21.3196,
+            -7.7184
+          ],
+          [
+            -55.128,
+            -21.6354,
+            -8.0692
+          ],
+          [
+            -55.535,
+            -21.9499,
+            -8.4228
+          ]
+        ],
+        "pointStrideOfFull": 7,
+        "fullPointCount": 450
       }
-    ]
-  },
-  "qca": {
-    "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.318258316104426161849590105828077565",
-    "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.244331418089759822172796932971604473",
-    "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.366566186228420217910404791357806054",
-    "file": "GNBP-XA-1.dcm",
-    "md5": "89ed2eb87cd2498d307d20a6c8266885",
-    "rows": 512,
-    "columns": 512,
-    "vesselAxisRow": 256.0,
-    "mmPerPx": 0.225,
-    "muContrastPerMm": 0.16666666666666666,
-    "frames": [
-      {
-        "frame": 1,
-        "percentDiameterStenosis": 0.0,
-        "percentAreaStenosis": 0.0,
-        "referenceDiameterMm": 3.0,
-        "mldMm": 3.0,
-        "lesionLengthMm": 0.0,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": null
-      },
-      {
-        "frame": 2,
-        "percentDiameterStenosis": 30.0,
-        "percentAreaStenosis": 51.0,
-        "referenceDiameterMm": 3.0,
-        "mldMm": 2.0999999999999996,
-        "lesionLengthMm": 10.0,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": null
-      },
-      {
-        "frame": 3,
-        "percentDiameterStenosis": 50.0,
-        "percentAreaStenosis": 75.0,
-        "referenceDiameterMm": 3.0,
-        "mldMm": 1.5,
-        "lesionLengthMm": 10.0,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": null
-      },
-      {
-        "frame": 4,
-        "percentDiameterStenosis": 70.0,
-        "percentAreaStenosis": 90.99999999999999,
-        "referenceDiameterMm": 3.0,
-        "mldMm": 0.9000000000000001,
-        "lesionLengthMm": 10.0,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": null
-      },
-      {
-        "frame": 5,
-        "percentDiameterStenosis": 90.0,
-        "percentAreaStenosis": 99.0,
-        "referenceDiameterMm": 3.0,
-        "mldMm": 0.29999999999999993,
-        "lesionLengthMm": 10.0,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": null
-      },
-      {
-        "frame": 6,
-        "percentDiameterStenosis": 50.0,
-        "percentAreaStenosis": 75.0,
-        "referenceDiameterMm": 3.0,
-        "mldMm": 1.5,
-        "lesionLengthMm": 5.0,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": null
-      },
-      {
-        "frame": 7,
-        "percentDiameterStenosis": 50.0,
-        "percentAreaStenosis": 75.0,
-        "referenceDiameterMm": 3.0,
-        "mldMm": 1.5,
-        "lesionLengthMm": 20.0,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": null
-      },
-      {
-        "frame": 8,
-        "percentDiameterStenosis": 50.0,
-        "percentAreaStenosis": 75.0,
-        "referenceDiameterMm": 3.0,
-        "mldMm": 1.5,
-        "lesionLengthMm": 10.0,
-        "blurSigmaPx": 0.0,
-        "photonsPerPixel": null
-      },
-      {
-        "frame": 9,
-        "percentDiameterStenosis": 50.0,
-        "percentAreaStenosis": 75.0,
-        "referenceDiameterMm": 3.0,
-        "mldMm": 1.5,
-        "lesionLengthMm": 10.0,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": 20000.0
-      },
-      {
-        "frame": 10,
-        "percentDiameterStenosis": 50.0,
-        "percentAreaStenosis": 75.0,
-        "referenceDiameterMm": 3.0,
-        "mldMm": 1.5,
-        "lesionLengthMm": 10.0,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": 4000.0
-      },
-      {
-        "frame": 11,
-        "percentDiameterStenosis": 50.0,
-        "percentAreaStenosis": 75.0,
-        "referenceDiameterMm": 3.0,
-        "mldMm": 1.5,
-        "lesionLengthMm": 10.0,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": 800.0
-      }
-    ]
+    ],
+    "bifurcationFractionOfMain": 0.45,
+    "lesion": {
+      "branch": "main",
+      "fractionOfMain": 0.66,
+      "percentDiameterStenosis": 50.0,
+      "lengthFraction": 0.09
+    },
+    "targets": {
+      "centerlineRmsMm": 1.0,
+      "segmentLengthErrorPercent": 3.0,
+      "angleRecoveryDeg": 1.0
+    }
   }
 }

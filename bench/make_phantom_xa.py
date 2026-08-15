@@ -23,10 +23,9 @@ GNBP-XA — GRAPHY-Next Benchmark Phantom, X-ray angiography series.
 ------------
     GNBP-XA-1   QCA 精度。既知径 3.0mm の直管に既知 %DS・既知長の狭窄。11 フレーム
     GNBP-XA-2   DSA。背景（骨相当）＋マスク 5 フレーム＋造影 20 フレーム、**既知の平行移動**を注入
+    GNBP-XA-3   2D→3D 再構成。既知の 3D 血管ツリーを既知角度で 4 方向へ順投影。
+                **タグの角度に既知誤差を混ぜた版**も作る（バンドル調整が回収すべき量）
     GNBP-XA-4   空間校正。既知外径のカテーテル＋**タグの書かれ方 4 変種**
-
-GNBP-XA-3（2D→3D 再構成）は **A6 が未実装なので作らない**。使う側が無い状態で
-生成しても、検証されないデータが増えるだけになる。A6 に着手するときにここへ足す。
 
 物理モデル
 ----------
@@ -456,6 +455,281 @@ def build_dsa(out_dir: str) -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════
+# GNBP-XA-3 — 2D→3D 再構成（§10 / A6）
+# ══════════════════════════════════════════════════════════════════════
+#
+# 🚨 **直線や単純な円弧で作ってはいけない。**
+# 三角測量は「対応点が正しく取れれば」厳密に解けるので、対応付けが自明な形状では
+# 再構成器ではなく三角測量の式を検算しているだけになる（§16.3 の警告）。
+# ここは **1.1 回転する先細りの螺旋 ＋ 分岐**:
+#   - 投影で**自己交差する**（どの点とどの点が対応するかが自明でない）
+#   - **曲率が場所で変わる**（一定曲率だと中心線抽出の誤差が均一になり実際と違う）
+#   - 分岐がある（A6b の対応付けにも使える）
+#
+# ⚠️ **このファントムが検証できないもの**: 射影行列の DICOM 角度定義そのもの。
+# 生成側と再構成側が同じ規約（下記 `_view_basis`）を共有しているので、**規約が
+# 間違っていても一致してしまう**。角度定義の正しさは規格の読解と実機データでしか
+# 確かめられない。ここで測れるのは「その規約のもとで三角測量とバンドル調整が
+# 正しく働くか」まで。
+
+#: 視点（PositionerPrimaryAngle, PositionerSecondaryAngle）[deg]。LAO+/CRA+。
+RECON_VIEWS = [
+    (-30.0, 0.0),    # RAO 30
+    (60.0, 20.0),    # LAO 60 / CRA 20
+    (-10.0, -30.0),  # RAO 10 / CAU 30
+    (30.0, 30.0),    # LAO 30 / CRA 30
+]
+#: タグへ書く角度に混ぜる誤差 [deg]。**画像は真の角度で作り、タグだけ狂わせる**。
+#: 装置の機械誤差（±2〜5°）と C アームのたわみを模す。バンドル調整が回収すべき量。
+RECON_ANGLE_ERRORS = [(1.5, -1.0), (-2.5, 2.0), (3.0, 1.5), (-1.0, -2.5)]
+
+#: 3D 中心線の標本数（投影したとき隣接点が 1px 未満になる密度）。
+RECON_SAMPLES = 900
+
+
+def _view_basis(primary_deg: float, secondary_deg: float):
+    """C アームの姿勢から、視線方向 d・画像の列方向 u・行方向 v・線源位置 S を作る。
+
+    患者座標は **LPS 右手系**（X=左, Y=後, Z=頭）。
+    DICOM の角度定義は primary=LAO 正（頭足軸まわり）、secondary=CRA 正（頭側へ振る）。
+
+        d(α,β) = (sinα·cosβ, −cosα·cosβ, sinβ)      アイソセンタ → 検出器
+
+    確認: α=β=0 で d=(0,−1,0)＝前方（PA 像）、α=90 で d=(1,0,0)＝患者の左、
+    β=90 で d=(0,0,1)＝頭側。
+
+    画像の向きは「正面像で患者の左が画像の右、頭が画像の上」に合わせる:
+        u = normalize(z × d)   … 列方向（患者の左へ）
+        v = u × d              … 行方向（足側へ）
+    """
+    a = np.radians(primary_deg)
+    b = np.radians(secondary_deg)
+    d = np.array([np.sin(a) * np.cos(b), -np.cos(a) * np.cos(b), np.sin(b)], dtype=np.float64)
+    d /= np.linalg.norm(d)
+    z = np.array([0.0, 0.0, 1.0])
+    u = np.cross(z, d)
+    n = np.linalg.norm(u)
+    if n < 1e-9:
+        # 真上/真下から見る縮退（β=±90）。列方向を患者の左に固定する。
+        u = np.array([1.0, 0.0, 0.0])
+    else:
+        u = u / n
+    v = np.cross(u, d)
+    source = -d * SOD_MM
+    return d, u, v, source
+
+
+def _project_points(points_mm: np.ndarray, primary_deg: float, secondary_deg: float):
+    """患者 LPS mm の点列 → 検出器画素座標 (col, row) と各点の拡大率 t=SID/(w·d)。"""
+    d, u, v, source = _view_basis(primary_deg, secondary_deg)
+    w = points_mm - source[None, :]
+    denom = w @ d
+    denom = np.where(np.abs(denom) < 1e-6, 1e-6, denom)
+    t = SID_MM / denom
+    q = source[None, :] + t[:, None] * w
+    center = d * (SID_MM - SOD_MM)
+    rel = q - center[None, :]
+    col = (rel @ u) / IMAGER_SPACING_MM + COLUMNS / 2.0
+    row = (rel @ v) / IMAGER_SPACING_MM + ROWS / 2.0
+    return col, row, t
+
+
+def _recon_tree():
+    """既知の 3D 血管ツリー（患者 LPS mm）。主枝＝先細りの螺旋、0.45 から娘枝。"""
+    t = np.linspace(0.0, 1.0, RECON_SAMPLES)
+    theta = 2.2 * np.pi * t
+    radius_mm = 30.0 - 12.0 * t                     # 螺旋の半径（曲率が場所で変わる）
+    main = np.stack(
+        [
+            radius_mm * np.cos(theta) - 5.0,
+            22.0 * np.sin(theta),
+            40.0 - 70.0 * t,
+        ],
+        axis=1,
+    )
+    # 血管半径 [mm]: 1.75 → 1.00 のテーパー ＋ 50% 狭窄。
+    r_main = 1.75 - 0.75 * t
+    lesion_center, lesion_half, lesion_pct = 0.66, 0.045, 50.0
+    dd = np.abs(t - lesion_center)
+    inside = dd < lesion_half
+    f = 0.5 * (1.0 + np.cos(np.pi * dd[inside] / lesion_half))
+    r_main[inside] = r_main[inside] * (1.0 - (lesion_pct / 100.0) * f)
+
+    i0 = int(0.45 * (RECON_SAMPLES - 1))
+    origin = main[i0]
+    tangent = main[i0 + 1] - main[i0 - 1]
+    tangent /= np.linalg.norm(tangent)
+    side = np.cross(tangent, np.array([0.0, 0.0, 1.0]))
+    side /= np.linalg.norm(side)
+    s = np.linspace(0.0, 1.0, RECON_SAMPLES // 2)
+    direction = (tangent + side) / np.linalg.norm(tangent + side)
+    bend = np.cross(direction, side)
+    daughter = (
+        origin[None, :]
+        + 38.0 * s[:, None] * direction[None, :]
+        + 9.0 * (s[:, None] ** 2) * bend[None, :]
+    )
+    r_daughter = 1.05 - 0.35 * s
+
+    return [
+        {"id": "main", "points": main, "radii": r_main},
+        {"id": "daughter", "points": daughter, "radii": r_daughter},
+    ]
+
+
+def _project_tree(branches, primary_deg: float, secondary_deg: float, blur_px: float) -> np.ndarray:
+    """3D ツリーの透過率画像（背景 1.0・血管が暗い）。
+
+    各枝は「中心線標本ごとの円板の **最大**」で経路長を作り、枝どうしは **和**を取る。
+    同じ枝の隣接標本は同じ管の断面なので足すと二重計上になるが、別の枝が重なる画素は
+    本当に 2 本ぶん減弱する（実際の投影と同じ）。
+    """
+    n = 3  # 面積平均の細分割
+    total_path = np.zeros((ROWS * n, COLUMNS * n), dtype=np.float64)
+    for br in branches:
+        col, row, t_ratio = _project_points(br["points"], primary_deg, secondary_deg)
+        # 検出器 1px が物体面の何 mm か（点ごとの拡大率で変わる）。
+        mm_per_px_at_point = IMAGER_SPACING_MM / t_ratio
+        path = np.zeros_like(total_path)
+        for i in range(len(col)):
+            r_mm = float(br["radii"][i])
+            mmpp = float(mm_per_px_at_point[i])
+            rad = (r_mm / mmpp) * n
+            cx = col[i] * n + (n - 1) / 2.0
+            cy = row[i] * n + (n - 1) / 2.0
+            x0 = max(0, int(np.floor(cx - rad)) - 1)
+            y0 = max(0, int(np.floor(cy - rad)) - 1)
+            x1 = min(COLUMNS * n, int(np.ceil(cx + rad)) + 2)
+            y1 = min(ROWS * n, int(np.ceil(cy + rad)) + 2)
+            if x1 <= x0 or y1 <= y0:
+                continue
+            yy, xx = np.mgrid[y0:y1, x0:x1]
+            dist_mm = np.hypot(xx - cx, yy - cy) / n * mmpp
+            inner = r_mm * r_mm - dist_mm * dist_mm
+            np.maximum(inner, 0.0, out=inner)
+            chord = 2.0 * np.sqrt(inner)
+            np.maximum(path[y0:y1, x0:x1], chord, out=path[y0:y1, x0:x1])
+        total_path += path
+    transmit = np.exp(-MU_CONTRAST * total_path)
+    transmit = transmit.reshape(ROWS, n, COLUMNS, n).mean(axis=(1, 3))
+    return _gaussian_blur(transmit, blur_px)
+
+
+def _polyline_length(points: np.ndarray) -> float:
+    return float(np.sum(np.linalg.norm(np.diff(points, axis=0), axis=1)))
+
+
+def build_recon3d(out_dir: str) -> dict:
+    """4 方向の投影を**単一フレームの XA インスタンス**として書く（ランごとに別シリーズ）。"""
+    rng = np.random.default_rng(20260818)
+    branches = _recon_tree()
+    os.makedirs(out_dir, exist_ok=True)
+
+    views = []
+    for i, (primary, secondary) in enumerate(RECON_VIEWS):
+        transmit = _project_tree(branches, primary, secondary, DEFAULT_BLUR_PX)
+        frame = _to_stored(transmit, None, rng)[None, :, :]
+        err_p, err_s = RECON_ANGLE_ERRORS[i]
+        view_entry = {
+            "view": i + 1,
+            "truePrimaryAngleDeg": primary,
+            "trueSecondaryAngleDeg": secondary,
+        }
+        for suffix, tag_primary, tag_secondary in (
+            ("a-exact", primary, secondary),
+            ("b-angle-error", primary + err_p, secondary + err_s),
+        ):
+            ds = _xa_dataset(
+                frame,
+                uid_key=f"XA-3-{suffix}-{i}",
+                study_key=f"XA-3-{suffix}",
+                series_description=f"GNBP-XA-3 {suffix} view{i + 1} ({primary:+.0f}/{secondary:+.0f})",
+                series_number=(30 + i) if suffix == "a-exact" else (130 + i),
+                frame_time_ms=40.0,
+                patient_id=f"GNBP-XA-3-{suffix}",
+                patient_name="GNBPXA^RECON3D",
+                calibration=(MM_PER_PX, "GEOMETRY"),
+            )
+            # 🚨 **タグの角度だけ狂わせる**（画像は真の角度で作ってある）。
+            #    素直にタグを信じると再投影誤差が残り、バンドル調整がそれを回収する。
+            ds.PositionerPrimaryAngle = f"{tag_primary:.3f}"
+            ds.PositionerSecondaryAngle = f"{tag_secondary:.3f}"
+            path = os.path.join(out_dir, f"GNBP-XA-3-{suffix}-view{i + 1}.dcm")
+            _save(ds, path)
+            entry = {
+                "file": os.path.basename(path),
+                "md5": _file_md5(path),
+                "sopInstanceUid": ds.SOPInstanceUID,
+                "seriesInstanceUid": ds.SeriesInstanceUID,
+                "studyInstanceUid": ds.StudyInstanceUID,
+            }
+            if suffix == "a-exact":
+                view_entry["exact"] = entry
+            else:
+                entry.update(
+                    {
+                        "taggedPrimaryAngleDeg": tag_primary,
+                        "taggedSecondaryAngleDeg": tag_secondary,
+                        "primaryErrorDeg": err_p,
+                        "secondaryErrorDeg": err_s,
+                    }
+                )
+                view_entry["angleError"] = entry
+        views.append(view_entry)
+
+    truth_branches = []
+    for br in branches:
+        pts = br["points"]
+        # 真値は間引いて書く（900 点は JSON に重い。形の検証には 60 点で足りる）。
+        step = max(1, len(pts) // 60)
+        truth_branches.append(
+            {
+                "id": br["id"],
+                "lengthMm": _polyline_length(pts),
+                "diameterProximalMm": float(br["radii"][0] * 2.0),
+                "diameterDistalMm": float(br["radii"][-1] * 2.0),
+                "minDiameterMm": float(np.min(br["radii"]) * 2.0),
+                "pointsLps": [[round(float(v), 4) for v in p] for p in pts[::step]],
+                "pointStrideOfFull": step,
+                "fullPointCount": int(len(pts)),
+            }
+        )
+
+    return {
+        "note": (
+            "Known 3D vessel tree projected from 4 known C-arm poses. "
+            "The 'b-angle-error' study contains the SAME images but the positioner angle "
+            "tags are offset by a known amount, so bundle adjustment has something to recover."
+        ),
+        "coordinateSystem": "patient LPS mm (X=left, Y=posterior, Z=head), isocenter at origin",
+        "projection": (
+            "d = (sin(primary)cos(secondary), -cos(primary)cos(secondary), sin(secondary)); "
+            "source = -d*SOD; detector plane at SID from source; "
+            "u = normalize(z x d) (image column, toward patient left), v = u x d (image row, toward feet)"
+        ),
+        "caveat": (
+            "The generator and the reconstruction share this angle convention, so a WRONG "
+            "convention would still agree. This phantom validates triangulation and bundle "
+            "adjustment, NOT the DICOM angle definition itself."
+        ),
+        "views": views,
+        "branches": truth_branches,
+        "bifurcationFractionOfMain": 0.45,
+        "lesion": {
+            "branch": "main",
+            "fractionOfMain": 0.66,
+            "percentDiameterStenosis": 50.0,
+            "lengthFraction": 0.09,
+        },
+        "targets": {
+            "centerlineRmsMm": 1.0,
+            "segmentLengthErrorPercent": 3.0,
+            "angleRecoveryDeg": 1.0,
+        },
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════
 # GNBP-XA-4 — 空間校正のフォールバック連鎖（§7.2）
 # ══════════════════════════════════════════════════════════════════════
 
@@ -540,7 +814,7 @@ def build_calibration(out_dir: str) -> dict:
 
 # ══════════════════════════════════════════════════════════════════════
 
-BUILDERS = {"qca": build_qca, "dsa": build_dsa, "calibration": build_calibration}
+BUILDERS = {"qca": build_qca, "dsa": build_dsa, "recon3d": build_recon3d, "calibration": build_calibration}
 
 
 def main() -> int:
@@ -595,6 +869,9 @@ def main() -> int:
         else:
             for v in section.get("variants", []):
                 print(f"  {v['file']}  md5 {v['md5']}", file=sys.stderr)
+            for v in section.get("views", []):
+                print(f"  {v['exact']['file']}  md5 {v['exact']['md5']}", file=sys.stderr)
+                print(f"  {v['angleError']['file']}  md5 {v['angleError']['md5']}", file=sys.stderr)
     return 0
 
 
