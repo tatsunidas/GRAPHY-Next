@@ -284,6 +284,11 @@ export interface QcaSrRequest {
   unit: string;
   calibration?: string | null;
   vesselLabel?: string | null;
+  /**
+   * 手修正の内容（"中間点 2 / エッジ 5 点 / 参照径=健常部指定"）。全自動なら null。
+   * 手で直した値を自動値と同じ顔で保存しないための項目（`fw/angio-design.md` §8.6）。
+   */
+  manualCorrection?: string | null;
   mld: number;
   rvd: number;
   percentDiameterStenosis: number;

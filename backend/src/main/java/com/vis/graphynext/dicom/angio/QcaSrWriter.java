@@ -41,6 +41,7 @@ final class QcaSrWriter {
     private static final Code CALIBRATION = new Code("CALIB", "99GRAPHYNEXT", null, "Spatial Calibration");
     private static final Code VESSEL = new Code("VESSEL", "99GRAPHYNEXT", null, "Vessel Segment");
     private static final Code METHOD = new Code("METHOD", "99GRAPHYNEXT", null, "Analysis Method");
+    private static final Code MANUAL = new Code("MANUAL", "99GRAPHYNEXT", null, "Manual Correction");
     /** キー画像と同じ概念（report/SrCodes と揃える）。 */
     private static final Code OF_INTEREST = new Code("113000", "DCM", null, "Of Interest");
 
@@ -120,6 +121,12 @@ final class QcaSrWriter {
             // 数値だけ残して出自を落とすと、あとから「この 1.5mm は何を基準に測ったのか」が分からなくなる。
             items.add(text(CALIBRATION, req.calibration()));
         }
+        // 手修正の有無は**必ず**残す。手で直した値を自動値と同じ顔で保存すると、
+        // 読む側が再現性を判断できない（設計 §8.6）。
+        items.add(text(MANUAL,
+                req.manualCorrection() != null && !req.manualCorrection().isBlank()
+                        ? req.manualCorrection()
+                        : "None (fully automatic)"));
         // 面積狭窄率が円形断面の仮定であること・単一投影であることを SR 自体に残す。
         items.add(text(METHOD,
                 "GRAPHY-Next QCA (research use only). %Area assumes a circular cross-section; "

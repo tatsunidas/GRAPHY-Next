@@ -246,6 +246,46 @@ function getImagePixelRange(): ImagePixelRange[] {
   return out;
 }
 
+/**
+ * QCA の現在の状態（手修正の実機検証用。`fw/angio-design.md` §8.6）。
+ *
+ * <p>エッジや中間点を掴むには**画像ピクセル座標と画面座標の対応**が要る。
+ * 画面から推測すると「掴めていないのに操作した気になる」検証になるので、
+ * 変換そのものを公開する。
+ */
+export interface QcaDebugSnapshot {
+  /** 計測点の中心線（画像 px）。 */
+  centerline: [number, number][];
+  /** 計測点のエッジ（画像 px）。 */
+  edges: { left: [number, number]; right: [number, number] }[];
+  pathIndices: number[];
+  centerlineToken: string;
+  provenance: { waypoints: number; editedEdges: number[]; trimmed: boolean; reference: string; edited: boolean };
+  mld: number;
+  rvd: number;
+  percentDiameterStenosis: number;
+  points: number;
+  /** 参照径の両端（1 区間指定なら定数になる＝両端が一致する、を確かめるため）。 */
+  referenceFirst: number;
+  referenceLast: number;
+  unit: string;
+  warnings: string[];
+  /** 拡大パネルの座標変換（画面 px = (画像 px − c0) × scale）。パネル未表示なら null。 */
+  view: { cx0: number; cy0: number; cw: number; ch: number; scale: number; dw: number; dh: number } | null;
+}
+
+let qcaSnapshot: QcaDebugSnapshot | null = null;
+
+/** QCA ダイアログ／拡大パネルから呼ぶ（DEV 以外では読まれない）。 */
+export function publishQcaSnapshot(patch: Partial<QcaDebugSnapshot> | null): void {
+  if (!import.meta.env.DEV) return;
+  qcaSnapshot = patch ? ({ ...(qcaSnapshot ?? {}), ...patch } as QcaDebugSnapshot) : null;
+}
+
+function getQcaState(): QcaDebugSnapshot | null {
+  return qcaSnapshot;
+}
+
 declare global {
   interface Window {
     __graphyDebug?: {
@@ -254,6 +294,7 @@ declare global {
       getViewportGeometry: typeof getViewportGeometry;
       getViewportProperties: typeof getViewportProperties;
       getXaCineStats: typeof getXaCineStats;
+      getQcaState: typeof getQcaState;
     };
   }
 }
@@ -269,6 +310,7 @@ export function installDebugApi(): void {
     getViewportGeometry,
     getViewportProperties,
     getXaCineStats,
+    getQcaState,
   };
   installed = true;
 }

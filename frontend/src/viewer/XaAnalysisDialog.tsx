@@ -11,7 +11,7 @@
  * - QCA: 解析したい血管区間の始点・終点として使う
  * 既存の操作（計測を引く）をそのまま流用でき、道具を増やさない。
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getRenderingEngine } from "@cornerstonejs/core";
 import { annotation as csAnnotation } from "@cornerstonejs/tools";
 import {
@@ -20,8 +20,10 @@ import {
   type AngioPresentationRequest,
 } from "../api";
 import { useI18n } from "../i18n/i18n";
+import { publishQcaSnapshot } from "./debugApi";
 import { readModalitySlice } from "./pixelCalibration";
-import { runQca, type QcaResult } from "./qca";
+import { QcaEditor, type QcaEditMode } from "./QcaEditor";
+import { runQca, type QcaManualEdits, type QcaReferenceMode, type QcaResult } from "./qca";
 import { ENGINE_ID } from "./Viewer2D";
 import { readVoiWindow } from "./viewportRead";
 import {
@@ -63,6 +65,23 @@ function shortUid(uid: string): string {
 }
 
 /**
+ * 手修正の内容を人が読める 1 行にする。**保存物（SR）にそのまま入れる**。
+ *
+ * <p>手で直した値を自動値と同じ顔で保存すると、読む側が再現性・監査可能性を判断できない
+ * （`fw/angio-design.md` §8.6）。全自動なら null を返し、SR 側が "None" と書く。
+ */
+function describeManual(result: QcaResult): string | null {
+  const p = result.provenance;
+  if (!p.edited) return null;
+  const parts: string[] = [];
+  if (p.waypoints > 0) parts.push(`waypoints=${p.waypoints}`);
+  if (p.editedEdges.length > 0) parts.push(`edges=${p.editedEdges.length}`);
+  if (p.trimmed) parts.push("trimmed");
+  if (p.reference !== "auto") parts.push(`reference=${p.reference}`);
+  return parts.join("; ");
+}
+
+/**
  * 表示中ビューポートの実 VOI を読む。
  *
  * <p>メタデータ（voiLutModule）ではなく**実際に表示されている値**を保存する。
@@ -85,6 +104,12 @@ function readVoiFor(imageId: string): { windowCenter: number; windowWidth: numbe
     /* 読めなければ VOI は保存しない */
   }
   return null;
+}
+
+/** 手修正パネル用の窓（ビューポートと同じ見え方にする）。 */
+function readVoiWindowFor(imageId: string): { center: number; width: number } | null {
+  const v = readVoiFor(imageId);
+  return v ? { center: v.windowCenter, width: v.windowWidth } : null;
 }
 
 interface LengthPick {
@@ -197,10 +222,36 @@ export function XaAnalysisDialog({
   const [saved, setSaved] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // ── 手修正（§8.6）─────────────────────────────────────────────────
+  const [waypoints, setWaypoints] = useState<[number, number][]>([]);
+  const [edgeEdits, setEdgeEdits] = useState<Record<number, { left?: number; right?: number }>>({});
+  const [edgeToken, setEdgeToken] = useState<string | null>(null);
+  const [trim, setTrim] = useState<{ from: number; to: number } | null>(null);
+  const [refMode, setRefMode] = useState<QcaReferenceMode>({ kind: "auto" });
+  const [editMode, setEditMode] = useState<QcaEditMode>("none");
+  const [chartMode, setChartMode] = useState<"none" | "trim" | "reference">("none");
+  const [highlight, setHighlight] = useState<number | null>(null);
+  /** 解析に使った画素。手修正のたびに読み直すと重いのでキャッシュする。 */
+  const sliceRef = useRef<{ imageId: string; values: Float32Array; width: number; height: number } | null>(null);
+
+  const resetEdits = () => {
+    setWaypoints([]);
+    setEdgeEdits({});
+    setEdgeToken(null);
+    setTrim(null);
+    setRefMode({ kind: "auto" });
+    setEditMode("none");
+    setChartMode("none");
+    setHighlight(null);
+  };
+
   useEffect(() => {
     setResult(null);
     setError(null);
     setSaved(null);
+    sliceRef.current = null;
+    resetEdits();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageId]);
 
   const pick = picks[selected] ?? null;
@@ -256,7 +307,9 @@ export function XaAnalysisDialog({
       frameNumbers: [saveContext.frameIndex + 1],
       label: "QCA",
       description: result
-        ? `QCA %DS ${result.percentDiameterStenosis.toFixed(1)}`
+        ? `QCA %DS ${result.percentDiameterStenosis.toFixed(1)}${
+            result.provenance.edited ? " (manually corrected)" : ""
+          }`
         : "GRAPHY-Next presentation state",
       voi,
       invert: false,
@@ -300,6 +353,8 @@ export function XaAnalysisDialog({
       unit: result.unit,
       calibration: c?.provenance ?? null,
       vesselLabel: null,
+      // 手で直した値を自動値と同じ顔で保存しない（§8.6）。
+      manualCorrection: describeManual(result),
       mld: result.mld,
       rvd: result.rvd,
       percentDiameterStenosis: result.percentDiameterStenosis,
@@ -311,15 +366,82 @@ export function XaAnalysisDialog({
       .finally(() => setSaving(false));
   };
 
-  const runAnalysis = () => {
+  /** 手修正を当てて解析し直す。画素はキャッシュを使うので同期的に終わる。 */
+  const analyzeWith = (edits: QcaManualEdits, slice: { values: Float32Array; width: number; height: number }) => {
+    if (!pick) return;
+    const c = calibrationForImageId(imageId);
+    const r = runQca({
+      pixels: slice.values,
+      width: slice.width,
+      height: slice.height,
+      start: pick.p0,
+      end: pick.p1,
+      edits,
+      mmPerPxRow: c?.mmPerPxRow ?? null,
+      mmPerPxCol: c?.mmPerPxCol ?? null,
+      // DSA 後は血管が正の大きな値（明るい）、非サブトラクションは暗い。
+      vesselIsDark: !isSubtracted,
+    });
+    if (!r) {
+      // 失敗したときに**古い結果が残らない**ようにする（前回値を見て「変わっていない」と
+      // 誤解する事故を防ぐ。実機で踏んだ）。
+      setResult(null);
+      setError(t("xa.analysis.failed"));
+      return;
+    }
+    setError(null);
+    setResult(r);
+    // 実機検証（automator）が掴む対象を計算できるように公開する。DEV 以外では何もしない。
+    publishQcaSnapshot({
+      centerline: r.centerline,
+      edges: r.edges,
+      pathIndices: r.pathIndices,
+      centerlineToken: r.centerlineToken,
+      provenance: r.provenance,
+      mld: r.mld,
+      rvd: r.rvd,
+      percentDiameterStenosis: r.percentDiameterStenosis,
+      points: r.diameters.length,
+      referenceFirst: r.reference[0] ?? 0,
+      referenceLast: r.reference[r.reference.length - 1] ?? 0,
+      unit: r.unit,
+      warnings: r.warnings,
+    });
+    // 中心線が変わったらエッジ修正の宛先も変わる。UI 側の token を追随させる
+    // （合わないまま持ち回ると runQca が捨てて警告を出す）。
+    if (r.centerlineToken !== edgeToken) {
+      setEdgeToken(r.centerlineToken);
+      if (r.warnings.includes("edgeEditsDropped")) setEdgeEdits({});
+    }
+  };
+
+  const currentEdits = (over?: Partial<QcaManualEdits>): QcaManualEdits => ({
+    waypoints,
+    edges: edgeToken && Object.keys(edgeEdits).length ? { token: edgeToken, byPathIndex: edgeEdits } : null,
+    trim,
+    reference: refMode,
+    ...over,
+  });
+
+  /** 手修正を変えたら即座に再解析する（押し直しを要求しない）。 */
+  const reanalyze = (over: Partial<QcaManualEdits>) => {
+    const slice = sliceRef.current;
+    if (!slice) return;
+    analyzeWith(currentEdits(over), slice);
+  };
+
+  const runAnalysis = (edits?: QcaManualEdits) => {
     if (!pick) {
       setError(t("xa.analysis.needLength"));
       return;
     }
+    const cached = sliceRef.current;
+    if (cached && cached.imageId === imageId) {
+      analyzeWith(edits ?? currentEdits(), cached);
+      return;
+    }
     setBusy(true);
     setError(null);
-    // 失敗したときに**古い結果が残らない**ようにする（前回値を見て「変わっていない」と
-    // 誤解する事故を防ぐ。実機で踏んだ）。
     setResult(null);
     readModalitySlice(imageId)
       .then((slice) => {
@@ -327,23 +449,8 @@ export function XaAnalysisDialog({
           setError(t("xa.analysis.noPixels"));
           return;
         }
-        const c = calibrationForImageId(imageId);
-        const r = runQca({
-          pixels: slice.values,
-          width: slice.width,
-          height: slice.height,
-          start: pick.p0,
-          end: pick.p1,
-          mmPerPxRow: c?.mmPerPxRow ?? null,
-          mmPerPxCol: c?.mmPerPxCol ?? null,
-          // DSA 後は血管が正の大きな値（明るい）、非サブトラクションは暗い。
-          vesselIsDark: !isSubtracted,
-        });
-        if (!r) {
-          setError(t("xa.analysis.failed"));
-          return;
-        }
-        setResult(r);
+        sliceRef.current = { imageId, values: slice.values, width: slice.width, height: slice.height };
+        analyzeWith(edits ?? currentEdits(), slice);
       })
       .catch(() => setError(t("xa.analysis.failed")))
       .finally(() => setBusy(false));
@@ -451,12 +558,100 @@ export function XaAnalysisDialog({
         <div style={section}>
           <div style={sectionTitle}>{t("xa.analysis.qca")}</div>
           <div style={row}>
-            <button style={primaryBtn} onClick={runAnalysis} disabled={!pick || busy}>
+            <button style={primaryBtn} data-testid="xa-qca-run" onClick={() => runAnalysis()} disabled={!pick || busy}>
               {busy ? t("common.loading") : t("xa.analysis.run")}
             </button>
+            {result && (
+              <button
+                style={btn}
+                data-testid="xa-qca-reset"
+                disabled={!result.provenance.edited}
+                onClick={() => {
+                  resetEdits();
+                  runAnalysis({ waypoints: [], edges: null, trim: null, reference: { kind: "auto" } });
+                }}
+              >
+                {t("xa.qca.resetEdits")}
+              </button>
+            )}
             <span style={hint}>{t("xa.analysis.researchOnly")}</span>
           </div>
-          {result && <QcaReport result={result} />}
+
+          {result && sliceRef.current && (
+            <>
+              {/* 手修正（§8.6）。自動の中心線は外れていても必ず結果を出すので、ここが要る。 */}
+              <div style={row}>
+                <span style={{ fontSize: 11, color: "#44586a" }}>{t("xa.qca.editMode")}:</span>
+                {(["none", "waypoint", "edge"] as const).map((m) => (
+                  <button
+                    key={m}
+                    style={editMode === m ? primaryBtn : btn}
+                    data-testid={`xa-qca-mode-${m}`}
+                    onClick={() => setEditMode(m)}
+                  >
+                    {t(`xa.qca.mode.${m}`)}
+                  </button>
+                ))}
+              </div>
+              <QcaEditor
+                pixels={sliceRef.current.values}
+                width={sliceRef.current.width}
+                height={sliceRef.current.height}
+                voi={readVoiWindowFor(imageId)}
+                result={result}
+                mode={editMode}
+                waypoints={waypoints}
+                edgeEdits={edgeEdits}
+                highlightIndex={highlight}
+                onWaypointsChange={(next) => {
+                  // 中心線が変わる＝エッジ修正の宛先が無意味になる（§8.6 の token）。
+                  setWaypoints(next);
+                  setEdgeEdits({});
+                  reanalyze({ waypoints: next, edges: null });
+                }}
+                onEdgeEdit={(pathIndex, side, offset) => {
+                  if (!edgeToken) return;
+                  const next = { ...edgeEdits, [pathIndex]: { ...edgeEdits[pathIndex], [side]: offset } };
+                  setEdgeEdits(next);
+                  reanalyze({ edges: { token: edgeToken, byPathIndex: next } });
+                }}
+              />
+            </>
+          )}
+
+          {result && (
+            <QcaReport
+              result={result}
+              chartMode={chartMode}
+              trimmed={!!trim}
+              referenceMode={refMode}
+              onChartModeChange={setChartMode}
+              onHighlight={setHighlight}
+              onSelectRange={(from, to) => {
+                if (chartMode === "trim") {
+                  const next = { from, to };
+                  setTrim(next);
+                  // 切り詰めは計測点インデックスの意味なので、エッジ修正（path インデックス）は生きる。
+                  reanalyze({ trim: next });
+                } else if (chartMode === "reference") {
+                  const ranges =
+                    refMode.kind === "segments" ? [...refMode.ranges, [from, to] as [number, number]] : [[from, to] as [number, number]];
+                  const next: QcaReferenceMode = { kind: "segments", ranges };
+                  setRefMode(next);
+                  reanalyze({ reference: next });
+                }
+              }}
+              onClearTrim={() => {
+                setTrim(null);
+                reanalyze({ trim: null });
+              }}
+              onClearReference={() => {
+                const next: QcaReferenceMode = { kind: "auto" };
+                setRefMode(next);
+                reanalyze({ reference: next });
+              }}
+            />
+          )}
         </div>
 
         {/* 保存（非破壊: GSPS ＝表示状態と描画 / SR ＝計測値）。fw/angio-design.md §14 */}
@@ -490,18 +685,71 @@ export function XaAnalysisDialog({
   );
 }
 
-/** 結果の数値と径プロファイル（依存を増やさないため素の SVG）。 */
-function QcaReport({ result }: { result: QcaResult }) {
+/**
+ * 結果の数値と径プロファイル（依存を増やさないため素の SVG）。
+ *
+ * <p>グラフ上のドラッグで**解析区間の切り詰め**と**参照径に使う健常部の指定**ができる
+ * （`fw/angio-design.md` §8.6）。どちらも「自動の推定が外れたときに人が決め直す」ためのもの。
+ */
+function QcaReport({
+  result,
+  chartMode,
+  trimmed,
+  referenceMode,
+  onChartModeChange,
+  onSelectRange,
+  onClearTrim,
+  onClearReference,
+  onHighlight,
+}: {
+  result: QcaResult;
+  chartMode: "none" | "trim" | "reference";
+  trimmed: boolean;
+  referenceMode: QcaReferenceMode;
+  onChartModeChange: (m: "none" | "trim" | "reference") => void;
+  onSelectRange: (from: number, to: number) => void;
+  onClearTrim: () => void;
+  onClearReference: () => void;
+  onHighlight: (i: number | null) => void;
+}) {
   const { t } = useI18n();
   const u = result.unit;
   const w = 460;
   const h = 120;
   const pad = 4;
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const [dragFrom, setDragFrom] = useState<number | null>(null);
+  const [dragTo, setDragTo] = useState<number | null>(null);
+
+  const n = result.diameters.length;
   const maxD = Math.max(...result.diameters, ...result.reference) * 1.1 || 1;
   const maxP = result.positions[result.positions.length - 1] || 1;
   const px = (i: number) => pad + (result.positions[i] / maxP) * (w - pad * 2);
   const py = (v: number) => h - pad - (v / maxD) * (h - pad * 2);
   const line = (vals: number[]) => vals.map((v, i) => `${px(i)},${py(v)}`).join(" ");
+
+  /** 画面 x → 計測点インデックス。 */
+  const indexAt = (clientX: number): number => {
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return 0;
+    const target = ((clientX - rect.left) / rect.width) * w;
+    let best = 0;
+    let bd = Infinity;
+    for (let i = 0; i < n; i++) {
+      const d = Math.abs(px(i) - target);
+      if (d < bd) {
+        bd = d;
+        best = i;
+      }
+    }
+    return best;
+  };
+
+  const band = (from: number, to: number, fill: string, key: string) => {
+    const a = Math.min(from, to);
+    const b = Math.max(from, to);
+    return <rect key={key} x={px(a)} y={pad} width={Math.max(1, px(b) - px(a))} height={h - pad * 2} fill={fill} />;
+  };
 
   return (
     <div>
@@ -533,13 +781,94 @@ function QcaReport({ result }: { result: QcaResult }) {
           </tr>
         </tbody>
       </table>
-      <svg width={w} height={h} style={{ background: "#0f1720", borderRadius: 4 }}>
+
+      {/* グラフ上での手修正（区間の切り詰め・健常部の指定）。 */}
+      <div style={row}>
+        <span style={{ fontSize: 11, color: "#44586a" }}>{t("xa.qca.chartMode")}:</span>
+        {(["none", "trim", "reference"] as const).map((m) => (
+          <button
+            key={m}
+            style={chartMode === m ? primaryBtn : btn}
+            data-testid={`xa-qca-chart-${m}`}
+            onClick={() => onChartModeChange(m)}
+          >
+            {t(`xa.qca.chart.${m}`)}
+          </button>
+        ))}
+        {trimmed && (
+          <button style={btn} data-testid="xa-qca-clear-trim" onClick={onClearTrim}>
+            {t("xa.qca.clearTrim")}
+          </button>
+        )}
+        {referenceMode.kind !== "auto" && (
+          <button style={btn} data-testid="xa-qca-clear-reference" onClick={onClearReference}>
+            {t("xa.qca.clearReference")}
+          </button>
+        )}
+      </div>
+
+      <svg
+        ref={svgRef}
+        width={w}
+        height={h}
+        data-testid="xa-qca-chart"
+        style={{
+          background: "#0f1720",
+          borderRadius: 4,
+          cursor: chartMode === "none" ? "default" : "col-resize",
+          touchAction: "none",
+        }}
+        onPointerDown={(e) => {
+          if (chartMode === "none") return;
+          e.currentTarget.setPointerCapture(e.pointerId);
+          const i = indexAt(e.clientX);
+          setDragFrom(i);
+          setDragTo(i);
+        }}
+        onPointerMove={(e) => {
+          const i = indexAt(e.clientX);
+          onHighlight(i);
+          if (dragFrom != null) setDragTo(i);
+        }}
+        onPointerLeave={() => onHighlight(null)}
+        onPointerUp={(e) => {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+          if (dragFrom != null && dragTo != null && dragFrom !== dragTo) {
+            onSelectRange(Math.min(dragFrom, dragTo), Math.max(dragFrom, dragTo));
+          }
+          setDragFrom(null);
+          setDragTo(null);
+        }}
+      >
+        {referenceMode.kind === "segments" &&
+          referenceMode.ranges.map((r, i) => band(r[0], r[1], "rgba(109,139,168,0.28)", `ref-${i}`))}
+        {dragFrom != null && dragTo != null && band(dragFrom, dragTo, "rgba(255,209,102,0.25)", "drag")}
         <polyline points={line(result.reference)} fill="none" stroke="#6d8ba8" strokeDasharray="4 3" />
         <polyline points={line(result.diameters)} fill="none" stroke="#7fd1b9" strokeWidth={1.5} />
+        {result.provenance.editedEdges.map((i) => (
+          <circle key={`e-${i}`} cx={px(i)} cy={py(result.diameters[i])} r={2} fill="#ffd166" />
+        ))}
         <circle cx={px(result.mldIndex)} cy={py(result.mld)} r={3} fill="#e07a5f" />
       </svg>
-      <div style={hint}>{t("xa.analysis.chartHint", { unit: u })}</div>
+      <div style={hint}>
+        {chartMode === "trim"
+          ? t("xa.qca.hintTrim")
+          : chartMode === "reference"
+            ? t("xa.qca.hintReference")
+            : t("xa.analysis.chartHint", { unit: u })}
+      </div>
       <div style={hint}>{t("xa.analysis.areaCaveat")}</div>
+      {/* 手が入っているなら**必ず**表示する。自動値と同じ顔をさせない（保存物にも入る）。 */}
+      {result.provenance.edited && (
+        <div style={warn} data-testid="xa-qca-manual-badge">
+          {t("xa.qca.manualBadge", {
+            waypoints: String(result.provenance.waypoints),
+            edges: String(result.provenance.editedEdges.length),
+            trim: result.provenance.trimmed ? t("xa.qca.yes") : t("xa.qca.no"),
+            reference: t(`xa.qca.refKind.${result.provenance.reference}`),
+          })}
+        </div>
+      )}
       {result.warnings.includes("uncalibrated") && <div style={warn}>{t("xa.analysis.uncalibratedWarn")}</div>}
     </div>
   );

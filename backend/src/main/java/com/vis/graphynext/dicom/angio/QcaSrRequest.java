@@ -12,6 +12,10 @@ package com.vis.graphynext.dicom.angio;
  * @param calibration   校正の出自（"カテーテル 6Fr / 0.208 mm/px" のような人向け文字列）。
  *                      <b>数値だけ保存して出自を落とさない</b>ためのフィールド
  * @param vesselLabel   血管・区間の名前（任意）
+ * @param manualCorrection 手修正の内容（"中間点 2 / エッジ 5 点 / 参照径=健常部指定" のような
+ *                      人向け文字列）。全自動なら null。
+ *                      <b>手で直した値を自動値と同じ顔で保存しない</b>ためのフィールド
+ *                      （設計 §8.6）。読む側が再現性・監査可能性を判断できなくなる
  */
 public record QcaSrRequest(
         String studyInstanceUid,
@@ -21,6 +25,7 @@ public record QcaSrRequest(
         String unit,
         String calibration,
         String vesselLabel,
+        String manualCorrection,
         double mld,
         double rvd,
         double percentDiameterStenosis,

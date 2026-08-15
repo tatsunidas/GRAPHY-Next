@@ -33,8 +33,12 @@ class QcaSrWriterTest {
     }
 
     private static QcaSrRequest req(String unit) {
+        return req(unit, null);
+    }
+
+    private static QcaSrRequest req(String unit, String manualCorrection) {
         return new QcaSrRequest("1.2.3", "1.2.3.9", "1.2.3.10", 12, unit,
-                "カテーテル 6Fr / 0.208 mm/px", "LAD proximal",
+                "カテーテル 6Fr / 0.208 mm/px", "LAD proximal", manualCorrection,
                 1.47, 3.00, 51.0, 76.0, 6.2);
     }
 
@@ -139,6 +143,23 @@ class QcaSrWriterTest {
         String method = findByCode(g, "METHOD").getString(Tag.TextValue);
         assertTrue(method.contains("research use only"));
         assertTrue(method.contains("circular cross-section"));
+    }
+
+    /**
+     * 手修正の有無は<b>常に</b>書く（設計 §8.6）。
+     *
+     * <p>「手修正の項目が無い」を「全自動だった」と読むことはできない — 項目を書かない実装と
+     * 区別が付かないため。全自動なら明示的に "None" と書く。
+     */
+    @Test
+    void alwaysRecordsWhetherTheResultWasHandEdited() {
+        Attributes autoRun = measurementGroup(QcaSrWriter.build(template(), req("mm")).dataset());
+        assertEquals("None (fully automatic)", findByCode(autoRun, "MANUAL").getString(Tag.TextValue));
+
+        Attributes edited = measurementGroup(
+                QcaSrWriter.build(template(), req("mm", "waypoints=2; edges=5; reference=segments")).dataset());
+        assertEquals("waypoints=2; edges=5; reference=segments",
+                findByCode(edited, "MANUAL").getString(Tag.TextValue));
     }
 
     @Test
