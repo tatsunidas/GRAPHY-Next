@@ -19,6 +19,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createQca3dSr } from "../api";
 import { desktop } from "../desktopBridge";
+import { publishAnalysisResult } from "../report/analysisResultStore";
+import { qca3dRecord } from "../report/xaAnalysisRecords";
 import { writeGeometry3dContext } from "../viewer3d/geometry3dContext";
 import { useI18n } from "../i18n/i18n";
 import { publishXa3dSnapshot } from "./debugApi";
@@ -150,9 +152,36 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
       );
     setProfile(sections);
     // 3D の狭窄率。断面が出せていなければ null（無理に出さない）。
-    setStenosis(sections.unavailable ? null : stenosis3d(r.points, sections));
+    const st = sections.unavailable ? null : stenosis3d(r.points, sections);
+    setStenosis(st);
     // 「次はどの角度で撮ると短縮が少ないか」。3D が一度取れて初めて言えること。
     setSuggestions(suggestWorkingAngles(r.points, runA.geometry, { stepDeg: 5, count: 3 }));
+
+    // レポートへ差し込めるように登録する（A14）。品質基準を満たした結果だけ。
+    if (r.acceptable && runA.sopInstanceUid && runB.sopInstanceUid) {
+      publishAnalysisResult(
+        qca3dRecord(
+          {
+            studyUid: runA.studyUid,
+            seriesUid: runA.seriesUid,
+            viewASopInstanceUid: runA.sopInstanceUid,
+            viewBSopInstanceUid: runB.sopInstanceUid,
+            viewALabel: runA.label,
+            viewBLabel: runB.label,
+            separationDeg: r.separationDeg,
+            anchorCount: r.anchorCount,
+            anchorReprojectionPx: r.anchorReprojectionPx,
+            angleCorrected: ref != null,
+            lengthMm: r.lengthMm,
+            minEquivalentDiameterMm: sections.unavailable ? null : (sections.minEquivalentDiameterMm ?? null),
+            percentDiameterStenosis: st?.percentDiameterStenosis ?? null,
+            visibleFractionA: r.foreshortening.a?.visibleFraction ?? null,
+            visibleFractionB: r.foreshortening.b?.visibleFraction ?? null,
+          },
+          t,
+        ),
+      );
+    }
   };
 
   /** 保存できるのは、2 方向とも元インスタンスが分かっていて、結果が品質基準を満たすとき。 */

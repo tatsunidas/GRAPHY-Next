@@ -20,6 +20,8 @@ import {
   type Study,
 } from "../api";
 import { useI18n } from "../i18n/i18n";
+import { appendBlock, formatAnalysisBlock } from "./analysisResults";
+import { useAnalysisResults } from "./analysisResultStore";
 import { KeyImageGrid } from "./KeyImageGrid";
 import { MarkdownEditor } from "./MarkdownEditor";
 import { ParticipantsPanel } from "./ParticipantsPanel";
@@ -84,6 +86,10 @@ export function ReportEditorDialog({
   const [clinicalHistory, setClinicalHistory] = useState("");
   const [referringPhysician, setReferringPhysician] = useState("");
   const [bodyMarkdown, setBodyMarkdown] = useState("");
+  // 解析結果の差し込み（A14）。**このスタディの結果だけ**を出す。
+  const analysisResults = useAnalysisResults(study?.studyInstanceUid ?? null);
+  const [analysisPick, setAnalysisPick] = useState("");
+  const [analysisInserted, setAnalysisInserted] = useState(false);
   const [participants, setParticipants] = useState<ReportParticipantInput[]>([]);
   const [keyImages, setKeyImages] = useState<ReportKeyImageInput[]>([]);
 
@@ -255,7 +261,7 @@ export function ReportEditorDialog({
               </span>
             )}
           </span>
-          <button style={closeBtn} onClick={handleClose} aria-label={t("common.close")}>
+          <button style={closeBtn} onClick={handleClose} aria-label={t("common.close")} data-testid="report-close">
             ✕
           </button>
         </div>
@@ -326,7 +332,58 @@ export function ReportEditorDialog({
             </div>
 
             <div style={bodySection}>
-              <div style={{ fontWeight: 700, marginBottom: 6, fontSize: 13 }}>{t("report.body.label")}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <span style={{ fontWeight: 700, fontSize: 13 }}>{t("report.body.label")}</span>
+                {/* 解析結果の差し込み（A14）。**本文は置き換えず末尾へ追記する**。 */}
+                {!readOnly && (
+                  <>
+                    <select
+                      style={insertSelect}
+                      data-testid="report-analysis-select"
+                      value={analysisPick}
+                      onChange={(e) => setAnalysisPick(e.target.value)}
+                      disabled={analysisResults.length === 0}
+                    >
+                      <option value="">
+                        {analysisResults.length === 0 ? t("report.analysis.none") : "—"}
+                      </option>
+                      {analysisResults.map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {r.title} — {r.frameLabel}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      style={insertBtn}
+                      data-testid="report-analysis-insert"
+                      disabled={!analysisPick}
+                      onClick={() => {
+                        const r = analysisResults.find((x) => x.id === analysisPick);
+                        if (!r) return;
+                        setBodyMarkdown((prev) =>
+                          appendBlock(
+                            prev,
+                            formatAnalysisBlock(r, {
+                              location: t("report.analysis.location"),
+                              metric: t("report.analysis.metric"),
+                              value: t("report.analysis.value"),
+                              provenance: t("report.analysis.provenance"),
+                            }),
+                          ),
+                        );
+                        setAnalysisInserted(true);
+                      }}
+                    >
+                      {t("report.analysis.insert")}
+                    </button>
+                    {analysisInserted && (
+                      <span style={{ fontSize: 11, color: "#3f8f6f" }} data-testid="report-analysis-inserted">
+                        {t("report.analysis.inserted")}
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
               <div style={editorArea}>
                 <MarkdownEditor
                   value={bodyMarkdown}
@@ -472,6 +529,21 @@ const fieldInput: React.CSSProperties = {
   borderRadius: 5,
   fontSize: 13,
   background: "#fff",
+};
+const insertSelect: React.CSSProperties = {
+  padding: "2px 4px",
+  border: "1px solid #c3ced9",
+  borderRadius: 3,
+  fontSize: 12,
+  maxWidth: 320,
+};
+const insertBtn: React.CSSProperties = {
+  padding: "2px 8px",
+  border: "1px solid #c3ced9",
+  borderRadius: 3,
+  background: "#fff",
+  cursor: "pointer",
+  fontSize: 12,
 };
 const bodySection: React.CSSProperties = { display: "flex", flexDirection: "column", flex: "2 1 260px", minHeight: 220 };
 const editorArea: React.CSSProperties = { flex: 1, minHeight: 200 };

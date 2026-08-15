@@ -56,7 +56,7 @@ export function Toolbar({
       <ToolButton testId="toolbar-tag-extractor-btn" iconFile={UI_ICON_FILES.tagExtractor} icon="🏷" label={t("main.toolbar.tagExtractor")} onClick={() => onOpenTool("tagExtractor")} />
       <ToolButton testId="toolbar-tag-viewer-btn" iconFile={UI_ICON_FILES.tagViewer} icon="🔖" label={t("main.toolbar.tagViewer")} onClick={() => onOpenTool("tagViewer")} />
       {!isDemo && <ToolButton testId="toolbar-series-extractor-btn" iconFile={UI_ICON_FILES.seriesExtractor} icon="🧬" label={t("main.toolbar.seriesExtractor")} onClick={() => onOpenTool("seriesExtractor")} />}
-      <ToolButton icon="📝" label={t("main.toolbar.report")} onClick={() => onOpenTool("report")} />
+      <ToolButton testId="report-toolbar-button" icon="📝" label={t("main.toolbar.report")} onClick={() => onOpenTool("report")} />
       <ToolButton icon="🗂" label={t("main.toolbar.reportManager")} onClick={() => onOpenTool("reportManager")} />
       <ToolButton iconFile={UI_ICON_FILES.refresh} icon="🔄" label={t("main.toolbar.refresh")} onClick={onRefresh} />
       {isStandalone && <ToolButton iconFile={UI_ICON_FILES.db} icon="🗄" label={t("app.btn.dbTitle")} onClick={onOpenDb} />}

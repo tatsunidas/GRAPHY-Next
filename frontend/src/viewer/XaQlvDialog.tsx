@@ -17,6 +17,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getRenderingEngine } from "@cornerstonejs/core";
 import { createQlvSr } from "../api";
+import { publishAnalysisResult } from "../report/analysisResultStore";
+import { qlvRecord } from "../report/xaAnalysisRecords";
 import { useI18n } from "../i18n/i18n";
 import { publishQlvSnapshot } from "./debugApi";
 import { LvContourEditor } from "./LvContourEditor";
@@ -267,6 +269,33 @@ export function XaQlvDialog({
         : null,
     });
   }, [result, edFrame, esFrame, framesManual, frameWarnings, areaCurve, edPoints.length, esPoints.length]);
+
+  // レポートへ差し込めるように登録する（A14）。**ED/ES の決め方も一緒に持ち込む**
+  // （自動提案のままか人が選んだかで結果の意味が変わる。§9.2.2）。
+  useEffect(() => {
+    if (!result || edFrame == null || esFrame == null) return;
+    const sop = saveContext.sopInstanceUidAt(edFrame);
+    if (!sop) return;
+    publishAnalysisResult(
+      qlvRecord(
+        {
+          studyUid: saveContext.studyUid,
+          seriesUid,
+          sopInstanceUid: sop,
+          edFrame,
+          esFrame,
+          framesManual,
+          calibration: calib?.provenance ?? null,
+          ejectionFraction: result.ejectionFraction,
+          edvMl: result.edvMl,
+          esvMl: result.esvMl,
+          kennedyEjectionFraction: result.kennedy?.ejectionFraction ?? null,
+        },
+        t,
+      ),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result, edFrame, esFrame, framesManual]);
 
   const steps = useMemo(
     () =>

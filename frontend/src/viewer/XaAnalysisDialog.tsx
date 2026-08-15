@@ -28,6 +28,8 @@ import { TaskStepRail } from "./TaskStepRail";
 import { ENGINE_ID } from "./Viewer2D";
 import { readVoiWindow } from "./viewportRead";
 import { isXaCalibrated } from "./xaCalibration";
+import { publishAnalysisResult } from "../report/analysisResultStore";
+import { qcaRecord } from "../report/xaAnalysisRecords";
 import { describeView, registerQcaRun } from "./xaRecon3dStore";
 import { readXaViewGeometry } from "./xaViewGeometryProvider";
 import {
@@ -419,6 +421,29 @@ export function XaAnalysisDialog({
       unit: r.unit,
       warnings: r.warnings,
     });
+    // レポートへ差し込めるように登録する（A14）。**出自（校正・手修正）も一緒に持ち込む**。
+    if (saveContext.sopInstanceUid) {
+      publishAnalysisResult(
+        qcaRecord(
+          {
+            studyUid: saveContext.studyUid,
+            seriesUid,
+            sopInstanceUid: saveContext.sopInstanceUid,
+            frameIndex: saveContext.frameIndex,
+            unit: r.unit,
+            calibration: c?.provenance ?? null,
+            manualCorrection: describeManual(r),
+            mld: r.mld,
+            rvd: r.rvd,
+            percentDiameterStenosis: r.percentDiameterStenosis,
+            percentAreaStenosis: r.percentAreaStenosis,
+            lesionLength: r.lesionLength,
+          },
+          t,
+        ),
+      );
+    }
+
     // 3D QCA（A6a）で選べるように登録する。投影幾何が読めない装置・データでは登録しない
     // （角度や SID/SOD が無ければ 3D にはできない。§10.1 の表）。
     const view = readXaViewGeometry(imageId, saveContext.frameIndex);

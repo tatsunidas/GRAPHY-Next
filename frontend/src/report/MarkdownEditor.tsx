@@ -137,6 +137,7 @@ export function MarkdownEditor({
       )}
       <div style={panes}>
         <textarea
+        data-testid="report-body"
           ref={textareaRef}
           value={value}
           onChange={(e) => onChange(e.target.value)}

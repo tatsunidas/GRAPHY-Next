@@ -15,6 +15,7 @@ import { MprScreen } from "./mpr/MprScreen";
 import { Viewer3DScreen } from "./viewer3d/Viewer3DScreen";
 import { Geometry3DScreen } from "./viewer3d/Geometry3DScreen";
 import { ensureQcaRunChannel } from "./viewer/xaRecon3dStore";
+import { ensureAnalysisResultChannel } from "./report/analysisResultStore";
 import { SlicerScreen } from "./slicer/SlicerScreen";
 import { CurvedMprScreen } from "./curvedmpr/CurvedMprScreen";
 import { QRScreen } from "./qr/QRScreen";
@@ -131,6 +132,9 @@ export function App() {
   // 覚えておく役がどこかに要る。常時開いているこのウィンドウが引き受ける。
   useEffect(() => {
     ensureQcaRunChannel();
+    // レポートへ差し込む解析結果も、解析するウィンドウとレポートを書くウィンドウが別なので
+    // 同じく中継する（A14）。
+    ensureAnalysisResultChannel();
   }, []);
 
   // 他ウィンドウの DB 変更（Slicer の派生シリーズ保存・DbAdmin 編集等）を受けて、
