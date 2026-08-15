@@ -343,6 +343,80 @@ function getQlvState(): QlvDebugSnapshot | null {
   return qlvSnapshot;
 }
 
+/** 3D QCA（A6a）の検証用スナップショット。`fw/angio-design.md` §10.2。 */
+export interface Xa3dDebugSnapshot {
+  /** 選べている方向の数と、その角度（**タグから読めているか**を数値で確かめる）。 */
+  viewCount: number;
+  anglesA: { primary: number; secondary: number } | null;
+  anglesB: { primary: number; secondary: number } | null;
+  separationDeg: number | null;
+  /** 2 方向の中心線の点数（画像から抽出できているか）。 */
+  pointsA: number;
+  pointsB: number;
+  anchorCount: number;
+  result: {
+    acceptable: boolean;
+    lengthMm: number;
+    anchorReprojectionPx: number;
+    /** 🚨 参考値。品質判定に使ってはいけない（§10.2.2）。 */
+    matchReprojectionPx: number;
+    separationDeg: number;
+    points: number;
+    warnings: { code: string; value: number; threshold: number; blocking: boolean }[];
+    /** 3D 中心線の端点と重心（真値と突き合わせるために出す）。 */
+    firstPoint: [number, number, number];
+    lastPoint: [number, number, number];
+  } | null;
+  refinement: { beforePx: number; afterPx: number; primary: number; secondary: number } | null;
+  /** ステップ・レールの状態（id → state）。 */
+  steps: Record<string, string>;
+}
+
+let xa3dSnapshot: Xa3dDebugSnapshot | null = null;
+
+/** 3D QCA ダイアログから呼ぶ（DEV 以外では読まれない）。 */
+export function publishXa3dSnapshot(patch: Partial<Xa3dDebugSnapshot> | null): void {
+  if (!import.meta.env.DEV) return;
+  xa3dSnapshot = patch ? ({ ...(xa3dSnapshot ?? {}), ...patch } as Xa3dDebugSnapshot) : null;
+}
+
+function getXa3dState(): Xa3dDebugSnapshot | null {
+  return xa3dSnapshot;
+}
+
+/**
+ * 画像ピクセル → キャンバス上の相対位置（0〜1）。
+ *
+ * <p>実機検証で「**この画素の上を**クリック/ドラッグする」ために要る。真値が画素で分かっている
+ * ファントム（GNBP-XA-3 の `branchesPx`）に対して、画面中央からの決め打ちではなく
+ * **狙った解剖位置**を指せるようになる。
+ *
+ * <p>変換は viewport の `worldToCanvas` に任せる（ズーム・パン・反転を自前で再現しない）。
+ */
+function imagePixelsToCanvasFraction(
+  points: readonly (readonly [number, number])[],
+): { fx: number; fy: number }[] | null {
+  const engine = getRenderingEngine(ENGINE_ID);
+  const vp = engine?.getViewports?.()[0] as unknown as {
+    getImageData?: () => { origin?: number[]; direction?: number[]; spacing?: number[] } | undefined;
+    worldToCanvas?: (w: number[]) => number[];
+    canvas?: HTMLCanvasElement;
+  } | undefined;
+  const data = vp?.getImageData?.();
+  const canvas = vp?.canvas;
+  if (!vp?.worldToCanvas || !data?.origin || !data.direction || !data.spacing || !canvas) return null;
+  const o = data.origin;
+  const dir = data.direction;
+  const sp = data.spacing;
+  const out: { fx: number; fy: number }[] = [];
+  for (const [col, row] of points) {
+    const w = [0, 1, 2].map((k) => o[k] + col * sp[0] * dir[k] + row * sp[1] * dir[3 + k]);
+    const c = vp.worldToCanvas(w);
+    out.push({ fx: c[0] / canvas.clientWidth, fy: c[1] / canvas.clientHeight });
+  }
+  return out;
+}
+
 declare global {
   interface Window {
     __graphyDebug?: {
@@ -353,6 +427,8 @@ declare global {
       getXaCineStats: typeof getXaCineStats;
       getQcaState: typeof getQcaState;
       getQlvState: typeof getQlvState;
+      getXa3dState: typeof getXa3dState;
+      imagePixelsToCanvasFraction: typeof imagePixelsToCanvasFraction;
     };
   }
 }
@@ -370,6 +446,8 @@ export function installDebugApi(): void {
     getXaCineStats,
     getQcaState,
     getQlvState,
+    getXa3dState,
+    imagePixelsToCanvasFraction,
   };
   installed = true;
 }

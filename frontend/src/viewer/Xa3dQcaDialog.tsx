@@ -1,0 +1,615 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
+/**
+ * 3D QCA（2 方向から 3D 中心線を作る・A6a）のダイアログ。
+ * `fw/angio-design.md` §10.1 / §10.2。計算は `xaRecon3d.ts`（純関数）にあり、ここは UI だけ。
+ *
+ * <h3>使い方の前提</h3>
+ * **各方向で先に 2D QCA を走らせる。** その結果が `xaRecon3dStore` に溜まり、ここで 2 つ選ぶ。
+ * 2 方向を同時に画面へ出す UI を作るより、既存の導線（中心線抽出・手修正・校正）をそのまま
+ * 使えるほうが良い、という判断（§10.2 の実装メモ）。
+ *
+ * <h3>🚨 「アンカー」を任意項目のように見せないこと</h3>
+ * 端点 2 つだけでは**角度補正が退化して掛けられない**（§10.2.2）。補正が掛からないと
+ * 装置の機械誤差（2〜3°）がそのまま形の歪みになるのに、**再投影誤差は閾値を通る**。
+ * だからステップ・レールでは端点だけの状態を `done` ではなく **`skipped`** にしてある。
+ */
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useI18n } from "../i18n/i18n";
+import { publishXa3dSnapshot } from "./debugApi";
+import { type Vec3, viewSeparationDeg } from "./xaGeometry";
+import {
+  type ReconAnchor,
+  type Recon3DResult,
+  type XaCenterline2D,
+  reconstructWithRefinement,
+  type GeometryRefinement,
+} from "./xaRecon3d";
+import { type XaQcaRun, useQcaRuns } from "./xaRecon3dStore";
+import { TaskStepRail } from "./TaskStepRail";
+import { deriveQca3dSteps } from "./xaTasks";
+
+const MIN_SEPARATION_DEG = 30;
+
+/** 中心線の点番号で持つアンカー（画素は再構成時に引く）。 */
+interface AnchorPick {
+  ia: number;
+  ib: number;
+}
+
+export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
+  const { t } = useI18n();
+  const runs = useQcaRuns();
+  const [keyA, setKeyA] = useState<string>("");
+  const [keyB, setKeyB] = useState<string>("");
+  const [anchors, setAnchors] = useState<AnchorPick[]>([]);
+  /** アンカーを打つ途中（A を選んだが B がまだ）。 */
+  const [pendingA, setPendingA] = useState<number | null>(null);
+  const [result, setResult] = useState<Recon3DResult | null>(null);
+  const [refinement, setRefinement] = useState<GeometryRefinement | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const runA = runs.find((r) => r.imageId === keyA) ?? null;
+  const runB = runs.find((r) => r.imageId === keyB) ?? null;
+
+  const separationDeg = useMemo(
+    () => (runA && runB ? viewSeparationDeg(runA.geometry, runB.geometry) : null),
+    [runA, runB],
+  );
+
+  /** 端点は常にアンカー（＝同じ場所から同じ場所まで辿ることを要求している）。 */
+  const anchorList = useMemo((): ReconAnchor[] => {
+    if (!runA || !runB) return [];
+    const ends: ReconAnchor[] = [
+      { pixelA: runA.centerline[0], pixelB: runB.centerline[0] },
+      {
+        pixelA: runA.centerline[runA.centerline.length - 1],
+        pixelB: runB.centerline[runB.centerline.length - 1],
+      },
+    ];
+    const picked = anchors
+      .filter((a) => runA.centerline[a.ia] && runB.centerline[a.ib])
+      .map((a) => ({ pixelA: runA.centerline[a.ia], pixelB: runB.centerline[a.ib] }));
+    return [...ends, ...picked];
+  }, [runA, runB, anchors]);
+
+  const reset = () => {
+    setResult(null);
+    setRefinement(null);
+    setError(null);
+  };
+
+  const pickView = (side: "a" | "b", key: string) => {
+    // 方向を選び直すとアンカーは別の画素座標を指すので捨てる（QCA3D_STEPS の `clears` と同じ）。
+    if (side === "a") setKeyA(key);
+    else setKeyB(key);
+    setAnchors([]);
+    setPendingA(null);
+    reset();
+  };
+
+  const run = () => {
+    if (!runA || !runB) return;
+    const a: XaCenterline2D = { geometry: runA.geometry, points: runA.centerline };
+    const b: XaCenterline2D = { geometry: runB.geometry, points: runB.centerline };
+    const { result: r, refinement: ref } = reconstructWithRefinement(a, b, {
+      anchors: anchorList,
+      minSeparationDeg: MIN_SEPARATION_DEG,
+    });
+    if (!r) {
+      setResult(null);
+      setRefinement(null);
+      setError(t("xa3d.failed"));
+      return;
+    }
+    setError(null);
+    setResult(r);
+    setRefinement(ref);
+  };
+
+  const steps = deriveQca3dSteps({
+    viewCount: (runA ? 1 : 0) + (runB ? 1 : 0),
+    separationDeg,
+    minSeparationDeg: MIN_SEPARATION_DEG,
+    anchorCount: anchorList.length,
+    hasResult: result != null,
+    acceptable: result?.acceptable ?? false,
+    blockingWarning: result?.warnings.find((w) => w.blocking)?.code ?? null,
+    refined: refinement != null,
+    canSave: false,
+    saved: false,
+  });
+
+  // 実機検証（automator）が数値で突き合わせられるように公開する。DEV 以外では何もしない。
+  // ⚠️ 描画中に副作用を起こさない（React の規約）。依存配列を付けないのは、
+  //    どの状態が変わっても最新を publish したいため（DEV 限定の軽い処理）。
+  useEffect(() => {
+    publishXa3dSnapshot({
+      viewCount: (runA ? 1 : 0) + (runB ? 1 : 0),
+      anglesA: runA ? { primary: runA.geometry.primaryAngleDeg, secondary: runA.geometry.secondaryAngleDeg } : null,
+      anglesB: runB ? { primary: runB.geometry.primaryAngleDeg, secondary: runB.geometry.secondaryAngleDeg } : null,
+      separationDeg,
+      pointsA: runA?.centerline.length ?? 0,
+      pointsB: runB?.centerline.length ?? 0,
+      anchorCount: anchorList.length,
+      result: result
+        ? {
+            acceptable: result.acceptable,
+            lengthMm: result.lengthMm,
+            anchorReprojectionPx: result.anchorReprojectionPx,
+            matchReprojectionPx: result.matchReprojectionPx,
+            separationDeg: result.separationDeg,
+            points: result.points.length,
+            warnings: result.warnings.map((w) => ({ ...w })),
+            firstPoint: [...result.points[0]] as [number, number, number],
+            lastPoint: [...result.points[result.points.length - 1]] as [number, number, number],
+          }
+        : null,
+      refinement: refinement
+        ? {
+            beforePx: refinement.beforePx,
+            afterPx: refinement.afterPx,
+            primary: refinement.offsetDeg.primary,
+            secondary: refinement.offsetDeg.secondary,
+          }
+        : null,
+      steps: Object.fromEntries(steps.map((s) => [s.id, s.state])),
+    });
+  });
+
+  const goToStep = (id: string) => {
+    document.querySelector(`[data-step~="${id}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  };
+  const redoFrom = (id: string) => {
+    if (id === "views") {
+      setKeyA("");
+      setKeyB("");
+    }
+    setAnchors([]);
+    setPendingA(null);
+    reset();
+  };
+
+  return (
+    <div style={backdrop} onMouseDown={onClose}>
+      <div style={panel} onMouseDown={(e) => e.stopPropagation()} data-testid="xa3d-dialog">
+        <div style={title}>{t("xa3d.title")}</div>
+        <div style={body}>
+          <div style={content}>
+            {/* ── 方向の選択 ───────────────────────────────── */}
+            <div style={section} data-step="views">
+              <div style={sectionTitle}>{t("xa3d.views")}</div>
+              {runs.length < 2 ? (
+                <div style={hint} data-testid="xa3d-need-runs">
+                  {t("xa3d.needRuns")}
+                </div>
+              ) : null}
+              <div style={row}>
+                <label style={label}>
+                  {t("xa3d.viewA")}
+                  <select
+                    style={select}
+                    value={keyA}
+                    data-testid="xa3d-view-a"
+                    onChange={(e) => pickView("a", e.target.value)}
+                  >
+                    <option value="">—</option>
+                    {runs.map((r) => (
+                      <option key={r.imageId} value={r.imageId}>
+                        {r.label}
+                        {r.edited ? " *" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label style={label}>
+                  {t("xa3d.viewB")}
+                  <select
+                    style={select}
+                    value={keyB}
+                    data-testid="xa3d-view-b"
+                    onChange={(e) => pickView("b", e.target.value)}
+                  >
+                    <option value="">—</option>
+                    {runs
+                      .filter((r) => r.imageId !== keyA)
+                      .map((r) => (
+                        <option key={r.imageId} value={r.imageId}>
+                          {r.label}
+                          {r.edited ? " *" : ""}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              </div>
+              {separationDeg != null ? (
+                <div style={row}>
+                  <span style={metric} data-testid="xa3d-separation">
+                    {t("xa3d.separation")}: <b>{separationDeg.toFixed(1)}°</b>
+                  </span>
+                  {separationDeg < MIN_SEPARATION_DEG ? (
+                    <span style={bad}>{t("xa3d.warn.insufficientSeparation", { min: String(MIN_SEPARATION_DEG) })}</span>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+
+            {/* ── アンカー ─────────────────────────────────── */}
+            <div style={section} data-step="anchors">
+              <div style={sectionTitle}>{t("xa3d.anchors")}</div>
+              <div style={hint}>{t("xa3d.anchorHelp")}</div>
+              {runA && runB ? (
+                <>
+                  <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                    <CenterlineCanvas
+                      run={runA}
+                      testId="xa3d-curve-a"
+                      highlighted={pendingA}
+                      anchors={anchors.map((a) => a.ia)}
+                      onPick={(i) => setPendingA(i)}
+                    />
+                    <CenterlineCanvas
+                      run={runB}
+                      testId="xa3d-curve-b"
+                      highlighted={null}
+                      anchors={anchors.map((a) => a.ib)}
+                      onPick={(i) => {
+                        if (pendingA == null) return;
+                        setAnchors((prev) => [...prev, { ia: pendingA, ib: i }]);
+                        setPendingA(null);
+                        reset();
+                      }}
+                    />
+                  </div>
+                  <div style={row}>
+                    <span style={metric} data-testid="xa3d-anchor-count">
+                      {t("xa3d.anchorCount", { n: String(anchorList.length) })}
+                    </span>
+                    {anchorList.length < 3 ? <span style={warn}>{t("xa3d.warn.tooFewAnchors")}</span> : null}
+                    <button
+                      style={btn}
+                      data-testid="xa3d-anchor-clear"
+                      disabled={anchors.length === 0}
+                      onClick={() => {
+                        setAnchors([]);
+                        setPendingA(null);
+                        reset();
+                      }}
+                    >
+                      {t("xa3d.clearAnchors")}
+                    </button>
+                  </div>
+                </>
+              ) : null}
+            </div>
+
+            {/* ── 再構成 ───────────────────────────────────── */}
+            <div style={section} data-step="recon">
+              <div style={sectionTitle}>{t("xa3d.recon")}</div>
+              <div style={row}>
+                <button style={primaryBtn} disabled={!runA || !runB} data-testid="xa3d-run" onClick={run}>
+                  {t("xa3d.run")}
+                </button>
+                {error ? <span style={bad}>{error}</span> : null}
+              </div>
+              {result ? <ResultPanel result={result} refinement={refinement} /> : null}
+            </div>
+
+            {/* ── 3D 表示 ──────────────────────────────────── */}
+            {result?.acceptable ? (
+              <div style={section} data-step="recon">
+                <div style={sectionTitle}>{t("xa3d.preview")}</div>
+                <Preview3D points={result.points} />
+              </div>
+            ) : null}
+          </div>
+          <TaskStepRail steps={steps} onGo={goToStep} onRedo={redoFrom} />
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+          <button style={btn} onClick={onClose}>
+            {t("common.close")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* 結果                                                                */
+/* ------------------------------------------------------------------ */
+
+function ResultPanel({
+  result,
+  refinement,
+}: {
+  result: Recon3DResult;
+  refinement: GeometryRefinement | null;
+}) {
+  const { t } = useI18n();
+  return (
+    <div style={{ marginTop: 8 }} data-testid="xa3d-result" data-acceptable={result.acceptable ? "1" : "0"}>
+      <div style={row}>
+        <span style={metric} data-testid="xa3d-length">
+          {t("xa3d.length")}: <b>{result.lengthMm.toFixed(1)} mm</b>
+        </span>
+        <span style={metric} data-testid="xa3d-anchor-reproj">
+          {t("xa3d.anchorReprojection")}: <b>{fmt(result.anchorReprojectionPx)} px</b>
+        </span>
+      </div>
+      {refinement ? (
+        <div style={row}>
+          <span style={metric} data-testid="xa3d-refinement">
+            {t("xa3d.refined", {
+              before: fmt(refinement.beforePx),
+              after: fmt(refinement.afterPx),
+              dp: refinement.offsetDeg.primary.toFixed(2),
+              ds: refinement.offsetDeg.secondary.toFixed(2),
+            })}
+          </span>
+        </div>
+      ) : (
+        <div style={row}>
+          <span style={warn} data-testid="xa3d-not-refined">
+            {t("xa3d.notRefined")}
+          </span>
+        </div>
+      )}
+      {/* 🚨 参考値であることを書く。ここを品質の根拠だと読まれるのが一番まずい（§10.2.2）。 */}
+      <div style={row}>
+        <span style={faint} data-testid="xa3d-match-reproj">
+          {t("xa3d.matchReprojection", { px: fmt(result.matchReprojectionPx) })}
+        </span>
+      </div>
+      {result.warnings.map((w) => (
+        <div key={w.code} style={row}>
+          <span
+            style={w.blocking ? bad : warn}
+            data-testid={`xa3d-warn-${w.code}`}
+            data-blocking={w.blocking ? "1" : "0"}
+          >
+            {t(`xa3d.warn.${w.code}`, { value: fmt(w.value), threshold: fmt(w.threshold) })}
+          </span>
+        </div>
+      ))}
+      {/* 姿勢は復元できないことを結果画面に必ず出す（§10.3）。 */}
+      <div style={row}>
+        <span style={faint}>{t("xa3d.poseCaveat")}</span>
+      </div>
+    </div>
+  );
+}
+
+function fmt(v: number): string {
+  return Number.isFinite(v) ? v.toFixed(2) : "—";
+}
+
+/* ------------------------------------------------------------------ */
+/* 中心線のプレビュー（アンカー指定）                                   */
+/* ------------------------------------------------------------------ */
+
+const CURVE_W = 210;
+const CURVE_H = 210;
+
+/** 中心線を画素座標のまま等方に収めて描く（縦横比を変えない＝形が嘘にならない）。 */
+function CenterlineCanvas({
+  run,
+  testId,
+  highlighted,
+  anchors,
+  onPick,
+}: {
+  run: XaQcaRun;
+  testId: string;
+  highlighted: number | null;
+  anchors: number[];
+  onPick: (index: number) => void;
+}) {
+  const pts = run.centerline;
+  const box = useMemo(() => {
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const p of pts) {
+      x0 = Math.min(x0, p[0]);
+      x1 = Math.max(x1, p[0]);
+      y0 = Math.min(y0, p[1]);
+      y1 = Math.max(y1, p[1]);
+    }
+    const pad = 8;
+    const scale = Math.min((CURVE_W - 2 * pad) / Math.max(1e-6, x1 - x0), (CURVE_H - 2 * pad) / Math.max(1e-6, y1 - y0));
+    return { x0, y0, scale, pad };
+  }, [pts]);
+
+  const toScreen = (p: readonly [number, number]): [number, number] => [
+    box.pad + (p[0] - box.x0) * box.scale,
+    box.pad + (p[1] - box.y0) * box.scale,
+  ];
+
+  const click = (e: React.MouseEvent<SVGSVGElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const sx = e.clientX - r.left;
+    const sy = e.clientY - r.top;
+    let best = 0;
+    let bestD = Infinity;
+    for (let i = 0; i < pts.length; i++) {
+      const s = toScreen(pts[i]);
+      const d = (s[0] - sx) ** 2 + (s[1] - sy) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    onPick(best);
+  };
+
+  return (
+    <svg
+      width={CURVE_W}
+      height={CURVE_H}
+      data-testid={testId}
+      style={{ background: "#e9eef3", border: "1px solid #d5dde4", borderRadius: 3, cursor: "crosshair" }}
+      onClick={click}
+    >
+      <polyline points={pts.map((p) => toScreen(p).join(",")).join(" ")} fill="none" stroke="#2f6f9f" strokeWidth={1.6} />
+      {/* 端点は常にアンカー。丸で明示する（「勝手に使われている」状態にしない）。 */}
+      {[0, pts.length - 1].map((i) => {
+        const s = toScreen(pts[i]);
+        return <circle key={`end-${i}`} cx={s[0]} cy={s[1]} r={4} fill="none" stroke="#3f8f6f" strokeWidth={1.6} />;
+      })}
+      {anchors.map((i, k) => {
+        const s = toScreen(pts[i] ?? pts[0]);
+        return (
+          <g key={`a-${k}`}>
+            <circle cx={s[0]} cy={s[1]} r={4} fill="#a5642a" />
+            <text x={s[0] + 6} y={s[1] - 4} fontSize={10} fill="#a5642a">
+              {k + 1}
+            </text>
+          </g>
+        );
+      })}
+      {highlighted != null && pts[highlighted] ? (
+        <circle
+          cx={toScreen(pts[highlighted])[0]}
+          cy={toScreen(pts[highlighted])[1]}
+          r={6}
+          fill="none"
+          stroke="#b3452f"
+          strokeWidth={2}
+        />
+      ) : null}
+    </svg>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* 3D プレビュー                                                       */
+/* ------------------------------------------------------------------ */
+
+const PREVIEW = 260;
+
+/**
+ * 3D 中心線の簡易プレビュー（ドラッグで回転）。
+ *
+ * <p>ここで `viewer3d/`（VTK.js）を使っていないのは、あちらが**別ウィンドウ**（`#viewer3d`）で、
+ * ボリュームを起点にシーンを組む作りになっているため。中心線だけを別ウィンドウへ渡す経路は
+ * まだ無い（残件）。まずは結果を確認できることを優先した。
+ *
+ * <p>投影は正射影。**遠近感を付けない**のは、長さの見た目が歪まないようにするため。
+ */
+function Preview3D({ points }: { points: readonly Vec3[] }) {
+  const [rot, setRot] = useState({ yaw: 0.6, pitch: -0.4 });
+  const drag = useRef<{ x: number; y: number } | null>(null);
+
+  const { center, scale } = useMemo(() => {
+    let cx = 0;
+    let cy = 0;
+    let cz = 0;
+    for (const p of points) {
+      cx += p[0];
+      cy += p[1];
+      cz += p[2];
+    }
+    const n = Math.max(1, points.length);
+    const c: Vec3 = [cx / n, cy / n, cz / n];
+    let r = 1e-6;
+    for (const p of points) r = Math.max(r, Math.hypot(p[0] - c[0], p[1] - c[1], p[2] - c[2]));
+    return { center: c, scale: (PREVIEW / 2 - 14) / r };
+  }, [points]);
+
+  const project = (p: Vec3): [number, number] => {
+    const x = p[0] - center[0];
+    const y = p[1] - center[1];
+    const z = p[2] - center[2];
+    const cy = Math.cos(rot.yaw);
+    const sy = Math.sin(rot.yaw);
+    const cp = Math.cos(rot.pitch);
+    const sp = Math.sin(rot.pitch);
+    const x1 = x * cy + y * sy;
+    const y1 = -x * sy + y * cy;
+    const y2 = y1 * cp + z * sp;
+    // 画面: 右が +x1、下が +y2（患者 LPS の Z は頭側なので、上下は反転して見える）。
+    return [PREVIEW / 2 + x1 * scale, PREVIEW / 2 + y2 * scale];
+  };
+
+  return (
+    <svg
+      width={PREVIEW}
+      height={PREVIEW}
+      data-testid="xa3d-preview"
+      style={{ background: "#12181d", borderRadius: 3, cursor: "grab", touchAction: "none" }}
+      onMouseDown={(e) => {
+        drag.current = { x: e.clientX, y: e.clientY };
+      }}
+      onMouseMove={(e) => {
+        const d = drag.current;
+        if (!d) return;
+        setRot((r) => ({ yaw: r.yaw + (e.clientX - d.x) * 0.01, pitch: r.pitch + (e.clientY - d.y) * 0.01 }));
+        drag.current = { x: e.clientX, y: e.clientY };
+      }}
+      onMouseUp={() => {
+        drag.current = null;
+      }}
+      onMouseLeave={() => {
+        drag.current = null;
+      }}
+    >
+      <polyline
+        points={points.map((p) => project(p).join(",")).join(" ")}
+        fill="none"
+        stroke="#7fd1b9"
+        strokeWidth={2}
+      />
+      <circle cx={project(points[0])[0]} cy={project(points[0])[1]} r={3} fill="#f0c674" />
+    </svg>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+
+const backdrop: React.CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0,0,0,0.5)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  zIndex: 1000,
+};
+const panel: React.CSSProperties = {
+  background: "#f4f6f8",
+  color: "#22303c",
+  borderRadius: 6,
+  padding: 16,
+  minWidth: 620,
+  maxHeight: "88vh",
+  display: "flex",
+  flexDirection: "column",
+  overflow: "hidden",
+  boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+};
+const body: React.CSSProperties = { display: "flex", gap: 10, minHeight: 0, flex: 1 };
+const content: React.CSSProperties = { flex: 1, minWidth: 0, overflowY: "auto", paddingRight: 2 };
+const title: React.CSSProperties = { fontWeight: 600, fontSize: 15, marginBottom: 10 };
+const section: React.CSSProperties = { border: "1px solid #d5dde4", borderRadius: 4, padding: 10, marginBottom: 10 };
+const sectionTitle: React.CSSProperties = { fontSize: 12, fontWeight: 600, marginBottom: 6, color: "#44586a" };
+const row: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, marginTop: 6, flexWrap: "wrap" };
+const label: React.CSSProperties = { display: "flex", alignItems: "center", gap: 4, fontSize: 12 };
+const select: React.CSSProperties = { padding: "2px 4px", border: "1px solid #c3ced9", borderRadius: 3, maxWidth: 220 };
+const btn: React.CSSProperties = {
+  padding: "3px 10px",
+  border: "1px solid #c3ced9",
+  borderRadius: 3,
+  background: "#fff",
+  cursor: "pointer",
+  fontSize: 12,
+};
+const primaryBtn: React.CSSProperties = { ...btn, background: "#2f6f9f", color: "#fff", borderColor: "#2f6f9f" };
+const metric: React.CSSProperties = { fontSize: 12 };
+const faint: React.CSSProperties = { fontSize: 11, color: "#6b7c8c" };
+const hint: React.CSSProperties = { fontSize: 11, color: "#6b7c8c", lineHeight: 1.5 };
+const warn: React.CSSProperties = { fontSize: 11, color: "#a5642a" };
+const bad: React.CSSProperties = { fontSize: 11, color: "#b3452f", fontWeight: 600 };

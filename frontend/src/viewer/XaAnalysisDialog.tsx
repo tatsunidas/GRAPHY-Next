@@ -28,6 +28,8 @@ import { TaskStepRail } from "./TaskStepRail";
 import { ENGINE_ID } from "./Viewer2D";
 import { readVoiWindow } from "./viewportRead";
 import { isXaCalibrated } from "./xaCalibration";
+import { describeView, registerQcaRun } from "./xaRecon3dStore";
+import { readXaViewGeometry } from "./xaViewGeometryProvider";
 import {
   calibrationForImageId,
   clearXaCalibrationCache,
@@ -417,6 +419,25 @@ export function XaAnalysisDialog({
       unit: r.unit,
       warnings: r.warnings,
     });
+    // 3D QCA（A6a）で選べるように登録する。投影幾何が読めない装置・データでは登録しない
+    // （角度や SID/SOD が無ければ 3D にはできない。§10.1 の表）。
+    const view = readXaViewGeometry(imageId, saveContext.frameIndex);
+    if (view.geometry) {
+      registerQcaRun({
+        imageId,
+        seriesUid,
+        sopInstanceUid: saveContext.sopInstanceUid,
+        frameIndex: saveContext.frameIndex,
+        label: describeView(view.geometry, saveContext.frameIndex),
+        geometry: view.geometry,
+        centerline: r.centerline,
+        diameters: r.diameters,
+        diameterPathIndices: r.pathIndices,
+        unit: r.unit,
+        edited: r.provenance.edited,
+        at: Date.now(),
+      });
+    }
     // 中心線が変わったらエッジ修正の宛先も変わる。UI 側の token を追随させる
     // （合わないまま持ち回ると runQca が捨てて警告を出す）。
     if (r.centerlineToken !== edgeToken) {

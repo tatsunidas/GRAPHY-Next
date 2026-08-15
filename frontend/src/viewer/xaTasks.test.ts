@@ -10,6 +10,9 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  type Qca3dTaskState,
+  QCA3D_STEPS,
+  deriveQca3dSteps,
   QCA_STEPS,
   QLV_STEPS,
   clearedBy,
@@ -234,6 +237,7 @@ describe("deriveQcaSteps", () => {
 describe.each([
   ["QCA", QCA_STEPS],
   ["QLV", QLV_STEPS],
+  ["3D QCA", QCA3D_STEPS],
 ])("段の繋がり（%s）", (_name, STEPS) => {
   const order = STEPS.map((s) => s.id);
 
@@ -359,5 +363,79 @@ describe("deriveQlvSteps", () => {
 
   it("ED の輪郭をやり直しても ES は残る", () => {
     expect(clearedBy("edContour", QLV_STEPS)).toEqual(["edContour"]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// 3D QCA — `fw/angio-design.md` §10.2 / A6a
+// ─────────────────────────────────────────────────────────────────────────
+
+describe("deriveQca3dSteps", () => {
+  function st(over: Partial<Qca3dTaskState> = {}): Qca3dTaskState {
+    return {
+      viewCount: 2,
+      separationDeg: 75,
+      minSeparationDeg: 30,
+      anchorCount: 5,
+      hasResult: true,
+      acceptable: true,
+      blockingWarning: null,
+      refined: true,
+      canSave: false,
+      saved: false,
+      ...over,
+    };
+  }
+  const by = (s: Qca3dTaskState) => Object.fromEntries(deriveQca3dSteps(s).map((x) => [x.id, x]));
+
+  it("方向が 1 つなら最初の段が active、後続は todo のまま", () => {
+    const m = by(st({ viewCount: 1, separationDeg: null, hasResult: false }));
+    expect(m.views.state).toBe("active");
+    expect(m.anchors.state).toBe("todo");
+    expect(m.recon.state).toBe("todo");
+  });
+
+  it("視点が近すぎれば方向の段が invalid になる", () => {
+    const m = by(st({ separationDeg: 12, hasResult: false }));
+    expect(m.views.state).toBe("invalid");
+    expect(m.views.reasonKey).toBe("xa3d.step.reason.insufficientSeparation");
+  });
+
+  it("角度差は注記に数値で出る（『十分』とだけ言わない）", () => {
+    expect(by(st()).views.note).toEqual({ key: "xa3d.step.note.separation", params: { deg: "75" } });
+  });
+
+  it("🚨 アンカーが端点 2 つだけなら done ではなく skipped", () => {
+    // 2 点では角度補正が退化して掛けられない（§10.2.2）。「やった」と同じ顔にしない。
+    const m = by(st({ anchorCount: 2 }));
+    expect(m.anchors.state).toBe("skipped");
+    expect(m.anchors.reasonKey).toBe("xa3d.step.reason.tooFewAnchors");
+  });
+
+  it("アンカーがゼロなら invalid（幾何を検算できない）", () => {
+    const m = by(st({ anchorCount: 0 }));
+    expect(m.anchors.state).toBe("invalid");
+    expect(m.anchors.reasonKey).toBe("xa3d.step.reason.geometryUnverified");
+  });
+
+  it("結果が棄却されたら理由コードがそのまま段の理由になる", () => {
+    const m = by(st({ acceptable: false, blockingWarning: "highReprojectionError" }));
+    expect(m.recon.state).toBe("invalid");
+    expect(m.recon.reasonKey).toBe("xa3d.step.reason.highReprojectionError");
+  });
+
+  it("補正が掛かったかどうかを注記で見分けられる", () => {
+    expect(by(st({ refined: true })).recon.note).toEqual({ key: "xa3d.step.note.refined" });
+    expect(by(st({ refined: false })).recon.note).toEqual({ key: "xa3d.step.note.notRefined" });
+  });
+
+  it("保存は未実装なので常に invalid（結果を出す前にそれが見える）", () => {
+    expect(by(st()).save.state).toBe("invalid");
+    expect(by(st()).save.reasonKey).toBe("xa3d.step.reason.saveNotImplemented");
+  });
+
+  it("方向をやり直すとアンカーも捨てる（別の 2 方向の画素座標になるため）", () => {
+    expect(clearedBy("views", QCA3D_STEPS)).toEqual(["views", "anchors"]);
+    expect(invalidatedBy("views", QCA3D_STEPS)).toEqual(["anchors", "recon", "save"]);
   });
 });

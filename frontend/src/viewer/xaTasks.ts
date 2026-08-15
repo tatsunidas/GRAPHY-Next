@@ -83,7 +83,9 @@ export type ManualInputKey =
   | "reference"
   | "frames"
   | "edContour"
-  | "esContour";
+  | "esContour"
+  | "views"
+  | "anchors";
 
 /** 導出された段（表示用）。 */
 export interface TaskStep extends TaskStepDef {
@@ -359,6 +361,112 @@ export function deriveQlvSteps(s: QlvTaskState): TaskStep[] {
 
       case "save":
         if (!s.canSave) return { ...def, state: "invalid", reasonKey: "xa.step.reason.noReference" };
+        return { ...def, state: s.saved ? "done" : "todo" };
+
+      default:
+        return { ...def, state: "todo" };
+    }
+  });
+
+  const first = steps.find((x) => x.state === "todo");
+  if (first) first.state = "active";
+  return steps;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 3D QCA — `fw/angio-design.md` §10.2 / A6a
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * 3D QCA タスクの段。
+ *
+ * <p>QCA / QLV と違い、**この段は 1 枚の画像の上では完結しない**（2 方向が要る）。
+ * だから最初の段が「方向を選ぶ」になっている。
+ *
+ * <p>保存の段を「実装していない」という理由で `invalid` のまま置いてあるのは意図的。
+ * 結果が出るのに保存できないことを、結果を出す前に見せておきたい。
+ */
+export const QCA3D_STEPS: readonly TaskStepDef[] = [
+  {
+    id: "views",
+    labelKey: "xa3d.step.views",
+    // 🚨 アンカーは**特定の 2 方向の画素座標**なので、方向を選び直したら意味を失う。
+    invalidates: ["anchors", "recon"],
+    owns: ["views"],
+    clears: ["views", "anchors"],
+  },
+  { id: "anchors", labelKey: "xa3d.step.anchors", invalidates: ["recon"], owns: ["anchors"], clears: ["anchors"] },
+  { id: "recon", labelKey: "xa3d.step.recon", invalidates: ["save"], owns: [], clears: [] },
+  { id: "save", labelKey: "xa.step.save", invalidates: [], owns: [], clears: [] },
+] as const;
+
+export interface Qca3dTaskState {
+  /** 選べている方向の数（0〜2）。 */
+  viewCount: number;
+  /** 2 方向の視線がなす角 [deg]。未選択なら null。 */
+  separationDeg: number | null;
+  minSeparationDeg: number;
+  /** アンカーの数（端点 2 つを含む）。 */
+  anchorCount: number;
+  hasResult: boolean;
+  acceptable: boolean;
+  /** 結果を止めている警告コード（`ReconWarningCode`）。 */
+  blockingWarning: string | null;
+  /** 角度補正が掛かったか。 */
+  refined: boolean;
+  /** 保存できるか（A6a では常に false＝未実装）。 */
+  canSave: boolean;
+  saved: boolean;
+}
+
+/**
+ * 3D QCA の段の状態を導出する。
+ *
+ * <p>🚨 **アンカーが端点 2 つだけの状態を `done` にしない。** 2 点では角度補正が退化して
+ * 掛けられず（§10.2.2）、装置の機械誤差がそのまま形の歪みになる。**「飛ばした」として出す** ——
+ * §21.6 の「未校正を done と同じ顔で出さない」と同じ話で、こちらのほうが害が大きい
+ * （未校正なら単位が px になって気付けるが、こちらは**もっともらしい mm が出る**）。
+ */
+export function deriveQca3dSteps(s: Qca3dTaskState): TaskStep[] {
+  const steps: TaskStep[] = QCA3D_STEPS.map((def): TaskStep => {
+    switch (def.id) {
+      case "views":
+        if (s.viewCount < 2) return { ...def, state: "todo" };
+        if (s.separationDeg != null && s.separationDeg < s.minSeparationDeg) {
+          return { ...def, state: "invalid", reasonKey: "xa3d.step.reason.insufficientSeparation" };
+        }
+        return {
+          ...def,
+          state: "done",
+          note: {
+            key: "xa3d.step.note.separation",
+            params: { deg: s.separationDeg != null ? s.separationDeg.toFixed(0) : "?" },
+          },
+        };
+
+      case "anchors":
+        if (s.viewCount < 2) return { ...def, state: "todo" };
+        if (s.anchorCount === 0) {
+          return { ...def, state: "invalid", reasonKey: "xa3d.step.reason.geometryUnverified" };
+        }
+        if (s.anchorCount < 3) {
+          return { ...def, state: "skipped", reasonKey: "xa3d.step.reason.tooFewAnchors" };
+        }
+        return { ...def, state: "done", note: { key: "xa3d.step.note.anchors", params: { n: String(s.anchorCount) } } };
+
+      case "recon":
+        if (!s.hasResult) return { ...def, state: "todo" };
+        if (!s.acceptable) {
+          return { ...def, state: "invalid", reasonKey: `xa3d.step.reason.${s.blockingWarning ?? "rejected"}` };
+        }
+        return {
+          ...def,
+          state: "done",
+          note: { key: s.refined ? "xa3d.step.note.refined" : "xa3d.step.note.notRefined" },
+        };
+
+      case "save":
+        if (!s.canSave) return { ...def, state: "invalid", reasonKey: "xa3d.step.reason.saveNotImplemented" };
         return { ...def, state: s.saved ? "done" : "todo" };
 
       default:

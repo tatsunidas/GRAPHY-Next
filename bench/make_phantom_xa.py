@@ -675,6 +675,19 @@ def build_recon3d(out_dir: str) -> dict:
                     }
                 )
                 view_entry["angleError"] = entry
+        # この視点での**真値の 2D 中心線**（画素）。3D 真値と同じ間引きで書くので 1:1 に対応する。
+        # これがあると、アプリが画像から抽出した中心線を真値と直接比べられる（実機検証で使う）。
+        view_entry["branchesPx"] = []
+        for br in branches:
+            pts = br["points"]
+            step = max(1, len(pts) // 60)
+            col, row, _ = _project_points(pts[::step], primary, secondary)
+            view_entry["branchesPx"].append(
+                {
+                    "id": br["id"],
+                    "pointsPx": [[round(float(c), 3), round(float(r), 3)] for c, r in zip(col, row)],
+                }
+            )
         views.append(view_entry)
 
     truth_branches = []

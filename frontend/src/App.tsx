@@ -13,6 +13,7 @@ import { MainScreen } from "./mainscreen/MainScreen";
 import { Viewer2DScreen } from "./viewer2d/Viewer2DScreen";
 import { MprScreen } from "./mpr/MprScreen";
 import { Viewer3DScreen } from "./viewer3d/Viewer3DScreen";
+import { ensureQcaRunChannel } from "./viewer/xaRecon3dStore";
 import { SlicerScreen } from "./slicer/SlicerScreen";
 import { CurvedMprScreen } from "./curvedmpr/CurvedMprScreen";
 import { QRScreen } from "./qr/QRScreen";
@@ -124,6 +125,12 @@ export function App() {
     if (screen !== "") return;
     void runUpdateCheck(false);
   }, [screen]);
+
+  // 3D QCA（A6a）の登録簿の中継。2D ビューアは 1 ウィンドウを使い回すため、方向を跨いで
+  // 覚えておく役がどこかに要る。常時開いているこのウィンドウが引き受ける。
+  useEffect(() => {
+    ensureQcaRunChannel();
+  }, []);
 
   // 他ウィンドウの DB 変更（Slicer の派生シリーズ保存・DbAdmin 編集等）を受けて、
   // このウィンドウの一覧を現在の検索条件で再読込する（MainScreen は reloadKey+dbVersion で再検索）。

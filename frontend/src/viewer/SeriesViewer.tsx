@@ -13,6 +13,8 @@ import { buildSeriesLayout, buildLayoutFromDto, DEFAULT_AXES, type AxisSpec, typ
 import CineControls from "./CineControls";
 import { XaAnalysisDialog } from "./XaAnalysisDialog";
 import { XaQlvDialog } from "./XaQlvDialog";
+import { Xa3dQcaDialog } from "./Xa3dQcaDialog";
+import { useQcaRuns } from "./xaRecon3dStore";
 import { prewarmXaDataset, readXaCineSource, type XaCineSource } from "./xaCine";
 import { downloadBytes, exportFramesAsZip } from "./xaFrameExport";
 import {
@@ -339,6 +341,9 @@ export function SeriesViewer({
   // 校正 / QCA ダイアログ（fw/angio-design.md §7.3 / §8）。
   const [xaDialogOpen, setXaDialogOpen] = useState(false);
   const [qlvDialogOpen, setQlvDialogOpen] = useState(false);
+  const [xa3dDialogOpen, setXa3dDialogOpen] = useState(false);
+  /** 3D QCA に使える「2D QCA 実行済みの方向」。2 つ揃うまでボタンは押せない。 */
+  const qcaRuns = useQcaRuns();
   // 空間校正の確定/解除は imageId を変えないため、Viewer2D にメタデータを読み直させる鍵。
   const [calibVersion, setCalibVersion] = useState(0);
   // 連番 PNG エクスポート（fw/angio-design.md §14.3）。
@@ -911,6 +916,18 @@ export function SeriesViewer({
                   >
                     {t("qlv.open")}
                   </button>
+                  {/* 3D QCA（A6a）。2 方向で 2D QCA を済ませてから開く（§10.2）。 */}
+                  <button
+                    style={btn}
+                    data-testid="xa3d-open"
+                    disabled={qcaRuns.length < 2}
+                    onClick={() => setXa3dDialogOpen(true)}
+                    title={
+                      qcaRuns.length < 2 ? t("xa3d.needRuns") : t("xa3d.title")
+                    }
+                  >
+                    {t("xa3d.open")}
+                  </button>
                   <button
                     style={btn}
                     data-testid="xa-export-frames"
@@ -1078,6 +1095,7 @@ export function SeriesViewer({
           }}
         />
       )}
+      {xa3dDialogOpen && <Xa3dQcaDialog onClose={() => setXa3dDialogOpen(false)} />}
       {qlvDialogOpen && displayImageIds.length > 0 && (
         <XaQlvDialog
           imageIds={displayImageIds}
