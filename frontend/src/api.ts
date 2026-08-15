@@ -365,6 +365,12 @@ export interface Qca3dSrRequest {
   visibleFractionA: number | null;
   visibleFractionB: number | null;
   calibration: string | null;
+  /** 狭窄率は比なので半値法の系統誤差がほぼ打ち消される。MLD/RVD の絶対値には残る。 */
+  percentDiameterStenosis: number | null;
+  percentAreaStenosis: number | null;
+  mldMm: number | null;
+  rvdMm: number | null;
+  lesionLengthMm: number | null;
 }
 
 /** 3D QCA の結果を Comprehensive SR として保存する。 */

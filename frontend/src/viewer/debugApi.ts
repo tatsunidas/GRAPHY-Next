@@ -377,6 +377,14 @@ export interface Xa3dDebugSnapshot {
     minEquivalentDiameterMm: number | null;
     medianMeasurementAngleDeg: number | null;
   } | null;
+  /** 3D の狭窄率。断面が出せなければ null。 */
+  stenosis: {
+    percentDiameterStenosis: number;
+    percentAreaStenosis: number;
+    mldMm: number;
+    rvdMm: number;
+    lesionLengthMm: number;
+  } | null;
   /** 短縮の少ない撮影角度の候補。 */
   workingAngles: { primary: number; secondary: number; visibleFraction: number }[];
   refinement: { beforePx: number; afterPx: number; primary: number; secondary: number } | null;

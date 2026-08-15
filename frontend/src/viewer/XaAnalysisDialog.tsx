@@ -563,7 +563,12 @@ export function XaAnalysisDialog({
           {picks.length === 0 ? (
             <div style={hint}>{t("xa.analysis.needLength")}</div>
           ) : (
-            <select value={selected} onChange={(e) => setSelected(Number(e.target.value))} style={select}>
+            <select
+              value={selected}
+              onChange={(e) => setSelected(Number(e.target.value))}
+              style={select}
+              data-testid="xa-analysis-pick"
+            >
               {picks.map((p, i) => (
                 <option key={p.uid} value={i}>
                   #{i + 1} — {p.lengthPx.toFixed(1)} px

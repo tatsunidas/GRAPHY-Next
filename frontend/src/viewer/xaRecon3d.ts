@@ -68,6 +68,7 @@ import {
   viewSeparationDeg,
   withAngleOffset,
 } from "./xaGeometry";
+import { referenceDiameters } from "./qca";
 
 export type Vec2 = readonly [number, number];
 
@@ -981,4 +982,100 @@ function sampleProfileByFraction(p: DiameterProfile, frac: number): number | nul
   const t1 = idx[j];
   const u = t1 > t0 ? (targetPath - t0) / (t1 - t0) : 0;
   return p.diameters[j - 1] + (p.diameters[j] - p.diameters[j - 1]) * u;
+}
+
+/* ------------------------------------------------------------------ */
+/* 3D の狭窄率（§10 / A6a）                                            */
+/* ------------------------------------------------------------------ */
+
+export interface Stenosis3DResult {
+  /** 断面を測れた点の、3D 中心線に沿った位置 [mm]。 */
+  positionsMm: number[];
+  /** 同じ点での等価直径 [mm]。 */
+  diametersMm: number[];
+  /** 参照径の当てはめ [mm]。 */
+  referenceMm: number[];
+  /** `positionsMm` 上の添字。3D 点列の添字へ戻すのに使う。 */
+  pointIndices: number[];
+  mldMm: number;
+  /** MLD の位置（3D 点列の添字）。 */
+  mldPointIndex: number;
+  rvdMm: number;
+  percentDiameterStenosis: number;
+  percentAreaStenosis: number;
+  lesionLengthMm: number;
+}
+
+/**
+ * 3D 断面プロファイルから狭窄率を出す。
+ *
+ * <h3>参照径は 2D QCA と同じ当てはめを使う</h3>
+ * `qca.ts` の {@link referenceDiameters}（狭窄側を捨てる反復 1 次回帰）をそのまま呼ぶ。
+ * **2D と 3D で別々の参照径モデルを持たない**——同じ名前の量が別の定義で出ると、
+ * どちらを見ているのか分からなくなる。
+ *
+ * <h3>🔑 半値法の 13% 過小は、%DS では（ほぼ）打ち消される</h3>
+ * 参照径の当てはめは径について 1 次同次で、狭窄側を捨てる判定
+ * （`d ≥ a·s + b`）も径を一律に定数倍しても変わらない。したがって
+ * **径をすべて k 倍しても %DS と %AS は厳密に不変**（vitest で固定してある）。
+ * 実際には係数が半径に依存する（§16.4）ぶんだけ残るが、MLD/RVD の絶対値ほどには効かない。
+ *
+ * <p>⚠️ 断面を測れない点（`sections` が null）は**飛ばす**。詰めて計算すると
+ * 位置がずれるので、位置は 3D 中心線に沿った実距離で持つ。
+ */
+export function stenosis3d(
+  points: readonly Vec3[],
+  profile: CrossSectionProfile,
+): Stenosis3DResult | null {
+  // 3D 中心線に沿った累積距離。
+  const cum: number[] = [0];
+  for (let i = 1; i < points.length; i++) {
+    cum.push(
+      cum[i - 1] +
+        Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1], points[i][2] - points[i - 1][2]),
+    );
+  }
+  const positionsMm: number[] = [];
+  const diametersMm: number[] = [];
+  const pointIndices: number[] = [];
+  for (let i = 0; i < profile.sections.length && i < points.length; i++) {
+    const s = profile.sections[i];
+    if (!s || !(s.equivalentDiameterMm > 0)) continue;
+    positionsMm.push(cum[i]);
+    diametersMm.push(s.equivalentDiameterMm);
+    pointIndices.push(i);
+  }
+  if (diametersMm.length < 3) return null;
+
+  const referenceMm = referenceDiameters(positionsMm, diametersMm);
+
+  let mldIdx = 0;
+  let mld = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < diametersMm.length; i++) {
+    if (diametersMm[i] < mld) {
+      mld = diametersMm[i];
+      mldIdx = i;
+    }
+  }
+  const rvd = referenceMm[mldIdx] ?? mld;
+  const ratio = rvd > 0 ? mld / rvd : 1;
+
+  // 病変長 = MLD を含む「径が参照径を下回る」連続区間（2D と同じ定義）。
+  let lo = mldIdx;
+  while (lo - 1 >= 0 && diametersMm[lo - 1] < referenceMm[lo - 1]) lo--;
+  let hi = mldIdx;
+  while (hi + 1 < diametersMm.length && diametersMm[hi + 1] < referenceMm[hi + 1]) hi++;
+
+  return {
+    positionsMm,
+    diametersMm,
+    referenceMm,
+    pointIndices,
+    mldMm: mld,
+    mldPointIndex: pointIndices[mldIdx],
+    rvdMm: rvd,
+    percentDiameterStenosis: Math.max(0, (1 - ratio) * 100),
+    percentAreaStenosis: Math.max(0, (1 - ratio * ratio) * 100),
+    lesionLengthMm: Math.abs((positionsMm[hi] ?? 0) - (positionsMm[lo] ?? 0)),
+  };
 }

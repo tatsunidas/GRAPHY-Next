@@ -47,6 +47,11 @@ final class Qca3dSrWriter {
     private static final Code MIN_AREA = new Code("MINAREA", "99GRAPHYNEXT", null, "Minimum Cross-sectional Area");
     private static final Code MIN_EQ_DIAM =
             new Code("MINEQD", "99GRAPHYNEXT", null, "Minimum Equivalent Diameter");
+    private static final Code PCT_DS = new Code("PCTDS", "99GRAPHYNEXT", null, "Percent Diameter Stenosis (3D)");
+    private static final Code PCT_AS = new Code("PCTAS", "99GRAPHYNEXT", null, "Percent Area Stenosis (3D)");
+    private static final Code MLD = new Code("MLD", "99GRAPHYNEXT", null, "Minimum Lumen Diameter (3D)");
+    private static final Code RVD = new Code("RVD", "99GRAPHYNEXT", null, "Reference Vessel Diameter (3D)");
+    private static final Code LESION_LEN = new Code("LESIONLEN", "99GRAPHYNEXT", null, "Lesion Length (3D)");
     private static final Code SEPARATION = new Code("VIEWSEP", "99GRAPHYNEXT", null, "Angle Between View Directions");
     private static final Code ANCHORS = new Code("ANCHORS", "99GRAPHYNEXT", null, "Anchor Point Count");
     private static final Code ANCHOR_ERR =
@@ -124,6 +129,22 @@ final class Qca3dSrWriter {
             if (req.minEquivalentDiameterMm() != null) {
                 items.add(num(MIN_EQ_DIAM, req.minEquivalentDiameterMm(), "mm"));
             }
+            // 狭窄率は比なので半値法の系統誤差がほぼ打ち消される。MLD/RVD の絶対値には残る。
+            if (req.percentDiameterStenosis() != null) {
+                items.add(num(PCT_DS, req.percentDiameterStenosis(), "%"));
+            }
+            if (req.percentAreaStenosis() != null) {
+                items.add(num(PCT_AS, req.percentAreaStenosis(), "%"));
+            }
+            if (req.mldMm() != null) {
+                items.add(num(MLD, req.mldMm(), "mm"));
+            }
+            if (req.rvdMm() != null) {
+                items.add(num(RVD, req.rvdMm(), "mm"));
+            }
+            if (req.lesionLengthMm() != null) {
+                items.add(num(LESION_LEN, req.lesionLengthMm(), "mm"));
+            }
         }
         items.add(num(SEPARATION, req.separationDeg(), "deg"));
         items.add(num(ANCHORS, req.anchorCount(), "{count}"));
@@ -165,7 +186,8 @@ final class Qca3dSrWriter {
             sb.append("Cross-sectional area assumes the ellipse axes coincide with the two measurement ")
                     .append("directions; it is exact for a circular section and for orthogonal views. ")
                     .append("Diameters from the half-maximum method are about 13% too small, so areas are ")
-                    .append("about 24% too small.");
+                    .append("about 24% too small. Percent stenosis is a ratio and largely cancels this bias; ")
+                    .append("absolute MLD and RVD do not.");
         } else {
             sb.append("NOT SPATIALLY CALIBRATED: cross-sectional areas are not reported.");
         }

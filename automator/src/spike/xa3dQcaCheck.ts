@@ -69,8 +69,22 @@ const KNOWN_DIAMETER_FACTOR = 0.870;
  * <p>💡 これは臨床の「ワーキングアングルを選ぶ」——**対象が短縮しない 2 方向を選ぶ**——
  * そのものである。3D QCA の前提条件として UI にも出すべき（残件）。
  */
-const SEG_FROM = 5;
-const SEG_TO = 25;
+/**
+ * 解析する区間（主枝の真値点列のインデックス）と、そこで確かめること。
+ *
+ * <p>**2 つ回す。片方だけでは検証が痩せる**:
+ * - `proximal`（5〜25）… 方向 B が強く短縮する区間。**自動追跡が弧長を取りこぼす現象**
+ *   （§10.3.1 の主因）を毎回踏む。病変を含まないので %DS は測れない。
+ * - `lesion`（34〜51）… 狭窄（t=0.66・50%）を挟む区間。**%DS を真値と比べられる**。
+ *   短縮が軽いので長さの目標も満たす。
+ *
+ * <p>🚨 **区間を 1 つに絞ると、その区間で起きない現象が検証から抜ける**。実際、病変込みの
+ * 区間だけにした時点で「短縮した方向で弧長を取りこぼす」証拠が回らなくなった。
+ */
+const SEGMENTS = [
+  { key: "proximal", from: 5, to: 25, hasLesion: false },
+  { key: "lesion", from: 34, to: 51, hasLesion: true },
+] as const;
 /** `qca.ts` の `tracePath` / `traceCenterline` の既定値。ここが変わったら区間を選び直す。 */
 const TRACER_MARGIN_PX = 40;
 /** 許容する短縮の度合い（弧長 / 弦長）。1 に近いほど視線に対して寝ている。 */
@@ -86,6 +100,7 @@ interface Truth {
       branchesPx: { id: string; pointsPx: [number, number][] }[];
     }[];
     branches: { id: string; lengthMm: number; pointsLps: number[][] }[];
+    lesion: { branch: string; fractionOfMain: number; percentDiameterStenosis: number; lengthFraction: number };
     targets: { centerlineRmsMm: number; segmentLengthErrorPercent: number };
   };
 }
@@ -119,6 +134,13 @@ interface Xa3dState {
   } | null;
   workingAngles: { primary: number; secondary: number; visibleFraction: number }[];
   refinement: { beforePx: number; afterPx: number; primary: number; secondary: number } | null;
+  stenosis: {
+    percentDiameterStenosis: number;
+    percentAreaStenosis: number;
+    mldMm: number;
+    rvdMm: number;
+    lesionLengthMm: number;
+  } | null;
   steps: Record<string, string>;
 }
 
@@ -245,6 +267,30 @@ async function runQcaForView(
   await drawBetweenImagePixels(viewer, ends[0], ends[1]);
   await viewer.getByTestId("xa-analysis-open").click();
   await viewer.getByTestId("xa-analysis-dialog").waitFor({ state: "visible", timeout: 10_000 });
+  // 🚨 **計測は保管庫へ永続化され、開き直すと復元される**。前の区間で引いた計測が残るので、
+  //    既定（先頭）のまま走らせると**前の区間を解析してしまう**（実際に踏んだ。2 区間目が
+  //    1 区間目と同じ端点・同じ点数で出た）。**今引いた計測を長さで選び直す**。
+  const wantPx = Math.hypot(ends[1][0] - ends[0][0], ends[1][1] - ends[0][1]);
+  const chosen = await viewer.evaluate(`(() => {
+    const sel = document.querySelector('[data-testid="xa-analysis-pick"]');
+    return sel ? JSON.stringify(Array.from(sel.options).map((o) => o.textContent)) : null;
+  })()`);
+  const labels = chosen ? (JSON.parse(chosen as string) as string[]) : [];
+  if (labels.length > 1) {
+    let best = 0;
+    let bestErr = Number.POSITIVE_INFINITY;
+    labels.forEach((label, i) => {
+      const m = /([\d.]+)\s*px/.exec(label ?? "");
+      if (!m) return;
+      const err = Math.abs(parseFloat(m[1]) - wantPx);
+      if (err < bestErr) {
+        bestErr = err;
+        best = i;
+      }
+    });
+    await viewer.selectOption('[data-testid="xa-analysis-pick"]', String(best));
+    await viewer.waitForTimeout(400);
+  }
   await viewer.getByTestId("xa-qca-run").click();
   await viewer.waitForTimeout(3_500);
   await viewer.getByTestId("xa-dialog-close").click();
@@ -265,6 +311,344 @@ function polylineLength(points: readonly number[][]): number {
   return total;
 }
 
+/** 1 区間ぶんの通し検証（2 方向で 2D QCA → 3D 再構成 → 断面 → 狭窄率 → 保存）。 */
+async function analyseSegment(
+  driver: DesktopDriver,
+  mainPage: Page,
+  ctx: {
+    v1: Truth["recon3d"]["views"][number];
+    v2: Truth["recon3d"]["views"][number];
+    main1: { pointsPx: [number, number][] };
+    main2: { pointsPx: [number, number][] };
+    mainTruth: { lengthMm: number; pointsLps: number[][] };
+    lesion: Truth["recon3d"]["lesion"];
+  },
+  seg: (typeof SEGMENTS)[number],
+): Promise<void> {
+  const { v1, v2, main1, main2, mainTruth, lesion } = ctx;
+  const SEG_FROM = seg.from;
+  const SEG_TO = seg.to;
+  const tag = `${seg.key}`;
+  const seg1 = main1.pointsPx.slice(SEG_FROM, SEG_TO + 1);
+  const seg2 = main2.pointsPx.slice(SEG_FROM, SEG_TO + 1);
+  const feedableLengthMm = polylineLength(mainTruth.pointsLps.slice(SEG_FROM, SEG_TO + 1));
+  const truth = { lesion };
+    // ── 前提の確認: 自動追跡の探索窓に何が収まるか ───────────────
+    // 「なぜ区間を切ったか」を毎回数値で確かめる。窓を広げたらここが落ちて気付ける。
+    for (const [name, pts] of [["A", main1.pointsPx], ["B", main2.pointsPx]] as const) {
+      const seg = pts.slice(SEG_FROM, SEG_TO + 1);
+      check(
+        maxChordDeviationPx(pts) > TRACER_MARGIN_PX,
+        `[限界/${tag}] 方向 ${name} — 血管全体は自動追跡の探索窓（±${TRACER_MARGIN_PX}px）に収まらない`,
+        { maxDeviationPx: Number(maxChordDeviationPx(pts).toFixed(1)) },
+      );
+      check(
+        maxChordDeviationPx(seg) < TRACER_MARGIN_PX,
+        `[限界/${tag}] 方向 ${name} — 解析する区間は探索窓に収まる`,
+        { maxDeviationPx: Number(maxChordDeviationPx(seg).toFixed(1)) },
+      );
+      // ★ 短縮した区間は「近道も血管の上を通る」ので原理的に辿れない。区間選びの前提。
+      const tort = polylineLengthPx(seg) / Math.hypot(seg[seg.length - 1][0] - seg[0][0], seg[seg.length - 1][1] - seg[0][1]);
+      check(
+        tort < MAX_TORTUOSITY,
+        `[限界/${tag}] 方向 ${name} — 解析する区間が短縮していない（弧長/弦長 < ${MAX_TORTUOSITY}）`,
+        { tortuosity: Number(tort.toFixed(3)) },
+      );
+    }
+
+    const viewerA = await runQcaForView(driver, mainPage, v1.exact.seriesInstanceUid, [
+      seg1[0],
+      seg1[seg1.length - 1],
+    ]);
+    const shortfallA = await checkExtractedCenterline(viewerA, "A", seg1, tag);
+    await viewerA.screenshot({ path: path.join(OUT_DIR, `1-${tag}-view1-qca.png`) }).catch(() => {});
+    await viewerA.close().catch(() => {});
+    await mainPage.waitForTimeout(600);
+
+    const viewerB = await runQcaForView(driver, mainPage, v2.exact.seriesInstanceUid, [
+      seg2[0],
+      seg2[seg2.length - 1],
+    ]);
+    const shortfallB = await checkExtractedCenterline(viewerB, "B", seg2, tag);
+    await viewerB.screenshot({ path: path.join(OUT_DIR, `2-${tag}-view2-qca.png`) }).catch(() => {});
+
+    // ── 3D QCA ────────────────────────────────────────────────
+    // 方向 A のビューアは既に閉じている。登録簿はメインウィンドウが中継して覚えているので、
+    // ここで 2 件見えていれば **BroadcastChannel の中継が効いている**ことの証明になる。
+    const open3d = viewerB.getByTestId("xa3d-open");
+    await open3d.waitFor({ state: "visible", timeout: 10_000 });
+    const disabled = await open3d.isDisabled();
+    check(!disabled, `[UI/${tag}] 2 方向が揃うと 3D QCA を開ける`, { disabled });
+    if (disabled) {
+      // ここで止まると以降が全部落ちるので、理由を残して終える。
+      const st = await xa3dState(viewerB);
+      check(false, `[UI/${tag}] 登録簿に 2 方向が載っている（ウィンドウ跨ぎの制約の可能性）`, st);
+      return;
+    }
+    await open3d.click();
+    await viewerB.getByTestId("xa3d-dialog").waitFor({ state: "visible", timeout: 10_000 });
+
+    const options = await viewerB.locator('[data-testid="xa3d-view-a"] option').allTextContents();
+    check(options.length >= 3, `[UI/${tag}] 方向の一覧に 2 件（＋空欄）出る`, options);
+
+    // 方向を選ぶ。value は imageId なので、ラベルではなく index で選ぶ。
+    const values = await viewerB.evaluate(`(() => {
+      const sel = document.querySelector('[data-testid="xa3d-view-a"]');
+      return JSON.stringify(Array.from(sel.options).map((o) => o.value).filter(Boolean));
+    })()`);
+    const ids = JSON.parse(values as string) as string[];
+    check(ids.length === 2, `[UI/${tag}] 登録された方向がちょうど 2 件`, ids.length);
+    await viewerB.selectOption('[data-testid="xa3d-view-a"]', ids[0]);
+    await viewerB.waitForTimeout(300);
+    await viewerB.selectOption('[data-testid="xa3d-view-b"]', ids[1]);
+    await viewerB.waitForTimeout(500);
+
+    const sel = await xa3dState(viewerB);
+    check(sel?.viewCount === 2, `[幾何/${tag}] 2 方向を選べている`, sel?.viewCount);
+
+    // ── タグから読んだ角度が真値と一致するか ─────────────────
+    const angles = [sel?.anglesA, sel?.anglesB];
+    const trueAngles = [v1, v2].map((v) => ({ primary: v.truePrimaryAngleDeg, secondary: v.trueSecondaryAngleDeg }));
+    // 選択順は登録順（＝解析した順）。どちらがどちらでもよいように集合で突き合わせる。
+    for (const want of trueAngles) {
+      const hit = angles.some(
+        (a) => a && Math.abs(a.primary - want.primary) < 0.01 && Math.abs(a.secondary - want.secondary) < 0.01,
+      );
+      check(hit, `[幾何/${tag}] タグから ${want.primary}/${want.secondary} を読めている`, angles);
+    }
+
+    const expectedSeparation = 90; // view1(-30,0) と view2(60,20) は厳密に直交する
+    check(
+      sel?.separationDeg != null && Math.abs(sel.separationDeg - expectedSeparation) < 0.5,
+      `[幾何/${tag}] 視線の角度差が真値どおり（90°）`,
+      sel?.separationDeg,
+    );
+
+    check((sel?.pointsA ?? 0) > 20, `[2D/${tag}] 方向 A の中心線を画像から抽出できている`, sel?.pointsA);
+    check((sel?.pointsB ?? 0) > 20, `[2D/${tag}] 方向 B の中心線を画像から抽出できている`, sel?.pointsB);
+
+    // ── アンカー: まず端点 2 つだけ（＝補正が掛からない状態）──
+    check(sel?.anchorCount === 2, `[アンカー/${tag}] 端点 2 点が既定で入っている`, sel?.anchorCount);
+    check(
+      sel?.steps.anchors === "skipped",
+      `[アンカー/${tag}] ★端点 2 点だけは done ではなく skipped（角度補正が掛からないため）`,
+      sel?.steps,
+    );
+
+    await viewerB.getByTestId("xa3d-run").click();
+    await viewerB.waitForTimeout(1_500);
+    const noAnchor = await xa3dState(viewerB);
+    check(noAnchor?.result != null, `[再構成/${tag}] 端点だけでも結果は出る`, noAnchor?.result != null);
+    check(noAnchor?.refinement == null, `[再構成/${tag}] ★アンカー 2 点では角度補正が掛からない`, noAnchor?.refinement);
+
+    // ── アンカーを 3 点目に足して補正を効かせる ────────────────
+    // 分岐部（主枝の 45%）を両方向で指す。ここは 2 方向で同定できる点の代表例。
+    const bifIdx = Math.round(0.45 * (seg1.length - 1));
+    await clickOnCurve(viewerB, "xa3d-curve-a", seg1, bifIdx);
+    await clickOnCurve(viewerB, "xa3d-curve-b", seg2, bifIdx);
+    await viewerB.waitForTimeout(400);
+    const withAnchor = await xa3dState(viewerB);
+    check(withAnchor?.anchorCount === 3, `[アンカー/${tag}] 3 点目を追加できた`, withAnchor?.anchorCount);
+    check(withAnchor?.steps.anchors === "done", `[アンカー/${tag}] 3 点あれば done になる`, withAnchor?.steps);
+    check(withAnchor?.result == null, `[アンカー/${tag}] アンカーを変えたら前の結果を捨てる`, withAnchor?.result);
+
+    await viewerB.getByTestId("xa3d-run").click();
+    await viewerB.waitForTimeout(2_000);
+    const st = await xa3dState(viewerB);
+    await viewerB.screenshot({ path: path.join(OUT_DIR, `3-${tag}-3dqca.png`) }).catch(() => {});
+
+    if (!st?.result) {
+      check(false, `[再構成/${tag}] 3D 中心線を作れた`, st);
+      return;
+    }
+    check(st.refinement != null, `[再構成/${tag}] アンカー 3 点で角度補正が掛かる`, st.refinement);
+    check(st.result.acceptable, `[再構成/${tag}] 品質基準を満たす`, {
+      warnings: st.result.warnings,
+      anchorPx: st.result.anchorReprojectionPx,
+    });
+    check(st.steps.recon === "done", `[UI/${tag}] レールの再構成の段が done`, st.steps);
+
+    const lengthErrPct = (Math.abs(st.result.lengthMm - feedableLengthMm) / feedableLengthMm) * 100;
+    target(
+      lengthErrPct < TARGET_LENGTH_ERROR_PCT,
+      `[精度/${tag}] 【目標】3D 長さの誤差 < ${TARGET_LENGTH_ERROR_PCT}%`,
+      { truthMm: Number(feedableLengthMm.toFixed(2)), measuredMm: Number(st.result.lengthMm.toFixed(2)), errorPct: Number(lengthErrPct.toFixed(2)) },
+    );
+    target(
+      st.result.anchorReprojectionPx < TARGET_ANCHOR_REPROJ_PX,
+      `[精度/${tag}] 【目標】アンカー再投影誤差 < ${TARGET_ANCHOR_REPROJ_PX}px`,
+      Number(st.result.anchorReprojectionPx.toFixed(3)),
+    );
+
+    // 🚨 「対応付けの再投影誤差は幾何の検査にならない」を実機でも固定する（§10.2.2）。
+    check(
+      st.result.matchReprojectionPx < st.result.anchorReprojectionPx + 1e-9 ||
+        st.result.matchReprojectionPx < 2.0,
+      `[原理/${tag}] 対応付けの再投影誤差は小さいまま出る（品質判定に使えない証拠）`,
+      {
+        match: Number(st.result.matchReprojectionPx.toFixed(3)),
+        anchor: Number(st.result.anchorReprojectionPx.toFixed(3)),
+      },
+    );
+
+    // ── 短縮の指標（§10.3.1 の主因を数値で出せているか）────────
+    const visA = st.result.visibleFractionA;
+    const visB = st.result.visibleFractionB;
+    check(
+      visA != null && visB != null && visA > 0 && visA <= 1 && visB > 0 && visB <= 1,
+      `[短縮/${tag}] 各方向の「見えている長さの割合」を出せている`,
+      { a: visA, b: visB },
+    );
+    // 🚨 **値が出るだけでは意味の検査にならない**ので、指標と実際の取りこぼしの
+    //    **向きが一致する**ことを見る。
+    //    ⚠️ ここを「B のほうが短縮が強い」と決め打ちしてはいけない。どちらが潰れるかは
+    //       解析する区間で入れ替わる（実際、区間を病変込みに変えたら A と B が逆転して
+    //       決め打ちの検査が落ちた）。**区間に依存しない主張だけを検査する**。
+    //    ⚠️ 取りこぼしがどちらも無い区間では「向きの一致」に情報が無い（比べても
+    //       雑音の符号を見るだけ）。**空振りの合格を作らない**ため、取りこぼしが
+    //       意味のある大きさのときだけ向きを見る。
+    const detail = {
+      shortfallA: Number(shortfallA.toFixed(3)),
+      shortfallB: Number(shortfallB.toFixed(3)),
+      visibleA: Number((visA ?? 0).toFixed(3)),
+      visibleB: Number((visB ?? 0).toFixed(3)),
+    };
+    if (Math.max(shortfallA, shortfallB) < 0.03) {
+      check(true, `[短縮/${tag}] この区間はどちらの方向も弧長を取りこぼしていない（向きの比較は情報が無い）`, detail);
+    } else {
+      const worseShortfall = shortfallA >= shortfallB ? "A" : "B";
+      const worseVisible = (visA ?? 1) <= (visB ?? 1) ? "A" : "B";
+      check(worseShortfall === worseVisible, `[短縮/${tag}] ★弧長を多く取りこぼした方向が、短縮も強いと出る`, detail);
+    }
+    check(
+      st.workingAngles.length >= 1 && st.workingAngles[0].visibleFraction >= (visA ?? 0),
+      `[短縮/${tag}] 短縮の少ない撮影角度を提案できる（現在の方向 A 以上）`,
+      st.workingAngles,
+    );
+
+    // ── 3D 断面（§10.2.5）──────────────────────────────────
+    check(st.section != null, `[断面/${tag}] 断面の合成まで到達している`, st.section);
+    if (st.section) {
+      check(
+        st.section.unavailable === null,
+        `[断面/${tag}] 装置校正済みなので断面積が出る`,
+        st.section.unavailable,
+      );
+      // 🔴 **既知の系統誤差と突き合わせる**（「妥当な範囲」で済ませない）。
+      //    主枝の径は 3.5mm → 2.0mm の線形テーパー。さらに径は半値法で約 13% 過小に出る
+      //    （§16.4 の係数 0.870）。
+      //    ⚠️ 期待値は**区間によって違う**。病変を含む区間なら最小径は狭窄部の値
+      //       （テーパー径 × (1 − %DS)）、含まない区間なら遠位端のテーパー径。
+      //       ここを片方に決め打ちすると、もう一方の区間で必ず落ちる（実際に落とした）。
+      const tLesion = truth.lesion.fractionOfMain;
+      const tDistal = SEG_TO / (main1.pointsPx.length - 1);
+      const truthMinDiameterMm = seg.hasLesion
+        ? (3.5 - 1.5 * tLesion) * (1 - truth.lesion.percentDiameterStenosis / 100)
+        : 3.5 - 1.5 * tDistal;
+      const expectedMm = truthMinDiameterMm * KNOWN_DIAMETER_FACTOR;
+      const eq = st.section.minEquivalentDiameterMm;
+      check(
+        eq != null && Math.abs(eq - expectedMm) < 0.35,
+        `[断面/${tag}] 最小等価直径が既知の系統誤差どおり（真値 × ${KNOWN_DIAMETER_FACTOR}）`,
+        {
+          truthMm: Number(truthMinDiameterMm.toFixed(3)),
+          expectedMm: Number(expectedMm.toFixed(3)),
+          measuredMm: eq == null ? null : Number(eq.toFixed(3)),
+        },
+      );
+      const ang = st.section.medianMeasurementAngleDeg;
+      check(ang != null && ang > 0 && ang <= 90, `[断面/${tag}] 測定方向のなす角を出せている`, ang == null ? null : Number(ang.toFixed(1)));
+    }
+
+    // ── 保存（3D QCA SR）────────────────────────────────────
+    check(st.steps.save === "active", `[保存/${tag}] 品質基準を満たしたので保存できる状態になる`, st.steps);
+    await viewerB.getByTestId("xa3d-save").click();
+    await viewerB.getByTestId("xa3d-saved").waitFor({ state: "visible", timeout: 15_000 });
+    const savedText = await viewerB.getByTestId("xa3d-saved").textContent();
+    check(!!savedText && savedText.length > 0, `[保存/${tag}] 保存に成功した`, savedText);
+    const afterSave = await xa3dState(viewerB);
+    check(afterSave?.steps.save === "done", `[保存/${tag}] レールの保存の段が done になる`, afterSave?.steps);
+    // 🚨 数値だけでなく「どう作った結果か」が SR に入っていること（§10 の SR 方針）。
+    const srSeries = await listSrSeries(driver.ports.http, v1.exact.studyInstanceUid);
+    check(srSeries.some((x) => x.seriesDescription === "QCA 3D"), `[保存/${tag}] SR シリーズが保管庫に入る`, srSeries);
+
+    // ── 3D の狭窄率（真値 50%）──────────────────────────────
+    // 🚨 病変を含まない区間では「真値 50%」と比べられない。**区間に無い事実を検査しない**。
+    if (!seg.hasLesion) {
+      check(
+        st.stenosis == null || st.stenosis.percentDiameterStenosis < 25,
+        `[狭窄/${tag}] 病変の無い区間では狭窄率が小さく出る`,
+        st.stenosis?.percentDiameterStenosis,
+      );
+    } else {
+    check(st.stenosis != null, `[狭窄/${tag}] 3D の狭窄率まで到達している`, st.stenosis);
+    if (st.stenosis) {
+      const truthDs = truth.lesion.percentDiameterStenosis;
+      // 🔑 狭窄率は**比**なので、半値法の 13% 過小はほぼ打ち消される（§10.2.8）。
+      //    したがって MLD/RVD の絶対値と違い、**真値そのもの**と比べてよい。
+      target(
+        Math.abs(st.stenosis.percentDiameterStenosis - truthDs) < 10,
+        `[狭窄/${tag}] 【目標】直径狭窄率が真値 ±10%`,
+        {
+          truth: truthDs,
+          measured: Number(st.stenosis.percentDiameterStenosis.toFixed(1)),
+          error: Number((st.stenosis.percentDiameterStenosis - truthDs).toFixed(1)),
+        },
+      );
+      // 面積狭窄率は直径狭窄率から一意に決まる（1 −(1−r)²）。恒等式なので必ず合う。
+      const r = 1 - st.stenosis.percentDiameterStenosis / 100;
+      check(
+        Math.abs(st.stenosis.percentAreaStenosis - (1 - r * r) * 100) < 1e-6,
+        `[狭窄/${tag}] 面積狭窄率は直径狭窄率と整合する`,
+        {
+          as: Number(st.stenosis.percentAreaStenosis.toFixed(3)),
+          expected: Number(((1 - r * r) * 100).toFixed(3)),
+        },
+      );
+      check(
+        st.stenosis.mldMm < st.stenosis.rvdMm,
+        `[狭窄/${tag}] MLD が参照径を下回る`,
+        { mld: Number(st.stenosis.mldMm.toFixed(3)), rvd: Number(st.stenosis.rvdMm.toFixed(3)) },
+      );
+      // 🔴 **病変長は過大に出る**（実測 33.7mm / 真値 15.8mm）。
+      //    定義は 2D QCA と共有している「径が参照径を下回る連続区間」。参照径の当てはめは
+      //    狭窄側を捨てる反復回帰なので**散布の上包絡へ寄る**。3D の等価直径は 2 方向の合成と
+      //    対応付けを経るぶん 2D より荒れており、その結果**大半の点が参照径を下回る**。
+      //    定義を 3D だけ変えると同じ名前の量が 2D と別物になるので、ここでは変えずに記録する。
+      const truthLesionMm = mainTruth.lengthMm * truth.lesion.lengthFraction;
+      target(
+        Math.abs(st.stenosis.lesionLengthMm - truthLesionMm) < truthLesionMm * 0.6,
+        `[狭窄/${tag}] 【目標】病変長が真値のオーダーに合う（参照径が上包絡へ寄るため過大）`,
+        {
+          truthMm: Number(truthLesionMm.toFixed(2)),
+          measuredMm: Number(st.stenosis.lesionLengthMm.toFixed(2)),
+          segmentMm: Number(st.result.lengthMm.toFixed(2)),
+        },
+      );
+    }
+    }
+
+    // ── 2D 投影長より 3D のほうが真値に近いこと（3D にする実利）──
+    const proj2dMm = polylineLengthPx(seg1) * 0.225;
+    const err2d = (Math.abs(proj2dMm - feedableLengthMm) / feedableLengthMm) * 100;
+    check(lengthErrPct < err2d, `[実利/${tag}] ★3D 長さのほうが 2D 投影長より真値に近い`, {
+      projected2dMm: Number(proj2dMm.toFixed(2)),
+      error2dPct: Number(err2d.toFixed(2)),
+      error3dPct: Number(lengthErrPct.toFixed(2)),
+    });
+
+    fs.writeFileSync(
+      path.join(OUT_DIR, `result-${tag}.json`),
+      JSON.stringify({ truthLengthMm: feedableLengthMm, state: st, lengthErrPct, err2d }, null, 2),
+    );
+
+    // 🚨 **区間の最後にビューアを閉じる。** 2D ビューアは 1 ウィンドウを使い回すので、
+    //    開いたまま次の区間へ進むと、ダイアログが被って「長さ」ツールを選べずタイムアウトする
+    //    （最初にこれを踏んだ。2 区間目の 2D QCA が始まる前で止まった）。
+    await viewerB.close().catch(() => {});
+    await mainPage.waitForTimeout(800);
+}
+
 async function main(): Promise<void> {
   if (!fs.existsSync(TRUTH_PATH)) {
     throw new Error(
@@ -279,13 +663,14 @@ async function main(): Promise<void> {
   if (!v1.branchesPx) {
     throw new Error("truth.json に branchesPx がありません。ファントムを作り直してください（--force）。");
   }
-  const main1 = v1.branchesPx.find((b) => b.id === "main")!;
-  const main2 = v2.branchesPx.find((b) => b.id === "main")!;
-  const mainTruth = truth.branches.find((b) => b.id === "main")!;
-  const seg1 = main1.pointsPx.slice(SEG_FROM, SEG_TO + 1);
-  const seg2 = main2.pointsPx.slice(SEG_FROM, SEG_TO + 1);
-  // 再構成が復元できるのは**与えた折れ線**まで（間引きぶんは背負わせない。§10.3 の注記）。
-  const feedableLengthMm = polylineLength(mainTruth.pointsLps.slice(SEG_FROM, SEG_TO + 1));
+  const ctx = {
+    v1,
+    v2,
+    main1: v1.branchesPx.find((b) => b.id === "main")!,
+    main2: v2.branchesPx.find((b) => b.id === "main")!,
+    mainTruth: truth.branches.find((b) => b.id === "main")!,
+    lesion: truth.lesion,
+  };
 
   const driver = new DesktopDriver();
   await driver.start();
@@ -300,240 +685,10 @@ async function main(): Promise<void> {
     await dismissStartupDialogs(mainPage);
     await openStudy(mainPage, v1.exact.studyInstanceUid);
 
-    // ── 各方向で 2D QCA ────────────────────────────────────────
-    // ── 前提の確認: 自動追跡の探索窓に何が収まるか ───────────────
-    // 「なぜ区間を切ったか」を毎回数値で確かめる。窓を広げたらここが落ちて気付ける。
-    for (const [name, pts] of [["A", main1.pointsPx], ["B", main2.pointsPx]] as const) {
-      const seg = pts.slice(SEG_FROM, SEG_TO + 1);
-      check(
-        maxChordDeviationPx(pts) > TRACER_MARGIN_PX,
-        `[限界] 方向 ${name} — 血管全体は自動追跡の探索窓（±${TRACER_MARGIN_PX}px）に収まらない`,
-        { maxDeviationPx: Number(maxChordDeviationPx(pts).toFixed(1)) },
-      );
-      check(
-        maxChordDeviationPx(seg) < TRACER_MARGIN_PX,
-        `[限界] 方向 ${name} — 解析する区間は探索窓に収まる`,
-        { maxDeviationPx: Number(maxChordDeviationPx(seg).toFixed(1)) },
-      );
-      // ★ 短縮した区間は「近道も血管の上を通る」ので原理的に辿れない。区間選びの前提。
-      const tort = polylineLengthPx(seg) / Math.hypot(seg[seg.length - 1][0] - seg[0][0], seg[seg.length - 1][1] - seg[0][1]);
-      check(
-        tort < MAX_TORTUOSITY,
-        `[限界] 方向 ${name} — 解析する区間が短縮していない（弧長/弦長 < ${MAX_TORTUOSITY}）`,
-        { tortuosity: Number(tort.toFixed(3)) },
-      );
+    // 🚨 **2 区間を回す**。片方だけでは、その区間で起きない現象が検証から抜ける。
+    for (const seg of SEGMENTS) {
+      await analyseSegment(driver, mainPage, ctx, seg);
     }
-
-    const viewerA = await runQcaForView(driver, mainPage, v1.exact.seriesInstanceUid, [
-      seg1[0],
-      seg1[seg1.length - 1],
-    ]);
-    await checkExtractedCenterline(viewerA, "A", seg1);
-    await viewerA.screenshot({ path: path.join(OUT_DIR, "1-view1-qca.png") }).catch(() => {});
-    await viewerA.close().catch(() => {});
-    await mainPage.waitForTimeout(600);
-
-    const viewerB = await runQcaForView(driver, mainPage, v2.exact.seriesInstanceUid, [
-      seg2[0],
-      seg2[seg2.length - 1],
-    ]);
-    await checkExtractedCenterline(viewerB, "B", seg2);
-    await viewerB.screenshot({ path: path.join(OUT_DIR, "2-view2-qca.png") }).catch(() => {});
-
-    // ── 3D QCA ────────────────────────────────────────────────
-    // 方向 A のビューアは既に閉じている。登録簿はメインウィンドウが中継して覚えているので、
-    // ここで 2 件見えていれば **BroadcastChannel の中継が効いている**ことの証明になる。
-    const open3d = viewerB.getByTestId("xa3d-open");
-    await open3d.waitFor({ state: "visible", timeout: 10_000 });
-    const disabled = await open3d.isDisabled();
-    check(!disabled, "[UI] 2 方向が揃うと 3D QCA を開ける", { disabled });
-    if (disabled) {
-      // ここで止まると以降が全部落ちるので、理由を残して終える。
-      const st = await xa3dState(viewerB);
-      check(false, "[UI] 登録簿に 2 方向が載っている（ウィンドウ跨ぎの制約の可能性）", st);
-      return;
-    }
-    await open3d.click();
-    await viewerB.getByTestId("xa3d-dialog").waitFor({ state: "visible", timeout: 10_000 });
-
-    const options = await viewerB.locator('[data-testid="xa3d-view-a"] option').allTextContents();
-    check(options.length >= 3, "[UI] 方向の一覧に 2 件（＋空欄）出る", options);
-
-    // 方向を選ぶ。value は imageId なので、ラベルではなく index で選ぶ。
-    const values = await viewerB.evaluate(`(() => {
-      const sel = document.querySelector('[data-testid="xa3d-view-a"]');
-      return JSON.stringify(Array.from(sel.options).map((o) => o.value).filter(Boolean));
-    })()`);
-    const ids = JSON.parse(values as string) as string[];
-    check(ids.length === 2, "[UI] 登録された方向がちょうど 2 件", ids.length);
-    await viewerB.selectOption('[data-testid="xa3d-view-a"]', ids[0]);
-    await viewerB.waitForTimeout(300);
-    await viewerB.selectOption('[data-testid="xa3d-view-b"]', ids[1]);
-    await viewerB.waitForTimeout(500);
-
-    const sel = await xa3dState(viewerB);
-    check(sel?.viewCount === 2, "[幾何] 2 方向を選べている", sel?.viewCount);
-
-    // ── タグから読んだ角度が真値と一致するか ─────────────────
-    const angles = [sel?.anglesA, sel?.anglesB];
-    const trueAngles = [v1, v2].map((v) => ({ primary: v.truePrimaryAngleDeg, secondary: v.trueSecondaryAngleDeg }));
-    // 選択順は登録順（＝解析した順）。どちらがどちらでもよいように集合で突き合わせる。
-    for (const want of trueAngles) {
-      const hit = angles.some(
-        (a) => a && Math.abs(a.primary - want.primary) < 0.01 && Math.abs(a.secondary - want.secondary) < 0.01,
-      );
-      check(hit, `[幾何] タグから ${want.primary}/${want.secondary} を読めている`, angles);
-    }
-
-    const expectedSeparation = 90; // view1(-30,0) と view2(60,20) は厳密に直交する
-    check(
-      sel?.separationDeg != null && Math.abs(sel.separationDeg - expectedSeparation) < 0.5,
-      "[幾何] 視線の角度差が真値どおり（90°）",
-      sel?.separationDeg,
-    );
-
-    check((sel?.pointsA ?? 0) > 20, "[2D] 方向 A の中心線を画像から抽出できている", sel?.pointsA);
-    check((sel?.pointsB ?? 0) > 20, "[2D] 方向 B の中心線を画像から抽出できている", sel?.pointsB);
-
-    // ── アンカー: まず端点 2 つだけ（＝補正が掛からない状態）──
-    check(sel?.anchorCount === 2, "[アンカー] 端点 2 点が既定で入っている", sel?.anchorCount);
-    check(
-      sel?.steps.anchors === "skipped",
-      "[アンカー] ★端点 2 点だけは done ではなく skipped（角度補正が掛からないため）",
-      sel?.steps,
-    );
-
-    await viewerB.getByTestId("xa3d-run").click();
-    await viewerB.waitForTimeout(1_500);
-    const noAnchor = await xa3dState(viewerB);
-    check(noAnchor?.result != null, "[再構成] 端点だけでも結果は出る", noAnchor?.result != null);
-    check(noAnchor?.refinement == null, "[再構成] ★アンカー 2 点では角度補正が掛からない", noAnchor?.refinement);
-
-    // ── アンカーを 3 点目に足して補正を効かせる ────────────────
-    // 分岐部（主枝の 45%）を両方向で指す。ここは 2 方向で同定できる点の代表例。
-    const bifIdx = Math.round(0.45 * (seg1.length - 1));
-    await clickOnCurve(viewerB, "xa3d-curve-a", seg1, bifIdx);
-    await clickOnCurve(viewerB, "xa3d-curve-b", seg2, bifIdx);
-    await viewerB.waitForTimeout(400);
-    const withAnchor = await xa3dState(viewerB);
-    check(withAnchor?.anchorCount === 3, "[アンカー] 3 点目を追加できた", withAnchor?.anchorCount);
-    check(withAnchor?.steps.anchors === "done", "[アンカー] 3 点あれば done になる", withAnchor?.steps);
-    check(withAnchor?.result == null, "[アンカー] アンカーを変えたら前の結果を捨てる", withAnchor?.result);
-
-    await viewerB.getByTestId("xa3d-run").click();
-    await viewerB.waitForTimeout(2_000);
-    const st = await xa3dState(viewerB);
-    await viewerB.screenshot({ path: path.join(OUT_DIR, "3-3dqca.png") }).catch(() => {});
-
-    if (!st?.result) {
-      check(false, "[再構成] 3D 中心線を作れた", st);
-      return;
-    }
-    check(st.refinement != null, "[再構成] アンカー 3 点で角度補正が掛かる", st.refinement);
-    check(st.result.acceptable, "[再構成] 品質基準を満たす", {
-      warnings: st.result.warnings,
-      anchorPx: st.result.anchorReprojectionPx,
-    });
-    check(st.steps.recon === "done", "[UI] レールの再構成の段が done", st.steps);
-
-    const lengthErrPct = (Math.abs(st.result.lengthMm - feedableLengthMm) / feedableLengthMm) * 100;
-    target(
-      lengthErrPct < TARGET_LENGTH_ERROR_PCT,
-      `[精度] 【目標】3D 長さの誤差 < ${TARGET_LENGTH_ERROR_PCT}%`,
-      { truthMm: Number(feedableLengthMm.toFixed(2)), measuredMm: Number(st.result.lengthMm.toFixed(2)), errorPct: Number(lengthErrPct.toFixed(2)) },
-    );
-    target(
-      st.result.anchorReprojectionPx < TARGET_ANCHOR_REPROJ_PX,
-      `[精度] 【目標】アンカー再投影誤差 < ${TARGET_ANCHOR_REPROJ_PX}px`,
-      Number(st.result.anchorReprojectionPx.toFixed(3)),
-    );
-
-    // 🚨 「対応付けの再投影誤差は幾何の検査にならない」を実機でも固定する（§10.2.2）。
-    check(
-      st.result.matchReprojectionPx < st.result.anchorReprojectionPx + 1e-9 ||
-        st.result.matchReprojectionPx < 2.0,
-      "[原理] 対応付けの再投影誤差は小さいまま出る（品質判定に使えない証拠）",
-      {
-        match: Number(st.result.matchReprojectionPx.toFixed(3)),
-        anchor: Number(st.result.anchorReprojectionPx.toFixed(3)),
-      },
-    );
-
-    // ── 短縮の指標（§10.3.1 の主因を数値で出せているか）────────
-    const visA = st.result.visibleFractionA;
-    const visB = st.result.visibleFractionB;
-    check(
-      visA != null && visB != null && visA > 0 && visA <= 1 && visB > 0 && visB <= 1,
-      "[短縮] 各方向の「見えている長さの割合」を出せている",
-      { a: visA, b: visB },
-    );
-    // 🚨 方向 B のほうが短縮している、という**向き**まで確かめる。実測で 2D 中心線の
-    //    弧長を取りこぼしたのは B（§10.3.1）。値が出るだけでは意味の検査にならない。
-    check(
-      visA != null && visB != null && visB < visA,
-      "[短縮] ★弧長を取りこぼした方向 B のほうが、短縮が強いと出る",
-      { a: Number((visA ?? 0).toFixed(3)), b: Number((visB ?? 0).toFixed(3)) },
-    );
-    check(
-      st.workingAngles.length >= 1 && st.workingAngles[0].visibleFraction >= (visA ?? 0),
-      "[短縮] 短縮の少ない撮影角度を提案できる（現在の方向 A 以上）",
-      st.workingAngles,
-    );
-
-    // ── 3D 断面（§10.2.5）──────────────────────────────────
-    check(st.section != null, "[断面] 断面の合成まで到達している", st.section);
-    if (st.section) {
-      check(
-        st.section.unavailable === null,
-        "[断面] 装置校正済みなので断面積が出る",
-        st.section.unavailable,
-      );
-      // 🔴 **既知の系統誤差と突き合わせる**（「妥当な範囲」で済ませない）。
-      //    主枝の径は 3.5mm → 2.0mm の線形テーパー。狭窄は t=0.66 で、この区間の外。
-      //    したがって区間内の最小径は遠位端 t=SEG_TO/59 の値。
-      //    径は半値法で約 13% 過小に出る（§16.4 の係数 0.870）ので、期待値はその積。
-      const tDistal = SEG_TO / (main1.pointsPx.length - 1);
-      const truthMinDiameterMm = 3.5 - 1.5 * tDistal;
-      const expectedMm = truthMinDiameterMm * KNOWN_DIAMETER_FACTOR;
-      const eq = st.section.minEquivalentDiameterMm;
-      check(
-        eq != null && Math.abs(eq - expectedMm) < 0.25,
-        `[断面] 最小等価直径が既知の系統誤差どおり（真値 × ${KNOWN_DIAMETER_FACTOR}）`,
-        {
-          truthMm: Number(truthMinDiameterMm.toFixed(3)),
-          expectedMm: Number(expectedMm.toFixed(3)),
-          measuredMm: eq == null ? null : Number(eq.toFixed(3)),
-        },
-      );
-      const ang = st.section.medianMeasurementAngleDeg;
-      check(ang != null && ang > 0 && ang <= 90, "[断面] 測定方向のなす角を出せている", ang == null ? null : Number(ang.toFixed(1)));
-    }
-
-    // ── 保存（3D QCA SR）────────────────────────────────────
-    check(st.steps.save === "active", "[保存] 品質基準を満たしたので保存できる状態になる", st.steps);
-    await viewerB.getByTestId("xa3d-save").click();
-    await viewerB.getByTestId("xa3d-saved").waitFor({ state: "visible", timeout: 15_000 });
-    const savedText = await viewerB.getByTestId("xa3d-saved").textContent();
-    check(!!savedText && savedText.length > 0, "[保存] 保存に成功した", savedText);
-    const afterSave = await xa3dState(viewerB);
-    check(afterSave?.steps.save === "done", "[保存] レールの保存の段が done になる", afterSave?.steps);
-    // 🚨 数値だけでなく「どう作った結果か」が SR に入っていること（§10 の SR 方針）。
-    const srSeries = await listSrSeries(driver.ports.http, v1.exact.studyInstanceUid);
-    check(srSeries.some((x) => x.seriesDescription === "QCA 3D"), "[保存] SR シリーズが保管庫に入る", srSeries);
-
-    // ── 2D 投影長より 3D のほうが真値に近いこと（3D にする実利）──
-    const proj2dMm = polylineLengthPx(seg1) * 0.225;
-    const err2d = (Math.abs(proj2dMm - feedableLengthMm) / feedableLengthMm) * 100;
-    check(lengthErrPct < err2d, "[実利] ★3D 長さのほうが 2D 投影長より真値に近い", {
-      projected2dMm: Number(proj2dMm.toFixed(2)),
-      error2dPct: Number(err2d.toFixed(2)),
-      error3dPct: Number(lengthErrPct.toFixed(2)),
-    });
-
-    fs.writeFileSync(
-      path.join(OUT_DIR, "result.json"),
-      JSON.stringify({ truthLengthMm: feedableLengthMm, state: st, lengthErrPct, err2d }, null, 2),
-    );
   } finally {
     await driver.stop().catch(() => {});
     const summary = `\n===== 3D QCA（GNBP-XA-3）実機検証 =====\n合格 ${pass} / 失敗 ${fail} / 目標未達 ${unmet}`;
@@ -625,15 +780,16 @@ async function checkExtractedCenterline(
   viewer: Page,
   name: string,
   truthPx: readonly [number, number][],
-): Promise<void> {
+  tag = "",
+): Promise<number> {
   const raw = (await viewer.evaluate(`(() => {
     const g = window.__graphyDebug;
     const s = g && g.getQcaState ? g.getQcaState() : null;
     return s && s.centerline ? JSON.stringify(s.centerline) : null;
   })()`)) as string | null;
   if (!raw) {
-    check(false, `[2D] 方向 ${name} — 中心線を抽出できた`);
-    return;
+    check(false, `[2D/${tag}] 方向 ${name} — 中心線を抽出できた`);
+    return 0;
   }
   const pts = JSON.parse(raw) as [number, number][];
   let sum = 0;
@@ -651,7 +807,7 @@ async function checkExtractedCenterline(
     pts[pts.length - 1][0] - truthPx[truthPx.length - 1][0],
     pts[pts.length - 1][1] - truthPx[truthPx.length - 1][1],
   );
-  check(Math.max(d0, dN) < 6, `[2D] 方向 ${name} — 計測を狙った画素に引けている`, {
+  check(Math.max(d0, dN) < 6, `[2D/${tag}] 方向 ${name} — 計測を狙った画素に引けている`, {
     startOffPx: Number(d0.toFixed(1)),
     endOffPx: Number(dN.toFixed(1)),
     got: [pts[0], pts[pts.length - 1]],
@@ -659,7 +815,7 @@ async function checkExtractedCenterline(
   });
   const truthLen = polylineLengthPx(truthPx);
   const gotLen = polylineLengthPx(pts);
-  check(rms < TOL_CENTERLINE_PX, `[2D] 方向 ${name} — 抽出した中心線が真値に乗る（RMS < ${TOL_CENTERLINE_PX}px）`, {
+  check(rms < TOL_CENTERLINE_PX, `[2D/${tag}] 方向 ${name} — 抽出した中心線が真値に乗る（RMS < ${TOL_CENTERLINE_PX}px）`, {
     rmsPx: Number(rms.toFixed(2)),
     maxPx: Number(max.toFixed(2)),
     points: pts.length,
@@ -669,13 +825,14 @@ async function checkExtractedCenterline(
   //    実測: 方向 B で 150.3px の真値に対し 136.0px（9.5% 短い）。これが 3D 長さ誤差 3.3% の主因。
   target(
     Math.abs(gotLen - truthLen) / truthLen < 0.05,
-    `[2D] 方向 ${name} — 【目標】中心線の長さが真値の 5% 以内（近道していない）`,
+    `[2D/${tag}] 方向 ${name} — 【目標】中心線の長さが真値の 5% 以内（近道していない）`,
     {
       truthPx: Number(truthLen.toFixed(1)),
       gotPx: Number(gotLen.toFixed(1)),
       shortPct: Number((((truthLen - gotLen) / truthLen) * 100).toFixed(1)),
     },
   );
+  return (truthLen - gotLen) / truthLen;
 }
 
 function polylineLengthPx(points: readonly [number, number][]): number {

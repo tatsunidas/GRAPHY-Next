@@ -26,6 +26,12 @@ package com.vis.graphynext.dicom.angio;
  * @param visibleFractionA     方向 A で見えている長さの割合（短縮の指標。§10.2.5）
  * @param visibleFractionB     方向 B での同じ値
  * @param calibration          校正の出自（人向け文字列）。null なら未校正
+ * @param percentDiameterStenosis 直径狭窄率 [%]。断面が出せないなら null。
+ *                             <b>比なので半値法の系統誤差はほぼ打ち消される</b>（§10.2.8）
+ * @param percentAreaStenosis  面積狭窄率 [%]。同上
+ * @param mldMm                最小血管径。<b>絶対値なので約 13% 過小</b>
+ * @param rvdMm                MLD 位置での参照血管径。同上
+ * @param lesionLengthMm       病変長
  */
 public record Qca3dSrRequest(
         String studyInstanceUid,
@@ -43,5 +49,10 @@ public record Qca3dSrRequest(
         Double minEquivalentDiameterMm,
         Double visibleFractionA,
         Double visibleFractionB,
-        String calibration) {
+        String calibration,
+        Double percentDiameterStenosis,
+        Double percentAreaStenosis,
+        Double mldMm,
+        Double rvdMm,
+        Double lesionLengthMm) {
 }

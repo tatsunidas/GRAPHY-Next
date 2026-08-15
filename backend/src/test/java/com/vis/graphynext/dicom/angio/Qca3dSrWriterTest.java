@@ -36,18 +36,21 @@ class Qca3dSrWriterTest {
     private static Qca3dSrRequest calibrated() {
         return new Qca3dSrRequest("1.2.3", "1.2.3.9", "1.2.3.10", 1, "1.2.3.11", 1,
                 90.0, 5, 0.01, true, 63.1, 5.018, 2.528, 0.783, 0.485,
-                "DICOM PixelSpacing (GEOMETRY) 0.225 mm/px");
+                "DICOM PixelSpacing (GEOMETRY) 0.225 mm/px",
+                49.2, 74.2, 1.42, 2.80, 4.1);
     }
 
     private static Qca3dSrRequest uncalibrated() {
         return new Qca3dSrRequest("1.2.3", "1.2.3.9", "1.2.3.10", 1, "1.2.3.11", 1,
-                90.0, 5, 0.01, true, 63.1, null, null, 0.783, 0.485, null);
+                90.0, 5, 0.01, true, 63.1, null, null, 0.783, 0.485, null,
+                null, null, null, null, null);
     }
 
     private static Qca3dSrRequest notCorrected() {
         return new Qca3dSrRequest("1.2.3", "1.2.3.9", "1.2.3.10", 1, "1.2.3.11", 1,
                 90.0, 2, 1.61, false, 63.1, 5.018, 2.528, 0.783, 0.485,
-                "DICOM PixelSpacing (GEOMETRY) 0.225 mm/px");
+                "DICOM PixelSpacing (GEOMETRY) 0.225 mm/px",
+                49.2, 74.2, 1.42, 2.80, 4.1);
     }
 
     private static Attributes measurementGroup(Attributes ds) {
@@ -145,6 +148,25 @@ class Qca3dSrWriterTest {
     }
 
     @Test
+    void writesStenosisWhenCalibrated() {
+        Attributes g = measurementGroup(Qca3dSrWriter.build(template(), calibrated()).dataset());
+        assertEquals(49.2, numericOf(findByCode(g, "PCTDS")), 1e-6);
+        assertEquals(74.2, numericOf(findByCode(g, "PCTAS")), 1e-6);
+        assertEquals(1.42, numericOf(findByCode(g, "MLD")), 1e-6);
+        assertEquals(2.80, numericOf(findByCode(g, "RVD")), 1e-6);
+        assertEquals(4.1, numericOf(findByCode(g, "LESIONLEN")), 1e-6);
+    }
+
+    @Test
+    void omitsStenosisWhenUncalibrated() {
+        // 狭窄率は比なので単位に依らないように見えるが、断面が出せていない以上、
+        // そもそも 3D の径が無い。あるように見せない。
+        Attributes g = measurementGroup(Qca3dSrWriter.build(template(), uncalibrated()).dataset());
+        assertNull(findByCode(g, "PCTDS"));
+        assertNull(findByCode(g, "MLD"));
+    }
+
+    @Test
     void methodNoteStatesTheSystematicBiasAndPoseLimitation() {
         // 🔴 系統誤差と「姿勢は復元できない」ことを、数値と同じ場所に書く。
         // 別ページの注記では読まれない。
@@ -155,6 +177,8 @@ class Qca3dSrWriterTest {
         assertTrue(note.contains("pose in patient coordinates is NOT"), note);
         assertTrue(note.contains("cardiac phase matching is approximate"), note);
         assertTrue(note.contains("research use only"), note);
+        // 比では打ち消され、絶対値には残る——という非対称を書いておく。
+        assertTrue(note.contains("Percent stenosis is a ratio and largely cancels"), note);
     }
 
     @Test

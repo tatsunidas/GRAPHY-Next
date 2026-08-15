@@ -32,6 +32,7 @@ import {
   refineGeometryWithAnchors,
   resampleByArcLengthN,
   smoothPolyline3d,
+  stenosis3d,
   suggestWorkingAngles,
   tangents3d,
 } from "./xaRecon3d";
@@ -600,5 +601,86 @@ describe("fuseDiameterProfile", () => {
     expect(p.sections[0]).toBeNull();
     expect(p.sections[p.sections.length - 1]).toBeNull();
     expect(p.sections.some((s) => s !== null)).toBe(true);
+  });
+});
+
+/* ---------------- 3D の狭窄率 ---------------- */
+
+describe("stenosis3d", () => {
+  const truth = helix(200);
+  const gA = geom(-30, 0);
+  const gB = geom(60, 20);
+  const recon = reconstructCenterline3d(centerline(truth, gA, 200), centerline(truth, gB, 200), { samples: 120 })!;
+
+  /** 先細り＋既知の狭窄。 */
+  function taperedWithStenosis(scale = 1): DiameterProfile {
+    const n = 60;
+    return {
+      diameters: Array.from({ length: n }, (_, i) => {
+        const t = i / (n - 1);
+        const base = 3.5 - 1.0 * t; // 先細り
+        const lesion = Math.abs(t - 0.5) < 0.06 ? 0.5 : 1; // 50% 狭窄
+        return base * lesion * scale;
+      }),
+      pathIndices: Array.from({ length: n }, (_, i) => Math.round((i / (n - 1)) * 199)),
+      pointCount: 200,
+      unit: "mm",
+    };
+  }
+
+  function analyse(scale = 1) {
+    const prof = taperedWithStenosis(scale);
+    const sections = fuseDiameterProfile(
+      recon.points,
+      { geometry: gA, profile: prof },
+      { geometry: gB, profile: prof },
+      recon.match,
+    );
+    return stenosis3d(recon.points, sections)!;
+  }
+
+  it("既知の 50% 狭窄をおおむね取り戻す", () => {
+    const r = analyse();
+    expect(r).not.toBeNull();
+    expect(r.percentDiameterStenosis).toBeGreaterThan(40);
+    expect(r.percentDiameterStenosis).toBeLessThan(60);
+    // 面積狭窄率は 1 − (1−%DS)²。50% なら 75%。
+    expect(r.percentAreaStenosis).toBeCloseTo(100 * (1 - (1 - r.percentDiameterStenosis / 100) ** 2), 6);
+  });
+
+  it("参照径は狭窄部でも健常部の当てはめを保つ（狭窄に引きずられない）", () => {
+    const r = analyse();
+    const iMld = r.pointIndices.indexOf(r.mldPointIndex);
+    expect(r.referenceMm[iMld]).toBeGreaterThan(r.mldMm * 1.5);
+  });
+
+  it("🔑 径を一律に定数倍しても %DS / %AS は厳密に不変（13% 過小が打ち消される理屈）", () => {
+    // 参照径の当てはめは径について 1 次同次で、狭窄側を捨てる判定も定数倍で変わらない。
+    // したがって半値法の系統誤差が**純粋な定数倍である限り**、比には出ない。
+    // （実際は係数が半径に依存するので完全には消えない。§16.4）
+    const a = analyse(1);
+    const b = analyse(0.87);
+    expect(b.percentDiameterStenosis).toBeCloseTo(a.percentDiameterStenosis, 9);
+    expect(b.percentAreaStenosis).toBeCloseTo(a.percentAreaStenosis, 9);
+    // 一方で絶対値はそのまま 0.87 倍になる（＝比だけが守られる）。
+    expect(b.mldMm / a.mldMm).toBeCloseTo(0.87, 9);
+    expect(b.rvdMm / a.rvdMm).toBeCloseTo(0.87, 9);
+  });
+
+  it("病変長は「参照径を下回る連続区間」（2D と同じ定義）", () => {
+    const r = analyse();
+    expect(r.lesionLengthMm).toBeGreaterThan(0);
+    // 狭窄は中心線の 12% ぶんに入れてある。長さのオーダーが合っていること。
+    expect(r.lesionLengthMm).toBeLessThan(polylineLength(recon.points) * 0.4);
+  });
+
+  it("断面が 3 点未満しか測れなければ null（無理に出さない）", () => {
+    const empty = fuseDiameterProfile(
+      recon.points,
+      { geometry: gA, profile: { diameters: [3], pathIndices: [100], pointCount: 200, unit: "px" } },
+      { geometry: gB, profile: { diameters: [3], pathIndices: [100], pointCount: 200, unit: "px" } },
+      recon.match,
+    );
+    expect(stenosis3d(recon.points, empty)).toBeNull();
   });
 });

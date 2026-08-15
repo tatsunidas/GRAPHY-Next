@@ -25,10 +25,12 @@ import {
   type CrossSectionProfile,
   type ReconAnchor,
   type Recon3DResult,
+  type Stenosis3DResult,
   type WorkingAngleSuggestion,
   type XaCenterline2D,
   fuseDiameterProfile,
   reconstructWithRefinement,
+  stenosis3d,
   suggestWorkingAngles,
   type GeometryRefinement,
 } from "./xaRecon3d";
@@ -56,6 +58,7 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
   const [refinement, setRefinement] = useState<GeometryRefinement | null>(null);
   const [profile, setProfile] = useState<CrossSectionProfile | null>(null);
   const [suggestions, setSuggestions] = useState<WorkingAngleSuggestion[]>([]);
+  const [stenosis, setStenosis] = useState<Stenosis3DResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
@@ -89,6 +92,7 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
     setRefinement(null);
     setProfile(null);
     setSuggestions([]);
+    setStenosis(null);
     setSaved(null);
     setError(null);
   };
@@ -120,8 +124,7 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
     setRefinement(ref);
     // 断面の合成（§10.2.5）。未校正なら `unavailable` が立って何も出さない。
     const geomB = ref?.geometryB ?? runB.geometry;
-    setProfile(
-      fuseDiameterProfile(
+    const sections = fuseDiameterProfile(
         r.points,
         {
           geometry: runA.geometry,
@@ -142,8 +145,10 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
           },
         },
         r.match,
-      ),
-    );
+      );
+    setProfile(sections);
+    // 3D の狭窄率。断面が出せていなければ null（無理に出さない）。
+    setStenosis(sections.unavailable ? null : stenosis3d(r.points, sections));
     // 「次はどの角度で撮ると短縮が少ないか」。3D が一度取れて初めて言えること。
     setSuggestions(suggestWorkingAngles(r.points, runA.geometry, { stepDeg: 5, count: 3 }));
   };
@@ -174,6 +179,11 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
       visibleFractionA: result.foreshortening.a?.visibleFraction ?? null,
       visibleFractionB: result.foreshortening.b?.visibleFraction ?? null,
       calibration: profile?.unavailable ? null : `${runA.label} / ${runB.label}`,
+      percentDiameterStenosis: stenosis?.percentDiameterStenosis ?? null,
+      percentAreaStenosis: stenosis?.percentAreaStenosis ?? null,
+      mldMm: stenosis?.mldMm ?? null,
+      rvdMm: stenosis?.rvdMm ?? null,
+      lesionLengthMm: stenosis?.lesionLengthMm ?? null,
     })
       .then((r) => setSaved(t("xa3d.saved", { uid: shortUid(r.sopInstanceUid) })))
       .catch(() => setError(t("xa3d.saveFailed")))
@@ -226,6 +236,15 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
             minAreaMm2: profile.minAreaMm2,
             minEquivalentDiameterMm: profile.minEquivalentDiameterMm,
             medianMeasurementAngleDeg: profile.medianMeasurementAngleDeg,
+          }
+        : null,
+        stenosis: stenosis
+        ? {
+            percentDiameterStenosis: stenosis.percentDiameterStenosis,
+            percentAreaStenosis: stenosis.percentAreaStenosis,
+            mldMm: stenosis.mldMm,
+            rvdMm: stenosis.rvdMm,
+            lesionLengthMm: stenosis.lesionLengthMm,
           }
         : null,
       workingAngles: suggestions.map((x) => ({
@@ -386,6 +405,7 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
                   refinement={refinement}
                   profile={profile}
                   suggestions={suggestions}
+                  stenosis={stenosis}
                 />
               ) : null}
             </div>
@@ -437,11 +457,13 @@ function ResultPanel({
   refinement,
   profile,
   suggestions,
+  stenosis,
 }: {
   result: Recon3DResult;
   refinement: GeometryRefinement | null;
   profile: CrossSectionProfile | null;
   suggestions: readonly WorkingAngleSuggestion[];
+  stenosis: Stenosis3DResult | null;
 }) {
   const { t } = useI18n();
   return (
@@ -508,8 +530,29 @@ function ResultPanel({
         </div>
       ) : null}
 
-      {/* ── 断面（§10.2.5）──────────────────────────────────── */}
+      {/* ── 断面（§10.2.6）と狭窄率 ─────────────────────────── */}
       {profile ? <CrossSectionPanel profile={profile} /> : null}
+      {stenosis ? (
+        <>
+          <div style={row}>
+            <span style={metric} data-testid="xa3d-percent-ds">
+              {t("xa3d.percentDiameterStenosis")}: <b>{stenosis.percentDiameterStenosis.toFixed(1)} %</b>
+            </span>
+            <span style={metric} data-testid="xa3d-percent-as">
+              {t("xa3d.percentAreaStenosis")}: <b>{stenosis.percentAreaStenosis.toFixed(1)} %</b>
+            </span>
+          </div>
+          <div style={row}>
+            <span style={metric} data-testid="xa3d-mld">
+              MLD <b>{fmt(stenosis.mldMm)} mm</b> / RVD <b>{fmt(stenosis.rvdMm)} mm</b> /{" "}
+              {t("xa3d.lesionLength")} <b>{fmt(stenosis.lesionLengthMm)} mm</b>
+            </span>
+          </div>
+          <div style={row}>
+            <span style={faint}>{t("xa3d.stenosisNote")}</span>
+          </div>
+        </>
+      ) : null}
 
       {/* 姿勢は復元できないことを結果画面に必ず出す（§10.3）。 */}
       <div style={row}>
