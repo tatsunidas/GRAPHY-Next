@@ -72,8 +72,18 @@ export interface TaskStepDef {
   clears: readonly ManualInputKey[];
 }
 
-/** 手修正の実体（`XaAnalysisDialog` の状態に対応）。 */
-export type ManualInputKey = "waypoints" | "edges" | "trim" | "reference";
+/**
+ * 手修正の実体（ダイアログの状態に対応）。
+ * QCA（`waypoints`〜`reference`）と QLV（`frames`〜`esContour`）で共有する。
+ */
+export type ManualInputKey =
+  | "waypoints"
+  | "edges"
+  | "trim"
+  | "reference"
+  | "frames"
+  | "edContour"
+  | "esContour";
 
 /** 導出された段（表示用）。 */
 export interface TaskStep extends TaskStepDef {
@@ -244,6 +254,108 @@ export function deriveQcaSteps(s: QcaTaskState): TaskStep[] {
                 }
               : { key: "xa.step.note.auto" },
         };
+
+      case "save":
+        if (!s.canSave) return { ...def, state: "invalid", reasonKey: "xa.step.reason.noReference" };
+        return { ...def, state: s.saved ? "done" : "todo" };
+
+      default:
+        return { ...def, state: "todo" };
+    }
+  });
+
+  const first = steps.find((x) => x.state === "todo");
+  if (first) first.state = "active";
+  return steps;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// QLV（左室造影）— `fw/angio-design.md` §9.2 / A5b
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * QLV タスクの段。
+ *
+ * <p>QCA とは**必要な入力が違う**（ED/ES フレームの決定が要り、中心線・エッジは無い）。
+ * 段をタスクごとの純データにしてある理由がここに出る（§21.2-3）。
+ */
+export const QLV_STEPS: readonly TaskStepDef[] = [
+  {
+    id: "frames",
+    labelKey: "qlv.step.frames",
+    // 🚨 輪郭は**特定のフレームの上に引いてある**。フレームを選び直したら、
+    //    前のフレームに引いた輪郭は別の心位相を指すので捨てる（§21.6 と同じ理屈）。
+    invalidates: ["edContour", "esContour"],
+    owns: ["frames"],
+    clears: ["frames", "edContour", "esContour"],
+  },
+  { id: "calibration", labelKey: "xa.step.calibration", invalidates: ["result"], owns: [], clears: [] },
+  { id: "edContour", labelKey: "qlv.step.edContour", invalidates: ["result"], owns: ["edContour"], clears: ["edContour"] },
+  { id: "esContour", labelKey: "qlv.step.esContour", invalidates: ["result"], owns: ["esContour"], clears: ["esContour"] },
+  { id: "result", labelKey: "qlv.step.result", invalidates: ["save"], owns: [], clears: [] },
+  { id: "save", labelKey: "xa.step.save", invalidates: [], owns: [], clears: [] },
+] as const;
+
+export interface QlvTaskState {
+  /** ED/ES フレームが決まっているか。 */
+  hasFrames: boolean;
+  /** フレームを人が選び直したか（提案のままなら false）。 */
+  framesManual: boolean;
+  /** ED/ES 提案の警告（`fillingNotDetected` 等）。 */
+  frameWarnings: readonly string[];
+  /** mm を出してよい校正か。 */
+  calibrated: boolean;
+  calibrationSource: string | null;
+  /** ED 輪郭の点数。 */
+  edPoints: number;
+  /** ES 輪郭の点数。 */
+  esPoints: number;
+  /** 輪郭として成立する最小点数。 */
+  minPoints: number;
+  hasResult: boolean;
+  canSave: boolean;
+  saved: boolean;
+}
+
+/**
+ * QLV の段の状態を導出する。
+ *
+ * <p>🚨 **未校正の扱いが QCA と違う**。QCA では未校正だと数値そのものが px になるが、
+ * QLV では **EF はスケール不変なので正しく出る**（容積 mL だけが出せない）。
+ * 同じ `skipped` でも**理由の文言を変える**。「飛ばすと何が失われるか」がタスクで違うため。
+ */
+export function deriveQlvSteps(s: QlvTaskState): TaskStep[] {
+  const steps: TaskStep[] = QLV_STEPS.map((def): TaskStep => {
+    switch (def.id) {
+      case "frames":
+        if (!s.hasFrames) return { ...def, state: "todo" };
+        if (s.frameWarnings.length > 0 && !s.framesManual) {
+          // 提案の根拠が弱いのに人が確認していない。**黙って done にしない**。
+          return { ...def, state: "invalid", reasonKey: `qlv.step.reason.${s.frameWarnings[0]}` };
+        }
+        return {
+          ...def,
+          state: "done",
+          note: { key: s.framesManual ? "qlv.step.note.framesManual" : "qlv.step.note.framesAuto" },
+        };
+
+      case "calibration":
+        return s.calibrated
+          ? { ...def, state: "done", note: { key: `xa.calib.source.${s.calibrationSource ?? "none"}` } }
+          : { ...def, state: "skipped", reasonKey: "qlv.step.reason.uncalibrated" };
+
+      case "edContour":
+      case "esContour": {
+        const n = def.id === "edContour" ? s.edPoints : s.esPoints;
+        if (n === 0) return { ...def, state: "todo" };
+        if (n < s.minPoints) {
+          return { ...def, state: "invalid", reasonKey: "qlv.step.reason.tooFewPoints" };
+        }
+        return { ...def, state: "done", note: { key: "qlv.step.note.points", params: { n: String(n) } } };
+      }
+
+      case "result":
+        return { ...def, state: s.hasResult ? "done" : "todo" };
 
       case "save":
         if (!s.canSave) return { ...def, state: "invalid", reasonKey: "xa.step.reason.noReference" };

@@ -69,7 +69,8 @@ export function TaskStepRail({
                 {t(s.reasonKey)}
               </div>
             )}
-            {s.clears.length > 0 && s.state === "done" && (
+            {/* `invalid` の段こそやり直したい（壊れている段を直す導線が無いと詰む）。 */}
+            {s.clears.length > 0 && (s.state === "done" || s.state === "invalid") && (
               <button
                 style={redoBtn}
                 data-testid={`xa-step-redo-${s.id}`}

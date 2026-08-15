@@ -296,6 +296,53 @@ function getQcaState(): QcaDebugSnapshot | null {
   return qcaSnapshot;
 }
 
+/** QLV（左室造影）の検証用スナップショット。`fw/angio-design.md` §9.2 / A5b。 */
+export interface QlvDebugSnapshot {
+  /** ED/ES に選んでいるフレーム（0 origin）。 */
+  edFrame: number;
+  esFrame: number;
+  /** 提案のままか、人が選び直したか。 */
+  framesManual: boolean;
+  /** ED/ES 提案の警告。 */
+  frameWarnings: string[];
+  /** 造影面積の時系列（提案の根拠。**数値で突き合わせるために出す**）。 */
+  areaCurve: number[];
+  /** 輪郭の点数。 */
+  edPoints: number;
+  esPoints: number;
+  /** 結果。未算出なら null。 */
+  result: {
+    ejectionFraction: number;
+    edvMl: number | null;
+    esvMl: number | null;
+    edVolumePx3: number;
+    esVolumePx3: number;
+    edAreaPx2: number;
+    esAreaPx2: number;
+    edLongAxisPx: number;
+    kennedyEf: number | null;
+    unit: string;
+    warnings: string[];
+    /** 壁運動の弦（正規化済み）。 */
+    wallMotion: number[] | null;
+    wallMotionMethod: string | null;
+  } | null;
+  /** 輪郭パネルの座標変換（画面 px = (画像 px − c0) × scale）。 */
+  view: { cx0: number; cy0: number; cw: number; ch: number; scale: number; dw: number; dh: number } | null;
+}
+
+let qlvSnapshot: QlvDebugSnapshot | null = null;
+
+/** QLV ダイアログ／輪郭パネルから呼ぶ（DEV 以外では読まれない）。 */
+export function publishQlvSnapshot(patch: Partial<QlvDebugSnapshot> | null): void {
+  if (!import.meta.env.DEV) return;
+  qlvSnapshot = patch ? ({ ...(qlvSnapshot ?? {}), ...patch } as QlvDebugSnapshot) : null;
+}
+
+function getQlvState(): QlvDebugSnapshot | null {
+  return qlvSnapshot;
+}
+
 declare global {
   interface Window {
     __graphyDebug?: {
@@ -305,6 +352,7 @@ declare global {
       getViewportProperties: typeof getViewportProperties;
       getXaCineStats: typeof getXaCineStats;
       getQcaState: typeof getQcaState;
+      getQlvState: typeof getQlvState;
     };
   }
 }
@@ -321,6 +369,7 @@ export function installDebugApi(): void {
     getViewportProperties,
     getXaCineStats,
     getQcaState,
+    getQlvState,
   };
   installed = true;
 }

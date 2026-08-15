@@ -69,6 +69,15 @@ public class AngioStoreService {
         return new Created(r.seriesInstanceUid(), r.sopInstanceUid());
     }
 
+    public Created createQlvSr(QlvSrRequest req) throws IOException {
+        Attributes tmpl = readTemplate(req.sopInstanceUid());
+        QlvSrWriter.Result r = QlvSrWriter.build(tmpl, req);
+        store(r.dataset());
+        log.info("QLV SR created: series={} sop={} (EF={})", r.seriesInstanceUid(), r.sopInstanceUid(),
+                req.ejectionFraction());
+        return new Created(r.seriesInstanceUid(), r.sopInstanceUid());
+    }
+
     /** 参照インスタンスのヘッダ（患者・スタディ識別情報の継承元）。取れなければ null。 */
     private Attributes readTemplate(String sopUid) {
         Path p = storage.resolveInstanceFile(sopUid);

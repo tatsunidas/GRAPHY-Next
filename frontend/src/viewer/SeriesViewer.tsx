@@ -12,6 +12,7 @@ import { UI_ICON_FILES } from "../icons/toolIcons";
 import { buildSeriesLayout, buildLayoutFromDto, DEFAULT_AXES, type AxisSpec, type SeriesLayout } from "./seriesLayout";
 import CineControls from "./CineControls";
 import { XaAnalysisDialog } from "./XaAnalysisDialog";
+import { XaQlvDialog } from "./XaQlvDialog";
 import { prewarmXaDataset, readXaCineSource, type XaCineSource } from "./xaCine";
 import { downloadBytes, exportFramesAsZip } from "./xaFrameExport";
 import {
@@ -337,6 +338,7 @@ export function SeriesViewer({
   const [dsaBusy, setDsaBusy] = useState(false);
   // 校正 / QCA ダイアログ（fw/angio-design.md §7.3 / §8）。
   const [xaDialogOpen, setXaDialogOpen] = useState(false);
+  const [qlvDialogOpen, setQlvDialogOpen] = useState(false);
   // 空間校正の確定/解除は imageId を変えないため、Viewer2D にメタデータを読み直させる鍵。
   const [calibVersion, setCalibVersion] = useState(0);
   // 連番 PNG エクスポート（fw/angio-design.md §14.3）。
@@ -899,6 +901,16 @@ export function SeriesViewer({
                   >
                     {t("xa.analysis.open")}
                   </button>
+                  {/* 左室造影の解析（A5b）。QCA とは段の構成が違うので別ダイアログ（§21.2-3）。 */}
+                  <button
+                    style={btn}
+                    data-testid="qlv-open"
+                    disabled={nZ < 3}
+                    onClick={() => setQlvDialogOpen(true)}
+                    title={t("qlv.title")}
+                  >
+                    {t("qlv.open")}
+                  </button>
                   <button
                     style={btn}
                     data-testid="xa-export-frames"
@@ -1064,6 +1076,22 @@ export function SeriesViewer({
             setDsaVersion((v) => v + 1);
             setCalibVersion((v) => v + 1);
           }}
+        />
+      )}
+      {qlvDialogOpen && displayImageIds.length > 0 && (
+        <XaQlvDialog
+          imageIds={displayImageIds}
+          seriesUid={seriesUid}
+          saveContext={{
+            studyUid,
+            // 保存の参照先は合成 imageId ではなく**ネイティブフレーム**の元インスタンス。
+            sopInstanceUidAt: (i) => sopUidFromImageId(zStack[i] ?? "") ?? null,
+          }}
+          frameTimeMs={fps > 0 ? 1000 / fps : null}
+          onClose={() => setQlvDialogOpen(false)}
+          // ⚠️ XA（isFrameStack）では**表示中のフレームは `z`**（`tIdx` は Run 軸）。
+          //    `setTIdx` を渡すと「フレームを合わせたつもりで別のランへ飛ぶ」。
+          onGoToFrame={setZ}
         />
       )}
     </div>

@@ -308,6 +308,36 @@ export const createXaPresentationState = (req: AngioPresentationRequest) =>
 /** QCA 計測値を Comprehensive SR として保存する。 */
 export const createQcaSr = (req: QcaSrRequest) => httpSend<AngioCreated>("/api/angio/qca-sr", "POST", req);
 
+/**
+ * QLV（左室造影）の結果を保存する要求（`fw/angio-design.md` §9.2 / A5b）。
+ *
+ * 🚨 **未校正のときは `unit`・容積・Kennedy をすべて null にする**。EF はスケール不変なので
+ * 未校正でも正しいが、容積の絶対値と Kennedy 補正（アフィン変換）は出せない（§9.2.1）。
+ */
+export interface QlvSrRequest {
+  studyInstanceUid: string;
+  seriesInstanceUid: string;
+  sopInstanceUid: string;
+  /** **1 origin**。 */
+  edFrameNumber: number;
+  esFrameNumber: number;
+  /** 校正済みなら "mL"、未校正なら null。 */
+  unit: string | null;
+  calibration?: string | null;
+  /** "manual" / "automatic (area curve)"。ED/ES の決め方は結果の意味を変える（§9.2.2）。 */
+  frameSelection: string;
+  ejectionFraction: number;
+  edvMl: number | null;
+  esvMl: number | null;
+  kennedyEdvMl: number | null;
+  kennedyEsvMl: number | null;
+  kennedyEjectionFraction: number | null;
+  method: string;
+}
+
+/** QLV 計測値を Comprehensive SR として保存する。 */
+export const createQlvSr = (req: QlvSrRequest) => httpSend<AngioCreated>("/api/angio/qlv-sr", "POST", req);
+
 // ── 被ばく線量レポート（RDSR）。`fw/angio-design.md` §14.2 / A9 ────────────────
 
 /** SR の 1 項目（NUM / TEXT / CODE / UIDREF / DATETIME）。 */

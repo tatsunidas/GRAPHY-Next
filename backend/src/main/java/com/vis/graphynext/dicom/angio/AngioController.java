@@ -60,6 +60,17 @@ public class AngioController {
         }
     }
 
+    @PostMapping("/qlv-sr")
+    public ResponseEntity<AngioStoreService.Created> createQlvSr(@RequestBody QlvSrRequest req) {
+        requireText(req.sopInstanceUid(), "sopInstanceUid");
+        try {
+            return ResponseEntity.ok(service.createQlvSr(req));
+        } catch (IOException e) {
+            log.error("QLV SR の作成に失敗", e);
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "解析結果を保存できませんでした");
+        }
+    }
+
     private static void requireText(String v, String name) {
         if (v == null || v.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, name + " は必須です");

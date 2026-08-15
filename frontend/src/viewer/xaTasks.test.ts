@@ -11,10 +11,13 @@
 import { describe, expect, it } from "vitest";
 import {
   QCA_STEPS,
+  QLV_STEPS,
   clearedBy,
   deriveQcaSteps,
+  deriveQlvSteps,
   invalidatedBy,
   type QcaTaskState,
+  type QlvTaskState,
 } from "./xaTasks";
 
 const ORDER = QCA_STEPS.map((s) => s.id);
@@ -220,5 +223,141 @@ describe("deriveQcaSteps", () => {
 
   it("段の数と順序は定義どおり", () => {
     expect(deriveQcaSteps(state()).map((x) => x.id)).toEqual(ORDER);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// QLV（左室造影）— `fw/angio-design.md` §9.2 / A5b
+// ─────────────────────────────────────────────────────────────────────────
+
+/** 段の繋がりの健全性は**タスクによらず**同じ規則で守る。 */
+describe.each([
+  ["QCA", QCA_STEPS],
+  ["QLV", QLV_STEPS],
+])("段の繋がり（%s）", (_name, STEPS) => {
+  const order = STEPS.map((s) => s.id);
+
+  it("id が重複していない", () => {
+    expect(new Set(order).size).toBe(order.length);
+  });
+
+  it("invalidates の宛先がすべて実在し、必ず後ろの段を指す", () => {
+    for (const s of STEPS) {
+      for (const id of s.invalidates) {
+        expect(order).toContain(id);
+        expect(order.indexOf(id)).toBeGreaterThan(order.indexOf(s.id));
+      }
+    }
+  });
+
+  it("巡回していない", () => {
+    for (const s of STEPS) expect(invalidatedBy(s.id, STEPS)).not.toContain(s.id);
+  });
+
+  it("手修正の持ち主が重複していない", () => {
+    const owners = STEPS.flatMap((s) => s.owns);
+    expect(new Set(owners).size).toBe(owners.length);
+  });
+
+  it("🚨 どの段も上流が持つ手修正を捨てない", () => {
+    for (const s of STEPS) {
+      for (const key of s.clears) {
+        const owner = STEPS.find((x) => x.owns.includes(key));
+        expect(owner, `${key} の持ち主が居ない`).toBeDefined();
+        expect(order.indexOf(owner!.id)).toBeGreaterThanOrEqual(order.indexOf(s.id));
+      }
+    }
+  });
+
+  it("最後の段は何も無効にしない", () => {
+    expect(STEPS[STEPS.length - 1].invalidates).toEqual([]);
+  });
+});
+
+describe("deriveQlvSteps", () => {
+  function qlv(over: Partial<QlvTaskState> = {}): QlvTaskState {
+    return {
+      hasFrames: true,
+      framesManual: false,
+      frameWarnings: [],
+      calibrated: true,
+      calibrationSource: "user-catheter",
+      edPoints: 8,
+      esPoints: 8,
+      minPoints: 4,
+      hasResult: true,
+      canSave: true,
+      saved: false,
+      ...over,
+    };
+  }
+  const byId = (s: QlvTaskState) => new Map(deriveQlvSteps(s).map((x) => [x.id, x]));
+
+  it("段は QCA と別（ED/ES があり、中心線・エッジが無い）", () => {
+    const ids = deriveQlvSteps(qlv()).map((x) => x.id);
+    expect(ids).toEqual(["frames", "calibration", "edContour", "esContour", "result", "save"]);
+    expect(ids).not.toContain("centerline");
+  });
+
+  it("🚨 未校正の理由が QCA と違う（EF は出せる、と伝える）", () => {
+    // QCA では未校正＝数値が px になる。QLV では EF はスケール不変なので正しい。
+    // 同じ skipped でも「飛ばすと何が失われるか」が違うので、文言を分ける。
+    const c = byId(qlv({ calibrated: false })).get("calibration")!;
+    expect(c.state).toBe("skipped");
+    expect(c.reasonKey).toBe("qlv.step.reason.uncalibrated");
+    expect(c.reasonKey).not.toBe("xa.step.reason.uncalibrated");
+  });
+
+  it("★提案に警告が付いている間は done にしない（黙って承認済みにしない）", () => {
+    const f = byId(qlv({ frameWarnings: ["fillingNotDetected"] })).get("frames")!;
+    expect(f.state).toBe("invalid");
+    expect(f.reasonKey).toBe("qlv.step.reason.fillingNotDetected");
+  });
+
+  it("警告があっても人が選び直せば done になる", () => {
+    const f = byId(qlv({ frameWarnings: ["fillingNotDetected"], framesManual: true })).get("frames")!;
+    expect(f.state).toBe("done");
+    expect(f.note?.key).toBe("qlv.step.note.framesManual");
+  });
+
+  it("自動提案のままなら「未確認」と名乗る", () => {
+    expect(byId(qlv()).get("frames")?.note?.key).toBe("qlv.step.note.framesAuto");
+  });
+
+  it("点が足りない輪郭は invalid（黙って結果を出さない）", () => {
+    const e = byId(qlv({ edPoints: 2, hasResult: false })).get("edContour")!;
+    expect(e.state).toBe("invalid");
+    expect(e.reasonKey).toBe("qlv.step.reason.tooFewPoints");
+  });
+
+  it("輪郭が未着手なら todo（点数は注記に出る）", () => {
+    const m = byId(qlv({ edPoints: 0, hasResult: false }));
+    expect(m.get("edContour")?.state).toBe("active");
+    expect(byId(qlv()).get("edContour")?.note).toEqual({ key: "qlv.step.note.points", params: { n: "8" } });
+  });
+
+  it("active は高々 1 つ", () => {
+    const cases: Partial<QlvTaskState>[] = [
+      {}, { hasFrames: false }, { calibrated: false }, { edPoints: 0, hasResult: false },
+      { esPoints: 0, hasResult: false }, { hasResult: false }, { saved: true }, { canSave: false },
+      { frameWarnings: ["shortWindow"] },
+    ];
+    for (const c of cases) {
+      expect(deriveQlvSteps(qlv(c)).filter((x) => x.state === "active").length).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("🚨 ED/ES をやり直すと両方の輪郭を捨てる（別の心位相を指すため）", () => {
+    const keys = clearedBy("frames", QLV_STEPS);
+    expect(keys).toContain("edContour");
+    expect(keys).toContain("esContour");
+  });
+
+  it("校正のやり直しは輪郭を捨てない（画素座標なので意味を失わない）", () => {
+    expect(clearedBy("calibration", QLV_STEPS)).toEqual([]);
+  });
+
+  it("ED の輪郭をやり直しても ES は残る", () => {
+    expect(clearedBy("edContour", QLV_STEPS)).toEqual(["edContour"]);
   });
 });

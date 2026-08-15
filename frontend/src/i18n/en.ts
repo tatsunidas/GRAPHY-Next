@@ -914,6 +914,57 @@ export const en: Record<string, string> = {
   "xa.step.reason.noReference": "Cannot identify the source instance to save against",
   "xa.step.legend":
     "✓ done / ▶ current / ○ to do / ⤼ skipped / ✕ unavailable. Skipped is NOT the same as done.",
+
+  // QLV (left ventriculography). fw/angio-design.md §9.2 / A5b
+  "qlv.open": "LV analysis",
+  "qlv.title": "Quantitative left ventriculography (QLV, single plane)",
+  "qlv.frames": "ED / ES frames",
+  "qlv.framesHint":
+    "The curve is the opacified area per frame (green = ED, orange = ES). The suggestion is only a starting point \u2014 always review the motion. Contrast injection commonly triggers a premature ventricular beat, and the beat right after it overestimates EF.",
+  "qlv.resuggest": "Suggest again",
+  "qlv.resuggestRoi": "Suggest from contour region",
+  "qlv.resuggestRoiTitle":
+    "Re-counts the opacified area only inside the bounding box of the ED contour. Counting over the whole frame picks up the diaphragm, spine, catheter and aorta, and does not track the ventricle.",
+  "qlv.contour": "LV contour",
+  "qlv.edit.ed": "Draw ED",
+  "qlv.edit.es": "Draw ES",
+  "qlv.clearContour": "Clear this contour",
+  "qlv.editor.hint":
+    "Click from one side of the aortic annulus, around the apex, to the other side. The chord between the first and last points is the valve plane, which defines the long axis. Drag a point to move it, right-click (or Alt+click) to delete, click on a segment to insert between.",
+  "qlv.result": "Results",
+  "qlv.needContours": "Draw both the ED and ES contours to get results.",
+  "qlv.ef": "Ejection fraction (EF)",
+  "qlv.noVolume": "\u2014 (uncalibrated)",
+  "qlv.kennedy": "Kennedy corrected",
+  "qlv.wallMotionMethod":
+    "Wall motion is chord shortening with arc-length correspondence (dimensionless). This is NOT Sheehan's centerline method. No normal-value database is bundled, so no normal/abnormal judgement is made.",
+  "qlv.areaLengthCaveat":
+    "The Area-Length method (single plane) assumes an ellipsoidal ventricle. Apical aneurysm or marked distortion increases the error. A single-plane RAO 30\u00b0 acquisition is assumed.",
+  "qlv.saved": "Measurements saved ({{uid}})",
+  "qlv.error.curve": "Could not build the opacified-area curve. Too few frames, or the pixels could not be read.",
+  "qlv.step.frames": "Choose ED / ES",
+  "qlv.step.edContour": "ED contour",
+  "qlv.step.esContour": "ES contour",
+  "qlv.step.result": "Review results",
+  "qlv.step.note.framesAuto": "auto-suggested (unreviewed)",
+  "qlv.step.note.framesManual": "chosen by user",
+  "qlv.step.note.points": "{{n}} point(s)",
+  "qlv.step.reason.uncalibrated":
+    "EF is still correct without calibration; only volumes (mL) and the Kennedy correction are unavailable",
+  "qlv.step.reason.tooFewPoints": "Not enough points (4 or more)",
+  "qlv.step.reason.fillingNotDetected":
+    "Fully opacified from the first frame. The filling ramp was not observed, so review ED/ES yourself",
+  "qlv.step.reason.esBeforeEd": "No end-systole found after ED. The run may not contain a full cardiac cycle",
+  "qlv.step.reason.shortWindow": "The searchable window is too short. Choose ED/ES manually",
+  "qlv.step.reason.implausibleInterval":
+    "The ED-to-ES interval is physiologically impossible (systole is roughly 200-500 ms). Re-suggest from the LV region, or choose the frames manually",
+  "qlv.warn.uncalibrated":
+    "\u26a0 Volumes (mL) cannot be reported without calibration. EF is scale invariant and therefore valid.",
+  "qlv.warn.esLargerThanEd":
+    "\u26a0 The ES volume exceeds the ED volume. Review the frame selection or the contours.",
+  "qlv.warn.kennedyNegative": "\u26a0 The Kennedy-corrected volume was negative, so it is not shown.",
+  "qlv.warn.valveWidthMismatch":
+    "\u26a0 The valve plane width differs markedly between ED and ES. Check that both mark the same plane.",
   "xa.qca.yes": "yes",
   "xa.qca.no": "no",
   "xa.qca.edgeEditsDropped": "⚠ Edge corrections were discarded because the centerline changed (they would land on different locations).",
