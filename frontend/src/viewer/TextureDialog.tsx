@@ -10,11 +10,32 @@
  * Radiomics の各種パラメータは環境設定 Settings ▸ Texture（{@code texture.*} キー）から取得する。
  * バッチ処理は対象外（単一マップのみ）。設計 {@code fw/texture-radiomics-design.md}。
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { NumberField } from "../hooks/NumberField";
 import { useI18n } from "../i18n/i18n";
-import { fetchSeries, fetchSeriesLayout, createTextureMap, type Series, type Study } from "../api";
+import {
+  fetchSeries,
+  fetchSeriesLayout,
+  submitTextureJob,
+  getTextureJob,
+  cancelTextureJob,
+  type Series,
+  type Study,
+  type TextureJobStatus,
+} from "../api";
 import { fetchSettings } from "../settings/settingsApi";
-import { TEXTURE_FAMILIES } from "./textureFeatures";
+import {
+  TEXTURE_FAMILIES,
+  GLAM_FAMILY_KEY,
+  GLAM_MATRICES,
+  GLAM_MIN_FILTER_SIZE,
+  glamFeatureString,
+  glamStatisticsFor,
+  resamplingSpacing,
+} from "./textureFeatures";
+
+/** ジョブの進み具合を見に行く間隔。 */
+const POLL_INTERVAL_MS = 700;
 
 export function TextureDialog({
   study,
@@ -45,10 +66,41 @@ export function TextureDialog({
   const [nC, setNC] = useState(1);
   const [nT, setNT] = useState(1);
 
+  // GLAM は 19 行列 × 8 統計。1 本のドロップダウンでは選べないので、行列と統計を別々に選ばせる。
+  const [glamMatrixName, setGlamMatrixName] = useState(GLAM_MATRICES[0].name);
+  const [glamStatistic, setGlamStatistic] = useState("Mean");
+
   const [allSeries, setAllSeries] = useState<Series[]>([series]);
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  const [job, setJob] = useState<TextureJobStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const jobIdRef = useRef<string | null>(null);
+
+  const isGlam = familyKey === GLAM_FAMILY_KEY;
+  const glamMatrix = useMemo(
+    () => GLAM_MATRICES.find((m) => m.name === glamMatrixName),
+    [glamMatrixName],
+  );
+  const glamStatOptions = useMemo(() => glamStatisticsFor(glamMatrix), [glamMatrix]);
+  const minKernel = isGlam ? GLAM_MIN_FILTER_SIZE : 3;
+  /**
+   * 境界補正が入っていると、この 2 行列は 1 に張り付いて情報が消える。
+   * 設定は真偽値なので "false"、backend の Property 表記に合わせた "0" のどちらでも来うる。
+   */
+  const boundaryCorrectionRaw = settings.BOOL_GLAM_boundaryCorrection;
+  const boundaryCorrectionOn = boundaryCorrectionRaw !== "0" && boundaryCorrectionRaw !== "false";
+  const glamBoundaryWarning =
+    isGlam && glamMatrix?.needsBoundaryCorrectionOff === true && boundaryCorrectionOn;
+
+  /**
+   * リサンプリングは環境設定で決まるので、この画面からは見えない。だが「距離 1 の意味」を
+   * 変えてしまう＝値の意味が変わるパラメータなので、有効なら計算前に見えるようにしておく。
+   */
+  const resamplingNote = useMemo(() => {
+    const spacing = resamplingSpacing(settings);
+    return spacing ? t("texture.resampling.on", { spacing: spacing.join(", ") }) : null;
+  }, [settings, t]);
 
   // ターゲット候補＝同一 study の全シリーズ。マスク候補はターゲットを除いたもの。
   const maskCandidates = useMemo(
@@ -115,39 +167,99 @@ export function TextureDialog({
     };
   }, [study.studyInstanceUid, maskSeriesUid]);
 
-  // ファミリー変更で特徴を先頭にリセット。
+  // ファミリー変更で特徴を先頭にリセット。GLAM は行列×統計なので features は空。
   useEffect(() => {
-    setFeature(family.features[0]);
+    setFeature(family.features[0] ?? "");
   }, [family]);
+
+  // GLAM は 3D 専用（球殻上の動径分布として定義されている）。カーネルも下限が上がる。
+  useEffect(() => {
+    if (!isGlam) return;
+    setForce2D(false);
+    setKernel((k) => (k < GLAM_MIN_FILTER_SIZE ? GLAM_MIN_FILTER_SIZE + 2 : k));
+  }, [isGlam]);
+
+  // 自己ペアだけの行列に切り替えたら、対角/非対角の統計は選べなくなる。
+  useEffect(() => {
+    if (!glamStatOptions.includes(glamStatistic)) setGlamStatistic(glamStatOptions[0]);
+  }, [glamStatOptions, glamStatistic]);
+
+  // 投入したジョブの進み具合を追う。ダイアログを閉じても取り違えないよう jobId で照合する。
+  useEffect(() => {
+    if (!job || job.state === "DONE" || job.state === "FAILED" || job.state === "CANCELLED") return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void getTextureJob(job.jobId)
+        .then((next) => {
+          if (cancelled || jobIdRef.current !== next.jobId) return;
+          setJob(next);
+          if (next.state === "DONE" && next.result) {
+            onCreated(next.result.seriesInstanceUid);
+            onClose();
+          } else if (next.state === "FAILED") {
+            setBusy(false);
+            setError(next.error ?? t("texture.err.failed"));
+          } else if (next.state === "CANCELLED") {
+            setBusy(false);
+          }
+        })
+        .catch((e) => {
+          if (cancelled) return;
+          setBusy(false);
+          setError(t("common.fetchError", { error: String(e) }));
+        });
+    }, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job]);
+
+  const featureString = isGlam
+    ? glamFeatureString(glamMatrixName, glamStatistic)
+    : `${family.key}_${feature}`;
 
   const onRun = async () => {
     setError(null);
-    if (!(kernel >= 3 && kernel <= 99)) return setError(t("texture.err.kernel"));
+    if (!(kernel >= minKernel && kernel <= 99)) {
+      return setError(isGlam ? t("texture.err.kernelGlam", { min: minKernel }) : t("texture.err.kernel"));
+    }
     if (!(stride >= 1 && stride <= 32)) return setError(t("texture.err.stride"));
+    // GLAM を全面マスクで回すと窓数が桁違いになる（backend も拒否する）。先に UI で止める。
+    if (isGlam && !maskSeriesUid) return setError(t("texture.err.glamNeedsMask"));
     setBusy(true);
     try {
-      const res = await createTextureMap({
+      const status = await submitTextureJob({
         studyInstanceUid: study.studyInstanceUid,
         sourceSeriesUid: targetSeriesUid,
         maskSeriesUid: maskSeriesUid || null,
         maskChannel,
-        feature: `${family.key}_${feature}`,
+        feature: featureString,
         filterSize: kernel,
         stride,
-        force2D,
+        force2D: isGlam ? false : force2D,
         channel,
         timePoint,
         settings,
+        margin: null,
         seriesDescription: null,
         seriesNumber: null,
       });
-      onCreated(res.seriesInstanceUid);
-      onClose();
+      jobIdRef.current = status.jobId;
+      setJob(status);
     } catch (e) {
-      setError(t("common.fetchError", { error: String(e) }));
-    } finally {
       setBusy(false);
+      setError(t("common.fetchError", { error: String(e) }));
     }
+  };
+
+  const onCancelJob = () => {
+    const id = jobIdRef.current;
+    if (!id) return;
+    void cancelTextureJob(id)
+      .then(setJob)
+      .catch(() => {});
   };
 
   const seriesLabel = (s: Series) =>
@@ -213,42 +325,89 @@ export function TextureDialog({
             ))}
           </select>
         </Field>
-        <Field label={t("texture.field.feature")}>
-          <select value={feature} onChange={(e) => setFeature(e.target.value)} disabled={busy} style={input}>
-            {family.features.map((f) => (
-              <option key={f} value={f}>{f}</option>
-            ))}
-          </select>
-        </Field>
+        {/* GLAM は行列（記述子）と統計（その要約）の 2 段。GLCM でいう共起行列と統計の関係。 */}
+        {isGlam ? (
+          <>
+            <Field label={t("texture.field.glamMatrix")}>
+              <select value={glamMatrixName} onChange={(e) => setGlamMatrixName(e.target.value)} disabled={busy} style={input}>
+                {GLAM_MATRICES.map((m) => (
+                  <option key={m.name} value={m.name}>{t(m.labelKey)}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label={t("texture.field.glamStatistic")}>
+              <select value={glamStatistic} onChange={(e) => setGlamStatistic(e.target.value)} disabled={busy} style={input}>
+                {glamStatOptions.map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            </Field>
+          </>
+        ) : (
+          <Field label={t("texture.field.feature")}>
+            <select value={feature} onChange={(e) => setFeature(e.target.value)} disabled={busy} style={input}>
+              {family.features.map((f) => (
+                <option key={f} value={f}>{f}</option>
+              ))}
+            </select>
+          </Field>
+        )}
 
         <Field label={t("texture.field.kernel")}>
-          <input type="number" min={3} max={99} step={2} value={kernel}
-            onChange={(e) => setKernel(Number(e.target.value))} disabled={busy} style={input} />
+          {/* 確定時に奇数へ丸める（min から step=2 刻み）。backend も奇数へ切り上げる。 */}
+          <NumberField value={kernel} onChange={setKernel} min={minKernel} max={99} step={2}
+            disabled={busy} style={input} />
         </Field>
         <Field label={t("texture.field.stride")}>
-          <input type="number" min={1} max={32} value={stride}
-            onChange={(e) => setStride(Number(e.target.value))} disabled={busy} style={input} />
+          <NumberField value={stride} onChange={setStride} min={1} max={32}
+            disabled={busy} style={input} />
         </Field>
         <Field label={t("texture.field.dim")}>
-          <select value={force2D ? "2d" : "3d"} onChange={(e) => setForce2D(e.target.value === "2d")} disabled={busy} style={input}>
+          <select value={isGlam ? "3d" : force2D ? "2d" : "3d"}
+            onChange={(e) => setForce2D(e.target.value === "2d")} disabled={busy || isGlam} style={input}>
             <option value="2d">{t("texture.dim.2d")}</option>
             <option value="3d">{t("texture.dim.3d")}</option>
           </select>
         </Field>
 
+        {isGlam && <div style={note}>{t("texture.glam.note")}</div>}
+        {glamBoundaryWarning && <div style={warnText}>{t("texture.glam.boundaryWarn")}</div>}
+        {resamplingNote && <div style={note}>{resamplingNote}</div>}
+
         <div style={{ color: "#6b7785", fontSize: 11, marginTop: 6 }}>{t("texture.paramsNote")}</div>
         {error && <div style={errText}>{error}</div>}
 
-        {/* 計算中の不定プログレスバー（同期 POST のため進捗は不定）。 */}
+        {/* 計算中の進み具合。backend がスライス単位で報告する。 */}
         {busy && (
-          <div style={progressTrack}>
-            <div style={progressBar} />
-            <style>{"@keyframes texbar{0%{left:-40%}100%{left:100%}}"}</style>
-          </div>
+          <>
+            <div style={progressTrack}>
+              {job && job.slicesTotal > 0 ? (
+                <div style={{ ...progressFill, width: `${Math.round((job.slicesDone / job.slicesTotal) * 100)}%` }} />
+              ) : (
+                <>
+                  <div style={progressBar} />
+                  <style>{"@keyframes texbar{0%{left:-40%}100%{left:100%}}"}</style>
+                </>
+              )}
+            </div>
+            <div style={note}>
+              {job && job.slicesTotal > 0
+                ? t("texture.progress.slices", {
+                    done: job.slicesDone,
+                    total: job.slicesTotal,
+                    seconds: Math.round(job.elapsedMs / 1000),
+                  })
+                : t("texture.progress.starting")}
+            </div>
+          </>
         )}
 
         <div style={{ display: "flex", gap: 6, marginTop: 12, justifyContent: "flex-end" }}>
-          <button onClick={onClose} disabled={busy} style={btn}>{t("common.cancel")}</button>
+          {busy ? (
+            <button onClick={onCancelJob} style={btn}>{t("texture.cancelJob")}</button>
+          ) : (
+            <button onClick={onClose} style={btn}>{t("common.cancel")}</button>
+          )}
           <button onClick={onRun} disabled={busy} style={{ ...btnPrimary, opacity: busy ? 0.6 : 1 }}>
             {busy ? t("texture.running") : t("texture.run")}
           </button>
@@ -282,6 +441,15 @@ const fieldLabel: React.CSSProperties = { color: "#5a6672", flex: "none", minWid
 const fieldValue: React.CSSProperties = { flex: 1, textAlign: "right" };
 const input: React.CSSProperties = { width: "100%", boxSizing: "border-box", border: "1px solid #cdd5de", borderRadius: 4, fontSize: 12, padding: "3px 6px" };
 const errText: React.CSSProperties = { color: "#b00020", marginTop: 8 };
+const warnText: React.CSSProperties = {
+  color: "#8a5300", background: "#fff6e5", border: "1px solid #f0d9a8",
+  borderRadius: 4, padding: "5px 7px", marginTop: 8, fontSize: 11, lineHeight: 1.5,
+};
+const note: React.CSSProperties = { color: "#6b7785", fontSize: 11, marginTop: 6, lineHeight: 1.5 };
+const progressFill: React.CSSProperties = {
+  position: "absolute", left: 0, top: 0, height: "100%", borderRadius: 3,
+  background: "#0b5cad", transition: "width 0.3s linear",
+};
 const progressTrack: React.CSSProperties = {
   position: "relative", height: 6, marginTop: 10, borderRadius: 3,
   background: "#e1e7ee", overflow: "hidden",

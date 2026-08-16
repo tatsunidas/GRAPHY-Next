@@ -106,6 +106,8 @@ const TEXTURE_CATEGORY: CategoryDef = {
         familyToggle("NGLDM", "settings.tex.fam.ngldm", true),
         familyToggle("Fractal", "settings.tex.fam.fractal", true),
         familyToggle("Shape2D", "settings.tex.fam.shape2d", false),
+        // GLAM は IBSI の標準特徴ではなく、ROI のボクセル対を全部歩くので他より重い。既定 OFF。
+        familyToggle("enableGLAM", "settings.tex.fam.glam", false),
       ],
     },
     { titleKey: "settings.sec.tex.glcm", fields: binFields("GLCM", { delta: true }) },
@@ -127,6 +129,36 @@ const TEXTURE_CATEGORY: CategoryDef = {
     {
       titleKey: "settings.sec.tex.fractal",
       fields: [{ key: "texture.BOXSIZES_FRACTAL", labelKey: "settings.tex.boxSizes", type: "text", default: "2,3,4,6,8,12,16,32,64" }],
+    },
+    {
+      // GLAM のアルゴリズムパラメータは RadiomicsJ の SettingParams 名をそのまま使う
+      // （本家ドキュメントと引き当てられるようにするため。他の族の GRAPHY Properties 風命名とは形が違う）。
+      titleKey: "settings.sec.tex.glam",
+      fields: [
+        ...binFields("GLAM"),
+        {
+          // 可視化マップではカーネル半径で頭打ちになる。0=カーネルから自動。
+          key: "texture.INT_GLAM_maxRadius", labelKey: "settings.tex.glam.maxRadius",
+          type: "number", default: 0, min: 0, max: 200, helpKey: "settings.tex.glam.maxRadius.help",
+        },
+        {
+          key: "texture.BOOL_GLAM_boundaryCorrection", labelKey: "settings.tex.glam.boundaryCorrection",
+          type: "toggle", default: true, helpKey: "settings.tex.glam.boundaryCorrection.help",
+        },
+        {
+          key: "texture.INT_GLAM_maxReferenceVoxels", labelKey: "settings.tex.glam.maxReferenceVoxels",
+          type: "number", default: 0, min: 0, max: 100000, helpKey: "settings.tex.glam.maxReferenceVoxels.help",
+        },
+        {
+          key: "texture.INT_GLAM_numRandomisations", labelKey: "settings.tex.glam.numRandomisations",
+          type: "number", default: 0, min: 0, max: 1000, helpKey: "settings.tex.glam.numRandomisations.help",
+        },
+        { key: "texture.LONG_GLAM_randomSeed", labelKey: "settings.tex.glam.randomSeed", type: "number", default: 42, min: 0, max: 2147483647 },
+        { key: "texture.INT_GLAM_savitzkyGolayWindow", labelKey: "settings.tex.glam.sgWindow", type: "number", default: 7, min: 3, max: 51 },
+        { key: "texture.INT_GLAM_savitzkyGolayPolynomial", labelKey: "settings.tex.glam.sgPolynomial", type: "number", default: 3, min: 1, max: 9 },
+        { key: "texture.DOUBLE_GLAM_peakProminence", labelKey: "settings.tex.glam.peakProminence", type: "number", default: 4, min: 0, max: 100 },
+        { key: "texture.INT_GLAM_maxLocalShellRadius", labelKey: "settings.tex.glam.maxLocalShellRadius", type: "number", default: 30, min: 2, max: 200 },
+      ],
     },
   ],
 };

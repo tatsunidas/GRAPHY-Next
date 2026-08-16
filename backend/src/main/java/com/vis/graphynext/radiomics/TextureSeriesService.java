@@ -2,7 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-package com.vis.graphynext.dicom.texture;
+package com.vis.graphynext.radiomics;
 
 import com.vis.graphynext.dicom.store.DicomStorageService;
 import org.dcm4che3.data.Attributes;
@@ -40,17 +40,25 @@ public class TextureSeriesService {
 
     private final DicomStorageService storage;
     private final RadiomicsMapEngine engine;
+    private final RadiomicsMode mode;
 
-    public TextureSeriesService(DicomStorageService storage, RadiomicsMapEngine engine) {
+    public TextureSeriesService(DicomStorageService storage, RadiomicsMapEngine engine, RadiomicsMode mode) {
         this.storage = storage;
         this.engine = engine;
+        this.mode = mode;
     }
 
     /** 生成結果。 */
     public record Result(String seriesInstanceUid, List<String> sopInstanceUids) {}
 
-    /** マップを計算し派生シリーズとして保存する。 */
+    /** マップを計算し派生シリーズとして保存する（進み具合は見ない）。 */
     public Result create(TextureSeriesRequest req) throws IOException {
+        return create(req, TextureProgress.NONE);
+    }
+
+    /** マップを計算し派生シリーズとして保存する。 */
+    public Result create(TextureSeriesRequest req, TextureProgress progress) throws IOException {
+        mode.require("テクスチャ可視化マップ");
         validate(req);
 
         // 属性テンプレート = 元シリーズ代表インスタンス。
@@ -61,7 +69,7 @@ public class TextureSeriesService {
         Attributes tmpl = readHeader(srcFiles.get(0));
 
         // マップ計算（重い）。
-        RadiomicsMapEngine.MapResult map = engine.compute(req);
+        RadiomicsMapEngine.MapResult map = engine.compute(req, progress);
 
         // 32bit float → 16bit unsigned のスケール係数（GRAPHY convertTo16BitWithCalibration 準拠）。
         double[] mm = minMax(map.data());
@@ -86,8 +94,7 @@ public class TextureSeriesService {
         double sliceThickness = tmpl.getDouble(Tag.SliceThickness, 0.0);
         double spacingBetween = tmpl.getDouble(Tag.SpacingBetweenSlices,
                 spacingFromIpp(map.ippPerZ(), sliceThickness));
-        String derivation = "Texture map " + featureName + " (GRAPHY-Next Radiomics; kernel=" + req.filterSize()
-                + ", stride=" + req.stride() + ", " + (req.force2D() ? "2D" : "3D") + ")";
+        String derivation = derivationDescription(req, featureName);
 
         List<String> sops = new ArrayList<>(map.slices());
         for (int z = 0; z < map.slices(); z++) {
@@ -100,6 +107,33 @@ public class TextureSeriesService {
         log.info("texture series created: {} ({} instances) feature={} from {}",
                 newSeriesUid, sops.size(), featureName, req.sourceSeriesUid());
         return new Result(newSeriesUid, sops);
+    }
+
+    /**
+     * DerivationDescription。<b>マップの値の意味を決めるパラメータを、シリーズ自身に書き残す</b>。
+     * 特に GLAM は maxRadius と境界補正で数値の意味が変わり、後から設定を辿る術が無い。
+     */
+    private static String derivationDescription(TextureSeriesRequest req, String featureName) {
+        StringBuilder sb = new StringBuilder("Texture map ").append(featureName)
+                .append(" (GRAPHY-Next Radiomics; kernel=").append(req.filterSize())
+                .append(", stride=").append(req.stride())
+                .append(", ").append(req.force2D() ? "2D" : "3D")
+                .append(", margin=").append(req.margin() != null ? req.margin().toString() : "default")
+                // リサンプリングすると「距離 1」の意味が変わるので、値の意味を決めるパラメータに含まれる。
+                .append(", resampling=").append(TextureResampling.describe(req.settings()));
+        if (GlamMapSupport.isGlam(req.feature())) {
+            sb.append(", maxRadius=")
+                    .append(GlamMapSupport.maxRadiusFor(Math.max(1, req.filterSize()), req.settings()))
+                    .append(", boundaryCorrection=").append(setting(req, "BOOL_GLAM_boundaryCorrection", "1"))
+                    .append(", randomisations=").append(setting(req, "INT_GLAM_numRandomisations", "0"));
+        }
+        return sb.append(")").toString();
+    }
+
+    private static String setting(TextureSeriesRequest req, String key, String def) {
+        if (req.settings() == null) return def;
+        String v = req.settings().get(key);
+        return (v == null || v.isBlank()) ? def : v.trim();
     }
 
     private void validate(TextureSeriesRequest req) {
@@ -220,6 +254,16 @@ public class TextureSeriesService {
         a.setDouble(Tag.RescaleSlope, VR.DS, slope);
         // RescaleType(LO, 64 桁): 校正済み画素値の意味＝特徴名。
         a.setString(Tag.RescaleType, VR.LO, featureName.length() > 64 ? featureName.substring(0, 64) : featureName);
+        /*
+         * 特徴値のとる範囲はモダリティ由来の W/L とは何の関係も無く、特徴ごとに桁も符号も違う。
+         * 何も書かないとビューアは既定の窓で開き、マップは一様な白に潰れて何も読めない
+         * （実機検証で実際にそうなった）。生成時に min/max は分かっているので、全域が見える窓を
+         * 初期値として置いておく。利用者が動かせばそちらが優先されるだけなので、害は無い。
+         */
+        // slope=(max-min)/65535, intercept=min で決めた係数なので、そこから元の範囲に戻せる。
+        double windowWidth = Math.max(1e-6, slope * 65535.0);
+        a.setDouble(Tag.WindowCenter, VR.DS, intercept + windowWidth / 2.0);
+        a.setDouble(Tag.WindowWidth, VR.DS, windowWidth);
 
         // 幾何（source と共有：Trilinear 拡大済みで 1:1）。
         if (hasGeom) {

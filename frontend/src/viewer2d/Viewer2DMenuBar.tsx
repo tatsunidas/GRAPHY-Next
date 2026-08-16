@@ -102,6 +102,8 @@ export function Viewer2DMenuBar({
     // H5: ROI の読み出しと、ROI に紐付くプラグイン属性。**pluginId は host が入れる**ので、
     // プラグインは他プラグイン（や本体）の属性名前空間に触れない。
     getRois: (tileId) => actions.getRois(tileId),
+    goTo: (tileId, dims) => actions.goTo(tileId, dims),
+    selectRoi: (tileId, roiUid, exclusive) => actions.selectRoi(tileId, roiUid, exclusive),
     getRoiMeta: (roiUid) => actions.getRoiMeta(roiUid, m.id),
     setRoiMeta: (roiUid, patch) => actions.setRoiMeta(roiUid, m.id, patch),
     subscribeRois: (listener) => actions.subscribeRois(listener),
@@ -220,6 +222,12 @@ export function Viewer2DMenuBar({
         { label: t("viewer2d.roi.angle"), onClick: () => actions.setTool(TOOL_IDS.angle), checked: activeTool === TOOL_IDS.angle },
         { label: t("viewer2d.roi.ellipse"), onClick: () => actions.setTool(TOOL_IDS.ellipse), checked: activeTool === TOOL_IDS.ellipse },
         { label: t("viewer2d.roi.rect"), onClick: () => actions.setTool(TOOL_IDS.rect), checked: activeTool === TOOL_IDS.rect },
+        // 輪郭系（Swing 版の POLYGON / FREEHAND / POLYLINE / FREELINE 相当）。
+        // **閉じる（面）と閉じない（線）を別項目にする**（後から閉じ忘れに気付けないため）。
+        { label: t("viewer2d.roi.polygon"), onClick: () => actions.setTool(TOOL_IDS.polygon), checked: activeTool === TOOL_IDS.polygon },
+        { label: t("viewer2d.roi.freehand"), onClick: () => actions.setTool(TOOL_IDS.freehand), checked: activeTool === TOOL_IDS.freehand },
+        { label: t("viewer2d.roi.polyline"), onClick: () => actions.setTool(TOOL_IDS.polyline), checked: activeTool === TOOL_IDS.polyline },
+        { label: t("viewer2d.roi.freeLine"), onClick: () => actions.setTool(TOOL_IDS.freeLine), checked: activeTool === TOOL_IDS.freeLine },
         { label: t("viewer2d.roi.probe"), onClick: () => actions.setTool(TOOL_IDS.probe), checked: activeTool === TOOL_IDS.probe },
         { label: t("viewer2d.roi.clear"), onClick: actions.clearRois },
       ],
@@ -229,6 +237,8 @@ export function Viewer2DMenuBar({
       label: t("viewer2d.menu.roiTools"),
       items: [
         { label: t("roiMgr.title"), onClick: actions.toggleRoiManager },
+        // スプライン Fit は**描画モードではなく選択中 ROI への操作**なので ROI Tools 側に置く。
+        { label: t("viewer2d.roi.splineFit"), onClick: actions.splineFitSelection },
         { label: t("viewer2d.tool.brush"), onClick: () => actions.setTool(TOOL_IDS.brush), checked: activeTool === TOOL_IDS.brush },
         { label: t("viewer2d.tool.eraser"), onClick: () => actions.setTool(TOOL_IDS.eraser), checked: activeTool === TOOL_IDS.eraser },
         { label: t("viewer2d.tool.wand2d"), onClick: () => actions.setTool(TOOL_IDS.wand2d), checked: activeTool === TOOL_IDS.wand2d },
@@ -250,6 +260,7 @@ export function Viewer2DMenuBar({
       items: [
         { label: t("viewer2d.menu.histogram"), onClick: () => actions.openHistogram() },
         { label: `${t("texture.menu")}…`, onClick: () => actions.openTexture() },
+        { label: `${t("glam.menu")}…`, onClick: () => actions.openGlamAnalysis() },
         ...(isDemo ? [] : [{ label: t("viewer2d.menu.imagej"), onClick: () => actions.bridgeImageJ() }]),
       ],
     },

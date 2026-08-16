@@ -31,6 +31,16 @@ import { LutDialog, ColorBar } from "../viewer/LutDialog";
 import { eventTarget } from "@cornerstonejs/core";
 import { Enums as csToolsEnums } from "@cornerstonejs/tools";
 import { runViewerCommand, queryViewerCommand } from "../viewer/viewerCommands";
+import {
+  annotationAtClientPoint,
+  annotationByUid,
+  canSplineFit,
+  isSplineFitted,
+  renderAnnotations,
+  selectedAnnotations,
+  setSplineFitOn,
+  toggleSplineFit,
+} from "../viewer/roiContourTools";
 import { subscribeRoiMaskStore } from "../viewer/roiMaskStore";
 import { getLoadedRois, registerRoiCollector, scheduleRoiSave } from "../viewer/roiSaveStore";
 import { collectRoisForPatient } from "../viewer/roiRestore";
@@ -55,6 +65,7 @@ import { Viewer2DToolbar, type ViewerActions } from "./Viewer2DToolbar";
 import { PluginSaveConfirmDialog, type PluginSaveRequest } from "./PluginSaveConfirmDialog";
 import { Viewer2DMenuBar } from "./Viewer2DMenuBar";
 import { RoiManagerPanel } from "./RoiManagerPanel";
+import { GLAM_CTX_KEY } from "../radiomics/GlamAnalysisScreen";
 import { useI18n } from "../i18n/i18n";
 import { desktop } from "../desktopBridge";
 
@@ -649,12 +660,35 @@ function TileGrid({
 
   // タイル枠の右クリックメニュー（画面座標）。null=非表示。
   const [frameMenu, setFrameMenu] = useState<{ x: number; y: number } | null>(null);
+  /** ROI の上での右クリックメニュー（スプライン Fit）。null=非表示。 */
+  const [roiMenu, setRoiMenu] = useState<{ x: number; y: number; uid: string; fitted: boolean } | null>(null);
   const openFrameMenu = useCallback((e: React.MouseEvent) => {
-    // 画像キャンバス上は cornerstone の右ドラッグ Zoom を優先し、メニューを出さない。
-    if ((e.target as HTMLElement).closest?.("[data-graphy-image-panel]")) return;
+    // 画像キャンバス上は cornerstone の右ドラッグ Zoom を優先し、原則メニューを出さない。
+    // **ただし ROI の上だけは例外**（その ROI への操作を出す。空きスペースでは従来どおり Zoom）。
+    const panel = (e.target as HTMLElement).closest?.("[data-graphy-image-panel]") as HTMLElement | null;
+    if (panel) {
+      const host = panel.querySelector<HTMLDivElement>('[data-testid="viewer2d-canvas-host"]');
+      const hit = host ? annotationAtClientPoint(host, e.clientX, e.clientY) : null;
+      if (hit && canSplineFit(hit)) {
+        e.preventDefault();
+        setRoiMenu({ x: e.clientX, y: e.clientY, uid: hit.annotationUID as string, fitted: isSplineFitted(hit) });
+      }
+      return;
+    }
     e.preventDefault();
     setFrameMenu({ x: e.clientX, y: e.clientY });
   }, []);
+  useEffect(() => {
+    if (!roiMenu) return;
+    const close = () => setRoiMenu(null);
+    const onKey = (ev: KeyboardEvent) => { if (ev.key === "Escape") setRoiMenu(null); };
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [roiMenu]);
   useEffect(() => {
     if (!frameMenu) return;
     const close = () => setFrameMenu(null);
@@ -988,7 +1022,33 @@ function TileGrid({
           runViewerCommand(resolveTargets(), (c) => c.clearAnnotations());
         }
       },
+      // 表示位置の移動（プラグイン H14）。対象タイル省略時は現在の対象。
+      goTo: (tileId, dims) => {
+        const targets = tileId ? [tileId] : resolveTargets();
+        runSeriesCommand(targets, (c) => c.goTo({ z: dims.sliceIndex, c: dims.c, t: dims.t }));
+      },
+      // ROI の選択（ハイライト）。
+      selectRoi: (tileId, roiUid, exclusive) => {
+        const targets = tileId ? [tileId] : resolveTargets();
+        runViewerCommand(targets, (c) => c.selectRoi(roiUid, exclusive));
+      },
       toggleRoiManager: () => setShowRoiMgr((v) => !v),
+      // 選択中の ROI（複数可）へスプライン Fit。対象が無ければ理由を出す（黙って何もしない、を避ける）。
+      splineFitSelection: () => {
+        const { applied, enabled } = toggleSplineFit(selectedAnnotations());
+        if (enabled === null) {
+          setToast(t("viewer2d.roi.splineFit.noTarget"));
+          if (toastTimer.current) window.clearTimeout(toastTimer.current);
+          toastTimer.current = window.setTimeout(() => setToast(null), 2500);
+          return;
+        }
+        renderAnnotations();
+        setToast(t(enabled ? "viewer2d.roi.splineFit.applied" : "viewer2d.roi.splineFit.removed", {
+          count: String(applied),
+        }));
+        if (toastTimer.current) window.clearTimeout(toastTimer.current);
+        toastTimer.current = window.setTimeout(() => setToast(null), 2500);
+      },
       openLut: () => setLutOpen(true),
       // コントラスト調整（W/L）: 対象タイル群の現在 VOI を先頭タイルから読み、ダイアログを開く。
       openWindowLevel: () => {
@@ -1100,6 +1160,20 @@ function TileGrid({
         if (!tile) { comingSoon(t("texture.menu")); return; }
         setTextureTarget(tile);
       },
+      // GLAM 解析: 別ウィンドウ（#glam）で開く。対象は localStorage 経由で渡す
+      // （ウィンドウを跨ぐため。2D ビューアの graphy-viewer-ctx とは別キーにして取り合わない）。
+      openGlamAnalysis: () => {
+        const tid = resolveTargets()[0];
+        const tile = patient.tiles.find((tl) => tl.id === tid);
+        if (!tile) { comingSoon(t("glam.menu")); return; }
+        localStorage.setItem(GLAM_CTX_KEY, JSON.stringify({
+          studyInstanceUid: tile.study.studyInstanceUid,
+          seriesInstanceUid: tile.series.seriesInstanceUid,
+        }));
+        const d = desktop();
+        if (d?.openViewer) void d.openViewer("glam");
+        else window.open(`${window.location.pathname}#glam`, "graphy-glam");
+      },
       // レポート: 対象（選択→無ければ先頭）タイルのスタディでレポート編集ダイアログを開く。
       openReport: () => {
         const tid = resolveTargets()[0];
@@ -1208,6 +1282,23 @@ function TileGrid({
           >
             <span style={{ width: 14, display: "inline-block" }}>{panelVisible ? "✓" : ""}</span>
             {t("viewer2d.toolPanel.label")}
+          </button>
+        </div>
+      )}
+      {/* ROI の上での右クリック: その ROI にスプライン Fit を適用/解除する。 */}
+      {roiMenu && (
+        <div style={{ ...ctxMenuBox, left: roiMenu.x, top: roiMenu.y }} onClick={(e) => e.stopPropagation()}>
+          <button
+            style={ctxMenuItem}
+            data-testid="roi-ctx-spline-fit"
+            onClick={() => {
+              const ann = annotationByUid(roiMenu.uid);
+              if (ann && setSplineFitOn(ann, !roiMenu.fitted)) renderAnnotations();
+              setRoiMenu(null);
+            }}
+          >
+            <span style={{ width: 14, display: "inline-block" }}>{roiMenu.fitted ? "✓" : ""}</span>
+            {t("viewer2d.roi.splineFit.menu")}
           </button>
         </div>
       )}

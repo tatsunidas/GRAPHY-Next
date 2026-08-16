@@ -27,6 +27,20 @@ jobs:
         shell: bash
         run: mvn -B -Dfrontend.skip=true clean package
 
+  desktop:
+    name: Desktop (window geometry)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      # ウィンドウ位置の検証は Electron 非依存の純関数に切り出してある（windowGeometry.js）。
+      # 依存が無いので npm install も要らない。
+      - name: Test
+        working-directory: desktop
+        run: node --test
+
   frontend:
     name: Frontend (build)
     runs-on: ubuntu-latest

@@ -1,12 +1,13 @@
 {
   "name": "graphy-next-desktop",
-  "version": "0.1.12",
+  "version": "0.1.16",
   "private": true,
   "license": "AGPL-3.0-or-later",
   "description": "GRAPHY-Next desktop (Electron) — standalone mode",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "test": "node --test",
     "dist": "electron-builder"
   },
   "devDependencies": {
@@ -16,7 +17,7 @@
   "build": {
     "appId": "com.vis.graphynext",
     "productName": "GRAPHY-Next",
-    "files": ["main.js", "preload.js", "windowState.js", "splash.html", "splash-preload.js", "config.json", "renderer/**"],
+    "files": ["main.js", "preload.js", "windowState.js", "windowGeometry.js", "splash.html", "splash-preload.js", "config.json", "renderer/**"],
     "extraResources": [
       { "from": "resources/backend", "to": "backend" },
       { "from": "resources/jre", "to": "jre" },

@@ -12,6 +12,14 @@ build runs `frontend-maven-plugin`/copy-resources internally) — rebuilding tha
 one service picks up frontend-only and backend-only changes alike. No separate
 frontend deploy step exists or is needed.
 
+**Note: this is now only needed for immediate deploys.** Since 2026-08-14 the
+nightly `reset-demo.sh` (cron, 0:00) fast-forwards to `origin/main`, rebuilds
+`graphy-backend`, and recreates it — so anything merged to `main` reaches the
+demo by itself the following night. Follow this skill when the user wants the
+change live *now*, or when the nightly update has been skipping (check
+`$HOME/graphy-demo-golden-snapshot/reset.log` for `WARN`/`ERROR`; the most
+common cause is an uncommitted change in the deploy checkout's working tree).
+
 ## 0. Preconditions — do these before anything else
 
 1. **Confirm the target changes are already merged to `main` on GitHub.** This

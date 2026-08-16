@@ -18,6 +18,7 @@
  * （`fw/cornerstone-3d-geometry-caveat.md` と同じ「確定値は 1 つの幾何で完結させる」方針）。
  */
 import type { DimScope, RoiScope } from "./roiMaskStore";
+import { isContourTool } from "./roiContourTools";
 
 /** 保存フォーマットの版。互換性を壊す変更をしたら上げ、読み込み側で分岐する。 */
 export const ROI_SCHEMA_VERSION = 1;
@@ -41,6 +42,13 @@ export interface SavedRoi {
   polyline?: number[][];
   /** 開いた輪郭か（PlanarFreehandROI 等）。 */
   isOpenContour?: boolean;
+  /**
+   * スプライン系ツールの補間方法（`"LINEAR"` / `"CATMULLROM"` 等）。
+   *
+   * <p>**ROI ごとに持たないと復元でカクカクに戻る**: 補間方法はツール側の設定から作られるため、
+   * 保存しないと「スプライン Fit を切った状態で読み直したら曲線が直線になる」ことになる。
+   */
+  splineType?: string;
   /** ROI マネージャのメタ（ラベル・説明・scope・プラグイン属性）。 */
   label?: string;
   description?: string;
@@ -156,6 +164,9 @@ export function toSavedRoi(ann: AnnotationLike, ctx: RoiSaveContext): SavedRoi |
     points,
   };
   if (polyline.length) out.polyline = polyline;
+  // スプライン系は補間方法も保存する（復元時に同じ形へ戻すため）
+  const splineType = (ann.data as { spline?: { type?: string } } | undefined)?.spline?.type;
+  if (typeof splineType === "string" && splineType) out.splineType = splineType;
   const open = ann.data?.isOpenContour ?? (ann.data?.contour?.closed === false ? true : undefined);
   if (open !== undefined) out.isOpenContour = open;
   if (ctx.ct?.studyUid) out.studyUid = ctx.ct.studyUid;
@@ -230,6 +241,8 @@ export function parseSaveFile(json: string | null | undefined): ParsedRoiFile {
     const item: SavedRoi = { roiUid: s.roiUid, tool: s.tool, sopInstanceUid: s.sopInstanceUid, points };
     if (polyline.length) item.polyline = polyline;
     if (typeof s.isOpenContour === "boolean") item.isOpenContour = s.isOpenContour;
+    // スプライン Fit の状態。落とすと再読み込みで直線に戻る（そのための保存項目）。
+    if (typeof s.splineType === "string" && s.splineType) item.splineType = s.splineType;
     if (typeof s.studyUid === "string") item.studyUid = s.studyUid;
     if (typeof s.seriesUid === "string") item.seriesUid = s.seriesUid;
     if (typeof s.c === "number") item.c = s.c;
@@ -318,6 +331,16 @@ export function buildAnnotationData(roi: SavedRoi): Record<string, unknown> {
     data.contour = { polyline: roi.polyline, closed };
     data.polyline = roi.polyline;
     data.isOpenContour = !closed;
+  } else if (isContourTool(roi.tool)) {
+    // polyline を保存できていない輪郭系 ROI でも**入れ物は必ず作る**。
+    // 無いと描画時に `data.contour.closed` を読んで落ち、以後 ROI が描けなくなる。
+    // 実際の輪郭は制御点から再計算される。
+    data.contour = { polyline: [], closed: !roi.isOpenContour };
+    data.isOpenContour = !!roi.isOpenContour;
+  }
+  if (roi.splineType) {
+    // インスタンスはここでは作らない（ツールに作らせる＝ roiRestore の ensureSplineInstance）。
+    data.spline = { type: roi.splineType };
   }
   return data;
 }

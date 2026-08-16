@@ -53,6 +53,13 @@ export interface ViewerActions {
    * tileId 省略時は**対象タイル全部**（ベースラインと追跡を並べて開いている場合に両方読めるよう）。
    */
   getRois(tileId?: string): ViewerTileRoi[];
+  /**
+   * **表示位置を移動する**（H14）。結果の行から該当スライスへ飛ぶ用途。
+   * 範囲外は端に丸める。読み出し（getPixelData）とは別にしてある。
+   */
+  goTo(tileId: string | undefined, dims: { sliceIndex?: number; c?: number; t?: number }): void;
+  /** **ROI を選択状態にする**（H14）。`null` で解除。ハイライトの実体は本体の選択表示。 */
+  selectRoi(tileId: string | undefined, roiUid: string | null, exclusive?: boolean): void;
   /** ROI に紐付くプラグイン属性を読む（H5）。 */
   getRoiMeta(roiUid: string, pluginId: string): Record<string, string>;
   /** ROI に紐付くプラグイン属性を書く（H5）。ROI が無ければ false。 */
@@ -96,6 +103,11 @@ export interface ViewerActions {
   setWandTolerance(tol: number): void;
   /** 計測 ROI を全消去（対象タイル）。 */
   clearRois(): void;
+  /**
+   * **選択中の ROI** にスプライン Fit を適用/解除する（ポリゴン系のみ。複数可）。
+   * 描画モードではないので ROI Tools 側に置いている。
+   */
+  splineFitSelection(): void;
   /** ROI マネージャ（右パネル）の表示切替。 */
   toggleRoiManager(): void;
   /** LUT 選択ダイアログを開く（適用は選択時に対象タイルへ）。 */
@@ -131,6 +143,8 @@ export interface ViewerActions {
   openTagViewer(): void;
   /** 対象タイルのシリーズで Texture（Radiomics 可視化マップ）ダイアログを開く。 */
   openTexture(): void;
+  /** GLAM 解析（ROI 全体の記述子）を別ウィンドウで開く。 */
+  openGlamAnalysis(): void;
   /** 対象タイルのスタディでレポート編集ダイアログを開く。 */
   openReport(): void;
 }

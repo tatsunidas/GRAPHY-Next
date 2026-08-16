@@ -76,6 +76,27 @@ public class DicomExportController {
         }
     }
 
+    /**
+     * 指定 SEG シリーズの<b>セグメントの見出しだけ</b>を返す（マスク平面は含まない）。
+     *
+     * <p>「どのセグメントを使うか」を選ばせる画面のためのもの。{@code /seg} は 1 セグメントあたり
+     * 512×512×スライス数の Base64 を返すので、名前を出すためだけに呼ぶには重すぎる。
+     * セグメントは<b>番号の昇順</b>で返るので、i 番目 ＝ シリーズレイアウトのチャンネル i。
+     */
+    @GetMapping("/seg/segments")
+    public SegImportResult readSegSegments(@RequestParam("study") String studyUid,
+            @RequestParam("series") String seriesUid) {
+        try {
+            SegImportResult res = segReadService.readSegments(studyUid, seriesUid);
+            return res != null ? res : new SegImportResult(0, 0, List.of());
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage(), e);
+        } catch (IOException e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
+                    "SEG の読込に失敗しました: " + e.getMessage(), e);
+        }
+    }
+
     /** 指定 SEG シリーズを読み、セグメント毎のマスク平面を返す（frontend が Cornerstone labelmap へ復元）。 */
     @GetMapping("/seg")
     public SegImportResult readSeg(@RequestParam("study") String studyUid,

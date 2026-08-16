@@ -20,6 +20,7 @@ import { SlicerScreen } from "./slicer/SlicerScreen";
 import { CurvedMprScreen } from "./curvedmpr/CurvedMprScreen";
 import { QRScreen } from "./qr/QRScreen";
 import { MonitorQcScreen } from "./monitorqc/MonitorQcScreen";
+import { GlamAnalysisScreen } from "./radiomics/GlamAnalysisScreen";
 import { MobileScreen } from "./mobile/MobileScreen";
 import { mobileHash, parseMobileRoute, MOBILE_SHELL_READY } from "./mobile/mobileRoute";
 import { useDeviceClass } from "./mobile/useDeviceClass";
@@ -159,6 +160,11 @@ export function App() {
 
   // モニター診断（目視テストパターン）は専用フルスクリーンウィンドウ。
   // 通常の chrome/オーバーレイを出さず、パターン画面のみを描画する。
+  // GLAM 解析は別ウィンドウ（#glam）。ROI 全体の記述子を見る画面で、2D ビューアとは独立。
+  if (screen === "glam") {
+    return <GlamAnalysisScreen />;
+  }
+
   if (screen === "monitorqc") {
     return <MonitorQcScreen />;
   }

@@ -2,7 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-package com.vis.graphynext.dicom.texture;
+package com.vis.graphynext.radiomics;
 
 import java.util.Map;
 
@@ -25,6 +25,10 @@ import java.util.Map;
  * @param timePoint          マルチ次元スタックの T インデックス（既定 0）
  * @param settings           Radiomics パラメータ（GRAPHY Property キー→値の文字列マップ。
  *                           例 "MASK_LABEL_INT"=1, "BINCOUNT_GLCM_INT"=16, "DELTA_GLCM_DOUBLE"=1）
+ * @param margin             窓を切り出す前に ROI を広げるボクセル数（任意, null で RadiomicsJ 既定の 3）。
+ *                           ROI 端のボクセルは窓が部分的にしか埋まらないため、テクスチャの違いではなく
+ *                           「読んだ画素が少ない」という理由だけで値がずれる。それを埋めるための余白。
+ *                           <b>0 で RadiomicsJ 2.3.0 以前の挙動</b>（{@code fw/texture-radiomics-design.md} §11.6）
  * @param seriesDescription  出力シリーズ説明（任意）
  * @param seriesNumber       出力シリーズ番号（任意, null で自動採番）
  */
@@ -40,6 +44,7 @@ public record TextureSeriesRequest(
         int channel,
         int timePoint,
         Map<String, String> settings,
+        Integer margin,
         String seriesDescription,
         Integer seriesNumber) {
 }

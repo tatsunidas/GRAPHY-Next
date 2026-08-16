@@ -69,6 +69,8 @@ const VIEWER_DEFAULTS = {
   curvedmpr: { width: 1400, height: 900 },
   // ボリュームを持たない 3D（3D QCA の中心線など）。
   geometry3d: { width: 1100, height: 800 },
+  // GLAM 解析は図を横に並べるので、やや幅広を既定にする。
+  glam: { width: 1250, height: 900 },
 };
 
 /** 同梱 / 開発時の backend jar のパスを解決する。 */

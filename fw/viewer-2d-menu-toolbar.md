@@ -173,3 +173,64 @@
 - **安定化**: `ImageJ.STANDALONE`→`EMBEDDED`＋`exitWhenQuitting(false)`（閉じても backend JVM を落とさない）。**要 backend 再ビルド＋再起動**。
 
 > 9.5–9.8 の詳細・追加/変更ファイル一覧・未コミット状況は **`fw/viewer2d-image-menu-progress.md`** を参照。
+
+## 9. 輪郭系 ROI（ポリゴン / フリーハンド × 閉じる / 閉じない）＋ スプライン Fit（2026-08-11）
+
+Swing 版 GRAPHY（ImageJ の POLYGON / FREEHAND / POLYLINE / FREELINE）に合わせて ROI メニューへ 4 つ追加した。
+実装は `frontend/src/viewer/roiContourTools.ts`。
+
+| メニュー | ツール名 | 中身 |
+|---|---|---|
+| ポリゴン ROI（閉） | `GraphyPolygonROI` | `SplineROITool`。クリックで頂点、ダブルクリック/始点クリックで閉じる |
+| フリーハンド ROI（閉） | `GraphyFreehandROI` | `PlanarFreehandROITool`（`allowOpenContours: false`） |
+| ポリゴンライン（開） | `GraphyPolylineROI` | `SplineROITool` ＋ **終了時に `contour.closed` を落とす** |
+| フリーライン（開） | `GraphyFreeLineROI` | `PlanarFreehandROITool`（`allowOpenContours: true`）＋ 同上 |
+| スプライン Fit | （切替） | ポリゴン系の補間を **直線 ↔ Catmull-Rom** で切り替える |
+
+### なぜ 4 ツールを別々に登録するのか
+
+Cornerstone3D の素のツールは**閉じる方向にしか寄らない**:
+
+- `SplineROITool` はダブルクリックで**必ず閉じて終わる**（`closeContour = points>=2 && doubleClick`）
+- `PlanarFreehandROITool` は始点付近で離すと閉じる（`closeContourProximity`）。
+  「決して閉じない」指定は無い
+
+そこで**同じクラスを別名で 2 つ登録**し（Cornerstone はツール名でインスタンスを持つ）、
+開く方は終了イベント後に `contour.closed` を落として矯正している。
+**面積が出てしまうと「線を引いたのに面積が出る」**ので、ここは必ず落とす。
+
+### 閉じる／閉じないを分けた理由
+
+後から「閉じ忘れ」に気付けないため。閉じた輪郭は面（面積・長径短径・統計）、開いた線は長さ、と
+**意味が変わる**ので、描く前に選ばせる。`roiRead.ts` の `OUTLINE_TOOLS`（長径・短径を出す対象）にも
+**閉じる方だけ**を入れてある。
+
+### スプライン Fit の保存（重要）
+
+補間方法は**ツール側の設定**から作られるため、そのままだと **ROI を読み直したときに直線へ戻る**。
+これを避けるため、`SavedRoi.splineType` に**ROI ごとの補間方法を保存**し、復元時に
+`data.spline = { type }` を戻す（インスタンスは持たせず、ツールに作らせる）。
+
+切り替えは①これから描くもの（ツール設定）②**既にあるポリゴン系 ROI**（制御点はそのままで張り替え）
+の両方に効く。
+
+### プラグイン（host API H5）から見たとき
+
+プラグインは `tool` 名で面かどうかを判定する（`graphy-next-plugin-cardiac` の `roiShapes.ts` など）。
+**閉じる方の名前にだけ `Polygon` / `Freehand` が入る**ようにしてあるので、
+開いた線（`…Polyline` / `…FreeLine`）が面として誤解されない。
+
+
+### 9.9 位相（C/T）を変えると選択中のツールが効かなくなっていた（2026-08-12 修正）
+
+**症状**: Probe や輪郭ツールを選び、T スライダで位相を変えると、メニューには選んだツールに
+チェックが付いたままなのに**クリックしても ROI が作られない**。スライス送り（Z）では起きない。
+
+**原因**: ビューポート構築の effect が `stackKey`（C/T を含む）依存で、クリーンアップで
+`ToolGroupManager.destroyToolGroup()` している。位相を変えるとツールグループが作り直され、
+既定（左ドラッグ = W/L）に戻る。React 側の選択状態は変わらないので、UI と実体がズレる。
+
+**直し方**: ツールグループを張り直した直後に、`activeToolRef` に覚えている選択を
+`setActiveTool` で再適用する（ThickSlab 中は対象外＝もともと注釈を禁止しているため）。
+
+4D シリーズ（cine）でしか踏まないので、実データを触るまで気づけなかった。

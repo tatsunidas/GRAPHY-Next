@@ -504,6 +504,78 @@ export interface NonDicomResult {
 export const importNonDicom = (req: NonDicomRequest) =>
   httpSend<NonDicomResult>("/api/import/nondicom", "POST", req);
 
+// ── NIfTI インポート（standalone のローカル FS 前提） ──────────────
+
+/** NIfTI ヘッダの下読み結果。取り込み前に次元と幾何の出所を見せるために使う。 */
+export interface NiftiProbe {
+  columns: number;
+  rows: number;
+  slices: number;
+  /** 時相数（4D なら 2 以上）。 */
+  phases: number;
+  channels: number;
+  spacingX: number;
+  spacingY: number;
+  spacingZ: number;
+  datatype: number;
+  /** 画素の変換方法（例 "int16 → 16bit signed"）。 */
+  pixelConversion: string | null;
+  /** 幾何の出所（"sform" / "qform" / "pixdim"）。 */
+  geometrySource: string | null;
+  /**
+   * 患者座標が無く幾何を合成したか。**true のときは向きが本物ではない**ので、
+   * UI で必ず警告すること。
+   */
+  geometrySynthesized: boolean;
+  description: string | null;
+  supported: boolean;
+  error: string | null;
+}
+
+export interface NiftiImportRequest {
+  path: string;
+  /** サイドカー JSON（dcm2niix / BIDS）。任意。 */
+  metadataPath?: string;
+  modality?: string;
+  patientId?: string;
+  patientName?: string;
+  patientBirthDate?: string;
+  patientSex?: string;
+  studyDate?: string;
+  studyDescription?: string;
+  seriesDescription?: string;
+  seriesNumber?: number;
+  studyInstanceUid?: string;
+}
+
+export interface NiftiImportResult {
+  imported: number;
+  failed: number;
+  slices: number;
+  phases: number;
+  channels: number;
+  rows: number;
+  columns: number;
+  geometrySource: string | null;
+  geometrySynthesized: boolean;
+  studyInstanceUid: string | null;
+  seriesInstanceUid: string | null;
+  /** サイドカー JSON から写せた属性の数。 */
+  metadataApplied: number;
+  pixelConversion: string | null;
+  /** アフィンのスケールが pixdim と食い違い、pixdim の実寸を採ったときの説明。 */
+  spacingNote: string | null;
+  error: string | null;
+}
+
+/** NIfTI のヘッダだけ読む（取り込みはしない）。 */
+export const probeNifti = (path: string) =>
+  httpSend<NiftiProbe>("/api/nifti/probe", "POST", { path });
+
+/** NIfTI を DICOM 化して保管庫へ取り込む。 */
+export const importNifti = (req: NiftiImportRequest) =>
+  httpSend<NiftiImportResult>("/api/nifti/import", "POST", req);
+
 // ── LUT ────────────────────────────────────────────────────────
 
 export interface LutData {
@@ -751,6 +823,18 @@ export const readDicomSeg = (studyUid: string, seriesUid: string) =>
     `/api/dicom/seg?study=${encodeURIComponent(studyUid)}&series=${encodeURIComponent(seriesUid)}`,
   );
 
+/**
+ * セグメントの見出しだけを読む（`frames` は空で返る）。
+ *
+ * マスク平面はセグメントあたり 512×512×スライス数の Base64 になるので、名前を出すためだけに
+ * `readDicomSeg` を呼ばないこと。**セグメントは番号の昇順**で、i 番目がシリーズの
+ * チャンネル (C) i に対応する（backend `SegFrameExpander` が番号の rank を C にしている）。
+ */
+export const readDicomSegSegments = (studyUid: string, seriesUid: string) =>
+  httpGet<SegImportResult>(
+    `/api/dicom/seg/segments?study=${encodeURIComponent(studyUid)}&series=${encodeURIComponent(seriesUid)}`,
+  );
+
 export interface DeleteSeriesResult {
   deletedInstances: number;
 }
@@ -810,6 +894,12 @@ export interface TextureMapRequest {
   timePoint: number;
   /** Radiomics パラメータ（GRAPHY Property キー→文字列値）。 */
   settings: Record<string, string>;
+  /**
+   * 窓を切り出す前に ROI を広げるボクセル数（未指定で RadiomicsJ 既定の 3）。
+   * ROI 端のボクセルは窓が部分的にしか埋まらず、テクスチャの違いではなく「読んだ画素が
+   * 少ない」という理由だけで値がずれる。それを埋めるための余白。0 で 2.3.0 以前の挙動。
+   */
+  margin?: number | null;
   seriesDescription?: string | null;
   seriesNumber?: number | null;
 }
@@ -817,9 +907,38 @@ export interface TextureMapResult {
   seriesInstanceUid: string;
   sopInstanceUids: string[];
 }
-/** Texture 可視化マップを計算し派生シリーズとして保存する。返り値=新シリーズ UID。 */
+/**
+ * Texture 可視化マップを計算し派生シリーズとして保存する（**終わるまで待つ**）。
+ * UI からは {@link submitTextureJob} を使う。マップ計算は分単位になりうる。
+ */
 export const createTextureMap = (req: TextureMapRequest) =>
   httpSend<TextureMapResult>("/api/series/texture", "POST", req);
+
+export type TextureJobState = "QUEUED" | "RUNNING" | "DONE" | "FAILED" | "CANCELLED";
+
+/** Texture 計算ジョブの状態（backend: TextureJobService.Status）。 */
+export interface TextureJobStatus {
+  jobId: string;
+  state: TextureJobState;
+  feature: string;
+  slicesDone: number;
+  slicesTotal: number;
+  elapsedMs: number;
+  result?: TextureMapResult | null;
+  error?: string | null;
+}
+
+/** 計算を投入する。返るのは「まだ何も起きていない」状態。 */
+export const submitTextureJob = (req: TextureMapRequest) =>
+  httpSend<TextureJobStatus>("/api/series/texture/jobs", "POST", req);
+
+/** 進み具合と、終わっていれば結果。 */
+export const getTextureJob = (jobId: string) =>
+  httpGet<TextureJobStatus>(`/api/series/texture/jobs/${encodeURIComponent(jobId)}`);
+
+/** キャンセルを頼む。実際に止まるのは走っているスライスが終わったところ。 */
+export const cancelTextureJob = (jobId: string) =>
+  httpSend<TextureJobStatus>(`/api/series/texture/jobs/${encodeURIComponent(jobId)}`, "DELETE");
 
 // ── Anonymizer（PS3.15 匿名化） ────────────────────────────────
 
@@ -1288,3 +1407,98 @@ export const finalizeReport = (id: string) =>
 /** MainScreen 一覧の ●/○ 表示用（フェーズ R5 で StudyList に接続）。 */
 export const fetchReportStudyCounts = (studyUids: string[]) =>
   httpGet<StudyReportCount[]>(`/api/reports/study-counts?studyUids=${encodeURIComponent(studyUids.join(","))}`);
+
+// ── GLAM 解析（ROI 全体・記述子そのもの） ───────────────────────
+
+/** GLAM 解析の要求（backend: POST /api/radiomics/glam/analyze）。 */
+export interface GlamAnalysisRequest {
+  studyInstanceUid: string;
+  sourceSeriesUid: string;
+  /** ROI マスクシリーズ（**必須**。全面では意味のある動径分布にならない）。 */
+  maskSeriesUid: string;
+  maskChannel: number;
+  channel: number;
+  timePoint: number;
+  /** 動径分布を見る最大距離（ボクセル, 未指定で 30）。 */
+  maxRadius?: number | null;
+  settings: Record<string, string>;
+}
+
+/**
+ * GLAM 解析の結果＝記述子そのもの。
+ *
+ * 特徴量 150 個は行列を要約した「答え」だが、解釈に効くのはその手前にある動径分布関数と
+ * 親和性行列（原著論文の図が見せているのはこちら）。
+ */
+export interface GlamAnalysis {
+  featureCount: number;
+  nBins: number;
+  maxRadius: number;
+  roiVoxelCount: number;
+  /** ビンごとのボクセル数。**稀なビンほど g(r) は跳ねる**ので曲線を読む前に見る。 */
+  binOccupancy: number[];
+  /** r の値（1..maxRadius）。 */
+  radii: number[];
+  /** 自己親和性 g(α,α,r)。`[α][r]`。**1.0 が「偶然と区別がつかない」水準**。 */
+  selfAffinity: number[][];
+  /** 同じ並びのランダム参照状態。 */
+  selfAffinityRandom: number[][];
+  /**
+   * 異なる濃度値どうしの親和性 g(α,β,r)。`[α][β][r]`（α=β の対角も含む）。
+   * nBins² × maxRadius が大きすぎる設定では `null`（理由は `crossAffinityOmitted`）。
+   */
+  crossAffinity: number[][][] | null;
+  /** `crossAffinity` を返さなかった理由（返した場合は null）。 */
+  crossAffinityOmitted: string | null;
+  /** 親和性行列 19 種。キーは GLAMMatrixType 名、値は nBins×nBins。 */
+  matrices: Record<string, number[][]>;
+  /** 自己ペアだけで定義される行列（非対角に意味が無い）。 */
+  diagonalOnly: string[];
+  /** 特徴量 150 個（GLAMFeatureType 名 → 値）。定義されない組み合わせは null。 */
+  features: Record<string, number | null>;
+  /** **計算に使った**ボクセル間隔 (x,y,z) mm。 */
+  voxelSpacing: number[];
+  isotropic: boolean;
+  /** リサンプリングした場合の**元の**ボクセル間隔 (x,y,z) mm。していなければ null。 */
+  resampledFrom: number[] | null;
+  settings: Record<string, string>;
+}
+
+/** 保存された解析の一覧行（JSON 本体は含まない）。 */
+export interface GlamSavedSummary {
+  id: string;
+  label: string;
+  sourceSeriesUid: string;
+  maskSeriesUid: string | null;
+  nBins: number;
+  maxRadius: number;
+  roiVoxelCount: number;
+  savedAt: string;
+}
+
+/** ROI 全体で GLAM を計算する（保存はしない）。 */
+export const analyzeGlam = (req: GlamAnalysisRequest) =>
+  httpSend<GlamAnalysis>("/api/radiomics/glam/analyze", "POST", req);
+
+/** 保存された解析の一覧（study 単位・新しい順）。 */
+export const listGlamAnalyses = (studyInstanceUid: string) =>
+  httpGet<GlamSavedSummary[]>(
+    `/api/radiomics/glam/saved?studyInstanceUid=${encodeURIComponent(studyInstanceUid)}`,
+  );
+
+/** 保存された解析を読み出す。 */
+export const loadGlamAnalysis = (id: string) =>
+  httpGet<GlamAnalysis>(`/api/radiomics/glam/saved/${encodeURIComponent(id)}`);
+
+/** 解析結果を保存する（利用者が保存を選んだときだけ）。 */
+export const saveGlamAnalysis = (body: {
+  studyInstanceUid: string;
+  sourceSeriesUid: string;
+  maskSeriesUid: string | null;
+  label: string;
+  analysis: GlamAnalysis;
+}) => httpSend<GlamSavedSummary>("/api/radiomics/glam/saved", "POST", body);
+
+/** 保存された解析を消す。 */
+export const deleteGlamAnalysis = (id: string) =>
+  httpSend<void>(`/api/radiomics/glam/saved/${encodeURIComponent(id)}`, "DELETE");

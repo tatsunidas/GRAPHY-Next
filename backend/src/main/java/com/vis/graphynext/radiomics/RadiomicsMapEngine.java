@@ -2,7 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-package com.vis.graphynext.dicom.texture;
+package com.vis.graphynext.radiomics;
 
 import com.vis.graphynext.dicom.SeriesLayout;
 import com.vis.graphynext.dicom.store.DicomStorageService;
@@ -59,14 +59,58 @@ public class RadiomicsMapEngine {
             String frameOfReferenceUid) {
     }
 
-    /** ターゲット（＋任意マスク）から 1 特徴のマップを計算する。 */
+    /** ターゲット（＋任意マスク）から 1 特徴のマップを計算する（進み具合は見ない）。 */
     public MapResult compute(TextureSeriesRequest req) throws IOException {
-        SeriesLayout layout = storage.seriesLayout(req.studyInstanceUid(), req.sourceSeriesUid());
+        return compute(req, TextureProgress.NONE);
+    }
+
+    /**
+     * 読み込んだボリュームとマスク、そして幾何。
+     *
+     * <p>マップ生成（{@link #compute}）と GLAM 解析（{@link GlamAnalysisService}）は、
+     * <b>同じ材料</b>から出発する — 同じシリーズを同じ (C,T) で積み、同じ規則でマスクを Z 整列し、
+     * 同じ校正を載せる。違うのはそこから先だけなので、ここまでを 1 か所にまとめる。
+     *
+     * <p>{@code width}/{@code height}/{@code slices} と {@code calibration} は<b>計算に使う格子</b>
+     * のもの。リサンプリングが有効なら元シリーズの格子とは異なり、そのときだけ
+     * {@code resampling} に元の格子と逆変換が入る（{@link TextureResampling}）。
+     * 一方 {@code ippByZ}/{@code sopPerZ} は<b>常に元シリーズの z</b> で並ぶ。
+     */
+    public record LoadedVolume(
+            ImagePlus image,
+            ImagePlus mask,
+            int width, int height, int slices,
+            int label,
+            boolean hasMask,
+            Calibration calibration,
+            double[] imageOrientationPatient,
+            double pixelSpacingRow, double pixelSpacingCol,
+            Map<Integer, double[]> ippByZ,
+            String[] sopPerZ,
+            String frameOfReferenceUid,
+            TextureResampling.Grid resampling) {
+    }
+
+    /** ターゲット（＋任意マスク）から 1 特徴のマップを計算する。 */
+    public MapResult compute(TextureSeriesRequest req, TextureProgress progress) throws IOException {
+        LoadedVolume vol = load(req.studyInstanceUid(), req.sourceSeriesUid(), req.channel(), req.timePoint(),
+                req.maskSeriesUid(), req.maskChannel(), parseLabel(req), req.settings());
+        return computeFrom(req, progress, vol);
+    }
+
+    /**
+     * シリーズを {@code ij.ImagePlus} のボリュームに積み、マスクを Z 整列し、校正を載せ、
+     * 設定で要求されていればリサンプリングする。
+     */
+    public LoadedVolume load(String studyInstanceUid, String sourceSeriesUid, int channel, int timePoint,
+                             String maskSeriesUid, int maskChannel, int label,
+                             Map<String, String> settings) throws IOException {
+        SeriesLayout layout = storage.seriesLayout(studyInstanceUid, sourceSeriesUid);
         if (layout == null || layout.cells().isEmpty()) {
-            throw new IllegalArgumentException("ターゲットシリーズにフレームがありません: " + req.sourceSeriesUid());
+            throw new IllegalArgumentException("ターゲットシリーズにフレームがありません: " + sourceSeriesUid);
         }
-        int ch = clampDim(req.channel(), layout.nC());
-        int tp = clampDim(req.timePoint(), layout.nT());
+        int ch = clampDim(channel, layout.nC());
+        int tp = clampDim(timePoint, layout.nT());
 
         // 指定 (C,T) に一致するセルを z 昇順で収集し、連続ボリュームとして扱う。
         // （T/C が空間位置と一致しない＝各グローバル z にそのセルが無いシリーズでも成立する。）
@@ -123,43 +167,194 @@ public class RadiomicsMapEngine {
             finalCal.pixelHeight = layout.pixelSpacingRow();
             finalCal.setUnit("mm");
         }
+        // スライス間隔。距離をボクセル格子で測る族（GLAM）は、これが無いと Z だけ 1mm 扱いになる。
+        double spacingZ = sliceSpacing(ippByZ, layout.imageOrientationPatient(), nZ);
+        if (spacingZ > 0) {
+            finalCal.pixelDepth = spacingZ;
+        }
         img.setCalibration(finalCal);
 
         // マスク（任意）。無ければ全面マスク（LABEL で塗り）。ある場合は IOP/IPP で Z 整列。
-        int label = parseLabel(req);
-        ImagePlus mask = buildMask(req, w, h, nZ, label, layout.imageOrientationPatient(), ippByZ);
+        boolean hasMask = maskSeriesUid != null && !maskSeriesUid.isBlank();
+        ImagePlus mask = buildMask(studyInstanceUid, maskSeriesUid, maskChannel, w, h, nZ, label,
+                layout.imageOrientationPatient(), ippByZ);
 
-        // calculator（族→ラムダ）。
-        TextureFeatureCatalog.BuiltFeature built = TextureFeatureCatalog.build(req.feature(), req.settings());
+        // リサンプリング（環境設定 ▸ テクスチャ）。ここから先は計算格子で進み、
+        // マップは最後に元の格子へ戻す（幾何は元シリーズと一致させる）。
+        TextureResampling.Grid grid = null;
+        double[] target = TextureResampling.targetSpacing(settings);
+        double[] source = {finalCal.pixelWidth, finalCal.pixelHeight, finalCal.pixelDepth};
+        if (target != null && source[0] > 0 && source[1] > 0 && source[2] > 0
+                && !TextureResampling.alreadyMatches(source, target)) {
+            int[] planned = TextureResampling.plan(w, h, nZ, source, target);
+            ImagePlus[] resampled = TextureResampling.resample(img, mask, label, target);
+            img = resampled[0];
+            mask = resampled[1];
+            grid = TextureResampling.Grid.of(w, h, nZ, img.getWidth(), img.getHeight(), img.getNSlices(),
+                    source, target);
+            finalCal = img.getCalibration();
+            log.info("[texture] resampled: {}x{}x{} ({}, {}, {} mm) -> {}x{}x{} ({}, {}, {} mm)",
+                    w, h, nZ, source[0], source[1], source[2],
+                    img.getWidth(), img.getHeight(), img.getNSlices(), target[0], target[1], target[2]);
+            if (img.getWidth() != planned[0] || img.getHeight() != planned[1] || img.getNSlices() != planned[2]) {
+                // 見積りと実際がずれたら、ここで気づけるようにしておく（増加率のガードが空振りする）。
+                log.warn("[texture] resample grid differs from the estimate ({}x{}x{})",
+                        planned[0], planned[1], planned[2]);
+            }
+            w = img.getWidth();
+            h = img.getHeight();
+            nZ = img.getNSlices();
+            if (hasMask && windowCount(mask, label, 1) == 0) {
+                // 粗い格子へ落とすと薄い ROI は部分体積しきい値を通らずに消える。ここで気づかないと
+                // 「全面ゼロのマップが黙って出来上がる」側に落ちる（package-info の注意書き）。
+                throw new IllegalArgumentException(String.format(
+                        "リサンプリング (%s mm) で ROI が消えました。元の ROI が目標間隔に対して薄すぎます。"
+                                + "目標間隔を細かくするか、リサンプリングを無効にしてください。",
+                        String.join(", ", String.valueOf(target[0]), String.valueOf(target[1]),
+                                String.valueOf(target[2]))));
+            }
+        } else if (target != null) {
+            log.info("[texture] resampling requested but the volume is already ({}, {}, {} mm) -> skipped",
+                    source[0], source[1], source[2]);
+        }
 
+        return new LoadedVolume(img, mask, w, h, nZ, label, hasMask, finalCal,
+                layout.imageOrientationPatient(), layout.pixelSpacingRow(), layout.pixelSpacingCol(),
+                ippByZ, sopPerZ, layout.frameOfReferenceUID(), grid);
+    }
+
+    /** {@link #load} で揃えた材料からマップを計算する（compute の後半）。 */
+    private MapResult computeFrom(TextureSeriesRequest req, TextureProgress progress, LoadedVolume vol) {
+        ImagePlus img = vol.image();
+        ImagePlus mask = vol.mask();
+        int w = vol.width();
+        int h = vol.height();
+        int nZ = vol.slices();
+        int label = vol.label();
+        boolean hasMask = vol.hasMask();
+        Calibration finalCal = vol.calibration();
+        Map<Integer, double[]> ippByZ = vol.ippByZ();
+        String[] sopPerZ = vol.sopPerZ();
         int filterSize = req.filterSize() > 0 ? oddUp(req.filterSize()) : 7;
         int stride = Math.max(1, req.stride());
         boolean d2 = req.force2D();
+        int margin = req.margin() != null ? Math.max(0, req.margin()) : FeatureVisualizationMap.DEFAULT_MARGIN;
 
+        boolean glam = GlamMapSupport.isGlam(req.feature());
+        if (glam) {
+            // 3D 専用・カーネル下限・マスク必須。ここで弾かないと RadiomicsJ の例外がボクセルごとに
+            // 握り潰され、全面ゼロのマップが黙って出来上がる。
+            GlamMapSupport.validate(req, nZ, hasMask, isotropyWarning(finalCal));
+            long windows = windowCount(mask, label, stride);
+            log.info("[texture][GLAM] {} windows, estimated {} s (kernel={}, maxRadius={})",
+                    windows, GlamMapSupport.estimateMillis(windows, filterSize) / 1000,
+                    filterSize, GlamMapSupport.maxRadiusFor(filterSize, req.settings()));
+            if (GlamMapSupport.dependsOnBoundaryCorrection(req.feature())) {
+                log.warn("[texture][GLAM] '{}' は境界補正が入ると 1 に張り付きます。"
+                        + "BOOL_GLAM_boundaryCorrection=0 での実行を検討してください。", req.feature());
+            }
+        }
+
+        // calculator（族→ラムダ）。GLAM は窓の大きさで maxRadius が決まるためカーネル径を渡す。
+        TextureFeatureCatalog.BuiltFeature built =
+                TextureFeatureCatalog.build(req.feature(), req.settings(), filterSize);
+
+        final int mapW = w;
+        final int mapH = h;
         long t0 = System.currentTimeMillis();
-        float[][] full = (stride <= 1)
-                ? computeFullRes(img, mask, built, filterSize, d2)
-                : computeStrided(img, mask, built, filterSize, d2, stride, w, h, nZ);
-        log.info("[texture] map '{}' {}x{}x{} stride={} filter={} in {} ms",
-                built.displayName(), w, h, nZ, stride, filterSize, System.currentTimeMillis() - t0);
+        TextureProgress sink = (progress != null) ? progress : TextureProgress.NONE;
+        float[][] full = runMap(glam, req, () -> (stride <= 1)
+                ? computeFullRes(img, mask, built, filterSize, d2, margin, sink)
+                : computeStrided(img, mask, built, filterSize, d2, stride, margin, mapW, mapH, nZ, sink));
+        log.info("[texture] map '{}' {}x{}x{} stride={} filter={} margin={} in {} ms",
+                built.displayName(), w, h, nZ, stride, filterSize, margin, System.currentTimeMillis() - t0);
 
-        List<double[]> ippList = new ArrayList<>(nZ);
-        List<String> sopList = new ArrayList<>(nZ);
-        for (int z = 0; z < nZ; z++) {
+        // リサンプリングして計算した場合は、元シリーズの格子へ戻してから DICOM 化する
+        // （派生シリーズの幾何を元と一致させ、Fusion で重ねられる状態を保つ）。
+        int outW = w;
+        int outH = h;
+        int outZ = nZ;
+        if (vol.resampling() != null) {
+            TextureResampling.Grid grid = vol.resampling();
+            full = TextureResampling.toSourceGrid(full, w, h, nZ, grid);
+            outW = grid.sourceWidth();
+            outH = grid.sourceHeight();
+            outZ = grid.sourceSlices();
+            log.info("[texture] map mapped back to the source grid {}x{}x{}", outW, outH, outZ);
+        }
+
+        List<double[]> ippList = new ArrayList<>(outZ);
+        List<String> sopList = new ArrayList<>(outZ);
+        for (int z = 0; z < outZ; z++) {
             ippList.add(ippByZ.get(z));
             sopList.add(sopPerZ[z]);
         }
-        return new MapResult(w, h, nZ, full,
+        return new MapResult(outW, outH, outZ, full,
                 built.displayName(),
-                layout.imageOrientationPatient(),
-                layout.pixelSpacingRow(), layout.pixelSpacingCol(),
-                ippList, sopList, layout.frameOfReferenceUID());
+                vol.imageOrientationPatient(),
+                vol.pixelSpacingRow(), vol.pixelSpacingCol(),
+                ippList, sopList, vol.frameOfReferenceUid());
+    }
+
+    /**
+     * GLAM なら {@code RadiomicsJ.glam*} を設定で上書きしてから走らせ、必ず元へ戻す
+     * （プロセス広域の static なので直列化される）。それ以外の族はそのまま走らせる。
+     */
+    private float[][] runMap(boolean glam, TextureSeriesRequest req, java.util.function.Supplier<float[][]> body) {
+        if (!glam) {
+            return body.get();
+        }
+        try {
+            return GlamMapSupport.runWithSettings(req.settings(), body::get);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("GLAM マップの計算に失敗しました: " + e.getMessage(), e);
+        }
+    }
+
+    /** 非等方ボクセルの説明（等方なら null）。GLAM は距離をボクセル格子で測るため効いてくる。 */
+    private static String isotropyWarning(Calibration cal) {
+        double sx = cal.pixelWidth, sy = cal.pixelHeight, sz = cal.pixelDepth;
+        double tolerance = 1e-3 * Math.max(sx, Math.max(sy, sz));
+        if (Math.abs(sx - sy) <= tolerance && Math.abs(sx - sz) <= tolerance) {
+            return null;
+        }
+        return String.format("ボクセルが等方ではありません (%.4f, %.4f, %.4f mm)。"
+                + "GLAM は距離をボクセル格子で測るため、等方へリサンプリングした画像を使ってください。", sx, sy, sz);
+    }
+
+    /** 隣接スライスの法線投影距離＝スライス間隔。求まらなければ 0。 */
+    private static double sliceSpacing(Map<Integer, double[]> ippByZ, double[] iop, int nZ) {
+        double[] normal = normalOf(iop);
+        if (normal == null || nZ < 2) return 0;
+        double[] a = ippByZ.get(0), b = ippByZ.get(1);
+        if (a == null || b == null || a.length != 3 || b.length != 3) return 0;
+        double d = Math.abs(dot(a, normal) - dot(b, normal));
+        return d > 1e-4 ? d : 0;
+    }
+
+    /** stride を踏まえて実際に特徴計算が走る窓の数（＝マスク内のサンプル点）。 */
+    private static long windowCount(ImagePlus mask, int label, int stride) {
+        int v = Math.max(1, Math.min(255, label));
+        ImageStack st = mask.getStack();
+        long count = 0;
+        for (int z = 0; z < mask.getNSlices(); z++) {
+            ImageProcessor ip = st.getProcessor(z + 1);
+            for (int y = 0; y < ip.getHeight(); y += stride) {
+                for (int x = 0; x < ip.getWidth(); x += stride) {
+                    if (ip.getf(x, y) >= v) count++;
+                }
+            }
+        }
+        return count;
     }
 
     /** stride<=1: RadiomicsJ に全スライスを一括計算させる（等倍・補間なし）。 */
     private float[][] computeFullRes(ImagePlus img, ImagePlus mask, TextureFeatureCatalog.BuiltFeature built,
-                                     int filterSize, boolean d2) {
-        ImagePlus lo = FeatureVisualizationMap.generateFeatureMap(img, mask, -1, built.calculator(), filterSize, d2, 1);
+                                     int filterSize, boolean d2, int margin, TextureProgress progress) {
+        ImagePlus lo = FeatureVisualizationMap.generateFeatureMap(img, mask, -1, built.calculator(), filterSize, d2, 1,
+                margin, progress::update);
         int s = lo.getNSlices();
         float[][] out = new float[s][];
         ImageStack st = lo.getStack();
@@ -175,11 +370,13 @@ public class RadiomicsMapEngine {
      * Z は 1:1 のため補間しない（ユーザー指定: Z stride は 1 固定）。
      */
     private float[][] computeStrided(ImagePlus img, ImagePlus mask, TextureFeatureCatalog.BuiltFeature built,
-                                     int filterSize, boolean d2, int stride, int w, int h, int s) {
+                                     int filterSize, boolean d2, int stride, int margin, int w, int h, int s,
+                                     TextureProgress progress) {
         int outW = (int) Math.ceil((double) w / stride);
         int outH = (int) Math.ceil((double) h / stride);
         // 全スライスを一括計算（XY のみ間引き）。
-        ImagePlus lo = FeatureVisualizationMap.generateFeatureMap(img, mask, -1, built.calculator(), filterSize, d2, stride);
+        ImagePlus lo = FeatureVisualizationMap.generateFeatureMap(img, mask, -1, built.calculator(), filterSize, d2,
+                stride, margin, progress::update);
         ImageStack st = lo.getStack();
         int loN = lo.getNSlices();
         float[][] full = new float[s][w * h];
@@ -218,18 +415,19 @@ public class RadiomicsMapEngine {
      * マスク画素は <b>値 ≥ 0.5 を LABEL</b> として二値化する。IOP/IPP 不明・OutOfRange の場合は
      * <b>スライスオーダー（index）</b>にフォールバックする。分岐は必ずログ出力する。マスク未指定は全面。
      */
-    private ImagePlus buildMask(TextureSeriesRequest req, int w, int h, int nZ, int label,
+    private ImagePlus buildMask(String studyInstanceUid, String maskSeriesUid, int maskChannel,
+                               int w, int h, int nZ, int label,
                                double[] targetIop, Map<Integer, double[]> targetIppByZ) throws IOException {
-        if (req.maskSeriesUid() == null || req.maskSeriesUid().isBlank()) {
+        if (maskSeriesUid == null || maskSeriesUid.isBlank()) {
             log.info("[texture] mask: none specified -> full-face mask (label={})", label);
             return fullFaceMask(w, h, nZ, label);
         }
-        SeriesLayout ml = storage.seriesLayout(req.studyInstanceUid(), req.maskSeriesUid());
+        SeriesLayout ml = storage.seriesLayout(studyInstanceUid, maskSeriesUid);
         if (ml == null || ml.cells().isEmpty()) {
-            log.warn("[texture] mask: series '{}' empty -> full-face mask", req.maskSeriesUid());
+            log.warn("[texture] mask: series '{}' empty -> full-face mask", maskSeriesUid);
             return fullFaceMask(w, h, nZ, label);
         }
-        int mCh = clampDim(req.maskChannel(), ml.nC()); // SEG マルチセグメント=マルチ C の選択。
+        int mCh = clampDim(maskChannel, ml.nC()); // SEG マルチセグメント=マルチ C の選択。
 
         // マスクの選択チャンネルのセルを z 昇順で収集（ターゲット同様、連続スタックとして扱う）。
         Map<Integer, double[]> maskIppGlobal = new HashMap<>();
@@ -249,7 +447,7 @@ public class RadiomicsMapEngine {
         }
         int mZ = mSel.size();
         if (ml.nC() > 1) {
-            log.info("[texture] mask channel selected: c={} of nC={} ({} slices, series={})", mCh, ml.nC(), mZ, req.maskSeriesUid());
+            log.info("[texture] mask channel selected: c={} of nC={} ({} slices, series={})", mCh, ml.nC(), mZ, maskSeriesUid);
         }
         double[][] maskIpp = new double[mZ][];
         ByteProcessor[] maskSlices = new ByteProcessor[mZ];
