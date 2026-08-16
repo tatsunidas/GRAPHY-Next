@@ -149,6 +149,11 @@ export interface QcaResult {
   percentAreaStenosis: number;
   /** 病変長（参照径を下回る連続区間）。 */
   lesionLength: number;
+  /**
+   * 径プロファイルの雑音尺度 σ̂（{@link profileNoiseScale}。単位は径と同じ）。
+   * **病変長がどれだけ信用できるかの目安**——参照径の当てはめはこの幅の中で揺れる。
+   */
+  profileNoise: number;
   /** 単位（校正済みなら "mm"、未校正なら "px"）。 */
   unit: "mm" | "px";
   warnings: string[];
@@ -486,7 +491,55 @@ export function findEdgesInProfile(
 }
 
 /**
- * 参照径（健常部の 1 次回帰）。病変側に引っ張られないよう、当てはめ以上の点だけで 2 回反復する。
+ * 径プロファイルの雑音尺度 σ̂（径と同じ単位）。**隣り合う点の差**の MAD から求める。
+ *
+ * <h3>なぜ「残差の散らばり」ではなく「隣との差」なのか</h3>
+ * 残差を使うには先に参照径が要るが、その参照径を決めるのにこの尺度が要る（循環する）。
+ * 隣との差なら**当てはめを持たずに**測れ、しかも
+ * - 緩やかなテーパーは隣同士でほとんど変わらないので**傾きを雑音と誤認しにくい**、
+ * - 病変は「少数の大きな差」なので**中央値が弾く**、
+ * という 2 つの性質がそのまま欲しい性質になっている。
+ * 係数は正規分布での一致性（MAD → σ が 1.4826 倍、差を取ると分散が 2 倍なので √2 で割る）。
+ *
+ * <p>⚠️ **急峻なテーパーは雑音として数えられる**（隣との差が大きくなるため）。
+ * σ̂ は「安全側（大きめ）に出る」量として使うこと。
+ */
+export function profileNoiseScale(diameters: readonly number[]): number {
+  const n = diameters.length;
+  if (n < 3) return 0;
+  const diffs: number[] = new Array(n - 1);
+  for (let i = 1; i < n; i++) diffs[i - 1] = Math.abs(diameters[i] - diameters[i - 1]);
+  return (1.4826 * median(diffs)) / Math.SQRT2;
+}
+
+/** 中央値（引数は破壊しない）。 */
+function median(values: readonly number[]): number {
+  if (values.length === 0) return 0;
+  const s = [...values].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+/**
+ * 参照径（健常部の当てはめ）。**外れ値を上下から落とす反復回帰**（2026-08-16 に作り直した）。
+ *
+ * <h3>🔴 なぜ作り直したか — 「当てはめ以上の点だけ残す」は端の数点に乗り上げる</h3>
+ * 元の実装は `d ≥ 当てはめ` を満たす点だけで 2 回反復していた。**片側**の選別なので、
+ * 解析区間の端で径が太く出る数点（実測: 357 点中 6 点が 2.61mm → 2.82mm）に当てはめが
+ * 乗り上げ、**健常部の平坦部（2.609mm）が丸ごと参照径を下回る**。結果:
+ * - 病変長 =「径が参照径を下回る連続区間」が**区間ほぼ全部**（実測 77.85mm / 真値 10mm）
+ * - 狭窄が無い血管で %DS が 3.27%、参照径が真値 ×0.870 から 0.088mm ずれる
+ *
+ * <p>いまは残差の中央値と MAD で**上下対称に外れ値を落として**当てはめ直す（4 反復）。
+ * 病変（深い外れ値）も端の膨らみ（高い外れ値）も同じ仕掛けで落ちる。実測（ファントム 11 枚）:
+ * **参照径 2.609mm = 真値 ×0.870 ぴったり**・**狭窄無しの %DS = 0.00**・
+ * **病変長の最大誤差 0.55mm**（作り直す前は最大 68mm）。
+ *
+ * <p>⚠️ MAD が壊れるのは外れ値が半数を超えたとき。**解析区間の半分以上を病変が占める指定**では
+ * 参照径が病変側に寄る。区間の取り方の問題なので、ここでは直さない（UI で区間を指定し直す）。
+ *
+ * <p>この関数は径について**1 次同次**（すべての径を k 倍したら参照径も k 倍）。
+ * %DS が校正の系統誤差（§16.4）に依らない根拠なので、ここは崩さないこと。
  *
  * @param userSegments ユーザが「ここが健常」と指定した閉区間（計測点インデックス）。
  *   与えられたら**その点だけ**を使い、反復による自動選別は行わない（人の指定が勝つ）。
@@ -534,42 +587,26 @@ export function referenceDiameters(
 
   if (n < 3) return diameters.map((d) => d);
   let include = new Array<boolean>(n).fill(true);
-  let a = 0;
-  let b = 0;
-  for (let iter = 0; iter < 2; iter++) {
-    let sw = 0;
-    let sx = 0;
-    let sy = 0;
-    let sxx = 0;
-    let sxy = 0;
-    for (let i = 0; i < n; i++) {
-      if (!include[i]) continue;
-      sw += 1;
-      sx += positions[i];
-      sy += diameters[i];
-      sxx += positions[i] * positions[i];
-      sxy += positions[i] * diameters[i];
-    }
-    const denom = sw * sxx - sx * sx;
-    if (sw < 2 || denom === 0) {
-      const mean = sy / Math.max(1, sw);
-      a = 0;
-      b = mean;
-    } else {
-      a = (sw * sxy - sx * sy) / denom;
-      b = (sy - a * sx) / sw;
-    }
-    // 次の反復は「当てはめ以上の径」だけ（＝狭窄側を捨てる）。
+  let line = fitLine(positions, diameters, include);
+  for (let iter = 0; iter < 4; iter++) {
+    const resid = diameters.map((d, i) => d - line[i]);
+    const center = median(resid);
+    // MAD = 0（＝平坦なプロファイル）でも帯が潰れないよう、径に比例した下限を置く。
+    const scale = Math.max(
+      1.4826 * median(resid.map((r) => Math.abs(r - center))),
+      1e-6 * Math.abs(median(diameters)),
+    );
     const next = new Array<boolean>(n);
     let kept = 0;
     for (let i = 0; i < n; i++) {
-      next[i] = diameters[i] >= a * positions[i] + b;
+      next[i] = Math.abs(resid[i] - center) <= 2.5 * scale;
       if (next[i]) kept++;
     }
-    if (kept < 2) break;
+    if (kept < 3) break;
     include = next;
+    line = fitLine(positions, diameters, include);
   }
-  return positions.map((p) => a * p + b);
+  return line;
 }
 
 /** `include[i]` が真の点だけで 1 次回帰し、全点での当てはめ値を返す（点が足りなければ平均）。 */
@@ -597,6 +634,40 @@ function fitLine(positions: readonly number[], diameters: readonly number[], inc
   return positions.map((p) => a * p + b);
 }
 
+/**
+ * 病変の判定を健常部の平坦部から離すための余裕（参照径に対する比）。
+ *
+ * <p>🚨 **臨床的な閾値ではなく、同点をほどくためだけの値**。健常部では径がほぼ一定なので、
+ * 参照径がそこにぴったり乗ると `径 < 参照径` の符号が最終桁の揺れで決まり、
+ * 病変長が「数点」にも「区間全部」にもなる（実測で両方見た）。
+ * 参照径 2.6mm に対して **2.6µm** ——エッジ検出の精度（0.05px ≒ 11µm）より 1 桁小さいので、
+ * **本物のくぼみを隠すことはない**。
+ */
+const LESION_TIE_MARGIN = 0.0005;
+
+/**
+ * 病変の範囲（MLD を含む「径が参照径を下回る」連続区間）の**計測点インデックス**。
+ *
+ * <p>🚨 **2D QCA と 3D QCA でこの 1 本を共有する。** 同じ名前の量（病変長）が
+ * 2 つの定義を持つと、どちらを見ているのか分からなくなる（§10.2.8）。
+ *
+ * <p>参照径が健常部の真ん中を通っていることが前提（{@link referenceDiameters}）。
+ * **参照径が寄っているのを判定の閾値で埋め合わせない** —— 参照径が狂ったままなのに
+ * 病変長だけそれらしい値になり、RVD と %DS の誤りが見えなくなる。
+ */
+export function lesionBounds(
+  diameters: readonly number[],
+  reference: readonly number[],
+  mldIndex: number,
+): { lo: number; hi: number } {
+  const below = (i: number): boolean => diameters[i] < reference[i] * (1 - LESION_TIE_MARGIN);
+  let lo = mldIndex;
+  while (lo - 1 >= 0 && below(lo - 1)) lo--;
+  let hi = mldIndex;
+  while (hi + 1 < diameters.length && below(hi + 1)) hi++;
+  return { lo, hi };
+}
+
 /** 中心線に沿った径プロファイルの計測結果（QcaResult の一部）。 */
 function summarize(
   positions: number[],
@@ -604,7 +675,7 @@ function summarize(
   reference: number[],
 ): Pick<
   QcaResult,
-  "mld" | "mldIndex" | "rvd" | "percentDiameterStenosis" | "percentAreaStenosis" | "lesionLength"
+  "mld" | "mldIndex" | "rvd" | "percentDiameterStenosis" | "percentAreaStenosis" | "lesionLength" | "profileNoise"
 > {
   let mldIndex = 0;
   let mld = Number.POSITIVE_INFINITY;
@@ -619,14 +690,18 @@ function summarize(
   const percentDiameterStenosis = Math.max(0, (1 - ratio) * 100);
   const percentAreaStenosis = Math.max(0, (1 - ratio * ratio) * 100);
 
-  // 病変長 = MLD を含む「径が参照径を下回る」連続区間。
-  let lo = mldIndex;
-  while (lo - 1 >= 0 && diameters[lo - 1] < reference[lo - 1]) lo--;
-  let hi = mldIndex;
-  while (hi + 1 < diameters.length && diameters[hi + 1] < reference[hi + 1]) hi++;
+  const { lo, hi } = lesionBounds(diameters, reference, mldIndex);
   const lesionLength = Math.abs((positions[hi] ?? 0) - (positions[lo] ?? 0));
 
-  return { mld, mldIndex, rvd, percentDiameterStenosis, percentAreaStenosis, lesionLength };
+  return {
+    mld,
+    mldIndex,
+    rvd,
+    percentDiameterStenosis,
+    percentAreaStenosis,
+    lesionLength,
+    profileNoise: profileNoiseScale(diameters),
+  };
 }
 
 /** 1 つの中心線点での計測（手修正の適用前）。 */

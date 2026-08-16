@@ -140,6 +140,8 @@ interface Xa3dState {
     mldMm: number;
     rvdMm: number;
     lesionLengthMm: number;
+    /** 径プロファイルの雑音尺度 σ̂ [mm]。3D は 2D より荒れる（§10.2.8）。 */
+    profileNoiseMm: number;
   } | null;
   steps: Record<string, string>;
 }
@@ -610,19 +612,21 @@ async function analyseSegment(
         `[狭窄/${tag}] MLD が参照径を下回る`,
         { mld: Number(st.stenosis.mldMm.toFixed(3)), rvd: Number(st.stenosis.rvdMm.toFixed(3)) },
       );
-      // 🔴 **病変長は過大に出る**（実測 33.7mm / 真値 15.8mm）。
-      //    定義は 2D QCA と共有している「径が参照径を下回る連続区間」。参照径の当てはめは
-      //    狭窄側を捨てる反復回帰なので**散布の上包絡へ寄る**。3D の等価直径は 2 方向の合成と
-      //    対応付けを経るぶん 2D より荒れており、その結果**大半の点が参照径を下回る**。
-      //    定義を 3D だけ変えると同じ名前の量が 2D と別物になるので、ここでは変えずに記録する。
+      // 病変長 = 「径が参照径を下回る連続区間」（2D と同じ関数）。
+      // 🔴 かつて **33.7mm / 真値 15.8mm** と出ていた。原因は判定でも 3D 特有の荒れでもなく、
+      //    **参照径の当てはめが解析区間の端の数点に乗り上げていた**こと（2D も同じ壊れ方をしていた）。
+      //    2026-08-16 に当てはめを外れ値に強いものへ作り直した（§10.2.8）。実測 16.75mm。
+      //    σ̂ を一緒に記録する——「3D は荒れているから仕方ない」という説明が**成り立たない**
+      //    ことの証拠（実測 σ̂ = 0.006mm ＝ 2D のノイズ無しフレームと同程度）。
       const truthLesionMm = mainTruth.lengthMm * truth.lesion.lengthFraction;
       target(
-        Math.abs(st.stenosis.lesionLengthMm - truthLesionMm) < truthLesionMm * 0.6,
-        `[狭窄/${tag}] 【目標】病変長が真値のオーダーに合う（参照径が上包絡へ寄るため過大）`,
+        Math.abs(st.stenosis.lesionLengthMm - truthLesionMm) < truthLesionMm * 0.2,
+        `[狭窄/${tag}] 【目標】病変長が真値の ±20% に入る`,
         {
           truthMm: Number(truthLesionMm.toFixed(2)),
           measuredMm: Number(st.stenosis.lesionLengthMm.toFixed(2)),
           segmentMm: Number(st.result.lengthMm.toFixed(2)),
+          profileNoiseMm: Number(st.stenosis.profileNoiseMm.toFixed(3)),
         },
       );
     }

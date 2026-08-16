@@ -274,6 +274,8 @@ export interface QcaDebugSnapshot {
   percentDiameterStenosis: number;
   percentAreaStenosis: number;
   lesionLength: number;
+  /** 径プロファイルの雑音尺度 σ̂（病変長の信用度の目安）。 */
+  profileNoise: number;
   points: number;
   /** 参照径の両端（1 区間指定なら定数になる＝両端が一致する、を確かめるため）。 */
   referenceFirst: number;
@@ -384,6 +386,8 @@ export interface Xa3dDebugSnapshot {
     mldMm: number;
     rvdMm: number;
     lesionLengthMm: number;
+    /** 径プロファイルの雑音尺度 σ̂ [mm]。3D は 2D より荒れるので病変長と一緒に見る。 */
+    profileNoiseMm: number;
   } | null;
   /** 短縮の少ない撮影角度の候補。 */
   workingAngles: { primary: number; secondary: number; visibleFraction: number }[];

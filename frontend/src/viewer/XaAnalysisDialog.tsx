@@ -415,6 +415,7 @@ export function XaAnalysisDialog({
       percentDiameterStenosis: r.percentDiameterStenosis,
       percentAreaStenosis: r.percentAreaStenosis,
       lesionLength: r.lesionLength,
+      profileNoise: r.profileNoise,
       points: r.diameters.length,
       referenceFirst: r.reference[0] ?? 0,
       referenceLast: r.reference[r.reference.length - 1] ?? 0,

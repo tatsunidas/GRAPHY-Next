@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   centerlineToken,
   findEdgesInProfile,
+  lesionBounds,
+  profileNoiseScale,
   referenceDiameters,
   runQca,
   sampleBilinear,
@@ -199,6 +201,92 @@ describe("referenceDiameters — 参照径の当てはめ", () => {
   it("点が少なくても壊れない", () => {
     expect(referenceDiameters([], [])).toEqual([]);
     expect(referenceDiameters([0, 1], [3, 3])).toEqual([3, 3]);
+  });
+
+  // 🔴 3D QCA で病変長が 33.7mm / 真値 15.8mm と出た原因（§10.2.8）。
+  //    「当てはめ以上の点だけ残す」反復は片側の選別なので、雑音があるだけで
+  //    参照径が散布の**上包絡**へ寄り、健常部の大半が「参照径を下回る」ことになる。
+  it("★荒れたプロファイルでも参照径が健常部の真ん中を通る（上包絡へ寄らない）", () => {
+    // 一定径 3.0 ＋ 決定的な鋸歯状の雑音（±0.3）。狭窄は無い。
+    const pos = Array.from({ length: 40 }, (_, i) => i * 0.5);
+    const dia = pos.map((_, i) => 3 + (i % 2 ? 0.3 : -0.3));
+    const ref = referenceDiameters(pos, dia);
+    // 参照径は真ん中（3.0）付近にいること。上包絡なら 3.3 に寄る。
+    const mid = ref[Math.floor(ref.length / 2)];
+    expect(Math.abs(mid - 3)).toBeLessThan(0.1);
+    // ★ 参照径を下回る点は半分程度（上包絡だとほぼ全点が下回る）。
+    const below = dia.filter((d, i) => d < ref[i]).length;
+    expect(below).toBeLessThan(dia.length * 0.75);
+  });
+
+  // 🔴 実データで実際に踏んだ壊れ方（§10.2.8）。357 点のうち端の 6 点だけが太く出ており、
+  //    片側の選別（当てはめ以上の点だけ残す）だとその 6 点に当てはめが乗り上げていた。
+  it("★解析区間の端の数点が太くても参照径が持ち上がらない", () => {
+    const pos = Array.from({ length: 60 }, (_, i) => i * 0.22);
+    const dia = pos.map((_, i) => {
+      if (i < 3 || i >= 57) return 2.82; // 端の膨らみ（実測と同じ 2.61 → 2.82）
+      if (i >= 28 && i <= 32) return 1.3; // 狭窄
+      return 2.61;
+    });
+    const ref = referenceDiameters(pos, dia);
+    // 参照径は健常部の 2.61 に乗る（端に乗り上げると 2.7 以上になる）。
+    expect(Math.abs(ref[30] - 2.61)).toBeLessThan(0.02);
+    // ★ 病変として拾われるのは狭窄の 5 点だけ（端に乗り上げていると区間全部になる）。
+    expect(lesionBounds(dia, ref, 30)).toEqual({ lo: 28, hi: 32 });
+  });
+
+  it("径をすべて k 倍すると参照径も k 倍になる（1 次同次・%DS が系統誤差に依らない根拠）", () => {
+    const pos = Array.from({ length: 30 }, (_, i) => i);
+    const dia = pos.map((p, i) => (p > 10 && p < 20 ? 1.5 : 3) + (i % 3 === 0 ? 0.12 : -0.06));
+    const k = 1.37;
+    const a = referenceDiameters(pos, dia);
+    const b = referenceDiameters(pos, dia.map((d) => d * k));
+    for (let i = 0; i < a.length; i++) expect(b[i]).toBeCloseTo(a[i] * k, 9);
+  });
+});
+
+describe("profileNoiseScale — プロファイルの雑音尺度", () => {
+  it("滑らかなプロファイルではほぼ 0（＝ 2D の実測値を動かさない）", () => {
+    const dia = Array.from({ length: 30 }, (_, i) => 3 - 0.002 * i);
+    expect(profileNoiseScale(dia)).toBeLessThan(0.01);
+  });
+
+  it("荒れるほど大きくなる", () => {
+    const smooth = Array.from({ length: 30 }, () => 3);
+    const rough = Array.from({ length: 30 }, (_, i) => 3 + (i % 2 ? 0.4 : -0.4));
+    expect(profileNoiseScale(rough)).toBeGreaterThan(profileNoiseScale(smooth) + 0.3);
+  });
+
+  it("病変（少数の大きな段差）には引っ張られない", () => {
+    const flat = Array.from({ length: 40 }, () => 3);
+    const withLesion = flat.map((d, i) => (i >= 18 && i <= 22 ? 1 : d));
+    expect(profileNoiseScale(withLesion)).toBeLessThan(0.05);
+  });
+
+  it("点が少なければ 0", () => {
+    expect(profileNoiseScale([])).toBe(0);
+    expect(profileNoiseScale([3, 3])).toBe(0);
+  });
+});
+
+describe("lesionBounds — 病変の範囲（2D と 3D で共有する 1 本）", () => {
+  it("MLD を含む「参照径を下回る」連続区間を返す", () => {
+    const dia = [3, 3, 2, 1, 2, 3, 3, 2.9, 3];
+    const ref = dia.map(() => 3);
+    const b = lesionBounds(dia, ref, 3);
+    expect(b).toEqual({ lo: 2, hi: 4 });
+  });
+
+  it("参照径を下回る点が MLD だけなら 1 点の区間", () => {
+    const dia = [3, 3, 1, 3, 3];
+    const ref = dia.map(() => 3);
+    expect(lesionBounds(dia, ref, 2)).toEqual({ lo: 2, hi: 2 });
+  });
+
+  it("全点が参照径を下回れば全区間（＝参照径が上に寄ったときの壊れ方）", () => {
+    const dia = [2.9, 2.8, 1, 2.8, 2.9];
+    const ref = dia.map(() => 3);
+    expect(lesionBounds(dia, ref, 2)).toEqual({ lo: 0, hi: 4 });
   });
 });
 
@@ -597,12 +685,15 @@ describe("★手修正 — 区間の切り詰めと参照径", () => {
     })!;
   }
 
-  it("前提: 段差があると自動の参照径が過大になり %DS を過大評価する", () => {
+  // 段差のある血管は**1 本の直線では表せない**（近位 4.0mm / 遠位 2.5mm）。自動の参照径が
+  // どちらへ外すかは当てはめ方で変わる（上包絡だった頃は過大、外れ値を落とす回帰では過小）。
+  // **どちらに外れるかではなく「外れること」がこの機能（健常区間の手指定）の前提**。
+  it("前提: 段差があると自動の参照径が真値から外れ、%DS を誤る", () => {
     const auto = run();
     // 真値: RVD 2.5mm / MLD 1.25mm / %DS 50%
     expect(auto.mld).toBeCloseTo(1.25, 1);
-    expect(auto.rvd).toBeGreaterThan(2.7); // 近位の 4.0mm に引っ張られている
-    expect(auto.percentDiameterStenosis).toBeGreaterThan(53);
+    expect(Math.abs(auto.rvd - 2.5)).toBeGreaterThan(0.1);
+    expect(Math.abs(auto.percentDiameterStenosis - 50)).toBeGreaterThan(3);
   });
 
   it("★健常区間を指定すると真値（RVD 2.5 / %DS 50%）に戻る", () => {

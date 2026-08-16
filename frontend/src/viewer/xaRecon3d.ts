@@ -68,7 +68,7 @@ import {
   viewSeparationDeg,
   withAngleOffset,
 } from "./xaGeometry";
-import { referenceDiameters } from "./qca";
+import { lesionBounds, profileNoiseScale, referenceDiameters } from "./qca";
 
 export type Vec2 = readonly [number, number];
 
@@ -1004,6 +1004,11 @@ export interface Stenosis3DResult {
   percentDiameterStenosis: number;
   percentAreaStenosis: number;
   lesionLengthMm: number;
+  /**
+   * 径プロファイルの雑音尺度 σ̂ [mm]。**3D は 2 方向の合成と対応付けを経るぶん 2D より荒れる**ので、
+   * 病変長をどれだけ信用してよいかはこの値と一緒に見る（§10.2.8）。
+   */
+  profileNoiseMm: number;
 }
 
 /**
@@ -1060,11 +1065,9 @@ export function stenosis3d(
   const rvd = referenceMm[mldIdx] ?? mld;
   const ratio = rvd > 0 ? mld / rvd : 1;
 
-  // 病変長 = MLD を含む「径が参照径を下回る」連続区間（2D と同じ定義）。
-  let lo = mldIdx;
-  while (lo - 1 >= 0 && diametersMm[lo - 1] < referenceMm[lo - 1]) lo--;
-  let hi = mldIdx;
-  while (hi + 1 < diametersMm.length && diametersMm[hi + 1] < referenceMm[hi + 1]) hi++;
+  // 病変長 = MLD を含む「径が参照径を下回る」連続区間。
+  // **2D と同じ関数を呼ぶ**（定義を 2 本持たない・§10.2.8）。
+  const { lo, hi } = lesionBounds(diametersMm, referenceMm, mldIdx);
 
   return {
     positionsMm,
@@ -1077,5 +1080,6 @@ export function stenosis3d(
     percentDiameterStenosis: Math.max(0, (1 - ratio) * 100),
     percentAreaStenosis: Math.max(0, (1 - ratio * ratio) * 100),
     lesionLengthMm: Math.abs((positionsMm[hi] ?? 0) - (positionsMm[lo] ?? 0)),
+    profileNoiseMm: profileNoiseScale(diametersMm),
   };
 }

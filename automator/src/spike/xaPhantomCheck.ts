@@ -131,6 +131,8 @@ interface QcaState {
   percentDiameterStenosis: number;
   percentAreaStenosis: number;
   lesionLength: number;
+  /** 径プロファイルの雑音尺度 σ̂（病変長の当てはめが効く量。単位は径と同じ）。 */
+  profileNoise: number;
   points: number;
   unit: string;
 }
@@ -246,6 +248,7 @@ async function main(): Promise<void> {
   const calibFiles = truth.calibration.variants.map((v) => path.join(PHANTOM_DIR, v.file));
 
   const rows: Record<string, unknown>[] = [];
+
   const driver = new DesktopDriver();
   await driver.start();
   try {
@@ -314,6 +317,7 @@ async function main(): Promise<void> {
         rvdError: Number(rvdErr.toFixed(3)),
         truthLesionLength: t.lesionLengthMm,
         measuredLesionLength: Number(st.lesionLength.toFixed(2)),
+        profileNoise: Number((st.profileNoise ?? 0).toFixed(4)),
         unit: st.unit,
         blurSigmaPx: t.blurSigmaPx,
         photons: t.photonsPerPixel,

@@ -276,6 +276,7 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
             mldMm: stenosis.mldMm,
             rvdMm: stenosis.rvdMm,
             lesionLengthMm: stenosis.lesionLengthMm,
+            profileNoiseMm: stenosis.profileNoiseMm,
           }
         : null,
       workingAngles: suggestions.map((x) => ({
