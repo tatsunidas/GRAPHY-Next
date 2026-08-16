@@ -12,6 +12,7 @@ import { UI_ICON_FILES } from "../icons/toolIcons";
 import { buildSeriesLayout, buildLayoutFromDto, DEFAULT_AXES, type AxisSpec, type SeriesLayout } from "./seriesLayout";
 import CineControls from "./CineControls";
 import { XaAnalysisDialog } from "./XaAnalysisDialog";
+import { Xa3dBifurcationDialog } from "./Xa3dBifurcationDialog";
 import { XaQlvDialog } from "./XaQlvDialog";
 import { Xa3dQcaDialog } from "./Xa3dQcaDialog";
 import { useQcaRuns } from "./xaRecon3dStore";
@@ -352,6 +353,7 @@ export function SeriesViewer({
   const [xaDialogOpen, setXaDialogOpen] = useState(false);
   const [qlvDialogOpen, setQlvDialogOpen] = useState(false);
   const [qvaDialogOpen, setQvaDialogOpen] = useState(false);
+  const [xaBifDialogOpen, setXaBifDialogOpen] = useState(false);
   const [xa3dDialogOpen, setXa3dDialogOpen] = useState(false);
   /** 3D QCA に使える「2D QCA 実行済みの方向」。2 つ揃うまでボタンは押せない。 */
   const qcaRuns = useQcaRuns();
@@ -994,6 +996,16 @@ export function SeriesViewer({
                   >
                     {t("xa3d.open")}
                   </button>
+                  {/* 分岐部 QCA（A6b）。3 本 × 2 方向ぶんの 2D QCA が要る（§21.4）。 */}
+                  <button
+                    style={btn}
+                    data-testid="xa3dbif-open"
+                    disabled={qcaRuns.length < 2}
+                    onClick={() => setXaBifDialogOpen(true)}
+                    title={qcaRuns.length < 2 ? t("xa3d.needRuns") : t("xa3dbif.title")}
+                  >
+                    {t("xa3dbif.open")}
+                  </button>
                   <button
                     style={btn}
                     data-testid="xa-export-frames"
@@ -1181,6 +1193,7 @@ export function SeriesViewer({
         />
       )}
       {xa3dDialogOpen && <Xa3dQcaDialog onClose={() => setXa3dDialogOpen(false)} />}
+      {xaBifDialogOpen && <Xa3dBifurcationDialog onClose={() => setXaBifDialogOpen(false)} />}
       {qlvDialogOpen && displayImageIds.length > 0 && (
         <XaQlvDialog
           imageIds={displayImageIds}

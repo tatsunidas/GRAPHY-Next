@@ -32,7 +32,7 @@ import { readVoiWindow } from "./viewportRead";
 import { isXaCalibrated } from "./xaCalibration";
 import { publishAnalysisResult } from "../report/analysisResultStore";
 import { qcaRecord, qvaRecord } from "../report/xaAnalysisRecords";
-import { describeView, registerQcaRun } from "./xaRecon3dStore";
+import { describeView, qcaRunKey, registerQcaRun } from "./xaRecon3dStore";
 import { readXaViewGeometry } from "./xaViewGeometryProvider";
 import {
   calibrationForImageId,
@@ -537,11 +537,17 @@ export function XaAnalysisDialog({
     if (view.geometry) {
       registerQcaRun({
         imageId,
+        // 🔴 鍵は imageId ではなく**imageId ＋ 解析区間**（分岐部は同じフレームから 3 本取る）。
+        runKey: qcaRunKey(imageId, pick.p0, pick.p1),
         studyUid: saveContext.studyUid,
         seriesUid,
         sopInstanceUid: saveContext.sopInstanceUid,
         frameIndex: saveContext.frameIndex,
-        label: describeView(view.geometry, saveContext.frameIndex),
+        // 同じフレームから複数の区間を取るので、**区間の長さまで名前に入れる**
+        // （さもないと一覧に同じ名前が並び、どれを選んでいるのか分からない）。
+        label: `${describeView(view.geometry, saveContext.frameIndex)} · ${Math.round(
+          Math.hypot(pick.p1[0] - pick.p0[0], pick.p1[1] - pick.p0[1]),
+        )}px`,
         geometry: view.geometry,
         centerline: r.centerline,
         diameters: r.diameters,

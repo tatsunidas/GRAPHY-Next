@@ -132,17 +132,17 @@ async function main(): Promise<void> {
       idle.qca,
     );
     check(
-      idle.qca3dBifurcation?.enabled === "0" && idle.qca3dBifurcation?.reason === "xa.task.reason.notImplemented",
+      idle.qlvBiplane?.enabled === "0" && idle.qlvBiplane?.reason === "xa.task.reason.notImplemented",
       "[一覧] ★未実装かつスタディ未選択でも『未実装』を出す（直せない理由が先）",
-      idle.qca3dBifurcation,
+      idle.qlvBiplane,
     );
     // 🚨 理由の文言が空だと、結局「無言で押せないボタン」に戻る。**表示されている文字**を見る。
     const empty = Object.entries(idle).filter(([, v]) => v.enabled === "0" && v.text.length === 0);
     check(empty.length === 0, "[一覧] ★押せないカードには必ず理由の文言が出ている", empty.map(([k]) => k));
     check(
-      (idle.qlvBiplane?.text ?? "").includes("A5c") && (idle.qca3dBifurcation?.text ?? "").includes("A6b"),
+      (idle.qlvBiplane?.text ?? "").includes("A5c"),
       "[一覧] 未実装カードは担当フェーズを名指しする",
-      { biplane: idle.qlvBiplane?.text, bif: idle.qca3dBifurcation?.text },
+      { biplane: idle.qlvBiplane?.text },
     );
     await mainPage.screenshot({ path: path.join(OUT_DIR, "1-launcher-idle.png") }).catch(() => {});
     await closeLauncher(mainPage);
@@ -154,14 +154,10 @@ async function main(): Promise<void> {
     await mainPage.waitForTimeout(400);
     await openLauncher(mainPage);
     const xa = await readCards(mainPage);
-    for (const id of ["qca", "qva", "qca3d", "qlv", "report"]) {
+    for (const id of ["qca", "qva", "qca3d", "qca3dBifurcation", "qlv", "report"]) {
       check(xa[id]?.enabled === "1", `[XA] ${id} が押せる`, xa[id]);
     }
-    check(
-      xa.qca3dBifurcation?.enabled === "0",
-      "[XA] 未実装タスクは XA を選んでも押せないまま",
-      xa.qca3dBifurcation,
-    );
+    check(xa.qlvBiplane?.enabled === "0", "[XA] 未実装タスクは XA を選んでも押せないまま", xa.qlvBiplane);
     await mainPage.screenshot({ path: path.join(OUT_DIR, "2-launcher-xa.png") }).catch(() => {});
 
     // ── ③ 押すと 2D ビューアが開き、その解析ダイアログが開く（本題）──────────

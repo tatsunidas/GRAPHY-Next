@@ -442,6 +442,27 @@
     ]
   },
   "recon3d": {
+    "bifurcation": {
+      "note": "Angles follow the convention used by frontend/src/viewer/xaBifurcation.ts: all three directions point AWAY from the carina (the proximal one is reversed), averaged over a 5 mm window. The exact take-off angle of the generator is 45 deg; the windowed value differs slightly because the daughter branch bends.",
+      "carinaLps": [
+        -29.5917,
+        0.784,
+        8.5428
+      ],
+      "mainIndex": 404,
+      "exactTakeOffDeg": 45.0,
+      "angleWindowMm": 5.0,
+      "distalToSideDeg": 47.997,
+      "proximalToSideDeg": 138.171,
+      "proximalToDistalDeg": 173.831,
+      "diameterProximalMm": 2.8259,
+      "diameterDistalMm": 2.8259,
+      "diameterSideMm": 2.1,
+      "finetExpectedMm": 3.3398,
+      "finetDeviationPercent": -15.386,
+      "murrayExpectedMm": 3.1691,
+      "murrayDeviationPercent": -10.829
+    },
     "note": "Known 3D vessel tree projected from 4 known C-arm poses. The 'b-angle-error' study contains the SAME images but the positioner angle tags are offset by a known amount, so bundle adjustment has something to recover.",
     "coordinateSystem": "patient LPS mm (X=left, Y=posterior, Z=head), isocenter at origin",
     "projection": "d = (sin(primary)cos(secondary), -cos(primary)cos(secondary), sin(secondary)); source = -d*SOD; detector plane at SID from source; u = normalize(z x d) (image column, toward patient left), v = u x d (image row, toward feet)",

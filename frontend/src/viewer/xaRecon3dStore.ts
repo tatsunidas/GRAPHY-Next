@@ -31,8 +31,17 @@ import { useSyncExternalStore } from "react";
 import { type XaViewGeometry } from "./xaGeometry";
 
 export interface XaQcaRun {
-  /** imageId（＝同じフレームを解析し直したら置き換える鍵）。 */
+  /** imageId（どのフレームを解析したか）。**鍵ではない**——{@link runKey} を見ること。 */
   imageId: string;
+  /**
+   * 登録の鍵 ＝ `imageId` ＋ **解析区間**。
+   *
+   * <p>🔴 **imageId だけを鍵にしてはいけない**（2026-08-16 の実機検証で判明）。
+   * 分岐部（A6b）は**同じフレームから 3 本の区間**を解析するので、imageId を鍵にすると
+   * 後の区間が前の区間を置き換えてしまい、**6 本登録したはずが 2 本しか残らない**。
+   * 同じ区間を解析し直したときだけ置き換わるように、区間の端点まで鍵に含める。
+   */
+  runKey: string;
   studyUid: string;
   seriesUid: string;
   sopInstanceUid: string | null;
@@ -135,13 +144,14 @@ export function ensureQcaRunChannel(): void {
 /** 同じ imageId の登録は置き換える（解析し直したら新しいほうが正しい）。 */
 export function registerQcaRun(run: XaQcaRun): void {
   ensureChannel();
-  runs = [...runs.filter((r) => r.imageId !== run.imageId), run];
+  // 同じ区間の解析し直しだけを置き換える（別の区間は足す）。
+  runs = [...runs.filter((r) => r.runKey !== run.runKey), run];
   notify();
   post({ type: "register", run });
 }
 
-export function removeQcaRun(imageId: string): void {
-  const next = runs.filter((r) => r.imageId !== imageId);
+export function removeQcaRun(runKey: string): void {
+  const next = runs.filter((r) => r.runKey !== runKey);
   if (next.length === runs.length) return;
   runs = next;
   notify();
@@ -168,6 +178,15 @@ export function useQcaRuns(): XaQcaRun[] {
     listQcaRuns,
     listQcaRuns,
   );
+}
+
+/**
+ * 解析区間まで含めた登録の鍵。**端点は丸めてから**使う（同じ計測を選び直しただけで
+ * 別区間として増えないように）。
+ */
+export function qcaRunKey(imageId: string, start: readonly number[], end: readonly number[]): string {
+  const r = (v: number) => Math.round(v);
+  return `${imageId}#${r(start[0])},${r(start[1])}-${r(end[0])},${r(end[1])}`;
 }
 
 /** 一覧に出す名前。角度が分かれば角度で呼ぶ（利用者が方向を選ぶときの手掛かりはそれ）。 */

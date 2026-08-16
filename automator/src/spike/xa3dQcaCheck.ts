@@ -399,10 +399,15 @@ async function analyseSegment(
       return JSON.stringify(Array.from(sel.options).map((o) => o.value).filter(Boolean));
     })()`);
     const ids = JSON.parse(values as string) as string[];
-    check(ids.length === 2, `[UI/${tag}] 登録された方向がちょうど 2 件`, ids.length);
-    await viewerB.selectOption('[data-testid="xa3d-view-a"]', ids[0]);
+    // 🔴 **登録簿は区間ごとに 1 件持つ**（2026-08-16 に imageId 鍵から変えた。分岐部 A6b は
+    //    同じフレームから 3 区間を取るため）。よって 2 区間目では 4 件並ぶ。
+    //    **いま解析した区間＝末尾の 2 件**を選ぶ。ここを index 0/1 のままにすると
+    //    「1 区間目の結果を 2 区間目として検証する」という静かな嘘になる。
+    check(ids.length >= 2, `[UI/${tag}] 登録された方向が 2 件以上ある`, ids.length);
+    const use = ids.slice(-2);
+    await viewerB.selectOption('[data-testid="xa3d-view-a"]', use[0]);
     await viewerB.waitForTimeout(300);
-    await viewerB.selectOption('[data-testid="xa3d-view-b"]', ids[1]);
+    await viewerB.selectOption('[data-testid="xa3d-view-b"]', use[1]);
     await viewerB.waitForTimeout(500);
 
     const sel = await xa3dState(viewerB);

@@ -408,6 +408,47 @@ export interface Xa3dDebugSnapshot {
   steps: Record<string, string>;
 }
 
+/** 分岐部 QCA（A6b）の検証用スナップショット。`fw/angio-design.md` §21.4。 */
+export interface XaBifurcationDebugSnapshot {
+  carina: [number, number, number];
+  endpointSpreadMm: number;
+  confluenceRadiusMm: number;
+  branches: {
+    id: string;
+    measuredPoints: number;
+    excludedLengthMm: number;
+    mldMm: number | null;
+    rvdMm: number | null;
+    percentDiameterStenosis: number | null;
+    lesionLengthMm: number | null;
+    referenceAtCarinaMm: number | null;
+  }[];
+  angles: {
+    proximalToDistalDeg: number | null;
+    proximalToSideDeg: number | null;
+    distalToSideDeg: number | null;
+  };
+  consistency: {
+    finet: { expectedMm: number; measuredMm: number; deviationPercent: number } | null;
+    murray: { expectedMm: number; measuredMm: number; deviationPercent: number } | null;
+  };
+  warnings: { code: string; branch: string | null; value: number; threshold: number }[];
+  /** 角度補正が掛からなかった枝（出自）。 */
+  unrefinedBranches: string[];
+}
+
+let xaBifurcationSnapshot: XaBifurcationDebugSnapshot | null = null;
+
+/** 分岐部ダイアログから呼ぶ（DEV 以外では何もしない）。 */
+export function publishXaBifurcationSnapshot(s: XaBifurcationDebugSnapshot | null): void {
+  if (!import.meta.env.DEV) return;
+  xaBifurcationSnapshot = s;
+}
+
+function getXaBifurcationState(): XaBifurcationDebugSnapshot | null {
+  return xaBifurcationSnapshot;
+}
+
 let xa3dSnapshot: Xa3dDebugSnapshot | null = null;
 
 /** 3D QCA ダイアログから呼ぶ（DEV 以外では読まれない）。 */
@@ -484,6 +525,7 @@ declare global {
       getQcaState: typeof getQcaState;
       getQlvState: typeof getQlvState;
       getXa3dState: typeof getXa3dState;
+      getXaBifurcationState: typeof getXaBifurcationState;
       imagePixelsToCanvasFraction: typeof imagePixelsToCanvasFraction;
       getGeometry3dStats: typeof getGeometry3dStats;
     };
@@ -504,6 +546,7 @@ export function installDebugApi(): void {
     getQcaState,
     getQlvState,
     getXa3dState,
+    getXaBifurcationState,
     imagePixelsToCanvasFraction,
     getGeometry3dStats,
   };

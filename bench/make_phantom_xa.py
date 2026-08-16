@@ -768,7 +768,73 @@ def build_recon3d(out_dir: str) -> dict:
             }
         )
 
+    # ── 分岐部（A6b）の真値 ────────────────────────────────────────────
+    # 生成器の作りから**幾何学的に決まる**量を、測り方の約束（カリーナから 5mm の窓で
+    # 平均方向を取り、3 本とも「カリーナから出ていく向き」に揃える）ごと書き出す。
+    # ⚠️ 分岐角は `direction = normalize(tangent + side)`（tangent ⊥ side）から
+    #    **厳密に 45°**。ただし娘枝には曲がりがあるので、窓を取って測ると少し増える。
+    main_br = next(b for b in branches if b["id"] == "main")
+    daughter_br = next(b for b in branches if b["id"] == "daughter")
+    main_pts = main_br["points"]
+    i0 = int(0.45 * (len(main_pts) - 1))
+    carina = main_pts[i0]
+
+    def _mean_direction(pts, window_mm=5.0):
+        acc = np.zeros(3)
+        used = 0
+        for p in pts:
+            v = p - carina
+            n = float(np.linalg.norm(v))
+            if n < 1e-9:
+                continue
+            if n > window_mm:
+                break
+            acc += v / n
+            used += 1
+        if used == 0:
+            return None
+        return acc / np.linalg.norm(acc)
+
+    d_distal = _mean_direction(main_pts[i0:])
+    d_proximal = _mean_direction(main_pts[: i0 + 1][::-1])
+    d_side = _mean_direction(daughter_br["points"])
+
+    def _angle(a, b):
+        return float(np.degrees(np.arccos(np.clip(float(np.dot(a, b)), -1.0, 1.0))))
+
+    d_prox_mm = float(main_br["radii"][i0] * 2.0)
+    d_dist_mm = float(main_br["radii"][i0] * 2.0)
+    d_side_mm = float(daughter_br["radii"][0] * 2.0)
+    finet_expected = 0.678 * (d_dist_mm + d_side_mm)
+    murray_expected = float((d_dist_mm ** 3 + d_side_mm ** 3) ** (1.0 / 3.0))
+
+    bifurcation = {
+        "note": (
+            "Angles follow the convention used by frontend/src/viewer/xaBifurcation.ts: all three "
+            "directions point AWAY from the carina (the proximal one is reversed), averaged over a "
+            "5 mm window. The exact take-off angle of the generator is 45 deg; the windowed value "
+            "differs slightly because the daughter branch bends."
+        ),
+        "carinaLps": [round(float(v), 4) for v in carina],
+        "mainIndex": i0,
+        "exactTakeOffDeg": 45.0,
+        "angleWindowMm": 5.0,
+        "distalToSideDeg": round(_angle(d_distal, d_side), 3),
+        "proximalToSideDeg": round(_angle(d_proximal, d_side), 3),
+        "proximalToDistalDeg": round(_angle(d_proximal, d_distal), 3),
+        "diameterProximalMm": round(d_prox_mm, 4),
+        "diameterDistalMm": round(d_dist_mm, 4),
+        "diameterSideMm": round(d_side_mm, 4),
+        # 🚨 このファントムは Finet / Murray を**満たさない**（合成の木なので当然）。
+        #    「式に合わない」ことを検出できるかが A6b の検査になる（式で径を書き換えないこと）。
+        "finetExpectedMm": round(finet_expected, 4),
+        "finetDeviationPercent": round((d_prox_mm - finet_expected) / finet_expected * 100.0, 3),
+        "murrayExpectedMm": round(murray_expected, 4),
+        "murrayDeviationPercent": round((d_prox_mm - murray_expected) / murray_expected * 100.0, 3),
+    }
+
     return {
+        "bifurcation": bifurcation,
         "note": (
             "Known 3D vessel tree projected from 4 known C-arm poses. "
             "The 'b-angle-error' study contains the SAME images but the positioner angle "

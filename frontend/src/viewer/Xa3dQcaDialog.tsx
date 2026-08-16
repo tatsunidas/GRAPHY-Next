@@ -67,8 +67,9 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
 
-  const runA = runs.find((r) => r.imageId === keyA) ?? null;
-  const runB = runs.find((r) => r.imageId === keyB) ?? null;
+  // 🚨 鍵は runKey（同じフレームでも解析区間が違えば別の登録・§21.4 の分岐部で必要になった）。
+  const runA = runs.find((r) => r.runKey === keyA) ?? null;
+  const runB = runs.find((r) => r.runKey === keyB) ?? null;
 
   const separationDeg = useMemo(
     () => (runA && runB ? viewSeparationDeg(runA.geometry, runB.geometry) : null),
@@ -334,7 +335,7 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
                   >
                     <option value="">—</option>
                     {runs.map((r) => (
-                      <option key={r.imageId} value={r.imageId}>
+                      <option key={r.runKey} value={r.runKey}>
                         {r.label}
                         {r.edited ? " *" : ""}
                       </option>
@@ -353,7 +354,7 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
                     {runs
                       .filter((r) => r.imageId !== keyA)
                       .map((r) => (
-                        <option key={r.imageId} value={r.imageId}>
+                        <option key={r.runKey} value={r.runKey}>
                           {r.label}
                           {r.edited ? " *" : ""}
                         </option>

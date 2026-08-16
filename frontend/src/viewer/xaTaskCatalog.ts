@@ -33,7 +33,7 @@ export type AnalysisTaskId =
   | "report";
 
 /** 起動したときに開くもの。`null` は未実装（開くものが無い）。 */
-export type AnalysisTaskTarget = "xaAnalysis" | "qva" | "qlv" | "qca3d" | "report";
+export type AnalysisTaskTarget = "xaAnalysis" | "qva" | "qlv" | "qca3d" | "qca3dBifurcation" | "report";
 
 export interface AnalysisTaskDef {
   id: AnalysisTaskId;
@@ -95,9 +95,9 @@ export const ANALYSIS_TASKS: readonly AnalysisTaskDef[] = [
     id: "qca3dBifurcation",
     labelKey: "xa.task.qca3dBifurcation",
     descKey: "xa.task.qca3dBifurcation.desc",
-    implemented: false,
+    implemented: true,
     phase: "A6b",
-    opens: null,
+    opens: "qca3dBifurcation",
     needsXaSeries: true,
     standaloneOnly: true,
   },
