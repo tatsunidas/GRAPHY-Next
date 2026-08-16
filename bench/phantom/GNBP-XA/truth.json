@@ -17,6 +17,92 @@
     "photometricInterpretation": "MONOCHROME2 (vessel is dark)",
     "halfMaxCaveat": "For an unblurred cylinder projection the half-maximum crossing sits at sqrt(3)/2 * r ~= 0.866 r, not at r. Blur pushes it back out toward r. Frame 8 of GNBP-XA-1 is unblurred so this systematic effect can be isolated."
   },
+  "qva": {
+    "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.260363033426583299175547461383368609",
+    "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.265871034141924619602297097894089335",
+    "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.165797282502826535077923916570667269",
+    "file": "GNBP-XA-6.dcm",
+    "md5": "8c10be99fb888e84caa51a55f0563247",
+    "rows": 512,
+    "columns": 512,
+    "vesselAxisRow": 256.0,
+    "mmPerPx": 0.225,
+    "aneurysmRatio": 1.5,
+    "frames": [
+      {
+        "frame": 1,
+        "referenceDiameterMm": 3.0,
+        "maxDiameterMm": 6.0,
+        "ratio": 2.0,
+        "aneurysmLengthMm": 20.0,
+        "eccentricity": 0.0,
+        "saccular": false,
+        "aneurysmal": true,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      },
+      {
+        "frame": 2,
+        "referenceDiameterMm": 3.0,
+        "maxDiameterMm": 4.5,
+        "ratio": 1.5,
+        "aneurysmLengthMm": 15.0,
+        "eccentricity": 0.0,
+        "saccular": false,
+        "aneurysmal": true,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      },
+      {
+        "frame": 3,
+        "referenceDiameterMm": 3.0,
+        "maxDiameterMm": 3.6,
+        "ratio": 1.2,
+        "aneurysmLengthMm": 20.0,
+        "eccentricity": 0.0,
+        "saccular": false,
+        "aneurysmal": false,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      },
+      {
+        "frame": 4,
+        "referenceDiameterMm": 3.0,
+        "maxDiameterMm": 6.0,
+        "ratio": 2.0,
+        "aneurysmLengthMm": 15.0,
+        "eccentricity": 1.0,
+        "saccular": true,
+        "aneurysmal": true,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      },
+      {
+        "frame": 5,
+        "referenceDiameterMm": 3.0,
+        "maxDiameterMm": 6.0,
+        "ratio": 2.0,
+        "aneurysmLengthMm": 15.0,
+        "eccentricity": 1.0,
+        "saccular": true,
+        "aneurysmal": true,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": 4000.0
+      },
+      {
+        "frame": 6,
+        "referenceDiameterMm": 3.0,
+        "maxDiameterMm": 3.0,
+        "ratio": 1.0,
+        "aneurysmLengthMm": 0.0,
+        "eccentricity": null,
+        "saccular": false,
+        "aneurysmal": false,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      }
+    ]
+  },
   "calibration": {
     "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.138740358522061867744332119398682434",
     "catheterFr": 6.0,

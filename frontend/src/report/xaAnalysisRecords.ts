@@ -48,6 +48,92 @@ export interface QcaRecordInput {
   lesionLength: number;
 }
 
+export interface QvaRecordInput extends Omit<QcaRecordInput, "percentAreaStenosis"> {
+  /** 拡張（瘤）の計測。拡張が無ければ null。 */
+  dilation: {
+    maxDiameter: number;
+    referenceAtMax: number;
+    ratio: number;
+    percentDilation: number;
+    length: number;
+    proximalNeck: number;
+    distalNeck: number;
+    eccentricity: number | null;
+    aneurysmal: boolean;
+  } | null;
+}
+
+/**
+ * QVA（末梢・脳血管）の記録（§9.1 / A5a）。
+ *
+ * <h3>QCA と分けている理由</h3>
+ * 指標が違うだけでなく、**限界の書き方が違う**。QVA は瘤の最大径を載せるので
+ * 「見えている向きでの最大径であって瘤の最大径ではない」を必ず言う必要がある
+ * （QCA の狭窄には無い限界）。同じ record 関数に押し込むと、この一文が
+ * 冠動脈のレポートにも出て意味が通らなくなる。
+ */
+export function qvaRecord(i: QvaRecordInput, t: Translate): AnalysisResultRecord {
+  const u = i.unit;
+  const caveats = [...common(t)];
+  if (u === "px") caveats.unshift(t("report.analysis.caveat.uncalibrated"));
+  else caveats.unshift(absoluteDiameterCaveat(t));
+  // 🔴 投影 1 方向の限界。**瘤の最大径を載せる以上、避けて通れない**。
+  if (i.dilation) caveats.push(t("report.analysis.caveat.projectionMax"));
+  if (i.manualCorrection) caveats.push(t("report.analysis.caveat.manual"));
+  const metrics = [
+    { label: t("report.analysis.metric.referenceDiameter"), value: i.rvd.toFixed(2), unit: u },
+    { label: "MLD", value: i.mld.toFixed(2), unit: u },
+    { label: t("report.analysis.metric.percentDs"), value: i.percentDiameterStenosis.toFixed(1), unit: "%" },
+  ];
+  if (i.dilation) {
+    const d = i.dilation;
+    metrics.push(
+      { label: t("report.analysis.metric.maxDiameter"), value: d.maxDiameter.toFixed(2), unit: u },
+      // 比は系統誤差が打ち消される量なので、判定（1.5 倍）はこちらで書く。
+      { label: t("report.analysis.metric.dilationRatio"), value: d.ratio.toFixed(2), unit: "×" },
+      { label: t("report.analysis.metric.aneurysmLength"), value: d.length.toFixed(1), unit: u },
+      {
+        label: t("report.analysis.metric.neck"),
+        value: `${d.proximalNeck.toFixed(2)} / ${d.distalNeck.toFixed(2)}`,
+        unit: u,
+      },
+    );
+    if (d.eccentricity != null) {
+      metrics.push({
+        label: t("report.analysis.metric.eccentricity"),
+        value: d.eccentricity.toFixed(2),
+        unit: "",
+      });
+    }
+    metrics.push({
+      label: t("report.analysis.metric.judgement"),
+      value: d.aneurysmal ? t("qva.judge.aneurysm") : t("qva.judge.notAneurysm"),
+      unit: "",
+    });
+  } else {
+    metrics.push({ label: t("report.analysis.metric.judgement"), value: t("qva.judge.noDilation"), unit: "" });
+  }
+  return {
+    id: `qva:${i.sopInstanceUid}:${i.frameIndex}`,
+    kind: "qva",
+    studyUid: i.studyUid,
+    seriesUid: i.seriesUid,
+    sopInstanceUids: [i.sopInstanceUid],
+    frameLabel: t("report.analysis.frame", { n: String(i.frameIndex + 1) }),
+    title: i.vesselLabel ? `${t("report.analysis.title.qva")}（${i.vesselLabel}）` : t("report.analysis.title.qva"),
+    metrics,
+    provenance: [
+      { label: t("report.analysis.prov.calibration"), value: i.calibration ?? t("report.analysis.prov.none") },
+      {
+        label: t("report.analysis.prov.manual"),
+        value: i.manualCorrection ?? t("report.analysis.prov.automatic"),
+      },
+    ],
+    caveats,
+    at: Date.now(),
+  };
+}
+
 export function qcaRecord(i: QcaRecordInput, t: Translate): AnalysisResultRecord {
   const u = i.unit;
   const caveats = [...common(t)];

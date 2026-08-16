@@ -276,6 +276,18 @@ export interface QcaDebugSnapshot {
   lesionLength: number;
   /** 径プロファイルの雑音尺度 σ̂（病変長の信用度の目安）。 */
   profileNoise: number;
+  /** 拡張（瘤）の計測（QVA のときだけ。§9.1 / A5a）。 */
+  qva: {
+    maxDiameter: number;
+    referenceAtMax: number;
+    ratio: number;
+    percentDilation: number;
+    length: number;
+    proximalNeck: number;
+    distalNeck: number;
+    eccentricity: number | null;
+    aneurysmal: boolean;
+  } | null;
   points: number;
   /** 参照径の両端（1 区間指定なら定数になる＝両端が一致する、を確かめるため）。 */
   referenceFirst: number;

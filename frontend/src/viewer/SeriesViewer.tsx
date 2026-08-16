@@ -351,6 +351,7 @@ export function SeriesViewer({
   // 校正 / QCA ダイアログ（fw/angio-design.md §7.3 / §8）。
   const [xaDialogOpen, setXaDialogOpen] = useState(false);
   const [qlvDialogOpen, setQlvDialogOpen] = useState(false);
+  const [qvaDialogOpen, setQvaDialogOpen] = useState(false);
   const [xa3dDialogOpen, setXa3dDialogOpen] = useState(false);
   /** 3D QCA に使える「2D QCA 実行済みの方向」。2 つ揃うまでボタンは押せない。 */
   const qcaRuns = useQcaRuns();
@@ -382,6 +383,7 @@ export function SeriesViewer({
         return;
       }
       if (req.target === "xaAnalysis") setXaDialogOpen(true);
+      else if (req.target === "qva") setQvaDialogOpen(true);
       else if (req.target === "qlv") setQlvDialogOpen(true);
       else if (req.target === "qca3d") setXa3dDialogOpen(true);
     });
@@ -946,6 +948,17 @@ export function SeriesViewer({
                   >
                     {t("xa.analysis.open")}
                   </button>
+                  {/* QVA（末梢・脳血管。A5a）。QCA と同じダイアログを mode で切り替える
+                      ——中心線・エッジ・手修正の作りが同じで、違うのは参照径の既定と
+                      瘤の指標だけ（§9.1）。 */}
+                  <button
+                    style={btn}
+                    data-testid="qva-open"
+                    onClick={() => setQvaDialogOpen(true)}
+                    title={t("qva.title")}
+                  >
+                    {t("qva.open")}
+                  </button>
                   {/* 左室造影の解析（A5b）。QCA とは段の構成が違うので別ダイアログ（§21.2-3）。 */}
                   <button
                     style={btn}
@@ -1129,6 +1142,25 @@ export function SeriesViewer({
           onClose={() => setXaDialogOpen(false)}
           // 校正が変わったら表示（スケールバー・計測ラベル）を作り直す。
           // DSA 中は合成 imageId の版番号、非 DSA でも refreshKey でスタックを初期化し直す。
+          onCalibrated={() => {
+            setDsaVersion((v) => v + 1);
+            setCalibVersion((v) => v + 1);
+          }}
+        />
+      )}
+      {qvaDialogOpen && displayImageIds[zc] && (
+        <XaAnalysisDialog
+          mode="qva"
+          imageId={displayImageIds[zc]}
+          seriesUid={seriesUid}
+          isSubtracted={!!dsaToken}
+          saveContext={{
+            studyUid,
+            sopInstanceUid: sopUidFromImageId(zStack[zc] ?? ""),
+            frameIndex: zc,
+            dsa: dsaState ? { maskFrames: dsaState.maskFrames, dx: dsaState.dx, dy: dsaState.dy } : null,
+          }}
+          onClose={() => setQvaDialogOpen(false)}
           onCalibrated={() => {
             setDsaVersion((v) => v + 1);
             setCalibVersion((v) => v + 1);

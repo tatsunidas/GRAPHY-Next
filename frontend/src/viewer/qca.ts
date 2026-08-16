@@ -46,7 +46,19 @@ export type QcaReferenceMode =
   /** ユーザが「ここが健常」と指定した区間（計測点インデックスの閉区間）だけで回帰する。 */
   | { kind: "segments"; ranges: readonly (readonly [number, number])[] }
   /** 参照径を直接与える（他モダリティの実測値を使う等）。単位は結果と同じ。 */
-  | { kind: "fixed"; diameter: number };
+  | { kind: "fixed"; diameter: number }
+  /**
+   * **区間の両端を健常と見なす**（QVA の既定・§9.1）。近位・遠位それぞれの窓の中央値を結び、
+   * 間を線形で内挿する。
+   *
+   * <p>冠動脈の自動当てはめ（`auto`）は「区間の大半が健常」を前提にしているが、
+   * **紡錘状の瘤は区間の大半を占めることがある**。そうなると瘤自身が参照径を押し上げ、
+   * 「参照径に対する拡張」が測れなくなる。両端を基準にすればこれが起きない。
+   *
+   * <p>平均ではなく**中央値**を使う。解析区間の端は径が太く出ることがあり
+   * （実測: 357 点中の端 6 点が 2.61 → 2.82mm）、平均だとそこに引かれる。
+   */
+  | { kind: "ends"; fraction?: number };
 
 /**
  * 手修正（`fw/angio-design.md` §8.1「各段の結果を手で直せること」）。
@@ -655,6 +667,31 @@ const LESION_TIE_MARGIN = 0.0005;
  * **参照径が寄っているのを判定の閾値で埋め合わせない** —— 参照径が狂ったままなのに
  * 病変長だけそれらしい値になり、RVD と %DS の誤りが見えなくなる。
  */
+/**
+ * 区間の両端を健常と見なした参照径（QVA・{@link QcaReferenceMode} の `ends`）。
+ *
+ * @param fraction 端の窓の割合（既定 0.25 ＝ 前後 25% ずつ）
+ */
+export function referenceFromEnds(
+  positions: readonly number[],
+  diameters: readonly number[],
+  fraction = 0.25,
+): number[] {
+  const n = diameters.length;
+  if (n === 0) return [];
+  if (n < 4) return diameters.map(() => median(diameters));
+  const f = Number.isFinite(fraction) ? Math.min(0.5, Math.max(0.05, fraction)) : 0.25;
+  const k = Math.max(1, Math.min(Math.floor(n / 2), Math.round(n * f)));
+  const proxD = median(diameters.slice(0, k));
+  const distD = median(diameters.slice(n - k));
+  const proxP = median(positions.slice(0, k));
+  const distP = median(positions.slice(n - k));
+  if (!(distP > proxP)) return positions.map(() => (proxD + distD) / 2);
+  const a = (distD - proxD) / (distP - proxP);
+  const b = proxD - a * proxP;
+  return positions.map((p) => a * p + b);
+}
+
 export function lesionBounds(
   diameters: readonly number[],
   reference: readonly number[],
@@ -665,6 +702,25 @@ export function lesionBounds(
   while (lo - 1 >= 0 && below(lo - 1)) lo--;
   let hi = mldIndex;
   while (hi + 1 < diameters.length && below(hi + 1)) hi++;
+  return { lo, hi };
+}
+
+/**
+ * 拡張（瘤）の範囲 —— {@link lesionBounds} の上下を裏返したもの。
+ *
+ * <p>**同じ余裕（{@link LESION_TIE_MARGIN}）を使う**。狭窄と拡張で判定の厳しさが違うと、
+ * 同じ血管の同じプロファイルで「狭窄長は短いのに拡張長は長い」といった非対称が出る。
+ */
+export function dilationBounds(
+  diameters: readonly number[],
+  reference: readonly number[],
+  maxIndex: number,
+): { lo: number; hi: number } {
+  const above = (i: number): boolean => diameters[i] > reference[i] * (1 + LESION_TIE_MARGIN);
+  let lo = maxIndex;
+  while (lo - 1 >= 0 && above(lo - 1)) lo--;
+  let hi = maxIndex;
+  while (hi + 1 < diameters.length && above(hi + 1)) hi++;
   return { lo, hi };
 }
 
@@ -882,6 +938,8 @@ export function runQca(input: QcaInput): QcaResult | null {
     reference = positions.map(() => refMode.diameter);
   } else if (refMode.kind === "segments") {
     reference = referenceDiameters(positions, diameters, refMode.ranges);
+  } else if (refMode.kind === "ends") {
+    reference = referenceFromEnds(positions, diameters, refMode.fraction);
   } else {
     reference = referenceDiameters(positions, diameters);
   }

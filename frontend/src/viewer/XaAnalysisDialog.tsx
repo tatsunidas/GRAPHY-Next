@@ -16,6 +16,7 @@ import { getRenderingEngine } from "@cornerstonejs/core";
 import { annotation as csAnnotation } from "@cornerstonejs/tools";
 import {
   createQcaSr,
+  createQvaSr,
   createXaPresentationState,
   type AngioPresentationRequest,
 } from "../api";
@@ -24,12 +25,13 @@ import { publishQcaSnapshot } from "./debugApi";
 import { readModalitySlice } from "./pixelCalibration";
 import { QcaEditor, type QcaEditMode } from "./QcaEditor";
 import { runQca, type QcaManualEdits, type QcaReferenceMode, type QcaResult } from "./qca";
+import { analyzeDilation, ANEURYSM_RATIO, type QvaDilation } from "./qva";
 import { TaskStepRail } from "./TaskStepRail";
 import { ENGINE_ID } from "./Viewer2D";
 import { readVoiWindow } from "./viewportRead";
 import { isXaCalibrated } from "./xaCalibration";
 import { publishAnalysisResult } from "../report/analysisResultStore";
-import { qcaRecord } from "../report/xaAnalysisRecords";
+import { qcaRecord, qvaRecord } from "../report/xaAnalysisRecords";
 import { describeView, registerQcaRun } from "./xaRecon3dStore";
 import { readXaViewGeometry } from "./xaViewGeometryProvider";
 import {
@@ -195,6 +197,7 @@ export function XaAnalysisDialog({
   seriesUid,
   isSubtracted,
   saveContext,
+  mode = "qca",
   onClose,
   onCalibrated,
 }: {
@@ -204,9 +207,18 @@ export function XaAnalysisDialog({
   /** DSA 表示中か（血管が明るいか暗いかの判断に使う）。 */
   isSubtracted: boolean;
   saveContext: XaSaveContext;
+  /**
+   * `qca`（冠動脈）か `qva`（末梢・脳血管）か。**同じダイアログを使い回す**
+   * ——中心線・エッジ・手修正・保存の作りが同じで、違うのは
+   * **参照径の既定と、拡張（瘤）の指標を出すかどうか**だけ（§9.1 / A5a）。
+   * ここを別ダイアログにすると、手修正の作りが 2 つに分裂して両方腐る。
+   */
+  mode?: "qca" | "qva";
   onClose: () => void;
   onCalibrated?: () => void;
 }) {
+  /** QVA の参照径は**区間の両端**が既定（瘤が区間の大半を占めても参照径が動かない）。 */
+  const defaultReference: QcaReferenceMode = mode === "qva" ? { kind: "ends" } : { kind: "auto" };
   const { t } = useI18n();
   // 校正を確定/解除したら自分の表示も更新する（imageId は変わらないので版番号で回す）。
   const [calibVersion, setCalibVersion] = useState(0);
@@ -224,6 +236,8 @@ export function XaAnalysisDialog({
   const [knownMm, setKnownMm] = useState("");
   const [frSize, setFrSize] = useState("6");
   const [result, setResult] = useState<QcaResult | null>(null);
+  /** 拡張（瘤）の計測。QVA のときだけ入る。 */
+  const [dilation, setDilation] = useState<QvaDilation | null>(null);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
@@ -234,7 +248,7 @@ export function XaAnalysisDialog({
   const [edgeEdits, setEdgeEdits] = useState<Record<number, { left?: number; right?: number }>>({});
   const [edgeToken, setEdgeToken] = useState<string | null>(null);
   const [trim, setTrim] = useState<{ from: number; to: number } | null>(null);
-  const [refMode, setRefMode] = useState<QcaReferenceMode>({ kind: "auto" });
+  const [refMode, setRefMode] = useState<QcaReferenceMode>(defaultReference);
   const [editMode, setEditMode] = useState<QcaEditMode>("none");
   const [chartMode, setChartMode] = useState<"none" | "trim" | "reference">("none");
   const [highlight, setHighlight] = useState<number | null>(null);
@@ -246,7 +260,7 @@ export function XaAnalysisDialog({
     setEdgeEdits({});
     setEdgeToken(null);
     setTrim(null);
-    setRefMode({ kind: "auto" });
+    setRefMode(defaultReference);
     setEditMode("none");
     setChartMode("none");
     setHighlight(null);
@@ -345,13 +359,46 @@ export function XaAnalysisDialog({
       .finally(() => setSaving(false));
   };
 
-  /** QCA の計測値を Comprehensive SR として保存する。 */
+  /** 計測値を Comprehensive SR として保存する（QVA なら瘤の指標込み）。 */
   const saveQca = () => {
     const sop = saveContext.sopInstanceUid;
     if (!sop || !result) return;
     setSaving(true);
     setError(null);
     const c = calibrationForImageId(imageId);
+    if (mode === "qva") {
+      createQvaSr({
+        studyInstanceUid: saveContext.studyUid,
+        seriesInstanceUid: seriesUid,
+        sopInstanceUid: sop,
+        frameNumber: saveContext.frameIndex + 1,
+        unit: result.unit,
+        calibration: c?.provenance ?? null,
+        vesselLabel: null,
+        manualCorrection: describeManual(result),
+        mld: result.mld,
+        rvd: result.rvd,
+        percentDiameterStenosis: result.percentDiameterStenosis,
+        lesionLength: result.lesionLength,
+        // 拡張が無ければ **null のまま**送る（0 で埋めると「瘤 0mm」が保存される）。
+        dilation: dilation
+          ? {
+              maxDiameter: dilation.maxDiameter,
+              ratio: dilation.ratio,
+              percentDilation: dilation.percentDilation,
+              length: dilation.length,
+              proximalNeck: dilation.proximalNeck,
+              distalNeck: dilation.distalNeck,
+              eccentricity: dilation.eccentricity,
+              aneurysmal: dilation.aneurysmal,
+            }
+          : null,
+      })
+        .then((r) => setSaved(t("xa.analysis.savedSr", { uid: shortUid(r.sopInstanceUid) })))
+        .catch(() => setError(t("xa.analysis.saveFailed")))
+        .finally(() => setSaving(false));
+      return;
+    }
     createQcaSr({
       studyInstanceUid: saveContext.studyUid,
       seriesInstanceUid: seriesUid,
@@ -393,6 +440,7 @@ export function XaAnalysisDialog({
       // 失敗したときに**古い結果が残らない**ようにする（前回値を見て「変わっていない」と
       // 誤解する事故を防ぐ。実機で踏んだ）。
       setResult(null);
+      setDilation(null);
       // 🚨 検証用スナップショットも必ず消す。ここを残すと automator は**前のフレームの
       //    数値**を読んで合格してしまう（実際に「別フレームの結果が出ている」形で踏んだ）。
       //    画面と同じ理由で、失敗は「値が無い」でなければならない。
@@ -402,6 +450,11 @@ export function XaAnalysisDialog({
     }
     setError(null);
     setResult(r);
+    // 拡張（瘤）は QVA のときだけ測る。QCA の画面に「瘤」を出すと、冠動脈の拡張を
+    // 瘤と呼んでいるように読める（言葉の意味が領域で違う）。
+    const dil = mode === "qva" ? analyzeDilation(r) : null;
+    setDilation(dil);
+
     // 実機検証（automator）が掴む対象を計算できるように公開する。DEV 以外では何もしない。
     publishQcaSnapshot({
       imageId,
@@ -417,13 +470,46 @@ export function XaAnalysisDialog({
       lesionLength: r.lesionLength,
       profileNoise: r.profileNoise,
       points: r.diameters.length,
+      qva: dil
+        ? {
+            maxDiameter: dil.maxDiameter,
+            referenceAtMax: dil.referenceAtMax,
+            ratio: dil.ratio,
+            percentDilation: dil.percentDilation,
+            length: dil.length,
+            proximalNeck: dil.proximalNeck,
+            distalNeck: dil.distalNeck,
+            eccentricity: dil.eccentricity,
+            aneurysmal: dil.aneurysmal,
+          }
+        : null,
       referenceFirst: r.reference[0] ?? 0,
       referenceLast: r.reference[r.reference.length - 1] ?? 0,
       unit: r.unit,
       warnings: r.warnings,
     });
     // レポートへ差し込めるように登録する（A14）。**出自（校正・手修正）も一緒に持ち込む**。
-    if (saveContext.sopInstanceUid) {
+    if (saveContext.sopInstanceUid && mode === "qva") {
+      publishAnalysisResult(
+        qvaRecord(
+          {
+            studyUid: saveContext.studyUid,
+            seriesUid,
+            sopInstanceUid: saveContext.sopInstanceUid,
+            frameIndex: saveContext.frameIndex,
+            unit: r.unit,
+            calibration: c?.provenance ?? null,
+            manualCorrection: describeManual(r),
+            mld: r.mld,
+            rvd: r.rvd,
+            percentDiameterStenosis: r.percentDiameterStenosis,
+            lesionLength: r.lesionLength,
+            dilation: dil,
+          },
+          t,
+        ),
+      );
+    } else if (saveContext.sopInstanceUid) {
       publishAnalysisResult(
         qcaRecord(
           {
@@ -578,7 +664,9 @@ export function XaAnalysisDialog({
   return (
     <div style={backdrop} onClick={onClose}>
       <div style={panel} onClick={(e) => e.stopPropagation()}>
-        <div style={title} data-testid="xa-analysis-dialog">{t("xa.analysis.title")}</div>
+        <div style={title} data-testid="xa-analysis-dialog" data-mode={mode}>
+          {t(mode === "qva" ? "qva.title" : "xa.analysis.title")}
+        </div>
 
         <div style={body}>
         <div style={content} ref={bodyRef}>
@@ -683,7 +771,8 @@ export function XaAnalysisDialog({
 
         {/* QCA */}
         <div style={section} data-step="analysis">
-          <div style={sectionTitle}>{t("xa.analysis.qca")}</div>
+          <div style={sectionTitle}>{t(mode === "qva" ? "qva.analysis" : "xa.analysis.qca")}</div>
+          {mode === "qva" && <div style={hint} data-testid="qva-scope">{t("qva.scope")}</div>}
           <div style={row}>
             <button style={primaryBtn} data-testid="xa-qca-run" onClick={() => runAnalysis()} disabled={!pick || busy}>
               {busy ? t("common.loading") : t("xa.analysis.run")}
@@ -695,7 +784,7 @@ export function XaAnalysisDialog({
                 disabled={!result.provenance.edited}
                 onClick={() => {
                   resetEdits();
-                  runAnalysis({ waypoints: [], edges: null, trim: null, reference: { kind: "auto" } });
+                  runAnalysis({ waypoints: [], edges: null, trim: null, reference: defaultReference });
                 }}
               >
                 {t("xa.qca.resetEdits")}
@@ -747,6 +836,66 @@ export function XaAnalysisDialog({
             </div>
           )}
 
+          {mode === "qva" && result && (
+            <div style={{ marginTop: 8 }} data-testid="qva-result" data-aneurysm={dilation?.aneurysmal ? "1" : "0"}>
+              {dilation ? (
+                <table style={table}>
+                  <tbody>
+                    <tr>
+                      <td style={th}>{t("qva.maxDiameter")}</td>
+                      <td style={td} data-testid="qva-max-diameter">
+                        {dilation.maxDiameter.toFixed(2)} {result.unit}
+                      </td>
+                      <td style={th}>{t("qva.reference")}</td>
+                      <td style={td}>
+                        {dilation.referenceAtMax.toFixed(2)} {result.unit}
+                      </td>
+                    </tr>
+                    <tr>
+                      {/* ★ 比は半値法の系統誤差が打ち消される量。判定はこちらで行う（§16.4）。 */}
+                      <td style={th}>{t("qva.ratio")}</td>
+                      <td style={td} data-testid="qva-ratio">
+                        {dilation.ratio.toFixed(2)} ×（{dilation.percentDilation.toFixed(0)} %）
+                      </td>
+                      <td style={th}>{t("qva.length")}</td>
+                      <td style={td} data-testid="qva-length">
+                        {dilation.length.toFixed(2)} {result.unit}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style={th}>{t("qva.neck")}</td>
+                      <td style={td}>
+                        {dilation.proximalNeck.toFixed(2)} / {dilation.distalNeck.toFixed(2)} {result.unit}
+                      </td>
+                      <td style={th}>{t("qva.eccentricity")}</td>
+                      <td style={td} data-testid="qva-eccentricity">
+                        {dilation.eccentricity == null
+                          ? "—"
+                          : `${dilation.eccentricity.toFixed(2)}（${t(
+                              dilation.eccentricity >= 0.5 ? "qva.saccular" : "qva.fusiform",
+                            )}）`}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style={th}>{t("qva.judgement")}</td>
+                      <td style={td} colSpan={3} data-testid="qva-judgement">
+                        <b>{t(dilation.aneurysmal ? "qva.judge.aneurysm" : "qva.judge.notAneurysm")}</b>
+                        {/* 🚨 基準そのものを必ず一緒に出す。「瘤」という語だけを出すと、
+                            どの基準で瘤と呼んだのかが読む側に分からない。 */}
+                        <span style={{ marginLeft: 8, color: "#44586a" }}>
+                          {t("qva.criterion", { ratio: ANEURYSM_RATIO.toFixed(1) })}
+                        </span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              ) : (
+                <div style={hint} data-testid="qva-no-dilation">{t("qva.judge.noDilation")}</div>
+              )}
+              <div style={hint}>{t("qva.projectionCaveat")}</div>
+            </div>
+          )}
+
           {result && (
             <div data-step="range">
             <QcaReport
@@ -775,7 +924,7 @@ export function XaAnalysisDialog({
                 reanalyze({ trim: null });
               }}
               onClearReference={() => {
-                const next: QcaReferenceMode = { kind: "auto" };
+                const next: QcaReferenceMode = defaultReference;
                 setRefMode(next);
                 reanalyze({ reference: next });
               }}
@@ -788,11 +937,17 @@ export function XaAnalysisDialog({
         <div style={section} data-step="save">
           <div style={sectionTitle}>{t("xa.analysis.save")}</div>
           <div style={row}>
-            <button style={btn} disabled={saving || !saveContext.sopInstanceUid} onClick={savePresentationState}>
+            <button
+              style={btn}
+              data-testid="xa-save-gsps"
+              disabled={saving || !saveContext.sopInstanceUid}
+              onClick={savePresentationState}
+            >
               {t("xa.analysis.saveGsps")}
             </button>
             <button
               style={btn}
+              data-testid="xa-save-sr"
               disabled={saving || !result || !saveContext.sopInstanceUid}
               onClick={saveQca}
             >

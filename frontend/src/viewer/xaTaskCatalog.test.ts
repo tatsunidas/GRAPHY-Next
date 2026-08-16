@@ -73,7 +73,8 @@ describe("ANALYSIS_TASKS", () => {
 
 describe("taskAvailability", () => {
   const qca = ANALYSIS_TASKS.find((d) => d.id === "qca")!;
-  const qva = ANALYSIS_TASKS.find((d) => d.id === "qva")!;
+  // 未実装タスクの代表（A5a QVA を実装したので分岐部 QCA に持ち替えた）。
+  const unimplemented = ANALYSIS_TASKS.find((d) => d.id === "qca3dBifurcation")!;
   const report = ANALYSIS_TASKS.find((d) => d.id === "report")!;
 
   it("実装済み・standalone・XA シリーズ選択済みなら押せる", () => {
@@ -81,15 +82,15 @@ describe("taskAvailability", () => {
   });
 
   it("🚨 未実装は他の条件が揃っていても押せない（フェーズ名を出す）", () => {
-    const av = taskAvailability(qva, READY);
+    const av = taskAvailability(unimplemented, READY);
     expect(av.enabled).toBe(false);
     expect(av.reasonKey).toBe("xa.task.reason.notImplemented");
-    expect(av.params?.phase).toBe("A5a");
+    expect(av.params?.phase).toBe("A6b");
   });
 
   it("🚨 未実装かつスタディ未選択なら『未実装』を出す（直せない理由が先）", () => {
     // 「スタディを選べ」と出すと、選んでも状況が変わらず**バグに見える**。
-    const av = taskAvailability(qva, { hasStudy: false, seriesModality: null, standalone: true });
+    const av = taskAvailability(unimplemented, { hasStudy: false, seriesModality: null, standalone: true });
     expect(av.reasonKey).toBe("xa.task.reason.notImplemented");
   });
 

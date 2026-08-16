@@ -33,7 +33,7 @@ export type AnalysisTaskId =
   | "report";
 
 /** 起動したときに開くもの。`null` は未実装（開くものが無い）。 */
-export type AnalysisTaskTarget = "xaAnalysis" | "qlv" | "qca3d" | "report";
+export type AnalysisTaskTarget = "xaAnalysis" | "qva" | "qlv" | "qca3d" | "report";
 
 export interface AnalysisTaskDef {
   id: AnalysisTaskId;
@@ -75,9 +75,9 @@ export const ANALYSIS_TASKS: readonly AnalysisTaskDef[] = [
     id: "qva",
     labelKey: "xa.task.qva",
     descKey: "xa.task.qva.desc",
-    implemented: false,
+    implemented: true,
     phase: "A5a",
-    opens: null,
+    opens: "qva",
     needsXaSeries: true,
     standaloneOnly: true,
   },

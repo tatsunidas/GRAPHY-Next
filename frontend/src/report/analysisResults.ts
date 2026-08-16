@@ -22,7 +22,7 @@
  * <p>ここは**純ロジック**（React・i18n 非依存）。文言は呼び出し側が `t()` で解決して渡す。
  */
 
-export type AnalysisKind = "qca" | "qlv" | "qca3d";
+export type AnalysisKind = "qca" | "qva" | "qlv" | "qca3d";
 
 /** 1 行の計測値。 */
 export interface AnalysisMetric {

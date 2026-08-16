@@ -181,8 +181,8 @@ export interface QcaTaskState {
   editedEdges: number;
   /** 区間を切り詰めたか。 */
   trimmed: boolean;
-  /** 参照径の決め方。 */
-  referenceKind: "auto" | "segments" | "fixed";
+  /** 参照径の決め方（`ends` は QVA の既定＝両端を健常と見なす）。 */
+  referenceKind: "auto" | "segments" | "fixed" | "ends";
   /** 中心線が変わってエッジ修正が捨てられたか（`warnings` に `edgeEditsDropped`）。 */
   edgeEditsDropped: boolean;
   /** 保存先の元インスタンスを特定できているか。 */

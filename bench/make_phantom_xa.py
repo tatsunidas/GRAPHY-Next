@@ -26,6 +26,9 @@ GNBP-XA — GRAPHY-Next Benchmark Phantom, X-ray angiography series.
     GNBP-XA-3   2D→3D 再構成。既知の 3D 血管ツリーを既知角度で 4 方向へ順投影。
                 **タグの角度に既知誤差を混ぜた版**も作る（バンドル調整が回収すべき量）
     GNBP-XA-4   空間校正。既知外径のカテーテル＋**タグの書かれ方 4 変種**
+    GNBP-XA-6   QVA（末梢・脳血管）。既知径の直管に**既知の拡張（瘤）**。紡錘状／嚢状／
+                軽度拡張／拡張無しの 6 フレーム
+                （⚠️ XA-5 は設計 §16.3 で**左室ファントム**に予約済み。番号を使い回さない）
 
 物理モデル
 ----------
@@ -176,6 +179,63 @@ def _project_vessel(
 
     transmit = np.exp(-MU_CONTRAST * path_mm)
     # 面積平均で 1 画素へ。
+    transmit = transmit.reshape(ROWS, n, COLUMNS, n).mean(axis=(1, 3))
+    return _gaussian_blur(transmit, blur_px)
+
+
+def _dilated_profile(
+    x_mm: np.ndarray,
+    peak_diameter_mm: float,
+    length_mm: float,
+    reference_diameter_mm: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """瘤の半径 r(x) と軸のずれ c(x) を返す（どちらも [mm]）。
+
+    膨らみは狭窄と同じ余弦テーパーの裏返しで、**区間の端でちょうど参照径に戻る**。
+    したがって真値の「瘤長」は ``length_mm``（＝径が参照径を上回る区間）と一致する。
+
+    嚢状（片側だけ）は ``c(x)`` を半径の増分の半分だけずらして作る。内腔は
+    [-r_ref, +r_ref + 膨らみ] になり、**片方の壁は動かない**。
+    """
+    r_ref = reference_diameter_mm / 2.0
+    r = np.full_like(x_mm, r_ref)
+    c = np.zeros_like(x_mm)
+    if peak_diameter_mm <= reference_diameter_mm or length_mm <= 0:
+        return r, c
+    half = length_mm / 2.0
+    d = np.abs(x_mm)
+    inside = d < half
+    f = 0.5 * (1.0 + np.cos(np.pi * d[inside] / half))
+    r[inside] = r_ref + (peak_diameter_mm / 2.0 - r_ref) * f
+    return r, c
+
+
+def _project_dilated(
+    peak_diameter_mm: float,
+    length_mm: float,
+    *,
+    saccular: bool,
+    blur_px: float,
+    axis_row: float = ROWS / 2.0,
+    reference_diameter_mm: float = REFERENCE_DIAMETER_MM,
+) -> np.ndarray:
+    """瘤のある血管 1 本の透過率画像。``_project_vessel`` と同じ物理モデル。"""
+    n = SUPERSAMPLE
+    sub = (np.arange(n) + 0.5) / n - 0.5
+    cols = (np.arange(COLUMNS)[:, None] + sub[None, :]).ravel()
+    rows = (np.arange(ROWS)[:, None] + sub[None, :]).ravel()
+    x_mm = (cols - COLUMNS / 2.0) * MM_PER_PX
+    d_mm = (rows - axis_row) * MM_PER_PX
+
+    r, c = _dilated_profile(x_mm, peak_diameter_mm, length_mm, reference_diameter_mm)
+    if saccular:
+        # 片側の壁を固定し、増えた分だけ軸をずらす（内腔の幅は同じ）。
+        c = r - reference_diameter_mm / 2.0
+
+    inner = r[None, :] ** 2 - (d_mm[:, None] - c[None, :]) ** 2
+    np.maximum(inner, 0.0, out=inner)
+    path_mm = 2.0 * np.sqrt(inner)
+    transmit = np.exp(-MU_CONTRAST * path_mm)
     transmit = transmit.reshape(ROWS, n, COLUMNS, n).mean(axis=(1, 3))
     return _gaussian_blur(transmit, blur_px)
 
@@ -827,7 +887,84 @@ def build_calibration(out_dir: str) -> dict:
 
 # ══════════════════════════════════════════════════════════════════════
 
-BUILDERS = {"qca": build_qca, "dsa": build_dsa, "recon3d": build_recon3d, "calibration": build_calibration}
+# ══════════════════════════════════════════════════════════════════════
+# GNBP-XA-6 — QVA（末梢・脳血管の瘤）
+# ══════════════════════════════════════════════════════════════════════
+
+#: (最大径 mm, 瘤長 mm, 嚢状か, ぼけ σ px, I0)。参照径は 3.0mm。
+#: 🔑 **比（最大径 / 参照径）が判定基準**なので、1.5 倍ちょうどの境界も入れてある。
+QVA_FRAMES = [
+    (6.0, 20.0, False, DEFAULT_BLUR_PX, None),   # 紡錘状・比 2.0
+    (4.5, 15.0, False, DEFAULT_BLUR_PX, None),   # 紡錘状・比 1.5（瘤と呼ぶ境界ちょうど）
+    (3.6, 20.0, False, DEFAULT_BLUR_PX, None),   # 軽度拡張・比 1.2（瘤ではない）
+    (6.0, 15.0, True, DEFAULT_BLUR_PX, None),    # ★嚢状（片側だけ）・比 2.0
+    (6.0, 15.0, True, DEFAULT_BLUR_PX, 4000.0),  # ★嚢状＋ノイズ
+    (3.0, 0.0, False, DEFAULT_BLUR_PX, None),    # 拡張無し（瘤を作り出さないこと）
+]
+
+
+def build_qva(out_dir: str) -> dict:
+    rng = np.random.default_rng(20260816)
+    frames = np.zeros((len(QVA_FRAMES), ROWS, COLUMNS), dtype=np.uint16)
+    truth_frames = []
+    for i, (peak, length, saccular, blur, photons) in enumerate(QVA_FRAMES):
+        transmit = _project_dilated(peak, length, saccular=saccular, blur_px=blur)
+        frames[i] = _to_stored(transmit, photons, rng)
+        dilated = peak > REFERENCE_DIAMETER_MM and length > 0
+        truth_frames.append(
+            {
+                "frame": i + 1,
+                "referenceDiameterMm": REFERENCE_DIAMETER_MM,
+                "maxDiameterMm": peak if dilated else REFERENCE_DIAMETER_MM,
+                # 半値法の 13% 過小は比では打ち消される（§16.4）。判定はこの比で行う。
+                "ratio": (peak / REFERENCE_DIAMETER_MM) if dilated else 1.0,
+                "aneurysmLengthMm": length if dilated else 0.0,
+                # 片側だけの膨らみ = 偏心度 1.0、全周性 = 0.0。
+                "eccentricity": (1.0 if saccular else 0.0) if dilated else None,
+                "saccular": bool(saccular and dilated),
+                # 1.5 倍以上を「瘤」と呼ぶ（`frontend/src/viewer/qva.ts` の ANEURYSM_RATIO）。
+                "aneurysmal": bool(dilated and peak / REFERENCE_DIAMETER_MM >= 1.5),
+                "blurSigmaPx": blur,
+                "photonsPerPixel": photons,
+            }
+        )
+
+    ds = _xa_dataset(
+        frames,
+        uid_key="XA-6",
+        study_key="XA-6",
+        series_description="GNBP-XA-6 QVA aneurysm",
+        series_number=6,
+        frame_time_ms=33.0,
+        patient_id="GNBP-XA-6",
+        patient_name="GNBPXA^QVA",
+        calibration=(MM_PER_PX, "GEOMETRY"),
+    )
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, "GNBP-XA-6.dcm")
+    _save(ds, path)
+    return {
+        "sopInstanceUid": ds.SOPInstanceUID,
+        "studyInstanceUid": ds.StudyInstanceUID,
+        "seriesInstanceUid": ds.SeriesInstanceUID,
+        "file": os.path.basename(path),
+        "md5": _file_md5(path),
+        "rows": ROWS,
+        "columns": COLUMNS,
+        "vesselAxisRow": ROWS / 2.0,
+        "mmPerPx": MM_PER_PX,
+        "aneurysmRatio": 1.5,
+        "frames": truth_frames,
+    }
+
+
+BUILDERS = {
+    "qca": build_qca,
+    "dsa": build_dsa,
+    "recon3d": build_recon3d,
+    "calibration": build_calibration,
+    "qva": build_qva,
+}
 
 
 def main() -> int:
@@ -843,7 +980,19 @@ def main() -> int:
     os.makedirs(out_root, exist_ok=True)
 
     wanted = args.series or sorted(BUILDERS)
-    truth = {
+    # 🚨 **`--series` で一部だけ作り直しても truth.json の他の系列を消さない。**
+    #    ここを上書きにしていたため、qva だけ生成した時点で qca / dsa / recon3d /
+    #    calibration の真値が truth.json から消え、他のスパイクが「ファントムが無い」で
+    #    落ちる状態になった（DICOM は残っているので気づきにくい）。既存を読んで**更新する**。
+    truth_path = os.path.join(out_root, "truth.json")
+    truth: dict = {}
+    if os.path.isfile(truth_path):
+        try:
+            with open(truth_path, encoding="utf-8") as f:
+                truth = json.load(f)
+        except (OSError, ValueError):
+            truth = {}
+    truth.update({
         "phantom": "GNBP-XA",
         "design": "fw/angio-design.md §16.3",
         "geometry": {
@@ -866,12 +1015,11 @@ def main() -> int:
                 "Frame 8 of GNBP-XA-1 is unblurred so this systematic effect can be isolated."
             ),
         },
-    }
+    })
     for name in wanted:
         print(f"[GNBP-XA] {name} …", file=sys.stderr)
         truth[name] = BUILDERS[name](out_root)
 
-    truth_path = os.path.join(out_root, "truth.json")
     with open(truth_path, "w", encoding="utf-8") as f:
         json.dump(truth, f, ensure_ascii=False, indent=2, sort_keys=False)
     print(f"[GNBP-XA] wrote {out_root}", file=sys.stderr)

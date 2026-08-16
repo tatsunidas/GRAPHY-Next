@@ -309,6 +309,41 @@ export const createXaPresentationState = (req: AngioPresentationRequest) =>
 export const createQcaSr = (req: QcaSrRequest) => httpSend<AngioCreated>("/api/angio/qca-sr", "POST", req);
 
 /**
+ * QVA（末梢・脳血管）の計測値を Comprehensive SR として保存する（§9.1 / A5a）。
+ *
+ * <p>QCA と別の要求にしているのは、**瘤の指標と、瘤に付く限界（投影 1 方向）**が
+ * 増えるため。QCA の SR に瘤の項目を混ぜると、冠動脈の SR に空の瘤欄が並ぶ。
+ */
+export const createQvaSr = (req: QvaSrRequest) => httpSend<AngioCreated>("/api/angio/qva-sr", "POST", req);
+
+export interface QvaSrRequest {
+  studyInstanceUid: string;
+  seriesInstanceUid: string;
+  sopInstanceUid: string;
+  frameNumber?: number | null;
+  unit: string;
+  calibration?: string | null;
+  vesselLabel?: string | null;
+  manualCorrection?: string | null;
+  mld: number;
+  rvd: number;
+  percentDiameterStenosis: number;
+  lesionLength: number;
+  /** 拡張（瘤）。無ければ null（**空欄を 0 で埋めない**）。 */
+  dilation?: {
+    maxDiameter: number;
+    ratio: number;
+    percentDilation: number;
+    length: number;
+    proximalNeck: number;
+    distalNeck: number;
+    /** 測れなければ null。 */
+    eccentricity?: number | null;
+    aneurysmal: boolean;
+  } | null;
+}
+
+/**
  * QLV（左室造影）の結果を保存する要求（`fw/angio-design.md` §9.2 / A5b）。
  *
  * 🚨 **未校正のときは `unit`・容積・Kennedy をすべて null にする**。EF はスケール不変なので

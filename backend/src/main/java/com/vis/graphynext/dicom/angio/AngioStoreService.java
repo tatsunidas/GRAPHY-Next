@@ -69,6 +69,15 @@ public class AngioStoreService {
         return new Created(r.seriesInstanceUid(), r.sopInstanceUid());
     }
 
+    public Created createQvaSr(QvaSrRequest req) throws IOException {
+        Attributes tmpl = readTemplate(req.sopInstanceUid());
+        QvaSrWriter.Result r = QvaSrWriter.build(tmpl, req);
+        store(r.dataset());
+        log.info("QVA SR created: series={} sop={} (%DS={} dilation={})", r.seriesInstanceUid(), r.sopInstanceUid(),
+                req.percentDiameterStenosis(), req.dilation() != null ? req.dilation().ratio() : null);
+        return new Created(r.seriesInstanceUid(), r.sopInstanceUid());
+    }
+
     public Created createQlvSr(QlvSrRequest req) throws IOException {
         Attributes tmpl = readTemplate(req.sopInstanceUid());
         QlvSrWriter.Result r = QlvSrWriter.build(tmpl, req);
