@@ -15,6 +15,9 @@
  *    しかも**差の % は径の系統誤差（13% 過小）に依らない**（3 本とも同じ係数で縮むため）。
  * 4. **カリーナ周辺を測っていない**ことが数値（除外半径・除外長）で出ること。
  * 5. **Medina 分類を出していない**こと。
+ * 6. 🔴 **同じ点から次の区間を引ける**こと。分岐部は 3 本がカリーナで出会うので、
+ *    既存注釈のハンドル（半径 6px）を掴んで**前の計測が伸びる**（実機で 89.5px → 207px）。
+ *    解析済みの計測をロックして避けている。本数が 1 本ずつ増えるかで検査する。
  *
  * <h3>⚠️ 短い枝を選んでいる理由</h3>
  * 分岐点をまたぐ区間は、**弦からの外れが探索窓（±40px）に収まる**かつ
@@ -73,6 +76,13 @@ interface Truth {
       exact: { file: string; studyInstanceUid: string; seriesInstanceUid: string };
       branchesPx: { id: string; pointsPx: [number, number][] }[];
     }[];
+    branches: {
+      id: string;
+      pointStrideOfFull: number;
+      fullPointCount: number;
+      diameterProximalMm: number;
+      diameterDistalMm: number;
+    }[];
     bifurcation: {
       exactTakeOffDeg: number;
       angleWindowMm: number;
@@ -112,12 +122,16 @@ interface BifState {
   };
   warnings: { code: string; branch: string | null; value: number; threshold: number }[];
   unrefinedBranches: string[];
+  /** 再構成した 3D 中心線（切り分け用。合否には使わない）。 */
+  branchPoints?: { id: string; points: [number, number, number][] }[];
 }
 
 let pass = 0;
 let fail = 0;
 let unmet = 0;
 const lines: string[] = [];
+/** 各区間の **2D** QCA の径（3D と切り分けるために控える）。 */
+const twoD: { key: string; mld: number; rvd: number; referenceFirst: number; referenceLast: number }[] = [];
 
 function check(cond: boolean, label: string, detail?: unknown): void {
   if (cond) pass++;
@@ -193,8 +207,10 @@ async function runQcaForSegments(
   ends: { key: string; p0: [number, number]; p1: [number, number] }[],
 ): Promise<void> {
   await selectLengthTool(viewer);
+  let drawn = 0;
   for (const e of ends) {
     await drawBetweenImagePixels(viewer, e.p0, e.p1);
+    drawn++;
     await viewer.getByTestId("xa-analysis-open").click();
     await viewer.getByTestId("xa-analysis-dialog").waitFor({ state: "visible", timeout: 10_000 });
     const wantPx = Math.hypot(e.p1[0] - e.p0[0], e.p1[1] - e.p0[1]);
@@ -207,6 +223,14 @@ async function runQcaForSegments(
     })()`);
     const labels = chosen ? (JSON.parse(chosen as string) as string[]) : [];
     if (labels.length === 0) throw new Error(`${e.key}: 計測が 1 本も無い（引けていない）`);
+    // 🔑 **本数が 1 本ずつ増えているか**を先に見る。分岐部は次の区間を**前の区間の終点
+    //    （＝カリーナ）から**引くので、Cornerstone が既存注釈のハンドルを掴むと
+    //    **新しい計測が生まれず、前の計測が伸びる**。長さだけを見ていると
+    //    「似た長さの別区間を解析した」と区別が付かない（実機で踏んだ）。
+    check(labels.length === drawn, `[描画] ${e.key}: 新しい計測が 1 本増えた（既存を掴んでいない）`, {
+      drawn,
+      picks: labels.length,
+    });
     const lastIndex = labels.length - 1;
     await viewer.selectOption('[data-testid="xa-analysis-pick"]', String(lastIndex));
     await viewer.waitForTimeout(400);
@@ -222,9 +246,29 @@ async function runQcaForSegments(
     const ok = await viewer.evaluate(`(() => {
       const g = window.__graphyDebug;
       const s = g && g.getQcaState ? g.getQcaState() : null;
-      return s ? JSON.stringify({ points: s.points, unit: s.unit }) : null;
+      return s ? JSON.stringify({
+        points: s.points, unit: s.unit, mld: s.mld, rvd: s.rvd,
+        referenceFirst: s.referenceFirst, referenceLast: s.referenceLast,
+      }) : null;
     })()`);
     check(!!ok, `[QCA] ${e.key}: 2D QCA が結果を出した`, ok);
+    // 🔑 **2D の径をここで控える**。3D の径がおかしいとき、2D から太いのか
+    //    合成で太るのかは、後から結果だけ見ても分からない（実機で側枝の参照径が
+    //    真値の 1.5 倍になったとき、どちらの段かを切り分けられなかった）。
+    if (ok) {
+      const q = JSON.parse(ok as string) as {
+        mld: number;
+        rvd: number;
+        referenceFirst: number;
+        referenceLast: number;
+      };
+      twoD.push({ key: e.key, mld: q.mld, rvd: q.rvd, referenceFirst: q.referenceFirst, referenceLast: q.referenceLast });
+    }
+    // 解析した計測はロックされる（次の区間を同じ点から引けるようにするため。§21.4.2 の 2）。
+    check(
+      (await viewer.getByTestId("xa-pick-locked").count()) === 1,
+      `[ロック] ${e.key}: 解析に使った計測がロックされた`,
+    );
     await viewer.getByTestId("xa-dialog-close").click();
     await viewer.waitForTimeout(400);
   }
@@ -325,7 +369,50 @@ async function main(): Promise<void> {
     }
     const s = JSON.parse(st) as BifState;
     fs.writeFileSync(path.join(OUT_DIR, "bifurcation.json"), JSON.stringify({ truth: bifTruth, measured: s }, null, 2));
+    // 3D 中心線は別ファイルへ（数値が合わないときに、追跡か再構成かを後から切り分けるため）。
+    if (s.branchPoints) {
+      fs.writeFileSync(path.join(OUT_DIR, "branch-points.json"), JSON.stringify(s.branchPoints));
+    }
     check(true, "[解析] 分岐部を解析できた");
+
+    // ── 2D の径と真値（ファントムのテーパは既知）─────────────────────────
+    // 半値法の系統誤差で **13% 前後過小**に出るのが正常。真値より**大きい**なら、
+    // それは系統誤差では説明できない＝別の血管を測っている（分岐部では母血管との重なり）。
+    const truthDiameterAt = (branch: string, index: number): number => {
+      const b = truth.recon3d.branches.find((x) => x.id === branch)!;
+      const full = index * b.pointStrideOfFull;
+      const f = full / (b.fullPointCount - 1);
+      return b.diameterProximalMm + (b.diameterDistalMm - b.diameterProximalMm) * f;
+    };
+    console.table(
+      twoD.map((d) => {
+        const seg = BRANCH_SEGMENTS[d.key as keyof typeof BRANCH_SEGMENTS];
+        const nearCarina = seg.branch === "main" && seg.to === BIF ? seg.to : seg.from;
+        const truthMm = truthDiameterAt(seg.branch, nearCarina);
+        const atCarina = seg.branch === "main" && seg.to === BIF ? d.referenceLast : d.referenceFirst;
+        return {
+          seg: d.key,
+          真値mm: Number(truthMm.toFixed(3)),
+          "2D参照径(カリーナ側)": Number(atCarina.toFixed(3)),
+          比: Number((atCarina / truthMm).toFixed(3)),
+          "2D rvd": Number(d.rvd.toFixed(3)),
+        };
+      }),
+    );
+    for (const d of twoD) {
+      const seg = BRANCH_SEGMENTS[d.key as keyof typeof BRANCH_SEGMENTS];
+      const nearCarina = seg.branch === "main" && seg.to === BIF ? seg.to : seg.from;
+      const truthMm = truthDiameterAt(seg.branch, nearCarina);
+      const atCarina = seg.branch === "main" && seg.to === BIF ? d.referenceLast : d.referenceFirst;
+      // 【目標】であって退行検査ではない。**投影で重なった血管を追跡してしまうのは
+      // 2D 追跡の原理的な限界**で、実装の不備ではない（§21.4.3）。壊れたことを
+      // 黙らせないほうは別に検査する（daughterWiderThanMother の警告）。
+      target(
+        atCarina < truthMm * 1.05,
+        `[2D] 【目標】${d.key}: カリーナ側の参照径が真値を超えない（超えたら母血管と重なって測っている）`,
+        { truthMm: Number(truthMm.toFixed(3)), measuredMm: Number(atCarina.toFixed(3)) },
+      );
+    }
 
     const byId = Object.fromEntries(s.branches.map((b) => [b.id, b]));
     for (const role of ["proximal", "distal", "side"]) {
@@ -417,6 +504,21 @@ async function main(): Promise<void> {
       "[整合] 3 本の端点がそろっている（同じ分岐を指している）",
       { spreadMm: Number(s.endpointSpreadMm.toFixed(2)) },
     );
+    // ★ 側枝が母血管に乗って測られていることを、**数値が狂ったまま黙らせない**。
+    //    この検査は「正しく測れた」ではなく「壊れているときに壊れていると言う」ことの検査。
+    const wider = s.warnings.find((w) => w.code === "daughterWiderThanMother");
+    const sideRefMm = byId.side?.referenceAtCarinaMm ?? null;
+    const proxRefMm = byId.proximal?.referenceAtCarinaMm ?? null;
+    if (sideRefMm != null && proxRefMm != null && sideRefMm > proxRefMm) {
+      check(!!wider, "[出自] ★娘枝が母血管より太いことを警告している（重なりを黙らせない）", {
+        sideMm: Number(sideRefMm.toFixed(2)),
+        proximalMm: Number(proxRefMm.toFixed(2)),
+      });
+      check(
+        (await viewer.getByTestId("xa3dbif-warn-daughterWiderThanMother").count()) === 1,
+        "[出自] ★その警告が画面にも出ている",
+      );
+    }
 
     await viewer.screenshot({ path: path.join(OUT_DIR, "1-bifurcation.png") }).catch(() => {});
     console.table(

@@ -435,6 +435,15 @@ export interface XaBifurcationDebugSnapshot {
   warnings: { code: string; branch: string | null; value: number; threshold: number }[];
   /** 角度補正が掛からなかった枝（出自）。 */
   unrefinedBranches: string[];
+  /**
+   * 再構成した 3D 中心線（患者 LPS mm・枝ごと）。
+   *
+   * <p>数値が合わないときに**どの段で狂ったか**を切り分けるために出す。角度だけを見ても
+   * 「2D の追跡が汚染された」のか「再構成が歪んだ」のかは区別が付かない
+   * （実機で分岐角が +10° ずれたとき、真値の 2D 点列から回した結果と突き合わせて
+   * 初めて追跡側だと分かった）。
+   */
+  branchPoints: { id: string; points: [number, number, number][] }[];
 }
 
 let xaBifurcationSnapshot: XaBifurcationDebugSnapshot | null = null;

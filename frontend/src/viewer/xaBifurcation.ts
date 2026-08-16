@@ -71,7 +71,16 @@ export type BifurcationWarningCode =
   /** 除外域を引くと枝が短すぎて測れない。 */
   | "branchTooShort"
   /** 断面が出せない（未校正など）。 */
-  | "noSections";
+  | "noSections"
+  /**
+   * 娘枝がカリーナ側で母血管より太い＝**その枝の中心線が母血管に乗っている**。
+   *
+   * <p>分岐では娘枝が母血管より太くなることは無い（Finet も Murray もそれを含意する）。
+   * それでも太く出るのは、投影で母血管と重なった区間を追跡・計測しているから
+   * ——実機で、真値 2.1mm の側枝がカリーナ側で 3.11mm と出た（＋その枝の向きが 11° ずれた）。
+   * **この状態の角度と径は信用できない**ので、黙って数値だけ出してはいけない。
+   */
+  | "daughterWiderThanMother";
 
 export interface BifurcationWarning {
   code: BifurcationWarningCode;
@@ -148,25 +157,41 @@ function carinaEnd(branch: readonly Vec3[], others: readonly Vec3[][]): { point:
 /**
  * カリーナから `windowMm` 以内の点で枝の向きを出す（**カリーナから出ていく向き**）。
  *
- * <p>先頭 2 点の差分では**曲率と抽出のゆらぎでいくらでも振れる**ので、窓の中の点への
- * 平均方向にする（臨床の分岐角も近位数 mm で測る）。
+ * <p>先頭 2 点の差分では**曲率と抽出のゆらぎでいくらでも振れる**ので、窓の中の点を
+ * 平均する（臨床の分岐角も近位数 mm で測る）。
+ *
+ * <h3>🔴 単位ベクトルの平均にしてはいけない</h3>
+ * カリーナから 0.1mm の点と 5mm の点を**同じ重み**で足すと、角度が数度ずれる
+ * （実機で分岐角が真値 +8.7° になった）。理由は簡単で、**カリーナのすぐ近くの点は
+ * 向きの情報をほとんど持たない**——0.15mm 先の点が 0.05mm 横にずれているだけで
+ * 向きは 18° 振れる。それを 5mm 先の点と対等に扱えば、平均はノイズに引かれる。
+ *
+ * <p>だから**正規化せずに足す**（＝窓の中の点の重心への向き）。遠い点ほど自然に重くなり、
+ * 近すぎる点は自分の短さのぶんだけ黙る。真値の生成器（`bench/make_phantom_xa.py`）も
+ * 同じ式に揃えてある——**約束が食い違うと、正しい実装でも不合格になる**。
  */
-function directionFrom(points: readonly Vec3[], carina: Vec3, atStart: boolean, windowMm: number): Vec3 | null {
+function directionFrom(
+  points: readonly Vec3[],
+  carina: Vec3,
+  atStart: boolean,
+  windowMm: number,
+  innerMm: number,
+): Vec3 | null {
   const ordered = atStart ? points : [...points].reverse();
   let acc: Vec3 = [0, 0, 0];
   let used = 0;
   for (const p of ordered) {
     const d = dist(p, carina);
     if (d < 1e-6) continue;
-    if (d > windowMm) break;
+    if (d <= innerMm) continue;
+    if (d > innerMm + windowMm) break;
     const v = sub(p, carina);
-    const n = norm(v);
-    acc = [acc[0] + v[0] / n, acc[1] + v[1] / n, acc[2] + v[2] / n];
+    acc = [acc[0] + v[0], acc[1] + v[1], acc[2] + v[2]];
     used++;
   }
   if (used === 0) {
-    // 窓に 1 点も入らないほど粗い中心線。最寄りの 1 点で代用する。
-    const p = ordered.find((q) => dist(q, carina) > 1e-6);
+    // 窓に 1 点も入らないほど粗い（または短い）中心線。除外域の外の最寄り 1 点で代用する。
+    const p = ordered.find((q) => dist(q, carina) > Math.max(1e-6, innerMm));
     if (!p) return null;
     const v = sub(p, carina);
     const n = norm(v);
@@ -321,10 +346,16 @@ export function analyzeBifurcation(
   }
 
   // ── 角度（すべて「カリーナから出ていく向き」）──────────────────────
+  //
+  // 🔴 **除外域の中の点は角度にも使わない。** 径をそこで測らないのは「3 本が重なっていて
+  //    1 本の血管として見られない」からで、その理由は中心線にもそのまま当てはまる——
+  //    投影で母血管と重なった側枝は、中心線が母血管側へ引かれる。実機で、側枝の
+  //    カリーナ側の径が真値 2.1mm に対し 3.11mm（＝母血管を測っている）になり、
+  //    同時に分岐角が +15.7° ずれた。**径だけ除外して角度は除外しない、は筋が通らない。**
   const windowMm = opts.angleWindowMm ?? 5;
   const dirOf = (b: BifurcationBranchInput): Vec3 | null => {
     const e = ends[branches.indexOf(b)];
-    return directionFrom(b.points, carina, e.atStart, windowMm);
+    return directionFrom(b.points, carina, e.atStart, windowMm, confluenceRadiusMm);
   };
   const dp = dirOf(proximal);
   const dd = dirOf(distal);
@@ -334,6 +365,19 @@ export function analyzeBifurcation(
   const dProx = results.find((r) => r.id === "proximal")?.referenceAtCarinaMm ?? null;
   const dDist = results.find((r) => r.id === "distal")?.referenceAtCarinaMm ?? null;
   const dSide = results.find((r) => r.id === "side")?.referenceAtCarinaMm ?? null;
+  // 🚨 娘枝が母血管より太く出たら、その枝は母血管に乗っている（上の警告の説明）。
+  //    角度・径・Finet/Murray がまとめて信用できなくなるので、**必ず出す**。
+  //    しきい値を 1.0 のまま（余裕を付けない）にしているのは、分岐で娘枝が母血管より
+  //    太いこと自体が起こらないため——「少しなら許す」は、この故障には意味が無い。
+  for (const [id, d] of [
+    ["distal", dDist],
+    ["side", dSide],
+  ] as const) {
+    if (dProx && d && d > dProx) {
+      warnings.push({ code: "daughterWiderThanMother", branch: id, value: d, threshold: dProx });
+    }
+  }
+
   const finet =
     dProx && dDist && dSide
       ? (() => {

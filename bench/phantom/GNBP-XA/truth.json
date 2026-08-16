@@ -17,430 +17,6 @@
     "photometricInterpretation": "MONOCHROME2 (vessel is dark)",
     "halfMaxCaveat": "For an unblurred cylinder projection the half-maximum crossing sits at sqrt(3)/2 * r ~= 0.866 r, not at r. Blur pushes it back out toward r. Frame 8 of GNBP-XA-1 is unblurred so this systematic effect can be isolated."
   },
-  "qva": {
-    "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.260363033426583299175547461383368609",
-    "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.265871034141924619602297097894089335",
-    "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.165797282502826535077923916570667269",
-    "file": "GNBP-XA-6.dcm",
-    "md5": "8c10be99fb888e84caa51a55f0563247",
-    "rows": 512,
-    "columns": 512,
-    "vesselAxisRow": 256.0,
-    "mmPerPx": 0.225,
-    "aneurysmRatio": 1.5,
-    "frames": [
-      {
-        "frame": 1,
-        "referenceDiameterMm": 3.0,
-        "maxDiameterMm": 6.0,
-        "ratio": 2.0,
-        "aneurysmLengthMm": 20.0,
-        "eccentricity": 0.0,
-        "saccular": false,
-        "aneurysmal": true,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": null
-      },
-      {
-        "frame": 2,
-        "referenceDiameterMm": 3.0,
-        "maxDiameterMm": 4.5,
-        "ratio": 1.5,
-        "aneurysmLengthMm": 15.0,
-        "eccentricity": 0.0,
-        "saccular": false,
-        "aneurysmal": true,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": null
-      },
-      {
-        "frame": 3,
-        "referenceDiameterMm": 3.0,
-        "maxDiameterMm": 3.6,
-        "ratio": 1.2,
-        "aneurysmLengthMm": 20.0,
-        "eccentricity": 0.0,
-        "saccular": false,
-        "aneurysmal": false,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": null
-      },
-      {
-        "frame": 4,
-        "referenceDiameterMm": 3.0,
-        "maxDiameterMm": 6.0,
-        "ratio": 2.0,
-        "aneurysmLengthMm": 15.0,
-        "eccentricity": 1.0,
-        "saccular": true,
-        "aneurysmal": true,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": null
-      },
-      {
-        "frame": 5,
-        "referenceDiameterMm": 3.0,
-        "maxDiameterMm": 6.0,
-        "ratio": 2.0,
-        "aneurysmLengthMm": 15.0,
-        "eccentricity": 1.0,
-        "saccular": true,
-        "aneurysmal": true,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": 4000.0
-      },
-      {
-        "frame": 6,
-        "referenceDiameterMm": 3.0,
-        "maxDiameterMm": 3.0,
-        "ratio": 1.0,
-        "aneurysmLengthMm": 0.0,
-        "eccentricity": null,
-        "saccular": false,
-        "aneurysmal": false,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": null
-      }
-    ]
-  },
-  "calibration": {
-    "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.138740358522061867744332119398682434",
-    "catheterFr": 6.0,
-    "catheterOuterDiameterMm": 2.0,
-    "catheterAxisRow": 316.0,
-    "vesselDiameterMm": 3.0,
-    "vesselAxisRow": 196.0,
-    "mmPerPx": 0.225,
-    "variants": [
-      {
-        "key": "a-fiducial",
-        "file": "GNBP-XA-4-a-fiducial.dcm",
-        "md5": "f923480d4566cba4031175e48fa85cc9",
-        "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.274522562329625357601486218000170347",
-        "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.277636189589978882154094697160526806",
-        "pixelSpacingMm": 0.225,
-        "pixelSpacingCalibrationType": "FIDUCIAL",
-        "hasSidSod": true,
-        "expectedSource": "dicom-fiducial",
-        "expectedMmPerPx": 0.225
-      },
-      {
-        "key": "b-geometry",
-        "file": "GNBP-XA-4-b-geometry.dcm",
-        "md5": "1e0e8ad22d70d36347724eb2ee8a6b06",
-        "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.755714407853308270664012403163129113",
-        "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.324657952949662881422606726337511023",
-        "pixelSpacingMm": 0.225,
-        "pixelSpacingCalibrationType": "GEOMETRY",
-        "hasSidSod": true,
-        "expectedSource": "dicom-geometry",
-        "expectedMmPerPx": 0.225
-      },
-      {
-        "key": "c-equals-imager",
-        "file": "GNBP-XA-4-c-equals-imager.dcm",
-        "md5": "096200efd7f406594cf05144a16320e7",
-        "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.329998897006509199348557230777407041",
-        "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.129302664687084978203787435177899681",
-        "pixelSpacingMm": 0.3,
-        "pixelSpacingCalibrationType": null,
-        "hasSidSod": true,
-        "expectedSource": "geometric-sid-sod",
-        "expectedMmPerPx": 0.225
-      },
-      {
-        "key": "d-geometry-only",
-        "file": "GNBP-XA-4-d-geometry-only.dcm",
-        "md5": "b25ec7162389376e5a23c0f8064fdfbc",
-        "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.970159898093626409515104498484423110",
-        "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.331865551111125286756446150285611959",
-        "pixelSpacingMm": null,
-        "pixelSpacingCalibrationType": null,
-        "hasSidSod": true,
-        "expectedSource": "geometric-sid-sod",
-        "expectedMmPerPx": 0.225
-      },
-      {
-        "key": "e-nothing",
-        "file": "GNBP-XA-4-e-nothing.dcm",
-        "md5": "e58a48299602b6f480e46c17d51dada6",
-        "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.328201450321714759235939036188392530",
-        "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.661606308379155463364252255096891202",
-        "pixelSpacingMm": null,
-        "pixelSpacingCalibrationType": null,
-        "hasSidSod": false,
-        "expectedSource": "detector-plane",
-        "expectedMmPerPx": null
-      }
-    ]
-  },
-  "dsa": {
-    "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.249858845979808808133778113598250107",
-    "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.325741874696725604880681971689250645",
-    "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.126658515504935125509118003178105094",
-    "file": "GNBP-XA-2.dcm",
-    "md5": "38d694474f9370b5b5ee469671470d1b",
-    "maskFrames": [
-      1,
-      2,
-      3,
-      4,
-      5
-    ],
-    "contrastArrivalFrame": 6,
-    "photonsPerPixel": 8000.0,
-    "shifts": [
-      {
-        "frame": 1,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 2,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 3,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 4,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 5,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 6,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 7,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 8,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 9,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 10,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 11,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 12,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 13,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 14,
-        "dxPx": 0.0,
-        "dyPx": 0.0
-      },
-      {
-        "frame": 15,
-        "dxPx": 3.0,
-        "dyPx": -2.0
-      },
-      {
-        "frame": 16,
-        "dxPx": 3.0,
-        "dyPx": -2.0
-      },
-      {
-        "frame": 17,
-        "dxPx": 3.0,
-        "dyPx": -2.0
-      },
-      {
-        "frame": 18,
-        "dxPx": 3.0,
-        "dyPx": -2.0
-      },
-      {
-        "frame": 19,
-        "dxPx": 3.0,
-        "dyPx": -2.0
-      },
-      {
-        "frame": 20,
-        "dxPx": 3.0,
-        "dyPx": -2.0
-      },
-      {
-        "frame": 21,
-        "dxPx": 3.0,
-        "dyPx": -2.0
-      },
-      {
-        "frame": 22,
-        "dxPx": 3.0,
-        "dyPx": -2.0
-      },
-      {
-        "frame": 23,
-        "dxPx": 3.0,
-        "dyPx": -2.0
-      },
-      {
-        "frame": 24,
-        "dxPx": 3.0,
-        "dyPx": -2.0
-      },
-      {
-        "frame": 25,
-        "dxPx": -4.0,
-        "dyPx": 5.0
-      }
-    ]
-  },
-  "qca": {
-    "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.318258316104426161849590105828077565",
-    "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.244331418089759822172796932971604473",
-    "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.366566186228420217910404791357806054",
-    "file": "GNBP-XA-1.dcm",
-    "md5": "89ed2eb87cd2498d307d20a6c8266885",
-    "rows": 512,
-    "columns": 512,
-    "vesselAxisRow": 256.0,
-    "mmPerPx": 0.225,
-    "muContrastPerMm": 0.16666666666666666,
-    "frames": [
-      {
-        "frame": 1,
-        "percentDiameterStenosis": 0.0,
-        "percentAreaStenosis": 0.0,
-        "referenceDiameterMm": 3.0,
-        "mldMm": 3.0,
-        "lesionLengthMm": 0.0,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": null
-      },
-      {
-        "frame": 2,
-        "percentDiameterStenosis": 30.0,
-        "percentAreaStenosis": 51.0,
-        "referenceDiameterMm": 3.0,
-        "mldMm": 2.0999999999999996,
-        "lesionLengthMm": 10.0,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": null
-      },
-      {
-        "frame": 3,
-        "percentDiameterStenosis": 50.0,
-        "percentAreaStenosis": 75.0,
-        "referenceDiameterMm": 3.0,
-        "mldMm": 1.5,
-        "lesionLengthMm": 10.0,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": null
-      },
-      {
-        "frame": 4,
-        "percentDiameterStenosis": 70.0,
-        "percentAreaStenosis": 90.99999999999999,
-        "referenceDiameterMm": 3.0,
-        "mldMm": 0.9000000000000001,
-        "lesionLengthMm": 10.0,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": null
-      },
-      {
-        "frame": 5,
-        "percentDiameterStenosis": 90.0,
-        "percentAreaStenosis": 99.0,
-        "referenceDiameterMm": 3.0,
-        "mldMm": 0.29999999999999993,
-        "lesionLengthMm": 10.0,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": null
-      },
-      {
-        "frame": 6,
-        "percentDiameterStenosis": 50.0,
-        "percentAreaStenosis": 75.0,
-        "referenceDiameterMm": 3.0,
-        "mldMm": 1.5,
-        "lesionLengthMm": 5.0,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": null
-      },
-      {
-        "frame": 7,
-        "percentDiameterStenosis": 50.0,
-        "percentAreaStenosis": 75.0,
-        "referenceDiameterMm": 3.0,
-        "mldMm": 1.5,
-        "lesionLengthMm": 20.0,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": null
-      },
-      {
-        "frame": 8,
-        "percentDiameterStenosis": 50.0,
-        "percentAreaStenosis": 75.0,
-        "referenceDiameterMm": 3.0,
-        "mldMm": 1.5,
-        "lesionLengthMm": 10.0,
-        "blurSigmaPx": 0.0,
-        "photonsPerPixel": null
-      },
-      {
-        "frame": 9,
-        "percentDiameterStenosis": 50.0,
-        "percentAreaStenosis": 75.0,
-        "referenceDiameterMm": 3.0,
-        "mldMm": 1.5,
-        "lesionLengthMm": 10.0,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": 20000.0
-      },
-      {
-        "frame": 10,
-        "percentDiameterStenosis": 50.0,
-        "percentAreaStenosis": 75.0,
-        "referenceDiameterMm": 3.0,
-        "mldMm": 1.5,
-        "lesionLengthMm": 10.0,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": 4000.0
-      },
-      {
-        "frame": 11,
-        "percentDiameterStenosis": 50.0,
-        "percentAreaStenosis": 75.0,
-        "referenceDiameterMm": 3.0,
-        "mldMm": 1.5,
-        "lesionLengthMm": 10.0,
-        "blurSigmaPx": 0.6,
-        "photonsPerPixel": 800.0
-      }
-    ]
-  },
   "recon3d": {
     "bifurcation": {
       "note": "Angles follow the convention used by frontend/src/viewer/xaBifurcation.ts: all three directions point AWAY from the carina (the proximal one is reversed), averaged over a 5 mm window. The exact take-off angle of the generator is 45 deg; the windowed value differs slightly because the daughter branch bends.",
@@ -452,9 +28,25 @@
       "mainIndex": 404,
       "exactTakeOffDeg": 45.0,
       "angleWindowMm": 5.0,
-      "distalToSideDeg": 47.997,
-      "proximalToSideDeg": 138.171,
-      "proximalToDistalDeg": 173.831,
+      "angleInnerMm": 2.8259,
+      "directionProximal": [
+        0.088381,
+        0.902407,
+        0.421723
+      ],
+      "directionDistal": [
+        0.151619,
+        -0.896897,
+        -0.415437
+      ],
+      "directionSide": [
+        -0.681711,
+        -0.658669,
+        -0.318473
+      ],
+      "distalToSideDeg": 51.706,
+      "proximalToSideDeg": 142.087,
+      "proximalToDistalDeg": 166.207,
       "diameterProximalMm": 2.8259,
       "diameterDistalMm": 2.8259,
       "diameterSideMm": 2.1,
@@ -3270,5 +2862,429 @@
       "segmentLengthErrorPercent": 3.0,
       "angleRecoveryDeg": 1.0
     }
+  },
+  "calibration": {
+    "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.138740358522061867744332119398682434",
+    "catheterFr": 6.0,
+    "catheterOuterDiameterMm": 2.0,
+    "catheterAxisRow": 316.0,
+    "vesselDiameterMm": 3.0,
+    "vesselAxisRow": 196.0,
+    "mmPerPx": 0.225,
+    "variants": [
+      {
+        "key": "a-fiducial",
+        "file": "GNBP-XA-4-a-fiducial.dcm",
+        "md5": "f923480d4566cba4031175e48fa85cc9",
+        "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.274522562329625357601486218000170347",
+        "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.277636189589978882154094697160526806",
+        "pixelSpacingMm": 0.225,
+        "pixelSpacingCalibrationType": "FIDUCIAL",
+        "hasSidSod": true,
+        "expectedSource": "dicom-fiducial",
+        "expectedMmPerPx": 0.225
+      },
+      {
+        "key": "b-geometry",
+        "file": "GNBP-XA-4-b-geometry.dcm",
+        "md5": "1e0e8ad22d70d36347724eb2ee8a6b06",
+        "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.755714407853308270664012403163129113",
+        "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.324657952949662881422606726337511023",
+        "pixelSpacingMm": 0.225,
+        "pixelSpacingCalibrationType": "GEOMETRY",
+        "hasSidSod": true,
+        "expectedSource": "dicom-geometry",
+        "expectedMmPerPx": 0.225
+      },
+      {
+        "key": "c-equals-imager",
+        "file": "GNBP-XA-4-c-equals-imager.dcm",
+        "md5": "096200efd7f406594cf05144a16320e7",
+        "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.329998897006509199348557230777407041",
+        "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.129302664687084978203787435177899681",
+        "pixelSpacingMm": 0.3,
+        "pixelSpacingCalibrationType": null,
+        "hasSidSod": true,
+        "expectedSource": "geometric-sid-sod",
+        "expectedMmPerPx": 0.225
+      },
+      {
+        "key": "d-geometry-only",
+        "file": "GNBP-XA-4-d-geometry-only.dcm",
+        "md5": "b25ec7162389376e5a23c0f8064fdfbc",
+        "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.970159898093626409515104498484423110",
+        "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.331865551111125286756446150285611959",
+        "pixelSpacingMm": null,
+        "pixelSpacingCalibrationType": null,
+        "hasSidSod": true,
+        "expectedSource": "geometric-sid-sod",
+        "expectedMmPerPx": 0.225
+      },
+      {
+        "key": "e-nothing",
+        "file": "GNBP-XA-4-e-nothing.dcm",
+        "md5": "e58a48299602b6f480e46c17d51dada6",
+        "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.328201450321714759235939036188392530",
+        "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.661606308379155463364252255096891202",
+        "pixelSpacingMm": null,
+        "pixelSpacingCalibrationType": null,
+        "hasSidSod": false,
+        "expectedSource": "detector-plane",
+        "expectedMmPerPx": null
+      }
+    ]
+  },
+  "dsa": {
+    "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.249858845979808808133778113598250107",
+    "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.325741874696725604880681971689250645",
+    "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.126658515504935125509118003178105094",
+    "file": "GNBP-XA-2.dcm",
+    "md5": "38d694474f9370b5b5ee469671470d1b",
+    "maskFrames": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "contrastArrivalFrame": 6,
+    "photonsPerPixel": 8000.0,
+    "shifts": [
+      {
+        "frame": 1,
+        "dxPx": 0.0,
+        "dyPx": 0.0
+      },
+      {
+        "frame": 2,
+        "dxPx": 0.0,
+        "dyPx": 0.0
+      },
+      {
+        "frame": 3,
+        "dxPx": 0.0,
+        "dyPx": 0.0
+      },
+      {
+        "frame": 4,
+        "dxPx": 0.0,
+        "dyPx": 0.0
+      },
+      {
+        "frame": 5,
+        "dxPx": 0.0,
+        "dyPx": 0.0
+      },
+      {
+        "frame": 6,
+        "dxPx": 0.0,
+        "dyPx": 0.0
+      },
+      {
+        "frame": 7,
+        "dxPx": 0.0,
+        "dyPx": 0.0
+      },
+      {
+        "frame": 8,
+        "dxPx": 0.0,
+        "dyPx": 0.0
+      },
+      {
+        "frame": 9,
+        "dxPx": 0.0,
+        "dyPx": 0.0
+      },
+      {
+        "frame": 10,
+        "dxPx": 0.0,
+        "dyPx": 0.0
+      },
+      {
+        "frame": 11,
+        "dxPx": 0.0,
+        "dyPx": 0.0
+      },
+      {
+        "frame": 12,
+        "dxPx": 0.0,
+        "dyPx": 0.0
+      },
+      {
+        "frame": 13,
+        "dxPx": 0.0,
+        "dyPx": 0.0
+      },
+      {
+        "frame": 14,
+        "dxPx": 0.0,
+        "dyPx": 0.0
+      },
+      {
+        "frame": 15,
+        "dxPx": 3.0,
+        "dyPx": -2.0
+      },
+      {
+        "frame": 16,
+        "dxPx": 3.0,
+        "dyPx": -2.0
+      },
+      {
+        "frame": 17,
+        "dxPx": 3.0,
+        "dyPx": -2.0
+      },
+      {
+        "frame": 18,
+        "dxPx": 3.0,
+        "dyPx": -2.0
+      },
+      {
+        "frame": 19,
+        "dxPx": 3.0,
+        "dyPx": -2.0
+      },
+      {
+        "frame": 20,
+        "dxPx": 3.0,
+        "dyPx": -2.0
+      },
+      {
+        "frame": 21,
+        "dxPx": 3.0,
+        "dyPx": -2.0
+      },
+      {
+        "frame": 22,
+        "dxPx": 3.0,
+        "dyPx": -2.0
+      },
+      {
+        "frame": 23,
+        "dxPx": 3.0,
+        "dyPx": -2.0
+      },
+      {
+        "frame": 24,
+        "dxPx": 3.0,
+        "dyPx": -2.0
+      },
+      {
+        "frame": 25,
+        "dxPx": -4.0,
+        "dyPx": 5.0
+      }
+    ]
+  },
+  "qca": {
+    "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.318258316104426161849590105828077565",
+    "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.244331418089759822172796932971604473",
+    "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.366566186228420217910404791357806054",
+    "file": "GNBP-XA-1.dcm",
+    "md5": "89ed2eb87cd2498d307d20a6c8266885",
+    "rows": 512,
+    "columns": 512,
+    "vesselAxisRow": 256.0,
+    "mmPerPx": 0.225,
+    "muContrastPerMm": 0.16666666666666666,
+    "frames": [
+      {
+        "frame": 1,
+        "percentDiameterStenosis": 0.0,
+        "percentAreaStenosis": 0.0,
+        "referenceDiameterMm": 3.0,
+        "mldMm": 3.0,
+        "lesionLengthMm": 0.0,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      },
+      {
+        "frame": 2,
+        "percentDiameterStenosis": 30.0,
+        "percentAreaStenosis": 51.0,
+        "referenceDiameterMm": 3.0,
+        "mldMm": 2.0999999999999996,
+        "lesionLengthMm": 10.0,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      },
+      {
+        "frame": 3,
+        "percentDiameterStenosis": 50.0,
+        "percentAreaStenosis": 75.0,
+        "referenceDiameterMm": 3.0,
+        "mldMm": 1.5,
+        "lesionLengthMm": 10.0,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      },
+      {
+        "frame": 4,
+        "percentDiameterStenosis": 70.0,
+        "percentAreaStenosis": 90.99999999999999,
+        "referenceDiameterMm": 3.0,
+        "mldMm": 0.9000000000000001,
+        "lesionLengthMm": 10.0,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      },
+      {
+        "frame": 5,
+        "percentDiameterStenosis": 90.0,
+        "percentAreaStenosis": 99.0,
+        "referenceDiameterMm": 3.0,
+        "mldMm": 0.29999999999999993,
+        "lesionLengthMm": 10.0,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      },
+      {
+        "frame": 6,
+        "percentDiameterStenosis": 50.0,
+        "percentAreaStenosis": 75.0,
+        "referenceDiameterMm": 3.0,
+        "mldMm": 1.5,
+        "lesionLengthMm": 5.0,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      },
+      {
+        "frame": 7,
+        "percentDiameterStenosis": 50.0,
+        "percentAreaStenosis": 75.0,
+        "referenceDiameterMm": 3.0,
+        "mldMm": 1.5,
+        "lesionLengthMm": 20.0,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      },
+      {
+        "frame": 8,
+        "percentDiameterStenosis": 50.0,
+        "percentAreaStenosis": 75.0,
+        "referenceDiameterMm": 3.0,
+        "mldMm": 1.5,
+        "lesionLengthMm": 10.0,
+        "blurSigmaPx": 0.0,
+        "photonsPerPixel": null
+      },
+      {
+        "frame": 9,
+        "percentDiameterStenosis": 50.0,
+        "percentAreaStenosis": 75.0,
+        "referenceDiameterMm": 3.0,
+        "mldMm": 1.5,
+        "lesionLengthMm": 10.0,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": 20000.0
+      },
+      {
+        "frame": 10,
+        "percentDiameterStenosis": 50.0,
+        "percentAreaStenosis": 75.0,
+        "referenceDiameterMm": 3.0,
+        "mldMm": 1.5,
+        "lesionLengthMm": 10.0,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": 4000.0
+      },
+      {
+        "frame": 11,
+        "percentDiameterStenosis": 50.0,
+        "percentAreaStenosis": 75.0,
+        "referenceDiameterMm": 3.0,
+        "mldMm": 1.5,
+        "lesionLengthMm": 10.0,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": 800.0
+      }
+    ]
+  },
+  "qva": {
+    "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.260363033426583299175547461383368609",
+    "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.265871034141924619602297097894089335",
+    "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.165797282502826535077923916570667269",
+    "file": "GNBP-XA-6.dcm",
+    "md5": "8c10be99fb888e84caa51a55f0563247",
+    "rows": 512,
+    "columns": 512,
+    "vesselAxisRow": 256.0,
+    "mmPerPx": 0.225,
+    "aneurysmRatio": 1.5,
+    "frames": [
+      {
+        "frame": 1,
+        "referenceDiameterMm": 3.0,
+        "maxDiameterMm": 6.0,
+        "ratio": 2.0,
+        "aneurysmLengthMm": 20.0,
+        "eccentricity": 0.0,
+        "saccular": false,
+        "aneurysmal": true,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      },
+      {
+        "frame": 2,
+        "referenceDiameterMm": 3.0,
+        "maxDiameterMm": 4.5,
+        "ratio": 1.5,
+        "aneurysmLengthMm": 15.0,
+        "eccentricity": 0.0,
+        "saccular": false,
+        "aneurysmal": true,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      },
+      {
+        "frame": 3,
+        "referenceDiameterMm": 3.0,
+        "maxDiameterMm": 3.6,
+        "ratio": 1.2,
+        "aneurysmLengthMm": 20.0,
+        "eccentricity": 0.0,
+        "saccular": false,
+        "aneurysmal": false,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      },
+      {
+        "frame": 4,
+        "referenceDiameterMm": 3.0,
+        "maxDiameterMm": 6.0,
+        "ratio": 2.0,
+        "aneurysmLengthMm": 15.0,
+        "eccentricity": 1.0,
+        "saccular": true,
+        "aneurysmal": true,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      },
+      {
+        "frame": 5,
+        "referenceDiameterMm": 3.0,
+        "maxDiameterMm": 6.0,
+        "ratio": 2.0,
+        "aneurysmLengthMm": 15.0,
+        "eccentricity": 1.0,
+        "saccular": true,
+        "aneurysmal": true,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": 4000.0
+      },
+      {
+        "frame": 6,
+        "referenceDiameterMm": 3.0,
+        "maxDiameterMm": 3.0,
+        "ratio": 1.0,
+        "aneurysmLengthMm": 0.0,
+        "eccentricity": null,
+        "saccular": false,
+        "aneurysmal": false,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      }
+    ]
   }
 }

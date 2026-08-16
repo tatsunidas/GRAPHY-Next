@@ -71,6 +71,41 @@ describe("★analyzeBifurcation — 分岐部（真値既知の合成分岐）",
     expect(r.angles.proximalToDistalDeg!).toBeCloseTo(180, 1);
   });
 
+  it("🔴 カリーナのすぐ近くの点が揺れても分岐角がずれない（単位ベクトルの平均にしない）", () => {
+    // 3D 再構成の点列は 0.1〜0.2mm 刻みで並ぶ。カリーナから 0.15mm の点が 0.05mm 横に
+    // ずれるだけで、その点だけを見た向きは 18° 振れる——**向きの情報を持たない点**。
+    // 単位ベクトルを等重みで平均すると、その 18° が 5mm 先の点と対等に効いて角度が狂う
+    // （実機で分岐角が真値 +8.7° になった原因）。
+    // 端点そのものは動かさない（動かすとカリーナの位置まで変わり、別の話が混ざる）。
+    const jittered = bifurcation().map((x) => ({
+      ...x,
+      points: x.points.map((p) => {
+        const d = Math.hypot(p[0], p[1], p[2]);
+        return d > 1e-6 && d <= 1.0 ? ([p[0], p[1] + 0.05, p[2] + 0.05] as Vec3) : p;
+      }),
+    }));
+    const r = analyzeBifurcation(jittered)!;
+    // 距離で重み付けしていれば 1° 以内に収まる。単位ベクトルの平均だと数度ずれる。
+    expect(Math.abs(r.angles.distalToSideDeg! - 45)).toBeLessThan(1);
+    expect(Math.abs(r.angles.proximalToSideDeg! - 135)).toBeLessThan(1);
+    expect(Math.abs(r.angles.proximalToDistalDeg! - 180)).toBeLessThan(1);
+  });
+
+  it("🚨 娘枝が母血管より太く出たら警告する（＝母血管に乗って測っている）", () => {
+    // 分岐で娘枝が母血管より太いことは無い。それでも太く出るのは、投影で母血管と
+    // 重なった区間を追跡・計測しているから（実機で真値 2.1mm の側枝が 3.11mm と出た）。
+    const r = analyzeBifurcation(bifurcation({ sideDiameter: 4.0 }))!;
+    const w = r.warnings.find((x) => x.code === "daughterWiderThanMother");
+    expect(w).toBeTruthy();
+    expect(w!.branch).toBe("side");
+    expect(w!.value).toBeGreaterThan(w!.threshold);
+  });
+
+  it("娘枝が母血管より細ければ警告しない", () => {
+    const r = analyzeBifurcation(bifurcation())!;
+    expect(r.warnings.find((x) => x.code === "daughterWiderThanMother")).toBeUndefined();
+  });
+
   it("カリーナは 3 本の端点の重心で、ばらつきが小さければ警告しない", () => {
     const r = analyzeBifurcation(bifurcation())!;
     expect(Math.hypot(...r.carina)).toBeLessThan(0.5);

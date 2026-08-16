@@ -53,6 +53,8 @@ export function Xa3dBifurcationDialog({ onClose }: { onClose: () => void }) {
   const [result, setResult] = useState<BifurcationResult | null>(null);
   /** 角度補正が掛からなかった枝（出自として必ず出す）。 */
   const [unrefined, setUnrefined] = useState<BranchId[]>([]);
+  /** 再構成した 3D 中心線。表示には使わず、実機検証の切り分けだけに出す（`debugApi`）。 */
+  const [branchPoints, setBranchPoints] = useState<{ id: BranchId; points: Vec3[] }[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const ready = useMemo(
@@ -64,6 +66,7 @@ export function Xa3dBifurcationDialog({ onClose }: { onClose: () => void }) {
     setPicks((p) => ({ ...p, [role]: { ...p[role], [side]: key } }));
     setResult(null);
     setUnrefined([]);
+    setBranchPoints([]);
     setError(null);
   };
 
@@ -127,6 +130,7 @@ export function Xa3dBifurcationDialog({ onClose }: { onClose: () => void }) {
     }
     setError(null);
     setUnrefined(notRefined);
+    setBranchPoints(branches.map((b) => ({ id: b.id, points: b.points })));
     setResult(analysis);
   };
 
@@ -146,6 +150,10 @@ export function Xa3dBifurcationDialog({ onClose }: { onClose: () => void }) {
             },
             warnings: result.warnings.map((w) => ({ ...w })),
             unrefinedBranches: [...unrefined],
+            branchPoints: branchPoints.map((b) => ({
+              id: b.id,
+              points: b.points.map((p) => [p[0], p[1], p[2]] as [number, number, number]),
+            })),
           }
         : null,
     );

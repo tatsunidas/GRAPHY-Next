@@ -779,17 +779,28 @@ def build_recon3d(out_dir: str) -> dict:
     i0 = int(0.45 * (len(main_pts) - 1))
     carina = main_pts[i0]
 
-    def _mean_direction(pts, window_mm=5.0):
+    # 🔴 角度の窓は**除外域の外から**取る（`xaBifurcation.ts` の `directionFrom` と同じ）。
+    #    カリーナ周辺は 3 本が重なって 1 本の血管として見られないので、径だけでなく
+    #    中心線も信用できない。除外域は「母血管 1 径ぶん」。
+    #    ⚠️ アプリ側は**実測の**母血管径からこの半径を決めるので、真値とは 0.2mm 程度ずれる
+    #    （系統誤差で細く出るため）。角度の許容は ±8° なので、この差は効かない。
+    angle_inner_mm = float(main_br["radii"][i0] * 2.0)
+
+    def _mean_direction(pts, window_mm=5.0, inner_mm=angle_inner_mm):
+        # 🔴 **正規化せずに足す**（＝窓の中の点の重心への向き）。単位ベクトルの平均にすると
+        #    カリーナのすぐ近くの点——向きの情報を持たない点——が遠い点と同じ重みで効き、
+        #    角度が数度ずれる。`frontend/src/viewer/xaBifurcation.ts` の `directionFrom` と
+        #    同じ式でなければならない（約束が食い違うと正しい実装が不合格になる）。
         acc = np.zeros(3)
         used = 0
         for p in pts:
             v = p - carina
             n = float(np.linalg.norm(v))
-            if n < 1e-9:
+            if n < 1e-9 or n <= inner_mm:
                 continue
-            if n > window_mm:
+            if n > inner_mm + window_mm:
                 break
-            acc += v / n
+            acc += v
             used += 1
         if used == 0:
             return None
@@ -819,6 +830,13 @@ def build_recon3d(out_dir: str) -> dict:
         "mainIndex": i0,
         "exactTakeOffDeg": 45.0,
         "angleWindowMm": 5.0,
+        "angleInnerMm": round(angle_inner_mm, 4),
+        # 🔑 **枝ごとの向きも出す。** 角度が合わないとき、対の角度だけ見ても
+        #    「3 本のうちどれがずれているのか」が分からない（実機で、側枝だけが
+        #    11° ずれているのに 2 つの角度が同時に外れて原因を見誤りかけた）。
+        "directionProximal": [round(float(v), 6) for v in d_proximal],
+        "directionDistal": [round(float(v), 6) for v in d_distal],
+        "directionSide": [round(float(v), 6) for v in d_side],
         "distalToSideDeg": round(_angle(d_distal, d_side), 3),
         "proximalToSideDeg": round(_angle(d_proximal, d_side), 3),
         "proximalToDistalDeg": round(_angle(d_proximal, d_distal), 3),
@@ -1032,6 +1050,16 @@ BUILDERS = {
     "qva": build_qva,
 }
 
+#: 系列ごとの出力ファイル名の接頭辞。`--series X --force` で**その系列だけ**消すために要る。
+#: 🚨 新しい系列を足したらここにも足すこと（漏れると `--force` がその系列の古い出力を残す）。
+SERIES_PREFIX = {
+    "qca": "GNBP-XA-1",
+    "dsa": "GNBP-XA-2",
+    "recon3d": "GNBP-XA-3",
+    "calibration": "GNBP-XA-4",
+    "qva": "GNBP-XA-6",
+}
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1041,11 +1069,21 @@ def main() -> int:
     args = ap.parse_args()
 
     out_root = os.path.join(args.out, "GNBP-XA")
-    if args.force and os.path.isdir(out_root):
-        shutil.rmtree(out_root)
-    os.makedirs(out_root, exist_ok=True)
-
     wanted = args.series or sorted(BUILDERS)
+    # 🚨 **`--series X --force` で他の系列を巻き添えにしない。**
+    #    ディレクトリごと消していたため、recon3d だけ作り直したつもりで qca / dsa /
+    #    calibration / qva の DICOM が消え、他のスパイクが「ファントムがありません」で
+    #    落ちた（2026-08-16 に実際に踏んだ。truth.json は更新方式にしてあったのに、
+    #    **DICOM 側が消える**ので同じ事故が別の顔で再発した）。
+    if args.force and os.path.isdir(out_root):
+        if args.series:
+            prefixes = tuple(SERIES_PREFIX[s] for s in wanted)
+            for name in os.listdir(out_root):
+                if name.startswith(prefixes):
+                    os.remove(os.path.join(out_root, name))
+        else:
+            shutil.rmtree(out_root)
+    os.makedirs(out_root, exist_ok=True)
     # 🚨 **`--series` で一部だけ作り直しても truth.json の他の系列を消さない。**
     #    ここを上書きにしていたため、qva だけ生成した時点で qca / dsa / recon3d /
     #    calibration の真値が truth.json から消え、他のスパイクが「ファントムが無い」で

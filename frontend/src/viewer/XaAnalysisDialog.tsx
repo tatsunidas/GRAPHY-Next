@@ -32,7 +32,7 @@ import { readVoiWindow } from "./viewportRead";
 import { isXaCalibrated } from "./xaCalibration";
 import { publishAnalysisResult } from "../report/analysisResultStore";
 import { qcaRecord, qvaRecord } from "../report/xaAnalysisRecords";
-import { describeView, qcaRunKey, registerQcaRun } from "./xaRecon3dStore";
+import { describeView, qcaRunKey, registerQcaRun, removeQcaRun } from "./xaRecon3dStore";
 import { readXaViewGeometry } from "./xaViewGeometryProvider";
 import {
   calibrationForImageId,
@@ -66,6 +66,39 @@ function invalidateAnnotations(): void {
     }
   } catch {
     /* 注釈が無ければ何もしない */
+  }
+}
+
+/**
+ * 解析に使い終わった Length 計測をロックする / 解除する。
+ *
+ * <h3>🔴 なぜロックするのか（2 つある）</h3>
+ * 1. **分岐部（A6b）は同じ点から 3 本の区間を引く**。Cornerstone の mousedown は、
+ *    既存注釈のハンドルの上（半径 6px）で押すと**新規作成ではなくそれを掴んで動かす**。
+ *    分岐部は「3 本がカリーナで出会う」形なので**必ず踏む**（実機で、遠位を引いたつもりが
+ *    近位の計測が 89.5px → 207px に伸びた）。`isLocked` が立っていると
+ *    `filterToolsWithMoveableHandles` / `filterMoveableAnnotationTools` が対象から外すので、
+ *    同じ点で押しても**新しい計測が生まれる**。
+ * 2. 解析結果は**引かれた線と対で意味を持つ**。ランを登録した後に線だけ動かされると、
+ *    登録簿の中心線・径が画面のどこを測ったものか分からなくなる（黙ってずれる）。
+ *
+ * <p>解除は利用者の操作でだけ行う（{@link XaAnalysisDialog} の「ロック解除」）。
+ * 解除したら**登録も外す**——線を引き直す前提なので、古いランを残すと
+ * 3D の一覧に「もう画面に無い区間」が並ぶ。
+ */
+function setPickLocked(uid: string, locked: boolean): void {
+  try {
+    csAnnotation.locking.setAnnotationLocked(uid, locked);
+  } catch {
+    /* ロックできない環境（テスト等）では素通しする */
+  }
+}
+
+function lockedPickUids(): Set<string> {
+  try {
+    return new Set(csAnnotation.locking.getAnnotationsLocked() ?? []);
+  } catch {
+    return new Set();
   }
 }
 
@@ -233,6 +266,8 @@ export function XaAnalysisDialog({
     return collectLengthPicks(imageId, sp.row, sp.col);
   }, [imageId, calibVersion]);
   const [selected, setSelected] = useState(0);
+  /** ロック済みの計測（§21.4.2 の 2）。解析に使い終わった線は掴めなくする。 */
+  const [locked, setLocked] = useState<Set<string>>(() => lockedPickUids());
   const [knownMm, setKnownMm] = useState("");
   const [frSize, setFrSize] = useState("6");
   const [result, setResult] = useState<QcaResult | null>(null);
@@ -450,6 +485,10 @@ export function XaAnalysisDialog({
     }
     setError(null);
     setResult(r);
+    // 解析に使った線はロックする。次の区間を**同じ端点から**引けるようにするため
+    // （分岐部は必ずここを踏む）と、結果と線がずれないようにするため。
+    setPickLocked(pick.uid, true);
+    setLocked(lockedPickUids());
     // 拡張（瘤）は QVA のときだけ測る。QCA の画面に「瘤」を出すと、冠動脈の拡張を
     // 瘤と呼んでいるように読める（言葉の意味が領域で違う）。
     const dil = mode === "qva" ? analyzeDilation(r) : null;
@@ -683,18 +722,41 @@ export function XaAnalysisDialog({
           {picks.length === 0 ? (
             <div style={hint}>{t("xa.analysis.needLength")}</div>
           ) : (
-            <select
-              value={selected}
-              onChange={(e) => setSelected(Number(e.target.value))}
-              style={select}
-              data-testid="xa-analysis-pick"
-            >
-              {picks.map((p, i) => (
-                <option key={p.uid} value={i}>
-                  #{i + 1} — {p.lengthPx.toFixed(1)} px
-                </option>
-              ))}
-            </select>
+            <>
+              <select
+                value={selected}
+                onChange={(e) => setSelected(Number(e.target.value))}
+                style={select}
+                data-testid="xa-analysis-pick"
+              >
+                {picks.map((p, i) => (
+                  <option key={p.uid} value={i}>
+                    #{i + 1} — {p.lengthPx.toFixed(1)} px
+                    {locked.has(p.uid) ? ` 🔒 ${t("xa.analysis.locked")}` : ""}
+                  </option>
+                ))}
+              </select>
+              {pick && locked.has(pick.uid) && (
+                <div style={row}>
+                  <div style={hint} data-testid="xa-pick-locked">
+                    {t("xa.analysis.lockHint")}
+                  </div>
+                  <button
+                    style={btn}
+                    data-testid="xa-pick-unlock"
+                    onClick={() => {
+                      setPickLocked(pick.uid, false);
+                      // 引き直す前提なので、登録済みのランも外す（画面に無い区間が
+                      // 3D の一覧に残らないように）。
+                      removeQcaRun(qcaRunKey(imageId, pick.p0, pick.p1));
+                      setLocked(lockedPickUids());
+                    }}
+                  >
+                    {t("xa.analysis.unlock")}
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
 

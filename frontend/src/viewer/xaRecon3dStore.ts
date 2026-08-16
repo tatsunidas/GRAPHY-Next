@@ -82,7 +82,11 @@ function notify(): void {
 /* ── ウィンドウ間の同期 ─────────────────────────────────────── */
 
 const CHANNEL = "graphy-xa-recon3d";
-type Msg = { type: "register"; run: XaQcaRun } | { type: "request" } | { type: "sync"; runs: XaQcaRun[] };
+type Msg =
+  | { type: "register"; run: XaQcaRun }
+  | { type: "remove"; runKey: string }
+  | { type: "request" }
+  | { type: "sync"; runs: XaQcaRun[] };
 
 let channel: BroadcastChannel | null = null;
 
@@ -94,18 +98,33 @@ function post(msg: Msg): void {
   }
 }
 
-/** 受け取った登録を取り込む（**通知はするが再送しない**＝無限ループを避ける）。 */
+/**
+ * 受け取った登録を取り込む（**通知はするが再送しない**＝無限ループを避ける）。
+ *
+ * <p>🔴 **突き合わせは `runKey`**（imageId ではない）。ここだけ imageId のままだと、
+ * ウィンドウを跨いだ瞬間に**同じフレームの 3 区間が 1 本に潰れる**——登録側を
+ * runKey に直しても、受け側が古い鍵なら同じ症状が別の場所で再発する
+ * （分岐部で「6 本のはずが 4 本」として実際に出た）。
+ */
 function merge(incoming: readonly XaQcaRun[]): void {
   let changed = false;
   let next = runs;
   for (const run of incoming) {
-    const cur = next.find((r) => r.imageId === run.imageId);
-    // 同じフレームを解析し直した場合は新しいほうを採る。
+    const cur = next.find((r) => r.runKey === run.runKey);
+    // 同じ区間を解析し直した場合は新しいほうを採る。
     if (cur && cur.at >= run.at) continue;
-    next = [...next.filter((r) => r.imageId !== run.imageId), run];
+    next = [...next.filter((r) => r.runKey !== run.runKey), run];
     changed = true;
   }
   if (!changed) return;
+  runs = next;
+  notify();
+}
+
+/** 他ウィンドウからの削除を取り込む（自分は再送しない）。 */
+function applyRemove(runKey: string): void {
+  const next = runs.filter((r) => r.runKey !== runKey);
+  if (next.length === runs.length) return;
   runs = next;
   notify();
 }
@@ -118,9 +137,13 @@ function ensureChannel(): void {
     channel = null;
     return;
   }
+  // Node（vitest）では開いたチャンネルがプロセスを生かし続ける。ブラウザには無いメソッドなので
+  // 任意呼び出しにする（挙動は変わらない。テストが終わらなくなるのを防ぐだけ）。
+  (channel as unknown as { unref?: () => void }).unref?.();
   channel.onmessage = (e) => {
     const msg = e.data as Msg;
     if (msg.type === "register") merge([msg.run]);
+    else if (msg.type === "remove") applyRemove(msg.runKey);
     else if (msg.type === "sync") merge(msg.runs);
     // 問い合わせには**自分が持っているぶんだけ**返す（持っていなければ黙る）。
     else if (msg.type === "request" && runs.length > 0) post({ type: "sync", runs });
@@ -141,6 +164,24 @@ export function ensureQcaRunChannel(): void {
   ensureChannel();
 }
 
+/**
+ * チャンネルから抜けて、登録を捨てる（＝このウィンドウは中継役をやめる）。
+ *
+ * <p>ウィンドウが閉じるときにブラウザが後始末するので本番では要らない。**テストで要る**——
+ * 同一プロセスに複数のインスタンスを作って「ウィンドウ跨ぎ」を再現するので、閉じないと
+ * **前のテストのウィンドウが問い合わせに答えてしまい**、検査が次々に汚染される（実際に踏んだ）。
+ */
+export function closeQcaRunChannel(): void {
+  try {
+    channel?.close();
+  } catch {
+    /* ignore */
+  }
+  channel = null;
+  runs = [];
+  notify();
+}
+
 /** 同じ imageId の登録は置き換える（解析し直したら新しいほうが正しい）。 */
 export function registerQcaRun(run: XaQcaRun): void {
   ensureChannel();
@@ -151,7 +192,11 @@ export function registerQcaRun(run: XaQcaRun): void {
 }
 
 export function removeQcaRun(runKey: string): void {
+  ensureChannel();
   const next = runs.filter((r) => r.runKey !== runKey);
+  // 自分が持っていなくても**他ウィンドウへは流す**（中継役のメインウィンドウが
+  // 持っている場合があり、そこで消さないと一覧に残り続ける）。
+  post({ type: "remove", runKey });
   if (next.length === runs.length) return;
   runs = next;
   notify();
