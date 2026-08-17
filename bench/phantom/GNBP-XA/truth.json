@@ -3286,5 +3286,70 @@
         "photonsPerPixel": null
       }
     ]
+  },
+  "shapes": {
+    "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.373904203294776528651560961083875020",
+    "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.639529033223128701951711542249609955",
+    "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.929937959811310881054018144301484081",
+    "file": "GNBP-XA-7.dcm",
+    "md5": "b7a1b318612a8b3c947d4315e982f844",
+    "rows": 512,
+    "columns": 512,
+    "vesselAxisRow": 256.0,
+    "mmPerPx": 0.225,
+    "muContrastPerMm": 0.16666666666666666,
+    "note": "断面の形だけが違う。circle / ellipse-wide / ellipse-tall は断面積が等しく、シルエットの幅だけが違う（密度計測は 3 本とも等価直径 3.00mm を返すはず）。",
+    "frames": [
+      {
+        "frame": 1,
+        "shape": "circle",
+        "areaMm2": 7.068404000000001,
+        "equivalentDiameterMm": 2.999961914918955,
+        "silhouetteWidthMm": 2.9980000000000024,
+        "maxChordMm": 3.0,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      },
+      {
+        "frame": 2,
+        "shape": "ellipse-wide",
+        "areaMm2": 7.068368,
+        "equivalentDiameterMm": 2.9999542753749755,
+        "silhouetteWidthMm": 4.239999999999533,
+        "maxChordMm": 2.12,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      },
+      {
+        "frame": 3,
+        "shape": "ellipse-tall",
+        "areaMm2": 7.068368,
+        "equivalentDiameterMm": 2.9999542753749755,
+        "silhouetteWidthMm": 2.1179999999997667,
+        "maxChordMm": 4.242,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      },
+      {
+        "frame": 4,
+        "shape": "crescent",
+        "areaMm2": 4.860888,
+        "equivalentDiameterMm": 2.4877851241875,
+        "silhouetteWidthMm": 2.4740000000000024,
+        "maxChordMm": 3.0,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      },
+      {
+        "frame": 5,
+        "shape": "d-shape",
+        "areaMm2": 5.683936,
+        "equivalentDiameterMm": 2.6901695271755277,
+        "silhouetteWidthMm": 2.9980000000000024,
+        "maxChordMm": 2.25,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      }
+    ]
   }
 }

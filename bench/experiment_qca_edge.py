@@ -154,13 +154,70 @@ def m4_cylinder_fit(
 # ── 実験本体 ──────────────────────────────────────────────────────────
 
 
+def run_shapes(root: str, truth_all: dict) -> list[dict]:
+    """GNBP-XA-7（非円形断面）で「何を測っているのか」を分ける。
+
+    円柱では シルエットの幅 ＝ 面積等価直径 なので、方式の違いが出ない。
+    この系列は**断面積が等しくシルエットだけ違う 3 本**を含むので、
+    半値法が外形を、密度計測が面積を測っていることが数値で分かる。
+    """
+    truth = truth_all.get("shapes")
+    if truth is None:
+        print("（GNBP-XA-7 がまだ生成されていません: --series shapes）")
+        return []
+    ds = pydicom.dcmread(os.path.join(root, truth["file"]))
+    pixels = ds.pixel_array
+    axis_row = int(truth["vesselAxisRow"])
+    mm_per_px = float(truth["mmPerPx"])
+    columns = int(truth["columns"])
+    half_rows = 32                       # ±7.2mm。一番太い ellipse-wide でも背景を含む
+    col = columns // 2
+
+    # μ は「健常＝円形」と見なせる 1 本で 1 回だけ当てはめる（実機の運用と同じ）。
+    circle_frame = next(f for f in truth["frames"] if f["shape"] == "circle")
+    p_circle = _transmission(pixels[circle_frame["frame"] - 1], col, half_rows, axis_row)
+    mu_from_circle = m4_cylinder_fit(p_circle, mm_per_px, float(circle_frame["blurSigmaPx"]))[1]
+
+    print()
+    print(f"── GNBP-XA-7 非円形断面（μ←円形の 1 本で当てはめ: {mu_from_circle:.5f} /mm）──")
+    header = (
+        f"{'shape':>13} {'面積等価D':>9} {'シルエット':>10} | "
+        f"{'M1 half':>8} {'対シルエット':>11} | {'M3 densito':>10} {'対面積等価':>10}"
+    )
+    print(header)
+    print("-" * len(header))
+    out: list[dict] = []
+    for f in truth["frames"]:
+        p = _transmission(pixels[f["frame"] - 1], col, half_rows, axis_row)
+        equiv = float(f["equivalentDiameterMm"])
+        silh = float(f["silhouetteWidthMm"])
+        half_px = m1_half_value_px(p)
+        m1 = half_px * mm_per_px if half_px is not None else float("nan")
+        m3 = 2.0 * math.sqrt(m3_densitometric_area_mm2(p, mm_per_px, mu_from_circle) / math.pi)
+        print(
+            f"{f['shape']:>13} {equiv:>9.3f} {silh:>10.3f} | "
+            f"{m1:>8.3f} {m1 / silh:>11.3f} | {m3:>10.3f} {m3 / equiv:>10.3f}"
+        )
+        out.append(
+            {
+                "series": "GNBP-XA-7", "shape": f["shape"],
+                "equivalentDiameterMm": equiv, "silhouetteWidthMm": silh,
+                "m1_half": m1, "m1_over_silhouette": m1 / silh,
+                "m3_densito": m3, "m3_over_equivalent": m3 / equiv,
+                "muFromCircle": mu_from_circle,
+            }
+        )
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="./phantom")
     args = ap.parse_args()
 
     root = os.path.join(args.out, "GNBP-XA")
-    truth = json.load(open(os.path.join(root, "truth.json"), encoding="utf-8"))["qca"]
+    truth_all = json.load(open(os.path.join(root, "truth.json"), encoding="utf-8"))
+    truth = truth_all["qca"]
     ds = pydicom.dcmread(os.path.join(root, truth["file"]))
     pixels = ds.pixel_array  # (frames, rows, cols)
 
@@ -251,6 +308,8 @@ def main() -> int:
             ds_measured = (1.0 - les[key] / ref[key]) * 100.0
             errs.append(ds_measured - float(t["percentDiameterStenosis"]))
         print(f"  {name:>20} : 平均 {np.mean(errs):+.2f}  最大 |{np.max(np.abs(errs)):.2f}|")
+
+    rows_out.extend(run_shapes(root, truth_all))
 
     out_path = os.path.join(root, "..", "..", "results", "qca-edge-experiment.json")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)

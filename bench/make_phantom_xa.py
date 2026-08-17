@@ -67,6 +67,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import shutil
 import sys
@@ -1042,12 +1043,141 @@ def build_qva(out_dir: str) -> dict:
     }
 
 
+# ══════════════════════════════════════════════════════════════════════
+# GNBP-XA-7 — 非円形断面（エッジ検出の方式を分けるための系列）
+# ══════════════════════════════════════════════════════════════════════
+#
+# 🚨 **なぜ要るのか**: XA-1 は円柱で作ってある。円柱に対しては
+# 「シルエットの幅」＝「面積等価直径」＝「真の直径」が全部同じ値になるので、
+# **エッジを測る方式（半値法）と面積を測る方式（密度計測）の違いが出ない**。
+# 設計 §16.5 で密度計測を採ると決めたが、その利点はこの系列でしか測れない。
+# §16.4 の教訓（箱型ファントムは半値法を「厳密に正しい」と見せた）と同じ構図。
+#
+# この系列は**断面の形だけを変え、他をすべて揃える**。とくに 3 本は
+# **断面積が厳密に等しく、シルエットの幅だけが違う**（3.00 / 4.24 / 2.12 mm）。
+# 密度計測は 3 本とも等価直径 3.00mm を返すはずで、半値法はシルエットを追うはず。
+# **どちらが「正しい」かは測る量の定義の問題**なので、真値は両方を持つ。
+
+#: (名前, 断面の判定関数を作る引数) の並び。断面は (d, z) 平面で定義する。
+#: d = 検出器上の横ずれ（＝行方向）、z = 線束の進行方向（＝投影で潰れる方向）。
+SHAPE_FRAMES: tuple[tuple[str, str, float, float, float, float], ...] = (
+    # 名前,           種類,        p(d半径), q(z半径), 侵入量, 侵入中心
+    ("circle", "ellipse", 1.5, 1.5, 0.0, 0.0),
+    ("ellipse-wide", "ellipse", 2.1213203435596424, 1.0606601717798212, 0.0, 0.0),
+    ("ellipse-tall", "ellipse", 1.0606601717798212, 2.1213203435596424, 0.0, 0.0),
+    ("crescent", "crescent", 1.5, 1.5, 1.2, 1.35),
+    ("d-shape", "flat", 1.5, 1.5, 0.0, 0.75),
+)
+
+#: 断面を積分するときの z 方向の刻み [mm]。細かいほど真値が正確になる。
+SHAPE_DZ_MM = 0.002
+
+
+def _chord_profile(kind: str, p: float, q: float, cut_r: float, cut_c: float, d_mm: np.ndarray) -> np.ndarray:
+    """横ずれ d [mm] における**経路長** L(d) [mm]（＝断面を z 方向に積分した長さ）。
+
+    円柱なら L(d) = 2√(r²−d²) の解析解で済むが、三日月や D 型には解析解が無い。
+    **全部の形を同じ数値積分で通す**（形ごとに別の式を使うと、真値が形ごとに別の
+    近似で決まってしまい、方式の比較が形の比較と混ざる）。
+    """
+    z = np.arange(-max(p, q) - 0.01, max(p, q) + 0.01, SHAPE_DZ_MM)
+    inside = (d_mm[:, None] / p) ** 2 + (z[None, :] / q) ** 2 <= 1.0
+    if kind == "crescent":
+        # 偏心したプラーク: 内腔から、+d 側にずらした円を引く。
+        inside &= (d_mm[:, None] - cut_c) ** 2 + z[None, :] ** 2 > cut_r**2
+    elif kind == "flat":
+        # D 型: z 方向の片側を弦で切り落とす（＝壁が平ら）。
+        inside &= z[None, :] < cut_c
+    return inside.sum(axis=1) * SHAPE_DZ_MM
+
+
+def _project_shape(kind: str, p: float, q: float, cut_r: float, cut_c: float, blur_px: float) -> np.ndarray:
+    """断面の形を指定して、まっすぐな血管 1 本の透過率画像を作る。
+
+    軸方向には一様（＝狭窄なし）。**形だけを見たい**ので、他の要因を入れない。
+    """
+    n = SUPERSAMPLE
+    sub = (np.arange(n) + 0.5) / n - 0.5
+    rows = (np.arange(ROWS)[:, None] + sub[None, :]).ravel()
+    d_mm = (rows - ROWS / 2.0) * MM_PER_PX
+    path = _chord_profile(kind, p, q, cut_r, cut_c, d_mm)          # (ROWS*n,)
+    transmit_row = np.exp(-MU_CONTRAST * path)
+    transmit_row = transmit_row.reshape(ROWS, n).mean(axis=1)      # 面積平均で 1 画素へ
+    transmit = np.repeat(transmit_row[:, None], COLUMNS, axis=1)
+    return _gaussian_blur(transmit, blur_px)
+
+
+def build_shapes(out_dir: str) -> dict:
+    rng = np.random.default_rng(20260817)
+    frames = np.zeros((len(SHAPE_FRAMES), ROWS, COLUMNS), dtype=np.uint16)
+    truth_frames = []
+    blur = DEFAULT_BLUR_PX
+    for i, (name, kind, p, q, cut_r, cut_c) in enumerate(SHAPE_FRAMES):
+        transmit = _project_shape(kind, p, q, cut_r, cut_c, blur)
+        frames[i] = _to_stored(transmit, None, rng)
+
+        # 真値は**投影に使ったのと同じ経路長**から出す（別の式で出すと真値と画像がずれる）。
+        d_fine = np.arange(-max(p, q) - 0.02, max(p, q) + 0.02, SHAPE_DZ_MM)
+        path = _chord_profile(kind, p, q, cut_r, cut_c, d_fine)
+        area = float(path.sum() * SHAPE_DZ_MM)                     # ∫L(d)dd ＝ 断面積
+        lit = d_fine[path > 0]
+        silhouette = float(lit.max() - lit.min()) if lit.size else 0.0
+        truth_frames.append(
+            {
+                "frame": i + 1,
+                "shape": name,
+                # 密度計測が返すべき量。−ln T の横積分は μ·A なので、形に依らずこれになる。
+                "areaMm2": area,
+                "equivalentDiameterMm": 2.0 * math.sqrt(area / math.pi),
+                # 半値法が返すべき量。エッジは**投影の外形**しか見ていない。
+                "silhouetteWidthMm": silhouette,
+                # 参考: 一番厚いところの経路長（＝z 方向の差し渡し）。
+                "maxChordMm": float(path.max()),
+                "blurSigmaPx": blur,
+                "photonsPerPixel": None,
+            }
+        )
+
+    ds = _xa_dataset(
+        frames,
+        uid_key="XA-7",
+        study_key="XA-7",
+        series_description="GNBP-XA-7 non-circular cross sections",
+        series_number=7,
+        frame_time_ms=33.0,
+        patient_id="GNBP-XA-7",
+        patient_name="GNBPXA^SHAPE",
+        calibration=(MM_PER_PX, "GEOMETRY"),
+    )
+    os.makedirs(out_dir, exist_ok=True)
+    path_out = os.path.join(out_dir, "GNBP-XA-7.dcm")
+    _save(ds, path_out)
+    return {
+        "sopInstanceUid": ds.SOPInstanceUID,
+        "studyInstanceUid": ds.StudyInstanceUID,
+        "seriesInstanceUid": ds.SeriesInstanceUID,
+        "file": os.path.basename(path_out),
+        "md5": _file_md5(path_out),
+        "rows": ROWS,
+        "columns": COLUMNS,
+        "vesselAxisRow": ROWS / 2.0,
+        "mmPerPx": MM_PER_PX,
+        "muContrastPerMm": MU_CONTRAST,
+        "note": (
+            "断面の形だけが違う。circle / ellipse-wide / ellipse-tall は断面積が等しく、"
+            "シルエットの幅だけが違う（密度計測は 3 本とも等価直径 3.00mm を返すはず）。"
+        ),
+        "frames": truth_frames,
+    }
+
+
 BUILDERS = {
     "qca": build_qca,
     "dsa": build_dsa,
     "recon3d": build_recon3d,
     "calibration": build_calibration,
     "qva": build_qva,
+    "shapes": build_shapes,
 }
 
 #: 系列ごとの出力ファイル名の接頭辞。`--series X --force` で**その系列だけ**消すために要る。
@@ -1058,6 +1188,7 @@ SERIES_PREFIX = {
     "recon3d": "GNBP-XA-3",
     "calibration": "GNBP-XA-4",
     "qva": "GNBP-XA-6",
+    "shapes": "GNBP-XA-7",
 }
 
 

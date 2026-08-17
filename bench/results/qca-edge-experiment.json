@@ -284,5 +284,60 @@
     "muFromRef": 0.15749999999999997,
     "blurSigmaPx": 0.6,
     "photonsPerPixel": 800.0
+  },
+  {
+    "series": "GNBP-XA-7",
+    "shape": "circle",
+    "equivalentDiameterMm": 2.999961914918955,
+    "silhouetteWidthMm": 2.9980000000000024,
+    "m1_half": 2.6119974874371863,
+    "m1_over_silhouette": 0.8712466602525631,
+    "m3_densito": 3.009756273874001,
+    "m3_over_equivalent": 1.0032648277654252,
+    "muFromCircle": 0.16499999999999992
+  },
+  {
+    "series": "GNBP-XA-7",
+    "shape": "ellipse-wide",
+    "equivalentDiameterMm": 2.9999542753749755,
+    "silhouetteWidthMm": 4.239999999999533,
+    "m1_half": 3.691943521594685,
+    "m1_over_silhouette": 0.870741396602616,
+    "m3_densito": 3.013215609736224,
+    "m3_over_equivalent": 1.0044205121625032,
+    "muFromCircle": 0.16499999999999992
+  },
+  {
+    "series": "GNBP-XA-7",
+    "shape": "ellipse-tall",
+    "equivalentDiameterMm": 2.9999542753749755,
+    "silhouetteWidthMm": 2.1179999999997667,
+    "m1_half": 1.863124999999999,
+    "m1_over_silhouette": 0.8796624173749784,
+    "m3_densito": 3.0005607191870936,
+    "m3_over_equivalent": 1.0002021510184658,
+    "muFromCircle": 0.16499999999999992
+  },
+  {
+    "series": "GNBP-XA-7",
+    "shape": "crescent",
+    "equivalentDiameterMm": 2.4877851241875,
+    "silhouetteWidthMm": 2.4740000000000024,
+    "m1_half": 1.8432467044363088,
+    "m1_over_silhouette": 0.745047172367141,
+    "m3_densito": 2.4930625163060225,
+    "m3_over_equivalent": 1.0021213215189742,
+    "muFromCircle": 0.16499999999999992
+  },
+  {
+    "series": "GNBP-XA-7",
+    "shape": "d-shape",
+    "equivalentDiameterMm": 2.6901695271755277,
+    "silhouetteWidthMm": 2.9980000000000024,
+    "m1_half": 2.750852272727273,
+    "m1_over_silhouette": 0.9175624658863477,
+    "m3_densito": 2.6992725110351,
+    "m3_over_equivalent": 1.0033837956186835,
+    "muFromCircle": 0.16499999999999992
   }
 ]
