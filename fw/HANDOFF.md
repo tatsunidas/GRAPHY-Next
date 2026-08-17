@@ -28,6 +28,12 @@
   （2026-08-13 起動・port 5176）。**止めない・ワークツリーを外さない**。
   そのせいで `release/0.1.16`（マージ済み・リモートは削除済み）だけが消せずに残っている。
 
+> 🟢 **2026-08-17 別マシン（Windows）で検証環境を立て直し、3 本とも基準値を取り直した。**
+> ファントムを再生成（記録済み MD5 と一致）→ backend を package → スパイク実行。
+> 実測 **2D 67/0/17 ／ A6a 103/0/2 ／ A6b 48/0/3**（A6b は記録の 46/0/5 より 2 件改善。
+> 原因は §21.4.3 の訂正を参照）。この過程で automator のバグを 1 件、bench の古い記録を
+> 2 件直している（下の §5 と `bench/README.md`）。
+
 ### 2. 直前のセッションで閉じたこと
 
 **A6b（分岐部 QCA）の実機検証**。実装は前から済んでいたが検証が塞がっていた。
@@ -82,15 +88,31 @@ cd backend && mvn -q -Dfrontend.skip=true compile     # 変更したら test も
 ```bash
 cd bench && python3 make_phantom_xa.py --out ./phantom     # 初回のみ（全系列で数分）
 cd backend && mvn -q -Dfrontend.skip=true -DskipTests package   # ⚠️ 必ず先に。古い jar だと偽の失敗
-cd automator && npx tsx src/spike/xaBifurcationCheck.ts    # A6b（46/0/5）
+cd automator && npx tsx src/spike/xaBifurcationCheck.ts    # A6b（46/0/5 → 48/0/3）
                 npx tsx src/spike/xa3dQcaCheck.ts          # A6a（103/0/2）
                 npx tsx src/spike/xaPhantomCheck.ts        # 2D（67/0/17）
 ```
 
+> **ファントムは追跡していないので、新しいマシンでは必ず生成から始める**（`bench/.gitignore`）。
+> 生成物はプラットフォームに依らず**記録済み MD5 と一致する**ことを 2026-08-17 に確認した
+> （Windows 11 / Python 3.11.7 / pydicom 3.0.2）。Windows 固有の手順は `bench/README.md`。
+
 ### 5. 中断時点で分かっている落とし穴（今回踏んだもの）
 
+- 🚨 **スパイクのドラッグの長さは CSS px で決める**（2026-08-17 に踏んだ）。
+  `dragOnCanvasHost` は `getBoundingClientRect` / `clientX` ＝ **CSS px** なのに、
+  `getViewportGeometry()` の `canvas.width/height` は**描画バッファ px**（CSS px × DPR）。
+  DPR=1 では一致するので気づけないが、**Windows の表示スケーリング 200% では区間が 2 倍**に
+  なって画像の外へ落ち、**全フレームが「中心線を引けない」で落ちる**。
+  換算は `dragSpanMmOnCanvasHost()` に閉じてあるので、新しいスパイクはそれを使う。
+- 🚨 **キャンバスの大きさは測定条件そのもの**。小さいと端点の量子化で数値が変わる
+  （A6b の分岐角 2 件は、窓を最大化しただけで目標内に入った。§21.4.3 の訂正）。
+  `DesktopDriver` がウィンドウを最大化するようにしてある。
 - 🚨 **`make_phantom_xa.py --series X --force` は直したが、`--force` を全系列で使うと
   ディレクトリごと消える**。他系列を巻き添えにする事故を 1 度起こしている（復旧済み）。
+- 🚨 **生成器を直したら真値 JSON / マニフェストも `--force` で作り直す**。系列ディレクトリが
+  残っていると `skip (exists)` になり、**md5 が古いまま一致しているように見える**
+  （2026-08-17 に `GNBP-4D_manifest.json` と `GNBP-2R_ground_truth.json` で発覚）。
 - 🚨 **`.results/` に残っている数値は前の版のもので当てにならない**。
   **その場で回した結果だけを根拠にする**（同じコードで 9.9mm → 77.85mm という例がある）。
 - 🔑 **数値が合わないときは、まず「真値と実装が同じ約束で計算しているか」を疑う。**
