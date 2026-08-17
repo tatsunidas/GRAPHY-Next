@@ -274,6 +274,15 @@ python3 make_phantom_2r.py --out ./phantom --series rigid --force  # 1 系列だ
 python3 preview.py phantom/GNBP-1A --out /tmp/a.png    # 目視確認
 ```
 
+> 🚨 **生成器を直したら、真値 JSON / マニフェストも `--force` で作り直す。**
+> 系列ディレクトリが残っていると生成そのものが `skip (exists)` になり、**マニフェストは
+> 既存の値をそのまま引き継ぐ**ので、md5 が古いまま「一致しているように見える」。
+> 2026-08-17 に実際に踏んだ: `GNBP-4D_manifest.json` は `46bff30` のまま残っていて、
+> その後の `a58dae7`（PET の値が 1024 高かったのを直した）が反映されていなかった。
+> `GNBP-2R_ground_truth.json` も同様に `evaluation_region` を欠いており、
+> **`score_registration.mjs` は領域が無いと黙って全空間で採点する**（`inRegion` が常に true）ので、
+> 設計ドキュメントの数値と食い違ってもエラーにならない。
+
 出力:
 
 - `phantom/GNBP-1A/` … DICOM 180 枚
@@ -286,6 +295,19 @@ python3 preview.py phantom/GNBP-1A --out /tmp/a.png    # 目視確認
   （fixed 空間と moving 空間の対応点）・変位統計・Jacobian・受け入れ基準・MD5
 
 依存: `pydicom`, `numpy`（プレビューのみ `pillow`）。採点ハーネスは Node 標準のみ（依存なし）。
+
+### Windows で生成する場合
+
+生成物は**プラットフォームに依らず同じ**（2026-08-17 に Windows 11 / Python 3.11.7 /
+pydicom 3.0.2 で確認。GNBP-XA・1A・2R とも記録済み MD5 と完全一致）。ただし 2 点だけ注意する。
+
+- **Git Bash の `python` / `python3` は WindowsApps のスタブ**（実行すると何も起きず rc=49）。
+  実体を直接叩く: `/c/Users/<user>/anaconda3/python.exe make_phantom_xa.py --out ./phantom`
+- 🚨 **生成器のテキスト出力は必ず `encoding="utf-8"` で開く**。Windows の既定は cp932 なので、
+  省略すると真値 JSON の書き出しが `UnicodeEncodeError` で落ちる（`make_phantom_a.py`）か、
+  **cp932 で書けてしまい次回の読み込みが `UnicodeDecodeError` になる**（`make_phantom_4d.py`）。
+  後者は**その場では成功したように見える**のが厄介。2026-08-17 に 4 本とも修正済み。
+  なお**コンソール表示が文字化けするのは表示だけの問題**で、ファイルの中身は UTF-8。
 
 ## ファイル
 

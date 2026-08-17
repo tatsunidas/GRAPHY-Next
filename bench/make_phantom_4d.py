@@ -245,10 +245,11 @@ def main() -> int:
     path = os.path.join(args.out, f"{PHANTOM_ID}_manifest.json")
     existing = {}
     if os.path.exists(path):
-        with open(path) as fh:
+        with open(path, encoding="utf-8") as fh:
             existing = json.load(fh).get("series", {})
     existing.update(manifest)
-    with open(path, "w") as fh:
+    # 🚨 Windows の既定は cp932。encoding を省略すると非 ASCII で落ちる
+    with open(path, "w", encoding="utf-8") as fh:
         json.dump({
             "phantom": PHANTOM_ID,
             "version": PHANTOM_VERSION,

@@ -410,7 +410,9 @@ def main() -> int:
     }
 
     truth_path = os.path.join(args.out, f"{PHANTOM_ID}_ground_truth.json")
-    with open(truth_path, "w") as fh:
+    # 🚨 encoding を省略しない。Windows の既定は cp932 なので、真値 JSON に含まれる
+    #    "—" のような文字で UnicodeEncodeError になり、DICOM だけ書けた状態で落ちる。
+    with open(truth_path, "w", encoding="utf-8") as fh:
         json.dump(truth, fh, indent=2, ensure_ascii=False)
 
     total = sum(os.path.getsize(os.path.join(out_dir, f)) for f in os.listdir(out_dir))

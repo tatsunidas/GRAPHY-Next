@@ -8,24 +8,24 @@
       "series_number": 1,
       "expects": "位置調整・自動位置合わせが無効化され、理由が表示されること",
       "files": 1,
-      "bytes": 34594,
-      "series_md5": "9af9f62f2bc0a69c47726cdfd777aa13"
+      "bytes": 34384,
+      "series_md5": "4ac00717b3a55731aff878d43e66c72a"
     },
     "pet-complete": {
       "series": "GNBP-4D-pet-complete",
       "series_number": 2,
       "expects": "SUV が計算でき、派生シリーズも保存できること",
       "files": 24,
-      "bytes": 840616,
-      "series_md5": "751a4fd5869495064aaebc10ec18b10c"
+      "bytes": 835432,
+      "series_md5": "a925061edafed221dd50631700c1b64e"
     },
     "pet-incomplete": {
       "series": "GNBP-4D-pet-incomplete",
       "series_number": 3,
       "expects": "SUV が拒否され、派生シリーズの保存も拒否されること",
       "files": 24,
-      "bytes": 835528,
-      "series_md5": "15da62a61cdb4ffcde877fe5bb483a3f"
+      "bytes": 830104,
+      "series_md5": "22eaade404ceb71d2b45b2c3136d5c75"
     }
   }
 }

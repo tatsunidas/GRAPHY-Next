@@ -5,6 +5,20 @@
   "content": "3D Shepp-Logan (see GNBP-1A_ground_truth.json for the ellipsoid table); no step wedge",
   "direction_convention": "transform_fixed_to_moving maps a point of the FIXED series to the point of the MOVING series holding the same anatomy: q = T(p). This is the transform a registration must recover, and the one GRAPHY passes to computeFusionSlice as xf.",
   "euler_convention": "R = Rz(rz) . Ry(ry) . Rx(rx), degrees, right-handed about patient LPS, about rotation_centre_mm; identical to mat4FromEulerDeg in frontend/src/viewer/regTransform.ts",
+  "evaluation_region": {
+    "kind": "ellipsoid",
+    "centre_mm": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "semi_axes_mm": [
+      69.0,
+      92.0,
+      81.0
+    ],
+    "note": "Shepp-Logan outer ellipsoid = the phantom's material support. Displacement error should be judged here; outside it the estimate is an extrapolation into a region that contains no structure."
+  },
   "acceptance_targets": {
     "rigid_translation_error_mm": 0.5,
     "rigid_rotation_error_deg": 0.2,
@@ -379,7 +393,7 @@
           ],
           "moving_mm": [
             4.254936142015824,
-            31.555041623169217,
+            31.555041623169224,
             -1.4171269084567673
           ]
         },
@@ -718,7 +732,7 @@
             0.0
           ],
           "moving_mm": [
-            -5.843347596842985,
+            -5.843347596842986,
             -52.51141734254063,
             -1.4505972022268656
           ]
@@ -799,7 +813,7 @@
         {
           "name": "nodule E",
           "moving_mm": [
-            -5.843347596842985,
+            -5.843347596842986,
             -52.51141734254063,
             -1.4505972022268656
           ],
@@ -907,7 +921,7 @@
           ],
           "moving_mm": [
             24.978220957768176,
-            -0.7817349545860007,
+            -0.7817349545860006,
             13.889341469819103
           ]
         },
@@ -958,7 +972,7 @@
             25.0
           ],
           "moving_mm": [
-            1.3921974893488733,
+            1.3921974893488729,
             -7.428043604805417,
             30.755624727268472
           ]
@@ -986,7 +1000,7 @@
           "moving_mm": [
             -0.9343797928614492,
             -62.39251841156355,
-            1.582096731186657
+            1.5820967311866567
           ]
         },
         {
@@ -1034,7 +1048,7 @@
         {
           "name": "nodule B",
           "moving_mm": [
-            1.3921974893488733,
+            1.3921974893488729,
             -7.428043604805417,
             30.755624727268472
           ],
@@ -1068,7 +1082,7 @@
           "moving_mm": [
             -0.9343797928614492,
             -62.39251841156355,
-            1.582096731186657
+            1.5820967311866567
           ],
           "voxel": [
             127,
@@ -1230,7 +1244,7 @@
             25.0
           ],
           "moving_mm": [
-            -5.067711678224952,
+            -5.067711678224951,
             -2.559875782124056,
             15.032214810113063
           ]
@@ -1277,7 +1291,7 @@
       ],
       "displacement": {
         "sampled_points": 45056,
-        "displacement_mm_mean": 17.134452870450883,
+        "displacement_mm_mean": 17.134452870450886,
         "displacement_mm_max": 32.856522529211475,
         "displacement_mm_p95": 26.110484080650995
       },
@@ -1327,7 +1341,7 @@
         {
           "name": "nodule B",
           "moving_mm": [
-            -5.067711678224952,
+            -5.067711678224951,
             -2.559875782124056,
             15.032214810113063
           ],

@@ -713,7 +713,7 @@ def main() -> int:
     truth_path = os.path.join(args.out, f"{PHANTOM_ID}_ground_truth.json")
     existing = {}
     if os.path.exists(truth_path):
-        with open(truth_path) as fh:
+        with open(truth_path, encoding="utf-8") as fh:
             existing = json.load(fh).get("series", {})
     existing.update(truth_series)
 
@@ -753,7 +753,8 @@ def main() -> int:
         },
         "series": existing,
     }
-    with open(truth_path, "w") as fh:
+    # 🚨 Windows の既定は cp932。encoding を省略すると非 ASCII で落ちる
+    with open(truth_path, "w", encoding="utf-8") as fh:
         json.dump(truth, fh, indent=2, ensure_ascii=False)
     print(f"  ground truth -> {truth_path}", file=sys.stderr)
     return 0
