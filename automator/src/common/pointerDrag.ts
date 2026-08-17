@@ -57,6 +57,52 @@ export async function dragOnCanvasHost(
 }
 
 /**
+ * 画像中央を中心に、血管軸（水平）へ ±`halfSpanMm` の計測を引く。
+ *
+ * 🚨 **長さは CSS px で決める。`canvas.width/height`（描画バッファ）で決めてはいけない。**
+ * `dragOnCanvasHost` は `getBoundingClientRect()` と `clientX/clientY` ＝ **CSS px** で動くが、
+ * `getViewportGeometry()` が返す `canvas.width/height` は**描画バッファ**の大きさで、
+ * これは CSS px × `devicePixelRatio` になる。DPR=1 の環境では一致するので気づけないが、
+ * **Windows の表示スケーリング 200%（DPR=2）では長さが 2 倍**になり、80mm のつもりの区間が
+ * 160mm になって画像（GNBP-XA-1 は 115.2mm 角）の外へ落ちる。すると `tracePath` が null を返し、
+ * **「中心線を引けない／エッジが検出できない」で全フレームが落ちる**（2026-08-17 に実際に踏んだ。
+ * 画面上は線が引けているように見えるので、エラー文だけ見ても原因に辿り着けない）。
+ *
+ * <p>`parallelScale` はビューポート**高さの半分**に相当する world 長 [mm] なので、
+ * mm/CSSpx = 2·parallelScale ÷ (canvas の CSS 高さ)。
+ */
+export async function dragSpanMmOnCanvasHost(
+  page: Page,
+  hostTestId: string,
+  halfSpanMm: number,
+  opts: { fracY?: number; steps?: number } = {},
+): Promise<{ spanCssPx: number; mmPerCssPx: number }> {
+  const raw = (await page.evaluate(`(() => {
+    const g = window.__graphyDebug;
+    const geo = g && g.getViewportGeometry ? g.getViewportGeometry() : null;
+    if (!geo || !geo.length) return null;
+    const host = document.querySelector('[data-testid="${hostTestId}"]');
+    const canvas = host && host.querySelector("canvas");
+    if (!canvas) return null;
+    const r = canvas.getBoundingClientRect();
+    return JSON.stringify({ ps: geo[0].camera.parallelScale, cssW: r.width, cssH: r.height });
+  })()`)) as string | null;
+  if (!raw) throw new Error("ビューポートの幾何を取得できませんでした");
+  const { ps, cssW, cssH } = JSON.parse(raw) as { ps: number; cssW: number; cssH: number };
+  const mmPerCssPx = (2 * ps) / cssH;
+  const halfPx = halfSpanMm / mmPerCssPx;
+  if (halfPx * 2 < 20) {
+    throw new Error(`表示が小さすぎて区間を引けません（${(halfPx * 2).toFixed(1)} CSS px）`);
+  }
+  await dragOnCanvasHost(page, hostTestId, Math.round(halfPx * 2), 0, 0, opts.steps ?? 12, {
+    fracX: 0.5 - halfPx / cssW,
+    fracY: opts.fracY ?? 0.5,
+  });
+  await page.waitForTimeout(800);
+  return { spanCssPx: halfPx * 2, mmPerCssPx };
+}
+
+/**
  * canvas要素上の相対位置(0〜1)へ、ボタンを押さないポインタ移動（hover）を生イベントで送る。
  * Viewer2D.tsx のカーソル位置サンプリング(onMove)向け。page.mouse.move() では発火しないことを
  * 実機で確認したため、dragOnCanvasHost と同じ生イベントdispatch方式を使う。

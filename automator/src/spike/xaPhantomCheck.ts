@@ -23,7 +23,7 @@ import { importPaths } from "../fixtures/importFixtures.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
 import { waitForMainScreenReady } from "../checklist/items/shared/helpers.js";
 import { dismissStartupDialogs, findBlockingOverlay } from "../common/dismissDialogs.js";
-import { dragOnCanvasHost } from "../common/pointerDrag.js";
+import { dragSpanMmOnCanvasHost } from "../common/pointerDrag.js";
 
 const REPO_ROOT = path.resolve(AUTOMATOR_ROOT, "..");
 const PHANTOM_DIR = path.join(REPO_ROOT, "bench", "phantom", "GNBP-XA");
@@ -202,27 +202,11 @@ async function selectLengthTool(viewer: Page): Promise<void> {
  * キャンバス割合 0.3〜0.7 で引くと**画像の外**に始終点が落ち、`tracePath` が null を返して
  * 「解析できない」になる（最初にこれを踏んだ。しかも画面上は線が引けているように見える）。
  *
- * <p>そこでカメラから mm/キャンバスpx を求めて、**mm で長さを決める**。
- * `parallelScale` はビューポート高さの半分に相当する world 長 [mm]。
+ * <p>そこで **mm で長さを決める**（`dragSpanMmOnCanvasHost`）。CSS px と描画バッファ px を
+ * 取り違えると DPR≠1 の環境で同じ壊れ方をするので、変換はヘルパー側に閉じてある。
  */
 async function drawSegment(viewer: Page, halfSpanMm: number): Promise<void> {
-  const raw = (await viewer.evaluate(`(() => {
-    const g = window.__graphyDebug;
-    const geo = g && g.getViewportGeometry ? g.getViewportGeometry() : null;
-    if (!geo || !geo.length) return null;
-    const v = geo[0];
-    return JSON.stringify({ h: v.canvas.height, w: v.canvas.width, ps: v.camera.parallelScale });
-  })()`)) as string | null;
-  if (!raw) throw new Error("ビューポートの幾何を取得できませんでした");
-  const { h, w, ps } = JSON.parse(raw) as { h: number; w: number; ps: number };
-  const mmPerCanvasPx = (2 * ps) / h;
-  const halfPx = halfSpanMm / mmPerCanvasPx;
-  if (halfPx * 2 < 20) throw new Error(`表示が小さすぎて区間を引けません（${(halfPx * 2).toFixed(1)}px）`);
-  await dragOnCanvasHost(viewer, HOST, Math.round(halfPx * 2), 0, 0, 12, {
-    fracX: 0.5 - halfPx / w,
-    fracY: 0.5,
-  });
-  await viewer.waitForTimeout(800);
+  await dragSpanMmOnCanvasHost(viewer, HOST, halfSpanMm);
 }
 
 /** ダイアログに出ているエラー文（解析できなかった理由の切り分け用）。 */

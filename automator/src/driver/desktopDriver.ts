@@ -114,6 +114,27 @@ export class DesktopDriver implements Driver {
     }
     await mainWin.waitForLoadState("domcontentloaded");
     this.mainPage = mainWin;
+    await this.maximizeWindows();
+  }
+
+  /**
+   * アプリのウィンドウを作業領域いっぱいに広げる。
+   *
+   * 🚨 **キャンバスの大きさは測定条件そのもの**。小さいと 1 CSS px あたりの mm が粗くなり、
+   * 引いた解析区間の端点が量子化されて**数値が変わる**（2026-08-17 の実測: 1368×912 の画面で
+   * 既定の窓だとキャンバスが CSS 95px しか無く、1px ≈ 1.2mm ＝ 5.4 画像px になった）。
+   * 窓の既定サイズは画面解像度と `window-position-memory` の記憶に依存するので、
+   * 広げておかないと**機械ごとに違う数値**が出て、退行と環境差を切り分けられなくなる。
+   *
+   * <p>devtools ウィンドウ（`GRAPHY_DEV=1` で開く）は対象外。
+   */
+  async maximizeWindows(): Promise<void> {
+    if (!this.electronApp) return;
+    await this.electronApp.evaluate(({ BrowserWindow }) => {
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.webContents.getURL().startsWith("devtools://")) w.maximize();
+      }
+    });
   }
 
   /** 条件に合う url を持つウィンドウが現れるまでポーリングする（about:blank 経過を吸収する）。 */
@@ -161,6 +182,8 @@ export class DesktopDriver implements Driver {
     ]);
     if (!win) throw new Error("trigger() で開くはずのウィンドウが見つかりませんでした");
     await win.waitForLoadState("domcontentloaded");
+    // ビューアのウィンドウも広げる（理由は maximizeWindows() の注記）。
+    await this.maximizeWindows();
     return win;
   }
 
