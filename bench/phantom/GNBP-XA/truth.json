@@ -3351,5 +3351,102 @@
         "photonsPerPixel": null
       }
     ]
+  },
+  "lesionshapes": {
+    "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.187660849602823850720281919553670876",
+    "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.246350655730755748097127112961446384",
+    "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.162518247133832800835971923490074630",
+    "file": "GNBP-XA-8.dcm",
+    "md5": "4e3aaff1db64b46246f01bdfa8d4d321",
+    "rows": 512,
+    "columns": 512,
+    "vesselAxisRow": 256.0,
+    "mmPerPx": 0.225,
+    "muContrastPerMm": 0.16666666666666666,
+    "healthyAreaMm2": 7.068428,
+    "lesionAreaRatio": 0.5,
+    "note": "健常部は円柱・病変部だけ断面の形が違う。5 フレームとも病変の断面積は同じ（健常部の 50%）で、シルエットの幅だけが違う。密度計測は 5 本とも同じ %DS を返すはずで、半値法はシルエットを追う（ellipse-wide は狭窄を見落とす）。",
+    "frames": [
+      {
+        "frame": 1,
+        "shape": "circle",
+        "note": "同心円の狭窄（対照。半値法でも正しく出る）",
+        "solvedParam": 1.0606368421050307,
+        "lesionAreaMm2": 3.534212,
+        "equivalentDiameterMm": 2.1212964144309367,
+        "silhouetteWidthMm": 2.1199999999997665,
+        "referenceDiameterMm": 3.0,
+        "percentAreaStenosis": 50.00002829483443,
+        "percentDiameterStenosis": 29.290119518968773,
+        "percentDiameterStenosisBySilhouette": 29.333333333341116,
+        "lesionLengthMm": 10.0,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      },
+      {
+        "frame": 2,
+        "shape": "ellipse-wide",
+        "note": "面積は半分だがシルエットは健常部と同じ＝半値法は見落とす",
+        "solvedParam": 0.7500000000001499,
+        "lesionAreaMm2": 3.5342120000000006,
+        "equivalentDiameterMm": 2.121296414430937,
+        "silhouetteWidthMm": 2.99799999999967,
+        "referenceDiameterMm": 3.0,
+        "percentAreaStenosis": 50.00002829483443,
+        "percentDiameterStenosis": 29.29011951896876,
+        "percentDiameterStenosisBySilhouette": 0.06666666667767274,
+        "lesionLengthMm": 10.0,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      },
+      {
+        "frame": 3,
+        "shape": "ellipse-tall",
+        "note": "面積は半分なのにシルエットは更に細い＝半値法は過大に見る",
+        "solvedParam": 0.7500000000003613,
+        "lesionAreaMm2": 3.534216,
+        "equivalentDiameterMm": 2.1212976148658935,
+        "silhouetteWidthMm": 1.4999999999998348,
+        "referenceDiameterMm": 3.0,
+        "percentAreaStenosis": 49.99997170516557,
+        "percentDiameterStenosis": 29.290079504470214,
+        "percentDiameterStenosisBySilhouette": 50.00000000000551,
+        "lesionLengthMm": 10.0,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      },
+      {
+        "frame": 4,
+        "shape": "crescent",
+        "note": "偏心プラーク（臨床的に一番ありふれた形）",
+        "solvedParam": 1.6118585545886304,
+        "lesionAreaMm2": 3.534212,
+        "equivalentDiameterMm": 2.1212964144309367,
+        "silhouetteWidthMm": 2.041999999999775,
+        "referenceDiameterMm": 3.0,
+        "percentAreaStenosis": 50.00002829483443,
+        "percentDiameterStenosis": 29.290119518968773,
+        "percentDiameterStenosisBySilhouette": 31.93333333334083,
+        "lesionLengthMm": 10.0,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      },
+      {
+        "frame": 5,
+        "shape": "d-shape",
+        "note": "片側が平ら",
+        "solvedParam": 1.3322676299956249e-15,
+        "lesionAreaMm2": 3.5372160000000004,
+        "equivalentDiameterMm": 2.122197749850361,
+        "silhouetteWidthMm": 2.99799999999967,
+        "referenceDiameterMm": 3.0,
+        "percentAreaStenosis": 49.957529453507895,
+        "percentDiameterStenosis": 29.260075004987975,
+        "percentDiameterStenosisBySilhouette": 0.06666666667767274,
+        "lesionLengthMm": 10.0,
+        "blurSigmaPx": 0.6,
+        "photonsPerPixel": null
+      }
+    ]
   }
 }

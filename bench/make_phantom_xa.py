@@ -1171,6 +1171,197 @@ def build_shapes(out_dir: str) -> dict:
     }
 
 
+# ══════════════════════════════════════════════════════════════════════
+#  GNBP-XA-8: **健常部は円・病変部だけ非円形**（A4c の実機検証用）
+# ══════════════════════════════════════════════════════════════════════
+#
+# 🔴 **なぜ XA-7 では足りないのか**（`fw/angio-design.md` §16.5.2）
+# XA-7 は各フレームが**一様な非円形断面**なので、アプリのように
+# 「健常部に円柱を当てはめて μ を得る」運用だと**健常部の当てはめが必ず外れる**。
+# 結果、密度計測の利点（形に依らない）が実機では示せない。
+#
+# この系列は**健常部を円柱に保ち、病変部だけ形を変える**。アプリの運用そのままで
+# 「病変の形は問わない」を確かめられる。
+#
+# 🔑 検査の要は「**病変の断面積を固定したまま、シルエットだけを変える**」こと:
+#   - ellipse-wide は**シルエットが健常部と同じ**なので、**半値法は狭窄を見落とす**。
+#   - ellipse-tall は逆に**実際より強い狭窄に見える**。
+#   - どちらも断面積は同じなので、密度計測は同じ %DS を返すはず。
+
+#: 病変部の断面積 ÷ 健常部の断面積。0.5 ＝ 面積狭窄 50%（径では 29.3%）。
+LESION_AREA_RATIO = 0.5
+#: 病変の長さ [mm]（この区間だけ形が変わる）。
+LESION_SHAPE_LENGTH_MM = 10.0
+#: 健常 → 病変の移行に使う長さ [mm]（段差にしないため）。
+LESION_SHAPE_RAMP_MM = 2.0
+
+#: (名前, 種類, 説明) — 断面の寸法は「面積を LESION_AREA_RATIO に合わせる」ように解く。
+LESION_SHAPE_FRAMES: tuple[tuple[str, str, str], ...] = (
+    ("circle", "circle", "同心円の狭窄（対照。半値法でも正しく出る）"),
+    ("ellipse-wide", "ellipse-wide", "面積は半分だがシルエットは健常部と同じ＝半値法は見落とす"),
+    ("ellipse-tall", "ellipse-tall", "面積は半分なのにシルエットは更に細い＝半値法は過大に見る"),
+    ("crescent", "crescent", "偏心プラーク（臨床的に一番ありふれた形）"),
+    ("d-shape", "flat", "片側が平ら"),
+)
+
+
+def _lesion_chord(kind: str, r_ref: float, param: float, d_mm: np.ndarray) -> np.ndarray:
+    """病変断面の経路長 L(d)。`param` は形ごとの自由度（面積を合わせるために解く）。"""
+    if kind == "circle":
+        return _chord_profile("ellipse", param, param, 0.0, 0.0, d_mm)
+    if kind == "ellipse-wide":
+        # シルエット（d 方向の半径）は健常部と同じに固定し、**厚みだけ**を薄くする。
+        return _chord_profile("ellipse", r_ref, param, 0.0, 0.0, d_mm)
+    if kind == "ellipse-tall":
+        # 厚み（z 方向）は健常部と同じに固定し、**シルエットだけ**を細くする。
+        return _chord_profile("ellipse", param, r_ref, 0.0, 0.0, d_mm)
+    if kind == "crescent":
+        # 偏心プラーク: 健常部の円から、+d 側にずらした円を引く（param = 侵入円の半径）。
+        return _chord_profile("crescent", r_ref, r_ref, param, r_ref * 0.9, d_mm)
+    if kind == "flat":
+        # D 型: z 方向の片側を弦で切る（param = 切る位置。小さいほど深く切る）。
+        return _chord_profile("flat", r_ref, r_ref, 0.0, param, d_mm)
+    raise ValueError(kind)
+
+
+def _solve_lesion_param(kind: str, r_ref: float, target_area: float) -> float:
+    """断面積が `target_area` になる形のパラメータを二分法で解く。
+
+    🔑 **解析解を形ごとに書かない**。形ごとに別の式を使うと、真値が形ごとに別の近似で
+    決まってしまう（`_chord_profile` の設計思想と同じ）。面積は投影に使うのと
+    **同じ数値積分**で測るので、真値と画像が必ず一致する。
+    """
+    d = np.arange(-r_ref * 1.6, r_ref * 1.6, SHAPE_DZ_MM)
+
+    def area_of(param: float) -> float:
+        return float(_lesion_chord(kind, r_ref, param, d).sum() * SHAPE_DZ_MM)
+
+    # 面積が単調になる向きに lo/hi を取る（flat は「切る位置」が大きいほど面積が増える）。
+    lo, hi = 1e-3, r_ref * 0.999
+    if kind == "flat":
+        lo, hi = -r_ref * 0.999, r_ref * 0.999
+    elif kind == "crescent":
+        # 侵入円が大きいほど面積は減る → 向きが逆。lo/hi を入れ替えて扱う。
+        lo, hi = 1e-3, r_ref * 1.8
+    for _ in range(80):
+        mid = (lo + hi) / 2.0
+        a = area_of(mid)
+        increasing = kind != "crescent"
+        if (a < target_area) == increasing:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2.0
+
+
+def _project_lesion_shape(kind: str, param: float, blur_px: float) -> np.ndarray:
+    """健常部は円柱・病変部だけ指定の断面、という血管 1 本の透過率画像。"""
+    n = SUPERSAMPLE
+    sub = (np.arange(n) + 0.5) / n - 0.5
+    cols = (np.arange(COLUMNS)[:, None] + sub[None, :]).ravel()
+    rows = (np.arange(ROWS)[:, None] + sub[None, :]).ravel()
+    x_mm = (cols - COLUMNS / 2.0) * MM_PER_PX
+    d_mm = (rows - ROWS / 2.0) * MM_PER_PX
+    r_ref = REFERENCE_DIAMETER_MM / 2.0
+
+    healthy = _chord_profile("ellipse", r_ref, r_ref, 0.0, 0.0, d_mm)   # (ROWS*n,)
+    lesion = _lesion_chord(kind, r_ref, param, d_mm)                    # (ROWS*n,)
+
+    # 病変の重み w(x): 中央 LESION_SHAPE_LENGTH_MM は 1、その外側 RAMP で余弦で 0 へ。
+    half = LESION_SHAPE_LENGTH_MM / 2.0
+    ax = np.abs(x_mm)
+    w = np.zeros_like(x_mm)
+    w[ax <= half] = 1.0
+    ramp = (ax > half) & (ax < half + LESION_SHAPE_RAMP_MM)
+    w[ramp] = 0.5 * (1.0 + np.cos(np.pi * (ax[ramp] - half) / LESION_SHAPE_RAMP_MM))
+
+    # 🔑 **経路長そのものを混ぜる**（形を混ぜるのではない）。中央では w=1 なので、
+    #    計測点での真値は病変断面の面積ちょうどになる。
+    path = healthy[:, None] * (1.0 - w[None, :]) + lesion[:, None] * w[None, :]
+    transmit = np.exp(-MU_CONTRAST * path)
+    transmit = transmit.reshape(ROWS, n, COLUMNS, n).mean(axis=(1, 3))
+    return _gaussian_blur(transmit, blur_px)
+
+
+def build_lesion_shapes(out_dir: str) -> dict:
+    rng = np.random.default_rng(20260818)
+    frames = np.zeros((len(LESION_SHAPE_FRAMES), ROWS, COLUMNS), dtype=np.uint16)
+    truth_frames = []
+    blur = DEFAULT_BLUR_PX
+    r_ref = REFERENCE_DIAMETER_MM / 2.0
+    d_fine = np.arange(-r_ref * 1.6, r_ref * 1.6, SHAPE_DZ_MM)
+    healthy_area = float(_chord_profile("ellipse", r_ref, r_ref, 0.0, 0.0, d_fine).sum() * SHAPE_DZ_MM)
+    target = healthy_area * LESION_AREA_RATIO
+
+    for i, (name, kind, note) in enumerate(LESION_SHAPE_FRAMES):
+        param = _solve_lesion_param(kind, r_ref, target)
+        frames[i] = _to_stored(_project_lesion_shape(kind, param, blur), None, rng)
+
+        path = _lesion_chord(kind, r_ref, param, d_fine)
+        area = float(path.sum() * SHAPE_DZ_MM)
+        lit = d_fine[path > 0]
+        silhouette = float(lit.max() - lit.min()) if lit.size else 0.0
+        equiv = 2.0 * math.sqrt(area / math.pi)
+        truth_frames.append(
+            {
+                "frame": i + 1,
+                "shape": name,
+                "note": note,
+                "solvedParam": param,
+                "lesionAreaMm2": area,
+                # 密度計測が返すべき MLD。
+                "equivalentDiameterMm": equiv,
+                # 半値法が返すべき MLD（＝投影の外形）。
+                "silhouetteWidthMm": silhouette,
+                "referenceDiameterMm": REFERENCE_DIAMETER_MM,
+                # 面積で見た狭窄率（真値）。
+                "percentAreaStenosis": (1.0 - area / healthy_area) * 100.0,
+                # 等価直径で見た狭窄率＝密度計測が返すべき %DS。
+                "percentDiameterStenosis": (1.0 - equiv / REFERENCE_DIAMETER_MM) * 100.0,
+                # シルエットで見た狭窄率＝半値法が返すはずの %DS（**別の量**）。
+                "percentDiameterStenosisBySilhouette": (1.0 - silhouette / REFERENCE_DIAMETER_MM) * 100.0,
+                "lesionLengthMm": LESION_SHAPE_LENGTH_MM,
+                "blurSigmaPx": blur,
+                "photonsPerPixel": None,
+            }
+        )
+
+    ds = _xa_dataset(
+        frames,
+        uid_key="XA-8",
+        study_key="XA-8",
+        series_description="GNBP-XA-8 non-circular lesion in a circular vessel",
+        series_number=8,
+        frame_time_ms=33.0,
+        patient_id="GNBP-XA-8",
+        patient_name="GNBPXA^LESIONSHAPE",
+        calibration=(MM_PER_PX, "GEOMETRY"),
+    )
+    os.makedirs(out_dir, exist_ok=True)
+    path_out = os.path.join(out_dir, "GNBP-XA-8.dcm")
+    _save(ds, path_out)
+    return {
+        "sopInstanceUid": ds.SOPInstanceUID,
+        "studyInstanceUid": ds.StudyInstanceUID,
+        "seriesInstanceUid": ds.SeriesInstanceUID,
+        "file": os.path.basename(path_out),
+        "md5": _file_md5(path_out),
+        "rows": ROWS,
+        "columns": COLUMNS,
+        "vesselAxisRow": ROWS / 2.0,
+        "mmPerPx": MM_PER_PX,
+        "muContrastPerMm": MU_CONTRAST,
+        "healthyAreaMm2": healthy_area,
+        "lesionAreaRatio": LESION_AREA_RATIO,
+        "note": (
+            "健常部は円柱・病変部だけ断面の形が違う。5 フレームとも病変の断面積は同じ"
+            "（健常部の 50%）で、シルエットの幅だけが違う。密度計測は 5 本とも同じ %DS を"
+            "返すはずで、半値法はシルエットを追う（ellipse-wide は狭窄を見落とす）。"
+        ),
+        "frames": truth_frames,
+    }
+
+
 BUILDERS = {
     "qca": build_qca,
     "dsa": build_dsa,
@@ -1178,6 +1369,7 @@ BUILDERS = {
     "calibration": build_calibration,
     "qva": build_qva,
     "shapes": build_shapes,
+    "lesionshapes": build_lesion_shapes,
 }
 
 #: 系列ごとの出力ファイル名の接頭辞。`--series X --force` で**その系列だけ**消すために要る。
@@ -1189,6 +1381,7 @@ SERIES_PREFIX = {
     "calibration": "GNBP-XA-4",
     "qva": "GNBP-XA-6",
     "shapes": "GNBP-XA-7",
+    "lesionshapes": "GNBP-XA-8",
 }
 
 
