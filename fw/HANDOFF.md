@@ -7,7 +7,7 @@
 
 ---
 
-## ▶ ここから再開（2026-08-18 時点のまとめ）
+## ▶ ここから再開（2026-08-18 その 2 時点のまとめ）
 
 > このブロックは**中断のたびに上書きする**。下の日付つきログは変更履歴なので消さない。
 
@@ -15,28 +15,31 @@
 
 | | |
 | :- | :- |
-| origin/main | **この引き継ぎコミット**。直前は `45aa19a`（`feat(bench): 非円形断面のファントム GNBP-XA-7 を追加し、A4c の着手条件を閉じる`）|
-| 未 push の作業 | **無い**。**open な PR も 0 件**。未マージのローカルブランチも**無い** |
-| ローカルブランチ | `main` と `feat/video-roi-frame-mode`（**マージ済みだがワークツリーが使用中**なので消していない）。他のマージ済みブランチは 2026-08-17 に削除した |
+| origin/main | **`c04a61b`**（`feat(angio): DSA の体動を真値で測れるようにし、見つかった 4 件を直す（A2・実機 17/0/0）`）。直前は `dd1735f`（GNBP-XA-8）|
+| 未 push の作業 | **無い**（作業ツリーは clean）。**open な PR も 0 件**。未マージのローカルブランチも**無い** |
+| ローカルブランチ | `main`（`gn-h5` がチェックアウト）と `feat/angio-a6b`（**`main` と同じコミット**。作業用に立てたまま）|
 | リモートブランチ | `origin/main` **のみ**。⚠️ 古い clone には remote-tracking ref が大量に残っていることがあるので `git fetch --prune` で消す |
 | 公開デモ | 夜間リセットで main の最新版になる。**アンギオ一式（QCA・QVA・3D QCA・分岐部・ランチャー）が載っている** |
 
-**この中断は Windows 機で行った。** その機の状態:
-
-- 検証データは**生成済み**（`bench/phantom/` に GNBP-XA〈XA-7 込み〉/ 1A / 2R / 4D・約 215MB）。
-  **GNBP-1B（性能系列・約 484MB）だけ無い**——性能の記録は Linux ベンチ機の値なので、
-  この機で測っても比較にならないと判断して作っていない。要るなら `make_phantom_b.py` 一発。
-- backend の jar は `45aa19a` の内容でビルド済み（`backend/target/graphy-next-backend.jar`）。
-- Python は Anaconda（3.11.7）。**Git Bash の `python` は WindowsApps のスタブなので使えない**
-  （`bench/README.md` の「Windows で生成する場合」）。
-
-⚠️ **別の PC（`gn-h5` / `gn-fixes` ワークツリーがある機）には別の事情がある。**
-**まず `git worktree list` で自分の環境を確認すること**。その機では:
+**この中断は Linux 機（`gn-h5` / `gn-fixes` ワークツリーがある機）で行った。** その機の事情:
 
 - **`main` は `gn-h5` がチェックアウトしている**ので `GRAPHY-Next` 直下で `main` に立てられない。
   main を進めるときは「作業ブランチでコミット → `gn-h5` で `git merge --ff-only` → push」。
-- **`gn-fixes` では別セッションの Vite dev server が動いている**（port 5176）。
-  **止めない・ワークツリーを外さない。**
+  **今回もその手順で push した。**
+- **他セッションの Vite dev server が動いている**（この repo の `frontend` で port 5174、
+  別プロジェクト `radreka` でも 1 本）。**止めない・ワークツリーを外さない。**
+  ⚠️ 自分で dev server を上げるなら**ポートが空いているか先に見る**（`.vite` の競合になる）。
+- 検証データは**生成済み**（`bench/phantom/GNBP-XA` に 18 ファイル＋`truth.json`）。
+  **GNBP-XA-2 は 2026-08-18 に作り直してある**（md5 `cd6026ca3332f6c8990b7551e4b9f2b9`）。
+- backend の jar は `c04a61b` の内容でビルド済み（`backend/target/graphy-next-backend.jar`）。
+
+> **Windows 機の事情**（2026-08-18 その 1 の中断時点。あちらで再開するなら）:
+> 検証データは生成済みだが **GNBP-XA-2 だけ古い**ので `python make_phantom_xa.py --series dsa --force`
+> で作り直すこと（これをしないと `xaDsaPhantomCheck` が真値と合わない）。
+> **GNBP-1B（性能系列・約 484MB）は無い**——性能の記録は Linux ベンチ機の値なので、
+> あの機で測っても比較にならないと判断して作っていない。要るなら `make_phantom_b.py` 一発。
+> Python は Anaconda（3.11.7）。**Git Bash の `python` は WindowsApps のスタブなので使えない**
+> （`bench/README.md` の「Windows で生成する場合」）。
 
 ### 2. このセッションで閉じたこと（2026-08-18）— **A4c を完了した**
 
