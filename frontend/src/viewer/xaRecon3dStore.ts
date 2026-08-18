@@ -29,6 +29,7 @@
 
 import { useSyncExternalStore } from "react";
 import { type XaViewGeometry } from "./xaGeometry";
+import { type QcaDiameterMethod } from "./qca";
 
 export interface XaQcaRun {
   /** imageId（どのフレームを解析したか）。**鍵ではない**——{@link runKey} を見ること。 */
@@ -60,6 +61,11 @@ export interface XaQcaRun {
   /** 径の対応する中心線インデックス。 */
   diameterPathIndices: number[];
   unit: "mm" | "px";
+  /**
+   * 径を何で測ったか（§16.5）。**3D 側も出自を失わない**ための項目。
+   * 半値法と密度計測では絶対値が 10% 以上違うので、合成した断面積の意味も変わる。
+   */
+  diameterMethod: QcaDiameterMethod;
   /** 手修正が入っているか（出自を 3D 側でも失わない）。 */
   edited: boolean;
   at: number;

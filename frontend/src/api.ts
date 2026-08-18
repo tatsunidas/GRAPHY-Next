@@ -289,6 +289,13 @@ export interface QcaSrRequest {
    * 手で直した値を自動値と同じ顔で保存しないための項目（`fw/angio-design.md` §8.6）。
    */
   manualCorrection?: string | null;
+  /**
+   * 径を何で測ったか（`"half-max"` / `"densitometric"`）。省略時は半値法として扱う。
+   * 🚨 **数値だけ残して測り方を落とさない**（`fw/angio-design.md` §16.5）。
+   * 半値法と密度計測では絶対値が 10% 以上違ううえ、密度計測のときは
+   * **画面の輪郭（半値法）と数値が別方式**になる。
+   */
+  diameterMethod?: string | null;
   mld: number;
   rvd: number;
   percentDiameterStenosis: number;

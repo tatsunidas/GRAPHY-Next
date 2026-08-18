@@ -16,6 +16,7 @@
  */
 
 import { type AnalysisResultRecord } from "./analysisResults";
+import { type QcaDiameterMethod } from "../viewer/qca";
 
 /** i18n の解決関数（`useI18n()` の `t`）。 */
 export type Translate = (key: string, params?: Record<string, string>) => string;
@@ -25,9 +26,19 @@ function common(t: Translate): string[] {
   return [t("report.analysis.caveat.researchOnly")];
 }
 
-/** 絶対値（径・面積・容積）を載せるときの系統誤差の注記。 */
-function absoluteDiameterCaveat(t: Translate): string {
-  return t("report.analysis.caveat.diameterBias");
+/**
+ * 絶対値（径・面積・容積）を載せるときの系統誤差の注記。
+ *
+ * <p>🚨 **測り方で文言が変わる**（§16.5）。半値法は円柱投影の帰結で過小に出るが、
+ * 密度計測は形を仮定しないので同じ注記は**嘘になる**。密度計測にはビール則という
+ * 別の前提があるので、そちらを言う。
+ * <p>⚠️ 呼び出し側が `diameterMethod` を渡さない（古い記録）ときは、**安全側**の
+ * 半値法の文言にする——「注記が消える」より「余分に付く」ほうが害が小さい。
+ */
+function absoluteDiameterCaveat(t: Translate, method?: QcaDiameterMethod | null): string {
+  return method === "densitometric"
+    ? t("report.analysis.caveat.densitometric")
+    : t("report.analysis.caveat.diameterBias");
 }
 
 export interface QcaRecordInput {
@@ -46,6 +57,8 @@ export interface QcaRecordInput {
   percentDiameterStenosis: number;
   percentAreaStenosis: number;
   lesionLength: number;
+  /** 径を何で測ったか（§16.5）。省略時は半値法として扱う。 */
+  diameterMethod?: QcaDiameterMethod | null;
 }
 
 export interface QvaRecordInput extends Omit<QcaRecordInput, "percentAreaStenosis"> {
@@ -76,7 +89,7 @@ export function qvaRecord(i: QvaRecordInput, t: Translate): AnalysisResultRecord
   const u = i.unit;
   const caveats = [...common(t)];
   if (u === "px") caveats.unshift(t("report.analysis.caveat.uncalibrated"));
-  else caveats.unshift(absoluteDiameterCaveat(t));
+  else caveats.unshift(absoluteDiameterCaveat(t, i.diameterMethod));
   // 🔴 投影 1 方向の限界。**瘤の最大径を載せる以上、避けて通れない**。
   if (i.dilation) caveats.push(t("report.analysis.caveat.projectionMax"));
   if (i.manualCorrection) caveats.push(t("report.analysis.caveat.manual"));
@@ -128,6 +141,12 @@ export function qvaRecord(i: QvaRecordInput, t: Translate): AnalysisResultRecord
         label: t("report.analysis.prov.manual"),
         value: i.manualCorrection ?? t("report.analysis.prov.automatic"),
       },
+      // 🚨 **どちらで測ったかを必ず出す**（§16.5）。輪郭は半値法・数値は密度計測という
+      //    ことがあるので、書かないと読む側が線と数値の食い違いを説明できない。
+      {
+        label: t("report.analysis.prov.diameterMethod"),
+        value: t(`report.analysis.prov.method.${i.diameterMethod ?? "half-max"}`),
+      },
     ],
     caveats,
     at: Date.now(),
@@ -139,7 +158,7 @@ export function qcaRecord(i: QcaRecordInput, t: Translate): AnalysisResultRecord
   const caveats = [...common(t)];
   // 🔴 px のときは「13% 過小」より先に「そもそも mm ではない」を言う。
   if (u === "px") caveats.unshift(t("report.analysis.caveat.uncalibrated"));
-  else caveats.unshift(absoluteDiameterCaveat(t));
+  else caveats.unshift(absoluteDiameterCaveat(t, i.diameterMethod));
   if (i.manualCorrection) caveats.push(t("report.analysis.caveat.manual"));
   return {
     id: `qca:${i.sopInstanceUid}:${i.frameIndex}`,
@@ -161,6 +180,12 @@ export function qcaRecord(i: QcaRecordInput, t: Translate): AnalysisResultRecord
       {
         label: t("report.analysis.prov.manual"),
         value: i.manualCorrection ?? t("report.analysis.prov.automatic"),
+      },
+      // 🚨 **どちらで測ったかを必ず出す**（§16.5）。輪郭は半値法・数値は密度計測という
+      //    ことがあるので、書かないと読む側が線と数値の食い違いを説明できない。
+      {
+        label: t("report.analysis.prov.diameterMethod"),
+        value: t(`report.analysis.prov.method.${i.diameterMethod ?? "half-max"}`),
       },
     ],
     caveats,

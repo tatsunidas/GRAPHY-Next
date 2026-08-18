@@ -40,6 +40,7 @@ function makeRun(store: Store, imageId: string, start: [number, number], end: [n
     diameters: [3, 3],
     diameterPathIndices: [0, 1],
     unit: "mm" as const,
+    diameterMethod: "densitometric" as const,
     edited: false,
     at,
   };

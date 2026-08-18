@@ -44,18 +44,22 @@ const TARGET_MLD_MM = 0.1;     // MLD 誤差 [mm]
 const TOL_CALIB_REL = 0.01;    // mm/px の相対誤差（P0〜P3）
 
 /**
- * 🚨 **既知の系統誤差**: 円柱投影に対して半値法は直径を約 13% 過小に測る。
+ * 🚨 **半値法の既知の系統誤差**: 円柱投影に対して直径を約 13% 過小に測る。
  *
  * <p>弱吸収近似では、内側と外側の中間値をよぎるのは d = (√3/2)·r ≈ 0.866·r であって
  * d = r ではない（`bench/make_phantom_xa.py` の冒頭に導出）。実測でも真値 3.000mm の
- * 直管が一貫して 2.609mm（係数 0.870）と出ている。
+ * 直管が一貫して 2.609mm（係数 0.870）と出ていた。
  *
- * <p>%DS は MLD/RVD の**比**なので大部分が打ち消され、残るのは「係数が半径に依存する」ぶん。
- * したがって %DS は目標に近く、MLD/RVD の**絶対値**は目標を満たさない。
- *
- * <p>退行検知はこの現状値を基準に行う。
+ * <p>⚠️ **この係数は円柱に固有**（GNBP-XA-7 では 0.745〜0.918 まで動く）。
+ * A4c（§16.5）以降、**報告する径は密度計測**になったので、この係数が期待値になるのは
+ * **ノイズで密度計測から退避したフレームだけ**。
  */
 const KNOWN_DIAMETER_FACTOR = 0.870;
+/**
+ * 密度計測（§16.5）の期待係数。**形を仮定しない**ので真値そのものが出るはず。
+ * 実測: 健常部 1.000 / 病変部（ノイズ無し）0.996〜1.004。
+ */
+const DENSITOMETRIC_FACTOR = 1.0;
 /**
  * 内腔がこの径を下回ると**ぼけが支配**し、係数 0.870 では説明できない（逆に過大に出る）。
  * 実測で切り分けた境界: 0.9mm（4px）はまだ係数どおり（0.767 ≒ 0.9×0.852）、
@@ -133,6 +137,10 @@ interface QcaState {
   lesionLength: number;
   /** 径プロファイルの雑音尺度 σ̂（病変長の当てはめが効く量。単位は径と同じ）。 */
   profileNoise: number;
+  /** 径を何で測ったか（§16.5）。期待値をこれで切り替える。 */
+  diameterMethod: "half-max" | "densitometric";
+  muPerMm: number | null;
+  densitometryFallback: string | null;
   points: number;
   unit: string;
 }
@@ -322,28 +330,46 @@ async function main(): Promise<void> {
         measured: Number(st.mld.toFixed(3)),
         error: Number(mldErr.toFixed(3)),
       });
-      // ── 退行検知（既知の系統誤差を織り込んだ現状値との比較）───────
-      // 参照径は「真値 × 0.870」に一致するはず。ここがずれたらエッジ検出か校正が壊れている。
-      const expectedRvd = t.referenceDiameterMm * KNOWN_DIAMETER_FACTOR;
+      // ── 退行検知 ──────────────────────────────────────────────
+      // 🔑 **期待値はアプリが「どちらで測った」と言っているかで切り替える**。
+      //    密度計測なら真値そのもの、ノイズで退避した半値法なら真値 × 0.870。
+      //    方式を見ずに 1 つの期待値で突き合わせると、退避が起きた瞬間に
+      //    嘘の失敗（または嘘の合格）になる。
+      const densito = st.diameterMethod === "densitometric";
+      check(
+        st.diameterMethod === "densitometric" || st.diameterMethod === "half-max",
+        `[XA-1] ${label} — 径をどちらで測ったかを申告している`,
+        { method: st.diameterMethod, mu: st.muPerMm, fallback: st.densitometryFallback },
+      );
+      const factor = densito ? DENSITOMETRIC_FACTOR : KNOWN_DIAMETER_FACTOR;
+      const expectedRvd = t.referenceDiameterMm * factor;
       check(
         Math.abs(st.rvd - expectedRvd) < REGRESSION_MLD_MM,
-        `[XA-1] ${label} — 参照径が既知の系統誤差どおり（真値 × ${KNOWN_DIAMETER_FACTOR}）`,
+        `[XA-1] ${label} — 参照径が測り方どおり（${densito ? "密度計測＝真値" : `半値法＝真値 × ${KNOWN_DIAMETER_FACTOR}`}）`,
         { expected: Number(expectedRvd.toFixed(3)), measured: Number(st.rvd.toFixed(3)) },
       );
       // 内腔がぼけの幅に近づくと、係数 0.870 では説明できなくなる（ぼけが支配して**過大**に出る）。
       // 実測: 真値 0.3mm（=1.3px）の 90% 狭窄で 0.408mm と、逆に 36% 過大。
       // 「細いほど過小になる」と思い込まないための境界なので、**上限としても**確かめる。
       if (!noisy && t.mldMm >= BLUR_LIMITED_MM) {
-        const expectedMld = t.mldMm * KNOWN_DIAMETER_FACTOR;
+        const expectedMld = t.mldMm * factor;
         check(
           Math.abs(st.mld - expectedMld) < REGRESSION_MLD_MM,
           `[XA-1] ${label} — MLD も同じ係数で説明できる`,
           { expected: Number(expectedMld.toFixed(3)), measured: Number(st.mld.toFixed(3)) },
         );
+      } else if (!noisy && densito) {
+        // ★ A4c の最大の利得。**ぼけ幅以下の内腔でも面積が残る**（畳み込みは積分を保存する）。
+        //   半値法はここで内腔を 36% 過大に測っていた（下の else 節）。
+        check(
+          Math.abs(st.mld - t.mldMm) < 0.1,
+          `[XA-1] ${label} — ★ぼけ幅以下の内腔でも密度計測なら真値どおり（半値法は 36% 過大だった）`,
+          { truth: t.mldMm, measured: Number(st.mld.toFixed(3)) },
+        );
       } else if (!noisy) {
         check(
           st.mld > t.mldMm,
-          `[XA-1] ${label} — ぼけ幅以下の内腔は**過大**に出る（過小と思い込まない）`,
+          `[XA-1] ${label} — ぼけ幅以下の内腔は半値法だと**過大**に出る（過小と思い込まない）`,
           { truth: t.mldMm, measured: Number(st.mld.toFixed(3)) },
         );
       }

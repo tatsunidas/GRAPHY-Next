@@ -30,6 +30,8 @@ import { TaskStepRail } from "./TaskStepRail";
 import { ENGINE_ID } from "./Viewer2D";
 import { readVoiWindow } from "./viewportRead";
 import { isXaCalibrated } from "./xaCalibration";
+import { needsLogTransform } from "./dsa";
+import { readXaDsaTags } from "./dsaLoader";
 import { publishAnalysisResult } from "../report/analysisResultStore";
 import { qcaRecord, qvaRecord } from "../report/xaAnalysisRecords";
 import { describeView, qcaRunKey, registerQcaRun, removeQcaRun } from "./xaRecon3dStore";
@@ -444,6 +446,8 @@ export function XaAnalysisDialog({
       vesselLabel: null,
       // 手で直した値を自動値と同じ顔で保存しない（§8.6）。
       manualCorrection: describeManual(result),
+      // 測り方も同じ理由で必ず残す（§16.5）。
+      diameterMethod: result.provenance.diameterMethod,
       mld: result.mld,
       rvd: result.rvd,
       percentDiameterStenosis: result.percentDiameterStenosis,
@@ -470,6 +474,15 @@ export function XaAnalysisDialog({
       mmPerPxCol: c?.mmPerPxCol ?? null,
       // DSA 後は血管が正の大きな値（明るい）、非サブトラクションは暗い。
       vesselIsDark: !isSubtracted,
+      // 🚨 密度計測（§16.5）は画素値の意味に依る。**`vesselIsDark` では決まらない**——
+      //    非サブトラクションでも装置が LOG で保存していれば、値は既に対数なので
+      //    もう一度対数を取ってはいけない。タグが無い XA を LOG とみなすのは
+      //    `dsa.ts` の `needsLogTransform` と同じ慣行（そこが正本）。
+      profileDomain: isSubtracted
+        ? "attenuation"
+        : needsLogTransform(readXaDsaTags(imageId)?.pixelIntensityRelationship ?? null)
+          ? "intensity"
+          : "logIntensity",
     });
     if (!r) {
       // 失敗したときに**古い結果が残らない**ようにする（前回値を見て「変わっていない」と
@@ -508,6 +521,9 @@ export function XaAnalysisDialog({
       percentAreaStenosis: r.percentAreaStenosis,
       lesionLength: r.lesionLength,
       profileNoise: r.profileNoise,
+      diameterMethod: r.provenance.diameterMethod,
+      muPerMm: r.provenance.muPerMm,
+      densitometryFallback: r.provenance.densitometryFallback,
       points: r.diameters.length,
       qva: dil
         ? {
@@ -543,6 +559,7 @@ export function XaAnalysisDialog({
             rvd: r.rvd,
             percentDiameterStenosis: r.percentDiameterStenosis,
             lesionLength: r.lesionLength,
+            diameterMethod: r.provenance.diameterMethod,
             dilation: dil,
           },
           t,
@@ -564,6 +581,7 @@ export function XaAnalysisDialog({
             percentDiameterStenosis: r.percentDiameterStenosis,
             percentAreaStenosis: r.percentAreaStenosis,
             lesionLength: r.lesionLength,
+            diameterMethod: r.provenance.diameterMethod,
           },
           t,
         ),
@@ -592,6 +610,7 @@ export function XaAnalysisDialog({
         diameters: r.diameters,
         diameterPathIndices: r.pathIndices,
         unit: r.unit,
+        diameterMethod: r.provenance.diameterMethod,
         edited: r.provenance.edited,
         at: Date.now(),
       });
@@ -1138,6 +1157,18 @@ function QcaReport({
           </tr>
         </tbody>
       </table>
+
+      {/*
+        🚨 **線と数値が別方式であることを黙って並べない**（§16.5 の 2）。
+        密度計測は径を返すが輪郭を返さないので、画面の輪郭は常に半値法のまま。
+        どちらで測ったかを出さないと、読む側は線と数値の食い違いを説明できない。
+      */}
+      <div style={hint} data-testid="xa-diameter-method" data-method={result.provenance.diameterMethod}>
+        {t(`xa.analysis.method.${result.provenance.diameterMethod}`)}
+        {result.provenance.densitometryFallback &&
+          result.provenance.densitometryFallback !== "disabled" &&
+          ` — ${t(`xa.analysis.densitometryFallback.${result.provenance.densitometryFallback}`)}`}
+      </div>
 
       {/* グラフ上での手修正（区間の切り詰め・健常部の指定）。 */}
       <div style={row}>

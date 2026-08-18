@@ -42,6 +42,8 @@ final class QcaSrWriter {
     private static final Code VESSEL = new Code("VESSEL", "99GRAPHYNEXT", null, "Vessel Segment");
     private static final Code METHOD = new Code("METHOD", "99GRAPHYNEXT", null, "Analysis Method");
     private static final Code MANUAL = new Code("MANUAL", "99GRAPHYNEXT", null, "Manual Correction");
+    private static final Code DIAMETER_METHOD =
+            new Code("DIAMMETHOD", "99GRAPHYNEXT", null, "Diameter Measurement Method");
     /** キー画像と同じ概念（report/SrCodes と揃える）。 */
     private static final Code OF_INTEREST = new Code("113000", "DCM", null, "Of Interest");
 
@@ -127,6 +129,14 @@ final class QcaSrWriter {
                 req.manualCorrection() != null && !req.manualCorrection().isBlank()
                         ? req.manualCorrection()
                         : "None (fully automatic)"));
+        // 🚨 **測り方を必ず残す**（設計 §16.5）。密度計測と半値法では径の絶対値が
+        //    10% 以上違ううえ、密度計測のときは**画面の輪郭（半値法）と数値が別方式**になる。
+        //    これを書かないと、あとから数値の食い違いを説明できない。
+        boolean densitometric = "densitometric".equalsIgnoreCase(req.diameterMethod());
+        items.add(text(DIAMETER_METHOD, densitometric
+                ? "Densitometric (attenuation integrated to a cross-sectional area; no shape assumed). "
+                        + "The drawn outline comes from the half-maximum method and is a different measurement."
+                : "Half-maximum (edge-based)."));
         // 面積狭窄率が円形断面の仮定であること・単一投影であることを SR 自体に残す。
         items.add(text(METHOD,
                 "GRAPHY-Next QCA (research use only). %Area assumes a circular cross-section; "

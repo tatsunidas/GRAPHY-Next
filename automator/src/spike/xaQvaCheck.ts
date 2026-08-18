@@ -33,12 +33,21 @@ const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "xa-qva");
 const HOST = "viewer2d-canvas-host";
 
 /**
- * 🚨 既知の系統誤差（§16.4）の**幅**。半値法は円柱の径を過小に測るが、
+ * 🚨 **半値法**の既知の系統誤差（§16.4）の**幅**。円柱の径を過小に測り、
  * **係数は径に依存する**（実測: 3mm で 0.870、6mm で 0.908）。
  * 「0.870 ちょうど」を期待すると太い血管で必ず落ちるので、**帯で見る**。
+ *
+ * <p>⚠️ A4c（§16.5）以降、**報告する径は密度計測**なのでこの帯が期待値になるのは
+ * ノイズで退避したときだけ。密度計測なら {@link DENSITO_FACTOR_MIN} の帯を使う。
  */
 const FACTOR_MIN = 0.85;
 const FACTOR_MAX = 0.93;
+/**
+ * **密度計測**の期待係数の帯。形を仮定しないので真値そのものが出る。
+ * 実測（GNBP-XA-6・アプリ通し）: 1.000〜1.003。
+ */
+const DENSITO_FACTOR_MIN = 0.97;
+const DENSITO_FACTOR_MAX = 1.03;
 /** 【目標】比の絶対誤差。判定（1.5 倍）が乗っている量なので、ここは厳しく見る。 */
 const TARGET_RATIO = 0.1;
 /** 【目標】瘤長の絶対誤差 [mm]。 */
@@ -72,6 +81,8 @@ interface QvaState {
   unit: string;
   mld: number;
   rvd: number;
+  /** 径を何で測ったか（§16.5）。期待値をこれで切り替える。 */
+  diameterMethod: "half-max" | "densitometric";
   qva: {
     maxDiameter: number;
     referenceAtMax: number;
@@ -242,10 +253,20 @@ async function main(): Promise<void> {
       });
       // ── 絶対径は既知の系統誤差どおり（＝ここがずれたらエッジ検出か校正が壊れている）──
       const factor = q.maxDiameter / t.maxDiameterMm;
+      // 🔑 **期待値はアプリの申告（diameterMethod）で切り替える。** 方式を見ずに 1 つの
+      //    帯で突き合わせると、退避が起きた瞬間に嘘の失敗（または嘘の合格）になる。
+      const densito = st.diameterMethod === "densitometric";
+      const lo = densito ? DENSITO_FACTOR_MIN : FACTOR_MIN;
+      const hi = densito ? DENSITO_FACTOR_MAX : FACTOR_MAX;
       check(
-        factor > FACTOR_MIN && factor < FACTOR_MAX,
-        `[XA-6] ${label} — 最大径が既知の系統誤差の帯に入る（真値 × ${FACTOR_MIN}〜${FACTOR_MAX}）`,
-        { factor: Number(factor.toFixed(3)), measured: Number(q.maxDiameter.toFixed(3)), truth: t.maxDiameterMm },
+        factor > lo && factor < hi,
+        `[XA-6] ${label} — 最大径が測り方どおりの帯に入る（${densito ? "密度計測＝真値" : "半値法"}・${lo}〜${hi}）`,
+        {
+          method: st.diameterMethod,
+          factor: Number(factor.toFixed(3)),
+          measured: Number(q.maxDiameter.toFixed(3)),
+          truth: t.maxDiameterMm,
+        },
       );
       check(
         q.aneurysmal === t.aneurysmal,
@@ -270,12 +291,16 @@ async function main(): Promise<void> {
           { saccular: t.saccular, eccentricity: Number(q.eccentricity.toFixed(3)) },
         );
       }
-      // ネックは参照径に戻っているはず（系統誤差ぶんだけ小さく出る）。
+      // ネックは参照径に戻っているはず。**測り方で期待値が変わる**（密度計測なら真値そのもの）。
+      const neckExpected = t.referenceDiameterMm * (densito ? 1.0 : 0.87);
       check(
-        Math.abs(q.proximalNeck - t.referenceDiameterMm * 0.87) < 0.3 &&
-          Math.abs(q.distalNeck - t.referenceDiameterMm * 0.87) < 0.3,
+        Math.abs(q.proximalNeck - neckExpected) < 0.3 && Math.abs(q.distalNeck - neckExpected) < 0.3,
         `[XA-6] ${label} — ネック径が参照径に戻っている`,
-        { prox: Number(q.proximalNeck.toFixed(3)), dist: Number(q.distalNeck.toFixed(3)) },
+        {
+          expected: Number(neckExpected.toFixed(3)),
+          prox: Number(q.proximalNeck.toFixed(3)),
+          dist: Number(q.distalNeck.toFixed(3)),
+        },
       );
 
       // 最初の瘤フレームだけ SR 保存まで通す（保存経路は 1 回確かめれば足りる）。
@@ -292,14 +317,19 @@ async function main(): Promise<void> {
       await viewer.getByTestId("xa-dialog-close").click();
       await viewer.waitForTimeout(400);
     }
-    // ★ 係数が径に依存することを**数値で残す**（比が完全には打ち消せない理由）。
+    // ★ A4c（§16.5）の効き目を数値で残す。
+    //    半値法では係数が**径に依存**していた（3.6mm 0.881 → 6mm 0.908）ため、
+    //    「太さの違う 2 点の比」である拡張比に +4〜6% が残っていた（§9.1.1 の 3）。
+    //    密度計測は形にも径にも依らないので、**その残りが消える**はず。
     const f3 = rows.find((r) => r.truthMaxMm === 3.6)?.factor as number | undefined;
     const f6 = rows.find((r) => r.truthMaxMm === 6)?.factor as number | undefined;
-    check(
-      f3 != null && f6 != null && f6 > f3,
-      "[XA-6] ★半値法の係数は径が太いほど 1 に近づく（比が数 % 残る理由）",
-      { at3_6mm: f3, at6mm: f6 },
-    );
+    if (f3 != null && f6 != null) {
+      check(
+        Math.abs(f6 - f3) < 0.02,
+        "[XA-6] ★密度計測なら係数が径に依らない（拡張比に系統誤差が残らない）",
+        { at3_6mm: f3, at6mm: f6, 半値法だったとき: "3.6mm 0.881 → 6mm 0.908" },
+      );
+    }
 
     await viewer.screenshot({ path: path.join(OUT_DIR, "1-qva.png") }).catch(() => {});
     fs.writeFileSync(path.join(OUT_DIR, "qva-accuracy.json"), JSON.stringify(rows, null, 2));

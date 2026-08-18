@@ -49,6 +49,10 @@ function analyze(pixels: Float32Array, width: number, height: number, cy: number
     vesselIsDark: true,
     profileRadiusPx: 30,
     edits: { reference: { kind: "ends" } },
+    // 🚨 ここのファントムは**箱型（スラブ）で透過画像ではない**ので、密度計測（§16.5）は
+    //    使えない（−ln に物理的な意味が無い）。`qca.test.ts` の `SLAB` と同じ理由。
+    //    密度計測の正しさはビール則で作った断面と bench の GNBP-XA-7 で測る。
+    densitometry: false,
   })!;
 }
 

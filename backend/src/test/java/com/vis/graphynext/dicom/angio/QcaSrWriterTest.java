@@ -37,8 +37,12 @@ class QcaSrWriterTest {
     }
 
     private static QcaSrRequest req(String unit, String manualCorrection) {
+        return req(unit, manualCorrection, null);
+    }
+
+    private static QcaSrRequest req(String unit, String manualCorrection, String diameterMethod) {
         return new QcaSrRequest("1.2.3", "1.2.3.9", "1.2.3.10", 12, unit,
-                "カテーテル 6Fr / 0.208 mm/px", "LAD proximal", manualCorrection,
+                "カテーテル 6Fr / 0.208 mm/px", "LAD proximal", manualCorrection, diameterMethod,
                 1.47, 3.00, 51.0, 76.0, 6.2);
     }
 
@@ -169,5 +173,21 @@ class QcaSrWriterTest {
         assertNotNull(r.dataset().getString(Tag.SOPInstanceUID));
         Sequence content = r.dataset().getSequence(Tag.ContentSequence);
         assertNotNull(content);
+    }
+
+    @Test
+    void 径の測り方を必ず残す() throws Exception {
+        // 🚨 半値法と密度計測では絶対値が 10% 以上違う。書かないと、あとから他社の
+        //    QCA と比べたときに差の原因が分からなくなる（設計 §16.5）。
+        Attributes halfMaxRun = measurementGroup(QcaSrWriter.build(template(), req("mm")).dataset());
+        String halfMax = findByCode(halfMaxRun, "DIAMMETHOD").getString(Tag.TextValue);
+        assertTrue(halfMax.contains("Half-maximum"), halfMax);
+
+        Attributes densRun = measurementGroup(
+                QcaSrWriter.build(template(), req("mm", null, "densitometric")).dataset());
+        String dens = findByCode(densRun, "DIAMMETHOD").getString(Tag.TextValue);
+        assertTrue(dens.contains("Densitometric"), dens);
+        // 輪郭が別方式であることまで書く（画面と数値の食い違いを説明できるように）。
+        assertTrue(dens.contains("half-maximum"), dens);
     }
 }

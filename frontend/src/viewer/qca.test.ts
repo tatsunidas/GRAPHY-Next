@@ -25,6 +25,21 @@ import {
 const BG = 200;
 const VESSEL = 60;
 
+/**
+ * 🚨 **このファイルのファントムでは密度計測（§16.5）を必ず切る。**
+ *
+ * <p>密度計測はビール則（`I = I₀·exp(−μ·L)`）を前提に **−ln I を積分して断面積**を出す。
+ * ここのファントムは**透過画像ではなく**、内外を線形に混ぜただけの箱型なので、
+ * −ln を取っても物理的な意味が無い（μ も定義できない）。切らずに回すと、
+ * 「箱型の幅」と「面積等価直径」という**別の量**を比べることになる。
+ *
+ * <p>これは §16.4 が名指しした罠そのもの——**ファントムが物理的に正しくないと、
+ * テストは「実装がファントムに合っていること」しか保証しない**。
+ * 密度計測の正しさは、ビール則で作った断面（下の「★密度計測」）と
+ * `bench/` の GNBP-XA-7 でだけ測る。
+ */
+const SLAB = { densitometry: false } as const;
+
 interface Phantom {
   pixels: Float32Array;
   width: number;
@@ -298,6 +313,7 @@ describe("★runQca — 真値既知ファントムでの精度", () => {
     const rPx = trueDiameterMm / 2 / mmPerPx; // 7.5px
     const p = makeVessel(120, 60, 30, () => rPx);
     const r = runQca({
+      ...SLAB,
       pixels: p.pixels,
       width: p.width,
       height: p.height,
@@ -335,6 +351,7 @@ describe("★runQca — 真値既知ファントムでの精度", () => {
       return refRpx - (refRpx - minRpx) * f;
     });
     const r = runQca({
+      ...SLAB,
       pixels: p.pixels,
       width: p.width,
       height: p.height,
@@ -365,6 +382,7 @@ describe("★runQca — 真値既知ファントムでの精度", () => {
       return d >= 15 ? refRpx : refRpx * (1 - 0.5 * 0.5 * (1 + Math.cos((Math.PI * d) / 15)));
     });
     const r = runQca({
+      ...SLAB,
       pixels: p.pixels,
       width: p.width,
       height: p.height,
@@ -380,6 +398,7 @@ describe("★runQca — 真値既知ファントムでの精度", () => {
   it("未校正なら px 単位で返す（mm を騙らない）", () => {
     const p = makeVessel(120, 60, 30, () => 7.5);
     const r = runQca({
+      ...SLAB,
       pixels: p.pixels,
       width: p.width,
       height: p.height,
@@ -396,7 +415,7 @@ describe("★runQca — 真値既知ファントムでの精度", () => {
   it("血管が無い（平坦な）画像では null", () => {
     const flat = new Float32Array(60 * 40).fill(100);
     expect(
-      runQca({ pixels: flat, width: 60, height: 40, start: [5, 20], end: [54, 20] }),
+      runQca({ ...SLAB, pixels: flat, width: 60, height: 40, start: [5, 20], end: [54, 20] }),
     ).toBeNull();
   });
 });
@@ -495,6 +514,7 @@ describe("★手修正 — 自動が外れる状況を作って真値に戻す",
   const decoyInput = (edits?: QcaManualEdits) => {
     const p = decoyPhantom();
     return runQca({
+      ...SLAB,
       pixels: p.pixels,
       width: p.width,
       height: p.height,
@@ -560,6 +580,7 @@ describe("★手修正 — エッジ", () => {
   function cleanRun(edits?: QcaManualEdits) {
     const p = makeVessel(120, 60, 30, () => 7.5);
     return runQca({
+      ...SLAB,
       pixels: p.pixels,
       width: p.width,
       height: p.height,
@@ -617,6 +638,7 @@ describe("★手修正 — エッジ", () => {
     // これが効いていないと「手で直したはずの点が違う場所に効く」という気づけない壊れ方をする。
     const p = makeVessel(120, 60, 30, () => 7.5);
     const auto = runQca({
+      ...SLAB,
       pixels: p.pixels,
       width: p.width,
       height: p.height,
@@ -631,6 +653,7 @@ describe("★手修正 — エッジ", () => {
     };
     // 中間点を足す＝中心線が変わる。
     const moved = runQca({
+      ...SLAB,
       pixels: p.pixels,
       width: p.width,
       height: p.height,
@@ -673,6 +696,7 @@ describe("★手修正 — 区間の切り詰めと参照径", () => {
   function run(edits?: QcaManualEdits) {
     const p = steppedPhantom();
     return runQca({
+      ...SLAB,
       pixels: p.pixels,
       width: p.width,
       height: p.height,
@@ -782,3 +806,225 @@ describe("★手修正 — 区間の切り詰めと参照径", () => {
     expect(run({ reference: { kind: "auto" } }).provenance.edited).toBe(false);
   });
 });
+
+/* ── ★密度計測（A4c・§16.5）──────────────────────────────────────────
+ *
+ * 🚨 上のファントムは箱型なのでここでは使えない（`SLAB` のコメント）。
+ * ここだけは**ビール則で作った透過画像**を使う——`I = I₀·exp(−μ·L(d))`。
+ * L(d) は視線が内腔を横切る長さで、断面の形から決まる。
+ *
+ * 🔑 検査の要は「**断面積を一定に保ったまま、シルエットだけを 4 倍動かす**」こと。
+ * 面積が同じなら密度計測は同じ径を返し、半値法はシルエットに追随して**大きく振れる**はず。
+ * これが GNBP-XA-7 で見つかった性質そのもので、箱型では原理的に作れない。
+ */
+
+const MU = 0.05;
+const I0 = 1000;
+
+/** 断面（軸からの距離 d における弦の長さ）。 */
+type Chord = (d: number) => number;
+
+const circleChord = (r: number): Chord => (d) => 2 * Math.sqrt(Math.max(0, r * r - d * d));
+/** 半軸 a（画面内＝シルエット方向）・b（視線方向）の楕円。面積 = πab。 */
+const ellipseChord = (a: number, b: number): Chord => (d) =>
+  Math.abs(d) >= a ? 0 : 2 * b * Math.sqrt(Math.max(0, 1 - (d / a) ** 2));
+
+/**
+ * 水平に走る血管の**透過画像**。区間 [x1,x2) だけ断面を差し替える。
+ * `domain="attenuation"` なら DSA の出力（＝すでに減弱）を模す。
+ */
+function makeBeerLambert(opts: {
+  width: number;
+  height: number;
+  cy: number;
+  healthy: Chord;
+  middle?: { from: number; to: number; chord: Chord };
+  domain?: "intensity" | "attenuation";
+  blurSigma?: number;
+  noiseSigma?: number;
+}): Phantom {
+  const { width, height, cy, healthy, middle, domain = "intensity", blurSigma = 0.6 } = opts;
+  const raw = new Float32Array(width * height);
+  // 🔑 画素は**面積平均**で作る（点サンプルにしない）。実際の検出器は画素の中で積分するし、
+  //    点サンプルだと指数関数の凸性のぶんだけ減弱が系統的にずれる（実測で径が 4% ずれた）。
+  //    `bench/make_phantom_xa.py` も同じ理由で超サンプリングしている。
+  const SUB = 8;
+  for (let x = 0; x < width; x++) {
+    const chord = middle && x >= middle.from && x < middle.to ? middle.chord : healthy;
+    for (let y = 0; y < height; y++) {
+      let acc = 0;
+      for (let s = 0; s < SUB; s++) {
+        const d = y - cy + (s + 0.5) / SUB - 0.5;
+        const a = MU * chord(d);
+        acc += domain === "intensity" ? I0 * Math.exp(-a) : a;
+      }
+      raw[y * width + x] = acc / SUB;
+    }
+  }
+  // 🔑 ぼけは**強度に**掛かる（減弱に掛けるのは別物）。列方向だけで足りる。
+  const pixels = new Float32Array(width * height);
+  const r = Math.max(1, Math.ceil(3 * blurSigma));
+  const k: number[] = [];
+  let ksum = 0;
+  for (let i = -r; i <= r; i++) {
+    const w = blurSigma > 0 ? Math.exp(-0.5 * (i / blurSigma) ** 2) : i === 0 ? 1 : 0;
+    k.push(w);
+    ksum += w;
+  }
+  for (let x = 0; x < width; x++) {
+    for (let y = 0; y < height; y++) {
+      let acc = 0;
+      for (let i = -r; i <= r; i++) {
+        const yy = Math.min(height - 1, Math.max(0, y + i));
+        acc += raw[yy * width + x] * k[i + r];
+      }
+      pixels[y * width + x] = acc / ksum;
+    }
+  }
+  if (opts.noiseSigma) {
+    // 決定的な擬似乱数（テストを揺らさない）。
+    let seed = 12345;
+    const rnd = () => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    };
+    for (let i = 0; i < pixels.length; i++) {
+      const u = Math.max(1e-9, rnd());
+      const g = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rnd());
+      pixels[i] += g * opts.noiseSigma;
+    }
+  }
+  return { pixels, width, height };
+}
+
+describe("★密度計測 — 断面の形に依らず面積を測る（§16.5）", () => {
+  const W = 200;
+  const H = 60;
+  const CY = 30;
+  const R = 5; // 健常部は半径 5（＝直径 10・面積 78.54）
+
+  /** 中央だけ断面を差し替えた血管を解析する。 */
+  const analyze = (middleChord: Chord | null, over?: Partial<Parameters<typeof runQca>[0]>) => {
+    const ph = makeBeerLambert({
+      width: W,
+      height: H,
+      cy: CY,
+      healthy: circleChord(R),
+      middle: middleChord ? { from: 80, to: 120, chord: middleChord } : undefined,
+      ...(over?.profileDomain === "attenuation" ? { domain: "attenuation" as const } : {}),
+      ...(over && "noiseSigma" in over ? {} : {}),
+    });
+    return runQca({
+      pixels: ph.pixels,
+      width: W,
+      height: H,
+      start: [10, CY],
+      end: [W - 11, CY],
+      mmPerPxRow: 1,
+      mmPerPxCol: 1,
+      ...over,
+    })!;
+  };
+
+  it("健常部（円）の径を真値どおりに返す", () => {
+    const r = analyze(null);
+    expect(r.provenance.diameterMethod).toBe("densitometric");
+    expect(r.provenance.muPerMm).toBeGreaterThan(0);
+    // 面積等価直径 = 2R = 10
+    expect(Math.abs(median(r.diameters) - 2 * R)).toBeLessThan(0.3);
+  });
+
+  it("★断面積が同じならシルエットが 2 倍でも同じ径を返す（半値法は追随して外す）", () => {
+    // 半軸 a=10（シルエット 20px）・b=2.5 → 面積 π·10·2.5 = 78.54 ＝ 健常部と同じ
+    const mid = ellipseChord(10, 2.5);
+    const dens = analyze(mid);
+    const half = analyze(mid, { densitometry: false });
+    const at = (r: typeof dens) => r.diameters[Math.round(r.diameters.length / 2)];
+    // 密度計測は面積等価直径（＝10）を返す
+    expect(Math.abs(at(dens) - 2 * R)).toBeLessThan(0.8);
+    // 半値法はシルエット（20px の 0.87 倍前後）を返す＝真の面積の 1.7 倍以上に見える
+    expect(at(half)).toBeGreaterThan(15);
+  });
+
+  it("★断面積が同じならシルエットが半分でも同じ径を返す（半値法は狭窄に見せる）", () => {
+    // 半軸 a=2.5（シルエット 5px）・b=10 → 面積は同じ 78.54
+    const mid = ellipseChord(2.5, 10);
+    const dens = analyze(mid);
+    const half = analyze(mid, { densitometry: false });
+    const at = (r: typeof dens) => r.diameters[Math.round(r.diameters.length / 2)];
+    expect(Math.abs(at(dens) - 2 * R)).toBeLessThan(0.8);
+    expect(at(half)).toBeLessThan(6);
+    // 🔴 半値法だと「50% 以上の狭窄」に見えるが、断面積は一定＝狭窄していない。
+    expect(half.percentDiameterStenosis).toBeGreaterThan(40);
+    expect(dens.percentDiameterStenosis).toBeLessThan(15);
+  });
+
+  it("★本当に細い内腔は密度計測でも細いと出る（形の違いと狭窄を取り違えない）", () => {
+    // 半径 2（面積 12.57 ＝ 健常の 16%）。%AS ≒ 84%、%DS ≒ 60%。
+    const r = analyze(circleChord(2));
+    expect(r.percentDiameterStenosis).toBeGreaterThan(50);
+    expect(r.percentDiameterStenosis).toBeLessThan(70);
+  });
+
+  it("🚨 DSA（すでに減弱）で二重に対数を取らない", () => {
+    const ph = makeBeerLambert({
+      width: W, height: H, cy: CY, healthy: circleChord(R), domain: "attenuation",
+    });
+    const r = runQca({
+      pixels: ph.pixels, width: W, height: H, start: [10, CY], end: [W - 11, CY],
+      mmPerPxRow: 1, mmPerPxCol: 1,
+      // DSA 後は血管が明るい。ドメインは既定でも attenuation になる。
+      vesselIsDark: false,
+    })!;
+    expect(r.provenance.diameterMethod).toBe("densitometric");
+    expect(Math.abs(median(r.diameters) - 2 * R)).toBeLessThan(0.5);
+  });
+
+  it("🚨 ノイズが大きいと半値法へ落として、落ちたことを出自に残す", () => {
+    const ph = makeBeerLambert({
+      width: W, height: H, cy: CY, healthy: circleChord(R), noiseSigma: 90,
+    });
+    const r = runQca({
+      pixels: ph.pixels, width: W, height: H, start: [10, CY], end: [W - 11, CY],
+      mmPerPxRow: 1, mmPerPxCol: 1,
+    })!;
+    expect(r.provenance.diameterMethod).toBe("half-max");
+    expect(r.provenance.densitometryFallback).toBe("noisy");
+    expect(r.provenance.muPerMm).toBeNull();
+    expect(r.warnings).toContain("densitometryFallback:noisy");
+  });
+
+  it("🔴 健常部が円形でないと形の独立性は失われる（μ を自分自身から取るため）", () => {
+    // 🚨 **「形を仮定しない」は病変部についてだけ**。基準の μ は健常部に円柱を当てはめて
+    //    得るので、**血管全体が非円形**だとその仮定が全体に及ぶ。
+    //    実測（GNBP-XA-7 のプロファイルで確認）: μ を円形から取れば比 0.997〜1.001、
+    //    自分自身（楕円・三日月・D 型）から取ると 1.410 / 0.712 / 0.694 / 1.171 まで外れる。
+    //    UI とレポートの注意書きはこの線引きで書いてある。ここを緩めないこと。
+    const ph = makeBeerLambert({
+      width: W, height: H, cy: CY,
+      // 区間の全体が「横に広い楕円」＝健常部も円形でない
+      healthy: ellipseChord(10, 2.5),
+    });
+    const r = runQca({
+      pixels: ph.pixels, width: W, height: H, start: [10, CY], end: [W - 11, CY],
+      mmPerPxRow: 1, mmPerPxCol: 1,
+    })!;
+    expect(r.provenance.diameterMethod).toBe("densitometric");
+    // 面積等価直径は 10 だが、μ が楕円から出るので大きく外れる（＝この仮定の証拠）。
+    expect(Math.abs(median(r.diameters) - 2 * R)).toBeGreaterThan(1.5);
+  });
+
+  it("densitometry:false なら常に半値法（出自にも残る）", () => {
+    const r = analyze(null, { densitometry: false });
+    expect(r.provenance.diameterMethod).toBe("half-max");
+    expect(r.provenance.densitometryFallback).toBe("disabled");
+    // 🚨 明示的に切った場合は警告にしない（利用者が選んだのだから異常ではない）。
+    expect(r.warnings.some((w) => w.startsWith("densitometryFallback"))).toBe(false);
+  });
+});
+
+/** テスト内で使う中央値。 */
+function median(v: readonly number[]): number {
+  const s = [...v].sort((a, b) => a - b);
+  return s.length % 2 ? s[s.length >> 1] : (s[(s.length >> 1) - 1] + s[s.length >> 1]) / 2;
+}

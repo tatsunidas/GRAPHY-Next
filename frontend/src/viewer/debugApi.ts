@@ -276,6 +276,16 @@ export interface QcaDebugSnapshot {
   lesionLength: number;
   /** 径プロファイルの雑音尺度 σ̂（病変長の信用度の目安）。 */
   profileNoise: number;
+  /**
+   * 径を何で測ったか（§16.5）。**検証側はこれを見て期待値を切り替える**——
+   * 半値法と密度計測では真値との係数が違うので、方式を見ずに 1 つの期待値で
+   * 突き合わせると、退避が起きた瞬間に嘘の失敗（または嘘の合格）になる。
+   */
+  diameterMethod: "half-max" | "densitometric";
+  /** 密度計測に使った μ（半値法なら null）。 */
+  muPerMm: number | null;
+  /** 密度計測を使わなかった理由（使ったなら null）。 */
+  densitometryFallback: string | null;
   /** 拡張（瘤）の計測（QVA のときだけ。§9.1 / A5a）。 */
   qva: {
     maxDiameter: number;
@@ -391,6 +401,12 @@ export interface Xa3dDebugSnapshot {
     minEquivalentDiameterMm: number | null;
     medianMeasurementAngleDeg: number | null;
   } | null;
+  /**
+   * 合成した 2 方向の径が**何で測られたか**（§16.5）。半値法と密度計測では
+   * 絶対値が 10% 以上違うので、断面積の期待値もこれで切り替える。
+   * 2 方向で違っていたら `"mixed"`（そのまま数値を信じてはいけない状態）。
+   */
+  diameterMethod: "half-max" | "densitometric" | "mixed" | null;
   /** 3D の狭窄率。断面が出せなければ null。 */
   stenosis: {
     percentDiameterStenosis: number;

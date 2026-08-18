@@ -244,6 +244,14 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
       anglesA: runA ? { primary: runA.geometry.primaryAngleDeg, secondary: runA.geometry.secondaryAngleDeg } : null,
       anglesB: runB ? { primary: runB.geometry.primaryAngleDeg, secondary: runB.geometry.secondaryAngleDeg } : null,
       separationDeg,
+      // 🚨 2 方向の測り方が違うまま合成したら、その事実を出す（"mixed"）。
+      //    片方が半値法・片方が密度計測だと、断面積は**どちらの意味でもない**。
+      diameterMethod:
+        runA && runB
+          ? runA.diameterMethod === runB.diameterMethod
+            ? runA.diameterMethod
+            : "mixed"
+          : (runA ?? runB)?.diameterMethod ?? null,
       pointsA: runA?.centerline.length ?? 0,
       pointsB: runB?.centerline.length ?? 0,
       anchorCount: anchorList.length,

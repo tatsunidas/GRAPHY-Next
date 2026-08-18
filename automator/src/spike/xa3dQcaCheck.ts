@@ -41,10 +41,15 @@ const TARGET_ANCHOR_REPROJ_PX = 2.0;
 /** 抽出された 2D 中心線が真値からどれだけ離れてよいか [px]。 */
 const TOL_CENTERLINE_PX = 3.0;
 /**
- * 🚨 **既知の系統誤差**: 半値法を円柱投影に当てると直径は約 13% 過小に出る（§16.4）。
- * 断面積はその 2 乗で効く。**目標未達を「合格」に書き換えないための基準値**でもある。
+ * 🚨 **半値法**の既知の系統誤差: 円柱投影に当てると直径は約 13% 過小に出る（§16.4）。
+ * 断面積はその 2 乗で効く。
+ *
+ * <p>⚠️ A4c（§16.5）以降、報告する径は**密度計測**なのでこの係数が期待値になるのは
+ * ノイズで退避したときだけ。実測（アプリ通し）では密度計測で 2.964 / 真値 2.864。
  */
 const KNOWN_DIAMETER_FACTOR = 0.870;
+/** 密度計測の期待係数。形を仮定しないので真値そのもの（実測 1.035）。 */
+const DENSITOMETRIC_FACTOR = 1.0;
 
 /**
  * 解析する区間（主枝の真値点列のインデックス）。
@@ -126,6 +131,7 @@ interface Xa3dState {
     visibleFractionA: number | null;
     visibleFractionB: number | null;
   } | null;
+  diameterMethod: "half-max" | "densitometric" | "mixed" | null;
   section: {
     unavailable: string | null;
     minAreaMm2: number | null;
@@ -552,11 +558,19 @@ async function analyseSegment(
       const truthMinDiameterMm = seg.hasLesion
         ? (3.5 - 1.5 * tLesion) * (1 - truth.lesion.percentDiameterStenosis / 100)
         : 3.5 - 1.5 * tDistal;
-      const expectedMm = truthMinDiameterMm * KNOWN_DIAMETER_FACTOR;
+      // 🔑 期待値は**アプリの申告**（2 方向の測り方）で切り替える。
+      //    "mixed"（2 方向で方式が違う）なら、そもそも断面積がどちらの意味でもないので落とす。
+      check(
+        st.diameterMethod === "half-max" || st.diameterMethod === "densitometric",
+        `[断面/${tag}] 2 方向が同じ測り方で合成されている`,
+        { method: st.diameterMethod },
+      );
+      const densito = st.diameterMethod === "densitometric";
+      const expectedMm = truthMinDiameterMm * (densito ? DENSITOMETRIC_FACTOR : KNOWN_DIAMETER_FACTOR);
       const eq = st.section.minEquivalentDiameterMm;
       check(
         eq != null && Math.abs(eq - expectedMm) < 0.35,
-        `[断面/${tag}] 最小等価直径が既知の系統誤差どおり（真値 × ${KNOWN_DIAMETER_FACTOR}）`,
+        `[断面/${tag}] 最小等価直径が測り方どおり（${densito ? "密度計測＝真値" : `半値法＝真値 × ${KNOWN_DIAMETER_FACTOR}`}）`,
         {
           truthMm: Number(truthMinDiameterMm.toFixed(3)),
           expectedMm: Number(expectedMm.toFixed(3)),

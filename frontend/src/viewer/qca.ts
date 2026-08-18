@@ -90,6 +90,15 @@ export interface QcaProvenance {
   trimmed: boolean;
   /** 参照径の決め方。 */
   reference: QcaReferenceMode["kind"];
+  /**
+   * **報告した径を何で測ったか**（§16.5）。⚠️ 画面に描く輪郭は常に半値法なので、
+   * これが `densitometric` のときは**線と数値が別方式**。UI と SR に必ず出すこと。
+   */
+  diameterMethod: QcaDiameterMethod;
+  /** 密度計測に使った μ [1/mm]（半値法なら null）。健常部の当てはめから得た値。 */
+  muPerMm: number | null;
+  /** 密度計測を使わなかった理由（使ったなら null）。**黙って落ちない**ための記録。 */
+  densitometryFallback: string | null;
   /** どれか 1 つでも手が入っているか。 */
   edited: boolean;
 }
@@ -113,6 +122,17 @@ export interface QcaInput {
    * DSA 後の差分画像は血管が正の大きな値になるので false。
    */
   vesselIsDark?: boolean;
+  /**
+   * プロファイルの値が何を表しているか。
+   *
+   * <p>🚨 **呼び出し側が `PixelIntensityRelationship (0028,1040)` から決めて渡すこと。**
+   * 省略時は `vesselIsDark` から `intensity` / `attenuation` を選ぶが、これは
+   * **LIN の装置でしか正しくない**。タグが無い XA を LOG とみなすのがこのアプリの慣行
+   * （`dsa.ts` の `needsLogTransform`）なので、そちらでは `logIntensity` を渡す。
+   */
+  profileDomain?: QcaProfileDomain;
+  /** 密度計測（§16.5）を使うか。既定 true。false なら常に半値法で報告する。 */
+  densitometry?: boolean;
   /** 法線方向にプロファイルを取る半径 [px]（既定 20）。想定血管径の 3 倍程度。 */
   profileRadiusPx?: number;
   /** 中心線探索の探索範囲マージン [px]（既定 40）。始終点の外接矩形をこれだけ広げる。 */
@@ -157,7 +177,13 @@ export interface QcaResult {
   rvd: number;
   /** 直径狭窄率 [%]。 */
   percentDiameterStenosis: number;
-  /** 面積狭窄率 [%]（**円形断面の仮定**）。 */
+  /**
+   * 面積狭窄率 [%]。
+   *
+   * <p>⚠️ 意味が**測り方で変わる**（§16.5）。半値法のときは `1 − (d_mld/d_rvd)²` ＝
+   * **円形断面の仮定**。密度計測のときは径が既に面積等価直径なので、この式は
+   * **面積の比そのもの**になり、断面の形の仮定は要らない（病変部について）。
+   */
   percentAreaStenosis: number;
   /** 病変長（参照径を下回る連続区間）。 */
   lesionLength: number;
@@ -502,6 +528,241 @@ export function findEdgesInProfile(
   return { left, right };
 }
 
+/* ── 密度計測（A4c・§16.5）─────────────────────────────────────────── */
+
+/**
+ * プロファイルの値が何を表しているか。**密度計測はここを取り違えると黙って壊れる。**
+ *
+ * <p>`intensity` … 透過強度に比例（`PixelIntensityRelationship = LIN`・非サブトラクション）。
+ * 減弱は **−ln(I/I_bg)**。
+ * <p>`logIntensity` … **強度の対数**に比例（`= LOG`、および**タグが無い XA**——
+ * `needsLogTransform()` の慣行）。血管は暗いが、**もう一度対数を取ってはいけない**。
+ * 減弱は `I_bg − I` に比例する。
+ * <p>`attenuation` … **すでに減弱**（DSA の出力 `log(mask) − log(live)`。§6）。血管が明るい。
+ *
+ * <h3>🔑 比例定数は気にしなくてよい</h3>
+ * `logIntensity` / `attenuation` では減弱の比例定数（画素値の単位）が未知だが、
+ * 面積は `Σa·間隔 / μ` で **a と μ に同じ定数が掛かる**ので約分される。
+ * ⚠️ その代わり、この 2 つでは {@link QcaProvenance.muPerMm} は
+ * **物理的な線減弱係数ではなく「画素値単位 / mm」**になる。数値をそのまま比較しない。
+ */
+export type QcaProfileDomain = "intensity" | "logIntensity" | "attenuation";
+
+/** 径を何で測ったか。**数値と輪郭が別方式なので、必ず結果に持ち回る**（§16.5 の 2・3）。 */
+export type QcaDiameterMethod = "half-max" | "densitometric";
+
+/** 対数のゼロ除け（`dsa.ts` の `LOG_EPS` と同じ考え方）。 */
+const LOG_EPS = 1e-6;
+
+/**
+ * 密度計測を諦めて半値法へ落とす雑音のしきい値（σ̂ ÷ 参照径）。
+ *
+ * <h3>🔑 この数字はファントムの実測から決めた（当てずっぽうではない）</h3>
+ * GNBP-XA-1 の 11 フレームで、雑音を変えながら「病変の径の誤差」を両方式で測った:
+ *
+ * | 条件 | σ̂/RVD | 密度計測の誤差 | 半値法の誤差 |
+ * | :- | -: | -: | -: |
+ * | ノイズ無し | 0.000 | ≤ 3% | 13〜16%（90% 狭窄では **+79%**）|
+ * | I0=20000 | 0.010 | 3.4% | 20% |
+ * | I0=4000 | 0.018 | 10.8% | 19% |
+ * | I0=800 | 0.041 | **31.9%** | 15% |
+ *
+ * **逆転するのは I0=800 と I0=4000 の間**なので、その間に置く。
+ * ⚠️ 1 つのファントムで決めた値なので、**実データで測り直す余地がある**。
+ */
+const DENSITOMETRY_NOISE_LIMIT = 0.03;
+
+/** μ の当てはめに使う健常部の点数（中央値を採るので奇数個あれば足りる）。 */
+const MU_FIT_SAMPLES = 5;
+
+/**
+ * プロファイルを**背景を引いた減弱**に直す。
+ *
+ * <p>背景は**両端の中央値**で取る（片端だけだと、隣の血管や骨が乗った側に引きずられる）。
+ * 対数を取ってから引く＝ `−ln(T/T_bg)` であって、`−ln(T) − T_bg` ではない。
+ */
+export function attenuationProfile(
+  profile: readonly number[],
+  domain: QcaProfileDomain,
+): number[] {
+  const n = profile.length;
+  const a = new Array<number>(n);
+  for (let i = 0; i < n; i++) {
+    const v = profile[i];
+    // logIntensity は「暗いほど減弱が大きい」ので符号を反転する。反転を忘れると
+    // 減弱がすべて負になり、正の部分だけを積分する式が **0 を返す**（径が出ない）。
+    a[i] = domain === "intensity" ? -Math.log(Math.max(v, LOG_EPS)) : domain === "logIntensity" ? -v : v;
+  }
+  const m = Math.max(3, Math.round(n * 0.05));
+  const ends: number[] = [];
+  for (let k = 0; k < m; k++) {
+    ends.push(a[k], a[n - 1 - k]);
+  }
+  const bg = median(ends);
+  for (let i = 0; i < n; i++) a[i] -= bg;
+  return a;
+}
+
+/**
+ * 密度計測の断面積 [mm²]（**断面の形を仮定しない**。§16.5 の M3）。
+ *
+ * <h3>なぜ形に依らないのか</h3>
+ * ビール則より `−ln(I/I₀) = μ·L(d)`（L は視線が内腔を横切る長さ）。これを d について
+ * 積分すると `∫L(d)dd = A`（断面積そのもの）になる。**円だと仮定していない**のが
+ * 半値法・円柱当てはめとの決定的な違いで、実測でも楕円・三日月・D 型に対して
+ * **0.4% 以内**で面積等価直径を返した（GNBP-XA-7・§16.5）。
+ *
+ * <h3>🔑 ぼけに厳密に強い</h3>
+ * 畳み込みは**積分を保存する**ので、ぼけは −ln T を横へ広げても**総量を変えない**。
+ * だから内腔がぼけ幅以下になっても面積の推定は生き残る（90% 狭窄で誤差 +3%。
+ * 半値法は +79%）。エッジを探す方式は、エッジ自体が消える領域で原理的に負ける。
+ *
+ * <p>⚠️ **弱点はノイズ**。積分は窓全体の雑音を拾い、−ln は暗い画素の雑音を増幅する。
+ * だから σ̂ が大きいときは半値法へ落とす（{@link runQca} の `densitometryFallback`）。
+ * <p>⚠️ **重なった構造にも弱い**。隣の血管や骨の減弱まで積分するので、分岐部のように
+ * 血管が投影で重なる場面では半値法より悪くなりうる（§21.4.3）。
+ *
+ * @param spacingMm プロファイルの**サンプル間隔** [mm]
+ */
+export function densitometricArea(
+  attenuation: readonly number[],
+  spacingMm: number,
+  muPerMm: number,
+): number | null {
+  if (!(muPerMm > 0) || !(spacingMm > 0)) return null;
+  let sum = 0;
+  for (const v of attenuation) if (v > 0) sum += v;
+  const area = (sum * spacingMm) / muPerMm;
+  return area > 0 ? area : null;
+}
+
+/** 面積等価直径 [mm]。 */
+export function densitometricDiameter(
+  attenuation: readonly number[],
+  spacingMm: number,
+  muPerMm: number,
+): number | null {
+  const area = densitometricArea(attenuation, spacingMm, muPerMm);
+  return area == null ? null : 2 * Math.sqrt(area / Math.PI);
+}
+
+/** ガウス核（`bench/experiment_qca_edge.py` と同じ約束: 端は値の複製で埋める）。 */
+function blur1d(v: readonly number[], sigmaSamples: number): number[] {
+  if (!(sigmaSamples > 0.01)) return [...v];
+  const r = Math.max(1, Math.ceil(4 * sigmaSamples));
+  const k = new Array<number>(2 * r + 1);
+  let ksum = 0;
+  for (let i = -r; i <= r; i++) {
+    const w = Math.exp(-0.5 * (i / sigmaSamples) ** 2);
+    k[i + r] = w;
+    ksum += w;
+  }
+  for (let i = 0; i < k.length; i++) k[i] /= ksum;
+  const n = v.length;
+  const out = new Array<number>(n);
+  for (let i = 0; i < n; i++) {
+    let acc = 0;
+    for (let j = -r; j <= r; j++) {
+      const idx = Math.min(n - 1, Math.max(0, i + j));
+      acc += v[idx] * k[j + r];
+    }
+    out[i] = acc;
+  }
+  return out;
+}
+
+/**
+ * 健常部のプロファイルに**ぼけ込みの円柱モデル**を当てはめて μ（線減弱係数 [1/mm]）を得る。
+ *
+ * <h3>🔑 形の仮定を健常部だけに閉じ込める</h3>
+ * μ は実機では未知なので、どこかで形を仮定しないと決まらない。**健常部は円柱に近い**
+ * という仮定はそこそこ妥当で、しかも**病変部には及ばない**——これが §16.5 で
+ * 「M3（μ←健常部）」を選んだ理由（実測 健常 1.007・病変ノイズ無し 1.006）。
+ *
+ * <p>モデルは `T(d) = G_σ * exp(−μ·2√(r²−d²))` を減弱に直したもの。
+ * ⚠️ **ぼけは強度に掛かるので、指数を取ってからぼかし、そのあと −ln に戻す**
+ * （減弱を直接ぼかすと別物になる）。
+ *
+ * <p>⚠️ 実験（`bench/experiment_qca_edge.py` の `m4_cylinder_fit`）は σ を真値から
+ * もらっていたが、**実機では σ も未知**なので (r, μ, σ) の 3 つを粗→細のグリッドで探す。
+ * μ だけが欲しいので σ・r は捨てて構わない。
+ *
+ * @param attenuation 背景を引いた減弱プロファイル（{@link attenuationProfile}）
+ * @param spacingMm サンプル間隔 [mm]
+ */
+export function fitCylinderMu(
+  attenuation: readonly number[],
+  spacingMm: number,
+): { muPerMm: number; radiusMm: number; sigmaMm: number } | null {
+  const n = attenuation.length;
+  if (n < 9 || !(spacingMm > 0)) return null;
+  const center = (n - 1) / 2;
+  const d: number[] = new Array(n);
+  for (let i = 0; i < n; i++) d[i] = (i - center) * spacingMm;
+
+  // 中心の減弱 ≈ 2μr、半値幅 ≈ 2r から出した初期値の周りを探す。
+  const peak = Math.max(...attenuation);
+  if (!(peak > 1e-4)) return null;
+  const halfWidthMm = attenuation.filter((v) => v >= peak / 2).length * spacingMm;
+  const r0 = Math.max(spacingMm, halfWidthMm / 2);
+  const mu0 = peak / (2 * r0);
+  if (!(mu0 > 0) || !Number.isFinite(mu0)) return null;
+
+  const residual = (r: number, mu: number, sigmaSamples: number): number => {
+    const t = new Array<number>(n);
+    for (let i = 0; i < n; i++) {
+      const inner = r * r - d[i] * d[i];
+      t[i] = Math.exp(-mu * 2 * Math.sqrt(Math.max(0, inner)));
+    }
+    const blurred = blur1d(t, sigmaSamples);
+    let sse = 0;
+    for (let i = 0; i < n; i++) {
+      const model = -Math.log(Math.max(blurred[i], LOG_EPS));
+      const e = model - attenuation[i];
+      sse += e * e;
+    }
+    return sse;
+  };
+
+  let bestR = r0;
+  let bestMu = mu0;
+  let bestSigma = Math.max(0.5, 0.5 / spacingMm);
+  let best = Infinity;
+  let rSpan = r0 * 0.6;
+  let muSpan = mu0 * 0.6;
+  let sSpan = bestSigma;
+  const STEPS = 8;
+  for (let level = 0; level < 4; level++) {
+    const cR = bestR;
+    const cMu = bestMu;
+    const cS = bestSigma;
+    for (let i = 0; i <= STEPS; i++) {
+      const r = cR - rSpan + (2 * rSpan * i) / STEPS;
+      if (!(r > 0)) continue;
+      for (let j = 0; j <= STEPS; j++) {
+        const mu = cMu - muSpan + (2 * muSpan * j) / STEPS;
+        if (!(mu > 0)) continue;
+        for (let k = 0; k <= STEPS; k++) {
+          const s = cS - sSpan + (2 * sSpan * k) / STEPS;
+          if (s < 0) continue;
+          const sse = residual(r, mu, s);
+          if (sse < best) {
+            best = sse;
+            bestR = r;
+            bestMu = mu;
+            bestSigma = s;
+          }
+        }
+      }
+    }
+    rSpan /= STEPS / 2;
+    muSpan /= STEPS / 2;
+    sSpan /= STEPS / 2;
+  }
+  if (!Number.isFinite(best) || !(bestMu > 0)) return null;
+  return { muPerMm: bestMu, radiusMm: bestR, sigmaMm: bestSigma * spacingMm };
+}
+
 /**
  * 径プロファイルの雑音尺度 σ̂（径と同じ単位）。**隣り合う点の差**の MAD から求める。
  *
@@ -769,6 +1030,8 @@ interface QcaRow {
   left: number | null;
   right: number | null;
   edited: boolean;
+  /** 法線方向の生プロファイル。密度計測（§16.5）が要るので捨てずに持つ。 */
+  profile: number[];
 }
 
 /** QCA 本体。失敗（中心線が引けない等）なら null。 */
@@ -787,6 +1050,9 @@ export function runQca(input: QcaInput): QcaResult | null {
     searchMarginPx = 40,
   } = input;
   const warnings: string[] = [];
+  // プロファイルの値の意味。既定は表示用の `vesselIsDark` から決めるが、
+  // **これは物理量の話**なので入力で上書きできるようにしてある（§16.5）。
+  const domain: QcaProfileDomain = input.profileDomain ?? (vesselIsDark ? "intensity" : "attenuation");
 
   // ── ① 中心線（中間点があれば脚ごとに引く）─────────────────────────
   const waypoints = edits?.waypoints ?? [];
@@ -849,6 +1115,7 @@ export function runQca(input: QcaInput): QcaResult | null {
       left: e ? e.left : null,
       right: e ? e.right : null,
       edited: false,
+      profile,
     };
   }
 
@@ -932,19 +1199,82 @@ export function runQca(input: QcaInput): QcaResult | null {
 
   // ── ⑦ 参照径 ─────────────────────────────────────────────────────
   const refMode: QcaReferenceMode = edits?.reference ?? { kind: "auto" };
-  let reference: number[];
-  if (refMode.kind === "fixed") {
-    if (!(refMode.diameter > 0)) return null;
-    reference = positions.map(() => refMode.diameter);
-  } else if (refMode.kind === "segments") {
-    reference = referenceDiameters(positions, diameters, refMode.ranges);
-  } else if (refMode.kind === "ends") {
-    reference = referenceFromEnds(positions, diameters, refMode.fraction);
-  } else {
-    reference = referenceDiameters(positions, diameters);
-  }
+  const fitReference = (d: readonly number[]): number[] => {
+    if (refMode.kind === "fixed") return positions.map(() => refMode.diameter);
+    if (refMode.kind === "segments") return referenceDiameters(positions, d, refMode.ranges);
+    if (refMode.kind === "ends") return referenceFromEnds(positions, d, refMode.fraction);
+    return referenceDiameters(positions, d);
+  };
+  if (refMode.kind === "fixed" && !(refMode.diameter > 0)) return null;
+  let reference = fitReference(diameters);
+  let summary = summarize(positions, diameters, reference);
 
-  const summary = summarize(positions, diameters, reference);
+  // ── ⑦' 密度計測（A4c・§16.5）──────────────────────────────────────
+  //
+  // ここまでで作った半値法の径は**輪郭（画面に描く線）**として残し、**報告する径だけ**を
+  // 密度計測で置き換える。半値法の係数は断面の形で 0.745〜0.918 まで動き（GNBP-XA-7）、
+  // 内腔がぼけ幅以下だと符号が反転して過大になるので、**定数で補正しても直らない**。
+  //
+  // 🚨 **黙って切り替えない。** どちらで測ったかは必ず出自に残す（§16.5 の 3）。
+  let diameterMethod: QcaDiameterMethod = "half-max";
+  let muPerMm: number | null = null;
+  let densitometryFallback: string | null = null;
+
+  if (input.densitometry === false) {
+    densitometryFallback = "disabled";
+  } else if (!(summary.rvd > 0)) {
+    densitometryFallback = "noReference";
+  } else if (summary.profileNoise / summary.rvd > DENSITOMETRY_NOISE_LIMIT) {
+    // ノイズが乗ると積分が窓全体の雑音を拾い、−ln が暗い画素の雑音を増幅する。
+    densitometryFallback = "noisy";
+  } else {
+    // μ は**健常部**で当てはめる（形の仮定を健常部に閉じ込める）。参照径にいちばん近い
+    // 点をいくつか使い、**中央値**を採る（1 点だけだとそこが実は病変でも気づけない）。
+    const healthy = kept
+      .map((_, i) => ({ i, dev: Math.abs(diameters[i] - reference[i]) / Math.max(reference[i], 1e-9) }))
+      .sort((a, b) => a.dev - b.dev)
+      .slice(0, MU_FIT_SAMPLES)
+      .map((x) => x.i);
+    const mus: number[] = [];
+    for (const i of healthy) {
+      const r = kept[i];
+      const [nx, ny] = r.normal;
+      const spacingMm = step * Math.hypot(nx * mmCol, ny * mmRow);
+      const fit = fitCylinderMu(attenuationProfile(r.profile, domain), spacingMm);
+      if (fit && fit.muPerMm > 0) mus.push(fit.muPerMm);
+    }
+    if (mus.length === 0) {
+      densitometryFallback = "muFitFailed";
+    } else {
+      muPerMm = median(mus);
+      const measured: number[] = new Array(kept.length);
+      let ok = true;
+      for (let i = 0; i < kept.length; i++) {
+        const r = kept[i];
+        const [nx, ny] = r.normal;
+        const spacingMm = step * Math.hypot(nx * mmCol, ny * mmRow);
+        const d = densitometricDiameter(attenuationProfile(r.profile, domain), spacingMm, muPerMm);
+        if (d == null || !(d > 0)) {
+          ok = false;
+          break;
+        }
+        measured[i] = d;
+      }
+      if (!ok) {
+        densitometryFallback = "profileFailed";
+        muPerMm = null;
+      } else {
+        // 径だけ差し替える。**エッジ（輪郭）はそのまま**＝線と数値が別方式になるので UI に出す。
+        for (let i = 0; i < measured.length; i++) diameters[i] = measured[i];
+        reference = fitReference(diameters);
+        summary = summarize(positions, diameters, reference);
+        diameterMethod = "densitometric";
+      }
+    }
+  }
+  if (densitometryFallback && densitometryFallback !== "disabled") {
+    warnings.push(`densitometryFallback:${densitometryFallback}`);
+  }
   if (summary.rvd <= 0) warnings.push("referenceFitFailed");
 
   const provenance: QcaProvenance = {
@@ -952,6 +1282,9 @@ export function runQca(input: QcaInput): QcaResult | null {
     editedEdges,
     trimmed,
     reference: refMode.kind,
+    diameterMethod,
+    muPerMm,
+    densitometryFallback,
     edited: waypoints.length > 0 || editedEdges.length > 0 || trimmed || refMode.kind !== "auto",
   };
 

@@ -26,6 +26,12 @@ public record QcaSrRequest(
         String calibration,
         String vesselLabel,
         String manualCorrection,
+        /*
+         * 径を何で測ったか（"half-max" / "densitometric"）。null なら半値法として扱う。
+         * 設計 §16.5。<b>数値だけ残して測り方を落とすと、他社の QCA と比べたときに
+         * 差の原因が分からなくなる</b>（半値法と密度計測では絶対値が 10% 以上違う）。
+         */
+        String diameterMethod,
         double mld,
         double rvd,
         double percentDiameterStenosis,
