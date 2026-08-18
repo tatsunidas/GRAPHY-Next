@@ -530,6 +530,26 @@ export function SeriesViewer({
       .finally(() => setExportBusy(false));
   };
 
+  /**
+   * フレームを送ったら背景残差も測り直す。
+   *
+   * <p>🚨 **これが無いと、別のフレームの残差が出たまま**になる（GNBP-XA-2 の実機検証で発覚）。
+   * 体動 (3, −2) のフレームへ送っても数値が動かず、**ずれているのに「合っている」**ように
+   * 見えていた。目視でなく数値で判断させるための表示なので、古い値が残るのは致命的。
+   *
+   * <p>シネ再生中に毎フレーム測ると重い（512² の差分＋全画素ソート）ので、送るのが
+   * 落ち着いてから測る。
+   */
+  useEffect(() => {
+    if (!dsaToken) return;
+    const id = window.setTimeout(() => {
+      measureDsaResidual(dsaToken, zc)
+        .then((r) => setDsaResidual(r))
+        .catch(() => setDsaResidual(null));
+    }, 300);
+    return () => window.clearTimeout(id);
+  }, [dsaToken, zc]);
+
   /** DSA のパラメータを変えた後に呼ぶ（再合成 → 状態と残差の更新）。 */
   const refreshDsa = (token: string, frame: number) => {
     setDsaVersion((v) => v + 1);

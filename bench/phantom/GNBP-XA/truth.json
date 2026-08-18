@@ -2939,7 +2939,7 @@
     "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.325741874696725604880681971689250645",
     "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.126658515504935125509118003178105094",
     "file": "GNBP-XA-2.dcm",
-    "md5": "38d694474f9370b5b5ee469671470d1b",
+    "md5": "cd6026ca3332f6c8990b7551e4b9f2b9",
     "maskFrames": [
       1,
       2,
@@ -3007,18 +3007,18 @@
       },
       {
         "frame": 12,
-        "dxPx": 0.0,
-        "dyPx": 0.0
+        "dxPx": 3.0,
+        "dyPx": -2.0
       },
       {
         "frame": 13,
-        "dxPx": 0.0,
-        "dyPx": 0.0
+        "dxPx": 3.0,
+        "dyPx": -2.0
       },
       {
         "frame": 14,
-        "dxPx": 0.0,
-        "dyPx": 0.0
+        "dxPx": 3.0,
+        "dyPx": -2.0
       },
       {
         "frame": 15,
@@ -3032,48 +3032,48 @@
       },
       {
         "frame": 17,
-        "dxPx": 3.0,
-        "dyPx": -2.0
+        "dxPx": -4.0,
+        "dyPx": 5.0
       },
       {
         "frame": 18,
-        "dxPx": 3.0,
-        "dyPx": -2.0
+        "dxPx": -4.0,
+        "dyPx": 5.0
       },
       {
         "frame": 19,
-        "dxPx": 3.0,
-        "dyPx": -2.0
+        "dxPx": -4.0,
+        "dyPx": 5.0
       },
       {
         "frame": 20,
-        "dxPx": 3.0,
-        "dyPx": -2.0
+        "dxPx": -4.0,
+        "dyPx": 5.0
       },
       {
         "frame": 21,
-        "dxPx": 3.0,
-        "dyPx": -2.0
+        "dxPx": -4.0,
+        "dyPx": 5.0
       },
       {
         "frame": 22,
-        "dxPx": 3.0,
-        "dyPx": -2.0
+        "dxPx": 1.4,
+        "dyPx": -0.6
       },
       {
         "frame": 23,
-        "dxPx": 3.0,
-        "dyPx": -2.0
+        "dxPx": 1.4,
+        "dyPx": -0.6
       },
       {
         "frame": 24,
-        "dxPx": 3.0,
-        "dyPx": -2.0
+        "dxPx": 1.4,
+        "dyPx": -0.6
       },
       {
         "frame": 25,
-        "dxPx": -4.0,
-        "dyPx": 5.0
+        "dxPx": 1.4,
+        "dyPx": -0.6
       }
     ]
   },

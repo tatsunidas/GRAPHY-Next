@@ -155,6 +155,7 @@ def _project_vessel(
     *,
     blur_px: float,
     axis_row: float = ROWS / 2.0,
+    col_shift: float = 0.0,
     reference_diameter_mm: float = REFERENCE_DIAMETER_MM,
 ) -> np.ndarray:
     """血管 1 本の透過率画像（0..1、背景 1.0）を作る。
@@ -169,7 +170,7 @@ def _project_vessel(
     cols = (np.arange(COLUMNS)[:, None] + sub[None, :]).ravel()
     rows = (np.arange(ROWS)[:, None] + sub[None, :]).ravel()
 
-    x_mm = (cols - COLUMNS / 2.0) * MM_PER_PX          # 血管軸方向 [mm]
+    x_mm = (cols - COLUMNS / 2.0 - col_shift) * MM_PER_PX  # 血管軸方向 [mm]
     d_mm = (rows - axis_row) * MM_PER_PX               # 軸からの横ずれ [mm]
 
     r = _radius_profile(x_mm, percent_stenosis, lesion_length_mm, reference_diameter_mm)  # (COLUMNS*n,)
@@ -444,25 +445,64 @@ def build_qca(out_dir: str) -> dict:
 DSA_MASK_FRAMES = 5
 DSA_CONTRAST_FRAMES = 20
 #: 造影フレームに注入する体動 [検出器 px]。フレーム番号 → (dx, dy)。
-DSA_SHIFTS = {6: (0.0, 0.0), 15: (3.0, -2.0), 25: (-4.0, 5.0)}
+#:
+#: 🚨 **整数だけにしない。** 推定器は整数格子で粗探索してから 0.1px で詰めるので、
+#: 整数の体動しか注入しないと**詰めの段が一度も試されない**まま「< 0.2px 達成」になる。
+#: 22 以降の (1.4, -0.6) がその段を踏ませるためのもの。
+#: 24 の dy=5 は**探索半径そのものを試す**（半径 4px の粗探索では届かない）。
+DSA_SHIFTS = {6: (0.0, 0.0), 12: (3.0, -2.0), 17: (-4.0, 5.0), 22: (1.4, -0.6)}
+
+#: 背景に置く局所的な高減衰（石灰化・椎弓根に相当）。(cx, cy, rx, ry, μ·mm)。
+#: **点状の構造は、どちら向きの平行移動にも等しく効く**のでこれが要（下の警告）。
+DSA_BLOBS = (
+    (150.0, 150.0, 26.0, 20.0, 0.8),
+    (330.0, 120.0, 18.0, 24.0, 0.7),
+    (200.0, 380.0, 30.0, 22.0, 0.6),
+    (390.0, 330.0, 20.0, 18.0, 0.9),
+    (110.0, 270.0, 14.0, 14.0, 0.5),
+)
 
 
 def _background(shift_x: float, shift_y: float) -> np.ndarray:
-    """骨に相当する高減衰の背景（斜めの帯 2 本＋緩い勾配）。
+    """骨に相当する高減衰の背景（斜めの帯・脊椎・局所の塊）。
 
     DSA の意味は「造影以外を消す」ことなので、**背景は造影フレームでも同じ形**で
     なければならない。体動はこの背景ごと平行移動する（実際の体動と同じ）。
+
+    🚨 **斜めの帯だけで作ってはいけない**（2026-08-18 に実測して判明）。
+    帯は帯の向きに**平行移動しても像が変わらない**ので、その向きの体動は
+    画像から**原理的に回収できない**（アパーチャ問題）。旧版はこれで、
+    帯に沿って 6px 動かしても残差が 6% しか動かず（＝ノイズと同程度）、
+    推定器が何を返しても真値と 0.58px ずれていた。**推定器ではなくファントムの欠陥**で、
+    この系列では「< 0.2px」を測ることが**そもそもできなかった**。
+    §16.4 の箱型断面・§16.3 の回転楕円体と同じ形の罠（＝仮定に都合のよいファントム）。
+
+    そこで **向きの違う構造を重ねる**: 斜めの帯（従来）＋縦の脊椎＋その縦方向の周期変調
+    （椎体の切れ目）＋点状の塊。どの向きの平行移動にも残差が応答するようになる。
+    その性質は `check_xa2_motion.py` が**毎回測って**確かめる（仮定しない）。
+
+    実機と同じく**検出器ぼけを掛けてから**返す（掛けないと背景だけが理想的に鋭く、
+    サブピクセル補間の誤差がファントム側の都合で決まってしまう）。
     """
     yy, xx = np.mgrid[0:ROWS, 0:COLUMNS].astype(np.float64)
     yy = yy - shift_y
     xx = xx - shift_x
     thickness = np.zeros((ROWS, COLUMNS), dtype=np.float64)
+    # ① 肋骨に相当する斜めの帯 2 本。**帯に沿った向きだけは拘束しない**。
     for offset, width, mu_mm in ((-60.0, 34.0, 0.9), (110.0, 26.0, 1.2)):
         d = np.abs((yy - 0.55 * xx) - (ROWS / 2.0 + offset))
         thickness += mu_mm * np.clip(1.0 - d / width, 0.0, 1.0)
-    # 体厚のゆるい変化（左右で透過が違う）。
+    # ② 脊椎に相当する縦の帯（＝横方向の平行移動を拘束する）と、
+    #    椎体の切れ目に相当する縦方向の周期変調（＝縦方向を拘束する）。
+    spine = np.clip(1.0 - np.abs(xx - (COLUMNS / 2.0 + 150.0)) / 46.0, 0.0, 1.0)
+    thickness += 0.95 * spine * (0.55 + 0.45 * np.cos(2.0 * np.pi * yy / 58.0))
+    # ③ 局所的な塊（石灰化・椎弓根）。向きを持たないので全方向に効く。
+    for cx, cy, rx, ry, mu_mm in DSA_BLOBS:
+        e = ((xx - cx) / rx) ** 2 + ((yy - cy) / ry) ** 2
+        thickness += mu_mm * np.clip(1.0 - e, 0.0, 1.0)
+    # ④ 体厚のゆるい変化（左右で透過が違う）。
     thickness += 0.35 * (xx / COLUMNS)
-    return np.exp(-thickness)
+    return _gaussian_blur(np.exp(-thickness), DEFAULT_BLUR_PX)
 
 
 def build_dsa(out_dir: str) -> dict:
@@ -483,7 +523,10 @@ def build_dsa(out_dir: str) -> dict:
         else:
             # 造影は 6 フレームかけて立ち上がり、以後一定（ボーラス到達）。
             ramp = min(1.0, (frame_no - DSA_MASK_FRAMES) / 6.0)
-            vessel = _project_vessel(50.0, 10.0, blur_px=DEFAULT_BLUR_PX, axis_row=ROWS / 2.0 + dy)
+            # 血管は体の中にあるので、背景と**同じだけ**動く（dx は軸方向なので狭窄の位置に効く）。
+            vessel = _project_vessel(
+                50.0, 10.0, blur_px=DEFAULT_BLUR_PX, axis_row=ROWS / 2.0 + dy, col_shift=dx,
+            )
             # 透過率どうしの積＝減弱の足し算（ビール則）。造影ぶんだけ ramp で効かせる。
             transmit = bg * (vessel ** ramp)
         frames[i] = _to_stored(transmit, 8000.0, rng)

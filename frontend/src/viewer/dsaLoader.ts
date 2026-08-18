@@ -20,7 +20,7 @@ import { readModalitySlice } from "./pixelCalibration";
 import {
   averageFrames,
   backgroundRms,
-  contrastSignal,
+  contrastDropSignal,
   estimateShift,
   needsLogTransform,
   pickMaskFrames,
@@ -170,17 +170,6 @@ async function readFrames(ids: string[]): Promise<{ values: Float32Array[]; widt
 }
 
 /**
- * マスク自動選択に使うフレーム代表値。
- *
- * <p>🚨 **全画素平均ではなく暗部テール**（{@link contrastSignal}）を使う。冠動脈造影では
- * 血管が画面のごく一部しか占めず、**全体平均では造影の到達を検出できない**
- * （実機で「マスクがランの末尾から選ばれる」形で発覚）。
- */
-function contrastSignalOf(v: Float32Array): number {
-  return contrastSignal(v);
-}
-
-/**
  * DSA セッションを用意する（マスク平均と表示 VOI をここで確定させる）。
  *
  * <p>**同期的にトークンだけ配らない**のは、マスク平均を作る前に描画が始まると
@@ -202,7 +191,9 @@ export async function prepareDsaSession(params: DsaSessionParams): Promise<strin
   let maskFrames = params.maskFrames?.filter((i) => i >= 0 && i < values.length) ?? null;
   let onset: number | null = null;
   if (!maskFrames || maskFrames.length === 0) {
-    const picked = pickMaskFrames(values.map(contrastSignalOf));
+    // 🚨 **フレーム単独の暗部テールでは足りない**（骨が濃いと造影が埋もれる）。
+    //    ラン先頭との差で見る（{@link contrastDropSignal} の警告）。
+    const picked = pickMaskFrames(contrastDropSignal(values));
     maskFrames = picked.frames;
     onset = picked.onset;
   }

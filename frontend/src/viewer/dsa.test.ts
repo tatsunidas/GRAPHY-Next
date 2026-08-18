@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   averageFrames,
   backgroundRms,
+  blurSeparable,
+  contrastDropSignal,
   contrastSignal,
   estimateShift,
   needsLogTransform,
@@ -226,6 +228,32 @@ describe("backgroundRms / estimateShift — ピクセルシフトの評価と自
     expect(Math.abs(best.dx - 1.5)).toBeLessThan(0.2);
   });
 
+  // 🔴 GNBP-XA-2 で実測した壊れ方。双線形補間はノイズを平滑化するので、**端数のシフトほど
+  //    残差が下がる**。整数の体動では真値が平滑化されないぶん、ずれた端数の位置が勝ってしまう
+  //    （実測 0.361px ずれ）。探索の前に両方をぼかすことで消える。
+  it("★ノイズがあっても整数の体動を端数へ引き込まれずに当てる", () => {
+    const w = 64;
+    const h = 64;
+    let seed = 12345;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff - 0.5) * 60;
+    const pattern = (x: number, y: number) =>
+      Math.sin(x * 0.5) * 60 + Math.cos(y * 0.4) * 50 + Math.sin((x + y) * 0.2) * 40 + 600;
+    const mask = img(w, h, (x, y) => pattern(x, y) + rnd());
+    const live = img(w, h, (x, y) => pattern(x - 2, y + 3) + rnd());
+    const best = estimateShift(mask, live, w, h, false, 5);
+    expect(Math.hypot(best.dx - 2, best.dy + 3)).toBeLessThan(0.2);
+  });
+
+  it("★4px を超える体動も取れる（既定の探索半径は 8px）", () => {
+    const w = 64;
+    const h = 64;
+    const pattern = (x: number, y: number) => Math.sin(x * 0.35) * 60 + Math.cos(y * 0.3) * 50 + 500;
+    const mask = img(w, h, pattern);
+    const live = img(w, h, (x, y) => pattern(x + 6, y - 5));
+    const best = estimateShift(mask, live, w, h, false);
+    expect(Math.hypot(best.dx + 6, best.dy - 5)).toBeLessThan(0.2);
+  });
+
   it("ズレが無ければ 0 を返す", () => {
     const w = 16;
     const h = 16;
@@ -234,6 +262,84 @@ describe("backgroundRms / estimateShift — ピクセルシフトの評価と自
     expect(best.dx).toBe(0);
     expect(best.dy).toBe(0);
     expect(best.rms).toBeCloseTo(0, 6);
+  });
+});
+
+describe("★contrastDropSignal — 骨が濃くても造影の到達が見える", () => {
+  /** 骨（暗い塊）＋ 途中から血管（別の場所が少し暗くなる）。 */
+  function run(vesselFrom: number): { drop: number[]; plain: number[] } {
+    const w = 40;
+    const h = 40;
+    const frames: Float32Array[] = [];
+    for (let t = 0; t < 10; t++) {
+      frames.push(
+        img(w, h, (x, y) => {
+          // 骨: 左半分が真っ暗（低パーセンタイルはここで占められる）。
+          let v = x < 20 ? 100 : 1000;
+          // 血管: 右半分の 1 行だけが少し暗くなる。全体から見ればごく一部。
+          if (t >= vesselFrom && x >= 20 && y === 20) v -= 300;
+          return v;
+        }),
+      );
+    }
+    return { drop: contrastDropSignal(frames, 0.02, 1), plain: frames.map((f) => contrastSignal(f, 0.02, 1)) };
+  }
+
+  it("フレーム単独の暗部テールは骨に埋もれて動かない（＝これだけでは検出できない）", () => {
+    const { plain } = run(4);
+    // 骨が最も暗いので、造影が入っても 2% 分位は 100 のまま。
+    expect(new Set(plain).size).toBe(1);
+  });
+
+  it("★先頭との差で見れば到達フレームで明確に動く", () => {
+    const { drop } = run(6);
+    for (let t = 0; t < 6; t++) expect(drop[t]).toBe(0);
+    for (let t = 6; t < 10; t++) expect(drop[t]).toBe(-300);
+    expect(pickMaskFrames(drop).onset).toBe(6);
+    // マスクは到達の手前だけ。
+    expect(pickMaskFrames(drop).frames).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  // 🔴 **既知の限界**（直していない）。{@link pickMaskFrames} は先頭 5 フレームを基線にし、
+  //    走査もその後ろから始めるので、**造影が 5 フレーム以内に到達すると検出できない**。
+  //    そのときマスクは先頭 5 フレーム＝造影入りになる。GNBP-XA-2 は到達が 6 フレーム目
+  //    （＝基線の直後）なので通っているだけで、余裕は 1 フレームしか無い。
+  it("🔴 造影が基線（先頭 5 フレーム）の中で到達すると検出できない", () => {
+    const { drop } = run(4);
+    expect(pickMaskFrames(drop).onset).toBeNull();
+    // 見つからないときはランの先頭＝造影入りのフレームを含んでしまう。
+    expect(pickMaskFrames(drop).frames).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it("先頭フレームは自分自身との差なので 2 番目の値で埋める（基線を壊さない）", () => {
+    const { drop } = run(4);
+    expect(drop[0]).toBe(drop[1]);
+  });
+
+  it("空・長さ違いでも壊れない", () => {
+    expect(contrastDropSignal([])).toEqual([]);
+    const a = new Float32Array(9);
+    expect(contrastDropSignal([a, new Float32Array(4)])).toEqual([0, 0]);
+  });
+});
+
+describe("★blurSeparable — 探索の前処理", () => {
+  it("全体が一定なら値は変わらない（端の複製が効いている）", () => {
+    const v = blurSeparable(img(8, 8, () => 5), 8, 8, 1.0);
+    for (const x of v) expect(x).toBeCloseTo(5, 5);
+  });
+
+  it("総和を保つ（インパルスを広げても失わない）", () => {
+    const src = new Float32Array(81);
+    src[40] = 100;
+    const out = blurSeparable(src, 9, 9, 1.0);
+    expect(out.reduce((a, b) => a + b, 0)).toBeCloseTo(100, 3);
+    expect(out[40]).toBeLessThan(100);
+  });
+
+  it("σ<=0 は素通し", () => {
+    const src = img(4, 4, (x, y) => x * y);
+    expect(Array.from(blurSeparable(src, 4, 4, 0))).toEqual(Array.from(src));
   });
 });
 

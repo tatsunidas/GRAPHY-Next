@@ -158,6 +158,41 @@ export function contrastSignal(values: Float32Array, quantile = 0.02, stride = 4
   return sorted[idx];
 }
 
+/**
+ * 造影到達の検出信号を**ラン全体**から作る（`fw/angio-design.md` §6.3）。
+ *
+ * <p>🚨 **フレーム単独の低パーセンタイル（{@link contrastSignal} をそのまま並べたもの）では
+ * 足りない**（GNBP-XA-2 で実測）。骨の濃い背景では**暗い側の 2% は骨で占められる**ため、
+ * 血管が造影されても指標がほとんど動かない。実測で、造影が 1/6・2/6・3/6 まで入った
+ * 3 フレームが「造影前」と判定され、**マスク平均に造影が混ざっていた**
+ * （マスクに造影が入ると、その血管は自分自身で引き算されて薄くなる）。
+ *
+ * <p>そこで**ラン先頭フレームとの差**の低パーセンタイルを見る。造影は必ず「暗くなる」ので
+ * 差の下側テールに出る。骨は両方に等しくあるので差では消える。実測の分離は
+ * 基線のばらつき 0.4 に対し到達フレームで 39（＝約 100 倍）。
+ *
+ * <p>体動も差を作るが、**早めに onset と判定される方向**にしか効かない。マスクが
+ * 数フレーム手前になるだけで造影は混ざらないので、外し方として安全な側。
+ */
+export function contrastDropSignal(
+  frames: readonly Float32Array[],
+  quantile = 0.02,
+  stride = 4,
+): number[] {
+  if (!frames.length) return [];
+  const ref = frames[0];
+  const diff = new Float32Array(ref.length);
+  const out = frames.map((f) => {
+    if (f.length !== ref.length) return 0;
+    for (let i = 0; i < f.length; i++) diff[i] = f[i] - ref[i];
+    // ちょうど 0 の除外（{@link contrastSignal}）が、ここではコリメータ外＝両方 0 の除外になる。
+    return contrastSignal(diff, quantile, stride);
+  });
+  // 先頭は自分自身との差＝全画素 0 で、基線をひとつだけ大きく外す。2 番目の値で埋める。
+  if (out.length > 1) out[0] = out[1];
+  return out;
+}
+
 /** マスク自動選択の結果。 */
 export interface MaskPick {
   /** 平均してマスクにするフレーム番号（0 origin, 昇順）。 */
@@ -315,12 +350,69 @@ function sampleBilinearAt(src: Float32Array, width: number, height: number, x: n
 }
 
 /**
+ * 探索の前に両方へ掛けるガウシアンの σ [px]。
+ *
+ * <p>🚨 **これが無いと、整数の体動が 0.36px ずれて推定される**（GNBP-XA-2 で実測）。
+ * 双線形補間は隣接画素を混ぜる＝**マスクのノイズを平滑化する**ので、シフトが端数のとき
+ * 残差が下がる。整数の体動では真値そのものが平滑化されないため、**ずれた端数の位置のほうが
+ * 残差が小さくなる**（実測 0.01188 → 0.01144）。位置合わせの誤差より補間の得のほうが大きい。
+ *
+ * <p>先に両方をぼかしておくとノイズが空間的に相関するので、補間で混ぜても分散がほとんど
+ * 減らなくなり、この偏りが消える（実測 0.361px → 0.000px）。σ=0.8 で十分で、
+ * 1.5 にしても改善しない。**差分そのものにはぼかしを掛けない**（表示・計測の値が変わる）。
+ */
+const SEARCH_BLUR_SIGMA = 0.8;
+
+/** 分離型ガウシアン（端は複製）。{@link estimateShift} の前処理専用。 */
+export function blurSeparable(
+  src: Float32Array,
+  width: number,
+  height: number,
+  sigma: number,
+): Float32Array {
+  if (!(sigma > 0)) return Float32Array.from(src);
+  const r = Math.max(1, Math.ceil(3 * sigma));
+  const kernel = new Float32Array(2 * r + 1);
+  let sum = 0;
+  for (let i = -r; i <= r; i++) {
+    const v = Math.exp(-0.5 * (i / sigma) ** 2);
+    kernel[i + r] = v;
+    sum += v;
+  }
+  for (let i = 0; i < kernel.length; i++) kernel[i] /= sum;
+  const cl = (v: number, hi: number) => (v < 0 ? 0 : v > hi ? hi : v);
+  const tmp = new Float32Array(src.length);
+  const out = new Float32Array(src.length);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let a = 0;
+      for (let i = -r; i <= r; i++) a += kernel[i + r] * src[y * width + cl(x + i, width - 1)];
+      tmp[y * width + x] = a;
+    }
+  }
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let a = 0;
+      for (let i = -r; i <= r; i++) a += kernel[i + r] * tmp[cl(y + i, height - 1) * width + x];
+      out[y * width + x] = a;
+    }
+  }
+  return out;
+}
+
+/**
  * ピクセルシフトの自動推定（背景 RMS 最小化）。
  *
  * <p>整数グリッドで粗探索 → 最良点の周りを 0.1px 刻みで詰める、の 2 段。血管領域は
  * {@link backgroundRms} が上位を除外することで自然に効きにくくなる。
  *
- * @param range 探索半径 [px]（既定 4）
+ * <p>🚨 **粗探索を「刻み 2px」で広げてはいけない**（GNBP-XA-2 で実測）。刻み 2 では
+ * 真値 (−4, 5) に対し粗探索が (−6, 4) を選び、そこから ±1 → ±0.5 と詰めても
+ * **真値まで届かない**（(−4.5, 4.8) で止まり、真値のほうが残差が小さいまま）。
+ * 探索範囲を広げるコストは**刻みではなく評価画素の間引き**で吸収する
+ * （粗探索は位置を大づかみに決めるだけなので、細かい格子で評価する必要が無い）。
+ *
+ * @param range 探索半径 [px]（既定 8）。体動は 4px を普通に超える（GNBP-XA-2 は dy=5）。
  */
 export function estimateShift(
   mask: Float32Array,
@@ -328,30 +420,36 @@ export function estimateShift(
   width: number,
   height: number,
   logarithmic: boolean,
-  range = 4,
+  range = 8,
 ): { dx: number; dy: number; rms: number } {
   // 評価は部分格子で行う（512² なら 4 画素おき ＝ 128²）。小さい画像では stride 1 に落ちるので
   // 精度は変わらない。**全画素で回すと UI が数十秒固まる**（実機で発覚）。
-  const stride = Math.max(1, Math.floor(Math.min(width, height) / 128));
-  const evaluate = (dx: number, dy: number): number =>
-    shiftResidual(mask, live, width, height, { dx, dy, logarithmic }, stride);
-  let best = { dx: 0, dy: 0, rms: evaluate(0, 0) };
+  const fine = Math.max(1, Math.floor(Math.min(width, height) / 128));
+  const coarse = fine * 2;
+  const m = blurSeparable(mask, width, height, SEARCH_BLUR_SIGMA);
+  const l = blurSeparable(live, width, height, SEARCH_BLUR_SIGMA);
+  const evaluate = (dx: number, dy: number, stride: number): number =>
+    shiftResidual(m, l, width, height, { dx, dy, logarithmic }, stride);
+
+  let best = { dx: 0, dy: 0, rms: evaluate(0, 0, coarse) };
   for (let dy = -range; dy <= range; dy++) {
     for (let dx = -range; dx <= range; dx++) {
       if (dx === 0 && dy === 0) continue;
-      const rms = evaluate(dx, dy);
+      const rms = evaluate(dx, dy, coarse);
       if (rms < best.rms) best = { dx, dy, rms };
     }
   }
   // 粗探索の周り ±0.5px を 0.1px 刻みで詰める（整数格子で最良を取った後なので ±0.5 で足りる）。
+  // 間引きを細かい側へ戻すので、残差の値は粗探索のものと比べられない（測り直してから始める）。
   const cx = best.dx;
   const cy = best.dy;
+  best = { dx: cx, dy: cy, rms: evaluate(cx, cy, fine) };
   for (let iy = -5; iy <= 5; iy++) {
     for (let ix = -5; ix <= 5; ix++) {
       const dx = cx + ix / 10;
       const dy = cy + iy / 10;
       if (dx === cx && dy === cy) continue;
-      const rms = evaluate(dx, dy);
+      const rms = evaluate(dx, dy, fine);
       if (rms < best.rms) best = { dx, dy, rms };
     }
   }
