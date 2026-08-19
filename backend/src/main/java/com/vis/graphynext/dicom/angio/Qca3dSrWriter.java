@@ -34,7 +34,10 @@ import java.util.Date;
  * </ul>
  *
  * <h3>🔴 系統誤差を注記に必ず書く</h3>
- * 径は半値法由来で約 13% 過小、面積はその 2 乗で約 24% 過小（§16.4）。
+ * <b>径の測り方（{@code diameterMethod}）で注記が変わる</b>。半値法なら過小に出るが、
+ * その係数は断面の形で 0.745〜0.918 まで動く（円柱に固有の 0.870 を定数として書かない。§16.4/§16.5）。
+ * 密度計測（A4c）なら係数は乗らないが、<b>基準の減弱係数を健常部から取るので健常部は円と仮定</b>し、
+ * <b>画面の輪郭（半値法）と数値が別方式</b>になる（§16.5.2）。
  * 断面積は<b>楕円の主軸が 2 方向の測定方向に一致するという仮定</b>の下でしか出ない（§10.2.6）。
  * また、患者座標系での<b>姿勢は復元できない</b>（先頭視点を固定するため。§10.3）。
  */
@@ -58,6 +61,9 @@ final class Qca3dSrWriter {
             new Code("ANCHORERR", "99GRAPHYNEXT", null, "Anchor Reprojection Error");
     private static final Code FORESHORTEN_A = new Code("FORESHRTA", "99GRAPHYNEXT", null, "Visible Length Fraction (view A)");
     private static final Code FORESHORTEN_B = new Code("FORESHRTB", "99GRAPHYNEXT", null, "Visible Length Fraction (view B)");
+    /** {@link QcaSrWriter} と同じコード（2D と 3D で別の意味に読まれないよう揃える）。 */
+    private static final Code DIAMETER_METHOD =
+            new Code("DIAMMETHOD", "99GRAPHYNEXT", null, "Diameter Measurement Method");
     private static final Code ANGLE_CORRECTION =
             new Code("ANGCORR", "99GRAPHYNEXT", null, "Positioner Angle Correction");
     private static final Code CALIBRATION = new Code("CALIB", "99GRAPHYNEXT", null, "Spatial Calibration");
@@ -163,13 +169,30 @@ final class Qca3dSrWriter {
         if (req.calibration() != null && !req.calibration().isBlank()) {
             items.add(text(CALIBRATION, req.calibration()));
         }
-        items.add(text(METHOD, methodNote(calibrated)));
+        // 🚨 **測り方を必ず残す**（§16.5）。半値法と密度計測では絶対値が 10% 以上違う。
+        items.add(text(DIAMETER_METHOD, diameterMethodNote(req.diameterMethod())));
+        items.add(text(METHOD, methodNote(calibrated, req.diameterMethod())));
         root.add(group);
 
         return new Result(ds, seriesUid, sopUid);
     }
 
-    private static String methodNote(boolean calibrated) {
+    /** 径の測り方の説明。null は半値法（安全側）として扱う。 */
+    private static String diameterMethodNote(String method) {
+        if ("densitometric".equalsIgnoreCase(method)) {
+            return "Densitometric (attenuation integrated to a cross-sectional area; no shape assumed for the "
+                    + "lesion, but the healthy segment is assumed circular when the reference attenuation "
+                    + "coefficient is derived from it). The drawn outline comes from the half-maximum method "
+                    + "and is a different measurement.";
+        }
+        if ("mixed".equalsIgnoreCase(method)) {
+            return "MIXED: the two views were measured with different methods (half-maximum and densitometric). "
+                    + "The fused cross-section is not in either sense; do not compare these absolute values.";
+        }
+        return "Half-maximum (edge-based).";
+    }
+
+    private static String methodNote(boolean calibrated, String diameterMethod) {
         StringBuilder sb = new StringBuilder();
         sb.append("Two-view 3D reconstruction (epipolar-constrained monotone correspondence, ")
                 .append("least-squares triangulation) — GRAPHY-Next 3D QCA (research use only). ");
@@ -182,12 +205,24 @@ final class Qca3dSrWriter {
         // 非同時収集。
         sb.append("If the two views were acquired in different heartbeats, cardiac phase matching is approximate. ");
         if (calibrated) {
-            // 🔴 系統誤差。数値と同じ場所に書く。
+            // 🔴 系統誤差。数値と同じ場所に書く。**測り方で内容が変わる**（§16.5）。
             sb.append("Cross-sectional area assumes the ellipse axes coincide with the two measurement ")
-                    .append("directions; it is exact for a circular section and for orthogonal views. ")
-                    .append("Diameters from the half-maximum method are about 13% too small, so areas are ")
-                    .append("about 24% too small. Percent stenosis is a ratio and largely cancels this bias; ")
-                    .append("absolute MLD and RVD do not.");
+                    .append("directions; it is exact for a circular section and for orthogonal views. ");
+            if ("densitometric".equalsIgnoreCase(diameterMethod)) {
+                sb.append("Diameters are densitometric, so no edge-detection bias is applied to them; ")
+                        .append("scatter, overlapping vessels or heavy noise can make them read high instead. ")
+                        .append("Percent stenosis is a ratio and is largely unaffected either way.");
+            } else if ("mixed".equalsIgnoreCase(diameterMethod)) {
+                sb.append("The two views were measured with DIFFERENT diameter methods, so the absolute ")
+                        .append("cross-section is not in either sense. Use the percent stenosis, not the ")
+                        .append("absolute values.");
+            } else {
+                sb.append("Diameters come from the half-maximum method, which reads low for a rounded lumen ")
+                        .append("(about 13% for a circular cross-section, and about 24% for areas, as the ")
+                        .append("square); the factor depends on the shape of the cross-section, so it is not ")
+                        .append("a constant. Percent stenosis is a ratio and largely cancels this bias; ")
+                        .append("absolute MLD and RVD do not.");
+            }
         } else {
             sb.append("NOT SPATIALLY CALIBRATED: cross-sectional areas are not reported.");
         }

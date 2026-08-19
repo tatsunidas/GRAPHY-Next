@@ -71,6 +71,21 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
   const runA = runs.find((r) => r.runKey === keyA) ?? null;
   const runB = runs.find((r) => r.runKey === keyB) ?? null;
 
+  /**
+   * 合成に使った 2 方向の径を**何で測ったか**（§16.5）。
+   * 🚨 片方が半値法・片方が密度計測なら断面積は**どちらの意味でもない**ので `"mixed"`。
+   * 画面の注記・SR・DEV スナップショットで**同じ値**を使う（別々に導出すると食い違う）。
+   */
+  const diameterMethod = useMemo<"half-max" | "densitometric" | "mixed" | null>(
+    () =>
+      runA && runB
+        ? runA.diameterMethod === runB.diameterMethod
+          ? runA.diameterMethod
+          : "mixed"
+        : ((runA ?? runB)?.diameterMethod ?? null),
+    [runA, runB],
+  );
+
   const separationDeg = useMemo(
     () => (runA && runB ? viewSeparationDeg(runA.geometry, runB.geometry) : null),
     [runA, runB],
@@ -211,6 +226,8 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
       visibleFractionA: result.foreshortening.a?.visibleFraction ?? null,
       visibleFractionB: result.foreshortening.b?.visibleFraction ?? null,
       calibration: profile?.unavailable ? null : `${runA.label} / ${runB.label}`,
+      // 🚨 測り方を落とさない。SR の注記（系統誤差の書き方）がこれで変わる（§16.5）。
+      diameterMethod,
       percentDiameterStenosis: stenosis?.percentDiameterStenosis ?? null,
       percentAreaStenosis: stenosis?.percentAreaStenosis ?? null,
       mldMm: stenosis?.mldMm ?? null,
@@ -246,12 +263,7 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
       separationDeg,
       // 🚨 2 方向の測り方が違うまま合成したら、その事実を出す（"mixed"）。
       //    片方が半値法・片方が密度計測だと、断面積は**どちらの意味でもない**。
-      diameterMethod:
-        runA && runB
-          ? runA.diameterMethod === runB.diameterMethod
-            ? runA.diameterMethod
-            : "mixed"
-          : (runA ?? runB)?.diameterMethod ?? null,
+      diameterMethod,
       pointsA: runA?.centerline.length ?? 0,
       pointsB: runB?.centerline.length ?? 0,
       anchorCount: anchorList.length,
@@ -447,6 +459,7 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
                   profile={profile}
                   suggestions={suggestions}
                   stenosis={stenosis}
+                  diameterMethod={diameterMethod}
                 />
               ) : null}
             </div>
@@ -529,12 +542,15 @@ function ResultPanel({
   profile,
   suggestions,
   stenosis,
+  diameterMethod,
 }: {
   result: Recon3DResult;
   refinement: GeometryRefinement | null;
   profile: CrossSectionProfile | null;
   suggestions: readonly WorkingAngleSuggestion[];
   stenosis: Stenosis3DResult | null;
+  /** 合成した 2 方向の径の測り方。注記がこれで変わる（§16.5）。 */
+  diameterMethod: "half-max" | "densitometric" | "mixed" | null;
 }) {
   const { t } = useI18n();
   return (
@@ -602,7 +618,7 @@ function ResultPanel({
       ) : null}
 
       {/* ── 断面（§10.2.6）と狭窄率 ─────────────────────────── */}
-      {profile ? <CrossSectionPanel profile={profile} /> : null}
+      {profile ? <CrossSectionPanel profile={profile} diameterMethod={diameterMethod} /> : null}
       {stenosis ? (
         <>
           <div style={row}>
@@ -652,7 +668,14 @@ function angleLabel(primary: number, secondary: number): string {
 }
 
 /** 3D 断面。**出せない条件を黙って埋めない**（§10.2.5）。 */
-function CrossSectionPanel({ profile }: { profile: CrossSectionProfile }) {
+function CrossSectionPanel({
+  profile,
+  diameterMethod,
+}: {
+  profile: CrossSectionProfile;
+  /** null（測り方が分からない）は**安全側**に半値法として扱う。 */
+  diameterMethod: "half-max" | "densitometric" | "mixed" | null;
+}) {
   const { t } = useI18n();
   if (profile.unavailable) {
     return (
@@ -684,10 +707,17 @@ function CrossSectionPanel({ profile }: { profile: CrossSectionProfile }) {
           </span>
         </div>
       ) : null}
-      {/* 🔴 系統誤差を結果と同じ画面に出す。別ページの注記では読まれない。 */}
+      {/* 🔴 系統誤差を結果と同じ画面に出す。別ページの注記では読まれない。
+          🚨 **測り方で内容が変わる**。密度計測（A4c）なら半値法の係数は乗らない（§16.5.1）。 */}
       <div style={row}>
         <span style={bad} data-testid="xa3d-section-bias">
-          {t("xa3d.section.bias")}
+          {t(
+            diameterMethod === "densitometric"
+              ? "xa3d.section.bias.densitometric"
+              : diameterMethod === "mixed"
+                ? "xa3d.section.bias.mixed"
+                : "xa3d.section.bias",
+          )}
         </span>
       </div>
     </>

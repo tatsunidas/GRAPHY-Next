@@ -26,6 +26,12 @@ public record QvaSrRequest(
         String calibration,
         String vesselLabel,
         String manualCorrection,
+        /*
+         * 径を何で測ったか（"half-max" / "densitometric"）。null なら半値法として扱う。
+         * 設計 §16.5。<b>拡張比（最大径 / 参照径）は太さの違う 2 点の比なので、半値法の
+         * 係数は打ち消されない</b>（%DS とはここが違う）。だから測り方を必ず残す。
+         */
+        String diameterMethod,
         double mld,
         double rvd,
         double percentDiameterStenosis,
@@ -35,8 +41,9 @@ public record QvaSrRequest(
     /**
      * 拡張（瘤）の計測。
      *
-     * @param ratio        最大径 / 参照径。<b>半値法の系統誤差（約 13% 過小・§16.4）が
-     *                     打ち消される量</b>なので、瘤かどうかの判定はこれで行う
+     * @param ratio        最大径 / 参照径。🔴 <b>%DS と違って、半値法の係数はここでは
+     *                     打ち消されない</b>——太さの違う 2 点の比であり、係数は径と断面の形に
+     *                     依存するため（§16.4）。密度計測（A4c）ならその依存は無い
      * @param eccentricity 0（全周性＝紡錘状）〜1（片側だけ＝嚢状）。測れなければ null
      * @param aneurysmal   参照径の 1.5 倍以上か。<b>基準そのものも SR の本文に書く</b>
      */

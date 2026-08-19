@@ -11,6 +11,7 @@ import org.dcm4che3.data.VR;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -35,8 +36,13 @@ class QvaSrWriterTest {
     }
 
     private static QvaSrRequest req(String unit, QvaSrRequest.Dilation dilation) {
+        return req(unit, dilation, "densitometric");
+    }
+
+    private static QvaSrRequest req(String unit, QvaSrRequest.Dilation dilation, String diameterMethod) {
         return new QvaSrRequest("1.2.3", "1.2.3.9", "1.2.3.10", 4, unit,
                 "DICOM PixelSpacing（GEOMETRY） (0.2250 mm/px)", "右浅大腿動脈", null,
+                diameterMethod,
                 2.10, 3.00, 30.0, 8.4, dilation);
     }
 
@@ -151,13 +157,31 @@ class QvaSrWriterTest {
 
     @Test
     void methodRecordsTheProjectionAndBiasLimits() {
-        var r = QvaSrWriter.build(template(), req("mm", dilation(2.0, true, 0.9)));
+        var r = QvaSrWriter.build(template(), req("mm", dilation(2.0, true, 0.9), "half-max"));
         String method = findByCode(measurementGroup(r.dataset()), "METHOD").getString(Tag.TextValue);
         assertTrue(method.contains("Single projection"), method);
-        assertTrue(method.contains("13%"), method);
-        assertTrue(method.contains("ratios are unaffected"), method);
+        // 🔴 拡張比は太さの違う 2 点の比なので、**%DS と違って係数が打ち消されない**（§16.4）。
+        //    かつて "ratios are unaffected" と書いていたのは誤り。
+        assertTrue(method.contains("does NOT cancel in the dilatation ratio"), method);
+        assertFalse(method.contains("ratios are unaffected"), method);
         // 3D-RA のプラグインと取り違えられないようにする。
         assertTrue(method.contains("Not a 3D-RA aneurysm detection"), method);
+        assertTrue(findByCode(measurementGroup(r.dataset()), "DIAMMETHOD")
+                .getString(Tag.TextValue).contains("Half-maximum"));
+    }
+
+    @Test
+    void 密度計測なら半値法の系統誤差を書かない() {
+        // 🚨 A4c 以降、報告する径は密度計測（設計 §16.5.1）。
+        var r = QvaSrWriter.build(template(), req("mm", dilation(2.0, true, 0.9)));
+        Attributes g = measurementGroup(r.dataset());
+        String method = findByCode(g, "METHOD").getString(Tag.TextValue);
+        assertFalse(method.contains("half-maximum method, which reads low"), method);
+        assertTrue(method.contains("densitometric"), method);
+        assertTrue(method.contains("read high"), method);
+        String how = findByCode(g, "DIAMMETHOD").getString(Tag.TextValue);
+        assertTrue(how.contains("Densitometric"), how);
+        assertTrue(how.contains("healthy segment is assumed circular"), how);
     }
 
     @Test
@@ -167,7 +191,8 @@ class QvaSrWriterTest {
                 .contains("None (fully automatic)"));
         var edited = QvaSrWriter.build(template(),
                 new QvaSrRequest("1.2.3", "1.2.3.9", "1.2.3.10", 4, "mm", null, null,
-                        "waypoints=2; reference=ends", 2.1, 3.0, 30.0, 8.4, dilation(2.0, true, 0.1)));
+                        "waypoints=2; reference=ends", "densitometric",
+                        2.1, 3.0, 30.0, 8.4, dilation(2.0, true, 0.1)));
         assertEquals("waypoints=2; reference=ends",
                 findByCode(measurementGroup(edited.dataset()), "MANUAL").getString(Tag.TextValue));
     }

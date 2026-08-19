@@ -413,6 +413,9 @@ export function XaAnalysisDialog({
         calibration: c?.provenance ?? null,
         vesselLabel: null,
         manualCorrection: describeManual(result),
+        // 🚨 測り方を落とさない。SR の注記（系統誤差の書き方）がこれで変わる（§16.5）。
+        //    🔴 拡張比は %DS と違って半値法の係数が打ち消されないので、QVA では特に効く。
+        diameterMethod: result.provenance.diameterMethod,
         mld: result.mld,
         rvd: result.rvd,
         percentDiameterStenosis: result.percentDiameterStenosis,
@@ -980,6 +983,14 @@ export function XaAnalysisDialog({
                 <div style={hint} data-testid="qva-no-dilation">{t("qva.judge.noDilation")}</div>
               )}
               <div style={hint}>{t("qva.projectionCaveat")}</div>
+              {/* 🚨 径の測り方で注記が変わる。密度計測（A4c）なら半値法の係数は乗らない（§16.5.1）。 */}
+              <div style={hint} data-testid="qva-diameter-caveat">
+                {t(
+                  result.provenance.diameterMethod === "densitometric"
+                    ? "qva.caveat.densitometric"
+                    : "qva.caveat.halfMax",
+                )}
+              </div>
             </div>
           )}
 

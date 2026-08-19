@@ -50,6 +50,9 @@ final class QvaSrWriter {
     private static final Code VESSEL = new Code("VESSEL", "99GRAPHYNEXT", null, "Vessel Segment");
     private static final Code METHOD = new Code("METHOD", "99GRAPHYNEXT", null, "Analysis Method");
     private static final Code MANUAL = new Code("MANUAL", "99GRAPHYNEXT", null, "Manual Correction");
+    /** {@link QcaSrWriter} と同じコード（2D QCA と別の意味に読まれないよう揃える）。 */
+    private static final Code DIAMETER_METHOD =
+            new Code("DIAMMETHOD", "99GRAPHYNEXT", null, "Diameter Measurement Method");
     private static final Code OF_INTEREST = new Code("113000", "DCM", null, "Of Interest");
 
     /** 「動脈瘤」と呼ぶ比。フロント（{@code qva.ts} の ANEURYSM_RATIO）と同じ値。 */
@@ -155,11 +158,26 @@ final class QvaSrWriter {
                 req.manualCorrection() != null && !req.manualCorrection().isBlank()
                         ? req.manualCorrection()
                         : "None (fully automatic)"));
+        // 🚨 **測り方を必ず残す**（§16.5）。半値法と密度計測では絶対値が 10% 以上違う。
+        boolean densitometric = "densitometric".equalsIgnoreCase(req.diameterMethod());
+        items.add(text(DIAMETER_METHOD, densitometric
+                ? "Densitometric (attenuation integrated to a cross-sectional area; no shape assumed for the "
+                        + "dilated segment, but the healthy segment is assumed circular when the reference "
+                        + "attenuation coefficient is derived from it). The drawn outline comes from the "
+                        + "half-maximum method and is a different measurement."
+                : "Half-maximum (edge-based)."));
         items.add(text(METHOD,
                 "GRAPHY-Next QVA (research use only). Single projection: the maximum diameter is the largest "
                         + "diameter in the projected direction, not necessarily the largest diameter of the "
-                        + "aneurysm. Absolute diameters carry a systematic underestimate of about 13% "
-                        + "(half-maximum edges on a cylindrical lumen); ratios are unaffected. "
+                        + "aneurysm. "
+                        + (densitometric
+                                ? "Diameters are densitometric, so no edge-detection bias is applied to them; "
+                                        + "scatter, overlapping vessels or heavy noise can make them read high "
+                                        + "instead. "
+                                : "Diameters come from the half-maximum method, which reads low for a rounded "
+                                        + "lumen; the factor depends on the diameter and on the shape of the "
+                                        + "cross-section, so it does NOT cancel in the dilatation ratio "
+                                        + "(unlike percent stenosis, which compares the same cross-section). ")
                         + "Not a 3D-RA aneurysm detection."
                         + (mm ? "" : " NOT SPATIALLY CALIBRATED: lengths are in pixels.")));
         root.add(group);

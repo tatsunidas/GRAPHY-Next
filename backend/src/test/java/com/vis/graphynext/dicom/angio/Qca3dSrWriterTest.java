@@ -11,6 +11,7 @@ import org.dcm4che3.data.VR;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -37,12 +38,32 @@ class Qca3dSrWriterTest {
         return new Qca3dSrRequest("1.2.3", "1.2.3.9", "1.2.3.10", 1, "1.2.3.11", 1,
                 90.0, 5, 0.01, true, 63.1, 5.018, 2.528, 0.783, 0.485,
                 "DICOM PixelSpacing (GEOMETRY) 0.225 mm/px",
+                "densitometric",
+                49.2, 74.2, 1.42, 2.80, 4.1);
+    }
+
+    /** 半値法で測った版（注記が変わることを見る）。 */
+    private static Qca3dSrRequest halfMax() {
+        return new Qca3dSrRequest("1.2.3", "1.2.3.9", "1.2.3.10", 1, "1.2.3.11", 1,
+                90.0, 5, 0.01, true, 63.1, 5.018, 2.528, 0.783, 0.485,
+                "DICOM PixelSpacing (GEOMETRY) 0.225 mm/px",
+                "half-max",
+                49.2, 74.2, 1.42, 2.80, 4.1);
+    }
+
+    /** 2 方向で測り方が違う版（**どちらの意味でもない**ことを書かせる）。 */
+    private static Qca3dSrRequest mixedMethod() {
+        return new Qca3dSrRequest("1.2.3", "1.2.3.9", "1.2.3.10", 1, "1.2.3.11", 1,
+                90.0, 5, 0.01, true, 63.1, 5.018, 2.528, 0.783, 0.485,
+                "DICOM PixelSpacing (GEOMETRY) 0.225 mm/px",
+                "mixed",
                 49.2, 74.2, 1.42, 2.80, 4.1);
     }
 
     private static Qca3dSrRequest uncalibrated() {
         return new Qca3dSrRequest("1.2.3", "1.2.3.9", "1.2.3.10", 1, "1.2.3.11", 1,
                 90.0, 5, 0.01, true, 63.1, null, null, 0.783, 0.485, null,
+                null,
                 null, null, null, null, null);
     }
 
@@ -50,6 +71,7 @@ class Qca3dSrWriterTest {
         return new Qca3dSrRequest("1.2.3", "1.2.3.9", "1.2.3.10", 1, "1.2.3.11", 1,
                 90.0, 2, 1.61, false, 63.1, 5.018, 2.528, 0.783, 0.485,
                 "DICOM PixelSpacing (GEOMETRY) 0.225 mm/px",
+                "densitometric",
                 49.2, 74.2, 1.42, 2.80, 4.1);
     }
 
@@ -170,15 +192,44 @@ class Qca3dSrWriterTest {
     void methodNoteStatesTheSystematicBiasAndPoseLimitation() {
         // 🔴 系統誤差と「姿勢は復元できない」ことを、数値と同じ場所に書く。
         // 別ページの注記では読まれない。
-        String note = findByCode(measurementGroup(Qca3dSrWriter.build(template(), calibrated()).dataset()), "METHOD")
+        String note = findByCode(measurementGroup(Qca3dSrWriter.build(template(), halfMax()).dataset()), "METHOD")
                 .getString(Tag.TextValue);
         assertTrue(note.contains("13%"), note);
         assertTrue(note.contains("24%"), note);
+        // 🔴 「13% 過小」を定数として読ませない。係数は断面の形で動く（§16.5）。
+        assertTrue(note.contains("depends on the shape of the cross-section"), note);
         assertTrue(note.contains("pose in patient coordinates is NOT"), note);
         assertTrue(note.contains("cardiac phase matching is approximate"), note);
         assertTrue(note.contains("research use only"), note);
         // 比では打ち消され、絶対値には残る——という非対称を書いておく。
         assertTrue(note.contains("Percent stenosis is a ratio and largely cancels"), note);
+    }
+
+    @Test
+    void 密度計測なら半値法の系統誤差を書かない() {
+        // 🚨 A4c 以降、報告する径は密度計測。ここに「13% 過小」と書き続けると
+        //    ユーザに嘘を読ませることになる（設計 §16.5.1）。
+        Attributes g = measurementGroup(Qca3dSrWriter.build(template(), calibrated()).dataset());
+        String note = findByCode(g, "METHOD").getString(Tag.TextValue);
+        assertFalse(note.contains("13%"), note);
+        assertTrue(note.contains("densitometric"), note);
+        // 密度計測に固有の外れ方（過大に出る）は書く。
+        assertTrue(note.contains("read high"), note);
+        String how = findByCode(g, "DIAMMETHOD").getString(Tag.TextValue);
+        assertTrue(how.contains("Densitometric"), how);
+        // 健常部は円と仮定していること・輪郭は別方式であることまで書く（§16.5.2）。
+        assertTrue(how.contains("healthy segment is assumed circular"), how);
+        assertTrue(how.contains("half-maximum"), how);
+    }
+
+    @Test
+    void 二方向で測り方が違うならそれを書く() {
+        // 片方が半値法・片方が密度計測なら、合成した断面は**どちらの意味でもない**。
+        Attributes g = measurementGroup(Qca3dSrWriter.build(template(), mixedMethod()).dataset());
+        assertTrue(findByCode(g, "DIAMMETHOD").getString(Tag.TextValue).contains("MIXED"));
+        String note = findByCode(g, "METHOD").getString(Tag.TextValue);
+        assertTrue(note.contains("DIFFERENT diameter methods"), note);
+        assertTrue(note.contains("Use the percent stenosis"), note);
     }
 
     @Test

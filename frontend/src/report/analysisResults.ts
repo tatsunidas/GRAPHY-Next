@@ -66,7 +66,7 @@ export interface AnalysisResultRecord {
  * `caveats` が空の記録は**作らせない**（{@link assertHasCaveats} で検査する）。
  * どの解析にも必ず言うべきことがある —— 少なくとも「研究用であり診断に用いない」。
  * 空の注意書きを許すと、**注意書きを書き忘れた結果が、注意の要らない結果と同じ顔で**
- * レポートに載る。§16.4 の系統誤差（径 13% 過小）がまさにそれで、
+ * レポートに載る。§16.4 の系統誤差（半値法だと径が小さめに出る）がまさにそれで、
  * **MLD/RVD を絶対値で報告書に載せる以上、避けて通れない**。
  */
 export function formatAnalysisBlock(r: AnalysisResultRecord, labels: BlockLabels): string {

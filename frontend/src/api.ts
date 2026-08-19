@@ -332,6 +332,12 @@ export interface QvaSrRequest {
   calibration?: string | null;
   vesselLabel?: string | null;
   manualCorrection?: string | null;
+  /**
+   * 径を何で測ったか（`"half-max"` / `"densitometric"`）。省略時は半値法として扱う。
+   * 🔴 **拡張比（最大径 / 参照径）では、%DS と違って半値法の係数が打ち消されない**
+   * （太さの違う 2 点の比だから。`fw/angio-design.md` §16.4）。だから測り方を必ず残す。
+   */
+  diameterMethod?: string | null;
   mld: number;
   rvd: number;
   percentDiameterStenosis: number;
@@ -407,7 +413,12 @@ export interface Qca3dSrRequest {
   visibleFractionA: number | null;
   visibleFractionB: number | null;
   calibration: string | null;
-  /** 狭窄率は比なので半値法の系統誤差がほぼ打ち消される。MLD/RVD の絶対値には残る。 */
+  /**
+   * 2 方向の径を何で測ったか（`"half-max"` / `"densitometric"`／2 方向で違うなら `"mixed"`）。
+   * 省略時は半値法として扱う（**安全側**）。SR の系統誤差の注記がこれで変わる（§16.5）。
+   */
+  diameterMethod?: string | null;
+  /** 狭窄率は比なので測り方に依らずほぼ打ち消される。MLD/RVD の絶対値は測り方に依る。 */
   percentDiameterStenosis: number | null;
   percentAreaStenosis: number | null;
   mldMm: number | null;
