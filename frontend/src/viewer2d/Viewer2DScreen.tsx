@@ -62,6 +62,12 @@ import { WlPresetDialog } from "./WlPresetDialog";
 import { fetchSettings } from "../settings/settingsApi";
 import { applyGlobalLabelmapStyle, applyGlobalAnnotationStyle } from "../viewer/cornerstoneSetup";
 import { Viewer2DToolbar, type ViewerActions } from "./Viewer2DToolbar";
+import {
+  estimatePluginVolume,
+  loadPluginVolume,
+  registerPluginVolumes,
+} from "../plugins/pluginVolumeApi";
+import { resamplePluginVolume } from "../plugins/pluginResample";
 import { PluginSaveConfirmDialog, type PluginSaveRequest } from "./PluginSaveConfirmDialog";
 import { Viewer2DMenuBar } from "./Viewer2DMenuBar";
 import { RoiManagerPanel } from "./RoiManagerPanel";
@@ -604,6 +610,10 @@ function TileGrid({
 }) {
   const { t } = useI18n();
   const n = patient.tiles.length;
+  // actions（useMemo）から**最新の**タイル一覧を引くための参照。actions を tiles に依存させると
+  // タイルを開くたびに host が作り直され、プラグイン側の購読が切れる。
+  const tilesRef = useRef<Tile[]>(patient.tiles);
+  tilesRef.current = patient.tiles;
 
   // ROI（幾何注釈）の自動保存（`fw/roi-manager-design.md` M5）。
   // 収集は患者単位（annotation state は本体でグローバル）。復元は各タイル（Viewer2D）が行う。
@@ -850,6 +860,22 @@ function TileGrid({
         /* 既定のまま */
       });
   }, []);
+  /**
+   * seriesUid → studyUid（H10 / H21 で `studyUid` 省略時に使う）。
+   *
+   * <p>★ **この患者セッションで開いているタイルからしか引かない。** 総当たりで探しに行くと、
+   * プラグインが患者を跨いで読めてしまう（患者の取り違えは黙って起きる種類の事故）。
+   */
+  const studyUidOfSeries = useCallback(
+    (seriesUid: string): string | undefined => {
+      for (const tile of tilesRef.current) {
+        if (tile.series.seriesInstanceUid === seriesUid) return tile.study.studyInstanceUid;
+      }
+      return undefined;
+    },
+    [],
+  );
+
   const actions = useMemo<ViewerActions>(
     () => ({
       fit: () => runViewerCommand(resolveTargets(), (c) => c.fit()),
@@ -871,6 +897,13 @@ function TileGrid({
       resetWindow: () => runViewerCommand(resolveTargets(), (c) => c.resetWindow()),
       // 問い合わせ系（プラグイン host API H1/H2）。対象の解決は命令系と同一（選択→無ければ全）。
       // 未登録タイル（fusion 子・アンマウント途中）は queryViewerCommand が null を返すので落ちる。
+      // H10 / H21: ボリュームの読み出しと位置合わせ。実装は `plugins/pluginVolumeApi.ts`
+      // （本体の regVolumeLoader / regWorkerClient をそのまま使う。計算をここに書かない）。
+      loadVolume: (ref, onProgress) => loadPluginVolume(mode, studyUidOfSeries, ref, onProgress),
+      estimateVolume: (ref) => estimatePluginVolume(mode, studyUidOfSeries, ref),
+      registerVolumes: (req, onProgress) =>
+        registerPluginVolumes(mode, studyUidOfSeries, req, onProgress),
+      resampleVolume: (source, transform, target) => resamplePluginVolume(source, transform, target),
       getTargets: () =>
         resolveTargets().flatMap((tileId) => {
           const info = queryViewerCommand(tileId, (c) => c.getTargetInfo());

@@ -166,9 +166,17 @@ export async function loadRegVolume(
     : normal;
 
   const firstId = zStack.find(Boolean);
-  const frameOfReferenceUid = firstId
-    ? String((metaData.get("frameOfReferenceModule", firstId) as AnyObj)?.frameOfReferenceUID ?? "")
-    : "";
+  // ★ FrameOfReferenceUID は **`imagePlaneModule`** から取る（本体の他の箇所——RTSTRUCT/SEG 書き出し・
+  //   ThickSlab・MPR——もすべてそこから引いている）。`frameOfReferenceModule` という provider は
+  //   dicom-image-loader が返さないので、こちらだけ**常に空文字**になっていた
+  //   ＝ `sameFrameOfReference` が常に false で、位置合わせの初期化が毎回「別 FoR」扱いだった
+  //   （2026-08-19 に H10 の実機検証で発覚）。
+  const firstPlane = firstId ? (metaData.get("imagePlaneModule", firstId) as AnyObj) : null;
+  const frameOfReferenceUid = String(
+    firstPlane?.frameOfReferenceUID ??
+      (firstId ? (metaData.get("frameOfReferenceModule", firstId) as AnyObj)?.frameOfReferenceUID : "") ??
+      "",
+  );
 
   return {
     volume: makeVolume(

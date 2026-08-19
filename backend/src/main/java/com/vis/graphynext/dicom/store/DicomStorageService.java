@@ -257,6 +257,11 @@ public class DicomStorageService {
         if (seg != null) {
             return seg;
         }
+        // NM（SPECT）の古典マルチフレーム断層は フレーム=Z に展開する（プラグイン host API の H28）。
+        com.vis.graphynext.dicom.SeriesLayout nm = nmLayoutIfApplicable(insts);
+        if (nm != null) {
+            return nm;
+        }
         // XA/XRF の古典マルチフレーム（シネ）は ラン=Z・フレーム=T に展開する（fw/angio-design.md §5.2）。
         com.vis.graphynext.dicom.SeriesLayout xa = xaLayoutIfApplicable(insts);
         if (xa != null) {
@@ -370,6 +375,22 @@ public class DicomStorageService {
      * XA/XRF の古典マルチフレーム（シネ）レイアウト。対象が無ければ null（従来経路へ）。
      * ロジックは web モードと共有（{@link com.vis.graphynext.dicom.XaFrameExpander}）。
      */
+    /** NM（SPECT）の古典マルチフレーム断層なら フレーム=Z のレイアウトを返す（H28）。 */
+    private com.vis.graphynext.dicom.SeriesLayout nmLayoutIfApplicable(java.util.List<DicomInstance> insts) {
+        java.util.List<Attributes> headers = new java.util.ArrayList<>();
+        for (DicomInstance inst : insts) {
+            Attributes ds = readHeaderQuietly(inst);
+            if (ds != null) {
+                headers.add(ds);
+            }
+        }
+        com.vis.graphynext.dicom.SeriesLayout nm = com.vis.graphynext.dicom.NmFrameExpander.layout(headers);
+        if (nm != null) {
+            log.debug("NM tomo series: slices={} phases={}", nm.nZ(), nm.nT());
+        }
+        return nm;
+    }
+
     private com.vis.graphynext.dicom.SeriesLayout xaLayoutIfApplicable(java.util.List<DicomInstance> insts) {
         java.util.List<Attributes> headers = new java.util.ArrayList<>();
         for (DicomInstance inst : insts) {
@@ -804,7 +825,36 @@ public class DicomStorageService {
         if (isMosaic(head)) {
             return mosaicTileDicom(sopUid, frame);
         }
+        // NM 断層は per-frame の幾何を持たないので、こちらで作って与える（H28）。
+        if (com.vis.graphynext.dicom.NmFrameExpander.isNmTomo(head)) {
+            return nmFrameDicom(sopUid, frame);
+        }
         return multiFrameDicom(sopUid, frame);
+    }
+
+    /** NM 断層マルチフレームの指定フレームを、幾何（IPP/IOP/スライス厚）を補って単一フレームで返す。 */
+    @Transactional(readOnly = true)
+    public byte[] nmFrameDicom(String sopUid, int frame) {
+        Path path = resolveInstanceFile(sopUid);
+        if (path == null) {
+            return null;
+        }
+        try (DicomInputStream in = new DicomInputStream(path.toFile())) {
+            in.setIncludeBulkData(IncludeBulkData.YES);
+            in.readFileMetaInformation();
+            Attributes ds = in.readDataset(-1, -1);
+            String ts = in.getTransferSyntax();
+            if (ts == null || !(ts.equals(org.dcm4che3.data.UID.ImplicitVRLittleEndian)
+                    || ts.equals(org.dcm4che3.data.UID.ExplicitVRLittleEndian)
+                    || ts.equals(org.dcm4che3.data.UID.ExplicitVRBigEndian))) {
+                log.warn("NM multiframe: 圧縮 TS は未対応 {}", ts);
+                return null;
+            }
+            return com.vis.graphynext.dicom.NmFrameExpander.extractFrame(ds, frame);
+        } catch (IOException e) {
+            log.warn("NM frame の抽出に失敗 sop={} frame={}", sopUid, frame, e);
+            return null;
+        }
     }
 
     /**

@@ -19,6 +19,14 @@ import {
   type ViewerTileRoi,
   type ViewerTileViewState,
 } from "../viewer/viewerCommands";
+import type {
+  PluginRegistrationRequest,
+  PluginRegistrationResult,
+  PluginSeriesRef,
+  PluginVolume,
+  PluginVolumeEstimate,
+  PluginVolumeGrid,
+} from "../plugins/pluginTypes";
 import { ToolIcon } from "../icons/ToolIcon";
 import { UI_ICON_FILES } from "../icons/toolIcons";
 
@@ -53,6 +61,23 @@ export interface ViewerActions {
    * tileId 省略時は**対象タイル全部**（ベースラインと追跡を並べて開いている場合に両方読めるよう）。
    */
   getRois(tileId?: string): ViewerTileRoi[];
+  /**
+   * **シリーズ 1 本をボリュームとして読む**（H10）。校正済み値＋患者 LPS の幾何。
+   * 開いていないシリーズも読める（`studyUid` 省略時は開いているタイルから解決）。
+   */
+  loadVolume(
+    ref: PluginSeriesRef,
+    onProgress?: (loaded: number, total: number) => void,
+  ): Promise<PluginVolume | null>;
+  /** 読み込み前の大きさの見積り（H10）。 */
+  estimateVolume(ref: PluginSeriesRef): Promise<PluginVolumeEstimate | null>;
+  /** **位置合わせを実行する**（H21）。本体の検証済み実装をそのまま使う。 */
+  registerVolumes(
+    req: PluginRegistrationRequest,
+    onProgress?: (fraction: number, stage: string) => void,
+  ): Promise<PluginRegistrationResult | null>;
+  /** 位置合わせの結果でリサンプルする（H21）。範囲外は NaN。 */
+  resampleVolume(source: PluginVolume, transform: unknown | null, target: PluginVolumeGrid): PluginVolume;
   /**
    * **表示位置を移動する**（H14）。結果の行から該当スライスへ飛ぶ用途。
    * 範囲外は端に丸める。読み出し（getPixelData）とは別にしてある。

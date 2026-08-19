@@ -263,6 +263,10 @@ H1・H2 は実質「これを本番向けの契約として切り出す」作業
 | **H9** ✅ | **計測レポート（DICOM SR）** — 計測を保管庫 / PACS へレポートとして残す | `saveStructuredReport(tileId?, req)` | DICOM はプラグインに書かせない（H4b と同じ）。**確認ダイアログ抑止不可**／未知の計測種別は拒否／UNVERIFIED で保存。TID 1500 の形に沿うが完全準拠は主張しない | ✅（standalone。web は未対応） |
 | **H8** ✅ | **プラグイン保存領域** — プラグインが計算した内容を患者単位で backend に保管 | `loadStore(patientKey?)` / `saveStore(json, opts?)` / `deleteStore(patientKey?)` | プラグイン id × 患者で領域を分け、**楽観ロックで上書き事故を防ぐ**。backend は中身を解釈しない。`localStorage` だと端末に閉じ、別 PC で過去の回が見えず判定が静かに変わる | ✅ |
 
+| **H10** ✅ | **ボリュームの読み出し** — シリーズ丸ごとを**校正済み値＋患者 LPS の幾何**で読む | `loadVolume(ref, onProgress?)` / `estimateVolume(ref)` | 実装は `plugins/pluginVolumeApi.ts` ＝ **`regVolumeLoader` を公開しただけ**（計算を増やさない）。**1 回 1 ボリューム**（まとめて返すと呼び出し側がメモリを見積もらない）。`studyUid` 省略時は**開いているタイルからのみ**解決＝患者を跨いで読ませない | ✅ |
+| **H21** ✅ | **位置合わせの実行とリサンプル** | `registerVolumes(req, onProgress?)` / `resampleVolume(src, transform, target)` | 実装は本体の `regWorkerClient`（剛体・非剛体とも Worker）＋ `registrationToTransform`。**プラグインのボリュームは受け取らない**（Worker へ転送すると呼び出し側の配列が detach される）。リサンプルの向きは pull-back、**範囲外は NaN** | ✅ |
+| **H28** ✅ | **多フレーム NM（SPECT）の展開** — 断層をスライスとして開く | （API ではなく本体の挙動） | `NmFrameExpander`（`XaFrameExpander` / `SegFrameExpander` と同じ形）。**NM はルートに IPP/IOP を持たない**ので、`DetectorInformationSequence` ＋ `SpacingBetweenSlices` から per-frame の位置を作る。**間隔が無ければ座標を作らない**（捏造しない） | ✅ |
+
 H1〜H3 は**フロント面だけで完結**するため、web モードでも同じように動く（backend の契約 `/api/plugins` は不変）。
 
 #### H1・H2 の実装（2026-07-29・GRAPHY-Next 0.1.9 以降）
@@ -821,6 +825,34 @@ host.locale   // "ja" | "en"（活性化した時点の値）
 
 **実装**: `plugins/pluginTypes.ts`（契約）/ `viewer2d/Viewer2DMenuBar.tsx`・`mainscreen/MenuBar.tsx`
 （host へ結線）/ `examples/plugin-template/graphy-plugin.d.ts`。
+
+#### H10 / H21 / H28 の実装（2026-08-19・線量評価プラグインからの要求）
+
+**動機**: 線量評価（セラノスティクス）は **4〜5 時点 ×（SPECT ＋ CT）** を扱う。
+`getPixelData`（1 枚ずつ・開いているタイルのみ）では**格子の対応が原理的に組めず**、
+実データの SPECT（多フレーム NM）はそもそもスライスとして開けなかった。
+
+| # | 何をしたか | 使った既存アセット |
+|---|---|---|
+| **H10** | `loadVolume` / `estimateVolume` を host へ | `viewer/regVolumeLoader.ts`（`loadRegVolume` / `estimateRegVolume`） |
+| **H21** | `registerVolumes` / `resampleVolume` を host へ | `viewer/regWorkerClient.ts`・`viewer/regResult.ts`・`viewer/regGeometry.ts` の `sampleWorld` |
+| **H28** | NM 断層の多フレームを Z に展開 | `dicom/SegFrameExpander`（フレーム抽出）・`XaFrameExpander`（展開の作法） |
+
+**実装で分かったこと**:
+
+- 🔴 **`regVolumeLoader` の FrameOfReferenceUID が常に空だった。** `frameOfReferenceModule` という
+  provider は dicom-image-loader が返さない（本体の他の箇所はすべて `imagePlaneModule.frameOfReferenceUID`
+  から引いている）。**位置合わせの `sameFrameOfReference` が常に false** で、初期化が毎回
+  「別 FoR」扱いになっていた。H10 の実機検証で発覚し、同時に直した。
+- **NM のフレーム切り出しは SOP UID を決定的にした**（親 SOP ＋ フレーム番号）。毎回ランダムだと
+  読み直すたびに別インスタンスに見え、ROI の復元やキャッシュが噛み合わない。
+- **プラグインのボリュームを位置合わせに渡させない。** Worker へは画素バッファを*転送*するので、
+  渡した側の配列が detach されて壊れる。**仕様で事故を防ぐ**（シリーズ参照だけを受け取る）。
+
+**実機検証**（`automator/src/spike/volumeApiCheck.ts`・**43/0**）: 真値既知のファントム GNBP-D
+（線量評価プラグインの `bench/`）で、NM が 48 スライスに展開されること・各スライスに患者座標が付くこと・
+`loadVolume` の次元/間隔/患者座標/値が真値と一致すること（肝の (-60,-10,20) で 114580 Bq/mL）・
+同一シリーズ同士の位置合わせが移動量ゼロになること・**CT の格子へリサンプルしても値が保たれること**を確認。
 
 ### 7.3 副作用（着手時に必ずセットで行うこと）
 

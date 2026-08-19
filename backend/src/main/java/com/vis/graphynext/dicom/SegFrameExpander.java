@@ -194,6 +194,19 @@ public final class SegFrameExpander {
      * を付与する。呼び出し側で転送構文が非圧縮であることを確認しておくこと。
      */
     public static byte[] extractFrame(Attributes ds, int frame) {
+        return extractFrame(ds, frame, null, null, null);
+    }
+
+    /**
+     * 幾何を外から与えられる版（NM 断層のように <b>per-frame の幾何をデータが持たない</b> 形式のため。
+     * {@link NmFrameExpander} が使う）。null を渡した項目は従来どおりデータから拾う。
+     *
+     * @param ippOverride     そのフレームの ImagePositionPatient（null ならデータから）
+     * @param iopOverride     ImageOrientationPatient（null ならデータから）
+     * @param sliceThickness  スライス厚 [mm]（null なら書かない）
+     */
+    public static byte[] extractFrame(Attributes ds, int frame, double[] ippOverride,
+            double[] iopOverride, Double sliceThickness) {
         int rows = ds.getInt(Tag.Rows, 0);
         int cols = ds.getInt(Tag.Columns, 0);
         int nf = ds.getInt(Tag.NumberOfFrames, 1);
@@ -237,13 +250,19 @@ public final class SegFrameExpander {
             }
         }
 
-        double[] ipp = perFrameIpp(ds, frame);
-        double[] iop = sharedIop(ds);
+        double[] ipp = ippOverride != null ? ippOverride : perFrameIpp(ds, frame);
+        double[] iop = iopOverride != null ? iopOverride : sharedIop(ds);
         double[] psp = sharedPixelSpacing(ds);
 
         Attributes out = new Attributes();
         out.setString(Tag.SOPClassUID, VR.UI, UID.SecondaryCaptureImageStorage);
-        out.setString(Tag.SOPInstanceUID, VR.UI, UIDUtils.createUID());
+        // ★ フレームごとに<b>決まった</b> UID にする（毎回ランダムだと、読み直すたびに別インスタンスに
+        // 見え、ROI の復元やキャッシュが噛み合わない）。親 SOP ＋ フレーム番号で作り、64 文字を超える
+        // 場合だけ従来どおり生成する。
+        String parentSop = ds.getString(Tag.SOPInstanceUID);
+        String derived = (parentSop == null || parentSop.isBlank()) ? null : parentSop + "." + (frame + 1);
+        out.setString(Tag.SOPInstanceUID, VR.UI,
+                (derived != null && derived.length() <= 64) ? derived : UIDUtils.createUID());
         out.setString(Tag.StudyInstanceUID, VR.UI, ds.getString(Tag.StudyInstanceUID));
         out.setString(Tag.SeriesInstanceUID, VR.UI, ds.getString(Tag.SeriesInstanceUID));
         out.setString(Tag.Modality, VR.CS, ds.getString(Tag.Modality, "OT"));
@@ -259,6 +278,14 @@ public final class SegFrameExpander {
         if (ipp != null) out.setDouble(Tag.ImagePositionPatient, VR.DS, ipp);
         if (iop != null && iop.length == 6) out.setDouble(Tag.ImageOrientationPatient, VR.DS, iop);
         if (psp != null && psp.length >= 2) out.setDouble(Tag.PixelSpacing, VR.DS, psp);
+        if (sliceThickness != null && sliceThickness > 0) {
+            out.setDouble(Tag.SliceThickness, VR.DS, sliceThickness);
+            out.setDouble(Tag.SpacingBetweenSlices, VR.DS, sliceThickness);
+        }
+        String forUid = ds.getString(Tag.FrameOfReferenceUID);
+        if (forUid != null && !forUid.isBlank()) {
+            out.setString(Tag.FrameOfReferenceUID, VR.UI, forUid);
+        }
         if (binary) {
             out.setDouble(Tag.WindowCenter, VR.DS, 127.0);
             out.setDouble(Tag.WindowWidth, VR.DS, 255.0);

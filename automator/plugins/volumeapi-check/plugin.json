@@ -1,0 +1,12 @@
+{
+  "id": "volumeapi-check",
+  "name": "Volume API Check",
+  "version": "0.1.0",
+  "engines": { "graphy": ">=0.1.16" },
+  "description": "H10 (loadVolume) / H21 (registerVolumes, resampleVolume) の実機検証用プローブ。値を window.__volumeApiCheck に書くだけ。",
+  "author": "Visionary Imaging Services, Inc.",
+  "license": "AGPL-3.0-or-later",
+  "contributes": ["viewer2d.menu"],
+  "ui": "ui.js",
+  "permissions": ["read-pixels"]
+}

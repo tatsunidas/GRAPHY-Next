@@ -46,6 +46,11 @@ public final class SeriesLayoutAssembler {
         if (seg != null) {
             return seg;
         }
+        // NM（SPECT）の古典マルチフレーム断層は フレーム=Z に展開する（standalone と同一ロジック・H28）。
+        SeriesLayout nm = NmFrameExpander.layout(instances);
+        if (nm != null) {
+            return nm;
+        }
         // XA/XRF の古典マルチフレーム（シネ）は ラン=Z・フレーム=T に展開する（standalone と同一ロジック）。
         SeriesLayout xa = XaFrameExpander.layout(instances);
         if (xa != null) {

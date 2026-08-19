@@ -79,6 +79,93 @@ interface PluginHostBase {
 }
 
 /** 2D Viewer 系プラグイン（viewer2d.menu / viewer2d.toolbar）に渡すコンテキスト。 */
+/** 読み出すシリーズの指定（H10 / H21）。`studyUid` 省略時は開いているタイルから解決する。 */
+export interface PluginSeriesRef {
+  seriesUid: string;
+  studyUid?: string;
+  /** 多次元シリーズのチャンネル / 時相（既定 0）。 */
+  c?: number;
+  t?: number;
+}
+
+/** ボリュームの格子（リサンプル先の指定にも使う）。 */
+export interface PluginVolumeGrid {
+  /** [nx, ny, nz] = [columns, rows, slices]。 */
+  dims: [number, number, number];
+  /** 各軸の実効間隔 [mm]。 */
+  spacing: [number, number, number];
+  /** index (i,j,k,1) → 患者 LPS mm。row-major 4×4（16 要素）。 */
+  indexToWorld: number[];
+  /** その逆行列。 */
+  worldToIndex: number[];
+}
+
+/** H10 が返すボリューム。値は**校正済みモダリティ値**（HU / Bq/mL / SUV）。 */
+export interface PluginVolume extends PluginVolumeGrid {
+  /** z-major のフラット配列（長さ = nx·ny·nz）。 */
+  data: Float32Array;
+  /** 先頭ボクセルの ImagePositionPatient。 */
+  ipp: [number, number, number];
+  /** ImageOrientationPatient（6 要素）。 */
+  iop: number[];
+  /** スライスが 1 進むときの移動ベクトル（法線 × 間隔ではなく実測の IPP 差）。 */
+  sliceStep: [number, number, number];
+  frameOfReferenceUid: string | null;
+  modality: string;
+  /** 値の単位（`HU` / `Bq/ml` / `SUV` 等。分からなければ空文字＝**捏造しない**）。 */
+  unit: string;
+  /** DICOM SliceThickness（**スライス間隔とは別物**）。 */
+  sliceThickness: number | null;
+  seriesUid: string;
+  studyUid: string;
+}
+
+/** 読み込み前の見積り（H10）。 */
+export interface PluginVolumeEstimate {
+  bytes: number;
+  dims: [number, number, number];
+  /** 患者座標（IOP/IPP）が揃っているか。false なら空間的な処理はできない。 */
+  spatial: boolean;
+}
+
+/** 位置合わせの要求（H21）。 */
+export interface PluginRegistrationRequest {
+  fixed: PluginSeriesRef;
+  moving: PluginSeriesRef;
+  /** 既定 "rigid"。 */
+  mode?: "rigid" | "deformable" | "rigid+deformable";
+  options?: {
+    metric?: string;
+    pyramidMm?: number[];
+    samplesPerIteration?: number;
+    maxIterationsPerLevel?: number;
+    seed?: number;
+    limits?: { translationMm: number; rotationDeg: number };
+    deformable?: {
+      controlSpacingsMm?: number[];
+      maxDisplacementMm?: number;
+      regularizationWeight?: number;
+    };
+  };
+}
+
+/** 位置合わせの結果（H21）。数値は記録・表示用、`transform` はリサンプルへ渡す用。 */
+export interface PluginRegistrationResult {
+  /** fixed world → moving world の 4×4（row-major, 16 要素）。 */
+  matrix: number[];
+  center: [number, number, number];
+  translationMm: [number, number, number];
+  eulerDeg: [number, number, number];
+  metric: string;
+  metricValue: number;
+  elapsedMs: number;
+  aborted: boolean;
+  hasDeformation: boolean;
+  maxDisplacementMm: number;
+  /** 本体の内部表現。**中身を見ない**で `resampleVolume` に渡す。 */
+  transform: unknown;
+}
+
 export interface Viewer2DPluginHost extends PluginHostBase {
   surface: "viewer2d.menu" | "viewer2d.toolbar";
   /** 表示中タイルへの操作（既存の runViewerCommand 経由）。 */
@@ -203,6 +290,43 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * <p>範囲外は端に丸める。**読み出し（`getPixelData`）とは別**にしてあるので、
    * 読むだけで画面が動くことはない。`tileId` 省略時は対象タイル。
    */
+  /**
+   * **シリーズ 1 本をボリュームとして読む**（H10）。校正済みの値と**患者 LPS の幾何**が付く。
+   *
+   * <p>`getPixelData`（1 枚ずつ・開いているタイルのみ）では複数シリーズの格子の対応が組めない
+   * （線量評価は 4〜5 時点 ×（SPECT ＋ CT）を扱う）。ここは**開いていないシリーズ**も読める。
+   *
+   * <p>★ **1 回 1 ボリューム。** まとめて返す API にすると呼び出し側がメモリを見積もらなくなる。
+   * 大きさは {@link estimateVolume} で**先に**聞ける。`studyUid` 省略時は開いているタイルから解決。
+   */
+  loadVolume: (
+    ref: PluginSeriesRef,
+    onProgress?: (loaded: number, total: number) => void,
+  ) => Promise<PluginVolume | null>;
+  /** 読み込み前の大きさの見積り（H10）。 */
+  estimateVolume: (ref: PluginSeriesRef) => Promise<PluginVolumeEstimate | null>;
+  /**
+   * **位置合わせを実行する**（H21）。剛体・非剛体・その両方。本体の検証済み実装
+   * （`fw/registration-design.md`）をそのまま使う。
+   *
+   * <p>★ **プラグインが持っているボリュームは渡せない**（シリーズ参照だけを受ける）。
+   * Worker へは画素バッファを*転送*するので、渡した側の配列は detach されて壊れるため。
+   */
+  registerVolumes: (
+    req: PluginRegistrationRequest,
+    onProgress?: (fraction: number, stage: string) => void,
+  ) => Promise<PluginRegistrationResult | null>;
+  /**
+   * 位置合わせの結果で `source` を `target` の格子へリサンプルする（H21）。
+   *
+   * <p>向きは本体と同じ **target world → source world**（pull-back）。
+   * **範囲外は `NaN`**（0 で埋めない ＝「視野の外」と「空気」を混同しない）。
+   */
+  resampleVolume: (
+    source: PluginVolume,
+    transform: unknown | null,
+    target: PluginVolumeGrid,
+  ) => PluginVolume;
   goTo: (tileId: string | undefined, dims: { sliceIndex?: number; c?: number; t?: number }) => void;
   /**
    * **ROI を選択状態にする**（H14）。`null` で解除。`exclusive` 既定 true（他の選択を外す）。

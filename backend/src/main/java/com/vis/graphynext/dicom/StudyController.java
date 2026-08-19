@@ -288,6 +288,10 @@ public class StudyController {
                     || ts.equals(UID.ExplicitVRBigEndian))) {
                 return null;
             }
+            // NM 断層は per-frame の幾何を持たないので、そちらの経路で幾何を補う（H28）。
+            if (NmFrameExpander.isNmTomo(ds)) {
+                return NmFrameExpander.extractFrame(ds, frame);
+            }
             return SegFrameExpander.extractFrame(ds, frame);
         } catch (Exception e) {
             return null;
