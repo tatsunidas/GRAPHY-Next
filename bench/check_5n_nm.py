@@ -193,10 +193,18 @@ def predicted_body_centroid(matrix_4x4, deformation) -> np.ndarray:
 def measured_body_centroid(ds, volume: np.ndarray) -> np.ndarray:
     """Centroid of the thresholded body, in world coordinates from the header."""
     v = volume.astype(np.float64)
-    positive = v[v > 0]
-    if positive.size == 0:
+    # ★ Not "voxels above zero". The phantom writes a noisy floor outside the
+    #   body, so `v > 0` selects almost the whole field of view and its median
+    #   collapses to the air level — the mask would then swallow the air and the
+    #   centroid would drift to the centre of the field of view instead of the
+    #   body. Taking the median of the voxels above the *overall mean* lands
+    #   firmly inside the body (which is bright and occupies ~9 % of the volume),
+    #   and half of that separates body from air by more than an order of
+    #   magnitude.
+    bright = v[v > v.mean()]
+    if bright.size < 1000:
         return np.array([np.nan] * 3)
-    mask = v > 0.4 * np.median(positive)
+    mask = v > 0.4 * np.median(bright)
     if mask.sum() < 1000:
         return np.array([np.nan] * 3)
 

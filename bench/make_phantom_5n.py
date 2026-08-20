@@ -57,6 +57,15 @@ identity truth can catch.
     answer: `tex` measures the engine, `smooth` measures the floor. Reporting a
     `t00` number without saying which arm it came from is meaningless.
 
+★ NOTHING IN THE FIELD OF VIEW IS EXACTLY ZERO
+
+    Outside the body sits a low, noisy floor (`AIR_FRACTION` of the body
+    background), because reconstructed SPECT is never black outside the patient —
+    scatter, septal penetration and the reconstruction itself see to that. A zero
+    exterior would hand a registration a perfectly sharp, perfectly noise-free
+    body silhouette, which no real acquisition offers and which is a strong
+    enough cue to carry an alignment on its own.
+
 ★ THE NOISE SEED DIFFERS BETWEEN EVERY SERIES, ON PURPOSE
 
     Reusing one seed would give the two series *identical* noise, and a
@@ -181,6 +190,34 @@ PSF_POST_FWHM_MM = 6.0
 # that is quietly easier than reality is the kind that certifies an engine which
 # then fails on patients.
 COUNT_SCALE = 0.10  # counts per activity unit; lower = noisier
+
+# Activity outside the body, as a fraction of BODY_BASE. Reconstructed SPECT is
+# never black outside the patient: scatter, collimator septal penetration and the
+# iterative reconstruction itself all put a low, noisy floor across the field of
+# view. Leaving it at exactly zero would hand a registration something no real
+# acquisition offers — a perfectly sharp, perfectly noise-free body silhouette,
+# which is a strong enough cue to carry an alignment on its own. The halo that
+# hugs the body comes free from the pre-PSF blur; this constant is the far-field
+# floor underneath it.
+AIR_FRACTION = 0.04
+
+# ★ The stored value is NOT the raw count.
+#
+# The Poisson draw happens at a realistic count level (~10 counts per voxel in
+# the body, which is what sets the noise), but the post-filter output is a
+# *fractional* image and a reconstruction stores it scaled to use the available
+# range. Rounding it to integer counts instead — which is what this generator did
+# first — quantised the whole body to about 16 grey levels: `t00-id-smooth` held
+# exactly 16 distinct values in the entire volume. That is not a cosmetic issue.
+# Mattes MI bins intensities (48 bins by default) and MIND-SSC builds descriptors
+# from small intensity differences; against a 16-level image both are measuring
+# an artefact of the rounding rather than the anatomy, and the air floor added
+# above would have collapsed to a sparse 0/1 speckle instead of noise.
+#
+# 200 keeps the brightest voxel measured across the 18 series (202 counts) at
+# ~40k, comfortably inside uint16. The writer refuses anything over 65535 rather
+# than wrapping, so a violation fails loudly.
+STORE_SCALE = 200
 
 # ── Transforms ───────────────────────────────────────────────────────────────
 # Larger than GNBP-2R's on purpose: that phantom models the residual misalignment
@@ -450,7 +487,7 @@ def activity_at(
             base = np.where(in_organ, base * mult, base)
 
     base = np.maximum(base, 0.0)
-    out = np.where(inside, base, 0.0)
+    out = np.where(inside, base, BODY_BASE * AIR_FRACTION)
 
     # Lesions add (contrast - 1) x the local background, so "contrast" means the
     # ratio a reader would measure, independent of where the lesion sits.
@@ -582,8 +619,8 @@ def simulate_acquisition(
     coarse_spacing = (SLICE_THICKNESS, PIXEL_SPACING[1], PIXEL_SPACING[0])
     sigma_post = _fwhm_to_sigma(PSF_POST_FWHM_MM)
     sigma_vox = tuple(sigma_post / s for s in coarse_spacing)
-    filtered = _gaussian_blur(counts, sigma_vox)
-    expected = _gaussian_blur(coarse.astype(np.float32), sigma_vox)
+    filtered = _gaussian_blur(counts, sigma_vox) * STORE_SCALE
+    expected = _gaussian_blur(coarse.astype(np.float32), sigma_vox) * STORE_SCALE
 
     rounded = np.rint(filtered)
     if rounded.max() > 65535 or rounded.min() < 0:
@@ -727,7 +764,7 @@ def measure_lesions(
         #   low pocket of the cloud read 12.4x when 6.8x was put in, and one
         #   beside a kidney read 1.7x when 3.1x was put in. Neither was a defect
         #   in the data; both were the reference moving under the measurement.
-        local_bg = COUNT_SCALE * float(
+        local_bg = COUNT_SCALE * STORE_SCALE * float(
             activity_at(centre[None, :], content, textured, include_lesions=False)[0]
         )
         out.append(
@@ -836,7 +873,11 @@ def background_stats(volume: np.ndarray, expected: np.ndarray, warp: Warp) -> di
     mean = float(exp.mean())
     return {
         "voxels": int(vals.size),
-        "mean_counts": mean,
+        # Reported in counts, not stored units: the count level is the physically
+        # meaningful quantity (it is what sets the Poisson noise), while
+        # STORE_SCALE is a container detail. The CVs below are ratios and so are
+        # unaffected by the scaling either way.
+        "mean_counts": mean / STORE_SCALE,
         # Anatomy only — the cloud and the organs. This is the number the `tex`
         # and `smooth` arms must differ in, and measuring it (rather than trusting
         # CLOUD_RELATIVE_AMPLITUDE) is what would catch the cloud being switched
@@ -845,6 +886,44 @@ def background_stats(volume: np.ndarray, expected: np.ndarray, warp: Warp) -> di
         # Counting statistics only, after the post-filter correlated them.
         "noise_cv": float((vals - exp).std() / mean) if mean > 0 else None,
         "total_cv": float(vals.std() / mean) if mean > 0 else None,
+    }
+
+
+def air_statistics(volume: np.ndarray, expected: np.ndarray, warp: Warp) -> dict:
+    """Counts well outside the body — the floor that used to be exactly zero.
+
+    Measured rather than asserted from AIR_FRACTION, for the same reason the
+    background structure is measured: a constant that silently stops taking
+    effect leaves a phantom that looks configured and is not. `noise_cv` here is
+    high by construction — a few tenths of a count per voxel is a noisy place —
+    and that is the point: the body outline is no longer a noise-free edge.
+    """
+    x_c = _grid_centres(COLUMNS, PIXEL_SPACING[0])
+    y_c = _grid_centres(ROWS, PIXEL_SPACING[1])
+    z_c = _grid_centres(N_SLICES, SLICE_THICKNESS)
+    ZZ, YY, XX = np.meshgrid(z_c, y_c, x_c, indexing="ij")
+    pts = np.stack([XX, YY, ZZ], axis=-1)
+
+    src = warp.inverse(pts.reshape(-1, 3)).reshape(pts.shape)
+    a, b, c = EGG_SEMI_AXES_MM
+    zt = src[..., 2] / c
+    w = 1.0 + EGG_TAPER * zt
+    safe_w = np.where(w > 1e-3, w, 1e-3)
+    rho2 = (src[..., 0] / (a * safe_w)) ** 2 + (src[..., 1] / (b * safe_w)) ** 2 + zt**2
+    # Clear of the body *and* of the PSF halo that hugs it, so what is measured
+    # is the far-field floor rather than spill-over from the patient.
+    air = (rho2 > 1.6) | (w <= 0.0)
+
+    vals = volume.astype(np.float64)[air]
+    exp = expected.astype(np.float64)[air]
+    if vals.size < 1000:
+        return {"voxels": int(vals.size)}
+    mean = float(exp.mean())
+    return {
+        "voxels": int(vals.size),
+        "mean_counts": mean / STORE_SCALE,
+        "noise_cv": float((vals - exp).std() / mean) if mean > 0 else None,
+        "fraction_of_body_background": AIR_FRACTION,
     }
 
 
@@ -988,6 +1067,7 @@ def main() -> int:
             "displacement": displacement_summary(warp),
             "lesion_measurements": measured,
             "background_statistics": background_stats(volume, expected, warp),
+            "air_statistics": air_statistics(volume, expected, warp),
             "noise_seed": noise_seed_for(name),
             "series_md5": series_checksum(out_dir),
         }
@@ -1019,9 +1099,15 @@ def main() -> int:
             file=sys.stderr,
         )
         print(
-            f"    background {bg.get('mean_counts', 0):.0f} counts, structure CV "
+            f"    background {bg.get('mean_counts', 0):.1f} counts, structure CV "
             f"{100 * (bg.get('structure_cv') or 0):.1f}% noise CV {100 * (bg.get('noise_cv') or 0):.1f}%"
             f"   lesions with CNR>=3: {visible}/{len(present)}",
+            file=sys.stderr,
+        )
+        air = entry["air_statistics"]
+        print(
+            f"    air {air.get('mean_counts', 0):.2f} counts, noise CV "
+            f"{100 * (air.get('noise_cv') or 0):.0f}%   stored max {int(volume.max())}",
             file=sys.stderr,
         )
 
@@ -1087,6 +1173,20 @@ def main() -> int:
             "psf_post_fwhm_mm": PSF_POST_FWHM_MM,
             "effective_fwhm_mm": float(np.hypot(PSF_PRE_FWHM_MM, PSF_POST_FWHM_MM)),
             "count_scale": COUNT_SCALE,
+            "air_fraction": AIR_FRACTION,
+            "store_scale": STORE_SCALE,
+            "stored_values": (
+                "counts x store_scale. The Poisson draw sets the noise at a realistic count "
+                "level; the post-filter output is fractional and is scaled before rounding so "
+                "that it is not quantised away. Rounding straight to counts left the body with "
+                "about 16 grey levels, which distorts MI's histogram and MIND-SSC's descriptors."
+            ),
+            "air": (
+                "Outside the body the activity is AIR_FRACTION of the body background, not zero. "
+                "A zero exterior gives a perfectly sharp, noise-free silhouette that no real "
+                "acquisition offers and that is a strong enough cue to carry an alignment on its "
+                "own. air_statistics per series reports what was actually written."
+            ),
             "order": (
                 "analytic activity on a grid FINE x finer -> pre-PSF blur -> bin down -> Poisson "
                 "-> post-filter. Partial-volume loss emerges from this order rather than being "
