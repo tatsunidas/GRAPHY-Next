@@ -17,6 +17,9 @@ phantom/GNBP-2R-multimodal/
 phantom/GNBP-4D-nonspatial/
 phantom/GNBP-4D-pet-complete/
 phantom/GNBP-4D-pet-incomplete/
+# GNBP-5N は 18 系列あるので個別に列挙せずまとめて無視する。
+# 真値 JSON（phantom/GNBP-5N_ground_truth.json）はこの glob に一致しないので追跡される。
+phantom/GNBP-5N-*/
 
 # 測定用の専用ワークツリーと、その standalone ランタイムデータ
 .build/
