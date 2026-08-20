@@ -97,6 +97,41 @@ Spring DI（`@Profile`）でプロファイルに応じて自動注入。
 - **ROI**: 当面は DB テーブル。将来 DICOM SR/SEG への書き出しに対応。
 - **取り込み経路**: ① ローカルファイル/フォルダ/CD インポート ② `StoreSCP` による C-STORE 受信。
 
+### 4.1 🔴 高優先 TODO — ドラッグ＆ドロップ取り込み と ZIP 取り込み（旧 GRAPHY からの**移植漏れ**）
+
+**Java 版 GRAPHY にはあったのに GRAPHY-Next に移植されていない。** 2026-08-20 に発覚。
+利用者は「あったはず」と認識している＝**退行として体験される**ため、優先度は高い。
+
+| | 旧 GRAPHY（Java Swing） | GRAPHY-Next | |
+| :- | :- | :- | :- |
+| D&D で取り込み | ✅ `TreeTableDropListener`（DICOMTreeTable に drop） | ❌ **未実装** | 🔴 |
+| ZIP 取り込み | ✅ `ZipDicomImporter`（**複数 zip 可**） | ❌ **未実装** | 🔴 |
+| 複数ファイル/フォルダ選択 | ✅ | ✅ ネイティブダイアログのみ | — |
+
+旧実装は `GRAPHY/src/main/java/com/vis/core/ui/main/dcmtreetable/TreeTableDropListener.java`。
+`javaFileListFlavor` で複数ファイル/フォルダを受け、拡張子で `.zip` だけ `ZipDicomImporter` へ、
+残りを `DicomFileCollection` → `DicomImporter` へ振り分けている（**フォルダ複数 ＋ ZIP 複数の同時 drop 可**）。
+
+**現状の測定値（2026-08-20・実機 backend で確認）**
+
+- 取り込み経路は `Import` ボタン → `graphy:pick-import`（`properties: ["openFile","openDirectory","multiSelections"]`）
+  → `POST /api/import/paths` の 1 本だけ。frontend に**ファイル drop のハンドラは 0 件**
+  （`onDrop`/`dataTransfer` の実装は `Viewer2DScreen.tsx` の**タイル入替／Fusion 用**のみ）。
+  ウィンドウにファイルを落としても `will-navigate` の `preventDefault()` で**何も起きない**。
+- ZIP は `ImportService.looksDicom()`（先頭 128B ＋ `DICM`）で弾かれ、**`skipped` に入って無言で終わる**:
+  `POST /api/import/paths [anon.zip]` → `{"imported":0,"skipped":1,"failed":0,"errors":[]}`（スタディ数 5→5）。
+  ⚠ `failed` ではないので UI の「取込 0 / スキップ 1 / 失敗 0」からは**非対応だと分からない**。
+
+**実装メモ（着手時にここから）**
+
+1. **backend** — `ImportService.importPaths()` に zip 分岐。`ZipInputStream` で一時ディレクトリへ展開し、
+   既存の再帰走査へ流す（旧 `ZipDicomImporter` 相当）。🔴 **zip 爆弾（展開後サイズ・エントリ数の上限）と
+   パストラバーサル（`../` を含むエントリ名の拒否）を必ず入れる**。取り込み後に一時ディレクトリを消す。
+2. **frontend** — MainScreen / StudyList に drop ハンドラ。🚨 **Electron 32 以降 `File.path` は廃止**なので、
+   preload で `webUtils.getPathForFile(file)` を公開して絶対パスを得る（現行 Electron 31 は `file.path` でも
+   動くが、アップグレードで黙って壊れる）。web モードはサーバがクライアントのパスを読めないので**対象外**。
+3. **UX** — 非対応の拡張子を落とされたときに `skipped` の内訳を出す（今の「無言でスキップ」をやめる）。
+
 ---
 
 ## 5. Web（BFF）仕様

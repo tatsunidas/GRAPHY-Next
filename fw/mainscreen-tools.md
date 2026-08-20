@@ -85,17 +85,68 @@ DICOM PS3.15 Basic Application Confidentiality Profile の匿名化。GRAPHY
   PixelData に 0 で塗り込み、BurnedInAnnotation=NO。圧縮 TS はスキップ。
 - **出力**: standalone のみ。ZIP（`/api/anonymizer/zip`）/ フォルダ（`/api/anonymizer/copy`＋`pickDirectory`）。
   web は WADO 取得が必要なため未対応（501）。出力パスは（RetainUIDs 考慮で再取込せず）匿名化後の UID 階層。
+- 🔴 **ZIP は「成功したのに空」になりうる経路だった（2026-08-20 に修正）**。ZIP は
+  `StreamingResponseBody` で返すため、**1 バイトでも流し始めたらステータスコードを変えられない**。
+  1 件も書けなくても `try (ZipOutputStream)` の close で EOCD だけが書かれ、
+  **HTTP 200 ＋ 22 バイトの「壊れてはいない空の ZIP」**が返る。`copy` は `Result`(instances/errors) を
+  JSON で返すので気付けるが、**ZIP はその結果を誰にも渡していなかった**ため、UI は無条件に
+  「ZIP を出力しました」と表示していた（利用者からは原因不明の「空でした」にしか見えない）。
+  対処は次の 3 段:
+  1. `AnonymizeService.preflight(studyUids)` で**流し始める前に**対象件数を数える。
+     `resolvable == 0` なら controller が **409** と理由（索引件数・欠けている SOP と URI）で弾く。
+  2. 成功時は `X-Anonymize-Instances` / `X-Anonymize-Problems` ヘッダで件数を返す
+     （`Access-Control-Expose-Headers` が要る。既定では fetch から読めない）。
+  3. frontend は 409 の本文をそのまま見せ、`blob.size <= 22` を**空 ZIP として弾き**、
+     成功メッセージに件数とバイト数を出す（`anon.zipped.count`）。
+  併せて `URL.revokeObjectURL()` の**即時呼び出しをやめた**（ダウンロード開始前に revoke すると
+  環境によって 0 バイトになる）。テスト: `AnonymizePreflightTest`、実機: `automator/src/spike/anonZipCheck.ts`
+  （backend が返す ZIP と**レンダラが実際にディスクへ保存した ZIP**を別々にエントリ数まで数える）。
 - **backend**: `com.vis.graphynext.anonymize`（`AnonymizeConfig`/`DicomTagRule`/`AnonymizeTagDictionary`/
   `DicomAnonymizerEngine`/`AnonymizeMaskStore`/`AnonymizeService`/`AnonymizeController`）。
   API: `/api/anonymizer/profiles|zip|copy|masks(POST/GET/DELETE)`。
 - **frontend**: `mainscreen/AnonymizerDialog.tsx`（Clean/Retain オプション・新PatientName/ID・seed・個別保持/カスタム値・
   プロファイル JSON 保存/読込・ZIP/フォルダ出力）。`api.ts` anon 関数群。i18n `anon.*`。
+- 🔵 **対象は「選択中のスタディ 1 件」（2026-08-20 に変更）**。以前は**常に検索リスト全体**で、
+  一覧で 1 件選んで開いても全部が出力されていた（実機で 6170 インスタンス／83MB が一度に出た）。
+  選んだものだけが処理されると誤解しやすく、意図しない症例まで書き出す事故になりうるため既定を変更。
+  一括処理は「検索結果全体を対象にする」チェックボックス（`anon-whole-list`）を明示的に ON にしたときだけ。
+  ダイアログ上部に**対象を文章で表示**する（`anon-scope-text`）。実機で 6170 → 97 件になることを確認済み。
+- 🔵 **Retain オプションは既定 ON（2026-08-20・ユーザー指定）**。定義は `mainscreen/anonDefaults.ts`
+  （`DEFAULT_ANON_OPTIONS`・テスト `anonDefaults.test.ts`）。意図は「まず情報を落とさない側から始めて、
+  必要なぶんだけ外す」。**Clean 系は従来どおり全 OFF**。
+  🔴 **`RetainLongitudinalTemporalInformationModifiedDates` だけは既定から外す**——PS3.15 では日付の 2 つは
+  排他だが UI は両方 ON にできてしまい、`getActionByOptionsAndDefault()` が**加工(C)を保持(K)より優先する**
+  ため、両方 ON だと FullDates が負けて日付が潰れる。実測: 元 `20260101`/`101530` →
+  FullDates のみ ON なら `20260101`/`101530`、**両方 ON だと `20000101`/`000000`**。
+- 🚨 **既定 ON の帰結: 匿名化した出力を「同じ保管庫へ再取込み」すると原本が消える。**
+  `RetainUIDs` が ON だと Study/Series/SOP UID が原本と同一のまま出力されるので、再取込みで
+  索引行が**上書き**される。実測（2026-08-20）:
+  `PT-000123 / YAMADA^TARO`（5 枚）を匿名化 → 同じ保管庫へ再取込み → **`PT-000123` は 0 件になり
+  `de-identified` だけが残る**（StudyInstanceUID は同一）。RetainUIDs OFF なら別スタディとして共存する。
+  ⚠ 通常の使い方（匿名化して**外部へ渡す**）では起きない。危ないのは**自分の保管庫へ戻す**運用のみ。
+  automator の `07-anonymizer.item-01` はこの衝突を検出できない（同一患者の別スタディがあると
+  「原本が残っている」と誤判定するため）。
 - **テスト**: `AnonymizeEngineTest`（辞書ロード・option→action・基本匿名化・RetainUIDs・UID 一貫）。全 81 green。
   実機: 隔離 :8099 に実 MR import→`/zip` で PatientName/ID 置換・UID 置換/保持・(0012,0062)=YES を dcm2json 確認、
   焼き込みマスク登録→該当 64x64 画素 0・BurnedInAnnotation=NO を確認。
 - **未対応/次段**: **2D viewer の「焼き込みに使用」ボタン（矩形ROI→`registerAnonMask`）は ROI/viewer 開発ストリームと
   競合回避のため保留**（マスク API は完成・curl 検証済。viewer が落ち着いたら矩形ROIジオメトリ→画素rect 変換を追加）。
   CleanRecognizableVisualFeatures（顔ぼかし）/圧縮TS焼き込み/web(WADO) は将来。
+- 🔴 **高優先の不具合 2 件（2026-08-20 実測・未修正）**
+  1. **焼き込みが「偽の匿名化申告」になっている。** 上の保留の帰結。`registerAnonMask()` の呼び出し元は
+     frontend に **0 件**（`anon.burnIn.note` は「2D viewer で矩形 ROI を登録」と案内しているのに導線が無い）。
+     この状態で `CleanPixelData` ＋ 焼き込み ON にすると:
+     `{"burnedInstances":0}` なのに出力は **`BurnedInAnnotation` が `YES`→`NO` に書き換わり**、
+     `DeidentificationMethodCodeSequence` に **113101 "Clean Pixel Data Option"** が入る。
+     画素は元と**完全一致**（`np.array_equal` で確認）。**何もしないより悪い**ので、UI ができるまでは
+     「マスク 0 件なら 113101 と `BurnedInAnnotation=NO` を書かない」だけでも先に入れる価値がある。
+     なお backend の塗り込み自体は正常（マスクを REST 登録すれば矩形内 0・矩形外不変を確認済）。
+  2. **`RetainLongitudinalTemporalInformationModifiedDates` が日付を潰す。** アクション C が VR 別の
+     固定ダミー（`dummyForVr`: DA→`20000101`）を返すため、**全検査日が `20000101` になる**。
+     実測: 元 `20260101` と `20260730`（7 か月差）の 2 スタディが**両方 `20000101`**。
+     このオプションの目的は**時間的前後関係の保持**なので、名前どおりに機能していない
+     （かつ 113107 を宣言する）。正しくは**患者ごとに一定のオフセットで日付をシフト**する実装が要る
+     （`randomSeed` を種にすれば決定的にできる）。
 
 ## SeriesExtractor 実装（GRAPHY 移植・2026-06-30）
 条件一致シリーズを**シリーズフォルダ**として親フォルダへ抽出（コピー）。GRAPHY
