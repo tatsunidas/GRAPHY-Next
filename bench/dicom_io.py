@@ -20,6 +20,7 @@ from typing import Sequence
 
 import numpy as np
 from pydicom.dataset import Dataset, FileMetaDataset
+from pydicom.tag import Tag
 from pydicom.uid import ExplicitVRLittleEndian
 
 UID_ROOT = "1.2.826.0.1.3680043.10.1338."  # free-to-use root (Medical Connections)
@@ -294,3 +295,257 @@ def series_checksum(out_dir: str) -> str:
         with open(os.path.join(out_dir, name), "rb") as fh:
             h.update(fh.read())
     return h.hexdigest()
+
+
+# ── NM (SPECT) tomographic multi-frame ───────────────────────────────────────
+
+NM_IMAGE_STORAGE = "1.2.840.10008.5.1.4.1.1.20"
+
+
+def write_nm_tomo(
+    volume: np.ndarray,
+    out_dir: str,
+    *,
+    series_description: str,
+    patient_id: str,
+    patient_name: str,
+    pixel_spacing: Sequence[float],
+    slice_thickness: float,
+    series_number: int,
+    uid_key: str,
+    study_key: str,
+    study_description: str,
+    model_name: str,
+    z_origin_mm: float = 0.0,
+    body_part: str = "",
+    protocol_name: str = "",
+    frame_of_reference_key: str | None = None,
+    radionuclide_code: Sequence[str] = ("C-114M8", "SRT", "Lu^177^"),
+    energy_window_kev: Sequence[float] = (198.0, 218.0),
+    energy_window_name: str = "Lu177 208keV",
+    frame_duration_ms: int = 1_800_000,
+    window: Sequence[float] | None = None,
+    window_explanation: str = "SPECT",
+    customize=None,
+) -> None:
+    """Write `volume` (slices, rows, cols) of **counts** as one multi-frame NM file.
+
+    Reconstructed SPECT arrives as NM Image Storage with every slice in a single
+    multi-frame instance, not as one file per slice, and GRAPHY expands it with
+    ``NmFrameExpander`` (host API H28). Writing this phantom as a stack of
+    single-frame files would therefore exercise a path real SPECT never takes,
+    and the expansion — the part most likely to be wrong — would go untested.
+
+    ★ **NM carries no per-frame ImagePositionPatient, and none at the root
+    either.** The geometry lives in ``DetectorInformationSequence`` (position and
+    orientation of the *first* slice) plus ``SpacingBetweenSlices``; a reader
+    stacks the remaining frames along the slice normal itself. The tags written
+    here are exactly the ones ``NmFrameExpander`` reads —
+    ``NumberOfSlices`` / ``SliceVector`` / ``ImageType`` containing ``RECON
+    TOMO`` / ``DetectorInformationSequence`` / ``SpacingBetweenSlices`` — because
+    a phantom that declares its geometry some other legal way would fail to open
+    and the failure would look like a bug in the feature under test.
+
+    ★ **No rescale pair is written.** NM values are counts; the quantitative step
+    is a site calibration factor applied downstream. Writing ``RescaleIntercept``
+    here would be the PET convention applied to the wrong modality, and GNBP-4D
+    already recorded what that costs: a PET series written with a CT intercept
+    read 1024 too high throughout, silently.
+
+    `window` defaults to the actual data range. The CT soft-tissue default would
+    put a count image entirely above the window, so the series would open white.
+    """
+    if volume.ndim != 3:
+        raise ValueError("volume must be 3-D (slices, rows, columns)")
+    # VR LO is capped at 64 characters. pydicom only *warns* and writes the long
+    # value anyway, so an over-length description leaves a non-conformant file
+    # that this generator reports as a success and a strict PACS later rejects.
+    # A phantom exists to be imported; failing here is cheaper than finding out
+    # at the receiving end.
+    for label, value in (
+        ("series_description", series_description),
+        ("study_description", study_description),
+        ("protocol_name", protocol_name),
+        ("model_name", model_name),
+        ("patient_id", patient_id),
+    ):
+        if len(value) > 64:
+            raise ValueError(f"{label} is {len(value)} characters; VR LO allows 64: {value!r}")
+    if volume.min() < 0:
+        raise ValueError(f"counts must be non-negative (got min {volume.min()})")
+    if volume.max() > 65535:
+        # Clamping would truncate the bright tail of the count distribution, i.e.
+        # change the statistics the phantom exists to present. The fix is the
+        # count scale, not a silent clamp (same rule as GNBP-2R's pseudo-PET).
+        raise ValueError(
+            f"counts exceed the 16-bit unsigned range (max {volume.max()}); lower the count scale"
+        )
+
+    n_slices, rows, columns = volume.shape
+    study_uid = deterministic_uid("study", study_key)
+    series_uid = deterministic_uid("series", uid_key)
+    frame_uid = deterministic_uid("for", frame_of_reference_key or study_key)
+    sop_uid = deterministic_uid("sop", uid_key, 0)
+
+    os.makedirs(out_dir, exist_ok=True)
+
+    fm = FileMetaDataset()
+    fm.MediaStorageSOPClassUID = NM_IMAGE_STORAGE
+    fm.MediaStorageSOPInstanceUID = sop_uid
+    fm.TransferSyntaxUID = ExplicitVRLittleEndian
+    fm.ImplementationClassUID = IMPLEMENTATION_CLASS_UID
+    fm.ImplementationVersionName = "GNBP-1"
+
+    ds = Dataset()
+    ds.file_meta = fm
+
+    # --- SOP Common -------------------------------------------------------
+    ds.SpecificCharacterSet = "ISO_IR 100"
+    ds.SOPClassUID = NM_IMAGE_STORAGE
+    ds.SOPInstanceUID = sop_uid
+    ds.InstanceCreationDate = "20260730"
+    ds.InstanceCreationTime = "120000"
+
+    # --- Patient ----------------------------------------------------------
+    ds.PatientName = patient_name
+    ds.PatientID = patient_id
+    ds.PatientBirthDate = ""
+    ds.PatientSex = ""
+    ds.PatientIdentityRemoved = "YES"
+    ds.DeidentificationMethod = "Synthetic phantom; contains no real patient data"
+
+    # --- General Study ----------------------------------------------------
+    ds.StudyInstanceUID = study_uid
+    ds.StudyDate = "20260730"
+    ds.StudyTime = "120000"
+    ds.ReferringPhysicianName = ""
+    ds.StudyID = "1"
+    ds.AccessionNumber = ""
+    ds.StudyDescription = study_description
+
+    # --- General Series ---------------------------------------------------
+    ds.Modality = "NM"
+    ds.SeriesInstanceUID = series_uid
+    ds.SeriesNumber = series_number
+    ds.SeriesDate = "20260730"
+    ds.SeriesTime = "120000"
+    ds.SeriesDescription = series_description
+    ds.Laterality = ""
+    ds.PatientPosition = "HFS"
+    ds.BodyPartExamined = body_part
+    ds.ProtocolName = protocol_name
+
+    # --- NM/PET Patient Orientation --------------------------------------
+    # Type 2 in the NM IOD. Recumbent / supine / head-first, matching HFS above.
+    ds.PatientOrientationCodeSequence = _code_sequence("F-10450", "SRT", "recumbent")
+    ds.PatientOrientationCodeSequence[0].PatientOrientationModifierCodeSequence = _code_sequence(
+        "F-10340", "SRT", "supine"
+    )
+    ds.PatientGantryRelationshipCodeSequence = _code_sequence("F-10470", "SRT", "headfirst")
+
+    # --- Frame of Reference ----------------------------------------------
+    ds.FrameOfReferenceUID = frame_uid
+    ds.PositionReferenceIndicator = ""
+
+    # --- General Equipment ------------------------------------------------
+    ds.Manufacturer = "GRAPHY-Next benchmark phantom"
+    ds.ManufacturerModelName = model_name
+    ds.InstitutionName = "Visionary Imaging Services, Inc."
+    ds.StationName = "GNBP"
+    ds.DeviceSerialNumber = "GNBP-1"
+    ds.SoftwareVersions = model_name
+
+    # --- General Image ----------------------------------------------------
+    ds.InstanceNumber = 1
+    ds.ContentDate = "20260730"
+    ds.ContentTime = "120000"
+    ds.AcquisitionDate = "20260730"
+    ds.AcquisitionTime = "120000"
+    ds.PatientOrientation = ["L", "P"]
+    ds.BurnedInAnnotation = "NO"
+    ds.LossyImageCompression = "00"
+    ds.ImageComments = "Synthetic digital phantom generated for benchmarking; not a real acquisition"
+
+    # --- NM Image ---------------------------------------------------------
+    # "RECON TOMO" is one of the three things NmFrameExpander.isNmTomo accepts as
+    # proof that the frames are slices rather than a dynamic planar sequence.
+    ds.ImageType = ["ORIGINAL", "PRIMARY", "RECON TOMO", "EMISSION"]
+    ds.ActualFrameDuration = int(frame_duration_ms)
+    ds.CountsAccumulated = int(volume.sum())
+
+    # --- Multi-frame ------------------------------------------------------
+    ds.NumberOfFrames = n_slices
+    # Frames are indexed by SliceVector, i.e. the frame axis *is* the slice axis.
+    ds.FrameIncrementPointer = Tag(0x0054, 0x0080)
+
+    # --- NM Reconstruction ------------------------------------------------
+    ds.NumberOfSlices = n_slices
+    ds.SliceVector = list(range(1, n_slices + 1))  # 1-based, in stored frame order
+    ds.SliceThickness = slice_thickness
+    ds.SpacingBetweenSlices = slice_thickness
+
+    # --- NM Detector ------------------------------------------------------
+    # ★ The only place the patient-space geometry appears. `ImagePositionPatient`
+    #   here is the position of the FIRST slice; the rest are stacked along the
+    #   normal by the reader.
+    det = Dataset()
+    det.ImageOrientationPatient = [1, 0, 0, 0, 1, 0]
+    det.ImagePositionPatient = [
+        -(columns - 1) / 2.0 * pixel_spacing[0],
+        -(rows - 1) / 2.0 * pixel_spacing[1],
+        z_origin_mm,
+    ]
+    det.CollimatorType = "PARA"
+    det.FieldOfViewShape = "RECTANGLE"
+    ds.DetectorInformationSequence = [det]
+
+    # --- NM Isotope -------------------------------------------------------
+    ew = Dataset()
+    ew.EnergyWindowName = energy_window_name
+    ew_range = Dataset()
+    ew_range.EnergyWindowLowerLimit = float(energy_window_kev[0])
+    ew_range.EnergyWindowUpperLimit = float(energy_window_kev[1])
+    ew.EnergyWindowRangeSequence = [ew_range]
+    ds.EnergyWindowInformationSequence = [ew]
+
+    radio = Dataset()
+    radio.Radiopharmaceutical = energy_window_name
+    radio.RadionuclideCodeSequence = _code_sequence(*radionuclide_code)
+    radio.RadiopharmaceuticalStartTime = "093000"
+    radio.RadionuclideTotalDose = 7400.0  # MBq — a plausible 177Lu therapy dose
+    ds.RadiopharmaceuticalInformationSequence = [radio]
+
+    # --- Image Pixel ------------------------------------------------------
+    ds.SamplesPerPixel = 1
+    ds.PhotometricInterpretation = "MONOCHROME2"
+    ds.Rows = rows
+    ds.Columns = columns
+    ds.PixelSpacing = list(pixel_spacing)
+    ds.BitsAllocated = 16
+    ds.BitsStored = 16
+    ds.HighBit = 15
+    ds.PixelRepresentation = 0
+
+    # --- VOI LUT ----------------------------------------------------------
+    # No Modality LUT: NM values are counts (see the docstring).
+    if window is None:
+        hi = int(volume.max())
+        window = (hi // 2, max(1, hi))
+    ds.WindowCenter = window[0]
+    ds.WindowWidth = window[1]
+    ds.WindowCenterWidthExplanation = window_explanation
+
+    ds.PixelData = np.ascontiguousarray(volume, dtype=np.uint16).tobytes()
+
+    if customize is not None:
+        customize(ds)
+
+    ds.save_as(os.path.join(out_dir, "0001.dcm"), enforce_file_format=True)
+
+
+def _code_sequence(value: str, scheme: str, meaning: str) -> list:
+    item = Dataset()
+    item.CodeValue = value
+    item.CodingSchemeDesignator = scheme
+    item.CodeMeaning = meaning
+    return [item]
