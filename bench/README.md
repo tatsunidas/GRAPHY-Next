@@ -405,15 +405,37 @@ python3 check_5n_nm.py --phantom ./phantom              # NM 幾何が真値と�
 実測（2026-08-20、18 系列）: 病変位置 120 点で一致、**体の重心は公開した変換の予測と平均
 0.29mm・最悪 0.54mm**。
 
-### 採点
+### 採点とエンジン実行
 
 真値 JSON のキー構造と変形の閉形式を GNBP-2R に合わせてあるので、**`score_registration.mjs` を
-そのまま使える**（新しい採点コードは要らない）。
+そのまま使える**（新しい採点コードは要らない）。`run_rigid_registration.mjs` も
+NM 多フレームを読めるようにしたので、同じハーネスでエンジンを走らせられる。
+**固定側は 18 セルのうちの 1 つ**なので `--fixed` で指定する。
 
 ```bash
 node score_registration.mjs --truth ./phantom/GNBP-5N_ground_truth.json \
      --series t25-rigid-tex --estimate identity
+
+node run_rigid_registration.mjs --truth ./phantom/GNBP-5N_ground_truth.json \
+     --fixed t20-id-tex --series t25-id-tex --metric nmi
 ```
+
+#### 初回実測（2026-08-20・剛体・既定パラメータ）
+
+| 系列 | TRE | 並進誤差 | 何が分かるか |
+| :- | -: | -: | :- |
+| `t20-rigid-tex`（対照） | 0.520 mm | 0.310 mm | 内容が同じなら 1/9 ボクセルで解ける |
+| `t25-id-tex` | 2.471 mm | 1.356 mm | **恒等が真値なのに動く** |
+| `t25-id-smooth` | 7.533 mm | 7.093 mm | 背景が無いと 3 倍悪化 |
+| `t00-id-smooth` | 2.495 mm | 2.335 mm | 消失より**変化**の方が悪い |
+
+**「腫瘍が変化する」方が「腫瘍が消える」より悪い**（smooth で 3 倍）。消えた集積は単に
+寄与しなくなるだけだが、大きさの変わった集積と新しい集積は「両方の画像に在る明るい特徴」で、
+指標がそれを積極的に合わせにいく。
+
+**縦断では NMI を既定にすべき**という結論が出た。最悪セル `t25-id-smooth` を 5 シードで測ると
+NCC 1.88〜7.09mm に対し **NMI 0.71〜1.69mm** で、**全シードで NMI が勝つ**。
+LNCC は破綻する（8.6mm / 10.3°）。詳細は `fw/registration-design.md` §9.5。
 
 ### ⚠️ 観測可能性を先に見ること
 
