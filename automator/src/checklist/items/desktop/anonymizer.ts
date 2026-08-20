@@ -6,8 +6,19 @@ import { AUTOMATOR_ROOT } from "../../../fixtures/manifest.js";
 import { waitForAnyFile } from "../../../common/waitForFile.js";
 import { importPaths } from "../../../fixtures/importFixtures.js";
 
-/** fixtures/ct-basic の PatientID（fixture固定値）。 */
-const CT_BASIC_PATIENT_ID = "HCC_001";
+/**
+ * 先頭スタディ行の PatientID（1列目）を読む。
+ *
+ * 🚨 fixture の PatientID を定数で持たない。以前は `HCC_001` を直書きしていたが、
+ * fixtures/ct-basic の中身が差し替わって `ZAbe1d241c` になった後もコードが古いままで、
+ * 「元スタディが匿名化で消えた」という**存在しない不具合**を FAIL として記録していた
+ * （2026-08-20 に発覚）。実際に画面に出ている値を検証の基準にする。
+ */
+async function firstStudyPatientId(page: import("@playwright/test").Page): Promise<string> {
+  const cell = page.locator('[data-testid^="study-row-"]').first().locator("td").first();
+  const text = (await cell.textContent()) ?? "";
+  return text.trim();
+}
 
 /**
  * Anonymizerダイアログを開き、新PatientIDを設定→出力先(モック)を選択→フォルダコピー実行→
@@ -87,6 +98,12 @@ export const anonymizerItems: ChecklistItem[] = [
       const { recorder } = ctx;
       await selectFirstStudy(ctx.driver.page, recorder);
 
+      const originalPatientId = await firstStudyPatientId(ctx.driver.page);
+      recorder.step("匿名化前の先頭スタディの PatientID を記録", { originalPatientId });
+      if (!originalPatientId || originalPatientId === "—") {
+        return { status: "fail" as const, error: "匿名化前の PatientID が読めませんでした（検索結果が空の可能性）" };
+      }
+
       const newId = "ANON_ITEM01";
       const destDir = path.join(AUTOMATOR_ROOT, ".results", `anon-out-${Date.now()}`);
       await runAnonymizeCopy(ctx, newId, destDir);
@@ -99,10 +116,10 @@ export const anonymizerItems: ChecklistItem[] = [
 
       // UIDが一貫して置換されていれば、元スタディ（HCC_001）を上書きせず、
       // 新StudyInstanceUIDを持つ別スタディ（新PatientID）として共存するはず。
-      const originalStillThere = await findStudyByPatientId(ctx, CT_BASIC_PATIENT_ID);
-      recorder.step(`元のPatientID ${CT_BASIC_PATIENT_ID} が引き続き検索できることを確認（上書きされていないか）`, { originalStillThere });
+      const originalStillThere = await findStudyByPatientId(ctx, originalPatientId);
+      recorder.step(`元のPatientID ${originalPatientId} が引き続き検索できることを確認（上書きされていないか）`, { originalStillThere });
       if (!originalStillThere) {
-        return { status: "fail" as const, error: `元のスタディ（PatientID=${CT_BASIC_PATIENT_ID}）が匿名化後に見つかりません（UID未置換で上書きされた疑い）` };
+        return { status: "fail" as const, error: `元のスタディ（PatientID=${originalPatientId}）が匿名化後に見つかりません（UID未置換で上書きされた疑い）` };
       }
 
       const found = await findStudyByPatientId(ctx, newId);
@@ -110,7 +127,7 @@ export const anonymizerItems: ChecklistItem[] = [
       if (!found) {
         return { status: "fail" as const, error: `新PatientID ${newId} のスタディが検索で見つかりません` };
       }
-      return { status: "pass" as const, notes: `匿名化+再取込みで元スタディ(${CT_BASIC_PATIENT_ID})と別スタディ(${newId})が共存することを確認` };
+      return { status: "pass" as const, notes: `匿名化+再取込みで元スタディ(${originalPatientId})と別スタディ(${newId})が共存することを確認` };
     },
   },
   {

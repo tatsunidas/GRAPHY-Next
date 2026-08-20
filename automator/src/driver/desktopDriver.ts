@@ -39,6 +39,16 @@ export class DesktopDriver implements Driver {
     return this.mainPage;
   }
 
+  /**
+   * main プロセスへ `evaluate()` したいスパイク向けの口。
+   * ダウンロードの横取り（`session.defaultSession.on("will-download")`）のように、
+   * renderer からは触れない挙動を検証するときだけ使う。
+   */
+  get app(): ElectronApplication {
+    if (!this.electronApp) throw new Error("DesktopDriver.start() がまだ完了していません");
+    return this.electronApp;
+  }
+
   async start(): Promise<void> {
     if (!fs.existsSync(BACKEND_JAR)) {
       throw new Error(
