@@ -104,6 +104,46 @@ public class AnonymizeService {
         void accept(Attributes anonymized, String tsuid) throws IOException;
     }
 
+    /** 事前見積り（ZIP を流し始める前の健全性チェック用）。 */
+    public record Preflight(int indexed, int resolvable, List<String> problems) {
+    }
+
+    /**
+     * 出力対象になるインスタンスが実際に何件あるかを、書き出す前に数える。
+     *
+     * <p>ZIP はストリーミングで返すため、**1 バイトでも流し始めたらステータスコードを変えられない**。
+     * その状態で 0 件になると「HTTP 200 ＋ 中身が空（22 バイト）の正常な ZIP」が返り、UI は
+     * 成功メッセージを出してしまう（利用者からは「ZIP が空だった」としか見えない）。
+     * そうならないよう、controller はこれを先に呼んで 0 件なら 409 で弾く。
+     */
+    @Transactional(readOnly = true)
+    public Preflight preflight(List<String> studyUids) {
+        List<String> problems = new ArrayList<>();
+        int indexed = 0;
+        int resolvable = 0;
+        for (String su : studyUids) {
+            if (su == null || su.isBlank()) {
+                continue;
+            }
+            List<DicomInstance> insts = repo.findByStudyInstanceUid(su);
+            if (insts.isEmpty()) {
+                problems.add("索引にインスタンスがありません: study " + su);
+                continue;
+            }
+            for (DicomInstance inst : insts) {
+                indexed++;
+                if (fileOf(inst) == null) {
+                    if (problems.size() < 20) {
+                        problems.add("ファイル無し: " + inst.getSopInstanceUid() + " (" + inst.getUri() + ")");
+                    }
+                } else {
+                    resolvable++;
+                }
+            }
+        }
+        return new Preflight(indexed, resolvable, problems);
+    }
+
     private Result run(List<String> studyUids, AnonymizeConfig cfg, boolean burnIn, Sink sink) {
         List<String> errors = new ArrayList<>();
         // 対象インスタンスを収集し、患者マッピングを事前構築。

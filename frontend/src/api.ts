@@ -1013,20 +1013,40 @@ export interface AnonSeriesMask {
 
 export const fetchAnonProfiles = () => httpGet<AnonProfile[]>("/api/anonymizer/profiles");
 
-/** 匿名化して ZIP を取得（standalone のローカルファイル）。 */
-export const anonymizeZip = async (req: AnonRequest): Promise<{ blob: Blob; filename: string }> => {
+/** 空の ZIP（ローカルファイルヘッダが 1 つも無く EOCD だけ）のバイト数。 */
+const EMPTY_ZIP_BYTES = 22;
+
+/**
+ * 匿名化して ZIP を取得（standalone のローカルファイル）。
+ *
+ * ⚠ ZIP はストリーミングで返るため、**サーバ側が途中で失敗しても HTTP 200 になる**。
+ * 「成功したのに中身が空」を成功として扱わないよう、件数ヘッダと blob サイズの両方を見る。
+ */
+export const anonymizeZip = async (
+  req: AnonRequest,
+): Promise<{ blob: Blob; filename: string; instances: number; problems: number }> => {
   const res = await fetch(`${apiBase()}/api/anonymizer/zip`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
   });
   if (!res.ok) {
-    throw new Error(`HTTP ${res.status}`);
+    // backend は 0 件のとき 409 に理由を載せる。握り潰さず本文を見せる。
+    const detail = await res.text().catch(() => "");
+    throw new Error(detail ? `HTTP ${res.status}: ${detail}` : `HTTP ${res.status}`);
   }
   const blob = await res.blob();
+  if (blob.size <= EMPTY_ZIP_BYTES) {
+    throw new Error(`empty zip (${blob.size} bytes)`);
+  }
   const cd = res.headers.get("content-disposition") ?? "";
   const m = /filename="?([^"]+)"?/.exec(cd);
-  return { blob, filename: m ? m[1] : "anonymized.zip" };
+  return {
+    blob,
+    filename: m ? m[1] : "anonymized.zip",
+    instances: Number(res.headers.get("X-Anonymize-Instances") ?? 0),
+    problems: Number(res.headers.get("X-Anonymize-Problems") ?? 0),
+  };
 };
 
 /** standalone: 匿名化してフォルダへ書き出す。 */

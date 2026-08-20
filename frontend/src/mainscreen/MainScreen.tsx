@@ -313,6 +313,7 @@ export function MainScreen({
       <AnonymizerDialog
         open={openTool === "anonymizer"}
         onClose={() => setOpenTool(null)}
+        study={selectedStudy}
         filters={filters}
         mode={isStandalone ? "standalone" : "web"}
       />

@@ -56,10 +56,24 @@ public class AnonymizeController {
                 new ProfileDto("cleanPixel", List.of("CleanPixelData")));
     }
 
+    /** 出力見込み件数を伝えるヘッダ（ZIP 本体はストリームなので JSON で結果を返せないため）。 */
+    private static final String H_INSTANCES = "X-Anonymize-Instances";
+    private static final String H_PROBLEMS = "X-Anonymize-Problems";
+
     @PostMapping("/zip")
     public ResponseEntity<StreamingResponseBody> zip(@RequestBody AnonRequest req) {
         requireStandalone();
         validate(req);
+
+        // ストリームを流し始めるとステータスを変えられない（＝失敗しても 200 ＋ 空 ZIP になり、
+        // UI は成功メッセージを出す）。書き出す前に対象件数を数え、0 件ならここで弾く。
+        AnonymizeService.Preflight pre = service.preflight(req.studyUids());
+        if (pre.resolvable() == 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "匿名化できるインスタンスが 0 件のため ZIP を作成しませんでした（索引 " + pre.indexed() + " 件）。"
+                            + String.join(" / ", pre.problems()));
+        }
+
         AnonymizeConfig cfg = toConfig(req);
         StreamingResponseBody body = out -> {
             try {
@@ -71,6 +85,10 @@ public class AnonymizeController {
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType("application/zip"))
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"anonymized.zip\"")
+                .header(H_INSTANCES, String.valueOf(pre.resolvable()))
+                .header(H_PROBLEMS, String.valueOf(pre.problems().size()))
+                // fetch() から読めるようにする（既定では safelisted な応答ヘッダしか見えない）。
+                .header(HttpHeaders.ACCESS_CONTROL_EXPOSE_HEADERS, H_INSTANCES + "," + H_PROBLEMS)
                 .body(body);
     }
 

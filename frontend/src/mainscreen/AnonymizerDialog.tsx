@@ -12,22 +12,14 @@ import {
   type AnonOption,
   type AnonProfile,
   type AnonRequest,
+  type Study,
   type StudyFilters,
   type TagDictEntry,
 } from "../api";
 import { desktop } from "../desktopBridge";
 import { useI18n } from "../i18n/i18n";
 import { dictMap, ggggeeee, normHex } from "./tagPathUtil";
-
-const CLEAN_OPTS: AnonOption[] = [
-  "CleanPixelData", "CleanRecognizableVisualFeatures", "CleanGraphics",
-  "CleanStructuredContent", "CleanDescriptors",
-];
-const RETAIN_OPTS: AnonOption[] = [
-  "RetainUIDs", "RetainSafePrivate", "RetainDeviceIdentity", "RetainInstitutionIdentity",
-  "RetainPatientCharacteristics", "RetainLongitudinalTemporalInformationFullDates",
-  "RetainLongitudinalTemporalInformationModifiedDates",
-];
+import { CLEAN_OPTS, DEFAULT_ANON_OPTIONS, RETAIN_OPTS } from "./anonDefaults";
 
 /**
  * Anonymizer（PS3.15）。検索リスト全体を匿名化（属性＋任意で Pixel 焼き込み）して ZIP/フォルダ出力。
@@ -36,11 +28,14 @@ const RETAIN_OPTS: AnonOption[] = [
 export function AnonymizerDialog({
   open,
   onClose,
+  study,
   filters,
   mode,
 }: {
   open: boolean;
   onClose: () => void;
+  /** 匿名化の対象スタディ（MainScreen で選択中の 1 件）。未選択なら null。 */
+  study: Study | null;
   filters: StudyFilters | null;
   mode: string;
 }) {
@@ -50,13 +45,15 @@ export function AnonymizerDialog({
   const dmap = useMemo(() => dictMap(dict), [dict]);
   const [profiles, setProfiles] = useState<AnonProfile[]>([]);
 
-  const [options, setOptions] = useState<Set<AnonOption>>(new Set());
+  const [options, setOptions] = useState<Set<AnonOption>>(new Set(DEFAULT_ANON_OPTIONS));
   const [patName, setPatName] = useState("de-identified");
   const [patId, setPatId] = useState("de-identified");
   const [seed, setSeed] = useState("");
   const [manualRetain, setManualRetain] = useState<string[]>([]);
   const [custom, setCustom] = useState<Record<string, string>>({});
   const [burnIn, setBurnIn] = useState(false);
+  // 既定は「選択中のスタディ 1 件」。検索結果全体を一括で処理したいときだけ明示的に ON にする。
+  const [wholeList, setWholeList] = useState(false);
   const [destination, setDestination] = useState<string | null>(null);
 
   const [tagInput, setTagInput] = useState("");
@@ -110,7 +107,20 @@ export function AnonymizerDialog({
     destination: destination ?? undefined,
   });
 
+  /**
+   * 匿名化の対象 studyUid を決める。
+   *
+   * 🔴 既定は**選択中のスタディ 1 件だけ**（2026-08-20 に変更）。
+   * それ以前は常に「検索結果全体」で、スタディを 1 件選んで開いても**リスト全部**が
+   * 出力されていた（実測で 6170 インスタンス／83MB が一度に出た）。選択したものだけが
+   * 処理されると誤解しやすく、意図しない症例まで書き出す事故につながるため既定を変えた。
+   * 一括処理は `wholeList` を明示的に ON にしたときだけ。
+   */
   const resolveStudyUids = async (): Promise<string[] | null> => {
+    if (!wholeList) {
+      if (!study) { setError(t("anon.err.noStudy")); return null; }
+      return [study.studyInstanceUid];
+    }
     if (!filters) { setError(t("tagext.err.noSearch")); return null; }
     const studies = await fetchStudies(filters);
     if (studies.length === 0) { setError(t("tagext.err.noStudies")); return null; }
@@ -122,12 +132,14 @@ export function AnonymizerDialog({
     try {
       const ids = await resolveStudyUids();
       if (!ids) return;
-      const { blob, filename } = await anonymizeZip(buildReq(ids));
+      const { blob, filename, instances, problems } = await anonymizeZip(buildReq(ids));
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
-      URL.revokeObjectURL(url);
-      setInfo(t("anon.zipped"));
+      // revoke はダウンロード開始後まで遅らせる（即時に revoke すると環境によって 0 バイトになる）。
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      setInfo(t("anon.zipped.count", { instances, bytes: blob.size }));
+      if (problems > 0) setError(t("anon.err.problems", { problems }));
     } catch (e) {
       setError(t("common.fetchError", { error: String(e) }));
     } finally { setBusy(false); }
@@ -185,7 +197,24 @@ export function AnonymizerDialog({
         </div>
 
         <div style={body}>
-          <div style={{ fontSize: 12, color: "#6b7785" }}>{t("anon.scope")}</div>
+          {/* 対象の明示。何が出力されるのかを押す前に読めるようにする。 */}
+          <div style={{ fontSize: 12, color: "#6b7785" }}>
+            <div data-testid="anon-scope-text">
+              {wholeList
+                ? t("anon.scope.wholeList")
+                : study
+                  ? t("anon.scope.study", {
+                      patientId: study.patientId || "—",
+                      description: study.studyDescription || study.studyDate || study.studyInstanceUid,
+                    })
+                  : t("anon.scope.none")}
+            </div>
+            <label style={{ ...opt, marginTop: 4 }}>
+              <input data-testid="anon-whole-list" type="checkbox" checked={wholeList}
+                onChange={(e) => setWholeList(e.target.checked)} />
+              {t("anon.scope.wholeListToggle")}
+            </label>
+          </div>
 
           {/* プロファイル */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
