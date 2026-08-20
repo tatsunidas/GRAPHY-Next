@@ -113,7 +113,29 @@ GRAPHY / GRAPHY-Next の新バージョンを公開したら、登録済みユ�
 - 1通の失敗で全体を止めない（1件のアドレス不備で残り全員に届かない方が損失が大きい）。
   失敗件数は `ANNOUNCEMENT_DELIVERY.FAILED_COUNT` に残る。
 
-## Phase 3: トリガー ✅ 実装済み（2026-07-28）
+## Phase 3: トリガー ✅ 実装済み（2026-07-28）／🔴 **自動配信は未稼働（TODO・2026-08-21）**
+
+> 🔴 **TODO: 配信鍵が cron を回すマシンに置かれていないため、自動配信は一度も動いていない。**
+> 実装（下記）は完了しているが、**§ステップ2 が未実施**。cron が動いている Linux 機に
+> `~/.config/graphy/announce-api-key` が無く、`auto-deploy.sh` は毎回こう終わっている:
+>
+> ```
+> [auto-deploy] ... done: deployed tatsunidas/GRAPHY-Next=v0.2.0 tatsunidas/GRAPHY=v0.0.21
+> [auto-deploy] ... announce: key file not readable (/home/tatsunidas/.config/graphy/announce-api-key); skipping notifications
+> ```
+>
+> **v0.2.0（2026-08-20）でも通知は 1 通も飛んでいない**（サイトの再ビルド・再デプロイだけが走った）。
+> 鍵の読めない場合はスキップするだけでデプロイは止めない設計なので、**失敗として目立たない**——
+> 気付く手段はこのログ行だけ。
+>
+> **やること**: §ステップ2 のとおり鍵を置く（デモ機 `deploy/demo/.env` の
+> `GRAPHY_AUTH_ANNOUNCE_API_KEY` と同じ値）。置いた直後の初回実行は現タグを `.announce-state` に
+> 記録するだけで飛ばさないので、**次のリリースから配信が始まる**。
+> v0.2.0 の分を今から出したいなら §ステップ3 の curl を手動で 1 回叩く
+> （`(product, version)` が同じ二度目は backend が弾くため二重送信にならない）。
+>
+> ⚠ **未確認**: cron が別マシン（Windows 機）でも動いていて、そちらに鍵があるなら
+> v0.2.0 の通知は既に出ている可能性がある。判定はデモ機の `ANNOUNCEMENT_DELIVERY` を見るのが確実。
 
 `graphy-site/auto-deploy.sh`（vis-ionary-web）に組み込んだ。
 

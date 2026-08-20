@@ -37,6 +37,10 @@
 >    （＝**偽の匿名化申告**）。正本＝`fw/mainscreen-tools.md`。
 > 3. **`RetainLongitudinalTemporalInformationModifiedDates` が全日付を `20000101` に潰す** —
 >    7 か月離れた 2 検査が同日になる＝オプションの目的（時間的前後関係の保持）を果たしていない。
+> 4. **更新通知メールの自動配信が動いていない**（手を動かすのは鍵を置くだけ）— cron を回す
+>    Linux 機に `~/.config/graphy/announce-api-key` が無く、**v0.2.0 でも 1 通も飛んでいない**。
+>    鍵が読めないとスキップするだけでデプロイは止まらないので**失敗として目立たない**。
+>    正本＝`fw/update-notification-design.md` Phase 3 の TODO ブロック（§ステップ2）。
 
 ---
 
