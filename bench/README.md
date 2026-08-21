@@ -432,6 +432,30 @@ Poisson は現実的な計数レベル（体部で約 10 カウント）で引�
 `DetectorInformationSequence` / `SpacingBetweenSlices`）。**別の合法な書き方で幾何を宣言すると
 開けず、その失敗は検証対象の機能の不具合に見える。**
 
+### 🔴 生成しただけでは**アプリに入らない** — C-STORE で投入する
+
+生成器は DICOM ファイルを書き出すだけで、保管庫（H2 索引 ＋ FS）には入らない。
+standalone の backend には**ファイルを受け取る HTTP の口が無く**
+（`DicomStorageService.ingest()` を呼べるのは DIMSE の C-STORE SCP と Q/R の retrieve だけ）、
+D&D 取り込みも未移植なので、**DIMSE で送るのが唯一の経路**である。
+
+```bash
+# アプリ（または backend）を起動しておく
+bash bench/store-scu.sh phantom/GNBP-5N-t20-id-tex phantom/GNBP-5N-t25-id-tex
+```
+
+送り先の既定は `GRAPHYNEXT@127.0.0.1:11112`（`application.yml` の `local-ae-title` と
+`application-standalone.yml` の SCP ポート）。`--host` / `--port` / `--called` で変えられる。
+
+dcm4che の CLI を別途入れなくて済むよう、**backend が既に依存している dcm4che のクラスだけ**で
+書いてある（`bench/StoreScu.java`。JDK 21 以降なら単一ファイルのまま実行できる）。
+クラスパスは `~/.m2` から拾うので、1 度 `mvn compile` を通してあれば追加の準備は要らない。
+
+⚠️ **Git Bash から実行するときはパス変換が要る**（`/c/Users/...` を Windows の java は
+理解せず、区切り文字も `;`）。`store-scu.sh` が `cygpath` で吸収している。
+自分で `java -cp` を書くときは忘れないこと——**jar は見つかっているのにクラスが無い**、
+という分かりにくい失敗になる。
+
 ### 生成と検証
 
 ```bash
