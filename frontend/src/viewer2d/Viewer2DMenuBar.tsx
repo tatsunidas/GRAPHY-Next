@@ -9,6 +9,7 @@ import { presetLabel } from "./wlPresets";
 import { useWlPresets } from "./wlPresetStore";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { usePluginMenu, runPluginBackend } from "../plugins/pluginRegistry";
+import type { PluginManifest, Viewer2DPluginHost, Viewer2DSurface } from "../plugins/pluginTypes";
 import { deletePluginStore, loadPluginStore, savePluginStore } from "../plugins/pluginStore";
 import { openLogViewer } from "../system/LogViewer";
 import { openMemoryMonitor } from "../system/memoryMonitor";
@@ -77,8 +78,10 @@ export function Viewer2DMenuBar({
 }) {
   const { t, locale } = useI18n();
   const presets = useWlPresets();
-  const pluginItems = usePluginMenu("viewer2d.menu", (m) => ({
-    surface: "viewer2d.menu",
+  // host の中身はサーフェスに依らず同一。違うのは「どのメニューに出るか」だけなので、
+  // 組み立てを 1 本にして surface だけ差し替える（2 本に分けると片方だけ H## を足す事故になる）。
+  const makeViewerHost = (surface: Viewer2DSurface) => (m: PluginManifest): Viewer2DPluginHost => ({
+    surface,
     pluginId: m.id,
     t,
     // プラグインが自前の文言を持つ場合の言語判定に使う（`t()` は本体のキーしか引けない）。
@@ -125,7 +128,14 @@ export function Viewer2DMenuBar({
         opts?.version ?? null,
       ),
     deleteStore: (patientKey) => deletePluginStore(m.id, patientKey ?? currentPatientKey(actions)),
-  }));
+  });
+  /** 「プラグイン」メニューに出るもの。 */
+  const pluginItems = usePluginMenu("viewer2d.menu", makeViewerHost("viewer2d.menu"));
+  /** 「解析」メニューに出るもの（`fw/subtraction-design.md` §15.8）。 */
+  const analysisPluginItems = usePluginMenu(
+    "viewer2d.menu.analysis",
+    makeViewerHost("viewer2d.menu.analysis"),
+  );
   const [open, setOpen] = useState<string | null>(null);
   useEffect(() => {
     const close = () => setOpen(null);
@@ -268,6 +278,18 @@ export function Viewer2DMenuBar({
         { label: `${t("texture.menu")}…`, onClick: () => actions.openTexture() },
         { label: `${t("glam.menu")}…`, onClick: () => actions.openGlamAnalysis() },
         ...(isDemo ? [] : [{ label: t("viewer2d.menu.imagej"), onClick: () => actions.bridgeImageJ() }]),
+        // 解析メニューは本体機能の並びなので、プラグイン由来は**必ず見分けられる形**で出す
+        // （区切り線で分け、ラベルに印を付ける）。プラグインメニューに出ていたときは
+        // 「そこに在ること」自体が出所の表示だったが、ここではそれが効かない。
+        // 設計: fw/subtraction-design.md §15.8。
+        ...(isDemo
+          ? []
+          : analysisPluginItems.map((p, i) => ({
+              label: `${p.label}${t("viewer2d.menu.pluginSuffix")}`,
+              onClick: p.onClick,
+              separatorBefore: i === 0,
+              testId: `plugin-analysis-item-${p.id}`,
+            }))),
       ],
     },
     {

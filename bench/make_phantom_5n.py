@@ -240,6 +240,56 @@ CONTENTS = ("t20", "t25", "t00")
 TRANSFORMS = ("id", "rigid", "deform")
 TEXTURES = ("tex", "smooth")
 
+# ══ Intensity arm — the counts no longer mean the same thing ═════════════════
+#
+# The 18 base series all share COUNT_SCALE and STORE_SCALE, and their background
+# is identical across the three content levels. That was deliberate for
+# registration (vary the lesions, hold everything else), but it makes the phantom
+# unable to say anything at all about *intensity normalisation*: any estimator,
+# including one that returns a hard-coded 1.0, scores perfectly. Subtraction
+# stands or falls on that step, so it needs its own arm.
+#
+# Three causes are modelled separately because they are not the same problem:
+#
+#   dose   injected activity / acquisition duration. Counts scale, and so the
+#          Poisson noise scales as 1/sqrt(counts). The level moves AND the image
+#          gets noisier. An estimator that is sensitive to noise fails here and
+#          not on `store`.
+#   store  the reconstruction's own output scaling. The level moves, the noise CV
+#          does not. This is the clean arithmetic case.
+#   offset a uniform pedestal (residual scatter/background correction). ★ This is
+#          the cell that separates a ratio-only estimator (median ratio, global
+#          mean) from an affine one (robust regression): no single multiplier can
+#          undo a pedestal, so a ratio-only method must visibly fail here. A
+#          normalisation arm without an offset cell cannot tell the two apart.
+#
+# Levels stay modest on purpose. +-25 % is what two ordinary follow-up scans
+# differ by; making it 3x would be easy for every method and would prove nothing.
+INTENSITY_BASE = "g100"
+# name -> (dose, store, offset as a fraction of the nominal body level)
+INTENSITY_ARMS = {
+    "d080": (0.80, 1.00, 0.00),
+    "s125": (1.00, 1.25, 0.00),
+    "b010": (1.00, 1.00, 0.10),
+}
+# The body sits at BODY_BASE * COUNT_SCALE * STORE_SCALE = 2000 stored units, so
+# a 10 % pedestal is 200. Published in the truth file rather than left implicit.
+NOMINAL_BODY_STORED = BODY_BASE * COUNT_SCALE * STORE_SCALE
+
+# The arm is crossed with content only, at transform `id` and background `tex`.
+#
+# `id` because a normalisation error and a registration error are different
+# failures and crossing them means neither can be attributed. The identity column
+# already proved its worth in the registration study for exactly this reason.
+#
+# `tex` because `smooth` is the *easier* arm for this question, not the harder
+# one: uniform tissue gives a clean median. `smooth` measures the floor for
+# registration (§9.5) but it would flatter a normaliser, and 9 more series that
+# only produce good news are not worth 28 MB.
+INTENSITY_CONTENTS = CONTENTS
+INTENSITY_TRANSFORM = "id"
+INTENSITY_TEXTURE = "tex"
+
 
 # ══ Transform model ══════════════════════════════════════════════════════════
 # Copied from make_phantom_2r.py rather than imported: the two generators are
@@ -590,9 +640,26 @@ def _bin_down(fine: np.ndarray) -> np.ndarray:
 
 
 def simulate_acquisition(
-    activity_fine: np.ndarray, noise_seed: int
+    activity_fine: np.ndarray,
+    noise_seed: int,
+    dose: float = 1.0,
+    store: float = 1.0,
+    offset: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Activity -> counts: PSF, binning, Poisson, post-filter.
+
+    `dose` / `store` / `offset` are the intensity arm (see INTENSITY_ARMS). They
+    enter at three different points on purpose, because that is where their real
+    causes enter:
+
+    * `dose` multiplies the counts **before** the Poisson draw, so it changes the
+      noise as well as the level (CV scales as 1/sqrt(dose)).
+    * `store` multiplies **after** the post-filter, so it changes the level only.
+    * `offset` is added **last**, in stored units, so it is a pedestal that no
+      multiplier can remove.
+
+    Collapsing them into one "gain" would make the phantom unable to distinguish
+    an estimator that is noise-sensitive from one that cannot handle a pedestal.
 
     Returns ``(counts, expected)`` — the written volume and the same pipeline run
     without the Poisson draw. `expected` is not written anywhere; it exists so
@@ -611,7 +678,7 @@ def simulate_acquisition(
     sigma_pre = _fwhm_to_sigma(PSF_PRE_FWHM_MM)
     blurred = _gaussian_blur(activity_fine, tuple(sigma_pre / s for s in fine_spacing))
 
-    coarse = np.clip(_bin_down(blurred), 0.0, None) * COUNT_SCALE
+    coarse = np.clip(_bin_down(blurred), 0.0, None) * COUNT_SCALE * dose
 
     rng = np.random.default_rng(noise_seed)
     counts = rng.poisson(coarse).astype(np.float32)
@@ -619,8 +686,9 @@ def simulate_acquisition(
     coarse_spacing = (SLICE_THICKNESS, PIXEL_SPACING[1], PIXEL_SPACING[0])
     sigma_post = _fwhm_to_sigma(PSF_POST_FWHM_MM)
     sigma_vox = tuple(sigma_post / s for s in coarse_spacing)
-    filtered = _gaussian_blur(counts, sigma_vox) * STORE_SCALE
-    expected = _gaussian_blur(coarse.astype(np.float32), sigma_vox) * STORE_SCALE
+    scale = STORE_SCALE * store
+    filtered = _gaussian_blur(counts, sigma_vox) * scale + offset
+    expected = _gaussian_blur(coarse.astype(np.float32), sigma_vox) * scale + offset
 
     rounded = np.rint(filtered)
     if rounded.max() > 65535 or rounded.min() < 0:
@@ -715,7 +783,12 @@ def sample_trilinear(volume: np.ndarray, q: np.ndarray) -> float:
 
 
 def measure_lesions(
-    volume: np.ndarray, warp: Warp, content: str, textured: bool
+    volume: np.ndarray,
+    warp: Warp,
+    content: str,
+    textured: bool,
+    level: float = 1.0,
+    offset: float = 0.0,
 ) -> list[dict]:
     """Measure each lesion in the written volume, at its predicted moving position.
 
@@ -764,9 +837,12 @@ def measure_lesions(
         #   low pocket of the cloud read 12.4x when 6.8x was put in, and one
         #   beside a kidney read 1.7x when 3.1x was put in. Neither was a defect
         #   in the data; both were the reference moving under the measurement.
-        local_bg = COUNT_SCALE * STORE_SCALE * float(
+        # ★ The reference must carry the same intensity arm as the image, or the
+        #   contrast of every gained series would read as if the arm were a real
+        #   change in uptake. `level` = dose*store, `offset` = the pedestal.
+        local_bg = level * COUNT_SCALE * STORE_SCALE * float(
             activity_at(centre[None, :], content, textured, include_lesions=False)[0]
-        )
+        ) + offset
         out.append(
             {
                 "id": les["id"],
@@ -946,14 +1022,34 @@ TEXTURE_NOTE = {
     "tex": "band-limited cloud + organ uptake",
     "smooth": "no background structure at all (observability floor)",
 }
+INTENSITY_NOTE = {
+    "d080": "dose x0.80 (level and noise)",
+    "s125": "store x1.25 (level only)",
+    "b010": "pedestal +10% of body",
+}
 
 
-def series_name(content: str, transform: str, texture: str) -> str:
-    return f"{content}-{transform}-{texture}"
+def series_name(content: str, transform: str, texture: str, intensity: str = INTENSITY_BASE) -> str:
+    base = f"{content}-{transform}-{texture}"
+    return base if intensity == INTENSITY_BASE else f"{base}-{intensity}"
 
 
-def all_series() -> list[tuple[str, str, str]]:
-    return [(c, t, x) for x in TEXTURES for c in CONTENTS for t in TRANSFORMS]
+def all_series() -> list[tuple[str, str, str, str]]:
+    """Every cell, base 18 first.
+
+    ★ The intensity arm is **appended**, never interleaved. `series_number` is
+    assigned from this order and the DICOM UIDs are derived from the series name,
+    so appending leaves all 18 original series byte-identical (verified by
+    `--check-md5`). Inserting the new cells in "logical" order would renumber the
+    originals and silently invalidate every md5 recorded in the design docs.
+    """
+    base = [(c, t, x, INTENSITY_BASE) for x in TEXTURES for c in CONTENTS for t in TRANSFORMS]
+    intensity = [
+        (c, INTENSITY_TRANSFORM, INTENSITY_TEXTURE, g)
+        for g in INTENSITY_ARMS  # dicts preserve insertion order; the naming is deterministic
+        for c in INTENSITY_CONTENTS
+    ]
+    return base + intensity
 
 
 def noise_seed_for(name: str) -> int:
@@ -979,12 +1075,21 @@ def main() -> int:
         action="append",
         help="generate only this background arm (repeatable)",
     )
+    ap.add_argument(
+        "--intensity",
+        choices=(INTENSITY_BASE, *INTENSITY_ARMS),
+        action="append",
+        help="generate only this intensity arm (repeatable); "
+        f"'{INTENSITY_BASE}' is the base 18 series",
+    )
     args = ap.parse_args()
 
     warps = build_warps()
     combos = all_series()
     if args.texture:
         combos = [c for c in combos if c[2] in args.texture]
+    if args.intensity:
+        combos = [c for c in combos if c[3] in args.intensity]
     if args.series:
         wanted = set(args.series)
         combos = [c for c in combos if series_name(*c) in wanted]
@@ -995,8 +1100,13 @@ def main() -> int:
     truth_series = {}
     number = {series_name(*c): i + 1 for i, c in enumerate(all_series())}
 
-    for content, transform, texture in combos:
-        name = series_name(content, transform, texture)
+    for content, transform, texture, intensity in combos:
+        name = series_name(content, transform, texture, intensity)
+        dose, store, offset_fraction = (
+            (1.0, 1.0, 0.0) if intensity == INTENSITY_BASE else INTENSITY_ARMS[intensity]
+        )
+        level = dose * store
+        offset = offset_fraction * NOMINAL_BODY_STORED
         series_id = f"{PHANTOM_ID}-{name}"
         out_dir = os.path.join(args.out, series_id)
         if os.path.exists(out_dir):
@@ -1007,15 +1117,21 @@ def main() -> int:
 
         warp = warps[transform]
         textured = texture == "tex"
-        print(f"building {series_id}: {N_SLICES} frames, {ROWS}x{COLUMNS}", file=sys.stderr)
+        arm = "" if intensity == INTENSITY_BASE else f"  [{INTENSITY_NOTE[intensity]}]"
+        print(f"building {series_id}: {N_SLICES} frames, {ROWS}x{COLUMNS}{arm}", file=sys.stderr)
 
         fine = build_activity_fine(warp, content, textured)
-        volume, expected = simulate_acquisition(fine, noise_seed_for(name))
+        volume, expected = simulate_acquisition(
+            fine, noise_seed_for(name), dose=dose, store=store, offset=offset
+        )
         del fine
 
         write_nm_tomo(
             volume,
             out_dir,
+            # ⚠ Do NOT append the intensity note here: SeriesDescription is VR LO
+            #   (64 chars) and `t25`'s content string already leaves no room. The
+            #   arm is in the series id and its meaning is in the truth JSON.
             series_description=f"{series_id} {CONTENT_SHORT[content]}",
             patient_id=f"{PHANTOM_ID}-{texture}",
             patient_name=f"GNBP^5N^{texture}",
@@ -1041,7 +1157,7 @@ def main() -> int:
             frame_of_reference_key=f"{PHANTOM_ID}-{PHANTOM_VERSION}-{name}",
         )
 
-        measured = measure_lesions(volume, warp, content, textured)
+        measured = measure_lesions(volume, warp, content, textured, level=level, offset=offset)
         self_check(measured, content)
 
         entry = {
@@ -1050,7 +1166,34 @@ def main() -> int:
             "content": content,
             "transform": transform,
             "background": texture,
-            "kind": f"{transform} + content {content} + background {texture}",
+            "intensity_arm": intensity,
+            "kind": f"{transform} + content {content} + background {texture} + intensity {intensity}",
+            # ── What an intensity normaliser has to recover ──────────────────
+            # Forward (what was applied to this series, relative to the base):
+            #     stored = level * stored_base + offset_stored
+            # A normaliser maps *this* series onto the fixed series, so the
+            # coefficients it must produce are the INVERSE:
+            #     a = 1/level,  b = -offset_stored/level
+            # Both are published so a scorer never has to invert anything itself.
+            "intensity": {
+                "dose": dose,
+                "store": store,
+                "level": level,
+                "offset_stored": offset,
+                "offset_fraction_of_body": offset_fraction,
+                "nominal_body_stored": NOMINAL_BODY_STORED,
+                "recover_scale": 1.0 / level,
+                "recover_offset_stored": -offset / level,
+                "fixed_reference": f"{PHANTOM_ID}-"
+                f"{series_name(CONTENTS[0], INTENSITY_TRANSFORM, INTENSITY_TEXTURE)}",
+                "note": (
+                    "dose scales counts before the Poisson draw (level AND noise move); "
+                    "store scales after the post-filter (level only); offset is a pedestal "
+                    "that no multiplier can remove. background_statistics.mean_counts is "
+                    "divided by the base STORE_SCALE, so it tracks true counts for `dose` "
+                    "but not for `store`/`offset`."
+                ),
+            },
             "geometry": {
                 "rows": ROWS,
                 "columns": COLUMNS,

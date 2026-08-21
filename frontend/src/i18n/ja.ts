@@ -510,6 +510,8 @@ export const ja: Record<string, string> = {
   "viewer2d.menu.roiTools": "ROI ツール",
   "viewer2d.menu.analysis": "解析",
   "viewer2d.menu.plugins": "プラグイン",
+  // 解析メニューに出るプラグイン項目に付ける印（本体機能と並ぶので出所を明示する）。
+  "viewer2d.menu.pluginSuffix": "（プラグイン）",
   // プラグインの計算結果を画像に重ねているとき、出所が分かるように出すラベル（H4a）。
   "viewer2d.plugin.overlayLabel": "プラグイン: {{name}}",
   // プラグインが派生シリーズを保存する前の確認ダイアログ（H4b・抑止不可）。

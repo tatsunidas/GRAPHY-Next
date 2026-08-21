@@ -38,8 +38,22 @@ export type {
   ViewerSrResult,
 };
 
-/** プラグインを組み込む先（UI サーフェス）。fw/plugin-architecture.md §2.1。 */
-export type PluginSurface = "viewer2d.menu" | "viewer2d.toolbar" | "mainscreen.menu";
+/**
+ * プラグインを組み込む先（UI サーフェス）。fw/plugin-architecture.md §2.1。
+ *
+ * <p>`viewer2d.menu.analysis` は **2D ビューアの「解析」メニュー**に出す
+ * （`viewer2d.menu` ＝「プラグイン」メニューとは別）。本体の解析機能と並ぶ位置に出るため、
+ * **プラグイン由来であることの表示が必須**（区切り線 ＋ 印。`fw/subtraction-design.md` §15.8）。
+ * host の中身は `viewer2d.menu` と完全に同一で、違うのは出る場所だけである。
+ */
+export type PluginSurface =
+  | "viewer2d.menu"
+  | "viewer2d.menu.analysis"
+  | "viewer2d.toolbar"
+  | "mainscreen.menu";
+
+/** 2D ビューア系サーフェス（host の形が同じもの）。 */
+export type Viewer2DSurface = "viewer2d.menu" | "viewer2d.menu.analysis" | "viewer2d.toolbar";
 
 /** backend の GET /api/plugins が返すマニフェスト 1 件。 */
 export interface PluginManifest {
@@ -167,7 +181,7 @@ export interface PluginRegistrationResult {
 }
 
 export interface Viewer2DPluginHost extends PluginHostBase {
-  surface: "viewer2d.menu" | "viewer2d.toolbar";
+  surface: Viewer2DSurface;
   /** 表示中タイルへの操作（既存の runViewerCommand 経由）。 */
   actions: ViewerActions;
   /**

@@ -44,6 +44,15 @@ import sys
 import numpy as np
 import pydicom
 
+# The success message contains an em dash, and a Windows console defaults to
+# cp932/cp1252, which cannot encode it. Without this the script does all of its
+# work, passes, and then dies with UnicodeEncodeError on the very last line —
+# i.e. a passing check reports as a crash with a non-zero exit status. Reconfigure
+# rather than de-Unicode the text, so the same message reads correctly everywhere.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 
 def is_nm_tomo(ds) -> bool:
     """Mirror of NmFrameExpander.isNmTomo."""
