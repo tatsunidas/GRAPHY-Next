@@ -599,7 +599,20 @@
       "content": "t20",
       "transform": "id",
       "background": "tex",
-      "kind": "id + content t20 + background tex",
+      "intensity_arm": "g100",
+      "kind": "id + content t20 + background tex + intensity g100",
+      "intensity": {
+        "dose": 1.0,
+        "store": 1.0,
+        "level": 1.0,
+        "offset_stored": 0.0,
+        "offset_fraction_of_body": 0.0,
+        "nominal_body_stored": 2000.0,
+        "recover_scale": 1.0,
+        "recover_offset_stored": -0.0,
+        "fixed_reference": "GNBP-5N-t20-id-tex",
+        "note": "dose scales counts before the Poisson draw (level AND noise move); store scales after the post-filter (level only); offset is a pedestal that no multiplier can remove. background_statistics.mean_counts is divided by the base STORE_SCALE, so it tracks true counts for `dose` but not for `store`/`offset`."
+      },
       "geometry": {
         "rows": 128,
         "columns": 128,
@@ -1053,10 +1066,10 @@
             64.17525593415107,
             87.28144581304304
           ],
-          "local_background_counts": 695.9297918332227,
-          "peak_contrast": 7.18042733128056,
-          "mean_contrast": 5.669625203818941,
-          "recovery_coefficient": 1.1571920946384597,
+          "local_background_counts": 695.9297918332226,
+          "peak_contrast": 7.180427331280561,
+          "mean_contrast": 5.669625203818942,
+          "recovery_coefficient": 1.15719209463846,
           "shell_background_counts": 1187.3027314112292,
           "cnr": 5.893647131371774
         },
@@ -1121,10 +1134,10 @@
             17.39165385496011,
             -26.04103843461027
           ],
-          "local_background_counts": 1591.900714885851,
-          "peak_contrast": 2.749993436501852,
-          "mean_contrast": 2.3182782164053677,
-          "recovery_coefficient": 0.6500476778919861,
+          "local_background_counts": 1591.9007148858511,
+          "peak_contrast": 2.7499934365018515,
+          "mean_contrast": 2.3182782164053672,
+          "recovery_coefficient": 0.650047677891986,
           "shell_background_counts": 2108.4241042345275,
           "cnr": 4.629899209169834
         },
@@ -1240,10 +1253,10 @@
             31.847594457173813,
             69.26048521229848
           ],
-          "local_background_counts": 946.5439451695643,
-          "peak_contrast": 3.094693291095364,
-          "mean_contrast": 2.7192585620645837,
-          "recovery_coefficient": 1.0099240884617693,
+          "local_background_counts": 946.543945169564,
+          "peak_contrast": 3.094693291095365,
+          "mean_contrast": 2.719258562064584,
+          "recovery_coefficient": 1.0099240884617697,
           "shell_background_counts": 1806.1758104738155,
           "cnr": 1.297861144716765
         },
@@ -3157,7 +3170,20 @@
       "content": "t25",
       "transform": "id",
       "background": "tex",
-      "kind": "id + content t25 + background tex",
+      "intensity_arm": "g100",
+      "kind": "id + content t25 + background tex + intensity g100",
+      "intensity": {
+        "dose": 1.0,
+        "store": 1.0,
+        "level": 1.0,
+        "offset_stored": 0.0,
+        "offset_fraction_of_body": 0.0,
+        "nominal_body_stored": 2000.0,
+        "recover_scale": 1.0,
+        "recover_offset_stored": -0.0,
+        "fixed_reference": "GNBP-5N-t20-id-tex",
+        "note": "dose scales counts before the Poisson draw (level AND noise move); store scales after the post-filter (level only); offset is a pedestal that no multiplier can remove. background_statistics.mean_counts is divided by the base STORE_SCALE, so it tracks true counts for `dose` but not for `store`/`offset`."
+      },
       "geometry": {
         "rows": 128,
         "columns": 128,
@@ -3611,10 +3637,10 @@
             64.17525593415107,
             87.28144581304304
           ],
-          "local_background_counts": 695.9297918332227,
-          "peak_contrast": 4.53567360733829,
-          "mean_contrast": 4.037846073016804,
-          "recovery_coefficient": 0.9959053587978068,
+          "local_background_counts": 695.9297918332226,
+          "peak_contrast": 4.535673607338291,
+          "mean_contrast": 4.037846073016805,
+          "recovery_coefficient": 0.9959053587978071,
           "shell_background_counts": 1639.4157557482097,
           "cnr": 0.7832711331565994
         },
@@ -3679,10 +3705,10 @@
             17.39165385496011,
             -26.04103843461027
           ],
-          "local_background_counts": 1591.900714885851,
-          "peak_contrast": 9.654729851919345,
-          "mean_contrast": 6.861155143435545,
-          "recovery_coefficient": 0.9708687955282651,
+          "local_background_counts": 1591.9007148858511,
+          "peak_contrast": 9.654729851919344,
+          "mean_contrast": 6.8611551434355444,
+          "recovery_coefficient": 0.9708687955282649,
           "shell_background_counts": 2171.660922453117,
           "cnr": 24.365494155605763
         },
@@ -3798,10 +3824,10 @@
             31.847594457173813,
             69.26048521229848
           ],
-          "local_background_counts": 946.5439451695643,
-          "peak_contrast": 6.990023606954035,
-          "mean_contrast": 6.641926477327007,
-          "recovery_coefficient": 1.1643402566504026,
+          "local_background_counts": 946.543945169564,
+          "peak_contrast": 6.990023606954037,
+          "mean_contrast": 6.641926477327009,
+          "recovery_coefficient": 1.164340256650403,
           "shell_background_counts": 2053.707743946296,
           "cnr": 5.229057573751677
         },
@@ -5715,7 +5741,20 @@
       "content": "t00",
       "transform": "id",
       "background": "tex",
-      "kind": "id + content t00 + background tex",
+      "intensity_arm": "g100",
+      "kind": "id + content t00 + background tex + intensity g100",
+      "intensity": {
+        "dose": 1.0,
+        "store": 1.0,
+        "level": 1.0,
+        "offset_stored": 0.0,
+        "offset_fraction_of_body": 0.0,
+        "nominal_body_stored": 2000.0,
+        "recover_scale": 1.0,
+        "recover_offset_stored": -0.0,
+        "fixed_reference": "GNBP-5N-t20-id-tex",
+        "note": "dose scales counts before the Poisson draw (level AND noise move); store scales after the post-filter (level only); offset is a pedestal that no multiplier can remove. background_statistics.mean_counts is divided by the base STORE_SCALE, so it tracks true counts for `dose` but not for `store`/`offset`."
+      },
       "geometry": {
         "rows": 128,
         "columns": 128,
@@ -6169,10 +6208,10 @@
             64.17525593415107,
             87.28144581304304
           ],
-          "local_background_counts": 695.9297918332227,
-          "peak_contrast": 1.2683425046286139,
-          "mean_contrast": 1.4703527670319776,
-          "recovery_coefficient": 1.3854191605968913,
+          "local_background_counts": 695.9297918332226,
+          "peak_contrast": 1.268342504628614,
+          "mean_contrast": 1.4703527670319778,
+          "recovery_coefficient": 1.3854191605968924,
           "shell_background_counts": 1177.3049378062572,
           "cnr": -0.4731754324161169
         },
@@ -6237,10 +6276,10 @@
             17.39165385496011,
             -26.04103843461027
           ],
-          "local_background_counts": 1591.900714885851,
-          "peak_contrast": 1.2011304752787175,
-          "mean_contrast": 1.1950284643242202,
-          "recovery_coefficient": 1.9894480969305692,
+          "local_background_counts": 1591.9007148858511,
+          "peak_contrast": 1.2011304752787173,
+          "mean_contrast": 1.19502846432422,
+          "recovery_coefficient": 1.989448096930567,
           "shell_background_counts": 2166.405473897618,
           "cnr": -0.5059868575319338
         },
@@ -6356,10 +6395,10 @@
             31.847594457173813,
             69.26048521229848
           ],
-          "local_background_counts": 946.5439451695643,
-          "peak_contrast": 1.3103088142655517,
-          "mean_contrast": 1.5115780578140496,
-          "recovery_coefficient": 1.6757291908059533,
+          "local_background_counts": 946.543945169564,
+          "peak_contrast": 1.310308814265552,
+          "mean_contrast": 1.5115780578140499,
+          "recovery_coefficient": 1.6757291908059544,
           "shell_background_counts": 1906.1488851594343,
           "cnr": -0.862875985129743
         },
@@ -15940,6 +15979,5984 @@
       },
       "noise_seed": 3470106571,
       "series_md5": "82d7f4e0308be657d9325430e0bbd7e7"
+    },
+    "t20-id-tex-d080": {
+      "series": "GNBP-5N-t20-id-tex-d080",
+      "series_number": 19,
+      "content": "t20",
+      "transform": "id",
+      "background": "tex",
+      "intensity_arm": "d080",
+      "kind": "id + content t20 + background tex + intensity d080",
+      "intensity": {
+        "dose": 0.8,
+        "store": 1.0,
+        "level": 0.8,
+        "offset_stored": 0.0,
+        "offset_fraction_of_body": 0.0,
+        "nominal_body_stored": 2000.0,
+        "recover_scale": 1.25,
+        "recover_offset_stored": -0.0,
+        "fixed_reference": "GNBP-5N-t20-id-tex",
+        "note": "dose scales counts before the Poisson draw (level AND noise move); store scales after the post-filter (level only); offset is a pedestal that no multiplier can remove. background_statistics.mean_counts is divided by the base STORE_SCALE, so it tracks true counts for `dose` but not for `store`/`offset`."
+      },
+      "geometry": {
+        "rows": 128,
+        "columns": 128,
+        "slices": 96,
+        "pixel_spacing_mm": 4.42,
+        "slice_thickness_mm": 4.42,
+        "encoding": "single multi-frame NM instance (RECON TOMO); frames are slices"
+      },
+      "transform_fixed_to_moving": {
+        "matrix_4x4_row_major": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "rotation_centre_mm": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "landmarks": [
+        {
+          "name": "L01",
+          "fixed_mm": [
+            85.3196490992537,
+            23.434354491976848,
+            -79.4601873783405
+          ],
+          "moving_mm": [
+            85.3196490992537,
+            23.434354491976848,
+            -79.4601873783405
+          ],
+          "visible": true
+        },
+        {
+          "name": "L02",
+          "fixed_mm": [
+            -12.102341083692266,
+            23.00379858828586,
+            -106.83944433996011
+          ],
+          "moving_mm": [
+            -12.102341083692266,
+            23.00379858828586,
+            -106.83944433996011
+          ],
+          "visible": true
+        },
+        {
+          "name": "L03",
+          "fixed_mm": [
+            -111.05452872689571,
+            15.927760337855986,
+            72.6423815039542
+          ],
+          "moving_mm": [
+            -111.05452872689571,
+            15.927760337855986,
+            72.6423815039542
+          ],
+          "visible": true
+        },
+        {
+          "name": "L04",
+          "fixed_mm": [
+            57.965000560817344,
+            64.17525593415107,
+            87.28144581304304
+          ],
+          "moving_mm": [
+            57.965000560817344,
+            64.17525593415107,
+            87.28144581304304
+          ],
+          "visible": true
+        },
+        {
+          "name": "L05",
+          "fixed_mm": [
+            -67.3426130390325,
+            31.931059160337526,
+            -59.225235275730796
+          ],
+          "moving_mm": [
+            -67.3426130390325,
+            31.931059160337526,
+            -59.225235275730796
+          ],
+          "visible": true
+        },
+        {
+          "name": "L06",
+          "fixed_mm": [
+            -83.71438628035118,
+            15.22805437655559,
+            23.4575142327742
+          ],
+          "moving_mm": [
+            -83.71438628035118,
+            15.22805437655559,
+            23.4575142327742
+          ],
+          "visible": true
+        },
+        {
+          "name": "L07",
+          "fixed_mm": [
+            42.01100600457585,
+            -49.726994820960385,
+            21.1496948359121
+          ],
+          "moving_mm": [
+            42.01100600457585,
+            -49.726994820960385,
+            21.1496948359121
+          ],
+          "visible": true
+        },
+        {
+          "name": "L08",
+          "fixed_mm": [
+            -35.331523604910146,
+            17.39165385496011,
+            -26.04103843461027
+          ],
+          "moving_mm": [
+            -35.331523604910146,
+            17.39165385496011,
+            -26.04103843461027
+          ],
+          "visible": true
+        },
+        {
+          "name": "L09",
+          "fixed_mm": [
+            12.254796259109781,
+            4.399865083913369,
+            -160.68631093318322
+          ],
+          "moving_mm": [
+            12.254796259109781,
+            4.399865083913369,
+            -160.68631093318322
+          ],
+          "visible": true
+        },
+        {
+          "name": "L10",
+          "fixed_mm": [
+            7.003473878059594,
+            85.31396874086184,
+            -29.99848007622623
+          ],
+          "moving_mm": [
+            7.003473878059594,
+            85.31396874086184,
+            -29.99848007622623
+          ],
+          "visible": true
+        },
+        {
+          "name": "L11",
+          "fixed_mm": [
+            80.57328087279905,
+            -20.95457995568684,
+            -91.7524491921514
+          ],
+          "moving_mm": [
+            80.57328087279905,
+            -20.95457995568684,
+            -91.7524491921514
+          ],
+          "visible": true
+        },
+        {
+          "name": "L12",
+          "fixed_mm": [
+            -9.989582074860778,
+            -10.78618534185955,
+            68.07470852065774
+          ],
+          "moving_mm": [
+            -9.989582074860778,
+            -10.78618534185955,
+            68.07470852065774
+          ],
+          "visible": true
+        },
+        {
+          "name": "L13",
+          "fixed_mm": [
+            -18.27798672714667,
+            -59.14718713005257,
+            -58.90271145228499
+          ],
+          "moving_mm": [
+            -18.27798672714667,
+            -59.14718713005257,
+            -58.90271145228499
+          ],
+          "visible": true
+        },
+        {
+          "name": "L14",
+          "fixed_mm": [
+            2.4855429476726556,
+            -43.461266305881814,
+            152.08984054499575
+          ],
+          "moving_mm": [
+            2.4855429476726556,
+            -43.461266305881814,
+            152.08984054499575
+          ],
+          "visible": true
+        },
+        {
+          "name": "L15",
+          "fixed_mm": [
+            22.614280836795047,
+            31.847594457173813,
+            69.26048521229848
+          ],
+          "moving_mm": [
+            22.614280836795047,
+            31.847594457173813,
+            69.26048521229848
+          ],
+          "visible": true
+        },
+        {
+          "name": "L16",
+          "fixed_mm": [
+            95.52640848926012,
+            52.143321279662075,
+            15.126069629051983
+          ],
+          "moving_mm": [
+            95.52640848926012,
+            52.143321279662075,
+            15.126069629051983
+          ],
+          "visible": true
+        },
+        {
+          "name": "L17",
+          "fixed_mm": [
+            -75.85733853508768,
+            11.479004564064809,
+            107.80027382096898
+          ],
+          "moving_mm": [
+            -75.85733853508768,
+            11.479004564064809,
+            107.80027382096898
+          ],
+          "visible": true
+        },
+        {
+          "name": "L18",
+          "fixed_mm": [
+            11.234565653669137,
+            -74.96032818056406,
+            -29.23836922531555
+          ],
+          "moving_mm": [
+            11.234565653669137,
+            -74.96032818056406,
+            -29.23836922531555
+          ],
+          "visible": true
+        },
+        {
+          "name": "L19",
+          "fixed_mm": [
+            32.33762063137553,
+            35.711852745360545,
+            2.508291990139753
+          ],
+          "moving_mm": [
+            32.33762063137553,
+            35.711852745360545,
+            2.508291990139753
+          ],
+          "visible": true
+        },
+        {
+          "name": "L20",
+          "fixed_mm": [
+            16.219444882015267,
+            -59.1424127617012,
+            111.20800324512481
+          ],
+          "moving_mm": [
+            16.219444882015267,
+            -59.1424127617012,
+            111.20800324512481
+          ],
+          "visible": true
+        },
+        {
+          "name": "L21",
+          "fixed_mm": [
+            -74.2423280144175,
+            -57.696227344629754,
+            90.68123566433002
+          ],
+          "moving_mm": [
+            -74.2423280144175,
+            -57.696227344629754,
+            90.68123566433002
+          ],
+          "visible": false
+        },
+        {
+          "name": "L22",
+          "fixed_mm": [
+            -80.53163849577739,
+            59.3681726925048,
+            -13.420215255005871
+          ],
+          "moving_mm": [
+            -80.53163849577739,
+            59.3681726925048,
+            -13.420215255005871
+          ],
+          "visible": false
+        },
+        {
+          "name": "L23",
+          "fixed_mm": [
+            54.80147012400661,
+            -33.47169592083833,
+            90.49959289744919
+          ],
+          "moving_mm": [
+            54.80147012400661,
+            -33.47169592083833,
+            90.49959289744919
+          ],
+          "visible": false
+        },
+        {
+          "name": "L24",
+          "fixed_mm": [
+            14.190005531699143,
+            48.995735031474,
+            -75.07242861650975
+          ],
+          "moving_mm": [
+            14.190005531699143,
+            48.995735031474,
+            -75.07242861650975
+          ],
+          "visible": false
+        },
+        {
+          "name": "L25",
+          "fixed_mm": [
+            105.91097902152887,
+            -30.238892799906353,
+            -9.437418777600925
+          ],
+          "moving_mm": [
+            105.91097902152887,
+            -30.238892799906353,
+            -9.437418777600925
+          ],
+          "visible": false
+        }
+      ],
+      "displacement": {
+        "sampled_points": 6144,
+        "displacement_mm_mean": 0.0,
+        "displacement_mm_max": 0.0,
+        "displacement_mm_p95": 0.0
+      },
+      "lesion_measurements": [
+        {
+          "id": "L01",
+          "present": true,
+          "diameter_mm": 12.723163611204273,
+          "nominal_contrast": 4.800245558710019,
+          "moving_mm": [
+            85.3196490992537,
+            23.434354491976848,
+            -79.4601873783405
+          ],
+          "local_background_counts": 1632.0130517481239,
+          "peak_contrast": 2.478073594251343,
+          "mean_contrast": 2.259683725803005,
+          "recovery_coefficient": 0.38894160164562375,
+          "shell_background_counts": 1518.2267080745341,
+          "cnr": 5.557690250863379
+        },
+        {
+          "id": "L02",
+          "present": true,
+          "diameter_mm": 28.763971935916626,
+          "nominal_contrast": 3.1894850023212595,
+          "moving_mm": [
+            -12.102341083692266,
+            23.00379858828586,
+            -106.83944433996011
+          ],
+          "local_background_counts": 1490.608383292498,
+          "peak_contrast": 2.806240814918182,
+          "mean_contrast": 2.3091956422354887,
+          "recovery_coefficient": 0.824961492315879,
+          "shell_background_counts": 1617.4922737306842,
+          "cnr": 2.6452057915772764
+        },
+        {
+          "id": "L03",
+          "present": true,
+          "diameter_mm": 36.746719245007,
+          "nominal_contrast": 3.055241007048041,
+          "moving_mm": [
+            -111.05452872689571,
+            15.927760337855986,
+            72.6423815039542
+          ],
+          "local_background_counts": 2422.54781201593,
+          "peak_contrast": 2.5671504203164726,
+          "mean_contrast": 1.8619766975815497,
+          "recovery_coefficient": 0.7625141844398011,
+          "shell_background_counts": 1538.9817990899544,
+          "cnr": 5.843260785104375
+        },
+        {
+          "id": "L04",
+          "present": true,
+          "diameter_mm": 33.87938693794135,
+          "nominal_contrast": 6.340882779891012,
+          "moving_mm": [
+            57.965000560817344,
+            64.17525593415107,
+            87.28144581304304
+          ],
+          "local_background_counts": 556.7438334665782,
+          "peak_contrast": 6.847275130220703,
+          "mean_contrast": 5.614745431365688,
+          "recovery_coefficient": 1.094814353955925,
+          "shell_background_counts": 928.1062215477997,
+          "cnr": 5.655762485192424
+        },
+        {
+          "id": "L05",
+          "present": true,
+          "diameter_mm": 20.745168961617047,
+          "nominal_contrast": 9.736175404917965,
+          "moving_mm": [
+            -67.3426130390325,
+            31.931059160337526,
+            -59.225235275730796
+          ],
+          "local_background_counts": 1727.9495687146602,
+          "peak_contrast": 8.70581986903041,
+          "mean_contrast": 5.625016858435002,
+          "recovery_coefficient": 0.8820587398797506,
+          "shell_background_counts": 1529.0080738177624,
+          "cnr": 30.234808075119172
+        },
+        {
+          "id": "L06",
+          "present": true,
+          "diameter_mm": 25.991297505227863,
+          "nominal_contrast": 5.702046564473235,
+          "moving_mm": [
+            -83.71438628035118,
+            15.22805437655559,
+            23.4575142327742
+          ],
+          "local_background_counts": 2191.053889218345,
+          "peak_contrast": 3.8711670212887985,
+          "mean_contrast": 2.993558123826544,
+          "recovery_coefficient": 0.6106207120495524,
+          "shell_background_counts": 2202.108173076923,
+          "cnr": 7.364173708893507
+        },
+        {
+          "id": "L07",
+          "present": true,
+          "diameter_mm": 30.2530270074114,
+          "nominal_contrast": 7.159018023946937,
+          "moving_mm": [
+            42.01100600457585,
+            -49.726994820960385,
+            21.1496948359121
+          ],
+          "local_background_counts": 1292.3832897626653,
+          "peak_contrast": 6.739277499097467,
+          "mean_contrast": 4.864101906504114,
+          "recovery_coefficient": 0.931849440411203,
+          "shell_background_counts": 1255.0606189063162,
+          "cnr": 16.548581675236548
+        },
+        {
+          "id": "L08",
+          "present": true,
+          "diameter_mm": 17.18659059732419,
+          "nominal_contrast": 3.692100127450399,
+          "moving_mm": [
+            -35.331523604910146,
+            17.39165385496011,
+            -26.04103843461027
+          ],
+          "local_background_counts": 1273.5205719086812,
+          "peak_contrast": 2.6585297342050067,
+          "mean_contrast": 2.250454419989934,
+          "recovery_coefficient": 0.6160728263015041,
+          "shell_background_counts": 1660.498371335505,
+          "cnr": 4.470960014791493
+        },
+        {
+          "id": "L09",
+          "present": true,
+          "diameter_mm": 21.168665917654298,
+          "nominal_contrast": 11.306025712504331,
+          "moving_mm": [
+            12.254796259109781,
+            4.399865083913369,
+            -160.68631093318322
+          ],
+          "local_background_counts": 1815.2822492421733,
+          "peak_contrast": 9.458118851783082,
+          "mean_contrast": 6.649684133951004,
+          "recovery_coefficient": 0.8206964631886006,
+          "shell_background_counts": 2335.3009653605905,
+          "cnr": 6.617724176108593
+        },
+        {
+          "id": "L10",
+          "present": true,
+          "diameter_mm": 11.648743366150068,
+          "nominal_contrast": 10.56059062032023,
+          "moving_mm": [
+            7.003473878059594,
+            85.31396874086184,
+            -29.99848007622623
+          ],
+          "local_background_counts": 198.4829872744678,
+          "peak_contrast": 4.752896961222676,
+          "mean_contrast": 3.9366781359610683,
+          "recovery_coefficient": 0.3925381924884651,
+          "shell_background_counts": 547.9893355209188,
+          "cnr": 0.8723782991575565
+        },
+        {
+          "id": "L11",
+          "present": true,
+          "diameter_mm": 35.09203168017685,
+          "nominal_contrast": 8.976035249672458,
+          "moving_mm": [
+            80.57328087279905,
+            -20.95457995568684,
+            -91.7524491921514
+          ],
+          "local_background_counts": 1057.5734448455726,
+          "peak_contrast": 8.674850615572165,
+          "mean_contrast": 6.603297134728017,
+          "recovery_coefficient": 0.9622388035317846,
+          "shell_background_counts": 1012.942794279428,
+          "cnr": 15.969926436909807
+        },
+        {
+          "id": "L12",
+          "present": true,
+          "diameter_mm": 40.13561288389957,
+          "nominal_contrast": 5.3840243807844175,
+          "moving_mm": [
+            -9.989582074860778,
+            -10.78618534185955,
+            68.07470852065774
+          ],
+          "local_background_counts": 1426.2057570082486,
+          "peak_contrast": 5.603851452641185,
+          "mean_contrast": 4.8118577662427775,
+          "recovery_coefficient": 1.0501427576042437,
+          "shell_background_counts": 2019.0892288081582,
+          "cnr": 6.753467242254223
+        },
+        {
+          "id": "L13",
+          "present": true,
+          "diameter_mm": 37.58596932972458,
+          "nominal_contrast": 4.235391135834939,
+          "moving_mm": [
+            -18.27798672714667,
+            -59.14718713005257,
+            -58.90271145228499
+          ],
+          "local_background_counts": 1327.5215873941277,
+          "peak_contrast": 4.3078879123951195,
+          "mean_contrast": 3.503110512717985,
+          "recovery_coefficient": 1.0224074226319075,
+          "shell_background_counts": 1435.8058984910838,
+          "cnr": 7.630027258613061
+        },
+        {
+          "id": "L14",
+          "present": true,
+          "diameter_mm": 14.947005902629522,
+          "nominal_contrast": 5.67243597740174,
+          "moving_mm": [
+            2.4855429476726556,
+            -43.461266305881814,
+            152.08984054499575
+          ],
+          "local_background_counts": 1218.7615640575975,
+          "peak_contrast": 3.539266955021684,
+          "mean_contrast": 2.7481697283040907,
+          "recovery_coefficient": 0.5434567680119881,
+          "shell_background_counts": 1165.938385269122,
+          "cnr": 5.734005952545348
+        },
+        {
+          "id": "L15",
+          "present": true,
+          "diameter_mm": 30.742592421384572,
+          "nominal_contrast": 3.0741096435137254,
+          "moving_mm": [
+            22.614280836795047,
+            31.847594457173813,
+            69.26048521229848
+          ],
+          "local_background_counts": 757.2351561356513,
+          "peak_contrast": 3.4072491499751725,
+          "mean_contrast": 2.735152207750748,
+          "recovery_coefficient": 1.1606180789445053,
+          "shell_background_counts": 1453.0565253532834,
+          "cnr": 1.6077442537819167
+        },
+        {
+          "id": "L16",
+          "present": true,
+          "diameter_mm": 26.1625323071501,
+          "nominal_contrast": 6.774528116922321,
+          "moving_mm": [
+            95.52640848926012,
+            52.143321279662075,
+            15.126069629051983
+          ],
+          "local_background_counts": 5921.368711294318,
+          "peak_contrast": 4.26986080296261,
+          "mean_contrast": 2.796658674239449,
+          "recovery_coefficient": 0.5662559323904313,
+          "shell_background_counts": 1962.5767575322811,
+          "cnr": 22.13590650049933
+        },
+        {
+          "id": "L17",
+          "present": true,
+          "diameter_mm": 15.981245857067638,
+          "nominal_contrast": 4.171751167410247,
+          "moving_mm": [
+            -75.85733853508768,
+            11.479004564064809,
+            107.80027382096898
+          ],
+          "local_background_counts": 2067.9392869070875,
+          "peak_contrast": 3.5415596577407804,
+          "mean_contrast": 2.910627037316127,
+          "recovery_coefficient": 0.8013111759381738,
+          "shell_background_counts": 2114.881309686221,
+          "cnr": 8.225038070957948
+        },
+        {
+          "id": "L18",
+          "present": true,
+          "diameter_mm": 9.383158641114186,
+          "nominal_contrast": 5.849599035056357,
+          "moving_mm": [
+            11.234565653669137,
+            -74.96032818056406,
+            -29.23836922531555
+          ],
+          "local_background_counts": 1491.640422752052,
+          "peak_contrast": 1.6129670364913071,
+          "mean_contrast": 1.6111456644263122,
+          "recovery_coefficient": 0.12639540548823616,
+          "shell_background_counts": 1342.99547920434,
+          "cnr": 2.172021541458223
+        },
+        {
+          "id": "L19",
+          "present": true,
+          "diameter_mm": 12.82836160424031,
+          "nominal_contrast": 4.4898211367319005,
+          "moving_mm": [
+            32.33762063137553,
+            35.711852745360545,
+            2.508291990139753
+          ],
+          "local_background_counts": 1652.3181362802507,
+          "peak_contrast": 2.5907981438437213,
+          "mean_contrast": 2.081145398219513,
+          "recovery_coefficient": 0.45583944893331985,
+          "shell_background_counts": 1874.4748257164988,
+          "cnr": 4.749273854927132
+        },
+        {
+          "id": "L20",
+          "present": true,
+          "diameter_mm": 30.64735128042036,
+          "nominal_contrast": 4.7954195951033345,
+          "moving_mm": [
+            16.219444882015267,
+            -59.1424127617012,
+            111.20800324512481
+          ],
+          "local_background_counts": 1849.4549635134558,
+          "peak_contrast": 4.718630999051584,
+          "mean_contrast": 3.442212323230951,
+          "recovery_coefficient": 0.9797680877890762,
+          "shell_background_counts": 1540.8478625314333,
+          "cnr": 14.140780802234389
+        },
+        {
+          "id": "L21",
+          "present": false,
+          "diameter_mm": null,
+          "nominal_contrast": null,
+          "moving_mm": [
+            -74.2423280144175,
+            -57.696227344629754,
+            90.68123566433002
+          ],
+          "local_background_counts": 2391.262455058861,
+          "peak_contrast": 0.9300540817612761,
+          "mean_contrast": 0.9744852536241743,
+          "recovery_coefficient": null,
+          "shell_background_counts": 1856.6402243589744,
+          "cnr": 0.4876133536830063
+        },
+        {
+          "id": "L22",
+          "present": false,
+          "diameter_mm": null,
+          "nominal_contrast": null,
+          "moving_mm": [
+            -80.53163849577739,
+            59.3681726925048,
+            -13.420215255005871
+          ],
+          "local_background_counts": 1116.0373407422046,
+          "peak_contrast": 1.8533267344860673,
+          "mean_contrast": 1.9510099891030093,
+          "recovery_coefficient": null,
+          "shell_background_counts": 1645.6129289704709,
+          "cnr": 0.46631440697074805
+        },
+        {
+          "id": "L23",
+          "present": false,
+          "diameter_mm": null,
+          "nominal_contrast": null,
+          "moving_mm": [
+            54.80147012400661,
+            -33.47169592083833,
+            90.49959289744919
+          ],
+          "local_background_counts": 1807.787907942564,
+          "peak_contrast": 0.890496237863982,
+          "mean_contrast": 0.9282615469587019,
+          "recovery_coefficient": null,
+          "shell_background_counts": 1731.8656838656839,
+          "cnr": -0.36647854971595023
+        },
+        {
+          "id": "L24",
+          "present": false,
+          "diameter_mm": null,
+          "nominal_contrast": null,
+          "moving_mm": [
+            14.190005531699143,
+            48.995735031474,
+            -75.07242861650975
+          ],
+          "local_background_counts": 1262.5073876604772,
+          "peak_contrast": 0.8919554503523883,
+          "mean_contrast": 0.9101926937072555,
+          "recovery_coefficient": null,
+          "shell_background_counts": 1278.6656050955414,
+          "cnr": -0.41242493092444654
+        },
+        {
+          "id": "L25",
+          "present": false,
+          "diameter_mm": null,
+          "nominal_contrast": null,
+          "moving_mm": [
+            105.91097902152887,
+            -30.238892799906353,
+            -9.437418777600925
+          ],
+          "local_background_counts": 1568.835664598506,
+          "peak_contrast": 0.9661806104330802,
+          "mean_contrast": 0.9320606568274421,
+          "recovery_coefficient": null,
+          "shell_background_counts": 1362.5647339158063,
+          "cnr": 0.3522532980502464
+        }
+      ],
+      "background_statistics": {
+        "voxels": 55532,
+        "mean_counts": 8.676228878520918,
+        "structure_cv": 0.470035491619875,
+        "noise_cv": 0.12794601073200462,
+        "total_cv": 0.48555273771477014
+      },
+      "air_statistics": {
+        "voxels": 1282120,
+        "mean_counts": 0.32000003814697264,
+        "noise_cv": 0.6760187598266469,
+        "fraction_of_body_background": 0.04
+      },
+      "noise_seed": 1304404895,
+      "series_md5": "4ce84afb07c8fffc11718db615fcb624"
+    },
+    "t25-id-tex-d080": {
+      "series": "GNBP-5N-t25-id-tex-d080",
+      "series_number": 20,
+      "content": "t25",
+      "transform": "id",
+      "background": "tex",
+      "intensity_arm": "d080",
+      "kind": "id + content t25 + background tex + intensity d080",
+      "intensity": {
+        "dose": 0.8,
+        "store": 1.0,
+        "level": 0.8,
+        "offset_stored": 0.0,
+        "offset_fraction_of_body": 0.0,
+        "nominal_body_stored": 2000.0,
+        "recover_scale": 1.25,
+        "recover_offset_stored": -0.0,
+        "fixed_reference": "GNBP-5N-t20-id-tex",
+        "note": "dose scales counts before the Poisson draw (level AND noise move); store scales after the post-filter (level only); offset is a pedestal that no multiplier can remove. background_statistics.mean_counts is divided by the base STORE_SCALE, so it tracks true counts for `dose` but not for `store`/`offset`."
+      },
+      "geometry": {
+        "rows": 128,
+        "columns": 128,
+        "slices": 96,
+        "pixel_spacing_mm": 4.42,
+        "slice_thickness_mm": 4.42,
+        "encoding": "single multi-frame NM instance (RECON TOMO); frames are slices"
+      },
+      "transform_fixed_to_moving": {
+        "matrix_4x4_row_major": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "rotation_centre_mm": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "landmarks": [
+        {
+          "name": "L01",
+          "fixed_mm": [
+            85.3196490992537,
+            23.434354491976848,
+            -79.4601873783405
+          ],
+          "moving_mm": [
+            85.3196490992537,
+            23.434354491976848,
+            -79.4601873783405
+          ],
+          "visible": true
+        },
+        {
+          "name": "L02",
+          "fixed_mm": [
+            -12.102341083692266,
+            23.00379858828586,
+            -106.83944433996011
+          ],
+          "moving_mm": [
+            -12.102341083692266,
+            23.00379858828586,
+            -106.83944433996011
+          ],
+          "visible": true
+        },
+        {
+          "name": "L03",
+          "fixed_mm": [
+            -111.05452872689571,
+            15.927760337855986,
+            72.6423815039542
+          ],
+          "moving_mm": [
+            -111.05452872689571,
+            15.927760337855986,
+            72.6423815039542
+          ],
+          "visible": true
+        },
+        {
+          "name": "L04",
+          "fixed_mm": [
+            57.965000560817344,
+            64.17525593415107,
+            87.28144581304304
+          ],
+          "moving_mm": [
+            57.965000560817344,
+            64.17525593415107,
+            87.28144581304304
+          ],
+          "visible": true
+        },
+        {
+          "name": "L05",
+          "fixed_mm": [
+            -67.3426130390325,
+            31.931059160337526,
+            -59.225235275730796
+          ],
+          "moving_mm": [
+            -67.3426130390325,
+            31.931059160337526,
+            -59.225235275730796
+          ],
+          "visible": true
+        },
+        {
+          "name": "L06",
+          "fixed_mm": [
+            -83.71438628035118,
+            15.22805437655559,
+            23.4575142327742
+          ],
+          "moving_mm": [
+            -83.71438628035118,
+            15.22805437655559,
+            23.4575142327742
+          ],
+          "visible": true
+        },
+        {
+          "name": "L07",
+          "fixed_mm": [
+            42.01100600457585,
+            -49.726994820960385,
+            21.1496948359121
+          ],
+          "moving_mm": [
+            42.01100600457585,
+            -49.726994820960385,
+            21.1496948359121
+          ],
+          "visible": true
+        },
+        {
+          "name": "L08",
+          "fixed_mm": [
+            -35.331523604910146,
+            17.39165385496011,
+            -26.04103843461027
+          ],
+          "moving_mm": [
+            -35.331523604910146,
+            17.39165385496011,
+            -26.04103843461027
+          ],
+          "visible": true
+        },
+        {
+          "name": "L09",
+          "fixed_mm": [
+            12.254796259109781,
+            4.399865083913369,
+            -160.68631093318322
+          ],
+          "moving_mm": [
+            12.254796259109781,
+            4.399865083913369,
+            -160.68631093318322
+          ],
+          "visible": true
+        },
+        {
+          "name": "L10",
+          "fixed_mm": [
+            7.003473878059594,
+            85.31396874086184,
+            -29.99848007622623
+          ],
+          "moving_mm": [
+            7.003473878059594,
+            85.31396874086184,
+            -29.99848007622623
+          ],
+          "visible": true
+        },
+        {
+          "name": "L11",
+          "fixed_mm": [
+            80.57328087279905,
+            -20.95457995568684,
+            -91.7524491921514
+          ],
+          "moving_mm": [
+            80.57328087279905,
+            -20.95457995568684,
+            -91.7524491921514
+          ],
+          "visible": true
+        },
+        {
+          "name": "L12",
+          "fixed_mm": [
+            -9.989582074860778,
+            -10.78618534185955,
+            68.07470852065774
+          ],
+          "moving_mm": [
+            -9.989582074860778,
+            -10.78618534185955,
+            68.07470852065774
+          ],
+          "visible": true
+        },
+        {
+          "name": "L13",
+          "fixed_mm": [
+            -18.27798672714667,
+            -59.14718713005257,
+            -58.90271145228499
+          ],
+          "moving_mm": [
+            -18.27798672714667,
+            -59.14718713005257,
+            -58.90271145228499
+          ],
+          "visible": true
+        },
+        {
+          "name": "L14",
+          "fixed_mm": [
+            2.4855429476726556,
+            -43.461266305881814,
+            152.08984054499575
+          ],
+          "moving_mm": [
+            2.4855429476726556,
+            -43.461266305881814,
+            152.08984054499575
+          ],
+          "visible": true
+        },
+        {
+          "name": "L15",
+          "fixed_mm": [
+            22.614280836795047,
+            31.847594457173813,
+            69.26048521229848
+          ],
+          "moving_mm": [
+            22.614280836795047,
+            31.847594457173813,
+            69.26048521229848
+          ],
+          "visible": true
+        },
+        {
+          "name": "L16",
+          "fixed_mm": [
+            95.52640848926012,
+            52.143321279662075,
+            15.126069629051983
+          ],
+          "moving_mm": [
+            95.52640848926012,
+            52.143321279662075,
+            15.126069629051983
+          ],
+          "visible": true
+        },
+        {
+          "name": "L17",
+          "fixed_mm": [
+            -75.85733853508768,
+            11.479004564064809,
+            107.80027382096898
+          ],
+          "moving_mm": [
+            -75.85733853508768,
+            11.479004564064809,
+            107.80027382096898
+          ],
+          "visible": true
+        },
+        {
+          "name": "L18",
+          "fixed_mm": [
+            11.234565653669137,
+            -74.96032818056406,
+            -29.23836922531555
+          ],
+          "moving_mm": [
+            11.234565653669137,
+            -74.96032818056406,
+            -29.23836922531555
+          ],
+          "visible": true
+        },
+        {
+          "name": "L19",
+          "fixed_mm": [
+            32.33762063137553,
+            35.711852745360545,
+            2.508291990139753
+          ],
+          "moving_mm": [
+            32.33762063137553,
+            35.711852745360545,
+            2.508291990139753
+          ],
+          "visible": true
+        },
+        {
+          "name": "L20",
+          "fixed_mm": [
+            16.219444882015267,
+            -59.1424127617012,
+            111.20800324512481
+          ],
+          "moving_mm": [
+            16.219444882015267,
+            -59.1424127617012,
+            111.20800324512481
+          ],
+          "visible": true
+        },
+        {
+          "name": "L21",
+          "fixed_mm": [
+            -74.2423280144175,
+            -57.696227344629754,
+            90.68123566433002
+          ],
+          "moving_mm": [
+            -74.2423280144175,
+            -57.696227344629754,
+            90.68123566433002
+          ],
+          "visible": true
+        },
+        {
+          "name": "L22",
+          "fixed_mm": [
+            -80.53163849577739,
+            59.3681726925048,
+            -13.420215255005871
+          ],
+          "moving_mm": [
+            -80.53163849577739,
+            59.3681726925048,
+            -13.420215255005871
+          ],
+          "visible": true
+        },
+        {
+          "name": "L23",
+          "fixed_mm": [
+            54.80147012400661,
+            -33.47169592083833,
+            90.49959289744919
+          ],
+          "moving_mm": [
+            54.80147012400661,
+            -33.47169592083833,
+            90.49959289744919
+          ],
+          "visible": true
+        },
+        {
+          "name": "L24",
+          "fixed_mm": [
+            14.190005531699143,
+            48.995735031474,
+            -75.07242861650975
+          ],
+          "moving_mm": [
+            14.190005531699143,
+            48.995735031474,
+            -75.07242861650975
+          ],
+          "visible": true
+        },
+        {
+          "name": "L25",
+          "fixed_mm": [
+            105.91097902152887,
+            -30.238892799906353,
+            -9.437418777600925
+          ],
+          "moving_mm": [
+            105.91097902152887,
+            -30.238892799906353,
+            -9.437418777600925
+          ],
+          "visible": true
+        }
+      ],
+      "displacement": {
+        "sampled_points": 6144,
+        "displacement_mm_mean": 0.0,
+        "displacement_mm_max": 0.0,
+        "displacement_mm_p95": 0.0
+      },
+      "lesion_measurements": [
+        {
+          "id": "L01",
+          "present": true,
+          "diameter_mm": 7.660337093272248,
+          "nominal_contrast": 8.201334545451033,
+          "moving_mm": [
+            85.3196490992537,
+            23.434354491976848,
+            -79.4601873783405
+          ],
+          "local_background_counts": 1632.0130517481239,
+          "peak_contrast": 1.7703323012298955,
+          "mean_contrast": 1.8633429412483227,
+          "recovery_coefficient": 0.10697076998269744,
+          "shell_background_counts": 1996.0572259941805,
+          "cnr": 0.7084527665117637
+        },
+        {
+          "id": "L02",
+          "present": true,
+          "diameter_mm": 49.904770178642444,
+          "nominal_contrast": 10.387453244024664,
+          "moving_mm": [
+            -12.102341083692266,
+            23.00379858828586,
+            -106.83944433996011
+          ],
+          "local_background_counts": 1490.608383292498,
+          "peak_contrast": 10.564551793952141,
+          "mean_contrast": 8.238926807762416,
+          "recovery_coefficient": 1.018865452143818,
+          "shell_background_counts": 2125.2359323744636,
+          "cnr": 6.777866334833214
+        },
+        {
+          "id": "L03",
+          "present": true,
+          "diameter_mm": 59.481262412951175,
+          "nominal_contrast": 9.711395555013846,
+          "moving_mm": [
+            -111.05452872689571,
+            15.927760337855986,
+            72.6423815039542
+          ],
+          "local_background_counts": 2422.54781201593,
+          "peak_contrast": 8.197335427918741,
+          "mean_contrast": 5.844223332781056,
+          "recovery_coefficient": 0.8261977524113588,
+          "shell_background_counts": 1821.2280701754387,
+          "cnr": 6.860101241320706
+        },
+        {
+          "id": "L04",
+          "present": true,
+          "diameter_mm": 34.11227287385631,
+          "nominal_contrast": 4.550210445304089,
+          "moving_mm": [
+            57.965000560817344,
+            64.17525593415107,
+            87.28144581304304
+          ],
+          "local_background_counts": 556.7438334665782,
+          "peak_contrast": 4.6637202489096845,
+          "mean_contrast": 4.062416633792566,
+          "recovery_coefficient": 1.0319726972117207,
+          "shell_background_counts": 1309.5929136826235,
+          "cnr": 0.8277386030942965
+        },
+        {
+          "id": "L05",
+          "present": true,
+          "diameter_mm": 23.01596526837207,
+          "nominal_contrast": 9.02203087441655,
+          "moving_mm": [
+            -67.3426130390325,
+            31.931059160337526,
+            -59.225235275730796
+          ],
+          "local_background_counts": 1727.9495687146602,
+          "peak_contrast": 8.344860986317366,
+          "mean_contrast": 5.572523743943862,
+          "recovery_coefficient": 0.9155862276398387,
+          "shell_background_counts": 1538.673436664885,
+          "cnr": 26.962219044048695
+        },
+        {
+          "id": "L06",
+          "present": true,
+          "diameter_mm": 26.16315141451981,
+          "nominal_contrast": 8.749201448022692,
+          "moving_mm": [
+            -83.71438628035118,
+            15.22805437655559,
+            23.4575142327742
+          ],
+          "local_background_counts": 2191.053889218345,
+          "peak_contrast": 6.655000220501909,
+          "mean_contrast": 4.6497310590517715,
+          "recovery_coefficient": 0.7297526407633724,
+          "shell_background_counts": 3029.9488527724666,
+          "cnr": 3.5085992195037448
+        },
+        {
+          "id": "L07",
+          "present": true,
+          "diameter_mm": 33.49755154639573,
+          "nominal_contrast": 4.459627524162867,
+          "moving_mm": [
+            42.01100600457585,
+            -49.726994820960385,
+            21.1496948359121
+          ],
+          "local_background_counts": 1292.3832897626653,
+          "peak_contrast": 4.775796334111599,
+          "mean_contrast": 3.3116589864079566,
+          "recovery_coefficient": 1.0913881068816031,
+          "shell_background_counts": 1257.7830728173847,
+          "cnr": 10.050857751766829
+        },
+        {
+          "id": "L08",
+          "present": true,
+          "diameter_mm": 25.159229751500526,
+          "nominal_contrast": 9.91441757298438,
+          "moving_mm": [
+            -35.331523604910146,
+            17.39165385496011,
+            -26.04103843461027
+          ],
+          "local_background_counts": 1273.5205719086812,
+          "peak_contrast": 9.53216597030576,
+          "mean_contrast": 6.9546230747426385,
+          "recovery_coefficient": 0.957119845514411,
+          "shell_background_counts": 1756.8155093765838,
+          "cnr": 23.585080868299865
+        },
+        {
+          "id": "L09",
+          "present": true,
+          "diameter_mm": 19.26886909961783,
+          "nominal_contrast": 7.9322502784840925,
+          "moving_mm": [
+            12.254796259109781,
+            4.399865083913369,
+            -160.68631093318322
+          ],
+          "local_background_counts": 1815.2822492421733,
+          "peak_contrast": 5.741329100820461,
+          "mean_contrast": 4.390288970043482,
+          "recovery_coefficient": 0.6839523834758703,
+          "shell_background_counts": 2366.1436298076924,
+          "cnr": 3.643904189168797
+        },
+        {
+          "id": "L10",
+          "present": true,
+          "diameter_mm": 14.843443685024875,
+          "nominal_contrast": 7.861702263083066,
+          "moving_mm": [
+            7.003473878059594,
+            85.31396874086184,
+            -29.99848007622623
+          ],
+          "local_background_counts": 198.4829872744678,
+          "peak_contrast": 4.567179569435383,
+          "mean_contrast": 4.236887057917518,
+          "recovery_coefficient": 0.5198680200141175,
+          "shell_background_counts": 585.8776824034335,
+          "cnr": 0.6346860845308773
+        },
+        {
+          "id": "L11",
+          "present": true,
+          "diameter_mm": 57.582653262975676,
+          "nominal_contrast": 6.640670578580112,
+          "moving_mm": [
+            80.57328087279905,
+            -20.95457995568684,
+            -91.7524491921514
+          ],
+          "local_background_counts": 1057.5734448455726,
+          "peak_contrast": 6.234333729222448,
+          "mean_contrast": 5.76528930183208,
+          "recovery_coefficient": 0.9279630243076616,
+          "shell_background_counts": 949.4773592890393,
+          "cnr": 8.94496338814525
+        },
+        {
+          "id": "L12",
+          "present": true,
+          "diameter_mm": 29.83383743353509,
+          "nominal_contrast": 3.73707900063128,
+          "moving_mm": [
+            -9.989582074860778,
+            -10.78618534185955,
+            68.07470852065774
+          ],
+          "local_background_counts": 1426.2057570082486,
+          "peak_contrast": 3.743197866329855,
+          "mean_contrast": 3.0681612711141053,
+          "recovery_coefficient": 1.0022355458856553,
+          "shell_background_counts": 2106.202319587629,
+          "cnr": 4.298697874626349
+        },
+        {
+          "id": "L13",
+          "present": true,
+          "diameter_mm": 58.816830938414455,
+          "nominal_contrast": 7.09620859787008,
+          "moving_mm": [
+            -18.27798672714667,
+            -59.14718713005257,
+            -58.90271145228499
+          ],
+          "local_background_counts": 1327.5215873941277,
+          "peak_contrast": 6.93398859651064,
+          "mean_contrast": 6.651175867344396,
+          "recovery_coefficient": 0.973390017950482,
+          "shell_background_counts": 1274.9355505060937,
+          "cnr": 10.898339559034193
+        },
+        {
+          "id": "L14",
+          "present": true,
+          "diameter_mm": 20.2747593128218,
+          "nominal_contrast": 4.696706090909189,
+          "moving_mm": [
+            2.4855429476726556,
+            -43.461266305881814,
+            152.08984054499575
+          ],
+          "local_background_counts": 1218.7615640575975,
+          "peak_contrast": 3.7483256684325683,
+          "mean_contrast": 2.911435885812413,
+          "recovery_coefficient": 0.7434525766576777,
+          "shell_background_counts": 1620.0377804014167,
+          "cnr": 1.3206090194445346
+        },
+        {
+          "id": "L15",
+          "present": true,
+          "diameter_mm": 52.00836009957069,
+          "nominal_contrast": 6.144564548670897,
+          "moving_mm": [
+            22.614280836795047,
+            31.847594457173813,
+            69.26048521229848
+          ],
+          "local_background_counts": 757.2351561356513,
+          "peak_contrast": 6.497976681224347,
+          "mean_contrast": 6.67738518857809,
+          "recovery_coefficient": 1.0686962189335838,
+          "shell_background_counts": 1630.8149124910094,
+          "cnr": 4.648908441189777
+        },
+        {
+          "id": "L16",
+          "present": true,
+          "diameter_mm": 22.02692797829703,
+          "nominal_contrast": 4.9380517681815395,
+          "moving_mm": [
+            95.52640848926012,
+            52.143321279662075,
+            15.126069629051983
+          ],
+          "local_background_counts": 5921.368711294318,
+          "peak_contrast": 2.831214827808521,
+          "mean_contrast": 1.944551396561249,
+          "recovery_coefficient": 0.4650052705259674,
+          "shell_background_counts": 2067.2242990654204,
+          "cnr": 13.814425512833425
+        },
+        {
+          "id": "L17",
+          "present": true,
+          "diameter_mm": 26.17584638675609,
+          "nominal_contrast": 9.543890730726513,
+          "moving_mm": [
+            -75.85733853508768,
+            11.479004564064809,
+            107.80027382096898
+          ],
+          "local_background_counts": 2067.9392869070875,
+          "peak_contrast": 11.491697879807772,
+          "mean_contrast": 8.11058898763028,
+          "recovery_coefficient": 1.2279765987732418,
+          "shell_background_counts": 3387.235519387267,
+          "cnr": 4.667445976925934
+        },
+        {
+          "id": "L18",
+          "present": true,
+          "diameter_mm": 13.7596742399433,
+          "nominal_contrast": 7.330571249856022,
+          "moving_mm": [
+            11.234565653669137,
+            -74.96032818056406,
+            -29.23836922531555
+          ],
+          "local_background_counts": 1491.640422752052,
+          "peak_contrast": 4.069442794307238,
+          "mean_contrast": 3.2573297369603407,
+          "recovery_coefficient": 0.4848603187867205,
+          "shell_background_counts": 2188.2764530551417,
+          "cnr": 1.5645210581913553
+        },
+        {
+          "id": "L19",
+          "present": true,
+          "diameter_mm": 15.295414814607469,
+          "nominal_contrast": 6.360153814597328,
+          "moving_mm": [
+            32.33762063137553,
+            35.711852745360545,
+            2.508291990139753
+          ],
+          "local_background_counts": 1652.3181362802507,
+          "peak_contrast": 4.178056070218686,
+          "mean_contrast": 3.163516909282285,
+          "recovery_coefficient": 0.5929038942061463,
+          "shell_background_counts": 1898.1420494699646,
+          "cnr": 8.550956389379962
+        },
+        {
+          "id": "L20",
+          "present": true,
+          "diameter_mm": 43.94857658179623,
+          "nominal_contrast": 9.818957036364186,
+          "moving_mm": [
+            16.219444882015267,
+            -59.1424127617012,
+            111.20800324512481
+          ],
+          "local_background_counts": 1849.4549635134558,
+          "peak_contrast": 10.076507513732661,
+          "mean_contrast": 7.460934032362465,
+          "recovery_coefficient": 1.0292041877862075,
+          "shell_background_counts": 1440.7587604981177,
+          "cnr": 25.06528603188728
+        },
+        {
+          "id": "L21",
+          "present": true,
+          "diameter_mm": 39.10073627089824,
+          "nominal_contrast": 3.900466860090067,
+          "moving_mm": [
+            -74.2423280144175,
+            -57.696227344629754,
+            90.68123566433002
+          ],
+          "local_background_counts": 2391.262455058861,
+          "peak_contrast": 3.883161347638787,
+          "mean_contrast": 2.669804770742899,
+          "recovery_coefficient": 0.9940335424309097,
+          "shell_background_counts": 1555.508218277449,
+          "cnr": 7.650641049520854
+        },
+        {
+          "id": "L22",
+          "present": true,
+          "diameter_mm": 8.18132340398744,
+          "nominal_contrast": 5.220059769870225,
+          "moving_mm": [
+            -80.53163849577739,
+            59.3681726925048,
+            -13.420215255005871
+          ],
+          "local_background_counts": 1116.0373407422046,
+          "peak_contrast": 2.4546289291913452,
+          "mean_contrast": 2.4826678273661993,
+          "recovery_coefficient": 0.34469391632244056,
+          "shell_background_counts": 1673.953642384106,
+          "cnr": 1.2213678847185285
+        },
+        {
+          "id": "L23",
+          "present": true,
+          "diameter_mm": 15.093419168194579,
+          "nominal_contrast": 4.339325069561703,
+          "moving_mm": [
+            54.80147012400661,
+            -33.47169592083833,
+            90.49959289744919
+          ],
+          "local_background_counts": 1807.787907942564,
+          "peak_contrast": 2.8264374549645104,
+          "mean_contrast": 2.2967044569845956,
+          "recovery_coefficient": 0.546948085890972,
+          "shell_background_counts": 1847.1613351877609,
+          "cnr": 3.2327908304666604
+        },
+        {
+          "id": "L24",
+          "present": true,
+          "diameter_mm": 35.09822506374297,
+          "nominal_contrast": 10.285350020204755,
+          "moving_mm": [
+            14.190005531699143,
+            48.995735031474,
+            -75.07242861650975
+          ],
+          "local_background_counts": 1262.5073876604772,
+          "peak_contrast": 10.809446969899348,
+          "mean_contrast": 7.689154859365828,
+          "recovery_coefficient": 1.056443424163243,
+          "shell_background_counts": 1932.5487311511586,
+          "cnr": 4.7128407829220365
+        },
+        {
+          "id": "L25",
+          "present": true,
+          "diameter_mm": 34.18837237664177,
+          "nominal_contrast": 7.651401199183903,
+          "moving_mm": [
+            105.91097902152887,
+            -30.238892799906353,
+            -9.437418777600925
+          ],
+          "local_background_counts": 1568.835664598506,
+          "peak_contrast": 7.789512868302594,
+          "mean_contrast": 5.373131599496273,
+          "recovery_coefficient": 1.0207642968726103,
+          "shell_background_counts": 1197.3056603773584,
+          "cnr": 19.47017589892503
+        }
+      ],
+      "background_statistics": {
+        "voxels": 55532,
+        "mean_counts": 8.67576031237611,
+        "structure_cv": 0.4699983752909763,
+        "noise_cv": 0.12902254971792332,
+        "total_cv": 0.4824028540266243
+      },
+      "air_statistics": {
+        "voxels": 1282120,
+        "mean_counts": 0.32000003814697264,
+        "noise_cv": 0.6767288951866072,
+        "fraction_of_body_background": 0.04
+      },
+      "noise_seed": 402635537,
+      "series_md5": "fdb05b2543b59803905f06a3185d8588"
+    },
+    "t20-id-tex-s125": {
+      "series": "GNBP-5N-t20-id-tex-s125",
+      "series_number": 22,
+      "content": "t20",
+      "transform": "id",
+      "background": "tex",
+      "intensity_arm": "s125",
+      "kind": "id + content t20 + background tex + intensity s125",
+      "intensity": {
+        "dose": 1.0,
+        "store": 1.25,
+        "level": 1.25,
+        "offset_stored": 0.0,
+        "offset_fraction_of_body": 0.0,
+        "nominal_body_stored": 2000.0,
+        "recover_scale": 0.8,
+        "recover_offset_stored": -0.0,
+        "fixed_reference": "GNBP-5N-t20-id-tex",
+        "note": "dose scales counts before the Poisson draw (level AND noise move); store scales after the post-filter (level only); offset is a pedestal that no multiplier can remove. background_statistics.mean_counts is divided by the base STORE_SCALE, so it tracks true counts for `dose` but not for `store`/`offset`."
+      },
+      "geometry": {
+        "rows": 128,
+        "columns": 128,
+        "slices": 96,
+        "pixel_spacing_mm": 4.42,
+        "slice_thickness_mm": 4.42,
+        "encoding": "single multi-frame NM instance (RECON TOMO); frames are slices"
+      },
+      "transform_fixed_to_moving": {
+        "matrix_4x4_row_major": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "rotation_centre_mm": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "landmarks": [
+        {
+          "name": "L01",
+          "fixed_mm": [
+            85.3196490992537,
+            23.434354491976848,
+            -79.4601873783405
+          ],
+          "moving_mm": [
+            85.3196490992537,
+            23.434354491976848,
+            -79.4601873783405
+          ],
+          "visible": true
+        },
+        {
+          "name": "L02",
+          "fixed_mm": [
+            -12.102341083692266,
+            23.00379858828586,
+            -106.83944433996011
+          ],
+          "moving_mm": [
+            -12.102341083692266,
+            23.00379858828586,
+            -106.83944433996011
+          ],
+          "visible": true
+        },
+        {
+          "name": "L03",
+          "fixed_mm": [
+            -111.05452872689571,
+            15.927760337855986,
+            72.6423815039542
+          ],
+          "moving_mm": [
+            -111.05452872689571,
+            15.927760337855986,
+            72.6423815039542
+          ],
+          "visible": true
+        },
+        {
+          "name": "L04",
+          "fixed_mm": [
+            57.965000560817344,
+            64.17525593415107,
+            87.28144581304304
+          ],
+          "moving_mm": [
+            57.965000560817344,
+            64.17525593415107,
+            87.28144581304304
+          ],
+          "visible": true
+        },
+        {
+          "name": "L05",
+          "fixed_mm": [
+            -67.3426130390325,
+            31.931059160337526,
+            -59.225235275730796
+          ],
+          "moving_mm": [
+            -67.3426130390325,
+            31.931059160337526,
+            -59.225235275730796
+          ],
+          "visible": true
+        },
+        {
+          "name": "L06",
+          "fixed_mm": [
+            -83.71438628035118,
+            15.22805437655559,
+            23.4575142327742
+          ],
+          "moving_mm": [
+            -83.71438628035118,
+            15.22805437655559,
+            23.4575142327742
+          ],
+          "visible": true
+        },
+        {
+          "name": "L07",
+          "fixed_mm": [
+            42.01100600457585,
+            -49.726994820960385,
+            21.1496948359121
+          ],
+          "moving_mm": [
+            42.01100600457585,
+            -49.726994820960385,
+            21.1496948359121
+          ],
+          "visible": true
+        },
+        {
+          "name": "L08",
+          "fixed_mm": [
+            -35.331523604910146,
+            17.39165385496011,
+            -26.04103843461027
+          ],
+          "moving_mm": [
+            -35.331523604910146,
+            17.39165385496011,
+            -26.04103843461027
+          ],
+          "visible": true
+        },
+        {
+          "name": "L09",
+          "fixed_mm": [
+            12.254796259109781,
+            4.399865083913369,
+            -160.68631093318322
+          ],
+          "moving_mm": [
+            12.254796259109781,
+            4.399865083913369,
+            -160.68631093318322
+          ],
+          "visible": true
+        },
+        {
+          "name": "L10",
+          "fixed_mm": [
+            7.003473878059594,
+            85.31396874086184,
+            -29.99848007622623
+          ],
+          "moving_mm": [
+            7.003473878059594,
+            85.31396874086184,
+            -29.99848007622623
+          ],
+          "visible": true
+        },
+        {
+          "name": "L11",
+          "fixed_mm": [
+            80.57328087279905,
+            -20.95457995568684,
+            -91.7524491921514
+          ],
+          "moving_mm": [
+            80.57328087279905,
+            -20.95457995568684,
+            -91.7524491921514
+          ],
+          "visible": true
+        },
+        {
+          "name": "L12",
+          "fixed_mm": [
+            -9.989582074860778,
+            -10.78618534185955,
+            68.07470852065774
+          ],
+          "moving_mm": [
+            -9.989582074860778,
+            -10.78618534185955,
+            68.07470852065774
+          ],
+          "visible": true
+        },
+        {
+          "name": "L13",
+          "fixed_mm": [
+            -18.27798672714667,
+            -59.14718713005257,
+            -58.90271145228499
+          ],
+          "moving_mm": [
+            -18.27798672714667,
+            -59.14718713005257,
+            -58.90271145228499
+          ],
+          "visible": true
+        },
+        {
+          "name": "L14",
+          "fixed_mm": [
+            2.4855429476726556,
+            -43.461266305881814,
+            152.08984054499575
+          ],
+          "moving_mm": [
+            2.4855429476726556,
+            -43.461266305881814,
+            152.08984054499575
+          ],
+          "visible": true
+        },
+        {
+          "name": "L15",
+          "fixed_mm": [
+            22.614280836795047,
+            31.847594457173813,
+            69.26048521229848
+          ],
+          "moving_mm": [
+            22.614280836795047,
+            31.847594457173813,
+            69.26048521229848
+          ],
+          "visible": true
+        },
+        {
+          "name": "L16",
+          "fixed_mm": [
+            95.52640848926012,
+            52.143321279662075,
+            15.126069629051983
+          ],
+          "moving_mm": [
+            95.52640848926012,
+            52.143321279662075,
+            15.126069629051983
+          ],
+          "visible": true
+        },
+        {
+          "name": "L17",
+          "fixed_mm": [
+            -75.85733853508768,
+            11.479004564064809,
+            107.80027382096898
+          ],
+          "moving_mm": [
+            -75.85733853508768,
+            11.479004564064809,
+            107.80027382096898
+          ],
+          "visible": true
+        },
+        {
+          "name": "L18",
+          "fixed_mm": [
+            11.234565653669137,
+            -74.96032818056406,
+            -29.23836922531555
+          ],
+          "moving_mm": [
+            11.234565653669137,
+            -74.96032818056406,
+            -29.23836922531555
+          ],
+          "visible": true
+        },
+        {
+          "name": "L19",
+          "fixed_mm": [
+            32.33762063137553,
+            35.711852745360545,
+            2.508291990139753
+          ],
+          "moving_mm": [
+            32.33762063137553,
+            35.711852745360545,
+            2.508291990139753
+          ],
+          "visible": true
+        },
+        {
+          "name": "L20",
+          "fixed_mm": [
+            16.219444882015267,
+            -59.1424127617012,
+            111.20800324512481
+          ],
+          "moving_mm": [
+            16.219444882015267,
+            -59.1424127617012,
+            111.20800324512481
+          ],
+          "visible": true
+        },
+        {
+          "name": "L21",
+          "fixed_mm": [
+            -74.2423280144175,
+            -57.696227344629754,
+            90.68123566433002
+          ],
+          "moving_mm": [
+            -74.2423280144175,
+            -57.696227344629754,
+            90.68123566433002
+          ],
+          "visible": false
+        },
+        {
+          "name": "L22",
+          "fixed_mm": [
+            -80.53163849577739,
+            59.3681726925048,
+            -13.420215255005871
+          ],
+          "moving_mm": [
+            -80.53163849577739,
+            59.3681726925048,
+            -13.420215255005871
+          ],
+          "visible": false
+        },
+        {
+          "name": "L23",
+          "fixed_mm": [
+            54.80147012400661,
+            -33.47169592083833,
+            90.49959289744919
+          ],
+          "moving_mm": [
+            54.80147012400661,
+            -33.47169592083833,
+            90.49959289744919
+          ],
+          "visible": false
+        },
+        {
+          "name": "L24",
+          "fixed_mm": [
+            14.190005531699143,
+            48.995735031474,
+            -75.07242861650975
+          ],
+          "moving_mm": [
+            14.190005531699143,
+            48.995735031474,
+            -75.07242861650975
+          ],
+          "visible": false
+        },
+        {
+          "name": "L25",
+          "fixed_mm": [
+            105.91097902152887,
+            -30.238892799906353,
+            -9.437418777600925
+          ],
+          "moving_mm": [
+            105.91097902152887,
+            -30.238892799906353,
+            -9.437418777600925
+          ],
+          "visible": false
+        }
+      ],
+      "displacement": {
+        "sampled_points": 6144,
+        "displacement_mm_mean": 0.0,
+        "displacement_mm_max": 0.0,
+        "displacement_mm_p95": 0.0
+      },
+      "lesion_measurements": [
+        {
+          "id": "L01",
+          "present": true,
+          "diameter_mm": 12.723163611204273,
+          "nominal_contrast": 4.800245558710019,
+          "moving_mm": [
+            85.3196490992537,
+            23.434354491976848,
+            -79.4601873783405
+          ],
+          "local_background_counts": 2550.020393356443,
+          "peak_contrast": 2.4497510848258495,
+          "mean_contrast": 2.2234135910329873,
+          "recovery_coefficient": 0.38148879129746627,
+          "shell_background_counts": 2402.4580745341614,
+          "cnr": 5.321961681049409
+        },
+        {
+          "id": "L02",
+          "present": true,
+          "diameter_mm": 28.763971935916626,
+          "nominal_contrast": 3.1894850023212595,
+          "moving_mm": [
+            -12.102341083692266,
+            23.00379858828586,
+            -106.83944433996011
+          ],
+          "local_background_counts": 2329.075598894528,
+          "peak_contrast": 3.3994164782028986,
+          "mean_contrast": 2.4129744876754864,
+          "recovery_coefficient": 1.09588166882124,
+          "shell_background_counts": 2522.3973509933776,
+          "cnr": 3.6409675520464426
+        },
+        {
+          "id": "L03",
+          "present": true,
+          "diameter_mm": 36.746719245007,
+          "nominal_contrast": 3.055241007048041,
+          "moving_mm": [
+            -111.05452872689571,
+            15.927760337855986,
+            72.6423815039542
+          ],
+          "local_background_counts": 3785.23095627489,
+          "peak_contrast": 2.5064535026975485,
+          "mean_contrast": 1.9117649211869696,
+          "recovery_coefficient": 0.7329814350392316,
+          "shell_background_counts": 2401.5785789289466,
+          "cnr": 5.808046073423324
+        },
+        {
+          "id": "L04",
+          "present": true,
+          "diameter_mm": 33.87938693794135,
+          "nominal_contrast": 6.340882779891012,
+          "moving_mm": [
+            57.965000560817344,
+            64.17525593415107,
+            87.28144581304304
+          ],
+          "local_background_counts": 869.9122397915282,
+          "peak_contrast": 6.933608110826087,
+          "mean_contrast": 5.649509434463762,
+          "recovery_coefficient": 1.1109789065520683,
+          "shell_background_counts": 1475.4370257966616,
+          "cnr": 5.652986094506948
+        },
+        {
+          "id": "L05",
+          "present": true,
+          "diameter_mm": 20.745168961617047,
+          "nominal_contrast": 9.736175404917965,
+          "moving_mm": [
+            -67.3426130390325,
+            31.931059160337526,
+            -59.225235275730796
+          ],
+          "local_background_counts": 2699.921201116656,
+          "peak_contrast": 7.476132218224106,
+          "mean_contrast": 5.341017829247458,
+          "recovery_coefficient": 0.7413006170387119,
+          "shell_background_counts": 2408.2629757785467,
+          "cnr": 25.96223005002833
+        },
+        {
+          "id": "L06",
+          "present": true,
+          "diameter_mm": 25.991297505227863,
+          "nominal_contrast": 5.702046564473235,
+          "moving_mm": [
+            -83.71438628035118,
+            15.22805437655559,
+            23.4575142327742
+          ],
+          "local_background_counts": 3423.521701903663,
+          "peak_contrast": 4.31147548021988,
+          "mean_contrast": 3.1077977982820935,
+          "recovery_coefficient": 0.7042625875379565,
+          "shell_background_counts": 3438.0264423076924,
+          "cnr": 8.55308511195243
+        },
+        {
+          "id": "L07",
+          "present": true,
+          "diameter_mm": 30.2530270074114,
+          "nominal_contrast": 7.159018023946937,
+          "moving_mm": [
+            42.01100600457585,
+            -49.726994820960385,
+            21.1496948359121
+          ],
+          "local_background_counts": 2019.3488902541642,
+          "peak_contrast": 6.739225248041362,
+          "mean_contrast": 4.952056102016232,
+          "recovery_coefficient": 0.9318409567445045,
+          "shell_background_counts": 1967.221280203476,
+          "cnr": 15.919999590058522
+        },
+        {
+          "id": "L08",
+          "present": true,
+          "diameter_mm": 17.18659059732419,
+          "nominal_contrast": 3.692100127450399,
+          "moving_mm": [
+            -35.331523604910146,
+            17.39165385496011,
+            -26.04103843461027
+          ],
+          "local_background_counts": 1989.875893607314,
+          "peak_contrast": 2.8850509407828477,
+          "mean_contrast": 2.335745543192763,
+          "recovery_coefficient": 0.7002157615021989,
+          "shell_background_counts": 2642.1622149837135,
+          "cnr": 5.047954886895565
+        },
+        {
+          "id": "L09",
+          "present": true,
+          "diameter_mm": 21.168665917654298,
+          "nominal_contrast": 11.306025712504331,
+          "moving_mm": [
+            12.254796259109781,
+            4.399865083913369,
+            -160.68631093318322
+          ],
+          "local_background_counts": 2836.378514440895,
+          "peak_contrast": 9.283772235867401,
+          "mean_contrast": 6.561536094440692,
+          "recovery_coefficient": 0.8037795040445781,
+          "shell_background_counts": 3604.424758659852,
+          "cnr": 6.570252152638826
+        },
+        {
+          "id": "L10",
+          "present": true,
+          "diameter_mm": 11.648743366150068,
+          "nominal_contrast": 10.56059062032023,
+          "moving_mm": [
+            7.003473878059594,
+            85.31396874086184,
+            -29.99848007622623
+          ],
+          "local_background_counts": 310.12966761635585,
+          "peak_contrast": 4.686599253938806,
+          "mean_contrast": 4.15720539470482,
+          "recovery_coefficient": 0.3856037142834303,
+          "shell_background_counts": 908.6152584085315,
+          "cnr": 0.7076544049304883
+        },
+        {
+          "id": "L11",
+          "present": true,
+          "diameter_mm": 35.09203168017685,
+          "nominal_contrast": 8.976035249672458,
+          "moving_mm": [
+            80.57328087279905,
+            -20.95457995568684,
+            -91.7524491921514
+          ],
+          "local_background_counts": 1652.4585075712068,
+          "peak_contrast": 8.751704302799043,
+          "mean_contrast": 6.64447819899572,
+          "recovery_coefficient": 0.9718743787043033,
+          "shell_background_counts": 1592.5313531353136,
+          "cnr": 15.7570749183539
+        },
+        {
+          "id": "L12",
+          "present": true,
+          "diameter_mm": 40.13561288389957,
+          "nominal_contrast": 5.3840243807844175,
+          "moving_mm": [
+            -9.989582074860778,
+            -10.78618534185955,
+            68.07470852065774
+          ],
+          "local_background_counts": 2228.4464953253882,
+          "peak_contrast": 5.413248126116503,
+          "mean_contrast": 4.848334099784832,
+          "recovery_coefficient": 1.0066659632323616,
+          "shell_background_counts": 3206.573932441045,
+          "cnr": 6.203906706548544
+        },
+        {
+          "id": "L13",
+          "present": true,
+          "diameter_mm": 37.58596932972458,
+          "nominal_contrast": 4.235391135834939,
+          "moving_mm": [
+            -18.27798672714667,
+            -59.14718713005257,
+            -58.90271145228499
+          ],
+          "local_background_counts": 2074.2524803033243,
+          "peak_contrast": 4.180813506582386,
+          "mean_contrast": 3.5662676718994173,
+          "recovery_coefficient": 0.9831310568147218,
+          "shell_background_counts": 2220.403978052126,
+          "cnr": 7.46147860790298
+        },
+        {
+          "id": "L14",
+          "present": true,
+          "diameter_mm": 14.947005902629522,
+          "nominal_contrast": 5.67243597740174,
+          "moving_mm": [
+            2.4855429476726556,
+            -43.461266305881814,
+            152.08984054499575
+          ],
+          "local_background_counts": 1904.3149438399957,
+          "peak_contrast": 3.6944380812499236,
+          "mean_contrast": 2.694765293304862,
+          "recovery_coefficient": 0.576666666869613,
+          "shell_background_counts": 1839.9830028328613,
+          "cnr": 6.197806002034024
+        },
+        {
+          "id": "L15",
+          "present": true,
+          "diameter_mm": 30.742592421384572,
+          "nominal_contrast": 3.0741096435137254,
+          "moving_mm": [
+            22.614280836795047,
+            31.847594457173813,
+            69.26048521229848
+          ],
+          "local_background_counts": 1183.179931461955,
+          "peak_contrast": 3.3452084443972194,
+          "mean_contrast": 2.6791869461104505,
+          "recovery_coefficient": 1.1307061088748562,
+          "shell_background_counts": 2257.6645885286785,
+          "cnr": 1.5698024113378504
+        },
+        {
+          "id": "L16",
+          "present": true,
+          "diameter_mm": 26.1625323071501,
+          "nominal_contrast": 6.774528116922321,
+          "moving_mm": [
+            95.52640848926012,
+            52.143321279662075,
+            15.126069629051983
+          ],
+          "local_background_counts": 9252.138611397371,
+          "peak_contrast": 4.427024464691261,
+          "mean_contrast": 2.7568027054087447,
+          "recovery_coefficient": 0.5934726431841809,
+          "shell_background_counts": 3093.1133428981348,
+          "cnr": 23.086988901595934
+        },
+        {
+          "id": "L17",
+          "present": true,
+          "diameter_mm": 15.981245857067638,
+          "nominal_contrast": 4.171751167410247,
+          "moving_mm": [
+            -75.85733853508768,
+            11.479004564064809,
+            107.80027382096898
+          ],
+          "local_background_counts": 3231.1551357923236,
+          "peak_contrast": 3.565921989789344,
+          "mean_contrast": 2.9312530458277837,
+          "recovery_coefficient": 0.8089922110391888,
+          "shell_background_counts": 3305.0845839017734,
+          "cnr": 8.505725217023949
+        },
+        {
+          "id": "L18",
+          "present": true,
+          "diameter_mm": 9.383158641114186,
+          "nominal_contrast": 5.849599035056357,
+          "moving_mm": [
+            11.234565653669137,
+            -74.96032818056406,
+            -29.23836922531555
+          ],
+          "local_background_counts": 2330.6881605500807,
+          "peak_contrast": 2.128336672958458,
+          "mean_contrast": 1.9699117529804542,
+          "recovery_coefficient": 0.232665971929233,
+          "shell_background_counts": 2072.72061482821,
+          "cnr": 3.736102232288208
+        },
+        {
+          "id": "L19",
+          "present": true,
+          "diameter_mm": 12.82836160424031,
+          "nominal_contrast": 4.4898211367319005,
+          "moving_mm": [
+            32.33762063137553,
+            35.711852745360545,
+            2.508291990139753
+          ],
+          "local_background_counts": 2581.747087937891,
+          "peak_contrast": 2.5827909883105344,
+          "mean_contrast": 2.1933375595150792,
+          "recovery_coefficient": 0.4535450174368434,
+          "shell_background_counts": 2933.496514329977,
+          "cnr": 4.581220784019768
+        },
+        {
+          "id": "L20",
+          "present": true,
+          "diameter_mm": 30.64735128042036,
+          "nominal_contrast": 4.7954195951033345,
+          "moving_mm": [
+            16.219444882015267,
+            -59.1424127617012,
+            111.20800324512481
+          ],
+          "local_background_counts": 2889.773380489774,
+          "peak_contrast": 4.697010340819281,
+          "mean_contrast": 3.467646002543199,
+          "recovery_coefficient": 0.9740715744812467,
+          "shell_background_counts": 2393.100586756077,
+          "cnr": 14.475668556422148
+        },
+        {
+          "id": "L21",
+          "present": false,
+          "diameter_mm": null,
+          "nominal_contrast": null,
+          "moving_mm": [
+            -74.2423280144175,
+            -57.696227344629754,
+            90.68123566433002
+          ],
+          "local_background_counts": 3736.3475860294698,
+          "peak_contrast": 0.9083470401732308,
+          "mean_contrast": 0.8710824118281044,
+          "recovery_coefficient": null,
+          "shell_background_counts": 2905.4334935897436,
+          "cnr": 0.4086814752237828
+        },
+        {
+          "id": "L22",
+          "present": false,
+          "diameter_mm": null,
+          "nominal_contrast": null,
+          "moving_mm": [
+            -80.53163849577739,
+            59.3681726925048,
+            -13.420215255005871
+          ],
+          "local_background_counts": 1743.8083449096944,
+          "peak_contrast": 1.6389456393513844,
+          "mean_contrast": 1.7528302401593854,
+          "recovery_coefficient": null,
+          "shell_background_counts": 2549.65522745411,
+          "cnr": 0.21549758763549126
+        },
+        {
+          "id": "L23",
+          "present": false,
+          "diameter_mm": null,
+          "nominal_contrast": null,
+          "moving_mm": [
+            54.80147012400661,
+            -33.47169592083833,
+            90.49959289744919
+          ],
+          "local_background_counts": 2824.6686061602554,
+          "peak_contrast": 0.9578934731220954,
+          "mean_contrast": 0.9765747365846918,
+          "recovery_coefficient": null,
+          "shell_background_counts": 2651.3742833742836,
+          "cnr": 0.11201313059079436
+        },
+        {
+          "id": "L24",
+          "present": false,
+          "diameter_mm": null,
+          "nominal_contrast": null,
+          "moving_mm": [
+            14.190005531699143,
+            48.995735031474,
+            -75.07242861650975
+          ],
+          "local_background_counts": 1972.6677932194953,
+          "peak_contrast": 1.029845593223538,
+          "mean_contrast": 1.0457285342674358,
+          "recovery_coefficient": null,
+          "shell_background_counts": 1992.81050955414,
+          "cnr": 0.07377020459530288
+        },
+        {
+          "id": "L25",
+          "present": false,
+          "diameter_mm": null,
+          "nominal_contrast": null,
+          "moving_mm": [
+            105.91097902152887,
+            -30.238892799906353,
+            -9.437418777600925
+          ],
+          "local_background_counts": 2451.305725935165,
+          "peak_contrast": 0.9252085902949068,
+          "mean_contrast": 0.932870174375174,
+          "recovery_coefficient": null,
+          "shell_background_counts": 2069.1715647339156,
+          "cnr": 0.29373248810606806
+        }
+      ],
+      "background_statistics": {
+        "voxels": 55532,
+        "mean_counts": 13.556607377120931,
+        "structure_cv": 0.47003549074160506,
+        "noise_cv": 0.11514213785149355,
+        "total_cv": 0.4848686001742546
+      },
+      "air_statistics": {
+        "voxels": 1282120,
+        "mean_counts": 0.5,
+        "noise_cv": 0.6064444169090212,
+        "fraction_of_body_background": 0.04
+      },
+      "noise_seed": 4139710320,
+      "series_md5": "78e72fc3ab8799525bfaff47b4915b86"
+    },
+    "t25-id-tex-s125": {
+      "series": "GNBP-5N-t25-id-tex-s125",
+      "series_number": 23,
+      "content": "t25",
+      "transform": "id",
+      "background": "tex",
+      "intensity_arm": "s125",
+      "kind": "id + content t25 + background tex + intensity s125",
+      "intensity": {
+        "dose": 1.0,
+        "store": 1.25,
+        "level": 1.25,
+        "offset_stored": 0.0,
+        "offset_fraction_of_body": 0.0,
+        "nominal_body_stored": 2000.0,
+        "recover_scale": 0.8,
+        "recover_offset_stored": -0.0,
+        "fixed_reference": "GNBP-5N-t20-id-tex",
+        "note": "dose scales counts before the Poisson draw (level AND noise move); store scales after the post-filter (level only); offset is a pedestal that no multiplier can remove. background_statistics.mean_counts is divided by the base STORE_SCALE, so it tracks true counts for `dose` but not for `store`/`offset`."
+      },
+      "geometry": {
+        "rows": 128,
+        "columns": 128,
+        "slices": 96,
+        "pixel_spacing_mm": 4.42,
+        "slice_thickness_mm": 4.42,
+        "encoding": "single multi-frame NM instance (RECON TOMO); frames are slices"
+      },
+      "transform_fixed_to_moving": {
+        "matrix_4x4_row_major": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "rotation_centre_mm": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "landmarks": [
+        {
+          "name": "L01",
+          "fixed_mm": [
+            85.3196490992537,
+            23.434354491976848,
+            -79.4601873783405
+          ],
+          "moving_mm": [
+            85.3196490992537,
+            23.434354491976848,
+            -79.4601873783405
+          ],
+          "visible": true
+        },
+        {
+          "name": "L02",
+          "fixed_mm": [
+            -12.102341083692266,
+            23.00379858828586,
+            -106.83944433996011
+          ],
+          "moving_mm": [
+            -12.102341083692266,
+            23.00379858828586,
+            -106.83944433996011
+          ],
+          "visible": true
+        },
+        {
+          "name": "L03",
+          "fixed_mm": [
+            -111.05452872689571,
+            15.927760337855986,
+            72.6423815039542
+          ],
+          "moving_mm": [
+            -111.05452872689571,
+            15.927760337855986,
+            72.6423815039542
+          ],
+          "visible": true
+        },
+        {
+          "name": "L04",
+          "fixed_mm": [
+            57.965000560817344,
+            64.17525593415107,
+            87.28144581304304
+          ],
+          "moving_mm": [
+            57.965000560817344,
+            64.17525593415107,
+            87.28144581304304
+          ],
+          "visible": true
+        },
+        {
+          "name": "L05",
+          "fixed_mm": [
+            -67.3426130390325,
+            31.931059160337526,
+            -59.225235275730796
+          ],
+          "moving_mm": [
+            -67.3426130390325,
+            31.931059160337526,
+            -59.225235275730796
+          ],
+          "visible": true
+        },
+        {
+          "name": "L06",
+          "fixed_mm": [
+            -83.71438628035118,
+            15.22805437655559,
+            23.4575142327742
+          ],
+          "moving_mm": [
+            -83.71438628035118,
+            15.22805437655559,
+            23.4575142327742
+          ],
+          "visible": true
+        },
+        {
+          "name": "L07",
+          "fixed_mm": [
+            42.01100600457585,
+            -49.726994820960385,
+            21.1496948359121
+          ],
+          "moving_mm": [
+            42.01100600457585,
+            -49.726994820960385,
+            21.1496948359121
+          ],
+          "visible": true
+        },
+        {
+          "name": "L08",
+          "fixed_mm": [
+            -35.331523604910146,
+            17.39165385496011,
+            -26.04103843461027
+          ],
+          "moving_mm": [
+            -35.331523604910146,
+            17.39165385496011,
+            -26.04103843461027
+          ],
+          "visible": true
+        },
+        {
+          "name": "L09",
+          "fixed_mm": [
+            12.254796259109781,
+            4.399865083913369,
+            -160.68631093318322
+          ],
+          "moving_mm": [
+            12.254796259109781,
+            4.399865083913369,
+            -160.68631093318322
+          ],
+          "visible": true
+        },
+        {
+          "name": "L10",
+          "fixed_mm": [
+            7.003473878059594,
+            85.31396874086184,
+            -29.99848007622623
+          ],
+          "moving_mm": [
+            7.003473878059594,
+            85.31396874086184,
+            -29.99848007622623
+          ],
+          "visible": true
+        },
+        {
+          "name": "L11",
+          "fixed_mm": [
+            80.57328087279905,
+            -20.95457995568684,
+            -91.7524491921514
+          ],
+          "moving_mm": [
+            80.57328087279905,
+            -20.95457995568684,
+            -91.7524491921514
+          ],
+          "visible": true
+        },
+        {
+          "name": "L12",
+          "fixed_mm": [
+            -9.989582074860778,
+            -10.78618534185955,
+            68.07470852065774
+          ],
+          "moving_mm": [
+            -9.989582074860778,
+            -10.78618534185955,
+            68.07470852065774
+          ],
+          "visible": true
+        },
+        {
+          "name": "L13",
+          "fixed_mm": [
+            -18.27798672714667,
+            -59.14718713005257,
+            -58.90271145228499
+          ],
+          "moving_mm": [
+            -18.27798672714667,
+            -59.14718713005257,
+            -58.90271145228499
+          ],
+          "visible": true
+        },
+        {
+          "name": "L14",
+          "fixed_mm": [
+            2.4855429476726556,
+            -43.461266305881814,
+            152.08984054499575
+          ],
+          "moving_mm": [
+            2.4855429476726556,
+            -43.461266305881814,
+            152.08984054499575
+          ],
+          "visible": true
+        },
+        {
+          "name": "L15",
+          "fixed_mm": [
+            22.614280836795047,
+            31.847594457173813,
+            69.26048521229848
+          ],
+          "moving_mm": [
+            22.614280836795047,
+            31.847594457173813,
+            69.26048521229848
+          ],
+          "visible": true
+        },
+        {
+          "name": "L16",
+          "fixed_mm": [
+            95.52640848926012,
+            52.143321279662075,
+            15.126069629051983
+          ],
+          "moving_mm": [
+            95.52640848926012,
+            52.143321279662075,
+            15.126069629051983
+          ],
+          "visible": true
+        },
+        {
+          "name": "L17",
+          "fixed_mm": [
+            -75.85733853508768,
+            11.479004564064809,
+            107.80027382096898
+          ],
+          "moving_mm": [
+            -75.85733853508768,
+            11.479004564064809,
+            107.80027382096898
+          ],
+          "visible": true
+        },
+        {
+          "name": "L18",
+          "fixed_mm": [
+            11.234565653669137,
+            -74.96032818056406,
+            -29.23836922531555
+          ],
+          "moving_mm": [
+            11.234565653669137,
+            -74.96032818056406,
+            -29.23836922531555
+          ],
+          "visible": true
+        },
+        {
+          "name": "L19",
+          "fixed_mm": [
+            32.33762063137553,
+            35.711852745360545,
+            2.508291990139753
+          ],
+          "moving_mm": [
+            32.33762063137553,
+            35.711852745360545,
+            2.508291990139753
+          ],
+          "visible": true
+        },
+        {
+          "name": "L20",
+          "fixed_mm": [
+            16.219444882015267,
+            -59.1424127617012,
+            111.20800324512481
+          ],
+          "moving_mm": [
+            16.219444882015267,
+            -59.1424127617012,
+            111.20800324512481
+          ],
+          "visible": true
+        },
+        {
+          "name": "L21",
+          "fixed_mm": [
+            -74.2423280144175,
+            -57.696227344629754,
+            90.68123566433002
+          ],
+          "moving_mm": [
+            -74.2423280144175,
+            -57.696227344629754,
+            90.68123566433002
+          ],
+          "visible": true
+        },
+        {
+          "name": "L22",
+          "fixed_mm": [
+            -80.53163849577739,
+            59.3681726925048,
+            -13.420215255005871
+          ],
+          "moving_mm": [
+            -80.53163849577739,
+            59.3681726925048,
+            -13.420215255005871
+          ],
+          "visible": true
+        },
+        {
+          "name": "L23",
+          "fixed_mm": [
+            54.80147012400661,
+            -33.47169592083833,
+            90.49959289744919
+          ],
+          "moving_mm": [
+            54.80147012400661,
+            -33.47169592083833,
+            90.49959289744919
+          ],
+          "visible": true
+        },
+        {
+          "name": "L24",
+          "fixed_mm": [
+            14.190005531699143,
+            48.995735031474,
+            -75.07242861650975
+          ],
+          "moving_mm": [
+            14.190005531699143,
+            48.995735031474,
+            -75.07242861650975
+          ],
+          "visible": true
+        },
+        {
+          "name": "L25",
+          "fixed_mm": [
+            105.91097902152887,
+            -30.238892799906353,
+            -9.437418777600925
+          ],
+          "moving_mm": [
+            105.91097902152887,
+            -30.238892799906353,
+            -9.437418777600925
+          ],
+          "visible": true
+        }
+      ],
+      "displacement": {
+        "sampled_points": 6144,
+        "displacement_mm_mean": 0.0,
+        "displacement_mm_max": 0.0,
+        "displacement_mm_p95": 0.0
+      },
+      "lesion_measurements": [
+        {
+          "id": "L01",
+          "present": true,
+          "diameter_mm": 7.660337093272248,
+          "nominal_contrast": 8.201334545451033,
+          "moving_mm": [
+            85.3196490992537,
+            23.434354491976848,
+            -79.4601873783405
+          ],
+          "local_background_counts": 2550.020393356443,
+          "peak_contrast": 1.7894595017064452,
+          "mean_contrast": 1.8384166700053168,
+          "recovery_coefficient": 0.10962683329371693,
+          "shell_background_counts": 3024.3976721629488,
+          "cnr": 0.7681666726104358
+        },
+        {
+          "id": "L02",
+          "present": true,
+          "diameter_mm": 49.904770178642444,
+          "nominal_contrast": 10.387453244024664,
+          "moving_mm": [
+            -12.102341083692266,
+            23.00379858828586,
+            -106.83944433996011
+          ],
+          "local_background_counts": 2329.075598894528,
+          "peak_contrast": 10.024319449712708,
+          "mean_contrast": 8.212175142381057,
+          "recovery_coefficient": 0.9613171128662505,
+          "shell_background_counts": 3343.129195054252,
+          "cnr": 6.390942494661462
+        },
+        {
+          "id": "L03",
+          "present": true,
+          "diameter_mm": 59.481262412951175,
+          "nominal_contrast": 9.711395555013846,
+          "moving_mm": [
+            -111.05452872689571,
+            15.927760337855986,
+            72.6423815039542
+          ],
+          "local_background_counts": 3785.23095627489,
+          "peak_contrast": 8.223273024595944,
+          "mean_contrast": 5.854006933767196,
+          "recovery_coefficient": 0.829175185420043,
+          "shell_background_counts": 2836.6340269277844,
+          "cnr": 6.9130879535544905
+        },
+        {
+          "id": "L04",
+          "present": true,
+          "diameter_mm": 34.11227287385631,
+          "nominal_contrast": 4.550210445304089,
+          "moving_mm": [
+            57.965000560817344,
+            64.17525593415107,
+            87.28144581304304
+          ],
+          "local_background_counts": 869.9122397915282,
+          "peak_contrast": 4.8159432867004135,
+          "mean_contrast": 4.164476992604331,
+          "recovery_coefficient": 1.0748498843914487,
+          "shell_background_counts": 2031.7866566151527,
+          "cnr": 0.8899382254670739
+        },
+        {
+          "id": "L05",
+          "present": true,
+          "diameter_mm": 23.01596526837207,
+          "nominal_contrast": 9.02203087441655,
+          "moving_mm": [
+            -67.3426130390325,
+            31.931059160337526,
+            -59.225235275730796
+          ],
+          "local_background_counts": 2699.921201116656,
+          "peak_contrast": 8.326313377362261,
+          "mean_contrast": 5.410948040739546,
+          "recovery_coefficient": 0.913274143674386,
+          "shell_background_counts": 2408.043826830572,
+          "cnr": 27.789123610946408
+        },
+        {
+          "id": "L06",
+          "present": true,
+          "diameter_mm": 26.16315141451981,
+          "nominal_contrast": 8.749201448022692,
+          "moving_mm": [
+            -83.71438628035118,
+            15.22805437655559,
+            23.4575142327742
+          ],
+          "local_background_counts": 3423.521701903663,
+          "peak_contrast": 6.7581710415690965,
+          "mean_contrast": 4.6217083592974895,
+          "recovery_coefficient": 0.7430663766056008,
+          "shell_background_counts": 4677.341778202677,
+          "cnr": 3.6269651225377983
+        },
+        {
+          "id": "L07",
+          "present": true,
+          "diameter_mm": 33.49755154639573,
+          "nominal_contrast": 4.459627524162867,
+          "moving_mm": [
+            42.01100600457585,
+            -49.726994820960385,
+            21.1496948359121
+          ],
+          "local_background_counts": 2019.3488902541642,
+          "peak_contrast": 3.989834053482385,
+          "mean_contrast": 3.3322488880678094,
+          "recovery_coefficient": 0.8642069218725622,
+          "shell_background_counts": 1952.6290507052993,
+          "cnr": 8.116517606455465
+        },
+        {
+          "id": "L08",
+          "present": true,
+          "diameter_mm": 25.159229751500526,
+          "nominal_contrast": 9.91441757298438,
+          "moving_mm": [
+            -35.331523604910146,
+            17.39165385496011,
+            -26.04103843461027
+          ],
+          "local_background_counts": 1989.875893607314,
+          "peak_contrast": 9.882502803601538,
+          "mean_contrast": 7.007600624919848,
+          "recovery_coefficient": 0.9964198704938882,
+          "shell_background_counts": 2729.6512924480485,
+          "cnr": 24.488703247851074
+        },
+        {
+          "id": "L09",
+          "present": true,
+          "diameter_mm": 19.26886909961783,
+          "nominal_contrast": 7.9322502784840925,
+          "moving_mm": [
+            12.254796259109781,
+            4.399865083913369,
+            -160.68631093318322
+          ],
+          "local_background_counts": 2836.378514440895,
+          "peak_contrast": 6.346755842060622,
+          "mean_contrast": 4.553277397944168,
+          "recovery_coefficient": 0.7712871906335473,
+          "shell_background_counts": 3733.966346153846,
+          "cnr": 4.093052727700647
+        },
+        {
+          "id": "L10",
+          "present": true,
+          "diameter_mm": 14.843443685024875,
+          "nominal_contrast": 7.861702263083066,
+          "moving_mm": [
+            7.003473878059594,
+            85.31396874086184,
+            -29.99848007622623
+          ],
+          "local_background_counts": 310.12966761635585,
+          "peak_contrast": 4.4717308596293615,
+          "mean_contrast": 4.118761064743211,
+          "recovery_coefficient": 0.505957665681265,
+          "shell_background_counts": 942.2596566523605,
+          "cnr": 0.553532437954302
+        },
+        {
+          "id": "L11",
+          "present": true,
+          "diameter_mm": 57.582653262975676,
+          "nominal_contrast": 6.640670578580112,
+          "moving_mm": [
+            80.57328087279905,
+            -20.95457995568684,
+            -91.7524491921514
+          ],
+          "local_background_counts": 1652.4585075712068,
+          "peak_contrast": 7.1360254231701905,
+          "mean_contrast": 5.77261350843022,
+          "recovery_coefficient": 1.0878184318139654,
+          "shell_background_counts": 1479.7355057130767,
+          "cnr": 10.483262268266898
+        },
+        {
+          "id": "L12",
+          "present": true,
+          "diameter_mm": 29.83383743353509,
+          "nominal_contrast": 3.73707900063128,
+          "moving_mm": [
+            -9.989582074860778,
+            -10.78618534185955,
+            68.07470852065774
+          ],
+          "local_background_counts": 2228.4464953253882,
+          "peak_contrast": 3.9319842847577147,
+          "mean_contrast": 3.099093762687774,
+          "recovery_coefficient": 1.0712092285540467,
+          "shell_background_counts": 3266.969501718213,
+          "cnr": 4.674221886802767
+        },
+        {
+          "id": "L13",
+          "present": true,
+          "diameter_mm": 58.816830938414455,
+          "nominal_contrast": 7.09620859787008,
+          "moving_mm": [
+            -18.27798672714667,
+            -59.14718713005257,
+            -58.90271145228499
+          ],
+          "local_background_counts": 2074.2524803033243,
+          "peak_contrast": 7.182487648625984,
+          "mean_contrast": 6.686839777324606,
+          "recovery_coefficient": 1.0141529032956726,
+          "shell_background_counts": 1998.1935550506093,
+          "cnr": 11.359099811324226
+        },
+        {
+          "id": "L14",
+          "present": true,
+          "diameter_mm": 20.2747593128218,
+          "nominal_contrast": 4.696706090909189,
+          "moving_mm": [
+            2.4855429476726556,
+            -43.461266305881814,
+            152.08984054499575
+          ],
+          "local_background_counts": 1904.3149438399957,
+          "peak_contrast": 3.795779051246524,
+          "mean_contrast": 2.9469612292050753,
+          "recovery_coefficient": 0.7562892430430989,
+          "shell_background_counts": 2496.5584415584417,
+          "cnr": 1.3704356222239902
+        },
+        {
+          "id": "L15",
+          "present": true,
+          "diameter_mm": 52.00836009957069,
+          "nominal_contrast": 6.144564548670897,
+          "moving_mm": [
+            22.614280836795047,
+            31.847594457173813,
+            69.26048521229848
+          ],
+          "local_background_counts": 1183.179931461955,
+          "peak_contrast": 6.415987807708723,
+          "mean_contrast": 6.6161753305377005,
+          "recovery_coefficient": 1.0527592289823535,
+          "shell_background_counts": 2569.0635339247183,
+          "cnr": 4.576740761095834
+        },
+        {
+          "id": "L16",
+          "present": true,
+          "diameter_mm": 22.02692797829703,
+          "nominal_contrast": 4.9380517681815395,
+          "moving_mm": [
+            95.52640848926012,
+            52.143321279662075,
+            15.126069629051983
+          ],
+          "local_background_counts": 9252.138611397371,
+          "peak_contrast": 2.771960153945168,
+          "mean_contrast": 1.9357921604461703,
+          "recovery_coefficient": 0.4499585729832597,
+          "shell_background_counts": 3238.5684442001098,
+          "cnr": 13.536206298374534
+        },
+        {
+          "id": "L17",
+          "present": true,
+          "diameter_mm": 26.17584638675609,
+          "nominal_contrast": 9.543890730726513,
+          "moving_mm": [
+            -75.85733853508768,
+            11.479004564064809,
+            107.80027382096898
+          ],
+          "local_background_counts": 3231.1551357923236,
+          "peak_contrast": 12.136420458291617,
+          "mean_contrast": 8.117044463762873,
+          "recovery_coefficient": 1.3034366671195305,
+          "shell_background_counts": 5299.247965533748,
+          "cnr": 4.979901309096357
+        },
+        {
+          "id": "L18",
+          "present": true,
+          "diameter_mm": 13.7596742399433,
+          "nominal_contrast": 7.330571249856022,
+          "moving_mm": [
+            11.234565653669137,
+            -74.96032818056406,
+            -29.23836922531555
+          ],
+          "local_background_counts": 2330.6881605500807,
+          "peak_contrast": 4.071136825278964,
+          "mean_contrast": 3.14686154300687,
+          "recovery_coefficient": 0.4851279140644396,
+          "shell_background_counts": 3438.6043219076005,
+          "cnr": 1.5575689561631911
+        },
+        {
+          "id": "L19",
+          "present": true,
+          "diameter_mm": 15.295414814607469,
+          "nominal_contrast": 6.360153814597328,
+          "moving_mm": [
+            32.33762063137553,
+            35.711852745360545,
+            2.508291990139753
+          ],
+          "local_background_counts": 2581.747087937891,
+          "peak_contrast": 3.730983779858283,
+          "mean_contrast": 3.0764931661339983,
+          "recovery_coefficient": 0.5094972783096232,
+          "shell_background_counts": 2902.6254416961133,
+          "cnr": 8.013728033079342
+        },
+        {
+          "id": "L20",
+          "present": true,
+          "diameter_mm": 43.94857658179623,
+          "nominal_contrast": 9.818957036364186,
+          "moving_mm": [
+            16.219444882015267,
+            -59.1424127617012,
+            111.20800324512481
+          ],
+          "local_background_counts": 2889.773380489774,
+          "peak_contrast": 10.061722393935682,
+          "mean_contrast": 7.457904430154786,
+          "recovery_coefficient": 1.027527672101188,
+          "shell_background_counts": 2229.9611931653635,
+          "cnr": 25.639620014677988
+        },
+        {
+          "id": "L21",
+          "present": true,
+          "diameter_mm": 39.10073627089824,
+          "nominal_contrast": 3.900466860090067,
+          "moving_mm": [
+            -74.2423280144175,
+            -57.696227344629754,
+            90.68123566433002
+          ],
+          "local_background_counts": 3736.3475860294698,
+          "peak_contrast": 3.3482926140986975,
+          "mean_contrast": 2.7146891751437585,
+          "recovery_coefficient": 0.8096257352258722,
+          "shell_background_counts": 2435.852728468113,
+          "cnr": 6.460670182573878
+        },
+        {
+          "id": "L22",
+          "present": true,
+          "diameter_mm": 8.18132340398744,
+          "nominal_contrast": 5.220059769870225,
+          "moving_mm": [
+            -80.53163849577739,
+            59.3681726925048,
+            -13.420215255005871
+          ],
+          "local_background_counts": 1743.8083449096944,
+          "peak_contrast": 2.4475540890737135,
+          "mean_contrast": 2.3828593389459813,
+          "recovery_coefficient": 0.34301743766966325,
+          "shell_background_counts": 2661.8552507095555,
+          "cnr": 1.1409019741831323
+        },
+        {
+          "id": "L23",
+          "present": true,
+          "diameter_mm": 15.093419168194579,
+          "nominal_contrast": 4.339325069561703,
+          "moving_mm": [
+            54.80147012400661,
+            -33.47169592083833,
+            90.49959289744919
+          ],
+          "local_background_counts": 2824.6686061602554,
+          "peak_contrast": 3.0207366587478095,
+          "mean_contrast": 2.2703065493693555,
+          "recovery_coefficient": 0.605133257964921,
+          "shell_background_counts": 2842.6495132127957,
+          "cnr": 3.6592316192837027
+        },
+        {
+          "id": "L24",
+          "present": true,
+          "diameter_mm": 35.09822506374297,
+          "nominal_contrast": 10.285350020204755,
+          "moving_mm": [
+            14.190005531699143,
+            48.995735031474,
+            -75.07242861650975
+          ],
+          "local_background_counts": 1972.6677932194953,
+          "peak_contrast": 10.062036723680867,
+          "mean_contrast": 7.661311384597944,
+          "recovery_coefficient": 0.9759499323086409,
+          "shell_background_counts": 3053.812431040824,
+          "cnr": 4.282766450185472
+        },
+        {
+          "id": "L25",
+          "present": true,
+          "diameter_mm": 34.18837237664177,
+          "nominal_contrast": 7.651401199183903,
+          "moving_mm": [
+            105.91097902152887,
+            -30.238892799906353,
+            -9.437418777600925
+          ],
+          "local_background_counts": 2451.305725935165,
+          "peak_contrast": 7.216830641807403,
+          "mean_contrast": 5.316652997459925,
+          "recovery_coefficient": 0.9346648105620482,
+          "shell_background_counts": 1852.0984905660378,
+          "cnr": 18.40664721841996
+        }
+      ],
+      "background_statistics": {
+        "voxels": 55532,
+        "mean_counts": 13.555875240740974,
+        "structure_cv": 0.46999837406915096,
+        "noise_cv": 0.11445588098928575,
+        "total_cv": 0.48415720487784014
+      },
+      "air_statistics": {
+        "voxels": 1282120,
+        "mean_counts": 0.5,
+        "noise_cv": 0.605236404364805,
+        "fraction_of_body_background": 0.04
+      },
+      "noise_seed": 2968143776,
+      "series_md5": "160959b2dfbc46f54224ded1c8b65a15"
+    },
+    "t20-id-tex-b010": {
+      "series": "GNBP-5N-t20-id-tex-b010",
+      "series_number": 25,
+      "content": "t20",
+      "transform": "id",
+      "background": "tex",
+      "intensity_arm": "b010",
+      "kind": "id + content t20 + background tex + intensity b010",
+      "intensity": {
+        "dose": 1.0,
+        "store": 1.0,
+        "level": 1.0,
+        "offset_stored": 200.0,
+        "offset_fraction_of_body": 0.1,
+        "nominal_body_stored": 2000.0,
+        "recover_scale": 1.0,
+        "recover_offset_stored": -200.0,
+        "fixed_reference": "GNBP-5N-t20-id-tex",
+        "note": "dose scales counts before the Poisson draw (level AND noise move); store scales after the post-filter (level only); offset is a pedestal that no multiplier can remove. background_statistics.mean_counts is divided by the base STORE_SCALE, so it tracks true counts for `dose` but not for `store`/`offset`."
+      },
+      "geometry": {
+        "rows": 128,
+        "columns": 128,
+        "slices": 96,
+        "pixel_spacing_mm": 4.42,
+        "slice_thickness_mm": 4.42,
+        "encoding": "single multi-frame NM instance (RECON TOMO); frames are slices"
+      },
+      "transform_fixed_to_moving": {
+        "matrix_4x4_row_major": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "rotation_centre_mm": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "landmarks": [
+        {
+          "name": "L01",
+          "fixed_mm": [
+            85.3196490992537,
+            23.434354491976848,
+            -79.4601873783405
+          ],
+          "moving_mm": [
+            85.3196490992537,
+            23.434354491976848,
+            -79.4601873783405
+          ],
+          "visible": true
+        },
+        {
+          "name": "L02",
+          "fixed_mm": [
+            -12.102341083692266,
+            23.00379858828586,
+            -106.83944433996011
+          ],
+          "moving_mm": [
+            -12.102341083692266,
+            23.00379858828586,
+            -106.83944433996011
+          ],
+          "visible": true
+        },
+        {
+          "name": "L03",
+          "fixed_mm": [
+            -111.05452872689571,
+            15.927760337855986,
+            72.6423815039542
+          ],
+          "moving_mm": [
+            -111.05452872689571,
+            15.927760337855986,
+            72.6423815039542
+          ],
+          "visible": true
+        },
+        {
+          "name": "L04",
+          "fixed_mm": [
+            57.965000560817344,
+            64.17525593415107,
+            87.28144581304304
+          ],
+          "moving_mm": [
+            57.965000560817344,
+            64.17525593415107,
+            87.28144581304304
+          ],
+          "visible": true
+        },
+        {
+          "name": "L05",
+          "fixed_mm": [
+            -67.3426130390325,
+            31.931059160337526,
+            -59.225235275730796
+          ],
+          "moving_mm": [
+            -67.3426130390325,
+            31.931059160337526,
+            -59.225235275730796
+          ],
+          "visible": true
+        },
+        {
+          "name": "L06",
+          "fixed_mm": [
+            -83.71438628035118,
+            15.22805437655559,
+            23.4575142327742
+          ],
+          "moving_mm": [
+            -83.71438628035118,
+            15.22805437655559,
+            23.4575142327742
+          ],
+          "visible": true
+        },
+        {
+          "name": "L07",
+          "fixed_mm": [
+            42.01100600457585,
+            -49.726994820960385,
+            21.1496948359121
+          ],
+          "moving_mm": [
+            42.01100600457585,
+            -49.726994820960385,
+            21.1496948359121
+          ],
+          "visible": true
+        },
+        {
+          "name": "L08",
+          "fixed_mm": [
+            -35.331523604910146,
+            17.39165385496011,
+            -26.04103843461027
+          ],
+          "moving_mm": [
+            -35.331523604910146,
+            17.39165385496011,
+            -26.04103843461027
+          ],
+          "visible": true
+        },
+        {
+          "name": "L09",
+          "fixed_mm": [
+            12.254796259109781,
+            4.399865083913369,
+            -160.68631093318322
+          ],
+          "moving_mm": [
+            12.254796259109781,
+            4.399865083913369,
+            -160.68631093318322
+          ],
+          "visible": true
+        },
+        {
+          "name": "L10",
+          "fixed_mm": [
+            7.003473878059594,
+            85.31396874086184,
+            -29.99848007622623
+          ],
+          "moving_mm": [
+            7.003473878059594,
+            85.31396874086184,
+            -29.99848007622623
+          ],
+          "visible": true
+        },
+        {
+          "name": "L11",
+          "fixed_mm": [
+            80.57328087279905,
+            -20.95457995568684,
+            -91.7524491921514
+          ],
+          "moving_mm": [
+            80.57328087279905,
+            -20.95457995568684,
+            -91.7524491921514
+          ],
+          "visible": true
+        },
+        {
+          "name": "L12",
+          "fixed_mm": [
+            -9.989582074860778,
+            -10.78618534185955,
+            68.07470852065774
+          ],
+          "moving_mm": [
+            -9.989582074860778,
+            -10.78618534185955,
+            68.07470852065774
+          ],
+          "visible": true
+        },
+        {
+          "name": "L13",
+          "fixed_mm": [
+            -18.27798672714667,
+            -59.14718713005257,
+            -58.90271145228499
+          ],
+          "moving_mm": [
+            -18.27798672714667,
+            -59.14718713005257,
+            -58.90271145228499
+          ],
+          "visible": true
+        },
+        {
+          "name": "L14",
+          "fixed_mm": [
+            2.4855429476726556,
+            -43.461266305881814,
+            152.08984054499575
+          ],
+          "moving_mm": [
+            2.4855429476726556,
+            -43.461266305881814,
+            152.08984054499575
+          ],
+          "visible": true
+        },
+        {
+          "name": "L15",
+          "fixed_mm": [
+            22.614280836795047,
+            31.847594457173813,
+            69.26048521229848
+          ],
+          "moving_mm": [
+            22.614280836795047,
+            31.847594457173813,
+            69.26048521229848
+          ],
+          "visible": true
+        },
+        {
+          "name": "L16",
+          "fixed_mm": [
+            95.52640848926012,
+            52.143321279662075,
+            15.126069629051983
+          ],
+          "moving_mm": [
+            95.52640848926012,
+            52.143321279662075,
+            15.126069629051983
+          ],
+          "visible": true
+        },
+        {
+          "name": "L17",
+          "fixed_mm": [
+            -75.85733853508768,
+            11.479004564064809,
+            107.80027382096898
+          ],
+          "moving_mm": [
+            -75.85733853508768,
+            11.479004564064809,
+            107.80027382096898
+          ],
+          "visible": true
+        },
+        {
+          "name": "L18",
+          "fixed_mm": [
+            11.234565653669137,
+            -74.96032818056406,
+            -29.23836922531555
+          ],
+          "moving_mm": [
+            11.234565653669137,
+            -74.96032818056406,
+            -29.23836922531555
+          ],
+          "visible": true
+        },
+        {
+          "name": "L19",
+          "fixed_mm": [
+            32.33762063137553,
+            35.711852745360545,
+            2.508291990139753
+          ],
+          "moving_mm": [
+            32.33762063137553,
+            35.711852745360545,
+            2.508291990139753
+          ],
+          "visible": true
+        },
+        {
+          "name": "L20",
+          "fixed_mm": [
+            16.219444882015267,
+            -59.1424127617012,
+            111.20800324512481
+          ],
+          "moving_mm": [
+            16.219444882015267,
+            -59.1424127617012,
+            111.20800324512481
+          ],
+          "visible": true
+        },
+        {
+          "name": "L21",
+          "fixed_mm": [
+            -74.2423280144175,
+            -57.696227344629754,
+            90.68123566433002
+          ],
+          "moving_mm": [
+            -74.2423280144175,
+            -57.696227344629754,
+            90.68123566433002
+          ],
+          "visible": false
+        },
+        {
+          "name": "L22",
+          "fixed_mm": [
+            -80.53163849577739,
+            59.3681726925048,
+            -13.420215255005871
+          ],
+          "moving_mm": [
+            -80.53163849577739,
+            59.3681726925048,
+            -13.420215255005871
+          ],
+          "visible": false
+        },
+        {
+          "name": "L23",
+          "fixed_mm": [
+            54.80147012400661,
+            -33.47169592083833,
+            90.49959289744919
+          ],
+          "moving_mm": [
+            54.80147012400661,
+            -33.47169592083833,
+            90.49959289744919
+          ],
+          "visible": false
+        },
+        {
+          "name": "L24",
+          "fixed_mm": [
+            14.190005531699143,
+            48.995735031474,
+            -75.07242861650975
+          ],
+          "moving_mm": [
+            14.190005531699143,
+            48.995735031474,
+            -75.07242861650975
+          ],
+          "visible": false
+        },
+        {
+          "name": "L25",
+          "fixed_mm": [
+            105.91097902152887,
+            -30.238892799906353,
+            -9.437418777600925
+          ],
+          "moving_mm": [
+            105.91097902152887,
+            -30.238892799906353,
+            -9.437418777600925
+          ],
+          "visible": false
+        }
+      ],
+      "displacement": {
+        "sampled_points": 6144,
+        "displacement_mm_mean": 0.0,
+        "displacement_mm_max": 0.0,
+        "displacement_mm_p95": 0.0
+      },
+      "lesion_measurements": [
+        {
+          "id": "L01",
+          "present": true,
+          "diameter_mm": 12.723163611204273,
+          "nominal_contrast": 4.800245558710019,
+          "moving_mm": [
+            85.3196490992537,
+            23.434354491976848,
+            -79.4601873783405
+          ],
+          "local_background_counts": 2240.016314685154,
+          "peak_contrast": 2.28257658016132,
+          "mean_contrast": 2.017210010351395,
+          "recovery_coefficient": 0.33749834329039685,
+          "shell_background_counts": 2093.608695652174,
+          "cnr": 5.315289178399033
+        },
+        {
+          "id": "L02",
+          "present": true,
+          "diameter_mm": 28.763971935916626,
+          "nominal_contrast": 3.1894850023212595,
+          "moving_mm": [
+            -12.102341083692266,
+            23.00379858828586,
+            -106.83944433996011
+          ],
+          "local_background_counts": 2063.2604791156223,
+          "peak_contrast": 2.980789037761624,
+          "mean_contrast": 2.2639544094678046,
+          "recovery_coefficient": 0.904682624298235,
+          "shell_background_counts": 2238.4997792494482,
+          "cnr": 3.219033079705932
+        },
+        {
+          "id": "L03",
+          "present": true,
+          "diameter_mm": 36.746719245007,
+          "nominal_contrast": 3.055241007048041,
+          "moving_mm": [
+            -111.05452872689571,
+            15.927760337855986,
+            72.6423815039542
+          ],
+          "local_background_counts": 3228.184765019912,
+          "peak_contrast": 2.5297816439014804,
+          "mean_contrast": 1.8213953328088268,
+          "recovery_coefficient": 0.7443319973936867,
+          "shell_background_counts": 2127.5922296114804,
+          "cnr": 6.118626963752859
+        },
+        {
+          "id": "L04",
+          "present": true,
+          "diameter_mm": 33.87938693794135,
+          "nominal_contrast": 6.340882779891012,
+          "moving_mm": [
+            57.965000560817344,
+            64.17525593415107,
+            87.28144581304304
+          ],
+          "local_background_counts": 895.9297918332226,
+          "peak_contrast": 5.535616270152463,
+          "mean_contrast": 4.611496842184297,
+          "recovery_coefficient": 0.8492259532880103,
+          "shell_background_counts": 1381.6380880121396,
+          "cnr": 5.517708190503558
+        },
+        {
+          "id": "L05",
+          "present": true,
+          "diameter_mm": 20.745168961617047,
+          "nominal_contrast": 9.736175404917965,
+          "moving_mm": [
+            -67.3426130390325,
+            31.931059160337526,
+            -59.225235275730796
+          ],
+          "local_background_counts": 2359.936960893325,
+          "peak_contrast": 7.492189567162461,
+          "mean_contrast": 5.20399879082373,
+          "recovery_coefficient": 0.7431386466333689,
+          "shell_background_counts": 2101.2479815455595,
+          "cnr": 28.530905992252464
+        },
+        {
+          "id": "L06",
+          "present": true,
+          "diameter_mm": 25.991297505227863,
+          "nominal_contrast": 5.702046564473235,
+          "moving_mm": [
+            -83.71438628035118,
+            15.22805437655559,
+            23.4575142327742
+          ],
+          "local_background_counts": 2938.8173615229307,
+          "peak_contrast": 4.219902399729707,
+          "mean_contrast": 2.940751031973176,
+          "recovery_coefficient": 0.684787433637512,
+          "shell_background_counts": 2955.9990384615385,
+          "cnr": 8.861202882242909
+        },
+        {
+          "id": "L07",
+          "present": true,
+          "diameter_mm": 30.2530270074114,
+          "nominal_contrast": 7.159018023946937,
+          "moving_mm": [
+            42.01100600457585,
+            -49.726994820960385,
+            21.1496948359121
+          ],
+          "local_background_counts": 1815.4791122033314,
+          "peak_contrast": 6.7087378070503245,
+          "mean_contrast": 4.57824278238291,
+          "recovery_coefficient": 0.9268909077476516,
+          "shell_background_counts": 1770.2810512929207,
+          "cnr": 18.37388944739885
+        },
+        {
+          "id": "L08",
+          "present": true,
+          "diameter_mm": 17.18659059732419,
+          "nominal_contrast": 3.692100127450399,
+          "moving_mm": [
+            -35.331523604910146,
+            17.39165385496011,
+            -26.04103843461027
+          ],
+          "local_background_counts": 1791.9007148858511,
+          "peak_contrast": 2.952277474919485,
+          "mean_contrast": 2.358459352626139,
+          "recovery_coefficient": 0.725187542251047,
+          "shell_background_counts": 2292.184364820847,
+          "cnr": 6.023403528216939
+        },
+        {
+          "id": "L09",
+          "present": true,
+          "diameter_mm": 21.168665917654298,
+          "nominal_contrast": 11.306025712504331,
+          "moving_mm": [
+            12.254796259109781,
+            4.399865083913369,
+            -160.68631093318322
+          ],
+          "local_background_counts": 2469.102811552716,
+          "peak_contrast": 8.971799009058982,
+          "mean_contrast": 6.304523968912304,
+          "recovery_coefficient": 0.7735085503800728,
+          "shell_background_counts": 3105.519023282226,
+          "cnr": 6.849892609068445
+        },
+        {
+          "id": "L10",
+          "present": true,
+          "diameter_mm": 11.648743366150068,
+          "nominal_contrast": 10.56059062032023,
+          "moving_mm": [
+            7.003473878059594,
+            85.31396874086184,
+            -29.99848007622623
+          ],
+          "local_background_counts": 448.10373409308465,
+          "peak_contrast": 3.264403822076981,
+          "mean_contrast": 2.966642621387947,
+          "recovery_coefficient": 0.23684769194741812,
+          "shell_background_counts": 925.3568498769483,
+          "cnr": 0.8599736316589087
+        },
+        {
+          "id": "L11",
+          "present": true,
+          "diameter_mm": 35.09203168017685,
+          "nominal_contrast": 8.976035249672458,
+          "moving_mm": [
+            80.57328087279905,
+            -20.95457995568684,
+            -91.7524491921514
+          ],
+          "local_background_counts": 1521.9668060569654,
+          "peak_contrast": 7.972234406965984,
+          "mean_contrast": 5.963938861878396,
+          "recovery_coefficient": 0.874147892870998,
+          "shell_background_counts": 1470.4151081774844,
+          "cnr": 16.57196841924064
+        },
+        {
+          "id": "L12",
+          "present": true,
+          "diameter_mm": 40.13561288389957,
+          "nominal_contrast": 5.3840243807844175,
+          "moving_mm": [
+            -9.989582074860778,
+            -10.78618534185955,
+            68.07470852065774
+          ],
+          "local_background_counts": 1982.7571962603106,
+          "peak_contrast": 5.59315987470159,
+          "mean_contrast": 4.432367355545282,
+          "recovery_coefficient": 1.047703998826702,
+          "shell_background_counts": 2759.3087954110897,
+          "cnr": 7.378773495052923
+        },
+        {
+          "id": "L13",
+          "present": true,
+          "diameter_mm": 37.58596932972458,
+          "nominal_contrast": 4.235391135834939,
+          "moving_mm": [
+            -18.27798672714667,
+            -59.14718713005257,
+            -58.90271145228499
+          ],
+          "local_background_counts": 1859.4019842426592,
+          "peak_contrast": 4.021313460641612,
+          "mean_contrast": 3.3317515378924476,
+          "recovery_coefficient": 0.933832520951727,
+          "shell_background_counts": 1973.2088477366256,
+          "cnr": 7.974758472471271
+        },
+        {
+          "id": "L14",
+          "present": true,
+          "diameter_mm": 14.947005902629522,
+          "nominal_contrast": 5.67243597740174,
+          "moving_mm": [
+            2.4855429476726556,
+            -43.461266305881814,
+            152.08984054499575
+          ],
+          "local_background_counts": 1723.4519550719965,
+          "peak_contrast": 3.334214300174017,
+          "mean_contrast": 2.680297308415925,
+          "recovery_coefficient": 0.499571168329209,
+          "shell_background_counts": 1651.6026912181303,
+          "cnr": 5.888021833338884
+        },
+        {
+          "id": "L15",
+          "present": true,
+          "diameter_mm": 30.742592421384572,
+          "nominal_contrast": 3.0741096435137254,
+          "moving_mm": [
+            22.614280836795047,
+            31.847594457173813,
+            69.26048521229848
+          ],
+          "local_background_counts": 1146.543945169564,
+          "peak_contrast": 2.8844546255418257,
+          "mean_contrast": 2.4247227052012303,
+          "recovery_coefficient": 0.9085607559055522,
+          "shell_background_counts": 2015.545719035744,
+          "cnr": 1.4878037518970502
+        },
+        {
+          "id": "L16",
+          "present": true,
+          "diameter_mm": 26.1625323071501,
+          "nominal_contrast": 6.774528116922321,
+          "moving_mm": [
+            95.52640848926012,
+            52.143321279662075,
+            15.126069629051983
+          ],
+          "local_background_counts": 7601.710889117896,
+          "peak_contrast": 3.92746883061148,
+          "mean_contrast": 2.7377910749286745,
+          "recovery_coefficient": 0.5069624342173518,
+          "shell_background_counts": 2647.049736967958,
+          "cnr": 21.146635052117972
+        },
+        {
+          "id": "L17",
+          "present": true,
+          "diameter_mm": 15.981245857067638,
+          "nominal_contrast": 4.171751167410247,
+          "moving_mm": [
+            -75.85733853508768,
+            11.479004564064809,
+            107.80027382096898
+          ],
+          "local_background_counts": 2784.924108633859,
+          "peak_contrast": 3.436727562737732,
+          "mean_contrast": 2.854296810227756,
+          "recovery_coefficient": 0.7682593728584749,
+          "shell_background_counts": 2809.691678035471,
+          "cnr": 9.162245279650614
+        },
+        {
+          "id": "L18",
+          "present": true,
+          "diameter_mm": 9.383158641114186,
+          "nominal_contrast": 5.849599035056357,
+          "moving_mm": [
+            11.234565653669137,
+            -74.96032818056406,
+            -29.23836922531555
+          ],
+          "local_background_counts": 2064.5505284400647,
+          "peak_contrast": 1.9250638617506328,
+          "mean_contrast": 1.8623908434467862,
+          "recovery_coefficient": 0.19075058681421125,
+          "shell_background_counts": 1850.6582278481012,
+          "cnr": 3.5274306994031934
+        },
+        {
+          "id": "L19",
+          "present": true,
+          "diameter_mm": 12.82836160424031,
+          "nominal_contrast": 4.4898211367319005,
+          "moving_mm": [
+            32.33762063137553,
+            35.711852745360545,
+            2.508291990139753
+          ],
+          "local_background_counts": 2265.3976703503126,
+          "peak_contrast": 2.10087953953916,
+          "mean_contrast": 1.9184585053004704,
+          "recovery_coefficient": 0.31545443058726397,
+          "shell_background_counts": 2536.21146398141,
+          "cnr": 3.239095113662099
+        },
+        {
+          "id": "L20",
+          "present": true,
+          "diameter_mm": 30.64735128042036,
+          "nominal_contrast": 4.7954195951033345,
+          "moving_mm": [
+            16.219444882015267,
+            -59.1424127617012,
+            111.20800324512481
+          ],
+          "local_background_counts": 2511.818704391819,
+          "peak_contrast": 4.292893434378099,
+          "mean_contrast": 3.232509481508829,
+          "recovery_coefficient": 0.8675966785402146,
+          "shell_background_counts": 2118.281642917016,
+          "cnr": 13.722701459670837
+        },
+        {
+          "id": "L21",
+          "present": false,
+          "diameter_mm": null,
+          "nominal_contrast": null,
+          "moving_mm": [
+            -74.2423280144175,
+            -57.696227344629754,
+            90.68123566433002
+          ],
+          "local_background_counts": 3189.078068823576,
+          "peak_contrast": 0.9089518302758425,
+          "mean_contrast": 0.9152070296426886,
+          "recovery_coefficient": null,
+          "shell_background_counts": 2521.1634615384614,
+          "cnr": 0.4015508209713181
+        },
+        {
+          "id": "L22",
+          "present": false,
+          "diameter_mm": null,
+          "nominal_contrast": null,
+          "moving_mm": [
+            -80.53163849577739,
+            59.3681726925048,
+            -13.420215255005871
+          ],
+          "local_background_counts": 1595.0466759277556,
+          "peak_contrast": 1.426283368802859,
+          "mean_contrast": 1.6269116378620228,
+          "recovery_coefficient": null,
+          "shell_background_counts": 2244.0582601755787,
+          "cnr": 0.02612303766460038
+        },
+        {
+          "id": "L23",
+          "present": false,
+          "diameter_mm": null,
+          "nominal_contrast": null,
+          "moving_mm": [
+            54.80147012400661,
+            -33.47169592083833,
+            90.49959289744919
+          ],
+          "local_background_counts": 2459.7348849282043,
+          "peak_contrast": 1.010094326447745,
+          "mean_contrast": 0.9981563521516112,
+          "recovery_coefficient": null,
+          "shell_background_counts": 2351.703521703522,
+          "cnr": 0.33113300545751684
+        },
+        {
+          "id": "L24",
+          "present": false,
+          "diameter_mm": null,
+          "nominal_contrast": null,
+          "moving_mm": [
+            14.190005531699143,
+            48.995735031474,
+            -75.07242861650975
+          ],
+          "local_background_counts": 1778.134234575596,
+          "peak_contrast": 1.0169114218592885,
+          "mean_contrast": 1.0002057018065855,
+          "recovery_coefficient": null,
+          "shell_background_counts": 1780.5748407643312,
+          "cnr": 0.0631467109187587
+        },
+        {
+          "id": "L25",
+          "present": false,
+          "diameter_mm": null,
+          "nominal_contrast": null,
+          "moving_mm": [
+            105.91097902152887,
+            -30.238892799906353,
+            -9.437418777600925
+          ],
+          "local_background_counts": 2161.044580748132,
+          "peak_contrast": 0.9627683648764851,
+          "mean_contrast": 0.9292959608009401,
+          "recovery_coefficient": null,
+          "shell_background_counts": 1872.0635424940428,
+          "cnr": 0.4173937702548613
+        }
+      ],
+      "background_statistics": {
+        "voxels": 55532,
+        "mean_counts": 11.8452859016297,
+        "structure_cv": 0.4303542629799868,
+        "noise_cv": 0.105857124389174,
+        "total_cv": 0.4435206030585175
+      },
+      "air_statistics": {
+        "voxels": 1282120,
+        "mean_counts": 1.4,
+        "noise_cv": 0.17326366420851336,
+        "fraction_of_body_background": 0.04
+      },
+      "noise_seed": 1694222507,
+      "series_md5": "c865bc391539118db4667ab31a91ca9f"
+    },
+    "t25-id-tex-b010": {
+      "series": "GNBP-5N-t25-id-tex-b010",
+      "series_number": 26,
+      "content": "t25",
+      "transform": "id",
+      "background": "tex",
+      "intensity_arm": "b010",
+      "kind": "id + content t25 + background tex + intensity b010",
+      "intensity": {
+        "dose": 1.0,
+        "store": 1.0,
+        "level": 1.0,
+        "offset_stored": 200.0,
+        "offset_fraction_of_body": 0.1,
+        "nominal_body_stored": 2000.0,
+        "recover_scale": 1.0,
+        "recover_offset_stored": -200.0,
+        "fixed_reference": "GNBP-5N-t20-id-tex",
+        "note": "dose scales counts before the Poisson draw (level AND noise move); store scales after the post-filter (level only); offset is a pedestal that no multiplier can remove. background_statistics.mean_counts is divided by the base STORE_SCALE, so it tracks true counts for `dose` but not for `store`/`offset`."
+      },
+      "geometry": {
+        "rows": 128,
+        "columns": 128,
+        "slices": 96,
+        "pixel_spacing_mm": 4.42,
+        "slice_thickness_mm": 4.42,
+        "encoding": "single multi-frame NM instance (RECON TOMO); frames are slices"
+      },
+      "transform_fixed_to_moving": {
+        "matrix_4x4_row_major": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "rotation_centre_mm": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "landmarks": [
+        {
+          "name": "L01",
+          "fixed_mm": [
+            85.3196490992537,
+            23.434354491976848,
+            -79.4601873783405
+          ],
+          "moving_mm": [
+            85.3196490992537,
+            23.434354491976848,
+            -79.4601873783405
+          ],
+          "visible": true
+        },
+        {
+          "name": "L02",
+          "fixed_mm": [
+            -12.102341083692266,
+            23.00379858828586,
+            -106.83944433996011
+          ],
+          "moving_mm": [
+            -12.102341083692266,
+            23.00379858828586,
+            -106.83944433996011
+          ],
+          "visible": true
+        },
+        {
+          "name": "L03",
+          "fixed_mm": [
+            -111.05452872689571,
+            15.927760337855986,
+            72.6423815039542
+          ],
+          "moving_mm": [
+            -111.05452872689571,
+            15.927760337855986,
+            72.6423815039542
+          ],
+          "visible": true
+        },
+        {
+          "name": "L04",
+          "fixed_mm": [
+            57.965000560817344,
+            64.17525593415107,
+            87.28144581304304
+          ],
+          "moving_mm": [
+            57.965000560817344,
+            64.17525593415107,
+            87.28144581304304
+          ],
+          "visible": true
+        },
+        {
+          "name": "L05",
+          "fixed_mm": [
+            -67.3426130390325,
+            31.931059160337526,
+            -59.225235275730796
+          ],
+          "moving_mm": [
+            -67.3426130390325,
+            31.931059160337526,
+            -59.225235275730796
+          ],
+          "visible": true
+        },
+        {
+          "name": "L06",
+          "fixed_mm": [
+            -83.71438628035118,
+            15.22805437655559,
+            23.4575142327742
+          ],
+          "moving_mm": [
+            -83.71438628035118,
+            15.22805437655559,
+            23.4575142327742
+          ],
+          "visible": true
+        },
+        {
+          "name": "L07",
+          "fixed_mm": [
+            42.01100600457585,
+            -49.726994820960385,
+            21.1496948359121
+          ],
+          "moving_mm": [
+            42.01100600457585,
+            -49.726994820960385,
+            21.1496948359121
+          ],
+          "visible": true
+        },
+        {
+          "name": "L08",
+          "fixed_mm": [
+            -35.331523604910146,
+            17.39165385496011,
+            -26.04103843461027
+          ],
+          "moving_mm": [
+            -35.331523604910146,
+            17.39165385496011,
+            -26.04103843461027
+          ],
+          "visible": true
+        },
+        {
+          "name": "L09",
+          "fixed_mm": [
+            12.254796259109781,
+            4.399865083913369,
+            -160.68631093318322
+          ],
+          "moving_mm": [
+            12.254796259109781,
+            4.399865083913369,
+            -160.68631093318322
+          ],
+          "visible": true
+        },
+        {
+          "name": "L10",
+          "fixed_mm": [
+            7.003473878059594,
+            85.31396874086184,
+            -29.99848007622623
+          ],
+          "moving_mm": [
+            7.003473878059594,
+            85.31396874086184,
+            -29.99848007622623
+          ],
+          "visible": true
+        },
+        {
+          "name": "L11",
+          "fixed_mm": [
+            80.57328087279905,
+            -20.95457995568684,
+            -91.7524491921514
+          ],
+          "moving_mm": [
+            80.57328087279905,
+            -20.95457995568684,
+            -91.7524491921514
+          ],
+          "visible": true
+        },
+        {
+          "name": "L12",
+          "fixed_mm": [
+            -9.989582074860778,
+            -10.78618534185955,
+            68.07470852065774
+          ],
+          "moving_mm": [
+            -9.989582074860778,
+            -10.78618534185955,
+            68.07470852065774
+          ],
+          "visible": true
+        },
+        {
+          "name": "L13",
+          "fixed_mm": [
+            -18.27798672714667,
+            -59.14718713005257,
+            -58.90271145228499
+          ],
+          "moving_mm": [
+            -18.27798672714667,
+            -59.14718713005257,
+            -58.90271145228499
+          ],
+          "visible": true
+        },
+        {
+          "name": "L14",
+          "fixed_mm": [
+            2.4855429476726556,
+            -43.461266305881814,
+            152.08984054499575
+          ],
+          "moving_mm": [
+            2.4855429476726556,
+            -43.461266305881814,
+            152.08984054499575
+          ],
+          "visible": true
+        },
+        {
+          "name": "L15",
+          "fixed_mm": [
+            22.614280836795047,
+            31.847594457173813,
+            69.26048521229848
+          ],
+          "moving_mm": [
+            22.614280836795047,
+            31.847594457173813,
+            69.26048521229848
+          ],
+          "visible": true
+        },
+        {
+          "name": "L16",
+          "fixed_mm": [
+            95.52640848926012,
+            52.143321279662075,
+            15.126069629051983
+          ],
+          "moving_mm": [
+            95.52640848926012,
+            52.143321279662075,
+            15.126069629051983
+          ],
+          "visible": true
+        },
+        {
+          "name": "L17",
+          "fixed_mm": [
+            -75.85733853508768,
+            11.479004564064809,
+            107.80027382096898
+          ],
+          "moving_mm": [
+            -75.85733853508768,
+            11.479004564064809,
+            107.80027382096898
+          ],
+          "visible": true
+        },
+        {
+          "name": "L18",
+          "fixed_mm": [
+            11.234565653669137,
+            -74.96032818056406,
+            -29.23836922531555
+          ],
+          "moving_mm": [
+            11.234565653669137,
+            -74.96032818056406,
+            -29.23836922531555
+          ],
+          "visible": true
+        },
+        {
+          "name": "L19",
+          "fixed_mm": [
+            32.33762063137553,
+            35.711852745360545,
+            2.508291990139753
+          ],
+          "moving_mm": [
+            32.33762063137553,
+            35.711852745360545,
+            2.508291990139753
+          ],
+          "visible": true
+        },
+        {
+          "name": "L20",
+          "fixed_mm": [
+            16.219444882015267,
+            -59.1424127617012,
+            111.20800324512481
+          ],
+          "moving_mm": [
+            16.219444882015267,
+            -59.1424127617012,
+            111.20800324512481
+          ],
+          "visible": true
+        },
+        {
+          "name": "L21",
+          "fixed_mm": [
+            -74.2423280144175,
+            -57.696227344629754,
+            90.68123566433002
+          ],
+          "moving_mm": [
+            -74.2423280144175,
+            -57.696227344629754,
+            90.68123566433002
+          ],
+          "visible": true
+        },
+        {
+          "name": "L22",
+          "fixed_mm": [
+            -80.53163849577739,
+            59.3681726925048,
+            -13.420215255005871
+          ],
+          "moving_mm": [
+            -80.53163849577739,
+            59.3681726925048,
+            -13.420215255005871
+          ],
+          "visible": true
+        },
+        {
+          "name": "L23",
+          "fixed_mm": [
+            54.80147012400661,
+            -33.47169592083833,
+            90.49959289744919
+          ],
+          "moving_mm": [
+            54.80147012400661,
+            -33.47169592083833,
+            90.49959289744919
+          ],
+          "visible": true
+        },
+        {
+          "name": "L24",
+          "fixed_mm": [
+            14.190005531699143,
+            48.995735031474,
+            -75.07242861650975
+          ],
+          "moving_mm": [
+            14.190005531699143,
+            48.995735031474,
+            -75.07242861650975
+          ],
+          "visible": true
+        },
+        {
+          "name": "L25",
+          "fixed_mm": [
+            105.91097902152887,
+            -30.238892799906353,
+            -9.437418777600925
+          ],
+          "moving_mm": [
+            105.91097902152887,
+            -30.238892799906353,
+            -9.437418777600925
+          ],
+          "visible": true
+        }
+      ],
+      "displacement": {
+        "sampled_points": 6144,
+        "displacement_mm_mean": 0.0,
+        "displacement_mm_max": 0.0,
+        "displacement_mm_p95": 0.0
+      },
+      "lesion_measurements": [
+        {
+          "id": "L01",
+          "present": true,
+          "diameter_mm": 7.660337093272248,
+          "nominal_contrast": 8.201334545451033,
+          "moving_mm": [
+            85.3196490992537,
+            23.434354491976848,
+            -79.4601873783405
+          ],
+          "local_background_counts": 2240.016314685154,
+          "peak_contrast": 1.81352872613181,
+          "mean_contrast": 1.8935129946123472,
+          "recovery_coefficient": 0.11296916161820354,
+          "shell_background_counts": 2639.7604267701263,
+          "cnr": 0.8920362058782136
+        },
+        {
+          "id": "L02",
+          "present": true,
+          "diameter_mm": 49.904770178642444,
+          "nominal_contrast": 10.387453244024664,
+          "moving_mm": [
+            -12.102341083692266,
+            23.00379858828586,
+            -106.83944433996011
+          ],
+          "local_background_counts": 2063.2604791156223,
+          "peak_contrast": 9.092900478447534,
+          "mean_contrast": 7.491214849776028,
+          "recovery_coefficient": 0.8620975538385618,
+          "shell_background_counts": 2868.45117335352,
+          "cnr": 6.291046487892884
+        },
+        {
+          "id": "L03",
+          "present": true,
+          "diameter_mm": 59.481262412951175,
+          "nominal_contrast": 9.711395555013846,
+          "moving_mm": [
+            -111.05452872689571,
+            15.927760337855986,
+            72.6423815039542
+          ],
+          "local_background_counts": 3228.184765019912,
+          "peak_contrast": 8.077111816271197,
+          "mean_contrast": 5.536541216098278,
+          "recovery_coefficient": 0.8123970231380394,
+          "shell_background_counts": 2458.4151366789065,
+          "cnr": 7.222102029264737
+        },
+        {
+          "id": "L04",
+          "present": true,
+          "diameter_mm": 34.11227287385631,
+          "nominal_contrast": 4.550210445304089,
+          "moving_mm": [
+            57.965000560817344,
+            64.17525593415107,
+            87.28144581304304
+          ],
+          "local_background_counts": 895.9297918332226,
+          "peak_contrast": 3.6287496049316985,
+          "mean_contrast": 3.5349804093629658,
+          "recovery_coefficient": 0.7404489523737335,
+          "shell_background_counts": 1832.303807010931,
+          "cnr": 0.753941122375227
+        },
+        {
+          "id": "L05",
+          "present": true,
+          "diameter_mm": 23.01596526837207,
+          "nominal_contrast": 9.02203087441655,
+          "moving_mm": [
+            -67.3426130390325,
+            31.931059160337526,
+            -59.225235275730796
+          ],
+          "local_background_counts": 2359.936960893325,
+          "peak_contrast": 7.297154016687407,
+          "mean_contrast": 4.987234911370166,
+          "recovery_coefficient": 0.784982520669419,
+          "shell_background_counts": 2125.3196151790485,
+          "cnr": 26.40110298727977
+        },
+        {
+          "id": "L06",
+          "present": true,
+          "diameter_mm": 26.16315141451981,
+          "nominal_contrast": 8.749201448022692,
+          "moving_mm": [
+            -83.71438628035118,
+            15.22805437655559,
+            23.4575142327742
+          ],
+          "local_background_counts": 2938.8173615229307,
+          "peak_contrast": 6.140448447853515,
+          "mean_contrast": 4.303447820676229,
+          "recovery_coefficient": 0.6633520217964093,
+          "shell_background_counts": 3965.6123326959846,
+          "cnr": 3.4049227873541525
+        },
+        {
+          "id": "L07",
+          "present": true,
+          "diameter_mm": 33.49755154639573,
+          "nominal_contrast": 4.459627524162867,
+          "moving_mm": [
+            42.01100600457585,
+            -49.726994820960385,
+            21.1496948359121
+          ],
+          "local_background_counts": 1815.4791122033314,
+          "peak_contrast": 3.8784759231518486,
+          "mean_contrast": 3.0224315984104932,
+          "recovery_coefficient": 0.8320190260506033,
+          "shell_background_counts": 1780.9210827296988,
+          "cnr": 8.592775842778975
+        },
+        {
+          "id": "L08",
+          "present": true,
+          "diameter_mm": 25.159229751500526,
+          "nominal_contrast": 9.91441757298438,
+          "moving_mm": [
+            -35.331523604910146,
+            17.39165385496011,
+            -26.04103843461027
+          ],
+          "local_background_counts": 1791.9007148858511,
+          "peak_contrast": 8.40650895643164,
+          "mean_contrast": 6.277418730662023,
+          "recovery_coefficient": 0.8308460867794057,
+          "shell_background_counts": 2365.3319817536744,
+          "cnr": 23.743065186978033
+        },
+        {
+          "id": "L09",
+          "present": true,
+          "diameter_mm": 19.26886909961783,
+          "nominal_contrast": 7.9322502784840925,
+          "moving_mm": [
+            12.254796259109781,
+            4.399865083913369,
+            -160.68631093318322
+          ],
+          "local_background_counts": 2469.102811552716,
+          "peak_contrast": 5.701547998419365,
+          "mean_contrast": 4.258963269012367,
+          "recovery_coefficient": 0.6782138280569227,
+          "shell_background_counts": 3195.652043269231,
+          "cnr": 3.8493932347062394
+        },
+        {
+          "id": "L10",
+          "present": true,
+          "diameter_mm": 14.843443685024875,
+          "nominal_contrast": 7.861702263083066,
+          "moving_mm": [
+            7.003473878059594,
+            85.31396874086184,
+            -29.99848007622623
+          ],
+          "local_background_counts": 448.10373409308465,
+          "peak_contrast": 3.2885843928398257,
+          "mean_contrast": 3.0585551864990603,
+          "recovery_coefficient": 0.33353012198630877,
+          "shell_background_counts": 938.7868383404864,
+          "cnr": 0.8300385891787285
+        },
+        {
+          "id": "L11",
+          "present": true,
+          "diameter_mm": 57.582653262975676,
+          "nominal_contrast": 6.640670578580112,
+          "moving_mm": [
+            80.57328087279905,
+            -20.95457995568684,
+            -91.7524491921514
+          ],
+          "local_background_counts": 1521.9668060569654,
+          "peak_contrast": 5.6323724819468906,
+          "mean_contrast": 5.124426176319373,
+          "recovery_coefficient": 0.8212449951496665,
+          "shell_background_counts": 1369.5245450698264,
+          "cnr": 9.29830841091734
+        },
+        {
+          "id": "L12",
+          "present": true,
+          "diameter_mm": 29.83383743353509,
+          "nominal_contrast": 3.73707900063128,
+          "moving_mm": [
+            -9.989582074860778,
+            -10.78618534185955,
+            68.07470852065774
+          ],
+          "local_background_counts": 1982.7571962603106,
+          "peak_contrast": 3.6146210093341584,
+          "mean_contrast": 2.7947563025786657,
+          "recovery_coefficient": 0.9552596065846555,
+          "shell_background_counts": 2817.7203608247423,
+          "cnr": 4.495826901107125
+        },
+        {
+          "id": "L13",
+          "present": true,
+          "diameter_mm": 58.816830938414455,
+          "nominal_contrast": 7.09620859787008,
+          "moving_mm": [
+            -18.27798672714667,
+            -59.14718713005257,
+            -58.90271145228499
+          ],
+          "local_background_counts": 1859.4019842426592,
+          "peak_contrast": 6.999501380475482,
+          "mean_contrast": 6.054627836472074,
+          "recovery_coefficient": 0.9841364979819774,
+          "shell_background_counts": 1786.0731253873166,
+          "cnr": 12.357069110412311
+        },
+        {
+          "id": "L14",
+          "present": true,
+          "diameter_mm": 20.2747593128218,
+          "nominal_contrast": 4.696706090909189,
+          "moving_mm": [
+            2.4855429476726556,
+            -43.461266305881814,
+            152.08984054499575
+          ],
+          "local_background_counts": 1723.4519550719965,
+          "peak_contrast": 3.7719613278954087,
+          "mean_contrast": 2.781314282858145,
+          "recovery_coefficient": 0.7498462846998086,
+          "shell_background_counts": 2214.7308146399055,
+          "cnr": 1.5491521447599061
+        },
+        {
+          "id": "L15",
+          "present": true,
+          "diameter_mm": 52.00836009957069,
+          "nominal_contrast": 6.144564548670897,
+          "moving_mm": [
+            22.614280836795047,
+            31.847594457173813,
+            69.26048521229848
+          ],
+          "local_background_counts": 1146.543945169564,
+          "peak_contrast": 5.535366422434304,
+          "mean_contrast": 5.618372486157329,
+          "recovery_coefficient": 0.8815841223347115,
+          "shell_background_counts": 2248.788779669144,
+          "cnr": 4.646067944766342
+        },
+        {
+          "id": "L16",
+          "present": true,
+          "diameter_mm": 22.02692797829703,
+          "nominal_contrast": 4.9380517681815395,
+          "moving_mm": [
+            95.52640848926012,
+            52.143321279662075,
+            15.126069629051983
+          ],
+          "local_background_counts": 7601.710889117896,
+          "peak_contrast": 2.8249866574072877,
+          "mean_contrast": 1.9193905670366984,
+          "recovery_coefficient": 0.46342373458691366,
+          "shell_background_counts": 2759.8295766904894,
+          "cnr": 14.719577362137471
+        },
+        {
+          "id": "L17",
+          "present": true,
+          "diameter_mm": 26.17584638675609,
+          "nominal_contrast": 9.543890730726513,
+          "moving_mm": [
+            -75.85733853508768,
+            11.479004564064809,
+            107.80027382096898
+          ],
+          "local_background_counts": 2784.924108633859,
+          "peak_contrast": 10.824717601201765,
+          "mean_contrast": 7.560987258379531,
+          "recovery_coefficient": 1.149911429212103,
+          "shell_background_counts": 4440.063188128291,
+          "cnr": 4.770087792702064
+        },
+        {
+          "id": "L18",
+          "present": true,
+          "diameter_mm": 13.7596742399433,
+          "nominal_contrast": 7.330571249856022,
+          "moving_mm": [
+            11.234565653669137,
+            -74.96032818056406,
+            -29.23836922531555
+          ],
+          "local_background_counts": 2064.5505284400647,
+          "peak_contrast": 3.8004599927599347,
+          "mean_contrast": 2.94412465760269,
+          "recovery_coefficient": 0.44237081966712344,
+          "shell_background_counts": 2948.3606557377047,
+          "cnr": 1.5675676536944707
+        },
+        {
+          "id": "L19",
+          "present": true,
+          "diameter_mm": 15.295414814607469,
+          "nominal_contrast": 6.360153814597328,
+          "moving_mm": [
+            32.33762063137553,
+            35.711852745360545,
+            2.508291990139753
+          ],
+          "local_background_counts": 2265.3976703503126,
+          "peak_contrast": 3.61286283799537,
+          "mean_contrast": 2.909322638375255,
+          "recovery_coefficient": 0.48746042154233526,
+          "shell_background_counts": 2555.406360424028,
+          "cnr": 8.219777134507474
+        },
+        {
+          "id": "L20",
+          "present": true,
+          "diameter_mm": 43.94857658179623,
+          "nominal_contrast": 9.818957036364186,
+          "moving_mm": [
+            16.219444882015267,
+            -59.1424127617012,
+            111.20800324512481
+          ],
+          "local_background_counts": 2511.818704391819,
+          "peak_contrast": 9.127522277112059,
+          "mean_contrast": 6.941381632127168,
+          "recovery_coefficient": 0.921596765195583,
+          "shell_background_counts": 1973.4879814653925,
+          "cnr": 24.80347647601465
+        },
+        {
+          "id": "L21",
+          "present": true,
+          "diameter_mm": 39.10073627089824,
+          "nominal_contrast": 3.900466860090067,
+          "moving_mm": [
+            -74.2423280144175,
+            -57.696227344629754,
+            90.68123566433002
+          ],
+          "local_background_counts": 3189.078068823576,
+          "peak_contrast": 3.6035867186706025,
+          "mean_contrast": 2.5973540395406074,
+          "recovery_coefficient": 0.8976440153464654,
+          "shell_background_counts": 2155.1617357001974,
+          "cnr": 7.3970103879551585
+        },
+        {
+          "id": "L22",
+          "present": true,
+          "diameter_mm": 8.18132340398744,
+          "nominal_contrast": 5.220059769870225,
+          "moving_mm": [
+            -80.53163849577739,
+            59.3681726925048,
+            -13.420215255005871
+          ],
+          "local_background_counts": 1595.0466759277556,
+          "peak_contrast": 2.3958159551168134,
+          "mean_contrast": 2.3591786101251606,
+          "recovery_coefficient": 0.3307573899977576,
+          "shell_background_counts": 2273.822138126774,
+          "cnr": 1.359603985403916
+        },
+        {
+          "id": "L23",
+          "present": true,
+          "diameter_mm": 15.093419168194579,
+          "nominal_contrast": 4.339325069561703,
+          "moving_mm": [
+            54.80147012400661,
+            -33.47169592083833,
+            90.49959289744919
+          ],
+          "local_background_counts": 2459.7348849282043,
+          "peak_contrast": 2.6709545106475026,
+          "mean_contrast": 2.140345226000031,
+          "recovery_coefficient": 0.5003868973040174,
+          "shell_background_counts": 2526.3880389429764,
+          "cnr": 3.2212856386924105
+        },
+        {
+          "id": "L24",
+          "present": true,
+          "diameter_mm": 35.09822506374297,
+          "nominal_contrast": 10.285350020204755,
+          "moving_mm": [
+            14.190005531699143,
+            48.995735031474,
+            -75.07242861650975
+          ],
+          "local_background_counts": 1778.134234575596,
+          "peak_contrast": 9.491629492393383,
+          "mean_contrast": 6.898850065956568,
+          "recovery_coefficient": 0.9145190513998664,
+          "shell_background_counts": 2657.951084957705,
+          "cnr": 4.477837273974778
+        },
+        {
+          "id": "L25",
+          "present": true,
+          "diameter_mm": 34.18837237664177,
+          "nominal_contrast": 7.651401199183903,
+          "moving_mm": [
+            105.91097902152887,
+            -30.238892799906353,
+            -9.437418777600925
+          ],
+          "local_background_counts": 2161.044580748132,
+          "peak_contrast": 6.981067054498546,
+          "mean_contrast": 5.024151477162918,
+          "recovery_coefficient": 0.8992191081831593,
+          "shell_background_counts": 1688.0177358490566,
+          "cnr": 19.58199501793044
+        }
+      ],
+      "background_statistics": {
+        "voxels": 55532,
+        "mean_counts": 11.844700191525005,
+        "structure_cv": 0.4303183174421266,
+        "noise_cv": 0.10570682250804637,
+        "total_cv": 0.4460816159375736
+      },
+      "air_statistics": {
+        "voxels": 1282120,
+        "mean_counts": 1.4,
+        "noise_cv": 0.1731662467144446,
+        "fraction_of_body_background": 0.04
+      },
+      "noise_seed": 1052944935,
+      "series_md5": "98e984338601ace4e044d79a41c2530f"
+    },
+    "t00-id-tex-b010": {
+      "series": "GNBP-5N-t00-id-tex-b010",
+      "series_number": 27,
+      "content": "t00",
+      "transform": "id",
+      "background": "tex",
+      "intensity_arm": "b010",
+      "kind": "id + content t00 + background tex + intensity b010",
+      "intensity": {
+        "dose": 1.0,
+        "store": 1.0,
+        "level": 1.0,
+        "offset_stored": 200.0,
+        "offset_fraction_of_body": 0.1,
+        "nominal_body_stored": 2000.0,
+        "recover_scale": 1.0,
+        "recover_offset_stored": -200.0,
+        "fixed_reference": "GNBP-5N-t20-id-tex",
+        "note": "dose scales counts before the Poisson draw (level AND noise move); store scales after the post-filter (level only); offset is a pedestal that no multiplier can remove. background_statistics.mean_counts is divided by the base STORE_SCALE, so it tracks true counts for `dose` but not for `store`/`offset`."
+      },
+      "geometry": {
+        "rows": 128,
+        "columns": 128,
+        "slices": 96,
+        "pixel_spacing_mm": 4.42,
+        "slice_thickness_mm": 4.42,
+        "encoding": "single multi-frame NM instance (RECON TOMO); frames are slices"
+      },
+      "transform_fixed_to_moving": {
+        "matrix_4x4_row_major": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "rotation_centre_mm": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "landmarks": [
+        {
+          "name": "L01",
+          "fixed_mm": [
+            85.3196490992537,
+            23.434354491976848,
+            -79.4601873783405
+          ],
+          "moving_mm": [
+            85.3196490992537,
+            23.434354491976848,
+            -79.4601873783405
+          ],
+          "visible": false
+        },
+        {
+          "name": "L02",
+          "fixed_mm": [
+            -12.102341083692266,
+            23.00379858828586,
+            -106.83944433996011
+          ],
+          "moving_mm": [
+            -12.102341083692266,
+            23.00379858828586,
+            -106.83944433996011
+          ],
+          "visible": false
+        },
+        {
+          "name": "L03",
+          "fixed_mm": [
+            -111.05452872689571,
+            15.927760337855986,
+            72.6423815039542
+          ],
+          "moving_mm": [
+            -111.05452872689571,
+            15.927760337855986,
+            72.6423815039542
+          ],
+          "visible": false
+        },
+        {
+          "name": "L04",
+          "fixed_mm": [
+            57.965000560817344,
+            64.17525593415107,
+            87.28144581304304
+          ],
+          "moving_mm": [
+            57.965000560817344,
+            64.17525593415107,
+            87.28144581304304
+          ],
+          "visible": false
+        },
+        {
+          "name": "L05",
+          "fixed_mm": [
+            -67.3426130390325,
+            31.931059160337526,
+            -59.225235275730796
+          ],
+          "moving_mm": [
+            -67.3426130390325,
+            31.931059160337526,
+            -59.225235275730796
+          ],
+          "visible": false
+        },
+        {
+          "name": "L06",
+          "fixed_mm": [
+            -83.71438628035118,
+            15.22805437655559,
+            23.4575142327742
+          ],
+          "moving_mm": [
+            -83.71438628035118,
+            15.22805437655559,
+            23.4575142327742
+          ],
+          "visible": false
+        },
+        {
+          "name": "L07",
+          "fixed_mm": [
+            42.01100600457585,
+            -49.726994820960385,
+            21.1496948359121
+          ],
+          "moving_mm": [
+            42.01100600457585,
+            -49.726994820960385,
+            21.1496948359121
+          ],
+          "visible": false
+        },
+        {
+          "name": "L08",
+          "fixed_mm": [
+            -35.331523604910146,
+            17.39165385496011,
+            -26.04103843461027
+          ],
+          "moving_mm": [
+            -35.331523604910146,
+            17.39165385496011,
+            -26.04103843461027
+          ],
+          "visible": false
+        },
+        {
+          "name": "L09",
+          "fixed_mm": [
+            12.254796259109781,
+            4.399865083913369,
+            -160.68631093318322
+          ],
+          "moving_mm": [
+            12.254796259109781,
+            4.399865083913369,
+            -160.68631093318322
+          ],
+          "visible": false
+        },
+        {
+          "name": "L10",
+          "fixed_mm": [
+            7.003473878059594,
+            85.31396874086184,
+            -29.99848007622623
+          ],
+          "moving_mm": [
+            7.003473878059594,
+            85.31396874086184,
+            -29.99848007622623
+          ],
+          "visible": false
+        },
+        {
+          "name": "L11",
+          "fixed_mm": [
+            80.57328087279905,
+            -20.95457995568684,
+            -91.7524491921514
+          ],
+          "moving_mm": [
+            80.57328087279905,
+            -20.95457995568684,
+            -91.7524491921514
+          ],
+          "visible": false
+        },
+        {
+          "name": "L12",
+          "fixed_mm": [
+            -9.989582074860778,
+            -10.78618534185955,
+            68.07470852065774
+          ],
+          "moving_mm": [
+            -9.989582074860778,
+            -10.78618534185955,
+            68.07470852065774
+          ],
+          "visible": false
+        },
+        {
+          "name": "L13",
+          "fixed_mm": [
+            -18.27798672714667,
+            -59.14718713005257,
+            -58.90271145228499
+          ],
+          "moving_mm": [
+            -18.27798672714667,
+            -59.14718713005257,
+            -58.90271145228499
+          ],
+          "visible": false
+        },
+        {
+          "name": "L14",
+          "fixed_mm": [
+            2.4855429476726556,
+            -43.461266305881814,
+            152.08984054499575
+          ],
+          "moving_mm": [
+            2.4855429476726556,
+            -43.461266305881814,
+            152.08984054499575
+          ],
+          "visible": false
+        },
+        {
+          "name": "L15",
+          "fixed_mm": [
+            22.614280836795047,
+            31.847594457173813,
+            69.26048521229848
+          ],
+          "moving_mm": [
+            22.614280836795047,
+            31.847594457173813,
+            69.26048521229848
+          ],
+          "visible": false
+        },
+        {
+          "name": "L16",
+          "fixed_mm": [
+            95.52640848926012,
+            52.143321279662075,
+            15.126069629051983
+          ],
+          "moving_mm": [
+            95.52640848926012,
+            52.143321279662075,
+            15.126069629051983
+          ],
+          "visible": false
+        },
+        {
+          "name": "L17",
+          "fixed_mm": [
+            -75.85733853508768,
+            11.479004564064809,
+            107.80027382096898
+          ],
+          "moving_mm": [
+            -75.85733853508768,
+            11.479004564064809,
+            107.80027382096898
+          ],
+          "visible": false
+        },
+        {
+          "name": "L18",
+          "fixed_mm": [
+            11.234565653669137,
+            -74.96032818056406,
+            -29.23836922531555
+          ],
+          "moving_mm": [
+            11.234565653669137,
+            -74.96032818056406,
+            -29.23836922531555
+          ],
+          "visible": false
+        },
+        {
+          "name": "L19",
+          "fixed_mm": [
+            32.33762063137553,
+            35.711852745360545,
+            2.508291990139753
+          ],
+          "moving_mm": [
+            32.33762063137553,
+            35.711852745360545,
+            2.508291990139753
+          ],
+          "visible": false
+        },
+        {
+          "name": "L20",
+          "fixed_mm": [
+            16.219444882015267,
+            -59.1424127617012,
+            111.20800324512481
+          ],
+          "moving_mm": [
+            16.219444882015267,
+            -59.1424127617012,
+            111.20800324512481
+          ],
+          "visible": false
+        },
+        {
+          "name": "L21",
+          "fixed_mm": [
+            -74.2423280144175,
+            -57.696227344629754,
+            90.68123566433002
+          ],
+          "moving_mm": [
+            -74.2423280144175,
+            -57.696227344629754,
+            90.68123566433002
+          ],
+          "visible": false
+        },
+        {
+          "name": "L22",
+          "fixed_mm": [
+            -80.53163849577739,
+            59.3681726925048,
+            -13.420215255005871
+          ],
+          "moving_mm": [
+            -80.53163849577739,
+            59.3681726925048,
+            -13.420215255005871
+          ],
+          "visible": false
+        },
+        {
+          "name": "L23",
+          "fixed_mm": [
+            54.80147012400661,
+            -33.47169592083833,
+            90.49959289744919
+          ],
+          "moving_mm": [
+            54.80147012400661,
+            -33.47169592083833,
+            90.49959289744919
+          ],
+          "visible": false
+        },
+        {
+          "name": "L24",
+          "fixed_mm": [
+            14.190005531699143,
+            48.995735031474,
+            -75.07242861650975
+          ],
+          "moving_mm": [
+            14.190005531699143,
+            48.995735031474,
+            -75.07242861650975
+          ],
+          "visible": false
+        },
+        {
+          "name": "L25",
+          "fixed_mm": [
+            105.91097902152887,
+            -30.238892799906353,
+            -9.437418777600925
+          ],
+          "moving_mm": [
+            105.91097902152887,
+            -30.238892799906353,
+            -9.437418777600925
+          ],
+          "visible": false
+        }
+      ],
+      "displacement": {
+        "sampled_points": 6144,
+        "displacement_mm_mean": 0.0,
+        "displacement_mm_max": 0.0,
+        "displacement_mm_p95": 0.0
+      },
+      "lesion_measurements": [
+        {
+          "id": "L01",
+          "present": true,
+          "diameter_mm": 7.660337093272248,
+          "nominal_contrast": 1.1663856227019618,
+          "moving_mm": [
+            85.3196490992537,
+            23.434354491976848,
+            -79.4601873783405
+          ],
+          "local_background_counts": 2240.016314685154,
+          "peak_contrast": 0.9639296064144849,
+          "mean_contrast": 0.9812428532731201,
+          "recovery_coefficient": -0.21678792313760306,
+          "shell_background_counts": 2081.010669253152,
+          "cnr": 0.23552906031769996
+        },
+        {
+          "id": "L02",
+          "present": true,
+          "diameter_mm": 49.904770178642444,
+          "nominal_contrast": 1.1401772955957101,
+          "moving_mm": [
+            -12.102341083692266,
+            23.00379858828586,
+            -106.83944433996011
+          ],
+          "local_background_counts": 2063.2604791156223,
+          "peak_contrast": 1.1276412550594035,
+          "mean_contrast": 1.079564998863443,
+          "recovery_coefficient": 0.9105701070702474,
+          "shell_background_counts": 2428.5321725965177,
+          "cnr": -0.06229401493842036
+        },
+        {
+          "id": "L03",
+          "present": true,
+          "diameter_mm": 59.481262412951175,
+          "nominal_contrast": 1.194019247012525,
+          "moving_mm": [
+            -111.05452872689571,
+            15.927760337855986,
+            72.6423815039542
+          ],
+          "local_background_counts": 3228.184765019912,
+          "peak_contrast": 0.9689248046672909,
+          "mean_contrast": 0.8342972012371751,
+          "recovery_coefficient": -0.16016552899364156,
+          "shell_background_counts": 1898.531211750306,
+          "cnr": 1.0977544703583169
+        },
+        {
+          "id": "L04",
+          "present": true,
+          "diameter_mm": 34.11227287385631,
+          "nominal_contrast": 1.1936904817405598,
+          "moving_mm": [
+            57.965000560817344,
+            64.17525593415107,
+            87.28144581304304
+          ],
+          "local_background_counts": 895.9297918332226,
+          "peak_contrast": 1.2169921251941962,
+          "mean_contrast": 1.2998264923255352,
+          "recovery_coefficient": 1.120303503012853,
+          "shell_background_counts": 1375.4398793818318,
+          "cnr": -0.4580572036634305
+        },
+        {
+          "id": "L05",
+          "present": true,
+          "diameter_mm": 23.01596526837207,
+          "nominal_contrast": 1.0808784636697848,
+          "moving_mm": [
+            -67.3426130390325,
+            31.931059160337526,
+            -59.225235275730796
+          ],
+          "local_background_counts": 2359.936960893325,
+          "peak_contrast": 1.0515564249558436,
+          "mean_contrast": 0.9923146417917624,
+          "recovery_coefficient": 0.6374555427553752,
+          "shell_background_counts": 2081.3415285943347,
+          "cnr": 0.7092077958990771
+        },
+        {
+          "id": "L06",
+          "present": true,
+          "diameter_mm": 26.16315141451981,
+          "nominal_contrast": 1.1066034509741707,
+          "moving_mm": [
+            -83.71438628035118,
+            15.22805437655559,
+            23.4575142327742
+          ],
+          "local_background_counts": 2938.8173615229307,
+          "peak_contrast": 0.8827815771217111,
+          "mean_contrast": 0.8239516439264514,
+          "recovery_coefficient": -1.0995743740668409,
+          "shell_background_counts": 2928.718929254302,
+          "cnr": -0.31196877091561703
+        },
+        {
+          "id": "L07",
+          "present": true,
+          "diameter_mm": 33.49755154639573,
+          "nominal_contrast": 1.1101160803970123,
+          "moving_mm": [
+            42.01100600457585,
+            -49.726994820960385,
+            21.1496948359121
+          ],
+          "local_background_counts": 1815.4791122033314,
+          "peak_contrast": 0.9878624521376074,
+          "mean_contrast": 1.028408313325769,
+          "recovery_coefficient": -0.11022502634158372,
+          "shell_background_counts": 1766.7129241326725,
+          "cnr": 0.04457123774610319
+        },
+        {
+          "id": "L08",
+          "present": true,
+          "diameter_mm": 25.159229751500526,
+          "nominal_contrast": 1.1010986291067522,
+          "moving_mm": [
+            -35.331523604910146,
+            17.39165385496011,
+            -26.04103843461027
+          ],
+          "local_background_counts": 1791.9007148858511,
+          "peak_contrast": 0.976997754750078,
+          "mean_contrast": 1.1300043237521362,
+          "recovery_coefficient": -0.22752282056795697,
+          "shell_background_counts": 2359.778003041054,
+          "cnr": -1.2000736829954795
+        },
+        {
+          "id": "L09",
+          "present": true,
+          "diameter_mm": 19.26886909961783,
+          "nominal_contrast": 1.1452531142905396,
+          "moving_mm": [
+            12.254796259109781,
+            4.399865083913369,
+            -160.68631093318322
+          ],
+          "local_background_counts": 2469.102811552716,
+          "peak_contrast": 1.1956046450972688,
+          "mean_contrast": 1.2105519700281857,
+          "recovery_coefficient": 1.3466468244254968,
+          "shell_background_counts": 3167.1856971153848,
+          "cnr": -0.07732609789767181
+        },
+        {
+          "id": "L10",
+          "present": true,
+          "diameter_mm": 14.843443685024875,
+          "nominal_contrast": 1.1309505668807842,
+          "moving_mm": [
+            7.003473878059594,
+            85.31396874086184,
+            -29.99848007622623
+          ],
+          "local_background_counts": 448.10373409308465,
+          "peak_contrast": 1.1671938831736832,
+          "mean_contrast": 1.3010380312494636,
+          "recovery_coefficient": 1.2767709766838542,
+          "shell_background_counts": 934.1466380543634,
+          "cnr": -0.6271938288660611
+        },
+        {
+          "id": "L11",
+          "present": true,
+          "diameter_mm": 57.582653262975676,
+          "nominal_contrast": 1.1745143392446669,
+          "moving_mm": [
+            80.57328087279905,
+            -20.95457995568684,
+            -91.7524491921514
+          ],
+          "local_background_counts": 1521.9668060569654,
+          "peak_contrast": 1.120726776223874,
+          "mean_contrast": 1.1418608787293454,
+          "recovery_coefficient": 0.6917871433740271,
+          "shell_background_counts": 1372.4720694033008,
+          "cnr": 0.43260636566984734
+        },
+        {
+          "id": "L12",
+          "present": true,
+          "diameter_mm": 29.83383743353509,
+          "nominal_contrast": 1.0957847657068494,
+          "moving_mm": [
+            -9.989582074860778,
+            -10.78618534185955,
+            68.07470852065774
+          ],
+          "local_background_counts": 1982.7571962603106,
+          "peak_contrast": 1.043321903913744,
+          "mean_contrast": 1.1619905484628694,
+          "recovery_coefficient": 0.4522838636608595,
+          "shell_background_counts": 2730.8844501718213,
+          "cnr": -0.635827322154782
+        },
+        {
+          "id": "L13",
+          "present": true,
+          "diameter_mm": 58.816830938414455,
+          "nominal_contrast": 1.1661478923557054,
+          "moving_mm": [
+            -18.27798672714667,
+            -59.14718713005257,
+            -58.90271145228499
+          ],
+          "local_background_counts": 1859.4019842426592,
+          "peak_contrast": 1.1451755528560528,
+          "mean_contrast": 1.2360780997900807,
+          "recovery_coefficient": 0.8737730632492586,
+          "shell_background_counts": 1758.5449287337326,
+          "cnr": 0.4360975437608584
+        },
+        {
+          "id": "L14",
+          "present": true,
+          "diameter_mm": 20.2747593128218,
+          "nominal_contrast": 1.093077205362092,
+          "moving_mm": [
+            2.4855429476726556,
+            -43.461266305881814,
+            152.08984054499575
+          ],
+          "local_background_counts": 1723.4519550719965,
+          "peak_contrast": 1.0060949237480743,
+          "mean_contrast": 1.004301500556236,
+          "recovery_coefficient": 0.06548245324259169,
+          "shell_background_counts": 1584.6056670602125,
+          "cnr": 0.2198123155486982
+        },
+        {
+          "id": "L15",
+          "present": true,
+          "diameter_mm": 52.00836009957069,
+          "nominal_contrast": 1.1851783784444947,
+          "moving_mm": [
+            22.614280836795047,
+            31.847594457173813,
+            69.26048521229848
+          ],
+          "local_background_counts": 1146.543945169564,
+          "peak_contrast": 1.3555736026102088,
+          "mean_contrast": 1.4375522108513914,
+          "recovery_coefficient": 1.9201680325588781,
+          "shell_background_counts": 2102.740829537281,
+          "cnr": -0.7118569507698853
+        },
+        {
+          "id": "L16",
+          "present": true,
+          "diameter_mm": 22.02692797829703,
+          "nominal_contrast": 1.0669778255765385,
+          "moving_mm": [
+            95.52640848926012,
+            52.143321279662075,
+            15.126069629051983
+          ],
+          "local_background_counts": 7601.710889117896,
+          "peak_contrast": 0.6631182035695833,
+          "mean_contrast": 0.6181007482318268,
+          "recovery_coefficient": -5.029751168100358,
+          "shell_background_counts": 2816.5525013743813,
+          "cnr": 1.6928462762868575
+        },
+        {
+          "id": "L17",
+          "present": true,
+          "diameter_mm": 26.17584638675609,
+          "nominal_contrast": 1.1598664734250976,
+          "moving_mm": [
+            -75.85733853508768,
+            11.479004564064809,
+            107.80027382096898
+          ],
+          "local_background_counts": 2784.924108633859,
+          "peak_contrast": 1.453611247620391,
+          "mean_contrast": 1.3389784157735167,
+          "recovery_coefficient": 2.8374382564517,
+          "shell_background_counts": 2678.099090473911,
+          "cnr": 1.8976065398376982
+        },
+        {
+          "id": "L18",
+          "present": true,
+          "diameter_mm": 13.7596742399433,
+          "nominal_contrast": 1.0504664950069982,
+          "moving_mm": [
+            11.234565653669137,
+            -74.96032818056406,
+            -29.23836922531555
+          ],
+          "local_background_counts": 2064.5505284400647,
+          "peak_contrast": 0.9771627048216478,
+          "mean_contrast": 0.9733495906651741,
+          "recovery_coefficient": -0.4525239007619879,
+          "shell_background_counts": 1801.7988077496275,
+          "cnr": 0.38655384180309554
+        },
+        {
+          "id": "L19",
+          "present": true,
+          "diameter_mm": 15.295414814607469,
+          "nominal_contrast": 1.1601768889053903,
+          "moving_mm": [
+            32.33762063137553,
+            35.711852745360545,
+            2.508291990139753
+          ],
+          "local_background_counts": 2265.3976703503126,
+          "peak_contrast": 0.9970635364310504,
+          "mean_contrast": 1.0447894722155486,
+          "recovery_coefficient": -0.01833262956358239,
+          "shell_background_counts": 2510.6713780918726,
+          "cnr": -0.36965480295653114
+        },
+        {
+          "id": "L20",
+          "present": true,
+          "diameter_mm": 43.94857658179623,
+          "nominal_contrast": 1.1401141852000072,
+          "moving_mm": [
+            16.219444882015267,
+            -59.1424127617012,
+            111.20800324512481
+          ],
+          "local_background_counts": 2511.818704391819,
+          "peak_contrast": 1.0729040986206064,
+          "mean_contrast": 1.0420953033479197,
+          "recovery_coefficient": 0.5203191847887411,
+          "shell_background_counts": 1910.9620619750942,
+          "cnr": 1.0489152891776055
+        },
+        {
+          "id": "L21",
+          "present": true,
+          "diameter_mm": 39.10073627089824,
+          "nominal_contrast": 1.1788661468896722,
+          "moving_mm": [
+            -74.2423280144175,
+            -57.696227344629754,
+            90.68123566433002
+          ],
+          "local_background_counts": 3189.078068823576,
+          "peak_contrast": 0.9692506068118403,
+          "mean_contrast": 0.9787744924375208,
+          "recovery_coefficient": -0.17191287296598667,
+          "shell_background_counts": 2150.4526627218934,
+          "cnr": 0.7515401348098604
+        },
+        {
+          "id": "L22",
+          "present": true,
+          "diameter_mm": 8.18132340398744,
+          "nominal_contrast": 1.1374960547426685,
+          "moving_mm": [
+            -80.53163849577739,
+            59.3681726925048,
+            -13.420215255005871
+          ],
+          "local_background_counts": 1595.0466759277556,
+          "peak_contrast": 1.473849962235769,
+          "mean_contrast": 1.4922760793915528,
+          "recovery_coefficient": 3.4462804269010165,
+          "shell_background_counts": 2281.6726584673606,
+          "cnr": 0.0635041887274402
+        },
+        {
+          "id": "L23",
+          "present": true,
+          "diameter_mm": 15.093419168194579,
+          "nominal_contrast": 1.0593509997369857,
+          "moving_mm": [
+            54.80147012400661,
+            -33.47169592083833,
+            90.49959289744919
+          ],
+          "local_background_counts": 2459.7348849282043,
+          "peak_contrast": 0.9625388444728663,
+          "mean_contrast": 1.071734126443779,
+          "recovery_coefficient": -0.631179857005662,
+          "shell_background_counts": 2302.800417246175,
+          "cnr": 0.15432981908971172
+        },
+        {
+          "id": "L24",
+          "present": true,
+          "diameter_mm": 35.09822506374297,
+          "nominal_contrast": 1.0934741670477806,
+          "moving_mm": [
+            14.190005531699143,
+            48.995735031474,
+            -75.07242861650975
+          ],
+          "local_background_counts": 1778.134234575596,
+          "peak_contrast": 1.1245848725936243,
+          "mean_contrast": 1.0881651486596147,
+          "recovery_coefficient": 1.3328267748022946,
+          "shell_background_counts": 1739.0996689959543,
+          "cnr": 0.4319460442035051
+        },
+        {
+          "id": "L25",
+          "present": true,
+          "diameter_mm": 34.18837237664177,
+          "nominal_contrast": 1.1715777631952211,
+          "moving_mm": [
+            105.91097902152887,
+            -30.238892799906353,
+            -9.437418777600925
+          ],
+          "local_background_counts": 2161.044580748132,
+          "peak_contrast": 1.1387853233948464,
+          "mean_contrast": 1.0519815521209857,
+          "recovery_coefficient": 0.8088770992831775,
+          "shell_background_counts": 1660.1528301886792,
+          "cnr": 1.1680375609496039
+        }
+      ],
+      "background_statistics": {
+        "voxels": 55532,
+        "mean_counts": 11.844530521649187,
+        "structure_cv": 0.43032125927440956,
+        "noise_cv": 0.10517348589176775,
+        "total_cv": 0.4421732342182179
+      },
+      "air_statistics": {
+        "voxels": 1282120,
+        "mean_counts": 1.4,
+        "noise_cv": 0.17266074667882492,
+        "fraction_of_body_background": 0.04
+      },
+      "noise_seed": 2359845154,
+      "series_md5": "67489bc7d5687187cc43933f578a9236"
     }
   }
 }

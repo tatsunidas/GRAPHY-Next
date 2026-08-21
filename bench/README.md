@@ -450,6 +450,15 @@ python3 check_5n_nm.py --phantom ./phantom              # NM 幾何が真値と�
 実測（2026-08-20、18 系列）: 病変位置 120 点で一致、**体の重心は公開した変換の予測と平均
 0.29mm・最悪 0.54mm**。
 
+### 読み取り器は `nmVolume.mjs` に切り出してある
+
+GNBP が書き出す DICOM を読む最小の読み取り器は、元は `run_rigid_registration.mjs` の中にあった。
+GNBP-5N を使う採点が位置合わせ以外にも増えた（サブトラクションの強度正規化ほか）ため、
+**同じ読み取り器を 2 つ書かないよう** `nmVolume.mjs` へ移してある（中身は動かしていない）。
+
+⚠️ **汎用の DICOM パーサにはしないこと。** ここが一般化すると、アプリが持っている実装の 2 本目になり、
+失敗したときに「エンジンが悪いのかベンチのパーサが悪いのか」が分からなくなる。
+
 ### 採点とエンジン実行
 
 真値 JSON のキー構造と変形の閉形式を GNBP-2R に合わせてあるので、**`score_registration.mjs` を
@@ -570,6 +579,18 @@ pydicom 3.0.2 で確認。GNBP-XA・1A・2R とも記録済み MD5 と完全一�
   **cp932 で書けてしまい次回の読み込みが `UnicodeDecodeError` になる**（`make_phantom_4d.py`）。
   後者は**その場では成功したように見える**のが厄介。2026-08-17 に 4 本とも修正済み。
   なお**コンソール表示が文字化けするのは表示だけの問題**で、ファイルの中身は UTF-8。
+
+**JS のハーネス（`run_rigid_registration.mjs`）も Windows で動くようにした**（2026-08-21）。
+それまで 3 か所で落ちていた:
+
+- `new URL("..", import.meta.url).pathname` を `resolve()` に渡すと `C:\C:\Users\...` になる
+  （pathname が `/C:/Users/...` なので `resolve` がドライブを前置する）。`fileURLToPath` を通す
+- `node_modules/.bin/esbuild` は Windows では拡張子なしのシェル用ラッパで、`execFileSync` からは
+  起動できない。`.cmd` を選ぶ
+- Windows の絶対パスはそのまま `import()` できない（`c:` がスキーム扱いになる）。`pathToFileURL` を通す
+
+実行確認: `--fixed t20-id-tex --series t25-id-tex --metric nmi` で TRE 2.637mm
+（下の「初回実測」の表と同水準）。
 
 ## ファイル
 
