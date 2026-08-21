@@ -31,6 +31,15 @@ import {
   type Types,
 } from "@cornerstonejs/core";
 import { ENGINE_ID } from "../viewer/Viewer2D";
+import {
+  ToolGroupManager,
+  TrackballRotateTool,
+  PanTool,
+  ZoomTool,
+  WindowLevelTool,
+  StackScrollTool,
+  Enums as csToolsEnums,
+} from "@cornerstonejs/tools";
 import { reapplyModeRendering, removeVolumeSafe } from "../viewer/volumeRender";
 import { geomFromIndexToWorld } from "./pluginMeshApi";
 import { createValueStack, releaseValueStack, autoWindow } from "./pluginVolumeScheme";
@@ -172,6 +181,7 @@ export async function mountValueViewport(
   });
 
   const viewportId = nextId(`plugin-vp-${pluginId}`);
+  const toolGroupId = nextId(`plugin-vp-tg-${pluginId}`);
   engine.enableElement({
     viewportId,
     type: Enums.ViewportType.STACK,
@@ -189,6 +199,7 @@ export async function mountValueViewport(
     },
     ...colormapProperty(opts.colormap),
   });
+  attachTools(toolGroupId, viewportId, "2d");
   viewport.render();
 
   let destroyed = false;
@@ -213,6 +224,7 @@ export async function mountValueViewport(
       destroyed = true;
       // 順番が大事: ビューポートを外してからスタックを捨てる。逆にすると
       // 描画中のスライスがキャッシュから消えて例外になる。
+      releaseTools(toolGroupId);
       try {
         engine.disableElement(viewportId);
       } catch {
@@ -243,6 +255,7 @@ async function mount3D(
   volumeId: string,
   mode: PluginVolumeViewMode,
   preset: string | undefined,
+  toolGroupId: string,
 ): Promise<void> {
   const isVr = mode === "VR";
   engine.enableElement({
@@ -260,7 +273,63 @@ async function mount3D(
   await vp.setVolumes([{ volumeId }]);
   reapplyModeRendering(engine, viewportId, mode as Any, "OT", preset, volumeId);
   vp.resetCamera?.();
+  attachTools(toolGroupId, viewportId, "3d");
   engine.renderViewports([viewportId]);
+}
+
+const { MouseBindings } = csToolsEnums;
+
+/**
+ * 貸したビューポートにマウス操作を付ける。
+ *
+ * 🔴 **プラグイン専用のツールグループを作り、そのビューポートだけを入れる。**
+ * 本体のツールグループへ足すと、本体のタイルの操作割り当てまで変わってしまう。
+ * `setup3DViewport` を共有エンジンに対して呼んで他の面を消した件と同じ性質の事故になる。
+ *
+ * ⚠️ 前回 `setup3DViewport` を使うのをやめたとき、ここまで一緒に落としてしまい
+ * **3D が回せなくなった**（実機で指摘を受けた）。表示だけ移して操作を忘れない。
+ */
+function attachTools(toolGroupId: string, viewportId: string, kind: "2d" | "3d"): void {
+  try {
+    if (ToolGroupManager.getToolGroup(toolGroupId)) {
+      ToolGroupManager.destroyToolGroup(toolGroupId);
+    }
+    const tg = ToolGroupManager.createToolGroup(toolGroupId);
+    if (!tg) return;
+    tg.addTool(PanTool.toolName);
+    tg.addTool(ZoomTool.toolName);
+    tg.addTool(WindowLevelTool.toolName);
+    if (kind === "3d") tg.addTool(TrackballRotateTool.toolName);
+    else tg.addTool(StackScrollTool.toolName);
+    tg.addViewport(viewportId, ENGINE_ID);
+
+    // 割り当ては本体の 3D ビューアと揃える: 左=回転（2D はスライス送り）/ 中=Pan /
+    // ホイール=Zoom（2D はスライス送り）/ 右=W/L。
+    tg.setToolActive(kind === "3d" ? TrackballRotateTool.toolName : StackScrollTool.toolName, {
+      bindings: [{ mouseButton: MouseBindings.Primary }],
+    });
+    tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
+    tg.setToolActive(
+      kind === "3d" ? ZoomTool.toolName : StackScrollTool.toolName,
+      { bindings: [{ mouseButton: MouseBindings.Wheel }] },
+    );
+    tg.setToolActive(WindowLevelTool.toolName, {
+      bindings: [{ mouseButton: MouseBindings.Secondary }],
+    });
+  } catch (e) {
+    // 操作が付かなくても表示は続ける（**黙って落とさず**理由は残す）。
+    console.warn(`[plugin-viewport] could not attach tools to ${viewportId}`, e);
+  }
+}
+
+function releaseTools(toolGroupId: string): void {
+  try {
+    if (ToolGroupManager.getToolGroup(toolGroupId)) {
+      ToolGroupManager.destroyToolGroup(toolGroupId);
+    }
+  } catch {
+    /* 既に無ければ何もしない */
+  }
 }
 
 /**
@@ -309,6 +378,7 @@ export async function mountVolumeView(
 
   const volumeId = nextId(`pluginVolume:${pluginId}`);
   const viewportId = nextId(`plugin-3d-${pluginId}`);
+  const toolGroupId = nextId(`plugin-3d-tg-${pluginId}`);
 
   (volumeLoader.createLocalVolume as Any)(volumeId, {
     metadata: {
@@ -332,18 +402,19 @@ export async function mountVolumeView(
     scalarData,
   });
 
-  await mount3D(engine, el as HTMLDivElement, viewportId, volumeId, mode, opts.preset);
+  await mount3D(engine, el as HTMLDivElement, viewportId, volumeId, mode, opts.preset, toolGroupId);
 
   let destroyed = false;
   return {
     async setMode(next: PluginVolumeViewMode) {
       if (destroyed) return;
       mode = next;
-      await mount3D(engine, el as HTMLDivElement, viewportId, volumeId, mode, opts.preset);
+      await mount3D(engine, el as HTMLDivElement, viewportId, volumeId, mode, opts.preset, toolGroupId);
     },
     destroy() {
       if (destroyed) return;
       destroyed = true;
+      releaseTools(toolGroupId);
       try {
         engine.disableElement(viewportId);
       } catch {
