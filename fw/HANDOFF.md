@@ -1,10 +1,11 @@
 # GRAPHY-Next 引き継ぎドキュメント
 
-> 更新日: 2026-08-20（**再開はすぐ下の「▶ ここから再開」から**）
-> 主題: **アンギオ（XA）**。A4c（密度計測）完了後の**後始末**を閉じた——
-> ドキュメントと**ユーザ向け注記**が半値法のまま「径は 13% 過小」と言い続けていたのを、
-> **径の測り方で切り替える**ように直した（`26dcff0`）。**この変更は実機未検証**。
-> 次の一手は **今回の変更の実機確認**→ **GSPS 読み込み／校正値の永続化／MP4 書き出し**。
+> 更新日: 2026-08-21（**再開はすぐ下の「▶ ここから再開」から**）
+> 主題: **Fusion のカーソル値を二段（前景／背景）にした**（`26b473a`・実機確認済み）。
+> 位置合わせが掛かっていれば前景はワープ後・補間後の値。正本 `fw/fusion-overlay-design.md` §5。
+> 次の一手は **2D ビューア「解析」メニューの サブトラクション 機能**（設計から。GNBP-5N で検証）。
+> 🔴 **アンギオの積み残し**: `26dcff0`（注記を径の測り方で切り替え）は**まだ実機未検証**。
+> その後は **GSPS 読み込み／校正値の永続化／MP4 書き出し**。
 
 > 🚀 **v0.2.0 をリリースした（2026-08-20・タグ `v0.2.0` = `b438e14`）**
 > v0.1.16 以降 55 コミット・163 ファイル・+41,731 行。**アンギオ（XA）一式が丸ごと入る**ため
@@ -44,7 +45,7 @@
 
 ---
 
-## ▶ ここから再開（2026-08-20 時点のまとめ）
+## ▶ ここから再開（2026-08-21 時点のまとめ）
 
 > このブロックは**中断のたびに上書きする**。下の日付つきログは変更履歴なので消さない。
 
@@ -52,36 +53,65 @@
 
 | | |
 | :- | :- |
-| origin/main | **`26dcff0`**（`fix(angio): 系統誤差の注記を径の測り方で切り替える`）。直前は `d02836e`（同件のドキュメント）／`15d287e`（**別セッションのプラグイン host API H10/H21/H28**）|
+| origin/main | **`26b473a`**（`feat(fusion): カーソル値を二段（前景／背景）にして同時に出す`）。直前は `79d43e6`（PR #131・GNBP-5N）|
 | 未 push の作業 | **無い**（作業ツリーは clean）。**open な PR も 0 件** |
-| ローカルブランチ | `main`（`gn-h5` がチェックアウト・`origin/main` と同一）と `docs/angio-status-sync`（**push 済み＝`origin/main` と同一コミット**。GRAPHY-Next 直下がこれを見ている）。`feat/angio-a6b` は**削除した**（`main` に完全に含まれていたため）|
+| ローカルブランチ | **`main` のみ**（`origin/main` と同一）。`feat/video-roi-frame-mode`（PR #69・`main` に完全に含まれ、リモートは削除済み）は**削除した**|
+| ワークツリー | **無し**。`.claude/worktrees/` の `video-roi-frame-mode` と `loop-engineering-foundation` は**どちらも clean・`main` に完全に含まれる**ことを確認して除去した（2026-08-21）|
 | リモートブランチ | `origin/main` **のみ**。⚠️ 古い clone には remote-tracking ref が大量に残っていることがあるので `git fetch --prune` で消す |
 | `CLAUDE.md`（backyard）| **`b4eaf40` を push 済み**。⚠️ **別マシンからの `ee388d4` と衝突したので rebase で統合した**（相手の「更新通知メールは止血済み」を残し、こちらのアンギオ／host API を足した）。backyard は**別 PC が先に進んでいることがある**ので、push 前に `git backyard fetch` |
 | 公開デモ | 夜間リセットで main の最新版になる。**アンギオ一式（QCA・QVA・3D QCA・分岐部・ランチャー）が載っている** |
 
-**この中断は Linux 機（`gn-h5` / `gn-fixes` / `gn-hostapi` ワークツリーがある機）で行った。** その機の事情:
+**この中断は Windows 機で行った。** その機の事情:
 
-- **`main` は `gn-h5` がチェックアウトしている**ので `GRAPHY-Next` 直下で `main` に立てられない。
-  main を進めるときは「作業ブランチでコミット → push（`git push origin HEAD:main`）→
-  `gn-h5` で `git merge --ff-only origin/main`」。**今回もその手順。**
-  ⚠️ **`GRAPHY-Next` 直下を detached HEAD のまま放置しない**（今回一度なった。ブランチを切ること）。
-- 🔴 **他セッションが `gn-hostapi` で作業中**（Vite が port 18093 で稼働）。**止めない・
-  ワークツリーを外さない。** `gn-fixes` には**6 日前の孤児 Vite（port 5176）**が残っている。
-  ⚠️ 自分で dev server を上げるなら**ポートが空いているか先に見る**（`.vite` の競合になる）。
-- 検証データは**生成済み**（`bench/phantom/GNBP-XA` に 18 ファイル＋`truth.json`）。
-  **GNBP-XA-2 は 2026-08-18 に作り直してある**（md5 `cd6026ca3332f6c8990b7551e4b9f2b9`）。
-- backend の jar は `c04a61b` の内容でビルド済み。🔴 **`26dcff0` を含んでいないので、
-  実機検証の前に `mvn -q -Dfrontend.skip=true -DskipTests package` をやり直すこと。**
+- `GRAPHY-Next` 直下が `main` を直接チェックアウトしている（ワークツリー無し）。
+  **`main` へ直接コミット → `git push origin main`** で進められる。
+- 実機確認は **`npm run dev-desktop`**（`scripts\dev-desktop.bat`）。backend の Maven ビルド →
+  Vite `:5173` → Electron まで自動で、Electron を閉じると Vite も止まる。
+  ⚠️ **Git Bash から `.bat` を叩くなら `MSYS_NO_PATHCONV=1 cmd.exe /c "scripts\dev-desktop.bat"`**。
+  これを付けないと MSYS が `/c` をパスに変換して cmd が対話シェルとして開き、**何も実行せず
+  exit 0 で返る**（成功に見えるので気づきにくい。2026-08-21 に踏んだ）。
+- Electron 起動時のログに出る `Request Autofill.enable failed` は **DevTools のノイズ**。
+  アプリとは無関係なので、ログを grep するときは除外してよい。
+- 検証データは生成済みだが **GNBP-XA-2 だけ古い**ので `python make_phantom_xa.py --series dsa --force`
+  で作り直すこと（これをしないと `xaDsaPhantomCheck` が真値と合わない）。
+  **GNBP-1B（性能系列・約 484MB）は無い**——性能の記録は Linux ベンチ機の値なので、
+  この機で測っても比較にならないと判断して作っていない。要るなら `make_phantom_b.py` 一発。
+- Python は Anaconda（3.11.7）。**Git Bash の `python` は WindowsApps のスタブなので使えない**
+  （`bench/README.md` の「Windows で生成する場合」）。
 
-> **Windows 機の事情**（2026-08-18 その 1 の中断時点。あちらで再開するなら）:
-> 検証データは生成済みだが **GNBP-XA-2 だけ古い**ので `python make_phantom_xa.py --series dsa --force`
-> で作り直すこと（これをしないと `xaDsaPhantomCheck` が真値と合わない）。
-> **GNBP-1B（性能系列・約 484MB）は無い**——性能の記録は Linux ベンチ機の値なので、
-> あの機で測っても比較にならないと判断して作っていない。要るなら `make_phantom_b.py` 一発。
-> Python は Anaconda（3.11.7）。**Git Bash の `python` は WindowsApps のスタブなので使えない**
-> （`bench/README.md` の「Windows で生成する場合」）。
+> **Linux 機（`gn-h5` / `gn-fixes` / `gn-hostapi` ワークツリーがある機）の事情**（あちらで再開するなら）:
+> **`main` は `gn-h5` がチェックアウトしている**ので `GRAPHY-Next` 直下で `main` に立てられない。
+> main を進めるときは「作業ブランチでコミット → push（`git push origin HEAD:main`）→
+> `gn-h5` で `git merge --ff-only origin/main`」。
+> ⚠️ **`GRAPHY-Next` 直下を detached HEAD のまま放置しない**（2026-08-20 に一度なった）。
+> 🔴 **他セッションが `gn-hostapi` で作業していた**（Vite が port 18093）。**止めない・
+> ワークツリーを外さない。** `gn-fixes` には**孤児 Vite（port 5176）**が残っている。
+> backend の jar は `c04a61b` の内容でビルド済みで **`26dcff0` を含んでいない**ので、
+> 実機検証の前に `mvn -q -Dfrontend.skip=true -DskipTests package` をやり直すこと。
 
-### 2. このセッションで閉じたこと（2026-08-19〜20）— **A4c の後始末（注記の食い違い）**
+### 2. このセッションで閉じたこと（2026-08-21）— **Fusion のカーソル値を二段にした**
+
+**Fusion では画面に 2 つの画像が重なっているのに、状態バーの「値」は背景（base）しか
+出していなかった。** 前景の値は `FusionImageViewer` が再構成した配列の中にしか無く、
+`Viewer2D` からは覗けない構造だった（`26b473a`）。
+
+- base ビューポート ID をキーにした置き場 `viewer/fusionProbe.ts` を挟み、オーバーレイが
+  載っている間だけ「値」を**上下 2 段（前景／背景）**にして**同時に**出す。
+- 🔑 **前景の値は `computeFusionSlice` の出力をそのまま読む。** 位置合わせ（自動 R3 ／
+  手動 R1）が掛かっていれば**ワープ後・補間後**の値になり、**描画と数値が必ず一致する**。
+  数値のために別経路で再計算しない、というのがこの設計の要点。
+- ⚠️ **購読通知は着脱のときだけ**。値の差し替えで通知すると、スライス送り・W/L 変更のたびに
+  base が再レンダする（`FusionImageViewer` の「レンダプロップ内で毎レンダ別関数 →
+  無限ループ」と同じ落とし穴）。値はカーソル移動時に pull で読む。
+- 背景側の `data-testid` は `status-value` のまま据え置き（既存セレクタを壊さない）。
+  前景側は `status-value-fg`。
+- **検証**: typecheck / typecheck:portable / vitest 918（新規 `fusionProbe.test.ts` 8 件）/ build、
+  **および Electron 実機での目視確認**（ユーザ確認済み）。
+- 正本は `fw/fusion-overlay-design.md` §5。
+
+併せて**ブランチとワークツリーを掃除した**（§1 の表）。
+
+### 3. 前のセッションで閉じたこと（2026-08-19〜20）— **A4c の後始末（注記の食い違い）**
 
 **A4c で報告する径は密度計測になったのに、説明のほうが半値法のまま残っていた。**
 ドキュメントとコードの両方で「径は約 13% 過小」と言い続けており、**数値は密度計測なのに
@@ -106,7 +136,7 @@ frontend typecheck・vitest 906・build。🔴 **実機は未**（automator を�
 今回は出口が 4 つ（レポート・3D QCA 画面・3D QCA の SR・QVA の画面と SR）あり、
 **1 つだけ正しくて 3 つが古い**という状態が 1 日以上続いていた。
 
-### 3. 前のセッションで閉じたこと（2026-08-18）— **A4c を完了した**
+### 4. 前のセッションで閉じたこと（2026-08-18）— **A4c を完了した**
 
 `qca.ts` に密度計測を実装し、**報告する径**を半値法から置き換えた（輪郭は半値法のまま）。
 実機 `xaPhantomCheck` **93 合格・退行 0・未達 2**（従来 67/0/17）。
@@ -130,7 +160,7 @@ frontend typecheck・vitest 906・build。🔴 **実機は未**（automator を�
   （`qca.test.ts` の `SLAB` / `qva.test.ts`）。切らずに回すと「箱の幅」と「面積等価直径」
   という**別の量**を比べることになる。§16.4 が名指しした罠そのもの。
 
-### 4. 前のセッションで閉じたこと（2026-08-18 その 2）— **DSA の体動を初めて数値で測った**
+### 5. 前のセッションで閉じたこと（2026-08-18 その 2）— **DSA の体動を初めて数値で測った**
 
 `automator/src/spike/xaDsaPhantomCheck.ts` を作り、GNBP-XA-2 に注入した体動を
 アプリの自動位置合わせで回収できるか測った。**実機 17 合格 / 退行 0 / 未達 0**。
@@ -150,7 +180,7 @@ frontend typecheck・vitest 906・build。🔴 **実機は未**（automator を�
 ④は「**合わせる前は残差が大きい**」を検査に入れたから掴めた——「合わせた後が良い」だけを
 見ていたら、ずれていない状態から始めても通ってしまう。
 
-### 5. 前のセッションで閉じたこと（2026-08-17）
+### 6. 前のセッションで閉じたこと（2026-08-17）
 
 **① 検証環境を Windows 機に立て直し、3 本とも基準値を取り直した。**
 ファントム再生成（**記録済み MD5 と全件一致**）→ backend package → スパイク。
@@ -174,7 +204,7 @@ frontend typecheck・vitest 906・build。🔴 **実機は未**（automator を�
 | バグ | bench の生成器 4 本が Windows で落ちる／静かに cp932 で書く |
 | バグ | `GNBP-4D_manifest.json` と `GNBP-2R_ground_truth.json` が**古い生成器の記録のまま**だった |
 
-### 6. 次にやること（この順で迷わない）
+### 7. 次にやること（この順で迷わない）
 
 0. 🔴 **`26dcff0`（注記の切り替え）の実機確認**。backend を package し直してから
    `xaPhantomCheck` / `xa3dQcaCheck` を回し、**密度計測のときに「13%」が画面と SR に
@@ -199,7 +229,7 @@ frontend typecheck・vitest 906・build。🔴 **実機は未**（automator を�
 `CLAUDE.md` に「未実施」と書かれた時期があったが**古い記述**で、2026-08-17 に直した。
 残っているのはプライバシーポリシーへの利用目的の記載確認だけ（別リポジトリ・ブロッカーでない）。
 
-### 7. 再開の手順
+### 8. 再開の手順
 
 ```bash
 cd frontend && npm run typecheck && npm test && npm run build
@@ -220,7 +250,7 @@ cd automator && npx tsx src/spike/xaBifurcationCheck.ts    # A6b（46/0/5 → 48
 > 生成物はプラットフォームに依らず**記録済み MD5 と一致する**ことを 2026-08-17 に確認した
 > （Windows 11 / Python 3.11.7 / pydicom 3.0.2）。Windows 固有の手順は `bench/README.md`。
 
-### 8. 分かっている落とし穴
+### 9. 分かっている落とし穴
 
 - 🚨 **スパイクのドラッグの長さは CSS px で決める**（2026-08-17 に踏んだ）。
   `dragOnCanvasHost` は `getBoundingClientRect` / `clientX` ＝ **CSS px** なのに、
