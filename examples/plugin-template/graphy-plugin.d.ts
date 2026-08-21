@@ -365,6 +365,89 @@ export interface PluginRegistrationResult {
   transform: unknown;
 }
 
+// ── H30〜H33: 「見せる」側の貸し出し（**0.2.1 以降**） ───────────────────────
+
+/** プラグイン専用ウィンドウのハンドル（H30）。 */
+export interface PluginWindowHandle {
+  /** プラグインが自由に使ってよい DOM。ここより外は触らない。 */
+  container: HTMLElement;
+  close(): void;
+  /** 閉じられたときに呼ばれる（ユーザーが × を押した場合も含む）。 */
+  onClose(listener: () => void): void;
+  readonly closed: boolean;
+}
+
+export interface PluginWindowOptions {
+  title?: string;
+  width?: number;
+  height?: number;
+}
+
+/** プラグインが作った値ボリューム（`PluginVolume` の部分集合）。 */
+export interface PluginValueVolume {
+  /** z-major のフラット配列（長さ nx·ny·nz）。`NaN` は「データ無し」。 */
+  data: Float32Array;
+  dims: [number, number, number];
+  /** index (i,j,k,1) → 患者 LPS mm。row-major 4×4。 */
+  indexToWorld: number[];
+  unit?: string;
+}
+
+export interface PluginViewportOptions {
+  /** 表示窓。省略時は値域の 1〜99% から決める。 */
+  window?: { center: number; width: number };
+  /** 本体の LUT 名（例 "Hot_Iron"）。省略/null はグレースケール。 */
+  colormap?: string | null;
+  sliceIndex?: number;
+}
+
+export interface PluginViewportHandle {
+  setSlice(index: number): void;
+  getSlice(): number;
+  setWindowLevel(center: number, width: number): void;
+  destroy(): void;
+}
+
+export type PluginVolumeViewMode = "MIP" | "MINIP" | "VR";
+
+export interface PluginVolumeViewHandle {
+  setMode(mode: PluginVolumeViewMode): Promise<void>;
+  destroy(): void;
+}
+
+/** メッシュ化して測るマスク（H33）。0=背景, >0=セグメント番号。 */
+export interface PluginMaskInput {
+  data: Uint8Array;
+  dims: [number, number, number];
+  indexToWorld: number[];
+}
+
+export interface PluginMeshOptions {
+  /** 測るセグメント番号。省略時はマスクに出てくる番号すべて。 */
+  segments?: number[];
+  /** 平滑化反復数（0 で無効）。既定 15。 */
+  smoothIterations?: number;
+  passBand?: number;
+}
+
+export interface PluginMeshMeasurement {
+  segment: number;
+  voxelCount: number;
+  /** ボクセル数 × 1 ボクセルの体積。 */
+  voxelVolumeMm3: number;
+  voxelVolumeMl: number;
+  /** メッシュ（平滑化後の曲面）の体積。**ボクセル数の体積とは一致しない**。 */
+  meshVolumeMm3: number;
+  meshVolumeMl: number;
+  surfaceAreaMm2: number;
+  /** 主径 [長径, 中径, 短径]（mm・PCA 軸への投影範囲）。 */
+  diameters: [number, number, number];
+  numTriangles: number;
+  numPoints: number;
+  boundsMin: [number, number, number];
+  boundsMax: [number, number, number];
+}
+
 interface PluginHostBase {
   /** 自分の plugin.json の id。 */
   pluginId: string;
@@ -540,6 +623,53 @@ export interface Viewer2DPluginHost extends PluginHostBase {
   ) => Promise<PluginStoreSaveResult>;
   /** **このプラグイン専用の保存領域**を消す。**0.1.12 以降**。 */
   deleteStore: (patientKey?: string) => Promise<boolean>;
+  /**
+   * **専用ウィンドウを開く**（H30・**0.2.1 以降**）。本体が窓を開き、**中身の DOM だけ貸す**。
+   *
+   * <p>同じ文書の中に浮かぶ窓である（OS のウィンドウではない）。別文書にすると
+   * `container: HTMLElement` を渡せず、Cornerstone の単一 RenderingEngine 前提も崩れるため。
+   *
+   * <p>タイトルバーには**プラグイン名が必ず出る**（消せない）。閉じたら本体が後始末し、
+   * その窓に貸したビューポートも一緒に落ちる。
+   */
+  openWindow: (opts?: PluginWindowOptions) => PluginWindowHandle;
+  /**
+   * **値ボリュームを 2D ビューポートとして表示する**（H31・**0.2.1 以降**）。
+   * W/L・パン/ズーム・スライス送りは本体の実装がそのまま効く。
+   *
+   * <p>幾何とメタデータは `referenceTileId` が表示しているシリーズへ委譲するので、
+   * 参照線・向きマーカー・座標同期が元シリーズと一致する。
+   *
+   * <p>🔴 **ボリュームの k と参照シリーズのスライスは 1:1 で対応していること。**
+   * 並びが違うと「ずれた絵」ではなく**「もっともらしいが別スライスの絵」**になり、見て気付けない。
+   * `getPixelData()` で数枚読み比べてから渡すこと。
+   *
+   * <p>値は**校正済みのまま**扱われる（Modality LUT は恒等）。生の格納値を渡さないこと。
+   */
+  mountViewport: (
+    el: HTMLElement,
+    volume: PluginValueVolume,
+    referenceTileId: string | undefined,
+    opts?: PluginViewportOptions,
+  ) => Promise<PluginViewportHandle | null>;
+  /**
+   * **値ボリュームを 3D（MIP / MINIP / VR）で表示する**（H32・**0.2.1 以降**）。
+   *
+   * <p>🔴 `NaN` は投影の前に潰される（MIP なら最小値、MINIP なら最大値で埋める）。
+   * 「データが無い」ところが投影で勝たないようにするため。`background` で変えられる。
+   */
+  mountVolumeView: (
+    el: HTMLElement,
+    volume: PluginValueVolume,
+    opts?: { mode?: PluginVolumeViewMode; background?: number; preset?: string },
+  ) => Promise<PluginVolumeViewHandle | null>;
+  /**
+   * **マスクをメッシュ化して測る**（H33・**0.2.1 以降**）。セグメントごとに別のメッシュにする。
+   *
+   * <p>🔴 返る体積は 2 種類ある。`voxelVolumeMm3`（数え上げ）と `meshVolumeMm3`
+   * （平滑化した曲面）は**一致しない**。どちらが正しいでもないので両方返す。
+   */
+  measureMask: (mask: PluginMaskInput, opts?: PluginMeshOptions) => PluginMeshMeasurement[];
   /**
    * 計測を **DICOM SR（構造化レポート）** として保存する。**0.1.12 以降**。
    *

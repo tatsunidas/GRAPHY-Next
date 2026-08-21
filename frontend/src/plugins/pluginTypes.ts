@@ -6,6 +6,15 @@
 // フロント面と /api/plugins の契約は standalone / web 両モード共通。
 import type { ViewerActions } from "../viewer2d/Viewer2DToolbar";
 import type { PluginStoreDoc, PluginStoreSaveResult } from "./pluginStore";
+import type { PluginWindowHandle, PluginWindowOptions } from "./pluginWindowApi";
+import type {
+  PluginValueVolume,
+  PluginViewportHandle,
+  PluginViewportOptions,
+  PluginVolumeViewHandle,
+  PluginVolumeViewMode,
+} from "./pluginViewportApi";
+import type { PluginMaskInput, PluginMeshMeasurement, PluginMeshOptions } from "./pluginMeshApi";
 import type {
   ViewerDerivedSeriesRequest,
   ViewerDerivedSeriesResult,
@@ -22,6 +31,16 @@ import type {
 } from "../viewer/viewerCommands";
 
 export type { PluginStoreDoc, PluginStoreSaveResult };
+
+export type { PluginWindowHandle, PluginWindowOptions } from "./pluginWindowApi";
+export type {
+  PluginValueVolume,
+  PluginViewportHandle,
+  PluginViewportOptions,
+  PluginVolumeViewHandle,
+  PluginVolumeViewMode,
+} from "./pluginViewportApi";
+export type { PluginMaskInput, PluginMeshMeasurement, PluginMeshOptions } from "./pluginMeshApi";
 
 export type {
   ViewerDerivedSeriesRequest,
@@ -381,6 +400,58 @@ export interface Viewer2DPluginHost extends PluginHostBase {
   ) => Promise<PluginStoreSaveResult>;
   /** **このプラグイン専用の保存領域**を消す（H8）。他プラグイン・本体の保存には影響しない。 */
   deleteStore: (patientKey?: string) => Promise<boolean>;
+  /**
+   * **専用ウィンドウを開く**（H30）。本体が窓を開き、**中身の DOM だけ貸す**。
+   *
+   * <p>同じ文書の中に浮かぶ窓である（OS のウィンドウではない）。別文書にすると
+   * `container: HTMLElement` を渡せず、Cornerstone の単一 RenderingEngine 前提も崩れる
+   * （`CLAUDE.md` 絶対ルール 1・4）。詳しい理由は `plugins/pluginWindowApi.ts`。
+   *
+   * <p>タイトルバーには**プラグイン名が必ず出る**。消せない（`fw/subtraction-design.md` §15.8）。
+   * 閉じたら本体が後始末する（貸したビューポートも一緒に落ちる）。
+   */
+  openWindow: (opts?: PluginWindowOptions) => PluginWindowHandle;
+  /**
+   * **値ボリュームを 2D ビューポートとして表示する**（H31）。W/L・パン/ズーム・スライス送りは
+   * 本体の実装がそのまま効く。
+   *
+   * <p>幾何とメタデータは `referenceTileId` が表示しているシリーズへ委譲するので、
+   * 参照線・向きマーカー・座標同期が元シリーズと一致する。
+   *
+   * <p>🔴 **ボリュームの k と参照シリーズのスライスは 1:1 で対応していること。**
+   * 並びが違うと「ずれた絵」ではなく**「もっともらしいが別スライスの絵」**になり、見て気付けない。
+   * 対応は呼び出し側が確かめること（`getPixelData` で数枚読み比べれば足りる）。
+   *
+   * <p>値は**校正済みのまま**扱われる（Modality LUT は恒等）。`pixelCalibration` を通った値を
+   * 渡すこと。二重適用すると CT で約 −1024 ずれる。
+   */
+  mountViewport: (
+    el: HTMLElement,
+    volume: PluginValueVolume,
+    referenceTileId: string | undefined,
+    opts?: PluginViewportOptions,
+  ) => Promise<PluginViewportHandle | null>;
+  /**
+   * **値ボリュームを 3D（MIP / MINIP / VR）で表示する**（H32）。
+   *
+   * <p>🔴 `NaN` は投影の前に潰される（MIP なら最小値、MINIP なら最大値で埋める）。
+   * 「データが無い」ところが投影で勝たないようにするため。埋める値は `background` で変えられる。
+   */
+  mountVolumeView: (
+    el: HTMLElement,
+    volume: PluginValueVolume,
+    opts?: { mode?: PluginVolumeViewMode; background?: number; preset?: string },
+  ) => Promise<PluginVolumeViewHandle | null>;
+  /**
+   * **マスクをメッシュ化して測る**（H33）。0=背景 / >0=セグメント番号。
+   *
+   * <p>セグメントごとに別のメッシュとして測る。**幾何と計測はプラグインに書かせない**
+   * ——同じ量を 2 か所で計算すると、食い違ったときにどちらが正しいか言えなくなる（H5 と同じ理由）。
+   *
+   * <p>🔴 返る体積は 2 種類ある。`voxelVolumeMm3`（数え上げ）と `meshVolumeMm3`
+   * （平滑化した曲面）は**一致しない**。どちらが正しいでもないので両方返す。
+   */
+  measureMask: (mask: PluginMaskInput, opts?: PluginMeshOptions) => PluginMeshMeasurement[];
 }
 
 /** MainScreen 系プラグイン（mainscreen.menu）に渡すコンテキスト。 */

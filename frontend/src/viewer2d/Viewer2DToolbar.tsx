@@ -57,6 +57,11 @@ export interface ViewerActions {
   /** 対象タイルのスライス 1 枚の校正済み画素（H3）。tileId 省略時は対象の先頭。無ければ null。 */
   getPixelData(tileId?: string, opts?: ViewerPixelDataOptions): Promise<ViewerTilePixelData | null>;
   /**
+   * 対象タイルが表示しているスタックの imageId を z 昇順で返す（H31 の幾何委譲先）。
+   * タイルが無ければ null。**空配列と null を混ぜない**（「無い」と「0 枚」は別）。
+   */
+  getStackImageIds(tileId?: string): string[] | null;
+  /**
    * 対象タイルに乗っている ROI（計測・幾何注釈）を読む問い合わせ（H5）。
    * tileId 省略時は**対象タイル全部**（ベースラインと追跡を並べて開いている場合に両方読めるよう）。
    */

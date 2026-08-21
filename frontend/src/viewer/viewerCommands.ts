@@ -373,6 +373,15 @@ export interface ViewerCommands {
    */
   getPixelData(opts?: ViewerPixelDataOptions): Promise<ViewerPixelData | null>;
   /**
+   * いま表示しているスタックの imageId を **z 昇順**で返す（プラグイン host API の H31 用）。
+   *
+   * <p>重畳（H4a）・派生シリーズ保存（H4b）・貸したビューポート（H31）は、いずれも
+   * **このスタックのスライス番号**で位置を決める。幾何やメタデータを別の並びから引くと
+   * 「ずれた絵」ではなく**「もっともらしいが別スライスの絵」**になり、見て気付けない。
+   * 3 者が同じ 1 本の並びを参照するための入口である。
+   */
+  getStackImageIds(): string[];
+  /**
    * 値マップを表示中スライスへ重ねる（H4a）。rows/cols が現在スライスと不一致なら false。
    * 表示中スライスに紐付き、他スライスでは自動的に隠れる（戻ると再表示）。
    */

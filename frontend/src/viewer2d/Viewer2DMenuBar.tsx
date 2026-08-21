@@ -10,6 +10,9 @@ import { useWlPresets } from "./wlPresetStore";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { usePluginMenu, runPluginBackend } from "../plugins/pluginRegistry";
 import type { PluginManifest, Viewer2DPluginHost, Viewer2DSurface } from "../plugins/pluginTypes";
+import { openPluginWindow } from "../plugins/pluginWindowApi";
+import { mountValueViewport, mountVolumeView } from "../plugins/pluginViewportApi";
+import { measureMask } from "../plugins/pluginMeshApi";
 import { deletePluginStore, loadPluginStore, savePluginStore } from "../plugins/pluginStore";
 import { openLogViewer } from "../system/LogViewer";
 import { openMemoryMonitor } from "../system/memoryMonitor";
@@ -128,6 +131,27 @@ export function Viewer2DMenuBar({
         opts?.version ?? null,
       ),
     deleteStore: (patientKey) => deletePluginStore(m.id, patientKey ?? currentPatientKey(actions)),
+    // ── H30〜H33: 「見せる」側の貸し出し（fw/subtraction-design.md §15.4） ──
+    // どれも**サブトラクションを知らない汎用の能力**である。本体側に機能固有の語を持ち込まない。
+    openWindow: (opts) =>
+      openPluginWindow(
+        { id: m.id, name: m.name },
+        // 出所の表示は本体が入れる。プラグインからは消せない（§15.8）。
+        {
+          ...opts,
+          originLabel: t("viewer2d.plugin.overlayLabel", { name: m.name }),
+          closeLabel: t("common.close"),
+        },
+      ),
+    mountViewport: (el, volume, referenceTileId, opts) => {
+      // 幾何の委譲先は「そのタイルが表示しているシリーズのスタック」。
+      // ここが取れなければ**表示しない**（幾何を作り直して辻褄を合わせない）。
+      const ids = actions.getStackImageIds?.(referenceTileId) ?? null;
+      if (!ids) return Promise.resolve(null);
+      return mountValueViewport(el, m.id, volume, ids, opts);
+    },
+    mountVolumeView: (el, volume, opts) => mountVolumeView(el, m.id, volume, opts),
+    measureMask: (mask, opts) => measureMask(mask, opts),
   });
   /** 「プラグイン」メニューに出るもの。 */
   const pluginItems = usePluginMenu("viewer2d.menu", makeViewerHost("viewer2d.menu"));

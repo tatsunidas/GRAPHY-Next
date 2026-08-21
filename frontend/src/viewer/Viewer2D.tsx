@@ -1977,6 +1977,7 @@ export function Viewer2D({
   const commandsRef = useRef<ViewerCommands>({
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
     getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
+    getStackImageIds: () => [...imageIdsRef.current],
     validateDerivedSeries, saveDerivedSeries, saveStructuredReport, setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
     undo, redo,
@@ -1984,6 +1985,8 @@ export function Viewer2D({
   commandsRef.current = {
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
     getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
+    // 重畳・派生シリーズ保存・貸したビューポートが**同じ並び**を見るための入口（H31）。
+    getStackImageIds: () => [...imageIdsRef.current],
     validateDerivedSeries, saveDerivedSeries, saveStructuredReport, setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
     undo, redo,
@@ -2006,6 +2009,7 @@ export function Viewer2D({
       getTargetInfo: () => commandsRef.current.getTargetInfo(),
       getViewState: () => commandsRef.current.getViewState(),
       getPixelData: (o) => commandsRef.current.getPixelData(o),
+      getStackImageIds: () => commandsRef.current.getStackImageIds(),
       showOverlay: (o) => commandsRef.current.showOverlay(o),
       clearOverlay: () => commandsRef.current.clearOverlay(),
       validateDerivedSeries: (r) => commandsRef.current.validateDerivedSeries(r),

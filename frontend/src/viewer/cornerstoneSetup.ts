@@ -17,6 +17,7 @@ import {
 import { resolveVolumeBudgetMb } from "./volumeMemoryGuard";
 import { registerSegMetadataProvider } from "./segMetadata";
 import { registerThickSlabLoader } from "./thickSlab";
+import { registerPluginVolumeLoader } from "../plugins/pluginVolumeScheme";
 import { registerXaCalibrationProvider } from "./xaCalibrationProvider";
 import { registerDsaLoader } from "./dsaLoader";
 import { WandTool } from "./wandTool";
@@ -186,6 +187,8 @@ export function ensureCornerstoneInitialized(): Promise<void> {
       registerSegMetadataProvider();
       // ThickSlab（デジタルスライス厚）: graphy-thickslab: スキームの合成スライスローダ＋メタデータ委譲。
       registerThickSlabLoader();
+      // プラグインが作った値ボリュームを表示する合成ローダ（H31/H32）。
+      registerPluginVolumeLoader();
       // XA/XRF の空間校正: PixelSpacing / ImagerPixelSpacing / SID・SOD から mm/px を解決して
       // imagePlaneModule へ注入する。未校正なら spacing を落として px 表示に戻す
       // （fw/angio-design.md §7）。

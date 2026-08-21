@@ -74,6 +74,7 @@ import { RoiManagerPanel } from "./RoiManagerPanel";
 import { GLAM_CTX_KEY } from "../radiomics/GlamAnalysisScreen";
 import { useI18n } from "../i18n/i18n";
 import { desktop } from "../desktopBridge";
+import { closeAllPluginWindows } from "../plugins/pluginWindowApi";
 
 // ── 型定義 ────────────────────────────────────────────────────
 
@@ -711,6 +712,11 @@ function TileGrid({
     };
   }, [frameMenu]);
 
+  // 画面を離れるときに、プラグインが開いた窓を本体側で閉じる（H30）。
+  // **プラグインの後始末を当てにしない** — プラグインが例外で落ちても、
+  // ビューアが消えた後に窓だけ浮いている状態を作らないため。
+  useEffect(() => closeAllPluginWindows, []);
+
   // タイル選択状態（Shift+左クリックでトグル）。将来の一括操作の対象指定に使う。
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const toggleSelect = useCallback((id: string) => {
@@ -914,6 +920,11 @@ function TileGrid({
         if (!id) return null;
         const st = queryViewerCommand(id, (c) => c.getViewState());
         return st ? { tileId: id, ...st } : null;
+      },
+      getStackImageIds: (tileId) => {
+        const id = tileId ?? resolveTargets()[0];
+        if (!id) return null;
+        return queryViewerCommand(id, (c) => c.getStackImageIds()) ?? null;
       },
       getPixelData: async (tileId, opts) => {
         const id = tileId ?? resolveTargets()[0];
