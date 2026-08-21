@@ -68,6 +68,13 @@ import {
 import { buildPluginMeta, computeCalipers, hasShapeCalipers, pickPluginMeta, readRoiStats } from "./roiRead";
 import { CONTOUR_TOOL_NAMES, contourToolConfig } from "./roiContourTools";
 import { subscribeSuvStore, suvForImageId, seriesUidOf } from "./suvStore";
+import {
+  getFusionProbeData,
+  hasFusionProbe,
+  sampleFusionValue,
+  subscribeFusionProbe,
+  type FusionProbeSample,
+} from "./fusionProbe";
 import { resolveOverlay } from "./overlayText";
 import { useOverlayConfig } from "./overlayConfig";
 import { ImageInfoPanel } from "./ImageInfoPanel";
@@ -242,6 +249,11 @@ export interface OverlayRenderContext {
   /** 現在スライスのインデックスと総数（比例 Fusion フォールバック用）。 */
   index: number;
   count: number;
+  /**
+   * base ビューポートの ID。オーバーレイ側が `fusionProbe` へ前景値を預けるときのキー。
+   * これが無いと状態バーの「値」に前景の段を出せない（base 側から前景配列が見えないため）。
+   */
+  viewportId: string;
 }
 
 export type RenderOverlay = (ctx: OverlayRenderContext) => React.ReactNode;
@@ -510,6 +522,11 @@ export function Viewer2D({
   const [info, setInfo] = useState<ImageInfo | null>(null);
   const infoRef = useRef<ImageInfo | null>(null);
   const [sample, setSample] = useState<PixelSample | null>(null);
+  // Fusion 中はカーソル値を二段（前景／背景）で出す。前景の値は base 画像からは読めないので、
+  // オーバーレイ側が `fusionProbe` に預けたものを読む。`fusionActive` はオーバーレイの有無、
+  // `fgSample` はカーソル位置の前景値（前景が無い画素なら null）。
+  const [fusionActive, setFusionActive] = useState(false);
+  const [fgSample, setFgSample] = useState<FusionProbeSample | null>(null);
   const [markers, setMarkers] = useState<OrientationMarkers | null>(null);
   const [scaleBar, setScaleBar] = useState<ScaleBar | null>(null);
   // base 画像の表示矩形（renderOverlay 用）。zoom/pan/fit に追従して更新。
@@ -808,9 +825,20 @@ export function Viewer2D({
       const v = viewportRef.current;
       if (!v || !infoRef.current) return;
       const rect = element.getBoundingClientRect();
-      setSample(sampleAtCanvas(v, [e.clientX - rect.left, e.clientY - rect.top], infoRef.current));
+      const s = sampleAtCanvas(v, [e.clientX - rect.left, e.clientY - rect.top], infoRef.current);
+      setSample(s);
+      // 前景（Fusion オーバーレイ）の値。base の連続 index 座標で引く。
+      const probe = getFusionProbeData(viewportId);
+      setFgSample(
+        s && probe
+          ? sampleFusionValue(probe, s.fx, s.fy, infoRef.current.columns ?? 0, infoRef.current.rows ?? 0)
+          : null,
+      );
     };
-    const onLeave = () => setSample(null);
+    const onLeave = () => {
+      setSample(null);
+      setFgSample(null);
+    };
     // フォーカス中タイルを記録（ROI マネージャの「＋新規マスク」対象）。
     const onFocusPointerDown = () => noteSegViewport(viewportIdRef.current, imageIdsRef.current);
 
@@ -1173,6 +1201,19 @@ export function Viewer2D({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageIndex, stackKey]);
+
+  // Fusion オーバーレイの着脱を購読。載っている間だけカーソル値を二段（前景／背景）にする。
+  // 値そのものはカーソル移動時に読むので、ここは「段を出すかどうか」だけを追う。
+  useEffect(() => {
+    const viewportId = viewportIdRef.current;
+    const refresh = () => {
+      const on = hasFusionProbe(viewportId);
+      setFusionActive(on);
+      if (!on) setFgSample(null);
+    };
+    refresh();
+    return subscribeFusionProbe(refresh);
+  }, []);
 
   // SUV 校正の変更を購読。校正が付与/解除されたら info を読み直し（suvScale/suvUnit が反映され、
   // カーソル値・ROI 統計・W/L 表示が SUV へ切替）、本家同様に SUV 標準ウィンドウを自動適用する。
@@ -2069,6 +2110,13 @@ export function Viewer2D({
         : `${fmtValue(sample.modalityValue ?? 0)}${calUnit ? " " + calUnit : ""}`
     : "—";
   const cursorXY = sample ? `${sample.fx.toFixed(1)}, ${sample.fy.toFixed(1)}` : "—";
+  // Fusion 中の前景値。ワープ後・補間後の値がそのまま入っている（`fusionProbe` の注記）。
+  // カーソルが前景ボリュームの外にあるときは「—」＝そこに前景が無いことを示す。
+  const fgCursorValue = fgSample
+    ? fgSample.suv
+      ? `${fgSample.value.toFixed(2)} ${fgSample.unit}`
+      : `${fmtValue(fgSample.value)}${fgSample.unit ? " " + fgSample.unit : ""}`
+    : "—";
 
   const imagePanel = (
     // data-graphy-image-panel: 画像キャンバス領域の目印。タイル枠の右クリックメニューは
@@ -2096,6 +2144,7 @@ export function Viewer2D({
             imageId: imageIds[imageIndex] ?? "",
             index: imageIndex,
             count: imageIds.length,
+            viewportId: viewportIdRef.current,
           })}
           {/* リファレンスライン: 他シリーズの現在スライス面がこのビューと交差する線。 */}
           {referenceLinesEnabled && refSegments.length > 0 && (
@@ -2218,7 +2267,25 @@ export function Viewer2D({
                 : "—"
             }
           />
-          <StatusItem testId="status-value" label={t("viewer.status.value")} value={cursorValue} />
+          {fusionActive ? (
+            // Fusion 中は前景と背景を同時に出す。1 行に並べると「どちらの値か」が読めないので、
+            // 「値」ラベルの右に前景／背景を上下 2 段で積む。
+            <span style={statusItem}>
+              <span style={statusKey}>{t("viewer.status.value")}</span>
+              <span style={statusStack}>
+                <span style={statusStackRow}>
+                  <span style={statusSubKey}>{t("viewer.status.valueForeground")}</span>
+                  <span data-testid="status-value-fg" style={statusVal}>{fgCursorValue}</span>
+                </span>
+                <span style={statusStackRow}>
+                  <span style={statusSubKey}>{t("viewer.status.valueBackground")}</span>
+                  <span data-testid="status-value" style={statusVal}>{cursorValue}</span>
+                </span>
+              </span>
+            </span>
+          ) : (
+            <StatusItem testId="status-value" label={t("viewer.status.value")} value={cursorValue} />
+          )}
           <StatusItem testId="status-xy" label={t("viewer.status.xy")} value={cursorXY} />
           {/* 必須情報ラベル横の Info ボタン（右の情報パネルの On/Off）。 */}
           <button
@@ -2364,6 +2431,10 @@ const infoBtnOn: React.CSSProperties = { background: "#0b5cad", border: "1px sol
 const btnDisabled: React.CSSProperties = { opacity: 0.45, cursor: "not-allowed" };
 const statusKey: React.CSSProperties = { color: "#6b7785" };
 const statusVal: React.CSSProperties = { color: "#1a2530", fontWeight: 600 };
+// Fusion 中の二段表示（前景／背景）。行高を詰めて、状態バーが 1 行のときと同じ高さに収める。
+const statusStack: React.CSSProperties = { display: "inline-flex", flexDirection: "column", lineHeight: 1.25 };
+const statusStackRow: React.CSSProperties = { display: "inline-flex", gap: 4, alignItems: "baseline" };
+const statusSubKey: React.CSSProperties = { color: "#6b7785", fontSize: 11 };
 
 const wrap: React.CSSProperties = {
   position: "relative",

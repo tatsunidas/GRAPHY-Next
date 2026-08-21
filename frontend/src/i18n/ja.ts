@@ -1210,6 +1210,8 @@ export const ja: Record<string, string> = {
   "viewer.status.zoom": "ズーム",
   "viewer.status.wl": "W/L",
   "viewer.status.value": "値",
+  "viewer.status.valueForeground": "前景",
+  "viewer.status.valueBackground": "背景",
   "viewer.status.xy": "XY",
   "viewer.info.btn": "Info",
   "viewer.info.toggle": "画像情報パネルの表示/非表示",

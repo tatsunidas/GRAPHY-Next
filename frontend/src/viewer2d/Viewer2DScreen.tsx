@@ -1686,6 +1686,7 @@ function TileCell({
         baseImageId={ctx.imageId}
         baseIndex={ctx.index}
         baseCount={ctx.count}
+        viewportId={ctx.viewportId}
         instances={fusion.instances}
         mode={mode}
         studyUid={fusion.study.studyInstanceUid}

@@ -1,6 +1,7 @@
 # Fusion オーバーレイ設計（GRAPHY-Next 2D Viewer）
 
-> 作成: 2026-07-02。2D Viewer のシリーズ重畳（Fusion）オーバーレイの設計と、LUT 引き継ぎ・オーバーレイ W/L 調整・範囲外消去の実装記録。
+> 作成: 2026-07-02（更新: 2026-08-21 §5 カーソル値の二段表示）。2D Viewer のシリーズ重畳（Fusion）
+> オーバーレイの設計と、LUT 引き継ぎ・オーバーレイ W/L 調整・範囲外消去の実装記録。
 > 関連: `fw/viewer-2d-screen.md`（DnD による Fusion 起動）/ `fw/viewer-2d-architecture.md`（pixelCalibration 単一入口）。
 > 旧: `GRAPHY/src/main/java/com/vis/core/fusion/ImagePairingEngine.java`（ワールド座標整合の移植元）。
 
@@ -49,16 +50,52 @@
 - `fmtValue()` を新設: |v|≥100 は整数〜1桁、1≤|v|<100 は3桁、|v|<1 は最大6桁（末尾ゼロ除去）、|v|<1e-4 or ≥1e6 は指数表記（例 `1.000e-5`）。
 - SUV 値表示は臨床慣習の 2 桁（`toFixed(2)`）を維持。
 
-## 5. 主なファイル
+## 5. カーソル値の二段表示（前景／背景）★2026-08-21
 
-- `frontend/src/viewer/FusionOverlayViewer.tsx` — オーバーレイ描画・W/L 解決・範囲外消去。
+- **課題**: Fusion では画面に 2 つの画像が重なっているのに、シリーズビュー上部の状態バーの「値」は
+  **背景（base）の画素値しか出していなかった**。前景の値は `FusionImageViewer` が再構成した
+  配列の中にしか無く、base 側（`Viewer2D`）からは覗けない。
+- **仕様**: Fusion オーバーレイが載っている間だけ、「値」を**上下 2 段**にして
+  **前景と背景を同時に表示する**。
+  - 上段＝前景（`data-testid="status-value-fg"`）、下段＝背景（`data-testid="status-value"`）。
+    背景の testid は Fusion 前と**同じ**まま（既存のセレクタを壊さない）。
+  - 前景に位置合わせ（自動 R3 ／ 手動 R1）が掛かっている場合、表示されるのは
+    **ワープ後・補間後の値**。`computeFusionSlice` が「背景ボクセル → 患者 world →（変換）→
+    前景ボクセル」で trilinear 補間した結果そのものを読むため、**描画と数値が必ず一致する**
+    （数値のために別経路で再計算しない）。
+  - カーソル位置に前景が無い（範囲外＝NaN、または断面が前景ボリュームの外）ときは前景段を「—」。
+    「前景が無い」ことが読めるので、段は消さない。
+  - 単位は前景シリーズ側で解決する。SUV 校正済み（PET）なら SUV 空間の値＋`SUVbw` 等で
+    臨床慣習の 2 桁固定、それ以外は `calibratedUnit`（HU 等）＋ `fmtValue`。
+- **仕組み**: `frontend/src/viewer/fusionProbe.ts`（新規）を **base ビューポート ID をキーにした
+  置き場**として挟む。
+  - `FusionImageViewer` は再構成のたびに `setFusionProbeData(viewportId, {values, cols, rows, unit, scale, suv})`。
+    範囲外で `clearCanvas()` したときは `null` を置く。マウント／アンマウントで register / unregister。
+  - `Viewer2D` は `OverlayRenderContext.viewportId`（新設）をオーバーレイへ渡し、
+    カーソル移動時に `sampleFusionValue(data, fx, fy, baseCols, baseRows)` で引く。
+  - ⚠ **通知は着脱のときだけ**。値の差し替えで購読者へ通知すると、スライス送り・W/L 変更の
+    たびに base が再レンダしてしまう（`FusionImageViewer` の「レンダプロップ内で毎レンダ
+    別関数 → 無限ループ」と同じ落とし穴）。値はカーソル移動時に pull で読む。
+  - 空間 Fusion では `values` の格子＝背景の格子なので添字はそのまま。非空間フォールバックは
+    前景自身の格子が載るので、`sampleFusionValue` が**画素中心どうしの比例**で対応づける
+    （引き伸ばして重ねている見た目と一致する）。このために `bgCols/bgRows` の解決を
+    「空間メタが組めるか」から切り離した。
+- **テスト**: `frontend/src/viewer/fusionProbe.test.ts`（格子一致／比例対応／NaN・範囲外／SUV／
+  レジストリの着脱と通知回数）。UI 側（二段の描画）は自動テスト対象外。
+
+## 6. 主なファイル
+
+- `frontend/src/viewer/FusionOverlayViewer.tsx` — オーバーレイ描画・W/L 解決・範囲外消去・前景値の publish。
 - `frontend/src/viewer/fusionEngine.ts` — `computeFusionSlice`（trilinear 再構成, 範囲外 NaN）/ `toImageData` / `autoWindowLevel`。
+- `frontend/src/viewer/fusionProbe.ts` — 前景カーソル値のレジストリ（§5）。
 - `frontend/src/viewer2d/Viewer2DScreen.tsx` — `FusionOverlay` 型 / `handleDrop`（LUT 引き継ぎ）/ `TileCell`（fusion 状態）/ `FusionControlBar`（opacity・LUT・W/L・C/T）。
-- `frontend/src/viewer/Viewer2D.tsx` — `getLutData` コマンド / `lutDataRef` / `fmtValue`。
+- `frontend/src/viewer/Viewer2D.tsx` — `getLutData` コマンド / `lutDataRef` / `fmtValue` / 状態バーの二段表示。
 - `frontend/src/viewer/viewerCommands.ts` — `getLutData` を interface に追加。
+- `frontend/src/mobile/MobileViewer.tsx` — モバイルの Fusion（同じ `FusionImageViewer` を使う）。
 
-## 6. 未対応・今後
+## 7. 未対応・今後
 
 - 非空間フォールバックは比例 Z のため厳密な範囲外判定なし（IOP/IPP 無しシリーズ）。
 - Fusion 専用の左ドラッグ W/L モード（前景/背景切替）は将来拡張候補。
 - 別患者タブ間の Fusion（比較ビューア）は別コンポーネントで将来対応（`fw/viewer-2d-screen.md`）。
+- 二段表示は状態バーのみ。右の情報パネル（`ImageInfoPanel`）と ROI 統計は背景のみのまま。

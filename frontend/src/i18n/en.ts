@@ -1221,6 +1221,8 @@ export const en: Record<string, string> = {
   "viewer.status.zoom": "Zoom",
   "viewer.status.wl": "W/L",
   "viewer.status.value": "Value",
+  "viewer.status.valueForeground": "FG",
+  "viewer.status.valueBackground": "BG",
   "viewer.status.xy": "XY",
   "viewer.info.btn": "Info",
   "viewer.info.toggle": "Show/hide the image info panel",

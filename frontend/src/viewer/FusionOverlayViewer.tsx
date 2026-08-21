@@ -12,6 +12,8 @@ import {
 import { overlayPlacement, type ImageRect } from "./overlayPlacement";
 import { imageIdForInstance, type ViewerMode } from "./imageId";
 import { getModalityCalibration } from "./pixelCalibration";
+import { calibratedUnit, readImageInfo } from "./imageInfo";
+import { registerFusionProbe, setFusionProbeData, unregisterFusionProbe } from "./fusionProbe";
 import { fetchSeriesLayout, type Instance, type SeriesLayoutDto } from "../api";
 import {
   computeFusionSlice,
@@ -74,6 +76,16 @@ function buildFgSkeleton(dto: SeriesLayoutDto): {
   };
 }
 
+/**
+ * 前景のカーソル値表示に添えるメタ（単位・SUV 乗数）を、実際に読んだ前景スライスから解決する。
+ * 校正の解釈は `readImageInfo`／`calibratedUnit` に任せ、ここで slope/intercept を触らない。
+ */
+function probeMetaOf(fgImageId: string): { unit: string; scale: number; suv: boolean } {
+  const info = readImageInfo(fgImageId);
+  if (info.suvScale !== undefined) return { unit: info.suvUnit ?? "SUV", scale: info.suvScale, suv: true };
+  return { unit: calibratedUnit(info), scale: 1, suv: false };
+}
+
 /** imageId → loaded FusionSlice のモジュールレベルキャッシュ。 */
 const _sliceCache = new Map<string, FusionSlice>();
 
@@ -130,6 +142,7 @@ export function FusionImageViewer({
   baseImageId,
   baseIndex,
   baseCount,
+  viewportId,
   overlayC,
   overlayT,
   lut,
@@ -153,6 +166,11 @@ export function FusionImageViewer({
   /** base の現在スライスインデックスと総数（非空間フォールバックの比例 Z 用）。 */
   baseIndex: number;
   baseCount: number;
+  /**
+   * base ビューポートの ID（`OverlayRenderContext.viewportId`）。
+   * 再構成した前景値をここをキーに `fusionProbe` へ預け、状態バーの「値」に前景の段を出す。
+   */
+  viewportId: string;
   overlayC: number;
   overlayT: number;
   /** カラー LUT（null でグレースケール）。 */
@@ -232,6 +250,13 @@ export function FusionImageViewer({
     onSpatialChangeRef.current?.(spatial);
   }, []);
 
+  // 前景値の置き場を base ビューポートに紐づける。載っている間だけ状態バーが二段になり、
+  // 外した瞬間（アンマウント）に一段へ戻る。
+  useEffect(() => {
+    registerFusionProbe(viewportId);
+    return () => unregisterFusionProbe(viewportId);
+  }, [viewportId]);
+
   // ── Canvas（base 矩形に重ねる単一キャンバス） ──────────────────
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const computingRef = useRef(false);
@@ -296,7 +321,9 @@ export function FusionImageViewer({
     // base スライスの空間メタ（取得できれば空間 Fusion）。
     let bgMeta: BackgroundSliceMeta | null = null;
     let bgCols = 0, bgRows = 0;
-    if (baseImageId && fgSkeleton) {
+    // ⚠ bgCols/bgRows は非空間フォールバックでも要る（前景格子 → base 格子の対応づけに使う）。
+    // 空間メタ（bgMeta）が組めるかどうかとは切り離して解決する。
+    if (baseImageId) {
       let bgPlane: AnyObj = metaData.get("imagePlaneModule", baseImageId) ?? {};
       if (!bgPlane.imagePositionPatient) {
         try { await imageLoader.loadAndCacheImage(baseImageId); } catch { /* fallthrough */ }
@@ -305,7 +332,7 @@ export function FusionImageViewer({
       const bgPixel: AnyObj = metaData.get("imagePixelModule", baseImageId) ?? {};
       bgCols = (bgPlane.columns as number | undefined) ?? (bgPixel.columns as number | undefined) ?? 512;
       bgRows = (bgPlane.rows as number | undefined) ?? (bgPixel.rows as number | undefined) ?? 512;
-      bgMeta = planeToMeta(bgPlane, bgCols, bgRows);
+      bgMeta = fgSkeleton ? planeToMeta(bgPlane, bgCols, bgRows) : null;
     }
 
     computingRef.current = true;
@@ -391,6 +418,7 @@ export function FusionImageViewer({
         const margin = sliceSpacing / 2 + dev; // 末端スライスの厚み分 ＋ 回転による振れ幅
         if (w_center < minW - margin || w_center > maxW + margin) {
           clearCanvas();
+          setFusionProbeData(viewportId, null); // この断面に前景は無い＝カーソル値も「—」
           return;
         }
 
@@ -439,9 +467,12 @@ export function FusionImageViewer({
         };
 
         const fusionPixels = computeFusionSlice(fgVolume, bgMeta, xf);
-        const voiLut: AnyObj = metaData.get("voiLutModule", fgZStack[loadedSlices[0].zIdx] ?? "") ?? {};
+        const fgSampleId = fgZStack[loadedSlices[0].zIdx] ?? "";
+        const voiLut: AnyObj = metaData.get("voiLutModule", fgSampleId) ?? {};
         const { center, width } = resolveWL(voiLut, fusionPixels);
         drawValues(fusionPixels, bgCols, bgRows, center, width, activeLut);
+        // 背景の画素格子に載った前景値。位置合わせを掛けているなら**ワープ後・補間後**の値。
+        setFusionProbeData(viewportId, { values: fusionPixels, cols: bgCols, rows: bgRows, ...probeMetaOf(fgSampleId) });
       } else {
         // ── 非空間フォールバック: 比例 Z で前景スライスを base 矩形にストレッチ ──
         const frac = baseCount > 1 ? baseIndex / (baseCount - 1) : 0;
@@ -462,6 +493,9 @@ export function FusionImageViewer({
         const voiLut: AnyObj = metaData.get("voiLutModule", fgId) ?? {};
         const { center, width } = resolveWL(voiLut, values);
         drawValues(values, cols, rows, center, width, activeLut);
+        // 非空間フォールバックは前景自身の格子。読み出し側（sampleFusionValue）が base 格子との
+        // 比例で対応づける（引き伸ばして重ねているのと同じ対応）。
+        setFusionProbeData(viewportId, { values, cols, rows, ...probeMetaOf(fgId) });
       }
     } finally {
       computingRef.current = false;
@@ -472,7 +506,7 @@ export function FusionImageViewer({
     }
     // ⚠ 親のコールバック（onAutoWL / onSpatialChange）は**依存に入れない**。ref 経由で呼んでいる。
     // 入れると、レンダプロップ内で毎レンダ生成される関数によって再計算が毎レンダ走る。
-  }, [baseImageId, baseIndex, baseCount, fgDto, overlayC, overlayT, lut, windowCenter, windowWidth,
+  }, [baseImageId, baseIndex, baseCount, viewportId, fgDto, overlayC, overlayT, lut, windowCenter, windowWidth,
       adjust, registration, notifySpatial, drawValues, clearCanvas]);
 
   useEffect(() => {

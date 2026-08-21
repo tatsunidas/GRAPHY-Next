@@ -87,6 +87,7 @@ export function MobileViewer({
         baseImageId={ctx.imageId}
         baseIndex={ctx.index}
         baseCount={ctx.count}
+        viewportId={ctx.viewportId}
         instances={f.instances}
         mode={mode}
         studyUid={study.studyInstanceUid}
