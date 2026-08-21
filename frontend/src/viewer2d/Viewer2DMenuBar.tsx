@@ -146,8 +146,22 @@ export function Viewer2DMenuBar({
     mountViewport: (el, volume, referenceTileId, opts) => {
       // 幾何の委譲先は「そのタイルが表示しているシリーズのスタック」。
       // ここが取れなければ**表示しない**（幾何を作り直して辻褄を合わせない）。
-      const ids = actions.getStackImageIds?.(referenceTileId) ?? null;
-      if (!ids) return Promise.resolve(null);
+      //
+      // 🔴 ただし **null を返して終わらない**。返すとプラグイン側では「黒い面」としか
+      // 見えず、原因を追う手がかりが 1 つも残らない。実際、開発中に HMR でコマンド登録が
+      // 古いまま残り（登録の useEffect は [commandKey] 依存なので再実行されない）、
+      // `getStackImageIds` を持たないオブジェクトが registry に残って**静かに 3 面とも
+      // 出ない**という形で踏んだ。理由を持った例外にして、呼び出し側に見せる。
+      const ids = actions.getStackImageIds?.(referenceTileId);
+      if (!ids || ids.length === 0) {
+        throw new Error(
+          `mountViewport: could not resolve the reference stack for tile ` +
+            `${referenceTileId ?? "(target)"}. ` +
+            (typeof actions.getStackImageIds !== "function"
+              ? "getStackImageIds is missing on ViewerActions — reload the app (a stale HMR registration does this)."
+              : "The tile has no image stack."),
+        );
+      }
       return mountValueViewport(el, m.id, volume, ids, opts);
     },
     mountVolumeView: (el, volume, opts) => mountVolumeView(el, m.id, volume, opts),
