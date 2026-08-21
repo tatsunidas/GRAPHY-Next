@@ -27,6 +27,7 @@ import {
   getRenderingEngine,
   volumeLoader,
   metaData,
+  utilities as csUtilities,
   type Types,
 } from "@cornerstonejs/core";
 import { ENGINE_ID } from "../viewer/Viewer2D";
@@ -66,6 +67,37 @@ export type PluginVolumeViewMode = "MIP" | "MINIP" | "VR";
 export interface PluginVolumeViewHandle {
   setMode(mode: PluginVolumeViewMode): Promise<void>;
   destroy(): void;
+}
+
+/** 本体が LUT を cornerstone の colormap として登録するときの接頭辞（`Viewer2D` と同じ）。 */
+const LUT_COLORMAP_PREFIX = "graphy-lut-";
+
+/**
+ * プラグインが渡した LUT 名を、実際に登録されている colormap 名へ解決する。
+ *
+ * 🔴 **未登録の名前を黙って渡さない。** cornerstone は知らない colormap 名を無視するので、
+ * 「指定したのに灰色のまま」という、原因の分からない状態になる。ここで解決できなければ
+ * **colormap を付けずに（グレースケールで）出し、コンソールに理由を残す**。
+ *
+ * <p>名前の解釈は `showOverlay`（H4a）と揃えてある: 本体の LUT ダイアログの名前
+ * （例 `"Hot_Iron"`）を受け取り、`graphy-lut-<名前>` を探す。生の cornerstone colormap 名も
+ * そのまま通す（`"hsv"` など）。**LUT はユーザーが 1 度使えば登録済みになる**が、
+ * 一度も開いていないと未登録なので、必ずこの分岐を通す。
+ */
+function colormapProperty(name?: string | null): { colormap?: { name: string } } {
+  if (!name) return {};
+  const registered = (csUtilities as Any)?.colormap?.getColormap;
+  const prefixed = `${LUT_COLORMAP_PREFIX}${name}`;
+  if (typeof registered === "function") {
+    if (registered(prefixed)) return { colormap: { name: prefixed } };
+    if (registered(name)) return { colormap: { name } };
+    console.warn(
+      `[plugin-viewport] colormap "${name}" is not registered; showing greyscale. ` +
+        "Open the LUT dialog once, or pass a cornerstone colormap name.",
+    );
+    return {};
+  }
+  return { colormap: { name: prefixed } };
 }
 
 let seq = 0;
@@ -122,7 +154,7 @@ export async function mountValueViewport(
       lower: win.center - win.width / 2,
       upper: win.center + win.width / 2,
     },
-    ...(opts.colormap ? { colormap: { name: opts.colormap } } : {}),
+    ...colormapProperty(opts.colormap),
   });
   viewport.render();
 
