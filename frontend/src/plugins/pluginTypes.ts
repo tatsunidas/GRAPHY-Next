@@ -15,6 +15,7 @@ import type {
   PluginVolumeViewMode,
 } from "./pluginViewportApi";
 import type { PluginMaskInput, PluginMeshMeasurement, PluginMeshOptions } from "./pluginMeshApi";
+import type { PluginSeriesPanelHandle, PluginSeriesPanelOptions } from "./pluginSeriesPanelApi";
 import type {
   ViewerDerivedSeriesRequest,
   ViewerDerivedSeriesResult,
@@ -41,6 +42,7 @@ export type {
   PluginVolumeViewMode,
 } from "./pluginViewportApi";
 export type { PluginMaskInput, PluginMeshMeasurement, PluginMeshOptions } from "./pluginMeshApi";
+export type { PluginSeriesPanelHandle, PluginSeriesPanelOptions } from "./pluginSeriesPanelApi";
 
 export type {
   ViewerDerivedSeriesRequest,
@@ -452,6 +454,25 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * （平滑化した曲面）は**一致しない**。どちらが正しいでもないので両方返す。
    */
   measureMask: (mask: PluginMaskInput, opts?: PluginMeshOptions) => PluginMeshMeasurement[];
+  /**
+   * **シリーズビューパネルをそのまま貸す**（H34）。W/L バー・スライダ・ThickSlab・参照線・
+   * 計測・シネ、そして**フュージョン重畳**が丸ごと付いてくる。
+   *
+   * <p>H31（ビューポートを素で貸す）との使い分け:
+   * **保管庫にある実シリーズはこちら**、プラグインが計算した値ボリュームは H31。
+   * `SeriesViewer` は `instances` を受け取る作りなので、値ボリュームはここには載らない。
+   *
+   * <p>`fusion.transform` には `registerVolumes`（H21）が返した `transform` をそのまま渡す
+   * （**中身を見ない**）。位置合わせの結果がそのまま重畳に反映される。
+   *
+   * <p>⚠️ 渡した要素の中身は**本体が管理する**（React ルートを張る）。プラグイン側から
+   * 子要素を触らないこと。`destroy()` で返す。
+   */
+  mountSeriesPanel: (
+    el: HTMLElement,
+    series: PluginSeriesRef,
+    opts?: PluginSeriesPanelOptions,
+  ) => Promise<PluginSeriesPanelHandle | null>;
 }
 
 /** MainScreen 系プラグイン（mainscreen.menu）に渡すコンテキスト。 */

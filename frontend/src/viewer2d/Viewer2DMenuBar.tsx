@@ -166,6 +166,7 @@ export function Viewer2DMenuBar({
     },
     mountVolumeView: (el, volume, opts) => mountVolumeView(el, m.id, volume, opts),
     measureMask: (mask, opts) => measureMask(mask, opts),
+    mountSeriesPanel: (el, series, opts) => actions.mountSeriesPanel(el, series, opts),
   });
   /** 「プラグイン」メニューに出るもの。 */
   const pluginItems = usePluginMenu("viewer2d.menu", makeViewerHost("viewer2d.menu"));

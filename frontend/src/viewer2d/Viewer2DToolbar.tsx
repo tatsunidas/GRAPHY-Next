@@ -23,6 +23,8 @@ import type {
   PluginRegistrationRequest,
   PluginRegistrationResult,
   PluginSeriesRef,
+  PluginSeriesPanelHandle,
+  PluginSeriesPanelOptions,
   PluginVolume,
   PluginVolumeEstimate,
   PluginVolumeGrid,
@@ -61,6 +63,12 @@ export interface ViewerActions {
    * タイルが無ければ null。**空配列と null を混ぜない**（「無い」と「0 枚」は別）。
    */
   getStackImageIds(tileId?: string): string[] | null;
+  /** シリーズビューパネルを貸す（H34）。実装は `plugins/pluginSeriesPanelApi.tsx`。 */
+  mountSeriesPanel(
+    el: HTMLElement,
+    series: PluginSeriesRef,
+    opts?: PluginSeriesPanelOptions,
+  ): Promise<PluginSeriesPanelHandle | null>;
   /**
    * 対象タイルに乗っている ROI（計測・幾何注釈）を読む問い合わせ（H5）。
    * tileId 省略時は**対象タイル全部**（ベースラインと追跡を並べて開いている場合に両方読めるよう）。

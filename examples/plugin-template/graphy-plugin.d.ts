@@ -424,6 +424,26 @@ export interface PluginVolumeViewHandle {
   destroy(): void;
 }
 
+/** シリーズビューパネルの貸し出し（H34・**0.2.1 以降**）。 */
+export interface PluginSeriesPanelOptions {
+  /** 重ねるシリーズ（省略でフュージョンなし）。 */
+  fusion?: {
+    series: PluginSeriesRef;
+    /** `registerVolumes`（H21）が返した `transform` をそのまま渡す（**中身を見ない**）。 */
+    transform?: unknown;
+    /** 重ねる側の不透明度（0〜1・既定 0.5）。 */
+    opacity?: number;
+    /** 重ねる側の LUT 名（既定 `"Hot_Iron"`）。 */
+    lut?: string | null;
+  };
+  /** 画像下の操作パネルを出すか（既定 true）。 */
+  showControls?: boolean;
+}
+
+export interface PluginSeriesPanelHandle {
+  destroy(): void;
+}
+
 /** メッシュ化して測るマスク（H33）。0=背景, >0=セグメント番号。 */
 export interface PluginMaskInput {
   data: Uint8Array;
@@ -679,6 +699,22 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * （平滑化した曲面）は**一致しない**。どちらが正しいでもないので両方返す。
    */
   measureMask: (mask: PluginMaskInput, opts?: PluginMeshOptions) => PluginMeshMeasurement[];
+  /**
+   * **シリーズビューパネルをそのまま貸す**（H34・**0.2.1 以降**）。W/L バー・スライダ・
+   * ThickSlab・参照線・計測・シネ、そして**フュージョン重畳**が丸ごと付いてくる。
+   *
+   * <p>使い分け: **保管庫にある実シリーズはこちら**、プラグインが計算した値ボリュームは
+   * `mountViewport`（H31）。`SeriesViewer` は `instances` を受け取る作りなので、
+   * 値ボリュームはここには載らない。
+   *
+   * <p>⚠️ 渡した要素の中身は**本体が管理する**（React ルートを張る）。
+   * プラグイン側から子要素を触らないこと。`destroy()` で返す。
+   */
+  mountSeriesPanel: (
+    el: HTMLElement,
+    series: PluginSeriesRef,
+    opts?: PluginSeriesPanelOptions,
+  ) => Promise<PluginSeriesPanelHandle | null>;
   /**
    * 計測を **DICOM SR（構造化レポート）** として保存する。**0.1.12 以降**。
    *

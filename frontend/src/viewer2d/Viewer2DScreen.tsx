@@ -75,6 +75,7 @@ import { GLAM_CTX_KEY } from "../radiomics/GlamAnalysisScreen";
 import { useI18n } from "../i18n/i18n";
 import { desktop } from "../desktopBridge";
 import { closeAllPluginWindows } from "../plugins/pluginWindowApi";
+import { mountSeriesPanel } from "../plugins/pluginSeriesPanelApi";
 
 // ── 型定義 ────────────────────────────────────────────────────
 
@@ -910,6 +911,10 @@ function TileGrid({
       registerVolumes: (req, onProgress) =>
         registerPluginVolumes(mode, studyUidOfSeries, req, onProgress),
       resampleVolume: (source, transform, target) => resamplePluginVolume(source, transform, target),
+      // H34: シリーズビューパネルごと貸す（フュージョン重畳込み）。
+      // 実シリーズしか出せないので、値ボリュームは H31（mountViewport）を使う。
+      mountSeriesPanel: (el, series, opts) =>
+        mountSeriesPanel(el, mode, (ref) => studyUidOfSeries(ref.seriesUid) ?? null, series, opts),
       getTargets: () =>
         resolveTargets().flatMap((tileId) => {
           const info = queryViewerCommand(tileId, (c) => c.getTargetInfo());
