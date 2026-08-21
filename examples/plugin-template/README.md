@@ -38,7 +38,7 @@ backend-optional/               ← 任意。Java のバックエンド面（重
 | `version` | ✅ | 版（semver）。**リリースタグ `v<version>` と一致必須** |
 | `engines.graphy` | 推奨 | 対応するコアの範囲（例 `">=0.1.0 <0.3.0"`）。マネージャが互換判定に使う |
 | `engines.os` | 推奨 | 対応 OS（`win32` / `darwin` / `linux`）。GRAPHY-Next は OS ごとにリリースが分かれるため、**導入前に実行中の OS と突き合わせて非対応なら拒否**する。JNI やネイティブバイナリを含むなら必ず絞る。省略＝OS 非依存 |
-| `contributes` | UI を出すなら | サーフェス配列。`"viewer2d.menu"` / `"mainscreen.menu"`（`"viewer2d.toolbar"` は予約） |
+| `contributes` | UI を出すなら | サーフェス配列。`"viewer2d.menu"` / `"viewer2d.menu.analysis"`（0.2.1 以降）/ `"mainscreen.menu"`（`"viewer2d.toolbar"` は予約） |
 | `ui` | UI を出すなら | フロント面 ES モジュールのファイル名（例 `ui.js`） |
 | `entrypoint` | backend 面を持つなら | `GraphyPlugin` 実装クラスの完全修飾名（`backend-optional/` 参照） |
 | `permissions` | 任意 | 要求権限（例 `"read-pixels"`）。導入時の同意画面に表示される（**強制はまだ無い**） |
@@ -68,7 +68,8 @@ git add minisign.pub && git commit -m "add signing public key"   # 公開鍵は�
 
 | サーフェス | 出る場所 | `host` の主なプロパティ |
 |---|---|---|
-| `viewer2d.menu` | 2D Viewer の Plug-ins メニュー | `actions`（`invert()` / `rotate90()` / `fit()` / `setWindowLevel()` …）<br>`getTargets()` / `getViewState()` / `getPixelData()` / `showOverlay()` / `clearOverlay()` / `saveDerivedSeries()` / `getRois()` / `getRoiMeta()` / `setRoiMeta()` / `subscribeRois()`（**0.1.9 以降**） |
+| `viewer2d.menu` | 2D Viewer の **Plug-ins** メニュー | `actions`（`invert()` / `rotate90()` / `fit()` / `setWindowLevel()` …）<br>`getTargets()` / `getViewState()` / `getPixelData()` / `showOverlay()` / `clearOverlay()` / `saveDerivedSeries()` / `getRois()` / `getRoiMeta()` / `setRoiMeta()` / `subscribeRois()`（**0.1.9 以降**）<br>`saveStructuredReport()` / `loadStore()` / `saveStore()` / `deleteStore()`（**0.1.12 以降**）<br>`goTo()` / `selectRoi()`（**0.1.13 以降**）<br>`loadVolume()` / `estimateVolume()` / `registerVolumes()` / `resampleVolume()`（**0.2.0 以降**） |
+| `viewer2d.menu.analysis` | 2D Viewer の **解析**メニュー（**0.2.1 以降**） | `viewer2d.menu` と**完全に同じ**。違うのは出る場所だけ。本体機能と並ぶので、**本体が区切り線と「（プラグイン）」の印を付ける** — 名前に「プラグイン」と入れないこと（二重に出る） |
 | `mainscreen.menu` | MainScreen の Plug-Ins メニュー | `selectedStudyUid`（選択中スタディ UID） |
 
 `getTargets()` は操作対象タイル（選択→無ければ全）の

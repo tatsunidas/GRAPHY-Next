@@ -10,8 +10,22 @@
  * 設計: fw/plugin-architecture.md §2.1 / fw/plugin-manager-design.md。
  */
 
-/** プラグインを組み込む先（UI サーフェス）。 */
-export type PluginSurface = "viewer2d.menu" | "viewer2d.toolbar" | "mainscreen.menu";
+/**
+ * プラグインを組み込む先（UI サーフェス）。
+ *
+ * <p>`viewer2d.menu.analysis` は **2D ビューアの「解析」メニュー**に出す（**0.2.1 以降**）。
+ * `viewer2d.menu`（＝「プラグイン」メニュー）とは**出る場所だけ**が違い、host の中身は同一。
+ * 本体の解析機能と並ぶ位置なので、**本体が区切り線と「（プラグイン）」の印を付ける**
+ * — プラグイン側で名前に「プラグイン」と入れる必要はない（二重に出る）。
+ */
+export type PluginSurface =
+  | "viewer2d.menu"
+  | "viewer2d.menu.analysis"
+  | "viewer2d.toolbar"
+  | "mainscreen.menu";
+
+/** 2D Viewer 系サーフェス（host の形が同じもの）。 */
+export type Viewer2DSurface = "viewer2d.menu" | "viewer2d.menu.analysis" | "viewer2d.toolbar";
 
 /**
  * 2D Viewer プラグインから使える表示中タイルへの操作（安定サブセット）。
@@ -256,6 +270,101 @@ export interface ViewerRoi {
   visible: boolean;
 }
 
+/**
+ * 読み出すシリーズの指定（`loadVolume` / `registerVolumes`）。**0.2.0 以降**。
+ * `studyUid` 省略時は開いているタイルから解決する（**患者を跨いでは読めない**）。
+ */
+export interface PluginSeriesRef {
+  seriesUid: string;
+  studyUid?: string;
+  /** 多次元シリーズのチャンネル / 時相（既定 0）。 */
+  c?: number;
+  t?: number;
+}
+
+/** ボリュームの格子（リサンプル先の指定にも使う）。**0.2.0 以降**。 */
+export interface PluginVolumeGrid {
+  /** [nx, ny, nz] = [columns, rows, slices]。 */
+  dims: [number, number, number];
+  /** 各軸の実効間隔 [mm]。 */
+  spacing: [number, number, number];
+  /** index (i,j,k,1) → 患者 LPS mm。row-major 4×4（16 要素）。 */
+  indexToWorld: number[];
+  /** その逆行列。 */
+  worldToIndex: number[];
+}
+
+/**
+ * `loadVolume` が返すボリューム。値は**校正済みモダリティ値**（HU / Bq/mL / SUV）。
+ * **0.2.0 以降**。
+ */
+export interface PluginVolume extends PluginVolumeGrid {
+  /** z-major のフラット配列（長さ = nx·ny·nz）。`data[i + j*nx + k*nx*ny]`。 */
+  data: Float32Array;
+  /** 先頭ボクセルの ImagePositionPatient。 */
+  ipp: [number, number, number];
+  /** ImageOrientationPatient（6 要素）。 */
+  iop: number[];
+  /** スライスが 1 進むときの移動ベクトル（法線 × 間隔ではなく**実測の IPP 差**）。 */
+  sliceStep: [number, number, number];
+  frameOfReferenceUid: string | null;
+  modality: string;
+  /** 値の単位（`HU` / `Bq/ml` / `SUV` 等。分からなければ空文字＝**捏造しない**）。 */
+  unit: string;
+  /** DICOM SliceThickness（**スライス間隔とは別物**）。 */
+  sliceThickness: number | null;
+  seriesUid: string;
+  studyUid: string;
+}
+
+/** 読み込み前の見積り。**0.2.0 以降**。 */
+export interface PluginVolumeEstimate {
+  bytes: number;
+  dims: [number, number, number];
+  /** 患者座標（IOP/IPP）が揃っているか。**false なら空間的な処理はできない**。 */
+  spatial: boolean;
+}
+
+/** 位置合わせの要求。**0.2.0 以降**。 */
+export interface PluginRegistrationRequest {
+  fixed: PluginSeriesRef;
+  moving: PluginSeriesRef;
+  /** 既定 "rigid"。 */
+  mode?: "rigid" | "deformable" | "rigid+deformable";
+  options?: {
+    metric?: string;
+    pyramidMm?: number[];
+    samplesPerIteration?: number;
+    maxIterationsPerLevel?: number;
+    seed?: number;
+    limits?: { translationMm: number; rotationDeg: number };
+    deformable?: {
+      controlSpacingsMm?: number[];
+      maxDisplacementMm?: number;
+      regularizationWeight?: number;
+    };
+  };
+}
+
+/**
+ * 位置合わせの結果。数値は記録・表示用、`transform` はリサンプルへ渡す用。**0.2.0 以降**。
+ */
+export interface PluginRegistrationResult {
+  /** fixed world → moving world の 4×4（row-major, 16 要素）。 */
+  matrix: number[];
+  center: [number, number, number];
+  translationMm: [number, number, number];
+  eulerDeg: [number, number, number];
+  metric: string;
+  metricValue: number;
+  elapsedMs: number;
+  aborted: boolean;
+  hasDeformation: boolean;
+  maxDisplacementMm: number;
+  /** 本体の内部表現。**中身を見ない**で `resampleVolume` に渡す。 */
+  transform: unknown;
+}
+
 interface PluginHostBase {
   /** 自分の plugin.json の id。 */
   pluginId: string;
@@ -275,9 +384,9 @@ interface PluginHostBase {
   runBackend: (payload?: unknown) => Promise<unknown>;
 }
 
-/** 2D Viewer 系（viewer2d.menu / viewer2d.toolbar）に渡るコンテキスト。 */
+/** 2D Viewer 系サーフェスに渡るコンテキスト。 */
 export interface Viewer2DPluginHost extends PluginHostBase {
-  surface: "viewer2d.menu" | "viewer2d.toolbar";
+  surface: Viewer2DSurface;
   /** 表示中タイルへの操作。 */
   actions: ViewerActions;
   /**
@@ -339,6 +448,62 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * スナップショットを持ち回らないこと。
    */
   getRois: (tileId?: string) => ViewerRoi[];
+  /**
+   * **シリーズ 1 本をボリュームとして読む**。校正済みの値と**患者 LPS の幾何**が付く。
+   * **0.2.0 以降**。
+   *
+   * <p>`getPixelData`（1 枚ずつ・開いているタイルのみ）では複数シリーズの格子の対応が組めない。
+   * こちらは**開いていないシリーズ**も読める（同じ患者の中で）。
+   *
+   * <p>★ **1 回 1 ボリューム。** 大きさは {@link Viewer2DPluginHost.estimateVolume} で
+   * **先に**聞ける。数百 MB になり得るので、聞かずに複数本読まないこと。
+   *
+   * <p>NM（SPECT）の多フレーム断層も、本体が Z に展開してから読む。ただし
+   * **間隔が無いシリーズでは座標を作らない**（捏造しない）ので `spatial: false` になる。
+   */
+  loadVolume: (
+    ref: PluginSeriesRef,
+    onProgress?: (loaded: number, total: number) => void,
+  ) => Promise<PluginVolume | null>;
+  /** 読み込み前の大きさの見積り。**0.2.0 以降**。 */
+  estimateVolume: (ref: PluginSeriesRef) => Promise<PluginVolumeEstimate | null>;
+  /**
+   * **位置合わせを実行する**（剛体・非剛体・その両方）。本体の検証済み実装をそのまま使う。
+   * **0.2.0 以降**。
+   *
+   * <p>★ **プラグインが持っているボリュームは渡せない**（シリーズ参照だけを受ける）。
+   * Worker へは画素バッファを*転送*するので、渡した側の配列が detach されて壊れるため。
+   */
+  registerVolumes: (
+    req: PluginRegistrationRequest,
+    onProgress?: (fraction: number, stage: string) => void,
+  ) => Promise<PluginRegistrationResult | null>;
+  /**
+   * 位置合わせの結果で `source` を `target` の格子へリサンプルする。**0.2.0 以降**。
+   *
+   * <p>向きは **target world → source world**（pull-back）。
+   * **範囲外は `NaN`**（0 で埋めない ＝「視野の外」と「空気」を混同しない）。
+   * `transform` に `null` を渡すと、幾何だけで格子を合わせる（位置合わせなしのリサンプル）。
+   */
+  resampleVolume: (
+    source: PluginVolume,
+    transform: unknown | null,
+    target: PluginVolumeGrid,
+  ) => PluginVolume;
+  /**
+   * **表示位置を移動する**。結果の一覧から「その ROI のスライス」へ飛ぶ用途。**0.1.13 以降**。
+   *
+   * <p>範囲外は端に丸める。**読み出し（`getPixelData`）とは別**にしてあるので、
+   * 読むだけで画面が動くことはない。`tileId` 省略時は対象タイル。
+   */
+  goTo: (tileId: string | undefined, dims: { sliceIndex?: number; c?: number; t?: number }) => void;
+  /**
+   * **ROI を選択状態にする**。`null` で解除。`exclusive` 既定 true（他の選択を外す）。
+   * **0.1.13 以降**。
+   *
+   * <p>ハイライトの実体は本体の選択表示なので、プラグイン独自の強調とずれない。
+   */
+  selectRoi: (tileId: string | undefined, roiUid: string | null, exclusive?: boolean) => void;
   /**
    * ROI に紐付けた**このプラグインの属性**を読む。未設定なら空オブジェクト。
    * キーは自動で `plugin.<pluginId>.` 名前空間に置かれるので、他プラグインの属性とは混ざらない。
@@ -452,3 +617,15 @@ export interface MainScreenPluginHost extends PluginHostBase {
 }
 
 export type PluginHost = Viewer2DPluginHost | MainScreenPluginHost;
+
+/**
+ * `ui.js`（ES モジュール）が公開する契約。
+ * `export function activate(host) {}` か、default export で `{ activate }`。
+ *
+ * <p>⚠️ **`ui.js` は単一ファイルとして配信される**（`GET /api/plugins/{id}/ui.js`）。
+ * バンドラを通らないので、**bare specifier も相対 import も使えない**
+ * （`./core/foo.js` は 404 になる）。ソースを分割するなら、配布前に 1 ファイルへ束ねること。
+ */
+export interface PluginModule {
+  activate(host: PluginHost): void | Promise<void>;
+}

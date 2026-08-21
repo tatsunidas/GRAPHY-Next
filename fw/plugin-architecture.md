@@ -858,6 +858,15 @@ host.locale   // "ja" | "en"（活性化した時点の値）
 
 - ✅ **型定義の同期（本体側 1/5）**: `examples/plugin-template/graphy-plugin.d.ts` に `ViewerTarget` /
   `ViewerViewState` / `getTargets` / `getViewState` を追加済み（README・`ui.js` のコメント例も）。
+- ✅ **2026-08-21 に追いつかせた**: テンプレートには **H10 / H21 が丸ごと欠落していた**
+  （`loadVolume` / `estimateVolume` / `registerVolumes` / `resampleVolume` ＋ その 6 つの型）。
+  併せて `goTo` / `selectRoi`（0.1.13）・`viewer2d.menu.analysis`（0.2.1）・`PluginModule` も追加。
+  **「host API を足したのに、作者からは存在しないように見える」状態が半年近く続いていた。**
+  🛡 **再発防止**: `frontend/src/plugins/pluginTemplateTypes.test.ts` を追加した。
+  `pluginTypes.ts` の `PluginHostBase` / `Viewer2DPluginHost` / `MainScreenPluginHost` の
+  メンバ名と `PluginSurface` の語彙を、テンプレートが**全部持っているか**を検査する
+  （型の同一性までは見ない。テンプレートは意図的に安定サブセットで型名も違うため）。
+  **host API を足すとこのテストが落ちるので、以後は忘れようがない。**
 - 🔴 **残: 外部デモ 4 リポジトリの `graphy-plugin.d.ts`**（[demos ハブ](https://github.com/tatsunidas/graphy-next-plugin-demos) /
   hello / mean-filter / gemini-findings）。本体リポジトリからは触れないので**別作業**。
 - **`engines.graphy` の下限**: 新 API を使うプラグインは `">=0.1.9"` へ上げる
