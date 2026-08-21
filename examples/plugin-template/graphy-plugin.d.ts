@@ -396,7 +396,16 @@ export interface PluginValueVolume {
 export interface PluginViewportOptions {
   /** 表示窓。省略時は値域の 1〜99% から決める。 */
   window?: { center: number; width: number };
-  /** 本体の LUT 名（例 "Hot_Iron"）。省略/null はグレースケール。 */
+  /**
+   * カラーマップ名。省略/null はグレースケール。
+   *
+   * - `"divergent"` … **host が必ず用意する発散色**（負=青 / 0=暗灰 / 正=赤）。差分向け。
+   * - 本体の LUT 名（例 `"Hot_Iron"`）… ⚠️ **ユーザーが LUT ダイアログで 1 度使うまで
+   *   登録されない**ので、当てにすると灰色のままになることがある。
+   * - cornerstone の colormap 名もそのまま通る。
+   *
+   * 解決できない名前は**グレースケールで出し、コンソールに理由を残す**（黙って無視しない）。
+   */
   colormap?: string | null;
   sliceIndex?: number;
 }

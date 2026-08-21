@@ -31,7 +31,7 @@ import {
   type Types,
 } from "@cornerstonejs/core";
 import { ENGINE_ID } from "../viewer/Viewer2D";
-import { setup3DViewport, removeVolumeSafe } from "../viewer/volumeRender";
+import { reapplyModeRendering, removeVolumeSafe } from "../viewer/volumeRender";
 import { geomFromIndexToWorld } from "./pluginMeshApi";
 import { createValueStack, releaseValueStack, autoWindow } from "./pluginVolumeScheme";
 
@@ -73,6 +73,38 @@ export interface PluginVolumeViewHandle {
 const LUT_COLORMAP_PREFIX = "graphy-lut-";
 
 /**
+ * host が**必ず用意する**発散カラーマップの名前。差分のように「0 を挟んで正負に意味がある」
+ * 値を出すためのもので、負＝青 / 0＝暗灰 / 正＝赤。
+ *
+ * 🔴 本体の LUT 名（`Hot_Iron` など）は**ユーザーが 1 度 LUT ダイアログで使うまで
+ * cornerstone に登録されない**。プラグインがそれを当てにすると「指定したのに灰色のまま」
+ * になる（実機で踏んだ）。だから発散色だけは host 側で先に登録しておく。
+ */
+export const PLUGIN_DIVERGENT_COLORMAP = "divergent";
+
+let divergentRegistered = false;
+
+function ensureDivergentColormap(): void {
+  if (divergentRegistered) return;
+  const api = (csUtilities as Any)?.colormap;
+  if (!api?.registerColormap) return;
+  divergentRegistered = true;
+  if (api.getColormap?.(PLUGIN_DIVERGENT_COLORMAP)) return;
+  // 0 を中心に対称。中心を暗くしておくと「変化なし」が背景に沈み、正負だけが立つ。
+  api.registerColormap({
+    ColorSpace: "RGB",
+    Name: PLUGIN_DIVERGENT_COLORMAP,
+    RGBPoints: [
+      0.0, 0.13, 0.4, 1.0,
+      0.25, 0.1, 0.2, 0.55,
+      0.5, 0.08, 0.08, 0.08,
+      0.75, 0.7, 0.18, 0.1,
+      1.0, 1.0, 0.35, 0.15,
+    ],
+  });
+}
+
+/**
  * プラグインが渡した LUT 名を、実際に登録されている colormap 名へ解決する。
  *
  * 🔴 **未登録の名前を黙って渡さない。** cornerstone は知らない colormap 名を無視するので、
@@ -86,6 +118,7 @@ const LUT_COLORMAP_PREFIX = "graphy-lut-";
  */
 function colormapProperty(name?: string | null): { colormap?: { name: string } } {
   if (!name) return {};
+  ensureDivergentColormap();
   const registered = (csUtilities as Any)?.colormap?.getColormap;
   const prefixed = `${LUT_COLORMAP_PREFIX}${name}`;
   if (typeof registered === "function") {
@@ -191,6 +224,46 @@ export async function mountValueViewport(
 }
 
 /**
+ * 🔴 **`setup3DViewport()` を共有エンジンに対して呼んではいけない。**
+ *
+ * あちらは `engine.setViewports([1 つだけ])` で始まる。3D ビューア画面のように
+ * **専用のエンジン**を持つ側では正しいが、共有エンジンに対して呼ぶと
+ * **他のビューポートが全部消える** — プラグインが直前に立てた 2D の面も、
+ * **本体の 2D タイルも**。実機 1 回目で正確にこれを踏んだ（2D 3 面が黒く、MIP だけ残った）。
+ *
+ * そこでここでは `enableElement()` で**足す**。向き・投影・blend・slab の作法は
+ * `setup3DViewport` と揃えてある（CORONAL / 平行投影 / モード別 TF は
+ * `reapplyModeRendering` に委譲）。ツールは付けない——共有エンジンのツールグループを
+ * 触るのは影響範囲が読めないため、まずは表示だけにする。
+ */
+async function mount3D(
+  engine: RenderingEngine,
+  el: HTMLDivElement,
+  viewportId: string,
+  volumeId: string,
+  mode: PluginVolumeViewMode,
+  preset: string | undefined,
+): Promise<void> {
+  const isVr = mode === "VR";
+  engine.enableElement({
+    viewportId,
+    type: isVr ? Enums.ViewportType.VOLUME_3D : Enums.ViewportType.ORTHOGRAPHIC,
+    element: el,
+    defaultOptions: {
+      background: [0, 0, 0] as Types.Point3,
+      orientation: Enums.OrientationAxis.CORONAL,
+      // 平行投影に統一（`setup3DViewport` と同じ理由。perspective は world↔canvas がずれる）。
+      parallelProjection: true,
+    },
+  });
+  const vp = engine.getViewport(viewportId) as Any;
+  await vp.setVolumes([{ volumeId }]);
+  reapplyModeRendering(engine, viewportId, mode as Any, "OT", preset, volumeId);
+  vp.resetCamera?.();
+  engine.renderViewports([viewportId]);
+}
+
+/**
  * **H32** — 値ボリュームを 3D（MIP / MINIP / VR）で貸す。
  *
  * 🔴 **`NaN` は投影の前に潰す。** MIP はレイに沿った最大値なので、`NaN` が 1 つでも混じると
@@ -236,7 +309,6 @@ export async function mountVolumeView(
 
   const volumeId = nextId(`pluginVolume:${pluginId}`);
   const viewportId = nextId(`plugin-3d-${pluginId}`);
-  const toolGroupId = nextId(`plugin-3d-tg-${pluginId}`);
 
   (volumeLoader.createLocalVolume as Any)(volumeId, {
     metadata: {
@@ -260,26 +332,14 @@ export async function mountVolumeView(
     scalarData,
   });
 
-  await setup3DViewport(engine, ENGINE_ID, el as HTMLDivElement, viewportId, volumeId, toolGroupId, {
-    modality: "OT",
-    mode,
-    preset: opts.preset,
-  });
+  await mount3D(engine, el as HTMLDivElement, viewportId, volumeId, mode, opts.preset);
 
   let destroyed = false;
   return {
     async setMode(next: PluginVolumeViewMode) {
       if (destroyed) return;
       mode = next;
-      await setup3DViewport(
-        engine,
-        ENGINE_ID,
-        el as HTMLDivElement,
-        viewportId,
-        volumeId,
-        toolGroupId,
-        { modality: "OT", mode, preset: opts.preset },
-      );
+      await mount3D(engine, el as HTMLDivElement, viewportId, volumeId, mode, opts.preset);
     },
     destroy() {
       if (destroyed) return;
