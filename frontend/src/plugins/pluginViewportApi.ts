@@ -68,6 +68,14 @@ export interface PluginViewportHandle {
   setSlice(index: number): void;
   getSlice(): number;
   setWindowLevel(center: number, width: number): void;
+  /**
+   * **中身だけ差し替える**（大きさは同じであること）。
+   *
+   * <p>手で位置を微調整しながら見る、のような用途では毎フレーム作り直すことになるが、
+   * `destroy()` → `mountViewport()` では**カメラ（ズーム・パン）とスライス位置が毎回飛ぶ**。
+   * ここはビューポートを残したままスタックを差し替えるので、見ている場所が動かない。
+   */
+  setVolume(volume: PluginValueVolume, opts?: PluginViewportOptions): Promise<void>;
   destroy(): void;
 }
 
@@ -204,10 +212,36 @@ export async function mountValueViewport(
   viewport.render();
 
   let destroyed = false;
+  let currentToken = token;
+  let currentIds = imageIds;
   return {
+    async setVolume(next: PluginValueVolume, nextOpts: PluginViewportOptions = {}) {
+      if (destroyed) return;
+      const at = viewport.getCurrentImageIdIndex?.() ?? 0;
+      const created = createValueStack({
+        pluginId,
+        data: next.data,
+        dims: next.dims,
+        nativeIds: referenceImageIds,
+        unit: next.unit,
+        window: nextOpts.window ?? opts.window ?? null,
+      });
+      const previous = currentToken;
+      currentToken = created.token;
+      currentIds = created.imageIds;
+      await viewport.setStack(created.imageIds, Math.min(created.imageIds.length - 1, at));
+      const w = nextOpts.window ?? opts.window ?? autoWindow(next.data);
+      viewport.setProperties({
+        voiRange: { lower: w.center - w.width / 2, upper: w.center + w.width / 2 },
+        ...colormapProperty(nextOpts.colormap ?? opts.colormap),
+      });
+      viewport.render();
+      // 差し替えた**後**に古い方を捨てる（先に捨てると描画中のスライスがキャッシュから消える）。
+      releaseValueStack(previous);
+    },
     setSlice(index: number) {
       if (destroyed) return;
-      viewport.setImageIdIndex?.(Math.min(imageIds.length - 1, Math.max(0, index)));
+      viewport.setImageIdIndex?.(Math.min(currentIds.length - 1, Math.max(0, index)));
       viewport.render();
     },
     getSlice() {
@@ -232,7 +266,7 @@ export async function mountValueViewport(
       } catch {
         /* 既に外れていれば何もしない */
       }
-      releaseValueStack(token);
+      releaseValueStack(currentToken);
     },
   };
 }

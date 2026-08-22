@@ -414,6 +414,13 @@ export interface PluginViewportHandle {
   setSlice(index: number): void;
   getSlice(): number;
   setWindowLevel(center: number, width: number): void;
+  /**
+   * **中身だけ差し替える**（大きさは同じであること）。**0.2.1 以降**。
+   *
+   * <p>`destroy()` → `mountViewport()` ではカメラ（ズーム・パン）とスライス位置が毎回飛ぶ。
+   * 手で動かしながら見るような用途ではこちらを使う。
+   */
+  setVolume(volume: PluginValueVolume, opts?: PluginViewportOptions): Promise<void>;
   destroy(): void;
 }
 
