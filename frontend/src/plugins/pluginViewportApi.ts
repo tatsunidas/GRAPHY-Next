@@ -30,7 +30,7 @@ import {
   utilities as csUtilities,
   type Types,
 } from "@cornerstonejs/core";
-import { ENGINE_ID } from "../viewer/Viewer2D";
+import { ENGINE_ID, scheduleEngineResize } from "../viewer/Viewer2D";
 import {
   ToolGroupManager,
   TrackballRotateTool,
@@ -200,6 +200,7 @@ export async function mountValueViewport(
     ...colormapProperty(opts.colormap),
   });
   attachTools(toolGroupId, viewportId, "2d");
+  const stopResize = observeResize(el, engine);
   viewport.render();
 
   let destroyed = false;
@@ -224,6 +225,7 @@ export async function mountValueViewport(
       destroyed = true;
       // 順番が大事: ビューポートを外してからスタックを捨てる。逆にすると
       // 描画中のスライスがキャッシュから消えて例外になる。
+      stopResize();
       releaseTools(toolGroupId);
       try {
         engine.disableElement(viewportId);
@@ -256,6 +258,7 @@ async function mount3D(
   mode: PluginVolumeViewMode,
   preset: string | undefined,
   toolGroupId: string,
+  centroid: [number, number, number] | null,
 ): Promise<void> {
   const isVr = mode === "VR";
   engine.enableElement({
@@ -273,6 +276,9 @@ async function mount3D(
   await vp.setVolumes([{ volumeId }]);
   reapplyModeRendering(engine, viewportId, mode as Any, "OT", preset, volumeId);
   vp.resetCamera?.();
+  // 🔴 回転の中心を**中身の重心**へ。箱の中心のままだと、隅に固まった差分が
+  // 回すたびに画面の外へ振り回される。
+  if (centroid) lookAt(vp, centroid);
   attachTools(toolGroupId, viewportId, "3d");
   engine.renderViewports([viewportId]);
 }
@@ -319,6 +325,85 @@ function attachTools(toolGroupId: string, viewportId: string, kind: "2d" | "3d")
   } catch (e) {
     // 操作が付かなくても表示は続ける（**黙って落とさず**理由は残す）。
     console.warn(`[plugin-viewport] could not attach tools to ${viewportId}`, e);
+  }
+}
+
+/**
+ * 要素の大きさが変わったら**アスペクト比を作り直す**。
+ *
+ * 🔴 これが無いと、プラグインのウィンドウをリサイズしたときに canvas だけが引き伸ばされ、
+ * **画像の縦横比が崩れる**（実機で指摘を受けた）。cornerstone は要素の変化を自分では見ない。
+ *
+ * ⚠️ 共有エンジンなので `engine.resize()` を直に叩かない。本体の `scheduleEngineResize()` は
+ * rAF で 1 回に束ね、**resize の前に全ビューポートの相対 zoom を退避して復元する**。
+ * 直に叩くと本体のタイルの表示倍率が resize のたびにずれる（`Viewer2D.tsx` の長い注記）。
+ */
+function observeResize(el: HTMLElement, engine: RenderingEngine): () => void {
+  if (typeof ResizeObserver === "undefined") return () => {};
+  const observer = new ResizeObserver(() => scheduleEngineResize(engine));
+  observer.observe(el);
+  return () => observer.disconnect();
+}
+
+/**
+ * 値が入っているところの重心（患者 LPS mm）。**回転の中心**に使う。
+ *
+ * 🔴 ボリュームの箱の中心ではない。閾値後の差分は視野の隅に固まっていることが普通で、
+ * 箱の中心を回転中心にすると**見たいものが画面の外へ振り回される**（実機で指摘を受けた）。
+ */
+function contentCentroid(
+  data: Float32Array,
+  dims: [number, number, number],
+  indexToWorld: number[],
+  background: number,
+): [number, number, number] | null {
+  const [nx, ny] = dims;
+  const nxy = nx * ny;
+  let sx = 0;
+  let sy = 0;
+  let sz = 0;
+  let n = 0;
+  for (let i = 0; i < data.length; i++) {
+    if (data[i] === background) continue;
+    const k = (i / nxy) | 0;
+    const rem = i - k * nxy;
+    const j = (rem / nx) | 0;
+    sx += rem - j * nx;
+    sy += j;
+    sz += k;
+    n++;
+  }
+  if (n === 0) return null;
+  const i0 = sx / n;
+  const j0 = sy / n;
+  const k0 = sz / n;
+  const m = indexToWorld;
+  return [
+    m[0] * i0 + m[1] * j0 + m[2] * k0 + m[3],
+    m[4] * i0 + m[5] * j0 + m[6] * k0 + m[7],
+    m[8] * i0 + m[9] * j0 + m[10] * k0 + m[11],
+  ];
+}
+
+/**
+ * カメラの注視点を動かす。**視線の向きと距離は保つ**（位置も同じだけずらす）。
+ * 注視点だけ動かすと向きが変わってしまう。
+ */
+function lookAt(vp: Any, target: [number, number, number]): void {
+  try {
+    const cam = vp.getCamera();
+    if (!cam?.focalPoint || !cam?.position) return;
+    const d = [
+      target[0] - cam.focalPoint[0],
+      target[1] - cam.focalPoint[1],
+      target[2] - cam.focalPoint[2],
+    ];
+    vp.setCamera({
+      focalPoint: target,
+      position: [cam.position[0] + d[0], cam.position[1] + d[1], cam.position[2] + d[2]],
+    });
+  } catch {
+    /* カメラが未初期化なら何もしない */
   }
 }
 
@@ -402,18 +487,21 @@ export async function mountVolumeView(
     scalarData,
   });
 
-  await mount3D(engine, el as HTMLDivElement, viewportId, volumeId, mode, opts.preset, toolGroupId);
+  const centroid = contentCentroid(scalarData, volume.dims, volume.indexToWorld, fill);
+  await mount3D(engine, el as HTMLDivElement, viewportId, volumeId, mode, opts.preset, toolGroupId, centroid);
+  const stopResize = observeResize(el, engine);
 
   let destroyed = false;
   return {
     async setMode(next: PluginVolumeViewMode) {
       if (destroyed) return;
       mode = next;
-      await mount3D(engine, el as HTMLDivElement, viewportId, volumeId, mode, opts.preset, toolGroupId);
+      await mount3D(engine, el as HTMLDivElement, viewportId, volumeId, mode, opts.preset, toolGroupId, centroid);
     },
     destroy() {
       if (destroyed) return;
       destroyed = true;
+      stopResize();
       releaseTools(toolGroupId);
       try {
         engine.disableElement(viewportId);

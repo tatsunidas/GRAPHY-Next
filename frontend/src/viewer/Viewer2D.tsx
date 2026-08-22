@@ -173,7 +173,7 @@ function getEngine(): RenderingEngine {
  * これで「どのタイルの ResizeObserver が先に走ったか」に結果が依存しなくなる。
  */
 let engineResizeScheduled = false;
-function scheduleEngineResize(engine: RenderingEngine): void {
+export function scheduleEngineResize(engine: RenderingEngine): void {
   if (engineResizeScheduled) return;
   engineResizeScheduled = true;
   requestAnimationFrame(() => {
