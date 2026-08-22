@@ -494,9 +494,12 @@ async function mount3D(
     type: isVr ? Enums.ViewportType.VOLUME_3D : Enums.ViewportType.ORTHOGRAPHIC,
     element: el,
     defaultOptions: {
-      // 🔴 反転したら背景も白へ。黒のままだと、ボリュームの外接箱だけが白く浮いて、
-      // 回すたびに四隅へ黒い楔が入る（＝壊れて見える）。
-      background: (invert ? [1, 1, 1] : [0, 0, 0]) as Types.Point3,
+      // 🔴 背景は「**中身の空白がどう出るか**」に合わせる（反転の有無だけで決めない）。
+      // 詳しくは `emptyRendersWhite()`。合っていないと、外接箱の縁に沿って四隅に楔が入り、
+      // **透けた画素が背景色の点々として浮く**（実機で MinIP を反転して出た）。
+      background: (emptyRendersWhite(mode, invert)
+        ? [1, 1, 1]
+        : [0, 0, 0]) as Types.Point3,
       orientation: Enums.OrientationAxis.CORONAL,
       // 平行投影に統一（`setup3DViewport` と同じ理由。perspective は world↔canvas がずれる）。
       parallelProjection: true,
@@ -528,6 +531,29 @@ async function mount3D(
   }
   attachTools(toolGroupId, viewportId, "3d");
   engine.renderViewports([viewportId]);
+}
+
+/**
+ * **ボリュームの「何も無いところ」が白として出るか。**
+ *
+ * 🔴 ビューポートの背景（＝箱の外・透けた画素）は、これと同じ色でなければならない。
+ * ずれていると、① 回したときに外接箱の縁に沿って四隅へ楔が入り、
+ * ② 透けた画素が**背景色の点々**として画面に散る。
+ *
+ * 空白の値は投影の向きで変わる:
+ * - **MIP** … 空白は値域の**下端**（`mountVolumeView` が `NaN` を最小値で埋め、閾値後の
+ *   非病変部は中立値＝下端）。素で**黒**、反転で**白**。
+ * - **MINIP** … 空白は値域の**上端**（最小値を拾う投影なので、埋め草は最大値）。
+ *   素で**白**、反転で**黒**。**MIP とは逆になる。**
+ *
+ * ⚠️ 実機 3 日目に「反転すると辺のあたりに点々が残る」と報告されたのがこれ。
+ * 反転だけで背景を決めていたので、**MinIP のときだけ本体と背景が逆**になっていた
+ * （素の MinIP も白い箱が黒地に浮いていた——反転して初めて目に付いた）。
+ */
+function emptyRendersWhite(mode: PluginVolumeViewMode, invert: boolean): boolean {
+  // VR は転送関数が色を決めるので、この理屈は当てはまらない。従来どおり黒（反転で白）。
+  const emptyIsHigh = mode === "MINIP";
+  return emptyIsHigh !== invert;
 }
 
 /** 立て直しの前後でカメラを引き継ぐための控え。失敗しても止めない。 */
