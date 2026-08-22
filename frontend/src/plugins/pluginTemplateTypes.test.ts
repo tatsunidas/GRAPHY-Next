@@ -23,6 +23,12 @@ const read = (relative: string) =>
   readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8");
 
 const CONTRACT = read("./pluginTypes.ts");
+/**
+ * 貸し出したものを操作する「ハンドル」は `pluginTypes.ts` ではなくここに居る。
+ * **作者が実際に呼ぶのはハンドルのメソッド**なので、こちらの漏れも同じだけ痛い
+ * （2026-08-22 に H32 の `setInvert` を足したときに気付いた）。
+ */
+const HANDLE_CONTRACT = read("./pluginViewportApi.ts");
 const TEMPLATE = read("../../../examples/plugin-template/graphy-plugin.d.ts");
 
 /** `export interface Name ... {` から、行頭 `}` までを切り出す。 */
@@ -32,6 +38,11 @@ function interfaceBody(source: string, name: string): string {
   const end = source.indexOf("\n}", start);
   expect(end, `interface ${name} の終端が見つからない`).toBeGreaterThan(start);
   return source.slice(start, end);
+}
+
+/** メソッド構文（`setMode(mode: ...): Promise<void>`）のメンバ名。 */
+function methodNames(body: string): string[] {
+  return [...body.matchAll(/^ {2}([A-Za-z_]\w*)\(/gm)].map((m) => m[1]);
 }
 
 /** インターフェース直下（インデント 2）のメンバ名。JSDoc 行や入れ子の型は拾わない。 */
@@ -59,6 +70,16 @@ describe("plugin-template の graphy-plugin.d.ts が本体の契約に追随し�
       const actual = new Set(memberNames(interfaceBody(TEMPLATE, iface)));
       const missing = expected.filter((name) => !actual.has(name));
       expect(missing, `テンプレートに無い host API: ${missing.join(", ")}`).toEqual([]);
+    });
+  }
+
+  for (const iface of ["PluginViewportHandle", "PluginVolumeViewHandle"]) {
+    it(`${iface} のメソッドがすべてテンプレートにある`, () => {
+      const expected = methodNames(interfaceBody(HANDLE_CONTRACT, iface));
+      expect(expected.length).toBeGreaterThan(0);
+      const actual = new Set(methodNames(interfaceBody(TEMPLATE, iface)));
+      const missing = expected.filter((name) => !actual.has(name));
+      expect(missing, `テンプレートに無い操作: ${missing.join(", ")}`).toEqual([]);
     });
   }
 

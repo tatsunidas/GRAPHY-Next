@@ -994,7 +994,7 @@ H30〜H33 は「4 面ウィンドウ・MIP・メッシュ計測ができる箱�
 | **SP0** | 「解析」メニューへの寄与 | `contributes: ["viewer2d.menu.analysis"]` | `pluginTypes.ts` の `PluginSurface` に 1 値追加 ＋ `Viewer2DMenuBar.tsx` の `analysis` メニューに流し込むだけ。**ただし §15.8 とセット** |
 | **H30** ✅ | **プラグイン専用ウィンドウ** | `openWindow({title, width, height}) => { container, close(), onClose(cb) }` | 🔴 **「別ウィンドウ」ではなく「同じ文書の中に浮かべる窓」にした**（下記 15.4.1）。本体が開き、中身の DOM だけ貸す。閉じたら本体が後始末。ビューアを離れるときに `closeAllPluginWindows()` で全部閉じる（**プラグインの後始末を当てにしない**）。タイトルバーの出所表示は**プラグインから消せない** |
 | **H31** | **ビューポートの貸し出し** | `mountViewport(el, source, opts?)`。`source` は `{kind:"series", ref}` か `{kind:"volume", volume}` | 値ボリュームを Cornerstone に載せる経路（§12.2）。W/L・パン/ズーム・スライス同期は**本体の実装をそのまま使う**。`modalityLutModule` の恒等化を忘れない（§14-5） |
-| **H32** | **3D 表示（MIP / VR）** | `mountVolumeView(el, volume, {mode:"MIP"｜"MINIP"｜"VR"})` | `volumeRender.ts` / `vtkVolumeView.ts` の薄い公開。**プラグインに vtk.js を import させない**（§15.7-1） |
+| **H32** ✅ | **3D 表示（MIP / VR）** | `mountVolumeView(el, volume, {mode:"MIP"｜"MINIP"｜"VR", invert?})` ＋ ハンドルの `setMode()` / `setInvert()` | `volumeRender.ts` / `vtkVolumeView.ts` の薄い公開。**プラグインに vtk.js を import させない**（§15.7-1）。★**白黒反転を実機の要望で追加**（2026-08-22・§15.4.2） |
 | **H33** ✅ | **マスク → メッシュ・計測** | `measureMask(mask, opts) => PluginMeshMeasurement[]` | `roiMesh.labelVolumeToMesh` ＋ `mesh3d.measureMesh` をそのまま通すだけ（新しい数式はゼロ）。**幾何をプラグインに書かせない**（H5 と同じ理由）。🔴 **セグメントごとに別メッシュにする**——1 つの LabelVolume に複数番号を入れると `contourValue 0.5` は「0 か非0 か」しか見ず、別々の病変が 1 つの塊として測られる。🔴 **体積は 2 種類返す**（ボクセル数／メッシュ）。平滑化が角を落とすので一致しない |
 
 | **H34** ⚠️ | **シリーズビューパネルの貸し出し**（フュージョン込み）**※本機能では未使用**（§11.3.2 でプラグイン側描画に切り替えた。汎用の能力としては本体に残してある） | `mountSeriesPanel(el, series, {fusion:{series, transform, opacity, lut}})` | ★**実機で追加**（2026-08-21）。🔴 **本体のツリーの中から `createPortal` で差し込む**（独立した `createRoot` はプロバイダの外になり `useI18n must be used within I18nProvider` で死ぬ。§14-22）。本体側は `<PluginSeriesPanels />` をプロバイダの内側に 1 つ置く。**保管庫にある実シリーズしか出せない**ので、値ボリュームは H31 と使い分ける |
@@ -1027,6 +1027,33 @@ H30〜H33 は「4 面ウィンドウ・MIP・メッシュ計測ができる箱�
 🔴 **帰結: 非公開の機能なのに、出荷が本体のリリース周期に縛られる。**
 「プラグインだけ直せる部分」と「本体を出さないと直せない部分」を最初から分けておくこと。
 §15.5 の段階分けはこの縛りを緩めるためのものでもある。
+
+#### 15.4.3 白黒反転（H32・2026-08-22）
+
+実機から「MIP に白黒反転ボタンを付けられますか」。核医学の MIP は反転（白地に黒）で読む
+習慣があるので、当然の要望である。3 つ気をつけた:
+
+1. 🔴 **反転は MINIP ではない。** 反転するのは投影した**後**の階調だけで、投影は最大値の
+   ままである。**反転した MIP でいちばん暗い点は、依然として最大値の点**。「減ったところ」を
+   見たいなら投影そのものを MINIP にする（＝設定の「拾う符号」を変える。§11.3.1）。
+   ボタンの説明文（`title`）にこれを書いた。
+2. 🔴 **背景も一緒に反転する。** ビューポートの背景を黒のままにすると、**ボリュームの外接箱
+   だけが白く浮き、回すと四隅に黒い楔が入る**。背景は `enableElement` の時にしか決められない
+   ので、反転のたびにビューポートを立て直している（ボリュームはキャッシュに載ったままなので
+   読み直しは起きない）。
+3. 🔴 **カメラを持ち越す。** `enableElement` は同じ id なら一度 `disableElement` してから
+   作り直すので、素直に書くと**反転のたびに向きが初期値へ戻る**。それでは見比べにならない。
+   立て直しの前に `getCamera()` を控え、`resetCamera` / `lookAt` の**後**で戻す。
+   モード切替（`setMode`）も同じにしたが、**VR ⇄ MIP はビューポートの型が変わる**ので
+   そのときだけ初期カメラへ戻す。
+
+⚠️ 反転は `applyModeRendering` が転送関数を当てた**後**に入れること。先に入れると
+モード別の転送関数で上書きされて、押しても何も起きない。
+
+⚠️ 併せて、テンプレートの `.d.ts` の追随テストを**ハンドルのメソッドまで**広げた
+（`PluginViewportHandle` / `PluginVolumeViewHandle`）。それまでは `PluginHostBase` などの
+**メンバ名しか見ておらず**、`setInvert` のようなハンドル側の追加は漏れても気付けなかった。
+**作者が実際に呼ぶのはハンドルのメソッド**なので、漏れの痛さは host API と変わらない。
 
 ### 15.5 段階 — host API を待たずに価値を出す
 

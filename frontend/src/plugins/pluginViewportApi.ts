@@ -110,6 +110,18 @@ export type PluginVolumeViewMode = "MIP" | "MINIP" | "VR";
 
 export interface PluginVolumeViewHandle {
   setMode(mode: PluginVolumeViewMode): Promise<void>;
+  /**
+   * **白黒を反転する**（H32・階調のみ）。
+   *
+   * 🔴 **MINIP とは別物**。反転するのは投影した**後**の見え方だけで、投影は最大値のまま
+   * である。反転した MIP で「いちばん暗い点」は、依然として**最大値**の点。
+   * 「減ったところ」を見たいなら `setMode("MINIP")` を使う。
+   *
+   * <p>ビューポートの背景も一緒に切り替える（反転したのに背景が黒のままだと、
+   * ボリュームの外接箱だけが白く浮いて、回すたびに黒い楔が見える）。
+   * **カメラは保つ**——反転のたびに向きが戻ると、見比べにならない。
+   */
+  setInvert(invert: boolean): Promise<void>;
   destroy(): void;
 }
 
@@ -470,14 +482,21 @@ async function mount3D(
   preset: string | undefined,
   toolGroupId: string,
   centroid: [number, number, number] | null,
+  invert: boolean,
+  keepCamera: boolean,
 ): Promise<void> {
   const isVr = mode === "VR";
+  // 立て直す前にカメラを控える。`enableElement` は同じ id なら**一度 disable してから**
+  // 作り直すので、そのままでは向きが初期値へ戻る（反転のたびに回転が戻ると見比べにならない）。
+  const previous = keepCamera ? getCameraSafe(engine, viewportId) : null;
   engine.enableElement({
     viewportId,
     type: isVr ? Enums.ViewportType.VOLUME_3D : Enums.ViewportType.ORTHOGRAPHIC,
     element: el,
     defaultOptions: {
-      background: [0, 0, 0] as Types.Point3,
+      // 🔴 反転したら背景も白へ。黒のままだと、ボリュームの外接箱だけが白く浮いて、
+      // 回すたびに四隅へ黒い楔が入る（＝壊れて見える）。
+      background: (invert ? [1, 1, 1] : [0, 0, 0]) as Types.Point3,
       orientation: Enums.OrientationAxis.CORONAL,
       // 平行投影に統一（`setup3DViewport` と同じ理由。perspective は world↔canvas がずれる）。
       parallelProjection: true,
@@ -486,12 +505,38 @@ async function mount3D(
   const vp = engine.getViewport(viewportId) as Any;
   await vp.setVolumes([{ volumeId }]);
   reapplyModeRendering(engine, viewportId, mode as Any, "OT", preset, volumeId);
+  // 🔴 反転は**モード別の転送関数を当てた後**に。先に入れると `applyModeRendering` の
+  // 転送関数で上書きされて、押しても何も起きない。
+  if (invert) {
+    try {
+      vp.setProperties({ invert: true });
+    } catch (e) {
+      console.warn(`[plugin-viewport] could not invert ${viewportId}`, e);
+    }
+  }
   vp.resetCamera?.();
   // 🔴 回転の中心を**中身の重心**へ。箱の中心のままだと、隅に固まった差分が
   // 回すたびに画面の外へ振り回される。
   if (centroid) lookAt(vp, centroid);
+  // 控えたカメラを戻す（`resetCamera` / `lookAt` の後でないと打ち消される）。
+  if (previous) {
+    try {
+      vp.setCamera?.(previous);
+    } catch {
+      /* 型が変わったとき等は初期カメラのままにする */
+    }
+  }
   attachTools(toolGroupId, viewportId, "3d");
   engine.renderViewports([viewportId]);
+}
+
+/** 立て直しの前後でカメラを引き継ぐための控え。失敗しても止めない。 */
+function getCameraSafe(engine: RenderingEngine, viewportId: string): Any | null {
+  try {
+    return (engine.getViewport(viewportId) as Any)?.getCamera?.() ?? null;
+  } catch {
+    return null;
+  }
 }
 
 const { MouseBindings } = csToolsEnums;
@@ -640,7 +685,12 @@ export async function mountVolumeView(
   el: HTMLElement,
   pluginId: string,
   volume: PluginValueVolume,
-  opts: { mode?: PluginVolumeViewMode; background?: number; preset?: string } = {},
+  opts: {
+    mode?: PluginVolumeViewMode;
+    background?: number;
+    preset?: string;
+    invert?: boolean;
+  } = {},
 ): Promise<PluginVolumeViewHandle | null> {
   const engine = sharedEngine();
   if (!engine) return null;
@@ -648,6 +698,7 @@ export async function mountVolumeView(
   if (!geom) return null;
 
   let mode: PluginVolumeViewMode = opts.mode ?? "MIP";
+  let inverted = opts.invert === true;
 
   let min = Infinity;
   let max = -Infinity;
@@ -699,15 +750,58 @@ export async function mountVolumeView(
   });
 
   const centroid = contentCentroid(scalarData, volume.dims, volume.indexToWorld, fill);
-  await mount3D(engine, el as HTMLDivElement, viewportId, volumeId, mode, opts.preset, toolGroupId, centroid);
+  await mount3D(
+    engine,
+    el as HTMLDivElement,
+    viewportId,
+    volumeId,
+    mode,
+    opts.preset,
+    toolGroupId,
+    centroid,
+    inverted,
+    false,
+  );
   const stopResize = observeResize(el, engine);
 
   let destroyed = false;
   return {
     async setMode(next: PluginVolumeViewMode) {
       if (destroyed) return;
+      // VR と MIP/MINIP はビューポートの型が違う。型をまたぐときにカメラを持ち越すと
+      // 意味の違う値を入れることになるので、そのときだけ初期カメラへ戻す。
+      const sameKind = (mode === "VR") === (next === "VR");
       mode = next;
-      await mount3D(engine, el as HTMLDivElement, viewportId, volumeId, mode, opts.preset, toolGroupId, centroid);
+      await mount3D(
+        engine,
+        el as HTMLDivElement,
+        viewportId,
+        volumeId,
+        mode,
+        opts.preset,
+        toolGroupId,
+        centroid,
+        inverted,
+        sameKind,
+      );
+    },
+    async setInvert(next: boolean) {
+      if (destroyed || inverted === next) return;
+      inverted = next;
+      // 背景色は `enableElement` の時にしか決められないので、立て直す。
+      // 中身（ボリューム）はキャッシュに載ったままなので読み直しは起きない。
+      await mount3D(
+        engine,
+        el as HTMLDivElement,
+        viewportId,
+        volumeId,
+        mode,
+        opts.preset,
+        toolGroupId,
+        centroid,
+        inverted,
+        true,
+      );
     },
     destroy() {
       if (destroyed) return;

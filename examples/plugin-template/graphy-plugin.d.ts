@@ -451,6 +451,12 @@ export type PluginVolumeViewMode = "MIP" | "MINIP" | "VR";
 
 export interface PluginVolumeViewHandle {
   setMode(mode: PluginVolumeViewMode): Promise<void>;
+  /**
+   * **白黒反転**（階調のみ）。🔴 **MINIP とは別物** — 投影は最大値のままで、
+   * 反転するのは投影した後の見え方だけ。反転した MIP の「いちばん暗い点」は最大値の点。
+   * 背景色も一緒に切り替わる。カメラ（向き）は保たれる。
+   */
+  setInvert(invert: boolean): Promise<void>;
   destroy(): void;
 }
 
@@ -724,7 +730,13 @@ export interface Viewer2DPluginHost extends PluginHostBase {
   mountVolumeView: (
     el: HTMLElement,
     volume: PluginValueVolume,
-    opts?: { mode?: PluginVolumeViewMode; background?: number; preset?: string },
+    opts?: {
+      mode?: PluginVolumeViewMode;
+      background?: number;
+      preset?: string;
+      /** 白黒反転（階調のみ。投影は最大値のまま＝MINIP とは別物）。 */
+      invert?: boolean;
+    },
   ) => Promise<PluginVolumeViewHandle | null>;
   /**
    * **マスクをメッシュ化して測る**（H33・**0.2.1 以降**）。セグメントごとに別のメッシュにする。

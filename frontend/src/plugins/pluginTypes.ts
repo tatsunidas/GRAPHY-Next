@@ -442,7 +442,13 @@ export interface Viewer2DPluginHost extends PluginHostBase {
   mountVolumeView: (
     el: HTMLElement,
     volume: PluginValueVolume,
-    opts?: { mode?: PluginVolumeViewMode; background?: number; preset?: string },
+    opts?: {
+      mode?: PluginVolumeViewMode;
+      background?: number;
+      preset?: string;
+      /** 白黒反転（階調のみ。投影は最大値のまま＝MINIP とは別物）。 */
+      invert?: boolean;
+    },
   ) => Promise<PluginVolumeViewHandle | null>;
   /**
    * **マスクをメッシュ化して測る**（H33）。0=背景 / >0=セグメント番号。
