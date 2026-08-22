@@ -75,7 +75,7 @@ import { GLAM_CTX_KEY } from "../radiomics/GlamAnalysisScreen";
 import { useI18n } from "../i18n/i18n";
 import { desktop } from "../desktopBridge";
 import { closeAllPluginWindows } from "../plugins/pluginWindowApi";
-import { mountSeriesPanel } from "../plugins/pluginSeriesPanelApi";
+import { mountSeriesPanel, closeAllSeriesPanels, PluginSeriesPanels } from "../plugins/pluginSeriesPanelApi";
 
 // ── 型定義 ────────────────────────────────────────────────────
 
@@ -716,7 +716,13 @@ function TileGrid({
   // 画面を離れるときに、プラグインが開いた窓を本体側で閉じる（H30）。
   // **プラグインの後始末を当てにしない** — プラグインが例外で落ちても、
   // ビューアが消えた後に窓だけ浮いている状態を作らないため。
-  useEffect(() => closeAllPluginWindows, []);
+  useEffect(
+    () => () => {
+      closeAllPluginWindows();
+      closeAllSeriesPanels();
+    },
+    [],
+  );
 
   // タイル選択状態（Shift+左クリックでトグル）。将来の一括操作の対象指定に使う。
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
@@ -1236,6 +1242,12 @@ function TileGrid({
 
   return (
     <div style={tileArea}>
+      {/*
+        プラグインへ貸したシリーズビューパネル（H34）。**プロバイダの内側**に置くこと——
+        ここがツリー上のどこにあるかで SeriesViewer が引ける context が決まる。
+        描画先はポータルでプラグインの DOM へ飛ぶので、ここに場所は取らない。
+      */}
+      <PluginSeriesPanels />
       <Viewer2DMenuBar
         actions={actions}
         refLines={refLines}
