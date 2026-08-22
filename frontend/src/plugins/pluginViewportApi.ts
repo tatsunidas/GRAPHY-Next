@@ -32,6 +32,7 @@ import {
 } from "@cornerstonejs/core";
 import { ENGINE_ID, scheduleEngineResize } from "../viewer/Viewer2D";
 import { getOrCreateCameraSync } from "../viewer/sync";
+import { fetchLutData } from "../api";
 import { SynchronizerManager } from "@cornerstonejs/tools";
 import {
   ToolGroupManager,
@@ -159,21 +160,34 @@ function ensureDivergentColormap(): void {
  * そのまま通す（`"hsv"` など）。**LUT はユーザーが 1 度使えば登録済みになる**が、
  * 一度も開いていないと未登録なので、必ずこの分岐を通す。
  */
-function colormapProperty(name?: string | null): { colormap?: { name: string } } {
-  if (!name) return {};
+async function resolveColormap(name?: string | null): Promise<string | null> {
+  if (!name) return null;
   ensureDivergentColormap();
-  const registered = (csUtilities as Any)?.colormap?.getColormap;
+  const api = (csUtilities as Any)?.colormap;
+  if (!api?.getColormap) return null;
   const prefixed = `${LUT_COLORMAP_PREFIX}${name}`;
-  if (typeof registered === "function") {
-    if (registered(prefixed)) return { colormap: { name: prefixed } };
-    if (registered(name)) return { colormap: { name } };
+  if (api.getColormap(prefixed)) return prefixed;
+  if (api.getColormap(name)) return name;
+
+  // 🔴 **未登録なら本体の LUT を取ってきて登録する。**
+  // 本体の LUT は「ユーザーが LUT ダイアログで 1 度使うまで cornerstone に登録されない」ので、
+  // 名前を渡しただけでは灰色のままになる（実機で 3 回踏んだ）。
+  // 登録の仕方は `Viewer2D` の LUT 適用と同じにする（`graphy-lut-<名前>`・256 点）。
+  try {
+    const lut = await fetchLutData(name);
+    const rgbPoints: number[] = [];
+    for (let i = 0; i < 256; i++) {
+      rgbPoints.push(i / 255, lut.r[i] / 255, lut.g[i] / 255, lut.b[i] / 255);
+    }
+    api.registerColormap({ ColorSpace: "RGB", Name: prefixed, RGBPoints: rgbPoints });
+    return prefixed;
+  } catch (e) {
     console.warn(
-      `[plugin-viewport] colormap "${name}" is not registered; showing greyscale. ` +
-        "Open the LUT dialog once, or pass a cornerstone colormap name.",
+      `[plugin-viewport] colormap "${name}" could not be resolved; showing greyscale.`,
+      e,
     );
-    return {};
+    return null;
   }
-  return { colormap: { name: prefixed } };
 }
 
 let seq = 0;
@@ -380,7 +394,7 @@ async function addLayer(
   const viewport = engine.getViewport(viewportId) as Any;
   const start = Math.min(created.imageIds.length - 1, Math.max(0, o.sliceIndex ?? 0));
   await viewport.setStack(created.imageIds, start);
-  applyDisplay(viewport, volume.data, o);
+  await applyDisplay(viewport, volume.data, o);
 
   let token = created.token;
   let imageIds = created.imageIds;
@@ -405,7 +419,7 @@ async function addLayer(
       token = again.token;
       imageIds = again.imageIds;
       await viewport.setStack(again.imageIds, Math.min(again.imageIds.length - 1, at));
-      applyDisplay(viewport, data, next);
+      await applyDisplay(viewport, data, next);
       viewport.render();
       // 差し替えた**後**に古い方を捨てる（先に捨てると描画中のスライスが消える）。
       releaseValueStack(previous);
@@ -421,15 +435,16 @@ async function addLayer(
   };
 }
 
-function applyDisplay(
+async function applyDisplay(
   viewport: Any,
   data: Float32Array,
   o: { window?: { center: number; width: number }; colormap?: string | null },
-): void {
+): Promise<void> {
   const win = o.window ?? autoWindow(data);
+  const colormap = await resolveColormap(o.colormap);
   viewport.setProperties({
     voiRange: { lower: win.center - win.width / 2, upper: win.center + win.width / 2 },
-    ...colormapProperty(o.colormap),
+    ...(colormap ? { colormap: { name: colormap } } : {}),
   });
 }
 
