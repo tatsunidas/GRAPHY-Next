@@ -37,7 +37,7 @@
  */
 import { Component, createElement, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { fetchInstances } from "../api";
+import { fetchInstances, fetchLutData, type LutData } from "../api";
 import type { ViewerMode } from "../viewer/imageId";
 import { SeriesViewer } from "../viewer/SeriesViewer";
 import { FusionImageViewer } from "../viewer/FusionOverlayViewer";
@@ -80,10 +80,30 @@ interface PanelRequest {
     seriesUid: string;
     c: number;
     t: number;
-    lut: string | null;
+    lut: LutData | null;
     opacity: number;
     transform: Any;
   } | null;
+}
+
+/**
+ * LUT 名 → **LUT の実データ**。
+ *
+ * 🔴 `FusionImageViewer` の `lut` は `{ r, g, b }` の実データであって**名前ではない**。
+ * 名前の文字列を渡すと `lut.r[g]` が
+ * `TypeError: Cannot read properties of undefined (reading '114')` で落ちる（実機で踏んだ）。
+ * プラグインからは名前で受けて、ここで解決する（プラグインに LUT を取りに行かせない）。
+ *
+ * 取れなければ `null`（＝グレースケール）で描く。**重畳が消えるより、色が付かない方がまし**。
+ */
+async function resolveLut(name: string | null): Promise<LutData | null> {
+  if (!name) return null;
+  try {
+    return await fetchLutData(name);
+  } catch (e) {
+    console.warn(`[plugin-series-panel] LUT "${name}" を読めませんでした。灰色で重ねます。`, e);
+    return null;
+  }
 }
 
 // ── 貸し出し中のパネル（本体のツリーが購読する） ─────────────────────────────
@@ -134,7 +154,7 @@ export async function mountSeriesPanel(
           seriesUid: opts.fusion.series.seriesUid,
           c: opts.fusion.series.c ?? 0,
           t: opts.fusion.series.t ?? 0,
-          lut: opts.fusion.lut === undefined ? "Hot_Iron" : opts.fusion.lut,
+          lut: await resolveLut(opts.fusion.lut === undefined ? "Hot_Iron" : opts.fusion.lut),
           opacity: opts.fusion.opacity ?? 0.5,
           // 位置合わせの結果は**本体の型へ戻してから**渡す。プラグインには `transform` を
           // 「中身を見ない値」として渡してあるので、ここで戻すのが唯一の正しい経路。

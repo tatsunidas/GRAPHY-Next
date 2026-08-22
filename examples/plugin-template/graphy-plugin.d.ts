@@ -433,7 +433,11 @@ export interface PluginSeriesPanelOptions {
     transform?: unknown;
     /** 重ねる側の不透明度（0〜1・既定 0.5）。 */
     opacity?: number;
-    /** 重ねる側の LUT 名（既定 `"Hot_Iron"`）。 */
+    /**
+     * 重ねる側の **LUT 名**（既定 `"Hot_Iron"`）。`null` でグレースケール。
+     * 名前は host が実データへ解決する（**プラグインが LUT を取りに行く必要はない**）。
+     * 読めない名前を渡したときはグレースケールで描き、コンソールに理由を残す。
+     */
     lut?: string | null;
   };
   /** 画像下の操作パネルを出すか（既定 true）。 */
