@@ -31,6 +31,8 @@ import {
   type Types,
 } from "@cornerstonejs/core";
 import { ENGINE_ID, scheduleEngineResize } from "../viewer/Viewer2D";
+import { getOrCreateCameraSync } from "../viewer/sync";
+import { SynchronizerManager } from "@cornerstonejs/tools";
 import {
   ToolGroupManager,
   TrackballRotateTool,
@@ -55,9 +57,29 @@ export interface PluginValueVolume {
   unit?: string;
 }
 
+/**
+ * 前景（フュージョンの上側）。**下地とは別のビューポート**として重ねる。
+ *
+ * 🔴 単一チャンネルのビューポートでは「灰色の下地 ＋ 色の前景 ＋ 透過度」は表現できない。
+ * ここは同じ要素にもう 1 枚ビューポートを重ね、**カメラを同期**し、
+ * CSS の `mix-blend-mode: screen` ＋ `opacity` で合成する。
+ * `screen` を使うのは、**cornerstone のビューポートの背景（黒）が不透明**だからである。
+ * 素の `opacity` だけで重ねると黒が下地を薄める（＝全体が濁る）。
+ */
+export interface PluginViewportOverlay {
+  data: Float32Array;
+  /** 前景の LUT 名。省略/null はグレースケール。 */
+  colormap?: string | null;
+  /** 0〜1（既定 0.5）。 */
+  opacity?: number;
+  window?: { center: number; width: number };
+}
+
 export interface PluginViewportOptions {
   /** 表示窓。省略時は値域の 1〜99% から決める。 */
   window?: { center: number; width: number };
+  /** フュージョンの前景。省略すると 1 層のまま。 */
+  overlay?: PluginViewportOverlay;
   /** 本体の LUT 名（例 `"Hot_Iron"`）。省略/null はグレースケール。 */
   colormap?: string | null;
   /** 最初に出すスライス。 */
@@ -76,6 +98,10 @@ export interface PluginViewportHandle {
    * ここはビューポートを残したままスタックを差し替えるので、見ている場所が動かない。
    */
   setVolume(volume: PluginValueVolume, opts?: PluginViewportOptions): Promise<void>;
+  /** 前景だけ差し替える（`mountViewport` で `overlay` を渡していたときのみ効く）。 */
+  setOverlay(overlay: PluginViewportOverlay): Promise<void>;
+  /** 前景の透過度だけ変える（再サンプルなしで即座に効く）。 */
+  setOverlayOpacity(opacity: number): void;
   destroy(): void;
 }
 
@@ -179,96 +205,232 @@ export async function mountValueViewport(
   const engine = sharedEngine();
   if (!engine) return null;
 
-  const { token, imageIds } = createValueStack({
+  // 層ごとに器を作る。**渡された要素の中身は host が管理する**
+  // （プラグイン側から子要素を触らない）。
+  const baseEl = layerElement(el, false);
+  const base = await addLayer(engine, pluginId, "vp", baseEl, volume, referenceImageIds, {
+    window: opts.window,
+    colormap: opts.colormap,
+    sliceIndex: opts.sliceIndex,
+  });
+
+  let overlay: Layer | null = null;
+  let overlayEl: HTMLDivElement | null = null;
+  let syncId: string | null = null;
+  let stopSliceSync: (() => void) | null = null;
+
+  if (opts.overlay) {
+    overlayEl = layerElement(el, true);
+    applyOverlayStyle(overlayEl, opts.overlay.opacity ?? 0.5);
+    overlay = await addLayer(
+      engine,
+      pluginId,
+      "ov",
+      overlayEl,
+      { ...volume, data: opts.overlay.data },
+      referenceImageIds,
+      {
+        window: opts.overlay.window,
+        colormap: opts.overlay.colormap,
+        sliceIndex: opts.sliceIndex,
+      },
+    );
+    // カメラ（pan/zoom/rotate/flip）は本体の同期をそのまま使う。
+    syncId = nextId(`plugin-fusion-sync-${pluginId}`);
+    const sync = getOrCreateCameraSync(syncId);
+    sync.add({ renderingEngineId: ENGINE_ID, viewportId: base.viewportId });
+    sync.add({ renderingEngineId: ENGINE_ID, viewportId: overlay.viewportId });
+    // スライス送りは下地だけが受ける（前景は pointer-events:none）。追従させる。
+    const follow = () => {
+      const at = (base.viewport.getCurrentImageIdIndex?.() ?? 0) as number;
+      overlay?.viewport.setImageIdIndex?.(Math.min(overlay.imageIds.length - 1, Math.max(0, at)));
+      overlay?.viewport.render();
+    };
+    baseEl.addEventListener(Enums.Events.STACK_NEW_IMAGE, follow);
+    stopSliceSync = () => baseEl.removeEventListener(Enums.Events.STACK_NEW_IMAGE, follow);
+  }
+
+  attachTools(base.toolGroupId, base.viewportId, "2d");
+  const stopResize = observeResize(el, engine);
+  base.viewport.render();
+  overlay?.viewport.render();
+
+  let destroyed = false;
+  return {
+    async setVolume(next: PluginValueVolume, nextOpts: PluginViewportOptions = {}) {
+      if (destroyed) return;
+      await base.replace(next.data, {
+        window: nextOpts.window ?? opts.window,
+        colormap: nextOpts.colormap ?? opts.colormap,
+      });
+    },
+    async setOverlay(next: PluginViewportOverlay) {
+      if (destroyed || !overlay) return;
+      await overlay.replace(next.data, {
+        window: next.window ?? opts.overlay?.window,
+        colormap: next.colormap ?? opts.overlay?.colormap,
+      });
+      if (overlayEl && Number.isFinite(next.opacity)) {
+        applyOverlayStyle(overlayEl, next.opacity as number);
+      }
+    },
+    setOverlayOpacity(opacity: number) {
+      if (destroyed || !overlayEl) return;
+      applyOverlayStyle(overlayEl, opacity);
+    },
+    setSlice(index: number) {
+      if (destroyed) return;
+      base.viewport.setImageIdIndex?.(Math.min(base.imageIds.length - 1, Math.max(0, index)));
+      base.viewport.render();
+    },
+    getSlice() {
+      return destroyed ? -1 : ((base.viewport.getCurrentImageIdIndex?.() ?? 0) as number);
+    },
+    setWindowLevel(center: number, width: number) {
+      if (destroyed) return;
+      base.viewport.setProperties({
+        voiRange: { lower: center - width / 2, upper: center + width / 2 },
+      });
+      base.viewport.render();
+    },
+    destroy() {
+      if (destroyed) return;
+      destroyed = true;
+      // 順番が大事: 同期とイベントを外し、ビューポートを外してからスタックを捨てる。
+      // 逆にすると描画中のスライスがキャッシュから消えて例外になる。
+      stopSliceSync?.();
+      if (syncId) {
+        try {
+          SynchronizerManager.destroySynchronizer(syncId);
+        } catch {
+          /* 既に無ければ何もしない */
+        }
+      }
+      stopResize();
+      releaseTools(base.toolGroupId);
+      overlay?.dispose();
+      base.dispose();
+      baseEl.remove();
+      overlayEl?.remove();
+    },
+  };
+}
+
+/** 層ごとの器。前景は下地の上に重ね、操作は下地だけが受ける。 */
+function layerElement(host: HTMLElement, isOverlay: boolean): HTMLDivElement {
+  const div = document.createElement("div");
+  div.style.position = "absolute";
+  div.style.inset = "0";
+  if (isOverlay) div.style.pointerEvents = "none";
+  host.appendChild(div);
+  return div;
+}
+
+/**
+ * 前景の合成。
+ *
+ * 🔴 `opacity` だけでは足りず `mix-blend-mode: screen` が要る。**cornerstone の
+ * ビューポートは背景（黒）を不透明に塗る**ので、素の透過だけで重ねると黒が下地を薄めて
+ * 全体が濁る。`screen` なら黒は何も足さないので、前景の明るいところだけが下地に乗る
+ * （フュージョンの見え方としても素直）。
+ */
+function applyOverlayStyle(el: HTMLElement, opacity: number): void {
+  el.style.opacity = String(Math.min(1, Math.max(0, opacity)));
+  el.style.mixBlendMode = "screen";
+}
+
+interface Layer {
+  viewportId: string;
+  toolGroupId: string;
+  viewport: Any;
+  readonly imageIds: string[];
+  replace(
+    data: Float32Array,
+    o: { window?: { center: number; width: number }; colormap?: string | null },
+  ): Promise<void>;
+  dispose(): void;
+}
+
+/** 1 層ぶんのビューポートを立てる（下地・前景で共通）。 */
+async function addLayer(
+  engine: RenderingEngine,
+  pluginId: string,
+  kind: string,
+  el: HTMLDivElement,
+  volume: PluginValueVolume,
+  referenceImageIds: string[],
+  o: { window?: { center: number; width: number }; colormap?: string | null; sliceIndex?: number },
+): Promise<Layer> {
+  const created = createValueStack({
     pluginId,
     data: volume.data,
     dims: volume.dims,
     nativeIds: referenceImageIds,
     unit: volume.unit,
-    window: opts.window ?? null,
+    window: o.window ?? null,
   });
-
-  const viewportId = nextId(`plugin-vp-${pluginId}`);
-  const toolGroupId = nextId(`plugin-vp-tg-${pluginId}`);
+  const viewportId = nextId(`plugin-${kind}-${pluginId}`);
+  const toolGroupId = nextId(`plugin-${kind}-tg-${pluginId}`);
   engine.enableElement({
     viewportId,
     type: Enums.ViewportType.STACK,
-    element: el as HTMLDivElement,
+    element: el,
     defaultOptions: { background: [0, 0, 0] as Types.Point3 },
   });
   const viewport = engine.getViewport(viewportId) as Any;
-  const start = Math.min(imageIds.length - 1, Math.max(0, opts.sliceIndex ?? 0));
-  await viewport.setStack(imageIds, start);
-  const win = opts.window ?? autoWindow(volume.data);
-  viewport.setProperties({
-    voiRange: {
-      lower: win.center - win.width / 2,
-      upper: win.center + win.width / 2,
-    },
-    ...colormapProperty(opts.colormap),
-  });
-  attachTools(toolGroupId, viewportId, "2d");
-  const stopResize = observeResize(el, engine);
-  viewport.render();
+  const start = Math.min(created.imageIds.length - 1, Math.max(0, o.sliceIndex ?? 0));
+  await viewport.setStack(created.imageIds, start);
+  applyDisplay(viewport, volume.data, o);
 
-  let destroyed = false;
-  let currentToken = token;
-  let currentIds = imageIds;
+  let token = created.token;
+  let imageIds = created.imageIds;
   return {
-    async setVolume(next: PluginValueVolume, nextOpts: PluginViewportOptions = {}) {
-      if (destroyed) return;
-      const at = viewport.getCurrentImageIdIndex?.() ?? 0;
-      const created = createValueStack({
+    viewportId,
+    toolGroupId,
+    viewport,
+    get imageIds() {
+      return imageIds;
+    },
+    async replace(data, next) {
+      const at = (viewport.getCurrentImageIdIndex?.() ?? 0) as number;
+      const again = createValueStack({
         pluginId,
-        data: next.data,
-        dims: next.dims,
+        data,
+        dims: volume.dims,
         nativeIds: referenceImageIds,
-        unit: next.unit,
-        window: nextOpts.window ?? opts.window ?? null,
+        unit: volume.unit,
+        window: next.window ?? null,
       });
-      const previous = currentToken;
-      currentToken = created.token;
-      currentIds = created.imageIds;
-      await viewport.setStack(created.imageIds, Math.min(created.imageIds.length - 1, at));
-      const w = nextOpts.window ?? opts.window ?? autoWindow(next.data);
-      viewport.setProperties({
-        voiRange: { lower: w.center - w.width / 2, upper: w.center + w.width / 2 },
-        ...colormapProperty(nextOpts.colormap ?? opts.colormap),
-      });
+      const previous = token;
+      token = again.token;
+      imageIds = again.imageIds;
+      await viewport.setStack(again.imageIds, Math.min(again.imageIds.length - 1, at));
+      applyDisplay(viewport, data, next);
       viewport.render();
-      // 差し替えた**後**に古い方を捨てる（先に捨てると描画中のスライスがキャッシュから消える）。
+      // 差し替えた**後**に古い方を捨てる（先に捨てると描画中のスライスが消える）。
       releaseValueStack(previous);
     },
-    setSlice(index: number) {
-      if (destroyed) return;
-      viewport.setImageIdIndex?.(Math.min(currentIds.length - 1, Math.max(0, index)));
-      viewport.render();
-    },
-    getSlice() {
-      return destroyed ? -1 : (viewport.getCurrentImageIdIndex?.() ?? 0);
-    },
-    setWindowLevel(center: number, width: number) {
-      if (destroyed) return;
-      viewport.setProperties({
-        voiRange: { lower: center - width / 2, upper: center + width / 2 },
-      });
-      viewport.render();
-    },
-    destroy() {
-      if (destroyed) return;
-      destroyed = true;
-      // 順番が大事: ビューポートを外してからスタックを捨てる。逆にすると
-      // 描画中のスライスがキャッシュから消えて例外になる。
-      stopResize();
-      releaseTools(toolGroupId);
+    dispose() {
       try {
         engine.disableElement(viewportId);
       } catch {
         /* 既に外れていれば何もしない */
       }
-      releaseValueStack(currentToken);
+      releaseValueStack(token);
     },
   };
+}
+
+function applyDisplay(
+  viewport: Any,
+  data: Float32Array,
+  o: { window?: { center: number; width: number }; colormap?: string | null },
+): void {
+  const win = o.window ?? autoWindow(data);
+  viewport.setProperties({
+    voiRange: { lower: win.center - win.width / 2, upper: win.center + win.width / 2 },
+    ...colormapProperty(o.colormap),
+  });
 }
 
 /**

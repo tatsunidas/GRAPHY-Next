@@ -393,9 +393,28 @@ export interface PluginValueVolume {
   unit?: string;
 }
 
+/**
+ * フュージョンの前景（**0.2.1 以降**）。**下地とは別のビューポート**として重ねる。
+ *
+ * 🔴 単一チャンネルのビューポートでは「灰色の下地 ＋ 色の前景 ＋ 透過度」は表現できない。
+ * host は同じ要素にもう 1 枚ビューポートを重ね、カメラとスライスを同期し、
+ * `mix-blend-mode: screen` ＋ `opacity` で合成する（cornerstone の背景の黒が不透明なので、
+ * 素の透過だけで重ねると下地が濁る）。
+ */
+export interface PluginViewportOverlay {
+  data: Float32Array;
+  /** 前景の LUT 名。省略/null はグレースケール。 */
+  colormap?: string | null;
+  /** 0〜1（既定 0.5）。 */
+  opacity?: number;
+  window?: { center: number; width: number };
+}
+
 export interface PluginViewportOptions {
   /** 表示窓。省略時は値域の 1〜99% から決める。 */
   window?: { center: number; width: number };
+  /** フュージョンの前景。省略すると 1 層のまま。**0.2.1 以降**。 */
+  overlay?: PluginViewportOverlay;
   /**
    * カラーマップ名。省略/null はグレースケール。
    *
@@ -421,6 +440,10 @@ export interface PluginViewportHandle {
    * 手で動かしながら見るような用途ではこちらを使う。
    */
   setVolume(volume: PluginValueVolume, opts?: PluginViewportOptions): Promise<void>;
+  /** 前景だけ差し替える（`overlay` を渡していたときのみ効く）。**0.2.1 以降**。 */
+  setOverlay(overlay: PluginViewportOverlay): Promise<void>;
+  /** 前景の透過度だけ変える（再サンプル不要・その場で効く）。**0.2.1 以降**。 */
+  setOverlayOpacity(opacity: number): void;
   destroy(): void;
 }
 
