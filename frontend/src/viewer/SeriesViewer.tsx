@@ -61,7 +61,10 @@ import {
 import { imageIdForInstance, sopUidFromImageId, type ViewerMode } from "./imageId";
 import { XaPresentationDialog } from "./XaPresentationDialog";
 import type { PresentationPlan } from "./xaPresentationApply";
-import { clearXaCalibrationCache, setXaUserCalibration } from "./xaCalibrationProvider";
+import {
+  ensureXaCalibrationsLoaded,
+  persistXaUserCalibration,
+} from "./xaCalibrationPersistence";
 import { advanceAnchor, sliceStepsFromDrag } from "./touchScroll";
 import { installDebugApi, countStackSwap } from "./debugApi";
 import { matchesCombo } from "../shortcuts/registry";
@@ -370,6 +373,20 @@ export function SeriesViewer({
   const qcaRuns = useQcaRuns();
   // 空間校正の確定/解除は imageId を変えないため、Viewer2D にメタデータを読み直させる鍵。
   const [calibVersion, setCalibVersion] = useState(0);
+  // 保存済みの空間校正を戻す（§7.4）。戻ったら表示（スケールバー・計測ラベル）を作り直す。
+  useEffect(() => {
+    let cancelled = false;
+    ensureXaCalibrationsLoaded()
+      .then((n) => {
+        if (!cancelled && n > 0) setCalibVersion((v) => v + 1);
+      })
+      .catch(() => {
+        /* 取れなくても表示は続ける（校正が無い状態＝px 表示で安全側） */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   // 連番 PNG エクスポート（fw/angio-design.md §14.3）。
   const [exportBusy, setExportBusy] = useState(false);
   const [exportDone, setExportDone] = useState(0);
@@ -591,9 +608,10 @@ export function SeriesViewer({
       applyTransform(vp, { rotation: plan.rotation, flipHorizontal: plan.flipHorizontal });
     }
     if (plan.mmPerPx != null) {
-      // 出自は "gsps"。人が測った校正と混ぜない（表示にもそう出る）。
-      setXaUserCalibration(seriesUid, { mmPerPx: plan.mmPerPx, method: "gsps" });
-      clearXaCalibrationCache();
+      // 出自は "gsps"。人が測った校正と混ぜない（表示にもそう出る）。保存まで含めて確定する。
+      void persistXaUserCalibration(seriesUid, { mmPerPx: plan.mmPerPx, method: "gsps" }).then(() =>
+        setCalibVersion((v) => v + 1),
+      );
       setCalibVersion((v) => v + 1);
     }
     if (plan.dsa) {

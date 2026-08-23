@@ -36,12 +36,8 @@ import { publishAnalysisResult } from "../report/analysisResultStore";
 import { qcaRecord, qvaRecord } from "../report/xaAnalysisRecords";
 import { describeView, qcaRunKey, registerQcaRun, removeQcaRun } from "./xaRecon3dStore";
 import { readXaViewGeometry } from "./xaViewGeometryProvider";
-import {
-  calibrationForImageId,
-  clearXaCalibrationCache,
-  loaderSpacingFor,
-  setXaUserCalibration,
-} from "./xaCalibrationProvider";
+import { calibrationForImageId, loaderSpacingFor } from "./xaCalibrationProvider";
+import { persistXaUserCalibration } from "./xaCalibrationPersistence";
 import { clearedBy, deriveQcaSteps, type ManualInputKey } from "./xaTasks";
 
 /** [x,y] の並びを GSPS 用のフラットな配列にする。 */
@@ -319,8 +315,8 @@ export function XaAnalysisDialog({
       setError(t("xa.analysis.needLength"));
       return;
     }
-    setXaUserCalibration(seriesUid, { mmPerPx: mm / pick.lengthPx, method, note });
-    clearXaCalibrationCache();
+    // 🚨 保存まで含めて確定する（`setXaUserCalibration` を直に呼ぶと次に開いたとき消えている）。
+    void persistXaUserCalibration(seriesUid, { mmPerPx: mm / pick.lengthPx, method, note });
     invalidateAnnotations();
     setError(null);
     setCalibVersion((v) => v + 1);
@@ -846,8 +842,8 @@ export function XaAnalysisDialog({
               style={btn}
               data-testid="xa-clear-calibration"
               onClick={() => {
-                setXaUserCalibration(seriesUid, null);
-                clearXaCalibrationCache();
+                // 解除も残す（次に開いたときに消したはずの校正が戻るのを防ぐ）。
+                void persistXaUserCalibration(seriesUid, null);
                 invalidateAnnotations();
                 setCalibVersion((v) => v + 1);
                 onCalibrated?.();

@@ -10,6 +10,7 @@ import com.vis.graphynext.plugin.store.SavePluginDocumentRequest;
 import com.vis.graphynext.roi.RoiDocumentRepository;
 import com.vis.graphynext.roi.RoiDocumentService;
 import com.vis.graphynext.roi.SaveRoiDocumentRequest;
+import com.vis.graphynext.settings.SettingsService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -48,7 +49,30 @@ class AutomatorServiceResetTest {
     @Autowired
     PluginDocumentRepository pluginRepo;
 
+    @Autowired
+    SettingsService settings;
+
     private static final String JSON = "{\"schema\":1,\"rois\":[{\"roiUid\":\"u1\",\"tool\":\"Length\"}]}";
+
+    @Test
+    void reset_deletesXaCalibrationsButKeepsRealSettings() {
+        // 🚨 XA の空間校正は「環境設定」ではなく症例に紐づくデータ。消し残すと、
+        //    前の実行で確定した校正が次の実行に効いて**「未校正なら px 表示」が黙って通る**。
+        settings.putAll(java.util.Map.of(
+                SettingsService.XA_CALIBRATION_PREFIX + "1.2.3",
+                "{\"v\":1,\"mmPerPx\":0.208,\"method\":\"catheter\"}",
+                SettingsService.XA_CALIBRATION_PREFIX + "1.2.4",
+                "{\"v\":1,\"mmPerPx\":0.3,\"method\":\"ruler\"}",
+                SettingsService.DEBUG_MODE_KEY, "true"));
+
+        AutomatorService.ResetResult r = automator.reset();
+
+        assertEquals(2, r.deletedXaCalibrations(), "校正の削除件数が返る");
+        assertNull(settings.getAll().get(SettingsService.XA_CALIBRATION_PREFIX + "1.2.3"));
+        assertNull(settings.getAll().get(SettingsService.XA_CALIBRATION_PREFIX + "1.2.4"));
+        // 環境設定そのものは消さない（ここまで消すと検証環境の前提が毎回崩れる）。
+        assertEquals("true", settings.getAll().get(SettingsService.DEBUG_MODE_KEY));
+    }
 
     @Test
     void reset_deletesRoiDocuments() {

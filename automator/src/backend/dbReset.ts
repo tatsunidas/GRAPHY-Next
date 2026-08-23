@@ -3,6 +3,14 @@ export interface ResetResult {
   deletedReports: number;
   /** ROI（幾何注釈）の保存ドキュメント件数。残すと次の検証が前回の ROI を復元してしまう。 */
   deletedRoiDocuments: number;
+  /** プラグイン保存領域の件数。 */
+  deletedPluginDocuments?: number;
+  /**
+   * XA の空間校正（`xa.calibration.*`）の件数。
+   * 🚨 残すと**前の実行で確定した校正が次の実行に効く**——「未校正なら px 表示」の検証が
+   * 黙って通る（設定ストアに置いてあるので、DB リセットだけでは消えない）。
+   */
+  deletedXaCalibrations?: number;
 }
 
 /**

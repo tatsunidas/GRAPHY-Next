@@ -9,6 +9,7 @@ import com.vis.graphynext.dicom.store.DicomInstanceRepository;
 import com.vis.graphynext.report.ReportRepository;
 import com.vis.graphynext.plugin.store.PluginDocumentRepository;
 import com.vis.graphynext.roi.RoiDocumentRepository;
+import com.vis.graphynext.settings.SettingsService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -42,25 +43,36 @@ public class AutomatorService {
     private final ReportRepository reportRepo;
     private final RoiDocumentRepository roiRepo;
     private final PluginDocumentRepository pluginRepo;
+    private final SettingsService settings;
 
     public AutomatorService(
             DicomInstanceRepository dicomRepo,
             ReportRepository reportRepo,
             RoiDocumentRepository roiRepo,
-            PluginDocumentRepository pluginRepo) {
+            PluginDocumentRepository pluginRepo,
+            SettingsService settings) {
         this.dicomRepo = dicomRepo;
         this.reportRepo = reportRepo;
         this.roiRepo = roiRepo;
         this.pluginRepo = pluginRepo;
+        this.settings = settings;
     }
 
     public record ResetResult(
-            int deletedInstances, int deletedReports, int deletedRoiDocuments, int deletedPluginDocuments) {
+            int deletedInstances,
+            int deletedReports,
+            int deletedRoiDocuments,
+            int deletedPluginDocuments,
+            int deletedXaCalibrations) {
     }
 
     /**
-     * 症例データ（DICOMインスタンス索引＋実ファイル、レポート、ROI 保存、プラグイン保存領域）を
-     * 全削除する。環境設定(Setting)は対象外。
+     * 症例データ（DICOMインスタンス索引＋実ファイル、レポート、ROI 保存、プラグイン保存領域、
+     * <b>XA の空間校正</b>）を全削除する。環境設定(Setting)は原則対象外だが、
+     * <b>{@code xa.calibration.*} だけは症例に紐づくデータなので消す</b>。
+     *
+     * <p>🚨 消し残すと<b>前の実行で確定した校正が次の実行に効く</b>——
+     * 「未校正なら px 表示」の検証が黙って通り、**検証が嘘になる**（ROI 保存で実際に踏んだ形）。
      *
      * <p><b>プラグイン保存領域も消す。</b> 消し残すと「症例を消したのに評価記録が残る」状態になり、
      * 検証では前回の実行の記録が次の実行に混ざる（ROI 保存で実際に起きた）。
@@ -88,8 +100,12 @@ public class AutomatorService {
         long pluginCount = pluginRepo.count();
         pluginRepo.deleteAll();
 
-        log.info("[automator] reset: instances={}, reports={}, roiDocuments={}, pluginDocuments={}",
-                instances.size(), reportCount, roiCount, pluginCount);
-        return new ResetResult(instances.size(), (int) reportCount, (int) roiCount, (int) pluginCount);
+        int calibCount = settings.deleteByPrefix(SettingsService.XA_CALIBRATION_PREFIX);
+
+        log.info("[automator] reset: instances={}, reports={}, roiDocuments={}, pluginDocuments={}, "
+                + "xaCalibrations={}",
+                instances.size(), reportCount, roiCount, pluginCount, calibCount);
+        return new ResetResult(
+                instances.size(), (int) reportCount, (int) roiCount, (int) pluginCount, calibCount);
     }
 }

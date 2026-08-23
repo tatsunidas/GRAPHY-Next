@@ -7,7 +7,9 @@ package com.vis.graphynext.settings;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -27,6 +29,17 @@ public class SettingsService {
      * 設計: fw/plugin-manager-design.md §5。
      */
     public static final String PLUGIN_INSTALL_ENABLED_KEY = "plugins.installEnabled";
+
+    /**
+     * XA の空間校正（シリーズ単位）。キーは {@code xa.calibration.<SeriesInstanceUID>}。
+     * 設計: fw/angio-design.md §7.4。
+     *
+     * <p>🚨 <b>これは環境設定ではなく症例に紐づくデータ</b>。だから
+     * {@code AutomatorService.reset()} は<b>このプレフィックスだけ消す</b>——
+     * 消し残すと、前の実行で確定した校正が次の実行に効いて
+     * <b>「未校正なら px 表示」の検証が黙って通る</b>（ROI 保存で実際に起きた形）。
+     */
+    public static final String XA_CALIBRATION_PREFIX = "xa.calibration.";
 
     private final SettingRepository repo;
     private final DebugLogControl debugLogControl;
@@ -60,5 +73,25 @@ public class SettingsService {
             }
         }
         return getAll();
+    }
+
+    /**
+     * プレフィックスに一致するキーを消す（症例に紐づく設定の後始末用）。
+     *
+     * @return 消した件数
+     */
+    @Transactional
+    public int deleteByPrefix(String prefix) {
+        if (prefix == null || prefix.isBlank()) {
+            return 0;
+        }
+        List<Setting> hit = new ArrayList<>();
+        for (Setting s : repo.findAll()) {
+            if (s.getKey() != null && s.getKey().startsWith(prefix)) {
+                hit.add(s);
+            }
+        }
+        repo.deleteAll(hit);
+        return hit.size();
     }
 }
