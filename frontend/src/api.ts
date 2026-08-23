@@ -2,7 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import { httpGet, httpSend } from "./http";
+import { HttpError, httpGet, httpSend } from "./http";
 import { apiBase } from "./apiBase";
 
 // apiBase は apiBase.ts へ分離（循環インポート回避）。互換のため再エクスポート。
@@ -341,6 +341,27 @@ export interface XaPresentationState {
   texts: { layer: string; text: string; anchorX: number; anchorY: number }[];
   warnings: string[];
 }
+
+/**
+ * フロントで焼いた PNG 列（ZIP）を MP4 にしてもらう（`fw/angio-design.md` §14.3）。
+ *
+ * 🚨 **画像はフロントから送る。** 出したいのは「今見えている絵」——DSA の差分・ピクセルシフト・
+ * W/L・白黒反転を当てた後の画像で、これらはフロントにしか無い。元の DICOM から作り直すと
+ * **画面と違う動画**が出る。
+ *
+ * @throws HttpError 422 なら ffmpeg が無い（環境の問題）。呼び出し側はその旨を案内する。
+ */
+export const encodeXaMp4 = async (zip: Uint8Array, fps: number): Promise<Uint8Array> => {
+  const res = await fetch(`${apiBase()}/api/angio/mp4?fps=${encodeURIComponent(String(fps))}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: zip as unknown as BodyInit,
+  });
+  if (!res.ok) {
+    throw new HttpError(await res.text().catch(() => ""), res.status);
+  }
+  return new Uint8Array(await res.arrayBuffer());
+};
 
 /** 保管庫の GSPS を読む（他社が書いた表示状態の適用。§14.1）。 */
 export const fetchXaPresentationState = (sopUid: string) =>

@@ -4,7 +4,7 @@
  */
 import { cache, getRenderingEngine, metaData } from "@cornerstonejs/core";
 import { ENGINE_ID } from "./Viewer2D";
-import { readCamera, readColormapName, readVoiWindow } from "./viewportRead";
+import { readCamera, readColormapName, readInvert, readVoiWindow } from "./viewportRead";
 
 /**
  * automator（自律検証ツール）専用のデバッグAPI。`window.__graphyDebug` として公開し、
@@ -135,6 +135,12 @@ export interface ViewportProperties {
   colormapName: string | null;
   /** 適用中の window/level（voiRange から算出）。取得不可なら null。 */
   windowLevel: { center: number; width: number } | null;
+  /**
+   * 白黒反転が掛かっているか。
+   * 🚨 **書き出し（PNG / MP4）が画面と同じ極性か**を automator が突き合わせるのに要る。
+   * 実機で「MP4 が画面の完全な補色」という壊れ方を掴んだのがこの値（2026-08-23）。
+   */
+  invert: boolean | null;
 }
 
 function getViewportProperties(): ViewportProperties[] {
@@ -147,6 +153,7 @@ function getViewportProperties(): ViewportProperties[] {
       // checklist は「LUT を当てたか」を見るので、内部グレースケール名は畳まず生の名前を返す。
       colormapName: readColormapName(vp),
       windowLevel: readVoiWindow(vp),
+      invert: readInvert(vp),
     });
   }
   return out;

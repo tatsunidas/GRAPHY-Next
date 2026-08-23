@@ -11,7 +11,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
@@ -24,6 +26,7 @@ import java.io.IOException;
  * <ul>
  *   <li>{@code POST /api/angio/presentation-state} … XA/XRF GSPS（DSA 設定・VOI・計測描画・空間校正）</li>
  *   <li>{@code GET  /api/angio/presentation-state/{sop}} … 保管庫の GSPS を読んで適用可能な形にする</li>
+ *   <li>{@code POST /api/angio/mp4} … フロントが焼いた PNG 列（ZIP）を MP4 にする</li>
  *   <li>{@code POST /api/angio/qca-sr} … QCA 計測値の Comprehensive SR</li>
  *   <li>{@code POST /api/angio/qva-sr} … QVA（末梢・脳血管）計測値の Comprehensive SR</li>
  * </ul>
@@ -35,9 +38,40 @@ public class AngioController {
     private static final Logger log = LoggerFactory.getLogger(AngioController.class);
 
     private final AngioStoreService service;
+    private final AngioMp4Service mp4;
 
-    public AngioController(AngioStoreService service) {
+    public AngioController(AngioStoreService service, AngioMp4Service mp4) {
         this.service = service;
+        this.mp4 = mp4;
+    }
+
+    /**
+     * PNG 列（ZIP）を MP4 にする（§14.3）。
+     *
+     * <p>🚨 <b>画像はフロントから来る。</b> 出したいのは「今見えている絵」——DSA の差分・
+     * ピクセルシフト・W/L・白黒反転を当てた後の画像で、これらはフロントにしか無い。
+     * 元の DICOM から作り直すと<b>画面と違う動画</b>が出る。
+     *
+     * <p>ffmpeg が無い環境では <b>422</b>（環境の問題であって、要求が壊れているわけではない）。
+     */
+    @PostMapping(value = "/mp4", consumes = MediaType.APPLICATION_OCTET_STREAM_VALUE)
+    public ResponseEntity<byte[]> encodeMp4(
+            @RequestBody byte[] zip,
+            @RequestParam(name = "fps", defaultValue = "15") double fps) {
+        if (zip == null || zip.length == 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "フレームがありません");
+        }
+        try {
+            byte[] out = mp4.encode(zip, fps);
+            return ResponseEntity.ok()
+                    .contentType(MediaType.parseMediaType("video/mp4"))
+                    .body(out);
+        } catch (AngioMp4Service.FfmpegUnavailableException e) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "ffmpeg が必要です");
+        } catch (IOException e) {
+            log.error("MP4 の生成に失敗", e);
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "MP4 を生成できませんでした");
+        }
     }
 
     @PostMapping("/presentation-state")

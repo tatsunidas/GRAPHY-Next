@@ -198,7 +198,8 @@ export default function CineControls({
             ))}
           </select>
         </label>
-        <span style={hint} title={t(`cine.fpsSource.${fpsSource}`)}>
+        {/* fps は automator が「動画の尺が画面と合っているか」を突き合わせる根拠になる。 */}
+        <span style={hint} data-testid="cine-fps" title={t(`cine.fpsSource.${fpsSource}`)}>
           {t("cine.fps", { fps: fps.toFixed(1) })} · {fmtSec(curSec)}/{fmtSec(totSec)}
         </span>
       </div>

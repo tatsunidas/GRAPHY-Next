@@ -17,8 +17,11 @@ import { XaQlvDialog } from "./XaQlvDialog";
 import { Xa3dQcaDialog } from "./Xa3dQcaDialog";
 import { useQcaRuns } from "./xaRecon3dStore";
 import { consumeXaTask, isFreshRequest, matchesRequest, onXaTaskRequest, pullXaTask } from "./xaTaskLaunch";
-import { prewarmXaDataset, readXaCineSource, type XaCineSource } from "./xaCine";
+import { prewarmXaDataset, readXaCineSource, resolveXaFps, type XaCineSource } from "./xaCine";
+import { readVoiWindow } from "./viewportRead";
+import type { XaExportWindow } from "./xaFrameExport";
 import { downloadBytes, exportFramesAsZip } from "./xaFrameExport";
+import { encodeXaMp4 } from "../api";
 import {
   autoAlignDsa,
   dsaImageId,
@@ -541,12 +544,84 @@ export function SeriesViewer({
    * 表示中のフレーム列を PNG にして ZIP で保存する（fw/angio-design.md §14.3）。
    * DSA 表示中は差分画像がそのまま出る（displayImageIds を読むため）。
    */
+  /**
+   * 書き出しに焼く表示条件。**画面と同じ W/L・反転**を全フレームに当てる。
+   *
+   * 🚨 null を渡す（＝フレームごとに自動 W/L）と**画面と違う絵**になり、しかも
+   * フレームごとに窓が変わるので**ちらつく**。DSA のマスク区間のような一様なフレームでは
+   * ノイズが全幅に引き伸ばされ、実機で「マスク区間なのに砂嵐」になった（2026-08-23）。
+   */
+  const exportWindow = (): XaExportWindow | null => {
+    // 🚨 **表示中の imageId が一致するビューポートから読む。**
+    //    リンク用ツールグループの先頭（`firstLinkedViewport`）から読むと、レイアウトや
+    //    登録の状況で**取れないことがある**——実機ではそれで null になり、
+    //    フレームごとの自動 W/L に落ちていた（MP4 の先頭フレームが中間調へ寄る形で発覚）。
+    const target = displayImageIds[zc];
+    if (!target) return null;
+    const engine = getRenderingEngine(ENGINE_ID);
+    for (const vp of engine?.getViewports() ?? []) {
+      const current = (vp as { getCurrentImageId?: () => string | undefined }).getCurrentImageId?.();
+      if (current !== target) continue;
+      const w = readVoiWindow(vp);
+      if (!w) continue;
+      const invert = !!(vp.getProperties?.() as { invert?: boolean } | undefined)?.invert;
+      // 🔴 **DSA の合成画像は、素直な「lower→0 / upper→255」の逆で描かれている**
+      //    （2026-08-23 に実機で測定）。ネイティブフレームは式どおりなので、合成のときだけ反転する。
+      //
+      //    実測: 合成フレーム 0 は画素平均 0.0000272・VOI [−0.1608, +0.2878] なので式では 91.4 だが、
+      //    画面（canvas の画像矩形）は 163.5 ＝ 255 − 91.4。ネイティブは式 180.6 に対し画面 180.4 で一致。
+      //    見た目は「血管が暗い＝古典的な DSA」になっており、利用者の期待には合っている。
+      //    ⚠️ ただし**そうなっている理由は Cornerstone 側にあり、こちらの意図ではない**
+      //      （合成画像に photometricInterpretation を載せていないのが疑わしい。§6.6 に記録）。
+      //      表示の極性を変えるのは利用者に見える変更なので、ここでは**書き出しを画面に合わせる**。
+      //      画面と書き出しがずれたら `automator/src/spike/xaMp4Check.ts` が落とす。
+      const composite = target.startsWith("graphy-dsa:");
+      return { windowCenter: w.center, windowWidth: w.width, invert: composite ? !invert : invert };
+    }
+    return null;
+  };
+
+  /**
+   * 書き出しに使う fps。
+   *
+   * 🔴 **XA は `viewer.cineFps`（環境設定の既定 10）ではなく、DICOM タグ由来の再生速度**
+   * （`resolveXaFps`）で再生している。前者で書き出すと**画面と尺が変わる**——
+   * 実機で 15fps 相当のシネが 10fps の MP4 になっていた（2026-08-23）。
+   */
+  const exportFps = (): number => (xaCineSource ? resolveXaFps(xaCineSource).fps : fps);
+
+  /**
+   * 表示中のシネを MP4 で書き出す（§14.3）。
+   *
+   * 🚨 **PNG 書き出しと同じ絵**を送る（DSA の差分・W/L・反転を当てた後）。元の DICOM から
+   * 作り直すと画面と違う動画になる。エンコードは backend の ffmpeg（取込側と同じ約束）。
+   * 🔴 **再生速度は画面と同じ fps** で書く。既定値で書くと、可変レート DSA で尺が変わる。
+   */
+  const exportMp4 = () => {
+    if (!window.confirm(t("xa.export.burnedInWarning"))) return;
+    setExportBusy(true);
+    setExportDone(0);
+    const ids = [...displayImageIds];
+    exportFramesAsZip(ids, exportWindow(), "f", (done) => setExportDone(done))
+      .then((zip) => {
+        if (!zip) throw new Error("no frames");
+        return encodeXaMp4(zip, exportFps());
+      })
+      .then((mp4) => downloadBytes(mp4, `${seriesLabel || "xa"}.mp4`, "video/mp4"))
+      .catch((e: unknown) => {
+        // ffmpeg が無い環境は「壊れた」ではなく「足りない」。文言を分ける。
+        const status = (e as { status?: number } | null)?.status;
+        emitToast(status === 422 ? t("xa.export.mp4.needsFfmpeg") : t("xa.export.failed"));
+      })
+      .finally(() => setExportBusy(false));
+  };
+
   const exportFrames = () => {
     if (!window.confirm(t("xa.export.burnedInWarning"))) return;
     setExportBusy(true);
     setExportDone(0);
     const ids = [...displayImageIds];
-    exportFramesAsZip(ids, null, `${seriesLabel || "xa"}-frame`, (done) => setExportDone(done))
+    exportFramesAsZip(ids, exportWindow(), `${seriesLabel || "xa"}-frame`, (done) => setExportDone(done))
       .then((zip) => {
         if (!zip) {
           emitToast(t("xa.export.failed"));
@@ -1117,6 +1192,15 @@ export function SeriesViewer({
                     onClick={() => setPrDialogOpen(true)}
                   >
                     {t("xa.pr.open")}
+                  </button>
+                  <button
+                    style={btn}
+                    data-testid="xa-export-mp4"
+                    disabled={exportBusy || nZ < 2}
+                    title={t("xa.export.mp4.title")}
+                    onClick={exportMp4}
+                  >
+                    {t("xa.export.mp4")}
                   </button>
                   <button
                     style={btn}
