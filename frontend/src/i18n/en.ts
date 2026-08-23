@@ -1217,6 +1217,7 @@ export const en: Record<string, string> = {
   "xa.calib.label": "Calibration",
   "xa.calib.source.user-catheter": "Catheter calibration (measured)",
   "xa.calib.source.user-ruler": "Ruler calibration (measured)",
+  "xa.calib.source.gsps": "from a presentation state (GSPS)",
   "xa.calib.source.dicom-fiducial": "DICOM PixelSpacing (FIDUCIAL)",
   "xa.calib.source.dicom-geometry": "DICOM PixelSpacing (GEOMETRY)",
   "xa.calib.source.dicom-calibrated-unspecified": "DICOM PixelSpacing (type unspecified)",

@@ -1206,6 +1206,7 @@ export const ja: Record<string, string> = {
   "xa.calib.label": "空間校正",
   "xa.calib.source.user-catheter": "カテーテル法（実測）",
   "xa.calib.source.user-ruler": "ルーラー法（実測）",
+  "xa.calib.source.gsps": "表示状態（GSPS）から取り込み",
   "xa.calib.source.dicom-fiducial": "DICOM PixelSpacing（FIDUCIAL）",
   "xa.calib.source.dicom-geometry": "DICOM PixelSpacing（GEOMETRY）",
   "xa.calib.source.dicom-calibrated-unspecified": "DICOM PixelSpacing（種別不明）",

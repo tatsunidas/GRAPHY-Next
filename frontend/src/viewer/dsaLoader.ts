@@ -237,6 +237,25 @@ export function dsaImageId(token: string, t: number, version = 0): string {
   return `${SCHEME}:${token}/${version}#${t}`;
 }
 
+/**
+ * 合成 imageId（`graphy-dsa:`）→ その t が指す**ネイティブフレームの imageId**。
+ * 合成でない／セッションが無いなら null。
+ *
+ * <p>🚨 これが要るのは、**合成 imageId には元の URL が入っていない**から。
+ * DICOM タグを直接読む層（空間校正の解決など）は、合成のままだと**タグが 1 つも読めず
+ * 「未校正」に見える**。実機で踏んだ: DSA 表示中に保存した GSPS に空間校正が入らず、
+ * 解析ダイアログの校正欄も "—" になっていた（Cornerstone 側の計測は
+ * このローダの metadata provider がネイティブへ委譲しているので mm のまま＝**気づけない**）。
+ */
+export function dsaNativeImageId(imageId: string): string | null {
+  const parsed = parseDsaImageId(imageId);
+  if (!parsed) return null;
+  const s = sessions.get(parsed.token);
+  if (!s) return null;
+  const i = Math.max(0, Math.min(s.frameIds.length - 1, parsed.t));
+  return s.frameIds[i] ?? null;
+}
+
 function parseDsaImageId(imageId: string): { token: string; t: number } | null {
   if (!imageId.startsWith(`${SCHEME}:`)) return null;
   const rest = imageId.slice(SCHEME.length + 1);

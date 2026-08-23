@@ -20,6 +20,7 @@
  * px 表示に戻す。これが無いと「未校正なのに mm が出る」という一番危ない状態が残る。
  */
 import { Enums, metaData } from "@cornerstonejs/core";
+import { dsaNativeImageId } from "./dsaLoader";
 import { xaDataSetOf } from "./xaCine";
 import {
   calibrationScaleFor,
@@ -112,9 +113,22 @@ function calibrationPayloadFor(
   return payload;
 }
 
+/**
+ * タグを読む対象の imageId。**合成（`graphy-dsa:`）はネイティブフレームへ読み替える。**
+ *
+ * <p>🚨 合成 imageId には元の URL が入っていないので、そのままではタグが 1 つも読めず
+ * **「未校正」に見える**。実機で踏んだ形（2026-08-23）: DSA 表示中に保存した GSPS に
+ * 空間校正が入らず、解析ダイアログの校正欄も "—" になっていた。
+ * ⚠️ **Cornerstone の計測は mm のまま**（DSA ローダの provider がネイティブへ委譲している）
+ * なので、画面を見ているだけでは気づけない。
+ */
+function nativeXaImageId(imageId: string): string {
+  return dsaNativeImageId(imageId) ?? imageId;
+}
+
 function dataSetFor(imageId: string): MinimalDataSet | null {
   // 未取得・非 wadouri の imageId はここで抜ける（プリウォーム前は解決しない）。
-  return (xaDataSetOf(imageId) as unknown as MinimalDataSet) ?? null;
+  return (xaDataSetOf(nativeXaImageId(imageId)) as unknown as MinimalDataSet) ?? null;
 }
 
 function readPair(ds: MinimalDataSet, tag: string): [number, number] | null {
@@ -158,7 +172,10 @@ export function loaderSpacingFor(imageId: string): { row: number; col: number } 
 }
 
 /** imageId の校正を解決する（memo 付き）。XA でなければ null。 */
-export function calibrationForImageId(imageId: string): XaCalibration | null {
+export function calibrationForImageId(rawImageId: string): XaCalibration | null {
+  // 合成（DSA）はネイティブへ読み替えてから解決・記憶する。合成 id で覚えると、
+  // 版番号やフレームが変わるたびに別キーになり、キャッシュが無限に増える。
+  const imageId = nativeXaImageId(rawImageId);
   const hit = resolved.get(imageId);
   if (hit !== undefined) return hit;
   const tags = readXaCalibTags(imageId);
