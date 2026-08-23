@@ -25,6 +25,19 @@ import type { Vec3 } from "./regTransform";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
 
+/**
+ * imageId から SOPInstanceUID を得る。
+ *
+ * <p>metadata を先に見て、無ければ wadouri の URL から取る（順序は
+ * `viewer/segExport.ts` と揃えてある）。どちらでも取れなければ null（**捏造しない**）。
+ */
+function sopOf(imageId: string): string | null {
+  const sc = metaData.get("sopCommonModule", imageId) as { sopInstanceUID?: string } | undefined;
+  if (sc?.sopInstanceUID) return sc.sopInstanceUID;
+  const m = /\/instances\/([^/]+)\//.exec(imageId);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
 export interface LoadedRegVolume {
   readonly volume: RegVolume;
   /** DICOM の IOP（行方向 3, 列方向 3）。Worker へ渡すときに要る。 */
@@ -33,6 +46,14 @@ export interface LoadedRegVolume {
   readonly sliceStep: Vec3;
   readonly frameOfReferenceUid: string;
   readonly modality: string;
+  /**
+   * ボリュームの z と**同じ並び**のスライス一覧（z=0 が先頭）。
+   *
+   * <p>SEG / RTDOSE の書き出しは「ボリュームの z 番目が、元シリーズのどのインスタンスか」を
+   * 必要とする。ここで返さないと呼び出し側が並べ替えを**もう一度**書くことになり、
+   * 並べ替えの答えが 2 つになる（この repo が繰り返し避けてきた事態）。
+   */
+  readonly slices: ReadonlyArray<{ readonly sopInstanceUid: string | null; readonly ipp: Vec3 }>;
 }
 
 /** 読み込み前の見積り。**着手前に予測して確認する**（設計 §7-1）。 */
@@ -113,7 +134,7 @@ export async function loadRegVolume(
     rc[0] * rr[1] - rc[1] * rr[0],
   ];
 
-  type Loaded = { ipp: Vec3; pixels: Float32Array; w: number };
+  type Loaded = { ipp: Vec3; pixels: Float32Array; w: number; imageId: string };
   const loaded: Loaded[] = [];
   let modality = "";
 
@@ -149,6 +170,7 @@ export async function loadRegVolume(
       ipp,
       pixels,
       w: ipp[0] * normal[0] + ipp[1] * normal[1] + ipp[2] * normal[2],
+      imageId,
     });
     onProgress?.(loaded.length, zStack.length);
   }
@@ -192,5 +214,7 @@ export async function loadRegVolume(
     sliceStep,
     frameOfReferenceUid,
     modality,
+    // 並べ替え後の順（＝ボリュームの z 順）で返す。
+    slices: loaded.map((s) => ({ sopInstanceUid: sopOf(s.imageId), ipp: s.ipp })),
   };
 }

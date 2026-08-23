@@ -23,6 +23,7 @@ import java.util.List;
  * @param frameOfReferenceUID     参照シリーズの FoR（null/空なら省略）
  * @param seriesDescription       生成シリーズの説明（null 可）
  * @param segments                セグメント群
+ * @param producer                プラグイン由来の場合の出所（null なら本体の機能による生成）
  */
 public record SegExportRequest(
         String studyInstanceUid,
@@ -34,7 +35,21 @@ public record SegExportRequest(
         double sliceThickness,
         String frameOfReferenceUID,
         String seriesDescription,
-        List<Segment> segments) {
+        List<Segment> segments,
+        Producer producer) {
+
+    /**
+     * プラグインが作った SEG であることの出所（host API の H22）。
+     *
+     * <p>派生シリーズ（H4b）・SR（H9）・RTDOSE（H23）と同じ扱い:
+     * ①`SeriesDescription` に接頭辞（`[Plugin] `）を付け、
+     * ②`ContributingEquipmentSequence` に id・版を書く。
+     * <b>プラグインは本体と同じ権限で動くので、出力の由来を消せる状態にしない。</b>
+     *
+     * <p>⚠ ここが抜けていたことに実機検証で気付いた（2026-08-23）。SEG だけ、他の 3 経路と違って
+     * 出所が残らなかった。
+     */
+    public record Producer(String id, String name, String version) {}
 
     /**
      * @param number      セグメント番号（1-based）

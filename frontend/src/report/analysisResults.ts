@@ -22,7 +22,13 @@
  * <p>ここは**純ロジック**（React・i18n 非依存）。文言は呼び出し側が `t()` で解決して渡す。
  */
 
-export type AnalysisKind = "qca" | "qva" | "qlv" | "qca3d";
+/**
+ * 解析の種別。`plugin` は**プラグインが登録した結果**（host API の H25）。
+ *
+ * <p>プラグインごとに種別を増やさない: 本体は「どのプラグインか」を
+ * {@link AnalysisResultRecord.provenance} の 1 行として持つ（本体が書くので消せない）。
+ */
+export type AnalysisKind = "qca" | "qva" | "qlv" | "qca3d" | "plugin";
 
 /** 1 行の計測値。 */
 export interface AnalysisMetric {

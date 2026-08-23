@@ -29,13 +29,16 @@ public class DicomExportController {
     private final RtStructExportService rtStructService;
     private final RtStructReadService rtStructReadService;
     private final SegReadService segReadService;
+    private final RtDoseExportService rtDoseService;
 
     public DicomExportController(SegExportService segService, RtStructExportService rtStructService,
-            RtStructReadService rtStructReadService, SegReadService segReadService) {
+            RtStructReadService rtStructReadService, SegReadService segReadService,
+            RtDoseExportService rtDoseService) {
         this.segService = segService;
         this.rtStructService = rtStructService;
         this.rtStructReadService = rtStructReadService;
         this.segReadService = segReadService;
+        this.rtDoseService = rtDoseService;
     }
 
     /** マスク群を DICOM SEG（BINARY）として保存し、新 Series/SOP UID を返す。 */
@@ -61,6 +64,25 @@ public class DicomExportController {
         } catch (IOException e) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
                     "RTSTRUCT の保存に失敗しました: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 線量分布を DICOM RT Dose として保存し、新 Series/SOP UID を返す（host API の H23）。
+     *
+     * <p>結果の {@code warnings} には「出力はしたが DICOM の要求を満たしていない点」が入る
+     * （核医学の線量評価には RT Plan が無いので Type 1C を満たせない、など）。
+     * <b>呼び出し側はこれをユーザーに見せること。</b>
+     */
+    @PostMapping("/rtdose")
+    public RtDoseExportService.Result exportRtDose(@RequestBody RtDoseExportRequest req) {
+        try {
+            return rtDoseService.export(req);
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage(), e);
+        } catch (IOException e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
+                    "RTDOSE の保存に失敗しました: " + e.getMessage(), e);
         }
     }
 

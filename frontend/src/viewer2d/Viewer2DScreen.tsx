@@ -71,6 +71,13 @@ import {
   registerPluginVolumes,
 } from "../plugins/pluginVolumeApi";
 import { resamplePluginVolume } from "../plugins/pluginResample";
+import {
+  commitRtDoseExport,
+  commitSegExport,
+  prepareRtDoseExport,
+  prepareSegExport,
+} from "../plugins/pluginExportApi";
+import { emitDbChanged } from "../dbEvents";
 import { PluginSaveConfirmDialog, type PluginSaveRequest } from "./PluginSaveConfirmDialog";
 import { Viewer2DMenuBar } from "./Viewer2DMenuBar";
 import { RoiManagerPanel } from "./RoiManagerPanel";
@@ -917,6 +924,26 @@ function TileGrid({
     [],
   );
 
+  /**
+   * 保存の同意を取る（H4b / H9 / H22 / H23 共通）。**抑止不可**。
+   *
+   * <p>同じダイアログを 4 か所で開くので、Promise 1 個に畳んである。
+   * ここを通さずに保管庫へ書く経路をプラグインに与えない。
+   */
+  const confirmPluginSave = useCallback(
+    (request: PluginSaveRequest): Promise<boolean> =>
+      new Promise((resolve) => {
+        setPluginSave({
+          request,
+          onDecide: (accepted) => {
+            setPluginSave(null);
+            resolve(accepted);
+          },
+        });
+      }),
+    [],
+  );
+
   const actions = useMemo<ViewerActions>(
     () => ({
       fit: () => runViewerCommand(resolveTargets(), (c) => c.fit()),
@@ -1103,6 +1130,75 @@ function TileGrid({
             },
           });
         });
+      },
+      // H22: マスクを DICOM SEG として保存する。**必ず確認ダイアログを挟む**（抑止不可）。
+      // 組み立てはダイアログの**前**に済ませる（通らない要求で同意を求めない）。
+      saveSegmentation: async (req, producer) => {
+        const prepared = await prepareSegExport(mode, studyUidOfSeries, req, producer);
+        if (!prepared.ok) return { ok: false, error: prepared.error };
+        const accepted = await confirmPluginSave({
+          kind: "seg",
+          pluginName: producer.name,
+          pluginVersion: producer.version,
+          seriesDescription: prepared.request.seriesDescription ?? "Segmentation",
+          instanceCount: 1,
+          segmentCount: prepared.segmentCount,
+          mode,
+        });
+        if (!accepted) return { ok: false, cancelled: true, foregroundVoxels: prepared.foregroundVoxels };
+        try {
+          const res = await commitSegExport(prepared.request);
+          emitDbChanged({ reason: "series-create", studyUids: [prepared.request.studyInstanceUid] });
+          return {
+            ok: true,
+            seriesInstanceUid: res.seriesInstanceUid,
+            sopInstanceUid: res.sopInstanceUid,
+            foregroundVoxels: prepared.foregroundVoxels,
+          };
+        } catch (e) {
+          return { ok: false, error: String(e) };
+        }
+      },
+      // H23: 線量分布を DICOM RTDOSE として保存する。**必ず確認ダイアログを挟む**（抑止不可）。
+      // ⚠ backend が返す「準拠していない点」（RT Plan 参照が無い等）は握り潰さずに返す。
+      saveRtDose: async (req, producer) => {
+        const prepared = await prepareRtDoseExport(mode, studyUidOfSeries, req, producer);
+        if (!prepared.ok) return { ok: false, error: prepared.error };
+        const accepted = await confirmPluginSave({
+          kind: "rtdose",
+          pluginName: producer.name,
+          pluginVersion: producer.version,
+          seriesDescription: prepared.request.seriesDescription ?? "RT Dose",
+          instanceCount: 1,
+          frameCount: prepared.frames,
+          maxGy: prepared.maxGy,
+          filledVoxels: prepared.filledVoxels,
+          mode,
+        });
+        if (!accepted) {
+          return {
+            ok: false,
+            cancelled: true,
+            doseGridScaling: prepared.doseGridScaling,
+            quantizationErrorGy: prepared.quantizationErrorGy,
+            filledVoxels: prepared.filledVoxels,
+          };
+        }
+        try {
+          const res = await commitRtDoseExport(prepared.request);
+          emitDbChanged({ reason: "series-create", studyUids: [prepared.request.studyInstanceUid] });
+          return {
+            ok: true,
+            seriesInstanceUid: res.seriesInstanceUid,
+            sopInstanceUid: res.sopInstanceUid,
+            doseGridScaling: prepared.doseGridScaling,
+            quantizationErrorGy: prepared.quantizationErrorGy,
+            filledVoxels: prepared.filledVoxels,
+            warnings: res.warnings ?? [],
+          };
+        } catch (e) {
+          return { ok: false, error: String(e) };
+        }
       },
       // H37: アンギオ解析の結果を本体と同じ SR で保存する。**確認は抑止不可**（H4b / H9 と同じ）。
       saveAngioReport: (tileId, req, producer) => {

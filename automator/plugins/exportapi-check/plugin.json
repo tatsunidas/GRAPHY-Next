@@ -1,0 +1,12 @@
+{
+  "id": "exportapi-check",
+  "name": "Export API Check",
+  "version": "0.1.0",
+  "engines": { "graphy": ">=0.2.0" },
+  "description": "H16 (SR の数値計測) / H22 (DICOM SEG) / H23 (RTDOSE) / H25 (レポートへの登録) の実機検証用プローブ。保存は automator が確認ダイアログを操作して行う。",
+  "author": "Visionary Imaging Services, Inc.",
+  "license": "AGPL-3.0-or-later",
+  "contributes": ["viewer2d.menu"],
+  "ui": "ui.js",
+  "permissions": ["read-pixels"]
+}

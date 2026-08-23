@@ -33,6 +33,10 @@ import type {
   PluginVolume,
   PluginVolumeEstimate,
   PluginVolumeGrid,
+  PluginSegmentationRequest,
+  PluginSegmentationResult,
+  PluginRtDoseRequest,
+  PluginRtDoseResult,
 } from "../plugins/pluginTypes";
 import { ToolIcon } from "../icons/ToolIcon";
 import { UI_ICON_FILES } from "../icons/toolIcons";
@@ -168,6 +172,22 @@ export interface ViewerActions {
     input: PluginAnalysisInput,
     producer: { id: string; name: string; version: string },
   ): { ok: boolean; error?: string };
+  /**
+   * マスクを DICOM SEG として保存する（H22）。**確認ダイアログを必ず挟む**（抑止不可）。
+   * 格子が元シリーズと一致しなければ保存しない。
+   */
+  saveSegmentation(
+    req: PluginSegmentationRequest,
+    producer: { id: string; name: string; version: string },
+  ): Promise<PluginSegmentationResult>;
+  /**
+   * 線量分布を DICOM RTDOSE として保存する（H23）。**確認ダイアログを必ず挟む**（抑止不可）。
+   * DICOM の要求を満たせない点は `warnings` として返し、ダイアログでも見せる。
+   */
+  saveRtDose(
+    req: PluginRtDoseRequest,
+    producer: { id: string; name: string; version: string },
+  ): Promise<PluginRtDoseResult>;
   /** W/L プリセット編集ダイアログを開く。 */
   editPresets(): void;
   /** Z 並べ替え（InstanceNumber / IPP, 昇順・降順）。対象タイルのシリーズに適用。 */
