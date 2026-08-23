@@ -579,6 +579,20 @@ async function analyseSegment(
       );
       const ang = st.section.medianMeasurementAngleDeg;
       check(ang != null && ang > 0 && ang <= 90, `[断面/${tag}] 測定方向のなす角を出せている`, ang == null ? null : Number(ang.toFixed(1)));
+      // 🚨 **数値と説明が食い違っていないか**を見る（§16.5.4）。A4c で報告する径は密度計測に
+      //    なったのに、注記だけ半値法のまま「13% 過小」と言い続けていた期間がある。
+      //    数値が合っているだけでは掴めないので、**画面の文言そのもの**を検査する。
+      const biasNote = ((await viewerB.getByTestId("xa3d-section-bias").textContent()) ?? "").trim();
+      check(
+        densito ? !/13\s*%/.test(biasNote) : /13\s*%/.test(biasNote),
+        `[断面/${tag}] 系統誤差の注記が測り方と一致（密度計測なら「13%」と書かない）`,
+        { method: st.diameterMethod, note: biasNote.slice(0, 120) },
+      );
+      check(
+        densito ? /密度計測/.test(biasNote) : /半値法/.test(biasNote),
+        `[断面/${tag}] 注記が測り方の名前を出している`,
+        biasNote.slice(0, 120),
+      );
     }
 
     // ── 保存（3D QCA SR）────────────────────────────────────
@@ -592,6 +606,31 @@ async function analyseSegment(
     // 🚨 数値だけでなく「どう作った結果か」が SR に入っていること（§10 の SR 方針）。
     const srSeries = await listSrSeries(driver.ports.http, v1.exact.studyInstanceUid);
     check(srSeries.some((x) => x.seriesDescription === "QCA 3D"), `[保存/${tag}] SR シリーズが保管庫に入る`, srSeries);
+    // 🚨 **測り方が SR まで届いているか**を見る（§16.5.4）。JUnit は writer 単体しか守れず、
+    //    「フロントが diameterMethod を送っていない」は実機でしか掴めない。
+    {
+      const qca3d = srSeries.find((x) => x.seriesDescription === "QCA 3D");
+      const sops = qca3d
+        ? await instancesOf(driver.ports.http, v1.exact.studyInstanceUid, qca3d.seriesInstanceUid)
+        : [];
+      const dump = sops.length
+        ? await dumpTags(driver.ports.http, v1.exact.studyInstanceUid, qca3d!.seriesInstanceUid, sops[sops.length - 1])
+        : "";
+      fs.writeFileSync(path.join(OUT_DIR, `qca3d-sr-tags-${tag}.txt`), dump);
+      check(/Diameter Measurement Method/.test(dump), `[保存/${tag}] SR に「径の測り方」が入っている`);
+      const st2 = await xa3dState(viewerB);
+      const densitoSaved = st2?.diameterMethod === "densitometric";
+      check(
+        densitoSaved ? /Densitometric/.test(dump) : /Half-maximum/.test(dump),
+        `[保存/${tag}] SR の測り方が画面の申告と一致する`,
+        { method: st2?.diameterMethod },
+      );
+      // 密度計測なら、系統誤差の注記に「13%」を書いてはいけない（嘘になる）。
+      check(
+        densitoSaved ? !/13% too small/.test(dump) : /13% too small/.test(dump),
+        `[保存/${tag}] SR の注記が測り方と一致（密度計測なら「13% too small」と書かない）`,
+      );
+    }
 
     // ── 3D の狭窄率（真値 50%）──────────────────────────────
     // 🚨 病変を含まない区間では「真値 50%」と比べられない。**区間に無い事実を検査しない**。
@@ -798,6 +837,28 @@ async function clickOnCurve(
   const el = page.getByTestId(testId);
   await el.click({ position: { x: sx, y: sy } });
   await page.waitForTimeout(250);
+}
+
+/** シリーズ内のインスタンス UID 一覧。 */
+async function instancesOf(httpPort: number, studyUid: string, seriesUid: string): Promise<string[]> {
+  const url =
+    `http://127.0.0.1:${httpPort}/api/studies/${encodeURIComponent(studyUid)}` +
+    `/series/${encodeURIComponent(seriesUid)}/instances`;
+  const res = await fetch(url);
+  if (!res.ok) return [];
+  const rows = (await res.json()) as { sopInstanceUid: string }[];
+  return rows.map((r) => r.sopInstanceUid);
+}
+
+/** SR の中身をタグダンプ経由で読む（入れ子の TEXT 項目まで平らに出る）。 */
+async function dumpTags(httpPort: number, studyUid: string, seriesUid: string, sopUid: string): Promise<string> {
+  const url =
+    `http://127.0.0.1:${httpPort}/api/studies/${encodeURIComponent(studyUid)}` +
+    `/series/${encodeURIComponent(seriesUid)}/instances/${encodeURIComponent(sopUid)}/tags`;
+  const res = await fetch(url);
+  if (!res.ok) return "";
+  const rows = (await res.json()) as { name: string; value: string }[];
+  return rows.map((r) => `${r.name}=${r.value}`).join("\n");
 }
 
 /** スタディ内の SR シリーズ一覧（保存が保管庫まで届いたかの確認）。 */

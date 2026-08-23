@@ -30,6 +30,42 @@ const REPO_ROOT = path.resolve(AUTOMATOR_ROOT, "..");
 const PHANTOM_DIR = path.join(REPO_ROOT, "bench", "phantom", "GNBP-XA");
 const TRUTH_PATH = path.join(PHANTOM_DIR, "truth.json");
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "xa-qva");
+
+/** スタディ内のシリーズ一覧。 */
+async function listSeries(
+  httpPort: number,
+  studyUid: string,
+): Promise<{ seriesInstanceUid: string; modality: string | null; seriesDescription: string | null }[]> {
+  const res = await fetch(`http://127.0.0.1:${httpPort}/api/studies/${encodeURIComponent(studyUid)}/series`);
+  if (!res.ok) return [];
+  return (await res.json()) as {
+    seriesInstanceUid: string;
+    modality: string | null;
+    seriesDescription: string | null;
+  }[];
+}
+
+/** シリーズ内のインスタンス UID 一覧。 */
+async function instancesOf(httpPort: number, studyUid: string, seriesUid: string): Promise<string[]> {
+  const url =
+    `http://127.0.0.1:${httpPort}/api/studies/${encodeURIComponent(studyUid)}` +
+    `/series/${encodeURIComponent(seriesUid)}/instances`;
+  const res = await fetch(url);
+  if (!res.ok) return [];
+  const rows = (await res.json()) as { sopInstanceUid: string }[];
+  return rows.map((r) => r.sopInstanceUid);
+}
+
+/** SR の中身をタグダンプ経由で読む（入れ子の TEXT 項目まで平らに出る）。 */
+async function dumpTags(httpPort: number, studyUid: string, seriesUid: string, sopUid: string): Promise<string> {
+  const url =
+    `http://127.0.0.1:${httpPort}/api/studies/${encodeURIComponent(studyUid)}` +
+    `/series/${encodeURIComponent(seriesUid)}/instances/${encodeURIComponent(sopUid)}/tags`;
+  const res = await fetch(url);
+  if (!res.ok) return "";
+  const rows = (await res.json()) as { name: string; value: string }[];
+  return rows.map((r) => `${r.name}=${r.value}`).join("\n");
+}
 const HOST = "viewer2d-canvas-host";
 
 /**
@@ -268,6 +304,23 @@ async function main(): Promise<void> {
           truth: t.maxDiameterMm,
         },
       );
+      // 🚨 **数値と説明が食い違っていないか**（§16.5.4）。QVA は拡張比が主役なので、
+      //    「比なら系統誤差は打ち消される」と書いてしまうと**嘘になる**（太さの違う 2 点の比）。
+      const caveat = ((await viewer.getByTestId("qva-diameter-caveat").textContent()) ?? "").trim();
+      check(
+        densito ? !/13\s*%/.test(caveat) : /13\s*%|半値法/.test(caveat),
+        `[XA-6] ${label} — 径の注記が測り方と一致（密度計測なら「13%」と書かない）`,
+        { method: st.diameterMethod, note: caveat.slice(0, 120) },
+      );
+      check(
+        densito ? /密度計測/.test(caveat) : /打ち消されません|打ち消さ/.test(caveat),
+        // ⚠️ 見出しを分岐で変える。実行が密度計測だったのに「半値法のときは〜」と出ると、
+        //    ログを読んだ人が**検査していない分岐を検査したと誤解する**（automator の衛生）。
+        densito
+          ? `[XA-6] ${label} — 注記が密度計測だと明記している（拡張比も同じ、と書く）`
+          : `[XA-6] ${label} — ★半値法のときは「拡張比では打ち消されない」と書いてある`,
+        caveat.slice(0, 140),
+      );
       check(
         q.aneurysmal === t.aneurysmal,
         `[XA-6] ${label} — 瘤かどうかの判定が真値と一致（基準 ${truth.qva.aneurysmRatio} 倍）`,
@@ -313,6 +366,30 @@ async function main(): Promise<void> {
           "[XA-6] QVA の結果を SR として保存できる",
           (saved ?? "").replace(/\s+/g, " ").slice(-140),
         );
+        // 🚨 測り方が SR まで届いているか（フロントが送っていない、は実機でしか掴めない）。
+        const srSeries = (await listSeries(driver.ports.http, truth.qva.studyInstanceUid)).filter(
+          (x) => x.modality === "SR",
+        );
+        const sops = srSeries.length
+          ? await instancesOf(driver.ports.http, truth.qva.studyInstanceUid, srSeries[srSeries.length - 1].seriesInstanceUid)
+          : [];
+        const dump = sops.length
+          ? await dumpTags(
+              driver.ports.http,
+              truth.qva.studyInstanceUid,
+              srSeries[srSeries.length - 1].seriesInstanceUid,
+              sops[sops.length - 1],
+            )
+          : "";
+        fs.writeFileSync(path.join(OUT_DIR, "qva-sr-tags.txt"), dump);
+        check(/Diameter Measurement Method/.test(dump), "[XA-6] SR に「径の測り方」が入っている");
+        check(
+          densito ? /Densitometric/.test(dump) : /Half-maximum/.test(dump),
+          "[XA-6] SR の測り方が画面の申告と一致する",
+          { method: st.diameterMethod },
+        );
+        // 🔴 かつての誤り（"ratios are unaffected"）が戻っていないこと。
+        check(!/ratios are unaffected/.test(dump), "[XA-6] ★SR に「比なら打ち消される」と書いていない");
       }
       await viewer.getByTestId("xa-dialog-close").click();
       await viewer.waitForTimeout(400);
