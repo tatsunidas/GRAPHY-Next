@@ -308,6 +308,44 @@ export interface AngioCreated {
   sopInstanceUid: string;
 }
 
+/**
+ * GSPS から読み取った表示状態（`fw/angio-design.md` §14.1 の読み込み側）。
+ *
+ * 🚨 **`warnings` は必ず UI に出す。** 他社の GSPS にはこちらが解釈しない項目
+ * （LUT で書かれた VOI・Display Shutter・DISPLAY 単位の図形）が普通に入っており、
+ * 黙って落とすと「適用したのに元と違う」になる。
+ */
+export interface XaPresentationState {
+  sopInstanceUid: string;
+  sopClassUid: string;
+  label: string;
+  description: string;
+  creator: string;
+  referencedImages: { seriesInstanceUid: string; sopInstanceUid: string; frameNumbers: number[] }[];
+  voi: { windowCenter: number; windowWidth: number } | null;
+  invert: boolean;
+  rotation: number;
+  flipHorizontal: boolean;
+  /** ⚠️ `subPixelShiftRow` が縦（内部の dy）、`subPixelShiftCol` が横（dx）。DICOM は [row, column]。 */
+  mask: {
+    maskFrameNumbers: number[];
+    subPixelShiftRow: number;
+    subPixelShiftCol: number;
+    operation: string;
+    applicableFrom: number | null;
+    applicableTo: number | null;
+  } | null;
+  calibration: { mmPerPxRow: number; mmPerPxCol: number } | null;
+  /** 画像ピクセル座標（0 origin）。PIXEL 単位で書かれたものだけ入る。 */
+  polylines: { layer: string; graphicType: string; points: number[]; filled: boolean }[];
+  texts: { layer: string; text: string; anchorX: number; anchorY: number }[];
+  warnings: string[];
+}
+
+/** 保管庫の GSPS を読む（他社が書いた表示状態の適用。§14.1）。 */
+export const fetchXaPresentationState = (sopUid: string) =>
+  httpGet<XaPresentationState>(`/api/angio/presentation-state/${encodeURIComponent(sopUid)}`);
+
 /** 表示状態（DSA 設定・VOI・計測描画・空間校正）を XA/XRF GSPS として保存する。 */
 export const createXaPresentationState = (req: AngioPresentationRequest) =>
   httpSend<AngioCreated>("/api/angio/presentation-state", "POST", req);

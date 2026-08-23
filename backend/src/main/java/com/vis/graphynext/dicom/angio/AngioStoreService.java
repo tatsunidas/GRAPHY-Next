@@ -59,6 +59,24 @@ public class AngioStoreService {
         return new Created(r.seriesInstanceUid(), r.sopInstanceUid());
     }
 
+    /**
+     * 保管庫の GSPS を読んで表示状態にする（§14.1 の読み込み側）。
+     *
+     * <p>🚨 <b>読めなかったものは {@code warnings} に入って返る。</b> 他社の GSPS には
+     * こちらが解釈しない項目が普通に入っており、黙って落とすと「適用したのに元と違う」に
+     * なる（{@link XaPresentationStateReader} のクラスコメント）。
+     *
+     * @throws IllegalArgumentException 表示状態でない SOP Class だったとき
+     * @throws IOException              インスタンスを読めなかったとき
+     */
+    public XaPresentationState readPresentationState(String sopUid) throws IOException {
+        Attributes ds = readTemplate(sopUid);
+        if (ds == null) {
+            throw new IOException("インスタンスが見つかりません: " + sopUid);
+        }
+        return XaPresentationStateReader.read(ds);
+    }
+
     /** QCA 結果の SR を作って保存する。 */
     public Created createQcaSr(QcaSrRequest req) throws IOException {
         Attributes tmpl = readTemplate(req.sopInstanceUid());

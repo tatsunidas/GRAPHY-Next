@@ -24,9 +24,11 @@
 
 /** 校正がどこから来たか。UI とレポートにそのまま出す。 */
 export type XaCalibSource =
-  /** P0: 人が確定（カテーテル法 / ルーラー法）。 */
+  /** P0: 人が確定（カテーテル法 / ルーラー法）、または読み込んだ表示状態（GSPS）の値。 */
   | "user-catheter"
   | "user-ruler"
+  /** P0: GSPS（他システムが書いた表示状態）の Presentation Pixel Spacing。出自を混ぜない。 */
+  | "gsps"
   /** P1: 装置/後処理が既知寸法物体で校正（PixelSpacingCalibrationType = FIDUCIAL）。 */
   | "dicom-fiducial"
   /** P2: 幾何倍率で補正済み（同 = GEOMETRY）。 */
@@ -77,7 +79,11 @@ export interface XaCalibTags {
 /** 人が確定した校正（カテーテル法 / ルーラー法）。 */
 export interface XaUserCalibration {
   mmPerPx: number;
-  method: "catheter" | "ruler";
+  /**
+   * 校正の出自。🚨 **`gsps` を人の校正と混ぜない**——他システムが書いた値であり、
+   * どう作られたかはこちらでは分からない（`provenance` にそう出す）。
+   */
+  method: "catheter" | "ruler" | "gsps";
   /** 出自の説明（"6Fr カテーテル（造影あり）" など）。そのまま表示する。 */
   note?: string;
 }
@@ -196,7 +202,12 @@ export function resolveXaCalibration(
     return withAnisotropyCheck({
       mmPerPxRow: userMm,
       mmPerPxCol: userMm,
-      source: override.method === "catheter" ? "user-catheter" : "user-ruler",
+      source:
+        override.method === "catheter"
+          ? "user-catheter"
+          : override.method === "gsps"
+            ? "gsps"
+            : "user-ruler",
       confidence: "high",
       plane: "fiducial-depth",
       tier: "calibrated",
@@ -252,8 +263,10 @@ export function resolveXaCalibration(
   return { ...UNCALIBRATED, warnings };
 }
 
-function userCalibLabel(method: "catheter" | "ruler"): string {
-  return method === "catheter" ? "catheter calibration" : "ruler calibration";
+function userCalibLabel(method: "catheter" | "ruler" | "gsps"): string {
+  if (method === "catheter") return "catheter calibration";
+  if (method === "gsps") return "presentation state (GSPS)";
+  return "ruler calibration";
 }
 
 /** 非等方（row ≠ col）を検出して警告に積む。値は潰さない。 */

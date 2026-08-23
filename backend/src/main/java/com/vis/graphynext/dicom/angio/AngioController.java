@@ -8,6 +8,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -21,6 +23,7 @@ import java.io.IOException;
  *
  * <ul>
  *   <li>{@code POST /api/angio/presentation-state} … XA/XRF GSPS（DSA 設定・VOI・計測描画・空間校正）</li>
+ *   <li>{@code GET  /api/angio/presentation-state/{sop}} … 保管庫の GSPS を読んで適用可能な形にする</li>
  *   <li>{@code POST /api/angio/qca-sr} … QCA 計測値の Comprehensive SR</li>
  *   <li>{@code POST /api/angio/qva-sr} … QVA（末梢・脳血管）計測値の Comprehensive SR</li>
  * </ul>
@@ -47,6 +50,25 @@ public class AngioController {
         } catch (IOException e) {
             log.error("GSPS の作成に失敗", e);
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "表示状態を保存できませんでした");
+        }
+    }
+
+    /**
+     * 保管庫の GSPS を読む（他社が書いたものを適用するための入口。§14.1）。
+     *
+     * <p>🚨 解釈しなかった項目は本文の {@code warnings} に入る。**呼び出し側は必ず出すこと**
+     * ——黙って落とすと「適用したのに元と違う」になる。
+     */
+    @GetMapping("/presentation-state/{sopInstanceUid}")
+    public ResponseEntity<XaPresentationState> readPresentationState(@PathVariable String sopInstanceUid) {
+        requireText(sopInstanceUid, "sopInstanceUid");
+        try {
+            return ResponseEntity.ok(service.readPresentationState(sopInstanceUid));
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        } catch (IOException e) {
+            log.warn("GSPS を読めませんでした {}", sopInstanceUid, e);
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "表示状態を読み込めませんでした");
         }
     }
 

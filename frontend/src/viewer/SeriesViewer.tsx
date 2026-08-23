@@ -59,6 +59,9 @@ import {
   thickSlabImageId,
 } from "./thickSlab";
 import { imageIdForInstance, sopUidFromImageId, type ViewerMode } from "./imageId";
+import { XaPresentationDialog } from "./XaPresentationDialog";
+import type { PresentationPlan } from "./xaPresentationApply";
+import { clearXaCalibrationCache, setXaUserCalibration } from "./xaCalibrationProvider";
 import { advanceAnchor, sliceStepsFromDrag } from "./touchScroll";
 import { installDebugApi, countStackSwap } from "./debugApi";
 import { matchesCombo } from "../shortcuts/registry";
@@ -355,6 +358,14 @@ export function SeriesViewer({
   const [qvaDialogOpen, setQvaDialogOpen] = useState(false);
   const [xaBifDialogOpen, setXaBifDialogOpen] = useState(false);
   const [xa3dDialogOpen, setXa3dDialogOpen] = useState(false);
+  /** 表示状態（GSPS）の読み込み（§14.1）。 */
+  const [prDialogOpen, setPrDialogOpen] = useState(false);
+  /**
+   * DSA を後から立ち上げて当てるための保留分。
+   * 🚨 DSA のセッションは非同期に張られるので、**token が来てから**マスクとシフトを当てる。
+   * 当てる前に「適用しました」と出すと、DSA だけ効いていない状態を成功と読ませてしまう。
+   */
+  const [pendingDsaPlan, setPendingDsaPlan] = useState<PresentationPlan["dsa"] | null>(null);
   /** 3D QCA に使える「2D QCA 実行済みの方向」。2 つ揃うまでボタンは押せない。 */
   const qcaRuns = useQcaRuns();
   // 空間校正の確定/解除は imageId を変えないため、Viewer2D にメタデータを読み直させる鍵。
@@ -558,6 +569,60 @@ export function SeriesViewer({
       .then((r) => setDsaResidual(r))
       .catch(() => setDsaResidual(null));
   };
+
+  /**
+   * 読み込んだ表示状態（GSPS）を当てる（§14.1）。
+   *
+   * 🚨 **当てられるものだけを当てる。** 何が当たり何が当たらなかったかは
+   * {@link XaPresentationDialog} が一覧に出す（ここで握りつぶさない）。
+   */
+  const applyPresentation = (plan: PresentationPlan) => {
+    const vp = firstLinkedViewport();
+    if (vp) {
+      if (plan.voi) {
+        const half = plan.voi.windowWidth / 2;
+        vp.setProperties({
+          voiRange: { lower: plan.voi.windowCenter - half, upper: plan.voi.windowCenter + half },
+        });
+      }
+      // 反転は「書いてある値にする」（トグルではない。二度当てて戻る事故を防ぐ）。
+      vp.setProperties({ invert: plan.invert });
+      vp.render();
+      applyTransform(vp, { rotation: plan.rotation, flipHorizontal: plan.flipHorizontal });
+    }
+    if (plan.mmPerPx != null) {
+      // 出自は "gsps"。人が測った校正と混ぜない（表示にもそう出る）。
+      setXaUserCalibration(seriesUid, { mmPerPx: plan.mmPerPx, method: "gsps" });
+      clearXaCalibrationCache();
+      setCalibVersion((v) => v + 1);
+    }
+    if (plan.dsa) {
+      if (dsaToken) {
+        setDsaMaskFrames(dsaToken, plan.dsa.maskFrameIndices);
+        setDsaShift(dsaToken, plan.dsa.dx, plan.dsa.dy);
+        rebuildDsaMask(dsaToken)
+          .then(() => refreshDsa(dsaToken, zc))
+          .catch(() => emitToast(t("dsa.failed")));
+      } else {
+        // まだ DSA を張っていない。token が来てから当てる（下の effect）。
+        setPendingDsaPlan(plan.dsa);
+        setDsaOn(true);
+      }
+    }
+  };
+
+  // 保留していた DSA 設定を、セッションが張れた時点で当てる。
+  useEffect(() => {
+    if (!pendingDsaPlan || !dsaToken) return;
+    setDsaMaskFrames(dsaToken, pendingDsaPlan.maskFrameIndices);
+    setDsaShift(dsaToken, pendingDsaPlan.dx, pendingDsaPlan.dy);
+    setPendingDsaPlan(null);
+    rebuildDsaMask(dsaToken)
+      .then(() => refreshDsa(dsaToken, zc))
+      .catch(() => emitToast(t("dsa.failed")));
+    // zc（表示フレーム）は残差の測り直しにだけ使う。依存に入れると当て直しが走る。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingDsaPlan, dsaToken]);
 
   // スタックの差し替え回数を数える（XA でフレーム送りのたびに増えるなら stackAxis の配線ミス）。
   const stackKeyForCount = displayImageIds[0] ?? "";
@@ -1026,6 +1091,15 @@ export function SeriesViewer({
                   >
                     {t("xa3dbif.open")}
                   </button>
+                  {/* 表示状態（GSPS）の読み込み（§14.1）。書き出しは解析ダイアログ側。 */}
+                  <button
+                    style={btn}
+                    data-testid="xa-pr-open"
+                    title={t("xa.pr.title")}
+                    onClick={() => setPrDialogOpen(true)}
+                  >
+                    {t("xa.pr.open")}
+                  </button>
                   <button
                     style={btn}
                     data-testid="xa-export-frames"
@@ -1171,6 +1245,15 @@ export function SeriesViewer({
           {gridDisabled && <span style={hint}>{t("series.grid.disabled")}</span>}
         </div>
       </div>
+      )}
+      {prDialogOpen && (
+        <XaPresentationDialog
+          studyUid={studyUid}
+          sopInstanceUid={sopUidFromImageId(zStack[zc] ?? "") ?? null}
+          frameCount={nZ}
+          onApply={(plan) => applyPresentation(plan)}
+          onClose={() => setPrDialogOpen(false)}
+        />
       )}
       {xaDialogOpen && displayImageIds[zc] && (
         <XaAnalysisDialog

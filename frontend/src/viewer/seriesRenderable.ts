@@ -38,6 +38,9 @@ const NON_IMAGE_SOP_CLASSES: Readonly<Record<string, string>> = {
   "1.2.840.10008.5.1.4.1.1.11.2": "Color Softcopy Presentation State",
   "1.2.840.10008.5.1.4.1.1.11.3": "Pseudo-Color Softcopy Presentation State",
   "1.2.840.10008.5.1.4.1.1.11.4": "Blending Softcopy Presentation State",
+  // XA/XRF GSPS。画像としては開けないが、**参照画像に適用できる**（§14.1 / A10）。
+  // シリーズビューアの「表示状態を適用」から当てる。
+  "1.2.840.10008.5.1.4.1.1.11.5": "XA/XRF Grayscale Softcopy Presentation State",
   "1.2.840.10008.5.1.4.1.1.88.11": "Basic Text SR",
   "1.2.840.10008.5.1.4.1.1.88.22": "Enhanced SR",
   "1.2.840.10008.5.1.4.1.1.88.33": "Comprehensive SR",
