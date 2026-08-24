@@ -68,10 +68,16 @@ graphy:
     # https のみ許可（平文 http や不正な URL は起動時にエラーで落とす）。
     # github-api-base: https://github.example.com/api/v3
   cors:
-    # /api/** に対する許可オリジン（dev の Vite と Electron file://=null を想定）
+    # /api/** に対する許可オリジン（dev の Vite と Electron の file:// を想定）。
+    # 🔴 Electron のレンダラ(file://)が送る Origin は "file://" であって "null" ではない。
+    # しかも Origin を送るのは module script の取得（動的 import）だけで、通常の fetch/XHR は
+    # file:// ページからは Origin を送らない＝CORS フィルタを素通りする。このため
+    # 「アプリ本体は全部動くのにプラグインの ui.js だけ 403」という形で現れた（2026-08-24 実機）。
+    # "null" も残す（sandbox iframe 等）。詳細: fw/security.md §CORS
     allowed-origin-patterns:
       - "http://localhost:*"
       - "http://127.0.0.1:*"
+      - "file://"
       - "null"
     allowed-methods:
       - GET

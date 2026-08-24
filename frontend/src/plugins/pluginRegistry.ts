@@ -56,7 +56,16 @@ async function importModule(m: PluginManifest): Promise<PluginModule> {
     throw new Error(`plugin '${m.id}': frontend.bundleUrl が未指定です`);
   }
   const abs = /^https?:\/\//.test(url) ? url : `${apiBase()}${url}`;
-  const mod = await import(/* @vite-ignore */ abs);
+  // 🔴 ここが落ちるとブラウザは "Failed to fetch dynamically imported module" としか言わず、
+  // HTTP ステータスもサーバ側の理由も出ない。実際に 2 度（CSP の script-src / backend の CORS が
+  // Origin: file:// を 403）ここで詰まっているので、次に同じ画面を見る人向けに手掛かりを足す。
+  // 切り分けの型は fw/security.md §CORS。
+  const mod = await import(/* @vite-ignore */ abs).catch((e) => {
+    const why =
+      "UI バンドルを読み込めませんでした。CSP(script-src) か backend の CORS(Origin) で" +
+      "止められている可能性があります。詳細: fw/security.md §CORS";
+    throw new Error(`plugin '${m.id}': ${why} [${abs}] ${e instanceof Error ? e.message : String(e)}`);
+  });
   const resolved = (mod.default ?? mod) as PluginModule;
   if (typeof resolved.activate !== "function") {
     throw new Error(`plugin '${m.id}': activate() を公開していません`);

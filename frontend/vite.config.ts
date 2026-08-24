@@ -14,6 +14,10 @@ function cspPlugin(): Plugin {
     // `TypeError: Failed to fetch dynamically imported module` で落ちる。
     // dev(Vite serve)は CSP を注入しないので dev では再現せず、**パッケージ版だけで壊れていた**
     // （2026-08-24 に v0.2.1 の実機で発覚）。許可範囲は connect-src と同じホストに揃える。
+    // ⚠ ただし**これだけでは直らなかった**。同じ症状の裏に backend の CORS
+    // （`Origin: file://` を 403 で弾いていた）という第 2 の原因があり、そちらは
+    // application.yml の allowed-origin-patterns に "file://" を足して解決した。
+    // 経緯と切り分けの型: fw/security.md §CORS
     "script-src 'self' 'wasm-unsafe-eval' http://localhost:* http://127.0.0.1:*",
     // インラインの style 属性を多用しているため style のみ unsafe-inline を許可（script より低リスク）
     "style-src 'self' 'unsafe-inline'",
