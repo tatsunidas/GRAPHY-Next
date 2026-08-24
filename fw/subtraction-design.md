@@ -1162,6 +1162,17 @@ H30〜H33 は「4 面ウィンドウ・MIP・メッシュ計測ができる箱�
 
 **`engines.graphy` の下限**は H30〜H34 が入った本体版へ上げる（**0.2.1**）。
 
+> ✅ **本体を 0.2.1 に上げた（2026-08-24・`npm run set-version 0.2.1`）。**
+> それまで本体は **0.2.0** のまま（`backend/pom.xml` の `<version>` が
+> `application.yml` の `graphy.version` を経て `PluginManagerService` に入る）で、
+> `SemVer.satisfies("0.2.0", ">=0.2.1")` が false ／ `PluginInstaller.checkCompat` が
+> **展開前に fail-closed** で落ちていた（`incompatible: plugin requires graphy >=0.2.1 but core is 0.2.0`）。
+> 🔴 **この宣言は正しく、コアの番号が実態より古かった**——H30〜H34 は v0.2.0 タグ
+> （2026-08-20・`b438e14`）より後の 08-21/22 に入ったため。**プラグイン側を `>=0.2.0` へ
+> 下げてはいけない**（本物の v0.2.0 配布物に H30〜H34 は無いので、入っても実行時に落ちる＝偽の宣言）。
+> 🚨 **手置き（`scripts/install-dev.mjs`）はインストーラを通らないので互換ゲートを一切通らない。**
+> だから S6b までの実機検証は通っていた。**導入経路の検証は手置きでは代替できない**（SP4 の教訓）。
+
 #### 15.4.1 🔴 H30 は「別ウィンドウ」にできなかった（実装して分かった）
 
 §8 の対応表は `GlamAnalysisScreen` と同じ「`window.open` / `desktop().openViewer()` で別ウィンドウ」を

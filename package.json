@@ -1,6 +1,6 @@
 {
   "private": true,
-  "version": "0.2.0",
+  "version": "0.2.1",
   "license": "AGPL-3.0-or-later",
   "scripts": {
     "dev-desktop": "scripts\\dev-desktop.bat",
