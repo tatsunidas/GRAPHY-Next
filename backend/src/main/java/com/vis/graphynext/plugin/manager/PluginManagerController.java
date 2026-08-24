@@ -118,9 +118,11 @@ public class PluginManagerController {
     @DeleteMapping("/{id}")
     public ResponseEntity<Object> uninstall(@PathVariable String id) {
         return handle(() -> {
-            boolean removed = service.uninstall(id);
-            if (!removed) throw new NoSuchElementException("plugin not installed: " + id);
-            return Map.of("id", id, "removed", true);
+            PluginInstaller.UninstallResult r = service.uninstall(id);
+            if (!r.existed()) throw new NoSuchElementException("plugin not installed: " + id);
+            // ファイルを掴まれていて今は消せなかった場合も「削除済み」で返す（台帳からは外れ、
+            // 走査対象からも外れ、次回起動時に実体が消える）。UI は削除後に再起動バナーを出す。
+            return Map.of("id", id, "removed", true, "restartRequired", r.pendingRestart());
         });
     }
 

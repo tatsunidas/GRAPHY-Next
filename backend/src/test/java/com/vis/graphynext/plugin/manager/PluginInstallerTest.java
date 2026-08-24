@@ -187,9 +187,49 @@ class PluginInstallerTest {
         PluginInstaller inst = installer(dir, "0.2.5");
         inst.install(zip(flat("hello", null)), SRC, null, "local");
 
-        assertTrue(inst.uninstall("hello"));
+        assertTrue(inst.uninstall("hello").existed());
         assertFalse(Files.exists(dir.resolve("hello")), "folder removed");
         assertTrue(inst.installed().isEmpty(), "ledger cleared");
-        assertFalse(inst.uninstall("hello"), "second uninstall is no-op");
+        assertFalse(inst.uninstall("hello").existed(), "second uninstall is no-op");
+    }
+
+    /**
+     * 🔴 削除・更新の前にクラスローダの解放フックが呼ばれること。
+     *
+     * <p>Windows では開いたままの JAR を削除できず、これを怠ると「backend 面を一度でも呼んだ
+     * プラグインだけ削除に失敗し、plugin.json と ui.js だけ消えて JAR と台帳が残る」という
+     * 壊れ方をする（2026-08-24 に実機で発生）。ファイルロックの再現は OS 依存なので、
+     * ここでは<b>順序（消す前に呼ぶ）</b>を固定する。
+     */
+    @Test
+    void releasesClassLoaderBeforeTouchingFiles(@TempDir Path dir) throws Exception {
+        List<String> calls = new java.util.ArrayList<>();
+        List<Boolean> folderStillThere = new java.util.ArrayList<>();
+        PluginInstaller inst = new PluginInstaller(dir, MAPPER, "0.2.5", id -> {
+            calls.add(id);
+            folderStillThere.add(Files.exists(dir.resolve(id).resolve("plugin.json")));
+        });
+
+        inst.install(zip(flat("hello", null)), SRC, null, "local");
+        assertEquals(List.of("hello"), calls, "導入(置換)の前にも解放する");
+        calls.clear();
+        folderStillThere.clear();
+
+        inst.uninstall("hello");
+        assertEquals(List.of("hello"), calls, "削除の前に解放する");
+        assertEquals(List.of(true), folderStillThere, "★消す前に呼ばれている（後だと手遅れ）");
+    }
+
+    /** 消せなかった残骸（.uninstall-pending）は次回起動時に消える。 */
+    @Test
+    void sweepsLeftoversOnStartup(@TempDir Path dir) throws Exception {
+        Path leftover = dir.resolve("ghost");
+        Files.createDirectories(leftover);
+        Files.writeString(leftover.resolve("ghost.jar"), "x");
+        Files.writeString(leftover.resolve(".uninstall-pending"), "pending");
+
+        installer(dir, "0.2.5");   // 起動を模す
+
+        assertFalse(Files.exists(leftover), "起動時に掃除される");
     }
 }

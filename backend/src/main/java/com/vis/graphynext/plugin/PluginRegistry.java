@@ -32,4 +32,18 @@ public interface PluginRegistry {
      * @throws UnsupportedOperationException このモード/プラグインでは実行不可
      */
     Object run(String id, Map<String, Object> payload);
+
+    /**
+     * そのプラグインが掴んでいる資源（クラスローダ＝JAR のファイルハンドル）を解放する。
+     *
+     * <p>🔴 <b>Windows では開いたままの JAR を削除できない</b>ため、削除・更新・再インストールの
+     * 前に必ず呼ぶこと。呼ばないと {@code deleteRecursively} が JAR で
+     * 「別のプロセスが使用中です」で落ち、<b>先に消えた {@code plugin.json} / {@code ui.js} だけが
+     * 失われて JAR と台帳が残る</b>という中途半端な状態になる（2026-08-24 に実機で発生）。
+     *
+     * <p>既定は何もしない（web モードは JAR を読み込まない）。
+     */
+    default void release(String id) {
+        // no-op
+    }
 }

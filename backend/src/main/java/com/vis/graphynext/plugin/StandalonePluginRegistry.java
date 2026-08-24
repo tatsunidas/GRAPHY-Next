@@ -77,6 +77,25 @@ public class StandalonePluginRegistry extends FileSystemPluginRegistry {
         return plugin;
     }
 
+    /**
+     * クラスローダを閉じて捨てる（JAR のファイルハンドルを解放する）。
+     *
+     * <p>削除・更新の前に {@code PluginManagerService} が呼ぶ。閉じてもロード済みクラスは
+     * メモリ上に残る（＝実行中の処理は壊れない）が、<b>ファイルは削除できるようになる</b>。
+     * 次に {@code run()} が呼ばれた時点で新しいローダが作り直される。
+     */
+    @Override
+    public void release(String id) {
+        URLClassLoader cl = loaders.remove(id);
+        if (cl == null) return;
+        try {
+            cl.close();
+            log.info("[plugins] released classloader for {}", id);
+        } catch (IOException e) {
+            log.warn("[plugins] failed to close classloader for {}: {}", id, e.getMessage());
+        }
+    }
+
     /** フォルダ直下の *.jar を親=このアプリのローダにして URLClassLoader を作る。 */
     private URLClassLoader newLoader(Path dir) {
         List<URL> urls = new ArrayList<>();

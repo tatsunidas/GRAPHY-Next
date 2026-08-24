@@ -118,7 +118,10 @@ class PluginManagerServiceTest {
         props.setTrustedKeys(trustedKeys);
         StandardEnvironment env = new StandardEnvironment();
         env.setActiveProfiles(profile);
-        return new PluginManagerService(props, MAPPER, client, env, () -> optedIn, "0.2.5");
+        return new PluginManagerService(props, MAPPER, client, env, () -> optedIn,
+                new org.springframework.beans.factory.support.StaticListableBeanFactory()
+                        .getBeanProvider(com.vis.graphynext.plugin.PluginRegistry.class),
+                "0.2.5");
     }
 
     /** zip・.minisig・minisign.pub を持つリリースを返す fake（署名経路の検証用）。 */

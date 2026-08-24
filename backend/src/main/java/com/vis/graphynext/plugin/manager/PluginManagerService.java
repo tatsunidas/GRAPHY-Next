@@ -8,9 +8,11 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vis.graphynext.plugin.PluginDescriptor;
 import com.vis.graphynext.plugin.PluginProperties;
+import com.vis.graphynext.plugin.PluginRegistry;
 import com.vis.graphynext.settings.SettingsService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Service;
@@ -53,6 +55,7 @@ public class PluginManagerService {
                                 GitHubReleaseClient github,
                                 Environment env,
                                 InstallOptIn optIn,
+                                ObjectProvider<PluginRegistry> registry,
                                 @Value("${graphy.version:dev}") String coreVersion) {
         this.props = props;
         this.github = github;
@@ -61,7 +64,11 @@ public class PluginManagerService {
         this.mapper = mapper;
         Path dir = Path.of(props.getDir() == null || props.getDir().isBlank() ? "./plugins" : props.getDir())
                 .toAbsolutePath().normalize();
-        this.installer = new PluginInstaller(dir, mapper, coreVersion);
+        // 🔴 削除・更新の前に実行レイヤのクラスローダを閉じさせる。Windows では開いたままの JAR を
+        // 削除できないため、これが無いと「backend 面を一度でも呼んだプラグインだけ消せない」。
+        // ObjectProvider にしているのは、プロファイルによっては PluginRegistry の bean が無いため。
+        this.installer = new PluginInstaller(dir, mapper, coreVersion,
+                id -> registry.ifAvailable(r -> r.release(id)));
     }
 
     /** 導入済み一覧（台帳）。読み取りは常に可能。 */
@@ -396,7 +403,7 @@ public class PluginManagerService {
         installer.setEnabled(id, false);
     }
 
-    public boolean uninstall(String id) throws IOException {
+    public PluginInstaller.UninstallResult uninstall(String id) throws IOException {
         requireMutable();
         return installer.uninstall(id);
     }

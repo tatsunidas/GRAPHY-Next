@@ -28,6 +28,11 @@ abstract class FileSystemPluginRegistry implements PluginRegistry {
     private static final String MANIFEST_FILE = "plugin.json";
     /** このマーカーがフォルダ直下にあると無効化扱い（PluginInstaller が enable/disable で管理）。 */
     static final String DISABLED_MARKER = ".disabled";
+    /**
+     * 削除したいがファイルを掴まれていて消せなかった残骸の印（次回起動時に PluginInstaller が消す）。
+     * 消えるまでの間、走査に載せてはいけない（利用者は既に「削除した」と思っている）。
+     */
+    static final String UNINSTALL_PENDING_MARKER = ".uninstall-pending";
 
     private final ObjectMapper mapper;
     private final boolean enabled;
@@ -89,6 +94,8 @@ abstract class FileSystemPluginRegistry implements PluginRegistry {
                 if (!Files.isRegularFile(manifest)) continue;
                 // マネージャが無効化したプラグインは走査対象外（削除せず一時停止）。
                 if (Files.isRegularFile(dir.resolve(DISABLED_MARKER))) continue;
+                // 削除済み扱いの残骸も対象外（次回起動時に消える）。
+                if (Files.isRegularFile(dir.resolve(UNINSTALL_PENDING_MARKER))) continue;
                 try {
                     PluginDescriptor desc = mapper.readValue(manifest.toFile(), PluginDescriptor.class);
                     if (desc.id() == null || desc.id().isBlank()) {

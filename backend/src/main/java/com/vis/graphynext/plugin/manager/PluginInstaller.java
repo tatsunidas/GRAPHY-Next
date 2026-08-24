@@ -17,6 +17,7 @@ import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
@@ -36,17 +37,36 @@ public class PluginInstaller {
      * （リポジトリの pinned-literal 規約に倣った意図的な重複。走査側とここで同じ文字列を使う）。
      */
     private static final String DISABLED_MARKER = ".disabled";
+    /**
+     * 「消したいが今は消せなかった」印。次回起動時に掃除する。
+     * <b>{@code FileSystemPluginRegistry.UNINSTALL_PENDING_MARKER} と一致必須</b>
+     * （{@link #DISABLED_MARKER} と同じ pinned-literal 規約）。
+     */
+    private static final String UNINSTALL_PENDING_MARKER = ".uninstall-pending";
 
     private final Path pluginsDir;
     private final ObjectMapper mapper;
     private final String coreVersion;
     private final PluginLedger ledger;
+    /** 削除・更新の前に、そのプラグインが掴んでいるクラスローダを解放させるフック。 */
+    private final Consumer<String> release;
 
     public PluginInstaller(Path pluginsDir, ObjectMapper mapper, String coreVersion) {
+        this(pluginsDir, mapper, coreVersion, id -> { });
+    }
+
+    /**
+     * @param release 削除・更新の直前に呼ばれる解放フック（実行レイヤのクラスローダを閉じる）。
+     *                🔴 Windows では<b>開いたままの JAR は削除できない</b>ため、これが無いと
+     *                「backend 面を一度でも呼んだプラグインだけ削除に失敗する」ことになる。
+     */
+    public PluginInstaller(Path pluginsDir, ObjectMapper mapper, String coreVersion, Consumer<String> release) {
         this.pluginsDir = pluginsDir.toAbsolutePath().normalize();
         this.mapper = mapper;
         this.coreVersion = coreVersion;
+        this.release = release == null ? id -> { } : release;
         this.ledger = new PluginLedger(this.pluginsDir.resolve("installed.json"), mapper);
+        sweepPendingUninstalls();
     }
 
     /** 台帳（導入済み一覧）。 */
@@ -94,7 +114,14 @@ public class PluginInstaller {
         Path tmp = Files.createTempDirectory(pluginsDir, ".install-" + desc.id() + "-");
         try {
             PluginPackage.extract(zip, base, tmp);
-            deleteRecursively(target);
+            // 置き換える前に、実行レイヤが掴んでいる JAR を手放させる（Windows では必須）。
+            release.accept(desc.id());
+            try {
+                deleteRecursively(target);
+            } catch (IOException e) {
+                throw new PluginInstallException("既存のファイルを置き換えられません（" + e.getMessage()
+                        + "）。アプリを再起動してから、もう一度お試しください。");
+            }
             try {
                 Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE);
             } catch (IOException atomicFailed) {
@@ -117,16 +144,76 @@ public class PluginInstaller {
         return rec;
     }
 
-    /** プラグインを削除（フォルダ＋台帳）。存在しなければ false。 */
-    public boolean uninstall(String id) throws IOException {
+    /**
+     * 削除の結果。
+     *
+     * @param existed        そもそも導入されていたか（false なら 404）
+     * @param pendingRestart ファイルを今は消せず、次回起動時に消す状態にしたか
+     */
+    public record UninstallResult(boolean existed, boolean pendingRestart) { }
+
+    /**
+     * プラグインを削除（フォルダ＋台帳）。
+     *
+     * <p>🔴 <b>ファイルを消す前に必ずクラスローダを解放する。</b> Windows では開いたままの JAR を
+     * 削除できず、{@code deleteRecursively} はファイルを先に消すので、これを怠ると
+     * <b>{@code plugin.json} と {@code ui.js} だけ消えて JAR と台帳が残る</b>
+     * （＝一覧には出るのに壊れている）状態になる。2026-08-24 に実機で発生した。
+     *
+     * <p>解放しても消せない場合（プラグイン自身が別のファイルを掴んでいる等）は、
+     * <b>中途半端なまま放置せず</b> {@code .uninstall-pending} の印を置いて台帳からは外し、
+     * 次回起動時に {@link #sweepPendingUninstalls()} が消す。UI は削除後に再起動バナーを出すので、
+     * 利用者から見た手順は変わらない。
+     */
+    public UninstallResult uninstall(String id) throws IOException {
         validateId(id);
         Path target = pluginsDir.resolve(id).normalize();
         if (!target.startsWith(pluginsDir)) throw new PluginInstallException("invalid id: " + id);
         boolean existed = Files.isDirectory(target) || ledger.find(id).isPresent();
-        deleteRecursively(target);
+        release.accept(id);
+        boolean pending = false;
+        try {
+            deleteRecursively(target);
+        } catch (IOException e) {
+            markPendingUninstall(target, e);
+            pending = true;
+        }
         ledger.remove(id);
-        if (existed) log.info("[plugin-manager] uninstalled {}", id);
-        return existed;
+        if (existed) {
+            log.info("[plugin-manager] uninstalled {}{}", id, pending ? " (files removed on next start)" : "");
+        }
+        return new UninstallResult(existed, pending);
+    }
+
+    /** 今は消せなかったフォルダに印を置く。印すら置けないなら元の失敗を投げる。 */
+    private void markPendingUninstall(Path target, IOException cause) throws IOException {
+        if (!Files.isDirectory(target)) throw cause;
+        try {
+            Files.writeString(target.resolve(UNINSTALL_PENDING_MARKER),
+                    "pending uninstall: " + cause.getMessage() + System.lineSeparator());
+        } catch (IOException e) {
+            throw cause;
+        }
+        log.warn("[plugin-manager] cannot delete {} now ({}); will remove on next start",
+                target.getFileName(), cause.getMessage());
+    }
+
+    /** 起動時に「消し残し」を掃除する（コンストラクタから呼ぶ）。 */
+    private void sweepPendingUninstalls() {
+        if (!Files.isDirectory(pluginsDir)) return;
+        try (Stream<Path> dirs = Files.list(pluginsDir)) {
+            for (Path dir : (Iterable<Path>) dirs.filter(Files::isDirectory)::iterator) {
+                if (!Files.isRegularFile(dir.resolve(UNINSTALL_PENDING_MARKER))) continue;
+                try {
+                    deleteRecursively(dir);
+                    log.info("[plugin-manager] removed leftover plugin {}", dir.getFileName());
+                } catch (IOException e) {
+                    log.warn("[plugin-manager] still cannot remove {}: {}", dir.getFileName(), e.getMessage());
+                }
+            }
+        } catch (IOException e) {
+            log.warn("[plugin-manager] failed to sweep leftovers: {}", e.getMessage());
+        }
     }
 
     /** 有効/無効を切り替える（{@code .disabled} マーカー＋台帳）。 */

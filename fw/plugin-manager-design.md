@@ -348,3 +348,39 @@ JAR 入りを導入・更新・削除・有効無効した直後は、既存の�
 - **押せないときは必ず理由を出す**（`pluginmgr.repoHint`）。これは A13-2 のタスク・ランチャーで
   決めた「押せないカードに必ず理由の文言を出す」（`fw/angio-design.md` §21.8）と同じ規則で、
   こちらの画面には適用されていなかった。**無言で無効なボタンはバグとして体験される。**
+
+## 5.4 削除・更新の前にクラスローダを解放する（2026-08-24 追加）
+
+> 実機で「プラグインが削除できない」として発覚。正本はここ。
+
+`StandalonePluginRegistry` は id ごとに `URLClassLoader` をキャッシュする。**Windows では
+開いたままの JAR を削除できない**ため、`PluginInstaller` がファイルを消す前に必ず解放させる。
+
+```
+PluginManagerService → PluginInstaller(release フック) → PluginRegistry#release(id)
+                                                          └ loaders.remove(id).close()
+```
+
+🔴 **これが無いと壊れ方が非対称になる**:
+
+| プラグイン | 削除の結果 |
+|---|---|
+| backend 面（JAR）を**一度も呼んでいない** | 200 — きれいに消える |
+| backend 面を**一度でも呼んだ** | **500「別のプロセスが使用中です」** |
+
+しかも `deleteRecursively` は**ファイルを先に消す**ので、JAR で失敗する頃には `plugin.json` と
+`ui.js` は既に消えている。結果は **JAR と台帳だけが残る**＝「一覧には出るのに壊れている」状態。
+`install()`（＝更新・再インストール。既存を消してから差し替える）も同じ経路なので、解放は
+**削除と導入の両方**で行う。
+
+**それでも消せなかった場合**（プラグイン自身が別のファイルを掴んでいる等）は、中途半端なまま
+放置せず `.uninstall-pending` の印を置いて**台帳からは外す**。走査側
+（`FileSystemPluginRegistry`）はこの印があるフォルダを飛ばし、実体は**次回起動時**に
+`PluginInstaller` のコンストラクタが掃除する。API は `{removed:true, restartRequired:true}` を返す
+（500 にしない）。UI は削除後に必ず再起動バナーを出すので、利用者から見た手順は変わらない。
+
+- 印の名前は `DISABLED_MARKER` と同じ pinned-literal 規約（インストーラ側と走査側で同じ文字列を
+  持つ意図的な重複）。
+- 回帰テスト `PluginInstallerTest#releasesClassLoaderBeforeTouchingFiles` は
+  **「消す前に呼ばれている」順序**を固定する（ファイルロックは OS 依存で CI では再現しないため、
+  ロックそのものではなく順序を守る）。`#sweepsLeftoversOnStartup` が起動時の掃除を固定する。
