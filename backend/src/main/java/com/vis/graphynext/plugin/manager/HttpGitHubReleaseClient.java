@@ -30,6 +30,8 @@ public class HttpGitHubReleaseClient implements GitHubReleaseClient {
 
     private static final Logger log = LoggerFactory.getLogger(HttpGitHubReleaseClient.class);
     private static final String UA = "GRAPHY-Next";
+    /** 一時的な失敗（5xx / 429 / 接続エラー）の試行回数。 */
+    private static final int MAX_ATTEMPTS = 3;
 
     private final ObjectMapper mapper;
     private final HttpClient http;
@@ -61,21 +63,16 @@ public class HttpGitHubReleaseClient implements GitHubReleaseClient {
                 .header("Accept", "application/vnd.github+json")
                 .header("X-GitHub-Api-Version", "2022-11-28")
                 .GET().build();
+        HttpResponse<byte[]> res = sendWithRetry(req, "GitHub releases fetch", safe);
         try {
-            HttpResponse<byte[]> res = http.send(req, HttpResponse.BodyHandlers.ofByteArray());
-            if (res.statusCode() / 100 != 2) {
-                throw new PluginInstallException("GitHub releases fetch failed: HTTP " + res.statusCode()
-                        + " for " + safe);
-            }
             JsonNode arr = mapper.readTree(res.body());
             List<Release> out = new ArrayList<>();
             if (arr.isArray()) {
                 for (JsonNode r : arr) out.add(toRelease(r));
             }
             return out;
-        } catch (IOException | InterruptedException e) {
-            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
-            throw new PluginInstallException("GitHub releases fetch error: " + e.getMessage());
+        } catch (IOException e) {
+            throw new PluginInstallException("GitHub releases parse error: " + e.getMessage());
         }
     }
 
@@ -84,15 +81,84 @@ public class HttpGitHubReleaseClient implements GitHubReleaseClient {
         HttpRequest req = base(URI.create(url), token)
                 .header("Accept", "application/octet-stream")
                 .GET().build();
-        try {
-            HttpResponse<byte[]> res = http.send(req, HttpResponse.BodyHandlers.ofByteArray());
-            if (res.statusCode() / 100 != 2) {
-                throw new PluginInstallException("asset download failed: HTTP " + res.statusCode());
+        return sendWithRetry(req, "asset download", url).body();
+    }
+
+    /**
+     * 送信し、<b>一時的な失敗は自動で再試行する</b>。
+     *
+     * <p>🔴 以前は再試行が無く、GitHub のエッジが返した <b>1 回きりの 504</b> で導入全体が
+     * 「取得に失敗しました: HTTP 504」で終わっていた（2026-08-24 に実機で発生。直後に手で
+     * 叩き直すと 200 が返る＝完全に一過性だった）。ネットワーク越しの取得で再試行が無いのは
+     * 実装の不足。
+     *
+     * <p>再試行するのは <b>5xx・429・408</b> と接続エラーだけ。404（無い）や
+     * 403（レート制限・権限）は<b>待っても変わらない</b>ので即座に理由を添えて返す。
+     */
+    private HttpResponse<byte[]> sendWithRetry(HttpRequest req, String what, String subject) {
+        IOException lastIo = null;
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            try {
+                HttpResponse<byte[]> res = http.send(req, HttpResponse.BodyHandlers.ofByteArray());
+                int sc = res.statusCode();
+                if (sc / 100 == 2) return res;
+                if (isTransient(sc) && attempt < MAX_ATTEMPTS) {
+                    log.warn("[plugin-manager] {} got HTTP {} for {} (attempt {}/{}), retrying",
+                            what, sc, subject, attempt, MAX_ATTEMPTS);
+                    pause(attempt);
+                    continue;
+                }
+                throw new PluginInstallException(explain(what, subject, sc, res, attempt));
+            } catch (IOException e) {
+                lastIo = e;
+                if (attempt < MAX_ATTEMPTS) {
+                    log.warn("[plugin-manager] {} failed for {} ({}), retrying {}/{}",
+                            what, subject, e.getMessage(), attempt, MAX_ATTEMPTS);
+                    pause(attempt);
+                    continue;
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new PluginInstallException(what + " interrupted: " + subject);
             }
-            return res.body();
-        } catch (IOException | InterruptedException e) {
-            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
-            throw new PluginInstallException("asset download error: " + e.getMessage());
+        }
+        throw new PluginInstallException(what + " error after " + MAX_ATTEMPTS + " attempts: "
+                + (lastIo == null ? "unknown" : lastIo.getMessage()));
+    }
+
+    /** 待てば直る見込みのあるステータスか。 */
+    private static boolean isTransient(int sc) {
+        return sc / 100 == 5 || sc == 429 || sc == 408;
+    }
+
+    /** 利用者が次に何をすればよいか分かる文言にする（生の番号だけでは何も伝わらない）。 */
+    private static String explain(String what, String subject, int sc, HttpResponse<byte[]> res, int attempts) {
+        String head = what + " failed: HTTP " + sc + " for " + subject;
+        if (sc == 404) {
+            return head + " — 見つかりません（リポジトリ名の綴り、リリースが公開済みか、"
+                    + "非公開リポジトリならトークンを確認してください）";
+        }
+        if (sc == 403 || sc == 429) {
+            String remaining = res.headers().firstValue("x-ratelimit-remaining").orElse(null);
+            if ("0".equals(remaining) || sc == 429) {
+                return head + " — GitHub API のレート制限に達しました（未認証は 60 回/時）。"
+                        + "しばらく待つか、環境設定でアクセストークンを設定してください";
+            }
+            return head + " — アクセスが拒否されました（非公開リポジトリならトークンが必要です）";
+        }
+        if (sc / 100 == 5) {
+            return head + " — GitHub 側の一時的な障害です（" + attempts + " 回試しました）。"
+                    + "少し待ってからもう一度お試しください";
+        }
+        return head;
+    }
+
+    /** 再試行の間隔（400ms → 1200ms）。長く待たせない。 */
+    private static void pause(int attempt) {
+        try {
+            Thread.sleep(400L * attempt * attempt);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
