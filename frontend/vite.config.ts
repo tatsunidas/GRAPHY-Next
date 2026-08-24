@@ -8,7 +8,13 @@ function cspPlugin(): Plugin {
   const csp = [
     "default-src 'self'",
     // 'wasm-unsafe-eval' は WebAssembly(将来の Cornerstone3D コーデック)用。eval は許可しない狭い権限。
-    "script-src 'self' 'wasm-unsafe-eval'",
+    // 🔴 localhost を script-src に入れるのは、プラグインの UI バンドル
+    // (`/api/plugins/{id}/ui.js`) を動的 import() で読むため。**import() は connect-src ではなく
+    // script-src に支配される**ので、connect-src だけ許可しても
+    // `TypeError: Failed to fetch dynamically imported module` で落ちる。
+    // dev(Vite serve)は CSP を注入しないので dev では再現せず、**パッケージ版だけで壊れていた**
+    // （2026-08-24 に v0.2.1 の実機で発覚）。許可範囲は connect-src と同じホストに揃える。
+    "script-src 'self' 'wasm-unsafe-eval' http://localhost:* http://127.0.0.1:*",
     // インラインの style 属性を多用しているため style のみ unsafe-inline を許可（script より低リスク）
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",

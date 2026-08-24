@@ -36,11 +36,21 @@ dev(Vite/HMR は unsafe-eval を使う) と本番(file://)で要件が異なる�
 **本番ビルド時のみ** `index.html` に厳格な CSP メタタグを注入する
 （`vite.config.ts` の `cspPlugin`, `apply: "build"`）。dev には注入せず HMR を壊さない。
 
-- `script-src 'self' 'wasm-unsafe-eval'`（WASM=将来の Cornerstone3D コーデック用。eval は不許可）
+- `script-src 'self' 'wasm-unsafe-eval' http://localhost:* http://127.0.0.1:*`
+  （WASM=将来の Cornerstone3D コーデック用。eval は不許可。localhost はプラグインの UI バンドル用）
 - `style-src 'self' 'unsafe-inline'`（インライン style 属性のため。script より低リスク）
 - `connect-src 'self' http://localhost:* http://127.0.0.1:*`（backend へ接続）
 - `worker-src 'self' blob:`（Cornerstone3D 等の Web Worker）
 - `img-src 'self' data: blob:` / `object-src 'none'` / `base-uri 'self'` / `frame-src 'none'`
+
+🔴 **`import()` は `connect-src` ではなく `script-src` に支配される**（2026-08-24 に実機で踏んだ）。
+プラグインの UI バンドルは `http://localhost:8080/api/plugins/{id}/ui.js` を動的 import で読むため、
+`connect-src` だけ localhost を許可しても `script-src 'self'` が **file:// 由来のパッケージ版で**
+これを止め、`TypeError: Failed to fetch dynamically imported module` になる。
+**dev は CSP を注入しないので再現しない**——つまり**パッケージ版でだけプラグインが読めない**状態が
+v0.2.1 まで続いていた（`fw/plugin-explainer.md` の「守れていないこと」に相当）。
+許可範囲は `connect-src` と同じホストに揃えてある（backend と同じ信頼境界。プラグインは設計上
+アプリと同じ権限で動くので、ここを広げても信頼モデルは変わらない）。
 
 備考: **dev では Electron の CSP 警告が出るが、これは Vite/HMR の eval が原因で回避不可。
 Electron はパッケージ後は警告を出さない**（本番は上記 CSP が適用される）。

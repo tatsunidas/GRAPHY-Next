@@ -36,7 +36,13 @@ const moduleCache = new Map<string, Promise<PluginModule>>();
 function resolveModule(m: PluginManifest): Promise<PluginModule> {
   const cached = moduleCache.get(m.id);
   if (cached) return cached;
-  const p = importModule(m);
+  // 🔴 失敗した promise をキャッシュに残さない。残すと、原因が解消したあとも
+  // 同じ拒否済み promise を返し続け、**画面を再読込するまで永久に起動できない**
+  // （CSP で import が落ちた 2026-08-24 の調査で、症状が居座る理由がこれだった）。
+  const p = importModule(m).catch((e) => {
+    moduleCache.delete(m.id);
+    throw e;
+  });
   moduleCache.set(m.id, p);
   return p;
 }
