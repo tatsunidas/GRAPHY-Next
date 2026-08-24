@@ -308,6 +308,14 @@ JAR 入りを導入・更新・削除・有効無効した直後は、既存の�
   - ✅ **独立したデモ リポジトリ 4 本**（2026-07-29・`plugin-explainer.md` §6）。
     ハブ `graphy-next-plugin-demos` ＋ 作例 3 本（hello / mean-filter / gemini-findings）。
     各 README は単体で完結し、GRAPHY Lab の「プラグインを作る」節から辿れる
+  - ✅ **デモ 2 本を実際に配布した（2026-08-24）** — `hello-graphy` `v0.1.0` と
+    `mean-filter` `v0.1.0`。**それまで「リポジトリはあるがリリースが 0 件」で、
+    URL を貼っても `no releases for <repo>` で入らなかった**（§9.1 の URL 修正の次に出る壁）。
+    資産は `<id>-<ver>.zip` ＋ `.zip.sha256`。**未署名なので信頼欄は `community` で同意画面が出る**
+    （設計どおり。`verified` にするには `plugin-signing-runbook.md` §6 の secrets 登録が要る）。
+    ⏸ `gemini-findings` は**作業ツリーに未コミットの変更があるため保留**（版は 0.1.0 → 0.2.0 へ
+    上がりかけ）。バックエンド面があり `release.yml` が `graphy-plugin-api-<ver>.jar` を
+    GRAPHY-Next の Release から取る（`GRAPHY_VERSION: "0.1.8"`。資産の存在は確認済み）。
   - 残: 公式索引 discovery／GitHub OAuth Device Flow／更新通知＋changelog／
     `examples/plugin-template/` を「Use this template」リポジトリへ昇格
     （デモ 3 本が実質その役割を担っているため優先度は下がった）
@@ -324,3 +332,19 @@ JAR 入りを導入・更新・削除・有効無効した直後は、既存の�
   署名検証と権限の実強制は P2/P3。
 - **discovery 未実装**: `index-url` は設定のみ。索引取得＋トピック検索は P2。
 - **file 由来の reinstall 不可**: zip を保持しないため再アップロードが必要。
+
+### 9.1 入力欄は URL を受ける（2026-08-24 修正）
+
+🔴 **導入欄が `owner/repo` しか受けず、ブラウザから貼った URL では導入ボタンが無言で無効だった。**
+`PluginManagerPanel` の `repoValid` が `^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$` だったため、
+`https://github.com/owner/repo` は不一致 → ボタンが `disabled` になるだけで**理由が一切出ない**。
+利用者からは「プラグインの導入ができない」としか見えない（実際にそう報告された）。
+
+- 正規化は **UI の責務**にした（`frontend/src/plugins/repoSpec.ts`・vitest 5）。受理するのは
+  `owner/repo` ／ `https|http://github.com/owner/repo`（`www.` / 末尾 `/` / `.git` /
+  `/tree/main` などの続き / `?query` / `#hash` 付きも可）／ `git@github.com:owner/repo.git`。
+- 🔴 **backend の `HttpGitHubReleaseClient.requireRepo()` は厳しいまま**にする（SSRF / パス注入の
+  ガードであり、UI の入力補助で薄めてはいけない）。**github.com 以外のホストは UI でも受けない。**
+- **押せないときは必ず理由を出す**（`pluginmgr.repoHint`）。これは A13-2 のタスク・ランチャーで
+  決めた「押せないカードに必ず理由の文言を出す」（`fw/angio-design.md` §21.8）と同じ規則で、
+  こちらの画面には適用されていなかった。**無言で無効なボタンはバグとして体験される。**

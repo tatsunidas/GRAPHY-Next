@@ -1296,6 +1296,9 @@ export const ja: Record<string, string> = {
   "pluginmgr.optIn.disabled": "プラグインの導入を禁止しました（導入済みのプラグインはそのまま動作します）。",
   "pluginmgr.webDisabled": "web モードでは導入操作はできません（共有サーバーのため運営が配備します）。一覧の閲覧のみ可能です。",
   "pluginmgr.install": "導入",
+  "pluginmgr.repoPlaceholder": "owner/repo または GitHub の URL",
+  "pluginmgr.repoHint":
+    "GitHub のリポジトリを指定してください（例 owner/repo、または https://github.com/owner/repo）。GitHub 以外のホストは扱えません。",
   "pluginmgr.installGithub": "GitHub から導入",
   "pluginmgr.installFile": "zip から導入",
   "pluginmgr.installFileHint": "ネットワークが無い環境向け（オフライン導入）。",

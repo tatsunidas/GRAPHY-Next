@@ -20,6 +20,7 @@ import {
   type ManagerStatus,
   type PluginPreview,
 } from "../plugins/pluginManagerApi";
+import { normalizeRepoSpec } from "../plugins/repoSpec";
 import { PluginConsentDialog } from "./PluginConsentDialog";
 import { markRestartRequired } from "../restartRequiredEvents";
 
@@ -104,7 +105,12 @@ export function PluginManagerPanel() {
     }
   };
 
-  const repoValid = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repo.trim());
+  // 入力は「人が貼るもの」なので URL でも受ける（正規化は `normalizeRepoSpec`）。
+  // backend は owner/repo 以外を弾く（SSRF 対策）ので、そこへ渡すのは正規化後の値だけ。
+  const repoSpec = normalizeRepoSpec(repo);
+  const repoValid = repoSpec !== null;
+  /** 入力があるのに解釈できないときだけ理由を出す（空欄に警告を出さない）。 */
+  const repoHint = repo.trim() !== "" && !repoValid ? t("pluginmgr.repoHint") : null;
 
   /**
      導入は 2 段階。まず取得して中身を検査（展開しない）し、同意画面で対応 OS・同梱 JAR・
@@ -145,7 +151,7 @@ export function PluginManagerPanel() {
       () =>
         file
           ? installPluginFromFile(file, preview.sha256)
-          : installPluginFromGitHub(repo.trim(), version.trim() || undefined, preview.sha256, acknowledgeUnverified),
+          : installPluginFromGitHub(repoSpec ?? "", version.trim() || undefined, preview.sha256, acknowledgeUnverified),
       "pluginmgr.installed_result",
     );
     if (ok) markRestartIfJar(preview.jars);
@@ -153,8 +159,8 @@ export function PluginManagerPanel() {
   };
 
   const installGithub = () => {
-    if (!repoValid) return;
-    void inspect("github", () => inspectPluginFromGitHub(repo.trim(), version.trim() || undefined));
+    if (repoSpec === null) return;
+    void inspect("github", () => inspectPluginFromGitHub(repoSpec, version.trim() || undefined));
   };
 
   const installFile = (file: File | undefined) => {
@@ -219,7 +225,7 @@ export function PluginManagerPanel() {
             <input
               style={{ ...input, flex: 3, minWidth: 180 }}
               value={repo}
-              placeholder="owner/repo"
+              placeholder={t("pluginmgr.repoPlaceholder")}
               spellCheck={false}
               onChange={(e) => setRepo(e.target.value)}
             />
@@ -238,6 +244,13 @@ export function PluginManagerPanel() {
               {busy === "github" ? t("pluginmgr.inspecting") : t("pluginmgr.installGithub")}
             </button>
           </div>
+
+          {/* 押せないときに理由を出す（無言で無効な導入ボタンは「壊れている」と読まれる）。 */}
+          {repoHint && (
+            <p data-testid="pluginmgr-repo-hint" style={{ fontSize: 12, color: "#9a3412", margin: "0 0 8px" }}>
+              {repoHint}
+            </p>
+          )}
 
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <label style={{ ...secondaryBtn, opacity: busy !== null ? 0.6 : 1 }}>

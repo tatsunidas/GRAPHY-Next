@@ -1307,6 +1307,9 @@ export const en: Record<string, string> = {
   "pluginmgr.optIn.disabled": "Installing plugins is now disallowed (already-installed plugins keep working).",
   "pluginmgr.webDisabled": "Installing is not available in web mode (plugins are deployed by the operator on the shared server). You can only view the list.",
   "pluginmgr.install": "Install",
+  "pluginmgr.repoPlaceholder": "owner/repo or a GitHub URL",
+  "pluginmgr.repoHint":
+    "Enter a GitHub repository (e.g. owner/repo, or https://github.com/owner/repo). Other hosts are not supported.",
   "pluginmgr.installGithub": "Install from GitHub",
   "pluginmgr.installFile": "Install from zip",
   "pluginmgr.installFileHint": "For environments without network access (offline install).",
