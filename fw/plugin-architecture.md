@@ -269,6 +269,7 @@ H1・H2 は実質「これを本番向けの契約として切り出す」作業
 | **H35** ✅ | **空間校正の値と出自** — 「近似か実測か未校正か」をプラグインが言えるようにする | `getSpatialCalibration(tileId?) => ViewerTileSpatialCalibration \| null` | 実装は `viewer/xaCalibrationProvider.ts` への委譲＋純関数 `xaCalibration.toViewerSpatialCalibration()`（**校正の単一入口**を守る）。🔴 **未校正を数値で埋めない**——検出器面の値は `detectorMmPerPx` に分けて渡し、`mmPerPx*` は null のまま。埋めると受け手は**未校正の画像を mm で測る**（値がそれらしいので誰も気付かない）。⚠️ **書く口は作らない**（校正を確定するのは本体だけ。`fw/angio-design.md` §7.2） | ✅（XA / XRF のみ。他モダリティは出自の概念が無いので null） |
 | **H36** ✅ | **XA の表示状態** — DSA（差分）中かどうか・マスク・シフト・フレーム軸 | `getXaState(tileId?) => ViewerTileXaState \| null` | 🔴 **差分中は画素の意味が反転する**（血管が正の大きな値）。合成 imageId（`graphy-dsa:`）は元の URL を持たないので**受け取った側からは見分けられない**——知らずに測ると**例外も警告も出ずに違う径が出る**。実装は `dsaLoader.dsaStateForImageId()`（トークンの解析はローダ内に閉じる） | ✅ |
 | **H37** ✅ | **アンギオ解析 SR の保存** — 本体の解析ダイアログと**同じ SR** をプラグインから書く | `saveAngioReport(tileId?, req) => Promise<ViewerSrResult>` | 中身も書き手も本体と同一（`QcaSrWriter` 等）。違うのは**出所の記録が必須**なことだけ（`[Plugin] ` ＋ `ContributingEquipmentSequence`）。🔴 **スタディはプラグインが選べない**（表示中のもの）。参照 SOP が**そのタイルの並びに無ければ拒否**——書き手は参照インスタンスから患者・スタディを継承するので、他患者の SOP を渡せると**その患者の検査にレポートが生える**。知らない `kind` は backend が 400 で拒否（H9 と同じ＝黙って落とさない） | ✅（standalone。web は未確認） |
+| **H38** ✅ | **表示状態（XA GSPS）の保存** — DSA のマスク・シフト・VOI・空間校正・描画を残す | `savePresentationState(tileId?, req) => Promise<ViewerSrResult>` | 書き手は本体と同じ `XaPresentationStateWriter`（**XA/XRF GSPS 11.5** のまま＝DSA を保存できる唯一の器）。H37 と同じ制約（スタディは本体が入れる／参照 SOP が開いている並びに無ければ拒否）。⚠️ **読み込み（適用）の口は作らない**——GSPS をビューポートへ当てるのは表示の仕事で、プラグインは当たった結果を H35 / H36 で見れば足りる | ✅（standalone。web は未確認） |
 
 H1〜H3 は**フロント面だけで完結**するため、web モードでも同じように動く（backend の契約 `/api/plugins` は不変）。
 
@@ -894,6 +895,7 @@ host.locale   // "ja" | "en"（活性化した時点の値）
 | G1 | **H35** | `viewer/xaCalibrationProvider.ts` の `calibrationForImageId()` ＋ 純関数 `xaCalibration.toViewerSpatialCalibration()` |
 | G2 | **H36** | `viewer/dsaLoader.ts` の `dsaStateForImageId()`（新規。imageId → セッション状態） |
 | G3 | **H37** | `POST /api/angio/plugin-sr`（新規）→ 既存の `QcaSrWriter` / `QvaSrWriter` / `QlvSrWriter` / `Qca3dSrWriter` |
+| G4 | **H38** | `POST /api/angio/plugin-presentation-state`（新規）→ 既存の `XaPresentationStateWriter` |
 
 #### H37 の設計で迷ったところ（2026-08-25）
 
@@ -902,7 +904,11 @@ host.locale   // "ja" | "en"（活性化した時点の値）
 区別が型から消える**。経路を分ければプラグイン経路で producer を**必須**にできる（無ければ 400）。
 既存 4 record・4 writer・10 か所の呼び出しにも触らずに済んだ。
 
-🔴 **他患者の検査にレポートを生やせない**ようにするのが、この API のいちばん重要な仕事。
+**H38 も同じ形にそろえた**（別エンドポイント・producer 必須・同じ writer・同じ SOP 突き合わせ）。
+突き合わせは `Viewer2D.firstUnopenedSop()` に 1 本化してあるので、**書き込み経路を足すときは
+必ずここを通す**。
+
+🔴 **他患者の検査にレポートを生やせない**ようにするのが、これらの API のいちばん重要な仕事。
 書き手は**参照インスタンスから患者・スタディを継承する**ので、SOP UID さえ渡せば
 保管庫の任意の検査に書けてしまう。プラグインは本体と同じ権限で動く（サンドボックス未実装）ため、
 **「開いているタイルの並びに無い SOP は拒否」**をフロント側の入口で掛けた

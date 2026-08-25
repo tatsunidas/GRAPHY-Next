@@ -62,6 +62,7 @@ import {
   type ViewerSrResult,
   type ViewerPixelDataOptions,
   type ViewerAngioReportRequest,
+  type ViewerPresentationStateRequest,
   type ViewerRoi,
   type ViewerSpatialCalibration,
   type ViewerTargetInfo,
@@ -86,6 +87,7 @@ import { useI18n } from "../i18n/i18n";
 import { LutDialog } from "./LutDialog";
 import {
   createPluginAngioSr,
+  createPluginXaPresentationState,
   fetchLutData,
   type AngioPluginSrRequest,
   type LutData,
@@ -1745,6 +1747,57 @@ export function Viewer2D({
   };
 
   /**
+   * 参照 SOP が「いまこのタイルが開いている並び」に無ければ、その 1 つ目を返す（無ければ null）。
+   *
+   * <p>🔴 **プラグインの書き込み経路（H37 / H38）はすべてこれを通す。** backend の writer は
+   * 参照インスタンスから患者・スタディを継承するので、他患者の SOP を渡せると
+   * **その患者の検査にレポートや表示状態が生える**。
+   *
+   * <p>🚨 DSA 表示中は並びが**合成 imageId**（`graphy-dsa:`）で URL を持たないため、
+   * ネイティブへ解決してから突き合わせる。しないと**差分を表示している間だけ保存が全部拒否される**
+   * （本体の解析ダイアログはネイティブの並びを別に持っているので、この経路にしか出ない）。
+   */
+  const firstUnopenedSop = (refs: (string | null | undefined)[]): string | null => {
+    const known = new Set(
+      imageIdsRef.current
+        .map((id) => sopUidFromImageId(dsaNativeImageId(id) ?? id))
+        .filter((v): v is string => !!v),
+    );
+    for (const sop of refs) {
+      if (!sop || !known.has(sop)) return sop ?? "(none)";
+    }
+    return null;
+  };
+
+  /**
+   * H38: 表示状態（XA GSPS）を **本体と同じ器** で保存する。
+   *
+   * <p>DSA のマスク・ピクセルシフト・VOI・空間校正・描画が入る唯一の器なので、
+   * 「解析結果を再現できる」ようにするにはこれが要る（§14.1）。
+   */
+  const savePresentationState = async (
+    req: ViewerPresentationStateRequest,
+    producer: { id: string; name: string; version: string },
+  ): Promise<ViewerSrResult> => {
+    const ctx = roiContextRef.current;
+    if (!ctx) return { ok: false, error: "no series context" };
+    const bad = firstUnopenedSop([req.sopInstanceUid]);
+    if (bad !== null) {
+      return { ok: false, error: `referenced SOP is not open in this tile: ${bad}` };
+    }
+    try {
+      const res = await createPluginXaPresentationState({
+        producer,
+        presentation: { ...req, studyInstanceUid: ctx.studyUid },
+      });
+      emitDbChanged({ reason: "series-create", studyUids: [ctx.studyUid] });
+      return { ok: true, seriesInstanceUid: res.seriesInstanceUid, sopInstanceUid: res.sopInstanceUid };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  };
+
+  /**
    * H37: アンギオ解析の結果を **本体と同じ SR** として保存する。
    *
    * <p>🔴 **参照 SOP は「いまこのタイルが開いている並び」の中に無ければ拒否する。**
@@ -1760,24 +1813,14 @@ export function Viewer2D({
   ): Promise<ViewerSrResult> => {
     const ctx = roiContextRef.current;
     if (!ctx) return { ok: false, error: "no series context" };
-    // 🚨 DSA 表示中は並びが**合成 imageId**（`graphy-dsa:`）になっており、URL を持たないので
-    //    SOP UID が取り出せない。ネイティブへ解決してから突き合わせる——しないと
-    //    **差分を表示している間だけ保存が全部拒否される**（本体の解析ダイアログは
-    //    ネイティブの並びを別に持っているので、この経路にしか出ない）。
-    const known = new Set(
-      imageIdsRef.current
-        .map((id) => sopUidFromImageId(dsaNativeImageId(id) ?? id))
-        .filter((v): v is string => !!v),
-    );
     const refs =
       req.kind === "qca3d"
         ? [req.qca3d.viewASopInstanceUid, req.qca3d.viewBSopInstanceUid]
         : [req.kind === "qca" ? req.qca.sopInstanceUid : req.kind === "qva" ? req.qva.sopInstanceUid : req.qlv.sopInstanceUid];
-    for (const sop of refs) {
-      if (!sop || !known.has(sop)) {
-        // 3D QCA の方向 B は別シリーズ＝別タイルにある。**そのタイルから呼ぶ**必要がある。
-        return { ok: false, error: `referenced SOP is not open in this tile: ${sop ?? "(none)"}` };
-      }
+    const bad = firstUnopenedSop(refs);
+    if (bad !== null) {
+      // 3D QCA の方向 B は別シリーズ＝別タイルにある。**そのタイルから呼ぶ**必要がある。
+      return { ok: false, error: `referenced SOP is not open in this tile: ${bad}` };
     }
     const study = ctx.studyUid;
     const body: AngioPluginSrRequest = { kind: req.kind, producer };
@@ -2084,7 +2127,7 @@ export function Viewer2D({
     getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
     getSpatialCalibration, getXaState,
     getStackImageIds: () => [...imageIdsRef.current],
-    validateDerivedSeries, saveDerivedSeries, saveStructuredReport, saveAngioReport,
+    validateDerivedSeries, saveDerivedSeries, saveStructuredReport, saveAngioReport, savePresentationState,
     setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
     undo, redo,
@@ -2095,7 +2138,7 @@ export function Viewer2D({
     getSpatialCalibration, getXaState,
     // 重畳・派生シリーズ保存・貸したビューポートが**同じ並び**を見るための入口（H31）。
     getStackImageIds: () => [...imageIdsRef.current],
-    validateDerivedSeries, saveDerivedSeries, saveStructuredReport, saveAngioReport,
+    validateDerivedSeries, saveDerivedSeries, saveStructuredReport, saveAngioReport, savePresentationState,
     setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
     undo, redo,
@@ -2129,6 +2172,7 @@ export function Viewer2D({
       saveDerivedSeries: (r, p) => commandsRef.current.saveDerivedSeries(r, p),
       saveStructuredReport: (r, p) => commandsRef.current.saveStructuredReport(r, p),
       saveAngioReport: (r, p) => commandsRef.current.saveAngioReport(r, p),
+      savePresentationState: (r, p) => commandsRef.current.savePresentationState(r, p),
       setActiveTool: (n) => commandsRef.current.setActiveTool(n),
       setBrushSize: (s) => commandsRef.current.setBrushSize(s),
       selectRoi: (u, ex) => commandsRef.current.selectRoi(u, ex),

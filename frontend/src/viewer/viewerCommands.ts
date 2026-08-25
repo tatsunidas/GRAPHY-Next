@@ -11,6 +11,7 @@
  * referenceLines/sliceSync と同じモジュールレベル・レジストリ方式。
  */
 import type {
+  AngioPresentationRequest,
   LutData,
   Qca3dSrRequest,
   QcaSrRequest,
@@ -175,6 +176,18 @@ export type ViewerAngioReportRequest =
   | { kind: "qva"; qva: Omit<QvaSrRequest, "studyInstanceUid"> }
   | { kind: "qlv"; qlv: Omit<QlvSrRequest, "studyInstanceUid"> }
   | { kind: "qca3d"; qca3d: Omit<Qca3dSrRequest, "studyInstanceUid"> };
+
+/**
+ * プラグインが書く表示状態（GSPS。H38 ／ `fw/angio-design.md` §22.3 の G4）。
+ *
+ * <p>H37 と同じ制約——**スタディは本体が入れ、参照 SOP が開いている並びに無ければ拒否**する。
+ * DSA のマスク・ピクセルシフト・VOI・空間校正・描画を残せる唯一の器なので、
+ * 「解析結果を再現できる」ようにするにはこれが要る。
+ *
+ * <p>⚠️ **読み込み（適用）は本体に残す。** GSPS をビューポートへ当てるのは表示の仕事で、
+ * プラグインは当たった結果を H35 / H36 で見れば足りる（校正も DSA も本体が解決した値が来る）。
+ */
+export type ViewerPresentationStateRequest = Omit<AngioPresentationRequest, "studyInstanceUid">;
 
 export interface ViewerSrResult {
   ok: boolean;
@@ -515,6 +528,14 @@ export interface ViewerCommands {
    */
   saveAngioReport(
     req: ViewerAngioReportRequest,
+    producer: { id: string; name: string; version: string },
+  ): Promise<ViewerSrResult>;
+  /**
+   * 表示状態（XA GSPS）を **本体と同じ器** で保存する（H38）。
+   * スタディは本体が入れ、参照 SOP がその並びに無ければ拒否する。
+   */
+  savePresentationState(
+    req: ViewerPresentationStateRequest,
     producer: { id: string; name: string; version: string },
   ): Promise<ViewerSrResult>;
   /** 左ドラッグに割り当てる操作/計測/ブラシツールを切替（toolName は Cornerstone のツール名 or 消しゴム id）。 */

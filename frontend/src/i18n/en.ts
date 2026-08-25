@@ -530,6 +530,13 @@ export const en: Record<string, string> = {
   "viewer2d.plugin.sr.groups": "Measurement groups (lesions)",
   "viewer2d.plugin.sr.findings": "Finding texts",
   "viewer2d.plugin.sr.notice": "The report is produced by the plug-in and is not validated for diagnostic use (it is recorded as unverified). The original images are not modified.",
+  // Presentation state (GSPS) save confirmation. Not a measurement, so it gets its own wording.
+  "viewer2d.plugin.ps.title": "Confirm presentation state save by plugin",
+  "viewer2d.plugin.ps.lead": "The plugin \"{{name}} {{version}}\" is about to save a presentation state (GSPS).",
+  "viewer2d.plugin.ps.seriesDescription": "Series description",
+  "viewer2d.plugin.ps.contains": "What is saved",
+  "viewer2d.plugin.ps.containsValue": "Window level, invert, rotation/flip, DSA mask and pixel shift, spatial calibration, graphics",
+  "viewer2d.plugin.ps.notice": "The presentation state is stored non-destructively (the original images are unchanged). It was produced by a plugin and is not validated for diagnostic use.",
   "viewer2d.menu.pluginsNone": "(no plug-ins)",
   "viewer2d.wl.preset": "W/L preset",
   "viewer2d.wl.default": "Default (DICOM)",

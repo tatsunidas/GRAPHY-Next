@@ -16,6 +16,7 @@ import {
   type ViewerSrResult,
   type ViewerTarget,
   type ViewerAngioReportRequest,
+  type ViewerPresentationStateRequest,
   type ViewerTilePixelData,
   type ViewerTileSpatialCalibration,
   type ViewerTileXaState,
@@ -146,6 +147,15 @@ export interface ViewerActions {
   saveAngioReport(
     tileId: string | undefined,
     req: ViewerAngioReportRequest,
+    producer: { id: string; name: string; version: string },
+  ): Promise<ViewerSrResult>;
+  /**
+   * 表示状態（XA GSPS）を**本体と同じ器**で保存する（H38）。確認ダイアログは抑止不可。
+   * スタディは本体が入れ、参照 SOP が開いている並びに無ければ拒否する。
+   */
+  savePresentationState(
+    tileId: string | undefined,
+    req: ViewerPresentationStateRequest,
     producer: { id: string; name: string; version: string },
   ): Promise<ViewerSrResult>;
   /** W/L プリセット編集ダイアログを開く。 */

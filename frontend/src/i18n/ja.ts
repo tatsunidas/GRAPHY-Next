@@ -532,6 +532,13 @@ export const ja: Record<string, string> = {
   "viewer2d.plugin.sr.groups": "計測グループ（病変）",
   "viewer2d.plugin.sr.findings": "所見テキスト",
   "viewer2d.plugin.sr.notice": "保存されるレポートはプラグインが作成したもので、診断用に検証されたものではありません（未検証として記録されます）。元の画像は変更されません。",
+  // 表示状態（GSPS）保存の確認。**計測ではない**ので SR の文言に寄せない。
+  "viewer2d.plugin.ps.title": "プラグインによる表示状態保存の確認",
+  "viewer2d.plugin.ps.lead": "プラグイン「{{name}} {{version}}」が表示状態（GSPS）を保存しようとしています。",
+  "viewer2d.plugin.ps.seriesDescription": "シリーズ説明",
+  "viewer2d.plugin.ps.contains": "保存される内容",
+  "viewer2d.plugin.ps.containsValue": "階調（W/L）・白黒反転・回転/反転・DSA のマスクとピクセルシフト・空間校正・描画",
+  "viewer2d.plugin.ps.notice": "表示状態は非破壊で保存されます（元の画像は変更されません）。プラグインが作成したもので、診断用に検証されたものではありません。",
   "viewer2d.menu.pluginsNone": "（プラグインなし）",
   "viewer2d.wl.preset": "W/L プリセット",
   "viewer2d.wl.default": "既定 (DICOM)",

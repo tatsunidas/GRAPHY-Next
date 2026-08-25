@@ -180,6 +180,33 @@ public class AngioStoreService {
         return new Created(seriesUid, sopUid);
     }
 
+    /**
+     * プラグインが書く XA GSPS（H38 ／ G4）。書き手は本体の経路と同じ
+     * {@link XaPresentationStateWriter} で、違うのは<b>出所を必ず刻む</b>ことだけ。
+     *
+     * @throws IllegalArgumentException producer が無い／表示状態が空のとき
+     */
+    public Created createPluginPresentationState(AngioPluginPresentationRequest req) throws IOException {
+        if (req == null || req.producer() == null || req.producer().id() == null
+                || req.producer().id().isBlank()) {
+            throw new IllegalArgumentException("producer は必須です");
+        }
+        AngioPresentationRequest ps = req.presentation();
+        require(ps != null, "presentation");
+        require(ps.sopInstanceUid() != null && !ps.sopInstanceUid().isBlank(), "sopInstanceUid");
+        Attributes tmpl = readTemplate(ps.sopInstanceUid());
+        int rows = tmpl == null ? 0 : tmpl.getInt(Tag.Rows, 0);
+        int cols = tmpl == null ? 0 : tmpl.getInt(Tag.Columns, 0);
+        XaPresentationStateWriter.Result r =
+                XaPresentationStateWriter.build(tmpl == null ? new Attributes() : tmpl, ps, rows, cols);
+        Attributes ds = r.dataset();
+        AngioSrProvenance.stamp(ds, req.producer());
+        store(ds);
+        log.info("plugin XA GSPS created: plugin={} series={} sop={} (ref={})",
+                req.producer().id(), r.seriesInstanceUid(), r.sopInstanceUid(), ps.sopInstanceUid());
+        return new Created(r.seriesInstanceUid(), r.sopInstanceUid());
+    }
+
     private static void require(boolean ok, String field) {
         if (!ok) {
             throw new IllegalArgumentException(field + " が空です");
