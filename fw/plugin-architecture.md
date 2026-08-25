@@ -899,6 +899,16 @@ host.locale   // "ja" | "en"（活性化した時点の値）
 | G4 | **H38** | `POST /api/angio/plugin-presentation-state`（新規）→ 既存の `XaPresentationStateWriter` |
 | G5 | **H39** | `report/analysisResults.buildPluginAnalysisRecord()`（新規・純関数）→ 既存の `publishAnalysisResult()` |
 
+#### 実機検証 — ✅ **49/0 合格（2026-08-25）**
+
+`automator/src/spike/angioHostApiCheck.ts` ＋ `automator/plugins/angio-hostapi-check/`。
+詳細と、そこで出た 2 件の不具合は `fw/angio-design.md` §22.5。
+
+🔴 **教訓: host API を足したら、その API を使う検証用プラグインまで書いて実機で回す。**
+今回出た 2 件（XA の計測が H5 から見えない／XA のフレーム imageId から SOP が取れない）は
+**本体の画面では何も壊れて見えない**——計測線は描かれ、本体からの保存も通る。
+**プラグイン経路にだけ出る穴は、プラグインを動かさないと見つからない。**
+
 #### H37 の設計で迷ったところ（2026-08-25）
 
 **既存の 4 エンドポイントに `producer` を足す**のではなく、**別エンドポイントを 1 本立てた**。

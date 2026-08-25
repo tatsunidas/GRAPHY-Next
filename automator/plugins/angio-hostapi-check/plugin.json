@@ -1,0 +1,12 @@
+{
+  "id": "angio-hostapi-check",
+  "name": "Angio Host API Check",
+  "version": "0.1.0",
+  "engines": { "graphy": ">=0.1.0", "os": ["win32", "darwin", "linux"] },
+  "description": "Verifies host API H35-H39 (angio calibration provenance, XA state, SR/GSPS writing, report publishing).",
+  "author": "automator",
+  "license": "MIT",
+  "contributes": ["viewer2d.menu"],
+  "ui": "ui.js",
+  "permissions": ["read-pixels"]
+}

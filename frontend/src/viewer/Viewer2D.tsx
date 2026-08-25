@@ -1938,6 +1938,10 @@ export function Viewer2D({
       if (sliceIndex < 0) continue;
       const world = (a.data?.contour?.polyline ?? a.data?.handles?.points ?? []) as number[][];
       if (!world.length) continue;
+      // 面内間隔は ROI が乗っているスライスの ImageInfo から（表示中スライスなら使い回す）。
+      const inf = sliceIndex === indexRef.current ? infoRef.current : readImageInfo(refId);
+      const sx = inf?.columnPixelSpacing ?? null;
+      const sy = inf?.rowPixelSpacing ?? null;
       const points: Array<[number, number]> = [];
       for (const w of world) {
         try {
@@ -1947,11 +1951,20 @@ export function Viewer2D({
           /* 変換できない頂点は落とす（幾何が無いシリーズなど） */
         }
       }
+      if (!points.length) {
+        // 🚨 **XA には幾何（IPP/IOP）が無いことがある**。そのとき Cornerstone の
+        //    `worldToImageCoords` は変換できず、ここで**計測が丸ごと落ちていた**
+        //    ——プラグインからは「ユーザーが引いた線が存在しない」ように見え、
+        //    アンギオの解析（入力＝長さ計測）が成立しない（実機で判明・2026-08-25）。
+        //    幾何が無いスタックの world は `画素 × 画素間隔`（原点 0）なので、割って戻す。
+        //    本体の解析ダイアログも同じ換算を使っている（`XaAnalysisDialog.worldToImagePx`）。
+        const col = sx && sx > 0 ? sx : 1;
+        const row = sy && sy > 0 ? sy : 1;
+        for (const w of world) {
+          if (Number.isFinite(w?.[0]) && Number.isFinite(w?.[1])) points.push([w[0] / col, w[1] / row]);
+        }
+      }
       if (!points.length) continue;
-      // 面内間隔は ROI が乗っているスライスの ImageInfo から（表示中スライスなら使い回す）。
-      const inf = sliceIndex === indexRef.current ? infoRef.current : readImageInfo(refId);
-      const sx = inf?.columnPixelSpacing ?? null;
-      const sy = inf?.rowPixelSpacing ?? null;
       const stats = readRoiStats(a.data?.cachedStats, refId);
       const tool = (a.metadata?.toolName as string) ?? "";
       // 形状ベースの長径・短径は「輪郭として意味づけられるツール」だけに出す
@@ -1961,8 +1974,16 @@ export function Viewer2D({
       // Cornerstone が px で計算するため、そのまま mm として渡すと単位が壊れる。
       const toolMm = stats.lengthUnit === undefined || stats.lengthUnit === "mm";
       const meta = getRoiMaskMeta(uid);
-      const sop = (metaData.get("sopCommonModule", refId) as { sopInstanceUID?: string } | undefined)
-        ?.sopInstanceUID;
+      // 🚨 XA のフレーム imageId（`.../instances/{sop}/file&frame=N`）では
+      //    `sopCommonModule` が解決できず **SOP UID が null になる**（実機で判明・2026-08-25）。
+      //    プラグインは ROI から参照インスタンスを名指しするので、これが null だと
+      //    **アンギオの保存経路（H37 / H38 / H39）が丸ごと使えない**。
+      //    imageId の URL は構成上 SOP を含んでいるので、そこから拾い直す
+      //    （本体自身も `SeriesViewer` の保存でこの経路を使っている）。
+      const sop =
+        (metaData.get("sopCommonModule", refId) as { sopInstanceUID?: string } | undefined)?.sopInstanceUID ??
+        sopUidFromImageId(dsaNativeImageId(refId) ?? refId) ??
+        undefined;
       let visible = true;
       try {
         visible = csAnnotation.visibility.isAnnotationVisible(uid) ?? true;
