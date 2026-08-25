@@ -323,3 +323,21 @@ export function bundleAdjustAngles(
 
   return { offsetsDeg: offsets, beforePx: before, afterPx: best, iterations };
 }
+
+/**
+ * C アームの 2 角を臨床の呼び方にする（"LAO 30° / CRA 25°"）。
+ *
+ * <p>正負の意味は {@link XaViewGeometry} と同じ（primary は LAO 正、secondary は CRA 正）。
+ * secondary が 0.5° 未満なら省く（"LAO 30°" と読める向きに寄せる）。
+ *
+ * <p>同じ整形が 3 か所（方向の一覧・3D QCA の候補角度・分岐部の候補角度）に要るので
+ * ここに置く。**角度の呼び方を画面ごとに変えない**ため。
+ */
+export function formatViewAngles(primaryDeg: number, secondaryDeg: number): string {
+  const lr = `${primaryDeg >= 0 ? "LAO" : "RAO"} ${Math.abs(primaryDeg).toFixed(0)}°`;
+  const cc =
+    Math.abs(secondaryDeg) < 0.5
+      ? ""
+      : ` / ${secondaryDeg >= 0 ? "CRA" : "CAU"} ${Math.abs(secondaryDeg).toFixed(0)}°`;
+  return `${lr}${cc}`;
+}

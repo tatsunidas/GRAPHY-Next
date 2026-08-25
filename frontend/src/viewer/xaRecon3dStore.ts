@@ -28,7 +28,7 @@
  */
 
 import { useSyncExternalStore } from "react";
-import { type XaViewGeometry } from "./xaGeometry";
+import { formatViewAngles, type XaViewGeometry } from "./xaGeometry";
 import { type QcaDiameterMethod } from "./qca";
 
 export interface XaQcaRun {
@@ -242,9 +242,5 @@ export function qcaRunKey(imageId: string, start: readonly number[], end: readon
 
 /** 一覧に出す名前。角度が分かれば角度で呼ぶ（利用者が方向を選ぶときの手掛かりはそれ）。 */
 export function describeView(g: XaViewGeometry, frameIndex: number): string {
-  const p = g.primaryAngleDeg;
-  const s = g.secondaryAngleDeg;
-  const lr = `${p >= 0 ? "LAO" : "RAO"} ${Math.abs(p).toFixed(0)}°`;
-  const cc = Math.abs(s) < 0.5 ? "" : ` / ${s >= 0 ? "CRA" : "CAU"} ${Math.abs(s).toFixed(0)}°`;
-  return `${lr}${cc} · f${frameIndex + 1}`;
+  return `${formatViewAngles(g.primaryAngleDeg, g.secondaryAngleDeg)} · f${frameIndex + 1}`;
 }
