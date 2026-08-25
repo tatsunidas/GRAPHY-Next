@@ -230,6 +230,7 @@ Fusion の有無で画像描画領域の高さが変わり、**横並び比較�
   （そこに付けた間引きは効いていない）。
   ⚠️ キーボードのスライス送り（↑↓ / テンキー 8・2）は別経路 `viewer/sliceStep.ts`。
   正本は `fw/keyboard-shortcuts.md`。
+  ✅ **実機確認 OK（2026-08-25）** — シリーズビュー / Slicer / MPR のホイールとキー送り。
 - **5D(ZCT) モデル** `viewer/seriesLayout.ts`（GRAPHY Praparat 準拠の Z×C×T）。現状 nC=nT=1。
   5D 時に C/T スライダーを表示する UI は実装済み。
 - **5D(ZCT) 派生＝実装済み（DICOM 準拠・Classic 単一フレーム）**:
