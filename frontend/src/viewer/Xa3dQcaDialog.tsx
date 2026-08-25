@@ -24,7 +24,7 @@ import { qca3dRecord } from "../report/xaAnalysisRecords";
 import { writeGeometry3dContext } from "../viewer3d/geometry3dContext";
 import { useI18n } from "../i18n/i18n";
 import { publishXa3dSnapshot } from "./debugApi";
-import { type Vec3, viewSeparationDeg } from "./xaGeometry";
+import { formatViewAngles, type Vec3, viewSeparationDeg } from "./xaGeometry";
 import {
   type CrossSectionProfile,
   type ReconAnchor,
@@ -610,7 +610,7 @@ function ResultPanel({
           <span style={faint} data-testid="xa3d-working-angles">
             {t("xa3d.workingAngles", {
               list: suggestions
-                .map((s) => `${angleLabel(s.primaryAngleDeg, s.secondaryAngleDeg)} (${pct(s.visibleFraction)})`)
+                .map((s) => `${formatViewAngles(s.primaryAngleDeg, s.secondaryAngleDeg)} (${pct(s.visibleFraction)})`)
                 .join(" / "),
             })}
           </span>
@@ -659,12 +659,6 @@ function shortUid(uid: string): string {
 
 function pct(v: number | undefined): string {
   return v == null || !Number.isFinite(v) ? "—" : `${(v * 100).toFixed(0)}%`;
-}
-
-function angleLabel(primary: number, secondary: number): string {
-  const lr = `${primary >= 0 ? "LAO" : "RAO"} ${Math.abs(primary).toFixed(0)}°`;
-  const cc = Math.abs(secondary) < 0.5 ? "" : ` / ${secondary >= 0 ? "CRA" : "CAU"} ${Math.abs(secondary).toFixed(0)}°`;
-  return `${lr}${cc}`;
 }
 
 /** 3D 断面。**出せない条件を黙って埋めない**（§10.2.5）。 */

@@ -26,8 +26,15 @@
  */
 
 import { lesionBounds, referenceDiameters } from "./qca";
-import { type Vec3 } from "./xaGeometry";
-import { type CrossSectionProfile } from "./xaRecon3d";
+import {
+  dot,
+  viewBasis,
+  viewSeparationDeg,
+  type Vec3,
+  type ViewBasis,
+  type XaViewGeometry,
+} from "./xaGeometry";
+import { foreshorteningProfile, type CrossSectionProfile } from "./xaRecon3d";
 
 /** 枝の役割。 */
 export type BranchId = "proximal" | "distal" | "side";
@@ -406,4 +413,286 @@ export function analyzeBifurcation(
     consistency: { finet, murray },
     warnings,
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* ワーキングアングル（分岐部）— §21.4.4                               */
+/* ------------------------------------------------------------------ */
+
+export interface BifurcationWorkingAngle {
+  primaryAngleDeg: number;
+  secondaryAngleDeg: number;
+  /** 枝ごとの「見えている長さの割合」（0〜1・除外域の外だけで測る）。 */
+  visibleFraction: Record<BranchId, number>;
+  /** 3 本のうち最も潰れている枝の割合。 */
+  minVisibleFraction: number;
+  /**
+   * 他の枝の裏に隠れて見える長さ [mm]（最も重なっている枝の値）。**0 が理想**。
+   * 除外域（カリーナ周辺）は数えない——そこは角度に関係なく必ず重なる。
+   */
+  overlapLengthMm: number;
+  /** 最も重なっていた 2 枝。 */
+  overlapPair: readonly [BranchId, BranchId];
+  /** 血管の太さを考えた重なりか。径を出せない枝があると false（中心線どうしで判定）。 */
+  edgeAware: boolean;
+  /** 並べ替えに使った点（0〜1）。重なりが許容を超えると 0。 */
+  score: number;
+}
+
+export interface BifurcationWorkingAngleOptions {
+  /** 走査の刻み [deg]（既定 5）。 */
+  stepDeg?: number;
+  /** primary の探索範囲 ±[deg]（既定 90）。 */
+  primaryRangeDeg?: number;
+  /** secondary の探索範囲 ±[deg]（既定 45）。 */
+  secondaryRangeDeg?: number;
+  /** 返す候補の数（既定 3）。 */
+  count?: number;
+  /**
+   * 重なりの許容 [mm]（既定 5）。これ以上重なる角度は 0 点。
+   * 分岐直後は角度に依らず数 mm 重なるので、0 を要求すると候補が消える。
+   */
+  overlapToleranceMm?: number;
+  /** 候補どうしをこれ以上離す [deg]（既定 15）。隣り合う格子点が並ぶのを防ぐ。 */
+  minSpreadDeg?: number;
+  /** 1 枝あたりの標本数の上限（既定 40）。 */
+  maxSamples?: number;
+}
+
+interface BranchSamples {
+  id: BranchId;
+  points: Vec3[];
+  /** 各点の半径 [mm]。分からない点は枝の中央値で埋める。全く分からなければ 0。 */
+  radiiMm: number[];
+  hasRadii: boolean;
+}
+
+/** 除外域の外の点を間引いて標本にする。半径は断面（等価直径）から。 */
+function branchSamples(
+  input: BifurcationBranchInput,
+  carina: Vec3,
+  confluenceRadiusMm: number,
+  maxSamples: number,
+): BranchSamples | null {
+  const pts: Vec3[] = [];
+  const radii: (number | null)[] = [];
+  for (let i = 0; i < input.points.length; i++) {
+    const p = input.points[i];
+    if (dist(p, carina) <= confluenceRadiusMm) continue;
+    const s = i < input.profile.sections.length ? input.profile.sections[i] : null;
+    pts.push(p);
+    radii.push(s && s.equivalentDiameterMm > 0 ? s.equivalentDiameterMm / 2 : null);
+  }
+  if (pts.length < 2) return null;
+  const stride = Math.max(1, Math.ceil(pts.length / Math.max(2, maxSamples)));
+  const outPts: Vec3[] = [];
+  const outRadii: (number | null)[] = [];
+  for (let i = 0; i < pts.length; i += stride) {
+    outPts.push(pts[i]);
+    outRadii.push(radii[i]);
+  }
+  // 末尾は必ず残す（枝の先端が落ちると重なりを見落とす）。
+  if (outPts[outPts.length - 1] !== pts[pts.length - 1]) {
+    outPts.push(pts[pts.length - 1]);
+    outRadii.push(radii[radii.length - 1]);
+  }
+  const known = outRadii.filter((r): r is number => r != null);
+  // 🔴 分からない点を 0 で埋めない。0 は「太さが無い」＝重なりを**狭く**見積もる方向で、
+  //    重なっている角度を「空いている」と言ってしまう。分かっている点の中央値で埋める。
+  const fill = known.length ? median(known) : 0;
+  return {
+    id: input.id,
+    points: outPts,
+    radiiMm: outRadii.map((r) => r ?? fill),
+    hasRadii: known.length > 0,
+  };
+}
+
+/** 投影済みの枝（重なり判定に要るものだけ）。 */
+interface ProjectedBranch {
+  xy: [number, number][];
+  radiiMm: number[];
+  /** 各区間の 3D 長さ [mm]（`segmentsMm[i]` は点 i-1 → i）。 */
+  segmentsMm: number[];
+}
+
+/** 3D 点を視線方向へ平行投影した 2D 座標 [mm]（検出器の画素には落とさない）。 */
+function projectOrtho(p: Vec3, basis: ViewBasis): [number, number] {
+  return [dot(p, basis.u), dot(p, basis.v)];
+}
+
+/** 点 → 線分の距離と、線分上の位置（0〜1）。 */
+function pointSegment2(
+  p: readonly [number, number],
+  a: readonly [number, number],
+  b: readonly [number, number],
+): { distance: number; t: number } {
+  const vx = b[0] - a[0];
+  const vy = b[1] - a[1];
+  const len2 = vx * vx + vy * vy;
+  if (!(len2 > 0)) return { distance: Math.hypot(p[0] - a[0], p[1] - a[1]), t: 0 };
+  let t = ((p[0] - a[0]) * vx + (p[1] - a[1]) * vy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return { distance: Math.hypot(p[0] - (a[0] + vx * t), p[1] - (a[1] + vy * t)), t };
+}
+
+/**
+ * 枝 `a` のうち、投影上で枝 `b` に隠れている長さ [mm]。
+ *
+ * <p>区間の中点が「2 本の半径の和」より近ければ、その区間は重なっているとみなす。
+ * 長さは**3D の弧長**で数える（投影長で数えると、潰れて見える角度ほど重なりが
+ * 小さく出て、二重に得をしてしまう）。
+ */
+function hiddenLengthMm(a: ProjectedBranch, b: ProjectedBranch): number {
+  let hidden = 0;
+  for (let i = 1; i < a.xy.length; i++) {
+    const mid: [number, number] = [(a.xy[i - 1][0] + a.xy[i][0]) / 2, (a.xy[i - 1][1] + a.xy[i][1]) / 2];
+    const ra = (a.radiiMm[i - 1] + a.radiiMm[i]) / 2;
+    let best = Infinity;
+    for (let j = 1; j < b.xy.length; j++) {
+      const { distance, t } = pointSegment2(mid, b.xy[j - 1], b.xy[j]);
+      const rb = b.radiiMm[j - 1] * (1 - t) + b.radiiMm[j] * t;
+      const gap = distance - (ra + rb);
+      if (gap < best) best = gap;
+    }
+    if (best < 0) hidden += a.segmentsMm[i];
+  }
+  return hidden;
+}
+
+const PAIRS: readonly (readonly [BranchId, BranchId])[] = [
+  ["distal", "side"],
+  ["proximal", "side"],
+  ["proximal", "distal"],
+];
+
+const BRANCH_ORDER: readonly BranchId[] = ["proximal", "distal", "side"];
+
+/**
+ * 分岐部が**重ならず・潰れずに**見える撮影角度を探す（ワーキングアングルの提案）。
+ *
+ * <h3>単一血管の `suggestWorkingAngles`（`xaRecon3d.ts`）と何が違うか</h3>
+ * 単一血管では「短縮しないこと」だけが条件だった。分岐部ではそれに加えて
+ * **3 本が互いに重ならないこと**が要る——側枝が母血管の裏に隠れる角度では、
+ * 側枝の入口（＝治療の可否を決める場所）が見えない。短縮だけで選ぶと、
+ * **潰れずにきれいに見えるが 2 本が完全に重なっている角度**が最上位に来る
+ * （合成分岐で実際にそうなる。`xaBifurcation.test.ts` で固定してある）。
+ *
+ * <h3>重なりの測り方</h3>
+ * 3D 中心線を視線方向へ**平行投影**し（透視の拡大率は重なりの判定にほとんど効かない）、
+ * 「区間の中点が、相手の枝から**2 本の半径の和**より近い」区間を重なりとして数える。
+ * 長さは 3D の弧長。カリーナから `confluenceRadiusMm` 以内は 3 本が本当に接しているので
+ * **数えない**（ここを入れるとどの角度でも「重なっている」になる）。
+ *
+ * <h3>🔴 これは「見えるはず」であって「見える」ではない</h3>
+ * - 装置の可動範囲・寝台・術者の立ち位置は見ていない。
+ * - **他の血管・脊椎・カテーテル・横隔膜との重なりは入っていない**（3 本しか知らないため）。
+ * - 元の 3D 中心線が短縮の影響で既に短ければ `visibleFraction` は過大に出る
+ *   （`foreshorteningProfile` と同じ性質。「危ないと出たら間違いなく危ない」向きの指標）。
+ *
+ * <p>`base` からは SID/SOD 等を引き継ぐが、**判定に効くのは 2 つの角度だけ**
+ * （平行投影と接線の向きしか見ないため）。
+ */
+export function suggestBifurcationWorkingAngles(
+  branches: readonly BifurcationBranchInput[],
+  carina: Vec3,
+  confluenceRadiusMm: number,
+  base: XaViewGeometry,
+  opts: BifurcationWorkingAngleOptions = {},
+): BifurcationWorkingAngle[] {
+  const step = Math.max(1, opts.stepDeg ?? 5);
+  const pRange = opts.primaryRangeDeg ?? 90;
+  const sRange = opts.secondaryRangeDeg ?? 45;
+  const count = Math.max(1, opts.count ?? 3);
+  const tolerance = Math.max(1e-6, opts.overlapToleranceMm ?? 5);
+  const spread = opts.minSpreadDeg ?? 15;
+
+  const samples: BranchSamples[] = [];
+  for (const id of BRANCH_ORDER) {
+    const input = branches.find((b) => b.id === id);
+    if (!input) return [];
+    const s = branchSamples(input, carina, confluenceRadiusMm, opts.maxSamples ?? 40);
+    if (!s) return [];
+    samples.push(s);
+  }
+  const edgeAware = samples.every((s) => s.hasRadii);
+  const segments = new Map<BranchId, number[]>(
+    samples.map((s) => [
+      s.id,
+      s.points.map((p, i) => (i === 0 ? 0 : dist(p, s.points[i - 1]))),
+    ]),
+  );
+
+  const all: BifurcationWorkingAngle[] = [];
+  for (let p = -pRange; p <= pRange + 1e-9; p += step) {
+    for (let sec = -sRange; sec <= sRange + 1e-9; sec += step) {
+      const g: XaViewGeometry = { ...base, primaryAngleDeg: p, secondaryAngleDeg: sec };
+      const basis = viewBasis(g);
+      const projected = new Map<BranchId, ProjectedBranch>();
+      const visible: Record<BranchId, number> = { proximal: 0, distal: 0, side: 0 };
+      let ok = true;
+      for (const s of samples) {
+        const prof = foreshorteningProfile(s.points, g);
+        if (!prof) {
+          ok = false;
+          break;
+        }
+        visible[s.id] = prof.visibleFraction;
+        projected.set(s.id, {
+          xy: s.points.map((q) => projectOrtho(q, basis)),
+          radiiMm: s.radiiMm,
+          segmentsMm: segments.get(s.id) ?? [],
+        });
+      }
+      if (!ok) continue;
+
+      let worst = 0;
+      let worstPair: readonly [BranchId, BranchId] = PAIRS[0];
+      for (const pair of PAIRS) {
+        const a = projected.get(pair[0]);
+        const b = projected.get(pair[1]);
+        if (!a || !b) continue;
+        const overlap = Math.max(hiddenLengthMm(a, b), hiddenLengthMm(b, a));
+        if (overlap > worst) {
+          worst = overlap;
+          worstPair = pair;
+        }
+      }
+
+      const minVisible = Math.min(visible.proximal, visible.distal, visible.side);
+      // 重なりが許容を超えた候補は 0 点。**「よく見えるが重なっている」を上位に出さない**
+      // ——重なった区間は測れないうえ、そこが一番見たい場所であることが多い。
+      const clarity = Math.max(0, 1 - worst / tolerance);
+      all.push({
+        primaryAngleDeg: p,
+        secondaryAngleDeg: sec,
+        visibleFraction: { ...visible },
+        minVisibleFraction: minVisible,
+        overlapLengthMm: worst,
+        overlapPair: worstPair,
+        edgeAware,
+        score: minVisible * clarity,
+      });
+    }
+  }
+
+  // 点が同じなら「より重なっていない」を上に。全部重なっていても（＝全部 0 点）
+  // 重なりの少ない順に並ぶので、「一番マシな角度」は返る。
+  all.sort((a, b) => b.score - a.score || a.overlapLengthMm - b.overlapLengthMm);
+
+  const out: BifurcationWorkingAngle[] = [];
+  for (const c of all) {
+    // 隣り合う格子点が 3 つ並んでも候補にならない（同じ方向を 3 回言っているだけ）。
+    const far = out.every(
+      (o) =>
+        viewSeparationDeg(
+          { ...base, primaryAngleDeg: o.primaryAngleDeg, secondaryAngleDeg: o.secondaryAngleDeg },
+          { ...base, primaryAngleDeg: c.primaryAngleDeg, secondaryAngleDeg: c.secondaryAngleDeg },
+        ) >= spread,
+    );
+    if (!far) continue;
+    out.push(c);
+    if (out.length >= count) break;
+  }
+  return out;
 }

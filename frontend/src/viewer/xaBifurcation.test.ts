@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   analyzeBifurcation,
+  suggestBifurcationWorkingAngles,
   ENDPOINT_SPREAD_LIMIT_MM,
   type BifurcationBranchInput,
 } from "./xaBifurcation";
-import { type Vec3 } from "./xaGeometry";
+import { viewSeparationDeg, type Vec3, type XaViewGeometry } from "./xaGeometry";
 import { type CrossSectionProfile } from "./xaRecon3d";
 
 /**
@@ -202,5 +203,118 @@ describe("★analyzeBifurcation — 分岐部（真値既知の合成分岐）",
     expect(r.warnings.some((w) => w.code === "noSections" && w.branch === "side")).toBe(true);
     // 他の枝は測れている。
     expect(r.branches.find((x) => x.id === "distal")!.mldMm).not.toBeNull();
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* ワーキングアングル（分岐部）                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 合成分岐は **z = 0 の平面**に置いてある（近位・遠位は ±x、側枝は x-y 面内で 45°）。
+ * したがって
+ * - 視線が平面の中にある（例 primary 0° / secondary 0° ＝ 患者の前から）と
+ *   **遠位と側枝が完全に重なって見える**。短縮は小さいので「短縮だけ」で選ぶとここが上位に来る。
+ * - 視線を平面から起こす（secondary を振る）と 2 本が離れて見える。
+ * この 2 つを取り違えないことが、この関数の存在理由そのもの。
+ */
+const BASE_GEOMETRY: XaViewGeometry = {
+  primaryAngleDeg: 0,
+  secondaryAngleDeg: 0,
+  sidMm: 1000,
+  sodMm: 750,
+  imagerSpacingMm: [0.2, 0.2],
+  principalPoint: [512, 512],
+};
+
+/** カリーナ = 原点、除外半径 = 母血管 1 径ぶん（analyzeBifurcation の既定と同じ）。 */
+function suggest(
+  branches: BifurcationBranchInput[],
+  opts?: Parameters<typeof suggestBifurcationWorkingAngles>[4],
+) {
+  return suggestBifurcationWorkingAngles(branches, [0, 0, 0], 3.0, BASE_GEOMETRY, opts);
+}
+
+describe("★suggestBifurcationWorkingAngles — 分岐部のワーキングアングル", () => {
+  it("🔴 短縮だけなら上位に来る「正面（0°/0°）」を、重なりを見て外す", () => {
+    const branches = bifurcation();
+
+    // 正面は 3 本とも大きくは潰れていない（母血管は視線に直交＝1.0）。
+    const front = suggest(branches, { count: 400, minSpreadDeg: 0 }).concat(
+      // 候補から落ちていても値を確かめられるように、1 点だけを走査して取り直す。
+      suggest(branches, { primaryRangeDeg: 0, secondaryRangeDeg: 0, count: 1, minSpreadDeg: 0 }),
+    );
+    const at00 = front.find((c) => c.primaryAngleDeg === 0 && c.secondaryAngleDeg === 0)!;
+    expect(at00).toBeDefined();
+    expect(at00.minVisibleFraction).toBeGreaterThan(0.7); // 潰れてはいない
+    // …が、遠位と側枝が丸ごと重なる。
+    expect(at00.overlapLengthMm).toBeGreaterThan(15);
+    expect(at00.score).toBe(0);
+
+    // 実際に返る候補は重なっていない。
+    const top = suggest(branches)[0];
+    expect(top.overlapLengthMm).toBeLessThan(5);
+    expect(top.minVisibleFraction).toBeGreaterThan(0.7);
+    expect(Math.abs(top.secondaryAngleDeg)).toBeGreaterThanOrEqual(20);
+  });
+
+  it("候補は互いに離れた方向になる（隣の格子点を 3 つ並べない）", () => {
+    const out = suggest(bifurcation(), { count: 3 });
+    expect(out.length).toBe(3);
+    for (let i = 0; i < out.length; i++) {
+      for (let j = i + 1; j < out.length; j++) {
+        const sep = viewSeparationDeg(
+          { ...BASE_GEOMETRY, primaryAngleDeg: out[i].primaryAngleDeg, secondaryAngleDeg: out[i].secondaryAngleDeg },
+          { ...BASE_GEOMETRY, primaryAngleDeg: out[j].primaryAngleDeg, secondaryAngleDeg: out[j].secondaryAngleDeg },
+        );
+        expect(sep).toBeGreaterThanOrEqual(15);
+      }
+    }
+  });
+
+  it("重なっている 2 枝を必ず名指しする（「どこかが重なっている」では直しようがない）", () => {
+    const out = suggest(bifurcation(), { count: 1 });
+    expect(out[0].overlapPair).toHaveLength(2);
+    expect(out[0].overlapPair[0]).not.toBe(out[0].overlapPair[1]);
+    expect(out[0].overlapLengthMm).toBeGreaterThanOrEqual(0);
+  });
+
+  it("母血管に沿って見る角度（LAO 90°）は候補にならない（3 本とも潰れる）", () => {
+    const along = suggest(bifurcation(), {
+      primaryRangeDeg: 90,
+      secondaryRangeDeg: 0,
+      stepDeg: 90,
+      count: 5,
+      minSpreadDeg: 0,
+    });
+    const at90 = along.find((c) => c.primaryAngleDeg === 90)!;
+    expect(at90.minVisibleFraction).toBeLessThan(0.05); // 視線 = 母血管の向き
+    expect(at90.score).toBe(0);
+    // 既定の探索では返らない。
+    const out = suggest(bifurcation(), { count: 3 });
+    for (const c of out) expect(c.minVisibleFraction).toBeGreaterThan(0.5);
+  });
+
+  it("径が出せない枝があると中心線どうしで判定し、それを申告する（黙って細い血管として扱わない）", () => {
+    const b = bifurcation().map((x) =>
+      x.id === "side"
+        ? { ...x, profile: { ...x.profile, sections: x.profile.sections.map(() => null) } }
+        : x,
+    );
+    const out = suggest(b, { count: 1 });
+    expect(out[0].edgeAware).toBe(false);
+    // 太さが分からない枝を 0 で埋めていない（埋めると重なりが過小に出る）。
+    const full = suggest(bifurcation(), { count: 1 });
+    expect(full[0].edgeAware).toBe(true);
+  });
+
+  it("枝が 3 本そろっていなければ候補を返さない", () => {
+    expect(suggest(bifurcation().slice(0, 2))).toEqual([]);
+  });
+
+  it("除外域が枝を食い尽くしたら候補を返さない（測れない範囲で角度を決めない）", () => {
+    expect(
+      suggestBifurcationWorkingAngles(bifurcation(), [0, 0, 0], 100, BASE_GEOMETRY),
+    ).toEqual([]);
   });
 });

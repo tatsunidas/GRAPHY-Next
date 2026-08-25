@@ -22,8 +22,14 @@ import { useEffect, useMemo, useState } from "react";
 
 import { useI18n } from "../i18n/i18n";
 import { publishXaBifurcationSnapshot } from "./debugApi";
-import { analyzeBifurcation, type BifurcationResult, type BranchId } from "./xaBifurcation";
-import { type Vec3 } from "./xaGeometry";
+import {
+  analyzeBifurcation,
+  suggestBifurcationWorkingAngles,
+  type BifurcationResult,
+  type BifurcationWorkingAngle,
+  type BranchId,
+} from "./xaBifurcation";
+import { formatViewAngles, type Vec3, type XaViewGeometry } from "./xaGeometry";
 import {
   fuseDiameterProfile,
   reconstructWithRefinement,
@@ -55,6 +61,8 @@ export function Xa3dBifurcationDialog({ onClose }: { onClose: () => void }) {
   const [unrefined, setUnrefined] = useState<BranchId[]>([]);
   /** 再構成した 3D 中心線。表示には使わず、実機検証の切り分けだけに出す（`debugApi`）。 */
   const [branchPoints, setBranchPoints] = useState<{ id: BranchId; points: Vec3[] }[]>([]);
+  /** 分岐部が重ならずに見える撮影角度の候補（§21.4.4）。 */
+  const [workingAngles, setWorkingAngles] = useState<BifurcationWorkingAngle[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const ready = useMemo(
@@ -67,12 +75,16 @@ export function Xa3dBifurcationDialog({ onClose }: { onClose: () => void }) {
     setResult(null);
     setUnrefined([]);
     setBranchPoints([]);
+    setWorkingAngles([]);
     setError(null);
   };
 
   const run = () => {
     const branches: { id: BranchId; points: Vec3[]; profile: CrossSectionProfile }[] = [];
     const notRefined: BranchId[] = [];
+    // 候補角度の走査に使う土台（SID/SOD 等）。**判定に効くのは角度だけ**なので、
+    // どの枝の方向 A でも構わない（`suggestBifurcationWorkingAngles` の注記）。
+    let baseGeometry: XaViewGeometry | null = null;
     for (const role of ROLES) {
       // 🚨 同じフレームから 3 区間を取るので、**imageId ではなく runKey** で引く。
       const runA = runs.find((r) => r.runKey === picks[role].a);
@@ -81,6 +93,7 @@ export function Xa3dBifurcationDialog({ onClose }: { onClose: () => void }) {
         setError(t("xa3dbif.needRuns"));
         return;
       }
+      if (!baseGeometry) baseGeometry = runA.geometry;
       const a: XaCenterline2D = { geometry: runA.geometry, points: runA.centerline };
       const b: XaCenterline2D = { geometry: runB.geometry, points: runB.centerline };
       const { result: r, refinement } = reconstructWithRefinement(a, b, {
@@ -131,6 +144,16 @@ export function Xa3dBifurcationDialog({ onClose }: { onClose: () => void }) {
     setError(null);
     setUnrefined(notRefined);
     setBranchPoints(branches.map((b) => ({ id: b.id, points: b.points })));
+    setWorkingAngles(
+      baseGeometry
+        ? suggestBifurcationWorkingAngles(
+            branches,
+            analysis.carina,
+            analysis.confluenceRadiusMm,
+            baseGeometry,
+          )
+        : [],
+    );
     setResult(analysis);
   };
 
@@ -149,6 +172,15 @@ export function Xa3dBifurcationDialog({ onClose }: { onClose: () => void }) {
               murray: result.consistency.murray ? { ...result.consistency.murray } : null,
             },
             warnings: result.warnings.map((w) => ({ ...w })),
+            workingAngles: workingAngles.map((c) => ({
+              primaryAngleDeg: c.primaryAngleDeg,
+              secondaryAngleDeg: c.secondaryAngleDeg,
+              minVisibleFraction: c.minVisibleFraction,
+              overlapLengthMm: c.overlapLengthMm,
+              overlapPair: [...c.overlapPair],
+              edgeAware: c.edgeAware,
+              score: c.score,
+            })),
             unrefinedBranches: [...unrefined],
             branchPoints: branchPoints.map((b) => ({
               id: b.id,
@@ -290,6 +322,37 @@ export function Xa3dBifurcationDialog({ onClose }: { onClose: () => void }) {
                 })}
               </div>
             )}
+            {/* ワーキングアングル（§21.4.4）。**短縮だけでなく重なりも見て選ぶ**。 */}
+            <div style={row}>
+              <span style={metric}>{t("xa3dbif.workingAngles")}</span>
+            </div>
+            {workingAngles.length === 0 ? (
+              <div style={hint} data-testid="xa3dbif-working-angles-none">
+                {t("xa3dbif.workingAngles.none")}
+              </div>
+            ) : (
+              <>
+                <div style={hint} data-testid="xa3dbif-working-angles">
+                  {workingAngles
+                    .map((c) =>
+                      t("xa3dbif.workingAngles.item", {
+                        view: formatViewAngles(c.primaryAngleDeg, c.secondaryAngleDeg),
+                        visible: `${(c.minVisibleFraction * 100).toFixed(0)}%`,
+                        overlap: c.overlapLengthMm.toFixed(1),
+                        pair: c.overlapPair.map((b) => t(`xa3dbif.role.${b}`)).join("↔"),
+                      }),
+                    )
+                    .join(" ／ ")}
+                </div>
+                {!workingAngles[0].edgeAware && (
+                  <div style={warn} data-testid="xa3dbif-working-angles-centerline">
+                    {t("xa3dbif.workingAngles.centerline")}
+                  </div>
+                )}
+              </>
+            )}
+            <div style={hint}>{t("xa3dbif.workingAngles.caveat")}</div>
+
             {/* 🚨 出さないものを明示する。 */}
             <div style={hint} data-testid="xa3dbif-no-medina">
               {t("xa3dbif.noMedina")}

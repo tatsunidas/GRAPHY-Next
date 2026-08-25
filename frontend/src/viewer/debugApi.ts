@@ -456,6 +456,16 @@ export interface XaBifurcationDebugSnapshot {
     murray: { expectedMm: number; measuredMm: number; deviationPercent: number } | null;
   };
   warnings: { code: string; branch: string | null; value: number; threshold: number }[];
+  /** ワーキングアングルの候補（§21.4.4）。上位から。 */
+  workingAngles: {
+    primaryAngleDeg: number;
+    secondaryAngleDeg: number;
+    minVisibleFraction: number;
+    overlapLengthMm: number;
+    overlapPair: string[];
+    edgeAware: boolean;
+    score: number;
+  }[];
   /** 角度補正が掛からなかった枝（出自）。 */
   unrefinedBranches: string[];
   /**
