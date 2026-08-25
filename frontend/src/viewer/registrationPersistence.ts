@@ -88,7 +88,8 @@ export async function loadRegistrations(patientKey: string): Promise<LoadedDocum
   };
   if (!patientKey) return empty;
   try {
-    const res = await fetch(`${apiBase()}/api/registrations/${encodeURIComponent(patientKey)}`);
+    // 🔴 キーはクエリで渡す（パスの `%2F` は Tomcat が 400 にする。roiPersistenceApi.ts の注記）。
+    const res = await fetch(`${apiBase()}/api/registrations?patientKey=${encodeURIComponent(patientKey)}`);
     if (!res.ok) return empty;
     const dto = (await res.json()) as DocumentDto;
     if (!dto.json) return { doc: empty.doc, version: dto.version };
@@ -121,7 +122,7 @@ export async function saveRegistrations(
     version: doc.version,
     records: doc.records.map((r) => ({ ...r, registration: toStored(r.registration) })),
   };
-  const res = await fetch(`${apiBase()}/api/registrations/${encodeURIComponent(patientKey)}`, {
+  const res = await fetch(`${apiBase()}/api/registrations?patientKey=${encodeURIComponent(patientKey)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

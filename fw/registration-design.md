@@ -1295,6 +1295,9 @@ pre=恒等・格子=u・post=R がそのまま対応する。この向きで書�
 
 - REST のパスを `/api/registrations/sro` に**しなかった**。それだと既存の
   `/api/registrations/{patientKey}` と衝突し、**patientKey が "sro" の患者**を隠す。
+  🔴 **2026-08-26 追記**: そもそも**キーをパスに入れるのをやめた**（`?patientKey=...`）。
+  PatientID の `/` を `%2F` にしても Tomcat が 400 を返し、**その患者だけ位置合わせが
+  復元されない**（`fw/roi-manager-design.md` の注記が正本）。
   実装途中に実際この URL を叩き、SRO ではなく「patientKey=sro のアプリ内保存」が
   200 を返して**動作確認が嘘になりかけた**。`/api/sro` に分離してある。
 - FoR が無い／fixed と moving で同じ FoR の場合は**保存を拒否**する。SRO は FoR どうしの
@@ -1482,7 +1485,7 @@ W/L や患者名のような**変換の正しさに関係しない属性は指�
 
 | 段階 | 方式 | 状態 |
 |---|---|---|
-| 第 1 段 | アプリ内（`/api/registrations/{patientKey}`。`RoiDocument` と同じ patientKey ＋ JSON ＋ 楽観ロック） | ✅ 2026-08-09 実装 |
+| 第 1 段 | アプリ内（`/api/registrations?patientKey=...`。`RoiDocument` と同じ patientKey ＋ JSON ＋ 楽観ロック） | ✅ 2026-08-09 実装 |
 | 第 2 段 | **DICOM SRO**（66.1 / 66.3）＝ R5 | ✅ 2026-08-10 実装（codec・REST・UI 導線）|
 
 SRO の導線は位置合わせパネルの下段（`frontend/src/viewer/sro.ts` ＋ `RegistrationPanel`）。

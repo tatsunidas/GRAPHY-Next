@@ -22,8 +22,12 @@ export interface PluginDocumentDto {
   version: number | null;
 }
 
+// 🔴 **キーはクエリで渡す**（パスに入れない）。PatientID には `/` が普通に入り
+//    （実データ `D97258/11053`）、`%2F` にしても **Tomcat が経路の段で 400 を返す**。
+//    Spring まで届かないので CORS ヘッダも付かず、ブラウザには「CORS エラー」に見える。
+//    結果は「**その患者だけ保存されない**」で、画面には何も出ない（実測・2026-08-26）。
 const path = (pluginId: string, patientKey: string): string =>
-  `/api/plugin-store/${encodeURIComponent(pluginId)}/${encodeURIComponent(patientKey)}`;
+  `/api/plugin-store/${encodeURIComponent(pluginId)}?patientKey=${encodeURIComponent(patientKey)}`;
 
 export const fetchPluginDocument = (pluginId: string, patientKey: string): Promise<PluginDocumentDto> =>
   httpGet<PluginDocumentDto>(path(pluginId, patientKey));
