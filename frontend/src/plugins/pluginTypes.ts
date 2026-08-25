@@ -7,6 +7,7 @@
 import type { ViewerActions } from "../viewer2d/Viewer2DToolbar";
 import type { PluginStoreDoc, PluginStoreSaveResult } from "./pluginStore";
 import type { PluginWindowHandle, PluginWindowOptions } from "./pluginWindowApi";
+import type { PluginAnalysisInput } from "../report/analysisResults";
 import type {
   PluginValueVolume,
   PluginViewportHandle,
@@ -349,6 +350,25 @@ export interface Viewer2DPluginHost extends PluginHostBase {
     tileId: string | undefined,
     req: ViewerPresentationStateRequest,
   ) => Promise<ViewerSrResult>;
+  /**
+   * **解析結果をレポートへ差し込める形で登録する**（H39）。DICOM は書かない。
+   *
+   * <p>確認ダイアログは出ない——実際にレポートへ差し込むのは利用者の操作
+   * （レポート画面の「解析結果を差し込む」）で、ここはその候補に載せるだけ。
+   *
+   * <p>host が入れるもの: **id の名前空間**（🔴 素通しにすると**本体の解析結果を差し替えられる**）、
+   * 表示中のスタディ / シリーズ、出自のプラグイン名と版、研究用である旨の 1 行。
+   *
+   * <p>🔴 **`caveats` は 1 つ以上必須**（空白だけは数えない）。host が研究用の 1 行を足すので
+   * 形式上は空でも通るが、**その解析に固有の限界**——半値法の系統誤差・単一投影・未校正など、
+   * 数値の意味を変える事情——を知っているのはプラグイン側だけ。
+   *
+   * <p>登録簿は**セッション限り・直近 20 件**。メインウィンドウを閉じると消える。
+   */
+  publishAnalysisResult: (
+    tileId: string | undefined,
+    input: PluginAnalysisInput,
+  ) => { ok: boolean; error?: string };
   /**
    * ユーザーが描いた **ROI（計測・幾何注釈）を読む**（H5）。`tileId` 省略時は**対象タイル全部**
    * （ベースラインと追跡を並べて開いている場合に両方読めるようにするため。H1〜H4 の「先頭タイル」と違う）。

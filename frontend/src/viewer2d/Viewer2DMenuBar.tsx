@@ -115,6 +115,9 @@ export function Viewer2DMenuBar({
     // H38: 表示状態（GSPS）。出所は host が入れる。
     savePresentationState: (tileId, req) =>
       actions.savePresentationState(tileId, req, { id: m.id, name: m.name, version: m.version }),
+    // H39: レポートへの差し込み候補。出所は host が入れる。
+    publishAnalysisResult: (tileId, input) =>
+      actions.publishAnalysisResult(tileId, input, { id: m.id, name: m.name, version: m.version }),
     // H5: ROI の読み出しと、ROI に紐付くプラグイン属性。**pluginId は host が入れる**ので、
     // プラグインは他プラグイン（や本体）の属性名前空間に触れない。
     getRois: (tileId) => actions.getRois(tileId),

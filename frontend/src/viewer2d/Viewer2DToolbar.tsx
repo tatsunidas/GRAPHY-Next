@@ -23,6 +23,7 @@ import {
   type ViewerTileRoi,
   type ViewerTileViewState,
 } from "../viewer/viewerCommands";
+import type { PluginAnalysisInput } from "../report/analysisResults";
 import type {
   PluginRegistrationRequest,
   PluginRegistrationResult,
@@ -158,6 +159,15 @@ export interface ViewerActions {
     req: ViewerPresentationStateRequest,
     producer: { id: string; name: string; version: string },
   ): Promise<ViewerSrResult>;
+  /**
+   * 解析結果をレポートの登録簿へ積む（H39）。**DICOM は書かない**ので確認は出さない
+   * （レポートへ差し込むのは利用者の操作）。
+   */
+  publishAnalysisResult(
+    tileId: string | undefined,
+    input: PluginAnalysisInput,
+    producer: { id: string; name: string; version: string },
+  ): { ok: boolean; error?: string };
   /** W/L プリセット編集ダイアログを開く。 */
   editPresets(): void;
   /** Z 並べ替え（InstanceNumber / IPP, 昇順・降順）。対象タイルのシリーズに適用。 */

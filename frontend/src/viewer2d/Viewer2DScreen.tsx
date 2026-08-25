@@ -1142,6 +1142,18 @@ function TileGrid({
           });
         });
       },
+      // H39: 解析結果をレポートの登録簿へ積む。**DICOM を書かないので確認は出さない**
+      // （実際に差し込むのは利用者の操作＝レポート画面の「解析結果を差し込む」）。
+      publishAnalysisResult: (tileId, input, producer) => {
+        const id = tileId ?? resolveTargets()[0];
+        if (!id) return { ok: false, error: "no target tile" };
+        return (
+          queryViewerCommand(id, (c) => c.publishAnalysisResult(input, producer)) ?? {
+            ok: false,
+            error: "tile is not available",
+          }
+        );
+      },
       editPresets: () => setPresetsOpen(true),
       // Z 並べ替えはシリーズレベル（seriesCommands）。動画/IPP不在は SeriesViewer 側でブロック。
       sort: (mode) => runSeriesCommand(resolveTargets(), (c) => c.setSortMode(mode)),

@@ -15,6 +15,7 @@ import {
   type BlockLabels,
   appendBlock,
   assertHasCaveats,
+  buildPluginAnalysisRecord,
   formatAnalysisBlock,
 } from "./analysisResults";
 import { clearAnalysisResults, listAnalysisResults, publishAnalysisResult, useAnalysisResults } from "./analysisResultStore";
@@ -125,5 +126,91 @@ describe("analysisResultStore", () => {
     // useAnalysisResults はフックだが、絞り込みの規則そのものを一覧側でも確かめる。
     expect(listAnalysisResults().filter((r) => r.studyUid === "1.2.3")).toHaveLength(1);
     expect(typeof useAnalysisResults).toBe("function");
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* H39 — プラグインからの解析結果                                      */
+/* ------------------------------------------------------------------ */
+
+describe("★buildPluginAnalysisRecord — プラグインの結果をレポートへ載せる", () => {
+  const context = { studyUid: "1.2.study", seriesUid: "1.2.series" };
+  const producer = { id: "angio-quant", name: "Angio Quant", version: "0.1.0" };
+  const labels = { pluginLabel: "プラグイン", researchOnly: "研究用の解析であり、単独で診断に用いないこと。" };
+  const input = {
+    id: "qca-1",
+    kind: "qca" as const,
+    sopInstanceUids: ["1.2.sop"],
+    frameLabel: "フレーム 12",
+    title: "冠動脈定量解析（QCA）",
+    metrics: [{ label: "MLD", value: "1.47", unit: "mm" }],
+    provenance: [{ label: "空間校正", value: "カテーテル 6Fr" }],
+    caveats: ["径は密度計測で測っています。"],
+  };
+
+  it("🔴 id にプラグインの名前空間を付ける（本体の記録を差し替えられない）", () => {
+    const r = buildPluginAnalysisRecord(input, context, producer, labels, 1000);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // 登録簿は id が同じ記録を**置き換える**。素の id を通すと本体の結果を上書きできてしまう。
+    expect(r.record.id).toBe("plugin:angio-quant:qca-1");
+  });
+
+  it("スタディ / シリーズはプラグインからではなく表示中のものを入れる", () => {
+    const r = buildPluginAnalysisRecord(
+      { ...input, ...({ studyUid: "9.9.9" } as object) },
+      context,
+      producer,
+      labels,
+      1000,
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.record.studyUid).toBe("1.2.study");
+    expect(r.record.seriesUid).toBe("1.2.series");
+  });
+
+  it("出自にプラグイン名と版を必ず足す", () => {
+    const r = buildPluginAnalysisRecord(input, context, producer, labels, 1000);
+    if (!r.ok) throw new Error("built failed");
+    const row = r.record.provenance.find((p) => p.label === "プラグイン");
+    expect(row?.value).toBe("Angio Quant 0.1.0");
+    // プラグインが書いた出自も残す（置き換えない）。
+    expect(r.record.provenance.some((p) => p.label === "空間校正")).toBe(true);
+  });
+
+  it("研究用の 1 行を必ず足す（二重には足さない）", () => {
+    const r = buildPluginAnalysisRecord(input, context, producer, labels, 1000);
+    if (!r.ok) throw new Error("built failed");
+    expect(r.record.caveats).toContain(labels.researchOnly);
+
+    const already = buildPluginAnalysisRecord(
+      { ...input, caveats: [labels.researchOnly] },
+      context,
+      producer,
+      labels,
+      1000,
+    );
+    if (!already.ok) throw new Error("built failed");
+    expect(already.record.caveats.filter((c) => c === labels.researchOnly)).toHaveLength(1);
+  });
+
+  it("🔴 注意書きが空（空白だけを含む）なら拒否する", () => {
+    // host が研究用の 1 行を足すので形式上は通せるが、**その解析に固有の限界**を
+    // 知っているのはプラグイン側だけ。空を許すと、注意の要らない結果と同じ顔で載る。
+    for (const caveats of [[], [""], ["   "]]) {
+      const r = buildPluginAnalysisRecord({ ...input, caveats }, context, producer, labels, 1000);
+      expect(r.ok).toBe(false);
+    }
+  });
+
+  it("id が空なら拒否する", () => {
+    expect(buildPluginAnalysisRecord({ ...input, id: "  " }, context, producer, labels, 1000).ok).toBe(false);
+  });
+
+  it("できた記録は本体と同じ検査（assertHasCaveats）を通る", () => {
+    const r = buildPluginAnalysisRecord(input, context, producer, labels, 1000);
+    if (!r.ok) throw new Error("built failed");
+    expect(() => assertHasCaveats(r.record)).not.toThrow();
   });
 });
