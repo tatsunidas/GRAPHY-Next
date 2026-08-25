@@ -23,6 +23,7 @@ import type {
   ViewerPixelDataOptions,
   ViewerRoiMeasurements,
   ViewerTarget,
+  ViewerAngioReportRequest,
   ViewerTilePixelData,
   ViewerTileSpatialCalibration,
   ViewerTileXaState,
@@ -310,6 +311,26 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * （アプリが読影医の確認行為を騙らない）。
    */
   saveStructuredReport: (tileId: string | undefined, req: ViewerSrRequest) => Promise<ViewerSrResult>;
+  /**
+   * **アンギオ解析の結果を、本体と同じ SR として保存する**（H37）。
+   *
+   * <p>**本体が必ず確認ダイアログを出す**（抑止不可）。ユーザーが拒否すると
+   * `{ ok: false, cancelled: true }` が返る。
+   *
+   * <p>中身（QCA / QVA / QLV / 3D QCA）と書き手は**本体の解析ダイアログと同一**なので、
+   * プラグインが出す SR は本体が出すものと同じ構造・同じコードになる。プラグイン側で
+   * DICOM を組み立てないこと（H4b / H9 と同じ方針）。出所は host が入れる
+   * （`SeriesDescription` に `[Plugin] `／`ContributingEquipmentSequence` に id・版）。
+   *
+   * <p>🔴 **スタディはプラグインが選べない**（表示中のものになる）。参照する SOP は
+   * **そのタイルが開いている並びの中**に無ければ拒否される——書き手は参照インスタンスから
+   * 患者・スタディを継承するので、他患者の SOP を渡せると**その患者の検査にレポートが生える**。
+   * 3D QCA の方向 B は別シリーズ＝別タイルなので、**両方の SOP を開いているタイルから呼ぶ**こと。
+   */
+  saveAngioReport: (
+    tileId: string | undefined,
+    req: ViewerAngioReportRequest,
+  ) => Promise<ViewerSrResult>;
   /**
    * ユーザーが描いた **ROI（計測・幾何注釈）を読む**（H5）。`tileId` 省略時は**対象タイル全部**
    * （ベースラインと追跡を並べて開いている場合に両方読めるようにするため。H1〜H4 の「先頭タイル」と違う）。

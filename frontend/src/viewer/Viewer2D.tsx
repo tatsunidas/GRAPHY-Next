@@ -61,6 +61,7 @@ import {
   type ViewerSrRequest,
   type ViewerSrResult,
   type ViewerPixelDataOptions,
+  type ViewerAngioReportRequest,
   type ViewerRoi,
   type ViewerSpatialCalibration,
   type ViewerTargetInfo,
@@ -83,7 +84,13 @@ import { ImageInfoPanel } from "./ImageInfoPanel";
 import { matchesCombo } from "../shortcuts/registry";
 import { useI18n } from "../i18n/i18n";
 import { LutDialog } from "./LutDialog";
-import { fetchLutData, type LutData } from "../api";
+import {
+  createPluginAngioSr,
+  fetchLutData,
+  type AngioPluginSrRequest,
+  type LutData,
+} from "../api";
+import { sopUidFromImageId } from "./imageId";
 import { LoadingSpinner } from "./LoadingSpinner";
 // H35 / H36: 校正の出自と XA の表示状態。**どちらも既存の単一入口へ委譲するだけ**
 // （ここで PixelSpacing やタグを直に読むと、本体の表示とプラグインの数値がずれる）。
@@ -1737,6 +1744,50 @@ export function Viewer2D({
     }
   };
 
+  /**
+   * H37: アンギオ解析の結果を **本体と同じ SR** として保存する。
+   *
+   * <p>🔴 **参照 SOP は「いまこのタイルが開いている並び」の中に無ければ拒否する。**
+   * 書き手（backend）は参照インスタンスから患者・スタディを継承するので、他患者の SOP を
+   * 渡されると**その患者の検査にレポートが生える**。プラグインは本体と同じ権限で動く
+   * （サンドボックス未実装）ため、ここで塞ぐ。H10 の「開いているタイルからのみ解決」と同じ考え方。
+   *
+   * <p>スタディ UID はプラグインから受け取らず、表示中のものを入れる。
+   */
+  const saveAngioReport = async (
+    req: ViewerAngioReportRequest,
+    producer: { id: string; name: string; version: string },
+  ): Promise<ViewerSrResult> => {
+    const ctx = roiContextRef.current;
+    if (!ctx) return { ok: false, error: "no series context" };
+    const known = new Set(
+      imageIdsRef.current.map((id) => sopUidFromImageId(id)).filter((v): v is string => !!v),
+    );
+    const refs =
+      req.kind === "qca3d"
+        ? [req.qca3d.viewASopInstanceUid, req.qca3d.viewBSopInstanceUid]
+        : [req.kind === "qca" ? req.qca.sopInstanceUid : req.kind === "qva" ? req.qva.sopInstanceUid : req.qlv.sopInstanceUid];
+    for (const sop of refs) {
+      if (!sop || !known.has(sop)) {
+        // 3D QCA の方向 B は別シリーズ＝別タイルにある。**そのタイルから呼ぶ**必要がある。
+        return { ok: false, error: `referenced SOP is not open in this tile: ${sop ?? "(none)"}` };
+      }
+    }
+    const study = ctx.studyUid;
+    const body: AngioPluginSrRequest = { kind: req.kind, producer };
+    if (req.kind === "qca") body.qca = { ...req.qca, studyInstanceUid: study };
+    else if (req.kind === "qva") body.qva = { ...req.qva, studyInstanceUid: study };
+    else if (req.kind === "qlv") body.qlv = { ...req.qlv, studyInstanceUid: study };
+    else body.qca3d = { ...req.qca3d, studyInstanceUid: study };
+    try {
+      const res = await createPluginAngioSr(body);
+      emitDbChanged({ reason: "series-create", studyUids: [study] });
+      return { ok: true, seriesInstanceUid: res.seriesInstanceUid, sopInstanceUid: res.sopInstanceUid };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  };
+
   // H3: スライス 1 枚の校正済み画素。**読み出しは pixelCalibration に委譲する**
   // （getPixelData() へ直接 slope/intercept を掛けると preScale と二重適用になり CT が
   // 約 −1024 ずれる既知事故。校正の単一入口を必ず通す＝CLAUDE.md のルール 2）。
@@ -2027,7 +2078,8 @@ export function Viewer2D({
     getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
     getSpatialCalibration, getXaState,
     getStackImageIds: () => [...imageIdsRef.current],
-    validateDerivedSeries, saveDerivedSeries, saveStructuredReport, setActiveTool, setBrushSize, setWandTolerance,
+    validateDerivedSeries, saveDerivedSeries, saveStructuredReport, saveAngioReport,
+    setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
     undo, redo,
   });
@@ -2037,7 +2089,8 @@ export function Viewer2D({
     getSpatialCalibration, getXaState,
     // 重畳・派生シリーズ保存・貸したビューポートが**同じ並び**を見るための入口（H31）。
     getStackImageIds: () => [...imageIdsRef.current],
-    validateDerivedSeries, saveDerivedSeries, saveStructuredReport, setActiveTool, setBrushSize, setWandTolerance,
+    validateDerivedSeries, saveDerivedSeries, saveStructuredReport, saveAngioReport,
+    setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
     undo, redo,
   };
@@ -2069,6 +2122,7 @@ export function Viewer2D({
       validateDerivedSeries: (r) => commandsRef.current.validateDerivedSeries(r),
       saveDerivedSeries: (r, p) => commandsRef.current.saveDerivedSeries(r, p),
       saveStructuredReport: (r, p) => commandsRef.current.saveStructuredReport(r, p),
+      saveAngioReport: (r, p) => commandsRef.current.saveAngioReport(r, p),
       setActiveTool: (n) => commandsRef.current.setActiveTool(n),
       setBrushSize: (s) => commandsRef.current.setBrushSize(s),
       selectRoi: (u, ex) => commandsRef.current.selectRoi(u, ex),

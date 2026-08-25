@@ -15,6 +15,7 @@ import {
   type ViewerSrRequest,
   type ViewerSrResult,
   type ViewerTarget,
+  type ViewerAngioReportRequest,
   type ViewerTilePixelData,
   type ViewerTileSpatialCalibration,
   type ViewerTileXaState,
@@ -136,6 +137,15 @@ export interface ViewerActions {
   saveStructuredReport(
     tileId: string | undefined,
     req: ViewerSrRequest,
+    producer: { id: string; name: string; version: string },
+  ): Promise<ViewerSrResult>;
+  /**
+   * アンギオ解析の結果を**本体と同じ SR** で保存する（H37）。確認ダイアログは抑止不可。
+   * スタディは本体が入れ、参照 SOP が開いている並びに無ければ拒否する。
+   */
+  saveAngioReport(
+    tileId: string | undefined,
+    req: ViewerAngioReportRequest,
     producer: { id: string; name: string; version: string },
   ): Promise<ViewerSrResult>;
   /** W/L プリセット編集ダイアログを開く。 */

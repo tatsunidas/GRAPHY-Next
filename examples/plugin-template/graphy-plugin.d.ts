@@ -113,6 +113,122 @@ export interface ViewerViewState {
 }
 
 /**
+ * アンギオ解析の結果を **本体と同じ SR** で保存する要求（`host.saveAngioReport()`。**H37**）。
+ *
+ * <p>🔴 **`studyInstanceUid` は入っていない。** どのスタディに付けるかは本体が決める
+ * （タイルが表示している検査）。また、参照する SOP は**そのタイルが開いている並びの中**に
+ * 無ければ拒否される——書き手は参照インスタンスから患者・スタディを継承するので、
+ * 他患者の SOP を渡せると**その患者の検査にレポートが生える**。
+ *
+ * <p>DICOM の構造・UID 採番・患者/検査属性の継承はすべて本体が行う。プラグインが渡すのは
+ * 「何を測ったか」だけ（H4b / H9 と同じ方針）。
+ */
+export type AngioReportRequest =
+  | { kind: "qca"; qca: AngioQcaReport }
+  | { kind: "qva"; qva: AngioQvaReport }
+  | { kind: "qlv"; qlv: AngioQlvReport }
+  | { kind: "qca3d"; qca3d: AngioQca3dReport };
+
+/** QCA（冠動脈）。 */
+export interface AngioQcaReport {
+  seriesInstanceUid: string;
+  sopInstanceUid: string;
+  /** **1 origin**。単一フレームなら null。 */
+  frameNumber?: number | null;
+  /** "mm" または "px"。**未校正なら px のまま出す**（mm を騙らない）。 */
+  unit: string;
+  /** 校正の出自（人向け文字列。`getSpatialCalibration().provenance` をそのまま渡してよい）。 */
+  calibration?: string | null;
+  vesselLabel?: string | null;
+  /** 手修正の内容。全自動なら null。**自動値と同じ顔で保存しない**ため。 */
+  manualCorrection?: string | null;
+  /** `"half-max"` / `"densitometric"`。省略は半値法。**測り方を落とさない**。 */
+  diameterMethod?: string | null;
+  mld: number;
+  rvd: number;
+  percentDiameterStenosis: number;
+  percentAreaStenosis: number;
+  lesionLength: number;
+}
+
+/** QVA（末梢・脳血管）。狭窄に加えて拡張（瘤）を持てる。 */
+export interface AngioQvaReport {
+  seriesInstanceUid: string;
+  sopInstanceUid: string;
+  frameNumber?: number | null;
+  unit: string;
+  calibration?: string | null;
+  vesselLabel?: string | null;
+  manualCorrection?: string | null;
+  diameterMethod?: string | null;
+  mld: number;
+  rvd: number;
+  percentDiameterStenosis: number;
+  lesionLength: number;
+  /** 拡張（瘤）。無ければ null。**空欄を 0 で埋めない**。 */
+  dilation?: {
+    maxDiameter: number;
+    ratio: number;
+    percentDilation: number;
+    length: number;
+    proximalNeck: number;
+    distalNeck: number;
+    eccentricity?: number | null;
+    aneurysmal: boolean;
+  } | null;
+}
+
+/** QLV（左室造影・単一面）。 */
+export interface AngioQlvReport {
+  seriesInstanceUid: string;
+  sopInstanceUid: string;
+  /** **1 origin**。 */
+  edFrameNumber: number;
+  esFrameNumber: number;
+  /** 校正済みなら "mL"、未校正なら null（EF はスケール不変なので校正が無くても出る）。 */
+  unit: string | null;
+  calibration?: string | null;
+  /** "manual" / "automatic (area curve)"。ED/ES の決め方は結果の意味を変える。 */
+  frameSelection: string;
+  ejectionFraction: number;
+  edvMl: number | null;
+  esvMl: number | null;
+  kennedyEdvMl: number | null;
+  kennedyEsvMl: number | null;
+  kennedyEjectionFraction: number | null;
+  method: string;
+}
+
+/** 3D QCA（2 方向からの再構成）。**方向 A / B の SOP は両方とも開いている必要がある。** */
+export interface AngioQca3dReport {
+  seriesInstanceUid: string;
+  viewASopInstanceUid: string;
+  /** **1 origin**。 */
+  viewAFrameNumber: number;
+  viewBSopInstanceUid: string;
+  viewBFrameNumber: number;
+  separationDeg: number;
+  /** 3 未満なら装置角度の補正が掛かっていない。 */
+  anchorCount: number;
+  anchorReprojectionPx: number;
+  angleCorrected: boolean;
+  lengthMm: number;
+  minAreaMm2: number | null;
+  minEquivalentDiameterMm: number | null;
+  /** 見えている長さの割合（短縮の指標）。 */
+  visibleFractionA: number | null;
+  visibleFractionB: number | null;
+  calibration: string | null;
+  /** `"half-max"` / `"densitometric"` / 2 方向で違うなら `"mixed"`。 */
+  diameterMethod?: string | null;
+  percentDiameterStenosis: number | null;
+  percentAreaStenosis: number | null;
+  mldMm: number | null;
+  rvdMm: number | null;
+  lesionLengthMm: number | null;
+}
+
+/**
  * 空間校正と**その出自**。`host.getSpatialCalibration()` の戻り。**H35**。
  *
  * <p>🔴 **数値だけでは足りない。** mm/px は `getPixelData().spacing` からも取れるが、
@@ -633,6 +749,16 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * <p>⚠️ 校正を**書く**口は無い（意図的）。確定するのは本体だけ。
    */
   getSpatialCalibration: (tileId?: string) => SpatialCalibration | null;
+  /**
+   * アンギオ解析の結果を **本体と同じ SR** で保存する（H37）。
+   *
+   * <p>**本体が必ず確認ダイアログを出す**（抑止不可）。拒否されると
+   * `{ ok: false, cancelled: true }` が返る。出所（プラグイン id・版）は本体が入れる。
+   *
+   * <p>🔴 スタディはプラグインが選べない（表示中のもの）。参照 SOP が**そのタイルの並びに
+   * 無ければ拒否**される。3D QCA は方向 A / B の両方が開いているタイルから呼ぶこと。
+   */
+  saveAngioReport: (tileId: string | undefined, req: AngioReportRequest) => Promise<SrResult>;
   /**
    * 対象タイルの **XA 表示状態**（DSA・フレーム軸）（H36）。XA / XRF でなければ null。
    *

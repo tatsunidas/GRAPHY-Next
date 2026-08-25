@@ -121,6 +121,71 @@ public class AngioStoreService {
         return new Created(r.seriesInstanceUid(), r.sopInstanceUid());
     }
 
+    /**
+     * プラグインが書くアンギオ解析 SR（H37 ／ G3）。中身と書き手は本体の経路と<b>同一</b>で、
+     * 違うのは<b>出所を必ず刻む</b>ことだけ（{@link AngioSrProvenance}）。
+     *
+     * <p>🔴 <b>producer 無しは受け付けない。</b> 出所の無いプラグイン出力を作れてしまうと、
+     * 保管庫の中で「本体が計算した値」と見分けが付かなくなる。
+     *
+     * @throws IllegalArgumentException kind が未知、対応する本体が空、producer が無いとき
+     */
+    public Created createPluginSr(AngioPluginSrRequest req) throws IOException {
+        if (req == null || req.producer() == null || req.producer().id() == null
+                || req.producer().id().isBlank()) {
+            throw new IllegalArgumentException("producer は必須です");
+        }
+        String kind = req.kind() == null ? "" : req.kind().trim().toLowerCase();
+        Attributes ds;
+        String seriesUid;
+        String sopUid;
+        switch (kind) {
+            case "qca" -> {
+                require(req.qca() != null, "qca");
+                QcaSrWriter.Result r = QcaSrWriter.build(readTemplate(req.qca().sopInstanceUid()), req.qca());
+                ds = r.dataset();
+                seriesUid = r.seriesInstanceUid();
+                sopUid = r.sopInstanceUid();
+            }
+            case "qva" -> {
+                require(req.qva() != null, "qva");
+                QvaSrWriter.Result r = QvaSrWriter.build(readTemplate(req.qva().sopInstanceUid()), req.qva());
+                ds = r.dataset();
+                seriesUid = r.seriesInstanceUid();
+                sopUid = r.sopInstanceUid();
+            }
+            case "qlv" -> {
+                require(req.qlv() != null, "qlv");
+                QlvSrWriter.Result r = QlvSrWriter.build(readTemplate(req.qlv().sopInstanceUid()), req.qlv());
+                ds = r.dataset();
+                seriesUid = r.seriesInstanceUid();
+                sopUid = r.sopInstanceUid();
+            }
+            case "qca3d" -> {
+                require(req.qca3d() != null, "qca3d");
+                Qca3dSrWriter.Result r =
+                        Qca3dSrWriter.build(readTemplate(req.qca3d().viewASopInstanceUid()), req.qca3d());
+                ds = r.dataset();
+                seriesUid = r.seriesInstanceUid();
+                sopUid = r.sopInstanceUid();
+            }
+            // 🚨 知らない種別は**拒否する**（H9 と同じ）。黙って落とすと
+            //    「入れたはずの計測が無いレポート」ができる。
+            default -> throw new IllegalArgumentException("未知の解析種別です: " + req.kind());
+        }
+        AngioSrProvenance.stamp(ds, req.producer());
+        store(ds);
+        log.info("plugin angio SR created: kind={} plugin={} series={} sop={}",
+                kind, req.producer().id(), seriesUid, sopUid);
+        return new Created(seriesUid, sopUid);
+    }
+
+    private static void require(boolean ok, String field) {
+        if (!ok) {
+            throw new IllegalArgumentException(field + " が空です");
+        }
+    }
+
     /** 参照インスタンスのヘッダ（患者・スタディ識別情報の継承元）。取れなければ null。 */
     private Attributes readTemplate(String sopUid) {
         Path p = storage.resolveInstanceFile(sopUid);

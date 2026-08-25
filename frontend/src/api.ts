@@ -485,6 +485,25 @@ export interface Qca3dSrRequest {
   lesionLengthMm: number | null;
 }
 
+/**
+ * プラグインが書くアンギオ解析 SR（host API の H37）。
+ *
+ * <p>中身と書き手は本体の 4 経路と**同一**で、違うのは**出所の記録が必須**な点だけ
+ * （`SeriesDescription` に `[Plugin] `／`ContributingEquipmentSequence` に id・版）。
+ * `studyInstanceUid` は本体が呼び出し側で埋める（プラグインに指定させない）。
+ */
+export interface AngioPluginSrRequest {
+  kind: "qca" | "qva" | "qlv" | "qca3d";
+  producer: { id: string; name: string; version: string };
+  qca?: QcaSrRequest | null;
+  qva?: QvaSrRequest | null;
+  qlv?: QlvSrRequest | null;
+  qca3d?: Qca3dSrRequest | null;
+}
+
+export const createPluginAngioSr = (req: AngioPluginSrRequest) =>
+  httpSend<AngioCreated>("/api/angio/plugin-sr", "POST", req);
+
 /** 3D QCA の結果を Comprehensive SR として保存する。 */
 export const createQca3dSr = (req: Qca3dSrRequest) =>
   httpSend<AngioCreated>("/api/angio/qca3d-sr", "POST", req);

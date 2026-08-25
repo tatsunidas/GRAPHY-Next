@@ -528,6 +528,7 @@ export const ja: Record<string, string> = {
   "viewer2d.plugin.sr.title": "プラグインによる計測レポート保存の確認",
   "viewer2d.plugin.sr.lead": "プラグイン「{{name}} {{version}}」が計測結果を DICOM 構造化レポート（SR）として保存しようとしています。",
   "viewer2d.plugin.sr.seriesDescription": "シリーズ説明",
+  "viewer2d.plugin.sr.analysis": "解析",
   "viewer2d.plugin.sr.groups": "計測グループ（病変）",
   "viewer2d.plugin.sr.findings": "所見テキスト",
   "viewer2d.plugin.sr.notice": "保存されるレポートはプラグインが作成したもので、診断用に検証されたものではありません（未検証として記録されます）。元の画像は変更されません。",

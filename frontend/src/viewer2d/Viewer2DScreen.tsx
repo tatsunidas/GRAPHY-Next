@@ -235,6 +235,17 @@ function setGhostImage(e: React.DragEvent, label: string): void {
  *   - 同一患者の別スタディ → 既存タブのタイルをクリアして新シリーズで置き換え
  *   - 未開患者 → 新しい患者タブを追加
  */
+/**
+ * backend の `*SrWriter` が入れる `SeriesDescription`。**確認ダイアログに出す文字列を
+ * 実際に保存されるものと一致させる**ため、ここに写しを持つ（違うものを見せて同意を取らない）。
+ */
+const ANGIO_SR_DESCRIPTION: Record<"qca" | "qva" | "qlv" | "qca3d", string> = {
+  qca: "QCA",
+  qva: "QVA",
+  qlv: "QLV",
+  qca3d: "QCA 3D",
+};
+
 export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
   const { t } = useI18n();
   const mode = status?.mode === "standalone" ? "standalone" : "web";
@@ -1071,6 +1082,34 @@ function TileGrid({
                 return;
               }
               const pending = queryViewerCommand(id, (c) => c.saveStructuredReport(req, producer));
+              resolve(pending ? await pending : { ok: false, error: "tile is not available" });
+            },
+          });
+        });
+      },
+      // H37: アンギオ解析の結果を本体と同じ SR で保存する。**確認は抑止不可**（H4b / H9 と同じ）。
+      saveAngioReport: (tileId, req, producer) => {
+        const id = tileId ?? resolveTargets()[0];
+        if (!id) return Promise.resolve({ ok: false, error: "no target tile" });
+        return new Promise((resolve) => {
+          setPluginSave({
+            request: {
+              kind: "angio-sr",
+              analysisKind: req.kind,
+              pluginName: producer.name,
+              pluginVersion: producer.version,
+              // backend の *SrWriter が付ける SeriesDescription と同じものを見せる。
+              seriesDescription: ANGIO_SR_DESCRIPTION[req.kind],
+              instanceCount: 1,
+              mode,
+            },
+            onDecide: async (accepted) => {
+              setPluginSave(null);
+              if (!accepted) {
+                resolve({ ok: false, cancelled: true });
+                return;
+              }
+              const pending = queryViewerCommand(id, (c) => c.saveAngioReport(req, producer));
               resolve(pending ? await pending : { ok: false, error: "tile is not available" });
             },
           });

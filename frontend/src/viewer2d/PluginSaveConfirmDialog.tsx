@@ -25,11 +25,25 @@ export interface PluginSaveRequest {
    * 何を保存するか。**画像シリーズと計測レポート（SR）では中身が違う**ので、
    * 「何がどこへ書かれるのか」を正しく提示するために分ける。
    */
-  kind?: "series" | "sr";
+  kind?: "series" | "sr" | "angio-sr";
   /** SR のとき: 計測グループ（病変）数と所見テキスト数。 */
   groupCount?: number;
   findingCount?: number;
+  /**
+   * アンギオ解析 SR のとき: どの解析か（`qca` / `qva` / `qlv` / `qca3d`）。
+   * **何を保存するのかを「計測 N 件」ではなく解析の名前で見せる**——同意する側にとって
+   * 意味があるのは件数ではなく「QCA の結果が保管庫に入る」という事実のほうなので。
+   */
+  analysisKind?: "qca" | "qva" | "qlv" | "qca3d";
 }
+
+/** 解析の呼び方は解析タスク一覧（A13-2）と同じ文言を使う。**画面ごとに変えない**。 */
+const ANALYSIS_LABEL = {
+  qca: "xa.task.qca",
+  qva: "xa.task.qva",
+  qlv: "xa.task.qlv",
+  qca3d: "xa.task.qca3d",
+} as const;
 
 export function PluginSaveConfirmDialog({
   request,
@@ -41,7 +55,8 @@ export function PluginSaveConfirmDialog({
   onCancel: () => void;
 }) {
   const { t } = useI18n();
-  const isSr = request.kind === "sr";
+  const isAngio = request.kind === "angio-sr";
+  const isSr = request.kind === "sr" || isAngio;
   // **document.body へ出し、最上位に置く。** プラグインの UI は本体の DOM とは別に
   // body へ挿し込まれ、任意の z-index を持てる。同じツリー内で z-index を競わせると
   // スタッキングコンテキスト次第で負ける（実機で SR 保存の同意ダイアログが
@@ -62,7 +77,14 @@ export function PluginSaveConfirmDialog({
                 {/* 保存時に本体が付ける接頭辞をそのまま見せる（一覧での見え方と一致させる）。 */}
                 <td style={td} data-testid="plugin-save-description">{`[Plugin] ${request.seriesDescription}`}</td>
               </tr>
-              {isSr ? (
+              {isAngio ? (
+                <tr>
+                  <th style={th}>{t("viewer2d.plugin.sr.analysis")}</th>
+                  <td style={td} data-testid="plugin-save-analysis">
+                    {t(ANALYSIS_LABEL[request.analysisKind ?? "qca"])}
+                  </td>
+                </tr>
+              ) : isSr ? (
                 <>
                   <tr>
                     <th style={th}>{t("viewer2d.plugin.sr.groups")}</th>

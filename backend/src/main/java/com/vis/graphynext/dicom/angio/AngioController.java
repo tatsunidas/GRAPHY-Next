@@ -151,6 +151,24 @@ public class AngioController {
         }
     }
 
+    /**
+     * プラグインが書くアンギオ解析 SR（H37 ／ {@code fw/angio-design.md} §22.3 の G3）。
+     *
+     * <p>本体の 4 エンドポイントと**同じ writer** を使う。違いは出所（プラグイン id・版）を
+     * 必ず刻むことだけ。**同意ダイアログはフロント側で必ず挟む**（抑止不可・H4b / H9 と同じ）。
+     */
+    @PostMapping("/plugin-sr")
+    public ResponseEntity<AngioStoreService.Created> createPluginSr(@RequestBody AngioPluginSrRequest req) {
+        try {
+            return ResponseEntity.ok(service.createPluginSr(req));
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        } catch (IOException e) {
+            log.error("プラグインのアンギオ SR 作成に失敗", e);
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "解析結果を保存できませんでした");
+        }
+    }
+
     private static void requireText(String v, String name) {
         if (v == null || v.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, name + " は必須です");
