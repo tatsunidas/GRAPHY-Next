@@ -284,6 +284,26 @@ DICOM PS3.15 Basic Application Confidentiality Profile の匿名化。GRAPHY
     SOPClass=Video Photographic（`1.2.840.10008.5.1.4.1.1.77.1.4.1`）を検出し、画像ビューアではなく案内表示。
     再生（VideoViewport + `/rendered` mp4 供給）は 2D Viewer 側の将来対応。**設計 → `fw/video-viewer-design.md`**。
 
+## 検索パネル（StudyList の絞り込み）— 「全期間」を足した（2026-08-25）
+
+🔴 **`StudyDate` が空のスタディは、日付範囲を指定した検索では必ず除外される。**
+一覧の JPQL は `(:studyDateFrom is null or i.studyDate >= :studyDateFrom)` で、SQL の NULL 比較は
+unknown になるため。既定の検索条件は**「今日」**（`SearchPanel.tsx`。公開デモだけ 1900/01/01〜今日）なので、
+**検査日の無いデータは取り込めているのに一覧から見えない**。実際に「インポートに失敗した」と誤読された。
+
+`StudyDate` は Study モジュールの **Type 2（空を許す）**で、日付なしの DICOM は規格違反ではない。
+一方 C-FIND の意味論では「日付なしは日付範囲にマッチしない」が自然なので、**SQL 側は変えない**。
+代わりに**日付条件そのものを外す経路**を UI に用意した。
+
+- 期間チップに **「全期間」** を追加（`main.search.allPeriod`）。押すと**日付欄を空にして即検索**する
+  （1900/01/01〜今日 に設定するのではない。それでは NULL は拾えない）。
+  他条件も空なら無条件検索になるが、**明示操作なので確認ダイアログは挟まない**。
+- 取り込みトーストに **「うち検査日なしのスタディ N 件。既定の『今日』では表示されません」** を出す
+  （`ImportResult.studiesWithoutDate`・`fw/dicom-data-layer.md` §4.2）。
+
+⚠ 同じ `filters` は Anonymizer / Export / TagExtractor / SeriesExtractor のスタディ一覧にも渡っている。
+日付なしのスタディはそれらでも同様に見えないので、対象に含めたいときは「全期間」で検索してから開く。
+
 ## 実装メモ
 - **更新(2026-07-02 監査)**: 3D/MPR/Slicer ビューアは**配線済**（`handleOpenViewer` が別ウィンドウ起動）。まだ未実装のツールのみ押下で「近日対応予定」バナーを表示（MainScreen `handleOpenTool`）。
 - これらは standalone（Electron）前提の機能が多い（ネイティブ I/O・媒体書込）。web モードでの可否は機能ごとに判断。

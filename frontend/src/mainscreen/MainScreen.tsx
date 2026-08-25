@@ -82,8 +82,18 @@ export function MainScreen({
     setImportMsg(t("main.import.running"));
     try {
       const r = await importPaths(paths);
-      setImportMsg(t("main.import.result", { imported: r.imported, skipped: r.skipped, failed: r.failed }));
+      const base = t("main.import.result", { imported: r.imported, skipped: r.skipped, failed: r.failed });
+      // 検査日の無いスタディは既定の検索条件（今日）では出ない。取り込めているのに
+      // 「失敗した」と読まれるため、件数があるときだけ理由と対処を添える。
+      const withDateNote =
+        r.studiesWithoutDate > 0
+          ? `${base} — ${t("main.import.noStudyDate", { count: r.studiesWithoutDate })}`
+          : base;
+      setImportMsg(withDateNote);
       setReloadKey((k) => k + 1);
+      // 注意文つきのときは読む時間が要る（既定の 6 秒では消えるのが早い）。
+      setTimeout(() => setImportMsg(null), r.studiesWithoutDate > 0 ? 20000 : 6000);
+      return;
     } catch (e) {
       setImportMsg(t("common.fetchError", { error: String(e) }));
     }
