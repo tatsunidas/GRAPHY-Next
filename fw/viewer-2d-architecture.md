@@ -199,6 +199,29 @@ Fusion の有無で画像描画領域の高さが変わり、**横並び比較�
   同一スタック内は **zoom/pan/WW/WL/回転/反転を自動維持**（=シリーズ全体での操作）。
   `overlays`(text/caliper/orientation) で画像上オーバーレイを On/Off。ホイールは Zoom から外した。
 - **スライス送り**: スライダー＋↑↓←→キー＋ホイール。**シネ再生**(fps)。
+  🔴 **ホイールは「1 ノッチ = 1 スライス」**（`viewer/wheelScroll.ts`・2026-08-25）。
+  以前は `wheel` イベントごとに 1 スライス送っていたが、高分解能ホイールとトラックパッドは
+  1 回の操作で何十件もイベントを出すため、少し回しただけで一気に飛んでいた。
+  `createWheelStepper()` は **−1 / 0 / +1 しか返さない**（1 イベントで 2 スライス以上送らない）。
+  ⚠ **「px を貯めて 100 で割る」方式にはしない**。1 ノッチの `deltaY` はブラウザと環境で
+  100 / 120 / 53 と違い、割り切れない環境では**数ノッチに 1 回だけ 2 スライス飛ぶ**。
+  離散イベント（`deltaMode !== 0`＝Firefox の行単位、または `|deltaY| >= 40`）は
+  **大きさに関係なく 1 ノッチ**として扱い、細かい delta（トラックパッド）だけ 40px 貯めて 1 スライス。
+  向きが変わったとき・250ms 以上間が空いたときは端数を捨てる（惰性スクロールの続きで動かさない）。
+  純関数なので `wheelScroll.test.ts` で 8 件。**タッチの 3 本指ドラッグは `touchScroll.ts`** で別勘定。
+  ⚠ ここは Cornerstone の `StackScrollTool` を使わない（表示スライスの出所は SeriesViewer の
+  React state `z` ただ 1 つ。ツールが `imageIdIndex` を直接動かすと次の再描画で巻き戻る）。
+  **Slicer / MPR / プラグイン（2D 面）にも同じ仕様を入れた**（`installWheelSliceGate()`）。
+  あちらは Cornerstone の `StackScrollTool` がホイールを受けるが、**ツール側に刻みの設定が無い**
+  ——`wheelListener` が `direction = ±1` を作り、`StackScrollTool._scroll` が `delta = direction`
+  で送るだけで、**`deltaY` の大きさは見ていない**＝ **イベント 1 件につき必ず 1 スライス**。
+  そこで**要素の capture 段でホイールを間引く**: ノッチに達しないイベントを
+  `stopImmediatePropagation()` で止め、達したものだけ Cornerstone へ通す。
+  ⚠ capture 段に置くのは Cornerstone より先に受けるため（Cornerstone は `enableElement` した
+  要素に bubble で付けており、実標的はその中の canvas なので、この要素の capture が必ず先）。
+  ⚠ **ホイールがスライス送り以外に割り当たっている面には付けない**——プラグインの 3D 面は
+  ホイールが Zoom なので、間引くと拡大縮小が粗くなる（`attachTools(kind)` の分岐と対応）。
+  付けた場所: `mpr.ts`（3 面）／`slicer.ts`（4 面＋単一面）／`pluginViewportApi.ts`（2D 面のみ）。
 - **5D(ZCT) モデル** `viewer/seriesLayout.ts`（GRAPHY Praparat 準拠の Z×C×T）。現状 nC=nT=1。
   5D 時に C/T スライダーを表示する UI は実装済み。
 - **5D(ZCT) 派生＝実装済み（DICOM 準拠・Classic 単一フレーム）**:

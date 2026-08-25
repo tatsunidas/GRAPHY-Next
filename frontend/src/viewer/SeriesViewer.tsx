@@ -69,6 +69,7 @@ import {
   persistXaUserCalibration,
 } from "./xaCalibrationPersistence";
 import { advanceAnchor, sliceStepsFromDrag } from "./touchScroll";
+import { createWheelStepper } from "./wheelScroll";
 import { installDebugApi, countStackSwap } from "./debugApi";
 import { matchesCombo } from "../shortcuts/registry";
 import { fetchSeriesLayout, type Instance } from "../api";
@@ -904,9 +905,14 @@ export function SeriesViewer({
         e.preventDefault();
       }
     };
+    // 🔴 ホイールは **1 ノッチ = 1 スライス**（`wheelScroll.ts`）。
+    // 以前は wheel イベントごとに step(±1) しており、高分解能ホイールとトラックパッドが
+    // 1 回の操作で何十件もイベントを出すため、少し回しただけで一気に飛んでいた。
+    const wheelStep = createWheelStepper();
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      step(e.deltaY > 0 ? 1 : -1);
+      const d = wheelStep(e.deltaY, e.deltaMode, e.timeStamp);
+      if (d !== 0) step(d);
     };
 
     // ── 3 本指の縦ドラッグでスライス送り（タッチ端末。fw/mobile-ui-design.md §3.3） ──
