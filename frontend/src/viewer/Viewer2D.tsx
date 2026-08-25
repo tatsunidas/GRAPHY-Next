@@ -62,8 +62,10 @@ import {
   type ViewerSrResult,
   type ViewerPixelDataOptions,
   type ViewerRoi,
+  type ViewerSpatialCalibration,
   type ViewerTargetInfo,
   type ViewerViewState,
+  type ViewerXaState,
 } from "./viewerCommands";
 import { buildPluginMeta, computeCalipers, hasShapeCalipers, pickPluginMeta, readRoiStats } from "./roiRead";
 import { CONTOUR_TOOL_NAMES, contourToolConfig } from "./roiContourTools";
@@ -83,6 +85,11 @@ import { useI18n } from "../i18n/i18n";
 import { LutDialog } from "./LutDialog";
 import { fetchLutData, type LutData } from "../api";
 import { LoadingSpinner } from "./LoadingSpinner";
+// H35 / H36: 校正の出自と XA の表示状態。**どちらも既存の単一入口へ委譲するだけ**
+// （ここで PixelSpacing やタグを直に読むと、本体の表示とプラグインの数値がずれる）。
+import { calibrationForImageId } from "./xaCalibrationProvider";
+import { toViewerSpatialCalibration } from "./xaCalibration";
+import { dsaStateForImageId, readXaDsaTags } from "./dsaLoader";
 
 type ViewSnapshot = { transform: ViewTransform; voi: { lower: number; upper: number } | null };
 
@@ -1485,6 +1492,47 @@ export function Viewer2D({
     };
   };
 
+  /**
+   * H35: 表示中スライスの空間校正と**その出自**。
+   *
+   * <p>読み出しは `xaCalibrationProvider.calibrationForImageId()` に委譲する
+   * （**校正の単一入口**。ここで `PixelSpacing` を直に読むと本体の表示とずれる）。
+   * XA / XRF 以外は解決器を持たないので null＝「出自の概念が無い」を返す。
+   */
+  const getSpatialCalibration = (): ViewerSpatialCalibration | null => {
+    const imageId = imageIdsRef.current[indexRef.current];
+    if (!imageId) return null;
+    const c = calibrationForImageId(imageId);
+    return c ? toViewerSpatialCalibration(imageId, c) : null;
+  };
+
+  /**
+   * H36: XA の表示状態（DSA・フレーム軸）。
+   *
+   * <p>DSA 中は合成 imageId になっており、**受け取った画素は差分**である。
+   * タグは `readXaDsaTags` がネイティブフレームへ委譲して読む（合成 imageId のままでも通る）。
+   */
+  const getXaState = (): ViewerXaState | null => {
+    const imageId = imageIdsRef.current[indexRef.current];
+    if (!imageId) return null;
+    const modality = (infoRef.current?.modality ?? "").toUpperCase();
+    const dsa = dsaStateForImageId(imageId);
+    // XA/XRF でなければ「無い」。DSA 合成中は modality が読めないことがあるので、
+    // 合成であること自体を XA の証拠として扱う。
+    if (!dsa && modality !== "XA" && modality !== "XRF") return null;
+    const tags = readXaDsaTags(imageId);
+    return {
+      imageId,
+      isSubtracted: !!dsa,
+      maskFrames: dsa ? [...dsa.maskFrames] : [],
+      shift: dsa ? [dsa.dx, dsa.dy] : [0, 0],
+      logarithmic: dsa ? dsa.logarithmic : false,
+      pixelIntensityRelationship: tags?.pixelIntensityRelationship ?? null,
+      frameIndex: indexRef.current,
+      frameCount: imageIdsRef.current.length,
+    };
+  };
+
   // colormap の内部登録名 → 公開する LUT 名。`graphy-lut-` は本体の実装詳細なので剥がす
   // （シリーズ Sync で他タイルから伝播した colormap も同じ規則の名前で来る）。
   const lutNameForPlugins = (colormapName: string | null): string | null =>
@@ -1977,6 +2025,7 @@ export function Viewer2D({
   const commandsRef = useRef<ViewerCommands>({
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
     getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
+    getSpatialCalibration, getXaState,
     getStackImageIds: () => [...imageIdsRef.current],
     validateDerivedSeries, saveDerivedSeries, saveStructuredReport, setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
@@ -1985,6 +2034,7 @@ export function Viewer2D({
   commandsRef.current = {
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
     getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
+    getSpatialCalibration, getXaState,
     // 重畳・派生シリーズ保存・貸したビューポートが**同じ並び**を見るための入口（H31）。
     getStackImageIds: () => [...imageIdsRef.current],
     validateDerivedSeries, saveDerivedSeries, saveStructuredReport, setActiveTool, setBrushSize, setWandTolerance,
@@ -2008,6 +2058,10 @@ export function Viewer2D({
       getSuvContext: () => commandsRef.current.getSuvContext(),
       getTargetInfo: () => commandsRef.current.getTargetInfo(),
       getViewState: () => commandsRef.current.getViewState(),
+      // H35 / H36。**タイル登録側にも足す**（ここを忘れると、プラグインからだけ
+      // 「メソッドが無い」状態になり、原因が本体側だと気付きにくい）。
+      getSpatialCalibration: () => commandsRef.current.getSpatialCalibration(),
+      getXaState: () => commandsRef.current.getXaState(),
       getPixelData: (o) => commandsRef.current.getPixelData(o),
       getStackImageIds: () => commandsRef.current.getStackImageIds(),
       showOverlay: (o) => commandsRef.current.showOverlay(o),

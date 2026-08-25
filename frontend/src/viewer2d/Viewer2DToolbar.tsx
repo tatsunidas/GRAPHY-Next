@@ -16,6 +16,8 @@ import {
   type ViewerSrResult,
   type ViewerTarget,
   type ViewerTilePixelData,
+  type ViewerTileSpatialCalibration,
+  type ViewerTileXaState,
   type ViewerTileRoi,
   type ViewerTileViewState,
 } from "../viewer/viewerCommands";
@@ -58,6 +60,13 @@ export interface ViewerActions {
   getViewState(tileId?: string): ViewerTileViewState | null;
   /** 対象タイルのスライス 1 枚の校正済み画素（H3）。tileId 省略時は対象の先頭。無ければ null。 */
   getPixelData(tileId?: string, opts?: ViewerPixelDataOptions): Promise<ViewerTilePixelData | null>;
+  /**
+   * 対象タイルの空間校正と**その出自**（H35）。XA / XRF 以外・解決不能なら null。
+   * 数値だけでは「近似か実測か未校正か」が伝わらないので、出自と警告ごと渡す。
+   */
+  getSpatialCalibration(tileId?: string): ViewerTileSpatialCalibration | null;
+  /** 対象タイルの XA 表示状態（DSA・フレーム軸）（H36）。XA / XRF でなければ null。 */
+  getXaState(tileId?: string): ViewerTileXaState | null;
   /**
    * 対象タイルが表示しているスタックの imageId を z 昇順で返す（H31 の幾何委譲先）。
    * タイルが無ければ null。**空配列と null を混ぜない**（「無い」と「0 枚」は別）。

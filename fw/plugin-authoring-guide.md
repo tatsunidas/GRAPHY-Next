@@ -99,7 +99,7 @@ export function activate(host) {
 
 | サーフェス | 追加プロパティ |
 |---|---|
-| `viewer2d.menu` / `viewer2d.toolbar` | `actions`（表示中タイルへの操作。`invert()` / `rotate90()` / `fit()` 等。定義は `frontend/src/viewer2d/Viewer2DToolbar.tsx` の `ViewerActions`）<br>`getTargets()` / `getViewState()` / `getPixelData()` / `showOverlay()` / `clearOverlay()` / `saveDerivedSeries()` / `getRois()` / `getRoiMeta()` / `setRoiMeta()` / `subscribeRois()`（**0.1.9 以降**。下記） |
+| `viewer2d.menu` / `viewer2d.toolbar` | `actions`（表示中タイルへの操作。`invert()` / `rotate90()` / `fit()` 等。定義は `frontend/src/viewer2d/Viewer2DToolbar.tsx` の `ViewerActions`）<br>`getTargets()` / `getViewState()` / `getPixelData()` / `getSpatialCalibration()` / `getXaState()` / `showOverlay()` / `clearOverlay()` / `saveDerivedSeries()` / `getRois()` / `getRoiMeta()` / `setRoiMeta()` / `subscribeRois()`（**0.1.9 以降**。下記） |
 | `mainscreen.menu` | `selectedStudyUid`（選択中スタディの UID、未選択なら `null`） |
 
 **問い合わせ・オーバーレイ・保存・ROI（0.1.9 以降・[`plugin-architecture.md` §7](plugin-architecture.md#7-host-api-の拡張h1h5-実装済み) の H1〜H5）**:
@@ -109,6 +109,8 @@ export function activate(host) {
 | `getTargets()` | 操作対象タイル（選択→無ければ全＝`actions` と同じ対象）の配列。要素は `{ tileId, patientKey, studyUid, studyDate, seriesUid, seriesLabel, imageId, sliceIndex, sliceCount, c, t, modality }` |
 | `getViewState(tileId?)` | `{ tileId, windowCenter, windowWidth, unit, colormap, invert, flipH, flipV, rotation, zoom, pan }`。省略時は対象の先頭タイル。取得不能なら `null` |
 | `getPixelData(tileId?, opts?)` | `Promise<{ tileId, imageId, sliceIndex, rows, cols, data, unit, spacing } \| null>`。`data` は `Float32Array`（row-major・`data[y*cols+x]`）の**校正済み画素**（CT なら HU）。`opts.sliceIndex` で別スライス（既定は表示中） |
+| `getSpatialCalibration(tileId?)` | `{ tileId, imageId, mmPerPxRow, mmPerPxCol, source, confidence, tier, plane, provenance, warnings, detectorMmPerPx } \| null`（**H35**）。XA / XRF のみ（他は null）。🔴 **未校正では `mmPerPx*` が null**。`detectorMmPerPx` は検出器面の値で**被写体の mm/px ではない**ので計測に使わないこと。`tier` が `approximate` なら結果に「近似」と書く |
+| `getXaState(tileId?)` | `{ tileId, imageId, isSubtracted, maskFrames, shift, logarithmic, pixelIntensityRelationship, frameIndex, frameCount } \| null`（**H36**）。🔴 `isSubtracted` が true のとき `getPixelData()` が返すのは**差分画像**（血管が正の大きな値）。エッジ検出と対数変換の向きを必ず切り替える |
 | `showOverlay(tileId?, overlay)` | 処理結果（値マップ）を表示中スライスに重ねる。`overlay = { data, rows, cols, window?, colormap?, opacity? }`。格子が現在スライスと不一致なら `false` |
 | `clearOverlay(tileId?)` | オーバーレイを消す |
 | `saveDerivedSeries(tileId?, req)` | 処理結果を**派生シリーズとして保存**（standalone は保管庫、web は PACS）。`Promise<{ ok, cancelled?, seriesInstanceUid?, instanceCount?, error? }>`。**本体が必ず確認ダイアログを出す** |

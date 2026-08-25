@@ -946,6 +946,21 @@ function TileGrid({
         const px = pending ? await pending : null;
         return px ? { tileId: id, ...px } : null;
       },
+      // H35: 校正の**値と出自**。tileId 省略時は先頭タイル（H2 / H3 と同じ規約）。
+      getSpatialCalibration: (tileId) => {
+        const id = tileId ?? resolveTargets()[0];
+        if (!id) return null;
+        const c = queryViewerCommand(id, (cmd) => cmd.getSpatialCalibration());
+        return c ? { tileId: id, ...c } : null;
+      },
+      // H36: XA の表示状態。**DSA 中かどうかは合成 imageId からは見分けられない**ので、
+      // これが無いとプラグインは差分画像を非サブトラクションとして測ってしまう。
+      getXaState: (tileId) => {
+        const id = tileId ?? resolveTargets()[0];
+        if (!id) return null;
+        const x = queryViewerCommand(id, (cmd) => cmd.getXaState());
+        return x ? { tileId: id, ...x } : null;
+      },
       // H5: ROI の読み出し。tileId 省略時は**対象タイル全部**を読む（H1〜H4 は「先頭タイル」だが、
       // 時系列の計測ではベースラインと追跡を並べて開くのが普通なので、まとめて読める方が素直）。
       getRois: (tileId) => {

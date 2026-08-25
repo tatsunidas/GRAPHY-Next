@@ -328,6 +328,63 @@ export interface ViewerTarget extends ViewerTargetInfo {
   tileId: string;
 }
 
+/**
+ * 表示中スライスの**空間校正**（プラグイン host API の H35）。
+ *
+ * <p>🔴 **数値だけでは足りない。** mm/px は `getPixelData().spacing` からも取れるが、
+ * それが**実測（カテーテル法）なのか、装置の校正値なのか、幾何近似なのか、未校正なのか**が
+ * 分からない。アンギオの設計は「近似には近似と書く」を要求している
+ * （`fw/angio-design.md` §7.4）ので、出自を渡さないと**プラグインは正しい注記を書けない**。
+ *
+ * <p>いまは **XA / XRF でだけ解決する**（`viewer/xaCalibration.ts` の P0〜P7 連鎖）。
+ * 他モダリティは `PixelSpacing` をそのまま使う世界で「出自」の概念が無いので **null を返す**
+ * ——「校正済み」と嘘をつくより、無いことを伝えるほうがよい。
+ */
+export interface ViewerSpatialCalibration {
+  imageId: string;
+  /** 行方向 mm/px。**未校正なら null**（px のまま）。 */
+  mmPerPxRow: number | null;
+  /** 列方向 mm/px。非等方はそのまま 2 値で渡す（平均して潰さない）。 */
+  mmPerPxCol: number | null;
+  /** 出自の識別子（`user-catheter` / `dicom-fiducial` / `geometric-sid-sod` / `none` 等）。 */
+  source: string;
+  confidence: "high" | "medium" | "low" | "none";
+  /** 表示の縮退区分。`approximate` なら「近似」と書く義務がある。 */
+  tier: "calibrated" | "approximate" | "uncalibrated";
+  /** その値が妥当な平面（`fiducial-depth` / `isocenter` / `central-ray` / `detector` / `unknown`）。 */
+  plane: string;
+  /** 人向けの根拠文字列（そのまま画面に出してよい）。 */
+  provenance: string;
+  /** 警告の識別子（装置値と 10% 以上ずれている 等）。 */
+  warnings: string[];
+  /** 未校正のときの検出器面 mm/px（**計測には使わない**。ツールチップ用）。 */
+  detectorMmPerPx: number | null;
+}
+
+/**
+ * XA の表示状態（プラグイン host API の H36）。XA / XRF でなければ null。
+ *
+ * <p>🔴 **DSA 表示中は画素の意味が変わる。** 差分後は血管が正の大きな値になるので、
+ * エッジ検出の向きもプロファイルの意味も反転する。合成 imageId（`graphy-dsa:`）は
+ * 元の URL を持たないため、**受け取った側からは見分けられない**（`fw/angio-design.md` §22.3 の G2）。
+ */
+export interface ViewerXaState {
+  imageId: string;
+  /** DSA（差分）を表示しているか。 */
+  isSubtracted: boolean;
+  /** マスクフレーム（0 origin）。差分していなければ空。 */
+  maskFrames: number[];
+  /** ピクセルシフト [dx, dy]。 */
+  shift: [number, number];
+  /** 対数変換を掛けているか。 */
+  logarithmic: boolean;
+  /** `PixelIntensityRelationship (0028,1040)`（LOG / LIN）。読めなければ null。 */
+  pixelIntensityRelationship: string | null;
+  /** 表示中のフレーム（0 origin）と総数。 */
+  frameIndex: number;
+  frameCount: number;
+}
+
 /** 画面視点での H2。 */
 export interface ViewerTileViewState extends ViewerViewState {
   tileId: string;
@@ -340,6 +397,16 @@ export interface ViewerTilePixelData extends ViewerPixelData {
 
 /** 画面視点での H5。どのタイルで読んだ ROI かが要るので tileId を持つ。 */
 export interface ViewerTileRoi extends ViewerRoi {
+  tileId: string;
+}
+
+/** 画面視点での H35。どのタイルの校正かが要る（tileId 省略時は先頭タイルが答える）。 */
+export interface ViewerTileSpatialCalibration extends ViewerSpatialCalibration {
+  tileId: string;
+}
+
+/** 画面視点での H36。 */
+export interface ViewerTileXaState extends ViewerXaState {
   tileId: string;
 }
 
@@ -367,6 +434,13 @@ export interface ViewerCommands {
   getTargetInfo(): ViewerTargetInfo | null;
   /** いまの表示状態（W/L・LUT・反転・affine）。プラグイン host API の H2。取得不能なら null。 */
   getViewState(): ViewerViewState | null;
+  /**
+   * 表示中スライスの空間校正と**その出自**（H35）。XA / XRF 以外は null。
+   * 読み出しは `viewer/xaCalibrationProvider.ts` に委譲する（校正の単一入口）。
+   */
+  getSpatialCalibration(): ViewerSpatialCalibration | null;
+  /** XA の表示状態（DSA・フレーム軸）（H36）。XA / XRF でなければ null。 */
+  getXaState(): ViewerXaState | null;
   /**
    * スライス 1 枚の校正済み画素。プラグイン host API の H3。取得不能・範囲外なら null。
    * 読み出しは `pixelCalibration.readModalitySlice()` に委譲する（校正の単一入口）。
