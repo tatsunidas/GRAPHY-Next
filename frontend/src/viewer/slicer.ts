@@ -33,6 +33,7 @@ import {
 } from "@cornerstonejs/tools";
 import { buildMprVolume, type BuildVolumeResult } from "./mpr";
 import { getOrCreateVoiSync } from "./sync";
+import { installWheelSliceGate } from "./wheelScroll";
 import type { ReslicePlane, ResliceVolume, Vec3 } from "./reslice";
 
 export { buildMprVolume };
@@ -136,6 +137,10 @@ export async function setupSlicerMpr(
       await vp.setVolumes([{ volumeId }]);
     }),
   );
+
+  // ホイールは StackScroll（スライス送り）。Cornerstone はイベント 1 件ごとに 1 スライス送るので、
+  // 高分解能ホイール／トラックパッドでは一気に飛ぶ。1 ノッチ = 1 スライスに間引く。
+  for (const el of [els.axial, els.coronal, els.sagittal, els.recon]) installWheelSliceGate(el);
 
   let tg = ToolGroupManager.getToolGroup(toolGroupId);
   if (tg) ToolGroupManager.destroyToolGroup(toolGroupId);
@@ -688,6 +693,7 @@ export async function setupReconViewport(
   engine.setViewports([
     { viewportId, type: ViewportType.ORTHOGRAPHIC, element: el, defaultOptions: { orientation: OrientationAxis.AXIAL, background: [0, 0, 0] as Types.Point3 } },
   ]);
+  installWheelSliceGate(el); // 1 ノッチ = 1 スライス（上と同じ理由）
   let tg = ToolGroupManager.getToolGroup(toolGroupId);
   if (tg) ToolGroupManager.destroyToolGroup(toolGroupId);
   tg = ToolGroupManager.createToolGroup(toolGroupId);

@@ -46,6 +46,7 @@ import {
 import { reapplyModeRendering, removeVolumeSafe } from "../viewer/volumeRender";
 import { geomFromIndexToWorld } from "./pluginMeshApi";
 import { createValueStack, releaseValueStack, autoWindow } from "./pluginVolumeScheme";
+import { installWheelSliceGate } from "../viewer/wheelScroll";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
@@ -277,6 +278,9 @@ export async function mountValueViewport(
   }
 
   attachTools(base.toolGroupId, base.viewportId, "2d");
+  // ホイールは 2D 面だけスライス送り。1 ノッチ = 1 スライスに間引く（3D 面はホイールが
+  // Zoom なので付けない。間引くと拡大縮小が粗くなる）。
+  installWheelSliceGate(baseEl);
   const stopResize = observeResize(el, engine);
   base.viewport.render();
   overlay?.viewport.render();

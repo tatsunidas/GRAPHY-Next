@@ -43,6 +43,7 @@ import {
 import { getOrCreateVoiSync } from "./sync";
 import { computeOrientationMarkers, type OrientationMarkers } from "./orientation";
 import { getModalityCalibration } from "./pixelCalibration";
+import { installWheelSliceGate } from "./wheelScroll";
 import { VolumeMemoryExceededError } from "./volumeMemory";
 
 /** MPR の VOI(W/L) 同期 ID。3 面は同一ボリュームを見るため VOI は絶対値同期でよい。 */
@@ -338,6 +339,10 @@ export async function setupMprViewports(
       },
     })),
   );
+
+  // ホイールは StackScroll（スライス送り）。Cornerstone はイベント 1 件ごとに 1 スライス送るため、
+  // 高分解能ホイール／トラックパッドでは一気に飛ぶ。1 ノッチ = 1 スライスに間引く。
+  for (const s of specs) installWheelSliceGate(s.el);
 
   const viewportIds = specs.map((s) => s.id);
   await Promise.all(

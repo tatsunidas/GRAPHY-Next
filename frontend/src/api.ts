@@ -540,6 +540,12 @@ export interface ImportResult {
   imported: number;
   skipped: number;
   failed: number;
+  /**
+   * 取り込んだうち **StudyDate が空のスタディ数**。検索の既定条件は「今日」で、
+   * 日付範囲を指定すると検査日の無いスタディは SQL の NULL 比較で必ず除外される
+   * （＝取り込めているのに一覧に出ない）。0 より大きいときは UI で注意を出す。
+   */
+  studiesWithoutDate: number;
   errors: string[];
 }
 

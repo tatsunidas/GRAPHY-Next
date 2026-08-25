@@ -87,6 +87,19 @@ export function SearchPanel({
     const f: StudyFilters = { ...filters, studyDateFrom: from, studyDateTo: to };
     onSearchRef.current(f);
   };
+  // 「全期間」= 日付条件そのものを外す（1900/01/01〜今日 ではない）。
+  // 🔴 StudyDate は Type 2（空を許す）で、範囲を指定すると SQL の NULL 比較により
+  // 検査日の無いスタディは必ず除外される。日付欄を空にする経路が無いと、取り込めているのに
+  // 一覧から永久に見えない（実際に「インポートに失敗した」と誤読された・2026-08-25）。
+  const pickAll = () => {
+    setDateFrom("");
+    setDateTo("");
+    const f: StudyFilters = { ...filters };
+    delete f.studyDateFrom;
+    delete f.studyDateTo;
+    // 他条件も空なら {} ＝無条件検索。明示操作なので runSearch の確認ダイアログは挟まない。
+    onSearchRef.current(f);
+  };
   const pickToday = () => setRange(todayStr, todayStr);
   const pickYesterday = () => {
     const y = ymd(addDays(new Date(), -1));
@@ -149,6 +162,9 @@ export function SearchPanel({
           />
         </div>
         <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+          <button data-testid="search-allperiod-chip" onClick={pickAll} style={chip}>
+            {t("main.search.allPeriod")}
+          </button>
           <button onClick={pickToday} style={chip}>{t("main.search.today")}</button>
           <button onClick={pickYesterday} style={chip}>{t("main.search.yesterday")}</button>
           <button onClick={pickWeek} style={chip}>{t("main.search.week")}</button>
