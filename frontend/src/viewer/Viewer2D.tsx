@@ -96,7 +96,7 @@ import { LoadingSpinner } from "./LoadingSpinner";
 // （ここで PixelSpacing やタグを直に読むと、本体の表示とプラグインの数値がずれる）。
 import { calibrationForImageId } from "./xaCalibrationProvider";
 import { toViewerSpatialCalibration } from "./xaCalibration";
-import { dsaStateForImageId, readXaDsaTags } from "./dsaLoader";
+import { dsaNativeImageId, dsaStateForImageId, readXaDsaTags } from "./dsaLoader";
 
 type ViewSnapshot = { transform: ViewTransform; voi: { lower: number; upper: number } | null };
 
@@ -1760,8 +1760,14 @@ export function Viewer2D({
   ): Promise<ViewerSrResult> => {
     const ctx = roiContextRef.current;
     if (!ctx) return { ok: false, error: "no series context" };
+    // 🚨 DSA 表示中は並びが**合成 imageId**（`graphy-dsa:`）になっており、URL を持たないので
+    //    SOP UID が取り出せない。ネイティブへ解決してから突き合わせる——しないと
+    //    **差分を表示している間だけ保存が全部拒否される**（本体の解析ダイアログは
+    //    ネイティブの並びを別に持っているので、この経路にしか出ない）。
     const known = new Set(
-      imageIdsRef.current.map((id) => sopUidFromImageId(id)).filter((v): v is string => !!v),
+      imageIdsRef.current
+        .map((id) => sopUidFromImageId(dsaNativeImageId(id) ?? id))
+        .filter((v): v is string => !!v),
     );
     const refs =
       req.kind === "qca3d"
