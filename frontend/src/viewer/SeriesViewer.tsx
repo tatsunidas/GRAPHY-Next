@@ -71,7 +71,7 @@ import {
 import { advanceAnchor, sliceStepsFromDrag } from "./touchScroll";
 import { createWheelStepper } from "./wheelScroll";
 import { installDebugApi, countStackSwap } from "./debugApi";
-import { matchesCombo } from "../shortcuts/registry";
+import { matchesCombo, matchesShortcut } from "../shortcuts/registry";
 import { fetchSeriesLayout, type Instance } from "../api";
 import { fetchSettings } from "../settings/settingsApi";
 import { useI18n } from "../i18n/i18n";
@@ -885,10 +885,11 @@ export function SeriesViewer({
       // コントロール（スライダー/ボタン/セレクト）操作中は誤爆させない。
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || tag === "BUTTON") return;
-      if (matchesCombo("ArrowUp", e)) {
+      // ↑↓ に加えてテンキー 8/2 も受ける（NumLock 非依存・1 打鍵 = 1 スライス）。
+      if (matchesShortcut("nav-prev-slice", e)) {
         step(-1);
         e.preventDefault();
-      } else if (matchesCombo("ArrowDown", e)) {
+      } else if (matchesShortcut("nav-next-slice", e)) {
         step(1);
         e.preventDefault();
       } else if (matchesCombo("Home", e)) {

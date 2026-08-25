@@ -2,7 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import { SHORTCUTS, displayCombo, type ShortcutGroup } from "./registry";
+import { SHORTCUTS, displayShortcut, type ShortcutGroup } from "./registry";
 import { useI18n } from "../i18n/i18n";
 
 export function KeyboardHelp({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -37,7 +37,7 @@ export function KeyboardHelp({ open, onClose }: { open: boolean; onClose: () => 
                     {items.map((s) => (
                       <tr key={s.id} style={{ borderBottom: "1px solid #f1f3f5" }}>
                         <td style={{ padding: "6px 10px", width: 160 }}>
-                          <kbd style={kbd}>{displayCombo(s.combo)}</kbd>
+                          <kbd style={kbd}>{displayShortcut(s)}</kbd>
                         </td>
                         <td style={{ padding: "6px 10px", color: s.planned ? "#9aa7b3" : "#222" }}>
                           {t(s.descriptionKey)}
