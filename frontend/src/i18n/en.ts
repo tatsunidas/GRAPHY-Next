@@ -526,6 +526,7 @@ export const en: Record<string, string> = {
   "viewer2d.plugin.sr.title": "Confirm measurement report save by plug-in",
   "viewer2d.plugin.sr.lead": "The plug-in \"{{name}} {{version}}\" wants to save its measurements as a DICOM Structured Report (SR).",
   "viewer2d.plugin.sr.seriesDescription": "Series description",
+  "viewer2d.plugin.sr.analysis": "Analysis",
   "viewer2d.plugin.sr.groups": "Measurement groups (lesions)",
   "viewer2d.plugin.sr.findings": "Finding texts",
   "viewer2d.plugin.sr.notice": "The report is produced by the plug-in and is not validated for diagnostic use (it is recorded as unverified). The original images are not modified.",

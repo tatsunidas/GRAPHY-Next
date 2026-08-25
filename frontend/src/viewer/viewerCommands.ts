@@ -10,7 +10,13 @@
  * Viewer2D 内部の命令的操作（Fit/回転/Invert/LUT…）を外から起動するための薄い仲介。
  * referenceLines/sliceSync と同じモジュールレベル・レジストリ方式。
  */
-import type { LutData } from "../api";
+import type {
+  LutData,
+  Qca3dSrRequest,
+  QcaSrRequest,
+  QlvSrRequest,
+  QvaSrRequest,
+} from "../api";
 
 /**
  * タイル 1 枚が「いま何を表示しているか」（プラグイン host API の H1・fw/plugin-architecture.md §7）。
@@ -151,6 +157,24 @@ export interface ViewerSrMeasurementGroup {
   /** 計測値。`longAxis` / `shortAxis` のみ（未知の種別は backend が拒否する）。 */
   measurements: { type: "longAxis" | "shortAxis"; value: number; unit?: string }[];
 }
+
+/**
+ * プラグインが書くアンギオ解析レポート（H37 ／ `fw/angio-design.md` §22.3 の G3）。
+ *
+ * <p>🔴 **`studyInstanceUid` は受け取らない。** どのスタディに付けるかは**本体が決める**
+ * （タイルが表示している検査）。プラグインに指定させると、開いてもいない他患者の検査へ
+ * レポートを書けてしまう。同じ理由で、参照する SOP は**開いているタイルの並びの中**に
+ * 無ければ拒否する（H10 の「開いているタイルからのみ解決」と同じ考え方）。
+ *
+ * <p>🔴 **中身は本体の解析ダイアログが出すものと同一**で、書き手も同じ `*SrWriter`。
+ * プラグインが渡すのは「何を測ったか」だけで、SR の構造・UID 採番・患者/検査属性の継承は
+ * 本体が行う（**DICOM はプラグインに書かせない**＝H4b / H9 と同じ）。
+ */
+export type ViewerAngioReportRequest =
+  | { kind: "qca"; qca: Omit<QcaSrRequest, "studyInstanceUid"> }
+  | { kind: "qva"; qva: Omit<QvaSrRequest, "studyInstanceUid"> }
+  | { kind: "qlv"; qlv: Omit<QlvSrRequest, "studyInstanceUid"> }
+  | { kind: "qca3d"; qca3d: Omit<Qca3dSrRequest, "studyInstanceUid"> };
 
 export interface ViewerSrResult {
   ok: boolean;
@@ -483,6 +507,14 @@ export interface ViewerCommands {
    */
   saveStructuredReport(
     req: ViewerSrRequest,
+    producer: { id: string; name: string; version: string },
+  ): Promise<ViewerSrResult>;
+  /**
+   * アンギオ解析の結果を **本体と同じ SR** として保存する（H37）。
+   * スタディは表示中のものを本体が入れ、参照 SOP がその並びに無ければ拒否する。
+   */
+  saveAngioReport(
+    req: ViewerAngioReportRequest,
     producer: { id: string; name: string; version: string },
   ): Promise<ViewerSrResult>;
   /** 左ドラッグに割り当てる操作/計測/ブラシツールを切替（toolName は Cornerstone のツール名 or 消しゴム id）。 */
