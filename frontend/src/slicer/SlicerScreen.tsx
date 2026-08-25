@@ -20,6 +20,9 @@ import { RenderingEngine } from "@cornerstonejs/core";
 import { fetchSeries, fetchInstances, fetchSeriesLayout, prefetchSeries, type AppStatus, type Study, type Series, type SeriesLayoutDto } from "../api";
 import { ensureCornerstoneInitialized } from "../viewer/cornerstoneSetup";
 import { imageIdForInstance, imageIdForCell } from "../viewer/imageId";
+import { stepViewportSlice } from "../viewer/sliceStep";
+import { createWheelStepper } from "../viewer/wheelScroll";
+import { matchesShortcut } from "../shortcuts/registry";
 import { getAppliedVolumeMaxMb, isCacheSizeExceeded } from "../viewer/volumeMemory";
 import { confirmVolumeMemory } from "../viewer/volumeMemoryGuard";
 import {
@@ -496,15 +499,16 @@ export function SlicerScreen({ status }: { status: AppStatus | null }) {
     [startDrag],
   );
 
-  // ホイール: 面法線方向に center をスクロール（1 ステップ = 最小 voxel 間隔）。
-  const onCellWheel = useCallback(
-    (axis: OrthoAxis, e: React.WheelEvent) => {
+  // 面法線方向に center を 1 ステップ動かす（1 ステップ = 最小 voxel 間隔）。
+  // 🔴 この 3 面は Cornerstone のビューポートではなく自前描画のパネルなので、
+  // `StackScrollTool` も `installWheelSliceGate()` も効かない。送りはここが唯一の出所。
+  const stepAlongNormal = useCallback(
+    (axis: OrthoAxis, dir: number) => {
       const vol = volRef.current;
       const g = geomRef.current;
       const layout = layoutsRef.current?.[axis];
-      if (!vol || !g || !layout) return;
+      if (!vol || !g || !layout || !dir) return;
       const stepMm = Math.max(0.1, Math.min(vol.spacing[0], vol.spacing[1], vol.spacing[2]));
-      const dir = e.deltaY > 0 ? 1 : -1;
       const n = layout.normal;
       const ng: SlicerGeometry = { ...g, center: [g.center[0] + n[0] * stepMm * dir, g.center[1] + n[1] * stepMm * dir, g.center[2] + n[2] * stepMm * dir] };
       setGeom(ng);
@@ -512,6 +516,41 @@ export function SlicerScreen({ status }: { status: AppStatus | null }) {
     },
     [recompute],
   );
+
+  // ホイール: 1 ノッチ = 1 ステップ（`wheelScroll.ts`）。面ごとに端数を持つので面ごとに 1 つ作る。
+  const wheelSteppers = useRef<Record<string, ReturnType<typeof createWheelStepper>>>({});
+  const onCellWheel = useCallback(
+    (axis: OrthoAxis, e: React.WheelEvent) => {
+      const steppers = wheelSteppers.current;
+      if (!steppers[axis]) steppers[axis] = createWheelStepper();
+      const d = steppers[axis](e.deltaY, e.deltaMode, e.timeStamp);
+      if (d !== 0) stepAlongNormal(axis, d);
+    },
+    [stepAlongNormal],
+  );
+
+  // キーボード: ↑↓ / テンキー 8・2 で 1 打鍵 = 1 ステップ（面をクリックしてフォーカスしてから）。
+  const onCellKey = useCallback(
+    (axis: OrthoAxis, e: React.KeyboardEvent<HTMLDivElement>) => {
+      const prev = matchesShortcut("nav-prev-slice", e.nativeEvent);
+      const next = matchesShortcut("nav-next-slice", e.nativeEvent);
+      if (!prev && !next) return;
+      e.preventDefault();
+      stepAlongNormal(axis, next ? 1 : -1);
+    },
+    [stepAlongNormal],
+  );
+
+  // 再構成プレビュー面は Cornerstone のスタック。こちらはツールを介さず 1 スライス送る。
+  const onReconKey = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    const prev = matchesShortcut("nav-prev-slice", e.nativeEvent);
+    const next = matchesShortcut("nav-next-slice", e.nativeEvent);
+    if (!prev && !next) return;
+    e.preventDefault();
+    const engine = engineRef.current;
+    if (!engine) return;
+    stepViewportSlice(engine.getViewport(RECON_VP), next ? 1 : -1);
+  }, []);
 
   useEffect(() => {
     const onMove = (e: PointerEvent) => {
@@ -829,10 +868,17 @@ export function SlicerScreen({ status }: { status: AppStatus | null }) {
             onCellPointerDown={onCellPointerDown}
             onHandleDown={startDrag}
             onWheel={onCellWheel}
+            onKey={onCellKey}
           />
         ))}
         <div style={cell}>
-          <div ref={reconRef} style={vpEl} onContextMenu={(e) => e.preventDefault()} />
+          <div
+            ref={reconRef}
+            style={vpEl}
+            tabIndex={0}
+            onContextMenu={(e) => e.preventDefault()}
+            onKeyDown={onReconKey}
+          />
           <span style={{ ...cellLabel, color: "#ff9a5a" }}>{t("slicer.recon")}</span>
         </div>
         {phase !== "ready" && (
@@ -904,6 +950,7 @@ function PanelCell({
   onCellPointerDown,
   onHandleDown,
   onWheel,
+  onKey,
 }: {
   label: string;
   color: string;
@@ -917,6 +964,8 @@ function PanelCell({
   onCellPointerDown: (axis: OrthoAxis, e: React.PointerEvent) => void;
   onHandleDown: (kind: "move" | "rotate", axis: OrthoAxis, e: React.PointerEvent) => void;
   onWheel: (axis: OrthoAxis, e: React.WheelEvent) => void;
+  /** キーボードのスライス送り（↑↓ / テンキー 8・2）。面をクリックしてフォーカスしてから効く。 */
+  onKey: (axis: OrthoAxis, e: React.KeyboardEvent<HTMLDivElement>) => void;
 }) {
   const n = bands?.length ?? 0;
   const vb = layout ? `0 0 ${layout.widthPx} ${layout.heightPx}` : "0 0 1 1";
@@ -932,7 +981,15 @@ function PanelCell({
     return [x / p.length, y / p.length];
   };
   return (
-    <div ref={cellRef} style={cell} onPointerDown={(e) => onCellPointerDown(axis, e)} onWheel={(e) => onWheel(axis, e)} onContextMenu={(e) => e.preventDefault()}>
+    <div
+      ref={cellRef}
+      style={cell}
+      tabIndex={0}
+      onPointerDown={(e) => onCellPointerDown(axis, e)}
+      onWheel={(e) => onWheel(axis, e)}
+      onKeyDown={(e) => onKey(axis, e)}
+      onContextMenu={(e) => e.preventDefault()}
+    >
       <canvas ref={canvasRef} style={panelCanvas} />
       <svg style={svgOverlay} viewBox={vb} preserveAspectRatio="xMidYMid meet">
         {(bands ?? []).map((p, i) =>

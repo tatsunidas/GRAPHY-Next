@@ -221,7 +221,15 @@ Fusion の有無で画像描画領域の高さが変わり、**横並び比較�
   要素に bubble で付けており、実標的はその中の canvas なので、この要素の capture が必ず先）。
   ⚠ **ホイールがスライス送り以外に割り当たっている面には付けない**——プラグインの 3D 面は
   ホイールが Zoom なので、間引くと拡大縮小が粗くなる（`attachTools(kind)` の分岐と対応）。
-  付けた場所: `mpr.ts`（3 面）／`slicer.ts`（4 面＋単一面）／`pluginViewportApi.ts`（2D 面のみ）。
+  付けた場所: `mpr.ts`（3 面）／`slicer.ts`（`setupSlicerMpr` の 4 面・`setupReconViewport` の
+  再構成面）／`pluginViewportApi.ts`（2D 面のみ）。
+  ⚠️ **訂正（2026-08-25）**: **Slicer の直交 3 面は Cornerstone のビューポートではない**
+  ——自前描画のパネルで、送りは `SlicerScreen.tsx` の `onCellWheel`（法線方向に最小 voxel 間隔で
+  center を動かす）が唯一の出所。`StackScrollTool` も間引きも効かないので、あちらには
+  `createWheelStepper()` を直接組み込んだ。`setupSlicerMpr` は**現在どこからも呼ばれていない**
+  （そこに付けた間引きは効いていない）。
+  ⚠️ キーボードのスライス送り（↑↓ / テンキー 8・2）は別経路 `viewer/sliceStep.ts`。
+  正本は `fw/keyboard-shortcuts.md`。
 - **5D(ZCT) モデル** `viewer/seriesLayout.ts`（GRAPHY Praparat 準拠の Z×C×T）。現状 nC=nT=1。
   5D 時に C/T スライダーを表示する UI は実装済み。
 - **5D(ZCT) 派生＝実装済み（DICOM 準拠・Classic 単一フレーム）**:

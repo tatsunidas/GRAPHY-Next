@@ -18,6 +18,15 @@ export interface ShortcutDef {
   descriptionKey: string;
   group: ShortcutGroup;
   planned?: boolean;
+  /**
+   * 追加で受ける物理キー（`KeyboardEvent.code`）。**NumLock に依存しない**判定に使う。
+   *
+   * <p>テンキーは NumLock が入っていると `e.key` が `"8"`（ただの数字）になり、
+   * 切っていると `"ArrowUp"` になる。`combo`（＝`e.key` 判定）だけだと
+   * **NumLock の状態で効いたり効かなかったりする**ので、物理キーでも受ける。
+   * 判定は {@link matchesShortcut}（修飾キー無しのときだけ一致）。
+   */
+  codes?: string[];
 }
 
 export const SHORTCUTS: ShortcutDef[] = [
@@ -38,8 +47,9 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "tool-crosshairs", combo: "C", descriptionKey: "sc.toolCrosshairs", group: "tools", planned: true },
 
   // --- 画像ナビゲーション ---
-  { id: "nav-next-slice", combo: "ArrowDown", descriptionKey: "sc.navNextSlice", group: "navigation" },
-  { id: "nav-prev-slice", combo: "ArrowUp", descriptionKey: "sc.navPrevSlice", group: "navigation" },
+  // テンキーの 2 / 8 も受ける（NumLock の状態に関係なく 1 打鍵 = 1 スライス）。
+  { id: "nav-next-slice", combo: "ArrowDown", codes: ["Numpad2"], descriptionKey: "sc.navNextSlice", group: "navigation" },
+  { id: "nav-prev-slice", combo: "ArrowUp", codes: ["Numpad8"], descriptionKey: "sc.navPrevSlice", group: "navigation" },
   { id: "nav-next-series", combo: "ArrowRight", descriptionKey: "sc.navNextSeries", group: "navigation", planned: true },
   { id: "nav-prev-series", combo: "ArrowLeft", descriptionKey: "sc.navPrevSeries", group: "navigation", planned: true },
   { id: "nav-cine", combo: "Space", descriptionKey: "sc.navCine", group: "navigation" },
@@ -93,4 +103,42 @@ export function matchesCombo(combo: string, e: KeyboardEvent): boolean {
 
   const eventKey = key === "Space" ? " " : key;
   return e.key === eventKey || e.key.toLowerCase() === eventKey.toLowerCase();
+}
+
+/** `e.code`（物理キー）の表示名。テンキーは環境で刻印が違うので "Num" を前置する。 */
+const CODE_SYM: Record<string, string> = {
+  Numpad0: "Num 0",
+  Numpad1: "Num 1",
+  Numpad2: "Num 2",
+  Numpad3: "Num 3",
+  Numpad4: "Num 4",
+  Numpad5: "Num 5",
+  Numpad6: "Num 6",
+  Numpad7: "Num 7",
+  Numpad8: "Num 8",
+  Numpad9: "Num 9",
+};
+
+/** 一覧に出す表示文字列（別キーがあれば " / " で併記）。 */
+export function displayShortcut(def: ShortcutDef): string {
+  const main = displayCombo(def.combo);
+  if (!def.codes?.length) return main;
+  return [main, ...def.codes.map((c) => CODE_SYM[c] ?? c)].join(" / ");
+}
+
+/**
+ * ショートカット定義（id）に一致するか。`combo`（`e.key`）に加えて
+ * `codes`（`e.code`＝物理キー）でも受ける。
+ *
+ * <p>🔴 `codes` は**修飾キーが 1 つも押されていないときだけ**一致させる。
+ * 物理キーは配列に依らず素通ししてしまうので、`Ctrl+Numpad8` のような組み合わせを
+ * 拾うと他の割り当てと衝突する。
+ */
+export function matchesShortcut(id: string, e: KeyboardEvent): boolean {
+  const def = SHORTCUTS.find((s) => s.id === id);
+  if (!def) return false;
+  if (matchesCombo(def.combo, e)) return true;
+  if (!def.codes?.length) return false;
+  if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return false;
+  return def.codes.includes(e.code);
 }

@@ -25,6 +25,8 @@ import { getAppliedVolumeMaxMb, isCacheSizeExceeded } from "../viewer/volumeMemo
 import { confirmVolumeMemory } from "../viewer/volumeMemoryGuard";
 import { useDeviceClass } from "../mobile/useDeviceClass";
 import { imageIdForInstance } from "../viewer/imageId";
+import { stepViewportSlice } from "../viewer/sliceStep";
+import { matchesShortcut } from "../shortcuts/registry";
 import {
   buildMprVolume,
   setupMprViewports,
@@ -112,6 +114,26 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
     }
     setOverlays(next);
   }, [elFor]);
+
+  /**
+   * キーボードでのスライス送り（1 打鍵 = 1 スライス）。
+   *
+   * <p>ホイールは `StackScrollTool` が受けるが、こちらはツールを介さず直接送る。
+   * ⚠️ Crosshairs で 3 面が連動するので、送ったあとは 3 面ぶんのオーバーレイを更新する。
+   */
+  const onCellKey = useCallback(
+    (viewportId: string, e: React.KeyboardEvent<HTMLDivElement>) => {
+      const prev = matchesShortcut("nav-prev-slice", e.nativeEvent);
+      const next = matchesShortcut("nav-next-slice", e.nativeEvent);
+      if (!prev && !next) return;
+      e.preventDefault();
+      const engine = engineRef.current;
+      if (!engine) return;
+      stepViewportSlice(engine.getViewport(viewportId), next ? 1 : -1);
+      refreshOverlays();
+    },
+    [refreshOverlays],
+  );
 
   const start = useCallback(async () => {
     // ctx 読み取り。
@@ -383,13 +405,16 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
          */}
         <Cell label={t("mpr.axial")} color="#00dc00" refEl={axialRef} overlay={overlays[VIEWPORT_IDS.axial]}
           stacked={singlePane} hidden={singlePane && activePane !== "axial"}
-          onMove={(e) => onCellMove(VIEWPORT_IDS.axial, e)} onLeave={() => setProbe(null)} />
+          onMove={(e) => onCellMove(VIEWPORT_IDS.axial, e)} onLeave={() => setProbe(null)}
+          onKey={(e) => onCellKey(VIEWPORT_IDS.axial, e)} />
         <Cell label={t("mpr.sagittal")} color="#dcdc00" refEl={sagittalRef} overlay={overlays[VIEWPORT_IDS.sagittal]}
           stacked={singlePane} hidden={singlePane && activePane !== "sagittal"}
-          onMove={(e) => onCellMove(VIEWPORT_IDS.sagittal, e)} onLeave={() => setProbe(null)} />
+          onMove={(e) => onCellMove(VIEWPORT_IDS.sagittal, e)} onLeave={() => setProbe(null)}
+          onKey={(e) => onCellKey(VIEWPORT_IDS.sagittal, e)} />
         <Cell label={t("mpr.coronal")} color="#00a0ff" refEl={coronalRef} overlay={overlays[VIEWPORT_IDS.coronal]}
           stacked={singlePane} hidden={singlePane && activePane !== "coronal"}
-          onMove={(e) => onCellMove(VIEWPORT_IDS.coronal, e)} onLeave={() => setProbe(null)} />
+          onMove={(e) => onCellMove(VIEWPORT_IDS.coronal, e)} onLeave={() => setProbe(null)}
+          onKey={(e) => onCellKey(VIEWPORT_IDS.coronal, e)} />
         {phase !== "ready" && (
           <div style={overlay}>
             <div style={overlayBox}>{busy ? t("mpr.loading") : message}</div>
@@ -409,6 +434,7 @@ function Cell({
   hidden = false,
   onMove,
   onLeave,
+  onKey,
 }: {
   label: string;
   color: string;
@@ -420,6 +446,8 @@ function Cell({
   hidden?: boolean;
   onMove?: (e: React.MouseEvent<HTMLDivElement>) => void;
   onLeave?: () => void;
+  /** キーボードのスライス送り（↑↓ / テンキー 8・2）。面をクリックしてフォーカスしてから効く。 */
+  onKey?: (e: React.KeyboardEvent<HTMLDivElement>) => void;
 }) {
   const m = overlay?.markers ?? null;
   return (
@@ -433,9 +461,12 @@ function Cell({
       <div
         ref={refEl}
         style={vpEl}
+        // クリックでフォーカスが乗り、↑↓ / テンキー 8・2 が届くようにする。
+        tabIndex={0}
         onContextMenu={(e) => e.preventDefault()}
         onMouseMove={onMove}
         onMouseLeave={onLeave}
+        onKeyDown={onKey}
       />
       <span style={{ ...cellLabel, color }}>{label}</span>
       {overlay && overlay.total > 0 && (
