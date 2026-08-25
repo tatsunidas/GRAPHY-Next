@@ -25,7 +25,7 @@ export interface PluginSaveRequest {
    * 何を保存するか。**画像シリーズと計測レポート（SR）では中身が違う**ので、
    * 「何がどこへ書かれるのか」を正しく提示するために分ける。
    */
-  kind?: "series" | "sr" | "angio-sr";
+  kind?: "series" | "sr" | "angio-sr" | "angio-ps";
   /** SR のとき: 計測グループ（病変）数と所見テキスト数。 */
   groupCount?: number;
   findingCount?: number;
@@ -56,12 +56,14 @@ export function PluginSaveConfirmDialog({
 }) {
   const { t } = useI18n();
   const isAngio = request.kind === "angio-sr";
+  // 表示状態（GSPS）は「計測」ではないので SR 用の文言に寄せない。
+  const isPs = request.kind === "angio-ps";
   const isSr = request.kind === "sr" || isAngio;
   // **document.body へ出し、最上位に置く。** プラグインの UI は本体の DOM とは別に
   // body へ挿し込まれ、任意の z-index を持てる。同じツリー内で z-index を競わせると
   // スタッキングコンテキスト次第で負ける（実機で SR 保存の同意ダイアログが
   // プラグインのパネルに隠れた）。同意を求める画面が読めないのは同意の意味を損なう。
-  const key = (name: string): string => `viewer2d.plugin.${isSr ? "sr" : "save"}.${name}`;
+  const key = (name: string): string => `viewer2d.plugin.${isPs ? "ps" : isSr ? "sr" : "save"}.${name}`;
   return createPortal(
     <div style={backdrop} data-testid="plugin-save-confirm">
       <div style={panel}>
@@ -77,7 +79,12 @@ export function PluginSaveConfirmDialog({
                 {/* 保存時に本体が付ける接頭辞をそのまま見せる（一覧での見え方と一致させる）。 */}
                 <td style={td} data-testid="plugin-save-description">{`[Plugin] ${request.seriesDescription}`}</td>
               </tr>
-              {isAngio ? (
+              {isPs ? (
+                <tr>
+                  <th style={th}>{t("viewer2d.plugin.ps.contains")}</th>
+                  <td style={td} data-testid="plugin-save-ps">{t("viewer2d.plugin.ps.containsValue")}</td>
+                </tr>
+              ) : isAngio ? (
                 <tr>
                   <th style={th}>{t("viewer2d.plugin.sr.analysis")}</th>
                   <td style={td} data-testid="plugin-save-analysis">

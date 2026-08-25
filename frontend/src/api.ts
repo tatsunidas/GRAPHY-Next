@@ -501,6 +501,18 @@ export interface AngioPluginSrRequest {
   qca3d?: Qca3dSrRequest | null;
 }
 
+/**
+ * プラグインが書く XA GSPS（host API の H38）。
+ * 中身と書き手は本体の経路と同一で、違うのは**出所の記録が必須**な点だけ。
+ */
+export interface AngioPluginPresentationRequest {
+  producer: { id: string; name: string; version: string };
+  presentation: AngioPresentationRequest;
+}
+
+export const createPluginXaPresentationState = (req: AngioPluginPresentationRequest) =>
+  httpSend<AngioCreated>("/api/angio/plugin-presentation-state", "POST", req);
+
 export const createPluginAngioSr = (req: AngioPluginSrRequest) =>
   httpSend<AngioCreated>("/api/angio/plugin-sr", "POST", req);
 

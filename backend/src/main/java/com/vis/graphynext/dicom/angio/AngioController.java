@@ -169,6 +169,23 @@ public class AngioController {
         }
     }
 
+    /**
+     * プラグインが書く XA GSPS（H38 ／ {@code fw/angio-design.md} §22.3 の G4）。
+     * 書き手は本体の経路と同じで、出所（プラグイン id・版）が必ず入る。
+     */
+    @PostMapping("/plugin-presentation-state")
+    public ResponseEntity<AngioStoreService.Created> createPluginPresentationState(
+            @RequestBody AngioPluginPresentationRequest req) {
+        try {
+            return ResponseEntity.ok(service.createPluginPresentationState(req));
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        } catch (IOException e) {
+            log.error("プラグインの GSPS 作成に失敗", e);
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "表示状態を保存できませんでした");
+        }
+    }
+
     private static void requireText(String v, String name) {
         if (v == null || v.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, name + " は必須です");

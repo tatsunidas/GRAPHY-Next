@@ -24,6 +24,7 @@ import type {
   ViewerRoiMeasurements,
   ViewerTarget,
   ViewerAngioReportRequest,
+  ViewerPresentationStateRequest,
   ViewerTilePixelData,
   ViewerTileSpatialCalibration,
   ViewerTileXaState,
@@ -330,6 +331,23 @@ export interface Viewer2DPluginHost extends PluginHostBase {
   saveAngioReport: (
     tileId: string | undefined,
     req: ViewerAngioReportRequest,
+  ) => Promise<ViewerSrResult>;
+  /**
+   * **表示状態（XA GSPS）を保存する**（H38）。
+   *
+   * <p>**本体が必ず確認ダイアログを出す**（抑止不可）。出所は host が入れる。
+   * DSA のマスク・ピクセルシフト・VOI・空間校正・描画が入る唯一の器なので、
+   * **解析結果を再現できる**ようにするにはこれが要る。
+   *
+   * <p>🔴 H37 と同じ制約——**スタディはプラグインが選べず**、参照 SOP が
+   * **そのタイルの並びに無ければ拒否**される。
+   *
+   * <p>⚠️ **読み込み（適用）の口は無い**（意図的）。GSPS をビューポートへ当てるのは表示の仕事で、
+   * プラグインは当たった結果を `getSpatialCalibration()` / `getXaState()` で見れば足りる。
+   */
+  savePresentationState: (
+    tileId: string | undefined,
+    req: ViewerPresentationStateRequest,
   ) => Promise<ViewerSrResult>;
   /**
    * ユーザーが描いた **ROI（計測・幾何注釈）を読む**（H5）。`tileId` 省略時は**対象タイル全部**

@@ -113,6 +113,52 @@ export interface ViewerViewState {
 }
 
 /**
+ * 表示状態（XA GSPS）の保存要求（`host.savePresentationState()`。**H38**）。
+ *
+ * <p>DSA のマスク・ピクセルシフト・VOI・空間校正・描画が入る**唯一の器**。
+ * これを残せないと、差分表示や校正を伴う解析は**再現できない**。
+ *
+ * <p>🔴 `studyInstanceUid` は入っていない（本体が入れる）。参照 SOP は**そのタイルが
+ * 開いている並びの中**に無ければ拒否される。座標は**画像ピクセル座標（0 origin, 小数可）**。
+ *
+ * <p>⚠️ **読み込み（適用）の口は無い**（意図的）。GSPS をビューポートへ当てるのは表示の仕事で、
+ * プラグインは当たった結果を `getSpatialCalibration()` / `getXaState()` で見れば足りる。
+ */
+export interface PresentationStateRequest {
+  seriesInstanceUid: string;
+  sopInstanceUid: string;
+  /** 対象フレーム（**1 origin**）。null / 空なら全フレーム。 */
+  frameNumbers?: number[] | null;
+  /** ContentLabel（DICOM CS: 大文字・空白不可。整形は本体が行う）。 */
+  label?: string | null;
+  description?: string | null;
+  creator?: string | null;
+  voi?: { windowCenter: number; windowWidth: number } | null;
+  invert?: boolean | null;
+  /** 0 / 90 / 180 / 270。 */
+  rotation?: number | null;
+  flipHorizontal?: boolean | null;
+  /** DSA のマスク指定。null なら非減算。 */
+  mask?: {
+    /** **1 origin**。 */
+    maskFrameNumbers: number[];
+    subPixelShiftRow?: number | null;
+    subPixelShiftCol?: number | null;
+    operation?: string | null;
+  } | null;
+  /** 空間校正。**出自（description）を必ず入れる**——数値だけ残すと意味が失われる。 */
+  calibration?: {
+    mmPerPxRow?: number | null;
+    mmPerPxCol?: number | null;
+    type?: string | null;
+    description?: string | null;
+  } | null;
+  /** 折れ線（中心線・エッジなど）。points は [x0,y0,x1,y1,...]（**0 origin**）。 */
+  polylines?: { layer: string; points: number[]; filled?: boolean; rgb?: number[] | null }[];
+  texts?: { layer: string; text: string; anchorX: number; anchorY: number }[];
+}
+
+/**
  * アンギオ解析の結果を **本体と同じ SR** で保存する要求（`host.saveAngioReport()`。**H37**）。
  *
  * <p>🔴 **`studyInstanceUid` は入っていない。** どのスタディに付けるかは本体が決める
@@ -759,6 +805,16 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * 無ければ拒否**される。3D QCA は方向 A / B の両方が開いているタイルから呼ぶこと。
    */
   saveAngioReport: (tileId: string | undefined, req: AngioReportRequest) => Promise<SrResult>;
+  /**
+   * **表示状態（XA GSPS）を保存する**（H38）。確認ダイアログは抑止不可。出所は本体が入れる。
+   *
+   * <p>🔴 H37 と同じ制約——スタディはプラグインが選べず、参照 SOP が**そのタイルの並びに
+   * 無ければ拒否**される。
+   */
+  savePresentationState: (
+    tileId: string | undefined,
+    req: PresentationStateRequest,
+  ) => Promise<SrResult>;
   /**
    * 対象タイルの **XA 表示状態**（DSA・フレーム軸）（H36）。XA / XRF でなければ null。
    *

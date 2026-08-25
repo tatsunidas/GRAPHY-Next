@@ -1115,6 +1115,33 @@ function TileGrid({
           });
         });
       },
+      // H38: 表示状態（GSPS）。**確認は抑止不可**（H4b / H9 / H37 と同じ）。
+      savePresentationState: (tileId, req, producer) => {
+        const id = tileId ?? resolveTargets()[0];
+        if (!id) return Promise.resolve({ ok: false, error: "no target tile" });
+        return new Promise((resolve) => {
+          setPluginSave({
+            request: {
+              kind: "angio-ps",
+              pluginName: producer.name,
+              pluginVersion: producer.version,
+              // backend の writer が入れる SeriesDescription をそのまま見せる。
+              seriesDescription: "GRAPHY-Next Presentation State",
+              instanceCount: 1,
+              mode,
+            },
+            onDecide: async (accepted) => {
+              setPluginSave(null);
+              if (!accepted) {
+                resolve({ ok: false, cancelled: true });
+                return;
+              }
+              const pending = queryViewerCommand(id, (c) => c.savePresentationState(req, producer));
+              resolve(pending ? await pending : { ok: false, error: "tile is not available" });
+            },
+          });
+        });
+      },
       editPresets: () => setPresetsOpen(true),
       // Z 並べ替えはシリーズレベル（seriesCommands）。動画/IPP不在は SeriesViewer 側でブロック。
       sort: (mode) => runSeriesCommand(resolveTargets(), (c) => c.setSortMode(mode)),

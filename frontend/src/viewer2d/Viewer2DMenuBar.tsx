@@ -112,6 +112,9 @@ export function Viewer2DMenuBar({
     // H37: アンギオ解析 SR。出所（id/name/version）は host がマニフェストから入れる。
     saveAngioReport: (tileId, req) =>
       actions.saveAngioReport(tileId, req, { id: m.id, name: m.name, version: m.version }),
+    // H38: 表示状態（GSPS）。出所は host が入れる。
+    savePresentationState: (tileId, req) =>
+      actions.savePresentationState(tileId, req, { id: m.id, name: m.name, version: m.version }),
     // H5: ROI の読み出しと、ROI に紐付くプラグイン属性。**pluginId は host が入れる**ので、
     // プラグインは他プラグイン（や本体）の属性名前空間に触れない。
     getRois: (tileId) => actions.getRois(tileId),
