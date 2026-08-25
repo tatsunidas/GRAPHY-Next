@@ -96,6 +96,10 @@ export function Viewer2DMenuBar({
     getTargets: () => actions.getTargets(),
     getViewState: (tileId) => actions.getViewState(tileId),
     getPixelData: (tileId, opts) => actions.getPixelData(tileId, opts),
+    // H35 / H36: 校正の出自と XA の表示状態。**画素だけ渡して意味を渡さない**のを避ける
+    // （数値は取れるのに「近似か実測か」「差分中か」が分からない状態を作らない）。
+    getSpatialCalibration: (tileId) => actions.getSpatialCalibration(tileId),
+    getXaState: (tileId) => actions.getXaState(tileId),
     // 出所ラベルはプラグイン任せにしない: host が必ずマニフェストの表示名を入れる。
     showOverlay: (tileId, overlay) => actions.showOverlay(tileId, { ...overlay, label: m.name }),
     clearOverlay: (tileId) => actions.clearOverlay(tileId),

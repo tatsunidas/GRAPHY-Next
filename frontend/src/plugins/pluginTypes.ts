@@ -24,6 +24,8 @@ import type {
   ViewerRoiMeasurements,
   ViewerTarget,
   ViewerTilePixelData,
+  ViewerTileSpatialCalibration,
+  ViewerTileXaState,
   ViewerTileRoi,
   ViewerTileViewState,
   ViewerSrMeasurementGroup,
@@ -234,6 +236,28 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * （導入時の同意画面に表示される）。
    */
   getPixelData: (tileId?: string, opts?: ViewerPixelDataOptions) => Promise<ViewerTilePixelData | null>;
+  /**
+   * 対象タイルの**空間校正と、その出自**（H35）。`tileId` 省略時は対象の先頭タイル。
+   * XA / XRF 以外、または解決できないなら null。
+   *
+   * <p>🔴 **数値だけでは足りない。** mm/px は `getPixelData().spacing` からも取れるが、
+   * それが**実測（カテーテル法）／装置の校正値／幾何近似／未校正**のどれなのかが分からない。
+   * アンギオは「近似には近似と書く」ことを要求する領域なので（`fw/angio-design.md` §7.4）、
+   * 出自を渡さないとプラグインは**正しい注記を書けない**——数値だけ出して黙ることになる。
+   *
+   * <p>⚠️ **校正を「書く」口は無い**（意図的）。校正を確定するのは本体だけ
+   * （スケールバーと計測ラベルを本体が描くため。§7.2 の単一入口）。
+   */
+  getSpatialCalibration: (tileId?: string) => ViewerTileSpatialCalibration | null;
+  /**
+   * 対象タイルの **XA 表示状態**（DSA・フレーム軸）（H36）。XA / XRF でなければ null。
+   *
+   * <p>🔴 **DSA 表示中は画素の意味が反転する。** 差分後は血管が正の大きな値になるので、
+   * エッジ検出の向きもプロファイルの意味（対数を取るかどうか）も変わる。合成 imageId
+   * （`graphy-dsa:`）は元の URL を持たないため、**受け取った側からは見分けられない**。
+   * これが無いまま差分画像を測ると、**例外も警告も出ずに違う径が出る**。
+   */
+  getXaState: (tileId?: string) => ViewerTileXaState | null;
   /**
    * 処理結果（値マップ）を対象タイルの**表示中スライスへ重ねて見せる**（H4a）。
    * `tileId` 省略時は対象の先頭タイル。rows/cols が現在スライスと不一致なら false。

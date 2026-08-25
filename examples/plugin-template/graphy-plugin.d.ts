@@ -112,6 +112,64 @@ export interface ViewerViewState {
   pan: [number, number];
 }
 
+/**
+ * 空間校正と**その出自**。`host.getSpatialCalibration()` の戻り。**H35**。
+ *
+ * <p>🔴 **数値だけでは足りない。** mm/px は `getPixelData().spacing` からも取れるが、
+ * それが**実測（カテーテル法）／装置の校正値／幾何近似／未校正**のどれなのかが分からない。
+ * アンギオのように「近似には近似と書く」ことが求められる領域では、出自が無いと
+ * **正しい注記を書けない**。
+ *
+ * <p>⚠️ **未校正のとき `mmPerPxRow` / `mmPerPxCol` は null**。`detectorMmPerPx`
+ * （検出器面の画素ピッチ）は**被写体の mm/px ではない**ので、計測に使ってはいけない。
+ */
+export interface SpatialCalibration {
+  tileId: string;
+  imageId: string;
+  /** 行方向 mm/px。**未校正なら null**。 */
+  mmPerPxRow: number | null;
+  /** 列方向 mm/px。非等方はそのまま 2 値で来る（平均して潰さない）。 */
+  mmPerPxCol: number | null;
+  /** 出自の識別子（`user-catheter` / `dicom-fiducial` / `geometric-sid-sod` / `none` 等）。 */
+  source: string;
+  confidence: "high" | "medium" | "low" | "none";
+  /** 表示の縮退区分。`approximate` なら「近似」と書く義務がある。 */
+  tier: "calibrated" | "approximate" | "uncalibrated";
+  /** その値が妥当な平面（`fiducial-depth` / `isocenter` / `central-ray` / `detector` / `unknown`）。 */
+  plane: string;
+  /** 人向けの根拠文字列（そのまま画面に出してよい）。 */
+  provenance: string;
+  /** 警告の識別子。 */
+  warnings: string[];
+  /** 未校正のときの検出器面 mm/px。**計測に使わない**（ツールチップ用）。 */
+  detectorMmPerPx: number | null;
+}
+
+/**
+ * XA（血管撮影）の表示状態。`host.getXaState()` の戻り。**H36**。
+ *
+ * <p>🔴 **DSA（差分）表示中は画素の意味が反転する。** 差分後は血管が正の大きな値になるので、
+ * エッジ検出の向きも、対数を取るかどうかも変わる。合成 imageId は元の URL を持たないため、
+ * **受け取った側からは見分けられない**。知らずに測ると例外も警告も出ずに違う径が出る。
+ */
+export interface XaState {
+  tileId: string;
+  imageId: string;
+  /** DSA（差分）を表示しているか。 */
+  isSubtracted: boolean;
+  /** マスクフレーム（0 origin）。差分していなければ空。 */
+  maskFrames: number[];
+  /** ピクセルシフト [dx, dy]。 */
+  shift: [number, number];
+  /** 対数変換を掛けているか。 */
+  logarithmic: boolean;
+  /** `PixelIntensityRelationship (0028,1040)`（LOG / LIN）。読めなければ null。 */
+  pixelIntensityRelationship: string | null;
+  /** 表示中のフレーム（0 origin）と総数。 */
+  frameIndex: number;
+  frameCount: number;
+}
+
 /** `getPixelData` の任意指定。**0.1.9 以降**。 */
 export interface PixelDataOptions {
   /**
@@ -565,6 +623,23 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * `"read-pixels"` を宣言すること（導入時の同意画面に出る）。
    */
   getPixelData: (tileId?: string, opts?: PixelDataOptions) => Promise<PixelData | null>;
+  /**
+   * 対象タイルの**空間校正と、その出自**（H35）。`tileId` 省略時は対象の先頭タイル。
+   * XA / XRF 以外、または解決できないなら null。
+   *
+   * <p>数値（mm/px）だけを見て測ると、**未校正・近似のまま mm で報告する**ことになる。
+   * `tier` を見て、`approximate` なら「近似」、`uncalibrated` なら px として扱うこと。
+   *
+   * <p>⚠️ 校正を**書く**口は無い（意図的）。確定するのは本体だけ。
+   */
+  getSpatialCalibration: (tileId?: string) => SpatialCalibration | null;
+  /**
+   * 対象タイルの **XA 表示状態**（DSA・フレーム軸）（H36）。XA / XRF でなければ null。
+   *
+   * <p>`isSubtracted` が true のとき、`getPixelData()` が返すのは**差分画像**である
+   * （血管が正の大きな値）。エッジ検出や対数変換の向きを必ず切り替えること。
+   */
+  getXaState: (tileId?: string) => XaState | null;
   /**
    * 処理結果（値マップ）を**表示中スライスへ重ねて見せる**。`tileId` 省略時は対象の先頭タイル。
    * rows/cols が現在スライスと不一致なら false。**0.1.9 以降**。

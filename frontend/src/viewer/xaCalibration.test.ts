@@ -3,6 +3,7 @@ import {
   calibrationScaleFor,
   isXaCalibrated,
   resolveXaCalibration,
+  toViewerSpatialCalibration,
   type XaCalibTags,
 } from "./xaCalibration";
 
@@ -234,5 +235,62 @@ describe("calibrationScaleFor — 計測ツールへ渡す倍率", () => {
   it("不正値は 1 として扱う", () => {
     expect(calibrationScaleFor(0, null)).toBe(1);
     expect(calibrationScaleFor(-1, 0.2)).toBeCloseTo(1 / 0.2, 12);
+  });
+});
+
+/**
+ * プラグインへ渡す形（host API の H35）。
+ *
+ * <p>ここで守るのは 1 つだけ——**未校正を数値で埋めないこと**。プラグインは受け取った
+ * mm/px で径を出すので、検出器面の値を流し込むと**未校正の画像が mm で測られる**。
+ * 値はそれらしいので、画面にも数値にも異常が出ない（＝誰も気付けない）。
+ */
+describe("★H35 — プラグインへ渡す校正（出自ごと渡す）", () => {
+  it("未校正では mm/px を null のまま渡す（検出器面の値で埋めない）", () => {
+    // ImagerPixelSpacing しか無い＝P6。検出器面の値は持っているが被写体の mm/px ではない。
+    const c = resolveXaCalibration(tags());
+    expect(isXaCalibrated(c)).toBe(false);
+    const v = toViewerSpatialCalibration("img#1", c);
+    expect(v.mmPerPxRow).toBeNull();
+    expect(v.mmPerPxCol).toBeNull();
+    expect(v.tier).toBe("uncalibrated");
+    // 捨てはしない。**別のフィールドで**渡す（ツールチップ用）。
+    expect(v.detectorMmPerPx).toBeCloseTo(0.279, 6);
+  });
+
+  it("出自・信頼度・警告をそのまま渡す（数値だけにしない）", () => {
+    const c = resolveXaCalibration(
+      tags({ pixelSpacing: [0.21, 0.21], pixelSpacingCalibrationType: "fiducial" }),
+    );
+    const v = toViewerSpatialCalibration("img#2", c);
+    expect(v.mmPerPxRow).toBeCloseTo(0.21, 6);
+    expect(v.source).toBe("dicom-fiducial");
+    expect(v.confidence).toBe("high");
+    expect(v.tier).toBe("calibrated");
+    expect(v.provenance).not.toBe("");
+    expect(Array.isArray(v.warnings)).toBe(true);
+  });
+
+  it("幾何近似は approximate として渡す（「近似」と書けるようにする）", () => {
+    const c = resolveXaCalibration(
+      tags({
+        pixelSpacing: [...IMAGER] as [number, number],
+        distanceSourceToDetector: 1000,
+        distanceSourceToPatient: 750,
+      }),
+    );
+    const v = toViewerSpatialCalibration("img#3", c);
+    expect(v.tier).toBe("approximate");
+    expect(v.source).toBe("geometric-sid-sod");
+    expect(v.mmPerPxRow).toBeCloseTo(0.279 * 750 / 1000, 6);
+  });
+
+  it("警告は写しを渡す（受け手が本体の配列を書き換えられない）", () => {
+    const c = resolveXaCalibration(
+      tags({ pixelSpacing: [0.279, 0.279] }), // ImagerPixelSpacing と同値＝未補正の警告が立つ
+    );
+    const v = toViewerSpatialCalibration("img#4", c);
+    v.warnings.push("tampered" as never);
+    expect(c.warnings).not.toContain("tampered");
   });
 });

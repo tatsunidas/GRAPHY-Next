@@ -268,6 +268,26 @@ function parseDsaImageId(imageId: string): { token: string; t: number } | null {
   return { token: slash >= 0 ? head.slice(0, slash) : head, t };
 }
 
+/**
+ * 合成 imageId → **いまの DSA の状態**（プラグイン host API の H36）。
+ *
+ * <p>合成でない（＝ネイティブフレームを表示している）なら null。
+ *
+ * <p>🔴 **これが無いと、プラグインは差分画像を非サブトラクションとして測ってしまう。**
+ * 差分後は血管が**正の大きな値**になるので、エッジ検出の向き（`vesselIsDark`）も
+ * プロファイルの意味（`profileDomain`）も反転する。合成 imageId は URL を持たないので、
+ * プラグイン側では**見分けようがない**（`fw/angio-design.md` §22.3 の G2）。
+ */
+export function dsaStateForImageId(imageId: string): (DsaSessionState & { frameIndex: number; frameCount: number }) | null {
+  const parsed = parseDsaImageId(imageId);
+  if (!parsed) return null;
+  const s = sessions.get(parsed.token);
+  if (!s) return null;
+  const state = dsaSessionState(parsed.token);
+  if (!state) return null;
+  return { ...state, frameIndex: parsed.t, frameCount: s.frameIds.length };
+}
+
 /** ピクセルシフトを更新する（imageId は変えず、呼び出し側で画像キャッシュを捨てて再描画する）。 */
 export function setDsaShift(token: string, dx: number, dy: number): void {
   const s = sessions.get(token);

@@ -104,6 +104,8 @@ export interface XaCalibration {
   detectorMmPerPx?: number | null;
 }
 
+import type { ViewerSpatialCalibration } from "./viewerCommands";
+
 /** `PixelSpacing == ImagerPixelSpacing`（＝未補正）とみなす相対許容差。 */
 const EQUAL_REL_EPS = 1e-6;
 /** 人の校正と装置の校正がこれ以上ずれたら警告する。 */
@@ -296,6 +298,33 @@ function withAnisotropyCheck(c: XaCalibration): XaCalibration {
  * @param loaderSpacing ローダが画像に付けた列方向 spacing（`PixelSpacing` が無ければ 1）
  * @param mmPerPx       解決した mm/px。未校正なら null
  */
+/**
+ * 解決済みの校正 → **プラグインへ渡す形**（host API の H35）。
+ *
+ * <p>🔴 **未校正を数値で埋めない。** `detectorMmPerPx`（検出器面の値）は持っているが、
+ * それは「その平面での画素ピッチ」であって**被写体の mm/px ではない**。ここで
+ * `mmPerPxRow` に流し込むと、受け取った側は**未校正の画像を mm で測ってしまう**
+ * （しかも値はそれらしいので誰も気付かない）。別のフィールドのまま渡し、
+ * 計測に使わないことを型と注記で示す。
+ *
+ * <p>型注釈だけを `viewerCommands` から借りる（`import type` なので実行時の依存は増えない
+ * ——このモジュールは Cornerstone を持ち込まない純ロジックのままにしておく）。
+ */
+export function toViewerSpatialCalibration(imageId: string, c: XaCalibration): ViewerSpatialCalibration {
+  return {
+    imageId,
+    mmPerPxRow: c.mmPerPxRow,
+    mmPerPxCol: c.mmPerPxCol,
+    source: c.source,
+    confidence: c.confidence,
+    tier: c.tier,
+    plane: c.plane,
+    provenance: c.provenance,
+    warnings: [...c.warnings],
+    detectorMmPerPx: c.detectorMmPerPx ?? null,
+  };
+}
+
 export function calibrationScaleFor(loaderSpacing: number | null | undefined, mmPerPx: number | null): number {
   const ls = loaderSpacing && loaderSpacing > 0 ? loaderSpacing : 1;
   if (mmPerPx && mmPerPx > 0) return ls / mmPerPx;
