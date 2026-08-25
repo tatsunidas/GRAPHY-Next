@@ -175,6 +175,9 @@ interface MaskItem {
 > 回帰テスト `backend/.../web/PatientKeyWithSlashTest.java`（🚨 **MockMvc では再現できない**
 > ——Tomcat の経路解析を通らないため。実サーバ＋素の `HttpClient` で喋る。
 > `RestTemplate` も使えない: `%2F` を再エンコードして**別の要求**にしてしまう）。
+> ✅ **実機で確認済み（2026-08-26）**: `automator/src/spike/angioQuantPluginCheck.ts`
+> （fixture `xa-angio` の PatientID がまさに `D97258/11053`）を回し、
+> **ROI 永続化のネットワークエラーが 0 件**になった（直前まで毎回出ていた）。
 
 | 決めたこと | 理由 |
 |---|---|
