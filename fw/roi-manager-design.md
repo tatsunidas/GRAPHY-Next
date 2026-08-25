@@ -164,7 +164,17 @@ interface MaskItem {
 
 ### 11.1 契約
 
-`GET / PUT / DELETE /api/rois/{patientKey}` — **患者単位**の JSON ドキュメント 1 本。
+`GET / PUT / DELETE /api/rois?patientKey=...` — **患者単位**の JSON ドキュメント 1 本。
+
+> 🔴 **キーはパスではなくクエリで渡す（2026-08-26 に変更）。** PatientID には `/` が普通に入る
+> （実データ `D97258/11053`）。パスに入れると、URL エンコードして `%2F` にしても
+> **Tomcat が経路の段で 400 を返す**（既定で符号化スラッシュを拒否）。Spring まで届かないので
+> CORS ヘッダも付かず、ブラウザには「**CORS エラー**」としか見えない——**その患者だけ ROI が
+> 保存されない**のに、画面には何も出ない。同じ理由で **プラグイン保存領域（H8）**と
+> **位置合わせ記録**も直した。パス版は互換のため残してあるが `/` を含むキーには使えない。
+> 回帰テスト `backend/.../web/PatientKeyWithSlashTest.java`（🚨 **MockMvc では再現できない**
+> ——Tomcat の経路解析を通らないため。実サーバ＋素の `HttpClient` で喋る。
+> `RestTemplate` も使えない: `%2F` を再エンコードして**別の要求**にしてしまう）。
 
 | 決めたこと | 理由 |
 |---|---|
@@ -268,7 +278,7 @@ RECIST では「消したはずの病変が戻る」が判定を誤らせるの�
    まだ読んでいないスライスの ROI は `selectRestorable` で毎回落ちていた（実測 `indexed: 1/10`）。
    → imageId は `viewer/imageId.ts` が組み立てているので、**URL から SOP を取り出す
    `sopFromImageId()` を後段のフォールバック**に入れた（他ローダ・blank は `null` のまま）。
-   症状が「保存されていない」と見分けにくいので、疑ったらまず `GET /api/rois/{patientKey}` を見る。
+   症状が「保存されていない」と見分けにくいので、疑ったらまず `GET /api/rois?patientKey=...` を見る。
 2. **`parseSaveFile()` が `splineType` を通していなかった**（保存はしていた）。
    結果、スプライン Fit した ROI が**読み直すと直線に戻る**——`11.` の設計意図そのものが
    効いていなかった。往復テストを追加（`roiPersistence.test.ts`）。
