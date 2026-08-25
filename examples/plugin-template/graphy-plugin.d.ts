@@ -113,6 +113,35 @@ export interface ViewerViewState {
 }
 
 /**
+ * レポートへ差し込む解析結果（`host.publishAnalysisResult()`。**H39**）。
+ *
+ * <p>host が入れるので**渡さない**もの: スタディ / シリーズ・id の名前空間・
+ * 出自のプラグイン名と版・研究用である旨の 1 行。
+ *
+ * <p>🔴 **`caveats` は 1 つ以上必須**（空白だけは数えない）。host が研究用の 1 行を足すので
+ * 形式上は空でも通るが、**その解析に固有の限界**——系統誤差・単一投影・未校正など、
+ * 数値の意味を変える事情——を知っているのはプラグイン側だけ。空を許すと、
+ * **注意の要らない結果と同じ顔でレポートに載る**。
+ */
+export interface AnalysisResultInput {
+  /** プラグイン内でのローカル id。**同じ id で出し直すと置き換わる**（host が名前空間を付ける）。 */
+  id: string;
+  kind: "qca" | "qva" | "qlv" | "qca3d";
+  /** 参照した元インスタンス。**開いているタイルの並びに無ければ拒否される。** */
+  sopInstanceUids?: string[];
+  /** 「ラン 3 / フレーム 12」のような人が読む位置。 */
+  frameLabel: string;
+  /** ブロックの見出し。 */
+  title: string;
+  /** 計測値。**丸めは渡す側の責任**（表示と保存でずれないように）。 */
+  metrics: { label: string; value: string; unit?: string }[];
+  /** 出自（校正の経路・手修正・アルゴリズム）。 */
+  provenance: { label: string; value: string }[];
+  /** 限界・注意。**1 つ以上必須**。 */
+  caveats: string[];
+}
+
+/**
  * 表示状態（XA GSPS）の保存要求（`host.savePresentationState()`。**H38**）。
  *
  * <p>DSA のマスク・ピクセルシフト・VOI・空間校正・描画が入る**唯一の器**。
@@ -815,6 +844,18 @@ export interface Viewer2DPluginHost extends PluginHostBase {
     tileId: string | undefined,
     req: PresentationStateRequest,
   ) => Promise<SrResult>;
+  /**
+   * **解析結果をレポートへ差し込める形で登録する**（H39）。DICOM は書かないので確認は出ない。
+   *
+   * <p>実際にレポートへ差し込むのは利用者の操作（レポート画面の「解析結果を差し込む」）で、
+   * ここはその候補に載せるだけ。登録簿は**セッション限り・直近 20 件**。
+   *
+   * <p>🔴 `caveats` は 1 つ以上必須。id は host が名前空間を付ける（本体の結果を差し替えられない）。
+   */
+  publishAnalysisResult: (
+    tileId: string | undefined,
+    input: AnalysisResultInput,
+  ) => { ok: boolean; error?: string };
   /**
    * 対象タイルの **XA 表示状態**（DSA・フレーム軸）（H36）。XA / XRF でなければ null。
    *

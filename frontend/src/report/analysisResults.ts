@@ -111,6 +111,84 @@ export interface BlockLabels {
  *
  * <p>作る側の書き忘れを**作った時点で**止めるためのもの（レポートに載ってからでは遅い）。
  */
+/**
+ * プラグインが渡した解析結果を、レポートへ載せられる記録に仕立てる（host API の H39）。
+ *
+ * <h3>host が必ず入れるもの（プラグインに任せない）</h3>
+ * 1. **id の名前空間**。🔴 登録簿は **id が同じ記録を置き換える**ので、プラグインが本体と同じ
+ *    id を出せると**本体の解析結果を差し替えられる**（レポートに載る値が黙って変わる）。
+ * 2. **スタディ / シリーズ**。表示中のものを入れる（プラグインに選ばせない）。
+ * 3. **出自にプラグイン名と版**。「誰が計算したか」は数値と同じくらい重要。
+ * 4. **研究用である旨**。プラグイン側が書き忘れても必ず載る。
+ *
+ * <h3>それでもプラグインに 1 つ以上の注意書きを要求する</h3>
+ * host が研究用の 1 行を足すので、形式上は空でも通せる。それでも**空を拒否する**のは、
+ * 「その解析に固有の限界」を書かせるため——半値法の系統誤差・単一投影・未校正など、
+ * **数値の意味を変える事情を知っているのはプラグイン側だけ**（§21.5）。
+ *
+ * @param input     プラグインからの入力（id はプラグイン内でのローカル id）
+ * @param context   表示中のスタディ / シリーズ
+ * @param producer  プラグインの id / 表示名 / 版
+ * @param labels    host が足す文言（i18n 済み）
+ * @param now       記録時刻
+ * @returns 記録、または拒否理由
+ */
+export function buildPluginAnalysisRecord(
+  input: PluginAnalysisInput,
+  context: { studyUid: string; seriesUid: string },
+  producer: { id: string; name: string; version: string },
+  labels: { pluginLabel: string; researchOnly: string },
+  now: number,
+): { ok: true; record: AnalysisResultRecord } | { ok: false; error: string } {
+  const caveats = (input.caveats ?? []).map((c) => c.trim()).filter((c) => c.length > 0);
+  if (caveats.length === 0) {
+    return { ok: false, error: "caveats is required (この解析に固有の限界を 1 つ以上入れてください)" };
+  }
+  if (!input.id || !input.id.trim()) {
+    return { ok: false, error: "id is required" };
+  }
+  if (!labels.researchOnly.trim()) {
+    return { ok: false, error: "researchOnly label is empty" };
+  }
+  const withResearchOnly = caveats.includes(labels.researchOnly)
+    ? caveats
+    : [...caveats, labels.researchOnly];
+  return {
+    ok: true,
+    record: {
+      // 🔴 本体の記録と衝突させない。プラグイン id ごとに名前空間を分ける。
+      id: `plugin:${producer.id}:${input.id.trim()}`,
+      kind: input.kind,
+      studyUid: context.studyUid,
+      seriesUid: context.seriesUid,
+      sopInstanceUids: [...(input.sopInstanceUids ?? [])],
+      frameLabel: input.frameLabel,
+      title: input.title,
+      metrics: input.metrics.map((m) => ({ ...m })),
+      provenance: [
+        ...input.provenance.map((p) => ({ ...p })),
+        { label: labels.pluginLabel, value: `${producer.name} ${producer.version}`.trim() },
+      ],
+      caveats: withResearchOnly,
+      at: now,
+    },
+  };
+}
+
+/** プラグインからの入力（host が入れる項目は含まない）。 */
+export interface PluginAnalysisInput {
+  /** プラグイン内でのローカル id。host が名前空間を付ける。 */
+  id: string;
+  kind: AnalysisKind;
+  sopInstanceUids?: string[];
+  frameLabel: string;
+  title: string;
+  metrics: AnalysisMetric[];
+  provenance: AnalysisProvenanceItem[];
+  /** **1 つ以上必須**（空文字は数えない）。 */
+  caveats: string[];
+}
+
 export function assertHasCaveats(r: AnalysisResultRecord): void {
   if (r.caveats.length === 0) {
     throw new Error(`解析結果 ${r.id} に注意書きがありません（レポートへ載せる記録には必須）`);

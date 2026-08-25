@@ -93,6 +93,8 @@ import {
   type LutData,
 } from "../api";
 import { sopUidFromImageId } from "./imageId";
+import { buildPluginAnalysisRecord, type PluginAnalysisInput } from "../report/analysisResults";
+import { publishAnalysisResult } from "../report/analysisResultStore";
 import { LoadingSpinner } from "./LoadingSpinner";
 // H35 / H36: 校正の出自と XA の表示状態。**どちらも既存の単一入口へ委譲するだけ**
 // （ここで PixelSpacing やタグを直に読むと、本体の表示とプラグインの数値がずれる）。
@@ -1798,6 +1800,46 @@ export function Viewer2D({
   };
 
   /**
+   * H39: 解析結果をレポートの登録簿へ積む（A14 の入口）。
+   *
+   * <p>**DICOM は書かない**ので確認ダイアログは出さない——レポートへ実際に差し込むのは
+   * 利用者の操作（レポート画面の「解析結果を差し込む」）で、ここはその候補に載せるだけ。
+   *
+   * <p>host が入れるもの（プラグインに任せない）は {@link buildPluginAnalysisRecord} を参照。
+   * 🔴 とくに **id の名前空間**——登録簿は id が同じ記録を置き換えるので、素通しにすると
+   * **プラグインが本体の解析結果を差し替えられる**（レポートに載る値が黙って変わる）。
+   */
+  const publishPluginAnalysis = (
+    input: PluginAnalysisInput,
+    producer: { id: string; name: string; version: string },
+  ): { ok: boolean; error?: string } => {
+    const ctx = roiContextRef.current;
+    if (!ctx) return { ok: false, error: "no series context" };
+    const bad = firstUnopenedSop(input.sopInstanceUids ?? []);
+    if (bad !== null) {
+      // レポートに「見ていない画像を参照した」と書かせない。
+      return { ok: false, error: `referenced SOP is not open in this tile: ${bad}` };
+    }
+    const built = buildPluginAnalysisRecord(
+      input,
+      { studyUid: ctx.studyUid, seriesUid: ctx.seriesUid },
+      producer,
+      {
+        pluginLabel: t("viewer2d.menu.plugins"),
+        researchOnly: t("report.analysis.caveat.researchOnly"),
+      },
+      Date.now(),
+    );
+    if (!built.ok) return { ok: false, error: built.error };
+    try {
+      publishAnalysisResult(built.record);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  };
+
+  /**
    * H37: アンギオ解析の結果を **本体と同じ SR** として保存する。
    *
    * <p>🔴 **参照 SOP は「いまこのタイルが開いている並び」の中に無ければ拒否する。**
@@ -2128,6 +2170,7 @@ export function Viewer2D({
     getSpatialCalibration, getXaState,
     getStackImageIds: () => [...imageIdsRef.current],
     validateDerivedSeries, saveDerivedSeries, saveStructuredReport, saveAngioReport, savePresentationState,
+    publishAnalysisResult: publishPluginAnalysis,
     setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
     undo, redo,
@@ -2139,6 +2182,7 @@ export function Viewer2D({
     // 重畳・派生シリーズ保存・貸したビューポートが**同じ並び**を見るための入口（H31）。
     getStackImageIds: () => [...imageIdsRef.current],
     validateDerivedSeries, saveDerivedSeries, saveStructuredReport, saveAngioReport, savePresentationState,
+    publishAnalysisResult: publishPluginAnalysis,
     setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
     undo, redo,
@@ -2173,6 +2217,7 @@ export function Viewer2D({
       saveStructuredReport: (r, p) => commandsRef.current.saveStructuredReport(r, p),
       saveAngioReport: (r, p) => commandsRef.current.saveAngioReport(r, p),
       savePresentationState: (r, p) => commandsRef.current.savePresentationState(r, p),
+      publishAnalysisResult: (r, p) => commandsRef.current.publishAnalysisResult(r, p),
       setActiveTool: (n) => commandsRef.current.setActiveTool(n),
       setBrushSize: (s) => commandsRef.current.setBrushSize(s),
       selectRoi: (u, ex) => commandsRef.current.selectRoi(u, ex),

@@ -10,6 +10,7 @@
  * Viewer2D 内部の命令的操作（Fit/回転/Invert/LUT…）を外から起動するための薄い仲介。
  * referenceLines/sliceSync と同じモジュールレベル・レジストリ方式。
  */
+import type { PluginAnalysisInput } from "../report/analysisResults";
 import type {
   AngioPresentationRequest,
   LutData,
@@ -538,6 +539,14 @@ export interface ViewerCommands {
     req: ViewerPresentationStateRequest,
     producer: { id: string; name: string; version: string },
   ): Promise<ViewerSrResult>;
+  /**
+   * 解析結果を**レポートへ差し込める形で登録する**（H39）。DICOM は書かない。
+   * スタディ / シリーズ・id の名前空間・出自・研究用の注記は本体が入れる。
+   */
+  publishAnalysisResult(
+    input: PluginAnalysisInput,
+    producer: { id: string; name: string; version: string },
+  ): { ok: boolean; error?: string };
   /** 左ドラッグに割り当てる操作/計測/ブラシツールを切替（toolName は Cornerstone のツール名 or 消しゴム id）。 */
   setActiveTool(toolName: string): void;
   /**
