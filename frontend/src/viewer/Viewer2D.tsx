@@ -73,7 +73,7 @@ import { buildPluginMeta, computeCalipers, hasShapeCalipers, pickPluginMeta, rea
 import { CONTOUR_TOOL_NAMES } from "./roiContourTools";
 import { measureToolConfig } from "./roiStatsTextBox";
 import { useRoiStatsDisplay } from "./roiStatsDisplay";
-import { subscribeRoiStats } from "./roiStatsStore";
+import { computeRoiStatsNow, getRoiStats, subscribeRoiStats } from "./roiStatsStore";
 import { buildRoiStatsCornerRows, sameCornerRows, type RoiStatsCornerRow } from "./roiStatsCorner";
 import { subscribeSuvStore, suvForImageId, seriesUidOf } from "./suvStore";
 import {
@@ -1990,6 +1990,12 @@ export function Viewer2D({
       );
       if (!points.length) continue;
       const stats = readRoiStats(a.data?.cachedStats, refId);
+      // 画素統計と面積は**本体の統計エンジン**から出す（`fw/roi-stats-design.md` §7）。
+      // Cornerstone の cachedStats は SUV 校正を知らないので、PET を SUV 校正しても
+      // 平均は Bq/mL のまま流れていた——例外も警告も出ずに違う値が使われる種類の事故。
+      // キャッシュに無ければ同期計算を試み、それも駄目なら**出さない**
+      // （cachedStats へフォールバックすると単位系が黙って混ざる）。
+      const own = getRoiStats(uid) ?? computeRoiStatsNow(uid);
       const tool = (a.metadata?.toolName as string) ?? "";
       // 形状ベースの長径・短径は「輪郭として意味づけられるツール」だけに出す
       // （Bidirectional の 4 ハンドルの最遠距離はユーザーが引いた長軸より長くなり得る）。
@@ -2036,12 +2042,13 @@ export function Viewer2D({
           longAxisMm: cal?.longAxisMm,
           shortAxisMm: cal?.shortAxisMm,
           longAxisEnds: cal?.longAxisEnds as [[number, number], [number, number]] | undefined,
-          area: stats.area,
-          mean: stats.mean,
-          stdDev: stats.stdDev,
-          min: stats.min,
-          max: stats.max,
-          unit: stats.unit,
+          // 面積はメッシュ（閉多角形）から。未校正では mm² を出さない（§4.2）。
+          area: own?.geometry.areaMm2,
+          mean: own?.values?.mean,
+          stdDev: own?.values?.sd,
+          min: own?.values?.min,
+          max: own?.values?.max,
+          unit: own?.values?.unit,
         },
         visible,
       });

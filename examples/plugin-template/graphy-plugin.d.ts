@@ -468,14 +468,24 @@ export interface ViewerRoiMeasurements {
   shortAxisMm?: number;
   /** 長径の両端（画素座標）。 */
   longAxisEnds?: [[number, number], [number, number]];
-  /** 面 ROI の面積 (mm²)。 */
+  /**
+   * 面 ROI の面積 (mm²)。閉多角形（メッシュ）の面積であって、ラスタ画素数 × 画素面積ではない。
+   * **画素間隔が無いシリーズでは `undefined`**（px² を mm² と偽らない）。
+   */
   area?: number;
-  /** ROI 内のモダリティ値統計（CT なら HU。表示 W/L は掛かっていない）。 */
+  /**
+   * ROI 内のモダリティ値統計（CT なら HU。表示 W/L は掛かっていない）。
+   * **SUV 校正済みの PET では SUV 値**になる（`unit` も "SUVbw" 等）。
+   * 出せない場合はすべて `undefined`（別経路の値で埋めない）。
+   */
   mean?: number;
   stdDev?: number;
   min?: number;
   max?: number;
-  /** 統計値の単位（"HU" / "SUVbw" / ""）。 */
+  /**
+   * 統計値の単位。解決順は SUV 校正 → RescaleType → モダリティ既定（CT なら "HU"）。
+   * 🔴 **`"raw"` は「校正が無い」という意味**。定量に使う前に必ず見ること。
+   */
   unit?: string;
 }
 
