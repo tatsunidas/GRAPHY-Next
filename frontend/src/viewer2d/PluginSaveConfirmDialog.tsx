@@ -22,10 +22,10 @@ export interface PluginSaveRequest {
   /** 保存先（web は外部 PACS へ STOW-RS、standalone はローカル保管庫）。 */
   mode: "standalone" | "web";
   /**
-   * 何を保存するか。**画像シリーズと計測レポート（SR）では中身が違う**ので、
-   * 「何がどこへ書かれるのか」を正しく提示するために分ける。
+   * 何を保存するか。**種類ごとに中身が違う**ので、「何がどこへ書かれるのか」を
+   * 正しく提示するために分ける（画像シリーズ / 計測レポート / セグメンテーション / 線量分布）。
    */
-  kind?: "series" | "sr" | "angio-sr" | "angio-ps";
+  kind?: "series" | "sr" | "angio-sr" | "angio-ps" | "seg" | "rtdose";
   /** SR のとき: 計測グループ（病変）数と所見テキスト数。 */
   groupCount?: number;
   findingCount?: number;
@@ -35,6 +35,12 @@ export interface PluginSaveRequest {
    * 意味があるのは件数ではなく「QCA の結果が保管庫に入る」という事実のほうなので。
    */
   analysisKind?: "qca" | "qva" | "qlv" | "qca3d";
+  /** SEG のとき: 保存されるセグメント数（前景ゼロは除いた数）。 */
+  segmentCount?: number;
+  /** RTDOSE のとき: フレーム数・最大線量 [Gy]・背景で埋めたボクセル数。 */
+  frameCount?: number;
+  maxGy?: number;
+  filledVoxels?: number;
 }
 
 /** 解析の呼び方は解析タスク一覧（A13-2）と同じ文言を使う。**画面ごとに変えない**。 */
@@ -55,15 +61,18 @@ export function PluginSaveConfirmDialog({
   onCancel: () => void;
 }) {
   const { t } = useI18n();
-  const isAngio = request.kind === "angio-sr";
+  const kind = request.kind ?? "series";
+  const isAngio = kind === "angio-sr";
   // 表示状態（GSPS）は「計測」ではないので SR 用の文言に寄せない。
-  const isPs = request.kind === "angio-ps";
-  const isSr = request.kind === "sr" || isAngio;
+  const isPs = kind === "angio-ps";
+  const isSr = kind === "sr" || isAngio;
   // **document.body へ出し、最上位に置く。** プラグインの UI は本体の DOM とは別に
   // body へ挿し込まれ、任意の z-index を持てる。同じツリー内で z-index を競わせると
   // スタッキングコンテキスト次第で負ける（実機で SR 保存の同意ダイアログが
   // プラグインのパネルに隠れた）。同意を求める画面が読めないのは同意の意味を損なう。
-  const key = (name: string): string => `viewer2d.plugin.${isPs ? "ps" : isSr ? "sr" : "save"}.${name}`;
+  // 種類ごとに文言を切り替える（"何を保存するのか" を取り違えさせない）。
+  const ns = isPs ? "ps" : isSr ? "sr" : kind === "seg" ? "seg" : kind === "rtdose" ? "rtdose" : "save";
+  const key = (name: string): string => `viewer2d.plugin.${ns}.${name}`;
   return createPortal(
     <div style={backdrop} data-testid="plugin-save-confirm">
       <div style={panel}>
@@ -101,6 +110,31 @@ export function PluginSaveConfirmDialog({
                     <th style={th}>{t("viewer2d.plugin.sr.findings")}</th>
                     <td style={td} data-testid="plugin-save-findings">{request.findingCount ?? 0}</td>
                   </tr>
+                </>
+              ) : kind === "seg" ? (
+                <tr>
+                  <th style={th}>{t("viewer2d.plugin.seg.segments")}</th>
+                  <td style={td} data-testid="plugin-save-segments">{request.segmentCount ?? 0}</td>
+                </tr>
+              ) : kind === "rtdose" ? (
+                <>
+                  <tr>
+                    <th style={th}>{t("viewer2d.plugin.rtdose.frames")}</th>
+                    <td style={td} data-testid="plugin-save-frames">{request.frameCount ?? 0}</td>
+                  </tr>
+                  <tr>
+                    <th style={th}>{t("viewer2d.plugin.rtdose.max")}</th>
+                    <td style={td} data-testid="plugin-save-maxdose">
+                      {(request.maxGy ?? 0).toPrecision(4)} Gy
+                    </td>
+                  </tr>
+                  {(request.filledVoxels ?? 0) > 0 ? (
+                    <tr>
+                      {/* 🔴 「データが無かった」ところを何かで埋めたことは必ず見せる。 */}
+                      <th style={th}>{t("viewer2d.plugin.rtdose.filled")}</th>
+                      <td style={td} data-testid="plugin-save-filled">{request.filledVoxels}</td>
+                    </tr>
+                  ) : null}
                 </>
               ) : (
                 <tr>

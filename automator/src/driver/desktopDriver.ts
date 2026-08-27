@@ -60,6 +60,12 @@ export class DesktopDriver implements Driver {
     // 前回実行の孤児プロセスへ繋がると、古い jar が応答して検証結果が黙って汚染される
     // （2026-07-30 に実際に 2 回分の結果を無駄にした。reset の応答に新フィールドが無いことで発覚）。
     await assertPortFree(this.ports.http);
+    // ★ **Vite 側も同じ理由で確かめる。** `--strictPort` は「他が居たら起動しない」だけなので、
+    //    孤児 Vite が居ると spawn は静かに失敗し、waitForHttp は**その孤児に**繋がって成功する。
+    //    その結果、**古いフロントエンドで検証が走り、通ったことになる**
+    //    （2026-08-23 に実際に踏んだ: 4 日前の別ワークツリーの Vite が 18093 を掴んでいて、
+    //     新しく足した host API が「存在しない」と報告された）。
+    await assertVitePortFree(this.ports.vite);
 
     const dataDir = DESKTOP_RUN_DATA_DIR;
     fs.mkdirSync(dataDir, { recursive: true });
@@ -202,6 +208,31 @@ export class DesktopDriver implements Driver {
     await this.electronApp.evaluate(({ dialog }, dirPath) => {
       dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [dirPath] })) as typeof dialog.showOpenDialog;
     }, path);
+  }
+}
+
+/**
+ * Vite のポートが空いていることを確かめる。応答があれば**前回の孤児プロセス**で、
+ * そのまま進めると<b>別のワークツリーの古いフロントエンド</b>で検証が走ってしまう。
+ */
+async function assertVitePortFree(vitePort: number): Promise<void> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1500);
+  try {
+    const res = await fetch(`http://localhost:${vitePort}/`, { signal: controller.signal });
+    if (res.ok) {
+      throw new Error(
+        `ポート ${vitePort} で既に Vite が応答しています。前回実行の孤児プロセスの可能性が高いです。\n` +
+          `--strictPort は「起動しない」だけなので、そのまま進めると**別のワークツリーの古い\n` +
+          `フロントエンドで検証が走り、通ったことになります**。\n` +
+          `確認: ps -eo pid,lstart,args | grep "vite --port ${vitePort}"\n` +
+          `対処: そのプロセスを終了してから再実行してください。`,
+      );
+    }
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith(`ポート ${vitePort}`)) throw e;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

@@ -168,6 +168,104 @@ export interface PluginVolumeEstimate {
   spatial: boolean;
 }
 
+/**
+ * 書き出し（H22 / H23）で使う**格子の申告**。
+ *
+ * <p>プラグインが H10 で読んだボリュームの幾何をそのまま渡す。本体はこれと元シリーズの
+ * スライス位置を突き合わせ、**一致しなければ書かない**（ずれた SEG / 線量を作らない）。
+ */
+export interface PluginExportGrid {
+  dims: [number, number, number];
+  /** 各軸の実効間隔 [mm]（[列, 行, スライス]）。 */
+  spacing: [number, number, number];
+  ipp: [number, number, number];
+  iop: number[];
+  sliceStep: [number, number, number];
+}
+
+/** DICOM SEG として保存する要求（H22）。 */
+export interface PluginSegmentationRequest {
+  /** 幾何・患者の継承元。**プラグインが H10 で読んだのと同じシリーズ**を指すこと。 */
+  reference: PluginSeriesRef;
+  /** マスクが乗っている格子（= H10 が返したボリュームの幾何）。 */
+  grid: PluginExportGrid;
+  seriesDescription?: string;
+  segments: Array<{
+    label: string;
+    /** RGB 0..255。 */
+    color?: [number, number, number];
+    /** SegmentDescription へ入れる説明（体積などの計測結果）。 */
+    description?: string;
+    /** `grid.dims` のボクセル数と同じ長さ。**0 以外が前景**。 */
+    data: Uint8Array;
+  }>;
+}
+
+export interface PluginSegmentationResult {
+  ok: boolean;
+  /** ユーザーが確認ダイアログで拒否した。 */
+  cancelled?: boolean;
+  seriesInstanceUid?: string;
+  sopInstanceUid?: string;
+  /** 入力セグメントごとの前景ボクセル数（**0 のセグメントは保存されない**）。 */
+  foregroundVoxels?: number[];
+  error?: string;
+}
+
+/**
+ * RTDOSE として保存する要求（H23）。
+ *
+ * <p>派生シリーズ（H4b）でも線量マップは保存できるが、他システムからは**ただの画像**に見える。
+ * こちらは「線量」として読まれる。
+ */
+export interface PluginRtDoseRequest {
+  reference: PluginSeriesRef;
+  /** 線量が乗っている格子（= H10 が返したボリュームの幾何）。 */
+  grid: PluginExportGrid;
+  /** 吸収線量 [Gy]。`grid.dims` のボクセル数と同じ長さ。 */
+  doseGy: Float32Array;
+  /**
+   * `doseGy` に `NaN` が含まれるなら**必須**（H4b の `background` と同じ作法）。
+   * RTDOSE にパディングの概念は無く、0 Gy で埋めると「線量が無かった」と読まれるため、
+   * 何で埋めるかを呼び出し側に必ず決めさせる。
+   */
+  backgroundGy?: number;
+  seriesDescription?: string;
+  doseType?: "PHYSICAL" | "EFFECTIVE" | "ERROR";
+  /** DICOM の列挙値（既定 `PLAN`）。 */
+  doseSummationType?: string;
+  doseComment?: string;
+  tissueHeterogeneityCorrection?: "IMAGE" | "ROI_OVERRIDE" | "WATER";
+}
+
+export interface PluginRtDoseResult {
+  ok: boolean;
+  cancelled?: boolean;
+  seriesInstanceUid?: string;
+  sopInstanceUid?: string;
+  /** 格納値 → Gy の係数。 */
+  doseGridScaling?: number;
+  /** 量子化で生じる最大誤差 [Gy]（＝係数の半分）。 */
+  quantizationErrorGy?: number;
+  /** 背景で埋めたボクセル数（`NaN` だったところ）。 */
+  filledVoxels?: number;
+  /**
+   * **出力はしたが DICOM の要求を満たしていない点。**
+   * 核医学の線量評価に RT Plan は存在しないので、通常 1 件入る。
+   */
+  warnings?: string[];
+  error?: string;
+}
+
+/**
+ * 本体レポートへ差し込む解析結果（H25）。
+ *
+ * <p>本体の「レポートに解析結果を差し込む」仕組み（A14）をプラグインへ開いたもの。
+ * 数値だけでなく**出自（`provenance`）と注意書き（`caveats`）を一緒に**渡す契約になっている。
+ *
+ * <p>🔴 **`caveats` は空にできない**（空なら拒否する）。レポートは人が読んで判断する最終成果物で、
+ * 「注意書きを書き忘れた結果」が「注意の要らない結果」と同じ顔で載るのを防ぐため。
+ */
 /** 位置合わせの要求（H21）。 */
 export interface PluginRegistrationRequest {
   fixed: PluginSeriesRef;
@@ -305,7 +403,8 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    *
    * <p>**DICOM はプラグインに書かせない**: 「何を測ったか」（病変ごとの追跡 ID・長径/短径・
    * 参照画像）と所見テキストを渡すだけで、SR の構造・UID 採番・患者/検査属性の引き継ぎは
-   * 本体が行う。計測種別は `longAxis` / `shortAxis` のみで、**未知の種別は拒否される**
+   * 本体が行う。計測種別は表にあるもの（長径・短径・体積・質量・吸収線量・時間積分放射能・
+   * 有効半減期・BED・EQD2）だけで、**未知の種別は拒否される**
    * （黙って落とすと「入れたはずの計測が無いレポート」ができるため）。
    *
    * <p>保存された SR は `SeriesDescription` に `[Plugin] ` 接頭辞が付き、
@@ -445,6 +544,28 @@ export interface Viewer2DPluginHost extends PluginHostBase {
     transform: unknown | null,
     target: PluginVolumeGrid,
   ) => PluginVolume;
+  /**
+   * マスクを **DICOM SEG** として保存する（H22）。
+   *
+   * <p>**本体が必ず確認ダイアログを出す**（抑止不可）。拒否されると `{ ok: false, cancelled: true }`。
+   *
+   * <p>**DICOM はプラグインに書かせない**: 渡すのは「どのシリーズの、どの格子の、どのラベルか」だけで、
+   * SEG の組み立て・UID 採番・患者/検査の引き継ぎは本体が行う。
+   * ⚠ プラグインの格子と元シリーズのスライス位置が一致しなければ**保存しない**
+   * （1 枚ずれた SEG は見ないと気付けない）。前景ゼロのセグメントは保存対象から外れる。
+   */
+  saveSegmentation: (req: PluginSegmentationRequest) => Promise<PluginSegmentationResult>;
+  /**
+   * 線量分布を **DICOM RTDOSE** として保存する（H23）。
+   *
+   * <p>**本体が必ず確認ダイアログを出す**（抑止不可）。
+   *
+   * <p>画素は Float32 [Gy] → uint16 ＋ `DoseGridScaling` に量子化される（相対分解能 1/65535）。
+   * `NaN` を含むなら `backgroundGy` が必須（未指定は拒否）。
+   * ⚠ 返り値の `warnings` には「出力はしたが DICOM の要求を満たしていない点」が入る。
+   * **プラグインはこれを握り潰さないこと**（本体も確認ダイアログで見せる）。
+   */
+  saveRtDose: (req: PluginRtDoseRequest) => Promise<PluginRtDoseResult>;
   goTo: (tileId: string | undefined, dims: { sliceIndex?: number; c?: number; t?: number }) => void;
   /**
    * **ROI を選択状態にする**（H14）。`null` で解除。`exclusive` 既定 true（他の選択を外す）。

@@ -1074,12 +1074,109 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    *
    * <p>**本体が必ず確認ダイアログを出す**（抑止不可）。拒否されると `{ ok:false, cancelled:true }`。
    * DICOM の構造・UID 採番・患者/検査属性の引き継ぎは本体が行うので、プラグインは
-   * 「何を測ったか」だけを渡す。計測種別は `longAxis` / `shortAxis` のみ
+   * 「何を測ったか」だけを渡す。計測種別は表にあるものだけ
    * （**未知の種別は拒否される**。黙って落とすと「入れたはずの計測が無いレポート」になるため）。
    */
   saveStructuredReport: (tileId: string | undefined, req: SrRequest) => Promise<SrResult>;
+  /**
+   * マスクを **DICOM SEG（セグメンテーション）** として保存する。**0.2.2 以降**。
+   *
+   * <p>**本体が必ず確認ダイアログを出す**（抑止不可）。DICOM の組み立て・UID 採番・
+   * 患者/検査の引き継ぎは本体が行う。
+   *
+   * <p>⚠ 渡す `grid` は **`loadVolume` が返したボリュームの幾何そのもの**であること。
+   * 元シリーズのスライス位置と一致しなければ**保存されない**
+   * （1 枚ずれた SEG は、見ないと気付けない）。前景ゼロのセグメントは保存対象から外れる。
+   */
+  saveSegmentation: (req: SegmentationRequest) => Promise<SegmentationResult>;
+  /**
+   * 線量分布を **DICOM RTDOSE** として保存する。**0.2.2 以降**。
+   *
+   * <p>派生シリーズ（`saveDerivedSeries`）でも保存はできるが、他システムからは
+   * **ただの画像**に見える。こちらは「線量」として読まれる。
+   *
+   * <p>画素は Float32 [Gy] → uint16 ＋ `DoseGridScaling` に量子化される（相対分解能 1/65535）。
+   * `NaN` を含むなら `backgroundGy` が**必須**（未指定は拒否。0 Gy で黙って埋めると
+   * 「線量が無かった」と読まれるため）。
+   *
+   * <p>🔴 返り値の `warnings` には「出力はしたが DICOM の要求を満たしていない点」が入る。
+   * **握り潰さないこと**（放射性医薬品の線量評価に RT Plan は無いので通常 1 件入る）。
+   */
+  saveRtDose: (req: RtDoseRequest) => Promise<RtDoseResult>;
+  // 解析結果のレポートへの差し込みは `publishAnalysisResult(tileId?, input)` を使う（上に定義）。
+  // 🔴 スタディ / シリーズは**本体が表示中のタイルから入れる**ので、プラグインは渡さない
+  //    （渡せると、開いてもいない他患者の検査へレポートが生える）。
 }
 
+/** 書き出し（SEG / RTDOSE）で渡す格子の申告。**0.2.2 以降**。 */
+export interface ExportGrid {
+  dims: [number, number, number];
+  /** 各軸の実効間隔 [mm]（[列, 行, スライス]）。 */
+  spacing: [number, number, number];
+  ipp: [number, number, number];
+  iop: number[];
+  sliceStep: [number, number, number];
+}
+
+/** DICOM SEG 保存の要求。**0.2.2 以降**。 */
+export interface SegmentationRequest {
+  /** 幾何・患者の継承元。**`loadVolume` で読んだのと同じシリーズ**を指すこと。 */
+  reference: PluginSeriesRef;
+  grid: ExportGrid;
+  seriesDescription?: string;
+  segments: Array<{
+    label: string;
+    /** RGB 0..255。 */
+    color?: [number, number, number];
+    description?: string;
+    /** `grid.dims` のボクセル数と同じ長さ。**0 以外が前景**。 */
+    data: Uint8Array;
+  }>;
+}
+
+export interface SegmentationResult {
+  ok: boolean;
+  cancelled?: boolean;
+  seriesInstanceUid?: string;
+  sopInstanceUid?: string;
+  /** 入力セグメントごとの前景ボクセル数（**0 のセグメントは保存されない**）。 */
+  foregroundVoxels?: number[];
+  error?: string;
+}
+
+/** RTDOSE 保存の要求。**0.2.2 以降**。 */
+export interface RtDoseRequest {
+  reference: PluginSeriesRef;
+  grid: ExportGrid;
+  /** 吸収線量 [Gy]。`grid.dims` のボクセル数と同じ長さ。 */
+  doseGy: Float32Array;
+  /** `doseGy` に `NaN` があるなら必須。 */
+  backgroundGy?: number;
+  seriesDescription?: string;
+  doseType?: "PHYSICAL" | "EFFECTIVE" | "ERROR";
+  /** DICOM の列挙値（既定 `PLAN`）。 */
+  doseSummationType?: string;
+  doseComment?: string;
+  tissueHeterogeneityCorrection?: "IMAGE" | "ROI_OVERRIDE" | "WATER";
+}
+
+export interface RtDoseResult {
+  ok: boolean;
+  cancelled?: boolean;
+  seriesInstanceUid?: string;
+  sopInstanceUid?: string;
+  /** 格納値 → Gy の係数。 */
+  doseGridScaling?: number;
+  /** 量子化で生じる最大誤差 [Gy]。 */
+  quantizationErrorGy?: number;
+  /** 背景で埋めたボクセル数。 */
+  filledVoxels?: number;
+  /** **出力はしたが DICOM の要求を満たしていない点。** */
+  warnings?: string[];
+  error?: string;
+}
+
+/** 本体レポートへ差し込む解析結果。**0.2.2 以降**。 */
 /** 計測レポートの保存要求。**0.1.12 以降**。 */
 export interface SrRequest {
   /** シリーズ説明（一覧に出る。`[Plugin] ` が前置される）。 */
@@ -1104,7 +1201,27 @@ export interface SrMeasurementGroup {
   /** 計測した画像。省略時は表示中シリーズが使われる（SOP を省略すると画像参照なし）。 */
   seriesInstanceUid?: string;
   sopInstanceUid?: string;
-  measurements: { type: "longAxis" | "shortAxis"; value: number; unit?: string }[];
+  measurements: {
+    /**
+     * 計測種別。**0.2.2 以降**で線量系が増えた。未知の種別は本体が拒否する。
+     *
+     * <p>`unit` を省略すると種別ごとの既定（UCUM）が入る:
+     * 長径/短径 `mm` ／ 体積 `mL` ／ 質量 `g` ／ 吸収線量・BED・EQD2 `Gy` ／
+     * 時間積分放射能 `Bq.s` ／ 有効半減期 `h`。**換算はされない**（値はそのまま入る）。
+     */
+    type:
+      | "longAxis"
+      | "shortAxis"
+      | "volume"
+      | "mass"
+      | "absorbedDose"
+      | "timeIntegratedActivity"
+      | "effectiveHalfLife"
+      | "bed"
+      | "eqd2";
+    value: number;
+    unit?: string;
+  }[];
 }
 
 export interface SrResult {

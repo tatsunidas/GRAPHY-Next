@@ -120,6 +120,12 @@ export function Viewer2DMenuBar({
     // H39: レポートへの差し込み候補。出所は host が入れる。
     publishAnalysisResult: (tileId, input) =>
       actions.publishAnalysisResult(tileId, input, { id: m.id, name: m.name, version: m.version }),
+    // H22 / H23: 出所（プラグイン id・名前・版）は**本体が付ける**。
+    // プラグイン側から渡させると、出力の由来を書き換えられる。
+    // （レポートへの差し込みは H39 が上で受けている。H25 は同じ機能の重複だったので採らない。）
+    saveSegmentation: (req) =>
+      actions.saveSegmentation(req, { id: m.id, name: m.name, version: m.version }),
+    saveRtDose: (req) => actions.saveRtDose(req, { id: m.id, name: m.name, version: m.version }),
     // H5: ROI の読み出しと、ROI に紐付くプラグイン属性。**pluginId は host が入れる**ので、
     // プラグインは他プラグイン（や本体）の属性名前空間に触れない。
     getRois: (tileId) => actions.getRois(tileId),

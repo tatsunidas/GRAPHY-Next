@@ -39,6 +39,9 @@ public class SegExportService {
 
     private static final Logger log = LoggerFactory.getLogger(SegExportService.class);
 
+    /** プラグイン出力の SeriesDescription 接頭辞（派生シリーズ・SR・RTDOSE と揃える）。 */
+    static final String PLUGIN_PREFIX = "[Plugin] ";
+
     private final DicomStorageService storage;
     /** web モードのときだけ存在（STOW-RS 書き戻し用）。standalone では null。 */
     private final ObjectProvider<WebDicomDataService> webProvider;
@@ -104,9 +107,7 @@ public class SegExportService {
         a.setString(Tag.SeriesInstanceUID, VR.UI, newSeriesUid);
         a.setInt(Tag.SeriesNumber, VR.IS, tmpl.getInt(Tag.SeriesNumber, 0) + 5000);
         a.setInt(Tag.InstanceNumber, VR.IS, 1);
-        a.setString(Tag.SeriesDescription, VR.LO,
-                req.seriesDescription() != null && !req.seriesDescription().isBlank()
-                        ? req.seriesDescription() : "Segmentation");
+        a.setString(Tag.SeriesDescription, VR.LO, seriesDescription(req));
         a.setString(Tag.ImageType, VR.CS, "DERIVED", "PRIMARY");
         a.setString(Tag.SegmentationType, VR.CS, "BINARY");
         a.setString(Tag.ContentLabel, VR.CS, "SEG");
@@ -114,6 +115,18 @@ public class SegExportService {
         a.setString(Tag.ContentCreatorName, VR.PN, "GRAPHY-Next");
         copyTag(tmpl, a, Tag.ContentDate);
         copyTag(tmpl, a, Tag.ContentTime);
+        // プラグイン出力は機械可読な出所も残す（一覧の接頭辞と二重に明示する）。
+        SegExportRequest.Producer producer = req.producer();
+        if (producer != null) {
+            Attributes eq = new Attributes(4);
+            eq.setString(Tag.Manufacturer, VR.LO, "GRAPHY-Next plugin");
+            eq.setString(Tag.ManufacturerModelName, VR.LO,
+                    producer.name() != null && !producer.name().isBlank() ? producer.name() : producer.id());
+            eq.setString(Tag.SoftwareVersions, VR.LO, producer.version() != null ? producer.version() : "");
+            eq.setString(Tag.ContributionDescription, VR.ST,
+                    "Segmentation produced by plugin " + producer.id());
+            a.newSequence(Tag.ContributingEquipmentSequence, 1).add(eq);
+        }
         if (req.frameOfReferenceUID() != null && !req.frameOfReferenceUID().isBlank()) {
             a.setString(Tag.FrameOfReferenceUID, VR.UI, req.frameOfReferenceUID());
         }
@@ -339,6 +352,17 @@ public class SegExportService {
 
     private static int clamp16(int v) {
         return v < 0 ? 0 : (v > 65535 ? 65535 : v);
+    }
+
+    /** プラグイン由来なら接頭辞を付ける（派生シリーズ・SR・RTDOSE と揃える）。 */
+    private static String seriesDescription(SegExportRequest req) {
+        String desc = req.seriesDescription() != null && !req.seriesDescription().isBlank()
+                ? req.seriesDescription() : "Segmentation";
+        if (req.producer() == null) {
+            return desc.length() <= 64 ? desc : desc.substring(0, 64);
+        }
+        String out = PLUGIN_PREFIX + desc;
+        return out.length() <= 64 ? out : out.substring(0, 64);
     }
 
     private static void copyTag(Attributes from, Attributes to, int tag) {

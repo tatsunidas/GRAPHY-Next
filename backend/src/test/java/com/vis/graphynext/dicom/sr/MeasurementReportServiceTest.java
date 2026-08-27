@@ -266,11 +266,77 @@ class MeasurementReportServiceTest {
     @Test
     void 未知の計測種別は拒否する() {
         MeasurementGroup g = new MeasurementGroup("1", null, null, "s", "i",
-                List.of(new Measurement("volume", 10.0, "ml")));
+                List.of(new Measurement("perfusion", 10.0, "ml/min")));
         // **黙って落とさない**。落とすと「入れたはずの計測が無い SR」ができる。
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> service.create(request(List.of(g), null)));
-        assertTrue(e.getMessage().contains("volume"));
+        assertTrue(e.getMessage().contains("perfusion"));
+        // 何なら受け付けるかも一緒に返す（呼び出し側が総当たりしなくて済む）。
+        assertTrue(e.getMessage().contains("absorbedDose"));
+    }
+
+    // ------------------------------------------------------------------
+    // H16: 数値計測の種別を広げる（吸収線量・TIA・有効半減期・体積・質量・BED/EQD2）
+    // ------------------------------------------------------------------
+
+    @Test
+    void 線量系の計測が単位付きで入る() {
+        MeasurementGroup g = new MeasurementGroup("liver", null, "Organ at risk", "1.2.3.4.9", "1.2.3.4.9.1",
+                List.of(new Measurement("absorbedDose", 1.3215, null),
+                        new Measurement("timeIntegratedActivity", 4.393e11, null),
+                        new Measurement("effectiveHalfLife", 60.0, null),
+                        new Measurement("volume", 6.822, null),
+                        new Measurement("mass", 7.11, null)));
+        Attributes sr = service.build(template(), request(List.of(g), null), NOW);
+
+        Attributes dose = find(sr, "ABSORBED_DOSE").get(0);
+        assertEquals("NUM", dose.getString(Tag.ValueType));
+        Attributes measured = dose.getNestedDataset(Tag.MeasuredValueSequence);
+        assertEquals("1.3215", measured.getString(Tag.NumericValue));
+        // 単位を省略したら種別ごとの既定（UCUM）が入る。**換算はしない**。
+        assertEquals("Gy", measured.getNestedDataset(Tag.MeasurementUnitsCodeSequence).getString(Tag.CodeValue));
+
+        assertEquals("Bq.s", find(sr, "TIA").get(0).getNestedDataset(Tag.MeasuredValueSequence)
+                .getNestedDataset(Tag.MeasurementUnitsCodeSequence).getString(Tag.CodeValue));
+        assertEquals("h", find(sr, "T_EFF").get(0).getNestedDataset(Tag.MeasuredValueSequence)
+                .getNestedDataset(Tag.MeasurementUnitsCodeSequence).getString(Tag.CodeValue));
+        assertEquals("mL", find(sr, "VOLUME").get(0).getNestedDataset(Tag.MeasuredValueSequence)
+                .getNestedDataset(Tag.MeasurementUnitsCodeSequence).getString(Tag.CodeValue));
+        assertEquals("g", find(sr, "MASS").get(0).getNestedDataset(Tag.MeasuredValueSequence)
+                .getNestedDataset(Tag.MeasurementUnitsCodeSequence).getString(Tag.CodeValue));
+    }
+
+    @Test
+    void 確認できない概念は私用スキームで書く() {
+        MeasurementGroup g = new MeasurementGroup("liver", null, null, "1.2.3.4.9", "1.2.3.4.9.1",
+                List.of(new Measurement("absorbedDose", 1.0, null)));
+        Attributes sr = service.build(template(), request(List.of(g), null), NOW);
+
+        // 🔴 標準コードを確認できていないものに「それらしい標準コード」を書かない。
+        //    私用と分かる designator で書き、スキームの素性も併記する。
+        Attributes name = find(sr, "ABSORBED_DOSE").get(0).getNestedDataset(Tag.ConceptNameCodeSequence);
+        assertEquals("99GRAPHY", name.getString(Tag.CodingSchemeDesignator));
+        assertEquals("Absorbed Dose", name.getString(Tag.CodeMeaning));
+
+        Attributes scheme = sr.getNestedDataset(Tag.CodingSchemeIdentificationSequence);
+        assertNotNull(scheme, "私用スキームを使ったら素性を書く");
+        assertEquals("99GRAPHY", scheme.getString(Tag.CodingSchemeDesignator));
+        assertTrue(scheme.getString(Tag.CodingSchemeUID).startsWith("2.25."));
+    }
+
+    @Test
+    void 標準コードだけならスキームの素性は書かない() {
+        Attributes sr = service.build(template(), request(List.of(group("1", 76.0, 24.0)), null), NOW);
+        assertNull(sr.getNestedDataset(Tag.CodingSchemeIdentificationSequence));
+    }
+
+    @Test
+    void 単位を明示したらそれを使う() {
+        MeasurementGroup g = new MeasurementGroup("liver", null, null, "1.2.3.4.9", "1.2.3.4.9.1",
+                List.of(new Measurement("volume", 6.822, "cm3")));
+        Attributes sr = service.build(template(), request(List.of(g), null), NOW);
+        assertEquals("cm3", find(sr, "VOLUME").get(0).getNestedDataset(Tag.MeasuredValueSequence)
+                .getNestedDataset(Tag.MeasurementUnitsCodeSequence).getString(Tag.CodeValue));
     }
 
     @Test

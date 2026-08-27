@@ -865,6 +865,8 @@ export interface SegExportRequest {
   frameOfReferenceUID?: string | null;
   seriesDescription?: string | null;
   segments: SegExportSegment[];
+  /** プラグイン由来のときの出所（本体が接頭辞と ContributingEquipment を書く）。 */
+  producer?: { id: string; name: string; version: string } | null;
 }
 export interface SegExportResult {
   seriesInstanceUid: string;
@@ -873,6 +875,53 @@ export interface SegExportResult {
 /** マスク群を DICOM SEG として保存し、新シリーズ UID を返す。 */
 export const exportDicomSeg = (req: SegExportRequest) =>
   httpSend<SegExportResult>("/api/dicom/seg", "POST", req);
+
+// --- RTDOSE 書き出し（線量分布→RT Dose Storage, host API の H23）---
+
+/**
+ * RTDOSE 書き出し要求。
+ *
+ * <p>幾何は呼び出し側が明示する（線量格子は元シリーズのスライスと 1:1 とは限らない）。
+ * ただし **FrameOfReferenceUID は backend が元シリーズから引き継ぐ**——ここを渡せるようにすると
+ * 「別の座標系の線量を、同じ座標系だ」と偽れてしまう。
+ */
+export interface RtDoseExportRequest {
+  studyInstanceUid: string;
+  seriesInstanceUid: string;
+  seriesDescription?: string | null;
+  seriesNumber?: number | null;
+  rows: number;
+  columns: number;
+  imageOrientationPatient: number[];
+  imagePositionPatient: number[];
+  /** [行間隔, 列間隔] mm。 */
+  pixelSpacing: [number, number];
+  /** フレームごとのオフセット [mm]。**先頭は 0**。 */
+  gridFrameOffsetVector: number[];
+  doseUnits: "GY" | "RELATIVE";
+  doseType: "PHYSICAL" | "EFFECTIVE" | "ERROR";
+  doseSummationType: string;
+  doseComment?: string | null;
+  /** 格納値 → Gy の係数。 */
+  doseGridScaling: number;
+  tissueHeterogeneityCorrection?: string | null;
+  /** uint16 リトルエンディアンを Base64 にしたもの。 */
+  pixels: string;
+  referencedSopInstanceUids?: string[] | null;
+  referencedRtPlan?: { sopClassUid?: string | null; sopInstanceUid: string } | null;
+  producer?: { id: string; name: string; version: string } | null;
+}
+
+export interface RtDoseExportResult {
+  seriesInstanceUid: string;
+  sopInstanceUid: string;
+  /** 出力はしたが DICOM の要求を満たしていない点（**呼び出し側がユーザーに見せる**）。 */
+  warnings: string[];
+}
+
+/** 線量分布を DICOM RT Dose として保存し、新シリーズ UID と警告を返す。 */
+export const exportRtDose = (req: RtDoseExportRequest) =>
+  httpSend<RtDoseExportResult>("/api/dicom/rtdose", "POST", req);
 
 // --- RTSTRUCT 書き出し（2D ベクタ ROI→RT Structure Set, S2）---
 export interface RtStructContour {

@@ -156,8 +156,30 @@ export interface ViewerSrMeasurementGroup {
   /** 計測した画像（省略時は SR に画像参照が入らない）。 */
   seriesInstanceUid?: string;
   sopInstanceUid?: string;
-  /** 計測値。`longAxis` / `shortAxis` のみ（未知の種別は backend が拒否する）。 */
-  measurements: { type: "longAxis" | "shortAxis"; value: number; unit?: string }[];
+  /**
+   * 計測値。**表にある種別のみ**（未知の種別は backend が拒否する＝黙って落とさない）。
+   *
+   * <p>`unit` を省略すると種別ごとの既定（UCUM）が入る:
+   * 長径/短径 `mm` ／ 体積 `mL` ／ 質量 `g` ／ 吸収線量・BED・EQD2 `Gy` ／
+   * 時間積分放射能 `Bq.s` ／ 有効半減期 `h`。**換算はしない**（値はそのまま入る）。
+   *
+   * <p>⚠ 線量系の概念は PS3.16 の標準コードを確認できていないため、
+   * **私用コーディングスキームで私用と分かる形**で書かれる（誤った標準コードより害が小さい）。
+   */
+  measurements: {
+    type:
+      | "longAxis"
+      | "shortAxis"
+      | "volume"
+      | "mass"
+      | "absorbedDose"
+      | "timeIntegratedActivity"
+      | "effectiveHalfLife"
+      | "bed"
+      | "eqd2";
+    value: number;
+    unit?: string;
+  }[];
 }
 
 /**

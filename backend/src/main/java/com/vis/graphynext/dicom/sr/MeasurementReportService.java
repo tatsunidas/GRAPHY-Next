@@ -55,9 +55,10 @@ public class MeasurementReportService {
     /** プラグイン出力の SeriesDescription 接頭辞（派生シリーズと揃える）。 */
     static final String PLUGIN_PREFIX = "[Plugin] ";
 
-    /** 対応する計測種別（これ以外は拒否する。知らない種別を無言で落とさない）。 */
-    static final String LONG_AXIS = "longAxis";
-    static final String SHORT_AXIS = "shortAxis";
+    /**
+     * 対応する計測種別は {@link SrMeasurementConcepts} の表が単一の出所（これ以外は拒否する。
+     * 知らない種別を無言で落とさない）。
+     */
 
     private static final DateTimeFormatter DA = DateTimeFormatter.ofPattern("yyyyMMdd");
     private static final DateTimeFormatter TM = DateTimeFormatter.ofPattern("HHmmss");
@@ -142,6 +143,9 @@ public class MeasurementReportService {
             eq.setString(Tag.ContributionDescription, VR.ST, "Measurement report produced by plugin " + p.id());
             a.newSequence(Tag.ContributingEquipmentSequence, 1).add(eq);
         }
+
+        // 私用コードを使ったときだけ、スキームの素性を明示する（DICOM の要求）。
+        addCodingSchemeIdentification(a, req);
 
         // 参照している画像（Current Requested Procedure Evidence Sequence）。
         // これが無いと、SR を受け取った側が元画像へ辿れない。
@@ -263,21 +267,65 @@ public class MeasurementReportService {
         return n;
     }
 
+    /**
+     * 単位（UCUM）。呼び出し側が明示したらそれを優先し、無ければ種別ごとの既定を使う。
+     *
+     * <p>**換算はしない**。値はそのまま入れて単位だけを書く（数値と単位を食い違わせない）。
+     */
     private static String unitOf(MeasurementReportRequest.Measurement m) {
-        return m.unit() == null || m.unit().isBlank() ? "mm" : m.unit().trim();
+        if (m.unit() != null && !m.unit().isBlank()) {
+            return m.unit().trim();
+        }
+        SrMeasurementConcepts.Concept c = SrMeasurementConcepts.of(m.type());
+        return c != null ? c.defaultUnit() : "mm";
     }
 
     /**
-     * 計測種別のコード。**実務で広く使われている SRT のコード**を使う（dcmjs / OHIF と同じ）。
-     * 受け側の実装がこの値で長径・短径を判別しているため、ここを独自コードにすると読めなくなる。
+     * 計測種別のコード。表（{@link SrMeasurementConcepts}）を引くだけ。
+     *
+     * <p>長径・短径は実務で広く使われている SRT のコード（受け側がこの値で判別している）。
+     * 標準コードを確認できていない種別は**私用スキームで私用と分かるように**書く（表の javadoc）。
      */
     private static Attributes measurementCode(String type) {
-        return switch (type) {
-            case LONG_AXIS -> code("G-A185", "SRT", "Long Axis");
-            case SHORT_AXIS -> code("G-A186", "SRT", "Short Axis");
+        SrMeasurementConcepts.Concept c = SrMeasurementConcepts.of(type);
+        if (c == null) {
             // validate() で弾いているのでここには来ない。
-            default -> throw new IllegalArgumentException("未知の計測種別: " + type);
-        };
+            throw new IllegalArgumentException("未知の計測種別: " + type);
+        }
+        return code(c.codeValue(), c.scheme(), c.meaning());
+    }
+
+    /**
+     * 私用コーディングスキームを使った場合に、その素性を書く（{@code CodingSchemeIdentificationSequence}）。
+     *
+     * <p>私用コードを**素性を書かずに**出すと、受け側は designator しか手掛かりが無く、
+     * どこの誰の定義なのか辿れない。使ったときだけ付ける（標準コードだけなら書かない）。
+     */
+    private static void addCodingSchemeIdentification(Attributes a, MeasurementReportRequest req) {
+        boolean usesPrivate = false;
+        if (req.groups() != null) {
+            for (MeasurementReportRequest.MeasurementGroup g : req.groups()) {
+                if (g.measurements() == null) {
+                    continue;
+                }
+                for (MeasurementReportRequest.Measurement m : g.measurements()) {
+                    SrMeasurementConcepts.Concept c = SrMeasurementConcepts.of(m.type());
+                    if (c != null && c.isPrivate()) {
+                        usesPrivate = true;
+                    }
+                }
+            }
+        }
+        if (!usesPrivate) {
+            return;
+        }
+        Attributes scheme = new Attributes(4);
+        scheme.setString(Tag.CodingSchemeDesignator, VR.SH, SrMeasurementConcepts.PRIVATE_SCHEME);
+        scheme.setString(Tag.CodingSchemeUID, VR.UI, SrMeasurementConcepts.PRIVATE_SCHEME_UID);
+        scheme.setString(Tag.CodingSchemeName, VR.ST, SrMeasurementConcepts.PRIVATE_SCHEME_NAME);
+        scheme.setString(Tag.CodingSchemeResponsibleOrganization, VR.ST,
+                "Visionary Imaging Services, Inc.");
+        a.newSequence(Tag.CodingSchemeIdentificationSequence, 1).add(scheme);
     }
 
     /** 参照している SOP Instance UID を重複なく集める（列挙順は入力順）。 */
@@ -421,11 +469,14 @@ public class MeasurementReportService {
                     throw new IllegalArgumentException("計測が空のグループがあります: " + g.trackingId());
                 }
                 for (MeasurementReportRequest.Measurement m : g.measurements()) {
-                    if (m.type() == null || !(LONG_AXIS.equals(m.type()) || SHORT_AXIS.equals(m.type()))) {
+                    if (SrMeasurementConcepts.of(m.type()) == null) {
                         // **知らない種別を黙って落とさない。** 落とすと「入れたはずの計測が無い」SR ができる。
-                        throw new IllegalArgumentException("未知の計測種別: " + m.type());
+                        throw new IllegalArgumentException("未知の計測種別: " + m.type()
+                                + "（対応: " + SrMeasurementConcepts.supportedTypes() + "）");
                     }
                     if (m.value() == null || !Double.isFinite(m.value()) || m.value() < 0) {
+                        // 負値は「引き算の向きを間違えた」等の取り違えでしか出ない。
+                        // 線量・体積・半減期はいずれも非負なので、ここで落として気付かせる。
                         throw new IllegalArgumentException("計測値が不正です: " + m.value());
                     }
                 }

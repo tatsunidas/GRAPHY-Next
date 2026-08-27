@@ -417,6 +417,34 @@
 
 > このブロックは**中断のたびに上書きする**。下の日付つきログは変更履歴なので消さない。
 
+### 0. 追記（2026-08-23）— **プラグイン host API に「出口」を 4 つ足した（H16 / H22 / H23 / H25）**
+
+線量評価プラグイン（`graphy-next-plugin-dosimetry`）の D4 からの要求。正本は
+`fw/plugin-architecture.md` §7（実装記録は §7.2 の末尾）。
+
+| # | API | 中身 |
+|---|---|---|
+| **H16** | `saveStructuredReport` の計測種別を拡張 | 吸収線量 / TIA / 有効半減期 / 体積 / 質量 / BED / EQD2。表は `dicom/sr/SrMeasurementConcepts.java` |
+| **H22** | `saveSegmentation` | 既存 `SegExportService` を host へ開いただけ |
+| **H23** | `saveRtDose` | **RTDOSE の writer は本体に無かったので新規**（`dicom/export/RtDoseExportService`） |
+| **H25** | `publishAnalysisResult` | A14 の `analysisResultStore` を host へ開いただけ |
+
+🔴 **確認できない標準コードを書かない。** 線量系の概念に対応する PS3.16 のコードは確認できて
+いないので、**私用スキーム `99GRAPHY`** で書く（誤った標準コードのほうが有害）。1 か所の表なので
+確認できたら 1 行差し替えで移行できる。
+
+🔴 **RTDOSE は「準拠していない点」を返す。** 核医学に RT Plan は無く `ReferencedRTPlanSequence`
+（Type 1C）を満たせない。**捏造せず `warnings` で返し、確認ダイアログで見せる。**
+
+🚨 **automator の落とし穴を 2 つ踏んだ**（どちらも検証が静かに嘘になる種類）:
+**① 4 日前の別ワークツリーの孤児 Vite が 18093 を掴んでいて、古いフロントで検証が走った**
+（`--strictPort` は「起動しない」だけ。`waitForHttp` は孤児に繋がって成功する）
+→ `desktopDriver` に `assertVitePortFree` を追加。
+**② `page.evaluate("window.__x = promise")` は固まる**（代入式の値が promise なので Playwright が
+await する）→ IIFE で包む。
+
+実機検証: `automator/src/spike/exportApiCheck.ts`（**35/0**）。プラグイン側は **67/0/0**。
+
 ### 1. 現在地
 
 | | |
