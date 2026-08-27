@@ -20,7 +20,7 @@ import { tOutsideReact } from "../i18n/i18n";
 import { contourToolConfig, renderAnnotations } from "./roiContourTools";
 import { getRoiStatsDisplay, subscribeRoiStatsDisplay } from "./roiStatsDisplay";
 import { getRoiStatsByData, scheduleRoiStatsSweep } from "./roiStatsStore";
-import { pickSampleKind } from "./roiStats";
+import { pickSampleKind, type RoiStatsResult } from "./roiStats";
 import { roiStatsTextLines } from "./roiStatsText";
 
 /**
@@ -39,7 +39,31 @@ export function graphyGetTextLines(data: unknown): string[] {
     scheduleRoiStatsSweep();
     return [];
   }
+  if (!canPlaceTextBox(data, stats)) return [];
   return roiStatsTextLines(stats, display.detail, tOutsideReact);
+}
+
+/**
+ * **いまの `data` に textBox を置けるか。** 純関数。
+ *
+ * <p>🚨 上流の `_renderStats` は「`getTextLines` が空でない」ときだけ textBox の位置計算へ進み、
+ * そこで `data.contour.polyline` の**先頭 2 点**を使う（`getTextBoxCoordsCanvas`）。
+ * 輪郭を描いている最中は polyline が**空や 1 点になる瞬間**があり、そこへ行を返すと
+ * `Cannot read properties of undefined (reading '1')` で落ちる（実機で踏んだ・2026-08-27）。
+ *
+ * <p>上流の既定実装は「統計がまだ無いので空を返す」ことで**偶然**これを避けていた。
+ * こちらは**キャッシュから返す**（`data` の中身は描画のたびに変わるのにキャッシュは残る）ので、
+ * **描画時点の頂点数を必ず見る**必要がある。
+ *
+ * <p>プローブ（1 点）は別経路（`drawTextBox` をハンドル位置に描く）なので 1 点で足りる。
+ */
+export function canPlaceTextBox(data: unknown, stats: RoiStatsResult): boolean {
+  const d = data as
+    | { contour?: { polyline?: unknown[] }; handles?: { points?: unknown[] } }
+    | null
+    | undefined;
+  const n = d?.contour?.polyline?.length ?? d?.handles?.points?.length ?? 0;
+  return stats.geometry.kind === "point" ? n >= 1 : n >= 2;
 }
 
 /**

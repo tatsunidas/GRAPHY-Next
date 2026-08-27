@@ -559,7 +559,10 @@ export function computeRoiStatsFrom(input: RoiStatsInput): RoiStatsResult {
   }
 
   const mesh = buildRoiMesh(tool, pointsPx, closed);
-  if (!mesh || !mesh.pointsPx.length) {
+  // 面型・線型は**2 点未満では何も測れない**（周囲長 0 のような無意味な値を作らない）。
+  // 描いている最中の輪郭がここへ来る。点型は 1 点で足りる。
+  const minPoints = kind === "point" ? 1 : 2;
+  if (!mesh || mesh.pointsPx.length < minPoints) {
     warnings.push("empty-mesh");
     return base;
   }
