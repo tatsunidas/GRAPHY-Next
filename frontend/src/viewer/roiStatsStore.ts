@@ -154,12 +154,17 @@ function store(uid: string, data: object | undefined, entry: Entry): void {
 
 // ───────────────────────── 計算 ─────────────────────────
 
+interface Detail {
+  withProfile?: boolean;
+  withHistogram?: boolean;
+}
+
 function computeWithSlice(
   uid: string,
   ann: Any,
   r: Resolved,
   slice: ModalitySlice | null,
-  withProfile: boolean,
+  detail: Detail,
 ): RoiStatsResult {
   const result = computeRoiStatsFrom({
     roiUid: uid,
@@ -171,7 +176,8 @@ function computeWithSlice(
     unit: r.unit,
     spacingX: r.spacingX,
     spacingY: r.spacingY,
-    withProfile,
+    withProfile: !!detail.withProfile,
+    withHistogram: !!detail.withHistogram,
   });
   store(uid, ann?.data, { result, signature: signatureOf(r) });
   return result;
@@ -186,35 +192,40 @@ function computeWithSlice(
  * <b>載っていなければ統計を出さない</b>（Cornerstone の `cachedStats` で埋めない
  * ——単位系が黙って混ざる方が有害）。
  */
-export function computeRoiStatsNow(uid: string, opts?: { withProfile?: boolean; force?: boolean }): RoiStatsResult | undefined {
+export function computeRoiStatsNow(uid: string, opts?: Detail & { force?: boolean }): RoiStatsResult | undefined {
   const ann = getAnnotation(uid);
   if (!ann) return undefined;
   const r = resolveInputs(ann);
   if (!r) return undefined;
-  const sig = signatureOf(r);
   const hit = byUid.get(uid);
-  if (!opts?.force && hit?.signature === sig && (!opts?.withProfile || hit.result.profile)) {
+  if (!opts?.force && hit?.signature === signatureOf(r) && detailSatisfied(hit.result, opts)) {
     return hit.result;
   }
-  return computeWithSlice(uid, ann, r, readModalitySliceSync(r.refImageId), !!opts?.withProfile);
+  return computeWithSlice(uid, ann, r, readModalitySliceSync(r.refImageId), opts ?? {});
+}
+
+/** キャッシュ済みの結果が、求められた詳細（プロファイル・ヒストグラム）を満たしているか。 */
+function detailSatisfied(result: RoiStatsResult, opts: Detail | undefined): boolean {
+  if (opts?.withProfile && !result.profile && result.geometry.kind === "line") return false;
+  if (opts?.withHistogram && !result.histogram && result.values) return false;
+  return true;
 }
 
 /** いますぐ計算して返す（**非同期**・画素が未ロードなら読み込む）。ダイアログ用。 */
 export async function computeRoiStatsAsync(
   uid: string,
-  opts?: { withProfile?: boolean; force?: boolean },
+  opts?: Detail & { force?: boolean },
 ): Promise<RoiStatsResult | undefined> {
   const ann = getAnnotation(uid);
   if (!ann) return undefined;
   const r = resolveInputs(ann);
   if (!r) return undefined;
-  const sig = signatureOf(r);
   const hit = byUid.get(uid);
-  if (!opts?.force && hit?.signature === sig && (!opts?.withProfile || hit.result.profile)) {
+  if (!opts?.force && hit?.signature === signatureOf(r) && detailSatisfied(hit.result, opts)) {
     return hit.result;
   }
   const slice = await readModalitySlice(r.refImageId);
-  return computeWithSlice(uid, ann, r, slice, !!opts?.withProfile);
+  return computeWithSlice(uid, ann, r, slice, opts ?? {});
 }
 
 function getAnnotation(uid: string): Any {
@@ -296,7 +307,7 @@ async function sweep(): Promise<void> {
       const slice = (await readModalitySlice(s.r.refImageId)) ?? null;
       // 待っているあいだに消された ROI は書かない（消えた ROI の統計が残る）。
       if (!getAnnotation(s.uid)) continue;
-      computeWithSlice(s.uid, s.ann, s.r, slice, false);
+      computeWithSlice(s.uid, s.ann, s.r, slice, {});
     }
     if (stale.length > batch.length) scheduleRoiStatsSweep();
     renderAnnotations();

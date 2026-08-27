@@ -106,6 +106,8 @@ export interface RoiStatsResult {
   geometry: RoiGeometryStats;
   values?: RoiValueStats;
   profile?: RoiProfile;
+  /** 要約統計と**同じ母集団**のヒストグラム。詳細表示を求められたときだけ入る。 */
+  histogram?: HistogramData;
   computedAt: number;
   /** 出せなかった理由。`"no-spacing"` / `"no-pixels"` / `"unsupported-tool"` / `"empty-mesh"` */
   warnings: string[];
@@ -524,6 +526,8 @@ export interface RoiStatsInput {
   spacingY: number | null | undefined;
   /** 開 ROI の線プロファイルも作るか（詳細表示のときだけ true）。 */
   withProfile?: boolean;
+  /** ヒストグラムも作るか（詳細表示のときだけ true）。要約統計と**同じ母集団**から作る。 */
+  withHistogram?: boolean;
 }
 
 /**
@@ -603,7 +607,9 @@ export function computeRoiStatsFrom(input: RoiStatsInput): RoiStatsResult {
 
   const values = summarizeValues(samples, unit) ?? undefined;
   if (!values) warnings.push("no-pixels");
-  return { ...base, geometry, values, profile };
+  // ヒストグラムは要約統計と同じサンプル集合から作る（別経路にすると数字が食い違う）。
+  const histogram = input.withHistogram && values ? (roiHistogram(samples, unit) ?? undefined) : undefined;
+  return { ...base, geometry, values, profile, histogram };
 }
 
 // ───────────────────────── 小物（非公開） ─────────────────────────

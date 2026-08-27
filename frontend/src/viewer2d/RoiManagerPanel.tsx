@@ -37,6 +37,7 @@ import { importImageJDtos } from "../viewer/imagejImport";
 import { exportImageJRoiSet, importImageJRoiSet } from "../api";
 import { saveRoiNow, scheduleRoiSave, subscribeRoiSave } from "../viewer/roiSaveStore";
 import { RoiMetaEditDialog } from "./RoiMetaEditDialog";
+import { RoiStatsDialog } from "./RoiStatsDialog";
 import { useI18n } from "../i18n/i18n";
 
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
@@ -98,6 +99,8 @@ export function RoiManagerPanel({
   const [rois, setRois] = useState<RoiRow[]>([]);
   const [masks, setMasks] = useState<MaskRow[]>([]);
   const [editId, setEditId] = useState<string | null>(null);
+  // 計測結果ダイアログ。null=閉。{focus} は開いた直後に詳細を出す ROI（ヘッダから開くと未指定）。
+  const [statsOpen, setStatsOpen] = useState<{ focus?: string } | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   // SEG⬆ インポートの進捗率（0〜1）。null は非実行中（SEG⬆ ボタンの円形プログレス表示に使う）。
@@ -609,6 +612,9 @@ export function RoiManagerPanel({
             "SEG ⬆"
           )}
         </button>
+        {rois.length > 0 && (
+          <button onClick={() => setStatsOpen({})} style={opBtn} title={t("roiMgr.statsAll")}>Σ</button>
+        )}
         {!isDemo && rois.length > 0 && <button onClick={runExportRois} disabled={busy} style={opBtn} title={t("roiMgr.exportIJ")}>IJ ⬇</button>}
         {!isDemo && rois.length > 0 && <button onClick={runExportRtStruct} disabled={busy} style={opBtn} title={t("roiMgr.exportRt")}>RT ⬇</button>}
       </div>
@@ -628,6 +634,7 @@ export function RoiManagerPanel({
           {isAreaRoi(r.tool) && <button onClick={() => runRoiToMask(r.uid)} disabled={busy} style={editBtn} title={t("roiMgr.toMask")}>▦</button>}
           {/circle/i.test(r.tool) && <button onClick={() => runDefineSphere(r.uid)} disabled={busy} style={editBtn} title={t("roiMgr.defineSphere")}>◎</button>}
           {/circle/i.test(r.tool) && <button onClick={() => runSphere(r.uid)} disabled={busy} style={editBtn} title={t("roiMgr.toSphere")}>⬤</button>}
+          <button onClick={() => setStatsOpen({ focus: r.uid })} style={editBtn} title={t("roiMgr.statsRoi")}>Σ</button>
           <button onClick={() => setEditId(r.uid)} style={editBtn} title={t("roiMgr.editTitle")}>✎</button>
           <button onClick={() => deleteRoi(r.uid)} style={delBtn} title={t("common.delete")}>🗑</button>
         </div>
@@ -664,7 +671,7 @@ export function RoiManagerPanel({
           <input type="number" min={0} max={10} defaultValue={maskDefaults.outlineWidth} onChange={(e) => setMaskStyle(m.id, { outlineWidth: Number(e.target.value) })} title={t("roiMgr.lineWidth")} style={numInput} />
           <input type="checkbox" defaultChecked onChange={(e) => setMaskStyle(m.id, { renderFill: e.target.checked })} title={t("roiMgr.fill")} />
           {m.scope && <button onClick={() => toggleScopeZ(m.id)} style={scopeChip} title={t("roiMgr.scopeToggleMask")}>{m.scope}</button>}
-          <button onClick={() => runStats(m.id)} style={editBtn} title={t("roiMgr.stats")}>Σ</button>
+          <button onClick={() => runStats(m.id)} style={editBtn} title={t("roiMgr.stats")}>Σ³</button>
           <button onClick={() => runSplitToSlices(m.id)} disabled={busy} style={editBtn} title={t("roiMgr.toSlices")}>⬚</button>
           {/* SEG書き出しは毎晩の自動リストアで確実に消えるため、他の持ち出し系と異なりデモでも許可
              （backend DemoModeFilter・fw/web-demo-hosting.md 参照）。 */}
@@ -737,6 +744,13 @@ export function RoiManagerPanel({
 
       <div style={note}>{t("roiMgr.m1note")}</div>
       {editId && <RoiMetaEditDialog itemId={editId} onClose={() => { setEditId(null); refresh(); }} />}
+      {statsOpen && (
+        <RoiStatsDialog
+          targets={rois.map((r) => ({ uid: r.uid, tool: r.tool }))}
+          initialUid={statsOpen.focus}
+          onClose={() => setStatsOpen(null)}
+        />
+      )}
     </div>
   );
 }
