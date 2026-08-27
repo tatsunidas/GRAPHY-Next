@@ -34,7 +34,9 @@ import pydicom
 from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from wrap_public_xa import SPECS, build_xa, collect_jobs, _load_frames  # noqa: E402
+from wrap_public_xa import (  # noqa: E402
+    SPECS, build_xa, collect_jobs, patient_key_of, _load_frames,
+)
 
 passed = 0
 failures = 0
@@ -188,6 +190,46 @@ def main() -> int:
         check(order == list(range(12)),
               "フレームを整数順に並べる（名前順だと i10 が i2 より先に来る）",
               f"{order[:5]}...{order[-3:]}")
+
+        # ── 4c. 患者単位のまとめ ─────────────────────────────────────────
+        # 同じ患者の複数ランは 1 人・1 スタディの下に並ぶ（実物に近い形）。
+        print("\n----- 患者単位のまとめ -----")
+        cad = SPECS["cadica"]
+        k1 = "selectedVideos/p41/v18/input"
+        k2 = "selectedVideos/p41/v8/input"
+        k3 = "nonselectedVideos/p41/v3/input"
+        k4 = "selectedVideos/p24/v15/input"
+        check(patient_key_of(cad, k1) == "p41" and patient_key_of(cad, k4) == "p24",
+              "シリーズ鍵から患者鍵を取れる",
+              f"{patient_key_of(cad, k1)} / {patient_key_of(cad, k4)}")
+        check(patient_key_of(cad, k3) == "p41",
+              "nonselectedVideos も同じ患者にまとまる")
+
+        built = {}
+        for i, k in enumerate((k1, k2, k3, k4), start=1):
+            built[k] = build_xa(frames[:3], bits, spec=cad, group_key=k,
+                                attribution=cad.attribution, fps=cad.fps,
+                                series_number=i)
+        check(built[k1].PatientID == built[k2].PatientID == built[k3].PatientID,
+              "同じ患者の 3 ランが同じ PatientID", built[k1].PatientID)
+        check(built[k1].StudyInstanceUID == built[k2].StudyInstanceUID,
+              "同じ患者なら StudyInstanceUID も同じ")
+        check(built[k1].SeriesInstanceUID != built[k2].SeriesInstanceUID,
+              "ランごとに SeriesInstanceUID は違う")
+        check(built[k1].SeriesNumber != built[k2].SeriesNumber,
+              "同じスタディ内でシリーズ番号が重ならない",
+              f"{built[k1].SeriesNumber} / {built[k2].SeriesNumber}")
+        check(built[k1].PatientID != built[k4].PatientID,
+              "別の患者は別の PatientID")
+        check(built[k1].StudyID == "p41", "StudyID が患者鍵", built[k1].StudyID)
+
+        # 患者の対応が分からないデータは 1 シリーズ = 1 患者のまま
+        d1 = build_xa(frames[:3], bits, spec=seq_spec, group_key="a",
+                      attribution=seq_spec.attribution, fps=seq_spec.fps)
+        d2 = build_xa(frames[:3], bits, spec=seq_spec, group_key="b",
+                      attribution=seq_spec.attribution, fps=seq_spec.fps)
+        check(d1.PatientID != d2.PatientID,
+              "patient_pattern が無いデータは 1 シリーズ = 1 患者のまま")
 
         # ── 5. 寸法違いは黙って直さない ──────────────────────────────────
         print("\n----- 壊れた入力 -----")

@@ -104,6 +104,10 @@ class DatasetSpec:
     #: フレームの並び順。None なら名前順。指定すると最初の捕獲群を整数として使う
     #: （i10 が i2 より先に来る名前順の罠を避ける）。
     frame_index_pattern: str | None = None
+    #: 患者の切り分け。シリーズ鍵に当てて最初の捕獲群を患者鍵にする。
+    #: 同じ患者の複数ランが PatientID と StudyInstanceUID を共有し、シリーズだけ分かれる。
+    #: None なら 1 シリーズ = 1 患者（患者の対応が分からないデータはこちら）。
+    patient_pattern: str | None = None
 
 
 SPECS: dict[str, DatasetSpec] = {
@@ -120,6 +124,9 @@ SPECS: dict[str, DatasetSpec] = {
         note=("1 ラン 1〜151 フレーム（10 fps・4〜8 秒・512×512）。"
               "解析できる数少ない公開データ。フレームは `input/` 配下に"
               "ゼロ埋めの連番で並ぶのでディレクトリ単位の束ねで足りる。"),
+        # pX が患者。selectedVideos / nonselectedVideos をまたいでも同じ患者なので、
+        # 両方が 1 人の患者の下にまとまる。
+        patient_pattern=r"(p\d+)",
     ),
     "dias": DatasetSpec(
         key="dias",
@@ -272,6 +279,14 @@ def _load_frames(paths: list[str]) -> tuple[np.ndarray, int]:
     return stacked.astype(np.uint8), 8
 
 
+def patient_key_of(spec: DatasetSpec, group_key: str) -> str:
+    """シリーズ鍵から患者鍵を取る。取れなければシリーズ鍵そのもの（＝1 シリーズ 1 患者）。"""
+    if not spec.patient_pattern:
+        return group_key
+    m = re.search(spec.patient_pattern, group_key)
+    return m.group(1) if m else group_key
+
+
 def build_xa(
     frames: np.ndarray,
     bits: int,
@@ -280,6 +295,7 @@ def build_xa(
     group_key: str,
     attribution: str,
     fps: float,
+    series_number: int = 1,
 ) -> Dataset:
     """マルチフレーム（または単一フレーム）XA インスタンスを組む。
 
@@ -307,7 +323,9 @@ def build_xa(
     ds.Modality = "XA"
 
     # 患者は仮名。元データが既に匿名化されているので、こちらで新たな同定情報は作らない。
-    pseudo = hashlib.sha256(uid_key.encode("utf-8")).hexdigest()[:8].upper()
+    # 患者鍵が取れるデータでは、同じ患者の複数ランが 1 人の下にまとまる（実物に近い形）。
+    pkey = patient_key_of(spec, group_key)
+    pseudo = hashlib.sha256(f"{spec.key}/{pkey}".encode("utf-8")).hexdigest()[:8].upper()
     ds.PatientID = f"{spec.key.upper()}-{pseudo}"
     ds.PatientName = f"{spec.title}^{pseudo}"
     ds.PatientBirthDate = ""
@@ -315,9 +333,10 @@ def build_xa(
     ds.PatientIdentityRemoved = "YES"
     ds.DeidentificationMethod = "published de-identified by the source dataset"
 
-    ds.StudyInstanceUID = deterministic_uid("wrap-public-xa", spec.key, group_key, "study")
+    # スタディは患者単位、シリーズはラン単位。
+    ds.StudyInstanceUID = deterministic_uid("wrap-public-xa", spec.key, pkey, "study")
     ds.SeriesInstanceUID = deterministic_uid("wrap-public-xa", uid_key, "series")
-    ds.StudyID = spec.key.upper()[:16]
+    ds.StudyID = pkey[:16]
     ds.AccessionNumber = ""
     ds.StudyDate = "20260101"
     ds.StudyTime = "120000"
@@ -327,7 +346,7 @@ def build_xa(
     ds.ContentTime = "120000"
     ds.StudyDescription = f"{spec.title} (public dataset)"
     ds.SeriesDescription = f"{spec.title} {group_key}"[:64]
-    ds.SeriesNumber = 1
+    ds.SeriesNumber = series_number
     ds.InstanceNumber = 1
     ds.Manufacturer = "Visionary Imaging Services"
     ds.ManufacturerModelName = "wrap_public_xa"
@@ -384,6 +403,14 @@ def run(src: str, out: str, spec: DatasetSpec, *, attribution: str, fps: float,
     if not dry_run:
         os.makedirs(out, exist_ok=True)
 
+    # 同じ患者の中でシリーズ番号を 1 から振る（1 スタディに複数シリーズが並ぶため）。
+    seen_per_patient: dict[str, int] = {}
+    series_no: dict[str, int] = {}
+    for job in jobs:
+        pk = patient_key_of(spec, job.group_key)
+        seen_per_patient[pk] = seen_per_patient.get(pk, 0) + 1
+        series_no[job.group_key] = seen_per_patient[pk]
+
     written = 0
     total_frames = 0
     for job in jobs:
@@ -400,7 +427,8 @@ def run(src: str, out: str, spec: DatasetSpec, *, attribution: str, fps: float,
                   f"{frames.shape[2]}x{frames.shape[1]}  {bits}bit")
         else:
             ds = build_xa(frames, bits, spec=spec, group_key=job.group_key,
-                          attribution=attribution, fps=fps)
+                          attribution=attribution, fps=fps,
+                          series_number=series_no[job.group_key])
             ds.save_as(path, enforce_file_format=True)
             print(f"  + {path}  {frames.shape[0]} frames  "
                   f"{frames.shape[2]}x{frames.shape[1]}  {bits}bit")
