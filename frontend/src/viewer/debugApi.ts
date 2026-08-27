@@ -5,6 +5,8 @@
 import { cache, getRenderingEngine, metaData } from "@cornerstonejs/core";
 import { ENGINE_ID } from "./Viewer2D";
 import { readCamera, readColormapName, readInvert, readVoiWindow } from "./viewportRead";
+import { annotation as csAnnotation } from "@cornerstonejs/tools";
+import { getRoiStats, getRoiStatsByData } from "./roiStatsStore";
 
 /**
  * automator（自律検証ツール）専用のデバッグAPI。`window.__graphyDebug` として公開し、
@@ -556,9 +558,45 @@ function getGeometry3dStats(): { total: number; nonBackground: number; fraction:
   return geometry3dProbe ? geometry3dProbe() : null;
 }
 
+/**
+ * ROI 統計の**同じ ROI に対する 2 つの読み口**を並べて返す（automator の切り分け用）。
+ *
+ * <p>表示（`annotation.data` をキーにした WeakMap）と問い合わせ（annotationUID の Map）が
+ * 食い違うと「画面の値とプラグインの値が違う」になる。どちらが古いのかを機械的に見る口。
+ */
+function getRoiStatsPair(): Array<{
+  uid: string;
+  tool: string;
+  refImageId: string | null;
+  byUidMean: number | null;
+  byDataMean: number | null;
+  byUidSamples: number | null;
+  byDataSamples: number | null;
+  sameEntry: boolean;
+}> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const anns = ((csAnnotation.state as any).getAllAnnotations?.() ?? []) as any[];
+  return anns.map((a) => {
+    const uid = (a?.annotationUID as string) ?? "";
+    const byUid = getRoiStats(uid);
+    const byData = getRoiStatsByData(a?.data);
+    return {
+      uid,
+      tool: (a?.metadata?.toolName as string) ?? "",
+      refImageId: (a?.metadata?.referencedImageId as string) ?? null,
+      byUidMean: byUid?.values?.mean ?? null,
+      byDataMean: byData?.values?.mean ?? null,
+      byUidSamples: byUid?.geometry.sampleCount ?? null,
+      byDataSamples: byData?.geometry.sampleCount ?? null,
+      sameEntry: !!byUid && byUid === byData,
+    };
+  });
+}
+
 declare global {
   interface Window {
     __graphyDebug?: {
+      getRoiStatsPair: typeof getRoiStatsPair;
       getImagePixelRange: typeof getImagePixelRange;
       getPixelStats: typeof getPixelStats;
       getViewportGeometry: typeof getViewportGeometry;
@@ -580,6 +618,7 @@ let installed = false;
 export function installDebugApi(): void {
   if (installed || !import.meta.env.DEV) return;
   window.__graphyDebug = {
+    getRoiStatsPair,
     getImagePixelRange,
     getPixelStats,
     getViewportGeometry,

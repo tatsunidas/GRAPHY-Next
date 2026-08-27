@@ -10,7 +10,7 @@
  * 設計: `fw/roi-manager-design.md`（M1=骨組み＋表示属性）。
  * 後続(M2+): 色/線幅/塗り, ZCT scope/メタ編集, ブール演算, 3D 変換, 保存(ImageJ/DICOM)。
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { eventTarget, getRenderingEngine, Enums as csEnums } from "@cornerstonejs/core";
 import {
   annotation as csAnnotation,
@@ -101,6 +101,10 @@ export function RoiManagerPanel({
   const [editId, setEditId] = useState<string | null>(null);
   // 計測結果ダイアログ。null=閉。{focus} は開いた直後に詳細を出す ROI（ヘッダから開くと未指定）。
   const [statsOpen, setStatsOpen] = useState<{ focus?: string } | null>(null);
+  // ⚠ ダイアログの `targets` は毎レンダで作り直さない。参照が変わるたびに統計の再計算
+  // （非同期ループ）が最初からやり直しになり、表がちらつく。保存通知などで
+  // このパネルは頻繁に再レンダされる。
+  const statsTargets = useMemo(() => rois.map((r) => ({ uid: r.uid, tool: r.tool })), [rois]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   // SEG⬆ インポートの進捗率（0〜1）。null は非実行中（SEG⬆ ボタンの円形プログレス表示に使う）。
@@ -746,7 +750,7 @@ export function RoiManagerPanel({
       {editId && <RoiMetaEditDialog itemId={editId} onClose={() => { setEditId(null); refresh(); }} />}
       {statsOpen && (
         <RoiStatsDialog
-          targets={rois.map((r) => ({ uid: r.uid, tool: r.tool }))}
+          targets={statsTargets}
           initialUid={statsOpen.focus}
           onClose={() => setStatsOpen(null)}
         />
