@@ -1535,7 +1535,24 @@ const controls: React.CSSProperties = {
   gap: 8,
   maxWidth: 560,
 };
-const row: React.CSSProperties = { display: "flex", alignItems: "center", gap: 10 };
+/**
+ * 操作行。**必ず折り返す**（`flexWrap`）。
+ *
+ * <p>アンギオ（XA）の行はボタンが 8 個以上並ぶ。折り返さないと flex が**ボタンだけを縮め**、
+ * 文字は縮まないのでラベルが枠からはみ出す（実機で判明・2026-08-27）。
+ * 併せて {@link btn} 側で `flexShrink: 0` と `whiteSpace: "nowrap"` を指定し、
+ * 「ボタンは自然な幅を保ち、入り切らなければ次の行へ送る」に統一する。
+ */
+const row: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  // ⚠ ショートハンドの `gap` と長い方（`rowGap`）を**混ぜない**。React は再レンダで
+  //    片方だけが消えると警告を出す（"Removing a style property during rerender"）。
+  //    行間と列間で値が違うので、最初から両方を長い方で書く。
+  columnGap: 10,
+  rowGap: 6,
+};
 const dimLabel: React.CSSProperties = {
   fontSize: 12,
   color: "#5a6672",
@@ -1550,6 +1567,9 @@ const btn: React.CSSProperties = {
   background: "#fff",
   cursor: "pointer",
   fontSize: 13,
+  // ラベルを 1 行に保ち、狭いときは縮むのではなく次の行へ送る（`row` の flexWrap と対）。
+  whiteSpace: "nowrap",
+  flexShrink: 0,
 };
 const selectBox: React.CSSProperties = {
   padding: "3px 6px",
@@ -1557,6 +1577,7 @@ const selectBox: React.CSSProperties = {
   borderRadius: 6,
   background: "#fff",
   fontSize: 13,
+  flexShrink: 0,
 };
 const hint: React.CSSProperties = { fontSize: 12, color: "#9aa6b2" };
 const gridScroll: React.CSSProperties = {
