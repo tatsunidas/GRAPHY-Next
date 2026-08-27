@@ -70,7 +70,11 @@ import {
   type ViewerXaState,
 } from "./viewerCommands";
 import { buildPluginMeta, computeCalipers, hasShapeCalipers, pickPluginMeta, readRoiStats } from "./roiRead";
-import { CONTOUR_TOOL_NAMES, contourToolConfig } from "./roiContourTools";
+import { CONTOUR_TOOL_NAMES } from "./roiContourTools";
+import { measureToolConfig } from "./roiStatsTextBox";
+import { useRoiStatsDisplay } from "./roiStatsDisplay";
+import { subscribeRoiStats } from "./roiStatsStore";
+import { buildRoiStatsCornerRows, sameCornerRows, type RoiStatsCornerRow } from "./roiStatsCorner";
 import { subscribeSuvStore, suvForImageId, seriesUidOf } from "./suvStore";
 import {
   getFusionProbeData,
@@ -366,6 +370,7 @@ function sameMarkers(a: OrientationMarkers | null, b: OrientationMarkers | null)
 /** 空配列は毎回作らず使い回す（新しい配列は「変化した」と誤判定される）。 */
 const EMPTY_SEGMENTS: RefSegment[] = [];
 const EMPTY_CIRCLES: SphereCanvasCircle[] = [];
+const EMPTY_ROI_ROWS: RoiStatsCornerRow[] = [];
 
 function sameSegments(a: RefSegment[], b: RefSegment[]): boolean {
   if (a === b) return true;
@@ -666,6 +671,34 @@ export function Viewer2D({
   }, [compact, syncGroupId]);
   recomputeSpheresRef.current = recomputeSpheres;
 
+  // ROI 統計の隅一覧（placement="corner"）。表と ROI の対応を付けるため #n バッジも出す。
+  const statsDisplay = useRoiStatsDisplay();
+  const statsDisplayRef = useRef(statsDisplay);
+  statsDisplayRef.current = statsDisplay;
+  const [roiStatRows, setRoiStatRows] = useState<RoiStatsCornerRow[]>(EMPTY_ROI_ROWS);
+  const lastRoiStatRowsRef = useRef<RoiStatsCornerRow[]>(EMPTY_ROI_ROWS);
+  const applyRoiStatRows = useCallback((next: RoiStatsCornerRow[]) => {
+    if (sameCornerRows(lastRoiStatRowsRef.current, next)) return;
+    lastRoiStatRowsRef.current = next;
+    setRoiStatRows(next);
+  }, []);
+  const recomputeRoiStatRowsRef = useRef<() => void>(() => {});
+  const recomputeRoiStatRows = useCallback(() => {
+    const v = viewportRef.current;
+    if (!v || statsDisplayRef.current.placement !== "corner") {
+      applyRoiStatRows(EMPTY_ROI_ROWS);
+      return;
+    }
+    const imageId = imageIdsRef.current[indexRef.current] ?? null;
+    applyRoiStatRows(buildRoiStatsCornerRows(v as unknown as { worldToCanvas: (w: number[]) => number[] }, imageId, t));
+  }, [applyRoiStatRows, t]);
+  recomputeRoiStatRowsRef.current = recomputeRoiStatRows;
+  // 統計の更新・表示モードの変更・スライス送りで作り直す（カメラ追従は onCameraModified 側）。
+  useEffect(() => {
+    recomputeRoiStatRows();
+    return subscribeRoiStats(() => recomputeRoiStatRowsRef.current());
+  }, [recomputeRoiStatRows, statsDisplay, imageIndex, stackKey]);
+
   /** 左ドラッグの割り当てを Pan↔W/L で切り替える。 */
   const togglePan = () => {
     // ROI/描画/セグメンテーション系ツールが有効な間は切替を抑止し、先に解除を促す。
@@ -923,6 +956,8 @@ export function Viewer2D({
       const calibrated = Boolean(infoRef.current?.columnPixelSpacing);
       const nextSb = computeScaleBar(vp, element, calibrated);
       applyScaleBarState(nextSb);
+      // ROI 統計の #n バッジは canvas 座標なので、zoom/pan/flip/rotation に追従させる。
+      recomputeRoiStatRowsRef.current();
       // Fusion / プラグイン（H4a）のオーバーレイ位置追従。
       if (renderOverlayRef.current || pluginOverlayRef.current) {
         const next = computeImageRect(vp);
@@ -1033,12 +1068,14 @@ export function Viewer2D({
             tg.addTool(ZoomTool.toolName);
             // 計測（ROI）ツールは passive で追加。setActiveTool で左ドラッグに割当。
             for (const tn of MEASURE_TOOLS) {
-              // 輪郭系は登録時にしか設定を渡せない（2 度目の addTool は無視される）。
-              tg.addTool(tn, contourToolConfig(tn));
+              // 設定は登録時にしか渡せない（2 度目の addTool は無視される）。
+              // 統計の表示（getTextLines）もここで全ツール共通の実装に差し替える
+              // ——ツール既定に任せると矩形だけ詳しく・ポリゴンは面積だけ、に戻る。
+              tg.addTool(tn, measureToolConfig(tn));
               tg.setToolPassive(tn);
             }
             // ImageJ インポートの polygon/freehand ROI 描画用（メニューには出さず passive で追加）。
-            tg.addTool(PlanarFreehandROITool.toolName);
+            tg.addTool(PlanarFreehandROITool.toolName, measureToolConfig(PlanarFreehandROITool.toolName));
             tg.setToolPassive(PlanarFreehandROITool.toolName);
             // ROI ブラシ（セグメンテーション編集）。passive で追加。
             tg.addTool(BrushTool.toolName);
@@ -2427,6 +2464,41 @@ export function Viewer2D({
               </div>
             </div>
           )}
+          {/* ROI 統計の隅一覧（placement="corner"）＋ ROI 脇の #n バッジ。
+              DICOM 属性テキストの右下と重ならないよう、統計はその上へ積む。 */}
+          {roiStatRows.length > 0 && (
+            <>
+              <svg style={refLineSvg}>
+                {roiStatRows.map((r) =>
+                  r.cx === null || r.cy === null ? null : (
+                    <text
+                      key={r.uid}
+                      x={r.cx}
+                      y={r.cy}
+                      fill={r.selected ? ROI_BADGE_SELECTED : ROI_BADGE_COLOR}
+                      fontSize={12}
+                      textAnchor="middle"
+                      style={refLineText}
+                    >
+                      #{r.index}
+                    </text>
+                  ),
+                )}
+              </svg>
+              <div data-testid="roi-stats-corner" style={roiStatsCornerBox}>
+                {roiStatRows.map((r) => (
+                  <div
+                    key={r.uid}
+                    style={{ color: r.selected ? ROI_BADGE_SELECTED : ROI_BADGE_COLOR, whiteSpace: "nowrap" }}
+                  >
+                    <span style={{ opacity: 0.8 }}>#{r.index}</span>
+                    {r.label ? ` ${r.label}` : ""}
+                    {r.summary ? `  ${r.summary}` : ""}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
           {/* DICOM 属性テキスト（4 隅・設定可能）。viewer 状態行(zoom/WL,cursor)の下に重ねる。 */}
           {dicomText && (
             <>
@@ -2588,6 +2660,31 @@ function CornerText({ lines, style, testId }: { lines: string[]; style: React.CS
     </div>
   );
 }
+
+/** #n バッジと隅一覧の色。選択中は Cornerstone の選択色（緑）に合わせる。 */
+const ROI_BADGE_COLOR = "#ffe082";
+const ROI_BADGE_SELECTED = "#69f0ae";
+
+/**
+ * 隅一覧の箱。DICOM 属性テキストの右下（`dicomBR`）と場所が競合するので、**その上へ積む**
+ * （利用者が右下にタグを割り当てていても潰さない）。`bottom` は dicomBR ぶんの余白を見込む。
+ */
+const roiStatsCornerBox: React.CSSProperties = {
+  position: "absolute",
+  right: 6,
+  bottom: 4,
+  display: "flex",
+  flexDirection: "column-reverse",
+  alignItems: "flex-end",
+  gap: 1,
+  maxWidth: "70%",
+  maxHeight: "45%",
+  overflow: "hidden",
+  fontSize: 11,
+  lineHeight: 1.35,
+  textShadow: "0 0 3px #000, 0 0 2px #000",
+  pointerEvents: "none",
+};
 
 const dicomBase: React.CSSProperties = {
   position: "absolute",

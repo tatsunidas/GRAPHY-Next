@@ -332,6 +332,38 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
             max: 10,
             helpKey: "settings.field.roiDefaultLineWidth.help",
           },
+          // ROI 統計の表示（fw/roi-stats-design.md §5・§8）。
+          // 1 本の列挙にせず 3 つの独立した軸にしてある（組み合わせで欲しい状態が全部作れる）。
+          {
+            key: "roi.statsPlacement",
+            labelKey: "settings.field.roiStatsPlacement",
+            type: "select",
+            default: "beside",
+            options: [
+              { value: "beside", labelKey: "settings.opt.roiStats.beside" },
+              { value: "corner", labelKey: "settings.opt.roiStats.corner" },
+              { value: "off", labelKey: "settings.opt.roiStats.off" },
+            ],
+            helpKey: "settings.field.roiStatsPlacement.help",
+          },
+          {
+            key: "roi.statsDetail",
+            labelKey: "settings.field.roiStatsDetail",
+            type: "select",
+            default: "compact",
+            options: [
+              { value: "compact", labelKey: "settings.opt.roiStats.compact" },
+              { value: "full", labelKey: "settings.opt.roiStats.full" },
+            ],
+            helpKey: "settings.field.roiStatsDetail.help",
+          },
+          {
+            key: "roi.statsSelectedOnly",
+            labelKey: "settings.field.roiStatsSelectedOnly",
+            type: "toggle",
+            default: false,
+            helpKey: "settings.field.roiStatsSelectedOnly.help",
+          },
         ],
       },
       {
