@@ -19,6 +19,11 @@
  *
  * ⚠ **未検証**: SUV 校正済み PET（fixture `pet-suv` が未取得）。RS5 の目玉である
  *   「SUV 校正で値と単位が変わる」はここでは確かめられていない。
+ *
+ * 🔴 **[3] は RS5（H5 の切り替え）が入っていることが前提**。入っていないブランチで回すと
+ *   プラグインは Cornerstone の `cachedStats` を受け取るので、画面の値と 0.2 HU ほどずれて
+ *   [3] だけ FAIL する（**それが切り替え前の正常な姿**）。実機を回す前に
+ *   `git branch --show-current` を見ること——取り違えて 3 回再現した前例がある。
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -355,10 +360,12 @@ async function main(): Promise<void> {
     check(!!m, "プラグインが ROI を 1 件受け取る", payload.rois?.length);
     if (m) {
       console.log(`  H5: rois=${payload.rois?.length} uid=${payload.rois?.[0]?.roiUid} mean=${m.mean} unit=${m.unit} area=${m.area}`);
+      // 画面は小数 2 桁で表示するので、**画面の丸め幅**で突き合わせる
+      //   （full precision と直接比べると、正しくても必ず落ちる）。
       check(
-        typeof m.mean === "number" && Math.abs(m.mean - dialogMean) < 1e-9,
-        "H5 の平均が画面の値と一致する",
-        { plugin: m.mean, screen: dialogMean },
+        typeof m.mean === "number" && Number(m.mean.toFixed(2)) === dialogMean,
+        "H5 の平均が画面の値と一致する（画面の丸め幅で）",
+        { plugin: m.mean, pluginRounded: typeof m.mean === "number" ? Number(m.mean.toFixed(2)) : null, screen: dialogMean },
       );
       pluginMean = typeof m.mean === "number" ? m.mean : null;
       // 🔎 表示用（data キー）と問い合わせ用（uid キー）の 2 つの読み口を並べて見る。
