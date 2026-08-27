@@ -147,6 +147,23 @@ function signatureOf(r: Resolved): string {
   return `${r.tool}|${r.refImageId}|${r.closed}|${r.pointsPx.length}|${sum.toFixed(4)}|${r.unit}|${calibrationEpoch}`;
 }
 
+/** 入力を解決できない ROI（頂点が無い・参照画像が無い等）にも「出せない」という結果を残す。 */
+function storeUnresolved(uid: string, ann: Any): void {
+  const signature = `unresolved|${calibrationEpoch}`;
+  if (byUid.get(uid)?.signature === signature) return;
+  store(uid, ann?.data, {
+    signature,
+    result: {
+      roiUid: uid,
+      tool: (ann?.metadata?.toolName as string) ?? "",
+      imageId: (ann?.metadata?.referencedImageId as string) ?? "",
+      geometry: { kind: "none", sampleCount: 0, spatiallyCalibrated: false },
+      computedAt: Date.now(),
+      warnings: ["empty-mesh"],
+    },
+  });
+}
+
 function store(uid: string, data: object | undefined, entry: Entry): void {
   byUid.set(uid, entry);
   if (data) byData.set(data, entry);
@@ -204,8 +221,17 @@ export function computeRoiStatsNow(uid: string, opts?: Detail & { force?: boolea
   return computeWithSlice(uid, ann, r, readModalitySliceSync(r.refImageId), opts ?? {});
 }
 
-/** キャッシュ済みの結果が、求められた詳細（プロファイル・ヒストグラム）を満たしているか。 */
+/**
+ * キャッシュ済みの結果をそのまま返してよいか。
+ *
+ * <p>🔴 **画素を読めなかった結果は確定扱いにしない。** ROI が乗っているスライスがまだ
+ * 読み込まれていないと `no-pixels` になるが、署名は頂点から作るので**後で画像が載っても
+ * 署名は変わらない**——一度取りこぼすと二度と統計が出ない、という状態になる。
+ * 明示的に問い合わせる経路（ダイアログ・H5）ではやり直す。掃除（{@link sweep}）は
+ * 独自に署名だけを見るので、失敗した読み込みを毎回繰り返すことにはならない。
+ */
 function detailSatisfied(result: RoiStatsResult, opts: Detail | undefined): boolean {
+  if (result.warnings.includes("no-pixels") && result.geometry.kind !== "none") return false;
   if (opts?.withProfile && !result.profile && result.geometry.kind === "line") return false;
   if (opts?.withHistogram && !result.histogram && result.values) return false;
   return true;
@@ -263,7 +289,7 @@ function displayedImageIds(): Set<string> {
 
 // ───────────────────────── 掃除（デバウンス） ─────────────────────────
 
-let timer: number | null = null;
+let timer: ReturnType<typeof setTimeout> | null = null;
 let running = false;
 
 /**
@@ -275,7 +301,8 @@ let running = false;
  */
 export function scheduleRoiStatsSweep(): void {
   if (timer !== null) return;
-  timer = window.setTimeout(() => {
+  // `window.setTimeout` は使わない（Electron の preload や worker・テストで window が無い）。
+  timer = setTimeout(() => {
     timer = null;
     void sweep();
   }, DEBOUNCE_MS);
@@ -294,7 +321,12 @@ async function sweep(): Promise<void> {
       const uid = ann?.annotationUID as string | undefined;
       if (!uid) continue;
       const r = resolveInputs(ann);
-      if (!r) continue;
+      if (!r) {
+        // 🔴 **解決できなくても必ず結果を書く。** 書かないと `getTextLines` が毎回
+        //    キャッシュを外し、そのたびに掃除を予約し続ける（100ms ごとの空回り）。
+        storeUnresolved(uid, ann);
+        continue;
+      }
       const sig = signatureOf(r);
       if (byUid.get(uid)?.signature === sig) continue;
       stale.push({ uid, ann, r, sig, shown: shown.has(r.refImageId) });

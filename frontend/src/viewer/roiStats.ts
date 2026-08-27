@@ -144,12 +144,16 @@ const AREA_TOOLS = new Set([
   "livewirecontour",
   "graphypolygonroi",
   "graphyfreehandroi",
-  "graphypolylineroi",
-  "graphyfreelineroi",
 ]);
 
-/** 線型として扱うツール（閉じることが無いもの）。 */
-const LINE_TOOLS = new Set(["length"]);
+/**
+ * 線型として扱うツール（**閉じることが無い**もの）。
+ *
+ * <p>ポリゴンライン / フリーラインは `roiContourTools` が描き終わりに必ず開くので、
+ * `contour.closed` を見るまでもなく線型。**描いている途中は `closed` がまだ未定**で、
+ * 面型として扱うと一瞬だけ面積が出る（「線を引いたのに面積が出る」）。名前で決め打つ。
+ */
+const LINE_TOOLS = new Set(["length", "graphypolylineroi", "graphyfreelineroi"]);
 
 /** 点型。 */
 const POINT_TOOLS = new Set(["probe", "dragprobe"]);
