@@ -203,7 +203,9 @@ const code: React.CSSProperties = {
   fontFamily: "ui-monospace, monospace",
   fontSize: 12,
   background: "#f6f8fa",
-  border: "1px solid #e2e7ec",
+  borderWidth: "1px",
+  borderStyle: "solid",
+  borderColor: "#e2e7ec",
   borderRadius: 5,
   padding: "2px 7px",
 };

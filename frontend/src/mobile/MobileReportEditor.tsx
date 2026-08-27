@@ -279,7 +279,9 @@ const tabRow: React.CSSProperties = { display: "flex", gap: 6 };
 const tabBtn: React.CSSProperties = {
   flex: 1,
   minHeight: 44,
-  border: "1px solid #39414d",
+  borderWidth: "1px",
+  borderStyle: "solid",
+  borderColor: "#39414d",
   borderRadius: 8,
   background: "transparent",
   color: "#c3cddb",

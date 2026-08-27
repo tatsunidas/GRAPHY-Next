@@ -193,4 +193,74 @@ class NmFrameExpanderTest {
         assertNotNull(NmFrameExpander.extractFrame(ds, 0));
         assertNotNull(NmFrameExpander.extractFrame(ds, 1));
     }
+
+    // --- Modality が NM でない再構成 SPECT（GE Xeleris）------------------------------
+
+    @Test
+    void ModalityがOTでもSOPClassがNMなら展開する() {
+        // GE Xeleris の再構成 SPECT。SOP Class は NM Image Storage で中身は断層なのに
+        // Modality だけが OT（MRTDosimetry の公開データで実際にこうなっている）。
+        Attributes ds = nmTomo("1.1", 8, 4.42);
+        ds.setString(Tag.Modality, VR.CS, "OT");
+        assertTrue(NmFrameExpander.isNmTomo(ds));
+        SeriesLayout layout = NmFrameExpander.layout(List.of(ds));
+        assertNotNull(layout);
+        assertEquals(8, layout.nZ());
+    }
+
+    @Test
+    void Modalityが空でもSOPClassがNMなら展開する() {
+        Attributes ds = nmTomo("1.1", 8, 4.42);
+        ds.setString(Tag.Modality, VR.CS, "");
+        assertTrue(NmFrameExpander.isNmTomo(ds));
+    }
+
+    @Test
+    void SOPClassがNMでないOTは対象外() {
+        // Secondary Capture などの OT を、断層の体裁だからといって核医学に読み替えない。
+        Attributes ds = nmTomo("1.1", 8, 4.42);
+        ds.setString(Tag.Modality, VR.CS, "OT");
+        ds.setString(Tag.SOPClassUID, VR.UI, "1.2.840.10008.5.1.4.1.1.7"); // Secondary Capture
+        assertFalse(NmFrameExpander.isNmTomo(ds));
+    }
+
+    // --- 1 ファイル＝1 スライスのものを巻き込まない ---------------------------------
+
+    @Test
+    void NumberOfFramesが1なら展開しない_エンハンス系の1ファイル1スライス() {
+        // エンハンス系は NumberOfFrames を持ちながら 1 枚ずつファイルが分かれていることがある
+        // （VSRAD 用の T1 など）。ここで展開すると 1 スライスぶんの Z しか組めず、
+        // シリーズが 1 枚に潰れる。★ NumberOfFrames > 1 だけを展開の条件にする。
+        Attributes enhanced = nmTomo("1.1", 1, 1.0);
+        enhanced.setString(Tag.Modality, VR.CS, "MR");
+        enhanced.setString(Tag.SOPClassUID, VR.UI, "1.2.840.10008.5.1.4.1.1.4.1"); // Enhanced MR
+        enhanced.setInt(Tag.NumberOfFrames, VR.IS, 1);
+        assertFalse(NmFrameExpander.isNmTomo(enhanced));
+        assertNull(NmFrameExpander.layout(List.of(enhanced)));
+
+        // Modality を OT にしても、SOP Class を NM にしても、フレームが 1 なら通さない。
+        Attributes ot = nmTomo("1.2", 1, 4.42);
+        ot.setString(Tag.Modality, VR.CS, "OT");
+        ot.setInt(Tag.NumberOfFrames, VR.IS, 1);
+        assertFalse(NmFrameExpander.isNmTomo(ot));
+
+        // NumberOfFrames そのものが無い場合も同じ（1 枚として扱う）。
+        Attributes noFrames = nmTomo("1.3", 4, 4.42);
+        noFrames.remove(Tag.NumberOfFrames);
+        assertFalse(NmFrameExpander.isNmTomo(noFrames));
+    }
+
+    @Test
+    void 断層の根拠が無い多フレームのOTは対象外() {
+        // Modality を緩めたぶん、断層の根拠（NumberOfSlices / SliceVector / RECON TOMO）は
+        // これまでどおり必須にする。ダイナミック平面像を Z に展開しないため。
+        Attributes ds = new Attributes();
+        ds.setString(Tag.SOPClassUID, VR.UI, NM);
+        ds.setString(Tag.SOPInstanceUID, VR.UI, "3.1");
+        ds.setString(Tag.Modality, VR.CS, "OT");
+        ds.setInt(Tag.NumberOfFrames, VR.IS, 30);
+        ds.setInt(Tag.Rows, VR.US, ROWS);
+        ds.setInt(Tag.Columns, VR.US, COLS);
+        assertFalse(NmFrameExpander.isNmTomo(ds));
+    }
 }

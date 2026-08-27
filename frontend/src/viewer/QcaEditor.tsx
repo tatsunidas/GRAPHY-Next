@@ -26,9 +26,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import { publishQcaSnapshot } from "./debugApi";
 import type { QcaResult } from "./qca";
+import { brushEdges, type BrushedEdge } from "./qcaBrush";
 
 /** 編集モード。 */
-export type QcaEditMode = "none" | "waypoint" | "edge";
+export type QcaEditMode = "none" | "waypoint" | "edge" | "brush";
 
 export interface QcaEditorProps {
   /** 解析に使った画素（モダリティ値）。 */
@@ -42,10 +43,14 @@ export interface QcaEditorProps {
   waypoints: readonly (readonly [number, number])[];
   /** 中心線（path）インデックス → 法線方向の符号付きオフセット。 */
   edgeEdits: Readonly<Record<number, { left?: number; right?: number }>>;
+  /** ブラシ半径（`result.positions` と同じ単位＝校正済みなら mm）。 */
+  brushRadius: number;
   /** ハイライトする計測点（径プロファイル上の選択と連動）。 */
   highlightIndex?: number | null;
   onWaypointsChange: (next: [number, number][]) => void;
   onEdgeEdit: (pathIndex: number, side: "left" | "right", offset: number) => void;
+  /** ブラシ 1 回ぶん（複数点）。`qcaBrush.brushEdges` の結果をそのまま渡す。 */
+  onEdgeEditMany: (edits: readonly BrushedEdge[]) => void;
 }
 
 /** 表示パネルの最大寸法 [px]。 */
@@ -63,15 +68,18 @@ export function QcaEditor({
   mode,
   waypoints,
   edgeEdits,
+  brushRadius,
   highlightIndex,
   onWaypointsChange,
   onEdgeEdit,
+  onEdgeEditMany,
 }: QcaEditorProps) {
   const { t } = useI18n();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [drag, setDrag] = useState<
     | { kind: "waypoint"; index: number }
     | { kind: "edge"; pathIndex: number; side: "left" | "right" }
+    | { kind: "brush"; pathIndex: number; side: "left" | "right" }
     | null
   >(null);
 
@@ -323,7 +331,7 @@ export function QcaEditor({
       return;
     }
     const e = hitEdge(p);
-    if (e) setDrag({ kind: "edge", ...e });
+    if (e) setDrag({ kind: mode === "brush" ? "brush" : "edge", ...e });
   };
 
   const onPointerMove = (ev: React.PointerEvent<HTMLCanvasElement>) => {
@@ -341,6 +349,21 @@ export function QcaEditor({
     const c = result.centerline[i];
     const n = result.normals[i];
     const offset = (p[0] - c[0]) * n[0] + (p[1] - c[1]) * n[1];
+    if (drag.kind === "brush") {
+      // 掴んだ点の**移動量**を、中心線に沿って近い点へ重み付きで配る（`qcaBrush.ts`）。
+      // ポインタ位置を各点へ当てはめないので、もとの輪郭の形は保たれる。
+      const brushed = brushEdges({
+        positions: result.positions,
+        pathIndices: result.pathIndices,
+        edgeOffsets: result.edgeOffsets,
+        centerIndex: i,
+        side: drag.side,
+        targetOffset: offset,
+        radius: brushRadius,
+      });
+      if (brushed.length) onEdgeEditMany(brushed);
+      return;
+    }
     // 符号は中心線をまたげない。0 に潰れると径が 0 になるので下限を置く。
     const clamped = drag.side === "left" ? Math.min(-0.25, offset) : Math.max(0.25, offset);
     onEdgeEdit(drag.pathIndex, drag.side, clamped);
@@ -386,7 +409,9 @@ export function QcaEditor({
           ? t("xa.qca.hintWaypoint")
           : mode === "edge"
             ? t("xa.qca.hintEdge")
-            : t("xa.qca.hintNone")}
+            : mode === "brush"
+              ? t("xa.qca.hintBrush")
+              : t("xa.qca.hintNone")}
       </div>
       {Object.keys(edgeEdits).length > 0 && result.warnings.includes("edgeEditsDropped") && (
         <div style={warn}>{t("xa.qca.edgeEditsDropped")}</div>

@@ -647,7 +647,9 @@ const input: React.CSSProperties = { width: 60, padding: "2px 4px", border: "1px
 const btn: React.CSSProperties = {
   padding: "3px 10px",
   background: "#e6ecf1",
-  border: "1px solid #c3ced9",
+  borderWidth: "1px",
+  borderStyle: "solid",
+  borderColor: "#c3ced9",
   borderRadius: 4,
   cursor: "pointer",
 };

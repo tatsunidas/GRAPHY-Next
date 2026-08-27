@@ -178,7 +178,9 @@ const chipRow: React.CSSProperties = { display: "flex", flexWrap: "wrap", gap: 8
 const chip: React.CSSProperties = {
   minHeight: 36,
   padding: "0 12px",
-  border: "1px solid #39414d",
+  borderWidth: "1px",
+  borderStyle: "solid",
+  borderColor: "#39414d",
   borderRadius: 18,
   background: "transparent",
   color: "#9fb2c9",
