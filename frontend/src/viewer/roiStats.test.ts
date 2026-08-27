@@ -589,3 +589,41 @@ describe("computeRoiStatsFrom", () => {
     expect(r.geometry.longAxisMm).toBeCloseTo(16, 1);
   });
 });
+
+describe("退化した形（描いている最中の輪郭）", () => {
+  const slice = { values: uniform(32, 32, 100), width: 32, height: 32 };
+
+  it("2 点未満の面型・線型では何も測らない（周囲長 0 のような値を作らない）", () => {
+    for (const tool of ["GraphyFreehandROI", "GraphyPolylineROI", "RectangleROI"]) {
+      const r = computeRoiStatsFrom({
+        roiUid: "a",
+        tool,
+        imageId: "wadouri:x",
+        pointsPx: [[4, 4]],
+        slice,
+        unit: "HU",
+        spacingX: 1,
+        spacingY: 1,
+      });
+      expect(r.warnings, tool).toContain("empty-mesh");
+      expect(r.values, tool).toBeUndefined();
+      expect(r.geometry.perimeterMm, tool).toBeUndefined();
+      expect(r.geometry.areaMm2, tool).toBeUndefined();
+    }
+  });
+
+  it("プローブは 1 点でよい", () => {
+    const r = computeRoiStatsFrom({
+      roiUid: "a",
+      tool: "Probe",
+      imageId: "wadouri:x",
+      pointsPx: [[4, 4]],
+      slice,
+      unit: "HU",
+      spacingX: 1,
+      spacingY: 1,
+    });
+    expect(r.warnings).not.toContain("empty-mesh");
+    expect(r.values?.mean).toBeCloseTo(100, 9);
+  });
+});
