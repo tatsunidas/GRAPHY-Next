@@ -616,7 +616,7 @@ const val: React.CSSProperties = { flex: 1, overflow: "hidden", textOverflow: "e
 const select: React.CSSProperties = { flex: 1, fontSize: 12, padding: "2px 4px" };
 const hint: React.CSSProperties = { fontSize: 10, color: "#8a94a2", marginTop: 2 };
 const btn: React.CSSProperties = {
-  fontSize: 12, padding: "3px 10px", border: "1px solid #c9d2dc", borderRadius: 4,
+  fontSize: 12, padding: "3px 10px", borderWidth: "1px", borderStyle: "solid", borderColor: "#c9d2dc", borderRadius: 4,
   background: "#f6f8fa", cursor: "pointer",
 };
 const runBtn: React.CSSProperties = { ...btn, background: "#2b6cb0", color: "#fff", borderColor: "#2b6cb0" };

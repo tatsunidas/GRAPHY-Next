@@ -933,7 +933,9 @@ const label: React.CSSProperties = { display: "flex", alignItems: "center", gap:
 const select: React.CSSProperties = { padding: "2px 4px", border: "1px solid #c3ced9", borderRadius: 3, maxWidth: 220 };
 const btn: React.CSSProperties = {
   padding: "3px 10px",
-  border: "1px solid #c3ced9",
+  borderWidth: "1px",
+  borderStyle: "solid",
+  borderColor: "#c3ced9",
   borderRadius: 3,
   background: "#fff",
   cursor: "pointer",

@@ -11,7 +11,7 @@
  * - QCA: 解析したい血管区間の始点・終点として使う
  * 既存の操作（計測を引く）をそのまま流用でき、道具を増やさない。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getRenderingEngine } from "@cornerstonejs/core";
 import { annotation as csAnnotation } from "@cornerstonejs/tools";
 import {
@@ -24,7 +24,18 @@ import { useI18n } from "../i18n/i18n";
 import { publishQcaSnapshot } from "./debugApi";
 import { readModalitySlice } from "./pixelCalibration";
 import { QcaEditor, type QcaEditMode } from "./QcaEditor";
+import { defaultBrushRadius, mergeEdgeEdits } from "./qcaBrush";
 import { runQca, type QcaManualEdits, type QcaReferenceMode, type QcaResult } from "./qca";
+import {
+  canCalibrateWith,
+  minSegmentPx,
+  pathLengthPx,
+  segmentKindOf,
+  segmentTooShort,
+  suspiciousQcaReasons,
+  toQcaKnots,
+  type QcaSegmentKind,
+} from "./qcaInput";
 import { analyzeDilation, ANEURYSM_RATIO, type QvaDilation } from "./qva";
 import { TaskStepRail } from "./TaskStepRail";
 import { ENGINE_ID } from "./Viewer2D";
@@ -152,11 +163,22 @@ function readVoiWindowFor(imageId: string): { center: number; width: number } | 
   return v ? { center: v.windowCenter, width: v.windowWidth } : null;
 }
 
+/**
+ * 入力に選べる線 1 本。
+ *
+ * <p>🔴 **`kind` で用途が分かれる**（`fw/angio-design.md` §8.7）。解析区間は開いた輪郭も
+ * 許すが、**空間校正は直線（`line`）だけ**——既知の長さは直線距離で、曲線の経路長とは
+ * 意味が違う（`qcaInput.canCalibrateWith`）。
+ */
 interface LengthPick {
   uid: string;
-  /** 画像座標 [px]。 */
+  kind: QcaSegmentKind;
+  /** 頂点列（画像座標 [px]）。直線なら 2 点。 */
+  points: [number, number][];
+  /** 始点・終点（画像座標 [px]）。ラン登録の鍵にも使う。 */
   p0: [number, number];
   p1: [number, number];
+  /** **経路長** [px]（折れ線は辺の合計。直線距離ではない）。 */
   lengthPx: number;
 }
 
@@ -182,7 +204,7 @@ function worldToImagePx(
   return [w[0] / col, w[1] / row];
 }
 
-/** この imageId に紐づく Length 計測を集める。 */
+/** この imageId に紐づく「入力に使える線」を集める（長さ／ポリゴンライン／フリーライン）。 */
 function collectLengthPicks(
   imageId: string,
   mmPerPxRow: number | null,
@@ -196,17 +218,21 @@ function collectLengthPicks(
   }
   const out: LengthPick[] = [];
   for (const a of all) {
-    if (a?.metadata?.toolName !== "Length") continue;
+    const kind = segmentKindOf(a?.metadata?.toolName as string | undefined);
+    if (!kind) continue;
     if (a?.metadata?.referencedImageId && a.metadata.referencedImageId !== imageId) continue;
-    const pts = a?.data?.handles?.points;
-    if (!Array.isArray(pts) || pts.length < 2) continue;
-    const p0 = worldToImagePx(pts[0], mmPerPxRow, mmPerPxCol);
-    const p1 = worldToImagePx(pts[1], mmPerPxRow, mmPerPxCol);
+    // 輪郭系は補間後の `contour.polyline`、直線は `handles.points`。
+    const raw = a?.data?.contour?.polyline ?? a?.data?.handles?.points;
+    if (!Array.isArray(raw) || raw.length < 2) continue;
+    const points = raw.map((w: readonly number[]) => worldToImagePx(w, mmPerPxRow, mmPerPxCol));
     out.push({
       uid: String(a.annotationUID ?? out.length),
-      p0,
-      p1,
-      lengthPx: Math.hypot(p1[0] - p0[0], p1[1] - p0[1]),
+      kind,
+      points,
+      p0: points[0],
+      p1: points[points.length - 1],
+      // 🔴 折れ線は**経路長**。直線距離で扱うと校正でも解析でも長さを取り違える。
+      lengthPx: pathLengthPx(points),
     });
   }
   return out;
@@ -264,6 +290,12 @@ export function XaAnalysisDialog({
     return collectLengthPicks(imageId, sp.row, sp.col);
   }, [imageId, calibVersion]);
   const [selected, setSelected] = useState(0);
+  /**
+   * 🔴 **空間校正の選択は解析区間と別に持つ**（`fw/angio-design.md` §8.7）。
+   * 以前は 1 つの一覧を共用しており、**カテーテル校正用の 9.2px の線がそのまま解析区間に
+   * 使われて**、10 点しか測れないまま `MLD > RVD` の無意味な結果が出た（実機・2026-08-27）。
+   */
+  const [calibSelected, setCalibSelected] = useState(0);
   /** ロック済みの計測（§21.4.2 の 2）。解析に使い終わった線は掴めなくする。 */
   const [locked, setLocked] = useState<Set<string>>(() => lockedPickUids());
   const [knownMm, setKnownMm] = useState("");
@@ -283,6 +315,8 @@ export function XaAnalysisDialog({
   const [trim, setTrim] = useState<{ from: number; to: number } | null>(null);
   const [refMode, setRefMode] = useState<QcaReferenceMode>(defaultReference);
   const [editMode, setEditMode] = useState<QcaEditMode>("none");
+  /** ブラシ半径。単位は結果と同じ（校正済み mm / 未校正 px）。 */
+  const [brushRadius, setBrushRadius] = useState<number | null>(null);
   const [chartMode, setChartMode] = useState<"none" | "trim" | "reference">("none");
   const [highlight, setHighlight] = useState<number | null>(null);
   /** 解析に使った画素。手修正のたびに読み直すと重いのでキャッシュする。 */
@@ -309,14 +343,32 @@ export function XaAnalysisDialog({
   }, [imageId]);
 
   const pick = picks[selected] ?? null;
+  /** 校正に使える線だけ（**直線のみ**）。 */
+  const calibPicks = useMemo(() => picks.filter((p) => canCalibrateWith(p.kind)), [picks]);
+  const calibPick = calibPicks[calibSelected] ?? null;
+  /** 一覧の表示。🔴 **px ではなく mm で出す**——`9.2 px` では校正用か解析用か見分けられない。 */
+  const pickLabel = useCallback(
+    (p: LengthPick, i: number): string => {
+      const mmPerPx = calib?.mmPerPxCol ?? null;
+      const size = mmPerPx && mmPerPx > 0 ? `${(p.lengthPx * mmPerPx).toFixed(1)} mm` : `${p.lengthPx.toFixed(1)} px`;
+      const kind = t(`xa.analysis.kind.${p.kind}`);
+      const pts = p.kind === "line" ? "" : ` · ${p.points.length}${t("xa.analysis.points")}`;
+      return `#${i + 1} — ${size}（${kind}${pts}）`;
+    },
+    [calib, t],
+  );
+  /** 解析区間として短すぎるか（プロファイル半径の 3 倍が下限）。 */
+  const tooShort = !!pick && segmentTooShort(pick.lengthPx);
 
   const applyCalibration = (mm: number, method: "catheter" | "ruler", note: string) => {
-    if (!pick || !(pick.lengthPx > 0) || !(mm > 0)) {
-      setError(t("xa.analysis.needLength"));
+    // 🔴 校正は**直線のみ**（`calibPicks`）。曲線の経路長を既知長と突き合わせると、
+    //    手ぶれのぶんだけ mm/px が小さく出て、以後のすべての計測が小さくなる。
+    if (!calibPick || !(calibPick.lengthPx > 0) || !(mm > 0)) {
+      setError(t("xa.analysis.needCalibLine"));
       return;
     }
     // 🚨 保存まで含めて確定する（`setXaUserCalibration` を直に呼ぶと次に開いたとき消えている）。
-    void persistXaUserCalibration(seriesUid, { mmPerPx: mm / pick.lengthPx, method, note });
+    void persistXaUserCalibration(seriesUid, { mmPerPx: mm / calibPick.lengthPx, method, note });
     invalidateAnnotations();
     setError(null);
     setCalibVersion((v) => v + 1);
@@ -462,13 +514,26 @@ export function XaAnalysisDialog({
   const analyzeWith = (edits: QcaManualEdits, slice: { values: Float32Array; width: number; height: number }) => {
     if (!pick) return;
     const c = calibrationForImageId(imageId);
+    // 🔴 開いた輪郭（ポリゴンライン / フリーライン）は**節（中間点）**として渡す。
+    //    `runQca` は節ごとに最小経路を引くので、フリーラインは弧長で間引く
+    //    （全頂点を渡すと中心線が手描きそのものになり、手ぶれが径プロファイルへ乗る）。
+    const knots = toQcaKnots(pick.points, pick.kind);
+    if (!knots) {
+      setError(t("xa.analysis.failed"));
+      return;
+    }
+    // 利用者が線の上に足した中間点は、線そのものの節より後に効かせる。
+    const withPath: QcaManualEdits = {
+      ...edits,
+      waypoints: [...knots.waypoints, ...(edits.waypoints ?? [])],
+    };
     const r = runQca({
       pixels: slice.values,
       width: slice.width,
       height: slice.height,
-      start: pick.p0,
-      end: pick.p1,
-      edits,
+      start: knots.start,
+      end: knots.end,
+      edits: withPath,
       mmPerPxRow: c?.mmPerPxRow ?? null,
       mmPerPxCol: c?.mmPerPxCol ?? null,
       // DSA 後は血管が正の大きな値（明るい）、非サブトラクションは暗い。
@@ -703,6 +768,13 @@ export function XaAnalysisDialog({
       setError(t("xa.analysis.needLength"));
       return;
     }
+    // 🚨 短すぎる区間では幾何が成立しない。実機では**カテーテル校正用の 9.2px の線**が
+    //    そのまま使われ、10 点しか測れないまま `MLD > RVD` の無意味な結果が出た。
+    //    エラーも出ないので誰も気付けなかった（`fw/angio-design.md` §8.7）。
+    if (segmentTooShort(pick.lengthPx)) {
+      setError(t("xa.analysis.tooShort", { min: minSegmentPx().toFixed(0) }));
+      return;
+    }
     const cached = sliceRef.current;
     if (cached && cached.imageId === imageId) {
       analyzeWith(edits ?? currentEdits(), cached);
@@ -734,9 +806,10 @@ export function XaAnalysisDialog({
         <div style={body}>
         <div style={content} ref={bodyRef}>
 
-        {/* 入力（Length 計測）の選択 */}
+        {/* 解析区間の選択。🔴 **空間校正の線とは別**（校正側は下の section で選ぶ）。 */}
         <div style={section} data-step="input">
           <div style={sectionTitle}>{t("xa.analysis.input")}</div>
+          <div style={hint}>{t("xa.analysis.inputHelp")}</div>
           {picks.length === 0 ? (
             <div style={hint}>{t("xa.analysis.needLength")}</div>
           ) : (
@@ -749,11 +822,16 @@ export function XaAnalysisDialog({
               >
                 {picks.map((p, i) => (
                   <option key={p.uid} value={i}>
-                    #{i + 1} — {p.lengthPx.toFixed(1)} px
+                    {pickLabel(p, i)}
                     {locked.has(p.uid) ? ` 🔒 ${t("xa.analysis.locked")}` : ""}
                   </option>
                 ))}
               </select>
+              {tooShort && (
+                <div style={warn} data-testid="xa-pick-too-short">
+                  {t("xa.analysis.tooShort", { min: minSegmentPx().toFixed(0) })}
+                </div>
+              )}
               {pick && locked.has(pick.uid) && (
                 <div style={row}>
                   <div style={hint} data-testid="xa-pick-locked">
@@ -785,6 +863,24 @@ export function XaAnalysisDialog({
             {t("xa.calib.label")}: {calib ? t(`xa.calib.source.${calib.source}`) : "—"}
             {calib?.mmPerPxCol != null && ` (${calib.mmPerPxCol.toFixed(4)} mm/px)`}
           </div>
+          {/* 🔴 校正に使う線は**直線のみ**（曲線の経路長は「既知の長さ」と意味が違う）。 */}
+          <div style={hint}>{t("xa.analysis.calibHelp")}</div>
+          {calibPicks.length === 0 ? (
+            <div style={warn} data-testid="xa-calib-need-line">{t("xa.analysis.needCalibLine")}</div>
+          ) : (
+            <select
+              value={calibSelected}
+              onChange={(e) => setCalibSelected(Number(e.target.value))}
+              style={select}
+              data-testid="xa-calib-pick"
+            >
+              {calibPicks.map((p, i) => (
+                <option key={p.uid} value={i}>
+                  {pickLabel(p, picks.indexOf(p))}
+                </option>
+              ))}
+            </select>
+          )}
           <div style={row}>
             <label style={label}>
               {t("xa.analysis.catheterFr")}
@@ -799,7 +895,7 @@ export function XaAnalysisDialog({
             <button
               style={btn}
               data-testid="xa-calibrate-catheter"
-              disabled={!pick}
+              disabled={!calibPick}
               onClick={() => {
                 const fr = Number(frSize);
                 if (!(fr > 0)) {
@@ -826,7 +922,7 @@ export function XaAnalysisDialog({
             </label>
             <button
               style={btn}
-              disabled={!pick}
+              disabled={!calibPick}
               onClick={() => {
                 const mm = Number(knownMm);
                 if (!(mm > 0)) {
@@ -885,7 +981,7 @@ export function XaAnalysisDialog({
               {/* 手修正（§8.6）。自動の中心線は外れていても必ず結果を出すので、ここが要る。 */}
               <div style={row}>
                 <span style={{ fontSize: 11, color: "#44586a" }}>{t("xa.qca.editMode")}:</span>
-                {(["none", "waypoint", "edge"] as const).map((m) => (
+                {(["none", "waypoint", "edge", "brush"] as const).map((m) => (
                   <button
                     key={m}
                     style={editMode === m ? primaryBtn : btn}
@@ -895,6 +991,21 @@ export function XaAnalysisDialog({
                     {t(`xa.qca.mode.${m}`)}
                   </button>
                 ))}
+                {editMode === "brush" && (
+                  <label style={{ ...label, fontSize: 11 }}>
+                    {t("xa.qca.brushRadius", { unit: result.unit })}
+                    <input
+                      data-testid="xa-qca-brush-radius"
+                      style={{ ...input, width: 56 }}
+                      inputMode="decimal"
+                      value={String(brushRadius ?? defaultBrushRadius(result.unit))}
+                      onChange={(e) => {
+                        const v = Number(e.target.value);
+                        setBrushRadius(Number.isFinite(v) && v > 0 ? v : null);
+                      }}
+                    />
+                  </label>
+                )}
               </div>
               <QcaEditor
                 pixels={sliceRef.current.values}
@@ -912,9 +1023,16 @@ export function XaAnalysisDialog({
                   setEdgeEdits({});
                   reanalyze({ waypoints: next, edges: null });
                 }}
+                brushRadius={brushRadius ?? defaultBrushRadius(result.unit)}
                 onEdgeEdit={(pathIndex, side, offset) => {
                   if (!edgeToken) return;
                   const next = { ...edgeEdits, [pathIndex]: { ...edgeEdits[pathIndex], [side]: offset } };
+                  setEdgeEdits(next);
+                  reanalyze({ edges: { token: edgeToken, byPathIndex: next } });
+                }}
+                onEdgeEditMany={(brushed) => {
+                  if (!edgeToken) return;
+                  const next = mergeEdgeEdits(edgeEdits, brushed);
                   setEdgeEdits(next);
                   reanalyze({ edges: { token: edgeToken, byPathIndex: next } });
                 }}
@@ -1097,6 +1215,8 @@ function QcaReport({
 }) {
   const { t } = useI18n();
   const u = result.unit;
+  // 「もっともらしく間違った結果」を拾う（純関数・`viewer/qcaInput.ts`）。
+  const suspicions = useMemo(() => suspiciousQcaReasons(result), [result]);
   const w = 460;
   const h = 120;
   const pad = 4;
@@ -1176,6 +1296,23 @@ function QcaReport({
           result.provenance.densitometryFallback !== "disabled" &&
           ` — ${t(`xa.analysis.densitometryFallback.${result.provenance.densitometryFallback}`)}`}
       </div>
+
+      {/*
+        🚨 **もっともらしく間違った結果を、正しい結果と同じ顔で出さない**（§8.7）。
+        中心線はコスト最小経路なので、血管から外れていても「それらしい」経路を必ず引く。
+        `MLD ≥ RVD` / サンプル点が極端に少ない / 病変長 0 は、**単独では正常値に見えるが
+        組み合わせは異常**。実機では 3 つ同時に出たまま「解析できた」ように見えていた。
+      */}
+      {suspicions.length > 0 && (
+        <div style={warn} data-testid="xa-qca-suspicious" data-reasons={suspicions.join(" ")}>
+          {t("xa.analysis.suspicious")}
+          <ul style={{ margin: "2px 0 0", paddingLeft: 16 }}>
+            {suspicions.map((k) => (
+              <li key={k}>{t(`xa.analysis.suspicious.${k}`)}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* グラフ上での手修正（区間の切り詰め・健常部の指定）。 */}
       <div style={row}>
@@ -1311,7 +1448,9 @@ const select: React.CSSProperties = { padding: "2px 4px", border: "1px solid #c3
 const btn: React.CSSProperties = {
   padding: "3px 10px",
   background: "#e6ecf1",
-  border: "1px solid #c3ced9",
+  borderWidth: "1px",
+  borderStyle: "solid",
+  borderColor: "#c3ced9",
   borderRadius: 4,
   cursor: "pointer",
 };

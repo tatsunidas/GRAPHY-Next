@@ -404,7 +404,9 @@ const btn: React.CSSProperties = {
   fontSize: 12,
   padding: "4px 10px",
   borderRadius: 4,
-  border: "1px solid #b9c6d2",
+  borderWidth: "1px",
+  borderStyle: "solid",
+  borderColor: "#b9c6d2",
   background: "#fff",
   cursor: "pointer",
 };
