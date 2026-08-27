@@ -160,6 +160,35 @@ def main() -> int:
         check(ds2.SeriesInstanceUID != back.SeriesInstanceUID,
               "シリーズごとに SeriesInstanceUID が違う")
 
+        # ── 4b. 平置き配布のグループ化（DIAS の形）────────────────────────
+        # 実データで踏んだ形: 1 ディレクトリに何本ものシーケンスが平置きされ、
+        # 同じ階層に正解マスクもある。ディレクトリ単位で束ねると全部 1 本に潰れる。
+        print("\n----- 平置き配布のグループ化 -----")
+        flat = os.path.join(tmp, "flat")
+        os.makedirs(os.path.join(flat, "images"), exist_ok=True)
+        os.makedirs(os.path.join(flat, "labels"), exist_ok=True)
+        for s_id, n in (("1", 12), ("2", 5)):
+            for i in range(n):
+                Image.fromarray(_synth_frame(48, 60, i * 0.5)).save(
+                    os.path.join(flat, "images", f"image_s{s_id}_i{i}.png"))
+        Image.fromarray(_synth_frame(48, 60, 0.0)).save(
+            os.path.join(flat, "labels", "label_s1.png"))
+
+        dias = SPECS["dias"]
+        fjobs = collect_jobs(flat, dias)
+        check(len(fjobs) == 2, "ファイル名の s トークンでシリーズを切り分ける",
+              f"{len(fjobs)} シリーズ（ディレクトリ単位なら 1 本に潰れる）")
+        check(sorted(len(j.paths) for j in fjobs) == [5, 12],
+              "各シリーズのフレーム数", str(sorted(len(j.paths) for j in fjobs)))
+        check(all("labels" not in q for j in fjobs for q in j.paths),
+              "正解マスク（labels/）を取り込まない")
+
+        twelve = [j for j in fjobs if len(j.paths) == 12][0]
+        order = [int(os.path.basename(q).split("_i")[1].split(".")[0]) for q in twelve.paths]
+        check(order == list(range(12)),
+              "フレームを整数順に並べる（名前順だと i10 が i2 より先に来る）",
+              f"{order[:5]}...{order[-3:]}")
+
         # ── 5. 寸法違いは黙って直さない ──────────────────────────────────
         print("\n----- 壊れた入力 -----")
         bad = os.path.join(tmp, "bad", "v")

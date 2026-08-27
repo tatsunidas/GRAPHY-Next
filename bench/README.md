@@ -117,7 +117,7 @@ cd ../automator && npx tsx src/spike/xaDsaPhantomCheck.ts  # DSA: 体動の自�
 ```bash
 python3 wrap_public_xa.py --dataset cadica --src <展開先> --out <出力先> --dry-run
 python3 wrap_public_xa.py --dataset cadica --src <展開先> --out <出力先>
-python3 check_wrap_public_xa.py                            # 合成入力での自己検証（27 項目）
+python3 check_wrap_public_xa.py                            # 自己検証（31 項目）
 ```
 
 対応: `cadica` / `dias` / `arcade` / `mendeley-stenosis` / `generic`。
@@ -136,6 +136,15 @@ ARCADE と Mendeley の狭窄データは**表示のみ**。
 
 ⚠️ **精度の検証には使えない。** 真値が無いので言えるのは「動く」「内部整合する」まで。
 合否の判定は GNBP-XA（真値既知）で行う。
+
+🔴 **配布形式はこちらの想定に従わない。** DIAS は 1 ディレクトリに 60 シーケンスを平置きし、
+同じ階層に正解マスクを置いている。ディレクトリ単位で束ねると **60 本が 1 本に潰れ、マスクが
+フレームとして混ざる**。データセットごとに `path_include` / `group_pattern` /
+`frame_index_pattern` を指定して切り分ける（`SPECS` を参照）。
+⚠️ フレームは**整数順**で並べること。名前順だと `i10` が `i2` より先に来る。
+
+実データでの確認: DIAS で **120 シリーズ / 762 フレーム**（入力の投影像とちょうど一致。
+マスク 120 枚は除外）。
 
 ⚠️ 取得したデータは**リポジトリに入れない**（設計 §16.1-4）。CC BY のものは**出典表記が必須**で、
 ラッパは帰属を `ImageComments` へ焼き込む（画像だけが独り歩きしても出典が残るように）。

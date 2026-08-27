@@ -66,6 +66,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 
@@ -90,10 +91,19 @@ class DatasetSpec:
     license: str
     attribution: str
     fps: float
-    #: True なら「1 ディレクトリ = 1 シリーズ（連続フレーム）」、False なら 1 枚 1 シリーズ。
+    #: True なら連続フレームとして束ねる、False なら 1 枚 1 シリーズ。
     frames_are_a_sequence: bool
     note: str = ""
     verified: bool = True
+    #: 相対パスがこれに一致するものだけを使う（None なら全部）。
+    #: 正解マスクなど「画像だが投影像ではない」ものを外すために要る。
+    path_include: str | None = None
+    #: シリーズの切り分け。None ならディレクトリ単位。
+    #: 指定するとファイル名から鍵を取る（1 ディレクトリに複数シーケンスが入る配布形式向け）。
+    group_pattern: str | None = None
+    #: フレームの並び順。None なら名前順。指定すると最初の捕獲群を整数として使う
+    #: （i10 が i2 より先に来る名前順の罠を避ける）。
+    frame_index_pattern: str | None = None
 
 
 SPECS: dict[str, DatasetSpec] = {
@@ -119,7 +129,14 @@ SPECS: dict[str, DatasetSpec] = {
         ),
         fps=6.0,
         frames_are_a_sequence=True,
-        note="頭蓋内動脈の DSA シーケンス。⚠️ 差分済みなのでマスクフレームは含まれない。",
+        note=("頭蓋内動脈の DSA シーケンス（60 本 × 4〜9 フレーム・800×800）。"
+              "⚠️ 差分済みなのでマスクフレームは含まれない。"),
+        # 実データで確認（2026-08-27）: 1 ディレクトリに 60 シーケンスが平置きで、
+        # 同じ階層に正解マスク（labels/ · scribble_labels/）もある。
+        # ディレクトリ単位で束ねると 60 本が 1 本に潰れ、マスクまで混ざる。
+        path_include=r"/(?:images|unlabeled_DSA)/",
+        group_pattern=r"_s(\d+)_",
+        frame_index_pattern=r"_i(\d+)\.",
     ),
     "arcade": DatasetSpec(
         key="arcade",
@@ -178,24 +195,49 @@ def _iter_images(root: str) -> list[str]:
 def collect_jobs(src: str, spec: DatasetSpec) -> list[SeriesJob]:
     """入力をシリーズ単位へ束ねる。
 
-    連続フレームを持つデータは **同じディレクトリのものだけ**を 1 本にする。
+    連続フレームを持つデータは、既定では **同じディレクトリのものだけ**を 1 本にする。
+    ただし配布形式によっては 1 ディレクトリに何本ものシーケンスが平置きされているので
+    （DIAS が実際そうだった）、``group_pattern`` があればファイル名から鍵を取る。
     無関係な静止画を束ねるとフレームごとに別患者になるので、その場合は 1 枚 1 本。
     """
     paths = _iter_images(src)
+    if spec.path_include:
+        keep = re.compile(spec.path_include)
+        paths = [p for p in paths if keep.search(p.replace(os.sep, "/"))]
     if not paths:
         return []
 
     if not spec.frames_are_a_sequence:
         return [SeriesJob(os.path.relpath(p, src), [p]) for p in paths]
 
-    by_dir: dict[str, list[str]] = {}
+    group_re = re.compile(spec.group_pattern) if spec.group_pattern else None
+    order_re = re.compile(spec.frame_index_pattern) if spec.frame_index_pattern else None
+
+    buckets: dict[str, list[str]] = {}
     for p in paths:
-        by_dir.setdefault(os.path.dirname(p), []).append(p)
-    jobs = []
-    for d in sorted(by_dir):
-        key = os.path.relpath(d, src)
-        jobs.append(SeriesJob("." if key == "." else key, sorted(by_dir[d])))
-    return jobs
+        if group_re is None:
+            key = os.path.relpath(os.path.dirname(p), src)
+            key = "." if key == "." else key
+        else:
+            m = group_re.search(os.path.basename(p))
+            if m is None:
+                # 黙って 1 本目へ混ぜない。鍵が取れないものは飛ばして報告する。
+                print(f"  ! シリーズ鍵が取れないので飛ばします: {p}", file=sys.stderr)
+                continue
+            # 配布形式によっては連番が split をまたいで重複する。
+            # ディレクトリも鍵に含めて衝突を避ける。
+            parent = os.path.relpath(os.path.dirname(p), src).replace(os.sep, "-")
+            key = f"{parent}-s{m.group(1)}" if parent != "." else f"s{m.group(1)}"
+        buckets.setdefault(key, []).append(p)
+
+    def frame_key(path: str):
+        if order_re is None:
+            return (0, os.path.basename(path))
+        m = order_re.search(os.path.basename(path))
+        # 名前順だと i10 が i2 より先に来る。整数として並べる。
+        return (int(m.group(1)), "") if m else (10**9, os.path.basename(path))
+
+    return [SeriesJob(k, sorted(buckets[k], key=frame_key)) for k in sorted(buckets)]
 
 
 def _load_frames(paths: list[str]) -> tuple[np.ndarray, int]:
