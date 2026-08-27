@@ -298,16 +298,35 @@ export interface ViewerRoiMeasurements {
   shortAxisMm?: number;
   /** 長径の両端（画素座標）。プラグインが確認表示に使う。 */
   longAxisEnds?: [[number, number], [number, number]];
-  /** 面 ROI の面積 (mm²)。 */
+  /**
+   * 面 ROI の面積 (mm²)。**閉多角形（メッシュ）の面積**であって、ラスタ画素数 × 画素面積では
+   * ない（両者は境界画素の扱いで数 % ずれる。`fw/roi-stats-design.md` §4.2）。
+   * **画素間隔が無いシリーズでは `undefined`**（px² を mm² と偽らない）。
+   */
   area?: number;
-  /** ROI 内のモダリティ値統計（CT なら HU。表示 W/L は掛かっていない）。 */
+  /**
+   * ROI 内のモダリティ値統計（CT なら HU。表示 W/L は掛かっていない）。
+   *
+   * <p>🔴 **本体の統計エンジンが出した値**（`viewer/roiStats.ts`）。校正は
+   * `pixelCalibration` に一元化されているので、**SUV 校正済みの PET では SUV 値**になる
+   * （`unit` も `"SUVbw"` 等になる）。以前は Cornerstone の `cachedStats` を素通ししており、
+   * SUV 校正しても Bq/mL のまま流れていた。
+   *
+   * <p>統計を出せない場合（画素が未ロード・角度など対象外のツール）は
+   * **すべて `undefined`**。別経路の値で埋めることはしない
+   * ——単位系が黙って混ざる方が有害だから（H35 の「未校正を数値で埋めない」と同じ考え方）。
+   */
   mean?: number;
   stdDev?: number;
   min?: number;
   max?: number;
   /**
-   * 上記の**統計値**（mean/stdDev/min/max）の単位（"HU" / "SUVbw"）。取れなければ `undefined`。
+   * 上記の**統計値**（mean/stdDev/min/max）の単位。取れなければ `undefined`。
    * 長さ・面積の単位ではない（長さは常に mm、面積は mm²）。
+   *
+   * <p>解決順は **SUV 校正 → RescaleType → モダリティ既定（CT なら "HU"）**。
+   * 🔴 **`"raw"` は「校正が無い」という意味**（Rescale も SUV も無い生値）。
+   * 定量に使う前に必ず見ること——値だけ見ると HU と区別が付かない。
    */
   unit?: string;
 }

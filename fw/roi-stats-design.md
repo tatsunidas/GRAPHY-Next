@@ -431,6 +431,13 @@ H35（空間校正の出自）で「未校正を数値で埋めない」と決�
 幾何系（`length` / `shortAxis` / `longAxisMm` / `shortAxisMm` / `area`）は**画素を読まない**ので
 常に同期で出せる。消え得るのは `mean` / `stdDev` / `min` / `max` / `unit` だけ。
 
+> **実装で確定したこと（2026-08-27）**: 切り替えたのは
+> **`mean` / `stdDev` / `min` / `max` / `unit` / `area`** の 6 つだけ。
+> **`length` / `shortAxis` はツール自身の計測のまま据え置いた**——`Bidirectional` は
+> ユーザーが引いた 2 軸そのものが計測値で、統計エンジンの対象外（`kind: "none"`）なので、
+> ここまで切り替えると**値が消える**。契約もこの 2 つを「ツール自身の主計測」と
+> 明示的に分けて書いてあり、その区別に合わせた。
+
 ### 7.3 プラグイン側に起きる変化（リリースノートに書く）
 
 | 項目 | 変化 |
@@ -529,7 +536,7 @@ backend の変更は無い。
 | ✅ **RS2** | `roiStatsStore` ＋ `getTextLines` 差し替え ＋ `PolylineRoiTool._renderStats` ＋ 表示モード 3 設定 ＋ メニュー | 済（`8df2169`） |
 | ✅ **RS3** | `corner` モード（右下一覧＋`#n` バッジ） | 済（`8df2169`） |
 | ✅ **RS4** | `RoiStatsDialog` ＋ ROI マネージャのボタン ＋ CSV | 済（`4c5d46e`） |
-| **RS5** | **H5 切替**（§7）＋ `fw/plugin-architecture.md` / テンプレート `.d.ts` 更新 | SUV 校正済み PET でプラグインが `unit:"SUVbw"` を受け取る。未計算時に `undefined`（フォールバックしない） |
+| ✅ **RS5** | **H5 切替**（§7）＋ `fw/plugin-architecture.md` / テンプレート `.d.ts` 更新 | 済（別ブランチ `feat/roi-stats-h5`）。**実機で SUV の値が変わることの確認は未実施**（§10.1） |
 | **RS6**（FutureWork） | テクスチャ（§11） | — |
 
 各フェーズで `/verify`。`fw/` を更新。
@@ -609,3 +616,7 @@ backend の変更は無い。
   既定は `beside`/`compact`（§8 を新設）。
 - 2026-08-27 **RS1〜RS4 実装**（`280db59` / `8df2169` / `4c5d46e`）。設計からの差分は §9.1。
   **実機検証は未実施**（§10.1 の automator ドライバは未作成）。
+- 2026-08-27 **RS5 実装**（別ブランチ `feat/roi-stats-h5`）。H5 の画素統計・面積を本体の
+  統計エンジンへ切り替え。`length` / `shortAxis` は**ツール自身の計測のまま**据え置き
+  （Bidirectional は統計エンジンの対象外なので、切り替えると値が消える）。
+  正本の追記先は `fw/plugin-architecture.md` の H5 節。
