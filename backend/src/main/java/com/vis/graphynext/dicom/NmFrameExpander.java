@@ -34,8 +34,17 @@ import java.util.TreeMap;
  *
  * <p><b>Rescale が無い</b>のも PET との違いで、値は原則カウントである（定量は施設の校正係数で行う）。
  * したがってここでは値を触らない。
+ *
+ * <p><b>Modality が {@code OT} で来るものがある</b>: GE Xeleris が書き出した再構成 SPECT は
+ * SOP Class が NM Image Storage で {@code NumberOfSlices} / {@code SliceVector} /
+ * {@code RECON TOMO} まで揃っているのに、{@code Modality} だけが {@code OT} になっている
+ * （2026-08-27 に MRTDosimetry の公開データで確認）。NM IOD としては {@code Modality=NM} が
+ * 正しいので、<b>SOP Class を根拠に受ける</b>。ここで弾くと 128 スライスが 1 枚に見える。
  */
 public final class NmFrameExpander {
+
+    /** NM Image Storage。Modality が NM でなくても、これなら核医学画像として扱う。 */
+    private static final String NM_IMAGE_STORAGE = "1.2.840.10008.5.1.4.1.1.20";
 
     private NmFrameExpander() {
     }
@@ -45,9 +54,14 @@ public final class NmFrameExpander {
         if (ds == null) {
             return false;
         }
-        if (!"NM".equalsIgnoreCase(String.valueOf(ds.getString(Tag.Modality, "")))) {
+        if (!isNmImage(ds)) {
             return false;
         }
+        // ★ ここを通すのは「1 ファイルに複数スライスが入っている」ものだけ。
+        // NumberOfFrames が無い / 1 のものは **1 ファイル＝1 スライス**として通常の経路へ落とす
+        // （エンハンス系のように NumberOfFrames を持ちながら 1 枚ずつファイルが分かれている形が
+        //  実在する。VSRAD 用の T1 など。ここで展開すると 1 枚ぶんの Z しか組めず、
+        //  シリーズが 1 スライスに潰れる）。
         if (ds.getInt(Tag.NumberOfFrames, 1) <= 1) {
             return false;
         }
@@ -67,6 +81,25 @@ public final class NmFrameExpander {
             }
         }
         return false;
+    }
+
+    /**
+     * 核医学画像として扱うか。
+     *
+     * <p>{@code Modality=NM} が本筋。それに加えて、<b>SOP Class が NM Image Storage なら
+     * Modality が {@code OT} や空でも受ける</b>（GE Xeleris の再構成 SPECT）。
+     * <b>他のモダリティ名が入っているものは受けない</b> — SOP Class と Modality が両方とも
+     * 別物を指しているデータを、こちらの都合で核医学に読み替えないため。
+     */
+    private static boolean isNmImage(Attributes ds) {
+        String modality = String.valueOf(ds.getString(Tag.Modality, "")).trim();
+        if ("NM".equalsIgnoreCase(modality)) {
+            return true;
+        }
+        if (!NM_IMAGE_STORAGE.equals(String.valueOf(ds.getString(Tag.SOPClassUID, "")).trim())) {
+            return false;
+        }
+        return modality.isEmpty() || "OT".equalsIgnoreCase(modality);
     }
 
     /** 検出器情報（無ければルート）の IOP。 */
