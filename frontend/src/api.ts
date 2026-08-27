@@ -3,6 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { HttpError, httpGet, httpSend } from "./http";
+import { chunkForQuery } from "./urlChunk";
 import { apiBase } from "./apiBase";
 
 // apiBase は apiBase.ts へ分離（循環インポート回避）。互換のため再エクスポート。
@@ -1153,9 +1154,23 @@ export const anonymizeCopy = (req: AnonRequest) =>
 export const registerAnonMask = (mask: AnonSeriesMask) =>
   httpSend<void>("/api/anonymizer/masks", "POST", mask);
 
-/** 登録済み焼き込みマスクを取得。 */
-export const fetchAnonMasks = (seriesUids: string[]) =>
-  httpGet<AnonSeriesMask[]>(`/api/anonymizer/masks?seriesUids=${encodeURIComponent(seriesUids.join(","))}`);
+/**
+ * 登録済み焼き込みマスクを取得。
+ *
+ * <p>⚠ **URL に載せる件数を必ず分割する**（`urlChunk.ts`）。シリーズ UID はスタディより数が
+ * 多いので、一覧全体を 1 本の URL に詰めると Tomcat の上限を早々に超える。
+ */
+export const fetchAnonMasks = async (seriesUids: string[]): Promise<AnonSeriesMask[]> => {
+  const out: AnonSeriesMask[] = [];
+  for (const chunk of chunkForQuery(seriesUids)) {
+    out.push(
+      ...(await httpGet<AnonSeriesMask[]>(
+        `/api/anonymizer/masks?seriesUids=${encodeURIComponent(chunk.join(","))}`,
+      )),
+    );
+  }
+  return out;
+};
 
 /** 焼き込みマスクを削除（seriesUid 省略で全消去）。 */
 export const clearAnonMask = (seriesUid?: string) =>
@@ -1538,9 +1553,24 @@ export const unlockReport = (id: string, lockedBy: string) =>
 export const finalizeReport = (id: string) =>
   httpSend<ReportDetail>(`/api/reports/${encodeURIComponent(id)}/finalize`, "POST");
 
-/** MainScreen 一覧の ●/○ 表示用（フェーズ R5 で StudyList に接続）。 */
-export const fetchReportStudyCounts = (studyUids: string[]) =>
-  httpGet<StudyReportCount[]>(`/api/reports/study-counts?studyUids=${encodeURIComponent(studyUids.join(","))}`);
+/**
+ * MainScreen 一覧の ●/○ 表示用（フェーズ R5 で StudyList に接続）。
+ *
+ * <p>🚨 **URL に載せる件数を必ず分割する**（`urlChunk.ts`）。以前は一覧の全 UID を 1 本の URL に
+ * 詰めており、**スタディが 130 件を超えると Tomcat の上限で 400** になっていた（2026-08-27 実機）。
+ * 呼び出し側が失敗を握り潰しているため、**●/○ が黙って出なくなる**だけで誰も気付けなかった。
+ */
+export const fetchReportStudyCounts = async (studyUids: string[]): Promise<StudyReportCount[]> => {
+  const out: StudyReportCount[] = [];
+  for (const chunk of chunkForQuery(studyUids)) {
+    out.push(
+      ...(await httpGet<StudyReportCount[]>(
+        `/api/reports/study-counts?studyUids=${encodeURIComponent(chunk.join(","))}`,
+      )),
+    );
+  }
+  return out;
+};
 
 // ── GLAM 解析（ROI 全体・記述子そのもの） ───────────────────────
 
