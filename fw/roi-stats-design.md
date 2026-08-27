@@ -472,18 +472,23 @@ H35（空間校正の出自）で「未校正を数値で埋めない」と決�
 
 ## 9. 変更ファイル
 
+> ✅ = RS1〜RS4 で実装済み。設計時の想定から**変えたところは「実装での差分」に書く**。
+
 | ファイル | 種別 | 内容 |
 |---|---|---|
 | `frontend/src/viewer/roiStats.ts` | 新規 | 統計エンジン（純関数＋サンプリング） |
 | `frontend/src/viewer/roiStats.test.ts` | 新規 | vitest |
 | `frontend/src/viewer/roiStatsStore.ts` | 新規 | イベント購読・デバウンス計算・2 本立てストア・無効化 |
-| `frontend/src/viewer/roiStatsText.ts` | 新規 | `getTextLines` 実装（compact/full）・純関数・i18n を受け取る |
+| `frontend/src/viewer/roiStatsText.ts` | 新規 | 表示文字列の整形（compact/full）・純関数・i18n を受け取る |
+| `frontend/src/viewer/roiStatsTextBox.ts` | 新規 | `getTextLines` の差し替えと `textBoxVisibility` の出し分け |
+| `frontend/src/viewer/roiStatsDisplay.ts` | 新規 | 表示モードのランタイム状態＋設定への書き戻し |
+| `frontend/src/viewer/roiStatsCorner.ts` | 新規 | 右下一覧の行と `#n` バッジ位置 |
+| `frontend/src/viewer/roiStatsCsv.ts` | 新規 | CSV（純関数） |
+| `frontend/src/i18n/i18n.tsx` | 変更 | `tOutsideReact()`（Cornerstone のツールは React の外） |
 | `frontend/src/viewer/histogram.ts` | 変更 | `analyzeValues()` を切り出し（`analyze` は委譲） |
 | `frontend/src/viewer/roiRead.ts` | 変更 | `roiPointsPx()` を追加（XA の幾何なし換算をここへ集約） |
-| `frontend/src/viewer/roiBooleanOps.ts` | 変更 | `rasterizeRoi` を export |
 | `frontend/src/viewer/roiContourTools.ts` | 変更 | `contourToolConfig` → `measureToolConfig`、`PolylineRoiTool._renderStats` 差し替え |
-| `frontend/src/viewer/cornerstoneSetup.ts` | 変更 | `applyGlobalAnnotationStyle` に `textBoxVisibility` を追加 |
-| `frontend/src/viewer/Viewer2D.tsx` | 変更 | ツール設定の適用、`corner` オーバーレイ、`#n` バッジ、既存 px 換算を `roiPointsPx` へ寄せる |
+| `frontend/src/viewer/Viewer2D.tsx` | 変更 | ツール設定の適用、`corner` オーバーレイ、`#n` バッジ、既存 px 換算を `roiPointsPx` へ寄せた |
 | `frontend/src/viewer2d/Viewer2DMenuBar.tsx` | 変更 | ROI ツールメニューに表示モード |
 | `frontend/src/viewer2d/Viewer2DScreen.tsx` | 変更 | 設定の読込・適用（既存の `fetchSettings` ブロックに追加） |
 | `frontend/src/viewer2d/RoiManagerPanel.tsx` | 変更 | `Σ 計測結果` ボタン（ヘッダ・行）、マスク側を `Σ³` へ |
@@ -493,20 +498,42 @@ H35（空間校正の出自）で「未校正を数値で埋めない」と決�
 
 backend の変更は無い。
 
+### 9.1 実装での差分（設計時の想定から変えたところ）
+
+1. 🔴 **`roiBooleanOps.rasterizeRoi()` は使わなかった。** 設計では再利用するつもりだったが、
+   あれは**自前の図形式**（楕円は bbox から半径を出す等）で塗るので、こちらのメッシュと
+   **別の図形**になる。すると「面積 12.4 mm² なのに、値を拾った画素は 12.9 mm² 相当」という
+   食い違いが出る。**面積を出したのと同じ多角形を塗る**（`roiStats.sampleInsideMesh`）。
+   `rasterizeRoi` は Mask 化（ブール演算の入口）専用のまま残した。
+2. 🔴 **`getTextLines` を差し替えるのは「統計を出せるツール」だけにした。**
+   全ツールに掛けると **Angle の角度・Bidirectional の L/W のラベルごと消える**
+   ——改善のつもりで既存の計測を壊す。表示の ON/OFF（`textBoxVisibility`）は全ツールに効く。
+   判定は `roiStatsTextBox.isMeasurableTool()`、回帰テストあり。
+3. **楕円は bbox ではなく半軸ベクトルで多角形化した**（`handles.points = [bottom, top, left, right]`
+   から中心と 2 本の半軸を作る）。**ビューポートを回転していても正しい**。
+4. **`resolveValueUnit()` を足した。** `RescaleType` が空の実データでは単位が消えるので、
+   SUV → RescaleType → **モダリティ既定（CT=HU）** → `"raw"` の順で解決する。
+   `getModalityCalibration()` 自体は触っていない（ヒストグラム・MPR が読む load-bearing な関数）。
+5. **i18n に `tOutsideReact()` を足した。** `getTextLines` は React ツリーの外で呼ばれるので
+   `useI18n()` を使えない。ロケールは `I18nProvider` と同じ localStorage から読む。
+6. **エントロピーのビン数を `ENTROPY_BINS = 256` に固定して画面に明記した。**
+   エントロピーは定義上ビン数に依存するので、数字だけ出すと比較できない。
+
 ---
 
 ## 10. フェーズ
 
 | # | 内容 | 完了条件 |
 |---|---|---|
-| **RS1** | `roiStats.ts` ＋ `histogram.analyzeValues` ＋ `roiPointsPx` ＋ `rasterizeRoi` export。vitest | 既知配列で mean/SD/median/歪度/尖度/エントロピーが一致。線サンプリングの長さ・双一次補間。未校正で mm を出さない |
-| **RS2** | `roiStatsStore` ＋ `getTextLines` 差し替え ＋ `PolylineRoiTool._renderStats` ＋ 表示モード 3 設定 ＋ メニュー | 10 ツール全部で ROI 脇に統計が出る。**開いたポリラインでも出る**。off/compact/full/選択中のみが効く |
-| **RS3** | `corner` モード（右下一覧＋`#n` バッジ） | ROI 10 本で重ならず読める。DICOM オーバーレイの右下と競合しない |
-| **RS4** | `RoiStatsDialog` ＋ ROI マネージャのボタン ＋ CSV | 表の値と ROI 脇の値が**一致**。CSV が表計算で開ける |
-| **RS5** | **H5 切替**（§7）＋ `readModalitySliceSync` ＋ `fw/plugin-architecture.md` / テンプレート `.d.ts` 更新 | SUV 校正済み PET でプラグインが `unit:"SUVbw"` を受け取る。未計算時に `undefined`（フォールバックしない） |
+| ✅ **RS1** | `roiStats.ts` ＋ `histogram.analyzeValues` ＋ `roiPointsPx`。vitest 40＋6＋6 件 | 済（`280db59`） |
+| ✅ **RS2** | `roiStatsStore` ＋ `getTextLines` 差し替え ＋ `PolylineRoiTool._renderStats` ＋ 表示モード 3 設定 ＋ メニュー | 済（`8df2169`） |
+| ✅ **RS3** | `corner` モード（右下一覧＋`#n` バッジ） | 済（`8df2169`） |
+| ✅ **RS4** | `RoiStatsDialog` ＋ ROI マネージャのボタン ＋ CSV | 済（`4c5d46e`） |
+| **RS5** | **H5 切替**（§7）＋ `fw/plugin-architecture.md` / テンプレート `.d.ts` 更新 | SUV 校正済み PET でプラグインが `unit:"SUVbw"` を受け取る。未計算時に `undefined`（フォールバックしない） |
 | **RS6**（FutureWork） | テクスチャ（§11） | — |
 
 各フェーズで `/verify`。`fw/` を更新。
+**RS1〜RS4 時点で `tsc` / `vitest` 1102 件 / `build` すべて green。実機検証は未実施（§10.1）。**
 
 **RS5 は独立した PR にする。** 本体の表示（RS1〜RS4）は本体だけで閉じるが、H5 の切替は
 **別リポジトリのプラグインが受け取る数値を変える**。同じ PR に混ぜると、プラグイン側で
@@ -580,3 +607,5 @@ backend の変更は無い。
 - 2026-08-27 初版（設計のみ・未実装）。§1 は `@cornerstonejs/tools@3.33.5` のソースを読んで確認した事実。
 - 2026-08-27 §12.1 の 3 点を決定。**H5 切替を採用**（§7 を新設・RS5）、**面積はメッシュで統一**（§4.2 を書き直し）、
   既定は `beside`/`compact`（§8 を新設）。
+- 2026-08-27 **RS1〜RS4 実装**（`280db59` / `8df2169` / `4c5d46e`）。設計からの差分は §9.1。
+  **実機検証は未実施**（§10.1 の automator ドライバは未作成）。

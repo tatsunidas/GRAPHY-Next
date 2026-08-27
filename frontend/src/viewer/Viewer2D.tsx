@@ -69,7 +69,7 @@ import {
   type ViewerViewState,
   type ViewerXaState,
 } from "./viewerCommands";
-import { buildPluginMeta, computeCalipers, hasShapeCalipers, pickPluginMeta, readRoiStats } from "./roiRead";
+import { buildPluginMeta, computeCalipers, hasShapeCalipers, pickPluginMeta, readRoiStats, roiPointsPx } from "./roiRead";
 import { CONTOUR_TOOL_NAMES } from "./roiContourTools";
 import { measureToolConfig } from "./roiStatsTextBox";
 import { useRoiStatsDisplay } from "./roiStatsDisplay";
@@ -1979,28 +1979,15 @@ export function Viewer2D({
       const inf = sliceIndex === indexRef.current ? infoRef.current : readImageInfo(refId);
       const sx = inf?.columnPixelSpacing ?? null;
       const sy = inf?.rowPixelSpacing ?? null;
-      const points: Array<[number, number]> = [];
-      for (const w of world) {
-        try {
-          const ic = utilities.worldToImageCoords(refId, w as Types.Point3) as [number, number] | undefined;
-          if (ic && Number.isFinite(ic[0]) && Number.isFinite(ic[1])) points.push([ic[0], ic[1]]);
-        } catch {
-          /* 変換できない頂点は落とす（幾何が無いシリーズなど） */
-        }
-      }
-      if (!points.length) {
-        // 🚨 **XA には幾何（IPP/IOP）が無いことがある**。そのとき Cornerstone の
-        //    `worldToImageCoords` は変換できず、ここで**計測が丸ごと落ちていた**
-        //    ——プラグインからは「ユーザーが引いた線が存在しない」ように見え、
-        //    アンギオの解析（入力＝長さ計測）が成立しない（実機で判明・2026-08-25）。
-        //    幾何が無いスタックの world は `画素 × 画素間隔`（原点 0）なので、割って戻す。
-        //    本体の解析ダイアログも同じ換算を使っている（`XaAnalysisDialog.worldToImagePx`）。
-        const col = sx && sx > 0 ? sx : 1;
-        const row = sy && sy > 0 ? sy : 1;
-        for (const w of world) {
-          if (Number.isFinite(w?.[0]) && Number.isFinite(w?.[1])) points.push([w[0] / col, w[1] / row]);
-        }
-      }
+      // 🚨 **XA には幾何（IPP/IOP）が無いことがある**。そのとき `worldToImageCoords` は
+      //    1 点も変換できず、**計測が丸ごと落ちる**（実機で判明・2026-08-25）。
+      //    その換算は `roiRead.roiPointsPx()` に集約してある（統計エンジンも同じものを通る）。
+      const points = roiPointsPx(
+        world,
+        (w) => utilities.worldToImageCoords(refId, w as Types.Point3) as [number, number],
+        sx,
+        sy,
+      );
       if (!points.length) continue;
       const stats = readRoiStats(a.data?.cachedStats, refId);
       const tool = (a.metadata?.toolName as string) ?? "";
@@ -2040,7 +2027,8 @@ export function Viewer2D({
         zScope: meta?.scope?.z ?? null,
         c: ctx.c,
         t: ctx.t,
-        points,
+        // 契約（ViewerRoi.points）は可変タプルなので、readonly の内部表現から写して渡す。
+        points: points.map((p) => [p[0], p[1]] as [number, number]),
         spacing: [sx, sy],
         measurements: {
           length: toolMm ? stats.length : undefined,
