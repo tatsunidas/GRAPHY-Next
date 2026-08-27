@@ -1258,6 +1258,23 @@ function TileGrid({
       // H39: 解析結果をレポートの登録簿へ積む。**DICOM を書かないので確認は出さない**
       // （実際に差し込むのは利用者の操作＝レポート画面の「解析結果を差し込む」）。
       publishAnalysisResult: (tileId, input, producer) => {
+        // 🚨 **引数を検証する。** これは third-party（プラグイン）が呼ぶ口なので、
+        //    形が違えば「何が違うのか」を返さないと相手は直せない。
+        //    実例: H25（旧設計）は `publishAnalysisResult(result)` の 1 引数だった。
+        //    そのまま呼ばれると tileId にレコードが入り、タイルが引けず
+        //    `tile is not available` と返る——**症状が原因を指さない**（今日 2 度踏んだ型）。
+        if (tileId !== undefined && typeof tileId !== "string") {
+          return {
+            ok: false,
+            error:
+              "publishAnalysisResult(tileId, input): tileId must be a string or undefined. " +
+              "古い 1 引数の署名 publishAnalysisResult(result) で呼んでいませんか。" +
+              "studyUid / seriesUid は渡さず、本体が表示中タイルから入れます。",
+          };
+        }
+        if (!input || typeof input !== "object") {
+          return { ok: false, error: "publishAnalysisResult(tileId, input): input is required" };
+        }
         const id = tileId ?? resolveTargets()[0];
         if (!id) return { ok: false, error: "no target tile" };
         return (
