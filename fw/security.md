@@ -99,3 +99,64 @@ Electron はパッケージ後は警告を出さない**（本番は上記 CSP �
 
 再発防止: `backend/src/test/java/com/vis/graphynext/web/CorsConfigTest.java`
 （`file://` / `null` / `http://localhost:5173` は 200、外部サイトは 403 を固定）。
+
+---
+
+## 🚨 「CORS エラー」に見えるが CORS ではない — URL が長すぎる（2026-08-27・PR #155）
+
+上の §CORS とは**別の原因**で、ブラウザには**まったく同じ顔**で出る。先に疑うべきはこちら
+（設定は正しいのに CORS を疑って時間を溶かす）。
+
+**症状**:
+
+```
+Access to fetch at 'http://localhost:8080/api/reports/study-counts?studyUids=…（8KB 超）'
+  from origin 'http://localhost:5173' has been blocked by CORS policy:
+  No 'Access-Control-Allow-Origin' header is present on the requested resource.
+GET …  net::ERR_FAILED 400 (Bad Request)
+```
+
+**原因**: Tomcat の `maxHttpRequestHeaderSize`（既定 **8KB**）はリクエストラインとヘッダの合計。
+ID を並べたクエリがこれを超えると、**Tomcat がパース段階で 400 を返す**。
+🔴 **Spring まで到達しないので CORS フィルタが動かず、`Access-Control-Allow-Origin` が付かない。**
+ブラウザは「CORS ヘッダが無い」としか言えない。
+
+**見分け方**: backend のログに次が出ているか。**これが唯一の決め手**。
+
+```
+o.apache.coyote.http11.Http11Processor : Error parsing HTTP request header
+java.lang.IllegalArgumentException: Request header is too large
+	at ...Http11InputBuffer.parseRequestLine
+```
+
+`parseRequestLine` で落ちていれば**ヘッダではなく URL（リクエストライン）が長い**。
+
+**実測**: スタディ一覧の全 UID を 1 本の URL に詰めていた
+（`GET /api/reports/study-counts?studyUids=a,b,c,…`）。
+Study Instance UID 63 文字 × **131 件** ≒ **8,383 バイト**で破綻。
+**126 件あたりが分水嶺**なので、開発中の少件数では絶対に踏まない。
+
+🔴 **さらに気付けなかった理由**: 呼び出し側（`hooks/useStudies.ts`）が
+`.catch(() => {})` で握り潰していたので、**MainScreen のレポート ●/○ が黙って出なくなる**だけ。
+`http.ts` が `log.warn` は出すので**開発者コンソールには残る**が、**画面にもトーストにも
+何も出ない**ので、コンソールを開いていない利用者には「そういう仕様」に見える。
+**「補助情報だから失敗しても無視」は、失敗が常態化したとき誰も気付けない**
+（`fw/error-handling-logging.md` の「失敗は握り潰さない」に反していた例）。
+
+**対策**（`frontend/src/urlChunk.ts` の `chunkForQuery()`）:
+
+- 🔴 **件数ではなくエンコード後のバイト長で切る**。UID の長さはデータ源で違う
+  （`1.2.826.0.1.3680043.10.1338.…` は 60 字超、`2.25.…` は 40 字前後）ので、
+  固定件数だと**ある施設のデータでだけ落ちる**。
+- 単体で上限を超える ID は 1 件のかたまりにして落とさない（進まなくなるのを防ぐ）。
+- 🔴 **Tomcat の上限を上げる対処は採らない。** データが増えれば必ずまた超える。
+  「URL に載せる件数をこちらで制御する」が正しい直し方。
+
+**同じ形が他にもある**。ID を `join(",")` してクエリに載せる GET は**すべて**この対象:
+
+| 経路 | 状態 |
+|---|---|
+| `GET /api/reports/study-counts?studyUids=` | ✅ 分割済み |
+| `GET /api/anonymizer/masks?seriesUids=` | ✅ 分割済み（**シリーズはスタディより数が多く、より早く踏む**） |
+
+**新しく足すときは `chunkForQuery()` を通すこと。** 単体テストは `frontend/src/urlChunk.test.ts`。
