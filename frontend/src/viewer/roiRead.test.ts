@@ -12,6 +12,7 @@ import {
   pickPluginMeta,
   pluginMetaPrefix,
   readRoiStats,
+  roiPointsPx,
   type PointPx,
 } from "./roiRead";
 
@@ -317,5 +318,65 @@ describe("Bidirectional のハンドルに形状キャリパを当てると誤�
     expect(cal.longAxisMm).toBeGreaterThan(100);
     // だからこのツールには形状キャリパを出さない。
     expect(hasShapeCalipers("Bidirectional")).toBe(false);
+  });
+});
+
+describe("roiPointsPx", () => {
+  const world = [
+    [10, 20, 5],
+    [30, 40, 5],
+  ];
+
+  it("変換器が答えれば、その画素座標をそのまま使う", () => {
+    const pts = roiPointsPx(world, (w) => [w[0] / 2, w[1] / 2], 0.5, 0.5);
+    expect(pts).toEqual([
+      [5, 10],
+      [15, 20],
+    ]);
+  });
+
+  it("🚨 幾何が無いスタック（XA）で 1 点も変換できないとき、world/画素間隔 で復元する", () => {
+    // これが無いと計測が丸ごと落ちる（2026-08-25 の実機事象）。
+    const pts = roiPointsPx(world, () => null, 0.2, 0.4);
+    expect(pts[0][0]).toBeCloseTo(50, 9);
+    expect(pts[0][1]).toBeCloseTo(50, 9);
+    expect(pts[1][0]).toBeCloseTo(150, 9);
+    expect(pts[1][1]).toBeCloseTo(100, 9);
+  });
+
+  it("変換器が例外を投げても落ちない（フォールバックへ）", () => {
+    const pts = roiPointsPx(world, () => {
+      throw new Error("no imagePlaneModule");
+    }, 1, 1);
+    expect(pts).toEqual([
+      [10, 20],
+      [30, 40],
+    ]);
+  });
+
+  it("画素間隔が無ければ 1 として扱う（world = 画素）", () => {
+    expect(roiPointsPx(world, () => null, null, undefined)).toEqual([
+      [10, 20],
+      [30, 40],
+    ]);
+  });
+
+  it("一部だけ変換できたときはフォールバックせず、変換できた点だけを使う", () => {
+    // 「1 点でも取れたなら幾何はある」＝残りは本当に画像外などで落ちた点。
+    const pts = roiPointsPx(world, (w) => (w[0] === 10 ? [1, 2] : null), 1, 1);
+    expect(pts).toEqual([[1, 2]]);
+  });
+
+  it("非有限な座標は落とす", () => {
+    const pts = roiPointsPx(
+      [
+        [1, 2, 0],
+        [NaN, 3, 0],
+      ],
+      (w) => [w[0], w[1]],
+      1,
+      1,
+    );
+    expect(pts).toEqual([[1, 2]]);
   });
 });

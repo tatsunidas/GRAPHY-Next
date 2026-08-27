@@ -143,6 +143,10 @@ function pointInPoly(px: number, py: number, poly: Array<[number, number]>): boo
  * ベクタ ROI（annotation）を 1 スライス分の前景 Uint8（cols*rows）にラスタ化する。
  * worldToImageCoords は [x(列), y(行)] を返す（imageToWorldCoords の逆対応で確認済）。
  * 楕円/円/矩形は形状式、フリーハンド等は多角形塗り。面積を持たない（Length/Angle/Probe）は null。
+ *
+ * <p>⚠ **ROI 統計はこれを使わない**（`viewer/roiStats.ts` は自前のメッシュを塗る）。
+ * 統計では「面積を出した多角形」と「値を拾った画素」が同じ図形でないと数字が食い違うため
+ * （`fw/roi-stats-design.md` §4.2）。こちらは Mask 化（ブール演算の入口）専用。
  */
 function rasterizeRoi(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

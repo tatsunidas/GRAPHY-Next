@@ -8,6 +8,7 @@ import { type ViewerActions } from "./Viewer2DToolbar";
 import { presetLabel } from "./wlPresets";
 import { useWlPresets } from "./wlPresetStore";
 import { TOOL_IDS } from "../viewer/toolIds";
+import { changeRoiStatsDisplay, useRoiStatsDisplay } from "../viewer/roiStatsDisplay";
 import { usePluginMenu, runPluginBackend } from "../plugins/pluginRegistry";
 import type { PluginManifest, Viewer2DPluginHost, Viewer2DSurface } from "../plugins/pluginTypes";
 import { openPluginWindow } from "../plugins/pluginWindowApi";
@@ -81,6 +82,7 @@ export function Viewer2DMenuBar({
 }) {
   const { t, locale } = useI18n();
   const presets = useWlPresets();
+  const statsDisplay = useRoiStatsDisplay();
   // host の中身はサーフェスに依らず同一。違うのは「どのメニューに出るか」だけなので、
   // 組み立てを 1 本にして surface だけ差し替える（2 本に分けると片方だけ H## を足す事故になる）。
   const makeViewerHost = (surface: Viewer2DSurface) => (m: PluginManifest): Viewer2DPluginHost => ({
@@ -307,6 +309,44 @@ export function Viewer2DMenuBar({
         { label: t("roiMgr.title"), onClick: actions.toggleRoiManager },
         // スプライン Fit は**描画モードではなく選択中 ROI への操作**なので ROI Tools 側に置く。
         { label: t("viewer2d.roi.splineFit"), onClick: actions.splineFitSelection },
+        // 統計の表示モード。設定画面にも同じ 3 項目があり、ここから変えると設定へ書き戻る。
+        {
+          label: t("viewer2d.roi.stats"),
+          submenu: [
+            {
+              label: t("viewer2d.roi.stats.beside"),
+              onClick: () => changeRoiStatsDisplay({ placement: "beside" }),
+              checked: statsDisplay.placement === "beside",
+            },
+            {
+              label: t("viewer2d.roi.stats.corner"),
+              onClick: () => changeRoiStatsDisplay({ placement: "corner" }),
+              checked: statsDisplay.placement === "corner",
+            },
+            {
+              label: t("viewer2d.roi.stats.off"),
+              onClick: () => changeRoiStatsDisplay({ placement: "off" }),
+              checked: statsDisplay.placement === "off",
+            },
+            {
+              label: t("viewer2d.roi.stats.compact"),
+              onClick: () => changeRoiStatsDisplay({ detail: "compact" }),
+              checked: statsDisplay.detail === "compact",
+              separatorBefore: true,
+            },
+            {
+              label: t("viewer2d.roi.stats.full"),
+              onClick: () => changeRoiStatsDisplay({ detail: "full" }),
+              checked: statsDisplay.detail === "full",
+            },
+            {
+              label: t("viewer2d.roi.stats.selectedOnly"),
+              onClick: () => changeRoiStatsDisplay({ selectedOnly: !statsDisplay.selectedOnly }),
+              checked: statsDisplay.selectedOnly,
+              separatorBefore: true,
+            },
+          ],
+        },
         { label: t("viewer2d.tool.brush"), onClick: () => actions.setTool(TOOL_IDS.brush), checked: activeTool === TOOL_IDS.brush },
         { label: t("viewer2d.tool.eraser"), onClick: () => actions.setTool(TOOL_IDS.eraser), checked: activeTool === TOOL_IDS.eraser },
         { label: t("viewer2d.tool.wand2d"), onClick: () => actions.setTool(TOOL_IDS.wand2d), checked: activeTool === TOOL_IDS.wand2d },

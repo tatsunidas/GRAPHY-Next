@@ -53,7 +53,7 @@ import { WandDialog } from "./WandDialog";
 import { LevelSetsDialog } from "./LevelSetsDialog";
 import { HistogramDialog } from "./HistogramDialog";
 import { SUVCalibrationDialog } from "../viewer/SUVCalibrationDialog";
-import { getSuv } from "../viewer/suvStore";
+import { getSuv, subscribeSuvStore } from "../viewer/suvStore";
 import { TagViewerDialog } from "../mainscreen/TagViewerDialog";
 import { ReportEditorDialog } from "../report/ReportEditorDialog";
 import { TextureDialog } from "../viewer/TextureDialog";
@@ -61,6 +61,9 @@ import { WwWlAdjustDialog, type WlTarget } from "./WwWlAdjustDialog";
 import { WlPresetDialog } from "./WlPresetDialog";
 import { fetchSettings } from "../settings/settingsApi";
 import { applyGlobalLabelmapStyle, applyGlobalAnnotationStyle } from "../viewer/cornerstoneSetup";
+import { parseRoiStatsDisplay, setRoiStatsDisplay } from "../viewer/roiStatsDisplay";
+import { installRoiStatsWatcher, invalidateAllRoiStats } from "../viewer/roiStatsStore";
+import { installRoiStatsDisplayWatcher } from "../viewer/roiStatsTextBox";
 import { Viewer2DToolbar, type ViewerActions } from "./Viewer2DToolbar";
 import {
   estimatePluginVolume,
@@ -879,11 +882,25 @@ function TileGrid({
           colorHex: m["roi.defaultColor"] || "#ffff00",
           lineWidth: Number.isFinite(lw) && lw > 0 ? lw : 1,
         });
+        // ROI 統計の表示モード（出す場所・詳しさ・選択中のみ）。
+        setRoiStatsDisplay(parseRoiStatsDisplay(m));
       })
       .catch(() => {
         /* 既定のまま */
       });
   }, []);
+  // ROI 統計: 計算のイベント購読と、表示モード/選択に追従する textBox の出し分け。
+  useEffect(() => {
+    const offWatch = installRoiStatsWatcher();
+    const offDisplay = installRoiStatsDisplayWatcher();
+    return () => {
+      offWatch();
+      offDisplay();
+    };
+  }, []);
+  // 校正が変われば統計は嘘になる。SUV 校正の変更で全 ROI を再計算させる
+  // （`roiPersistence.ts` の「古い統計を持ち回らない」と同じ方針）。
+  useEffect(() => subscribeSuvStore(() => invalidateAllRoiStats()), []);
   /**
    * seriesUid → studyUid（H10 / H21 で `studyUid` 省略時に使う）。
    *

@@ -13,6 +13,7 @@ import {
   toggleSplineFit,
   isClosedContourTool,
   isOpenContourTool,
+  forceTextBoxOnOpenContour,
   openContour,
   splineTypeFor,
   supportsSplineFit,
@@ -293,5 +294,89 @@ describe("スプライン Fit の永続化", () => {
     const data = buildAnnotationData(saved!) as { contour?: { closed?: boolean }; isOpenContour?: boolean };
     expect(data.contour?.closed).toBe(false);
     expect(data.isOpenContour).toBe(true);
+  });
+});
+
+describe("開いた輪郭でも統計の textBox を描かせる差し替え", () => {
+  /** `SplineROITool._renderStats` を模したもの（上流は closed でなければ即 return する）。 */
+  function fakeTool() {
+    const calls: { textLines: string[] }[] = [];
+    return {
+      calls,
+      configuration: { getTextLines: () => ["Length: 38.6 mm", "Mean: 43.2 HU"] },
+      getTargetId: () => "imageId:wadouri:x",
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      _renderStats: (_a: any, _v: any, _s: any, _t: any) => {
+        throw new Error("上流の実装が呼ばれた（差し替えが効いていない）");
+      },
+    };
+  }
+
+  const viewport = {
+    worldToCanvas: (p: number[]) => [p[0], p[1]],
+    canvasToWorld: (p: number[]) => [p[0], p[1], 0],
+  };
+
+  function annotation() {
+    return {
+      annotationUID: "uid-1",
+      data: {
+        handles: {
+          points: [
+            [0, 0, 0],
+            [10, 0, 0],
+          ],
+          textBox: { hasMoved: false, worldPosition: [0, 0, 0], worldBoundingBox: {} },
+        },
+        // 開いた輪郭。上流はここで抜ける。
+        contour: { closed: false },
+        spline: { instance: { closed: false } },
+      },
+    };
+  }
+
+  it("🚨 開いた輪郭（closed=false）でも描画まで進む", () => {
+    // 上流 `SplineROITool._renderStats` は `if (!data.spline.instance.closed) return;` で
+    // **何もせずに抜ける**。差し替えが効いていれば getTextLines が呼ばれ、textBox の位置も決まる。
+    const tool = fakeTool();
+    expect(forceTextBoxOnOpenContour(tool)).toBe(true);
+    let askedForLines = false;
+    tool.configuration.getTextLines = () => {
+      askedForLines = true;
+      return ["Length: 38.6 mm", "Mean: 43.2 HU"];
+    };
+    const ann = annotation();
+    try {
+      tool._renderStats(ann, viewport, {}, { visibility: true });
+    } catch {
+      // 最後の `drawLinkedTextBox` は Cornerstone の SVG 描画で、DOM の無い vitest
+      // （environment: "node"）では必ず失敗する。ここで見たいのは**そこまで到達したか**。
+    }
+    expect(askedForLines).toBe(true);
+    // textBox は原点のままではなく、頂点から計算された位置に置かれている。
+    expect(ann.data.handles.textBox.worldPosition).not.toEqual([0, 0, 0]);
+  });
+
+  it("textBox が非表示なら何もしない", () => {
+    const tool = fakeTool();
+    forceTextBoxOnOpenContour(tool);
+    const ann = annotation();
+    const before = JSON.stringify(ann.data.handles.textBox);
+    tool._renderStats(ann, viewport, {}, { visibility: false });
+    expect(JSON.stringify(ann.data.handles.textBox)).toBe(before);
+  });
+
+  it("表示する行が無ければ何もしない", () => {
+    const tool = fakeTool();
+    tool.configuration.getTextLines = () => [];
+    forceTextBoxOnOpenContour(tool);
+    const ann = annotation();
+    const before = JSON.stringify(ann.data.handles.textBox);
+    tool._renderStats(ann, viewport, {}, { visibility: true });
+    expect(JSON.stringify(ann.data.handles.textBox)).toBe(before);
+  });
+
+  it("差し替え先が無いツールでは false を返す（上流の版が変わったら気付ける）", () => {
+    expect(forceTextBoxOnOpenContour({})).toBe(false);
   });
 });

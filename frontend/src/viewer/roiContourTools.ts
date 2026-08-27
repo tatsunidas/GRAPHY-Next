@@ -29,7 +29,12 @@ import {
   ToolGroupManager,
   annotation as csAnnotation,
 } from "@cornerstonejs/tools";
-import { getAnnotationNearPoint, triggerAnnotationRenderForViewportIds } from "@cornerstonejs/tools/utilities";
+import {
+  drawing as csDrawingUtils,
+  getAnnotationNearPoint,
+  triggerAnnotationRenderForViewportIds,
+} from "@cornerstonejs/tools/utilities";
+import { drawing as csDrawing } from "@cornerstonejs/tools";
 import { getRenderingEngines } from "@cornerstonejs/core";
 
 /**
@@ -61,6 +66,8 @@ export class PolylineRoiTool extends SplineROITool {
   constructor(toolProps: any = {}, defaultToolProps?: any) {
     super(toolProps, defaultToolProps);
     forceOpenAfterFinish(this);
+    // 開いた輪郭でも統計を出す（上流は closed のときしか描かない）。
+    forceTextBoxOnOpenContour(this);
   }
 }
 
@@ -370,6 +377,58 @@ function forceOpenAfterFinish(tool: any): void {
     openContour(annotation);
     return result;
   };
+}
+
+/**
+ * **開いたポリラインでも統計の textBox を描かせる。**
+ *
+ * <p>`SplineROITool._renderStats` は先頭で `if (!data.spline.instance.closed || !visibility) return;`
+ * と抜けるため、**`configuration.getTextLines` を差し替えても開いた輪郭には何も出ない**
+ * （`fw/roi-stats-design.md` §4.7）。開いた線にも「線長・線上の画素統計」という測れる量が
+ * あるので、閉じているかの判定だけを外した実装へ差し替える。
+ *
+ * <p>`_renderStats` はコンストラクタでインスタンスに代入されるアロー関数なので、
+ * サブクラスのコンストラクタから差し替えられる（{@link forceOpenAfterFinish} と同じ手口）。
+ *
+ * <p>🔴 **上流の内部実装に依存している。** `@cornerstonejs/tools` を上げたらここが最初に壊れる。
+ * 差し替えが刺さったかは `roiContourTools.test.ts` が見ている。
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function forceTextBoxOnOpenContour(tool: any): boolean {
+  if (typeof tool?._renderStats !== "function") return false;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  tool._renderStats = (annotation: any, viewport: any, svgDrawingHelper: any, textboxStyle: any) => {
+    const data = annotation?.data;
+    if (!data || !textboxStyle?.visibility) return;
+    const textLines = tool.configuration?.getTextLines?.(data, tool.getTargetId(viewport));
+    if (!textLines || textLines.length === 0) return;
+    const canvasCoordinates = (data.handles?.points ?? []).map((p: number[]) => viewport.worldToCanvas(p));
+    if (canvasCoordinates.length < 2) return;
+    if (!data.handles.textBox.hasMoved) {
+      data.handles.textBox.worldPosition = viewport.canvasToWorld(
+        csDrawingUtils.getTextBoxCoordsCanvas(canvasCoordinates),
+      );
+    }
+    const textBoxPosition = viewport.worldToCanvas(data.handles.textBox.worldPosition);
+    const box = csDrawing.drawLinkedTextBox(
+      svgDrawingHelper,
+      annotation.annotationUID ?? "",
+      "textBox",
+      textLines,
+      textBoxPosition,
+      canvasCoordinates,
+      {},
+      textboxStyle,
+    );
+    const { x: left, y: top, width, height } = box;
+    data.handles.textBox.worldBoundingBox = {
+      topLeft: viewport.canvasToWorld([left, top]),
+      topRight: viewport.canvasToWorld([left + width, top]),
+      bottomLeft: viewport.canvasToWorld([left, top + height]),
+      bottomRight: viewport.canvasToWorld([left + width, top + height]),
+    };
+  };
+  return true;
 }
 
 /** アノテーションを開いた輪郭にする（純粋な後処理。テストから直接呼べる形にしてある）。 */

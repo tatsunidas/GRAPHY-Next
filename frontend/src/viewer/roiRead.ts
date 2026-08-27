@@ -196,6 +196,49 @@ export function distanceMm(
 }
 
 /**
+ * ROI の頂点（world 座標）を画素座標へ落とす。純関数（変換器を注入する）。
+ *
+ * <p>🚨 **幾何（IPP/IOP）が無いシリーズがある**。XA がまさにそれで、そこでは Cornerstone の
+ * `worldToImageCoords` が 1 点も変換できず、**計測が丸ごと落ちる**（2026-08-25 に実機で判明。
+ * プラグインからは「ユーザーが引いた線が存在しない」ように見え、アンギオの解析が成立しない）。
+ * 幾何が無いスタックの world は `画素 × 画素間隔`（原点 0）なので、割って戻せばよい。
+ *
+ * <p>この換算はもともと `Viewer2D.getRois()` と `XaAnalysisDialog.worldToImagePx()` に
+ * 別々に書かれていた。**3 か所目を作らないため**にここへ集約する。
+ *
+ * @param world         頂点の world 座標（`contour.polyline` または `handles.points`）
+ * @param toImageCoords world → 画素座標の変換器（変換できなければ null/undefined を返すこと）
+ * @param spacingX      列方向(x)の画素間隔 mm。不明なら null（フォールバックでは 1 として扱う）
+ * @param spacingY      行方向(y)の画素間隔 mm
+ */
+export function roiPointsPx(
+  world: ReadonlyArray<ArrayLike<number>>,
+  toImageCoords: (w: ArrayLike<number>) => readonly [number, number] | null | undefined,
+  spacingX: number | null | undefined,
+  spacingY: number | null | undefined,
+): PointPx[] {
+  const points: PointPx[] = [];
+  for (const w of world) {
+    let ic: readonly [number, number] | null | undefined;
+    try {
+      ic = toImageCoords(w);
+    } catch {
+      ic = null; // 変換できない頂点は落とす（幾何が無いシリーズなど）
+    }
+    if (ic && Number.isFinite(ic[0]) && Number.isFinite(ic[1])) points.push([ic[0], ic[1]]);
+  }
+  if (points.length) return points;
+
+  // 幾何が無いスタック: world = 画素 × 画素間隔（原点 0）なので割って戻す。
+  const col = Number.isFinite(spacingX) && (spacingX as number) > 0 ? (spacingX as number) : 1;
+  const row = Number.isFinite(spacingY) && (spacingY as number) > 0 ? (spacingY as number) : 1;
+  for (const w of world) {
+    if (Number.isFinite(w?.[0]) && Number.isFinite(w?.[1])) points.push([w[0] / col, w[1] / row]);
+  }
+  return points;
+}
+
+/**
  * ROI に紐付くプラグイン属性のキー接頭辞。
  *
  * <p>プラグインが渡すキーは**必ずこの名前空間に入れる**（前置は host が行い、プラグインには
