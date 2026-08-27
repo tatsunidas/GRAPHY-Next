@@ -109,6 +109,37 @@ cd ../automator && npx tsx src/spike/xaDsaPhantomCheck.ts  # DSA: 体動の自�
   ③解析失敗時に検証用スナップショットが前の値のまま残る。
   **どれもフレームごとに中身が違うファントムでしか見えない**。
 
+## 公開データを取り込む — `wrap_public_xa.py`
+
+商用利用可と確認できた公開データ（`fw/angio-design.md` §16.2.1）は**すべて PNG などの
+画像形式**で配布されている。GRAPHY-Next は DICOM しか開かないので、包んでから取り込む。
+
+```bash
+python3 wrap_public_xa.py --dataset cadica --src <展開先> --out <出力先> --dry-run
+python3 wrap_public_xa.py --dataset cadica --src <展開先> --out <出力先>
+python3 check_wrap_public_xa.py                            # 合成入力での自己検証（27 項目）
+```
+
+対応: `cadica` / `dias` / `arcade` / `mendeley-stenosis` / `generic`。
+`generic` は `--attribution` でライセンス表記を渡すこと（表記の無いデータは包まない）。
+
+🚨 **このラッパは空間校正・投影幾何のタグを一切書かない。** 元データが患者情報除去のため
+画像化されており、`PixelSpacing` / `ImagerPixelSpacing` / `DistanceSourceTo*` /
+`Positioner*Angle` が失われているためである。既定値で埋めると**未校正の画像が mm で測られ、
+値がそれらしいので誰も気付かない**。校正連鎖は P7（none）へ落ちて px 表示になる——それが正しい。
+mm が要るなら画面上でカテーテル法／ルーラー法で校正する（設計 §7.3）。
+
+🔴 **独立した静止画は解析できない。** XA の解析はフレーム軸を持つスタックにしか出ないので、
+無関係な静止画は 1 枚 1 シリーズ（単一フレーム）で出す。束ねると**フレームごとに別患者**の
+嘘のシリーズになる。実データで QCA を回せるのは **CADICA と DIAS だけ**で、
+ARCADE と Mendeley の狭窄データは**表示のみ**。
+
+⚠️ **精度の検証には使えない。** 真値が無いので言えるのは「動く」「内部整合する」まで。
+合否の判定は GNBP-XA（真値既知）で行う。
+
+⚠️ 取得したデータは**リポジトリに入れない**（設計 §16.1-4）。CC BY のものは**出典表記が必須**で、
+ラッパは帰属を `ImageComments` へ焼き込む（画像だけが独り歩きしても出典が残るように）。
+
 ## 再現性
 
 生成物は**バイト単位で決定的**。UID は固定ルート＋パラメータの SHA-256 から導出し、
