@@ -91,18 +91,11 @@ export interface ModalitySlice {
 }
 
 /**
- * imageId のピクセルを校正済み float スライスとして読み出す（未ロードなら読み込む）。
- * カラー（RGB）画像は輝度（ITU-R BT.601）へ変換する。取得不能なら null。
- * 校正の適用可否は {@link getModalityCalibration} に一元化しているため二重適用しない。
+ * キャッシュ画像 → 校正済み float スライス。読み込みはしない（純粋な変換部）。
+ * {@link readModalitySlice} と {@link readModalitySliceSync} の共通実装。
  */
-export async function readModalitySlice(imageId: string): Promise<ModalitySlice | null> {
-  try {
-    await imageLoader.loadAndCacheImage(imageId);
-  } catch {
-    /* すでにキャッシュ済みなら getImage で拾える */
-  }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const img: any = cache.getImage(imageId);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function sliceFromImage(img: any, imageId: string): ModalitySlice | null {
   if (!img) return null;
   const px = img.getPixelData?.() as ArrayLike<number> | undefined;
   const width: number = img.columns ?? img.width;
@@ -123,4 +116,70 @@ export async function readModalitySlice(imageId: string): Promise<ModalitySlice 
   const { scale, offset, unit } = getModalityCalibration(img, imageId);
   for (let i = 0; i < n; i++) values[i] = px[i] * scale + offset;
   return { values, width, height, unit };
+}
+
+/**
+ * imageId のピクセルを校正済み float スライスとして読み出す（未ロードなら読み込む）。
+ * カラー（RGB）画像は輝度（ITU-R BT.601）へ変換する。取得不能なら null。
+ * 校正の適用可否は {@link getModalityCalibration} に一元化しているため二重適用しない。
+ */
+export async function readModalitySlice(imageId: string): Promise<ModalitySlice | null> {
+  try {
+    await imageLoader.loadAndCacheImage(imageId);
+  } catch {
+    /* すでにキャッシュ済みなら getImage で拾える */
+  }
+  return sliceFromImage(cache.getImage(imageId), imageId);
+}
+
+/**
+ * {@link readModalitySlice} の同期版。<b>キャッシュに載っている画像だけ</b>を読み、
+ * 載っていなければ {@code null} を返す（読み込みを起動しない）。
+ *
+ * <p>同期でしか答えられない口——プラグイン host API の H5 {@code getRois()} は
+ * {@code ViewerTileRoi[]} を同期で返す契約なので、そこから ROI 統計を出すために要る
+ * （`fw/roi-stats-design.md` §7.2）。表示中のスライスは必ずキャッシュに載っているため、
+ * 実用上はこれで足りる。載っていなければ<b>統計を出さない</b>（別経路の値で埋めない）。
+ */
+export function readModalitySliceSync(imageId: string): ModalitySlice | null {
+  return sliceFromImage(cache.getImage(imageId), imageId);
+}
+
+/**
+ * モダリティ名から「校正値の既定単位」を引く。純関数。
+ *
+ * <p>{@code RescaleType}(0028,1054) は<b>実データではしばしば空</b>で、そのままでは
+ * 「43.2 」のように単位の無い数字が出る。DICOM 上 CT の Rescale 後は HU と決まっている等、
+ * モダリティから決まるものはここで補う。<b>決まらないものは空文字のまま</b>にする
+ * （それらしい単位を捏造するより、無いほうがよい）。
+ */
+export function defaultUnitForModality(modality: string | undefined): string {
+  switch ((modality ?? "").trim().toUpperCase()) {
+    case "CT":
+      return "HU";
+    case "PT":
+      return "Bq/ml";
+    default:
+      // MR/US/XA/XRF/CR/DX/NM/MG… は Rescale 後の単位が規格で決まっていない。
+      return "";
+  }
+}
+
+/**
+ * 統計値（mean/SD/min/max）に添える単位を決める。解決順は
+ * <b>SUV 校正 → RescaleType → モダリティ既定 → "raw"</b>（`fw/roi-stats-design.md` §3.3）。
+ *
+ * <p>{@link getModalityCalibration} の戻り値は<b>変えない</b>（ヒストグラム・MPR・Curved MPR が
+ * 読んでいる load-bearing な関数なので、意味を変える理由がここには無い）。解決は呼び出し側で行う。
+ */
+export function resolveValueUnit(imageId: string): string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const img: any = cache.getImage(imageId);
+  const cal = getModalityCalibration(img, imageId);
+  // "raw" は「校正そのものが無い」印。モダリティ既定で埋めない（未校正を校正済みに見せない）。
+  if (cal.unit === "raw") return "raw";
+  if (cal.unit) return cal.unit;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const gsm: any = metaData.get("generalSeriesModule", imageId) ?? {};
+  return defaultUnitForModality(gsm.modality as string | undefined);
 }

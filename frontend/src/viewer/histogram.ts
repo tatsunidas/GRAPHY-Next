@@ -71,15 +71,35 @@ export function analyzeSlice(slice: Slice, spec: BinSpec): HistogramData {
  * （先頭スライスの unit を採用）。オリジナルの HistogramAnalyzer.analyze と同ロジック。
  */
 export function analyze(slices: Slice[], spec: BinSpec): HistogramData {
-  const unit = slices.length ? slices[0].unit : "raw";
+  return analyzeValues(
+    slices.map((s) => s.values),
+    slices.length ? slices[0].unit : "raw",
+    spec,
+  );
+}
 
+/**
+ * 値の並び（複数チャンク）から直接ヒストグラム＋一次統計量を出す。純関数。
+ *
+ * <p>{@link analyze} の実体。<b>スライス全体でなく ROI 内の画素だけ</b>を渡せるようにするために
+ * 切り出した（`viewer/roiStats.ts` が使う）。分散・歪度・尖度・エントロピー・中央値の式を
+ * 2 か所に書かないための単一入口——数式が分かれると、同じ ROI について画面のどこを見たかで
+ * 値が違う、という事故になる。
+ *
+ * @param chunks 値の並び（連結して 1 母集団として扱う）。空チャンクは無視。
+ * @param unit   値の単位（"HU" / "SUVbw" / "raw" 等）。
+ */
+export function analyzeValues(
+  chunks: ReadonlyArray<ArrayLike<number>>,
+  unit: string,
+  spec: BinSpec,
+): HistogramData {
   // Pass 1: min/max/mean。
   let min = Number.POSITIVE_INFINITY;
   let max = Number.NEGATIVE_INFINITY;
   let sum = 0;
   let count = 0;
-  for (const s of slices) {
-    const v = s.values;
+  for (const v of chunks) {
     for (let i = 0; i < v.length; i++) {
       const x = v[i];
       if (x < min) min = x;
@@ -110,8 +130,7 @@ export function analyze(slices: Slice[], spec: BinSpec): HistogramData {
   let sumSq = 0;
   let sumCube = 0;
   let sumQuad = 0;
-  for (const s of slices) {
-    const v = s.values;
+  for (const v of chunks) {
     for (let i = 0; i < v.length; i++) {
       const x = v[i];
       const d = x - mean;
