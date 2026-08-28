@@ -8,7 +8,7 @@ import {
   brushWeight,
   defaultBrushRadius,
   mergeEdgeEdits,
-  type BrushInput, detectEdgeOutliers, localMedian, smoothEdges } from "./qcaBrush";
+  type BrushInput, detectEdgeOutliers, localMedian, smoothEdges, robustLocalLine } from "./qcaBrush";
 
 /** 等間隔 0.1 単位で n 点、左 −2 / 右 +2 のまっすぐな血管。 */
 function straight(n: number, step = 0.1): Omit<BrushInput, "centerIndex" | "side" | "targetOffset" | "radius"> {
@@ -279,5 +279,97 @@ describe("smoothEdges", () => {
         strength: 0,
       }),
     ).toEqual([]);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 外れ点が「塊」のとき（2026-08-28・実機で言われた）                     */
+/* ------------------------------------------------------------------ */
+
+describe("robustLocalLine", () => {
+  const pos = Array.from({ length: 41 }, (_, i) => i);
+
+  it("傾きのある並びに直線を当てる（中央値と違ってテーパーを潰さない）", () => {
+    const val = pos.map((x) => 2 + 0.05 * x);
+    expect(robustLocalLine(pos, val, 20, 12)).toBeCloseTo(2 + 0.05 * 20, 6);
+  });
+
+  it("🚨 隣り合う外れの塊があっても引っ張られない（除外を渡す）", () => {
+    const val = pos.map(() => 2);
+    for (let i = 18; i <= 23; i++) val[i] = 7; // 6 点まとめて外れ
+    const excluded = new Set([18, 19, 20, 21, 22, 23]);
+    expect(robustLocalLine(pos, val, 20, 12, excluded)).toBeCloseTo(2, 6);
+  });
+
+  it("窓の点が全部外れ扱いでも当てはめを諦めない（除外をやめて集め直す）", () => {
+    const val = pos.map(() => 2);
+    const excluded = new Set(pos);
+    expect(Number.isFinite(robustLocalLine(pos, val, 20, 5, excluded))).toBe(true);
+  });
+
+  it("標本が足りなければ直線ではなく中央値へ落ちる（傾きが暴れない）", () => {
+    expect(robustLocalLine([0, 1, 2], [2, 9, 2], 1, 1.5)).toBe(2);
+  });
+});
+
+describe("smoothEdges — 外れ点が塊のとき", () => {
+  const pos = Array.from({ length: 61 }, (_, i) => i);
+  const make = (values: number[]) => values.map((v) => ({ left: -v, right: v }));
+
+  it("🔴 隣り合う 6 点がまとめて外れていても、なでれば戻る（従来は動かなかった）", () => {
+    // ブラシ半径 5 と同じ幅の窓だと、この塊は窓内の多数派になり中央値が外れ値になる。
+    const val = pos.map(() => 2);
+    for (let i = 28; i <= 33; i++) val[i] = 7;
+    const out = smoothEdges({
+      positions: pos,
+      pathIndices: pos,
+      edgeOffsets: make(val),
+      centerIndex: 30,
+      side: "right",
+      radius: 5,
+    });
+    const byIndex = new Map(out.map((o) => [o.pathIndex, o.offset]));
+    const moved = byIndex.get(30);
+    expect(moved).toBeDefined();
+    // 7 → 2 の向きへはっきり動く（1 回のなでで strength ぶん）。
+    expect(moved!).toBeLessThan(5.5);
+  });
+
+  it("なでるほど塊が正しい値へ寄る（数回で実用になる）", () => {
+    let offsets = make(pos.map((_, i) => (i >= 28 && i <= 33 ? 7 : 2)));
+    for (let k = 0; k < 6; k++) {
+      const out = smoothEdges({
+        positions: pos,
+        pathIndices: pos,
+        edgeOffsets: offsets,
+        centerIndex: 30,
+        side: "right",
+        radius: 5,
+      });
+      const byIndex = new Map(out.map((o) => [o.pathIndex, o.offset]));
+      offsets = offsets.map((o, i) => (byIndex.has(i) ? { ...o, right: byIndex.get(i)! } : o));
+    }
+    expect(offsets[30].right).toBeLessThan(2.6);
+  });
+
+  it("🔴 テーパー（先細り）のある区間をならしても、傾きは残る", () => {
+    // 近位 3.0mm → 遠位 1.8mm へ素直に細くなる並びに、1 点だけ飛びを入れる。
+    const val = pos.map((x) => 3.0 - 0.02 * x);
+    val[30] = 6;
+    const out = smoothEdges({
+      positions: pos,
+      pathIndices: pos,
+      edgeOffsets: make(val),
+      centerIndex: 30,
+      side: "right",
+      radius: 6,
+    });
+    const byIndex = new Map(out.map((o) => [o.pathIndex, o.offset]));
+    // 飛びは戻る
+    expect(byIndex.get(30)!).toBeLessThan(5);
+    // 近位側と遠位側は元の傾きのまま（定数へ均されていない）
+    const near = byIndex.get(25) ?? val[25];
+    const far = byIndex.get(35) ?? val[35];
+    expect(near - far).toBeGreaterThan(0.15);
   });
 });

@@ -990,6 +990,7 @@ export const ja: Record<string, string> = {
   "xa.export.burnedInWarning": "PNG には DICOM のタグは含まれませんが、**画像に焼き込まれた患者情報（バーンドイン注釈）は消えません**。書き出しますか？",
   "xa.analysis.researchOnly": "研究用（Research Use Only）",
   // QCA の手修正（fw/angio-design.md §8.6）
+  "xa.qca.frameLocked": "解析中はフレームを固定しています（ホイール・シネ・スライダーは効きません）。別のフレームを解析するには、いったん閉じてください。",
   "xa.qca.editMode": "手修正",
   "xa.qca.mode.none": "しない",
   "xa.qca.mode.waypoint": "中心線（通過点）",

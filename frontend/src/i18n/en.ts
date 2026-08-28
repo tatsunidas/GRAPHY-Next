@@ -988,6 +988,7 @@ export const en: Record<string, string> = {
   "xa.export.burnedInWarning": "PNG files carry no DICOM tags, but **patient information burned into the pixels is not removed**. Export anyway?",
   "xa.analysis.researchOnly": "Research Use Only",
   // QCA manual correction (fw/angio-design.md §8.6)
+  "xa.qca.frameLocked": "The frame is pinned while a result is shown (wheel, cine and the slider are disabled). Close the dialog to analyse a different frame.",
   "xa.qca.editMode": "Manual correction",
   "xa.qca.mode.none": "Off",
   "xa.qca.mode.waypoint": "Centerline (waypoints)",

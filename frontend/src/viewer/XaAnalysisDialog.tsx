@@ -25,6 +25,7 @@ import { publishQcaSnapshot } from "./debugApi";
 import { readModalitySlice } from "./pixelCalibration";
 import { QcaEditor, type QcaEditMode } from "./QcaEditor";
 import { defaultBrushRadius, mergeEdgeEdits } from "./qcaBrush";
+import { lockSliceNavigation } from "./sliceNavigationLock";
 import { runQca, type QcaManualEdits, type QcaReferenceMode, type QcaResult } from "./qca";
 import {
   canCalibrateWith,
@@ -317,6 +318,21 @@ export function XaAnalysisDialog({
   const [editMode, setEditMode] = useState<QcaEditMode>("none");
   /** ブラシ半径。単位は結果と同じ（校正済み mm / 未校正 px）。 */
   const [brushRadius, setBrushRadius] = useState<number | null>(null);
+
+  /**
+   * 🔴 **解析結果がある間はフレームを固定する**（実機で言われた・2026-08-28）。
+   *
+   * <p>結果は「あるフレーム」に対して出ており、中心線・エッジ・手修正・校正はすべてその 1 枚に
+   * 紐付いている。裏でホイールが効くと、**画面の画像とダイアログの数値が別フレームのもの**になり、
+   * しかも**エラーが出ない**（値は内部整合したまま残る）。
+   *
+   * <p>⚠️ **ダイアログを開いている間ずっと、ではない。** 解析前にフレームを選ぶのは正当な操作で、
+   * そこまで止めると「解析したいフレームに行けない」になる。錠は結果が出てから。
+   */
+  useEffect(() => {
+    if (!result) return;
+    return lockSliceNavigation();
+  }, [result]);
   const [chartMode, setChartMode] = useState<"none" | "trim" | "reference">("none");
   const [highlight, setHighlight] = useState<number | null>(null);
   /** 解析に使った画素。手修正のたびに読み直すと重いのでキャッシュする。 */
@@ -982,6 +998,10 @@ export function XaAnalysisDialog({
             /* 中心線とエッジはどちらもこのパネルで直すので、両方の段がここを指す。 */
             <div data-step="centerline edges">
               {/* 手修正（§8.6）。自動の中心線は外れていても必ず結果を出すので、ここが要る。 */}
+              {/* 🔴 止まっている理由を出す。動かないのに理由が無いと「壊れている」と読まれる。 */}
+              <div style={{ fontSize: 11, color: "#8a6d3b", marginBottom: 4 }} data-testid="xa-qca-frame-locked">
+                {t("xa.qca.frameLocked")}
+              </div>
               <div style={row}>
                 <span style={{ fontSize: 11, color: "#44586a" }}>{t("xa.qca.editMode")}:</span>
                 {(["none", "waypoint", "edge", "brush", "smooth"] as const).map((m) => (

@@ -209,6 +209,121 @@ export function detectEdgeOutliers(
   return out;
 }
 
+/* ── ロバストな局所当てはめ（2026-08-28・改良）───────────────────── */
+
+/**
+ * 🚨 **中央値だけでは、外れ点が「塊」になっていると直せない**（実機で言われた）。
+ *
+ * <p>中央値の耐性は「窓の中で外れが**半分未満**」であることが前提。自動エッジが外れるときは
+ * 1 点ずつではなく**隣り合う数点がまとめて**外れることが多く、ブラシ半径と同じ幅の窓では
+ * **外れの塊が多数派**になる。すると中央値そのものが外れ値になり、
+ * **なでても何も動かない**（＝「ならせない」）。
+ *
+ * <p>対処は 3 つ重ねる:
+ * <ol>
+ *   <li><b>当てはめの窓をブラシ半径から切り離して広げる</b>（既定 {@link SMOOTH_WINDOW_FACTOR} 倍）。
+ *       塊を多数決で負かす。</li>
+ *   <li><b>定数（中央値）ではなく直線を当てる。</b> 窓を広げても血管のテーパーに追従するので、
+ *       真の形を潰さない。中央値のまま窓だけ広げると**狭窄を均してしまう**。</li>
+ *   <li><b>当てはめから外れ点を除く。</b> 塊が窓内で多数でも、除いてしまえば目標は正しく出る。</li>
+ * </ol>
+ */
+
+/** 当てはめの窓 ＝ ブラシ半径 × これ（既定）。塊の外れを多数決で負かせる広さ。 */
+export const SMOOTH_WINDOW_FACTOR = 3;
+
+/** 当てはめに使う標本数の上限（計算量を抑える。超えたら等間隔に間引く）。 */
+const FIT_SAMPLE_CAP = 41;
+
+function median(sorted: number[]): number {
+  const m = sorted.length >> 1;
+  return sorted.length % 2 ? sorted[m] : (sorted[m - 1] + sorted[m]) / 2;
+}
+
+/**
+ * 窓に入る点を集める。`excluded` の添字は外す。使える点が 3 未満なら、
+ * **除外をやめて集め直す**（全部が外れ扱いの窓で「当てはめ不能」にしない）。
+ */
+function collectWindow(
+  positions: readonly number[],
+  values: readonly number[],
+  index: number,
+  windowRadius: number,
+  excluded?: ReadonlySet<number>,
+): { x: number[]; y: number[] } {
+  const n = Math.min(positions.length, values.length);
+  const p0 = positions[index];
+  const pick = (skipExcluded: boolean) => {
+    const x: number[] = [];
+    const y: number[] = [];
+    for (let i = 0; i < n; i++) {
+      if (Math.abs(positions[i] - p0) > windowRadius) continue;
+      if (!Number.isFinite(values[i])) continue;
+      if (skipExcluded && excluded?.has(i)) continue;
+      x.push(positions[i]);
+      y.push(values[i]);
+    }
+    return { x, y };
+  };
+  let w = pick(true);
+  if (w.x.length < 3) w = pick(false);
+  // 計算量の上限。等間隔に間引く（端は残す）。
+  if (w.x.length > FIT_SAMPLE_CAP) {
+    const x: number[] = [];
+    const y: number[] = [];
+    for (let k = 0; k < FIT_SAMPLE_CAP; k++) {
+      const i = Math.round((k * (w.x.length - 1)) / (FIT_SAMPLE_CAP - 1));
+      x.push(w.x[i]);
+      y.push(w.y[i]);
+    }
+    w = { x, y };
+  }
+  return w;
+}
+
+/**
+ * 窓の点に**ロバストな直線**を当て、`positions[index]` での値を返す。
+ *
+ * <p>推定は**繰り返し中央値**（Siegel）。各点について他点との傾きの中央値を取り、
+ * さらにその中央値を傾きとする。**耐性 50%** で、最小二乗と違って外れ点に引かれない。
+ *
+ * <p>点が 2 未満なら NaN、2〜3 点なら中央値（定数）にフォールバックする
+ * ——標本が足りないのに直線を当てると、**傾きが暴れて隣の点をあらぬ所へ飛ばす**。
+ */
+export function robustLocalLine(
+  positions: readonly number[],
+  values: readonly number[],
+  index: number,
+  windowRadius: number,
+  excluded?: ReadonlySet<number>,
+): number {
+  const n = Math.min(positions.length, values.length);
+  if (index < 0 || index >= n) return NaN;
+  const { x, y } = collectWindow(positions, values, index, windowRadius, excluded);
+  if (x.length === 0) return NaN;
+  if (x.length < 4) return median([...y].sort((a, b) => a - b));
+
+  const slopes: number[] = [];
+  for (let i = 0; i < x.length; i++) {
+    const si: number[] = [];
+    for (let j = 0; j < x.length; j++) {
+      const dx = x[j] - x[i];
+      if (dx === 0) continue;
+      si.push((y[j] - y[i]) / dx);
+    }
+    if (si.length === 0) continue;
+    si.sort((a, b) => a - b);
+    slopes.push(median(si));
+  }
+  if (slopes.length === 0) return median([...y].sort((a, b) => a - b));
+  slopes.sort((a, b) => a - b);
+  const slope = median(slopes);
+  const intercepts = x.map((xi, i) => y[i] - slope * xi).sort((a, b) => a - b);
+  const intercept = median(intercepts);
+  const fitted = intercept + slope * positions[index];
+  return Number.isFinite(fitted) ? fitted : median([...y].sort((a, b) => a - b));
+}
+
 export interface SmoothInput {
   /** 各計測点の弧長（`QcaResult.positions`）。 */
   positions: readonly number[];
@@ -220,8 +335,11 @@ export interface SmoothInput {
   /** ブラシ半径（効く範囲）。 */
   radius: number;
   /**
-   * ロバスト当てはめの窓（省略時は `radius`）。
-   * 🔴 **狭窄長より短くする。** 長くすると狭窄そのものを均してしまう。
+   * ロバスト当てはめの窓（省略時は `radius` × {@link SMOOTH_WINDOW_FACTOR}）。
+   *
+   * <p>🔴 **ブラシ半径と同じにしない。** 外れ点は隣り合って塊になることが多く、
+   * 半径と同じ幅だと**塊が窓内の多数派**になって当てはめごと引っ張られる（＝ならせない）。
+   * 直線を当てているので、広げても血管のテーパーには追従する。
    */
   windowRadius?: number;
   /** 1 回の効き（0..1・既定 {@link DEFAULT_SMOOTH_STRENGTH}）。 */
@@ -246,18 +364,23 @@ export function smoothEdges(input: SmoothInput): BrushedEdge[] {
   const n = Math.min(positions.length, pathIndices.length, edgeOffsets.length);
   if (centerIndex < 0 || centerIndex >= n) return [];
   const strength = input.strength ?? DEFAULT_SMOOTH_STRENGTH;
-  const windowRadius = input.windowRadius ?? radius;
+  const windowRadius = input.windowRadius ?? radius * SMOOTH_WINDOW_FACTOR;
   if (!(strength > 0)) return [];
 
   const values = new Array<number>(n);
   for (let i = 0; i < n; i++) values[i] = edgeOffsets[i][side];
+
+  // 🔴 **外れ点を当てはめから除く。** 隣り合う数点がまとめて外れていると、除かない限り
+  //    当てはめごと引っ張られて「なでても動かない」になる（実機で言われた症状の本体）。
+  //    検出は当てはめと同じ窓で行う（狭い窓で見ると塊が多数派になって見逃す）。
+  const excluded = new Set(detectEdgeOutliers(positions, values, windowRadius));
 
   const p0 = positions[centerIndex];
   const out: BrushedEdge[] = [];
   for (let i = 0; i < n; i++) {
     const w = brushWeight(positions[i] - p0, radius);
     if (w <= 0) continue;
-    const med = localMedian(positions, values, i, windowRadius);
+    const med = robustLocalLine(positions, values, i, windowRadius, excluded);
     if (!Number.isFinite(med)) continue;
     const change = (med - values[i]) * strength * w;
     if (Math.abs(change) < SMOOTH_EPSILON) continue;
