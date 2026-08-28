@@ -51,6 +51,15 @@ export interface QcaEditorProps {
   brushRadius: number;
   /** ハイライトする計測点（径プロファイル上の選択と連動）。 */
   highlightIndex?: number | null;
+  /**
+   * エッジ（左右の輪郭線とその上の印）を描くか。
+   *
+   * <p>🔴 **消しているあいだはエッジを掴めない。** 見えないものを掴ませると、
+   * どこを動かしたのか分からないまま手修正が入る（`provenance.editedEdges` だけが増える）。
+   */
+  showEdges?: boolean;
+  /** 囲っている内腔を半透明で塗るか（線より「面」のほうが当たり外れを掴みやすい）。 */
+  showMask?: boolean;
   onWaypointsChange: (next: [number, number][]) => void;
   onEdgeEdit: (pathIndex: number, side: "left" | "right", offset: number) => void;
   /** ブラシ 1 回ぶん（複数点）。`qcaBrush.brushEdges` の結果をそのまま渡す。 */
@@ -73,6 +82,8 @@ export function QcaEditor({
   waypoints,
   edgeEdits,
   brushRadius,
+  showEdges = true,
+  showMask = false,
   highlightIndex,
   onWaypointsChange,
   onEdgeEdit,
@@ -214,15 +225,34 @@ export function QcaEditor({
       ctx.stroke();
     };
 
-    stroke(result.edges.map((e) => e.left), "#4fc3f7");
-    stroke(result.edges.map((e) => e.right), "#4fc3f7");
+    // 内腔の半透明マスク。**線より先に敷く**（面を上に乗せると輪郭が沈んで見えなくなる）。
+    // 面は「左エッジを近位→遠位、右エッジを遠位→近位」でひと筆に閉じる＝解析が内腔と
+    // みなしている領域そのもの。線とは別の見え方をするので、外れている所が掴みやすい。
+    if (showMask && result.edges.length >= 2) {
+      ctx.fillStyle = "rgba(79, 195, 247, 0.28)";
+      ctx.beginPath();
+      ctx.moveTo(sx(result.edges[0].left[0]), sy(result.edges[0].left[1]));
+      for (let i = 1; i < result.edges.length; i++) {
+        ctx.lineTo(sx(result.edges[i].left[0]), sy(result.edges[i].left[1]));
+      }
+      for (let i = result.edges.length - 1; i >= 0; i--) {
+        ctx.lineTo(sx(result.edges[i].right[0]), sy(result.edges[i].right[1]));
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    if (showEdges) {
+      stroke(result.edges.map((e) => e.left), "#4fc3f7");
+      stroke(result.edges.map((e) => e.right), "#4fc3f7");
+    }
     stroke(result.centerline, "#7fd1b9");
 
     // 🚨 **外れ点に印を付ける**（`smooth` モードのときだけ）。
     //    「ならす」は外れている所だけをなでる道具なので、**どこが外れているのかが
     //    見えないと使えない**——外れ点が扱いづらいという指摘の半分はここだった。
     //    印は検出（ロバスト・`detectEdgeOutliers`）そのままで、閾値は画面に持たせない。
-    if (mode === "smooth") {
+    if (mode === "smooth" && showEdges) {
       ctx.strokeStyle = "#ff7b72";
       ctx.lineWidth = 1.5;
       for (const side of ["left", "right"] as const) {
@@ -239,8 +269,9 @@ export function QcaEditor({
     }
 
     // 手で直したエッジは色を変える（どこに手が入っているかが一目で分かるように）。
+    // エッジを消しているときは一緒に消す——線が無いのに点だけ浮くと何の点か分からない。
     ctx.fillStyle = "#ffd166";
-    for (const i of result.provenance.editedEdges) {
+    for (const i of showEdges ? result.provenance.editedEdges : []) {
       const e = result.edges[i];
       if (!e) continue;
       ctx.beginPath();
@@ -286,7 +317,7 @@ export function QcaEditor({
     }
   // 🔴 `mode` と `brushRadius` を依存に入れる——外れ点の印は smooth のときだけ描き、
   //    半径で変わる。入れ忘れると「モードを切り替えても印が出ない / 消えない」になる。
-  }, [backdropCanvas, result, waypoints, view, highlightIndex, mode, brushRadius]);
+  }, [backdropCanvas, result, waypoints, view, highlightIndex, mode, brushRadius, showEdges, showMask]);
 
   // ── 掴む対象を決める ─────────────────────────────────────────────
   const hitWaypoint = (p: [number, number]): number => {
@@ -305,7 +336,9 @@ export function QcaEditor({
   };
 
   const hitEdge = (p: [number, number]): { pathIndex: number; side: "left" | "right" } | null => {
-    if (!view) return null;
+    // 🔴 見えていないものは掴ませない。掴めてしまうと、どこを動かしたのか分からないまま
+    //    手修正が入り、`provenance.editedEdges` だけが増える。
+    if (!view || !showEdges) return null;
     const tol = GRAB_PX / view.scale;
     let best: { pathIndex: number; side: "left" | "right" } | null = null;
     let bd = tol;
@@ -445,6 +478,10 @@ export function QcaEditor({
           ■ {t("xa.qca.legendEdited", { waypoints: String(waypoints.length), edges: String(editedCount) })}
         </span>
       </div>
+      {/* 🔴 掴めない理由を出す。出さないと「ブラシが壊れた」と読まれる。 */}
+      {!showEdges && mode !== "none" && mode !== "waypoint" ? (
+        <div style={warn} data-testid="xa-qca-edges-hidden">{t("xa.qca.edgesHidden")}</div>
+      ) : null}
       <div style={hint}>
         {mode === "waypoint"
           ? t("xa.qca.hintWaypoint")

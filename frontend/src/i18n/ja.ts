@@ -991,6 +991,11 @@ export const ja: Record<string, string> = {
   "xa.analysis.researchOnly": "研究用（Research Use Only）",
   // QCA の手修正（fw/angio-design.md §8.6）
   "xa.qca.frameLocked": "解析中はフレームを固定しています（ホイール・シネ・スライダーは効きません）。別のフレームを解析するには、いったん閉じてください。",
+  "xa.qca.edgesHidden": "エッジを消しているあいだは、エッジを掴んで直せません（「エッジ」を押して表示してください）。",
+  "xa.qca.showEdges": "エッジ",
+  "xa.qca.showEdgesHint": "左右の輪郭線とその上の印を表示します。消している間はエッジを掴めません（画像そのものを確かめるとき用）。",
+  "xa.qca.showMask": "マスク",
+  "xa.qca.showMaskHint": "解析が内腔とみなしている領域を半透明で塗ります。線より「どこまでを内腔と見たか」が分かりやすく、外れている所を掴みやすくなります。",
   "xa.qca.editMode": "手修正",
   "xa.qca.mode.none": "しない",
   "xa.qca.mode.waypoint": "中心線（通過点）",

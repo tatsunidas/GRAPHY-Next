@@ -989,6 +989,11 @@ export const en: Record<string, string> = {
   "xa.analysis.researchOnly": "Research Use Only",
   // QCA manual correction (fw/angio-design.md §8.6)
   "xa.qca.frameLocked": "The frame is pinned while a result is shown (wheel, cine and the slider are disabled). Close the dialog to analyse a different frame.",
+  "xa.qca.edgesHidden": "Edges cannot be grabbed while they are hidden (press \"Edges\" to show them).",
+  "xa.qca.showEdges": "Edges",
+  "xa.qca.showEdgesHint": "Show the left/right contours and their markers. While hidden, edges cannot be grabbed (use it to check the image itself).",
+  "xa.qca.showMask": "Mask",
+  "xa.qca.showMaskHint": "Shade the region the analysis treats as the lumen. The filled area shows how far the lumen was taken, which makes a wrong contour easier to spot than the lines alone.",
   "xa.qca.editMode": "Manual correction",
   "xa.qca.mode.none": "Off",
   "xa.qca.mode.waypoint": "Centerline (waypoints)",
