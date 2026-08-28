@@ -26,10 +26,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import { publishQcaSnapshot } from "./debugApi";
 import type { QcaResult } from "./qca";
-import { brushEdges, type BrushedEdge } from "./qcaBrush";
+import { brushEdges, type BrushedEdge, smoothEdges, detectEdgeOutliers } from "./qcaBrush";
 
 /** 編集モード。 */
-export type QcaEditMode = "none" | "waypoint" | "edge" | "brush";
+/**
+ * `smooth` は「ならす」ブラシ（§8.8.1）。**押すブラシでは外れ点を直せない**
+ * ——半径内へ同じ移動量を配るので、外れ点を押せば近傍まで外れ、近傍を押せば外れ点は残る。
+ */
+export type QcaEditMode = "none" | "waypoint" | "edge" | "brush" | "smooth";
 
 export interface QcaEditorProps {
   /** 解析に使った画素（モダリティ値）。 */
@@ -80,6 +84,7 @@ export function QcaEditor({
     | { kind: "waypoint"; index: number }
     | { kind: "edge"; pathIndex: number; side: "left" | "right" }
     | { kind: "brush"; pathIndex: number; side: "left" | "right" }
+    | { kind: "smooth"; pathIndex: number; side: "left" | "right" }
     | null
   >(null);
 
@@ -213,6 +218,26 @@ export function QcaEditor({
     stroke(result.edges.map((e) => e.right), "#4fc3f7");
     stroke(result.centerline, "#7fd1b9");
 
+    // 🚨 **外れ点に印を付ける**（`smooth` モードのときだけ）。
+    //    「ならす」は外れている所だけをなでる道具なので、**どこが外れているのかが
+    //    見えないと使えない**——外れ点が扱いづらいという指摘の半分はここだった。
+    //    印は検出（ロバスト・`detectEdgeOutliers`）そのままで、閾値は画面に持たせない。
+    if (mode === "smooth") {
+      ctx.strokeStyle = "#ff7b72";
+      ctx.lineWidth = 1.5;
+      for (const side of ["left", "right"] as const) {
+        const values = result.edgeOffsets.map((o) => o[side]);
+        for (const i of detectEdgeOutliers(result.positions, values, brushRadius)) {
+          const e = result.edges[i];
+          if (!e) continue;
+          const pt = e[side];
+          ctx.beginPath();
+          ctx.arc(sx(pt[0]), sy(pt[1]), 4.5, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
+    }
+
     // 手で直したエッジは色を変える（どこに手が入っているかが一目で分かるように）。
     ctx.fillStyle = "#ffd166";
     for (const i of result.provenance.editedEdges) {
@@ -259,7 +284,9 @@ export function QcaEditor({
       ctx.fill();
       ctx.stroke();
     }
-  }, [backdropCanvas, result, waypoints, view, highlightIndex]);
+  // 🔴 `mode` と `brushRadius` を依存に入れる——外れ点の印は smooth のときだけ描き、
+  //    半径で変わる。入れ忘れると「モードを切り替えても印が出ない / 消えない」になる。
+  }, [backdropCanvas, result, waypoints, view, highlightIndex, mode, brushRadius]);
 
   // ── 掴む対象を決める ─────────────────────────────────────────────
   const hitWaypoint = (p: [number, number]): number => {
@@ -331,7 +358,7 @@ export function QcaEditor({
       return;
     }
     const e = hitEdge(p);
-    if (e) setDrag({ kind: mode === "brush" ? "brush" : "edge", ...e });
+    if (e) setDrag({ kind: mode === "brush" ? "brush" : mode === "smooth" ? "smooth" : "edge", ...e });
   };
 
   const onPointerMove = (ev: React.PointerEvent<HTMLCanvasElement>) => {
@@ -349,6 +376,20 @@ export function QcaEditor({
     const c = result.centerline[i];
     const n = result.normals[i];
     const offset = (p[0] - c[0]) * n[0] + (p[1] - c[1]) * n[1];
+    if (drag.kind === "smooth") {
+      // 「ならす」——局所中央値へ寄せる。外れ点は大きく動き、合っている点はほとんど動かない。
+      // 🔴 ここでポインタの位置は使わない。使うのは「どこをなでているか」だけ。
+      const smoothed = smoothEdges({
+        positions: result.positions,
+        pathIndices: result.pathIndices,
+        edgeOffsets: result.edgeOffsets,
+        centerIndex: i,
+        side: drag.side,
+        radius: brushRadius,
+      });
+      if (smoothed.length) onEdgeEditMany(smoothed);
+      return;
+    }
     if (drag.kind === "brush") {
       // 掴んだ点の**移動量**を、中心線に沿って近い点へ重み付きで配る（`qcaBrush.ts`）。
       // ポインタ位置を各点へ当てはめないので、もとの輪郭の形は保たれる。
@@ -411,7 +452,9 @@ export function QcaEditor({
             ? t("xa.qca.hintEdge")
             : mode === "brush"
               ? t("xa.qca.hintBrush")
-              : t("xa.qca.hintNone")}
+              : mode === "smooth"
+                ? t("xa.qca.hintSmooth")
+                : t("xa.qca.hintNone")}
       </div>
       {Object.keys(edgeEdits).length > 0 && result.warnings.includes("edgeEditsDropped") && (
         <div style={warn}>{t("xa.qca.edgeEditsDropped")}</div>

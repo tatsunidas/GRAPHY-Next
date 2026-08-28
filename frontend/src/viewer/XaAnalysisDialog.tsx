@@ -984,7 +984,7 @@ export function XaAnalysisDialog({
               {/* 手修正（§8.6）。自動の中心線は外れていても必ず結果を出すので、ここが要る。 */}
               <div style={row}>
                 <span style={{ fontSize: 11, color: "#44586a" }}>{t("xa.qca.editMode")}:</span>
-                {(["none", "waypoint", "edge", "brush"] as const).map((m) => (
+                {(["none", "waypoint", "edge", "brush", "smooth"] as const).map((m) => (
                   <button
                     key={m}
                     style={editMode === m ? primaryBtn : btn}
@@ -994,7 +994,7 @@ export function XaAnalysisDialog({
                     {t(`xa.qca.mode.${m}`)}
                   </button>
                 ))}
-                {editMode === "brush" && (
+                {(editMode === "brush" || editMode === "smooth") && (
                   <label style={{ ...label, fontSize: 11 }}>
                     {t("xa.qca.brushRadius", { unit: result.unit })}
                     <input

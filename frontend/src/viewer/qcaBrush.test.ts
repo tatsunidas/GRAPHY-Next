@@ -8,8 +8,7 @@ import {
   brushWeight,
   defaultBrushRadius,
   mergeEdgeEdits,
-  type BrushInput,
-} from "./qcaBrush";
+  type BrushInput, detectEdgeOutliers, localMedian, smoothEdges } from "./qcaBrush";
 
 /** 等間隔 0.1 単位で n 点、左 −2 / 右 +2 のまっすぐな血管。 */
 function straight(n: number, step = 0.1): Omit<BrushInput, "centerIndex" | "side" | "targetOffset" | "radius"> {
@@ -137,5 +136,148 @@ describe("defaultBrushRadius", () => {
   it("単位に応じて既定を変える", () => {
     expect(defaultBrushRadius("mm")).toBeGreaterThan(0);
     expect(defaultBrushRadius("px")).toBeGreaterThan(defaultBrushRadius("mm"));
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 「ならす」ブラシ（2026-08-28）                                        */
+/* ------------------------------------------------------------------ */
+
+describe("localMedian", () => {
+  it("弧長の窓で中央値を取る（外れ点に引っ張られない）", () => {
+    const pos = [0, 1, 2, 3, 4];
+    const val = [2, 2, 9, 2, 2]; // 真ん中だけ飛んでいる
+    expect(localMedian(pos, val, 2, 2)).toBe(2);
+  });
+
+  it("窓が届かない点はその点自身の値（動かさない）", () => {
+    expect(localMedian([0, 10], [1, 5], 0, 0.5)).toBe(1);
+  });
+});
+
+describe("detectEdgeOutliers", () => {
+  it("飛んでいる点だけを挙げる", () => {
+    const pos = Array.from({ length: 21 }, (_, i) => i);
+    const val = pos.map(() => 2);
+    val[10] = 6;
+    expect(detectEdgeOutliers(pos, val, 5)).toEqual([10]);
+  });
+
+  it("🔴 散らばりが 0 の平坦な区間を「全部外れ」にしない", () => {
+    const pos = Array.from({ length: 21 }, (_, i) => i);
+    const val = pos.map(() => 2);
+    expect(detectEdgeOutliers(pos, val, 5)).toEqual([]);
+  });
+
+  it("窓に 5 点未満しか入らなければ判定しない（言えないことを言わない）", () => {
+    expect(detectEdgeOutliers([0, 1, 2], [2, 9, 2], 1.5)).toEqual([]);
+  });
+
+  it("🔴 外れが大きくても検出できる（標準偏差だと外れ自身が閾値を膨らませる）", () => {
+    const pos = Array.from({ length: 21 }, (_, i) => i);
+    const val = pos.map(() => 2);
+    val[10] = 500;
+    expect(detectEdgeOutliers(pos, val, 5)).toContain(10);
+  });
+});
+
+describe("smoothEdges", () => {
+  const pos = Array.from({ length: 21 }, (_, i) => i);
+  const make = (values: number[]) => values.map((v) => ({ left: -v, right: v }));
+
+  it("🚨 外れ点は大きく動き、合っている点はほとんど動かない（押すブラシとの違い）", () => {
+    const val = pos.map(() => 2);
+    val[10] = 6;
+    const out = smoothEdges({
+      positions: pos,
+      pathIndices: pos,
+      edgeOffsets: make(val),
+      centerIndex: 10,
+      side: "right",
+      radius: 5,
+    });
+    const byIndex = new Map(out.map((o) => [o.pathIndex, o.offset]));
+    // 外れ点は中央値 2 へ大きく寄る
+    expect(byIndex.get(10)!).toBeLessThan(4);
+    // 隣の合っている点は動かない（結果に含まれない or 変化がごく小さい）
+    for (const i of [8, 9, 11, 12]) {
+      const v = byIndex.get(i);
+      if (v !== undefined) expect(Math.abs(v - 2)).toBeLessThan(0.05);
+    }
+  });
+
+  it("半径の外は触らない（動かしていない点を手修正済みにしない）", () => {
+    const val = pos.map(() => 2);
+    val[10] = 6;
+    const out = smoothEdges({
+      positions: pos,
+      pathIndices: pos,
+      edgeOffsets: make(val),
+      centerIndex: 10,
+      side: "right",
+      radius: 3,
+    });
+    expect(out.every((o) => Math.abs(o.pathIndex - 10) < 3)).toBe(true);
+  });
+
+  it("値が既に揃っていれば何も返さない（なぞっただけで手修正済みにならない）", () => {
+    const out = smoothEdges({
+      positions: pos,
+      pathIndices: pos,
+      edgeOffsets: make(pos.map(() => 2)),
+      centerIndex: 10,
+      side: "right",
+      radius: 5,
+    });
+    expect(out).toEqual([]);
+  });
+
+  it("中心線をまたがない", () => {
+    const val = pos.map(() => 0.3);
+    val[10] = 0.3;
+    const out = smoothEdges({
+      positions: pos,
+      pathIndices: pos,
+      edgeOffsets: pos.map((_, i) => ({ left: -0.3, right: i === 10 ? 0.3 : 0.3 })),
+      centerIndex: 10,
+      side: "right",
+      radius: 5,
+      strength: 1,
+    });
+    expect(out.every((o) => o.offset >= 0.25)).toBe(true);
+  });
+
+  it("なで続けると平坦化する（＝狭窄も均せてしまう。文言で警告している）", () => {
+    let offsets = make([2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]);
+    for (let k = 0; k < 12; k++) {
+      const out = smoothEdges({
+        positions: pos,
+        pathIndices: pos,
+        edgeOffsets: offsets,
+        centerIndex: 5,
+        side: "right",
+        radius: 5,
+      });
+      const byIndex = new Map(out.map((o) => [o.pathIndex, o.offset]));
+      offsets = offsets.map((o, i) => (byIndex.has(i) ? { ...o, right: byIndex.get(i)! } : o));
+    }
+    // 谷（1）が中央値（2）へ吸われる。
+    expect(offsets[5].right).toBeGreaterThan(1.8);
+  });
+
+  it("strength=0 なら何もしない", () => {
+    const val = pos.map(() => 2);
+    val[10] = 6;
+    expect(
+      smoothEdges({
+        positions: pos,
+        pathIndices: pos,
+        edgeOffsets: make(val),
+        centerIndex: 10,
+        side: "right",
+        radius: 5,
+        strength: 0,
+      }),
+    ).toEqual([]);
   });
 });

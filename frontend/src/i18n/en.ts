@@ -992,6 +992,8 @@ export const en: Record<string, string> = {
   "xa.qca.mode.none": "Off",
   "xa.qca.mode.waypoint": "Centerline (waypoints)",
   "xa.qca.mode.edge": "Edges",
+  "xa.qca.mode.smooth": "Smooth",
+  "xa.qca.hintSmooth": "Stroke over outlying points to pull them back to the local shape (only outliers move much). Repeated strokes also flatten the real narrowing, so stroke only where the edge is off.",
   "xa.qca.mode.brush": "Brush",
   "xa.qca.chartMode": "Chart action",
   "xa.qca.chart.none": "Off",

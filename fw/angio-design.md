@@ -954,6 +954,40 @@ export function resolveXaCalibration(meta: XaCalibMeta, override?: UserCalib): X
 - 幾何近似（P4/P5）の誤差要因（アイソセンタ外の対象・テーブル高さ・パン後の角度）は
   **原理的に消せない**。QCA ダイアログに常時 1 行で出す。
 
+
+#### 7.5.1 DICOM タグ由来の枝を実 DICOM で通す（2026-08-28）
+
+🔴 **実データでは P1〜P5 を一度も通していない。** Rubo の XA 5 本は空間校正タグを 1 つも
+持たないので（§20-7）、実 DICOM で踏めるのは **P6 / P7 だけ**。単体テストは連鎖の分岐を
+覆っているが、それは「`XaCalibMeta` を渡したら」の話で、**DICOM → backend → ローダ →
+メタデータ → 連鎖**の通しではない。
+
+ファントム **GNBP-XA-4** がタグの書かれ方を書き分けている。**5 変種から 7 変種へ増やして
+P3 と P5 を埋めた**（`bench/make_phantom_xa.py` の `CALIB_VARIANTS`）:
+
+| 変種 | 書いたタグ | 期待する経路 |
+| :- | :- | :- |
+| `a-fiducial` | PixelSpacing ＋ `FIDUCIAL` | **P1** `dicom-fiducial` |
+| `b-geometry` | PixelSpacing ＋ `GEOMETRY` | **P2** `dicom-geometry` |
+| `f-uncalibrated-type` | PixelSpacing のみ（`≠ ImagerPixelSpacing`） | **P3** `dicom-calibrated-unspecified` |
+| `c-equals-imager` | PixelSpacing `== ImagerPixelSpacing` | **P3'→P4** `geometric-sid-sod` |
+| `d-geometry-only` | ImagerPixelSpacing ＋ SID/SOD | **P4** `geometric-sid-sod` |
+| `g-magfactor` | ImagerPixelSpacing ＋ **拡大率だけ**（SID/SOD 無し） | **P5** `geometric-magfactor` |
+| `e-nothing` | 何も無い | **P6** `detector-plane`（**px 表示が正しい**） |
+
+🚨 **P5 は SID/SOD を書いた瞬間に通らない**（P4 が先に成立する）。拡大率だけを書く変種が
+無いと、この枝は永久に未検証のままになる。
+
+🔴 **照合を「画面の日本語ラベルの正規表現」から「解決結果の識別子」へ変えた。**
+`f-uncalibrated-type`（P3）と `c-equals-imager`（P3'→P4）は**タグの顔ぶれが同じ**で
+文言も似るため、**取り違えても以前の照合は通ってしまう**。解決結果は DEV 限定の口
+`window.__graphyDebug.getXaCalibration()` から読む（`viewer/debugApi.ts`。読み出しは
+`xaCalibrationProvider` へ委譲＝**校正の単一入口**を守る）。画面の mm/px とも突き合わせ、
+**片方だけ正しい状態を通さない**。
+
+実行: `cd bench && python make_phantom_xa.py --out ./phantom` →
+`cd automator && npx tsx src/spike/xaPhantomCheck.ts`（XA-4 の節）。
+
 ### 7.5 検証（この連鎖こそテストで守る）
 
 - **vitest（`xaCalibration.test.ts`）で P0〜P7 の全分岐を網羅**する。特に:
@@ -1263,6 +1297,46 @@ offset_i ← offset_i + Δ · w(弧長距離_i)          Δ = 掴んだ点の移
 **未実装（要望が出たら）**: **なぞった軌跡そのものにエッジを吸着させる**（＝正しい輪郭を
 描き直す）モード。自動エッジが**まるごと外れている**ときはこちらが速いが、手ぶれがそのまま
 輪郭になる。「押す」で足りるかを実機で見てから決める。
+
+### 8.8.1 「ならす」ブラシ — 外れ点は押しても直らない（2026-08-28）
+
+**指摘**: 押すブラシを実機で使って「**外れポイントがあった場合に扱いづらい**」。
+
+🔴 **これは調整の問題ではなく、道具が合っていない。** 押すブラシは半径内の全点へ**同じ Δ** を
+配るので、
+
+- 外れ点を正しい位置まで押すと、**合っていた近傍まで一緒に外れる**
+- 近傍を合わせて押すと、**外れ点は外れたまま**（相対関係が変わらないので当然）
+
+直したいのが「区間ぜんぶのずれ」なら押すのが正しく、「**1〜数点の飛び**」なら別の道具が要る。
+
+**足したもの — `smooth`（ならす）モード**:
+
+```
+offset_i ← offset_i + (median_i − offset_i) · strength · w(弧長距離_i)
+```
+
+外れ点は局所中央値から遠いので大きく動き、**合っている点はほとんど動かない**。
+
+| 決めごと | 理由 |
+|---|---|
+| **平均ではなく中央値** | 平均だと**外れ点自身が目標を引っ張る**ので、外れが強いほど直りが悪い |
+| 当てはめの窓は既定でブラシ半径 | 🔴 **狭窄長より短くする。** 長いと狭窄そのものを均す |
+| 1 回の効き `strength` は 0.6 | 収束先は局所中央値なので、なで続ければ**本物の凹凸まで均される**。文言でも警告する |
+| 動かない点は結果に含めない | 押すブラシと同じ。含めると `provenance.editedEdges` が嘘になる |
+
+**外れ点に印を出す**（`smooth` のときだけ）。**どこが外れているのか見えないと使えない**——
+指摘の半分はここだった。検出は `detectEdgeOutliers`（局所中央値からの隔たりを **MAD** で測る）。
+
+🚨 **標準偏差では測れない。** 外れ点そのものが散らばりを膨らませるので、
+**外れが大きいほど検出されにくくなる**——1 点だけ大きく飛んでいる、というまさに直したい状況で
+効かない。さらに **MAD だけでも取り逃がす**: 窓の過半数が同じ値だと MAD が 0 になり閾値が消える
+（テストで捕捉した）。MAD が 0 のときは**平均絶対偏差**へ落とし、どちらも 0（＝完全に一定）なら
+**本当に何も外れていない**ので何も言わない。
+
+実体は `viewer/qcaBrush.ts`（純関数・`smoothEdges` / `localMedian` / `detectEdgeOutliers`）。
+単体テスト `qcaBrush.test.ts` **28 件**。1 点ずつの `エッジ` と押す `ブラシ` は残す
+（3 つは**用途が違う**——ずれを押す / 飛びをならす / 1 点を決める）。
 
 ---
 

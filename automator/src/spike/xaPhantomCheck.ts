@@ -423,24 +423,50 @@ async function main(): Promise<void> {
       await vp.getByTestId("xa-analysis-open").click();
       await vp.getByTestId("xa-analysis-dialog").waitFor({ state: "visible", timeout: 10_000 });
       const statusText = (await vp.getByTestId("xa-calib-status").textContent()) ?? "";
+      // 🔴 **出自は識別子で読む。** 以前は画面の日本語ラベルを正規表現で見ていたが、
+      //    P3（dicom-calibrated-unspecified）と P3'（＝降格して geometric-sid-sod）は
+      //    **タグの顔ぶれが同じ**で文言も似るため、取り違えても通ってしまう。
+      //    解決結果そのものを `__graphyDebug.getXaCalibration()` から読む（DEV 限定の口）。
+      const resolved = await vp.evaluate(() => {
+        const d = (window as unknown as { __graphyDebug?: { getXaCalibration?: () => unknown[] } })
+          .__graphyDebug;
+        const all = (d?.getXaCalibration?.() ?? []) as {
+          imageId: string | null;
+          mmPerPxRow: number | null;
+          source: string;
+          tier: string;
+          detectorMmPerPx: number | null;
+        }[];
+        return all.find((c) => c.imageId) ?? null;
+      });
+      // 表示も併せて見る（数値が合っていても画面が px のままなら利用者には届かない）。
       const mmMatch = /([\d.]+)\s*mm\/px/.exec(statusText);
-      const measured = mmMatch ? Number(mmMatch[1]) : null;
+      const shown = mmMatch ? Number(mmMatch[1]) : null;
+      const measured = resolved?.mmPerPxRow ?? null;
       await vp.screenshot({ path: path.join(OUT_DIR, `2-calib-${v.key}.png`) }).catch(() => {});
       await vp.close().catch(() => {});
 
-      // 画面には日本語ラベルが出るので、期待する source のラベルで突き合わせる。
-      const labels: Record<string, RegExp> = {
-        "dicom-fiducial": /FIDUCIAL/,
-        "dicom-geometry": /GEOMETRY/,
-        "geometric-sid-sod": /SID\/SOD/,
-        "detector-plane": /検出器面|Detector plane/,
-      };
-      const want = labels[v.expectedSource];
       check(
-        !!want && want.test(statusText),
+        resolved?.source === v.expectedSource,
         `[XA-4] ${v.key} — §7.2 が期待した経路（${v.expectedSource}）に解決する`,
-        statusText.trim(),
+        { got: resolved?.source ?? null, tier: resolved?.tier ?? null, status: statusText.trim() },
       );
+      // P6 は「校正できていない」と言えていること（mm を出さないだけでなく tier も落ちる）。
+      if (v.expectedSource === "detector-plane") {
+        check(
+          resolved?.tier === "uncalibrated" && resolved?.detectorMmPerPx != null,
+          `[XA-4] ${v.key} — 未校正と申告し、検出器面の値だけは保持する`,
+          { tier: resolved?.tier ?? null, detector: resolved?.detectorMmPerPx ?? null },
+        );
+      }
+      // 画面と解決結果が食い違わないこと（片方だけ正しい状態を通さない）。
+      if (measured != null && shown != null) {
+        check(
+          Math.abs(shown - measured) / measured < 0.01,
+          `[XA-4] ${v.key} — 画面の mm/px と解決結果が一致する`,
+          { shown, measured },
+        );
+      }
       if (v.expectedMmPerPx == null) {
         // P6: mm を出さないのが正しい挙動。
         check(measured == null, `[XA-4] ${v.key} — 校正できないので mm/px を出さない`, measured);

@@ -994,6 +994,8 @@ export const ja: Record<string, string> = {
   "xa.qca.mode.none": "しない",
   "xa.qca.mode.waypoint": "中心線（通過点）",
   "xa.qca.mode.edge": "エッジ",
+  "xa.qca.mode.smooth": "ならす",
+  "xa.qca.hintSmooth": "外れた点をなでると、まわりの形に合わせて引き戻します（外れ点だけが大きく動きます）。なで続けると狭窄の凹凸まで均されるので、外れている所だけになでてください。",
   "xa.qca.mode.brush": "ブラシ",
   "xa.qca.chartMode": "グラフ操作",
   "xa.qca.chart.none": "しない",

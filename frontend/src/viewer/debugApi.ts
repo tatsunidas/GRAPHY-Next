@@ -12,6 +12,7 @@ import {
   listVesselModels,
   putVesselAnalysis,
 } from "../plugins/pluginVesselApi";
+import { calibrationForImageId } from "./xaCalibrationProvider";
 
 /**
  * automator（自律検証ツール）専用のデバッグAPI。`window.__graphyDebug` として公開し、
@@ -613,6 +614,7 @@ declare global {
       getXaBifurcationState: typeof getXaBifurcationState;
       imagePixelsToCanvasFraction: typeof imagePixelsToCanvasFraction;
       getGeometry3dStats: typeof getGeometry3dStats;
+      getXaCalibration: typeof getXaCalibration;
       getVesselModels: typeof getVesselModels;
       putVesselAnalysis: typeof putVesselAnalysisDebug;
       seedVesselAnalysis: typeof seedVesselAnalysis;
@@ -667,6 +669,61 @@ function seedVesselAnalysis(label = "DEBUG"): { ok: boolean; error?: string; run
   return { ...r, runId: m.runId };
 }
 
+
+/**
+ * 表示中タイルの**空間校正の解決結果**（`fw/angio-design.md` §7.2 の P0〜P7）。DEV 限定。
+ *
+ * <h3>🚨 なぜ要るのか</h3>
+ * 校正の分岐は**タグの書かれ方**で決まるが、実データ（Rubo の XA 5 本）は空間校正タグを
+ * **1 つも持たない**ので、P1〜P5 は**実 DICOM で一度も通っていなかった**（§20-7）。
+ * ファントム GNBP-XA-4 はタグの書かれ方を 5 変種で書き分けてあるが、
+ * **画面から数値で読む口が無い**と「どの枝に落ちたか」を検証できない。
+ *
+ * <p>⚠️ スケールバーの文字（"20 mm" / "100 px"）だけでは足りない。
+ * **mm と出ていても値が間違っていることがある**し、P3'（降格）と P4（幾何近似）は
+ * どちらも mm を出すので**表示だけでは区別が付かない**。出自まで読む。
+ */
+export interface XaCalibrationProbe {
+  viewportId: string;
+  imageId: string | null;
+  mmPerPxRow: number | null;
+  mmPerPxCol: number | null;
+  source: string;
+  confidence: string;
+  tier: string;
+  plane: string;
+  provenance: string;
+  warnings: string[];
+  detectorMmPerPx: number | null;
+}
+
+function getXaCalibration(): XaCalibrationProbe[] {
+  const engine = getRenderingEngine(ENGINE_ID);
+  if (!engine) return [];
+  const out: XaCalibrationProbe[] = [];
+  for (const vp of engine.getViewports()) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const imageId: string | null = (vp as any).getCurrentImageId?.() ?? null;
+    // 🔴 校正は必ず単一入口（`xaCalibrationProvider`）から読む。ここで PixelSpacing を
+    //    直接読むと、検証している当のものと別の答えを見ることになる。
+    const c = imageId ? calibrationForImageId(imageId) : null;
+    out.push({
+      viewportId: vp.id,
+      imageId,
+      mmPerPxRow: c?.mmPerPxRow ?? null,
+      mmPerPxCol: c?.mmPerPxCol ?? null,
+      source: c?.source ?? "none",
+      confidence: c?.confidence ?? "none",
+      tier: c?.tier ?? "uncalibrated",
+      plane: c?.plane ?? "unknown",
+      provenance: c?.provenance ?? "",
+      warnings: c?.warnings ?? [],
+      detectorMmPerPx: c?.detectorMmPerPx ?? null,
+    });
+  }
+  return out;
+}
+
 let installed = false;
 
 /** 冪等: 何度呼んでも安全（SeriesViewer マウントの都度呼ばれる想定）。 */
@@ -685,6 +742,7 @@ export function installDebugApi(): void {
     getXaBifurcationState,
     imagePixelsToCanvasFraction,
     getGeometry3dStats,
+    getXaCalibration,
     getVesselModels,
     putVesselAnalysis: putVesselAnalysisDebug,
     seedVesselAnalysis,

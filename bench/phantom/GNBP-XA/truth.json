@@ -2931,6 +2931,30 @@
         "hasSidSod": false,
         "expectedSource": "detector-plane",
         "expectedMmPerPx": null
+      },
+      {
+        "key": "f-uncalibrated-type",
+        "file": "GNBP-XA-4-f-uncalibrated-type.dcm",
+        "md5": "73e386a1a26697079987e9474abdabbd",
+        "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.917740477097412529295919873459141388",
+        "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.123109622014893730621508031516851555",
+        "pixelSpacingMm": 0.23625000000000002,
+        "pixelSpacingCalibrationType": null,
+        "hasSidSod": true,
+        "expectedSource": "dicom-calibrated-unspecified",
+        "expectedMmPerPx": 0.23625000000000002
+      },
+      {
+        "key": "g-magfactor",
+        "file": "GNBP-XA-4-g-magfactor.dcm",
+        "md5": "29e815dcf038f8447fc90d4ece16b765",
+        "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.233239868149208777702122545055494763",
+        "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.608728313416997747920090833071135890",
+        "pixelSpacingMm": null,
+        "pixelSpacingCalibrationType": null,
+        "hasSidSod": "mag-only",
+        "expectedSource": "geometric-magfactor",
+        "expectedMmPerPx": 0.225
       }
     ]
   },
