@@ -11,6 +11,11 @@ import { TOOL_IDS } from "../viewer/toolIds";
 import { changeRoiStatsDisplay, useRoiStatsDisplay } from "../viewer/roiStatsDisplay";
 import { usePluginMenu, runPluginBackend } from "../plugins/pluginRegistry";
 import type { PluginManifest, Viewer2DPluginHost, Viewer2DSurface } from "../plugins/pluginTypes";
+import {
+  getVesselModel,
+  listVesselModels,
+  putVesselAnalysis,
+} from "../plugins/pluginVesselApi";
 import { openPluginWindow } from "../plugins/pluginWindowApi";
 import { mountValueViewport, mountVolumeView } from "../plugins/pluginViewportApi";
 import { measureMask } from "../plugins/pluginMeshApi";
@@ -102,6 +107,13 @@ export function Viewer2DMenuBar({
     // （数値は取れるのに「近似か実測か」「差分中か」が分からない状態を作らない）。
     getSpatialCalibration: (tileId) => actions.getSpatialCalibration(tileId),
     getXaState: (tileId) => actions.getXaState(tileId),
+    // H11 / H12: 3D 血管モデルの受け渡しと、解析値の書き戻し（A7）。
+    // タイルに紐付かない（再構成はセッション単位の登録簿）ので actions を経由しない。
+    // 🔴 出自は host が入れる。**本体は FFR を計算しない**（fw/angio-design.md §11.1）。
+    listVesselModels: () => listVesselModels(),
+    getVesselModel: (runId) => getVesselModel(runId),
+    putVesselAnalysis: (runId, result) =>
+      putVesselAnalysis(runId, result, { id: m.id, name: m.name, version: m.version }),
     // 出所ラベルはプラグイン任せにしない: host が必ずマニフェストの表示名を入れる。
     showOverlay: (tileId, overlay) => actions.showOverlay(tileId, { ...overlay, label: m.name }),
     clearOverlay: (tileId) => actions.clearOverlay(tileId),

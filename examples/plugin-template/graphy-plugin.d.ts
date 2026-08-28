@@ -337,6 +337,111 @@ export interface SpatialCalibration {
 }
 
 /**
+ * 再構成済み 3D 血管モデルの 1 区間。`host.getVesselModel()` の戻りに入る。**H11**。
+ */
+export interface VesselSegment {
+  /** モデル内で一意（単一血管は "main"、分岐部は "proximal" / "distal" / "side"）。 */
+  id: string;
+  /** 中心線（患者 LPS mm・近位→遠位）。 */
+  points: [number, number, number][];
+  /**
+   * 各点の内腔径 [mm]。**測れなかった点は null**。
+   *
+   * 🔴 **0 や補間値で埋めないこと。** 径から断面積を作るので、埋めた値は
+   * 「そこが細い / 太い」という所見に化ける。未校正なら全点 null。
+   */
+  diameterMm: (number | null)[];
+  /** 近位側の区間 id。根なら null。 */
+  parentId: string | null;
+}
+
+/** 空間校正の状態。近似には近似と書くために要る。**H11**。 */
+export interface VesselCalibration {
+  /** 径が mm で出せているか。false なら断面積を作れない＝FFR の入力にならない。 */
+  diameterCalibrated: boolean;
+  /** 方向ごとの校正の出自（`getSpatialCalibration()` と同じ語彙）。読めなければ "unknown"。 */
+  sources: string[];
+  /** 方向ごとの縮退区分。`approximate` が混ざれば結果も近似。 */
+  tiers: ("calibrated" | "approximate" | "uncalibrated")[];
+  /**
+   * 径の測り方。半値法と密度計測では絶対値が 10% 以上違い、断面積はその 2 乗で効く。
+   * 2 方向で違えば "mixed"（断面積はどちらの意味でもない）。分からなければ null。
+   */
+  diameterMethod: "half-max" | "densitometric" | "mixed" | null;
+}
+
+/** この数字がどこから来たか。注記を書くための材料。**H11**。 */
+export interface VesselProvenance {
+  studyUid: string;
+  seriesUids: string[];
+  sopUids: string[];
+  /** 方向ごとの [primary, secondary] 角度 [deg]。 */
+  angles: [number, number][];
+  /** 角度補正（バンドル調整）が掛かったか。掛かっていない結果は歪みを含む。 */
+  angleCorrected: boolean;
+  /** 方向ごとの可視割合（短縮）。取れなければ null。 */
+  visibleFractions: (number | null)[];
+  /** アンカーの再投影誤差 RMS [px]。**幾何の検算はこれ**。 */
+  anchorReprojectionPx: number;
+  /** 2 方向の角度差 [deg]。 */
+  separationDeg: number;
+}
+
+/**
+ * 再構成済み 3D 血管モデル。`host.getVesselModel()` の戻り。**H11**。
+ *
+ * 🔴 **本体は FFR を計算しない。** 流体解析・学習モデルはプラグインの担当で、
+ * 本体はモデルを渡し、返ってきた値を色で見せるだけ。
+ */
+export interface VesselModel {
+  runId: string;
+  kind: "xa-qca3d" | "xa-bifurcation3d";
+  label: string;
+  segments: VesselSegment[];
+  calibration: VesselCalibration;
+  provenance: VesselProvenance;
+  at: number;
+}
+
+/** `host.listVesselModels()` の 1 件（点列を含まない要約）。**H11**。 */
+export interface VesselModelSummary {
+  runId: string;
+  kind: "xa-qca3d" | "xa-bifurcation3d";
+  label: string;
+  segmentCount: number;
+  pointCount: number;
+  diameterCalibrated: boolean;
+  /** 最も弱い縮退区分（1 方向でも近似なら "approximate"）。 */
+  tier: "calibrated" | "approximate" | "uncalibrated";
+  at: number;
+}
+
+/**
+ * 解析結果（点ごとの値）。`host.putVesselAnalysis()` に渡す。**H12**。
+ *
+ * 🔴 **色の向きは range[0] が赤・range[1] が青**（FFR のように低いほど悪い量に合わせてある）。
+ * 高いほど悪い量は同じ向きで描かれるので、符号を反転して渡すこと。
+ */
+export interface VesselAnalysisInput {
+  kind: "ffr" | "custom";
+  /** 凡例名（例 "FFR"）。 */
+  label: string;
+  /** 色マップの範囲 [min, max]。min < max。 */
+  range: [number, number];
+  /** `index` は該当区間の中心線の添字。範囲外・非有限はエラーになる（黙って落とされない）。 */
+  perPoint: { segmentId: string; index: number; value: number }[];
+  /** 提供元の免責文。**そのまま画面に出る**（本体は要約も書き換えもしない）。 */
+  disclaimer?: string;
+}
+
+/** `host.putVesselAnalysis()` の戻り。 */
+export interface VesselAnalysisResult {
+  ok: boolean;
+  /** 拒否された理由（形が壊れているとき）。 */
+  error?: string;
+}
+
+/**
  * XA（血管撮影）の表示状態。`host.getXaState()` の戻り。**H36**。
  *
  * <p>🔴 **DSA（差分）表示中は画素の意味が反転する。** 差分後は血管が正の大きな値になるので、
@@ -873,6 +978,33 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * （血管が正の大きな値）。エッジ検出や対数変換の向きを必ず切り替えること。
    */
   getXaState: (tileId?: string) => XaState | null;
+  /**
+   * **再構成済み 3D 血管モデルの一覧**（**H11**）。新しい順。まだ無ければ空配列。
+   * 点列を含まない要約だけを返す（本体は `getVesselModel()` で取る）。
+   */
+  listVesselModels: () => VesselModelSummary[];
+  /**
+   * **再構成済み 3D 血管モデル**（**H11**）。`runId` 省略時は最も新しいもの。無ければ null。
+   *
+   * 中心線（患者 LPS mm）・点ごとの内腔径・分岐のトポロジと、校正と出自が入る。
+   * 本体の 3D QCA（A6a）／分岐部（A6b）で再構成すると登録される。
+   *
+   * 🔴 **測れなかった点の径は null。** 補間して埋めないこと（本体も埋めていない）。
+   * 🔴 **`calibration.diameterMethod` を必ず見る。** 半値法と密度計測では径の絶対値が
+   * 10% 以上違い、断面積はその 2 乗で効く。係数を定数として持ち回らないこと。
+   * ⚠️ セッション限り。アプリを閉じると消える。
+   */
+  getVesselModel: (runId?: string) => VesselModel | null;
+  /**
+   * **解析結果（点ごとの値）を書き戻す**（**H12**）。3D ウィンドウが色マップと凡例で表示する。
+   *
+   * 確認ダイアログは出ない（DICOM を書かない）。出自（id・名前・版）は host が入れる。
+   * 同じ `runId` に入れ直すと置き換わる。
+   *
+   * 🔴 **壊れた入力はエラーになる**（未知の `segmentId`・範囲外の `index`・非有限の値・
+   * 退化した `range`）。捨てて残りを採用すると**ずれたまま色が乗り**、誰も気付けない。
+   */
+  putVesselAnalysis: (runId: string, result: VesselAnalysisInput) => VesselAnalysisResult;
   /**
    * 処理結果（値マップ）を**表示中スライスへ重ねて見せる**。`tileId` 省略時は対象の先頭タイル。
    * rows/cols が現在スライスと不一致なら false。**0.1.9 以降**。

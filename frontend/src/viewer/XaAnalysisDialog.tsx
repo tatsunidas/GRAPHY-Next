@@ -676,6 +676,9 @@ export function XaAnalysisDialog({
         unit: r.unit,
         diameterMethod: r.provenance.diameterMethod,
         edited: r.provenance.edited,
+        // 校正の出自は 3D（A7 の H11）まで運ぶ。落とすと近似が実測として外部モジュールへ渡る。
+        calibrationSource: c?.source,
+        calibrationTier: c?.tier,
         at: Date.now(),
       });
     }

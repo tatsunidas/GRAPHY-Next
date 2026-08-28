@@ -22,6 +22,12 @@ export interface Geometry3DContext {
   name: string;
   /** 3D 中心線（患者 LPS mm）。 */
   centerlineLps: LpsPolyline;
+  /**
+   * 血管モデルの `runId`（`viewer/xaVesselModelStore`）。A7 の解析値（H12）を
+   * 色で乗せる宛先。**モデルはこのコンテキストではなく登録簿から読む**——
+   * ここは使い捨ての引数で、点ごとの径も出自も持たないため。
+   */
+  runId?: string;
   /** 情報バーに出す数値（**再計算しない**。ダイアログで出したものと同じ値を見せる）。 */
   info?: {
     lengthMm?: number;

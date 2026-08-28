@@ -22,6 +22,8 @@ import { desktop } from "../desktopBridge";
 import { publishAnalysisResult } from "../report/analysisResultStore";
 import { qca3dRecord } from "../report/xaAnalysisRecords";
 import { writeGeometry3dContext } from "../viewer3d/geometry3dContext";
+import { buildQca3dVesselModel } from "./xaVesselModelBuild";
+import { registerVesselModel } from "./xaVesselModelStore";
 import { useI18n } from "../i18n/i18n";
 import { publishXa3dSnapshot } from "./debugApi";
 import { formatViewAngles, type Vec3, viewSeparationDeg } from "./xaGeometry";
@@ -90,6 +92,34 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
     () => (runA && runB ? viewSeparationDeg(runA.geometry, runB.geometry) : null),
     [runA, runB],
   );
+
+  /**
+   * プラグインへ渡す血管モデル（A7 の H11）。
+   *
+   * <p>🚨 **「3D で開く」を押さなくても登録する。** FFR モジュールは 3D ウィンドウとは
+   * 独立に動く（自前のウィンドウを持つ）ので、表示操作を前提にすると
+   * 「解析はできているのにプラグインからは見えない」状態になる。
+   */
+  const vesselModel = useMemo(
+    () =>
+      runA && runB && result
+        ? buildQca3dVesselModel({
+            runA,
+            runB,
+            result,
+            profile,
+            refinement,
+            diameterMethod,
+            separationDeg,
+            label: `3D QCA — ${runA.label} / ${runB.label}`,
+          })
+        : null,
+    [runA, runB, result, profile, refinement, diameterMethod, separationDeg],
+  );
+
+  useEffect(() => {
+    if (vesselModel) registerVesselModel(vesselModel);
+  }, [vesselModel]);
 
   /** 端点は常にアンカー（＝同じ場所から同じ場所まで辿ることを要求している）。 */
   const anchorList = useMemo((): ReconAnchor[] => {
@@ -495,6 +525,8 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
                       writeGeometry3dContext({
                         kind: "xa-qca3d",
                         name: `3D QCA — ${runA?.label ?? ""} / ${runB?.label ?? ""}`,
+                        // 解析値（H12）の宛先。これが無いと 3D 側は色を乗せる相手が分からない。
+                        runId: vesselModel?.runId,
                         centerlineLps: result.points.map((p) => [p[0], p[1], p[2]]),
                         info: {
                           lengthMm: result.lengthMm,
