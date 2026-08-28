@@ -26,11 +26,18 @@ const PROGRESS_PREFIX = "__GRAPHY_PROGRESS__";
 
 const cfg = require("./config.json");
 const { createWindowStateKeeper } = require("./windowState");
+const messages = require("./startupMessages");
 
 const PORT = process.env.GRAPHY_BACKEND_PORT || String(cfg.backend.port);
 const PROFILE = process.env.GRAPHY_BACKEND_PROFILE || cfg.backend.profile;
 const HEALTH_PATH = cfg.backend.healthPath;
 const HEALTH_TIMEOUT_MS = cfg.backend.healthTimeoutMs;
+// backend が「何も出力しないまま」黙り込んだと見なすまでの時間。Spring Boot の起動は
+// ログを出し続けるので、これを超える沈黙は必ず何かで詰まっている（過去の実例は H2 の
+// AUTO_SERVER が行う DNS 正引き/逆引き＝インターネットが無いと 30〜60 秒ブロックする）。
+// 沈黙を検出しても待つのはやめない（backend は遅れて立ち上がることがある）。
+// 「どの段階で何秒 止まっているか」をスプラッシュに出して、原因を目に見えるようにするためのもの。
+const HEALTH_STALL_MS = Number(cfg.backend.healthStallMs || 15000);
 const JAR_NAME = cfg.backend.jarName;
 // GRAPHY_DEV_SERVER_URL … Vite dev サーバの URL を上書き（既定 5173 以外のポートで自前起動する
 // automator 等、複数の dev サーバを並行稼働させたいツール向け）。GRAPHY_DEV=1 のときのみ参照される。
@@ -52,6 +59,29 @@ const APP_ICON = DEV
   : path.join(__dirname, "renderer", "icons", "app", "app_icon.png");
 
 let backendProc = null;
+// --- 起動診断（失敗したときに「直接的な原因」を出すための材料）---
+// backend の直近出力。原因表示に添える technical detail の供給元（メモリは高々数十行）。
+const BACKEND_LOG_TAIL = [];
+const BACKEND_LOG_TAIL_MAX = 60;
+// backend から最後に 1 行でも受け取った時刻。沈黙の検出に使う。
+let lastBackendOutputAt = 0;
+// 直近に running になった進捗ステップ（どこで止まったかを名指しするため）。
+let lastRunningStep = null;
+// backend プロセスがヘルスチェック成功前に落ちた場合の記録。
+let backendExit = null;
+// spawn 自体が失敗した場合（java が無い等）の記録。
+let backendSpawnError = null;
+let backendHealthy = false;
+
+/** 起動失敗を「コード＋技術的な詳細」で表現する。コードはスプラッシュ側で ja/en に訳す。 */
+class StartupError extends Error {
+  constructor(code, detail, params) {
+    super(code);
+    this.code = code;
+    this.detail = detail || "";
+    this.params = params || {};
+  }
+}
 // 位置記憶対象ビューアのシングルトン参照（画面キー → BrowserWindow）。
 // 既に開いていればフォーカスして再利用し、キーごとに前回位置を 1 つ記憶する。
 const viewerWins = new Map();
@@ -127,20 +157,30 @@ function resolveDataDir() {
 }
 
 function startBackend() {
+  // 沈黙の検出はここを起点にする（external モードでは backend の出力が来ないため、
+  // 初期化しないと「起動直後に無応答」と誤判定してしまう）。
+  lastBackendOutputAt = Date.now();
   if (EXTERNAL_BACKEND) {
     console.log("[backend] external mode — spawn をスキップ");
     return;
   }
   const jar = resolveBackendJar();
   if (!jar) {
-    throw new Error(
-      "backend jar が見つかりません。`make build` で backend をビルドしてください。",
+    throw new StartupError(
+      "jar-missing",
+      `${JAR_NAME} (${process.resourcesPath ? path.join(process.resourcesPath, "backend") : "resources/backend"})`,
     );
   }
   const javaCmd = resolveJava();
   // JVM ヒープ上限（config.backend.maxHeapMb、0/未設定なら JVM 既定）。画像処理に向けて調整可能。
   const maxHeapMb = Number(process.env.GRAPHY_MAX_HEAP_MB || cfg.backend.maxHeapMb || 0);
   const jvmArgs = maxHeapMb > 0 ? [`-Xmx${maxHeapMb}m`] : [];
+  // stdout/stderr を UTF-8 に固定する。Java 21 は「端末でない出力先」の既定を OS のネイティブ
+  // エンコーディングにするため、日本語 Windows では stdout が CP932 で流れてくる。
+  // Node 側は UTF-8 で読むので、そのままだと backend のログ行が文字化けする。
+  // 進捗行は step で訳すので影響が無かったが、失敗時に backend の最終行を「直接的な原因」として
+  // そのまま画面へ出すようになったため、ここで揃える必要がある。
+  jvmArgs.push("-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8");
   // データ(DB/DICOM/plugins)は CWD 相対で作られるため、CWD を固定する（パッケージ版は userData）。
   const dataDir = resolveDataDir();
   console.log(`[backend] starting: ${jar} (java=${javaCmd}, profile=${PROFILE}, port=${PORT}, maxHeapMb=${maxHeapMb || "default"}, dataDir=${dataDir})`);
@@ -156,10 +196,66 @@ function startBackend() {
     { cwd: dataDir, stdio: ["ignore", "pipe", "pipe"] },
   );
   wireBackendOutput(backendProc);
-  backendProc.on("exit", (code) => {
-    console.log(`[backend] exited (code=${code})`);
+  // spawn 自体の失敗（java.exe が無い＝ENOENT など）。exit は来ないのでここで拾う。
+  backendProc.on("error", (err) => {
+    console.error("[backend] spawn failed:", err);
+    backendSpawnError = new StartupError(
+      err.code === "ENOENT" ? "java-missing" : "spawn-failed",
+      `${javaCmd}: ${err.message}`,
+    );
     backendProc = null;
   });
+  backendProc.on("exit", (code, signal) => {
+    console.log(`[backend] exited (code=${code})`);
+    // ヘルスチェックが通る前の終了だけを「起動失敗」として記録する
+    // （終了時の正常な停止と区別する）。
+    if (!backendHealthy) {
+      backendExit = { code, signal };
+    }
+    backendProc = null;
+  });
+}
+
+/** backend の出力を 1 行受け取ったときの共通処理（沈黙検出用の時刻更新＋末尾バッファ）。 */
+function noteBackendOutput(line) {
+  lastBackendOutputAt = Date.now();
+  BACKEND_LOG_TAIL.push(line);
+  if (BACKEND_LOG_TAIL.length > BACKEND_LOG_TAIL_MAX) BACKEND_LOG_TAIL.shift();
+}
+
+/**
+ * backend の出力から「起動できなかった直接の原因」を読み取る。
+ * Spring Boot は失敗理由を最後にまとめて出すので、末尾から既知のパターンを探す。
+ * 見つからない場合は最後の非空行をそのまま詳細として返す（生の一次情報の方が
+ * 「起動に失敗しました」より遥かに役に立つ）。
+ */
+function classifyBackendFailure(fallbackCode) {
+  const tail = BACKEND_LOG_TAIL.join("\n");
+  let m = /Port (\d+) was already in use|Web server failed to start.*port (\d+)/i.exec(tail);
+  if (m) {
+    return new StartupError("port-in-use", tail.split("\n").filter(Boolean).pop() || "", {
+      port: m[1] || m[2] || PORT,
+    });
+  }
+  if (/UnsupportedClassVersionError|class file version|Unsupported class file major version/i.test(tail)) {
+    return new StartupError("java-too-old", lastMeaningfulLine());
+  }
+  if (/Unable to access jarfile|Error: Invalid or corrupt jarfile/i.test(tail)) {
+    return new StartupError("jar-broken", lastMeaningfulLine());
+  }
+  if (/Failed to (?:start|configure) a DataSource|Database may be already in use|Locked by another/i.test(tail)) {
+    return new StartupError("db-locked", lastMeaningfulLine());
+  }
+  return new StartupError(fallbackCode, lastMeaningfulLine());
+}
+
+/** 末尾の「意味のある」1 行（Spring Boot の装飾行・空行を避ける）。 */
+function lastMeaningfulLine() {
+  for (let i = BACKEND_LOG_TAIL.length - 1; i >= 0; i--) {
+    const s = BACKEND_LOG_TAIL[i].trim();
+    if (s && !/^[-*_=\s]+$/.test(s) && !/^\*{3}/.test(s)) return s.slice(0, 300);
+  }
+  return "";
 }
 
 /** backend の stdout/stderr を行単位で読み、進捗行はスプラッシュへ、それ以外はログへ。 */
@@ -168,42 +264,101 @@ function wireBackendOutput(proc) {
     readline.createInterface({ input: proc.stdout }).on("line", (line) => {
       const i = line.indexOf(PROGRESS_PREFIX);
       if (i >= 0) {
+        lastBackendOutputAt = Date.now();
         try {
-          forwardProgress(JSON.parse(line.slice(i + PROGRESS_PREFIX.length)));
+          const p = JSON.parse(line.slice(i + PROGRESS_PREFIX.length));
+          if (p && p.state === "running" && p.step) lastRunningStep = p.step;
+          forwardProgress(p);
         } catch {
           // 進捗行のパース失敗は無視
         }
       } else {
+        noteBackendOutput(line);
         console.log("[backend]", line);
       }
     });
   }
   if (proc.stderr) {
     readline.createInterface({ input: proc.stderr }).on("line", (line) => {
+      noteBackendOutput(line);
       console.error("[backend]", line);
     });
   }
 }
 
-/** ヘルスチェックパスが 200 を返すまでポーリングする。 */
+/**
+ * ヘルスチェックパスが 200 を返すまでポーリングする。
+ *
+ * 失敗を「起動に失敗しました」で片付けず、原因を切り分けて {@link StartupError} で返す:
+ *   - spawn 失敗（java が無い）/ プロセスがヘルス成功前に終了 → 即座に確定。待たない。
+ *   - backend が {@link HEALTH_STALL_MS} 以上 沈黙 → どの段階で何秒 止まっているかを
+ *     スプラッシュに出す（待つのはやめない。遅れて立ち上がることがあるため）。
+ *   - {@link HEALTH_TIMEOUT_MS} 到達 → 「失敗」ではなく「待ちきれなかった」として報告する
+ *     （実際この後 backend が立ち上がって普通に使えることがあるため、断定しない）。
+ */
 function waitForBackend(timeoutMs = HEALTH_TIMEOUT_MS) {
   const start = Date.now();
+  let stallReported = false;
   return new Promise((resolve, reject) => {
     const tick = () => {
+      // プロセスが死んでいるなら待つ意味が無い。原因は backend の出力から拾う。
+      if (backendSpawnError) return reject(backendSpawnError);
+      if (backendExit) {
+        const err = classifyBackendFailure("backend-exited");
+        err.params.code = String(backendExit.code ?? backendExit.signal ?? "?");
+        return reject(err);
+      }
       const req = http.get(
         { host: "127.0.0.1", port: PORT, path: HEALTH_PATH, timeout: 2000 },
         (res) => {
-          res.resume();
-          if (res.statusCode === 200) return resolve();
-          retry();
+          if (res.statusCode !== 200) {
+            res.resume();
+            return retry();
+          }
+          // 🔴 200 だけでは足りない。ポートを別のアプリが握っていると、その応答で
+          // 「backend は健全」と判定してしまい、本当の原因（backend はポート衝突で
+          // 起動できていない）が最後まで表に出ない。応答が GRAPHY-Next のものか確かめる。
+          let body = "";
+          res.setEncoding("utf8");
+          res.on("data", (c) => (body += c.length > 4096 ? c.slice(0, 4096) : c));
+          res.on("end", () => {
+            let ok = false;
+            try {
+              ok = JSON.parse(body).app === "GRAPHY-Next";
+            } catch {
+              ok = false;
+            }
+            if (!ok) return retry();
+            backendHealthy = true;
+            resolve();
+          });
+          res.on("error", retry);
         },
       );
       req.on("error", retry);
-      req.on("timeout", () => req.destroy());
+      // destroy() に Error を渡さないと 'error' が発火せず、ポーリングが静かに止まる。
+      req.on("timeout", () => req.destroy(new Error("health check timeout")));
     };
     const retry = () => {
-      if (Date.now() - start > timeoutMs) {
-        return reject(new Error("backend のヘルスチェックがタイムアウトしました"));
+      const elapsed = Date.now() - start;
+      const silent = Date.now() - lastBackendOutputAt;
+      if (!stallReported && silent > HEALTH_STALL_MS) {
+        stallReported = true;
+        forwardProgress({
+          step: "stall",
+          state: "warn",
+          code: "backend-stalled",
+          params: { step: lastRunningStep || "init", seconds: Math.round(silent / 1000) },
+          detail: lastMeaningfulLine(),
+        });
+      }
+      if (elapsed > timeoutMs) {
+        return reject(
+          new StartupError("backend-timeout", lastMeaningfulLine(), {
+            step: lastRunningStep || "init",
+            seconds: Math.round(elapsed / 1000),
+          }),
+        );
       }
       setTimeout(tick, 500);
     };
@@ -218,8 +373,10 @@ const progressQueue = [];
 
 function createSplash() {
   splashWin = new BrowserWindow({
-    width: 480,
-    height: 340,
+    width: 520,
+    // 段階ごとの経過秒と、失敗時の一次情報（backend の最後のログ行）を出す余白を持たせている。
+    // 400 だと「原因」の最終行がちょうど切れる（実測して 430 にした）。
+    height: 430,
     frame: false,
     resizable: false,
     center: true,
@@ -649,14 +806,47 @@ ipcMain.on("graphy:refocus", (e) => {
   setTimeout(apply, 60); // GTK ダイアログのクローズ完了後に再適用
 });
 
+// 起動を続けても意味が無い（backend が動かない）失敗。スプラッシュは一瞬で閉じてしまうので、
+// これらだけは OS のダイアログでも出して、原因が読める状態で残す。
+const FATAL_CODES = new Set([
+  "jar-missing",
+  "jar-broken",
+  "java-missing",
+  "java-too-old",
+  "spawn-failed",
+  "port-in-use",
+  "db-locked",
+  "backend-exited",
+]);
+
+/** 起動失敗を「直接的な原因」としてスプラッシュ（と、致命的ならダイアログ）へ出す。 */
+function reportStartupFailure(e) {
+  console.error("[startup]", e);
+  const err = e instanceof StartupError ? e : new StartupError("unknown", String(e && e.message ? e.message : e));
+  forwardProgress({
+    step: "error",
+    state: "error",
+    code: err.code,
+    params: err.params,
+    detail: err.detail,
+  });
+  if (FATAL_CODES.has(err.code)) {
+    const locale = String(app.getLocale() || "").startsWith("ja") ? "ja" : "en";
+    const text = messages.format(locale, err.code, err.params);
+    // ダイアログは createWindow の後に出す（メインウィンドウの背後に残さない）。
+    setTimeout(() => {
+      dialog.showErrorBox("GRAPHY-Next", err.detail ? `${text}\n\n${err.detail}` : text);
+    }, 0);
+  }
+}
+
 app.whenReady().then(async () => {
   createSplash();
   try {
     startBackend();
     await waitForBackend();
   } catch (e) {
-    console.error("[startup]", e);
-    forwardProgress({ step: "error", state: "error", message: "起動に失敗しました: " + (e.message || e) });
+    reportStartupFailure(e);
   }
   createWindow(); // スプラッシュは createWindow の ready-to-show で閉じる
 

@@ -15,15 +15,33 @@
       .wrap { padding: 22px 26px; height: 100%; box-sizing: border-box; display: flex; flex-direction: column; }
       .brand { font-size: 22px; font-weight: 700; letter-spacing: 0.5px; }
       .sub { color: #8aa4bd; font-size: 12px; margin-top: 2px; }
-      ul { list-style: none; margin: 18px 0 0; padding: 0; flex: 1; overflow: hidden; }
-      li { display: flex; align-items: center; gap: 10px; padding: 5px 0; font-size: 13px; }
-      .icon { width: 18px; text-align: center; flex: none; }
+      /* 行数は段階＋警告＋失敗で増えるので、はみ出したらスクロールさせる
+         （overflow:hidden だと最後に出る「原因」がちょうど隠れる）。 */
+      ul { list-style: none; margin: 18px 0 0; padding: 0; flex: 1; overflow-y: auto; overflow-x: hidden; }
+      ul::-webkit-scrollbar { width: 6px; }
+      ul::-webkit-scrollbar-thumb { background: #1f3b57; border-radius: 3px; }
+      li { display: flex; align-items: flex-start; gap: 10px; padding: 5px 0; font-size: 13px; }
+      .icon { width: 18px; text-align: center; flex: none; line-height: 1.5; }
+      .body { min-width: 0; }
       .running .icon { color: #6cb6ff; animation: spin 0.9s linear infinite; }
       .ok .icon { color: #3fb950; }
+      .warn .icon { color: #d29922; }
       .error .icon { color: #f85149; }
+      .warn .msg { color: #d29922; }
       .error .msg { color: #f85149; }
       .msg { color: #c9d6e3; }
       .ok .msg { color: #8aa4bd; }
+      /* 経過秒。「どこで待たされているか」を目に見えるようにするためのもの。 */
+      .elapsed { color: #5a7088; font-size: 11px; margin-left: 6px; }
+      /* backend の生ログ・終了コード等の一次情報。訳さずそのまま出す。 */
+      .detail {
+        color: #8aa4bd;
+        font-size: 11px;
+        margin-top: 2px;
+        font-family: ui-monospace, Consolas, monospace;
+        word-break: break-all;
+        user-select: text;
+      }
       @keyframes spin { to { transform: rotate(360deg); } }
       .ver { color: #5a7088; font-size: 11px; margin-top: 8px; }
     </style>
@@ -36,6 +54,7 @@
       <div class="ver">standalone mode</div>
     </div>
 
+    <script src="startupMessages.js"></script>
     <script>
       // localStorage の言語設定（React 側と共有）で日英切替。
       let locale = "ja";
@@ -45,68 +64,88 @@
         else if (navigator.language && navigator.language.startsWith("en")) locale = "en";
       } catch (e) {}
 
-      const I18N = {
-        ja: {
-          sub: "起動しています…",
-          init: "起動を開始しています",
-          folders: "必要なフォルダを確認しています",
-          database: "データベースを確認・マイグレーションしています",
-          scp: "DICOM 受信(SCP)を開始しています",
-          plugins: "プラグインを読み込んでいます",
-          pluginsDone: "プラグインを読み込みました",
-          pluginsNone: "プラグインはありません",
-          pluginsFailed: "プラグインの読み込みに失敗しました",
-          ready: "起動が完了しました",
-          error: "起動に失敗しました",
-        },
-        en: {
-          sub: "Starting…",
-          init: "Starting up",
-          folders: "Checking required folders",
-          database: "Checking / migrating the database",
-          scp: "Starting DICOM receiver (SCP)",
-          plugins: "Loading plugins",
-          pluginsDone: "Plugins loaded",
-          pluginsNone: "No plugins",
-          pluginsFailed: "Failed to load plugins",
-          ready: "Startup complete",
-          error: "Startup failed",
-        },
-      };
-      const T = I18N[locale];
-      document.getElementById("sub").textContent = T.sub;
+      const M = window.GraphyStartupMessages;
+      document.getElementById("sub").textContent = M.subtitle(locale);
 
       const ul = document.getElementById("steps");
-      const ICON = { running: "◴", ok: "✓", error: "✕" };
+      const ICON = { running: "◴", ok: "✓", warn: "!", error: "✕" };
+      // step ごとの開始時刻（running を受け取った時刻）。所要時間の表示に使う。
+      const startedAt = new Map();
+      // 今まさに進行中の段階。経過秒はこれだけに出す。
+      // （backend は init に ok を送らないので、全 running に出すと「起動を開始しています」が
+      //   ずっと数字を増やし続け、そこで止まっているように見える）
+      let currentStep = null;
 
-      function upsert({ step, state, message }) {
+      function upsert(p) {
+        const step = p.step;
+        const state = p.state || "running";
         let li = document.querySelector(`li[data-step="${step}"]`);
         if (!li) {
           li = document.createElement("li");
           li.setAttribute("data-step", step);
-          li.innerHTML = '<span class="icon"></span><span class="msg"></span>';
+          li.innerHTML =
+            '<span class="icon"></span>' +
+            '<span class="body"><span class="msg"></span><span class="elapsed"></span>' +
+            '<div class="detail"></div></span>';
           ul.appendChild(li);
         }
-        li.className = state || "running";
+        if (state === "running") {
+          if (!startedAt.has(step)) startedAt.set(step, Date.now());
+          currentStep = step;
+        }
+        li.className = state;
         li.querySelector(".icon").textContent = ICON[state] || ICON.running;
-        li.querySelector(".msg").textContent = labelFor(step, state, message);
+        li.querySelector(".msg").textContent = labelFor(p);
+        const detail = li.querySelector(".detail");
+        detail.textContent = p.detail || "";
+        detail.style.display = p.detail ? "block" : "none";
+        renderElapsed(li, step, state);
+        ul.scrollTop = ul.scrollHeight; // 最後に出た行（＝原因）を必ず見せる
       }
 
-      // step 表示文言をローカライズ。plugins は状態＋件数から動的に組み立てる。
-      function labelFor(step, state, message) {
-        if (step === "plugins") {
-          if (state === "ok") {
-            const n = parseInt(message, 10);
-            if (!Number.isFinite(n)) return T.pluginsDone;
-            return n === 0 ? T.pluginsNone : `${T.pluginsDone} (${n})`;
-          }
-          if (state === "error") {
-            return message ? `${T.pluginsFailed}: ${message}` : T.pluginsFailed;
-          }
-          return T.plugins; // running
+      // 所要時間は 3 秒を超えたものだけ出す（速い段階まで並べると読みにくい）。
+      function renderElapsed(li, step, state) {
+        const from = startedAt.get(step);
+        const el = li.querySelector(".elapsed");
+        if (!from || (state === "running" && step !== currentStep)) {
+          el.textContent = "";
+          return;
         }
-        // その他: ローカライズ済みラベル（未知の step は backend メッセージにフォールバック）
-        return T[step] || message || step;
+        const sec = (Date.now() - from) / 1000;
+        el.textContent = sec >= 3 ? ` ${sec.toFixed(1)}s` : "";
+      }
+
+      // 動いている段階は 0.5 秒ごとに経過を描き直す（止まって見えるのを防ぐ）。
+      setInterval(() => {
+        for (const li of ul.querySelectorAll("li.running")) {
+          renderElapsed(li, li.getAttribute("data-step"), "running");
+        }
+      }, 500);
+
+      // 表示文言の決定。
+      //   1) code があれば（＝ main プロセスが原因を切り分けた通知）それを訳す
+      //   2) plugins は状態＋件数から組み立てる
+      //   3) 既知の step 名を訳す
+      //   4) 最後に backend が送ってきた message をそのまま出す
+      // 🔴 3) が 1)/4) を飲み込まないこと。以前は step "error" が 3) に当たってしまい、
+      //    main プロセスが渡した具体的な原因を捨てて「起動に失敗しました」だけを出していた。
+      function labelFor(p) {
+        if (p.code) return M.format(locale, p.code, p.params);
+        if (p.step === "plugins") {
+          if (p.state === "ok") {
+            const n = parseInt(p.message, 10);
+            if (!Number.isFinite(n)) return M.stepLabel(locale, "pluginsDone");
+            return n === 0
+              ? M.stepLabel(locale, "pluginsNone")
+              : `${M.stepLabel(locale, "pluginsDone")} (${n})`;
+          }
+          if (p.state === "error") {
+            const base = M.stepLabel(locale, "pluginsFailed");
+            return p.message ? `${base}: ${p.message}` : base;
+          }
+          return M.stepLabel(locale, "plugins");
+        }
+        return M.stepLabel(locale, p.step) || p.message || p.step;
       }
 
       if (window.graphySplash) {
