@@ -579,6 +579,21 @@ function getGeometry3dStats(): Geometry3DPixelStats | null {
 }
 
 /**
+ * いま選択（ハイライト）されている注釈の UID。
+ *
+ * <p>🚨 「画像で示す」（§8.7.1）が効いたことは、**画面の色だけでは機械で確かめられない**
+ * ——線が 1 本色を変えるだけなので、画素の統計にはほとんど出ない。選択の実体
+ * （Cornerstone の annotation selection）を読む。
+ */
+function getSelectedAnnotations(): string[] {
+  try {
+    return [...(csAnnotation.selection.getAnnotationsSelected() ?? [])];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * ROI 統計の**同じ ROI に対する 2 つの読み口**を並べて返す（automator の切り分け用）。
  *
  * <p>表示（`annotation.data` をキーにした WeakMap）と問い合わせ（annotationUID の Map）が
@@ -631,6 +646,7 @@ declare global {
       getXaCalibration: typeof getXaCalibration;
       getVesselModels: typeof getVesselModels;
       getVesselModel: typeof getVesselModelBody;
+      getSelectedAnnotations: typeof getSelectedAnnotations;
       putVesselAnalysis: typeof putVesselAnalysisDebug;
       seedVesselAnalysis: typeof seedVesselAnalysis;
     };
@@ -771,6 +787,7 @@ export function installDebugApi(): void {
     getXaCalibration,
     getVesselModels,
     getVesselModel: getVesselModelBody,
+    getSelectedAnnotations,
     putVesselAnalysis: putVesselAnalysisDebug,
     seedVesselAnalysis,
   };
