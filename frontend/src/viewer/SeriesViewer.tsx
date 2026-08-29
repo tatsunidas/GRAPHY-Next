@@ -1117,6 +1117,7 @@ export function SeriesViewer({
                   index={zc}
                   onIndex={navLocked ? () => {} : setZ}
                   source={xaCineSource}
+                  locked={navLocked}
                 />
               ) : (
                 <DimSlider

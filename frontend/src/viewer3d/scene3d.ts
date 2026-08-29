@@ -33,6 +33,7 @@ import vtkPolyData from "@kitware/vtk.js/Common/DataModel/PolyData";
 import vtkTubeFilter from "@kitware/vtk.js/Filters/General/TubeFilter";
 import vtkDataArray from "@kitware/vtk.js/Common/Core/DataArray";
 import { resampleColorsNearest } from "./vesselColorMap";
+import { activateTubeColors, TUBE_COLOR_ARRAY } from "./tubeColors";
 import vtkSphereSource from "@kitware/vtk.js/Filters/Sources/SphereSource";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 import vtkClipClosedSurface from "@kitware/vtk.js/Filters/General/ClipClosedSurface";
@@ -950,9 +951,10 @@ function buildTube(points: V3[], radiusMm: number, pointColors?: Uint8Array): An
   const pd: Any = vtkPolyData.newInstance();
   pd.getPoints().setData(flat, 3);
   pd.getLines().setData(lines);
-  if (pointColors && pointColors.length === points.length * 3) {
+  const hasColors = !!pointColors && pointColors.length === points.length * 3;
+  if (hasColors) {
     pd.getPointData().setScalars(
-      vtkDataArray.newInstance({ name: "Colors", numberOfComponents: 3, values: pointColors }),
+      vtkDataArray.newInstance({ name: TUBE_COLOR_ARRAY, numberOfComponents: 3, values: pointColors }),
     );
   }
   const tube: Any = vtkTubeFilter.newInstance();
@@ -961,7 +963,12 @@ function buildTube(points: V3[], radiusMm: number, pointColors?: Uint8Array): An
   tube.setNumberOfSides(10);
   tube.setCapping(true);
   const out = tube.getOutputData();
-  return out && out.getNumberOfPoints?.() > 0 ? out : pd;
+  if (!(out && out.getNumberOfPoints?.() > 0)) return pd;
+  // 🚨 **管にした後、色をアクティブなスカラーに立て直す。** `vtkTubeFilter` は配列を
+  //    運ぶだけで、アクティブにはしてくれない（`tubeColors.ts` に実測と理由）。
+  //    これを忘れると、色は黙って無視されてアクターの単色になる。
+  if (hasColors) activateTubeColors(out);
+  return out;
 }
 
 /** Centerline3D をシーンに追加（チューブ表示）。fly-through のパスにもなる。 */

@@ -13,6 +13,7 @@ import {
   putVesselAnalysis,
 } from "../plugins/pluginVesselApi";
 import { calibrationForImageId } from "./xaCalibrationProvider";
+import type { Geometry3DPixelStats } from "./vtkGeometryView";
 
 /**
  * automator（自律検証ツール）専用のデバッグAPI。`window.__graphyDebug` として公開し、
@@ -551,16 +552,14 @@ function imagePixelsToCanvasFraction(
  * シーンの物体数・表示中の数値がすべて合格したまま 3D が真っ黒だったことがある
  * （カメラの視線と view-up が平行になって退化していた）。**描かれた画素を数える**。
  */
-let geometry3dProbe: (() => { total: number; nonBackground: number; fraction: number } | null) | null = null;
+let geometry3dProbe: (() => Geometry3DPixelStats | null) | null = null;
 
-export function publishGeometry3dProbe(
-  fn: (() => { total: number; nonBackground: number; fraction: number } | null) | null,
-): void {
+export function publishGeometry3dProbe(fn: (() => Geometry3DPixelStats | null) | null): void {
   if (!import.meta.env.DEV) return;
   geometry3dProbe = fn;
 }
 
-function getGeometry3dStats(): { total: number; nonBackground: number; fraction: number } | null {
+function getGeometry3dStats(): Geometry3DPixelStats | null {
   return geometry3dProbe ? geometry3dProbe() : null;
 }
 
@@ -616,6 +615,7 @@ declare global {
       getGeometry3dStats: typeof getGeometry3dStats;
       getXaCalibration: typeof getXaCalibration;
       getVesselModels: typeof getVesselModels;
+      getVesselModel: typeof getVesselModelBody;
       putVesselAnalysis: typeof putVesselAnalysisDebug;
       seedVesselAnalysis: typeof seedVesselAnalysis;
     };
@@ -635,6 +635,17 @@ declare global {
  */
 function getVesselModels(): ReturnType<typeof listVesselModels> {
   return listVesselModels();
+}
+
+/**
+ * H11 の**モデル本体**（`runId` 省略で最も新しいもの）。
+ *
+ * <p>🔴 一覧（{@link getVesselModels}）は**要約**で、点数と校正の区分しか持たない。
+ * 中心線・径・校正の出自を確かめるには本体が要る——実機検証で一覧を本体と取り違え、
+ * 「モデルに中心線が入っていない」という**偽の不具合**を作った（2026-08-29）。
+ */
+function getVesselModelBody(runId?: string): ReturnType<typeof getVesselModel> {
+  return getVesselModel(runId);
 }
 
 function putVesselAnalysisDebug(
@@ -744,6 +755,7 @@ export function installDebugApi(): void {
     getGeometry3dStats,
     getXaCalibration,
     getVesselModels,
+    getVesselModel: getVesselModelBody,
     putVesselAnalysis: putVesselAnalysisDebug,
     seedVesselAnalysis,
   };
