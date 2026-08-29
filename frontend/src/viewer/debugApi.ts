@@ -322,6 +322,21 @@ export interface QcaDebugSnapshot {
   warnings: string[];
   /** 拡大パネルの座標変換（画面 px = (画像 px − c0) × scale）。パネル未表示なら null。 */
   view: { cx0: number; cy0: number; cw: number; ch: number; scale: number; dw: number; dh: number } | null;
+  /**
+   * ストレート像（§8.9）の座標系。出していなければ null。
+   *
+   * <p>🔴 **横が弧長で刻まれているか**は画面の見た目では分からない（添字で刻んでも
+   * それらしい帯が出る）。列数を中心線の全長と突き合わせられるように数値で出す。
+   */
+  straight: {
+    cols: number;
+    rows: number;
+    halfWidthPx: number;
+    lengthPx: number;
+    scale: number;
+    dw: number;
+    dh: number;
+  } | null;
 }
 
 let qcaSnapshot: QcaDebugSnapshot | null = null;

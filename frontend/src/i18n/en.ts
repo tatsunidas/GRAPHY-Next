@@ -7,6 +7,7 @@ export const en: Record<string, string> = {
   // common
   "common.loading": "Loading…",
   "common.fetchError": "Failed to load: {{error}}",
+  "viewer2d.noImages": "No images to display.",
   "common.close": "Close",
   "common.noData": "No data",
   "common.search": "Search",
@@ -992,6 +993,10 @@ export const en: Record<string, string> = {
   "xa.qca.edgesHidden": "Edges cannot be grabbed while they are hidden (press \"Edges\" to show them).",
   "xa.qca.showEdges": "Edges",
   "xa.qca.showEdgesHint": "Show the left/right contours and their markers. While hidden, edges cannot be grabbed (use it to check the image itself).",
+  "xa.qca.straightTitle": "Straightened view (stretched along the centerline)",
+  "xa.qca.straightAxis": "Horizontal = distance along the centerline; vertical = offset from it. Waypoints and edges can be corrected here too.",
+  "xa.qca.showStraight": "Straightened",
+  "xa.qca.showStraightHint": "Show the vessel stretched straight along its centerline. Curvature no longer hides anything, so wrong edges and diameter changes are easier to spot. Edits here change the same result as the main panel.",
   "xa.qca.showMask": "Mask",
   "xa.qca.showMaskHint": "Shade the region the analysis treats as the lumen. The filled area shows how far the lumen was taken, which makes a wrong contour easier to spot than the lines alone.",
   "xa.qca.editMode": "Manual correction",

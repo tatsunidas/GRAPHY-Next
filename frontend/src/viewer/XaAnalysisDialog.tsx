@@ -329,6 +329,8 @@ export function XaAnalysisDialog({
    */
   const [showEdges, setShowEdges] = useState(true);
   const [showMask, setShowMask] = useState(false);
+  // ストレート像は既定 ON（§8.9）。曲がりの影響が消えるので、外れたエッジはここが一番早い。
+  const [showStraight, setShowStraight] = useState(true);
 
   /**
    * 🔴 **解析結果がある間はフレームを固定する**（実機で言われた・2026-08-28）。
@@ -1045,6 +1047,15 @@ export function XaAnalysisDialog({
                 >
                   {t("xa.qca.showMask")}
                 </button>
+                <button
+                  style={showStraight ? primaryBtn : btn}
+                  data-testid="xa-qca-show-straight"
+                  aria-pressed={showStraight}
+                  onClick={() => setShowStraight((v) => !v)}
+                  title={t("xa.qca.showStraightHint")}
+                >
+                  {t("xa.qca.showStraight")}
+                </button>
                 {(editMode === "brush" || editMode === "smooth") && (
                   <label style={{ ...label, fontSize: 11 }}>
                     {t("xa.qca.brushRadius", { unit: result.unit })}
@@ -1080,6 +1091,7 @@ export function XaAnalysisDialog({
                 brushRadius={brushRadius ?? defaultBrushRadius(result.unit)}
                 showEdges={showEdges}
                 showMask={showMask}
+                showStraight={showStraight}
                 onEdgeEdit={(pathIndex, side, offset) => {
                   if (!edgeToken) return;
                   const next = { ...edgeEdits, [pathIndex]: { ...edgeEdits[pathIndex], [side]: offset } };

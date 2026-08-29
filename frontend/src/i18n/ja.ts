@@ -7,6 +7,7 @@ export const ja: Record<string, string> = {
   // common
   "common.loading": "読み込み中…",
   "common.fetchError": "取得に失敗しました: {{error}}",
+  "viewer2d.noImages": "表示できる画像がありません。",
   "common.close": "閉じる",
   "common.noData": "データがありません",
   "common.search": "検索",
@@ -994,6 +995,10 @@ export const ja: Record<string, string> = {
   "xa.qca.edgesHidden": "エッジを消しているあいだは、エッジを掴んで直せません（「エッジ」を押して表示してください）。",
   "xa.qca.showEdges": "エッジ",
   "xa.qca.showEdgesHint": "左右の輪郭線とその上の印を表示します。消している間はエッジを掴めません（画像そのものを確かめるとき用）。",
+  "xa.qca.straightTitle": "ストレート像（中心線に沿って伸ばした像）",
+  "xa.qca.straightAxis": "横＝中心線に沿った距離／縦＝中心線からのずれ。ここでも中間点とエッジを直せます。",
+  "xa.qca.showStraight": "ストレート",
+  "xa.qca.showStraightHint": "中心線に沿ってまっすぐ引き延ばした像を並べて出します。曲がりの影響が消えるので、エッジの外れと径の変化が見つけやすくなります。上下に動かす操作は本画面と同じ結果を書き換えます。",
   "xa.qca.showMask": "マスク",
   "xa.qca.showMaskHint": "解析が内腔とみなしている領域を半透明で塗ります。線より「どこまでを内腔と見たか」が分かりやすく、外れている所を掴みやすくなります。",
   "xa.qca.editMode": "手修正",
