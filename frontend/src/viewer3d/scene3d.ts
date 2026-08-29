@@ -31,6 +31,8 @@ import { extractCenterlineGraph, graphSummary, type CenterlineGraph } from "../v
 import { createEndoController, type EndoController } from "../viewer/endoscopy";
 import vtkPolyData from "@kitware/vtk.js/Common/DataModel/PolyData";
 import vtkTubeFilter from "@kitware/vtk.js/Filters/General/TubeFilter";
+import vtkDataArray from "@kitware/vtk.js/Common/Core/DataArray";
+import { resampleColorsNearest } from "./vesselColorMap";
 import vtkSphereSource from "@kitware/vtk.js/Filters/Sources/SphereSource";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 import vtkClipClosedSurface from "@kitware/vtk.js/Filters/General/ClipClosedSurface";
@@ -440,6 +442,14 @@ export interface AddOptions {
    * "mesh" はメッシュ（平滑化後）から算出した体積を使う（セグメント単位インポート等、
    * 表示メッシュと数値を一致させたい用途向け）。 */
   volumeFrom?: "voxel" | "mesh";
+  /**
+   * 中心線を**点ごとの色**で描く（RGB 0..255・3 成分・近位→遠位）。A7 の解析値の可視化用。
+   *
+   * <p>点数は中心線の制御点数と一致していなくてよい——表示は 1mm 間隔で貼り直すので、
+   * こちらで**最近傍**に合わせる（`vesselColorMap.resampleColorsNearest`）。
+   * 省略時は従来どおり単色（`color`）。
+   */
+  pointColors?: Uint8Array;
 }
 
 /** メッシュ（`vtkPolyData`, LPS mm）をシーンに追加。追加した id を返す。 */
@@ -920,8 +930,14 @@ function sampleCenterline(cl: Centerline3D, stepMm = 1): V3[] {
   return pts;
 }
 
-/** 点列 → チューブ polydata（中心線の可視化）。 */
-function buildTube(points: V3[], radiusMm: number): Any {
+/**
+ * 点列 → チューブ polydata（中心線の可視化）。
+ *
+ * <p>`pointColors`（RGB 0..255・入力点ごと）を渡すと、それを点データとして載せる。
+ * vtkTubeFilter は `outPD.passData` で**入力点のデータを生成した各点へ複製する**ので、
+ * 管の表面に元の点の色がそのまま乗る（実装を確認済み）。
+ */
+function buildTube(points: V3[], radiusMm: number, pointColors?: Uint8Array): Any {
   const flat = new Float32Array(points.length * 3);
   for (let i = 0; i < points.length; i++) {
     flat[i * 3] = points[i][0];
@@ -934,6 +950,11 @@ function buildTube(points: V3[], radiusMm: number): Any {
   const pd: Any = vtkPolyData.newInstance();
   pd.getPoints().setData(flat, 3);
   pd.getLines().setData(lines);
+  if (pointColors && pointColors.length === points.length * 3) {
+    pd.getPointData().setScalars(
+      vtkDataArray.newInstance({ name: "Colors", numberOfComponents: 3, values: pointColors }),
+    );
+  }
   const tube: Any = vtkTubeFilter.newInstance();
   tube.setInputData(pd);
   tube.setRadius(radiusMm);
@@ -952,8 +973,16 @@ export function addCenterlineObject(cl: Centerline3D, opts: AddOptions = {}): st
   const opacity = opts.opacity ?? 1;
   const total = cl.getTotalLength();
   const radius = Math.max(0.4, Math.min(2, total / 200));
-  const tube = buildTube(pts, radius);
+  // 点ごとの色が来ていれば、表示標本（1mm 間隔）へ最近傍で貼り直してから管にする。
+  const colors = opts.pointColors ? resampleColorsNearest(opts.pointColors, pts.length) : undefined;
+  const tube = buildTube(pts, radius, colors);
   const ma = makeSurfaceActor(tube, { color, opacity, visible: true });
+  if (colors) {
+    // 点データの RGB をそのまま色として使う（LUT を通さない＝色の決定は vesselColorMap 側に閉じる）。
+    ma.mapper.setScalarVisibility(true);
+    ma.mapper.setColorModeToDirectScalars?.();
+    ma.mapper.setScalarModeToUsePointData?.();
+  }
   const data: SceneData = { polydata: tube, centerline: cl, ma };
   const obj: SceneObject = {
     id,

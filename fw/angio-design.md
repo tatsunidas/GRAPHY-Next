@@ -1806,32 +1806,102 @@ vitest（真値の中心線を投影して入力にする）では言えなか�
 理由: CFD ソルバの実装・検証コストが本体の射程を超え、かつ FFR は**治療方針を左右する値**なので
 規制上も分離しておくべき（§19）。registration で DL モデルを本体に載せないと決めたのと同じ判断。
 
-### 11.2 受け渡しの契約（案）
+### 11.2 受け渡しの契約 — ✅ **実装済み（2026-08-28）**
 
-プラグイン host API に 2 本追加（**番号は暫定**。`fw/plugin-architecture.md` で採番を確認すること）:
+プラグイン host API に 2 本（正本の採番は `fw/plugin-architecture.md`）。
 
 ```ts
 // H11: 再構成済み血管モデルの取得
-getVesselModel(runId: string): {
-  centerline: { id: string; points: [number, number, number][]; /* 患者 LPS mm */
-                diameterMm: number[]; parentId: string | null }[];
-  calibration: { method: "geometric" | "catheter" | "ruler"; mmPerPx: number };
-  provenance: { studyUid: string; seriesUid: string; sopUids: string[]; angles: [number, number][] };
+listVesselModels(): XaVesselModelSummary[];        // 新しい順・点列を含まない要約
+getVesselModel(runId?: string): XaVesselModel | null;  // 省略時は最新
+
+interface XaVesselModel {
+  runId: string;
+  kind: "xa-qca3d" | "xa-bifurcation3d";
+  label: string;
+  segments: {
+    id: string;                              // "main" / "proximal" / "distal" / "side"
+    points: [number, number, number][];      // 患者 LPS mm・近位→遠位
+    diameterMm: (number | null)[];           // 🔴 測れなかった点は null（埋めない）
+    parentId: string | null;
+  }[];
+  calibration: {
+    diameterCalibrated: boolean;             // false なら断面積を作れない
+    sources: string[];                       // 方向ごと（H35 と同じ語彙。読めなければ "unknown"）
+    tiers: ("calibrated" | "approximate" | "uncalibrated")[];
+    diameterMethod: "half-max" | "densitometric" | "mixed" | null;
+  };
+  provenance: {
+    studyUid: string; seriesUids: string[]; sopUids: string[];
+    angles: [number, number][];              // 方向ごとの [primary, secondary] deg
+    angleCorrected: boolean;                 // バンドル調整が掛かったか
+    visibleFractions: (number | null)[];     // 短縮（§10.2.5）
+    anchorReprojectionPx: number;            // 🔴 幾何の検算はこれ（対応付けの残差ではない）
+    separationDeg: number;
+  };
+  at: number;
 }
 
 // H12: 解析結果の書き戻し
 putVesselAnalysis(runId: string, result: {
   kind: "ffr" | "custom";
+  label: string;                             // 凡例名（例 "FFR"）
+  range: [number, number];                   // 色マップ範囲（FFR なら [0.5, 1.0]）
   perPoint: { segmentId: string; index: number; value: number }[];
-  label: string;            // 凡例名（例 "FFR"）
-  range: [number, number];  // 色マップ範囲（FFR なら [0.5, 1.0]）
-  disclaimer?: string;      // モジュール提供元の免責文（そのまま表示する）
-}): void
+  disclaimer?: string;                       // 提供元の免責文。そのまま表示する
+}): { ok: boolean; error?: string };
 ```
 
-- 表示は既存 `viewer3d/ColorLegend.tsx` を流用。**値の出自（どのモジュール・バージョン）を
-  必ずパネルに出す**。
-- **本体は既定でどのモジュールも同梱しない**。未導入なら「FFR モジュールが導入されていません」と出すだけ。
+**実装**: `viewer/xaVesselModelStore.ts`（登録簿・ウィンドウ間同期）／
+`viewer/xaVesselModelBuild.ts`（再構成結果 → モデル）／`plugins/pluginVesselApi.ts`（H11 / H12）／
+`viewer3d/vesselColorMap.ts`（色）／`viewer3d/VesselAnalysisLegend.tsx`（凡例）／
+`viewer3d/Geometry3DScreen.tsx`（適用）。vitest 52。
+
+### 11.3 実装で決めたこと（設計案から変えた点・理由つき）
+
+**① 既存の `ColorLegend.tsx` は流用しなかった。** あれは VR の LUT と VOI に結び付いていて
+（`VtkVolumeView` を引数に取る）、**ボリュームの無い `#geometry3d` には載らない**。
+色の決定を `vesselColorMap.ts` に閉じ、凡例はそこから目盛りを作る小さな部品にした。
+
+**② モデルの受け渡しに `geometry3dContext` を使わなかった。** あれは「3D ウィンドウを開くときの
+使い捨ての引数」で、**径も出自も持たず・1 件しか置けず・`runId` で指せない**。A7 は
+`xaVesselModelStore`（`BroadcastChannel` でウィンドウ間同期・セッション限り）に載せ、
+コンテキストには `runId` だけを足した。
+
+**③ 「3D で開く」を押さなくてもモデルを登録する。** FFR モジュールは自前のウィンドウを持つので、
+表示操作を前提にすると「解析はできているのにプラグインからは見えない」状態になる。
+
+**④ 色の向きを決めごとにした。** `range[0]` が**赤**、`range[1]` が**青**
+（FFR のように低いほど悪い量に合わせた）。**高いほど悪い量も同じ向きで描かれる**ので、
+モジュール側で符号を反転して渡す。本体が量ごとに向きを推測すると、外したときに黙って逆の絵が出る。
+
+**⑤ 閾値を持たない。** 0.80 のような臨床的カットオフを本体に入れると、
+**別の基準で出した値までその線で色分けされる**＝本体が診断的な主張をしたことになる（§19）。
+
+**⑥ 値の無い点はグレー。補間しない。** 埋めると**解析していない区間が解析済みに見える**。
+表示は中心線を 1mm 間隔で貼り直してから管にするので、色は**最近傍**で貼り直す
+（線形にすると「値なしのグレー」と実際の色が混ざり、**ありもしない値の色**が生まれる）。
+
+**⑦ 壊れた入力は黙って落とさずエラーを返す**（未知の `segmentId`・範囲外の `index`・非有限の値・
+退化した `range`・空の `label`）。捨てて残りを採用すると**ずれたまま色が乗り**、
+値が付いているぶん誰も気付けない（H9 / H39 と同じ判断）。
+
+**⑧ 校正の出自を 3D まで運ぶ**ために `XaQcaRun` に `calibrationSource` / `calibrationTier` を足した。
+`unit: "mm"` だけでは**実測（カテーテル法）と幾何近似の区別が付かず**、3D は
+**近似を実測として外部モジュールへ渡してしまう**。凡例には最も弱い区分を出す（§7.4）。
+
+**⑨ 「FFR モジュールが導入されていません」という画面は作らなかった。** プラグインは自分で
+メニュー項目を出すので、未導入なら**項目が無い**＝ボタンを押して断られる場面が存在しない。
+押せないボタンを置くほうが「壊れている」と読まれる。
+
+### 11.4 検証状況
+
+- vitest **52**（色マップ 10 / host API 20 / モデル構築 13 / 登録簿の同期 9）。
+- **プラグイン無しで画面まで通せる口**を DEV 限定で用意した——
+  `window.__graphyDebug.getVesselModels()` / `.putVesselAnalysis(runId, result)` /
+  `.seedVesselAnalysis()`（径の比を値にして色を乗せる）。
+- 🔴 **実機検証（automator）は未実施。** 2 方向の 3D QCA を通してから色を乗せる手順が要る。
+  **外部の FFR モジュールとの結合も未実施**（まだ存在しない）。
 
 ---
 
@@ -2630,7 +2700,7 @@ null＝半値法として書かれ、writer のテストは全部通ったまま
 | **A5c** | QLV バイプレーン（Simpson 法） | A5b | 小 | 🔴 検証データ無し（§20-9） |
 | **A6a** | 2D→3D 再構成・**3D QCA 単一血管**（射影幾何・バンドル調整・3D 表示） | A3, A4 | **大** | ✅ **実装済・実機 103/0（目標未達 2）**（§10.3.1）。`xaGeometry.ts` vitest 27 ＋ `xaRecon3d.ts` vitest 36 ＋ `Xa3dQcaDialog.tsx` ＋ `Qca3dSrWriter`（JUnit 11）＋ 幾何だけの 3D ウィンドウ（§10.2.9）。病変長の当てはめは §10.2.8 で解決済み。未達 2 は**2D 追跡が短縮区間で弧長を取りこぼす**ことが原因 |
 | **A6b** | **3D QCA 分岐部**（polygon of confluence・分岐別参照径・分岐角） | A6a | 中 | ✅ **実装済・実機 46/0（未達 5）／再測定 48/0（未達 3）**（§21.4）。`xaBifurcation.ts` vitest 11 ＋ `Xa3dBifurcationDialog.tsx`。残る未達 3 件は**投影で側枝が母血管に重なる**ことが原因（§21.4.3。分岐角 2 件はハーネスの分解能だった） |
-| **A7** | FFR インターフェース（host API H11/H12・色マップ） | A6 | 小 | 🔴 |
+| **A7** | FFR インターフェース（host API H11/H12・色マップ） | A6 | 小 | 🟡 **実装済み・vitest 52**（§11.2〜§11.4）。`xaVesselModelStore` / `pluginVesselApi` / `vesselColorMap` / `VesselAnalysisLegend`。🔴 **実機検証と外部モジュールとの結合は未実施**（モジュールがまだ無い）。DEV 限定の口 `__graphyDebug.seedVesselAnalysis()` で画面までは通せる |
 | **A8** | IVUS / OCT 同期 | A1（＋A4 の中心線） | 中 | 🔴 |
 | **A9** | RDSR 読み取り・線量サマリ | — （独立） | 中 | ✅ 実装済・**実機 18/18**（§14.2）。ただし**合成 RDSR**での検証 |
 | **A10** | GSPS / QCA SR / MP4・PNG エクスポート | A2, A4 | 中 | ✅ 実装済（§8.5 に含む）。**GSPS 読み込み（2026-08-23・§14.1.1・実機 14/0）／MP4（§14.3.1・実機 10/0）も実装済み** |

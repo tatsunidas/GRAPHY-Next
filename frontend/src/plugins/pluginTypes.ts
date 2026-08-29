@@ -38,6 +38,13 @@ import type {
 
 export type { PluginStoreDoc, PluginStoreSaveResult };
 
+import type {
+  VesselAnalysisResult,
+  XaVesselAnalysisInput,
+  XaVesselModel,
+  XaVesselModelSummary,
+} from "./pluginVesselApi";
+
 export type { PluginWindowHandle, PluginWindowOptions } from "./pluginWindowApi";
 export type {
   PluginValueVolume,
@@ -47,6 +54,17 @@ export type {
   PluginVolumeViewMode,
 } from "./pluginViewportApi";
 export type { PluginMaskInput, PluginMeshMeasurement, PluginMeshOptions } from "./pluginMeshApi";
+export type {
+  XaVesselAnalysis,
+  XaVesselAnalysisInput,
+  XaVesselAnalysisPoint,
+  XaVesselCalibration,
+  XaVesselModel,
+  XaVesselModelSummary,
+  XaVesselProvenance,
+  XaVesselSegment,
+  VesselAnalysisResult,
+} from "./pluginVesselApi";
 export type { PluginSeriesPanelHandle, PluginSeriesPanelOptions } from "./pluginSeriesPanelApi";
 
 export type {
@@ -359,6 +377,48 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * これが無いまま差分画像を測ると、**例外も警告も出ずに違う径が出る**。
    */
   getXaState: (tileId?: string) => ViewerTileXaState | null;
+  /**
+   * **再構成済み 3D 血管モデルの一覧**（H11）。新しい順。まだ 1 件も無ければ空配列。
+   *
+   * <p>点列を含まない要約だけを返す（モデル本体は `getVesselModel()` で取る）。
+   * `diameterCalibrated` が false のモデルは**断面積が作れない**＝FFR の入力にならない。
+   */
+  listVesselModels: () => XaVesselModelSummary[];
+  /**
+   * **再構成済み 3D 血管モデル**（H11）。`runId` 省略時は最も新しいもの。無ければ null。
+   *
+   * <p>中心線（患者 LPS mm）・点ごとの内腔径・分岐のトポロジ（`parentId`）と、
+   * **校正と出自**が入る。3D QCA（A6a）／分岐部（A6b）のダイアログで再構成すると登録される。
+   *
+   * <p>🔴 **測れなかった点の径は `null`。** 0 や補間値で埋めていない——埋めた値は
+   * 「そこが細い / 太い」という所見に化ける。**受け取った側が埋めるのも同じ理由でやめること。**
+   *
+   * <p>🔴 **`calibration.diameterMethod` を必ず見る。** 半値法と密度計測では径の絶対値が
+   * 10% 以上違い、断面積はその 2 乗で効く（`fw/angio-design.md` §16.4 / §16.5）。
+   * 係数を定数として持ち回らないこと——断面の形で 0.745〜0.918 まで動く。
+   *
+   * <p>⚠️ **セッション限り**。アプリを閉じると消える（結果そのものの保存は SR）。
+   */
+  getVesselModel: (runId?: string) => XaVesselModel | null;
+  /**
+   * **解析結果（点ごとの値）を書き戻す**（H12）。3D ウィンドウが色マップと凡例で表示する。
+   *
+   * <p>確認ダイアログは出ない（DICOM を書かない。表示だけ）。出自（プラグイン id・名前・版）は
+   * **host が入れる**ので名乗らなくてよい。同じ `runId` に入れ直すと置き換わる。
+   *
+   * <p>🔴 **本体は値の意味を解釈しない。** 閾値も正常/異常の判定も持たず、
+   * `range[0]` を赤・`range[1]` を青に写すだけ（FFR のように**低いほど悪い**量に合わせてある）。
+   * 高いほど悪い量は**同じ向きで描かれる**ので、符号を反転して渡すこと。
+   *
+   * <p>🔴 **壊れた入力は黙って落とさずエラーを返す**——未知の `segmentId`、範囲外の `index`、
+   * 非有限の値、退化した `range`。捨てて残りを採用すると**ずれたまま色が乗り**、
+   * 値が付いているぶん誰も間違いに気付けない。
+   *
+   * <p>`disclaimer` は**そのまま画面に出る**（本体は要約も書き換えもしない）。FFR は治療方針を
+   * 左右する値なので、モジュールの限界を書くこと。校正の縮退区分（近似か未校正か）は
+   * host が凡例の脇に必ず出す。
+   */
+  putVesselAnalysis: (runId: string, result: XaVesselAnalysisInput) => VesselAnalysisResult;
   /**
    * 処理結果（値マップ）を対象タイルの**表示中スライスへ重ねて見せる**（H4a）。
    * `tileId` 省略時は対象の先頭タイル。rows/cols が現在スライスと不一致なら false。

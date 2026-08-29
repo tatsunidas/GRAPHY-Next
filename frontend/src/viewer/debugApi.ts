@@ -7,6 +7,11 @@ import { ENGINE_ID } from "./Viewer2D";
 import { readCamera, readColormapName, readInvert, readVoiWindow } from "./viewportRead";
 import { annotation as csAnnotation } from "@cornerstonejs/tools";
 import { getRoiStats, getRoiStatsByData } from "./roiStatsStore";
+import {
+  getVesselModel,
+  listVesselModels,
+  putVesselAnalysis,
+} from "../plugins/pluginVesselApi";
 
 /**
  * automator（自律検証ツール）専用のデバッグAPI。`window.__graphyDebug` として公開し、
@@ -608,8 +613,58 @@ declare global {
       getXaBifurcationState: typeof getXaBifurcationState;
       imagePixelsToCanvasFraction: typeof imagePixelsToCanvasFraction;
       getGeometry3dStats: typeof getGeometry3dStats;
+      getVesselModels: typeof getVesselModels;
+      putVesselAnalysis: typeof putVesselAnalysisDebug;
+      seedVesselAnalysis: typeof seedVesselAnalysis;
     };
   }
+}
+
+
+/**
+ * A7（H11 / H12）を**プラグイン無しで動かすための口**。DEV 限定。
+ *
+ * <p>🚨 FFR モジュールは外部（プラグイン）なので、本体だけでは「モデルを渡して値を受け取る」
+ * 経路を一度も通せない。実機検証で**血管に色が乗るところまで**を見るために、
+ * host API と同じ関数を叩く口を出す。
+ *
+ * <p>⚠️ **本番には出ない**（`import.meta.env.DEV` ガード）。ここから入れた値も
+ * 出自は "debug" として記録されるので、画面の凡例で本物と区別できる。
+ */
+function getVesselModels(): ReturnType<typeof listVesselModels> {
+  return listVesselModels();
+}
+
+function putVesselAnalysisDebug(
+  runId: string,
+  result: Parameters<typeof putVesselAnalysis>[1],
+): ReturnType<typeof putVesselAnalysis> {
+  return putVesselAnalysis(runId, result, { id: "debug", name: "debug", version: "0" });
+}
+
+/**
+ * いちばん新しいモデルへ、**径から作った合成値**を乗せる（色マップの目視確認用）。
+ * 径が細いところほど値が小さくなるので、狭窄の位置と色が合っているかを見られる。
+ * 径が無い点は**値を入れない**（グレーのまま＝「埋めない」の確認も兼ねる）。
+ */
+function seedVesselAnalysis(label = "DEBUG"): { ok: boolean; error?: string; runId?: string } {
+  const m = getVesselModel();
+  if (!m) return { ok: false, error: "no vessel model" };
+  const seg = m.segments[0];
+  const ds = seg.diameterMm.filter((d): d is number => d != null);
+  if (ds.length === 0) return { ok: false, error: "no diameters" };
+  const max = Math.max(...ds);
+  const perPoint = seg.diameterMm
+    .map((d, index) => (d == null ? null : { segmentId: seg.id, index, value: d / max }))
+    .filter((p): p is { segmentId: string; index: number; value: number } => p != null);
+  const r = putVesselAnalysisDebug(m.runId, {
+    kind: "custom",
+    label,
+    range: [0.5, 1],
+    perPoint,
+    disclaimer: "DEBUG: 径の比を色にしただけの合成値です。臨床的な意味はありません。",
+  });
+  return { ...r, runId: m.runId };
 }
 
 let installed = false;
@@ -630,6 +685,9 @@ export function installDebugApi(): void {
     getXaBifurcationState,
     imagePixelsToCanvasFraction,
     getGeometry3dStats,
+    getVesselModels,
+    putVesselAnalysis: putVesselAnalysisDebug,
+    seedVesselAnalysis,
   };
   installed = true;
 }

@@ -68,6 +68,15 @@ export interface XaQcaRun {
   diameterMethod: QcaDiameterMethod;
   /** 手修正が入っているか（出自を 3D 側でも失わない）。 */
   edited: boolean;
+  /**
+   * 空間校正の出自と縮退区分（H35 と同じ語彙）。読めなければ undefined。
+   *
+   * <p>3D 側（A7 の H11）が「この幾何はどこまで信用してよいか」を外部モジュールへ渡すために要る。
+   * 🔴 **`unit: "mm"` だけでは足りない**——実測（カテーテル法）と幾何近似では意味が違い、
+   * 近似には近似と書く義務がある（§7.4）。ここが無いと 3D は**近似を実測として渡す**。
+   */
+  calibrationSource?: string;
+  calibrationTier?: "calibrated" | "approximate" | "uncalibrated";
   at: number;
 }
 

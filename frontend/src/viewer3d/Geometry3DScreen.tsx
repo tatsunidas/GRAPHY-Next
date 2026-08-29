@@ -20,7 +20,7 @@
  * W/L・プリセット・ORTHO・クロップ。**無いものを操作させない**（押しても何も起きない
  * ボタンは「壊れている」と読まれる）。
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AppStatus } from "../api";
 import { useI18n } from "../i18n/i18n";
 import { installDebugApi, publishGeometry3dProbe } from "../viewer/debugApi";
@@ -33,6 +33,9 @@ import {
   type Geometry3DContext,
 } from "./geometry3dContext";
 import { addCenterlineObject, attachSceneRenderer, resetScene, setClipContext } from "./scene3d";
+import { getVesselModel, useVesselAnalysis } from "../viewer/xaVesselModelStore";
+import { segmentValues, valuesToRgb } from "./vesselColorMap";
+import { VesselAnalysisLegend } from "./VesselAnalysisLegend";
 import { getSceneObjects, useSceneObjects } from "./scene3dStore";
 import { removeObject } from "./scene3d";
 import { SceneObjectPanel } from "./SceneObjectPanel";
@@ -92,7 +95,7 @@ export function Geometry3DScreen({ status }: { status: AppStatus | null }) {
     for (const o of [...getSceneObjects()]) removeObject(o.id);
     const cl = new Centerline3D();
     for (const p of c.centerlineLps) cl.addControlPoint([p[0], p[1], p[2]]);
-    const id = addCenterlineObject(cl, { name: c.name });
+    const id = addCenterlineObject(cl, { name: c.name, pointColors: colorsRef.current ?? undefined });
     if (!id) {
       setError(t("geometry3d.empty"));
       return;
@@ -103,6 +106,39 @@ export function Geometry3DScreen({ status }: { status: AppStatus | null }) {
   // 開いたまま「3D で開く」を押し直したときに中身を差し替える
   // （ウィンドウはシングルトンなので、開き直しでは読み直されない）。
   useEffect(() => subscribeGeometry3dContext(() => loadRef.current()), []);
+
+  /* ── A7: 解析値（H12）を色で乗せる ─────────────────────────── */
+
+  // 別ウィンドウのプラグインが入れた値を購読する（`xaVesselModelStore` の BroadcastChannel）。
+  const analysis = useVesselAnalysis(ctx?.runId ?? null);
+  const model = ctx?.runId ? getVesselModel(ctx.runId) : null;
+
+  /**
+   * 中心線の制御点ごとの RGB。
+   *
+   * <p>🚨 **区間 1 本ぶんしか色を作らない。** このウィンドウは中心線を 1 本しか描かない
+   * （分岐部は将来）。モデルの先頭区間＝表示している中心線、という前提が崩れたら
+   * ここも一緒に直すこと。
+   */
+  const pointColors = useMemo(() => {
+    if (!analysis || !model || model.segments.length === 0) return null;
+    const seg = model.segments[0];
+    const values = segmentValues(
+      seg.points.length,
+      analysis.perPoint.filter((p) => p.segmentId === seg.id),
+    );
+    return valuesToRgb(values, analysis.range);
+  }, [analysis, model]);
+
+  // 色は管を作る時点で焼き込む（vtkTubeFilter が入力点のデータを複製する）ので、
+  // 値が届いたら**シーンを作り直す**。ref 経由なのは loadRef が最新を読むため。
+  const colorsRef = useRef<Uint8Array | null>(null);
+  useEffect(() => {
+    colorsRef.current = pointColors;
+    if (ctx) loadRef.current();
+    // ctx を依存に入れない（loadRef 内で setCtx するので無限ループになる）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pointColors]);
 
   // アンマウントで vtk とシーンを片付ける（ウィンドウを閉じ直して開くと二重に載るため）。
   useEffect(() => {
@@ -163,7 +199,9 @@ export function Geometry3DScreen({ status }: { status: AppStatus | null }) {
         </button>
       </div>
       <div style={body}>
-        <div ref={hostRef} style={canvasHost} data-testid="geometry3d-canvas-host" />
+        <div ref={hostRef} style={canvasHost} data-testid="geometry3d-canvas-host">
+          {analysis ? <VesselAnalysisLegend analysis={analysis} model={model} /> : null}
+        </div>
         <div style={side} data-testid="geometry3d-objects" data-count={String(objectCount)}>
           <SceneObjectPanel geom={null} />
         </div>
