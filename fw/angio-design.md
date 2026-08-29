@@ -2518,8 +2518,32 @@ web モード（BFF/DICOMweb）は A1 完了後に追随（動画 P5b と同じ�
 #### 検証
 
 `qcaAnalysisState.test.ts` **14 件**（往復・壊れた値の扱い・マージ・道連れ）。
-🔴 **実機（automator）は未**——保存 → 開き直し → 復元 → 再解析 → 上書き保存の通しは
-利用者の手元での確認のみ。
+
+✅ **実機検証 — 30/0**（2026-08-29・`automator/src/spike/xaQcaRestoreCheck.ts`）。
+§14.5 と §8.7.1 を 1 本で通す。
+
+🚨 **「保存しました」の文字を合格条件にしない。** 保存の成否は **backend の保管庫を
+直接読んで**確かめる（`GET /api/rois?patientKey=`）。画面の文字は「保存を試みた」までしか
+言っていない。
+
+| 見たもの | 実測 |
+| :- | :- |
+| 解析状態が保管庫に入る | `analyses=1`・鍵はフレーム 55・中間点 1 点・SR 参照あり・中心線の指紋一致 |
+| **開き直すと手修正込みで復元** | 通過点 1・`centerlineToken` 一致・**MLD も一致**（同じ入力での再解析） |
+| ★**破棄したあと復元が勝って戻ってこない** | 破棄後も通過点 0 のまま |
+| 初回は「上書き / 新規」を聞かない | 選択は出ない |
+| 保存済みがあると聞く | 選択が出る |
+| **「新規で保存」は前の SR を消さない** | SR 1 → 2 |
+| ★**「上書き」で本数が増えない** | SR 2 → 2（前の版が消える） |
+| 解析状態の SR 参照が生きている SR を指す | 一致 |
+| 一覧に用途が出る／「画像で示す」で 1 本だけ光る | 選択 1 件・選び替えで移る |
+| 同じ線を両方に選ぶと警告 | 出る／別の線に戻すと消える |
+
+🚨 **検証側でまた 2 回転んだ**（§18 の再発）:
+① **拡大パネルを触る直前に `scrollIntoViewIfNeeded()`**——ストレート像が付いてダイアログが
+更に縦長になったぶん、以前より踏みやすくなっている。
+② **同じメニューを 2 回開こうとしない**——1 回目で選んだツールは残るので、開き直す必要が
+そもそも無い（2 回目が開かず落ちた）。**線は最初にまとめて引く**。
 
 ---
 
@@ -3271,7 +3295,7 @@ A13-1（ステップ・レール）✅ → A5b（LV モノプレーン）✅ →
 | 純ロジック | **vitest** | `xaCalibration.ts` / `qca.ts` / `qlv.ts` / `dsa.ts` / `xaTasks.ts`（段の繋がり）/ `xaGeometry.ts` / `ivusSync.ts` / `recon3d.ts`。**mm に関わる計算は全部ここでカバーする**（UI から切り離して書く理由）。＋ `seriesLayout.ts` の **`axes`/`stackAxis` の既定値が現行動作と一致する回帰テスト**（§5.7 は CT/MR の表示を変えてはいけない） |
 | backend | **JUnit** | `XaFrameExpander`（レイアウト）、`RdsrParseService`（SR トラバース） |
 | 精度 | **`bench/` GNBP-XA** | §16.3 の合否基準。`measure_*.mjs` と同じ形の計測ハーネスを足す |
-| 実機（standalone） | **automator spike** | `xaCineCheck.ts`（A1: フレーム数・fps・最終フレーム）／ `dsaCheck.ts`（A2: シフト量と残差）／ `qcaCheck.ts`（A4: ファントムでの %DS）／ `rdsrCheck.ts`（A9）／ `xaStepRailCheck.ts`（A13-1: **`data-state` で判定**。色や記号で判定しない）／ `xaQlvCheck.ts`（A5b: **EF = 1 − k³ の恒等式で数値判定**）／ `xa3dQcaCheck.ts`（A6a）／ `reportAnalysisCheck.ts`（A14: **本文の中身を読む**）／ `taskLauncherCheck.ts`（A13-2: **`data-enabled`/`data-reason` で判定**・§21.8） |
+| 実機（standalone） | **automator spike** | `xaCineCheck.ts`（A1: フレーム数・fps・最終フレーム）／ `dsaCheck.ts`（A2: シフト量と残差）／ `qcaCheck.ts`（A4: ファントムでの %DS）／ `rdsrCheck.ts`（A9）／ `xaStepRailCheck.ts`（A13-1: **`data-state` で判定**。色や記号で判定しない）／ `xaQlvCheck.ts`（A5b: **EF = 1 − k³ の恒等式で数値判定**）／ `xa3dQcaCheck.ts`（A6a）／ `reportAnalysisCheck.ts`（A14: **本文の中身を読む**）／ `taskLauncherCheck.ts`（A13-2: **`data-enabled`/`data-reason` で判定**・§21.8）／ `xaQcaBrushCheck.ts`（§5.10 / §8.8 / §8.9: **画素で判定**）／ `xaQcaRestoreCheck.ts`（§14.5 / §8.7.1: **保管庫を直接読んで判定**） |
 | ゲート | `/verify` | 変更のたび |
 
 ⚠️ 実機検証の落とし穴は `[[automator-verification-hygiene]]` の 5 パターンがそのまま当てはまる。
