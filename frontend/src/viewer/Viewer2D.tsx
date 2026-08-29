@@ -445,6 +445,7 @@ export function Viewer2D({
   renderOverlay,
   thickSlab,
   refreshKey,
+  pendingImages = false,
 }: {
   imageIds: string[];
   imageIndex: number;
@@ -480,6 +481,15 @@ export function Viewer2D({
    * スタックを初期化し直してメタデータを読み直す。
    */
   refreshKey?: number | string;
+  /**
+   * `imageIds` が空なのは**まだ来ていないから**か（true）、**そもそも無いから**か（false）。
+   *
+   * <p>🔴 空のスタックを一律「取得失敗」にしない。XA は backend の展開とプリウォームが
+   * 終わるまでフレームを渡さない設計なので、開いた直後は必ず空で 1 回描画される。
+   * ここを失敗として扱うと、**開くたびに一瞬「取得に失敗しました」が出る**（実機で指摘された）。
+   * 逆に、本当に画像が無いときに待ち続けるのも嘘なので、区別は呼び出し側が持つ。
+   */
+  pendingImages?: boolean;
 }) {
   const { t } = useI18n();
   // 合成スライス上でのアノテーション作成をブロックする判定を、setActiveTool から最新参照する。
@@ -988,6 +998,14 @@ export function Viewer2D({
       try {
         setLoading(true);
         setError(null);
+        // 🚨 **空のスタックは「失敗」ではない。まだ来ていないだけ。**
+        //    XA（マルチフレーム）は backend の展開とプリウォームが終わるまでフレームを
+        //    渡さない設計なので（`SeriesViewer` の `xaReady`）、開いた直後は**必ず**
+        //    空で 1 回描画される。そのまま `setStack([])` まで進むと Cornerstone が投げ、
+        //    「取得に失敗しました」が一瞬出てから画像が出る——**毎回出る**ので、
+        //    利用者には「毎回失敗している」と読める（実機で指摘された）。
+        //    ここでは読み込み中のまま待つ。フレームが来れば `stackKey` が変わって再実行される。
+        if (imageIdsRef.current.length === 0) return;
         await ensureCornerstoneInitialized();
         if (disposed) return;
 
@@ -2503,11 +2521,16 @@ export function Viewer2D({
               <CornerText lines={dicomText.bottomRight} style={dicomBR} testId="corner-text-br" />
             </>
           )}
-      {loading && !error && (
+      {/* 🔴 まだ来ていない（`pendingImages`）なら読み込み中。**そもそも無い**なら
+          待たせずにそう言う。空のスタックを「取得に失敗しました」にはしない。 */}
+      {loading && !error && (imageIds.length > 0 || pendingImages) && (
         <div style={overlayCenter}>
           <LoadingSpinner size={28} />
           <div>{t("common.loading")}</div>
         </div>
+      )}
+      {loading && !error && imageIds.length === 0 && !pendingImages && (
+        <div style={overlayCenter} data-testid="viewer2d-no-images">{t("viewer2d.noImages")}</div>
       )}
       {/* 初回ロード後のスライス送りで、まだ未取得のスライスを待っている間の視覚フィードバック。 */}
       {!loading && sliceLoading && !error && (
@@ -2515,7 +2538,11 @@ export function Viewer2D({
           <LoadingSpinner size={20} />
         </div>
       )}
-      {error && <div style={{ ...overlayCenter, color: "#ff8a80" }}>{t("common.fetchError", { error })}</div>}
+      {error && (
+        <div style={{ ...overlayCenter, color: "#ff8a80" }} data-testid="viewer2d-error">
+          {t("common.fetchError", { error })}
+        </div>
+      )}
     </div>
   );
 

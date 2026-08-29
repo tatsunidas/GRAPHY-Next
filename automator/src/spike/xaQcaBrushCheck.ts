@@ -1,6 +1,7 @@
 /*
  * QCA の**「ならす」ブラシ**（§8.8.1）／**エッジ・マスクの表示切り替え**（§8.8.3）／
- * **解析中のフレーム固定**（§8.8.2）の実機検証 — `fw/angio-design.md`。
+ * **解析中のフレーム固定**（§8.8.2）／**ストレート像**（§8.9）の実機検証 — `fw/angio-design.md`。
+ * 併せて **XA を開いた瞬間にエラーが出ないこと**（§5.10）も見る。
  *
  * 実行:  cd automator && npx tsx src/spike/xaQcaBrushCheck.ts
  *
@@ -58,6 +59,15 @@ interface QcaState {
   points: number;
   unit: string;
   view: { cx0: number; cy0: number; cw: number; ch: number; scale: number; dw: number; dh: number } | null;
+  straight: {
+    cols: number;
+    rows: number;
+    halfWidthPx: number;
+    lengthPx: number;
+    scale: number;
+    dw: number;
+    dh: number;
+  } | null;
 }
 
 async function qcaState(page: Page): Promise<QcaState | null> {
@@ -137,6 +147,80 @@ async function panelInk(page: Page): Promise<{ line: number; area: number; total
   return v as { line: number; area: number; total: number };
 }
 
+/**
+ * ストレート像の canvas の寸法と、描かれている中身の**署名**。
+ *
+ * <p>🔴 署名を見るのは「本画面で直したら帯も変わる」を**画素で**確かめるため。
+ * 「両方に同じ `result` を渡している」ことはコードを読めば分かるが、**描き直しているか**は
+ * 画面からしか分からない（ref に貯めた古い絵が残るのは実際にある壊れ方）。
+ */
+async function stripState(page: Page): Promise<{ w: number; h: number; sig: number; ink: number } | null> {
+  const v = await page.evaluate(`(function () {
+    var c = document.querySelector('[data-testid="qca-straight-canvas"]');
+    if (!c) return null;
+    var ctx = c.getContext("2d");
+    if (!ctx) return null;
+    var d = ctx.getImageData(0, 0, c.width, c.height).data;
+    var sig = 0, ink = 0;
+    for (var i = 0; i < d.length; i += 4) {
+      var r = d[i], g = d[i + 1], b = d[i + 2];
+      if (b > g + 5 && b - r > 30) ink++;
+      sig = (sig * 31 + r + g * 3 + b * 7) | 0;
+    }
+    return { w: c.width, h: c.height, sig: sig, ink: ink };
+  })()`);
+  return v as { w: number; h: number; sig: number; ink: number } | null;
+}
+
+/** 帯の上のクライアント座標（col は 0..1 の相対位置、offset は画像 px）。 */
+async function stripPoint(
+  page: Page,
+  colFrac: number,
+  offsetPx: number,
+  halfWidthPx: number,
+): Promise<{ x: number; y: number }> {
+  const box = await page.getByTestId("qca-straight-canvas").boundingBox();
+  if (!box) throw new Error("ストレート像が見つかりません");
+  const rows = halfWidthPx * 2 + 1;
+  return {
+    x: box.x + box.width * colFrac,
+    y: box.y + ((offsetPx + halfWidthPx) / rows) * box.height,
+  };
+}
+
+/**
+ * 中心線の**弧長**で `frac` の位置にある計測点の添字。
+ *
+ * <p>🔴 添字の割合で代用しない。帯の横は弧長なので、点の間隔が一定でない区間では
+ * 「帯の 35% の位置」と「計測点の 35% 番目」は**別の場所**になる。
+ */
+function indexAtArcFraction(points: readonly [number, number][], frac: number): number {
+  const cum: number[] = [0];
+  for (let i = 1; i < points.length; i++) {
+    cum.push(cum[i - 1] + Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1]));
+  }
+  const target = frac * cum[cum.length - 1];
+  let best = 0;
+  let bd = Infinity;
+  for (let i = 0; i < cum.length; i++) {
+    const d = Math.abs(cum[i] - target);
+    if (d < bd) {
+      bd = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+/** 中心線の全長 [画像 px]（帯の列数の期待値）。 */
+function polylineLengthPx(points: readonly [number, number][]): number {
+  let total = 0;
+  for (let i = 1; i < points.length; i++) {
+    total += Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1]);
+  }
+  return total;
+}
+
 /** 中心線からエッジまでの距離（＝オフセット）。手修正で押し出した量をこれで測る。 */
 function offsets(st: QcaState, side: "left" | "right"): number[] {
   return st.edges.map((e, i) => {
@@ -189,12 +273,52 @@ async function main(): Promise<void> {
     await mainPage.locator('[data-testid^="study-row-"]').first().click();
     await mainPage.locator('[data-testid^="series-row-"]').first().click();
 
+    // 🚨 **「開いた瞬間だけ出るエラー」は、出た後に探しても捕まらない。**
+    //    ページが出来てから `evaluate` で見張りを付けたのでは**間に合わない**
+    //    （実際に間に合わず、"出なかった" ではなく "見ていない" 状態で合格しかけた）。
+    //    `addInitScript` はページの最初のスクリプトより前に走るので、確実に先回りできる。
+    //    間に合ったことは `readyState === "loading"` で残し、**それも合格条件にする**。
+    await driver.app.context().addInitScript(`(function () {
+      var w = window;
+      w.__xaErrWatch = { seen: 0, readyAtInstall: document.readyState };
+      var scan = function () {
+        if (document.querySelector('[data-testid="viewer2d-error"]')) w.__xaErrWatch.seen++;
+      };
+      var start = function () {
+        if (!document.documentElement) return false;
+        new MutationObserver(scan).observe(document.documentElement, { childList: true, subtree: true });
+        scan();
+        return true;
+      };
+      if (!start()) document.addEventListener("readystatechange", start);
+    })()`);
+
     const viewer = await driver.waitForNewPage(
       () => mainPage.getByTestId("viewer2d-toolbar-button").click(),
       (url) => url.includes("2dviewer"),
     );
     await viewer.getByTestId("series-viewer-root").first().waitFor({ state: "visible", timeout: 30_000 });
     await viewer.waitForTimeout(3_000);
+
+    // ── §5.10 開いた瞬間のエラー ──────────────────────────────────
+    const watch = JSON.parse((await viewer.evaluate(`(function () {
+      return JSON.stringify(window.__xaErrWatch || null);
+    })()`)) as string) as { seen: number; readyAtInstall: string } | null;
+    check(
+      watch?.readyAtInstall === "loading",
+      "[E1] ★ページが描画を始める前に見張りを付けられた（間に合っていなければ「見ていない」）",
+      watch,
+    );
+    const errSeen = watch ? watch.seen : -1;
+    check(
+      errSeen === 0,
+      "[E2] ★XA を開く間に「取得に失敗しました」が一度も出ない（空のフレーム列は失敗ではない）",
+      { seen: errSeen },
+    );
+    check(
+      (await viewer.getByTestId("viewer2d-error").count()) === 0,
+      "[E3] 表示後もエラーは出ていない",
+    );
 
     await viewer.getByTestId("cine-seek").fill(String(FRAME));
     await viewer.waitForTimeout(1_500);
@@ -468,6 +592,134 @@ async function main(): Promise<void> {
       edited: stAfter.provenance.editedEdges.length,
     });
     await viewer.screenshot({ path: path.join(OUT_DIR, "5-smoothed.png") }).catch(() => {});
+
+    // ══ §8.9 ストレート像 ═══════════════════════════════════════════
+    // 🔴 見るのは「帯が出る」ことではなく、**帯の座標が本画面の量と同じ意味を持つ**こと。
+    //    横が弧長でなく添字だと、斜めの区間だけ縮んだ帯になる（絵は出るので気付けない）。
+    await viewer.getByTestId("qca-straight-canvas").scrollIntoViewIfNeeded();
+    await viewer.waitForTimeout(400);
+    const stSt = (await qcaState(viewer))!;
+    check(!!stSt.straight, "[ST1a] ストレート像が既定で出ている", stSt.straight);
+    if (!stSt.straight) throw new Error("ストレート像が出ていません");
+    const lengthPx = polylineLengthPx(stSt.centerline);
+    check(
+      Math.abs(stSt.straight.lengthPx - lengthPx) < 0.5,
+      "[ST1b] ★帯の全長が中心線の弧長と一致する",
+      { strip: Number(stSt.straight.lengthPx.toFixed(2)), centerline: Number(lengthPx.toFixed(2)) },
+    );
+    check(
+      Math.abs(stSt.straight.cols - (Math.round(lengthPx) + 1)) <= 1,
+      "[ST1c] ★横は弧長で 1px ごとに刻まれている（計測点の添字ではない）",
+      { cols: stSt.straight.cols, expected: Math.round(lengthPx) + 1, points: stSt.centerline.length },
+    );
+    check(
+      stSt.straight.rows === stSt.straight.halfWidthPx * 2 + 1,
+      "[ST1d] 縦は中心線からの ±オフセット",
+      stSt.straight,
+    );
+    const inkSt = await stripState(viewer);
+    check(!!inkSt && inkSt.ink > 50, "[ST1e] 帯にエッジが描かれている（画素で確認）", inkSt);
+    await viewer.screenshot({ path: path.join(OUT_DIR, "6-straight.png") }).catch(() => {});
+
+    // ★本画面で直したら帯も変わる（別々の絵を持っていない）。
+    const sigBefore = (await stripState(viewer))!.sig;
+    const stMain = (await qcaState(viewer))!;
+    const mi = Math.min(stMain.edges.length - 5, Math.floor(stMain.edges.length / 2) + 20);
+    const me = stMain.edges[mi].right;
+    const mc = stMain.centerline[mi];
+    const mdx = me[0] - mc[0];
+    const mdy = me[1] - mc[1];
+    const ml = Math.hypot(mdx, mdy) || 1;
+    const mFrom = await panelPoint(viewer, stMain, me[0], me[1]);
+    const mTo = await panelPoint(viewer, stMain, me[0] + (mdx / ml) * 4, me[1] + (mdy / ml) * 4);
+    await viewer.mouse.move(mFrom.x, mFrom.y);
+    await viewer.mouse.down();
+    await viewer.mouse.move(mTo.x, mTo.y, { steps: 6 });
+    await viewer.mouse.up();
+    await viewer.waitForTimeout(1_200);
+    const sigAfterMain = (await stripState(viewer))!.sig;
+    check(sigAfterMain !== sigBefore, "[ST2] ★本画面で直すと帯も描き直される（連動）", {
+      before: sigBefore,
+      after: sigAfterMain,
+    });
+
+    // ★帯の上でエッジを掴んで直せる。
+    // 🚨 **モードを明示して入る。** ここまでの検証で「ならす」のままだったため、帯の
+    //    ドラッグが（正しく）ならしブラシとして効き、11 点がまとめて動いた——
+    //    「掴んだ点と直った点が違う」という**偽の不具合**に見えた（2026-08-29）。
+    await viewer.getByTestId("xa-qca-mode-edge").click();
+    await viewer.waitForTimeout(400);
+    // 🚨 触る直前に毎回スクロールし直す。上のボタンを押すと Playwright がそちらを
+    //    可視化するので、帯がスクロール領域の外へ戻る（§18-2 と同じ罠）。
+    await viewer.getByTestId("qca-straight-canvas").scrollIntoViewIfNeeded();
+    await viewer.waitForTimeout(300);
+    const stBefore = (await qcaState(viewer))!;
+    const editedBefore = [...stBefore.provenance.editedEdges];
+    const colFrac = 0.35;
+    const idxAtCol = indexAtArcFraction(stBefore.centerline, colFrac);
+    const offBefore0 = offsets(stBefore, "right")[idxAtCol];
+    const half = stBefore.straight!.halfWidthPx;
+    const grabPt = await stripPoint(viewer, colFrac, offBefore0, half);
+    const dropOffset = offBefore0 + 4;
+    const dropPt = await stripPoint(viewer, colFrac, dropOffset, half);
+    await viewer.mouse.move(grabPt.x, grabPt.y);
+    await viewer.mouse.down();
+    await viewer.mouse.move((grabPt.x + dropPt.x) / 2, (grabPt.y + dropPt.y) / 2, { steps: 4 });
+    await viewer.mouse.move(dropPt.x, dropPt.y, { steps: 4 });
+    await viewer.mouse.up();
+    await viewer.waitForTimeout(1_500);
+    const stAfterStrip = (await qcaState(viewer))!;
+    const newlyEdited = stAfterStrip.provenance.editedEdges.filter((p) => !editedBefore.includes(p));
+    check(newlyEdited.length === 1, "[ST3a] ★帯の上でエッジを 1 点だけ掴んで動かせた", {
+      before: editedBefore.length,
+      after: stAfterStrip.provenance.editedEdges.length,
+      newly: newlyEdited,
+    });
+    // 🔴 `editedEdges` は**計測点の添字**（`pathIndices` で引き直さない。引き直すと別の点になる）。
+    const stripEditIndex = newlyEdited.length ? newlyEdited[0] : -1;
+    // 🔴 掴んだ「列」が狙った計測点に対応しているか。ここがずれると、帯で直したつもりの
+    //    点と実際に直った点が違う——値は出るので画面からは気付けない。
+    check(
+      stripEditIndex >= 0 && Math.abs(stripEditIndex - idxAtCol) <= 2,
+      "[ST3b] ★掴んだ列に対応する計測点が直された",
+      { edited: stripEditIndex, wanted: idxAtCol },
+    );
+    const offAfterStrip = stripEditIndex >= 0 ? offsets(stAfterStrip, "right")[stripEditIndex] : NaN;
+    check(
+      Math.abs(offAfterStrip - dropOffset) < 1.5,
+      "[ST3c] ★落とした位置と同じオフセットになる（帯の縦＝法線方向のずれ）[px]",
+      { want: Number(dropOffset.toFixed(2)), got: Number(offAfterStrip.toFixed(2)) },
+    );
+
+    // ★帯から中間点を置くと中心線が変わる（中心線の編集も帯からできる）。
+    await viewer.getByTestId("xa-qca-mode-waypoint").click();
+    await viewer.waitForTimeout(400);
+    await viewer.getByTestId("qca-straight-canvas").scrollIntoViewIfNeeded();
+    await viewer.waitForTimeout(300);
+    const stWp = (await qcaState(viewer))!;
+    const wpPt = await stripPoint(viewer, 0.6, 5, stWp.straight!.halfWidthPx);
+    await viewer.mouse.click(wpPt.x, wpPt.y);
+    await viewer.waitForTimeout(2_500);
+    const stWpAfter = (await qcaState(viewer))!;
+    check(
+      stWpAfter.provenance.waypoints > stWp.provenance.waypoints,
+      "[ST4a] ★帯から中間点を置ける",
+      { before: stWp.provenance.waypoints, after: stWpAfter.provenance.waypoints },
+    );
+    check(
+      stWpAfter.centerlineToken !== stWp.centerlineToken,
+      "[ST4b] ★中心線が実際に変わった（帯からの編集が本体へ効く）",
+      { before: stWp.centerlineToken, after: stWpAfter.centerlineToken },
+    );
+    await viewer.screenshot({ path: path.join(OUT_DIR, "7-straight-edited.png") }).catch(() => {});
+
+    // トグルで消せる／戻せる。
+    await viewer.getByTestId("xa-qca-show-straight").click();
+    await viewer.waitForTimeout(500);
+    check((await viewer.getByTestId("qca-straight-canvas").count()) === 0, "[ST5a] トグルで帯を消せる");
+    await viewer.getByTestId("xa-qca-show-straight").click();
+    await viewer.waitForTimeout(700);
+    check((await viewer.getByTestId("qca-straight-canvas").count()) === 1, "[ST5b] トグルで戻せる");
 
     // ══ 錠は必ず外れる ═══════════════════════════════════════════════
     // 🔴 外れ残ると「フレームが二度と送れないビューア」になり、原因が「前に開いた解析

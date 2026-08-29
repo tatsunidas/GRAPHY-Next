@@ -1081,7 +1081,7 @@ export function SeriesViewer({
           </div>
         </div>
       ) : (
-        <Viewer2D imageIds={displayImageIds} imageIndex={zc} overlays={overlays} fill={fillHeight} showControls={showControls} viewSyncEnabled={syncOn} referenceLinesEnabled={referenceLinesEnabled} referenceLabel={referenceLabel} commandKey={commandKey} roiContext={roiContext} renderOverlay={renderFusionOverlay} thickSlab={effectiveThick} refreshKey={calibVersion} />
+        <Viewer2D imageIds={displayImageIds} imageIndex={zc} overlays={overlays} fill={fillHeight} showControls={showControls} viewSyncEnabled={syncOn} referenceLinesEnabled={referenceLinesEnabled} referenceLabel={referenceLabel} commandKey={commandKey} roiContext={roiContext} renderOverlay={renderFusionOverlay} thickSlab={effectiveThick} refreshKey={calibVersion} pendingImages={!xaReady} />
       )}
 
       {showControls && (
@@ -1398,6 +1398,8 @@ export function SeriesViewer({
           isSubtracted={!!dsaToken}
           saveContext={{
             studyUid,
+            // 解析状態の保存先（ROI と同じ患者ごとの JSON。§14.5）。
+            patientKey,
             // 保存の参照先は**合成 imageId ではなくネイティブフレーム**の元インスタンス。
             sopInstanceUid: sopUidFromImageId(zStack[zc] ?? ""),
             frameIndex: zc,
@@ -1420,6 +1422,8 @@ export function SeriesViewer({
           isSubtracted={!!dsaToken}
           saveContext={{
             studyUid,
+            // 解析状態の保存先（ROI と同じ患者ごとの JSON。§14.5）。
+            patientKey,
             sopInstanceUid: sopUidFromImageId(zStack[zc] ?? ""),
             frameIndex: zc,
             dsa: dsaState ? { maskFrames: dsaState.maskFrames, dx: dsaState.dx, dy: dsaState.dy } : null,
@@ -1440,6 +1444,8 @@ export function SeriesViewer({
           saveContext={{
             studyUid,
             // 保存の参照先は合成 imageId ではなく**ネイティブフレーム**の元インスタンス。
+            // 🔴 QLV には解析状態の保存（§14.5）をまだ入れていない。QCA/QVA と手修正の
+            //    作りが違う（ED/ES の輪郭）ので、同じ器に入れる前に鍵の設計が要る。
             sopInstanceUidAt: (i) => sopUidFromImageId(zStack[i] ?? "") ?? null,
           }}
           frameTimeMs={fps > 0 ? 1000 / fps : null}

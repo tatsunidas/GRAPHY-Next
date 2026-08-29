@@ -13,11 +13,12 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getRenderingEngine } from "@cornerstonejs/core";
-import { annotation as csAnnotation } from "@cornerstonejs/tools";
+import { annotation as csAnnotation, utilities as csToolsUtilities } from "@cornerstonejs/tools";
 import {
   createQcaSr,
   createQvaSr,
   createXaPresentationState,
+  deleteSeries,
   type AngioPresentationRequest,
 } from "../api";
 import { useI18n } from "../i18n/i18n";
@@ -26,6 +27,13 @@ import { readModalitySlice } from "./pixelCalibration";
 import { QcaEditor, type QcaEditMode } from "./QcaEditor";
 import { defaultBrushRadius, mergeEdgeEdits } from "./qcaBrush";
 import { lockSliceNavigation } from "./sliceNavigationLock";
+import {
+  analysisId,
+  findAnalysis,
+  type QcaAnalysisKey,
+  type SavedQcaAnalysis,
+} from "./qcaAnalysisState";
+import { getQcaAnalyses, loadRoisCached, upsertQcaAnalysis } from "./roiSaveStore";
 import { runQca, type QcaManualEdits, type QcaReferenceMode, type QcaResult } from "./qca";
 import {
   canCalibrateWith,
@@ -239,9 +247,22 @@ function collectLengthPicks(
   return out;
 }
 
+/** 保存時刻を画面用に短くする。読めない ISO をそのまま出さない。 */
+function formatSavedAt(iso: string): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return iso;
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 /** 保存（GSPS / SR）に必要な、表示中フレームの素性。SeriesViewer から渡す。 */
 export interface XaSaveContext {
   studyUid: string;
+  /**
+   * 解析状態の保存先（患者ごとの JSON。ROI と同じ器。§14.5）。
+   * 空なら解析状態は残さない（＝毎回自動解析からやり直しになる）。
+   */
+  patientKey?: string;
   /** 表示中フレームの元インスタンス（＝ラン）。 */
   sopInstanceUid: string | null;
   /** 表示中フレーム（**0 origin**。DICOM へ書くときに +1 する）。 */
@@ -329,6 +350,20 @@ export function XaAnalysisDialog({
    */
   const [showEdges, setShowEdges] = useState(true);
   const [showMask, setShowMask] = useState(false);
+  // ストレート像は既定 ON（§8.9）。曲がりの影響が消えるので、外れたエッジはここが一番早い。
+  const [showStraight, setShowStraight] = useState(true);
+  /**
+   * この計測に対して保管庫に残っている解析状態（§14.5）。
+   *
+   * <p>🔴 **「結果」ではなく「入力」を戻す。** 復元したら同じ入力でもう一度解析する
+   * ——保存した数値をそのまま表示すると、アルゴリズムを直したときに**古い数値が
+   * 新しい画面に混ざる**。
+   */
+  const [savedAnalysis, setSavedAnalysis] = useState<SavedQcaAnalysis | null>(null);
+  /** 復元したことを画面に出す（黙って手修正が入っていると「自動解析が変」に見える）。 */
+  const [restoredAt, setRestoredAt] = useState<string | null>(null);
+  /** 保存済みの SR があるときに出す「上書き / 新規」の選択。 */
+  const [srChoice, setSrChoice] = useState(false);
 
   /**
    * 🔴 **解析結果がある間はフレームを固定する**（実機で言われた・2026-08-28）。
@@ -384,8 +419,50 @@ export function XaAnalysisDialog({
     },
     [calib, t],
   );
+  /**
+   * 一覧に出す「この線は何に使われているか」。
+   *
+   * <p>🔴 **同じ線を解析区間と校正の両方に使うのは事故**（§8.7。カテーテル校正用の 9.2px の
+   * 線がそのまま解析区間に使われ、10 点しか測れないまま `MLD > RVD` が出た）。
+   * だから**どちらの一覧にも他方での使用を出す**——選ぶ前に気付けるようにする。
+   */
+  const pickUsage = useCallback(
+    (p: LengthPick): string => {
+      const tags: string[] = [];
+      if (locked.has(p.uid)) tags.push(t("xa.analysis.usedForAnalysis"));
+      if (calibPick && p.uid === calibPick.uid) tags.push(t("xa.analysis.usedForCalib"));
+      return tags.length ? ` · ${tags.join(" / ")}` : "";
+    },
+    [locked, calibPick, t],
+  );
+  /** 解析区間と校正に**同じ線**を選んでいる（§8.7 の事故そのもの）。 */
+  const samePickForBoth = !!pick && !!calibPick && pick.uid === calibPick.uid;
   /** 解析区間として短すぎるか（プロファイル半径の 3 倍が下限）。 */
   const tooShort = !!pick && segmentTooShort(pick.lengthPx);
+
+  /**
+   * 選んでいる線を**画像の上で光らせる**。
+   *
+   * <p>🚨 一覧のラベルだけでは「画面のどの線か」が分からない。解析区間と空間校正は
+   * 別々に選ぶ（§8.7）が、**候補は同じ計測の一覧**なので、文字列は同じ顔で並ぶ
+   * （`#1 — 45.9 mm（長さ）`）。実機で「どちらを選んでいるのか分かりにくい」と言われた。
+   *
+   * <p>ハイライトの実体は **Cornerstone の annotation selection**（本体の選択表示と同じ）。
+   * 独自の強調を重ねると、本体の選択と二重に見えて余計に分からなくなる。
+   */
+  const highlightPick = useCallback((uid: string | null) => {
+    try {
+      for (const u of csAnnotation.selection.getAnnotationsSelected() ?? []) {
+        csAnnotation.selection.setAnnotationSelected(u, false);
+      }
+      if (uid) csAnnotation.selection.setAnnotationSelected(uid, true, false);
+      const engine = getRenderingEngine(ENGINE_ID);
+      const ids = (engine?.getViewports() ?? []).map((v) => v.id);
+      if (ids.length) csToolsUtilities.triggerAnnotationRenderForViewportIds(ids);
+    } catch {
+      /* 光らせられなくても解析は続けられる */
+    }
+  }, []);
 
   const applyCalibration = (mm: number, method: "catheter" | "ruler", note: string) => {
     // 🔴 校正は**直線のみ**（`calibPicks`）。曲線の経路長を既知長と突き合わせると、
@@ -466,17 +543,55 @@ export function XaAnalysisDialog({
       polylines,
       texts,
     })
-      .then((r) => setSaved(t("xa.analysis.savedGsps", { uid: shortUid(r.sopInstanceUid) })))
+      .then((r) => {
+        setSaved(t("xa.analysis.savedGsps", { uid: shortUid(r.sopInstanceUid) }));
+        // 表示状態を残したなら、やり直せる材料（解析状態）も一緒に残す。
+        // 🔴 SR の参照は触らない（GSPS は SR の版とは無関係）。
+        persistAnalysis(undefined);
+      })
       .catch(() => setError(t("xa.analysis.saveFailed")))
       .finally(() => setSaving(false));
   };
 
-  /** 計測値を Comprehensive SR として保存する（QVA なら瘤の指標込み）。 */
+  /**
+   * 保存の入口。**同じ解析から前に書いた SR があるなら、上書きか新規かを聞いてから**書く。
+   *
+   * <p>🔴 黙ってどちらかに決めない。新規で増え続けるのも、前の版が消えるのも、
+   * どちらも「そのつもりが無かった」と言われる類の副作用。聞くのが一番安い。
+   */
   const saveQca = () => {
+    if (savedAnalysis?.sr) {
+      setSrChoice(true);
+      return;
+    }
+    doSaveQca(false);
+  };
+
+  /**
+   * 計測値を Comprehensive SR として保存する（QVA なら瘤の指標込み）。
+   *
+   * @param replace 前の SR を保管庫から**削除してから**書く（＝上書き）
+   */
+  const doSaveQca = (replace: boolean) => {
     const sop = saveContext.sopInstanceUid;
     if (!sop || !result) return;
+    setSrChoice(false);
     setSaving(true);
     setError(null);
+    // 🔴 前の SR は「新しいものが書けてから」ではなく先に消す。後で消す作りにすると、
+    //    書き込みに失敗したときに**前の版だけが残って新しい値が無い**状態になり得るが、
+    //    先に消せば「消えたが書けなかった」が画面に出る（黙って古い値が残るより良い）。
+    const before =
+      replace && savedAnalysis?.sr
+        ? deleteSeries(saveContext.studyUid, savedAnalysis.sr.seriesInstanceUid).catch(() => {
+            // 既に手で消されていることがある。消せなくても保存は続ける（新規として残る）。
+          })
+        : Promise.resolve();
+    void before.then(() => doSaveQcaInner(sop));
+  };
+
+  const doSaveQcaInner = (sop: string) => {
+    if (!result) return;
     const c = calibrationForImageId(imageId);
     if (mode === "qva") {
       createQvaSr({
@@ -509,7 +624,10 @@ export function XaAnalysisDialog({
             }
           : null,
       })
-        .then((r) => setSaved(t("xa.analysis.savedSr", { uid: shortUid(r.sopInstanceUid) })))
+        .then((r) => {
+          setSaved(t("xa.analysis.savedSr", { uid: shortUid(r.sopInstanceUid) }));
+          persistAnalysis({ seriesInstanceUid: r.seriesInstanceUid, sopInstanceUid: r.sopInstanceUid });
+        })
         .catch(() => setError(t("xa.analysis.saveFailed")))
         .finally(() => setSaving(false));
       return;
@@ -532,7 +650,10 @@ export function XaAnalysisDialog({
       percentAreaStenosis: result.percentAreaStenosis,
       lesionLength: result.lesionLength,
     })
-      .then((r) => setSaved(t("xa.analysis.savedSr", { uid: shortUid(r.sopInstanceUid) })))
+      .then((r) => {
+        setSaved(t("xa.analysis.savedSr", { uid: shortUid(r.sopInstanceUid) }));
+        persistAnalysis({ seriesInstanceUid: r.seriesInstanceUid, sopInstanceUid: r.sopInstanceUid });
+      })
       .catch(() => setError(t("xa.analysis.saveFailed")))
       .finally(() => setSaving(false));
   };
@@ -826,6 +947,97 @@ export function XaAnalysisDialog({
       .finally(() => setBusy(false));
   };
 
+  /* ── 解析状態の保存と復元（§14.5）─────────────────────────────── */
+
+  /** いまの解析を指す鍵。計測・フレーム・モードまで含める。 */
+  const analysisKey = useMemo((): QcaAnalysisKey | null => {
+    const sop = saveContext.sopInstanceUid;
+    if (!sop || !pick) return null;
+    return { sopInstanceUid: sop, frame: saveContext.frameIndex, pickUid: pick.uid, mode };
+  }, [saveContext.sopInstanceUid, saveContext.frameIndex, pick, mode]);
+
+  /**
+   * 保存済みの解析があれば**自動で復元して再解析する**。
+   *
+   * <p>🔴 **1 つの鍵につき 1 回だけ**当てる。毎回当てると、利用者が「手修正をすべて破棄」した
+   * 直後に**復元が勝って元に戻る**（何をしても戻ってくる、という最悪の壊れ方になる）。
+   */
+  const restoredKeys = useRef(new Set<string>());
+  useEffect(() => {
+    const patientKey = saveContext.patientKey;
+    if (!patientKey || !analysisKey) return;
+    const id = analysisId(analysisKey);
+    if (restoredKeys.current.has(id)) return;
+    let cancelled = false;
+    void loadRoisCached(patientKey)
+      .catch(() => null)
+      .then(() => {
+        if (cancelled) return;
+        const found = findAnalysis(getQcaAnalyses(patientKey), analysisKey);
+        setSavedAnalysis(found);
+        if (!found) return;
+        restoredKeys.current.add(id);
+        setWaypoints(found.waypoints.map((w) => [w[0], w[1]] as [number, number]));
+        setEdgeEdits(found.edgeEdits);
+        setEdgeToken(found.edgeToken);
+        setTrim(found.trim);
+        setRefMode(found.reference);
+        setRestoredAt(found.savedAt);
+        // 入力を戻したら**そのまま解析まで走らせる**。押させると「復元したのに何も出ない」になる。
+        runAnalysis({
+          waypoints: found.waypoints.map((w) => [w[0], w[1]] as [number, number]),
+          edges:
+            found.edgeToken && Object.keys(found.edgeEdits).length
+              ? { token: found.edgeToken, byPathIndex: found.edgeEdits }
+              : null,
+          trim: found.trim,
+          reference: found.reference,
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [analysisKey, saveContext.patientKey]);
+
+  /**
+   * いまの解析状態を保管庫へ残す。
+   *
+   * <p>⚠️ **保存を押したときだけ**残す。編集のたびに残すと、捨てたはずの手修正が
+   * 次に開いたときに戻ってくる（利用者は「保存した」ものだけが残ると考える）。
+   */
+  const persistAnalysis = useCallback(
+    (sr: SavedQcaAnalysis["sr"] | undefined) => {
+      const patientKey = saveContext.patientKey;
+      if (!patientKey || !analysisKey) return;
+      const next: SavedQcaAnalysis = {
+        id: analysisId(analysisKey),
+        mode,
+        studyUid: saveContext.studyUid,
+        seriesUid,
+        sopInstanceUid: analysisKey.sopInstanceUid,
+        frame: analysisKey.frame,
+        pickUid: analysisKey.pickUid,
+        edgeToken,
+        waypoints: waypoints.map((w) => [w[0], w[1]] as [number, number]),
+        edgeEdits,
+        trim,
+        reference: refMode,
+        sr: sr === undefined ? (savedAnalysis?.sr ?? null) : sr,
+        savedAt: new Date().toISOString(),
+      };
+      setSavedAnalysis(next);
+      // 復元済みとして印を付ける（保存した直後に自分の復元が走って上書きするのを防ぐ）。
+      restoredKeys.current.add(next.id);
+      // 🔴 **失敗を黙って飲まない。** 保存に失敗したまま「保存しました」と出ると、
+      //    次に開いたときに復元されず「動いていない」としか見えない（原因も辿れない）。
+      void upsertQcaAnalysis(patientKey, next).then((r) => {
+        if (!r.ok) setError(t("xa.analysis.stateSaveFailed", { error: r.error ?? "" }));
+      });
+    },
+    [saveContext.patientKey, saveContext.studyUid, analysisKey, mode, seriesUid, edgeToken, waypoints, edgeEdits, trim, refMode, savedAnalysis],
+  );
+
   return (
     <div style={backdrop} onClick={onClose}>
       <div style={panel} onClick={(e) => e.stopPropagation()}>
@@ -844,19 +1056,36 @@ export function XaAnalysisDialog({
             <div style={hint}>{t("xa.analysis.needLength")}</div>
           ) : (
             <>
-              <select
-                value={selected}
-                onChange={(e) => setSelected(Number(e.target.value))}
-                style={select}
-                data-testid="xa-analysis-pick"
-              >
-                {picks.map((p, i) => (
-                  <option key={p.uid} value={i}>
-                    {pickLabel(p, i)}
-                    {locked.has(p.uid) ? ` 🔒 ${t("xa.analysis.locked")}` : ""}
-                  </option>
-                ))}
-              </select>
+              <div style={row}>
+                <select
+                  value={selected}
+                  onChange={(e) => {
+                    const i = Number(e.target.value);
+                    setSelected(i);
+                    // 選んだ瞬間に**画面のどの線か**を示す（文字列だけでは分からない）。
+                    highlightPick(picks[i]?.uid ?? null);
+                  }}
+                  style={select}
+                  data-testid="xa-analysis-pick"
+                >
+                  {picks.map((p, i) => (
+                    <option key={p.uid} value={i}>
+                      {pickLabel(p, i)}
+                      {pickUsage(p)}
+                      {locked.has(p.uid) ? ` 🔒 ${t("xa.analysis.locked")}` : ""}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  style={btn}
+                  data-testid="xa-analysis-pick-show"
+                  disabled={!pick}
+                  onClick={() => highlightPick(pick?.uid ?? null)}
+                  title={t("xa.analysis.showOnImageHint")}
+                >
+                  {t("xa.analysis.showOnImage")}
+                </button>
+              </div>
               {tooShort && (
                 <div style={warn} data-testid="xa-pick-too-short">
                   {t("xa.analysis.tooShort", { min: minSegmentPx().toFixed(0) })}
@@ -898,18 +1127,38 @@ export function XaAnalysisDialog({
           {calibPicks.length === 0 ? (
             <div style={warn} data-testid="xa-calib-need-line">{t("xa.analysis.needCalibLine")}</div>
           ) : (
-            <select
-              value={calibSelected}
-              onChange={(e) => setCalibSelected(Number(e.target.value))}
-              style={select}
-              data-testid="xa-calib-pick"
-            >
-              {calibPicks.map((p, i) => (
-                <option key={p.uid} value={i}>
-                  {pickLabel(p, picks.indexOf(p))}
-                </option>
-              ))}
-            </select>
+            <div style={row}>
+              <select
+                value={calibSelected}
+                onChange={(e) => {
+                  const i = Number(e.target.value);
+                  setCalibSelected(i);
+                  highlightPick(calibPicks[i]?.uid ?? null);
+                }}
+                style={select}
+                data-testid="xa-calib-pick"
+              >
+                {calibPicks.map((p, i) => (
+                  <option key={p.uid} value={i}>
+                    {pickLabel(p, picks.indexOf(p))}
+                    {pickUsage(p)}
+                  </option>
+                ))}
+              </select>
+              <button
+                style={btn}
+                data-testid="xa-calib-pick-show"
+                disabled={!calibPick}
+                onClick={() => highlightPick(calibPick?.uid ?? null)}
+                title={t("xa.analysis.showOnImageHint")}
+              >
+                {t("xa.analysis.showOnImage")}
+              </button>
+            </div>
+          )}
+          {/* 🔴 §8.7 の事故そのもの。選ぶ前に気付けるように、選んだ時点で言う。 */}
+          {samePickForBoth && (
+            <div style={warn} data-testid="xa-calib-same-as-analysis">{t("xa.analysis.sameLineWarn")}</div>
           )}
           <div style={row}>
             <label style={label}>
@@ -985,6 +1234,12 @@ export function XaAnalysisDialog({
         <div style={section} data-step="analysis">
           <div style={sectionTitle}>{t(mode === "qva" ? "qva.analysis" : "xa.analysis.qca")}</div>
           {mode === "qva" && <div style={hint} data-testid="qva-scope">{t("qva.scope")}</div>}
+          {/* 🔴 復元したことを言う。黙って手修正が入っていると「自動解析が変」に見える。 */}
+          {restoredAt && (
+            <div style={restoredBox} data-testid="xa-analysis-restored">
+              {t("xa.analysis.restored", { at: formatSavedAt(restoredAt) })}
+            </div>
+          )}
           <div style={row}>
             <button style={primaryBtn} data-testid="xa-qca-run" onClick={() => runAnalysis()} disabled={!pick || busy}>
               {busy ? t("common.loading") : t("xa.analysis.run")}
@@ -1045,6 +1300,15 @@ export function XaAnalysisDialog({
                 >
                   {t("xa.qca.showMask")}
                 </button>
+                <button
+                  style={showStraight ? primaryBtn : btn}
+                  data-testid="xa-qca-show-straight"
+                  aria-pressed={showStraight}
+                  onClick={() => setShowStraight((v) => !v)}
+                  title={t("xa.qca.showStraightHint")}
+                >
+                  {t("xa.qca.showStraight")}
+                </button>
                 {(editMode === "brush" || editMode === "smooth") && (
                   <label style={{ ...label, fontSize: 11 }}>
                     {t("xa.qca.brushRadius", { unit: result.unit })}
@@ -1080,6 +1344,7 @@ export function XaAnalysisDialog({
                 brushRadius={brushRadius ?? defaultBrushRadius(result.unit)}
                 showEdges={showEdges}
                 showMask={showMask}
+                showStraight={showStraight}
                 onEdgeEdit={(pathIndex, side, offset) => {
                   if (!edgeToken) return;
                   const next = { ...edgeEdits, [pathIndex]: { ...edgeEdits[pathIndex], [side]: offset } };
@@ -1223,6 +1488,25 @@ export function XaAnalysisDialog({
             </button>
             {saved && <span style={hint}>{saved}</span>}
           </div>
+          {/* 🔴 前に書いた SR があるときだけ聞く。毎回聞くと「保存」が 2 手になる。 */}
+          {srChoice && savedAnalysis?.sr && (
+            <div style={choiceBox} data-testid="xa-save-sr-choice">
+              <div>{t("xa.analysis.srExists", { uid: shortUid(savedAnalysis.sr.sopInstanceUid) })}</div>
+              <div style={{ ...row, marginTop: 6 }}>
+                <button style={primaryBtn} data-testid="xa-save-sr-replace" onClick={() => doSaveQca(true)}>
+                  {t("xa.analysis.srReplace")}
+                </button>
+                <button style={btn} data-testid="xa-save-sr-new" onClick={() => doSaveQca(false)}>
+                  {t("xa.analysis.srNew")}
+                </button>
+                <button style={btn} data-testid="xa-save-sr-cancel" onClick={() => setSrChoice(false)}>
+                  {t("common.cancel")}
+                </button>
+              </div>
+              {/* 🚨 外へ送った後では取り返せない。上書きの前に必ず言う。 */}
+              <div style={warnText}>{t("xa.analysis.srReplaceWarn")}</div>
+            </div>
+          )}
           <div style={hint}>{t("xa.analysis.saveHint")}</div>
         </div>
 
@@ -1512,6 +1796,25 @@ const btn: React.CSSProperties = {
 };
 const primaryBtn: React.CSSProperties = { ...btn, background: "#2f6f9f", color: "#fff", borderColor: "#2a6088" };
 const hint: React.CSSProperties = { fontSize: 11, color: "#66788a", marginTop: 4 };
+const choiceBox: React.CSSProperties = {
+  marginTop: 6,
+  padding: 8,
+  border: "1px solid #d9c08a",
+  borderRadius: 4,
+  background: "#fdf7e6",
+  fontSize: 11,
+  color: "#5c4a1e",
+};
+const warnText: React.CSSProperties = { fontSize: 11, color: "#a5642a", marginTop: 6 };
+const restoredBox: React.CSSProperties = {
+  fontSize: 11,
+  color: "#2f6f4f",
+  background: "#eaf6ef",
+  border: "1px solid #bfe0cd",
+  borderRadius: 4,
+  padding: "4px 6px",
+  marginBottom: 4,
+};
 const warn: React.CSSProperties = { fontSize: 11, color: "#a5642a", marginTop: 4 };
 const errorText: React.CSSProperties = { fontSize: 12, color: "#b3452f", marginBottom: 8 };
 const table: React.CSSProperties = { fontSize: 12, borderCollapse: "collapse", marginBottom: 8 };

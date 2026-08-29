@@ -27,6 +27,12 @@ import { useI18n } from "../i18n/i18n";
 import { publishQcaSnapshot } from "./debugApi";
 import type { QcaResult } from "./qca";
 import { brushEdges, type BrushedEdge, smoothEdges, detectEdgeOutliers } from "./qcaBrush";
+import {
+  buildStraightened,
+  pointAtFractionalIndex,
+  straightenHalfWidth,
+  straightenedToImageData,
+} from "./qcaStraighten";
 
 /** 編集モード。 */
 /**
@@ -60,6 +66,14 @@ export interface QcaEditorProps {
   showEdges?: boolean;
   /** 囲っている内腔を半透明で塗るか（線より「面」のほうが当たり外れを掴みやすい）。 */
   showMask?: boolean;
+  /**
+   * 中心線に沿って**まっすぐ引き延ばした像**（ストレート像）も出すか（§8.9）。
+   *
+   * <p>曲がった血管を曲がったまま見ると、エッジのずれが「曲がりのせい」に見えて
+   * 判別しにくい。帯にすると、径の変化と外れが**上下のがたつき**としてそのまま出る。
+   * 帯の上でも中心線（中間点）とエッジを直せて、本画面と**同じ結果**を書き換える。
+   */
+  showStraight?: boolean;
   onWaypointsChange: (next: [number, number][]) => void;
   onEdgeEdit: (pathIndex: number, side: "left" | "right", offset: number) => void;
   /** ブラシ 1 回ぶん（複数点）。`qcaBrush.brushEdges` の結果をそのまま渡す。 */
@@ -69,6 +83,8 @@ export interface QcaEditorProps {
 /** 表示パネルの最大寸法 [px]。 */
 const MAX_W = 460;
 const MAX_H = 300;
+/** ストレート像の最大の高さ [px]（横は MAX_W に合わせる）。 */
+const MAX_STRIP_H = 190;
 /** 掴んだと判定する距離 [画面 px]。 */
 const GRAB_PX = 8;
 
@@ -84,6 +100,7 @@ export function QcaEditor({
   brushRadius,
   showEdges = true,
   showMask = false,
+  showStraight = true,
   highlightIndex,
   onWaypointsChange,
   onEdgeEdit,
@@ -91,6 +108,18 @@ export function QcaEditor({
 }: QcaEditorProps) {
   const { t } = useI18n();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const stripRef = useRef<HTMLCanvasElement | null>(null);
+  /**
+   * ストレート像の上のドラッグ。
+   *
+   * <p>🔴 本画面と**別に持つ**。同じ状態を共有すると、片方で掴んだまま
+   * もう片方へポインタが入ったときに座標系が入れ替わり、掴んだ点が飛ぶ。
+   */
+  const [stripDrag, setStripDrag] = useState<
+    | { kind: "waypoint"; index: number }
+    | { kind: "edge" | "brush" | "smooth"; pathIndex: number; side: "left" | "right"; centerIndex: number }
+    | null
+  >(null);
   const [drag, setDrag] = useState<
     | { kind: "waypoint"; index: number }
     | { kind: "edge"; pathIndex: number; side: "left" | "right" }
@@ -155,33 +184,40 @@ export function QcaEditor({
    * <p>ハイライトの追従でマウス移動のたびに作り直すと、crop 全画素の走査が毎フレーム走る。
    * 画像そのものが変わる条件（画素・crop・窓）だけで作り直す。
    */
-  const backdropCanvas = useMemo(() => {
+  /**
+   * 画素 → 8bit の窓。
+   *
+   * <p>🔴 **本画面とストレート像で同じ窓を使う。** 片方だけ自動窓にすると、同じ血管が
+   * 隣同士で違う明るさに出て「別の画像」に見える（見比べる道具なので致命的）。
+   */
+  const grayWindow = useMemo(() => {
     if (!view) return null;
+    if (voi && voi.width > 0) {
+      return { lo: voi.center - voi.width / 2, hi: voi.center + voi.width / 2 };
+    }
+    const { cx0, cy0, cw, ch } = view;
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let y = cy0; y < cy0 + ch; y++) {
+      for (let x = cx0; x < cx0 + cw; x++) {
+        const v = pixels[y * width + x];
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+      }
+    }
+    if (!(hi > lo)) hi = lo + 1;
+    return { lo, hi };
+  }, [pixels, width, view, voi]);
+
+  const backdropCanvas = useMemo(() => {
+    if (!view || !grayWindow) return null;
     const { cx0, cy0, cw, ch } = view;
     const off = document.createElement("canvas");
     off.width = cw;
     off.height = ch;
     const octx = off.getContext("2d");
     if (!octx) return null;
-
-    // 画素 → 8bit（ビューポートと同じ窓を使う。違う見え方だと「別の画像」に見える）。
-    let lo: number;
-    let hi: number;
-    if (voi && voi.width > 0) {
-      lo = voi.center - voi.width / 2;
-      hi = voi.center + voi.width / 2;
-    } else {
-      lo = Infinity;
-      hi = -Infinity;
-      for (let y = cy0; y < cy0 + ch; y++) {
-        for (let x = cx0; x < cx0 + cw; x++) {
-          const v = pixels[y * width + x];
-          if (v < lo) lo = v;
-          if (v > hi) hi = v;
-        }
-      }
-      if (!(hi > lo)) hi = lo + 1;
-    }
+    const { lo, hi } = grayWindow;
     const img = octx.createImageData(cw, ch);
     for (let y = 0; y < ch; y++) {
       for (let x = 0; x < cw; x++) {
@@ -196,7 +232,39 @@ export function QcaEditor({
     }
     octx.putImageData(img, 0, 0);
     return off;
-  }, [pixels, width, view, voi]);
+  }, [pixels, width, view, grayWindow]);
+
+  /**
+   * ストレート像（§8.9）。中心線・法線・窓が変われば作り直す。
+   *
+   * <p>計算量は 列 × 行（実測 240 × 33 ≒ 8 千サンプル）で、手修正のたびに走っても軽い。
+   * **中心線が変われば像も変わる**——これが「連動している」ことの実体で、
+   * 別々に持つと片方だけ古い絵が残る。
+   */
+  const straight = useMemo(() => {
+    if (!showStraight || !grayWindow) return null;
+    return buildStraightened({
+      centerline: result.centerline,
+      normals: result.normals,
+      pixels,
+      width,
+      height,
+      halfWidthPx: straightenHalfWidth(result.edgeOffsets),
+      lo: grayWindow.lo,
+      hi: grayWindow.hi,
+    });
+  }, [showStraight, grayWindow, result, pixels, width, height]);
+
+  /** 帯の表示寸法（等方。縦だけ伸ばすと径が太って見えるのでやらない）。 */
+  const stripView = useMemo(() => {
+    if (!straight) return null;
+    const scale = Math.max(1, Math.min(MAX_W / straight.cols, MAX_STRIP_H / straight.rows));
+    return {
+      scale,
+      dw: Math.round(straight.cols * scale),
+      dh: Math.round(straight.rows * scale),
+    };
+  }, [straight]);
 
   // ── 描画 ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -318,6 +386,167 @@ export function QcaEditor({
   // 🔴 `mode` と `brushRadius` を依存に入れる——外れ点の印は smooth のときだけ描き、
   //    半径で変わる。入れ忘れると「モードを切り替えても印が出ない / 消えない」になる。
   }, [backdropCanvas, result, waypoints, view, highlightIndex, mode, brushRadius, showEdges, showMask]);
+
+  // 実機検証が帯の上の座標を計算できるよう、帯の座標系も公開する。
+  useEffect(() => {
+    publishQcaSnapshot({
+      straight:
+        straight && stripView
+          ? {
+              cols: straight.cols,
+              rows: straight.rows,
+              halfWidthPx: straight.halfWidthPx,
+              lengthPx: straight.lengthPx,
+              scale: stripView.scale,
+              dw: stripView.dw,
+              dh: stripView.dh,
+            }
+          : null,
+    });
+  }, [straight, stripView]);
+
+  // ── ストレート像の描画 ───────────────────────────────────────────
+  // 🔴 本画面と**同じ描き順**（面 → 線 → 印）。順序が違うと、同じ状態なのに
+  //    片方だけ輪郭が沈んで見え、どちらが正しいのか分からなくなる。
+  useEffect(() => {
+    const canvas = stripRef.current;
+    if (!canvas || !straight || !stripView) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    canvas.width = stripView.dw;
+    canvas.height = stripView.dh;
+    ctx.imageSmoothingEnabled = false;
+
+    // 画像（等倍で焼いてから拡大）。
+    const off = document.createElement("canvas");
+    off.width = straight.cols;
+    off.height = straight.rows;
+    const octx = off.getContext("2d");
+    if (!octx) return;
+    octx.putImageData(straightenedToImageData(straight, octx), 0, 0);
+    ctx.clearRect(0, 0, stripView.dw, stripView.dh);
+    ctx.drawImage(off, 0, 0, stripView.dw, stripView.dh);
+
+    const sxOf = (col: number) => col * stripView.scale;
+    const syOf = (offset: number) => (offset + straight.halfWidthPx) * stripView.scale;
+    const colOf = (i: number) => straight.indexToCol[i] ?? 0;
+
+    // 内腔の面（本画面と同じく線より先に敷く）。
+    if (showMask && result.edgeOffsets.length >= 2) {
+      ctx.fillStyle = "rgba(79, 195, 247, 0.28)";
+      ctx.beginPath();
+      ctx.moveTo(sxOf(colOf(0)), syOf(result.edgeOffsets[0].left));
+      for (let i = 1; i < result.edgeOffsets.length; i++) {
+        ctx.lineTo(sxOf(colOf(i)), syOf(result.edgeOffsets[i].left));
+      }
+      for (let i = result.edgeOffsets.length - 1; i >= 0; i--) {
+        ctx.lineTo(sxOf(colOf(i)), syOf(result.edgeOffsets[i].right));
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    const strokeOffsets = (side: "left" | "right", color: string) => {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      for (let i = 0; i < result.edgeOffsets.length; i++) {
+        const x = sxOf(colOf(i));
+        const y = syOf(result.edgeOffsets[i][side]);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    };
+    if (showEdges) {
+      strokeOffsets("left", "#4fc3f7");
+      strokeOffsets("right", "#4fc3f7");
+    }
+
+    // 中心線は帯の真ん中の水平線（＝オフセット 0）。まっすぐなのが道具の要点。
+    ctx.strokeStyle = "#7fd1b9";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, syOf(0));
+    ctx.lineTo(stripView.dw, syOf(0));
+    ctx.stroke();
+
+    // 外れ点の印（本画面と同じ条件で出す）。
+    if (mode === "smooth" && showEdges) {
+      ctx.strokeStyle = "#ff7b72";
+      ctx.lineWidth = 1.5;
+      for (const side of ["left", "right"] as const) {
+        const values = result.edgeOffsets.map((o) => o[side]);
+        for (const i of detectEdgeOutliers(result.positions, values, brushRadius)) {
+          if (!result.edgeOffsets[i]) continue;
+          ctx.beginPath();
+          ctx.arc(sxOf(colOf(i)), syOf(result.edgeOffsets[i][side]), 4.5, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
+    }
+
+    // 手で直したエッジ。
+    // 🔴 `provenance.editedEdges` は **計測点の添字**（path 番号ではない）。
+    //    `pathIndices` で引き直すと、印だけ**別の場所**に出る（本画面の描画と同じ規約）。
+    ctx.fillStyle = "#ffd166";
+    for (const i of showEdges ? result.provenance.editedEdges : []) {
+      if (!result.edgeOffsets[i]) continue;
+      for (const side of ["left", "right"] as const) {
+        ctx.beginPath();
+        ctx.arc(sxOf(colOf(i)), syOf(result.edgeOffsets[i][side]), 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // MLD。
+    const mldOff = result.edgeOffsets[result.mldIndex];
+    if (mldOff) {
+      ctx.strokeStyle = "#e07a5f";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(sxOf(colOf(result.mldIndex)), syOf(mldOff.left));
+      ctx.lineTo(sxOf(colOf(result.mldIndex)), syOf(mldOff.right));
+      ctx.stroke();
+    }
+
+    // 径プロファイルで選択中の点。
+    if (highlightIndex != null && result.edgeOffsets[highlightIndex]) {
+      const o = result.edgeOffsets[highlightIndex];
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(sxOf(colOf(highlightIndex)), syOf(o.left));
+      ctx.lineTo(sxOf(colOf(highlightIndex)), syOf(o.right));
+      ctx.stroke();
+    }
+
+    // 中間点は「中心線の上に乗っている」ので、帯では縦線で位置だけ示す
+    // （帯の縦は法線方向のオフセットなので、中間点は必ずオフセット 0 付近に来る）。
+    if (waypoints.length) {
+      ctx.fillStyle = "#ffd166";
+      ctx.strokeStyle = "#1b2733";
+      ctx.lineWidth = 1;
+      for (const w of waypoints) {
+        let best = -1;
+        let bd = Infinity;
+        for (let i = 0; i < result.centerline.length; i++) {
+          const c = result.centerline[i];
+          const d = (c[0] - w[0]) ** 2 + (c[1] - w[1]) ** 2;
+          if (d < bd) {
+            bd = d;
+            best = i;
+          }
+        }
+        if (best < 0) continue;
+        const x = sxOf(colOf(best));
+        ctx.beginPath();
+        ctx.rect(x - 3, syOf(0) - 3, 6, 6);
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+  }, [straight, stripView, result, waypoints, highlightIndex, mode, brushRadius, showEdges, showMask]);
 
   // ── 掴む対象を決める ─────────────────────────────────────────────
   const hitWaypoint = (p: [number, number]): number => {
@@ -448,6 +677,150 @@ export function QcaEditor({
     setDrag(null);
   };
 
+  /* ── ストレート像の上の操作 ─────────────────────────────────── */
+
+  /**
+   * 帯の上の位置 → 計測点と法線オフセット。
+   *
+   * <p>🔴 縦は `result.edgeOffsets` と**同じ量**（符号付き・画像 px）。だから
+   * 掴んで動かすことがそのまま `onEdgeEdit(pathIndex, side, offset)` になる。
+   */
+  const toStrip = (
+    ev: { clientX: number; clientY: number },
+  ): { index: number; offset: number; col: number } | null => {
+    const canvas = stripRef.current;
+    if (!canvas || !straight) return null;
+    const rect = canvas.getBoundingClientRect();
+    if (!(rect.width > 0 && rect.height > 0)) return null;
+    const col = Math.max(0, Math.min(straight.cols - 1, ((ev.clientX - rect.left) / rect.width) * straight.cols));
+    const row = ((ev.clientY - rect.top) / rect.height) * straight.rows;
+    const fi = straight.colToIndex[Math.round(col)] ?? 0;
+    const index = Math.max(0, Math.min(result.edgeOffsets.length - 1, Math.round(fi)));
+    return { index, offset: row - straight.halfWidthPx, col };
+  };
+
+  /** 帯で掴めるエッジ（画面 px で近さを見る。本画面と同じ {@link GRAB_PX}）。 */
+  const hitStripEdge = (index: number, offset: number): "left" | "right" | null => {
+    if (!showEdges || !straight || !stripView) return null; // 見えないものは掴ませない（§8.8.3）
+    const o = result.edgeOffsets[index];
+    if (!o) return null;
+    const tol = GRAB_PX / stripView.scale;
+    const dl = Math.abs(offset - o.left);
+    const dr = Math.abs(offset - o.right);
+    if (Math.min(dl, dr) > tol) return null;
+    return dl <= dr ? "left" : "right";
+  };
+
+  /** 帯の位置 → 画像座標（中間点を置くのに使う）。 */
+  const stripToImage = (col: number, offset: number): [number, number] | null => {
+    if (!straight) return null;
+    const fi = straight.colToIndex[Math.round(col)] ?? 0;
+    const p = pointAtFractionalIndex(result.centerline, result.normals, fi);
+    return [p.x + p.nx * offset, p.y + p.ny * offset];
+  };
+
+  /** 帯の上で中間点を掴めるか（横方向の近さだけで見る。縦は中心線上に居るため）。 */
+  const nearestWaypointOnStrip = (col: number): number => {
+    if (!straight || !stripView) return -1;
+    const tol = GRAB_PX / stripView.scale;
+    let best = -1;
+    let bd = tol;
+    for (let i = 0; i < waypoints.length; i++) {
+      const w = waypoints[i];
+      let ci = -1;
+      let cd = Infinity;
+      for (let k = 0; k < result.centerline.length; k++) {
+        const c = result.centerline[k];
+        const d = (c[0] - w[0]) ** 2 + (c[1] - w[1]) ** 2;
+        if (d < cd) {
+          cd = d;
+          ci = k;
+        }
+      }
+      if (ci < 0) continue;
+      const d = Math.abs((straight.indexToCol[ci] ?? 0) - col);
+      if (d < bd) {
+        bd = d;
+        best = i;
+      }
+    }
+    return best;
+  };
+
+  const onStripPointerDown = (ev: React.PointerEvent<HTMLCanvasElement>) => {
+    const hit = toStrip(ev);
+    if (!hit || mode === "none") return;
+    ev.currentTarget.setPointerCapture(ev.pointerId);
+    if (mode === "waypoint") {
+      // 帯で「上下に動かす」＝中心線をその場所で法線方向へ寄せる、という意味になる。
+      const near = nearestWaypointOnStrip(hit.col);
+      if (ev.button === 2 || ev.altKey) {
+        if (near >= 0) onWaypointsChange(waypoints.filter((_, i) => i !== near).map((w) => [w[0], w[1]]));
+        return;
+      }
+      if (near >= 0) {
+        setStripDrag({ kind: "waypoint", index: near });
+        return;
+      }
+      const p = stripToImage(hit.col, hit.offset);
+      if (p) insertWaypoint(p);
+      return;
+    }
+    const side = hitStripEdge(hit.index, hit.offset);
+    if (!side) return;
+    setStripDrag({
+      kind: mode === "brush" ? "brush" : mode === "smooth" ? "smooth" : "edge",
+      pathIndex: result.pathIndices[hit.index],
+      side,
+      centerIndex: hit.index,
+    });
+  };
+
+  const onStripPointerMove = (ev: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!stripDrag) return;
+    const hit = toStrip(ev);
+    if (!hit) return;
+    if (stripDrag.kind === "waypoint") {
+      const p = stripToImage(hit.col, hit.offset);
+      if (!p) return;
+      onWaypointsChange(waypoints.map((w, i) => (i === stripDrag.index ? p : ([w[0], w[1]] as [number, number]))));
+      return;
+    }
+    if (stripDrag.kind === "smooth") {
+      const smoothed = smoothEdges({
+        positions: result.positions,
+        pathIndices: result.pathIndices,
+        edgeOffsets: result.edgeOffsets,
+        centerIndex: stripDrag.centerIndex,
+        side: stripDrag.side,
+        radius: brushRadius,
+      });
+      if (smoothed.length) onEdgeEditMany(smoothed);
+      return;
+    }
+    if (stripDrag.kind === "brush") {
+      const brushed = brushEdges({
+        positions: result.positions,
+        pathIndices: result.pathIndices,
+        edgeOffsets: result.edgeOffsets,
+        centerIndex: stripDrag.centerIndex,
+        side: stripDrag.side,
+        targetOffset: hit.offset,
+        radius: brushRadius,
+      });
+      if (brushed.length) onEdgeEditMany(brushed);
+      return;
+    }
+    // 符号は中心線をまたげない（本画面と同じ規約。0 に潰れると径が 0 になる）。
+    const clamped = stripDrag.side === "left" ? Math.min(-0.25, hit.offset) : Math.max(0.25, hit.offset);
+    onEdgeEdit(stripDrag.pathIndex, stripDrag.side, clamped);
+  };
+
+  const endStripDrag = (ev: React.PointerEvent<HTMLCanvasElement>) => {
+    if (stripDrag) ev.currentTarget.releasePointerCapture(ev.pointerId);
+    setStripDrag(null);
+  };
+
   if (!view) return null;
   const editedCount = result.provenance.editedEdges.length;
 
@@ -470,6 +843,33 @@ export function QcaEditor({
         onPointerCancel={endDrag}
         onContextMenu={(e) => e.preventDefault()}
       />
+      {/* ストレート像（§8.9）。本画面と同じ `result` を描き、同じコールバックへ書くので、
+          どちらで直しても**必ず両方に反映される**（別々の状態を持たない）。 */}
+      {straight && stripView ? (
+        <div style={{ marginTop: 6 }}>
+          <div style={stripLabel}>
+            {t("xa.qca.straightTitle")}
+            <span style={{ color: "#66788a" }}>{t("xa.qca.straightAxis")}</span>
+          </div>
+          <canvas
+            ref={stripRef}
+            data-testid="qca-straight-canvas"
+            style={{
+              width: stripView.dw,
+              height: stripView.dh,
+              borderRadius: 4,
+              background: "#000",
+              cursor: mode === "none" ? "default" : stripDrag ? "grabbing" : "crosshair",
+              touchAction: "none",
+            }}
+            onPointerDown={onStripPointerDown}
+            onPointerMove={onStripPointerMove}
+            onPointerUp={endStripDrag}
+            onPointerCancel={endStripDrag}
+            onContextMenu={(e) => e.preventDefault()}
+          />
+        </div>
+      ) : null}
       <div style={legend}>
         <span style={{ color: "#7fd1b9" }}>━ {t("xa.qca.legendCenterline")}</span>
         <span style={{ color: "#4fc3f7" }}>━ {t("xa.qca.legendEdges")}</span>
@@ -508,4 +908,11 @@ const legend: React.CSSProperties = {
   flexWrap: "wrap",
 };
 const hint: React.CSSProperties = { fontSize: 11, color: "#66788a", marginTop: 4 };
+const stripLabel: React.CSSProperties = {
+  display: "flex",
+  gap: 8,
+  fontSize: 10,
+  color: "#44586a",
+  marginBottom: 2,
+};
 const warn: React.CSSProperties = { fontSize: 11, color: "#a5642a", marginTop: 4 };
