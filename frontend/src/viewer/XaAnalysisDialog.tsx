@@ -25,6 +25,7 @@ import { publishQcaSnapshot } from "./debugApi";
 import { readModalitySlice } from "./pixelCalibration";
 import { QcaEditor, type QcaEditMode } from "./QcaEditor";
 import { defaultBrushRadius, mergeEdgeEdits } from "./qcaBrush";
+import { lockSliceNavigation } from "./sliceNavigationLock";
 import { runQca, type QcaManualEdits, type QcaReferenceMode, type QcaResult } from "./qca";
 import {
   canCalibrateWith,
@@ -317,6 +318,32 @@ export function XaAnalysisDialog({
   const [editMode, setEditMode] = useState<QcaEditMode>("none");
   /** ブラシ半径。単位は結果と同じ（校正済み mm / 未校正 px）。 */
   const [brushRadius, setBrushRadius] = useState<number | null>(null);
+  /**
+   * 表示の切り替え（2026-08-28 の要望）。
+   *
+   * <p>**線と面は見え方が違う**——線は「どこを通っているか」、面は「どこまでを内腔と
+   * みなしたか」を見せる。輪郭が外れているとき、面のほうが一目で分かることが多い。
+   * 画像そのものを見たいときは両方消せる。
+   *
+   * <p>⚠️ 既定はエッジのみ（従来の見え方を変えない）。マスクは押したときだけ。
+   */
+  const [showEdges, setShowEdges] = useState(true);
+  const [showMask, setShowMask] = useState(false);
+
+  /**
+   * 🔴 **解析結果がある間はフレームを固定する**（実機で言われた・2026-08-28）。
+   *
+   * <p>結果は「あるフレーム」に対して出ており、中心線・エッジ・手修正・校正はすべてその 1 枚に
+   * 紐付いている。裏でホイールが効くと、**画面の画像とダイアログの数値が別フレームのもの**になり、
+   * しかも**エラーが出ない**（値は内部整合したまま残る）。
+   *
+   * <p>⚠️ **ダイアログを開いている間ずっと、ではない。** 解析前にフレームを選ぶのは正当な操作で、
+   * そこまで止めると「解析したいフレームに行けない」になる。錠は結果が出てから。
+   */
+  useEffect(() => {
+    if (!result) return;
+    return lockSliceNavigation();
+  }, [result]);
   const [chartMode, setChartMode] = useState<"none" | "trim" | "reference">("none");
   const [highlight, setHighlight] = useState<number | null>(null);
   /** 解析に使った画素。手修正のたびに読み直すと重いのでキャッシュする。 */
@@ -982,9 +1009,13 @@ export function XaAnalysisDialog({
             /* 中心線とエッジはどちらもこのパネルで直すので、両方の段がここを指す。 */
             <div data-step="centerline edges">
               {/* 手修正（§8.6）。自動の中心線は外れていても必ず結果を出すので、ここが要る。 */}
+              {/* 🔴 止まっている理由を出す。動かないのに理由が無いと「壊れている」と読まれる。 */}
+              <div style={{ fontSize: 11, color: "#8a6d3b", marginBottom: 4 }} data-testid="xa-qca-frame-locked">
+                {t("xa.qca.frameLocked")}
+              </div>
               <div style={row}>
                 <span style={{ fontSize: 11, color: "#44586a" }}>{t("xa.qca.editMode")}:</span>
-                {(["none", "waypoint", "edge", "brush"] as const).map((m) => (
+                {(["none", "waypoint", "edge", "brush", "smooth"] as const).map((m) => (
                   <button
                     key={m}
                     style={editMode === m ? primaryBtn : btn}
@@ -994,7 +1025,27 @@ export function XaAnalysisDialog({
                     {t(`xa.qca.mode.${m}`)}
                   </button>
                 ))}
-                {editMode === "brush" && (
+                {/* 表示の On/Off。1 クリックで切り替わる（押している＝出ている）。 */}
+                <span style={{ width: 8 }} />
+                <button
+                  style={showEdges ? primaryBtn : btn}
+                  data-testid="xa-qca-show-edges"
+                  aria-pressed={showEdges}
+                  onClick={() => setShowEdges((v) => !v)}
+                  title={t("xa.qca.showEdgesHint")}
+                >
+                  {t("xa.qca.showEdges")}
+                </button>
+                <button
+                  style={showMask ? primaryBtn : btn}
+                  data-testid="xa-qca-show-mask"
+                  aria-pressed={showMask}
+                  onClick={() => setShowMask((v) => !v)}
+                  title={t("xa.qca.showMaskHint")}
+                >
+                  {t("xa.qca.showMask")}
+                </button>
+                {(editMode === "brush" || editMode === "smooth") && (
                   <label style={{ ...label, fontSize: 11 }}>
                     {t("xa.qca.brushRadius", { unit: result.unit })}
                     <input
@@ -1027,6 +1078,8 @@ export function XaAnalysisDialog({
                   reanalyze({ waypoints: next, edges: null });
                 }}
                 brushRadius={brushRadius ?? defaultBrushRadius(result.unit)}
+                showEdges={showEdges}
+                showMask={showMask}
                 onEdgeEdit={(pathIndex, side, offset) => {
                   if (!edgeToken) return;
                   const next = { ...edgeEdits, [pathIndex]: { ...edgeEdits[pathIndex], [side]: offset } };

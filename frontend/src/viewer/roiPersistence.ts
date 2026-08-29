@@ -36,6 +36,19 @@ export interface SavedRoi {
   /** ZCT（復元先スタックの特定と scope 復元に使う）。 */
   c?: number;
   t?: number;
+  /**
+   * マルチフレーム・インスタンス内の**フレーム番号（0 origin）**。単一フレームなら省略。
+   *
+   * <p>🚨 **`sopInstanceUid` だけでは復元先が決まらない。** XA の 1 ラン数十〜数百フレームは
+   * すべて**同じ SOP Instance UID** を持つので、SOP を鍵に解決すると
+   * **必ず 1 フレーム目**に戻る（実機で「解析したフレームには無く、1 フレーム目に出る」
+   * という形で発覚・2026-08-28）。
+   *
+   * <p>🔴 **表示中の T ではなく、その ROI 自身の `referencedImageId` から取る。**
+   * 保存は全 ROI をまとめて集めるので、表示中の値を配ると**別フレームの ROI に
+   * 今見ているフレーム番号を書く**（`t` を保存していないのも同じ理由）。
+   */
+  frame?: number;
   /** ハンドル座標（患者座標 LPS mm）。 */
   points: number[][];
   /** 輪郭系ツールの polyline（患者座標 LPS mm）。無いツールでは省略。 */
@@ -117,6 +130,11 @@ export interface AnnotationLike {
 export interface RoiSaveContext {
   /** annotation の referencedImageId → SOP Instance UID。解決できなければ null。 */
   sopOf: (imageId: string) => string | null;
+  /**
+   * annotation の referencedImageId → フレーム番号（0 origin）。単一フレームなら null。
+   * 省略するとフレームを記録しない＝マルチフレームで復元先を誤る。
+   */
+  frameOf?: (imageId: string) => number | null;
   /** annotationUID → ROI マネージャのメタ。 */
   metaOf: (roiUid: string) => {
     label?: string;
@@ -164,6 +182,9 @@ export function toSavedRoi(ann: AnnotationLike, ctx: RoiSaveContext): SavedRoi |
     points,
   };
   if (polyline.length) out.polyline = polyline;
+  // マルチフレームの復元先。**その ROI 自身の imageId** から取る（表示中の値ではない）。
+  const frame = ctx.frameOf?.(refId);
+  if (typeof frame === "number" && Number.isFinite(frame) && frame >= 0) out.frame = frame;
   // スプライン系は補間方法も保存する（復元時に同じ形へ戻すため）
   const splineType = (ann.data as { spline?: { type?: string } } | undefined)?.spline?.type;
   if (typeof splineType === "string" && splineType) out.splineType = splineType;
@@ -247,6 +268,7 @@ export function parseSaveFile(json: string | null | undefined): ParsedRoiFile {
     if (typeof s.seriesUid === "string") item.seriesUid = s.seriesUid;
     if (typeof s.c === "number") item.c = s.c;
     if (typeof s.t === "number") item.t = s.t;
+    if (typeof s.frame === "number" && Number.isFinite(s.frame) && s.frame >= 0) item.frame = s.frame;
     if (typeof s.label === "string") item.label = s.label;
     if (typeof s.description === "string") item.description = s.description;
     if (s.scope && typeof s.scope === "object") item.scope = sanitizeScope(s.scope);
@@ -291,19 +313,22 @@ function sanitizeCustom(c: Record<string, unknown>): Record<string, string> {
  * 復元対象を絞る（純関数）。**SOP が現在のスタックに無い ROI は復元しない**
  * （別シリーズの ROI を今見ているシリーズへ載せると座標の意味が壊れる）。
  *
+ * <p>🚨 **解決には SOP とフレームの両方を渡す。** マルチフレーム（XA の 1 ラン）は
+ * 全フレームが同じ SOP を持つので、SOP だけで解くと**必ず 1 フレーム目**に戻る。
+ *
  * @param saved 保存されていた ROI
- * @param imageIdOfSop SOP Instance UID → 現在のスタックの imageId（無ければ null）
+ * @param imageIdOf (SOP Instance UID, フレーム番号) → 現在のスタックの imageId（無ければ null）
  * @param alreadyPresent 既に annotation state にある UID（二重復元を防ぐ）
  */
 export function selectRestorable(
   saved: SavedRoi[],
-  imageIdOfSop: (sop: string) => string | null,
+  imageIdOf: (sop: string, frame?: number) => string | null,
   alreadyPresent: (roiUid: string) => boolean,
 ): Array<{ roi: SavedRoi; imageId: string }> {
   const out: Array<{ roi: SavedRoi; imageId: string }> = [];
   for (const roi of saved) {
     if (alreadyPresent(roi.roiUid)) continue;
-    const imageId = imageIdOfSop(roi.sopInstanceUid);
+    const imageId = imageIdOf(roi.sopInstanceUid, roi.frame);
     if (!imageId) continue;
     out.push({ roi, imageId });
   }

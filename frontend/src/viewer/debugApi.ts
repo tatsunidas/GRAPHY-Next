@@ -12,6 +12,8 @@ import {
   listVesselModels,
   putVesselAnalysis,
 } from "../plugins/pluginVesselApi";
+import { calibrationForImageId } from "./xaCalibrationProvider";
+import type { Geometry3DPixelStats } from "./vtkGeometryView";
 
 /**
  * automator（自律検証ツール）専用のデバッグAPI。`window.__graphyDebug` として公開し、
@@ -550,16 +552,14 @@ function imagePixelsToCanvasFraction(
  * シーンの物体数・表示中の数値がすべて合格したまま 3D が真っ黒だったことがある
  * （カメラの視線と view-up が平行になって退化していた）。**描かれた画素を数える**。
  */
-let geometry3dProbe: (() => { total: number; nonBackground: number; fraction: number } | null) | null = null;
+let geometry3dProbe: (() => Geometry3DPixelStats | null) | null = null;
 
-export function publishGeometry3dProbe(
-  fn: (() => { total: number; nonBackground: number; fraction: number } | null) | null,
-): void {
+export function publishGeometry3dProbe(fn: (() => Geometry3DPixelStats | null) | null): void {
   if (!import.meta.env.DEV) return;
   geometry3dProbe = fn;
 }
 
-function getGeometry3dStats(): { total: number; nonBackground: number; fraction: number } | null {
+function getGeometry3dStats(): Geometry3DPixelStats | null {
   return geometry3dProbe ? geometry3dProbe() : null;
 }
 
@@ -613,7 +613,9 @@ declare global {
       getXaBifurcationState: typeof getXaBifurcationState;
       imagePixelsToCanvasFraction: typeof imagePixelsToCanvasFraction;
       getGeometry3dStats: typeof getGeometry3dStats;
+      getXaCalibration: typeof getXaCalibration;
       getVesselModels: typeof getVesselModels;
+      getVesselModel: typeof getVesselModelBody;
       putVesselAnalysis: typeof putVesselAnalysisDebug;
       seedVesselAnalysis: typeof seedVesselAnalysis;
     };
@@ -633,6 +635,17 @@ declare global {
  */
 function getVesselModels(): ReturnType<typeof listVesselModels> {
   return listVesselModels();
+}
+
+/**
+ * H11 の**モデル本体**（`runId` 省略で最も新しいもの）。
+ *
+ * <p>🔴 一覧（{@link getVesselModels}）は**要約**で、点数と校正の区分しか持たない。
+ * 中心線・径・校正の出自を確かめるには本体が要る——実機検証で一覧を本体と取り違え、
+ * 「モデルに中心線が入っていない」という**偽の不具合**を作った（2026-08-29）。
+ */
+function getVesselModelBody(runId?: string): ReturnType<typeof getVesselModel> {
+  return getVesselModel(runId);
 }
 
 function putVesselAnalysisDebug(
@@ -667,6 +680,61 @@ function seedVesselAnalysis(label = "DEBUG"): { ok: boolean; error?: string; run
   return { ...r, runId: m.runId };
 }
 
+
+/**
+ * 表示中タイルの**空間校正の解決結果**（`fw/angio-design.md` §7.2 の P0〜P7）。DEV 限定。
+ *
+ * <h3>🚨 なぜ要るのか</h3>
+ * 校正の分岐は**タグの書かれ方**で決まるが、実データ（Rubo の XA 5 本）は空間校正タグを
+ * **1 つも持たない**ので、P1〜P5 は**実 DICOM で一度も通っていなかった**（§20-7）。
+ * ファントム GNBP-XA-4 はタグの書かれ方を 5 変種で書き分けてあるが、
+ * **画面から数値で読む口が無い**と「どの枝に落ちたか」を検証できない。
+ *
+ * <p>⚠️ スケールバーの文字（"20 mm" / "100 px"）だけでは足りない。
+ * **mm と出ていても値が間違っていることがある**し、P3'（降格）と P4（幾何近似）は
+ * どちらも mm を出すので**表示だけでは区別が付かない**。出自まで読む。
+ */
+export interface XaCalibrationProbe {
+  viewportId: string;
+  imageId: string | null;
+  mmPerPxRow: number | null;
+  mmPerPxCol: number | null;
+  source: string;
+  confidence: string;
+  tier: string;
+  plane: string;
+  provenance: string;
+  warnings: string[];
+  detectorMmPerPx: number | null;
+}
+
+function getXaCalibration(): XaCalibrationProbe[] {
+  const engine = getRenderingEngine(ENGINE_ID);
+  if (!engine) return [];
+  const out: XaCalibrationProbe[] = [];
+  for (const vp of engine.getViewports()) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const imageId: string | null = (vp as any).getCurrentImageId?.() ?? null;
+    // 🔴 校正は必ず単一入口（`xaCalibrationProvider`）から読む。ここで PixelSpacing を
+    //    直接読むと、検証している当のものと別の答えを見ることになる。
+    const c = imageId ? calibrationForImageId(imageId) : null;
+    out.push({
+      viewportId: vp.id,
+      imageId,
+      mmPerPxRow: c?.mmPerPxRow ?? null,
+      mmPerPxCol: c?.mmPerPxCol ?? null,
+      source: c?.source ?? "none",
+      confidence: c?.confidence ?? "none",
+      tier: c?.tier ?? "uncalibrated",
+      plane: c?.plane ?? "unknown",
+      provenance: c?.provenance ?? "",
+      warnings: c?.warnings ?? [],
+      detectorMmPerPx: c?.detectorMmPerPx ?? null,
+    });
+  }
+  return out;
+}
+
 let installed = false;
 
 /** 冪等: 何度呼んでも安全（SeriesViewer マウントの都度呼ばれる想定）。 */
@@ -685,7 +753,9 @@ export function installDebugApi(): void {
     getXaBifurcationState,
     imagePixelsToCanvasFraction,
     getGeometry3dStats,
+    getXaCalibration,
     getVesselModels,
+    getVesselModel: getVesselModelBody,
     putVesselAnalysis: putVesselAnalysisDebug,
     seedVesselAnalysis,
   };

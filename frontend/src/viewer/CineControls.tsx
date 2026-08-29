@@ -36,6 +36,16 @@ export interface CineControlsProps {
   source?: XaCineSource | null;
   /** 外側でスライダーを描くか（false なら再生/速度/コマ送りだけ）。 */
   showSeek?: boolean;
+  /**
+   * フレーム送りが**錠で止められている**か（`sliceNavigationLock`。`fw/angio-design.md` §8.8.2）。
+   *
+   * <p>🔴 **`onIndex` を無効化するだけでは足りない。** 呼び出し側が `onIndex` を
+   * 何もしない関数に差し替えると、フレームは確かに動かないが、**再生ボタンは押せて
+   * ⏸ に変わり、rAF も回り続ける**——「再生しているのに絵が止まっている」という、
+   * 壊れているようにしか見えない状態になる（実機検証で踏んだ）。
+   * 錠が掛かっている間は**押せなくする**。理由は錠を掛けた側が画面に出している。
+   */
+  locked?: boolean;
 }
 
 /** 秒を m:ss.s 表記に。 */
@@ -50,6 +60,7 @@ export default function CineControls({
   onIndex,
   source,
   showSeek = true,
+  locked = false,
 }: CineControlsProps): React.ReactElement {
   const { t } = useI18n();
   const [playing, setPlaying] = useState(false);
@@ -81,8 +92,14 @@ export default function CineControls({
     setPlaying(false);
   }, [count, totalMs]);
 
+  // 錠が掛かったら**再生中でも止める**。押せなくするだけでは、掛かった時点で
+  // 再生中だったものが rAF を回し続ける（絵は動かないので気付けない）。
   useEffect(() => {
-    if (!playing || count <= 1) return;
+    if (locked) setPlaying(false);
+  }, [locked]);
+
+  useEffect(() => {
+    if (!playing || count <= 1 || locked) return;
     let raf = 0;
     // 再生開始時のフレームの時刻を起点にする（途中から再生しても飛ばない）。
     const startElapsed = times[Math.min(Math.max(0, indexRef.current), times.length - 1)] ?? 0;
@@ -122,7 +139,7 @@ export default function CineControls({
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [playing, count, times, totalMs, fps, fpsSource]);
+  }, [playing, count, times, totalMs, fps, fpsSource, locked]);
 
   const step = useCallback(
     (delta: number) => {
@@ -136,7 +153,7 @@ export default function CineControls({
 
   const curSec = (times[Math.min(index, times.length - 1)] ?? 0) / 1000;
   const totSec = totalMs / 1000;
-  const disabled = count <= 1;
+  const disabled = count <= 1 || locked;
 
   return (
     <>

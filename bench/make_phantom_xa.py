@@ -263,13 +263,18 @@ def _xa_dataset(
     patient_id: str,
     patient_name: str,
     calibration=None,
-    include_geometry: bool = True,
+    include_geometry=True,
 ) -> Dataset:
     """マルチフレーム XA インスタンスを組む。
 
     ``calibration`` は ``(pixel_spacing_mm, calibration_type)``。None なら
     ``PixelSpacing`` を書かない（＝ §7.2 の P4 以降へ落ちる）。
-    ``include_geometry=False`` は SID/SOD も落とす（P6/P7 の確認用）。
+
+    ``include_geometry``:
+        ``True``       … SID / SOD / 拡大率を書く（P4 が成立）
+        ``False``      … 幾何タグを一切書かない（P6 / P7 の確認用）
+        ``"mag-only"`` … **拡大率だけ**書く。SID/SOD が無い装置を模す＝ P5 だけが成立する枝。
+                          これが無いと P5 は一度も通らない（P4 が先に成立してしまうため）。
     """
     n_frames = int(frames.shape[0])
     sop_uid = deterministic_uid("GNBP-XA", uid_key, "sop")
@@ -335,9 +340,12 @@ def _xa_dataset(
 
     # ── 幾何 ──────────────────────────────────────────────────────────
     ds.ImagerPixelSpacing = [f"{IMAGER_SPACING_MM:.6f}", f"{IMAGER_SPACING_MM:.6f}"]
-    if include_geometry:
+    if include_geometry is True:
         ds.DistanceSourceToDetector = f"{SID_MM:.1f}"
         ds.DistanceSourceToPatient = f"{SOD_MM:.1f}"
+        ds.EstimatedRadiographicMagnificationFactor = f"{SID_MM / SOD_MM:.6f}"
+    elif include_geometry == "mag-only":
+        # SID/SOD を書かず拡大率だけ。P4 が成立しないので P5 に落ちる。
         ds.EstimatedRadiographicMagnificationFactor = f"{SID_MM / SOD_MM:.6f}"
     ds.PositionerPrimaryAngle = "0.0"
     ds.PositionerSecondaryAngle = "0.0"
@@ -949,6 +957,14 @@ CALIB_VARIANTS = [
     ("d-geometry-only", None, None, True, "geometric-sid-sod"),
     # ⑤ 幾何タグも無い（実データの Rubo がこれ）→ P6。**px 表示が正しい挙動**。
     ("e-nothing", None, None, False, "detector-plane"),
+    # ⑥ PixelSpacing はあるが CalibrationType が無く、**ImagerPixelSpacing とも違う**。
+    #    規格には反するが実在する書かれ方で、「何かで補正済み」とみなす（P3）。
+    #    🚨 ③（c-equals-imager）と**タグの顔ぶれは同じ**で、違うのは値が一致するかどうかだけ。
+    #    画面の文言では見分けが付きにくいので、出自の識別子で突き合わせること。
+    ("f-uncalibrated-type", MM_PER_PX * 1.05, None, True, "dicom-calibrated-unspecified"),
+    # ⑦ PixelSpacing 無し・SID/SOD も無く、**拡大率だけ**ある → P5。
+    #    P4 が成立しないときだけ通る枝なので、SID/SOD を書いてしまうと一生通らない。
+    ("g-magfactor", None, None, "mag-only", "geometric-magfactor"),
 ]
 
 
@@ -997,8 +1013,19 @@ def build_calibration(out_dir: str) -> dict:
                 "pixelSpacingCalibrationType": calib_type,
                 "hasSidSod": geometry,
                 "expectedSource": expected,
-                # 期待する mm/px。P6（e-nothing）は「mm を出さない」が正解なので null。
-                "expectedMmPerPx": None if expected == "detector-plane" else MM_PER_PX,
+                # 期待する mm/px。
+                #   P6（detector-plane）  … 「mm を出さない」が正解なので null
+                #   P4 / P5（geometric-*）… アイソセンタ面の計算値 MM_PER_PX
+                #   P1 / P2 / P3          … PixelSpacing をそのまま採る
+                # 🚨 ③（c-equals-imager）は PixelSpacing を持つが**降格して P4 になる**ので、
+                #    「PixelSpacing があるならそれ」ではなく**解決先の source で決める**。
+                "expectedMmPerPx": (
+                    None
+                    if expected == "detector-plane"
+                    else MM_PER_PX
+                    if expected.startswith("geometric-")
+                    else spacing
+                ),
             }
         )
     return {

@@ -26,10 +26,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import { publishQcaSnapshot } from "./debugApi";
 import type { QcaResult } from "./qca";
-import { brushEdges, type BrushedEdge } from "./qcaBrush";
+import { brushEdges, type BrushedEdge, smoothEdges, detectEdgeOutliers } from "./qcaBrush";
 
 /** 編集モード。 */
-export type QcaEditMode = "none" | "waypoint" | "edge" | "brush";
+/**
+ * `smooth` は「ならす」ブラシ（§8.8.1）。**押すブラシでは外れ点を直せない**
+ * ——半径内へ同じ移動量を配るので、外れ点を押せば近傍まで外れ、近傍を押せば外れ点は残る。
+ */
+export type QcaEditMode = "none" | "waypoint" | "edge" | "brush" | "smooth";
 
 export interface QcaEditorProps {
   /** 解析に使った画素（モダリティ値）。 */
@@ -47,6 +51,15 @@ export interface QcaEditorProps {
   brushRadius: number;
   /** ハイライトする計測点（径プロファイル上の選択と連動）。 */
   highlightIndex?: number | null;
+  /**
+   * エッジ（左右の輪郭線とその上の印）を描くか。
+   *
+   * <p>🔴 **消しているあいだはエッジを掴めない。** 見えないものを掴ませると、
+   * どこを動かしたのか分からないまま手修正が入る（`provenance.editedEdges` だけが増える）。
+   */
+  showEdges?: boolean;
+  /** 囲っている内腔を半透明で塗るか（線より「面」のほうが当たり外れを掴みやすい）。 */
+  showMask?: boolean;
   onWaypointsChange: (next: [number, number][]) => void;
   onEdgeEdit: (pathIndex: number, side: "left" | "right", offset: number) => void;
   /** ブラシ 1 回ぶん（複数点）。`qcaBrush.brushEdges` の結果をそのまま渡す。 */
@@ -69,6 +82,8 @@ export function QcaEditor({
   waypoints,
   edgeEdits,
   brushRadius,
+  showEdges = true,
+  showMask = false,
   highlightIndex,
   onWaypointsChange,
   onEdgeEdit,
@@ -80,6 +95,7 @@ export function QcaEditor({
     | { kind: "waypoint"; index: number }
     | { kind: "edge"; pathIndex: number; side: "left" | "right" }
     | { kind: "brush"; pathIndex: number; side: "left" | "right" }
+    | { kind: "smooth"; pathIndex: number; side: "left" | "right" }
     | null
   >(null);
 
@@ -209,13 +225,53 @@ export function QcaEditor({
       ctx.stroke();
     };
 
-    stroke(result.edges.map((e) => e.left), "#4fc3f7");
-    stroke(result.edges.map((e) => e.right), "#4fc3f7");
+    // 内腔の半透明マスク。**線より先に敷く**（面を上に乗せると輪郭が沈んで見えなくなる）。
+    // 面は「左エッジを近位→遠位、右エッジを遠位→近位」でひと筆に閉じる＝解析が内腔と
+    // みなしている領域そのもの。線とは別の見え方をするので、外れている所が掴みやすい。
+    if (showMask && result.edges.length >= 2) {
+      ctx.fillStyle = "rgba(79, 195, 247, 0.28)";
+      ctx.beginPath();
+      ctx.moveTo(sx(result.edges[0].left[0]), sy(result.edges[0].left[1]));
+      for (let i = 1; i < result.edges.length; i++) {
+        ctx.lineTo(sx(result.edges[i].left[0]), sy(result.edges[i].left[1]));
+      }
+      for (let i = result.edges.length - 1; i >= 0; i--) {
+        ctx.lineTo(sx(result.edges[i].right[0]), sy(result.edges[i].right[1]));
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    if (showEdges) {
+      stroke(result.edges.map((e) => e.left), "#4fc3f7");
+      stroke(result.edges.map((e) => e.right), "#4fc3f7");
+    }
     stroke(result.centerline, "#7fd1b9");
 
+    // 🚨 **外れ点に印を付ける**（`smooth` モードのときだけ）。
+    //    「ならす」は外れている所だけをなでる道具なので、**どこが外れているのかが
+    //    見えないと使えない**——外れ点が扱いづらいという指摘の半分はここだった。
+    //    印は検出（ロバスト・`detectEdgeOutliers`）そのままで、閾値は画面に持たせない。
+    if (mode === "smooth" && showEdges) {
+      ctx.strokeStyle = "#ff7b72";
+      ctx.lineWidth = 1.5;
+      for (const side of ["left", "right"] as const) {
+        const values = result.edgeOffsets.map((o) => o[side]);
+        for (const i of detectEdgeOutliers(result.positions, values, brushRadius)) {
+          const e = result.edges[i];
+          if (!e) continue;
+          const pt = e[side];
+          ctx.beginPath();
+          ctx.arc(sx(pt[0]), sy(pt[1]), 4.5, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
+    }
+
     // 手で直したエッジは色を変える（どこに手が入っているかが一目で分かるように）。
+    // エッジを消しているときは一緒に消す——線が無いのに点だけ浮くと何の点か分からない。
     ctx.fillStyle = "#ffd166";
-    for (const i of result.provenance.editedEdges) {
+    for (const i of showEdges ? result.provenance.editedEdges : []) {
       const e = result.edges[i];
       if (!e) continue;
       ctx.beginPath();
@@ -259,7 +315,9 @@ export function QcaEditor({
       ctx.fill();
       ctx.stroke();
     }
-  }, [backdropCanvas, result, waypoints, view, highlightIndex]);
+  // 🔴 `mode` と `brushRadius` を依存に入れる——外れ点の印は smooth のときだけ描き、
+  //    半径で変わる。入れ忘れると「モードを切り替えても印が出ない / 消えない」になる。
+  }, [backdropCanvas, result, waypoints, view, highlightIndex, mode, brushRadius, showEdges, showMask]);
 
   // ── 掴む対象を決める ─────────────────────────────────────────────
   const hitWaypoint = (p: [number, number]): number => {
@@ -278,7 +336,9 @@ export function QcaEditor({
   };
 
   const hitEdge = (p: [number, number]): { pathIndex: number; side: "left" | "right" } | null => {
-    if (!view) return null;
+    // 🔴 見えていないものは掴ませない。掴めてしまうと、どこを動かしたのか分からないまま
+    //    手修正が入り、`provenance.editedEdges` だけが増える。
+    if (!view || !showEdges) return null;
     const tol = GRAB_PX / view.scale;
     let best: { pathIndex: number; side: "left" | "right" } | null = null;
     let bd = tol;
@@ -331,7 +391,7 @@ export function QcaEditor({
       return;
     }
     const e = hitEdge(p);
-    if (e) setDrag({ kind: mode === "brush" ? "brush" : "edge", ...e });
+    if (e) setDrag({ kind: mode === "brush" ? "brush" : mode === "smooth" ? "smooth" : "edge", ...e });
   };
 
   const onPointerMove = (ev: React.PointerEvent<HTMLCanvasElement>) => {
@@ -349,6 +409,20 @@ export function QcaEditor({
     const c = result.centerline[i];
     const n = result.normals[i];
     const offset = (p[0] - c[0]) * n[0] + (p[1] - c[1]) * n[1];
+    if (drag.kind === "smooth") {
+      // 「ならす」——局所中央値へ寄せる。外れ点は大きく動き、合っている点はほとんど動かない。
+      // 🔴 ここでポインタの位置は使わない。使うのは「どこをなでているか」だけ。
+      const smoothed = smoothEdges({
+        positions: result.positions,
+        pathIndices: result.pathIndices,
+        edgeOffsets: result.edgeOffsets,
+        centerIndex: i,
+        side: drag.side,
+        radius: brushRadius,
+      });
+      if (smoothed.length) onEdgeEditMany(smoothed);
+      return;
+    }
     if (drag.kind === "brush") {
       // 掴んだ点の**移動量**を、中心線に沿って近い点へ重み付きで配る（`qcaBrush.ts`）。
       // ポインタ位置を各点へ当てはめないので、もとの輪郭の形は保たれる。
@@ -404,6 +478,10 @@ export function QcaEditor({
           ■ {t("xa.qca.legendEdited", { waypoints: String(waypoints.length), edges: String(editedCount) })}
         </span>
       </div>
+      {/* 🔴 掴めない理由を出す。出さないと「ブラシが壊れた」と読まれる。 */}
+      {!showEdges && mode !== "none" && mode !== "waypoint" ? (
+        <div style={warn} data-testid="xa-qca-edges-hidden">{t("xa.qca.edgesHidden")}</div>
+      ) : null}
       <div style={hint}>
         {mode === "waypoint"
           ? t("xa.qca.hintWaypoint")
@@ -411,7 +489,9 @@ export function QcaEditor({
             ? t("xa.qca.hintEdge")
             : mode === "brush"
               ? t("xa.qca.hintBrush")
-              : t("xa.qca.hintNone")}
+              : mode === "smooth"
+                ? t("xa.qca.hintSmooth")
+                : t("xa.qca.hintNone")}
       </div>
       {Object.keys(edgeEdits).length > 0 && result.warnings.includes("edgeEditsDropped") && (
         <div style={warn}>{t("xa.qca.edgeEditsDropped")}</div>

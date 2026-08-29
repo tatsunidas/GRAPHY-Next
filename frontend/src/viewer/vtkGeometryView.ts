@@ -26,6 +26,27 @@ import { WebGLContextUnavailableError, isWebGLContextUnavailable } from "./vtkVo
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
 
+/**
+ * 描かれている画素の内訳。
+ *
+ * <p>`warm` / `cool` / `neutral` は **A7（血管に解析値を色で乗せる・§11）**の検証用。
+ * 色マップは `range[0]` が赤・`range[1]` が青で、**値の無い点はグレー**（`NO_VALUE_RGB`）
+ * と決まっている（`viewer3d/vesselColorMap.ts`）。「色が乗ったか」「値の無い所を
+ * 埋めていないか」は、**画面の画素でしか確かめられない**——凡例が出ていることも、
+ * 描画物の数が合っていることも、色が正しい証拠にはならない。
+ */
+export interface Geometry3DPixelStats {
+  total: number;
+  nonBackground: number;
+  fraction: number;
+  /** 背景でない画素のうち、赤寄り（R − B > 30）。 */
+  warm: number;
+  /** 同じく青寄り（B − R > 30）。 */
+  cool: number;
+  /** どちらでもない（＝無彩色。値の無い点のグレーと、色を乗せる前の既定色）。 */
+  neutral: number;
+}
+
 export interface VtkGeometryView {
   /** `scene3d.attachSceneRenderer` へ渡す部品。 */
   getSceneParts(): { renderer: Any; render: () => void };
@@ -38,7 +59,7 @@ export interface VtkGeometryView {
    * シーンの物体数・表示中の数値がすべて合格したまま、**3D は真っ黒**だったことがある
    * （カメラの退化。上記 `resetCamera` の注意書き）。
    */
-  readPixelStats(): { total: number; nonBackground: number; fraction: number } | null;
+  readPixelStats(): Geometry3DPixelStats | null;
   resize(): void;
   destroy(): void;
 }
@@ -115,12 +136,23 @@ export function createVtkGeometryView(container: HTMLDivElement): VtkGeometryVie
         const buf = new Uint8Array(w * h * 4);
         gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
         // 背景は暗い単色。そこから十分離れた画素を「描かれている」と数える。
+        // 併せて色の内訳も返す（A7 の色マップを画素で確かめるため）。
         let nonBackground = 0;
+        let warm = 0;
+        let cool = 0;
+        let neutral = 0;
         for (let i = 0; i < buf.length; i += 4) {
-          if (buf[i] > 60 || buf[i + 1] > 60 || buf[i + 2] > 60) nonBackground++;
+          const r = buf[i];
+          const g = buf[i + 1];
+          const b = buf[i + 2];
+          if (!(r > 60 || g > 60 || b > 60)) continue;
+          nonBackground++;
+          if (r - b > 30) warm++;
+          else if (b - r > 30) cool++;
+          else neutral++;
         }
         const total = w * h;
-        return { total, nonBackground, fraction: nonBackground / total };
+        return { total, nonBackground, fraction: nonBackground / total, warm, cool, neutral };
       } catch {
         return null;
       }

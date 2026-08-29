@@ -70,6 +70,7 @@ import {
 } from "./xaCalibrationPersistence";
 import { advanceAnchor, sliceStepsFromDrag } from "./touchScroll";
 import { createWheelStepper } from "./wheelScroll";
+import { isSliceNavigationLocked, useSliceNavigationLocked } from "./sliceNavigationLock";
 import { installDebugApi, countStackSwap } from "./debugApi";
 import { matchesCombo, matchesShortcut } from "../shortcuts/registry";
 import { fetchSeriesLayout, type Instance } from "../api";
@@ -237,6 +238,9 @@ export function SeriesViewer({
   });
   // シネ再生は Z/C/T それぞれ独立。各次元のインデックスをループ送りする。
   const [playZ, setPlayZ] = useState(false);
+  // 解析中（QCA 等）はフレームを固定する。スライダー・シネ・ホイール・キーの**全部**を止める
+  // ——1 つでも残すと、そこから裏でフレームが動いて数値と画像が食い違う。
+  const navLocked = useSliceNavigationLocked();
   const [playC, setPlayC] = useState(false);
   const [playT, setPlayT] = useState(false);
   // シネ速度は環境設定 viewer.cineFps から（既定 10）。
@@ -857,10 +861,10 @@ export function SeriesViewer({
   // シネ再生（各次元を独立してループ送り）。
   const cineInterval = Math.max(16, Math.round(1000 / fps));
   useEffect(() => {
-    if (!playZ || activeCount <= 1) return;
+    if (!playZ || activeCount <= 1 || navLocked) return;
     const id = window.setInterval(() => setZ((p) => (p + 1) % activeCount), cineInterval);
     return () => window.clearInterval(id);
-  }, [playZ, cineInterval, activeCount]);
+  }, [playZ, cineInterval, activeCount, navLocked]);
   useEffect(() => {
     if (!playC || layout.nC <= 1) return;
     const id = window.setInterval(() => setC((p) => (p + 1) % layout.nC), cineInterval);
@@ -878,7 +882,18 @@ export function SeriesViewer({
   useEffect(() => {
     const el = rootRef.current;
     if (!el || gridOn) return;
-    const step = (d: number) => setZ((p) => Math.max(0, Math.min(activeCount - 1, p + d)));
+    // 🔴 解析中（QCA 等）はフレームを動かさない（`sliceNavigationLock.ts`）。
+    //    裏で送られると、画面の画像とダイアログの数値が別フレームのものになり、
+    //    しかも**エラーが出ない**——気付けない食い違いになる。
+    //    ホイール・キー・3 本指ドラッグの入口をここ 1 本に絞ってある。
+    const step = (d: number) => {
+      if (isSliceNavigationLocked()) return;
+      setZ((p) => Math.max(0, Math.min(activeCount - 1, p + d)));
+    };
+    const jumpTo = (z: number) => {
+      if (isSliceNavigationLocked()) return;
+      setZ(z);
+    };
     // 既定ショートカット（registry）に従う。ArrowUp=前, ArrowDown=次, Home/End=先頭/末尾,
     // Space=シネ, O=テキストオーバーレイ切替。
     const onKey = (e: KeyboardEvent) => {
@@ -893,13 +908,14 @@ export function SeriesViewer({
         step(1);
         e.preventDefault();
       } else if (matchesCombo("Home", e)) {
-        setZ(0);
+        jumpTo(0);
         e.preventDefault();
       } else if (matchesCombo("End", e)) {
-        setZ(activeCount - 1);
+        jumpTo(activeCount - 1);
         e.preventDefault();
       } else if (matchesCombo("Space", e)) {
-        setPlayZ((p) => !p);
+        // 解析中はシネも始めない（始まればフレームが動く＝同じ事故）。
+        if (!isSliceNavigationLocked()) setPlayZ((p) => !p);
         e.preventDefault();
       } else if (matchesCombo("O", e)) {
         setOverlays((o) => ({ ...o, text: !o.text }));
@@ -1096,15 +1112,26 @@ export function SeriesViewer({
             {/* スタック軸。実時間再生に意味がある軸（frame）はシネコントロールに差し替える。 */}
             {activeCount > 1 &&
               (stackAxisSpec.kind === "frame" ? (
-                <CineControls count={activeCount} index={zc} onIndex={setZ} source={xaCineSource} />
+                <CineControls
+                  count={activeCount}
+                  index={zc}
+                  onIndex={navLocked ? () => {} : setZ}
+                  source={xaCineSource}
+                  locked={navLocked}
+                />
               ) : (
                 <DimSlider
                   label={axisLabel(t, stackAxisSpec)}
                   dim={stackAxisSpec.dim}
                   idx={zc}
                   count={activeCount}
-                  onChange={setZ}
-                  trailing={cinePlayBtn(playZ, () => setPlayZ((p) => !p), activeCount <= 1, "cine-play-z")}
+                  onChange={navLocked ? () => {} : setZ}
+                  trailing={cinePlayBtn(
+                    playZ,
+                    () => setPlayZ((p) => !p),
+                    activeCount <= 1 || navLocked,
+                    "cine-play-z",
+                  )}
                   testId="dim-slider-z"
                 />
               ))}

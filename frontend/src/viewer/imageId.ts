@@ -94,6 +94,24 @@ export function imageIdForXaFrame(
 }
 
 /**
+ * imageId から**フレーム番号（0 origin）**を取り出す。フレーム指定が無ければ null。
+ *
+ * <p>🚨 **マルチフレームは「1 SOP = 1 画像」ではない。** XA の 1 ラン数十〜数百フレームは
+ * すべて**同じ SOP Instance UID** を持ち、`&frame=N` だけが違う。SOP だけを鍵にする処理は
+ * ここで必ず取り違える（実際 ROI の永続化が**必ず 1 フレーム目に復元する**不具合になっていた）。
+ *
+ * <p>URL 中の番号は **1 origin**（DICOM のフレーム番号）なので −1 して返す。
+ * `?frame=` / `&frame=` のどちらの区切りでも読む。
+ */
+export function frameOfImageId(imageId: string): number | null {
+  const m = /[?&]frame=(\d+)/.exec(imageId);
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n) || n < 1) return null;
+  return n - 1;
+}
+
+/**
  * imageId から SOPInstanceUID を取り出す（`/instances/{sop}/file` 形式の URL 前提）。
  * 取れなければ null。GSPS/SR の参照を組むときに使う。
  */

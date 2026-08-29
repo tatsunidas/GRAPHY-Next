@@ -454,3 +454,67 @@ describe("parseSaveFile — 墓標", () => {
     expect(parsed.deleted).toEqual([]);
   });
 });
+
+describe("マルチフレームのフレーム記録（2026-08-28）", () => {
+  const xa = (frame: number) => `wadouri:http://x/instances/1.2.3/file&frame=${frame + 1}`;
+  const ann = (uid: string, refId: string) => ({
+    annotationUID: uid,
+    metadata: { toolName: "Length", referencedImageId: refId },
+    data: { handles: { points: [[0, 0, 0], [1, 1, 1]] } },
+  });
+  const ctx = {
+    sopOf: () => "1.2.3",
+    frameOf: (id: string) => {
+      const m = /frame=(\d+)/.exec(id);
+      return m ? Number(m[1]) - 1 : null;
+    },
+    metaOf: () => undefined,
+  };
+
+  it("🔴 ROI ごとに自分のフレームが入る（表示中の値を配らない）", () => {
+    const a = toSavedRoi(ann("a", xa(0)), ctx)!;
+    const b = toSavedRoi(ann("b", xa(7)), ctx)!;
+    expect(a.frame).toBe(0);
+    expect(b.frame).toBe(7);
+    // 同じインスタンスなので SOP は同じ。**SOP だけでは区別できない**のがこの不具合の核心。
+    expect(a.sopInstanceUid).toBe(b.sopInstanceUid);
+  });
+
+  it("単一フレーム（frame= 無し）では frame を持たない", () => {
+    const r = toSavedRoi(ann("c", "wadouri:http://x/instances/1.2.3/file"), ctx)!;
+    expect(r.frame).toBeUndefined();
+  });
+
+  it("frameOf を渡さなければ記録しない（従来の呼び出しを壊さない）", () => {
+    const r = toSavedRoi(ann("d", xa(3)), { sopOf: () => "1.2.3", metaOf: () => undefined })!;
+    expect(r.frame).toBeUndefined();
+  });
+
+  it("保存 → 読み込みで frame が往復する", () => {
+    const file = buildSaveFile([toSavedRoi(ann("a", xa(4)), ctx)!]);
+    const back = parseSaveFile(JSON.stringify(file));
+    expect(back.rois[0].frame).toBe(4);
+  });
+
+  it("壊れた frame は取り込まない（負・非数）", () => {
+    const file = buildSaveFile([toSavedRoi(ann("a", xa(4)), ctx)!]);
+    const raw = JSON.parse(JSON.stringify(file));
+    raw.rois[0].frame = -1;
+    expect(parseSaveFile(JSON.stringify(raw)).rois[0].frame).toBeUndefined();
+    raw.rois[0].frame = "3";
+    expect(parseSaveFile(JSON.stringify(raw)).rois[0].frame).toBeUndefined();
+  });
+
+  it("selectRestorable はフレームを解決関数へ渡す", () => {
+    const rois = [
+      { roiUid: "a", tool: "Length", sopInstanceUid: "1.2.3", frame: 2, points: [] },
+      { roiUid: "b", tool: "Length", sopInstanceUid: "1.2.3", points: [] },
+    ];
+    const seen: (number | undefined)[] = [];
+    selectRestorable(rois, (_sop, frame) => {
+      seen.push(frame);
+      return "img";
+    }, () => false);
+    expect(seen).toEqual([2, undefined]);
+  });
+});

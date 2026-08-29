@@ -12,7 +12,7 @@
 import { getRenderingEngines, metaData } from "@cornerstonejs/core";
 import { annotation as csAnnotation } from "@cornerstonejs/tools";
 import { log } from "../log";
-import { sopFromImageId } from "./imageId";
+import { frameOfImageId, sopFromImageId } from "./imageId";
 import { getRoiMaskMeta, setRoiMaskMeta } from "./roiMaskStore";
 import { ensureSplineInstance } from "./roiContourTools";
 import {
@@ -71,15 +71,57 @@ export function openStackSops(): Set<string> {
   return out;
 }
 
-/** スタックの imageId 群から SOP → imageId の対応表を作る。 */
-export function sopIndex(imageIds: string[]): Map<string, string> {
-  const map = new Map<string, string>();
+/**
+ * スタックの imageId 群から **SOP → imageId 群**の対応表を作る。
+ *
+ * <p>🚨 **「同じ SOP は 1 つの imageId」という前提は XA で崩れる。** マルチフレームの 1 ランは
+ * 数十〜数百フレームが**すべて同じ SOP Instance UID** を持ち、`&frame=N` だけが違う。
+ * 以前はここで**先勝ち**にしていたため、ROI の復元が**必ず 1 フレーム目**になっていた
+ * （実機で「解析したフレームには無く、1 フレーム目に出る」として発覚・2026-08-28）。
+ *
+ * <p>スタック内の並び順のまま保持する（解決はフレーム番号で行うので順序には依存しないが、
+ * フレーム番号を持たない古い保存を戻すときの既定＝先頭が要る）。
+ */
+export function sopIndex(imageIds: string[]): Map<string, string[]> {
+  const map = new Map<string, string[]>();
   for (const id of imageIds) {
     const sop = sopOfImageId(id);
-    // 同じ SOP が複数 imageId に現れることは通常無いが、先勝ちにする（合成 imageId 対策）。
-    if (sop && !map.has(sop)) map.set(sop, id);
+    if (!sop) continue;
+    const list = map.get(sop);
+    if (list) list.push(id);
+    else map.set(sop, [id]);
   }
   return map;
+}
+
+/**
+ * (SOP, フレーム) → imageId を解く。
+ *
+ * <p>解決の順序:
+ * <ol>
+ *   <li>その SOP がスタックに無い → null（別シリーズの ROI は戻さない）</li>
+ *   <li>imageId が 1 つだけ（＝単一フレーム）→ それ。**フレーム番号は見ない**
+ *       （古い保存にも新しい保存にも同じように効く）</li>
+ *   <li>フレーム番号が保存されている → **imageId 自身の `frame=` と突き合わせる**。
+ *       配列の添字で引かない——スタックの並びとフレーム番号が一致する保証は無い</li>
+ *   <li>フレーム番号が無い（フレームを記録していなかった頃の保存）→ 先頭。
+ *       🔴 **これは従来どおり間違い得る**が、情報が無いので直しようがない。
+ *       黙って捨てるより 1 フレーム目に出すほうが、利用者が気付いて描き直せる</li>
+ * </ol>
+ */
+export function resolveImageId(
+  index: Map<string, string[]>,
+  sop: string,
+  frame?: number,
+): string | null {
+  const list = index.get(sop);
+  if (!list || list.length === 0) return null;
+  if (list.length === 1) return list[0];
+  if (typeof frame === "number" && frame >= 0) {
+    const hit = list.find((id) => frameOfImageId(id) === frame);
+    if (hit) return hit;
+  }
+  return list[0];
 }
 
 /**
@@ -106,6 +148,9 @@ export function collectRoisForPatient(patientKey: string, loaded: SavedRoi[] = [
     if (meta?.patientKey && meta.patientKey !== patientKey) continue;
     const saved = toSavedRoi(a as AnnotationLike, {
       sopOf: sopOfImageId,
+      // 🔴 その ROI 自身の imageId からフレームを取る（表示中の値を配ると別フレームの
+      //    ROI に今見ているフレーム番号を書いてしまう。`ct` を渡していないのと同じ理由）。
+      frameOf: frameOfImageId,
       metaOf: (roiUid) => getRoiMaskMeta(roiUid),
       // scope は作成時のメタが持っているので、ここでは補わない
       // （表示中の ZCT を混ぜると、別タイルの ROI に今見ている c/t を書いてしまう）。
@@ -153,7 +198,7 @@ export function restoreRoisIntoStack(
   const index = sopIndex(imageIds);
   const targets = selectRestorable(
     saved,
-    (sop) => index.get(sop) ?? null,
+    (sop, frame) => resolveImageId(index, sop, frame),
     (roiUid) => {
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
