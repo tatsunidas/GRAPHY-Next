@@ -166,6 +166,82 @@ function check(cond: boolean, label: string, detail?: unknown): void {
 }
 
 /** 設計目標。未達でも失敗にはしないが、**合格にも数えない**。 */
+/**
+ * A7（FFR インターフェース）の検証は**この通しの続きで行う**。
+ *
+ * <p>色を乗せる相手は 3D 再構成の産物（`XaVesselModel`）なので、モデルを作るには
+ * ここまでの 2 方向 QCA → 三角測量が丸ごと要る。別スパイクにすると同じ 300 行を
+ * 二重に持つことになるので、**同じ 1 回の通しの中で見る**（§11.4）。
+ * 区間ごとに繰り返す意味は無いので 1 度だけ。
+ */
+let ffrChecked = false;
+
+/** 3D ウィンドウの画素統計（色の内訳つき。`vtkGeometryView.readPixelStats`）。 */
+interface Geo3dStats {
+  total: number;
+  nonBackground: number;
+  fraction: number;
+  warm: number;
+  cool: number;
+  neutral: number;
+}
+
+/**
+ * H11 の**一覧**（`getVesselModels()`）。
+ *
+ * 🔴 **これは要約であって本体ではない。** 点数と校正の区分しか持たない。中心線・径・
+ * 校正の出自を見るには {@link vesselModelBody} を使う——この検証を書いた初回に取り違え、
+ * 「モデルに中心線が入っていない」という**偽の不具合**を作った（2026-08-29）。
+ * 新しい順に並ぶので、いま作ったモデルは**先頭**。
+ */
+interface VesselModelSummary {
+  runId: string;
+  label: string;
+  segmentCount: number;
+  pointCount: number;
+  diameterCalibrated: boolean;
+  tier: string;
+}
+
+/** H11 の**モデル本体**（`getVesselModel()`。省略で最も新しいもの）。 */
+interface VesselModelBody {
+  runId: string;
+  label: string;
+  calibration: {
+    diameterCalibrated: boolean;
+    sources: string[];
+    tiers: string[];
+    diameterMethod: string | null;
+  };
+  segments: { id: string; points: number[][]; diameterMm: (number | null)[] }[];
+}
+
+async function geo3dStats(page: Page): Promise<Geo3dStats | null> {
+  const raw = (await page.evaluate(`(() => {
+    const g = window.__graphyDebug;
+    const s = g && g.getGeometry3dStats ? g.getGeometry3dStats() : null;
+    return s ? JSON.stringify(s) : null;
+  })()`)) as string | null;
+  return raw ? (JSON.parse(raw) as Geo3dStats) : null;
+}
+
+async function vesselModels(page: Page): Promise<VesselModelSummary[]> {
+  const raw = (await page.evaluate(`(() => {
+    const g = window.__graphyDebug;
+    return JSON.stringify(g && g.getVesselModels ? g.getVesselModels() : []);
+  })()`)) as string;
+  return JSON.parse(raw) as VesselModelSummary[];
+}
+
+async function vesselModelBody(page: Page): Promise<VesselModelBody | null> {
+  const raw = (await page.evaluate(`(() => {
+    const g = window.__graphyDebug;
+    const m = g && g.getVesselModel ? g.getVesselModel() : null;
+    return m ? JSON.stringify(m) : null;
+  })()`)) as string | null;
+  return raw ? (JSON.parse(raw) as VesselModelBody) : null;
+}
+
 function target(cond: boolean, label: string, detail?: unknown): void {
   if (cond) pass++;
   else unmet++;
@@ -285,17 +361,41 @@ async function runQcaForView(
   })()`);
   const labels = chosen ? (JSON.parse(chosen as string) as string[]) : [];
   if (labels.length > 1) {
+    // 🚨 **ラベルの単位は px とは限らない。** GNBP-XA は装置タグを持つので校正が効き、
+    //    選択肢は "#1 — 45.85 mm（長さ）" と **mm** で出る。`px` 決め打ちの正規表現だと
+    //    どれにも当たらず、**黙って先頭（＝前の区間）を選ぶ**——2 区間目が 1 区間目の
+    //    計測で解析され、再構成が品質基準で弾かれて落ちた（2026-08-29）。
+    //    **一般化: 画面の文字列で照合するなら、単位まで読む。**
+    const mmPerPx = (await viewer.evaluate(`(() => {
+      const g = window.__graphyDebug;
+      const c = g && g.getXaCalibration ? g.getXaCalibration()[0] : null;
+      return c && c.mmPerPxCol ? c.mmPerPxCol : null;
+    })()`)) as number | null;
     let best = 0;
     let bestErr = Number.POSITIVE_INFINITY;
     labels.forEach((label, i) => {
-      const m = /([\d.]+)\s*px/.exec(label ?? "");
+      const m = /([\d.]+)\s*(px|mm)/.exec(label ?? "");
       if (!m) return;
-      const err = Math.abs(parseFloat(m[1]) - wantPx);
+      const value = parseFloat(m[1]);
+      // mm 表記なら px へ戻して比べる（校正はアプリの単一入口から読む）。
+      const px = m[2] === "mm" ? (mmPerPx ? value / mmPerPx : NaN) : value;
+      if (!Number.isFinite(px)) return;
+      const err = Math.abs(px - wantPx);
       if (err < bestErr) {
         bestErr = err;
         best = i;
       }
     });
+    // 🔴 **どれとも照合できなかったら黙って 0 を選ばない。** それが今回の壊れ方だった。
+    if (!Number.isFinite(bestErr)) {
+      throw new Error(`解析区間を選べません（単位を読めなかった）: ${JSON.stringify(labels)}`);
+    }
+    if (bestErr > wantPx * 0.2) {
+      throw new Error(
+        `解析区間の照合が遠すぎます（狙い ${wantPx.toFixed(1)}px・誤差 ${bestErr.toFixed(1)}px）: ` +
+          JSON.stringify(labels),
+      );
+    }
     await viewer.selectOption('[data-testid="xa-analysis-pick"]', String(best));
     await viewer.waitForTimeout(400);
   }
@@ -690,6 +790,65 @@ async function analyseSegment(
     }
     }
 
+    // ── A7: 3D 再構成の結果がモデルとして登録される（§11.2 / §11.3 ③）──
+    // 🔴 **「3D で開く」を押さなくても登録される**こと。表示操作を前提にすると
+    //    「解析はできているのにプラグインからは見えない」状態ができる。**押す前に**見る。
+    if (!ffrChecked) {
+      const models = await vesselModels(viewerB);
+      check(models.length >= 1, `[FFR/${tag}] ★3D 再構成の結果が登録簿に載る（3D を開く前に）`, models.length);
+      const sum = models[0]; // 新しい順
+      check(
+        !!sum && sum.pointCount > 10 && sum.segmentCount >= 1,
+        `[FFR/${tag}] 一覧に点数と区間数が出る（プラグインが選べる材料）`,
+        sum,
+      );
+      const body = await vesselModelBody(viewerB);
+      const s0 = body?.segments?.[0];
+      check(!!s0 && s0.points.length > 10, `[FFR/${tag}] モデル本体に中心線（患者 LPS mm）が入っている`, s0?.points.length);
+      check(
+        !!s0 && s0.points.every((q) => q.length === 3),
+        `[FFR/${tag}] 中心線が 3 次元の点で来る`,
+        s0?.points[0],
+      );
+      check(
+        !!s0 && s0.diameterMm.some((d) => d != null),
+        `[FFR/${tag}] モデルに径が入っている（受け取る側が断面を作れる）`,
+        s0?.diameterMm.filter((d) => d != null).length,
+      );
+      // 🔴 §11.3 ⑧: `unit:"mm"` だけでは**実測と幾何近似の区別が付かない**。
+      //    ファントムは装置タグ由来なので `approximate` が期待値——ここが `calibrated` に
+      //    化けていたら、**近似を実測として外部モジュールへ渡している**。
+      check(
+        !!body && body.calibration.sources.length === 2 && body.calibration.tiers.length === 2,
+        `[FFR/${tag}] ★校正の出自と縮退区分が方向ごとにモデルへ載る`,
+        body?.calibration,
+      );
+      // 🔴 期待値をファントムのタグに決め打ちしない。守りたいのは
+      //    「**方向のうち最も弱い区分が一覧に出る**」という規則そのもの
+      //    （1 方向でも近似なら結果は近似。§11.3 ⑧ / `weakestTier`）。
+      const tiers = body?.calibration.tiers ?? [];
+      const weakest = tiers.includes("uncalibrated")
+        ? "uncalibrated"
+        : tiers.includes("approximate")
+          ? "approximate"
+          : "calibrated";
+      check(
+        !!sum && tiers.length > 0 && sum.tier === weakest,
+        `[FFR/${tag}] ★一覧には最も弱い区分が出る（近似を実測として渡さない）`,
+        { tier: sum?.tier, tiers },
+      );
+      check(
+        !!body && body.calibration.diameterCalibrated === true && sum?.diameterCalibrated === true,
+        `[FFR/${tag}] 径が mm で出せている旗が立つ`,
+        body?.calibration.diameterCalibrated,
+      );
+      check(
+        !!body && body.calibration.diameterMethod != null,
+        `[FFR/${tag}] ★径の測り方まで運ぶ（半値法と密度計測で絶対値が 10% 変わる）`,
+        body?.calibration.diameterMethod,
+      );
+    }
+
     // ── 3D ウィンドウへの受け渡し（幾何だけのビュー）────────────
     if (seg.hasLesion) {
       const geo = await driver.waitForNewPage(
@@ -736,6 +895,146 @@ async function analyseSegment(
       const objects = await geo.getByTestId("geometry3d-objects").getAttribute("data-count");
       check(Number(objects) === 1, `[3D表示/${tag}] シーンに中心線が 1 本だけ載る（重ならない）`, objects);
       await geo.screenshot({ path: path.join(OUT_DIR, `4-${tag}-geometry3d.png`) }).catch(() => {});
+
+      // ══ A7（H11 / H12）— 解析値を色で乗せる（§11.2〜§11.4）══════════
+      // 🚨 **FFR モジュールはまだ無い**ので、DEV 限定の口から同じ経路を通す。
+      //    通っているのは host API 本体（`putVesselAnalysis`）で、出自だけ "debug" になる。
+      // 🚨 **色は画素で見る。** 凡例が出ていることも、描画物の数が合っていることも、
+      //    色が正しい証拠にはならない（この spike が黒画面で踏んだのと同じ罠）。
+      if (!ffrChecked) {
+        ffrChecked = true;
+        // 🚨 **「色が付いていない」を「彩度が無い」で測ってはいけない。** 既定の中心線は
+        //    単色**シアン**なので、乗せる前から画素は全部「寒色」に数えられる（実測
+        //    warm 0 / cool 32174）。見るべきは**赤が無いこと**＝勾配が乗っていないこと。
+        const before = await geo3dStats(geo);
+        check(
+          !!before && before.warm === 0,
+          `[FFR/${tag}] 値を乗せる前は単色（赤寄りの画素が 1 つも無い）`,
+          before,
+        );
+
+        const seeded = JSON.parse((await geo.evaluate(`(() => {
+          const g = window.__graphyDebug;
+          return JSON.stringify(g.seedVesselAnalysis("DEBUG-FFR"));
+        })()`)) as string) as { ok: boolean; error?: string; runId?: string };
+        check(seeded.ok === true, `[FFR/${tag}] host API（H12）で値を入れられる`, seeded);
+        await geo.waitForTimeout(2_500);
+
+        const colored = await geo3dStats(geo);
+        // 種は「径 / 最大径」を範囲 [0.5,1] で乗せる。狭窄部は下端側＝**赤**、健常部は
+        // 上端側＝青。赤と青が**同居**して初めて「勾配が乗った」と言える。
+        check(
+          !!colored && colored.warm > colored.nonBackground * 0.02 && colored.cool > 0,
+          `[FFR/${tag}] ★値を乗せると血管に色が乗る（狭窄部が赤・健常部が青。画素で確認）`,
+          colored,
+        );
+        check((await geo.getByTestId("vessel-legend").count()) === 1, `[FFR/${tag}] 凡例が出る`);
+        const legendLabel = await geo.getByTestId("vessel-legend").getAttribute("data-label");
+        check(legendLabel === "DEBUG-FFR", `[FFR/${tag}] 凡例に量の名前が出る（本体は名前を決めない）`, legendLabel);
+        // 🔴 §19: 出所と免責文が画面から消えてはいけない。
+        const src = (await geo.getByTestId("vessel-legend-source").textContent()) ?? "";
+        check(src.includes("debug"), `[FFR/${tag}] ★どのモジュールが出した値かが画面に出る`, src.trim());
+        const disc = (await geo.getByTestId("vessel-legend-disclaimer").textContent()) ?? "";
+        check(disc.trim().length > 0, `[FFR/${tag}] ★モジュールの免責文がそのまま出る`, disc.trim().slice(0, 40));
+        // 校正が近似なら、そう書く（§7.4 / §11.3 ⑧）。
+        check(
+          (await geo.getByTestId("vessel-legend-tier").count()) === 1,
+          `[FFR/${tag}] 幾何近似の校正であることが凡例に出る`,
+        );
+        await geo.screenshot({ path: path.join(OUT_DIR, `5-${tag}-ffr-color.png`) }).catch(() => {});
+
+        // 🔴 §11.3 ⑤: **本体は閾値を持たない。** 色は渡された `range` だけで決まる。
+        //    同じ値を別の範囲で入れ直すと、色は必ず動く。
+        const widened = JSON.parse((await geo.evaluate(`(() => {
+          const g = window.__graphyDebug;
+          const m = g.getVesselModel();
+          const seg = m.segments[0];
+          const pp = [];
+          for (let i = 0; i < seg.diameterMm.length; i++) {
+            if (seg.diameterMm[i] == null) continue;
+            pp.push({ segmentId: seg.id, index: i, value: seg.diameterMm[i] });
+          }
+          return JSON.stringify({
+            r: g.putVesselAnalysis(m.runId, {
+              kind: "custom", label: "WIDE", range: [0, 1000], perPoint: pp,
+              disclaimer: "DEBUG",
+            }),
+            n: pp.length,
+          });
+        })()`)) as string) as { r: { ok: boolean; error?: string }; n: number };
+        check(widened.r.ok === true, `[FFR/${tag}] 別の範囲で入れ直せる`, widened);
+        await geo.waitForTimeout(2_000);
+        const wide = await geo3dStats(geo);
+        // 径 [mm] を範囲 [0,1000] で見れば、値は全部下端寄り＝暖色側に振り切る。
+        check(
+          !!wide && !!colored && wide.warm > colored.warm * 1.5 && wide.cool < colored.cool,
+          `[FFR/${tag}] ★色は渡された範囲だけで決まる（本体が閾値を持っていない）`,
+          { before: { warm: colored?.warm, cool: colored?.cool }, after: { warm: wide?.warm, cool: wide?.cool } },
+        );
+
+        // 🔴 §11.3 ⑥: **値の無い点はグレー。埋めない。** 半分だけ値を入れて、
+        //    色と無彩色が同居することを見る（埋めていれば全部色が付いてしまう）。
+        const half = JSON.parse((await geo.evaluate(`(() => {
+          const g = window.__graphyDebug;
+          const m = g.getVesselModel();
+          const seg = m.segments[0];
+          const n = seg.points.length;
+          const pp = [];
+          for (let i = 0; i < Math.floor(n / 2); i++) pp.push({ segmentId: seg.id, index: i, value: 0.95 });
+          return JSON.stringify({
+            r: g.putVesselAnalysis(m.runId, {
+              kind: "custom", label: "HALF", range: [0.5, 1], perPoint: pp, disclaimer: "DEBUG",
+            }),
+            n: n,
+          });
+        })()`)) as string) as { r: { ok: boolean }; n: number };
+        check(half.r.ok === true, `[FFR/${tag}] 一部の点だけに値を入れられる`, half);
+        await geo.waitForTimeout(2_000);
+        const partial = await geo3dStats(geo);
+        check(
+          !!partial && partial.cool > 0 && partial.neutral > partial.nonBackground * 0.2,
+          `[FFR/${tag}] ★値の無い点はグレーのまま（補間して埋めていない）`,
+          partial,
+        );
+        await geo.screenshot({ path: path.join(OUT_DIR, `6-${tag}-ffr-partial.png`) }).catch(() => {});
+
+        // 🔴 §11.3 ⑦: **壊れた入力は黙って落とさずエラー。** 捨てて残りを採用すると
+        //    ずれたまま色が乗り、値が付いているぶん誰も気付けない。
+        const bad = JSON.parse((await geo.evaluate(`(() => {
+          const g = window.__graphyDebug;
+          const m = g.getVesselModel();
+          const seg = m.segments[0];
+          const put = (pp, range) => g.putVesselAnalysis(m.runId, {
+            kind: "custom", label: "BAD", range: range || [0, 1], perPoint: pp, disclaimer: "DEBUG",
+          });
+          return JSON.stringify({
+            unknownSegment: put([{ segmentId: "no-such-segment", index: 0, value: 0.5 }]),
+            outOfRange: put([{ segmentId: seg.id, index: seg.points.length + 10, value: 0.5 }]),
+            notFinite: put([{ segmentId: seg.id, index: 0, value: Number.NaN }]),
+            degenerateRange: put([{ segmentId: seg.id, index: 0, value: 0.5 }], [1, 1]),
+            unknownRun: g.putVesselAnalysis("no-such-run", {
+              kind: "custom", label: "BAD", range: [0, 1],
+              perPoint: [{ segmentId: seg.id, index: 0, value: 0.5 }],
+            }),
+          });
+        })()`)) as string) as Record<string, { ok: boolean; error?: string }>;
+        for (const [key, r] of Object.entries(bad)) {
+          check(
+            r.ok === false && typeof r.error === "string" && r.error.length > 0,
+            `[FFR/${tag}] ★壊れた入力（${key}）はエラーになる（黙って捨てない）`,
+            r,
+          );
+        }
+        // 壊れた入力を入れたあとも、直前の正しい表示が残っていること
+        //（拒否したはずの入力で画面が消えたら、それはそれで壊れている）。
+        const afterBad = await geo3dStats(geo);
+        check(
+          !!afterBad && !!partial && Math.abs(afterBad.cool - partial.cool) < partial.nonBackground * 0.05,
+          `[FFR/${tag}] 拒否しても直前の表示は壊れない`,
+          { before: partial?.cool, after: afterBad?.cool },
+        );
+      }
+
       await geo.close().catch(() => {});
       await viewerB.waitForTimeout(500);
     }
