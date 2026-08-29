@@ -188,7 +188,7 @@ describe("parseSaveFile — 壊れた入力で全部を失わない", () => {
   });
 
   it("JSON として壊れていれば空配列（例外にしない）", () => {
-    const empty: ParsedRoiFile = { rois: [], deleted: [] };
+    const empty: ParsedRoiFile = { rois: [], deleted: [], analyses: [] };
     expect(parseSaveFile("{not json")).toEqual(empty);
     expect(parseSaveFile("")).toEqual(empty);
     expect(parseSaveFile(null)).toEqual(empty);
@@ -202,7 +202,7 @@ describe("parseSaveFile — 壊れた入力で全部を失わない", () => {
       schema: ROI_SCHEMA_VERSION + 1,
       rois: [{ roiUid: "x", tool: "Length", sopInstanceUid: SOP, points: [[0, 0, 0], [1, 1, 1]] }],
     });
-    expect(parseSaveFile(json)).toEqual({ rois: [], deleted: [] });
+    expect(parseSaveFile(json)).toEqual({ rois: [], deleted: [], analyses: [] });
   });
 
   it("scope の z/c/t は数値か \"all\" だけ通す", () => {
@@ -331,6 +331,7 @@ describe("mergeSaveFiles — 別ウィンドウの計測を失わず、削除は
   const file = (rois: SavedRoi[], deleted: string[] = [], at = "2026-07-30T00:00:00Z"): ParsedRoiFile => ({
     rois,
     deleted: deleted.map((roiUid) => ({ roiUid, at })),
+    analyses: [],
   });
 
   it("双方の ROI が残る（和を取る）", () => {
@@ -381,7 +382,7 @@ describe("mergeSaveFiles — 別ウィンドウの計測を失わず、削除は
   it("片方が空でも成立する", () => {
     expect(mergeSaveFiles(file([]), file([roi("a")])).rois.map((r) => r.roiUid)).toEqual(["a"]);
     expect(mergeSaveFiles(file([roi("a")]), file([])).rois.map((r) => r.roiUid)).toEqual(["a"]);
-    expect(mergeSaveFiles(file([]), file([]))).toEqual({ rois: [], deleted: [] });
+    expect(mergeSaveFiles(file([]), file([]))).toEqual({ rois: [], deleted: [], analyses: [] });
   });
 });
 
