@@ -26,6 +26,11 @@ export interface FieldDef {
   options?: FieldOption[]; // select 用
   min?: number; // number 用
   max?: number; // number 用
+  /**
+   * number 用の刻み。**小数を受ける項目では必ず指定する** —— 既定の step は 1 なので、
+   * min が整数でない項目（例 1.05）では 1.5 のような値がブラウザの検証で弾かれる。
+   */
+  step?: number;
 }
 
 export interface SectionDef {
@@ -386,6 +391,24 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
             min: 0,
             max: 10,
             helpKey: "settings.field.maskOutlineWidth.help",
+          },
+        ],
+      },
+      // アンギオ（XA）の定量解析。fw/angio-design.md §9.1（QVA）。
+      {
+        titleKey: "settings.sec.angio",
+        fields: [
+          // 🔴 「参照径の何倍で動脈瘤と呼ぶか」。既定 1.5 は血管外科の報告基準（+50%）だが、
+          //    部位・施設で採る基準が違うので固定しない。判定文と SR には**この値が出る**。
+          {
+            key: "xa.aneurysmRatio",
+            labelKey: "settings.field.aneurysmRatio",
+            type: "number",
+            default: 1.5,
+            min: 1.05,
+            max: 5,
+            step: 0.05,
+            helpKey: "settings.field.aneurysmRatio.help",
           },
         ],
       },

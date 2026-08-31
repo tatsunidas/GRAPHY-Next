@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { referenceFromEnds, runQca, type QcaResult } from "./qca";
-import { analyzeDilation, ANEURYSM_RATIO } from "./qva";
+import {
+  analyzeDilation,
+  normalizeAneurysmRatio,
+  summarizeDiameters,
+  DEFAULT_ANEURYSM_RATIO,
+  ANEURYSM_RATIO_MIN,
+  ANEURYSM_RATIO_MAX,
+} from "./qva";
 
 /**
  * QVA（`fw/angio-design.md` §9.1 / A5a）の数値検証。
@@ -127,7 +134,7 @@ describe("★analyzeDilation — 瘤の計測（真値既知ファントム）",
     const p = makeVessel(120, 60, (x) => 7.5 + bulge(x, 1.5), () => 30);
     const r = analyze(p.pixels, p.width, p.height, 30);
     const d = analyzeDilation(r)!;
-    expect(d.ratio).toBeLessThan(ANEURYSM_RATIO);
+    expect(d.ratio).toBeLessThan(DEFAULT_ANEURYSM_RATIO);
     expect(d.aneurysmal).toBe(false);
     expect(d.ectatic).toBe(true);
   });
@@ -198,5 +205,82 @@ describe("★analyzeDilation — 瘤の計測（真値既知ファントム）",
     expect(b.eccentricity!).toBeCloseTo(a.eccentricity!, 9);
     // 絶対値のほうは k 倍される（打ち消されないことも固定しておく）。
     expect(b.maxDiameter).toBeCloseTo(a.maxDiameter * k, 9);
+  });
+});
+
+/**
+ * 「動脈瘤と呼ぶ比」は**設定で変えられる**（2026-08-31・利用者の要望）。
+ * 判定・画面・SR が同じ値を使うこと、壊れた設定で判定が消えないことを固定する。
+ */
+describe("動脈瘤の基準（設定可能）", () => {
+  const profile: QcaResult = {
+    ...({} as QcaResult),
+    positions: [0, 1, 2, 3, 4, 5, 6],
+    diameters: [3, 3, 3.6, 4.2, 3.6, 3, 3],
+    reference: [3, 3, 3, 3, 3, 3, 3],
+    edgeOffsets: [3, 3, 3.6, 4.2, 3.6, 3, 3].map((d) => ({ left: -d / 2, right: d / 2 })),
+    centerline: Array.from({ length: 7 }, (_, i) => [i, 0] as [number, number]),
+    normals: Array.from({ length: 7 }, () => [0, 1] as [number, number]),
+  };
+
+  it("既定（1.5 倍）では比 1.4 は瘤にならない", () => {
+    const d = analyzeDilation(profile)!;
+    expect(d.ratio).toBeCloseTo(1.4, 9);
+    expect(d.aneurysmal).toBe(false);
+    expect(d.aneurysmRatio).toBe(DEFAULT_ANEURYSM_RATIO);
+  });
+
+  it("基準を 1.3 に下げると同じ形が瘤になる（判定に使った比も一緒に返る）", () => {
+    const d = analyzeDilation(profile, { aneurysmRatio: 1.3 })!;
+    expect(d.aneurysmal).toBe(true);
+    // 🔴 画面と SR に出すのはこの値。ここが返らないと「基準 1.5」と書かれた保存物ができる。
+    expect(d.aneurysmRatio).toBe(1.3);
+  });
+
+  it("基準を上げると瘤でなくなる（境界はちょうどで含む）", () => {
+    expect(analyzeDilation(profile, { aneurysmRatio: 1.4 })!.aneurysmal).toBe(true);
+    expect(analyzeDilation(profile, { aneurysmRatio: 1.41 })!.aneurysmal).toBe(false);
+  });
+
+  it("壊れた設定は範囲に丸めるか既定へ落とす（解析そのものは止めない）", () => {
+    expect(normalizeAneurysmRatio("1.3")).toBe(1.3);
+    expect(normalizeAneurysmRatio("")).toBe(DEFAULT_ANEURYSM_RATIO);
+    expect(normalizeAneurysmRatio(undefined)).toBe(DEFAULT_ANEURYSM_RATIO);
+    expect(normalizeAneurysmRatio(Number.NaN)).toBe(DEFAULT_ANEURYSM_RATIO);
+    // 1.0 以下は「常に瘤」になるので許さない。
+    expect(normalizeAneurysmRatio(0.5)).toBe(ANEURYSM_RATIO_MIN);
+    expect(normalizeAneurysmRatio(99)).toBe(ANEURYSM_RATIO_MAX);
+    // 丸めた値がそのまま判定に使われる（画面の基準文と食い違わない）。
+    expect(analyzeDilation(profile, { aneurysmRatio: 0.5 })!.aneurysmRatio).toBe(ANEURYSM_RATIO_MIN);
+  });
+});
+
+/**
+ * 拡張が無くても最大径・参照径は出す（2026-08-31・利用者の要望）。
+ * 「拡張なし」とだけ出すと、**測れなかったのか拡張が無かったのか**が区別できない。
+ */
+describe("最大径・参照径は常に出せる", () => {
+  const flat: QcaResult = {
+    ...({} as QcaResult),
+    positions: Array.from({ length: 20 }, (_, i) => i),
+    // 端 2 点だけが太い（実データで見えている「区間の端は太く出る」現象）。
+    diameters: Array.from({ length: 20 }, (_, i) => (i < 2 || i >= 18 ? 3.4 : 3.0)),
+    reference: Array.from({ length: 20 }, () => 3.0),
+    edgeOffsets: Array.from({ length: 20 }, () => ({ left: -1.5, right: 1.5 })),
+    centerline: Array.from({ length: 20 }, (_, i) => [i, 0] as [number, number]),
+    normals: Array.from({ length: 20 }, () => [0, 1] as [number, number]),
+  };
+
+  it("拡張が無い（＝瘤として報告しない）ときでも最大径と参照径が取れる", () => {
+    expect(analyzeDilation(flat)).toBeNull();
+    const s = summarizeDiameters(flat)!;
+    // 🔴 端の膨らみは拾わない（拾うと「拡張なし」なのに比 1.13 が出て矛盾して見える）。
+    expect(s.maxDiameter).toBeCloseTo(3.0, 9);
+    expect(s.referenceAtMax).toBeCloseTo(3.0, 9);
+    expect(s.ratio).toBeCloseTo(1.0, 9);
+  });
+
+  it("点が少なすぎるときは null（無い数字を作らない）", () => {
+    expect(summarizeDiameters({ ...flat, diameters: [3], reference: [3], positions: [0] })).toBeNull();
   });
 });

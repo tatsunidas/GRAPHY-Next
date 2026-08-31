@@ -413,6 +413,12 @@ export interface QvaSrRequest {
     /** 測れなければ null。 */
     eccentricity?: number | null;
     aneurysmal: boolean;
+    /**
+     * 判定に使った比（参照径の何倍で「動脈瘤」と呼んだか）。省略時は 1.5。
+     * 🔴 **画面の判定文と同じ値を必ず送る**。SR の本文にはこの値が「criterion」として出るので、
+     * 送り忘れると「基準 1.5 と書いてあるのに 1.3 で瘤と判定された SR」ができる。
+     */
+    aneurysmRatio?: number | null;
   } | null;
 }
 

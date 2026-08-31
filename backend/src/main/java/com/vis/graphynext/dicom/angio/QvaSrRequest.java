@@ -45,7 +45,11 @@ public record QvaSrRequest(
      *                     打ち消されない</b>——太さの違う 2 点の比であり、係数は径と断面の形に
      *                     依存するため（§16.4）。密度計測（A4c）ならその依存は無い
      * @param eccentricity 0（全周性＝紡錘状）〜1（片側だけ＝嚢状）。測れなければ null
-     * @param aneurysmal   参照径の 1.5 倍以上か。<b>基準そのものも SR の本文に書く</b>
+     * @param aneurysmal   {@code aneurysmRatio} 倍以上か。<b>基準そのものも SR の本文に書く</b>
+     * @param aneurysmRatio 判定に使った比。<b>フロントの画面に出ているのと同じ値</b>を受け取る
+     *                      （設定 {@code xa.aneurysmRatio} で変わる）。null なら既定 1.5。
+     *                      🔴 ここを固定値にしてはいけない —— 画面で 1.3 と判定したものが
+     *                      「criterion 1.5」と書かれた SR になり、<b>保存物だけが嘘をつく</b>
      */
     public record Dilation(
             double maxDiameter,
@@ -55,6 +59,17 @@ public record QvaSrRequest(
             double proximalNeck,
             double distalNeck,
             Double eccentricity,
-            boolean aneurysmal) {
+            boolean aneurysmal,
+            Double aneurysmRatio) {
+
+        /** 判定に使った比（未指定なら既定 1.5）。 */
+        public double criterion() {
+            return aneurysmRatio != null && Double.isFinite(aneurysmRatio) && aneurysmRatio > 1.0
+                    ? aneurysmRatio
+                    : DEFAULT_ANEURYSM_RATIO;
+        }
     }
+
+    /** 「動脈瘤」と呼ぶ比の既定値。フロント（{@code qva.ts}）の既定と同じ 1.5。 */
+    public static final double DEFAULT_ANEURYSM_RATIO = 1.5;
 }
