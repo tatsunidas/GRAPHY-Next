@@ -26,7 +26,12 @@ import java.util.Locale;
  *
  * <h3>🚨 瘤を「瘤」と書くときは基準も一緒に書く</h3>
  * 「動脈瘤」という語だけを SR に残すと、<b>どの基準で瘤と呼んだのかが読む側に分からない</b>。
- * 参照径の 1.5 倍という基準と、参照径をどう決めたかを本文に書く。
+ * 参照径の何倍を瘤と呼んだか（{@link QvaSrRequest.Dilation#criterion()}）と、参照径をどう
+ * 決めたかを本文に書く。
+ *
+ * <p>🔴 <b>基準はここで決めない。</b> 利用者が設定（{@code xa.aneurysmRatio}）で変えられるので、
+ * <b>画面が判定に使った値をそのまま受け取って書く</b>。ここに定数を持つと、画面と保存物が
+ * 別々の基準を主張する（しかも SR を読む側にはそれが分からない）。
  */
 final class QvaSrWriter {
 
@@ -54,9 +59,6 @@ final class QvaSrWriter {
     private static final Code DIAMETER_METHOD =
             new Code("DIAMMETHOD", "99GRAPHYNEXT", null, "Diameter Measurement Method");
     private static final Code OF_INTEREST = new Code("113000", "DCM", null, "Of Interest");
-
-    /** 「動脈瘤」と呼ぶ比。フロント（{@code qva.ts} の ANEURYSM_RATIO）と同じ値。 */
-    private static final double ANEURYSM_RATIO = 1.5;
 
     private QvaSrWriter() {
     }
@@ -143,10 +145,10 @@ final class QvaSrWriter {
             }
             // 🚨 「瘤」という語だけを残さない。基準と、比が系統誤差に強いことを一緒に書く。
             items.add(text(ASSESSMENT, String.format(Locale.ROOT,
-                    "%s (criterion: max/reference >= %.1f; measured %.2f). "
+                    "%s (criterion: max/reference >= %.2f; measured %.2f). "
                             + "The reference diameter is interpolated from the healthy ends of the analysed segment.",
                     d.aneurysmal() ? "Aneurysm" : "Dilated but below the aneurysm criterion",
-                    ANEURYSM_RATIO, d.ratio())));
+                    d.criterion(), d.ratio())));
         } else {
             items.add(text(ASSESSMENT, "No dilatation above the reference diameter."));
         }

@@ -25,7 +25,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import { publishQcaSnapshot } from "./debugApi";
-import type { QcaResult } from "./qca";
+import { toRanges, type QcaResult } from "./qca";
 import { brushEdges, type BrushedEdge, smoothEdges, detectEdgeOutliers } from "./qcaBrush";
 import {
   buildStraightened,
@@ -57,6 +57,15 @@ export interface QcaEditorProps {
   brushRadius: number;
   /** ハイライトする計測点（径プロファイル上の選択と連動）。 */
   highlightIndex?: number | null;
+  /**
+   * **最大径**の計測点（QVA）。null / 未指定なら描かない。
+   *
+   * <p>🔴 **ここで計算しない。** 最大径は「区間の端を外してから取る」規則（`qva.ts` の
+   * {@link summarizeDiameters}）で決まり、瘤があるときは瘤の頂点（`QvaDilation.maxIndex`）を
+   * 使う。描画側で独自に `Math.max` を取ると、**表に出ている数値と線の位置がずれる**
+   * ——画面の中で 2 つの「最大径」が生まれる。
+   */
+  maxDiameterIndex?: number | null;
   /**
    * エッジ（左右の輪郭線とその上の印）を描くか。
    *
@@ -102,6 +111,7 @@ export function QcaEditor({
   showMask = false,
   showStraight = true,
   highlightIndex,
+  maxDiameterIndex,
   onWaypointsChange,
   onEdgeEdit,
   onEdgeEditMany,
@@ -314,6 +324,25 @@ export function QcaEditor({
       stroke(result.edges.map((e) => e.left), "#4fc3f7");
       stroke(result.edges.map((e) => e.right), "#4fc3f7");
     }
+    // 🔴 **参照径をどこの実測から決めたか**を血管の上に敷く（2026-08-31・利用者の要望）。
+    //    参照径そのものは「点ごとの値」なので画像には描けないが、**使った範囲**は描ける。
+    //    中心線より先に太く敷いて、中心線を上に重ねる（範囲は背景・中心線は前景）。
+    if (result.referenceSupport.length) {
+      ctx.strokeStyle = "rgba(109,139,168,0.55)";
+      ctx.lineWidth = 7;
+      for (const [lo, hi] of toRanges(result.referenceSupport)) {
+        if (hi <= lo) continue;
+        ctx.beginPath();
+        for (let i = lo; i <= hi; i++) {
+          const c = result.centerline[result.pathIndices[i]] ?? result.centerline[i];
+          if (!c) continue;
+          if (i === lo) ctx.moveTo(sx(c[0]), sy(c[1]));
+          else ctx.lineTo(sx(c[0]), sy(c[1]));
+        }
+        ctx.stroke();
+      }
+      ctx.lineWidth = 1;
+    }
     stroke(result.centerline, "#7fd1b9");
 
     // 🚨 **外れ点に印を付ける**（`smooth` モードのときだけ）。
@@ -361,6 +390,19 @@ export function QcaEditor({
       ctx.stroke();
     }
 
+    // 最大径の位置（QVA）。MLD と同じ描き方・別の色で、どちらも一目で分かるようにする。
+    // 🔴 MLD と同じ点になることもある（拡張の無い血管では最小と最大が近い）。**両方描く**
+    //    ——片方を省くと「線が出ていない＝測れていない」と読まれる。
+    const maxEdge = maxDiameterIndex != null ? result.edges[maxDiameterIndex] : null;
+    if (maxEdge) {
+      ctx.strokeStyle = "#c792ea";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(sx(maxEdge.left[0]), sy(maxEdge.left[1]));
+      ctx.lineTo(sx(maxEdge.right[0]), sy(maxEdge.right[1]));
+      ctx.stroke();
+    }
+
     // 径プロファイルで選択中の点。
     if (highlightIndex != null && result.edges[highlightIndex]) {
       const e = result.edges[highlightIndex];
@@ -385,7 +427,7 @@ export function QcaEditor({
     }
   // 🔴 `mode` と `brushRadius` を依存に入れる——外れ点の印は smooth のときだけ描き、
   //    半径で変わる。入れ忘れると「モードを切り替えても印が出ない / 消えない」になる。
-  }, [backdropCanvas, result, waypoints, view, highlightIndex, mode, brushRadius, showEdges, showMask]);
+  }, [backdropCanvas, result, waypoints, view, highlightIndex, maxDiameterIndex, mode, brushRadius, showEdges, showMask]);
 
   // 実機検証が帯の上の座標を計算できるよう、帯の座標系も公開する。
   useEffect(() => {
@@ -471,6 +513,16 @@ export function QcaEditor({
     ctx.lineTo(stripView.dw, syOf(0));
     ctx.stroke();
 
+    // 参照径に使った範囲（本画面と同じ意味・同じ色）。帯の横軸は弧長なので列で塗れる。
+    if (result.referenceSupport.length) {
+      ctx.fillStyle = "rgba(109,139,168,0.22)";
+      for (const [lo, hi] of toRanges(result.referenceSupport)) {
+        const x0 = sxOf(colOf(lo));
+        const x1 = sxOf(colOf(hi));
+        if (x1 > x0) ctx.fillRect(x0, 0, x1 - x0, stripView.dh);
+      }
+    }
+
     // 外れ点の印（本画面と同じ条件で出す）。
     if (mode === "smooth" && showEdges) {
       ctx.strokeStyle = "#ff7b72";
@@ -510,6 +562,17 @@ export function QcaEditor({
       ctx.stroke();
     }
 
+    // 最大径（帯の上でも同じ位置に出す。本画面と帯で違う絵になると、どちらが本当か分からない）。
+    const maxOff = maxDiameterIndex != null ? result.edgeOffsets[maxDiameterIndex] : null;
+    if (maxOff && maxDiameterIndex != null) {
+      ctx.strokeStyle = "#c792ea";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(sxOf(colOf(maxDiameterIndex)), syOf(maxOff.left));
+      ctx.lineTo(sxOf(colOf(maxDiameterIndex)), syOf(maxOff.right));
+      ctx.stroke();
+    }
+
     // 径プロファイルで選択中の点。
     if (highlightIndex != null && result.edgeOffsets[highlightIndex]) {
       const o = result.edgeOffsets[highlightIndex];
@@ -546,7 +609,7 @@ export function QcaEditor({
         ctx.stroke();
       }
     }
-  }, [straight, stripView, result, waypoints, highlightIndex, mode, brushRadius, showEdges, showMask]);
+  }, [straight, stripView, result, waypoints, highlightIndex, maxDiameterIndex, mode, brushRadius, showEdges, showMask]);
 
   // ── 掴む対象を決める ─────────────────────────────────────────────
   const hitWaypoint = (p: [number, number]): number => {
@@ -874,6 +937,12 @@ export function QcaEditor({
         <span style={{ color: "#7fd1b9" }}>━ {t("xa.qca.legendCenterline")}</span>
         <span style={{ color: "#4fc3f7" }}>━ {t("xa.qca.legendEdges")}</span>
         <span style={{ color: "#e07a5f" }}>━ MLD</span>
+        {maxDiameterIndex != null ? (
+          <span style={{ color: "#c792ea" }}>━ {t("xa.qca.legendMaxDiameter")}</span>
+        ) : null}
+        {result.referenceSupport.length ? (
+          <span style={{ color: "#6d8ba8" }}>▬ {t("xa.qca.legendReferenceSupport")}</span>
+        ) : null}
         <span style={{ color: "#c08a2a" }}>
           ■ {t("xa.qca.legendEdited", { waypoints: String(waypoints.length), edges: String(editedCount) })}
         </span>

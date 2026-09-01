@@ -204,6 +204,7 @@ function renderControl(field: FieldDef, t: TFn, raw: string, onChange: (f: Field
           value={raw}
           min={field.min}
           max={field.max}
+          step={field.step}
           onChange={(e) => onChange(field, e.target.value)}
           style={input}
         />

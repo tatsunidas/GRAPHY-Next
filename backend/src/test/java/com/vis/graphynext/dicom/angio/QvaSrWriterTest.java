@@ -47,8 +47,13 @@ class QvaSrWriterTest {
     }
 
     private static QvaSrRequest.Dilation dilation(double ratio, boolean aneurysmal, Double eccentricity) {
+        return dilation(ratio, aneurysmal, eccentricity, null);
+    }
+
+    private static QvaSrRequest.Dilation dilation(
+            double ratio, boolean aneurysmal, Double eccentricity, Double criterion) {
         return new QvaSrRequest.Dilation(3.0 * ratio, ratio, (ratio - 1) * 100, 18.0, 3.0, 3.0,
-                eccentricity, aneurysmal);
+                eccentricity, aneurysmal, criterion);
     }
 
     private static Attributes measurementGroup(Attributes ds) {
@@ -115,6 +120,28 @@ class QvaSrWriterTest {
         assertTrue(assessment.contains("2.00"), assessment);
         // 参照径の決め方も残す（両端から内挿している、という前提が読めないと数値が使えない）。
         assertTrue(assessment.contains("healthy ends"), assessment);
+    }
+
+    /**
+     * 🔴 <b>基準は利用者が設定で変えられる</b>（{@code xa.aneurysmRatio}）。SR には
+     * <b>画面が判定に使った値</b>が入らなければならない —— 固定の 1.5 を書くと、
+     * 1.3 で瘤と判定した結果が「criterion 1.5」の SR になり、保存物だけが嘘をつく。
+     */
+    @Test
+    void criterionComesFromTheRequestNotAConstant() {
+        var r = QvaSrWriter.build(template(), req("mm", dilation(1.35, true, null, 1.30)));
+        String assessment = findByCode(measurementGroup(r.dataset()), "ASSESS").getString(Tag.TextValue);
+        assertTrue(assessment.contains("Aneurysm"), assessment);
+        assertTrue(assessment.contains("1.30"), assessment);
+        assertTrue(!assessment.contains("1.50"), assessment);
+    }
+
+    /** 比が未指定（古いクライアント）なら既定 1.5 に落ちる。 */
+    @Test
+    void criterionFallsBackToTheDefaultWhenNotSent() {
+        var r = QvaSrWriter.build(template(), req("mm", dilation(2.0, true, null, null)));
+        String assessment = findByCode(measurementGroup(r.dataset()), "ASSESS").getString(Tag.TextValue);
+        assertTrue(assessment.contains("1.50"), assessment);
     }
 
     @Test

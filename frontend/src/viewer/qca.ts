@@ -169,6 +169,16 @@ export interface QcaResult {
   diameters: number[];
   /** 参照径の当てはめ（線形回帰）。各点での参照径。 */
   reference: number[];
+  /**
+   * **参照径を決めるのに使った計測点**（＝健常とみなした点）の添字。
+   *
+   * <p>画面に帯として出す（`XaAnalysisDialog` のグラフ・`QcaEditor` の画像とストレート像）。
+   * 🔴 **「参照径がどこから来たか」が見えないと、外れているときに人が気づけない**。
+   * 段差のある血管では自動当てはめが段差をまたいで平均し、%DS が 4.7% 外れた実測がある
+   * （§8.7）。そのとき帯を見れば「段差の両側を健常として平均している」と分かる。
+   * <p>参照径を直接指定した（`fixed`）ときは**空**（どこも測っていない）。
+   */
+  referenceSupport: number[];
   /** 最小血管径。 */
   mld: number;
   /** MLD の中心線インデックス。 */
@@ -822,13 +832,52 @@ function median(values: readonly number[]): number {
  *   （実機で「左端を健常と指定したら参照径が右へ向かって上り坂になる」形で出た）。
  *   近位と遠位の 2 区間を指定したときだけ、その間を線形で結ぶ（臨床 QCA の慣行と同じ）。
  */
+/**
+ * 参照径と、**それを決めるのに使った計測点**（＝健常とみなした点）。
+ *
+ * <p>🔴 **「どこを測って参照径としたか」は画面に出す。** 参照径は 1 本の破線として出るが、
+ * その線が**どの範囲の実測から来たのか**は線を見ても分からない。段差やびまん性病変では
+ * 当てはめが健常部から外れるので（§8.7 の実測: 自動 %DS 45.3 / 健常部指定 49.5 / 真値 50）、
+ * **使った範囲が見えないと「なぜこの参照径になったか」を人が判断できない**。
+ */
+export interface QcaReferenceFit {
+  /** 各計測点での参照径。 */
+  reference: number[];
+  /** 参照径を決めるのに使った計測点の添字（昇順）。 */
+  support: number[];
+  /** 決め方。`auto` = 外れ値を落とす反復回帰、`user` = 人の指定、`ends` = 両端、`fixed` = 直接指定。 */
+  kind: "auto" | "user" | "ends" | "fixed";
+}
+
+/** 添字の集合を連続区間へまとめる（画面で帯として描くため）。 */
+export function toRanges(indices: readonly number[]): [number, number][] {
+  const sorted = [...indices].sort((a, b) => a - b);
+  const out: [number, number][] = [];
+  for (const i of sorted) {
+    const last = out[out.length - 1];
+    if (last && i === last[1] + 1) last[1] = i;
+    else out.push([i, i]);
+  }
+  return out;
+}
+
+/** {@link referenceDiametersFit} の参照径だけを返す薄い包み（既存の呼び出し向け）。 */
 export function referenceDiameters(
   positions: readonly number[],
   diameters: readonly number[],
   userSegments?: readonly (readonly [number, number])[] | null,
 ): number[] {
+  return referenceDiametersFit(positions, diameters, userSegments).reference;
+}
+
+export function referenceDiametersFit(
+  positions: readonly number[],
+  diameters: readonly number[],
+  userSegments?: readonly (readonly [number, number])[] | null,
+): QcaReferenceFit {
   const n = diameters.length;
-  if (n === 0) return [];
+  const all = (): number[] => Array.from({ length: n }, (_, i) => i);
+  if (n === 0) return { reference: [], support: [], kind: "auto" };
 
   if (userSegments && userSegments.length) {
     const picked: boolean[] = new Array(n).fill(false);
@@ -847,18 +896,19 @@ export function referenceDiameters(
       }
     }
     if (count >= 1) {
+      const support = picked.map((v, i) => (v ? i : -1)).filter((i) => i >= 0);
       // 区間 1 つ → 定数。2 つ以上 → その間を線形で結ぶ（テーパーを表現できる）。
       if (ranges < 2) {
         let sum = 0;
         for (let i = 0; i < n; i++) if (picked[i]) sum += diameters[i];
         const mean = sum / count;
-        return positions.map(() => mean);
+        return { reference: positions.map(() => mean), support, kind: "user" };
       }
-      return fitLine(positions, diameters, picked);
+      return { reference: fitLine(positions, diameters, picked), support, kind: "user" };
     }
   }
 
-  if (n < 3) return diameters.map((d) => d);
+  if (n < 3) return { reference: diameters.map((d) => d), support: all(), kind: "auto" };
   let include = new Array<boolean>(n).fill(true);
   let line = fitLine(positions, diameters, include);
   for (let iter = 0; iter < 4; iter++) {
@@ -879,7 +929,12 @@ export function referenceDiameters(
     include = next;
     line = fitLine(positions, diameters, include);
   }
-  return line;
+  return {
+    reference: line,
+    // 最後の反復で残った点＝「健常とみなした点」。病変や端の膨らみはここから外れている。
+    support: include.map((v, i) => (v ? i : -1)).filter((i) => i >= 0),
+    kind: "auto",
+  };
 }
 
 /** `include[i]` が真の点だけで 1 次回帰し、全点での当てはめ値を返す（点が足りなければ平均）。 */
@@ -938,19 +993,37 @@ export function referenceFromEnds(
   diameters: readonly number[],
   fraction = 0.25,
 ): number[] {
+  return referenceFromEndsFit(positions, diameters, fraction).reference;
+}
+
+/** {@link referenceFromEnds} ＋「どの点を健常として使ったか」（両端の窓）。 */
+export function referenceFromEndsFit(
+  positions: readonly number[],
+  diameters: readonly number[],
+  fraction = 0.25,
+): QcaReferenceFit {
   const n = diameters.length;
-  if (n === 0) return [];
-  if (n < 4) return diameters.map(() => median(diameters));
+  const all = (): number[] => Array.from({ length: n }, (_, i) => i);
+  if (n === 0) return { reference: [], support: [], kind: "ends" };
+  if (n < 4) return { reference: diameters.map(() => median(diameters)), support: all(), kind: "ends" };
   const f = Number.isFinite(fraction) ? Math.min(0.5, Math.max(0.05, fraction)) : 0.25;
   const k = Math.max(1, Math.min(Math.floor(n / 2), Math.round(n * f)));
   const proxD = median(diameters.slice(0, k));
   const distD = median(diameters.slice(n - k));
   const proxP = median(positions.slice(0, k));
   const distP = median(positions.slice(n - k));
-  if (!(distP > proxP)) return positions.map(() => (proxD + distD) / 2);
+  // 使ったのは前後の窓（k 点ずつ）。中央は 1 点も使っていない——瘤が区間の大半を占めても
+  // 参照径が動かないのはこのため（§9.1）。**その事実が画面から読めるように支持点を返す。**
+  const support = [
+    ...Array.from({ length: k }, (_, i) => i),
+    ...Array.from({ length: k }, (_, i) => n - k + i),
+  ];
+  if (!(distP > proxP)) {
+    return { reference: positions.map(() => (proxD + distD) / 2), support, kind: "ends" };
+  }
   const a = (distD - proxD) / (distP - proxP);
   const b = proxD - a * proxP;
-  return positions.map((p) => a * p + b);
+  return { reference: positions.map((p) => a * p + b), support, kind: "ends" };
 }
 
 export function lesionBounds(
@@ -1199,14 +1272,18 @@ export function runQca(input: QcaInput): QcaResult | null {
 
   // ── ⑦ 参照径 ─────────────────────────────────────────────────────
   const refMode: QcaReferenceMode = edits?.reference ?? { kind: "auto" };
-  const fitReference = (d: readonly number[]): number[] => {
-    if (refMode.kind === "fixed") return positions.map(() => refMode.diameter);
-    if (refMode.kind === "segments") return referenceDiameters(positions, d, refMode.ranges);
-    if (refMode.kind === "ends") return referenceFromEnds(positions, d, refMode.fraction);
-    return referenceDiameters(positions, d);
+  const fitReference = (d: readonly number[]): QcaReferenceFit => {
+    if (refMode.kind === "fixed") {
+      // 直接指定は「どこも測っていない」——支持点は空（画面でも帯を出さない）。
+      return { reference: positions.map(() => refMode.diameter), support: [], kind: "fixed" };
+    }
+    if (refMode.kind === "segments") return referenceDiametersFit(positions, d, refMode.ranges);
+    if (refMode.kind === "ends") return referenceFromEndsFit(positions, d, refMode.fraction);
+    return referenceDiametersFit(positions, d);
   };
   if (refMode.kind === "fixed" && !(refMode.diameter > 0)) return null;
-  let reference = fitReference(diameters);
+  let referenceFit = fitReference(diameters);
+  let reference = referenceFit.reference;
   let summary = summarize(positions, diameters, reference);
 
   // ── ⑦' 密度計測（A4c・§16.5）──────────────────────────────────────
@@ -1266,7 +1343,10 @@ export function runQca(input: QcaInput): QcaResult | null {
       } else {
         // 径だけ差し替える。**エッジ（輪郭）はそのまま**＝線と数値が別方式になるので UI に出す。
         for (let i = 0; i < measured.length; i++) diameters[i] = measured[i];
-        reference = fitReference(diameters);
+        // 🔴 支持点も**当て直した結果のもの**にする。径が半値法から密度計測へ変わると
+        //    健常とみなす点も変わりうるので、古い支持点を残すと画面の帯だけが前の方式を指す。
+        referenceFit = fitReference(diameters);
+        reference = referenceFit.reference;
         summary = summarize(positions, diameters, reference);
         diameterMethod = "densitometric";
       }
@@ -1299,6 +1379,7 @@ export function runQca(input: QcaInput): QcaResult | null {
     positions,
     diameters,
     reference,
+    referenceSupport: referenceFit.support,
     ...summary,
     unit: calibrated ? "mm" : "px",
     warnings,

@@ -34,7 +34,7 @@ import {
   type SavedQcaAnalysis,
 } from "./qcaAnalysisState";
 import { getQcaAnalyses, loadRoisCached, upsertQcaAnalysis } from "./roiSaveStore";
-import { runQca, type QcaManualEdits, type QcaReferenceMode, type QcaResult } from "./qca";
+import { runQca, toRanges, type QcaManualEdits, type QcaReferenceMode, type QcaResult } from "./qca";
 import {
   canCalibrateWith,
   minSegmentPx,
@@ -45,7 +45,13 @@ import {
   toQcaKnots,
   type QcaSegmentKind,
 } from "./qcaInput";
-import { analyzeDilation, ANEURYSM_RATIO, type QvaDilation } from "./qva";
+import {
+  analyzeDilation,
+  normalizeAneurysmRatio,
+  summarizeDiameters,
+  DEFAULT_ANEURYSM_RATIO,
+  type QvaDilation,
+} from "./qva";
 import { TaskStepRail } from "./TaskStepRail";
 import { ENGINE_ID } from "./Viewer2D";
 import { readVoiWindow } from "./viewportRead";
@@ -53,6 +59,7 @@ import { isXaCalibrated } from "./xaCalibration";
 import { needsLogTransform } from "./dsa";
 import { readXaDsaTags } from "./dsaLoader";
 import { publishAnalysisResult } from "../report/analysisResultStore";
+import { fetchSettings } from "../settings/settingsApi";
 import { qcaRecord, qvaRecord } from "../report/xaAnalysisRecords";
 import { describeView, qcaRunKey, registerQcaRun, removeQcaRun } from "./xaRecon3dStore";
 import { readXaViewGeometry } from "./xaViewGeometryProvider";
@@ -325,6 +332,49 @@ export function XaAnalysisDialog({
   const [result, setResult] = useState<QcaResult | null>(null);
   /** 拡張（瘤）の計測。QVA のときだけ入る。 */
   const [dilation, setDilation] = useState<QvaDilation | null>(null);
+  /**
+   * 「動脈瘤」と呼ぶ比（環境設定 `xa.aneurysmRatio`・既定 1.5）。
+   *
+   * 🔴 **ハードコードしない**（部位・施設で基準が違う）。判定・画面の基準文・SR の本文の
+   * 3 か所が**必ず同じ値**を使うよう、ここ 1 か所から配る。
+   * 🚨 解析は設定の取得を待たない（待つと「設定サーバが遅い日は解析できない」になる）。
+   *    取得前は既定で判定し、届いたら**判定し直す**（下の effect）。
+   */
+  const [aneurysmRatio, setAneurysmRatio] = useState(DEFAULT_ANEURYSM_RATIO);
+  const aneurysmRatioRef = useRef(aneurysmRatio);
+  aneurysmRatioRef.current = aneurysmRatio;
+  useEffect(() => {
+    if (mode !== "qva") return;
+    let cancelled = false;
+    fetchSettings()
+      .then((m) => {
+        if (!cancelled) setAneurysmRatio(normalizeAneurysmRatio(m["xa.aneurysmRatio"]));
+      })
+      .catch(() => {
+        /* 取れなければ既定のまま。基準文にはその既定値が出るので、画面と判定はずれない。 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode]);
+  /**
+   * 拡張が見つからなくても出す「区間内の最大径とその位置の参照径」。
+   * {@link dilation} が有るときはそちらの値（瘤の頂点）を出すので使わない。
+   */
+  const summary = useMemo(
+    () => (mode === "qva" && result && !dilation ? summarizeDiameters(result) : null),
+    [mode, result, dilation],
+  );
+
+  // 設定が後から届いた（または利用者が変えた）ときは、出ている結果の判定を作り直す。
+  // 🚨 **再解析はしない**（画素も中心線も変わっていない）。比の判定だけを当て直す。
+  useEffect(() => {
+    setDilation((prev) =>
+      prev && prev.aneurysmRatio !== aneurysmRatio
+        ? { ...prev, aneurysmal: prev.ratio >= aneurysmRatio, aneurysmRatio }
+        : prev,
+    );
+  }, [aneurysmRatio]);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
@@ -621,6 +671,7 @@ export function XaAnalysisDialog({
               distalNeck: dilation.distalNeck,
               eccentricity: dilation.eccentricity,
               aneurysmal: dilation.aneurysmal,
+              aneurysmRatio: dilation.aneurysmRatio,
             }
           : null,
       })
@@ -716,7 +767,7 @@ export function XaAnalysisDialog({
     setLocked(lockedPickUids());
     // 拡張（瘤）は QVA のときだけ測る。QCA の画面に「瘤」を出すと、冠動脈の拡張を
     // 瘤と呼んでいるように読める（言葉の意味が領域で違う）。
-    const dil = mode === "qva" ? analyzeDilation(r) : null;
+    const dil = mode === "qva" ? analyzeDilation(r, { aneurysmRatio: aneurysmRatioRef.current }) : null;
     setDilation(dil);
 
     // 実機検証（automator）が掴む対象を計算できるように公開する。DEV 以外では何もしない。
@@ -1335,6 +1386,13 @@ export function XaAnalysisDialog({
                 waypoints={waypoints}
                 edgeEdits={edgeEdits}
                 highlightIndex={highlight}
+                /*
+                 * 最大径の位置を画像（とストレート像）に描く。QVA のときだけ。
+                 * 🔴 **表に出している数値と同じ点**を渡す——瘤があるならその頂点、無ければ
+                 *    端を外した最大（`summarizeDiameters`）。描画側で最大を取り直すと、
+                 *    数値と線が別の点を指す。
+                 */
+                maxDiameterIndex={mode === "qva" ? (dilation?.maxIndex ?? summary?.maxIndex ?? null) : null}
                 onWaypointsChange={(next) => {
                   // 中心線が変わる＝エッジ修正の宛先が無意味になる（§8.6 の token）。
                   setWaypoints(next);
@@ -1408,14 +1466,47 @@ export function XaAnalysisDialog({
                         {/* 🚨 基準そのものを必ず一緒に出す。「瘤」という語だけを出すと、
                             どの基準で瘤と呼んだのかが読む側に分からない。 */}
                         <span style={{ marginLeft: 8, color: "#44586a" }}>
-                          {t("qva.criterion", { ratio: ANEURYSM_RATIO.toFixed(1) })}
+                          {t("qva.criterion", { ratio: (dilation.aneurysmRatio ?? aneurysmRatio).toFixed(2) })}
                         </span>
                       </td>
                     </tr>
                   </tbody>
                 </table>
               ) : (
-                <div style={hint} data-testid="qva-no-dilation">{t("qva.judge.noDilation")}</div>
+                /*
+                 * 🔴 **拡張が無くても「最大径」と「参照径」は出す**（2026-08-31・利用者の指摘）。
+                 *    判定文だけを出して数値を 1 つも出さないと、**測れなかったのか、測ったら
+                 *    拡張が無かったのか**が読む側に区別できない。値は
+                 *    {@link summarizeDiameters}（区間の端を外した最大）から取る。
+                 */
+                <>
+                  {summary && (
+                    <table style={table} data-testid="qva-summary">
+                      <tbody>
+                        <tr>
+                          <td style={th}>{t("qva.maxDiameter")}</td>
+                          <td style={td} data-testid="qva-max-diameter">
+                            {summary.maxDiameter.toFixed(2)} {result.unit}
+                          </td>
+                          <td style={th}>{t("qva.reference")}</td>
+                          <td style={td} data-testid="qva-reference">
+                            {summary.referenceAtMax.toFixed(2)} {result.unit}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td style={th}>{t("qva.ratio")}</td>
+                          <td style={td} colSpan={3} data-testid="qva-ratio">
+                            {summary.ratio == null ? "—" : `${summary.ratio.toFixed(2)} ×`}
+                            <span style={{ marginLeft: 8, color: "#44586a" }}>
+                              {t("qva.criterion", { ratio: aneurysmRatio.toFixed(2) })}
+                            </span>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  )}
+                  <div style={hint} data-testid="qva-no-dilation">{t("qva.judge.noDilation")}</div>
+                </>
               )}
               <div style={hint}>{t("qva.projectionCaveat")}</div>
               {/* 🚨 径の測り方で注記が変わる。密度計測（A4c）なら半値法の係数は乗らない（§16.5.1）。 */}
@@ -1433,6 +1524,7 @@ export function XaAnalysisDialog({
             <div data-step="range">
             <QcaReport
               result={result}
+              maxDiameterIndex={mode === "qva" ? (dilation?.maxIndex ?? summary?.maxIndex ?? null) : null}
               chartMode={chartMode}
               trimmed={!!trim}
               referenceMode={refMode}
@@ -1451,6 +1543,19 @@ export function XaAnalysisDialog({
                   setRefMode(next);
                   reanalyze({ reference: next });
                 }
+              }}
+              /*
+               * 帯の端を掴んで動かした結果（2026-08-31・利用者の要望）。
+               * 🔴 **掴んだ時点で「人の指定」へ変わる。** 自動当てはめの支持点をそのまま種にして
+               *    区間へ変換するので、利用者から見ると「自動で出た範囲を手で直した」になる。
+               *    参照径だけでなく **RVD・%DS・病変長・QVA の比まで**一度に更新される
+               *    （`reanalyze` が同じ入力から全部を出し直すため）。
+               */
+              onReferenceRanges={(ranges) => {
+                const next: QcaReferenceMode =
+                  ranges.length > 0 ? { kind: "segments", ranges } : defaultReference;
+                setRefMode(next);
+                reanalyze({ reference: next });
               }}
               onClearTrim={() => {
                 setTrim(null);
@@ -1542,8 +1647,12 @@ function QcaReport({
   onClearTrim,
   onClearReference,
   onHighlight,
+  onReferenceRanges,
+  maxDiameterIndex,
 }: {
   result: QcaResult;
+  /** 最大径の計測点（QVA）。null なら描かない。**表に出している値と同じ点**を受け取る。 */
+  maxDiameterIndex?: number | null;
   chartMode: "none" | "trim" | "reference";
   trimmed: boolean;
   referenceMode: QcaReferenceMode;
@@ -1552,6 +1661,8 @@ function QcaReport({
   onClearTrim: () => void;
   onClearReference: () => void;
   onHighlight: (i: number | null) => void;
+  /** 参照径に使う範囲を差し替える（帯の端を掴んで動かしたとき）。空なら自動へ戻す。 */
+  onReferenceRanges: (ranges: [number, number][]) => void;
 }) {
   const { t } = useI18n();
   const u = result.unit;
@@ -1563,6 +1674,15 @@ function QcaReport({
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [dragTo, setDragTo] = useState<number | null>(null);
+  /**
+   * 帯の端を掴んで動かしている最中の状態（2026-08-31）。
+   *
+   * <p>🔴 **掴んでいる間は画面の帯を先に動かす**（`preview`）。再解析はドラッグを離した
+   * ときに 1 回だけ走らせる —— 途中で毎回走らせると、密度計測を含む重い計算が
+   * ポインタ移動のたびに動き、画面が固まる。
+   */
+  const [edgeDrag, setEdgeDrag] = useState<{ range: number; side: 0 | 1 } | null>(null);
+  const [preview, setPreview] = useState<[number, number][] | null>(null);
 
   const n = result.diameters.length;
   const maxD = Math.max(...result.diameters, ...result.reference) * 1.1 || 1;
@@ -1587,6 +1707,45 @@ function QcaReport({
     }
     return best;
   };
+
+  /**
+   * いま参照径に使っている範囲（帯として描き、端を掴めるようにする）。
+   *
+   * <p>ドラッグ中は `preview` を優先する。それ以外は**解析結果が返した支持点**を使う
+   * ——自動当てはめでも人の指定でも同じ見た目・同じ掴み方になる。
+   */
+  const supportRanges: [number, number][] = preview ?? toRanges(result.referenceSupport);
+  /** 掴める距離 [SVG px]。 */
+  const GRAB = 6;
+
+  /** クリック位置に近い帯の端（無ければ null）。 */
+  const grabEdgeAt = (clientX: number): { range: number; side: 0 | 1 } | null => {
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return null;
+    const target = ((clientX - rect.left) / rect.width) * w;
+    let best: { range: number; side: 0 | 1 } | null = null;
+    let bd = GRAB;
+    supportRanges.forEach((r, ri) => {
+      ([0, 1] as const).forEach((side) => {
+        const d = Math.abs(px(r[side]) - target);
+        if (d < bd) {
+          bd = d;
+          best = { range: ri, side };
+        }
+      });
+    });
+    return best;
+  };
+
+  /** 端を動かした結果の範囲列（つぶれた区間は消す＝幅 0 まで詰めれば削除になる）。 */
+  const movedRanges = (drag: { range: number; side: 0 | 1 }, to: number): [number, number][] =>
+    supportRanges
+      .map((r, ri): [number, number] => {
+        if (ri !== drag.range) return [r[0], r[1]];
+        const next: [number, number] = drag.side === 0 ? [to, r[1]] : [r[0], to];
+        return [Math.min(next[0], next[1]), Math.max(next[0], next[1])];
+      })
+      .filter((r) => r[1] > r[0]);
 
   const band = (from: number, to: number, fill: string, key: string) => {
     const a = Math.min(from, to);
@@ -1694,17 +1853,39 @@ function QcaReport({
           if (chartMode === "none") return;
           e.currentTarget.setPointerCapture(e.pointerId);
           const i = indexAt(e.clientX);
+          // 「健常部を指定」モードでは、まず**既存の帯の端を掴もうとする**。
+          // 掴めなければ従来どおり新しい区間を引く（追加）。
+          const grabbed = chartMode === "reference" ? grabEdgeAt(e.clientX) : null;
+          if (grabbed) {
+            setEdgeDrag(grabbed);
+            setPreview(movedRanges(grabbed, i));
+            return;
+          }
           setDragFrom(i);
           setDragTo(i);
         }}
         onPointerMove={(e) => {
           const i = indexAt(e.clientX);
           onHighlight(i);
+          if (edgeDrag) {
+            setPreview(movedRanges(edgeDrag, i));
+            return;
+          }
           if (dragFrom != null) setDragTo(i);
         }}
         onPointerLeave={() => onHighlight(null)}
         onPointerUp={(e) => {
           e.currentTarget.releasePointerCapture(e.pointerId);
+          if (edgeDrag) {
+            const next = preview ?? supportRanges;
+            setEdgeDrag(null);
+            // 🔴 **プレビューはここで捨てる。** 残すと、再解析で支持点が変わっても
+            //    画面が古い帯を出し続ける（人の指定なら一致するが、つぶれて自動へ戻した
+            //    ときに食い違う）。
+            setPreview(null);
+            onReferenceRanges(next.map((r): [number, number] => [r[0], r[1]]));
+            return;
+          }
           if (dragFrom != null && dragTo != null && dragFrom !== dragTo) {
             onSelectRange(Math.min(dragFrom, dragTo), Math.max(dragFrom, dragTo));
           }
@@ -1712,8 +1893,30 @@ function QcaReport({
           setDragTo(null);
         }}
       >
-        {referenceMode.kind === "segments" &&
-          referenceMode.ranges.map((r, i) => band(r[0], r[1], "rgba(109,139,168,0.28)", `ref-${i}`))}
+        {/*
+          🔴 **参照径をどの点から決めたか**を帯で出す（2026-08-31・利用者の要望）。
+          人が指定した区間も、自動当てはめが健常として残した点も、**同じ帯**で表す
+          ——利用者にとっての問いは「どこを測ったか」であって、決め方の分類ではない。
+        */}
+        {supportRanges.map((r, i) => band(r[0], r[1], "rgba(109,139,168,0.28)", `ref-${i}`))}
+        {/*
+          帯の端の掴み手。**「健常部を指定」モードのときだけ**出す
+          ——いつでも出ていると「掴めそうなのに掴めない」線になる。
+        */}
+        {chartMode === "reference" &&
+          supportRanges.flatMap((r, ri) =>
+            ([0, 1] as const).map((side) => (
+              <line
+                key={`grab-${ri}-${side}`}
+                x1={px(r[side])}
+                x2={px(r[side])}
+                y1={pad}
+                y2={h - pad}
+                stroke="#6d8ba8"
+                strokeWidth={edgeDrag?.range === ri && edgeDrag?.side === side ? 3 : 1.5}
+              />
+            )),
+          )}
         {dragFrom != null && dragTo != null && band(dragFrom, dragTo, "rgba(255,209,102,0.25)", "drag")}
         <polyline points={line(result.reference)} fill="none" stroke="#6d8ba8" strokeDasharray="4 3" />
         <polyline points={line(result.diameters)} fill="none" stroke="#7fd1b9" strokeWidth={1.5} />
@@ -1721,6 +1924,15 @@ function QcaReport({
           <circle key={`e-${i}`} cx={px(i)} cy={py(result.diameters[i])} r={2} fill="#ffd166" />
         ))}
         <circle cx={px(result.mldIndex)} cy={py(result.mld)} r={3} fill="#e07a5f" />
+        {/* 最大径（QVA）。画像・ストレート像と**同じ色**にして、3 つの絵で同じ点を指す。 */}
+        {maxDiameterIndex != null && result.diameters[maxDiameterIndex] != null && (
+          <circle
+            cx={px(maxDiameterIndex)}
+            cy={py(result.diameters[maxDiameterIndex])}
+            r={3}
+            fill="#c792ea"
+          />
+        )}
       </svg>
       <div style={hint}>
         {chartMode === "trim"

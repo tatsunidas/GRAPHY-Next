@@ -5,7 +5,10 @@ import {
   lesionBounds,
   profileNoiseScale,
   referenceDiameters,
+  referenceDiametersFit,
+  referenceFromEndsFit,
   runQca,
+  toRanges,
   sampleBilinear,
   smoothPath,
   traceCenterline,
@@ -1028,3 +1031,48 @@ function median(v: readonly number[]): number {
   const s = [...v].sort((a, b) => a - b);
   return s.length % 2 ? s[s.length >> 1] : (s[(s.length >> 1) - 1] + s[s.length >> 1]) / 2;
 }
+
+
+/**
+ * 「どこを測って参照径としたか」を返せること（2026-08-31・利用者の要望で追加）。
+ * 画面はこの支持点を帯として描くので、**中身が正しくないと嘘の帯が出る**。
+ */
+describe("参照径の支持点（どの計測点を健常として使ったか）", () => {
+  it("自動当てはめでは病変の点が支持から外れる", () => {
+    const n = 40;
+    const pos = Array.from({ length: n }, (_, i) => i * 0.5);
+    // 中央の 6 点だけ深い狭窄。ほかは 3.0mm 一定。
+    const dia = Array.from({ length: n }, (_, i) => (i >= 17 && i <= 22 ? 1.5 : 3.0));
+    const fit = referenceDiametersFit(pos, dia);
+    expect(fit.kind).toBe("auto");
+    // 病変の点は 1 つも使われていない。
+    for (let i = 17; i <= 22; i++) expect(fit.support).not.toContain(i);
+    // 健常部はほぼ全部使われている。
+    expect(fit.support.length).toBeGreaterThan(n - 10);
+    // 参照径そのものは健常部の値のまま。
+    expect(fit.reference[19]).toBeCloseTo(3.0, 3);
+  });
+
+  it("人が指定した区間は、その点だけが支持になる", () => {
+    const pos = Array.from({ length: 20 }, (_, i) => i);
+    const dia = Array.from({ length: 20 }, () => 3.0);
+    const fit = referenceDiametersFit(pos, dia, [[2, 5], [14, 17]]);
+    expect(fit.kind).toBe("user");
+    expect(fit.support).toEqual([2, 3, 4, 5, 14, 15, 16, 17]);
+  });
+
+  it("QVA（両端）では中央は 1 点も使わない", () => {
+    const n = 20;
+    const pos = Array.from({ length: n }, (_, i) => i);
+    const dia = Array.from({ length: n }, () => 3.0);
+    const fit = referenceFromEndsFit(pos, dia, 0.25);
+    expect(fit.kind).toBe("ends");
+    // 前後 5 点ずつ（25%）。真ん中は瘤が占めていても参照径を動かさない、の根拠。
+    expect(fit.support).toEqual([0, 1, 2, 3, 4, 15, 16, 17, 18, 19]);
+  });
+
+  it("連続区間へまとめられる（画面の帯はこれで描く）", () => {
+    expect(toRanges([0, 1, 2, 5, 6, 9])).toEqual([[0, 2], [5, 6], [9, 9]]);
+    expect(toRanges([])).toEqual([]);
+  });
+});
