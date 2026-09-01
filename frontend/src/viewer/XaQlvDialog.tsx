@@ -39,6 +39,8 @@ import { readVoiWindow } from "./viewportRead";
 import { isXaCalibrated } from "./xaCalibration";
 import { calibrationForImageId } from "./xaCalibrationProvider";
 import { clearedBy, deriveQlvSteps, QLV_STEPS, type ManualInputKey } from "./xaTasks";
+import { lockSliceNavigation } from "./sliceNavigationLock";
+import { viewerOverlayProps } from "./viewerOverlay";
 
 /** 輪郭として成立する最小点数（弁輪 2 点＋心尖側 2 点）。 */
 const MIN_POINTS = 4;
@@ -116,6 +118,24 @@ export function XaQlvDialog({
   edFrameRef.current = edFrame;
   esFrameRef.current = esFrame;
   const [editing, setEditing] = useState<"ed" | "es">("ed");
+
+  /**
+   * 🔴 **輪郭を引き始めたらフレームを固定する**（実機で言われた・2026-09-01。QCA / QVA と同じ扱い）。
+   *
+   * <p>ED / ES の輪郭は**それぞれのフレームの上**に引く。裏でホイールが効くと、引いている輪郭と
+   * 画面の画像が別の心位相になり、**エラーは何も出ないまま容積と EF が別物になる**。
+   * QCA 側は 2026-08-28 に錠を入れたが、**LV は入れ忘れていた**（`lockSliceNavigation` の
+   * 呼び出しが 1 か所しか無かった）。
+   *
+   * <p>⚠️ **フレームを選び直す道は塞がない。** ED / ES の指定は `setFrame` →
+   * `onGoToFrame` で親を直接動かすので錠を通らない（錠はホイール・キー・シネだけを止める）。
+   * 選び直したときに輪郭を捨てるのも従来どおり。
+   */
+  const frameLocked = busy || edPoints.length > 0 || esPoints.length > 0;
+  useEffect(() => {
+    if (!frameLocked) return;
+    return lockSliceNavigation();
+  }, [frameLocked]);
 
   /** フレーム番号 → 画素。読んだものは使い回す。 */
   const sliceCache = useRef<Map<number, Slice>>(new Map());
@@ -383,7 +403,7 @@ export function XaQlvDialog({
   const voi = activeFrame != null ? readVoiWindowFor(imageIds[activeFrame] ?? "") : null;
 
   return (
-    <div style={backdrop} onClick={onClose}>
+    <div style={backdrop} onClick={onClose} {...viewerOverlayProps}>
       <div style={panel} onClick={(e) => e.stopPropagation()}>
         <div style={title} data-testid="qlv-dialog">{t("qlv.title")}</div>
 
@@ -440,6 +460,15 @@ export function XaQlvDialog({
             {/* 輪郭 */}
             <div style={section} data-step="edContour esContour">
               <div style={sectionTitle}>{t("qlv.contour")}</div>
+              {/* 🔴 止まっている理由を出す。動かないのに理由が無いと「壊れている」と読まれる。 */}
+              {frameLocked && (
+                <div
+                  style={{ fontSize: 11, color: "#8a6d3b", marginBottom: 4 }}
+                  data-testid="qlv-frame-locked"
+                >
+                  {t("qlv.frameLocked")}
+                </div>
+              )}
               <div style={row}>
                 {(["ed", "es"] as const).map((k) => (
                   <button

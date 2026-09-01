@@ -43,6 +43,7 @@ import {
 import { type XaQcaRun, useQcaRuns } from "./xaRecon3dStore";
 import { TaskStepRail } from "./TaskStepRail";
 import { deriveQca3dSteps } from "./xaTasks";
+import { viewerOverlayProps } from "./viewerOverlay";
 
 const MIN_SEPARATION_DEG = 30;
 
@@ -361,7 +362,7 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div style={backdrop} onMouseDown={onClose}>
+    <div style={backdrop} onMouseDown={onClose} {...viewerOverlayProps}>
       <div style={panel} onMouseDown={(e) => e.stopPropagation()} data-testid="xa3d-dialog">
         <div style={title}>{t("xa3d.title")}</div>
         <div style={body}>

@@ -21,6 +21,7 @@ import {
 } from "../api";
 import { useI18n } from "../i18n/i18n";
 import { appliedItems, planPresentation, type PresentationPlan } from "./xaPresentationApply";
+import { viewerOverlayProps } from "./viewerOverlay";
 
 /** 一覧に出す 1 件。 */
 interface Candidate {
@@ -93,7 +94,7 @@ export function XaPresentationDialog({
   const others = items.filter((c) => !c.plan.matchesImage);
 
   return (
-    <div style={backdrop} role="dialog" aria-modal="true" data-testid="xa-pr-dialog">
+    <div style={backdrop} role="dialog" aria-modal="true" data-testid="xa-pr-dialog" {...viewerOverlayProps}>
       <div style={panel}>
         <div style={header}>
           <b>{t("xa.pr.title")}</b>

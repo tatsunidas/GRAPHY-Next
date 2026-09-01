@@ -71,6 +71,7 @@ import {
 import { advanceAnchor, sliceStepsFromDrag } from "./touchScroll";
 import { createWheelStepper } from "./wheelScroll";
 import { isSliceNavigationLocked, useSliceNavigationLocked } from "./sliceNavigationLock";
+import { isInsideViewerOverlay } from "./viewerOverlay";
 import { installDebugApi, countStackSwap } from "./debugApi";
 import { matchesCombo, matchesShortcut } from "../shortcuts/registry";
 import { fetchSeriesLayout, type Instance } from "../api";
@@ -900,6 +901,8 @@ export function SeriesViewer({
       // コントロール（スライダー/ボタン/セレクト）操作中は誤爆させない。
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || tag === "BUTTON") return;
+      // 器（解析ダイアログ等）の中のキーもビューアのものではない（ホイールと同じ理由）。
+      if (isInsideViewerOverlay(e.target)) return;
       // ↑↓ に加えてテンキー 8/2 も受ける（NumLock 非依存・1 打鍵 = 1 スライス）。
       if (matchesShortcut("nav-prev-slice", e)) {
         step(-1);
@@ -927,6 +930,12 @@ export function SeriesViewer({
     // 1 回の操作で何十件もイベントを出すため、少し回しただけで一気に飛んでいた。
     const wheelStep = createWheelStepper();
     const onWheel = (e: WheelEvent) => {
+      // 🔴 **器（解析ダイアログ等）の中で回したホイールはビューアのものではない**
+      //    （実機で言われた・2026-09-01。`viewerOverlay.ts`）。器は根の子として描かれるので
+      //    イベントがここまで上がってくる。ここで `preventDefault` すると器自身の縦スクロールが
+      //    死に、**代わりに裏のフレームが送られる**。錠では直らない（錠はフレーム送りだけを
+      //    止めるので、スクロールは `preventDefault` に殺されたまま）。
+      if (isInsideViewerOverlay(e.target)) return;
       e.preventDefault();
       const d = wheelStep(e.deltaY, e.deltaMode, e.timeStamp);
       if (d !== 0) step(d);
@@ -938,7 +947,9 @@ export function SeriesViewer({
     // 1 本指＝アクティブツール、2 本指＝ピンチ Zoom+Pan は Cornerstone 側（Viewer2D のバインド）。
     let scrollAnchorY: number | null = null;
     const onTouchStart = (e: TouchEvent) => {
-      scrollAnchorY = e.touches.length === 3 ? e.touches[0].clientY : null;
+      // 器の中の 3 本指も同じ（器をなぞってスクロールしたいのであって、フレーム送りではない）。
+      scrollAnchorY =
+        e.touches.length === 3 && !isInsideViewerOverlay(e.target) ? e.touches[0].clientY : null;
     };
     const onTouchMove = (e: TouchEvent) => {
       if (scrollAnchorY === null || e.touches.length !== 3) return;
