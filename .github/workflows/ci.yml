@@ -13,6 +13,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    # 🚨 上限を切る。2026-08-27 に **macOS ランナーで Maven Central の DNS が引けず
+    #    （`repo.maven.apache.org: nodename nor servname provided`）、ミラーも 503** という
+    #    一過性のインフラ障害が 3 回続き、そのたびに **1 ジョブが 2 時間走り続けて**から
+    #    落ちた。中身は 2 分で終わるので、詰まっているならさっさと落として気付けるようにする。
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -22,10 +27,19 @@ jobs:
           cache: maven
       # テストのゲート。UI 同梱は不要なので frontend はスキップし、3 OS でバックエンドの
       # ビルド＆テストを回す（DICOM 送受信の Windows/POSIX 差異を検出するため）。
+      #
+      # ⚠ 取得は**再試行させる**。上記の障害は 503 と DNS 失敗の混在で、既定では
+      #   1 回失敗しただけでビルド全体が落ちる。接続/読み取りの上限も切って、
+      #   1 つの依存で長時間ぶら下がらないようにする。
       - name: Build & test
         working-directory: backend
         shell: bash
-        run: mvn -B -Dfrontend.skip=true clean package
+        run: |
+          mvn -B -Dfrontend.skip=true clean package \
+            -Dmaven.wagon.http.retryHandler.count=3 \
+            -Dmaven.wagon.httpconnectionManager.ttlSeconds=120 \
+            -Dmaven.wagon.http.connectionTimeout=30000 \
+            -Dmaven.wagon.http.readTimeout=60000
 
   desktop:
     name: Desktop (window geometry)

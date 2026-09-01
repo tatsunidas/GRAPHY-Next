@@ -43,6 +43,8 @@ jobs:
   web-jar:
     name: Web jar
     needs: verify-version
+    # 上限を切る（2026-08-27 に macOS で Maven の取得が詰まり 2h11m かかった。通常 5〜6 分）。
+    timeout-minutes: 60
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -54,7 +56,12 @@ jobs:
       - name: Build web jar (UI 同梱 / frontend は Maven が内部ビルド)
         working-directory: backend
         # パッケージング工程はテストをスキップ（テストのゲートは ci.yml が担う）。
-        run: mvn -B -DskipTests clean package
+        run: |
+          mvn -B -DskipTests clean package \
+            -Dmaven.wagon.http.retryHandler.count=3 \
+            -Dmaven.wagon.httpconnectionManager.ttlSeconds=120 \
+            -Dmaven.wagon.http.connectionTimeout=30000 \
+            -Dmaven.wagon.http.readTimeout=60000
       - name: Stage plugin API jar (第三者プラグイン開発者向け・fw/plugin-manager-design.md)
         shell: bash
         run: |
@@ -74,6 +81,8 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
+    # 上限を切る（2026-08-27 に macOS で Maven の取得が詰まり 2h11m かかった。通常 5〜6 分）。
+    timeout-minutes: 60
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -85,7 +94,12 @@ jobs:
       - name: Build backend jar + frontend (Maven 統合)
         shell: bash
         # パッケージング工程はテストをスキップ（テストのゲートは ci.yml が担う）。
-        run: cd backend && mvn -B -DskipTests clean package
+        run: |
+          cd backend && mvn -B -DskipTests clean package \
+            -Dmaven.wagon.http.retryHandler.count=3 \
+            -Dmaven.wagon.httpconnectionManager.ttlSeconds=120 \
+            -Dmaven.wagon.http.connectionTimeout=30000 \
+            -Dmaven.wagon.http.readTimeout=60000
       - name: Stage desktop resources
         shell: bash
         run: |
