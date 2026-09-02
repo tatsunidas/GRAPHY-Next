@@ -1078,6 +1078,7 @@ export const en: Record<string, string> = {
   "qlv.edit.ed": "Draw ED",
   "qlv.edit.es": "Draw ES",
   "qlv.clearContour": "Clear this contour",
+  "qlv.frameLocked": "The frame is pinned while a contour is being drawn (wheel, cine and the slider are disabled). To draw on a different frame, set the ED / ES frame above.",
   "qlv.editor.hint":
     "Click from one side of the aortic annulus, around the apex, to the other side. The chord between the first and last points is the valve plane, which defines the long axis. Drag a point to move it, right-click (or Alt+click) to delete, click on a segment to insert between.",
   "qlv.result": "Results",

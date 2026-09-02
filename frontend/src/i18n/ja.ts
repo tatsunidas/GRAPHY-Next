@@ -1076,6 +1076,7 @@ export const ja: Record<string, string> = {
   "qlv.edit.ed": "ED を引く",
   "qlv.edit.es": "ES を引く",
   "qlv.clearContour": "この輪郭を消す",
+  "qlv.frameLocked": "輪郭を引いている間はフレームを固定しています（ホイール・シネ・スライダーは効きません）。別のフレームで引くには、上の ED / ES フレームを指定し直してください。",
   "qlv.editor.hint": "大動脈弁輪の一端 → 心尖 → 他端 の順にクリックします（最初と最後の点を結ぶ弦が弁面、そこから長軸が決まります）。点はドラッグで移動、右クリック（または Alt＋クリック）で削除。線の途中をクリックすると間に挿入されます。",
   "qlv.result": "結果",
   "qlv.needContours": "ED と ES の両方の輪郭を引くと結果が出ます。",

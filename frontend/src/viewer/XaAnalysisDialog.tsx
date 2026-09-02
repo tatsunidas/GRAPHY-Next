@@ -66,6 +66,7 @@ import { readXaViewGeometry } from "./xaViewGeometryProvider";
 import { calibrationForImageId, loaderSpacingFor } from "./xaCalibrationProvider";
 import { persistXaUserCalibration } from "./xaCalibrationPersistence";
 import { clearedBy, deriveQcaSteps, type ManualInputKey } from "./xaTasks";
+import { viewerOverlayProps } from "./viewerOverlay";
 
 /** [x,y] の並びを GSPS 用のフラットな配列にする。 */
 function flatten(points: readonly (readonly [number, number])[]): number[] {
@@ -424,11 +425,15 @@ export function XaAnalysisDialog({
    *
    * <p>⚠️ **ダイアログを開いている間ずっと、ではない。** 解析前にフレームを選ぶのは正当な操作で、
    * そこまで止めると「解析したいフレームに行けない」になる。錠は結果が出てから。
+   *
+   * <p>⚠️ **解析の実行中（`busy`）も掛ける**（2026-09-01）。走っている最中に送られると、
+   * 読み終えた画素と出来上がる結果のフレームが食い違う——結果が出た後より気付きにくい。
    */
+  const frameLocked = !!result || busy;
   useEffect(() => {
-    if (!result) return;
+    if (!frameLocked) return;
     return lockSliceNavigation();
-  }, [result]);
+  }, [frameLocked]);
   const [chartMode, setChartMode] = useState<"none" | "trim" | "reference">("none");
   const [highlight, setHighlight] = useState<number | null>(null);
   /** 解析に使った画素。手修正のたびに読み直すと重いのでキャッシュする。 */
@@ -1090,7 +1095,7 @@ export function XaAnalysisDialog({
   );
 
   return (
-    <div style={backdrop} onClick={onClose}>
+    <div style={backdrop} onClick={onClose} {...viewerOverlayProps}>
       <div style={panel} onClick={(e) => e.stopPropagation()}>
         <div style={title} data-testid="xa-analysis-dialog" data-mode={mode}>
           {t(mode === "qva" ? "qva.title" : "xa.analysis.title")}
