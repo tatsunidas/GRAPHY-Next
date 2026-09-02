@@ -1186,17 +1186,10 @@ export function SeriesViewer({
                   >
                     {t("xa.analysis.open")}
                   </button>
-                  {/* QVA（末梢・脳血管。A5a）。QCA と同じダイアログを mode で切り替える
-                      ——中心線・エッジ・手修正の作りが同じで、違うのは参照径の既定と
-                      瘤の指標だけ（§9.1）。 */}
-                  <button
-                    style={btn}
-                    data-testid="qva-open"
-                    onClick={() => setQvaDialogOpen(true)}
-                    title={t("qva.title")}
-                  >
-                    {t("qva.open")}
-                  </button>
+                  {/* 🔴 **QVA のボタンは外してある**（2026-09-01）。理由は `xaTaskCatalog.ts` の
+                      同名の注記を読むこと——報告していた「ネック径」が瘤頸ではなく、嚢状動脈瘤を
+                      そもそも表現できない計測モデルだったため。ダイアログ自体は残してあるので、
+                      作り直しの結論が出るまでは**導線だけが無い**状態。 */}
                   {/* 左室造影の解析（A5b）。QCA とは段の構成が違うので別ダイアログ（§21.2-3）。 */}
                   <button
                     style={btn}
