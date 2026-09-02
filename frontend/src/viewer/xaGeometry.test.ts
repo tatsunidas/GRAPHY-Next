@@ -20,6 +20,7 @@ import {
   pixelToRay,
   projectToPixel,
   reprojectionErrorPx,
+  sameViewGeometry,
   triangulate,
   viewBasis,
   viewSeparationDeg,
@@ -374,5 +375,30 @@ describe("★別実装（ファントム生成器）との突き合わせ", () =
         expect(got[1], `${key} #${i} row`).toBeCloseTo(expected[i][1], 3);
       });
     }
+  });
+});
+
+describe("sameViewGeometry", () => {
+  it("同じ撮影は true", () => {
+    expect(sameViewGeometry(geom(-30, 0), geom(-30, 0))).toBe(true);
+  });
+
+  it("角度が違えば false（別の撮影のアンカーを束ねない）", () => {
+    expect(sameViewGeometry(geom(-30, 0), geom(60, 20))).toBe(false);
+    expect(sameViewGeometry(geom(-30, 0), geom(-30, 20))).toBe(false);
+  });
+
+  it("装置定数が違えば false", () => {
+    expect(sameViewGeometry(geom(-30, 0), { ...geom(-30, 0), sidMm: 1100 })).toBe(false);
+    expect(sameViewGeometry(geom(-30, 0), { ...geom(-30, 0), sodMm: 800 })).toBe(false);
+    expect(sameViewGeometry(geom(-30, 0), { ...geom(-30, 0), imagerSpacingMm: [0.3, 0.31] })).toBe(false);
+    // 主点は FOV 切り出しでずれる。ずれていれば別の撮影として扱う。
+    expect(sameViewGeometry(geom(-30, 0), { ...geom(-30, 0), principalPoint: [250, 256] })).toBe(false);
+  });
+
+  it("丸め差は吸収するが、装置の機械誤差の桁（0.1°）は吸収しない", () => {
+    // 🔴 ここを緩めると「別の撮影を同じ扱いにする」ことになり、検査の意味が消える。
+    expect(sameViewGeometry(geom(-30, 0), geom(-30.0000001, 0))).toBe(true);
+    expect(sameViewGeometry(geom(-30, 0), geom(-30.1, 0))).toBe(false);
   });
 });

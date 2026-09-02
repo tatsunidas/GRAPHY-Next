@@ -89,6 +89,10 @@ interface Truth {
     views: {
       view: number;
       exact: VariantFiles;
+      /**
+       * 既知の角度誤差を焼き込んだ版（段 3 の検査に使う）。タグの角度が真値からずれている。
+       */
+      angleError?: VariantFiles & { primaryErrorDeg: number; secondaryErrorDeg: number };
       /** ノイズ層（段 2b）。**形状と真値は `exact` と同一で、量子ノイズだけが違う。** */
       noise?: Record<string, VariantFiles & { photons: number; backgroundRelativeSigma: number }>;
       branchesPx: { id: string; pointsPx: [number, number][] }[];
@@ -139,6 +143,15 @@ interface BifState {
   };
   warnings: { code: string; branch: string | null; value: number; threshold: number }[];
   unrefinedBranches: string[];
+  viewPairShared: boolean;
+  refinement: {
+    applied: boolean;
+    beforePx: number;
+    afterPx: number;
+    primaryDeg: number;
+    secondaryDeg: number;
+    anchorCount: number;
+  } | null;
   /** 再構成した 3D 中心線（切り分け用。合否には使わない）。 */
   branchPoints?: { id: string; points: [number, number, number][] }[];
 }
@@ -309,9 +322,13 @@ async function main(): Promise<void> {
   if (!bifTruth) throw new Error("truth.json に recon3d.bifurcation がありません（ファントムを作り直す）");
 
   const viewOf = (n: number) => truth.recon3d.views.find((v) => v.view === n)!;
-  const filesOf = (v: { exact: VariantFiles; noise?: Record<string, VariantFiles> }): VariantFiles => {
+  const filesOf = (v: {
+    exact: VariantFiles;
+    angleError?: VariantFiles;
+    noise?: Record<string, VariantFiles>;
+  }): VariantFiles => {
     if (VARIANT === "exact") return v.exact;
-    const found = v.noise?.[VARIANT];
+    const found = VARIANT === "b-angle-error" ? v.angleError : v.noise?.[VARIANT];
     if (!found) throw new Error(`truth.json に版 "${VARIANT}" がありません（ファントムを作り直す）`);
     return found;
   };
@@ -527,13 +544,65 @@ async function main(): Promise<void> {
       (await viewer.getByTestId("xa3dbif-no-medina").count()) === 1,
       "[方針] 「分類は自動で出さない」と画面に書いてある",
     );
-    // アンカーを取らない画面なので、角度補正が掛かっていないことは**必ず**出す。
-    if (s.unrefinedBranches.length > 0) {
+    // ── 角度補正（§21.4 の段 3）────────────────────────────────────
+    //
+    // 🔴 **この検査は 2026-09-02 に反転した。** それまでは「角度補正が掛かっていない枝がある
+    //    ことを画面に出している」を合格条件にしていた。枝の両端 2 点しか渡しておらず、
+    //    未知数 2 に対して拘束が 2 では意味のある解が出ないため実装が拒否していたのが実態で、
+    //    **3 枝すべてで補正が一度も掛かっていなかった**。3 枝ぶん束ねて 6 対応にしたので、
+    //    いまは**掛かることが正常**である。
+    check(s.viewPairShared, "[出自] 3 枝が同じ視点ペアから取られている（束ねる前提）", {
+      shared: s.viewPairShared,
+    });
+    check(
+      s.refinement != null && s.unrefinedBranches.length === 0,
+      "[出自] ★角度補正を 3 枝まとめて評価している",
+      { refinement: s.refinement, unrefined: s.unrefinedBranches },
+    );
+    if (s.refinement) {
       check(
-        (await viewer.getByTestId("xa3dbif-unrefined").count()) === 1,
-        "[出自] ★角度補正が掛かっていない枝があることを画面に出している",
-        s.unrefinedBranches,
+        s.refinement.anchorCount === 6,
+        "[出自] 3 枝 × 両端 = 6 対応を束ねている（3 未満では退化する）",
+        { anchorCount: s.refinement.anchorCount },
       );
+      check(
+        s.refinement.afterPx <= s.refinement.beforePx + 1e-6,
+        "[出自] 当てはめで再投影誤差が悪化していない",
+        { beforePx: s.refinement.beforePx, afterPx: s.refinement.afterPx },
+      );
+      // 🔴 **これが段 3 の本体の検査**（2026-09-02）。
+      //    補正は「装置の角度誤差」と「端点の対応ずれ」を区別できず、どちらも角度に吸わせる。
+      //    したがって **掛けられること自体は正しさの証拠にならない**。見るのは
+      //    「直すべき誤差があるときだけ掛けているか」——**版によって期待が逆になる**。
+      const off = Math.max(Math.abs(s.refinement.primaryDeg), Math.abs(s.refinement.secondaryDeg));
+      if (VARIANT === "b-angle-error") {
+        check(s.refinement.applied, "[出自] ★焼き込んだ角度誤差に対しては補正を掛けている", {
+          beforePx: s.refinement.beforePx,
+          afterPx: s.refinement.afterPx,
+        });
+        // ⚠️ 視点 A を固定するので「注入した誤差の符号違い」にはならない
+        //（B は歪んだ A と辻褄が合う位置へ動く）。**大きさが 0 でないこと**を見る。
+        check(off > 0.5, "[出自] 回収した角度オフセットが 0 でない", {
+          offsetDeg: [s.refinement.primaryDeg, s.refinement.secondaryDeg],
+        });
+        check(
+          (await viewer.getByTestId("xa3dbif-refined").count()) === 1,
+          "[出自] 補正を掛けたことと回収量を画面に出している",
+        );
+      } else {
+        // 🔴 **厳密な幾何では「掛けない」のが正解。** 直すべき誤差が無いのに掛けると、
+        //    端点のずれを角度に付け替えた**作り話**になる（実測: 0.67° の偽の回転で
+        //    分岐角が 3 つ中 2 つ悪化した）。
+        check(!s.refinement.applied, "[出自] ★厳密な幾何では角度補正を掛けていない", {
+          beforePx: s.refinement.beforePx,
+          candidateOffsetDeg: [s.refinement.primaryDeg, s.refinement.secondaryDeg],
+        });
+        check(
+          (await viewer.getByTestId("xa3dbif-refine-skipped").count()) === 1,
+          "[出自] 掛けなかったことを画面に出している（黙って諦めない）",
+        );
+        void off;
+      }
     }
     check(
       s.warnings.every((w) => w.code !== "endpointsApart"),

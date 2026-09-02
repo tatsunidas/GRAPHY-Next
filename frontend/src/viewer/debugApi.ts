@@ -480,6 +480,21 @@ export interface XaBifurcationDebugSnapshot {
   }[];
   /** 角度補正が掛からなかった枝（出自）。 */
   unrefinedBranches: string[];
+  /** 3 枝が同じ視点ペアを見ていたか（違うとアンカーを束ねられない）。 */
+  viewPairShared: boolean;
+  /**
+   * 3 枝ぶんのアンカーを束ねて視点ペアに 1 回だけ掛けた角度補正（§21.4 の段 3）。
+   * 掛からなかったときは null。
+   */
+  refinement: {
+    /** 門を通って**実際に適用した**か。false なら候補は出したが幾何はタグのまま。 */
+    applied: boolean;
+    beforePx: number;
+    afterPx: number;
+    primaryDeg: number;
+    secondaryDeg: number;
+    anchorCount: number;
+  } | null;
   /**
    * 再構成した 3D 中心線（患者 LPS mm・枝ごと）。
    *
