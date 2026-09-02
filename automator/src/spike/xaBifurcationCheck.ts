@@ -69,12 +69,28 @@ const TARGET_ANGLE_DEG = 8;
 /** 【目標】Finet / Murray の差の絶対誤差 [%pt]。 */
 const TARGET_DEVIATION_PT = 8;
 
+interface VariantFiles {
+  file: string;
+  studyInstanceUid: string;
+  seriesInstanceUid: string;
+}
+
+/**
+ * どの版で回すか。`GNBP_XA3_VARIANT=exact | c-noise-low | d-noise-mid | e-noise-high`。
+ *
+ * 🔴 **合否の基準線は `exact` のまま**（46/0/3・2026-08-16）。ノイズ版で見るのは合否ではなく
+ * **劣化の仕方**——急に壊れるなら、無ノイズでの合格は紙一重で成立していたことになる。
+ */
+const VARIANT = process.env.GNBP_XA3_VARIANT ?? "exact";
+
 interface Truth {
   geometry: { mmPerPxAtIsocenter: number };
   recon3d: {
     views: {
       view: number;
-      exact: { file: string; studyInstanceUid: string; seriesInstanceUid: string };
+      exact: VariantFiles;
+      /** ノイズ層（段 2b）。**形状と真値は `exact` と同一で、量子ノイズだけが違う。** */
+      noise?: Record<string, VariantFiles & { photons: number; backgroundRelativeSigma: number }>;
       branchesPx: { id: string; pointsPx: [number, number][] }[];
     }[];
     branches: {
@@ -293,8 +309,17 @@ async function main(): Promise<void> {
   if (!bifTruth) throw new Error("truth.json に recon3d.bifurcation がありません（ファントムを作り直す）");
 
   const viewOf = (n: number) => truth.recon3d.views.find((v) => v.view === n)!;
+  const filesOf = (v: { exact: VariantFiles; noise?: Record<string, VariantFiles> }): VariantFiles => {
+    if (VARIANT === "exact") return v.exact;
+    const found = v.noise?.[VARIANT];
+    if (!found) throw new Error(`truth.json に版 "${VARIANT}" がありません（ファントムを作り直す）`);
+    return found;
+  };
   const vA = viewOf(VIEW_A);
   const vB = viewOf(VIEW_B);
+  const fA = filesOf(vA);
+  const fB = filesOf(vB);
+  console.log(`[版] ${VARIANT}`);
   const endsFor = (v: typeof vA) =>
     (Object.keys(BRANCH_SEGMENTS) as (keyof typeof BRANCH_SEGMENTS)[]).map((key) => {
       const seg = BRANCH_SEGMENTS[key];
@@ -309,19 +334,19 @@ async function main(): Promise<void> {
     mainPage.on("dialog", (d) => void d.accept().catch(() => {}));
     await resetDb(driver.ports.http);
     const imp = await importPaths(driver.ports.http, [
-      path.join(PHANTOM_DIR, vA.exact.file),
-      path.join(PHANTOM_DIR, vB.exact.file),
+      path.join(PHANTOM_DIR, fA.file),
+      path.join(PHANTOM_DIR, fB.file),
     ]);
     check(imp.imported === 2, "[準備] 2 方向を取り込めた", imp);
 
     await waitForMainScreenReady(mainPage, 60_000);
     await dismissStartupDialogs(mainPage);
-    await openStudy(mainPage, vA.exact.studyInstanceUid);
+    await openStudy(mainPage, fA.studyInstanceUid);
 
     // ── 方向ごとに 3 区間の 2D QCA を回す（3D の登録簿に 6 本たまる）──────
     let viewer: Page | null = null;
     for (const v of [vA, vB]) {
-      const row = mainPage.locator(`[data-testid="series-row-${v.exact.seriesInstanceUid}"]`);
+      const row = mainPage.locator(`[data-testid="series-row-${filesOf(v).seriesInstanceUid}"]`);
       await row.waitFor({ state: "visible", timeout: 30_000 });
       await row.click();
       await mainPage.waitForTimeout(400);

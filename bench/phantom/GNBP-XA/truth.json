@@ -82,6 +82,44 @@
           "primaryErrorDeg": 1.5,
           "secondaryErrorDeg": -1.0
         },
+        "noise": {
+          "c-noise-low": {
+            "file": "GNBP-XA-3-c-noise-low-view1.dcm",
+            "md5": "bf0cb5cc5748e6252a2f4a44d2eece37",
+            "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.882866886890259633154377845959692562",
+            "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.214701074151454947328784404039698627",
+            "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.368844589425173403240685479865543241",
+            "photons": 40000.0,
+            "backgroundMean": 3992.62,
+            "backgroundSigma": 19.974,
+            "backgroundRelativeSigma": 0.005,
+            "nominalRelativeSigma": 0.005
+          },
+          "d-noise-mid": {
+            "file": "GNBP-XA-3-d-noise-mid-view1.dcm",
+            "md5": "3eaab2a3f72fc89c2ecbd124d7fb5e6e",
+            "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.299651778584729245948157443986631489",
+            "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.484896140099718193659543169949036433",
+            "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.125175822499352236363961169517789989",
+            "photons": 10000.0,
+            "backgroundMean": 3890.25,
+            "backgroundSigma": 38.805,
+            "backgroundRelativeSigma": 0.00998,
+            "nominalRelativeSigma": 0.01
+          },
+          "e-noise-high": {
+            "file": "GNBP-XA-3-e-noise-high-view1.dcm",
+            "md5": "85088fc485ebc2ebbaaf027719d219dc",
+            "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.167519386618884314020348390862558982",
+            "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.637193156513297760368052964084051957",
+            "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.192430824985264300162015345554675611",
+            "photons": 2500.0,
+            "backgroundMean": 3685.41,
+            "backgroundSigma": 73.683,
+            "backgroundRelativeSigma": 0.01999,
+            "nominalRelativeSigma": 0.02
+          }
+        },
         "branchesPx": [
           {
             "id": "main",
@@ -616,6 +654,44 @@
           "taggedSecondaryAngleDeg": 22.0,
           "primaryErrorDeg": -2.5,
           "secondaryErrorDeg": 2.0
+        },
+        "noise": {
+          "c-noise-low": {
+            "file": "GNBP-XA-3-c-noise-low-view2.dcm",
+            "md5": "6271c9e58064708a33b9e6afec34bdd8",
+            "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.319197907412883767421274129627019279",
+            "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.138537658741225608066836124047539168",
+            "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.368844589425173403240685479865543241",
+            "photons": 40000.0,
+            "backgroundMean": 3992.63,
+            "backgroundSigma": 19.946,
+            "backgroundRelativeSigma": 0.005,
+            "nominalRelativeSigma": 0.005
+          },
+          "d-noise-mid": {
+            "file": "GNBP-XA-3-d-noise-mid-view2.dcm",
+            "md5": "2cf1f98a5c961960b47af831ebb932b5",
+            "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.631499998593388529917968825119282899",
+            "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.304495305553790815645767904381323445",
+            "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.125175822499352236363961169517789989",
+            "photons": 10000.0,
+            "backgroundMean": 3890.44,
+            "backgroundSigma": 38.828,
+            "backgroundRelativeSigma": 0.00998,
+            "nominalRelativeSigma": 0.01
+          },
+          "e-noise-high": {
+            "file": "GNBP-XA-3-e-noise-high-view2.dcm",
+            "md5": "c874fa0db0ab2ce5d5c4aca9b64d538b",
+            "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.200261070766960095260881335889774962",
+            "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.832252520696712558588455965394811026",
+            "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.192430824985264300162015345554675611",
+            "photons": 2500.0,
+            "backgroundMean": 3685.46,
+            "backgroundSigma": 73.932,
+            "backgroundRelativeSigma": 0.02006,
+            "nominalRelativeSigma": 0.02
+          }
         },
         "branchesPx": [
           {
@@ -1152,6 +1228,44 @@
           "primaryErrorDeg": 3.0,
           "secondaryErrorDeg": 1.5
         },
+        "noise": {
+          "c-noise-low": {
+            "file": "GNBP-XA-3-c-noise-low-view3.dcm",
+            "md5": "93a9fa5140d285d065556f0c7cd746a1",
+            "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.145761022543191187379442563599471716",
+            "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.333107899205035860166934677865045565",
+            "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.368844589425173403240685479865543241",
+            "photons": 40000.0,
+            "backgroundMean": 3992.63,
+            "backgroundSigma": 19.971,
+            "backgroundRelativeSigma": 0.005,
+            "nominalRelativeSigma": 0.005
+          },
+          "d-noise-mid": {
+            "file": "GNBP-XA-3-d-noise-mid-view3.dcm",
+            "md5": "24782fbf3157719ad169e24336264aa5",
+            "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.132036716734035233224580425137757711",
+            "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.272593508083406267269961016794660103",
+            "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.125175822499352236363961169517789989",
+            "photons": 10000.0,
+            "backgroundMean": 3890.18,
+            "backgroundSigma": 38.881,
+            "backgroundRelativeSigma": 0.00999,
+            "nominalRelativeSigma": 0.01
+          },
+          "e-noise-high": {
+            "file": "GNBP-XA-3-e-noise-high-view3.dcm",
+            "md5": "a086332f9cefb5033a4e242eff696312",
+            "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.217282190972485426893284361998587035",
+            "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.258659352351684614182821637028011562",
+            "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.192430824985264300162015345554675611",
+            "photons": 2500.0,
+            "backgroundMean": 3685.61,
+            "backgroundSigma": 73.752,
+            "backgroundRelativeSigma": 0.02001,
+            "nominalRelativeSigma": 0.02
+          }
+        },
         "branchesPx": [
           {
             "id": "main",
@@ -1686,6 +1800,44 @@
           "taggedSecondaryAngleDeg": 27.5,
           "primaryErrorDeg": -1.0,
           "secondaryErrorDeg": -2.5
+        },
+        "noise": {
+          "c-noise-low": {
+            "file": "GNBP-XA-3-c-noise-low-view4.dcm",
+            "md5": "0c2d4254f6a59e193c98b4dc5ebfca18",
+            "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.120813954810560675319657576880362972",
+            "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.427168347553741515551065696164596218",
+            "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.368844589425173403240685479865543241",
+            "photons": 40000.0,
+            "backgroundMean": 3992.63,
+            "backgroundSigma": 19.947,
+            "backgroundRelativeSigma": 0.005,
+            "nominalRelativeSigma": 0.005
+          },
+          "d-noise-mid": {
+            "file": "GNBP-XA-3-d-noise-mid-view4.dcm",
+            "md5": "f267069c2aafdaeadd84ab6798b553ea",
+            "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.103952433445018944363738270179906701",
+            "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.747008194721361809190318768001502846",
+            "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.125175822499352236363961169517789989",
+            "photons": 10000.0,
+            "backgroundMean": 3890.23,
+            "backgroundSigma": 38.924,
+            "backgroundRelativeSigma": 0.01001,
+            "nominalRelativeSigma": 0.01
+          },
+          "e-noise-high": {
+            "file": "GNBP-XA-3-e-noise-high-view4.dcm",
+            "md5": "07498cc52cf59480938f4fc9d7ce393a",
+            "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.111415654259503066100856785319263430",
+            "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.310645750422786269341079295803472855",
+            "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.192430824985264300162015345554675611",
+            "photons": 2500.0,
+            "backgroundMean": 3685.31,
+            "backgroundSigma": 73.664,
+            "backgroundRelativeSigma": 0.01999,
+            "nominalRelativeSigma": 0.02
+          }
         },
         "branchesPx": [
           {
