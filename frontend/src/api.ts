@@ -375,59 +375,6 @@ export const createXaPresentationState = (req: AngioPresentationRequest) =>
 /** QCA 計測値を Comprehensive SR として保存する。 */
 export const createQcaSr = (req: QcaSrRequest) => httpSend<AngioCreated>("/api/angio/qca-sr", "POST", req);
 
-/**
- * QVA（末梢・脳血管）の計測値を Comprehensive SR として保存する（§9.1 / A5a）。
- *
- * <p>QCA と別の要求にしているのは、**瘤の指標と、瘤に付く限界（投影 1 方向）**が
- * 増えるため。QCA の SR に瘤の項目を混ぜると、冠動脈の SR に空の瘤欄が並ぶ。
- */
-export const createQvaSr = (req: QvaSrRequest) => httpSend<AngioCreated>("/api/angio/qva-sr", "POST", req);
-
-export interface QvaSrRequest {
-  studyInstanceUid: string;
-  seriesInstanceUid: string;
-  sopInstanceUid: string;
-  frameNumber?: number | null;
-  unit: string;
-  calibration?: string | null;
-  vesselLabel?: string | null;
-  manualCorrection?: string | null;
-  /**
-   * 径を何で測ったか（`"half-max"` / `"densitometric"`）。省略時は半値法として扱う。
-   * 🔴 **拡張比（最大径 / 参照径）では、%DS と違って半値法の係数が打ち消されない**
-   * （太さの違う 2 点の比だから。`fw/angio-design.md` §16.4）。だから測り方を必ず残す。
-   */
-  diameterMethod?: string | null;
-  mld: number;
-  rvd: number;
-  percentDiameterStenosis: number;
-  lesionLength: number;
-  /** 拡張（瘤）。無ければ null（**空欄を 0 で埋めない**）。 */
-  dilation?: {
-    maxDiameter: number;
-    ratio: number;
-    percentDilation: number;
-    length: number;
-    proximalNeck: number;
-    distalNeck: number;
-    /** 測れなければ null。 */
-    eccentricity?: number | null;
-    aneurysmal: boolean;
-    /**
-     * 判定に使った比（参照径の何倍で「動脈瘤」と呼んだか）。省略時は 1.5。
-     * 🔴 **画面の判定文と同じ値を必ず送る**。SR の本文にはこの値が「criterion」として出るので、
-     * 送り忘れると「基準 1.5 と書いてあるのに 1.3 で瘤と判定された SR」ができる。
-     */
-    aneurysmRatio?: number | null;
-  } | null;
-}
-
-/**
- * QLV（左室造影）の結果を保存する要求（`fw/angio-design.md` §9.2 / A5b）。
- *
- * 🚨 **未校正のときは `unit`・容積・Kennedy をすべて null にする**。EF はスケール不変なので
- * 未校正でも正しいが、容積の絶対値と Kennedy 補正（アフィン変換）は出せない（§9.2.1）。
- */
 export interface QlvSrRequest {
   studyInstanceUid: string;
   seriesInstanceUid: string;
@@ -500,10 +447,9 @@ export interface Qca3dSrRequest {
  * `studyInstanceUid` は本体が呼び出し側で埋める（プラグインに指定させない）。
  */
 export interface AngioPluginSrRequest {
-  kind: "qca" | "qva" | "qlv" | "qca3d";
+  kind: "qca" | "qlv" | "qca3d";
   producer: { id: string; name: string; version: string };
   qca?: QcaSrRequest | null;
-  qva?: QvaSrRequest | null;
   qlv?: QlvSrRequest | null;
   qca3d?: Qca3dSrRequest | null;
 }

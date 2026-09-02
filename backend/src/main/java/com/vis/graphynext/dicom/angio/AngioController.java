@@ -28,7 +28,6 @@ import java.io.IOException;
  *   <li>{@code GET  /api/angio/presentation-state/{sop}} … 保管庫の GSPS を読んで適用可能な形にする</li>
  *   <li>{@code POST /api/angio/mp4} … フロントが焼いた PNG 列（ZIP）を MP4 にする</li>
  *   <li>{@code POST /api/angio/qca-sr} … QCA 計測値の Comprehensive SR</li>
- *   <li>{@code POST /api/angio/qva-sr} … QVA（末梢・脳血管）計測値の Comprehensive SR</li>
  * </ul>
  */
 @RestController
@@ -113,17 +112,6 @@ public class AngioController {
             return ResponseEntity.ok(service.createQcaSr(req));
         } catch (IOException e) {
             log.error("QCA SR の作成に失敗", e);
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "解析結果を保存できませんでした");
-        }
-    }
-
-    @PostMapping("/qva-sr")
-    public ResponseEntity<AngioStoreService.Created> createQvaSr(@RequestBody QvaSrRequest req) {
-        requireText(req.sopInstanceUid(), "sopInstanceUid");
-        try {
-            return ResponseEntity.ok(service.createQvaSr(req));
-        } catch (IOException e) {
-            log.error("QVA SR の作成に失敗", e);
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "解析結果を保存できませんでした");
         }
     }

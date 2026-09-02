@@ -25,7 +25,6 @@
 /** タスク識別子。`opens` が指すダイアログの実体は `SeriesViewer` にある。 */
 export type AnalysisTaskId =
   | "qca"
-  | "qva"
   | "qca3d"
   | "qca3dBifurcation"
   | "qlv"
@@ -33,7 +32,7 @@ export type AnalysisTaskId =
   | "report";
 
 /** 起動したときに開くもの。`null` は未実装（開くものが無い）。 */
-export type AnalysisTaskTarget = "xaAnalysis" | "qva" | "qlv" | "qca3d" | "qca3dBifurcation" | "report";
+export type AnalysisTaskTarget = "xaAnalysis" | "qlv" | "qca3d" | "qca3dBifurcation" | "report";
 
 export interface AnalysisTaskDef {
   id: AnalysisTaskId;
@@ -82,8 +81,9 @@ export const ANALYSIS_TASKS: readonly AnalysisTaskDef[] = [
   // 「ネック径が参照径に戻る」は生成モデル上 100% 通り、偏心度の真値も定数だった。
   // **実機 53/0 は「同じモデルで作った的に同じモデルで当てた」結果**なので撤回する。
   //
-  // 復活させる前に `fw/angio-design.md` §9.1 を読むこと（何を測ると言うのかが未決）。
-  // 再開の予定地は本体ではなく `graphy-next-plugin-angio-quant`（移行の段 3 / 段 5）。
+  // 実装は 2026-09-02 に本体から撤去した。**責務は `graphy-next-plugin-aneurysm-detector`**
+  // （`src/qva/` ＋ `docs/qva.md`）。復活させる前にそちらの TODO と
+  // `fw/angio-design.md` §9.1 を読むこと（何を測ると言うのかが未決）。
   {
     id: "qca3d",
     labelKey: "xa.task.qca3d",

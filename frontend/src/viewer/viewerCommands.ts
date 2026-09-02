@@ -17,7 +17,6 @@ import type {
   Qca3dSrRequest,
   QcaSrRequest,
   QlvSrRequest,
-  QvaSrRequest,
 } from "../api";
 
 /**
@@ -196,7 +195,6 @@ export interface ViewerSrMeasurementGroup {
  */
 export type ViewerAngioReportRequest =
   | { kind: "qca"; qca: Omit<QcaSrRequest, "studyInstanceUid"> }
-  | { kind: "qva"; qva: Omit<QvaSrRequest, "studyInstanceUid"> }
   | { kind: "qlv"; qlv: Omit<QlvSrRequest, "studyInstanceUid"> }
   | { kind: "qca3d"; qca3d: Omit<Qca3dSrRequest, "studyInstanceUid"> };
 

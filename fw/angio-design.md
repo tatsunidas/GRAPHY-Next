@@ -1605,12 +1605,25 @@ rAF を回し続ける）。
 > **A5b は実データ（`0009.DCM`）が手元にあり、EF まで実データで検証できる**（§21.3）。
 > A5c は同時 2 方向データが 1 本も無く、ファントム以外で確認する当てが無い（§20-9）。
 
-### 9.1 QVA（末梢・脳血管）— 🔴 **作り直し中（2026-09-01）。導線は撤去済み**
+### 9.1 QVA（末梢・脳血管）— 🔴 **本体から撤去済み（2026-09-02）。責務はプラグインへ移管**
 
 > 🔴 **この節の以下の記述（§9.1.0〜§9.1.2）は、誤った計測モデルを正当化している。**
 > 残してあるのは経緯を追えるようにするためで、**仕様として読まないこと**。
-> 作り直しの検討が終わるまで、QVA は**タスクランチャーのカードとビューアのボタンを撤去**した
-> （実装は残置。`frontend/src/viewer/xaTaskCatalog.ts` の注記）。
+>
+> **QVA の実装は本体から撤去した**（2026-09-02）。責務は
+> **`graphy-next-plugin-aneurysm-detector`**（`src/qva/` ＋ `docs/qva.md` が正本）にあり、
+> 作り直しもそちらで行う。**動脈瘤の検出（3D）と計測が別々の場所で別々の前提を持つと、
+> 同じ患者について矛盾する数値が 2 か所から出る**ため一本化した。
+>
+> 撤去したもの: `qva.ts` / `qva.test.ts`／`XaAnalysisDialog` の `mode` prop（QCA 専用にした）／
+> QVA 結果表・最大径マーカー／レポート記録 `qvaRecord`／`createQvaSr` と `QvaSrRequest`／
+> i18n `qva.*`（ja/en 各 25 キー）／設定 `xa.aneurysmRatio`（angio セクションごと）／
+> backend `QvaSrRequest` `QvaSrWriter` ＋テスト 12 件と `/api/angio/qva-sr`／
+> host API H37 の `kind:"qva"`／`automator/src/spike/xaQvaCheck.ts`。
+>
+> 残したもの: `qcaAnalysisState` の `mode: "qca"|"qva"`（**保存済みの解析状態を読むため**。
+> 新規保存は常に `"qca"`）と、`qca.ts` の参照径モード `ends`（QCA でも選べる汎用の当てはめ）。
+> 既に保存された QVA の SR（SeriesNumber 9105）は DICOM としてそのまま残る。
 >
 > #### 何が間違っていたか
 >
