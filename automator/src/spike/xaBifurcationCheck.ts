@@ -121,6 +121,10 @@ interface Truth {
 interface BifState {
   carina: [number, number, number];
   carinaSource: string;
+  carinaProfile?: {
+    id: string;
+    samples: { fromCarinaMm: number; dA: number; dB: number; equiv: number }[];
+  }[];
   inscribedRadiusMm: number | null;
   endpointSpreadMm: number;
   confluenceRadiusMm: number;

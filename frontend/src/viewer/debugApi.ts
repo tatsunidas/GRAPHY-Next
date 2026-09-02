@@ -484,6 +484,14 @@ export interface XaBifurcationDebugSnapshot {
   }[];
   /** 角度補正が掛からなかった枝（出自）。 */
   unrefinedBranches: string[];
+  /**
+   * カリーナ付近の 2 方向それぞれの径（切り分け専用）。片方だけ太いなら**投影で重なっている**、
+   * 両方太いなら**本当に太い**。
+   */
+  carinaProfile: {
+    id: string;
+    samples: { fromCarinaMm: number; dA: number; dB: number; equiv: number }[];
+  }[];
   /** 3 枝が同じ視点ペアを見ていたか（違うとアンカーを束ねられない）。 */
   viewPairShared: boolean;
   /**

@@ -111,6 +111,16 @@ export function Xa3dBifurcationDialog({ onClose }: { onClose: () => void }) {
   const [viewPairShared, setViewPairShared] = useState(true);
   /** 再構成した 3D 中心線。表示には使わず、実機検証の切り分けだけに出す（`debugApi`）。 */
   const [branchPoints, setBranchPoints] = useState<{ id: BranchId; points: Vec3[] }[]>([]);
+  /**
+   * カリーナ付近の**2 方向それぞれの径**（切り分け専用・`debugApi`）。
+   *
+   * 🔑 **なぜ要るか**: 側枝の参照径がカリーナ側で真値より太い（+14.6%）。原因が
+   * 「**片方の投影で母血管に重なっている**」なら **2 方向の径が食い違う**はずで、
+   * 「本当に太い」なら**両方で太い**はず。**結果の数字だけを見ても区別できない。**
+   */
+  const [carinaProfile, setCarinaProfile] = useState<
+    { id: BranchId; samples: { fromCarinaMm: number; dA: number; dB: number; equiv: number }[] }[]
+  >([]);
   /** 分岐部が重ならずに見える撮影角度の候補（§21.4.4）。 */
   const [workingAngles, setWorkingAngles] = useState<BifurcationWorkingAngle[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -127,6 +137,7 @@ export function Xa3dBifurcationDialog({ onClose }: { onClose: () => void }) {
     setPooledRefinement(null);
     setViewPairShared(true);
     setBranchPoints([]);
+    setCarinaProfile([]);
     setWorkingAngles([]);
     setError(null);
   };
@@ -260,6 +271,31 @@ export function Xa3dBifurcationDialog({ onClose }: { onClose: () => void }) {
         : null,
     );
     setBranchPoints(branches.map((b) => ({ id: b.id, points: b.points })));
+    setCarinaProfile(
+      branches.map((b) => ({
+        id: b.id,
+        samples: b.points
+          .map((p, i) => {
+            const sec = b.profile.sections[i];
+            const d = Math.hypot(
+              p[0] - analysis.carina[0],
+              p[1] - analysis.carina[1],
+              p[2] - analysis.carina[2],
+            );
+            return sec && sec.equivalentDiameterMm > 0
+              ? {
+                  fromCarinaMm: d,
+                  dA: sec.diameterAMm,
+                  dB: sec.diameterBMm,
+                  equiv: sec.equivalentDiameterMm,
+                }
+              : null;
+          })
+          .filter((x): x is { fromCarinaMm: number; dA: number; dB: number; equiv: number } => x != null)
+          .filter((x) => x.fromCarinaMm <= 14)
+          .sort((x, y) => x.fromCarinaMm - y.fromCarinaMm),
+      })),
+    );
     setWorkingAngles(
       suggestBifurcationWorkingAngles(branches, analysis.carina, analysis.confluenceRadiusMm, baseGeometry),
     );
@@ -295,6 +331,10 @@ export function Xa3dBifurcationDialog({ onClose }: { onClose: () => void }) {
             unrefinedBranches: [...unrefined],
             viewPairShared,
             refinement: pooledRefinement ? { ...pooledRefinement } : null,
+            carinaProfile: carinaProfile.map((b) => ({
+              id: b.id,
+              samples: b.samples.map((x) => ({ ...x })),
+            })),
             branchPoints: branchPoints.map((b) => ({
               id: b.id,
               points: b.points.map((p) => [p[0], p[1], p[2]] as [number, number, number]),
