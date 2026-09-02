@@ -1068,6 +1068,13 @@ export const en: Record<string, string> = {
   "qlv.open": "LV analysis",
   "qlv.title": "Quantitative left ventriculography (QLV, single plane)",
   "qlv.frames": "ED / ES frames",
+  "qlv.ed": "ED (end-diastole, largest)",
+  "qlv.es": "ES (end-systole, smallest)",
+  "qlv.edv": "EDV (end-diastolic volume)",
+  "qlv.esv": "ESV (end-systolic volume)",
+  "qlv.frames.confirm": "Move the {{which}} frame from {{from}} to {{to}}. The contour drawn on that phase ({{points}} points) will be discarded.",
+  "qlv.frames.confirm.ok": "Change and discard contour",
+  "qlv.frames.hint": "Drag the vertical markers to pick a frame (applied when you release). Green = ED (end-diastole) belongs on a peak of the curve (largest opacified area); orange = ES (end-systole) belongs in a trough (smallest). Note: changing a frame discards the contour drawn on it, because it belongs to a different cardiac phase.",
   "qlv.framesHint":
     "The curve is the opacified area per frame (green = ED, orange = ES). The suggestion is only a starting point \u2014 always review the motion. Contrast injection commonly triggers a premature ventricular beat, and the beat right after it overestimates EF.",
   "qlv.resuggest": "Suggest again",
@@ -1075,8 +1082,8 @@ export const en: Record<string, string> = {
   "qlv.resuggestRoiTitle":
     "Re-counts the opacified area only inside the bounding box of the ED contour. Counting over the whole frame picks up the diaphragm, spine, catheter and aorta, and does not track the ventricle.",
   "qlv.contour": "LV contour",
-  "qlv.edit.ed": "Draw ED",
-  "qlv.edit.es": "Draw ES",
+  "qlv.edit.ed": "Draw ED (end-diastole)",
+  "qlv.edit.es": "Draw ES (end-systole)",
   "qlv.clearContour": "Clear this contour",
   "qlv.frameLocked": "The frame is pinned while a contour is being drawn (wheel, cine and the slider are disabled). To draw on a different frame, set the ED / ES frame above.",
   "qlv.editor.hint":
@@ -1108,6 +1115,8 @@ export const en: Record<string, string> = {
   "qlv.step.reason.shortWindow": "The searchable window is too short. Choose ED/ES manually",
   "qlv.step.reason.implausibleInterval":
     "The ED-to-ES interval is physiologically impossible (systole is roughly 200-500 ms). Re-suggest from the LV region, or choose the frames manually",
+  "qlv.warn.noCardiacRipple":
+    "\u26a0 No cardiac ripple could be read from the area curve, so the suggestion fell back to the plain maximum and minimum. The measure may not reflect ventricular size \u2014 draw the ED contour and press \"Suggest from contour\", or drag the markers onto a peak and a trough.",
   "qlv.warn.uncalibrated":
     "\u26a0 Volumes (mL) cannot be reported without calibration. EF is scale invariant and therefore valid.",
   "qlv.warn.esLargerThanEd":

@@ -953,8 +953,8 @@ export function XaAnalysisDialog({
   );
 
   return (
-    <div style={backdrop} onClick={onClose} {...viewerOverlayProps}>
-      <div style={panel} onClick={(e) => e.stopPropagation()}>
+    <div style={backdrop} onClick={onClose}>
+      <div style={panel} onClick={(e) => e.stopPropagation()} {...viewerOverlayProps}>
         <div style={title} data-testid="xa-analysis-dialog" data-mode="qca">
           {t("xa.analysis.title")}
         </div>
