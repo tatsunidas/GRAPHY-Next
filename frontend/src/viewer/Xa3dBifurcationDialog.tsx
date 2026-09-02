@@ -36,7 +36,7 @@ import {
   type CrossSectionProfile,
   type XaCenterline2D,
 } from "./xaRecon3d";
-import { useQcaRuns } from "./xaRecon3dStore";
+import { useQcaRuns, type XaQcaRun } from "./xaRecon3dStore";
 
 /** 分岐部で使う 3 本の役割。表示順もこれ。 */
 const ROLES: BranchId[] = ["proximal", "distal", "side"];
@@ -232,6 +232,8 @@ export function Xa3dBifurcationDialog({ onClose }: { onClose: () => void }) {
           </table>
         )}
 
+        {runs.length >= 2 && <BranchPreview runs={runs} picks={picks} />}
+
         <div style={row}>
           <button style={primaryBtn} data-testid="xa3dbif-run" disabled={!ready} onClick={run}>
             {t("xa3dbif.run")}
@@ -411,3 +413,109 @@ const btn: React.CSSProperties = {
   cursor: "pointer",
 };
 const primaryBtn: React.CSSProperties = { ...btn, background: "#2c6fb5", color: "#fff", borderColor: "#2c6fb5" };
+
+/** 枝ごとの色。表・プレビューで**同じ色**を使う（別の色にすると対応を覚え直させることになる）。 */
+const BRANCH_COLORS: Record<string, string> = {
+  proximal: "#6d9be0",
+  distal: "#3f8f6f",
+  side: "#e07a5f",
+};
+
+/**
+ * どのランをどの枝に割り当てたかを、**中心線の絵**で示す。
+ *
+ * <h3>なぜ要るのか（実機で言われた・2026-09-02）</h3>
+ * 一覧の文字列は `#2 · LAO 60° / CRA 20° · f1 · 118px` のような形で、**同じ方向に 3 本引くと
+ * 角度もフレームも同じ**、px も近い行が並ぶ。番号を付けても「#2 が画面のどの線か」は
+ * 覚えていないと分からない。**登録済みの中心線をそのまま描いて、割り当てた枝の色で塗る**のが
+ * いちばん短い説明になる。
+ *
+ * <p>🔴 画素は持たない（登録簿は中心線と幾何だけを保持する設計）。**線だけを描く。**
+ */
+function BranchPreview({
+  runs,
+  picks,
+}: {
+  runs: readonly XaQcaRun[];
+  picks: Record<string, { a: string; b: string }>;
+}) {
+  const { t } = useI18n();
+  const W = 240;
+  const H = 170;
+  /** ランごとに「どの枝の、どちら側か」を引けるようにする。 */
+  const assigned = new Map<string, { role: string; side: "a" | "b" }>();
+  for (const role of Object.keys(picks)) {
+    for (const side of ["a", "b"] as const) {
+      const key = picks[role][side];
+      if (key) assigned.set(key, { role, side });
+    }
+  }
+  // 方向ごとにまとめる（同じ幾何のランは同じ絵の中に描く）。
+  const byView = new Map<string, XaQcaRun[]>();
+  for (const r of runs) {
+    const k = `${r.geometry.primaryAngleDeg}/${r.geometry.secondaryAngleDeg}/${r.frameIndex}`;
+    const list = byView.get(k) ?? [];
+    list.push(r);
+    byView.set(k, list);
+  }
+
+  return (
+    <div style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "8px 0" }}>
+      {[...byView.entries()].map(([k, list]) => {
+        // すべての中心線が入る矩形へ収める。
+        let x0 = Infinity;
+        let y0 = Infinity;
+        let x1 = -Infinity;
+        let y1 = -Infinity;
+        for (const r of list) {
+          for (const [x, y] of r.centerline) {
+            if (x < x0) x0 = x;
+            if (x > x1) x1 = x;
+            if (y < y0) y0 = y;
+            if (y > y1) y1 = y;
+          }
+        }
+        const sx = x1 > x0 ? (W - 24) / (x1 - x0) : 1;
+        const sy = y1 > y0 ? (H - 34) / (y1 - y0) : 1;
+        const sc = Math.min(sx, sy);
+        const px = (x: number) => 12 + (x - x0) * sc;
+        const py = (y: number) => 24 + (y - y0) * sc;
+        return (
+          <svg
+            key={k}
+            width={W}
+            height={H}
+            data-testid="xa3dbif-preview"
+            style={{ background: "#eef2f6", border: "1px solid #c3ced9", borderRadius: 3 }}
+          >
+            <text x={8} y={14} fontSize={11} fill="#44586a">
+              {list[0]?.label.replace(/^#\d+ · /, "") ?? ""}
+            </text>
+            {list.map((r) => {
+              const a = assigned.get(r.runKey);
+              const color = a ? BRANCH_COLORS[a.role] ?? "#8a95a1" : "#b7c2cd";
+              const num = /^#(\d+)/.exec(r.label)?.[1] ?? "";
+              const head = r.centerline[0];
+              return (
+                <g key={r.runKey} data-testid={`xa3dbif-preview-run-${r.runKey}`}>
+                  <polyline
+                    points={r.centerline.map((pt: readonly number[]) => `${px(pt[0])},${py(pt[1])}`).join(" ")}
+                    fill="none"
+                    stroke={color}
+                    strokeWidth={a ? 3 : 1.5}
+                  />
+                  {head && (
+                    <text x={px(head[0]) + 3} y={py(head[1]) - 3} fontSize={11} fontWeight={a ? 700 : 400} fill={color}>
+                      #{num}
+                      {a ? ` ${t(`xa3dbif.role.${a.role}`)}` : ""}
+                    </text>
+                  )}
+                </g>
+              );
+            })}
+          </svg>
+        );
+      })}
+    </div>
+  );
+}

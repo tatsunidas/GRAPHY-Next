@@ -956,6 +956,7 @@ export const ja: Record<string, string> = {
   "xa.analysis.srNew": "新規で保存",
   "xa.analysis.srReplaceWarn": "上書きすると、前の計測値はこの保管庫から削除されます。外部へ送信済みのものは戻せません。",
   "xa.analysis.stateSaveFailed": "計測値は保存しましたが、やり直すための解析状態を保存できませんでした（{{error}}）。次に開いても復元されません。",
+  "xa.analysis.previewHint": "オレンジが選んでいる線です。番号は上の一覧と同じで、絵の上を押しても選べます。",
   "xa.analysis.showOnImage": "画像で示す",
   "xa.analysis.showOnImageHint": "選んでいる線を画像の上で光らせます（どの線を選んでいるか一覧の文字だけでは分かりにくいため）。",
   "xa.analysis.usedForAnalysis": "解析に使用中",

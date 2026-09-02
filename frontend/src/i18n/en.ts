@@ -954,6 +954,7 @@ export const en: Record<string, string> = {
   "xa.analysis.srNew": "Save as new",
   "xa.analysis.srReplaceWarn": "Replacing deletes the previous values from this archive. Copies already sent elsewhere cannot be recalled.",
   "xa.analysis.stateSaveFailed": "The measurements were saved, but the analysis state could not be ({{error}}). It will not be restored next time.",
+  "xa.analysis.previewHint": "The orange line is the selected one. The numbers match the list above; you can also click a line here to select it.",
   "xa.analysis.showOnImage": "Show on image",
   "xa.analysis.showOnImageHint": "Highlight the selected line on the image (the list text alone does not tell which line it is).",
   "xa.analysis.usedForAnalysis": "used for analysis",

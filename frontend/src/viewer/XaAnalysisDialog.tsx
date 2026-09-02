@@ -727,7 +727,11 @@ export function XaAnalysisDialog({
         frameIndex: saveContext.frameIndex,
         // 同じフレームから複数の区間を取るので、**区間の長さまで名前に入れる**
         // （さもないと一覧に同じ名前が並び、どれを選んでいるのか分からない）。
-        label: `${describeView(view.geometry, saveContext.frameIndex)} · ${Math.round(
+        //
+        // 🔴 **先頭に一覧と同じ番号を付ける**（実機で言われた・2026-09-02）。
+        //    長さだけでは足りない——分岐部は同じ方向に 3 本引くので、角度もフレームも同じで
+        //    px も近い行が並ぶ。**この画面の `#2` と、3D の一覧の `#2` を同じ記号で結ぶ**。
+        label: `#${selected + 1} · ${describeView(view.geometry, saveContext.frameIndex)} · ${Math.round(
           Math.hypot(pick.p1[0] - pick.p0[0], pick.p1[1] - pick.p0[1]),
         )}px`,
         geometry: view.geometry,
@@ -877,8 +881,38 @@ export function XaAnalysisDialog({
    * 直後に**復元が勝って元に戻る**（何をしても戻ってくる、という最悪の壊れ方になる）。
    */
   const restoredKeys = useRef(new Set<string>());
+  /** 直前に見ていた解析の鍵。**選ぶ計測が変わったこと**を検出するために持つ。 */
+  const lastKeyRef = useRef<string | null>(null);
   useEffect(() => {
     const patientKey = saveContext.patientKey;
+    const nextId = analysisKey ? analysisId(analysisKey) : null;
+
+    // 🔴 **選ぶ計測を変えたら、前の解析を持ち越さない**（実機で言われた・2026-09-02）。
+    //
+    //    見た目は「別の線を選んだのに画像が切り替わらない」だが、**害はそこではない**。
+    //    `result` だけでなく `waypoints` / `edgeEdits`（手修正）まで残るので、そのまま
+    //    次の線を解析すると**前の線の手修正が混ざる**——しかも画面には何も出ない。
+    //    分岐部のように 1 枚の画像で 3 本続けて解析する使い方で必ず踏む。
+    //
+    //    ⚠️ 復元（下）と喧嘩しないよう、**同じ effect の先頭**で捨てる。別の effect にすると
+    //    宣言順で復元が先に走り、「捨てたのに戻る／戻らない」が順序で変わる。
+    if (lastKeyRef.current !== null && lastKeyRef.current !== nextId) {
+      setResult(null);
+      resetEdits();
+      setSaved(null);
+      setError(null);
+      setRestoredAt(null);
+      setSavedAnalysis(null);
+      setSrChoice(false);
+      sliceRef.current = null;
+      publishQcaSnapshot(null);
+      // 選び直したときは**もう一度復元してよい**。「1 回だけ」の制約は、
+      // 利用者が「手修正をすべて破棄」した直後に復元が勝つのを防ぐためのもので、
+      // 計測を選び直す操作はそれに当たらない。
+      if (nextId) restoredKeys.current.delete(nextId);
+    }
+    lastKeyRef.current = nextId;
+
     if (!patientKey || !analysisKey) return;
     const id = analysisId(analysisKey);
     if (restoredKeys.current.has(id)) return;
@@ -1000,6 +1034,18 @@ export function XaAnalysisDialog({
                   {t("xa.analysis.showOnImage")}
                 </button>
               </div>
+              {/* 🔴 どの線を選んでいるかを**ダイアログの中で**示す。裏の画像は背景で暗くなり、
+                  パネルにも覆われるので、annotation の選択表示だけでは見えない。 */}
+              <PickPreview
+                imageId={imageId}
+                picks={picks}
+                selectedIndex={selected}
+                onSelect={(i) => {
+                  setSelected(i);
+                  highlightPick(picks[i]?.uid ?? null);
+                }}
+              />
+              <div style={hint}>{t("xa.analysis.previewHint")}</div>
               {tooShort && (
                 <div style={warn} data-testid="xa-pick-too-short">
                   {t("xa.analysis.tooShort", { min: minSegmentPx().toFixed(0) })}
@@ -1785,3 +1831,136 @@ const errorText: React.CSSProperties = { fontSize: 12, color: "#b3452f", marginB
 const table: React.CSSProperties = { fontSize: 12, borderCollapse: "collapse", marginBottom: 8 };
 const th: React.CSSProperties = { textAlign: "left", padding: "2px 10px 2px 0", color: "#66788a" };
 const td: React.CSSProperties = { textAlign: "right", padding: "2px 16px 2px 0", fontVariantNumeric: "tabular-nums" };
+
+/**
+ * 「いまどの線を選んでいるか」を示す小さなプレビュー。
+ *
+ * <h3>なぜ要るのか（実機で言われた・2026-09-02）</h3>
+ * 選ぶと Cornerstone の annotation selection で**裏の画像の線が光る**作りにしてあるが、
+ * 実際には見えない——**ダイアログの背景が画像を暗くし、パネルが血管を覆う**からである。
+ * 一覧の文字列（`#1 — 45.9 mm（長さ）`）も、分岐部のように似た長さの線を 3 本引くと
+ * 区別が付かない。**分岐部は 1 枚の画像に 3 本引く**ので、ここが分からないと
+ * 「近位のつもりで側枝を解析していた」が起きる。
+ *
+ * <p>🔴 **番号は一覧と同じ**（`#1`, `#2`, …）。画面の線と一覧の行を、**同じ記号**で結ぶ。
+ * <p>クリックでも選べる（一覧を開かずに、絵の上で直接指せる）。
+ */
+function PickPreview({
+  imageId,
+  picks,
+  selectedIndex,
+  onSelect,
+}: {
+  imageId: string;
+  picks: readonly LengthPick[];
+  selectedIndex: number;
+  onSelect: (index: number) => void;
+}) {
+  const [slice, setSlice] = useState<{ values: Float32Array; width: number; height: number } | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const MAX_W = 440;
+
+  useEffect(() => {
+    let cancelled = false;
+    void readModalitySlice(imageId).then((s) => {
+      if (!cancelled) setSlice(s ? { values: s.values, width: s.width, height: s.height } : null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [imageId]);
+
+  const view = useMemo(() => {
+    if (!slice) return null;
+    const scale = Math.min(1, MAX_W / slice.width);
+    return { scale, dw: Math.round(slice.width * scale), dh: Math.round(slice.height * scale) };
+  }, [slice]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !slice || !view) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    canvas.width = view.dw;
+    canvas.height = view.dh;
+
+    // 画素を描く（VOI は持たないので min/max で伸ばす。位置が分かればよい）。
+    const off = document.createElement("canvas");
+    off.width = slice.width;
+    off.height = slice.height;
+    const octx = off.getContext("2d");
+    if (!octx) return;
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let i = 0; i < slice.values.length; i++) {
+      const v = slice.values[i];
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    if (!(hi > lo)) hi = lo + 1;
+    const img = octx.createImageData(slice.width, slice.height);
+    for (let i = 0; i < slice.width * slice.height; i++) {
+      const g = Math.max(0, Math.min(255, Math.round(((slice.values[i] - lo) / (hi - lo)) * 255)));
+      const k = i * 4;
+      img.data[k] = g;
+      img.data[k + 1] = g;
+      img.data[k + 2] = g;
+      img.data[k + 3] = 255;
+    }
+    octx.putImageData(img, 0, 0);
+    ctx.drawImage(off, 0, 0, view.dw, view.dh);
+
+    // 線を描く。**選んでいるものだけ強く**——他を消すと「どれがあるか」が分からなくなる。
+    picks.forEach((p, i) => {
+      const on = i === selectedIndex;
+      ctx.strokeStyle = on ? "#e07a5f" : "rgba(110,139,168,0.75)";
+      ctx.lineWidth = on ? 3 : 1.5;
+      ctx.beginPath();
+      p.points.forEach(([x, y], k) => {
+        const cx = x * view.scale;
+        const cy = y * view.scale;
+        if (k === 0) ctx.moveTo(cx, cy);
+        else ctx.lineTo(cx, cy);
+      });
+      ctx.stroke();
+      // 番号は一覧と同じ記号。読めるよう縁取りする。
+      const [hx, hy] = p.points[0];
+      const tx = hx * view.scale + 4;
+      const ty = hy * view.scale - 4;
+      ctx.font = on ? "bold 13px sans-serif" : "12px sans-serif";
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "rgba(0,0,0,0.75)";
+      ctx.strokeText(`#${i + 1}`, tx, ty);
+      ctx.fillStyle = on ? "#ffb59b" : "#cfe0ef";
+      ctx.fillText(`#${i + 1}`, tx, ty);
+    });
+  }, [slice, view, picks, selectedIndex]);
+
+  if (!slice || !view) return null;
+  return (
+    <canvas
+      ref={canvasRef}
+      data-testid="xa-pick-preview"
+      style={{ width: view.dw, height: view.dh, border: "1px solid #c3ced9", borderRadius: 3, cursor: "pointer", display: "block" }}
+      onClick={(e) => {
+        // いちばん近い線を選ぶ（絵の上で直接指せるように）。
+        const r = e.currentTarget.getBoundingClientRect();
+        const x = ((e.clientX - r.left) / r.width) * slice.width;
+        const y = ((e.clientY - r.top) / r.height) * slice.height;
+        let bestI = -1;
+        let bestD = Infinity;
+        picks.forEach((p, i) => {
+          for (const [px, py] of p.points) {
+            const d = (px - x) ** 2 + (py - y) ** 2;
+            if (d < bestD) {
+              bestD = d;
+              bestI = i;
+            }
+          }
+        });
+        // 遠すぎるところを押しても選び替えない（誤操作で解析対象が変わらないように）。
+        if (bestI >= 0 && Math.sqrt(bestD) <= 24) onSelect(bestI);
+      }}
+    />
+  );
+}
