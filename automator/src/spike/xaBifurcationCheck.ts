@@ -70,6 +70,7 @@ const TARGET_ANGLE_DEG = 8;
 const TARGET_DEVIATION_PT = 8;
 
 interface Truth {
+  geometry: { mmPerPxAtIsocenter: number };
   recon3d: {
     views: {
       view: number;
@@ -205,6 +206,8 @@ async function drawBetweenImagePixels(viewer: Page, p0: [number, number], p1: [n
 async function runQcaForSegments(
   viewer: Page,
   ends: { key: string; p0: [number, number]; p1: [number, number] }[],
+  /** 画像 px → mm（校正済みなら一覧のラベルが mm で出るため、期待値の換算に要る）。 */
+  mmPerPx: number,
 ): Promise<void> {
   await selectLengthTool(viewer);
   let drawn = 0;
@@ -234,11 +237,19 @@ async function runQcaForSegments(
     const lastIndex = labels.length - 1;
     await viewer.selectOption('[data-testid="xa-analysis-pick"]', String(lastIndex));
     await viewer.waitForTimeout(400);
-    const gotPx = parseFloat(/([\d.]+)\s*px/.exec(labels[lastIndex] ?? "")?.[1] ?? "NaN");
+    // 🚨 **一覧のラベルは校正済みなら mm で書かれる**（`pickLabel()`）。
+    //    px 前提で読んでいたため、校正が付くようになった時点で**この検査は必ず失敗**していた
+    //    （2026-09-02 に発覚。6 件の「失敗」はすべてこれで、製品の不具合ではなかった）。
+    //    2026-08-16 に 46/0 で通っていたのは、当時この経路が px だったから。
+    //    → **単位ごと読み、期待値を同じ単位へ換算して比べる。**
+    const m = /([\d.]+)\s*(mm|px)/.exec(labels[lastIndex] ?? "");
+    const got = m ? parseFloat(m[1]) : Number.NaN;
+    const unit = m?.[2] ?? "?";
+    const want = unit === "mm" ? wantPx * mmPerPx : wantPx;
     check(
-      Math.abs(gotPx - wantPx) < Math.max(6, wantPx * 0.12),
+      Number.isFinite(got) && Math.abs(got - want) < Math.max(unit === "mm" ? 6 * mmPerPx : 6, want * 0.12),
       `[QCA] ${e.key}: 引いた区間を解析対象に選べている`,
-      { wantPx: Number(wantPx.toFixed(1)), gotPx },
+      { want: Number(want.toFixed(2)), got, unit, label: labels[lastIndex] },
     );
     await viewer.getByTestId("xa-qca-run").click();
     await viewer.waitForTimeout(3_500);
@@ -320,7 +331,7 @@ async function main(): Promise<void> {
       );
       await viewer.getByTestId("series-viewer-root").first().waitFor({ state: "visible", timeout: 30_000 });
       await viewer.waitForTimeout(3_000);
-      await runQcaForSegments(viewer, endsFor(v));
+      await runQcaForSegments(viewer, endsFor(v), truth.geometry.mmPerPxAtIsocenter);
       // ⚠️ 2D ビューアは同じウィンドウを使い回すので、シリーズを変えるには一度閉じる。
       if (v !== vB) {
         await viewer.close();
