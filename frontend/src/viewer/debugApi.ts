@@ -302,18 +302,6 @@ export interface QcaDebugSnapshot {
   muPerMm: number | null;
   /** 密度計測を使わなかった理由（使ったなら null）。 */
   densitometryFallback: string | null;
-  /** 拡張（瘤）の計測（QVA のときだけ。§9.1 / A5a）。 */
-  qva: {
-    maxDiameter: number;
-    referenceAtMax: number;
-    ratio: number;
-    percentDilation: number;
-    length: number;
-    proximalNeck: number;
-    distalNeck: number;
-    eccentricity: number | null;
-    aneurysmal: boolean;
-  } | null;
   points: number;
   /** 参照径の両端（1 区間指定なら定数になる＝両端が一致する、を確かめるため）。 */
   referenceFirst: number;

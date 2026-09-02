@@ -249,9 +249,8 @@ function setGhostImage(e: React.DragEvent, label: string): void {
  * backend の `*SrWriter` が入れる `SeriesDescription`。**確認ダイアログに出す文字列を
  * 実際に保存されるものと一致させる**ため、ここに写しを持つ（違うものを見せて同意を取らない）。
  */
-const ANGIO_SR_DESCRIPTION: Record<"qca" | "qva" | "qlv" | "qca3d", string> = {
+const ANGIO_SR_DESCRIPTION: Record<"qca" | "qlv" | "qca3d", string> = {
   qca: "QCA",
-  qva: "QVA",
   qlv: "QLV",
   qca3d: "QCA 3D",
 };

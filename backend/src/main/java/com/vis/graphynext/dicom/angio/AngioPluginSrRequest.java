@@ -21,14 +21,13 @@ package com.vis.graphynext.dicom.angio;
  * <p>🔴 <b>DICOM はプラグインに書かせない</b>という方針はここでも同じ。プラグインが渡すのは
  * 「何を測ったか」だけで、SR の構造・UID 採番・患者/検査属性の継承は本体（{@code *SrWriter}）が行う。
  *
- * @param kind     "qca" / "qva" / "qlv" / "qca3d"
+ * @param kind     "qca" / "qlv" / "qca3d"
  * @param producer 出所（プラグイン id・表示名・版）。**必須**
  */
 public record AngioPluginSrRequest(
         String kind,
         Producer producer,
         QcaSrRequest qca,
-        QvaSrRequest qva,
         QlvSrRequest qlv,
         Qca3dSrRequest qca3d) {
 

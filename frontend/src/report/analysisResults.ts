@@ -28,7 +28,7 @@
  * <p>プラグインごとに種別を増やさない: 本体は「どのプラグインか」を
  * {@link AnalysisResultRecord.provenance} の 1 行として持つ（本体が書くので消せない）。
  */
-export type AnalysisKind = "qca" | "qva" | "qlv" | "qca3d" | "plugin";
+export type AnalysisKind = "qca" | "qlv" | "qca3d" | "plugin";
 
 /** 1 行の計測値。 */
 export interface AnalysisMetric {

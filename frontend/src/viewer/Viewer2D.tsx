@@ -1913,7 +1913,7 @@ export function Viewer2D({
     const refs =
       req.kind === "qca3d"
         ? [req.qca3d.viewASopInstanceUid, req.qca3d.viewBSopInstanceUid]
-        : [req.kind === "qca" ? req.qca.sopInstanceUid : req.kind === "qva" ? req.qva.sopInstanceUid : req.qlv.sopInstanceUid];
+        : [req.kind === "qca" ? req.qca.sopInstanceUid : req.qlv.sopInstanceUid];
     const bad = firstUnopenedSop(refs);
     if (bad !== null) {
       // 3D QCA の方向 B は別シリーズ＝別タイルにある。**そのタイルから呼ぶ**必要がある。
@@ -1922,7 +1922,6 @@ export function Viewer2D({
     const study = ctx.studyUid;
     const body: AngioPluginSrRequest = { kind: req.kind, producer };
     if (req.kind === "qca") body.qca = { ...req.qca, studyInstanceUid: study };
-    else if (req.kind === "qva") body.qva = { ...req.qva, studyInstanceUid: study };
     else if (req.kind === "qlv") body.qlv = { ...req.qlv, studyInstanceUid: study };
     else body.qca3d = { ...req.qca3d, studyInstanceUid: study };
     try {

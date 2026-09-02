@@ -367,7 +367,6 @@ export function SeriesViewer({
   // 校正 / QCA ダイアログ（fw/angio-design.md §7.3 / §8）。
   const [xaDialogOpen, setXaDialogOpen] = useState(false);
   const [qlvDialogOpen, setQlvDialogOpen] = useState(false);
-  const [qvaDialogOpen, setQvaDialogOpen] = useState(false);
   const [xaBifDialogOpen, setXaBifDialogOpen] = useState(false);
   const [xa3dDialogOpen, setXa3dDialogOpen] = useState(false);
   /** 表示状態（GSPS）の読み込み（§14.1）。 */
@@ -422,7 +421,6 @@ export function SeriesViewer({
         return;
       }
       if (req.target === "xaAnalysis") setXaDialogOpen(true);
-      else if (req.target === "qva") setQvaDialogOpen(true);
       else if (req.target === "qlv") setQlvDialogOpen(true);
       else if (req.target === "qca3d") setXa3dDialogOpen(true);
     });
@@ -1412,27 +1410,6 @@ export function SeriesViewer({
           onClose={() => setXaDialogOpen(false)}
           // 校正が変わったら表示（スケールバー・計測ラベル）を作り直す。
           // DSA 中は合成 imageId の版番号、非 DSA でも refreshKey でスタックを初期化し直す。
-          onCalibrated={() => {
-            setDsaVersion((v) => v + 1);
-            setCalibVersion((v) => v + 1);
-          }}
-        />
-      )}
-      {qvaDialogOpen && displayImageIds[zc] && (
-        <XaAnalysisDialog
-          mode="qva"
-          imageId={displayImageIds[zc]}
-          seriesUid={seriesUid}
-          isSubtracted={!!dsaToken}
-          saveContext={{
-            studyUid,
-            // 解析状態の保存先（ROI と同じ患者ごとの JSON。§14.5）。
-            patientKey,
-            sopInstanceUid: sopUidFromImageId(zStack[zc] ?? ""),
-            frameIndex: zc,
-            dsa: dsaState ? { maskFrames: dsaState.maskFrames, dx: dsaState.dx, dy: dsaState.dy } : null,
-          }}
-          onClose={() => setQvaDialogOpen(false)}
           onCalibrated={() => {
             setDsaVersion((v) => v + 1);
             setCalibVersion((v) => v + 1);

@@ -394,24 +394,6 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
           },
         ],
       },
-      // アンギオ（XA）の定量解析。fw/angio-design.md §9.1（QVA）。
-      {
-        titleKey: "settings.sec.angio",
-        fields: [
-          // 🔴 「参照径の何倍で動脈瘤と呼ぶか」。既定 1.5 は血管外科の報告基準（+50%）だが、
-          //    部位・施設で採る基準が違うので固定しない。判定文と SR には**この値が出る**。
-          {
-            key: "xa.aneurysmRatio",
-            labelKey: "settings.field.aneurysmRatio",
-            type: "number",
-            default: 1.5,
-            min: 1.05,
-            max: 5,
-            step: 0.05,
-            helpKey: "settings.field.aneurysmRatio.help",
-          },
-        ],
-      },
       {
         titleKey: "settings.sec.seriesSync",
         fields: [
