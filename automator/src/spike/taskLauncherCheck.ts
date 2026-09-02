@@ -154,9 +154,13 @@ async function main(): Promise<void> {
     await mainPage.waitForTimeout(400);
     await openLauncher(mainPage);
     const xa = await readCards(mainPage);
-    for (const id of ["qca", "qva", "qca3d", "qca3dBifurcation", "qlv", "report"]) {
+    // 🔴 `qva` はここから外した（2026-09-01）。**カードごと撤去**したので「押せる」も
+    //    「押せない」も検査できない（存在しないものは `xa[id]` が undefined になる）。
+    //    理由は `frontend/src/viewer/xaTaskCatalog.ts` の注記。
+    for (const id of ["qca", "qca3d", "qca3dBifurcation", "qlv", "report"]) {
       check(xa[id]?.enabled === "1", `[XA] ${id} が押せる`, xa[id]);
     }
+    check(xa.qva === undefined, "[XA] QVA のカードは出ない（作り直しのため導線を撤去）", xa.qva);
     check(xa.qlvBiplane?.enabled === "0", "[XA] 未実装タスクは XA を選んでも押せないまま", xa.qlvBiplane);
     await mainPage.screenshot({ path: path.join(OUT_DIR, "2-launcher-xa.png") }).catch(() => {});
 
