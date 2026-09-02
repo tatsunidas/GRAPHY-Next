@@ -71,16 +71,19 @@ export const ANALYSIS_TASKS: readonly AnalysisTaskDef[] = [
     needsXaSeries: true,
     standaloneOnly: true,
   },
-  {
-    id: "qva",
-    labelKey: "xa.task.qva",
-    descKey: "xa.task.qva.desc",
-    implemented: true,
-    phase: "A5a",
-    opens: "qva",
-    needsXaSeries: true,
-    standaloneOnly: true,
-  },
+  // 🔴 **QVA（A5a）はここから外してある**（2026-09-01）。実装は残っているが導線を切った。
+  //
+  // 理由: 報告していた「ネック径」が**瘤頸（母血管との開口部の幅）ではなく、拡張区間の端の
+  // 血管径**だった。嚢状動脈瘤は「血管の側面に付いた袋」で、現行の計測モデル（中心線に沿った
+  // 1 次元の径プロファイル）では**そもそも表現できない**。
+  //
+  // 🚨 **検証も無効だった**。`bench/make_phantom_xa.py` の「嚢状」は紡錘状と同じ膨らみを軸ごと
+  // ずらして片壁を固定しただけで、**どの断面も単一の円＝開口部が存在しない**。受け入れ条件
+  // 「ネック径が参照径に戻る」は生成モデル上 100% 通り、偏心度の真値も定数だった。
+  // **実機 53/0 は「同じモデルで作った的に同じモデルで当てた」結果**なので撤回する。
+  //
+  // 復活させる前に `fw/angio-design.md` §9.1 を読むこと（何を測ると言うのかが未決）。
+  // 再開の予定地は本体ではなく `graphy-next-plugin-angio-quant`（移行の段 3 / 段 5）。
   {
     id: "qca3d",
     labelKey: "xa.task.qca3d",
