@@ -15,9 +15,11 @@
 > **A4c（密度計測）で 2D ファントムは 67 → 93（未達 17 → 2）**。
 > スパイクは `automator/src/spike/xa*Check.ts`。
 >
-> 🧩 **計測はプラグインへ外出しする（案 A・2026-08-25 着手・§22.3）**。切り出し先は
-> `graphy-next-plugin-angio-quant`（private）。**表示・空間校正・DICOM 書き出しは本体に残す**。
-> 本体側の宿題は host API 6 本（G1〜G6）。**第 5 段まで本体の実装は消さない**。
+> 🧩 **計測のプラグイン外出しは段 2 で止めた（2026-09-02）**。切り出し先だった
+> `graphy-next-plugin-angio-quant` は畳み、**経緯と host API の由来は `fw/angio-plugin-migration.md`
+> へ移した**。本体側の宿題だった G1〜G5 は **H35〜H39 として実装済み**（残 G6）。
+> **QCA / QLV / 3D は本体にあるまま**（計算コアは元から本体で、あちらは写しだった）。
+> 動脈瘤（QVA）だけは責務が `graphy-next-plugin-aneurysm-detector` へ移っている（§9.1）。
 >
 > 🩺 **「1 症例を通せるか」は §22**（臨床シナリオとの差分・2026-08-25）。個々の機能が
 > 実装済みでも工程として繋がるかは別問題で、繋がらない箇所は機能表からは見えない。
@@ -1660,9 +1662,9 @@ rAF を回し続ける）。
 > → 投影、計測は画像からのみ）。真値は幾何の設計値から導出し、`if saccular` のような定数を置かない。
 > **「構造上必ず通る条件」を受け入れ条件に入れない**（先に「この条件が落ちる入力が存在するか」を確かめる）。
 >
-> ⚠️ **誤ったモデルは 2 か所にある。** `graphy-next-plugin-angio-quant/src/core/qva.ts` が本体からの
-> 写しで、`tools/syncCore.mjs` の `MODULES` に `qva` が入っているため**同期が強制されている**。
-> プラグイン側だけ直すと `npm run check:sync` が落ちる。作り直すときは同期対象から外す。
+> ✅ **写しは 1 つに戻した**（2026-09-02）。`angio-quant` にあった `qva.ts` の写しは削除し、
+> 同期対象からも外したうえで、リポジトリごと畳んだ。QVA の実体は
+> `graphy-next-plugin-aneurysm-detector` の `src/qva/` だけ。
 >
 > ⚠️ **既に保存された QVA の SR（SeriesNumber 9105）が残っている。** 「ネック」の意味を変えるなら
 > **SR のコードも変える**こと（同じコードで違う意味を持つ保存物を作らない）。
@@ -4109,11 +4111,17 @@ path インデックスが別の物理位置を指す場合（§8.6 の `centerl
 **決定**: アンギオの**定量解析だけ**を非公開プラグインへ切り出す。表示（2D ビューア・シネ・
 DSA）・**空間校正**・DICOM 書き出しは**本体に残す**。
 
+> 🔴 **この決定は 2026-09-02 に段 2 で止めた。** リポジトリ `graphy-next-plugin-angio-quant` は
+> 畳み、**G1〜G6 の由来・移行の段取り・実機で踏んだ写し間違いは
+> `fw/angio-plugin-migration.md` に移した**（再開するならそこの段 3 から）。
+> 実装は失われていない——**計算コアは元から本体にあり、あちらは写しだった**。
+> 以下は当時の記述。
+
 | | |
 | :- | :- |
-| リポジトリ | `github.com/tatsunidas/graphy-next-plugin-angio-quant`（private） |
-| plugin id | `angio-quant`（**変えない**。H8 の保存領域と導入先ディレクトリの鍵） |
-| 正本 | そのリポジトリの `README.md`。足りない host API は `docs/host-api-gaps.md` |
+| リポジトリ | `graphy-next-plugin-angio-quant`（private・**2026-09-02 に削除**） |
+| plugin id | `angio-quant`（H8 の保存領域と導入先ディレクトリの鍵だった） |
+| 正本 | 移設後は `fw/angio-plugin-migration.md` |
 
 **なぜ計測だけなのか**: 重量物のうち `dsaLoader`（Cornerstone の image loader を登録する口が
 プラグインに無い）・`xaCalibration`（**本体のスケールバーと計測ラベル**を直すために metaData
