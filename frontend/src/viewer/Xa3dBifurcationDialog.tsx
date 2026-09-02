@@ -272,6 +272,8 @@ export function Xa3dBifurcationDialog({ onClose }: { onClose: () => void }) {
       result
         ? {
             carina: [...result.carina] as [number, number, number],
+            carinaSource: result.carinaSource,
+            inscribedRadiusMm: result.inscribedRadiusMm,
             endpointSpreadMm: result.endpointSpreadMm,
             confluenceRadiusMm: result.confluenceRadiusMm,
             branches: result.branches.map((b) => ({ ...b })),
@@ -363,6 +365,11 @@ export function Xa3dBifurcationDialog({ onClose }: { onClose: () => void }) {
             {/* 🚨 「どこを測っていないか」を数値で先に出す。 */}
             <div style={hint} data-testid="xa3dbif-confluence">
               {t("xa3dbif.confluence", { mm: result.confluenceRadiusMm.toFixed(2) })}
+            </div>
+            <div style={hint} data-testid="xa3dbif-carina-source">
+              {result.carinaSource === "geometry"
+                ? t("xa3dbif.carina.geometry", { mm: (result.inscribedRadiusMm ?? 0).toFixed(2) })
+                : t("xa3dbif.carina.endpoints")}
             </div>
             <table style={table}>
               <thead>

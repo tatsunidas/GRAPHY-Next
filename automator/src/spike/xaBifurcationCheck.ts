@@ -120,6 +120,8 @@ interface Truth {
 
 interface BifState {
   carina: [number, number, number];
+  carinaSource: string;
+  inscribedRadiusMm: number | null;
   endpointSpreadMm: number;
   confluenceRadiusMm: number;
   branches: {
@@ -604,6 +606,17 @@ async function main(): Promise<void> {
         void off;
       }
     }
+    // ── カリーナの出自（段 4）────────────────────────────────────────
+    // 🔴 端点の重心をやめ、**3 本に接する最大の内接球**から決めるようにした。
+    //    退避（"endpoints"）に落ちているなら 3 本が交わっていない＝入力が悪い。
+    check(s.carinaSource === "geometry", "[出自] ★カリーナを幾何から決めている（端点の重心ではない）", {
+      carinaSource: s.carinaSource,
+      inscribedRadiusMm: s.inscribedRadiusMm,
+    });
+    check(
+      (await viewer.getByTestId("xa3dbif-carina-source").count()) === 1,
+      "[出自] カリーナの決め方を画面に出している",
+    );
     check(
       s.warnings.every((w) => w.code !== "endpointsApart"),
       "[整合] 3 本の端点がそろっている（同じ分岐を指している）",

@@ -1254,6 +1254,8 @@ export const ja: Record<string, string> = {
   "xa3dbif.branch": "枝",
   "xa3dbif.lesionLength": "病変長",
   "xa3dbif.excluded": "除外長",
+  "xa3dbif.carina.geometry": "カリーナは 3 本に接する最大の内接球（半径 {{mm}} mm）の中心として、幾何から決めています（線をどこで描き終えたかに依りません）。",
+  "xa3dbif.carina.endpoints": "⚠ 3 本が交わっていないため、カリーナを線の端点の重心で代用しています。3 本が同じ分岐を通るように引き直してください。",
   "xa3dbif.confluence": "カリーナから半径 {{mm}} mm（母血管 1 径ぶん）は測っていません。この範囲の数値は出しません。",
   "xa3dbif.angle.distalSide": "遠位↔側枝（分岐角）",
   "xa3dbif.angle.proximalSide": "近位↔側枝",

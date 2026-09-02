@@ -34,6 +34,7 @@ import {
   type ViewBasis,
   type XaViewGeometry,
 } from "./xaGeometry";
+import { findPointOfBifurcation, type TubeBranch } from "./xaBifurcationCore";
 import { foreshorteningProfile, type CrossSectionProfile } from "./xaRecon3d";
 
 /** 枝の役割。 */
@@ -96,9 +97,19 @@ export interface BifurcationWarning {
   threshold: number;
 }
 
+/** カリーナをどう決めたか。**数値の意味が変わるので必ず添える。** */
+export type CarinaSource = "geometry" | "endpoints";
+
 export interface BifurcationResult {
   /** カリーナ（3 本の端点の重心）。 */
   carina: Vec3;
+  /**
+   * カリーナの出自。`geometry` は**3 本に接する最大の内接球の中心**（POB の近似・段 4）、
+   * `endpoints` は**利用者が線を描き終えた 3 点の重心**（旧方式・3 本が交わっていないときの退避）。
+   */
+  carinaSource: CarinaSource;
+  /** `geometry` のときの内接球の半径 [mm]（＝分岐核の大きさの目安）。 */
+  inscribedRadiusMm: number | null;
   /** 3 本の端点のばらつき [mm]。大きいほど「同じ分岐を指していない」。 */
   endpointSpreadMm: number;
   /** 実際に使った除外半径 [mm]。 */
@@ -322,12 +333,30 @@ export function analyzeBifurcation(
       branches.filter((o) => o.id !== b.id).map((o) => o.points as Vec3[]),
     ),
   );
-  const carina: Vec3 = [
+  const endpointCentroid: Vec3 = [
     (ends[0].point[0] + ends[1].point[0] + ends[2].point[0]) / 3,
     (ends[0].point[1] + ends[1].point[1] + ends[2].point[1]) / 3,
     (ends[0].point[2] + ends[1].point[2] + ends[2].point[2]) / 3,
   ];
-  const endpointSpreadMm = Math.max(...ends.map((e) => dist(e.point, carina)));
+  // 🔴 **カリーナは幾何から決める**（段 4・2026-09-02）。端点の重心は「利用者が線を描き終えた
+  //    場所」であって解剖学的な分岐ではない。**端点を触る改善が必ず幾何を壊す**という詰まりも
+  //    ここが原因だった（§21.4.0 の「試して失敗した 2 つ」）。
+  //    3 本が交わっていないときだけ、旧方式へ退避する（黙って最良点を使わない）。
+  const tubes: TubeBranch[] = branches.map((b) => ({
+    id: b.id,
+    points: b.points,
+    radiiMm: b.points.map((_, i) => {
+      const d = b.profile.sections[i]?.equivalentDiameterMm;
+      return d != null && Number.isFinite(d) ? d / 2 : null;
+    }),
+  }));
+  const pob = findPointOfBifurcation(tubes);
+  const useGeometry = pob != null && pob.overlapping;
+  const carina: Vec3 = useGeometry ? pob.point : endpointCentroid;
+  const carinaSource: CarinaSource = useGeometry ? "geometry" : "endpoints";
+  // ⚠️ 端点のばらつきは**カリーナの決定には使わなくなった**が、
+  //    「3 本が同じ分岐を指しているか」の目安としては引き続き意味があるので出し続ける。
+  const endpointSpreadMm = Math.max(...ends.map((e) => dist(e.point, endpointCentroid)));
   if (endpointSpreadMm > ENDPOINT_SPREAD_LIMIT_MM) {
     warnings.push({
       code: "endpointsApart",
@@ -402,6 +431,8 @@ export function analyzeBifurcation(
 
   return {
     carina,
+    carinaSource,
+    inscribedRadiusMm: useGeometry ? pob.radiusMm : null,
     endpointSpreadMm,
     confluenceRadiusMm,
     branches: results,

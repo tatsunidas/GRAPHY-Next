@@ -446,6 +446,10 @@ export interface Xa3dDebugSnapshot {
 /** 分岐部 QCA（A6b）の検証用スナップショット。`fw/angio-design.md` §21.4。 */
 export interface XaBifurcationDebugSnapshot {
   carina: [number, number, number];
+  /** カリーナの出自（"geometry" ＝ 内接球・"endpoints" ＝ 旧方式への退避）。 */
+  carinaSource: string;
+  /** 内接球の半径 [mm]（"geometry" のときだけ）。 */
+  inscribedRadiusMm: number | null;
   endpointSpreadMm: number;
   confluenceRadiusMm: number;
   branches: {

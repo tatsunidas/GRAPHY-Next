@@ -1265,6 +1265,8 @@ export const en: Record<string, string> = {
   "xa3dbif.branch": "Branch",
   "xa3dbif.lesionLength": "Lesion length",
   "xa3dbif.excluded": "Excluded",
+  "xa3dbif.carina.geometry": "The carina is derived geometrically as the centre of the largest sphere touching all three branches (radius {{mm}} mm) — it does not depend on where you stopped drawing.",
+  "xa3dbif.carina.endpoints": "⚠ The three branches do not overlap, so the carina falls back to the centroid of the drawn endpoints. Redraw so all three pass through the same bifurcation.",
   "xa3dbif.confluence": "Not measured within {{mm}} mm of the carina (about one mother-vessel diameter). No numbers are reported for that range.",
   "xa3dbif.angle.distalSide": "Distal-to-side (bifurcation angle)",
   "xa3dbif.angle.proximalSide": "Proximal-to-side",
