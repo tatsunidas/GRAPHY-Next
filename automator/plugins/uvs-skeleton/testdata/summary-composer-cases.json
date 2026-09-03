@@ -1,0 +1,164 @@
+{
+  "_comment": [
+    "要約インデックス合成規則の共有テストベクタ。",
+    "Java (analysis/SummaryComposer) と TypeScript (frontend/src/summarizer/summaryComposer.ts) の",
+    "両方がこのファイルを読んで検証する。片方だけ直すと必ずここで落ちる。",
+    "",
+    "規則（fw/swing-feature-inventory.md §4）:",
+    "  removeSet = colorRemove ∪ staticRemove",
+    "  heartSet  = 予測未実行なら全フレーム",
+    "  final     = ((heartSet − removeSet) − userRemove) ∪ userAdd   // userAdd が最優先"
+  ],
+  "cases": [
+    {
+      "name": "予測未実行なら色/静止だけで要約する",
+      "frameCount": 10,
+      "colorRemove": [2, 3],
+      "staticRemove": [9],
+      "heart": null,
+      "userAdd": [],
+      "userRemove": [],
+      "expected": {
+        "heart": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        "removedByPrediction": [],
+        "finalIndices": [1, 4, 5, 6, 7, 8, 10]
+      }
+    },
+    {
+      "name": "final = heart − (color ∪ static)",
+      "frameCount": 10,
+      "colorRemove": [3],
+      "staticRemove": [4],
+      "heart": [2, 3, 4, 5],
+      "userAdd": [],
+      "userRemove": [],
+      "expected": {
+        "heart": [2, 3, 4, 5],
+        "removedByPrediction": [1, 6, 7, 8, 9, 10],
+        "finalIndices": [2, 5]
+      }
+    },
+    {
+      "name": "userAdd はあらゆる除外より優先される",
+      "frameCount": 10,
+      "colorRemove": [3],
+      "staticRemove": [4],
+      "heart": [1, 2, 5],
+      "userAdd": [3, 4, 8],
+      "userRemove": [],
+      "expected": {
+        "heart": [1, 2, 5],
+        "removedByPrediction": [3, 4, 6, 7, 8, 9, 10],
+        "finalIndices": [1, 2, 3, 4, 5, 8]
+      }
+    },
+    {
+      "name": "同じフレームが userAdd と userRemove にあれば userAdd が勝つ",
+      "frameCount": 5,
+      "colorRemove": [],
+      "staticRemove": [],
+      "heart": [1, 2, 3, 4, 5],
+      "userAdd": [3],
+      "userRemove": [3],
+      "expected": {
+        "heart": [1, 2, 3, 4, 5],
+        "removedByPrediction": [],
+        "finalIndices": [1, 2, 3, 4, 5]
+      }
+    },
+    {
+      "name": "userRemove でフレームが落ちる",
+      "frameCount": 5,
+      "colorRemove": [],
+      "staticRemove": [],
+      "heart": [1, 2, 3, 4, 5],
+      "userAdd": [],
+      "userRemove": [2, 4],
+      "expected": {
+        "heart": [1, 2, 3, 4, 5],
+        "removedByPrediction": [],
+        "finalIndices": [1, 3, 5]
+      }
+    },
+    {
+      "name": "color と static が重なっても二重に数えない",
+      "frameCount": 5,
+      "colorRemove": [2, 3],
+      "staticRemove": [3, 4],
+      "heart": [1, 2, 3, 4, 5],
+      "userAdd": [],
+      "userRemove": [],
+      "expected": {
+        "heart": [1, 2, 3, 4, 5],
+        "removedByPrediction": [],
+        "finalIndices": [1, 5]
+      }
+    },
+    {
+      "name": "すべて除外されて空になる",
+      "frameCount": 3,
+      "colorRemove": [1, 2, 3],
+      "staticRemove": [],
+      "heart": [1, 2, 3],
+      "userAdd": [],
+      "userRemove": [],
+      "expected": {
+        "heart": [1, 2, 3],
+        "removedByPrediction": [],
+        "finalIndices": []
+      }
+    }
+  ],
+  "interpolationCases": [
+    {
+      "name": "区間線形補間（interval=10、3 点 → 21 フレーム）",
+      "known": [0.0, 1.0, 0.0],
+      "size": 21,
+      "interval": 10,
+      "expectedAt": { "0": 0.0, "5": 0.5, "10": 1.0, "15": 0.5, "20": 0.0 }
+    },
+    {
+      "name": "既知点を超えたら最後の値で埋める",
+      "known": [0.2, 0.8],
+      "size": 30,
+      "interval": 10,
+      "expectedAt": { "0": 0.2, "5": 0.5, "10": 0.8, "25": 0.8, "29": 0.8 }
+    },
+    {
+      "name": "1 点だけなら定数",
+      "known": [0.42],
+      "size": 5,
+      "interval": 1000,
+      "expectedAt": { "0": 0.42, "2": 0.42, "4": 0.42 }
+    }
+  ],
+  "thresholdCases": [
+    {
+      "name": "補間してから閾値を当てる（超過のみ採用）",
+      "predScores": { "1": 0.0, "11": 1.0 },
+      "frameCount": 21,
+      "interval": 10,
+      "threshold": 0.5,
+      "expectedHeartContains": [8, 9, 10, 11],
+      "expectedHeartExcludes": [1, 6]
+    },
+    {
+      "name": "閾値が 1 超なら 0.9999999 にクランプ",
+      "predScores": { "1": 0.5, "2": 0.5 },
+      "frameCount": 2,
+      "interval": 1,
+      "threshold": 5.0,
+      "expectedHeartContains": [],
+      "expectedHeartExcludes": [1, 2]
+    },
+    {
+      "name": "閾値が 0 以下なら 0.0000001 にクランプ",
+      "predScores": { "1": 0.5, "2": 0.5 },
+      "frameCount": 2,
+      "interval": 1,
+      "threshold": -1.0,
+      "expectedHeartContains": [1, 2],
+      "expectedHeartExcludes": []
+    }
+  ]
+}

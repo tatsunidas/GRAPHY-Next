@@ -83,6 +83,24 @@ interface Payload {
       elapsedMs?: number;
       error?: string;
     };
+    prediction?: {
+      ok?: boolean;
+      frameIndex?: number;
+      radiomicsJVersion?: string;
+      probability?: number;
+      rois?: {
+        cluster: number;
+        x: number;
+        y: number;
+        w: number;
+        h: number;
+        pixels: number;
+        probability: number;
+        features?: Record<string, number>;
+      }[];
+      elapsedMs?: number;
+      error?: string;
+    };
     analysis?: {
       ok?: boolean;
       frames?: number;
@@ -331,6 +349,85 @@ async function main(): Promise<void> {
       }
     } else {
       console.log(`  [注意] ROI の参照値が無いので段 4 の検査を飛ばした: ${roiRefPath}`);
+    }
+
+    // ── 8. 段 5: 15 特徴 ＋ LR 推論を突き合わせる ────────────────────
+    // 🔴 **相手は「RadiomicsJ 2.4.0 で走らせた同じコード」**（`RefFeat`）。
+    //    学習は 2.1.16 だが、版差は §8.8 で別途 2 版を突き合わせて閉じてある
+    //    （15 特徴すべて完全一致）。ここで見ているのは**プラグイン内で同じ値が出るか**＝
+    //    モデルの読み込み・特徴の順序・シグモイドの向きが正しいか。
+    // ⚠️ **確率は「もっともらしい数」が出てしまう**ので、確率だけでなく
+    //    **15 特徴を 1 つずつ**突き合わせる（向きの取り違えは確率だけ見ると気づけない）。
+    const predRefPath = process.env.UVS_PREDICT_REF ?? "/tmp/uvs-predict-ref.json";
+    if (fs.existsSync(predRefPath)) {
+      const predRef = JSON.parse(fs.readFileSync(predRefPath, "utf8")) as Record<
+        string,
+        { bounds: number[]; pixels: number; probability: number; features: Record<string, number> }
+      >;
+      for (const [key, want] of Object.entries(predRef)) {
+        const frameIndex = Number(key);
+        await viewer.evaluate(
+          (r) => {
+            (window as unknown as { __uvsRequest?: unknown }).__uvsRequest = r;
+            delete (window as unknown as { __uvsSkeleton?: unknown }).__uvsSkeleton;
+          },
+          { predict: true, width: 720, height: 440, stride: 6, frameIndex },
+        );
+        await viewer.getByTestId("viewer2d-menu-plugins").click();
+        await viewer.waitForTimeout(300);
+        await viewer.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
+        await viewer.waitForTimeout(30_000);
+        const p4 = (await viewer.evaluate(
+          () => (window as unknown as { __uvsSkeleton?: Payload }).__uvsSkeleton ?? null,
+        )) as Payload | null;
+        const got = p4?.backend?.prediction;
+        const roi = got?.rois?.[0];
+        check(
+          got?.ok === true && !!roi,
+          `[8] フレーム ${frameIndex}: 推論が返った`,
+          { error: got?.error, elapsedMs: got?.elapsedMs, radiomicsJ: got?.radiomicsJVersion },
+        );
+        if (!roi) continue;
+
+        check(
+          roi.pixels === want.pixels,
+          `[8] フレーム ${frameIndex}: 切り出した画素数が一致`,
+          { got: roi.pixels, expected: want.pixels },
+        );
+
+        // 15 特徴を 1 つずつ。相対 1e-9 まで（double の演算順序ぶんだけ許す）。
+        let worstName = "";
+        let worstRel = 0;
+        for (const [name, expected] of Object.entries(want.features)) {
+          const actual = roi.features?.[name];
+          const rel =
+            typeof actual === "number"
+              ? Math.abs(actual - expected) / Math.max(Math.abs(expected), 1e-12)
+              : Number.POSITIVE_INFINITY;
+          if (rel > worstRel) {
+            worstRel = rel;
+            worstName = name;
+          }
+        }
+        check(
+          worstRel <= 1e-9,
+          `[8] ★★フレーム ${frameIndex}: 15 特徴すべてが参照と一致`,
+          {
+            worstFeature: worstName,
+            worstRel,
+            n: Object.keys(want.features).length,
+          },
+        );
+
+        const dp = Math.abs((roi.probability ?? NaN) - want.probability);
+        check(
+          dp <= 1e-9,
+          `[8] ★★フレーム ${frameIndex}: 確率が参照と一致（シグモイドの向きを含む）`,
+          { got: roi.probability, expected: want.probability, diff: dp },
+        );
+      }
+    } else {
+      console.log(`  [注意] 推論の参照値が無いので段 5 の検査を飛ばした: ${predRefPath}`);
     }
 
     await viewer.screenshot({ path: path.join(OUT_DIR, "viewer.png") }).catch(() => {});

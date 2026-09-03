@@ -67,6 +67,11 @@ public class UvsPlugin implements GraphyPlugin {
             out.put("roiResult", extractRoi(args, out));
         }
 
+        // 段 5: 特徴抽出（RadiomicsJ）＋ LR 推論。`predict: true` のときだけ。
+        if (Boolean.TRUE.equals(args == null ? null : args.get("predict"))) {
+            out.put("prediction", predict(args, out));
+        }
+
         return out;
     }
 
@@ -206,6 +211,132 @@ public class UvsPlugin implements GraphyPlugin {
         return r;
     }
 
+    /**
+     * 1 フレームの「心臓確率」— 設計 §5 の [C]→特徴→LR。
+     *
+     * <p>ROI 抽出までは {@link #extractRoi} と同じ経路。その先で ROI ごとに
+     * 8bit グレースケールへ落として RadiomicsJ に渡し、15 特徴を LR に通す。
+     * フレームの確率は <b>ROI ごとの確率の平均</b>（移植元 {@code FramePredictor} と同じ）。
+     *
+     * <h3>🔴 RadiomicsJ は 2.4.0 のまま使う（版差の判断・§8.8）</h3>
+     * 学習は 2.1.16 だが、15 特徴のうち版差に触れるのは
+     * {@code Percentile90} と {@code Interquartile} の 2 つだけで、
+     * <b>どちらも実測で完全一致した</b>。分位点の添字が 1 つずれても、
+     * 25,000 画素が 155 段階のグレー値にしか散らばらないため<b>同値になる</b>。
+     *
+     * <h3>⚠️ padding は manifest 由来の値を使う</h3>
+     * NaN / Inf のとき「0」で埋めると、学習時と違う量が入る。
+     * {@code model-manifest.json} の {@code features[].padding} を渡す。
+     */
+    private Map<String, Object> predict(Map<String, Object> args, Map<String, Object> probes) {
+        Map<String, Object> r = new LinkedHashMap<>();
+        try {
+            String apiBase = String.valueOf(args.get("apiBase"));
+            String sop = String.valueOf(args.get("sopInstanceUid"));
+            int width = intArg(args, "width", 0);
+            int height = intArg(args, "height", 0);
+            int stride = intArg(args, "stride", 6);
+            int index = intArg(args, "frameIndex", 0);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> ff = (Map<String, Object>) probes.get("ffmpeg");
+            String ffmpeg = ff == null ? "ffmpeg" : String.valueOf(ff.get("path"));
+
+            // 🔴 モデルは**自分のフォルダ**から読む（§8.5 で実測済み）。
+            //    読めなければ既定値へ落ちずに失敗させる（黙って別のモデルで走るより良い）。
+            java.nio.file.Path dir = pluginDir();
+            com.vis.uvs.ml.LrModel model = com.vis.uvs.ml.LrModel.fromJson(
+                    java.nio.file.Files.readString(dir.resolve("reference-params.json")));
+            String[] names = model.featureNames();
+            double[] paddings = readPaddings(dir.resolve("model-manifest.json"), names);
+
+            FrameSource src = FrameSource.fromRendered(apiBase, sop, ffmpeg, width, height);
+            byte[][] pair;
+            try {
+                pair = src.readPair(index, index + stride);
+            } finally {
+                src.close();
+            }
+            if (pair[0] == null) {
+                r.put("ok", false);
+                r.put("error", "フレーム " + index + " を読めなかった");
+                return r;
+            }
+
+            com.vis.uvs.video.Frame f0 =
+                    new com.vis.uvs.video.Frame(index + 1, width, height, pair[0]);
+            com.vis.uvs.video.Frame f1 = pair[1] == null ? null
+                    : new com.vis.uvs.video.Frame(index + stride + 1, width, height, pair[1]);
+
+            com.vis.uvs.analysis.AnalysisSettings.Extractor ex =
+                    com.vis.uvs.analysis.AnalysisSettings.Extractor.EXTRACTOR_COMPOSITE;
+            long t0 = System.currentTimeMillis();
+            Map<Integer, ij.gui.Roi> rois = com.vis.uvs.analysis.candidate.CandidateExtractor.extract(
+                    f0, f1, ex, 1,
+                    com.vis.uvs.analysis.roi.RoiSettings.forExtractor(ex),
+                    com.vis.uvs.analysis.flow.FlowSettings.swingDefaults());
+
+            com.vis.uvs.radiomics.RadiomicsFeatureService svc =
+                    new com.vis.uvs.radiomics.RadiomicsFeatureService();
+            com.vis.uvs.radiomics.RadiomicsFeatureService.Spec spec =
+                    com.vis.uvs.radiomics.RadiomicsFeatureService.Spec.swingDefaults(names, paddings);
+
+            List<Map<String, Object>> perRoi = new ArrayList<>();
+            double sum = 0;
+            for (Map.Entry<Integer, ij.gui.Roi> e : rois.entrySet()) {
+                com.vis.uvs.radiomics.RoiCropper.Cropped c =
+                        com.vis.uvs.radiomics.RoiCropper.crop(f0, e.getValue());
+                if (c == null) continue;
+                double[] v = svc.extract(c.image(), c.mask(), spec);
+                double p = model.score(v);
+                sum += p;
+                Map<String, Object> one = new LinkedHashMap<>();
+                one.put("cluster", e.getKey());
+                one.put("x", c.bounds().x);
+                one.put("y", c.bounds().y);
+                one.put("w", c.bounds().width);
+                one.put("h", c.bounds().height);
+                one.put("pixels", c.bounds().width * c.bounds().height);
+                one.put("probability", p);
+                Map<String, Object> feats = new LinkedHashMap<>();
+                for (int i = 0; i < names.length; i++) feats.put(names[i], v[i]);
+                one.put("features", feats);
+                perRoi.add(one);
+            }
+
+            r.put("elapsedMs", System.currentTimeMillis() - t0);
+            r.put("ok", true);
+            r.put("frameIndex", index);
+            r.put("stride", stride);
+            r.put("radiomicsJVersion",
+                    com.vis.uvs.radiomics.RadiomicsFeatureService.radiomicsJVersion());
+            r.put("rois", perRoi);
+            r.put("probability", perRoi.isEmpty() ? 0.0 : sum / perRoi.size());
+        } catch (Throwable t) {
+            r.put("ok", false);
+            r.put("error", t.getClass().getSimpleName() + ": " + t.getMessage());
+        }
+        return r;
+    }
+
+    /**
+     * manifest の `features[].padding` を `names` の順に並べ替えて返す。
+     *
+     * <p>⚠️ <b>順序は manifest ではなく `names`（＝推論入力の順序）で決める。</b>
+     * manifest 側の並びに依存すると、片方だけ並べ替えたときに黙ってずれる。
+     * 見つからない名前は 0（＝padding 無し）。
+     */
+    private static double[] readPaddings(java.nio.file.Path manifest, String[] names) throws Exception {
+        String json = java.nio.file.Files.readString(manifest);
+        Map<String, Double> byName = new LinkedHashMap<>();
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("\\{\\s*\"name\"\\s*:\\s*\"([^\"]+)\"\\s*,\\s*\"padding\"\\s*:\\s*(-?[0-9.eE+]+)")
+                .matcher(json);
+        while (m.find()) byName.put(m.group(1), Double.parseDouble(m.group(2)));
+        double[] out = new double[names.length];
+        for (int i = 0; i < names.length; i++) out[i] = byName.getOrDefault(names[i], 0.0);
+        return out;
+    }
+
     private static int intArg(Map<String, Object> args, String key, int dflt) {
         Object v = args == null ? null : args.get(key);
         return v instanceof Number n ? n.intValue() : dflt;
@@ -233,6 +364,24 @@ public class UvsPlugin implements GraphyPlugin {
     }
 
     /** 自分（この JAR）が置かれているフォルダと、その中身。 */
+    /**
+     * 自分の JAR が置かれているフォルダ（＝`<pluginsDir>/<id>/`）。
+     *
+     * <p>🔑 HTTP で配信されるのは `ui.js` 1 本だけだが、<b>JAR は自分のフォルダを読める</b>
+     * （`fw/plugin-explainer.md` §5）。モデルのパラメータはここから読む。
+     */
+    private java.nio.file.Path pluginDir() throws Exception {
+        CodeSource cs = getClass().getProtectionDomain().getCodeSource();
+        if (cs == null || cs.getLocation() == null) {
+            throw new IllegalStateException("CodeSource が取れないのでプラグインのフォルダを決められない");
+        }
+        Path dir = Path.of(cs.getLocation().toURI()).getParent();
+        if (dir == null) {
+            throw new IllegalStateException("JAR の親フォルダが取れない");
+        }
+        return dir;
+    }
+
     private Map<String, Object> probePluginDir() {
         Map<String, Object> r = new LinkedHashMap<>();
         try {
