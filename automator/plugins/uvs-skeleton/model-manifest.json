@@ -1,0 +1,104 @@
+{
+  "modelId": "uvs-lr-20250611",
+  "displayName": "胎児心臓フレーム判定 LR (2025-06-11 学習・Smile から移行)",
+  "task": "heart-frame-probability",
+  "createdAt": "2026-07-31T06:19:29.675504+00:00",
+  "framework": {
+    "trainedWith": "Smile 4.4.2 LogisticRegression (Java)",
+    "convertedBy": "tools/onnx/build_model.py",
+    "onnxOpset": 18
+  },
+  "features": [
+    {
+      "name": "Shape2D_MajorAxisLength",
+      "padding": 227.3021951631035
+    },
+    {
+      "name": "GLCM_InverseVariance",
+      "padding": 0.09176096737907775
+    },
+    {
+      "name": "GLCM_JointMaximum",
+      "padding": 0.052847019122609994
+    },
+    {
+      "name": "IntensityBasedStatistical_Percentile90",
+      "padding": 110.58605174353205
+    },
+    {
+      "name": "GLDZM_SmallDistanceEmphasis",
+      "padding": 0.11778740157480339
+    },
+    {
+      "name": "IntensityHistogram_Entropy",
+      "padding": 3.983214285714284
+    },
+    {
+      "name": "IntensityHistogram_MeanDiscretisedIntensity",
+      "padding": 9.12641676040496
+    },
+    {
+      "name": "IntensityBasedStatistical_Interquartile",
+      "padding": 39.41169853768279
+    },
+    {
+      "name": "NGTDM_Complexity",
+      "padding": 178.4278824521933
+    },
+    {
+      "name": "IntensityBasedStatistical_Variance",
+      "padding": 865.9979870641165
+    },
+    {
+      "name": "Shape2D_Elongation",
+      "padding": 0.8194235095613069
+    },
+    {
+      "name": "IntensityHistogram_MinimumHistogramGradient",
+      "padding": -3750.316085489314
+    },
+    {
+      "name": "GLDZM_ZoneDistanceNonUniformity",
+      "padding": 49.62418560179984
+    },
+    {
+      "name": "IntensityBasedStatistical_Maximum",
+      "padding": 188.14398200224971
+    },
+    {
+      "name": "GLRLM_LowGrayLevelRunEmphasis",
+      "padding": 0.06905793025871784
+    }
+  ],
+  "inputName": "X",
+  "outputName": "probability",
+  "positiveClassIndex": 0,
+  "featureExtraction": {
+    "engine": "RadiomicsJ",
+    "version": "2.1.16",
+    "force2D": true,
+    "useBinCount": true,
+    "nBins": null,
+    "maskLabel": 255
+  },
+  "roi": {
+    "extractor": "EXTRACTOR_COMPOSITE",
+    "boxCount": 300,
+    "percentile": 80.0,
+    "kmeansK": 1,
+    "flow": {
+      "impl": "uvs-farneback",
+      "pyrScale": 3.0,
+      "levels": 1,
+      "winsize": 15,
+      "iterations": 3,
+      "polyN": 5,
+      "polySigma": 1.1
+    }
+  },
+  "recommendedThreshold": 0.75,
+  "intendedUse": "研究用。診断目的で使用しないこと。",
+  "sha256": {
+    "model.onnx": "f72cbcf0befccd678465d013f509173fd643f486031d07d1d31771abefcc7649"
+  }
+}
