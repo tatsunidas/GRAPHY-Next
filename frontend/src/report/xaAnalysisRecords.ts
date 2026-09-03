@@ -15,7 +15,7 @@
  * 同じ注記を付けると「狭窄率も 13% ずれている」と誤読されるので、**別の文にする**。
  */
 
-import { type AnalysisResultRecord } from "./analysisResults";
+import { type AnalysisMetric, type AnalysisResultRecord } from "./analysisResults";
 import { type QcaDiameterMethod } from "../viewer/qca";
 
 /** i18n の解決関数（`useI18n()` の `t`）。 */
@@ -221,6 +221,83 @@ export function qca3dRecord(i: Qca3dRecordInput, t: Translate): AnalysisResultRe
         value: i.angleCorrected
           ? t("report.analysis.prov.applied")
           : t("report.analysis.prov.notApplied"),
+      },
+    ],
+    caveats,
+    at: Date.now(),
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* TIMI フレームカウント（A15）                                        */
+/* ------------------------------------------------------------------ */
+
+export interface TimiRecordInput {
+  result: {
+    vessel: string;
+    startFrame: number;
+    endFrame: number;
+    frames: number;
+    elapsedMs: number | null;
+    tfc30: number | null;
+    ctfc: number | null;
+    fps: number;
+    fpsSource: string;
+    warnings: string[];
+  };
+  studyUid: string;
+  seriesUid: string;
+  sopInstanceUid: string | null;
+  /** 時間輝度カーブの ROI を引いたときのフレーム（引いていなければ null）。 */
+  roiFrame: number | null;
+}
+
+/**
+ * レポートへ差し込む 1 件。
+ *
+ * <h3>🔴 換算できていないときに生のフレーム差を報告値にしない</h3>
+ * `tfc30` が null（撮影レートのタグが無い）なら **TFC の行を出さない**。
+ * 生のフレーム差は「数えた事実」として別の行に出すが、それは撮影条件に依る値なので
+ * **TFC とは呼ばない**。読んだ人が 30fps 撮影だと誤解しないよう、注意書きにも出す。
+ */
+export function timiRecord(i: TimiRecordInput, t: Translate): AnalysisResultRecord {
+  const r = i.result;
+  const metrics: AnalysisMetric[] = [
+    { label: t("timi.result.frames"), value: String(r.frames), unit: "frames" },
+  ];
+  if (r.tfc30 != null) {
+    metrics.push({ label: t("timi.result.tfc30"), value: r.tfc30.toFixed(1), unit: "frames@30fps" });
+  }
+  if (r.ctfc != null) {
+    metrics.push({ label: t("timi.result.ctfc"), value: r.ctfc.toFixed(1), unit: "frames@30fps" });
+  }
+
+  const caveats = [t("timi.notFlowGrade"), ...common(t)];
+  // 出せなかった理由・条件は、そのまま注意書きへ持っていく（画面だけに出して消さない）。
+  for (const w of r.warnings) caveats.push(t(`timi.warn.${w}`));
+  if (i.roiFrame == null) caveats.push(t("timi.roi.none"));
+
+  return {
+    id: `timi:${i.sopInstanceUid ?? i.seriesUid}:${r.startFrame}:${r.endFrame}`,
+    kind: "timi",
+    studyUid: i.studyUid,
+    seriesUid: i.seriesUid,
+    sopInstanceUids: i.sopInstanceUid ? [i.sopInstanceUid] : [],
+    frameLabel: t("timi.result.frameNumbers", {
+      start: String(r.startFrame + 1),
+      end: String(r.endFrame + 1),
+    }),
+    title: t("xa.task.timi"),
+    metrics,
+    provenance: [
+      { label: t("timi.step.vessel"), value: t(`timi.vessel.${r.vessel}`) },
+      {
+        label: t("timi.result.rate"),
+        value: `${r.fps.toFixed(2)} fps · ${t(`cine.fpsSource.${r.fpsSource}`)}`,
+      },
+      {
+        label: t("timi.result.elapsed"),
+        value: r.elapsedMs == null ? "—" : `${r.elapsedMs.toFixed(0)} ms`,
       },
     ],
     caveats,
