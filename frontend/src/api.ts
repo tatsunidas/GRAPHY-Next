@@ -219,7 +219,7 @@ export interface SeriesAxisDto {
   /** UI に出すラベル（"Z" / "Run" / "Frame" 等）。 */
   label: string;
   /** 軸の種別。UI は空間スライス軸前提の機能（ThickSlab/Sync/参照線）の可否をこれで決める。 */
-  kind: "slice" | "run" | "frame" | "echo" | "bvalue" | "temporal" | "generic";
+  kind: "slice" | "run" | "frame" | "echo" | "bvalue" | "temporal" | "pullback" | "generic";
 }
 
 /** 軸の提示モデル（`fw/angio-design.md` §5.7）。 */

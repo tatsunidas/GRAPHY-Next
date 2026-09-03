@@ -267,6 +267,11 @@ public class DicomStorageService {
         if (xa != null) {
             return xa;
         }
+        // 血管内画像（IVUS / OCT）は プルバック=Z・フレーム=T に展開する（fw/angio-design.md §12 / A8）。
+        com.vis.graphynext.dicom.SeriesLayout ivus = ivusLayoutIfApplicable(insts);
+        if (ivus != null) {
+            return ivus;
+        }
         java.util.List<SeriesLayoutBuilder.FrameMeta> frames = new java.util.ArrayList<>();
         // Fusion 空間メタ収集
         double[] seriesIop = null;
@@ -404,6 +409,29 @@ public class DicomStorageService {
             log.debug("XA cine series: runs={} frames={}", xa.nZ(), xa.nT());
         }
         return xa;
+    }
+
+    /**
+     * 血管内画像（IVUS / OCT）のレイアウト。対象でなければ null。
+     *
+     * <p>🚨 <b>展開の振り分けは standalone（このクラス）と web
+     * （{@link com.vis.graphynext.dicom.SeriesLayoutAssembler}）の 2 箇所にある。</b>
+     * 片方だけに足すと、<b>単体テストは通るのに実機では 1 枚しか出ない</b>。
+     * 実際にそれを踏んだ（2026-09-03・A8）。**新しい展開器を足したら必ず両方に繋ぐこと。**
+     */
+    private com.vis.graphynext.dicom.SeriesLayout ivusLayoutIfApplicable(java.util.List<DicomInstance> insts) {
+        java.util.List<Attributes> headers = new java.util.ArrayList<>();
+        for (DicomInstance inst : insts) {
+            Attributes ds = readHeaderQuietly(inst);
+            if (ds != null) {
+                headers.add(ds);
+            }
+        }
+        com.vis.graphynext.dicom.SeriesLayout ivus = com.vis.graphynext.dicom.IvusFrameExpander.layout(headers);
+        if (ivus != null) {
+            log.debug("intravascular pullback series: pullbacks={} frames={}", ivus.nZ(), ivus.nT());
+        }
+        return ivus;
     }
 
     /** Siemens 私的タグ NumberOfImagesInMosaic (0019,100a)。 */
