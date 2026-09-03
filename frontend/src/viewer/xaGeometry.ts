@@ -44,6 +44,35 @@ export interface XaViewGeometry {
   principalPoint: readonly [number, number];
 }
 
+/**
+ * 2 つの視点幾何が**同じ撮影条件**か。
+ *
+ * <h3>なぜ要るのか（§21.4 の段 3）</h3>
+ * 分岐部は 3 本の枝を別々に解析するが、**角度補正は「視点ペアに対して 1 回」掛けるもの**である
+ * （`refineGeometryWithAnchors` が返すのは視点 B の幾何であって、枝の性質ではない）。
+ * 3 枝ぶんのアンカーを束ねて 1 回で補正するには、**3 枝が同じ視点ペアを見ている**必要がある。
+ *
+ * <p>🔴 **現行の UI は枝ごとに別の方向を選べてしまう**（ランの割り当ては人がやる）。
+ * 束ねる前にここで検査し、違うなら束ねない——**違う撮影から取ったアンカーを混ぜると、
+ * 存在しない 1 つの幾何へ 3 枝すべてを寄せてしまう**。
+ *
+ * <p>⚠️ 角度は DICOM タグ由来なので基本は完全一致する。許容は丸め差を吸収する程度に留める
+ * （緩めると「別の撮影を同じ扱いにする」ことになり、検査の意味が消える）。
+ */
+export function sameViewGeometry(a: XaViewGeometry, b: XaViewGeometry): boolean {
+  const near = (x: number, y: number, tol: number) => Math.abs(x - y) <= tol;
+  return (
+    near(a.primaryAngleDeg, b.primaryAngleDeg, 1e-3) &&
+    near(a.secondaryAngleDeg, b.secondaryAngleDeg, 1e-3) &&
+    near(a.sidMm, b.sidMm, 1e-3) &&
+    near(a.sodMm, b.sodMm, 1e-3) &&
+    near(a.imagerSpacingMm[0], b.imagerSpacingMm[0], 1e-6) &&
+    near(a.imagerSpacingMm[1], b.imagerSpacingMm[1], 1e-6) &&
+    near(a.principalPoint[0], b.principalPoint[0], 1e-3) &&
+    near(a.principalPoint[1], b.principalPoint[1], 1e-3)
+  );
+}
+
 /** 3D 点の 1 視点での観測。 */
 export interface XaObservation {
   geometry: XaViewGeometry;

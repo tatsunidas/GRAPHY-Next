@@ -30,6 +30,7 @@ import {
   opacifiedAreaInRect,
   smoothContour,
   suggestEdEs,
+  clampFrameIndex,
   type Point,
   type QlvResult,
 } from "./qlv";
@@ -44,6 +45,8 @@ import { viewerOverlayProps } from "./viewerOverlay";
 
 /** 輪郭として成立する最小点数（弁輪 2 点＋心尖側 2 点）。 */
 const MIN_POINTS = 4;
+/** これ以上の点が引かれていたら、フレーム変更で捨てる前に確認する。 */
+const CONFIRM_DISCARD_MIN_POINTS = 3;
 /** 造影面積の時系列を作るときの間引き（全フレーム読むと重い）。 */
 const CURVE_MAX_FRAMES = 60;
 
@@ -118,6 +121,8 @@ export function XaQlvDialog({
   edFrameRef.current = edFrame;
   esFrameRef.current = esFrame;
   const [editing, setEditing] = useState<"ed" | "es">("ed");
+  /** フレーム変更の確認待ち（輪郭を破棄してよいか）。 */
+  const [pendingFrame, setPendingFrame] = useState<{ which: "ed" | "es"; frame: number } | null>(null);
 
   /**
    * 🔴 **輪郭を引き始めたらフレームを固定する**（実機で言われた・2026-09-01。QCA / QVA と同じ扱い）。
@@ -168,6 +173,33 @@ export function XaQlvDialog({
    * 心拍は EF を過大評価する。ECG が無い本経路では検出できないので、人が必ず選び直せる
    * （§9.2.2）。提案に警告が付いている間は、段が `done` にならない。
    */
+  /**
+   * 候補フレームの周り ±{@code span} を全解像度で読み直し、極値のフレームへ寄せる。
+   * 読めなかったフレームは飛ばす（1 枚読めないだけで提案を捨てない）。
+   */
+  const refineExtremum = async (
+    center: number,
+    span: number,
+    roi: { x0: number; y0: number; x1: number; y1: number } | null,
+    kind: "max" | "min",
+  ): Promise<number> => {
+    if (span <= 1) return center;
+    let bestF = center;
+    let bestV: number | null = null;
+    for (let f = Math.max(0, center - span); f <= Math.min(imageIds.length - 1, center + span); f++) {
+      const s = await loadSlice(f);
+      if (!s) continue;
+      const v = roi
+        ? opacifiedAreaInRect(s.values, s.width, s.height, roi)
+        : opacifiedAreaCount(s.values);
+      if (bestV === null || (kind === "max" ? v > bestV : v < bestV)) {
+        bestV = v;
+        bestF = f;
+      }
+    }
+    return bestF;
+  };
+
   const buildCurve = async (roiPoints?: readonly Point[]) => {
     setBusy(true);
     setError(null);
@@ -203,8 +235,11 @@ export function XaQlvDialog({
         return;
       }
       setFrameWarnings(sug.warnings);
-      const nextEd = sampled[sug.ed];
-      const nextEs = sampled[sug.es];
+      // 🔴 **間引いたカーブは真の山・谷を跨ぐ**（step=3・40ms なら 1 点 120ms。収縮期 300ms は
+      //    たった 2.5 点）。提案の周りだけ**全解像度で読み直して**極値に合わせる。
+      //    読み足すのは ±step の十数枚だけなので、全フレーム読むのとは費用が違う。
+      const nextEd = await refineExtremum(sampled[sug.ed], step, roi, "max");
+      const nextEs = await refineExtremum(sampled[sug.es], step, roi, "min");
       // 🚨 **フレームが変わったら、そのフレームに引いた輪郭は捨てる。**
       //    提案し直しは `setFrame` を通らないので、ここで同じ規則を適用しないと
       //    「別の心位相のフレームに、前のフレームの輪郭が残ったまま」結果が出る。
@@ -354,8 +389,8 @@ export function XaQlvDialog({
     goToStep(id);
   };
 
-  const setFrame = (which: "ed" | "es", value: number) => {
-    const v = Math.max(0, Math.min(imageIds.length - 1, Math.round(value)));
+  /** フレームを実際に動かす。**輪郭の破棄はここで起きる。** */
+  const applyFrame = (which: "ed" | "es", v: number) => {
     // 🚨 フレームを選び直したら、**そのフレームの上に引いた輪郭は別の心位相を指す**ので捨てる。
     if (which === "ed") {
       setEdFrame(v);
@@ -365,7 +400,29 @@ export function XaQlvDialog({
       setEsPoints([]);
     }
     setFramesManual(true);
+    setPendingFrame(null);
     onGoToFrame?.(v);
+  };
+
+  const setFrame = (which: "ed" | "es", value: unknown) => {
+    // 🚨 **丸めるだけでは NaN が素通しする**（`Math.max(0, Math.min(n-1, Math.round(NaN)))` は NaN）。
+    //    入っていたら面積カーブが x1="NaN" で落ち、`onGoToFrame(NaN)` でビューアの表示フレームまで
+    //    NaN になる。空文字も「0 フレーム目」ではなく**変更なし**として扱う（消して打ち直すだけで
+    //    先頭へ飛び、その位相の輪郭が破棄されるため）。判定は `clampFrameIndex` に集約した。
+    const v = clampFrameIndex(value, imageIds.length);
+    if (v == null) return;
+    const current = which === "ed" ? edFrame : esFrame;
+    if (v === current) return;
+    // 🔴 **引きかけの輪郭がある間は、黙って捨てない**（利用者の要望・2026-09-02）。
+    //    ±1 フレームの微調整でも全部消えるので、消える前に止められるようにする。
+    //    点が少ないうち（引き始め）は聞かない——確認のほうが邪魔になる。
+    //    ⚠️ ネイティブの confirm は使わない（レンダラのフォーカスを失う既知の不具合）。
+    const pts = which === "ed" ? edPoints : esPoints;
+    if (pts.length >= CONFIRM_DISCARD_MIN_POINTS) {
+      setPendingFrame({ which, frame: v });
+      return;
+    }
+    applyFrame(which, v);
   };
 
   const save = () => {
@@ -403,8 +460,8 @@ export function XaQlvDialog({
   const voi = activeFrame != null ? readVoiWindowFor(imageIds[activeFrame] ?? "") : null;
 
   return (
-    <div style={backdrop} onClick={onClose} {...viewerOverlayProps}>
-      <div style={panel} onClick={(e) => e.stopPropagation()}>
+    <div style={backdrop} onClick={onClose}>
+      <div style={panel} onClick={(e) => e.stopPropagation()} {...viewerOverlayProps}>
         <div style={title} data-testid="qlv-dialog">{t("qlv.title")}</div>
 
         <div style={body}>
@@ -413,26 +470,60 @@ export function XaQlvDialog({
             <div style={section} data-step="frames">
               <div style={sectionTitle}>{t("qlv.frames")}</div>
               {busy && <div style={hint}>{t("common.loading")}</div>}
-              {areaCurve && <AreaCurve curve={areaCurve} total={imageIds.length} ed={edFrame} es={esFrame} />}
+              {areaCurve && (
+                <AreaCurve
+                  curve={areaCurve}
+                  total={imageIds.length}
+                  ed={edFrame}
+                  es={esFrame}
+                  onPick={(which, frame) => setFrame(which, frame)}
+                />
+              )}
+              {areaCurve && <div style={hint}>{t("qlv.frames.hint")}</div>}
+              {/* 🔴 引いた輪郭を黙って捨てない。捨てるのは人が押したときだけ。 */}
+              {pendingFrame && (
+                <div style={confirmBox} data-testid="qlv-frame-confirm">
+                  <div>
+                    {t("qlv.frames.confirm", {
+                      which: pendingFrame.which.toUpperCase(),
+                      from: String((pendingFrame.which === "ed" ? edFrame : esFrame) ?? "—"),
+                      to: String(pendingFrame.frame),
+                      points: String((pendingFrame.which === "ed" ? edPoints : esPoints).length),
+                    })}
+                  </div>
+                  <div style={{ ...row, marginTop: 6 }}>
+                    <button
+                      style={primaryBtn}
+                      data-testid="qlv-frame-confirm-ok"
+                      onClick={() => applyFrame(pendingFrame.which, pendingFrame.frame)}
+                    >
+                      {t("qlv.frames.confirm.ok")}
+                    </button>
+                    <button style={btn} data-testid="qlv-frame-confirm-cancel" onClick={() => setPendingFrame(null)}>
+                      {t("common.cancel")}
+                    </button>
+                  </div>
+                </div>
+              )}
               <div style={row}>
                 <label style={label}>
-                  ED
+                  {t("qlv.ed")}
                   <input
                     style={input}
                     data-testid="qlv-ed-frame"
                     value={edFrame ?? ""}
                     inputMode="numeric"
-                    onChange={(e) => setFrame("ed", Number(e.target.value))}
+                    onChange={(e) => setFrame("ed", e.target.value)}
                   />
                 </label>
                 <label style={label}>
-                  ES
+                  {t("qlv.es")}
                   <input
                     style={input}
                     data-testid="qlv-es-frame"
                     value={esFrame ?? ""}
                     inputMode="numeric"
-                    onChange={(e) => setFrame("es", Number(e.target.value))}
+                    onChange={(e) => setFrame("es", e.target.value)}
                   />
                 </label>
                 <button style={btn} data-testid="qlv-resuggest" onClick={() => void buildCurve()} disabled={busy}>
@@ -538,39 +629,131 @@ export function XaQlvDialog({
 }
 
 /** 造影面積の時系列（ED/ES の根拠を人が見て確かめられるように出す）。 */
+/**
+ * 造影面積の時系列と、ED / ES の位置を示す縦線。
+ *
+ * <h3>縦線はドラッグして動かせる（利用者の要望・2026-09-02）</h3>
+ * フレーム番号を数値で打つより、**面積カーブの谷と山を見ながら掴んで動かす**ほうが早い
+ * ——ED は面積が最大、ES は最小の位相なので、選ぶ根拠がこのグラフの上にある。
+ *
+ * <p>🔴 **確定はドラッグを離したときに 1 回だけ**（QCA の参照径の帯と同じ約束・§9.1.0d）。
+ * 動かしている間に毎回 {@code onPick} を呼ぶと、**フレームを変えるたびに親が再レンダし、
+ * その位相の輪郭が破棄される**——掴んで動かしただけで輪郭が消え、しかも重い。
+ * 掴んでいる間は**この図の中の縦線だけ**を先に動かす。
+ */
 function AreaCurve({
   curve,
   total,
   ed,
   es,
+  onPick,
 }: {
   curve: readonly number[];
   total: number;
   ed: number | null;
   es: number | null;
+  /** ドラッグを離したときに 1 回だけ呼ばれる。 */
+  onPick?: (which: "ed" | "es", frame: number) => void;
 }) {
   const w = 440;
   const h = 70;
+  /** 掴める距離 [px]。細い線そのものを狙わせない。 */
+  const GRAB_PX = 14;
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [drag, setDrag] = useState<{ which: "ed" | "es"; frame: number } | null>(null);
+
   const max = Math.max(...curve);
   const min = Math.min(...curve);
   const span = max > min ? max - min : 1;
   const px = (i: number) => (i / Math.max(1, curve.length - 1)) * w;
   const py = (v: number) => h - ((v - min) / span) * (h - 6) - 3;
-  const mark = (frame: number | null, color: string, key: string) => {
-    if (frame == null || total <= 1) return null;
-    const x = (frame / (total - 1)) * w;
-    return <line key={key} x1={x} y1={0} x2={x} y2={h} stroke={color} strokeWidth={1.5} />;
+  const usable = Number.isFinite(total) && total > 1;
+  const frameToX = (frame: number) => (frame / (total - 1)) * w;
+  /** 画面座標 → フレーム番号。SVG は CSS で伸縮しうるので**実寸で割る**。 */
+  const frameAt = (clientX: number): number | null => {
+    const el = svgRef.current;
+    if (!el || !usable) return null;
+    const r = el.getBoundingClientRect();
+    if (!(r.width > 0)) return null;
+    return clampFrameIndex(((clientX - r.left) / r.width) * (total - 1), total);
   };
+
+  // 掴んでいる間は、その線だけ手元の値で描く（親はまだ動かさない）。
+  const edAt = drag?.which === "ed" ? drag.frame : ed;
+  const esAt = drag?.which === "es" ? drag.frame : es;
+
+  const mark = (frame: number | null, color: string, key: string) => {
+    // 二重の守り。上流（`clampFrameIndex`）で弾いているが、**描く側でも NaN を描かない**
+    //    ——SVG は NaN を渡されると属性エラーを出して、その線だけでなく読み手の信頼を損ねる。
+    if (frame == null || !Number.isFinite(frame) || !usable) return null;
+    const x = frameToX(frame);
+    return (
+      <g key={key} data-testid={`qlv-mark-${key}`} data-frame={frame}>
+        {/* 掴みしろ。見えないが太い（線そのものは 1.5px で狙えない）。 */}
+        <line x1={x} y1={0} x2={x} y2={h} stroke="transparent" strokeWidth={GRAB_PX} />
+        <line x1={x} y1={0} x2={x} y2={h} stroke={color} strokeWidth={1.5} />
+        <rect x={x - 3} y={0} width={6} height={5} fill={color} />
+      </g>
+    );
+  };
+
+  const pick = (clientX: number): "ed" | "es" | null => {
+    const f = frameAt(clientX);
+    if (f == null) return null;
+    const x = frameToX(f);
+    const dEd = ed != null && Number.isFinite(ed) ? Math.abs(frameToX(ed) - x) : Infinity;
+    const dEs = es != null && Number.isFinite(es) ? Math.abs(frameToX(es) - x) : Infinity;
+    const near = Math.min(dEd, dEs);
+    // 🔴 **どちらの線からも遠いときは何もしない。** 近いほうへ勝手に飛ばすと、
+    //    グラフを何気なく押しただけで ED/ES が変わり、その位相の輪郭が消える。
+    if (near > GRAB_PX) return null;
+    return dEd <= dEs ? "ed" : "es";
+  };
+
   return (
-    <svg width={w} height={h} data-testid="qlv-area-curve" style={{ display: "block", background: "#eef2f6" }}>
+    <svg
+      ref={svgRef}
+      width={w}
+      height={h}
+      data-testid="qlv-area-curve"
+      style={{
+        display: "block",
+        background: "#eef2f6",
+        cursor: onPick && usable ? "ew-resize" : "default",
+        touchAction: "none",
+      }}
+      onPointerDown={(e) => {
+        if (!onPick) return;
+        const which = pick(e.clientX);
+        const f = frameAt(e.clientX);
+        if (which == null || f == null) return;
+        setDrag({ which, frame: f });
+        e.currentTarget.setPointerCapture(e.pointerId);
+      }}
+      onPointerMove={(e) => {
+        if (!drag) return;
+        const f = frameAt(e.clientX);
+        if (f == null) return;
+        setDrag({ ...drag, frame: f });
+      }}
+      onPointerUp={(e) => {
+        if (!drag) return;
+        e.currentTarget.releasePointerCapture(e.pointerId);
+        const { which, frame } = drag;
+        setDrag(null);
+        // 掴んだだけで動かしていないなら、輪郭を捨てる理由が無い。
+        const current = which === "ed" ? ed : es;
+        if (frame !== current) onPick?.(which, frame);
+      }}
+    >
       <polyline
         points={curve.map((v, i) => `${px(i)},${py(v)}`).join(" ")}
         fill="none"
         stroke="#6d8ba8"
         strokeWidth={1.4}
       />
-      {mark(ed, "#3f8f6f", "ed")}
-      {mark(es, "#e07a5f", "es")}
+      {mark(edAt, "#3f8f6f", "ed")}
+      {mark(esAt, "#e07a5f", "es")}
     </svg>
   );
 }
@@ -589,13 +772,13 @@ function QlvReport({ result }: { result: QlvResult }) {
             </td>
           </tr>
           <tr>
-            <td style={th}>EDV</td>
+            <td style={th}>{t("qlv.edv")}</td>
             <td style={td} data-testid="qlv-edv">
               {result.edvMl != null ? `${result.edvMl.toFixed(1)} mL` : t("qlv.noVolume")}
             </td>
           </tr>
           <tr>
-            <td style={th}>ESV</td>
+            <td style={th}>{t("qlv.esv")}</td>
             <td style={td} data-testid="qlv-esv">
               {result.esvMl != null ? `${result.esvMl.toFixed(1)} mL` : t("qlv.noVolume")}
             </td>
@@ -683,6 +866,16 @@ const btn: React.CSSProperties = {
   cursor: "pointer",
 };
 const primaryBtn: React.CSSProperties = { ...btn, background: "#2f6f9f", color: "#fff", borderColor: "#2a6088" };
+/** 破棄の確認。**警告と同じ色**にして、押す前に気付かせる。 */
+const confirmBox: React.CSSProperties = {
+  border: "1px solid #d9c48a",
+  background: "#f7f0e2",
+  color: "#8a6d3b",
+  borderRadius: 4,
+  padding: "8px 10px",
+  marginTop: 6,
+  fontSize: 12,
+};
 const hint: React.CSSProperties = { fontSize: 11, color: "#66788a", marginTop: 4 };
 const warn: React.CSSProperties = { fontSize: 11, color: "#a5642a", marginTop: 4 };
 const errorText: React.CSSProperties = { fontSize: 12, color: "#b3452f", marginBottom: 8 };

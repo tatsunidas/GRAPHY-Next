@@ -94,8 +94,8 @@ export function XaPresentationDialog({
   const others = items.filter((c) => !c.plan.matchesImage);
 
   return (
-    <div style={backdrop} role="dialog" aria-modal="true" data-testid="xa-pr-dialog" {...viewerOverlayProps}>
-      <div style={panel}>
+    <div style={backdrop} role="dialog" aria-modal="true" data-testid="xa-pr-dialog">
+      <div style={panel} {...viewerOverlayProps}>
         <div style={header}>
           <b>{t("xa.pr.title")}</b>
           <button style={btn} data-testid="xa-pr-close" onClick={onClose}>

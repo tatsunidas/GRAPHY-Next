@@ -446,6 +446,10 @@ export interface Xa3dDebugSnapshot {
 /** 分岐部 QCA（A6b）の検証用スナップショット。`fw/angio-design.md` §21.4。 */
 export interface XaBifurcationDebugSnapshot {
   carina: [number, number, number];
+  /** カリーナの出自（"geometry" ＝ 内接球・"endpoints" ＝ 旧方式への退避）。 */
+  carinaSource: string;
+  /** 内接球の半径 [mm]（"geometry" のときだけ）。 */
+  inscribedRadiusMm: number | null;
   endpointSpreadMm: number;
   confluenceRadiusMm: number;
   branches: {
@@ -480,6 +484,29 @@ export interface XaBifurcationDebugSnapshot {
   }[];
   /** 角度補正が掛からなかった枝（出自）。 */
   unrefinedBranches: string[];
+  /**
+   * カリーナ付近の 2 方向それぞれの径（切り分け専用）。片方だけ太いなら**投影で重なっている**、
+   * 両方太いなら**本当に太い**。
+   */
+  carinaProfile: {
+    id: string;
+    samples: { fromCarinaMm: number; dA: number; dB: number; equiv: number }[];
+  }[];
+  /** 3 枝が同じ視点ペアを見ていたか（違うとアンカーを束ねられない）。 */
+  viewPairShared: boolean;
+  /**
+   * 3 枝ぶんのアンカーを束ねて視点ペアに 1 回だけ掛けた角度補正（§21.4 の段 3）。
+   * 掛からなかったときは null。
+   */
+  refinement: {
+    /** 門を通って**実際に適用した**か。false なら候補は出したが幾何はタグのまま。 */
+    applied: boolean;
+    beforePx: number;
+    afterPx: number;
+    primaryDeg: number;
+    secondaryDeg: number;
+    anchorCount: number;
+  } | null;
   /**
    * 再構成した 3D 中心線（患者 LPS mm・枝ごと）。
    *

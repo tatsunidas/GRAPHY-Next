@@ -242,13 +242,28 @@ def _project_dilated(
     return _gaussian_blur(transmit, blur_px)
 
 
-def _to_stored(transmit: np.ndarray, photons: float | None, rng: np.random.Generator) -> np.ndarray:
-    """透過率 → 12bit 格納値。``photons`` を与えるとポアソンノイズを載せる。"""
+def _to_stored(
+    transmit: np.ndarray,
+    photons: float | None,
+    rng: np.random.Generator,
+    full_scale: float = STORED_MAX,
+) -> np.ndarray:
+    """透過率 → 12bit 格納値。``photons`` を与えるとポアソンノイズを載せる。
+
+    🔴 ``full_scale`` は「透過率 1.0（＝素通し）を格納値のどこに置くか」。既定は最大値だが、
+    **ノイズを載せるときは必ず下げる**。既定のままだと背景がちょうど飽和し、
+    **ノイズの上半分が `clip` で消える**（実測: photons=40000 で σ が理論 20.5 → 11.9、
+    平均も 4095 → 4086.8 に偏る・2026-09-02）。
+
+    <p>これは実害がある。**エッジ検出も密度計測も「背景」を基準に取る**ので、
+    基準の側だけノイズが片側に潰れていると、**ファントムが検出を有利にしてしまう**。
+    ⚠️ 明るさの尺度が版ごとに変わるが、半値法も −lnT も**背景基準の相対量**なので測定値は動かない。
+    """
     if photons is None:
-        values = transmit * STORED_MAX
+        values = transmit * full_scale
     else:
         counts = rng.poisson(np.clip(transmit, 0.0, None) * photons)
-        values = counts / photons * STORED_MAX
+        values = counts / photons * full_scale
     return np.clip(np.rint(values), 0, STORED_MAX).astype(np.uint16)
 
 
@@ -595,6 +610,20 @@ RECON_VIEWS = [
 #: 装置の機械誤差（±2〜5°）と C アームのたわみを模す。バンドル調整が回収すべき量。
 RECON_ANGLE_ERRORS = [(1.5, -1.0), (-2.5, 2.0), (3.0, 1.5), (-1.0, -2.5)]
 
+#: ノイズ層（段 2b）。**形状も真値も a-exact と同一で、量子ノイズだけが違う。**
+#:
+#: 🔴 なぜ要るか: a-exact は**背景の標準偏差が 0.0000**（実測・2026-09-02）。実臨床の QCA は
+#:    **エッジ検出の精度がノイズで決まる**ので、無ノイズのファントムだけで「精度」を語ると
+#:    必ず楽観側に出る。文献の検証ファントム（Ishibashi ら）は実機で撮影しており、
+#:    ノイズ・散乱・MTF を含んだ数字である。
+#:
+#: ⚠️ 見るのは**合否ではなく劣化の仕方**。急に壊れるなら、無ノイズでの合格は紙一重だった
+#:    ということになる。
+#:
+#: 光子数の目安（背景の相対 σ ≒ 1/√photons）:
+#:   40000 → 0.5%（十分に良い）／10000 → 1.0%（臨床相当）／2500 → 2.0%（厳しい）
+RECON_NOISE_LEVELS = [("c-noise-low", 40000.0), ("d-noise-mid", 10000.0), ("e-noise-high", 2500.0)]
+
 #: 3D 中心線の標本数（投影したとき隣接点が 1px 未満になる密度）。
 RECON_SAMPLES = 900
 
@@ -747,16 +776,32 @@ def build_recon3d(out_dir: str) -> dict:
             "truePrimaryAngleDeg": primary,
             "trueSecondaryAngleDeg": secondary,
         }
-        for suffix, tag_primary, tag_secondary in (
-            ("a-exact", primary, secondary),
-            ("b-angle-error", primary + err_p, secondary + err_s),
-        ):
+        # 角度は真値のまま、**ノイズだけ**を変えた版（段 2b）。角度誤差版とは目的が違う。
+        variants: list[tuple[str, float, float, float | None]] = [
+            ("a-exact", primary, secondary, None),
+            ("b-angle-error", primary + err_p, secondary + err_s, None),
+        ]
+        variants += [(name, primary, secondary, photons) for name, photons in RECON_NOISE_LEVELS]
+        for suffix, tag_primary, tag_secondary, photons in variants:
+            # 🔴 **透過率は同じものを使い、格納値だけ作り直す。** こうすると形状は 1 画素も
+            #    変わらず、**ノイズだけが違う**——劣化の原因を切り分けられる。
+            # 背景（透過率 1.0）を 5σ ぶん下げた位置に置き、ノイズの上側が飽和しないようにする。
+            full_scale = STORED_MAX * (1.0 - 5.0 / math.sqrt(photons)) if photons else STORED_MAX
+            variant_frame = (
+                frame if photons is None else _to_stored(transmit, photons, rng, full_scale)[None, :, :]
+            )
             ds = _xa_dataset(
-                frame,
+                variant_frame,
                 uid_key=f"XA-3-{suffix}-{i}",
                 study_key=f"XA-3-{suffix}",
                 series_description=f"GNBP-XA-3 {suffix} view{i + 1} ({primary:+.0f}/{secondary:+.0f})",
-                series_number=(30 + i) if suffix == "a-exact" else (130 + i),
+                series_number=(
+                    (30 + i)
+                    if suffix == "a-exact"
+                    else (130 + i)
+                    if suffix == "b-angle-error"
+                    else (230 + 10 * next(k for k, (nm, _) in enumerate(RECON_NOISE_LEVELS) if nm == suffix) + i)
+                ),
                 frame_time_ms=40.0,
                 patient_id=f"GNBP-XA-3-{suffix}",
                 patient_name="GNBPXA^RECON3D",
@@ -775,7 +820,17 @@ def build_recon3d(out_dir: str) -> dict:
                 "seriesInstanceUid": ds.SeriesInstanceUID,
                 "studyInstanceUid": ds.StudyInstanceUID,
             }
-            if suffix == "a-exact":
+            if photons is not None:
+                entry["photons"] = photons
+                # 🔴 **実測値を書く**（理論値 1/√photons ではない）。丸め・クリップ・素通し位置の
+                #    決め方で理論からずれるので、「作ったつもりの値」を真値にしない。
+                bg = variant_frame[0][transmit >= transmit.max() - 1e-9].astype(float)
+                entry["backgroundMean"] = round(float(bg.mean()), 2)
+                entry["backgroundSigma"] = round(float(bg.std()), 3)
+                entry["backgroundRelativeSigma"] = round(float(bg.std() / bg.mean()), 5)
+                entry["nominalRelativeSigma"] = round(float(1.0 / math.sqrt(photons)), 5)
+                view_entry.setdefault("noise", {})[suffix] = entry
+            elif suffix == "a-exact":
                 view_entry["exact"] = entry
             else:
                 entry.update(

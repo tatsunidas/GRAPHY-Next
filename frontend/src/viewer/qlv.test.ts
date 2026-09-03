@@ -27,6 +27,7 @@ import {
   suggestEdEs,
   wallMotion,
   type Point,
+  clampFrameIndex,
 } from "./qlv";
 
 /**
@@ -404,5 +405,94 @@ describe("関心領域と生理的な妥当性（実データで踏んだ 2 件�
   it("フレーム間隔を渡さなければ検査しない（誤った警告を出さない）", () => {
     const s = suggestEdEs([10, 90, 100, 95, 92, 96, 99, 94])!;
     expect(s.warnings).not.toContain("implausibleInterval");
+  });
+});
+
+describe("clampFrameIndex — フレーム番号の入力（実機で NaN を踏んだ・2026-09-02）", () => {
+  it("★数字にならない入力を状態へ通さない（Math.round では NaN が素通しする）", () => {
+    // 🚨 これが本体の不具合だった: Math.max(0, Math.min(n-1, Math.round(NaN))) === NaN。
+    //    面積カーブが x1="NaN" になり、onGoToFrame(NaN) でビューアの表示フレームまで壊れた。
+    expect(clampFrameIndex("-", 137)).toBeNull();
+    expect(clampFrameIndex("abc", 137)).toBeNull();
+    expect(clampFrameIndex(Number.NaN, 137)).toBeNull();
+    expect(clampFrameIndex(Number.POSITIVE_INFINITY, 137)).toBeNull();
+    expect(clampFrameIndex(undefined, 137)).toBeNull();
+  });
+
+  it("★空文字は「0 フレーム目」ではなく変更なし（消して打ち直すだけで輪郭が消えるのを防ぐ）", () => {
+    // Number("") === 0 なので、素通しすると先頭フレームへ飛んでその位相の輪郭が破棄される。
+    expect(clampFrameIndex("", 137)).toBeNull();
+    expect(clampFrameIndex("   ", 137)).toBeNull();
+  });
+
+  it("範囲外は端へ丸める", () => {
+    expect(clampFrameIndex(-5, 137)).toBe(0);
+    expect(clampFrameIndex(999, 137)).toBe(136);
+  });
+
+  it("小数は四捨五入して整数の添字にする", () => {
+    expect(clampFrameIndex(12.4, 137)).toBe(12);
+    expect(clampFrameIndex("12.6", 137)).toBe(13);
+  });
+
+  it("フレームが無いときは指せない", () => {
+    expect(clampFrameIndex(0, 0)).toBeNull();
+    expect(clampFrameIndex(0, -1)).toBeNull();
+  });
+});
+
+describe("★suggestEdEs — 造影の上り坂に隠れた心周期（実機で踏んだ・2026-09-02）", () => {
+  /**
+   * 実データ（Rubo 0009）の形を作る: **注入で単調に増える上り坂**の上に、心周期の
+   * さざ波が載っている。素朴に「全体の最大＝ED」を採ると末尾が ED になり、
+   * 「ES は ED より後」の制約で ES が隣に押し出される（実測 132/135・120ms・比 0.977）。
+   */
+  function rampWithRipple(beats: number, perBeat: number, rampPerFrame: number): number[] {
+    const out: number[] = [];
+    for (let b = 0; b < beats; b++) {
+      for (let i = 0; i < perBeat; i++) {
+        const phase = (i / perBeat) * 2 * Math.PI;
+        const ripple = Math.cos(phase) * 100; // 山（拡張末期）から始まり谷（収縮末期）へ
+        out.push(1000 + out.length * rampPerFrame + ripple);
+      }
+    }
+    return out;
+  }
+
+  it("上り坂があっても、末尾ではなく心周期の山と谷を選ぶ", () => {
+    // 1 拍 10 点・40ms → 1 拍 400ms。ES は山から 5 点（200ms）後。
+    const areas = rampWithRipple(6, 10, 8);
+    const s = suggestEdEs(areas, { frameIntervalMs: 40 })!;
+    expect(s).not.toBeNull();
+    // ★ 末尾に張り付かない（これが直したかったこと）。
+    expect(s.ed).toBeLessThan(areas.length - 3);
+    // ★ ED は ES より前で、面積は ED のほうが大きい。
+    expect(s.ed).toBeLessThan(s.es);
+    expect(areas[s.ed]).toBeGreaterThan(areas[s.es]);
+    // ★ 収縮期として妥当な間隔（150〜600ms）。
+    const ms = (s.es - s.ed) * 40;
+    expect(ms).toBeGreaterThanOrEqual(150);
+    expect(ms).toBeLessThanOrEqual(600);
+    expect(s.warnings).not.toContain("noCardiacRipple");
+  });
+
+  it("上り坂が急でも山と谷の関係は保たれる（坂に負けない）", () => {
+    const areas = rampWithRipple(6, 10, 30); // さざ波 ±100 に対し 1 点 30 の坂
+    const s = suggestEdEs(areas, { frameIntervalMs: 40 })!;
+    expect(s.ed).toBeLessThan(s.es);
+    expect(s.ed).toBeLessThan(areas.length - 3);
+  });
+
+  it("さざ波が無い（単調増加だけ）なら退避し、指標を疑えと警告する", () => {
+    const areas = Array.from({ length: 40 }, (_, i) => 1000 + i * 10);
+    const s = suggestEdEs(areas, { frameIntervalMs: 40 })!;
+    expect(s.warnings).toContain("noCardiacRipple");
+  });
+
+  it("時間が分からなくても、末尾に張り付かない", () => {
+    const areas = rampWithRipple(6, 10, 8);
+    const s = suggestEdEs(areas)!;
+    expect(s.ed).toBeLessThan(s.es);
+    expect(s.ed).toBeLessThan(areas.length - 3);
   });
 });

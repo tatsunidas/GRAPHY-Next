@@ -24,10 +24,24 @@
  * ビューア側に器の一覧を持たせない。
  */
 
-/** 器の最外殻に付ける属性。 */
+/** 器に付ける属性。 */
 export const VIEWER_OVERLAY_ATTR = "data-viewer-overlay";
 
-/** 器の最外殻へ展開する（`<div {...viewerOverlayProps}>`）。 */
+/**
+ * 器へ展開する（`<div {...viewerOverlayProps}>`）。
+ *
+ * 🔴 **付ける先は「ダイアログの箱（panel）」であって、背景（backdrop）ではない**
+ * （実機で踏んだ・2026-09-02）。backdrop は `position:fixed; inset:0` で**画面全体を覆う**ので、
+ * そこに付けると**画像の上で回したホイールまで「器の中」になり、フレーム送りが一切効かなくなる**。
+ *
+ * <p>正しい切り分けはこう:
+ * <ul>
+ *   <li><b>箱の中</b>（節・グラフ・表）… 器のもの。ビューアは触らない＝中身がスクロールする</li>
+ *   <li><b>箱の外＝暗くなった部分</b>（その下に画像がある）… ビューアのもの。**フレーム送りは効いてよい**
+ *       ——解析前にフレームを選ぶのは正当な操作。止めるのは錠（`sliceNavigationLock`）の仕事で、
+ *       器の判定の仕事ではない</li>
+ * </ul>
+ */
 export const viewerOverlayProps = { [VIEWER_OVERLAY_ATTR]: "" } as const;
 
 /** 祖先を辿れるもの。DOM の `Element` はこれを満たす。 */
