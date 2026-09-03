@@ -106,6 +106,38 @@ public final class FrameSource {
         return seen;
     }
 
+    /**
+     * a 番目と b 番目（0 origin）を **1 パス**で取る。範囲外は null。
+     *
+     * <p>🔴 <b>1 枚ごとに ffmpeg を起動しない。</b> 参照ドライバでそれをやって
+     * **取りこぼした子プロセスで JVM が終わらなくなった**（10 分待って気づいた・2026-09-03）。
+     * 起動を 1 回に減らし、`-frames:v` で必要な範囲だけ復号し、必ず強制終了する。
+     */
+    public byte[][] readPair(int a, int b) throws Exception {
+        int frameBytes = width * height * 3;
+        int last = Math.max(a, b);
+        ProcessBuilder pb = new ProcessBuilder(
+                ffmpeg, "-v", "error", "-i", mp4.toString(),
+                "-frames:v", String.valueOf(last + 1),
+                "-f", "rawvideo", "-pix_fmt", "rgb24", "-");
+        pb.redirectError(ProcessBuilder.Redirect.DISCARD);
+        Process proc = pb.start();
+        byte[] fa = null;
+        byte[] fb = null;
+        try (DataInputStream in = new DataInputStream(proc.getInputStream())) {
+            byte[] buf = new byte[frameBytes];
+            for (int i = 0; i <= last; i++) {
+                if (!readFully(in, buf)) break;
+                if (i == a) fa = buf.clone();
+                if (i == b) fb = buf.clone();
+            }
+        } finally {
+            proc.destroyForcibly();
+            proc.waitFor();
+        }
+        return new byte[][]{fa, fb};
+    }
+
     private static boolean readFully(InputStream in, byte[] buf) throws IOException {
         int off = 0;
         while (off < buf.length) {

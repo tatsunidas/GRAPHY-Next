@@ -76,6 +76,13 @@ interface Payload {
     };
     ffmpeg?: { resolved?: boolean; path?: string; version?: string; tried?: string[] };
     rendered?: { status?: number; contentType?: string; looksLikeMp4?: boolean; error?: string };
+    roiResult?: {
+      ok?: boolean;
+      frameIndex?: number;
+      rois?: { cluster: number; x: number; y: number; w: number; h: number }[];
+      elapsedMs?: number;
+      error?: string;
+    };
     analysis?: {
       ok?: boolean;
       frames?: number;
@@ -278,6 +285,52 @@ async function main(): Promise<void> {
       }
     } else {
       console.log(`  [注意] 参照値が無いので段 3 の検査を飛ばした: ${refPath}`);
+    }
+
+    // ── 7. 段 4: 候補 ROI を移植元の実装と突き合わせる ──────────────
+    // 🔑 **相手は移植元そのもの**（`/tmp/uvs-ref-build/RefRoi`）。段 3 と違って
+    //    独立実装ではない——Farnebäck を書き直す独立性より、**元と一致すること**が
+    //    移植の要件だから。ここで見ているのは実質「**配線が正しいか**」
+    //    （フレームを正しい番号・正しい向きで渡せているか）。
+    const roiRefPath = process.env.UVS_ROI_REF ?? "/tmp/uvs-roi-ref.json";
+    if (fs.existsSync(roiRefPath)) {
+      const roiRef = JSON.parse(fs.readFileSync(roiRefPath, "utf8")) as {
+        stride: number;
+        frames: { frameIndex: number; rois: { x: number; y: number; w: number; h: number }[] }[];
+      };
+      for (const want of roiRef.frames) {
+        await viewer.evaluate(
+          (r) => {
+            (window as unknown as { __uvsRequest?: unknown }).__uvsRequest = r;
+            delete (window as unknown as { __uvsSkeleton?: unknown }).__uvsSkeleton;
+          },
+          { roi: true, width: 720, height: 440, stride: roiRef.stride, frameIndex: want.frameIndex },
+        );
+        await viewer.getByTestId("viewer2d-menu-plugins").click();
+        await viewer.waitForTimeout(300);
+        await viewer.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
+        await viewer.waitForTimeout(20_000);
+        const p3 = (await viewer.evaluate(
+          () => (window as unknown as { __uvsSkeleton?: Payload }).__uvsSkeleton ?? null,
+        )) as Payload | null;
+        const got = p3?.backend?.roiResult;
+        const g = got?.rois?.[0];
+        const e = want.rois[0];
+        check(
+          got?.ok === true && !!g,
+          `[7] フレーム ${want.frameIndex}: ROI が返った`,
+          { error: got?.error, elapsedMs: got?.elapsedMs },
+        );
+        if (g) {
+          check(
+            g.x === e.x && g.y === e.y && g.w === e.w && g.h === e.h,
+            `[7] ★★フレーム ${want.frameIndex}: ROI が移植元と一致`,
+            { got: [g.x, g.y, g.w, g.h], expected: [e.x, e.y, e.w, e.h] },
+          );
+        }
+      }
+    } else {
+      console.log(`  [注意] ROI の参照値が無いので段 4 の検査を飛ばした: ${roiRefPath}`);
     }
 
     await viewer.screenshot({ path: path.join(OUT_DIR, "viewer.png") }).catch(() => {});

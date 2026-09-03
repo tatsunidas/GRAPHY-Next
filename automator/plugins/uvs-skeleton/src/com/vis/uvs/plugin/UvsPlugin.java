@@ -62,6 +62,10 @@ public class UvsPlugin implements GraphyPlugin {
         if (Boolean.TRUE.equals(args == null ? null : args.get("analyze"))) {
             out.put("analysis", analyze(args, out));
         }
+        // ── 6. [C-1] 候補 ROI の抽出（段 4）─────────────────────────
+        if (Boolean.TRUE.equals(args == null ? null : args.get("roi"))) {
+            out.put("roiResult", extractRoi(args, out));
+        }
 
         return out;
     }
@@ -117,6 +121,84 @@ public class UvsPlugin implements GraphyPlugin {
             r.put("seed", FrameScoring.RANDOM_SEED);
             r.put("colorThreshold", FrameScoring.COLOR_THRESHOLD);
             r.put("elapsedMs", System.currentTimeMillis() - t0);
+        } catch (Throwable t) {
+            r.put("ok", false);
+            r.put("error", t.getClass().getSimpleName() + ": " + t.getMessage());
+        }
+        return r;
+    }
+
+    /**
+     * 候補 ROI の抽出（段 4）。**移植したコアをそのまま呼ぶ。**
+     *
+     * <p>🔑 ここでやっているのは<b>配線</b>だけ——フレームを 2 枚取って
+     * {@code CandidateExtractor.extract} に渡す。アルゴリズムは移植元のまま
+     * （書き直すと乱数・丸め・パラメータのどれかがずれて、学習済みモデルが不整合になる）。
+     *
+     * <p>⚠️ 差分の相手は {@code min(i + stride, N-1)}。元アプリは最終フレームで
+     * <b>相手を空画像</b>にするが、ここでは範囲内に丸めた実フレームを渡す実装にはしていない
+     * ——**同じ挙動にするため null を渡す**。
+     */
+    private Map<String, Object> extractRoi(Map<String, Object> args, Map<String, Object> probes) {
+        Map<String, Object> r = new LinkedHashMap<>();
+        try {
+            String apiBase = String.valueOf(args.get("apiBase"));
+            String sop = String.valueOf(args.get("sopInstanceUid"));
+            int width = intArg(args, "width", 0);
+            int height = intArg(args, "height", 0);
+            int stride = intArg(args, "stride", 6);
+            int index = intArg(args, "frameIndex", 0);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> ff = (Map<String, Object>) probes.get("ffmpeg");
+            String ffmpeg = ff == null ? "ffmpeg" : String.valueOf(ff.get("path"));
+
+            FrameSource src = FrameSource.fromRendered(apiBase, sop, ffmpeg, width, height);
+            byte[][] pair;
+            try {
+                pair = src.readPair(index, index + stride);
+            } finally {
+                src.close();
+            }
+            if (pair[0] == null) {
+                r.put("ok", false);
+                r.put("error", "フレーム " + index + " を読めなかった");
+                return r;
+            }
+
+            com.vis.uvs.video.Frame f0 =
+                    new com.vis.uvs.video.Frame(index + 1, width, height, pair[0]);
+            com.vis.uvs.video.Frame f1 = pair[1] == null ? null
+                    : new com.vis.uvs.video.Frame(index + stride + 1, width, height, pair[1]);
+
+            com.vis.uvs.analysis.AnalysisSettings.Extractor ex =
+                    com.vis.uvs.analysis.AnalysisSettings.Extractor.EXTRACTOR_COMPOSITE;
+            com.vis.uvs.analysis.roi.RoiSettings roiSet =
+                    com.vis.uvs.analysis.roi.RoiSettings.forExtractor(ex);
+            com.vis.uvs.analysis.flow.FlowSettings flow =
+                    com.vis.uvs.analysis.flow.FlowSettings.swingDefaults();
+
+            long t0 = System.currentTimeMillis();
+            Map<Integer, ij.gui.Roi> rois =
+                    com.vis.uvs.analysis.candidate.CandidateExtractor.extract(f0, f1, ex, 1, roiSet, flow);
+            r.put("elapsedMs", System.currentTimeMillis() - t0);
+
+            List<Map<String, Object>> list = new ArrayList<>();
+            for (Map.Entry<Integer, ij.gui.Roi> e : rois.entrySet()) {
+                java.awt.Rectangle b = e.getValue().getBounds();
+                Map<String, Object> one = new LinkedHashMap<>();
+                one.put("cluster", e.getKey());
+                one.put("x", b.x);
+                one.put("y", b.y);
+                one.put("w", b.width);
+                one.put("h", b.height);
+                list.add(one);
+            }
+            r.put("ok", true);
+            r.put("frameIndex", index);
+            r.put("stride", stride);
+            r.put("rois", list);
+            r.put("boxCount", roiSet.boxCount());
+            r.put("boxSeed", roiSet.boxSeed());
         } catch (Throwable t) {
             r.put("ok", false);
             r.put("error", t.getClass().getSimpleName() + ": " + t.getMessage());

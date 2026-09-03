@@ -77,19 +77,25 @@ export function activate(host) {
     out.sopInstanceUid = parsed.sop;
 
     // 解析の指示は automator が仕込む（`window.__uvsRequest`）。既定は疎通確認のみ。
-    const req = (window.__uvsRequest || {});
+    //
+    // 🔴 **指示は丸ごと転送する。** 最初は `analyze` 系だけを列挙して渡しており、
+    //    段 4 で足した `roi` / `stride` / `frameIndex` が**黙って落ちていた**
+    //    （backend は「指示が無い」として何も返さず、検査は空の結果を見ていた）。
+    //    鍵を 1 つ足すたびに 2 箇所を直す作りにしない。
+    const req = window.__uvsRequest || {};
     host
-      .runBackend({
-        probe: true,
-        apiBase: parsed.apiBase,
-        studyUid: first.studyUid || null,
-        seriesUid: first.seriesUid || null,
-        sopInstanceUid: parsed.sop,
-        analyze: !!req.analyze,
-        width: req.width || 0,
-        height: req.height || 0,
-        limit: req.limit || 0,
-      })
+      .runBackend(
+        Object.assign(
+          {
+            probe: true,
+            apiBase: parsed.apiBase,
+            studyUid: first.studyUid || null,
+            seriesUid: first.seriesUid || null,
+            sopInstanceUid: parsed.sop,
+          },
+          req,
+        ),
+      )
       .then((res) => {
         out.backend = res;
         finish();
