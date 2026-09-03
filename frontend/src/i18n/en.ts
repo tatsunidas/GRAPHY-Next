@@ -954,6 +954,7 @@ export const en: Record<string, string> = {
   "xa.analysis.srNew": "Save as new",
   "xa.analysis.srReplaceWarn": "Replacing deletes the previous values from this archive. Copies already sent elsewhere cannot be recalled.",
   "xa.analysis.stateSaveFailed": "The measurements were saved, but the analysis state could not be ({{error}}). It will not be restored next time.",
+  "xa.analysis.previewHint": "The orange line is the selected one. The numbers match the list above; you can also click a line here to select it.",
   "xa.analysis.showOnImage": "Show on image",
   "xa.analysis.showOnImageHint": "Highlight the selected line on the image (the list text alone does not tell which line it is).",
   "xa.analysis.usedForAnalysis": "used for analysis",
@@ -1068,6 +1069,13 @@ export const en: Record<string, string> = {
   "qlv.open": "LV analysis",
   "qlv.title": "Quantitative left ventriculography (QLV, single plane)",
   "qlv.frames": "ED / ES frames",
+  "qlv.ed": "ED (end-diastole, largest)",
+  "qlv.es": "ES (end-systole, smallest)",
+  "qlv.edv": "EDV (end-diastolic volume)",
+  "qlv.esv": "ESV (end-systolic volume)",
+  "qlv.frames.confirm": "Move the {{which}} frame from {{from}} to {{to}}. The contour drawn on that phase ({{points}} points) will be discarded.",
+  "qlv.frames.confirm.ok": "Change and discard contour",
+  "qlv.frames.hint": "Drag the vertical markers to pick a frame (applied when you release). Green = ED (end-diastole) belongs on a peak of the curve (largest opacified area); orange = ES (end-systole) belongs in a trough (smallest). Note: changing a frame discards the contour drawn on it, because it belongs to a different cardiac phase.",
   "qlv.framesHint":
     "The curve is the opacified area per frame (green = ED, orange = ES). The suggestion is only a starting point \u2014 always review the motion. Contrast injection commonly triggers a premature ventricular beat, and the beat right after it overestimates EF.",
   "qlv.resuggest": "Suggest again",
@@ -1075,8 +1083,8 @@ export const en: Record<string, string> = {
   "qlv.resuggestRoiTitle":
     "Re-counts the opacified area only inside the bounding box of the ED contour. Counting over the whole frame picks up the diaphragm, spine, catheter and aorta, and does not track the ventricle.",
   "qlv.contour": "LV contour",
-  "qlv.edit.ed": "Draw ED",
-  "qlv.edit.es": "Draw ES",
+  "qlv.edit.ed": "Draw ED (end-diastole)",
+  "qlv.edit.es": "Draw ES (end-systole)",
   "qlv.clearContour": "Clear this contour",
   "qlv.frameLocked": "The frame is pinned while a contour is being drawn (wheel, cine and the slider are disabled). To draw on a different frame, set the ED / ES frame above.",
   "qlv.editor.hint":
@@ -1108,6 +1116,8 @@ export const en: Record<string, string> = {
   "qlv.step.reason.shortWindow": "The searchable window is too short. Choose ED/ES manually",
   "qlv.step.reason.implausibleInterval":
     "The ED-to-ES interval is physiologically impossible (systole is roughly 200-500 ms). Re-suggest from the LV region, or choose the frames manually",
+  "qlv.warn.noCardiacRipple":
+    "\u26a0 No cardiac ripple could be read from the area curve, so the suggestion fell back to the plain maximum and minimum. The measure may not reflect ventricular size \u2014 draw the ED contour and press \"Suggest from contour\", or drag the markers onto a peak and a trough.",
   "qlv.warn.uncalibrated":
     "\u26a0 Volumes (mL) cannot be reported without calibration. EF is scale invariant and therefore valid.",
   "qlv.warn.esLargerThanEd":
@@ -1276,6 +1286,8 @@ export const en: Record<string, string> = {
   "xa3dbif.branch": "Branch",
   "xa3dbif.lesionLength": "Lesion length",
   "xa3dbif.excluded": "Excluded",
+  "xa3dbif.carina.geometry": "The carina is derived geometrically as the centre of the largest sphere touching all three branches (radius {{mm}} mm) — it does not depend on where you stopped drawing.",
+  "xa3dbif.carina.endpoints": "⚠ The three branches do not overlap, so the carina falls back to the centroid of the drawn endpoints. Redraw so all three pass through the same bifurcation.",
   "xa3dbif.confluence": "Not measured within {{mm}} mm of the carina (about one mother-vessel diameter). No numbers are reported for that range.",
   "xa3dbif.angle.distalSide": "Distal-to-side (bifurcation angle)",
   "xa3dbif.angle.proximalSide": "Proximal-to-side",
@@ -1291,6 +1303,9 @@ export const en: Record<string, string> = {
   "xa3dbif.warn.branchTooShort": "{{branch}}: only {{value}} points remain once the carina region is excluded.",
   "xa3dbif.warn.noSections": "{{branch}}: cross-sections are unavailable (e.g. not spatially calibrated).",
   "xa3dbif.warn.daughterWiderThanMother": "{{branch}}: its diameter at the carina, {{value}} mm, exceeds the mother vessel's {{threshold}} mm. The traced segment most likely overlaps the mother vessel in projection, so this branch's diameter, the bifurcation angle and the Finet/Murray deviations are all unreliable.",
+  "xa3dbif.refineSkipped": "No angle correction was applied (pre-correction reprojection {{before}} px — the two views already agree). Correcting here would absorb endpoint mismatch into the angles rather than any positioner error (candidate: primary {{primary}}° / secondary {{secondary}}°).",
+  "xa3dbif.refined": "Angle correction: pooled {{anchors}} branch endpoints and corrected once (reprojection {{before}} → {{after}} px; view B offset primary {{primary}}° / secondary {{secondary}}°).",
+  "xa3dbif.viewPairMismatch": "The three branches do not come from the same two views, so no angle correction could be applied. Pick the same two acquisitions for all three branches.",
   "xa3dbif.unrefined": "Some branches were not angle-corrected: {{branches}}. Positioner angle errors remain in the shape.",
   "xa3d.save": "Save",
   "xa3d.saveSr": "Save 3D QCA result as SR",

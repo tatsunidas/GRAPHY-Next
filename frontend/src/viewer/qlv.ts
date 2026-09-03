@@ -191,7 +191,12 @@ export type EdEsWarning =
    * ED → ES の間隔が生理的にありえない（収縮期はおよそ 200〜500 ms）。
    * **面積の指標が心室の大きさを反映していない**ことのほうが疑わしい。
    */
-  | "implausibleInterval";
+  | "implausibleInterval"
+  /**
+   * 心周期のさざ波を拾えず、素朴な最大・最小に退避した。
+   * **指標が心室の大きさを見ていない**疑いが強い（画面全体を数えている等）。
+   */
+  | "noCardiacRipple";
 
 /**
  * 造影された面積の時系列から ED / ES フレームを提案する。
@@ -222,11 +227,55 @@ export function suggestEdEs(
   }
   if (!(max > min)) return null;
 
-  // 「一度でも十分に造影された」フレームを探索の起点にする。
+  const dt = opts?.frameIntervalMs && opts.frameIntervalMs > 0 ? opts.frameIntervalMs : null;
+
+  // ── ① トレンド（造影の充満）を引く ────────────────────────────
   //
-  // ⚠️ **「最小と最大の中間を超えたフレーム」ではダメ**。造影の立ち上がりの途中でも中間は
-  //    超えるので、**充満途中のフレームを ED として拾う**（心室サイズを過小評価する）。
-  //    最大の 95% に達した最初のフレーム＝ほぼ最初の拡張末期、を起点にする。
+  // 🚨 **生の曲線の最大＝ED、ではない**（実機で踏んだ・2026-09-02）。造影は注入のあいだ
+  //    増え続けるので曲線に**強い上り坂**が乗り、心周期のさざ波がその上に載る。素朴に
+  //    全体の最大を採ると**末尾のフレーム**が ED になり、「ES は ED より後」の制約で
+  //    ES が隣に押し出される。実データ（Rubo 0009）では **ED 132 / ES 135・間隔 120ms・
+  //    面積比 0.977**——ほぼ同じ位相の 2 枚で、収縮をまったく捉えていなかった。
+  //
+  //    そこで**移動中央値でトレンドを推定して引き**、残ったさざ波（＝心周期）から選ぶ。
+  //    中央値にするのは、平均だと山と谷そのものに引きずられるため。
+  const detr = detrend(areas, trendWindow(n, dt));
+
+  // ── ② さざ波の山と谷 ────────────────────────────────────
+  const peaks: number[] = [];
+  const troughs: number[] = [];
+  for (let i = 1; i < n - 1; i++) {
+    if (detr[i] >= detr[i - 1] && detr[i] > detr[i + 1]) peaks.push(i);
+    if (detr[i] <= detr[i - 1] && detr[i] < detr[i + 1]) troughs.push(i);
+  }
+
+  // ── ③ 「山 → その直後の谷」を組にして、妥当なものを選ぶ ──────────
+  //
+  // 🔴 選ぶ基準は**生の面積の落差が最大**の組。落差が大きい＝よく造影された心拍で、
+  //    収縮を最もはっきり捉えている。トレンド除去後の値で比べると、坂の傾きの差が残る。
+  const minFill = min + (max - min) * 0.85;
+  let best: { ed: number; es: number; drop: number } | null = null;
+  for (const p of peaks) {
+    // 十分に造影された心拍だけを見る（充満途中の心拍は心室サイズを過小評価する）。
+    if (areas[p] < minFill) continue;
+    const t = troughs.find((x) => x > p);
+    if (t === undefined) continue;
+    if (!plausibleSystole(t - p, n, dt)) continue;
+    const drop = areas[p] - areas[t];
+    if (drop <= 0) continue;
+    if (!best || drop > best.drop) best = { ed: p, es: t, drop };
+  }
+
+  if (best) {
+    if (peaks.length < 2) warnings.push("shortWindow");
+    return { ed: best.ed, es: best.es, window: [0, n - 1], warnings };
+  }
+
+  // ── ④ さざ波が拾えなかったときの退避 ───────────────────────
+  //
+  // ⚠️ ここへ来るのは「指標が心室を見ていない」場合が多い（画面全体の暗い画素を数えている等）。
+  //    無理に良い組を作らず、**素朴な最大・最小を返したうえで警告を残す**。
+  warnings.push("noCardiacRipple");
   const target = min + (max - min) * 0.95;
   let filled = 0;
   for (let i = 0; i < n; i++) {
@@ -235,19 +284,13 @@ export function suggestEdEs(
       break;
     }
   }
-  // max を取るフレームは必ず存在するので `filled` は必ず決まる（見つからない分岐は作らない）。
-  let from = filled;
-  if (filled === 0) {
-    // 1 フレーム目から満量＝立ち上がりを観測できていない。前の注入が残っている場合など。
-    warnings.push("fillingNotDetected");
-  }
+  const from = filled;
+  if (filled === 0) warnings.push("fillingNotDetected");
   const to = n - 1;
   if (to - from < 3) warnings.push("shortWindow");
 
   let ed = from;
   for (let i = from; i <= to; i++) if (areas[i] > areas[ed]) ed = i;
-
-  // ES は ED より後（1 心拍のうち拡張末期 → 収縮末期の順）。
   let es = -1;
   for (let i = ed + 1; i <= to; i++) if (es < 0 || areas[i] < areas[es]) es = i;
   if (es < 0 || es === ed) {
@@ -255,16 +298,48 @@ export function suggestEdEs(
     es = from;
     for (let i = 0; i <= to; i++) if (areas[i] < areas[es]) es = i;
   }
-
-  // 収縮期（ED → ES）はおよそ 200〜500 ms。ここから大きく外れたら、
-  // ED/ES を間違えたというより**指標が心室の大きさを見ていない**ことを疑う。
-  const dt = opts?.frameIntervalMs;
-  if (dt && dt > 0) {
+  if (dt) {
     const gapMs = Math.abs(es - ed) * dt;
     if (gapMs < 120 || gapMs > 900) warnings.push("implausibleInterval");
   }
-
   return { ed, es, window: [from, to], warnings };
+}
+
+/** トレンドを均す窓幅（要素数・奇数）。心拍 1 つ強（約 1.2 秒）を目安にする。 */
+function trendWindow(n: number, frameIntervalMs: number | null): number {
+  const w = frameIntervalMs ? Math.round(1200 / frameIntervalMs) : Math.round(n / 6);
+  return Math.max(3, w | 1);
+}
+
+/** 移動中央値を引く。**平均ではなく中央値**——平均は山と谷に引きずられる。 */
+function detrend(areas: readonly number[], window: number): number[] {
+  const n = areas.length;
+  const half = window >> 1;
+  const out = new Array<number>(n);
+  for (let i = 0; i < n; i++) {
+    const lo = Math.max(0, i - half);
+    const hi = Math.min(n - 1, i + half);
+    const w = areas.slice(lo, hi + 1).sort((a, b) => a - b);
+    const m = w.length >> 1;
+    out[i] = w.length % 2 ? w[m] : (w[m - 1] + w[m]) / 2;
+  }
+  for (let i = 0; i < n; i++) out[i] = areas[i] - out[i];
+  return out;
+}
+
+/**
+ * ED → ES の隔たりが収縮期として妥当か。
+ *
+ * <p>時間が分かるなら **150〜600 ms**（収縮期はおよそ 200〜500ms。端は少し緩める）。
+ * 分からないときは要素数で見るしかないので、**1 心拍を全体の 1/6 と仮定**した緩い窓にする。
+ */
+function plausibleSystole(gap: number, n: number, frameIntervalMs: number | null): boolean {
+  if (gap <= 0) return false;
+  if (frameIntervalMs) {
+    const ms = gap * frameIntervalMs;
+    return ms >= 150 && ms <= 600;
+  }
+  return gap >= 1 && gap <= Math.max(2, Math.round(n / 6));
 }
 
 /**
@@ -533,4 +608,34 @@ export function opacifiedAreaCount(values: Float32Array | readonly number[], thr
   let count = 0;
   for (let i = 0; i < n; i++) if (values[i] <= cut) count++;
   return count;
+}
+
+/**
+ * 入力されたフレーム番号を、実際に指せる添字へ丸める。指せなければ null。
+ *
+ * <h3>🚨 なぜ関数にしてあるか（実機で踏んだ・2026-09-02）</h3>
+ * 呼び出し側は素朴にこう書いていた:
+ *
+ * <pre>const v = Math.max(0, Math.min(frameCount - 1, Math.round(value)));</pre>
+ *
+ * これは **NaN を素通しする**。`Math.round(NaN)` も `Math.min(x, NaN)` も
+ * `Math.max(0, NaN)` もすべて NaN なので、**丸めているつもりで何も丸まっていない**。
+ * ED/ES の入力欄に数字にならない文字（`-` や `1e` の途中）を打つと `Number()` が NaN を返し、
+ * それがそのまま状態に入って:
+ *
+ * <ul>
+ *   <li>面積カーブの縦線が `x1="NaN"` になり **SVG がエラーを吐く**</li>
+ *   <li>`onGoToFrame(NaN)` で**ビューアの表示フレーム番号まで NaN** になる（こちらが本体の害）</li>
+ * </ul>
+ *
+ * <p>🔴 **空文字は「0 フレーム目」ではない。** `Number("")` は 0 なので、素通しすると
+ * 入力欄を消しただけで**先頭フレームへ飛び、その位相の輪郭が破棄される**。
+ * 「消して打ち直す」という普通の操作でデータが消えるので、空は**変更なし**として扱う。
+ */
+export function clampFrameIndex(value: unknown, frameCount: number): number | null {
+  if (!Number.isInteger(frameCount) || frameCount <= 0) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+  const n = typeof value === "string" ? Number(value) : value;
+  if (typeof n !== "number" || !Number.isFinite(n)) return null;
+  return Math.max(0, Math.min(frameCount - 1, Math.round(n)));
 }
