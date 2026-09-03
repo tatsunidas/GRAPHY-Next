@@ -556,7 +556,9 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
           <TaskStepRail steps={steps} onGo={goToStep} onRedo={redoFrom} />
         </div>
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
-          <button style={btn} onClick={onClose}>
+          {/* 他の解析ダイアログ（QLV / TIMI / IVUS）と同じく testid を付ける。
+              無いと実機検証から閉じられない（FFR の疎通確認で踏んだ・2026-09-03）。 */}
+          <button style={btn} data-testid="xa3d-close" onClick={onClose}>
             {t("common.close")}
           </button>
         </div>
