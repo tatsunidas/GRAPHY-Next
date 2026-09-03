@@ -1,0 +1,52 @@
+{
+ "note": "合成 IVUS プルバック。検証できるのは『フレーム→距離→経路上の位置』の対応づけであって、断層画像の中身ではない。実 IVUS のリングダウン・ガイドワイヤ影・非一様な引き抜き・心拍による前後動は含んでいない。",
+ "file": "GNBP-IVUS-1.dcm",
+ "md5": "ba9aebab77c0c6967821a9e86790317c",
+ "sopClassUid": "1.2.840.10008.5.1.4.1.1.3.1",
+ "sopInstanceUid": "1.2.826.0.1.3680043.10.1338.284596299619377699955471962330797565",
+ "seriesInstanceUid": "1.2.826.0.1.3680043.10.1338.220704014947257390740136118466288525",
+ "studyInstanceUid": "1.2.826.0.1.3680043.10.1338.130260941587634360959072277365383342",
+ "modality": "IVUS",
+ "frameCount": 610,
+ "rows": 256,
+ "columns": 256,
+ "pixelSpacingMm": 0.04,
+ "frameRate": 30.0,
+ "pullbackRateMmPerS": 0.5,
+ "pullbackStartFrame": 61,
+ "pullbackStopFrame": 610,
+ "markers": [
+  {
+   "distanceMm": 1.0,
+   "frame": 120,
+   "frameOneBased": 121
+  },
+  {
+   "distanceMm": 3.0,
+   "frame": 240,
+   "frameOneBased": 241
+  },
+  {
+   "distanceMm": 5.0,
+   "frame": 360,
+   "frameOneBased": 361
+  },
+  {
+   "distanceMm": 7.0,
+   "frame": 480,
+   "frameOneBased": 481
+  },
+  {
+   "distanceMm": 9.0,
+   "frame": 600,
+   "frameOneBased": 601
+  }
+ ],
+ "totalPullbackLengthMm": 9.15,
+ "stenosis": {
+  "atDistanceMm": 5.0,
+  "minLumenRadiusMm": 0.96,
+  "referenceLumenRadiusMm": 1.6,
+  "caveat": "内腔の形は目視でフレームを見分けるためのもので、A8 の受け入れ条件には使わない。"
+ }
+}

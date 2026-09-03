@@ -56,6 +56,13 @@ public final class SeriesLayoutAssembler {
         if (xa != null) {
             return xa;
         }
+        // 血管内画像（IVUS / OCT）の古典マルチフレームは プルバック=Z・フレーム=T に展開する（A8）。
+        // 🔴 ここを通さないと **pullback を取り込んでも先頭フレームしか出ない**
+        //    （classic 経路は NumberOfFrames を見ない）。
+        SeriesLayout ivus = IvusFrameExpander.layout(instances);
+        if (ivus != null) {
+            return ivus;
+        }
 
         List<SeriesLayoutBuilder.FrameMeta> frames = new ArrayList<>();
         double[] seriesIop = null;
