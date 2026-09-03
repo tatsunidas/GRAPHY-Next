@@ -57,11 +57,32 @@ const VIEW_B = 4;
 
 /** 真値点列（60 点に間引いた主枝）の中での分岐位置。full index 404 / stride 15。 */
 const BIF = 27;
+/**
+ * **カリーナ手前で描き終える利用者**を再現する（`GNBP_XA3_DRAW=short`）。
+ *
+ * 🔴 **なぜ要るのか**（2026-09-02）: 既定の区間は**真値のカリーナちょうどで始まり／終わる**。
+ * これは**端点が理想的に置かれた入力**で、「カリーナ＝端点の重心」という旧方式に**最も有利**な
+ * 条件である。実データの利用者はカリーナちょうどで描き終えない。
+ * **カリーナを幾何から決める（段 4-1）ことの是非を、有利な条件だけで判断してはいけない。**
+ *
+ * 🔴 **区間は短くせず、まるごとカリーナから遠ざける。** 短くすると
+ * 「端点の位置」と「区間の長さ」の 2 つが同時に動き、どちらが効いたのか分からなくなる。
+ * 実際、最初は短くする形で書いて**視点 1 の遠位・側枝が短すぎて 2D QCA が結果を返さず**、
+ * 実験そのものが成立しなかった（2026-09-02）。
+ *
+ * 数字は「カリーナ側の端を何点ぶん遠ざけるか」。main は stride 15、daughter は stride 7。
+ */
+const SHORT_DRAW = process.env.GNBP_XA3_DRAW === "short";
+// ⚠️ 1 目盛りは main が約 2.9mm、daughter が約 1.4mm。**利用者の描き間違いの水準**にする。
+// 最初は 3/3/5（＝約 9mm）で書いたが、それは「描き間違い」ではなく**別の場所を引いた**水準で、
+// 3 本の管が交わらなくなって幾何カリーナが成立しなかった（＝退避が正しく働いた）。
+const BACKOFF = SHORT_DRAW ? { proximal: 1, distal: 1, side: 2 } : { proximal: 0, distal: 0, side: 0 };
+
 /** 枝ごとの区間（上記の理由で短い）。 */
 const BRANCH_SEGMENTS = {
-  proximal: { branch: "main", from: 16, to: BIF },
-  distal: { branch: "main", from: BIF, to: 36 },
-  side: { branch: "daughter", from: 0, to: 28 },
+  proximal: { branch: "main", from: 16 - BACKOFF.proximal, to: BIF - BACKOFF.proximal },
+  distal: { branch: "main", from: BIF + BACKOFF.distal, to: 36 + BACKOFF.distal },
+  side: { branch: "daughter", from: BACKOFF.side, to: 28 + BACKOFF.side },
 } as const;
 
 /** 【目標】角度の絶対誤差 [deg]。 */
@@ -342,7 +363,7 @@ async function main(): Promise<void> {
   const vB = viewOf(VIEW_B);
   const fA = filesOf(vA);
   const fB = filesOf(vB);
-  console.log(`[版] ${VARIANT}`);
+  console.log(`[版] ${VARIANT}${SHORT_DRAW ? " / 描き方: short（カリーナ手前で止める）" : ""}`);
   const endsFor = (v: typeof vA) =>
     (Object.keys(BRANCH_SEGMENTS) as (keyof typeof BRANCH_SEGMENTS)[]).map((key) => {
       const seg = BRANCH_SEGMENTS[key];
