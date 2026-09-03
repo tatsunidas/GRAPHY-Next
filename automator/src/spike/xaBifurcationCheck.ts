@@ -57,11 +57,32 @@ const VIEW_B = 4;
 
 /** 真値点列（60 点に間引いた主枝）の中での分岐位置。full index 404 / stride 15。 */
 const BIF = 27;
+/**
+ * **カリーナ手前で描き終える利用者**を再現する（`GNBP_XA3_DRAW=short`）。
+ *
+ * 🔴 **なぜ要るのか**（2026-09-02）: 既定の区間は**真値のカリーナちょうどで始まり／終わる**。
+ * これは**端点が理想的に置かれた入力**で、「カリーナ＝端点の重心」という旧方式に**最も有利**な
+ * 条件である。実データの利用者はカリーナちょうどで描き終えない。
+ * **カリーナを幾何から決める（段 4-1）ことの是非を、有利な条件だけで判断してはいけない。**
+ *
+ * 🔴 **区間は短くせず、まるごとカリーナから遠ざける。** 短くすると
+ * 「端点の位置」と「区間の長さ」の 2 つが同時に動き、どちらが効いたのか分からなくなる。
+ * 実際、最初は短くする形で書いて**視点 1 の遠位・側枝が短すぎて 2D QCA が結果を返さず**、
+ * 実験そのものが成立しなかった（2026-09-02）。
+ *
+ * 数字は「カリーナ側の端を何点ぶん遠ざけるか」。main は stride 15、daughter は stride 7。
+ */
+const SHORT_DRAW = process.env.GNBP_XA3_DRAW === "short";
+// ⚠️ 1 目盛りは main が約 2.9mm、daughter が約 1.4mm。**利用者の描き間違いの水準**にする。
+// 最初は 3/3/5（＝約 9mm）で書いたが、それは「描き間違い」ではなく**別の場所を引いた**水準で、
+// 3 本の管が交わらなくなって幾何カリーナが成立しなかった（＝退避が正しく働いた）。
+const BACKOFF = SHORT_DRAW ? { proximal: 1, distal: 1, side: 2 } : { proximal: 0, distal: 0, side: 0 };
+
 /** 枝ごとの区間（上記の理由で短い）。 */
 const BRANCH_SEGMENTS = {
-  proximal: { branch: "main", from: 16, to: BIF },
-  distal: { branch: "main", from: BIF, to: 36 },
-  side: { branch: "daughter", from: 0, to: 28 },
+  proximal: { branch: "main", from: 16 - BACKOFF.proximal, to: BIF - BACKOFF.proximal },
+  distal: { branch: "main", from: BIF + BACKOFF.distal, to: 36 + BACKOFF.distal },
+  side: { branch: "daughter", from: BACKOFF.side, to: 28 + BACKOFF.side },
 } as const;
 
 /** 【目標】角度の絶対誤差 [deg]。 */
@@ -69,11 +90,32 @@ const TARGET_ANGLE_DEG = 8;
 /** 【目標】Finet / Murray の差の絶対誤差 [%pt]。 */
 const TARGET_DEVIATION_PT = 8;
 
+interface VariantFiles {
+  file: string;
+  studyInstanceUid: string;
+  seriesInstanceUid: string;
+}
+
+/**
+ * どの版で回すか。`GNBP_XA3_VARIANT=exact | c-noise-low | d-noise-mid | e-noise-high`。
+ *
+ * 🔴 **合否の基準線は `exact` のまま**（46/0/3・2026-08-16）。ノイズ版で見るのは合否ではなく
+ * **劣化の仕方**——急に壊れるなら、無ノイズでの合格は紙一重で成立していたことになる。
+ */
+const VARIANT = process.env.GNBP_XA3_VARIANT ?? "exact";
+
 interface Truth {
+  geometry: { mmPerPxAtIsocenter: number };
   recon3d: {
     views: {
       view: number;
-      exact: { file: string; studyInstanceUid: string; seriesInstanceUid: string };
+      exact: VariantFiles;
+      /**
+       * 既知の角度誤差を焼き込んだ版（段 3 の検査に使う）。タグの角度が真値からずれている。
+       */
+      angleError?: VariantFiles & { primaryErrorDeg: number; secondaryErrorDeg: number };
+      /** ノイズ層（段 2b）。**形状と真値は `exact` と同一で、量子ノイズだけが違う。** */
+      noise?: Record<string, VariantFiles & { photons: number; backgroundRelativeSigma: number }>;
       branchesPx: { id: string; pointsPx: [number, number][] }[];
     }[];
     branches: {
@@ -99,6 +141,12 @@ interface Truth {
 
 interface BifState {
   carina: [number, number, number];
+  carinaSource: string;
+  carinaProfile?: {
+    id: string;
+    samples: { fromCarinaMm: number; dA: number; dB: number; equiv: number }[];
+  }[];
+  inscribedRadiusMm: number | null;
   endpointSpreadMm: number;
   confluenceRadiusMm: number;
   branches: {
@@ -122,6 +170,15 @@ interface BifState {
   };
   warnings: { code: string; branch: string | null; value: number; threshold: number }[];
   unrefinedBranches: string[];
+  viewPairShared: boolean;
+  refinement: {
+    applied: boolean;
+    beforePx: number;
+    afterPx: number;
+    primaryDeg: number;
+    secondaryDeg: number;
+    anchorCount: number;
+  } | null;
   /** 再構成した 3D 中心線（切り分け用。合否には使わない）。 */
   branchPoints?: { id: string; points: [number, number, number][] }[];
 }
@@ -205,6 +262,8 @@ async function drawBetweenImagePixels(viewer: Page, p0: [number, number], p1: [n
 async function runQcaForSegments(
   viewer: Page,
   ends: { key: string; p0: [number, number]; p1: [number, number] }[],
+  /** 画像 px → mm（校正済みなら一覧のラベルが mm で出るため、期待値の換算に要る）。 */
+  mmPerPx: number,
 ): Promise<void> {
   await selectLengthTool(viewer);
   let drawn = 0;
@@ -234,11 +293,19 @@ async function runQcaForSegments(
     const lastIndex = labels.length - 1;
     await viewer.selectOption('[data-testid="xa-analysis-pick"]', String(lastIndex));
     await viewer.waitForTimeout(400);
-    const gotPx = parseFloat(/([\d.]+)\s*px/.exec(labels[lastIndex] ?? "")?.[1] ?? "NaN");
+    // 🚨 **一覧のラベルは校正済みなら mm で書かれる**（`pickLabel()`）。
+    //    px 前提で読んでいたため、校正が付くようになった時点で**この検査は必ず失敗**していた
+    //    （2026-09-02 に発覚。6 件の「失敗」はすべてこれで、製品の不具合ではなかった）。
+    //    2026-08-16 に 46/0 で通っていたのは、当時この経路が px だったから。
+    //    → **単位ごと読み、期待値を同じ単位へ換算して比べる。**
+    const m = /([\d.]+)\s*(mm|px)/.exec(labels[lastIndex] ?? "");
+    const got = m ? parseFloat(m[1]) : Number.NaN;
+    const unit = m?.[2] ?? "?";
+    const want = unit === "mm" ? wantPx * mmPerPx : wantPx;
     check(
-      Math.abs(gotPx - wantPx) < Math.max(6, wantPx * 0.12),
+      Number.isFinite(got) && Math.abs(got - want) < Math.max(unit === "mm" ? 6 * mmPerPx : 6, want * 0.12),
       `[QCA] ${e.key}: 引いた区間を解析対象に選べている`,
-      { wantPx: Number(wantPx.toFixed(1)), gotPx },
+      { want: Number(want.toFixed(2)), got, unit, label: labels[lastIndex] },
     );
     await viewer.getByTestId("xa-qca-run").click();
     await viewer.waitForTimeout(3_500);
@@ -282,8 +349,21 @@ async function main(): Promise<void> {
   if (!bifTruth) throw new Error("truth.json に recon3d.bifurcation がありません（ファントムを作り直す）");
 
   const viewOf = (n: number) => truth.recon3d.views.find((v) => v.view === n)!;
+  const filesOf = (v: {
+    exact: VariantFiles;
+    angleError?: VariantFiles;
+    noise?: Record<string, VariantFiles>;
+  }): VariantFiles => {
+    if (VARIANT === "exact") return v.exact;
+    const found = VARIANT === "b-angle-error" ? v.angleError : v.noise?.[VARIANT];
+    if (!found) throw new Error(`truth.json に版 "${VARIANT}" がありません（ファントムを作り直す）`);
+    return found;
+  };
   const vA = viewOf(VIEW_A);
   const vB = viewOf(VIEW_B);
+  const fA = filesOf(vA);
+  const fB = filesOf(vB);
+  console.log(`[版] ${VARIANT}${SHORT_DRAW ? " / 描き方: short（カリーナ手前で止める）" : ""}`);
   const endsFor = (v: typeof vA) =>
     (Object.keys(BRANCH_SEGMENTS) as (keyof typeof BRANCH_SEGMENTS)[]).map((key) => {
       const seg = BRANCH_SEGMENTS[key];
@@ -298,19 +378,19 @@ async function main(): Promise<void> {
     mainPage.on("dialog", (d) => void d.accept().catch(() => {}));
     await resetDb(driver.ports.http);
     const imp = await importPaths(driver.ports.http, [
-      path.join(PHANTOM_DIR, vA.exact.file),
-      path.join(PHANTOM_DIR, vB.exact.file),
+      path.join(PHANTOM_DIR, fA.file),
+      path.join(PHANTOM_DIR, fB.file),
     ]);
     check(imp.imported === 2, "[準備] 2 方向を取り込めた", imp);
 
     await waitForMainScreenReady(mainPage, 60_000);
     await dismissStartupDialogs(mainPage);
-    await openStudy(mainPage, vA.exact.studyInstanceUid);
+    await openStudy(mainPage, fA.studyInstanceUid);
 
     // ── 方向ごとに 3 区間の 2D QCA を回す（3D の登録簿に 6 本たまる）──────
     let viewer: Page | null = null;
     for (const v of [vA, vB]) {
-      const row = mainPage.locator(`[data-testid="series-row-${v.exact.seriesInstanceUid}"]`);
+      const row = mainPage.locator(`[data-testid="series-row-${filesOf(v).seriesInstanceUid}"]`);
       await row.waitFor({ state: "visible", timeout: 30_000 });
       await row.click();
       await mainPage.waitForTimeout(400);
@@ -320,7 +400,7 @@ async function main(): Promise<void> {
       );
       await viewer.getByTestId("series-viewer-root").first().waitFor({ state: "visible", timeout: 30_000 });
       await viewer.waitForTimeout(3_000);
-      await runQcaForSegments(viewer, endsFor(v));
+      await runQcaForSegments(viewer, endsFor(v), truth.geometry.mmPerPxAtIsocenter);
       // ⚠️ 2D ビューアは同じウィンドウを使い回すので、シリーズを変えるには一度閉じる。
       if (v !== vB) {
         await viewer.close();
@@ -491,14 +571,77 @@ async function main(): Promise<void> {
       (await viewer.getByTestId("xa3dbif-no-medina").count()) === 1,
       "[方針] 「分類は自動で出さない」と画面に書いてある",
     );
-    // アンカーを取らない画面なので、角度補正が掛かっていないことは**必ず**出す。
-    if (s.unrefinedBranches.length > 0) {
+    // ── 角度補正（§21.4 の段 3）────────────────────────────────────
+    //
+    // 🔴 **この検査は 2026-09-02 に反転した。** それまでは「角度補正が掛かっていない枝がある
+    //    ことを画面に出している」を合格条件にしていた。枝の両端 2 点しか渡しておらず、
+    //    未知数 2 に対して拘束が 2 では意味のある解が出ないため実装が拒否していたのが実態で、
+    //    **3 枝すべてで補正が一度も掛かっていなかった**。3 枝ぶん束ねて 6 対応にしたので、
+    //    いまは**掛かることが正常**である。
+    check(s.viewPairShared, "[出自] 3 枝が同じ視点ペアから取られている（束ねる前提）", {
+      shared: s.viewPairShared,
+    });
+    check(
+      s.refinement != null && s.unrefinedBranches.length === 0,
+      "[出自] ★角度補正を 3 枝まとめて評価している",
+      { refinement: s.refinement, unrefined: s.unrefinedBranches },
+    );
+    if (s.refinement) {
       check(
-        (await viewer.getByTestId("xa3dbif-unrefined").count()) === 1,
-        "[出自] ★角度補正が掛かっていない枝があることを画面に出している",
-        s.unrefinedBranches,
+        s.refinement.anchorCount === 6,
+        "[出自] 3 枝 × 両端 = 6 対応を束ねている（3 未満では退化する）",
+        { anchorCount: s.refinement.anchorCount },
       );
+      check(
+        s.refinement.afterPx <= s.refinement.beforePx + 1e-6,
+        "[出自] 当てはめで再投影誤差が悪化していない",
+        { beforePx: s.refinement.beforePx, afterPx: s.refinement.afterPx },
+      );
+      // 🔴 **これが段 3 の本体の検査**（2026-09-02）。
+      //    補正は「装置の角度誤差」と「端点の対応ずれ」を区別できず、どちらも角度に吸わせる。
+      //    したがって **掛けられること自体は正しさの証拠にならない**。見るのは
+      //    「直すべき誤差があるときだけ掛けているか」——**版によって期待が逆になる**。
+      const off = Math.max(Math.abs(s.refinement.primaryDeg), Math.abs(s.refinement.secondaryDeg));
+      if (VARIANT === "b-angle-error") {
+        check(s.refinement.applied, "[出自] ★焼き込んだ角度誤差に対しては補正を掛けている", {
+          beforePx: s.refinement.beforePx,
+          afterPx: s.refinement.afterPx,
+        });
+        // ⚠️ 視点 A を固定するので「注入した誤差の符号違い」にはならない
+        //（B は歪んだ A と辻褄が合う位置へ動く）。**大きさが 0 でないこと**を見る。
+        check(off > 0.5, "[出自] 回収した角度オフセットが 0 でない", {
+          offsetDeg: [s.refinement.primaryDeg, s.refinement.secondaryDeg],
+        });
+        check(
+          (await viewer.getByTestId("xa3dbif-refined").count()) === 1,
+          "[出自] 補正を掛けたことと回収量を画面に出している",
+        );
+      } else {
+        // 🔴 **厳密な幾何では「掛けない」のが正解。** 直すべき誤差が無いのに掛けると、
+        //    端点のずれを角度に付け替えた**作り話**になる（実測: 0.67° の偽の回転で
+        //    分岐角が 3 つ中 2 つ悪化した）。
+        check(!s.refinement.applied, "[出自] ★厳密な幾何では角度補正を掛けていない", {
+          beforePx: s.refinement.beforePx,
+          candidateOffsetDeg: [s.refinement.primaryDeg, s.refinement.secondaryDeg],
+        });
+        check(
+          (await viewer.getByTestId("xa3dbif-refine-skipped").count()) === 1,
+          "[出自] 掛けなかったことを画面に出している（黙って諦めない）",
+        );
+        void off;
+      }
     }
+    // ── カリーナの出自（段 4）────────────────────────────────────────
+    // 🔴 端点の重心をやめ、**3 本に接する最大の内接球**から決めるようにした。
+    //    退避（"endpoints"）に落ちているなら 3 本が交わっていない＝入力が悪い。
+    check(s.carinaSource === "geometry", "[出自] ★カリーナを幾何から決めている（端点の重心ではない）", {
+      carinaSource: s.carinaSource,
+      inscribedRadiusMm: s.inscribedRadiusMm,
+    });
+    check(
+      (await viewer.getByTestId("xa3dbif-carina-source").count()) === 1,
+      "[出自] カリーナの決め方を画面に出している",
+    );
     check(
       s.warnings.every((w) => w.code !== "endpointsApart"),
       "[整合] 3 本の端点がそろっている（同じ分岐を指している）",

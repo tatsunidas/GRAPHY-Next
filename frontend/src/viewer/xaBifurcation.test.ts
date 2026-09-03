@@ -64,12 +64,47 @@ function bifurcation(opts?: { sideDiameter?: number; distalStenosis?: boolean })
 }
 
 describe("★analyzeBifurcation — 分岐部（真値既知の合成分岐）", () => {
+  it("カリーナは幾何から決まる（端点の重心ではない・段 4）", () => {
+    const r = analyzeBifurcation(bifurcation())!;
+    expect(r.carinaSource).toBe("geometry");
+    expect(r.inscribedRadiusMm).not.toBeNull();
+    // 真の分岐は原点。内接球の中心は**定義が違う**ので厳密には一致しない
+    // （文献の POB は「3 本の輪郭に接する最大円の中心」で、分岐点そのものではない）。
+    // 意味のある近さに居ることだけを固定する。
+    expect(Math.hypot(...r.carina)).toBeLessThan(0.5);
+  });
+
+  it("🔴 端をどこで描き終えてもカリーナが動かない（旧方式はここで壊れていた）", () => {
+    // 🚨 2026-09-02 の失敗の再発防止（§21.4.0）。端点の重心でカリーナを決めていたときは、
+    //    カリーナ側の点を削るとカリーナ自体が動き、除外域も角度の窓も別の場所を指した。
+    const base = analyzeBifurcation(bifurcation())!;
+    const trimmed = analyzeBifurcation(
+      bifurcation().map((b) => ({
+        ...b,
+        points: b.id === "proximal" ? b.points.slice(0, -3) : b.points.slice(3),
+        profile: {
+          ...b.profile,
+          sections: b.id === "proximal" ? b.profile.sections.slice(0, -3) : b.profile.sections.slice(3),
+        },
+      })),
+    )!;
+    const shift = Math.hypot(
+      trimmed.carina[0] - base.carina[0],
+      trimmed.carina[1] - base.carina[1],
+      trimmed.carina[2] - base.carina[2],
+    );
+    expect(shift).toBeLessThan(0.3);
+  });
+
   it("角度の約束どおりに出る（遠位↔側枝 45° ＝ いわゆる分岐角）", () => {
     const r = analyzeBifurcation(bifurcation())!;
     expect(r).not.toBeNull();
-    expect(r.angles.distalToSideDeg!).toBeCloseTo(45, 1);
-    expect(r.angles.proximalToSideDeg!).toBeCloseTo(135, 1);
-    expect(r.angles.proximalToDistalDeg!).toBeCloseTo(180, 1);
+    // ⚠️ 許容は 0.2°。**カリーナを幾何で決めるようにした（段 4）ぶんだけ動く**
+    //    （実測 45.000° → 44.946°）。角度は「カリーナから 5mm の窓」で測るので、
+    //    カリーナが 0.1mm 動けば角度も動く。0.05° は測っている量に対して無意味に細かい。
+    expect(r.angles.distalToSideDeg!).toBeCloseTo(45, 0.7);
+    expect(r.angles.proximalToSideDeg!).toBeCloseTo(135, 0.7);
+    expect(r.angles.proximalToDistalDeg!).toBeCloseTo(180, 0.7);
   });
 
   it("🔴 カリーナのすぐ近くの点が揺れても分岐角がずれない（単位ベクトルの平均にしない）", () => {

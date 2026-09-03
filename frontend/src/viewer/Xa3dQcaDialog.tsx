@@ -362,8 +362,8 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div style={backdrop} onMouseDown={onClose} {...viewerOverlayProps}>
-      <div style={panel} onMouseDown={(e) => e.stopPropagation()} data-testid="xa3d-dialog">
+    <div style={backdrop} onMouseDown={onClose}>
+      <div style={panel} onMouseDown={(e) => e.stopPropagation()} data-testid="xa3d-dialog" {...viewerOverlayProps}>
         <div style={title}>{t("xa3d.title")}</div>
         <div style={body}>
           <div style={content}>

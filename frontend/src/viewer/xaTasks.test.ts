@@ -15,6 +15,8 @@ import {
   deriveQca3dSteps,
   QCA_STEPS,
   QLV_STEPS,
+  TIMI_STEPS,
+  deriveTimiSteps,
   clearedBy,
   deriveQcaSteps,
   deriveQlvSteps,
@@ -22,6 +24,7 @@ import {
   type QcaTaskState,
   type QlvTaskState,
 } from "./xaTasks";
+import type { TimiTaskState } from "./xaTasks";
 
 const ORDER = QCA_STEPS.map((s) => s.id);
 
@@ -238,6 +241,7 @@ describe.each([
   ["QCA", QCA_STEPS],
   ["QLV", QLV_STEPS],
   ["3D QCA", QCA3D_STEPS],
+  ["TIMI", TIMI_STEPS],
 ])("段の繋がり（%s）", (_name, STEPS) => {
   const order = STEPS.map((s) => s.id);
 
@@ -443,5 +447,114 @@ describe("deriveQca3dSteps", () => {
   it("方向をやり直すとアンカーも捨てる（別の 2 方向の画素座標になるため）", () => {
     expect(clearedBy("views", QCA3D_STEPS)).toEqual(["views", "anchors"]);
     expect(invalidatedBy("views", QCA3D_STEPS)).toEqual(["anchors", "recon", "save"]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// TIMI フレームカウント — `fw/angio-design.md` §24 / A15
+// ─────────────────────────────────────────────────────────────────────────
+
+function timiState(over: Partial<TimiTaskState> = {}): TimiTaskState {
+  return {
+    hasVessel: true,
+    fpsSource: "frameTime",
+    hasStart: true,
+    hasEnd: true,
+    endSelection: "manual",
+    endBeforeStart: false,
+    endAtLastFrame: false,
+    endAtLastFrameConfirmed: false,
+    hasResult: true,
+    hasNormalised: true,
+    canSave: false,
+    saved: false,
+    ...over,
+  };
+}
+
+const timiById = (s: TimiTaskState) => new Map(deriveTimiSteps(s).map((x) => [x.id, x]));
+
+describe("TIMI_STEPS の形", () => {
+  it("根は vessel と rate の 2 つ（撮影レートは独立した入口）", () => {
+    const order = TIMI_STEPS.map((s) => s.id);
+    const targets = new Set(TIMI_STEPS.flatMap((s) => s.invalidates));
+    expect(order.filter((id) => !targets.has(id))).toEqual(["vessel", "rate"]);
+  });
+
+  it("🔴 血管をやり直すと開始・到達を捨てる（別の入口部・別の指標点を指すため）", () => {
+    expect(clearedBy("vessel", TIMI_STEPS)).toEqual(["vessel", "startFrame", "endFrame"]);
+  });
+
+  it("上流の手修正を捨てない", () => {
+    // 到達をやり直しても、血管や開始は残る。
+    expect(clearedBy("end", TIMI_STEPS)).toEqual(["endFrame"]);
+    expect(clearedBy("start", TIMI_STEPS)).toEqual(["startFrame"]);
+  });
+
+  it("QLV の frames 鍵を流用していない（片方のやり直しでもう片方を消さない）", () => {
+    const owned = TIMI_STEPS.flatMap((s) => s.owns);
+    expect(owned).not.toContain("frames");
+  });
+});
+
+describe("deriveTimiSteps", () => {
+  it("血管が未選択なら vessel が active", () => {
+    const steps = deriveTimiSteps(timiState({ hasVessel: false }));
+    expect(steps.find((s) => s.id === "vessel")!.state).toBe("active");
+  });
+
+  it("🔴 撮影レートのタグが無ければ rate は skipped（done にしない）", () => {
+    const st = timiById(timiState({ fpsSource: "default", hasNormalised: false })).get("rate")!;
+    expect(st.state).toBe("skipped");
+    expect(st.reasonKey).toBe("timi.step.reason.fpsUnknown");
+  });
+
+  it("撮影レートが分かっていれば done で、出自を注記に出す", () => {
+    const st = timiById(timiState({ fpsSource: "frameTimeVector" })).get("rate")!;
+    expect(st.state).toBe("done");
+    expect(st.note?.key).toBe("cine.fpsSource.frameTimeVector");
+  });
+
+  it("到達 ≤ 開始 なら end が invalid", () => {
+    const st = timiById(timiState({ endBeforeStart: true })).get("end")!;
+    expect(st.state).toBe("invalid");
+    expect(st.reasonKey).toBe("timi.step.reason.endBeforeStart");
+  });
+
+  it("🔴 到達が最終フレームなら、人が確認するまで invalid", () => {
+    expect(timiById(timiState({ endAtLastFrame: true })).get("end")!.state).toBe("invalid");
+    expect(
+      timiById(timiState({ endAtLastFrame: true, endAtLastFrameConfirmed: true })).get("end")!.state,
+    ).toBe("done");
+  });
+
+  it("到達の決め方を注記に出す（候補から採ったか手で入れたか）", () => {
+    expect(timiById(timiState({ endSelection: "assisted" })).get("end")!.note?.key).toBe(
+      "timi.step.note.assisted",
+    );
+    expect(timiById(timiState({ endSelection: "manual" })).get("end")!.note?.key).toBe(
+      "timi.step.note.manual",
+    );
+  });
+
+  it("換算できていない結果はその旨を注記に出す", () => {
+    expect(timiById(timiState({ hasNormalised: false })).get("result")!.note?.key).toBe(
+      "timi.step.note.rawOnly",
+    );
+  });
+
+  it("保存は第 1 段では常に invalid（理由つきで並べる）", () => {
+    const st = timiById(timiState()).get("save")!;
+    expect(st.state).toBe("invalid");
+    expect(st.reasonKey).toBe("timi.step.reason.srNotImplemented");
+  });
+
+  it("active は高々 1 つで、skipped を active にしない", () => {
+    const steps = deriveTimiSteps(
+      timiState({ fpsSource: "default", hasStart: false, hasEnd: false, hasResult: false }),
+    );
+    expect(steps.filter((s) => s.state === "active")).toHaveLength(1);
+    expect(steps.find((s) => s.id === "rate")!.state).toBe("skipped");
+    expect(steps.find((s) => s.state === "active")!.id).toBe("start");
   });
 });

@@ -386,6 +386,69 @@ function getQlvState(): QlvDebugSnapshot | null {
   return qlvSnapshot;
 }
 
+/**
+ * TIMI フレームカウント（A15）の検証用スナップショット。`fw/angio-design.md` §24。
+ *
+ * <p>🔑 **「出さないことの検査」ができる形にしてある**——この機能の要点は
+ * 「撮影レートが分からなければ換算値を出さない」「到達 ≤ 開始 なら結果を出さない」なので、
+ * `result` が null であることと、その理由（段の `reasonKey`）を突き合わせられるようにする。
+ */
+export interface TimiDebugSnapshot {
+  /** どのフレームを見ているときの状態か（フレーム取り違えは数値からは判別できない）。 */
+  imageId: string | null;
+  seriesUid: string;
+  vessel: string | null;
+  startFrame: number | null;
+  endFrame: number | null;
+  /** 到達をどう決めたか（候補から採ったか手で入れたか）。 */
+  endSelection: string | null;
+  currentFrame: number;
+  frameCount: number;
+  fps: number;
+  /** 撮影レートの出自。`"default"` は**タグが無い**＝換算値を出せない。 */
+  fpsSource: string;
+  /** 各フレームの開始時刻 [ms]（換算の材料そのもの）。 */
+  frameTimesMs: number[];
+  /** 時間輝度カーブの ROI（画像 px）。**無ければカーブも作らない**。 */
+  roi: { x0: number; y0: number; x1: number; y1: number } | null;
+  /** ROI を引いたときに見ていたフレーム（体動の影響を後から見るため）。 */
+  roiFrame: number | null;
+  /** 時間輝度カーブ（間引き済み）。ROI が無ければ空。 */
+  intensityCurve: { frame: number; value: number }[];
+  /** 到達フレームの**候補**（人が押すまで結果には入らない）。 */
+  candidateFrame: number | null;
+  /** 結果。出せない条件では null。 */
+  result: {
+    vessel: string;
+    startFrame: number;
+    endFrame: number;
+    frames: number;
+    elapsedMs: number | null;
+    tfc30: number | null;
+    ctfc: number | null;
+    fps: number;
+    fpsSource: string;
+    rateUniform: boolean;
+    unit: string;
+    method: string;
+    warnings: string[];
+  } | null;
+  /** 段の状態（レールの検査用）。 */
+  steps: { id: string; state: string; reasonKey: string | null }[];
+}
+
+let timiSnapshot: TimiDebugSnapshot | null = null;
+
+/** TIMI ダイアログから呼ぶ（DEV 以外では読まれない）。 */
+export function publishTimiSnapshot(patch: Partial<TimiDebugSnapshot> | null): void {
+  if (!import.meta.env.DEV) return;
+  timiSnapshot = patch ? ({ ...(timiSnapshot ?? {}), ...patch } as TimiDebugSnapshot) : null;
+}
+
+function getTimiState(): TimiDebugSnapshot | null {
+  return timiSnapshot;
+}
+
 /** 3D QCA（A6a）の検証用スナップショット。`fw/angio-design.md` §10.2。 */
 export interface Xa3dDebugSnapshot {
   /** 選べている方向の数と、その角度（**タグから読めているか**を数値で確かめる）。 */
@@ -446,6 +509,10 @@ export interface Xa3dDebugSnapshot {
 /** 分岐部 QCA（A6b）の検証用スナップショット。`fw/angio-design.md` §21.4。 */
 export interface XaBifurcationDebugSnapshot {
   carina: [number, number, number];
+  /** カリーナの出自（"geometry" ＝ 内接球・"endpoints" ＝ 旧方式への退避）。 */
+  carinaSource: string;
+  /** 内接球の半径 [mm]（"geometry" のときだけ）。 */
+  inscribedRadiusMm: number | null;
   endpointSpreadMm: number;
   confluenceRadiusMm: number;
   branches: {
@@ -480,6 +547,29 @@ export interface XaBifurcationDebugSnapshot {
   }[];
   /** 角度補正が掛からなかった枝（出自）。 */
   unrefinedBranches: string[];
+  /**
+   * カリーナ付近の 2 方向それぞれの径（切り分け専用）。片方だけ太いなら**投影で重なっている**、
+   * 両方太いなら**本当に太い**。
+   */
+  carinaProfile: {
+    id: string;
+    samples: { fromCarinaMm: number; dA: number; dB: number; equiv: number }[];
+  }[];
+  /** 3 枝が同じ視点ペアを見ていたか（違うとアンカーを束ねられない）。 */
+  viewPairShared: boolean;
+  /**
+   * 3 枝ぶんのアンカーを束ねて視点ペアに 1 回だけ掛けた角度補正（§21.4 の段 3）。
+   * 掛からなかったときは null。
+   */
+  refinement: {
+    /** 門を通って**実際に適用した**か。false なら候補は出したが幾何はタグのまま。 */
+    applied: boolean;
+    beforePx: number;
+    afterPx: number;
+    primaryDeg: number;
+    secondaryDeg: number;
+    anchorCount: number;
+  } | null;
   /**
    * 再構成した 3D 中心線（患者 LPS mm・枝ごと）。
    *
@@ -627,6 +717,7 @@ declare global {
       getXaCineStats: typeof getXaCineStats;
       getQcaState: typeof getQcaState;
       getQlvState: typeof getQlvState;
+      getTimiState: typeof getTimiState;
       getXa3dState: typeof getXa3dState;
       getXaBifurcationState: typeof getXaBifurcationState;
       imagePixelsToCanvasFraction: typeof imagePixelsToCanvasFraction;
@@ -768,6 +859,7 @@ export function installDebugApi(): void {
     getXaCineStats,
     getQcaState,
     getQlvState,
+    getTimiState,
     getXa3dState,
     getXaBifurcationState,
     imagePixelsToCanvasFraction,
