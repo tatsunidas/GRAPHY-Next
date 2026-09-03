@@ -57,7 +57,76 @@ public class UvsPlugin implements GraphyPlugin {
         //     段 3 のフレーム供給の経路。⚠️ ポートは呼び出し側から渡してもらう。
         out.put("rendered", probeRendered(args));
 
+        // ── 5. [A] 色判定 / [B] 静止判定（段 3）─────────────────────
+        //     `analyze: true` のときだけ走らせる。疎通確認と解析を混ぜない。
+        if (Boolean.TRUE.equals(args == null ? null : args.get("analyze"))) {
+            out.put("analysis", analyze(args, out));
+        }
+
         return out;
+    }
+
+    /**
+     * [A] 色判定 / [B] 静止判定を 1 パスで行う（段 3）。
+     *
+     * <p>🔴 <b>しきい値の判定はここでしない。</b> 生の CPR / MAD を返し、
+     * 「カラーか」「静止か」は呼び出し側が決める——**静止のしきい値は動画の由来に依存する**
+     * （H.264 化で MAD が系統的に下がる・設計 §7）ので、ここで焼き込むと嘘になる。
+     */
+    private Map<String, Object> analyze(Map<String, Object> args, Map<String, Object> probes) {
+        Map<String, Object> r = new LinkedHashMap<>();
+        long t0 = System.currentTimeMillis();
+        try {
+            String apiBase = String.valueOf(args.get("apiBase"));
+            String sop = String.valueOf(args.get("sopInstanceUid"));
+            int width = intArg(args, "width", 0);
+            int height = intArg(args, "height", 0);
+            int limit = intArg(args, "limit", 0);
+            if (width <= 0 || height <= 0) {
+                r.put("ok", false);
+                r.put("error", "width/height が渡されていない（/video-metadata の値を渡すこと）");
+                return r;
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> ff = (Map<String, Object>) probes.get("ffmpeg");
+            String ffmpeg = ff == null ? "ffmpeg" : String.valueOf(ff.get("path"));
+
+            FrameScoring.Points points = new FrameScoring.Points(
+                    width, height, FrameScoring.SAMPLING_POINTS, FrameScoring.RANDOM_SEED);
+
+            List<Double> cpr = new ArrayList<>();
+            List<Double> mad = new ArrayList<>();
+            FrameSource src = FrameSource.fromRendered(apiBase, sop, ffmpeg, width, height);
+            try {
+                src.forEachPair(limit, (i, pair) -> {
+                    cpr.add(FrameScoring.colorPixelRatio(pair[0], points, FrameScoring.COLOR_THRESHOLD));
+                    mad.add(FrameScoring.meanAbsDiff(pair[0], pair[1], points, width));
+                });
+                // 最後のフレームは相手が無い。CPR は自分だけで出せるが、MAD は出せないので
+                // 🔴 **元アプリと同じく直前の値を複製する**（逆順比較のバグ B3 を避けた形）。
+                if (!mad.isEmpty()) mad.add(mad.get(mad.size() - 1));
+            } finally {
+                src.close();
+            }
+
+            r.put("ok", true);
+            r.put("frames", cpr.size());
+            r.put("cpr", cpr);
+            r.put("mad", mad);
+            r.put("samplingPoints", points.count);
+            r.put("seed", FrameScoring.RANDOM_SEED);
+            r.put("colorThreshold", FrameScoring.COLOR_THRESHOLD);
+            r.put("elapsedMs", System.currentTimeMillis() - t0);
+        } catch (Throwable t) {
+            r.put("ok", false);
+            r.put("error", t.getClass().getSimpleName() + ": " + t.getMessage());
+        }
+        return r;
+    }
+
+    private static int intArg(Map<String, Object> args, String key, int dflt) {
+        Object v = args == null ? null : args.get(key);
+        return v instanceof Number n ? n.intValue() : dflt;
     }
 
     /** クラスが見えるか＋どこから来たか＋版。見えなければ理由を返す。 */
@@ -122,41 +191,48 @@ public class UvsPlugin implements GraphyPlugin {
     /**
      * ffmpeg を解決して版を得る。
      *
-     * <p>⚠️ 本体の解決順（設定 → 環境変数 → 同梱 → PATH）を**そのまま呼べるとは限らない**ので、
-     * ここでは「同梱の場所を探す」「PATH にあるか」を**素朴に**見る。
-     * 本番では本体の口を使うべきで、それが無ければ**それ自体が段 2 の成果**（穴の発見）。
+     * <h3>🔑 本体の解決順を使う（段 2 の反省）</h3>
+     * 最初は「設定 → 環境変数 → PATH」を**素朴に**探索していたが、それでは
+     * <b>PATH にたまたま入っていた ffmpeg</b> を拾うだけで、**配布物では見つからない**
+     * （本体は ffmpeg を同梱していて PATH には置かない・{@code fw/nondicom-ffmpeg.md}）。
+     *
+     * <p>→ 本体の {@code FfmpegLocator} を**反射で呼ぶ**。親クラスローダから見えるので
+     * 素の 2 引数コンストラクタで作れる（Spring の文脈は要らない）。
+     *
+     * <p>🔴 <b>限界</b>: 管理者が {@code nondicom.ffmpeg} / {@code nondicom.ffmpeg-dir} を
+     * <b>設定ファイルで指定していた場合、それはこの経路からは見えない</b>
+     * （{@code @Value} の注入は Spring がやる）。同梱探索・環境変数・PATH は同じ順で効く。
+     * **設定を尊重するには host API 側に口が要る**——それは別途の課題として記録する。
      */
     private Map<String, Object> probeFfmpeg() {
         Map<String, Object> r = new LinkedHashMap<>();
-        List<String> tried = new ArrayList<>();
-        for (String cand : new String[]{
-                System.getProperty("graphy.ffmpeg", ""),
-                System.getenv("GRAPHY_FFMPEG") == null ? "" : System.getenv("GRAPHY_FFMPEG"),
-                "ffmpeg",
-        }) {
-            if (cand == null || cand.isBlank()) continue;
-            tried.add(cand);
-            try {
-                Process p = new ProcessBuilder(cand, "-version").redirectErrorStream(true).start();
-                String first;
-                try (InputStream in = p.getInputStream()) {
-                    first = new String(in.readAllBytes()).lines().findFirst().orElse("");
-                }
-                p.waitFor();
-                if (p.exitValue() == 0) {
-                    r.put("resolved", true);
-                    r.put("path", cand);
-                    r.put("version", first);
-                    r.put("tried", tried);
-                    return r;
-                }
-            } catch (Throwable ignored) {
-                /* 次の候補へ */
-            }
+        String path = null;
+        try {
+            Class<?> loc = Class.forName(
+                    "com.vis.graphynext.nondicom.FfmpegLocator", true, getClass().getClassLoader());
+            Object inst = loc.getDeclaredConstructor(String.class, String.class).newInstance("", "");
+            path = String.valueOf(loc.getMethod("resolve").invoke(inst));
+            r.put("via", "FfmpegLocator（本体の解決順）");
+            r.put("configVisible", false); // 上記の限界
+        } catch (Throwable t) {
+            r.put("via", "fallback");
+            r.put("locatorError", t.getClass().getSimpleName() + ": " + t.getMessage());
+            path = "ffmpeg";
         }
-        r.put("resolved", false);
-        r.put("tried", tried);
-        r.put("note", "本体の解決順（fw/nondicom-ffmpeg.md）を JAR から呼ぶ口が要るかもしれない");
+        r.put("path", path);
+        try {
+            Process p = new ProcessBuilder(path, "-version").redirectErrorStream(true).start();
+            String first;
+            try (InputStream in = p.getInputStream()) {
+                first = new String(in.readAllBytes()).lines().findFirst().orElse("");
+            }
+            p.waitFor();
+            r.put("resolved", p.exitValue() == 0);
+            r.put("version", first);
+        } catch (Throwable t) {
+            r.put("resolved", false);
+            r.put("error", t.getClass().getSimpleName() + ": " + t.getMessage());
+        }
         return r;
     }
 
@@ -164,15 +240,14 @@ public class UvsPlugin implements GraphyPlugin {
     private Map<String, Object> probeRendered(Map<String, Object> args) {
         Map<String, Object> r = new LinkedHashMap<>();
         Object sop = args == null ? null : args.get("sopInstanceUid");
-        Object port = args == null ? null : args.get("httpPort");
-        if (sop == null) {
+        Object base = args == null ? null : args.get("apiBase");
+        if (sop == null || base == null || String.valueOf(base).isBlank()) {
             r.put("attempted", false);
-            r.put("reason", "sopInstanceUid が渡されていない");
+            // 🔑 **どちらが欠けたのかを出す。** 段 2 では「渡していない」ことに気づくのが遅れた。
+            r.put("reason", "sopInstanceUid=" + sop + " apiBase=" + base);
             return r;
         }
-        int p = 8080;
-        if (port instanceof Number n) p = n.intValue();
-        String url = "http://127.0.0.1:" + p + "/api/instances/" + sop + "/rendered";
+        String url = String.valueOf(base) + "/api/instances/" + sop + "/rendered";
         r.put("attempted", true);
         r.put("url", url);
         try (HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build()) {

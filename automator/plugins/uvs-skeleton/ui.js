@@ -60,12 +60,35 @@ export function activate(host) {
     }
 
     const first = (targets || [])[0] || {};
+
+    // 🔑 **API のベース URL と SOP UID は、どちらも `imageId` から取れる。**
+    //    `ViewerTargetInfo` に `sopInstanceUid` は無い（`imageId` はある）。
+    //    JAR 側は自分の backend のポートを知らない（`run()` に渡るのは要求本文だけ）ので、
+    //    **フロントが渡す**しかない。段 2 でこれを渡し忘れ、`/rendered` を確認できなかった。
+    //
+    //    imageId の形: `wadouri:http://localhost:18090/api/instances/<sop>/file[&frame=N]`
+    const parsed = (() => {
+      const id = first.imageId || "";
+      const m = /^[a-z]+:(https?:\/\/[^/]+)\/api\/instances\/([^/?&#]+)\//.exec(id);
+      return m ? { apiBase: m[1], sop: m[2] } : { apiBase: "", sop: null };
+    })();
+    out.imageId = first.imageId || null;
+    out.apiBase = parsed.apiBase;
+    out.sopInstanceUid = parsed.sop;
+
+    // 解析の指示は automator が仕込む（`window.__uvsRequest`）。既定は疎通確認のみ。
+    const req = (window.__uvsRequest || {});
     host
       .runBackend({
         probe: true,
+        apiBase: parsed.apiBase,
         studyUid: first.studyUid || null,
         seriesUid: first.seriesUid || null,
-        sopInstanceUid: first.sopInstanceUid || null,
+        sopInstanceUid: parsed.sop,
+        analyze: !!req.analyze,
+        width: req.width || 0,
+        height: req.height || 0,
+        limit: req.limit || 0,
       })
       .then((res) => {
         out.backend = res;

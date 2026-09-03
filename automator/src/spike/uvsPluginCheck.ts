@@ -76,6 +76,15 @@ interface Payload {
     };
     ffmpeg?: { resolved?: boolean; path?: string; version?: string; tried?: string[] };
     rendered?: { status?: number; contentType?: string; looksLikeMp4?: boolean; error?: string };
+    analysis?: {
+      ok?: boolean;
+      frames?: number;
+      cpr?: number[];
+      mad?: number[];
+      samplingPoints?: number;
+      elapsedMs?: number;
+      error?: string;
+    };
   } | null;
   error: string | null;
 }
@@ -217,6 +226,59 @@ async function main(): Promise<void> {
 
     // ── 5. /rendered から MP4（段 3 の経路）─────────────────────────
     observe("[5] /rendered の応答", b.rendered);
+
+    // ── 6. 段 3: [A] 色判定 / [B] 静止判定を独立参照と突き合わせる ──
+    // 🔑 **元アプリを動かさずに検証する。** `bench/uvs_frame_scores.py` は仕様（定数）から
+    //    起こした**別実装**で、Java の `Random` を規格から再現している（一致は確認済み）。
+    //    同じコードを写していないので「両方が同じように間違える」ことが起きにくい。
+    const refPath = process.env.UVS_REF ?? "/tmp/uvs-ref.json";
+    if (fs.existsSync(refPath)) {
+      const ref = JSON.parse(fs.readFileSync(refPath, "utf8")) as {
+        frames: number;
+        cpr: number[];
+        mad: number[];
+      };
+      await viewer.evaluate(
+        (r) => {
+          (window as unknown as { __uvsRequest?: unknown }).__uvsRequest = r;
+          delete (window as unknown as { __uvsSkeleton?: unknown }).__uvsSkeleton;
+        },
+        { analyze: true, width: 720, height: 440, limit: ref.frames + 1 },
+      );
+      await viewer.getByTestId("viewer2d-menu-plugins").click();
+      await viewer.waitForTimeout(300);
+      await viewer.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
+      await viewer.waitForTimeout(30_000);
+      const p2 = (await viewer.evaluate(
+        () => (window as unknown as { __uvsSkeleton?: Payload }).__uvsSkeleton ?? null,
+      )) as Payload | null;
+      fs.writeFileSync(path.join(OUT_DIR, "analysis.json"), JSON.stringify(p2?.backend?.analysis, null, 2));
+      const a = p2?.backend?.analysis;
+      check(a?.ok === true, "[6] ★解析が走った", { error: a?.error, elapsedMs: a?.elapsedMs });
+      if (a?.ok) {
+        check(
+          a.frames === ref.frames,
+          "[6] フレーム数が参照と一致",
+          { got: a.frames, expected: ref.frames },
+        );
+        const maxDiff = (x: number[] | undefined, y: number[]) =>
+          !x ? Number.POSITIVE_INFINITY
+            : Math.max(...x.slice(0, Math.min(x.length, y.length)).map((v, i) => Math.abs(v - y[i])));
+        const dCpr = maxDiff(a.cpr, ref.cpr);
+        const dMad = maxDiff(a.mad, ref.mad);
+        // 🔴 **どちらも厳密一致すべき**（整数演算と固定点列なので浮動小数の揺れも小さい）。
+        check(dCpr < 1e-9, "[6] ★★CPR 列が独立参照と一致", { maxDiff: dCpr, n: a.cpr?.length });
+        check(dMad < 1e-9, "[6] ★★MAD 列が独立参照と一致", { maxDiff: dMad, n: a.mad?.length });
+        observe("[6] 先頭 3 件（Java / 参照）", {
+          cprJava: a.cpr?.slice(0, 3),
+          cprRef: ref.cpr.slice(0, 3),
+          madJava: a.mad?.slice(0, 3),
+          madRef: ref.mad.slice(0, 3),
+        });
+      }
+    } else {
+      console.log(`  [注意] 参照値が無いので段 3 の検査を飛ばした: ${refPath}`);
+    }
 
     await viewer.screenshot({ path: path.join(OUT_DIR, "viewer.png") }).catch(() => {});
   } finally {
