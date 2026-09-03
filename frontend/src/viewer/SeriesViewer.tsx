@@ -14,6 +14,7 @@ import CineControls from "./CineControls";
 import { XaAnalysisDialog } from "./XaAnalysisDialog";
 import { Xa3dBifurcationDialog } from "./Xa3dBifurcationDialog";
 import { XaQlvDialog } from "./XaQlvDialog";
+import { XaIvusSyncDialog } from "./XaIvusSyncDialog";
 import { Xa3dQcaDialog } from "./Xa3dQcaDialog";
 import { useQcaRuns } from "./xaRecon3dStore";
 import { consumeXaTask, isFreshRequest, matchesRequest, onXaTaskRequest, pullXaTask } from "./xaTaskLaunch";
@@ -300,6 +301,11 @@ export function SeriesViewer({
   const [spacingZ, setSpacingZ] = useState<number | null>(null);
   // スタックが空間スライスでない（XA のフレーム軸など）なら ThickSlab の概念が無い → 行ごと隠す。
   const spatialStack = stackAxisSpec.kind === "slice";
+  /**
+   * 血管内画像（IVUS / OCT）か。**モダリティで分岐しない**——backend が付けた
+   * 軸の提示で判定する（§5.7 の「UI に『XA なら…』の分岐を撒かない」）。
+   */
+  const isPullbackSeries = axes.z.kind === "pullback";
   const thickAvailable = spatialStack && isThickSlabAvailable({ hasVideo, nZ }) && !gridOn;
 
   // 実スライス間隔(mm)を先頭2枚の IOP/IPP から算出（デジタル枚数換算・厚み範囲に使う）。
@@ -367,6 +373,7 @@ export function SeriesViewer({
   // 校正 / QCA ダイアログ（fw/angio-design.md §7.3 / §8）。
   const [xaDialogOpen, setXaDialogOpen] = useState(false);
   const [qlvDialogOpen, setQlvDialogOpen] = useState(false);
+  const [ivusDialogOpen, setIvusDialogOpen] = useState(false);
   const [xaBifDialogOpen, setXaBifDialogOpen] = useState(false);
   const [xa3dDialogOpen, setXa3dDialogOpen] = useState(false);
   /** 表示状態（GSPS）の読み込み（§14.1）。 */
@@ -1198,6 +1205,17 @@ export function SeriesViewer({
                   >
                     {t("qlv.open")}
                   </button>
+                  {/* IVUS / OCT 同期（A8）。断層のシリーズでだけ出す。 */}
+                  {isPullbackSeries && (
+                    <button
+                      style={btn}
+                      data-testid="ivus-open"
+                      onClick={() => setIvusDialogOpen(true)}
+                      title={t("ivus.title")}
+                    >
+                      {t("ivus.open")}
+                    </button>
+                  )}
                   {/* 3D QCA（A6a）。2 方向で 2D QCA を済ませてから開く（§10.2）。 */}
                   <button
                     style={btn}
@@ -1433,6 +1451,17 @@ export function SeriesViewer({
           onClose={() => setQlvDialogOpen(false)}
           // ⚠️ XA（isFrameStack）では**表示中のフレームは `z`**（`tIdx` は Run 軸）。
           //    `setTIdx` を渡すと「フレームを合わせたつもりで別のランへ飛ぶ」。
+          onGoToFrame={setZ}
+        />
+      )}
+      {ivusDialogOpen && displayImageIds.length > 0 && (
+        <XaIvusSyncDialog
+          imageIds={displayImageIds}
+          studyUid={studyUid}
+          seriesUid={seriesUid}
+          mode={mode}
+          currentFrame={z}
+          onClose={() => setIvusDialogOpen(false)}
           onGoToFrame={setZ}
         />
       )}

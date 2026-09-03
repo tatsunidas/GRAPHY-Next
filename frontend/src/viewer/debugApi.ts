@@ -386,6 +386,53 @@ function getQlvState(): QlvDebugSnapshot | null {
   return qlvSnapshot;
 }
 
+/** IVUS / OCT 同期（A8）の検証用スナップショット。`fw/angio-design.md` §12。 */
+export interface IvusSyncDebugSnapshot {
+  tomoSeriesUid: string;
+  angioSeriesUid: string | null;
+  tomoFrame: number;
+  tomoFrameCount: number;
+  angioFrame: number;
+  angioFrameCount: number;
+  /** タグから作った引き抜きの幾何。出せなければ null。 */
+  geometry: {
+    startFrame: number;
+    stopFrame: number;
+    frameRate: number;
+    pullbackRateMmPerS: number;
+    lengthMm: number;
+  } | null;
+  /** 幾何を出せない理由（`noPullbackRate` 等）。 */
+  unavailable: string | null;
+  /**
+   * アンギオ側の空間校正（列・行）。未校正なら null＝経路上の位置を出さない。
+   * 🔴 **平均して 1 値に潰さない**（斜めの経路で長さがずれる）。
+   */
+  mmPerPxCol: number | null;
+  mmPerPxRow: number | null;
+  pathPointsPx: [number, number][];
+  pathLengthMm: number | null;
+  /** 経路長 / 引き抜き長。**経路の引き間違いの唯一の手掛かり**。 */
+  pathLengthRatio: number | null;
+  /** いまの断層フレームに対応するプルバック距離 [mm]。 */
+  distanceMm: number | null;
+  markerPx: { x: number; y: number; clamped: boolean } | null;
+  /** 対応づけの精度の目安 [mm]（心拍による縦方向運動を無視した近似）。 */
+  accuracyMm: number;
+}
+
+let ivusSyncSnapshot: IvusSyncDebugSnapshot | null = null;
+
+/** IVUS 同期ダイアログから呼ぶ（DEV 以外では読まれない）。 */
+export function publishIvusSyncSnapshot(patch: Partial<IvusSyncDebugSnapshot> | null): void {
+  if (!import.meta.env.DEV) return;
+  ivusSyncSnapshot = patch ? ({ ...(ivusSyncSnapshot ?? {}), ...patch } as IvusSyncDebugSnapshot) : null;
+}
+
+function getIvusSyncState(): IvusSyncDebugSnapshot | null {
+  return ivusSyncSnapshot;
+}
+
 /** 3D QCA（A6a）の検証用スナップショット。`fw/angio-design.md` §10.2。 */
 export interface Xa3dDebugSnapshot {
   /** 選べている方向の数と、その角度（**タグから読めているか**を数値で確かめる）。 */
@@ -627,6 +674,7 @@ declare global {
       getXaCineStats: typeof getXaCineStats;
       getQcaState: typeof getQcaState;
       getQlvState: typeof getQlvState;
+      getIvusSyncState: typeof getIvusSyncState;
       getXa3dState: typeof getXa3dState;
       getXaBifurcationState: typeof getXaBifurcationState;
       imagePixelsToCanvasFraction: typeof imagePixelsToCanvasFraction;
@@ -768,6 +816,7 @@ export function installDebugApi(): void {
     getXaCineStats,
     getQcaState,
     getQlvState,
+    getIvusSyncState,
     getXa3dState,
     getXaBifurcationState,
     imagePixelsToCanvasFraction,

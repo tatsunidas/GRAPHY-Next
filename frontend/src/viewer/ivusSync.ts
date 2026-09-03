@@ -228,7 +228,25 @@ function normaliseLandmarks(landmarks: readonly PullbackLandmark[]): PullbackLan
  */
 export interface PullbackPath {
   pointsPx: readonly (readonly [number, number])[];
-  mmPerPx: number | null;
+  /**
+   * 列方向（x）と行方向（y）の mm/px。
+   *
+   * 🔴 **平均して 1 値に潰さない。** 空間校正は非等方をそのまま保持する方針
+   * （`xaCalibration.ts`）で、潰すと斜めの経路で長さがずれる。
+   * どちらかが無ければ未校正として扱う。
+   */
+  mmPerPxCol: number | null;
+  mmPerPxRow: number | null;
+}
+
+/** 2 点間の距離 [mm]（非等方の画素ピッチをそのまま使う）。 */
+function segmentMm(
+  a: readonly [number, number],
+  b: readonly [number, number],
+  mmCol: number,
+  mmRow: number,
+): number {
+  return Math.hypot((b[0] - a[0]) * mmCol, (b[1] - a[1]) * mmRow);
 }
 
 /**
@@ -241,21 +259,23 @@ export function pointAtDistance(
   path: PullbackPath,
   distanceMm: number,
 ): { x: number; y: number; clamped: boolean } | null {
-  const { pointsPx, mmPerPx } = path;
-  if (!mmPerPx || !(mmPerPx > 0) || pointsPx.length < 2) return null;
-  const targetPx = distanceMm / mmPerPx;
+  const { pointsPx, mmPerPxCol, mmPerPxRow } = path;
+  if (!mmPerPxCol || !mmPerPxRow || !(mmPerPxCol > 0) || !(mmPerPxRow > 0)) return null;
+  if (pointsPx.length < 2) return null;
 
-  let acc = 0;
-  if (targetPx <= 0) {
-    return { x: pointsPx[0][0], y: pointsPx[0][1], clamped: targetPx < 0 };
+  if (distanceMm <= 0) {
+    return { x: pointsPx[0][0], y: pointsPx[0][1], clamped: distanceMm < 0 };
   }
+  let acc = 0;
   for (let i = 1; i < pointsPx.length; i++) {
-    const dx = pointsPx[i][0] - pointsPx[i - 1][0];
-    const dy = pointsPx[i][1] - pointsPx[i - 1][1];
-    const seg = Math.hypot(dx, dy);
-    if (acc + seg >= targetPx) {
-      const t = seg > 0 ? (targetPx - acc) / seg : 0;
-      return { x: pointsPx[i - 1][0] + dx * t, y: pointsPx[i - 1][1] + dy * t, clamped: false };
+    const seg = segmentMm(pointsPx[i - 1], pointsPx[i], mmPerPxCol, mmPerPxRow);
+    if (acc + seg >= distanceMm) {
+      const t = seg > 0 ? (distanceMm - acc) / seg : 0;
+      return {
+        x: pointsPx[i - 1][0] + (pointsPx[i][0] - pointsPx[i - 1][0]) * t,
+        y: pointsPx[i - 1][1] + (pointsPx[i][1] - pointsPx[i - 1][1]) * t,
+        clamped: false,
+      };
     }
     acc += seg;
   }
@@ -265,13 +285,14 @@ export function pointAtDistance(
 
 /** 経路の全長 [mm]（未校正なら null）。 */
 export function pathLengthMm(path: PullbackPath): number | null {
-  const { pointsPx, mmPerPx } = path;
-  if (!mmPerPx || !(mmPerPx > 0) || pointsPx.length < 2) return null;
+  const { pointsPx, mmPerPxCol, mmPerPxRow } = path;
+  if (!mmPerPxCol || !mmPerPxRow || !(mmPerPxCol > 0) || !(mmPerPxRow > 0)) return null;
+  if (pointsPx.length < 2) return null;
   let acc = 0;
   for (let i = 1; i < pointsPx.length; i++) {
-    acc += Math.hypot(pointsPx[i][0] - pointsPx[i - 1][0], pointsPx[i][1] - pointsPx[i - 1][1]);
+    acc += segmentMm(pointsPx[i - 1], pointsPx[i], mmPerPxCol, mmPerPxRow);
   }
-  return acc * mmPerPx;
+  return acc;
 }
 
 /**

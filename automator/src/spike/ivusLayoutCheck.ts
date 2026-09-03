@@ -44,6 +44,30 @@ function check(cond: boolean, label: string, detail?: unknown): void {
   }
 }
 
+interface IvusSyncState {
+  geometry: {
+    startFrame: number;
+    stopFrame: number;
+    frameRate: number;
+    pullbackRateMmPerS: number;
+    lengthMm: number;
+  } | null;
+  unavailable: string | null;
+  distanceMm: number | null;
+  markerPx: { x: number; y: number; clamped: boolean } | null;
+  mmPerPxCol: number | null;
+  pathLengthMm: number | null;
+}
+
+async function ivusState(page: import("@playwright/test").Page): Promise<IvusSyncState | null> {
+  const raw = await page.evaluate(`(() => {
+    const g = window.__graphyDebug;
+    const s = g && g.getIvusSyncState ? g.getIvusSyncState() : null;
+    return s ? JSON.stringify(s) : null;
+  })()`);
+  return raw ? (JSON.parse(raw as string) as IvusSyncState) : null;
+}
+
 interface Truth {
   file: string;
   studyInstanceUid: string;
@@ -175,6 +199,69 @@ async function main(): Promise<void> {
       "[4] 断層が実際に描画されている（レイアウトだけ合って真っ黒、ではない）",
       px[0],
     );
+
+    // ── 5. 同期ダイアログ（A8 本体）──────────────────────────────
+    check(
+      await viewer.getByTestId("ivus-open").isVisible().catch(() => false),
+      "[5] ★断層のシリーズに IVUS 同期の導線が出る（軸の提示で判定している）",
+    );
+    await viewer.getByTestId("ivus-open").click();
+    await viewer.getByTestId("xa-ivus-dialog").waitFor({ state: "visible", timeout: 10_000 });
+    await viewer.waitForTimeout(3_000);
+
+    const sync = await ivusState(viewer);
+    check(!!sync, "[5] 同期の状態を取得できる");
+    if (sync) {
+      // 🔴 これが A8 の本体。タグから引き抜きの幾何が組めているか。
+      check(
+        sync.geometry != null && sync.unavailable == null,
+        "[5] ★プルバックの幾何をタグから組めている",
+        { geometry: sync.geometry, unavailable: sync.unavailable },
+      );
+      if (sync.geometry) {
+        check(
+          sync.geometry.startFrame === truth.pullbackStartFrame - 1,
+          "[5] ★開始フレームを 1 origin から 0 origin へ直している",
+          { got: sync.geometry.startFrame, expected: truth.pullbackStartFrame - 1 },
+        );
+        check(
+          Math.abs(sync.geometry.pullbackRateMmPerS - truth.pullbackRateMmPerS) < 1e-6,
+          "[5] 引き抜き速度がタグどおり",
+          { got: sync.geometry.pullbackRateMmPerS },
+        );
+        // 全長 (609−60)/30×0.5 = 9.15mm
+        const expectedLen =
+          ((truth.pullbackStopFrame - truth.pullbackStartFrame) / truth.frameRate) *
+          truth.pullbackRateMmPerS;
+        check(
+          Math.abs(sync.geometry.lengthMm - expectedLen) < 1e-3,
+          "[5] ★引き抜きの長さが独立計算と一致",
+          { got: sync.geometry.lengthMm, expected: expectedLen },
+        );
+      }
+      // マーカーの真値との突き合わせ。断層のフレームを送ると距離が真値どおりに動くか。
+      for (const m of truth.markers.slice(0, 3)) {
+        await viewer.getByTestId("ivus-tomo-frame").fill(String(m.frame));
+        await viewer.waitForTimeout(500);
+        const st = await ivusState(viewer);
+        check(
+          !!st?.distanceMm && Math.abs(st.distanceMm - m.distanceMm) < 0.01,
+          `[5] ★フレーム ${m.frameOneBased} が真値 ${m.distanceMm}mm に対応する`,
+          { distanceMm: st?.distanceMm, expected: m.distanceMm },
+        );
+      }
+      // 経路を引いていないので、経路上の位置は出ない（＝出せないときに出さない）。
+      const st2 = await ivusState(viewer);
+      check(
+        st2?.markerPx == null,
+        "[5] ★経路を引くまで経路上の印を出さない",
+        { markerPx: st2?.markerPx },
+      );
+      check(
+        await viewer.getByTestId("ivus-accuracy").isVisible().catch(() => false),
+        "[5] ★±1〜2mm の近似であることを常時出している",
+      );
+    }
 
     await viewer.screenshot({ path: path.join(OUT_DIR, "viewer.png") }).catch(() => {});
   } finally {

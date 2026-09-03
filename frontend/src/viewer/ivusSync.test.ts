@@ -204,7 +204,8 @@ describe("pointAtDistance", () => {
       [0, 0],
       [100, 0],
     ] as const,
-    mmPerPx: 0.1,
+    mmPerPxCol: 0.1,
+    mmPerPxRow: 0.1,
   };
 
   it("距離に応じて経路上を進む", () => {
@@ -220,7 +221,8 @@ describe("pointAtDistance", () => {
         [30, 40], // 長さ 50px
         [30, 90], // 長さ 50px（合計 100px = 10mm）
       ] as const,
-      mmPerPx: 0.1,
+      mmPerPxCol: 0.1,
+      mmPerPxRow: 0.1,
     };
     const p = pointAtDistance(bent, 5)!;
     expect(p.x).toBeCloseTo(30, 6);
@@ -228,8 +230,9 @@ describe("pointAtDistance", () => {
   });
 
   it("🔴 未校正なら null（px の長さを mm と呼ばない）", () => {
-    expect(pointAtDistance({ pointsPx: path.pointsPx, mmPerPx: null }, 5)).toBeNull();
-    expect(pointAtDistance({ pointsPx: path.pointsPx, mmPerPx: 0 }, 5)).toBeNull();
+    expect(pointAtDistance({ ...path, mmPerPxCol: null }, 5)).toBeNull();
+    expect(pointAtDistance({ ...path, mmPerPxRow: null }, 5)).toBeNull();
+    expect(pointAtDistance({ ...path, mmPerPxCol: 0 }, 5)).toBeNull();
   });
 
   it("経路の外へ出る距離は端で止め、その旨を返す", () => {
@@ -242,26 +245,59 @@ describe("pointAtDistance", () => {
   });
 
   it("点が足りなければ null", () => {
-    expect(pointAtDistance({ pointsPx: [[0, 0]], mmPerPx: 0.1 }, 1)).toBeNull();
+    expect(pointAtDistance({ ...path, pointsPx: [[0, 0]] }, 1)).toBeNull();
   });
 });
 
 describe("pathLengthMm / pathLengthRatio", () => {
-  const path = { pointsPx: [[0, 0], [100, 0]] as const, mmPerPx: 0.1 };
+  const path = { pointsPx: [[0, 0], [100, 0]] as const, mmPerPxCol: 0.1, mmPerPxRow: 0.1 };
 
   it("経路長を mm で出す", () => {
     expect(pathLengthMm(path)).toBeCloseTo(10, 6);
   });
 
   it("未校正なら null", () => {
-    expect(pathLengthMm({ pointsPx: path.pointsPx, mmPerPx: null })).toBeNull();
+    expect(pathLengthMm({ ...path, mmPerPxCol: null })).toBeNull();
   });
 
   it("🔑 経路長と引き抜き長の食い違いを比で返す（経路の引き間違いの唯一の手掛かり）", () => {
     const g = geom(); // 9.15mm
     expect(pathLengthRatio(path, g)!).toBeCloseTo(10 / 9.15, 4);
     // 経路を 3 倍長く引いてしまった場合。
-    const long = { pointsPx: [[0, 0], [300, 0]] as const, mmPerPx: 0.1 };
+    const long = { pointsPx: [[0, 0], [300, 0]] as const, mmPerPxCol: 0.1, mmPerPxRow: 0.1 };
     expect(pathLengthRatio(long, g)!).toBeGreaterThan(3);
+  });
+});
+
+describe("非等方の画素ピッチ", () => {
+  it("🔴 行と列で mm/px が違うとき、平均して 1 値に潰さない", () => {
+    // 列 0.2mm/px・行 0.1mm/px。斜め (30, 40) px の長さは
+    //   hypot(30×0.2, 40×0.1) = hypot(6, 4) = 7.2111mm
+    // 平均（0.15）で潰すと hypot(30,40)×0.15 = 7.5mm になり、ずれる。
+    const diagonal = {
+      pointsPx: [
+        [0, 0],
+        [30, 40],
+      ] as const,
+      mmPerPxCol: 0.2,
+      mmPerPxRow: 0.1,
+    };
+    expect(pathLengthMm(diagonal)!).toBeCloseTo(Math.hypot(6, 4), 6);
+    expect(pathLengthMm(diagonal)!).not.toBeCloseTo(50 * 0.15, 3);
+  });
+
+  it("非等方でも距離に応じた位置が経路上に乗る", () => {
+    const diagonal = {
+      pointsPx: [
+        [0, 0],
+        [30, 40],
+      ] as const,
+      mmPerPxCol: 0.2,
+      mmPerPxRow: 0.1,
+    };
+    const full = pathLengthMm(diagonal)!;
+    const mid = pointAtDistance(diagonal, full / 2)!;
+    expect(mid.x).toBeCloseTo(15, 6);
+    expect(mid.y).toBeCloseTo(20, 6);
   });
 });
