@@ -29,10 +29,11 @@ export type AnalysisTaskId =
   | "qca3dBifurcation"
   | "qlv"
   | "qlvBiplane"
+  | "timi"
   | "report";
 
 /** 起動したときに開くもの。`null` は未実装（開くものが無い）。 */
-export type AnalysisTaskTarget = "xaAnalysis" | "qlv" | "qca3d" | "qca3dBifurcation" | "report";
+export type AnalysisTaskTarget = "xaAnalysis" | "qlv" | "qca3d" | "qca3dBifurcation" | "timi" | "report";
 
 export interface AnalysisTaskDef {
   id: AnalysisTaskId;
@@ -121,6 +122,18 @@ export const ANALYSIS_TASKS: readonly AnalysisTaskDef[] = [
     implemented: false,
     phase: "A5c",
     opens: null,
+    needsXaSeries: true,
+    standaloneOnly: true,
+  },
+  {
+    // TIMI フレームカウント（A15）。血流の速さの代用指標で、**径も輪郭も要らない**——
+    // 要るのは「2 つのフレーム」と「撮影レート」だけ。だから QCA 系とは独立に置ける。
+    id: "timi",
+    labelKey: "xa.task.timi",
+    descKey: "xa.task.timi.desc",
+    implemented: true,
+    phase: "A15",
+    opens: "timi",
     needsXaSeries: true,
     standaloneOnly: true,
   },
