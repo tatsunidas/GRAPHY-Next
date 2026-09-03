@@ -85,7 +85,12 @@ export type ManualInputKey =
   | "edContour"
   | "esContour"
   | "views"
-  | "anchors";
+  | "anchors"
+  // TIMI（A15）。`frames` は QLV の ED/ES 用なので流用しない
+  // （同じ鍵にすると、片方をやり直したときにもう片方の状態まで捨てる）。
+  | "vessel"
+  | "startFrame"
+  | "endFrame";
 
 /** 導出された段（表示用）。 */
 export interface TaskStep extends TaskStepDef {
@@ -468,6 +473,120 @@ export function deriveQca3dSteps(s: Qca3dTaskState): TaskStep[] {
 
       case "save":
         if (!s.canSave) return { ...def, state: "invalid", reasonKey: "xa3d.step.reason.saveNotImplemented" };
+        return { ...def, state: s.saved ? "done" : "todo" };
+
+      default:
+        return { ...def, state: "todo" };
+    }
+  });
+
+  const first = steps.find((x) => x.state === "todo");
+  if (first) first.state = "active";
+  return steps;
+}
+
+/* ------------------------------------------------------------------ */
+/* TIMI フレームカウント（A15）                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * TIMI タスクの段。**根は `vessel` と `rate` の 2 本**（QCA の `input` / `calibration` と同じ形）。
+ *
+ * <p>🔴 **`rate`（撮影レート）は人が触れない導出値**だが段として並べる。
+ * 撮影レートのタグが無いと**換算値を出せない**ので、「なぜ数字が出ないか」を
+ * ここで説明する必要がある。校正（`calibration`）と同じ役回り。
+ */
+export const TIMI_STEPS: readonly TaskStepDef[] = [
+  {
+    id: "vessel",
+    labelKey: "timi.step.vessel",
+    // 🚨 血管が変われば**入口部も指標点も別の場所**になる。前に選んだフレームは
+    //    別の物を指すので捨てる（QLV がフレームを変えたら輪郭を捨てるのと同じ理屈）。
+    invalidates: ["start", "end"],
+    owns: ["vessel"],
+    clears: ["vessel", "startFrame", "endFrame"],
+  },
+  { id: "rate", labelKey: "timi.step.rate", invalidates: ["result"], owns: [], clears: [] },
+  { id: "start", labelKey: "timi.step.start", invalidates: ["result"], owns: ["startFrame"], clears: ["startFrame"] },
+  { id: "end", labelKey: "timi.step.end", invalidates: ["result"], owns: ["endFrame"], clears: ["endFrame"] },
+  { id: "result", labelKey: "timi.step.result", invalidates: ["save"], owns: [], clears: [] },
+  { id: "save", labelKey: "xa.step.save", invalidates: [], owns: [], clears: [] },
+] as const;
+
+/** {@link deriveTimiSteps} の入力。**UI の状態をそのまま写したもの**。 */
+export interface TimiTaskState {
+  /** 血管を選んだか。選ぶまで結果を出さない（何を測ったか決まらないため）。 */
+  hasVessel: boolean;
+  /** 撮影レートの出自。`"default"` は**タグが無い**＝換算値を出せない。 */
+  fpsSource: string;
+  /** 開始フレームを決めたか。 */
+  hasStart: boolean;
+  /** 到達フレームを決めたか。 */
+  hasEnd: boolean;
+  /** 到達の決め方（候補を押したか、手で入れたか）。出自として注記に出す。 */
+  endSelection: "manual" | "assisted" | null;
+  /** 到達 ≤ 開始。 */
+  endBeforeStart: boolean;
+  /** 到達がランの最終フレーム＝造影が途中で切れている可能性。 */
+  endAtLastFrame: boolean;
+  /** 最終フレームでよいと人が確認したか。 */
+  endAtLastFrameConfirmed: boolean;
+  /** 結果があるか。 */
+  hasResult: boolean;
+  /** 換算値（TFC30）を出せたか。撮影レート不明なら false。 */
+  hasNormalised: boolean;
+  /** 保存できるか（第 1 段では常に false）。 */
+  canSave: boolean;
+  saved: boolean;
+}
+
+/**
+ * 段の状態を導出する。
+ *
+ * <p>🔑 QLV と違い「**自動提案のまま `done`**」の経路が無い。開始フレームには候補を出さず、
+ * 到達の候補も人が押すまで入らないため（§24.1）。
+ */
+export function deriveTimiSteps(s: TimiTaskState): TaskStep[] {
+  const steps: TaskStep[] = TIMI_STEPS.map((def): TaskStep => {
+    switch (def.id) {
+      case "vessel":
+        return s.hasVessel ? { ...def, state: "done" } : { ...def, state: "todo" };
+
+      case "rate":
+        // 🔴 既定値に落ちている＝測っていない。`done` にせず `skipped` にする
+        //    （「撮影レートが分かった」と読ませない）。
+        return s.fpsSource === "default"
+          ? { ...def, state: "skipped", reasonKey: "timi.step.reason.fpsUnknown" }
+          : { ...def, state: "done", note: { key: `cine.fpsSource.${s.fpsSource}` } };
+
+      case "start":
+        if (!s.hasStart) return { ...def, state: "todo" };
+        return { ...def, state: "done", note: { key: "timi.step.note.manual" } };
+
+      case "end": {
+        if (!s.hasEnd) return { ...def, state: "todo" };
+        if (s.endBeforeStart) {
+          return { ...def, state: "invalid", reasonKey: "timi.step.reason.endBeforeStart" };
+        }
+        if (s.endAtLastFrame && !s.endAtLastFrameConfirmed) {
+          // 造影が途中で切れている可能性。人が確認するまで結果を出さない。
+          return { ...def, state: "invalid", reasonKey: "timi.step.reason.endAtLastFrame" };
+        }
+        return {
+          ...def,
+          state: "done",
+          note: { key: s.endSelection === "assisted" ? "timi.step.note.assisted" : "timi.step.note.manual" },
+        };
+      }
+
+      case "result":
+        if (!s.hasResult) return { ...def, state: "todo" };
+        return s.hasNormalised
+          ? { ...def, state: "done" }
+          : { ...def, state: "done", note: { key: "timi.step.note.rawOnly" } };
+
+      case "save":
+        if (!s.canSave) return { ...def, state: "invalid", reasonKey: "timi.step.reason.srNotImplemented" };
         return { ...def, state: s.saved ? "done" : "todo" };
 
       default:
