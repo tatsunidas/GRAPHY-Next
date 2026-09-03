@@ -1,0 +1,14 @@
+{
+  "id": "ffr-skeleton",
+  "name": "FFR (skeleton)",
+  "version": "0.1.0",
+  "engines": {
+    "graphy": ">=0.2.0",
+    "os": ["win32", "darwin", "linux"]
+  },
+  "description": "Drives the real H11/H12 path end to end with a placeholder computation, to find the holes before a real FFR module is written (fw/angio-design.md 11.5).",
+  "author": "automator",
+  "license": "MIT",
+  "contributes": ["viewer2d.menu"],
+  "ui": "ui.js"
+}
