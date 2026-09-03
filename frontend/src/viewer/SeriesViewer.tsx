@@ -14,6 +14,7 @@ import CineControls from "./CineControls";
 import { XaAnalysisDialog } from "./XaAnalysisDialog";
 import { Xa3dBifurcationDialog } from "./Xa3dBifurcationDialog";
 import { XaQlvDialog } from "./XaQlvDialog";
+import { XaTimiDialog } from "./XaTimiDialog";
 import { Xa3dQcaDialog } from "./Xa3dQcaDialog";
 import { useQcaRuns } from "./xaRecon3dStore";
 import { consumeXaTask, isFreshRequest, matchesRequest, onXaTaskRequest, pullXaTask } from "./xaTaskLaunch";
@@ -367,6 +368,7 @@ export function SeriesViewer({
   // 校正 / QCA ダイアログ（fw/angio-design.md §7.3 / §8）。
   const [xaDialogOpen, setXaDialogOpen] = useState(false);
   const [qlvDialogOpen, setQlvDialogOpen] = useState(false);
+  const [timiDialogOpen, setTimiDialogOpen] = useState(false);
   const [xaBifDialogOpen, setXaBifDialogOpen] = useState(false);
   const [xa3dDialogOpen, setXa3dDialogOpen] = useState(false);
   /** 表示状態（GSPS）の読み込み（§14.1）。 */
@@ -423,6 +425,7 @@ export function SeriesViewer({
       if (req.target === "xaAnalysis") setXaDialogOpen(true);
       else if (req.target === "qlv") setQlvDialogOpen(true);
       else if (req.target === "qca3d") setXa3dDialogOpen(true);
+      else if (req.target === "timi") setTimiDialogOpen(true);
     });
     // ビューアのウィンドウは依頼より後に立ち上がる。保留分を取りに行く。
     pullXaTask();
@@ -1198,6 +1201,16 @@ export function SeriesViewer({
                   >
                     {t("qlv.open")}
                   </button>
+                  {/* TIMI フレームカウント（A15）。径も輪郭も要らないので、
+                      2D QCA を済ませていなくても単独で開ける（§24）。 */}
+                  <button
+                    style={btn}
+                    data-testid="timi-open"
+                    onClick={() => setTimiDialogOpen(true)}
+                    title={t("timi.title")}
+                  >
+                    {t("xa.task.timi")}
+                  </button>
                   {/* 3D QCA（A6a）。2 方向で 2D QCA を済ませてから開く（§10.2）。 */}
                   <button
                     style={btn}
@@ -1433,6 +1446,23 @@ export function SeriesViewer({
           onClose={() => setQlvDialogOpen(false)}
           // ⚠️ XA（isFrameStack）では**表示中のフレームは `z`**（`tIdx` は Run 軸）。
           //    `setTIdx` を渡すと「フレームを合わせたつもりで別のランへ飛ぶ」。
+          onGoToFrame={setZ}
+        />
+      )}
+      {timiDialogOpen && displayImageIds.length > 0 && (
+        <XaTimiDialog
+          imageIds={displayImageIds}
+          seriesUid={seriesUid}
+          saveContext={{
+            studyUid,
+            sopInstanceUidAt: (i) => sopUidFromImageId(zStack[i] ?? "") ?? null,
+          }}
+          // 🔴 fps ではなく材料を丸ごと渡す。fps だけだと「既定値に落ちたのか」が
+          //    分からず、30fps 換算をしてよいか判断できない（§24.2）。
+          cine={xaCineSource}
+          currentFrame={z}
+          subtracted={!!dsaToken}
+          onClose={() => setTimiDialogOpen(false)}
           onGoToFrame={setZ}
         />
       )}
