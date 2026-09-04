@@ -132,6 +132,27 @@ class NmFrameExpanderTest {
     }
 
     @Test
+    void 負の間隔は向きとして扱う() {
+        // ★ NM の SpacingBetweenSlices は負でありうる（スライスが法線の逆方向に進む）。
+        //   GE Xeleris が実際にそう書く（MRTDosimetry の公開データ: -4.41964）。
+        //   符号を落とすとボリュームが z 方向に反転し、同じ FrameOfReference の CT と
+        //   数百 mm ずれて融合・位置合わせが成立しなくなる。
+        Attributes ds = nmTomo("1.1", 8, 4.42);
+        ds.setDouble(Tag.SpacingBetweenSlices, VR.DS, -4.42);
+        ds.setDouble(Tag.SliceThickness, VR.DS, 4.42);
+
+        assertEquals(-4.42, NmFrameExpander.sliceSpacing(ds), 1e-9);
+        // IOP=(1,0,0,0,1,0) → 法線は +z。間隔が負なので **z は減る**。
+        assertEquals(-30.0, NmFrameExpander.frameIpp(ds, 0)[2], 1e-9);
+        assertEquals(-30.0 - 3 * 4.42, NmFrameExpander.frameIpp(ds, 3)[2], 1e-9);
+
+        SeriesLayout layout = NmFrameExpander.layout(List.of(ds));
+        assertNotNull(layout);
+        assertNotNull(layout.zSpatial());
+        assertEquals(-30.0 - 7 * 4.42, layout.zSpatial().get(7).imagePositionPatient()[2], 1e-9);
+    }
+
+    @Test
     void 間隔が無ければ座標を作らない() {
         Attributes ds = nmTomo("1.1", 4, 4.42);
         ds.remove(Tag.SpacingBetweenSlices);

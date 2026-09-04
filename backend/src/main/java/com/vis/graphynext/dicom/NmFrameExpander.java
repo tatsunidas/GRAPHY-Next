@@ -131,10 +131,22 @@ public final class NmFrameExpander {
         return (det != null && !det.isEmpty()) ? det.get(0) : null;
     }
 
-    /** スライス間隔 [mm]。SpacingBetweenSlices → SliceThickness の順（どちらも無ければ 0）。 */
+    /**
+     * スライス間隔 [mm]。SpacingBetweenSlices → SliceThickness の順（どちらも無ければ 0）。
+     *
+     * <p>★ <b>符号を落とさない。</b> NM の {@code SpacingBetweenSlices} は負でありうる
+     * （スライスが法線の<b>逆</b>方向に進むことを表す。GE Xeleris が実際にそう書く）。
+     * ここで {@code s > 0} を条件にすると負値が捨てられ、正の {@code SliceThickness} に
+     * フォールバックして<b>ボリュームが z 方向に反転する</b>。MRTDosimetry の公開データ
+     * （{@code SpacingBetweenSlices = -4.41964}）では 128 枚が CT と正反対に積まれ、
+     * 同じ FrameOfReference なのに約 560mm ずれて融合・位置合わせが成立しなかった
+     * （2026-09-04 に実機で確認）。
+     *
+     * <p>戻り値は<b>符号つき</b>。スライス厚のように大きさだけが要る用途では絶対値を取ること。
+     */
     public static double sliceSpacing(Attributes ds) {
         double s = ds.getDouble(Tag.SpacingBetweenSlices, 0);
-        if (s > 0) {
+        if (s != 0) {
             return s;
         }
         return ds.getDouble(Tag.SliceThickness, 0);
@@ -177,7 +189,7 @@ public final class NmFrameExpander {
             return null;
         }
         double spacing = sliceSpacing(ds);
-        if (spacing <= 0) {
+        if (spacing == 0) {
             return null;
         }
         double[] n = normal(iop(ds));
@@ -270,7 +282,8 @@ public final class NmFrameExpander {
         if (!isNmTomo(ds)) {
             return null;
         }
-        double spacing = sliceSpacing(ds);
+        // ★ スライス厚は**大きさ**なので絶対値。向きは frameIpp が符号で持っている。
+        double spacing = Math.abs(sliceSpacing(ds));
         return SegFrameExpander.extractFrame(
                 ds, frame, frameIpp(ds, frame), iop(ds), spacing > 0 ? spacing : null);
     }
