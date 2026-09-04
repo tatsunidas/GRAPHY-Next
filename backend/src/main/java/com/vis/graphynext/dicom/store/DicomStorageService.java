@@ -165,12 +165,26 @@ public class DicomStorageService {
         // ⚠ 生の NUL 文字をソースに書くと grep/rg がこのファイルをバイナリ扱いして**検索から丸ごと漏れる**
         //   （実際に listSeries が見つからず調査が空振りした）。必ずエスケープで書くこと。
         java.util.List<String> modParam = filterModality ? modalities : java.util.List.of("\0");
-        return repo.findStudySummaries(s.patientId(), s.patientName(), s.studyDateFrom(), s.studyDateTo(),
-                        filterModality, modParam, s.accessionNumber()).stream()
+        var rows = repo.findStudySummaries(s.patientId(), s.patientName(), s.studyDateFrom(), s.studyDateTo(),
+                filterModality, modParam, s.accessionNumber());
+        // ★ 集計の max(modality) は 1 つしか返せないので、表示用の列挙は別引きする
+        //   （CT/PT/NM を持つスタディが "PT" だけに見えていた）。IN 句が空だと SQL が壊れるので守る。
+        java.util.List<String> uids = rows.stream()
+                .map(com.vis.graphynext.dicom.store.DicomInstanceRepository.StudySummary::getStudyInstanceUid)
+                .filter(java.util.Objects::nonNull).distinct().toList();
+        java.util.Map<String, java.util.List<String>> byStudy = uids.isEmpty() ? java.util.Map.of()
+                : repo.findStudyModalities(uids).stream().collect(java.util.stream.Collectors.groupingBy(
+                        com.vis.graphynext.dicom.store.DicomInstanceRepository.StudyModality::getStudyUid,
+                        java.util.stream.Collectors.mapping(
+                                com.vis.graphynext.dicom.store.DicomInstanceRepository.StudyModality::getModality,
+                                java.util.stream.Collectors.toList())));
+        return rows.stream()
                 .map(x -> new com.vis.graphynext.dicom.StudyDto(
                         x.getStudyInstanceUid(), x.getPatientId(), x.getPatientName(),
                         x.getStudyDate(), x.getStudyDescription(), x.getModality(),
-                        x.getNumberOfInstances()))
+                        x.getNumberOfInstances(),
+                        byStudy.getOrDefault(x.getStudyInstanceUid(), java.util.List.of())
+                                .stream().distinct().sorted().toList()))
                 .toList();
     }
 

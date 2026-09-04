@@ -25,6 +25,13 @@ export interface Study {
   studyDate: string | null;
   studyDescription: string | null;
   modality: string | null;
+  /**
+   * スタディが持つシリーズのモダリティを重複なしで列挙したもの。
+   *
+   * ★ `modality` は検索の絞り込みキーとして残してあり、集計上 1 つしか入らない
+   * （CT/PT/NM を持つスタディが "PT" だけに見えていた）。表示にはこちらを使う。
+   */
+  modalities?: string[] | null;
   numberOfInstances: number;
 }
 

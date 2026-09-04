@@ -57,6 +57,26 @@ public interface DicomInstanceRepository extends JpaRepository<DicomInstance, St
                                           @Param("modalities") List<String> modalities,
                                           @Param("accessionNumber") String accessionNumber);
 
+    /**
+     * スタディごとの<b>重複なしモダリティ</b>。
+     *
+     * <p>スタディ一覧の表示に使う。集計行の {@code max(i.modality)} は 1 つしか返せないため、
+     * CT/PT/NM を持つスタディが "PT" だけに見えてしまう（MRTDosimetry の実データで踏んだ）。
+     */
+    @Query("""
+            select distinct i.studyInstanceUid as studyUid, i.modality as modality
+            from DicomInstance i
+            where i.studyInstanceUid in :studyUids and i.modality is not null
+            """)
+    List<StudyModality> findStudyModalities(@Param("studyUids") List<String> studyUids);
+
+    /** findStudyModalities の射影。 */
+    interface StudyModality {
+        String getStudyUid();
+
+        String getModality();
+    }
+
     /** スタディ内のシリーズ単位の集計。 */
     @Query("""
             select i.seriesInstanceUid as seriesInstanceUid,

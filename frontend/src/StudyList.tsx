@@ -25,12 +25,16 @@ import { useTableSort, applySort, sortIndicator, type SortState, type Accessor }
 const PAGE_SIZE = 50;
 
 // スタディ表の列ソート用アクセサ（numberOfInstances は数値=自然な数値順）。
+/** スタディが持つモダリティの列挙（無ければ従来の単一値へフォールバック）。 */
+const studyModalities = (s: Study): string =>
+  s.modalities && s.modalities.length > 0 ? s.modalities.join(" / ") : (s.modality ?? "");
+
 const STUDY_SORT: Record<string, Accessor<Study>> = {
   patientId: (s) => s.patientId,
   patientName: (s) => s.patientName,
   studyDate: (s) => s.studyDate,
   studyDescription: (s) => s.studyDescription,
-  modality: (s) => s.modality,
+  modality: (s) => studyModalities(s),
   numberOfInstances: (s) => s.numberOfInstances,
 };
 
@@ -123,7 +127,7 @@ export function StudyList({
                   <Td>{s.patientName || "—"}</Td>
                   <Td>{formatDate(s.studyDate)}</Td>
                   <Td>{s.studyDescription || "—"}</Td>
-                  <Td>{s.modality || "—"}</Td>
+                  <Td>{studyModalities(s) || "—"}</Td>
                   <Td>{s.numberOfInstances}</Td>
                   <Td><ReportBadge count={reportCounts[s.studyInstanceUid]} /></Td>
                 </tr>

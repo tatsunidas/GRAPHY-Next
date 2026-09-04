@@ -330,7 +330,12 @@ public class StudyController {
                 a.getString(Tag.StudyDate),
                 a.getString(Tag.StudyDescription),
                 a.getString(Tag.ModalitiesInStudy),
-                a.getInt(Tag.NumberOfStudyRelatedInstances, 0));
+                a.getInt(Tag.NumberOfStudyRelatedInstances, 0),
+                // ★ ModalitiesInStudy は多値。getString は先頭しか返さないので、表示用は全値を使う。
+                a.getStrings(Tag.ModalitiesInStudy) == null ? java.util.List.of()
+                        : java.util.Arrays.stream(a.getStrings(Tag.ModalitiesInStudy))
+                                .filter(java.util.Objects::nonNull).map(String::trim)
+                                .filter(m -> !m.isEmpty()).distinct().sorted().toList());
     }
 
     private static SeriesDto seriesOf(Attributes a) {
