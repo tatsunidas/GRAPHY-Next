@@ -117,19 +117,13 @@ export const fetchInstanceTags = (studyUid: string, seriesUid: string, sopUid: s
 /** Encapsulated PDF Storage の SOP Class UID（ピクセル無し＝画像ビューア非対応）。 */
 export const ENCAPSULATED_PDF_SOP_CLASS = "1.2.840.10008.5.1.4.1.1.104.1";
 
-/** Video Photographic Image Storage の SOP Class UID（encapsulated 動画）。 */
-export const VIDEO_PHOTOGRAPHIC_SOP_CLASS = "1.2.840.10008.5.1.4.1.1.77.1.4.1";
-
-/** encapsulated 動画系 SOP Class（Endoscopic / Microscopic / Photographic）。動画再生の対象判定に使う。 */
-export const VIDEO_SOP_CLASSES: ReadonlySet<string> = new Set([
-  "1.2.840.10008.5.1.4.1.1.77.1.1.1", // Video Endoscopic Image Storage
-  "1.2.840.10008.5.1.4.1.1.77.1.2.1", // Video Microscopic Image Storage
-  VIDEO_PHOTOGRAPHIC_SOP_CLASS, // Video Photographic Image Storage
-]);
-
-/** SOP Class UID が encapsulated 動画かどうか。 */
-export const isVideoSopClass = (sopClassUid: string | null | undefined): boolean =>
-  !!sopClassUid && VIDEO_SOP_CLASSES.has(sopClassUid);
+// encapsulated 動画の SOP クラス判定は、他の SOP クラス表と同じ場所（viewer/seriesRenderable.ts）に
+// 置いてある。api.ts からも従来どおり参照できるよう再エクスポートする。
+export {
+  VIDEO_PHOTOGRAPHIC_SOP_CLASS,
+  VIDEO_SOP_CLASSES,
+  isVideoSopClass,
+} from "./viewer/seriesRenderable";
 
 /** Encapsulated Document（PDF 等）の中身を配信する URL（inline / download）。 */
 export const instanceDocumentUrl = (sopUid: string, download = false) =>
