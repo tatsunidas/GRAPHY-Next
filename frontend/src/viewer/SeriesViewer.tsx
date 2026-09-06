@@ -11,6 +11,7 @@ import { ToolIcon } from "../icons/ToolIcon";
 import { UI_ICON_FILES } from "../icons/toolIcons";
 import { buildSeriesLayout, buildLayoutFromDto, DEFAULT_AXES, type AxisSpec, type SeriesLayout } from "./seriesLayout";
 import CineControls from "./CineControls";
+import { VideoViewer } from "./VideoViewer";
 import { XaAnalysisDialog } from "./XaAnalysisDialog";
 import { Xa3dBifurcationDialog } from "./Xa3dBifurcationDialog";
 import { XaQlvDialog } from "./XaQlvDialog";
@@ -77,6 +78,7 @@ import { isInsideViewerOverlay } from "./viewerOverlay";
 import { installDebugApi, countStackSwap } from "./debugApi";
 import { matchesCombo, matchesShortcut } from "../shortcuts/registry";
 import { fetchSeriesLayout, type Instance } from "../api";
+import { classifySeriesDisplay, isVideoSopClass } from "./seriesRenderable";
 import { fetchSettings } from "../settings/settingsApi";
 import { useI18n } from "../i18n/i18n";
 import { LoadingSpinner } from "./LoadingSpinner";
@@ -87,13 +89,6 @@ import "./maskBridge";
 interface OverlayState extends Required<ViewerOverlays> {
   roi: boolean;
 }
-
-/** 動画(ビデオ)系 SOP Class。GridView を無効化する。 */
-const VIDEO_SOP_CLASSES = new Set([
-  "1.2.840.10008.5.1.4.1.1.77.1.1.1", // Video Endoscopic Image Storage
-  "1.2.840.10008.5.1.4.1.1.77.1.2.1", // Video Microscopic Image Storage
-  "1.2.840.10008.5.1.4.1.1.77.1.4.1", // Video Photographic Image Storage
-]);
 
 /** グリッドセルの高さ(px)。 */
 const CELL_HEIGHT = 200;
@@ -289,7 +284,15 @@ export function SeriesViewer({
   // マルチチャンネル / 動画(ビデオ UID) / スライス1枚 では GridView を無効化。
   // XA シネはスタック＝フレームなので Grid は「フレーム一覧」として意味が通る（無効化しない）。
   const hasVideo = useMemo(
-    () => instances.some((i) => i.sopClassUid && VIDEO_SOP_CLASSES.has(i.sopClassUid)),
+    () => instances.some((i) => isVideoSopClass(i.sopClassUid)),
+    [instances],
+  );
+  // どの表示器へ振り分けるか（image / video / videoUnavailable）。判定は
+  // StudyList と同じく**先頭インスタンスの SOP Class**で行う。`hasVideo` は「1 つでも動画が
+  // 混ざるか」で GridView 無効化などのガード用。役割が違うので別に持つ。
+  const display = classifySeriesDisplay(instances, mode);
+  const videoInstances = useMemo(
+    () => instances.filter((i) => isVideoSopClass(i.sopClassUid)),
     [instances],
   );
   const gridDisabled = layout.nC > 1 || hasVideo || nZ <= 1;
@@ -1066,6 +1069,50 @@ export function SeriesViewer({
       {on ? "⏸" : "▶"}
     </button>
   );
+
+  // ── encapsulated 動画シリーズ（Video Photographic / Endoscopic / Microscopic）──────────
+  //
+  // これらは MP4 等を丸ごと DICOM に包んだもので **画素データを持たない**。wadouri を通す
+  // Viewer2D（Cornerstone StackViewport）では "The pixel data is missing" になって開けないため、
+  // 専用の VideoViewer（`/rendered` の mp4 を VideoViewport / <video> で再生）へ振り分ける。
+  // スライス送り・ThickSlab・GridView・ソートは動画では意味を持たないので、この分岐では出さない
+  // （VideoViewer が再生・シーク・フレーム送り・速度・ループを自前で持っている）。
+  //
+  // 判定は StudyList と同じく **先頭インスタンスの SOP Class**。シリーズ内で SOP が混ざることは
+  // 通常なく、混在時に一部だけ再生器へ送ると画面が割れるため、代表インスタンスで決める。
+  //
+  // ⚠ 同じ「DICOM の動画」でも、XA/US のシネは通常の画素データが並んだマルチフレームで、
+  //   これは従来どおり Viewer2D のシネ再生で動く（ここには来ない）。
+  //
+  // 設計: fw/video-viewer-design.md §5.3。
+  if (display !== "image") {
+    return (
+      <div
+        ref={rootRef}
+        tabIndex={0}
+        data-testid="series-viewer-root"
+        style={fillHeight ? { ...root, flex: 1, display: "flex", flexDirection: "column", minHeight: 0 } : root}
+      >
+        {display === "video" ? (
+          // 複数インスタンスの動画シリーズは「1 SOP = 1 本」。一覧として順に並べる。
+          videoInstances.map((inst) => (
+            <div key={inst.sopInstanceUid} style={{ marginTop: 8 }}>
+              {videoInstances.length > 1 && (
+                <div style={{ fontSize: 13, color: "#445" }}>🎞 #{inst.instanceNumber ?? "?"}</div>
+              )}
+              <VideoViewer sopInstanceUid={inst.sopInstanceUid} />
+            </div>
+          ))
+        ) : (
+          // web(BFF) は `/rendered` が索引ローカルファイルを前提にしていて使えない
+          // （fw/video-viewer-design.md §8）。StudyList と同じ案内を出す。
+          <div data-testid="series-video-web-notice" style={{ marginTop: 10, fontSize: 13, color: "#8a6d3b" }}>
+            🎞 {t("video.webUnsupported")}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div

@@ -117,3 +117,51 @@ export function isNonImageSeries(series: {
 }): boolean {
   return !classifySeriesRenderability(series).renderable;
 }
+
+/** Video Photographic Image Storage の SOP Class UID（encapsulated 動画）。 */
+export const VIDEO_PHOTOGRAPHIC_SOP_CLASS = "1.2.840.10008.5.1.4.1.1.77.1.4.1";
+
+/**
+ * encapsulated 動画系 SOP Class（Endoscopic / Microscopic / Photographic）。
+ *
+ * <p>これらは MP4 等を丸ごと DICOM に包んだもので**画素データを持たない**。
+ * ⚠ **XA / US のシネは含まれない。** あれは通常の画素データが時間方向に並んだマルチフレームで、
+ * SOP クラスも別。「DICOM の動画」には構造の違う 2 種類がある、という区別がここの要点。
+ */
+export const VIDEO_SOP_CLASSES: ReadonlySet<string> = new Set([
+  "1.2.840.10008.5.1.4.1.1.77.1.1.1", // Video Endoscopic Image Storage
+  "1.2.840.10008.5.1.4.1.1.77.1.2.1", // Video Microscopic Image Storage
+  VIDEO_PHOTOGRAPHIC_SOP_CLASS, // Video Photographic Image Storage
+]);
+
+/** SOP Class UID が encapsulated 動画かどうか。 */
+export const isVideoSopClass = (sopClassUid: string | null | undefined): boolean =>
+  !!sopClassUid && VIDEO_SOP_CLASSES.has(sopClassUid);
+
+/**
+ * シリーズを 2D ビューアで「どう出すか」。`classifySeriesRenderability` が
+ * 「開けるか」を見るのに対し、こちらは**どの表示器に振り分けるか**を決める。
+ *
+ * - `image` … 従来どおり Viewer2D（Cornerstone StackViewport）
+ * - `video` … VideoViewer（`/rendered` の mp4 を VideoViewport / `<video>` で再生）
+ * - `videoUnavailable` … 動画だが、この動作モードでは再生できない
+ *
+ * <p>encapsulated 動画は画素を持たないため、wadouri を通す Viewer2D では
+ * `The pixel data is missing` になる。再生器へ振り分ける必要がある。
+ *
+ * <p>判定は StudyList と同じく**先頭インスタンスの SOP クラス**で行う。シリーズ内で SOP が
+ * 混ざることは通常なく、混在時に一部だけ再生器へ送ると画面が割れるため代表で決める。
+ *
+ * <p>web(BFF) モードでは `/rendered` が索引のローカルファイルを前提にしていて使えないため
+ * `videoUnavailable` を返す（`fw/video-viewer-design.md` §8）。
+ */
+export type SeriesDisplay = "image" | "video" | "videoUnavailable";
+
+export function classifySeriesDisplay(
+  instances: readonly { sopClassUid?: string | null }[],
+  mode: "standalone" | "web",
+): SeriesDisplay {
+  if (instances.length === 0) return "image";
+  if (!isVideoSopClass(instances[0].sopClassUid)) return "image";
+  return mode === "standalone" ? "video" : "videoUnavailable";
+}
