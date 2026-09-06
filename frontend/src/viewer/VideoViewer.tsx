@@ -89,6 +89,18 @@ interface RoiItem {
 interface VideoVP {
   setVideo(imageId: string, frame?: number): Promise<unknown>;
   setProperties(p: { loop?: boolean; playbackRate?: number }): void;
+  /**
+   * 🔴 **内部フィールド。公開 API では触れないので直接読み書きする。**
+   *
+   * `setProperties({ loop })` が更新するのは `videoElement.loop`（HTML 要素の
+   * ネイティブループ）**だけ**で、**フレーム範囲の折り返し判定に使う `loop` は
+   * コンストラクタの `true` のまま一度も更新されない**（@cornerstonejs/core の
+   * `VideoViewport`）。しかも `getProperties()` は `videoElement.loop` を返すため、
+   * **設定できたように見えて効いていない**。2 つの loop があることに気付けない。
+   */
+  loop?: boolean;
+  /** 🔴 内部フィールド。再生状態を変えずにプロパティを当てるのに要る（{@link applyPlaybackProps}）。 */
+  isPlaying?: boolean;
   play(): Promise<void>;
   pause(): void;
   togglePlayPause(): boolean;
@@ -105,6 +117,33 @@ type Phase = "loading" | "viewport" | "fallback" | "transcode" | "error";
 let engineSeq = 0;
 
 const SPEEDS = [0.25, 0.5, 1, 1.5, 2, 4];
+
+/**
+ * ループ／再生速度を viewport に当てる。**再生状態は変えない。**
+ *
+ * <h3>🚨 なぜ専用の関数が要るのか（2026-09-06 に利用者が発見・v0.2.7）</h3>
+ * Cornerstone の `setProperties({ playbackRate })` は内部で `setPlaybackRate()` を呼び、
+ * **その末尾が `this.play()` である**。つまり「速度を設定する」だけのつもりで**再生が始まる**。
+ *
+ * これを知らずに `setProperties(...)` → `togglePlayPause()` と続けると、
+ * **直前に勝手に始まった再生を toggle が止める**ため、
+ * <b>再生ボタンを押しても再生されず、ボタンも一時停止に切り替わらない</b>。
+ * 実際にそのまま v0.2.7 として公開してしまった。
+ *
+ * <h3>🔴 loop は 2 か所へ入れる</h3>
+ * `setProperties({ loop })` は `videoElement.loop` しか変えない。フレーム範囲の折り返し判定は
+ * **内部フィールド `loop`** を見ており、そちらは更新されない。両方入れないと効かない。
+ */
+function applyPlaybackProps(vp: VideoVP, loop: boolean, rate: number): void {
+  // 🔑 **当てる前に**再生中かどうかを控える（setProperties がこの後それを変えてしまうため）。
+  const wasPlaying = vp.isPlaying === true;
+  vp.setProperties({ loop, playbackRate: rate });
+  vp.loop = loop;
+  // setProperties が勝手に始めた再生を戻す。**元から再生中なら触らない。**
+  if (!wasPlaying) {
+    vp.pause();
+  }
+}
 
 function fmtTime(sec: number): string {
   if (!Number.isFinite(sec) || sec < 0) {
@@ -353,12 +392,15 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
   useEffect(() => () => analysisAbortRef.current?.abort(), []);
 
   // ループ／再生速度を viewport に反映。
+  //
+  // 🚨 **ここで再生を始めてはいけない。** 以前は `setProperties(...)` に続けて
+  //    `setPlaybackRate(rate)` を呼んでいたが、**どちらも内部で `play()` を呼ぶ**ので、
+  //    ループのチェックを触っただけで動画が動き出していた（v0.2.7 で利用者が遭遇）。
   useEffect(() => {
     const vp = vpRef.current;
     if (phase === "viewport" && vp) {
       try {
-        vp.setProperties({ loop, playbackRate: rate });
-        vp.setPlaybackRate(rate);
+        applyPlaybackProps(vp, loop, rate);
       } catch {
         /* 未初期化はスキップ */
       }
@@ -436,7 +478,9 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
     }
     try {
       // シーク中はループを外してある（{@link seekToFrame} 参照）ので、再生開始時に設定を戻す。
-      vp.setProperties({ loop, playbackRate: rate });
+      // 🔴 **`applyPlaybackProps` を通すこと。** 素の `setProperties` は内部で `play()` を呼ぶため、
+      //    直後の `togglePlayPause()` がそれを止めてしまい「押しても再生されない」になる。
+      applyPlaybackProps(vp, loop, rate);
       setPlaying(vp.togglePlayPause());
     } catch {
       /* 無視 */
@@ -774,7 +818,11 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
       // ⚠ **ループ有効のままだと最終フレームへシークできない**（frame 1 に巻き戻る。2026-07-30 実機検証）。
       // VideoViewport は再生位置がフレーム範囲を超えたと判断すると loop 時に先頭へ戻すため、シーク中は
       // ループを外す。再生を始めるときに {@link togglePlay} が設定を戻す（ループ再生の挙動は変えない）。
+      // 🔴 **2 か所に入れる。** `setProperties` は `videoElement.loop` しか変えず、
+      //    折り返し判定が見る内部フィールドは更新されない（そのため、この回避策は
+      //    2026-07-30 に入れて以来ずっと効いていなかった）。
       vp.setProperties({ loop: false });
+      vp.loop = false;
       vp.setFrameNumber(clamped);
       setFrame(clamped);
     } catch {
@@ -961,7 +1009,16 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
 
           {/* シークバー（フレーム精度。1..totalFrames）。 */}
           <div style={{ ...controlRowStyle, gap: 10 }}>
-            <button type="button" style={playBtn} onClick={togglePlay} title={t(playing ? "video.pause" : "video.play")}>
+            <button
+              type="button"
+              style={playBtn}
+              onClick={togglePlay}
+              title={t(playing ? "video.pause" : "video.play")}
+              // 🔴 **testid が無い操作対象は自動検査されない。** 実際これが無かったせいで
+              //    再生ボタンの不具合が automator を素通りした（v0.2.7）。
+              data-testid="video-play"
+              data-playing={playing ? "1" : "0"}
+            >
               {playing ? "⏸" : "▶"}
             </button>
             <input
@@ -984,7 +1041,12 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
 
           <div style={controlRowStyle}>
             <label style={ctrlLabel}>
-              <input type="checkbox" checked={loop} onChange={(e) => setLoop(e.target.checked)} />
+              <input
+                type="checkbox"
+                checked={loop}
+                onChange={(e) => setLoop(e.target.checked)}
+                data-testid="video-loop"
+              />
               {t("video.loop")}
             </label>
 

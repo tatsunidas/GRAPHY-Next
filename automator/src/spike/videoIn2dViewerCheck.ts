@@ -234,6 +234,65 @@ async function main(): Promise<void> {
       { before: s0.frameText, after: s1.frameText },
     );
 
+    // ── 🚨 再生コントロールを「押して」確かめる ────────────────
+    //    v0.2.7 はここを見ていなかったので、**再生ボタンが動かないまま公開した**。
+    //    描画が出ていることは、操作が効くことの証拠にならない。
+    const playBtn = viewer.getByTestId("video-play");
+    check(await playBtn.isVisible().catch(() => false), "[5] 再生ボタンがある");
+    const playingAttr = async (): Promise<string> =>
+      (await playBtn.getAttribute("data-playing")) ?? "?";
+    const seekNow = async (): Promise<number> => (await playerState(viewer)).seekValue;
+
+    await viewer.getByTestId("video-seek").evaluate((el: HTMLInputElement) => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      setter.call(el, "1");
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await viewer.waitForTimeout(500);
+    const p0 = await seekNow();
+    check((await playingAttr()) === "0", "[5] 押す前は停止状態", { playing: await playingAttr() });
+
+    await playBtn.click();
+    await viewer.waitForTimeout(1_200);
+    const p1 = await seekNow();
+    check(
+      (await playingAttr()) === "1",
+      "[5] ★★★押すと「再生中」に切り替わる（v0.2.7 はここが切り替わらなかった）",
+      { playing: await playingAttr() },
+    );
+    check(p1 > p0, "[5] ★★★実際にフレームが進む（v0.2.7 は 1 のまま動かなかった）", { before: p0, after: p1 });
+
+    await playBtn.click();
+    await viewer.waitForTimeout(300);
+    const p2 = await seekNow();
+    await viewer.waitForTimeout(900);
+    const p3 = await seekNow();
+    check((await playingAttr()) === "0", "[5] ★もう一度押すと停止に戻る");
+    check(p3 === p2, "[5] ★停止したらフレームが進まない", { p2, p3 });
+
+    // ── ループの向き ─────────────────────────────────────────
+    //    🔴 Cornerstone には loop が 2 つある（videoElement.loop と内部フィールド）。
+    //    setProperties は前者しか更新しないので、**チェックの意味が逆になっていた**。
+    const loopBox = viewer.getByTestId("video-loop");
+    check(await loopBox.isChecked(), "[6] ループは既定で有効");
+    await loopBox.uncheck();
+    await viewer.waitForTimeout(300);
+    const total = (await playerState(viewer)).seekMax;
+    await viewer.getByTestId("video-seek").evaluate((el: HTMLInputElement, v: number) => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      setter.call(el, String(v));
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    }, Math.max(1, total - 3));
+    await viewer.waitForTimeout(400);
+    await playBtn.click();
+    await viewer.waitForTimeout(2_500);
+    const endNoLoop = await seekNow();
+    check(
+      endNoLoop >= total - 1,
+      "[6] ★★ループ無効なら最終フレームで止まる（v0.2.7 は逆にループしていた）",
+      { total, endNoLoop },
+    );
+
     await viewer.screenshot({ path: path.join(OUT_DIR, "1-video-in-2d-viewer.png") }).catch(() => {});
     await viewer.close();
     await mainPage.waitForTimeout(500);
