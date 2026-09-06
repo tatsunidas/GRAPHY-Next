@@ -280,9 +280,15 @@ DICOM PS3.15 Basic Application Confidentiality Profile の匿名化。GRAPHY
   - テスト: `VideoConverterTest`（ffmpeg 検出・非対応時 UnsupportedOperationException）、`NonDicomImportServiceTest`
     （ffmpeg 不在パス注入で mp4/avi が skip・storage 未使用＝NPE 無し）。**実 H.264 MP4 の取込成功は実機確認推奨**
     （この環境に ffmpeg/サンプル動画が無く E2E 未検証）。
-  - **表示**: Video Photographic はピクセル無し扱いで wadouri 画像ビューア非対応。`StudyList.tsx` で
-    SOPClass=Video Photographic（`1.2.840.10008.5.1.4.1.1.77.1.4.1`）を検出し、画像ビューアではなく案内表示。
-    再生（VideoViewport + `/rendered` mp4 供給）は 2D Viewer 側の将来対応。**設計 → `fw/video-viewer-design.md`**。
+  - **表示**: Video Photographic はピクセル無し扱いで wadouri 画像ビューア非対応。
+    **再生は実装済み**（VideoViewport + `/rendered` mp4 供給。`viewer/VideoViewer.tsx`）。
+    振り分けは `viewer/seriesRenderable.ts` の `classifySeriesDisplay`（先頭インスタンスの SOP クラスで判定）で、
+    **`StudyList.tsx`（メイン画面のシリーズパネル）と `SeriesViewer.tsx`（2D ビューア）の両方**が再生器を出す。
+    web(BFF) モードは `/rendered` が索引のローカルファイルを前提にしていて使えないため案内表示のみ。
+    **設計 → `fw/video-viewer-design.md`**。
+    ⚠ ここで言う「動画」は **encapsulated 動画**（MP4 等を丸ごと包んだもの・画素を持たない）だけ。
+    XA/US のシネは通常の画素データが並んだマルチフレームで SOP クラスも別なので、
+    従来どおり Viewer2D のシネ再生で動く。**同じ「DICOM の動画」に構造の違う 2 種類がある。**
 
 ## 検索パネル（StudyList の絞り込み）— 「全期間」を足した（2026-08-25）
 

@@ -311,7 +311,13 @@ frontend: VideoViewport（ViewportType.VIDEO）
   `api.ts`（`videoRenderedUrl`/`fetchVideoMetadata`/`VideoMetadata`/`isVideoSopClass`）。
   **P3a 実装済**: `viewer/videoMetadataProvider.ts`（VideoViewport 用メタデータプロバイダ）。
 - frontend 既存（P1 実装済）: `StudyList.tsx`（案内表示→再生導線）、i18n `video.*`。
-  ※ `SeriesViewer.tsx` の `VIDEO_SOP_CLASSES` は GridView 無効化用に現状維持（動画は `StudyList` 側で分岐）。
+- **§5.3 の `SeriesViewer.tsx` 振り分けを実装（2026-09-06）**: 2D ビューアで動画シリーズを開いても
+  何も表示されなかったのを解消。先頭インスタンスの SOP クラスで `VideoViewer` へ振り分ける。
+  判定は `viewer/seriesRenderable.ts` の `classifySeriesDisplay`（純関数・単体テスト付き）に切り出し、
+  SOP クラスの表（`VIDEO_SOP_CLASSES` / `isVideoSopClass`）も `api.ts` からそこへ移した（api.ts は再エクスポート）。
+  `SeriesViewer.tsx` の `VIDEO_SOP_CLASSES` は GridView 無効化にも引き続き使う（役割が違うので判定は別に持つ）。
+  ⚠ `StudyList.tsx` 側の分岐は**残してある**。メイン画面のパネルで直接再生する導線をそのまま保つため。
+  同じ振り分け関数を両方が使うので出所は 1 つだが、描画は 2 か所にある。統合するなら別途。
 - doc: `fw/mainscreen-tools.md` 234 行から本ドキュメントへリンク。`fw/development-phases.md` の Video 項更新。
 
 ## 12. 動画 ROI 解析（P3c）
