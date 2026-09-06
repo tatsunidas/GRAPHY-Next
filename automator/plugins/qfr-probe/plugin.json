@@ -1,0 +1,15 @@
+{
+  "id": "qfr-probe",
+  "name": "QFR probe (host API facts)",
+  "version": "0.1.0",
+  "engines": {
+    "graphy": ">=0.2.0",
+    "os": ["win32", "darwin", "linux"]
+  },
+  "description": "Measures the host API facts that QFR/cQFR depends on and that unit tests cannot reach: does getPixelData({sliceIndex}) walk XA frames, does getXaCine return during DSA, and how long a full frame scan takes.",
+  "author": "automator",
+  "license": "MIT",
+  "contributes": ["viewer2d.menu"],
+  "permissions": ["read-pixels"],
+  "ui": "ui.js"
+}

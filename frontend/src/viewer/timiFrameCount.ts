@@ -30,7 +30,18 @@
  * TIMI flow grade（0〜3 の定性評価）とは別の指標。混同されやすいので UI にも明示する。
  * 正常/異常の判定もしない（正常値データベースを持たないため。QLV と同じ構え）。
  */
-import { frameStartTimesMs, resolveXaFps, type XaCineSource, type XaFpsSource } from "./xaCine";
+// 🔑 **`xaCine` ではなく `xaCineTiming`（純関数）から取る。**
+//    こちらは Cornerstone に依存しないので、プラグインへ写せる（QFR が同じ規則で fps を決める）。
+import {
+  frameStartTimesMs,
+  isUniformFrameTime,
+  resolveXaFps,
+  type XaCineSource,
+  type XaFpsSource,
+} from "./xaCineTiming";
+
+// 定義の家は `xaCineTiming` に移したが、ここから import している呼び出し元を壊さない。
+export { isUniformFrameTime };
 
 /** TFC の定義が前提とする撮影レート [fps]。 */
 export const TIMI_REFERENCE_FPS = 30;
@@ -101,20 +112,6 @@ export interface TimiResult {
   /** 方式の識別子（検証側が期待値を切り替えられるように）。 */
   method: string;
   warnings: TimiWarning[];
-}
-
-/** フレーム間隔が一様か（可変レート収集の検出）。 */
-export function isUniformFrameTime(cine: XaCineSource): boolean {
-  const times = frameStartTimesMs(cine);
-  if (times.length < 3) return true;
-  const first = times[1] - times[0];
-  if (!(first > 0)) return false;
-  for (let i = 2; i < times.length; i++) {
-    const step = times[i] - times[i - 1];
-    // 1/1000 の相対差までは同じ間隔とみなす（浮動小数の丸め）。
-    if (Math.abs(step - first) > first * 1e-3) return false;
-  }
-  return true;
 }
 
 /**

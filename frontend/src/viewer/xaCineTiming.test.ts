@@ -1,18 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
-
-// Cornerstone のローダはここでは使わない（純関数だけを検証する）。
-vi.mock("@cornerstonejs/dicom-image-loader", () => ({
-  internal: { xhrRequest: vi.fn() },
-  wadouri: { dataSetCacheManager: { isLoaded: vi.fn(), load: vi.fn(), get: vi.fn() } },
-}));
-
-const {
+import { describe, expect, it } from "vitest";
+// 🔑 **モックが要らなくなった。** 2026-09-06 に時間軸を `xaCineTiming.ts` へ切り出すまでは、
+//    Cornerstone のローダを import する `xaCine.ts` から取っていたので `vi.mock` が要った。
+//    モックが不要になったこと自体が「純関数として切れている」ことの証拠になる。
+import {
   DEFAULT_XA_FPS,
   cineDurationMs,
   frameAtElapsed,
   frameStartTimesMs,
+  isUniformFrameTime,
   resolveXaFps,
-} = await import("./xaCine");
+} from "./xaCineTiming";
 
 /**
  * XA シネの時間軸（fw/angio-design.md §5.4）。
@@ -122,5 +119,19 @@ describe("frameAtElapsed — 経過時刻 → フレーム", () => {
   it("描画が遅れても時間軸を保つ（フレームを飛ばす）", () => {
     // 250ms 分の遅延が起きた ＝ フレーム 0 の次は 2（1 を飛ばす）。伸ばさない。
     expect(frameAtElapsed(times, total, 250, true)).toBe(2);
+  });
+});
+
+describe("isUniformFrameTime — 可変レート収集の検出", () => {
+  it("等間隔なら true", () => {
+    expect(isUniformFrameTime({ numberOfFrames: 10, frameTimeMs: 33.3333 })).toBe(true);
+  });
+
+  it("FrameTimeVector の間隔がばらつけば false", () => {
+    expect(isUniformFrameTime({ numberOfFrames: 4, frameTimeVectorMs: [0, 20, 60, 20] })).toBe(false);
+  });
+
+  it("2 フレーム以下は判定しようがないので true", () => {
+    expect(isUniformFrameTime({ numberOfFrames: 2, frameTimeMs: 40 })).toBe(true);
   });
 });

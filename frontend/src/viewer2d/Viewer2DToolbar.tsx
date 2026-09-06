@@ -20,6 +20,7 @@ import {
   type ViewerTilePixelData,
   type ViewerTileSpatialCalibration,
   type ViewerTileXaState,
+  type ViewerTileXaCine,
   type ViewerTileRoi,
   type ViewerTileViewState,
 } from "../viewer/viewerCommands";
@@ -74,6 +75,7 @@ export interface ViewerActions {
   getSpatialCalibration(tileId?: string): ViewerTileSpatialCalibration | null;
   /** 対象タイルの XA 表示状態（DSA・フレーム軸）（H36）。XA / XRF でなければ null。 */
   getXaState(tileId?: string): ViewerTileXaState | null;
+  getXaCine(tileId?: string): ViewerTileXaCine | null;
   /**
    * 対象タイルが表示しているスタックの imageId を z 昇順で返す（H31 の幾何委譲先）。
    * タイルが無ければ null。**空配列と null を混ぜない**（「無い」と「0 枚」は別）。

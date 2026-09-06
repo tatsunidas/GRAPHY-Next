@@ -29,6 +29,7 @@ import type {
   ViewerTilePixelData,
   ViewerTileSpatialCalibration,
   ViewerTileXaState,
+  ViewerTileXaCine,
   ViewerTileRoi,
   ViewerTileViewState,
   ViewerSrMeasurementGroup,
@@ -377,6 +378,21 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * これが無いまま差分画像を測ると、**例外も警告も出ずに違う径が出る**。
    */
   getXaState: (tileId?: string) => ViewerTileXaState | null;
+  /**
+   * 対象タイルの **XA シネの時間軸**（H40）。XA / XRF でなければ null。
+   *
+   * <p>🔴 **fps だけでは足りない。** 「タグから決まったのか、どのタグも無くて既定値
+   * （15fps）に落ちたのか」が分からないと、**フレーム番号を秒に換算してよいかを判断できない**。
+   * 本体は既定値に落ちたランで TIMI フレームカウントの `TFC30` を出さないと決めている
+   * （`fw/angio-design.md` §24.2）。プラグイン側だけが黙って既定値で埋めると、
+   * **同じ製品の中で規則が食い違う**——だから生タグ・決定結果・各フレームの開始時刻を全部渡す。
+   *
+   * <p>🔑 経過時間は `frameStartTimesMs` の**差**で取ること。
+   * **フレーム差 × 1/fps で代用しない**（`uniform` が false の可変レート収集で合わなくなる）。
+   *
+   * <p>⚠️ dataSet が**プリウォーム前**なら null。シネを一度再生すれば温まる。
+   */
+  getXaCine: (tileId?: string) => ViewerTileXaCine | null;
   /**
    * **再構成済み 3D 血管モデルの一覧**（H11）。新しい順。まだ 1 件も無ければ空配列。
    *

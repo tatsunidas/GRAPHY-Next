@@ -107,6 +107,7 @@ export function Viewer2DMenuBar({
     // （数値は取れるのに「近似か実測か」「差分中か」が分からない状態を作らない）。
     getSpatialCalibration: (tileId) => actions.getSpatialCalibration(tileId),
     getXaState: (tileId) => actions.getXaState(tileId),
+    getXaCine: (tileId) => actions.getXaCine(tileId),
     // H11 / H12: 3D 血管モデルの受け渡しと、解析値の書き戻し（A7）。
     // タイルに紐付かない（再構成はセッション単位の登録簿）ので actions を経由しない。
     // 🔴 出自は host が入れる。**本体は FFR を計算しない**（fw/angio-design.md §11.1）。

@@ -18,6 +18,7 @@ import type {
   QcaSrRequest,
   QlvSrRequest,
 } from "../api";
+import type { XaFpsSource } from "./xaCineTiming";
 
 /**
  * タイル 1 枚が「いま何を表示しているか」（プラグイン host API の H1・fw/plugin-architecture.md §7）。
@@ -483,6 +484,47 @@ export interface ViewerTileSpatialCalibration extends ViewerSpatialCalibration {
 }
 
 /** 画面視点での H36。 */
+/**
+ * XA シネの**時間軸**（H40）。XA / XRF でなければ null。
+ *
+ * <h3>🔴 fps だけを返さない</h3>
+ * 「タグから決まったのか、どのタグも無くて既定値に落ちたのか」が分からないと、
+ * **フレーム番号を秒に換算してよいかを判断できない**。本体は既定値に落ちたランで
+ * TIMI フレームカウントの `TFC30` を出さないと決めている（`fw/angio-design.md` §24.2）。
+ * プラグイン（QFR の造影流速）にも同じ判断をさせるため、
+ * **生タグ・決定結果・各フレームの開始時刻の 3 つ**を渡す。
+ *
+ * <p>🔑 決定そのものは `viewer/xaCineTiming.ts` の `resolveXaFps()` に委譲する。
+ * **規則を 2 か所に持たない** —— 画面（シネ再生・TIMI）と解析（QFR）で fps が違うと、
+ * 目視では気づけない形で時間軸が食い違う。
+ */
+export interface ViewerXaCine {
+  imageId: string;
+  /* --- 生の材料（受け取った側が検算できるように） --- */
+  numberOfFrames: number;
+  /** FrameTime (0018,1063) [ms]。 */
+  frameTimeMs: number | null;
+  /** FrameTimeVector (0018,1065) [ms]。可変レート収集。 */
+  frameTimeVectorMs: number[] | null;
+  /** CineRate (0018,0040) [fps]。 */
+  cineRate: number | null;
+  /** RecommendedDisplayFrameRate (0008,2144) [fps]。 */
+  recommendedDisplayFrameRate: number | null;
+  /* --- 本体の決定結果 --- */
+  fps: number;
+  /** 🔴 `"default"` は**測定値ではない**（どのタグからも決まらなかった）。 */
+  fpsSource: XaFpsSource;
+  /** 各フレームの開始時刻 [ms]（0 起点・長さ = `numberOfFrames`）。 */
+  frameStartTimesMs: number[];
+  /** フレーム間隔が一様か。false なら「フレーム差 × 1/fps」は実時間と合わない。 */
+  uniform: boolean;
+}
+
+/** 画面視点での H40。 */
+export interface ViewerTileXaCine extends ViewerXaCine {
+  tileId: string;
+}
+
 export interface ViewerTileXaState extends ViewerXaState {
   tileId: string;
 }
@@ -518,6 +560,12 @@ export interface ViewerCommands {
   getSpatialCalibration(): ViewerSpatialCalibration | null;
   /** XA の表示状態（DSA・フレーム軸）（H36）。XA / XRF でなければ null。 */
   getXaState(): ViewerXaState | null;
+  /**
+   * XA シネの時間軸（H40）。XA / XRF でなければ null。
+   * 読み出しは `viewer/xaCine.ts` の `readXaCineSource()` と
+   * `viewer/xaCineTiming.ts` の `resolveXaFps()` に委譲する（**規則の単一入口**）。
+   */
+  getXaCine(): ViewerXaCine | null;
   /**
    * スライス 1 枚の校正済み画素。プラグイン host API の H3。取得不能・範囲外なら null。
    * 読み出しは `pixelCalibration.readModalitySlice()` に委譲する（校正の単一入口）。

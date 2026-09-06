@@ -7,16 +7,13 @@
  * 特に「30fps でない撮影で換算せずに数字を出さない」「撮影レート不明なら数字を出さない」の
  * 2 つは、壊れても画面は普通に動いてしまう（数字が少し違うだけ）ので、ここでしか守れない。
  */
-import { describe, expect, it, vi } from "vitest";
-
-// ⚠️ `xaCine` 経由で Cornerstone のローダが読み込まれる。ここでは純関数だけを検証するので
-//    偽物に差し替える（`xaCine.test.ts` と同じ作法）。
-vi.mock("@cornerstonejs/dicom-image-loader", () => ({
-  internal: { xhrRequest: vi.fn() },
-  wadouri: { dataSetCacheManager: { isLoaded: vi.fn(), load: vi.fn(), get: vi.fn() } },
-}));
-
-const {
+import { describe, expect, it } from "vitest";
+// 🔑 **モックが要らなくなった**（2026-09-06）。時間軸を `xaCineTiming.ts`（純関数）へ
+//    切り出すまでは `xaCine` 経由で Cornerstone のローダが読み込まれていたので `vi.mock` が要った。
+//    モックが不要になったこと自体が「純関数として切れている」ことの証拠になる。
+//    🔴 **ここを戻さないこと。** このファイルは angio-quant プラグインへ写される（QFR の
+//    フレームカウント）が、あちらに `@cornerstonejs/dicom-image-loader` は入っていない。
+import {
   arrivalCandidate,
   computeTimiFrameCount,
   ctfcForVessel,
@@ -24,9 +21,9 @@ const {
   isUniformFrameTime,
   meanInRect,
   TIMI_REFERENCE_FPS,
-} = await import("./timiFrameCount");
-type TimiVessel = import("./timiFrameCount").TimiVessel;
-type XaCineSource = import("./xaCine").XaCineSource;
+  type TimiVessel,
+} from "./timiFrameCount";
+import type { XaCineSource } from "./xaCineTiming";
 
 /** FrameTime だけを持つ等間隔の収集。 */
 function cineAt(fps: number, frames = 100): XaCineSource {

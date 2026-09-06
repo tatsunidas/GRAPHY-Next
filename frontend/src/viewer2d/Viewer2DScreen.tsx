@@ -1015,6 +1015,14 @@ function TileGrid({
         const x = queryViewerCommand(id, (cmd) => cmd.getXaState());
         return x ? { tileId: id, ...x } : null;
       },
+      // H40: シネの時間軸。**QFR の造影流速はこれが無いと出せない**（フレーム番号を秒に
+      // 直せないので、固定流速の fQFR だけが残る＝文献が「臨床的に不十分」とした側）。
+      getXaCine: (tileId) => {
+        const id = tileId ?? resolveTargets()[0];
+        if (!id) return null;
+        const c = queryViewerCommand(id, (cmd) => cmd.getXaCine());
+        return c ? { tileId: id, ...c } : null;
+      },
       // H5: ROI の読み出し。tileId 省略時は**対象タイル全部**を読む（H1〜H4 は「先頭タイル」だが、
       // 時系列の計測ではベースラインと追跡を並べて開くのが普通なので、まとめて読める方が素直）。
       getRois: (tileId) => {

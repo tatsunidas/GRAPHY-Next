@@ -68,6 +68,7 @@ import {
   type ViewerTargetInfo,
   type ViewerViewState,
   type ViewerXaState,
+  type ViewerXaCine,
 } from "./viewerCommands";
 import { buildPluginMeta, computeCalipers, hasShapeCalipers, pickPluginMeta, readRoiStats, roiPointsPx } from "./roiRead";
 import { CONTOUR_TOOL_NAMES } from "./roiContourTools";
@@ -105,6 +106,9 @@ import { LoadingSpinner } from "./LoadingSpinner";
 import { calibrationForImageId } from "./xaCalibrationProvider";
 import { toViewerSpatialCalibration } from "./xaCalibration";
 import { dsaNativeImageId, dsaStateForImageId, readXaDsaTags } from "./dsaLoader";
+// H40: シネの時間軸。**決定そのものは既存の単一入口に委譲する**（規則を 2 か所に持たない）。
+import { readXaCineSource } from "./xaCine";
+import { frameStartTimesMs, isUniformFrameTime, resolveXaFps } from "./xaCineTiming";
 
 type ViewSnapshot = { transform: ViewTransform; voi: { lower: number; upper: number } | null };
 
@@ -1599,6 +1603,43 @@ export function Viewer2D({
     };
   };
 
+  /**
+   * H40: XA シネの時間軸（fps とその出自・各フレームの開始時刻）。
+   *
+   * <p>🔴 **DSA 表示中も返す。** 合成 imageId（`graphy-dsa:`）は元の URL を持たないので
+   * そのままではタグが 1 つも読めない。`dsaNativeImageId()` でネイティブフレームへ委譲する
+   * ——ここを忘れると「差分表示にした瞬間に fps が取れなくなる」という、
+   * 画面では何も起きないのに解析だけが静かに落ちる壊れ方をする。
+   * 造影のフレームカウントは背景が消えている DSA のほうが素直なので、**そこが取れないと困る**。
+   *
+   * <p>⚠️ dataSet が**プリウォーム前**なら null（`readXaCineSource` がキャッシュを見る）。
+   * シネ再生を一度開けば温まる。ここで待たないのは、プラグインの問い合わせが
+   * ネットワーク取得を誘発すると「押した瞬間に固まる」ため。
+   */
+  const getXaCine = (): ViewerXaCine | null => {
+    const imageId = imageIdsRef.current[indexRef.current];
+    if (!imageId) return null;
+    const modality = (infoRef.current?.modality ?? "").toUpperCase();
+    const dsa = dsaStateForImageId(imageId);
+    if (!dsa && modality !== "XA" && modality !== "XRF") return null;
+    const native = dsaNativeImageId(imageId) ?? imageId;
+    const src = readXaCineSource(native);
+    if (!src) return null;
+    const { fps, source } = resolveXaFps(src);
+    return {
+      imageId,
+      numberOfFrames: src.numberOfFrames,
+      frameTimeMs: src.frameTimeMs ?? null,
+      frameTimeVectorMs: src.frameTimeVectorMs ?? null,
+      cineRate: src.cineRate ?? null,
+      recommendedDisplayFrameRate: src.recommendedDisplayFrameRate ?? null,
+      fps,
+      fpsSource: source,
+      frameStartTimesMs: frameStartTimesMs(src),
+      uniform: isUniformFrameTime(src),
+    };
+  };
+
   // colormap の内部登録名 → 公開する LUT 名。`graphy-lut-` は本体の実装詳細なので剥がす
   // （シリーズ Sync で他タイルから伝播した colormap も同じ規則の名前で来る）。
   const lutNameForPlugins = (colormapName: string | null): string | null =>
@@ -2237,7 +2278,7 @@ export function Viewer2D({
   const commandsRef = useRef<ViewerCommands>({
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
     getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
-    getSpatialCalibration, getXaState,
+    getSpatialCalibration, getXaState, getXaCine,
     getStackImageIds: () => [...imageIdsRef.current],
     validateDerivedSeries, saveDerivedSeries, saveStructuredReport, saveAngioReport, savePresentationState,
     publishAnalysisResult: publishPluginAnalysis,
@@ -2248,7 +2289,7 @@ export function Viewer2D({
   commandsRef.current = {
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
     getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
-    getSpatialCalibration, getXaState,
+    getSpatialCalibration, getXaState, getXaCine,
     // 重畳・派生シリーズ保存・貸したビューポートが**同じ並び**を見るための入口（H31）。
     getStackImageIds: () => [...imageIdsRef.current],
     validateDerivedSeries, saveDerivedSeries, saveStructuredReport, saveAngioReport, savePresentationState,
@@ -2278,6 +2319,7 @@ export function Viewer2D({
       // 「メソッドが無い」状態になり、原因が本体側だと気付きにくい）。
       getSpatialCalibration: () => commandsRef.current.getSpatialCalibration(),
       getXaState: () => commandsRef.current.getXaState(),
+      getXaCine: () => commandsRef.current.getXaCine(),
       getPixelData: (o) => commandsRef.current.getPixelData(o),
       getStackImageIds: () => commandsRef.current.getStackImageIds(),
       showOverlay: (o) => commandsRef.current.showOverlay(o),

@@ -126,7 +126,20 @@ export interface ViewerViewState {
 export interface AnalysisResultInput {
   /** プラグイン内でのローカル id。**同じ id で出し直すと置き換わる**（host が名前空間を付ける）。 */
   id: string;
-  kind: "qca" | "qva" | "qlv" | "qca3d";
+  /**
+   * 解析の種別。正本は本体の `report/analysisResults.ts` の `AnalysisKind`。
+   *
+   * <p>🔑 **プラグインが登録する結果は `"plugin"`**。本体は「どのプラグインか」を
+   * `provenance` の 1 行として自分で足すので、**プラグインごとに種別を増やさない**設計。
+   *
+   * <p>🚨 2026-09-06 まで、ここは `"qca" | "qva" | "qlv" | "qca3d"` と書かれていた
+   * （実在しない `"qva"` があり、実在する `"timi"` / `"plugin"` が無かった）。
+   * `buildPluginAnalysisRecord` は `kind` を検証せず素通しするので、
+   * **`"qva"` を渡すと実行時に存在しない種別がそのまま記録に入っていた**。
+   * このファイルの追随テスト（`pluginTemplateTypes.test.ts`）は
+   * **「名前が抜けていないか」しか見ない**ので、値の集合のずれは掴めなかった。
+   */
+  kind: "qca" | "qlv" | "qca3d" | "timi" | "plugin";
   /** 参照した元インスタンス。**開いているタイルの並びに無ければ拒否される。** */
   sopInstanceUids?: string[];
   /** 「ラン 3 / フレーム 12」のような人が読む位置。 */
@@ -464,6 +477,42 @@ export interface XaState {
   /** 表示中のフレーム（0 origin）と総数。 */
   frameIndex: number;
   frameCount: number;
+}
+
+/**
+ * XA シネの**時間軸**。`host.getXaCine()` の戻り。**H40**。
+ *
+ * <h3>🔴 fps だけを見て換算しない</h3>
+ * `fpsSource` が `"default"` のときは、**どのタグからも決まらず既定値（15fps）に落ちた**という
+ * 意味であって、**測定値ではない**。本体は既定値に落ちたランで TIMI フレームカウントの
+ * 30fps 換算値を出さないと決めている。プラグイン側だけが黙って埋めると、
+ * 同じ製品の中で「同じランの時間軸が画面と解析で違う」という、目視では気づけない食い違いになる。
+ *
+ * <h3>🔑 経過時間は `frameStartTimesMs` の差で取る</h3>
+ * **フレーム差 × 1/fps で代用しないこと。** `uniform` が false（可変レート収集）では合わない。
+ *
+ * <p>⚠️ dataSet が**プリウォーム前**なら `getXaCine()` は null を返す。シネを一度再生すれば温まる。
+ */
+export interface XaCine {
+  tileId: string;
+  imageId: string;
+  /* --- 生の材料（受け取った側が検算できるように） --- */
+  numberOfFrames: number;
+  /** FrameTime (0018,1063) [ms]。 */
+  frameTimeMs: number | null;
+  /** FrameTimeVector (0018,1065) [ms]。可変レート収集。 */
+  frameTimeVectorMs: number[] | null;
+  /** CineRate (0018,0040) [fps]。 */
+  cineRate: number | null;
+  /** RecommendedDisplayFrameRate (0008,2144) [fps]。 */
+  recommendedDisplayFrameRate: number | null;
+  /* --- 本体の決定結果 --- */
+  fps: number;
+  fpsSource: "frameTimeVector" | "frameTime" | "cineRate" | "recommendedDisplayFrameRate" | "default";
+  /** 各フレームの開始時刻 [ms]（0 起点・長さ = `numberOfFrames`）。 */
+  frameStartTimesMs: number[];
+  /** フレーム間隔が一様か。false なら「フレーム差 × 1/fps」は実時間と合わない。 */
+  uniform: boolean;
 }
 
 /** `getPixelData` の任意指定。**0.1.9 以降**。 */
@@ -978,6 +1027,13 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * （血管が正の大きな値）。エッジ検出や対数変換の向きを必ず切り替えること。
    */
   getXaState: (tileId?: string) => XaState | null;
+  /**
+   * 対象タイルの **XA シネの時間軸**（**H40**）。XA / XRF でなければ null。
+   *
+   * <p>フレーム番号を秒に直すのに要る（造影の通過時間・フレームカウント）。
+   * 🔴 **`fpsSource` を必ず見ること**——`"default"` は測定値ではない。
+   */
+  getXaCine: (tileId?: string) => XaCine | null;
   /**
    * **再構成済み 3D 血管モデルの一覧**（**H11**）。新しい順。まだ無ければ空配列。
    * 点列を含まない要約だけを返す（本体は `getVesselModel()` で取る）。
