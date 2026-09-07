@@ -153,7 +153,15 @@ export function AnonymizerDialog({
       if (!ids) return;
       const r = await anonymizeCopy(buildReq(ids));
       setInfo(t("anon.copied", { instances: r.instances, burned: r.burnedInstances }));
-      if (r.errors.length) setError(r.errors.slice(0, 3).join(" / "));
+      // 焼き込みを頼まれたのに塗れなかったぶんは、出力に焼き込み文字が残っている。
+      // 申告していないので DICOM としては正直だが、利用者は気づけないので必ず出す。
+      // ⚠ errors と両方出うるので、片方で上書きしない（警告のほうが重要度が高い）。
+      const notes: string[] = [];
+      if (r.notBurnedInstances > 0) {
+        notes.push(t("anon.burnIn.warn.notBurned", { count: r.notBurnedInstances }));
+      }
+      if (r.errors.length) notes.push(r.errors.slice(0, 3).join(" / "));
+      if (notes.length) setError(notes.join(" / "));
     } catch (e) {
       setError(t("common.fetchError", { error: String(e) }));
     } finally { setBusy(false); }

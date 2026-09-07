@@ -32,12 +32,46 @@ public class DicomAnonymizerEngine {
     public record PatientMapping(String newPatId, String newPatName) {
     }
 
+    /**
+     * このインスタンスに対して<b>実際に</b>行った処理の申告材料。
+     *
+     * <p>🔴 <b>オプションが立っていることと、実際にやったことは別</b>。
+     * {@code DeidentificationMethodCodeSequence} は「その SOP Instance に実際に適用した手法」の
+     * 列挙なので、やっていない処理を宣言してはいけない。宣言だけして中身が伴わないと、
+     * 受け取った側はタグを信用して検証しないため、<b>匿名化しないより危険</b>になる。
+     *
+     * <p>申告はエンジンが一箇所で組み立て、<b>事実は呼び出し元が渡す</b>のが不変条件。
+     * 「宣言してから消す」形にすると、消し忘れたときに安全側に倒れない。
+     *
+     * @param pixelCleaned 焼き込みマスクを実際に画素へ適用したか（圧縮 TS・マスク 0 件・
+     *                     画像外の矩形などで塗れなかった場合は false）
+     */
+    public record InstanceDeidFacts(boolean pixelCleaned) {
+
+        /** 何も実施していない（申告するものが無い）。 */
+        public static InstanceDeidFacts none() {
+            return new InstanceDeidFacts(false);
+        }
+    }
+
     static {
         AnonymizeTagDictionary.ensureLoaded();
     }
 
-    /** 1 データセットを匿名化（破壊的）。 */
+    /**
+     * 1 データセットを匿名化（破壊的）。実施した処理が無い前提で申告する。
+     *
+     * @deprecated 画素処理を伴う経路では {@link #deidentify(Attributes, AnonymizeConfig, PatientMapping, Map, InstanceDeidFacts)}
+     *             を使い、実際に塗ったかを渡すこと。この 4 引数版は画素に触らない呼び出し専用。
+     */
+    @Deprecated
     public void deidentify(Attributes ds, AnonymizeConfig cfg, PatientMapping pmap, Map<String, String> uidMap) {
+        deidentify(ds, cfg, pmap, uidMap, InstanceDeidFacts.none());
+    }
+
+    /** 1 データセットを匿名化（破壊的）。{@code facts} に実際に行った処理を渡す。 */
+    public void deidentify(Attributes ds, AnonymizeConfig cfg, PatientMapping pmap, Map<String, String> uidMap,
+            InstanceDeidFacts facts) {
         deidentifyRecursive(ds, cfg, uidMap);
 
         ds.setString(Tag.PatientName, VR.PN, pmap.newPatName());
@@ -48,7 +82,10 @@ public class DicomAnonymizerEngine {
         ds.setString(Tag.DeidentificationMethod, VR.LO, "Basic Application Level Confidentiality Profile");
         Sequence method = ds.newSequence(Tag.DeidentificationMethodCodeSequence, 0);
         addCode(method, "113100", "Basic Application Confidentiality Profile");
-        if (cfg.hasOption(AnonymizeConfig.Option.CleanPixelData)) {
+        // 🔴 オプションが立っているだけでは申告しない。実際に塗ったインスタンスに限る。
+        // 圧縮 TS・マスク 0 件・画像外の矩形では 1 画素も変わらないので、その場合は
+        // BurnedInAnnotation も原本のまま残す（真の YES を偽の NO に書き換えない）。
+        if (cfg.hasOption(AnonymizeConfig.Option.CleanPixelData) && facts.pixelCleaned()) {
             addCode(method, "113101", "Clean Pixel Data Option");
             ds.setString(Tag.BurnedInAnnotation, VR.CS, "NO");
         }

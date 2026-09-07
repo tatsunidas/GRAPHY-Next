@@ -7,11 +7,14 @@ package com.vis.graphynext.anonymize;
 import com.vis.graphynext.anonymize.AnonymizeConfig.Option;
 import com.vis.graphynext.anonymize.DicomTagRule.Action;
 import org.dcm4che3.data.Attributes;
+import org.dcm4che3.data.Sequence;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.VR;
 import org.junit.jupiter.api.Test;
 
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -62,9 +65,79 @@ class AnonymizeEngineTest {
         assertNull(ds.getString(Tag.PatientAge), "PatientAge は既定 X で除去");
         assertNull(ds.getString("ACME", 0x00090001), "private データは除去");
         assertNull(ds.getString(0x00090010), "private creator も除去");
-        // method code seq に基本プロファイルコード
-        assertTrue(ds.getSequence(Tag.DeidentificationMethodCodeSequence) != null
-                && !ds.getSequence(Tag.DeidentificationMethodCodeSequence).isEmpty());
+        // method code seq に基本プロファイルコードだけが入る。
+        // 🔴 かつては「null でなく空でもない」としか見ておらず、113100 さえ入れば通ったので
+        // 113101 の誤混入（＝偽の匿名化申告）を検出できなかった。集合として突き合わせる。
+        assertEquals(Set.of("113100"), methodCodes(ds), "基本プロファイルのみを申告する");
+    }
+
+    /** {@code DeidentificationMethodCodeSequence} に入っている CodeValue の集合。 */
+    private static Set<String> methodCodes(Attributes ds) {
+        Sequence seq = ds.getSequence(Tag.DeidentificationMethodCodeSequence);
+        if (seq == null) {
+            return Set.of();
+        }
+        Set<String> codes = new HashSet<>();
+        for (Attributes item : seq) {
+            codes.add(item.getString(Tag.CodeValue));
+        }
+        return codes;
+    }
+
+    private static void deidentify(Attributes ds, AnonymizeConfig cfg, boolean pixelCleaned) {
+        new DicomAnonymizerEngine().deidentify(ds, cfg, new DicomAnonymizerEngine.PatientMapping("ANON", "ANON"),
+                new HashMap<>(), new DicomAnonymizerEngine.InstanceDeidFacts(pixelCleaned));
+    }
+
+    private static AnonymizeConfig cleanPixelConfig() {
+        AnonymizeConfig cfg = new AnonymizeConfig();
+        cfg.addOption(Option.CleanPixelData);
+        return cfg;
+    }
+
+    // ------------------------------------------------------------------------
+    // 焼き込みの申告（2026-08-20 実測・fw/mainscreen-tools.md L135-143 の回帰）
+    //
+    // 症状: registerAnonMask() の呼び出し元が frontend に 0 件なのに、CleanPixelData を
+    // ON にするだけで出力の BurnedInAnnotation が YES→NO に書き換わり、113101 が入った。
+    // 画素は元と完全一致（np.array_equal で確認）。受け取った側はタグを信用して検証しないため、
+    // 匿名化していないことより危険＝「何もしないより悪い」。
+    // ------------------------------------------------------------------------
+
+    @Test
+    void deidentify_cleanPixelData_withoutActualBurn_doesNotDeclare113101() {
+        Attributes ds = sample();
+        deidentify(ds, cleanPixelConfig(), false);
+        assertEquals(Set.of("113100"), methodCodes(ds),
+                "1 画素も塗っていないなら Clean Pixel Data Option を申告しない");
+    }
+
+    @Test
+    void deidentify_cleanPixelData_withoutActualBurn_keepsOriginalBurnedInAnnotation() {
+        Attributes ds = sample();
+        ds.setString(Tag.BurnedInAnnotation, VR.CS, "YES");
+        deidentify(ds, cleanPixelConfig(), false);
+        assertEquals("YES", ds.getString(Tag.BurnedInAnnotation),
+                "塗っていないなら、真の YES を偽の NO に書き換えない");
+    }
+
+    @Test
+    void deidentify_cleanPixelData_withActualBurn_declares113101_andSetsNo() {
+        Attributes ds = sample();
+        ds.setString(Tag.BurnedInAnnotation, VR.CS, "YES");
+        deidentify(ds, cleanPixelConfig(), true);
+        assertEquals(Set.of("113100", "113101"), methodCodes(ds), "実際に塗ったときだけ申告する");
+        assertEquals("NO", ds.getString(Tag.BurnedInAnnotation));
+    }
+
+    @Test
+    void deidentify_withoutCleanPixelDataOption_neverTouchesBurnedInAnnotation() {
+        Attributes ds = sample();
+        ds.setString(Tag.BurnedInAnnotation, VR.CS, "YES");
+        // オプション自体が無いので、塗った事実があっても申告経路に入らない。
+        deidentify(ds, new AnonymizeConfig(), true);
+        assertEquals(Set.of("113100"), methodCodes(ds));
+        assertEquals("YES", ds.getString(Tag.BurnedInAnnotation));
     }
 
     @Test

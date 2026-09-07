@@ -59,7 +59,18 @@ public class AnonymizeService {
         this.webProvider = webProvider;
     }
 
-    public record Result(int studies, int series, int instances, int burnedInstances, List<String> errors) {
+    /**
+     * 匿名化の結果。
+     *
+     * @param notBurnedInstances 焼き込みを要求されたのに<b>塗れなかった</b>インスタンス数
+     *                           （マスク未登録のシリーズ・圧縮 TS・画像外の矩形）。
+     *                           🔴 これらは Clean Pixel Data を申告していないので、
+     *                           <b>受け取り側から見ると焼き込み文字が残ったまま</b>。0 でなければ
+     *                           利用者に見せる必要がある（{@code burnedInstances} が 0 でも
+     *                           従来はそれが異常だと分からなかった）。
+     */
+    public record Result(int studies, int series, int instances, int burnedInstances, int notBurnedInstances,
+            List<String> errors) {
     }
 
     public boolean isWeb() {
@@ -164,6 +175,7 @@ public class AnonymizeService {
 
         int instances = 0;
         int burned = 0;
+        int notBurned = 0;
         for (DicomInstance inst : all) {
             try {
                 Path src = fileOf(inst);
@@ -184,13 +196,20 @@ public class AnonymizeService {
                         new DicomAnonymizerEngine.PatientMapping(cfg.getReplacePatientId(), cfg.getReplacePatientName()));
 
                 // 焼き込み（属性匿名化前に元 seriesUid で判定）。
+                // 🔴 塗れたかどうかは **インスタンス単位** で決まる（圧縮 TS は burnInto が
+                // 無条件 false、マスクが無いシリーズもある）。その事実を申告へ渡す。
+                boolean pixelCleaned = false;
                 if (cleanPixel) {
                     AnonymizeMaskStore.SeriesMask mask = maskStore.get(inst.getSeriesInstanceUid());
                     if (mask != null && burnInto(ds, tsuid, mask)) {
+                        pixelCleaned = true;
                         burned++;
+                    } else {
+                        notBurned++;
                     }
                 }
-                engine.deidentify(ds, cfg, pm, uidMap);
+                engine.deidentify(ds, cfg, pm, uidMap,
+                        new DicomAnonymizerEngine.InstanceDeidFacts(pixelCleaned));
                 seriesSet.add(ds.getString(Tag.SeriesInstanceUID));
                 sink.accept(ds, tsuid);
                 instances++;
@@ -199,7 +218,7 @@ public class AnonymizeService {
             }
         }
         log.info("Anonymize: studies={} instances={} burned={} errors={}", studySet.size(), instances, burned, errors.size());
-        return new Result(studySet.size(), seriesSet.size(), instances, burned, errors);
+        return new Result(studySet.size(), seriesSet.size(), instances, burned, notBurned, errors);
     }
 
     /** 患者ごとの新 ID/Name を決める（単一→置換文字列、複数→連番。randomSeed で順序撹拌）。 */

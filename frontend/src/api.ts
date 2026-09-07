@@ -1100,6 +1100,15 @@ export interface AnonResult {
   series: number;
   instances: number;
   burnedInstances: number;
+  /**
+   * 焼き込みを要求されたのに **塗れなかった** インスタンス数
+   * （マスク未登録のシリーズ・圧縮 TS・画像外の矩形）。
+   *
+   * 🔴 これらは Clean Pixel Data を申告していないので、受け取り側から見ると
+   * **焼き込み文字が残ったまま**。0 でなければ利用者に見せる必要がある
+   * （burnedInstances が 0 でも、従来はそれが異常だと分からなかった）。
+   */
+  notBurnedInstances: number;
   errors: string[];
 }
 
