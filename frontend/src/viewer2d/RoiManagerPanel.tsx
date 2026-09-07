@@ -33,8 +33,9 @@ import { combineMasks, splitMask, roiToMask, isAreaRoi, type BoolOp, type SplitC
 import { sphereFromCircleRoi, createSphere3DFromCircleRoi, bakeSphere3D, splitMaskToSlices, maskVolumeStats, type MaskVolumeStats } from "../viewer/roi3d";
 import { listSpheres3D, updateSphere3D, deleteSphere3D, subscribeSphere3D, type Sphere3D } from "../viewer/sphere3dStore";
 import { annotationsToImageJDtos } from "../viewer/imagejExport";
+import { annotationsToMaskPolygons, seriesUidOfRoi } from "../viewer/anonMaskExport";
 import { importImageJDtos } from "../viewer/imagejImport";
-import { exportImageJRoiSet, importImageJRoiSet } from "../api";
+import { exportImageJRoiSet, fetchAnonMasks, importImageJRoiSet, registerAnonMask } from "../api";
 import { saveRoiNow, scheduleRoiSave, subscribeRoiSave } from "../viewer/roiSaveStore";
 import { RoiMetaEditDialog } from "./RoiMetaEditDialog";
 import { RoiStatsDialog } from "./RoiStatsDialog";
@@ -354,6 +355,45 @@ export function RoiManagerPanel({
       refresh();
     }
   };
+  /**
+   * ROI を匿名化の焼き込みマスクとして登録する。
+   *
+   * 🔴 幾何は `anonMaskExport` が `roiPointsPx` → `buildRoiMesh`（本体の正本）を通して起こす。
+   * ImageJ の交換型は使わない —— 楕円・矩形を軸平行 bbox に潰すため、回転した楕円で
+   * 塗り足りなくなる（焼き込み文字が残るのに出力を見ても気づけない）。
+   *
+   * ⚠ マスクは backend のプロセス内メモリにしか無く、再起動で消える。
+   * 匿名化ダイアログ側の一覧で「消えたこと」が見えるようにしてある。
+   */
+  const runUseForBurnIn = async (uid: string) => {
+    if (busy) return;
+    const seriesUid = seriesUidOfRoi(uid);
+    if (!seriesUid) { window.alert(t("roiMgr.burnIn.noSeries")); return; }
+    const { polygons, skipped } = annotationsToMaskPolygons([uid]);
+    if (polygons.length === 0) {
+      // 線・点・角度は面積を持たないので焼き込みには使えない。理由を出して黙って落とさない。
+      window.alert(skipped.some((s) => s.reason === "notClosedArea")
+        ? t("roiMgr.burnIn.notClosed")
+        : t("roiMgr.opFailed"));
+      return;
+    }
+    setBusy(true);
+    try {
+      // 同一シリーズの既存マスクに足す（登録は seriesUid 単位で上書きになるため）。
+      const existing = (await fetchAnonMasks([seriesUid]))[0];
+      await registerAnonMask({
+        seriesUid,
+        frames: existing?.frames ?? [],
+        rects: existing?.rects ?? [],
+        polygons: [...(existing?.polygons ?? []), ...polygons],
+      });
+      window.alert(t("roiMgr.burnIn.registered"));
+    } catch {
+      window.alert(t("roiMgr.opFailed"));
+    } finally {
+      setBusy(false);
+    }
+  };
   // ベクタ ROI（エリア型）をラスタ化して新規 Mask に変換（→ 以後 Mask 演算の対象に）。
   const runRoiToMask = async (uid: string) => {
     if (busy) return;
@@ -636,6 +676,7 @@ export function RoiManagerPanel({
           <input type="checkbox" onChange={(e) => setRoiStyle(r.uid, { fillOpacity: e.target.checked ? 0.3 : 0 })} title={t("roiMgr.fill")} />
           {r.scope && <button onClick={() => toggleScopeZ(r.uid)} style={scopeChip} title={t("roiMgr.scopeToggle")}>{r.scope}</button>}
           {isAreaRoi(r.tool) && <button onClick={() => runRoiToMask(r.uid)} disabled={busy} style={editBtn} title={t("roiMgr.toMask")}>▦</button>}
+          {!isDemo && isAreaRoi(r.tool) && <button onClick={() => runUseForBurnIn(r.uid)} disabled={busy} style={editBtn} title={t("roiMgr.burnIn")}>🖍</button>}
           {/circle/i.test(r.tool) && <button onClick={() => runDefineSphere(r.uid)} disabled={busy} style={editBtn} title={t("roiMgr.defineSphere")}>◎</button>}
           {/circle/i.test(r.tool) && <button onClick={() => runSphere(r.uid)} disabled={busy} style={editBtn} title={t("roiMgr.toSphere")}>⬤</button>}
           <button onClick={() => setStatsOpen({ focus: r.uid })} style={editBtn} title={t("roiMgr.statsRoi")}>Σ</button>
