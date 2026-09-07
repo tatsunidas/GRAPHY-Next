@@ -93,6 +93,54 @@ class AnonymizeRequestValidationTest {
     }
 
     // ------------------------------------------------------------------------
+    // 焼き込みが実行できないなら書き出す前に止める
+    //
+    // 「一部だけ塗れた ZIP」を黙って渡すのが最も危険 —— 受け取り側は ZIP 全体が clean だと
+    // 解釈する。ZIP はストリーミングなので 1 バイト流したらステータスを変えられない。
+    // ------------------------------------------------------------------------
+
+    private static AnonymizeController controllerWithMasks(int maskCount) {
+        AnonymizeMaskStore store = new AnonymizeMaskStore();
+        for (int i = 0; i < maskCount; i++) {
+            store.put(new AnonymizeMaskStore.SeriesMask("1.2.3." + i, List.of(),
+                    List.of(new AnonymizeMaskStore.Rect(0, 0, 8, 8))));
+        }
+        return new AnonymizeController(null, store);
+    }
+
+    private static AnonymizeConfig cleanPixelCfg() {
+        AnonymizeConfig cfg = new AnonymizeConfig();
+        cfg.addOption(AnonymizeConfig.Option.CleanPixelData);
+        return cfg;
+    }
+
+    @Test
+    void cleanPixelData_withNoRegisteredMask_isRejectedBeforeWriting() {
+        ResponseStatusException e = assertThrows(ResponseStatusException.class,
+                () -> controllerWithMasks(0).requireBurnableIfCleanPixelData(cleanPixelCfg(), true));
+        assertEquals(HttpStatus.CONFLICT, e.getStatusCode(),
+                "マスクが無いまま出力すると焼き込み文字が残るので中止する");
+    }
+
+    @Test
+    void cleanPixelData_withoutBurnInFlag_isRejected() {
+        ResponseStatusException e = assertThrows(ResponseStatusException.class,
+                () -> controllerWithMasks(1).requireBurnableIfCleanPixelData(cleanPixelCfg(), false));
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode(), "設定と出力が食い違うものは通さない");
+    }
+
+    @Test
+    void cleanPixelData_withMask_isAccepted() {
+        assertDoesNotThrow(() -> controllerWithMasks(1).requireBurnableIfCleanPixelData(cleanPixelCfg(), true));
+    }
+
+    @Test
+    void withoutCleanPixelData_maskCountDoesNotMatter() {
+        assertDoesNotThrow(() -> controllerWithMasks(0)
+                .requireBurnableIfCleanPixelData(new AnonymizeConfig(), false));
+    }
+
+    // ------------------------------------------------------------------------
     // 既定プロファイル
     // ------------------------------------------------------------------------
 

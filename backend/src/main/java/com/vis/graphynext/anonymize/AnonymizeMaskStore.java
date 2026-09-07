@@ -55,6 +55,11 @@ public class AnonymizeMaskStore {
         bySeries.remove(seriesUid);
     }
 
+    /** 登録されているマスクの件数（0 なら焼き込みは 1 画素も起きない）。 */
+    public int size() {
+        return bySeries.size();
+    }
+
     public void clear() {
         bySeries.clear();
     }

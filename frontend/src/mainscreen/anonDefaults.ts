@@ -35,8 +35,15 @@ export const RETAIN_OPTS: AnonOption[] = [
  * | FullDates のみ ON（＝この既定） | `20260101` | `101530` |
  * | 両方 ON | **`20000101`** | **`000000`** |
  *
- * つまり両方 ON は「保持」どころか日付を潰す。しかも現状の C は VR 別の固定ダミーを返すだけで
- * 前後関係も保たないため、ModifiedDates 自体に不具合がある（`fw/mainscreen-tools.md` の Anonymizer §）。
+ * つまり両方 ON は「保持」どころか日付を潰していた。
+ *
+ * ✅ **2026-09-07 に両方とも直した**（`fw/mainscreen-tools.md` の Anonymizer §）。
+ * ModifiedDates は患者ごとに一定のオフセットで日付をシフトするようになり（時刻は保持）、
+ * 両方 ON は backend が 400 で弾く（{@link toggleAnonOption} が UI 側でも排他にする）。
+ * 上の実測表は**当時の記録**として残す —— 同じ穴を開けないための証跡。
+ *
+ * 既定から ModifiedDates を外したままなのは変わらない（排他なのでどちらか一方しか選べず、
+ * 「原本の日付を保持」のほうが既定として素直なため）。
  */
 export const DEFAULT_ANON_OPTIONS: AnonOption[] = RETAIN_OPTS.filter(
   (o) => o !== "RetainLongitudinalTemporalInformationModifiedDates",

@@ -75,6 +75,7 @@ public class AnonymizeController {
         }
 
         AnonymizeConfig cfg = toConfig(req);
+        requireBurnableIfCleanPixelData(cfg, req.burnIn());
         StreamingResponseBody body = out -> {
             try {
                 service.anonymizeToZip(req.studyUids(), cfg, req.burnIn(), out);
@@ -99,8 +100,10 @@ public class AnonymizeController {
         if (req.destination() == null || req.destination().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "destination が空です");
         }
+        AnonymizeConfig cfg = toConfig(req);
+        requireBurnableIfCleanPixelData(cfg, req.burnIn());
         try {
-            return service.anonymizeToFolder(req.studyUids(), toConfig(req), req.burnIn(), req.destination());
+            return service.anonymizeToFolder(req.studyUids(), cfg, req.burnIn(), req.destination());
         } catch (Exception e) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, e.getMessage());
         }
@@ -132,6 +135,33 @@ public class AnonymizeController {
             maskStore.clear();
         } else {
             maskStore.remove(seriesUid);
+        }
+    }
+
+    /**
+     * Clean Pixel Data を要求されたのに<b>実行できない</b>状態なら、書き出す前に止める。
+     *
+     * <p>🔴 <b>「一部だけ塗れた ZIP」を黙って渡すのが最も危険</b> —— 受け取り側は ZIP 全体が
+     * clean だと解釈する。ZIP はストリーミングなので 1 バイト流したらステータスを変えられず、
+     * 途中で気づいても遅い。よって判定は流し始める前に済ませる。
+     *
+     * <p>誤った申告をするくらいなら機能を止める、という判断基準の実装。
+     */
+    // package-private: validate と同じ理由で直接テストする。
+    void requireBurnableIfCleanPixelData(AnonymizeConfig cfg, boolean burnIn) {
+        if (!cfg.hasOption(AnonymizeConfig.Option.CleanPixelData)) {
+            return;
+        }
+        if (!burnIn) {
+            // チェックだけ入れて焼き込みを回さない＝設定と出力が食い違う。通さない。
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Clean Pixel Data を選ぶ場合は焼き込みの実行も有効にしてください。"
+                            + "焼き込みを行わないと画素は変わらず、除去済みという申告もできません。");
+        }
+        if (maskStore.size() == 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "焼き込みマスクが 1 件も登録されていないため、Clean Pixel Data を実行できません。"
+                            + "マスクが無いまま出力すると焼き込み文字が残ったままになるので中止しました。");
         }
     }
 
