@@ -192,17 +192,39 @@ DICOM PS3.15 Basic Application Confidentiality Profile の匿名化。GRAPHY
   - frontend は `DEFAULT_ANON_OPTIONS` の中身だけを見ており、**手で両方 ON にする経路**を通らなかった。
   修正を戻すと新テストが実測どおりの症状（`20000101` / 時刻 `000000` / `BurnedInAnnotation=NO`）で
   落ちることを確認済み。
-- **残り（次段）**: **マスク登録の導線がまだ無い**（`registerAnonMask` の呼び出し元は 0 件のまま）。
-  現在は API 経由でのみ登録でき、未登録なら 409 で止まる。
-  🔴 **旧 GRAPHY は ROI ベースで、閉じた ROI すべてを塗れた** ——
-  `GRAPHY/src/main/java/com/vis/core/anonymize/PixelAnonymizerPanel.java` の "Mask ROIs" リストが
-  任意の `RoiObj` を受け、`ip.fill(ijRoi)` で RECTANGLE / OVAL / POLYGON / FREEROI / TRACED_ROI /
-  COMPOSITE を塗り、ROI ごとにスライス範囲を選べた。**Next は矩形のみ**（`AnonymizeMaskStore.Rect`）で、
-  UI も未実装＝二重に劣化した移植。
-  ⚠ 旧版は**圧縮 TS でも塗っていた**（decode → mask → 非圧縮で書き出し）。Next の「圧縮は無条件 false」も
-  旧版からの劣化。ただし TS が変わる＝可逆性喪失なので利用者の合意が要る。
-  CleanRecognizableVisualFeatures（顔ぼかし）/ web(WADO) は将来。
-- 🔴 **形状を戻すときは `ImageJRoiDto` を使わない**（2026-09-07 に方針を差し戻した）。
+- ✅ **焼き込みが UI から使えるようになった（2026-09-07）**。旧 GRAPHY の
+  `PixelAnonymizerPanel` の "Mask ROIs" リストに相当するものを、Next の構造に合わせて 2 つに分けた
+  （2D viewer は**別 BrowserWindow** で ROI は viewer 側の Cornerstone 状態にあり、MainScreen から
+  読めない。`AnonymizeMaskStore` がシングルトンなのはこのクロスウィンドウ橋渡しのため）。
+
+  | 役割 | 置き場所 |
+  | :- | :- |
+  | **登録** | ROI マネージャの行アクション「匿名化の焼き込みに使用」（**閉じた面 ROI にのみ表示**） |
+  | **管理**（一覧・件数・個別/全削除） | 匿名化ダイアログの「焼き込みマスク」セクション |
+
+  - 🔴 幾何は**本体の正本を通す**。`viewer/anonMaskExport.ts` が
+    `roiRead.roiPointsPx()` → `roiStats.buildRoiMesh()` を呼ぶだけで、**新しい変換を書いていない**
+    （「任意 ROI → 閉多角形」の実装は既に 3 つあり、4 つ目を作らない）。
+  - 使えるのは `pickSampleKind` が `"area"` を返し、かつ `mesh.closed` な ROI だけ。
+    線・点・角度・開いたフリーハンドは弾いて理由を出す —— 受け付けると「登録できたのに
+    1 画素も塗られていないのに申告する」**新しい偽申告**になる。
+  - 適用先は **SOP Instance UID** で指定（index は並び順が変われば別スライスを塗る）。
+    XA は 1 ラン全フレームが同じ SOP なのでフレーム番号も持つ。
+    既定は「この ROI が描かれた 1 枚だけ」＝旧版の "Current Slice Only" 相当。
+  - 頂点は**サブピクセルのまま**送る（丸めると 1px ずれる）。
+  - ⚠ マスクは backend の**プロセス内メモリにしか無く再起動で消える**。一覧が無いと
+    「消えたこと」に気づけないので、**0 件のときも必ず見せる**（`AnonymizeMaskStore` の
+    永続化は今のところ不要と判断）。
+  - ⚠ マスクは**シリーズ単位**なので、対象スタディの外に登録されたマスクは一覧に出ない
+    （出ないものが黙って効くことはない）。
+  - 旧版の "Preview Mask as Blackout"（ビューア側で塗り結果を先に見る）は未実装。
+- **残り（次段）**:
+  🔴 **圧縮 TS では塗れない**（`burnInto` が無条件 false）。旧 GRAPHY は
+  `PixelAnonymizerPanel.java` L490-505 で decode → mask → **TSUID を ExplicitVRLittleEndian に
+  書き換えて非圧縮で書き出し**ており、ここも旧版からの劣化。ただし TS が変わる＝ファイルサイズ増・
+  可逆性喪失なので**利用者の合意が要る**。それまでは 409 で止める（黙って未処理を返さない）。
+  旧版の "Preview Mask as Blackout" / CleanRecognizableVisualFeatures（顔ぼかし）/ web(WADO) も将来。
+- 📌 **設計の記録: `ImageJRoiDto` は使わない**（2026-09-07 に方針を差し戻した）。
   一度は「`ImageJRoiService.toIjRoi` が rect/oval/polygon/freehand を変換済みで安い」と書いたが、
   **型の性格を取り違えていた**。`ImageJRoiDto` は `.roi` / `RoiSet.zip` の **interop 専用**で
   （全 13 使用箇所が `/api/imagej/*` 経路）、`imagejExport.ts:46-51` が頂点の min/max から
@@ -221,10 +243,17 @@ DICOM PS3.15 Basic Application Confidentiality Profile の匿名化。GRAPHY
   つまりこのリポジトリでは「ROI を画素マスクにする」のは一貫して frontend の仕事だった。
   ⚠ 「任意 ROI → 閉多角形」の変換は既に 3 実装ある（`buildRoiMesh` が正本／
   `roiBooleanOps.rasterizeRoi` は楕円を bbox 近似／`rtstructExport` は world mm）。**4 つ目を作らない。**
-- 🔴 **モデルの穴**: `SeriesMask` は**シリーズ単位**で、`frames` は multi-frame の frame index。
-  単一フレーム画像が N 枚のシリーズでは「3 枚目だけ患者名が焼かれている」を表現できず、
-  全スライスを潰すか何も塗られないかになる（`burnInto` の呼び出しに SOP Instance UID が渡っていない）。
-  形状拡張と合わせて `sopInstanceUids` を持たせる。
+- ✅ **モデルの穴も塞いだ**（同 2026-09-07）。従来の `SeriesMask` は**シリーズ単位**で、
+  `frames` は multi-frame の frame index。単一フレーム画像が N 枚のシリーズでは
+  「3 枚目だけ患者名が焼かれている」（実務で典型）を表現できず、**全スライスを潰すか
+  何も塗られないか**のどちらかになっていた（`burnInto` の呼び出しに SOP Instance UID が
+  渡っていなかった）。`MaskPolygon.sopInstanceUids` で対象インスタンスを指定できるようにした。
+- 🔴 **併せて直した潜在バグ**: `burnInto` が `PlanarConfiguration=1`（RRR…GGG…BBB…）を見ておらず、
+  画素インターリーブ前提の `(y*cols + x)*bps` が成立しないまま**誤った位置を塗っていた**。
+  `BitsAllocated` が 8 の倍数でない場合（1bit・12bit）も `bps` が誤る。どちらも塗らない扱いにした
+  （段 1 により、塗らなければ申告もされない）。
+  ⚠ `SamplesPerPixel` は元から読めており、**interleaved RGB は正しく塗れていた**
+  （調査中に「RGB が壊れている」という指摘が出たが、コードを読んで否定した）。
 
 ## SeriesExtractor 実装（GRAPHY 移植・2026-06-30）
 条件一致シリーズを**シリーズフォルダ**として親フォルダへ抽出（コピー）。GRAPHY
