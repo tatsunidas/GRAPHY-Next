@@ -1987,6 +1987,7 @@ export const ja: Record<string, string> = {
   "anon.pickDest": "出力先を選択",
   "anon.copy": "フォルダへ出力",
   "anon.copied": "出力完了: {{instances}} 件（焼き込み {{burned}}）",
+  "anon.dateOpts.adjusted": "日付オプションは排他のため、Modified Dates を外しました（Full Dates を残しています）。",
   "anon.usedSeed": "日付シフトの種: {{seed}}（同じ患者を後日追加で出すときは、この値を種に指定してください）",
   "anon.zip": "ZIP 出力",
   "anon.zipped": "ZIP を出力しました",

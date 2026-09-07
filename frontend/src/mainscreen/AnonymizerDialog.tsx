@@ -19,7 +19,7 @@ import {
 import { desktop } from "../desktopBridge";
 import { useI18n } from "../i18n/i18n";
 import { dictMap, ggggeeee, normHex } from "./tagPathUtil";
-import { CLEAN_OPTS, DEFAULT_ANON_OPTIONS, RETAIN_OPTS } from "./anonDefaults";
+import { CLEAN_OPTS, DEFAULT_ANON_OPTIONS, RETAIN_OPTS, sanitizeAnonOptions, toggleAnonOption } from "./anonDefaults";
 
 /**
  * Anonymizer（PS3.15）。検索リスト全体を匿名化（属性＋任意で Pixel 焼き込み）して ZIP/フォルダ出力。
@@ -71,15 +71,18 @@ export function AnonymizerDialog({
 
   if (!open) return null;
 
-  const toggleOpt = (o: AnonOption) =>
-    setOptions((s) => {
-      const n = new Set(s);
-      if (n.has(o)) n.delete(o);
-      else n.add(o);
-      return n;
-    });
+  // 日付の 2 つだけは相互排他（両方 ON にすると加工が保持に勝ち、日付が潰れる）。
+  // 判定は anonDefaults の純関数へ（.tsx は vitest の対象外なのでここには書けない）。
+  const toggleOpt = (o: AnonOption) => setOptions((s) => toggleAnonOption(s, o));
 
-  const applyProfile = (p: AnonProfile) => setOptions(new Set(p.options));
+  const applyProfile = (p: AnonProfile) => setOptions(applySanitized(p.options ?? []));
+
+  /** 排他規則に合わせて直しつつ、直したことを利用者に見せる。 */
+  const applySanitized = (opts: AnonOption[]): Set<AnonOption> => {
+    const { options: next, dropped } = sanitizeAnonOptions(opts);
+    if (dropped.length) setInfo(t("anon.dateOpts.adjusted"));
+    return next;
+  };
 
   const addRetain = () => {
     const h = normHex(tagInput);
@@ -190,7 +193,7 @@ export function AnonymizerDialog({
   const loadProfile = async (f: File) => {
     try {
       const p = JSON.parse(await f.text());
-      setOptions(new Set(p.options ?? []));
+      setOptions(applySanitized(p.options ?? []));
       setPatName(p.patName ?? "de-identified");
       setPatId(p.patId ?? "de-identified");
       setSeed(p.seed ?? "");

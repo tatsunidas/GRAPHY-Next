@@ -142,20 +142,59 @@ public class AnonymizeController {
         }
     }
 
-    private static void validate(AnonRequest req) {
+    // package-private: Spring も Mockito も要らずに直接テストする（この JDK では
+    // Mockito が ObjectProvider をモックできず、@WebMvcTest 系が動かないため）。
+    static void validate(AnonRequest req) {
         if (req.studyUids() == null || req.studyUids().isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "studyUids が空です");
         }
+        validateDateOptions(req);
     }
 
-    private static AnonymizeConfig toConfig(AnonRequest req) {
+    /**
+     * 日付オプションの排他を検査する。
+     *
+     * <p>PS3.15 では Full Dates（原本の日付を保持）と Modified Dates（関係を保ったまま加工）は
+     * <b>どちらか一方</b>を選ぶもの。両方立つと {@code AnonymizeConfig.getActionByOptionsAndDefault()} の
+     * 「加工(C,X)は保持(K)より優先（安全側）」により <b>Full Dates が負けて</b>、
+     * 利用者が「保持」を選んだつもりの日付が加工される。
+     *
+     * <p>🔴 <b>ここが正本</b>。UI 側の排他だけでは塞げない —— プロファイルの読み込みは
+     * 任意の JSON ファイルから options を丸ごと差し替えるし、API を直接叩くこともできる。
+     *
+     * <p>⚠ C&gt;K の優先規則そのものは変えない。あれは辞書解決の汎用の安全側フォールバックで、
+     * 他のオプションの組み合わせにも効いている。日付 2 つの排他という個別事情で触ると
+     * 影響範囲が読めなくなる。<b>競合を後段で解決するのではなく、競合した設定を受け付けない</b>のが正しい層。
+     */
+    private static void validateDateOptions(AnonRequest req) {
+        if (req.options() == null) {
+            return;
+        }
+        boolean full = req.options().contains(
+                AnonymizeConfig.Option.RetainLongitudinalTemporalInformationFullDates.name());
+        boolean modified = req.options().contains(
+                AnonymizeConfig.Option.RetainLongitudinalTemporalInformationModifiedDates.name());
+        if (full && modified) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "日付オプションは排他です。Full Dates（原本の日付を保持）と Modified Dates"
+                            + "（前後関係を保ったままシフト）のどちらか一方を選んでください。"
+                            + "両方を指定すると加工が保持に優先し、保持したつもりの日付が加工されます。");
+        }
+    }
+
+    /** @see #validate(AnonRequest) （同じ理由で package-private） */
+    static AnonymizeConfig toConfig(AnonRequest req) {
         AnonymizeConfig cfg = new AnonymizeConfig();
         if (req.options() != null) {
             for (String o : req.options()) {
                 try {
                     cfg.addOption(AnonymizeConfig.Option.valueOf(o));
-                } catch (IllegalArgumentException ignore) {
-                    // 未知オプションは無視
+                } catch (IllegalArgumentException e) {
+                    // 🔴 黙って無視しない。脱識別で「読めなかった設定を無視する」は、
+                    // 利用者が指定したつもりの保護がそのまま消えることを意味する。
+                    // 綴り違いのオプション 1 つで保護が外れた出力が出るくらいなら止める。
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "未知の匿名化オプションです: " + o);
                 }
             }
         }
