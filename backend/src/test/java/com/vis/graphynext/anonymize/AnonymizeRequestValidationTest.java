@@ -141,6 +141,71 @@ class AnonymizeRequestValidationTest {
     }
 
     // ------------------------------------------------------------------------
+    // マスクの形の検査
+    //
+    // 🔴 塗れない形を受け付けると「登録できたのに 1 画素も塗られていないのに Clean Pixel Data を
+    // 申告する」という新しい偽申告を作る。登録の時点で断る。
+    // ------------------------------------------------------------------------
+
+    private static AnonymizeMaskStore.SeriesMask maskWith(AnonymizeMaskStore.MaskPolygon... polys) {
+        return new AnonymizeMaskStore.SeriesMask("1.2.3", List.of(), List.of(), List.of(polys));
+    }
+
+    private static AnonymizeMaskStore.MaskPolygon polygon(double[] xs, double[] ys) {
+        return new AnonymizeMaskStore.MaskPolygon(xs, ys, List.of(), List.of());
+    }
+
+    @Test
+    void registerMask_closedPolygon_isAccepted() {
+        assertDoesNotThrow(() -> AnonymizeController.validateMask(
+                maskWith(polygon(new double[] { 0, 5, 5, 0 }, new double[] { 0, 0, 5, 5 }))));
+    }
+
+    @Test
+    void registerMask_openRoi_returns400() {
+        // 線（2 頂点）は面積を持たないので焼き込みには使えない。
+        ResponseStatusException e = assertThrows(ResponseStatusException.class,
+                () -> AnonymizeController.validateMask(
+                        maskWith(polygon(new double[] { 0, 5 }, new double[] { 0, 5 }))));
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode());
+        assertTrue(e.getReason() != null && e.getReason().contains("面積"), e.getReason());
+    }
+
+    @Test
+    void registerMask_mismatchedVertexArrays_returns400() {
+        ResponseStatusException e = assertThrows(ResponseStatusException.class,
+                () -> AnonymizeController.validateMask(
+                        maskWith(polygon(new double[] { 0, 1, 2 }, new double[] { 0, 1 }))));
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode());
+    }
+
+    @Test
+    void registerMask_nonFiniteCoordinate_returns400() {
+        ResponseStatusException e = assertThrows(ResponseStatusException.class,
+                () -> AnonymizeController.validateMask(
+                        maskWith(polygon(new double[] { 0, Double.NaN, 5 }, new double[] { 0, 5, 5 }))));
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode());
+    }
+
+    @Test
+    void registerMask_excessiveVertexCount_returns400() {
+        int n = 200_000;
+        double[] xs = new double[n];
+        double[] ys = new double[n];
+        ResponseStatusException e = assertThrows(ResponseStatusException.class,
+                () -> AnonymizeController.validateMask(maskWith(polygon(xs, ys))));
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode());
+    }
+
+    @Test
+    void registerMask_legacyRectsOnlyPayload_isAccepted() {
+        // 旧形式（矩形のみ・polygons 無し）のペイロードは今までどおり通る。
+        assertDoesNotThrow(() -> AnonymizeController.validateMask(
+                new AnonymizeMaskStore.SeriesMask("1.2.3", List.of(),
+                        List.of(new AnonymizeMaskStore.Rect(0, 0, 8, 8)))));
+    }
+
+    // ------------------------------------------------------------------------
     // 既定プロファイル
     // ------------------------------------------------------------------------
 

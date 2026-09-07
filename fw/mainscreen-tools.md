@@ -198,11 +198,33 @@ DICOM PS3.15 Basic Application Confidentiality Profile の匿名化。GRAPHY
   `GRAPHY/src/main/java/com/vis/core/anonymize/PixelAnonymizerPanel.java` の "Mask ROIs" リストが
   任意の `RoiObj` を受け、`ip.fill(ijRoi)` で RECTANGLE / OVAL / POLYGON / FREEROI / TRACED_ROI /
   COMPOSITE を塗り、ROI ごとにスライス範囲を選べた。**Next は矩形のみ**（`AnonymizeMaskStore.Rect`）で、
-  UI も未実装＝二重に劣化した移植。次段では `ImageJRoiDto`（`ImageJRoiService.toIjRoi` が
-  rect/oval/polygon/freehand を変換済み・backend に `net.imagej:ij` あり）を共用して形状を戻す。
+  UI も未実装＝二重に劣化した移植。
   ⚠ 旧版は**圧縮 TS でも塗っていた**（decode → mask → 非圧縮で書き出し）。Next の「圧縮は無条件 false」も
   旧版からの劣化。ただし TS が変わる＝可逆性喪失なので利用者の合意が要る。
   CleanRecognizableVisualFeatures（顔ぼかし）/ web(WADO) は将来。
+- 🔴 **形状を戻すときは `ImageJRoiDto` を使わない**（2026-09-07 に方針を差し戻した）。
+  一度は「`ImageJRoiService.toIjRoi` が rect/oval/polygon/freehand を変換済みで安い」と書いたが、
+  **型の性格を取り違えていた**。`ImageJRoiDto` は `.roi` / `RoiSet.zip` の **interop 専用**で
+  （全 13 使用箇所が `/api/imagej/*` 経路）、`imagejExport.ts:46-51` が頂点の min/max から
+  **軸平行 bbox** を作って `oval` / `rect` をそこに潰す。**回転した楕円では真の楕円の内側が
+  軸平行 oval の外に出て塗り足りなくなり、焼き込み文字が残るのに出力を見ても気づけない** ——
+  脱識別で最悪の失敗モード。依存の向きも悪い（脱識別の正しさが ImageJ 連携の都合で動く）。
+  **正本は `frontend/src/viewer/roiStats.ts` の `RoiMesh { pointsPx, closed }` と `buildRoiMesh()`**
+  （「すべての ROI 種別がここへ潰れる」）。楕円は `polygonizeEllipse` が**半軸ベクトルで持つので
+  回転しても正しい**。座標換算は `roiRead.roiPointsPx()`（「3 か所目を作らないため」に集約済み）。
+  → **自前の閉多角形（画素座標・サブピクセル）を送り、backend は `java.awt.geom.Path2D`
+  （`WIND_EVEN_ODD`）で画素中心 `(x+0.5, y+0.5)` を判定して行区間に畳む**。
+  この規約は `roiStats.pointInPolygon` / `roiBooleanOps.pointInPoly` と同じで、揃えないと
+  「ROI 統計が測った領域」と「焼き込んだ領域」がズレる。JDK 標準なので新規依存はゼロ。
+  ⚠ backend には多角形ラスタ化が無い（`Path2D`/`Area` が main で 0 件）。`SegExportService` は
+  **frontend が作ったマスクを受け取るだけ**、RadiomicsJ は**マスクシリーズ UID** で受ける ——
+  つまりこのリポジトリでは「ROI を画素マスクにする」のは一貫して frontend の仕事だった。
+  ⚠ 「任意 ROI → 閉多角形」の変換は既に 3 実装ある（`buildRoiMesh` が正本／
+  `roiBooleanOps.rasterizeRoi` は楕円を bbox 近似／`rtstructExport` は world mm）。**4 つ目を作らない。**
+- 🔴 **モデルの穴**: `SeriesMask` は**シリーズ単位**で、`frames` は multi-frame の frame index。
+  単一フレーム画像が N 枚のシリーズでは「3 枚目だけ患者名が焼かれている」を表現できず、
+  全スライスを潰すか何も塗られないかになる（`burnInto` の呼び出しに SOP Instance UID が渡っていない）。
+  形状拡張と合わせて `sopInstanceUids` を持たせる。
 
 ## SeriesExtractor 実装（GRAPHY 移植・2026-06-30）
 条件一致シリーズを**シリーズフォルダ**として親フォルダへ抽出（コピー）。GRAPHY

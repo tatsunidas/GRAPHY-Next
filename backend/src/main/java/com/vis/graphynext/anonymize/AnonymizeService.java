@@ -209,7 +209,7 @@ public class AnonymizeService {
                 boolean pixelCleaned = false;
                 if (cleanPixel) {
                     AnonymizeMaskStore.SeriesMask mask = maskStore.get(inst.getSeriesInstanceUid());
-                    if (mask != null && burnInto(ds, tsuid, mask)) {
+                    if (mask != null && burnInto(ds, tsuid, mask, inst.getSopInstanceUid(), cfg.getBurnDilatePx())) {
                         pixelCleaned = true;
                         burned++;
                     } else {
@@ -280,9 +280,22 @@ public class AnonymizeService {
         return map;
     }
 
-    /** 矩形領域を 0 で塗り潰す（非圧縮 TS のみ）。塗ったら true。 */
-    private static boolean burnInto(Attributes ds, String tsuid, AnonymizeMaskStore.SeriesMask mask)
-            throws IOException {
+    /**
+     * マスク領域を一定値（0）で潰す（非圧縮 TS のみ）。1 画素でも塗ったら true。
+     *
+     * <p>矩形・楕円・ポリゴン・クローズドフリーハンドはすべて {@code MaskPolygon} へ潰れており、
+     * {@link PolygonRasterizer} が「行ごとの連続区間」を返すので、<b>画素アドレス計算は
+     * 矩形時代のまま</b>（区間の決め方だけが変わった）。
+     *
+     * <p>⚠ 「黒く塗る」ではなく「<b>一定値で潰す</b>」。0 は {@code MONOCHROME1} では白、
+     * signed では中間値、{@code PALETTE COLOR} では 0 番の色になる。判読不能化という目的は
+     * どれでも満たすので値は 0 のままでよい。
+     *
+     * <p>🔴 塗れない条件では <b>false を返して何もしない</b>。呼び出し元はその事実を
+     * {@code InstanceDeidFacts} でエンジンへ渡すので、<b>申告もされない</b>（安全側）。
+     */
+    private static boolean burnInto(Attributes ds, String tsuid, AnonymizeMaskStore.SeriesMask mask,
+            String sopInstanceUid, int dilatePx) throws IOException {
         if (tsuid == null || !UNCOMPRESSED.contains(tsuid)) {
             return false; // 圧縮 TS は未対応
         }
@@ -294,29 +307,45 @@ public class AnonymizeService {
         int nf = ds.getInt(Tag.NumberOfFrames, 1);
         int bits = ds.getInt(Tag.BitsAllocated, 8);
         int spp = ds.getInt(Tag.SamplesPerPixel, 1);
-        int bps = Math.max(1, bits / 8) * spp;
+        // 🔴 bps は「1 画素あたりバイト数」。bits が 8 の倍数でないと成立しないので、
+        // その場合は塗らない（誤った位置を塗るより何もしないほうが良い）。
+        if (bits <= 0 || bits % 8 != 0) {
+            return false;
+        }
+        // 🔴 PlanarConfiguration=1（RRR…GGG…BBB…）は画素インターリーブ前提の
+        // (y*cols + x)*bps が成立しない。誤った位置を塗るので対象外にする。
+        if (spp > 1 && ds.getInt(Tag.PlanarConfiguration, 0) != 0) {
+            return false;
+        }
+        int bps = (bits / 8) * spp;
         int frameSize = rows * cols * bps;
         byte[] px = ds.getBytes(Tag.PixelData);
         if (px == null || px.length < frameSize) {
             return false;
         }
-        List<Integer> frames = mask.frames();
-        boolean allFrames = frames == null || frames.isEmpty();
+
+        // このインスタンスに効く多角形だけに絞る（rects は多角形へ正規化済み）。
+        List<AnonymizeMaskStore.MaskPolygon> polys = new ArrayList<>();
+        for (AnonymizeMaskStore.MaskPolygon p : mask.allPolygons()) {
+            if (p.appliesTo(sopInstanceUid)) {
+                polys.add(p);
+            }
+        }
+        if (polys.isEmpty()) {
+            return false;
+        }
+
         boolean any = false;
         for (int f = 0; f < nf; f++) {
-            if (!allFrames && !frames.contains(f)) {
-                continue;
-            }
             int base = f * frameSize;
-            for (AnonymizeMaskStore.Rect r : mask.rects()) {
-                int x0 = Math.max(0, r.x());
-                int y0 = Math.max(0, r.y());
-                int x1 = Math.min(cols, r.x() + r.w());
-                int y1 = Math.min(rows, r.y() + r.h());
-                for (int y = y0; y < y1; y++) {
-                    int off = base + (y * cols + x0) * bps;
-                    int len = (x1 - x0) * bps;
-                    if (off >= 0 && off + len <= px.length) {
+            for (AnonymizeMaskStore.MaskPolygon p : polys) {
+                if (!p.appliesToFrame(f, mask.frames())) {
+                    continue;
+                }
+                for (PolygonRasterizer.Run run : PolygonRasterizer.runsFor(p, cols, rows, dilatePx)) {
+                    int off = base + (run.y() * cols + run.xStart()) * bps;
+                    int len = (run.xEnd() - run.xStart()) * bps;
+                    if (off >= 0 && len > 0 && off + len <= px.length) {
                         java.util.Arrays.fill(px, off, off + len, (byte) 0);
                         any = true;
                     }

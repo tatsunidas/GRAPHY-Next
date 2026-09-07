@@ -1119,11 +1119,32 @@ export interface AnonResult {
   errors: string[];
 }
 
-/** 焼き込みマスク（画像ピクセル矩形）。frames 空=全フレーム/全インスタンス。 */
+/**
+ * 焼き込みマスクの閉多角形（**画像ピクセル座標**）。
+ *
+ * 🔴 本体の正本 `viewer/roiStats.ts` の `RoiMesh` と規約を揃える ——
+ * **サブピクセル可**（丸めると 1px ずれる）、**始点を末尾で繰り返さない**。
+ * 矩形・楕円・円・ポリゴン・クローズドフリーハンドはすべてこの形へ潰す。
+ *
+ * ⚠ 楕円を bbox で送らないこと。ImageJ の交換型（`ImageJRoiDto`）は軸平行 bbox に潰すため、
+ * **回転した楕円で塗り足りなくなる**（焼き込み文字が残るのに出力を見ても気づけない）。
+ */
+export interface AnonMaskPolygon {
+  xs: number[];
+  ys: number[];
+  /** 適用先の SOP Instance UID。空ならシリーズの全インスタンス。 */
+  sopInstanceUids: string[];
+  /** multi-frame 内のフレーム index（0 origin）。空なら全フレーム。 */
+  frames: number[];
+}
+
+/** 焼き込みマスク。frames 空=全フレーム/全インスタンス。 */
 export interface AnonSeriesMask {
   seriesUid: string;
   frames: number[];
+  /** 旧形式（矩形のみ）。後方互換のため残す。新規は polygons を使う。 */
   rects: { x: number; y: number; w: number; h: number }[];
+  polygons?: AnonMaskPolygon[];
 }
 
 export const fetchAnonProfiles = () => httpGet<AnonProfile[]>("/api/anonymizer/profiles");

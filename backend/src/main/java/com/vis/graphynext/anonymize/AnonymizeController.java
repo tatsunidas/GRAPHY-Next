@@ -115,7 +115,50 @@ public class AnonymizeController {
         if (mask == null || mask.seriesUid() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "seriesUid が必要です");
         }
+        validateMask(mask);
         maskStore.put(mask);
+    }
+
+    /** 多角形の頂点数の上限。これを超える ROI は手描きでも現実的でなく、DoS の入口になる。 */
+    private static final int MAX_MASK_VERTICES = 100_000;
+
+    /**
+     * 焼き込みマスクの形が「実際に塗れるもの」かを、登録の時点で検査する。
+     *
+     * <p>🔴 <b>ここで弾かないと新しい偽申告を作る</b> —— 面積を持たない形（頂点 3 未満）や
+     * 壊れた座標を受け付けると、「登録できたのに 1 画素も塗られていないのに Clean Pixel Data を
+     * 申告する」状態になりうる。塗れない形は<b>登録の時点で断る</b>。
+     *
+     * <p>frontend 側でも閉じた面 ROI だけに絞るが、API は直接叩けるのでここが正本。
+     */
+    static void validateMask(AnonymizeMaskStore.SeriesMask mask) {
+        if (mask.polygons() == null) {
+            return;
+        }
+        for (AnonymizeMaskStore.MaskPolygon p : mask.polygons()) {
+            if (p == null || p.xs() == null || p.ys() == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "マスクの頂点列がありません");
+            }
+            if (p.xs().length != p.ys().length) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "マスクの x と y の頂点数が一致しません: " + p.xs().length + " / " + p.ys().length);
+            }
+            if (p.xs().length < 3) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "焼き込みマスクは閉じた面（3 頂点以上）である必要があります。"
+                                + "線・点・角度の ROI は面積を持たないため使えません。");
+            }
+            if (p.xs().length > MAX_MASK_VERTICES) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "マスクの頂点が多すぎます: " + p.xs().length + "（上限 " + MAX_MASK_VERTICES + "）");
+            }
+            for (int i = 0; i < p.xs().length; i++) {
+                if (!Double.isFinite(p.xs()[i]) || !Double.isFinite(p.ys()[i])) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "マスクの座標に NaN / Infinity が含まれています");
+                }
+            }
+        }
     }
 
     @GetMapping("/masks")

@@ -35,6 +35,14 @@ public class AnonymizeConfig {
     private String replacePatientName = "de-identified";
     private String replacePatientId = "de-identified";
     private Long randomSeed;
+    /**
+     * 焼き込みマスクを外側へ広げる画素数。
+     *
+     * <p>🔴 <b>既定は 0 ではなく 2</b>。コストが非対称で、「塗り足りない」＝<b>個人情報の残存＝
+     * 致命的</b>、「塗りすぎ」＝画質劣化のみ。手描き ROI やアンチエイリアスされた焼き込み文字の
+     * 縁を確実に覆う。0 にできるのは明示指定したときだけ。
+     */
+    private int burnDilatePx = 2;
     private Set<Integer> manualRetainTags = new HashSet<>();
     private Map<Integer, String> customTagReplacements = new HashMap<>();
 
@@ -72,6 +80,14 @@ public class AnonymizeConfig {
 
     public void setReplacePatientId(String id) {
         this.replacePatientId = id;
+    }
+
+    public int getBurnDilatePx() {
+        return burnDilatePx;
+    }
+
+    public void setBurnDilatePx(int burnDilatePx) {
+        this.burnDilatePx = burnDilatePx;
     }
 
     public Long getRandomSeed() {
