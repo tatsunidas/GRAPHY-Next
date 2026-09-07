@@ -21,6 +21,7 @@ import {
   type StudyFilters,
   type TagDictEntry,
 } from "../api";
+import { HttpError } from "../http";
 import { desktop } from "../desktopBridge";
 import { useI18n } from "../i18n/i18n";
 import { dictMap, ggggeeee, normHex } from "./tagPathUtil";
@@ -186,6 +187,22 @@ export function AnonymizerDialog({
     } finally { setBusy(false); }
   };
 
+  /**
+   * 失敗の見せ方。
+   *
+   * 🔴 **意図して止めたもの（400/409）を「取得に失敗しました」と出さない。** マスク未登録や
+   * 設定の矛盾で中止したのは異常ではなく、こちらが安全側に倒した結果。backend が本文の
+   * {message} に日本語の理由を載せているので、それをそのまま見せる（実機で「生の JSON が
+   * 途中で切れて理由が読めない」状態になっていたのを直した・2026-09-07）。
+   */
+  const showFailure = (e: unknown) => {
+    if (e instanceof HttpError && e.status >= 400 && e.status < 500) {
+      setError(e.message);
+      return;
+    }
+    setError(t("common.fetchError", { error: String(e) }));
+  };
+
   const runZip = async () => {
     setBusy(true); setError(null); setInfo(null);
     try {
@@ -200,7 +217,7 @@ export function AnonymizerDialog({
       setInfo(t("anon.zipped.count", { instances, bytes: blob.size }));
       if (problems > 0) setError(t("anon.err.problems", { problems }));
     } catch (e) {
-      setError(t("common.fetchError", { error: String(e) }));
+      showFailure(e);
     } finally { setBusy(false); }
   };
 
@@ -228,7 +245,7 @@ export function AnonymizerDialog({
       if (r.errors.length) notes.push(r.errors.slice(0, 3).join(" / "));
       if (notes.length) setError(notes.join(" / "));
     } catch (e) {
-      setError(t("common.fetchError", { error: String(e) }));
+      showFailure(e);
     } finally { setBusy(false); }
   };
 
@@ -391,7 +408,12 @@ export function AnonymizerDialog({
         </div>
 
         <div style={footer}>
-          <div style={{ flex: 1, minWidth: 0, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {/*
+            🔴 折り返す。以前は nowrap + ellipsis で 1 行に詰めていたため、
+            「なぜ中止したか」の説明が途中で切れて読めなかった（実機で発覚・2026-09-07）。
+            止めた理由が読めないと、利用者は不具合と区別できない。
+          */}
+          <div style={{ flex: 1, minWidth: 0, fontSize: 12, overflowWrap: "anywhere" }}>
             {info && <span data-testid="anon-info-message" style={{ color: "#2e5d27" }}>{info}</span>}
             {error && <span data-testid="anon-error-message" style={{ color: "#b00020" }}>{error}</span>}
             {isWeb && <span style={{ color: "#a85b00" }}>{t("anon.webNote")}</span>}

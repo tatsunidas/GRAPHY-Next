@@ -53,8 +53,14 @@ export class HttpError extends Error {
   }
 }
 
-/** backend の {message} を優先し、無ければ HTTP ステータスを返す。 */
-async function extractErrorMessage(res: Response): Promise<string> {
+/**
+ * backend の {message} を優先し、無ければ HTTP ステータスを返す。
+ *
+ * <p>`fetch` を直に使う経路（ZIP のようにストリームを受けるもの）からも使えるよう export する。
+ * 🔴 ここを通さずに本文を丸ごと文字列化すると、`{"status":409,"error":...}` という生の JSON が
+ * そのまま画面に出て、**backend が丁寧に書いた理由が読めなくなる**（実機で発覚・2026-09-07）。
+ */
+export async function extractErrorMessage(res: Response): Promise<string> {
   try {
     const ct = res.headers.get("content-type") ?? "";
     if (ct.includes("application/json")) {

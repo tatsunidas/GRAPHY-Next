@@ -2,7 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import { HttpError, httpGet, httpSend } from "./http";
+import { HttpError, extractErrorMessage, httpGet, httpSend } from "./http";
 import { chunkForQuery } from "./urlChunk";
 import { apiBase } from "./apiBase";
 
@@ -1167,9 +1167,10 @@ export const anonymizeZip = async (
     body: JSON.stringify(req),
   });
   if (!res.ok) {
-    // backend は 0 件のとき 409 に理由を載せる。握り潰さず本文を見せる。
-    const detail = await res.text().catch(() => "");
-    throw new Error(detail ? `HTTP ${res.status}: ${detail}` : `HTTP ${res.status}`);
+    // backend は「流す前に止めた」理由を本文の {message} に載せる（0 件の 409、焼き込み不可の
+    // 409/400 など）。🔴 本文を丸ごと文字列化すると生の JSON が画面に出て理由が読めないので、
+    // 共通の抽出を通す。status も持たせて呼び出し側が文言を選べるようにする。
+    throw new HttpError(await extractErrorMessage(res), res.status);
   }
   const blob = await res.blob();
   if (blob.size <= EMPTY_ZIP_BYTES) {
