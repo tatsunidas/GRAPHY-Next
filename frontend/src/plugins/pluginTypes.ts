@@ -16,6 +16,13 @@ import type {
   PluginVolumeViewMode,
 } from "./pluginViewportApi";
 import type { PluginMaskInput, PluginMeshMeasurement, PluginMeshOptions } from "./pluginMeshApi";
+import type {
+  PluginCenterlineGraph,
+  PluginCenterlineOptions,
+  PluginCurveFrame,
+  PluginCurveFrameOptions,
+} from "./pluginCenterlineApi";
+import type { Vec3 } from "../viewer/reslice";
 import type { PluginSeriesPanelHandle, PluginSeriesPanelOptions } from "./pluginSeriesPanelApi";
 import type {
   ViewerDerivedSeriesRequest,
@@ -55,6 +62,14 @@ export type {
   PluginVolumeViewMode,
 } from "./pluginViewportApi";
 export type { PluginMaskInput, PluginMeshMeasurement, PluginMeshOptions } from "./pluginMeshApi";
+export type {
+  PluginCenterlineBranch,
+  PluginCenterlineGraph,
+  PluginCenterlineNode,
+  PluginCenterlineOptions,
+  PluginCurveFrame,
+  PluginCurveFrameOptions,
+} from "./pluginCenterlineApi";
 export type {
   XaVesselAnalysis,
   XaVesselAnalysisInput,
@@ -740,6 +755,40 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * （平滑化した曲面）は**一致しない**。どちらが正しいでもないので両方返す。
    */
   measureMask: (mask: PluginMaskInput, opts?: PluginMeshOptions) => PluginMeshMeasurement[];
+  /**
+   * **マスクを 3D 細線化して中心線グラフにする**（H41）。0=背景 / >0=前景。
+   *
+   * <p>本体の `skeletonize.ts`（Lee-Kashyap-Chu 1994・Fiji と数値一致）と
+   * `centerlineGraph.ts`（26 近傍歩行）をそのまま通す。3D 細線化は vtk.js にも
+   * cornerstone にも無いので、**各プラグインが自前で書くと実装がアプリ内に増え続ける**
+   * （H5 / H33 と同じ理由でここに閉じる）。
+   *
+   * <p>返る枝は**内部に分岐を持たない**＝1 本の管に対応する。
+   * **どの枝がどの血管かは本体が知らない**——選ぶのはプラグインの仕事。
+   *
+   * <p>🔴 複数のセグメントが入ったマスクを `segment` 無しで渡すと、
+   * 別々の構造が 1 本に繋がった骨格ができる。前景が無ければ `null`
+   * （空のグラフは返さない＝「何も無かった」と「できなかった」を混ぜない）。
+   */
+  extractCenterline: (
+    mask: PluginMaskInput,
+    opts?: PluginCenterlineOptions,
+  ) => PluginCenterlineGraph | null;
+  /**
+   * **折れ線に沿って等間隔の位置と正規直交フレームを作る**（H41）。
+   * 中心線に直交する断面を並べる用途（流量計測・CPR・径プロファイル）。
+   *
+   * <p>補間は本体の `Centerline3D`（centripetal Catmull-Rom ＋ 弧長パラメータ化）。
+   * **入力の平滑化はしない**（どれだけ均すかは測る対象で決まるので本体が既定値を選ばない）。
+   *
+   * <p>🔴 **曲線をはみ出す位置は返さない**。端に丸めて本数を揃えると、呼び出し側は
+   * 「等間隔で置けた」と思ったまま重なった断面で積分する（絵は最後までもっともらしい）。
+   * 足りないことは戻り値の長さで分かるので、**必ず length を見ること**。
+   */
+  sampleCenterlineFrames: (
+    polylineWorld: readonly Vec3[],
+    opts: PluginCurveFrameOptions,
+  ) => PluginCurveFrame[];
   /**
    * **シリーズビューパネルをそのまま貸す**（H34）。W/L バー・スライダ・ThickSlab・参照線・
    * 計測・シネ、そして**フュージョン重畳**が丸ごと付いてくる。

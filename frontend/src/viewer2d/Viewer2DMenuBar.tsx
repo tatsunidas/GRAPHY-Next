@@ -19,6 +19,7 @@ import {
 import { openPluginWindow } from "../plugins/pluginWindowApi";
 import { mountValueViewport, mountVolumeView } from "../plugins/pluginViewportApi";
 import { measureMask } from "../plugins/pluginMeshApi";
+import { extractCenterline, sampleCenterlineFrames } from "../plugins/pluginCenterlineApi";
 import { deletePluginStore, loadPluginStore, savePluginStore } from "../plugins/pluginStore";
 import { openLogViewer } from "../system/LogViewer";
 import { openMemoryMonitor } from "../system/memoryMonitor";
@@ -200,6 +201,8 @@ export function Viewer2DMenuBar({
     },
     mountVolumeView: (el, volume, opts) => mountVolumeView(el, m.id, volume, opts),
     measureMask: (mask, opts) => measureMask(mask, opts),
+    extractCenterline: (mask, opts) => extractCenterline(mask, opts),
+    sampleCenterlineFrames: (polyline, opts) => sampleCenterlineFrames(polyline, opts),
     mountSeriesPanel: (el, series, opts) => actions.mountSeriesPanel(el, series, opts),
   });
   /** 「プラグイン」メニューに出るもの。 */

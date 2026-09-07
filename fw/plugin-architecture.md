@@ -277,6 +277,7 @@ H1・H2 は実質「これを本番向けの契約として切り出す」作業
 | **H16** ✅ | **SR の数値計測の拡張** — 長径・短径以外の数値を SR に入れる | `saveStructuredReport` の `measurements[].type` を拡張 | 表は `dicom/sr/SrMeasurementConcepts.java` が単一の出所（検証・コード・単位が 3 か所に散らない）。**標準コードを確認できていない概念は私用スキーム `99GRAPHY` で書く**（誤った標準コードのほうが有害）。単位は UCUM、**換算はしない** | ✅ |
 | **H22** ✅ | **マスクの書き出し（DICOM SEG）** | `saveSegmentation(req)` | 既存 `SegExportService` を host へ開いただけ。**格子の申告（H10 が返した幾何）と元シリーズのスライス位置を突き合わせ、一致しなければ書かない**。前景ゼロのセグメントは保存しない | ✅ |
 | **H23** ✅ | **線量分布の書き出し（RTDOSE）** | `saveRtDose(req)` | **本体に無かったので新規**（`dicom/export/RtDoseExportService`）。Float32 [Gy] → uint16 ＋ `DoseGridScaling`。**`NaN` を含むなら `backgroundGy` 必須**（0 Gy で埋めると「線量が無かった」と読まれる）。⚠ 核医学に RT Plan は無いので **Type 1C を満たせないことを `warnings` で返す** | ✅ |
+| **H41** ✅ | **マスク → 中心線・直交フレーム** — 3D 細線化・分岐グラフ・弧長等間隔の正規直交フレーム | `extractCenterline(mask, opts?)` / `sampleCenterlineFrames(polylineWorld, opts)` | 実装は `plugins/pluginCenterlineApi.ts` ＝ **`skeletonize.ts` ＋ `centerlineGraph.ts` ＋ `centerline.ts` を公開しただけ**（H10 が `regVolumeLoader` を公開したのと同じで、新しい数式は 1 つも足していない）。3D 細線化は **vtk.js にも cornerstone にも無い**ので、公開しないと各プラグインが自前で書く（H5 の長径・H33 の体積と同じ理由でここに閉じる）。境界は **本体は幾何、解剖は知らない**：どの枝がどの血管かはプラグインが決める。🔴 **曲線をはみ出すフレームは返さない**——端に丸めて本数を揃えると、呼び出し側は「等間隔で置けた」と思ったまま**重なった断面で積分する**（絵は最後までもっともらしい）。⚠ 複数セグメントのマスクを `segment` 無しで渡すと、別々の構造が 1 本に繋がった骨格ができる | ✅ |
 | ~~**H25**~~ | **H39 に統合した**（2026-08-27） | — | 🔴 **H25 と H39 は同じ機能を独立に実装していた**（どちらも A14 の登録簿へ積む）。H25 は**プラグインが `studyUid` / `seriesUid` を指定できる**形で、「参照を素通しにすると他患者の検査へレポートが生える」という**書き込み系 host API の罠**（HANDOFF 冒頭）そのものだった。**H39 を残す**——host が表示中タイルから study/series を入れ、id には `plugin:<id>:` の名前空間を強制する | — |
 
 H1〜H3 は**フロント面だけで完結**するため、web モードでも同じように動く（backend の契約 `/api/plugins` は不変）。
@@ -907,6 +908,7 @@ host.locale   // "ja" | "en"（活性化した時点の値）
 | **H16** | SR の計測種別を表で持ち、線量系（吸収線量 / TIA / 有効半減期 / 体積 / 質量 / BED / EQD2）を追加 | `dicom/sr/MeasurementReportService`（構造は変えず、`switch` を表に置換） |
 | **H22** | `saveSegmentation` を host へ | `dicom/export/SegExportService`（**既にあった**。呼べるようにしただけ） |
 | **H23** | `saveRtDose` を host へ（**writer は新規**） | `DerivedSeriesService` の属性引き継ぎ・`SegExportService` の ingest の作法 |
+| **H41** | `extractCenterline` / `sampleCenterlineFrames` を host へ | `viewer/skeletonize.ts`（Lee-Kashyap-Chu 1994）・`viewer/centerlineGraph.ts`（`extractGraphFromSkeleton` / `prune`）・`viewer/centerline.ts`（`Centerline3D.frameAt`）・`plugins/pluginMeshApi.ts` の `geomFromIndexToWorld`（**すべて既存**） |
 
 **実装で決めたこと**:
 

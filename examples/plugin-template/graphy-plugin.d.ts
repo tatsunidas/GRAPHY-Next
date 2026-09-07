@@ -930,6 +930,74 @@ export interface PluginMeshMeasurement {
   boundsMax: [number, number, number];
 }
 
+/** 中心線グラフの節点（H41・**0.2.9 以降**）。端点 degree=1 / 分岐点 degree>=3。 */
+export interface PluginCenterlineNode {
+  id: number;
+  /** 患者 LPS mm。 */
+  world: [number, number, number];
+  /** この節点に集まる枝の数。 */
+  degree: number;
+}
+
+/** 2 つの節点を結ぶ 1 本の枝。**枝の内部に分岐は無い**＝1 本の管に対応する。 */
+export interface PluginCenterlineBranch {
+  id: number;
+  startNode: number;
+  endNode: number;
+  /** startNode → endNode の順の制御点（患者 LPS mm）。2 点以上。 */
+  pointsWorld: [number, number, number][];
+  lengthMm: number;
+}
+
+export interface PluginCenterlineGraph {
+  nodes: PluginCenterlineNode[];
+  branches: PluginCenterlineBranch[];
+}
+
+export interface PluginCenterlineOptions {
+  /** 制御点の簡略化（Douglas-Peucker）の許容誤差 mm。既定 0.5。 */
+  simplifyEpsilonMm?: number;
+  /** 細線化前に前景 bbox へ付ける余白ボクセル。既定 2。 */
+  margin?: number;
+  /**
+   * 短い葉枝を落とす下限 mm。既定 0（＝落とさない）。
+   * 骨格化は表面のこぶから短いひげを生やすので、実データでは 2〜3 mm を入れることが多い。
+   */
+  pruneMinLengthMm?: number;
+  /**
+   * 前景とみなすセグメント番号。省略すると 0 以外すべてが前景。
+   * 🔴 複数セグメントのマスクを省略のまま渡すと、別々の構造が 1 本に繋がった骨格ができる。
+   */
+  segment?: number;
+}
+
+/** 弧長位置での 位置 ＋ 正規直交フレーム（H41）。 */
+export interface PluginCurveFrame {
+  positionWorld: [number, number, number];
+  /** 単位・接線方向。 */
+  tangent: [number, number, number];
+  /** 単位・接線に直交（出力の第 2 軸）。 */
+  normal: [number, number, number];
+  /** 単位・tangent × normal。 */
+  binormal: [number, number, number];
+  /** 曲線の始点からの弧長 mm。 */
+  arcLengthMm: number;
+}
+
+export interface PluginCurveFrameOptions {
+  /** フレームどうしの弧長間隔 mm。正の有限値。 */
+  spacingMm: number;
+  /** 生成する本数。既定 1。曲線の外に出る分は**返らない**。 */
+  count?: number;
+  /** この点に最も近い曲線上の位置を中心に前後へ振り分ける。省略時は曲線の中央。 */
+  anchorWorld?: [number, number, number];
+  /**
+   * 第 2 軸の規約。既定 `"ROTATION_MINIMIZING"`（捩れ最小）。
+   * 血管のように曲線が面外へ出る用途はこちら。`"FIXED_Z"` は曲線が 1 断面に収まる用途向け。
+   */
+  frameMode?: "FIXED_Z" | "ROTATION_MINIMIZING";
+}
+
 interface PluginHostBase {
   /** 自分の plugin.json の id。 */
   pluginId: string;
@@ -1241,6 +1309,37 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * （平滑化した曲面）は**一致しない**。どちらが正しいでもないので両方返す。
    */
   measureMask: (mask: PluginMaskInput, opts?: PluginMeshOptions) => PluginMeshMeasurement[];
+  /**
+   * **マスクを 3D 細線化して中心線グラフにする**（H41・**0.2.9 以降**）。0=背景 / >0=前景。
+   *
+   * <p>本体の Lee-Kashyap-Chu 1994 細線化（Fiji Skeletonize3D と数値一致）＋ 26 近傍歩行を
+   * そのまま通す。3D 細線化は vtk.js にも cornerstone にも無いので、
+   * **各プラグインが自前で書くと実装がアプリ内に増え続ける**（H5 / H33 と同じ理由）。
+   *
+   * <p>返る枝は**内部に分岐を持たない**＝1 本の管に対応する。
+   * **どの枝がどの構造かは本体が知らない**——選ぶのはプラグインの仕事。
+   *
+   * <p>前景が無ければ `null`（空のグラフは返さない＝「何も無かった」と「できなかった」を混ぜない）。
+   */
+  extractCenterline: (
+    mask: PluginMaskInput,
+    opts?: PluginCenterlineOptions,
+  ) => PluginCenterlineGraph | null;
+  /**
+   * **折れ線に沿って等間隔の位置と正規直交フレームを作る**（H41・**0.2.9 以降**）。
+   * 中心線に直交する断面を並べる用途（流量計測・CPR・径プロファイル）。
+   *
+   * <p>補間は centripetal Catmull-Rom ＋ 弧長パラメータ化。**入力の平滑化はしない**
+   * （どれだけ均すかは測る対象で決まるので本体が既定値を選ばない）。
+   *
+   * <p>🔴 **曲線をはみ出す位置は返さない**。端に丸めて本数を揃えると、呼び出し側は
+   * 「等間隔で置けた」と思ったまま重なった断面で積分する（絵は最後までもっともらしい）。
+   * 足りないことは戻り値の長さで分かるので、**必ず length を見ること**。
+   */
+  sampleCenterlineFrames: (
+    polylineWorld: readonly [number, number, number][],
+    opts: PluginCurveFrameOptions,
+  ) => PluginCurveFrame[];
   /**
    * **シリーズビューパネルをそのまま貸す**（H34・**0.2.1 以降**）。W/L バー・スライダ・
    * ThickSlab・参照線・計測・シネ、そして**フュージョン重畳**が丸ごと付いてくる。

@@ -118,6 +118,14 @@ export function activate(host) {
 | `getRoiMeta(roiUid)` | ROI に紐付けた**このプラグインの属性**（`Record<string,string>`）。未設定なら `{}` |
 | `setRoiMeta(roiUid, patch)` | 同属性を書く（マージ）。ROI が無ければ `false` |
 | `subscribeRois(cb)` | ROI の追加/変更/削除を購読。返り値で解除。**差分は渡さない**ので `getRois()` を読み直す |
+| `extractCenterline(mask, opts?)` | **マスクを 3D 細線化して中心線グラフにする**（H41・**0.2.9 以降**）。`mask` は `{data: Uint8Array, dims, indexToWorld}`（`loadVolume` の幾何をそのまま渡せる）。返る枝は**内部に分岐を持たない**＝1 本の管。前景が無ければ `null` |
+| `sampleCenterlineFrames(polylineWorld, opts)` | **折れ線に沿って等間隔の位置と正規直交フレーム**（H41・**0.2.9 以降**）。`opts = {spacingMm, count?, anchorWorld?, frameMode?}`。中心線に直交する断面を並べる用途 |
+
+> ⚠ **この表は 0.1.9 時点の一覧**で、0.2.x で入った host API（`loadVolume` / `registerVolumes` /
+> `openWindow` / `mountViewport` / `mountVolumeView` / `measureMask` / `mountSeriesPanel` /
+> `loadStore` / `saveStore` / `saveSegmentation` / `saveRtDose` / `publishAnalysisResult` 等）は
+> **載っていない**。全量は [`plugin-architecture.md` §7](plugin-architecture.md) の表と、
+> 型の正本 `frontend/src/plugins/pluginTypes.ts` を見ること。
 
 - **呼ぶたびに現在値を読む**。ダイアログを開いている間にユーザーがスライスを送るので、
   活性化時に一度読んだ値を持ち回らないこと。
@@ -259,6 +267,40 @@ function refresh() {
     sld += size;
   }
   host.notify(`SLD = ${sld.toFixed(1)} mm`);
+}
+```
+
+
+**中心線（H41）の要点** — 流量計測・CPR・径プロファイルのように「中心線に直交する断面」を並べるなら:
+
+- **3D 細線化は vtk.js にも cornerstone にも無い**。自前で書かず `extractCenterline()` を使うこと
+  （本体の実装は Lee-Kashyap-Chu 1994 で、Fiji `Skeletonize3D_` と数値一致する）。
+- 🔴 **`sampleCenterlineFrames()` は曲線をはみ出す位置を返さない。** 端に丸めて要求どおりの
+  本数を返すと、呼び出し側は「等間隔で置けた」と思ったまま**重なった断面で積分する**
+  （絵は最後までもっともらしく、見て気付けない）。**必ず戻り値の length を見ること。**
+- ⚠ **複数のセグメントが入ったマスクを `segment` 無しで渡さない。** 別々の構造が
+  1 本に繋がった骨格ができる（`measureMask` がセグメントごとに独立したメッシュを作るのと同じ罠）。
+- 骨格化は表面のこぶから**短いひげ**を生やす。実データでは `pruneMinLengthMm` に 2〜3 mm を入れる。
+- **入力の平滑化はされない**（制御点をそのまま通る）。どれだけ均すかは測る対象で決まるので、
+  必要なら呼び出し側で平滑化してから渡す。
+- どの枝がどの血管かは**本体が知らない**。枝を選ぶのはプラグインの仕事。
+
+```js
+// 例: マスクの中で、指定した点に最も近い枝に沿って 9 断面を 2mm 間隔で置く
+const graph = host.extractCenterline(
+  { data: maskU8, dims: vol.dims, indexToWorld: vol.indexToWorld },
+  { pruneMinLengthMm: 2 },
+);
+if (graph) {
+  const seed = [x, y, z];                       // 患者 LPS mm
+  const branch = nearestBranch(graph.branches, seed);   // 選ぶのはこちらの仕事
+  const frames = host.sampleCenterlineFrames(branch.pointsWorld, {
+    spacingMm: 2, count: 9, anchorWorld: seed,
+  });
+  if (frames.length < 9) {
+    // 端に丸められていない＝枝が短い。等間隔のまま本数が減っている。
+    host.notify(`断面は ${frames.length} 枚しか置けませんでした`);
+  }
 }
 ```
 
