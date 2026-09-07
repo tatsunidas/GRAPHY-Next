@@ -75,6 +75,7 @@ public class AnonymizeController {
         }
 
         AnonymizeConfig cfg = toConfig(req);
+        requireBurnableIfCleanPixelData(cfg, req.burnIn());
         StreamingResponseBody body = out -> {
             try {
                 service.anonymizeToZip(req.studyUids(), cfg, req.burnIn(), out);
@@ -99,8 +100,10 @@ public class AnonymizeController {
         if (req.destination() == null || req.destination().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "destination が空です");
         }
+        AnonymizeConfig cfg = toConfig(req);
+        requireBurnableIfCleanPixelData(cfg, req.burnIn());
         try {
-            return service.anonymizeToFolder(req.studyUids(), toConfig(req), req.burnIn(), req.destination());
+            return service.anonymizeToFolder(req.studyUids(), cfg, req.burnIn(), req.destination());
         } catch (Exception e) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, e.getMessage());
         }
@@ -112,7 +115,50 @@ public class AnonymizeController {
         if (mask == null || mask.seriesUid() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "seriesUid が必要です");
         }
+        validateMask(mask);
         maskStore.put(mask);
+    }
+
+    /** 多角形の頂点数の上限。これを超える ROI は手描きでも現実的でなく、DoS の入口になる。 */
+    private static final int MAX_MASK_VERTICES = 100_000;
+
+    /**
+     * 焼き込みマスクの形が「実際に塗れるもの」かを、登録の時点で検査する。
+     *
+     * <p>🔴 <b>ここで弾かないと新しい偽申告を作る</b> —— 面積を持たない形（頂点 3 未満）や
+     * 壊れた座標を受け付けると、「登録できたのに 1 画素も塗られていないのに Clean Pixel Data を
+     * 申告する」状態になりうる。塗れない形は<b>登録の時点で断る</b>。
+     *
+     * <p>frontend 側でも閉じた面 ROI だけに絞るが、API は直接叩けるのでここが正本。
+     */
+    static void validateMask(AnonymizeMaskStore.SeriesMask mask) {
+        if (mask.polygons() == null) {
+            return;
+        }
+        for (AnonymizeMaskStore.MaskPolygon p : mask.polygons()) {
+            if (p == null || p.xs() == null || p.ys() == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "マスクの頂点列がありません");
+            }
+            if (p.xs().length != p.ys().length) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "マスクの x と y の頂点数が一致しません: " + p.xs().length + " / " + p.ys().length);
+            }
+            if (p.xs().length < 3) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "焼き込みマスクは閉じた面（3 頂点以上）である必要があります。"
+                                + "線・点・角度の ROI は面積を持たないため使えません。");
+            }
+            if (p.xs().length > MAX_MASK_VERTICES) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "マスクの頂点が多すぎます: " + p.xs().length + "（上限 " + MAX_MASK_VERTICES + "）");
+            }
+            for (int i = 0; i < p.xs().length; i++) {
+                if (!Double.isFinite(p.xs()[i]) || !Double.isFinite(p.ys()[i])) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "マスクの座標に NaN / Infinity が含まれています");
+                }
+            }
+        }
     }
 
     @GetMapping("/masks")
@@ -135,6 +181,33 @@ public class AnonymizeController {
         }
     }
 
+    /**
+     * Clean Pixel Data を要求されたのに<b>実行できない</b>状態なら、書き出す前に止める。
+     *
+     * <p>🔴 <b>「一部だけ塗れた ZIP」を黙って渡すのが最も危険</b> —— 受け取り側は ZIP 全体が
+     * clean だと解釈する。ZIP はストリーミングなので 1 バイト流したらステータスを変えられず、
+     * 途中で気づいても遅い。よって判定は流し始める前に済ませる。
+     *
+     * <p>誤った申告をするくらいなら機能を止める、という判断基準の実装。
+     */
+    // package-private: validate と同じ理由で直接テストする。
+    void requireBurnableIfCleanPixelData(AnonymizeConfig cfg, boolean burnIn) {
+        if (!cfg.hasOption(AnonymizeConfig.Option.CleanPixelData)) {
+            return;
+        }
+        if (!burnIn) {
+            // チェックだけ入れて焼き込みを回さない＝設定と出力が食い違う。通さない。
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Clean Pixel Data を選ぶ場合は焼き込みの実行も有効にしてください。"
+                            + "焼き込みを行わないと画素は変わらず、除去済みという申告もできません。");
+        }
+        if (maskStore.size() == 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "焼き込みマスクが 1 件も登録されていないため、Clean Pixel Data を実行できません。"
+                            + "マスクが無いまま出力すると焼き込み文字が残ったままになるので中止しました。");
+        }
+    }
+
     private void requireStandalone() {
         if (service.isWeb()) {
             throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
@@ -142,20 +215,59 @@ public class AnonymizeController {
         }
     }
 
-    private static void validate(AnonRequest req) {
+    // package-private: Spring も Mockito も要らずに直接テストする（この JDK では
+    // Mockito が ObjectProvider をモックできず、@WebMvcTest 系が動かないため）。
+    static void validate(AnonRequest req) {
         if (req.studyUids() == null || req.studyUids().isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "studyUids が空です");
         }
+        validateDateOptions(req);
     }
 
-    private static AnonymizeConfig toConfig(AnonRequest req) {
+    /**
+     * 日付オプションの排他を検査する。
+     *
+     * <p>PS3.15 では Full Dates（原本の日付を保持）と Modified Dates（関係を保ったまま加工）は
+     * <b>どちらか一方</b>を選ぶもの。両方立つと {@code AnonymizeConfig.getActionByOptionsAndDefault()} の
+     * 「加工(C,X)は保持(K)より優先（安全側）」により <b>Full Dates が負けて</b>、
+     * 利用者が「保持」を選んだつもりの日付が加工される。
+     *
+     * <p>🔴 <b>ここが正本</b>。UI 側の排他だけでは塞げない —— プロファイルの読み込みは
+     * 任意の JSON ファイルから options を丸ごと差し替えるし、API を直接叩くこともできる。
+     *
+     * <p>⚠ C&gt;K の優先規則そのものは変えない。あれは辞書解決の汎用の安全側フォールバックで、
+     * 他のオプションの組み合わせにも効いている。日付 2 つの排他という個別事情で触ると
+     * 影響範囲が読めなくなる。<b>競合を後段で解決するのではなく、競合した設定を受け付けない</b>のが正しい層。
+     */
+    private static void validateDateOptions(AnonRequest req) {
+        if (req.options() == null) {
+            return;
+        }
+        boolean full = req.options().contains(
+                AnonymizeConfig.Option.RetainLongitudinalTemporalInformationFullDates.name());
+        boolean modified = req.options().contains(
+                AnonymizeConfig.Option.RetainLongitudinalTemporalInformationModifiedDates.name());
+        if (full && modified) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "日付オプションは排他です。Full Dates（原本の日付を保持）と Modified Dates"
+                            + "（前後関係を保ったままシフト）のどちらか一方を選んでください。"
+                            + "両方を指定すると加工が保持に優先し、保持したつもりの日付が加工されます。");
+        }
+    }
+
+    /** @see #validate(AnonRequest) （同じ理由で package-private） */
+    static AnonymizeConfig toConfig(AnonRequest req) {
         AnonymizeConfig cfg = new AnonymizeConfig();
         if (req.options() != null) {
             for (String o : req.options()) {
                 try {
                     cfg.addOption(AnonymizeConfig.Option.valueOf(o));
-                } catch (IllegalArgumentException ignore) {
-                    // 未知オプションは無視
+                } catch (IllegalArgumentException e) {
+                    // 🔴 黙って無視しない。脱識別で「読めなかった設定を無視する」は、
+                    // 利用者が指定したつもりの保護がそのまま消えることを意味する。
+                    // 綴り違いのオプション 1 つで保護が外れた出力が出るくらいなら止める。
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "未知の匿名化オプションです: " + o);
                 }
             }
         }

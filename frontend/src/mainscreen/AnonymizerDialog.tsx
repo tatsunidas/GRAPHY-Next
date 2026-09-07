@@ -2,24 +2,30 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   anonymizeCopy,
   anonymizeZip,
+  clearAnonMask,
+  fetchAnonMasks,
   fetchAnonProfiles,
+  fetchSeries,
   fetchStudies,
   fetchTagDictionary,
   type AnonOption,
   type AnonProfile,
   type AnonRequest,
+  type AnonSeriesMask,
+  type Series,
   type Study,
   type StudyFilters,
   type TagDictEntry,
 } from "../api";
+import { HttpError } from "../http";
 import { desktop } from "../desktopBridge";
 import { useI18n } from "../i18n/i18n";
 import { dictMap, ggggeeee, normHex } from "./tagPathUtil";
-import { CLEAN_OPTS, DEFAULT_ANON_OPTIONS, RETAIN_OPTS } from "./anonDefaults";
+import { CLEAN_OPTS, DEFAULT_ANON_OPTIONS, RETAIN_OPTS, sanitizeAnonOptions, toggleAnonOption } from "./anonDefaults";
 
 /**
  * Anonymizer（PS3.15）。検索リスト全体を匿名化（属性＋任意で Pixel 焼き込み）して ZIP/フォルダ出力。
@@ -55,6 +61,14 @@ export function AnonymizerDialog({
   // 既定は「選択中のスタディ 1 件」。検索結果全体を一括で処理したいときだけ明示的に ON にする。
   const [wholeList, setWholeList] = useState(false);
   const [destination, setDestination] = useState<string | null>(null);
+  /**
+   * 登録済みの焼き込みマスク（旧 GRAPHY の "Mask ROIs" リストに相当）。
+   *
+   * ⚠ backend のプロセス内メモリにしか無く**再起動で消える**。一覧が無いと「消えたこと」に
+   * 気づけないので、件数 0 も含めて必ず見せる。
+   */
+  const [masks, setMasks] = useState<AnonSeriesMask[]>([]);
+  const [seriesList, setSeriesList] = useState<Series[]>([]);
 
   const [tagInput, setTagInput] = useState("");
   const [valInput, setValInput] = useState("");
@@ -69,17 +83,42 @@ export function AnonymizerDialog({
     fetchAnonProfiles().then(setProfiles).catch(() => undefined);
   }, [open, dict.length]);
 
+  // 選択中スタディのシリーズを引き、そのシリーズに付いているマスクを読む。
+  // 🔴 マスクはシリーズ単位なので、スタディの外に登録されたマスクはここには出ない
+  //    （出しても対象外なので、黙って効くことはない）。
+  const reloadMasks = useCallback(async () => {
+    const studyUid = study?.studyInstanceUid;
+    if (!studyUid) { setSeriesList([]); setMasks([]); return; }
+    try {
+      const ss = await fetchSeries(studyUid);
+      setSeriesList(ss);
+      const uids = ss.map((x) => x.seriesInstanceUid);
+      setMasks(uids.length ? await fetchAnonMasks(uids) : []);
+    } catch {
+      setSeriesList([]);
+      setMasks([]);
+    }
+  }, [study?.studyInstanceUid]);
+
+  useEffect(() => {
+    if (!open) return;
+    void reloadMasks();
+  }, [open, reloadMasks]);
+
   if (!open) return null;
 
-  const toggleOpt = (o: AnonOption) =>
-    setOptions((s) => {
-      const n = new Set(s);
-      if (n.has(o)) n.delete(o);
-      else n.add(o);
-      return n;
-    });
+  // 日付の 2 つだけは相互排他（両方 ON にすると加工が保持に勝ち、日付が潰れる）。
+  // 判定は anonDefaults の純関数へ（.tsx は vitest の対象外なのでここには書けない）。
+  const toggleOpt = (o: AnonOption) => setOptions((s) => toggleAnonOption(s, o));
 
-  const applyProfile = (p: AnonProfile) => setOptions(new Set(p.options));
+  const applyProfile = (p: AnonProfile) => setOptions(applySanitized(p.options ?? []));
+
+  /** 排他規則に合わせて直しつつ、直したことを利用者に見せる。 */
+  const applySanitized = (opts: AnonOption[]): Set<AnonOption> => {
+    const { options: next, dropped } = sanitizeAnonOptions(opts);
+    if (dropped.length) setInfo(t("anon.dateOpts.adjusted"));
+    return next;
+  };
 
   const addRetain = () => {
     const h = normHex(tagInput);
@@ -127,6 +166,43 @@ export function AnonymizerDialog({
     return studies.map((s) => s.studyInstanceUid);
   };
 
+  const maskCount = masks.reduce((n, m) => n + (m.polygons?.length ?? 0) + (m.rects?.length ?? 0), 0);
+
+  /** マスクのシリーズを人が読める形に（UID だけでは対象が分からない）。 */
+  const seriesLabel = (seriesUid: string): string => {
+    const se = seriesList.find((x) => x.seriesInstanceUid === seriesUid);
+    if (!se) return seriesUid;
+    const num = se.seriesNumber != null ? `${se.seriesNumber}: ` : "";
+    return `${num}${se.seriesDescription ?? se.modality ?? seriesUid}`;
+  };
+
+  /** マスクを消す（seriesUid 省略で全消去）。 */
+  const removeMasks = async (seriesUid?: string) => {
+    setBusy(true);
+    try {
+      await clearAnonMask(seriesUid);
+      await reloadMasks();
+    } catch (e) {
+      setError(t("common.fetchError", { error: String(e) }));
+    } finally { setBusy(false); }
+  };
+
+  /**
+   * 失敗の見せ方。
+   *
+   * 🔴 **意図して止めたもの（400/409）を「取得に失敗しました」と出さない。** マスク未登録や
+   * 設定の矛盾で中止したのは異常ではなく、こちらが安全側に倒した結果。backend が本文の
+   * {message} に日本語の理由を載せているので、それをそのまま見せる（実機で「生の JSON が
+   * 途中で切れて理由が読めない」状態になっていたのを直した・2026-09-07）。
+   */
+  const showFailure = (e: unknown) => {
+    if (e instanceof HttpError && e.status >= 400 && e.status < 500) {
+      setError(e.message);
+      return;
+    }
+    setError(t("common.fetchError", { error: String(e) }));
+  };
+
   const runZip = async () => {
     setBusy(true); setError(null); setInfo(null);
     try {
@@ -141,7 +217,7 @@ export function AnonymizerDialog({
       setInfo(t("anon.zipped.count", { instances, bytes: blob.size }));
       if (problems > 0) setError(t("anon.err.problems", { problems }));
     } catch (e) {
-      setError(t("common.fetchError", { error: String(e) }));
+      showFailure(e);
     } finally { setBusy(false); }
   };
 
@@ -152,10 +228,24 @@ export function AnonymizerDialog({
       const ids = await resolveStudyUids();
       if (!ids) return;
       const r = await anonymizeCopy(buildReq(ids));
-      setInfo(t("anon.copied", { instances: r.instances, burned: r.burnedInstances }));
-      if (r.errors.length) setError(r.errors.slice(0, 3).join(" / "));
+      let done = t("anon.copied", { instances: r.instances, burned: r.burnedInstances });
+      // 日付をずらしたなら、使った種を必ず見せる。控えていないと後日の追加出力で
+      // 日付が別方向にずれ、前回の出力と時間軸が合わなくなる。
+      if (options.has("RetainLongitudinalTemporalInformationModifiedDates")) {
+        done += " " + t("anon.usedSeed", { seed: r.usedSeed });
+      }
+      setInfo(done);
+      // 焼き込みを頼まれたのに塗れなかったぶんは、出力に焼き込み文字が残っている。
+      // 申告していないので DICOM としては正直だが、利用者は気づけないので必ず出す。
+      // ⚠ errors と両方出うるので、片方で上書きしない（警告のほうが重要度が高い）。
+      const notes: string[] = [];
+      if (r.notBurnedInstances > 0) {
+        notes.push(t("anon.burnIn.warn.notBurned", { count: r.notBurnedInstances }));
+      }
+      if (r.errors.length) notes.push(r.errors.slice(0, 3).join(" / "));
+      if (notes.length) setError(notes.join(" / "));
     } catch (e) {
-      setError(t("common.fetchError", { error: String(e) }));
+      showFailure(e);
     } finally { setBusy(false); }
   };
 
@@ -176,7 +266,7 @@ export function AnonymizerDialog({
   const loadProfile = async (f: File) => {
     try {
       const p = JSON.parse(await f.text());
-      setOptions(new Set(p.options ?? []));
+      setOptions(applySanitized(p.options ?? []));
       setPatName(p.patName ?? "de-identified");
       setPatId(p.patId ?? "de-identified");
       setSeed(p.seed ?? "");
@@ -270,6 +360,30 @@ export function AnonymizerDialog({
           {options.has("CleanPixelData") && (
             <div style={{ fontSize: 11, color: "#8a98a6" }}>{t("anon.burnIn.note")}</div>
           )}
+          {options.has("CleanPixelData") && (
+            <div style={maskBox}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <b style={{ fontSize: 12 }}>{t("anon.masks")} ({maskCount})</b>
+                <button style={{ ...btn, padding: "2px 8px" }} disabled={busy || maskCount === 0}
+                  onClick={() => void removeMasks()}>{t("anon.masks.clear")}</button>
+              </div>
+              {maskCount === 0 ? (
+                <div style={{ fontSize: 11, color: "#8a98a6", marginTop: 4 }}>{t("anon.masks.empty")}</div>
+              ) : (
+                masks.map((m) => (
+                  <div key={m.seriesUid} style={maskRow}>
+                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}
+                      title={m.seriesUid}>{seriesLabel(m.seriesUid)}</span>
+                    <span style={{ color: "#8a98a6" }}>
+                      {t("anon.masks.shapes", { count: (m.polygons?.length ?? 0) + (m.rects?.length ?? 0) })}
+                    </span>
+                    <button style={{ ...btn, padding: "2px 8px" }} disabled={busy}
+                      onClick={() => void removeMasks(m.seriesUid)}>{t("common.delete")}</button>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
 
           {/* 個別上書き */}
           <details>
@@ -294,7 +408,12 @@ export function AnonymizerDialog({
         </div>
 
         <div style={footer}>
-          <div style={{ flex: 1, minWidth: 0, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {/*
+            🔴 折り返す。以前は nowrap + ellipsis で 1 行に詰めていたため、
+            「なぜ中止したか」の説明が途中で切れて読めなかった（実機で発覚・2026-09-07）。
+            止めた理由が読めないと、利用者は不具合と区別できない。
+          */}
+          <div style={{ flex: 1, minWidth: 0, fontSize: 12, overflowWrap: "anywhere" }}>
             {info && <span data-testid="anon-info-message" style={{ color: "#2e5d27" }}>{info}</span>}
             {error && <span data-testid="anon-error-message" style={{ color: "#b00020" }}>{error}</span>}
             {isWeb && <span style={{ color: "#a85b00" }}>{t("anon.webNote")}</span>}
@@ -322,6 +441,12 @@ const header: React.CSSProperties = { display: "flex", alignItems: "center", jus
 const closeBtn: React.CSSProperties = { border: "none", background: "transparent", fontSize: 16, cursor: "pointer", color: "#666" };
 const body: React.CSSProperties = { padding: "12px 16px", display: "flex", flexDirection: "column", gap: 12, overflow: "auto" };
 const grpTitle: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: "#33404d", marginBottom: 4 };
+const maskBox: React.CSSProperties = {
+  border: "1px solid #2c3a47", borderRadius: 4, padding: 6, marginTop: 4,
+};
+const maskRow: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: 8, fontSize: 11, padding: "2px 0",
+};
 const opt: React.CSSProperties = { display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer", padding: "1px 0" };
 const lbl: React.CSSProperties = { fontSize: 12, color: "#556" };
 const inp: React.CSSProperties = { padding: "5px 8px", border: "1px solid #cdd5de", borderRadius: 5, fontSize: 13 };

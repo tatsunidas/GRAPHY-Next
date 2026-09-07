@@ -59,7 +59,18 @@ public class AnonymizeService {
         this.webProvider = webProvider;
     }
 
-    public record Result(int studies, int series, int instances, int burnedInstances, List<String> errors) {
+    /**
+     * 匿名化の結果。
+     *
+     * @param notBurnedInstances 焼き込みを要求されたのに<b>塗れなかった</b>インスタンス数
+     *                           （マスク未登録のシリーズ・圧縮 TS・画像外の矩形）。
+     *                           🔴 これらは Clean Pixel Data を申告していないので、
+     *                           <b>受け取り側から見ると焼き込み文字が残ったまま</b>。0 でなければ
+     *                           利用者に見せる必要がある（{@code burnedInstances} が 0 でも
+     *                           従来はそれが異常だと分からなかった）。
+     */
+    public record Result(int studies, int series, int instances, int burnedInstances, int notBurnedInstances,
+            long usedSeed, List<String> errors) {
     }
 
     public boolean isWeb() {
@@ -158,12 +169,14 @@ public class AnonymizeService {
             all.addAll(insts);
             studySet.add(su);
         }
-        Map<String, DicomAnonymizerEngine.PatientMapping> pmap = buildPatientMappings(all, cfg);
+        long dateSeed = resolveDateSeed(cfg);
+        Map<String, DicomAnonymizerEngine.PatientMapping> pmap = buildPatientMappings(all, cfg, dateSeed);
         Map<String, String> uidMap = new HashMap<>();
         boolean cleanPixel = cfg.hasOption(AnonymizeConfig.Option.CleanPixelData) && burnIn;
 
         int instances = 0;
         int burned = 0;
+        int notBurned = 0;
         for (DicomInstance inst : all) {
             try {
                 Path src = fileOf(inst);
@@ -180,17 +193,31 @@ public class AnonymizeService {
                     tsuid = in.getTransferSyntax();
                 }
                 String origPat = inst.getPatientId() == null ? "" : inst.getPatientId();
-                DicomAnonymizerEngine.PatientMapping pm = pmap.getOrDefault(origPat,
-                        new DicomAnonymizerEngine.PatientMapping(cfg.getReplacePatientId(), cfg.getReplacePatientName()));
+                DicomAnonymizerEngine.PatientMapping pm = pmap.get(origPat);
+                if (pm == null) {
+                    // 索引に患者 ID が無い等でマッピングを引けない場合。日付シフトは
+                    // 同じ導出式で決めるので、この経路でも患者内の一貫性は保たれる。
+                    int shift = cfg.hasOption(AnonymizeConfig.Option.RetainLongitudinalTemporalInformationModifiedDates)
+                            ? DateShifter.shiftDaysFor(origPat, dateSeed) : 0;
+                    pm = new DicomAnonymizerEngine.PatientMapping(
+                            cfg.getReplacePatientId(), cfg.getReplacePatientName(), shift);
+                }
 
                 // 焼き込み（属性匿名化前に元 seriesUid で判定）。
+                // 🔴 塗れたかどうかは **インスタンス単位** で決まる（圧縮 TS は burnInto が
+                // 無条件 false、マスクが無いシリーズもある）。その事実を申告へ渡す。
+                boolean pixelCleaned = false;
                 if (cleanPixel) {
                     AnonymizeMaskStore.SeriesMask mask = maskStore.get(inst.getSeriesInstanceUid());
-                    if (mask != null && burnInto(ds, tsuid, mask)) {
+                    if (mask != null && burnInto(ds, tsuid, mask, inst.getSopInstanceUid(), cfg.getBurnDilatePx())) {
+                        pixelCleaned = true;
                         burned++;
+                    } else {
+                        notBurned++;
                     }
                 }
-                engine.deidentify(ds, cfg, pm, uidMap);
+                engine.deidentify(ds, cfg, pm, uidMap,
+                        new DicomAnonymizerEngine.InstanceDeidFacts(pixelCleaned));
                 seriesSet.add(ds.getString(Tag.SeriesInstanceUID));
                 sink.accept(ds, tsuid);
                 instances++;
@@ -199,12 +226,32 @@ public class AnonymizeService {
             }
         }
         log.info("Anonymize: studies={} instances={} burned={} errors={}", studySet.size(), instances, burned, errors.size());
-        return new Result(studySet.size(), seriesSet.size(), instances, burned, errors);
+        return new Result(studySet.size(), seriesSet.size(), instances, burned, notBurned, dateSeed, errors);
+    }
+
+    /**
+     * 日付シフトに使う種を決める。
+     *
+     * <p>{@code randomSeed} が指定されていればそれを使い、無ければ 1 回だけ生成して
+     * {@link Result#usedSeed()} で返す。<b>返さないと「後日その患者だけ追加でエクスポートしたら
+     * 日付が別方向にずれた」という事故を防げない</b>——利用者が控えて次回に指定できることが要件。
+     *
+     * <p>⚠ 患者 ID のシャッフルには使わない。{@code randomSeed} 未指定のときシャッフルしないのは
+     * 既存の挙動なので、日付のためにここを変えない。
+     */
+    private static long resolveDateSeed(AnonymizeConfig cfg) {
+        if (cfg.getRandomSeed() != null) {
+            return cfg.getRandomSeed();
+        }
+        // 🔴 2^53 未満に収める。JSON の数値は JS では double なので、Long の全域を返すと
+        // 画面に出た時点で下位桁が失われ、**控えた種を次回に指定しても同じ日付にならない**。
+        // 種の役割は「利用者が控えて再現できること」なので、再現できない値を返すのは無意味。
+        return new java.security.SecureRandom().nextLong() & ((1L << 53) - 1);
     }
 
     /** 患者ごとの新 ID/Name を決める（単一→置換文字列、複数→連番。randomSeed で順序撹拌）。 */
     private static Map<String, DicomAnonymizerEngine.PatientMapping> buildPatientMappings(
-            List<DicomInstance> all, AnonymizeConfig cfg) {
+            List<DicomInstance> all, AnonymizeConfig cfg, long dateSeed) {
         java.util.LinkedHashSet<String> pids = new java.util.LinkedHashSet<>();
         for (DicomInstance i : all) {
             pids.add(i.getPatientId() == null ? "" : i.getPatientId());
@@ -217,20 +264,38 @@ public class AnonymizeService {
         String idPrefix = blank(cfg.getReplacePatientId(), "ANON");
         String namePrefix = blank(cfg.getReplacePatientName(), "ANON");
         boolean single = list.size() == 1;
+        // 日付シフトは Modified Dates を選んだときだけ効かせる（それ以外は 0＝従来どおり）。
+        boolean shiftDates = cfg.hasOption(AnonymizeConfig.Option.RetainLongitudinalTemporalInformationModifiedDates);
         Map<String, DicomAnonymizerEngine.PatientMapping> map = new LinkedHashMap<>();
         int n = 1;
         for (String orig : list) {
             String newId = single ? idPrefix : String.format("%s%03d", idPrefix, n);
             String newName = single ? namePrefix : namePrefix + "^" + n;
-            map.put(orig, new DicomAnonymizerEngine.PatientMapping(newId, newName));
+            // 🔴 オフセットは「種と元 PatientID」の純関数。ここでの並び（list は上でシャッフル
+            // され得る）に依存しないので、対象範囲が変わっても同じ患者には同じ値が出る。
+            int shift = shiftDates ? DateShifter.shiftDaysFor(orig, dateSeed) : 0;
+            map.put(orig, new DicomAnonymizerEngine.PatientMapping(newId, newName, shift));
             n++;
         }
         return map;
     }
 
-    /** 矩形領域を 0 で塗り潰す（非圧縮 TS のみ）。塗ったら true。 */
-    private static boolean burnInto(Attributes ds, String tsuid, AnonymizeMaskStore.SeriesMask mask)
-            throws IOException {
+    /**
+     * マスク領域を一定値（0）で潰す（非圧縮 TS のみ）。1 画素でも塗ったら true。
+     *
+     * <p>矩形・楕円・ポリゴン・クローズドフリーハンドはすべて {@code MaskPolygon} へ潰れており、
+     * {@link PolygonRasterizer} が「行ごとの連続区間」を返すので、<b>画素アドレス計算は
+     * 矩形時代のまま</b>（区間の決め方だけが変わった）。
+     *
+     * <p>⚠ 「黒く塗る」ではなく「<b>一定値で潰す</b>」。0 は {@code MONOCHROME1} では白、
+     * signed では中間値、{@code PALETTE COLOR} では 0 番の色になる。判読不能化という目的は
+     * どれでも満たすので値は 0 のままでよい。
+     *
+     * <p>🔴 塗れない条件では <b>false を返して何もしない</b>。呼び出し元はその事実を
+     * {@code InstanceDeidFacts} でエンジンへ渡すので、<b>申告もされない</b>（安全側）。
+     */
+    private static boolean burnInto(Attributes ds, String tsuid, AnonymizeMaskStore.SeriesMask mask,
+            String sopInstanceUid, int dilatePx) throws IOException {
         if (tsuid == null || !UNCOMPRESSED.contains(tsuid)) {
             return false; // 圧縮 TS は未対応
         }
@@ -242,29 +307,45 @@ public class AnonymizeService {
         int nf = ds.getInt(Tag.NumberOfFrames, 1);
         int bits = ds.getInt(Tag.BitsAllocated, 8);
         int spp = ds.getInt(Tag.SamplesPerPixel, 1);
-        int bps = Math.max(1, bits / 8) * spp;
+        // 🔴 bps は「1 画素あたりバイト数」。bits が 8 の倍数でないと成立しないので、
+        // その場合は塗らない（誤った位置を塗るより何もしないほうが良い）。
+        if (bits <= 0 || bits % 8 != 0) {
+            return false;
+        }
+        // 🔴 PlanarConfiguration=1（RRR…GGG…BBB…）は画素インターリーブ前提の
+        // (y*cols + x)*bps が成立しない。誤った位置を塗るので対象外にする。
+        if (spp > 1 && ds.getInt(Tag.PlanarConfiguration, 0) != 0) {
+            return false;
+        }
+        int bps = (bits / 8) * spp;
         int frameSize = rows * cols * bps;
         byte[] px = ds.getBytes(Tag.PixelData);
         if (px == null || px.length < frameSize) {
             return false;
         }
-        List<Integer> frames = mask.frames();
-        boolean allFrames = frames == null || frames.isEmpty();
+
+        // このインスタンスに効く多角形だけに絞る（rects は多角形へ正規化済み）。
+        List<AnonymizeMaskStore.MaskPolygon> polys = new ArrayList<>();
+        for (AnonymizeMaskStore.MaskPolygon p : mask.allPolygons()) {
+            if (p.appliesTo(sopInstanceUid)) {
+                polys.add(p);
+            }
+        }
+        if (polys.isEmpty()) {
+            return false;
+        }
+
         boolean any = false;
         for (int f = 0; f < nf; f++) {
-            if (!allFrames && !frames.contains(f)) {
-                continue;
-            }
             int base = f * frameSize;
-            for (AnonymizeMaskStore.Rect r : mask.rects()) {
-                int x0 = Math.max(0, r.x());
-                int y0 = Math.max(0, r.y());
-                int x1 = Math.min(cols, r.x() + r.w());
-                int y1 = Math.min(rows, r.y() + r.h());
-                for (int y = y0; y < y1; y++) {
-                    int off = base + (y * cols + x0) * bps;
-                    int len = (x1 - x0) * bps;
-                    if (off >= 0 && off + len <= px.length) {
+            for (AnonymizeMaskStore.MaskPolygon p : polys) {
+                if (!p.appliesToFrame(f, mask.frames())) {
+                    continue;
+                }
+                for (PolygonRasterizer.Run run : PolygonRasterizer.runsFor(p, cols, rows, dilatePx)) {
+                    int off = base + (run.y() * cols + run.xStart()) * bps;
+                    int len = (run.xEnd() - run.xStart()) * bps;
+                    if (off >= 0 && len > 0 && off + len <= px.length) {
                         java.util.Arrays.fill(px, off, off + len, (byte) 0);
                         any = true;
                     }

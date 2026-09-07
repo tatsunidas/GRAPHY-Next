@@ -126,27 +126,134 @@ DICOM PS3.15 Basic Application Confidentiality Profile の匿名化。GRAPHY
   ⚠ 通常の使い方（匿名化して**外部へ渡す**）では起きない。危ないのは**自分の保管庫へ戻す**運用のみ。
   automator の `07-anonymizer.item-01` はこの衝突を検出できない（同一患者の別スタディがあると
   「原本が残っている」と誤判定するため）。
-- **テスト**: `AnonymizeEngineTest`（辞書ロード・option→action・基本匿名化・RetainUIDs・UID 一貫）。全 81 green。
-  実機: 隔離 :8099 に実 MR import→`/zip` で PatientName/ID 置換・UID 置換/保持・(0012,0062)=YES を dcm2json 確認、
-  焼き込みマスク登録→該当 64x64 画素 0・BurnedInAnnotation=NO を確認。
-- **未対応/次段**: **2D viewer の「焼き込みに使用」ボタン（矩形ROI→`registerAnonMask`）は ROI/viewer 開発ストリームと
-  競合回避のため保留**（マスク API は完成・curl 検証済。viewer が落ち着いたら矩形ROIジオメトリ→画素rect 変換を追加）。
-  CleanRecognizableVisualFeatures（顔ぼかし）/圧縮TS焼き込み/web(WADO) は将来。
-- 🔴 **高優先の不具合 2 件（2026-08-20 実測・未修正）**
-  1. **焼き込みが「偽の匿名化申告」になっている。** 上の保留の帰結。`registerAnonMask()` の呼び出し元は
-     frontend に **0 件**（`anon.burnIn.note` は「2D viewer で矩形 ROI を登録」と案内しているのに導線が無い）。
-     この状態で `CleanPixelData` ＋ 焼き込み ON にすると:
-     `{"burnedInstances":0}` なのに出力は **`BurnedInAnnotation` が `YES`→`NO` に書き換わり**、
-     `DeidentificationMethodCodeSequence` に **113101 "Clean Pixel Data Option"** が入る。
-     画素は元と**完全一致**（`np.array_equal` で確認）。**何もしないより悪い**ので、UI ができるまでは
-     「マスク 0 件なら 113101 と `BurnedInAnnotation=NO` を書かない」だけでも先に入れる価値がある。
-     なお backend の塗り込み自体は正常（マスクを REST 登録すれば矩形内 0・矩形外不変を確認済）。
-  2. **`RetainLongitudinalTemporalInformationModifiedDates` が日付を潰す。** アクション C が VR 別の
-     固定ダミー（`dummyForVr`: DA→`20000101`）を返すため、**全検査日が `20000101` になる**。
-     実測: 元 `20260101` と `20260730`（7 か月差）の 2 スタディが**両方 `20000101`**。
-     このオプションの目的は**時間的前後関係の保持**なので、名前どおりに機能していない
-     （かつ 113107 を宣言する）。正しくは**患者ごとに一定のオフセットで日付をシフト**する実装が要る
-     （`randomSeed` を種にすれば決定的にできる）。
+- **実機（2026-08-20）**: 隔離 :8099 に実 MR import→`/zip` で PatientName/ID 置換・UID 置換/保持・
+  (0012,0062)=YES を dcm2json 確認、焼き込みマスク登録→該当 64x64 画素 0・BurnedInAnnotation=NO を確認。
+- ✅ **高優先の不具合 2 件は修正済み（2026-09-07）**。どちらも「やっていないことを申告する」偽申告で、
+  受け取った側はタグを信用して検証しないため**匿名化しないより危険**だった。
+  正本のコードは `DicomAnonymizerEngine` / `DateShifter` / `AnonymizeController`。
+
+  1. ✅ **焼き込みの偽申告を止めた。** 症状（2026-08-20 実測）: `registerAnonMask()` の呼び出し元が
+     frontend に **0 件**なのに、`CleanPixelData` を ON にするだけで出力の
+     **`BurnedInAnnotation` が `YES`→`NO` に書き換わり**、`DeidentificationMethodCodeSequence` に
+     **113101 "Clean Pixel Data Option"** が入った。画素は元と**完全一致**（`np.array_equal` で確認）。
+     🔴 構造的な原因は**エンジンが焼き込みの成否を知り得なかったこと** —— `AnonymizeService` は
+     `burnInto()` の戻り値をカウンタに足すだけで `deidentify()` へ渡していなかった。
+     `InstanceDeidFacts` を足し、**実際に塗ったインスタンスに限って**申告するようにした。
+     - **引数追加**にした。「宣言してから消す」形は消し忘れたときに安全側に倒れない。
+       *申告はエンジンが一箇所で組み立て、事実は呼び出し元が渡す* を不変条件にする。
+     - **インスタンス単位**で判定する（`burnInto` は圧縮 TS で無条件 false なので、同じシリーズでも
+       塗れたものと塗れないものが混在する）。塗らなかったインスタンスの `BurnedInAnnotation` は原本のまま。
+     - 塗れなかった件数を `Result.notBurnedInstances` で返し、UI に警告を出す。
+       `{"burnedInstances":0}` は従来も出ていたが、それが異常だと分からなかった。
+     - 🔴 **実行できないなら書き出す前に止める**: `CleanPixelData` ＋ 焼き込み ON でマスクが 0 件なら
+       **409**、`CleanPixelData` ON なのに焼き込み OFF なら **400**。「一部だけ塗れた ZIP」を黙って
+       渡すのが最も危険（受け取り側は ZIP 全体を clean と解釈する）で、ZIP はストリーミングなので
+       1 バイト流したらステータスを変えられない。
+  2. ✅ **`ModifiedDates` の日付潰しを直した。** 症状: アクション C が VR 別の固定ダミー
+     （`dummyForVr`: DA→`20000101`）を返すため**全検査日が `20000101` に潰れて**いた
+     （実測: 元 `20260101` と `20260730` の 2 スタディが**両方 `20000101`**）。目的は
+     **時間的前後関係の保持**なので名前の逆を行っており、しかも 113107 を宣言していた。
+     `DateShifter` で**患者ごとに一定のオフセットで日付をシフト**する。
+     - **日付のみシフトし、時刻は保持する。** 線量評価のように投与後 1h / 4h と同じ日に複数時点を
+       撮る検査では、時刻をずらすと時点の間隔が壊れる。日単位のシフトでは TM は定義上変化しない。
+     - 🔴 オフセットは **SHA-256(種, 元 PatientID)** から導く。`java.util.Random` を順に引かない ——
+       `buildPatientMappings` は `randomSeed` があると患者の並びを**シャッフルする**ので、処理順に
+       依存すると「後日その患者だけ追加でエクスポートしたら日付が別方向にずれた」という事故になる。
+       `String.hashCode()` も不可（短く衝突しやすく、オフセットから元 ID を推測できる）。
+     - **過去方向のみ・最大 10 年**（未来日は PACS・検索・年齢計算で異常値として扱われる）。
+       **患者ごとに独立**（患者間の相対関係は破壊する＝集団の受診日の相関から実日付が復元されるのを防ぐ）。
+     - 🔴 解釈できない値は**元を残さず空にする**。「ずらせなかったから素通し」が最悪の漏洩経路。
+       日付のパースは **STRICT** —— 既定の SMART は `20260230` を 2 月 28 日に**黙って丸める**ので、
+       壊れた日付が「もっともらしい別の日」として通ってしまう。
+     - 種を `Result.usedSeed` で返して画面に出す。⚠ 生成する種は **2^53 未満**に収める ——
+       JSON の数値は JS では double なので、Long の全域を返すと画面に出た時点で下位桁が失われ、
+       控えた種を次回に指定しても同じ日付にならない。
+- ✅ **日付オプションの排他を 3 層で担保した（2026-09-07）**。PS3.15 では Full Dates と Modified Dates は
+  排他だが UI は両方 ON にでき、`getActionByOptionsAndDefault()` の「加工(C,X)は保持(K)より優先（安全側）」で
+  **Full Dates が負けて**日付が潰れていた（実測: `20260101`→`20000101`、`101530`→`000000`）。
+  ⚠ **C>K の優先規則そのものは変えない** —— 辞書解決の汎用フォールバックで他の組み合わせにも効いており、
+  個別事情で触ると影響範囲が読めない。**競合を後段で解決せず、競合した設定を受け付けない**のが正しい層。
+  1. **backend（正本）**: `AnonymizeController.validate` が両方 ON を **400**。UI だけでは塞げない
+     （プロファイル読み込みは任意の JSON から options を丸ごと差し替えるし、API も直接叩ける）。
+  2. **backend（副）**: `toConfig` の「未知オプションは黙って無視」を **400** に変えた。脱識別で
+     「読めなかった設定を無視」は、利用者が指定したつもりの保護がそのまま消えることを意味する。
+  3. **frontend**: `anonDefaults.ts` の `toggleAnonOption` / `sanitizeAnonOptions`（純関数）。
+     チェックボックスの見た目のままラジオ的に振る舞う。**radio にはしない** ——「両方 OFF」は
+     有効な選択（Basic Profile の日付削除）だから。
+  `research` プロファイルは ModifiedDates だけなので変更不要（シフト実装後はそのまま正しく動く）。
+- **テスト**: `AnonymizeEngineTest`（13）/ `DateShifterTest`（10）/ `AnonymizeRequestValidationTest`（11）/
+  frontend `anonDefaults.test.ts`（11）。
+  🔴 **なぜ従来のテストが素通りしたか**（同じ穴を開けないために残す）:
+  - `AnonymizeEngineTest` は `DeidentificationMethodCodeSequence` を「**null でなく空でもない**」と
+    しか見ておらず、113100 が入れば通るので **113101 の誤混入を検出しなかった** → 集合で突き合わせる。
+  - `BurnedInAnnotation` を assert するテストが**リポジトリ全体で 0 件**だった。
+  - 日付は「**C になること**（辞書引き）」までしか見ておらず、**C を適用した結果の値**を見ていなかった。
+    **複数スタディを跨ぐテストも 0 件**＝前後関係が保たれるかを試験できていなかった。
+  - frontend は `DEFAULT_ANON_OPTIONS` の中身だけを見ており、**手で両方 ON にする経路**を通らなかった。
+  修正を戻すと新テストが実測どおりの症状（`20000101` / 時刻 `000000` / `BurnedInAnnotation=NO`）で
+  落ちることを確認済み。
+- ✅ **焼き込みが UI から使えるようになった（2026-09-07）**。旧 GRAPHY の
+  `PixelAnonymizerPanel` の "Mask ROIs" リストに相当するものを、Next の構造に合わせて 2 つに分けた
+  （2D viewer は**別 BrowserWindow** で ROI は viewer 側の Cornerstone 状態にあり、MainScreen から
+  読めない。`AnonymizeMaskStore` がシングルトンなのはこのクロスウィンドウ橋渡しのため）。
+
+  | 役割 | 置き場所 |
+  | :- | :- |
+  | **登録** | ROI マネージャの行アクション「匿名化の焼き込みに使用」（**閉じた面 ROI にのみ表示**） |
+  | **管理**（一覧・件数・個別/全削除） | 匿名化ダイアログの「焼き込みマスク」セクション |
+
+  - 🔴 幾何は**本体の正本を通す**。`viewer/anonMaskExport.ts` が
+    `roiRead.roiPointsPx()` → `roiStats.buildRoiMesh()` を呼ぶだけで、**新しい変換を書いていない**
+    （「任意 ROI → 閉多角形」の実装は既に 3 つあり、4 つ目を作らない）。
+  - 使えるのは `pickSampleKind` が `"area"` を返し、かつ `mesh.closed` な ROI だけ。
+    線・点・角度・開いたフリーハンドは弾いて理由を出す —— 受け付けると「登録できたのに
+    1 画素も塗られていないのに申告する」**新しい偽申告**になる。
+  - 適用先は **SOP Instance UID** で指定（index は並び順が変われば別スライスを塗る）。
+    XA は 1 ラン全フレームが同じ SOP なのでフレーム番号も持つ。
+    既定は「この ROI が描かれた 1 枚だけ」＝旧版の "Current Slice Only" 相当。
+  - 頂点は**サブピクセルのまま**送る（丸めると 1px ずれる）。
+  - ⚠ マスクは backend の**プロセス内メモリにしか無く再起動で消える**。一覧が無いと
+    「消えたこと」に気づけないので、**0 件のときも必ず見せる**（`AnonymizeMaskStore` の
+    永続化は今のところ不要と判断）。
+  - ⚠ マスクは**シリーズ単位**なので、対象スタディの外に登録されたマスクは一覧に出ない
+    （出ないものが黙って効くことはない）。
+  - 旧版の "Preview Mask as Blackout"（ビューア側で塗り結果を先に見る）は未実装。
+- **残り（次段）**:
+  🔴 **圧縮 TS では塗れない**（`burnInto` が無条件 false）。旧 GRAPHY は
+  `PixelAnonymizerPanel.java` L490-505 で decode → mask → **TSUID を ExplicitVRLittleEndian に
+  書き換えて非圧縮で書き出し**ており、ここも旧版からの劣化。ただし TS が変わる＝ファイルサイズ増・
+  可逆性喪失なので**利用者の合意が要る**。それまでは 409 で止める（黙って未処理を返さない）。
+  旧版の "Preview Mask as Blackout" / CleanRecognizableVisualFeatures（顔ぼかし）/ web(WADO) も将来。
+- 📌 **設計の記録: `ImageJRoiDto` は使わない**（2026-09-07 に方針を差し戻した）。
+  一度は「`ImageJRoiService.toIjRoi` が rect/oval/polygon/freehand を変換済みで安い」と書いたが、
+  **型の性格を取り違えていた**。`ImageJRoiDto` は `.roi` / `RoiSet.zip` の **interop 専用**で
+  （全 13 使用箇所が `/api/imagej/*` 経路）、`imagejExport.ts:46-51` が頂点の min/max から
+  **軸平行 bbox** を作って `oval` / `rect` をそこに潰す。**回転した楕円では真の楕円の内側が
+  軸平行 oval の外に出て塗り足りなくなり、焼き込み文字が残るのに出力を見ても気づけない** ——
+  脱識別で最悪の失敗モード。依存の向きも悪い（脱識別の正しさが ImageJ 連携の都合で動く）。
+  **正本は `frontend/src/viewer/roiStats.ts` の `RoiMesh { pointsPx, closed }` と `buildRoiMesh()`**
+  （「すべての ROI 種別がここへ潰れる」）。楕円は `polygonizeEllipse` が**半軸ベクトルで持つので
+  回転しても正しい**。座標換算は `roiRead.roiPointsPx()`（「3 か所目を作らないため」に集約済み）。
+  → **自前の閉多角形（画素座標・サブピクセル）を送り、backend は `java.awt.geom.Path2D`
+  （`WIND_EVEN_ODD`）で画素中心 `(x+0.5, y+0.5)` を判定して行区間に畳む**。
+  この規約は `roiStats.pointInPolygon` / `roiBooleanOps.pointInPoly` と同じで、揃えないと
+  「ROI 統計が測った領域」と「焼き込んだ領域」がズレる。JDK 標準なので新規依存はゼロ。
+  ⚠ backend には多角形ラスタ化が無い（`Path2D`/`Area` が main で 0 件）。`SegExportService` は
+  **frontend が作ったマスクを受け取るだけ**、RadiomicsJ は**マスクシリーズ UID** で受ける ——
+  つまりこのリポジトリでは「ROI を画素マスクにする」のは一貫して frontend の仕事だった。
+  ⚠ 「任意 ROI → 閉多角形」の変換は既に 3 実装ある（`buildRoiMesh` が正本／
+  `roiBooleanOps.rasterizeRoi` は楕円を bbox 近似／`rtstructExport` は world mm）。**4 つ目を作らない。**
+- ✅ **モデルの穴も塞いだ**（同 2026-09-07）。従来の `SeriesMask` は**シリーズ単位**で、
+  `frames` は multi-frame の frame index。単一フレーム画像が N 枚のシリーズでは
+  「3 枚目だけ患者名が焼かれている」（実務で典型）を表現できず、**全スライスを潰すか
+  何も塗られないか**のどちらかになっていた（`burnInto` の呼び出しに SOP Instance UID が
+  渡っていなかった）。`MaskPolygon.sopInstanceUids` で対象インスタンスを指定できるようにした。
+- 🔴 **併せて直した潜在バグ**: `burnInto` が `PlanarConfiguration=1`（RRR…GGG…BBB…）を見ておらず、
+  画素インターリーブ前提の `(y*cols + x)*bps` が成立しないまま**誤った位置を塗っていた**。
+  `BitsAllocated` が 8 の倍数でない場合（1bit・12bit）も `bps` が誤る。どちらも塗らない扱いにした
+  （段 1 により、塗らなければ申告もされない）。
+  ⚠ `SamplesPerPixel` は元から読めており、**interleaved RGB は正しく塗れていた**
+  （調査中に「RGB が壊れている」という指摘が出たが、コードを読んで否定した）。
 
 ## SeriesExtractor 実装（GRAPHY 移植・2026-06-30）
 条件一致シリーズを**シリーズフォルダ**として親フォルダへ抽出（コピー）。GRAPHY

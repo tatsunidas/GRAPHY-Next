@@ -3,7 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { describe, expect, it } from "vitest";
-import { CLEAN_OPTS, DEFAULT_ANON_OPTIONS, RETAIN_OPTS } from "./anonDefaults";
+import { CLEAN_OPTS, DEFAULT_ANON_OPTIONS, RETAIN_OPTS, sanitizeAnonOptions, toggleAnonOption } from "./anonDefaults";
 
 describe("Anonymizer の既定オプション", () => {
   it("Retain 系は Modified Dates 以外すべて既定 ON", () => {
@@ -36,5 +36,61 @@ describe("Anonymizer の既定オプション", () => {
     for (const o of DEFAULT_ANON_OPTIONS) {
       expect(o.startsWith("Retain")).toBe(true);
     }
+  });
+});
+
+/**
+ * 日付オプションの排他。
+ *
+ * 🔴 なぜ書いたか: 既存テストは **DEFAULT_ANON_OPTIONS の中身だけ**を見ており、
+ * 「利用者が手で両方 ON にする」「research プロファイルを押す」経路を素通りしていた。
+ * 両方 ON にすると加工(C)が保持(K)に勝ち、日付が 20000101 に潰れる（2026-08-20 実測）。
+ */
+describe("日付オプションの排他", () => {
+  const FULL = "RetainLongitudinalTemporalInformationFullDates" as const;
+  const MOD = "RetainLongitudinalTemporalInformationModifiedDates" as const;
+
+  it("ModifiedDates を ON にすると FullDates が OFF になる", () => {
+    const r = toggleAnonOption(new Set([FULL]), MOD);
+    expect(r.has(MOD)).toBe(true);
+    expect(r.has(FULL)).toBe(false);
+  });
+
+  it("FullDates を ON にすると ModifiedDates が OFF になる", () => {
+    const r = toggleAnonOption(new Set([MOD]), FULL);
+    expect(r.has(FULL)).toBe(true);
+    expect(r.has(MOD)).toBe(false);
+  });
+
+  it("両方 OFF は有効な選択として許す（Basic Profile の日付削除）", () => {
+    const r = toggleAnonOption(new Set([FULL]), FULL);
+    expect(r.has(FULL)).toBe(false);
+    expect(r.has(MOD)).toBe(false);
+  });
+
+  it("日付以外のオプションは互いに影響しない", () => {
+    const r = toggleAnonOption(new Set(["RetainUIDs", FULL]), "RetainDeviceIdentity");
+    expect(r.has("RetainUIDs")).toBe(true);
+    expect(r.has(FULL)).toBe(true);
+    expect(r.has("RetainDeviceIdentity")).toBe(true);
+  });
+
+  it("プロファイルに両方入っていたら ModifiedDates を落とす", () => {
+    const { options, dropped } = sanitizeAnonOptions([FULL, MOD, "RetainUIDs"]);
+    expect(options.has(FULL)).toBe(true);
+    expect(options.has(MOD)).toBe(false);
+    expect(options.has("RetainUIDs")).toBe(true);
+    expect(dropped).toEqual([MOD]);
+  });
+
+  it("片方だけのプロファイルは何も直さない", () => {
+    const { options, dropped } = sanitizeAnonOptions([MOD]);
+    expect(options.has(MOD)).toBe(true);
+    expect(dropped).toEqual([]);
+  });
+
+  it("既定は両方 ON にならない", () => {
+    const d = new Set(DEFAULT_ANON_OPTIONS);
+    expect(d.has(FULL) && d.has(MOD)).toBe(false);
   });
 });

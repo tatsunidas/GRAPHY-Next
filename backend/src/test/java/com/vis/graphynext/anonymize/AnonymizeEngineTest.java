@@ -7,11 +7,16 @@ package com.vis.graphynext.anonymize;
 import com.vis.graphynext.anonymize.AnonymizeConfig.Option;
 import com.vis.graphynext.anonymize.DicomTagRule.Action;
 import org.dcm4che3.data.Attributes;
+import org.dcm4che3.data.Sequence;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.VR;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -62,9 +67,163 @@ class AnonymizeEngineTest {
         assertNull(ds.getString(Tag.PatientAge), "PatientAge は既定 X で除去");
         assertNull(ds.getString("ACME", 0x00090001), "private データは除去");
         assertNull(ds.getString(0x00090010), "private creator も除去");
-        // method code seq に基本プロファイルコード
-        assertTrue(ds.getSequence(Tag.DeidentificationMethodCodeSequence) != null
-                && !ds.getSequence(Tag.DeidentificationMethodCodeSequence).isEmpty());
+        // method code seq に基本プロファイルコードだけが入る。
+        // 🔴 かつては「null でなく空でもない」としか見ておらず、113100 さえ入れば通ったので
+        // 113101 の誤混入（＝偽の匿名化申告）を検出できなかった。集合として突き合わせる。
+        assertEquals(Set.of("113100"), methodCodes(ds), "基本プロファイルのみを申告する");
+    }
+
+    /** {@code DeidentificationMethodCodeSequence} に入っている CodeValue の集合。 */
+    private static Set<String> methodCodes(Attributes ds) {
+        Sequence seq = ds.getSequence(Tag.DeidentificationMethodCodeSequence);
+        if (seq == null) {
+            return Set.of();
+        }
+        Set<String> codes = new HashSet<>();
+        for (Attributes item : seq) {
+            codes.add(item.getString(Tag.CodeValue));
+        }
+        return codes;
+    }
+
+    private static void deidentify(Attributes ds, AnonymizeConfig cfg, boolean pixelCleaned) {
+        new DicomAnonymizerEngine().deidentify(ds, cfg, new DicomAnonymizerEngine.PatientMapping("ANON", "ANON"),
+                new HashMap<>(), new DicomAnonymizerEngine.InstanceDeidFacts(pixelCleaned));
+    }
+
+    private static AnonymizeConfig cleanPixelConfig() {
+        AnonymizeConfig cfg = new AnonymizeConfig();
+        cfg.addOption(Option.CleanPixelData);
+        return cfg;
+    }
+
+    // ------------------------------------------------------------------------
+    // 焼き込みの申告（2026-08-20 実測・fw/mainscreen-tools.md L135-143 の回帰）
+    //
+    // 症状: registerAnonMask() の呼び出し元が frontend に 0 件なのに、CleanPixelData を
+    // ON にするだけで出力の BurnedInAnnotation が YES→NO に書き換わり、113101 が入った。
+    // 画素は元と完全一致（np.array_equal で確認）。受け取った側はタグを信用して検証しないため、
+    // 匿名化していないことより危険＝「何もしないより悪い」。
+    // ------------------------------------------------------------------------
+
+    @Test
+    void deidentify_cleanPixelData_withoutActualBurn_doesNotDeclare113101() {
+        Attributes ds = sample();
+        deidentify(ds, cleanPixelConfig(), false);
+        assertEquals(Set.of("113100"), methodCodes(ds),
+                "1 画素も塗っていないなら Clean Pixel Data Option を申告しない");
+    }
+
+    @Test
+    void deidentify_cleanPixelData_withoutActualBurn_keepsOriginalBurnedInAnnotation() {
+        Attributes ds = sample();
+        ds.setString(Tag.BurnedInAnnotation, VR.CS, "YES");
+        deidentify(ds, cleanPixelConfig(), false);
+        assertEquals("YES", ds.getString(Tag.BurnedInAnnotation),
+                "塗っていないなら、真の YES を偽の NO に書き換えない");
+    }
+
+    @Test
+    void deidentify_cleanPixelData_withActualBurn_declares113101_andSetsNo() {
+        Attributes ds = sample();
+        ds.setString(Tag.BurnedInAnnotation, VR.CS, "YES");
+        deidentify(ds, cleanPixelConfig(), true);
+        assertEquals(Set.of("113100", "113101"), methodCodes(ds), "実際に塗ったときだけ申告する");
+        assertEquals("NO", ds.getString(Tag.BurnedInAnnotation));
+    }
+
+    @Test
+    void deidentify_withoutCleanPixelDataOption_neverTouchesBurnedInAnnotation() {
+        Attributes ds = sample();
+        ds.setString(Tag.BurnedInAnnotation, VR.CS, "YES");
+        // オプション自体が無いので、塗った事実があっても申告経路に入らない。
+        deidentify(ds, new AnonymizeConfig(), true);
+        assertEquals(Set.of("113100"), methodCodes(ds));
+        assertEquals("YES", ds.getString(Tag.BurnedInAnnotation));
+    }
+
+    // ------------------------------------------------------------------------
+    // 日付シフト（fw/mainscreen-tools.md L144-149 の回帰）
+    //
+    // 症状: ModifiedDates を選ぶと全検査日が 20000101 に潰れた。アクション C が VR 別の
+    // 固定ダミーを返すだけで元の値を読んでいなかったため。オプションの目的は
+    // 「時間的前後関係の保持」なので名前の逆を行っており、しかも 113107 を宣言していた。
+    // ------------------------------------------------------------------------
+
+    private static AnonymizeConfig modifiedDatesConfig() {
+        AnonymizeConfig cfg = new AnonymizeConfig();
+        cfg.addOption(Option.RetainLongitudinalTemporalInformationModifiedDates);
+        return cfg;
+    }
+
+    /** 同一患者の 2 スタディを同じオフセットで匿名化する（＝実運用と同じ条件）。 */
+    private static String[] shiftTwoStudies(String da1, String da2) {
+        int shift = DateShifter.shiftDaysFor("PID123", 20260907L);
+        var pm = new DicomAnonymizerEngine.PatientMapping("ANON", "ANON", shift);
+        var eng = new DicomAnonymizerEngine();
+
+        Attributes a = sample();
+        a.setString(Tag.StudyDate, VR.DA, da1);
+        Attributes b = sample();
+        b.setString(Tag.StudyDate, VR.DA, da2);
+        eng.deidentify(a, modifiedDatesConfig(), pm, new HashMap<>(),
+                DicomAnonymizerEngine.InstanceDeidFacts.none());
+        eng.deidentify(b, modifiedDatesConfig(), pm, new HashMap<>(),
+                DicomAnonymizerEngine.InstanceDeidFacts.none());
+        return new String[] { a.getString(Tag.StudyDate), b.getString(Tag.StudyDate) };
+    }
+
+    @Test
+    void deidentify_modifiedDates_preservesIntervalBetweenStudies() {
+        String[] out = shiftTwoStudies("20260101", "20260730");
+
+        assertNotEquals("20000101", out[0], "固定ダミーに潰れない（2026-08-20 の実測ケース）");
+        assertNotEquals("20000101", out[1], "固定ダミーに潰れない（2026-08-20 の実測ケース）");
+        assertNotEquals(out[0], out[1], "7 か月差の 2 スタディが同じ日にならない");
+
+        DateTimeFormatter f = DateTimeFormatter.ofPattern("uuuuMMdd");
+        long days = LocalDate.parse(out[1], f).toEpochDay() - LocalDate.parse(out[0], f).toEpochDay();
+        assertEquals(210, days, "元の 210 日差が保たれる（＝113107 の申告が事実になる）");
+    }
+
+    @Test
+    void deidentify_modifiedDates_keepsStudyTimeUnchanged() {
+        // 投与後 1h / 4h のように同じ日に複数時点を撮る検査で、時点の間隔を壊さない。
+        int shift = DateShifter.shiftDaysFor("PID123", 20260907L);
+        Attributes ds = sample();
+        ds.setString(Tag.StudyTime, VR.TM, "101530");
+        new DicomAnonymizerEngine().deidentify(ds, modifiedDatesConfig(),
+                new DicomAnonymizerEngine.PatientMapping("ANON", "ANON", shift), new HashMap<>(),
+                DicomAnonymizerEngine.InstanceDeidFacts.none());
+        assertEquals("101530", ds.getString(Tag.StudyTime), "日単位シフトなので時刻は変わらない");
+    }
+
+    @Test
+    void deidentify_modifiedDates_differentPatients_getDifferentOffsets() {
+        assertNotEquals(DateShifter.shiftDaysFor("PID123", 1L), DateShifter.shiftDaysFor("PID999", 1L),
+                "患者間の相対関係は保たない（集団の受診日の相関から実日付が復元されるのを防ぐ）");
+    }
+
+    @Test
+    void deidentify_fullDates_keepsStudyDateExactly() {
+        // 排他のもう一方。ModifiedDates を入れたことで Full Dates が壊れていないこと。
+        Attributes ds = sample();
+        AnonymizeConfig cfg = new AnonymizeConfig();
+        cfg.addOption(Option.RetainLongitudinalTemporalInformationFullDates);
+        new DicomAnonymizerEngine().deidentify(ds, cfg,
+                new DicomAnonymizerEngine.PatientMapping("ANON", "ANON"), new HashMap<>(),
+                DicomAnonymizerEngine.InstanceDeidFacts.none());
+        assertEquals("20240101", ds.getString(Tag.StudyDate), "Full Dates は原本のまま");
+    }
+
+    @Test
+    void deidentify_withoutDateOption_stillRemovesStudyDate() {
+        // 日付オプション無し＝Basic Profile の Z。既存の挙動を固定する。
+        Attributes ds = sample();
+        new DicomAnonymizerEngine().deidentify(ds, new AnonymizeConfig(),
+                new DicomAnonymizerEngine.PatientMapping("ANON", "ANON"), new HashMap<>(),
+                DicomAnonymizerEngine.InstanceDeidFacts.none());
+        assertNull(ds.getString(Tag.StudyDate), "StudyDate は既定 Z で空");
     }
 
     @Test

@@ -2,7 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import { HttpError, httpGet, httpSend } from "./http";
+import { HttpError, extractErrorMessage, httpGet, httpSend } from "./http";
 import { chunkForQuery } from "./urlChunk";
 import { apiBase } from "./apiBase";
 
@@ -1100,14 +1100,51 @@ export interface AnonResult {
   series: number;
   instances: number;
   burnedInstances: number;
+  /**
+   * 焼き込みを要求されたのに **塗れなかった** インスタンス数
+   * （マスク未登録のシリーズ・圧縮 TS・画像外の矩形）。
+   *
+   * 🔴 これらは Clean Pixel Data を申告していないので、受け取り側から見ると
+   * **焼き込み文字が残ったまま**。0 でなければ利用者に見せる必要がある
+   * （burnedInstances が 0 でも、従来はそれが異常だと分からなかった）。
+   */
+  notBurnedInstances: number;
+  /**
+   * 日付シフト（Modified Dates）に実際に使った種。randomSeed を指定していれば同じ値。
+   *
+   * 🔴 **控えて次回に指定すること**。同じ患者を後日追加でエクスポートするとき、種が違うと
+   * 日付が別方向にずれ、前回の出力と時間軸が合わなくなる。
+   */
+  usedSeed: number;
   errors: string[];
 }
 
-/** 焼き込みマスク（画像ピクセル矩形）。frames 空=全フレーム/全インスタンス。 */
+/**
+ * 焼き込みマスクの閉多角形（**画像ピクセル座標**）。
+ *
+ * 🔴 本体の正本 `viewer/roiStats.ts` の `RoiMesh` と規約を揃える ——
+ * **サブピクセル可**（丸めると 1px ずれる）、**始点を末尾で繰り返さない**。
+ * 矩形・楕円・円・ポリゴン・クローズドフリーハンドはすべてこの形へ潰す。
+ *
+ * ⚠ 楕円を bbox で送らないこと。ImageJ の交換型（`ImageJRoiDto`）は軸平行 bbox に潰すため、
+ * **回転した楕円で塗り足りなくなる**（焼き込み文字が残るのに出力を見ても気づけない）。
+ */
+export interface AnonMaskPolygon {
+  xs: number[];
+  ys: number[];
+  /** 適用先の SOP Instance UID。空ならシリーズの全インスタンス。 */
+  sopInstanceUids: string[];
+  /** multi-frame 内のフレーム index（0 origin）。空なら全フレーム。 */
+  frames: number[];
+}
+
+/** 焼き込みマスク。frames 空=全フレーム/全インスタンス。 */
 export interface AnonSeriesMask {
   seriesUid: string;
   frames: number[];
+  /** 旧形式（矩形のみ）。後方互換のため残す。新規は polygons を使う。 */
   rects: { x: number; y: number; w: number; h: number }[];
+  polygons?: AnonMaskPolygon[];
 }
 
 export const fetchAnonProfiles = () => httpGet<AnonProfile[]>("/api/anonymizer/profiles");
@@ -1130,9 +1167,10 @@ export const anonymizeZip = async (
     body: JSON.stringify(req),
   });
   if (!res.ok) {
-    // backend は 0 件のとき 409 に理由を載せる。握り潰さず本文を見せる。
-    const detail = await res.text().catch(() => "");
-    throw new Error(detail ? `HTTP ${res.status}: ${detail}` : `HTTP ${res.status}`);
+    // backend は「流す前に止めた」理由を本文の {message} に載せる（0 件の 409、焼き込み不可の
+    // 409/400 など）。🔴 本文を丸ごと文字列化すると生の JSON が画面に出て理由が読めないので、
+    // 共通の抽出を通す。status も持たせて呼び出し側が文言を選べるようにする。
+    throw new HttpError(await extractErrorMessage(res), res.status);
   }
   const blob = await res.blob();
   if (blob.size <= EMPTY_ZIP_BYTES) {
