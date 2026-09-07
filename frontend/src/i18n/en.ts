@@ -1996,6 +1996,7 @@ export const en: Record<string, string> = {
   "anon.pickDest": "Choose destination",
   "anon.copy": "Write to folder",
   "anon.copied": "Done: {{instances}} instance(s) (burned {{burned}})",
+  "anon.usedSeed": "Date-shift seed: {{seed}} (specify this seed when exporting the same patient again later)",
   "anon.zip": "Download ZIP",
   "anon.zipped": "ZIP created",
   "anon.zipped.count": "ZIP created: {{instances}} instance(s), {{bytes}} bytes",

@@ -28,8 +28,23 @@ public class DicomAnonymizerEngine {
             Tag.TransferSyntaxUID, Tag.MediaStorageSOPClassUID, Tag.ImplementationClassUID,
             Tag.SOPClassUID, Tag.RelatedGeneralSOPClassUID, Tag.OriginalSpecializedSOPClassUID);
 
-    /** 患者単位の新 ID/Name。 */
-    public record PatientMapping(String newPatId, String newPatName) {
+    /**
+     * 患者単位の新 ID/Name と、日付シフト量。
+     *
+     * <p>{@code dateShiftDays} は Modified Dates Option（113107）用。<b>患者ごとに 1 回だけ決める</b>ので、
+     * スタディ・シリーズ・インスタンスを跨いで自動的に一貫し、患者内の時間的前後関係が保たれる。
+     * 導出は {@link DateShifter#shiftDaysFor}（種と元 PatientID の純関数＝処理順に依存しない）。
+     *
+     * <p>⚠ {@link AnonymizeConfig} に持たせることはできない（患者ごとに値を変えられない）。
+     * エンジンのフィールドや {@code ThreadLocal} も不可 —— エンジンは {@code AnonymizeService} の
+     * <b>共有インスタンス</b>なので、状態を持たせると患者間で漏れる。
+     */
+    public record PatientMapping(String newPatId, String newPatName, int dateShiftDays) {
+
+        /** 日付シフト無し（Modified Dates を使わない経路用）。 */
+        public PatientMapping(String newPatId, String newPatName) {
+            this(newPatId, newPatName, 0);
+        }
     }
 
     /**
@@ -72,7 +87,7 @@ public class DicomAnonymizerEngine {
     /** 1 データセットを匿名化（破壊的）。{@code facts} に実際に行った処理を渡す。 */
     public void deidentify(Attributes ds, AnonymizeConfig cfg, PatientMapping pmap, Map<String, String> uidMap,
             InstanceDeidFacts facts) {
-        deidentifyRecursive(ds, cfg, uidMap);
+        deidentifyRecursive(ds, cfg, uidMap, pmap.dateShiftDays());
 
         ds.setString(Tag.PatientName, VR.PN, pmap.newPatName());
         ds.setString(Tag.PatientID, VR.LO, pmap.newPatId());
@@ -124,7 +139,8 @@ public class DicomAnonymizerEngine {
         }
     }
 
-    private void deidentifyRecursive(Attributes ds, AnonymizeConfig cfg, Map<String, String> uidMap) {
+    private void deidentifyRecursive(Attributes ds, AnonymizeConfig cfg, Map<String, String> uidMap,
+            int dateShiftDays) {
         cleanPrivateTags(ds, cfg);
 
         for (int tag : ds.tags()) {
@@ -138,7 +154,7 @@ public class DicomAnonymizerEngine {
             if (vr == VR.SQ) {
                 if (action == Action.C && (tag == Tag.ContentSequence
                         || tag == Tag.AcquisitionContextSequence || tag == Tag.SpecimenPreparationSequence)) {
-                    cleanStructuredContentSequence(ds, tag, cfg, uidMap);
+                    cleanStructuredContentSequence(ds, tag, cfg, uidMap, dateShiftDays);
                     continue;
                 }
                 if (action == Action.X) {
@@ -152,7 +168,7 @@ public class DicomAnonymizerEngine {
                 Sequence sq = ds.getSequence(tag);
                 if (sq != null) {
                     for (Attributes item : sq) {
-                        deidentifyRecursive(item, cfg, uidMap);
+                        deidentifyRecursive(item, cfg, uidMap, dateShiftDays);
                     }
                 }
                 continue;
@@ -168,7 +184,7 @@ public class DicomAnonymizerEngine {
                     } else if (action == Action.U) {
                         replaceUid(ds, tag, vr, uidMap);
                     } else {
-                        applyTagAction(ds, tag, vr, action, cfg);
+                        applyTagAction(ds, tag, vr, action, cfg, dateShiftDays);
                     }
                 } else if (!cfg.hasOption(AnonymizeConfig.Option.RetainUIDs)) {
                     replaceUid(ds, tag, vr, uidMap);
@@ -177,18 +193,31 @@ public class DicomAnonymizerEngine {
             }
 
             if (action != null && action != Action.K) {
-                applyTagAction(ds, tag, vr, action, cfg);
+                applyTagAction(ds, tag, vr, action, cfg, dateShiftDays);
             }
         }
     }
 
-    private void applyTagAction(Attributes ds, int tag, VR vr, Action action, AnonymizeConfig cfg) {
+    private void applyTagAction(Attributes ds, int tag, VR vr, Action action, AnonymizeConfig cfg,
+            int dateShiftDays) {
         String customVal = cfg.getCustomTagReplacements().get(tag);
         switch (action) {
             case X -> ds.remove(tag);
             case Z -> ds.setNull(tag, vr);
             case D, C -> {
-                String val = customVal != null ? sanitizeForVr(customVal.trim(), vr) : dummyForVr(vr);
+                // 🔴 D と C は意味が違う。D は「ダミーで置換」なので固定値で正しいが、
+                // C は「加工して関係を保つ」。日付の C を固定ダミーにすると全検査日が同じ日に潰れ、
+                // Modified Dates Option（113107）が名前の逆を行う偽申告になる。
+                String val;
+                if (customVal != null) {
+                    val = sanitizeForVr(customVal.trim(), vr);
+                } else if (action == Action.C && dateShiftDays != 0 && isShiftableDateVr(vr)) {
+                    // 解釈できない値は null になり、下で空にされる。
+                    // 「ずらせなかったから元のまま素通し」は最悪の漏洩経路なので絶対にしない。
+                    val = shiftDateValue(ds.getString(tag), vr, dateShiftDays);
+                } else {
+                    val = dummyForVr(vr);
+                }
                 if (val == null) {
                     ds.setNull(tag, vr);
                 } else {
@@ -252,7 +281,8 @@ public class DicomAnonymizerEngine {
     }
 
     /** Structured Content（SR）系シーケンスから個人情報アイテムを除去し、残りを再帰処理。 */
-    private void cleanStructuredContentSequence(Attributes ds, int tag, AnonymizeConfig cfg, Map<String, String> uidMap) {
+    private void cleanStructuredContentSequence(Attributes ds, int tag, AnonymizeConfig cfg,
+            Map<String, String> uidMap, int dateShiftDays) {
         Sequence sq = ds.getSequence(tag);
         if (sq == null) {
             return;
@@ -263,7 +293,7 @@ public class DicomAnonymizerEngine {
             if (isIdentifiableContentItem(item)) {
                 it.remove();
             } else {
-                deidentifyRecursive(item, cfg, uidMap);
+                deidentifyRecursive(item, cfg, uidMap, dateShiftDays);
             }
         }
     }
@@ -290,6 +320,33 @@ public class DicomAnonymizerEngine {
     }
 
     /** VR 別の既定ダミー値（バイナリ等で文字列不可なら null＝空にする）。 */
+    /**
+     * 日数シフトで扱える日付 VR か。
+     *
+     * <p>{@code TM}（時刻）は<b>含めない</b>。日単位のシフトでは時刻は定義上変化せず、
+     * 時刻だけ独立にずらすと同一検査内の相対時刻が壊れる（投与後 1h / 4h のように
+     * 同じ日に複数時点を撮る検査で間隔が失われる）。よって TM は K と同じく素通しさせる
+     * ——ただし {@code isShiftableDateVr} が false を返すと {@code dummyForVr} 側に落ちるため、
+     * TM の扱いは {@link #shiftDateValue} で明示的に「元の値を返す」としている。
+     */
+    private static boolean isShiftableDateVr(VR vr) {
+        return vr == VR.DA || vr == VR.DT || vr == VR.TM;
+    }
+
+    /** DA/DT は日付部をシフト、TM は保持。解釈できなければ null（＝空にする）。 */
+    private static String shiftDateValue(String original, VR vr, int days) {
+        if (original == null || original.isBlank()) {
+            return null;
+        }
+        return switch (vr) {
+            case DA -> DateShifter.shiftDa(original, days);
+            case DT -> DateShifter.shiftDt(original, days);
+            // 時刻は日単位シフトの対象外。前後関係を保つため元の値をそのまま残す。
+            case TM -> original;
+            default -> null;
+        };
+    }
+
     private static String dummyForVr(VR vr) {
         return switch (vr) {
             case DA -> "20000101";

@@ -1109,6 +1109,13 @@ export interface AnonResult {
    * （burnedInstances が 0 でも、従来はそれが異常だと分からなかった）。
    */
   notBurnedInstances: number;
+  /**
+   * 日付シフト（Modified Dates）に実際に使った種。randomSeed を指定していれば同じ値。
+   *
+   * 🔴 **控えて次回に指定すること**。同じ患者を後日追加でエクスポートするとき、種が違うと
+   * 日付が別方向にずれ、前回の出力と時間軸が合わなくなる。
+   */
+  usedSeed: number;
   errors: string[];
 }
 

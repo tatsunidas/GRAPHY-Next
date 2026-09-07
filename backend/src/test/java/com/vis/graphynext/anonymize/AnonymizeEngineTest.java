@@ -12,6 +12,8 @@ import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.VR;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
@@ -138,6 +140,90 @@ class AnonymizeEngineTest {
         deidentify(ds, new AnonymizeConfig(), true);
         assertEquals(Set.of("113100"), methodCodes(ds));
         assertEquals("YES", ds.getString(Tag.BurnedInAnnotation));
+    }
+
+    // ------------------------------------------------------------------------
+    // 日付シフト（fw/mainscreen-tools.md L144-149 の回帰）
+    //
+    // 症状: ModifiedDates を選ぶと全検査日が 20000101 に潰れた。アクション C が VR 別の
+    // 固定ダミーを返すだけで元の値を読んでいなかったため。オプションの目的は
+    // 「時間的前後関係の保持」なので名前の逆を行っており、しかも 113107 を宣言していた。
+    // ------------------------------------------------------------------------
+
+    private static AnonymizeConfig modifiedDatesConfig() {
+        AnonymizeConfig cfg = new AnonymizeConfig();
+        cfg.addOption(Option.RetainLongitudinalTemporalInformationModifiedDates);
+        return cfg;
+    }
+
+    /** 同一患者の 2 スタディを同じオフセットで匿名化する（＝実運用と同じ条件）。 */
+    private static String[] shiftTwoStudies(String da1, String da2) {
+        int shift = DateShifter.shiftDaysFor("PID123", 20260907L);
+        var pm = new DicomAnonymizerEngine.PatientMapping("ANON", "ANON", shift);
+        var eng = new DicomAnonymizerEngine();
+
+        Attributes a = sample();
+        a.setString(Tag.StudyDate, VR.DA, da1);
+        Attributes b = sample();
+        b.setString(Tag.StudyDate, VR.DA, da2);
+        eng.deidentify(a, modifiedDatesConfig(), pm, new HashMap<>(),
+                DicomAnonymizerEngine.InstanceDeidFacts.none());
+        eng.deidentify(b, modifiedDatesConfig(), pm, new HashMap<>(),
+                DicomAnonymizerEngine.InstanceDeidFacts.none());
+        return new String[] { a.getString(Tag.StudyDate), b.getString(Tag.StudyDate) };
+    }
+
+    @Test
+    void deidentify_modifiedDates_preservesIntervalBetweenStudies() {
+        String[] out = shiftTwoStudies("20260101", "20260730");
+
+        assertNotEquals("20000101", out[0], "固定ダミーに潰れない（2026-08-20 の実測ケース）");
+        assertNotEquals("20000101", out[1], "固定ダミーに潰れない（2026-08-20 の実測ケース）");
+        assertNotEquals(out[0], out[1], "7 か月差の 2 スタディが同じ日にならない");
+
+        DateTimeFormatter f = DateTimeFormatter.ofPattern("uuuuMMdd");
+        long days = LocalDate.parse(out[1], f).toEpochDay() - LocalDate.parse(out[0], f).toEpochDay();
+        assertEquals(210, days, "元の 210 日差が保たれる（＝113107 の申告が事実になる）");
+    }
+
+    @Test
+    void deidentify_modifiedDates_keepsStudyTimeUnchanged() {
+        // 投与後 1h / 4h のように同じ日に複数時点を撮る検査で、時点の間隔を壊さない。
+        int shift = DateShifter.shiftDaysFor("PID123", 20260907L);
+        Attributes ds = sample();
+        ds.setString(Tag.StudyTime, VR.TM, "101530");
+        new DicomAnonymizerEngine().deidentify(ds, modifiedDatesConfig(),
+                new DicomAnonymizerEngine.PatientMapping("ANON", "ANON", shift), new HashMap<>(),
+                DicomAnonymizerEngine.InstanceDeidFacts.none());
+        assertEquals("101530", ds.getString(Tag.StudyTime), "日単位シフトなので時刻は変わらない");
+    }
+
+    @Test
+    void deidentify_modifiedDates_differentPatients_getDifferentOffsets() {
+        assertNotEquals(DateShifter.shiftDaysFor("PID123", 1L), DateShifter.shiftDaysFor("PID999", 1L),
+                "患者間の相対関係は保たない（集団の受診日の相関から実日付が復元されるのを防ぐ）");
+    }
+
+    @Test
+    void deidentify_fullDates_keepsStudyDateExactly() {
+        // 排他のもう一方。ModifiedDates を入れたことで Full Dates が壊れていないこと。
+        Attributes ds = sample();
+        AnonymizeConfig cfg = new AnonymizeConfig();
+        cfg.addOption(Option.RetainLongitudinalTemporalInformationFullDates);
+        new DicomAnonymizerEngine().deidentify(ds, cfg,
+                new DicomAnonymizerEngine.PatientMapping("ANON", "ANON"), new HashMap<>(),
+                DicomAnonymizerEngine.InstanceDeidFacts.none());
+        assertEquals("20240101", ds.getString(Tag.StudyDate), "Full Dates は原本のまま");
+    }
+
+    @Test
+    void deidentify_withoutDateOption_stillRemovesStudyDate() {
+        // 日付オプション無し＝Basic Profile の Z。既存の挙動を固定する。
+        Attributes ds = sample();
+        new DicomAnonymizerEngine().deidentify(ds, new AnonymizeConfig(),
+                new DicomAnonymizerEngine.PatientMapping("ANON", "ANON"), new HashMap<>(),
+                DicomAnonymizerEngine.InstanceDeidFacts.none());
+        assertNull(ds.getString(Tag.StudyDate), "StudyDate は既定 Z で空");
     }
 
     @Test

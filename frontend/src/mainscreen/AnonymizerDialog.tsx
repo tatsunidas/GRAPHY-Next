@@ -152,7 +152,13 @@ export function AnonymizerDialog({
       const ids = await resolveStudyUids();
       if (!ids) return;
       const r = await anonymizeCopy(buildReq(ids));
-      setInfo(t("anon.copied", { instances: r.instances, burned: r.burnedInstances }));
+      let done = t("anon.copied", { instances: r.instances, burned: r.burnedInstances });
+      // 日付をずらしたなら、使った種を必ず見せる。控えていないと後日の追加出力で
+      // 日付が別方向にずれ、前回の出力と時間軸が合わなくなる。
+      if (options.has("RetainLongitudinalTemporalInformationModifiedDates")) {
+        done += " " + t("anon.usedSeed", { seed: r.usedSeed });
+      }
+      setInfo(done);
       // 焼き込みを頼まれたのに塗れなかったぶんは、出力に焼き込み文字が残っている。
       // 申告していないので DICOM としては正直だが、利用者は気づけないので必ず出す。
       // ⚠ errors と両方出うるので、片方で上書きしない（警告のほうが重要度が高い）。
