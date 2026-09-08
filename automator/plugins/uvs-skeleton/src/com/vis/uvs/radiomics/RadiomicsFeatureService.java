@@ -96,13 +96,42 @@ public class RadiomicsFeatureService {
      * @return {@code spec.names()} と同じ長さ・同じ順序の値
      */
     public double[] extract(ImagePlus image, ImagePlus mask, Spec spec) {
+        return extractDetailed(image, mask, spec).values();
+    }
+
+    /**
+     * 抽出結果と、<b>どの特徴が padding で埋まったか</b>。
+     *
+     * @param values  {@code spec.names()} と同じ長さ・同じ順序の値
+     * @param padded  同じ長さ。NaN / Inf だったため padding 値に置き換えた位置が true
+     */
+    public record Extracted(double[] values, boolean[] padded) {
+        /** 1 つでも埋めたか。 */
+        public boolean any() {
+            for (boolean b : padded) if (b) return true;
+            return false;
+        }
+    }
+
+    /**
+     * {@link #extract} と<b>同じ計算</b>をしたうえで、padding の有無も返す。
+     *
+     * <p>⚠️ <b>padding の経路は一度も通っていない</b>（設計 §8.10）。4 フレームでは NaN が
+     * 出なかったので、埋めた実績が無い＝正しさが確かめられていない。数字を変えずに
+     * <b>通ったかどうかを観測できる</b>ようにするためだけの口である
+     * （`extract` はこれに委譲するので、2 つの実装に分かれる余地は無い）。
+     */
+    public Extracted extractDetailed(ImagePlus image, ImagePlus mask, Spec spec) {
         double[] values = new double[spec.names().length];
+        boolean[] padded = new boolean[spec.names().length];
         synchronized (RADIOMICS_LOCK) {
             for (int i = 0; i < spec.names().length; i++) {
-                values[i] = pad(calculate(spec.names()[i], image, mask, spec), spec, i);
+                Double raw = calculate(spec.names()[i], image, mask, spec);
+                padded[i] = raw == null || !Double.isFinite(raw);
+                values[i] = pad(raw, spec, i);
             }
         }
-        return values;
+        return new Extracted(values, padded);
     }
 
     /** 特徴名を {@code Family} と {@code FeatureName} に割って RadiomicsJ を呼ぶ。 */

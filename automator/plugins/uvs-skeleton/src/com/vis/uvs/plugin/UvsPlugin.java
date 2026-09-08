@@ -105,6 +105,7 @@ public class UvsPlugin implements GraphyPlugin {
                     r.put("ok", true);
                 }
                 case "prepare" -> r.putAll(prepare(args));
+                case "predict" -> r.putAll(predictChunk(args));
                 case "checkCache" -> r.putAll(checkCache(args));
                 case "release" -> {
                     UvsSession s = UvsSession.get(strArg(args, "sessionId"));
@@ -168,7 +169,10 @@ public class UvsPlugin implements GraphyPlugin {
             for (int i = ((from + interval - 1) / interval) * interval; i <= scoreLast; i += interval) {
                 samples.add(i);
                 needed.add(i);
-                needed.add(Math.min(i + stride, lastFrame));
+                // ⚠️ **範囲外の相手は丸めない。** 元アプリは最終フレームで相手を空画像にする。
+                //    段 4 の検査は「相手が無ければ null」で移植元と一致しているので、
+                //    ここで min(i+stride, last) に丸めると**別の ROI が出る**。
+                if (i + stride <= lastFrame) needed.add(i + stride);
             }
         }
 
@@ -240,6 +244,141 @@ public class UvsPlugin implements GraphyPlugin {
         r.put("samplingPoints", points.count);
         r.put("seed", FrameScoring.RANDOM_SEED);
         r.put("colorThreshold", FrameScoring.COLOR_THRESHOLD);
+        return r;
+    }
+
+    /**
+     * 予測を<b>区間に分けて</b>走らせる（段 6 の {@code op:"predict"}）。
+     *
+     * <h3>なぜ分けるのか</h3>
+     * 1 予測あたり 2.2〜2.9 秒。4,958 フレーム・間引き 15 なら 331 サンプル ≒ <b>16 分</b>。
+     * {@code runBackend()} は同期 1 往復で進捗を返せないので、<b>数サンプルずつ返して
+     * 呼び直してもらう</b>。進捗はフロントが持つ（「押したら 11 分無反応」を作らない）。
+     *
+     * <h3>中止は実装しない</h3>
+     * 🔑 <b>フロントが次のチャンクを投げなければ止まる。</b> 分割方式の副産物として
+     * 中止が無料で手に入るので、止める仕掛けを別に作らない（止め忘れの経路も増えない）。
+     *
+     * <h3>フレームはキャッシュから読む</h3>
+     * {@code prepare} が置いた生 rgb24 をそのまま使う。⚠️ <b>差分の相手が範囲外なら null</b>
+     * ——元アプリは最終フレームで空画像を相手にする。丸めて実フレームを渡すと別の ROI が出る。
+     */
+    private Map<String, Object> predictChunk(Map<String, Object> args) throws Exception {
+        Map<String, Object> r = new LinkedHashMap<>();
+        UvsSession s = UvsSession.get(strArg(args, "sessionId"));
+        if (s == null) {
+            r.put("error", "セッションがありません（op:\"info\" で開き直してください）");
+            return r;
+        }
+        UvsSession.Scan sc = s.scan();
+        if (sc == null) {
+            r.put("error", "先に op:\"prepare\" を走らせてください");
+            return r;
+        }
+        int[] samples = sc.samples();
+        int sampleFrom = Math.max(0, intArg(args, "sampleFrom", 0));
+        int sampleCount = Math.max(1, intArg(args, "sampleCount", 4));
+        boolean includeFeatures = Boolean.TRUE.equals(args.get("includeFeatures"));
+        int end = Math.min(samples.length, sampleFrom + sampleCount);
+        int lastFrame = Math.max(0, s.numberOfFrames - 1);
+
+        // 🔴 モデルは**自分のフォルダ**から読む。読めなければ既定値へ落ちずに失敗させる。
+        java.nio.file.Path dir = pluginDir();
+        com.vis.uvs.ml.LrModel model = com.vis.uvs.ml.LrModel.fromJson(
+                java.nio.file.Files.readString(dir.resolve("reference-params.json")));
+        String[] names = model.featureNames();
+        double[] paddings = readPaddings(dir.resolve("model-manifest.json"), names);
+
+        com.vis.uvs.analysis.AnalysisSettings.Extractor ex =
+                com.vis.uvs.analysis.AnalysisSettings.Extractor.EXTRACTOR_COMPOSITE;
+        com.vis.uvs.radiomics.RadiomicsFeatureService svc =
+                new com.vis.uvs.radiomics.RadiomicsFeatureService();
+        com.vis.uvs.radiomics.RadiomicsFeatureService.Spec spec =
+                com.vis.uvs.radiomics.RadiomicsFeatureService.Spec.swingDefaults(names, paddings);
+        FrameCache cache = s.cache();
+
+        List<Map<String, Object>> scores = new ArrayList<>();
+        boolean anyPadded = false;
+        for (int k = sampleFrom; k < end; k++) {
+            int index = samples[k];
+            long t0 = System.currentTimeMillis();
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("sample", k);
+            row.put("frameIndex", index);
+
+            byte[] a = cache.read(index);
+            if (a == null) {
+                row.put("ok", false);
+                row.put("error", "フレーム " + index + " がキャッシュにありません（prepare をやり直してください）");
+                scores.add(row);
+                continue;
+            }
+            int partner = index + sc.stride();
+            byte[] b = partner <= lastFrame ? cache.read(partner) : null;
+
+            com.vis.uvs.video.Frame f0 = new com.vis.uvs.video.Frame(index + 1, s.width, s.height, a);
+            com.vis.uvs.video.Frame f1 = b == null ? null
+                    : new com.vis.uvs.video.Frame(partner + 1, s.width, s.height, b);
+
+            Map<Integer, ij.gui.Roi> rois = com.vis.uvs.analysis.candidate.CandidateExtractor.extract(
+                    f0, f1, ex, 1,
+                    com.vis.uvs.analysis.roi.RoiSettings.forExtractor(ex),
+                    com.vis.uvs.analysis.flow.FlowSettings.swingDefaults());
+
+            List<Map<String, Object>> perRoi = new ArrayList<>();
+            double sum = 0;
+            boolean framePadded = false;
+            for (Map.Entry<Integer, ij.gui.Roi> e : rois.entrySet()) {
+                com.vis.uvs.radiomics.RoiCropper.Cropped c =
+                        com.vis.uvs.radiomics.RoiCropper.crop(f0, e.getValue());
+                if (c == null) continue;
+                com.vis.uvs.radiomics.RadiomicsFeatureService.Extracted ext =
+                        svc.extractDetailed(c.image(), c.mask(), spec);
+                double p = model.score(ext.values());
+                sum += p;
+                Map<String, Object> one = new LinkedHashMap<>();
+                one.put("cluster", e.getKey());
+                one.put("x", c.bounds().x);
+                one.put("y", c.bounds().y);
+                one.put("w", c.bounds().width);
+                one.put("h", c.bounds().height);
+                one.put("pixels", c.bounds().width * c.bounds().height);
+                one.put("probability", p);
+                // ⚠️ 未検証の経路。**通ったら、どの特徴が埋まったかを名前で残す**（§8.10）。
+                List<String> paddedNames = new ArrayList<>();
+                for (int i = 0; i < names.length; i++) if (ext.padded()[i]) paddedNames.add(names[i]);
+                one.put("padded", !paddedNames.isEmpty());
+                if (!paddedNames.isEmpty()) {
+                    one.put("paddedFeatures", paddedNames);
+                    framePadded = true;
+                }
+                if (includeFeatures) {
+                    Map<String, Object> feats = new LinkedHashMap<>();
+                    for (int i = 0; i < names.length; i++) feats.put(names[i], ext.values()[i]);
+                    one.put("features", feats);
+                }
+                perRoi.add(one);
+            }
+            anyPadded |= framePadded;
+            row.put("ok", true);
+            row.put("rois", perRoi);
+            // フレームの確率は **ROI ごとの確率の平均**（移植元と同じ）。
+            row.put("probability", perRoi.isEmpty() ? 0.0 : sum / perRoi.size());
+            row.put("padded", framePadded);
+            row.put("elapsedMs", System.currentTimeMillis() - t0);
+            scores.add(row);
+        }
+
+        r.put("ok", true);
+        r.put("sessionId", s.id);
+        r.put("scores", scores);
+        r.put("sampleFrom", sampleFrom);
+        r.put("nextFrom", end);
+        r.put("total", samples.length);
+        r.put("done", end >= samples.length);
+        r.put("anyPadded", anyPadded);
+        r.put("stride", sc.stride());
+        r.put("radiomicsJVersion", com.vis.uvs.radiomics.RadiomicsFeatureService.radiomicsJVersion());
         return r;
     }
 

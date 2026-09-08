@@ -100,6 +100,33 @@ interface OpResult {
   // op:"checkCache"
   allMatch?: boolean;
   checked?: { index: number; cachedMd5: string | null; decodedMd5: string | null; same: boolean }[];
+  // op:"predict"（チャンク）
+  scores?: {
+    sample: number;
+    frameIndex: number;
+    ok?: boolean;
+    error?: string;
+    probability?: number;
+    padded?: boolean;
+    elapsedMs?: number;
+    rois?: {
+      cluster: number;
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      pixels: number;
+      probability: number;
+      padded?: boolean;
+      paddedFeatures?: string[];
+      features?: Record<string, number>;
+    }[];
+  }[];
+  sampleFrom?: number;
+  nextFrom?: number;
+  total?: number;
+  done?: boolean;
+  anyPadded?: boolean;
 }
 
 interface Payload {
@@ -503,7 +530,14 @@ async function main(): Promise<void> {
     // 🔑 旧経路（analyze/roi/predict）は**そのまま**動き続けることが上の 1〜8 で示されている。
     //    ここで見るのは「op を足したことで、状態を持つ呼び方ができるようになったか」。
     {
-      const runOp = async (request: Record<string, unknown>, waitMs = 8_000): Promise<OpResult | null> => {
+      /**
+       * op を 1 回投げて、結果が書かれるまで**待つ**。
+       *
+       * ⚠️ 固定待ちにしない。予測は 1 サンプル 2〜3 秒だが走査は 1 秒で終わる——固定にすると
+       * 遅いほうに合わせることになり、実機検証が何分も伸びる（実際、Electron ＋ backend を
+       * 抱えたまま待ち続けてメモリ不足で落とされた）。**書かれた瞬間に進む。**
+       */
+      const runOp = async (request: Record<string, unknown>, maxWaitMs = 30_000): Promise<OpResult | null> => {
         await viewer.evaluate((r) => {
           (window as unknown as { __uvsRequest?: unknown }).__uvsRequest = r;
           delete (window as unknown as { __uvsSkeleton?: unknown }).__uvsSkeleton;
@@ -511,11 +545,15 @@ async function main(): Promise<void> {
         await viewer.getByTestId("viewer2d-menu-plugins").click();
         await viewer.waitForTimeout(300);
         await viewer.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
-        await viewer.waitForTimeout(waitMs);
-        const p = (await viewer.evaluate(
-          () => (window as unknown as { __uvsSkeleton?: Payload }).__uvsSkeleton ?? null,
-        )) as Payload | null;
-        return (p?.backend as OpResult | undefined) ?? null;
+        const deadline = Date.now() + maxWaitMs;
+        while (Date.now() < deadline) {
+          const p = (await viewer.evaluate(
+            () => (window as unknown as { __uvsSkeleton?: Payload }).__uvsSkeleton ?? null,
+          )) as Payload | null;
+          if (p) return (p.backend as OpResult | undefined) ?? null;
+          await viewer.waitForTimeout(250);
+        }
+        return null;
       };
 
       const info = await runOp({ op: "info" });
@@ -597,6 +635,77 @@ async function main(): Promise<void> {
             "[9] ★★★キャッシュしたフレームが復号結果と byte 単位で一致（md5）", cc?.checked);
         }
         await runOp({ op: "release", sessionId: info2?.sessionId }, 3_000);
+      }
+
+      // ── 段 6-3: チャンク予測が、段 5 の参照と 1 ビットも違わないこと ──
+      // 🔑 **間引きを 10 にすると、格子はちょうど参照のフレーム（0/10/20/30）に重なる。**
+      //    経路は変わった（readPair での都度復号 → キャッシュからの読み出し）が、
+      //    出る数字が同じであることを、段 5 と**同じ参照値**で確かめる。
+      if (fs.existsSync(predRefPath)) {
+        const predRef = JSON.parse(fs.readFileSync(predRefPath, "utf8")) as Record<
+          string,
+          { bounds: number[]; pixels: number; probability: number; features: Record<string, number> }
+        >;
+        const wanted = Object.keys(predRef).map(Number).sort((a, b) => a - b);
+        const info4 = await runOp({ op: "info" });
+        const prep2 = await runOp(
+          { op: "prepare", sessionId: info4?.sessionId, from: 0, count: wanted[wanted.length - 1] + 1, interval: 10 },
+          60_000,
+        );
+        check(prep2?.ok === true, "[9] 予測用の走査が通った（間引き 10）", { error: prep2?.error });
+
+        const chunk = await runOp(
+          {
+            op: "predict",
+            sessionId: info4?.sessionId,
+            sampleFrom: 0,
+            sampleCount: wanted.length,
+            includeFeatures: true,
+          },
+          120_000,
+        );
+        fs.writeFileSync(path.join(OUT_DIR, "predict-chunk.json"), JSON.stringify(chunk, null, 2));
+        check(chunk?.ok === true, "[9] ★op:predict（チャンク）が走った", { error: chunk?.error });
+        if (chunk?.ok) {
+          // 🔑 チャンクは「次はここから」を返す＝フロントが進捗と中止を持てる。
+          check(
+            chunk.nextFrom === wanted.length && typeof chunk.total === "number",
+            "[9] 次のチャンクの開始位置と総数を返す（進捗はフロントが持てる）",
+            { nextFrom: chunk.nextFrom, total: chunk.total, done: chunk.done },
+          );
+          for (const frameIndex of wanted) {
+            const want = predRef[String(frameIndex)];
+            const row = chunk.scores?.find((x) => x.frameIndex === frameIndex);
+            const roi = row?.rois?.[0];
+            check(!!roi, `[9] フレーム ${frameIndex}: キャッシュ経由で推論できた`, {
+              error: row?.error, elapsedMs: row?.elapsedMs,
+            });
+            if (!roi) continue;
+            check(roi.pixels === want.pixels, `[9] フレーム ${frameIndex}: 画素数が段 5 と一致`,
+              { got: roi.pixels, expected: want.pixels });
+            let worstName = "";
+            let worstRel = 0;
+            for (const [name, expected] of Object.entries(want.features)) {
+              const actual = roi.features?.[name];
+              const rel = typeof actual === "number"
+                ? Math.abs(actual - expected) / Math.max(Math.abs(expected), 1e-12)
+                : Number.POSITIVE_INFINITY;
+              if (rel > worstRel) { worstRel = rel; worstName = name; }
+            }
+            check(worstRel <= 1e-9,
+              `[9] ★★★フレーム ${frameIndex}: キャッシュ経由でも 15 特徴が段 5 と一致`,
+              { worstFeature: worstName, worstRel });
+            check(Math.abs((roi.probability ?? NaN) - want.probability) <= 1e-9,
+              `[9] ★★★フレーム ${frameIndex}: キャッシュ経由でも確率が段 5 と一致`,
+              { got: roi.probability, expected: want.probability });
+          }
+          // ⚠️ padding は「潰す」のではなく**観測する**（未検証の経路・§8.10）。
+          observe("[9] ⚠️ padding が通ったか（未検証の経路の観測窓）", {
+            anyPadded: chunk.anyPadded,
+            paddedFrames: chunk.scores?.filter((x) => x.padded).map((x) => x.frameIndex),
+          });
+        }
+        await runOp({ op: "release", sessionId: info4?.sessionId }, 5_000);
       }
 
       // ── 段 6-2: 動画まるごと 1 本を走らせる（実際の使い方）────────────
