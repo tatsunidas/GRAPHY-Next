@@ -32,14 +32,17 @@ public final class FrameSource {
 
     private final Path mp4;
     private final String ffmpeg;
+    /** この MP4 を close() で消してよいか。セッションから借りた MP4 は消さない。 */
+    private final boolean ownsMp4;
     public final int width;
     public final int height;
 
-    private FrameSource(Path mp4, String ffmpeg, int width, int height) {
+    private FrameSource(Path mp4, String ffmpeg, int width, int height, boolean ownsMp4) {
         this.mp4 = mp4;
         this.ffmpeg = ffmpeg;
         this.width = width;
         this.height = height;
+        this.ownsMp4 = ownsMp4;
     }
 
     /** `/rendered` から MP4 を落として開く。 */
@@ -55,10 +58,19 @@ public final class FrameSource {
                 throw new IOException("/rendered が " + res.statusCode() + " を返しました: " + url);
             }
         }
-        return new FrameSource(tmp, ffmpeg, width, height);
+        return new FrameSource(tmp, ffmpeg, width, height, true);
+    }
+
+    /**
+     * 既に手元にある MP4 を開く（{@link UvsSession} が 1 回だけ落としたもの）。
+     * 🔑 <b>この経路は MP4 を消さない。</b> セッションが持ち主である。
+     */
+    public static FrameSource fromFile(Path mp4, String ffmpeg, int width, int height) {
+        return new FrameSource(mp4, ffmpeg, width, height, false);
     }
 
     public void close() {
+        if (!ownsMp4) return;
         try {
             Files.deleteIfExists(mp4);
         } catch (IOException ignored) {
@@ -99,6 +111,49 @@ public final class FrameSource {
         } finally {
             // 🔴 **読み切る前に止めるので、必ず破棄する。** 放置すると ffmpeg が
             //    パイプの書き込みでブロックしたまま残る。
+            proc.destroy();
+            drainQuietly(proc.getErrorStream());
+            proc.waitFor();
+        }
+        return seen;
+    }
+
+    /** {@link #forEachFrame} の受け手。渡される配列は<b>使い回される</b>ので、残すなら複製すること。 */
+    @FunctionalInterface
+    public interface FrameConsumer {
+        void accept(int index, byte[] frame) throws Exception;
+    }
+
+    /**
+     * 先頭から {@code untilInclusive} 番目まで（0 origin）を <b>1 パス</b>で流す。
+     *
+     * <p>🔴 <b>`-ss` で途中から始めない。</b> 区間解析でも先頭から復号する。シークは
+     * キーフレーム境界に丸められ、<b>フレーム番号が静かにずれる</b>——段 4 / 段 5 の
+     * 「移植元と完全一致」は<b>番号が合っていること</b>に全面的に依存している。
+     * 復号のやり直しより、ずれた ROI のほうがずっと高くつく。
+     *
+     * <p>⚠️ <b>渡す配列は使い回す。</b> 数千フレーム × 1.16MB を貯めない
+     * （キャッシュへ書くのは呼び出し側が「必要な番号だけ」選ぶ）。
+     *
+     * @return 実際に読めたフレーム数
+     */
+    public int forEachFrame(int untilInclusive, FrameConsumer sink) throws Exception {
+        int frameBytes = width * height * 3;
+        ProcessBuilder pb = new ProcessBuilder(
+                ffmpeg, "-v", "error", "-i", mp4.toString(),
+                "-f", "rawvideo", "-pix_fmt", "rgb24", "-");
+        pb.redirectErrorStream(false);
+        Process proc = pb.start();
+        int seen = 0;
+        try (DataInputStream in = new DataInputStream(proc.getInputStream())) {
+            byte[] buf = new byte[frameBytes];
+            while (untilInclusive < 0 || seen <= untilInclusive) {
+                if (!readFully(in, buf)) break;
+                sink.accept(seen, buf);
+                seen++;
+            }
+        } finally {
+            // 🔴 読み切る前に止めるので、必ず破棄する（放置すると ffmpeg がパイプで詰まって残る）。
             proc.destroy();
             drainQuietly(proc.getErrorStream());
             proc.waitFor();

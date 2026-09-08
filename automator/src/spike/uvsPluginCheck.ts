@@ -84,6 +84,22 @@ interface OpResult {
   };
   freedBytes?: number;
   existed?: boolean;
+  // op:"prepare"
+  from?: number;
+  frames?: number;
+  cpr?: number[];
+  mad?: number[];
+  sampleIndices?: number[];
+  interval?: number;
+  stride?: number;
+  cachedFrames?: number;
+  cacheBytes?: number;
+  framesDecoded?: number;
+  ffmpegRuns?: number;
+  decodeMs?: number;
+  // op:"checkCache"
+  allMatch?: boolean;
+  checked?: { index: number; cachedMd5: string | null; decodedMd5: string | null; same: boolean }[];
 }
 
 interface Payload {
@@ -538,6 +554,86 @@ async function main(): Promise<void> {
         check(again?.ok === true && again?.existed === false,
           "[9] 既に無いセッションの release は赤くしない", again);
       }
+      // ── 段 6-2: prepare（1 パス走査＋フレームキャッシュ）────────────
+      // 🔴 **ここが段 6 の要**。キャッシュしたフレームが復号結果と 1 バイトでも違うと、
+      //    ROI が静かにずれ「確率だけが違う」という気づきにくい壊れ方になる。
+      if (fs.existsSync(refPath)) {
+        const ref = JSON.parse(fs.readFileSync(refPath, "utf8")) as { frames: number; cpr: number[]; mad: number[] };
+        const info2 = await runOp({ op: "info" });
+        const prep = await runOp(
+          { op: "prepare", sessionId: info2?.sessionId, from: 0, count: ref.frames },
+          60_000,
+        );
+        fs.writeFileSync(path.join(OUT_DIR, "prepare.json"), JSON.stringify(
+          { ...prep, cpr: prep?.cpr?.slice(0, 5), mad: prep?.mad?.slice(0, 5) }, null, 2));
+        check(prep?.ok === true, "[9] ★op:prepare が走った", { error: prep?.error, decodeMs: prep?.decodeMs });
+        if (prep?.ok) {
+          const maxDiff = (x: number[] | undefined, y: number[]) =>
+            !x ? Number.POSITIVE_INFINITY
+              : Math.max(...x.slice(0, Math.min(x.length, y.length)).map((v, i) => Math.abs(v - y[i])));
+          // 🔑 相手は段 3 と**同じ独立参照**（bench/uvs_frame_scores.py）。走査の作りを
+          //    1 パスへ変えても、出る数字は 1 ビットも変わっていないこと。
+          check(prep.frames === ref.frames, "[9] prepare のフレーム数が参照と一致",
+            { got: prep.frames, expected: ref.frames });
+          check(maxDiff(prep.cpr, ref.cpr) < 1e-12, "[9] ★★prepare の CPR 列が独立参照と一致",
+            { maxDiff: maxDiff(prep.cpr, ref.cpr), n: prep.cpr?.length });
+          check(maxDiff(prep.mad, ref.mad) < 1e-12, "[9] ★★prepare の MAD 列が独立参照と一致",
+            { maxDiff: maxDiff(prep.mad, ref.mad), n: prep.mad?.length });
+          check(prep.ffmpegRuns === 1, "[9] 🔴復号は 1 回だけ（readPair の総なめに戻っていない）",
+            { ffmpegRuns: prep.ffmpegRuns, framesDecoded: prep.framesDecoded });
+          check(
+            (prep.sampleIndices?.length ?? 0) > 0 &&
+              (prep.sampleIndices ?? []).every((i) => i % (prep.interval ?? 1) === 0),
+            "[9] 予測の格子が動画全体で固定（index % interval === 0）",
+            { samples: prep.sampleIndices, interval: prep.interval },
+          );
+          check((prep.cachedFrames ?? 0) > 0, "[9] 予測用フレームがキャッシュされた",
+            { cachedFrames: prep.cachedFrames, cacheBytes: prep.cacheBytes });
+
+          const cc = await runOp({ op: "checkCache", sessionId: info2?.sessionId }, 30_000);
+          fs.writeFileSync(path.join(OUT_DIR, "check-cache.json"), JSON.stringify(cc, null, 2));
+          // 🚨 相手は readPair ＝ 段 4 / 段 5 が実際に使って移植元と完全一致した経路。
+          check(cc?.allMatch === true,
+            "[9] ★★★キャッシュしたフレームが復号結果と byte 単位で一致（md5）", cc?.checked);
+        }
+        await runOp({ op: "release", sessionId: info2?.sessionId }, 3_000);
+      }
+
+      // ── 段 6-2: 動画まるごと 1 本を走らせる（実際の使い方）────────────
+      // 📏 ここで得た「1 パスの所要時間」と「キャッシュの容量」が、画面の見積もりの根拠になる。
+      {
+        const info3 = await runOp({ op: "info" });
+        const whole = await runOp({ op: "prepare", sessionId: info3?.sessionId }, 120_000);
+        check(whole?.ok === true, "[9] ★動画まるごとの走査が通った", { error: whole?.error });
+        if (whole?.ok) {
+          const frames = info3?.numberOfFrames ?? 0;
+          check(
+            (whole.frames ?? 0) >= frames - 1,
+            "[9] 末尾まで走査した（区間指定なし＝全部）",
+            { scored: whole.frames, videoFrames: frames },
+          );
+          const expectedSamples = Math.floor((frames - 1) / (whole.interval ?? 1)) + 1;
+          check(
+            whole.sampleIndices?.length === expectedSamples,
+            "[9] 予測サンプル数が間引き間隔から予想どおり",
+            { got: whole.sampleIndices?.length, expected: expectedSamples, interval: whole.interval },
+          );
+          observe("[9] 📏 1 パスの実測（画面の見積もりの根拠）", {
+            framesDecoded: whole.framesDecoded,
+            decodeMs: whole.decodeMs,
+            cachedFrames: whole.cachedFrames,
+            cacheMB: Math.round((whole.cacheBytes ?? 0) / 1024 / 1024),
+          });
+          const freed = await runOp({ op: "release", sessionId: info3?.sessionId }, 5_000);
+          // 🔴 閉じたら一時ファイルは消えていること（数百 MB を置きっぱなしにしない）。
+          check(
+            (freed?.freedBytes ?? 0) >= (whole.cacheBytes ?? 0),
+            "[9] ★release でキャッシュが実際に解放される",
+            { freedBytes: freed?.freedBytes, cacheBytes: whole.cacheBytes },
+          );
+        }
+      }
+
       const unknown = await runOp({ op: "no-such-op" }, 3_000);
       check(
         unknown?.ok === false && (unknown?.error ?? "").includes("未知の op"),

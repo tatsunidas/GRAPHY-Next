@@ -104,6 +104,8 @@ public class UvsPlugin implements GraphyPlugin {
                     r.putAll(s.info());
                     r.put("ok", true);
                 }
+                case "prepare" -> r.putAll(prepare(args));
+                case "checkCache" -> r.putAll(checkCache(args));
                 case "release" -> {
                     UvsSession s = UvsSession.get(strArg(args, "sessionId"));
                     // 🔑 既に無いセッションの release は**成功**にする。窓を閉じたときと
@@ -123,6 +125,183 @@ public class UvsPlugin implements GraphyPlugin {
     private static String strArg(Map<String, Object> args, String key) {
         Object v = args == null ? null : args.get(key);
         return v == null ? null : String.valueOf(v);
+    }
+
+    /**
+     * 走査（段 6 の {@code op:"prepare"}）— <b>復号 1 回</b>で
+     * ① 色判定の CPR 列 ② 静止判定の MAD 列 ③ 予測に要るフレームのキャッシュ、を同時に作る。
+     *
+     * <h3>🔴 なぜ 1 パスに載せるのか</h3>
+     * {@link FrameSource#readPair} は毎回<b>先頭から復号し直す</b>。4,958 フレームの動画で
+     * 331 サンプル × 2 枚を取りに行くと、平均で動画の半分を毎回復号することになる。
+     * 段 5 が 4 フレームだったから成立していただけで、そのままでは段 6 は動かない。
+     *
+     * <h3>🔴 なぜ生の rgb24 を置くのか</h3>
+     * {@link FrameCache} の説明のとおり。<b>sink が見た byte[] をそのまま書く</b>ので、
+     * 「キャッシュ ＝ 復号結果」はコードの構造から従う（{@code op:"checkCache"} で数字でも確かめる）。
+     *
+     * <h3>間引きの格子は動画全体で固定する</h3>
+     * 🔑 予測するフレームは <b>{@code index % interval == 0}</b> で決める。区間の先頭を起点に
+     * すると、<b>同じ動画でも区切り方で別の要約が出る</b>——チャンクに分けて呼ぶ設計と噛み合わない。
+     */
+    private Map<String, Object> prepare(Map<String, Object> args) throws Exception {
+        Map<String, Object> r = new LinkedHashMap<>();
+        UvsSession s = UvsSession.get(strArg(args, "sessionId"));
+        if (s == null) {
+            r.put("error", "セッションがありません（op:\"info\" で開き直してください）");
+            return r;
+        }
+        int lastFrame = Math.max(0, s.numberOfFrames - 1);
+        int from = Math.max(0, intArg(args, "from", 0));
+        int count = intArg(args, "count", 0); // 0 以下＝末尾まで
+        int interval = Math.max(1, intArg(args, "interval", s.intervalFrames()));
+        int stride = Math.max(1, intArg(args, "stride", s.strideFrames()));
+        boolean cacheForPredict = !Boolean.FALSE.equals(args.get("cacheForPredict"));
+
+        // スコアを出す最後のフレーム（この番号の相手＝+1 まで読む必要がある）。
+        int scoreLast = count > 0 ? Math.min(lastFrame, from + count - 1) : lastFrame;
+
+        // 予測を走らせる番号（動画全体で固定の格子）と、その差分の相手。
+        List<Integer> samples = new ArrayList<>();
+        java.util.TreeSet<Integer> needed = new java.util.TreeSet<>();
+        if (cacheForPredict) {
+            for (int i = ((from + interval - 1) / interval) * interval; i <= scoreLast; i += interval) {
+                samples.add(i);
+                needed.add(i);
+                needed.add(Math.min(i + stride, lastFrame));
+            }
+        }
+
+        FrameCache cache = s.cache();
+        // 🔴 始める前に空きを確かめる。足りないまま走らせると、16 分かけてディスクを埋めて落ちる。
+        long need = (long) needed.size() * cache.frameBytes();
+        long usable = Files.getFileStore(cache.dir()).getUsableSpace();
+        long margin = 64L * 1024 * 1024;
+        if (need + margin > usable) {
+            r.put("error", "空き容量が足りません: 必要 " + need + " バイト＋余裕 " + margin
+                    + " に対し空き " + usable + " バイト。区間を短くするか間引きを粗くしてください");
+            r.put("requiredBytes", need);
+            r.put("usableBytes", usable);
+            return r;
+        }
+
+        int readUntil = Math.max(needed.isEmpty() ? -1 : needed.last(), scoreLast + 1);
+        FrameScoring.Points points = new FrameScoring.Points(
+                s.width, s.height, FrameScoring.SAMPLING_POINTS, FrameScoring.RANDOM_SEED);
+        List<Double> cpr = new ArrayList<>();
+        List<Double> mad = new ArrayList<>();
+        long t0 = System.currentTimeMillis();
+        int seen;
+        FrameSource src = s.open();
+        try {
+            // ⚠️ 渡される配列は使い回されるので、直前フレームは必ず複製して持つ。
+            byte[][] holder = new byte[][]{null};
+            int[] prevIdx = new int[]{-1};
+            List<Double> cprRef = cpr;
+            List<Double> madRef = mad;
+            seen = src.forEachFrame(readUntil, (i, frame) -> {
+                if (needed.contains(i)) cache.write(i, frame);
+                byte[] p = holder[0];
+                if (p != null && prevIdx[0] >= from && prevIdx[0] <= scoreLast) {
+                    cprRef.add(FrameScoring.colorPixelRatio(p, points, FrameScoring.COLOR_THRESHOLD));
+                    madRef.add(FrameScoring.meanAbsDiff(p, frame, points, s.width));
+                }
+                holder[0] = frame.clone();
+                prevIdx[0] = i;
+            });
+        } finally {
+            src.close();
+        }
+        // 最後のフレームは相手が無い。CPR は自分だけで出せるが MAD は出せないので、
+        // 🔴 **元アプリと同じく直前の値を複製する**（逆順比較のバグ B3 を避けた形）。
+        if (!mad.isEmpty()) mad.add(mad.get(mad.size() - 1));
+
+        UvsSession.Scan scanned = new UvsSession.Scan(
+                from, cpr.size(), interval, stride,
+                cpr.stream().mapToDouble(Double::doubleValue).toArray(),
+                mad.stream().mapToDouble(Double::doubleValue).toArray(),
+                samples.stream().mapToInt(Integer::intValue).toArray());
+        s.setScan(scanned);
+
+        r.put("ok", true);
+        r.put("sessionId", s.id);
+        r.put("from", from);
+        r.put("frames", cpr.size());
+        r.put("cpr", cpr);
+        r.put("mad", mad);
+        r.put("sampleIndices", samples);
+        r.put("interval", interval);
+        r.put("stride", stride);
+        r.put("cachedFrames", cache.count());
+        r.put("cacheBytes", cache.bytes());
+        r.put("framesDecoded", seen);
+        r.put("ffmpegRuns", 1); // 🔑 1 パス。ここが 1 でなくなったら設計が壊れている
+        r.put("decodeMs", System.currentTimeMillis() - t0);
+        r.put("samplingPoints", points.count);
+        r.put("seed", FrameScoring.RANDOM_SEED);
+        r.put("colorThreshold", FrameScoring.COLOR_THRESHOLD);
+        return r;
+    }
+
+    /**
+     * 🔴 <b>「キャッシュしたフレームは、復号したフレームと本当に同じか」を数字で確かめる</b>
+     * （段 6 の最重要検査）。
+     *
+     * <p>相手は {@link FrameSource#readPair}——<b>段 4 / 段 5 が実際に使い、移植元と完全一致すると
+     * 確かめられた経路</b>である。ここが崩れていると ROI が静かにずれ、
+     * 「確率だけが違う」という気づきにくい壊れ方に戻る。
+     */
+    private Map<String, Object> checkCache(Map<String, Object> args) throws Exception {
+        Map<String, Object> r = new LinkedHashMap<>();
+        UvsSession s = UvsSession.get(strArg(args, "sessionId"));
+        if (s == null) {
+            r.put("error", "セッションがありません（op:\"info\" で開き直してください）");
+            return r;
+        }
+        Object raw = args.get("indices");
+        List<Integer> indices = new ArrayList<>();
+        if (raw instanceof List<?> l) {
+            for (Object o : l) if (o instanceof Number n) indices.add(n.intValue());
+        }
+        if (indices.isEmpty()) {
+            UvsSession.Scan sc = s.scan();
+            if (sc == null) {
+                r.put("error", "先に op:\"prepare\" を走らせてください");
+                return r;
+            }
+            // 既定は先頭・中央・末尾のサンプル（全部照合すると 1 枚ごとに復号し直すので遅い）。
+            int[] sm = sc.samples();
+            if (sm.length > 0) {
+                indices.add(sm[0]);
+                indices.add(sm[sm.length / 2]);
+                indices.add(sm[sm.length - 1]);
+            }
+        }
+        FrameCache cache = s.cache();
+        List<Map<String, Object>> rows = new ArrayList<>();
+        boolean allMatch = true;
+        FrameSource src = s.open();
+        try {
+            for (int i : indices) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("index", i);
+                String cached = cache.digest(i);
+                byte[][] pair = src.readPair(i, i);
+                String decoded = pair[0] == null ? null : FrameCache.md5(pair[0]);
+                row.put("cachedMd5", cached);
+                row.put("decodedMd5", decoded);
+                boolean same = cached != null && cached.equals(decoded);
+                row.put("same", same);
+                if (!same) allMatch = false;
+                rows.add(row);
+            }
+        } finally {
+            src.close();
+        }
+        r.put("ok", true);
+        r.put("allMatch", allMatch);
+        r.put("checked", rows);
+        return r;
     }
 
     /**

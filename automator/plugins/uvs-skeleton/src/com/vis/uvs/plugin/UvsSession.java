@@ -83,7 +83,26 @@ public final class UvsSession {
 
     private volatile Path dir;
     private volatile Path mp4;
+    private volatile FrameCache cache;
     private volatile long lastUsedMs = System.currentTimeMillis();
+
+    /** 直近の走査結果（`prepare`）。予測と合成が同じ値を見るために**セッションが持つ**。 */
+    private volatile Scan scan;
+
+    /**
+     * 1 回の走査で確定したもの。
+     *
+     * @param from     走査の開始フレーム（0 origin）
+     * @param frames   スコアを出したフレーム数（＝ cpr の長さ）
+     * @param interval 予測の間引き間隔
+     * @param stride   差分の相手までの距離
+     * @param cpr      色の画素比（`from` から順）
+     * @param mad      平均絶対差（末尾は直前の複製・元アプリと同じ）
+     * @param samples  予測を走らせるフレーム番号（0 origin・絶対値）
+     */
+    public record Scan(int from, int frames, int interval, int stride,
+                       double[] cpr, double[] mad, int[] samples) {
+    }
 
     private UvsSession(String id, String apiBase, String sop, String ffmpeg, VideoMeta meta) {
         this.id = id;
@@ -134,6 +153,8 @@ public final class UvsSession {
         Path d = dir;
         dir = null;
         mp4 = null;
+        cache = null;
+        scan = null;
         return d == null ? 0L : deleteRecursively(d);
     }
 
@@ -187,6 +208,27 @@ public final class UvsSession {
         }
         mp4 = out;
         return out;
+    }
+
+    /** 予測に使うフレームの置き場。 */
+    public synchronized FrameCache cache() throws IOException {
+        if (cache == null) cache = new FrameCache(dir(), width, height);
+        return cache;
+    }
+
+    /** 直近の走査結果。まだ走らせていなければ null。 */
+    public Scan scan() {
+        return scan;
+    }
+
+    public void setScan(Scan s) {
+        this.scan = s;
+        this.lastUsedMs = System.currentTimeMillis();
+    }
+
+    /** このセッションの MP4 を開く（**落とし直さない**）。 */
+    public FrameSource open() throws Exception {
+        return FrameSource.fromFile(mp4(), ffmpeg, width, height);
     }
 
     /**
@@ -249,6 +291,11 @@ public final class UvsSession {
         defaults.put("randomSeed", d.randomSeed());
         r.put("defaults", defaults);
         return r;
+    }
+
+    /** 予測の間引き間隔（フレーム数）。fps の 0.5 秒ぶん（{@link AnalysisSettings#defaults}）。 */
+    public int intervalFrames() {
+        return AnalysisSettings.defaults(fps).predictionSamplingInterval();
     }
 
     /**
