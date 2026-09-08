@@ -52,6 +52,11 @@ export interface Instance {
   sopInstanceUid: string;
   instanceNumber: number | null;
   sopClassUid: string | null;
+  /**
+   * 転送構文。**動画で包まれた画像（H.264 の US Multi-frame 等）を見分けるために使う**
+   * （`viewer/seriesRenderable.ts` の `isVideoInstance`）。web(QIDO) では取れず null になる。
+   */
+  transferSyntaxUid: string | null;
 }
 
 export interface StudyFilters {
@@ -122,7 +127,10 @@ export const ENCAPSULATED_PDF_SOP_CLASS = "1.2.840.10008.5.1.4.1.1.104.1";
 export {
   VIDEO_PHOTOGRAPHIC_SOP_CLASS,
   VIDEO_SOP_CLASSES,
+  VIDEO_TRANSFER_SYNTAXES,
   isVideoSopClass,
+  isVideoTransferSyntax,
+  isVideoInstance,
 } from "./viewer/seriesRenderable";
 
 /** Encapsulated Document（PDF 等）の中身を配信する URL（inline / download）。 */

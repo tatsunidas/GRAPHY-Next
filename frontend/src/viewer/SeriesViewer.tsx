@@ -78,7 +78,7 @@ import { isInsideViewerOverlay } from "./viewerOverlay";
 import { installDebugApi, countStackSwap } from "./debugApi";
 import { matchesCombo, matchesShortcut } from "../shortcuts/registry";
 import { fetchSeriesLayout, type Instance } from "../api";
-import { classifySeriesDisplay, isVideoSopClass } from "./seriesRenderable";
+import { classifySeriesDisplay, isVideoInstance } from "./seriesRenderable";
 import { fetchSettings } from "../settings/settingsApi";
 import { useI18n } from "../i18n/i18n";
 import { LoadingSpinner } from "./LoadingSpinner";
@@ -284,15 +284,16 @@ export function SeriesViewer({
   // マルチチャンネル / 動画(ビデオ UID) / スライス1枚 では GridView を無効化。
   // XA シネはスタック＝フレームなので Grid は「フレーム一覧」として意味が通る（無効化しない）。
   const hasVideo = useMemo(
-    () => instances.some((i) => isVideoSopClass(i.sopClassUid)),
+    () => instances.some((i) => isVideoInstance(i)),
     [instances],
   );
   // どの表示器へ振り分けるか（image / video / videoUnavailable）。判定は
-  // StudyList と同じく**先頭インスタンスの SOP Class**で行う。`hasVideo` は「1 つでも動画が
-  // 混ざるか」で GridView 無効化などのガード用。役割が違うので別に持つ。
+  // StudyList と同じく**先頭インスタンスの SOP Class と転送構文**で行う（H.264 の US Multi-frame は
+  // SOP Class 上ふつうの画像なので、転送構文を見ないと真っ黒になる）。`hasVideo` は
+  // 「1 つでも動画が混ざるか」で GridView 無効化などのガード用。役割が違うので別に持つ。
   const display = classifySeriesDisplay(instances, mode);
   const videoInstances = useMemo(
-    () => instances.filter((i) => isVideoSopClass(i.sopClassUid)),
+    () => instances.filter((i) => isVideoInstance(i)),
     [instances],
   );
   const gridDisabled = layout.nC > 1 || hasVideo || nZ <= 1;

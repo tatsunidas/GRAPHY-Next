@@ -117,16 +117,29 @@ Shape2D / IntensityHistogram）を TypeScript で書き直すことになるが�
 取り込んだ H.264 が**そのまま MP4 として取り出せる**ので、
 プラグインは**再エンコードなしで**フレーム供給に入れる。
 
-### 3.1.2 ⚠️ 副次的に分かった実害（プラグインとは別の話）
+### 3.1.2 ⚠️ 副次的に分かった実害（プラグインとは別の話）→ ✅ **2026-09-08 に直した**
 
-**この形式のシリーズは、いま利用者から見ると真っ黒に見える。**
+**この形式のシリーズは、利用者から見ると真っ黒に見えていた。**
 `seriesRenderable.ts` は**除外リスト方式の fail-open**（末尾が `return RENDERABLE`）で、
 US Multi-frame はどちらのリストにも無いため「開ける」と判定され、
-**開いたうえで何も描かれない**。
-
-→ 本体側の手当てが要る（**この設計の範囲外**だが記録する）。取れる道は 2 つ:
-① 動画経路（`isVideoSopClass`）へ回す ② 「この形式は表示できない」と明示する。
+**開いたうえで何も描かれなかった**。
 🔴 **黙って真っ黒を出すのがいちばん悪い**——利用者には「壊れた」としか見えない。
+
+**採った道は ①（動画経路へ回す）**。振り分けが **SOP クラスだけ**を見ていたのが原因で、
+`VIDEO_SOP_CLASSES`（77.1.x）に US Multi-frame は入らない。**転送構文を判定に足した**:
+
+- `InstanceDto` に `transferSyntaxUid` を追加（standalone は索引が既に持っていた。
+  web(QIDO) は `AvailableTransferSyntaxUID` が返らないのが普通なので null 可）
+- `seriesRenderable.ts` に `VIDEO_TRANSFER_SYNTAXES`（MPEG2 4.100/4.101・H.264 4.102〜4.106・
+  HEVC 4.107/4.108 と Fragmentable 版）と `isVideoInstance()` を新設。
+  `classifySeriesDisplay` / `SeriesViewer` の `hasVideo`・`videoInstances` / `StudyList` の
+  代表判定をこれに寄せた
+- 🔑 backend 側は**もともと SOP クラスで門を作っていない**（`/rendered`・`/video-metadata` は
+  転送構文で判定）ので、フロントの振り分けだけで通った。MPEG2 は backend が ffmpeg で変換して
+  配信し、変換できないときは VideoViewer が理由を出す（黙って落ちない）
+
+検証: `seriesRenderable.test.ts` に 6 ケース追加（H.264/MPEG2 の US Multi-frame → `video`、
+非圧縮・JPEG → `image`、web → `videoUnavailable`、転送構文が取れないときは SOP クラスだけで判定）。
 
 ### 3.2 採る方式: **プラグインの backend 面が ffmpeg でフレームを取り出す**
 

@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import {
   instanceDocumentUrl,
   ENCAPSULATED_PDF_SOP_CLASS,
-  isVideoSopClass,
+  isVideoInstance,
   type Study,
   type Series,
   type StudyFilters,
@@ -264,9 +264,10 @@ function InstanceList({ study, series, mode }: { study: Study; series: Series; m
   const nonImage = hasImages
     ? classifySeriesRenderability({ sopClassUid: instances![0].sopClassUid, modality: series.modality })
     : RENDERABLE_UNKNOWN;
-  // 動画(Video Photographic/Endoscopic/Microscopic)は wadouri の画像ビューアでは表示できず、
-  // 専用の VideoViewer（/rendered の video/mp4 を <video> 再生）で表示する。
-  const isVideo = hasImages && isVideoSopClass(instances![0].sopClassUid);
+  // 動画(Video Photographic/Endoscopic/Microscopic、および H.264 等で包まれたシリーズ)は
+  // wadouri の画像ビューアでは表示できず、専用の VideoViewer（/rendered の video/mp4 を
+  // <video> 再生）で表示する。
+  const isVideo = hasImages && isVideoInstance(instances![0]);
 
   return (
     <div style={{ marginTop: 10, color: "#445" }}>

@@ -354,6 +354,10 @@ public class StudyController {
         return new InstanceDto(
                 a.getString(Tag.SOPInstanceUID),
                 a.getInt(Tag.InstanceNumber, 0),
-                a.getString(Tag.SOPClassUID));
+                a.getString(Tag.SOPClassUID),
+                // QIDO の応答に転送構文は含まれないのが普通（含めるかは PACS 次第）。
+                // 取れたら使い、取れなければ null。web は動画を再生できない（`videoUnavailable`）ので
+                // ここが null でも表示の振り分けは SOP クラス側で決まる。
+                a.getString(Tag.AvailableTransferSyntaxUID));
     }
 }

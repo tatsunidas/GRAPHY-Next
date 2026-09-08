@@ -203,7 +203,8 @@ public class DicomStorageService {
     public List<com.vis.graphynext.dicom.InstanceDto> listInstances(String studyUid, String seriesUid) {
         return repo.findBySeries(studyUid, seriesUid).stream()
                 .map(i -> new com.vis.graphynext.dicom.InstanceDto(
-                        i.getSopInstanceUid(), i.getInstanceNumber(), i.getSopClassUid()))
+                        i.getSopInstanceUid(), i.getInstanceNumber(), i.getSopClassUid(),
+                        i.getTransferSyntaxUid()))
                 .toList();
     }
 
