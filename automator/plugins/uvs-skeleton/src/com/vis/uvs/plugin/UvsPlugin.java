@@ -106,6 +106,7 @@ public class UvsPlugin implements GraphyPlugin {
                 }
                 case "prepare" -> r.putAll(prepare(args));
                 case "predict" -> r.putAll(predictChunk(args));
+                case "compose" -> r.putAll(compose(args));
                 case "checkCache" -> r.putAll(checkCache(args));
                 case "release" -> {
                     UvsSession s = UvsSession.get(strArg(args, "sessionId"));
@@ -245,6 +246,107 @@ public class UvsPlugin implements GraphyPlugin {
         r.put("seed", FrameScoring.RANDOM_SEED);
         r.put("colorThreshold", FrameScoring.COLOR_THRESHOLD);
         return r;
+    }
+
+    /**
+     * 要約インデックスの合成（段 6 の {@code op:"compose"}）。
+     *
+     * <h3>🔴 これは画面の常用経路ではない</h3>
+     * しきい値のドラッグでは<b>フロントが自分で合成する</b>（サーバ往復すると手が止まる）。
+     * この op は<b>そのフロント実装のオラクル</b>——同じ入力で Java と同じ答えになるかを
+     * 実機で突き合わせるためにある。合成規則の正本は {@link com.vis.uvs.analysis.SummaryComposer}
+     * であって、フロントはその写しに過ぎない、という関係をここで保証する。
+     *
+     * <h3>入力の 2 通り</h3>
+     * <ul>
+     *   <li>{@code heart} を直接渡す … 共有テストベクタ（`testdata/summary-composer-cases.json`）の形</li>
+     *   <li>{@code predScores} ＋ {@code interval} ＋ {@code threshold} … 実データの形。
+     *       補間してから閾値を当てる（{@code applyPredictionThreshold}）</li>
+     * </ul>
+     * ⚠️ <b>番号はすべて 1-based</b>（`Indices` / `SummaryComposer` の世界）。
+     * `cpr[]` / `mad[]` / `sampleIndices[]` は 0-based なので、渡す前に必ず +1 すること。
+     */
+    private Map<String, Object> compose(Map<String, Object> args) {
+        Map<String, Object> r = new LinkedHashMap<>();
+        int frameCount = intArg(args, "frameCount", 0);
+        if (frameCount <= 0) {
+            r.put("error", "frameCount が必要です（1 以上）");
+            return r;
+        }
+        List<Integer> colorRemove = intList(args, "colorRemove");
+        List<Integer> staticRemove = intList(args, "staticRemove");
+        List<Integer> userAdd = intList(args, "userAdd");
+        List<Integer> userRemove = intList(args, "userRemove");
+        List<Integer> heart = intList(args, "heart"); // null＝予測未実行
+
+        double[] interpolated = null;
+        if (heart == null && args.get("predScores") instanceof Map<?, ?> raw && !raw.isEmpty()) {
+            java.util.TreeMap<Integer, Double> pred = new java.util.TreeMap<>();
+            for (Map.Entry<?, ?> e : raw.entrySet()) {
+                if (e.getValue() instanceof Number n) {
+                    pred.put(Integer.parseInt(String.valueOf(e.getKey())), n.doubleValue());
+                }
+            }
+            int interval = Math.max(1, intArg(args, "interval", 1));
+            float threshold = (float) numArg(args, "threshold",
+                    com.vis.uvs.analysis.AnalysisSettings.DEFAULT_PREDICTION_THRESHOLD);
+            com.vis.uvs.analysis.SummaryComposer.HeartResult hr =
+                    com.vis.uvs.analysis.SummaryComposer.applyPredictionThreshold(
+                            pred, frameCount, interval, threshold);
+            if (hr != null) {
+                heart = hr.heart();
+                interpolated = hr.interpolated();
+            }
+        }
+
+        com.vis.uvs.analysis.SummaryComposer.Derived d =
+                com.vis.uvs.analysis.SummaryComposer.compose(
+                        frameCount, colorRemove, staticRemove, heart, userAdd, userRemove);
+        com.vis.uvs.analysis.SummaryComposer.Results res =
+                com.vis.uvs.analysis.SummaryComposer.results(frameCount, d, userAdd, userRemove);
+
+        r.put("ok", true);
+        r.put("frameCount", frameCount);
+        r.put("colorRemove", d.colorRemove());
+        r.put("staticRemove", d.staticRemove());
+        r.put("heart", d.heart());
+        r.put("removedByPrediction", d.removedByPrediction());
+        r.put("finalIndices", d.finalIndices());
+
+        Map<String, Object> counts = new LinkedHashMap<>();
+        counts.put("numberOfFrames", res.numberOfFrames());
+        counts.put("totalRemoved", res.totalRemoved());
+        counts.put("colorRemoved", res.colorRemoved());
+        counts.put("staticRemoved", res.staticRemoved());
+        counts.put("probaRemoved", res.probaRemoved());
+        counts.put("userAdded", res.userAdded());
+        counts.put("userRemoved", res.userRemoved());
+        counts.put("totalRate", res.totalRate());
+        counts.put("colorRate", res.colorRate());
+        counts.put("staticRate", res.staticRate());
+        counts.put("probaRate", res.probaRate());
+        // 🔴 画面に出すときは「色・静止・確率の件数は重複するので足し合わせない」と書くこと。
+        counts.put("note", "色 / 静止 / 確率の件数は重なる。合計は totalRemoved であって和ではない");
+        r.put("results", counts);
+
+        if (interpolated != null && Boolean.TRUE.equals(args.get("includeInterpolated"))) {
+            r.put("interpolated", interpolated);
+        }
+        return r;
+    }
+
+    /** 数の配列を取り出す。キーが無い / null なら null（「指定されていない」と「空」を区別する）。 */
+    private static List<Integer> intList(Map<String, Object> args, String key) {
+        Object v = args == null ? null : args.get(key);
+        if (!(v instanceof List<?> l)) return null;
+        List<Integer> out = new ArrayList<>();
+        for (Object o : l) if (o instanceof Number n) out.add(n.intValue());
+        return out;
+    }
+
+    private static double numArg(Map<String, Object> args, String key, double dflt) {
+        Object v = args == null ? null : args.get(key);
+        return v instanceof Number n ? n.doubleValue() : dflt;
     }
 
     /**

@@ -127,6 +127,44 @@ interface OpResult {
   total?: number;
   done?: boolean;
   anyPadded?: boolean;
+  // op:"compose"
+  heart?: number[];
+  removedByPrediction?: number[];
+  finalIndices?: number[];
+  colorRemove?: number[];
+  staticRemove?: number[];
+  results?: Record<string, number | string>;
+  interpolated?: number[];
+}
+
+/** `testdata/summary-composer-cases.json`（Java とフロントの共有ベクタ）。 */
+interface ComposerVectors {
+  cases: {
+    name: string;
+    frameCount: number;
+    colorRemove: number[];
+    staticRemove: number[];
+    heart: number[] | null;
+    userAdd: number[];
+    userRemove: number[];
+    expected: { heart: number[]; removedByPrediction: number[]; finalIndices: number[] };
+  }[];
+  interpolationCases: {
+    name: string;
+    known: number[];
+    size: number;
+    interval: number;
+    expectedAt: Record<string, number>;
+  }[];
+  thresholdCases: {
+    name: string;
+    predScores: Record<string, number>;
+    frameCount: number;
+    interval: number;
+    threshold: number;
+    expectedHeartContains: number[];
+    expectedHeartExcludes: number[];
+  }[];
 }
 
 interface Payload {
@@ -635,6 +673,85 @@ async function main(): Promise<void> {
             "[9] ★★★キャッシュしたフレームが復号結果と byte 単位で一致（md5）", cc?.checked);
         }
         await runOp({ op: "release", sessionId: info2?.sessionId }, 3_000);
+      }
+
+      // ── 段 6-4: 合成規則を共有ベクタで固定する ──────────────────────
+      // 🔑 このベクタは**フロント実装（段 6-6）と共有する**。Java 側がここで緑になっていて
+      //    初めて「フロントの写しが正しいか」を突き合わせられる。
+      {
+        const vectors = JSON.parse(
+          fs.readFileSync(
+            path.join(AUTOMATOR_ROOT, "plugins", PLUGIN_ID, "testdata", "summary-composer-cases.json"),
+            "utf8",
+          ),
+        ) as ComposerVectors;
+        const eq = (a: number[] | undefined, b: number[]) =>
+          !!a && a.length === b.length && a.every((v, i) => v === b[i]);
+
+        let composeFails = 0;
+        for (const c of vectors.cases) {
+          const got = await runOp({
+            op: "compose",
+            frameCount: c.frameCount,
+            colorRemove: c.colorRemove,
+            staticRemove: c.staticRemove,
+            heart: c.heart,
+            userAdd: c.userAdd,
+            userRemove: c.userRemove,
+          }, 10_000);
+          const ok = got?.ok === true
+            && eq(got.heart, c.expected.heart)
+            && eq(got.removedByPrediction, c.expected.removedByPrediction)
+            && eq(got.finalIndices, c.expected.finalIndices);
+          if (!ok) {
+            composeFails++;
+            observe(`[9] compose 不一致: ${c.name}`, { got: got?.finalIndices, expected: c.expected.finalIndices });
+          }
+        }
+        check(composeFails === 0, "[9] ★★op:compose が共有ベクタ 7 件すべてに一致",
+          { cases: vectors.cases.length, fails: composeFails });
+
+        // 🔴 しきい値ハンドルのドラッグが触るのは**補間とクランプ**。ここを飛ばさない。
+        let thFails = 0;
+        for (const c of vectors.thresholdCases) {
+          const got = await runOp({
+            op: "compose",
+            frameCount: c.frameCount,
+            colorRemove: [],
+            staticRemove: [],
+            predScores: c.predScores,
+            interval: c.interval,
+            threshold: c.threshold,
+          }, 10_000);
+          const heart = got?.heart ?? [];
+          const okIn = c.expectedHeartContains.every((i) => heart.includes(i));
+          const okOut = c.expectedHeartExcludes.every((i) => !heart.includes(i));
+          if (got?.ok !== true || !okIn || !okOut) {
+            thFails++;
+            observe(`[9] しきい値の適用が不一致: ${c.name}`, { heart, want: c.expectedHeartContains });
+          }
+        }
+        check(thFails === 0, "[9] ★★確率しきい値の適用（補間＋クランプ）が共有ベクタに一致",
+          { cases: vectors.thresholdCases.length, fails: thFails });
+
+        // 除外の内訳は**重なる**。足し合わせて総数にならないことを実データで示す。
+        const overlap = await runOp({
+          op: "compose",
+          frameCount: 10,
+          colorRemove: [2, 3],
+          staticRemove: [3, 4],
+          heart: [1, 2, 3, 4, 5],
+          userAdd: [],
+          userRemove: [],
+        }, 10_000);
+        const res = overlap?.results ?? {};
+        check(
+          overlap?.ok === true
+            && Number(res.colorRemoved) + Number(res.staticRemoved) + Number(res.probaRemoved)
+              !== Number(res.totalRemoved),
+          "[9] 🔴除外の内訳は重なる（足し合わせても総数にならない＝画面にそう書く）",
+          res,
+        );
       }
 
       // ── 段 6-3: チャンク予測が、段 5 の参照と 1 ビットも違わないこと ──
