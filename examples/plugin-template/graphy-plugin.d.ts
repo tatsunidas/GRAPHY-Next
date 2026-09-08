@@ -77,9 +77,31 @@ export interface ViewerTarget {
   seriesUid: string;
   /** 画面に出ているシリーズ名。 */
   seriesLabel: string;
-  /** 表示中スライスの imageId。 */
+  /**
+   * 表示中スライスの imageId。
+   * ⚠ **動画タイル（`kind === "video"`）は cornerstone の像を持たないので空文字**。
+   */
   imageId: string;
-  /** 表示中スライス（Z）の 0 始まり index と、そのスタックの総数。 */
+  /**
+   * 表示中インスタンスの SOP Instance UID。解決できなければ null。**0.2.9 以降**。
+   * 🔑 これがある前に書かれたプラグインは `imageId` を正規表現で削っていた。もう要らない。
+   */
+  sopInstanceUid: string | null;
+  /**
+   * 本体 REST の基点（例 `http://localhost:18090`）。**0.2.9 以降**。
+   * 🔑 **JAR 面へ渡す値**——JAR は自分の backend のポートを知らない。
+   */
+  apiBase: string;
+  /**
+   * どの表示器に出ているか。`"image"` = 2D ビューア、`"video"` = 動画再生器。**0.2.9 以降**。
+   * 🔴 動画には imageId も画素取得（`getPixelData`）も無い。**分岐すること**。
+   */
+  kind: "image" | "video";
+  /**
+   * 表示中スライス（Z）の 0 始まり index と、そのスタックの総数。
+   * ⚠ 動画タイルは 1 SOP = 1 本として `sliceIndex: 0` / `sliceCount: 1` を返す
+   * （**フレーム数ではない**。フレーム数は `/video-metadata` から取る）。
+   */
   sliceIndex: number;
   sliceCount: number;
   /** ZCT モデルのチャンネル / 時相（多次元でないシリーズは 0）。 */

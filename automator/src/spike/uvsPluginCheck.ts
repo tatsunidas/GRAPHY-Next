@@ -57,12 +57,46 @@ interface Probe {
   codeSource?: string | null;
   error?: string;
 }
+/** 段 6 の `op` 応答（`{ok, op, ...}`）。旧経路の巨大 Map とは別の形。 */
+interface OpResult {
+  ok?: boolean;
+  op?: string;
+  error?: string;
+  sessionId?: string;
+  width?: number;
+  height?: number;
+  numberOfFrames?: number;
+  fps?: number;
+  durationSec?: number | null;
+  transferSyntaxUid?: string | null;
+  transcodeRequired?: boolean;
+  ffmpeg?: string;
+  defaults?: {
+    interval?: number;
+    stride?: number;
+    staticMeanAbsDiffThreshold?: number;
+    staticMeanAbsDiffNote?: string;
+    aviEquivalentMeanAbsDiff?: number;
+    predictionThreshold?: number;
+    extractor?: string;
+    samplingPoints?: number;
+    randomSeed?: number;
+  };
+  freedBytes?: number;
+  existed?: boolean;
+}
+
 interface Payload {
   surface: string | null;
   hasRunBackend: boolean;
-  targets: { seriesUid: string; sopInstanceUid: string | null; modality: string | null }[] | null;
+  targets:
+    | { seriesUid: string; sopInstanceUid: string | null; modality: string | null; kind?: string | null }[]
+    | null;
+  sopInstanceUid?: string | null;
+  apiBase?: string | null;
   backend: {
     ok?: boolean;
+    op?: string;
     java?: string;
     radiomicsj?: Probe;
     imagej?: Probe;
@@ -135,13 +169,32 @@ async function main(): Promise<void> {
   fs.rmSync(OUT_DIR, { recursive: true, force: true });
   fs.mkdirSync(OUT_DIR, { recursive: true });
 
-  const jar = path.join(AUTOMATOR_ROOT, "plugins", PLUGIN_ID, `${PLUGIN_ID}.jar`);
+  const pluginDir = path.join(AUTOMATOR_ROOT, "plugins", PLUGIN_ID);
+  const jar = path.join(pluginDir, `${PLUGIN_ID}.jar`);
+  const buildHint = `  cd automator/plugins/${PLUGIN_ID} && bash tools/build-jar.sh`;
   if (!fs.existsSync(jar)) {
-    throw new Error(
-      `JAR がありません: ${jar}\n` +
-        `  cd automator/plugins/${PLUGIN_ID} && javac -cp ../../../backend/target/classes ` +
-        `-d out src/com/vis/uvs/plugin/UvsPlugin.java && (cd out && jar cf ../${PLUGIN_ID}.jar com)`,
-    );
+    throw new Error(`JAR がありません: ${jar}\n${buildHint}`);
+  }
+  // 🔴 **古い JAR で緑にしない。** ここは配布物と同じくフォルダをコピーするだけでビルドしない。
+  //    src を直したのに JAR を焼き直し忘れると、**直す前のコードで検査が通ってしまう**。
+  {
+    const jarAt = fs.statSync(jar).mtimeMs;
+    const newer: string[] = [];
+    const walk = (dir: string): void => {
+      for (const name of fs.readdirSync(dir)) {
+        const p = path.join(dir, name);
+        if (fs.statSync(p).isDirectory()) walk(p);
+        else if (name.endsWith(".java") && fs.statSync(p).mtimeMs > jarAt) newer.push(p);
+      }
+    };
+    walk(path.join(pluginDir, "src"));
+    if (newer.length > 0) {
+      throw new Error(
+        `JAR が古いです（${newer.length} 個の .java が JAR より新しい）:\n` +
+          newer.slice(0, 5).map((p) => `    ${path.relative(pluginDir, p)}`).join("\n") +
+          `\n${buildHint}`,
+      );
+    }
   }
   if (!fs.existsSync(DEFAULT_DICOM)) {
     throw new Error(
@@ -430,12 +483,75 @@ async function main(): Promise<void> {
       console.log(`  [注意] 推論の参照値が無いので段 5 の検査を飛ばした: ${predRefPath}`);
     }
 
+    // ── 9. 段 6: op 方式（セッション）────────────────────────────────
+    // 🔑 旧経路（analyze/roi/predict）は**そのまま**動き続けることが上の 1〜8 で示されている。
+    //    ここで見るのは「op を足したことで、状態を持つ呼び方ができるようになったか」。
+    {
+      const runOp = async (request: Record<string, unknown>, waitMs = 8_000): Promise<OpResult | null> => {
+        await viewer.evaluate((r) => {
+          (window as unknown as { __uvsRequest?: unknown }).__uvsRequest = r;
+          delete (window as unknown as { __uvsSkeleton?: unknown }).__uvsSkeleton;
+        }, request);
+        await viewer.getByTestId("viewer2d-menu-plugins").click();
+        await viewer.waitForTimeout(300);
+        await viewer.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
+        await viewer.waitForTimeout(waitMs);
+        const p = (await viewer.evaluate(
+          () => (window as unknown as { __uvsSkeleton?: Payload }).__uvsSkeleton ?? null,
+        )) as Payload | null;
+        return (p?.backend as OpResult | undefined) ?? null;
+      };
+
+      const info = await runOp({ op: "info" });
+      fs.writeFileSync(path.join(OUT_DIR, "info.json"), JSON.stringify(info, null, 2));
+      check(info?.ok === true, "[9] ★op:info が応えた", { error: info?.error });
+      if (info?.ok) {
+        // 🔑 **寸法とフレーム数は JAR が /video-metadata から取る**。ui.js が渡す形はやめた
+        //    （渡し忘れると「width/height が無い」で落ちるだけだった）。
+        check(
+          (info.width ?? 0) > 0 && (info.height ?? 0) > 0 && (info.numberOfFrames ?? 0) > 0,
+          "[9] ★★動画の諸元を JAR 自身が取れた（ui.js からの手渡しが要らない）",
+          { width: info.width, height: info.height, frames: info.numberOfFrames, fps: info.fps },
+        );
+        // 🚨 設計 §7: AVI の 0.5 をそのまま出すと、H.264 では静止判定が 10.4 倍出る。
+        check(
+          info.defaults?.staticMeanAbsDiffThreshold === 0.19,
+          "[9] 🚨静止判定の既定が 0.19（圧縮動画向け・0.5 ではない）",
+          info.defaults,
+        );
+        check(
+          (info.defaults?.interval ?? 0) > 0 && (info.defaults?.stride ?? 0) > 0,
+          "[9] 間引き間隔と差分距離が fps から導かれている",
+          { interval: info.defaults?.interval, stride: info.defaults?.stride },
+        );
+        observe("[9] 動画の出自（画面にそのまま出す値）", {
+          transferSyntaxUid: info.transferSyntaxUid,
+          transcodeRequired: info.transcodeRequired,
+          ffmpeg: info.ffmpeg,
+        });
+
+        const released = await runOp({ op: "release", sessionId: info.sessionId }, 3_000);
+        check(released?.ok === true && released?.existed === true,
+          "[9] ★op:release でセッションを閉じられる", released);
+        const again = await runOp({ op: "release", sessionId: info.sessionId }, 3_000);
+        // 🔑 二重解放は**成功**にする（窓を閉じたときと明示解放が重なるのはふつうに起きる）。
+        check(again?.ok === true && again?.existed === false,
+          "[9] 既に無いセッションの release は赤くしない", again);
+      }
+      const unknown = await runOp({ op: "no-such-op" }, 3_000);
+      check(
+        unknown?.ok === false && (unknown?.error ?? "").includes("未知の op"),
+        "[9] 知らない op は理由を返す（黙って空を返さない）",
+        unknown,
+      );
+    }
+
     await viewer.screenshot({ path: path.join(OUT_DIR, "viewer.png") }).catch(() => {});
   } finally {
     await driver.stop().catch(() => {});
   }
 
-  console.log(`\n===== UVS 骨組みプラグイン（段 2）実機検証 =====`);
+  console.log(`\n===== UVS プラグイン 実機検証（段 2〜6）=====`);
   console.log(`合格 ${passed} / 失敗 ${failures.length}`);
   for (const f of failures) console.log(`  - ${f}`);
   if (failures.length > 0) process.exitCode = 1;

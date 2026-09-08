@@ -45,8 +45,32 @@ export interface ViewerTargetInfo {
   seriesUid: string;
   /** 画面に出ているシリーズ名（"3: AXIAL CT" 等）。 */
   seriesLabel: string;
-  /** 表示中スライスの imageId。 */
+  /**
+   * 表示中スライスの imageId。
+   * ⚠ **動画タイル（`kind === "video"`）は cornerstone の像を持たないので空文字**。
+   * 動画でも使える識別子が要るなら `sopInstanceUid` を見ること。
+   */
   imageId: string;
+  /**
+   * 表示中インスタンスの SOP Instance UID。解決できなければ null。
+   *
+   * <p>🔑 **これが無いと、プラグインは `imageId` を正規表現で削って UID を作る**しかない
+   * （UVS プラグインが実際にそうしていた）。動画タイルには imageId が無いので、その手は
+   * そもそも通らない。H1 の穴として記録されていたものをここで塞ぐ。
+   */
+  sopInstanceUid: string | null;
+  /**
+   * 本体 REST の基点（例 `http://localhost:18090`）。
+   *
+   * <p>🔑 **JAR 面のプラグインは自分の backend のポートを知らない**（`run()` に渡るのは要求本文
+   * だけ）。フロントが渡すしかないので、対象の一部として出す。
+   */
+  apiBase: string;
+  /**
+   * この対象がどの表示器に出ているか。`"image"` = 2D ビューア、`"video"` = 動画再生器。
+   * 🔴 プラグインは**これを見て分岐する**——動画は imageId も画素取得（H3）も無い。
+   */
+  kind: "image" | "video";
   /** 表示中スライス（Z）の 0 始まり index と、そのスタックの総数。 */
   sliceIndex: number;
   sliceCount: number;
@@ -694,6 +718,37 @@ export function runViewerCommand(keys: string[], fn: (c: ViewerCommands) => void
 /** 指定キーが登録済みか。 */
 export function hasViewerCommands(key: string): boolean {
   return registry.has(key);
+}
+
+/**
+ * 動画タイル用の H1 登録簿。
+ *
+ * <p>動画再生器は {@link ViewerCommands} をほとんど実装できない（W/L も ROI も画素取得も無い）。
+ * 一方で「いま何を見ているか」だけは名乗れないと、**プラグインから動画シリーズが存在しないことに
+ * なる**（実際に UVS プラグインの対象が空になった）。そこで H1 だけを別に登録できるようにする。
+ *
+ * <p>キーは {@link registerViewerCommands} と同じ tileId。両方あるときは
+ * {@link ViewerCommands#getTargetInfo} が優先される（2D ビューアのほうが情報が多い）。
+ */
+const targetInfoRegistry = new Map<string, () => ViewerTargetInfo | null>();
+
+/** tileId をキーに H1 だけを登録する（動画タイル用）。返り値で解除。 */
+export function registerViewerTargetInfo(key: string, get: () => ViewerTargetInfo | null): () => void {
+  targetInfoRegistry.set(key, get);
+  return () => {
+    if (targetInfoRegistry.get(key) === get) targetInfoRegistry.delete(key);
+  };
+}
+
+/** H1 だけの登録から対象を引く（未登録・例外なら null）。 */
+export function queryViewerTargetInfo(key: string): ViewerTargetInfo | null {
+  const get = targetInfoRegistry.get(key);
+  if (!get) return null;
+  try {
+    return get();
+  } catch {
+    return null;
+  }
 }
 
 /** 単一 tileId のコマンドから値を取得する（未登録・例外なら null）。 */

@@ -33,6 +33,14 @@ public class UvsPlugin implements GraphyPlugin {
 
     @Override
     public Object run(Map<String, Object> args) {
+        // ── 段 6: `op` があれば新経路。プローブは走らせない ──────────
+        //   🔑 **`op` が無ければ従来どおり**。段 2〜5 の 40 検査は旧フラグ（analyze/roi/predict）で
+        //      動き続ける必要がある——あれが段 6 の回帰テストそのものだから。
+        Object op = args == null ? null : args.get("op");
+        if (op != null && !String.valueOf(op).isBlank()) {
+            return dispatch(String.valueOf(op), args);
+        }
+
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("ok", true);
         out.put("note", "これは疎通確認であって解析ではない（fw/uvs-plugin-design.md 段 2）");
@@ -73,6 +81,48 @@ public class UvsPlugin implements GraphyPlugin {
         }
 
         return out;
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  段 6: op 方式
+    //
+    //  画面は 1 回の解析で 40 回以上ここを呼ぶ。そのたびに MP4 を落とし直したり
+    //  `ffmpeg -version` を起こしたりしないよう、状態は {@link UvsSession} が持つ。
+    //  戻りは必ず {"ok":..., "op":...}（失敗時は "error" も）。
+    //  🔴 **args のエコーバックはしない**——40 往復ぶんの無駄が乗る。
+    // ══════════════════════════════════════════════════════════════
+
+    private Map<String, Object> dispatch(String op, Map<String, Object> args) {
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("ok", false);
+        r.put("op", op);
+        try {
+            switch (op) {
+                case "info" -> {
+                    UvsSession s = UvsSession.open(
+                            strArg(args, "apiBase"), strArg(args, "sopInstanceUid"), getClass().getClassLoader());
+                    r.putAll(s.info());
+                    r.put("ok", true);
+                }
+                case "release" -> {
+                    UvsSession s = UvsSession.get(strArg(args, "sessionId"));
+                    // 🔑 既に無いセッションの release は**成功**にする。窓を閉じたときと
+                    //    明示解放が二重に飛ぶのはふつうに起きるので、そこで赤くしない。
+                    r.put("freedBytes", s == null ? 0L : s.close());
+                    r.put("existed", s != null);
+                    r.put("ok", true);
+                }
+                default -> r.put("error", "未知の op: " + op);
+            }
+        } catch (Throwable t) {
+            r.put("error", t.getClass().getSimpleName() + ": " + t.getMessage());
+        }
+        return r;
+    }
+
+    private static String strArg(Map<String, Object> args, String key) {
+        Object v = args == null ? null : args.get(key);
+        return v == null ? null : String.valueOf(v);
     }
 
     /**

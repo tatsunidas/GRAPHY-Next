@@ -91,6 +91,7 @@ import { matchesCombo } from "../shortcuts/registry";
 import { useI18n } from "../i18n/i18n";
 import { LutDialog } from "./LutDialog";
 import {
+  apiBase,
   createPluginAngioSr,
   createPluginXaPresentationState,
   fetchLutData,
@@ -1554,6 +1555,11 @@ export function Viewer2D({
       seriesUid: ctx.seriesUid,
       seriesLabel: ctx.seriesLabel,
       imageId,
+      // imageId の URL から取る（`viewer/imageId.ts` の単一入口）。cornerstone のメタデータ経由と
+      // 違い**画素が読めていなくても解決できる**ので、開いた直後でも UID を渡せる。
+      sopInstanceUid: sopUidFromImageId(imageId),
+      apiBase: apiBase(),
+      kind: "image",
       sliceIndex: indexRef.current,
       sliceCount: imageIdsRef.current.length,
       c: ctx.c,

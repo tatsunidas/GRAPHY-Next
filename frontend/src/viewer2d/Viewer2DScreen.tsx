@@ -30,7 +30,11 @@ import { buildSeriesLayout, type SeriesLayout } from "../viewer/seriesLayout";
 import { LutDialog, ColorBar } from "../viewer/LutDialog";
 import { eventTarget } from "@cornerstonejs/core";
 import { Enums as csToolsEnums } from "@cornerstonejs/tools";
-import { runViewerCommand, queryViewerCommand } from "../viewer/viewerCommands";
+import {
+  runViewerCommand,
+  queryViewerCommand,
+  queryViewerTargetInfo,
+} from "../viewer/viewerCommands";
 import {
   annotationAtClientPoint,
   annotationByUid,
@@ -977,7 +981,10 @@ function TileGrid({
         mountSeriesPanel(el, mode, (ref) => studyUidOfSeries(ref.seriesUid) ?? null, series, opts),
       getTargets: () =>
         resolveTargets().flatMap((tileId) => {
-          const info = queryViewerCommand(tileId, (c) => c.getTargetInfo());
+          // 2D ビューアが登録していればそれが結論。動画タイルは ViewerCommands を持てないので、
+          // H1 だけの登録簿へ落とす（無いと動画シリーズがプラグインから見えなくなる）。
+          const info =
+            queryViewerCommand(tileId, (c) => c.getTargetInfo()) ?? queryViewerTargetInfo(tileId);
           return info ? [{ tileId, ...info }] : [];
         }),
       getViewState: (tileId) => {

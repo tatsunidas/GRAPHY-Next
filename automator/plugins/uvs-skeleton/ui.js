@@ -50,6 +50,7 @@ export function activate(host) {
       seriesUid: t.seriesUid,
       sopInstanceUid: t.sopInstanceUid || null,
       modality: t.modality || null,
+      kind: t.kind || null,
       sliceCount: t.sliceCount,
     }));
 
@@ -61,13 +62,18 @@ export function activate(host) {
 
     const first = (targets || [])[0] || {};
 
-    // 🔑 **API のベース URL と SOP UID は、どちらも `imageId` から取れる。**
-    //    `ViewerTargetInfo` に `sopInstanceUid` は無い（`imageId` はある）。
+    // 🔑 **API のベース URL と SOP UID は host が渡してくれる**（0.2.9 で H1 に追加）。
     //    JAR 側は自分の backend のポートを知らない（`run()` に渡るのは要求本文だけ）ので、
-    //    **フロントが渡す**しかない。段 2 でこれを渡し忘れ、`/rendered` を確認できなかった。
+    //    フロントが渡すしかない。段 2 でこれを渡し忘れ、`/rendered` を確認できなかった。
     //
-    //    imageId の形: `wadouri:http://localhost:18090/api/instances/<sop>/file[&frame=N]`
+    //    ⚠️ **0.2.8 以前の host には無い**ので、そのときだけ imageId から削り出す
+    //    （形: `wadouri:http://localhost:18090/api/instances/<sop>/file[&frame=N]`）。
+    //    🔴 **動画タイルには imageId が無い**——UVS の入力である US Multi-frame(H.264) は
+    //    動画再生器に出るので、フォールバックの正規表現はそこでは効かない。
     const parsed = (() => {
+      if (first.apiBase || first.sopInstanceUid) {
+        return { apiBase: first.apiBase || "", sop: first.sopInstanceUid || null };
+      }
       const id = first.imageId || "";
       const m = /^[a-z]+:(https?:\/\/[^/]+)\/api\/instances\/([^/?&#]+)\//.exec(id);
       return m ? { apiBase: m[1], sop: m[2] } : { apiBase: "", sop: null };

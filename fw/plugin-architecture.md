@@ -253,6 +253,7 @@ H1・H2 は実質「これを本番向けの契約として切り出す」作業
 | # | 内容 | 追加する host API | 依存・難所 | 両モード |
 |---|---|---|---|---|
 | **H1** ✅ | **対象タイルの識別情報**。DOM 依存（`data-tile-id`）を公式契約へ置換 | `getTargets() => ViewerTarget[]` | 「対象」の定義を `runViewerCommand` と揃える（選択タイル→無ければ全タイル） | ✅ |
+| **H1b** ✅ **0.2.9** | **H1 の穴埋めと動画タイル対応** — `sopInstanceUid` / `apiBase` / `kind` を対象に足し、**動画再生器のタイルも対象として名乗れる**ようにする | `ViewerTarget.sopInstanceUid` / `.apiBase` / `.kind` ＋ `registerViewerTargetInfo(tileId, get)` | 🔴 **動画に振り分けたシリーズは、それまでプラグインから「存在しない」ことになっていた**——表示器が Viewer2D でなくなると `ViewerCommands` の登録が無く `getTargets()` が空になる（US Multi-frame(H.264) を動画へ回した直後に UVS プラグインの対象が実際に消えた）。動画は W/L も画素取得も持てないので `ViewerCommands` は実装できない → **H1 だけの登録簿**を別に置き、`getTargets()` が両方を見る。⚠️ 動画タイルの `imageId` は空・`sliceCount` は 1（**フレーム数ではない**。フレーム数は `/video-metadata` から取る）。🔑 `sopInstanceUid` / `apiBase` を足したのは、**JAR 面のプラグインが imageId を正規表現で削って UID とポートを作っていた**から（動画には imageId が無いのでその手は使えない） | ✅ |
 | **H2** ✅ | **表示状態の問い合わせ**。`debugApi` の相当機能を本番契約へ昇格 | `getViewState(tileId?) => ViewerViewState \| null` | `debugApi.ts` から共有ロジックを切り出し、DEV ガードの外へ | ✅ |
 | **H3** ✅ | **画素の読み出し**（本命） | `getPixelData(tileId?, opts?) => Promise<ViewerPixelData \| null>` | **必ず [`pixelCalibration.ts`](../frontend/src/viewer/pixelCalibration.ts) 経由**（`getPixelData()` に直接 slope/intercept を書かない。preScale 既定 ON による二重適用で CT が約 −1024 ずれる既知事故）。シリーズ全スライスは転送量が大きいのでスライス単位を既定にし、範囲指定を任意で | ✅ |
 | **H4a** ✅ | **オーバーレイ表示** — 処理結果を表示中スライスに重ねる（保存しない） | `showOverlay(tileId?, overlay)` / `clearOverlay(tileId?)` | 値マップを受け取り**色付けは本体側**で行う。imageId に紐付け | ✅ |
