@@ -1,29 +1,22 @@
-/*
- * UVS（胎児心エコー動画要約）の骨組み — `fw/uvs-plugin-design.md` の段 2。
- *
- * 🔴 **解析はまだしない。** ここで確かめるのは **JAR 面の継ぎ目**だけ:
- *    JAR が読まれて `run()` が呼ばれるか、そして**この先の段で必要なものが揃っているか**。
- *
- *    本体側に JAR 面のプラグインの実例が無い（社外のデモ 1 本だけ）ので、
- *    **穴があるとしたらここで出る**。
- *
- * 結果は `window.__uvsSkeleton` に置く（automator が読む）。
+/* UVS (skeleton) v0.1.0 — 胎児心エコー動画の要約（UVS）
+ * 研究・教育目的。診断機器ではありません。
+ * このファイルは tools/build.mjs が src/ui/ から生成します。直接編集しないこと。
  */
-export function activate(host) {
+
+// src/ui/ui.ts
+function activate(host) {
   const out = {
     surface: host.surface || null,
     hasRunBackend: typeof host.runBackend === "function",
     targets: null,
     backend: null,
     error: null,
+    pluginVersion: true ? "0.1.0" : void 0
   };
-
   const finish = () => {
     window.__uvsSkeleton = out;
     try {
-      const w = host.openWindow
-        ? host.openWindow({ title: "UVS (skeleton)", width: 460, height: 300 })
-        : null;
+      const w = host.openWindow ? host.openWindow({ title: "UVS (skeleton)", width: 460, height: 300 }) : null;
       const root = w && (w.container || w.root);
       if (root) {
         const div = root.ownerDocument.createElement("div");
@@ -31,45 +24,28 @@ export function activate(host) {
         div.style.font = "12px sans-serif";
         div.style.padding = "10px";
         div.style.whiteSpace = "pre-wrap";
-        div.textContent = out.error
-          ? "NG: " + out.error
-          : "OK: backend に到達しました（解析はまだ行いません）\n" +
-            JSON.stringify(out.backend, null, 1);
+        div.textContent = out.error ? "NG: " + out.error : "OK: backend \u306B\u5230\u9054\u3057\u307E\u3057\u305F\uFF08\u89E3\u6790\u306F\u307E\u3060\u884C\u3044\u307E\u305B\u3093\uFF09\n" + JSON.stringify(out.backend, null, 1);
         root.appendChild(div);
       }
-    } catch (e) {
-      /* 窓が開けなくても本筋は済んでいる */
+    } catch {
     }
     if (host.notify) host.notify(out.error ? "uvs-skeleton: " + out.error : "uvs-skeleton: ok");
   };
-
   try {
-    // どの検査を見ているか（対象の SOP を backend に渡す）。
-    const targets = typeof host.getTargets === "function" ? host.getTargets() : [];
-    out.targets = (targets || []).map((t) => ({
+    const targets = (typeof host.getTargets === "function" ? host.getTargets() : []) ?? [];
+    out.targets = targets.map((t) => ({
       seriesUid: t.seriesUid,
       sopInstanceUid: t.sopInstanceUid || null,
       modality: t.modality || null,
       kind: t.kind || null,
-      sliceCount: t.sliceCount,
+      sliceCount: t.sliceCount
     }));
-
     if (!out.hasRunBackend) {
-      out.error = "host に runBackend が生えていない（standalone か確認）";
+      out.error = "host \u306B runBackend \u304C\u751F\u3048\u3066\u3044\u306A\u3044\uFF08standalone \u304B\u78BA\u8A8D\uFF09";
       finish();
       return;
     }
-
-    const first = (targets || [])[0] || {};
-
-    // 🔑 **API のベース URL と SOP UID は host が渡してくれる**（0.2.9 で H1 に追加）。
-    //    JAR 側は自分の backend のポートを知らない（`run()` に渡るのは要求本文だけ）ので、
-    //    フロントが渡すしかない。段 2 でこれを渡し忘れ、`/rendered` を確認できなかった。
-    //
-    //    ⚠️ **0.2.8 以前の host には無い**ので、そのときだけ imageId から削り出す
-    //    （形: `wadouri:http://localhost:18090/api/instances/<sop>/file[&frame=N]`）。
-    //    🔴 **動画タイルには imageId が無い**——UVS の入力である US Multi-frame(H.264) は
-    //    動画再生器に出るので、フォールバックの正規表現はそこでは効かない。
+    const first = targets[0] ?? {};
     const parsed = (() => {
       if (first.apiBase || first.sopInstanceUid) {
         return { apiBase: first.apiBase || "", sop: first.sopInstanceUid || null };
@@ -81,38 +57,30 @@ export function activate(host) {
     out.imageId = first.imageId || null;
     out.apiBase = parsed.apiBase;
     out.sopInstanceUid = parsed.sop;
-
-    // 解析の指示は automator が仕込む（`window.__uvsRequest`）。既定は疎通確認のみ。
-    //
-    // 🔴 **指示は丸ごと転送する。** 最初は `analyze` 系だけを列挙して渡しており、
-    //    段 4 で足した `roi` / `stride` / `frameIndex` が**黙って落ちていた**
-    //    （backend は「指示が無い」として何も返さず、検査は空の結果を見ていた）。
-    //    鍵を 1 つ足すたびに 2 箇所を直す作りにしない。
     const req = window.__uvsRequest || {};
-    host
-      .runBackend(
-        Object.assign(
-          {
-            probe: true,
-            apiBase: parsed.apiBase,
-            studyUid: first.studyUid || null,
-            seriesUid: first.seriesUid || null,
-            sopInstanceUid: parsed.sop,
-          },
-          req,
-        ),
+    host.runBackend(
+      Object.assign(
+        {
+          probe: true,
+          apiBase: parsed.apiBase,
+          studyUid: first.studyUid || null,
+          seriesUid: first.seriesUid || null,
+          sopInstanceUid: parsed.sop
+        },
+        req
       )
-      .then((res) => {
-        out.backend = res;
-        finish();
-      })
-      .catch((e) => {
-        // 🔴 **失敗を握り潰さない。** JAR が読まれていない／例外が出た、はここに出る。
-        out.error = "runBackend が失敗: " + String((e && e.message) || e);
-        finish();
-      });
+    ).then((res) => {
+      out.backend = res;
+      finish();
+    }).catch((e) => {
+      out.error = "runBackend \u304C\u5931\u6557: " + String(e?.message ?? e);
+      finish();
+    });
   } catch (e) {
-    out.error = String((e && e.stack) || e);
+    out.error = String(e?.stack ?? e);
     finish();
   }
 }
+export {
+  activate
+};

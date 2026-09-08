@@ -256,26 +256,38 @@ async function main(): Promise<void> {
   if (!fs.existsSync(jar)) {
     throw new Error(`JAR がありません: ${jar}\n${buildHint}`);
   }
-  // 🔴 **古い JAR で緑にしない。** ここは配布物と同じくフォルダをコピーするだけでビルドしない。
-  //    src を直したのに JAR を焼き直し忘れると、**直す前のコードで検査が通ってしまう**。
+  // 🔴 **古い成果物で緑にしない。** ここは配布物と同じくフォルダをコピーするだけでビルドしない。
+  //    src を直したのに焼き直しを忘れると、**直す前のコードで検査が通ってしまう**。
+  //    JAR（Java 面）と ui.js（UI 面）の両方を見る。
   {
-    const jarAt = fs.statSync(jar).mtimeMs;
-    const newer: string[] = [];
-    const walk = (dir: string): void => {
-      for (const name of fs.readdirSync(dir)) {
-        const p = path.join(dir, name);
-        if (fs.statSync(p).isDirectory()) walk(p);
-        else if (name.endsWith(".java") && fs.statSync(p).mtimeMs > jarAt) newer.push(p);
+    const stale = (artifact: string, srcDir: string, ext: string, hint: string): void => {
+      if (!fs.existsSync(srcDir)) return;
+      const at = fs.statSync(artifact).mtimeMs;
+      const newer: string[] = [];
+      const walk = (dir: string): void => {
+        for (const name of fs.readdirSync(dir)) {
+          if (name === "node_modules") continue;
+          const p = path.join(dir, name);
+          if (fs.statSync(p).isDirectory()) walk(p);
+          else if (name.endsWith(ext) && fs.statSync(p).mtimeMs > at) newer.push(p);
+        }
+      };
+      walk(srcDir);
+      if (newer.length > 0) {
+        throw new Error(
+          `${path.basename(artifact)} が古いです（${newer.length} 個の ${ext} が新しい）:\n` +
+            newer.slice(0, 5).map((p) => `    ${path.relative(pluginDir, p)}`).join("\n") +
+            `\n${hint}`,
+        );
       }
     };
-    walk(path.join(pluginDir, "src"));
-    if (newer.length > 0) {
-      throw new Error(
-        `JAR が古いです（${newer.length} 個の .java が JAR より新しい）:\n` +
-          newer.slice(0, 5).map((p) => `    ${path.relative(pluginDir, p)}`).join("\n") +
-          `\n${buildHint}`,
-      );
-    }
+    stale(jar, path.join(pluginDir, "src", "com"), ".java", buildHint);
+    stale(
+      path.join(pluginDir, "ui.js"),
+      path.join(pluginDir, "src", "ui"),
+      ".ts",
+      `  cd automator/plugins/${PLUGIN_ID} && npm run build`,
+    );
   }
   if (!fs.existsSync(DEFAULT_DICOM)) {
     throw new Error(
