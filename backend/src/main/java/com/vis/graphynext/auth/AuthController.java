@@ -97,7 +97,12 @@ public class AuthController {
                 + (wantsSubscribe ? "&subscribe=1" : "");
         String body = "以下のリンクから" + properties.getTokenTtlMinutes() + "分以内にログインしてください:\n\n"
                 + verifyUrl + "\n\nこのメールに心当たりがない場合は無視してください。";
-        mailerClient.send(email, "GRAPHY-Next デモへのログインリンク", body);
+        if (!mailerClient.send(email, "GRAPHY-Next デモへのログインリンク", body).success()) {
+            // 送信できていないのに「送信しました」と出すと、利用者は届かないメールを待ち続け、
+            // 運用側も気づけない。SMTPの認証失効などはここでしか表に出ない。
+            return htmlResponse(renderLoginPage(safeNext,
+                    "メールの送信に失敗しました。時間をおいて再度お試しいただくか、customerservices@vis-ionary.com までお問い合わせください"));
+        }
 
         return htmlResponse(renderSentPage(escapeHtml(email)));
     }
