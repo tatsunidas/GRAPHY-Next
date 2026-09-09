@@ -1,4 +1,4 @@
-/* UVS (skeleton) v0.1.0 — 胎児心エコー動画の要約（UVS）
+/* UVS（胎児心エコー動画の要約） v0.2.0 — 胎児心エコー動画の要約（UVS）
  * 研究・教育目的。診断機器ではありません。
  * このファイルは tools/build.mjs が src/ui/ から生成します。直接編集しないこと。
  */
@@ -1036,7 +1036,7 @@ function activate(host) {
     targets: null,
     backend: null,
     error: null,
-    pluginVersion: true ? "0.1.0" : void 0
+    pluginVersion: true ? "0.2.0" : void 0
   };
   const finish = () => {
     window.__uvsSkeleton = out;

@@ -1,6 +1,6 @@
 {
   "name": "graphy-next-plugin-uvs",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "UVS (fetal echo video summarization) plugin for GRAPHY-Next — UI face",
   "type": "module",
