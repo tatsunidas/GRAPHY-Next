@@ -10,6 +10,7 @@
  * ⚠️ このファイルは `tools/build.mjs` が `ui.js` にバンドルする。**`ui.js` を直接編集しない。**
  */
 import type { ViewerTarget, Viewer2DPluginHost } from "../../graphy-plugin";
+import { mountPanel } from "./panel";
 
 /** ビルド時に埋まるプラグインの版（`tools/build.mjs` の define）。 */
 declare const __PLUGIN_VERSION__: string;
@@ -48,14 +49,32 @@ export function activate(host: Viewer2DPluginHost): void {
     pluginVersion: typeof __PLUGIN_VERSION__ === "string" ? __PLUGIN_VERSION__ : undefined,
   };
 
+  /**
+   * 窓を開く。
+   *
+   * 🔑 **automator が指示（`__uvsRequest`）を置いているときは、画面を出さずに素の結果を見せる。**
+   *    段 2〜5 の 40 検査は 1 回のクリックにつき 1 回の `run()` を前提にしており、画面が自分で
+   *    `op:"info"` を投げると往復の数が変わってしまう。利用者の経路（指示なし）では**画面を出す**
+   *    ——どちらも実機検査が通る（画面は検査 9-x が押す）。
+   */
   const finish = (): void => {
     (window as unknown as { __uvsSkeleton?: SkeletonOut }).__uvsSkeleton = out;
     try {
+      const automatorMode = !!(window as unknown as { __uvsRequest?: unknown }).__uvsRequest;
       const w = host.openWindow
-        ? host.openWindow({ title: "UVS (skeleton)", width: 460, height: 300 })
+        ? host.openWindow({
+            title: "UVS",
+            width: automatorMode ? 460 : 560,
+            height: automatorMode ? 300 : 720,
+          })
         : null;
       const root = w && ((w as { container?: HTMLElement }).container || (w as { root?: HTMLElement }).root);
-      if (root) {
+      if (root && !automatorMode && !out.error && out.sopInstanceUid) {
+        mountPanel(root, host, {
+          apiBase: out.apiBase ?? "",
+          sopInstanceUid: out.sopInstanceUid ?? null,
+        });
+      } else if (root) {
         const div = root.ownerDocument.createElement("div");
         div.setAttribute("data-testid", "uvs-skeleton-panel");
         div.style.font = "12px sans-serif";
@@ -63,14 +82,13 @@ export function activate(host: Viewer2DPluginHost): void {
         div.style.whiteSpace = "pre-wrap";
         div.textContent = out.error
           ? "NG: " + out.error
-          : "OK: backend に到達しました（解析はまだ行いません）\n" +
-            JSON.stringify(out.backend, null, 1);
+          : "OK: backend に到達しました\n" + JSON.stringify(out.backend, null, 1);
         root.appendChild(div);
       }
     } catch {
       /* 窓が開けなくても本筋は済んでいる */
     }
-    if (host.notify) host.notify(out.error ? "uvs-skeleton: " + out.error : "uvs-skeleton: ok");
+    if (host.notify) host.notify(out.error ? "uvs: " + out.error : "uvs: ok");
   };
 
   try {

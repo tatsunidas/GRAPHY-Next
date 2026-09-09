@@ -872,6 +872,211 @@ async function main(): Promise<void> {
         }
       }
 
+      // ── 段 6-7: 🚨 **画面を実際に押す** ────────────────────────────
+      // v0.2.7 の反省（CLAUDE.md ルール 9）: 「要素があること」は「操作が効くこと」の証拠に
+      // ならない。ここは押す・ドラッグする・入力する検査だけを書く。
+      if (fs.existsSync(refPath)) {
+        const ref = JSON.parse(fs.readFileSync(refPath, "utf8")) as { frames: number; cpr: number[]; mad: number[] };
+        interface UvsDebug {
+          scan: { from: number; frames: number; cpr: number[]; mad: number[]; sampleIndices: number[] } | null;
+          predict: { done: number; total: number; anyPadded: boolean } | null;
+          composed: {
+            finalIndices: number[]; heart: number[]; frameCount: number; interval: number;
+            colorRemove: number[]; staticRemove: number[]; predScores: Record<string, number>;
+            results: Record<string, number>;
+          } | null;
+          progress: number;
+          backendCalls: number;
+          threshold: number;
+          madThreshold: number;
+          info: { numberOfFrames: number; fps: number; transferSyntaxUid: string | null } | null;
+          error: string | null;
+        }
+        const readDebug = async (): Promise<UvsDebug | null> =>
+          (await viewer.evaluate(
+            () => (window as unknown as { __uvsDebug?: UvsDebug }).__uvsDebug ?? null,
+          )) as UvsDebug | null;
+        const waitFor = async (
+          pred: (d: UvsDebug | null) => boolean, maxMs: number, onTick?: (d: UvsDebug | null) => void,
+        ): Promise<UvsDebug | null> => {
+          const deadline = Date.now() + maxMs;
+          for (;;) {
+            const d = await readDebug();
+            onTick?.(d);
+            if (pred(d)) return d;
+            if (Date.now() > deadline) return d;
+            await viewer.waitForTimeout(250);
+          }
+        };
+
+        // 🔑 **指示を消してから開く**＝利用者と同じ経路（画面が出る）。
+        await viewer.evaluate(() => {
+          delete (window as unknown as { __uvsRequest?: unknown }).__uvsRequest;
+          delete (window as unknown as { __uvsDebug?: unknown }).__uvsDebug;
+        });
+        await viewer.getByTestId("viewer2d-menu-plugins").click();
+        await viewer.waitForTimeout(300);
+        await viewer.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
+
+        // ⚠️ 段 1 の最初のクリック（指示なし）でも画面は開くので、**この節で開いた最後の 1 枚**に
+        //    絞る。絞らないと strict mode で「2 つ見つかった」と落ちる。
+        const panel = viewer.getByTestId("uvs-panel").last();
+        const ui = (testId: string) => panel.getByTestId(testId);
+        await panel.waitFor({ state: "visible", timeout: 15_000 }).catch(() => {});
+        check(await panel.isVisible(), "[9] ★画面が開く（利用者の経路）");
+
+        const opened = await waitFor((d) => !!d?.info, 20_000);
+        check(!!opened?.info, "[9] 動画の諸元が画面に載る", opened?.info ?? {});
+        // 🚨 設計 §7: 0.19 と「圧縮動画向け」の注記が読めること。
+        const madValue = await ui("uvs-mad-input").inputValue();
+        check(Number(madValue) === 0.19, "[9] 🚨静止しきい値の初期値が 0.19（画面）", { madValue });
+        const settingsText = await panel.innerText();
+        check(
+          settingsText.includes("圧縮動画") || settingsText.includes("compressed"),
+          "[9] 「圧縮動画向け」の注記が画面にある（数字だけ見せない）",
+        );
+        check(
+          settingsText.includes("1.2.840.10008.1.2.4.102"),
+          "[9] 動画の出自（転送構文）を画面に出している",
+        );
+
+        // ── 走査を押す（独立参照と一致するところまで画面経由で確かめる）──
+        await ui("uvs-range-count").fill(String(ref.frames));
+        await ui("uvs-range-count").dispatchEvent("change");
+        await ui("uvs-interval-input").fill("10");
+        await ui("uvs-interval-input").dispatchEvent("change");
+        await ui("uvs-run-both").click();
+        const scanned = await waitFor((d) => !!d?.scan, 60_000);
+        const maxDiff = (x: number[] | undefined, y: number[]) =>
+          !x ? Number.POSITIVE_INFINITY
+            : Math.max(...x.slice(0, Math.min(x.length, y.length)).map((v, i) => Math.abs(v - y[i])));
+        check(
+          !!scanned?.scan && maxDiff(scanned.scan.cpr, ref.cpr) < 1e-12
+            && maxDiff(scanned.scan.mad, ref.mad) < 1e-12,
+          "[9] ★★画面から走らせた CPR / MAD が独立参照と一致",
+          { frames: scanned?.scan?.frames, cpr: maxDiff(scanned?.scan?.cpr, ref.cpr) },
+        );
+
+        // 🚨 このサンプルは**既定のカラー比率で全フレームがカラー扱いになる**（実測）。
+        //    空の要約を涼しい顔で出さず、理由が読める警告が出ていること。
+        const warning = await ui("uvs-warning").innerText();
+        check(
+          warning.includes("カラー判定でほぼ全フレーム") || warning.includes("Color detection removed"),
+          "[9] 🚨ほぼ全フレームが落ちたときは理由を書いた警告を出す（黙って空を出さない）",
+          { warning: warning.slice(0, 80) },
+        );
+
+        // ── 予測を押す（進捗の中間値を必ず 1 回は観測する）──
+        let sawIntermediate = false;
+        await ui("uvs-run-predict").click();
+        const predicted = await waitFor(
+          (d) => !!d?.predict && d.predict.done >= d.predict.total,
+          180_000,
+          (d) => {
+            const p = d?.progress ?? 0;
+            if (p > 0 && p < 1) sawIntermediate = true;
+          },
+        );
+        check(
+          !!predicted?.predict && predicted.predict.done === predicted.predict.total,
+          "[9] ★予測が最後まで進んだ（画面から）",
+          predicted?.predict ?? {},
+        );
+        // 🔴 終了値だけ見ない。**途中の進捗が出ている**＝分割が効いている証拠。
+        check(sawIntermediate, "[9] ★★進捗の中間値を観測した（押して 11 分無反応にならない）");
+        observe("[9] ⚠️ padding が通ったか（画面経由）", { anyPadded: predicted?.predict?.anyPadded });
+
+        // ── しきい値ハンドルを**ポインタでドラッグ**する ──
+        const before = await readDebug();
+        const callsBefore = before?.backendCalls ?? 0;
+        const finalBefore = (before?.composed?.finalIndices ?? []).length;
+        const handle = ui("uvs-threshold-handle");
+        const box = await handle.boundingBox();
+        check(!!box, "[9] しきい値ハンドルが掴める位置にある");
+        if (box) {
+          const chartBox = await ui("uvs-chart").boundingBox();
+          await viewer.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+          await viewer.mouse.down();
+          // 下へドラッグ＝しきい値を下げる（採用が増える向き）。
+          await viewer.mouse.move(
+            box.x + box.width / 2,
+            (chartBox?.y ?? box.y) + (chartBox?.height ?? 100) - 4,
+            { steps: 8 },
+          );
+          await viewer.mouse.up();
+        }
+        const after = await waitFor((d) => (d?.threshold ?? 1) < (before?.threshold ?? 1), 5_000);
+        check(
+          (after?.threshold ?? 1) < (before?.threshold ?? 1),
+          "[9] ★★★ハンドルをドラッグするとしきい値が変わる（JS 代入ではなく実操作）",
+          { before: before?.threshold, after: after?.threshold },
+        );
+        check(
+          (after?.composed?.finalIndices.length ?? 0) >= finalBefore,
+          "[9] しきい値を下げると採用フレームは減らない",
+          { before: finalBefore, after: after?.composed?.finalIndices.length },
+        );
+        // 🔴 **往復していないこと**を数字で示す（「速い気がする」で済ませない）。
+        check(
+          (after?.backendCalls ?? -1) === callsBefore,
+          "[9] ★★★ドラッグ中に backend への往復が 1 回も増えない（フロントで再合成）",
+          { before: callsBefore, after: after?.backendCalls },
+        );
+
+        // ── 手動の追加が最優先であること ──
+        await ui("uvs-manual-input").fill("3-5");
+        await ui("uvs-manual-input").dispatchEvent("change");
+        const manual = await waitFor((d) => (d?.composed?.finalIndices ?? []).includes(3), 5_000);
+        check(
+          [3, 4, 5].every((i) => (manual?.composed?.finalIndices ?? []).includes(i)),
+          "[9] ★手動で追加したフレームはあらゆる除外に勝つ",
+          { has3: manual?.composed?.finalIndices.includes(3) },
+        );
+
+        // ── 🔴 オラクル照合: 画面の答え vs Java の正本（同じ入力）──
+        const c = manual?.composed;
+        if (c) {
+          const java = await runOp({
+            op: "compose",
+            frameCount: c.frameCount,
+            colorRemove: c.colorRemove,
+            staticRemove: c.staticRemove,
+            predScores: c.predScores,
+            interval: c.interval,
+            threshold: manual?.threshold,
+            userAdd: [3, 4, 5],
+          }, 15_000);
+          const same = (a: number[] | undefined, b: number[]) =>
+            !!a && a.length === b.length && a.every((v, i) => v === b[i]);
+          check(
+            java?.ok === true && same(java.finalIndices, c.finalIndices) && same(java.heart, c.heart),
+            "[9] ★★★画面の合成が Java の正本と実データで完全一致（§9 の最終インデックスの一致）",
+            {
+              frameCount: c.frameCount,
+              front: c.finalIndices.length,
+              java: java?.finalIndices?.length,
+              frontHeart: c.heart.length,
+              javaHeart: java?.heart?.length,
+            },
+          );
+        }
+
+        // ── レポートへ差し込む ──
+        await viewer.evaluate(() => {
+          delete (window as unknown as { __uvsRequest?: unknown }).__uvsRequest;
+        });
+        await ui("uvs-publish-report").click();
+        await viewer.waitForTimeout(1_000);
+        const publishStatus = await ui("uvs-publish-status").innerText();
+        // 🚨 **「登録」で部分一致させない。** 失敗文言「登録できませんでした」も通ってしまい、
+        //    実際に一度これで緑になった（H39 が動画タイルで塞がっていたのに気付けなかった）。
+        check(
+          publishStatus.includes("登録しました") || publishStatus.toLowerCase().includes("registered"),
+          "[9] ★レポートの候補に登録できた（H39・動画タイル）",
+          { publishStatus },
+        );
+      }
+
       const unknown = await runOp({ op: "no-such-op" }, 3_000);
       check(
         unknown?.ok === false && (unknown?.error ?? "").includes("未知の op"),

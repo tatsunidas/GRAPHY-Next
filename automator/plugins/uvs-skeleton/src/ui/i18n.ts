@@ -1,0 +1,153 @@
+/**
+ * プラグイン内の辞書（**ja / en 両方必須**・CLAUDE.md のルール 5）。
+ *
+ * 🔑 `host.t()` は**本体のキーしか引けない**ので、プラグインの文言は自分で持つ。
+ * `host.locale` は活性化時のスナップショット（後から変わらない）。
+ */
+export type Locale = "ja" | "en";
+
+const ja = {
+  title: "UVS — 胎児心エコー動画の要約",
+  research: "研究・教育目的。診断機器ではありません。",
+  source: "動画の出自",
+  frames: "フレーム",
+  fps: "fps",
+  transferSyntax: "転送構文",
+  transcode: "サーバ側変換",
+  needed: "要",
+  notNeeded: "不要",
+  settings: "設定",
+  rangeFrom: "解析の開始フレーム",
+  rangeCount: "解析するフレーム数（0＝末尾まで）",
+  interval: "予測の間引き間隔",
+  stride: "差分の相手までの距離",
+  extractor: "候補領域の抽出器",
+  extractorFixed: "学習時と同じ EXTRACTOR_COMPOSITE に固定。変えると確率の意味が変わる。",
+  colorThreshold: "カラー判定のしきい値",
+  colorRatio: "カラー画素の比率しきい値",
+  madThreshold: "静止判定のしきい値（平均絶対差）",
+  madCompressed: "🚨 圧縮動画（H.264）向けの値。非圧縮 AVI の {avi} に相当する。",
+  probThreshold: "確率のしきい値",
+  run: "実行",
+  runColor: "カラー判定",
+  runStatic: "静止判定",
+  runBoth: "カラー＋静止（復号 1 回）",
+  runPredict: "予測",
+  cancel: "中止",
+  scanning: "走査中…",
+  predicting: "予測中 {done}/{total}（残り約 {min} 分）",
+  cancelled: "中止しました（ここまでの結果は残っています）",
+  needScan: "先にカラー／静止判定を走らせてください。",
+  incomplete: "予測が途中です（未計算のサンプルがあるため合成していません）。",
+  curve: "確率（補間済み）",
+  bars: "フレームの内訳",
+  barFinal: "採用",
+  barPred: "予測",
+  barColor: "カラー",
+  barStatic: "静止",
+  barManual: "手動",
+  manual: "手動の追加・除外",
+  manualAdd: "追加するフレーム（例 1,5-8,12）",
+  manualRemove: "除外するフレーム",
+  manualHint: "バーをクリックしても切り替えられます。手動の追加はすべての除外に優先します。",
+  results: "結果",
+  total: "総フレーム",
+  kept: "採用",
+  removed: "除外",
+  byColor: "カラーで除外",
+  byStatic: "静止で除外",
+  byProb: "確率で除外",
+  byUser: "手動で除外",
+  overlapNote: "🔴 カラー・静止・確率の件数は重なります。足し合わせても除外の総数にはなりません。",
+  preview: "プレビュー",
+  previewHint: "採用フレームをクリックするとその位置へ移動します。",
+  publish: "レポートへ差し込む",
+  published: "レポートの候補に登録しました。",
+  publishFailed: "登録できませんでした: {error}",
+  cacheUsage: "一時ファイル {mb} MB",
+  warnAllColor: "⚠ カラー判定でほぼ全フレーム（{n}/{total}）が落ちています。この動画は画面内に色付きの表示があるかもしれません。しきい値を見直してください。",
+  warnAllStatic: "⚠ 静止判定でほぼ全フレーム（{n}/{total}）が落ちています。しきい値（圧縮動画向けの既定は 0.19）を見直してください。",
+  warnEmpty: "⚠ 採用フレームが 0 件です。上の内訳のどれが効いているかを見て、しきい値を調整してください。",
+  error: "エラー",
+} as const;
+
+type Dict = Record<keyof typeof ja, string>;
+
+const en: Dict = {
+  title: "UVS — Fetal echo video summarization",
+  research: "For research and education. Not a diagnostic device.",
+  source: "Video source",
+  frames: "frames",
+  fps: "fps",
+  transferSyntax: "Transfer syntax",
+  transcode: "Server-side transcode",
+  needed: "required",
+  notNeeded: "not required",
+  settings: "Settings",
+  rangeFrom: "First frame to analyze",
+  rangeCount: "Number of frames (0 = to the end)",
+  interval: "Prediction sampling interval",
+  stride: "Distance to the difference partner",
+  extractor: "Candidate region extractor",
+  extractorFixed: "Fixed to EXTRACTOR_COMPOSITE as trained. Changing it changes what the probability means.",
+  colorThreshold: "Color detection threshold",
+  colorRatio: "Color pixel ratio threshold",
+  madThreshold: "Static detection threshold (mean absolute difference)",
+  madCompressed: "🚨 Value for compressed (H.264) video. Equivalent to {avi} on uncompressed AVI.",
+  probThreshold: "Probability threshold",
+  run: "Run",
+  runColor: "Color detection",
+  runStatic: "Static detection",
+  runBoth: "Color + static (one decode)",
+  runPredict: "Predict",
+  cancel: "Cancel",
+  scanning: "Scanning…",
+  predicting: "Predicting {done}/{total} (about {min} min left)",
+  cancelled: "Cancelled (results so far are kept).",
+  needScan: "Run color / static detection first.",
+  incomplete: "Prediction is incomplete; not composed because some samples are missing.",
+  curve: "Probability (interpolated)",
+  bars: "Frame breakdown",
+  barFinal: "Kept",
+  barPred: "Prediction",
+  barColor: "Color",
+  barStatic: "Static",
+  barManual: "Manual",
+  manual: "Manual add / remove",
+  manualAdd: "Frames to add (e.g. 1,5-8,12)",
+  manualRemove: "Frames to remove",
+  manualHint: "Click a bar to toggle. Manual additions win over every exclusion.",
+  results: "Results",
+  total: "Total frames",
+  kept: "Kept",
+  removed: "Removed",
+  byColor: "Removed by color",
+  byStatic: "Removed as static",
+  byProb: "Removed by probability",
+  byUser: "Removed manually",
+  overlapNote: "🔴 Color / static / probability counts overlap. Adding them does not give the total removed.",
+  preview: "Preview",
+  previewHint: "Click a kept frame to seek there.",
+  publish: "Add to report",
+  published: "Registered as a report candidate.",
+  publishFailed: "Could not register: {error}",
+  cacheUsage: "Temporary files: {mb} MB",
+  warnAllColor: "⚠ Color detection removed almost every frame ({n}/{total}). This video may contain colored on-screen graphics. Review the threshold.",
+  warnAllStatic: "⚠ Static detection removed almost every frame ({n}/{total}). Review the threshold (0.19 is the default for compressed video).",
+  warnEmpty: "⚠ No frames were kept. Check which criterion above is responsible and adjust its threshold.",
+  error: "Error",
+};
+
+const dicts: Record<Locale, Dict> = { ja, en };
+
+/** 文言を引く。`{name}` は `params` で置換する。未知のロケールは ja に落とす。 */
+export function createT(locale: string | null | undefined): (key: keyof Dict, params?: Record<string, string | number>) => string {
+  const dict = dicts[(locale === "en" ? "en" : "ja") as Locale];
+  return (key, params) => {
+    let s: string = dict[key] ?? String(key);
+    if (params) for (const [k, v] of Object.entries(params)) s = s.replaceAll(`{${k}}`, String(v));
+    return s;
+  };
+}
+
+export type T = ReturnType<typeof createT>;

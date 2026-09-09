@@ -60,6 +60,9 @@ import { SUVCalibrationDialog } from "../viewer/SUVCalibrationDialog";
 import { getSuv, subscribeSuvStore } from "../viewer/suvStore";
 import { TagViewerDialog } from "../mainscreen/TagViewerDialog";
 import { ReportEditorDialog } from "../report/ReportEditorDialog";
+// H39 を動画タイルでも通すために使う（2D ビューアと同じ器・同じ規則で積む）。
+import { buildPluginAnalysisRecord } from "../report/analysisResults";
+import { publishAnalysisResult } from "../report/analysisResultStore";
 import { TextureDialog } from "../viewer/TextureDialog";
 import { WwWlAdjustDialog, type WlTarget } from "./WwWlAdjustDialog";
 import { WlPresetDialog } from "./WlPresetDialog";
@@ -1291,12 +1294,35 @@ function TileGrid({
         }
         const id = tileId ?? resolveTargets()[0];
         if (!id) return { ok: false, error: "no target tile" };
-        return (
-          queryViewerCommand(id, (c) => c.publishAnalysisResult(input, producer)) ?? {
-            ok: false,
-            error: "tile is not available",
-          }
+        const viaViewer = queryViewerCommand(id, (c) => c.publishAnalysisResult(input, producer));
+        if (viaViewer) return viaViewer;
+        // 🚨 **動画タイルは ViewerCommands を持てない**（W/L も画素取得も無い）。ここで諦めると
+        //    「動画シリーズの解析結果だけレポートに載せられない」になる——実際に UVS で踏んだ。
+        //    H1b の登録簿から study/series と表示中インスタンスを取り、同じ器で積む。
+        const target = queryViewerTargetInfo(id);
+        if (!target) return { ok: false, error: "tile is not available" };
+        // 🔴 参照 SOP は**このタイルが開いているもの**に限る（見ていない画像を参照させない）。
+        const bad = (input.sopInstanceUids ?? []).find((sop) => !sop || sop !== target.sopInstanceUid);
+        if (bad !== undefined) {
+          return { ok: false, error: `referenced SOP is not open in this tile: ${bad ?? "(none)"}` };
+        }
+        const built = buildPluginAnalysisRecord(
+          input,
+          { studyUid: target.studyUid, seriesUid: target.seriesUid },
+          producer,
+          {
+            pluginLabel: t("viewer2d.menu.plugins"),
+            researchOnly: t("report.analysis.caveat.researchOnly"),
+          },
+          Date.now(),
         );
+        if (!built.ok) return { ok: false, error: built.error };
+        try {
+          publishAnalysisResult(built.record);
+          return { ok: true };
+        } catch (e) {
+          return { ok: false, error: String(e) };
+        }
       },
       editPresets: () => setPresetsOpen(true),
       // Z 並べ替えはシリーズレベル（seriesCommands）。動画/IPP不在は SeriesViewer 側でブロック。
