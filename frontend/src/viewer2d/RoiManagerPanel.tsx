@@ -33,9 +33,8 @@ import { combineMasks, splitMask, roiToMask, isAreaRoi, type BoolOp, type SplitC
 import { sphereFromCircleRoi, createSphere3DFromCircleRoi, bakeSphere3D, splitMaskToSlices, maskVolumeStats, type MaskVolumeStats } from "../viewer/roi3d";
 import { listSpheres3D, updateSphere3D, deleteSphere3D, subscribeSphere3D, type Sphere3D } from "../viewer/sphere3dStore";
 import { annotationsToImageJDtos } from "../viewer/imagejExport";
-import { annotationsToMaskPolygons, seriesUidOfRoi } from "../viewer/anonMaskExport";
 import { importImageJDtos } from "../viewer/imagejImport";
-import { exportImageJRoiSet, fetchAnonMasks, importImageJRoiSet, registerAnonMask } from "../api";
+import { exportImageJRoiSet, importImageJRoiSet } from "../api";
 import { saveRoiNow, scheduleRoiSave, subscribeRoiSave } from "../viewer/roiSaveStore";
 import { RoiMetaEditDialog } from "./RoiMetaEditDialog";
 import { RoiStatsDialog } from "./RoiStatsDialog";
@@ -87,6 +86,8 @@ export function RoiManagerPanel({
   activePatientKey,
   isDemo,
   mode,
+  onRevealRoi,
+  onDuplicateRoi,
   onClose,
 }: {
   activePatientKey: string;
@@ -94,6 +95,10 @@ export function RoiManagerPanel({
   isDemo: boolean;
   /** `AppStatus.mode`（"standalone"/"web"）。SEG 再書き出し時の旧シリーズ自動削除の可否判定に使う。 */
   mode?: string;
+  /** 行を選んだとき: その ROI をハイライトし、乗っているスライスへ表示を移す。 */
+  onRevealRoi?: (roiUid: string) => void;
+  /** ROI を複製する（貼り付け先は現在表示中のスライス）。 */
+  onDuplicateRoi?: (roiUid: string) => void;
   onClose: () => void;
 }) {
   const { t } = useI18n();
@@ -107,6 +112,8 @@ export function RoiManagerPanel({
   // このパネルは頻繁に再レンダされる。
   const statsTargets = useMemo(() => rois.map((r) => ({ uid: r.uid, tool: r.tool })), [rois]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  /** 一覧で選んでいる ROI（ハイライト＋スライス移動の対象）。マスクの選択チェックとは別物。 */
+  const [focusedRoi, setFocusedRoi] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // SEG⬆ インポートの進捗率（0〜1）。null は非実行中（SEG⬆ ボタンの円形プログレス表示に使う）。
   const [segImportProgress, setSegImportProgress] = useState<number | null>(null);
@@ -353,45 +360,6 @@ export function RoiManagerPanel({
     } finally {
       setBusy(false);
       refresh();
-    }
-  };
-  /**
-   * ROI を匿名化の焼き込みマスクとして登録する。
-   *
-   * 🔴 幾何は `anonMaskExport` が `roiPointsPx` → `buildRoiMesh`（本体の正本）を通して起こす。
-   * ImageJ の交換型は使わない —— 楕円・矩形を軸平行 bbox に潰すため、回転した楕円で
-   * 塗り足りなくなる（焼き込み文字が残るのに出力を見ても気づけない）。
-   *
-   * ⚠ マスクは backend のプロセス内メモリにしか無く、再起動で消える。
-   * 匿名化ダイアログ側の一覧で「消えたこと」が見えるようにしてある。
-   */
-  const runUseForBurnIn = async (uid: string) => {
-    if (busy) return;
-    const seriesUid = seriesUidOfRoi(uid);
-    if (!seriesUid) { window.alert(t("roiMgr.burnIn.noSeries")); return; }
-    const { polygons, skipped } = annotationsToMaskPolygons([uid]);
-    if (polygons.length === 0) {
-      // 線・点・角度は面積を持たないので焼き込みには使えない。理由を出して黙って落とさない。
-      window.alert(skipped.some((s) => s.reason === "notClosedArea")
-        ? t("roiMgr.burnIn.notClosed")
-        : t("roiMgr.opFailed"));
-      return;
-    }
-    setBusy(true);
-    try {
-      // 同一シリーズの既存マスクに足す（登録は seriesUid 単位で上書きになるため）。
-      const existing = (await fetchAnonMasks([seriesUid]))[0];
-      await registerAnonMask({
-        seriesUid,
-        frames: existing?.frames ?? [],
-        rects: existing?.rects ?? [],
-        polygons: [...(existing?.polygons ?? []), ...polygons],
-      });
-      window.alert(t("roiMgr.burnIn.registered"));
-    } catch {
-      window.alert(t("roiMgr.opFailed"));
-    } finally {
-      setBusy(false);
     }
   };
   // ベクタ ROI（エリア型）をラスタ化して新規 Mask に変換（→ 以後 Mask 演算の対象に）。
@@ -664,24 +632,46 @@ export function RoiManagerPanel({
       </div>
       {rois.length === 0 && <div style={empty}>{t("roiMgr.empty")}</div>}
       {rois.map((r) => (
-        <div key={r.uid} style={row}>
-          <button onClick={() => toggleRoi(r.uid, !r.visible)} style={eyeBtn} title={t("roiMgr.visible")}>{r.visible ? "👁" : "🚫"}</button>
+        // 行の**余白**を押したら「この ROI を見せる」。
+        //
+        // 🔴 **行内のボタンは `stopPropagation()` すること。** しないと子の onClick の後に
+        //    親のこれが走り、**ボタンの結果を上書きする**。実機で踏んだ: ⧉（複製）を押すと
+        //    複製先スライスへ移った直後に、行の reveal が**元 ROI のスライスへ引き戻していた**
+        //    （複製はできているのに「同じ場所に戻った」ようにしか見えない）。
+        <div
+          key={r.uid}
+          style={focusedRoi === r.uid ? { ...row, ...focusedRowBox } : row}
+          onClick={() => { setFocusedRoi(r.uid); onRevealRoi?.(r.uid); }}
+          data-testid="roi-mgr-row"
+          data-roi-uid={r.uid}
+        >
+          <button onClick={(e) => { e.stopPropagation(); toggleRoi(r.uid, !r.visible); }} style={eyeBtn} title={t("roiMgr.visible")}>{r.visible ? "👁" : "🚫"}</button>
           <input
             type="text" style={name} title={r.tool}
             defaultValue={getRoiMaskMeta(r.uid)?.label ?? r.tool}
             onChange={(e) => setRoiMaskMeta(r.uid, { label: e.target.value })}
           />
-          <input type="color" defaultValue="#ffff00" onChange={(e) => setRoiStyle(r.uid, { color: hexToRgb(e.target.value) })} title={t("roiMgr.color")} style={colorInput} />
-          <input type="number" min={1} max={10} defaultValue={1} onChange={(e) => setRoiStyle(r.uid, { lineWidth: String(e.target.value) })} title={t("roiMgr.lineWidth")} style={numInput} />
-          <input type="checkbox" onChange={(e) => setRoiStyle(r.uid, { fillOpacity: e.target.checked ? 0.3 : 0 })} title={t("roiMgr.fill")} />
-          {r.scope && <button onClick={() => toggleScopeZ(r.uid)} style={scopeChip} title={t("roiMgr.scopeToggle")}>{r.scope}</button>}
-          {isAreaRoi(r.tool) && <button onClick={() => runRoiToMask(r.uid)} disabled={busy} style={editBtn} title={t("roiMgr.toMask")}>▦</button>}
-          {!isDemo && isAreaRoi(r.tool) && <button onClick={() => runUseForBurnIn(r.uid)} disabled={busy} style={editBtn} title={t("roiMgr.burnIn")}>🖍</button>}
-          {/circle/i.test(r.tool) && <button onClick={() => runDefineSphere(r.uid)} disabled={busy} style={editBtn} title={t("roiMgr.defineSphere")}>◎</button>}
-          {/circle/i.test(r.tool) && <button onClick={() => runSphere(r.uid)} disabled={busy} style={editBtn} title={t("roiMgr.toSphere")}>⬤</button>}
-          <button onClick={() => setStatsOpen({ focus: r.uid })} style={editBtn} title={t("roiMgr.statsRoi")}>Σ</button>
-          <button onClick={() => setEditId(r.uid)} style={editBtn} title={t("roiMgr.editTitle")}>✎</button>
-          <button onClick={() => deleteRoi(r.uid)} style={delBtn} title={t("common.delete")}>🗑</button>
+          <input type="color" defaultValue="#ffff00" onClick={(e) => e.stopPropagation()} onChange={(e) => setRoiStyle(r.uid, { color: hexToRgb(e.target.value) })} title={t("roiMgr.color")} style={colorInput} />
+          <input type="number" min={1} max={10} defaultValue={1} onClick={(e) => e.stopPropagation()} onChange={(e) => setRoiStyle(r.uid, { lineWidth: String(e.target.value) })} title={t("roiMgr.lineWidth")} style={numInput} />
+          <input type="checkbox" onClick={(e) => e.stopPropagation()} onChange={(e) => setRoiStyle(r.uid, { fillOpacity: e.target.checked ? 0.3 : 0 })} title={t("roiMgr.fill")} />
+          {r.scope && <button onClick={(e) => { e.stopPropagation(); toggleScopeZ(r.uid); }} style={scopeChip} title={t("roiMgr.scopeToggle")}>{r.scope}</button>}
+          {isAreaRoi(r.tool) && <button onClick={(e) => { e.stopPropagation(); runRoiToMask(r.uid); }} disabled={busy} style={editBtn} title={t("roiMgr.toMask")}>▦</button>}
+          {onDuplicateRoi && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setFocusedRoi(r.uid); onDuplicateRoi(r.uid); }}
+              disabled={busy}
+              style={editBtn}
+              title={t("roiMgr.duplicate")}
+              data-testid="roi-mgr-duplicate"
+            >
+              ⧉
+            </button>
+          )}
+          {/circle/i.test(r.tool) && <button onClick={(e) => { e.stopPropagation(); runDefineSphere(r.uid); }} disabled={busy} style={editBtn} title={t("roiMgr.defineSphere")}>◎</button>}
+          {/circle/i.test(r.tool) && <button onClick={(e) => { e.stopPropagation(); runSphere(r.uid); }} disabled={busy} style={editBtn} title={t("roiMgr.toSphere")}>⬤</button>}
+          <button onClick={(e) => { e.stopPropagation(); setStatsOpen({ focus: r.uid }); }} style={editBtn} title={t("roiMgr.statsRoi")}>Σ</button>
+          <button onClick={(e) => { e.stopPropagation(); setEditId(r.uid); }} style={editBtn} title={t("roiMgr.editTitle")}>✎</button>
+          <button onClick={(e) => { e.stopPropagation(); deleteRoi(r.uid); }} style={delBtn} title={t("common.delete")}>🗑</button>
         </div>
       ))}
 
@@ -828,6 +818,8 @@ const empty: React.CSSProperties = { padding: "2px 10px", color: "#9aa6b2" };
 const note: React.CSSProperties = { marginTop: "auto", padding: 8, color: "#9aa6b2", fontSize: 11, borderTop: "1px solid #eef1f4" };
 // アクティブ編集対象（D2）のハイライトと segment チップ。
 const activeMaskBox: React.CSSProperties = { background: "#eef7ff", borderLeft: "3px solid #2b8aef" };
+// 一覧で選んでいる ROI の行。マスクのアクティブ表示と同じ見た目に揃える（別の意味に見せない）。
+const focusedRowBox: React.CSSProperties = { background: "#eef7ff", borderLeft: "3px solid #2b8aef" };
 const segLine: React.CSSProperties = { display: "flex", alignItems: "center", gap: 4, padding: "0 10px 4px 28px", fontSize: 11 };
 const segChip: React.CSSProperties = { minWidth: 20, border: "1px solid #cdd5de", borderRadius: 4, background: "#fff", cursor: "pointer", fontSize: 11, padding: "1px 6px" };
 // アクティブ枠は border shorthand に統一（borderColor 非shorthand との混在で React 警告が出るため）。

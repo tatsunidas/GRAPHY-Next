@@ -64,6 +64,35 @@ export function maskPolygonFrom(
   refImageId: string,
 ): { polygon: AnonMaskPolygon } | { reason: MaskSkipReason } {
   if (!refImageId) return { reason: "noReference" };
+  // 適用先は「この ROI が描かれた 1 枚だけ」が既定（旧 GRAPHY の "Current Slice Only" 相当）。
+  // 🔴 index ではなく SOP Instance UID で指定する —— index は並び順が変われば別スライスを塗る。
+  const sop = sopFromImageId(refImageId) ?? sopUidFromImageId(refImageId);
+  // XA の 1 ラン数十〜数百フレームは全部同じ SOP なので、フレーム番号も要る。
+  const frame = frameOfImageId(refImageId);
+  return maskPolygonFromResolved(tool, pointsPx, closed, sop, frame);
+}
+
+/**
+ * 適用先（SOP / フレーム）を**解決済みで**受け取る版。
+ *
+ * <p>imageId から SOP を起こせない場所——具体的には**匿名化ダイアログ（MainScreen ウィンドウ）**
+ * ——のための入口。あちらは 2D ビューアと別レンダラで、Cornerstone に画像を読み込んでいないため
+ * imageId が存在しない。保存済み ROI（`roiPersistence`）は SOP とフレームを直接持っている。
+ *
+ * <p>🔴 **判定と多角形化の規則をこちらに寄せてある**（`maskPolygonFrom` は薄いラッパ）。
+ * 「楕円を bbox に潰さない」「頂点はサブピクセルのまま」「面積を持つ閉 ROI だけ」という
+ * 決定が、2 つの経路で食い違わないようにするため。
+ *
+ * @param sop   適用先の SOP Instance UID。null なら**そのシリーズの全インスタンス**が対象になる
+ * @param frame multi-frame のフレーム index（0 origin）。null なら全フレーム
+ */
+export function maskPolygonFromResolved(
+  tool: string,
+  pointsPx: ReadonlyArray<PointPx>,
+  closed: boolean | undefined,
+  sop: string | null,
+  frame: number | null,
+): { polygon: AnonMaskPolygon } | { reason: MaskSkipReason } {
   if (!pointsPx.length) return { reason: "noVertices" };
   if (pickSampleKind((tool ?? "").trim().toLowerCase(), closed) !== "area") {
     return { reason: "notClosedArea" };
@@ -72,12 +101,6 @@ export function maskPolygonFrom(
   if (!mesh || !mesh.closed || mesh.pointsPx.length < 3) {
     return { reason: "notClosedArea" };
   }
-
-  // 適用先は「この ROI が描かれた 1 枚だけ」が既定（旧 GRAPHY の "Current Slice Only" 相当）。
-  // 🔴 index ではなく SOP Instance UID で指定する —— index は並び順が変われば別スライスを塗る。
-  const sop = sopFromImageId(refImageId) ?? sopUidFromImageId(refImageId);
-  // XA の 1 ラン数十〜数百フレームは全部同じ SOP なので、フレーム番号も要る。
-  const frame = frameOfImageId(refImageId);
 
   return {
     polygon: {

@@ -66,6 +66,15 @@ export interface RoiGeometryStats {
   centroidPx?: [number, number];
   /** [minX, minY, maxX, maxY]（画素座標）。 */
   bboxPx?: [number, number, number, number];
+  /**
+   * 点型（プローブ）で**実際に値を読んだ画素**の整数インデックス [col, row]。
+   *
+   * <p>🔴 `centroidPx` を丸めて代用しないこと。読み出しは {@link nearestIndex} が
+   * 画像の外を端へ丸める（クランプする）ので、画像外に置いたプローブでは
+   * 「丸めた重心」と「実際に読んだ画素」がずれる。表示座標とその画素値が食い違うと、
+   * 他のツールと突き合わせた人が原因の分からない差を追うことになる。
+   */
+  samplePx?: [number, number];
   /** **統計に使った画素（サンプル）の数**。面積とは別物（上記「面積はメッシュで統一する」）。 */
   sampleCount: number;
   /** 面内の画素間隔が取れたか。false なら mm 系は全部 `undefined`。 */
@@ -607,6 +616,8 @@ export function computeRoiStatsFrom(input: RoiStatsInput): RoiStatsResult {
     if (pr && input.withProfile) profile = pr;
   } else {
     const p = mesh.pointsPx[0];
+    const idx = nearestIndex(p[0], p[1], slice.width, slice.height);
+    if (idx) geometry.samplePx = idx;
     const v = nearestValue(p[0], p[1], slice.values, slice.width, slice.height);
     samples = v === null ? new Float32Array(0) : Float32Array.of(v);
   }
@@ -649,11 +660,29 @@ function nearestValue(
   width: number,
   height: number,
 ): number | null {
+  const idx = nearestIndex(x, y, width, height);
+  if (!idx) return null;
+  const v = values[idx[1] * width + idx[0]];
+  return Number.isFinite(v) ? v : null;
+}
+
+/**
+ * 画素中心規約での最近傍画素インデックス [col, row]。画像の外は端へ丸める。
+ *
+ * <p>{@link nearestValue} が読む画素そのもの。**表示用の座標もここを通す**
+ * （丸め規則を 2 か所に書くと、表示した座標の画素値と表示した値が食い違う）。
+ */
+export function nearestIndex(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): [number, number] | null {
+  if (!(width > 0) || !(height > 0)) return null;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
   const ix = Math.min(width - 1, Math.max(0, Math.round(x - 0.5)));
   const iy = Math.min(height - 1, Math.max(0, Math.round(y - 0.5)));
-  if (!(width > 0) || !(height > 0)) return null;
-  const v = values[iy * width + ix];
-  return Number.isFinite(v) ? v : null;
+  return [ix, iy];
 }
 
 /** 双一次補間。画素中心を (i+0.5, j+0.5) とみなし、外周はクランプする。 */

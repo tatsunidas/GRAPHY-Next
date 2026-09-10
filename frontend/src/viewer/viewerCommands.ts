@@ -664,6 +664,20 @@ export interface ViewerCommands {
   setRoiMeta(roiUid: string, pluginId: string, patch: Record<string, string>): boolean;
   /** 計測（ROI）注釈を全消去。 */
   clearAnnotations(): void;
+  /**
+   * ROI をアプリ内クリップボードへ取る。`roiUid` 省略時は**選択中の先頭 1 件**。取れたら true。
+   *
+   * <p>形を測る道具なので「同じ形をもう 1 つ」が要る（対側比較・経時追跡）。
+   * 描き直すと形が変わり、形が変われば値も変わる。
+   */
+  copyRoi(roiUid?: string): boolean;
+  /**
+   * クリップボードの ROI を**現在表示中のスライス**へ、面内の同じ位置に貼る。
+   * 作った annotationUID（失敗は null）。ThickSlab 中は貼れない（新規作成と同じ理由）。
+   */
+  pasteRoi(): string | null;
+  /** ROI をその場で複製する（クリップボードの中身は変えない）。 */
+  duplicateRoi(roiUid: string): string | null;
   undo(): void;
   redo(): void;
 }

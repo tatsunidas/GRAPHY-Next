@@ -174,7 +174,7 @@ export function collectRoisForPatient(patientKey: string, loaded: SavedRoi[] = [
 }
 
 /** 復元先のビューポート（ダックタイピング）。 */
-interface RestoreViewport {
+export interface RestoreViewport {
   element?: HTMLElement;
   getCamera?: () => { viewPlaneNormal?: number[]; viewUp?: number[]; position?: number[]; focalPoint?: number[] };
   /** Cornerstone の `ViewReference`。中身は本体の型に追従させたくないので unknown で受ける。 */
@@ -219,50 +219,98 @@ export function restoreRoisIntoStack(
 
   let restored = 0;
   for (const { roi, imageId } of targets) {
-    const z = imageIds.indexOf(imageId);
-    let viewRef: Record<string, unknown> = {};
-    try {
-      viewRef = (viewport.getViewReference?.({ sliceIndex: z }) as Record<string, unknown>) ?? {};
-    } catch {
-      viewRef = {};
-    }
-    const annotation = {
-      // **保存されていた UID をそのまま使う**（プラグインが鍵に使えるようにするため）。
-      annotationUID: roi.roiUid,
-      highlighted: false,
-      invalidated: true,
-      isLocked: roi.isLocked ?? false,
-      isVisible: roi.isVisible ?? true,
-      metadata: {
-        ...viewRef,
-        toolName: roi.tool,
-        referencedImageId: imageId,
-        viewPlaneNormal: camera?.viewPlaneNormal,
-        viewUp: camera?.viewUp,
-        cameraPosition: camera?.position,
-        cameraFocalPoint: camera?.focalPoint,
-      },
-      data: buildAnnotationData(roi),
-    };
-    // スプライン系は補間インスタンスが無いと描画・当たり判定で落ちる（保存形は type しか持たない）。
-    ensureSplineInstance(annotation);
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (csAnnotation.state as any).addAnnotation(annotation, viewport.element);
-    } catch (e) {
-      log.warn("roi restore failed", roi.roiUid, e);
-      continue;
-    }
-    setRoiMaskMeta(roi.roiUid, buildRestoredMeta(roi, patientKey, seriesLabel));
-    if (roi.isVisible === false) {
-      try {
-        csAnnotation.visibility.setAnnotationVisibility(roi.roiUid, false);
-      } catch {
-        /* 表示状態は復元できなくても致命的ではない */
-      }
-    }
-    restored++;
+    const ok = addSavedRoiToViewport(roi, imageId, viewport, {
+      sliceIndex: imageIds.indexOf(imageId),
+      camera,
+      patientKey,
+      seriesLabel,
+    });
+    if (ok) restored++;
   }
   // 再描画は呼び出し側（Viewer2D）が行う。ここは annotation state を触るだけに留める。
   return restored;
+}
+
+/** {@link addSavedRoiToViewport} の付帯情報。 */
+interface AddSavedRoiOptions {
+  /** 表示スタック内の index（`getViewReference` に渡す）。不明なら省略。 */
+  sliceIndex?: number;
+  /** 先に取得済みのカメラ。省略すると viewport から取る。 */
+  camera?: { viewPlaneNormal?: number[]; viewUp?: number[]; position?: number[]; focalPoint?: number[] };
+  patientKey: string;
+  seriesLabel?: string;
+}
+
+/**
+ * 保存形の ROI 1 件を Cornerstone の annotation state へ入れる。成功したら true。
+ *
+ * <p>復元（{@link restoreRoisIntoStack}）と**複製（`roiClipboard`）の共通の入口**。
+ *
+ * <p>🔴 **ここを複製側で書き直さないこと。** `ensureSplineInstance()` を `addAnnotation` より
+ * **前**に呼ばないと、スプライン系 ROI は描画ループの内側で例外を投げ、
+ * **以後その viewport の ROI が 1 本も描かれなくなる**（保存形は `splineType` しか持たず、
+ * 補間インスタンスは持たないため）。順序を守る責任をこの 1 関数に閉じる。
+ *
+ * <p>`roi.roiUid` を**そのまま** annotationUID に使う。複製側は呼ぶ前に新しい UID を振ること
+ * （UID はプラグインの縦断追跡の鍵なので、複製が元と同じ鍵を持つと追跡が壊れる）。
+ */
+export function addSavedRoiToViewport(
+  roi: SavedRoi,
+  imageId: string,
+  viewport: RestoreViewport,
+  opts: AddSavedRoiOptions,
+): boolean {
+  if (!viewport?.element) return false;
+  let camera = opts.camera;
+  if (!camera) {
+    try {
+      camera = viewport.getCamera?.();
+    } catch {
+      camera = undefined;
+    }
+  }
+  let viewRef: Record<string, unknown> = {};
+  if (opts.sliceIndex !== undefined && opts.sliceIndex >= 0) {
+    try {
+      viewRef = (viewport.getViewReference?.({ sliceIndex: opts.sliceIndex }) as Record<string, unknown>) ?? {};
+    } catch {
+      viewRef = {};
+    }
+  }
+  const annotation = {
+    // **保存されていた UID をそのまま使う**（プラグインが鍵に使えるようにするため）。
+    annotationUID: roi.roiUid,
+    highlighted: false,
+    invalidated: true,
+    isLocked: roi.isLocked ?? false,
+    isVisible: roi.isVisible ?? true,
+    metadata: {
+      ...viewRef,
+      toolName: roi.tool,
+      referencedImageId: imageId,
+      viewPlaneNormal: camera?.viewPlaneNormal,
+      viewUp: camera?.viewUp,
+      cameraPosition: camera?.position,
+      cameraFocalPoint: camera?.focalPoint,
+    },
+    data: buildAnnotationData(roi),
+  };
+  // スプライン系は補間インスタンスが無いと描画・当たり判定で落ちる（保存形は type しか持たない）。
+  ensureSplineInstance(annotation);
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (csAnnotation.state as any).addAnnotation(annotation, viewport.element);
+  } catch (e) {
+    log.warn("roi restore failed", roi.roiUid, e);
+    return false;
+  }
+  setRoiMaskMeta(roi.roiUid, buildRestoredMeta(roi, opts.patientKey, opts.seriesLabel));
+  if (roi.isVisible === false) {
+    try {
+      csAnnotation.visibility.setAnnotationVisibility(roi.roiUid, false);
+    } catch {
+      /* 表示状態は復元できなくても致命的ではない */
+    }
+  }
+  return true;
 }

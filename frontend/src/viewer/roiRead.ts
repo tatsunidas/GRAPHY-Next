@@ -196,6 +196,46 @@ export function distanceMm(
 }
 
 /**
+ * IPP / IOP / 画素間隔から world(患者 LPS mm) → 画像画素座標。純関数。
+ *
+ * <p>Cornerstone の `worldToImageCoords` と同じものを、**Cornerstone が無い場所**でも
+ * 出せるようにするための実装。匿名化ダイアログ（MainScreen ウィンドウ）は 2D ビューアと
+ * 別レンダラで、その画像を読み込んでいないため上流の変換器を呼べない。
+ *
+ * <p>🔴 **`iop` の前 3 要素は「列 index が増える向き」**なので `colSpacingMm`（列間隔）で割り、
+ * 後ろ 3 要素が「行 index が増える向き」なので `rowSpacingMm` で割る。ここを入れ替えると
+ * 転置した位置を指す——焼き込みなら**塗る場所が変わるのに出力を見ても気づけない**。
+ *
+ * <p>方向余弦は正規直交なので逆行列は転置＝内積で足りる（一般の逆行列を組まない）。
+ *
+ * @returns 変換できなければ null（幾何が無いシリーズ。呼び出し側が
+ *          {@link roiPointsPx} のフォールバックへ落ちる）
+ */
+export function worldToPixelOnPlane(
+  world: ArrayLike<number>,
+  ipp: ArrayLike<number> | null | undefined,
+  iop: ArrayLike<number> | null | undefined,
+  rowSpacingMm: number | null | undefined,
+  colSpacingMm: number | null | undefined,
+): PointPx | null {
+  if (!ipp || ipp.length < 3 || !iop || iop.length < 6) return null;
+  if (!world || world.length < 3) return null;
+  const col = colSpacingMm;
+  const row = rowSpacingMm;
+  if (!Number.isFinite(col) || !((col as number) > 0)) return null;
+  if (!Number.isFinite(row) || !((row as number) > 0)) return null;
+  const dx = world[0] - ipp[0];
+  const dy = world[1] - ipp[1];
+  const dz = world[2] - ipp[2];
+  if (!Number.isFinite(dx) || !Number.isFinite(dy) || !Number.isFinite(dz)) return null;
+  // iop[0..2] = 列 index が増える向き（= x）、iop[3..5] = 行 index が増える向き（= y）。
+  const x = (dx * iop[0] + dy * iop[1] + dz * iop[2]) / (col as number);
+  const y = (dx * iop[3] + dy * iop[4] + dz * iop[5]) / (row as number);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return [x, y];
+}
+
+/**
  * ROI の頂点（world 座標）を画素座標へ落とす。純関数（変換器を注入する）。
  *
  * <p>🚨 **幾何（IPP/IOP）が無いシリーズがある**。XA がまさにそれで、そこでは Cornerstone の
