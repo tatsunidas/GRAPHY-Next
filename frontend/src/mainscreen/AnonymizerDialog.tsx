@@ -12,6 +12,8 @@ import {
   fetchSeries,
   fetchStudies,
   fetchTagDictionary,
+  registerAnonMask,
+  type AnonMaskPolygon,
   type AnonOption,
   type AnonProfile,
   type AnonRequest,
@@ -26,6 +28,25 @@ import { desktop } from "../desktopBridge";
 import { useI18n } from "../i18n/i18n";
 import { dictMap, ggggeeee, normHex } from "./tagPathUtil";
 import { CLEAN_OPTS, DEFAULT_ANON_OPTIONS, RETAIN_OPTS, sanitizeAnonOptions, toggleAnonOption } from "./anonDefaults";
+import { loadAnonRoiCandidates, type AnonRoiCandidate, type AnonRoiSkip } from "./anonRoiCandidates";
+
+/**
+ * その ROI の多角形が**いま登録されているか**。チェックの初期状態をここから起こす。
+ *
+ * <p>頂点はサブピクセルのまま往復する（丸めない）ので、厳密一致でよい。丸め幅を持たせると
+ * 「別の場所を塗るマスク」を同一と見なしかねない。
+ */
+function isRegistered(c: AnonRoiCandidate, registered: readonly AnonSeriesMask[]): boolean {
+  const m = registered.find((x) => x.seriesUid === c.seriesUid);
+  return (m?.polygons ?? []).some(
+    (p) =>
+      p.xs.length === c.polygon.xs.length &&
+      p.xs.every((v, i) => v === c.polygon.xs[i]) &&
+      p.ys.every((v, i) => v === c.polygon.ys[i]) &&
+      String(p.sopInstanceUids) === String(c.polygon.sopInstanceUids) &&
+      String(p.frames) === String(c.polygon.frames),
+  );
+}
 
 /**
  * Anonymizer（PS3.15）。検索リスト全体を匿名化（属性＋任意で Pixel 焼き込み）して ZIP/フォルダ出力。
@@ -69,6 +90,17 @@ export function AnonymizerDialog({
    */
   const [masks, setMasks] = useState<AnonSeriesMask[]>([]);
   const [seriesList, setSeriesList] = useState<Series[]>([]);
+  /**
+   * 焼き込みに使える保存済み ROI（2D ビューアで描いた面 ROI）。
+   *
+   * <p>以前は 2D ビューアの ROI マネージャから登録していたが、匿名化をする画面はここなので
+   * **この画面で選べるようにした**。ROI は患者単位で自動保存されているので、
+   * ウィンドウを跨がずに読める（`anonRoiCandidates.ts`）。
+   */
+  const [roiCands, setRoiCands] = useState<AnonRoiCandidate[]>([]);
+  const [roiSkips, setRoiSkips] = useState<AnonRoiSkip[]>([]);
+  const [roiChecked, setRoiChecked] = useState<Set<string>>(new Set());
+  const [roiLoading, setRoiLoading] = useState(false);
 
   const [tagInput, setTagInput] = useState("");
   const [valInput, setValInput] = useState("");
@@ -86,17 +118,22 @@ export function AnonymizerDialog({
   // 選択中スタディのシリーズを引き、そのシリーズに付いているマスクを読む。
   // 🔴 マスクはシリーズ単位なので、スタディの外に登録されたマスクはここには出ない
   //    （出しても対象外なので、黙って効くことはない）。
-  const reloadMasks = useCallback(async () => {
+  const reloadMasks = useCallback(async (): Promise<AnonSeriesMask[]> => {
     const studyUid = study?.studyInstanceUid;
-    if (!studyUid) { setSeriesList([]); setMasks([]); return; }
+    if (!studyUid) { setSeriesList([]); setMasks([]); return []; }
     try {
       const ss = await fetchSeries(studyUid);
       setSeriesList(ss);
       const uids = ss.map((x) => x.seriesInstanceUid);
-      setMasks(uids.length ? await fetchAnonMasks(uids) : []);
+      const found = uids.length ? await fetchAnonMasks(uids) : [];
+      setMasks(found);
+      // 登録内容は ROI 一覧のチェック状態の出どころでもあるので、呼び出し側へ返す
+      // （state を読み直すと 1 レンダ遅れて「登録したのにチェックが付かない」ように見える）。
+      return found;
     } catch {
       setSeriesList([]);
       setMasks([]);
+      return [];
     }
   }, [study?.studyInstanceUid]);
 
@@ -104,6 +141,48 @@ export function AnonymizerDialog({
     if (!open) return;
     void reloadMasks();
   }, [open, reloadMasks]);
+
+  /**
+   * 保存済み ROI を読み直し、**いま登録されているマスクと一致する ROI にチェックを入れる**。
+   *
+   * <p>チェックの初期状態を登録内容から起こすので、ダイアログを開き直しても
+   * 「何が焼き込まれるのか」が画面と一致する。backend を再起動してマスクが消えていれば
+   * チェックも外れて見える＝**消えたことに気付ける**。
+   */
+  const reloadRoiCandidates = useCallback(async (registered: AnonSeriesMask[]) => {
+    if (!study || isWeb) { setRoiCands([]); setRoiSkips([]); setRoiChecked(new Set()); return; }
+    setRoiLoading(true);
+    try {
+      const ss = seriesList.length ? seriesList : await fetchSeries(study.studyInstanceUid);
+      const { candidates, skipped } = await loadAnonRoiCandidates(study, ss);
+      setRoiCands(candidates);
+      setRoiSkips(skipped);
+      const already = new Set(
+        candidates.filter((c) => isRegistered(c, registered)).map((c) => c.roiUid),
+      );
+      setRoiChecked(already);
+    } catch {
+      // ROI が 1 件も保存されていない患者では 200 で空が返るので、ここに来るのは通信不良。
+      setRoiCands([]);
+      setRoiSkips([]);
+      setRoiChecked(new Set());
+    } finally {
+      setRoiLoading(false);
+    }
+  }, [study, isWeb, seriesList]);
+
+  // 焼き込み節が出るときだけ ROI を読む（Clean Pixel Data を使わない人には要らない問い合わせ）。
+  const cleanPixel = options.has("CleanPixelData");
+  useEffect(() => {
+    if (!open || !cleanPixel) return;
+    void (async () => {
+      const registered = await reloadMasks();
+      await reloadRoiCandidates(registered);
+    })();
+    // reloadRoiCandidates は seriesList に依存するが、ここで依存に入れると
+    // reloadMasks が seriesList を更新するたびに読み直しが走って往復し続ける。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, cleanPixel, study?.studyInstanceUid]);
 
   if (!open) return null;
 
@@ -174,6 +253,38 @@ export function AnonymizerDialog({
     if (!se) return seriesUid;
     const num = se.seriesNumber != null ? `${se.seriesNumber}: ` : "";
     return `${num}${se.seriesDescription ?? se.modality ?? seriesUid}`;
+  };
+
+
+  /**
+   * チェックした ROI を**シリーズ単位で置き換え**登録する。
+   *
+   * <p>🔴 追記ではなく置き換え。以前の「押すたびに追記」では同じ ROI を二度押すと多角形が
+   * 重複し、**個別に外す手段が無かった**（シリーズ丸ごと消すしかなかった）。
+   * チェックを外して押せば減る、が守れるのは置き換えだけ。
+   *
+   * <p>候補が 1 件も無いシリーズには触らない（この画面の外で登録されたマスクを巻き込まない）。
+   */
+  const applyRoiMasks = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const bySeries = new Map<string, AnonMaskPolygon[]>();
+      for (const c of roiCands) {
+        if (!bySeries.has(c.seriesUid)) bySeries.set(c.seriesUid, []);
+        if (roiChecked.has(c.roiUid)) bySeries.get(c.seriesUid)!.push(c.polygon);
+      }
+      for (const [seriesUid, polygons] of bySeries) {
+        await registerAnonMask({ seriesUid, frames: [], rects: [], polygons });
+      }
+      const fresh = await reloadMasks();
+      await reloadRoiCandidates(fresh);
+      setInfo(t("anon.masks.applied", { count: roiChecked.size }));
+    } catch (e) {
+      showFailure(e);
+    } finally {
+      setBusy(false);
+    }
   };
 
   /** マスクを消す（seriesUid 省略で全消去）。 */
@@ -359,6 +470,57 @@ export function AnonymizerDialog({
           </label>
           {options.has("CleanPixelData") && (
             <div style={{ fontSize: 11, color: "#8a98a6" }}>{t("anon.burnIn.note")}</div>
+          )}
+          {options.has("CleanPixelData") && !isWeb && (
+            <div style={maskBox} data-testid="anon-mask-roi-list">
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <b style={{ fontSize: 12 }}>{t("anon.masks.fromRoi")}</b>
+                <span>
+                  <button
+                    style={{ ...btn, padding: "2px 8px" }}
+                    disabled={busy || roiLoading}
+                    onClick={() => void (async () => { const r = await reloadMasks(); await reloadRoiCandidates(r); })()}
+                  >
+                    {t("anon.masks.reload")}
+                  </button>
+                  <button
+                    style={{ ...btn, padding: "2px 8px", marginLeft: 6 }}
+                    data-testid="anon-mask-apply"
+                    disabled={busy || roiLoading || roiCands.length === 0}
+                    onClick={() => void applyRoiMasks()}
+                  >
+                    {t("anon.masks.apply")}
+                  </button>
+                </span>
+              </div>
+              {roiLoading && <div style={{ fontSize: 11, color: "#8a98a6", marginTop: 4 }}>{t("common.loading")}</div>}
+              {!roiLoading && roiCands.length === 0 && (
+                <div style={{ fontSize: 11, color: "#8a98a6", marginTop: 4 }}>{t("anon.masks.roiEmpty")}</div>
+              )}
+              {roiCands.map((c) => (
+                <label key={c.roiUid} style={maskRow} data-testid="anon-mask-roi-row">
+                  <input
+                    type="checkbox"
+                    checked={roiChecked.has(c.roiUid)}
+                    disabled={busy}
+                    onChange={(e) => setRoiChecked((prev) => {
+                      const next = new Set(prev);
+                      if (e.target.checked) next.add(c.roiUid); else next.delete(c.roiUid);
+                      return next;
+                    })}
+                  />
+                  <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }} title={c.tool}>
+                    {c.label}
+                  </span>
+                  <span style={{ color: "#8a98a6" }}>{c.seriesLabel}</span>
+                </label>
+              ))}
+              {roiSkips.length > 0 && (
+                <div style={{ fontSize: 11, color: "#8a98a6", marginTop: 4 }}>
+                  {t("anon.masks.roiSkipped", { count: roiSkips.length })}
+                </div>
+              )}
+            </div>
           )}
           {options.has("CleanPixelData") && (
             <div style={maskBox}>

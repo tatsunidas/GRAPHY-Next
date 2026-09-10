@@ -202,6 +202,9 @@ DICOM PS3.15 Basic Application Confidentiality Profile の匿名化。GRAPHY
   | **登録** | ROI マネージャの行アクション「匿名化の焼き込みに使用」（**閉じた面 ROI にのみ表示**） |
   | **管理**（一覧・件数・個別/全削除） | 匿名化ダイアログの「焼き込みマスク」セクション |
 
+  > 🔁 **この分担は 2026-09-10 に変わった（下記「登録を匿名化ダイアログへ移した」）。**
+  > 上の表は当時の記録として残す。
+
   - 🔴 幾何は**本体の正本を通す**。`viewer/anonMaskExport.ts` が
     `roiRead.roiPointsPx()` → `roiStats.buildRoiMesh()` を呼ぶだけで、**新しい変換を書いていない**
     （「任意 ROI → 閉多角形」の実装は既に 3 つあり、4 つ目を作らない）。
@@ -421,3 +424,40 @@ unknown になるため。既定の検索条件は**「今日」**（`SearchPane
 - **更新(2026-07-02 監査)**: 3D/MPR/Slicer ビューアは**配線済**（`handleOpenViewer` が別ウィンドウ起動）。まだ未実装のツールのみ押下で「近日対応予定」バナーを表示（MainScreen `handleOpenTool`）。
 - これらは standalone（Electron）前提の機能が多い（ネイティブ I/O・媒体書込）。web モードでの可否は機能ごとに判断。
 - 多くは backend(dcm4che) と新規エンドポイント＋フロント UI（ダイアログ）で構成予定。
+
+### 焼き込みマスクの登録を匿名化ダイアログへ移した（2026-09-10）
+
+発端は利用者の指摘「**Use in anonymizer burn in は anonymizer 機能に統合・移動できないか**」。
+
+**何が問題だったか**
+
+1. 登録は **2D ビューアウィンドウ**、匿名化は **MainScreen ウィンドウ**。匿名化をする人は、
+   マスクを登録するためだけに別ウィンドウを開いて右パネルを出す必要があった。
+2. 🔴 **押すたびに追記**していた（`RoiManagerPanel.runUseForBurnIn` が `fetchAnonMasks` の結果へ
+   足して `registerAnonMask`）。同じ ROI を二度押すと多角形が重複し、
+   **個別に外す手段が無かった**（シリーズ丸ごと消すしかない）。
+3. 登録は一度きりのスナップショットで、ROI を編集しても追従しない。
+
+**どう解決したか** — 匿名化ダイアログが**保存済み ROI を読んで一覧し、チェックしたものを
+シリーズ単位で置き換え登録する**（`frontend/src/mainscreen/anonRoiCandidates.ts`）。
+ROI は `/api/rois?patientKey=` に患者単位で自動保存されている（`roiSaveStore`・デバウンス 1.5 秒）
+ので、ウィンドウを跨がずに読める。**backend の変更はゼロ。**
+
+| 決めたこと | 理由 |
+|---|---|
+| 🔴 **backend に ROI JSON を解釈させない** | `RoiDocument.java` が「backend は中身を解釈しない・スキーマの正本はフロント」と決めている。破ると tool を増やすたびに Java 側のスキーマ移行が要る |
+| **world → 画素は `roiRead.worldToPixelOnPlane()`（新規・純関数）** | MainScreen には Cornerstone が無く `worldToImageCoords` を呼べない。IPP/IOP/画素間隔は `fetchSeriesLayout()` が返す |
+| **`anonMaskExport.maskPolygonFromResolved()` に分割** | 「楕円を bbox に潰さない」「頂点はサブピクセルのまま」「面積を持つ閉 ROI だけ」を 2 つ目の実装で書き直さない。imageId 版は薄いラッパ |
+| **追記ではなく置き換え** | 「チェックを外して押せば減る」が守れるのは置き換えだけ。上記 2 が同時に解消する |
+| **候補が 1 件も無いシリーズには触らない** | この画面の外で登録されたマスクを巻き込まない |
+| **チェックの初期状態は登録内容から起こす**（`isRegistered`・頂点の厳密一致） | 開き直しても画面と実際に焼かれるものが一致する。backend 再起動でマスクが消えればチェックも外れる＝**消えたことに気付ける** |
+
+🔴 **`seriesUid` を持たない ROI は候補にしない／SOP がそのシリーズに無ければ候補にしない。**
+最初「スタディにシリーズが 1 本ならそれだろう」と当てにいく実装にしていたが、
+その場合 SOP が layout の `cells` に無いまま**幾何なしフォールバック（world / 画素間隔）**へ落ち、
+**もっともらしいが別の場所を塗る多角形**が黙って出来る。フォールバックを使ってよいのは
+「そのシリーズに本当に幾何が無い」（XA）ときだけ。回帰テストあり
+（`anonRoiCandidates.test.ts` の 2 件）。
+
+ROI マネージャの 🖍 と i18n `roiMgr.burnIn*` は撤去した。
+`anon.burnIn.note` の文言も新しい手順に差し替えてある。

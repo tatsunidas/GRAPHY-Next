@@ -19,7 +19,7 @@
  */
 import type { TFn } from "../i18n/i18n";
 import type { RoiStatsDetail } from "./roiStatsDisplay";
-import type { RoiStatsResult, RoiValueStats } from "./roiStats";
+import type { RoiGeometryStats, RoiStatsResult, RoiValueStats } from "./roiStats";
 
 /** 有効数字を保ちつつ短く。大きい値は桁を落とし、小さい値は潰さない。 */
 export function formatNumber(v: number, maxDigits = 2): string {
@@ -62,6 +62,19 @@ export function formatArea(r: RoiStatsResult): string | null {
   return null;
 }
 
+/**
+ * 点型（プローブ）が**実際に値を読んだ画素**の座標 `(col, row)`。出せなければ null。
+ *
+ * <p>🔴 `centroidPx` を丸めて作らない。読み出しは画像の外を端へクランプするので、
+ * 画像外のプローブでは「丸めた重心」と「読んだ画素」がずれる。統計エンジンが
+ * `samplePx` として渡してくる値をそのまま出す（丸め規則を 2 か所に持たない）。
+ */
+export function formatPixelCoord(g: RoiGeometryStats): string | null {
+  const p = g.samplePx;
+  if (!p || !Number.isFinite(p[0]) || !Number.isFinite(p[1])) return null;
+  return `(${p[0]}, ${p[1]})`;
+}
+
 /** 長さ（閉なら周囲長・開なら線長）の表示。出せなければ null。 */
 export function formatLength(r: RoiStatsResult): string | null {
   if (r.geometry.perimeterMm !== undefined) return `${formatNumber(r.geometry.perimeterMm)} mm`;
@@ -98,6 +111,13 @@ export function roiStatsTextLines(
     if (l) lines.push(`${t("roiStats.length")}: ${l}`);
   }
 
+  // プローブは「どの画素を読んだか」が分からないと他ツールと突き合わせられないので、
+  // 値の前に座標を出す（compact でも出す。プローブは元々 1〜2 行しか無い）。
+  if (g.kind === "point") {
+    const c = formatPixelCoord(g);
+    if (c) lines.push(`${t("roiStats.coord")}: ${c}`);
+  }
+
   if (v) {
     if (g.kind === "point") {
       lines.push(formatValue(v.mean, v.unit, t));
@@ -130,6 +150,10 @@ export function roiStatsSummary(r: RoiStatsResult | undefined, t: TFn): string {
   const parts: string[] = [];
   const size = r.geometry.kind === "area" ? formatArea(r) : formatLength(r);
   if (size) parts.push(size);
+  if (r.geometry.kind === "point") {
+    const c = formatPixelCoord(r.geometry);
+    if (c) parts.push(c);
+  }
   if (r.values) {
     parts.push(r.geometry.kind === "point" ? formatValue(r.values.mean, r.values.unit, t) : formatMeanSd(r.values, t));
   }

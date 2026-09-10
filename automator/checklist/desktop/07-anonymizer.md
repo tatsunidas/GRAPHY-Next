@@ -13,7 +13,7 @@
 |---|---|---|---|
 | 1 | PS3.15プロファイルでタグ匿名化（X/Z/D/K/C/U）・UID一貫置換ができる | 自動PASS | 2026-08-20 |
 | 2 | 新PatientID/Name設定、RetainSafePrivate等のオプションが機能する | 自動PASS | 2026-08-20 |
-| 3 | 矩形マスクによる画素焼き込み（BurnedInAnnotation=NO）ができる | 未着手 | |
+| 3 | 矩形マスクによる画素焼き込み（BurnedInAnnotation=NO）ができる | 未着手（登録の経路のみ実機確認済 2026-09-10） | |
 | 4 | 出力（ZIP/フォルダ）が正しく生成される（standalone専用、webは非対応バナー） | 自動PASS | 2026-08-20 |
 
 ## 小項目詳細
@@ -65,12 +65,15 @@ Result: PASS — RetainSafePrivate有効・新PatientID=ANON_ITEM02で匿名化�
 
 - 対応 fixture: (未定義)
 - requiresHuman: (未定義。実装時に判定方式を決める)
-- **保留（2026-07-17）**: `registerAnonMask()`（`frontend/src/api.ts`）は定義されているが、
-  「2D viewerで矩形ROIを描き『焼き込みに使用』で登録する」という説明文（`ja.ts` の
-  `anon.burnIn.note`）に対応する呼び出し元がフロントエンドのどこにも存在しない
-  （呼び出し箇所0件、`AnonymizerDialog.tsx`の焼き込みチェックボックスは既登録マスクの有無を
-  トグルするだけで、マスク自体を作る手段がUIにない）。automatorの制約ではなく機能自体が
-  未実装のため、UI実装が追加されるまで着手不可。
+- ~~**保留（2026-07-17）**: マスクを作る手段が UI に無く着手不可~~
+  → **解消済み**。2026-09-07 に ROI マネージャからの登録が入り、**2026-09-10 に登録の口が
+  匿名化ダイアログ側へ移った**（`fw/mainscreen-tools.md` の Anonymizer §）。
+- **登録の経路は `automator/src/spike/roiImprovementsCheck.ts` の [5] で実機確認済み**
+  （2026-09-10・19/0）——描いた面 ROI が一覧に出る／チェックして登録するとマスク件数が増える／
+  **チェックを外して押すと 0 件に戻る**（追記ではなく置き換え）。
+- **この項目に残っているのは「焼き込んだ出力画素が実際に 0 か」と `BurnedInAnnotation=NO` の確認**。
+  `anonZipCheck.ts:111` は `burnIn: false` を決め打ちしているので、そのままでは通らない。
+  🔴 **`burned 0` を成功と読まないこと**（item-01/02 の実行ログはどちらも `burned 0`）。
 
 <!-- AUTOMATOR:BEGIN 07-anonymizer.item-03 -->
 （未実装 — automator run で自動記録される手順ログがここに入る）

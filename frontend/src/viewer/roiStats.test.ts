@@ -498,6 +498,24 @@ describe("computeRoiStatsFrom", () => {
     expect(r.geometry.kind).toBe("point");
     expect(r.geometry.sampleCount).toBe(1);
     expect(r.values?.mean).toBeCloseTo(5, 9);
+    // 表示する座標は「実際に読んだ画素」。rampX は値 = 列なので、値 5 と列 5 が一致する。
+    expect(r.geometry.samplePx).toEqual([5, 5]);
+  });
+
+  it("画像の外に置いたプローブは端の画素を読み、座標もその端を指す", () => {
+    const r = computeRoiStatsFrom({
+      roiUid: "c-out",
+      tool: "Probe",
+      imageId: "wadouri:x",
+      pointsPx: [[-4, 99]],
+      slice: { values: rampX(32, 32), width: 32, height: 32 },
+      unit: "HU",
+      spacingX: 1,
+      spacingY: 1,
+    });
+    // 読んだ画素と表示座標がずれないこと（centroidPx を丸めると (-4, 99) になり食い違う）。
+    expect(r.geometry.samplePx).toEqual([0, 31]);
+    expect(r.values?.mean).toBeCloseTo(0, 9);
   });
 
   it("画素間隔が無ければ mm を出さず no-spacing を立てる（px は出る）", () => {

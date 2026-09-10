@@ -21,6 +21,7 @@ import { roiStatsCsvBlobText, roiStatsToCsv, type RoiStatsCsvRow } from "../view
 import {
   formatArea,
   formatLength,
+  formatPixelCoord,
   formatNumber,
   formatValue,
   valueUnitLabel,
@@ -187,6 +188,9 @@ function Detail({ stats }: { stats: RoiStatsResult }) {
 
   const geomParts: string[] = [];
   if (size) geomParts.push(`${t(g.kind === "area" ? "roiStats.area" : "roiStats.length")}: ${size}`);
+  // プローブは「どの画素を読んだか」＝座標が本体。ROI 脇の表示と同じ整形を通す。
+  const coord = g.kind === "point" ? formatPixelCoord(g) : null;
+  if (coord) geomParts.push(`${t("roiStats.coord")}: ${coord}`);
   if (g.kind === "area") {
     const per = formatLength(stats);
     if (per) geomParts.push(`${t("roiStats.perimeter")}: ${per}`);

@@ -3,7 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { RenderingEngine, Enums, EVENTS, metaData, utilities, type Types } from "@cornerstonejs/core";
+import { RenderingEngine, Enums, EVENTS, eventTarget, metaData, utilities, type Types } from "@cornerstonejs/core";
 import {
   ToolGroupManager,
   PanTool,
@@ -31,6 +31,9 @@ import { emitToast } from "./toast";
 import { ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID } from "./toolIds";
 import { setViewerContext, clearViewerContext, getViewerContext, type ViewerContext } from "./viewerContext";
 import { getRoiMaskMeta, setRoiMaskMeta, subscribeRoiMaskStore } from "./roiMaskStore";
+import { noteFocusedTile } from "./focusedTile";
+import { copyRoiToClipboard, duplicateRoi as duplicateRoiEntry, hasClipboardRoi, pasteRoiInto } from "./roiClipboard";
+import { emitRoiReveal } from "./roiReveal";
 import { reconcileGlobalAnnotations } from "./globalRoiSync";
 import { loadRoisCached, scheduleRoiSave } from "./roiSaveStore";
 import { restoreRoisIntoStack } from "./roiRestore";
@@ -97,7 +100,7 @@ import {
   type AngioPluginSrRequest,
   type LutData,
 } from "../api";
-import { sopUidFromImageId } from "./imageId";
+import { frameOfImageId, sopFromImageId, sopUidFromImageId } from "./imageId";
 import { buildPluginAnalysisRecord, type PluginAnalysisInput } from "../report/analysisResults";
 import { publishAnalysisResult } from "../report/analysisResultStore";
 import { LoadingSpinner } from "./LoadingSpinner";
@@ -510,6 +513,8 @@ export function Viewer2D({
   indexRef.current = imageIndex;
   const roiContextRef = useRef(roiContext);
   roiContextRef.current = roiContext;
+  const commandKeyRef = useRef(commandKey);
+  commandKeyRef.current = commandKey;
   // 同じスタック(imageIds)なら init を再実行しない。C/T 切替で配列が変わると再 setStack。
   // refreshKey は「imageId は同じだがメタデータが変わった」ときの明示的な再初期化トリガ
   // （空間校正の確定・解除。imageId を変えると画素キャッシュが捨てられ再デコードになるため、
@@ -905,17 +910,37 @@ export function Viewer2D({
       setFgSample(null);
     };
     // フォーカス中タイルを記録（ROI マネージャの「＋新規マスク」対象）。
-    const onFocusPointerDown = () => noteSegViewport(viewportIdRef.current, imageIdsRef.current);
+    const onFocusPointerDown = () => {
+      noteSegViewport(viewportIdRef.current, imageIdsRef.current);
+      // ROI の貼り付け先（宛先が 1 つに定まらないと困る操作）にも同じ「直近に触ったタイル」を使う。
+      noteFocusedTile(commandKeyRef.current);
+    };
 
-    // ROI（計測注釈）作成完了時に、このビューポートの現在コンテキストでメタ（患者・scope）を紐付ける。
+    /**
+     * ROI（計測注釈）作成完了時に、このビューポートの現在コンテキストでメタ（患者・scope）を紐付ける。
+     *
+     * <p>🚨 **この購読は `eventTarget`（グローバル）に付ける。** 上流の
+     * `_triggerAnnotationCompleted` は `triggerEvent(eventTarget, …)` で投げており、
+     * **element には飛ばない**（`@cornerstonejs/tools` の `annotation/helpers/state.js`）。
+     * element に付けていたので**一度も発火しておらず、描いた ROI に scope も patientKey も
+     * 付いていなかった**（2026-09-10 に実機のスクリーンショットで発覚——ROI マネージャの
+     * 行に ZCT チップが出ず、貼り付けた ROI にだけ出ていた）。
+     *
+     * <p>グローバルなので**全タイルの Viewer2D に届く**。自分のスタックに属する注釈だけを
+     * 拾う（そうしないと別タイルの ROI に、いま自分が見ている scope を書いてしまう）。
+     */
     const onAnnotationDone = (evt: Event) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const uid = (evt as any)?.detail?.annotation?.annotationUID as string | undefined;
+      const ann = (evt as any)?.detail?.annotation;
+      const uid = ann?.annotationUID as string | undefined;
+      const refId = ann?.metadata?.referencedImageId as string | undefined;
+      if (!uid || !refId || !imageIdsRef.current.includes(refId)) return;
       const ctx = getViewerContext(viewportIdRef.current);
-      if (!uid || !ctx) return;
+      if (!ctx) return;
       const sc = { studyUid: ctx.studyUid, seriesUid: ctx.seriesUid, z: ctx.z, c: ctx.c, t: ctx.t };
       setRoiMaskMeta(uid, { patientKey: ctx.patientKey, seriesLabel: ctx.seriesLabel, scope: sc, origin: sc });
     };
+    eventTarget.addEventListener(csToolsEnums.Events.ANNOTATION_COMPLETED, onAnnotationDone as EventListener);
 
     // カメラ暴走の自己修復。共有 RenderingEngine 上でスライス/シリーズ切替時にまれに
     // parallelScale が画像フィット規模を大きく超え（真っ黒/点表示）ることがあるため、
@@ -1135,7 +1160,6 @@ export function Viewer2D({
           element.addEventListener(EVENTS.VOI_MODIFIED, onVoiModified);
           element.addEventListener("mousemove", onMove);
           element.addEventListener("mouseleave", onLeave);
-          element.addEventListener(csToolsEnums.Events.ANNOTATION_COMPLETED, onAnnotationDone as EventListener);
           onVoiModified();
         }
         onCameraModified();
@@ -1186,7 +1210,7 @@ export function Viewer2D({
       element.removeEventListener(EVENTS.VOI_MODIFIED, onVoiModified);
       element.removeEventListener("mousemove", onMove);
       element.removeEventListener("mouseleave", onLeave);
-      element.removeEventListener(csToolsEnums.Events.ANNOTATION_COMPLETED, onAnnotationDone as EventListener);
+      eventTarget.removeEventListener(csToolsEnums.Events.ANNOTATION_COMPLETED, onAnnotationDone as EventListener);
       if (!compact && !syncGroupId) {
         disposeViewportSegmentation(viewportId);
       }
@@ -2259,6 +2283,100 @@ export function Viewer2D({
     }
   };
 
+  /**
+   * 選択中（または指定）の ROI をクリップボードへ取る。取れた件数を返す。
+   *
+   * <p>複数選択されていても**先頭の 1 件だけ**を取る。複数コピーは「貼ったときにどう並ぶか」を
+   * 決めないと使えず、いまその要件が無いので広げない。
+   */
+  const copyRoi = (roiUid?: string): boolean => {
+    const uid = roiUid ?? csAnnotation.selection.getAnnotationsSelected()?.[0];
+    if (!uid) return false;
+    return copyRoiToClipboard(uid);
+  };
+
+  /** 貼り付け/複製で共通の宛先情報。現在表示中のスライスへ置く。 */
+  const pasteContext = () => {
+    const v = vp();
+    const imageId = imageIdsRef.current[indexRef.current];
+    if (!v || !imageId) return null;
+    const ctx = getViewerContext(viewportIdRef.current);
+    return {
+      imageId,
+      viewport: v as unknown as Parameters<typeof pasteRoiInto>[0]["viewport"],
+      sliceIndex: indexRef.current,
+      patientKey: roiContextRef.current?.patientKey ?? "",
+      seriesLabel: roiContextRef.current?.seriesLabel,
+      // 🔴 貼り付け先スライスの **local** scope。global(z:"all") を引き継がない。
+      scope: ctx
+        ? { studyUid: ctx.studyUid, seriesUid: ctx.seriesUid, z: indexRef.current, c: ctx.c, t: ctx.t }
+        : undefined,
+      labelFor: (label: string | undefined, tool: string) => `${label || tool} ${t("roi.copySuffix")}`,
+    };
+  };
+
+  /** 貼り付け後の後始末（描画・選択・保存予約・「どこへ行ったか」の通知）。 */
+  const afterPaste = (uid: string, imageId: string): void => {
+    try {
+      csToolsUtilities.triggerAnnotationRenderForViewportIds([viewportIdRef.current]);
+    } catch {
+      /* 破棄途中は無視 */
+    }
+    selectRoi(uid);
+    // 一覧から複製したときは「今どのスライスを見ているか」が視野の外にあるので、
+    // 複製先を必ず見せる（押したのに何も起きていないように見えるのを防ぐ）。
+    emitRoiReveal({
+      sopInstanceUid: sopFromImageId(imageId) ?? "",
+      frame: frameOfImageId(imageId),
+      seriesUid: roiContextRef.current?.seriesUid,
+    });
+    // ANNOTATION_ADDED は飛ぶが、保存の取りこぼしを過去に踏んでいるので明示的に予約する。
+    const pk = roiContextRef.current?.patientKey;
+    if (pk) scheduleRoiSave(pk);
+  };
+
+  /**
+   * ThickSlab 中は貼り付けを許さない（新規作成と同じ理由）。
+   * 合成スライスは単一の実スライス(SOP)に一意対応せず、置いた ROI を安全に保存できない。
+   */
+  const roiEditBlocked = (): boolean => {
+    if (!thickSlabRef.current) return false;
+    emitToast(t("series.thickSlab.roiBlocked"));
+    return true;
+  };
+
+  /**
+   * クリップボードの ROI を現在表示中のスライスへ貼る。作った UID を返す。
+   *
+   * <p>🔴 **失敗を黙って落とさない。** 「押したのに何も起きない」は、この機能で最も質の悪い
+   * 出方（利用者は押せていないのかコピーできていないのか判断できない）。
+   */
+  const pasteRoi = (): string | null => {
+    if (!hasClipboardRoi()) return null;
+    if (roiEditBlocked()) return null; // 理由は roiEditBlocked が出す
+    const ctx = pasteContext();
+    const uid = ctx ? pasteRoiInto(ctx) : null;
+    if (!uid || !ctx) {
+      emitToast(t("roi.paste.failed"));
+      return null;
+    }
+    afterPaste(uid, ctx.imageId);
+    return uid;
+  };
+
+  /** ROI をその場で複製する（クリップボードの中身を壊さない）。 */
+  const duplicateRoi = (roiUid: string): string | null => {
+    if (roiEditBlocked()) return null;
+    const ctx = pasteContext();
+    const uid = ctx ? duplicateRoiEntry(roiUid, ctx) : null;
+    if (!uid || !ctx) {
+      emitToast(t("roi.paste.failed"));
+      return null;
+    }
+    afterPaste(uid, ctx.imageId);
+    return uid;
+  };
+
   // この viewport の注釈（計測 ROI）を全消去。
   const clearAnnotations = () => {
     const v = vp();
@@ -2284,6 +2402,7 @@ export function Viewer2D({
     publishAnalysisResult: publishPluginAnalysis,
     setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
+    copyRoi, pasteRoi, duplicateRoi,
     undo, redo,
   });
   commandsRef.current = {
@@ -2296,6 +2415,7 @@ export function Viewer2D({
     publishAnalysisResult: publishPluginAnalysis,
     setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
+    copyRoi, pasteRoi, duplicateRoi,
     undo, redo,
   };
   useEffect(() => {
@@ -2338,6 +2458,9 @@ export function Viewer2D({
       getRoiMeta: (u, p) => commandsRef.current.getRoiMeta(u, p),
       setRoiMeta: (u, p, patch) => commandsRef.current.setRoiMeta(u, p, patch),
       clearAnnotations: () => commandsRef.current.clearAnnotations(),
+      copyRoi: (u) => commandsRef.current.copyRoi(u),
+      pasteRoi: () => commandsRef.current.pasteRoi(),
+      duplicateRoi: (u) => commandsRef.current.duplicateRoi(u),
       undo: () => commandsRef.current.undo(),
       redo: () => commandsRef.current.redo(),
     });

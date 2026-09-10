@@ -43,7 +43,14 @@ import {
 } from "../viewer/roiContourTools";
 import { subscribeRoiMaskStore } from "../viewer/roiMaskStore";
 import { getLoadedRois, registerRoiCollector, scheduleRoiSave } from "../viewer/roiSaveStore";
-import { collectRoisForPatient } from "../viewer/roiRestore";
+import { collectRoisForPatient, sopOfImageId } from "../viewer/roiRestore";
+import { emitRoiReveal } from "../viewer/roiReveal";
+import { frameOfImageId } from "../viewer/imageId";
+import { derivePatientKey } from "../viewer/patientKey";
+import { getFocusedTile } from "../viewer/focusedTile";
+import { hasClipboardRoi } from "../viewer/roiClipboard";
+import { isTextEntryTarget, matchesShortcut } from "../shortcuts/registry";
+import { isInsideViewerOverlay } from "../viewer/viewerOverlay";
 import { runSeriesCommand } from "../viewer/seriesCommands";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { emitToast, subscribeToast } from "../viewer/toast";
@@ -147,10 +154,6 @@ function _resetDragState(): void {
 }
 
 // ── ユーティリティ ────────────────────────────────────────────
-
-function derivePatientKey(study: Study): string {
-  return study.patientId || study.patientName || study.studyInstanceUid;
-}
 
 function autoTileCols(n: number): number {
   if (n <= 1) return 1;
@@ -693,7 +696,7 @@ function TileGrid({
   // タイル枠の右クリックメニュー（画面座標）。null=非表示。
   const [frameMenu, setFrameMenu] = useState<{ x: number; y: number } | null>(null);
   /** ROI の上での右クリックメニュー（スプライン Fit）。null=非表示。 */
-  const [roiMenu, setRoiMenu] = useState<{ x: number; y: number; uid: string; fitted: boolean } | null>(null);
+  const [roiMenu, setRoiMenu] = useState<{ x: number; y: number; uid: string; fitted: boolean; splineable: boolean } | null>(null);
   const openFrameMenu = useCallback((e: React.MouseEvent) => {
     // 画像キャンバス上は cornerstone の右ドラッグ Zoom を優先し、原則メニューを出さない。
     // **ただし ROI の上だけは例外**（その ROI への操作を出す。空きスペースでは従来どおり Zoom）。
@@ -701,9 +704,16 @@ function TileGrid({
     if (panel) {
       const host = panel.querySelector<HTMLDivElement>('[data-testid="viewer2d-canvas-host"]');
       const hit = host ? annotationAtClientPoint(host, e.clientX, e.clientY) : null;
-      if (hit && canSplineFit(hit)) {
+      // ROI の上ならメニューを出す（複製はどの ROI でもできるので、スプライン可否では絞らない）。
+      if (hit?.annotationUID) {
         e.preventDefault();
-        setRoiMenu({ x: e.clientX, y: e.clientY, uid: hit.annotationUID as string, fitted: isSplineFitted(hit) });
+        setRoiMenu({
+          x: e.clientX,
+          y: e.clientY,
+          uid: hit.annotationUID as string,
+          fitted: isSplineFitted(hit),
+          splineable: canSplineFit(hit),
+        });
       }
       return;
     }
@@ -844,6 +854,22 @@ function TileGrid({
     () => (selectedIds.size > 0 ? [...selectedIds] : patient.tiles.map((tl) => tl.id)),
     [selectedIds, patient.tiles],
   );
+  /**
+   * ROI の**貼り付け先タイルを 1 つに決める**。決まらなければ null。
+   *
+   * <p>🔴 既定の `resolveTargets()`（選択タイル → 無ければ全タイル）を貼り付けに使うと、
+   * **開いている全タイルに複製が生える**。かといって毎回タイルを選ばせるのは煩わしいので、
+   * 「選択が 1 つならそれ／タイルが 1 つならそれ／それ以外は最後に触ったタイル」とする。
+   * ROI をコピーするにはその ROI をクリックする＝タイルに触る必要があるので、
+   * 通常の操作の流れでは必ず決まる。
+   */
+  const resolveRoiEditTarget = useCallback((): string | null => {
+    if (selectedIds.size === 1) return [...selectedIds][0];
+    if (patient.tiles.length === 1) return patient.tiles[0].id;
+    const focused = getFocusedTile();
+    if (focused && patient.tiles.some((tl) => tl.id === focused)) return focused;
+    return null;
+  }, [selectedIds, patient.tiles]);
   // プラグインの派生シリーズ保存の確認（H4b）。保存は同意が取れてから実行する。
   const [pluginSave, setPluginSave] = useState<{
     request: PluginSaveRequest;
@@ -866,6 +892,11 @@ function TileGrid({
     },
     [t],
   );
+  const notify = useCallback((msg: string) => {
+    setToast(msg);
+    if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(null), 2500);
+  }, []);
   // ビューポート側（Viewer2D）からの理由トースト（例: 非規則ボリュームで 3D ツール不可）。
   useEffect(() => subscribeToast((msg) => {
     setToast(msg);
@@ -1317,6 +1348,26 @@ function TileGrid({
         const targets = tileId ? [tileId] : resolveTargets();
         runViewerCommand(targets, (c) => c.selectRoi(roiUid, exclusive));
       },
+      copyRoi: (roiUid) => {
+        const target = resolveRoiEditTarget();
+        if (!target) { notify(t("roi.paste.noTile")); return; }
+        const uid = roiUid ?? selectedAnnotations()[0]?.annotationUID;
+        if (!uid) { notify(t("roi.copy.none")); return; }
+        const ok = queryViewerCommand(target, (c) => c.copyRoi(uid as string));
+        notify(t(ok ? "roi.copy.done" : "roi.copy.failed"));
+      },
+      pasteRoi: () => {
+        if (!hasClipboardRoi()) { notify(t("roi.paste.empty")); return; }
+        const target = resolveRoiEditTarget();
+        if (!target) { notify(t("roi.paste.noTile")); return; }
+        // 失敗の理由が ThickSlab のときは Viewer2D 側がトーストを出すので、ここでは重ねない。
+        if (!queryViewerCommand(target, (c) => c.pasteRoi())) return;
+      },
+      duplicateRoi: (roiUid) => {
+        const target = resolveRoiEditTarget();
+        if (!target) { notify(t("roi.paste.noTile")); return; }
+        if (!queryViewerCommand(target, (c) => c.duplicateRoi(roiUid))) return;
+      },
       toggleRoiManager: () => setShowRoiMgr((v) => !v),
       // 選択中の ROI（複数可）へスプライン Fit。対象が無ければ理由を出す（黙って何もしない、を避ける）。
       splineFitSelection: () => {
@@ -1467,8 +1518,53 @@ function TileGrid({
         setReportTarget(tile);
       },
     }),
-    [resolveTargets, onSetGrid, onSetSync, onSetFusion, patient.patientKey, patient.tiles, comingSoon, t],
+    [resolveTargets, resolveRoiEditTarget, notify, onSetGrid, onSetSync, onSetFusion, patient.patientKey, patient.tiles, comingSoon, t],
   );
+
+  /**
+   * ROI マネージャで行を選んだとき: **ハイライト＋その ROI が乗っているスライスへ移動**。
+   *
+   * <p>ハイライトは本体の注釈選択をそのまま使う（独自の強調を重ねない）。スライス移動は
+   * `SeriesViewer` が持っているので `roiReveal` バス経由（`viewer/roiReveal.ts` の冒頭参照）。
+   */
+  const revealRoi = useCallback((roiUid: string) => {
+    runViewerCommand(patient.tiles.map((tl) => tl.id), (c) => c.selectRoi(roiUid, true));
+    const ann = annotationByUid(roiUid);
+    const refId = ann?.metadata?.referencedImageId as string | undefined;
+    if (!refId) return;
+    // 🔴 `sopCommonModule` はその画像を読み込んだ後にしか答えないので、URL からの解決を含む
+    //    `sopOfImageId` を使う（読んでいないスライスの ROI で 1 件も引けなくなる）。
+    const sop = sopOfImageId(refId);
+    if (!sop) return;
+    emitRoiReveal({ sopInstanceUid: sop, frame: frameOfImageId(refId) });
+  }, [patient.tiles]);
+
+  // ROI のコピー / 貼り付け（Mod+C / Mod+V）。
+  //
+  // 🔴 **ここ（画面）に 1 本だけ置く。** Viewer2D 側に置くとタイルの数だけ window リスナが
+  //    並び、貼り付けが全タイルで起きる。宛先は `resolveRoiEditTarget()` が 1 つに決める。
+  const actionsRef = useRef(actions);
+  actionsRef.current = actions;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // 文字入力欄（ラベル編集など）と、器（解析ダイアログ）の中は触らない。
+      // 🔴 INPUT を一律に除外しない —— スライススライダー（type="range"）も INPUT で、
+      //    送った直後は focus が残る。実機で `Mod+V` が無反応になった（`isTextEntryTarget` 参照）。
+      if (isTextEntryTarget(e.target)) return;
+      if (isInsideViewerOverlay(e.target)) return;
+      // 文字列を選択しているときの Mod+C は「文字のコピー」なので譲る。
+      if (matchesShortcut("roi-copy", e)) {
+        if ((window.getSelection()?.toString() ?? "") !== "") return;
+        e.preventDefault();
+        actionsRef.current.copyRoi();
+      } else if (matchesShortcut("roi-paste", e)) {
+        e.preventDefault();
+        actionsRef.current.pasteRoi();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   return (
     <div style={tileArea}>
@@ -1513,7 +1609,7 @@ function TileGrid({
         />
       )}
       {toast && (
-        <div style={{
+        <div data-testid="viewer2d-toast" style={{
           position: "fixed", top: 56, left: "50%", transform: "translateX(-50%)", zIndex: 60,
           background: "rgba(33,40,48,0.92)", color: "#fff", padding: "6px 14px", borderRadius: 6,
           fontSize: 12, pointerEvents: "none", boxShadow: "0 4px 14px rgba(0,0,0,0.3)",
@@ -1576,25 +1672,56 @@ function TileGrid({
           </button>
         </div>
       )}
-      {/* ROI の上での右クリック: その ROI にスプライン Fit を適用/解除する。 */}
+      {/* ROI の上での右クリック: 複製・コピーと、（ポリゴン系なら）スプライン Fit。 */}
       {roiMenu && (
         <div style={{ ...ctxMenuBox, left: roiMenu.x, top: roiMenu.y }} onClick={(e) => e.stopPropagation()}>
           <button
             style={ctxMenuItem}
-            data-testid="roi-ctx-spline-fit"
+            data-testid="roi-ctx-duplicate"
             onClick={() => {
-              const ann = annotationByUid(roiMenu.uid);
-              if (ann && setSplineFitOn(ann, !roiMenu.fitted)) renderAnnotations();
+              actions.duplicateRoi(roiMenu.uid);
               setRoiMenu(null);
             }}
           >
-            <span style={{ width: 14, display: "inline-block" }}>{roiMenu.fitted ? "✓" : ""}</span>
-            {t("viewer2d.roi.splineFit.menu")}
+            <span style={{ width: 14, display: "inline-block" }} />
+            {t("viewer2d.roi.duplicate")}
           </button>
+          <button
+            style={ctxMenuItem}
+            data-testid="roi-ctx-copy"
+            onClick={() => {
+              actions.copyRoi(roiMenu.uid);
+              setRoiMenu(null);
+            }}
+          >
+            <span style={{ width: 14, display: "inline-block" }} />
+            {t("viewer2d.roi.copy")}
+          </button>
+          {roiMenu.splineable && (
+            <button
+              style={ctxMenuItem}
+              data-testid="roi-ctx-spline-fit"
+              onClick={() => {
+                const ann = annotationByUid(roiMenu.uid);
+                if (ann && setSplineFitOn(ann, !roiMenu.fitted)) renderAnnotations();
+                setRoiMenu(null);
+              }}
+            >
+              <span style={{ width: 14, display: "inline-block" }}>{roiMenu.fitted ? "✓" : ""}</span>
+              {t("viewer2d.roi.splineFit.menu")}
+            </button>
+          )}
         </div>
       )}
       {showRoiMgr && (
-        <RoiManagerPanel activePatientKey={patient.patientKey} isDemo={isDemo} mode={mode} onClose={() => setShowRoiMgr(false)} />
+        <RoiManagerPanel
+          activePatientKey={patient.patientKey}
+          isDemo={isDemo}
+          mode={mode}
+          onRevealRoi={revealRoi}
+          onDuplicateRoi={(uid) => actions.duplicateRoi(uid)}
+          onClose={() => setShowRoiMgr(false)}
+        />
       )}
       {histo && (
         <HistogramDialog

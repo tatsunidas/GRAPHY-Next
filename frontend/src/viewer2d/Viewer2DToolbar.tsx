@@ -203,6 +203,17 @@ export interface ViewerActions {
   /** 計測 ROI を全消去（対象タイル）。 */
   clearRois(): void;
   /**
+   * 選択中（または指定）の ROI をアプリ内クリップボードへ取る。
+   *
+   * <p>⚠ **プラグインには出していない**（`plugins/pluginTypes.ts` に対応する口を作らないこと）。
+   * ROI は読影医の計測なので、プラグインが書き換えられないという既存の方針を崩さない。
+   */
+  copyRoi(roiUid?: string): void;
+  /** クリップボードの ROI を**現在表示中のスライス**へ貼る（面内の同じ位置）。 */
+  pasteRoi(): void;
+  /** ROI をその場で複製する（クリップボードの中身は変えない）。 */
+  duplicateRoi(roiUid: string): void;
+  /**
    * **選択中の ROI** にスプライン Fit を適用/解除する（ポリゴン系のみ。複数可）。
    * 描画モードではないので ROI Tools 側に置いている。
    */

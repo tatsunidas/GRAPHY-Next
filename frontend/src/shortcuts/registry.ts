@@ -66,7 +66,34 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "sys-undo", combo: "Mod+Z", descriptionKey: "sc.sysUndo", group: "system" },
   { id: "sys-redo", combo: "Mod+Shift+Z", descriptionKey: "sc.sysRedo", group: "system" },
   { id: "sys-delete", combo: "Delete", descriptionKey: "sc.sysDelete", group: "system", planned: true },
+  // ROI の複製（同じ形の ROI をもう 1 つ置く）。貼り付け先は**現在表示中のスライス**。
+  { id: "roi-copy", combo: "Mod+C", descriptionKey: "sc.roiCopy", group: "system" },
+  { id: "roi-paste", combo: "Mod+V", descriptionKey: "sc.roiPaste", group: "system" },
 ];
+
+/**
+ * その要素が**文字を打ち込む場所**か。ショートカットを譲るかどうかの判定。
+ *
+ * <p>🔴 **`tagName === "INPUT"` で一律に譲らないこと。** スライダー（`type="range"`）も
+ * チェックボックスも INPUT で、しかも**操作すると focus が残る**。実機で踏んだ:
+ * スライススライダーでスライスを送った直後の `Mod+V` が、**何の反応も無いまま**捨てられていた
+ * ——押していないのかコピーできていないのか、利用者には区別が付かない。
+ * 文字入力でない INPUT にクリップボード操作の意味は無いので、譲る相手は文字入力だけにする。
+ */
+const TEXT_INPUT_TYPES = new Set([
+  "text", "search", "url", "tel", "email", "password", "number",
+  "date", "time", "datetime-local", "month", "week",
+]);
+
+export function isTextEntryTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el || typeof el.tagName !== "string") return false;
+  if (el.isContentEditable) return true;
+  if (el.tagName === "TEXTAREA" || el.tagName === "SELECT") return true;
+  if (el.tagName !== "INPUT") return false;
+  const type = ((el as HTMLInputElement).type || "text").toLowerCase();
+  return TEXT_INPUT_TYPES.has(type);
+}
 
 const IS_MAC = typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
 

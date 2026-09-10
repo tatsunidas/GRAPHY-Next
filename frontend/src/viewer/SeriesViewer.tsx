@@ -74,6 +74,8 @@ import {
 import { advanceAnchor, sliceStepsFromDrag } from "./touchScroll";
 import { createWheelStepper } from "./wheelScroll";
 import { isSliceNavigationLocked, useSliceNavigationLocked } from "./sliceNavigationLock";
+import { subscribeRoiReveal } from "./roiReveal";
+import { resolveImageId, sopIndex } from "./roiRestore";
 import { isInsideViewerOverlay } from "./viewerOverlay";
 import { installDebugApi, countStackSwap } from "./debugApi";
 import { matchesCombo, matchesShortcut } from "../shortcuts/registry";
@@ -1036,6 +1038,44 @@ export function SeriesViewer({
     });
     return unregister;
   }, [syncOn, sliceSyncId]);
+
+  // ── ROI を見せる（ROI マネージャの行選択・複製の直後）─────────────────────
+  // 宛先は SOP Instance UID ＋フレーム番号。どのタイルがその画像を持っているかは
+  // 発火側には分からないので、**受け手が自分のスタックに在るかを判定**する。
+  const otherCountRef = useRef(otherCount); otherCountRef.current = otherCount;
+  useEffect(() => {
+    return subscribeRoiReveal((req) => {
+      // 🔴 解析中（QCA 等）はフレームを動かさない。裏で送られると画面の画像とダイアログの
+      //    数値が別フレームのものになり、しかも**エラーが出ない**（`sliceNavigationLock.ts`）。
+      if (isSliceNavigationLocked()) return;
+      if (req.seriesUid && req.seriesUid !== seriesUid) return;
+      const lay = layoutRef.current;
+      const frameStack = isFrameStackRef.current;
+      const others = Math.max(1, otherCountRef.current);
+      for (let ci = 0; ci < Math.max(1, lay.nC); ci++) {
+        for (let oi = 0; oi < others; oi++) {
+          const stack = frameStack ? (lay.tStack?.(oi, ci) ?? []) : lay.zStack(ci, oi);
+          if (!stack.length) continue;
+          // 🔴 添字では引かない。XA の 1 ラン数百フレームは同じ SOP を持つので、
+          //    imageId 自身の `frame=` と突き合わせる（`roiRestore` の解決規則をそのまま使う）。
+          const hit = resolveImageId(sopIndex(stack), req.sopInstanceUid, req.frame ?? undefined);
+          const idx = hit ? stack.indexOf(hit) : -1;
+          if (idx < 0) continue;
+          setC(ci);
+          setTIdx(oi);
+          // ThickSlab ON のとき z は「デジタルスライス」の index なので換算して渡す。
+          setZ(
+            effectiveThickRef.current
+              ? originalToDigitalZ(idx, slicesPerStepRef.current, activeCountRef.current)
+              : idx,
+          );
+          return;
+        }
+      }
+      // どのスタックにも無い＝このタイルの担当ではない。何もしない（他タイルを動かさない）。
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seriesUid]);
 
   // スライス変化を coordinator に publish。Sync 受信由来（syncDrivenRef）は再 publish しない。
   useEffect(() => {

@@ -7,6 +7,7 @@ import {
   formatArea,
   formatLength,
   formatMeanSd,
+  formatPixelCoord,
   formatNumber,
   formatValue,
   roiStatsSummary,
@@ -135,7 +136,18 @@ describe("roiStatsTextLines", () => {
     expect(lines).toEqual(["length: 38.6 mm", "mean: 43.21 ± 11.83 HU"]);
   });
 
-  it("プローブは値だけ", () => {
+  it("プローブは読んだ画素の座標＋値", () => {
+    const point = result({
+      tool: "Probe",
+      geometry: { kind: "point", samplePx: [256, 118], sampleCount: 1, spatiallyCalibrated: true },
+      values: values({ n: 1, mean: -102, sd: 0 }),
+    });
+    expect(roiStatsTextLines(point, "compact", t)).toEqual(["coord: (256, 118)", "-102 HU"]);
+    // full でも同じ（プローブは元々行数が少ないので詳細で増やす項目が無い）。
+    expect(roiStatsTextLines(point, "full", t)).toEqual(["coord: (256, 118)", "-102 HU"]);
+  });
+
+  it("プローブでも samplePx が無ければ座標行を出さない（'—' を並べない）", () => {
     const point = result({
       tool: "Probe",
       geometry: { kind: "point", sampleCount: 1, spatiallyCalibrated: true },
@@ -161,11 +173,30 @@ describe("roiStatsSummary", () => {
     expect(roiStatsSummary(result(), t)).toBe("12.44 mm²  43.21 ± 11.83 HU");
   });
 
+  it("プローブは座標と値", () => {
+    const point = result({
+      tool: "Probe",
+      geometry: { kind: "point", samplePx: [10, 20], sampleCount: 1, spatiallyCalibrated: true },
+      values: values({ n: 1, mean: -102, sd: 0 }),
+    });
+    expect(roiStatsSummary(point, t)).toBe("(10, 20)  -102 HU");
+  });
+
   it("統計が無ければサイズだけ", () => {
     expect(roiStatsSummary(result({ values: undefined }), t)).toBe("12.44 mm²");
   });
 
   it("未計算・対象外は空", () => {
     expect(roiStatsSummary(undefined, t)).toBe("");
+  });
+});
+
+describe("formatPixelCoord", () => {
+  it("samplePx をそのまま (col, row) で出す", () => {
+    expect(formatPixelCoord({ kind: "point", samplePx: [0, 0], sampleCount: 1, spatiallyCalibrated: true })).toBe("(0, 0)");
+  });
+
+  it("samplePx が無ければ null（centroidPx を丸めて代用しない）", () => {
+    expect(formatPixelCoord({ kind: "point", centroidPx: [3.7, 8.2], sampleCount: 1, spatiallyCalibrated: true })).toBeNull();
   });
 });

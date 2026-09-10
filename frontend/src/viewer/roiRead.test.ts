@@ -13,6 +13,7 @@ import {
   pluginMetaPrefix,
   readRoiStats,
   roiPointsPx,
+  worldToPixelOnPlane,
   type PointPx,
 } from "./roiRead";
 
@@ -378,5 +379,80 @@ describe("roiPointsPx", () => {
       1,
     );
     expect(pts).toEqual([[1, 2]]);
+  });
+});
+
+describe("worldToPixelOnPlane", () => {
+  /** 逆変換（画素 → world）。DICOM の定義そのまま。テストの真値はこちらで作る。 */
+  function pixelToWorld(
+    px: number,
+    py: number,
+    ipp: number[],
+    iop: number[],
+    rowSpacing: number,
+    colSpacing: number,
+  ): [number, number, number] {
+    return [
+      ipp[0] + iop[0] * px * colSpacing + iop[3] * py * rowSpacing,
+      ipp[1] + iop[1] * px * colSpacing + iop[4] * py * rowSpacing,
+      ipp[2] + iop[2] * px * colSpacing + iop[5] * py * rowSpacing,
+    ];
+  }
+
+  const cases: { name: string; ipp: number[]; iop: number[]; row: number; col: number }[] = [
+    // 軸平行（アキシャル）。
+    { name: "軸平行", ipp: [-250, -250, 12.5], iop: [1, 0, 0, 0, 1, 0], row: 0.9765625, col: 0.9765625 },
+    // 斜位（面内で 30 度回した直交系）。転置していたらここで落ちる。
+    {
+      name: "斜位",
+      ipp: [10, -20, 30],
+      iop: [Math.cos(Math.PI / 6), Math.sin(Math.PI / 6), 0, -Math.sin(Math.PI / 6), Math.cos(Math.PI / 6), 0],
+      row: 1.25,
+      col: 1.25,
+    },
+    // 異方性画素（行間隔 ≠ 列間隔）。row/col を取り違えていたらここで落ちる。
+    { name: "異方性画素", ipp: [0, 0, 0], iop: [1, 0, 0, 0, 1, 0], row: 3, col: 0.5 },
+  ];
+
+  for (const c of cases) {
+    it(`${c.name}: 画素 → world → 画素 で元に戻る`, () => {
+      for (const [px, py] of [
+        [0, 0],
+        [255.5, 127.25],
+        [511, 511],
+      ]) {
+        const w = pixelToWorld(px, py, c.ipp, c.iop, c.row, c.col);
+        const back = worldToPixelOnPlane(w, c.ipp, c.iop, c.row, c.col);
+        expect(back).not.toBeNull();
+        expect(back![0]).toBeCloseTo(px, 9);
+        expect(back![1]).toBeCloseTo(py, 9);
+      }
+    });
+  }
+
+  it("原点（IPP）は画素 (0,0)", () => {
+    expect(worldToPixelOnPlane([10, -20, 30], [10, -20, 30], [1, 0, 0, 0, 1, 0], 1, 1)).toEqual([0, 0]);
+  });
+
+  it("幾何が無い / 画素間隔が無いときは null（捏造しない）", () => {
+    const iop = [1, 0, 0, 0, 1, 0];
+    expect(worldToPixelOnPlane([1, 2, 3], null, iop, 1, 1)).toBeNull();
+    expect(worldToPixelOnPlane([1, 2, 3], [0, 0, 0], null, 1, 1)).toBeNull();
+    expect(worldToPixelOnPlane([1, 2, 3], [0, 0, 0], iop, 0, 1)).toBeNull();
+    expect(worldToPixelOnPlane([1, 2, 3], [0, 0, 0], iop, 1, 0)).toBeNull();
+    expect(worldToPixelOnPlane([1, 2], [0, 0, 0], iop, 1, 1)).toBeNull();
+    expect(worldToPixelOnPlane([NaN, 2, 3], [0, 0, 0], iop, 1, 1)).toBeNull();
+  });
+
+  it("null を返すので roiPointsPx の幾何なしフォールバックにそのまま落ちる", () => {
+    const world = [
+      [10, 20, 0],
+      [30, 40, 0],
+    ];
+    const pts = roiPointsPx(world, (w) => worldToPixelOnPlane(w, null, null, 2, 2), 2, 2);
+    expect(pts).toEqual([
+      [5, 10],
+      [15, 20],
+    ]);
   });
 });
