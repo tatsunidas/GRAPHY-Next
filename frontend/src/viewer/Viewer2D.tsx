@@ -2740,6 +2740,9 @@ export function Viewer2D({
       }}>
         {/* 画像外の状態ラベルエリア（必須情報）。 */}
         <div style={statusBar}>
+          {/* 項目は左グループに入れて折り返さない。カーソルの出入りで値の幅が変わっても
+              Info が 2 行目へ落ちてバーの高さ（＝画像の位置）が跳ばないようにする。 */}
+          <div style={statusGroup}>
           <StatusItem testId="status-zoom" label={t("viewer.status.zoom")} value={`${Math.round(transform.zoom * 100)}%`} />
           {panned && <span style={panBadge}>{t("viewer.panned")}</span>}
           <StatusItem
@@ -2770,15 +2773,16 @@ export function Viewer2D({
               </span>
             </span>
           ) : (
-            <StatusItem testId="status-value" label={t("viewer.status.value")} value={cursorValue} />
+            <StatusItem testId="status-value" label={t("viewer.status.value")} value={cursorValue} minWidth="7ch" />
           )}
-          <StatusItem testId="status-xy" label={t("viewer.status.xy")} value={cursorXY} />
-          {/* 必須情報ラベル横の Info ボタン（右の情報パネルの On/Off）。 */}
+          <StatusItem testId="status-xy" label={t("viewer.status.xy")} value={cursorXY} minWidth="12ch" />
+          </div>
+          {/* 必須情報ラベル横の Info ボタン（右の情報パネルの On/Off）。常に右端に固定。 */}
           <button
             onClick={() => setShowInfo((v) => !v)}
             aria-pressed={showInfo}
             title={t("viewer.info.toggle")}
-            style={{ ...infoBtn, ...(showInfo ? infoBtnOn : null), marginLeft: "auto" }}
+            style={{ ...infoBtn, ...(showInfo ? infoBtnOn : null), flexShrink: 0 }}
           >
             {t("viewer.info.btn")}
           </button>
@@ -2904,11 +2908,11 @@ const dicomBR: React.CSSProperties = {
   textAlign: "right",
 };
 
-function StatusItem({ label, value, testId }: { label: string; value: string; testId?: string }) {
+function StatusItem({ label, value, testId, minWidth }: { label: string; value: string; testId?: string; minWidth?: string }) {
   return (
     <span style={statusItem}>
       <span style={statusKey}>{label}</span>
-      <span data-testid={testId} style={statusVal}>{value}</span>
+      <span data-testid={testId} style={minWidth ? { ...statusVal, ...statusValReserved, minWidth } : statusVal}>{value}</span>
     </span>
   );
 }
@@ -2917,7 +2921,7 @@ const statusBar: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 14,
-  flexWrap: "wrap",
+  flexWrap: "nowrap",
   padding: "5px 10px",
   marginBottom: 6,
   background: "#eef2f6",
@@ -2926,7 +2930,19 @@ const statusBar: React.CSSProperties = {
   fontSize: 12,
   fontVariantNumeric: "tabular-nums",
 };
-const statusItem: React.CSSProperties = { display: "inline-flex", gap: 5, alignItems: "baseline" };
+// 状態項目の左グループ。狭いときは末尾が切れる（折り返してバーを高くしない）。
+const statusGroup: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 14,
+  flex: "1 1 auto",
+  minWidth: 0,
+  overflow: "hidden",
+  whiteSpace: "nowrap",
+};
+const statusItem: React.CSSProperties = { display: "inline-flex", gap: 5, alignItems: "baseline", flexShrink: 0 };
+// カーソル値・XY は「—」と数値で幅が変わるので、幅を予約して横揺れさせない。
+const statusValReserved: React.CSSProperties = { display: "inline-block" };
 const infoBtn: React.CSSProperties = {
   padding: "2px 9px",
   border: "1px solid #cdd5de",
