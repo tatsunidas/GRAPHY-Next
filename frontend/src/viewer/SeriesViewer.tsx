@@ -1248,6 +1248,7 @@ export function SeriesViewer({
                 idx={cc}
                 count={layout.nC}
                 onChange={setC}
+                testId="dim-slider-c"
                 trailing={cinePlayBtn(playC, () => setPlayC((p) => !p), layout.nC <= 1)}
               />
             )}
