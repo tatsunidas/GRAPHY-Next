@@ -2,7 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { RenderingEngine, Enums, EVENTS, eventTarget, metaData, utilities, type Types } from "@cornerstonejs/core";
 import {
   ToolGroupManager,
@@ -2739,7 +2739,12 @@ export function Viewer2D({
         ...(fill ? { display: "flex", flexDirection: "column", minHeight: 0 } : {}),
       }}>
         {/* 画像外の状態ラベルエリア（必須情報）。 */}
-        <div style={statusBar}>
+        <StatusBar>
+          {(compact) => (
+          <>
+          {/* 項目は左グループに入れて折り返さない。カーソルの出入りで値の幅が変わっても
+              Info が 2 行目へ落ちてバーの高さ（＝画像の位置）が跳ばないようにする。 */}
+          <div style={compact ? { ...statusGroup, gap: 6 } : statusGroup}>
           <StatusItem testId="status-zoom" label={t("viewer.status.zoom")} value={`${Math.round(transform.zoom * 100)}%`} />
           {panned && <span style={panBadge}>{t("viewer.panned")}</span>}
           <StatusItem
@@ -2770,19 +2775,22 @@ export function Viewer2D({
               </span>
             </span>
           ) : (
-            <StatusItem testId="status-value" label={t("viewer.status.value")} value={cursorValue} />
+            <StatusItem testId="status-value" label={t("viewer.status.value")} value={cursorValue} minWidth="7ch" />
           )}
-          <StatusItem testId="status-xy" label={t("viewer.status.xy")} value={cursorXY} />
-          {/* 必須情報ラベル横の Info ボタン（右の情報パネルの On/Off）。 */}
+          <StatusItem testId="status-xy" label={t("viewer.status.xy")} value={cursorXY} minWidth="12ch" />
+          </div>
+          {/* 必須情報ラベル横の Info ボタン（右の情報パネルの On/Off）。常に右端に固定。 */}
           <button
             onClick={() => setShowInfo((v) => !v)}
             aria-pressed={showInfo}
             title={t("viewer.info.toggle")}
-            style={{ ...infoBtn, ...(showInfo ? infoBtnOn : null), marginLeft: "auto" }}
+            style={{ ...infoBtn, ...(showInfo ? infoBtnOn : null), flexShrink: 0, ...(compact ? infoBtnCompact : null) }}
           >
-            {t("viewer.info.btn")}
+            {compact ? "i" : t("viewer.info.btn")}
           </button>
-        </div>
+          </>
+          )}
+        </StatusBar>
         {imagePanel}
 
         {/* 操作バー（canvas の外＝ツール入力と競合しない）。showControls=false で畳む。 */}
@@ -2904,11 +2912,37 @@ const dicomBR: React.CSSProperties = {
   textAlign: "right",
 };
 
-function StatusItem({ label, value, testId }: { label: string; value: string; testId?: string }) {
+/** 状態バーがこの幅（px）未満なら詰めて表示する（文字 11px・間隔 8px・Info を「i」）。 */
+const STATUS_BAR_COMPACT_BELOW_PX = 460;
+
+/**
+ * 画像外の状態バー。自分の幅を測り、狭ければ詰めた表示を子に指示する。
+ * 高さは常に 1 行分なので、詰めても詰めなくても画像の位置は変わらない。
+ */
+function StatusBar({ children }: { children: (compact: boolean) => React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [compact, setCompact] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const update = () => setCompact(el.getBoundingClientRect().width < STATUS_BAR_COMPACT_BELOW_PX);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return (
+    <div ref={ref} data-compact={compact || undefined} style={compact ? { ...statusBar, ...statusBarCompact } : statusBar}>
+      {children(compact)}
+    </div>
+  );
+}
+
+function StatusItem({ label, value, testId, minWidth }: { label: string; value: string; testId?: string; minWidth?: string }) {
   return (
     <span style={statusItem}>
       <span style={statusKey}>{label}</span>
-      <span data-testid={testId} style={statusVal}>{value}</span>
+      <span data-testid={testId} style={minWidth ? { ...statusVal, ...statusValReserved, minWidth } : statusVal}>{value}</span>
     </span>
   );
 }
@@ -2917,7 +2951,7 @@ const statusBar: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 14,
-  flexWrap: "wrap",
+  flexWrap: "nowrap",
   padding: "5px 10px",
   marginBottom: 6,
   background: "#eef2f6",
@@ -2926,7 +2960,23 @@ const statusBar: React.CSSProperties = {
   fontSize: 12,
   fontVariantNumeric: "tabular-nums",
 };
-const statusItem: React.CSSProperties = { display: "inline-flex", gap: 5, alignItems: "baseline" };
+// 狭いビューア（グリッド表示など）用。文字と余白を詰める。高さは 1 行のまま。
+// minHeight は通常表示の高さ（32px）に揃え、詰めても画像の大きさを変えない。
+const statusBarCompact: React.CSSProperties = { fontSize: 11, gap: 6, padding: "5px 8px", minHeight: 32, boxSizing: "border-box" };
+const infoBtnCompact: React.CSSProperties = { padding: "0 7px", fontSize: 11, fontWeight: 600 };
+// 状態項目の左グループ。狭いときは末尾が切れる（折り返してバーを高くしない）。
+const statusGroup: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 14,
+  flex: "1 1 auto",
+  minWidth: 0,
+  overflow: "hidden",
+  whiteSpace: "nowrap",
+};
+const statusItem: React.CSSProperties = { display: "inline-flex", gap: 5, alignItems: "baseline", flexShrink: 0 };
+// カーソル値・XY は「—」と数値で幅が変わるので、幅を予約して横揺れさせない。
+const statusValReserved: React.CSSProperties = { display: "inline-block" };
 const infoBtn: React.CSSProperties = {
   padding: "2px 9px",
   border: "1px solid #cdd5de",
