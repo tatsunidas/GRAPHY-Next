@@ -234,6 +234,23 @@ export function scheduleEngineResize(engine: RenderingEngine): void {
 
 let viewportSeq = 0;
 
+/** メイン effect 1 回分の後始末。C/T 切替時に次の effect が viewport ごと引き取れるよう遅延させる。 */
+type LiveSetup = { teardown: () => void; ready: boolean; pending: boolean };
+
+/**
+ * 後始末を 1 マイクロタスク遅らせる。React は前回 effect の cleanup と次の effect を同じ同期処理で
+ * 続けて呼ぶので、次の effect が `pending` を下ろせば取り消せる（アンマウント時は誰も下ろさない）。
+ */
+function deferTeardown(live: LiveSetup, ref: { current: LiveSetup | null }): void {
+  live.pending = true;
+  queueMicrotask(() => {
+    if (!live.pending) return;
+    live.pending = false;
+    if (ref.current === live) ref.current = null;
+    live.teardown();
+  });
+}
+
 /**
  * 2D 画像ビューア（単一スライス＋表示変換）。
  *
@@ -506,6 +523,13 @@ export function Viewer2D({
   const elementRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<Types.IStackViewport | null>(null);
   const viewportIdRef = useRef(`graphy-vp-${viewportSeq++}`);
+  // C/T 切替などで imageIds だけ変わるときは viewport を作り直さず setStack で差し替える（メイン effect）。
+  // 作り直し（disableElement → enableElement）は共有エンジン上の全タイルの描画面の配置を計算し直し、
+  // 並べた他シリーズがちらつくため（実機の 2D PC の Channel 送りで発覚）。
+  const liveSetupRef = useRef<LiveSetup | null>(null);
+  // 差し替えは直列に流す（ドラッグ中に追い越された分は飛ばす）。未完了の件数はスライス送り effect が見る。
+  const swapChainRef = useRef<Promise<void>>(Promise.resolve());
+  const swapPendingRef = useRef(0);
   // 識別子は再レンダで変わるが init を再実行しないよう ref で最新を持つ。
   const imageIdsRef = useRef(imageIds);
   imageIdsRef.current = imageIds;
@@ -1023,32 +1047,13 @@ export function Viewer2D({
       scheduleCapture();
     };
 
-    (async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        // 🚨 **空のスタックは「失敗」ではない。まだ来ていないだけ。**
-        //    XA（マルチフレーム）は backend の展開とプリウォームが終わるまでフレームを
-        //    渡さない設計なので（`SeriesViewer` の `xaReady`）、開いた直後は**必ず**
-        //    空で 1 回描画される。そのまま `setStack([])` まで進むと Cornerstone が投げ、
-        //    「取得に失敗しました」が一瞬出てから画像が出る——**毎回出る**ので、
-        //    利用者には「毎回失敗している」と読める（実機で指摘された）。
-        //    ここでは読み込み中のまま待つ。フレームが来れば `stackKey` が変わって再実行される。
-        if (imageIdsRef.current.length === 0) return;
-        await ensureCornerstoneInitialized();
-        if (disposed) return;
-
-        const engine = getEngine();
-        engine.enableElement({ viewportId, type: Enums.ViewportType.STACK, element });
-        const viewport = engine.getViewport(viewportId) as Types.IStackViewport;
-        viewportRef.current = viewport;
-        await viewport.setStack(imageIdsRef.current, indexRef.current);
-
+    // setStack の後の共通処理（作り直し・差し替えの両方で使う）。
+    const applyLoadedStack = (viewport: Types.IStackViewport, isDead: () => boolean) => {
         // 輝度/ボクセル/FOV のキャリブレーション情報（読み込み後にメタが揃う）。
         const curId = imageIdsRef.current[indexRef.current];
         const inf = readImageInfo(curId);
         infoRef.current = inf;
-        if (!disposed) setInfo(inf);
+        if (!isDead()) setInfo(inf);
 
         // 初期 Window: DICOM の WindowCenter/Width があれば明示適用する。
         // CT 等は自動 VOI が生 16bit のパディング画素（例 -2048）や広いダイナミックレンジに
@@ -1095,11 +1100,81 @@ export function Viewer2D({
         // スライス方向ボクセル奥行きは非同期（複数枚は隣接スライスのメタを要する）。後から合流。
         void (async () => {
           const r = await computeSliceSpacing(curId, imageIdsRef.current, inf.sliceThickness);
-          if (disposed) return;
+          if (isDead()) return;
           const merged = { ...inf, sliceSpacing: r.spacing, sliceSpacingSource: r.source };
           infoRef.current = merged;
           setInfo(merged);
         })();
+    };
+
+    const live: LiveSetup = { teardown: () => {}, ready: false, pending: false };
+    const prevLive = liveSetupRef.current;
+    if (prevLive?.pending) {
+      prevLive.pending = false; // 前回の後始末を取り消す（引き取るか、ここで即座に片付けるか）
+      const viewport = viewportRef.current;
+      if (prevLive.ready && viewport && imageIdsRef.current.length > 0) {
+        // 差し替え: viewport・ツールグループ・同期・リスナー・ResizeObserver は前回のものを引き継ぐ。
+        let cancelled = false;
+        swapPendingRef.current++;
+        swapChainRef.current = swapChainRef.current.then(async () => {
+          let showTimer: number | undefined;
+          try {
+            if (cancelled) return; // 後続の差し替えに追い越された
+            // 未取得の画像への切替は取得を待つ。120ms 以上かかるときだけスピナーを出す（スライス送りと同じ）。
+            showTimer = window.setTimeout(() => {
+              if (!cancelled) applySliceLoading(true);
+            }, 120);
+            setError(null);
+            // 作り直していた頃と同じく、スタックが変わったらこのビューポートのセグメンテーションは外す。
+            if (!compact && !syncGroupId) disposeViewportSegmentation(viewportId);
+            await viewport.setStack(imageIdsRef.current, indexRef.current);
+            if (cancelled) return;
+            applyLoadedStack(viewport, () => cancelled);
+            // 差し替え中に z が動いていたら追いつく（スライス送り effect は差し替え中は手を出さない）。
+            if (viewport.getCurrentImageIdIndex() !== indexRef.current) {
+              await viewport.setImageIdIndex(indexRef.current);
+            }
+            if (!compact && !syncGroupId) onVoiModified();
+          } catch (e) {
+            if (!cancelled) setError(String(e));
+          } finally {
+            if (showTimer !== undefined) window.clearTimeout(showTimer);
+            applySliceLoading(false);
+            swapPendingRef.current--;
+          }
+        });
+        liveSetupRef.current = prevLive;
+        return () => {
+          cancelled = true;
+          deferTeardown(prevLive, liveSetupRef);
+        };
+      }
+      prevLive.teardown();
+    }
+    liveSetupRef.current = live;
+
+    (async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        // 🚨 **空のスタックは「失敗」ではない。まだ来ていないだけ。**
+        //    XA（マルチフレーム）は backend の展開とプリウォームが終わるまでフレームを
+        //    渡さない設計なので（`SeriesViewer` の `xaReady`）、開いた直後は**必ず**
+        //    空で 1 回描画される。そのまま `setStack([])` まで進むと Cornerstone が投げ、
+        //    「取得に失敗しました」が一瞬出てから画像が出る——**毎回出る**ので、
+        //    利用者には「毎回失敗している」と読める（実機で指摘された）。
+        //    ここでは読み込み中のまま待つ。フレームが来れば `stackKey` が変わって再実行される。
+        if (imageIdsRef.current.length === 0) return;
+        await ensureCornerstoneInitialized();
+        if (disposed) return;
+
+        const engine = getEngine();
+        engine.enableElement({ viewportId, type: Enums.ViewportType.STACK, element });
+        const viewport = engine.getViewport(viewportId) as Types.IStackViewport;
+        viewportRef.current = viewport;
+        await viewport.setStack(imageIdsRef.current, indexRef.current);
+        if (disposed) return;
+        applyLoadedStack(viewport, () => disposed);
 
         // CAMERA_MODIFIED は compact でも必要（向きマーカー/スケールバーの初期計算・再Fit）。
         element.addEventListener(EVENTS.CAMERA_MODIFIED, onCameraModified);
@@ -1193,6 +1268,7 @@ export function Viewer2D({
         });
         resizeObserver.observe(element);
 
+        live.ready = true; // ここまで揃ったら、次の C/T 切替は差し替えで済ませてよい
         if (!disposed) setLoading(false);
       } catch (e) {
         if (!disposed) {
@@ -1202,7 +1278,7 @@ export function Viewer2D({
       }
     })();
 
-    return () => {
+    live.teardown = () => {
       disposed = true;
       resizeObserver?.disconnect();
       element.removeEventListener(EVENTS.CAMERA_MODIFIED, onCameraModified);
@@ -1245,6 +1321,7 @@ export function Viewer2D({
       }
       viewportRef.current = null;
     };
+    return () => deferTeardown(live, liveSetupRef);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stackKey]);
 
@@ -1252,6 +1329,8 @@ export function Viewer2D({
   useEffect(() => {
     const v = viewportRef.current;
     if (!v) return;
+    // C/T の差し替え中は差し替え側が index を合わせる（setStack と setImageIdIndex を競合させない）。
+    if (swapPendingRef.current > 0) return;
     let cancelled = false;
     let showTimer: number | undefined;
     (async () => {
