@@ -393,6 +393,7 @@ export function Viewer2DMenuBar({
       label: t("viewer2d.menu.analysis"),
       items: [
         { label: t("viewer2d.menu.histogram"), onClick: () => actions.openHistogram() },
+        { label: `${t("fourier.menu")}…`, onClick: () => actions.openFourier(), testId: "menu-fourier" },
         { label: `${t("texture.menu")}…`, onClick: () => actions.openTexture() },
         { label: `${t("glam.menu")}…`, onClick: () => actions.openGlamAnalysis() },
         ...(isDemo ? [] : [{ label: t("viewer2d.menu.imagej"), onClick: () => actions.bridgeImageJ() }]),
