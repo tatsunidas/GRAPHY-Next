@@ -19,20 +19,25 @@ import {
   MAX_FFT_SIZE,
   complexExportSlices,
   complexStackInfo,
+  decomposeLine,
   imageJComplexProperties,
   fftshift,
   isMaskActive,
   logScale,
   multiplyMask,
   nextPow2,
+  radialProfile,
   rectCenterLimit,
   toGray8,
+  topComponents,
   type FilterMode,
   type FilterSpec,
 } from "../viewer/fourier";
 import type { FourierWorkerRequest, FourierWorkerResponse } from "../viewer/fourierProtocol";
 import { encodeFloat32Tiff, encodeFloat32TiffStack } from "../viewer/tiffFloat32";
 import { downloadBytes } from "../viewer/xaFrameExport";
+import { RadialSpectrumChart } from "./RadialSpectrumChart";
+import { Waterfall3D } from "./Waterfall3D";
 
 const SIDE = 300;
 const SPEC = 420;
@@ -51,6 +56,9 @@ interface Source {
   sliceIndex: number;
   isRgb: boolean;
   unit: string;
+  /** 画素間隔 mm（列方向 x・行方向 y）。不明なら null（グラフと 3D は cycles/px になる）。 */
+  dx: number | null;
+  dy: number | null;
 }
 interface Spectrum {
   n: number;
@@ -103,7 +111,12 @@ export function FourierDialog({
   const [resultView, setResultView] = useState<"real" | "magnitude">("real");
   const [autoUpdate, setAutoUpdate] = useState(true);
   const [runTick, setRunTick] = useState(0);
-  const [tab, setTab] = useState<"filter" | "basis">("filter");
+  const [tab, setTab] = useState<"filter" | "basis" | "graph" | "wave">("filter");
+  // 3D 波形分解: 行 or 列、その番号、表示する成分数、対象（原画像 or 逆変換結果）。
+  const [waveAxis, setWaveAxis] = useState<"row" | "col">("row");
+  const [waveIndex, setWaveIndex] = useState(0);
+  const [waveK, setWaveK] = useState(8);
+  const [waveTarget, setWaveTarget] = useState<"source" | "result">("source");
 
   const [filterKind, setFilterKind] = useState<FilterKind>("none");
   const [rectOrientation, setRectOrientation] = useState<"vertical" | "horizontal">("vertical");
@@ -199,7 +212,17 @@ export function FourierDialog({
     const isRgb = px.unit === "raw" || pi.startsWith("RGB") || pi.startsWith("YBR") || pi === "PALETTE COLOR";
     const values = isRgb ? toGray8(px.data) : new Float32Array(px.data);
     const size = nextPow2(Math.max(px.cols, px.rows));
-    setSource({ values, width: px.cols, height: px.rows, sliceIndex: px.sliceIndex, isRgb, unit: px.unit });
+    setSource({
+      values,
+      width: px.cols,
+      height: px.rows,
+      sliceIndex: px.sliceIndex,
+      isRgb,
+      unit: px.unit,
+      dx: px.spacing[0] && px.spacing[0] > 0 ? px.spacing[0] : null,
+      dy: px.spacing[1] && px.spacing[1] > 0 ? px.spacing[1] : null,
+    });
+    setWaveIndex(Math.floor((waveAxisRef.current === "row" ? px.rows : px.cols) / 2));
     if (size > MAX_FFT_SIZE) {
       setStatus(t("fourier.tooLarge", { n: size, max: MAX_FFT_SIZE }));
       return;
@@ -215,6 +238,9 @@ export function FourierDialog({
     // 開いた時に 1 回だけ。以降は「再取得」ボタン。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const waveAxisRef = useRef(waveAxis);
+  waveAxisRef.current = waveAxis;
 
   // ── フィルタ → 逆変換 ──────────────────────────────────────────
   const filter = useMemo<FilterSpec>(() => {
@@ -335,6 +361,32 @@ export function FourierDialog({
   const appliedMask = inverse?.filtered && spectrum && inverse.mask.length === spectrum.n * spectrum.n ? inverse.mask : null;
   const filteredSuffix = appliedMask ? "_filtered" : "";
 
+  // ── グラフ（動径平均スペクトル）: タブを開いているときだけ計算する ──
+  const radial = useMemo(() => {
+    if (tab !== "graph" || !spectrum || !source) return null;
+    return radialProfile(spectrum.magnitude, spectrum.n, source.dx, source.dy, appliedMask);
+  }, [tab, spectrum, source, appliedMask]);
+
+  // ── 3D 波形分解 ──
+  const waveLen = source ? (waveAxis === "row" ? source.width : source.height) : 0;
+  const waveMaxIndex = source ? (waveAxis === "row" ? source.height : source.width) - 1 : 0;
+  const waveLine = useMemo(() => {
+    if (tab !== "wave" || !source) return null;
+    const img = waveTarget === "result" && inverse && inverse.real.length === source.values.length ? inverse.real : source.values;
+    const idx = clamp(waveIndex, 0, waveMaxIndex);
+    const out = new Float32Array(waveLen);
+    if (waveAxis === "row") for (let x = 0; x < source.width; x++) out[x] = img[idx * source.width + x];
+    else for (let y = 0; y < source.height; y++) out[y] = img[y * source.width + idx];
+    return out;
+  }, [tab, source, inverse, waveTarget, waveAxis, waveIndex, waveMaxIndex, waveLen]);
+  const waveAll = useMemo(() => (waveLine ? decomposeLine(waveLine) : null), [waveLine]);
+  const waveTop = useMemo(() => (waveAll ? topComponents(waveAll, waveK) : []), [waveAll, waveK]);
+  // ライン方向の画素間隔（行＝x 方向、列＝y 方向）。
+  const waveSpacing = source ? (waveAxis === "row" ? source.dx : source.dy) : null;
+  const waveUnit = waveSpacing ? "lp/mm" : "cycles/px";
+  const freqOf = useCallback((k: number) => (waveLen ? k / (waveLen * (waveSpacing ?? 1)) : 0), [waveLen, waveSpacing]);
+  const waveKMax = Math.max(1, Math.min(32, waveLen >> 1));
+
   const exportSpectrum = (which: "real" | "imag") => {
     if (!spectrum) return;
     const raw = which === "real" ? spectrum.realAbs : spectrum.imagAbs;
@@ -410,7 +462,19 @@ export function FourierDialog({
           {/* 原画像 */}
           <div style={column}>
             <div style={colTitle}>{t("fourier.source")}</div>
-            <FloatCanvas values={source?.values ?? null} width={source?.width ?? 0} height={source?.height ?? 0} size={SIDE} testId="fourier-source" />
+            <div style={{ position: "relative", width: SIDE + 2, height: SIDE + 2 }}>
+              <FloatCanvas values={source?.values ?? null} width={source?.width ?? 0} height={source?.height ?? 0} size={SIDE} testId="fourier-source" />
+              {tab === "wave" && source && (
+                <LineOverlay
+                  width={source.width}
+                  height={source.height}
+                  size={SIDE}
+                  axis={waveAxis}
+                  index={clamp(waveIndex, 0, waveMaxIndex)}
+                  onPick={setWaveIndex}
+                />
+              )}
+            </div>
           </div>
 
           {/* スペクトル */}
@@ -511,9 +575,15 @@ export function FourierDialog({
           <button style={tab === "basis" ? chipOn : chip} onClick={() => setTab("basis")} data-testid="fourier-tab-basis">
             {t("fourier.tab.basis")}
           </button>
+          <button style={tab === "graph" ? chipOn : chip} onClick={() => setTab("graph")} data-testid="fourier-tab-graph">
+            {t("fourier.tab.graph")}
+          </button>
+          <button style={tab === "wave" ? chipOn : chip} onClick={() => setTab("wave")} data-testid="fourier-tab-wave">
+            {t("fourier.tab.wave")}
+          </button>
         </div>
 
-        {tab === "filter" ? (
+        {tab === "filter" && (
           <div style={box}>
             <div style={row}>
               {(["none", "rect", "circle", "donut"] as FilterKind[]).map((k) => (
@@ -554,7 +624,8 @@ export function FourierDialog({
               </div>
             )}
           </div>
-        ) : (
+        )}
+        {tab === "basis" && (
           <div style={{ ...box, flexDirection: "row", gap: 14, alignItems: "flex-start" }}>
             <FloatCanvas values={basisImage} width={n} height={n} size={BASIS} testId="fourier-basis" />
             <div style={{ display: "flex", flexDirection: "column", gap: 8, flex: 1 }}>
@@ -594,6 +665,87 @@ export function FourierDialog({
               )}
               <div style={hint}>{t("fourier.basis.hint")}</div>
             </div>
+          </div>
+        )}
+        {tab === "graph" && (
+          <div style={box}>
+            <RadialSpectrumChart profile={radial} filtered={!!appliedMask} />
+            <div style={hint}>{t("fourier.graph.hint")}</div>
+          </div>
+        )}
+        {tab === "wave" && (
+          <div style={box}>
+            <div style={row}>
+              {(["row", "col"] as const).map((k) => (
+                <button
+                  key={k}
+                  style={waveAxis === k ? chipOn : chip}
+                  onClick={() => {
+                    setWaveAxis(k);
+                    if (source) setWaveIndex(Math.floor((k === "row" ? source.height : source.width) / 2));
+                  }}
+                  data-testid={`fourier-wave-axis-${k}`}
+                >
+                  {t(`fourier.wave.axis.${k}`)}
+                </button>
+              ))}
+              <SliderField
+                label={t(`fourier.wave.index.${waveAxis}`)}
+                value={clamp(waveIndex, 0, waveMaxIndex)}
+                min={0}
+                max={Math.max(0, waveMaxIndex)}
+                step={1}
+                onChange={(x) => setWaveIndex(Math.round(x))}
+                testId="fourier-wave-index"
+              />
+              <SliderField label={t("fourier.wave.k")} value={Math.min(waveK, waveKMax)} min={1} max={waveKMax} step={1} onChange={(x) => setWaveK(Math.round(x))} testId="fourier-wave-k" />
+              {(["source", "result"] as const).map((k) => (
+                <button
+                  key={k}
+                  style={waveTarget === k ? chipOn : chip}
+                  disabled={k === "result" && !inverse}
+                  onClick={() => setWaveTarget(k)}
+                  data-testid={`fourier-wave-target-${k}`}
+                >
+                  {t(`fourier.wave.target.${k}`)}
+                </button>
+              ))}
+            </div>
+            {waveLine && waveAll && (
+              <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+                <Waterfall3D line={waveLine} dc={waveAll[0]} components={waveTop} freqOf={freqOf} unit={waveUnit} />
+                <div style={{ maxHeight: 410, overflow: "auto", minWidth: 250 }}>
+                  <table style={{ borderCollapse: "collapse", fontSize: 11, fontFamily: "monospace", color: "#c3ccd5" }} data-testid="fourier-wave-table">
+                    <thead>
+                      <tr style={{ color: "#8a98a6" }}>
+                        <th style={th}>k</th>
+                        <th style={th}>{waveUnit}</th>
+                        <th style={th}>{t("fourier.wave.amp")}</th>
+                        <th style={th}>{t("fourier.wave.phase")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[waveAll[0], ...waveTop].map((c) => (
+                        <tr key={c.k} data-testid="fourier-wave-row">
+                          <td style={td}>{c.k === 0 ? "DC" : c.k}</td>
+                          <td style={td}>{freqOf(c.k).toFixed(4)}</td>
+                          <td style={td}>{fmt(c.k === 0 ? c.amp * Math.cos(c.phase) : c.amp)}</td>
+                          <td style={td}>{c.k === 0 ? "-" : c.phase.toFixed(3)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div style={{ ...hint, marginTop: 6 }}>
+                    {t("fourier.wave.lineInfo", {
+                      len: waveLen,
+                      nyq: freqOf(waveLen / 2).toFixed(4),
+                      unit: waveUnit,
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+            <div style={hint}>{t("fourier.wave.hint")}</div>
           </div>
         )}
 
@@ -697,6 +849,60 @@ function FloatCanvas({
     ctx.drawImage(off, Math.round((size - dw) / 2), Math.round((size - dh) / 2), dw, dh);
   }, [values, width, height, size]);
   return <canvas ref={ref} width={size} height={size} style={canvasStyle} data-testid={testId} />;
+}
+
+/** 原画像の上に 3D 波形分解の対象ライン（行 or 列）を描き、クリックでラインを選ぶ。FloatCanvas と同じフィット。 */
+function LineOverlay({
+  width,
+  height,
+  size,
+  axis,
+  index,
+  onPick,
+}: {
+  width: number;
+  height: number;
+  size: number;
+  axis: "row" | "col";
+  index: number;
+  onPick: (i: number) => void;
+}) {
+  const scale = Math.min(size / width, size / height);
+  const dw = Math.round(width * scale);
+  const dh = Math.round(height * scale);
+  const left = 1 + Math.round((size - dw) / 2);
+  const top = 1 + Math.round((size - dh) / 2);
+  const pick = (e: React.PointerEvent<SVGSVGElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const i =
+      axis === "row"
+        ? Math.floor(((e.clientY - r.top) / r.height) * height)
+        : Math.floor(((e.clientX - r.left) / r.width) * width);
+    onPick(clamp(i, 0, (axis === "row" ? height : width) - 1));
+  };
+  return (
+    <svg
+      width={dw}
+      height={dh}
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+      style={{ position: "absolute", left, top, cursor: axis === "row" ? "row-resize" : "col-resize" }}
+      onPointerDown={(e) => {
+        e.currentTarget.setPointerCapture(e.pointerId);
+        pick(e);
+      }}
+      onPointerMove={(e) => {
+        if (e.buttons & 1) pick(e);
+      }}
+      data-testid="fourier-wave-line-overlay"
+    >
+      {axis === "row" ? (
+        <line x1={0} x2={width} y1={index + 0.5} y2={index + 0.5} stroke="#ffb020" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+      ) : (
+        <line y1={0} y2={height} x1={index + 0.5} x2={index + 0.5} stroke="#ffb020" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+      )}
+    </svg>
+  );
 }
 
 /** 除去される周波数（マスク < 1）を半透明の赤で重ねる。 */
@@ -895,6 +1101,8 @@ const column: React.CSSProperties = { display: "flex", flexDirection: "column", 
 const colTitle: React.CSSProperties = { color: "#9fb0c0", fontWeight: 600 };
 const row: React.CSSProperties = { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" };
 const hint: React.CSSProperties = { fontSize: 11, color: "#7a8896", maxWidth: SPEC };
+const th: React.CSSProperties = { textAlign: "right", padding: "2px 8px", borderBottom: "1px solid #26313d", fontWeight: 400 };
+const td: React.CSSProperties = { textAlign: "right", padding: "2px 8px", borderBottom: "1px solid #1c252e" };
 const checkLabel: React.CSSProperties = { display: "flex", alignItems: "center", gap: 4, cursor: "pointer" };
 const canvasStyle: React.CSSProperties = { border: "1px solid #26313d", background: "#000", display: "block" };
 const box: React.CSSProperties = {

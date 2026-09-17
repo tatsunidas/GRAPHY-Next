@@ -410,3 +410,142 @@ export function unshiftedIndex(u: number, v: number, n: number): number {
   const h = n >> 1;
   return ((v + h) % n) * n + ((u + h) % n);
 }
+
+// ── 動径平均スペクトル（ナイキスト周波数つきグラフ）─────────────────
+
+export interface RadialProfile {
+  /** ビンの中心周波数（`unit`）。 */
+  freq: Float64Array;
+  /** ビンごとの |F| の平均（フィルタなし）。 */
+  mean: Float64Array;
+  /** マスクを渡したときだけ: |F|·m の平均。 */
+  meanMasked: Float64Array | null;
+  /** 列方向（x）・行方向（y）のナイキスト周波数（`unit`）。 */
+  nyquistX: number;
+  nyquistY: number;
+  /** PixelSpacing があれば "lp/mm"、無ければ "cycles/px"。 */
+  unit: "lp/mm" | "cycles/px";
+}
+
+/**
+ * シフト後の |F|（n×n）を DC からの距離（物理的な空間周波数）ごとに平均する。
+ * 周波数は fx = (u−n/2)/(n·dx)、fy = (v−n/2)/(n·dy)、f = hypot(fx, fy)。
+ * `dx`・`dy`（mm/px）のどちらかが無ければ 1 として cycles/px で返す（ナイキストは 0.5）。
+ */
+export function radialProfile(
+  magnitudeShifted: ArrayLike<number>,
+  n: number,
+  dx: number | null | undefined,
+  dy: number | null | undefined,
+  mask?: ArrayLike<number> | null,
+): RadialProfile {
+  const physical = !!(dx && dx > 0 && dy && dy > 0);
+  const sx = physical ? (dx as number) : 1;
+  const sy = physical ? (dy as number) : 1;
+  const h = n >> 1;
+  const stepX = 1 / (n * sx);
+  const stepY = 1 / (n * sy);
+  const bin = Math.min(stepX, stepY);
+  const maxF = Math.hypot(h * stepX, h * stepY);
+  const bins = Math.floor(maxF / bin + 0.5) + 1;
+  const sum = new Float64Array(bins);
+  const sumM = mask ? new Float64Array(bins) : null;
+  const cnt = new Float64Array(bins);
+  for (let v = 0; v < n; v++) {
+    const fy = (v - h) * stepY;
+    for (let u = 0; u < n; u++) {
+      const k = Math.floor(Math.hypot((u - h) * stepX, fy) / bin + 0.5);
+      const i = v * n + u;
+      sum[k] += magnitudeShifted[i];
+      if (sumM && mask) sumM[k] += magnitudeShifted[i] * mask[i];
+      cnt[k]++;
+    }
+  }
+  // 中身の無いビン（異方性の格子で飛ぶ距離）は詰める。
+  const keep: number[] = [];
+  for (let k = 0; k < bins; k++) if (cnt[k] > 0) keep.push(k);
+  const freq = new Float64Array(keep.length);
+  const mean = new Float64Array(keep.length);
+  const meanMasked = sumM ? new Float64Array(keep.length) : null;
+  keep.forEach((k, j) => {
+    freq[j] = k * bin;
+    mean[j] = sum[k] / cnt[k];
+    if (meanMasked && sumM) meanMasked[j] = sumM[k] / cnt[k];
+  });
+  return { freq, mean, meanMasked, nyquistX: 1 / (2 * sx), nyquistY: 1 / (2 * sy), unit: physical ? "lp/mm" : "cycles/px" };
+}
+
+// ── 1D ラインの波形分解（3D ウォーターフォール）────────────────────
+
+export interface WaveComponent {
+  /** 1 ライン長 L あたりの周期数（0〜⌊L/2⌋）。周波数は k/L cycles/px。 */
+  k: number;
+  /** 振幅（その成分の cos の係数。DC は平均値の絶対値）。 */
+  amp: number;
+  /** 位相 rad。 */
+  phase: number;
+}
+
+/**
+ * 長さ L のプロファイルを正弦波成分へ分解する（パディングなしの 1D DFT を直接計算）。
+ * `Σ_k amp·cos(2πk·x/L + phase) = values[x]` が成り立つよう、DC とナイキスト（L 偶数の k=L/2）は
+ * |X|/L、それ以外は 2|X|/L で正規化する。
+ */
+export function decomposeLine(values: ArrayLike<number>): WaveComponent[] {
+  const L = values.length;
+  const out: WaveComponent[] = [];
+  for (let k = 0; k <= L >> 1; k++) {
+    let re = 0;
+    let im = 0;
+    const w = (-2 * Math.PI * k) / L;
+    for (let x = 0; x < L; x++) {
+      const v = Number.isFinite(values[x]) ? values[x] : 0;
+      re += v * Math.cos(w * x);
+      im += v * Math.sin(w * x);
+    }
+    const single = k === 0 || 2 * k === L;
+    out.push({ k, amp: (Math.hypot(re, im) * (single ? 1 : 2)) / L, phase: Math.atan2(im, re) });
+  }
+  return out;
+}
+
+/** 成分 1 つの波形（長さ L）。 */
+export function waveOf(c: WaveComponent, L: number): Float32Array {
+  const out = new Float32Array(L);
+  const w = (2 * Math.PI * c.k) / L;
+  for (let x = 0; x < L; x++) out[x] = c.amp * Math.cos(w * x + c.phase);
+  return out;
+}
+
+/** DC を除き振幅の大きい順に K 個（同振幅は低周波を先に）。返り値は周波数の昇順。 */
+export function topComponents(components: WaveComponent[], K: number): WaveComponent[] {
+  return components
+    .filter((c) => c.k > 0)
+    .sort((a, b) => b.amp - a.amp || a.k - b.k)
+    .slice(0, Math.max(0, K))
+    .sort((a, b) => a.k - b.k);
+}
+
+/**
+ * 3D 点 [x, y(上), z(奥)] を正射影する。yaw＝鉛直軸まわり、pitch＝水平軸まわり（rad）。
+ * 返り値の `depth` が大きいほど奥（描くときは depth の大きい順＝奥から手前へ）。
+ */
+export function project3d(
+  p: readonly [number, number, number],
+  yaw: number,
+  pitch: number,
+  scale: number,
+  cx: number,
+  cy: number,
+): { x: number; y: number; depth: number } {
+  const [x, y, z] = p;
+  const cyw = Math.cos(yaw);
+  const syw = Math.sin(yaw);
+  const x1 = x * cyw + z * syw;
+  const z1 = -x * syw + z * cyw;
+  const cp = Math.cos(pitch);
+  const sp = Math.sin(pitch);
+  const y2 = y * cp - z1 * sp;
+  const z2 = y * sp + z1 * cp;
+  return { x: cx + x1 * scale, y: cy - y2 * scale, depth: z2 };
+}
