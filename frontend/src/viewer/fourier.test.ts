@@ -12,6 +12,7 @@ import {
   buildMask,
   complexExportSlices,
   cropFromPadded,
+  decomposeLine,
   fft2d,
   fftshift,
   isMaskActive,
@@ -19,9 +20,13 @@ import {
   nextPow2,
   normalCdf,
   padToPow2Square,
+  project3d,
+  radialProfile,
   rectCenterLimit,
   toGray8,
+  topComponents,
   unshiftedIndex,
+  waveOf,
 } from "./fourier";
 
 function mulberry32(seed: number): () => number {
@@ -286,5 +291,92 @@ describe("applyMask", () => {
       return s / a.length;
     };
     expect(variance(lp.re)).toBeLessThan(variance(src));
+  });
+});
+
+describe("radialProfile", () => {
+  it("単位とナイキスト: 間隔 0.5 mm なら 1 lp/mm、無ければ 0.5 cycles/px", () => {
+    const n = 16;
+    const mag = new Float32Array(n * n).fill(1);
+    const phys = radialProfile(mag, n, 0.5, 0.5);
+    expect(phys.unit).toBe("lp/mm");
+    expect(phys.nyquistX).toBeCloseTo(1, 12);
+    expect(phys.nyquistY).toBeCloseTo(1, 12);
+    const px = radialProfile(mag, n, null, 0.5);
+    expect(px.unit).toBe("cycles/px");
+    expect(px.nyquistX).toBe(0.5);
+    // 一様な |F| の平均は全ビン 1
+    for (const m of phys.mean) expect(m).toBeCloseTo(1, 12);
+    expect(phys.freq[0]).toBe(0);
+    // 最遠のビンは四隅（ナイキストの √2 倍付近）
+    expect(phys.freq[phys.freq.length - 1]).toBeGreaterThan(phys.nyquistX * 1.3);
+  });
+
+  it("DC だけに値があれば 0 のビンだけが立ち、リングは該当する周波数に出る", () => {
+    const n = 32;
+    const h = n / 2;
+    const dc = new Float32Array(n * n);
+    dc[h * n + h] = 100;
+    const p = radialProfile(dc, n, null, null);
+    expect(p.mean[0]).toBe(100);
+    for (let j = 1; j < p.mean.length; j++) expect(p.mean[j]).toBe(0);
+
+    const ring = new Float32Array(n * n);
+    for (let v = 0; v < n; v++)
+      for (let u = 0; u < n; u++) if (Math.round(Math.hypot(u - h, v - h)) === 8) ring[v * n + u] = 1;
+    const r = radialProfile(ring, n, null, null);
+    const peak = r.freq[r.mean.indexOf(Math.max(...r.mean))];
+    expect(peak).toBeCloseTo(8 / n, 12); // 8 周期 / 32 px = 0.25 cycles/px
+  });
+
+  it("マスクを渡すとフィルタ後の平均も返る", () => {
+    const n = 16;
+    const mag = new Float32Array(n * n).fill(2);
+    const mask = buildMask({ kind: "circle", radius: 3, mode: "pass" }, n, 0);
+    const p = radialProfile(mag, n, 1, 1, mask);
+    expect(p.meanMasked![0]).toBe(2);
+    expect(p.meanMasked![p.meanMasked!.length - 1]).toBe(0);
+  });
+});
+
+describe("decomposeLine / waveOf / topComponents", () => {
+  for (const L of [64, 65]) {
+    it(`全成分の和が元のラインに一致する（L=${L}）`, () => {
+      const rnd = mulberry32(L);
+      const line = Float32Array.from({ length: L }, () => rnd() * 300 - 80);
+      const comps = decomposeLine(line);
+      expect(comps.length).toBe((L >> 1) + 1);
+      const sum = new Float64Array(L);
+      for (const c of comps) waveOf(c, L).forEach((v, i) => (sum[i] += v));
+      for (let i = 0; i < L; i++) expect(sum[i]).toBeCloseTo(line[i], 3);
+    });
+  }
+
+  it("単一の cos 波は 1 成分・既知の振幅と位相になる", () => {
+    const L = 128;
+    const line = Float32Array.from({ length: L }, (_, x) => 40 + 7 * Math.cos((2 * Math.PI * 5 * x) / L + 0.6));
+    const comps = decomposeLine(line);
+    expect(comps[0].amp).toBeCloseTo(40, 4);
+    expect(comps[5].amp).toBeCloseTo(7, 4);
+    expect(comps[5].phase).toBeCloseTo(0.6, 4);
+    for (const c of comps) if (c.k !== 0 && c.k !== 5) expect(c.amp).toBeLessThan(1e-3);
+    const top = topComponents(comps, 3);
+    expect(top.map((c) => c.k)).toContain(5);
+    expect(top.every((c) => c.k > 0)).toBe(true);
+    expect(top.map((c) => c.k)).toEqual([...top.map((c) => c.k)].sort((a, b) => a - b));
+  });
+});
+
+describe("project3d", () => {
+  it("回転 0 は恒等（y は上向き＝画面では減る）、yaw 90° で x と z が入れ替わる", () => {
+    const p = project3d([0.5, 0.25, 0.75], 0, 0, 100, 200, 150);
+    expect(p.x).toBeCloseTo(250, 9);
+    expect(p.y).toBeCloseTo(125, 9);
+    expect(p.depth).toBeCloseTo(0.75, 9);
+    const q = project3d([0.5, 0, 0.75], Math.PI / 2, 0, 100, 0, 0);
+    expect(q.x).toBeCloseTo(75, 9); // x' = z
+    expect(q.depth).toBeCloseTo(-0.5, 9); // z' = −x
+    const r = project3d([0, 1, 0], 0, Math.PI / 2, 1, 0, 0);
+    expect(r.depth).toBeCloseTo(1, 9); // 真上から見下ろすと上向きは奥へ
   });
 });
