@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import type { ViewerTilePixelData } from "../viewer/viewerCommands";
 import { readImageInfo } from "../viewer/imageInfo";
+import { viewerOverlayProps } from "../viewer/viewerOverlay";
 import {
   MAX_FFT_SIZE,
   complexExportSlices,
@@ -436,10 +437,67 @@ export function FourierDialog({
   const crossX = swapped ? u : (u + h) % Math.max(1, n);
   const crossY = swapped ? v : (v + h) % Math.max(1, n);
 
+  // ── 位置（ドラッグで動かす） ───────────────────────────────────────────
+  // 🔴 この器は**モーダルではない**。暗幕で画面を覆うと、裏のビューアでスライスを送れず
+  //    「Reload current image」を押す手立てが無くなる（自動検査は Z スライダーへ直接値を
+  //    入れられるので通ってしまい、人が詰まることに気付けなかった）。
+  //    覆うのをやめた代わりに、画像が隠れるぶんは**ヘッダを掴んで動かせる**ようにする。
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  const dragRef = useRef<{ dx: number; dy: number } | null>(null);
+
+  const onDragStart = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    // ヘッダの中のボタン（再取得）はドラッグの取っ手にしない。
+    if ((e.target as HTMLElement).closest("button")) return;
+    const el = panelRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    dragRef.current = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+    setPos({ x: r.left, y: r.top });
+    e.currentTarget.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }, []);
+
+  const onDragMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    const el = panelRef.current;
+    if (!d || !el) return;
+    // 画面の外へ出し切らない（ヘッダが必ず掴める位置に残す）。
+    const x = Math.min(Math.max(e.clientX - d.dx, EDGE - el.offsetWidth), window.innerWidth - EDGE);
+    const y = Math.min(Math.max(e.clientY - d.dy, 0), window.innerHeight - EDGE);
+    setPos({ x, y });
+  }, []);
+
+  const onDragEnd = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    dragRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+  }, []);
+
+  // 暗幕が無いので、外側クリックでは閉じない。Esc で閉じられるようにしておく。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   return (
-    <div style={backdrop} onMouseDown={onClose}>
-      <div style={panel} onMouseDown={(e) => e.stopPropagation()} data-testid="fourier-dialog">
-        <div style={header}>
+    <div style={shell}>
+      <div
+        ref={panelRef}
+        style={pos ? { ...panel, position: "fixed", left: pos.x, top: pos.y, margin: 0 } : panel}
+        data-testid="fourier-dialog"
+        {...viewerOverlayProps}
+      >
+        <div
+          style={header}
+          onPointerDown={onDragStart}
+          onPointerMove={onDragMove}
+          onPointerUp={onDragEnd}
+          onPointerCancel={onDragEnd}
+          data-testid="fourier-header"
+        >
           <span>{t("fourier.title")}</span>
           <span style={{ flex: 1 }} />
           <span style={{ fontSize: 11, color: "#8a98a6", fontWeight: 400 }}>
@@ -1071,16 +1129,22 @@ function fmt(v: number): string {
 
 // ── スタイル（HistogramDialog と揃える）──────────────────────────
 
-const backdrop: React.CSSProperties = {
+//: 器を置くだけの枠。**画面を覆わない**（`pointerEvents: "none"`）ので、裏の 2D ビューアは
+//: そのまま操作できる（スライスを送ってから「Reload current image」を押せる）。
+//: 暗幕を敷くと、裏のスライダーもホイールもメニューも届かなくなる。
+const shell: React.CSSProperties = {
   position: "fixed",
   inset: 0,
-  background: "rgba(0,0,0,0.45)",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
   zIndex: 200,
+  pointerEvents: "none",
 };
+//: 画面の端に残す量（ドラッグでヘッダを掴めなくなるところまで出さない）。
+const EDGE = 80;
 const panel: React.CSSProperties = {
+  pointerEvents: "auto",
   background: "#1a2129",
   border: "1px solid #2c3742",
   borderRadius: 10,
@@ -1095,7 +1159,7 @@ const panel: React.CSSProperties = {
   maxHeight: "94vh",
   overflow: "auto",
 };
-const header: React.CSSProperties = { display: "flex", alignItems: "center", fontWeight: 600, fontSize: 14, color: "#7fb2ec" };
+const header: React.CSSProperties = { display: "flex", alignItems: "center", fontWeight: 600, fontSize: 14, color: "#7fb2ec", cursor: "move", touchAction: "none", userSelect: "none" };
 const footer: React.CSSProperties = { display: "flex", alignItems: "center", marginTop: 2 };
 const column: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 6 };
 const colTitle: React.CSSProperties = { color: "#9fb0c0", fontWeight: 600 };

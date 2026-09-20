@@ -456,6 +456,56 @@ async function main(): Promise<void> {
     const after = await canvasGray(viewer, "fourier-source");
     check(meanAbsDiff(before, after) > 0.5, "再取得で原画像が変わる", meanAbsDiff(before, after));
     await viewer.screenshot({ path: path.join(OUT_DIR, "7-refetch.png") });
+
+    // [10] モーダルでないこと（2026-09-20）。
+    // 🔴 以前は暗幕（backdrop）が画面を覆い、押すと閉じていた。**人は裏のスライダーへ触れず、
+    //    スライスを送ってから「再取得」を押すことができなかった**（このスパイクは Z スライダーへ
+    //    直接値を入れられるので通ってしまい、詰まりに気付けなかった）。器の外を押しても閉じないこと、
+    //    器を置いたまま裏のスライスが送れること、ヘッダを掴んで動かせることを見る。
+    console.log("\n[10] モーダルでない・ヘッダで動かせる");
+    const dialog = viewer.getByTestId("fourier-dialog");
+    const box0 = await dialog.boundingBox();
+    // 器の外（画像の上）を押しても閉じない。
+    await viewer.mouse.click(40, 300);
+    await settle(viewer, 400);
+    check(await dialog.isVisible(), "器の外を押しても閉じない");
+
+    // 器を開いたまま、裏のビューアでスライスを送れる（スライダーを実際に押して動かす）。
+    const zSlider = viewer.getByTestId("dim-slider-z");
+    const sbox = await zSlider.boundingBox();
+    if (sbox) {
+      await viewer.mouse.click(sbox.x + sbox.width * 0.75, sbox.y + sbox.height / 2);
+      await settle(viewer, 900);
+    }
+    check(await dialog.isVisible(), "スライダーを押しても器は開いたまま");
+    const zAfter = await zSlider.inputValue();
+    check(Number(zAfter) !== 20, "器を開いたまま裏のスライスが送れる", zAfter);
+    await viewer.getByTestId("fourier-refetch").click();
+    await settle(viewer, 2500);
+    const hdr3 = (await dialog.textContent()) ?? "";
+    check(new RegExp(`スライス ${Number(zAfter) + 1}|slice ${Number(zAfter) + 1}`).test(hdr3),
+      "送った先のスライスで再取得できる", hdr3.slice(0, 200));
+
+    // ヘッダを掴んで動かす。
+    const header = viewer.getByTestId("fourier-header");
+    const hbox = await header.boundingBox();
+    if (hbox && box0) {
+      await viewer.mouse.move(hbox.x + 40, hbox.y + hbox.height / 2);
+      await viewer.mouse.down();
+      await viewer.mouse.move(hbox.x + 40 - 120, hbox.y + hbox.height / 2 + 60, { steps: 8 });
+      await viewer.mouse.up();
+      await settle(viewer, 400);
+      const box1 = await dialog.boundingBox();
+      check(!!box1 && Math.abs(box1.x - box0.x) > 60 && Math.abs(box1.y - box0.y) > 30,
+        "ヘッダのドラッグで器が動く", { before: box0, after: box1 });
+    }
+    // 動かした器と、その裏で送ったスライスが同時に写る 1 枚（Esc の前に撮る）。
+    await viewer.screenshot({ path: path.join(OUT_DIR, "10-modeless.png") });
+
+    // Esc で閉じる（暗幕が無くなったぶんの代わり）。
+    await viewer.keyboard.press("Escape");
+    await settle(viewer, 400);
+    check(!(await dialog.isVisible().catch(() => false)), "Esc で閉じる");
   } finally {
     await d.stop();
   }
