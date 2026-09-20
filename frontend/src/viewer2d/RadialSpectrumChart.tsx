@@ -14,7 +14,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n/i18n";
-import type { RadialProfile } from "../viewer/fourier";
+import { isolatedIndices, type RadialProfile } from "../viewer/fourier";
 
 const W = 760;
 const H = 260;
@@ -119,7 +119,10 @@ export function RadialSpectrumChart({ profile, filtered }: { profile: RadialProf
     ctx.fillText(t("fourier.graph.yAxis"), 0, 0);
     ctx.restore();
 
-    // 曲線（2px・丸め）
+    // 曲線（2px・丸め）。
+    // 🔴 両隣が 0 の点は線分にならず、moveTo だけでは何も描かれない。合成した縞のような
+    //   きれいな画像では正の値が飛び飛びのビンにしか入らず、**グラフが空になる**
+    //   （罫線とナイキスト線だけが残る）。孤立した点は点として描く。
     const drawLine = (s: Float64Array, color: string) => {
       ctx.strokeStyle = color;
       ctx.lineWidth = 2;
@@ -139,6 +142,12 @@ export function RadialSpectrumChart({ profile, filtered }: { profile: RadialProf
         started = true;
       }
       ctx.stroke();
+      ctx.fillStyle = color;
+      for (const i of isolatedIndices(s)) {
+        ctx.beginPath();
+        ctx.arc(xOf(freq[i]), yOf(s[i]), 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
     };
     drawLine(mean, C.series1);
     if (filtered && meanMasked) drawLine(meanMasked, C.series2);

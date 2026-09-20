@@ -549,3 +549,21 @@ export function project3d(
   const z2 = y * sp + z1 * cp;
   return { x: cx + x1 * scale, y: cy - y2 * scale, depth: z2 };
 }
+
+/**
+ * 系列のうち「両隣が 0（または端）」の点の添字。
+ *
+ * <p>グラフは点と点を線分で結ぶので、孤立した点は線にならず何も描かれない。合成した縞のような
+ * きれいな画像では動径平均が飛び飛びのビンにしか入らず、それが**グラフが空に見える**原因になる。
+ * 呼び出し側はここで返った点を点（マーカー）として描く。
+ */
+export function isolatedIndices(s: ArrayLike<number>): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < s.length; i++) {
+    if (!(s[i] > 0)) continue;
+    if (i > 0 && s[i - 1] > 0) continue;
+    if (i + 1 < s.length && s[i + 1] > 0) continue;
+    out.push(i);
+  }
+  return out;
+}

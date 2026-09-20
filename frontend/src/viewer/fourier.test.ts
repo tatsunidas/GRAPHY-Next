@@ -16,6 +16,7 @@ import {
   fft2d,
   fftshift,
   isMaskActive,
+  isolatedIndices,
   multiplyMask,
   nextPow2,
   normalCdf,
@@ -378,5 +379,17 @@ describe("project3d", () => {
     expect(q.depth).toBeCloseTo(-0.5, 9); // z' = −x
     const r = project3d([0, 1, 0], 0, Math.PI / 2, 1, 0, 0);
     expect(r.depth).toBeCloseTo(1, 9); // 真上から見下ろすと上向きは奥へ
+  });
+});
+
+describe("isolatedIndices", () => {
+  it("両隣が 0 の点だけを返す（線にならない点）", () => {
+    expect(isolatedIndices([0, 5, 0, 1, 2, 0, 3])).toEqual([1, 6]);
+  });
+  it("端の点も、隣が 0 なら孤立とみなす", () => {
+    expect(isolatedIndices([7, 0, 0, 7])).toEqual([0, 3]);
+  });
+  it("連続している系列では空", () => {
+    expect(isolatedIndices([1, 2, 3])).toEqual([]);
   });
 });
