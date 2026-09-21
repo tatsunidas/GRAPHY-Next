@@ -224,6 +224,42 @@ export interface ImagePixelRange {
   voiRange: { lower: number; upper: number } | null;
   /** この imageId に対して metaData が返す voiLutModule（プロバイダの解決結果）。 */
   voiLutModule: unknown;
+  /**
+   * **画素配列の実体**（`fw/angio-design.md` §6.8）。
+   *
+   * <p>🚨 「画素は正しいのに真っ黒」を切り分けるために要る。値だけ見ていると
+   * `min`/`max`/`mean` が妥当なので正常に見えるが、**配列の長さや型が rows×columns と
+   * 食い違っていると GPU へのアップロードが黙って捨てられ、画面だけが黒くなる**
+   * （`WebGL texImage2D: ArrayBufferView not big enough`）。長さと型を数値で出す。
+   */
+  pixels: {
+    length: number;
+    /** `rows * columns`（1 チャンネルぶんの期待値）。 */
+    expected: number;
+    ctor: string;
+    bytesPerElement: number;
+    rows: number;
+    columns: number;
+    /** DICOM 由来の成分数と、cornerstone が色と見なしているか。 */
+    samplesPerPixel: number | null;
+    numberOfComponents: number | null;
+    color: boolean | null;
+    rgba: boolean | null;
+    dataType: string | null;
+    bitsAllocated: number | null;
+  } | null;
+}
+
+/** `cache.getImage()` が返すもののうち、ここで読む分だけ。 */
+interface ImageLike {
+  getPixelData?: () => ArrayLike<number>;
+  rows?: number;
+  columns?: number;
+  numberOfComponents?: number;
+  color?: boolean;
+  rgba?: boolean;
+  dataType?: string;
+  bitsAllocated?: number;
 }
 
 function getImagePixelRange(): ImagePixelRange[] {
@@ -237,9 +273,26 @@ function getImagePixelRange(): ImagePixelRange[] {
     let min = NaN;
     let max = NaN;
     let mean = NaN;
+    let pixels: ImagePixelRange["pixels"] = null;
     try {
-      const img = imageId ? (cache.getImage(imageId) as unknown as { getPixelData?: () => ArrayLike<number> }) : null;
+      const img = imageId ? (cache.getImage(imageId) as unknown as ImageLike) : null;
       const px = img?.getPixelData?.();
+      if (img && px) {
+        pixels = {
+          length: px.length,
+          expected: (img.rows ?? 0) * (img.columns ?? 0),
+          ctor: (px as object).constructor?.name ?? "?",
+          bytesPerElement: (px as { BYTES_PER_ELEMENT?: number }).BYTES_PER_ELEMENT ?? 0,
+          rows: img.rows ?? 0,
+          columns: img.columns ?? 0,
+          samplesPerPixel: (metaData.get("imagePixelModule", imageId!) as { samplesPerPixel?: number } | undefined)?.samplesPerPixel ?? null,
+          numberOfComponents: img.numberOfComponents ?? null,
+          color: img.color ?? null,
+          rgba: img.rgba ?? null,
+          dataType: img.dataType ?? null,
+          bitsAllocated: img.bitsAllocated ?? null,
+        };
+      }
       if (px && px.length) {
         min = Number.POSITIVE_INFINITY;
         max = Number.NEGATIVE_INFINITY;
@@ -257,7 +310,7 @@ function getImagePixelRange(): ImagePixelRange[] {
     }
     const range = (anyVp.getProperties?.() ?? {}).voiRange ?? null;
     const voiLutModule = imageId ? (metaData.get("voiLutModule", imageId) ?? null) : null;
-    out.push({ viewportId: vp.id, imageId, min, max, mean, voiRange: range, voiLutModule });
+    out.push({ viewportId: vp.id, imageId, min, max, mean, voiRange: range, voiLutModule, pixels });
   }
   return out;
 }
