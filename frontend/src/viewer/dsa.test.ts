@@ -11,6 +11,7 @@ import {
   pickMaskFrames,
   shiftBilinear,
   subtractFrames,
+  warpRigid,
 } from "./dsa";
 
 /** w×h の画像を作る（f(x,y) で値を決める）。 */
@@ -75,6 +76,51 @@ describe("shiftBilinear — サブピクセル平行移動", () => {
   it("縦方向も同じ規約（dy 正で下へ）", () => {
     const src = img(1, 3, (_x, y) => y);
     expect(Array.from(shiftBilinear(src, 1, 3, 0, 1))).toEqual([0, 0, 1]);
+  });
+});
+
+describe("warpRigid — 回転つきの剛体ワープ", () => {
+  it("★ 回転 0 は shiftBilinear と 1 ビットも変わらない（既存の数値を動かさない）", () => {
+    const w = 24, h = 24;
+    const src = img(w, h, (x, y) => Math.sin(x / 3) * 40 + Math.cos(y / 5) * 25);
+    for (const [dx, dy] of [[0, 0], [2, -3], [1.4, -0.6]] as Array<[number, number]>) {
+      expect(Array.from(warpRigid(src, w, h, dx, dy, 0))).toEqual(
+        Array.from(shiftBilinear(src, w, h, dx, dy)),
+      );
+    }
+  });
+
+  it("360 度回しても元に戻る", () => {
+    const w = 16, h = 16;
+    const src = img(w, h, (x, y) => x * 3 + y);
+    const out = warpRigid(src, w, h, 0, 0, 360);
+    for (let i = 0; i < src.length; i++) expect(out[i]).toBeCloseTo(src[i], 3);
+  });
+
+  it("中心まわりに回す（中心の画素は動かない）", () => {
+    const w = 33, h = 33;
+    // 中心だけ明るい点。回しても中心に残る。
+    const src = img(w, h, (x, y) => (x === 16 && y === 16 ? 100 : 0));
+    const out = warpRigid(src, w, h, 0, 0, 30);
+    expect(out[16 * w + 16]).toBeCloseTo(100, 3);
+  });
+
+  it("90 度回すと (x,y) が (y,x) 相当へ移る（順方向の定義の確認）", () => {
+    const w = 9, h = 9;
+    const src = img(w, h, () => 0);
+    src[2 * w + 6] = 100; // 中心 (4,4) から見て (+2, -2)
+    const out = warpRigid(src, w, h, 0, 0, 90);
+    // 反時計回り／時計回りの規約ごと固定する: (+2,-2) → (+2,+2)
+    expect(out[6 * w + 6]).toBeCloseTo(100, 3);
+  });
+
+  it("回転と平行移動は「回転 → 平行移動」の順", () => {
+    const w = 21, h = 21;
+    const src = img(w, h, () => 0);
+    src[10 * w + 10] = 100; // ちょうど中心
+    const out = warpRigid(src, w, h, 3, -2, 45);
+    // 中心の点は回転で動かないので、平行移動ぶんだけ動く。
+    expect(out[(10 - 2) * w + (10 + 3)]).toBeCloseTo(100, 3);
   });
 });
 
@@ -356,5 +402,97 @@ describe("parseFrameNumbers — DICOM の 1 origin を 0 origin へ", () => {
 
   it("0 以下は捨てる（1 origin なので 0 は不正）", () => {
     expect(parseFrameNumbers("0\\1\\2")).toEqual([0, 1]);
+  });
+});
+
+
+describe("subtractFrames — levelMatch（一様オフセットの除去・§6.9 5-F）", () => {
+  const W = 40;
+  const H = 40;
+  /** 血管に見立てた濃い筋を 1 本だけ持つ背景（画面のごく一部）。 */
+  const scene = (gain: number): Float32Array => {
+    const f = new Float32Array(W * H);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const bone = 60 + 20 * Math.sin((x * 2 * Math.PI) / 13) + 15 * Math.cos((y * 2 * Math.PI) / 9);
+        const vessel = x >= 18 && x <= 21 ? -25 : 0; // 4/40 列 ＝ 画面の 10%
+        f[y * W + x] = gain * (bone + vessel);
+      }
+    }
+    return f;
+  };
+
+  const median = (a: Float32Array): number => {
+    const v = Array.from(a).sort((x, y) => x - y);
+    const h = v.length >> 1;
+    return v.length % 2 ? v[h] : (v[h - 1] + v[h]) / 2;
+  };
+
+  it("🔴 ★ 既定（false）では一様オフセットがそのまま残る", () => {
+    // 露出が 1.9 倍違う 2 枚（実機の先頭フレームは p10 103 対 プラトー 55）。
+    const out = subtractFrames(scene(1.9), scene(1), W, H, { dx: 0, dy: 0, logarithmic: true })!;
+    expect(median(out)).toBeCloseTo(Math.log(1.9), 2);
+  });
+
+  it("★ levelMatch を立てると中央値が 0 になる（絵の中身は変えない）", () => {
+    const base = { dx: 0, dy: 0, logarithmic: true };
+    const plain = subtractFrames(scene(1.9), scene(1), W, H, base)!;
+    const matched = subtractFrames(scene(1.9), scene(1), W, H, { ...base, levelMatch: true })!;
+    expect(Math.abs(median(matched))).toBeLessThan(0.01);
+    // 🔑 引いたのは**定数だけ**。画素ごとの差（＝見たいもの）は 1 つも変わっていない。
+    const offset = median(plain) - median(matched);
+    for (let i = 0; i < plain.length; i++) expect(matched[i]).toBeCloseTo(plain[i] - offset, 5);
+  });
+
+  it("血管（画面の 10%）があっても中央値は動かない", () => {
+    // 造影の有無で中央値がずれないこと＝レベル合わせが造影を消さないこと。
+    const withVessel = subtractFrames(scene(1), scene(1), W, H, { dx: 0, dy: 0, logarithmic: true, levelMatch: true })!;
+    for (let i = 0; i < withVessel.length; i++) expect(withVessel[i]).toBeCloseTo(0, 6);
+  });
+
+  it("🚨 コリメータ外（ちょうど 0）の画素は中央値に入れない", () => {
+    const mask = scene(1.9);
+    const live = scene(1);
+    // 画面の 60% を 0 で埋める（実データのコリメータより極端に）。
+    for (let i = 0; i < mask.length * 0.6; i++) { mask[i] = 0; live[i] = 0; }
+    const out = subtractFrames(mask, live, W, H, { dx: 0, dy: 0, logarithmic: true, levelMatch: true })!;
+    // 0 を除いた側（後ろの 40%）の中央値が 0 になっていること。
+    const tail = out.slice(Math.floor(out.length * 0.6));
+    expect(Math.abs(median(tail))).toBeLessThan(0.01);
+  });
+});
+
+
+describe("subtractFrames — 自分自身を引くと厳密にゼロ（§6.10 Phase 6）", () => {
+  const W = 33;
+  const H = 21;
+  const frame = (): Float32Array => {
+    const f = new Float32Array(W * H);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        f[y * W + x] = 40 + 30 * Math.sin((x * 2 * Math.PI) / 7) + 20 * Math.cos((y * 2 * Math.PI) / 5);
+      }
+    }
+    return f;
+  };
+
+  it("🔴 ★ 非造影フレームにとって誤差ゼロのマスクは自分自身である", () => {
+    const f = frame();
+    for (const logarithmic of [true, false]) {
+      const out = subtractFrames(f, f, W, H, { dx: 0, dy: 0, logarithmic })!;
+      for (let i = 0; i < out.length; i++) expect(out[i]).toBe(0);
+    }
+  });
+
+  it("levelMatch を立ててもゼロのまま（中央値が 0 なので何も引かれない）", () => {
+    const f = frame();
+    const out = subtractFrames(f, f, W, H, { dx: 0, dy: 0, logarithmic: true, levelMatch: true })!;
+    for (let i = 0; i < out.length; i++) expect(out[i]).toBe(0);
+  });
+
+  it("🚨 シフトを入れるとゼロではなくなる（だから計画の dx/dy は 0 でなければならない）", () => {
+    const f = frame();
+    const out = subtractFrames(f, f, W, H, { dx: 0.4, dy: 0, logarithmic: true })!;
+    expect(out.some((v) => Math.abs(v) > 1e-6)).toBe(true);
   });
 });

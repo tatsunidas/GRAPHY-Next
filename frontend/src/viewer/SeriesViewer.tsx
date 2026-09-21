@@ -17,26 +17,40 @@ import { Xa3dBifurcationDialog } from "./Xa3dBifurcationDialog";
 import { XaQlvDialog } from "./XaQlvDialog";
 import { XaIvusSyncDialog } from "./XaIvusSyncDialog";
 import { XaTimiDialog } from "./XaTimiDialog";
+import { XaDsaDialog, type MaskRun } from "./XaDsaDialog";
+import { buildAutoPhaseMaskPlan, releaseAutoPhaseWorker, type AutoPhaseResult } from "./xaAutoPhaseMask";
 import { Xa3dQcaDialog } from "./Xa3dQcaDialog";
 import { useQcaRuns } from "./xaRecon3dStore";
 import { consumeXaTask, isFreshRequest, matchesRequest, onXaTaskRequest, pullXaTask } from "./xaTaskLaunch";
-import { prewarmXaDataset, readXaCineSource, resolveXaFps, type XaCineSource } from "./xaCine";
+import { prewarmXaDataset, readXaCineSource, resolveXaFps, type XaCineSource, frameStartTimesMs} from "./xaCine";
 import { readVoiWindow } from "./viewportRead";
 import type { XaExportWindow } from "./xaFrameExport";
 import { downloadBytes, exportFramesAsZip } from "./xaFrameExport";
 import { encodeXaMp4 } from "../api";
+import { needsLogTransform } from "./dsa";
 import {
+  alignDsaOnEdges,
   autoAlignDsa,
+  setDsaAutoAlign,
+  setDsaLevelMatch,
+  clearDsaNudge,
   dsaImageId,
   dsaSessionState,
+  dsaFramePlan,
   measureDsaResidual,
+  measureDsaResidualAll,
   prepareDsaSession,
   readXaDsaTags,
   rebuildDsaMask,
   releaseDsaSession,
   setDsaLogarithmic,
+  nudgeDsaRotation,
+  nudgeDsaShift,
+  setDsaFramePlan,
   setDsaMaskFrames,
   setDsaShift,
+  type DsaFramePlanEntry,
+  type DsaShiftScope,
   type DsaSessionState,
 } from "./dsaLoader";
 import {
@@ -381,6 +395,45 @@ export function SeriesViewer({
   const [qlvDialogOpen, setQlvDialogOpen] = useState(false);
   const [ivusDialogOpen, setIvusDialogOpen] = useState(false);
   const [timiDialogOpen, setTimiDialogOpen] = useState(false);
+  const [dsaDiagOpen, setDsaDiagOpen] = useState(false);
+  const [dsaResiduals, setDsaResiduals] = useState<number[] | null>(null);
+  const [dsaResidualProgress, setDsaResidualProgress] = useState<string | null>(null);
+  // ── 診断ダイアログを開いたら、全フレームの残差を測る（§6.14）──────────
+  // 🔑 「うまくいっているか」の答えはこれ。開いたときだけ走らせ、DSA を触ったら測り直す。
+  useEffect(() => {
+    if (!dsaDiagOpen || !dsaToken) { setDsaResiduals(null); setDsaResidualProgress(null); return; }
+    let cancelled = false;
+    setDsaResiduals(null);
+    setDsaResidualProgress("0%");
+    void measureDsaResidualAll(
+      dsaToken,
+      (done, total) => { if (!cancelled) setDsaResidualProgress(`${Math.round((done / total) * 100)}%`); },
+      () => cancelled,
+    ).then((r) => {
+      if (cancelled) return;
+      setDsaResiduals(r);
+      setDsaResidualProgress(null);
+    });
+    return () => { cancelled = true; };
+  }, [dsaDiagOpen, dsaToken, dsaVersion]);
+
+  /** 診断に出す「いま効いている計画」。DSA を触るたびに取り直す。 */
+  const dsaPlanEntries = useMemo(
+    () => (dsaToken ? dsaFramePlan(dsaToken) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [dsaToken, dsaVersion, dsaDiagOpen],
+  );
+  /** ずらしを当てる範囲（§6.4 の 3 択）。既定はラン全体＝従来の挙動。 */
+  const [dsaScope, setDsaScope] = useState<DsaShiftScope>("all");
+  /** エッジ合わせで回転も探すか。既定 OFF（自由度を上げると見たい差を消す）。 */
+  const [dsaRotate, setDsaRotate] = useState(false);
+  /**
+   * 自動同位相 DSA の状態（§6.8）。DSA を ON にしたら自動で走る。
+   * 🔴 **失敗したら計画を入れず、理由を出して従来の単一マスクのままにする。**
+   */
+  const [autoPhase, setAutoPhase] = useState<
+    { status: "running"; progress: string } | { status: "done"; result: AutoPhaseResult } | null
+  >(null);
   const [xaBifDialogOpen, setXaBifDialogOpen] = useState(false);
   const [xa3dDialogOpen, setXa3dDialogOpen] = useState(false);
   /** 表示状態（GSPS）の読み込み（§14.1）。 */
@@ -443,6 +496,24 @@ export function SeriesViewer({
     pullXaTask();
     return off;
   }, [acceptsTaskLaunch, studyUid, seriesUid, isFrameStack, layoutReady, t]);
+
+  /**
+   * 同じシリーズのほかのラン（同位相マスクの供給元の候補）。
+   *
+   * 🔴 `XaFrameExpander` は **Z 軸＝ラン**なので、別ランは「同じシリーズの別 Z」である
+   * （`fw/angio-design.md` §5.2）。別シリーズからの取り込みは未対応——幾何が無いので
+   * 同一 FOV / 同一角度であることを確かめる手立てが要る。
+   */
+  const maskRuns = useMemo<MaskRun[]>(() => {
+    if (!isFrameStack || !layout.tStack) return [];
+    const out: MaskRun[] = [];
+    for (let i = 0; i < layout.nZ; i++) {
+      const ids = layout.tStack(i, cc) ?? [];
+      if (ids.length > 1) out.push({ index: i, label: `${otherAxisSpec.label} ${i + 1}`, imageIds: ids });
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout, cc, isFrameStack, otherAxisSpec.label]);
 
   const dsaImageIds = useMemo(() => {
     if (!dsaToken) return null;
@@ -543,6 +614,48 @@ export function SeriesViewer({
         measureDsaResidual(token, zc)
           .then((r) => setDsaResidual(r))
           .catch(() => setDsaResidual(null));
+
+        // ── 自動同位相 DSA（§6.8）──────────────────────────────────
+        // 🔴 **await しない。** ここで待つと DSA の表示そのものが数秒遅れる。
+        //    差分は先に出し、計画は整い次第あとから当てる。
+        setAutoPhase({ status: "running", progress: "" });
+        void buildAutoPhaseMaskPlan({
+          frameIds: zStack,
+          frameStartTimesMs: frameStartTimesMs(xaCineSource ?? { numberOfFrames: zStack.length }),
+          logarithmic: needsLogTransform(tags?.pixelIntensityRelationship ?? null),
+          isCancelled: () => cancelled,
+          onProgress: (progress) => {
+            if (!cancelled) setAutoPhase({ status: "running", progress });
+          },
+          // 🔴 **計画の成否に依らず、既定マスクを造影前へ移す**（§5-D）。
+          //    既定のままだと露出の立ち上がり（ラン先頭）が落ち先になり、計画に載らない
+          //    フレームだけ一様に明るい絵になる——実機で利用者が見た不具合そのもの。
+          onPreContrast: ({ preContrast, selfPlan }) => {
+            if (cancelled || !preContrast.length) return;
+            if (!setDsaMaskFrames(token, preContrast)) return;
+            // 🔴 露出の立ち上がりは計画の有無と関係なく存在する。ここで効かせないと
+            //    先頭の数フレームだけ一様に明るい絵のまま残る（§5-F）。
+            setDsaLevelMatch(token, true);
+            // 🔴 **造影前フレームは自分自身を引く。** 誤差ゼロで、追尾の成否に依らない。
+            //    追尾を待たせないよう、ここで先に入れてしまう（§6.10 3-B）。
+            if (selfPlan) setDsaFramePlan(token, selfPlan, t("dsa.autoPhase.selfOnly"));
+            void rebuildDsaMask(token).then((ok) => {
+              if (ok && !cancelled) refreshDsa(token, zc);
+            });
+          },
+        })
+          .then((result) => {
+            if (cancelled) return;
+            setAutoPhase({ status: "done", result });
+            // 🔴 **`ok` に依らず計画を入れる。** 失敗しても「造影前は自分自身」の分は正しく、
+            //    それを捨てると 1〜8 が他人のマスクに戻る（§6.10 3-B）。
+            if (!result.plan) return;
+            const label = result.ok ? t("dsa.autoPhase.label") : t("dsa.autoPhase.selfOnly");
+            if (setDsaFramePlan(token, result.plan, label)) refreshDsa(token, zc);
+          })
+          .catch(() => {
+            if (!cancelled) setAutoPhase({ status: "done", result: { ok: false, reason: "trackFailed" } });
+          });
       })
       .catch(() => {
         if (!cancelled) {
@@ -555,9 +668,13 @@ export function SeriesViewer({
       });
     return () => {
       cancelled = true;
+      setAutoPhase(null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dsaOn, isFrameStack, zStackKey]);
+
+  // シリーズを離れたら Worker を畳む（画素を掴んだままにしない）。
+  useEffect(() => () => releaseAutoPhaseWorker(), []);
 
   /**
    * 表示中のフレーム列を PNG にして ZIP で保存する（fw/angio-design.md §14.3）。
@@ -664,22 +781,39 @@ export function SeriesViewer({
    */
   useEffect(() => {
     if (!dsaToken) return;
+    // 🔴 **状態はフレームを変えたらすぐ読み直す**（§6.8）。同位相マスクが効いていると
+    //    マスクもシフトもフレームごとに違うので、これを忘れると**画面が古いフレームの
+    //    マスクを表示したまま**になる。実際 Phase 2 でそれを取りこぼし、
+    //    「フレームを送ってもマスクが変わらない」＝効いていないように見えていた。
+    //    残差と違って読み直しは安い（画素を触らない）ので、デバウンスしない。
+    setDsaState(dsaSessionState(dsaToken, zc));
     const id = window.setTimeout(() => {
       measureDsaResidual(dsaToken, zc)
         .then((r) => setDsaResidual(r))
         .catch(() => setDsaResidual(null));
     }, 300);
     return () => window.clearTimeout(id);
-  }, [dsaToken, zc]);
+  }, [dsaToken, zc, dsaVersion]);
+
+  // keydown ハンドラは要素へ 1 度だけ張るので、そこから見る最新値は ref で持つ。
+  // （依存に入れて張り直すと、リスナの付け外しが毎レンダ走って打鍵を取りこぼす。）
+  const dsaTokenRef = useRef<string | null>(null);
+  dsaTokenRef.current = dsaToken;
+  const dsaScopeRef = useRef<DsaShiftScope>("all");
+  dsaScopeRef.current = dsaScope;
+  // （`zcRef` は下の sync 用リーフを共用する。）
 
   /** DSA のパラメータを変えた後に呼ぶ（再合成 → 状態と残差の更新）。 */
   const refreshDsa = (token: string, frame: number) => {
     setDsaVersion((v) => v + 1);
-    setDsaState(dsaSessionState(token));
+    // 🔴 フレームを渡す。同位相マスクが効いていると、マスクもシフトもフレームごとに違う。
+    setDsaState(dsaSessionState(token, frame));
     measureDsaResidual(token, frame)
       .then((r) => setDsaResidual(r))
       .catch(() => setDsaResidual(null));
   };
+  const refreshDsaRef = useRef(refreshDsa);
+  refreshDsaRef.current = refreshDsa;
 
   /**
    * 読み込んだ表示状態（GSPS）を当てる（§14.1）。
@@ -935,6 +1069,15 @@ export function SeriesViewer({
         e.preventDefault();
       } else if (matchesCombo("O", e)) {
         setOverlays((o) => ({ ...o, text: !o.text }));
+        e.preventDefault();
+      } else if (e.altKey && dsaTokenRef.current && DSA_ARROWS[e.key]) {
+        // DSA のピクセルシフト（§6.4 の「矢印キー 1px / Shift+矢印 0.1px」）。
+        // 🔴 **素の矢印はスライス送りのまま**なので Alt を付ける（`shortcuts/registry.ts` の注記）。
+        //    DSA 表示中でなければ何も起きない——同じキーが文脈で別の事をするのは避ける。
+        const [ux, uy] = DSA_ARROWS[e.key];
+        const stepPx = e.shiftKey ? 0.1 : 1;
+        nudgeDsaShift(dsaTokenRef.current, ux * stepPx, uy * stepPx, dsaScopeRef.current, zcRef.current);
+        refreshDsaRef.current(dsaTokenRef.current, zcRef.current);
         e.preventDefault();
       }
     };
@@ -1375,6 +1518,61 @@ export function SeriesViewer({
                           frames: dsaState.maskFrames.map((i) => i + 1).join(", "),
                         })}
                       </span>
+                      {/* 🔴 同位相マスクが効いていることを必ず出す。出さないと「マスクが
+                          フレームごとに変わっている」ことが画面から読めず、上の dsa-mask が
+                          フレーム送りで勝手に変わるように見える。 */}
+                      {dsaState.framePlan && (
+                        <span style={{ ...hint, color: "#69c98a" }} data-testid="dsa-frame-plan">
+                          {t("dsa.framePlan", {
+                            label: dsaState.framePlanLabel ?? "",
+                            n: dsaState.framePlanCovered,
+                          })}
+                        </span>
+                      )}
+                      {/* 自動同位相 DSA（§6.8）。🔴 **黙って数秒固まらせない**——準備中も、
+                          作れなかった理由も、必ず画面に出す。 */}
+                      {autoPhase?.status === "running" && (
+                        <span style={{ ...hint, color: "#c08a30" }} data-testid="dsa-auto-phase-busy">
+                          {t("dsa.autoPhase.running", { progress: autoPhase.progress })}
+                        </span>
+                      )}
+                      {autoPhase?.status === "done" && autoPhase.result.ok && (
+                        <span style={{ ...hint, color: "#2f8f4f" }} data-testid="dsa-auto-phase-ok">
+                          {t("dsa.autoPhase.ok", {
+                            roi: autoPhase.result.roi
+                              ? `${autoPhase.result.roi.x0},${autoPhase.result.roi.y0}–${autoPhase.result.roi.x1},${autoPhase.result.roi.y1}`
+                              : "—",
+                            pre: autoPhase.result.preContrastCount ?? 0,
+                            onset: (autoPhase.result.onset ?? 0) + 1,
+                            bpm: autoPhase.result.bpm != null ? autoPhase.result.bpm.toFixed(0) : "—",
+                            matched: autoPhase.result.matchedFrames ?? 0,
+                            total: autoPhase.result.totalFrames ?? 0,
+                            start: (autoPhase.result.contrastStart ?? 0) + 1,
+                            span: (autoPhase.result.amplitudeSpanPx ?? 0).toFixed(1),
+                            clamped: autoPhase.result.clampedFrames ?? 0,
+                            filled: autoPhase.result.filledFrames ?? 0,
+                          })}
+                        </span>
+                      )}
+                      {/* 🔑 造影前が真っ黒なのは**壊れているからではない**（自分自身を引いている）。
+                          そう書いておかないと「マスクが効いていない」と読まれる——実機で実際に起きた。 */}
+                      {autoPhase?.status === "done" && autoPhase.result.contrastStart != null && (
+                        <span style={{ ...hint, color: "#2f8f4f" }} data-testid="dsa-self-mask">
+                          {t("dsa.autoPhase.selfRange", {
+                            last: autoPhase.result.contrastStart,
+                            start: autoPhase.result.contrastStart + 1,
+                          })}
+                        </span>
+                      )}
+                      {autoPhase?.status === "done" && !autoPhase.result.ok && (
+                        <span style={{ ...hint, color: "#b06a20" }} data-testid="dsa-auto-phase-failed">
+                          {autoPhase.result.reason === "noMotion"
+                            ? t("dsa.autoPhase.failed.noMotion", {
+                                span: (autoPhase.result.amplitudeSpanPx ?? 0).toFixed(1),
+                              })
+                            : t(`dsa.autoPhase.failed.${autoPhase.result.reason ?? "trackFailed"}`)}
+                        </span>
+                      )}
                       <button
                         style={btn}
                         title={t("dsa.setMaskHere.title")}
@@ -1395,7 +1593,20 @@ export function SeriesViewer({
                   <div style={row}>
                     <span style={hint} data-testid="dsa-shift">
                       {t("dsa.shift", { dx: dsaState.dx.toFixed(1), dy: dsaState.dy.toFixed(1) })}
+                      {dsaState.rotationDeg !== 0 && ` / ${t("dsa.rotation", { deg: dsaState.rotationDeg.toFixed(2) })}`}
                     </span>
+                    {/* 🔴 ずらしを当てる範囲（§6.4 の 3 択）。既定は「全部」＝従来の挙動。 */}
+                    {(["all", "from", "current"] as const).map((sc) => (
+                      <button
+                        key={sc}
+                        style={dsaScope === sc ? btnOn : btn}
+                        data-testid={`dsa-scope-${sc}`}
+                        title={t(`dsa.scope.${sc}.title`)}
+                        onClick={() => setDsaScope(sc)}
+                      >
+                        {t(`dsa.scope.${sc}`)}
+                      </button>
+                    ))}
                     {([
                       ["←", -1, 0],
                       ["→", 1, 0],
@@ -1408,8 +1619,23 @@ export function SeriesViewer({
                         data-testid={`dsa-shift-${ddx}-${ddy}`}
                         title={t("dsa.shiftStep")}
                         onClick={() => {
-                          if (!dsaToken || !dsaState) return;
-                          setDsaShift(dsaToken, dsaState.dx + ddx, dsaState.dy + ddy);
+                          if (!dsaToken) return;
+                          nudgeDsaShift(dsaToken, ddx, ddy, dsaScope, zc);
+                          refreshDsa(dsaToken, zc);
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                    {dsaRotate && ([["↺", -0.2], ["↻", 0.2]] as const).map(([label, ddeg]) => (
+                      <button
+                        key={label}
+                        style={btn}
+                        data-testid={`dsa-rotate-${ddeg}`}
+                        title={t("dsa.rotateStep")}
+                        onClick={() => {
+                          if (!dsaToken) return;
+                          nudgeDsaRotation(dsaToken, ddeg, dsaScope, zc);
                           refreshDsa(dsaToken, zc);
                         }}
                       >
@@ -1423,13 +1649,77 @@ export function SeriesViewer({
                       onClick={() => {
                         if (!dsaToken) return;
                         setDsaBusy(true);
-                        autoAlignDsa(dsaToken, zc)
+                        autoAlignDsa(dsaToken, zc, dsaScope)
                           .then(() => refreshDsa(dsaToken, zc))
                           .finally(() => setDsaBusy(false));
                       }}
                       disabled={dsaBusy}
                     >
                       {t("dsa.autoAlign")}
+                    </button>
+                    {/* エッジで合わせる（A16 Phase 3）。ZNCC なので輝度が変わっても効く
+                        ＝同位相マスクのように別の心拍・別のランから来たマスクに強い（§6.7.4）。 */}
+                    <button
+                      style={btn}
+                      data-testid="dsa-align-edges"
+                      title={t("dsa.alignEdges.title")}
+                      onClick={() => {
+                        if (!dsaToken) return;
+                        setDsaBusy(true);
+                        alignDsaOnEdges(dsaToken, zc, dsaScope, dsaRotate ? { maxRotationDeg: 3 } : {})
+                          .then((r) => {
+                            // 🔴 合わせられなかったら**理由を出す**（黙って何も起きないようにしない）。
+                            if (r && !r.reliable) emitToast(t(`dsa.alignEdges.failed.${r.reason ?? "lowScore"}`));
+                            refreshDsa(dsaToken, zc);
+                          })
+                          .finally(() => setDsaBusy(false));
+                      }}
+                      disabled={dsaBusy}
+                    >
+                      {t("dsa.alignEdges")}
+                    </button>
+                    <Check
+                      testId="dsa-rotate-check"
+                      label={t("dsa.rotate")}
+                      checked={dsaRotate}
+                      onChange={() => setDsaRotate((v) => !v)}
+                    />
+                    {/* 自動位置合わせ（§5-G）。計画と一緒にエッジ ZNCC の残差を先回りで計算して
+                        あるので、**切り替えは即座**——再計算は起きない。 */}
+                    {dsaState.autoAlignAvailable && (
+                      <Check
+                        testId="dsa-auto-align-toggle"
+                        title={t("dsa.autoAlignPlan.title")}
+                        label={t("dsa.autoAlignPlan")}
+                        checked={dsaState.autoAlign}
+                        onChange={() => {
+                          if (!dsaToken) return;
+                          setDsaAutoAlign(dsaToken, !dsaState.autoAlign);
+                          refreshDsa(dsaToken, zc);
+                        }}
+                      />
+                    )}
+                    {/* 🔑 DSA の入口から開く。追尾は「前処理の内訳」として中に畳んである。 */}
+                    <button
+                      style={btn}
+                      data-testid="dsa-diagnose"
+                      title={t("xadsa.title")}
+                      onClick={() => setDsaDiagOpen(true)}
+                    >
+                      {t("xadsa.open")}
+                    </button>
+                    <button
+                      style={btn}
+                      data-testid="dsa-reset-nudge"
+                      title={t("dsa.resetNudge.title")}
+                      onClick={() => {
+                        if (!dsaToken) return;
+                        clearDsaNudge(dsaToken);
+                        setDsaShift(dsaToken, 0, 0);
+                        refreshDsa(dsaToken, zc);
+                      }}
+                    >
+                      {t("dsa.resetNudge")}
                     </button>
                     <Check
                       testId="dsa-log-check"
@@ -1583,6 +1873,35 @@ export function SeriesViewer({
           onGoToFrame={setZ}
         />
       )}
+      {dsaDiagOpen && zStack.length > 1 && (
+        <XaDsaDialog
+          // 🔴 **ネイティブの** zStack を渡す（displayImageIds ではない）。DSA の差分は
+          //    追尾したい骨・横隔膜をまさに消すので、差分画像を追尾しても何も残っていない。
+          imageIds={zStack}
+          seriesLabel={seriesLabel ?? ""}
+          cine={xaCineSource}
+          currentFrame={z}
+          runs={maskRuns}
+          currentRun={otherIdx}
+          dsaActive={!!dsaToken}
+          dsaOnset={dsaState?.onset ?? null}
+          planLabel={dsaState?.framePlan ? dsaState.framePlanLabel : null}
+          autoPhase={autoPhase?.status === "done" ? autoPhase.result : null}
+          dsaPlan={dsaPlanEntries}
+          residuals={dsaResiduals}
+          residualProgress={dsaResidualProgress}
+          onClose={() => setDsaDiagOpen(false)}
+          onGoToFrame={setZ}
+          onApplyPlan={(plan: (DsaFramePlanEntry | null)[], label: string) => {
+            if (!dsaToken) return;
+            if (setDsaFramePlan(dsaToken, plan, label)) refreshDsa(dsaToken, z);
+          }}
+          onClearPlan={() => {
+            if (!dsaToken) return;
+            if (setDsaFramePlan(dsaToken, null, null)) refreshDsa(dsaToken, z);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1656,15 +1975,20 @@ function Check({
   onChange,
   disabled,
   testId,
+  title,
 }: {
   label: string;
   checked: boolean;
   onChange: () => void;
   disabled?: boolean;
   testId?: string;
+  title?: string;
 }) {
   return (
-    <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: disabled ? "#9aa6b2" : "#33404d" }}>
+    <label
+      title={title}
+      style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: disabled ? "#9aa6b2" : "#33404d" }}
+    >
       <input data-testid={testId} type="checkbox" checked={checked} onChange={onChange} disabled={disabled} />
       {label}
     </label>
@@ -1720,6 +2044,14 @@ const dimLabel: React.CSSProperties = {
   fontVariantNumeric: "tabular-nums",
   minWidth: 52,
 };
+/** DSA のピクセルシフトに使う矢印（`Alt` 付き。素の矢印はスライス送り）。 */
+const DSA_ARROWS: Record<string, [number, number]> = {
+  ArrowLeft: [-1, 0],
+  ArrowRight: [1, 0],
+  ArrowUp: [0, -1],
+  ArrowDown: [0, 1],
+};
+
 const btn: React.CSSProperties = {
   minWidth: 34,
   padding: "3px 8px",
@@ -1732,6 +2064,8 @@ const btn: React.CSSProperties = {
   whiteSpace: "nowrap",
   flexShrink: 0,
 };
+/** 選択中のトグルボタン（ずらしの適用範囲）。 */
+const btnOn: React.CSSProperties = { ...btn, background: "#2b8aef", color: "#fff", borderColor: "#2b8aef" };
 const selectBox: React.CSSProperties = {
   padding: "3px 6px",
   border: "1px solid #cdd5de",

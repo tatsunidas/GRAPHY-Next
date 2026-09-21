@@ -28,6 +28,8 @@ import {
   type DsaOptions,
 } from "./dsa";
 import { xaDataSetOf } from "./xaCine";
+import { robustSpread } from "./xaContrastOnset";
+import { alignOnEdges, type EdgeAlignResult } from "./xaTracking";
 
 const SCHEME = "graphy-dsa";
 
@@ -109,23 +111,82 @@ export function readXaDsaTags(imageId: string): XaDsaTags | null {
   };
 }
 
+/**
+ * フレームごとのマスクと合わせ込み（**同位相マスク**・`fw/angio-design.md` §6.7）。
+ *
+ * <p>🔴 **画素を持たない。** マスクを Float32Array で持つと、1024²・150 フレームで 600MB を
+ * 掴んだまま離さない器になる。持つのは**どのフレームを平均するか**だけで、画素は描画時に
+ * `readModalitySlice`（＝Cornerstone のキャッシュ）から取り、直近ぶんだけ {@link maskCache} に置く。
+ */
+export interface DsaFramePlanEntry {
+  /** マスクにするフレームの imageId（複数なら平均する）。**別ランでもよい**。 */
+  maskImageIds: string[];
+  /** 表示用の出自（マスク源のラン内での 0 origin フレーム番号）。 */
+  maskFrames: number[];
+  /** 引く前にマスクをずらす量 [px]（追尾した位置の差から出る）。 */
+  dx: number;
+  dy: number;
+  /** 画像中心まわりに回す量 [度]（同位相マスクは回転を推定しないので通常は省略）。 */
+  rotationDeg?: number;
+  /**
+   * エッジ ZNCC で求めた**残差**のずらし [px]。{@link DsaSession#autoAlign} が true のときだけ効く。
+   *
+   * <p>🔴 **`dx`/`dy` に足し込まない。** 足し込むと切り替えるたびに計算し直すことになる。
+   * 別枠で持てばトグルは**即座**に効く（`optsAt()` が足すかどうかを変えるだけ）。
+   */
+  alignDx?: number;
+  alignDy?: number;
+}
+
 interface DsaSession {
   /** ネイティブフレームの imageId（t 昇順）。 */
   frameIds: string[];
-  /** 平均してマスクにするフレーム（0 origin）。 */
+  /** 平均してマスクにするフレーム（0 origin）。**ラン全体に効く既定のマスク**。 */
   maskFrames: number[];
   /** マスク平均（サイズ = width*height）。 */
   mask: Float32Array;
   width: number;
   height: number;
   logarithmic: boolean;
+  /** ラン全体に効くピクセルシフト。 */
   dx: number;
   dy: number;
+  /** ラン全体に効く回転 [度]。 */
+  rotationDeg: number;
+  /**
+   * フレームごとの計画（同位相マスク）。`null` なら従来どおりラン全体で 1 組。
+   * 要素が `null` のフレームは**既定のマスクに落ちる**（対応するマスクが見つからなかった等）。
+   */
+  framePlan: (DsaFramePlanEntry | null)[] | null;
+  /** 計画の出自（UI に出す。例「このラン内」「ラン 2」）。 */
+  framePlanLabel: string | null;
+  /**
+   * **あとから足したずらし**（フレームごと）。手で動かした分と、エッジ合わせで足した分の両方。
+   * `null` なら無し。
+   * 🔴 **計画の dx/dy とは別に持つ。** 混ぜると「計画を作り直したら手で直した分が消える」
+   * （逆に、手で直した分を計画に焼き込むと、どこまでが自動でどこからが手かが分からなくなる）。
+   */
+  nudge: ({ dx: number; dy: number; rotationDeg: number } | null)[] | null;
+  /**
+   * 差分の一様オフセットを取り除くか（{@link DsaOptions#levelMatch}）。
+   * 自動同位相の計画を入れたときに true になる。**既定経路は false のまま**。
+   */
+  levelMatch: boolean;
+  /** 計画の `alignDx`/`alignDy` を足すか（利用者のトグル・既定 true）。 */
+  autoAlign: boolean;
   /** 差分から決めた表示 VOI。 */
   voi: { windowCenter: number; windowWidth: number };
   /** 自動選択が判断した造影到達フレーム（UI の説明用）。 */
   onset: number | null;
 }
+
+/**
+ * マスク平均の使い回し（直近ぶんだけ）。鍵は imageId の並びなので、セッションをまたいでも安全
+ * （同じ imageId の組は同じ画素）。シネ再生では隣り合うフレームが同じマスクを共有することが
+ * 多いので、数個あれば効く。
+ */
+const MASK_CACHE_MAX = 8;
+const maskCache = new Map<string, Float32Array>();
 
 const sessions = new Map<string, DsaSession>();
 let seq = 0;
@@ -142,15 +203,81 @@ export interface DsaSessionParams {
   dy?: number;
 }
 
+/**
+ * **エッジ像で剛体合わせして、その分を足し込む**（`fw/angio-design.md` §6.7・Phase 3）。
+ *
+ * <p>合わせるのは「そのフレームに当たっているマスク」と「そのフレームのライブ」。求めた変換は
+ * **オリジナルのマスクに当てて引く**（エッジ像は引かない）。
+ *
+ * <p>🔴 **足し込むのは「いま効いている分との差」である。** そうしないと、同位相マスクの計画が
+ * 入っているフレームで二重にずれる。`scope` が `"from"` / `"all"` のときは、**このフレームで
+ * 測った差をそのまま範囲へ効かせる**——1 枚で合わせて範囲に流すのは DSA のピクセルシフトの
+ * 昔からの作法で、ここもそれに倣う（フレームごとに測り直したいなら `"current"` で 1 枚ずつ）。
+ *
+ * <p>🔴 **`autoAlignDsa`（背景 RMS 最小化）を置き換えない。** 輝度スケールが揃っているとき
+ * （同一収集の体動補正）はあちらのほうが正確で、こちらは ZNCC なので `aI+b` に不変
+ * ——**別の心拍・別のランから持ってきたマスク**に強い。用途で選ぶ（§6.7.4）。
+ */
+export async function alignDsaOnEdges(
+  token: string,
+  t: number,
+  scope: DsaShiftScope,
+  opts: { maxRotationDeg?: number } = {},
+): Promise<EdgeAlignResult | null> {
+  const s = sessions.get(token);
+  if (!s) return null;
+  const idx = Math.max(0, Math.min(s.frameIds.length - 1, t));
+  const live = await readModalitySlice(s.frameIds[idx]);
+  if (!live) return null;
+  const mask = await maskAt(s, idx);
+  if (!mask) return null;
+  const result = alignOnEdges(mask, live.values, s.width, s.height, {
+    logarithmic: s.logarithmic,
+    ...(opts.maxRotationDeg ? { maxRotationDeg: opts.maxRotationDeg } : {}),
+  });
+  if (!result.reliable) return result; // 合ったふりをしない。足し込まずに理由ごと返す。
+  const cur = optsAt(s, idx);
+  nudgeDsaRigid(
+    token,
+    result.dx - cur.dx,
+    result.dy - cur.dy,
+    result.rotationDeg - (cur.rotationDeg ?? 0),
+    scope,
+    idx,
+  );
+  return result;
+}
+
 /** セッションの現在状態（UI 表示用）。 */
 export interface DsaSessionState {
+  /**
+   * マスクフレーム。
+   * 🔴 **同位相マスクが効いているときは「そのフレームに当たっているマスク」**を返す
+   * （`framePlan` が true のとき）。H36 を読むプラグインは「いま見えている絵」を測るので、
+   * ラン全体の既定を返すと出自を取り違える。
+   */
   maskFrames: number[];
   onset: number | null;
+  /** そのフレームに実際に効いているシフト（計画＋全体＋あとから足した分の合計）。 */
   dx: number;
   dy: number;
+  /** 同じく、効いている回転 [度]。0 なら平行移動だけ。 */
+  rotationDeg: number;
   logarithmic: boolean;
   /** 現在のシフトでの背景 RMS（小さいほど合っている）。 */
   backgroundRms: number;
+  /** 同位相マスク（フレームごとの計画）が効いているか。 */
+  framePlan: boolean;
+  /** 計画の出自（`framePlan` が false なら null）。 */
+  framePlanLabel: string | null;
+  /** 計画があるフレーム数（無いフレームは既定のマスクに落ちている）。 */
+  framePlanCovered: number;
+  /** 自動位置合わせ（エッジ ZNCC の残差）が効いているか。 */
+  autoAlign: boolean;
+  /** その残差が計算済みか（未計算ならトグルを出しても効かない）。 */
+  autoAlignAvailable: boolean;
+  /** 差分の一様オフセットを取り除いているか（{@link DsaOptions#levelMatch}）。 */
+  levelMatch: boolean;
 }
 
 async function readFrames(ids: string[]): Promise<{ values: Float32Array[]; width: number; height: number } | null> {
@@ -209,7 +336,11 @@ export async function prepareDsaSession(params: DsaSessionParams): Promise<strin
   const voi = probe ? voiFromDiff(probe) : { windowCenter: 0, windowWidth: 1 };
 
   const token = `dsa${++seq}`;
-  sessions.set(token, { frameIds, maskFrames, mask, width, height, logarithmic, dx, dy, voi, onset });
+  sessions.set(token, {
+    frameIds, maskFrames, mask, width, height, logarithmic, dx, dy, rotationDeg: 0,
+    framePlan: null, framePlanLabel: null, nudge: null,
+    levelMatch: false, autoAlign: true, voi, onset,
+  });
   return token;
 }
 
@@ -283,18 +414,195 @@ export function dsaStateForImageId(imageId: string): (DsaSessionState & { frameI
   if (!parsed) return null;
   const s = sessions.get(parsed.token);
   if (!s) return null;
-  const state = dsaSessionState(parsed.token);
+  // 🔴 フレームを渡す。同位相マスクが効いていると、マスクもシフトもフレームごとに違う。
+  //    H36 を読むプラグインは「いま見えている絵」を測るので、ラン全体の既定を返すと
+  //    出自を取り違える（差分の極性やプロファイルの向きまで巻き添えになる）。
+  const state = dsaSessionState(parsed.token, parsed.t);
   if (!state) return null;
   return { ...state, frameIndex: parsed.t, frameCount: s.frameIds.length };
 }
 
-/** ピクセルシフトを更新する（imageId は変えず、呼び出し側で画像キャッシュを捨てて再描画する）。 */
+/**
+ * ラン全体に効くピクセルシフトを**絶対値で**置き換える（GSPS の復元・自動位置合わせが使う）。
+ * imageId は変えないので、呼び出し側で画像キャッシュを捨てて再描画する。
+ */
 export function setDsaShift(token: string, dx: number, dy: number): void {
   const s = sessions.get(token);
   if (s) {
     s.dx = dx;
     s.dy = dy;
   }
+}
+
+/** ずらしを当てる範囲（`fw/angio-design.md` §6.4 の 3 択）。 */
+export type DsaShiftScope = "all" | "current" | "from";
+
+/**
+ * 手でずらす（**足し込み**）。
+ *
+ * <p>🔴 **計画（同位相マスク）の dx/dy を書き換えない。** 手で直した分は別に持ち、合計して効かせる。
+ * 混ぜると「計画を作り直したら手で直した分が消える」「どこまでが自動か分からない」のどちらかになる。
+ *
+ * @param scope `"all"` はラン全体 / `"current"` はそのフレームだけ / `"from"` はそのフレーム以降
+ */
+export function nudgeDsaShift(token: string, ddx: number, ddy: number, scope: DsaShiftScope, t: number): void {
+  nudgeDsaRigid(token, ddx, ddy, 0, scope, t);
+}
+
+/** 手で回す（足し込み）。{@link nudgeDsaShift} と同じ層に載る。 */
+export function nudgeDsaRotation(token: string, ddeg: number, scope: DsaShiftScope, t: number): void {
+  nudgeDsaRigid(token, 0, 0, ddeg, scope, t);
+}
+
+/**
+ * 平行移動と回転をまとめて足し込む。
+ *
+ * <p>🔴 **これは「剛体変換の合成」ではなく「パラメータの足し算」である。** 効くのは
+ * 「合計の角度で画像中心まわりに回してから、合計の平行移動をする」1 つの剛体変換で、
+ * 層ごとの変換を順に掛けたものとは（微小角以外では）一致しない。層を分けているのは
+ * 出自を残すためで、幾何を合成するためではない——この読み替えを前提に UI も作ること。
+ */
+function nudgeDsaRigid(
+  token: string,
+  ddx: number,
+  ddy: number,
+  ddeg: number,
+  scope: DsaShiftScope,
+  t: number,
+): void {
+  const s = sessions.get(token);
+  if (!s) return;
+  if (scope === "all") {
+    s.dx += ddx;
+    s.dy += ddy;
+    s.rotationDeg += ddeg;
+    return;
+  }
+  if (!s.nudge) s.nudge = s.frameIds.map(() => null);
+  const from = Math.max(0, Math.min(s.frameIds.length - 1, Math.floor(t)));
+  const to = scope === "current" ? from : s.frameIds.length - 1;
+  for (let i = from; i <= to; i++) {
+    const cur = s.nudge[i] ?? { dx: 0, dy: 0, rotationDeg: 0 };
+    s.nudge[i] = { dx: cur.dx + ddx, dy: cur.dy + ddy, rotationDeg: cur.rotationDeg + ddeg };
+  }
+}
+
+/** 手で足した分だけを捨てる（計画と全体シフトは残す）。 */
+export function clearDsaNudge(token: string): void {
+  const s = sessions.get(token);
+  if (s) s.nudge = null;
+}
+
+/**
+ * 同位相マスクの計画を入れる（`null` で外す）。
+ *
+ * <p>要素が `null` のフレームは**既定のマスクに落ちる**。「対応するマスクが見つからなかった」
+ * フレームを黙って近いもので埋めないための逃がし方で、そのぶん UI には
+ * 「何フレームが計画に載ったか」を出すこと（{@link DsaSessionState#framePlanCovered}）。
+ */
+export function setDsaFramePlan(
+  token: string,
+  plan: (DsaFramePlanEntry | null)[] | null,
+  label: string | null,
+): boolean {
+  const s = sessions.get(token);
+  if (!s) return false;
+  if (!plan) {
+    s.framePlan = null;
+    s.framePlanLabel = null;
+    s.levelMatch = false;
+    return true;
+  }
+  if (plan.length !== s.frameIds.length) return false;
+  s.framePlan = plan;
+  s.framePlanLabel = label;
+  // 🔴 計画が入るときだけレベル合わせを効かせる（既定経路の数値は動かさない・§5-F）。
+  s.levelMatch = true;
+  return true;
+}
+
+/**
+ * エッジ ZNCC で求めた残差を計画へ**別枠で**入れる。長さは計画と同じであること。
+ * 既に計画が入っていなければ何もしない（計画なしに残差だけ足しても意味がない）。
+ */
+export function setDsaFrameAlignments(
+  token: string,
+  align: ({ dx: number; dy: number } | null)[],
+): boolean {
+  const s = sessions.get(token);
+  if (!s?.framePlan || align.length !== s.framePlan.length) return false;
+  for (let t = 0; t < align.length; t++) {
+    const e = s.framePlan[t];
+    const a = align[t];
+    if (!e) continue;
+    if (a) { e.alignDx = a.dx; e.alignDy = a.dy; }
+    else { delete e.alignDx; delete e.alignDy; }
+  }
+  return true;
+}
+
+/**
+ * 差分の一様オフセットの除去を切り替える（{@link DsaOptions#levelMatch}）。
+ *
+ * <p>🔴 **計画が作れなくても要る。** 露出の立ち上がりは計画の有無と関係なく存在するので、
+ * 「造影前フレームの平均をマスクにした」時点で効かせないと、**先頭の数フレームだけ
+ * 一様に明るい／暗い**絵のまま残る（実機で利用者が最初に気づいた症状）。
+ */
+export function setDsaLevelMatch(token: string, on: boolean): boolean {
+  const s = sessions.get(token);
+  if (!s) return false;
+  s.levelMatch = on;
+  return true;
+}
+
+/** 自動位置合わせ（計画の残差）を効かせるか。切り替えは**即座**——再計算はしない。 */
+export function setDsaAutoAlign(token: string, on: boolean): boolean {
+  const s = sessions.get(token);
+  if (!s) return false;
+  s.autoAlign = on;
+  return true;
+}
+
+/** そのフレームに効いている剛体パラメータ（計画＋全体＋あとから足した分）。 */
+function optsAt(s: DsaSession, t: number): DsaOptions {
+  const plan = s.framePlan?.[t] ?? null;
+  const n = s.nudge?.[t] ?? null;
+  const rotationDeg = (plan?.rotationDeg ?? 0) + s.rotationDeg + (n?.rotationDeg ?? 0);
+  const alignDx = s.autoAlign ? plan?.alignDx ?? 0 : 0;
+  const alignDy = s.autoAlign ? plan?.alignDy ?? 0 : 0;
+  return {
+    dx: (plan?.dx ?? 0) + alignDx + s.dx + (n?.dx ?? 0),
+    dy: (plan?.dy ?? 0) + alignDy + s.dy + (n?.dy ?? 0),
+    logarithmic: s.logarithmic,
+    // 0 のときは `subtractFrames` が {@link shiftBilinear} をそのまま通る（既存の数値を動かさない）。
+    ...(rotationDeg ? { rotationDeg } : {}),
+    ...(s.levelMatch ? { levelMatch: true } : {}),
+  };
+}
+
+/** そのフレームに当てるマスク（計画があればそれ、無ければ既定）。 */
+async function maskAt(s: DsaSession, t: number): Promise<Float32Array | null> {
+  const plan = s.framePlan?.[t] ?? null;
+  if (!plan || !plan.maskImageIds.length) return s.mask;
+  const key = plan.maskImageIds.join("|");
+  const hit = maskCache.get(key);
+  if (hit) {
+    // LRU: 触ったものを末尾へ。
+    maskCache.delete(key);
+    maskCache.set(key, hit);
+    return hit;
+  }
+  const read = await readFrames(plan.maskImageIds);
+  if (!read) return s.mask;
+  const avg = read.values.length === 1 ? read.values[0] : averageFrames(read.values);
+  if (!avg || avg.length !== s.mask.length) return s.mask;
+  maskCache.set(key, avg);
+  while (maskCache.size > MASK_CACHE_MAX) {
+    const oldest = maskCache.keys().next().value;
+    if (oldest === undefined) break;
+    maskCache.delete(oldest);
+  }
+  return avg;
 }
 
 /** マスクフレームを差し替える（自動選択を人が直すとき）。 */
@@ -305,6 +613,11 @@ export function setDsaMaskFrames(token: string, frames: number[]): boolean {
   if (!valid.length) return false;
   // マスク平均を作り直すために、対象フレームだけ読み直す（キャッシュ済みなので安い）。
   s.maskFrames = valid;
+  // 🔴 ラン全体のマスクを人が指定したなら、それが最後の意思表示。**同位相マスクの計画は外す**
+  //    （残すと「指定したのに絵が変わらないフレームがある」になり、理由が画面から読めない）。
+  s.framePlan = null;
+  s.framePlanLabel = null;
+  s.levelMatch = false;
   return true;
 }
 
@@ -324,36 +637,151 @@ export async function rebuildDsaMask(token: string): Promise<boolean> {
 export async function measureDsaResidual(token: string, t: number): Promise<number | null> {
   const s = sessions.get(token);
   if (!s) return null;
-  const live = await readModalitySlice(s.frameIds[Math.max(0, Math.min(s.frameIds.length - 1, t))]);
+  const idx = Math.max(0, Math.min(s.frameIds.length - 1, t));
+  const live = await readModalitySlice(s.frameIds[idx]);
   if (!live) return null;
-  const diff = subtractFrames(s.mask, live.values, s.width, s.height, opts(s));
+  const mask = await maskAt(s, idx);
+  if (!mask) return null;
+  const diff = subtractFrames(mask, live.values, s.width, s.height, optsAt(s, idx));
   return diff ? backgroundRms(diff) : null;
 }
 
-/** ピクセルシフトを自動推定して適用する。戻り値は推定結果。 */
-export async function autoAlignDsa(token: string, t: number): Promise<{ dx: number; dy: number; rms: number } | null> {
+/** {@link robustResidual} が見る画素の間引き。512² を 4 画素おきで 16k サンプル。 */
+const RESIDUAL_STRIDE = 4;
+/** コリメータ際を外すための下限（視野の代表値に対する比）。`xaContrastOnset` と同じ考え方。 */
+const RESIDUAL_FLOOR_FRACTION = 0.02;
+
+/**
+ * 差分画像の**背景の散らばり**（MAD × 1.4826）。
+ *
+ * <p>🚨 **コリメータの外とその際を外す。** 外は 0 で埋まっており、際の 1 カウント画素は
+ * 対数域で桁違いの差を作る（`xaContrastOnset` の `FIELD_FLOOR_FRACTION` と同じ罠）。
+ * 視野かどうかは**ライブ側の画素**で決める（差分は 0 付近なので判定に使えない）。
+ */
+function robustResidual(diff: Float32Array, live: Float32Array): number {
+  const lit: number[] = [];
+  for (let i = 0; i < live.length; i += RESIDUAL_STRIDE) if (live[i] > 0) lit.push(live[i]);
+  if (!lit.length) return Number.NaN;
+  lit.sort((a, b) => a - b);
+  const med = lit[lit.length >> 1];
+  const floor = Math.max(1, med * RESIDUAL_FLOOR_FRACTION);
+
+  const v: number[] = [];
+  for (let i = 0; i < diff.length && i < live.length; i += RESIDUAL_STRIDE) {
+    if (!(live[i] > floor)) continue;
+    v.push(diff[i]);
+  }
+  if (v.length < 4) return Number.NaN;
+  const sorted = Float64Array.from(v).sort();
+  const h = sorted.length >> 1;
+  const center = sorted.length % 2 ? sorted[h] : (sorted[h - 1] + sorted[h]) / 2;
+  // `robustSpread` は中央値を引いた列を前提にしている。
+  return robustSpread(Float64Array.from(v, (x) => x - center));
+}
+
+/**
+ * **全フレームの「合っていなさ」**を測る（DSA 診断・`fw/angio-design.md` §6.14）。
+ *
+ * <h3>🚨 RMS ではなく MAD で測る</h3>
+ * 実測（§6.12・`0009.DCM` のライブ 81 に対しマスクを総当たり）で、
+ * **RMS は血管そのものに支配されて** 0.267〜0.297 と 11% しか動かないのに対し、
+ * ロバストな散らばり（MAD）は **0.091〜0.242** ときれいに分かれた。
+ * 見たいのは造影の濃さではなく**背景が合っていないこと**なので、MAD を使う。
+ *
+ * <p>🔑 **造影前は自己差分なので 0 になるはず。** そこが 0 でなければ何かおかしい——
+ * このグラフはそれ自体が健全性の確認になる。
+ *
+ * <p>マスクはフレームごとに違いうるので {@link maskAt} を都度引く（LRU が効く）。
+ * 画素は Cornerstone のキャッシュに載っているので読み直しは安い。
+ */
+export async function measureDsaResidualAll(
+  token: string,
+  onProgress?: (done: number, total: number) => void,
+  isCancelled?: () => boolean,
+): Promise<number[] | null> {
   const s = sessions.get(token);
   if (!s) return null;
-  const live = await readModalitySlice(s.frameIds[Math.max(0, Math.min(s.frameIds.length - 1, t))]);
+  const n = s.frameIds.length;
+  const out: number[] = new Array(n).fill(Number.NaN);
+  for (let t = 0; t < n; t++) {
+    if (isCancelled?.()) return null;
+    onProgress?.(t, n);
+    const live = await readModalitySlice(s.frameIds[t]);
+    if (!live) continue;
+    const mask = await maskAt(s, t);
+    if (!mask) continue;
+    const diff = subtractFrames(mask, live.values, s.width, s.height, optsAt(s, t));
+    if (!diff) continue;
+    out[t] = robustResidual(diff, live.values);
+  }
+  onProgress?.(n, n);
+  return out;
+}
+
+/** ピクセルシフトを自動推定して適用する。戻り値は推定結果。 */
+export async function autoAlignDsa(
+  token: string,
+  t: number,
+  scope: DsaShiftScope = "all",
+): Promise<{ dx: number; dy: number; rms: number } | null> {
+  const s = sessions.get(token);
+  if (!s) return null;
+  const idx = Math.max(0, Math.min(s.frameIds.length - 1, t));
+  const live = await readModalitySlice(s.frameIds[idx]);
   if (!live) return null;
-  const best = estimateShift(s.mask, live.values, s.width, s.height, s.logarithmic);
-  s.dx = best.dx;
-  s.dy = best.dy;
+  const mask = await maskAt(s, idx);
+  if (!mask) return null;
+  const best = estimateShift(mask, live.values, s.width, s.height, s.logarithmic);
+  // 🔑 **適用範囲は {@link alignDsaOnEdges} と同じ規則にする。** 画面では 3 択（全部/以降/
+  //    このフレーム）がこの 2 つのボタンの間にあるのに、こちらだけ常にラン全体へ書いていた。
+  //    いま効いている量との**差分**を足すので、二重には掛からない。
+  const cur = optsAt(s, idx);
+  nudgeDsaRigid(token, best.dx - cur.dx, best.dy - cur.dy, 0, scope, idx);
   return best;
 }
 
-/** セッションの現在状態（UI 表示用）。 */
-export function dsaSessionState(token: string): DsaSessionState | null {
+/**
+ * セッションの現在状態（UI 表示用）。
+ *
+ * @param t どのフレームについて答えるか。同位相マスクが効いているとフレームごとに
+ *          マスクもシフトも違うので、**フレームを指定しないと嘘になる**。省略時は
+ *          既定のマスクとラン全体のシフトを返す（計画が無いときは従来と同じ値）。
+ */
+export function dsaSessionState(token: string, t?: number): DsaSessionState | null {
   const s = sessions.get(token);
   if (!s) return null;
+  const covered = s.framePlan ? s.framePlan.filter((e) => e != null).length : 0;
+  const idx = t == null ? null : Math.max(0, Math.min(s.frameIds.length - 1, Math.floor(t)));
+  const plan = idx == null ? null : s.framePlan?.[idx] ?? null;
+  const o: DsaOptions = idx == null
+    ? { dx: s.dx, dy: s.dy, logarithmic: s.logarithmic, ...(s.rotationDeg ? { rotationDeg: s.rotationDeg } : {}) }
+    : optsAt(s, idx);
   return {
-    maskFrames: [...s.maskFrames],
+    maskFrames: plan ? [...plan.maskFrames] : [...s.maskFrames],
     onset: s.onset,
-    dx: s.dx,
-    dy: s.dy,
+    dx: o.dx,
+    dy: o.dy,
+    rotationDeg: o.rotationDeg ?? 0,
     logarithmic: s.logarithmic,
     backgroundRms: 0,
+    framePlan: s.framePlan != null,
+    framePlanLabel: s.framePlanLabel,
+    framePlanCovered: covered,
+    autoAlign: s.autoAlign,
+    autoAlignAvailable: s.framePlan?.some((e) => e?.alignDx != null) ?? false,
+    levelMatch: s.levelMatch,
   };
+}
+
+/**
+ * いま効いている計画（フレームごとに何を引いているか）。無ければ null。
+ * 🔑 診断表示の**唯一の真実**——`AutoPhaseResult.plan` は自動が作ったものであって、
+ * 人が手で入れ直した計画は反映されない。
+ */
+export function dsaFramePlan(token: string): (DsaFramePlanEntry | null)[] | null {
+  const s = sessions.get(token);
+  if (!s?.framePlan) return null;
+  return s.framePlan.map((e) => (e ? { ...e, maskImageIds: [...e.maskImageIds], maskFrames: [...e.maskFrames] } : null));
 }
 
 /** 対数変換の ON/OFF を切り替える（装置が LOG/LIN を書いていない時の手動切替）。 */
@@ -365,10 +793,8 @@ export function setDsaLogarithmic(token: string, logarithmic: boolean): void {
 /** セッションを破棄する（シリーズ切替・DSA OFF）。 */
 export function releaseDsaSession(token: string): void {
   sessions.delete(token);
-}
-
-function opts(s: DsaSession): DsaOptions {
-  return { dx: s.dx, dy: s.dy, logarithmic: s.logarithmic };
+  // 誰も使っていないなら、マスク平均を握ったままにしない（1 枚 4MB 級）。
+  if (sessions.size === 0) maskCache.clear();
 }
 
 /** 合成画像の IImage を組み立てる（cache への put は cornerstone 側が行う）。 */
@@ -378,10 +804,13 @@ async function computeDsaImage(imageId: string): Promise<Record<string, unknown>
   const s = sessions.get(parsed.token);
   if (!s) throw new Error(`dsa: session not found (${parsed.token})`);
 
-  const nativeId = s.frameIds[Math.max(0, Math.min(s.frameIds.length - 1, parsed.t))];
+  const idx = Math.max(0, Math.min(s.frameIds.length - 1, parsed.t));
+  const nativeId = s.frameIds[idx];
   const live = await readModalitySlice(nativeId);
   if (!live) throw new Error("dsa: no pixel data");
-  const diff = subtractFrames(s.mask, live.values, s.width, s.height, opts(s));
+  const mask = await maskAt(s, idx);
+  if (!mask) throw new Error("dsa: no mask");
+  const diff = subtractFrames(mask, live.values, s.width, s.height, optsAt(s, idx));
   if (!diff) throw new Error("dsa: size mismatch");
 
   let minPixelValue = Infinity;

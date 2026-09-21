@@ -62,6 +62,18 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "disp-overlay", combo: "O", descriptionKey: "sc.dispOverlay", group: "display" },
   { id: "disp-fullscreen", combo: "F", descriptionKey: "sc.dispFullscreen", group: "display", planned: true },
 
+  // --- DSA のピクセルシフト（`fw/angio-design.md` §6.4 / §6.7） ---
+  // 🔴 **`Alt` を付けるのは、素の矢印が既にスライス送りだから**（`nav-next-slice` /
+  //    `nav-prev-slice`）。DSA の表示中だけ意味を変える手もあるが、**同じキーが文脈で
+  //    別の事をするのは、押した人には見分けが付かない**（送ったつもりがマスクを動かしていた、
+  //    が起こる）。別のキーにして、効かない場面では何も起きないほうが安全である。
+  // ⚠️ 効くのは **DSA 表示中だけ**。適用範囲（全部 / 以降 / このフレームだけ）は画面の 3 択に従う。
+  { id: "dsa-shift-left", combo: "Alt+ArrowLeft", descriptionKey: "sc.dsaShiftLeft", group: "display" },
+  { id: "dsa-shift-right", combo: "Alt+ArrowRight", descriptionKey: "sc.dsaShiftRight", group: "display" },
+  { id: "dsa-shift-up", combo: "Alt+ArrowUp", descriptionKey: "sc.dsaShiftUp", group: "display" },
+  { id: "dsa-shift-down", combo: "Alt+ArrowDown", descriptionKey: "sc.dsaShiftDown", group: "display" },
+  { id: "dsa-shift-fine", combo: "Alt+Shift+ArrowLeft", descriptionKey: "sc.dsaShiftFine", group: "display" },
+
   // --- 汎用・システム（Redo は Win:Ctrl+Y / Mac:Cmd+Shift+Z） ---
   { id: "sys-undo", combo: "Mod+Z", descriptionKey: "sc.sysUndo", group: "system" },
   { id: "sys-redo", combo: "Mod+Shift+Z", descriptionKey: "sc.sysRedo", group: "system" },
