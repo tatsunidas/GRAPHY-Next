@@ -276,6 +276,52 @@ describe("既定の挙動を変えていないこと", () => {
 });
 
 
+describe("resetDsaRigid — 人が触った分だけを捨てる", () => {
+  it("🔴 ★ 回転も戻る（適用範囲「全部」で回した分）", async () => {
+    // 🚨 以前はボタンが clearDsaNudge + setDsaShift(0,0) を並べて呼んでおり、
+    //    **rotationDeg だけ消し忘れていた**。↺/↻ が「回転も合わせる」チェックの裏に
+    //    隠れていたので表に出にくかったが、常時表示にして踏みやすくなった。
+    const token = await session();
+    mod.nudgeDsaRotation(token, 1.5, "all", 0);
+    mod.setDsaShift(token, 4, -3);
+    expect(mod.dsaSessionState(token, 1)?.rotationDeg).toBeCloseTo(1.5, 6);
+
+    mod.resetDsaRigid(token);
+    const st = mod.dsaSessionState(token, 1)!;
+    expect(st.rotationDeg).toBe(0);
+    expect(st.dx).toBe(0);
+    expect(st.dy).toBe(0);
+  });
+
+  it("★ フレームごとの手動分も戻る", async () => {
+    const token = await session();
+    mod.nudgeDsaShift(token, 2, 2, "current", 3);
+    mod.nudgeDsaRotation(token, 0.8, "current", 3);
+    expect(mod.dsaSessionState(token, 3)?.dx).toBe(2);
+
+    mod.resetDsaRigid(token);
+    const st = mod.dsaSessionState(token, 3)!;
+    expect(st.dx).toBe(0);
+    expect(st.rotationDeg).toBe(0);
+  });
+
+  it("🔴 ★ 計画と残差合わせは残る（自動で決まった分は消さない）", async () => {
+    const token = await session();
+    const pl = plan();
+    mod.setDsaFramePlan(token, pl, "自動");
+    mod.setDsaFrameAlignments(token, pl.map(() => ({ dx: 1, dy: 1, rotationDeg: 0.3 })));
+    mod.setDsaAutoAlign(token, true);
+    mod.nudgeDsaShift(token, 5, 5, "all", 0);
+
+    mod.resetDsaRigid(token);
+    const st = mod.dsaSessionState(token, 7)!;
+    expect(st.framePlan).toBe(true);
+    // 計画の dx ＋ 残差の dx は残っている（人が足した 5 だけが消える）。
+    expect(st.dx).toBeCloseTo((pl[7]?.dx ?? 0) + 1, 6);
+    expect(st.rotationDeg).toBeCloseTo(0.3, 6);
+  });
+});
+
 describe("dsaFramePair — 画面のマスクと実際に引かれるマスクが一致する（§6.18）", () => {
   it("🔴 ★ 返る diff が、返る mask と live から作り直せる", () => {
     // **これが診断の絵の契約。** ここがずれたら、画面が嘘をつく。

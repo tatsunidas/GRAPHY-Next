@@ -39,7 +39,6 @@ import {
   autoAlignDsa,
   setDsaAutoAlign,
   setDsaLevelMatch,
-  clearDsaNudge,
   dsaImageId,
   dsaSessionState,
   dsaFramePlan,
@@ -55,6 +54,7 @@ import {
   setDsaFramePlan,
   setDsaMaskFrames,
   setDsaOnset,
+  resetDsaRigid,
   setDsaShift,
   type DsaFramePlanEntry,
   type DsaShiftScope,
@@ -1764,8 +1764,9 @@ export function SeriesViewer({
                       title={t("dsa.resetNudge.title")}
                       onClick={() => {
                         if (!dsaToken) return;
-                        clearDsaNudge(dsaToken);
-                        setDsaShift(dsaToken, 0, 0);
+                        // 🔴 手動層とラン全体を**まとめて**戻す。以前はここで 2 つ並べて
+                        //    呼んでおり、回転だけ消し忘れていた（適用範囲「全部」で回した分）。
+                        resetDsaRigid(dsaToken);
                         refreshDsa(dsaToken, zc);
                       }}
                     >

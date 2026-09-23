@@ -509,6 +509,26 @@ export function clearDsaNudge(token: string): void {
 }
 
 /**
+ * **人が触った位置合わせを全部捨てる**（「ずらしを戻す」）。
+ *
+ * <p>消すのは**手動層**（フレームごとの `nudge`）と**ラン全体**（`dx`/`dy`/`rotationDeg`）の 2 つ。
+ * 同位相マスクの計画（`framePlan` の `dx`/`dy`）と、その残差合わせ（`align*`）は**残る**
+ * ——あれらは自動で決まった分なので、人の操作を取り消す道具で消すものではない。
+ *
+ * <p>🚨 **層を数える仕事を呼び出し側に残さない。** 以前はボタンが
+ * `clearDsaNudge()` ＋ `setDsaShift(0, 0)` を並べて呼んでおり、**`rotationDeg` だけ
+ * 消し忘れていた**（適用範囲「全部」で回した分が残る）。1 つの操作は 1 つの関数にする。
+ */
+export function resetDsaRigid(token: string): void {
+  const s = sessions.get(token);
+  if (!s) return;
+  s.nudge = null;
+  s.dx = 0;
+  s.dy = 0;
+  s.rotationDeg = 0;
+}
+
+/**
  * 同位相マスクの計画を入れる（`null` で外す）。
  *
  * <p>要素が `null` のフレームは**既定のマスクに落ちる**。「対応するマスクが見つからなかった」

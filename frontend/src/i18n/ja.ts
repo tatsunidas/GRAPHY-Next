@@ -1555,7 +1555,7 @@ export const ja: Record<string, string> = {
   "dsa.alignEdges.failed.noTexture": "エッジが合いませんでした（合わせられる構造がありません）。",
   "dsa.alignEdges.failed.tooFewReliableFrames": "エッジが合いませんでした。",
   "dsa.resetNudge": "ずらしを戻す",
-  "dsa.resetNudge.title": "手で動かした分と、2 つの「合わせる」で足した分を捨て、ラン全体のシフトも 0 に戻します（同位相マスクの計画とその自動補正は残ります）。",
+  "dsa.resetNudge.title": "手で動かした分（ずらしと回転）と、2 つの「合わせる」で足した分を捨て、ラン全体のずらしと回転も 0 に戻します（同位相マスクの計画とその自動補正は残ります）。",
   "sc.dsaShiftLeft": "DSA: マスクを左へ 1px",
   "sc.dsaShiftRight": "DSA: マスクを右へ 1px",
   "sc.dsaShiftUp": "DSA: マスクを上へ 1px",

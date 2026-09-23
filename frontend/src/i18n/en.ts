@@ -1566,7 +1566,7 @@ export const en: Record<string, string> = {
   "dsa.alignEdges.failed.noTexture": "The edges did not match (there is no structure to match).",
   "dsa.alignEdges.failed.tooFewReliableFrames": "The edges did not match.",
   "dsa.resetNudge": "Reset nudges",
-  "dsa.resetNudge.title": "Drops what you moved by hand and what the two fit buttons added, and resets the run-wide shift to zero (the phase-matched plan and its automatic correction are kept).",
+  "dsa.resetNudge.title": "Drops what you moved by hand (shift and rotation) and what the two fit buttons added, and resets the run-wide shift and rotation to zero (the phase-matched plan and its automatic correction are kept).",
   "sc.dsaShiftLeft": "DSA: move mask 1px left",
   "sc.dsaShiftRight": "DSA: move mask 1px right",
   "sc.dsaShiftUp": "DSA: move mask 1px up",
