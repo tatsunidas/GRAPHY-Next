@@ -170,21 +170,88 @@ export interface TrackingAlignPlanRequest {
   logarithmic: boolean;
   /** 半解像度での探索半径 [px]（既定 4 ＝ 実寸 ±8px）。 */
   searchRadius: number;
+  /**
+   * 回転も探す幅 [度]（既定 0 ＝ 平行移動だけ）。
+   *
+   * <p>⚠️ **自由度を上げるほど「片方にしか無いもの」を変形で埋めにいく**
+   * （`fw/subtraction-design.md` §2.3）。造影後のフレームには血管があり、マスクには無い
+   * ——回すほど血管を消しにかかる恐れがある。**明示したときだけ回す。**
+   */
+  maxRotationDeg?: number;
+  /** 回転の刻み [度]（既定 0.5）。 */
+  rotationStepDeg?: number;
 }
 
 export interface TrackingAlignPlanResponse {
   type: "alignPlanDone";
   requestId: number;
-  /** **全解像度**での残差 [px]。合わなかったフレームは null。 */
-  align: ({ dx: number; dy: number } | null)[];
+  /** **全解像度**での残差 [px] と回転 [度]。合わなかったフレームは null。 */
+  align: ({ dx: number; dy: number; rotationDeg: number } | null)[];
   aligned: number;
+}
+
+/**
+ * 同位相マスクを**背景の突き合わせ**で決める（§6.16）。
+ *
+ * <p>🔑 **追尾も ROI も要らない。** ライブフレームごとに、造影で変わった画素を外して
+ * 背景がいちばん似た造影前フレームを選ぶ。造影後に追尾が死ぬラン（実機の Rubo Run 1）でも
+ * 成立するのが要点。
+ *
+ * <p>🔴 画素は **2 倍ダウンサンプルした全画面**（`alignPlan` と同じ作法）。
+ * 全解像度で 137 枚持つと 600MB を超える（§6.7.7）。
+ */
+export interface TrackingPhaseMatchRequest {
+  type: "phaseMatch";
+  requestId: number;
+  /** **2 倍ダウンサンプルした全画面**の全フレーム。 */
+  frames: PackedFrames;
+  /** マスクにしてよいフレーム（造影到達前）。平均マスクもここから作る。 */
+  maskFrames: number[];
+  /** マスクを当てたいフレーム（造影後）。 */
+  liveFrames: number[];
+  logarithmic: boolean;
+  /** 造影と判定する床の倍数（既定 4）。 */
+  sigma?: number;
+  /** 比べる画素がこの割合を下回ったら当てない（既定 0.5）。 */
+  minUsedFraction?: number;
+}
+
+export interface TrackingPhaseMatchResponse {
+  type: "phaseMatchDone";
+  requestId: number;
+  /** ライブフレームごとの結果（要求した `liveFrames` と同じ並び）。 */
+  entries: {
+    liveFrame: number;
+    maskFrame: number | null;
+    score: number;
+    margin: number;
+    usedFraction: number;
+  }[];
+  /** 突き合わせに使った窓（**半解像度**）。null なら造影が見つからなかった。 */
+  rect: { x0: number; y0: number; x1: number; y1: number } | null;
+  /** 診断用: ライブフレームごとの「造影で変わった画素」の割合。 */
+  contrastFraction: number[];
 }
 
 export type XaTrackingWorkerRequest =
   | TrackingSuggestRequest
   | TrackingAnalyzeRequest
   | TrackingMatchRequest
-  | TrackingAlignPlanRequest;
+  | TrackingAlignPlanRequest
+  | TrackingPhaseMatchRequest;
+
+/**
+ * 途中経過。**要求を解決しない**（`ask` は progress を受けても待ち続ける）。
+ *
+ * <p>🔑 背景の突き合わせは 3000 回規模の ZNCC を回す**不透明な区間**で、
+ * 何も出さないと利用者からは固まったように見える（実機で指摘された）。
+ */
+export interface TrackingProgressResponse {
+  type: "progress";
+  requestId: number;
+  done: number;
+  total: number;
+}
 
 export interface TrackingErrorResponse {
   type: "error";
@@ -197,4 +264,6 @@ export type XaTrackingWorkerResponse =
   | TrackingAnalyzeResponse
   | TrackingMatchResponse
   | TrackingAlignPlanResponse
+  | TrackingPhaseMatchResponse
+  | TrackingProgressResponse
   | TrackingErrorResponse;

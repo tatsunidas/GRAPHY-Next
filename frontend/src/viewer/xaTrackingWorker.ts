@@ -14,6 +14,7 @@
  */
 import { shiftBilinear } from "./dsa";
 import { buildPhaseMaskPlan, type RunTrack } from "./xaPhaseMask";
+import { contrastBounds, contrastMask, matchByBackground, packGradients } from "./xaPhaseMatch";
 import {
   alignOnEdges,
   amplitudeSpan,
@@ -49,6 +50,12 @@ self.onmessage = (ev: MessageEvent<XaTrackingWorkerRequest>) => {
   try {
     if (req.type === "suggest") {
       const frames = unpack(req.frames);
+      // 🚨 ここで落としたほうがメッセージが具体的になる（§6.15）。
+      if (req.frameStartTimesMs?.length && req.frameStartTimesMs.length !== req.frames.frameCount) {
+        throw new Error(
+          `suggest: frameStartTimesMs length ${req.frameStartTimesMs.length} !== frames ${req.frames.frameCount}`,
+        );
+      }
       const candidates = suggestTrackingRois(frames, req.frames.width, req.frames.height, {
         tileSize: req.tileSize,
         ...(req.tileSizes?.length ? { tileSizes: req.tileSizes } : {}),
@@ -90,8 +97,17 @@ self.onmessage = (ev: MessageEvent<XaTrackingWorkerRequest>) => {
         : liveTrack;
 
       // 2 ラン間で振幅を比べるので、**軸はマスク側で決めてライブへ渡す**。
+      // 🔴 **デトレンドの方式と窓も同じく渡す（§6.15）。** ラン長が 3 秒の境界をまたぐと
+      //    片方が移動平均・片方が線形になり、残る振幅の定義が違うので amplitude sorting の
+      //    前提（2 ランの px が比較できる）が壊れる。
       const maskSignal = motionSignal(maskTrack, req.maskTimesMs);
-      const liveSignal = motionSignal(liveTrack, req.liveTimesMs, { axis: maskSignal.axis });
+      const liveSignal = motionSignal(liveTrack, req.liveTimesMs, {
+        axis: maskSignal.axis,
+        detrendMode: maskSignal.detrendMode,
+        ...(maskSignal.detrendMode === "movingAverage"
+          ? { detrendWindowFrames: maskSignal.detrendWindowFrames }
+          : {}),
+      });
       const maskPeriod = estimatePeriod(maskSignal.s, req.maskTimesMs);
       const livePeriod = estimatePeriod(liveSignal.s, req.liveTimesMs);
       const maskPhase = assignPhase(maskSignal.s, req.maskTimesMs, maskPeriod.periodFrames);
@@ -165,27 +181,94 @@ self.onmessage = (ev: MessageEvent<XaTrackingWorkerRequest>) => {
       return;
     }
 
+    if (req.type === "phaseMatch") {
+      const frames = unpack(req.frames);
+      const w = req.frames.width;
+      const h = req.frames.height;
+
+      // 造影前の平均マスク（造影で変わった画素を見つけるための基準）。
+      const mask = new Float32Array(w * h);
+      for (const m of req.maskFrames) {
+        const f = frames[m];
+        if (!f) continue;
+        for (let i = 0; i < mask.length; i++) mask[i] += f[i];
+      }
+      if (req.maskFrames.length) {
+        for (let i = 0; i < mask.length; i++) mask[i] /= req.maskFrames.length;
+      }
+
+      // ライブフレームごとの「造影で変わった画素」。
+      const excludes: Uint8Array[] = [];
+      const contrastFraction: number[] = [];
+      for (const t of req.liveFrames) {
+        const f = frames[t];
+        if (!f) { excludes.push(new Uint8Array(w * h)); contrastFraction.push(0); continue; }
+        const r = contrastMask(mask, f, w, h, req.logarithmic, req.sigma ?? 4);
+        excludes.push(r.exclude);
+        contrastFraction.push(r.fraction);
+      }
+
+      // 🚨 窓は**造影が現れた範囲**に限る。全画面で比べると静止した背骨やコリメータが
+      //    大半を占め、心臓の動きが数値に出ない（実測で変位 0.00px になった）。
+      const rect = contrastBounds(excludes, w, h);
+      if (!rect) {
+        post({
+          type: "phaseMatchDone", requestId: req.requestId,
+          entries: req.liveFrames.map((t) => ({ liveFrame: t, maskFrame: null, score: 0, margin: 0, usedFraction: 0 })),
+          rect: null, contrastFraction,
+        });
+        return;
+      }
+
+      const packed = packGradients(frames, w, h);
+      const byLive = new Map<number, Uint8Array>();
+      req.liveFrames.forEach((t, i) => byLive.set(t, excludes[i]));
+      // 🔑 **途中経過を出す。** ここは 3000 回規模の ZNCC で、黙っていると固まって見える。
+      //    塊に割って進捗を挟む（要求は解決しない）。
+      const CHUNK = 8;
+      const entries: ReturnType<typeof matchByBackground> = [];
+      for (let i = 0; i < req.liveFrames.length; i += CHUNK) {
+        const part = req.liveFrames.slice(i, i + CHUNK);
+        entries.push(...matchByBackground(
+          packed, part, req.maskFrames, rect,
+          (t) => byLive.get(t) ?? null,
+          { ...(req.minUsedFraction != null ? { minUsedFraction: req.minUsedFraction } : {}) },
+        ));
+        post({ type: "progress", requestId: req.requestId, done: entries.length, total: req.liveFrames.length });
+      }
+      post({ type: "phaseMatchDone", requestId: req.requestId, entries, rect, contrastFraction });
+      return;
+    }
+
     if (req.type === "alignPlan") {
       const frames = unpack(req.frames);
       const w = req.frames.width;
       const h = req.frames.height;
       const radius = Math.max(1, Math.floor(req.searchRadius));
-      const align: ({ dx: number; dy: number } | null)[] = [];
+      const align: ({ dx: number; dy: number; rotationDeg: number } | null)[] = [];
       let aligned = 0;
       for (let t = 0; t < frames.length; t++) {
         const m = req.maskFrameFor[t];
         if (m == null || m < 0 || m >= frames.length) { align.push(null); continue; }
         // 🔑 既に分かっているずらし（追尾）を**先に当ててから**残差だけを探す。
         //    画素は半解像度なので、実寸のずらしは半分にして掛ける。
+        //    🔴 背景の突き合わせ経路では基準が 0（マスクを選んだ時点で解剖は揃っている前提）。
         const pre = shiftBilinear(frames[m], w, h, req.baseDx[t] / 2, req.baseDy[t] / 2);
         const r = alignOnEdges(pre, frames[t], w, h, {
           searchRadius: radius,
           logarithmic: req.logarithmic,
+          ...(req.maxRotationDeg ? { maxRotationDeg: req.maxRotationDeg } : {}),
+          ...(req.rotationStepDeg ? { rotationStepDeg: req.rotationStepDeg } : {}),
         });
         if (!r.reliable) { align.push(null); continue; }
-        // 半解像度で求めた量なので実寸へ戻す。
-        align.push({ dx: r.dx * 2, dy: r.dy * 2 });
+        // 半解像度で求めた量なので実寸へ戻す。🔴 **角度はスケール不変なので 2 倍しない。**
+        align.push({ dx: r.dx * 2, dy: r.dy * 2, rotationDeg: r.rotationDeg });
         aligned++;
+        // 🔑 回転を入れると 1 フレームあたり角度の数だけ走るので、ここが最長の段になる。
+        //    黙っていると固まって見える（§6.16.6）。
+        if ((t + 1) % 8 === 0) {
+          post({ type: "progress", requestId: req.requestId, done: t + 1, total: frames.length });
+        }
       }
       post({ type: "alignPlanDone", requestId: req.requestId, align, aligned });
       return;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  transformMask,
   averageFrames,
   backgroundRms,
   blurSeparable,
@@ -160,6 +161,56 @@ describe("subtractFrames — 差分の数式", () => {
 
   it("サイズ不一致は null", () => {
     expect(subtractFrames(img(2, 1, () => 0), img(3, 1, () => 0), 2, 1, { dx: 0, dy: 0, logarithmic: false })).toBeNull();
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* §6.18 — 「引かれるマスク」の定義を 1 箇所にする                       */
+/*                                                                      */
+/* 🔴 診断が表示するマスクと、実際に引かれるマスクが**別経路**だと、      */
+/*    画面が嘘をつく。このセッションで直した不具合はほぼ全部その型だった。*/
+/*    だから subtractFrames の中の変換を切り出して共有する——ただし       */
+/*    **切り出しで数値が 1 ビットも動かないこと**を先に固定する。         */
+/* ------------------------------------------------------------------ */
+
+describe("transformMask — subtractFrames が引く前に当てる変換そのもの", () => {
+  const W = 9;
+  const H = 7;
+  const ramp = (): Float32Array =>
+    Float32Array.from({ length: W * H }, (_, i) => 100 + (i % W) * 7 + Math.floor(i / W) * 3);
+
+  it("🔴 ★ 回転 0 なら shiftBilinear と 1 ビットも違わない", () => {
+    const m = ramp();
+    const a = transformMask(m, W, H, { dx: 1.3, dy: -0.7 });
+    const b = shiftBilinear(m, W, H, 1.3, -0.7);
+    expect(Array.from(a)).toEqual(Array.from(b));
+  });
+
+  it("🔴 ★ 回転があれば warpRigid と 1 ビットも違わない", () => {
+    const m = ramp();
+    const a = transformMask(m, W, H, { dx: 0.5, dy: 0.25, rotationDeg: 2 });
+    const b = warpRigid(m, W, H, 0.5, 0.25, 2);
+    expect(Array.from(a)).toEqual(Array.from(b));
+  });
+
+  it("🔴 ★ subtractFrames の結果が transformMask から作り直せる（定義が一致している）", () => {
+    // **これが「画面のマスク＝実際に引かれたマスク」の保証。**
+    const mask = ramp();
+    const live = Float32Array.from(mask, (v, i) => v - (i % 5));
+    for (const opts of [
+      { dx: 0, dy: 0, logarithmic: false },
+      { dx: 1.3, dy: -0.7, logarithmic: false },
+      { dx: -0.4, dy: 0.9, rotationDeg: 1.5, logarithmic: false },
+      { dx: 0.8, dy: 0.2, logarithmic: true },
+    ] as const) {
+      const diff = subtractFrames(mask, live, W, H, opts)!;
+      const m = transformMask(mask, W, H, opts);
+      const rebuilt = Float32Array.from(m, (v, i) =>
+        opts.logarithmic
+          ? Math.log(Math.max(v, 0) + 1e-3) - Math.log(Math.max(live[i], 0) + 1e-3)
+          : v - live[i]);
+      for (let i = 0; i < diff.length; i++) expect(diff[i]).toBeCloseTo(rebuilt[i], 10);
+    }
   });
 });
 

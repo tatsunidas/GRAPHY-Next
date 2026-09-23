@@ -29,6 +29,8 @@ import { readModalitySlice } from "./pixelCalibration";
 import { viewerOverlayProps } from "./viewerOverlay";
 import type { AutoPhaseResult } from "./xaAutoPhaseMask";
 import {
+  BAND_KINDS,
+  bandLegendColor,
   MASK_ORIGINS,
   originColor,
   originCounts,
@@ -39,7 +41,11 @@ import {
 } from "./xaDsaPlot";
 import { frameStartTimesMs, type XaCineSource } from "./xaCine";
 import type { DsaFramePlanEntry } from "./dsaLoader";
-import type { RoiCandidate } from "./xaTracking";
+import { OCTAVE_TOLERANCE, type PeriodEstimate, type RoiCandidate } from "./xaTracking";
+import { phaseMaskGates } from "./xaPhaseMaskGates";
+import { ProgressBar } from "./ProgressBar";
+import { SliceCanvas } from "./SliceCanvas";
+import { dsaFramePair, type DsaFramePair } from "./dsaLoader";
 import type {
   TrackingAnalyzeResponse,
   TrackingMatchResponse,
@@ -89,6 +95,8 @@ export function XaDsaDialog({
   planLabel,
   autoPhase,
   dsaPlan,
+  dsaToken,
+  dsaVersion,
   residuals,
   residualProgress,
   onClose,
@@ -114,10 +122,17 @@ export function XaDsaDialog({
   autoPhase: AutoPhaseResult | null;
   /** いま DSA に効いている計画（フレームごとに何を引いているか）。 */
   dsaPlan: readonly (DsaFramePlanEntry | null)[] | null;
+  /** DSA セッションのトークン（3 枚の絵を読むのに要る）。 */
+  dsaToken: string | null;
+  /**
+   * DSA を触るたびに増える版数。**3 枚の絵を読み直す合図**にする（§6.18）。
+   * 🔑 これが無いと、2D Viewer でずらしても診断の絵が古いままになる。
+   */
+  dsaVersion: number;
   /** フレームごとのロバスト残差（測り終わるまで null）。 */
   residuals: readonly number[] | null;
   /** 残差の測定中の進捗（終わったら null）。 */
-  residualProgress: string | null;
+  residualProgress: { done: number; total: number } | null;
   onClose: () => void;
   onGoToFrame?: (index: number) => void;
   onApplyPlan?: (plan: (DsaFramePlanEntry | null)[], label: string) => void;
@@ -138,9 +153,52 @@ export function XaDsaDialog({
   );
   const originTally = useMemo(() => originCounts(pairing.origins), [pairing.origins]);
 
+  /**
+   * 周期推定の裏付けを 1 行で出す（§6.15）。
+   *
+   * <p>🚨 **45 bpm は真値 90.2 の半分（オクターブ誤り）**で、`confidence` では原理的に
+   * 弾けない（`r(2T) ≈ r(T)` ＝両方高いときに起きるため）。補正が「効いたのか、
+   * 敷居にどれだけ届かなかったのか」を数値で出さないと、原因を追えない。
+   */
+  const periodEvidence = useCallback(
+    (p: PeriodEstimate) => t("xatrack.period.evidence", {
+      peak: p.peakCorrelation.toFixed(3),
+      // 🔴 null は「比べていない」。0 と混ぜない（負の相関は正当な測定結果である）。
+      half: p.halfLagCorrelation != null ? p.halfLagCorrelation.toFixed(3) : "—",
+      limit: (OCTAVE_TOLERANCE * p.peakCorrelation).toFixed(3),
+      halved: p.octaveHalved,
+      verdict: t(
+        p.octaveHalved > 0
+          ? "xatrack.period.evidence.halved"
+          : p.halfLagCorrelation == null
+            ? "xatrack.period.evidence.na"
+            : p.halfLagCorrelation <= 0
+              ? "xatrack.period.evidence.negative"
+              : "xatrack.period.evidence.kept",
+        { halved: p.octaveHalved },
+      ),
+    }),
+    [t],
+  );
+
+  /** 追尾が落ちた理由の内訳（多い順）。 */
+  const trackReasonTally = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const r of diag?.trackReason ?? []) if (r) counts.set(r, (counts.get(r) ?? 0) + 1);
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  }, [diag?.trackReason]);
+
   const [reference, setReference] = useState(() => Math.max(0, Math.min(frameCount - 1, currentFrame)));
   const [slice, setSlice] = useState<Slice | null>(null);
-  const [roi, setRoi] = useState<PixelRect | null>(null);
+  /**
+   * 🔴 **自動同位相が採用した ROI を初期値にする（§6.15）。**
+   *
+   * <p>この画面は「DSA が何をしたか」を見るための画面なのに、ROI 欄が空で始まるため
+   * Track ボタンが `disabled` のままで、しかも無効に見えなかった——**最初に「押しても
+   * 何も起こらない」と言われたのがこれ**。`autoPhase.roi` は
+   * 「画面に出して差し替えられるようにするため」に返されているのに、ここまで届いていなかった。
+   */
+  const [roi, setRoi] = useState<PixelRect | null>(() => autoPhase?.roi ?? null);
   const [candidates, setCandidates] = useState<RoiCandidate[] | null>(null);
   const [result, setResult] = useState<TrackingAnalyzeResponse | null>(null);
   const [busy, setBusy] = useState<Busy>(null);
@@ -148,6 +206,8 @@ export function XaDsaDialog({
   const [error, setError] = useState<string | null>(null);
   const [searchRadius, setSearchRadius] = useState<number>(32);
   const [maskSource, setMaskSource] = useState<MaskSource>("self");
+  /** いまのフレームで「実際に引かれているもの」3 枚（§6.18）。 */
+  const [pair, setPair] = useState<DsaFramePair | null>(null);
   const [match, setMatch] = useState<TrackingMatchResponse | null>(null);
 
   /**
@@ -176,6 +236,9 @@ export function XaDsaDialog({
       const res = ev.data;
       // 古い応答は捨てる（ROI を変えて投げ直したときに前の結果で上書きしない）。
       if (res.requestId !== pendingRef.current) return;
+      // 🔴 **途中経過で終わったことにしない。** `busy` を型判定の前に消す作りなので、
+      //    ここで弾かないと進捗が届くたびに「進捗が消えて何も起きない」状態になる（§6.15 A12）。
+      if (res.type === "progress") return;
       pendingRef.current = -1;
       setBusy(null);
       setProgress(null);
@@ -202,6 +265,22 @@ export function XaDsaDialog({
     pendingRef.current = requestId;
     w.postMessage({ ...req, requestId } as XaTrackingWorkerRequest, transfer);
   }, []);
+
+  // ── いまのフレームで実際に引かれているもの（§6.18）──────────────────
+  // 🔑 **新しい計算をしない。** `dsaFramePair` が `maskAt` / `optsAt` / `subtractFrames` を
+  //    そのまま通すので、ここに出る絵は**実際に引かれたものと定義上同じ**である。
+  // 🔴 `dsaVersion` が依存に入っているので、2D Viewer 側でずらし・計画・トグルを触ると
+  //    ここも即座に追従する。
+  useEffect(() => {
+    if (!dsaToken) { setPair(null); return; }
+    let cancelled = false;
+    void (async () => {
+      const r = await dsaFramePair(dsaToken, currentFrame);
+      // 連打（Alt+矢印）で古い結果が後から来ても上書きしない。
+      if (!cancelled) setPair(r);
+    })();
+    return () => { cancelled = true; };
+  }, [dsaToken, dsaVersion, currentFrame]);
 
   // ── 参照フレームの読み出し ────────────────────────────────────────
   useEffect(() => {
@@ -487,9 +566,37 @@ export function XaDsaDialog({
     return out;
   }, [result, t]);
 
+  /**
+   * 🚨 **自動経路と同じ門を、手動経路でも通す（§6.15）。**
+   *
+   * <p>以前ここには `outOfRange` / `unreliable` / `directionRelaxed` / `phaseDisagreements` の
+   * 4 つしか無く、**振幅がノイズでも／周期が心拍でなくても／追尾が半数外れていても
+   * 警告なしで「同位相マスク」として適用できた**。判断材料は Worker が返していたのに、
+   * 読んでいたのが自動経路だけだった。
+   */
+  const gates = useMemo(
+    () => (match
+      ? phaseMaskGates({
+          liveTracked: match.liveTracked,
+          totalFrames: match.liveFrameCount,
+          maskAmplitudeSpan: match.maskAmplitudeSpan,
+          periodConfidence: match.maskPeriod.confidence,
+        })
+      : []),
+    [match],
+  );
+
   const matchWarnings = useMemo(() => {
     if (!match) return [];
     const out: string[] = [];
+    // 🔴 **重い門を先に出す。** 追尾が壊れていれば振幅も周期も信用できない。
+    for (const g of gates) {
+      out.push(t(`xadsa.gate.${g}`, {
+        tracked: match.liveTracked,
+        total: match.liveFrameCount,
+        span: match.maskAmplitudeSpan.toFixed(2),
+      }));
+    }
     // 🔴 造影前が 1 心拍に満たないと、位相の合うマスクがそもそも存在しない。
     if (match.maskPeriod.confidence !== "none" && usableMaskFrames.length < match.maskPeriod.periodFrames) {
       out.push(t("xatrack.match.shortMask", {
@@ -504,10 +611,19 @@ export function XaDsaDialog({
       out.push(t("xatrack.match.phaseDisagree", { n: match.summary.phaseDisagreements }));
     }
     return out;
-  }, [match, usableMaskFrames.length, t]);
+  }, [match, gates, usableMaskFrames.length, t]);
 
   return (
-    <div style={shell}>
+    <div style={shell} data-xadsa>
+      {/*
+        🚨 **無効なボタンが有効に見えていた（§6.15）。**
+        `chip` / `btnPrimary` は素の CSSProperties で `cursor: "pointer"` 決め打ちのため、
+        `disabled` でも色もカーソルも変わらず、利用者には「押しても何も起こらない」としか
+        見えなかった（最初に指摘されたのが Track ボタンのこれ）。
+        個別に直すと将来足すボタンで再発するので、**このダイアログの button すべて**に
+        一度だけ効かせる。
+      */}
+      <style>{DISABLED_CSS}</style>
       <div
         ref={panelRef}
         style={pos ? { ...panel, position: "fixed", left: pos.x, top: pos.y, margin: 0 } : panel}
@@ -551,12 +667,39 @@ export function XaDsaDialog({
                 })}
               </div>
               <div>
-                {t("xadsa.summary.run", {
-                  start: (autoPhase.contrastStart ?? 0) + 1,
-                  bpm: autoPhase.bpm != null ? autoPhase.bpm.toFixed(0) : "—",
-                  span: (autoPhase.amplitudeSpanPx ?? 0).toFixed(1),
-                })}
+                {/* 🔴 bpm と振幅は**追尾経路の量**。背景の突き合わせでは測っていないので、
+                    「0.0px」と出して「動いていない」と読まれないよう出し分ける（§6.16）。 */}
+                {autoPhase.method === "background"
+                  ? t("xadsa.summary.run.background", { start: (autoPhase.contrastStart ?? 0) + 1 })
+                  : t("xadsa.summary.run", {
+                      start: (autoPhase.contrastStart ?? 0) + 1,
+                      bpm: autoPhase.bpm != null ? autoPhase.bpm.toFixed(0) : "—",
+                      span: (autoPhase.amplitudeSpanPx ?? 0).toFixed(1),
+                    })}
               </div>
+              {/* 🔑 **どちらの経路で位相を決めたか**（§6.16）。造影後に追尾が死ぬランは
+                  「背景の突き合わせ」に落ちる——それは失敗ではなく、第 2 の経路である。 */}
+              {autoPhase.method && (
+                <div data-testid="xadsa-method">
+                  {t("dsa.autoPhase.background", {
+                    method: t(`dsa.autoPhase.method.${autoPhase.method}`),
+                    score: autoPhase.backgroundScore != null ? autoPhase.backgroundScore.toFixed(3) : "—",
+                    frac: autoPhase.contrastFraction != null
+                      ? (autoPhase.contrastFraction * 100).toFixed(1)
+                      : "—",
+                  })}
+                  {" / "}
+                  {t("xadsa.align", {
+                    aligned: autoPhase.alignedFrames ?? 0,
+                    rot: autoPhase.alignRotationDeg != null ? autoPhase.alignRotationDeg.toFixed(2) : "—",
+                  })}
+                </div>
+              )}
+              {diag?.maskPeriod && diag.maskPeriod.peakCorrelation > 0 && (
+                <div style={{ color: "#8a98a6" }} data-testid="xadsa-period-evidence">
+                  {periodEvidence(diag.maskPeriod)}
+                </div>
+              )}
               {!autoPhase.ok && (
                 <div style={{ color: "#e0b050" }} data-testid="xadsa-failed">
                   {t(`dsa.autoPhase.failed.${autoPhase.reason ?? "trackFailed"}`, {
@@ -584,13 +727,75 @@ export function XaDsaDialog({
                 </span>
               ))}
             </div>
+            {/* 🚨 **帯の凡例。** `PlotBand.kind` は「凡例に出す種別」と書かれていたのに
+                凡例が無く、全グラフの背景の赤・緑・青が何なのか画面のどこにも
+                書かれていなかった（§6.15）。上の凡例は**点の色**で、別物。 */}
+            {bands.length > 0 && (
+              <div
+                style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "2px 0 0" }}
+                data-testid="xadsa-band-legend"
+              >
+                {BAND_KINDS.filter((k) => bands.some((b) => b.kind === k)).map((k) => (
+                  <span key={k} style={{ fontSize: 11, color: "#8a98a6" }}>
+                    <span style={{ color: bandLegendColor(k) }}>▬</span> {t(`xadsa.band.${k}`)}
+                  </span>
+                ))}
+              </div>
+            )}
             <div style={hint}>{t("xadsa.chart.mask.hint")}</div>
+
+            {/* ══ 実際に引かれているもの（§6.18）═══════════════════════════
+                🔑 ②の残差は差分に血管そのものを含む（造影画素 15%）ので、数値だけでは
+                   「縁取りが減ったか」を判断できない。**絵を見るしかない。** */}
+            {pair && (
+              <>
+                <div style={colTitle}>{t("xadsa.pair.title", { frame: currentFrame + 1 })}</div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", flexShrink: 0 }} data-testid="xadsa-pair">
+                  <PairPanel
+                    label={t("xadsa.pair.mask")}
+                    note={t("xadsa.pair.mask.note", {
+                      frames: pair.maskFrames.map((f) => f + 1).join(", ") || "—",
+                      dx: pair.dx.toFixed(2),
+                      dy: pair.dy.toFixed(2),
+                      rot: pair.rotationDeg.toFixed(2),
+                    })}
+                    slice={{ values: pair.mask, width: pair.width, height: pair.height }}
+                    testId="xadsa-pair-mask"
+                  />
+                  <PairPanel
+                    label={t("xadsa.pair.live")}
+                    note={t("xadsa.pair.live.note", { frame: currentFrame + 1 })}
+                    slice={{ values: pair.live, width: pair.width, height: pair.height }}
+                    testId="xadsa-pair-live"
+                  />
+                  <PairPanel
+                    label={t("xadsa.pair.diff")}
+                    note={t("xadsa.pair.diff.note", {
+                      resid: residuals?.[currentFrame] != null && Number.isFinite(residuals[currentFrame])
+                        ? residuals[currentFrame].toFixed(3)
+                        : "—",
+                    })}
+                    slice={{ values: pair.diff, width: pair.width, height: pair.height }}
+                    // 🔴 差分だけは**セッションの窓**で描く。フレームごとに自動調整すると
+                    //    明るさが変わって見比べられない（§6.18）。
+                    voi={pair.voi}
+                    testId="xadsa-pair-diff"
+                  />
+                </div>
+                <div style={hint}>{t("xadsa.pair.hint")}</div>
+              </>
+            )}
 
             {/* ② どれだけ合っているか — これが「うまくいっているか」の答え */}
             <div style={colTitle}>{t("xadsa.chart.residual")}</div>
             {residuals ? (
               <SignalChart
                 series={[{ label: "resid", color: "#e0a050", values: [...residuals] }]}
+                // 🔑 **位相と振幅が食い違ったフレームを赤い目盛りで出す（§6.15）。**
+                //    `xaPhaseMask.ts` は「食い違うフレームを出す（どちらが正しいかは決めない。
+                //    人に見せる）」と書いているのに、これまで出ていたのは**件数だけ**で、
+                //    どのフレームを見に行けばよいか分からなかった。
+                unreliable={diag?.phaseDisagree ?? undefined}
                 bands={bands}
                 current={currentFrame}
                 onPick={onGoToFrame}
@@ -599,7 +804,14 @@ export function XaDsaDialog({
               />
             ) : (
               <div style={{ ...hint, color: "#e0b050" }} data-testid="xadsa-residual-busy">
-                {residualProgress ?? t("xatrack.working")}
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  {t("xadsa.residual.measuring")}
+                  <ProgressBar
+                    done={residualProgress?.done}
+                    total={residualProgress?.total}
+                    testId="xadsa-residual-bar"
+                  />
+                </span>
               </div>
             )}
             <div style={hint}>{t("xadsa.chart.residual.hint")}</div>
@@ -640,8 +852,26 @@ export function XaDsaDialog({
             <div style={colTitle}>{t("xadsa.candidates")}</div>
             <div style={{ fontFamily: "monospace", fontSize: 11, lineHeight: 1.6 }}>
               {diag.candidates.map((c, i) => (
-                <div key={`${c.rect.x0},${c.rect.y0},${c.tileSize}`} data-testid={`xadsa-candidate-${i}`}
-                     style={{ color: c.adopted ? "#69c98a" : "#a9b4bf" }}>
+                <button
+                  key={`${c.rect.x0},${c.rect.y0},${c.tileSize}`}
+                  data-testid={`xadsa-candidate-${i}`}
+                  type="button"
+                  title={t("xadsa.candidate.pick")}
+                  onClick={() => changeRoi(c.rect)}
+                  style={{
+                    color: c.adopted ? "#69c98a" : "#a9b4bf",
+                    background: "none",
+                    border: "none",
+                    borderRadius: 4,
+                    padding: "1px 4px",
+                    textAlign: "left",
+                    font: "inherit",
+                    cursor: "pointer",
+                    ...(roi && c.rect.x0 === roi.x0 && c.rect.y0 === roi.y0 && c.rect.x1 === roi.x1
+                      ? { background: "#1d2a38" }
+                      : {}),
+                  }}
+                >
                   {c.adopted ? "▶ " : "  "}
                   {t("xadsa.candidate.row", {
                     rect: `${c.rect.x0},${c.rect.y0}/${c.tileSize}`,
@@ -651,10 +881,38 @@ export function XaDsaDialog({
                     tracked: `${c.trackedFrames}/${c.totalFrames}`,
                     post: c.postFraction != null ? `${(c.postFraction * 100).toFixed(0)}%` : "—",
                   })}
-                </div>
+                </button>
               ))}
             </div>
             <div style={hint}>{t("xadsa.candidates.hint")}</div>
+            {/* 🔑 **bpm 列が「—」である理由を画面に出す（§6.15）。** 心拍の判定には
+                3 周期ぶん（4.5 秒）要るので、1 秒強の造影前窓では原理的に出ない。
+                窓の長さはデトレンドの方式も決める（3 秒未満なら線形）。 */}
+            {diag.surveyFrames > 0 && (
+              <div style={hint} data-testid="xadsa-survey">
+                {t("xadsa.survey", {
+                  n: diag.surveyFrames,
+                  sec: (diag.surveySpanMs / 1000).toFixed(2),
+                  detrend: t(`xadsa.detrend.${diag.surveySpanMs >= 3000 ? "movingAverage" : "linear"}`),
+                })}
+                {diag.surveySpanMs < 4500 && ` ${t("xadsa.survey.noBpm")}`}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 🔑 **なぜ追えなかったかの内訳（§6.15）。** `lowScore` の連発（造影でテンプレートが
+            別物）と `atSearchEdge` の連発（探索半径が足りない）は対処が正反対なのに、
+            これまでは「追えなかった」としか出ていなかった。 */}
+        {trackReasonTally.length > 0 && (
+          <div style={box} data-testid="xadsa-track-reasons">
+            <div style={colTitle}>{t("xadsa.trackReasons")}</div>
+            <div style={{ fontFamily: "monospace", fontSize: 11, lineHeight: 1.6 }}>
+              {trackReasonTally.map(([reason, count]) => (
+                <div key={reason}>{t(`xatrack.frameReason.${reason}`)}: {count}</div>
+              ))}
+            </div>
+            <div style={hint}>{t("xadsa.trackReasons.hint")}</div>
           </div>
         )}
 
@@ -681,13 +939,30 @@ export function XaDsaDialog({
           <div style={column}>
             <div style={colTitle}>{t("xatrack.roi.title")}</div>
             {slice ? (
-              <RoiCanvas slice={slice} roi={roi} candidates={candidates} onChange={changeRoi} />
+              <RoiCanvas
+                slice={slice}
+                roi={roi}
+                // 🔴 手で「候補を出す」を押していなくても、**自動が採点した候補を出す**。
+                //    座標が文字で出るだけでは「なぜこの ROI か」を目で確かめられない（§6.15）。
+                candidates={candidates ?? diag?.candidates ?? null}
+                onChange={changeRoi}
+              />
             ) : (
               <div style={{ ...box, width: PREVIEW, height: PREVIEW, justifyContent: "center" }}>
                 {t("xatrack.loading")}
               </div>
             )}
             <div style={hint}>{t("xatrack.roi.hint")}</div>
+            {/* 🔴 **座標を出す。** これが無いと、実機で見た ROI を記録することも
+                同じ場所を引き直すこともできない（利用者の指摘）。 */}
+            <div style={{ ...hint, fontFamily: "monospace" }} data-testid="xatrack-roi-coords">
+              {roi
+                ? t("xatrack.roi.coords", {
+                    x0: roi.x0, y0: roi.y0, x1: roi.x1, y1: roi.y1,
+                    w: roi.x1 - roi.x0 + 1, h: roi.y1 - roi.y0 + 1,
+                  })
+                : t("xatrack.roi.none")}
+            </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
               <span style={{ color: "#8a98a6" }}>{t("xatrack.reference")}</span>
               <span style={{ fontFamily: "monospace" }} data-testid="xatrack-reference">
@@ -758,6 +1033,9 @@ export function XaDsaDialog({
               >
                 {t("xatrack.run")}
               </button>
+              {!roi && !busy && (
+                <div style={hint} data-testid="xatrack-need-roi">{t("xatrack.needRoi")}</div>
+              )}
               {busy && <div style={{ ...hint, color: "#e0b050" }} data-testid="xatrack-busy">{progress ?? t("xatrack.working")}</div>}
               {error && <div style={{ ...hint, color: "#e06060" }} data-testid="xatrack-error">{error}</div>}
               {result && summary && (
@@ -776,6 +1054,11 @@ export function XaDsaDialog({
                       : t("xatrack.result.noRate")}
                   </div>
                   <div>{t("xatrack.result.amplitude", { px: summary.amplitude.toFixed(2) })}</div>
+                  {result.period.peakCorrelation > 0 && (
+                    <div style={{ color: "#8a98a6" }} data-testid="xatrack-period-evidence">
+                      {periodEvidence(result.period)}
+                    </div>
+                  )}
                 </div>
               )}
               {warnings.map((w) => (
@@ -850,7 +1133,72 @@ export function XaDsaDialog({
                           })}
                         </div>
                       )}
+                      {match.maskPeriod.peakCorrelation > 0 && (
+                        <div style={{ color: "#8a98a6" }} data-testid="xatrack-match-period-evidence">
+                          {periodEvidence(match.maskPeriod)}
+                        </div>
+                      )}
+                      <div>
+                        {t("xatrack.match.tracked", {
+                          live: match.liveTracked,
+                          liveTotal: match.liveFrameCount,
+                          mask: match.maskTracked,
+                          maskTotal: match.maskFrameCount,
+                        })}
+                      </div>
+                      {/* 🔑 マスクに別ランを使うなら、**2 ランの心拍が違えば同位相は成立しない**。
+                          両方の周期が届いているのに、これまで片方しか見ていなかった（§6.15）。 */}
+                      {maskRun && (
+                        <div style={
+                          match.livePeriod.confidence !== "none" && match.maskPeriod.confidence !== "none"
+                            && Math.abs(match.livePeriod.periodFrames - match.maskPeriod.periodFrames)
+                               > 0.2 * match.maskPeriod.periodFrames
+                            ? { color: "#e0b050" }
+                            : undefined
+                        }>
+                          {t("xatrack.match.periods", {
+                            mask: match.maskPeriod.confidence !== "none"
+                              ? (60000 / match.maskPeriod.periodMs).toFixed(0) : "—",
+                            live: match.livePeriod.confidence !== "none"
+                              ? (60000 / match.livePeriod.periodMs).toFixed(0) : "—",
+                          })}
+                        </div>
+                      )}
                     </div>
+                  )}
+                  {/* 🔑 **自動経路と同じグラフを手動でも出す（§6.15）。** Worker は
+                      「診断用。捨てずに返すだけ」と明記して `liveSignal` / `liveFrames` を
+                      返しているのに、これまで描いていたのは自動経路だけで、手動で見るには
+                      Track を回し直す（＝同じ追尾を 2 回計算する）必要があった。 */}
+                  {match && (
+                    <>
+                      <div style={colTitle}>{t("xadsa.chart.motion")}</div>
+                      <SignalChart
+                        series={[{ label: "s", color: "#69c98a", values: [...match.liveSignal] }]}
+                        unreliable={match.liveFrames.map((f) => !f.reliable)}
+                        current={currentFrame}
+                        onPick={onGoToFrame}
+                        testId="xatrack-match-chart-motion"
+                        unit="px"
+                      />
+                      <div style={colTitle}>{t("xadsa.chart.zncc")}</div>
+                      <SignalChart
+                        series={[
+                          { label: "track", color: "#7fb2ec", values: match.liveFrames.map((f) => f.score) },
+                          {
+                            label: "pair",
+                            color: "#c9a0dc",
+                            values: match.entries.map((e) => e.similarity ?? Number.NaN),
+                          },
+                        ]}
+                        domain={ZNCC_DOMAIN}
+                        unreliable={match.liveFrames.map((f) => !f.reliable)}
+                        current={currentFrame}
+                        onPick={onGoToFrame}
+                        testId="xatrack-match-chart-zncc"
+                        unit=""
+                      />
+                    </>
                   )}
                   {matchWarnings.map((w) => (
                     <div key={w} style={{ ...hint, color: "#e0b050" }} data-testid="xatrack-match-warning">
@@ -861,7 +1209,12 @@ export function XaDsaDialog({
                     <button
                       style={btnPrimary}
                       data-testid="xatrack-apply"
-                      disabled={!!busy || !match || !match.summary.ok || !onApplyPlan}
+                      disabled={!!busy || !match || !match.summary.ok || gates.length > 0 || !onApplyPlan}
+                      title={gates.length ? t(`xadsa.gate.${gates[0]}`, {
+                        tracked: match?.liveTracked ?? 0,
+                        total: match?.liveFrameCount ?? 0,
+                        span: (match?.maskAmplitudeSpan ?? 0).toFixed(2),
+                      }) : undefined}
                       onClick={applyPlan}
                     >
                       {t("xatrack.mask.apply")}
@@ -949,6 +1302,29 @@ export function XaDsaDialog({
  * そのためフレーム送りを止める必要が無い。矩形は画像座標なので、どのフレームを見ながら
  * 引いたかに依らず全フレームへ同じ位置で当たる。
  */
+/** 3 枚並べる 1 枚ぶん（見出し＋注記＋絵）。 */
+function PairPanel({
+  label,
+  note,
+  slice,
+  voi,
+  testId,
+}: {
+  label: string;
+  note: string;
+  slice: { values: Float32Array; width: number; height: number };
+  voi?: { windowCenter: number; windowWidth: number } | null;
+  testId: string;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 2, flexShrink: 0 }}>
+      <div style={{ color: "#9fb0c0", fontSize: 11 }}>{label}</div>
+      <SliceCanvas slice={slice} size={PAIR_PREVIEW} voi={voi ?? null} testId={testId} />
+      <div style={{ ...hint, fontFamily: "monospace", maxWidth: PAIR_PREVIEW }}>{note}</div>
+    </div>
+  );
+}
+
 function RoiCanvas({
   slice,
   roi,
@@ -957,7 +1333,8 @@ function RoiCanvas({
 }: {
   slice: Slice;
   roi: PixelRect | null;
-  candidates: RoiCandidate[] | null;
+  /** 🔴 出自は問わない（手動の `suggest` でも、自動同位相の診断でも同じように描く）。 */
+  candidates: readonly { rect: PixelRect }[] | null;
   onChange: (r: PixelRect) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -1199,6 +1576,16 @@ function SignalChart({
 }
 
 /* ------------------------------------------------------------------ */
+
+/** 無効なボタンを無効に見せる（`data-xadsa` の内側すべて）。 */
+const DISABLED_CSS = `
+[data-xadsa] button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+`;
+
+const PAIR_PREVIEW = 200;
 
 const shell: React.CSSProperties = {
   position: "fixed",

@@ -225,7 +225,7 @@ export function detectOnsetFromSignal(
  * 🔴 対数を取るときのゼロ除け。**`dsa.ts` の `LOG_EPS` と同じ値**にしてある
  * （差分の見え方を合わせるため。片方だけ変えると閾値の意味がずれる）。
  */
-const LOG_EPS = 1e-3;
+export const LOG_EPS = 1e-3;
 
 /**
  * コリメータ際を外すための下限。**ちょうど 0 を外すだけでは足りない。**
@@ -235,7 +235,7 @@ const LOG_EPS = 1e-3;
  * 基準値が 0.36% → 0.40% に膨らんで閾値が上がり、**造影開始の判定が 5 フレーム遅れた**
  * （1-origin 33 → 38）。0.01〜0.05 のどこでも 33 に落ち着くので 0.02 にしてある。
  */
-const FIELD_FLOOR_FRACTION = 0.02;
+export const FIELD_FLOOR_FRACTION = 0.02;
 
 /**
  * マスクとの差を**間引いて取り出し、中央値を引いたもの**（＝レベル合わせ後）。
@@ -352,6 +352,37 @@ export function contrastStartFromFractions(
     else break;
   }
   return start;
+}
+
+/**
+ * ROI 調査に使う窓と、そのうち**造影が混ざっていない接頭辞**を返す（§6.15）。
+ *
+ * <p>🚨 **この 2 つは一致しない。** `window` は粗い onset までの造影前フレームだが、
+ * `surveyFrames` は**絞り込んだ `contrastStart` より前**しかない。§6.10.2 のとおり
+ * p10 由来の onset は冠動脈では遅れる（実機で 9 フレーム）ので、
+ * **絞り込みが効いている＝正常系では必ず `surveyFrames.length < window.length` になる。**
+ *
+ * <p>🔴 **`surveyFrames` は `window` の接頭辞である。** `roughPre` は連続昇順で、
+ * `contrastStart` は閾値カットなので、前から数えた何枚かがそのまま残る。
+ * これは呼び出し側が**画素を `window` の順に詰めてから先頭 `surveyFrames.length` 枚を
+ * 切り出す**ことに依存している不変条件なので、ここで一緒に返して取り違えを防ぐ。
+ *
+ * <p>以前は呼び出し側が「枚数」と「時刻の配列」を**別々の式**から作っていたため、
+ * 時刻だけ `window` の長さになり、受け側で黙って捨てられていた（§6.15 の元凶）。
+ *
+ * @param roughPre     粗い造影前区間（連続昇順）
+ * @param contrastStart 絞り込んだ造影開始フレーム
+ * @param maxFrames    窓の上限（超えるときは **onset 側に寄せて**連続した窓を取る）
+ */
+export function roiSurveyWindow(
+  roughPre: readonly number[],
+  contrastStart: number,
+  maxFrames: number,
+): { window: number[]; surveyFrames: number[] } {
+  const window = roughPre.length <= maxFrames
+    ? [...roughPre]
+    : roughPre.slice(roughPre.length - maxFrames);
+  return { window, surveyFrames: window.filter((t) => t < contrastStart) };
 }
 
 /** 画像から造影到達まで一息で。 */

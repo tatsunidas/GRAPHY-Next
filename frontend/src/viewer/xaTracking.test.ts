@@ -18,6 +18,7 @@ import {
   znccPrepared,
   type PixelRect,
   type TrackedFrame,
+  type TrackResult,
 } from "./xaTracking";
 
 /* ------------------------------------------------------------------ */
@@ -514,6 +515,51 @@ describe("estimatePeriod — オクターブ誤り（倍周期へのロック）
     expect(Math.abs(p.periodFrames - T)).toBeLessThanOrEqual(1);
   });
 
+  /* ---------------------------------------------------------------- */
+  /* §6.15 — 補正が効いたか／ぎりぎり落ちたかを外から読めること          */
+  /* ---------------------------------------------------------------- */
+
+  it("🔴 ★ 補正の判断材料を返す（`confidence` では原理的に読めないため）", () => {
+    // 🚨 `confidence` はピークの**高さ**の指標。オクターブ誤りは r(2T) ≈ r(T) で
+    //    **両方高い**ときに起きるので、"ok" のまま倍周期が通る。
+    //    「効いたのか、敷居にどれだけ届かなかったのか」はこの 3 つでしか読めない。
+    const T = 10;
+    const ts = times(120);
+    const p = estimatePeriod(Float64Array.from(alternating(120, T, 6, 4.2)), ts);
+    expect(p.octaveHalved).toBeGreaterThan(0);          // 補正が効いた
+    expect(p.peakCorrelation).toBeGreaterThan(0);
+    // 補正が効いたということは、半分側が敷居（0.85 × r(T)）を超えていたということ。
+    expect(p.halfLagCorrelation).not.toBeNull();
+    expect(p.halfLagCorrelation!).toBeGreaterThan(0);
+  });
+
+  it("🔴 ★ 「比べていない」と「測ったら負だった」を混ぜない", () => {
+    // 🚨 実機で `r(T/2) = -0.017` を「生理的な範囲の外なので比べていません」と表示した。
+    //    負の相関は**正当な測定結果**（逆位相）であって、未測定ではない。0 で表すと区別が付かない。
+    const ts = times(160);
+    const p = estimatePeriod(
+      Float64Array.from({ length: 160 }, (_, i) => 5 * Math.sin((2 * Math.PI * i) / 20)),
+      ts,
+    );
+    // 周期 20 の正弦なら、半分の遅れ（10）はちょうど逆位相なので相関は負になる。
+    expect(p.halfLagCorrelation).not.toBeNull();
+    expect(p.halfLagCorrelation!).toBeLessThan(0);
+    expect(p.octaveHalved).toBe(0);
+  });
+
+  it("★ 補正しなかったときも、半分側の相関を返す（落ちた理由が読める）", () => {
+    // 本当に周期が長いだけの波形。半分側は低いので補正しない——**その値が見えること**が要点。
+    const T = 20;
+    const ts = times(160);
+    const p = estimatePeriod(
+      Float64Array.from({ length: 160 }, (_, i) => 5 * Math.sin((2 * Math.PI * i) / T)),
+      ts,
+    );
+    expect(p.octaveHalved).toBe(0);
+    expect(p.halfLagCorrelation).not.toBeNull();
+    expect(p.halfLagCorrelation!).toBeLessThan(0.85 * p.peakCorrelation);
+  });
+
   it("生理的な下限（200bpm）より下へは降りない", () => {
     // 15fps・周期 6 フレーム（=400ms, 150bpm）。半分にすると 200bpm を超えるので降りない。
     const T = 6;
@@ -645,6 +691,192 @@ describe("suggestTrackingRois — 提案であって決定ではない", () => {
     const cands = suggestTrackingRois(frames, W, H, { tileSize: 32, stride: 16, shortlist: 6, maxCandidates: 5 });
     expect(cands.length).toBeGreaterThan(0);
     for (const c of cands) expect(c.rect.x0).toBeGreaterThanOrEqual(40);
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* §6.15 — 心拍帯で採点する（呼吸で動く横隔膜を 1 位にしない）         */
+  /* ---------------------------------------------------------------- */
+
+  describe("🔴 時刻を渡すと、呼吸ではなく心拍で採点する（§6.15）", () => {
+    // 🚨 **このテストは 2 つのバグを同時に踏む唯一の形。**
+    //    ① 時刻の長さ不一致で `times` が捨てられる（`suggestTrackingRois`）
+    //    ② デトレンドが窓 >= フレーム数で黙って no-op になる（`motionSignal`）
+    //    片方だけ直すと横隔膜側の motionPx が 2.2px のまま残り、ここが落ちる。
+    const SW = 160;
+    const SH = 96;
+    const N = 32;
+    const DT = 40; // 25fps（実機に合わせる）
+    const CARDIAC = 16.6; // 90.2bpm
+
+    // 左半分＝横隔膜（呼吸。32 枚かけて 6px 片道に流れる）
+    // 右半分＝心臓（拍動。±1.5px で周期 16.6 フレーム）
+    // 🚨 **探索半径は縞の周期 11px より小さく取る。** 広いと隣の縞へ乗り移り、
+    //    「動き 15〜24px」という偽の値が出る（同 describe 冒頭の罠と同じ）。
+    const frames = Array.from({ length: N }, (_, i) => {
+      const drift = (6 * i) / (N - 1);
+      const beat = 1.5 * Math.sin((2 * Math.PI * i) / CARDIAC);
+      const left = renderScene(drift * 0.6, drift * 0.8, { width: SW, height: SH, noise: 1, seed: 2100 + i });
+      const right = renderScene(beat * 0.6, beat * 0.8, { width: SW, height: SH, noise: 1, seed: 2100 + i });
+      const out = new Float32Array(SW * SH);
+      for (let y = 0; y < SH; y++) {
+        for (let x = 0; x < SW; x++) out[y * SW + x] = x < SW / 2 ? left[y * SW + x] : right[y * SW + x];
+      }
+      return out;
+    });
+
+    // 🔴 タイルは 32px・ストライド 16px なので x0=64 のタイルだけが境界をまたぐ。
+    //    またぐタイルは作り物の不連続を含むので、判定からは外す。
+    const opts = { tileSize: 32, stride: 16, shortlist: 40, maxCandidates: 30, track: { searchRadius: 6 } };
+    const isDiaphragm = (c: { rect: PixelRect }) => c.rect.x1 < SW / 2;
+    const isHeart = (c: { rect: PixelRect }) => c.rect.x0 >= SW / 2;
+
+    it("時刻を渡さないと、動きの大きさだけで並ぶので呼吸が勝つ（従来の挙動）", () => {
+      const cands = suggestTrackingRois(frames, SW, SH, opts);
+      const diaphragm = cands.filter(isDiaphragm);
+      const heart = cands.filter(isHeart);
+      expect(diaphragm.length).toBeGreaterThan(0);
+      expect(heart.length).toBeGreaterThan(0);
+      // 片道 6px の呼吸が、±1.5px の拍動より大きく測られる。
+      expect(Math.min(...diaphragm.map((c) => c.motionPx)))
+        .toBeGreaterThan(Math.max(...heart.map((c) => c.motionPx)));
+      expect(isDiaphragm(cands[0])).toBe(true);
+    });
+
+    it("🔴 ★ 時刻を渡すと呼吸は 0 に落ち、拍動だけが残って順位が逆転する", () => {
+      const cands = suggestTrackingRois(frames, SW, SH, { ...opts, frameStartTimesMs: times(N, DT) });
+      const diaphragm = cands.filter(isDiaphragm);
+      const heart = cands.filter(isHeart);
+      expect(diaphragm.length).toBeGreaterThan(0);
+      expect(heart.length).toBeGreaterThan(0);
+
+      // 呼吸しかしていないタイルは、直線を引いた時点で振幅を失う（直す前は 2.2px）。
+      for (const c of diaphragm) expect(c.motionPx).toBeLessThan(0.3);
+      // 拍動は残る。
+      for (const c of heart) expect(c.motionPx).toBeGreaterThan(1);
+
+      // 🚨 **これが §6.11.3 の目的そのもの**——境界をまたがないタイルの中では心臓が上に来る。
+      const pure = cands.filter((c) => isDiaphragm(c) || isHeart(c));
+      expect(isHeart(pure[0])).toBe(true);
+    });
+
+    it("🚨 ★ 長さの違う時刻を渡したら、黙って捨てずに落とす", () => {
+      // 黙って降格すると「横隔膜を心臓として採用する」という臨床的な差になる。
+      // 実機では造影開始の絞り込みで 9 フレーム分ずれていた。
+      expect(() =>
+        suggestTrackingRois(frames, SW, SH, { ...opts, frameStartTimesMs: times(N + 9, DT) }),
+      ).toThrow(/frameStartTimesMs/);
+    });
+  });
+});
+
+
+/* ------------------------------------------------------------------ */
+/* §6.15 — 呼吸と拍動を分ける（デトレンド）                              */
+/*                                                                      */
+/* 🚨 §6.11.3 で入れた「心拍帯で採点する」対策は、引数の長さ不一致と       */
+/*    デトレンドの無言の no-op の **2 段**で、一度も実行されていなかった。 */
+/*    ここはその 2 つを同時に押さえる錠である。                           */
+/* ------------------------------------------------------------------ */
+
+describe("motionSignal — 呼吸と拍動を分ける（§6.15）", () => {
+  // 🔴 **実機に合わせて 25fps で書く**（このファイルの既定 FPS=15 ではなく）。
+  //    Rubo Run 1 は 25fps・心拍 90.2bpm ＝ 周期 16.6 フレーム。
+  const DT = 40;
+  const CARDIAC_FRAMES = 16.6;
+
+  /** 1 次元の位置列から追尾結果を組む（画像を描かずにデトレンドだけを見る）。 */
+  const trackOfPositions = (pos: readonly number[]): TrackResult => ({
+    frames: pos.map((p) => ({ dx: p * 0.6, dy: p * 0.8, score: 0.9, reliable: true })),
+    referenceFrame: 0,
+    tensor: { lambda1: 1, lambda2: 0.5, anisotropy: 0.5, orientationRad: 0 },
+    reliable: true,
+  });
+
+  /** 片振幅 [px]（`amplitudeSpan` は p10–p90 なので半分にする）。 */
+  const halfAmplitude = (pos: readonly number[], n = pos.length): number =>
+    amplitudeSpan(motionSignal(trackOfPositions(pos), times(n, DT)).s) / 2;
+
+  const sine = (n: number, periodFrames: number, amp: number, phase = 0): number[] =>
+    Array.from({ length: n }, (_, i) => amp * Math.sin(2 * Math.PI * (i / periodFrames + phase)));
+
+  const ramp = (n: number, total: number): number[] =>
+    Array.from({ length: n }, (_, i) => (total * i) / (n - 1));
+
+  it("🔴 ★ 横隔膜だけの信号（32 枚・10px の直線ドリフト）はほぼ消える", () => {
+    // これが**バグ 2（detrend の無言の no-op）の回帰錠**。
+    // 既定窓は round(1500/40)=38 フレームで、32 枚の信号に対し `w >= s.length` となり
+    // 黙って素通りしていた。素通りすると 4.0px がそのまま残る。
+    expect(halfAmplitude(ramp(32, 10))).toBeLessThan(0.3);
+  });
+
+  it("★ 心臓だけの信号（32 枚・3px・周期 16.6）は残る", () => {
+    // 「呼吸を消すために窓を短くする」という誤った直し方を弾く。
+    // 移動平均の窓 9 では 1.2px まで落ちる（周期の半分の窓は振動そのものを削る）。
+    const measured = Array.from({ length: 8 }, (_, k) =>
+      halfAmplitude(sine(32, CARDIAC_FRAMES, 3, k / 8)));
+    for (const m of measured) {
+      expect(m).toBeGreaterThan(2.2);
+      expect(m).toBeLessThan(3.2);
+    }
+  });
+
+  it("🔴 ★ 心臓（3px 振動）が横隔膜（10px ドリフト）より大きく測れる", () => {
+    // 🚨 **これが §6.11.3 の目的そのもの。** 直す前は逆転していた（心臓 2.82px に対し
+    //    横隔膜 4.00px で、横隔膜が 1 位を取っていた）。
+    const heart = halfAmplitude(sine(32, CARDIAC_FRAMES, 3));
+    const diaphragm = halfAmplitude(ramp(32, 10));
+    expect(heart).toBeGreaterThan(diaphragm * 3);
+  });
+
+  it("★ 生理的な心拍数（60〜180bpm）では振幅の 8 割以上が残る", () => {
+    // 2 次多項式デトレンドへ変えたくなったときに落ちる（60bpm で 0.66 まで落ちる）。
+    for (const bpm of [60, 90, 140, 180]) {
+      const period = 60000 / bpm / DT;
+      const measured = Array.from({ length: 8 }, (_, k) =>
+        halfAmplitude(sine(32, period, 3, k / 8)));
+      const mean = measured.reduce((a, b) => a + b, 0) / measured.length;
+      expect(mean / 3).toBeGreaterThan(0.8);
+    }
+  });
+
+  it("🚨 ★ 137 枚のラン（＝対応付けの段）は今までどおり移動平均で、窓も変わらない", () => {
+    // **主経路を壊していないことの錠。** 5.48 秒 ≥ 3 秒なので移動平均側に残る。
+    const sig = motionSignal(trackOfPositions(sine(137, CARDIAC_FRAMES, 3)), times(137, DT));
+    expect(sig.detrendMode).toBe("movingAverage");
+    expect(sig.detrendWindowFrames).toBe(38);
+  });
+
+  it("★ 記録が 3 秒未満なら線形、以上なら移動平均（フレーム数ではなく時間で決まる）", () => {
+    const at = (n: number) => motionSignal(trackOfPositions(sine(n, CARDIAC_FRAMES, 3)), times(n, DT)).detrendMode;
+    expect(at(32)).toBe("linear");   // 1.28 秒
+    expect(at(74)).toBe("linear");   // 2.96 秒
+    expect(at(76)).toBe("movingAverage"); // 3.04 秒
+  });
+
+  it("🔴 ★ デトレンドしなかったことを黙らない", () => {
+    const pos = sine(32, CARDIAC_FRAMES, 3);
+    const off = motionSignal(trackOfPositions(pos), times(32, DT), { detrendWindowFrames: 0 });
+    expect(off.detrendMode).toBe("none");
+    expect(off.detrendSkipped).toBe("requestedOff");
+
+    const noTime = motionSignal(trackOfPositions(pos), []);
+    expect(noTime.detrendMode).toBe("none");
+    expect(noTime.detrendSkipped).toBe("noTimeBase");
+
+    const tooFew = motionSignal(trackOfPositions([1, 2]), times(2, DT));
+    expect(tooFew.detrendMode).toBe("none");
+    expect(tooFew.detrendSkipped).toBe("tooFewFrames");
+  });
+
+  it("★ 直線の当てはめは追尾できたフレームだけで行う", () => {
+    // 1 枚の外れフレームで直線が傾くと、残り全部がずれる。
+    const pos = ramp(32, 10);
+    const track = trackOfPositions(pos);
+    track.frames[7] = { dx: 60, dy: 80, score: 0.1, reliable: false };
+    const sig = motionSignal(track, times(32, DT));
+    // 外れフレームを除いた 31 枚は、直線を引いたあとほぼ 0 に落ちる。
+    const rest = [...sig.s].filter((_, i) => i !== 7);
+    expect(Math.max(...rest.map(Math.abs))).toBeLessThan(0.5);
   });
 });
 

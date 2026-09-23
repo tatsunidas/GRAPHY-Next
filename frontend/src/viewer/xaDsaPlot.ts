@@ -51,6 +51,20 @@ const BAND_COLORS: Record<PlotBand["kind"], string> = {
 };
 
 /**
+ * 凡例に出す帯の種別（**この順に並べる**）。
+ *
+ * <p>🚨 帯の `kind` は「凡例に出す種別」と書かれていながら、**凡例が存在しなかった**
+ * （使われていたのは React の key だけ）。全グラフの背景に赤・緑・青が敷かれているのに、
+ * それが何なのか画面のどこにも書かれていない状態だった（§6.15）。
+ */
+export const BAND_KINDS: readonly PlotBand["kind"][] = ["ramp", "preContrast", "contrast"];
+
+/** 凡例のチップに使う色（帯そのものは薄いので、凡例では濃く出す）。 */
+export function bandLegendColor(kind: PlotBand["kind"]): string {
+  return { ramp: "#e06060", preContrast: "#69c98a", contrast: "#7fb2ec" }[kind];
+}
+
+/**
  * 露出の立ち上がり／造影前／造影後の 3 本の帯。
  *
  * <p>🔑 **区切り専用のグラフを作らない**ための道具。p10 の曲線を別に描かなくても、

@@ -276,6 +276,61 @@ describe("既定の挙動を変えていないこと", () => {
 });
 
 
+describe("dsaFramePair — 画面のマスクと実際に引かれるマスクが一致する（§6.18）", () => {
+  it("🔴 ★ 返る diff が、返る mask と live から作り直せる", () => {
+    // **これが診断の絵の契約。** ここがずれたら、画面が嘘をつく。
+    return (async () => {
+      const token = await session();
+      const p = await mod.dsaFramePair(token, 7);
+      expect(p).not.toBeNull();
+      const { mask, live, diff, logarithmic } = p!;
+      for (let i = 0; i < diff.length; i++) {
+        const expected = logarithmic
+          ? Math.log(Math.max(mask[i], 0) + 1e-3) - Math.log(Math.max(live[i], 0) + 1e-3)
+          : mask[i] - live[i];
+        expect(diff[i]).toBeCloseTo(expected, 6);
+      }
+    })();
+  });
+
+  it("🔴 ★ 手で動かしたずらしが mask に効く", async () => {
+    const token = await session();
+    const before = (await mod.dsaFramePair(token, 7))!;
+    expect(before.dx).toBe(0);
+    mod.setDsaShift(token, 3, -2);
+    const after = (await mod.dsaFramePair(token, 7))!;
+    expect(after.dx).toBe(3);
+    expect(after.dy).toBe(-2);
+    // 画素も本当に動いていること（数字だけ変わって絵が同じ、を防ぐ）。
+    expect(Array.from(after.mask)).not.toEqual(Array.from(before.mask));
+  });
+
+  it("🔴 ★ 残差合わせのトグルが mask に効く（切ったら元へ戻る）", async () => {
+    const token = await session();
+    const pl = plan();
+    mod.setDsaFramePlan(token, pl, "自動");
+    mod.setDsaFrameAlignments(token, pl.map(() => ({ dx: 2, dy: 1, rotationDeg: 0.5 })));
+
+    mod.setDsaAutoAlign(token, true);
+    const on = (await mod.dsaFramePair(token, 7))!;
+    mod.setDsaAutoAlign(token, false);
+    const off = (await mod.dsaFramePair(token, 7))!;
+
+    expect(on.rotationDeg).toBeCloseTo(0.5, 6);
+    expect(off.rotationDeg).toBe(0);
+    expect(Array.from(on.mask)).not.toEqual(Array.from(off.mask));
+  });
+
+  it("★ マスクの出自を返す（計画があればその番号、無ければラン既定）", async () => {
+    const token = await session();
+    const noPlan = (await mod.dsaFramePair(token, 7))!;
+    expect(noPlan.maskFrames.length).toBeGreaterThan(0);
+    mod.setDsaFramePlan(token, plan(), "自動");
+    const withPlan = (await mod.dsaFramePair(token, 7))!;
+    expect(withPlan.maskFrames).toEqual(plan()[7]?.maskFrames);
+  });
+});
+
 describe("自動位置合わせのトグルとレベル合わせ（§6.9 5-F/5-G）", () => {
   it("🔴 計画が入るとレベル合わせが効き、外すと戻る（既定経路は触らない）", async () => {
     const token = await session();
@@ -293,6 +348,97 @@ describe("自動位置合わせのトグルとレベル合わせ（§6.9 5-F/5-G
     const st = mod.dsaSessionState(token)!;
     expect(st.framePlan).toBe(false);
     expect(st.levelMatch).toBe(false);
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* §6.15 — 利用者が自分で決めた分は、自動経路が触らない                */
+  /* ---------------------------------------------------------------- */
+
+  it("🔴 ★ 造影到達を書き戻せる（同位相マスクのボタンが押せるようになる）", async () => {
+    // 🚨 実機で踏んだ: 自動同位相は §6.10.2 の絞り込みで正しい contrastStart を持っているのに
+    //    セッションへ書き戻す口が無く、診断ダイアログが「造影到達が決まっていない」と言い続け、
+    //    「同位相マスクを作る」が押せないままだった。
+    const token = await session();
+    expect(mod.setDsaOnset(token, 4)).toBe(true);
+    expect(mod.dsaSessionState(token)?.onset).toBe(4);
+  });
+
+  it("★ 範囲外の造影到達は受け付けない（null に落とす）", async () => {
+    const token = await session();
+    mod.setDsaOnset(token, 4);
+    mod.setDsaOnset(token, 0); // 0 は「造影前が 1 枚も無い」＝ マスクにできない
+    expect(mod.dsaSessionState(token)?.onset).toBeNull();
+    mod.setDsaOnset(token, 9999);
+    expect(mod.dsaSessionState(token)?.onset).toBeNull();
+  });
+
+  it("🔴 ★ 利用者が入れたレベル合わせは、マスクを手で選び直しても消えない", async () => {
+    // 直す前は `setDsaMaskFrames` が無条件に false へ戻していた。露出の立ち上がりは
+    // マスクの選び方と関係なく存在するので、これは「自分でマスクを選んだら先頭が
+    // 明るくなった」という理由の読めない挙動になっていた。
+    const token = await session();
+    expect(mod.setDsaLevelMatch(token, true)).toBe(true);
+    mod.setDsaMaskFrames(token, [1, 2]);
+    expect(mod.dsaSessionState(token)?.levelMatch).toBe(true);
+  });
+
+  it("🔴 ★ 利用者が切ったレベル合わせは、計画が入っても勝手に戻らない", async () => {
+    const token = await session();
+    mod.setDsaLevelMatch(token, false);
+    mod.setDsaFramePlan(token, plan(), "自動");
+    expect(mod.dsaSessionState(token)?.levelMatch).toBe(false);
+  });
+
+  it("★ 自動経路（source: \"auto\"）は、利用者が決める前なら効く", async () => {
+    const token = await session();
+    expect(mod.setDsaLevelMatch(token, true, "auto")).toBe(true);
+    expect(mod.dsaSessionState(token)?.levelMatch).toBe(true);
+    // 利用者が切ったあとは、自動経路が true にしようとしても戻さない。
+    mod.setDsaLevelMatch(token, false);
+    mod.setDsaLevelMatch(token, true, "auto");
+    expect(mod.dsaSessionState(token)?.levelMatch).toBe(false);
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* §6.17 — 残差の「回転」も別枠で、トグルで切れること                  */
+  /* ---------------------------------------------------------------- */
+
+  it("🔴 ★ 残差の回転は autoAlign のときだけ効く（切れることが要件）", async () => {
+    // 🚨 回転は「片方にしか無いもの（血管）を変形で埋めにいく」危うさがある
+    //    （subtraction-design §2.3）。だから **外せること**が要件で、
+    //    `DsaFramePlanEntry.rotationDeg`（無条件に足す層）には入れてはいけない。
+    const token = await session();
+    const p = plan();
+    mod.setDsaFramePlan(token, p, "自動");
+    expect(mod.setDsaFrameAlignments(token, p.map(() => ({ dx: 1, dy: 2, rotationDeg: 0.7 })))).toBe(true);
+
+    mod.setDsaAutoAlign(token, true);
+    expect(mod.dsaSessionState(token, 1)?.rotationDeg).toBeCloseTo(0.7, 6);
+
+    mod.setDsaAutoAlign(token, false);
+    expect(mod.dsaSessionState(token, 1)?.rotationDeg).toBe(0);
+  });
+
+  it("🔴 ★ 回転を与えなければ、従来の数値が 1 ビットも動かない", async () => {
+    const token = await session();
+    const p = plan();
+    mod.setDsaFramePlan(token, p, "自動");
+    mod.setDsaAutoAlign(token, true);
+    // 平行移動だけ（従来の呼び出し）。
+    mod.setDsaFrameAlignments(token, p.map(() => ({ dx: 1.5, dy: -2.5 })));
+    const st = mod.dsaSessionState(token, 1)!;
+    expect(st.rotationDeg).toBe(0);
+    expect(st.dx).toBeCloseTo(1.5 + (p[1]?.dx ?? 0), 6);
+  });
+
+  it("★ 残差を外すと回転も一緒に消える", async () => {
+    const token = await session();
+    const p = plan();
+    mod.setDsaFramePlan(token, p, "自動");
+    mod.setDsaAutoAlign(token, true);
+    mod.setDsaFrameAlignments(token, p.map(() => ({ dx: 1, dy: 2, rotationDeg: 0.7 })));
+    mod.setDsaFrameAlignments(token, p.map(() => null));
+    expect(mod.dsaSessionState(token, 1)?.rotationDeg).toBe(0);
   });
 
   it("★ 残差は計画の dx/dy とは別枠で、トグルで即座に出入りする", async () => {

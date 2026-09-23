@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   contrastStartFromFractions,
+  roiSurveyWindow,
   darkenedFraction,
   detectContrastOnset,
   detectOnsetFromSignal,
@@ -208,6 +209,67 @@ describe("contrastStartFromFractions — 実機で測った割合", () => {
   it("範囲が潰れていても落ちない", () => {
     expect(contrastStartFromFractions(fractions, 20, 20)).toBe(20);
     expect(contrastStartFromFractions(fractions, 30, 20)).toBe(20);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* §6.15 — 調査窓と「造影が混ざっていない接頭辞」は一致しない            */
+/*                                                                      */
+/* 🚨 この食い違いは**合成データでは再現しない**（contrastStart == onset  */
+/*    にしてしまえば長さは一致する）。実機の「絞り込んだ造影開始は粗い    */
+/*    onset より 9 フレーム早い」という関係が原因なので、実測でしか守れない。*/
+/* ------------------------------------------------------------------ */
+
+describe("roiSurveyWindow — 窓と接頭辞（§6.15）", () => {
+  const onsetResult = detectOnsetFromSignal(RUBO_RUN1_P10, times(RUBO_RUN1_P10.length));
+  const fractions: number[] = [];
+  for (const [k, v] of Object.entries(RUBO_RUN1_DARKENED)) fractions[Number(k)] = v;
+  const roughPre = onsetResult.preContrast;
+  // ⚠️ 実測の割合フィクスチャ `RUBO_RUN1_DARKENED` はフレーム 8〜40 しか持っていないので、
+  //    絞り込みの範囲もそこで打ち切る（本番は窓の全フレームぶん計算する）。
+  const contrastStart = contrastStartFromFractions(fractions, roughPre[0], 40);
+  const { window, surveyFrames } = roiSurveyWindow(roughPre, contrastStart, 48);
+
+  it("🔴 ★ 造影開始の絞り込みが効くと、窓と接頭辞は必ず食い違う", () => {
+    // **これが「時刻配列は窓の長さではない」ことの実測による錠。**
+    // 以前はここが一致している前提で時刻を `window.length` 枚作っており、
+    // 受け側（suggestTrackingRois）が長さ不一致で黙って時刻を捨てていた。
+    expect(contrastStart).toBeLessThan(onsetResult.onset!);
+    expect(surveyFrames.length).toBeLessThan(window.length);
+    // 実機では 8〜9 フレームの差。
+    expect(window.length - surveyFrames.length).toBeGreaterThanOrEqual(7);
+  });
+
+  it("🔴 ★ 接頭辞である（画素を窓の順に詰めて先頭から切り出せる）", () => {
+    // 呼び出し側は `survey.subarray(0, surveyCount * frameSize)` で切り出すので、
+    // ここが接頭辞でないと**画素と時刻が別のフレームを指す**。
+    expect(surveyFrames.every((t, i) => t === window[i])).toBe(true);
+  });
+
+  it("★ 境界の両側が正しく分かれている", () => {
+    expect(surveyFrames.every((t) => t < contrastStart)).toBe(true);
+    expect(window.slice(surveyFrames.length).every((t) => t >= contrastStart)).toBe(true);
+  });
+
+  it("★ 実機の枚数の範囲に収まる", () => {
+    expect(window.length).toBeGreaterThanOrEqual(30);
+    expect(window.length).toBeLessThanOrEqual(40);
+    expect(surveyFrames.length).toBeGreaterThanOrEqual(20);
+    expect(surveyFrames.length).toBeLessThanOrEqual(28);
+  });
+
+  it("上限を超えるランでは onset 側に寄せた連続した窓を取る", () => {
+    const long = Array.from({ length: 100 }, (_, i) => i);
+    const r = roiSurveyWindow(long, 95, 48);
+    expect(r.window).toHaveLength(48);
+    expect(r.window[0]).toBe(52);
+    expect(r.window[47]).toBe(99);
+    expect(r.surveyFrames).toHaveLength(43); // 52..94
+  });
+
+  it("造影開始が窓より後ろなら、全部が接頭辞になる（退化ケース）", () => {
+    const r = roiSurveyWindow([3, 4, 5, 6], Number.POSITIVE_INFINITY, 48);
+    expect(r.surveyFrames).toEqual(r.window);
   });
 });
 

@@ -32,9 +32,12 @@
 import type { DsaFramePlanEntry } from "./dsaLoader";
 import type { PixelRect } from "./edgeFilters";
 import type { PhaseMaskEntry } from "./xaPhaseMask";
+import type { PeriodEstimate, TrackedFrame } from "./xaTracking";
 import { readModalitySlice } from "./pixelCalibration";
+import { yieldEvery } from "./uiYield";
 import {
   contrastStartFromFractions,
+  roiSurveyWindow,
   darkenedFraction,
   detectOnsetFromSignal,
   levelMatchedDifference,
@@ -46,10 +49,13 @@ import type {
   TrackingAlignPlanResponse,
   TrackingAnalyzeResponse,
   TrackingMatchResponse,
+  TrackingPhaseMatchResponse,
   TrackingSuggestResponse,
   XaTrackingWorkerRequest,
   XaTrackingWorkerResponse,
 } from "./xaTrackingProtocol";
+import { MIN_MATCHED_FRACTION, phaseMaskGates } from "./xaPhaseMaskGates";
+import { PHASE_DISAGREEMENT_LIMIT } from "./xaPhaseMask";
 
 /** ROI を決めるのに読む造影前フレーム数の上限（**連続**して取る。間引かない）。 */
 const ROI_SURVEY_MAX_FRAMES = 48;
@@ -61,18 +67,17 @@ const SEARCH_RADIUS = 32;
 const MATCH_K = 3;
 /** これ未満の造影前フレームしか無ければ、位相の合うマスクは期待できない。 */
 const MIN_PRE_CONTRAST = 8;
-/** 追尾できたフレームがこの割合を下回ったら自動では足りないと判断する。 */
-const MIN_MATCHED_FRACTION = 0.5;
-/**
- * 🔴 **マスク側の運動振幅（p10–p90）がこれ未満なら、振幅で並べ替えても意味がない。**
- *
- * <p>実機（Rubo Run1）で採用されていた ROI の振幅は **0.49px** ＝ 追尾ノイズそのもので、
- * `coverageTolerance` 5% が **0.025px** になり、**0.016px のはみ出し**でマスクを拒否していた。
- * それでも「同位相マスク」と表示してしまうのがいちばん悪い。ここで止める。
- */
-const MIN_AMPLITUDE_SPAN_PX = 2;
 /** エッジ残差の探索半径（**半解像度**・実寸 ±8px）。 */
 const ALIGN_RADIUS_HALF = 4;
+/**
+ * 背景の突き合わせのあとに探す回転の幅 [度]（§6.17）。
+ *
+ * <p>§6.4 の手動ボタンは ±3° だが、こちらは**全フレームぶん回す**ので狭める。
+ * ⚠️ 自由度を上げるほど「片方にしか無いもの」＝血管を変形で埋めにいく
+ * （`fw/subtraction-design.md` §2.3）。効果と一緒に**回転量そのものを診断に出して**判断する。
+ */
+const BG_ALIGN_MAX_ROTATION_DEG = 2;
+const BG_ALIGN_ROTATION_STEP_DEG = 0.5;
 /**
  * 造影後でも追えるか確かめる候補の数。
  *
@@ -94,6 +99,18 @@ const VERIFY_MIN_RELIABLE = 0.6;
  */
 const MAX_FILLED_FRACTION = 0.25;
 
+/**
+ * 途中経過。**段の名前と、分かるときだけ分数**を渡す。
+ *
+ * <p>🔴 文字列を組み立てて渡さない——画面側で i18n できなくなる（実機で
+ * 「crop 12/137」という生の英語が出ていた）。
+ */
+export interface AutoPhaseProgress {
+  step: "read" | "roi" | "verify" | "crop" | "match" | "align" | "background" | "matching";
+  done?: number;
+  total?: number;
+}
+
 export type AutoPhaseFailure =
   | "readFailed"
   | "noOnset"
@@ -104,7 +121,8 @@ export type AutoPhaseFailure =
   | "trackFailed"
   | "tooManyFilled"
   | "noMotion"
-  | "tooFewMatched";
+  | "tooFewMatched"
+  | "contrastPhaseFailed";
 
 /**
  * **DSA がうまくいっているかを画面で見るための材料**（`fw/angio-design.md` §6.14）。
@@ -124,8 +142,38 @@ export interface AutoPhaseDiagnostics {
   trackScore: number[] | null;
   /** フレームごとの追尾の当否（追えなかったフレームをグラフに出すため）。 */
   reliable: boolean[] | null;
+  /**
+   * 🔑 **なぜ追えなかったか**（追えたフレームは null）。
+   *
+   * <p>以前は `reliable` の真偽だけを取り出して `reason` を捨てていた（§6.15）。
+   * `lowScore` の連発（造影でテンプレートが別物になった）と `atSearchEdge` の連発
+   * （探索半径が足りない）は**対処が正反対**なのに、画面から区別できなかった。
+   */
+  trackReason: (TrackedFrame["reason"] | null)[] | null;
+  /** 位相での対応付けと振幅での対応付けが食い違ったフレーム（`true` が食い違い）。 */
+  phaseDisagree: boolean[] | null;
+  /** §6.16 の背景の突き合わせの結果（その経路を通ったときだけ）。 */
+  backgroundEntries: TrackingPhaseMatchResponse["entries"] | null;
+  /** ライブフレームごとの「造影で変わった画素」の割合。 */
+  contrastFraction: number[] | null;
+  /**
+   * マスク側の周期推定（**bpm の出どころそのもの**）。
+   *
+   * <p>🔑 実機の 45 bpm（真値 90.2）を追うには、`bpm` という 1 つの数ではなく
+   * 自己相関のピークと半分の遅れが要る。`confidence` ではオクターブ誤りを弾けない（§6.15）。
+   */
+  maskPeriod: PeriodEstimate | null;
   /** 露出が安定したとみなしたフレーム（帯の境界）。 */
   stableFrom: number;
+  /**
+   * ROI 候補の採点に使った窓（枚数と長さ [ms]）。
+   *
+   * <p>🔑 **候補表の bpm が「—」である理由がここから読める。** 心拍の判定には 3 周期ぶん
+   * （4.5 秒）要るので、1 秒強の造影前窓では原理的に出ない（§6.12.1）。
+   * 窓の長さはデトレンドの方式（3 秒未満なら線形）も決める（§6.15）。
+   */
+  surveyFrames: number;
+  surveySpanMs: number;
   /**
    * ROI 候補（採点順）。`postFraction` は**試した候補にだけ**入る——
    * 検証は合格した時点で打ち切るので、それ以降は**測っていない**（null）。
@@ -146,6 +194,20 @@ export interface AutoPhaseDiagnostics {
 export interface AutoPhaseResult {
   ok: boolean;
   reason?: AutoPhaseFailure;
+  /**
+   * 🔑 **どちらの経路で同位相マスクを作ったか**（§6.16）。
+   *
+   * <p>`"tracking"` = 背景 ROI を全区間で追尾して振幅で並べた（従来）。
+   * `"background"` = 造影で変わった画素を外して**背景を直接突き合わせた**
+   * ——造影後に追尾が死ぬラン（実機の Rubo Run 1）はこちらに落ちる。
+   */
+  method?: "tracking" | "background";
+  /** `"background"` のとき、突き合わせの ZNCC の中央値。 */
+  backgroundScore?: number;
+  /** `"background"` のとき、造影で外した画素の割合の中央値。 */
+  contrastFraction?: number;
+  /** 残差合わせで求めた回転の絶対値の中央値 [度]（§6.17）。 */
+  alignRotationDeg?: number;
   /**
    * `dsaLoader.setDsaFramePlan()` へそのまま渡せる計画。
    * 🔴 **失敗時にも返る**——造影前フレームを自分自身に当てる分（`selfPlan`）は、
@@ -184,7 +246,11 @@ export interface AutoPhaseResult {
 
 let worker: Worker | null = null;
 let seq = 0;
-const pending = new Map<number, { resolve: (r: XaTrackingWorkerResponse) => void; reject: (e: Error) => void }>();
+const pending = new Map<number, {
+  resolve: (r: XaTrackingWorkerResponse) => void;
+  reject: (e: Error) => void;
+  onProgress?: (done: number, total: number) => void;
+}>();
 
 function ensureWorker(): Worker {
   if (worker) return worker;
@@ -192,6 +258,8 @@ function ensureWorker(): Worker {
   w.onmessage = (ev: MessageEvent<XaTrackingWorkerResponse>) => {
     const p = pending.get(ev.data.requestId);
     if (!p) return;
+    // 🔴 **途中経過では解決しない。** 消してしまうと本来の応答が迷子になる。
+    if (ev.data.type === "progress") { p.onProgress?.(ev.data.done, ev.data.total); return; }
     pending.delete(ev.data.requestId);
     if (ev.data.type === "error") p.reject(new Error(ev.data.message));
     else p.resolve(ev.data);
@@ -213,11 +281,15 @@ export function releaseAutoPhaseWorker(): void {
 
 type WithoutId<T> = T extends unknown ? Omit<T, "requestId"> : never;
 
-function ask(req: WithoutId<XaTrackingWorkerRequest>, transfer: Transferable[] = []): Promise<XaTrackingWorkerResponse> {
+function ask(
+  req: WithoutId<XaTrackingWorkerRequest>,
+  transfer: Transferable[] = [],
+  onProgress?: (done: number, total: number) => void,
+): Promise<XaTrackingWorkerResponse> {
   const w = ensureWorker();
   const requestId = ++seq;
   return new Promise((resolve, reject) => {
-    pending.set(requestId, { resolve, reject });
+    pending.set(requestId, { resolve, reject, ...(onProgress ? { onProgress } : {}) });
     w.postMessage({ ...req, requestId } as XaTrackingWorkerRequest, transfer);
   });
 }
@@ -246,7 +318,7 @@ export interface AutoPhaseParams {
   frameStartTimesMs: readonly number[];
   /** `PixelIntensityRelationship = LIN` なら true。 */
   logarithmic: boolean;
-  onProgress?: (label: string) => void;
+  onProgress?: (p: AutoPhaseProgress) => void;
   /**
    * 造影前区間が決まった時点で呼ぶ（追尾より**ずっと早い**）。
    * 🔴 呼び出し側はここで既定マスクを造影前へ差し替え、`selfPlan` があればそのまま入れること。
@@ -328,7 +400,9 @@ export async function buildAutoPhaseMaskPlan(params: AutoPhaseParams): Promise<A
   // 🔴 **段が進むほど埋まる器。** どの `fail()` でもこれを付けて返すので、
   //    途中で降りても「そこまでに分かったこと」は画面に出る。
   const diag: AutoPhaseDiagnostics = {
-    entries: null, signal: null, trackScore: null, reliable: null, stableFrom: 0, candidates: [],
+    entries: null, signal: null, trackScore: null, reliable: null, trackReason: null,
+    phaseDisagree: null, backgroundEntries: null, contrastFraction: null,
+    maskPeriod: null, stableFrom: 0, surveyFrames: 0, surveySpanMs: 0, candidates: [],
   };
   const fail = (reason: AutoPhaseFailure, extra: Partial<AutoPhaseResult> = {}): AutoPhaseResult =>
     ({ ok: false, reason, totalFrames: n, diagnostics: diag, ...extra });
@@ -340,7 +414,8 @@ export async function buildAutoPhaseMaskPlan(params: AutoPhaseParams): Promise<A
   const signal: number[] = [];
   for (let t = 0; t < n; t++) {
     if (cancelled()) return fail("readFailed");
-    params.onProgress?.(`${t + 1}/${n}`);
+    params.onProgress?.({ step: "read", done: t + 1, total: n });
+    await yieldEvery(t);
     const s = await readModalitySlice(frameIds[t]);
     if (!s) return fail("readFailed");
     if (!width) { width = s.width; height = s.height; }
@@ -364,12 +439,12 @@ export async function buildAutoPhaseMaskPlan(params: AutoPhaseParams): Promise<A
   // 🔑 この 1 パスで 3 つ片付ける: ①造影前の平均 ②造影が本当に始まるフレーム
   //    ③ROI 調査用の画素。読み直しは増やさない（§6.10 3-C）。
   if (cancelled()) return fail("readFailed");
-  params.onProgress?.("roi");
+  params.onProgress?.({ step: "roi" });
   // 上限を超えるときは **onset 側に寄せた連続した窓**を取る（飛ばし読みはしない）。
   // 造影が始まるのは onset の近くなので、そちら側が要る。
-  const window = roughPre.length <= ROI_SURVEY_MAX_FRAMES
-    ? roughPre
-    : roughPre.slice(roughPre.length - ROI_SURVEY_MAX_FRAMES);
+  // 🔴 造影開始がまだ決まっていないので、ここでは窓だけ取る（接頭辞は下で
+  //    `roiSurveyWindow` に決めさせる）。
+  const window = roiSurveyWindow(roughPre, Number.POSITIVE_INFINITY, ROI_SURVEY_MAX_FRAMES).window;
   const frameSize = width * height;
   const survey = new Float32Array(frameSize * window.length);
   const sum = new Float64Array(frameSize);
@@ -420,7 +495,15 @@ export async function buildAutoPhaseMaskPlan(params: AutoPhaseParams): Promise<A
   }
 
   // ROI の調査は**造影が混ざっていないフレームだけ**で行う。
-  const surveyCount = preContrast.filter((t) => t >= window[0]).length;
+  // 🔴 **枚数と時刻を別々の式から作らない。** `surveyFrames` を唯一の真実にして、
+  //    画素も時刻もここから派生させる（§6.15。以前は時刻だけ `window` の長さになり、
+  //    `suggestTrackingRois` が長さ不一致で黙って時刻を捨てていた）。
+  const { surveyFrames } = roiSurveyWindow(roughPre, contrastStart, ROI_SURVEY_MAX_FRAMES);
+  const surveyCount = surveyFrames.length;
+  diag.surveyFrames = surveyCount;
+  diag.surveySpanMs = surveyCount >= 2
+    ? (frameStartTimesMs[surveyFrames[surveyCount - 1]] ?? 0) - (frameStartTimesMs[surveyFrames[0]] ?? 0)
+    : 0;
   if (surveyCount < 4) return fail("noRoi", { onset, contrastStart, preContrast, plan: selfPlan });
   const surveyPacked: PackedFrames = { values: survey.subarray(0, frameSize * surveyCount), frameCount: surveyCount, width, height };
   const tile = Math.max(32, Math.min(96, Math.round(Math.min(width, height) / 8)));
@@ -436,7 +519,8 @@ export async function buildAutoPhaseMaskPlan(params: AutoPhaseParams): Promise<A
         // 🔴 大きさひとつでは見つからない（実機では 48px でのみ見つかった）。
         tileSizes: [tile, Math.max(24, Math.round(tile * 0.75))],
         // 🚨 心拍帯で採点させる（呼吸で動く横隔膜を 1 位にしないため・§6.11）。
-        frameStartTimesMs: window.map((t) => frameStartTimesMs[t] ?? t * 40),
+        //    🔴 **画素と同じ `surveyFrames` から作る**（長さが違うと受け側が弾く）。
+        frameStartTimesMs: surveyFrames.map((t) => frameStartTimesMs[t] ?? t * 40),
         maxCandidates: VERIFY_CANDIDATES,
       },
       // 🔴 transfer しない。`survey` は `subarray` の親なので、渡すと元も使えなくなる。
@@ -474,7 +558,7 @@ export async function buildAutoPhaseMaskPlan(params: AutoPhaseParams): Promise<A
   if (postIdx.length >= 4) {
     for (const cand of usable) {
       if (cancelled()) return fail("readFailed", { onset, contrastStart, preContrast, plan: selfPlan });
-      params.onProgress?.("verify");
+      params.onProgress?.({ step: "verify" });
       const c = cropRectFor(cand.rect, width, height);
       const pack = await readCrop(frameIds, [refFrame, ...postIdx], c, params);
       if (!pack) return fail("readFailed", { onset, contrastStart, preContrast, plan: selfPlan });
@@ -513,10 +597,169 @@ export async function buildAutoPhaseMaskPlan(params: AutoPhaseParams): Promise<A
     return fail("noRoi", { onset, contrastStart, preContrast, preContrastCount: preContrast.length, plan: selfPlan });
   }
   if (chosen.fraction < VERIFY_MIN_RELIABLE) {
-    return fail("lostAfterContrast", {
+    // ═══ §6.16 — 背景の突き合わせへ切り替える ═══════════════════════
+    //
+    // 🔑 追尾が造影で死ぬのは「**追う対象を選ぶ**」ことの帰結だった（§6.11.4）。
+    //    心拍をよく運ぶ ROI は造影で壊れ、造影に強い ROI は心拍を持たない。
+    //    **選ぶのをやめれば矛盾しない**——ライブフレームごとに、造影で変わった画素を
+    //    外して背景がいちばん似た造影前フレームを当てればよい。
+    //
+    // 🔴 ここは**降りる先の格上げ**である。従来はこのまま `lostAfterContrast` で降り、
+    //    造影後は「造影前の平均マスク 1 枚」になっていた（実機の Rubo Run 1 がそこにいた）。
+    const lost = {
       roi: chosen.rect, onset, contrastStart, preContrast,
-      preContrastCount: preContrast.length, plan: selfPlan,
-    });
+      preContrastCount: preContrast.length, totalFrames: n, plan: selfPlan,
+      diagnostics: diag,
+    };
+    params.onProgress?.({ step: "background" });
+    const bw = width >> 1;
+    const bh = height >> 1;
+    const bgHalf = new Float32Array(bw * bh * n);
+    for (let t = 0; t < n; t++) {
+      if (cancelled()) return fail("readFailed", lost);
+      params.onProgress?.({ step: "background", done: t + 1, total: n });
+      await yieldEvery(t);
+      const sl = await readModalitySlice(frameIds[t]);
+      if (!sl) return fail("readFailed", lost);
+      halveFrame(sl.values, width, height, bgHalf, t * bw * bh);
+    }
+    const liveIdx: number[] = [];
+    for (let t = contrastStart; t < n; t++) liveIdx.push(t);
+
+    let pmRes: XaTrackingWorkerResponse;
+    try {
+      pmRes = await ask(
+        {
+          type: "phaseMatch",
+          // 🔴 **transfer しない。** このあとの残差合わせ（alignPlan）で同じ画素を使う。
+          //    渡してしまうと読み直しになる（137 枚ぶん）。
+          frames: { values: bgHalf, frameCount: n, width: bw, height: bh },
+          maskFrames: [...preContrast],
+          liveFrames: liveIdx,
+          logarithmic,
+        },
+        [],
+        (done, total) => params.onProgress?.({ step: "matching", done, total }),
+      );
+    } catch {
+      return fail("contrastPhaseFailed", lost);
+    }
+    if (pmRes.type !== "phaseMatchDone") return fail("contrastPhaseFailed", lost);
+    const pm = pmRes;
+
+    diag.backgroundEntries = pm.entries;
+    diag.contrastFraction = pm.contrastFraction;
+    // 🔴 **出自の分類は `diag.entries` を見る**（`xaDsaPlot.maskOrigin`）。ここを埋めないと、
+    //    突き合わせで当たったフレームまで「穴埋め」に分類される——実機で
+    //    「filled 105 / phase 0」と出て、効いているのかどうか画面から読めなかった。
+    //    同じ器に詰め直すことで、①の色も③の pair ZNCC も既存のまま動く。
+    diag.entries = Array.from({ length: n }, (_, t): PhaseMaskEntry => ({
+      liveFrame: t,
+      maskFrame: t < contrastStart ? t : null,
+      dx: 0,
+      dy: 0,
+      amplitudeDiff: Number.NaN,
+      similarity: null,
+      status: t < contrastStart ? "ok" : "outOfRange",
+      phaseMaskFrame: null,
+      phaseDisagreement: null,
+    }));
+    for (const e of pm.entries) {
+      const slot = diag.entries[e.liveFrame];
+      if (!slot) continue;
+      slot.maskFrame = e.maskFrame;
+      slot.similarity = e.maskFrame != null ? e.score : null;
+      slot.status = e.maskFrame != null ? "ok" : "outOfRange";
+    }
+
+    // 造影前は自分自身のまま。造影後だけ突き合わせの結果で埋める。
+    // 🔴 **残差シフトは 0。** 追尾が死んでいるので取れないし、背景がいちばん合うマスクを
+    //    選んだ時点で解剖は既に揃っている。足りなければ §6.4 の自動位置合わせが拾う。
+    const bgPlan: (DsaFramePlanEntry | null)[] = selfPlan.map((e) => e);
+    let bgMatched = 0;
+    for (const e of pm.entries) {
+      if (e.maskFrame == null || !frameIds[e.maskFrame]) continue;
+      bgPlan[e.liveFrame] = {
+        maskImageIds: [frameIds[e.maskFrame]], maskFrames: [e.maskFrame], dx: 0, dy: 0,
+      };
+      bgMatched++;
+    }
+    const bgLive = Math.max(1, n - contrastStart);
+    if (bgMatched < bgLive * MIN_MATCHED_FRACTION) {
+      return fail("contrastPhaseFailed", { ...lost, matchedFrames: bgMatched });
+    }
+
+    // 穴は時間方向に最も近い当たったフレームで埋める（従来経路と同じ作法）。
+    let bgFilled = 0;
+    for (let t = contrastStart; t < bgPlan.length; t++) {
+      if (bgPlan[t]) continue;
+      let src: DsaFramePlanEntry | null = null;
+      for (let d = 1; d < bgPlan.length && !src; d++) src = bgPlan[t - d] ?? bgPlan[t + d] ?? null;
+      if (!src) continue;
+      bgPlan[t] = { maskImageIds: [...src.maskImageIds], maskFrames: [...src.maskFrames], dx: 0, dy: 0 };
+      bgFilled++;
+    }
+
+    // ── 画像全体の剛体位置合わせ（§6.17）────────────────────────────
+    // 🔑 突き合わせは「背景がいちばん合うマスク」を選ぶが、**選んだうえで残る**ずれがある。
+    //    ここは ROI ではなく**画像全体**で合わせる（`alignOnEdges` の既定が画像全体）。
+    // 🔴 基準のずらしは 0——マスクを選んだ時点で解剖は揃っている前提なので、**残差だけ**を探す。
+    let bgAligned = 0;
+    let bgRotations: number[] = [];
+    if (!cancelled()) {
+      params.onProgress?.({ step: "align" });
+      try {
+        const ar = await ask(
+          {
+            type: "alignPlan",
+            frames: { values: bgHalf, frameCount: n, width: bw, height: bh },
+            // 🔑 造影前は自分自身なので残差は定義上 0。計算させない。
+            maskFrameFor: bgPlan.map((e, t) => (t < contrastStart ? null : e?.maskFrames[0] ?? null)),
+            baseDx: bgPlan.map(() => 0),
+            baseDy: bgPlan.map(() => 0),
+            logarithmic,
+            searchRadius: ALIGN_RADIUS_HALF,
+            maxRotationDeg: BG_ALIGN_MAX_ROTATION_DEG,
+            rotationStepDeg: BG_ALIGN_ROTATION_STEP_DEG,
+          },
+          [bgHalf.buffer],
+          (done, total) => params.onProgress?.({ step: "align", done, total }),
+        );
+        if (ar.type === "alignPlanDone") {
+          bgAligned = ar.aligned;
+          for (let t = 0; t < bgPlan.length; t++) {
+            const a = ar.align[t];
+            const e = bgPlan[t];
+            if (!e || !a) continue;
+            e.alignDx = a.dx;
+            e.alignDy = a.dy;
+            if (a.rotationDeg) e.alignRotationDeg = a.rotationDeg;
+            bgRotations.push(a.rotationDeg);
+          }
+        }
+      } catch {
+        // 🔴 **残差が出なくても計画そのものは使える。** 黙って計画ごと捨てない。
+        bgAligned = 0;
+      }
+    }
+    bgRotations = bgRotations.map(Math.abs).sort((a, b) => a - b);
+
+    const scores = pm.entries.filter((e) => e.maskFrame != null).map((e) => e.score).sort((a, b) => a - b);
+    const fracs = [...pm.contrastFraction].sort((a, b) => a - b);
+    return {
+      ...lost,
+      ok: true,
+      plan: bgPlan,
+      method: "background",
+      matchedFrames: bgMatched,
+      filledFrames: bgFilled,
+      alignedFrames: bgAligned,
+      backgroundScore: scores.length ? scores[scores.length >> 1] : 0,
+      contrastFraction: fracs.length ? fracs[fracs.length >> 1] : 0,
+      // 🔑 **回転量そのものを出す。** 心臓の回旋なら 1° 未満のはず。数度出るなら
+      //    「片方にしか無いもの（血管）を変形で埋めにいっている」疑いが立つ（§6.17）。
+      alignRotationDeg: bgRotations.length ? bgRotations[bgRotations.length >> 1] : 0,
+    };
   }
   const roi = chosen.rect;
   for (const d of diag.candidates) d.adopted = d.rect === roi;
@@ -531,7 +774,8 @@ export async function buildAutoPhaseMaskPlan(params: AutoPhaseParams): Promise<A
   const half = new Float32Array(hw * hh * n);
   for (let t = 0; t < n; t++) {
     if (cancelled()) return fail("readFailed", { onset, contrastStart, preContrast, plan: selfPlan });
-    params.onProgress?.(`crop ${t + 1}/${n}`);
+    params.onProgress?.({ step: "crop", done: t + 1, total: n });
+    await yieldEvery(t);
     const s = await readModalitySlice(frameIds[t]);
     if (!s) return fail("readFailed", { onset, contrastStart, preContrast, plan: selfPlan });
     const base = t * cw * ch;
@@ -544,7 +788,7 @@ export async function buildAutoPhaseMaskPlan(params: AutoPhaseParams): Promise<A
 
   // ── 追尾＋対応付け（Worker・同一ラン内） ────────────────────────────
   if (cancelled()) return fail("readFailed", { onset, contrastStart, preContrast, plan: selfPlan });
-  params.onProgress?.("match");
+  params.onProgress?.({ step: "match" });
   let match: TrackingMatchResponse;
   try {
     const res = await ask(
@@ -579,31 +823,41 @@ export async function buildAutoPhaseMaskPlan(params: AutoPhaseParams): Promise<A
   diag.signal = Array.from(match.liveSignal);
   diag.trackScore = match.liveFrames.map((f) => f.score);
   diag.reliable = match.liveFrames.map((f) => f.reliable);
+  // 🔴 **理由を捨てない（§6.15）。** 対処が正反対の故障を区別できるようにする。
+  diag.trackReason = match.liveFrames.map((f) => f.reason ?? null);
+  diag.maskPeriod = match.maskPeriod;
+  diag.phaseDisagree = match.entries.map(
+    (e) => e.phaseDisagreement != null && e.phaseDisagreement > PHASE_DISAGREEMENT_LIMIT,
+  );
 
   const common = {
     roi, onset, contrastStart, preContrast, preContrastCount: preContrast.length, totalFrames: n,
     // 🔴 どの門で降りても**自己マスクは残す**（造影前は位相合わせと無関係に正しい）。
     plan: selfPlan,
   };
-  if (match.liveTracked < n * MIN_MATCHED_FRACTION) return fail("trackFailed", common);
-
-  // 🔴 振幅がノイズの水準なら、並べ替えても意味がない。**同位相と名乗らない**。
-  if (match.maskAmplitudeSpan < MIN_AMPLITUDE_SPAN_PX) {
-    return fail("noMotion", { ...common, amplitudeSpanPx: match.maskAmplitudeSpan });
-  }
-
   // 🚨 **心拍かどうかの判定はここで行う。** ROI の採点の段（造影前だけ＝実機で 1.4 拍）では
   //    窓が短すぎて周期が出せない。ここは全フレームを追尾しているので自己相関が効く
   //    （実測で同じタイルが 88〜90 bpm・DICOM の R 波タグ 90.2 と一致）。
-  // 🔑 これが「呼吸を追っているのか心拍を追っているのか」の門である。周期が出ない ROI は
-  //    横隔膜の呼吸性ドリフトを追っている可能性が高く、位相を合わせても意味がない。
-  if (match.maskPeriod.confidence === "none") {
-    return fail("noCardiacRhythm", { ...common, amplitudeSpanPx: match.maskAmplitudeSpan });
+  // 🔴 門そのものは `xaPhaseMaskGates.ts` に置いてある——**手動経路（診断ダイアログ）と
+  //    同じ判定を使うため**（§6.15。以前はここにしか無く、手動は素通りしていた）。
+  const gates = phaseMaskGates({
+    liveTracked: match.liveTracked,
+    totalFrames: n,
+    maskAmplitudeSpan: match.maskAmplitudeSpan,
+    periodConfidence: match.maskPeriod.confidence,
+  });
+  if (gates.length) {
+    return fail(gates[0], { ...common, amplitudeSpanPx: match.maskAmplitudeSpan });
   }
 
   const matched = match.entries.filter((e, t) => t >= contrastStart && e.maskFrame != null).length;
-  // 🔴 **confidence が "ok" のときだけ bpm を出す。** 実機で、追尾に穴の多いランが
-  //    45 bpm（真値の半分＝オクターブ誤り）を堂々と表示していた。自信が無いなら黙る。
+  // 🔴 **confidence が "ok" のときだけ bpm を出す。** 自信が無いなら黙る。
+  //
+  // ⚠️ **この門はオクターブ誤りを弾かない（§6.15 で判明）。** `confidence` は自己相関の
+  //    ピークの高さで、オクターブ誤りは `r(2T) ≈ r(T)` ＝**両方高い**ときに起きるので、
+  //    倍周期にロックしても "ok" のまま通る。実機の 45 bpm（真値 90.2）はこれで、
+  //    **まだ直っていない**。判断材料（`octaveHalved` / `halfLagCorrelation` /
+  //    `peakCorrelation`）を診断ダイアログに出して、次はそこから追う。
   const bpm = match.maskPeriod.confidence === "ok" && match.maskPeriod.periodMs > 0
     ? 60000 / match.maskPeriod.periodMs
     : null;
@@ -646,7 +900,7 @@ export async function buildAutoPhaseMaskPlan(params: AutoPhaseParams): Promise<A
   // ── エッジ残差の先回り計算（5-G・トグルで即座に切れるよう別枠で持つ） ──
   let alignedFrames = 0;
   if (!cancelled()) {
-    params.onProgress?.("align");
+    params.onProgress?.({ step: "align" });
     try {
       const res = await ask(
         {
@@ -667,7 +921,11 @@ export async function buildAutoPhaseMaskPlan(params: AutoPhaseParams): Promise<A
         for (let t = 0; t < plan.length; t++) {
           const a = done.align[t];
           const e = plan[t];
-          if (e && a) { e.alignDx = a.dx; e.alignDy = a.dy; }
+          if (e && a) {
+            e.alignDx = a.dx;
+            e.alignDy = a.dy;
+            if (a.rotationDeg) e.alignRotationDeg = a.rotationDeg;
+          }
         }
       }
     } catch {
@@ -680,6 +938,7 @@ export async function buildAutoPhaseMaskPlan(params: AutoPhaseParams): Promise<A
     ...common,
     diagnostics: diag,
     ok: true,
+    method: "tracking",
     // 🚨 `common` は落ちどころ用に `plan: selfPlan` を持っている。**後に置いて上書きする**
     //    ——順序を逆にすると、成功しているのに造影前だけの計画が入る。
     plan,

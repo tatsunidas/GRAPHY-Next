@@ -167,6 +167,28 @@ export function warpRigid(
  * 「血管が明るい」画像になる。慣行の「白背景に黒い血管」は W/L の反転で作る
  * （値の符号をここでひっくり返さない — 反転は表示の話であって値の話ではない）。
  */
+/**
+ * **引く前にマスクへ当てる変換**（§6.18）。{@link subtractFrames} が使っているものそのもの。
+ *
+ * <h3>🔴 なぜ切り出してあるか</h3>
+ * 診断ダイアログが「いまこのフレームで引かれているマスク」を絵で出す。そこで別の計算を
+ * 書くと、**画面のマスクと実際に引かれたマスクがずれて、診断が嘘をつく**。
+ * 定義はここ 1 箇所しか無い、という状態を保つこと。
+ *
+ * <p>🔴 **回転 0 なら `shiftBilinear` をそのまま通す**（既存の数値を 1 ビットも動かさないため。
+ * `warpRigid` は回転 0 でも同じ結果になるが、経路が変わると丸めが変わりうる）。
+ */
+export function transformMask(
+  mask: Float32Array,
+  width: number,
+  height: number,
+  opts: Pick<DsaOptions, "dx" | "dy" | "rotationDeg">,
+): Float32Array {
+  return opts.rotationDeg
+    ? warpRigid(mask, width, height, opts.dx, opts.dy, opts.rotationDeg)
+    : shiftBilinear(mask, width, height, opts.dx, opts.dy);
+}
+
 export function subtractFrames(
   mask: Float32Array,
   live: Float32Array,
@@ -175,9 +197,7 @@ export function subtractFrames(
   opts: DsaOptions,
 ): Float32Array | null {
   if (mask.length !== live.length || mask.length !== width * height) return null;
-  const m = opts.rotationDeg
-    ? warpRigid(mask, width, height, opts.dx, opts.dy, opts.rotationDeg)
-    : shiftBilinear(mask, width, height, opts.dx, opts.dy);
+  const m = transformMask(mask, width, height, opts);
   const out = new Float32Array(mask.length);
   if (opts.logarithmic) {
     for (let i = 0; i < out.length; i++) {

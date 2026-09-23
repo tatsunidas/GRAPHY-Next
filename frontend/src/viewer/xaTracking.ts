@@ -71,7 +71,13 @@ const MIN_FRAMES_PER_CYCLE = 4;
  * <p>半分の遅れの相関が最良の相関のこの割合を超えていれば、**半分を採る**。
  * 1.0 に近いほど「倍にロックしたまま」になりやすく、小さいほど半分へ飛びやすい。
  */
-const OCTAVE_TOLERANCE = 0.85;
+/**
+ * オクターブ補正の許容比。`r(T/2) > OCTAVE_TOLERANCE × r(T)` なら半分を採る。
+ *
+ * <p>🔑 **画面に出すために export している**——「補正が効いたのか、ぎりぎり落ちたのか」は
+ * この敷居と `halfLagCorrelation` を並べて初めて読める（§6.15）。
+ */
+export const OCTAVE_TOLERANCE = 0.85;
 
 /* ------------------------------------------------------------------ */
 /* ZNCC                                                                */
@@ -821,7 +827,24 @@ export interface MotionSignal {
   /** 射影の原点（軌跡の平均位置）。 */
   center: readonly [number, number];
   reliable: boolean;
+  /**
+   * 🔴 **デトレンドで実際に行ったこと。** `"none"` は「**呼吸が残っている**」という意味。
+   *
+   * <p>以前はここが黙っていたため、窓がフレーム数以上で移動平均が素通りしていても
+   * 呼び出し側から分からなかった（§6.15）。**何もしなかったことも結果として返す。**
+   */
+  detrendMode: DetrendMode;
+  /** `"movingAverage"` のときの窓 [フレーム]。`"linear"` / `"none"` では 0。 */
+  detrendWindowFrames: number;
+  /** `"none"` になった理由（診断用）。 */
+  detrendSkipped?: DetrendSkipReason;
 }
+
+/** デトレンドの方式。 */
+export type DetrendMode = "movingAverage" | "linear" | "none";
+
+/** デトレンドしなかった理由。 */
+export type DetrendSkipReason = "requestedOff" | "noTimeBase" | "tooFewFrames";
 
 export interface MotionSignalOptions {
   /**
@@ -832,12 +855,83 @@ export interface MotionSignalOptions {
   /**
    * デトレンドの窓 [フレーム]。既定は **1.5 秒相当**（HR 40 bpm ＝ 心拍の下限の周期）。
    * 周期を知らなくても決まる規則にしてある。0 でデトレンドしない。
+   *
+   * <p>`detrendMode` が `"movingAverage"` のときだけ効く（`"auto"` で移動平均が選ばれた
+   * ときを含む）。
    */
   detrendWindowFrames?: number;
+  /**
+   * デトレンドの方式。既定は `"auto"`（記録長で決める。{@link planDetrend}）。
+   *
+   * <p>🔴 **2 ラン間で振幅を比べるときは、`axis` と同じく必ず揃える**
+   * ——マスク側で決まった方式と窓をライブ側へ渡すこと。片方が移動平均でもう片方が線形だと、
+   * 残る振幅の定義が違うので amplitude sorting の前提が壊れる。
+   */
+  detrendMode?: "auto" | DetrendMode;
+}
+
+/** デトレンドの決定。{@link planDetrend} が返し、{@link applyDetrend} が実行する。 */
+interface DetrendPlan {
+  mode: DetrendMode;
+  windowFrames: number;
+  skipped?: DetrendSkipReason;
+}
+
+/**
+ * **何でデトレンドするかを決める。**
+ *
+ * <p>🔴 判断はここ 1 箇所に集める。以前は `detrend()` の中で `w >= s.length` を
+ * **黙って素通り**していたため、呼び出し側からは「引いたのか引いていないのか」が分からなかった。
+ */
+function planDetrend(
+  n: number,
+  dtMs: number,
+  opts: MotionSignalOptions,
+): DetrendPlan {
+  const requested = opts.detrendMode ?? "auto";
+  if (requested === "none") return { mode: "none", windowFrames: 0, skipped: "requestedOff" };
+  // 🔴 `detrendWindowFrames: 0` ＝「引かない」の既存の意味は変えない。
+  if (opts.detrendWindowFrames === 0) return { mode: "none", windowFrames: 0, skipped: "requestedOff" };
+  if (n < 3) return { mode: "none", windowFrames: 0, skipped: "tooFewFrames" };
+  if (!(dtMs > 0)) return { mode: "none", windowFrames: 0, skipped: "noTimeBase" };
+
+  if (requested === "linear") return { mode: "linear", windowFrames: 0 };
+
+  const window = Math.floor(opts.detrendWindowFrames ?? Math.round(MAX_PERIOD_MS / dtMs));
+  const movingAverage = (): DetrendPlan =>
+    window >= 3 && window < n
+      ? { mode: "movingAverage", windowFrames: window }
+      : { mode: "none", windowFrames: 0, skipped: "tooFewFrames" };
+
+  // 窓を明示されたら方式も決まったものとして扱う（従来の呼び出しの意味を変えない）。
+  if (requested === "movingAverage" || opts.detrendWindowFrames != null) return movingAverage();
+
+  // ── requested === "auto" ────────────────────────────────────────
+  // 🔑 **移動平均は、記録が「最も遅い心拍の周期」の 2 倍以上あるときだけ使える。**
+  //
+  // <p>移動平均は心拍そのものは削らない（窓 31・周期 16.6 で残存 1.07）。問題は**端**で、
+  // 実装が窓を縮めるせいで **純粋な直線トレンドを 48% 残す**。呼吸を落とすのが目的なのに
+  // 一次成分が半分残るなら意味がない。1.28 秒の窓での実測（心拍 T=16.6・呼吸 T=100）:
+  //
+  // <pre>
+  //             心拍残存  呼吸残存  判別比  純ランプ残り
+  //   生          1.000    1.000     2.0      1.000
+  //   移動平均31   1.021    0.537     3.8      0.480   ← 呼吸が落ちない
+  //   線形        0.950    0.247     7.7      0.000
+  // </pre>
+  //
+  // <p>短い窓では呼吸（3〜5 秒周期）はほぼ直線に見えるので、直線を引けば消える。
+  // 🔴 **`min(n-1, …)` のようなクランプは入れない**——窓が心拍の周期より短くなると
+  // 今度は心拍を削る側に倒れる（窓 9・周期 16.6 で残存 0.40）。
+  //
+  // <p>⚠️ **正直な限界**: 40〜50 bpm では窓に 1 周期も入らず、呼吸も心拍もただの「坂」に
+  // なるので**どの方式でも分離できない**（線形での心拍残存は 60bpm 0.95 に対し 40bpm 0.64）。
+  if (n * dtMs >= 2 * MAX_PERIOD_MS) return movingAverage();
+  return { mode: "linear", windowFrames: 0 };
 }
 
 /** 移動平均を引く（端は窓を縮める）。 */
-function detrend(s: Float64Array, windowFrames: number): Float64Array {
+function detrendMovingAverage(s: Float64Array, windowFrames: number): Float64Array {
   const w = Math.floor(windowFrames);
   if (w < 3 || w >= s.length) return s;
   const half = w >> 1;
@@ -850,6 +944,40 @@ function detrend(s: Float64Array, windowFrames: number): Float64Array {
     out[i] = s[i] - sum / (b - a + 1);
   }
   return out;
+}
+
+/**
+ * 最小二乗の直線を引く。
+ *
+ * <p>🔴 **当てはめは `reliable` なフレームだけ**で行い、引き算は全フレームに適用する
+ * （PCA の基底が `used` だけを使うのと同じ作法）。外れフレーム 1 枚で直線が傾くのを防ぐ。
+ */
+function detrendLinear(s: Float64Array, reliable: readonly boolean[]): Float64Array {
+  const n = s.length;
+  const idx: number[] = [];
+  for (let i = 0; i < n; i++) if (reliable[i]) idx.push(i);
+  const fit = idx.length >= 2 ? idx : Array.from({ length: n }, (_, i) => i);
+
+  let sx = 0, sy = 0;
+  for (const i of fit) { sx += i; sy += s[i]; }
+  const mx = sx / fit.length;
+  const my = sy / fit.length;
+  let sxx = 0, sxy = 0;
+  for (const i of fit) {
+    const a = i - mx;
+    sxx += a * a;
+    sxy += a * (s[i] - my);
+  }
+  const slope = sxx > 1e-12 ? sxy / sxx : 0;
+  const out = new Float64Array(n);
+  for (let i = 0; i < n; i++) out[i] = s[i] - (my + slope * (i - mx));
+  return out;
+}
+
+function applyDetrend(s: Float64Array, plan: DetrendPlan, reliable: readonly boolean[]): Float64Array {
+  if (plan.mode === "movingAverage") return detrendMovingAverage(s, plan.windowFrames);
+  if (plan.mode === "linear") return detrendLinear(s, reliable);
+  return s;
 }
 
 function meanFrameIntervalMs(frameStartTimesMs: readonly number[]): number {
@@ -880,7 +1008,10 @@ export function motionSignal(
   const s = new Float64Array(n);
   const sdot = new Float64Array(n);
   if (n === 0) {
-    return { s, sdot, axis: [1, 0], center: [0, 0], reliable: false };
+    return {
+      s, sdot, axis: [1, 0], center: [0, 0], reliable: false,
+      detrendMode: "none", detrendWindowFrames: 0, detrendSkipped: "tooFewFrames",
+    };
   }
 
   const used = track.frames.filter((f) => f.reliable);
@@ -921,9 +1052,8 @@ export function motionSignal(
   }
 
   const dtMs = meanFrameIntervalMs(frameStartTimesMs);
-  const defaultWindow = dtMs > 0 ? Math.round(MAX_PERIOD_MS / dtMs) : 0;
-  const window = opts.detrendWindowFrames ?? defaultWindow;
-  const centered = window > 0 ? detrend(s, window) : s;
+  const plan = planDetrend(n, dtMs, opts);
+  const centered = applyDetrend(s, plan, track.frames.map((f) => f.reliable));
   if (centered !== s) s.set(centered);
 
   // 中央差分（端は片側差分）。時間は秒。
@@ -934,7 +1064,13 @@ export function motionSignal(
     sdot[i] = dt > 1e-9 ? (s[b] - s[a]) / dt : 0;
   }
 
-  return { s, sdot, axis, center: [mx, my], reliable: track.reliable && used.length >= 2 };
+  return {
+    s, sdot, axis, center: [mx, my],
+    reliable: track.reliable && used.length >= 2,
+    detrendMode: plan.mode,
+    detrendWindowFrames: plan.windowFrames,
+    ...(plan.skipped ? { detrendSkipped: plan.skipped } : {}),
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -946,6 +1082,22 @@ export interface PeriodEstimate {
   periodFrames: number;
   /** 自己相関のピークの高さ。 */
   peakCorrelation: number;
+  /**
+   * 🔑 **オクターブ補正で周期を半分にした回数**（0〜2）。
+   *
+   * <p>⚠️ **`confidence` はオクターブ誤りを弾けない。** あれは「ピークが高いか」の指標だが、
+   * オクターブ誤りは定義上 `r(2T) ≈ r(T)` で**両方高い**ときに起きる。倍周期にロックしても
+   * `confidence` は "ok" のままになる（実機の 45 bpm ＝真値 90.2 の半分がこれ）。
+   * 補正が効いたのか、ぎりぎり落ちたのかを外から見るにはこの 2 つが要る。
+   */
+  octaveHalved: number;
+  /**
+   * 採用した遅れの**半分**での自己相関。`OCTAVE_TOLERANCE × peakCorrelation` と比べている。
+   *
+   * <p>🔴 **比べていないときは `null`。** 0 で表すと「測ったら 0 だった」と区別が付かない
+   * （実機で `-0.017` を「比べていない」と表示する取り違えを出した）。負の値は正当な測定結果である。
+   */
+  halfLagCorrelation: number | null;
   confidence: "ok" | "weak" | "none";
   reason?: "tooFewSamplesPerCycle" | "runTooShort" | "noPeak";
 }
@@ -965,7 +1117,8 @@ export function estimatePeriod(
 ): PeriodEstimate {
   const n = s.length;
   const none = (reason: PeriodEstimate["reason"]): PeriodEstimate => ({
-    periodMs: 0, periodFrames: 0, peakCorrelation: 0, confidence: "none", ...(reason ? { reason } : {}),
+    periodMs: 0, periodFrames: 0, peakCorrelation: 0, octaveHalved: 0, halfLagCorrelation: null,
+    confidence: "none", ...(reason ? { reason } : {}),
   });
   const dtMs = meanFrameIntervalMs(frameStartTimesMs);
   if (n < 4 || !(dtMs > 0)) return none("runTooShort");
@@ -1018,11 +1171,15 @@ export function estimatePeriod(
   // <p>🔴 **生理的な下限（200 bpm）より下へは降りない。** そこまで行くなら
   // それは心拍ではない。
   let tau = bestTau;
+  let octaveHalved = 0;
+  let halfLagCorrelation: number | null = null;
   for (let k = 0; k < 2; k++) {
     const half = Math.round(tau / 2);
     if (half < minTau || half < 1) break;
+    if (k === 0) halfLagCorrelation = r[half];
     if (!(r[half] > OCTAVE_TOLERANCE * r[tau])) break;
     tau = half;
+    octaveHalved++;
   }
   const tauR = r[tau];
 
@@ -1045,6 +1202,8 @@ export function estimatePeriod(
     periodMs: confidence === "none" ? 0 : periodMs,
     periodFrames: confidence === "none" ? 0 : periodFrames,
     peakCorrelation: tauR,
+    octaveHalved,
+    halfLagCorrelation,
     confidence,
     ...(reason ? { reason } : {}),
   };
@@ -1365,7 +1524,22 @@ export interface RoiCandidate {
   const logarithmic = opts.logarithmic ?? false;
   const maxZeroFraction = opts.maxZeroFraction ?? 0.01;
   const minAnisotropy = opts.track?.minAnisotropy ?? 0.04;
-  const times = opts.frameStartTimesMs?.length === frames.length ? opts.frameStartTimesMs : null;
+  // 🚨 **長さが違ったら黙って降格しない（§6.15）。**
+  //
+  // <p>ここは以前 `?.length === frames.length ? … : null` で、**不一致なら黙って時刻を
+  // 捨てていた**。呼び出し側が画素と時刻を別々の式から作っていたため実際に常に不一致で、
+  // §6.11.3 で入れた「心拍帯で採点する」対策が一度も実行されていなかった。
+  //
+  // <p>🔴 **表示が崩れるのではなく、追う場所が変わる**——呼吸で動く横隔膜を心臓として
+  // 採用してしまう。静かに劣化させてよい種類の食い違いではない。Worker の `catch` が
+  // `{type:"error"}` にして画面まで運ぶので、気づける形で落とす。
+  const timesOpt = opts.frameStartTimesMs;
+  if (timesOpt && timesOpt.length > 0 && timesOpt.length !== frames.length) {
+    throw new Error(
+      `suggestTrackingRois: frameStartTimesMs length ${timesOpt.length} !== frames ${frames.length}`,
+    );
+  }
+  const times = timesOpt && timesOpt.length === frames.length ? timesOpt : null;
 
   // 🚨 前処理は **1 回だけ**。候補ごとに `trackTemplate` を呼ぶと、同じフレームの
   //    ぼかしと Sobel を候補の数だけ繰り返すことになる（実データで十数秒）。

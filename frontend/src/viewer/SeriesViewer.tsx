@@ -18,7 +18,13 @@ import { XaQlvDialog } from "./XaQlvDialog";
 import { XaIvusSyncDialog } from "./XaIvusSyncDialog";
 import { XaTimiDialog } from "./XaTimiDialog";
 import { XaDsaDialog, type MaskRun } from "./XaDsaDialog";
-import { buildAutoPhaseMaskPlan, releaseAutoPhaseWorker, type AutoPhaseResult } from "./xaAutoPhaseMask";
+import { ProgressBar } from "./ProgressBar";
+import {
+  buildAutoPhaseMaskPlan,
+  releaseAutoPhaseWorker,
+  type AutoPhaseProgress,
+  type AutoPhaseResult,
+} from "./xaAutoPhaseMask";
 import { Xa3dQcaDialog } from "./Xa3dQcaDialog";
 import { useQcaRuns } from "./xaRecon3dStore";
 import { consumeXaTask, isFreshRequest, matchesRequest, onXaTaskRequest, pullXaTask } from "./xaTaskLaunch";
@@ -48,6 +54,7 @@ import {
   nudgeDsaShift,
   setDsaFramePlan,
   setDsaMaskFrames,
+  setDsaOnset,
   setDsaShift,
   type DsaFramePlanEntry,
   type DsaShiftScope,
@@ -397,17 +404,17 @@ export function SeriesViewer({
   const [timiDialogOpen, setTimiDialogOpen] = useState(false);
   const [dsaDiagOpen, setDsaDiagOpen] = useState(false);
   const [dsaResiduals, setDsaResiduals] = useState<number[] | null>(null);
-  const [dsaResidualProgress, setDsaResidualProgress] = useState<string | null>(null);
+  const [dsaResidualProgress, setDsaResidualProgress] = useState<{ done: number; total: number } | null>(null);
   // ── 診断ダイアログを開いたら、全フレームの残差を測る（§6.14）──────────
   // 🔑 「うまくいっているか」の答えはこれ。開いたときだけ走らせ、DSA を触ったら測り直す。
   useEffect(() => {
     if (!dsaDiagOpen || !dsaToken) { setDsaResiduals(null); setDsaResidualProgress(null); return; }
     let cancelled = false;
     setDsaResiduals(null);
-    setDsaResidualProgress("0%");
+    setDsaResidualProgress({ done: 0, total: 0 });
     void measureDsaResidualAll(
       dsaToken,
-      (done, total) => { if (!cancelled) setDsaResidualProgress(`${Math.round((done / total) * 100)}%`); },
+      (done, total) => { if (!cancelled) setDsaResidualProgress({ done, total }); },
       () => cancelled,
     ).then((r) => {
       if (cancelled) return;
@@ -426,13 +433,12 @@ export function SeriesViewer({
   /** ずらしを当てる範囲（§6.4 の 3 択）。既定はラン全体＝従来の挙動。 */
   const [dsaScope, setDsaScope] = useState<DsaShiftScope>("all");
   /** エッジ合わせで回転も探すか。既定 OFF（自由度を上げると見たい差を消す）。 */
-  const [dsaRotate, setDsaRotate] = useState(false);
   /**
    * 自動同位相 DSA の状態（§6.8）。DSA を ON にしたら自動で走る。
    * 🔴 **失敗したら計画を入れず、理由を出して従来の単一マスクのままにする。**
    */
   const [autoPhase, setAutoPhase] = useState<
-    { status: "running"; progress: string } | { status: "done"; result: AutoPhaseResult } | null
+    { status: "running"; progress: AutoPhaseProgress } | { status: "done"; result: AutoPhaseResult } | null
   >(null);
   const [xaBifDialogOpen, setXaBifDialogOpen] = useState(false);
   const [xa3dDialogOpen, setXa3dDialogOpen] = useState(false);
@@ -618,7 +624,7 @@ export function SeriesViewer({
         // ── 自動同位相 DSA（§6.8）──────────────────────────────────
         // 🔴 **await しない。** ここで待つと DSA の表示そのものが数秒遅れる。
         //    差分は先に出し、計画は整い次第あとから当てる。
-        setAutoPhase({ status: "running", progress: "" });
+        setAutoPhase({ status: "running", progress: { step: "read" } });
         void buildAutoPhaseMaskPlan({
           frameIds: zStack,
           frameStartTimesMs: frameStartTimesMs(xaCineSource ?? { numberOfFrames: zStack.length }),
@@ -630,12 +636,17 @@ export function SeriesViewer({
           // 🔴 **計画の成否に依らず、既定マスクを造影前へ移す**（§5-D）。
           //    既定のままだと露出の立ち上がり（ラン先頭）が落ち先になり、計画に載らない
           //    フレームだけ一様に明るい絵になる——実機で利用者が見た不具合そのもの。
-          onPreContrast: ({ preContrast, selfPlan }) => {
+          onPreContrast: ({ preContrast, contrastStart, selfPlan }) => {
             if (cancelled || !preContrast.length) return;
             if (!setDsaMaskFrames(token, preContrast)) return;
+            // 🔴 **造影到達を書き戻す（§6.15）。** セッション作成時の onset は
+            //    §6.10.2 の絞り込みを通っていない（タグでマスクが与えられていれば null のまま）。
+            //    ここで入れないと、診断ダイアログが「造影到達が決まっていない」と言い続け、
+            //    同位相マスクを作るボタンが押せない——実機で踏んだ。
+            setDsaOnset(token, contrastStart);
             // 🔴 露出の立ち上がりは計画の有無と関係なく存在する。ここで効かせないと
             //    先頭の数フレームだけ一様に明るい絵のまま残る（§5-F）。
-            setDsaLevelMatch(token, true);
+            setDsaLevelMatch(token, true, "auto");
             // 🔴 **造影前フレームは自分自身を引く。** 誤差ゼロで、追尾の成否に依らない。
             //    追尾を待たせないよう、ここで先に入れてしまう（§6.10 3-B）。
             if (selfPlan) setDsaFramePlan(token, selfPlan, t("dsa.autoPhase.selfOnly"));
@@ -1532,13 +1543,38 @@ export function SeriesViewer({
                       {/* 自動同位相 DSA（§6.8）。🔴 **黙って数秒固まらせない**——準備中も、
                           作れなかった理由も、必ず画面に出す。 */}
                       {autoPhase?.status === "running" && (
-                        <span style={{ ...hint, color: "#c08a30" }} data-testid="dsa-auto-phase-busy">
-                          {t("dsa.autoPhase.running", { progress: autoPhase.progress })}
+                        <span
+                          style={{ ...hint, color: "#c08a30", display: "inline-flex", alignItems: "center", gap: 6 }}
+                          data-testid="dsa-auto-phase-busy"
+                        >
+                          {t("dsa.autoPhase.running", { progress: t(`dsa.autoPhase.step.${autoPhase.progress.step}`) })}
+                          <ProgressBar
+                            done={autoPhase.progress.done}
+                            total={autoPhase.progress.total}
+                            testId="dsa-auto-phase-bar"
+                          />
                         </span>
                       )}
                       {autoPhase?.status === "done" && autoPhase.result.ok && (
                         <span style={{ ...hint, color: "#2f8f4f" }} data-testid="dsa-auto-phase-ok">
-                          {t("dsa.autoPhase.ok", {
+                          {/* 🔴 背景の突き合わせでは bpm も振幅も測っていない（追尾経路の量）。
+                              「0.0px」と出すと「動いていない」と読まれる（§6.16）。 */}
+                          {autoPhase.result.method === "background"
+                            ? t("dsa.autoPhase.ok.background", {
+                                pre: autoPhase.result.preContrastCount ?? 0,
+                                start: (autoPhase.result.contrastStart ?? 0) + 1,
+                                matched: autoPhase.result.matchedFrames ?? 0,
+                                total: autoPhase.result.totalFrames ?? 0,
+                                filled: autoPhase.result.filledFrames ?? 0,
+                                score: autoPhase.result.backgroundScore != null
+                                  ? autoPhase.result.backgroundScore.toFixed(3) : "—",
+                                frac: autoPhase.result.contrastFraction != null
+                                  ? (autoPhase.result.contrastFraction * 100).toFixed(1) : "—",
+                                aligned: autoPhase.result.alignedFrames ?? 0,
+                                rot: autoPhase.result.alignRotationDeg != null
+                                  ? autoPhase.result.alignRotationDeg.toFixed(2) : "—",
+                              })
+                            : t("dsa.autoPhase.ok", {
                             roi: autoPhase.result.roi
                               ? `${autoPhase.result.roi.x0},${autoPhase.result.roi.y0}–${autoPhase.result.roi.x1},${autoPhase.result.roi.y1}`
                               : "—",
@@ -1551,6 +1587,12 @@ export function SeriesViewer({
                             span: (autoPhase.result.amplitudeSpanPx ?? 0).toFixed(1),
                             clamped: autoPhase.result.clampedFrames ?? 0,
                             filled: autoPhase.result.filledFrames ?? 0,
+                            // 🔴 いちばん高い計算（全フレーム × 半解像度のエッジ残差）の結果が、
+                            //    これまで画面のどこにも出ていなかった（§6.15）。
+                            aligned: autoPhase.result.alignedFrames ?? 0,
+                            diff: autoPhase.result.medianAmplitudeDiff != null
+                              ? autoPhase.result.medianAmplitudeDiff.toFixed(2)
+                              : "—",
                           })}
                         </span>
                       )}
@@ -1627,7 +1669,10 @@ export function SeriesViewer({
                         {label}
                       </button>
                     ))}
-                    {dsaRotate && ([["↺", -0.2], ["↻", 0.2]] as const).map(([label, ddeg]) => (
+                    {/* 🔴 回転は**常に出す**（2026-09-23・利用者の指示）。以前は「回す」チェックの
+                        裏に隠れていたが、同じチェックが「エッジで合わせる」の回転探索も
+                        兼ねていて、1 つの操作に 2 つの意味があった。 */}
+                    {([["↺", -0.2], ["↻", 0.2]] as const).map(([label, ddeg]) => (
                       <button
                         key={label}
                         style={btn}
@@ -1666,7 +1711,9 @@ export function SeriesViewer({
                       onClick={() => {
                         if (!dsaToken) return;
                         setDsaBusy(true);
-                        alignDsaOnEdges(dsaToken, zc, dsaScope, dsaRotate ? { maxRotationDeg: 3 } : {})
+                        // 🔴 回転も**常に**探す。チェックで切り替えていたのをやめたので、
+                        //    ここが「回すかどうか」の唯一の決定である（§6.17）。
+                        alignDsaOnEdges(dsaToken, zc, dsaScope, { maxRotationDeg: 3 })
                           .then((r) => {
                             // 🔴 合わせられなかったら**理由を出す**（黙って何も起きないようにしない）。
                             if (r && !r.reliable) emitToast(t(`dsa.alignEdges.failed.${r.reason ?? "lowScore"}`));
@@ -1678,12 +1725,6 @@ export function SeriesViewer({
                     >
                       {t("dsa.alignEdges")}
                     </button>
-                    <Check
-                      testId="dsa-rotate-check"
-                      label={t("dsa.rotate")}
-                      checked={dsaRotate}
-                      onChange={() => setDsaRotate((v) => !v)}
-                    />
                     {/* 自動位置合わせ（§5-G）。計画と一緒にエッジ ZNCC の残差を先回りで計算して
                         あるので、**切り替えは即座**——再計算は起きない。 */}
                     {dsaState.autoAlignAvailable && (
@@ -1708,6 +1749,15 @@ export function SeriesViewer({
                     >
                       {t("xadsa.open")}
                     </button>
+                    {/* 🔴 押してから中身が揃うまで数秒かかる。**押した瞬間から**動いていることを見せる。 */}
+                    {dsaDiagOpen && dsaResiduals == null && (
+                      <ProgressBar
+                        done={dsaResidualProgress?.done}
+                        total={dsaResidualProgress?.total}
+                        testId="dsa-diagnose-bar"
+                        width={70}
+                      />
+                    )}
                     <button
                       style={btn}
                       data-testid="dsa-reset-nudge"
@@ -1728,6 +1778,20 @@ export function SeriesViewer({
                       onChange={() => {
                         if (!dsaToken || !dsaState) return;
                         setDsaLogarithmic(dsaToken, !dsaState.logarithmic);
+                        refreshDsa(dsaToken, zc);
+                      }}
+                    />
+                    {/* 🔴 実装はあったのに画面に出ておらず、マスクを手で選ぶと黙って off に
+                        戻っていた（§6.15）。状態が見えないと「自分で選んだら先頭が明るく
+                        なった」という理由の読めない挙動になる。 */}
+                    <Check
+                      testId="dsa-level-match-check"
+                      label={t("dsa.levelMatch")}
+                      title={t("dsa.levelMatch.title")}
+                      checked={dsaState.levelMatch}
+                      onChange={() => {
+                        if (!dsaToken || !dsaState) return;
+                        setDsaLevelMatch(dsaToken, !dsaState.levelMatch);
                         refreshDsa(dsaToken, zc);
                       }}
                     />
@@ -1889,6 +1953,8 @@ export function SeriesViewer({
           autoPhase={autoPhase?.status === "done" ? autoPhase.result : null}
           dsaPlan={dsaPlanEntries}
           residuals={dsaResiduals}
+          dsaToken={dsaToken}
+          dsaVersion={dsaVersion}
           residualProgress={dsaResidualProgress}
           onClose={() => setDsaDiagOpen(false)}
           onGoToFrame={setZ}
