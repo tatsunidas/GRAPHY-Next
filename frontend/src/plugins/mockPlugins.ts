@@ -75,6 +75,20 @@ export const DEMO_MODULES: Record<string, PluginModule> = {
       for (const tg of targets) {
         const vs = host.getViewState(tg.tileId);
         const wl = vs ? `W/L ${vs.windowWidth.toFixed(0)}/${vs.windowCenter.toFixed(0)} ${vs.unit}` : "W/L ?";
+        // 🔴 H2 は W/L だけではない。**画面に見えている範囲**（visibleRegion）を出す ——
+        // プラグインが「画面のとおりに切り出す」ためにこれだけを見る契約なので、
+        // 「拡大・パンが反映されない」と疑われたとき、ここを押せば切り分けられる
+        // （2026-09-24 に実際に疑われ、切り分ける手段が無かった）。
+        const r = vs?.visibleRegion;
+        const view = vs
+          ? `rot=${vs.rotation} zoom=${vs.zoom.toFixed(2)} pan=[${vs.pan.map((n) => n.toFixed(0)).join(",")}] ` +
+            `flip=${vs.flipH ? "H" : ""}${vs.flipV ? "V" : ""}\n  ` +
+            (r
+              ? `見えている範囲: ${Math.hypot(r.corners[1][0] - r.corners[0][0], r.corners[1][1] - r.corners[0][1]).toFixed(0)}` +
+                `×${Math.hypot(r.corners[2][0] - r.corners[0][0], r.corners[2][1] - r.corners[0][1]).toFixed(0)} px ` +
+                `（画面 ${Math.round(r.screenWidth)}×${Math.round(r.screenHeight)}）`
+              : "見えている範囲: 取得できず（プラグインは画像全体を使う）")
+          : "";
         const px = await host.getPixelData(tg.tileId);
         let stats = "pixels ?";
         if (px) {
@@ -91,7 +105,7 @@ export const DEMO_MODULES: Record<string, PluginModule> = {
             `min=${min.toFixed(0)} max=${max.toFixed(0)} mean=${(sum / px.data.length).toFixed(1)}`;
         }
         lines.push(
-          `${tg.seriesLabel} [${tg.modality}] slice ${tg.sliceIndex + 1}/${tg.sliceCount} — ${wl}\n  ${stats}`,
+          `${tg.seriesLabel} [${tg.modality}] slice ${tg.sliceIndex + 1}/${tg.sliceCount} — ${wl}\n  ${view}\n  ${stats}`,
         );
       }
       host.notify(lines.join("\n"));
