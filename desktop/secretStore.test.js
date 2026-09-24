@@ -1,8 +1,8 @@
 // `node --test`（desktop/ で `npm test`）。
 //
 // secretStore は Electron の safeStorage に依存するが、素の Node からは electron の API を
-// 読めない（`require("electron")` が実行ファイルのパス文字列を返す）ので、require キャッシュへ
-// スタブを差し込んでから読み込む。
+// 読めない（`require("electron")` が実行ファイルのパス文字列を返す）し、CI では
+// **electron 自体が入っていない**。どちらでも成立するよう、モジュールの読み込みを横取りする。
 //
 // ここで守りたいのは 3 つ。いずれも破れると鍵が漏れる／黙って消える:
 //   1. ディスク上で平文にならない・パーミッションが 0600
@@ -28,13 +28,20 @@ const electronStub = {
     },
   },
 };
-const electronPath = require.resolve("electron");
-require.cache[electronPath] = {
-  id: electronPath,
-  filename: electronPath,
-  loaded: true,
-  exports: electronStub,
+// 🔴 **`require.resolve("electron")` を使わない。** CI の desktop ジョブは
+//    「Electron 非依存の純関数だけを検査する」方針で **npm install をしない**ため、
+//    electron が解決できず `Cannot find module 'electron'` でこのファイルごと落ちる
+//    （2026-09-24 に実際に CI を赤くした。手元は node_modules があるので通っていた）。
+//    モジュールの読み込みを横取りすれば、electron の有無に関係なく成立する。
+const Module = require("node:module");
+const originalLoad = Module._load;
+Module._load = function (request, ...rest) {
+  if (request === "electron") return electronStub;
+  return originalLoad.call(this, request, ...rest);
 };
+test.after(() => {
+  Module._load = originalLoad;
+});
 
 const STORE_PATH = require.resolve("./secretStore");
 const KEY = "ai.gemini.apiKey";
