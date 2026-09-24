@@ -76,16 +76,16 @@ dcm4che-tools:
 # build から呼ぶ冪等ガード: 既に取得済みならスキップ、無ければ取得。
 # CI で事前ステージすれば再ダウンロードしない。DCM4CHE_TOOLS_VERSION で版を固定可。
 #
-# 🔴 bin/movescu だけでは足りない。OpenCV ネイティブを置くようにしたのは 2026-09-24 で、
-#    それ以前に取得したディレクトリ（開発機・CI キャッシュ）には入っていない。
-#    ツールの有無だけで判定すると、**QR は動くのに圧縮画像の焼き込みだけ使えない配布物**が
-#    黙って出来上がる。ネイティブの有無も条件に入れる。
+# 🔴 判定は必ず `--check` に委ねる（Make 側で条件を書き直さない）。見るべきは
+#    「**このホスト向けの**ネイティブがあるか」で、別プラットフォームのものが残っていても
+#    実行時には読めない。bin/movescu だけを見ていた頃は、ネイティブを置くようにする前に
+#    取得したディレクトリを「取得済み」と誤判定し、**QR は動くのに圧縮画像の焼き込みだけ
+#    使えない配布物**が黙って出来上がった。
 dcm4che-tools-ensure:
-	@if [ -x desktop/resources/dcm4che/bin/movescu ] \
-		&& ls desktop/resources/dcm4che/lib/*/*opencv_java* >/dev/null 2>&1; then \
+	@if bash scripts/fetch-dcm4che-tools.sh --check; then \
 		echo "[bundle] dcm4che tools: 取得済み（スキップ）"; \
 	else \
-		echo "[bundle] dcm4che tools: 未取得 or OpenCV ネイティブ無し → 取得します"; \
+		echo "[bundle] dcm4che tools: 不足 → 取得します"; \
 		bash scripts/fetch-dcm4che-tools.sh; \
 	fi
 

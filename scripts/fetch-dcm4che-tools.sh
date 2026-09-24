@@ -21,6 +21,8 @@
 # 使い方:
 #   scripts/fetch-dcm4che-tools.sh
 #   DCM4CHE_TOOLS_VERSION=5.34.3 scripts/fetch-dcm4che-tools.sh   # 取得バージョンを固定
+#   scripts/fetch-dcm4che-tools.sh --check                          # 取得せず、このホスト向けに
+#                                                                  # 揃っているかだけ点検
 #   DCM4CHE_ALL_NATIVES=1 scripts/fetch-dcm4che-tools.sh           # 全プラットフォームの
 #                                                                  # OpenCV ネイティブを置く
 #                                                                  # （クロスビルド用・+113MB）
@@ -35,6 +37,46 @@ VERSION="${DCM4CHE_TOOLS_VERSION:-5.34.3}"
 URL="https://sourceforge.net/projects/dcm4che/files/dcm4che3/${VERSION}/dcm4che-${VERSION}-bin.zip/download"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT_DIR="${DCM4CHE_TOOLS_OUT_DIR:-$SCRIPT_DIR/../desktop/resources/dcm4che}"
+# このホストに対応する dcm4che の lib/<os-arch> ディレクトリ名。
+#
+# 🔴 **この対応表の 2 つ目を書かないこと。** 取得（下）と点検（--check）と Makefile の
+#    冪等ガードが同じ判定を使う。別々に書くと「取得はしたのに点検が別の場所を見る」形で、
+#    **中身が違う配布物が検査を通る**。ffmpeg の fetch-ffmpeg.sh と同じ uname 由来の規則。
+host_native_dir() {
+  local os arch n_os n_arch
+  os="$(uname -s)"
+  arch="$(uname -m)"
+  case "$os" in
+    Linux)  n_os=linux;;
+    Darwin) n_os=macosx;;
+    *)      n_os=windows;;   # MINGW64_NT / MSYS_NT（GitHub Actions の windows runner は bash）
+  esac
+  case "$arch" in
+    x86_64|amd64)  n_arch=x86-64;;
+    aarch64|arm64) n_arch=aarch64;;
+    i?86)          n_arch=x86;;
+    *)             n_arch=x86-64;;
+  esac
+  printf '%s-%s' "$n_os" "$n_arch"
+}
+HOST_NATIVE="$(host_native_dir)"
+
+# --check: 取得せずに「このホスト向けに揃っているか」だけ見る（Makefile の冪等ガード・CI の点検用）。
+# 🔴 **ネイティブは「どれか 1 つある」では不十分**——別プラットフォームのものが残っていると、
+#    ガードは通るのに実行時には読めない。必ず **このホスト向けのもの** を見る。
+if [ "${1:-}" = "--check" ]; then
+  missing=""
+  [ -x "$OUT_DIR/bin/movescu" ] || missing="$missing QR ツール(bin/movescu)"
+  ls "$OUT_DIR/lib/$HOST_NATIVE"/*opencv_java* >/dev/null 2>&1 \
+    || missing="$missing OpenCVネイティブ(lib/$HOST_NATIVE)"
+  if [ -n "$missing" ]; then
+    echo "dcm4che 同梱物が不足:$missing（host=$HOST_NATIVE）" >&2
+    exit 1
+  fi
+  echo "dcm4che 同梱物: 揃っています（host=$HOST_NATIVE）"
+  exit 0
+fi
+
 TMP_ZIP="$(mktemp -t dcm4che-tools-XXXXXX.zip)"
 trap 'rm -f "$TMP_ZIP"' EXIT
 
@@ -87,34 +129,8 @@ for t in "${TOOLS[@]}"; do
   cp "$SRC/lib/dcm4che-tool-$t-${VERSION}.jar" "$OUT_DIR/lib/"
 done
 
-# OpenCV ネイティブ（lib/<os-arch>/）。**匿名化の焼き込みが圧縮画素を伸長するのに要る。**
-# XA は JPEG 圧縮が標準なので、これが無いと「マスクを登録したのに焼き込み文字が残る」出力になる
-# （2026-09-24 に利用者が踏んだ。今は残るくらいなら backend が書き出す前に中止する）。
-# 読み込むのは backend の PixelCodec で、探索は Dcm4cheHome の規則に従う。
-#
-# 🔴 **このホストの 1 プラットフォーム分だけ置く。** 取得元 zip には 7 プラットフォーム分
-#    （+113MB）が入っているが、desktop/package.json の extraResources は
-#    `resources/dcm4che` を**丸ごと**同梱するので、全部置くと Windows の .exe に macOS の
-#    .dylib が乗るような形で**どの OS のインストーラも +113MB になる**（実測）。
-#    リリースは OS ごとの runner で組む（.github/workflows/release.yml の matrix）ので、
-#    ffmpeg と同じく「このOS/アーキ向けのみ」で足りる。
-#
-# ⚠ 他プラットフォーム向けにクロスビルドするときは DCM4CHE_ALL_NATIVES=1 を付けて全部置く。
-HOST_OS="$(uname -s)"
-HOST_ARCH="$(uname -m)"
-case "$HOST_OS" in
-  Linux)  n_os=linux;;
-  Darwin) n_os=macosx;;
-  *)      n_os=windows;;   # MINGW64_NT / MSYS_NT（GitHub Actions の windows runner は bash）
-esac
-case "$HOST_ARCH" in
-  x86_64|amd64)  n_arch=x86-64;;
-  aarch64|arm64) n_arch=aarch64;;
-  i?86)          n_arch=x86;;
-  *)             n_arch=x86-64;;
-esac
-HOST_NATIVE="$n_os-$n_arch"
-
+# OpenCV ネイティブ（lib/<os-arch>/）を、**このホスト向けの 1 つだけ**置く。
+# 判定の正本は host_native_dir()（ファイル冒頭）。
 NATIVE_FOUND=0
 for d in "$SRC"/lib/*/; do
   plat="$(basename "$d")"

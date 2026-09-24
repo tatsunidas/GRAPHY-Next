@@ -1,0 +1,15 @@
+{
+  "id": "viewstate-check",
+  "name": "View State Framing Check",
+  "version": "0.1.0",
+  "engines": {
+    "graphy": ">=0.2.0",
+    "os": ["win32", "darwin", "linux"]
+  },
+  "description": "Samples host.getViewState().visibleRegion so the framing of the sent image can be verified against zoom/pan/rotate (fw/plugin-architecture.md #7 H2).",
+  "author": "automator",
+  "license": "MIT",
+  "contributes": ["viewer2d.menu"],
+  "ui": "ui.js",
+  "permissions": ["read-pixels"]
+}

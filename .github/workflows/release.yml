@@ -119,9 +119,19 @@ jobs:
           case "$os" in Linux) os=linux;; Darwin) os=mac;; *) os=win;; esac
           case "$arch" in x86_64|amd64) arch=x64;; aarch64|arm64) arch=arm64;; *) arch=x64;; esac
           bash scripts/fetch-ffmpeg.sh "$os-$arch"
-      - name: Fetch dcm4che-tools (QR の findscu/movescu/getscu/storescu 用、全OS共通)
+      # QR の findscu/movescu/getscu/storescu（Java 製・全OS共通）と、
+      # 匿名化の焼き込みが圧縮画素を伸長するのに使う OpenCV ネイティブ（**このOS/アーキ向けのみ**）。
+      #
+      # 🔴 **--check を必ず通す。** extraResources は resources/dcm4che を丸ごと同梱するので、
+      #    ネイティブが欠けていても・別プラットフォームのものが混ざっていても、
+      #    インストーラは**問題なく出来上がってしまう**。実行時に初めて
+      #    「圧縮画像の焼き込みだけ使えない」と分かる——リリース後に気付く類の壊れ方なので、
+      #    ここで落とす。
+      - name: Fetch dcm4che-tools (QR は全OS共通 / OpenCV ネイティブはこのOS向けのみ)
         shell: bash
-        run: bash scripts/fetch-dcm4che-tools.sh
+        run: |
+          bash scripts/fetch-dcm4che-tools.sh
+          bash scripts/fetch-dcm4che-tools.sh --check
       - name: Install desktop deps & build installer
         working-directory: desktop
         shell: bash
