@@ -276,6 +276,7 @@ self.onmessage = (ev: MessageEvent<XaTrackingWorkerRequest>) => {
         const r = alignOnEdges(pre, frames[t], w, h, {
           searchRadius: radius,
           logarithmic: req.logarithmic,
+          ...(req.roi ? { roi: req.roi } : {}),
           ...(req.maxRotationDeg ? { maxRotationDeg: req.maxRotationDeg } : {}),
           ...(req.rotationStepDeg ? { rotationStepDeg: req.rotationStepDeg } : {}),
         });

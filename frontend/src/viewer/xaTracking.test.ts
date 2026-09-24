@@ -238,6 +238,40 @@ describe("alignOnEdges — DSA の体動補正（エッジで合わせる）", (
     }
   });
 
+  /* ---------------------------------------------------------------- */
+  /* §6.20 — 窓を絞って「見たい場所」で合わせる                          */
+  /* ---------------------------------------------------------------- */
+
+  it("🔴 ★ roi を渡すと、窓の外を壊しても結果が変わらない", () => {
+    // 🚨 **これが「窓が効いている」ことの錠。** FOV が動くランでは、遠くの背景
+    //    （脊椎・コリメータ・体外）が変換を支配して見たい場所が合わない。
+    const [ox, oy] = [2, -1.5];
+    const mask = renderScene(0, 0, { width: W, height: H, noise: 2, seed: 1300 });
+    const live = renderScene(ox, oy, { width: W, height: H, noise: 2, seed: 1301 });
+    const roi = { x0: 48, y0: 48, x1: 79, y1: 79 };
+
+    const before = alignOnEdges(mask, live, W, H, { searchRadius: 8, roi });
+
+    // 窓から**離れた**ところだけを塗り潰す（遠くの背景に別の構造が入ってきた状況）。
+    // 🔴 窓のすぐ外は結果に効く——探索は最大 searchRadius 分はみ出し、ピラミッドも近傍を混ぜる。
+    //    「窓の外は一切見ない」ではなく「**遠くの背景に引きずられない**」が確かめたいこと。
+    const M = 10;
+    const brokenLive = Float32Array.from(live);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const near = x >= roi.x0 - M && x <= roi.x1 + M && y >= roi.y0 - M && y <= roi.y1 + M;
+        if (!near) brokenLive[y * W + x] = 3000;
+      }
+    }
+    const after = alignOnEdges(mask, brokenLive, W, H, { searchRadius: 8, roi });
+    expect(after.dx).toBeCloseTo(before.dx, 6);
+    expect(after.dy).toBeCloseTo(before.dy, 6);
+
+    // 窓を渡さなければ当然壊れる（テストが空回りしていないことの確認）。
+    const whole = alignOnEdges(mask, brokenLive, W, H, { searchRadius: 8 });
+    expect(Math.hypot(whole.dx - ox, whole.dy - oy)).toBeGreaterThan(0.5);
+  });
+
   it("🔴 明るさが一次変換で変わっても外れない（同位相マスクは別の心拍から来る）", () => {
     const [ox, oy] = [2.5, -1.5];
     const mask = renderScene(0, 0, { width: W, height: H, noise: 2, seed: 1200 });

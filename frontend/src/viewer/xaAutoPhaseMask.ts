@@ -216,6 +216,11 @@ export interface AutoPhaseResult {
   /** 残差合わせで求めた回転の絶対値の中央値 [度]（§6.17）。 */
   alignRotationDeg?: number;
   /**
+   * 自動で決められなかったとき、**造影がいちばん薄いフレーム**（0 origin・§6.20）。
+   * 「現在フレームをマスクに」で人が選ぶときの手がかり。
+   */
+  thinnestFrame?: number;
+  /**
    * `dsaLoader.setDsaFramePlan()` へそのまま渡せる計画。
    * 🔴 **失敗時にも返る**——造影前フレームを自分自身に当てる分（`selfPlan`）は、
    * 位相合わせの成否と関係なく正しいからである（§6.10 3-B）。
@@ -390,6 +395,18 @@ function halveFrame(src: Float32Array, width: number, height: number, out: Float
       out[dst + x] = (src[r0 + c] + src[r0 + c + 1] + src[r1 + c] + src[r1 + c + 1]) / 4;
     }
   }
+}
+
+/**
+ * 造影がいちばん薄いフレーム（0 origin）。**自動で決められないとき、人にどこを見ればよいかを言う**ため。
+ *
+ * <p>🔴 「作れませんでした」だけでは次に何をすればよいか分からない。判別に使った数値は
+ * 既に手元にあるので、そこから一番の候補を出す。
+ */
+function thinnestFrameOf(fractions: readonly number[]): number {
+  let best = 0;
+  for (let i = 1; i < fractions.length; i++) if (fractions[i] < fractions[best]) best = i;
+  return best;
 }
 
 /** {@link tryWashoutMask} への入力。 */
@@ -803,6 +820,12 @@ async function runBackgroundMatch(a: BackgroundMatchArgs): Promise<AutoPhaseResu
         searchRadius: ALIGN_RADIUS_HALF,
         maxRotationDeg: BG_ALIGN_MAX_ROTATION_DEG,
         rotationStepDeg: BG_ALIGN_ROTATION_STEP_DEG,
+        // 🔑 **造影が現れる範囲で合わせる**（§6.20・利用者の指示）。FOV が動くランでは
+        //    画像全体だと遠くの背景が変換を支配し、見たい場所が合わない。この窓の中では
+        //    **カテーテル**——マスク側にもライブ側にも同じ姿で在るもの——が主役になる。
+        // 🚨 血管どうしを重ねにいくのではない。マスク（washout）には薄い血管が、ライブには
+        //    濃い血管がある。濃淡を一致させにいくと**引いたときに血管まで打ち消す**。
+        ...(pm.rect ? { roi: pm.rect } : {}),
       },
       [bgHalf.buffer],
       (done, total) => onProgress?.({ step: "align", done, total }),
@@ -883,22 +906,38 @@ async function tryWashoutMask(a: WashoutArgs): Promise<AutoPhaseResult> {
   }
   if (profile.type !== "contrastProfileDone") return failShort(fallbackReason);
 
-  const source = classifyMaskSource(profile.fractions, { minFrames: MIN_PRE_CONTRAST });
+  const source = classifyMaskSource(
+    profile.fractions,
+    { minFrames: MIN_PRE_CONTRAST },
+    a.params.frameStartTimesMs,
+  );
   diag.contrastFraction = profile.fractions;
   diag.maskSource = source;
 
   // 🔴 **判別が `preContrast` を指したのに、ここへ来た。** 検出器と判別が食い違って
   //    いるので、無理に進めず正直に降りる（どちらが正しいかは診断の数値で追える）。
   if (source.kind !== "washout") {
-    return failShort(source.kind === "none" ? "noMaskFrames" : fallbackReason);
+    // 🔑 `none` は**失敗ではなく「自動では決められないので人が選ぶ」状態**（§6.20）。
+    //    受け皿は既にある（DSA 行の「現在フレームをマスクに」）。どこを見ればよいかまで言う。
+    return failShort(source.kind === "none" ? "noMaskFrames" : fallbackReason, {
+      ...(source.kind === "none" ? { thinnestFrame: thinnestFrameOf(profile.fractions) } : {}),
+    });
   }
 
   // 🔴 **washout 層は自己差分に使えない。** 血管が残っているので「誤差ちょうど 0」に
   //    ならない。自己差分の計画は空（`selfUntil = 0`）。
   const emptySelf: (DsaFramePlanEntry | null)[] = Array.from({ length: n }, () => null);
-  const maskSet = new Set(source.frames);
+
+  // 🔑 **ライブは全フレーム。washout 層のフレームも含める**（§6.20）。
+  //    造影前をマスクにするケースと**対称**にする、という利用者の設計。層のフレームに
+  //    マスクを当てないと、そこだけ既定マスクに落ちて絵が変わる。
+  //
+  // 🔑 **特別扱いは要らない。** ZNCC の自己相関は 1.000 ＝ 絶対最大なので、層のフレームは
+  //    **計算の結果として自分自身を選ぶ**（§6.11 で確かめた性質）。決め打ちを足さない。
+  // 🔴 ただしそれは「当てはめの結果そうなる」であって、造影前の自己差分のような
+  //    「誤差ちょうど 0」の**保証ではない**。この違いを混ぜないこと。
   const live: number[] = [];
-  for (let t = 0; t < n; t++) if (!maskSet.has(t)) live.push(t);
+  for (let t = 0; t < n; t++) live.push(t);
 
   return runBackgroundMatch({
     frameIds, n, width, height, logarithmic, half: read.half,

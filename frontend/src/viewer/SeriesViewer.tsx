@@ -1612,7 +1612,12 @@ export function SeriesViewer({
                             ? t("dsa.autoPhase.failed.noMotion", {
                                 span: (autoPhase.result.amplitudeSpanPx ?? 0).toFixed(1),
                               })
-                            : t(`dsa.autoPhase.failed.${autoPhase.result.reason ?? "trackFailed"}`)}
+                            : autoPhase.result.reason === "noMaskFrames"
+                              // 🔑 「作れませんでした」で終えない。**どこを見て何を押すか**まで言う（§6.20）。
+                              ? t("dsa.autoPhase.failed.noMaskFrames", {
+                                  thinnest: (autoPhase.result.thinnestFrame ?? 0) + 1,
+                                })
+                              : t(`dsa.autoPhase.failed.${autoPhase.result.reason ?? "trackFailed"}`)}
                         </span>
                       )}
                       <button

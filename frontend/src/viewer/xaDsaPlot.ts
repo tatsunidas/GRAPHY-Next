@@ -18,7 +18,7 @@ export interface PlotBand {
   to: number;
   color: string;
   /** 凡例に出す種別。 */
-  kind: "ramp" | "preContrast" | "contrast";
+  kind: "ramp" | "preContrast" | "contrast" | "washout";
 }
 
 /**
@@ -48,6 +48,8 @@ const BAND_COLORS: Record<PlotBand["kind"], string> = {
   ramp: "rgba(224, 96, 96, 0.10)",
   preContrast: "rgba(105, 201, 138, 0.10)",
   contrast: "rgba(127, 178, 236, 0.10)",
+  // washout はマスク源なので、造影前と同じ「マスクに使える」意味の緑系。ただし血管が残るので別色。
+  washout: "rgba(105, 201, 138, 0.16)",
 };
 
 /**
@@ -57,11 +59,11 @@ const BAND_COLORS: Record<PlotBand["kind"], string> = {
  * （使われていたのは React の key だけ）。全グラフの背景に赤・緑・青が敷かれているのに、
  * それが何なのか画面のどこにも書かれていない状態だった（§6.15）。
  */
-export const BAND_KINDS: readonly PlotBand["kind"][] = ["ramp", "preContrast", "contrast"];
+export const BAND_KINDS: readonly PlotBand["kind"][] = ["ramp", "preContrast", "contrast", "washout"];
 
 /** 凡例のチップに使う色（帯そのものは薄いので、凡例では濃く出す）。 */
 export function bandLegendColor(kind: PlotBand["kind"]): string {
-  return { ramp: "#e06060", preContrast: "#69c98a", contrast: "#7fb2ec" }[kind];
+  return { ramp: "#e06060", preContrast: "#69c98a", contrast: "#7fb2ec", washout: "#8fd8a8" }[kind];
 }
 
 /**
@@ -73,6 +75,23 @@ export function bandLegendColor(kind: PlotBand["kind"]): string {
  * <p>境界が潰れている区間（`stableFrom === 0` など）は**返さない**——幅 0 の帯を描くと
  * 凡例にだけ現れて中身が無い、という読めない絵になる。
  */
+/**
+ * **washout 層をマスクにするランの帯**（§6.20）。
+ *
+ * <p>🚨 {@link phaseBands} は「造影前 → 造影後」という順番を前提にしている。washout を
+ * マスクにするランは**造影が先で、薄いのが後ろ**なので、そのまま使うと帯の意味が逆になる
+ * ——実機で「Contrast from 69」と出て、69〜89（washout）が「造影前」の色で描かれていた。
+ */
+export function washoutBands(layerFrom: number, frameCount: number): PlotBand[] {
+  const n = Math.max(0, Math.floor(frameCount));
+  if (n === 0) return [];
+  const c = Math.min(n, Math.max(0, Math.floor(layerFrom)));
+  const out: PlotBand[] = [];
+  if (c > 0) out.push({ from: 0, to: c, color: BAND_COLORS.contrast, kind: "contrast" });
+  if (n > c) out.push({ from: c, to: n, color: BAND_COLORS.washout, kind: "washout" });
+  return out;
+}
+
 export function phaseBands(stableFrom: number, contrastStart: number, frameCount: number): PlotBand[] {
   const n = Math.max(0, Math.floor(frameCount));
   if (n === 0) return [];

@@ -359,6 +359,43 @@ describe("classifyMaskSource — マスク源の判別", () => {
     expect(r.frames.length).toBe(8);
   });
 
+  /* ---------------------------------------------------------------- */
+  /* §6.20 — 「拍動フレームを含むか」は時間で見る                        */
+  /* ---------------------------------------------------------------- */
+
+  const times = (n: number, dtMs: number): number[] =>
+    Array.from({ length: n }, (_, i) => i * dtMs);
+
+  it("🔴 ★ 15fps で 8 枚（0.53 秒）は『造影前あり』と呼ばない（心拍 1 周期に届かない）", () => {
+    // 🚨 枚数だけで判定していたころは、**位相を覆えていないのに preContrast と呼んでいた**。
+    const f = [...Array(8).fill(0.006), ...Array(20).fill(0.056), ...Array(14).fill(0.014)];
+    expect(classifyMaskSource(f, {}, times(f.length, 1000 / 15)).kind).not.toBe("preContrast");
+  });
+
+  it("🔴 ★ 15fps で 20 枚（1.33 秒）なら『造影前あり』", () => {
+    const f = [...Array(20).fill(0.006), ...Array(20).fill(0.056), ...Array(14).fill(0.014)];
+    expect(classifyMaskSource(f, {}, times(f.length, 1000 / 15)).kind).toBe("preContrast");
+  });
+
+  it("🔴 ★ fps が違っても同じ意味になる（30fps の 16 枚 = 0.53 秒も不可）", () => {
+    // **これが「時間で書く」ことの目的。** 枚数だと装置ごとに意味が変わる。
+    const f = [...Array(16).fill(0.006), ...Array(20).fill(0.056), ...Array(14).fill(0.014)];
+    expect(classifyMaskSource(f, {}, times(f.length, 1000 / 30)).kind).not.toBe("preContrast");
+    // 同じ 16 枚でも 15fps（1.07 秒）なら通る。
+    expect(classifyMaskSource(f, {}, times(f.length, 1000 / 15)).kind).toBe("preContrast");
+  });
+
+  it("★ 時刻を渡さなければ長さは見ない（渡せない呼び出しを黙って落とさない）", () => {
+    const f = [...Array(8).fill(0.006), ...Array(20).fill(0.056), ...Array(14).fill(0.014)];
+    expect(classifyMaskSource(f).kind).toBe("preContrast");
+  });
+
+  it("★ washout 層にも同じ長さの条件がかかる", () => {
+    // 末尾が 5 枚（0.33 秒）しか無い。
+    const f = [...Array(30).fill(0.056), ...Array(5).fill(0.012)];
+    expect(classifyMaskSource(f, {}, times(f.length, 1000 / 15)).kind).toBe("none");
+  });
+
   it("🔴 ★ evidence が時系列と合っている（画面に出す値なので嘘をつかせない）", () => {
     const f = withPre();
     const r = classifyMaskSource(f);

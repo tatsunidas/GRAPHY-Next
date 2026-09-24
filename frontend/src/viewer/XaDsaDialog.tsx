@@ -36,6 +36,7 @@ import {
   originCounts,
   pairingSeries,
   phaseBands,
+  washoutBands,
   ZNCC_DOMAIN,
   type PlotBand,
 } from "./xaDsaPlot";
@@ -144,8 +145,14 @@ export function XaDsaDialog({
   // ── DSA 診断の材料（描画に要る形へ・計算は `xaDsaPlot.ts` の純関数） ──
   const diag = autoPhase?.diagnostics ?? null;
   const bands = useMemo(
-    () => phaseBands(diag?.stableFrom ?? 0, autoPhase?.contrastStart ?? frameCount, frameCount),
-    [diag?.stableFrom, autoPhase?.contrastStart, frameCount],
+    () => (
+      // 🚨 washout をマスクにするランは**造影が先で薄いのが後ろ**。`phaseBands` は逆順を
+      //    前提にしているので、そのまま使うと帯の意味が反転する（§6.20・実機で踏んだ）。
+      diag?.maskSource?.kind === "washout" && diag.maskSource.frames.length
+        ? washoutBands(diag.maskSource.frames[0], frameCount)
+        : phaseBands(diag?.stableFrom ?? 0, autoPhase?.contrastStart ?? frameCount, frameCount)
+    ),
+    [diag?.stableFrom, diag?.maskSource, autoPhase?.contrastStart, frameCount],
   );
   const pairing = useMemo(
     () => pairingSeries(diag?.entries ?? null, dsaPlan ?? null, frameCount),
@@ -669,7 +676,14 @@ export function XaDsaDialog({
               <div>
                 {/* 🔴 bpm と振幅は**追尾経路の量**。背景の突き合わせでは測っていないので、
                     「0.0px」と出して「動いていない」と読まれないよう出し分ける（§6.16）。 */}
-                {autoPhase.method === "background"
+                {/* 🚨 washout 経路の `contrastStart` は**層の先頭**であって造影の開始ではない。
+                    「Contrast from 69」と出して 69 を造影開始と読ませない（§6.20・実機で踏んだ）。 */}
+                {diag?.maskSource?.kind === "washout"
+                  ? t("xadsa.summary.run.washout", {
+                      from: (diag.maskSource.frames[0] ?? 0) + 1,
+                      to: (diag.maskSource.frames[diag.maskSource.frames.length - 1] ?? 0) + 1,
+                    })
+                  : autoPhase.method === "background"
                   ? t("xadsa.summary.run.background", { start: (autoPhase.contrastStart ?? 0) + 1 })
                   : t("xadsa.summary.run", {
                       start: (autoPhase.contrastStart ?? 0) + 1,

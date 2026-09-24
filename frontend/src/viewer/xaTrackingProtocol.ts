@@ -180,6 +180,14 @@ export interface TrackingAlignPlanRequest {
   maxRotationDeg?: number;
   /** 回転の刻み [度]（既定 0.5）。 */
   rotationStepDeg?: number;
+  /**
+   * 合わせに使う窓（**半解像度**の座標）。省略すると画像全体。
+   *
+   * <p>🔑 **FOV が動くランでは画像全体で合わせてはいけない**（§6.20）。遠くの背景
+   * （脊椎・コリメータ・体外）が変換を支配し、見たい場所が合わない。造影が現れる範囲に絞ると、
+   * **カテーテル**——マスク側にもライブ側にも同じ姿で在るもの——が変換を決める主役になる。
+   */
+  roi?: { x0: number; y0: number; x1: number; y1: number };
 }
 
 export interface TrackingAlignPlanResponse {

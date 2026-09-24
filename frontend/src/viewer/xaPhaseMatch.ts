@@ -400,8 +400,18 @@ export interface ClassifyOptions {
   preContrastRatio?: number;
   /** 「washout した」と呼ぶ、末尾とピークの比（既定 0.4。実測 0.243）。 */
   washoutRatio?: number;
-  /** 層として認める最小の枚数（既定 8）。 */
+  /** 層として認める最小の枚数（既定 8）。ZNCC が安定する下限。 */
   minFrames?: number;
+  /**
+   * 層として認める最小の**長さ [ms]**（既定 1000）。
+   *
+   * <p>🚨 **枚数だけでは意味が定まらない。** 15fps では 8 枚 = 0.53 秒で、心拍 1 周期
+   * （75bpm なら 0.8 秒）に届かない——**位相を覆えていないのに「造影前あり」と呼んでいた**。
+   * fps が違う装置で同じ意味になるよう、時間で見る（§6.15 のデトレンドと同じ作法）。
+   *
+   * <p>`frameStartTimesMs` を渡さないときは判定しない（枚数だけで通す）。
+   */
+  minSpanMs?: number;
   /**
    * 境界を動かすのに要る**連続した**フレーム数（既定 3）。
    *
@@ -439,13 +449,28 @@ export interface ClassifyOptions {
 export function classifyMaskSource(
   fractions: readonly number[],
   opts: ClassifyOptions = {},
+  frameStartTimesMs?: readonly number[],
 ): MaskSourceResult {
   const n = fractions.length;
   const edge = Math.max(3, Math.floor(n * (opts.edgeFraction ?? 0.1)));
   const preRatio = opts.preContrastRatio ?? 0.3;
   const washRatio = opts.washoutRatio ?? 0.4;
   const minFrames = Math.max(1, Math.floor(opts.minFrames ?? 8));
+  const minSpanMs = opts.minSpanMs ?? 1000;
   const sustain = Math.max(1, Math.floor(opts.sustainFrames ?? 3));
+
+  /**
+   * 層が**枚数と長さの両方**を満たすか。
+   * 🔴 時刻が無ければ長さは見ない（渡せない呼び出しを黙って落とさない）。
+   */
+  const longEnough = (frames: readonly number[]): boolean => {
+    if (frames.length < minFrames) return false;
+    if (!frameStartTimesMs || frameStartTimesMs.length < 2 || minSpanMs <= 0) return true;
+    const a = frameStartTimesMs[frames[0]];
+    const b = frameStartTimesMs[frames[frames.length - 1]];
+    if (a == null || b == null) return true;
+    return b - a >= minSpanMs;
+  };
 
   let peakFrame = 0;
   for (let i = 1; i < n; i++) if (fractions[i] > fractions[peakFrame]) peakFrame = i;
@@ -474,7 +499,7 @@ export function classifyMaskSource(
     }
     const frames: number[] = [];
     for (let i = 0; i < end; i++) frames.push(i);
-    if (frames.length >= minFrames) {
+    if (longEnough(frames)) {
       return { kind: "preContrast", frames, evidence: { leadingLevel, peakLevel, peakFrame, trailingLevel, threshold } };
     }
   }
@@ -492,7 +517,7 @@ export function classifyMaskSource(
     }
     const frames: number[] = [];
     for (let i = start; i < n; i++) frames.push(i);
-    if (frames.length >= minFrames) {
+    if (longEnough(frames)) {
       return { kind: "washout", frames, evidence: { leadingLevel, peakLevel, peakFrame, trailingLevel, threshold } };
     }
   }

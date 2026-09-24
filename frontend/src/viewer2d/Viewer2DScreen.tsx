@@ -271,6 +271,11 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
   // 左ツリー用: コンテキストから自動設定される患者ID・スタディUID。
   const [initialPatientId, setInitialPatientId] = useState<string | null>(null);
   const [initialStudyUid, setInitialStudyUid] = useState<string | null>(null);
+  /**
+   * 🔴 **PatientID が空のデータがある**（実データ CASE01 LAD / CASE02 LCx は空）。
+   * ID だけを頼りにすると左ツリーが黙って空になるので、患者名も渡して代わりに引けるようにする。
+   */
+  const [initialPatientName, setInitialPatientName] = useState<string | null>(null);
 
   // 処理済みコンテキストのタイムスタンプ（二重適用防止）。
   const processedCtxTs = useRef(0);
@@ -469,10 +474,13 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
 
     // 左ツリーを対象患者のスタディ一覧で更新。
     setInitialPatientId(study.patientId || null);
+    setInitialPatientName(study.patientName || null);
     setInitialStudyUid(study.studyInstanceUid);
 
     if (!series) {
       // スタディのみ選択: タイルは追加しない。患者タブが既にあればフォーカス。
+      // 🔴 タイルが無いときは既存の `viewer2d.empty`（「左のツリーからシリーズを選び…」）が
+      //    案内する。**そのツリーが空にならないこと**が肝で、それは上のコンテキストで担保する。
       if (patients.some((p) => p.patientKey === pKey)) {
         setActiveKey(pKey);
       }
@@ -537,6 +545,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
           patients={patients}
           onAdd={addTile}
           initialPatientId={initialPatientId}
+          initialPatientName={initialPatientName}
           initialStudyUid={initialStudyUid}
         />
 
@@ -2738,11 +2747,13 @@ function StudyBrowser({
   patients,
   onAdd,
   initialPatientId,
+  initialPatientName,
   initialStudyUid,
 }: {
   patients: PatientSession[];
   onAdd: (study: Study, series: Series) => void;
   initialPatientId?: string | null;
+  initialPatientName?: string | null;
   initialStudyUid?: string | null;
 }) {
   const { t } = useI18n();
@@ -2791,18 +2802,30 @@ function StudyBrowser({
     search({ patientId: id || undefined, patientName: name || undefined });
   };
 
-  // initialPatientId が変化したら、その患者の全スタディを自動取得してツリーを構成。
-  const prevInitialPatientId = useRef<string | null | undefined>(undefined);
+  // コンテキストが来たら、その患者（無ければそのスタディ）を自動取得してツリーを構成。
+  //
+  // 🚨 **PatientID だけを頼りにしない。** 空の実データがある（CASE01 LAD / CASE02 LCx）。
+  //    ID が空だとここが黙って何もせず、**タイルも無くツリーも空**という
+  //    「2D Viewer を開いても何も出ない」状態になっていた（実機で踏んだ）。
+  //    患者名 → スタディ UID の順に落ちる。スタディ UID は IHE IID 起動と同じ経路で、
+  //    他の条件を無視して当該 study を返すので、**必ず 1 件は出せる**。
+  const prevCtxKey = useRef<string | null | undefined>(undefined);
   useEffect(() => {
-    if (prevInitialPatientId.current === initialPatientId) return;
-    prevInitialPatientId.current = initialPatientId;
+    const key = `${initialPatientId ?? ""}|${initialPatientName ?? ""}|${initialStudyUid ?? ""}`;
+    if (prevCtxKey.current === key) return;
+    prevCtxKey.current = key;
 
     if (initialPatientId) {
       setPatientId(initialPatientId);
       search({ patientId: initialPatientId }); // 日付フィルタなし（全過去スタディ）
+    } else if (initialPatientName) {
+      setPatientName(initialPatientName);
+      search({ patientName: initialPatientName });
+    } else if (initialStudyUid) {
+      search({ studyInstanceUid: initialStudyUid });
     }
     // コンテキストなし: 自動検索しない（ユーザーが検索条件を入力して実行する）
-  }, [initialPatientId, search]);
+  }, [initialPatientId, initialPatientName, initialStudyUid, search]);
 
   return (
     <div style={tree}>
