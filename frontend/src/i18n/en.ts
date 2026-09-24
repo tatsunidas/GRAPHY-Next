@@ -2260,7 +2260,7 @@ export const en: Record<string, string> = {
   "anon.newId": "New patient ID",
   "anon.seed": "Random seed",
   "anon.masks": "Burn-in masks",
-  "anon.masks.empty": "None registered. Draw a closed ROI in the 2D viewer and register it from the ROI manager row action. Masks are lost when the app restarts.",
+  "anon.masks.empty": "None registered. Draw a closed ROI in the 2D viewer; it appears in the list above, then tick it and press \"Register ticked ROIs\". Masks are lost when the app restarts.",
   "anon.masks.shapes": "{{count}} shape(s)",
   "anon.masks.clear": "Clear all",
   "anon.burnIn": "Apply pixel burn-in (use registered masks)",

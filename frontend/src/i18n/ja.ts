@@ -2251,7 +2251,7 @@ export const ja: Record<string, string> = {
   "anon.newId": "新 患者ID",
   "anon.seed": "乱数シード",
   "anon.masks": "焼き込みマスク",
-  "anon.masks.empty": "登録されていません。2D ビューアで閉じた ROI を描き、ROI マネージャの 🖍 で登録します。⚠ マスクはアプリを再起動すると失われます。",
+  "anon.masks.empty": "登録されていません。2D ビューアで閉じた ROI を描くと上の一覧に出るので、チェックして「チェックした ROI を登録」を押してください。⚠ マスクはアプリを再起動すると失われます。",
   "anon.masks.shapes": "{{count}} 個",
   "anon.masks.clear": "すべて削除",
   "anon.burnIn": "ピクセル焼き込みを実行（登録済みマスクを使用）",
