@@ -320,3 +320,182 @@ export function packGradients(
   });
   return { data, width, height, planes: 2, frameCount: frames.length };
 }
+
+/* ------------------------------------------------------------------ */
+/* マスク源の判別（§6.19）                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * フレーム列の**画素ごとの時間中央値**。血管の無い背景の近似。
+ *
+ * <p>🔑 **造影前フレームを 1 枚も必要としない。** 血管は一部のフレームにしか無く、しかも
+ * 心拍で動くので、時間方向の中央値は血管を外して背景に寄る。造影前が無いラン
+ * （CASE01 LAD）では「造影前の平均」が作れないので、基準はこれで作る。
+ *
+ * <p>⚠️ **半解像度で呼ぶこと。** 全解像度 × 全フレームを画素ごとにソートすると重い。
+ */
+export function temporalMedian(
+  frames: readonly Float32Array[],
+  width: number,
+  height: number,
+): Float32Array {
+  const n = frames.length;
+  const size = width * height;
+  const out = new Float32Array(size);
+  if (!n) return out;
+  const buf = new Float64Array(n);
+  const half = n >> 1;
+  for (let i = 0; i < size; i++) {
+    for (let t = 0; t < n; t++) buf[t] = frames[t][i];
+    const sorted = Float64Array.from(buf).sort();
+    out[i] = n % 2 ? sorted[half] : (sorted[half - 1] + sorted[half]) / 2;
+  }
+  return out;
+}
+
+/** フレームごとの「造影で変わった画素の割合」。 */
+export function contrastFractions(
+  frames: readonly Float32Array[],
+  reference: Float32Array,
+  width: number,
+  height: number,
+  logarithmic: boolean,
+  sigma = 4,
+): number[] {
+  return frames.map((f) => contrastMask(reference, f, width, height, logarithmic, sigma).fraction);
+}
+
+/** マスクにできるのは何か。 */
+export type MaskSourceKind = "preContrast" | "washout" | "none";
+
+export interface MaskSourceEvidence {
+  /** 先頭の水準（造影量の割合）。 */
+  leadingLevel: number;
+  /** ピークの水準と、その位置。 */
+  peakLevel: number;
+  peakFrame: number;
+  /** 末尾の水準。 */
+  trailingLevel: number;
+  /** 判定に使った閾値（割合そのもの）。 */
+  threshold: number;
+}
+
+export interface MaskSourceResult {
+  kind: MaskSourceKind;
+  /** マスクに使える層のフレーム番号（`kind === "none"` なら空）。 */
+  frames: number[];
+  /** 🔑 **なぜそう判断したか。** 画面に出して、外したときに追えるようにする。 */
+  evidence: MaskSourceEvidence;
+}
+
+export interface ClassifyOptions {
+  /** 先頭・末尾の水準を測る枚数の割合（既定 0.1・最低 3 枚）。 */
+  edgeFraction?: number;
+  /**
+   * 「造影前がある」と呼ぶ、先頭とピークの比（既定 0.3）。
+   *
+   * <p>実測（CASE01 `00000003`）で先頭 0.56% ／ ピーク 5.64% ＝ **0.099**。
+   * 最初から造影が入っているランではこの比が 1 に近づく。0.3 は両者の間に十分な余裕がある。
+   */
+  preContrastRatio?: number;
+  /** 「washout した」と呼ぶ、末尾とピークの比（既定 0.4。実測 0.243）。 */
+  washoutRatio?: number;
+  /** 層として認める最小の枚数（既定 8）。 */
+  minFrames?: number;
+  /**
+   * 境界を動かすのに要る**連続した**フレーム数（既定 3）。
+   *
+   * <p>🚨 **単発の跳ねで境界を動かさない。** 実測（CASE01 `00000003`）で先頭 f0 だけが
+   * 1.89%（閾値 1.69%）と跳ねており、「フレーム 0 から連続で閾値以下」という条件は
+   * **1 枚目で切れて**造影前を 0 枚と判定した。先頭の水準（0.56% ＝ ピークの 10%）は
+   * 明らかに造影前なのに、層の取り方が脆かった。
+   * `xaContrastOnset.contrastStartFromFractions` が同じ教訓で持っている作法に揃える。
+   */
+  sustainFrames?: number;
+}
+
+/**
+ * **造影前があるのか、造影後しか無いのかを判別する**（§6.19）。
+ *
+ * <h3>🚨 `preContrast.length < 8` で判断してはいけない</h3>
+ * あれは推論であって判別ではない。`xaContrastOnset.detectOnsetFromSignal` は
+ * 「**ランが造影前から始まる**」前提で作られた検出器なので、最初から造影が入っているランでは
+ * **出力そのものが当てにならない**（それらしい値を返してしまう）。
+ * 「造影前が 8 枚未満だった」は「造影前が無い」の証拠にならない。
+ *
+ * <h3>判別はフレーム番号ではなく時系列の形で決める</h3>
+ * <pre>
+ *   先頭が低く、そのあと上がる          → preContrast（先頭側を使う）
+ *   先頭から既に高いが、ピークの後ろで下げ止まる → washout（末尾側を使う）
+ *   どちらも無い                        → none（降りる。無理に当てない）
+ * </pre>
+ *
+ * <p>🚨 **「割合が低い」だけで層を決めない。** 造影前の立ち上がりも低いので、
+ * `washout` には**ピークより後ろ**という条件が要る。だから判別と層の抽出を同じ関数に置く。
+ *
+ * <p>🔴 **混ぜない。** 造影前と washout 層では**残っている血管の量が違う**（実測で
+ * 最小 0.42% に対し末尾 1.2〜2.0%）。混ぜるとマスクごとに残存量が変わり、一貫しない。
+ */
+export function classifyMaskSource(
+  fractions: readonly number[],
+  opts: ClassifyOptions = {},
+): MaskSourceResult {
+  const n = fractions.length;
+  const edge = Math.max(3, Math.floor(n * (opts.edgeFraction ?? 0.1)));
+  const preRatio = opts.preContrastRatio ?? 0.3;
+  const washRatio = opts.washoutRatio ?? 0.4;
+  const minFrames = Math.max(1, Math.floor(opts.minFrames ?? 8));
+  const sustain = Math.max(1, Math.floor(opts.sustainFrames ?? 3));
+
+  let peakFrame = 0;
+  for (let i = 1; i < n; i++) if (fractions[i] > fractions[peakFrame]) peakFrame = i;
+  const peakLevel = n ? fractions[peakFrame] : 0;
+  const leadingLevel = n ? medianOf(fractions.slice(0, Math.min(edge, n))) : 0;
+  const trailingLevel = n ? medianOf(fractions.slice(Math.max(0, n - edge))) : 0;
+
+  const none = (threshold: number): MaskSourceResult => ({
+    kind: "none",
+    frames: [],
+    evidence: { leadingLevel, peakLevel, peakFrame, trailingLevel, threshold },
+  });
+
+  // 造影がそもそも見つからないランでは、同位相マスクを考える意味が無い。
+  if (!(peakLevel > 0) || n < minFrames) return none(0);
+
+  // ── 造影前があるか ────────────────────────────────────────────
+  if (leadingLevel <= preRatio * peakLevel) {
+    const threshold = preRatio * peakLevel;
+    // 🚨 **持続して超えた所を境界にする**（単発の跳ねでは動かさない）。
+    let end = n;
+    for (let i = 0; i + sustain <= n; i++) {
+      let all = true;
+      for (let k = 0; k < sustain && all; k++) if (fractions[i + k] <= threshold) all = false;
+      if (all) { end = i; break; }
+    }
+    const frames: number[] = [];
+    for (let i = 0; i < end; i++) frames.push(i);
+    if (frames.length >= minFrames) {
+      return { kind: "preContrast", frames, evidence: { leadingLevel, peakLevel, peakFrame, trailingLevel, threshold } };
+    }
+  }
+
+  // ── 無ければ washout した層を探す ─────────────────────────────
+  if (trailingLevel <= washRatio * peakLevel) {
+    const threshold = washRatio * peakLevel;
+    // 🔴 **ピークより後ろだけ。** 前から遡ると造影前の立ち上がりを拾ってしまう。
+    // 🚨 こちらも単発の跳ねで切らない（末尾から遡って、持続して超えた所で止める）。
+    let start = peakFrame + 1;
+    for (let i = n - 1; i - sustain + 1 > peakFrame; i--) {
+      let all = true;
+      for (let k = 0; k < sustain && all; k++) if (fractions[i - k] <= threshold) all = false;
+      if (all) { start = i + 1; break; }
+    }
+    const frames: number[] = [];
+    for (let i = start; i < n; i++) frames.push(i);
+    if (frames.length >= minFrames) {
+      return { kind: "washout", frames, evidence: { leadingLevel, peakLevel, peakFrame, trailingLevel, threshold } };
+    }
+  }
+
+  return none(Math.min(preRatio, washRatio) * peakLevel);
+}

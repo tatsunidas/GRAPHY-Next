@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  classifyMaskSource,
   contrastBounds,
   contrastMask,
   matchByBackground,
   packGradients,
+  temporalMedian,
   znccMasked,
   type PhaseMatchFrames,
 } from "./xaPhaseMatch";
@@ -248,5 +250,150 @@ describe("packGradients — 勾配成分 2ch に詰める", () => {
     const gx = (x: number, y: number) => p.data[y * w + x];
     expect(gx(4, 6)).toBeGreaterThan(0);
     expect(gx(12, 6)).toBeLessThan(0);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* §6.19 — 造影前があるのか、造影後しか無いのかを判別する               */
+/*                                                                      */
+/* 🚨 preContrast.length < 8 で判断してはいけない。あれは推論であって   */
+/*    判別ではない——detectOnsetFromSignal は「ランが造影前から始まる」  */
+/*    前提の検出器なので、最初から造影が入っていると出力が当てにならない。*/
+/* ------------------------------------------------------------------ */
+
+describe("classifyMaskSource — マスク源の判別", () => {
+  /** 低→高→低（造影前あり）。実測 CASE01 00000003 の形。 */
+  const withPre = (): number[] => [
+    ...Array(20).fill(0.006), // 造影前（実測 0.4〜1.9%）
+    0.012, 0.020, 0.030,      // 立ち上がり
+    ...Array(20).fill(0.056), // ピーク（実測 5.6%）
+    0.030, 0.020,             // 洗い出し
+    ...Array(10).fill(0.014), // 末尾（実測 1.2〜2.0%）
+  ];
+  /** 高→低（最初から造影が入っている）。 */
+  const onlyPost = (): number[] => [
+    ...Array(24).fill(0.056), // 最初からピーク
+    0.030, 0.020,
+    ...Array(14).fill(0.012), // washout
+  ];
+
+  it("🔴 ★ 低→高→低なら preContrast で、**先頭側**を選ぶ", () => {
+    const r = classifyMaskSource(withPre());
+    expect(r.kind).toBe("preContrast");
+    expect(r.frames[0]).toBe(0);
+    expect(r.frames.length).toBeGreaterThanOrEqual(20);
+    // 末尾は選ばない（造影前があるなら混ぜない）。
+    expect(Math.max(...r.frames)).toBeLessThan(23);
+  });
+
+  it("🔴 ★ 高→低なら washout で、**末尾側**を選ぶ", () => {
+    const f = onlyPost();
+    const r = classifyMaskSource(f);
+    expect(r.kind).toBe("washout");
+    expect(Math.max(...r.frames)).toBe(f.length - 1);
+    expect(r.frames.length).toBeGreaterThanOrEqual(8);
+    // 🚨 **ピークより前を選ばない。** 立ち上がりと取り違えない。
+    expect(Math.min(...r.frames)).toBeGreaterThan(r.evidence.peakFrame);
+  });
+
+  it("🔴 ★ 立ち上がりの低い区間を washout と取り違えない", () => {
+    // 造影前がある形を washout として解釈すると、先頭が選ばれてしまう。
+    const r = classifyMaskSource(withPre());
+    expect(r.kind).not.toBe("washout");
+  });
+
+  it("★ ずっと造影が入ったままなら none で降りる（無理に当てない）", () => {
+    const flat = Array(40).fill(0.05);
+    const r = classifyMaskSource(flat);
+    expect(r.kind).toBe("none");
+    expect(r.frames).toEqual([]);
+  });
+
+  it("★ 造影がそもそも無ければ none", () => {
+    expect(classifyMaskSource(Array(40).fill(0)).kind).toBe("none");
+  });
+
+  it("★ 層が短すぎれば採らない", () => {
+    // washout が 3 枚しか無い。
+    const f = [...Array(30).fill(0.05), ...Array(3).fill(0.01)];
+    expect(classifyMaskSource(f, { minFrames: 8 }).kind).toBe("none");
+  });
+
+  it("🔴 ★ 境界: 先頭がピークの何割までを『造影前あり』と呼ぶか", () => {
+    // 実測（CASE01 00000003）は 先頭 0.56% / ピーク 5.64% = 0.099。既定の閾値 0.3 に対し十分低い。
+    const peak = 0.056;
+    const at = (ratio: number) =>
+      classifyMaskSource([...Array(20).fill(peak * ratio), ...Array(20).fill(peak),
+                          ...Array(10).fill(peak * 0.25)]).kind;
+    expect(at(0.099)).toBe("preContrast"); // 実測の値
+    expect(at(0.25)).toBe("preContrast");  // 閾値の内側
+    expect(at(0.5)).toBe("washout");       // 閾値の外側 → 造影前とは呼ばない
+    expect(at(0.9)).toBe("washout");       // ほぼ最初から造影
+  });
+
+  it("🚨 ★ 先頭 1 枚の跳ねで造影前を見失わない（実測で踏んだ）", () => {
+    // CASE01 00000003 の実測: 先頭の水準は 0.56%（ピークの 10%）で明らかに造影前なのに、
+    // **f0 だけが 1.89%** と跳ねていた。閾値は 0.3 × 5.64% = 1.69% なので、
+    // 「フレーム 0 から連続で閾値以下」という条件は **1 枚目で切れて** 造影前 0 枚と誤判定した。
+    const f = withPre();
+    f[0] = 0.019; // 閾値 0.0168 をわずかに超える跳ね
+    const r = classifyMaskSource(f);
+    expect(r.kind).toBe("preContrast");
+    expect(r.frames.length).toBeGreaterThanOrEqual(15);
+  });
+
+  it("🚨 ★ washout 層も単発の跳ねで切らない", () => {
+    const f = onlyPost();
+    f[f.length - 4] = 0.05; // 末尾近くに 1 枚だけ跳ね
+    const r = classifyMaskSource(f);
+    expect(r.kind).toBe("washout");
+    expect(r.frames.length).toBeGreaterThanOrEqual(8);
+  });
+
+  it("★ ただし持続して上がっていれば境界は動く（跳ねと本物を取り違えない）", () => {
+    const f = withPre();
+    // 5 枚続けて閾値を超えたら、そこが境界。
+    for (let i = 8; i < 13; i++) f[i] = 0.05;
+    const r = classifyMaskSource(f);
+    expect(r.kind).toBe("preContrast");
+    expect(r.frames.length).toBe(8);
+  });
+
+  it("🔴 ★ evidence が時系列と合っている（画面に出す値なので嘘をつかせない）", () => {
+    const f = withPre();
+    const r = classifyMaskSource(f);
+    expect(r.evidence.peakLevel).toBeCloseTo(0.056, 6);
+    expect(f[r.evidence.peakFrame]).toBeCloseTo(r.evidence.peakLevel, 6);
+    expect(r.evidence.leadingLevel).toBeCloseTo(0.006, 6);
+    expect(r.evidence.trailingLevel).toBeCloseTo(0.014, 6);
+  });
+});
+
+describe("temporalMedian — 血管の無い背景の近似", () => {
+  it("🔴 ★ 一部のフレームにしか無い暗部は中央値で消える", () => {
+    const w = 4;
+    const h = 3;
+    const bg = () => Float32Array.from({ length: w * h }, (_, i) => 1000 + i);
+    const frames: Float32Array[] = [];
+    for (let t = 0; t < 9; t++) {
+      const f = bg();
+      // 血管に相当する暗部を、フレームごとに**別の場所**へ置く（心拍で動く様子）。
+      if (t < 4) f[t] = 200;
+      frames.push(f);
+    }
+    const med = temporalMedian(frames, w, h);
+    // 暗部を置いた画素も、背景の値に戻っていること。
+    for (let i = 0; i < 4; i++) expect(med[i]).toBeCloseTo(1000 + i, 6);
+  });
+
+  it("★ 常に暗い場所は残る（それは背景である）", () => {
+    const w = 3;
+    const h = 2;
+    const frames = Array.from({ length: 5 }, () => {
+      const f = Float32Array.from({ length: w * h }, () => 1000);
+      f[2] = 300;
+      return f;
+    });
+    expect(temporalMedian(frames, w, h)[2]).toBe(300);
   });
 });
