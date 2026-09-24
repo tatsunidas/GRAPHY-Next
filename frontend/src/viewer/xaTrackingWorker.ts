@@ -14,7 +14,14 @@
  */
 import { shiftBilinear } from "./dsa";
 import { buildPhaseMaskPlan, type RunTrack } from "./xaPhaseMask";
-import { contrastBounds, contrastMask, matchByBackground, packGradients } from "./xaPhaseMatch";
+import {
+  contrastBounds,
+  contrastFractions,
+  contrastMask,
+  matchByBackground,
+  packGradients,
+  temporalMedian,
+} from "./xaPhaseMatch";
 import {
   alignOnEdges,
   amplitudeSpan,
@@ -178,6 +185,18 @@ self.onmessage = (ev: MessageEvent<XaTrackingWorkerRequest>) => {
         liveFrameCount: liveTrack.frames.length,
         maskFrameCount: maskTrack.frames.length,
       });
+      return;
+    }
+
+    if (req.type === "contrastProfile") {
+      const frames = unpack(req.frames);
+      const w = req.frames.width;
+      const h = req.frames.height;
+      // 🔑 造影前を 1 枚も必要としない基準（§6.19）。血管は一部のフレームにしか無く
+      //    しかも動くので、時間中央値は血管を外して背景に寄る。
+      const reference = temporalMedian(frames, w, h);
+      const fractions = contrastFractions(frames, reference, w, h, req.logarithmic, req.sigma ?? 4);
+      post({ type: "contrastProfileDone", requestId: req.requestId, fractions });
       return;
     }
 
