@@ -20,6 +20,33 @@ export interface DsaOptions {
    * false は線形差分（`LOG`。XA の多くはこちら）。
    */
   logarithmic: boolean;
+  /**
+   * マスクを画像中心まわりに回す量 [度]（省略・0 なら平行移動だけ）。
+   *
+   * <p>🔴 **既定は 0 のまま変えない。** 自由度を上げるほど「片方にしか無いもの」を変形で
+   * 埋めにいく（`fw/subtraction-design.md` §2.3 と同じ理由）。回転は明示的に使うときだけ。
+   *
+   * <p>変換の順は **回転 → 平行移動**。`0` のときは {@link shiftBilinear} をそのまま通るので、
+   * 既存の数値は 1 ビットも変わらない。
+   */
+  rotationDeg?: number;
+  /**
+   * 差分の**一様なオフセットを取り除く**（既定 false）。
+   *
+   * <p>🚨 **心臓 XA の先頭は露出の立ち上がりで、フレームごとに明るさが違う。** 実機
+   * （Rubo Run1・中央 ROI の p10）は先頭 8 フレームが **103 → 53** と動き、造影前プラトーは
+   * 55 前後。位相の合ったマスク（プラトー）を当てても、ライブ側がランプなら対数域で最大
+   * **+0.63** の一様オフセットが乗り、表示窓（造影フレームの差分から決めた ±0.15 程度）から
+   * 完全に外れる。利用者には「マスクが効いていないフレーム」に見える。
+   *
+   * <p>取り除き方は**差分画像の中央値を引く**だけ。血管は画面のごく一部しか占めないので
+   * 中央値は造影に動かされない（`contrastSignal()` が全画素平均で失敗したのと同じ理屈の裏返し）。
+   * 収集中の線量変調にもそのまま効く。
+   *
+   * <p>🔴 **既定 false。** 既存 DSA の数値（`dsa.test.ts` / GNBP-XA-2 の実機 17/0）を
+   * 1 つも動かさないため。自動同位相 DSA の計画が入ったときだけ true になる。
+   */
+  levelMatch?: boolean;
 }
 
 /** 対数を取るときのゼロ除け。 */
@@ -97,6 +124,42 @@ export function shiftBilinear(
 }
 
 /**
+ * 剛体ワープ（画像中心まわりの回転 → 平行移動）。範囲外は端の値で埋める（clamp）。
+ *
+ * <p>`rotationDeg = 0` なら {@link shiftBilinear} と同じ結果になる（そちらのほうが速いので、
+ * {@link subtractFrames} は 0 のときこれを呼ばない）。
+ *
+ * <p>順方向の定義は「元画像の点 p が `R(p − c) + c + t` へ写る」。したがって出力 q には
+ * `R⁻¹(q − c − t) + c` の画素が来る。
+ */
+export function warpRigid(
+  src: Float32Array,
+  width: number,
+  height: number,
+  dx: number,
+  dy: number,
+  rotationDeg: number,
+): Float32Array {
+  if (!rotationDeg) return shiftBilinear(src, width, height, dx, dy);
+  const out = new Float32Array(src.length);
+  const cx = (width - 1) / 2;
+  const cy = (height - 1) / 2;
+  const rad = (-rotationDeg * Math.PI) / 180; // 逆回転
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  for (let y = 0; y < height; y++) {
+    const uy = y - dy - cy;
+    for (let x = 0; x < width; x++) {
+      const ux = x - dx - cx;
+      const sx = cos * ux - sin * uy + cx;
+      const sy = sin * ux + cos * uy + cy;
+      out[y * width + x] = sampleBilinearAt(src, width, height, sx, sy);
+    }
+  }
+  return out;
+}
+
+/**
  * サブトラクション本体。`out = mask' − live`（LOG）または
  * `out = log(mask'+ε) − log(live+ε)`（LIN）。mask' は (dx,dy) シフト後のマスク。
  *
@@ -104,6 +167,28 @@ export function shiftBilinear(
  * 「血管が明るい」画像になる。慣行の「白背景に黒い血管」は W/L の反転で作る
  * （値の符号をここでひっくり返さない — 反転は表示の話であって値の話ではない）。
  */
+/**
+ * **引く前にマスクへ当てる変換**（§6.18）。{@link subtractFrames} が使っているものそのもの。
+ *
+ * <h3>🔴 なぜ切り出してあるか</h3>
+ * 診断ダイアログが「いまこのフレームで引かれているマスク」を絵で出す。そこで別の計算を
+ * 書くと、**画面のマスクと実際に引かれたマスクがずれて、診断が嘘をつく**。
+ * 定義はここ 1 箇所しか無い、という状態を保つこと。
+ *
+ * <p>🔴 **回転 0 なら `shiftBilinear` をそのまま通す**（既存の数値を 1 ビットも動かさないため。
+ * `warpRigid` は回転 0 でも同じ結果になるが、経路が変わると丸めが変わりうる）。
+ */
+export function transformMask(
+  mask: Float32Array,
+  width: number,
+  height: number,
+  opts: Pick<DsaOptions, "dx" | "dy" | "rotationDeg">,
+): Float32Array {
+  return opts.rotationDeg
+    ? warpRigid(mask, width, height, opts.dx, opts.dy, opts.rotationDeg)
+    : shiftBilinear(mask, width, height, opts.dx, opts.dy);
+}
+
 export function subtractFrames(
   mask: Float32Array,
   live: Float32Array,
@@ -112,7 +197,7 @@ export function subtractFrames(
   opts: DsaOptions,
 ): Float32Array | null {
   if (mask.length !== live.length || mask.length !== width * height) return null;
-  const m = shiftBilinear(mask, width, height, opts.dx, opts.dy);
+  const m = transformMask(mask, width, height, opts);
   const out = new Float32Array(mask.length);
   if (opts.logarithmic) {
     for (let i = 0; i < out.length; i++) {
@@ -121,7 +206,33 @@ export function subtractFrames(
   } else {
     for (let i = 0; i < out.length; i++) out[i] = m[i] - live[i];
   }
+  if (opts.levelMatch) {
+    const offset = diffLevel(out, m, live);
+    if (offset !== 0) for (let i = 0; i < out.length; i++) out[i] -= offset;
+  }
   return out;
+}
+
+/** {@link diffLevel} が見る画素の間引き。512² を 4 画素おきで 16k サンプル。 */
+const LEVEL_MATCH_STRIDE = 4;
+
+/**
+ * 差分画像の**一様なオフセット**（中央値）。{@link DsaOptions#levelMatch} が使う。
+ *
+ * <p>🚨 **ちょうど 0 の画素は外す。** XA はコリメータの外が 0 で埋まっており（実データで
+ * 画面の 20%）、対数域ではそこが `log(LOG_EPS)` という極端な値になる。外さないと中央値が
+ * そちらへ引っ張られ、**合わせたつもりでずらす**ことになる。
+ */
+function diffLevel(diff: Float32Array, mask: Float32Array, live: Float32Array): number {
+  const sample: number[] = [];
+  for (let i = 0; i < diff.length; i += LEVEL_MATCH_STRIDE) {
+    if (mask[i] === 0 || live[i] === 0) continue;
+    sample.push(diff[i]);
+  }
+  if (!sample.length) return 0;
+  sample.sort((a, b) => a - b);
+  const h = sample.length >> 1;
+  return sample.length % 2 ? sample[h] : (sample[h - 1] + sample[h]) / 2;
 }
 
 /**
@@ -304,10 +415,24 @@ export function shiftResidual(
   if (n === 0) return 0;
   const vals = new Float32Array(n);
   let k = 0;
+  // 回転があるときも同じ逆写像を使う（{@link warpRigid} と同じ式）。無ければ平行移動だけ。
+  const cx = (width - 1) / 2;
+  const cy = (height - 1) / 2;
+  const rad = opts.rotationDeg ? (-opts.rotationDeg * Math.PI) / 180 : 0;
+  const cos = rad ? Math.cos(rad) : 1;
+  const sin = rad ? Math.sin(rad) : 0;
   for (let y = 0; y < height; y += st) {
     for (let x = 0; x < width; x += st) {
       // マスクを (dx,dy) ずらした位置＝出力 (x,y) には入力 (x-dx, y-dy) が来る。
-      const m = sampleBilinearAt(mask, width, height, x - opts.dx, y - opts.dy);
+      let sx = x - opts.dx;
+      let sy = y - opts.dy;
+      if (rad) {
+        const ux = sx - cx;
+        const uy = sy - cy;
+        sx = cos * ux - sin * uy + cx;
+        sy = sin * ux + cos * uy + cy;
+      }
+      const m = sampleBilinearAt(mask, width, height, sx, sy);
       const l = live[y * width + x];
       vals[k++] = opts.logarithmic
         ? Math.log(Math.max(m, 0) + LOG_EPS) - Math.log(Math.max(l, 0) + LOG_EPS)
