@@ -82,6 +82,8 @@ export type {
   VesselAnalysisResult,
 } from "./pluginVesselApi";
 export type { PluginSeriesPanelHandle, PluginSeriesPanelOptions } from "./pluginSeriesPanelApi";
+export type { AiGenerationOptions, AiGenerationOutcome } from "./pluginAiApi";
+export type { PluginSaveFileOptions } from "./pluginFileApi";
 
 export type {
   ViewerDerivedSeriesRequest,
@@ -106,6 +108,10 @@ export type {
  * **プラグイン由来であることの表示が必須**（区切り線 ＋ 印。`fw/subtraction-design.md` §15.8）。
  * host の中身は `viewer2d.menu` と完全に同一で、違うのは出る場所だけである。
  */
+import type { AiGenerationOptions, AiGenerationOutcome } from "./pluginAiApi";
+import type { PluginSaveFileOptions } from "./pluginFileApi";
+import type { SaveFileResult } from "../desktopBridge";
+
 export type PluginSurface =
   | "viewer2d.menu"
   | "viewer2d.menu.analysis"
@@ -132,6 +138,14 @@ export interface PluginManifest {
     entrypoint: string;
     permissions?: string[];
   };
+  /**
+   * 要求権限（`plugin.json` の `permissions`）。JAR の有無に関わらず常に入る。
+   *
+   * <p>大半は宣言のみだが、**`ai-egress` は実行時に強制される**
+   * （`pluginAiApi.ts`。患者画像を外部へ出す操作なので、宣言していないプラグインには
+   * ホスト API を渡さない）。
+   */
+  permissions?: string[];
 }
 
 interface PluginHostBase {
@@ -150,6 +164,31 @@ interface PluginHostBase {
   notify: (message: string) => void;
   /** backend 面の実行: POST /api/plugins/{id}/run。 */
   runBackend: (payload?: unknown) => Promise<unknown>;
+  /**
+   * 外部 AI への画像送信（H40）。実装は `pluginAiApi.tsx`。
+   *
+   * <p>⚠ **患者の画素を第三者クラウドへ出す API である。** 呼ぶには
+   * `plugin.json` の `permissions` に `"ai-egress"` の宣言が要り（未宣言なら
+   * `permission-denied` で弾かれる）、送信のたびに**送る画像とプロンプト全文を見せた
+   * 同意ダイアログ**が本体側で出る。同意はセッション内・同一 `scopeKey` にしか効かない。
+   *
+   * <p>例外は投げない。`{ok:false, error}` で返る。`error:"canceled"` は
+   * ユーザーが送信を取り消しただけなので、**エラーとして表示しないこと**。
+   *
+   * <p>デスクトップ専用（web モードは `desktop-only`）。
+   */
+  ai: {
+    generate: (req: Omit<AiGenerationOptions, "manifest">) => Promise<AiGenerationOutcome>;
+  };
+  /**
+   * 名前を付けて保存（H41）。実装は `pluginFileApi.ts`。
+   *
+   * <p>OS の保存ダイアログを出すので、**同名ファイルの上書き確認は OS が行う**。
+   * `{ok:false, canceled:true}` は取り消しであって失敗ではない。
+   */
+  file: {
+    saveAs: (opts: PluginSaveFileOptions) => Promise<SaveFileResult>;
+  };
 }
 
 /** 2D Viewer 系プラグイン（viewer2d.menu / viewer2d.toolbar）に渡すコンテキスト。 */
@@ -818,6 +857,18 @@ export interface MainScreenPluginHost extends PluginHostBase {
 }
 
 export type PluginHost = Viewer2DPluginHost | MainScreenPluginHost;
+
+/** ユニオンの各枝に Omit を配る（`Omit<A|B, K>` は共通項しか残らないため）。 */
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+
+/**
+ * 各画面の `makeHost` が組み立てる部分。**`ai` / `file` は含まない。**
+ *
+ * <p>この 2 つはマニフェスト（＝権限宣言）と結び付いていなければ意味を成さないので、
+ * `launchPlugin` が一箇所で注入する。呼び出し側に作らせると、マニフェストの渡し忘れが
+ * そのまま権限チェックの素通りになる。
+ */
+export type PluginHostSeed = DistributiveOmit<PluginHost, "ai" | "file">;
 
 /**
  * プラグイン UI バンドル（ES モジュール）が公開する契約。

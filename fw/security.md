@@ -160,3 +160,42 @@ Study Instance UID 63 文字 × **131 件** ≒ **8,383 バイト**で破綻。
 | `GET /api/anonymizer/masks?seriesUids=` | ✅ 分割済み（**シリーズはスタディより数が多く、より早く踏む**） |
 
 **新しく足すときは `chunkForQuery()` を通すこと。** 単体テストは `frontend/src/urlChunk.test.ts`。
+
+## 外部 AI への送信（AI egress ゲートウェイ）— v0.3.0
+
+設計の全体は `fw/art-of-imaging-design.md`。ここにはセキュリティ上の判断だけ残す。
+
+### CSP を広げていない
+
+`generativelanguage.googleapis.com` を `connect-src` に足す、という選択はしなかった。
+足せばレンダラ上のあらゆるコード（プラグインを含む）がその宛先へ自由に到達できるようになり、
+**同意も監査も通らない送信経路が常時開く**。代わりに Electron main を通す
+（既存の `graphy:check-update` が api.github.com に対して同じ形を取っている）。
+
+結果として CSP は**従来のまま**——外部ホストは 1 つも増えていない。
+
+### API キーは backend の設定に置かない
+
+設定は H2 の平文行になり、`GET /api/settings` が全件を丸ごと返す。
+そこへ鍵を置けばレンダラ・プラグイン・DB バックアップ・ログの全経路から平文で読める。
+`safeStorage`（DPAPI / Keychain / libsecret）に預け、**復号値を返す IPC は作らない**。
+暗号化が使えない環境では**平文保存に落ちず**、保存を断ってセッション内保持に留める。
+
+詳細と allowlist は `desktop/secretStore.js`。
+
+### `ai-egress` は実際に強制される最初の権限
+
+`plugin.json` の `permissions` はこれまで宣言のみで、インストール時の一覧表示にしか
+使われていなかった。患者画素が第三者クラウドへ出る操作は宣言だけでは足りないので、
+`frontend/src/plugins/pluginAiApi.tsx` が実行時に弾く。
+
+そのために `PluginManifest` へトップレベルの `permissions` を足した。従来は
+`Backend.permissions` にしか載らず、JAR を持たない UI 完結プラグインでは値が
+フロントへ届かなかった（外部送信を要求するのはまさにその形のプラグインである）。
+
+### 送信のたびに実物を見せる
+
+`AiEgressConsentDialog` は**これから送る画像そのもの**と**プロンプト全文**を出す。
+件数や要約では同意の対象にならない。抑止は「セッション内・同一シリーズ」までで、
+全面的な無効化は用意しない。監査ログには宛先・バイト数・指示の長さを残し、
+**画像そのものは残さない**（ログに患者画素を溜めない）。

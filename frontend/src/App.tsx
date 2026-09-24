@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { fetchStatus, fetchStudies, fetchSeries, type AppStatus, type Study, type Series } from "./api";
 import { parseIidLaunch } from "./iid";
 import { SettingsDialog } from "./settings/SettingsDialog";
+import { AiEgressConsentHost } from "./plugins/pluginAiApi";
 import { DbAdminDialog } from "./dbadmin/DbAdminDialog";
 import { KeyboardHelp } from "./shortcuts/KeyboardHelp";
 import { useGlobalShortcuts } from "./shortcuts/useGlobalShortcuts";
@@ -212,6 +213,8 @@ export function App() {
         />
       )}
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      {/* 外部 AI 送信の同意ダイアログ。2D ビューアは別ウィンドウ＝別ルートなので両方に要る。 */}
+      <AiEgressConsentHost />
       {/* DB 管理。編集成功で同一ウィンドウの一覧を再読込（dbVersion）＋他ウィンドウへ通知（dbEvents）。 */}
       <DbAdminDialog
         open={dbOpen}

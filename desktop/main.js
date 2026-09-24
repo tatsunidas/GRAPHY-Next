@@ -27,6 +27,8 @@ const PROGRESS_PREFIX = "__GRAPHY_PROGRESS__";
 const cfg = require("./config.json");
 const { createWindowStateKeeper } = require("./windowState");
 const messages = require("./startupMessages");
+const secretStore = require("./secretStore");
+const aiGateway = require("./aiGateway");
 
 const PORT = process.env.GRAPHY_BACKEND_PORT || String(cfg.backend.port);
 const PROFILE = process.env.GRAPHY_BACKEND_PROFILE || cfg.backend.profile;
@@ -806,6 +808,47 @@ ipcMain.on("graphy:refocus", (e) => {
   setTimeout(apply, 60); // GTK ダイアログのクローズ完了後に再適用
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 秘密情報（API キー）— fw/art-of-imaging-design.md §2
+//
+// 意図的に「取り出す」IPC を持たない。平文が main プロセスの外へ出る経路を作らないため、
+// レンダラが知れるのは statusOf が返す「入っているか否か」だけである。
+// ─────────────────────────────────────────────────────────────────────────────
+ipcMain.handle("graphy:secret-set", (_e, payload) => {
+  const key = payload && payload.key;
+  const value = payload && payload.value;
+  return secretStore.setSecret(String(key || ""), String(value == null ? "" : value));
+});
+
+ipcMain.handle("graphy:secret-status", (_e, key) => secretStore.statusOf(String(key || "")));
+
+ipcMain.handle("graphy:secret-clear", (_e, key) => secretStore.clearSecret(String(key || "")));
+
+// AI 中継。CSP によりレンダラからは外部 API を叩けないため main が肩代わりする。
+// 解釈は一切せず、Gemini の生 JSON をそのまま返す（解析はプラグイン側の TS で試験する）。
+ipcMain.handle("graphy:ai-generate", async (_e, req) => aiGateway.generate(req || {}));
+
+// 名前を付けて保存。OS ネイティブのダイアログを使うので、**同名ファイルの上書き確認は
+// OS が標準で出す**（アプリ側で自前実装しない）。保存したパスを返す。取り消しなら null。
+ipcMain.handle("graphy:save-file", async (e, payload) => {
+  const defaultName = (payload && payload.defaultName) || "untitled";
+  const filters = (payload && Array.isArray(payload.filters) && payload.filters) || [{ name: "PNG", extensions: ["png"] }];
+  const bytes = payload && payload.bytes;
+  if (!bytes || typeof bytes.byteLength !== "number" || bytes.byteLength === 0) {
+    return { ok: false, error: "empty" };
+  }
+  const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
+  const result = await dialog.showSaveDialog(win, { title: "名前を付けて保存", defaultPath: defaultName, filters });
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+  try {
+    fs.writeFileSync(result.filePath, Buffer.from(bytes));
+    return { ok: true, filePath: result.filePath };
+  } catch (err) {
+    console.error("[save] 書き込みに失敗:", err.message);
+    return { ok: false, error: String(err.message) };
+  }
+});
+
 // 起動を続けても意味が無い（backend が動かない）失敗。スプラッシュは一瞬で閉じてしまうので、
 // これらだけは OS のダイアログでも出して、原因が読める状態で残す。
 const FATAL_CODES = new Set([
@@ -841,6 +884,8 @@ function reportStartupFailure(e) {
 }
 
 app.whenReady().then(async () => {
+  // 秘密情報の置き場は backend の CWD（H2・DICOM 保管庫と同じ場所）に揃える。
+  secretStore.init(resolveDataDir());
   createSplash();
   try {
     startBackend();

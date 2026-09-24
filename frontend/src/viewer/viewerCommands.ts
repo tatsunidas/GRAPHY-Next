@@ -11,6 +11,7 @@
  * referenceLines/sliceSync と同じモジュールレベル・レジストリ方式。
  */
 import type { PluginAnalysisInput } from "../report/analysisResults";
+import type { VisibleRegion } from "./visibleRegion";
 import type {
   AngioPresentationRequest,
   LutData,
@@ -80,6 +81,17 @@ export interface ViewerViewState {
   zoom: number;
   /** 既定（画像が中央）からのオフセット（world mm）。 */
   pan: [number, number];
+  /**
+   * **画面に見えている画像上の範囲**（画像画素座標, 0 origin）。算出できなければ null。
+   *
+   * <p>`rotation` / `zoom` / `pan` / `flipH` / `flipV` / Fit 倍率が**すべてここに畳み込まれている**。
+   * プラグインが同じものを再計算しようとすると、world 座標の原点（IPP）や Fit の規約を
+   * 本体の外で復元することになり、**幾何を持たない XA で破綻する**（`roiRead.ts` の注記）。
+   * そこで本体が出して渡す。
+   *
+   * <p>画像の外側（Fit のときの黒帯）は**切り落としてある**ので、無操作なら画像の外形と一致する。
+   */
+  visibleRegion: VisibleRegion | null;
 }
 
 /** `getPixelData` の任意指定。 */

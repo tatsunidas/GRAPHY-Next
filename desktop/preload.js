@@ -42,4 +42,13 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   relaunch: () => ipcRenderer.invoke("graphy:relaunch"),
   // ネイティブダイアログ後にレンダラのキーボードフォーカスを復帰させる。
   refocus: () => ipcRenderer.send("graphy:refocus"),
+  // API キー等の秘密情報。**取り出す口は無い**（平文を main の外へ出さないため）。
+  // 分かるのは「入っているか」「OS のキーチェーンが使えるか」だけ。
+  secretSet: (key, value) => ipcRenderer.invoke("graphy:secret-set", { key, value }),
+  secretStatus: (key) => ipcRenderer.invoke("graphy:secret-status", key),
+  secretClear: (key) => ipcRenderer.invoke("graphy:secret-clear", key),
+  // Gemini への中継（CSP でレンダラからは外部 API に届かないため main が肩代わりする）。
+  aiGenerate: (req) => ipcRenderer.invoke("graphy:ai-generate", req),
+  // 名前を付けて保存。上書き確認は OS のダイアログが出す。
+  saveFile: (payload) => ipcRenderer.invoke("graphy:save-file", payload),
 });

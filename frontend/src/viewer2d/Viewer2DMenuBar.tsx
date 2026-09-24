@@ -10,7 +10,7 @@ import { useWlPresets } from "./wlPresetStore";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { changeRoiStatsDisplay, useRoiStatsDisplay } from "../viewer/roiStatsDisplay";
 import { usePluginMenu, runPluginBackend } from "../plugins/pluginRegistry";
-import type { PluginManifest, Viewer2DPluginHost, Viewer2DSurface } from "../plugins/pluginTypes";
+import type { PluginHostSeed, PluginManifest, Viewer2DSurface } from "../plugins/pluginTypes";
 import {
   getVesselModel,
   listVesselModels,
@@ -91,7 +91,9 @@ export function Viewer2DMenuBar({
   const statsDisplay = useRoiStatsDisplay();
   // host の中身はサーフェスに依らず同一。違うのは「どのメニューに出るか」だけなので、
   // 組み立てを 1 本にして surface だけ差し替える（2 本に分けると片方だけ H## を足す事故になる）。
-  const makeViewerHost = (surface: Viewer2DSurface) => (m: PluginManifest): Viewer2DPluginHost => ({
+  // `ai` / `file` はここでは作らない。マニフェストと結び付けて launchPlugin が注入する
+  // （PluginHostSeed の注記を参照）。
+  const makeViewerHost = (surface: Viewer2DSurface) => (m: PluginManifest): PluginHostSeed => ({
     surface,
     pluginId: m.id,
     t,
