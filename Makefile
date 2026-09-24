@@ -68,16 +68,24 @@ ffmpeg:
 
 # --- QR(C-FIND/C-MOVE/C-GET) 用 dcm4che CLI ツールを desktop/resources/dcm4che へ配置（リリース同梱用） ---
 # Java 製ツールのため OS/アーキ別配布は不要（全 OS 共通の 1 セット）。
+# ただし同梱する OpenCV ネイティブ（匿名化の焼き込みが圧縮画素を伸長するのに使う）だけは
+# このホスト向けの 1 つを置く。詳細は scripts/fetch-dcm4che-tools.sh の冒頭。
 dcm4che-tools:
 	bash scripts/fetch-dcm4che-tools.sh
 
-# build から呼ぶ冪等ガード: 既に取得済み（bin/movescu がある）ならスキップ、無ければ取得。
+# build から呼ぶ冪等ガード: 既に取得済みならスキップ、無ければ取得。
 # CI で事前ステージすれば再ダウンロードしない。DCM4CHE_TOOLS_VERSION で版を固定可。
+#
+# 🔴 bin/movescu だけでは足りない。OpenCV ネイティブを置くようにしたのは 2026-09-24 で、
+#    それ以前に取得したディレクトリ（開発機・CI キャッシュ）には入っていない。
+#    ツールの有無だけで判定すると、**QR は動くのに圧縮画像の焼き込みだけ使えない配布物**が
+#    黙って出来上がる。ネイティブの有無も条件に入れる。
 dcm4che-tools-ensure:
-	@if [ -x desktop/resources/dcm4che/bin/movescu ]; then \
+	@if [ -x desktop/resources/dcm4che/bin/movescu ] \
+		&& ls desktop/resources/dcm4che/lib/*/*opencv_java* >/dev/null 2>&1; then \
 		echo "[bundle] dcm4che tools: 取得済み（スキップ）"; \
 	else \
-		echo "[bundle] dcm4che tools: 未取得 → 取得します"; \
+		echo "[bundle] dcm4che tools: 未取得 or OpenCV ネイティブ無し → 取得します"; \
 		bash scripts/fetch-dcm4che-tools.sh; \
 	fi
 

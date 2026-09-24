@@ -13,13 +13,17 @@
 # 起動している同梱 JRE を Dcm4cheTools が JAVA_HOME として渡すため、追加同梱不要。
 #
 # ⚠ 例外が 1 つある: **OpenCV ネイティブ（lib/<os-arch>/）だけは OS/アーキ別**。
-#   匿名化の焼き込みが圧縮画素を伸長するのに使う（backend の PixelCodec）。取得元 zip に
-#   全プラットフォーム分が入っているので、ここでは全部そのまま置いて「1 つの配置を全 OS で
-#   共有する」方針を崩さない。1 プラットフォーム 25MB 前後。
+#   匿名化の焼き込みが圧縮画素を伸長するのに使う（backend の PixelCodec）。取得元 zip には
+#   全プラットフォーム分（7 種・計 113MB）が入っているが、**このホストの 1 つだけ**を置く
+#   ——extraResources が resources/dcm4che を丸ごと同梱するため、全部置くとどの OS の
+#   インストーラも +113MB になる。クロスビルド時は DCM4CHE_ALL_NATIVES=1。
 #
 # 使い方:
 #   scripts/fetch-dcm4che-tools.sh
 #   DCM4CHE_TOOLS_VERSION=5.34.3 scripts/fetch-dcm4che-tools.sh   # 取得バージョンを固定
+#   DCM4CHE_ALL_NATIVES=1 scripts/fetch-dcm4che-tools.sh           # 全プラットフォームの
+#                                                                  # OpenCV ネイティブを置く
+#                                                                  # （クロスビルド用・+113MB）
 #
 # 取得元: dcm4che の SourceForge 配布（GitHub Releases にはバイナリ添付が無いため）。
 #   https://sourceforge.net/projects/dcm4che/files/dcm4che3/
@@ -88,28 +92,51 @@ done
 # （2026-09-24 に利用者が踏んだ。今は残るくらいなら backend が書き出す前に中止する）。
 # 読み込むのは backend の PixelCodec で、探索は Dcm4cheHome の規則に従う。
 #
-# 🔴 **全 OS 分をそのまま置く。** 取得元 zip に最初から入っているので追加ダウンロードは要らず、
-#    OS ごとにこのスクリプトを走らせ分ける必要も無くなる（1 つの配置を全 OS で共有する、という
-#    このスクリプト全体の方針と揃える）。electron-builder は各 OS のぶんだけ同梱すればよいが、
-#    現状の extraResources は dcm4che ごと配るので、ここでは選り分けない。
+# 🔴 **このホストの 1 プラットフォーム分だけ置く。** 取得元 zip には 7 プラットフォーム分
+#    （+113MB）が入っているが、desktop/package.json の extraResources は
+#    `resources/dcm4che` を**丸ごと**同梱するので、全部置くと Windows の .exe に macOS の
+#    .dylib が乗るような形で**どの OS のインストーラも +113MB になる**（実測）。
+#    リリースは OS ごとの runner で組む（.github/workflows/release.yml の matrix）ので、
+#    ffmpeg と同じく「このOS/アーキ向けのみ」で足りる。
+#
+# ⚠ 他プラットフォーム向けにクロスビルドするときは DCM4CHE_ALL_NATIVES=1 を付けて全部置く。
+HOST_OS="$(uname -s)"
+HOST_ARCH="$(uname -m)"
+case "$HOST_OS" in
+  Linux)  n_os=linux;;
+  Darwin) n_os=macosx;;
+  *)      n_os=windows;;   # MINGW64_NT / MSYS_NT（GitHub Actions の windows runner は bash）
+esac
+case "$HOST_ARCH" in
+  x86_64|amd64)  n_arch=x86-64;;
+  aarch64|arm64) n_arch=aarch64;;
+  i?86)          n_arch=x86;;
+  *)             n_arch=x86-64;;
+esac
+HOST_NATIVE="$n_os-$n_arch"
+
 NATIVE_FOUND=0
 for d in "$SRC"/lib/*/; do
-  arch="$(basename "$d")"
-  case "$arch" in
-    linux-*|windows-*|macosx-*)
-      if ls "$d" 2>/dev/null | grep -qiE 'opencv_java'; then
-        mkdir -p "$OUT_DIR/lib/$arch"
-        cp "$d"/* "$OUT_DIR/lib/$arch/"
-        NATIVE_FOUND=$((NATIVE_FOUND + 1))
-      fi
-      ;;
+  plat="$(basename "$d")"
+  case "$plat" in
+    linux-*|windows-*|macosx-*) ;;
+    *) continue;;
   esac
+  if [ "${DCM4CHE_ALL_NATIVES:-0}" != "1" ] && [ "$plat" != "$HOST_NATIVE" ]; then
+    continue
+  fi
+  if ls "$d" 2>/dev/null | grep -qiE 'opencv_java'; then
+    mkdir -p "$OUT_DIR/lib/$plat"
+    cp "$d"/* "$OUT_DIR/lib/$plat/"
+    NATIVE_FOUND=$((NATIVE_FOUND + 1))
+  fi
 done
 if [ "$NATIVE_FOUND" -eq 0 ]; then
-  echo "警告: OpenCV ネイティブ（lib/<os-arch>/opencv_java）が配布物に見つかりません。" >&2
+  echo "警告: このホスト（$HOST_NATIVE）向けの OpenCV ネイティブが配布物に見つかりません。" >&2
   echo "      圧縮画像の焼き込み除去が使えません（backend が実行前に中止します）。" >&2
+  echo "      配布物の構成が変わったか、対応していないプラットフォームです。" >&2
 else
-  echo "OpenCV ネイティブ: $NATIVE_FOUND プラットフォーム分を配置しました。"
+  echo "OpenCV ネイティブ: $NATIVE_FOUND プラットフォーム分を配置しました（host=$HOST_NATIVE）。"
 fi
 
 for t in "${TOOLS[@]}"; do
