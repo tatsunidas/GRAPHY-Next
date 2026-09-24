@@ -95,15 +95,15 @@ update_to_latest() {
   before="$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
   after="$(git -C "$REPO_ROOT" rev-parse --short origin/main)"
   if [ "$before" = "$after" ]; then
-    log "  update: 既に最新（$before）"
+    log "  update: 既に最新（${before}）"
     return
   fi
 
   if ! git -C "$REPO_ROOT" merge --ff-only origin/main >> "$LOG_FILE" 2>&1; then
-    log "  WARN: ff-only merge に失敗（$before → $after）。現行イメージのまま"
+    log "  WARN: ff-only merge に失敗（$before → ${after}）。現行イメージのまま"
     return
   fi
-  log "  update: $before → $after、イメージを再ビルドする"
+  log "  update: $before → ${after}、イメージを再ビルドする"
 
   # ビルド失敗時は直前のイメージがそのまま残る（タグは付け替えられない）ので、
   # 壊れた版が公開されることはない。次の晩に再挑戦される。

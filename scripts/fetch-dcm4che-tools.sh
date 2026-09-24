@@ -70,10 +70,10 @@ if [ "${1:-}" = "--check" ]; then
   ls "$OUT_DIR/lib/$HOST_NATIVE"/*opencv_java* >/dev/null 2>&1 \
     || missing="$missing OpenCVネイティブ(lib/$HOST_NATIVE)"
   if [ -n "$missing" ]; then
-    echo "dcm4che 同梱物が不足:$missing（host=$HOST_NATIVE）" >&2
+    echo "dcm4che 同梱物が不足:${missing}（host=${HOST_NATIVE}）" >&2
     exit 1
   fi
-  echo "dcm4che 同梱物: 揃っています（host=$HOST_NATIVE）"
+  echo "dcm4che 同梱物: 揃っています（host=${HOST_NATIVE}）"
   exit 0
 fi
 
@@ -148,11 +148,11 @@ for d in "$SRC"/lib/*/; do
   fi
 done
 if [ "$NATIVE_FOUND" -eq 0 ]; then
-  echo "警告: このホスト（$HOST_NATIVE）向けの OpenCV ネイティブが配布物に見つかりません。" >&2
+  echo "警告: このホスト（${HOST_NATIVE}）向けの OpenCV ネイティブが配布物に見つかりません。" >&2
   echo "      圧縮画像の焼き込み除去が使えません（backend が実行前に中止します）。" >&2
   echo "      配布物の構成が変わったか、対応していないプラットフォームです。" >&2
 else
-  echo "OpenCV ネイティブ: $NATIVE_FOUND プラットフォーム分を配置しました（host=$HOST_NATIVE）。"
+  echo "OpenCV ネイティブ: $NATIVE_FOUND プラットフォーム分を配置しました（host=${HOST_NATIVE}）。"
 fi
 
 for t in "${TOOLS[@]}"; do

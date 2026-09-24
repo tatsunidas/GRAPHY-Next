@@ -41,6 +41,18 @@ jobs:
             -Dmaven.wagon.http.connectionTimeout=30000 \
             -Dmaven.wagon.http.readTimeout=60000
 
+  shell-scripts:
+    name: Shell scripts (変数展開)
+    runs-on: ubuntu-latest
+    # 🔴 macOS の bash 3.2 は `$VAR` の直後のマルチバイト文字を変数名に食う。
+    #    手元（Linux / bash 5）では再現せず、**リリースの macOS ジョブで初めて落ちる**
+    #    （2026-09-25 に v0.3.0 が実際に止まった）。日本語のメッセージを書く限り繰り返すので、
+    #    タグを切る前に気付けるよう CI で見る。
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check
+        run: python3 scripts/check-shell-vars.py
+
   desktop:
     name: Desktop (window geometry)
     runs-on: ubuntu-latest

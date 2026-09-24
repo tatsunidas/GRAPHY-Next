@@ -37,7 +37,7 @@ cat >&2 <<EOF
   machine-id 照合  : $([ "$current_hash" = "$expected_hash" ] && echo 一致 || echo 不一致/取得不可)
 
 deploy/demo/ 配下の設定変更・docker compose操作・cron編集・Cloudflare設定変更は、
-公開デモを実際にホストしている物理サーバー機（$expected_hostname）の上で行ってください。
+公開デモを実際にホストしている物理サーバー機（${expected_hostname}）の上で行ってください。
 別マシン（開発用Linux機・Windows等）での操作は、意図しない設定ズレや、
 本番と異なる環境への誤デプロイの原因になります。
 
