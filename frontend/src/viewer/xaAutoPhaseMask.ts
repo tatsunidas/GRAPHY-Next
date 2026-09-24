@@ -392,6 +392,25 @@ function halveFrame(src: Float32Array, width: number, height: number, out: Float
   }
 }
 
+/** {@link tryWashoutMask} への入力。 */
+interface WashoutArgs {
+  frameIds: readonly string[];
+  n: number;
+  width: number;
+  height: number;
+  logarithmic: boolean;
+  /** 粗い造影前区間（空でもよい）。 */
+  roughPre: readonly number[];
+  /** 粗い造影到達（決まらなければ null）。 */
+  onset: number | null;
+  diag: AutoPhaseDiagnostics;
+  params: AutoPhaseParams;
+  cancelled: () => boolean;
+  /** washout でなかったときに返す理由（門ごとに違う）。 */
+  fallbackReason: AutoPhaseFailure;
+}
+
+
 /**
  * 自動同位相マスクの計画を作る。**失敗は必ず理由つきで返す**（例外にしない）。
  *
@@ -432,65 +451,17 @@ export async function buildAutoPhaseMaskPlan(params: AutoPhaseParams): Promise<A
   if (!width) return fail("readFailed");
 
   const onsetResult = detectOnsetFromSignal(signal, frameStartTimesMs);
-  if (onsetResult.onset == null) return fail("noOnset");
-  const onset = onsetResult.onset;
+  const onset = onsetResult.onset ?? 0;
   diag.stableFrom = onsetResult.stableFrom;
   const roughPre = onsetResult.preContrast;
-  if (roughPre.length < MIN_PRE_CONTRAST) {
-    // ═══ §6.19 — 造影前が足りない。判別してから washout 層へ落ちる ═══
-    //
-    // 🚨 **ここで「造影前が無い」と決めつけない。** `detectOnsetFromSignal` は
-    //    「ランが造影前から始まる」前提の検出器なので、最初から造影が入っているランでは
-    //    出力そのものが当てにならない。**造影量の時系列を測り直して判別する。**
-    // 🔴 絞り込めていないので `selfPlan` は渡さない（粗い onset は実測で 9 フレーム遅い）。
-    params.onPreContrast?.({ preContrast: [...roughPre], contrastStart: onset, selfPlan: null });
-    const shortCommon = { onset, preContrast: roughPre, preContrastCount: roughPre.length };
 
-    params.onProgress?.({ step: "background" });
-    const read = await readHalfFrames(frameIds, width, height, cancelled, params.onProgress);
-    if (!read) return fail("readFailed", shortCommon);
 
-    let profile: XaTrackingWorkerResponse;
-    try {
-      profile = await ask({
-        type: "contrastProfile",
-        frames: { values: read.half, frameCount: n, width: read.bw, height: read.bh },
-        logarithmic,
-      });
-    } catch {
-      return fail("preContrastTooShort", shortCommon);
-    }
-    if (profile.type !== "contrastProfileDone") return fail("preContrastTooShort", shortCommon);
-
-    const source = classifyMaskSource(profile.fractions, { minFrames: MIN_PRE_CONTRAST });
-    diag.contrastFraction = profile.fractions;
-    diag.maskSource = source;
-
-    // 🔴 **判別が `preContrast` を指したのに、ここへ来た。** 検出器と判別が食い違って
-    //    いるので、無理に進めず正直に降りる（どちらが正しいかは診断の数値で追える）。
-    if (source.kind !== "washout") {
-      return fail(source.kind === "none" ? "noMaskFrames" : "preContrastTooShort", {
-        ...shortCommon, diagnostics: diag,
-      });
-    }
-
-    // 🔴 **washout 層は自己差分に使えない。** 血管が残っているので「誤差ちょうど 0」に
-    //    ならない。自己差分の計画は空（`selfUntil = 0`）。
-    const emptySelf: (DsaFramePlanEntry | null)[] = Array.from({ length: n }, () => null);
-    const maskSet = new Set(source.frames);
-    const live: number[] = [];
-    for (let t = 0; t < n; t++) if (!maskSet.has(t)) live.push(t);
-
-    return runBackgroundMatch({
-      frameIds, n, width, height, logarithmic, half: read.half,
-      maskFrames: [...source.frames],
-      liveFrames: live,
-      selfPlan: emptySelf,
-      selfUntil: 0,
-      diag,
-      common: { ...shortCommon, contrastStart: source.frames[0] },
-      cancelled,
-      ...(params.onProgress ? { onProgress: params.onProgress } : {}),
+  // ═══ §6.19 — 造影前が当てにならない。判別して washout 層を試す ═══
+  if (onsetResult.onset == null || roughPre.length < MIN_PRE_CONTRAST) {
+    return tryWashoutMask({
+      frameIds, n, width, height, logarithmic,
+      roughPre, onset: onsetResult.onset, diag, params, cancelled,
+      fallbackReason: onsetResult.onset == null ? "noOnset" : "preContrastTooShort",
     });
   }
 
@@ -871,6 +842,75 @@ async function runBackgroundMatch(a: BackgroundMatchArgs): Promise<AutoPhaseResu
     //    「片方にしか無いもの（血管）を変形で埋めにいっている」疑いが立つ（§6.17）。
     alignRotationDeg: bgRotations.length ? bgRotations[bgRotations.length >> 1] : 0,
   };
+}
+
+/**
+ * **造影前が使えないランで、washout 層をマスクにできるか試す**（§6.19）。
+ *
+ * <h3>🚨 2 つの門から呼ぶ</h3>
+ * 実機（CASE01 `00000001`）は **`noOnset`** で落ちていた——造影が最初から入っているので
+ * `detectOnsetFromSignal` が onset を返せず、`preContrastTooShort` より**手前**で降りる。
+ * どちらの門も「造影前が当てにならない」という同じ事実を別の言い方で言っているだけなので、
+ * **両方からここへ入る**。
+ */
+async function tryWashoutMask(a: WashoutArgs): Promise<AutoPhaseResult> {
+  const { fallbackReason } = a;
+    // ═══ §6.19 — 造影前が足りない。判別してから washout 層へ落ちる ═══
+  //
+  // 🚨 **ここで「造影前が無い」と決めつけない。** `detectOnsetFromSignal` は
+  //    「ランが造影前から始まる」前提の検出器なので、最初から造影が入っているランでは
+  //    出力そのものが当てにならない。**造影量の時系列を測り直して判別する。**
+  const { frameIds, n, width, height, logarithmic, roughPre, onset, diag, params, cancelled } = a;
+  // 🔴 絞り込めていないので `selfPlan` は渡さない（粗い onset は実測で 9 フレーム遅い）。
+  params.onPreContrast?.({ preContrast: [...roughPre], contrastStart: onset ?? 0, selfPlan: null });
+  const shortCommon = { ...(onset != null ? { onset } : {}), preContrast: [...roughPre], preContrastCount: roughPre.length };
+  const failShort = (reason: AutoPhaseFailure, extra: Partial<AutoPhaseResult> = {}): AutoPhaseResult =>
+    ({ ok: false, reason, totalFrames: n, diagnostics: diag, ...shortCommon, ...extra });
+
+  params.onProgress?.({ step: "background" });
+  const read = await readHalfFrames(frameIds, width, height, cancelled, params.onProgress);
+  if (!read) return failShort("readFailed");
+
+  let profile: XaTrackingWorkerResponse;
+  try {
+    profile = await ask({
+      type: "contrastProfile",
+      frames: { values: read.half, frameCount: n, width: read.bw, height: read.bh },
+      logarithmic,
+    });
+  } catch {
+    return failShort(fallbackReason);
+  }
+  if (profile.type !== "contrastProfileDone") return failShort(fallbackReason);
+
+  const source = classifyMaskSource(profile.fractions, { minFrames: MIN_PRE_CONTRAST });
+  diag.contrastFraction = profile.fractions;
+  diag.maskSource = source;
+
+  // 🔴 **判別が `preContrast` を指したのに、ここへ来た。** 検出器と判別が食い違って
+  //    いるので、無理に進めず正直に降りる（どちらが正しいかは診断の数値で追える）。
+  if (source.kind !== "washout") {
+    return failShort(source.kind === "none" ? "noMaskFrames" : fallbackReason);
+  }
+
+  // 🔴 **washout 層は自己差分に使えない。** 血管が残っているので「誤差ちょうど 0」に
+  //    ならない。自己差分の計画は空（`selfUntil = 0`）。
+  const emptySelf: (DsaFramePlanEntry | null)[] = Array.from({ length: n }, () => null);
+  const maskSet = new Set(source.frames);
+  const live: number[] = [];
+  for (let t = 0; t < n; t++) if (!maskSet.has(t)) live.push(t);
+
+  return runBackgroundMatch({
+    frameIds, n, width, height, logarithmic, half: read.half,
+    maskFrames: [...source.frames],
+    liveFrames: live,
+    selfPlan: emptySelf,
+    selfUntil: 0,
+    diag,
+    common: { ...shortCommon, contrastStart: source.frames[0] },
+    cancelled,
+    ...(params.onProgress ? { onProgress: params.onProgress } : {}),
+  });
 }
 
   if (chosen.fraction < VERIFY_MIN_RELIABLE) {
