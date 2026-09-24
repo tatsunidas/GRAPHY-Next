@@ -138,6 +138,9 @@ GRAPHY-Next/
 - [ ] Plugin システム
 - [ ] DIMSE (C-FIND/C-MOVE/C-STORE) / TLS / 匿名化
 - [ ] ローカルファイル読み込み / CD・DVD 書き込み
+- [ ] **複数の AI 提供元へのルーティング**（Gemini / OpenAI / Claude / DeepSeek 等を本体の設定で
+      切り替え、プラグインと本体機能の双方から同じ入口で使う）。**未着手**・設計と論点は
+      [security.md](security.md) の「FutureWork — 複数の AI 提供元へのルーティング」
 
 **完了条件**: 旧 GRAPHY の全機能が Web 版で利用可能（省略・後回しなし）。
 
