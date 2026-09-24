@@ -183,6 +183,15 @@ function startBackend() {
   // 進捗行は step で訳すので影響が無かったが、失敗時に backend の最終行を「直接的な原因」として
   // そのまま画面へ出すようになったため、ここで揃える必要がある。
   jvmArgs.push("-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8");
+  // 匿名化の焼き込みで圧縮画素（JPEG 等）を伸長するために要る。dcm4che の OpenCV コーデックは
+  // javax.imageio.stream / java.io の private フィールドへリフレクションで触るため。
+  // 🔴 **java.base/java.io を忘れると例外では済まず JVM が SIGSEGV で落ちる**（実測）。
+  //    片方だけ渡すくらいなら両方渡さないほうが安全なので、必ず 2 つ 1 組で扱うこと。
+  //    backend 側は PixelCodec が Module.isOpen で有無を確かめ、無ければ伸長を行わない。
+  jvmArgs.push(
+    "--add-opens", "java.base/java.io=ALL-UNNAMED",
+    "--add-opens", "java.desktop/javax.imageio.stream=ALL-UNNAMED",
+  );
   // データ(DB/DICOM/plugins)は CWD 相対で作られるため、CWD を固定する（パッケージ版は userData）。
   const dataDir = resolveDataDir();
   console.log(`[backend] starting: ${jar} (java=${javaCmd}, profile=${PROFILE}, port=${PORT}, maxHeapMb=${maxHeapMb || "default"}, dataDir=${dataDir})`);

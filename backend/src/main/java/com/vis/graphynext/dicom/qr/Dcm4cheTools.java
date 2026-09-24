@@ -4,14 +4,13 @@
  */
 package com.vis.graphynext.dicom.qr;
 
+import com.vis.graphynext.dicom.Dcm4cheHome;
 import com.vis.graphynext.dicom.DicomProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.system.ApplicationHome;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
-import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -23,7 +22,7 @@ import java.util.concurrent.TimeUnit;
  * dcm4che の CLI ツール（getscu / movescu / findscu / storescu）をプロセス起動するヘルパ。
  *
  * <p>standalone の C-GET/C-MOVE は自前で DIMSE クライアントを実装せず、実績ある dcm4che
- * ツールを起動して解決する。ツールの場所の解決順は {@link #candidateDirs()} を参照
+ * ツールを起動して解決する。ツールの場所の解決順は {@link Dcm4cheHome#candidateDirs(String)} を参照
  * （明示設定 → 同梱ディレクトリ → {@code ~/dcm4che-*} 自動検出）。配置規約・取得は
  * {@code scripts/fetch-dcm4che-tools.sh} を参照。
  *
@@ -62,55 +61,9 @@ public class Dcm4cheTools {
         return Optional.empty();
     }
 
-    /**
-     * 解決順: 明示設定（{@code graphy.dicom.dcm4che-home}）→ 同梱ディレクトリ探索
-     * （jar 隣接の {@code dcm4che/}・{@code ../dcm4che/}（Electron では {@code resources/dcm4che}）／
-     * カレントの {@code dcm4che}・{@code resources/dcm4che}・{@code desktop/resources/dcm4che}）→
-     * {@code ~/dcm4che-*} 自動検出（開発機向け）。
-     */
+    /** @see Dcm4cheHome#candidateDirs(String) （探索規則の正本。ここでは持たない） */
     private List<Path> candidateDirs() {
-        List<Path> bases = new ArrayList<>();
-        String home = props.getDcm4cheHome();
-        if (home != null && !home.isBlank()) {
-            bases.add(Path.of(home));
-        }
-        Path jarDir = jarDir();
-        if (jarDir != null) {
-            bases.add(jarDir.resolve("dcm4che"));
-            Path parent = jarDir.getParent();
-            if (parent != null) {
-                bases.add(parent.resolve("dcm4che")); // Electron: resources/backend → resources/dcm4che
-            }
-        }
-        Path cwd = Path.of("").toAbsolutePath();
-        bases.add(cwd.resolve("dcm4che"));
-        bases.add(cwd.resolve("resources").resolve("dcm4che"));               // desktop/ から起動
-        bases.add(cwd.resolve("desktop").resolve("resources").resolve("dcm4che")); // repo ルートから起動
-        // ~/dcm4che-* を自動検出（開発機の手動インストール向けフォールバック）
-        Path userHome = Path.of(System.getProperty("user.home"));
-        try (DirectoryStream<Path> s = Files.newDirectoryStream(userHome, "dcm4che-*")) {
-            for (Path d : s) {
-                bases.add(d);
-            }
-        } catch (IOException ignore) {
-            // 検出不可
-        }
-        return bases;
-    }
-
-    /**
-     * jar（このバックエンド jar）を含むディレクトリ。Spring Boot の実行可能 jar は
-     * {@code BOOT-INF/} 配下を {@code nested:} スキームの仮想 FS として読むため、
-     * {@code getProtectionDomain().getCodeSource()} から素朴に {@link Path#of} すると
-     * その仮想 FS 内のパスになってしまい、実ファイルシステム上の同梱ディレクトリと一致しない。
-     * {@link ApplicationHome} はこのケースを正しく解決する Spring Boot 提供のユーティリティ。
-     */
-    private static Path jarDir() {
-        try {
-            return new ApplicationHome(Dcm4cheTools.class).getDir().toPath();
-        } catch (Exception e) {
-            return null;
-        }
+        return Dcm4cheHome.candidateDirs(props.getDcm4cheHome());
     }
 
     public boolean isAvailable(String name) {

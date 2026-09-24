@@ -31,10 +31,15 @@ class AnonymizePreflightTest {
 
     @SuppressWarnings("unchecked")
     private static AnonymizeService serviceWith(DicomInstanceRepository repo) {
+        return serviceWith(repo, new AnonymizeMaskStore());
+    }
+
+    @SuppressWarnings("unchecked")
+    private static AnonymizeService serviceWith(DicomInstanceRepository repo, AnonymizeMaskStore masks) {
         ObjectProvider<com.vis.graphynext.dicom.web.WebDicomDataService> web =
                 Mockito.mock(ObjectProvider.class);
         Mockito.when(web.getIfAvailable()).thenReturn(null); // standalone
-        return new AnonymizeService(repo, new AnonymizeMaskStore(), web);
+        return new AnonymizeService(repo, masks, web, new PixelCodec(new com.vis.graphynext.dicom.DicomProperties()));
     }
 
     private static DicomInstance instance(String sop, String uri) {

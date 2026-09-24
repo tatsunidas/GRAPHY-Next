@@ -12,6 +12,11 @@
 # 配布は不要——1 つの zip を全 OS で共有する。バイナリ実行に必要な JVM は、backend を
 # 起動している同梱 JRE を Dcm4cheTools が JAVA_HOME として渡すため、追加同梱不要。
 #
+# ⚠ 例外が 1 つある: **OpenCV ネイティブ（lib/<os-arch>/）だけは OS/アーキ別**。
+#   匿名化の焼き込みが圧縮画素を伸長するのに使う（backend の PixelCodec）。取得元 zip に
+#   全プラットフォーム分が入っているので、ここでは全部そのまま置いて「1 つの配置を全 OS で
+#   共有する」方針を崩さない。1 プラットフォーム 25MB 前後。
+#
 # 使い方:
 #   scripts/fetch-dcm4che-tools.sh
 #   DCM4CHE_TOOLS_VERSION=5.34.3 scripts/fetch-dcm4che-tools.sh   # 取得バージョンを固定
@@ -77,6 +82,35 @@ done
 for t in "${TOOLS[@]}"; do
   cp "$SRC/lib/dcm4che-tool-$t-${VERSION}.jar" "$OUT_DIR/lib/"
 done
+
+# OpenCV ネイティブ（lib/<os-arch>/）。**匿名化の焼き込みが圧縮画素を伸長するのに要る。**
+# XA は JPEG 圧縮が標準なので、これが無いと「マスクを登録したのに焼き込み文字が残る」出力になる
+# （2026-09-24 に利用者が踏んだ。今は残るくらいなら backend が書き出す前に中止する）。
+# 読み込むのは backend の PixelCodec で、探索は Dcm4cheHome の規則に従う。
+#
+# 🔴 **全 OS 分をそのまま置く。** 取得元 zip に最初から入っているので追加ダウンロードは要らず、
+#    OS ごとにこのスクリプトを走らせ分ける必要も無くなる（1 つの配置を全 OS で共有する、という
+#    このスクリプト全体の方針と揃える）。electron-builder は各 OS のぶんだけ同梱すればよいが、
+#    現状の extraResources は dcm4che ごと配るので、ここでは選り分けない。
+NATIVE_FOUND=0
+for d in "$SRC"/lib/*/; do
+  arch="$(basename "$d")"
+  case "$arch" in
+    linux-*|windows-*|macosx-*)
+      if ls "$d" 2>/dev/null | grep -qiE 'opencv_java'; then
+        mkdir -p "$OUT_DIR/lib/$arch"
+        cp "$d"/* "$OUT_DIR/lib/$arch/"
+        NATIVE_FOUND=$((NATIVE_FOUND + 1))
+      fi
+      ;;
+  esac
+done
+if [ "$NATIVE_FOUND" -eq 0 ]; then
+  echo "警告: OpenCV ネイティブ（lib/<os-arch>/opencv_java）が配布物に見つかりません。" >&2
+  echo "      圧縮画像の焼き込み除去が使えません（backend が実行前に中止します）。" >&2
+else
+  echo "OpenCV ネイティブ: $NATIVE_FOUND プラットフォーム分を配置しました。"
+fi
 
 for t in "${TOOLS[@]}"; do
   if [ ! -f "$OUT_DIR/bin/$t" ]; then

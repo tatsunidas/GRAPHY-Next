@@ -3,7 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { describe, expect, it } from "vitest";
-import { maskPolygonFrom } from "./anonMaskExport";
+import { maskPolygonFrom, withFrameScope } from "./anonMaskExport";
 import type { PointPx } from "./roiRead";
 
 const IMG = "wadouri:http://x/api/instances/1.2.840.113/file";
@@ -80,16 +80,37 @@ describe("焼き込みマスクの中身", () => {
     expect(p.sopInstanceUids).toEqual(["1.2.840.113"]);
   });
 
-  it("XA のようにフレームがある参照ではフレーム番号も持つ（0 origin）", () => {
-    // XA の 1 ラン数十〜数百フレームは全部同じ SOP なので、SOP だけでは足りない。
+  it("🔴 既定では、描いたフレームだけでなくインスタンス全体に効く", () => {
+    // 焼き込み文字は全フレームの同じ位置に出るので、1 枚だけ塗ると残りに個人情報が残る。
+    // 2026-09-24 の実測では 63 フレーム中 1 枚しか塗られていないのに「除去済み」と
+    // 申告されていた。既定を全フレームにしたのはその再発防止。
     const p = polygonOf(maskPolygonFrom("RectangleROI", SQUARE, true, XA_FRAME_3));
     expect(p.sopInstanceUids).toEqual(["1.2.840.999"]);
+    expect(p.frames).toEqual([]); // 空＝全フレーム（backend の appliesToFrame の規約）
+  });
+
+  it("明示して絞ったときだけ、描いたフレーム番号が入る（0 origin）", () => {
+    const p = polygonOf(maskPolygonFrom("RectangleROI", SQUARE, true, XA_FRAME_3, "drawnFrameOnly"));
     expect(p.frames).toEqual([2]); // URL は 1 origin
   });
 
-  it("フレーム指定の無い参照では frames は空（全フレーム扱い）", () => {
-    const p = polygonOf(maskPolygonFrom("RectangleROI", SQUARE, true, IMG));
+  it("フレーム指定の無い参照では、絞っても frames は空", () => {
+    // 単一フレーム（CT/MR）はそもそもフレーム番号を持たない。ここで [null] のような
+    // 値が入ると backend 側で「どのフレームにも当たらない」マスクになる。
+    const p = polygonOf(maskPolygonFrom("RectangleROI", SQUARE, true, IMG, "drawnFrameOnly"));
     expect(p.frames).toEqual([]);
+  });
+
+  it("withFrameScope は頂点と適用先インスタンスを変えない", () => {
+    // 匿名化ダイアログは作ったあとから範囲だけ切り替える。そのとき多角形そのものが
+    // 変わってしまうと、画面の一覧と実際に塗る場所が食い違う。
+    const p = polygonOf(maskPolygonFrom("RectangleROI", SQUARE, true, XA_FRAME_3));
+    const narrowed = withFrameScope(p, 2, "drawnFrameOnly");
+    expect(narrowed.xs).toEqual(p.xs);
+    expect(narrowed.ys).toEqual(p.ys);
+    expect(narrowed.sopInstanceUids).toEqual(p.sopInstanceUids);
+    expect(narrowed.frames).toEqual([2]);
+    expect(withFrameScope(narrowed, 2, "wholeInstance").frames).toEqual([]);
   });
 
   it("楕円は bbox ではなく多角形に展開される", () => {

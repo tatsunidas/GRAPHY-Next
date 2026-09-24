@@ -99,25 +99,15 @@ class AnonymizeRequestValidationTest {
     // 解釈する。ZIP はストリーミングなので 1 バイト流したらステータスを変えられない。
     // ------------------------------------------------------------------------
 
-    private static AnonymizeController controllerWithMasks(int maskCount) {
-        AnonymizeMaskStore store = new AnonymizeMaskStore();
-        for (int i = 0; i < maskCount; i++) {
-            store.put(new AnonymizeMaskStore.SeriesMask("1.2.3." + i, List.of(),
-                    List.of(new AnonymizeMaskStore.Rect(0, 0, 8, 8))));
-        }
-        return new AnonymizeController(null, store);
-    }
-
-    private static AnonymizeConfig cleanPixelCfg() {
-        AnonymizeConfig cfg = new AnonymizeConfig();
-        cfg.addOption(AnonymizeConfig.Option.CleanPixelData);
-        return cfg;
+    private static AnonymizeService.BurnPreflight burn(int burnable, int blocked, int unmasked) {
+        return new AnonymizeService.BurnPreflight(burnable, blocked, unmasked,
+                blocked > 0 ? List.of("1.2.3: 圧縮画像を伸長できません") : List.of());
     }
 
     @Test
     void cleanPixelData_withNoRegisteredMask_isRejectedBeforeWriting() {
         ResponseStatusException e = assertThrows(ResponseStatusException.class,
-                () -> controllerWithMasks(0).requireBurnableIfCleanPixelData(cleanPixelCfg(), true));
+                () -> AnonymizeController.checkBurnRequest(true, 0));
         assertEquals(HttpStatus.CONFLICT, e.getStatusCode(),
                 "マスクが無いまま出力すると焼き込み文字が残るので中止する");
     }
@@ -125,19 +115,50 @@ class AnonymizeRequestValidationTest {
     @Test
     void cleanPixelData_withoutBurnInFlag_isRejected() {
         ResponseStatusException e = assertThrows(ResponseStatusException.class,
-                () -> controllerWithMasks(1).requireBurnableIfCleanPixelData(cleanPixelCfg(), false));
+                () -> AnonymizeController.checkBurnRequest(false, 1));
         assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode(), "設定と出力が食い違うものは通さない");
     }
 
     @Test
     void cleanPixelData_withMask_isAccepted() {
-        assertDoesNotThrow(() -> controllerWithMasks(1).requireBurnableIfCleanPixelData(cleanPixelCfg(), true));
+        assertDoesNotThrow(() -> AnonymizeController.checkBurnRequest(true, 1));
+    }
+
+    // ------------------------------------------------------------------------
+    // 🔴 登録件数だけでは足りない —— 「対象に実際に塗れるか」で判定する
+    //
+    // 2026-09-24 の利用者報告: 圧縮 XA（JPEG Baseline）にマスクを登録して出力したところ、
+    // 96 フレーム全部が未マスクのまま渡された。当時の検査は maskStore.size() しか見ておらず、
+    // 「登録されている＝実行できる」と扱っていた。
+    // ------------------------------------------------------------------------
+
+    @Test
+    void burnPreflight_withBlockedInstances_isRejectedBeforeWriting() {
+        ResponseStatusException e = assertThrows(ResponseStatusException.class,
+                () -> AnonymizeController.checkBurnPreflight(burn(3, 2, 0)));
+        assertEquals(HttpStatus.CONFLICT, e.getStatusCode(), "1 件でも塗れないなら書き出さない");
+        assertTrue(e.getReason() != null && e.getReason().contains("伸長できません"),
+                "なぜ塗れないのかを伝える: " + e.getReason());
     }
 
     @Test
-    void withoutCleanPixelData_maskCountDoesNotMatter() {
-        assertDoesNotThrow(() -> controllerWithMasks(0)
-                .requireBurnableIfCleanPixelData(new AnonymizeConfig(), false));
+    void burnPreflight_maskForAnotherSeriesOnly_isRejected() {
+        // マスクは登録されているが、今回の対象シリーズには 1 つも効かない。
+        ResponseStatusException e = assertThrows(ResponseStatusException.class,
+                () -> AnonymizeController.checkBurnPreflight(burn(0, 0, 40)));
+        assertEquals(HttpStatus.CONFLICT, e.getStatusCode());
+    }
+
+    @Test
+    void burnPreflight_allBurnable_isAccepted() {
+        assertDoesNotThrow(() -> AnonymizeController.checkBurnPreflight(burn(96, 0, 0)));
+    }
+
+    @Test
+    void burnPreflight_someSeriesWithoutMask_isStillAccepted() {
+        // マスクの無いシリーズ（焼き込み文字を持たない CT など）があっても止めない。
+        // 申告はされないので DICOM としては正直で、件数は UI が警告として見せる。
+        assertDoesNotThrow(() -> AnonymizeController.checkBurnPreflight(burn(96, 0, 400)));
     }
 
     // ------------------------------------------------------------------------

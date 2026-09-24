@@ -98,6 +98,20 @@
             <artifactId>dcm4che-imageio</artifactId>
             <version>${dcm4che.version}</version>
         </dependency>
+        <!--
+          DICOM の圧縮画素コーデック（JPEG baseline/extended/lossless・JPEG-LS・JPEG2000・RLE）。
+          匿名化の焼き込み（Clean Pixel Data）が圧縮画像を伸長するために要る。XA は JPEG が標準で、
+          これが無いと「焼き込み文字が残ったまま出力される」のに利用者からは分からなかった。
+
+          ⚠ 実体は JNI で、ネイティブ libopencv_java が別に要る（dcm4che の配布物が同梱しており、
+          読み込みは PixelCodec が行う）。ネイティブが無くても**起動は妨げない** —— 圧縮画像の
+          焼き込みだけが使えなくなり、AnonymizeService の事前検査が書き出す前に止める。
+        -->
+        <dependency>
+            <groupId>org.dcm4che</groupId>
+            <artifactId>dcm4che-imageio-opencv</artifactId>
+            <version>${dcm4che.version}</version>
+        </dependency>
         <!-- DICOM JSON (QIDO/WADO-RS metadata の dicom+json 解析) -->
         <dependency>
             <groupId>org.dcm4che</groupId>
@@ -249,6 +263,20 @@
                         </configuration>
                     </execution>
                 </executions>
+            </plugin>
+
+            <!--
+              テスト JVM にも、圧縮画素の伸長に要る add-opens を渡す（desktop/main.js と同じ 2 つ）。
+              渡さないと PixelCodecTest が「ネイティブが使えない環境」として skip してしまい、
+              🔴 一番確かめたい経路（JPEG を実際に伸長する）が黙って通り抜ける。
+              ⚠ java.base/java.io を落とすと OpenCV 呼び出しで JVM が SIGSEGV する。2 つ 1 組で扱う。
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>--add-opens java.base/java.io=ALL-UNNAMED --add-opens java.desktop/javax.imageio.stream=ALL-UNNAMED</argLine>
+                </configuration>
             </plugin>
 
             <plugin>

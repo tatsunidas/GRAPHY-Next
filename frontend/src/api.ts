@@ -1101,14 +1101,21 @@ export interface AnonResult {
   instances: number;
   burnedInstances: number;
   /**
-   * 焼き込みを要求されたのに **塗れなかった** インスタンス数
-   * （マスク未登録のシリーズ・圧縮 TS・画像外の矩形）。
+   * 焼き込みを要求されたのに **1 画素も塗れなかった** インスタンス数
+   * （マスク未登録のシリーズなど）。
    *
    * 🔴 これらは Clean Pixel Data を申告していないので、受け取り側から見ると
    * **焼き込み文字が残ったまま**。0 でなければ利用者に見せる必要がある
    * （burnedInstances が 0 でも、従来はそれが異常だと分からなかった）。
    */
   notBurnedInstances: number;
+  /**
+   * multi-frame で **一部のフレームだけ** 塗ったインスタンス数。
+   *
+   * 🔴 これも申告しない。63 フレーム中 1 枚だけ塗って「除去済み」と宣言していたのが
+   * 2026-09-24 に見つかった不具合で、残り 62 枚には患者名が残っていた。
+   */
+  partiallyBurnedInstances: number;
   /**
    * 日付シフト（Modified Dates）に実際に使った種。randomSeed を指定していれば同じ値。
    *
@@ -1160,7 +1167,7 @@ const EMPTY_ZIP_BYTES = 22;
  */
 export const anonymizeZip = async (
   req: AnonRequest,
-): Promise<{ blob: Blob; filename: string; instances: number; problems: number }> => {
+): Promise<{ blob: Blob; filename: string; instances: number; problems: number; burned: number; unmasked: number }> => {
   const res = await fetch(`${apiBase()}/api/anonymizer/zip`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1183,6 +1190,10 @@ export const anonymizeZip = async (
     filename: m ? m[1] : "anonymized.zip",
     instances: Number(res.headers.get("X-Anonymize-Instances") ?? 0),
     problems: Number(res.headers.get("X-Anonymize-Problems") ?? 0),
+    // ZIP は Result を返せないので、焼き込みの見込みをヘッダで受ける。backend は
+    // 「塗れないものがあれば流す前に 409」まで済ませているので、見込み＝実績になる。
+    burned: Number(res.headers.get("X-Anonymize-Burn") ?? 0),
+    unmasked: Number(res.headers.get("X-Anonymize-Unmasked") ?? 0),
   };
 };
 
