@@ -679,6 +679,24 @@ export function XaDsaDialog({
               </div>
               {/* 🔑 **どちらの経路で位相を決めたか**（§6.16）。造影後に追尾が死ぬランは
                   「背景の突き合わせ」に落ちる——それは失敗ではなく、第 2 の経路である。 */}
+              {/* 🔑 **マスク源の判別結果と根拠**（§6.19）。造影前があるのか、
+                  造影後しか無いのか。外したときに追えるよう、判断した数値ごと出す。 */}
+              {diag?.maskSource && (
+                <div data-testid="xadsa-mask-source">
+                  {t(`xadsa.maskSource.${diag.maskSource.kind}`, {
+                    n: diag.maskSource.frames.length,
+                    from: (diag.maskSource.frames[0] ?? 0) + 1,
+                    to: (diag.maskSource.frames[diag.maskSource.frames.length - 1] ?? 0) + 1,
+                  })}
+                  {" — "}
+                  {t("xadsa.maskSource.evidence", {
+                    lead: (diag.maskSource.evidence.leadingLevel * 100).toFixed(2),
+                    peak: (diag.maskSource.evidence.peakLevel * 100).toFixed(2),
+                    peakAt: diag.maskSource.evidence.peakFrame + 1,
+                    trail: (diag.maskSource.evidence.trailingLevel * 100).toFixed(2),
+                  })}
+                </div>
+              )}
               {autoPhase.method && (
                 <div data-testid="xadsa-method">
                   {t("dsa.autoPhase.background", {

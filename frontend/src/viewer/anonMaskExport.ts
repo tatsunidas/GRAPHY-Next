@@ -33,6 +33,37 @@ import type { AnonMaskPolygon } from "../api";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Any = any;
 
+/**
+ * マスクを multi-frame の何フレームに効かせるか。
+ *
+ * <p>🔴 **既定は `"wholeInstance"`（そのインスタンスの全フレーム）。**
+ * 焼き込まれた患者情報は全フレームの同じ位置に出るので、1 枚に描いた ROI をその 1 枚だけに
+ * 効かせると **残りのフレームに個人情報が残ったまま出力される**。2026-09-24 の実測では
+ * 63 フレーム中 1 枚しか塗られていなかった（しかも「除去済み」と申告されていた）。
+ *
+ * <p>`"drawnFrameOnly"` は、そのフレームにしか出ていないものを狙って消したいときだけ。
+ * 選んだ場合は全フレームが覆われないので **Clean Pixel Data は申告されない**（backend の
+ * `AnonymizeService.BurnOutcome#fullyCleaned` が全フレーム塗れたときだけ true）。
+ */
+export type MaskFrameScope = "wholeInstance" | "drawnFrameOnly";
+
+/**
+ * 適用フレームの決め方（**この規則の 2 つ目を書かない**）。
+ *
+ * <p>マスクを作る経路は 2 つ（ビューアの imageId 経由・保存済み ROI 経由）あり、さらに
+ * 匿名化ダイアログは作った後から範囲を切り替える。3 か所で同じ if を書くと必ずずれるので、
+ * 空配列＝全フレームという backend との約束ごと、ここに閉じ込める。
+ */
+export function withFrameScope(
+  polygon: AnonMaskPolygon,
+  frame: number | null,
+  scope: MaskFrameScope,
+): AnonMaskPolygon {
+  // backend の MaskPolygon#appliesToFrame は「空なら全フレーム」。
+  const frames = scope === "drawnFrameOnly" && frame !== null ? [frame] : [];
+  return { ...polygon, frames };
+}
+
 /** 焼き込みに使えなかった理由。UI で内訳を出すため。 */
 export type MaskSkipReason = "notClosedArea" | "noVertices" | "noReference";
 
@@ -56,12 +87,14 @@ export interface MaskExportResult {
  * Clean Pixel Data を申告する」新しい偽申告になる。
  *
  * @param refImageId 適用先の解決に使う。SOP Instance UID とフレーム番号をここから取る。
+ * @param frameScope multi-frame の適用範囲（既定はインスタンス全体。{@link MaskFrameScope}）
  */
 export function maskPolygonFrom(
   tool: string,
   pointsPx: ReadonlyArray<PointPx>,
   closed: boolean | undefined,
   refImageId: string,
+  frameScope: MaskFrameScope = "wholeInstance",
 ): { polygon: AnonMaskPolygon } | { reason: MaskSkipReason } {
   if (!refImageId) return { reason: "noReference" };
   // 適用先は「この ROI が描かれた 1 枚だけ」が既定（旧 GRAPHY の "Current Slice Only" 相当）。
@@ -69,7 +102,7 @@ export function maskPolygonFrom(
   const sop = sopFromImageId(refImageId) ?? sopUidFromImageId(refImageId);
   // XA の 1 ラン数十〜数百フレームは全部同じ SOP なので、フレーム番号も要る。
   const frame = frameOfImageId(refImageId);
-  return maskPolygonFromResolved(tool, pointsPx, closed, sop, frame);
+  return maskPolygonFromResolved(tool, pointsPx, closed, sop, frame, frameScope);
 }
 
 /**
@@ -84,7 +117,8 @@ export function maskPolygonFrom(
  * 決定が、2 つの経路で食い違わないようにするため。
  *
  * @param sop   適用先の SOP Instance UID。null なら**そのシリーズの全インスタンス**が対象になる
- * @param frame multi-frame のフレーム index（0 origin）。null なら全フレーム
+ * @param frame multi-frame のフレーム index（0 origin）。描かれたフレーム
+ * @param frameScope 適用範囲。既定はインスタンス全体（{@link MaskFrameScope} に理由）
  */
 export function maskPolygonFromResolved(
   tool: string,
@@ -92,6 +126,7 @@ export function maskPolygonFromResolved(
   closed: boolean | undefined,
   sop: string | null,
   frame: number | null,
+  frameScope: MaskFrameScope = "wholeInstance",
 ): { polygon: AnonMaskPolygon } | { reason: MaskSkipReason } {
   if (!pointsPx.length) return { reason: "noVertices" };
   if (pickSampleKind((tool ?? "").trim().toLowerCase(), closed) !== "area") {
@@ -103,12 +138,16 @@ export function maskPolygonFromResolved(
   }
 
   return {
-    polygon: {
-      xs: mesh.pointsPx.map((p) => p[0]),
-      ys: mesh.pointsPx.map((p) => p[1]),
-      sopInstanceUids: sop ? [sop] : [],
-      frames: frame === null ? [] : [frame],
-    },
+    polygon: withFrameScope(
+      {
+        xs: mesh.pointsPx.map((p) => p[0]),
+        ys: mesh.pointsPx.map((p) => p[1]),
+        sopInstanceUids: sop ? [sop] : [],
+        frames: [],
+      },
+      frame,
+      frameScope,
+    ),
   };
 }
 

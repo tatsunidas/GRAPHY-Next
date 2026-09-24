@@ -461,3 +461,97 @@ ROI は `/api/rois?patientKey=` に患者単位で自動保存されている（
 
 ROI マネージャの 🖍 と i18n `roiMgr.burnIn*` は撤去した。
 `anon.burnIn.note` の文言も新しい手順に差し替えてある。
+
+### 🔴 焼き込みが「登録しても効かない」件を直した（2026-09-24・利用者報告）
+
+発端は利用者の報告「**マスク用の ROI を登録しても、画像上の個人情報がマスクされないまま
+出力された。私の操作ミスの可能性もあります**」。**操作ミスではなかった。** 調べたところ
+独立した欠陥が 3 つ出て、うち 1 つは 2026-09-07 に直したのと**同じ種類の偽申告の再発**だった。
+
+**実測（`/api/anonymizer/masks` に登録 → `/copy` → pydicom で 1 フレームずつ画素を数えた）**
+
+| 対象 | 転送構文 | frames | 修正前 | 修正後 |
+|---|---|---|---|---|
+| Rubo DEMO | JPEG Baseline | 96 | `burned=0`・**96/96 が未マスク** | `burned=1`・**96/96 マスク済み** |
+| CASE01 LAD | JPEG Lossless SV1 | 89 | 同上 | **89/89 マスク済み**・113101 申告 |
+| CASE02 LCx | Explicit VR LE | 63 | 63/63 マスク済み | 同左（退行なし） |
+| CASE02 LCx（`frames:[10]`） | Explicit VR LE | 63 | **1/63 なのに `BurnedInAnnotation=NO` ＋ 113101** | 1/63・**申告なし**・`partiallyBurnedInstances=1` |
+
+#### A. 圧縮画像は 1 画素も塗っていなかった
+
+`AnonymizeService.burnInto()` が圧縮 TS を無条件で `return false` していた。
+**XA と US は JPEG 圧縮が標準**（非圧縮の方が例外）なので、焼き込み除去の主な対象で
+機能が成立していなかった。しかも塗れなかったことが `copy` の事後警告にしか出ず、
+**ZIP 経路では一切表示されなかった**（ZIP はストリーミングなので `Result` を返せない）。
+
+→ `PixelCodec` を足し、**マスクがあるインスタンスだけ**伸長してから塗る。
+出力はそのインスタンスのみ非圧縮（Explicit VR LE）になる。
+
+- 🔴 **マスクの無いインスタンスは触らない。** 全件伸長するとファイルが 10〜20 倍に膨らむ
+  （実測 13.6MB → 23.3MB／1 インスタンス）。焼き込みが要らないものを作り替える理由はない。
+- 🔴 **再圧縮はしない。** lossy 再エンコードの劣化を持ち込むくらいなら大きいままでよい。
+  `LossyImageCompression` は触らない（元が lossy だった事実は消えない）。
+- 実体は JNI（OpenCV）。**3 つ揃って初めて動く**ので、1 つでも欠けたら `available()` が
+  false を返し、`burnPreflight` が書き出す前に 409 で止める。
+  1. `dcm4che-imageio-opencv`（`backend/pom.xml`）
+  2. ネイティブ `libopencv_java`（dcm4che 配布物の `lib/<os-arch>/`。
+     `scripts/fetch-dcm4che-tools.sh` が全 OS 分を配置する。1 プラットフォーム約 25MB）
+  3. JVM の `--add-opens` 2 つ（`desktop/main.js` の `jvmArgs`・`backend/pom.xml` の surefire）
+- 🚨 **`--add-opens java.base/java.io` を落とすと、例外では済まず JVM が SIGSEGV で落ちる**
+  （実測。`org.dcm4che3.opencv.StreamSegment` が `RandomAccessFile.path` へリフレクションする）。
+  backend ごと巻き添えになるので、**ネイティブに触る前に純 Java の `Module.isOpen` で判定する**。
+  フラグ無しで起動した backend に実際に投げて、**409 で止まり・プロセスが生きている**ことを確認済み。
+- ⚠ ネイティブの探索は `Dcm4cheHome`（`Dcm4cheTools` から切り出した共通の規則）。
+  **同じ探索規則の 2 つ目を作らない** ——「QR は動くのに伸長だけ効かない」の切り分けは難しい。
+- ⚠ 読み込みは **`IncludeBulkData.URI`**（`YES` ではない）。`Decompressor` は PixelData の
+  フラグメントが `BulkData`（元ファイルへの参照）であることを要求する。`YES` だと
+  `ClassCastException` になるだけで、呼び出し元からは「圧縮は塗れない」と区別がつかない。
+  規約は `PixelCodecTest` が固定している。
+- ⚠ `System.load(絶対パス)` で読む（`-Djava.library.path` を使わない）。**探索規則を Java 側に
+  残すため。** このとき weasis のローダが `System.loadLibrary` に失敗して
+  「Cannot load OpenCV native library」を 1 行出すが、**伸長は正常に動く**（JNI のネイティブ
+  メソッドは、そのクラスを定義したクラスローダが読み込み済みのライブラリから解決される）。
+
+#### B. 一部フレームしか塗っていないのに「除去済み」と申告していた（最も危険）
+
+ROI 由来のマスクは「描いた 1 フレーム」にしか効かないのに、`pixelCleaned` が
+**「1 画素でも塗ったか」**だった。結果、63 フレーム中 1 枚だけ塗って
+`BurnedInAnnotation=NO` ＋ 113101 を宣言し、**残り 62 枚に患者名が残ったまま**になっていた。
+受け取った側はタグを信用して検証しないので、**匿名化しないより危険**。
+
+→ 2 つ同時に直した。
+
+1. **申告は「そのインスタンスの全フレームを塗れたとき」だけ**（`BurnOutcome#fullyCleaned`）。
+   `Result.partiallyBurnedInstances` を足して、一部だけ塗った件数を UI に出す。
+2. **既定を「そのインスタンスの全フレーム」に変えた**（`anonMaskExport.MaskFrameScope`）。
+   焼き込み文字は全フレームの同じ位置に出るので、これが正しい既定。
+   「描いたフレームだけ」はチェックボックスで選べるが、選ぶと全フレームを覆えないため
+   **Clean Pixel Data は申告されない**（1 の規則がそのまま効く）。
+   単一フレーム（CT/MR）は元から frame を持たないので影響なし。
+
+🔴 **この壊れ方は画面でも出力の属性でも気づけない。** タグは「きれい」と言っており、
+画素を 1 フレームずつ見に行って初めて食い違いが分かる。だから
+`AnonymizeBurnScopeTest` が**出力ファイルを開いてフレームごとに数える**形で固定してある
+（旧実装に戻すと実際に落ちることを確認済み）。
+
+#### C. 「登録件数」だけを見て実行可否を判断していた
+
+`requireBurnableIfCleanPixelData` は `maskStore.size()` しか見ておらず、
+「マスクはあるが対象シリーズのものではない」「圧縮で塗れない」を通していた。
+
+→ `AnonymizeService.burnPreflight()` を新設。対象インスタンスを 1 件ずつ見て
+（画素は読まず `IncludeBulkData.NO` ＋ PixelData の手前まで）、**塗れないものが 1 件でもあれば
+409 ＋ 理由**で中止する。ZIP も `copy` も同じ入口を通る。
+
+- 判定は実処理と同じ `geometryOf` / `PixelCodec.isUncompressed` を通す
+  ——「検査は通ったのに塗れなかった」を作らないため。
+- **マスクの無いシリーズがあるだけでは止めない**（焼き込み文字を持たない CT などがあるのは普通）。
+  申告もしないので DICOM としては正直。ただし件数は警告として出す。
+- ZIP は結果 JSON を返せないので、見込み件数を `X-Anonymize-Burn` / `X-Anonymize-Unmasked`
+  ヘッダで返す。**塗れないものは手前で止まっているので、見込み＝実績**になる。
+
+#### 既知の限界
+
+- 焼き込んだインスタンスの**出力は非圧縮になり 10〜20 倍に膨らむ**。
+- ネイティブが無い環境では圧縮画像を匿名化できない。ただし**黙って未マスクで出ることは無い**。
+- マスクは in-memory のまま（backend 再起動で消える）。今回は触っていない。

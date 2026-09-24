@@ -233,12 +233,39 @@ export interface TrackingPhaseMatchResponse {
   contrastFraction: number[];
 }
 
+/**
+ * フレームごとの**造影量**（造影で変わった画素の割合）を返す（§6.19）。
+ *
+ * <p>🔑 基準は**全フレームの画素ごとの時間中央値**。造影前フレームを 1 枚も必要としない
+ * ので、最初から造影が入っているランでも測れる。
+ *
+ * <p>🔴 **判別そのものは main 側の純関数（`classifyMaskSource`）が行う。**
+ * Worker は数字を出すだけにして、判断をテストできる場所に置く。
+ */
+export interface TrackingContrastProfileRequest {
+  type: "contrastProfile";
+  requestId: number;
+  /** **2 倍ダウンサンプルした全画面**の全フレーム。 */
+  frames: PackedFrames;
+  logarithmic: boolean;
+  /** 造影と判定する床の倍数（既定 4）。 */
+  sigma?: number;
+}
+
+export interface TrackingContrastProfileResponse {
+  type: "contrastProfileDone";
+  requestId: number;
+  /** フレームごとの造影画素の割合。 */
+  fractions: number[];
+}
+
 export type XaTrackingWorkerRequest =
   | TrackingSuggestRequest
   | TrackingAnalyzeRequest
   | TrackingMatchRequest
   | TrackingAlignPlanRequest
-  | TrackingPhaseMatchRequest;
+  | TrackingPhaseMatchRequest
+  | TrackingContrastProfileRequest;
 
 /**
  * 途中経過。**要求を解決しない**（`ask` は progress を受けても待ち続ける）。
@@ -265,5 +292,6 @@ export type XaTrackingWorkerResponse =
   | TrackingMatchResponse
   | TrackingAlignPlanResponse
   | TrackingPhaseMatchResponse
+  | TrackingContrastProfileResponse
   | TrackingProgressResponse
   | TrackingErrorResponse;

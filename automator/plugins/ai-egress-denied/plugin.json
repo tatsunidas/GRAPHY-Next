@@ -1,0 +1,12 @@
+{
+  "id": "ai-egress-denied",
+  "name": "AI Egress Denied",
+  "version": "0.1.0",
+  "engines": { "graphy": ">=0.3.0", "os": ["win32", "darwin", "linux"] },
+  "description": "Verifies host.ai.generate() gating (fw/art-of-imaging-design.md #3).",
+  "author": "automator",
+  "license": "MIT",
+  "contributes": ["viewer2d.menu"],
+  "ui": "ui.js",
+  "permissions": ["read-pixels"]
+}

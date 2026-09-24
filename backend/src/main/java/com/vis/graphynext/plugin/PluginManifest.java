@@ -20,7 +20,16 @@ public record PluginManifest(
         String name,
         String version,
         Frontend frontend,
-        Backend backend) {
+        Backend backend,
+        /**
+         * 要求権限。**JAR の有無に関わらず常に載せる。**
+         *
+         * <p>かつては {@code Backend.permissions} にしか載らず、{@code entrypoint} を持たない
+         * UI 完結プラグインでは値がフロントへ届かなかった。外部送信のように実行時に
+         * 強制したい権限（{@code ai-egress}）は UI 完結プラグインこそが要求するため、
+         * それでは強制のしようが無い。フロントの実行時チェックはこの項目を見る。
+         */
+        List<String> permissions) {
 
     /** フロント面（UI バンドル）。UI を持たないプラグインでは null。 */
     @JsonInclude(JsonInclude.Include.NON_NULL)

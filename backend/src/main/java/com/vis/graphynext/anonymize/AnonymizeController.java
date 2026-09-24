@@ -59,6 +59,15 @@ public class AnonymizeController {
     /** 出力見込み件数を伝えるヘッダ（ZIP 本体はストリームなので JSON で結果を返せないため）。 */
     private static final String H_INSTANCES = "X-Anonymize-Instances";
     private static final String H_PROBLEMS = "X-Anonymize-Problems";
+    /**
+     * 焼き込みの見込み件数。
+     *
+     * <p>ZIP は {@code Result} を返せないので「何件塗れたか」を事後に伝える手段が無い。
+     * {@link #requireBurnableIfCleanPixelData} が「塗れないものがあれば中止」まで済ませているので、
+     * <b>ここで返す見込み件数がそのまま実績になる</b>。マスクの無い対象が何件残るかも併せて出す。
+     */
+    private static final String H_BURN = "X-Anonymize-Burn";
+    private static final String H_UNMASKED = "X-Anonymize-Unmasked";
 
     @PostMapping("/zip")
     public ResponseEntity<StreamingResponseBody> zip(@RequestBody AnonRequest req) {
@@ -75,7 +84,7 @@ public class AnonymizeController {
         }
 
         AnonymizeConfig cfg = toConfig(req);
-        requireBurnableIfCleanPixelData(cfg, req.burnIn());
+        AnonymizeService.BurnPreflight burn = requireBurnableIfCleanPixelData(cfg, req.burnIn(), req.studyUids());
         StreamingResponseBody body = out -> {
             try {
                 service.anonymizeToZip(req.studyUids(), cfg, req.burnIn(), out);
@@ -88,8 +97,11 @@ public class AnonymizeController {
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"anonymized.zip\"")
                 .header(H_INSTANCES, String.valueOf(pre.resolvable()))
                 .header(H_PROBLEMS, String.valueOf(pre.problems().size()))
+                .header(H_BURN, String.valueOf(burn == null ? 0 : burn.burnable()))
+                .header(H_UNMASKED, String.valueOf(burn == null ? 0 : burn.unmasked()))
                 // fetch() から読めるようにする（既定では safelisted な応答ヘッダしか見えない）。
-                .header(HttpHeaders.ACCESS_CONTROL_EXPOSE_HEADERS, H_INSTANCES + "," + H_PROBLEMS)
+                .header(HttpHeaders.ACCESS_CONTROL_EXPOSE_HEADERS,
+                        String.join(",", H_INSTANCES, H_PROBLEMS, H_BURN, H_UNMASKED))
                 .body(body);
     }
 
@@ -101,7 +113,7 @@ public class AnonymizeController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "destination が空です");
         }
         AnonymizeConfig cfg = toConfig(req);
-        requireBurnableIfCleanPixelData(cfg, req.burnIn());
+        requireBurnableIfCleanPixelData(cfg, req.burnIn(), req.studyUids());
         try {
             return service.anonymizeToFolder(req.studyUids(), cfg, req.burnIn(), req.destination());
         } catch (Exception e) {
@@ -190,21 +202,56 @@ public class AnonymizeController {
      *
      * <p>誤った申告をするくらいなら機能を止める、という判断基準の実装。
      */
-    // package-private: validate と同じ理由で直接テストする。
-    void requireBurnableIfCleanPixelData(AnonymizeConfig cfg, boolean burnIn) {
+    AnonymizeService.BurnPreflight requireBurnableIfCleanPixelData(AnonymizeConfig cfg, boolean burnIn,
+            List<String> studyUids) {
         if (!cfg.hasOption(AnonymizeConfig.Option.CleanPixelData)) {
-            return;
+            return null;
         }
+        checkBurnRequest(burnIn, maskStore.size());
+        // 🔴 マスクの「登録件数」だけでは足りない。**対象のインスタンスに実際に塗れるか**を見る。
+        //    これが無かったために、圧縮 XA（JPEG）で 1 画素も塗られていない出力が、警告も無く
+        //    渡っていた（2026-09-24・利用者報告）。塗れないものが 1 件でもあれば書き出さない。
+        AnonymizeService.BurnPreflight burn = service.burnPreflight(studyUids);
+        checkBurnPreflight(burn);
+        return burn;
+    }
+
+    /** 要求そのものが矛盾していないか（対象データを読む前に分かること）。 */
+    // package-private: validate と同じ理由で直接テストする。
+    static void checkBurnRequest(boolean burnIn, int maskCount) {
         if (!burnIn) {
             // チェックだけ入れて焼き込みを回さない＝設定と出力が食い違う。通さない。
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Clean Pixel Data を選ぶ場合は焼き込みの実行も有効にしてください。"
                             + "焼き込みを行わないと画素は変わらず、除去済みという申告もできません。");
         }
-        if (maskStore.size() == 0) {
+        if (maskCount == 0) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "焼き込みマスクが 1 件も登録されていないため、Clean Pixel Data を実行できません。"
                             + "マスクが無いまま出力すると焼き込み文字が残ったままになるので中止しました。");
+        }
+    }
+
+    /**
+     * 対象データを見たうえで、焼き込みが本当に成立するか。
+     *
+     * <p>🔴 <b>「塗れないものが 1 件でもあれば中止」</b>。一部だけ塗れた出力を渡すのが最も危険で、
+     * 受け取り側は全体が clean だと解釈する。ZIP はストリーミングなので、流し始めてからでは遅い。
+     */
+    // package-private: 同上。
+    static void checkBurnPreflight(AnonymizeService.BurnPreflight burn) {
+        if (burn.blocked() > 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "焼き込みマスクが登録されているのに適用できないインスタンスが " + burn.blocked()
+                            + " 件あるため中止しました（塗れるのは " + burn.burnable() + " 件）。"
+                            + "そのまま出力すると焼き込み文字が残ったままになります。理由: "
+                            + String.join(" / ", burn.problems()));
+        }
+        if (burn.burnable() == 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "登録されている焼き込みマスクは、今回の対象シリーズのものではありません"
+                            + "（対象 " + burn.unmasked() + " 件はいずれもマスク未登録）。"
+                            + "このまま出力しても 1 画素も塗られないため中止しました。");
         }
     }
 

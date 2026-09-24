@@ -590,6 +590,15 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
     sections: [],
   },
   {
+    // 外部 AI（Gemini）は専用パネル。**API キーは通常の設定に載せない**
+    // ——設定は H2 の平文行になり GET /api/settings が全件返すため。
+    // キーは Electron main の safeStorage へ預ける（AiPanel.tsx 参照）。
+    id: "ai",
+    labelKey: "settings.cat.ai",
+    icon: "✨",
+    sections: [],
+  },
+  {
     // プラグイン（導入・有効無効・削除）は専用パネル（/api/plugin-manager/*）。SettingsDialog で特別扱い。
     id: "plugins",
     labelKey: "settings.cat.plugins",

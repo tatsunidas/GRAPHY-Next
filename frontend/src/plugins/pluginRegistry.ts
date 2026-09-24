@@ -9,8 +9,10 @@ import { useEffect, useState } from "react";
 import { httpGet, httpSend } from "../http";
 import { apiBase } from "../apiBase";
 import { log } from "../log";
-import type { PluginHost, PluginManifest, PluginModule, PluginSurface } from "./pluginTypes";
+import type { PluginHost, PluginHostSeed, PluginManifest, PluginModule, PluginSurface } from "./pluginTypes";
 import { DEMO_MODULES, MOCK_ENABLED, MOCK_MANIFESTS } from "./mockPlugins";
+import { requestAiGeneration, type AiGenerationOptions } from "./pluginAiApi";
+import { saveFileAs } from "./pluginFileApi";
 
 let manifestsCache: Promise<PluginManifest[]> | null = null;
 
@@ -73,10 +75,30 @@ async function importModule(m: PluginManifest): Promise<PluginModule> {
   return resolved;
 }
 
+/**
+ * マニフェストに紐づくホスト API を注入する。
+ *
+ * <p>`ai` / `file` を各画面の `makeHost` に書かせない理由: **どちらもマニフェスト
+ * （＝権限宣言）と結び付いていなければ意味が無い**。呼び出し側に組み立てさせると、
+ * マニフェストの渡し忘れが権限チェックの素通りになる。ここで一度だけ束ねる。
+ */
+function withHostApis(m: PluginManifest, host: PluginHostSeed): PluginHost {
+  // seed はユニオンなので、展開結果を TS が 1 つの枝へ絞れない。足しているのは
+  // 欠けている 2 プロパティだけなので、ここだけ明示的に据える。
+  return {
+    ...host,
+    ai: {
+      generate: (req: Omit<AiGenerationOptions, "manifest">) =>
+        requestAiGeneration({ ...req, manifest: m }),
+    },
+    file: { saveAs: saveFileAs },
+  } as PluginHost;
+}
+
 /** メニュー項目クリック時: UI バンドルを動的 import して activate(host) を呼ぶ。 */
-export async function launchPlugin(m: PluginManifest, host: PluginHost): Promise<void> {
+export async function launchPlugin(m: PluginManifest, host: PluginHostSeed): Promise<void> {
   const mod = await resolveModule(m);
-  await mod.activate(host);
+  await mod.activate(withHostApis(m, host));
 }
 
 /** backend 面の実行: POST /api/plugins/{id}/run。 */
@@ -112,7 +134,7 @@ export interface PluginMenuItem {
  */
 export function usePluginMenu(
   surface: PluginSurface,
-  makeHost: (m: PluginManifest) => PluginHost,
+  makeHost: (m: PluginManifest) => PluginHostSeed,
 ): PluginMenuItem[] {
   const manifests = usePluginManifests(surface);
   return manifests.map((m) => ({

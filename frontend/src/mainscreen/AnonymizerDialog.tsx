@@ -29,6 +29,7 @@ import { useI18n } from "../i18n/i18n";
 import { dictMap, ggggeeee, normHex } from "./tagPathUtil";
 import { CLEAN_OPTS, DEFAULT_ANON_OPTIONS, RETAIN_OPTS, sanitizeAnonOptions, toggleAnonOption } from "./anonDefaults";
 import { loadAnonRoiCandidates, type AnonRoiCandidate, type AnonRoiSkip } from "./anonRoiCandidates";
+import { withFrameScope } from "../viewer/anonMaskExport";
 
 /**
  * その ROI の多角形が**いま登録されているか**。チェックの初期状態をここから起こす。
@@ -79,6 +80,14 @@ export function AnonymizerDialog({
   const [manualRetain, setManualRetain] = useState<string[]>([]);
   const [custom, setCustom] = useState<Record<string, string>>({});
   const [burnIn, setBurnIn] = useState(false);
+  /**
+   * multi-frame のマスクを「描いたフレームだけ」に絞るか。
+   *
+   * 🔴 **既定は OFF＝そのインスタンスの全フレーム。** 焼き込まれた患者情報は全フレームの
+   * 同じ位置に出るので、1 枚だけ塗ると残りに個人情報が残る（2026-09-24 に実測）。
+   * ON にすると全フレームを覆えないため Clean Pixel Data は申告されない。
+   */
+  const [drawnFrameOnly, setDrawnFrameOnly] = useState(false);
   // 既定は「選択中のスタディ 1 件」。検索結果全体を一括で処理したいときだけ明示的に ON にする。
   const [wholeList, setWholeList] = useState(false);
   const [destination, setDestination] = useState<string | null>(null);
@@ -272,7 +281,11 @@ export function AnonymizerDialog({
       const bySeries = new Map<string, AnonMaskPolygon[]>();
       for (const c of roiCands) {
         if (!bySeries.has(c.seriesUid)) bySeries.set(c.seriesUid, []);
-        if (roiChecked.has(c.roiUid)) bySeries.get(c.seriesUid)!.push(c.polygon);
+        if (roiChecked.has(c.roiUid)) {
+          // 適用フレームの決め方は anonMaskExport が正本（ここで if を書き足さない）。
+          bySeries.get(c.seriesUid)!.push(
+            withFrameScope(c.polygon, c.frame, drawnFrameOnly ? "drawnFrameOnly" : "wholeInstance"));
+        }
       }
       for (const [seriesUid, polygons] of bySeries) {
         await registerAnonMask({ seriesUid, frames: [], rects: [], polygons });
@@ -319,14 +332,22 @@ export function AnonymizerDialog({
     try {
       const ids = await resolveStudyUids();
       if (!ids) return;
-      const { blob, filename, instances, problems } = await anonymizeZip(buildReq(ids));
+      const { blob, filename, instances, problems, burned, unmasked } = await anonymizeZip(buildReq(ids));
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
       // revoke はダウンロード開始後まで遅らせる（即時に revoke すると環境によって 0 バイトになる）。
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      setInfo(t("anon.zipped.count", { instances, bytes: blob.size }));
-      if (problems > 0) setError(t("anon.err.problems", { problems }));
+      let done = t("anon.zipped.count", { instances, bytes: blob.size });
+      if (burnIn && options.has("CleanPixelData")) {
+        done += " " + t("anon.burned.count", { burned });
+      }
+      setInfo(done);
+      // ⚠ 警告とエラーは両方出うるので片方で上書きしない（警告のほうが重要度が高い）。
+      const notes: string[] = [];
+      if (unmasked > 0) notes.push(t("anon.burnIn.warn.unmasked", { count: unmasked }));
+      if (problems > 0) notes.push(t("anon.err.problems", { problems }));
+      if (notes.length) setError(notes.join(" / "));
     } catch (e) {
       showFailure(e);
     } finally { setBusy(false); }
@@ -351,7 +372,11 @@ export function AnonymizerDialog({
       // ⚠ errors と両方出うるので、片方で上書きしない（警告のほうが重要度が高い）。
       const notes: string[] = [];
       if (r.notBurnedInstances > 0) {
-        notes.push(t("anon.burnIn.warn.notBurned", { count: r.notBurnedInstances }));
+        notes.push(t("anon.burnIn.warn.unmasked", { count: r.notBurnedInstances }));
+      }
+      // 🔴 一部フレームだけ塗ったものは「除去済み」と申告していない＝残っている。必ず見せる。
+      if (r.partiallyBurnedInstances > 0) {
+        notes.push(t("anon.burnIn.warn.partial", { count: r.partiallyBurnedInstances }));
       }
       if (r.errors.length) notes.push(r.errors.slice(0, 3).join(" / "));
       if (notes.length) setError(notes.join(" / "));
@@ -470,6 +495,16 @@ export function AnonymizerDialog({
           </label>
           {options.has("CleanPixelData") && (
             <div style={{ fontSize: 11, color: "#8a98a6" }}>{t("anon.burnIn.note")}</div>
+          )}
+          {options.has("CleanPixelData") && burnIn && (
+            <>
+              <label style={opt}>
+                <input type="checkbox" data-testid="anon-drawn-frame-only" checked={drawnFrameOnly}
+                  onChange={(e) => setDrawnFrameOnly(e.target.checked)} />
+                {t("anon.burnIn.drawnFrameOnly")}
+              </label>
+              <div style={{ fontSize: 11, color: "#8a98a6" }}>{t("anon.burnIn.drawnFrameOnly.note")}</div>
+            </>
           )}
           {options.has("CleanPixelData") && !isWeb && (
             <div style={maskBox} data-testid="anon-mask-roi-list">

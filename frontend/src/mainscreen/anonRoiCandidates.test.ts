@@ -122,10 +122,14 @@ describe("loadAnonRoiCandidates", () => {
     expect(skipped).toEqual([]);
   });
 
-  it("マルチフレームはフレーム番号も適用先に載せる（XA で全フレームを塗らない）", async () => {
+  it("🔴 マルチフレームは既定でインスタンス全体に効く（1 枚だけ塗らない）", async () => {
+    // 以前は描いたフレームだけを塗っていた。焼き込み文字は全フレームの同じ位置に出るので、
+    // 2026-09-24 の実測では 63 フレーム中 62 枚に患者名が残ったまま「除去済み」と申告していた。
+    // 描いたフレーム番号は候補に残し、ダイアログで明示的に絞れるようにしてある。
     fetchRoiDocument.mockResolvedValue(docWith([savedRoi({ frame: 4 })]));
     const { candidates } = await loadAnonRoiCandidates(STUDY, SERIES);
-    expect(candidates[0].polygon.frames).toEqual([4]);
+    expect(candidates[0].polygon.frames).toEqual([]); // 空＝全フレーム
+    expect(candidates[0].frame).toBe(4); // 絞るときの材料は失わない
   });
 
   it("幾何が引けないシリーズ（XA）は world/画素間隔のフォールバックで拾う", async () => {

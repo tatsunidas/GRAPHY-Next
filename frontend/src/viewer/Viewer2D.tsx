@@ -48,6 +48,7 @@ import { encodeFrames, framePixelsBase64, hasNonFinite } from "./derivedSeriesEn
 import { httpSend } from "../http";
 import { emitDbChanged } from "../dbEvents";
 import { overlayPlacement, type ImageRect } from "./overlayPlacement";
+import { visibleImageRegion, type VisibleRegion } from "./visibleRegion";
 // 配置の純関数は overlayPlacement.ts が正。ここは既存の import 元との互換のため再輸出する。
 export { overlayPlacement, type ImageRect } from "./overlayPlacement";
 import { computeOrientationMarkers, type OrientationMarkers } from "./orientation";
@@ -339,6 +340,25 @@ function computeImageRect(vp: Types.IStackViewport): ImageRect | null {
       height,
       linear: [ux / width, uy / width, vx / height, vy / height],
     };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 画面に見えている画像上の範囲（H2 の `visibleRegion`）。
+ *
+ * <p>幾何は {@link visibleImageRegion} が持つ（cornerstone を import しない純関数なので
+ * node の vitest で数値を固定できる）。ここは cornerstone から**材料を集めるだけ**。
+ */
+function computeVisibleRegion(vp: Types.IStackViewport): VisibleRegion | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const dims = (vp.getImageData() as any)?.dimensions;
+    if (!dims) return null;
+    const el = vp.element as HTMLElement | undefined;
+    if (!el) return null;
+    return visibleImageRegion(computeImageRect(vp), dims[0], dims[1], el.clientWidth, el.clientHeight);
   } catch {
     return null;
   }
@@ -1757,6 +1777,10 @@ export function Viewer2D({
     const w = getWindowState();
     const tr = readTransform(v);
     return {
+      // 🔴 「画面に見えている範囲」は**本体が出す**。zoom/pan/rotation/flip/Fit を渡して
+      //    プラグイン側に再計算させると、world 原点（IPP）と Fit の規約を本体の外で
+      //    復元することになり、幾何を持たない XA で破綻する。
+      visibleRegion: computeVisibleRegion(v),
       windowCenter: w?.center ?? 0,
       windowWidth: w?.width ?? 1,
       unit: calibratedUnit(infoRef.current),

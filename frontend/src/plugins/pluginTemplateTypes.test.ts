@@ -29,6 +29,13 @@ const CONTRACT = read("./pluginTypes.ts");
  * （2026-08-22 に H32 の `setInvert` を足したときに気付いた）。
  */
 const HANDLE_CONTRACT = read("./pluginViewportApi.ts");
+/**
+ * host API が**返す値の形**（H2 の表示状態・H3 の画素）はここに居る。
+ * メソッド名だけ合っていても、**戻り値のフィールドが漏れれば作者からは存在しないように見える**
+ * ——`getViewState()` は呼べるのに `visibleRegion` が補完に出ない、という壊れ方をする。
+ * 名前の検査を host インターフェースだけに掛けていると、この抜け方を丸ごと見逃す。
+ */
+const VIEWER_CONTRACT = read("../viewer/viewerCommands.ts");
 const TEMPLATE = read("../../../examples/plugin-template/graphy-plugin.d.ts");
 
 /** `export interface Name ... {` から、行頭 `}` までを切り出す。 */
@@ -80,6 +87,20 @@ describe("plugin-template の graphy-plugin.d.ts が本体の契約に追随し�
       const actual = new Set(methodNames(interfaceBody(TEMPLATE, iface)));
       const missing = expected.filter((name) => !actual.has(name));
       expect(missing, `テンプレートに無い操作: ${missing.join(", ")}`).toEqual([]);
+    });
+  }
+
+  // 本体名 → テンプレート名（テンプレートは意図的に別名の安定サブセット）。
+  for (const [hostName, templateName] of [
+    ["ViewerViewState", "ViewerViewState"],
+    ["ViewerPixelData", "PixelData"],
+  ] as const) {
+    it(`${hostName} のフィールドがすべてテンプレートにある`, () => {
+      const expected = memberNames(interfaceBody(VIEWER_CONTRACT, hostName));
+      expect(expected.length).toBeGreaterThan(0);
+      const actual = new Set(memberNames(interfaceBody(TEMPLATE, templateName)));
+      const missing = expected.filter((name) => !actual.has(name));
+      expect(missing, `テンプレートに無いフィールド: ${missing.join(", ")}`).toEqual([]);
     });
   }
 

@@ -10,6 +10,7 @@ import { RemoteAePanel } from "./RemoteAePanel";
 import { AboutPanel } from "./AboutPanel";
 import { MonitorQcPanel } from "./MonitorQcPanel";
 import { PluginManagerPanel } from "./PluginManagerPanel";
+import { AiPanel } from "./AiPanel";
 import { useI18n, type Locale, type TFn } from "../i18n/i18n";
 import { markRestartRequired } from "../restartRequiredEvents";
 
@@ -88,6 +89,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
             {SETTINGS_REGISTRY.map((c: CategoryDef) => (
               <button
                 key={c.id}
+                data-testid={`settings-cat-${c.id}`}
                 onClick={() => setSelectedId(c.id)}
                 style={{
                   ...navItem,
@@ -112,6 +114,15 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
               <RemoteAePanel />
             ) : category.id === "monitor" ? (
               <MonitorQcPanel />
+            ) : category.id === "ai" ? (
+              // モデル ID 等は通常の設定（平文で構わない）、キーだけ safeStorage。
+              <AiPanel
+                values={map}
+                onChange={(key, value) => {
+                  setMap((prev) => ({ ...prev, [key]: value }));
+                  saveSettings({ [key]: value }).catch((e: unknown) => setError(String(e)));
+                }}
+              />
             ) : category.id === "plugins" ? (
               <PluginManagerPanel />
             ) : category.id === "about" ? (

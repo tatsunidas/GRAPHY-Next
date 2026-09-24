@@ -49,6 +49,12 @@ deploy/demo/.env
 desktop/data/
 # プラグインの導入先（graphy.plugins.dir=./plugins が CWD 相対で作られる）と台帳
 desktop/plugins/
+# 外部 AI の API キー保管庫（OS キーチェーンが使えない環境でここへ暗号化して置く）。
+# 🔴 実行時データであってソースではない。中身は暗号化済みだが、鍵の持ち回りを
+#    前提にした設計なのでリポジトリには決して入れない。
+desktop/secrets.enc.json
+# Art of Imaging が生成した作品が CWD=desktop に残ったもの
+desktop/graphy-art-*.png
 
 # 個人メモ（リポジトリに含めない）
 memorandum_76.txt
