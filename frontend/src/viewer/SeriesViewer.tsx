@@ -1333,7 +1333,7 @@ export function SeriesViewer({
               {videoInstances.length > 1 && (
                 <div style={{ fontSize: 13, color: "#445" }}>🎞 #{inst.instanceNumber ?? "?"}</div>
               )}
-              <VideoViewer sopInstanceUid={inst.sopInstanceUid} />
+              <VideoViewer sopInstanceUid={inst.sopInstanceUid} commandKey={commandKey} />
             </div>
           ))
         ) : (

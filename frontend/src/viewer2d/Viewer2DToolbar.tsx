@@ -302,9 +302,9 @@ export function Viewer2DToolbar({
 
       <Sep />
       {/* 操作ツール（ラジオ・全タイルに適用） */}
-      <button onClick={() => actions.setTool(TOOL_IDS.windowLevel)} style={{ ...btn, ...(activeTool === TOOL_IDS.windowLevel ? on : null) }} title={t("viewer.status.wl")}><ToolIcon id={TOOL_IDS.windowLevel} size={16} style={activeTool === TOOL_IDS.windowLevel ? activeIcon : undefined} /></button>
-      <button onClick={() => actions.setTool(TOOL_IDS.pan)} style={{ ...btn, ...(activeTool === TOOL_IDS.pan ? on : null) }} title={t("viewer.pan")}><ToolIcon id={TOOL_IDS.pan} size={16} style={activeTool === TOOL_IDS.pan ? activeIcon : undefined} /></button>
-      <button onClick={() => actions.setTool(TOOL_IDS.zoom)} style={{ ...btn, ...(activeTool === TOOL_IDS.zoom ? on : null) }} title={t("viewer.zoomIn")}><ToolIcon id={TOOL_IDS.zoom} size={16} style={activeTool === TOOL_IDS.zoom ? activeIcon : undefined} /></button>
+      <button data-testid="toolbar-tool-wl" onClick={() => actions.setTool(TOOL_IDS.windowLevel)} style={{ ...btn, ...(activeTool === TOOL_IDS.windowLevel ? on : null) }} title={t("viewer.status.wl")}><ToolIcon id={TOOL_IDS.windowLevel} size={16} style={activeTool === TOOL_IDS.windowLevel ? activeIcon : undefined} /></button>
+      <button data-testid="toolbar-tool-pan" onClick={() => actions.setTool(TOOL_IDS.pan)} style={{ ...btn, ...(activeTool === TOOL_IDS.pan ? on : null) }} title={t("viewer.pan")}><ToolIcon id={TOOL_IDS.pan} size={16} style={activeTool === TOOL_IDS.pan ? activeIcon : undefined} /></button>
+      <button data-testid="toolbar-tool-zoom" onClick={() => actions.setTool(TOOL_IDS.zoom)} style={{ ...btn, ...(activeTool === TOOL_IDS.zoom ? on : null) }} title={t("viewer.zoomIn")}><ToolIcon id={TOOL_IDS.zoom} size={16} style={activeTool === TOOL_IDS.zoom ? activeIcon : undefined} /></button>
       {(activeTool === TOOL_IDS.brush || activeTool === TOOL_IDS.eraser) && (
         <label style={{ fontSize: 11, color: "#33404d", display: "inline-flex", alignItems: "center", gap: 3 }} title={t("viewer2d.tool.brushSize")}>
           <ToolIcon id={TOOL_IDS.brush} size={16} />
@@ -322,6 +322,7 @@ export function Viewer2DToolbar({
       <Sep />
       {/* W/L プリセット（対象タイル） */}
       <select
+        data-testid="toolbar-wl-preset"
         value=""
         onChange={(e) => {
           const v = e.target.value;
@@ -345,17 +346,17 @@ export function Viewer2DToolbar({
       </select>
 
       {/* 画像調整（対象タイル） */}
-      <button onClick={actions.invert} style={btn} title={t("viewer.invert")}><ToolIcon file={UI_ICON_FILES.invert} size={16} /></button>
+      <button data-testid="toolbar-invert" onClick={actions.invert} style={btn} title={t("viewer.invert")}><ToolIcon file={UI_ICON_FILES.invert} size={16} /></button>
       {/* LUT は適切なアイコンが無いためテキストを維持 */}
       <button onClick={actions.openLut} style={btn} title={t("viewer.lut")}>{t("viewer.lut")}</button>
-      <button onClick={actions.rotate90} style={btn} title={t("viewer.rotate")}><ToolIcon file={UI_ICON_FILES.rotate} size={16} /></button>
-      <button onClick={actions.flipH} style={btn} title={t("viewer.flipH")}><ToolIcon file={UI_ICON_FILES.flipH} size={16} /></button>
-      <button onClick={actions.flipV} style={btn} title={t("viewer.flipV")}><ToolIcon file={UI_ICON_FILES.flipV} size={16} /></button>
+      <button data-testid="toolbar-rotate" onClick={actions.rotate90} style={btn} title={t("viewer.rotate")}><ToolIcon file={UI_ICON_FILES.rotate} size={16} /></button>
+      <button data-testid="toolbar-flip-h" onClick={actions.flipH} style={btn} title={t("viewer.flipH")}><ToolIcon file={UI_ICON_FILES.flipH} size={16} /></button>
+      <button data-testid="toolbar-flip-v" onClick={actions.flipV} style={btn} title={t("viewer.flipV")}><ToolIcon file={UI_ICON_FILES.flipV} size={16} /></button>
 
       <Sep />
       {/* 表示リセット / Undo-Redo（対象タイル） */}
-      <button onClick={actions.fit} style={btn} title={t("viewer.fit")}><ToolIcon file={UI_ICON_FILES.fit} size={16} /></button>
-      <button onClick={actions.reset} style={btn} title={t("viewer.reset")}><ToolIcon file={UI_ICON_FILES.reset} size={16} /></button>
+      <button data-testid="toolbar-fit" onClick={actions.fit} style={btn} title={t("viewer.fit")}><ToolIcon file={UI_ICON_FILES.fit} size={16} /></button>
+      <button data-testid="toolbar-reset" onClick={actions.reset} style={btn} title={t("viewer.reset")}><ToolIcon file={UI_ICON_FILES.reset} size={16} /></button>
       {/* Undo/Redo は適切なアイコンが無いためグリフを維持 */}
       <button onClick={actions.undo} style={btn} title={t("viewer.undo")}>↶</button>
       <button onClick={actions.redo} style={btn} title={t("viewer.redo")}>↷</button>

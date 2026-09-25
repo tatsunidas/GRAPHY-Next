@@ -229,7 +229,9 @@ async function main(): Promise<void> {
     //    シークしても "0:00 / 0:01" のまま変わらないことがある。
     //    フレームが進んだことは seekValue で既に見ているので、ここは**形が壊れていないか**だけ見る。
     check(
-      /^\d+:\d{2} \/ \d+:\d{2}$/.test(s1.frameText) || /^\d+ \/ \d+$/.test(s1.frameText),
+      // 2026-09-25 から「フレーム n / N」を常に出し、時刻を後ろに添える（例: "フレーム 15 / 300:00 / 0:01"）
+      /^\D*\d+ \/ \d+(\d+:\d{2} \/ \d+:\d{2})?$/.test(s1.frameText) &&
+        s1.frameText.includes(`/ ${s1.seekMax}`),
       "[3] 画面のフレーム表示が読める形で出ている",
       { before: s0.frameText, after: s1.frameText },
     );

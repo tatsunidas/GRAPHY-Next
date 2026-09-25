@@ -10,6 +10,7 @@
  * Viewer2D 内部の命令的操作（Fit/回転/Invert/LUT…）を外から起動するための薄い仲介。
  * referenceLines/sliceSync と同じモジュールレベル・レジストリ方式。
  */
+import { useSyncExternalStore } from "react";
 import type { PluginAnalysisInput } from "../report/analysisResults";
 import type { VisibleRegion } from "./visibleRegion";
 import type {
@@ -728,15 +729,71 @@ export function registerViewerCommands(key: string, cmds: ViewerCommands): () =>
   };
 }
 
-/** 対象 tileId 群へ同一コマンドを送出する（未登録キーは無視）。 */
+/**
+ * 表示の操作だけを受け付けるタイル（動画タイル・`VideoViewer`）の命令。
+ *
+ * <p>動画タイルは {@link ViewerCommands} を登録しない（プラグイン向けの問い合わせ H1〜H40 に
+ * 「画像のスタック」として答えられないため）。その代わりにこの小さな登録簿へ載せ、
+ * 画面のツールバーの操作（Fit・回転・反転・W/L・ツール選択など）だけを {@link runViewerCommand} から届ける。
+ * **問い合わせ（`queryViewerCommand`）の対象にはならない。**
+ */
+export type ViewerDisplayCommands = Partial<
+  Pick<
+    ViewerCommands,
+    "fit" | "reset" | "rotate90" | "flipH" | "flipV" | "invert" | "setWindowLevel" | "resetWindow" | "setActiveTool"
+  >
+>;
+
+/** 1 タイルに動画が複数並ぶことがあるので、キーごとに複数持つ。 */
+const displayRegistry = new Map<string, Set<ViewerDisplayCommands>>();
+const displayListeners = new Set<() => void>();
+const notifyDisplay = () => displayListeners.forEach((l) => l());
+
+export function registerViewerDisplayCommands(key: string, cmds: ViewerDisplayCommands): () => void {
+  const set = displayRegistry.get(key) ?? new Set<ViewerDisplayCommands>();
+  set.add(cmds);
+  displayRegistry.set(key, set);
+  notifyDisplay();
+  return () => {
+    set.delete(cmds);
+    if (set.size === 0 && displayRegistry.get(key) === set) displayRegistry.delete(key);
+    notifyDisplay();
+  };
+}
+
+/**
+ * このタイルが「表示の命令だけ」のタイル（動画）か。タイル枠の 🔗（同期）を無効にするのに使う
+ * （動画は同期の対象外）。
+ */
+export function useIsDisplayOnlyTile(key: string): boolean {
+  return useSyncExternalStore(
+    (l) => {
+      displayListeners.add(l);
+      return () => displayListeners.delete(l);
+    },
+    () => (displayRegistry.get(key)?.size ?? 0) > 0,
+  );
+}
+
+/** 表示の命令だけを持つタイルを {@link ViewerCommands} として扱う。持っていない命令は何もしない。 */
+function displayOnly(cmds: ViewerDisplayCommands): ViewerCommands {
+  const noop = () => undefined;
+  return new Proxy(cmds, {
+    get: (target, prop) => (target as Record<PropertyKey, unknown>)[prop] ?? noop,
+  }) as unknown as ViewerCommands;
+}
+
+/** 対象 tileId 群へ同一コマンドを送出する（未登録キーは無視）。表示だけのタイル（動画）には表示の命令だけが届く。 */
 export function runViewerCommand(keys: string[], fn: (c: ViewerCommands) => void): void {
   for (const k of keys) {
-    const c = registry.get(k);
-    if (!c) continue;
-    try {
-      fn(c);
-    } catch {
-      /* ビューポート破棄途中などは無視 */
+    const full = registry.get(k);
+    const targets = full ? [full] : [...(displayRegistry.get(k) ?? [])].map(displayOnly);
+    for (const c of targets) {
+      try {
+        fn(c);
+      } catch {
+        /* ビューポート破棄途中などは無視 */
+      }
     }
   }
 }

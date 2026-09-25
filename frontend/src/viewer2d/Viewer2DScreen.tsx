@@ -32,6 +32,7 @@ import { eventTarget } from "@cornerstonejs/core";
 import { Enums as csToolsEnums } from "@cornerstonejs/tools";
 import {
   runViewerCommand,
+  useIsDisplayOnlyTile,
   queryViewerCommand,
   queryViewerTargetInfo,
 } from "../viewer/viewerCommands";
@@ -1908,6 +1909,8 @@ function TileCell({
   onDrop: (targetTileId: string, zone: "before" | "after" | "center" | "none") => void;
 }) {
   const { t } = useI18n();
+  // 動画タイル（表示の操作だけを受けるタイル）。同期（🔗）の対象外
+  const isVideoTile = useIsDisplayOnlyTile(commandKey);
   // ドラッグオーバー中のゾーン（ビジュアルオーバーレイ制御用）
   const [dropZone, setDropZone] = useState<"before" | "after" | "center" | "none" | null>(null);
 
@@ -2283,18 +2286,21 @@ function TileCell({
           ⤓
         </span>
 
-        {/* Sync トグルボタン */}
+        {/* Sync トグルボタン（動画タイルは同期の対象外なので押せない） */}
         <button
           onClick={(e) => { e.stopPropagation(); onSyncToggle(); }}
+          disabled={isVideoTile}
+          data-testid="tile-sync-toggle"
           style={{
             ...xbtn,
-            color: tile.syncEnabled ? "#0b5cad" : "#8a98a6",
-            border: tile.syncEnabled ? "1px solid #b0cce8" : "1px solid #cdd5de",
-            background: tile.syncEnabled ? "#eef4fc" : "#fff",
+            color: tile.syncEnabled && !isVideoTile ? "#0b5cad" : "#8a98a6",
+            border: tile.syncEnabled && !isVideoTile ? "1px solid #b0cce8" : "1px solid #cdd5de",
+            background: tile.syncEnabled && !isVideoTile ? "#eef4fc" : "#fff",
             fontSize: 14,
             lineHeight: 1,
+            ...(isVideoTile ? { opacity: 0.45, cursor: "not-allowed" } : null),
           }}
-          title={t("viewer2d.sync.toggle")}
+          title={t(isVideoTile ? "viewer2d.sync.videoUnsupported" : "viewer2d.sync.toggle")}
         >
           🔗
         </button>
