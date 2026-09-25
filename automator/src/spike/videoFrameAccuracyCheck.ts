@@ -273,6 +273,76 @@ async function main(): Promise<void> {
       { ticNums, loExpect: Number(loExpect.toFixed(1)), hiExpect: Number(hiExpect.toFixed(1)) },
     );
     await page.screenshot({ path: path.join(OUT_DIR, "2-tic.png") }).catch(() => {});
+
+    // ── 画面に出ている絵そのもので「1 フレームずつ進む」を確かめる（2026-09-25）
+    // 🔑 ここまでの検査は、別の <video> をフレーム中央へシークして画素を読んでいた。**画面の
+    //    VideoViewport が描いている絵**がフレーム n かどうかは見ていなかった。ここでは ▶ を 1 回ずつ
+    //    押し、描画面（canvas）の中央の画素と「フレーム n / N」の表示を読む。
+    //    ROI の枠は SVG で canvas とは別なので、中央の画素には乗らない。
+    const readCenter = (): Promise<number> =>
+      page.evaluate(() => {
+        const c = document.querySelector('[data-testid="video-viewport-host"] canvas') as HTMLCanvasElement | null;
+        const ctx = c?.getContext("2d");
+        if (!c || !ctx) return Number.NaN;
+        const d = ctx.getImageData(Math.floor(c.width / 2), Math.floor(c.height / 2), 1, 1).data;
+        return (d[0] + d[1] + d[2]) / 3;
+      });
+    await seekToFrame(page, 1);
+    await page.waitForTimeout(400);
+    const drawn: { frame: number; shown: string; value: number }[] = [];
+    for (let n = 1; n <= N_FRAMES; n++) {
+      if (n > 1) {
+        await page.getByTestId("video-frame-next").click();
+        await page.waitForTimeout(250);
+      }
+      drawn.push({
+        frame: n,
+        shown: ((await page.getByTestId("video-frame-number").textContent()) ?? "").trim(),
+        value: await readCenter(),
+      });
+    }
+    const badNumber = drawn.filter((d) => !d.shown.includes(`${d.frame} / ${N_FRAMES}`));
+    check(badNumber.length === 0, "▶ を 1 回押すごとに「フレーム n / N」が 1 ずつ進む（1〜30）", badNumber.slice(0, 5));
+    const fitDrawn = fitLinear(drawn.map((d) => levelOf(d.frame)), drawn.map((d) => d.value));
+    const drawnMismatch = drawn
+      .map((d) => {
+        let best = 1;
+        let bestErr = Number.POSITIVE_INFINITY;
+        for (let f = 1; f <= N_FRAMES; f++) {
+          const err = Math.abs(fitDrawn.a * levelOf(f) + fitDrawn.b - d.value);
+          if (err < bestErr) {
+            bestErr = err;
+            best = f;
+          }
+        }
+        return { requested: d.frame, nearest: best, value: Number(d.value.toFixed(1)) };
+      })
+      .filter((m) => m.nearest !== m.requested);
+    check(
+      fitDrawn.a > 0.5 && drawnMismatch.length === 0,
+      "★★画面に描かれた絵そのものが、各フレームに符号化した輝度と一致する（末尾の 30 も含む）",
+      { a: Number(fitDrawn.a.toFixed(3)), mismatches: drawnMismatch.slice(0, 5) },
+    );
+
+    // ── 表示領域の幅を変えても絵が引き伸ばされない（描画面の解像度が表示の大きさに追従する）
+    const canvasFit = (): Promise<{ w: number; h: number; cw: number; ch: number }> =>
+      page.evaluate(() => {
+        const c = document.querySelector('[data-testid="video-viewport-host"] canvas') as HTMLCanvasElement;
+        return { w: c.width, h: c.height, cw: c.clientWidth, ch: c.clientHeight };
+      });
+    const before = await canvasFit();
+    await page.evaluate(() => {
+      const host = document.querySelector('[data-testid="video-viewport-host"]') as HTMLElement;
+      host.style.width = "55%";
+    });
+    await page.waitForTimeout(800);
+    const after = await canvasFit();
+    check(
+      before.w === before.cw && before.h === before.ch && after.w === after.cw && after.h === after.ch && after.cw < before.cw,
+      "★表示の幅を変えても、描画面の解像度が表示の大きさに合っている（縦横比が崩れない）",
+      { before, after },
+    );
+    await page.screenshot({ path: path.join(OUT_DIR, "3-resized.png") }).catch(() => {});
   } finally {
     await driver.stop();
   }
