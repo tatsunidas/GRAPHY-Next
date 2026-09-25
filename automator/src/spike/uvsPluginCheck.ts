@@ -31,6 +31,12 @@ import { waitForMainScreenReady } from "../checklist/items/shared/helpers.js";
 import { dismissStartupDialogs, findBlockingOverlay } from "../common/dismissDialogs.js";
 
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "uvs-plugin");
+/**
+ * 配布物の置き場所。既定はこのリポジトリの `automator/plugins/<id>`（stage6 の写し）。
+ * `UVS_PLUGIN_DIR` を渡すと、UVS-Web リポジトリが組んだ配布物（`graphy-plugin/dist/<id>`・
+ * 解析コアは uvs-core を同梱）を検査する。そちらの鮮度は UVS-Web の `tools/assemble.mjs` が見る。
+ */
+const EXTERNAL_PLUGIN_DIR = process.env.UVS_PLUGIN_DIR ?? null;
 const PLUGIN_ID = "uvs-skeleton";
 const DEFAULT_DICOM = path.join(os.homedir(), "graphy_sample_images", "uvs", "HLHS-600.dcm");
 
@@ -231,7 +237,7 @@ interface Payload {
 
 /** 検証用プラグインを backend の plugins フォルダへ置く（第三者の手置きと同じ形）。 */
 function installPlugin(): void {
-  const src = path.join(AUTOMATOR_ROOT, "plugins", PLUGIN_ID);
+  const src = EXTERNAL_PLUGIN_DIR ?? path.join(AUTOMATOR_ROOT, "plugins", PLUGIN_ID);
   const dst = path.join(DESKTOP_RUN_DATA_DIR, "plugins", PLUGIN_ID);
   fs.rmSync(dst, { recursive: true, force: true });
   fs.mkdirSync(dst, { recursive: true });
@@ -250,9 +256,15 @@ async function main(): Promise<void> {
   fs.rmSync(OUT_DIR, { recursive: true, force: true });
   fs.mkdirSync(OUT_DIR, { recursive: true });
 
-  const pluginDir = path.join(AUTOMATOR_ROOT, "plugins", PLUGIN_ID);
-  const jar = path.join(pluginDir, `${PLUGIN_ID}.jar`);
-  const buildHint = `  cd automator/plugins/${PLUGIN_ID} && bash tools/build-jar.sh`;
+  const pluginDir = EXTERNAL_PLUGIN_DIR ?? path.join(AUTOMATOR_ROOT, "plugins", PLUGIN_ID);
+  const jarName = EXTERNAL_PLUGIN_DIR
+    ? fs.readdirSync(pluginDir).find((n) => n.endsWith(".jar")) ?? `${PLUGIN_ID}.jar`
+    : `${PLUGIN_ID}.jar`;
+  const jar = path.join(pluginDir, jarName);
+  const buildHint = EXTERNAL_PLUGIN_DIR
+    ? "  UVS-Web で mvn -B -DskipTests -pl graphy-plugin -am package → node graphy-plugin/tools/assemble.mjs"
+    : `  cd automator/plugins/${PLUGIN_ID} && bash tools/build-jar.sh`;
+  if (EXTERNAL_PLUGIN_DIR) console.log(`配布物: ${pluginDir}（UVS-Web）`);
   if (!fs.existsSync(jar)) {
     throw new Error(`JAR がありません: ${jar}\n${buildHint}`);
   }
@@ -327,6 +339,17 @@ async function main(): Promise<void> {
       (url) => url.includes("2dviewer"),
     );
     await viewer.waitForTimeout(5_000);
+    // 🔑 画面の小さい機（1368×912）では、開いたプラグイン窓が「プラグイン」メニューに重なり、
+    //    2 回目以降のクリックが届かない（2026-09-25 に Windows 機で踏んだ）。最大化は物理画面までしか
+    //    広がらないので、窓を明示サイズにする（Electron は画面より大きくても正しく描く）。
+    await driver.app.evaluate(({ BrowserWindow }) => {
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (w.webContents.getURL().startsWith("devtools://")) continue;
+        w.unmaximize();
+        w.setBounds({ x: 0, y: 0, width: 1920, height: 1200 });
+      }
+    });
+    await viewer.waitForTimeout(1_000);
 
     // ── 1. プラグインが一覧に出て、起動できる ──────────────────────
     const menu = viewer.getByTestId("viewer2d-menu-plugins");
