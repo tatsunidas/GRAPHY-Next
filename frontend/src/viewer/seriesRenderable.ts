@@ -125,8 +125,11 @@ export const VIDEO_PHOTOGRAPHIC_SOP_CLASS = "1.2.840.10008.5.1.4.1.1.77.1.4.1";
  * encapsulated 動画系 SOP Class（Endoscopic / Microscopic / Photographic）。
  *
  * <p>これらは MP4 等を丸ごと DICOM に包んだもので**画素データを持たない**。
- * ⚠ **XA / US のシネは含まれない。** あれは通常の画素データが時間方向に並んだマルチフレームで、
- * SOP クラスも別。「DICOM の動画」には構造の違う 2 種類がある、という区別がここの要点。
+ * ⚠ **XA / US のシネはこの表に含まれない。** あれは通常の画素データが時間方向に並んだ
+ * マルチフレームで、SOP クラスも別。「DICOM の動画」には構造の違う 2 種類がある、という区別が
+ * ここの要点。ただし**同じ US Multi-frame でも転送構文が H.264 なら中身は動画**なので、
+ * 再生器へ振り分けるかは SOP クラスだけでなく {@link VIDEO_TRANSFER_SYNTAXES} も見る
+ * （{@link isVideoInstance}）。
  */
 export const VIDEO_SOP_CLASSES: ReadonlySet<string> = new Set([
   "1.2.840.10008.5.1.4.1.1.77.1.1.1", // Video Endoscopic Image Storage
@@ -139,6 +142,55 @@ export const isVideoSopClass = (sopClassUid: string | null | undefined): boolean
   !!sopClassUid && VIDEO_SOP_CLASSES.has(sopClassUid);
 
 /**
+ * 動画（MPEG2 / H.264 / HEVC）で包まれた転送構文。
+ *
+ * <p>🔴 **SOP クラスだけでは動画を見分けられない。** US Multi-frame（1.1.3.1）や XA シネは
+ * SOP クラス上ふつうの画像だが、転送構文が H.264 だと中身は動画そのもので、
+ * dicom-image-loader は復号できない。`classifySeriesDisplay` が SOP クラスしか見ていなかったため、
+ * **H.264 の US Multi-frame は「開ける」と判定され、開いたうえで何も描かれなかった**（実機で発生）。
+ * 黙って真っ黒を出すのがいちばん悪いので、転送構文でも再生器へ振り分ける。
+ *
+ * <p>並びは backend の `VideoFragmentExtractor.NO_TRANSCODE_TS` と同じ出典（DICOM PS3.6）。
+ * あちらは「無変換で配信できるか」の集合なので **MPEG2（4.100 / 4.101）を含まない**が、
+ * こちらは「Cornerstone で復号できない包み方か」の集合なので**含める**——MPEG2 は
+ * backend が ffmpeg で変換して配信でき、変換できないときは VideoViewer が理由を出す。
+ * `.1` 付きは Fragmentable 版（PS3.6 で別 UID）。
+ */
+export const VIDEO_TRANSFER_SYNTAXES: ReadonlySet<string> = new Set([
+  "1.2.840.10008.1.2.4.100", // MPEG2 Main Profile / Main Level
+  "1.2.840.10008.1.2.4.100.1", // MPEG2 MP@ML Fragmentable
+  "1.2.840.10008.1.2.4.101", // MPEG2 Main Profile / High Level
+  "1.2.840.10008.1.2.4.101.1", // MPEG2 MP@HL Fragmentable
+  "1.2.840.10008.1.2.4.102", // MPEG-4 AVC/H.264 High Profile / Level 4.1
+  "1.2.840.10008.1.2.4.102.1", // 同 Fragmentable
+  "1.2.840.10008.1.2.4.103", // MPEG-4 AVC/H.264 BD-compatible High Profile / Level 4.1
+  "1.2.840.10008.1.2.4.103.1", // 同 Fragmentable
+  "1.2.840.10008.1.2.4.104", // MPEG-4 AVC/H.264 High Profile / Level 4.2 For 2D Video
+  "1.2.840.10008.1.2.4.104.1", // 同 Fragmentable
+  "1.2.840.10008.1.2.4.105", // MPEG-4 AVC/H.264 High Profile / Level 4.2 For 3D Video
+  "1.2.840.10008.1.2.4.105.1", // 同 Fragmentable
+  "1.2.840.10008.1.2.4.106", // MPEG-4 AVC/H.264 Stereo High Profile / Level 4.2
+  "1.2.840.10008.1.2.4.106.1", // 同 Fragmentable
+  "1.2.840.10008.1.2.4.107", // HEVC/H.265 Main Profile / Level 5.1
+  "1.2.840.10008.1.2.4.108", // HEVC/H.265 Main 10 Profile / Level 5.1
+]);
+
+/** 転送構文が動画（MPEG2 / H.264 / HEVC）かどうか。 */
+export const isVideoTransferSyntax = (transferSyntaxUid: string | null | undefined): boolean =>
+  !!transferSyntaxUid && VIDEO_TRANSFER_SYNTAXES.has(transferSyntaxUid.trim());
+
+/**
+ * このインスタンスを**再生器で出すべきか**。SOP クラスが encapsulated 動画（77.1.x）か、
+ * 転送構文が動画のどちらかで真。転送構文は standalone の索引にはあるが
+ * **web(QIDO) では取れないことがある**ので、片方だけでも判定できる形にしてある。
+ */
+export const isVideoInstance = (instance: {
+  sopClassUid?: string | null;
+  transferSyntaxUid?: string | null;
+}): boolean =>
+  isVideoSopClass(instance.sopClassUid) || isVideoTransferSyntax(instance.transferSyntaxUid);
+
+/**
  * シリーズを 2D ビューアで「どう出すか」。`classifySeriesRenderability` が
  * 「開けるか」を見るのに対し、こちらは**どの表示器に振り分けるか**を決める。
  *
@@ -149,8 +201,8 @@ export const isVideoSopClass = (sopClassUid: string | null | undefined): boolean
  * <p>encapsulated 動画は画素を持たないため、wadouri を通す Viewer2D では
  * `The pixel data is missing` になる。再生器へ振り分ける必要がある。
  *
- * <p>判定は StudyList と同じく**先頭インスタンスの SOP クラス**で行う。シリーズ内で SOP が
- * 混ざることは通常なく、混在時に一部だけ再生器へ送ると画面が割れるため代表で決める。
+ * <p>判定は StudyList と同じく**先頭インスタンスの SOP クラスと転送構文**で行う。シリーズ内で
+ * これらが混ざることは通常なく、混在時に一部だけ再生器へ送ると画面が割れるため代表で決める。
  *
  * <p>web(BFF) モードでは `/rendered` が索引のローカルファイルを前提にしていて使えないため
  * `videoUnavailable` を返す（`fw/video-viewer-design.md` §8）。
@@ -158,10 +210,10 @@ export const isVideoSopClass = (sopClassUid: string | null | undefined): boolean
 export type SeriesDisplay = "image" | "video" | "videoUnavailable";
 
 export function classifySeriesDisplay(
-  instances: readonly { sopClassUid?: string | null }[],
+  instances: readonly { sopClassUid?: string | null; transferSyntaxUid?: string | null }[],
   mode: "standalone" | "web",
 ): SeriesDisplay {
   if (instances.length === 0) return "image";
-  if (!isVideoSopClass(instances[0].sopClassUid)) return "image";
+  if (!isVideoInstance(instances[0])) return "image";
   return mode === "standalone" ? "video" : "videoUnavailable";
 }

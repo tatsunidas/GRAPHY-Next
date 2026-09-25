@@ -100,8 +100,9 @@ import { resolveImageId, sopIndex } from "./roiRestore";
 import { isInsideViewerOverlay } from "./viewerOverlay";
 import { installDebugApi, countStackSwap } from "./debugApi";
 import { matchesCombo, matchesShortcut } from "../shortcuts/registry";
-import { fetchSeriesLayout, type Instance } from "../api";
-import { classifySeriesDisplay, isVideoSopClass } from "./seriesRenderable";
+import { apiBase, fetchSeriesLayout, type Instance } from "../api";
+import { classifySeriesDisplay, isVideoInstance } from "./seriesRenderable";
+import { registerViewerTargetInfo } from "./viewerCommands";
 import { fetchSettings } from "../settings/settingsApi";
 import { useI18n } from "../i18n/i18n";
 import { LoadingSpinner } from "./LoadingSpinner";
@@ -307,15 +308,16 @@ export function SeriesViewer({
   // マルチチャンネル / 動画(ビデオ UID) / スライス1枚 では GridView を無効化。
   // XA シネはスタック＝フレームなので Grid は「フレーム一覧」として意味が通る（無効化しない）。
   const hasVideo = useMemo(
-    () => instances.some((i) => isVideoSopClass(i.sopClassUid)),
+    () => instances.some((i) => isVideoInstance(i)),
     [instances],
   );
   // どの表示器へ振り分けるか（image / video / videoUnavailable）。判定は
-  // StudyList と同じく**先頭インスタンスの SOP Class**で行う。`hasVideo` は「1 つでも動画が
-  // 混ざるか」で GridView 無効化などのガード用。役割が違うので別に持つ。
+  // StudyList と同じく**先頭インスタンスの SOP Class と転送構文**で行う（H.264 の US Multi-frame は
+  // SOP Class 上ふつうの画像なので、転送構文を見ないと真っ黒になる）。`hasVideo` は
+  // 「1 つでも動画が混ざるか」で GridView 無効化などのガード用。役割が違うので別に持つ。
   const display = classifySeriesDisplay(instances, mode);
   const videoInstances = useMemo(
-    () => instances.filter((i) => isVideoSopClass(i.sopClassUid)),
+    () => instances.filter((i) => isVideoInstance(i)),
     [instances],
   );
   const gridDisabled = layout.nC > 1 || hasVideo || nZ <= 1;
@@ -1256,6 +1258,43 @@ export function SeriesViewer({
     () => ({ patientKey: patientKey ?? "", studyUid, seriesUid, seriesLabel: seriesLabel ?? "", c: cc, t: tc }),
     [patientKey, studyUid, seriesUid, seriesLabel, cc, tc],
   );
+
+  /**
+   * 動画タイルの H1 登録（プラグイン host API）。
+   *
+   * <p>🚨 **動画に振り分けたシリーズは、プラグインから見えなくなる。** 表示器が Viewer2D では
+   * なくなるので {@link registerViewerCommands} の登録が無く、`getTargets()` が空を返す
+   * （UVS プラグインの対象が実際に消えた）。動画は W/L も画素取得も持てないが、
+   * 「いま何を見ているか」だけは名乗れる——H1 だけを別の登録簿へ入れる。
+   *
+   * <p>⚠️ `imageId` は空（cornerstone の像が無い）。`sliceCount` は動画の本数ではなく
+   * **フレーム数でもない**——ここでは 1 SOP = 1 本として 1 を入れ、フレーム数は
+   * プラグインが `/video-metadata` から取る（本体が持っていない値を推測しない）。
+   */
+  useEffect(() => {
+    if (!commandKey || display !== "video") return;
+    const first = videoInstances[0];
+    if (!first) return;
+    return registerViewerTargetInfo(commandKey, () => ({
+      patientKey: patientKey ?? "",
+      studyUid,
+      // 動画タイルは検査日を持っていない（imageId 経由の解決ができない）。**推測しない**。
+      studyDate: null,
+      seriesUid,
+      seriesLabel: seriesLabel ?? "",
+      imageId: "",
+      sopInstanceUid: first.sopInstanceUid,
+      apiBase: apiBase(),
+      kind: "video",
+      sliceIndex: 0,
+      sliceCount: 1,
+      c: 0,
+      t: 0,
+      // シリーズ一覧の Modality はこのコンポーネントに渡って来ていない。空で出す
+      // （"US" と決め打ちすると、内視鏡・顕微鏡の動画で嘘になる）。
+      modality: "",
+    }));
+  }, [commandKey, display, videoInstances, patientKey, studyUid, seriesUid, seriesLabel]);
 
   // 各次元スライダー横のシネ再生ボタン（▶/⏸）。
   const cinePlayBtn = (on: boolean, onToggle: () => void, disabled: boolean, testId?: string) => (

@@ -132,26 +132,6 @@ export interface ViewerViewState {
   zoom: number;
   /** 既定（画像が中央）からのオフセット（world mm）。 */
   pan: [number, number];
-  /**
-   * **画面に見えている画像上の範囲**（画像画素座標, 0 origin）。算出できなければ null。
-   *
-   * <p>`rotation` / `zoom` / `pan` / `flipH` / `flipV` / Fit 倍率が**すべてここに畳み込まれている**ので、
-   * 「画面で見えているとおりの画像」が欲しいときは**これだけを見ればよい**。
-   * 画像の外側（Fit のときの余白）は切り落としてある。
-   */
-  visibleRegion: VisibleRegion | null;
-}
-
-/** 画面に見えている画像上の範囲（`ViewerViewState.visibleRegion`）。 */
-export interface VisibleRegion {
-  /**
-   * 四隅の画像画素座標（0 origin）。並びは**画面から見た** 左上・右上・左下・右下。
-   * 回転・反転がここに入っているので、左上が画像の右下になることもある。
-   */
-  corners: [number, number][];
-  /** その範囲の画面上の大きさ（CSS px）。出力の縦横比に使う。 */
-  screenWidth: number;
-  screenHeight: number;
 }
 
 /**
@@ -1057,72 +1037,7 @@ interface PluginHostBase {
   notify: (message: string) => void;
   /** バックエンド面（Java 実装）を呼ぶ: POST /api/plugins/{id}/run。standalone のみ実行可。 */
   runBackend: (payload?: unknown) => Promise<unknown>;
-  /**
-   * 外部 AI への画像送信（H40）。
-   *
-   * <p>⚠ **患者の画素を第三者クラウドへ出す API である。** 使うには `plugin.json` の
-   * `permissions` に `"ai-egress"` を宣言すること（未宣言なら `permission-denied` で弾かれる。
-   * これは実際に強制される数少ない権限のひとつ）。送信のたびに、**送る画像とプロンプト全文を
-   * 見せた同意ダイアログ**が本体側で出る。同意が効くのはセッション内・同一 `scopeKey` のみ。
-   *
-   * <p>例外は投げず `{ok:false, error}` で返る。`error:"canceled"` はユーザーが送信を
-   * 取り消しただけなので、**エラーとして表示しないこと**。デスクトップ専用。
-   */
-  ai: {
-    generate: (req: AiGenerationRequest) => Promise<AiGenerationOutcome>;
-  };
-  /**
-   * 名前を付けて保存（H41）。OS の保存ダイアログを出すので、
-   * **同名ファイルの上書き確認は OS が行う**（自前で確認しないこと）。
-   * `{ok:false, canceled:true}` は取り消しであって失敗ではない。デスクトップ専用。
-   */
-  file: {
-    saveAs: (opts: PluginSaveFileOptions) => Promise<SaveFileResult>;
-  };
 }
-
-/** `host.ai.generate()` の要求（H40）。 */
-export interface AiGenerationRequest {
-  /** モデル ID（例 `gemini-3.1-flash-image`）。利用者の設定値を使うこと。 */
-  model: string;
-  /** API バージョン。既定 `v1beta`。 */
-  apiVersion?: string;
-  /** 指示文。**同意ダイアログに全文が表示される**ので、患者情報を混ぜないこと。 */
-  prompt: string;
-  /** 送信する画像そのもの（PNG 等のエンコード済みバイト列）。 */
-  imageBytes: Uint8Array;
-  mimeType?: string;
-  /** 同意を覚える単位。通常はシリーズ UID。省略すると毎回確認になる。 */
-  scopeKey?: string;
-  temperature?: number;
-  /** 既定 `["TEXT","IMAGE"]`。画像と説明文を 1 回で受け取るために両方を要求する。 */
-  responseModalities?: string[];
-}
-
-/** `host.ai.generate()` の結果。`data` はモデルの生レスポンス（解釈はプラグイン側の責任）。 */
-export type AiGenerationOutcome =
-  | { ok: true; data: unknown }
-  | {
-      ok: false;
-      /** `desktop-only` / `permission-denied` / `no-api-key` / `canceled` / `busy` / API 側のメッセージ。 */
-      error: string;
-      status?: number;
-      kind?: string;
-    };
-
-/** `host.file.saveAs()` の引数（H41）。 */
-export interface PluginSaveFileOptions {
-  /** 保存ダイアログの初期ファイル名（拡張子込み）。 */
-  defaultName: string;
-  bytes: Uint8Array;
-  /** 拡張子フィルタ。既定は PNG。 */
-  filters?: { name: string; extensions: string[] }[];
-}
-
-/** `host.file.saveAs()` の結果。`canceled` は失敗ではない。 */
-export type SaveFileResult =
-  | { ok: true; filePath: string }
-  | { ok: false; canceled?: boolean; error?: string };
 
 /** 2D Viewer 系サーフェスに渡るコンテキスト。 */
 export interface Viewer2DPluginHost extends PluginHostBase {
