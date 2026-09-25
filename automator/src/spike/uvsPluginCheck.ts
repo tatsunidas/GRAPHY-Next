@@ -350,6 +350,20 @@ async function main(): Promise<void> {
       }
     });
     await viewer.waitForTimeout(1_000);
+    // 🔑 プラグインを開くたびに窓が 1 枚ずつ重なる。利用者向けの窓（UVS の React 画面・1280×860）は
+    //    大きく、前の窓のタイトルバーが「プラグイン」メニューを覆ってクリックが届かない
+    //    （2026-09-25 に踏んだ）。検査は毎回「最後に開いた 1 枚」を見るので、開く前に閉じてよい。
+    //    ⚠ 閉じるのは React 画面の窓（本体の窓の中身に Shadow DOM を持つもの）だけ。段 6-7 の旧画面は
+    //    検査の途中で op を呼び直しても開いたまま使い続けるので、閉じると後の手順が押せなくなる。
+    const closePluginWindows = async (): Promise<void> => {
+      await viewer.evaluate(() => {
+        document.querySelectorAll<HTMLElement>(".graphy-plugin-window").forEach((w) => {
+          const hasShadow = [...w.querySelectorAll<HTMLElement>("*")].some((el) => el.shadowRoot != null);
+          if (hasShadow) w.querySelector<HTMLElement>(".graphy-plugin-window__close")?.click();
+        });
+      });
+      await viewer.waitForTimeout(200);
+    };
 
     // ── 1. プラグインが一覧に出て、起動できる ──────────────────────
     const menu = viewer.getByTestId("viewer2d-menu-plugins");
@@ -439,6 +453,7 @@ async function main(): Promise<void> {
         },
         { analyze: true, width: 720, height: 440, limit: ref.frames + 1 },
       );
+      await closePluginWindows();
       await viewer.getByTestId("viewer2d-menu-plugins").click();
       await viewer.waitForTimeout(300);
       await viewer.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
@@ -493,6 +508,7 @@ async function main(): Promise<void> {
           },
           { roi: true, width: 720, height: 440, stride: roiRef.stride, frameIndex: want.frameIndex },
         );
+        await closePluginWindows();
         await viewer.getByTestId("viewer2d-menu-plugins").click();
         await viewer.waitForTimeout(300);
         await viewer.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
@@ -542,6 +558,7 @@ async function main(): Promise<void> {
           },
           { predict: true, width: 720, height: 440, stride: 6, frameIndex },
         );
+        await closePluginWindows();
         await viewer.getByTestId("viewer2d-menu-plugins").click();
         await viewer.waitForTimeout(300);
         await viewer.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
@@ -615,6 +632,7 @@ async function main(): Promise<void> {
           (window as unknown as { __uvsRequest?: unknown }).__uvsRequest = r;
           delete (window as unknown as { __uvsSkeleton?: unknown }).__uvsSkeleton;
         }, request);
+        await closePluginWindows();
         await viewer.getByTestId("viewer2d-menu-plugins").click();
         await viewer.waitForTimeout(300);
         await viewer.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
@@ -933,10 +951,14 @@ async function main(): Promise<void> {
         };
 
         // 🔑 **指示を消してから開く**＝利用者と同じ経路（画面が出る）。
+        //    ⚠ ここで操作するのは stage6 の専用画面。利用者向けの既定は UVS の React 画面（[10] で検査）
+        //    になったので、旧画面を出す印（__uvsLegacyPanel）を立てる。
         await viewer.evaluate(() => {
           delete (window as unknown as { __uvsRequest?: unknown }).__uvsRequest;
           delete (window as unknown as { __uvsDebug?: unknown }).__uvsDebug;
+          (window as unknown as { __uvsLegacyPanel?: boolean }).__uvsLegacyPanel = true;
         });
+        await closePluginWindows();
         await viewer.getByTestId("viewer2d-menu-plugins").click();
         await viewer.waitForTimeout(300);
         await viewer.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
@@ -1106,6 +1128,83 @@ async function main(): Promise<void> {
         "[9] 知らない op は理由を返す（黙って空を返さない）",
         unknown,
       );
+    }
+
+    // ── 10. UVS の React の要約画面（単体アプリと共通・UVS-Web fw/graphy-plugin.md 段 3）──────
+    // 利用者と同じ経路（指示も旧画面の印も無し）で開き、**押して**数字を確かめる。
+    // 画面は Shadow DOM の中にある（UVS の CSS を本体へ漏らさないため）。Playwright の locator は
+    // open な shadow root を貫くので、そのまま探せる。
+    if (EXTERNAL_PLUGIN_DIR && fs.existsSync(refPath)) {
+      const ref = JSON.parse(fs.readFileSync(refPath, "utf8")) as { cpr: number[]; mad: number[] };
+      const pageErrors: string[] = [];
+      viewer.on("pageerror", (e) => pageErrors.push(e.message));
+      await viewer.evaluate(() => {
+        const w = window as unknown as Record<string, unknown>;
+        delete w.__uvsRequest;
+        delete w.__uvsDebug;
+        delete w.__uvsLegacyPanel;
+      });
+      await closePluginWindows();
+      await viewer.getByTestId("viewer2d-menu-plugins").click();
+      await viewer.waitForTimeout(300);
+      await viewer.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
+
+      const screen = viewer.getByTestId("uvs-summarizer").last();
+      const mounted = await screen.waitFor({ state: "visible", timeout: 30_000 }).then(() => true, () => false);
+      check(mounted, "[10] ★UVS の React の要約画面がプラグイン窓に出る");
+      if (mounted) {
+        await viewer.waitForTimeout(3_000);
+        const header = await screen.locator("h2").first().innerText().catch(() => "");
+        const meta = await screen.locator(".summarizer-header .muted").first().innerText().catch(() => "");
+        check(/600/.test(meta), "[10] 対象の動画の諸元が出る（600 フレーム）", { header, meta });
+
+        const img = await screen.locator(".view-pane img").first().evaluate(
+          (el) => ({ src: (el as HTMLImageElement).src.slice(0, 5), w: (el as HTMLImageElement).naturalWidth }),
+        ).catch(() => null);
+        check(!!img && img.src === "blob:" && img.w > 0, "[10] ★フレーム画像が出る（本体の /rendered から切り出し）", img);
+
+        // 閾値は画面に出ている値で期待値を出す（既定が変わっても検査が嘘をつかないように）
+        const ratio = Number(await screen.locator("#set-colorPixelRatioThreshold").inputValue());
+        const madTh = Number(await screen.locator("#set-staticMeanAbsDiffThreshold").inputValue());
+        const expColor = ref.cpr.filter((v) => v > ratio).length;
+        const expStatic = ref.mad.filter((v) => v < madTh).length;
+
+        const count = async (label: string): Promise<number | null> => {
+          const text = await screen.innerText();
+          const m = new RegExp(`${label} \\((\\d+)\\)`).exec(text);
+          return m ? Number(m[1]) : null;
+        };
+        const runAndWait = async (name: string, maxMs: number): Promise<boolean> => {
+          const btn = screen.getByRole("button", { name: new RegExp(`^${name}`) });
+          await btn.click();
+          await viewer.waitForTimeout(500);
+          const deadline = Date.now() + maxMs;
+          while (Date.now() < deadline) {
+            if (await btn.isEnabled()) return true;
+            await viewer.waitForTimeout(500);
+          }
+          return false;
+        };
+
+        const colorDone = await runAndWait("カラーフレームを全判定", 120_000);
+        const gotColor = await count("カラー");
+        check(colorDone && gotColor === expColor, "[10] ★★「カラーフレームを全判定」を押すと、除外数が独立参照から数えた数と一致", {
+          got: gotColor, expected: expColor, ratio,
+        });
+
+        const staticDone = await runAndWait("静止フレームを全判定", 120_000);
+        const gotStatic = await count("静止");
+        check(staticDone && gotStatic === expStatic, "[10] ★★「静止フレームを全判定」を押すと、除外数が独立参照から数えた数と一致", {
+          got: gotStatic, expected: expStatic, madThreshold: madTh,
+        });
+
+        const predictDone = await runAndWait("全フレームを予測", 600_000);
+        const chartEmpty = await screen.getByText("予測がまだ実行されていません").count();
+        check(predictDone && chartEmpty === 0, "[10] ★予測が最後まで走り、確率カーブが出る", { predictDone, chartEmpty });
+
+        check(pageErrors.length === 0, "[10] 画面のエラーが無い", pageErrors.slice(0, 3));
+        await viewer.screenshot({ path: path.join(OUT_DIR, "uvs-react.png") }).catch(() => {});
+      }
     }
 
     await viewer.screenshot({ path: path.join(OUT_DIR, "viewer.png") }).catch(() => {});
