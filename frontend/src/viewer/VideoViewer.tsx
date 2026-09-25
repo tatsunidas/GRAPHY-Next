@@ -45,6 +45,20 @@ import {
 import { TimeIntensityChart } from "./TimeIntensityChart";
 import { RoiHistogramChart } from "./RoiHistogramChart";
 import { clampFrame, frameToSeekTime } from "./videoFrameTime";
+import {
+  IDENTITY,
+  VIDEO_DEFAULT_VOI,
+  flipH as flipHOrient,
+  flipV as flipVOrient,
+  installVideoDisplay,
+  rotate90 as rotate90Orient,
+  type OrientableVideoViewport,
+  type Orient,
+} from "./videoTransform";
+import { registerViewerDisplayCommands } from "./viewerCommands";
+import { TOOL_IDS } from "./toolIds";
+import { ToolIcon } from "../icons/ToolIcon";
+import { UI_ICON_FILES, ACTIVE_ICON_STYLE } from "../icons/toolIcons";
 
 const { MouseBindings } = csToolsEnums;
 
@@ -60,6 +74,16 @@ const VIDEO_PRIMARY_TOOLS: { name: string; key: string }[] = [
   { name: EllipticalROITool.toolName, key: "ellipse" },
   { name: ProbeTool.toolName, key: "probe" },
 ];
+
+/**
+ * 画面のツールバー（`setTool`）から動画タイルへ届けてよいツール。Pan・Zoom は左ドラッグにも割り当てられる
+ * （中・右ドラッグの割り当てはそのまま残る）。ここに無いツール（ブラシ等）は動画では黙って無視する。
+ */
+const VIDEO_TOOLBAR_TOOLS = new Set<string>([
+  ...VIDEO_PRIMARY_TOOLS.map((x) => x.name),
+  PanTool.toolName,
+  ZoomTool.toolName,
+]);
 
 /** ROI 一覧・管理の対象（注釈系ツール。WW/WL・Pan/Zoom は注釈ではないので除く）。 */
 const ANNOTATION_TOOL_DEFS: { name: string; key: string }[] = [
@@ -157,7 +181,17 @@ function fmtTime(sec: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
+export function VideoViewer({
+  sopInstanceUid,
+  commandKey,
+}: {
+  sopInstanceUid: string;
+  /**
+   * 2D ビューアのタイル ID。渡すと、画面のツールバーの表示の操作（Fit・回転・反転・W/L・階調反転・ツール選択）が
+   * この動画にも届く（`registerViewerDisplayCommands`）。
+   */
+  commandKey?: string;
+}) {
   const { t } = useI18n();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<RenderingEngine | null>(null);
@@ -171,6 +205,10 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
   const [rate, setRate] = useState(1);
   const [loop, setLoop] = useState(true);
   const [activeTool, setActiveTool] = useState<string>(WindowLevelTool.toolName);
+  // 表示の向き（回転・反転）と階調反転。Cornerstone に差し替えた関数が毎回 ref を読む（videoTransform.ts）
+  const orientRef = useRef<Orient>(IDENTITY);
+  const invertedRef = useRef(false);
+  const [inverted, setInverted] = useState(false);
 
   // グローバル ROI 時系列解析（P3c）。
   const analysisAbortRef = useRef<AbortController | null>(null);
@@ -272,6 +310,9 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
 
     setPhase("loading");
     setMeta(null);
+    orientRef.current = IDENTITY;
+    invertedRef.current = false;
+    setInverted(false);
     setPlaying(false);
     setFrame(1);
     // 解析状態は SOP 切替でリセット（走行中なら中断）。
@@ -333,6 +374,11 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
         engineRef.current = engine;
         engine.enableElement({ viewportId, type: Enums.ViewportType.VIDEO, element: el });
         const vp = engine.getViewport(viewportId) as unknown as VideoVP;
+        // 回転・反転・ズーム・パン・WW/WL・階調反転を、注釈ツールと描画の両方に効く形で差し替える
+        installVideoDisplay(vp as unknown as OrientableVideoViewport, {
+          orient: () => orientRef.current,
+          inverted: () => invertedRef.current,
+        });
         vpRef.current = vp;
         await vp.setVideo(imageId, 1);
         if (cancelled) {
@@ -500,7 +546,7 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
     if (!tg) {
       return;
     }
-    for (const { name } of VIDEO_PRIMARY_TOOLS) {
+    for (const name of VIDEO_TOOLBAR_TOOLS) {
       if (name !== toolName) {
         try {
           tg.setToolPassive(name);
@@ -529,6 +575,93 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
       /* 無視 */
     }
   };
+
+  // ── 表示の操作（画像タイルの操作バー・画面のツールバーと同じ並び）。状態は ref に置き、描き直すだけ ──
+  const displayVp = () => vpRef.current as unknown as (VideoVP & OrientableVideoViewport) | null;
+  const rerender = () => {
+    try {
+      vpRef.current?.render();
+    } catch {
+      /* 無視 */
+    }
+  };
+  const rotateView = () => {
+    orientRef.current = rotate90Orient(orientRef.current);
+    fitView(); // 幅と高さが入れ替わるので収め直す（中心は保たれる）
+  };
+  const flipViewH = () => {
+    orientRef.current = flipHOrient(orientRef.current);
+    rerender();
+  };
+  const flipViewV = () => {
+    orientRef.current = flipVOrient(orientRef.current);
+    rerender();
+  };
+  const zoomView = (f: number) => {
+    const vp = displayVp();
+    if (!vp) return;
+    try {
+      vp.setCamera({ parallelScale: vp.getCamera().parallelScale / f });
+    } catch {
+      /* 無視 */
+    }
+  };
+  const applyInverted = (on: boolean) => {
+    invertedRef.current = on;
+    setInverted(on);
+    const vp = displayVp();
+    vp?.setVOI(vp.voiRange);
+  };
+  const setViewWindow = (center: number, width: number) => {
+    const vp = displayVp();
+    if (!vp || !(width > 0)) return;
+    vp.setVOI({ lower: center - width / 2, upper: center + width / 2 });
+    rerender();
+  };
+  const resetViewWindow = () => {
+    displayVp()?.setVOI({ ...VIDEO_DEFAULT_VOI });
+    rerender();
+  };
+  const resetView = () => {
+    orientRef.current = IDENTITY;
+    invertedRef.current = false;
+    setInverted(false);
+    displayVp()?.setVOI({ ...VIDEO_DEFAULT_VOI });
+    fitView();
+  };
+
+  // 画面のツールバー（2D ビューアの上部）からの操作をこの動画に届ける。関数は毎回作り直されるので、
+  // 最新のものを ref 経由で呼ぶ（登録は viewport ができたときに 1 回）。
+  const displayCmds = {
+    fit: fitView,
+    reset: resetView,
+    rotate90: rotateView,
+    flipH: flipViewH,
+    flipV: flipViewV,
+    invert: () => applyInverted(!invertedRef.current),
+    setWindowLevel: setViewWindow,
+    resetWindow: resetViewWindow,
+    setActiveTool: (name: string) => {
+      if (VIDEO_TOOLBAR_TOOLS.has(name)) selectPrimaryTool(name);
+    },
+  };
+  const displayCmdsRef = useRef(displayCmds);
+  displayCmdsRef.current = displayCmds;
+  useEffect(() => {
+    if (!commandKey || phase !== "viewport") return;
+    const c = () => displayCmdsRef.current;
+    return registerViewerDisplayCommands(commandKey, {
+      fit: () => c().fit(),
+      reset: () => c().reset(),
+      rotate90: () => c().rotate90(),
+      flipH: () => c().flipH(),
+      flipV: () => c().flipV(),
+      invert: () => c().invert(),
+      setWindowLevel: (cc, ww) => c().setWindowLevel(cc, ww),
+      resetWindow: () => c().resetWindow(),
+      setActiveTool: (name) => c().setActiveTool(name),
+    });
+  }, [commandKey, phase]);
 
   /**
    * 解析対象の Rectangle/Ellipse ROI をピクセル座標（world=pixel）で取り出す。無ければ null。
@@ -904,9 +1037,13 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
       tabIndex={0}
       onKeyDown={onKeyDown}
       onPointerDown={(e) => {
-        // 動画の上を押したらキーボード送りの対象にする（入力欄を押したときは入力欄に任せる）
-        const tag = (e.target as HTMLElement).tagName?.toLowerCase();
-        if (tag !== "input" && tag !== "select" && tag !== "button") (e.currentTarget as HTMLDivElement).focus();
+        // 動画の上を押したらキーボード送りの対象にする（入力欄・ボタンを押したときはそちらに任せる）。
+        // 🔴 ボタンの中のアイコン（img）もボタンとして扱う。また focus でスクロールさせない。
+        //    スクロールで押している最中のボタンがずれ、クリックが失われていた（パンのボタンが 1 回目に効かない）。
+        const target = e.target as HTMLElement;
+        if (!target.closest("input, select, textarea, button")) {
+          (e.currentTarget as HTMLDivElement).focus({ preventScroll: true });
+        }
       }}
       data-testid="video-viewer"
     >
@@ -919,6 +1056,55 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
 
       {phase === "viewport" && (
         <>
+          {/* 表示の操作バー（画像タイルと同じ並び: Fit・パン・縮小/拡大・回転・左右/上下反転・階調反転・リセット） */}
+          <div style={{ ...controlRowStyle, gap: 4 }} data-testid="video-display-bar">
+            <button type="button" style={iconBtn} data-testid="video-fit" onClick={fitView} title={t("viewer.fit")}>
+              <ToolIcon file={UI_ICON_FILES.fit} size={16} />
+            </button>
+            <button
+              type="button"
+              style={activeTool === PanTool.toolName ? iconBtnOn : iconBtn}
+              data-testid="video-pan"
+              aria-pressed={activeTool === PanTool.toolName}
+              onClick={() => selectPrimaryTool(activeTool === PanTool.toolName ? WindowLevelTool.toolName : PanTool.toolName)}
+              title={t("viewer.pan")}
+            >
+              <ToolIcon
+                id={TOOL_IDS.pan}
+                size={16}
+                style={activeTool === PanTool.toolName ? ACTIVE_ICON_STYLE : undefined}
+              />
+            </button>
+            <button type="button" style={iconBtn} data-testid="video-zoom-out" onClick={() => zoomView(1 / 1.2)} title={t("viewer.zoomOut")}>
+              −
+            </button>
+            <button type="button" style={iconBtn} data-testid="video-zoom-in" onClick={() => zoomView(1.2)} title={t("viewer.zoomIn")}>
+              ＋
+            </button>
+            <button type="button" style={iconBtn} data-testid="video-rotate" onClick={rotateView} title={t("viewer.rotate")}>
+              <ToolIcon file={UI_ICON_FILES.rotate} size={16} />
+            </button>
+            <button type="button" style={iconBtn} data-testid="video-flip-h" onClick={flipViewH} title={t("viewer.flipH")}>
+              <ToolIcon file={UI_ICON_FILES.flipH} size={16} />
+            </button>
+            <button type="button" style={iconBtn} data-testid="video-flip-v" onClick={flipViewV} title={t("viewer.flipV")}>
+              <ToolIcon file={UI_ICON_FILES.flipV} size={16} />
+            </button>
+            <button
+              type="button"
+              style={inverted ? iconBtnOn : iconBtn}
+              data-testid="video-invert"
+              aria-pressed={inverted}
+              onClick={() => applyInverted(!inverted)}
+              title={t("viewer.invert")}
+            >
+              <ToolIcon file={UI_ICON_FILES.invert} size={16} style={inverted ? ACTIVE_ICON_STYLE : undefined} />
+            </button>
+            <button type="button" style={iconBtn} data-testid="video-reset" onClick={resetView} title={t("viewer.reset")}>
+              <ToolIcon file={UI_ICON_FILES.reset} size={16} />
+            </button>
+          </div>
+
           {/* ツールバー（左ドラッグ=WW/WL・計測/ROI 切替。中=Pan・右=Zoom は固定）。 */}
           <div style={{ ...controlRowStyle, gap: 6 }}>
             {VIDEO_PRIMARY_TOOLS.map(({ name, key }) => (
@@ -933,9 +1119,6 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
                 {t(`video.tool.${key}`)}
               </button>
             ))}
-            <button type="button" style={toolBtn} onClick={fitView} title={t("video.tool.fit")}>
-              {t("video.tool.fit")}
-            </button>
             <span style={{ width: 1, height: 18, background: "#dce2e9" }} aria-hidden />
             {!analyzing ? (
               <button
@@ -1265,6 +1448,21 @@ const frameStyle: React.CSSProperties = {
   justifyContent: "center",
   maxWidth: 900,
 };
+
+const iconBtn: React.CSSProperties = {
+  minWidth: 28,
+  height: 26,
+  padding: "0 6px",
+  border: "1px solid #c9d3dd",
+  borderRadius: 4,
+  background: "#fff",
+  color: "#223",
+  cursor: "pointer",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+};
+const iconBtnOn: React.CSSProperties = { ...iconBtn, background: "#0b5cad", border: "1px solid #0b5cad", color: "#fff" };
 
 const hostStyle: React.CSSProperties = {
   width: "100%",

@@ -162,6 +162,26 @@ frontend: VideoViewport（ViewportType.VIDEO）
   - WW/WL = `setWindowLevel()`（DICOM VOI があれば初期適用）
 - **ツールは最小構成から**: P1 は Pan/Zoom のみ。計測/注釈は P3（VideoViewport はツールに対応）。
 
+### 5.2.1 表示の基本機能（2026-09-25・段 A2）
+シリーズビューア（画像タイル）と同じ操作を、動画タイルにも効かせる。
+- **画面のツールバーから届ける**: 動画タイルは `ViewerCommands` を登録しない（プラグイン向けの問い合わせに
+  「画像のスタック」として答えられないため）。代わりに `registerViewerDisplayCommands`（`viewerCommands.ts`）へ
+  表示の命令だけ（`fit / reset / rotate90 / flipH / flipV / invert / setWindowLevel / resetWindow / setActiveTool`）を載せ、
+  `runViewerCommand` が見つからないキーでこちらも探す。持たない命令（undo・LUT など）は何もしない。
+  `SeriesViewer` がタイル ID を `commandKey` として渡す。1 タイルに動画が複数あれば全部に届く。
+- **タイルの操作バー**: Fit・パン・縮小/拡大・回転・左右/上下反転・階調反転・リセット（画像タイルと同じ並び）。
+- **回転・反転**: Cornerstone 3.33.5 の `VideoViewport` は拡大縮小と平行移動しか持たない。しかも座標変換が
+  2 系統ある（描画 = `getTransform`、注釈ツール = `canvasToWorld` / `worldToCanvas`）。片方だけ回すと
+  「絵は回ったが ROI は回らない」になるので、`videoTransform.ts` の `installVideoDisplay` がインスタンス上で
+  両方を同じ式に差し替える（向き M は canvas の中心のまわりに掛ける）。あわせて Fit（`refreshRenderValues`）は
+  回転で縦横が入れ替わるのを見込み、`setCamera` は中心の world 点を保つ形にする（素の実装は回っているとパンが逆向きに動く）。
+- **WW/WL・階調反転**: CSS の `filter`（SVG の feColorMatrix）。Cornerstone の `setColorTransform` は窓の式になっておらず、
+  `linearRGB` で計算し、反転も持たないため使わない（`videoColorFilter`）。**canvas の画素は変わらない**（表示だけ）。
+- **同期（🔗）**: 動画は対象外。タイル枠の 🔗 は押せない（`useIsDisplayOnlyTile`）。
+- **検査**: `automator/src/spike/videoDisplayOpsCheck.ts`。4 象限を別の色に塗った動画で、回転・反転の向きを
+  canvas の画素で、W/L・階調反転をスクリーンショットで判定する。回転しても ROI が同じ象限に付いてくることも見る。
+  🔴 Cornerstone を上げたら必ず回す（内部に手を入れているため）。
+
 ### 5.3 ルーティング（案内表示の置換）
 - `SeriesViewer.tsx`: 現在 `VIDEO_SOP_CLASSES` を GridView 無効化に使っている。ここで
   「先頭インスタンスが video SOP」なら `<Viewer2D>` の代わりに `<VideoViewer sop=.../>` を表示。

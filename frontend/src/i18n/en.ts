@@ -502,6 +502,7 @@ export const en: Record<string, string> = {
   "viewer2d.layout.apply": "Apply",
   "viewer2d.tileCount": "{{n}} tiles",
   "viewer2d.sync.toggle": "Toggle series sync (slice position, W/L, zoom, pan, rotate, flip, LUT)",
+  "viewer2d.sync.videoUnsupported": "Videos are not synchronized",
   "viewer2d.sync.active": "Synced",
   "viewer2d.refLines.label": "Ref lines",
   "viewer2d.toolPanel.label": "Show tool panel",

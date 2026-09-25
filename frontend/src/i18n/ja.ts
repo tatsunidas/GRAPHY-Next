@@ -502,6 +502,7 @@ export const ja: Record<string, string> = {
   "viewer2d.layout.apply": "適用",
   "viewer2d.tileCount": "{{n}} タイル",
   "viewer2d.sync.toggle": "シリーズ同期 ON/OFF（スライス位置・W/L・Zoom・Pan・回転・反転・LUT）",
+  "viewer2d.sync.videoUnsupported": "動画は同期の対象外です",
   "viewer2d.sync.active": "Sync 中",
   "viewer2d.refLines.label": "参照線",
   "viewer2d.refLines.toggle": "リファレンスライン ON/OFF（他シリーズの現在スライス面が交差する線を表示）",
