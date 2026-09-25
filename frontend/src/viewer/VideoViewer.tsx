@@ -44,6 +44,7 @@ import {
 } from "./videoRoiScope";
 import { TimeIntensityChart } from "./TimeIntensityChart";
 import { RoiHistogramChart } from "./RoiHistogramChart";
+import { clampFrame, frameToSeekTime } from "./videoFrameTime";
 
 const { MouseBindings } = csToolsEnums;
 
@@ -105,6 +106,8 @@ interface VideoVP {
   pause(): void;
   togglePlayPause(): boolean;
   setFrameNumber(f: number): Promise<void>;
+  /** 再生時刻へシーク（秒）。フレーム送りはこちらを使う（{@link frameToSeekTime}）。 */
+  setTime(t: number): Promise<void>;
   setPlaybackRate(r?: number): void;
   getFrameNumber(): number;
   getNumberOfSlices(): number;
@@ -811,7 +814,7 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
     if (!vp) {
       return;
     }
-    const clamped = Math.min(Math.max(1, f), totalFrames);
+    const clamped = clampFrame(f, totalFrames);
     try {
       vp.pause();
       setPlaying(false);
@@ -823,11 +826,55 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
       //    2026-07-30 に入れて以来ずっと効いていなかった）。
       vp.setProperties({ loop: false });
       vp.loop = false;
-      vp.setFrameNumber(clamped);
+      // 🔑 境目 (n-1)/fps（setFrameNumber）ではなく**フレームの 1/4 の位置**へシークする。
+      //    境目だとブラウザの描く絵が 1 つ前になることがあり、「本当に 1 フレームずつ進んでいるのか
+      //    分からない」原因になっていた（videoFrameTime.ts・2026-09-25）。
+      if (fps > 0) {
+        void vp.setTime(frameToSeekTime(clamped, fps, meta?.durationSec ?? undefined));
+      } else {
+        void vp.setFrameNumber(clamped);
+      }
       setFrame(clamped);
     } catch {
       /* 無視 */
     }
+  };
+
+  // 🔑 表示領域の大きさが変わったら、描画面（canvas）の解像度を合わせる。これが無いと枠だけが
+  //    伸び縮みして絵が引き伸ばされ、縦横比が崩れていた（2026-09-25 ユーザ報告）。表示の状態は保つ。
+  useEffect(() => {
+    const el = hostRef.current;
+    if (phase !== "viewport" || !el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      try {
+        engineRef.current?.resize(true, true);
+      } catch {
+        /* 破棄後の通知は無視 */
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [phase]);
+
+  /**
+   * キーボードでフレーム送り（この動画ビューアにフォーカスがあるときだけ）。
+   * ←/→ = ±1、Shift で ±10、Home/End = 先頭/末尾、Space = 再生/一時停止。
+   * 入力欄・選択欄では奪わない（数値を打っている最中に矢印キーでフレームが動かないように）。
+   */
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const tag = (e.target as HTMLElement).tagName?.toLowerCase();
+    const type = ((e.target as HTMLInputElement).type || "").toLowerCase();
+    if (tag === "textarea" || tag === "select" || (tag === "input" && type !== "range" && type !== "checkbox")) return;
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+    const step = e.shiftKey ? 10 : 1;
+    if (e.key === "ArrowRight") seekToFrame(frame + step);
+    else if (e.key === "ArrowLeft") seekToFrame(frame - step);
+    else if (e.key === "Home") seekToFrame(1);
+    else if (e.key === "End") seekToFrame(totalFrames);
+    else if (e.key === " ") togglePlay();
+    else return;
+    e.preventDefault();
+    e.stopPropagation(); // 2D ビューアの ↑↓ や Space（シネ）と取り合わない
   };
 
   if (phase === "transcode") {
@@ -852,7 +899,17 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
   const totSec = fps > 0 ? (totalFrames - 1) / fps : 0;
 
   return (
-    <div style={{ marginTop: 10 }}>
+    <div
+      style={{ marginTop: 10, outline: "none" }}
+      tabIndex={0}
+      onKeyDown={onKeyDown}
+      onPointerDown={(e) => {
+        // 動画の上を押したらキーボード送りの対象にする（入力欄を押したときは入力欄に任せる）
+        const tag = (e.target as HTMLElement).tagName?.toLowerCase();
+        if (tag !== "input" && tag !== "select" && tag !== "button") (e.currentTarget as HTMLDivElement).focus();
+      }}
+      data-testid="video-viewer"
+    >
       {/* VideoViewport のホスト。cornerstone が内部に canvas を生成する。常時マウントして ref を確保。 */}
       <div style={frameStyle}>
         <div ref={hostRef} data-testid="video-viewport-host" style={hostStyle} />
@@ -1021,6 +1078,24 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
             >
               {playing ? "⏸" : "▶"}
             </button>
+            <button
+              type="button"
+              style={frameBtn}
+              data-testid="video-frame-prev"
+              title={t("video.prevFrame")}
+              onClick={() => seekToFrame(frame - 1)}
+            >
+              ◀
+            </button>
+            <button
+              type="button"
+              style={frameBtn}
+              data-testid="video-frame-next"
+              title={t("video.nextFrame")}
+              onClick={() => seekToFrame(frame + 1)}
+            >
+              ▶
+            </button>
             <input
               type="range"
               data-testid="video-seek"
@@ -1035,7 +1110,11 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
               style={{ color: "#556", fontSize: 12, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}
               data-testid="video-frame-indicator"
             >
-              {fps > 0 ? `${fmtTime(curSec)} / ${fmtTime(totSec)}` : `${frame} / ${totalFrames}`}
+              {/* フレーム番号を常に出す（1 フレームずつ進んでいることが分かるように）。時刻は添える */}
+              <span data-testid="video-frame-number" style={{ fontWeight: 600, color: "#223" }}>
+                {t("video.frame")} {frame} / {totalFrames}
+              </span>
+              {fps > 0 && <span style={{ marginLeft: 8 }}>{`${fmtTime(curSec)} / ${fmtTime(totSec)}`}</span>}
             </span>
           </div>
 
@@ -1061,27 +1140,6 @@ export function VideoViewer({ sopInstanceUid }: { sopInstanceUid: string }) {
               </select>
             </span>
 
-            <span style={ctrlLabel}>
-              {t("video.frame")}
-              <button
-                type="button"
-                style={frameBtn}
-                data-testid="video-frame-prev"
-                title={t("video.prevFrame")}
-                onClick={() => seekToFrame(frame - 1)}
-              >
-                ◀
-              </button>
-              <button
-                type="button"
-                style={frameBtn}
-                data-testid="video-frame-next"
-                title={t("video.nextFrame")}
-                onClick={() => seekToFrame(frame + 1)}
-              >
-                ▶
-              </button>
-            </span>
 
             {meta && (
               <span style={{ color: "#889", fontSize: 12 }}>
