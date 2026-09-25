@@ -33,6 +33,14 @@ public class UvsPlugin implements GraphyPlugin {
 
     @Override
     public Object run(Map<String, Object> args) {
+        // ── 段 6: `op` があれば新経路。プローブは走らせない ──────────
+        //   🔑 **`op` が無ければ従来どおり**。段 2〜5 の 40 検査は旧フラグ（analyze/roi/predict）で
+        //      動き続ける必要がある——あれが段 6 の回帰テストそのものだから。
+        Object op = args == null ? null : args.get("op");
+        if (op != null && !String.valueOf(op).isBlank()) {
+            return dispatch(String.valueOf(op), args);
+        }
+
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("ok", true);
         out.put("note", "これは疎通確認であって解析ではない（fw/uvs-plugin-design.md 段 2）");
@@ -73,6 +81,468 @@ public class UvsPlugin implements GraphyPlugin {
         }
 
         return out;
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  段 6: op 方式
+    //
+    //  画面は 1 回の解析で 40 回以上ここを呼ぶ。そのたびに MP4 を落とし直したり
+    //  `ffmpeg -version` を起こしたりしないよう、状態は {@link UvsSession} が持つ。
+    //  戻りは必ず {"ok":..., "op":...}（失敗時は "error" も）。
+    //  🔴 **args のエコーバックはしない**——40 往復ぶんの無駄が乗る。
+    // ══════════════════════════════════════════════════════════════
+
+    private Map<String, Object> dispatch(String op, Map<String, Object> args) {
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("ok", false);
+        r.put("op", op);
+        try {
+            switch (op) {
+                case "info" -> {
+                    UvsSession s = UvsSession.open(
+                            strArg(args, "apiBase"), strArg(args, "sopInstanceUid"), getClass().getClassLoader());
+                    r.putAll(s.info());
+                    r.put("ok", true);
+                }
+                case "prepare" -> r.putAll(prepare(args));
+                case "predict" -> r.putAll(predictChunk(args));
+                case "compose" -> r.putAll(compose(args));
+                case "checkCache" -> r.putAll(checkCache(args));
+                case "release" -> {
+                    UvsSession s = UvsSession.get(strArg(args, "sessionId"));
+                    // 🔑 既に無いセッションの release は**成功**にする。窓を閉じたときと
+                    //    明示解放が二重に飛ぶのはふつうに起きるので、そこで赤くしない。
+                    r.put("freedBytes", s == null ? 0L : s.close());
+                    r.put("existed", s != null);
+                    r.put("ok", true);
+                }
+                default -> r.put("error", "未知の op: " + op);
+            }
+        } catch (Throwable t) {
+            r.put("error", t.getClass().getSimpleName() + ": " + t.getMessage());
+        }
+        return r;
+    }
+
+    private static String strArg(Map<String, Object> args, String key) {
+        Object v = args == null ? null : args.get(key);
+        return v == null ? null : String.valueOf(v);
+    }
+
+    /**
+     * 走査（段 6 の {@code op:"prepare"}）— <b>復号 1 回</b>で
+     * ① 色判定の CPR 列 ② 静止判定の MAD 列 ③ 予測に要るフレームのキャッシュ、を同時に作る。
+     *
+     * <h3>🔴 なぜ 1 パスに載せるのか</h3>
+     * {@link FrameSource#readPair} は毎回<b>先頭から復号し直す</b>。4,958 フレームの動画で
+     * 331 サンプル × 2 枚を取りに行くと、平均で動画の半分を毎回復号することになる。
+     * 段 5 が 4 フレームだったから成立していただけで、そのままでは段 6 は動かない。
+     *
+     * <h3>🔴 なぜ生の rgb24 を置くのか</h3>
+     * {@link FrameCache} の説明のとおり。<b>sink が見た byte[] をそのまま書く</b>ので、
+     * 「キャッシュ ＝ 復号結果」はコードの構造から従う（{@code op:"checkCache"} で数字でも確かめる）。
+     *
+     * <h3>間引きの格子は動画全体で固定する</h3>
+     * 🔑 予測するフレームは <b>{@code index % interval == 0}</b> で決める。区間の先頭を起点に
+     * すると、<b>同じ動画でも区切り方で別の要約が出る</b>——チャンクに分けて呼ぶ設計と噛み合わない。
+     */
+    private Map<String, Object> prepare(Map<String, Object> args) throws Exception {
+        Map<String, Object> r = new LinkedHashMap<>();
+        UvsSession s = UvsSession.get(strArg(args, "sessionId"));
+        if (s == null) {
+            r.put("error", "セッションがありません（op:\"info\" で開き直してください）");
+            return r;
+        }
+        int lastFrame = Math.max(0, s.numberOfFrames - 1);
+        int from = Math.max(0, intArg(args, "from", 0));
+        int count = intArg(args, "count", 0); // 0 以下＝末尾まで
+        int interval = Math.max(1, intArg(args, "interval", s.intervalFrames()));
+        int stride = Math.max(1, intArg(args, "stride", s.strideFrames()));
+        boolean cacheForPredict = !Boolean.FALSE.equals(args.get("cacheForPredict"));
+
+        // スコアを出す最後のフレーム（この番号の相手＝+1 まで読む必要がある）。
+        int scoreLast = count > 0 ? Math.min(lastFrame, from + count - 1) : lastFrame;
+
+        // 予測を走らせる番号（動画全体で固定の格子）と、その差分の相手。
+        List<Integer> samples = new ArrayList<>();
+        java.util.TreeSet<Integer> needed = new java.util.TreeSet<>();
+        if (cacheForPredict) {
+            for (int i = ((from + interval - 1) / interval) * interval; i <= scoreLast; i += interval) {
+                samples.add(i);
+                needed.add(i);
+                // ⚠️ **範囲外の相手は丸めない。** 元アプリは最終フレームで相手を空画像にする。
+                //    段 4 の検査は「相手が無ければ null」で移植元と一致しているので、
+                //    ここで min(i+stride, last) に丸めると**別の ROI が出る**。
+                if (i + stride <= lastFrame) needed.add(i + stride);
+            }
+        }
+
+        FrameCache cache = s.cache();
+        // 🔴 始める前に空きを確かめる。足りないまま走らせると、16 分かけてディスクを埋めて落ちる。
+        long need = (long) needed.size() * cache.frameBytes();
+        long usable = Files.getFileStore(cache.dir()).getUsableSpace();
+        long margin = 64L * 1024 * 1024;
+        if (need + margin > usable) {
+            r.put("error", "空き容量が足りません: 必要 " + need + " バイト＋余裕 " + margin
+                    + " に対し空き " + usable + " バイト。区間を短くするか間引きを粗くしてください");
+            r.put("requiredBytes", need);
+            r.put("usableBytes", usable);
+            return r;
+        }
+
+        int readUntil = Math.max(needed.isEmpty() ? -1 : needed.last(), scoreLast + 1);
+        FrameScoring.Points points = new FrameScoring.Points(
+                s.width, s.height, FrameScoring.SAMPLING_POINTS, FrameScoring.RANDOM_SEED);
+        List<Double> cpr = new ArrayList<>();
+        List<Double> mad = new ArrayList<>();
+        long t0 = System.currentTimeMillis();
+        int seen;
+        FrameSource src = s.open();
+        try {
+            // ⚠️ 渡される配列は使い回されるので、直前フレームは必ず複製して持つ。
+            byte[][] holder = new byte[][]{null};
+            int[] prevIdx = new int[]{-1};
+            List<Double> cprRef = cpr;
+            List<Double> madRef = mad;
+            seen = src.forEachFrame(readUntil, (i, frame) -> {
+                if (needed.contains(i)) cache.write(i, frame);
+                byte[] p = holder[0];
+                if (p != null && prevIdx[0] >= from && prevIdx[0] <= scoreLast) {
+                    cprRef.add(FrameScoring.colorPixelRatio(p, points, FrameScoring.COLOR_THRESHOLD));
+                    madRef.add(FrameScoring.meanAbsDiff(p, frame, points, s.width));
+                }
+                holder[0] = frame.clone();
+                prevIdx[0] = i;
+            });
+        } finally {
+            src.close();
+        }
+        // 最後のフレームは相手が無い。CPR は自分だけで出せるが MAD は出せないので、
+        // 🔴 **元アプリと同じく直前の値を複製する**（逆順比較のバグ B3 を避けた形）。
+        if (!mad.isEmpty()) mad.add(mad.get(mad.size() - 1));
+
+        UvsSession.Scan scanned = new UvsSession.Scan(
+                from, cpr.size(), interval, stride,
+                cpr.stream().mapToDouble(Double::doubleValue).toArray(),
+                mad.stream().mapToDouble(Double::doubleValue).toArray(),
+                samples.stream().mapToInt(Integer::intValue).toArray());
+        s.setScan(scanned);
+
+        r.put("ok", true);
+        r.put("sessionId", s.id);
+        r.put("from", from);
+        r.put("frames", cpr.size());
+        r.put("cpr", cpr);
+        r.put("mad", mad);
+        r.put("sampleIndices", samples);
+        r.put("interval", interval);
+        r.put("stride", stride);
+        r.put("cachedFrames", cache.count());
+        r.put("cacheBytes", cache.bytes());
+        r.put("framesDecoded", seen);
+        r.put("ffmpegRuns", 1); // 🔑 1 パス。ここが 1 でなくなったら設計が壊れている
+        r.put("decodeMs", System.currentTimeMillis() - t0);
+        r.put("samplingPoints", points.count);
+        r.put("seed", FrameScoring.RANDOM_SEED);
+        r.put("colorThreshold", FrameScoring.COLOR_THRESHOLD);
+        return r;
+    }
+
+    /**
+     * 要約インデックスの合成（段 6 の {@code op:"compose"}）。
+     *
+     * <h3>🔴 これは画面の常用経路ではない</h3>
+     * しきい値のドラッグでは<b>フロントが自分で合成する</b>（サーバ往復すると手が止まる）。
+     * この op は<b>そのフロント実装のオラクル</b>——同じ入力で Java と同じ答えになるかを
+     * 実機で突き合わせるためにある。合成規則の正本は {@link com.vis.uvs.analysis.SummaryComposer}
+     * であって、フロントはその写しに過ぎない、という関係をここで保証する。
+     *
+     * <h3>入力の 2 通り</h3>
+     * <ul>
+     *   <li>{@code heart} を直接渡す … 共有テストベクタ（`testdata/summary-composer-cases.json`）の形</li>
+     *   <li>{@code predScores} ＋ {@code interval} ＋ {@code threshold} … 実データの形。
+     *       補間してから閾値を当てる（{@code applyPredictionThreshold}）</li>
+     * </ul>
+     * ⚠️ <b>番号はすべて 1-based</b>（`Indices` / `SummaryComposer` の世界）。
+     * `cpr[]` / `mad[]` / `sampleIndices[]` は 0-based なので、渡す前に必ず +1 すること。
+     */
+    private Map<String, Object> compose(Map<String, Object> args) {
+        Map<String, Object> r = new LinkedHashMap<>();
+        int frameCount = intArg(args, "frameCount", 0);
+        if (frameCount <= 0) {
+            r.put("error", "frameCount が必要です（1 以上）");
+            return r;
+        }
+        List<Integer> colorRemove = intList(args, "colorRemove");
+        List<Integer> staticRemove = intList(args, "staticRemove");
+        List<Integer> userAdd = intList(args, "userAdd");
+        List<Integer> userRemove = intList(args, "userRemove");
+        List<Integer> heart = intList(args, "heart"); // null＝予測未実行
+
+        double[] interpolated = null;
+        if (heart == null && args.get("predScores") instanceof Map<?, ?> raw && !raw.isEmpty()) {
+            java.util.TreeMap<Integer, Double> pred = new java.util.TreeMap<>();
+            for (Map.Entry<?, ?> e : raw.entrySet()) {
+                if (e.getValue() instanceof Number n) {
+                    pred.put(Integer.parseInt(String.valueOf(e.getKey())), n.doubleValue());
+                }
+            }
+            int interval = Math.max(1, intArg(args, "interval", 1));
+            float threshold = (float) numArg(args, "threshold",
+                    com.vis.uvs.analysis.AnalysisSettings.DEFAULT_PREDICTION_THRESHOLD);
+            com.vis.uvs.analysis.SummaryComposer.HeartResult hr =
+                    com.vis.uvs.analysis.SummaryComposer.applyPredictionThreshold(
+                            pred, frameCount, interval, threshold);
+            if (hr != null) {
+                heart = hr.heart();
+                interpolated = hr.interpolated();
+            }
+        }
+
+        com.vis.uvs.analysis.SummaryComposer.Derived d =
+                com.vis.uvs.analysis.SummaryComposer.compose(
+                        frameCount, colorRemove, staticRemove, heart, userAdd, userRemove);
+        com.vis.uvs.analysis.SummaryComposer.Results res =
+                com.vis.uvs.analysis.SummaryComposer.results(frameCount, d, userAdd, userRemove);
+
+        r.put("ok", true);
+        r.put("frameCount", frameCount);
+        r.put("colorRemove", d.colorRemove());
+        r.put("staticRemove", d.staticRemove());
+        r.put("heart", d.heart());
+        r.put("removedByPrediction", d.removedByPrediction());
+        r.put("finalIndices", d.finalIndices());
+
+        Map<String, Object> counts = new LinkedHashMap<>();
+        counts.put("numberOfFrames", res.numberOfFrames());
+        counts.put("totalRemoved", res.totalRemoved());
+        counts.put("colorRemoved", res.colorRemoved());
+        counts.put("staticRemoved", res.staticRemoved());
+        counts.put("probaRemoved", res.probaRemoved());
+        counts.put("userAdded", res.userAdded());
+        counts.put("userRemoved", res.userRemoved());
+        counts.put("totalRate", res.totalRate());
+        counts.put("colorRate", res.colorRate());
+        counts.put("staticRate", res.staticRate());
+        counts.put("probaRate", res.probaRate());
+        // 🔴 画面に出すときは「色・静止・確率の件数は重複するので足し合わせない」と書くこと。
+        counts.put("note", "色 / 静止 / 確率の件数は重なる。合計は totalRemoved であって和ではない");
+        r.put("results", counts);
+
+        if (interpolated != null && Boolean.TRUE.equals(args.get("includeInterpolated"))) {
+            r.put("interpolated", interpolated);
+        }
+        return r;
+    }
+
+    /** 数の配列を取り出す。キーが無い / null なら null（「指定されていない」と「空」を区別する）。 */
+    private static List<Integer> intList(Map<String, Object> args, String key) {
+        Object v = args == null ? null : args.get(key);
+        if (!(v instanceof List<?> l)) return null;
+        List<Integer> out = new ArrayList<>();
+        for (Object o : l) if (o instanceof Number n) out.add(n.intValue());
+        return out;
+    }
+
+    private static double numArg(Map<String, Object> args, String key, double dflt) {
+        Object v = args == null ? null : args.get(key);
+        return v instanceof Number n ? n.doubleValue() : dflt;
+    }
+
+    /**
+     * 予測を<b>区間に分けて</b>走らせる（段 6 の {@code op:"predict"}）。
+     *
+     * <h3>なぜ分けるのか</h3>
+     * 1 予測あたり 2.2〜2.9 秒。4,958 フレーム・間引き 15 なら 331 サンプル ≒ <b>16 分</b>。
+     * {@code runBackend()} は同期 1 往復で進捗を返せないので、<b>数サンプルずつ返して
+     * 呼び直してもらう</b>。進捗はフロントが持つ（「押したら 11 分無反応」を作らない）。
+     *
+     * <h3>中止は実装しない</h3>
+     * 🔑 <b>フロントが次のチャンクを投げなければ止まる。</b> 分割方式の副産物として
+     * 中止が無料で手に入るので、止める仕掛けを別に作らない（止め忘れの経路も増えない）。
+     *
+     * <h3>フレームはキャッシュから読む</h3>
+     * {@code prepare} が置いた生 rgb24 をそのまま使う。⚠️ <b>差分の相手が範囲外なら null</b>
+     * ——元アプリは最終フレームで空画像を相手にする。丸めて実フレームを渡すと別の ROI が出る。
+     */
+    private Map<String, Object> predictChunk(Map<String, Object> args) throws Exception {
+        Map<String, Object> r = new LinkedHashMap<>();
+        UvsSession s = UvsSession.get(strArg(args, "sessionId"));
+        if (s == null) {
+            r.put("error", "セッションがありません（op:\"info\" で開き直してください）");
+            return r;
+        }
+        UvsSession.Scan sc = s.scan();
+        if (sc == null) {
+            r.put("error", "先に op:\"prepare\" を走らせてください");
+            return r;
+        }
+        int[] samples = sc.samples();
+        int sampleFrom = Math.max(0, intArg(args, "sampleFrom", 0));
+        int sampleCount = Math.max(1, intArg(args, "sampleCount", 4));
+        boolean includeFeatures = Boolean.TRUE.equals(args.get("includeFeatures"));
+        int end = Math.min(samples.length, sampleFrom + sampleCount);
+        int lastFrame = Math.max(0, s.numberOfFrames - 1);
+
+        // 🔴 モデルは**自分のフォルダ**から読む。読めなければ既定値へ落ちずに失敗させる。
+        java.nio.file.Path dir = pluginDir();
+        com.vis.uvs.ml.LrModel model = com.vis.uvs.ml.LrModel.fromJson(
+                java.nio.file.Files.readString(dir.resolve("reference-params.json")));
+        String[] names = model.featureNames();
+        double[] paddings = readPaddings(dir.resolve("model-manifest.json"), names);
+
+        com.vis.uvs.analysis.AnalysisSettings.Extractor ex =
+                com.vis.uvs.analysis.AnalysisSettings.Extractor.EXTRACTOR_COMPOSITE;
+        com.vis.uvs.radiomics.RadiomicsFeatureService svc =
+                new com.vis.uvs.radiomics.RadiomicsFeatureService();
+        com.vis.uvs.radiomics.RadiomicsFeatureService.Spec spec =
+                com.vis.uvs.radiomics.RadiomicsFeatureService.Spec.swingDefaults(names, paddings);
+        FrameCache cache = s.cache();
+
+        List<Map<String, Object>> scores = new ArrayList<>();
+        boolean anyPadded = false;
+        for (int k = sampleFrom; k < end; k++) {
+            int index = samples[k];
+            long t0 = System.currentTimeMillis();
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("sample", k);
+            row.put("frameIndex", index);
+
+            byte[] a = cache.read(index);
+            if (a == null) {
+                row.put("ok", false);
+                row.put("error", "フレーム " + index + " がキャッシュにありません（prepare をやり直してください）");
+                scores.add(row);
+                continue;
+            }
+            int partner = index + sc.stride();
+            byte[] b = partner <= lastFrame ? cache.read(partner) : null;
+
+            com.vis.uvs.video.Frame f0 = new com.vis.uvs.video.Frame(index + 1, s.width, s.height, a);
+            com.vis.uvs.video.Frame f1 = b == null ? null
+                    : new com.vis.uvs.video.Frame(partner + 1, s.width, s.height, b);
+
+            Map<Integer, ij.gui.Roi> rois = com.vis.uvs.analysis.candidate.CandidateExtractor.extract(
+                    f0, f1, ex, 1,
+                    com.vis.uvs.analysis.roi.RoiSettings.forExtractor(ex),
+                    com.vis.uvs.analysis.flow.FlowSettings.swingDefaults());
+
+            List<Map<String, Object>> perRoi = new ArrayList<>();
+            double sum = 0;
+            boolean framePadded = false;
+            for (Map.Entry<Integer, ij.gui.Roi> e : rois.entrySet()) {
+                com.vis.uvs.radiomics.RoiCropper.Cropped c =
+                        com.vis.uvs.radiomics.RoiCropper.crop(f0, e.getValue());
+                if (c == null) continue;
+                com.vis.uvs.radiomics.RadiomicsFeatureService.Extracted ext =
+                        svc.extractDetailed(c.image(), c.mask(), spec);
+                double p = model.score(ext.values());
+                sum += p;
+                Map<String, Object> one = new LinkedHashMap<>();
+                one.put("cluster", e.getKey());
+                one.put("x", c.bounds().x);
+                one.put("y", c.bounds().y);
+                one.put("w", c.bounds().width);
+                one.put("h", c.bounds().height);
+                one.put("pixels", c.bounds().width * c.bounds().height);
+                one.put("probability", p);
+                // ⚠️ 未検証の経路。**通ったら、どの特徴が埋まったかを名前で残す**（§8.10）。
+                List<String> paddedNames = new ArrayList<>();
+                for (int i = 0; i < names.length; i++) if (ext.padded()[i]) paddedNames.add(names[i]);
+                one.put("padded", !paddedNames.isEmpty());
+                if (!paddedNames.isEmpty()) {
+                    one.put("paddedFeatures", paddedNames);
+                    framePadded = true;
+                }
+                if (includeFeatures) {
+                    Map<String, Object> feats = new LinkedHashMap<>();
+                    for (int i = 0; i < names.length; i++) feats.put(names[i], ext.values()[i]);
+                    one.put("features", feats);
+                }
+                perRoi.add(one);
+            }
+            anyPadded |= framePadded;
+            row.put("ok", true);
+            row.put("rois", perRoi);
+            // フレームの確率は **ROI ごとの確率の平均**（移植元と同じ）。
+            row.put("probability", perRoi.isEmpty() ? 0.0 : sum / perRoi.size());
+            row.put("padded", framePadded);
+            row.put("elapsedMs", System.currentTimeMillis() - t0);
+            scores.add(row);
+        }
+
+        r.put("ok", true);
+        r.put("sessionId", s.id);
+        r.put("scores", scores);
+        r.put("sampleFrom", sampleFrom);
+        r.put("nextFrom", end);
+        r.put("total", samples.length);
+        r.put("done", end >= samples.length);
+        r.put("anyPadded", anyPadded);
+        r.put("stride", sc.stride());
+        r.put("radiomicsJVersion", com.vis.uvs.radiomics.RadiomicsFeatureService.radiomicsJVersion());
+        return r;
+    }
+
+    /**
+     * 🔴 <b>「キャッシュしたフレームは、復号したフレームと本当に同じか」を数字で確かめる</b>
+     * （段 6 の最重要検査）。
+     *
+     * <p>相手は {@link FrameSource#readPair}——<b>段 4 / 段 5 が実際に使い、移植元と完全一致すると
+     * 確かめられた経路</b>である。ここが崩れていると ROI が静かにずれ、
+     * 「確率だけが違う」という気づきにくい壊れ方に戻る。
+     */
+    private Map<String, Object> checkCache(Map<String, Object> args) throws Exception {
+        Map<String, Object> r = new LinkedHashMap<>();
+        UvsSession s = UvsSession.get(strArg(args, "sessionId"));
+        if (s == null) {
+            r.put("error", "セッションがありません（op:\"info\" で開き直してください）");
+            return r;
+        }
+        Object raw = args.get("indices");
+        List<Integer> indices = new ArrayList<>();
+        if (raw instanceof List<?> l) {
+            for (Object o : l) if (o instanceof Number n) indices.add(n.intValue());
+        }
+        if (indices.isEmpty()) {
+            UvsSession.Scan sc = s.scan();
+            if (sc == null) {
+                r.put("error", "先に op:\"prepare\" を走らせてください");
+                return r;
+            }
+            // 既定は先頭・中央・末尾のサンプル（全部照合すると 1 枚ごとに復号し直すので遅い）。
+            int[] sm = sc.samples();
+            if (sm.length > 0) {
+                indices.add(sm[0]);
+                indices.add(sm[sm.length / 2]);
+                indices.add(sm[sm.length - 1]);
+            }
+        }
+        FrameCache cache = s.cache();
+        List<Map<String, Object>> rows = new ArrayList<>();
+        boolean allMatch = true;
+        FrameSource src = s.open();
+        try {
+            for (int i : indices) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("index", i);
+                String cached = cache.digest(i);
+                byte[][] pair = src.readPair(i, i);
+                String decoded = pair[0] == null ? null : FrameCache.md5(pair[0]);
+                row.put("cachedMd5", cached);
+                row.put("decodedMd5", decoded);
+                boolean same = cached != null && cached.equals(decoded);
+                row.put("same", same);
+                if (!same) allMatch = false;
+                rows.add(row);
+            }
+        } finally {
+            src.close();
+        }
+        r.put("ok", true);
+        r.put("allMatch", allMatch);
+        r.put("checked", rows);
+        return r;
     }
 
     /**

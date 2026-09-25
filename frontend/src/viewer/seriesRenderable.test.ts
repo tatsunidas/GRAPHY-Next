@@ -3,7 +3,14 @@
  * Author: Tatsuaki Kobayashi
  */
 import { describe, expect, it } from "vitest";
-import { classifySeriesDisplay, classifySeriesRenderability, isNonImageSeries, isVideoSopClass } from "./seriesRenderable";
+import {
+  classifySeriesDisplay,
+  classifySeriesRenderability,
+  isNonImageSeries,
+  isVideoInstance,
+  isVideoSopClass,
+  isVideoTransferSyntax,
+} from "./seriesRenderable";
 
 describe("classifySeriesRenderability", () => {
   it("RTSTRUCT は SOP クラスで弾く（実機で未処理例外を出していたケース）", () => {
@@ -93,5 +100,58 @@ describe("classifySeriesDisplay", () => {
     expect(classifySeriesDisplay([], "standalone")).toBe("image");
     expect(classifySeriesDisplay([{}], "standalone")).toBe("image");
     expect(classifySeriesDisplay([{ sopClassUid: null }], "standalone")).toBe("image");
+  });
+});
+
+describe("転送構文で包まれた動画（H.264 の US Multi-frame）", () => {
+  // 🚨 実機で「開けるのに真っ黒」を出していたケース。SOP クラスはふつうの画像なので、
+  //    転送構文を見ないと Viewer2D へ流れ、dicom-image-loader が H.264 を復号できず何も描かない。
+  const US_MULTIFRAME = "1.2.840.10008.5.1.4.1.1.3.1"; // Ultrasound Multi-frame Image Storage
+  const H264 = "1.2.840.10008.1.2.4.102";
+  const MPEG2 = "1.2.840.10008.1.2.4.100";
+  const EXPLICIT_VR_LE = "1.2.840.10008.1.2.1";
+  const JPEG_LOSSLESS = "1.2.840.10008.1.2.4.70";
+
+  it("H.264 の US Multi-frame は再生器へ回す", () => {
+    expect(classifySeriesDisplay([{ sopClassUid: US_MULTIFRAME, transferSyntaxUid: H264 }], "standalone"))
+      .toBe("video");
+  });
+
+  it("MPEG2 も再生器へ回す（backend が ffmpeg で変換して配信する）", () => {
+    expect(classifySeriesDisplay([{ sopClassUid: US_MULTIFRAME, transferSyntaxUid: MPEG2 }], "standalone"))
+      .toBe("video");
+  });
+
+  it("非圧縮・JPEG の US Multi-frame は従来どおり画像として開く", () => {
+    for (const ts of [EXPLICIT_VR_LE, JPEG_LOSSLESS]) {
+      expect(classifySeriesDisplay([{ sopClassUid: US_MULTIFRAME, transferSyntaxUid: ts }], "standalone"))
+        .toBe("image");
+    }
+  });
+
+  it("web モードでは再生できないと伝える（黙って真っ黒にしない）", () => {
+    expect(classifySeriesDisplay([{ sopClassUid: US_MULTIFRAME, transferSyntaxUid: H264 }], "web"))
+      .toBe("videoUnavailable");
+  });
+
+  it("転送構文が取れない（web の QIDO）なら SOP クラスだけで判定する", () => {
+    expect(classifySeriesDisplay([{ sopClassUid: US_MULTIFRAME }], "standalone")).toBe("image");
+    expect(classifySeriesDisplay([{ sopClassUid: US_MULTIFRAME, transferSyntaxUid: null }], "standalone"))
+      .toBe("image");
+  });
+
+  it("isVideoInstance は SOP クラスと転送構文のどちらか一方でも動画なら真", () => {
+    expect(isVideoInstance({ sopClassUid: US_MULTIFRAME, transferSyntaxUid: H264 })).toBe(true);
+    expect(isVideoInstance({ sopClassUid: "1.2.840.10008.5.1.4.1.1.77.1.4.1" })).toBe(true);
+    expect(isVideoInstance({ sopClassUid: US_MULTIFRAME, transferSyntaxUid: EXPLICIT_VR_LE })).toBe(false);
+    expect(isVideoInstance({})).toBe(false);
+  });
+
+  it("isVideoTransferSyntax は前後の空白を無視する（索引の値が汚れていることがある）", () => {
+    expect(isVideoTransferSyntax(` ${H264} `)).toBe(true);
+    expect(isVideoTransferSyntax(EXPLICIT_VR_LE)).toBe(false);
+    expect(isVideoTransferSyntax(null)).toBe(false);
+    // SOP クラス側の判定は転送構文を見ない（役割が違う）。
+    expect(isVideoSopClass(US_MULTIFRAME)).toBe(false);
   });
 });

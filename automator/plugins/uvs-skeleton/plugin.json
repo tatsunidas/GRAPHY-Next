@@ -1,15 +1,21 @@
 {
   "id": "uvs-skeleton",
-  "name": "UVS (skeleton)",
-  "version": "0.1.0",
+  "name": "UVS（胎児心エコー動画の要約）",
+  "version": "0.2.0",
   "engines": {
     "graphy": ">=0.2.0",
-    "os": ["win32", "darwin", "linux"]
+    "os": [
+      "win32",
+      "darwin",
+      "linux"
+    ]
   },
-  "description": "Probes the JAR-face seam for the fetal echo summarization port: which of RadiomicsJ / ImageJ / ffmpeg / plugin-folder files / rendered MP4 are actually reachable (fw/uvs-plugin-design.md stage 2).",
-  "author": "automator",
+  "description": "Summarizes fetal echocardiography video: picks the frames where the heart is visible (logistic regression on 15 radiomics features), and drops colored / static / low-probability frames. Research use only. Standalone only (JAR face). fw/uvs-plugin-design.md stage 6.",
+  "author": "Visionary Imaging Services",
   "license": "MIT",
-  "contributes": ["viewer2d.menu"],
+  "contributes": [
+    "viewer2d.menu"
+  ],
   "ui": "ui.js",
   "entrypoint": "com.vis.uvs.plugin.UvsPlugin"
 }
