@@ -53,6 +53,9 @@ desktop/plugins/
 # 🔴 実行時データであってソースではない。中身は暗号化済みだが、鍵の持ち回りを
 #    前提にした設計なのでリポジトリには決して入れない。
 desktop/secrets.enc.json
+# AI 提供元レジストリ（開発時は CWD=desktop に作られる）。鍵は入らないが、
+# 接続先＝送信先の設定であり**その機体の構成**なので、リポジトリには入れない。
+desktop/ai-providers.json
 # Art of Imaging が生成した作品が CWD=desktop に残ったもの
 desktop/graphy-art-*.png
 
