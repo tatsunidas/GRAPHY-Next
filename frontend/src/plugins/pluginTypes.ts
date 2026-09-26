@@ -123,6 +123,8 @@ import type {
   PluginFrameValues,
   PluginFrameValuesRead,
   PluginFrameValuesSeries,
+  PluginVideoConsentIssue,
+  PluginVideoConsentItem,
   PluginVideoConsentRequest,
   PluginVideoConsentResult,
   PluginVideoImportOutcome,
@@ -135,6 +137,8 @@ export type {
   PluginFrameValues,
   PluginFrameValuesRead,
   PluginFrameValuesSeries,
+  PluginVideoConsentIssue,
+  PluginVideoConsentItem,
   PluginVideoConsentRequest,
   PluginVideoConsentResult,
   PluginVideoImportOutcome,
@@ -182,6 +186,12 @@ export interface PluginManifest {
 
 interface PluginHostBase {
   pluginId: string;
+  /**
+   * H50: 本体の REST の基点（例 `http://localhost:8080`。同じ origin なら空文字）。
+   * `ViewerTarget.apiBase` と同じ値。**メイン画面の host からも** `/api/instances/{sop}/rendered` などを
+   * 組み立てられる（2D ビューアを開かずに取り込んだ動画を扱うため）。
+   */
+  apiBase: string;
   /** i18n 取得関数（プラグイン UI がホスト言語に追従できるよう渡す）。 */
   t: (key: string) => string;
   /**
@@ -968,7 +978,7 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
  * `launchPlugin` が一箇所で注入する。呼び出し側に作らせると、マニフェストの渡し忘れが
  * そのまま権限チェックの素通りになる。
  */
-export type PluginHostSeed = DistributiveOmit<PluginHost, "ai" | "file" | "runBackendJob" | "db" | "video">;
+export type PluginHostSeed = DistributiveOmit<PluginHost, "ai" | "file" | "runBackendJob" | "db" | "video" | "apiBase">;
 
 /**
  * プラグイン UI バンドル（ES モジュール）が公開する契約。

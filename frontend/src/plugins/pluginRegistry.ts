@@ -89,6 +89,8 @@ function withHostApis(m: PluginManifest, host: PluginHostSeed): PluginHost {
   // 欠けている 2 プロパティだけなので、ここだけ明示的に据える。
   return {
     ...host,
+    // H50: 本体の REST の基点（ViewerTarget.apiBase と同じ）
+    apiBase: apiBase(),
     ai: {
       generate: (req: Omit<AiGenerationOptions, "manifest">) =>
         requestAiGeneration({ ...req, manifest: m }),
