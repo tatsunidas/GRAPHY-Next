@@ -1043,6 +1043,11 @@ export interface PluginCurveFrameOptions {
 interface PluginHostBase {
   /** 自分の plugin.json の id。 */
   pluginId: string;
+  /**
+   * H50: 本体の REST の基点（`ViewerTarget.apiBase` と同じ。同じ origin なら空文字）。
+   * メイン画面の host からも `/api/instances/{sop}/rendered` などを組み立てられる。
+   */
+  apiBase: string;
   /** i18n 取得関数（ホスト言語に追従）。 */
   t: (key: string) => string;
   /**
@@ -1167,18 +1172,41 @@ export interface PluginFrameValues {
 }
 
 /** `host.video.requestImportConsent()` の要求（確認ダイアログに出す中身）。 */
-export interface PluginVideoConsentRequest {
+/** H48 の同意の 1 本分（動画ごとに患者・シリーズの説明を変えられる）。 */
+export interface PluginVideoConsentItem {
+  path: string;
   patient: PluginVideoPatient;
-  paths: string[];
+  /** シリーズの説明（ダイアログに出る。渡したら `importAsDicom` でも同じ値であること）。 */
+  seriesDescription?: string;
+}
+
+/** 動画ごとの患者は `items`。全部同じ患者なら従来の `patient` + `paths` でもよい。 */
+export interface PluginVideoConsentRequest {
+  items?: PluginVideoConsentItem[];
+  patient?: PluginVideoPatient;
+  paths?: string[];
   /** `"US"` は US Multi-frame。既定は Video Photographic。 */
   modality?: "US";
   /** フレームごとの値の SR も書くなら、その説明（ダイアログにそのまま出る）。 */
   frameValues?: { description: string };
 }
 
+/**
+ * 事前確認の問題（ダイアログは出ない）。`code`: `patient-exists`（新しい患者の ID が既にある。
+ * `existingPatientKey` で既存の患者を指せる）/ `patient-not-found` / `patient-invalid` / `patient-conflict` / `patient-missing`。
+ */
+export interface PluginVideoConsentIssue {
+  index: number;
+  path: string | null;
+  code: string;
+  message: string;
+  existingPatientKey?: string | null;
+  existingPatientName?: string | null;
+}
+
 export type PluginVideoConsentResult =
   | { ok: true; consentToken: string }
-  | { ok: false; cancelled?: boolean; error?: string };
+  | { ok: false; cancelled?: boolean; error?: string; issues?: PluginVideoConsentIssue[] };
 
 /** `host.video.importAsDicom()` の 1 本分の要求。 */
 export interface PluginVideoImportRequest {

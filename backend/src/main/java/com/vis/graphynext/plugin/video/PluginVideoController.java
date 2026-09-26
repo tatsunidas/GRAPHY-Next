@@ -25,6 +25,8 @@ import java.util.Optional;
  *
  * <ul>
  *   <li>{@code POST /api/plugins/{id}/video/probe} — 諸元・指紋・既に取り込み済みか（H47）</li>
+ *   <li>{@code POST /api/plugins/{id}/video/validate} — 取り込む前の患者の確認（H48。副作用なし。
+ *       確認ダイアログの前に呼び、採点・変換のような重い処理の前に止める）</li>
  *   <li>{@code POST /api/plugins/{id}/video/imports} — 取り込みをジョブとして投入（H48。状態は
  *       {@code /api/plugin-jobs/{jobId}}）</li>
  *   <li>{@code GET  /api/plugins/{id}/video/frame-values/{sop}} — フレームごとの値の SR を読む（H49）</li>
@@ -58,6 +60,14 @@ public class PluginVideoController {
         } catch (IOException e) {
             return bad(e.getMessage());
         }
+    }
+
+    @PostMapping("/api/plugins/{id}/video/validate")
+    public ResponseEntity<Object> validate(@PathVariable String id,
+                                           @RequestBody PluginVideoImportService.ValidateRequest req) {
+        Optional<ResponseEntity<Object>> denied = guard(id);
+        if (denied.isPresent()) return denied.get();
+        return ResponseEntity.ok(service.validate(req));
     }
 
     @PostMapping("/api/plugins/{id}/video/imports")

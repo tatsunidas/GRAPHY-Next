@@ -8,7 +8,9 @@
  * <ul>
  *   <li>H47 `video.probe(path)` … 諸元・指紋・既に取り込み済みか（本体の ffmpeg で調べる。ffprobe 不要）</li>
  *   <li>H48 `video.requestImportConsent(req)` → `video.importAsDicom(req)` … 本体の確認ダイアログを
- *       <b>1 回の取り込みにつき 1 回</b>出し、その同意（札）の範囲で 1 本ずつ取り込む</li>
+ *       <b>1 回の取り込みにつき 1 回</b>出し、その同意（札）の範囲で 1 本ずつ取り込む。患者は動画ごとに
+ *       違ってよい（`items`）。ダイアログの<b>前に</b>本体が患者の指定を確かめる（新しい患者の ID が既にある等。
+ *       `POST …/video/validate`）ので、重い処理（プラグインの採点・変換）の前に止まる</li>
  *   <li>H49 `video.readFrameValues(sop)` … 取り込み時に書いた「フレームごとの値」の SR を読む</li>
  * </ul>
  *
@@ -64,20 +66,46 @@ export interface PluginFrameValues {
   params?: Record<string, string>;
 }
 
-/** H48 の同意の要求（確認ダイアログに出す中身）。 */
-export interface PluginVideoConsentRequest {
-  patient: PluginVideoPatient;
+/** H48 の同意の 1 本分（動画ごとに患者・シリーズの説明を変えられる）。 */
+export interface PluginVideoConsentItem {
   /** 取り込むファイル（`file.pickFiles` で選んだ絶対パス）。 */
-  paths: string[];
+  path: string;
+  patient: PluginVideoPatient;
+  /** シリーズの説明（ダイアログに出る。渡したら `importAsDicom` でも同じ値であること）。 */
+  seriesDescription?: string;
+}
+
+/**
+ * H48 の同意の要求（確認ダイアログに出す中身）。
+ * 動画ごとの患者は `items`。全部同じ患者なら従来の `patient` + `paths` でもよい（`items` があればそちらを使う）。
+ */
+export interface PluginVideoConsentRequest {
+  items?: PluginVideoConsentItem[];
+  patient?: PluginVideoPatient;
+  paths?: string[];
   /** `"US"` は US Multi-frame。既定は Video Photographic（本体の非 DICOM 取り込みと同じ）。 */
   modality?: "US";
   /** フレームごとの値の SR も書くなら、その説明（ダイアログにそのまま出る）。 */
   frameValues?: { description: string };
 }
 
+/**
+ * 事前確認で見つかった問題（ダイアログは出ない）。`index` は `items`（または `paths`）の何番目か。
+ * `code`: `patient-exists`（新しい患者の ID が既にある。`existingPatientKey` で既存の患者を指せる）/
+ * `patient-not-found` / `patient-invalid` / `patient-conflict` / `patient-missing`。
+ */
+export interface PluginVideoConsentIssue {
+  index: number;
+  path: string | null;
+  code: string;
+  message: string;
+  existingPatientKey?: string | null;
+  existingPatientName?: string | null;
+}
+
 export type PluginVideoConsentResult =
   | { ok: true; consentToken: string }
-  | { ok: false; cancelled?: boolean; error?: string };
+  | { ok: false; cancelled?: boolean; error?: string; issues?: PluginVideoConsentIssue[] };
 
 /** H48 の 1 本分の要求。 */
 export interface PluginVideoImportRequest {
@@ -130,8 +158,8 @@ export interface PluginFrameValuesRead {
 
 interface Consent {
   pluginId: string;
-  patient: string;
-  paths: Set<string>;
+  /** path → そのファイルに同意した患者の署名・シリーズの説明。 */
+  paths: Map<string, { patient: string; seriesDescription: string | null }>;
   used: Set<string>;
   modality: string;
   frameValues: boolean;
@@ -157,9 +185,14 @@ export type ConfirmFn = (lines: ConsentLines) => Promise<boolean>;
 
 export interface ConsentLines {
   pluginName: string;
+  /** 全部同じ患者ならその表示。動画ごとに違うときは「動画ごと」（各行は `rows`）。 */
   patient: string;
   modality: string;
   files: string[];
+  /** ファイルごとの行（ファイル名・患者・シリーズの説明）。 */
+  rows: { file: string; patient: string; seriesDescription: string | null }[];
+  /** 動画ごとに患者が違う。 */
+  perFilePatients: boolean;
   frameValues: string | null;
 }
 
@@ -182,37 +215,80 @@ async function describePatient(p: PluginVideoPatient): Promise<string> {
   return t("pluginVideo.consent.patientNew", { id: c.patientId, name: c.patientName || "-" });
 }
 
-/** H48（前半）: 確認ダイアログを出し、同意の札を返す。 */
+/** 要求を `items` の形に揃える（従来の `patient` + `paths` も受ける）。 */
+function consentItems(req: PluginVideoConsentRequest): PluginVideoConsentItem[] | null {
+  if (Array.isArray(req?.items) && req.items.length > 0) return req.items;
+  if (req?.patient && Array.isArray(req.paths) && req.paths.length > 0) {
+    return req.paths.map((path) => ({ path, patient: req.patient! }));
+  }
+  return null;
+}
+
+/** 事前確認（副作用なし）。問題が無ければ空。 */
+async function validateItems(pluginId: string, items: PluginVideoConsentItem[]): Promise<PluginVideoConsentIssue[]> {
+  const r = await httpSend<{ ok: boolean; issues: PluginVideoConsentIssue[] }>(
+    `/api/plugins/${encodeURIComponent(pluginId)}/video/validate`,
+    "POST",
+    {
+      items: items.map((it) => ({
+        path: it.path,
+        patient: "patientKey" in it.patient ? { patientKey: it.patient.patientKey } : { create: it.patient.create },
+      })),
+    },
+  );
+  return r?.issues ?? [];
+}
+
+/**
+ * H48（前半）: 患者の指定を確かめ、確認ダイアログを出し、同意の札を返す。
+ * 確かめて問題があれば**ダイアログを出さず** `{ ok:false, error: 最初の問題の code, issues }` を返す
+ * （プラグインは採点などの重い処理の前に止まれる）。
+ */
 export async function requestVideoImportConsent(
   plugin: { id: string; name: string },
   req: PluginVideoConsentRequest,
 ): Promise<PluginVideoConsentResult> {
-  if (!req || !Array.isArray(req.paths) || req.paths.length === 0) return { ok: false, error: "no-paths" };
-  let patientText: string;
+  const items = consentItems(req);
+  if (!items) return { ok: false, error: "no-paths" };
+  if (new Set(items.map((i) => i.path)).size !== items.length) return { ok: false, error: "duplicate-paths" };
   try {
-    patientText = await describePatient(req.patient);
+    const issues = await validateItems(plugin.id, items);
+    if (issues.length > 0) return { ok: false, error: issues[0].code, issues };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
+  const described = new Map<string, string>();
+  const rows: ConsentLines["rows"] = [];
+  try {
+    for (const it of items) {
+      const sig = patientSig(it.patient);
+      if (!described.has(sig)) described.set(sig, await describePatient(it.patient));
+      rows.push({ file: baseName(it.path), patient: described.get(sig)!, seriesDescription: it.seriesDescription ?? null });
+    }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  const perFilePatients = described.size > 1;
   const ok = await confirmImpl({
     pluginName: plugin.name,
-    patient: patientText,
+    patient: perFilePatients ? t("pluginVideo.consent.patientPerFile") : rows[0].patient,
     modality: t(req.modality === "US" ? "pluginVideo.consent.modalityUS" : "pluginVideo.consent.modalityVideo"),
-    files: req.paths.map(baseName),
+    files: rows.map((r) => r.file),
+    rows,
+    perFilePatients,
     frameValues: req.frameValues ? req.frameValues.description : null,
   });
   if (!ok) return { ok: false, cancelled: true };
   const token = `${plugin.id}:${crypto.randomUUID()}`;
   consents.set(token, {
     pluginId: plugin.id,
-    patient: patientSig(req.patient),
-    paths: new Set(req.paths),
+    paths: new Map(items.map((it) => [it.path, { patient: patientSig(it.patient), seriesDescription: it.seriesDescription ?? null }])),
     used: new Set(),
     modality: req.modality ?? "",
     frameValues: !!req.frameValues,
     expiresAt: Date.now() + CONSENT_TTL_MS,
   });
-  log.info(`[plugin-video] consent: ${plugin.id} ${req.paths.length} file(s)`);
+  log.info(`[plugin-video] consent: ${plugin.id} ${items.length} file(s), ${described.size} patient(s)`);
   return { ok: true, consentToken: token };
 }
 
@@ -221,9 +297,13 @@ function checkConsent(pluginId: string, req: PluginVideoImportRequest): string |
   const c = consents.get(req.consentToken);
   if (!c || c.pluginId !== pluginId) return "no-consent";
   if (Date.now() > c.expiresAt) return "consent-expired";
-  if (!c.paths.has(req.path)) return "path-not-consented";
+  const allowed = c.paths.get(req.path);
+  if (!allowed) return "path-not-consented";
   if (c.used.has(req.path)) return "path-already-imported";
-  if (c.patient !== patientSig(req.patient)) return "patient-not-consented";
+  if (allowed.patient !== patientSig(req.patient)) return "patient-not-consented";
+  if (allowed.seriesDescription != null && (req.seriesDescription ?? null) !== allowed.seriesDescription) {
+    return "series-description-not-consented";
+  }
   if ((req.modality ?? "") !== c.modality) return "modality-not-consented";
   if (req.frameValues && !c.frameValues) return "frame-values-not-consented";
   return null;
@@ -305,7 +385,7 @@ function showConsentDialog(lines: ConsentLines): Promise<boolean> {
     } as Partial<CSSStyleDeclaration>);
     const box = document.createElement("div");
     Object.assign(box.style, {
-      background: "#fff", color: "#223", borderRadius: "10px", padding: "18px 20px", width: "min(560px, 92vw)",
+      background: "#fff", color: "#223", borderRadius: "10px", padding: "18px 20px", width: "min(680px, 92vw)",
       maxHeight: "80vh", overflow: "auto", boxShadow: "0 10px 40px rgba(0,0,0,0.3)", fontSize: "13px", lineHeight: "1.6",
     } as Partial<CSSStyleDeclaration>);
     const h = document.createElement("div");
@@ -322,15 +402,40 @@ function showConsentDialog(lines: ConsentLines): Promise<boolean> {
     row(t("pluginVideo.consent.plugin"), lines.pluginName);
     row(t("pluginVideo.consent.patient"), lines.patient);
     row(t("pluginVideo.consent.modality"), lines.modality);
-    const files = document.createElement("ul");
-    Object.assign(files.style, { margin: "6px 0 6px 18px", padding: "0", maxHeight: "30vh", overflow: "auto" });
-    for (const f of lines.files) {
-      const li = document.createElement("li");
-      li.textContent = f;
-      files.appendChild(li);
+    row(t("pluginVideo.consent.files", { n: lines.rows.length }), "");
+    // ファイルごとの表（患者が動画ごとに違うときは患者の列も出す）
+    const showSeries = lines.rows.some((r) => r.seriesDescription);
+    const wrap = document.createElement("div");
+    Object.assign(wrap.style, { margin: "6px 0", maxHeight: "34vh", overflow: "auto" });
+    const table = document.createElement("table");
+    table.setAttribute("data-testid", "plugin-video-consent-files");
+    Object.assign(table.style, { borderCollapse: "collapse", width: "100%", fontSize: "12px" });
+    const cols = [t("pluginVideo.consent.colFile")];
+    if (lines.perFilePatients) cols.push(t("pluginVideo.consent.patient"));
+    if (showSeries) cols.push(t("pluginVideo.consent.colSeries"));
+    const head = document.createElement("tr");
+    for (const c of cols) {
+      const th = document.createElement("th");
+      th.textContent = c;
+      Object.assign(th.style, { textAlign: "left", borderBottom: "1px solid #cdd5de", padding: "3px 6px" });
+      head.appendChild(th);
     }
-    row(t("pluginVideo.consent.files", { n: lines.files.length }), "");
-    box.appendChild(files);
+    table.appendChild(head);
+    for (const r of lines.rows) {
+      const tr = document.createElement("tr");
+      const cells = [r.file];
+      if (lines.perFilePatients) cells.push(r.patient);
+      if (showSeries) cells.push(r.seriesDescription ?? "");
+      for (const c of cells) {
+        const td = document.createElement("td");
+        td.textContent = c;
+        Object.assign(td.style, { borderBottom: "1px solid #eef1f4", padding: "3px 6px", verticalAlign: "top" });
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+    wrap.appendChild(table);
+    box.appendChild(wrap);
     if (lines.frameValues) row(t("pluginVideo.consent.frameValues"), lines.frameValues);
     const note = document.createElement("div");
     note.textContent = t("pluginVideo.consent.provenance");

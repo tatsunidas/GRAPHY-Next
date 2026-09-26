@@ -113,6 +113,7 @@ async function main(): Promise<void> {
   const odd = makeAvi("odd-321x241.avi", 30);
   const short = makeAvi("odd-short-20.avi", 20);
   const third = makeAvi("odd-third-12.avi", 12);
+  const fourth = makeAvi("odd-fourth-9.avi", 9);
   installPlugin();
   const driver = new DesktopDriver();
   await driver.start();
@@ -242,13 +243,52 @@ async function main(): Promise<void> {
       id: tagVal(t3, "00100020"),
       name: tagVal(t3, "00100010"),
     });
-    const c3 = await consent(page, { patient: { create: { patientId: "EXIST-001", patientName: "X" } }, paths: [third], modality: "US" });
-    const clash = await inHost<{ ok: boolean; error?: string }>(
+    // 🔑 新しい患者に既存の ID → **確認ダイアログの前に**本体が止める（プラグインの採点などが走る前）
+    const t0 = Date.now();
+    const clash = await inHost<{ ok: boolean; error?: string; issues?: { code: string; existingPatientKey?: string; existingPatientName?: string }[] }>(
       page,
-      `return host.video.importAsDicom({ consentToken: ${JSON.stringify(c3.consentToken)}, path: ${JSON.stringify(third)},
-         patient: { create: { patientId: "EXIST-001", patientName: "X" } }, modality: "US" });`,
+      `return host.video.requestImportConsent({ patient: { create: { patientId: "EXIST-001", patientName: "X" } }, paths: [${JSON.stringify(third)}], modality: "US" });`,
     );
-    check(!clash.ok && /既にあります|already/.test(clash.error ?? ""), "[8b] 新しい患者に既存の患者 ID は使えない", clash);
+    const dialogShown = await page.getByTestId("plugin-video-consent").isVisible().catch(() => false);
+    check(
+      !clash.ok && clash.error === "patient-exists" && clash.issues?.[0]?.existingPatientKey === "EXIST-001" && !dialogShown,
+      "[8b] ★新しい患者に既存の患者 ID → 確認ダイアログを出す前に patient-exists で止まる（既存の患者を返す）",
+      { clash, dialogShown, ms: Date.now() - t0 },
+    );
+
+    // ── 8c. 動画ごとに違う患者・シリーズの説明（1 回のダイアログ）
+    const cMix = await consent(page, {
+      items: [
+        { path: third, patient: { patientKey: "EXIST-001" }, seriesDescription: "per-file A" },
+        { path: fourth, patient: { create: { patientId: "UVS-NEW-002", patientName: "PER^FILE" } }, seriesDescription: "per-file B" },
+      ],
+      modality: "US",
+    });
+    check(cMix.ok, "[8c] 動画ごとに違う患者でも 1 回のダイアログで同意できる");
+    const mixA = await inHost<{ ok: boolean; result: Record<string, unknown> }>(
+      page,
+      `return host.video.importAsDicom({ consentToken: ${JSON.stringify(cMix.consentToken)}, path: ${JSON.stringify(third)},
+         patient: { patientKey: "EXIST-001" }, modality: "US", seriesDescription: "per-file A" });`,
+    );
+    const mixWrong = await inHost<{ ok: boolean; error?: string }>(
+      page,
+      `return host.video.importAsDicom({ consentToken: ${JSON.stringify(cMix.consentToken)}, path: ${JSON.stringify(fourth)},
+         patient: { patientKey: "EXIST-001" }, modality: "US", seriesDescription: "per-file B" });`,
+    );
+    const mixB = await inHost<{ ok: boolean; result: Record<string, unknown> }>(
+      page,
+      `return host.video.importAsDicom({ consentToken: ${JSON.stringify(cMix.consentToken)}, path: ${JSON.stringify(fourth)},
+         patient: { create: { patientId: "UVS-NEW-002", patientName: "PER^FILE" } }, modality: "US", seriesDescription: "per-file B" });`,
+    );
+    check(!mixWrong.ok && mixWrong.error === "patient-not-consented", "[8c] 別の動画の患者を付けると拒否（札は動画ごとの患者に縛る）", mixWrong);
+    const ta = mixA.ok ? await tags(port, String(mixA.result.sopInstanceUid)) : [];
+    const tb = mixB.ok ? await tags(port, String(mixB.result.sopInstanceUid)) : [];
+    check(
+      tagVal(ta, "00100020") === "EXIST-001" && tagVal(tb, "00100020") === "UVS-NEW-002" &&
+        (tagVal(ta, "0008103E") ?? "") === "[Plugin] per-file A" && (tagVal(tb, "0008103E") ?? "") === "[Plugin] per-file B",
+      "[8c] ★動画ごとの患者・シリーズの説明で書かれる",
+      { a: [tagVal(ta, "00100020"), tagVal(ta, "0008103E")], b: [tagVal(tb, "00100020"), tagVal(tb, "0008103E")] },
+    );
 
     await page.screenshot({ path: path.join(OUT_DIR, "9-end.png") }).catch(() => {});
     check(pageErrors.length === 0, "[10] 画面の例外（pageerror）が 0 件", pageErrors.slice(0, 3));

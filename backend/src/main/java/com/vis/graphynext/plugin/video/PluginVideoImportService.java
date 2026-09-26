@@ -29,8 +29,11 @@ import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.function.Function;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
@@ -315,6 +318,103 @@ public class PluginVideoImportService {
         }
     }
 
+    // ── 事前確認（副作用なし）──
+
+    /** 事前確認の 1 件（取り込む動画とその患者）。 */
+    public record ValidateItem(String path, PatientSpec patient) {
+    }
+
+    /** 事前確認の要求。 */
+    public record ValidateRequest(List<ValidateItem> items) {
+    }
+
+    /**
+     * 事前確認で見つかった問題。{@code code} は画面が訳す短い識別子、{@code message} は日本語の説明。
+     * {@code patient-exists} のときは既存患者（{@code existingPatientKey}・氏名）も返す（「この患者を使う」に使える）。
+     */
+    public record ValidateIssue(int index, String path, String code, String message,
+                                String existingPatientKey, String existingPatientName) {
+    }
+
+    /** 事前確認の結果。{@code issues} が空なら取り込める。 */
+    public record ValidateResult(boolean ok, List<ValidateIssue> issues) {
+    }
+
+    /**
+     * 取り込む<b>前に</b>患者の指定を確かめる（採点・変換のような重い処理の前に止めるため）。
+     * 規則は {@link #resolvePatient} と同じ（ジョブの中の検査は最後の砦として残す）。
+     * <ul>
+     *   <li>既存の患者（patientKey）が見つからない → {@code patient-not-found}</li>
+     *   <li>新しい患者の ID が空・長すぎる・生年月日/性別の形が違う → {@code patient-invalid}</li>
+     *   <li>新しい患者の ID が既に保管庫にある → {@code patient-exists}</li>
+     *   <li>1 回の取り込みの中で、同じ新しい ID に違う氏名・生年月日・性別 → {@code patient-conflict}</li>
+     * </ul>
+     */
+    public ValidateResult validate(ValidateRequest req) {
+        return validate(req, id -> storage.findMatches(id, null, null, null));
+    }
+
+    /** {@link #validate(ValidateRequest)} の本体。患者 ID（patientKey）で保管庫を引く関数を受ける（テスト用に分けた）。 */
+    static ValidateResult validate(ValidateRequest req, Function<String, List<DicomInstance>> byPatient) {
+        List<ValidateIssue> issues = new ArrayList<>();
+        List<ValidateItem> items = req == null || req.items() == null ? List.of() : req.items();
+        Map<String, NewPatient> seen = new HashMap<>();
+        for (int i = 0; i < items.size(); i++) {
+            ValidateItem it = items.get(i);
+            String path = it == null ? null : it.path();
+            PatientSpec spec = it == null ? null : it.patient();
+            if (spec == null || (blank(spec.patientKey()) && spec.create() == null)) {
+                issues.add(new ValidateIssue(i, path, "patient-missing", "患者の指定がありません", null, null));
+                continue;
+            }
+            if (!blank(spec.patientKey())) {
+                if (byPatient.apply(spec.patientKey()).isEmpty()) {
+                    issues.add(new ValidateIssue(i, path, "patient-not-found",
+                            "患者が見つかりません: " + spec.patientKey(), null, null));
+                }
+                continue;
+            }
+            NewPatient n = normalize(spec.create());
+            String bad = newPatientFormatError(n);
+            if (bad != null) {
+                issues.add(new ValidateIssue(i, path, "patient-invalid", bad, null, null));
+                continue;
+            }
+            List<DicomInstance> hit = byPatient.apply(n.patientId());
+            if (!hit.isEmpty()) {
+                issues.add(new ValidateIssue(i, path, "patient-exists",
+                        "患者 ID " + n.patientId() + " は既にあります。既存の患者から選んでください",
+                        n.patientId(), nz(hit.get(0).getPatientName())));
+                continue;
+            }
+            NewPatient prev = seen.putIfAbsent(n.patientId(), n);
+            if (prev != null && !prev.equals(n)) {
+                issues.add(new ValidateIssue(i, path, "patient-conflict",
+                        "同じ患者 ID " + n.patientId() + " に違う氏名・生年月日・性別が入っています", null, null));
+            }
+        }
+        return new ValidateResult(issues.isEmpty(), issues);
+    }
+
+    private static NewPatient normalize(NewPatient n) {
+        if (n == null) return new NewPatient("", "", "", "");
+        return new NewPatient(nz(n.patientId()).trim(), nz(n.patientName()).trim(), nz(n.birthDate()).trim(),
+                nz(n.sex()).trim().toUpperCase(Locale.ROOT));
+    }
+
+    /** 新しい患者の形の誤り（無ければ null）。{@link #normalize} 済みを渡す。 */
+    private static String newPatientFormatError(NewPatient n) {
+        if (n.patientId().isEmpty()) return "患者 ID は必須です";
+        if (n.patientId().length() > 64) return "患者 ID が長すぎます（64 文字まで）";
+        if (!n.birthDate().isEmpty() && !n.birthDate().matches("\\d{8}")) return "生年月日は YYYYMMDD";
+        if (!n.sex().isEmpty() && !n.sex().matches("[MFO]")) return "性別は M / F / O";
+        return null;
+    }
+
+    private static boolean blank(String s) {
+        return s == null || s.isBlank();
+    }
+
     // ── 患者 ──
 
     /**
@@ -335,10 +435,10 @@ public class PluginVideoImportService {
                 copy(h, p, tag);
             }
         } else {
-            NewPatient n = spec.create();
-            String id = n.patientId() == null ? "" : n.patientId().trim();
-            if (id.isEmpty()) throw new IllegalArgumentException("患者 ID は必須です");
-            if (id.length() > 64) throw new IllegalArgumentException("患者 ID が長すぎます（64 文字まで）");
+            NewPatient n = normalize(spec.create());
+            String id = n.patientId();
+            String bad = newPatientFormatError(n);
+            if (bad != null) throw new IllegalArgumentException(bad);
             if (!storage.findMatches(id, null, null, null).isEmpty()) {
                 // 同じ取り込みの 2 本目以降: 1 本目がこの患者を作った。そのスタディ（同じ患者のもの）を
                 // 渡してきたときだけ、その患者として続ける（属性は 1 本目が書いたものを写す）
@@ -349,10 +449,8 @@ public class PluginVideoImportService {
                 }
                 return resolvePatient(new PatientSpec(id, null), null);
             }
-            String birth = n.birthDate() == null ? "" : n.birthDate().trim();
-            if (!birth.isEmpty() && !birth.matches("\\d{8}")) throw new IllegalArgumentException("生年月日は YYYYMMDD");
-            String sex = n.sex() == null ? "" : n.sex().trim().toUpperCase(Locale.ROOT);
-            if (!sex.isEmpty() && !sex.matches("[MFO]")) throw new IllegalArgumentException("性別は M / F / O");
+            String birth = n.birthDate();
+            String sex = n.sex();
             p.setSpecificCharacterSet("ISO_IR 192");
             p.setString(Tag.PatientID, VR.LO, id);
             p.setString(Tag.PatientName, VR.PN, nz(n.patientName()).trim());
