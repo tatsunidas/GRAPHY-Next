@@ -18,10 +18,11 @@
  * 🚨 **JAR を変えたらアプリ再起動が要る**（ローダが id 単位でキャッシュされる）。
  *    automator は毎回プロセスを立て直すので問題にならないが、手元の dev-desktop では効かない。
  */
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 
 import { DesktopDriver, DESKTOP_RUN_DATA_DIR } from "../driver/desktopDriver.js";
 import { resetDb } from "../backend/dbReset.js";
@@ -252,6 +253,184 @@ function installPlugin(): void {
   console.log(`  中身: ${fs.readdirSync(dst).join(", ")}`);
 }
 
+// ── 12. 段 4: メイン画面から取り込む（UVS-Web fw/graphy-plugin.md §3.4・本体の H42〜H49）──────
+/**
+ * 取り込みに使う実データ。既定は手元の `K1-011_short-003.avi`（rawvideo 720×440・4,628 フレーム・2.2GB）の
+ * **先頭 300 フレームを無劣化で切り出したもの**（`-c copy`）。rawvideo の写しなので中身は元と同じ。
+ * 独立参照 `bench/uvs_frame_scores.py` も同じ切り出しから出す（どちらも一度作ったら使い回す）。
+ * `UVS_IMPORT_AVI` で別の動画を渡せる（720×440 以外なら `UVS_IMPORT_WH=WxH`）。
+ */
+function prepareImportSource(): { avi: string; ref: { cpr: number[]; mad: number[] } } | null {
+  const given = process.env.UVS_IMPORT_AVI;
+  const src = given ?? path.join(os.homedir(), "Desktop", "sample avi", "K1-011_short-003.avi");
+  if (!fs.existsSync(src)) {
+    console.log(`  [注意] 取り込みに使う動画が無いので [12] を飛ばした: ${src}`);
+    return null;
+  }
+  const dir = path.join(os.tmpdir(), "uvs-import-src");
+  fs.mkdirSync(dir, { recursive: true });
+  const avi = given ?? path.join(dir, "K1-011-300f.avi");
+  if (!given && !fs.existsSync(avi)) {
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-i", src, "-frames:v", "300", "-c", "copy", avi]);
+  }
+  const refFile = path.join(dir, `${path.basename(avi)}.ref.json`);
+  if (!fs.existsSync(refFile)) {
+    const [w, h] = (process.env.UVS_IMPORT_WH ?? "720x440").split("x");
+    const script = path.join(AUTOMATOR_ROOT, "..", "bench", "uvs_frame_scores.py");
+    const py = process.platform === "win32" ? "python" : "python3";
+    const out = execFileSync(py, [script, avi, "--width", w, "--height", h], { maxBuffer: 256 * 1024 * 1024 });
+    fs.writeFileSync(refFile, out);
+  }
+  return { avi, ref: JSON.parse(fs.readFileSync(refFile, "utf8")) as { cpr: number[]; mad: number[] } };
+}
+
+/**
+ * 利用者と同じ経路で押す: メイン画面の「プラグイン」→ UVS の取り込み画面 → 新しい患者を入力 → ファイルを選ぶ
+ * （OS のダイアログの代わりに `window.__uvsPickPaths`）→ 取り込み → 本体の確認ダイアログで OK。
+ * そのあと SR の CPR / MAD を独立参照と突き合わせ、2D ビューアの要約画面が元動画のスコアを使うこと、
+ * 同じ動画をもう一度選ぶと重複として止まることを確かめる。
+ */
+async function importCheck(driver: DesktopDriver, mainPage: Page, closeViewer: () => Promise<void>): Promise<void> {
+  const srcData = prepareImportSource();
+  if (!srcData) return;
+  const { avi, ref } = srcData;
+  const port = driver.ports.http;
+  const pageErrors: string[] = [];
+  mainPage.on("pageerror", (e) => pageErrors.push(e.message));
+
+  const openImport = async (): Promise<Locator> => {
+    await mainPage.evaluate((p) => {
+      (window as unknown as { __uvsPickPaths?: string[] }).__uvsPickPaths = p;
+      document.querySelectorAll<HTMLElement>(".graphy-plugin-window__close").forEach((b) => b.click());
+    }, [avi]);
+    await mainPage.waitForTimeout(300);
+    await mainPage.getByTestId("mainscreen-menu-plugins").click();
+    await mainPage.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
+    const screen = mainPage.getByTestId("uvs-import").last();
+    await screen.waitFor({ state: "visible", timeout: 30_000 });
+    return screen;
+  };
+  const rowStatus = async (screen: Locator, want: string[], maxMs: number): Promise<string | null> => {
+    const row = screen.getByTestId("uvs-import-row").first();
+    const deadline = Date.now() + maxMs;
+    let st: string | null = null;
+    while (Date.now() < deadline) {
+      st = await row.getAttribute("data-status").catch(() => null);
+      if (st && want.includes(st)) return st;
+      await mainPage.waitForTimeout(500);
+    }
+    return st;
+  };
+
+  const screen = await openImport();
+  check(true, "[12] ★メイン画面のプラグインメニューから UVS の取り込み画面が開く");
+  await screen.getByTestId("uvs-import-tab-new").click();
+  await screen.getByTestId("uvs-import-new-id").fill("UVS-IMP-001");
+  await screen.getByTestId("uvs-import-new-name").fill("UVS^IMPORT");
+  await screen.getByTestId("uvs-import-pick").click();
+  const probed = await rowStatus(screen, ["ready", "duplicate", "failed"], 120_000);
+  const info = await screen.getByTestId("uvs-import-row").first().innerText().catch(() => "");
+  check(probed === "ready" && /720×440 · 300 /.test(info), "[12] 選んだ動画を調べて諸元を出す（ffprobe 無し・300 フレーム）", { probed, info });
+
+  await screen.getByTestId("uvs-import-run").click();
+  await mainPage.getByTestId("plugin-video-consent").waitFor({ state: "visible", timeout: 20_000 });
+  await mainPage.screenshot({ path: path.join(OUT_DIR, "import-consent.png") }).catch(() => {});
+  check(true, "[12] ★本体の確認ダイアログが出る（DICOM は本体が書く）");
+  await mainPage.getByTestId("plugin-video-consent-ok").click();
+  const t0 = Date.now();
+  const done = await rowStatus(screen, ["done", "failed", "cancelled", "duplicate"], 600_000);
+  const row = screen.getByTestId("uvs-import-row").first();
+  const rowText = await row.innerText().catch(() => "");
+  const warned = (await row.locator(".warn").count()) > 0;
+  check(done === "done" && !warned, "[12] ★★元動画を採点してから取り込み、SR まで書けた", {
+    done, rowText, sec: Math.round((Date.now() - t0) / 1000),
+  });
+  await mainPage.screenshot({ path: path.join(OUT_DIR, "import-done.png") }).catch(() => {});
+  const sop = (await row.getAttribute("data-sop")) ?? "";
+  if (done !== "done" || !sop) return;
+
+  // SR を本体の口（H49）から読む
+  const fv = (await (
+    await fetch(`http://127.0.0.1:${port}/api/plugins/${PLUGIN_ID}/video/frame-values/${encodeURIComponent(sop)}`)
+  ).json()) as { series?: { key: string; values: number[] }[]; params?: Record<string, string> } | null;
+  const cpr = fv?.series?.find((s) => s.key === "CPR")?.values ?? [];
+  const mad = fv?.series?.find((s) => s.key === "MAD")?.values ?? [];
+  fs.writeFileSync(path.join(OUT_DIR, "import-frame-values.json"), JSON.stringify(fv, null, 2));
+  check(cpr.length === 300 && mad.length === 300 && fv?.params?.scoreSource === "SOURCE_VIDEO",
+    "[12] SR に CPR / MAD が 300 フレーム分・scoreSource=SOURCE_VIDEO で残る", { cpr: cpr.length, mad: mad.length, params: fv?.params });
+  // 🔑 値は単体アプリと同じく小数 6 桁に丸めて保存する。参照（丸めない）との差は 5e-7 以内のはず。
+  //    参照の CPR は「前のフレーム」基準で最後の 1 件が無いので、ある分（299 件）だけ比べる。
+  const maxDiff = (x: number[], y: number[]): number => {
+    const n = Math.min(x.length, y.length);
+    let m = n === 0 ? Number.POSITIVE_INFINITY : 0;
+    for (let i = 0; i < n; i++) m = Math.max(m, Math.abs(x[i] - y[i]));
+    return m;
+  };
+  const dCpr = maxDiff(cpr, ref.cpr);
+  const dMad = maxDiff(mad, ref.mad);
+  check(dCpr <= 5.0001e-7 && ref.cpr.length >= 299, "[12] ★★SR の CPR が元動画での独立参照と一致（6 桁丸めの内）", { maxDiff: dCpr, n: ref.cpr.length });
+  check(dMad <= 5.0001e-7 && ref.mad.length === 300, "[12] ★★SR の MAD が元動画での独立参照と一致（6 桁丸めの内）", { maxDiff: dMad, n: ref.mad.length });
+
+  // 要約画面（2D ビューア）が SR を元動画のスコアとして使う
+  const tags = (await (await fetch(`http://127.0.0.1:${port}/api/instances/${encodeURIComponent(sop)}/tags`)).json()) as {
+    tag: string; depth: number; value: string | null;
+  }[];
+  const tagVal = (t: string) => tags.find((r) => r.depth === 0 && r.tag.replace(/[^0-9a-f]/gi, "").toUpperCase() === t)?.value ?? "";
+  const studyUid = tagVal("0020000D");
+  const seriesUid = tagVal("0020000E");
+  await closeViewer();
+  await mainPage.evaluate(() => document.querySelectorAll<HTMLElement>(".graphy-plugin-window__close").forEach((b) => b.click()));
+  await mainPage.getByTestId("search-patientid-input").fill("UVS-IMP-001");
+  const dates = mainPage.locator('input[type="date"]');
+  await dates.nth(0).fill("");
+  await dates.nth(1).fill("");
+  await mainPage.getByTestId("search-submit-button").click();
+  await mainPage.getByTestId(`study-row-${studyUid}`).click();
+  await mainPage.getByTestId(`series-row-${seriesUid}`).click();
+  const viewer = await driver.waitForNewPage(
+    () => mainPage.getByTestId("viewer2d-toolbar-button").click(),
+    (url) => url.includes("2dviewer"),
+  );
+  await viewer.waitForTimeout(5_000);
+  await driver.app.evaluate(({ BrowserWindow }) => {
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (w.webContents.getURL().startsWith("devtools://")) continue;
+      w.unmaximize();
+      w.setBounds({ x: 0, y: 0, width: 1920, height: 1200 });
+    }
+  });
+  viewer.on("pageerror", (e) => pageErrors.push(e.message));
+  await viewer.getByTestId("viewer2d-menu-plugins").click();
+  await viewer.waitForTimeout(300);
+  await viewer.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
+  const sum = viewer.getByTestId("uvs-summarizer").last();
+  const mounted = await sum.waitFor({ state: "visible", timeout: 30_000 }).then(() => true, () => false);
+  if (mounted) {
+    await viewer.waitForTimeout(3_000);
+    const text = await sum.innerText();
+    const madTh = await sum.locator("#set-staticMeanAbsDiffThreshold").inputValue().catch(() => "");
+    const shownStatic = /静止 \((\d+)\)/.exec(text)?.[1];
+    const expStatic = mad.filter((v) => v < Number(madTh)).length;
+    check(text.includes("スコアは圧縮前の元動画で採点されています"), "[12] ★★要約画面が「元動画で採点」（SOURCE_VIDEO）と出す");
+    check(Number(madTh) === 0.5, "[12] ★静止の閾値の既定が元動画向けの 0.5 になる（圧縮向けは 0.19）", { madTh });
+    check(shownStatic != null && Number(shownStatic) === expStatic, "[12] ★押さなくても SR のスコアで静止の除外数が出る（SR から数えた数と一致）", {
+      shown: shownStatic, expected: expStatic,
+    });
+    await viewer.screenshot({ path: path.join(OUT_DIR, "import-summarizer.png") }).catch(() => {});
+  } else {
+    check(false, "[12] 取り込んだ動画で要約画面が開く");
+  }
+  await viewer.close().catch(() => {});
+
+  // 同じ動画をもう一度選ぶと、重複として止まる（取り込まない）
+  const again = await openImport();
+  await again.getByTestId("uvs-import-pick").click();
+  const dup = await rowStatus(again, ["duplicate", "ready", "failed"], 120_000);
+  const runDisabled = await again.getByTestId("uvs-import-run").isDisabled().catch(() => false);
+  check(dup === "duplicate" && runDisabled, "[12] ★★同じ動画をもう一度選ぶと重複として止まる（取り込みボタンも押せない）", { dup, runDisabled });
+  check(pageErrors.length === 0, "[12] 画面のエラーが無い", pageErrors.slice(0, 3));
+}
+
 async function main(): Promise<void> {
   fs.rmSync(OUT_DIR, { recursive: true, force: true });
   fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -325,6 +504,11 @@ async function main(): Promise<void> {
 
     await waitForMainScreenReady(mainPage, 60_000);
     await dismissStartupDialogs(mainPage);
+    // 🔑 `UVS_ONLY_IMPORT=1` で [12] だけを回す（段 2〜6 の予測は数分かかる）。
+    if (process.env.UVS_ONLY_IMPORT && EXTERNAL_PLUGIN_DIR) {
+      await importCheck(driver, mainPage, async () => {});
+      return;
+    }
     const blocked = await findBlockingOverlay(mainPage, "search-submit-button");
     if (blocked) throw new Error(`クリックが塞がれています: ${blocked}`);
     const dates = mainPage.locator('input[type="date"]');
@@ -1303,17 +1487,24 @@ async function main(): Promise<void> {
     }
 
     await viewer.screenshot({ path: path.join(OUT_DIR, "viewer.png") }).catch(() => {});
+
+    if (EXTERNAL_PLUGIN_DIR) await importCheck(driver, mainPage, () => viewer.close().catch(() => {}));
   } finally {
     await driver.stop().catch(() => {});
   }
+}
 
-  console.log(`\n===== UVS プラグイン 実機検証（段 2〜6）=====`);
+/** 集計（`UVS_ONLY_IMPORT` の近道で main が早く返っても必ず出す）。 */
+function report(): void {
+  console.log(`\n===== UVS プラグイン 実機検証（段 2〜6・取り込み）=====`);
   console.log(`合格 ${passed} / 失敗 ${failures.length}`);
   for (const f of failures) console.log(`  - ${f}`);
   if (failures.length > 0) process.exitCode = 1;
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exitCode = 1;
-});
+main()
+  .catch((e) => {
+    console.error(e);
+    process.exitCode = 1;
+  })
+  .finally(report);
