@@ -19,8 +19,22 @@ const { safeStorage } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
 
-/** 保存を許すキー名。増やすときはここに明示的に足す。 */
-const ALLOWED_KEYS = new Set(["ai.gemini.apiKey"]);
+/**
+ * 保存を許すキー名。
+ *
+ * <p>提供元ごとに鍵が要るので、固定名の集合ではなく**形で許す**。
+ *
+ * 🔴 **形の検査を緩めないこと。** allowlist は「レンダラから任意の名前で書き込めると、
+ * ここが素朴な平文 KVS として濫用される」ために在る。提供元 id を受けるようにした以上、
+ * `../` や長大な名前が通らないことが唯一の防御線になる
+ * （id の形は `aiProviders.ID_RE` と同じ。両方を緩めない）。
+ */
+const LEGACY_KEYS = new Set(["ai.gemini.apiKey"]);
+const PROVIDER_KEY_RE = /^ai\.provider\.[a-z0-9-]{1,32}\.apiKey$/;
+
+function isAllowedKey(key) {
+  return typeof key === "string" && (LEGACY_KEYS.has(key) || PROVIDER_KEY_RE.test(key));
+}
 
 /** `{ "<key>": "<base64 の暗号文>" }` を収めたファイル。dataDir 直下に置く。 */
 const FILE_NAME = "secrets.enc.json";
@@ -92,7 +106,7 @@ function persist() {
  *   persisted=false は「この起動中しか保持できていない」ことを意味する。UI はこれを隠さず伝える。
  */
 function setSecret(key, value) {
-  if (!ALLOWED_KEYS.has(key)) return { ok: false, persisted: false, encryptionAvailable: encryptionAvailable(), reason: "unknown-key" };
+  if (!isAllowedKey(key)) return { ok: false, persisted: false, encryptionAvailable: encryptionAvailable(), reason: "unknown-key" };
   if (typeof value !== "string" || value.length === 0) return { ok: false, persisted: false, encryptionAvailable: encryptionAvailable(), reason: "empty" };
   if (value.length > 4096) return { ok: false, persisted: false, encryptionAvailable: encryptionAvailable(), reason: "too-long" };
 
@@ -119,7 +133,7 @@ function setSecret(key, value) {
  * 平文を取り出す。**main プロセス内からのみ呼ぶこと。IPC で公開してはいけない。**
  */
 function getSecret(key) {
-  if (!ALLOWED_KEYS.has(key)) return null;
+  if (!isAllowedKey(key)) return null;
   if (session.has(key)) return session.get(key);
   const cipher = load().get(key);
   if (!cipher) return null;
@@ -134,18 +148,18 @@ function getSecret(key) {
 
 /** UI へ返してよい状態だけを返す。値そのものは絶対に含めない。 */
 function statusOf(key) {
-  if (!ALLOWED_KEYS.has(key)) return { hasValue: false, persisted: false, encryptionAvailable: encryptionAvailable() };
+  if (!isAllowedKey(key)) return { hasValue: false, persisted: false, encryptionAvailable: encryptionAvailable() };
   const inSession = session.has(key);
   const onDisk = load().has(key);
   return { hasValue: inSession || onDisk, persisted: onDisk, encryptionAvailable: encryptionAvailable() };
 }
 
 function clearSecret(key) {
-  if (!ALLOWED_KEYS.has(key)) return false;
+  if (!isAllowedKey(key)) return false;
   session.delete(key);
   const had = load().delete(key);
   if (had) persist();
   return true;
 }
 
-module.exports = { init, setSecret, getSecret, statusOf, clearSecret, encryptionAvailable, ALLOWED_KEYS };
+module.exports = { init, setSecret, getSecret, statusOf, clearSecret, encryptionAvailable, isAllowedKey };

@@ -27,8 +27,7 @@ import { desktop, type AiGenerateResult } from "../desktopBridge";
 import { log } from "../log";
 import { AiEgressConsentDialog, type AiEgressRequest } from "./AiEgressConsentDialog";
 import type { PluginManifest } from "./pluginTypes";
-import { fetchSettings } from "../settings/settingsApi";
-import type { AiCapability } from "../desktopBridge";
+import type { AiCapability, AiResolveResult } from "../desktopBridge";
 
 /** 送信先。UI に出す値であり、実際の接続は Electron main が行う。 */
 export const AI_HOST = "generativelanguage.googleapis.com";
@@ -40,60 +39,44 @@ export const AI_HOST = "generativelanguage.googleapis.com";
 export const AI_PROVIDER_ID = "gemini-public";
 /** この権限を `plugin.json` の `permissions` に宣言していないプラグインは送信できない。 */
 export const AI_EGRESS_PERMISSION = "ai-egress";
-const SECRET_KEY = "ai.gemini.apiKey";
+/**
+ * 旧版（0.3.0）の鍵名。提供元ごとの鍵（`ai.provider.<id>.apiKey`）へ移ったが、
+ * 版を上げた利用者が入れ直さずに済むよう main 側が旧名も見る（`aiProviders.secretKeyCandidates`）。
+ * ここでは設定画面の既定表示のためだけに公開している。
+ */
+export const AI_LEGACY_SECRET_KEY = "ai.gemini.apiKey";
 
 /**
- * 用途ごとの既定モデル。
+ * 用途 → どこへ何で送るか。**解決は Electron main が行う。**
  *
- * <p>🔑 **プラグインはモデルを知らなくてよい。** 用途を頼めば本体が決める
- * （設計: `fw/ai-routing-design.md` §2）。段 3 で `ai-providers.json` へ移る。
+ * <p>🔑 レンダラ側で同じ計算を持たない。同意画面に出す宛先と実際の宛先がずれる余地を作らない
+ * （設計: `fw/ai-routing-design.md` §4）。
  *
- * <p>⚠ 画像生成用のモデルは文章を返さず、その逆も同様なので、**1 つの設定では両方を賄えない**。
- * 用途ごとに持つ必要がある。
+ * <p>⚠ 解決できない場合（その用途を扱える提供元が無い等）は**送信前に**返す。
  */
-const DEFAULT_MODELS: Record<AiCapability, string> = {
-  "image-to-image": "gemini-3.1-flash-image",
-  "image-to-text": "gemini-2.5-flash",
-};
-/** 環境設定のキー。`image-to-image` 側は既存の設定（従来は**誰も読んでいなかった**）。 */
-const MODEL_SETTING_KEYS: Record<AiCapability, string> = {
-  "image-to-image": "ai.gemini.model",
-  "image-to-text": "ai.gemini.textModel",
-};
-const API_VERSION_SETTING_KEY = "ai.gemini.apiVersion";
-
-/** 設定は 1 セッション 1 回だけ読む（生成ごとに往復させない）。 */
-let settingsCache: Record<string, string> | null = null;
-
-async function readSettings(): Promise<Record<string, string>> {
-  if (settingsCache) return settingsCache;
-  try {
-    settingsCache = await fetchSettings();
-  } catch {
-    settingsCache = {}; // 読めなくても既定で動く。ここで送信を止める理由はない。
+async function resolvePlan(
+  d: NonNullable<ReturnType<typeof desktop>>,
+  capability: AiCapability,
+): Promise<AiResolveResult> {
+  if (!d.aiResolve) {
+    // 0.3.0 の main には居ない。従来どおり Gemini の既定へ落ちる（互換）。
+    // 🔴 **鍵の有無は必ず見る。** ここで true を決め打ちにすると、古い main で
+    //    「鍵が無いのに同意ダイアログが出る」——同意を取ってから失敗する形になる。
+    const status = d.secretStatus ? await d.secretStatus(AI_LEGACY_SECRET_KEY) : { hasValue: false };
+    return {
+      ok: true,
+      providerId: AI_PROVIDER_ID,
+      label: "Google Gemini",
+      kind: "gemini",
+      model: capability === "image-to-text" ? "gemini-2.5-flash" : "gemini-3.1-flash-image",
+      endpointHost: AI_HOST,
+      hasApiKey: status.hasValue,
+    };
   }
-  return settingsCache;
+  return d.aiResolve(capability);
 }
 
-/**
- * 用途 → モデル。利用者の設定があればそれを使う。
- *
- * <p>🔴 **`ai.gemini.model` は設定画面にあるのに、これまで誰も読んでいなかった**
- * （プラグインが自前の定数を使っていた）。用途で頼む形にしたついでに、設定が効くようにする。
- */
-async function resolveModel(capability: AiCapability): Promise<{ model: string; apiVersion?: string }> {
-  const values = await readSettings();
-  const configured = values[MODEL_SETTING_KEYS[capability]];
-  return {
-    model: configured && configured.trim() ? configured.trim() : DEFAULT_MODELS[capability],
-    apiVersion: values[API_VERSION_SETTING_KEY] || undefined,
-  };
-}
 
-/** テスト用。設定の読み直しを強制する。 */
-export function resetAiSettingsCache(): void {
-  settingsCache = null;
-}
 
 export interface AiGenerationOptions {
   /** 呼び出し元プラグインのマニフェスト（権限確認と表示に使う）。 */
@@ -192,7 +175,7 @@ function bytesToBase64(bytes: Uint8Array): string {
  */
 export async function requestAiGeneration(opts: AiGenerationOptions): Promise<AiGenerationOutcome> {
   const d = desktop();
-  if (!d?.aiGenerate || !d.secretStatus) {
+  if (!d?.aiGenerate) {
     // web モードにはプラグインも Electron も無い。届かないことをそのまま返す。
     return { ok: false, error: "desktop-only" };
   }
@@ -204,29 +187,33 @@ export async function requestAiGeneration(opts: AiGenerationOptions): Promise<Ai
     return { ok: false, error: "permission-denied" };
   }
 
-  // (2) 鍵。無いまま同意だけ取らせるのは無駄なので先に見る。
-  const status = await d.secretStatus(SECRET_KEY);
-  if (!status.hasValue) return { ok: false, error: "no-api-key" };
-
-  // (3) 用途 → モデル。プラグインがモデルを名指ししてきた場合はそれを尊重する（互換）。
+  // (2) 用途 → どこへ何で送るか。**宛先を確定してから**鍵と同意を見る
+  //     （宛先が分からないまま同意を取らせない）。
   const capability: AiCapability = opts.capability ?? "image-to-image";
-  const resolved = opts.model
-    ? { model: opts.model, apiVersion: opts.apiVersion }
-    : await resolveModel(capability);
+  const plan = await resolvePlan(d, capability);
+  if (!plan.ok) {
+    log.warn(`[ai] ${opts.manifest.id}: ${capability} を扱える提供元がありません (${plan.error})`);
+    return { ok: false, error: plan.error };
+  }
+  // プラグインがモデルを名指ししてきた場合はそれを尊重する（互換）。宛先は変えない。
+  const model = opts.model ?? plan.model;
+
+  // (3) 鍵。無いまま同意だけ取らせるのは無駄なので先に見る。**提供元ごとに見る。**
+  if (!plan.hasApiKey) return { ok: false, error: "no-api-key" };
 
   const imageBase64 = bytesToBase64(opts.imageBytes);
-  // 🔴 **同意の単位に宛先を含める。** 提供元が増えたとき、ある提供元への同意が
-  //    別の提供元への送信を黙って許してはならない——同じ画像でも送り先が違えば別の外部送信。
-  //    段 3 で解決後の providerId が入る。いまは提供元が 1 つなので AI_PROVIDER_ID。
-  const scope = `${opts.manifest.id}::${AI_PROVIDER_ID}::${opts.scopeKey ?? ""}`;
+  // 🔴 **同意の単位に宛先を含める。** ある提供元への同意が別の提供元への送信を
+  //    黙って許してはならない——同じ画像でも送り先が違えば別の外部送信。
+  const scope = `${opts.manifest.id}::${plan.providerId}::${opts.scopeKey ?? ""}`;
 
   // (4) 同意。覚えているのは「同一プラグイン × 同一提供元 × 同一スコープ」だけ。
   if (!remembered.has(scope)) {
     const consent = await askConsent({
       pluginId: opts.manifest.id,
       pluginName: opts.manifest.name,
-      host: AI_HOST,
-      model: resolved.model,
+      // 🔴 定数ではなく**解決後の宛先**を出す。画面と実際が食い違ってはならない。
+      host: plan.endpointHost,
+      model,
       prompt: opts.prompt,
       imageDataUrl: `data:${opts.mimeType ?? "image/png"};base64,${imageBase64}`,
       imageBytes: opts.imageBytes.length,
@@ -238,15 +225,15 @@ export async function requestAiGeneration(opts: AiGenerationOptions): Promise<Ai
   // (5) 監査。**画像そのものは残さない**（ログに患者画素を溜め込まない）。
   //     残すのは「いつ・どのプラグインが・どこへ・どれだけ・どんな指示で」出したか。
   log.info(
-    `[ai] egress plugin=${opts.manifest.id} provider=${AI_PROVIDER_ID} host=${AI_HOST} ` +
-      `capability=${capability} model=${resolved.model} ` +
+    `[ai] egress plugin=${opts.manifest.id} provider=${plan.providerId} host=${plan.endpointHost} ` +
+      `capability=${capability} model=${model} ` +
       `bytes=${opts.imageBytes.length} promptChars=${opts.prompt.length}`,
   );
 
   return d.aiGenerate({
     capability,
-    model: resolved.model,
-    apiVersion: resolved.apiVersion,
+    model,
+    apiVersion: opts.apiVersion,
     prompt: opts.prompt,
     imageBase64,
     mimeType: opts.mimeType ?? "image/png",

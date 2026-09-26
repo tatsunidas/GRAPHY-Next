@@ -72,6 +72,41 @@ export interface AiGenerateRequest {
   providerOptions?: Record<string, unknown>;
 }
 
+/** 用途の解決結果。 */
+export type AiResolveResult =
+  | {
+      ok: true;
+      providerId: string;
+      label: string;
+      kind: string;
+      model: string;
+      endpointHost: string;
+      hasApiKey: boolean;
+    }
+  | { ok: false; error: string };
+
+/** 提供元 1 件。**鍵は含まない**（`hasApiKey` で有無だけ）。 */
+export interface AiProviderEntry {
+  id: string;
+  label: string;
+  kind: string;
+  endpoint: string;
+  /** 用途 → モデル ID。**無い用途はその提供元では使えない。** */
+  models: Record<string, string>;
+  hasApiKey?: boolean;
+  /** 鍵を保存するときのキー名（`secretSet` に渡す）。 */
+  secretKey?: string;
+}
+
+export interface AiProvidersConfig {
+  providers: AiProviderEntry[];
+  /** 用途 → 提供元 id。 */
+  defaults: Record<string, string>;
+  /** 読み込み時に捨てた設定の理由。**黙って捨てない。** */
+  problems: string[];
+  capabilities: string[];
+}
+
 /** どこで何によって作られたか。作品の再現性と監査のために持ち回る。 */
 export interface AiProvenance {
   providerId: string;
@@ -146,6 +181,17 @@ export interface GraphyDesktop {
    * 呼び出しは必ず `plugins/pluginAiApi.ts` の `requestAiGeneration()` を通す。
    */
   aiGenerate?: (req: AiGenerateRequest) => Promise<AiGenerateResult>;
+  /**
+   * 用途 → どこへ何で送るか。**同意ダイアログに出す宛先を知るため**に呼ぶ。
+   *
+   * <p>🔑 解決の権限は Electron main に 1 つだけ（レンダラ側に同じ計算を持つと、
+   * 同意画面に出す宛先と実際の宛先がずれる余地ができる）。
+   */
+  aiResolve?: (capability: AiCapability) => Promise<AiResolveResult>;
+  /** 提供元の一覧と用途ごとの既定。**鍵の値は返らない**（有無だけ）。 */
+  aiProvidersGet?: () => Promise<AiProvidersConfig>;
+  aiProvidersSet?: (cfg: { providers: AiProviderEntry[]; defaults: Record<string, string> }) =>
+    Promise<{ ok: boolean; problems: string[] }>;
   /** 名前を付けて保存（OS ダイアログ）。**上書き確認は OS が出す。** */
   saveFile?: (payload: {
     defaultName: string;

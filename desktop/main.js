@@ -29,6 +29,7 @@ const { createWindowStateKeeper } = require("./windowState");
 const messages = require("./startupMessages");
 const secretStore = require("./secretStore");
 const aiGateway = require("./aiGateway");
+const aiProviders = require("./aiProviders");
 
 const PORT = process.env.GRAPHY_BACKEND_PORT || String(cfg.backend.port);
 const PROFILE = process.env.GRAPHY_BACKEND_PROFILE || cfg.backend.profile;
@@ -834,8 +835,36 @@ ipcMain.handle("graphy:secret-status", (_e, key) => secretStore.statusOf(String(
 ipcMain.handle("graphy:secret-clear", (_e, key) => secretStore.clearSecret(String(key || "")));
 
 // AI 中継。CSP によりレンダラからは外部 API を叩けないため main が肩代わりする。
-// 解釈は一切せず、Gemini の生 JSON をそのまま返す（解析はプラグイン側の TS で試験する）。
+// 用途 → 提供元の解決と応答の正規化は aiGateway / aiAdapters が行う（fw/ai-routing-design.md）。
 ipcMain.handle("graphy:ai-generate", async (_e, req) => aiGateway.generate(req || {}));
+
+// 用途 → どこへ何で送るか。**同意ダイアログに出す宛先をレンダラが知るため**に要る。
+// 🔑 解決の権限は main に 1 つだけ置く（レンダラ側に同じ計算を持つと、同意画面に出す宛先と
+//    実際の宛先がずれる余地ができる）。
+ipcMain.handle("graphy:ai-resolve", (_e, capability) =>
+  aiGateway.resolveCapability(String(capability || "")),
+);
+
+// 提供元の一覧と用途ごとの既定。**鍵は含まない**（secretStore が持ち、値は返らない）。
+ipcMain.handle("graphy:ai-providers-get", () => {
+  const c = aiProviders.get();
+  return {
+    providers: c.providers.map((p) => ({
+      id: p.id,
+      label: p.label,
+      kind: p.kind,
+      endpoint: p.endpoint,
+      models: p.models,
+      // 鍵が入っているかだけを返す。**値は返さない。**
+      hasApiKey: !!aiProviders.secretKeyCandidates(p.id).find((k) => secretStore.statusOf(k).hasValue),
+      secretKey: aiProviders.secretKeyFor(p.id),
+    })),
+    defaults: c.defaults,
+    problems: c.problems,
+    capabilities: aiProviders.CAPABILITIES,
+  };
+});
+ipcMain.handle("graphy:ai-providers-set", (_e, cfg) => aiProviders.save(cfg || {}));
 
 // 名前を付けて保存。OS ネイティブのダイアログを使うので、**同名ファイルの上書き確認は
 // OS が標準で出す**（アプリ側で自前実装しない）。保存したパスを返す。取り消しなら null。
@@ -895,6 +924,7 @@ function reportStartupFailure(e) {
 app.whenReady().then(async () => {
   // 秘密情報の置き場は backend の CWD（H2・DICOM 保管庫と同じ場所）に揃える。
   secretStore.init(resolveDataDir());
+  aiProviders.init(resolveDataDir());
   createSplash();
   try {
     startBackend();

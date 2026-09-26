@@ -17,15 +17,13 @@
 const https = require("node:https");
 const secretStore = require("./secretStore");
 const gemini = require("./aiAdapters/gemini");
+const aiProviders = require("./aiProviders");
 
-/**
- * 提供元。**段 3 で `ai-providers.json` から読む**ようになる（設計 §4）。
- * いまは 1 つだけを定数で持つ——提供元が 1 つのうちに契約を提供元非依存へ変えるのが段 2 の目的で、
- * 「契約の変更」と「提供元の増加」を同時にやらないため。
- */
-const PROVIDER = { id: "gemini-public", kind: gemini.KIND, adapter: gemini };
-const HOST = "generativelanguage.googleapis.com";
-const SECRET_KEY = "ai.gemini.apiKey";
+/** `kind` → アダプタ。提供元を足すときはここに 1 行足す（設計 §4.2）。 */
+const ADAPTERS = { [gemini.KIND]: gemini };
+
+/** 旧名（`statusOf` の既存呼び出し互換のために公開したまま）。 */
+const SECRET_KEY = aiProviders.LEGACY_SECRET_KEY;
 const TIMEOUT_MS = 120000;
 /** 画像生成のレスポンスは base64 で数 MB になる。青天井にはしない。 */
 const MAX_RESPONSE_BYTES = 20 * 1024 * 1024;
@@ -59,12 +57,12 @@ function mask(text, key) {
   return s.length > 2000 ? `${s.slice(0, 2000)}…` : s;
 }
 
-function postJson(pathname, apiKey, bodyObj) {
+function postJson(host, pathname, apiKey, bodyObj) {
   const body = Buffer.from(JSON.stringify(bodyObj), "utf8");
   return new Promise((resolve, reject) => {
     const req = https.request(
       {
-        host: HOST,
+        host,
         path: pathname,
         method: "POST",
         headers: {
@@ -119,41 +117,41 @@ function postJson(pathname, apiKey, bodyObj) {
  *   鍵入りのスタックトレースが IPC 境界を越えるのを避けるため。
  */
 async function generate(req) {
-  const apiKey = secretStore.getSecret(SECRET_KEY);
+  if (!req) return { ok: false, error: "empty-request" };
+
+  // 🔴 **宛先とモデルは本体が決める。** プラグインが名指ししてきても、用途が来ていれば
+  //    レジストリの解決を優先する——宛先を呼び出し側に決めさせない（設計 §3.1）。
+  const plan = resolvePlan(req);
+  if (!plan.ok) return plan;
+  const { provider, adapter, model } = plan;
+
+  const apiKey = secretForProvider(provider.id);
   if (!apiKey) return { ok: false, error: "no-api-key" };
-  if (!req || !validModel(req.model)) return { ok: false, error: "invalid-model" };
-  const apiVersion = req.apiVersion == null ? PROVIDER.adapter.DEFAULT_API_VERSION : req.apiVersion;
+  if (!validModel(model)) return { ok: false, error: "invalid-model" };
+  const apiVersion = req.apiVersion == null ? adapter.DEFAULT_API_VERSION : req.apiVersion;
   if (!validApiVersion(apiVersion)) return { ok: false, error: "invalid-api-version" };
   if (typeof req.prompt !== "string" || req.prompt.length === 0) return { ok: false, error: "empty-prompt" };
   if (typeof req.imageBase64 !== "string" || req.imageBase64.length === 0) return { ok: false, error: "empty-image" };
   if (req.imageBase64.length > MAX_IMAGE_BYTES) return { ok: false, error: "image-too-large" };
-  // 🔴 扱えない用途は**送る前に**断る。送ってから「できません」と返るのでは課金が発生する。
-  if (req.capability && !PROVIDER.adapter.supports(req.capability)) {
-    return { ok: false, error: "unsupported-capability", kind: "capability" };
-  }
   if (inFlight) return { ok: false, error: "busy" };
 
-  const { path, body } = PROVIDER.adapter.buildRequest({ ...req, apiVersion });
-  const provenance = {
-    providerId: PROVIDER.id,
-    kind: PROVIDER.kind,
-    model: req.model,
-    endpointHost: HOST,
-  };
+  const host = hostOf(provider.endpoint);
+  const { path, body } = adapter.buildRequest({ ...req, model, apiVersion });
+  const provenance = { providerId: provider.id, kind: provider.kind, model, endpointHost: host };
 
   inFlight = true;
   try {
-    const res = await postJson(path, apiKey, body);
+    const res = await postJson(host, path, apiKey, body);
     if (res.statusCode !== 200) {
       const msg = (res.json && res.json.error && res.json.error.message) || res.text || `HTTP ${res.statusCode}`;
       // 認証失敗だけは呼び出し側で「鍵を入れ直して」と案内したいので区別する。
       const kind = res.statusCode === 400 || res.statusCode === 401 || res.statusCode === 403 ? "auth-or-request" : "http";
-      console.error(`[ai] ${PROVIDER.id} エラー ${res.statusCode}:`, mask(msg, apiKey));
+      console.error(`[ai] ${provider.id} エラー ${res.statusCode}:`, mask(msg, apiKey));
       return { ok: false, error: mask(msg, apiKey), status: res.statusCode, kind };
     }
     if (!res.json) return { ok: false, error: "invalid-json", status: 200 };
 
-    const norm = PROVIDER.adapter.normalize(res.json);
+    const norm = adapter.normalize(res.json);
     return {
       ok: true,
       image: norm.image,
@@ -171,4 +169,70 @@ async function generate(req) {
   }
 }
 
-module.exports = { generate, SECRET_KEY, MAX_IMAGE_BYTES };
+/**
+ * 用途 → 提供元・アダプタ・モデル。
+ *
+ * <p>用途が来ていなければ**旧来の呼び出し**（プラグインがモデルを名指し）として扱い、
+ * 既定の提供元へ送る——0.3.0 で配ったプラグインを動かし続けるため。
+ */
+function resolvePlan(req) {
+  const capability = req.capability;
+  if (capability) {
+    const r = aiProviders.resolve(capability);
+    // 🔴 扱えない用途は**送る前に**断る。送ってから「できません」と返るのでは課金が発生する。
+    if (!r.ok) return { ok: false, error: r.error, kind: "capability" };
+    const adapter = ADAPTERS[r.provider.kind];
+    if (!adapter) return { ok: false, error: "unknown-provider-kind", kind: "capability" };
+    if (!adapter.supports(capability)) return { ok: false, error: "unsupported-capability", kind: "capability" };
+    return { ok: true, provider: r.provider, adapter, model: r.model };
+  }
+  // 旧来の呼び出し。モデルは呼び出し側の指定を使うが、**宛先は既定の提供元**。
+  const fallback = aiProviders.resolve("image-to-image");
+  if (!fallback.ok) return { ok: false, error: fallback.error, kind: "capability" };
+  const adapter = ADAPTERS[fallback.provider.kind];
+  if (!adapter) return { ok: false, error: "unknown-provider-kind", kind: "capability" };
+  return { ok: true, provider: fallback.provider, adapter, model: req.model };
+}
+
+/** その提供元の鍵。出荷時の Gemini は旧名も見る（版を上げて鍵が消えたように見えるのを防ぐ）。 */
+function secretForProvider(providerId) {
+  for (const key of aiProviders.secretKeyCandidates(providerId)) {
+    const v = secretStore.getSecret(key);
+    if (v) return v;
+  }
+  return null;
+}
+
+/** `https://host` からホスト名だけを取る。検査済みなので失敗しない前提。 */
+function hostOf(endpoint) {
+  try {
+    return new URL(endpoint).host;
+  } catch {
+    return endpoint.replace(/^https:\/\//, "");
+  }
+}
+
+/**
+ * レンダラが同意ダイアログを出す前に「どこへ何で送るか」を知るための問い合わせ。
+ *
+ * <p>🔑 **解決の権限は main に 1 つ。** レンダラ側で同じ計算を持つと、
+ * 同意画面に出す宛先と実際の宛先がずれる余地ができる。
+ *
+ * @returns {{ok: true, providerId: string, kind: string, model: string, endpointHost: string,
+ *            hasApiKey: boolean} | {ok: false, error: string}}
+ */
+function resolveCapability(capability) {
+  const r = aiProviders.resolve(capability);
+  if (!r.ok) return { ok: false, error: r.error };
+  return {
+    ok: true,
+    providerId: r.provider.id,
+    label: r.provider.label,
+    kind: r.provider.kind,
+    model: r.model,
+    endpointHost: hostOf(r.provider.endpoint),
+    hasApiKey: !!secretForProvider(r.provider.id),
+  };
+}
+
+module.exports = { generate, resolveCapability, SECRET_KEY, MAX_IMAGE_BYTES };

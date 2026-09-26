@@ -49,6 +49,11 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   secretClear: (key) => ipcRenderer.invoke("graphy:secret-clear", key),
   // Gemini への中継（CSP でレンダラからは外部 API に届かないため main が肩代わりする）。
   aiGenerate: (req) => ipcRenderer.invoke("graphy:ai-generate", req),
+  // 用途 → どこへ何で送るか（同意ダイアログの宛先表示に使う）。
+  aiResolve: (capability) => ipcRenderer.invoke("graphy:ai-resolve", capability),
+  // 提供元の一覧と既定。鍵の値は返らない（有無だけ）。
+  aiProvidersGet: () => ipcRenderer.invoke("graphy:ai-providers-get"),
+  aiProvidersSet: (cfg) => ipcRenderer.invoke("graphy:ai-providers-set", cfg),
   // 名前を付けて保存。上書き確認は OS のダイアログが出す。
   saveFile: (payload) => ipcRenderer.invoke("graphy:save-file", payload),
 });
