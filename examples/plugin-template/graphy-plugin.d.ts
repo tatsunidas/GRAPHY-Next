@@ -1081,11 +1081,27 @@ interface PluginHostBase {
   };
 }
 
-/** `host.ai.generate()` の要求（H40）。 */
+/**
+ * `host.ai.generate()` の要求（H40）。
+ *
+ * ⚠ **`model` / `apiVersion` / `responseModalities` は Gemini の語彙で、複数提供元への
+ * ルーティングを入れる際に `capability` へ置き換わる**（設計: `fw/ai-routing-design.md`）。
+ * 新しいプラグインは**宛先やモデルを名指しせず、用途を頼む**形で書くこと。
+ * 提供元の差（電文の形・応答の形）は本体が吸収する。
+ */
 export interface AiGenerationRequest {
-  /** モデル ID（例 `gemini-3.1-flash-image`）。利用者の設定値を使うこと。 */
+  /**
+   * モデル ID（例 `gemini-3.1-flash-image`）。利用者の設定値を使うこと。
+   *
+   * @deprecated 提供元に固有の語彙。`capability` に置き換わる予定
+   *             （`fw/ai-routing-design.md` §3.1）。移行期間は両方受け付ける。
+   */
   model: string;
-  /** API バージョン。既定 `v1beta`。 */
+  /**
+   * API バージョン。既定 `v1beta`。
+   *
+   * @deprecated Gemini に固有。提供元ごとの接続先設定へ移る。
+   */
   apiVersion?: string;
   /** 指示文。**同意ダイアログに全文が表示される**ので、患者情報を混ぜないこと。 */
   prompt: string;
@@ -1095,11 +1111,23 @@ export interface AiGenerationRequest {
   /** 同意を覚える単位。通常はシリーズ UID。省略すると毎回確認になる。 */
   scopeKey?: string;
   temperature?: number;
-  /** 既定 `["TEXT","IMAGE"]`。画像と説明文を 1 回で受け取るために両方を要求する。 */
+  /**
+   * 既定 `["TEXT","IMAGE"]`。画像と説明文を 1 回で受け取るために両方を要求する。
+   *
+   * @deprecated Gemini に固有。用途（`image-to-image` / `image-to-text`）で表す形に移る。
+   */
   responseModalities?: string[];
 }
 
-/** `host.ai.generate()` の結果。`data` はモデルの生レスポンス（解釈はプラグイン側の責任）。 */
+/**
+ * `host.ai.generate()` の結果。
+ *
+ * ⚠ **`data` は提供元の生レスポンスで、いまは解釈がプラグイン側の責任になっている。**
+ * 複数提供元を扱えるようにする際、解釈は本体のアダプタへ移り、
+ * `image` / `text` / `provenance` という提供元非依存の形が加わる
+ * （`fw/ai-routing-design.md` §3.2）。**これが入るまで、プラグインは提供元を 1 つしか
+ * 相手にできない**——応答の形が提供元ごとに違うため。
+ */
 export type AiGenerationOutcome =
   | { ok: true; data: unknown }
   | {
