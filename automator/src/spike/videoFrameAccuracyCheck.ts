@@ -1,11 +1,14 @@
 /*
- * 動画 ROI 解析の**フレーム精度**の実機検証（`fw/video-viewer-design.md` §10-3 / §12 残タスク）。
+ * 動画ビューアの**フレーム精度**の実機検証（`fw/video-viewer-design.md` §10-3）。
  *
  * 実行:  cd automator && npx tsx src/spike/videoFrameAccuracyCheck.ts
  *
- * 何を確かめるか: 「フレーム f の統計」と言っている値が**本当にフレーム f のもの**か。
- * 解析はオフスクリーン `<video>` の `currentTime` シーク（`videoRoiAnalysis.ts` の `createFrameSampler`）で
- * フレームを取り出すため、設計上は **GOP 近似で 1 フレームずれうる**ことが懸念として挙がっていた。
+ * 何を確かめるか: 「フレーム f」と表示しているとき、**画面に描かれている絵が本当にフレーム f か**。
+ * シークバー（任意のフレームへ飛ぶ）と ▶（1 フレームずつ送る）の両方で確かめる。
+ *
+ * ⚠ 2026-09-26（段 A3）: 以前は動画ビューア独自の「フレーム統計」「グローバル ROI 解析」の値で測っていた。
+ *   ROI の UI を 2D ビューアの ROI 機能へ一本化したので、**画面の描画面（canvas）の画素**で測る形に
+ *   置き換えた。全フレームの時系列解析（旧 TIC）の判定は、グローバル ROI（段 C）の検査へ移す。
  *
  * 測り方（ずれを検出できるフィクスチャを作る）:
  *   - `geq=lum='16 + mod(N*13,30)*7'` … **フレーム番号 N ごとに輝度が飛び飛びに変わる**一様グレー動画。
@@ -14,7 +17,7 @@
  *   - 読み取り値は「限定レンジ↔フルレンジ」変換の分だけ符号化値と定数倍ずれるので、**測定値を
  *     符号化レベルへ最小二乗で当てはめ**（2 パラメータ）、残差と「最も近い候補フレーム」で判定する。
  *     フレームがずれていれば候補の巡回列と一致しないため残差が跳ね上がる。
- *   - 一様フレームなので SD が小さいことも確認する（複数フレームの混ざりや途中フレームの合成を検出）。
+ *   - 一様フレームなので、中央の区画の SD が小さいことも確認する（途中フレームの合成を検出）。
  *
  * 前提: backend jar（`cd backend && mvn -q -Dfrontend.skip=true -DskipTests package`）。
  * フィクスチャは無ければ ffmpeg で自動生成する（`fixtures/video-mp4-avi/frame-accuracy/`）。
@@ -28,7 +31,6 @@ import { DesktopDriver } from "../driver/desktopDriver.js";
 import { resetDb } from "../backend/dbReset.js";
 import { importNonDicomPaths } from "../fixtures/importFixtures.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
-import { dragOnCanvasHost } from "../common/pointerDrag.js";
 import { waitForMainScreenReady } from "../checklist/items/shared/helpers.js";
 
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "video-frame-accuracy");
@@ -97,30 +99,33 @@ async function seekToFrame(page: Page, frame: number): Promise<number> {
   return Number(await seek.inputValue());
 }
 
-/** 「フレーム統計」を実行して要約テキストの数値（平均・最小・最大・SD）を読む。 */
-async function frameStats(
+/** 画面の描画面（canvas）の中央 16×16 の区画の輝度の平均と SD。ROI の枠などは SVG なので乗らない。 */
+async function readCenterPatch(page: Page): Promise<{ mean: number; sd: number }> {
+  return page.evaluate(() => {
+    const c = document.querySelector('[data-testid="video-viewport-host"] canvas') as HTMLCanvasElement | null;
+    const ctx = c?.getContext("2d");
+    if (!c || !ctx) return { mean: Number.NaN, sd: Number.NaN };
+    const d = ctx.getImageData(Math.floor(c.width / 2) - 8, Math.floor(c.height / 2) - 8, 16, 16).data;
+    const ys: number[] = [];
+    for (let i = 0; i < d.length; i += 4) ys.push((d[i] + d[i + 1] + d[i + 2]) / 3);
+    const mean = ys.reduce((a, v) => a + v, 0) / ys.length;
+    const sd = Math.sqrt(ys.reduce((a, v) => a + (v - mean) ** 2, 0) / ys.length);
+    return { mean, sd };
+  });
+}
+
+/** シークバーでフレーム f へ飛び、画面に描かれた絵と「フレーム n / N」の表示を読む。 */
+async function screenStats(
   page: Page,
   frame: number,
-): Promise<{ mean: number; min: number; max: number; sd: number; landedFrame: number; titleFrame: number }> {
+): Promise<{ mean: number; sd: number; landedFrame: number; shownFrame: number }> {
   const landedFrame = await seekToFrame(page, frame);
-  // ⚠ 前回のパネルを必ず閉じてから実行する。開いたままだと**前のフレームの値**を読んでしまう。
-  const close = page.getByTestId("video-frame-stats-close");
-  if ((await close.count()) > 0) {
-    await close.click();
-    await page.getByTestId("video-frame-stats-panel").waitFor({ state: "detached", timeout: 10_000 }).catch(() => {});
-  }
-  await page.getByTestId("video-frame-stats").click();
-  await page.getByTestId("video-frame-stats-panel").waitFor({ state: "visible", timeout: 30_000 });
-  const txt = ((await page.getByTestId("video-frame-stats-summary").textContent()) ?? "").trim();
-  // "Area 4152 px² · Mean 85.7 · Range 71–101 · SD 7.6" / ja も数値の並びは同じ順。
-  const nums = (txt.match(/\d+(?:\.\d+)?/g) ?? []).map(Number);
-  // [area, mean, min, max, sd]
-  const [, mean, min, max, sd] = nums;
-  // パネル見出しは「ROI statistics — frame N」。**解析されたフレーム**を確かめる（要求と食い違えばそれが原因）。
-  const title = ((await page.getByTestId("video-frame-stats-panel").locator("strong").first().textContent()) ?? "").trim();
-  const titleFrame = Number((title.match(/(\d+)/) ?? [])[1] ?? NaN);
-  console.log(`    frame ${frame}: level=${levelOf(frame)} / シーク後=${landedFrame} / パネル=${titleFrame} → ${txt}`);
-  return { mean, min, max, sd, landedFrame, titleFrame };
+  await page.waitForTimeout(400); // シーク後の描画を待つ
+  const { mean, sd } = await readCenterPatch(page);
+  const shown = ((await page.getByTestId("video-frame-number").textContent()) ?? "").trim();
+  const shownFrame = Number((shown.match(/(\d+)\s*\//) ?? [])[1] ?? NaN);
+  console.log(`    frame ${frame}: level=${levelOf(frame)} / シーク後=${landedFrame} / 表示=${shown} → 平均 ${mean.toFixed(1)} SD ${sd.toFixed(1)}`);
+  return { mean, sd, landedFrame, shownFrame };
 }
 
 /** y ≈ a*x + b を最小二乗で当てはめる。 */
@@ -173,13 +178,13 @@ async function main(): Promise<void> {
 
     await page.getByTestId(HOST).waitFor({ state: "visible", timeout: 60_000 });
     const ok = await page
-      .getByTestId("video-tool-rectangle")
+      .getByTestId("video-display-bar")
       .waitFor({ state: "visible", timeout: 60_000 })
       .then(() => true)
       .catch(() => false);
     check(ok, "VideoViewport（方式 A）で開く");
     if (!ok) {
-      throw new Error("方式 B フォールバックのため ROI 解析の検証ができません");
+      throw new Error("方式 B フォールバックのため画面の絵の検証ができません");
     }
     await page.waitForTimeout(800);
     check(
@@ -188,20 +193,12 @@ async function main(): Promise<void> {
       await page.getByTestId("video-seek").getAttribute("max"),
     );
 
-    // グローバル ROI（矩形）を中央に置く。一様フレームなので位置は問わない。
-    await page.getByTestId("video-tool-rectangle").click();
-    await page.waitForTimeout(200);
-    await dragOnCanvasHost(page, HOST, 80, 60, 0, 12, { fracX: 0.35, fracY: 0.35 });
-    await page.waitForTimeout(600);
-    check((await page.getByTestId("video-roi-chip").count()) === 1, "ROI を 1 つ描けた");
-    await page.screenshot({ path: path.join(OUT_DIR, "0-roi.png") }).catch(() => {});
-
-    // ── 各フレームの統計を読む（先頭・末尾・中間・隣接ペアを含める）。
+    // ── シークバーで飛んだ先の絵を読む（先頭・末尾・中間・隣接ペアを含める）。
     const probeFrames = [1, 2, 3, 8, 15, 16, 23, 29, 30];
-    const measured: { frame: number; mean: number; sd: number; landedFrame: number; titleFrame: number }[] = [];
+    const measured: { frame: number; mean: number; sd: number; landedFrame: number; shownFrame: number }[] = [];
     for (const f of probeFrames) {
-      const s = await frameStats(page, f);
-      measured.push({ frame: f, mean: s.mean, sd: s.sd, landedFrame: s.landedFrame, titleFrame: s.titleFrame });
+      const s = await screenStats(page, f);
+      measured.push({ frame: f, mean: s.mean, sd: s.sd, landedFrame: s.landedFrame, shownFrame: s.shownFrame });
     }
     check(
       measured.every((m) => m.landedFrame === m.frame),
@@ -209,15 +206,15 @@ async function main(): Promise<void> {
       measured.filter((m) => m.landedFrame !== m.frame).map((m) => ({ req: m.frame, landed: m.landedFrame })),
     );
     check(
-      measured.every((m) => m.titleFrame === m.frame),
-      "解析されたフレームが要求フレームと一致する（パネル見出し）",
-      measured.filter((m) => m.titleFrame !== m.frame).map((m) => ({ req: m.frame, panel: m.titleFrame })),
+      measured.every((m) => m.shownFrame === m.frame),
+      "「フレーム n / N」の表示が要求フレームと一致する",
+      measured.filter((m) => m.shownFrame !== m.frame).map((m) => ({ req: m.frame, shown: m.shownFrame })),
     );
-    await page.screenshot({ path: path.join(OUT_DIR, "1-last-frame-stats.png") }).catch(() => {});
+    await page.screenshot({ path: path.join(OUT_DIR, "1-last-frame.png") }).catch(() => {});
 
     check(
       measured.every((m) => Number.isFinite(m.mean)),
-      "全ての測定フレームで平均が読める",
+      "全ての測定フレームで画面の絵が読める",
       measured,
     );
     check(
@@ -258,35 +255,9 @@ async function main(): Promise<void> {
     }
     check(misidentified.length === 0, "測定値から同定されるフレームが要求フレームと一致する", misidentified);
 
-    // ── 時系列解析（全 30 フレーム）でも同じ巡回パターンが出ること。
-    await page.getByTestId("video-analyze-run").click();
-    await page.getByTestId("video-analyze-summary").waitFor({ state: "visible", timeout: 120_000 });
-    const summary = ((await page.getByTestId("video-analyze-summary").textContent()) ?? "").trim();
-    console.log(`    TIC 要約: ${summary}`);
-    const ticNums = (summary.match(/\d+(?:\.\d+)?/g) ?? []).map(Number);
-    // [mean, min, max, sd]。全レベルを走るので min/max は端のフレームの値に近いはず。
-    const loExpect = a * levelOf(1) + b;
-    const hiExpect = a * Math.max(...Array.from({ length: N_FRAMES }, (_, i) => levelOf(i + 1))) + b;
-    check(
-      ticNums.length >= 3 && Math.abs(ticNums[1] - loExpect) < 8 && Math.abs(ticNums[2] - hiExpect) < 8,
-      "時系列解析の min/max が符号化レベルの端と一致する（全フレームを正しく走査している）",
-      { ticNums, loExpect: Number(loExpect.toFixed(1)), hiExpect: Number(hiExpect.toFixed(1)) },
-    );
-    await page.screenshot({ path: path.join(OUT_DIR, "2-tic.png") }).catch(() => {});
-
     // ── 画面に出ている絵そのもので「1 フレームずつ進む」を確かめる（2026-09-25）
-    // 🔑 ここまでの検査は、別の <video> をフレーム中央へシークして画素を読んでいた。**画面の
-    //    VideoViewport が描いている絵**がフレーム n かどうかは見ていなかった。ここでは ▶ を 1 回ずつ
-    //    押し、描画面（canvas）の中央の画素と「フレーム n / N」の表示を読む。
-    //    ROI の枠は SVG で canvas とは別なので、中央の画素には乗らない。
-    const readCenter = (): Promise<number> =>
-      page.evaluate(() => {
-        const c = document.querySelector('[data-testid="video-viewport-host"] canvas') as HTMLCanvasElement | null;
-        const ctx = c?.getContext("2d");
-        if (!c || !ctx) return Number.NaN;
-        const d = ctx.getImageData(Math.floor(c.width / 2), Math.floor(c.height / 2), 1, 1).data;
-        return (d[0] + d[1] + d[2]) / 3;
-      });
+    // ここではシークバーではなく ▶ を 1 回ずつ押し、描画面の中央の画素と「フレーム n / N」の表示を読む。
+    const readCenter = async (): Promise<number> => (await readCenterPatch(page)).mean;
     await seekToFrame(page, 1);
     await page.waitForTimeout(400);
     const drawn: { frame: number; shown: string; value: number }[] = [];

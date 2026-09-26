@@ -13,7 +13,8 @@
  *   3. 変換結果が `<storageDir>/.cache/video/{sop}.mp4` にキャッシュされ、2 回目は再変換しない
  *   4. UI が「ffmpeg が無い」案内ではなく **VideoViewport で再生** できる（ツールバーが出る・フレーム数 30）
  *   5. **変換でフレームが入れ替わっていない**（フレームごとに輝度が飛び飛びの動画なので、
- *      ROI のフレーム統計を符号化レベルへ線形当てはめして残差で判定できる）
+ *      画面に描かれた絵の輝度を符号化レベルへ線形当てはめして残差で判定できる。2026-09-26 の段 A3 で
+ *      動画ビューア独自の「フレーム統計」を外したため、描画面の画素を読む形に置き換えた）
  *
  * フィクスチャ: 取込経路は非 H.264 を**取込時に**変換してしまうため、MPEG2 のままの DICOM は
  * `automator/scripts/make-mpeg2-video-dicom.py`（ffmpeg ＋ pydicom）で直接組み立てる。
@@ -28,14 +29,12 @@ import { DesktopDriver, DESKTOP_RUN_DATA_DIR } from "../driver/desktopDriver.js"
 import { resetDb } from "../backend/dbReset.js";
 import { importPaths } from "../fixtures/importFixtures.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
-import { dragOnCanvasHost } from "../common/pointerDrag.js";
 import { waitForMainScreenReady } from "../checklist/items/shared/helpers.js";
 
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "video-mpeg2-transcode");
 const FIXTURE_DIR = path.join(AUTOMATOR_ROOT, "fixtures", "video-mp4-avi", "mpeg2");
 const FIXTURE = path.join(FIXTURE_DIR, "mpeg2-video.dcm");
 const GENERATOR = path.join(AUTOMATOR_ROOT, "scripts", "make-mpeg2-video-dicom.py");
-const HOST = "video-viewport-host";
 
 const N_FRAMES = 30;
 /** 生成スクリプトと同じ式。フレーム f（1-based）に符号化した輝度。 */
@@ -88,20 +87,21 @@ async function seekToFrame(page: Page, frame: number): Promise<number> {
   return Number(await seek.inputValue());
 }
 
-/** 「フレーム統計」の平均を読む（開いたままだと前の値を掴むので必ず閉じてから開く）。 */
+/** フレーム f へ飛び、画面の描画面（canvas）の中央 16×16 の区画の輝度の平均を読む。 */
 async function frameMean(page: Page, frame: number): Promise<number> {
   await seekToFrame(page, frame);
-  const close = page.getByTestId("video-frame-stats-close");
-  if ((await close.count()) > 0) {
-    await close.click();
-    await page.getByTestId("video-frame-stats-panel").waitFor({ state: "detached", timeout: 10_000 }).catch(() => {});
-  }
-  await page.getByTestId("video-frame-stats").click();
-  await page.getByTestId("video-frame-stats-panel").waitFor({ state: "visible", timeout: 30_000 });
-  const txt = ((await page.getByTestId("video-frame-stats-summary").textContent()) ?? "").trim();
-  const nums = (txt.match(/\d+(?:\.\d+)?/g) ?? []).map(Number);
-  console.log(`    frame ${frame}: level=${levelOf(frame)} → ${txt}`);
-  return nums[1];
+  await page.waitForTimeout(400); // シーク後の描画を待つ
+  const mean = await page.evaluate(() => {
+    const c = document.querySelector('[data-testid="video-viewport-host"] canvas') as HTMLCanvasElement | null;
+    const ctx = c?.getContext("2d");
+    if (!c || !ctx) return Number.NaN;
+    const d = ctx.getImageData(Math.floor(c.width / 2) - 8, Math.floor(c.height / 2) - 8, 16, 16).data;
+    let sum = 0;
+    for (let i = 0; i < d.length; i += 4) sum += (d[i] + d[i + 1] + d[i + 2]) / 3;
+    return sum / (d.length / 4);
+  });
+  console.log(`    frame ${frame}: level=${levelOf(frame)} → 画面の平均 ${mean.toFixed(1)}`);
+  return mean;
 }
 
 function fitLinear(xs: number[], ys: number[]): { a: number; b: number } {
@@ -192,7 +192,7 @@ async function main(): Promise<void> {
     await page.locator('[data-testid^="series-row-"]').first().click();
 
     const playable = await page
-      .getByTestId("video-tool-rectangle")
+      .getByTestId("video-display-bar")
       .waitFor({ state: "visible", timeout: 60_000 })
       .then(() => true)
       .catch(() => false);
@@ -219,12 +219,6 @@ async function main(): Promise<void> {
     check(Number(seekMax) === N_FRAMES, `シークバーが ${N_FRAMES} フレームを持つ`, { seekMax });
 
     // ── 5. 変換でフレームが入れ替わっていない
-    await page.getByTestId("video-tool-rectangle").click();
-    await page.waitForTimeout(200);
-    await dragOnCanvasHost(page, HOST, 80, 60, 0, 12, { fracX: 0.35, fracY: 0.35 });
-    await page.waitForTimeout(600);
-    check((await page.getByTestId("video-roi-chip").count()) === 1, "ROI を描ける");
-
     const probe = [1, 2, 9, 16, 23, 30];
     const means: number[] = [];
     for (const f of probe) {
@@ -242,7 +236,7 @@ async function main(): Promise<void> {
       maxResid,
       resid: resid.map((r) => Number(r.toFixed(2))),
     });
-    await page.screenshot({ path: path.join(OUT_DIR, "1-frame-stats.png") }).catch(() => {});
+    await page.screenshot({ path: path.join(OUT_DIR, "1-frames.png") }).catch(() => {});
   } finally {
     await driver.stop();
   }
