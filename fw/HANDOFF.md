@@ -2,6 +2,14 @@
 
 > 更新日: 2026-09-26（**再開はすぐ下の「▶ ここから再開」から**）
 >
+> ## ▶ 2026-09-26 — 🚧 **Slab MIP（MIP/MinIP/AvgIP）を 3D・MPR・2D の 3 経路に追加**（`feat/slab-mip`）
+>
+> 正本 **`fw/slab-mip-design.md`**。3D Viewer に**モード「Slab」**（vtk.js `ImageResliceMapper` のスラブ、
+> 面はカメラ固定＝回転で任意斜め・Shift+ホイールで前後）、MPR 画面ヘッダに**スラブ select＋厚み**
+> （cornerstone `setSlabThickness`/`setBlendMode`）、2D ThickSlab に**投影方式**と**表示 > Slab MIP**。
+> 厚みは全幅 mm、プリセット 3/5/8/10/15/20（文献根拠は設計 §6）。typecheck/vitest/build green。
+> **次**: 利用者の `make dev-desktop` 実機確認（特に MPR の slab が効くか・3D の GPU メモリ）。
+>
 > ## ▶ 2026-09-26 — ✅ **外部 AI を「用途で頼む」形に作り替えた（段 1〜4 完了・`c72c6cb`）**
 >
 > 正本 **`fw/ai-routing-design.md`**。発端は利用者の判断「**多くの生成 AI が使える中で、

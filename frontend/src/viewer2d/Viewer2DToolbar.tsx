@@ -7,6 +7,7 @@ import { presetLabel } from "./wlPresets";
 import { useWlPresets } from "./wlPresetStore";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { type SortMode } from "../viewer/seriesSort";
+import type { SlabProjection } from "../viewer/slabPresets";
 import {
   type ViewerDerivedSeriesRequest,
   type ViewerDerivedSeriesResult,
@@ -194,6 +195,8 @@ export interface ViewerActions {
   editPresets(): void;
   /** Z 並べ替え（InstanceNumber / IPP, 昇順・降順）。対象タイルのシリーズに適用。 */
   sort(mode: SortMode): void;
+  /** Slab 投影（ThickSlab の MIP/MinIP/AvgIP）。null で OFF。対象タイルのシリーズに適用。 */
+  setSlab(projection: SlabProjection | null): void;
   /** 左ドラッグの操作/計測/ブラシツールを切替（全タイルに適用＝グローバルなツールモード）。 */
   setTool(toolName: string): void;
   /** ROI ブラシ径(px)。 */

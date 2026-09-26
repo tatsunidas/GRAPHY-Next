@@ -259,6 +259,19 @@ export function Viewer2DMenuBar({
             },
           ],
         },
+        {
+          label: t("viewer2d.menu.slabMip"),
+          testId: "menu-slab-mip",
+          submenu: [
+            { label: t("viewer2d.menu.slabMip.off"), onClick: () => actions.setSlab(null), testId: "menu-slab-off" },
+            ...(["MIP", "MINIP", "AVG"] as const).map((p, i) => ({
+              label: t(`viewer2d.menu.slabMip.${p.toLowerCase()}`),
+              onClick: () => actions.setSlab(p),
+              separatorBefore: i === 0,
+              testId: `menu-slab-${p.toLowerCase()}`,
+            })),
+          ],
+        },
         { label: t("viewer2d.tb.syncOn"), onClick: () => actions.setSyncTargets(true) },
         { label: t("viewer2d.tb.syncOff"), onClick: () => actions.setSyncTargets(false) },
         { label: `${t("main.toolbar.viewer3d")}…`, onClick: () => actions.launchViewer3D() },

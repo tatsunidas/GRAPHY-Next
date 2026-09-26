@@ -74,7 +74,7 @@ import { registerSegGeometryFromLayout } from "./segMetadata";
 import { registerSliceSync, publishSlice, setSliceSyncConfig } from "./sliceSync";
 import { computeSliceSpacing } from "./imageInfo";
 import {
-  THICK_SLAB_THICKNESSES,
+  thickSlabThicknessesFor,
   isThickSlabAvailable,
   isOriginalThickness,
   slicesPerStepOf,
@@ -85,6 +85,7 @@ import {
   registerThickSlabSession,
   thickSlabImageId,
 } from "./thickSlab";
+import { SLAB_PROJECTIONS, defaultSlabThickness, type SlabProjection } from "./slabPresets";
 import { imageIdForInstance, sopUidFromImageId, type ViewerMode } from "./imageId";
 import { XaPresentationDialog } from "./XaPresentationDialog";
 import type { PresentationPlan } from "./xaPresentationApply";
@@ -327,6 +328,8 @@ export function SeriesViewer({
   //    カラーでは無効。実スライス厚に一致する厚みを選ぶと Original（合成しない）。─────────────
   const [thickSlabOn, setThickSlabOn] = useState(false);
   const [thickSlabMm, setThickSlabMm] = useState<number>(2.0);
+  // 投影方式（AVG=従来の平均 / MIP / MINIP）。Slab MIP（fw/slab-mip-design.md）。
+  const [thickSlabProj, setThickSlabProj] = useState<SlabProjection>("AVG");
   const [spacingZ, setSpacingZ] = useState<number | null>(null);
   // スタックが空間スライスでない（XA のフレーム軸など）なら ThickSlab の概念が無い → 行ごと隠す。
   const spatialStack = stackAxisSpec.kind === "slice";
@@ -381,9 +384,10 @@ export function SeriesViewer({
       thicknessMm: thickSlabMm,
       spacingZmm: spacingZ!,
       nativeIds: zStack,
+      projection: thickSlabProj,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectiveThick, seriesUid, cc, tc, thickSlabMm, spacingZ, zStackKey]);
+  }, [effectiveThick, seriesUid, cc, tc, thickSlabMm, spacingZ, zStackKey, thickSlabProj]);
   const thickImageIds = useMemo(() => {
     if (!thickToken) return null;
     return Array.from({ length: digitalCount }, (_, dz) => thickSlabImageId(thickToken, dz));
@@ -910,6 +914,7 @@ export function SeriesViewer({
   // 表示中の画像（imageId）を追従させて同じスライスを保つ。
   const currentImageId = zStack[nativeZ];
   const hasVideoRef = useRef(hasVideo); hasVideoRef.current = hasVideo;
+  const thickAvailableRef = useRef(thickAvailable); thickAvailableRef.current = thickAvailable;
   const sortMetaRef = useRef<SortMeta | null>(sortMeta); sortMetaRef.current = sortMeta;
   const currentImageIdRef = useRef(currentImageId); currentImageIdRef.current = currentImageId;
   const pendingFollowRef = useRef<string | null>(null);
@@ -959,6 +964,20 @@ export function SeriesViewer({
         }
         pendingFollowRef.current = currentImageIdRef.current ?? null;
         setSortMode(mode);
+      },
+      // View メニュー「Slab MIP」→ ThickSlab の投影方式＋既定厚で ON / OFF。
+      setSlab: (projection) => {
+        if (projection === null) {
+          setThickSlabOn(false);
+          return;
+        }
+        if (!thickAvailableRef.current) {
+          emitToast(t("series.thickSlab.unavailable"));
+          return;
+        }
+        setThickSlabProj(projection);
+        setThickSlabMm(defaultSlabThickness(projection));
+        setThickSlabOn(true);
       },
     });
   }, [commandKey, t]);
@@ -1864,10 +1883,30 @@ export function SeriesViewer({
                 onChange={(e) => setThickSlabMm(Number(e.target.value))}
                 style={selectBox}
                 title={t("series.thickSlab.title")}
+                data-testid="thickslab-thickness"
               >
-                {THICK_SLAB_THICKNESSES.map((mm) => (
+                {thickSlabThicknessesFor(thickSlabProj).map((mm) => (
                   <option key={mm} value={mm}>
                     {mm.toFixed(1)} mm
+                  </option>
+                ))}
+              </select>
+              <select
+                value={thickSlabProj}
+                disabled={!thickSlabOn || !thickAvailable}
+                onChange={(e) => {
+                  const p = e.target.value as SlabProjection;
+                  setThickSlabProj(p);
+                  // 平均に戻したとき、MIP 専用の厚い選択肢のままだと select が空表示になるので丸める。
+                  if (!thickSlabThicknessesFor(p).includes(thickSlabMm)) setThickSlabMm(defaultSlabThickness(p));
+                }}
+                style={selectBox}
+                title={t("series.thickSlab.proj.title")}
+                data-testid="thickslab-projection"
+              >
+                {SLAB_PROJECTIONS.map((p) => (
+                  <option key={p} value={p}>
+                    {t(`series.thickSlab.proj.${p.toLowerCase()}`)}
                   </option>
                 ))}
               </select>

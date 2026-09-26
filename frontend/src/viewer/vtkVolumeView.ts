@@ -38,13 +38,22 @@ import vtkOrientationMarkerWidget from "@kitware/vtk.js/Interaction/Widgets/Orie
 import vtkAnnotatedCubeActor from "@kitware/vtk.js/Rendering/Core/AnnotatedCubeActor";
 import { Corners as OrientationCorners } from "@kitware/vtk.js/Interaction/Widgets/OrientationMarkerWidget/Constants";
 import { createOrthoSlices, type OrthoSlices } from "./vtkOrthoSlices";
+import { createSlabView } from "./vtkSlab";
+import { defaultSlabThickness, type SlabProjection } from "./slabPresets";
 import actorRotateManipulator from "./actorRotateManipulator";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
 
 /** レンダリングモード。 */
-export type VtkRenderMode = "VR" | "MIP" | "MINIP" | "ORTHO";
+export type VtkRenderMode = "VR" | "MIP" | "MINIP" | "ORTHO" | "SLAB";
+
+/** SLAB モード（Slab MIP）のパラメータ。厚みは全幅 mm、depth は焦点から視線方向のオフセット mm。 */
+export interface VtkSlabParams {
+  thicknessMm: number;
+  projection: SlabProjection;
+  depthMm: number;
+}
 
 /** 不透明度カーブ点（value=HU/SUV, opacity=0..1）。 */
 export interface VtkOpacityPoint {
@@ -97,6 +106,10 @@ export interface VtkVolumeView {
   setWindowLevel(center: number, width: number): void;
   /** Ortho モードの各軸スライス位置（0..1 の割合）。 */
   setOrthoPositions(fx: number, fy: number, fz: number): void;
+  /** SLAB モードのパラメータ（指定フィールドのみ）。Shift+ホイールでも depth が動く。 */
+  setSlab(params: Partial<VtkSlabParams>): void;
+  /** 現在の SLAB パラメータと depth の可動域(±mm)。 */
+  getSlab(): VtkSlabParams & { maxDepthMm: number };
   /** 色 LUT（256 の r/g/b 0..255）を適用。null でグレースケールへ。 */
   setColorLut(lut: { r: number[]; g: number[]; b: number[] } | null): void;
   /** VR プリセット（cornerstone VIEWPORT_PRESETS 名）を適用。null で解除（グレースケール/W-L へ）。 */
@@ -501,6 +514,15 @@ export function createVtkVolumeView(
   // Ortho（3 直交スライス）。初期は非表示。VR/MIP/MinIP と排他で表示切替。
   const ortho: OrthoSlices = createOrthoSlices(renderer, imageData, render, { center, width });
 
+  // SLAB（Slab MIP・カメラ固定スラブ）。初期は非表示。色 TF は volume と共有（W/L・LUT 追従）。
+  const slabParams: VtkSlabParams = { thicknessMm: defaultSlabThickness("MIP"), projection: "MIP", depthMm: 0 };
+  const slab = createSlabView(renderer, imageData, ctf, render, {
+    thicknessMm: slabParams.thicknessMm,
+    projection: slabParams.projection,
+  });
+  // SLAB 中は平行投影を強制（スラブ厚が画面全域で一定の意味を持つように）。抜けるとき元へ戻す。
+  let parallelBeforeSlab: boolean | null = null;
+
   // 状態変化の通知（Info オーバーレイ更新用）。
   const stateListeners = new Set<() => void>();
   const notifyState = () => {
@@ -524,18 +546,39 @@ export function createVtkVolumeView(
     notifyState();
   };
 
+  // マウスマニピュレータの張り替え（interactor 割当節で実体を代入。applyMode から SLAB 切替時に呼ぶ）。
+  let installManipulators: (() => void) | null = null;
+
   // モード切替（setMode と applyState で共用）。render/notify は呼び元で行う。
   const applyMode = (next: VtkRenderMode) => {
     mode = next;
     customOpacity = null;
     const isOrtho = next === "ORTHO";
+    const isSlab = next === "SLAB";
     try {
-      actor.setVisibility(!isOrtho);
+      actor.setVisibility(!isOrtho && !isSlab);
     } catch {
       /* ignore */
     }
     ortho.setVisible(isOrtho);
-    if (isOrtho) {
+    try {
+      const cam: Any = renderer.getActiveCamera();
+      if (isSlab && parallelBeforeSlab === null) {
+        parallelBeforeSlab = !!cam.getParallelProjection();
+        cam.setParallelProjection(true);
+      } else if (!isSlab && parallelBeforeSlab !== null) {
+        cam.setParallelProjection(parallelBeforeSlab);
+        parallelBeforeSlab = null;
+      }
+    } catch {
+      /* ignore */
+    }
+    slab.setVisible(isSlab);
+    // SLAB は回転=カメラ周回に固定（Actor 回転だとスラブ面とボリュームの幾何がずれる）。
+    installManipulators?.();
+    if (isSlab) {
+      // 色は共有 TF（rebuildColor 済み）。不透明度 TF・ブレンドは volume 非表示なので触らない。
+    } else if (isOrtho) {
       ortho.setWindowLevel(center, width);
     } else {
       applyBlend();
@@ -627,18 +670,35 @@ export function createVtkVolumeView(
   const actorRotate = actorRotateManipulator.newInstance({ button: 1, center: volCenter });
   let rotateMode: "camera" | "actor" = "camera";
   // 全マウスマニピュレータを張り替える（個別 remove より確実）。回転だけ mode で差し替え。
-  const installManipulators = () => {
+  // Shift+ホイール = SLAB の depth（視線方向の前後スライド）。修飾キー一致で判定されるため
+  // 素のホイール（Zoom）とは衝突しない。SLAB 以外では何もしない。
+  const depthManip = vtkMouseRangeManipulator.newInstance({ scrollEnabled: true, shift: true });
+  const depthMax = slab.getMaxDepth() || 1;
+  depthManip.setScrollListener(
+    -depthMax,
+    depthMax,
+    fine,
+    () => slabParams.depthMm,
+    (v: number) => {
+      if (mode !== "SLAB") return;
+      slab.setDepth(v);
+      slabParams.depthMm = slab.getDepth();
+      notifyState();
+    },
+  );
+  installManipulators = () => {
     iStyle.removeAllMouseManipulators();
-    iStyle.addMouseManipulator(rotateMode === "camera" ? camRotate : actorRotate);
+    iStyle.addMouseManipulator(rotateMode === "camera" || mode === "SLAB" ? camRotate : actorRotate);
     iStyle.addMouseManipulator(panManip);
     iStyle.addMouseManipulator(zoomManip);
     iStyle.addMouseManipulator(wlManip);
+    iStyle.addMouseManipulator(depthManip);
   };
   const applyRotateMode = (m: "camera" | "actor") => {
     rotateMode = m;
-    installManipulators();
+    installManipulators?.();
   };
-  installManipulators();
+  installManipulators?.();
   // タッチ端末: ピンチ=Zoom / 2本指ドラッグ=Pan / 2本指ひねり=回転。マウスとは別系統の
   // ジェスチャマニピュレータで、installManipulators の removeAllMouseManipulators では消えない
   // ため 1 回だけ登録する（単指ドラッグは button1 に写像され回転として既に効く）。
@@ -711,6 +771,24 @@ export function createVtkVolumeView(
     },
     setOrthoPositions(fx, fy, fz) {
       ortho.setPositions(fx, fy, fz);
+    },
+    setSlab(p) {
+      if (typeof p.thicknessMm === "number" && p.thicknessMm > 0) {
+        slabParams.thicknessMm = p.thicknessMm;
+        slab.setThickness(p.thicknessMm);
+      }
+      if (p.projection) {
+        slabParams.projection = p.projection;
+        slab.setProjection(p.projection);
+      }
+      if (typeof p.depthMm === "number") {
+        slab.setDepth(p.depthMm);
+        slabParams.depthMm = slab.getDepth();
+      }
+      notifyState();
+    },
+    getSlab() {
+      return { ...slabParams, maxDepthMm: slab.getMaxDepth() };
     },
     setColorLut(next) {
       lut = next;
@@ -992,6 +1070,11 @@ export function createVtkVolumeView(
       }
       try {
         ortho.destroy();
+      } catch {
+        /* ignore */
+      }
+      try {
+        slab.destroy();
       } catch {
         /* ignore */
       }

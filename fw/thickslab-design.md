@@ -62,8 +62,8 @@ Slicer/CurvedMPR=自前 canvas。ThickSlab は 2D 経路にのみ追加。
 - **Slicer**: 既に `reslice.ts` `SlabSpec`（thickness/gap/numSlices/mode=MEAN/MAX/MIN/MEDIAN/MODE）で
   デジタルスライス厚を装備 → 委譲（変更なし）。
 - **Curved MPR**: 既に `bandHalfWidthMm`＋`ProjectionMode`(MIP/MINIP/AVERAGE) を装備 → 委譲（変更なし）。
-- **MPR**: 現状スラブ非対応の `VolumeViewport`。今回は対象外（将来 cornerstone ネイティブの
-  `setSlabThickness`/`setBlendMode` で MPR 側だけに後付け可能。2D 実装とは無関係）。
+- **MPR**: 2026-09-26 に cornerstone ネイティブの `setSlabThickness`/`setBlendMode` で後付け済み
+  （[`slab-mip-design.md`](slab-mip-design.md) §B。2D 実装とは無関係）。
 
 ## 6. 既存機能への影響と対応
 
@@ -90,4 +90,4 @@ Slicer/CurvedMPR=自前 canvas。ThickSlab は 2D 経路にのみ追加。
   デジタル送り・同期・参照線の追従。tsc は green。
 - PET SUV シリーズの ThickSlab は SUV 窓/値が合成 id に載らない（`suvForImageId` は実 id キー）。要検討。
 - `sessions` Map は (series×C/T×厚み×スタック) 分たまる（実質小）。長時間運用で気になれば LRU 化。
-- MIP/MinIP を選べる拡張（本家 ThickSlab には無いが要望次第）。
+- ~~MIP/MinIP を選べる拡張~~ → **2026-09-26 実装**（投影方式 select＋表示 > Slab MIP。[`slab-mip-design.md`](slab-mip-design.md) §C）。

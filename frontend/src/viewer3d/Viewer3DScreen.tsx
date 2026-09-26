@@ -57,6 +57,7 @@ import { MeshRepairDialog } from "./MeshRepairDialog";
 import { ColorLegend } from "./ColorLegend";
 import { Viewer3DMenuBar } from "./Viewer3DMenuBar";
 import { CinematicSettingsDialog } from "./CinematicSettingsDialog";
+import { SlabPanel } from "./SlabPanel";
 import { RepresentationStateDialog } from "./RepresentationStateDialog";
 import { ViewInfoOverlay } from "./ViewInfoOverlay";
 import { fetchLutData } from "../api";
@@ -92,7 +93,7 @@ function imageIdsForCT(
     .map((cell) => imageIdForCell(mode, cell.sopInstanceUid, cell.frame, studyUid, seriesUid));
 }
 
-const MODES: VtkRenderMode[] = ["VR", "MIP", "MINIP", "ORTHO"];
+const MODES: VtkRenderMode[] = ["VR", "MIP", "MINIP", "ORTHO", "SLAB"];
 
 /** モダリティ既定の W/L（CT=40/400、他は scalar 範囲）。 */
 function defaultWl(modality: string | null, range: [number, number]): { center: number; width: number } {
@@ -663,7 +664,12 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
               <div style={panelLabel}>{t("viewer3d.mode")}</div>
               <div style={modeRow}>
                 {MODES.map((m) => (
-                  <button key={m} style={mode === m ? modeBtnActive : modeBtn} onClick={() => onMode(m)}>
+                  <button
+                    key={m}
+                    style={mode === m ? modeBtnActive : modeBtn}
+                    onClick={() => onMode(m)}
+                    data-testid={`viewer3d-mode-${m.toLowerCase()}`}
+                  >
                     {t(`viewer3d.mode.${m.toLowerCase()}`)}
                   </button>
                 ))}
@@ -682,6 +688,20 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
                   ))}
                 </select>
               </div>
+            )}
+
+            {mode === "SLAB" && (
+              <SlabPanel
+                view={viewRef.current}
+                styles={{
+                  section: panelSection,
+                  label: panelLabel,
+                  row: orthoRow,
+                  btn: modeBtn,
+                  btnActive: modeBtnActive,
+                  select,
+                }}
+              />
             )}
 
             {mode === "ORTHO" && (

@@ -15,7 +15,7 @@ import { useI18n } from "../i18n/i18n";
 import { fetchLutNames } from "../api";
 import type { VtkVolumeView, VtkRenderMode } from "../viewer/vtkVolumeView";
 
-const MODES: VtkRenderMode[] = ["VR", "MIP", "MINIP", "ORTHO"];
+const MODES: VtkRenderMode[] = ["VR", "MIP", "MINIP", "ORTHO", "SLAB"];
 
 export function RepresentationStateDialog({
   view,

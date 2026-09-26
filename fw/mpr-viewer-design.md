@@ -265,3 +265,8 @@ VolumeViewport」* と既に方針が明記されており、本採用は既定�
 4. **P4**: 再構成シリーズの DICOM Export（旧 `exportDicomSeries` 移植）・oblique・4D（C/T）。
 5. **P1 制約の解消**: web モード（wadors）対応・複数シリーズ選択 UI。
 
+
+## 追記 2026-09-26 — スラブ（Slab MIP）
+
+ヘッダに「スラブ」select（OFF / AvgIP / MIP / MinIP）＋厚み（全幅 mm）。3 面の `VolumeViewport` に
+`setBlendMode`＋`setSlabThickness` を一括適用（`mpr.ts` `applyMprSlab`）。probe は中心面の値。正本 [`slab-mip-design.md`](slab-mip-design.md) §B。
