@@ -13,6 +13,7 @@ import type { PluginHost, PluginHostSeed, PluginManifest, PluginModule, PluginSu
 import { DEMO_MODULES, MOCK_ENABLED, MOCK_MANIFESTS } from "./mockPlugins";
 import { requestAiGeneration, type AiGenerationOptions } from "./pluginAiApi";
 import { saveFileAs } from "./pluginFileApi";
+import { notifyDbChanged, pickFiles, runBackendJob, searchPatients } from "./pluginCommonApi";
 
 let manifestsCache: Promise<PluginManifest[]> | null = null;
 
@@ -91,7 +92,13 @@ function withHostApis(m: PluginManifest, host: PluginHostSeed): PluginHost {
       generate: (req: Omit<AiGenerationOptions, "manifest">) =>
         requestAiGeneration({ ...req, manifest: m }),
     },
-    file: { saveAs: saveFileAs },
+    file: { saveAs: saveFileAs, pickFiles },
+    // H45: ジョブの投入先はマニフェストの id に固定する（他のプラグインの JAR は走らせられない）
+    runBackendJob: (payload, opts) => runBackendJob(m.id, payload, opts),
+    db: {
+      searchPatients,
+      notifyChanged: (detail) => notifyDbChanged(m.id, detail),
+    },
   } as PluginHost;
 }
 

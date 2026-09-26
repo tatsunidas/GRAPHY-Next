@@ -34,6 +34,13 @@ public class WebPluginRegistry extends FileSystemPluginRegistry {
     }
 
     @Override
+    public void checkRunnable(String id) {
+        discover(id).orElseThrow(() -> new java.util.NoSuchElementException("plugin not found: " + id));
+        throw new UnsupportedOperationException(
+                "web mode: backend plugin execution is disabled (sandbox pending)");
+    }
+
+    @Override
     public Object run(String id, Map<String, Object> payload) {
         // 存在確認だけ行い、実行はサンドボックス実装まで拒否する。
         discover(id).orElseThrow(() -> new java.util.NoSuchElementException("plugin not found: " + id));
