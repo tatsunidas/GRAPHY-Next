@@ -26,8 +26,14 @@ const CAPABILITIES = ["image-to-image", "image-to-text"];
  */
 const ID_RE = /^[a-z0-9-]{1,32}$/;
 
-/** 既知の電文の形。`kind` ごとに desktop/aiAdapters/<kind>.js が対応する。 */
-const KINDS = new Set(["gemini"]);
+/**
+ * 既知の電文の形。`kind` がアダプタ（電文の組み立てと応答の解釈）を決める。
+ *
+ * <p>`openai` と `azure-openai` は同じ実装だが、**パスと認証が別**なので kind を分ける
+ * （同じ kind に混ぜると分岐が body の中まで漏れる）。`endpoint` を自院のものにすれば、
+ * Azure OpenAI でも自前ホストの OpenAI 互換サーバでも同じ形で扱える。
+ */
+const KINDS = new Set(["gemini", "openai", "azure-openai"]);
 
 /**
  * 出荷時の構成。**ファイルが無いときはこれで動く。**

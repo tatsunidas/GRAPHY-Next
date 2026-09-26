@@ -44,7 +44,7 @@ function supports(capability) {
  * @param {{capability?: string, model: string, apiVersion?: string, prompt: string,
  *          imageBase64: string, mimeType?: string, temperature?: number,
  *          responseModalities?: string[], providerOptions?: object}} req
- * @returns {{path: string, body: object}}
+ * @returns {{path: string, headers: object, body: Buffer}}
  */
 function buildRequest(req) {
   const apiVersion = req.apiVersion || DEFAULT_API_VERSION;
@@ -77,7 +77,12 @@ function buildRequest(req) {
     Object.assign(body.generationConfig, req.providerOptions);
   }
 
-  return { path: `/${apiVersion}/models/${req.model}:generateContent`, body };
+  return {
+    path: `/${apiVersion}/models/${req.model}:generateContent`,
+    // 認証の載せ方は提供元ごとに違うので、アダプタが持つ。
+    headers: { "Content-Type": "application/json", "x-goog-api-key": req.apiKey },
+    body: Buffer.from(JSON.stringify(body), "utf8"),
+  };
 }
 
 function asRecord(v) {
@@ -138,4 +143,18 @@ function normalize(json) {
   return out;
 }
 
-module.exports = { KIND, DEFAULT_ENDPOINT, DEFAULT_API_VERSION, supports, buildRequest, normalize };
+module.exports = {
+  KIND,
+  DEFAULT_ENDPOINT,
+  DEFAULT_API_VERSION,
+  /**
+   * 用途を指定しない呼び出し（0.3.0 のプラグイン）を受けられるか。
+   *
+   * <p>🔑 **Gemini だけ true。** あの形は `responseModalities` で応答の種類を言う
+   * Gemini の語彙なので、他社の電文には対応する概念が無い。
+   */
+  acceptsLegacyRequest: true,
+  supports,
+  buildRequest,
+  normalize,
+};

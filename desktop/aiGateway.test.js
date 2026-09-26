@@ -176,3 +176,59 @@ test("🔴 モデル名の形を検査する（URL のパスに入るため）",
   const r = await aiGateway.generate({ ...REQ, capability: "image-to-image" });
   assert.equal(r.error, "invalid-model");
 });
+
+// ── 段 4: 提供元の種類をまたぐ ─────────────────────────────────────────────
+//
+// 🔑 **ここが「一社に縛られない」の実体。** 同じ用途を、別の会社の別の電文で送れること。
+// 🚨 ただし**相手の API が受け付けるかは実機で確かめる**（fw/ai-routing-design.md §12）。
+
+const OPENAI = {
+  id: "oa", label: "OpenAI", kind: "openai", endpoint: "https://api.openai.test",
+  models: { "image-to-image": "gpt-image-1", "image-to-text": "gpt-4o-mini" },
+};
+const AZURE = {
+  id: "az", label: "院内 Azure", kind: "azure-openai", endpoint: "https://hosp.openai.azure.test",
+  models: { "image-to-text": "my-deployment" },
+};
+
+test("🔑 gemini と openai を並べ、用途ごとに別の会社へ振れる", () => {
+  const dir = freshDir();
+  const { aiGateway } = freshGateway(dir, {
+    providers: [GEMINI_A, OPENAI],
+    defaults: { "image-to-image": "oa", "image-to-text": "prov-a" },
+  });
+  const i2i = aiGateway.resolveCapability("image-to-image");
+  assert.equal(i2i.kind, "openai");
+  assert.equal(i2i.endpointHost, "api.openai.test");
+  assert.equal(i2i.model, "gpt-image-1");
+
+  const i2t = aiGateway.resolveCapability("image-to-text");
+  assert.equal(i2t.kind, "gemini");
+  assert.equal(i2t.endpointHost, "a.example.test");
+});
+
+test("🔑 自院の Azure エンドポイントへ振れる（公開 API と同じ kind の実装で）", () => {
+  const dir = freshDir();
+  const { aiGateway } = freshGateway(dir, {
+    providers: [AZURE],
+    defaults: { "image-to-text": "az" },
+  });
+  const r = aiGateway.resolveCapability("image-to-text");
+  assert.equal(r.ok, true);
+  assert.equal(r.kind, "azure-openai");
+  assert.equal(r.endpointHost, "hosp.openai.azure.test");
+  // Azure は画像生成のデプロイを置いていない構成なので、そちらは振らない。
+  assert.equal(aiGateway.resolveCapability("image-to-image").error, "no-provider-for-capability");
+});
+
+test("🔴 openai の提供元へ、用途無しの古い呼び出しは通さない", async () => {
+  const dir = freshDir();
+  const { aiGateway, secretStore } = freshGateway(dir, {
+    providers: [OPENAI], defaults: { "image-to-image": "oa" },
+  });
+  secretStore.setSecret("ai.provider.oa.apiKey", "KEY");
+  // capability 無し＝0.3.0 のプラグイン。Gemini の語彙を openai で解釈すると意味が合わない。
+  const r = await aiGateway.generate({ ...REQ, model: "gpt-image-1" });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, "unsupported-capability");
+});

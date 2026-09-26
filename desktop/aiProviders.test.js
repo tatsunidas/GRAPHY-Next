@@ -58,9 +58,21 @@ test("末尾のスラッシュは落とす（パスを組むときに // にな�
 });
 
 test("未知の kind は捨てる（対応するアダプタが無い）", () => {
-  const r = providers.normalize({ providers: [{ ...GEMINI, kind: "openai" }] });
-  assert.equal(r.providers.length, 0);
-  assert.ok(r.problems.some((p) => p.includes("unknown-kind")));
+  for (const bad of ["anthropic", "deepseek", "grok", ""]) {
+    const r = providers.normalize({ providers: [{ ...GEMINI, kind: bad }] });
+    assert.equal(r.providers.length, 0, `アダプタが無い kind: ${bad}`);
+    assert.ok(r.problems.some((p) => p.includes("unknown-kind")));
+  }
+});
+
+test("OpenAI 互換の kind を受け付ける（Azure も同じ実装で扱う）", () => {
+  for (const kind of ["openai", "azure-openai"]) {
+    const r = providers.normalize({
+      providers: [{ id: "p", kind, endpoint: "https://x.test", models: { "image-to-text": "m" } }],
+    });
+    assert.equal(r.providers.length, 1, kind);
+    assert.equal(r.providers[0].kind, kind);
+  }
 });
 
 test("🔑 扱えない用途は models に入れない（空文字は「使えない」と同じ）", () => {

@@ -12,6 +12,11 @@ const gemini = require("./gemini");
 
 const IMG = "aGVsbG8="; // "hello" の base64。中身は問わない
 
+/** buildRequest は送出可能な Buffer を返すので、検査のために JSON へ戻す。 */
+function bodyOf(built) {
+  return JSON.parse(built.body.toString("utf8"));
+}
+
 /** Gemini の応答の形（画像とテキストの両方が返った場合）。 */
 function response(parts, extra) {
   return { candidates: [{ content: { parts }, ...(extra || {}) }] };
@@ -26,16 +31,16 @@ test("扱える用途を答える", () => {
 
 test("用途から応答の種類が決まる", () => {
   const i2i = gemini.buildRequest({ capability: "image-to-image", model: "m", prompt: "p", imageBase64: IMG });
-  assert.deepEqual(i2i.body.generationConfig.responseModalities, ["TEXT", "IMAGE"]);
+  assert.deepEqual(bodyOf(i2i).generationConfig.responseModalities, ["TEXT", "IMAGE"]);
 
   const i2t = gemini.buildRequest({ capability: "image-to-text", model: "m", prompt: "p", imageBase64: IMG });
-  assert.deepEqual(i2t.body.generationConfig.responseModalities, ["TEXT"]);
+  assert.deepEqual(bodyOf(i2t).generationConfig.responseModalities, ["TEXT"]);
 });
 
 test("🔴 用途が無ければ従来の responseModalities を尊重する（既存プラグインを壊さない）", () => {
   // 0.3.0 で配ったプラグインは capability を知らない。TEXT だけを要求してくる経路がある。
   const r = gemini.buildRequest({ model: "m", prompt: "p", imageBase64: IMG, responseModalities: ["TEXT"] });
-  assert.deepEqual(r.body.generationConfig.responseModalities, ["TEXT"]);
+  assert.deepEqual(bodyOf(r).generationConfig.responseModalities, ["TEXT"]);
 });
 
 test("パスにモデルと API バージョンが入る", () => {
@@ -48,7 +53,7 @@ test("パスにモデルと API バージョンが入る", () => {
 
 test("画像は inline_data として 1 つだけ載る", () => {
   const r = gemini.buildRequest({ capability: "image-to-image", model: "m", prompt: "描いて", imageBase64: IMG, mimeType: "image/png" });
-  const parts = r.body.contents[0].parts;
+  const parts = bodyOf(r).contents[0].parts;
   assert.equal(parts.length, 2);
   assert.equal(parts[0].text, "描いて");
   assert.equal(parts[1].inline_data.data, IMG);
@@ -60,9 +65,9 @@ test("providerOptions は generationConfig にだけ効く", () => {
     capability: "image-to-text", model: "m", prompt: "p", imageBase64: IMG,
     providerOptions: { topK: 3 },
   });
-  assert.equal(r.body.generationConfig.topK, 3);
+  assert.equal(bodyOf(r).generationConfig.topK, 3);
   // 🔴 contents（＝送る画像と指示）は提供元固有の指定で書き換えられない。
-  assert.equal(r.body.contents[0].parts[1].inline_data.data, IMG);
+  assert.equal(bodyOf(r).contents[0].parts[1].inline_data.data, IMG);
 });
 
 // ── 正規化 ────────────────────────────────────────────────────────────────

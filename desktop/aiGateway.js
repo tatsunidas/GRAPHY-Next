@@ -17,10 +17,15 @@
 const https = require("node:https");
 const secretStore = require("./secretStore");
 const gemini = require("./aiAdapters/gemini");
+const openai = require("./aiAdapters/openai");
 const aiProviders = require("./aiProviders");
 
 /** `kind` → アダプタ。提供元を足すときはここに 1 行足す（設計 §4.2）。 */
-const ADAPTERS = { [gemini.KIND]: gemini };
+const ADAPTERS = {
+  [gemini.KIND]: gemini,
+  [openai.KIND]: openai,
+  [openai.KIND_AZURE]: openai,
+};
 
 /** 旧名（`statusOf` の既存呼び出し互換のために公開したまま）。 */
 const SECRET_KEY = aiProviders.LEGACY_SECRET_KEY;
@@ -44,7 +49,10 @@ function validModel(model) {
  * 公式ドキュメントの例は v1 を使うので、必要なら設定から切り替えられるようにしてある。
  */
 function validApiVersion(v) {
-  return typeof v === "string" && /^v[0-9]+[A-Za-z0-9]*$/.test(v);
+  // 🔑 使わない提供元もある（OpenAI の公開 API はパスに版を持たない）。未指定は許す。
+  //    Azure の `2024-10-21` のような日付形も通す必要がある。
+  if (v == null) return true;
+  return typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9.-]{0,31}$/.test(v);
 }
 
 /**
@@ -57,8 +65,16 @@ function mask(text, key) {
   return s.length > 2000 ? `${s.slice(0, 2000)}…` : s;
 }
 
-function postJson(host, pathname, apiKey, bodyObj) {
-  const body = Buffer.from(JSON.stringify(bodyObj), "utf8");
+/**
+ * POST する。**認証ヘッダと本文の形はアダプタが決める。**
+ *
+ * <p>🔑 提供元ごとに認証の載せ方が違う（`x-goog-api-key` / `Authorization: Bearer` /
+ * Azure の `api-key`）。ここで 1 つに決め打ちにすると、提供元を足すたびにこの層を触ることになる。
+ *
+ * @param headers アダプタが組んだヘッダ（`Content-Type` と認証を含む）
+ * @param body    送る本文（Buffer）。JSON でも multipart でもここでは区別しない
+ */
+function post(host, pathname, headers, body) {
   return new Promise((resolve, reject) => {
     const req = https.request(
       {
@@ -66,10 +82,9 @@ function postJson(host, pathname, apiKey, bodyObj) {
         path: pathname,
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
           "Content-Length": body.length,
           "User-Agent": "GRAPHY-Next",
-          "x-goog-api-key": apiKey,
+          ...headers,
         },
         timeout: TIMEOUT_MS,
       },
@@ -136,12 +151,13 @@ async function generate(req) {
   if (inFlight) return { ok: false, error: "busy" };
 
   const host = hostOf(provider.endpoint);
-  const { path, body } = adapter.buildRequest({ ...req, model, apiVersion });
+  const built = adapter.buildRequest({ ...req, model, apiVersion, apiKey, provider });
+  if (built.error) return { ok: false, error: built.error, kind: "capability" };
   const provenance = { providerId: provider.id, kind: provider.kind, model, endpointHost: host };
 
   inFlight = true;
   try {
-    const res = await postJson(host, path, apiKey, body);
+    const res = await post(host, built.path, built.headers, built.body);
     if (res.statusCode !== 200) {
       const msg = (res.json && res.json.error && res.json.error.message) || res.text || `HTTP ${res.statusCode}`;
       // 認証失敗だけは呼び出し側で「鍵を入れ直して」と案内したいので区別する。
@@ -186,11 +202,19 @@ function resolvePlan(req) {
     if (!adapter.supports(capability)) return { ok: false, error: "unsupported-capability", kind: "capability" };
     return { ok: true, provider: r.provider, adapter, model: r.model };
   }
-  // 旧来の呼び出し。モデルは呼び出し側の指定を使うが、**宛先は既定の提供元**。
+  // 旧来の呼び出し（0.3.0 のプラグイン）。モデルは呼び出し側の指定を使うが、
+  // **宛先は既定の提供元**。
   const fallback = aiProviders.resolve("image-to-image");
   if (!fallback.ok) return { ok: false, error: fallback.error, kind: "capability" };
   const adapter = ADAPTERS[fallback.provider.kind];
   if (!adapter) return { ok: false, error: "unknown-provider-kind", kind: "capability" };
+  // 🔴 **用途が無い呼び出しを、Gemini 以外へ流さない。** あの形は
+  //    `responseModalities` で「何を返してほしいか」を言う Gemini の語彙で、
+  //    他社の電文には対応する概念が無い。**勝手に画像生成へ読み替えると、
+  //    文章が欲しかった呼び出しで画像を作って課金する。**
+  if (!adapter.acceptsLegacyRequest) {
+    return { ok: false, error: "unsupported-capability", kind: "capability" };
+  }
   return { ok: true, provider: fallback.provider, adapter, model: req.model };
 }
 
