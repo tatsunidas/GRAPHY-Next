@@ -358,7 +358,7 @@ async function main(): Promise<void> {
     const closePluginWindows = async (): Promise<void> => {
       await viewer.evaluate(() => {
         document.querySelectorAll<HTMLElement>(".graphy-plugin-window").forEach((w) => {
-          const hasShadow = [...w.querySelectorAll<HTMLElement>("*")].some((el) => el.shadowRoot != null);
+          const hasShadow = Array.from(w.querySelectorAll<HTMLElement>("*")).some((el) => el.shadowRoot != null);
           if (hasShadow) w.querySelector<HTMLElement>(".graphy-plugin-window__close")?.click();
         });
       });
@@ -1201,6 +1201,101 @@ async function main(): Promise<void> {
         const predictDone = await runAndWait("全フレームを予測", 600_000);
         const chartEmpty = await screen.getByText("予測がまだ実行されていません").count();
         check(predictDone && chartEmpty === 0, "[10] ★予測が最後まで走り、確率カーブが出る", { predictDone, chartEmpty });
+
+        // ── 11. 検査パネル（UVS-Web 段 3・JAR の op "inspect" ＝単体アプリと同じ core の関数）──
+        // 🔑 数字は**参照と完全一致**で見る（段 3〜5 と同じ参照値。フレーム 1 ＝ 0 始まりの 0）。
+        //    検査は ffmpeg で目的のフレームだけ取る経路（core の FrameExtractor）なので、1 パス走査で
+        //    作った参照と一致すれば「取り出したフレームが同じ」ことも言える。
+        {
+          // op を 1 回呼ぶ（段 6 の runOp と同じ手順。あちらはブロックの内側で見えないので写す）
+          const runOp = async (request: Record<string, unknown>, maxWaitMs: number): Promise<unknown> => {
+            await viewer.evaluate((r) => {
+              (window as unknown as { __uvsRequest?: unknown }).__uvsRequest = r;
+              delete (window as unknown as { __uvsSkeleton?: unknown }).__uvsSkeleton;
+            }, request);
+            await closePluginWindows();
+            await viewer.getByTestId("viewer2d-menu-plugins").click();
+            await viewer.waitForTimeout(300);
+            await viewer.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
+            const deadline = Date.now() + maxWaitMs;
+            while (Date.now() < deadline) {
+              const p = (await viewer.evaluate(
+                () => (window as unknown as { __uvsSkeleton?: Payload }).__uvsSkeleton ?? null,
+              )) as Payload | null;
+              if (p) return p.backend ?? null;
+              await viewer.waitForTimeout(250);
+            }
+            return null;
+          };
+          const info = await runOp({ op: "info" }, 30_000);
+          const sid = (info as { sessionId?: string } | null)?.sessionId;
+          const settings = { staticMeanAbsDiffThreshold: 0.19, extractor: "EXTRACTOR_COMPOSITE", predictionCluster: 1 };
+          const inspect = async (args: Record<string, unknown>): Promise<Record<string, unknown> | null> => {
+            const r = (await runOp({ op: "inspect", sessionId: sid, settings, ...args }, 60_000)) as
+              | { ok?: boolean; result?: Record<string, unknown>; error?: string }
+              | null;
+            if (!r?.ok) console.log("  [inspect]", args.kind, r?.error);
+            return r?.ok ? (r.result ?? null) : null;
+          };
+          const color = await inspect({ kind: "color", frame: 1 });
+          check(color?.colorPixelRatio === ref.cpr[0], "[11] ★★検査（カラー判定）の CPR が独立参照と一致", {
+            got: color?.colorPixelRatio, expected: ref.cpr[0],
+          });
+          const stat = await inspect({ kind: "static", frame: 1 });
+          check(stat?.meanAbsDiff === ref.mad[0], "[11] ★★検査（静止画判定）の平均絶対差が独立参照と一致", {
+            got: stat?.meanAbsDiff, expected: ref.mad[0],
+          });
+          if (fs.existsSync(roiRefPath)) {
+            const roiRef = JSON.parse(fs.readFileSync(roiRefPath, "utf8")) as {
+              frames: { frameIndex: number; rois: { x: number; y: number; w: number; h: number }[] }[];
+            };
+            const want = roiRef.frames.find((f) => f.frameIndex === 0)?.rois[0];
+            const cand = await inspect({ kind: "candidate", frame: 1, k: 1 });
+            const got = (cand?.rois as { x: number; y: number; width: number; height: number }[] | undefined)?.[0];
+            check(!!want && !!got && got.x === want.x && got.y === want.y && got.width === want.w && got.height === want.h,
+              "[11] ★★検査（候補領域）の ROI が参照と一致", { got, expected: want });
+          }
+          if (fs.existsSync(predRefPath)) {
+            const predRef = JSON.parse(fs.readFileSync(predRefPath, "utf8")) as Record<string, { probability: number }>;
+            const heart = await inspect({ kind: "heart", frame: 1 });
+            check(heart?.probability === predRef["0"]?.probability, "[11] ★★検査（心臓判定）の確率が参照と一致", {
+              got: heart?.probability, expected: predRef["0"]?.probability,
+            });
+          }
+          const rr = await inspect({ kind: "rr", startFrame: 1, endFrame: 60 });
+          const motion = rr?.motion as unknown[] | undefined;
+          check(Array.isArray(motion) && motion.length === 59 && Array.isArray(rr?.peaks),
+            "[11] 検査（R-R）が動きの系列（59 点）とピーク候補を返す", { motion: motion?.length, peaks: rr?.peaks });
+
+          // 画面からも押す（検査パネルが出ていて、結果が表に出る）
+          await viewer.evaluate(() => {
+            const w = window as unknown as Record<string, unknown>;
+            delete w.__uvsRequest;
+            delete w.__uvsLegacyPanel;
+          });
+          await closePluginWindows();
+          await viewer.getByTestId("viewer2d-menu-plugins").click();
+          await viewer.waitForTimeout(300);
+          await viewer.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
+          const screen2 = viewer.getByTestId("uvs-summarizer").last();
+          await screen2.waitFor({ state: "visible", timeout: 30_000 }).catch(() => {});
+          await viewer.waitForTimeout(2_000);
+          const inspectBtn = screen2.getByRole("button", { name: "カラー判定" });
+          const hasPanel = (await inspectBtn.count()) > 0;
+          if (hasPanel) {
+            await inspectBtn.click();
+            await viewer.waitForTimeout(8_000);
+          }
+          const text = hasPanel ? await screen2.innerText() : "";
+          // 🚨 部分一致で合格にしない。設定欄のラベル「カラー画素比率の閾値」にも当たってしまう
+          //    （最初の版はそれで緑になっていた）。検査の結果の行＝「カラー画素比率」の直後の
+          //    小数 4 桁（InspectPanel の toFixed(4)）を取り、フレーム 1 の参照と文字列で比べる。
+          const shown = /カラー画素比率\s+(\d+\.\d{4})(?!\d)/.exec(text)?.[1] ?? null;
+          const expectedShown = ref.cpr[0].toFixed(4);
+          check(hasPanel && shown === expectedShown, "[11] ★画面の検査パネルで「カラー判定」を押すと、フレーム 1 の CPR が参照どおりに出る", {
+            hasPanel, shown, expected: expectedShown,
+          });
+        }
 
         check(pageErrors.length === 0, "[10] 画面のエラーが無い", pageErrors.slice(0, 3));
         await viewer.screenshot({ path: path.join(OUT_DIR, "uvs-react.png") }).catch(() => {});
