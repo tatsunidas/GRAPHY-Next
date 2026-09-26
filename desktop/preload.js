@@ -51,4 +51,6 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   aiGenerate: (req) => ipcRenderer.invoke("graphy:ai-generate", req),
   // 名前を付けて保存。上書き確認は OS のダイアログが出す。
   saveFile: (payload) => ipcRenderer.invoke("graphy:save-file", payload),
+  // 開くダイアログ（プラグインの H43 file.pickFiles）。ファイルだけ。選んだ絶対パスを返す。
+  pickFiles: (payload) => ipcRenderer.invoke("graphy:pick-files", payload),
 });

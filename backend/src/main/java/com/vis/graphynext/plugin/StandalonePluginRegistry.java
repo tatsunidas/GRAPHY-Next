@@ -50,6 +50,15 @@ public class StandalonePluginRegistry extends FileSystemPluginRegistry {
     }
 
     @Override
+    public void checkRunnable(String id) {
+        Discovered d = discover(id).orElseThrow(() -> new NoSuchElementException("plugin not found: " + id));
+        String entry = d.descriptor().entrypoint();
+        if (entry == null || entry.isBlank()) {
+            throw new UnsupportedOperationException("plugin has no backend: " + id);
+        }
+    }
+
+    @Override
     public Object run(String id, Map<String, Object> payload) {
         Discovered d = discover(id).orElseThrow(() -> new NoSuchElementException("plugin not found: " + id));
         String entry = d.descriptor().entrypoint();

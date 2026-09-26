@@ -75,6 +75,11 @@ export type SaveFileResult =
   | { ok: true; filePath: string }
   | { ok: false; canceled?: boolean; error?: string };
 
+/** 開くダイアログの結果（H43）。`canceled` はユーザーが取り消しただけで、失敗ではない。 */
+export type PickFilesResult =
+  | { ok: true; paths: string[] }
+  | { ok: false; canceled?: boolean; error?: string };
+
 export interface GraphyDesktop {
   pickImportPaths: () => Promise<string[]>;
   /** 単一の出力先フォルダを選ぶ（SeriesExtractor のコピー先など）。キャンセル時 null。 */
@@ -124,6 +129,12 @@ export interface GraphyDesktop {
     bytes: Uint8Array;
     filters?: { name: string; extensions: string[] }[];
   }) => Promise<SaveFileResult>;
+  /** 開くダイアログ（ファイルだけ）。選んだ絶対パスを返す。 */
+  pickFiles?: (payload: {
+    title?: string;
+    multiple?: boolean;
+    filters?: { name: string; extensions: string[] }[];
+  }) => Promise<PickFilesResult>;
 }
 
 export function desktop(): GraphyDesktop | undefined {

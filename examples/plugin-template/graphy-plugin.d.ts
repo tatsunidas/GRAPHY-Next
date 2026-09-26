@@ -1078,7 +1078,73 @@ interface PluginHostBase {
    */
   file: {
     saveAs: (opts: PluginSaveFileOptions) => Promise<SaveFileResult>;
+    /**
+     * **開くダイアログ**（H43・**0.3.0 以降**）。OS のダイアログでファイルを選ばせ、**絶対パス**を返す。
+     * フォルダは選べない。取り消しは `{ok:false, canceled:true}`（失敗ではない）。
+     * パスはバックエンド面（JAR）へ渡して読む想定。デスクトップ専用（web は `desktop-only`）。
+     */
+    pickFiles: (opts?: PluginPickFilesOptions) => Promise<PickFilesResult>;
   };
+  /**
+   * バックエンド面を**ジョブとして**走らせる（H45・**0.3.0 以降**）。進み具合と取り消しがある。
+   *
+   * <p>JAR の `run(Map)` には、args の `__progress`（`java.util.function.BiConsumer<Double,String>`）と
+   * `__cancelled`（`java.util.function.BooleanSupplier`）が入る。同期の `runBackend` から呼ばれたときは
+   * 入らないので、JAR は「無ければ何もしない」で書くこと。例外は投げない（`{ok:false}` で返る）。
+   * `cancelled: true` は利用者の取り消しで、エラーとして表示しないこと。standalone 専用。
+   */
+  runBackendJob: (payload?: unknown, opts?: PluginJobOptions) => Promise<PluginJobOutcome>;
+  /** 本体の DB（H44・H46・**0.3.0 以降**）。 */
+  db: {
+    /** 患者を ID・氏名の部分一致で探す（H44）。**読み取りのみ**。空文字は全件。 */
+    searchPatients: (query: string) => Promise<PluginPatient[]>;
+    /**
+     * DB を変えたことを知らせる（H46）。メイン画面の一覧（呼んだウィンドウ自身も含む）と、
+     * 開いている他のウィンドウが読み直す。本体の書き込み API は自分で知らせるので、
+     * これを呼ぶのはプラグインが別の経路で DB を変えたときだけ。
+     */
+    notifyChanged: (detail?: { studyUids?: string[]; patientId?: string }) => void;
+  };
+}
+
+/** `host.file.pickFiles()` の引数（H43）。 */
+export interface PluginPickFilesOptions {
+  title?: string;
+  /** 複数選べるか（既定 false）。 */
+  multiple?: boolean;
+  /** 拡張子のフィルタ（例 `[{ name: "Video", extensions: ["avi", "mp4"] }]`）。 */
+  filters?: { name: string; extensions: string[] }[];
+}
+
+/** `host.file.pickFiles()` の結果。`canceled` は失敗ではない。 */
+export type PickFilesResult =
+  | { ok: true; paths: string[] }
+  | { ok: false; canceled?: boolean; error?: string };
+
+/** `host.runBackendJob()` の引数（H45）。 */
+export interface PluginJobOptions {
+  /** 進み具合（0〜1）と短い説明。ポーリングのたびに呼ばれる。 */
+  onProgress?: (progress: number, message: string) => void;
+  /** 取り消し。abort すると backend に取り消しを求め、JAR が止まるのを待つ。 */
+  signal?: AbortSignal;
+  /** ポーリング間隔（ms・既定 400）。 */
+  pollMs?: number;
+}
+
+/** `host.runBackendJob()` の結果。 */
+export type PluginJobOutcome =
+  | { ok: true; result: unknown }
+  | { ok: false; cancelled?: boolean; error?: string };
+
+/** `host.db.searchPatients()` の 1 件。`patientKey` は保存領域（H8/H42）の患者の鍵と同じ。 */
+export interface PluginPatient {
+  patientKey: string;
+  patientId: string;
+  patientName: string;
+  /** DICOM の日付（YYYYMMDD）。無ければ空。 */
+  birthDate: string;
+  sex: string;
+  studyCount: number;
 }
 
 /** `host.ai.generate()` の要求（H40）。 */
@@ -1654,6 +1720,17 @@ export interface MainScreenPluginHost extends PluginHostBase {
   surface: "mainscreen.menu";
   /** 選択中スタディの UID（未選択なら null）。 */
   selectedStudyUid: string | null;
+  /** 専用ウィンドウを開く（H42・**0.3.0 以降**。2D ビューアの `openWindow` と同じ）。 */
+  openWindow: (opts?: PluginWindowOptions) => PluginWindowHandle;
+  /**
+   * このプラグイン専用の保存領域を読む（H42・**0.3.0 以降**。規則は 2D ビューアの `loadStore` と同じ）。
+   * メイン画面には表示中の患者が無いので、**`patientKey` は必須**（`db.searchPatients` で得る）。
+   */
+  loadStore: (patientKey: string) => Promise<PluginStoreDoc>;
+  /** 保存領域へ書く（H42）。`version` の規約は 2D ビューアの `saveStore` と同じ。 */
+  saveStore: (json: string, opts: { patientKey: string; version?: number | null }) => Promise<PluginStoreSaveResult>;
+  /** 保存領域を消す（H42）。 */
+  deleteStore: (patientKey: string) => Promise<boolean>;
 }
 
 export type PluginHost = Viewer2DPluginHost | MainScreenPluginHost;

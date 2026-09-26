@@ -6,6 +6,8 @@ import { useEffect, useState } from "react";
 import { type ToolKind, type ViewerKind } from "./Toolbar";
 import { useI18n } from "../i18n/i18n";
 import { usePluginMenu, runPluginBackend } from "../plugins/pluginRegistry";
+import { deletePluginStore, loadPluginStore, savePluginStore } from "../plugins/pluginStore";
+import { openPluginWindow } from "../plugins/pluginWindowApi";
 import { openLogViewer } from "../system/LogViewer";
 import { openMemoryMonitor } from "../system/memoryMonitor";
 import { openUsersCommunity } from "../help/links";
@@ -60,6 +62,17 @@ export function MenuBar({
     notify: (msg) => window.alert(msg),
     runBackend: (payload) => runPluginBackend(m.id, payload),
     selectedStudyUid,
+    // H42: 窓と保存領域（2D ビューアの H30・H8 と同じ実装）。メイン画面には表示中の患者が無いので、
+    // 保存領域の patientKey はプラグインが必ず渡す（型で必須にしてある）。
+    openWindow: (opts) =>
+      openPluginWindow(
+        { id: m.id, name: m.name },
+        // 出所の表示は本体が入れる。プラグインからは消せない
+        { ...opts, originLabel: t("viewer2d.plugin.overlayLabel", { name: m.name }), closeLabel: t("common.close") },
+      ),
+    loadStore: (patientKey) => loadPluginStore(m.id, patientKey),
+    saveStore: (json, opts) => savePluginStore(m.id, opts.patientKey, json, opts.version ?? null),
+    deleteStore: (patientKey) => deletePluginStore(m.id, patientKey),
   }));
   const [open, setOpen] = useState<string | null>(null);
 
@@ -112,7 +125,7 @@ export function MenuBar({
       items: isDemo
         ? [{ label: t("main.menu.pluginsNone"), onClick: () => {}, disabled: true }]
         : pluginItems.length
-          ? pluginItems.map((p) => ({ label: p.label, onClick: p.onClick }))
+          ? pluginItems.map((p) => ({ label: p.label, onClick: p.onClick, testId: `plugin-item-${p.id}` }))
           : [{ label: t("main.menu.pluginsNone"), onClick: () => {}, disabled: true }],
     },
     {

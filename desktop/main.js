@@ -780,6 +780,19 @@ ipcMain.handle("graphy:pick-import", async () => {
   return result.canceled ? [] : result.filePaths;
 });
 
+// プラグイン向けの「開く」ダイアログ（H43 file.pickFiles）。**ファイルだけ**選ばせる（フォルダは不可）。
+// 題と拡張子のフィルタはプラグインが渡す。選んだ絶対パスを返す（取り消しは canceled）。
+ipcMain.handle("graphy:pick-files", async (e, payload) => {
+  const title = (payload && typeof payload.title === "string" && payload.title) || "ファイルを選択";
+  const filters = (payload && Array.isArray(payload.filters) && payload.filters.length > 0 && payload.filters) || undefined;
+  const properties = ["openFile"];
+  if (payload && payload.multiple) properties.push("multiSelections");
+  const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
+  const result = await dialog.showOpenDialog(win, { title, filters, properties });
+  if (result.canceled || result.filePaths.length === 0) return { ok: false, canceled: true };
+  return { ok: true, paths: result.filePaths };
+});
+
 // 単一フォルダ選択（SeriesExtractor のコピー先など）。選んだ絶対パス（無ければ null）。
 ipcMain.handle("graphy:pick-directory", async () => {
   const result = await dialog.showOpenDialog(BrowserWindow.getFocusedWindow(), {

@@ -34,6 +34,15 @@ public interface PluginRegistry {
     Object run(String id, Map<String, Object> payload);
 
     /**
+     * {@link #run} できるかを、実行せずに確かめる（ジョブの投入時に使う。H45）。
+     * 投入を受け付けてから非同期に失敗させると、利用者には「始まったのに何も起きない」としか見えない。
+     *
+     * @throws java.util.NoSuchElementException プラグインが存在しない
+     * @throws UnsupportedOperationException このモード/プラグインでは実行不可
+     */
+    void checkRunnable(String id);
+
+    /**
      * そのプラグインが掴んでいる資源（クラスローダ＝JAR のファイルハンドル）を解放する。
      *
      * <p>🔴 <b>Windows では開いたままの JAR を削除できない</b>ため、削除・更新・再インストールの

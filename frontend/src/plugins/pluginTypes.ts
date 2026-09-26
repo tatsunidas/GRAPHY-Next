@@ -111,6 +111,14 @@ export type {
 import type { AiGenerationOptions, AiGenerationOutcome } from "./pluginAiApi";
 import type { PluginSaveFileOptions } from "./pluginFileApi";
 import type { SaveFileResult } from "../desktopBridge";
+import type {
+  PickFilesResult,
+  PluginJobOptions,
+  PluginJobOutcome,
+  PluginPatient,
+  PluginPickFilesOptions,
+} from "./pluginCommonApi";
+export type { PickFilesResult, PluginJobOptions, PluginJobOutcome, PluginPatient, PluginPickFilesOptions };
 
 export type PluginSurface =
   | "viewer2d.menu"
@@ -188,6 +196,38 @@ interface PluginHostBase {
    */
   file: {
     saveAs: (opts: PluginSaveFileOptions) => Promise<SaveFileResult>;
+    /**
+     * **開くダイアログ**（H43）。OS のダイアログでファイルを選ばせ、**絶対パス**を返す。
+     * フォルダは選べない。取り消しは `{ok:false, canceled:true}`（失敗ではない）。
+     *
+     * <p>パスはバックエンド面（JAR）へそのまま渡して読む想定。JAR は本体と同じ権限で動くので、
+     * この口が新しい権限を生むことはない（選ぶのは利用者で、選ばれたものだけが返る）。
+     * デスクトップ専用（web は `desktop-only`）。
+     */
+    pickFiles: (opts?: PluginPickFilesOptions) => Promise<PickFilesResult>;
+  };
+  /**
+   * バックエンド面を**ジョブとして**走らせる（H45）。進み具合と取り消しがある。
+   *
+   * <p>JAR の `run(Map)` には、args の `__progress`（`BiConsumer<Double,String>`）と
+   * `__cancelled`（`BooleanSupplier`）が入る。同期の `runBackend` から呼ばれたときは入らないので、
+   * JAR は「無ければ何もしない」で書くこと。例外は投げない（`{ok:false}` で返る）。
+   * standalone 専用（web は backend 面が無いので失敗が返る）。
+   */
+  runBackendJob: (payload?: unknown, opts?: PluginJobOptions) => Promise<PluginJobOutcome>;
+  /** 本体の DB（H44・H46）。 */
+  db: {
+    /**
+     * 患者を ID・氏名の部分一致で探す（H44）。**読み取りのみ**。空文字は全件。
+     * `patientKey` は保存領域（H8）などの患者の鍵と同じもの。
+     */
+    searchPatients: (query: string) => Promise<PluginPatient[]>;
+    /**
+     * DB を変えたことを知らせる（H46）。メイン画面の一覧（呼んだウィンドウ自身も含む）と、
+     * 開いている他のウィンドウが読み直す。本体の書き込み API（H4b・H9 等）は自分で知らせるので、
+     * これを呼ぶのはプラグインが別の経路で DB を変えたときだけ。
+     */
+    notifyChanged: (detail?: { studyUids?: string[]; patientId?: string }) => void;
   };
 }
 
@@ -854,6 +894,20 @@ export interface MainScreenPluginHost extends PluginHostBase {
   surface: "mainscreen.menu";
   /** 選択中スタディの UID（未選択なら null）。 */
   selectedStudyUid: string | null;
+  /**
+   * **専用ウィンドウを開く**（H42。2D ビューアの H30 と同じ）。メイン画面の上に浮かぶ窓で、
+   * タイトルバーにプラグイン名が必ず出る。
+   */
+  openWindow: (opts?: PluginWindowOptions) => PluginWindowHandle;
+  /**
+   * **このプラグイン専用の保存領域**を読む（H42。2D ビューアの H8 と同じ規則）。
+   * メイン画面には「表示中の患者」が無いので、**`patientKey` は必須**（`db.searchPatients` で得る）。
+   */
+  loadStore: (patientKey: string) => Promise<PluginStoreDoc>;
+  /** 保存領域へ書く（H42。`version` の規約は H8 と同じ）。`patientKey` は必須。 */
+  saveStore: (json: string, opts: { patientKey: string; version?: number | null }) => Promise<PluginStoreSaveResult>;
+  /** 保存領域を消す（H42）。`patientKey` は必須。 */
+  deleteStore: (patientKey: string) => Promise<boolean>;
 }
 
 export type PluginHost = Viewer2DPluginHost | MainScreenPluginHost;
@@ -868,7 +922,7 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
  * `launchPlugin` が一箇所で注入する。呼び出し側に作らせると、マニフェストの渡し忘れが
  * そのまま権限チェックの素通りになる。
  */
-export type PluginHostSeed = DistributiveOmit<PluginHost, "ai" | "file">;
+export type PluginHostSeed = DistributiveOmit<PluginHost, "ai" | "file" | "runBackendJob" | "db">;
 
 /**
  * プラグイン UI バンドル（ES モジュール）が公開する契約。
