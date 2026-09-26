@@ -43,6 +43,14 @@ public interface PluginRegistry {
     void checkRunnable(String id);
 
     /**
+     * 利用者の端末のファイルを本体が読んでよいモードか（H47 / H48 の動画の取り込み）。
+     * web モードでは「端末のパス」がサーバのパスになってしまうので許さない。
+     */
+    default boolean localFilesAllowed() {
+        return false;
+    }
+
+    /**
      * そのプラグインが掴んでいる資源（クラスローダ＝JAR のファイルハンドル）を解放する。
      *
      * <p>🔴 <b>Windows では開いたままの JAR を削除できない</b>ため、削除・更新・再インストールの

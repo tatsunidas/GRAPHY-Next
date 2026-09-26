@@ -50,6 +50,11 @@ public class StandalonePluginRegistry extends FileSystemPluginRegistry {
     }
 
     @Override
+    public boolean localFilesAllowed() {
+        return true;
+    }
+
+    @Override
     public void checkRunnable(String id) {
         Discovered d = discover(id).orElseThrow(() -> new NoSuchElementException("plugin not found: " + id));
         String entry = d.descriptor().entrypoint();
