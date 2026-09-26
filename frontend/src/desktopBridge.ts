@@ -52,22 +52,50 @@ export interface SecretSetResult extends SecretStatus {
 }
 
 /** Gemini 中継の要求。解釈は一切せず、生 JSON がそのまま返る。 */
+/** 用途。**提供元ではなくこれで頼む**（設計: fw/ai-routing-design.md §2）。 */
+export type AiCapability = "image-to-image" | "image-to-text";
+
 export interface AiGenerateRequest {
+  /** 用途。main 側が応答の種類を決める。 */
+  capability?: AiCapability;
   model: string;
   prompt: string;
   /** 送信画像（base64、データ URL の接頭辞は含めない）。 */
   imageBase64: string;
   mimeType?: string;
-  /** 既定 ["TEXT", "IMAGE"]。画像と鑑賞説明を 1 回で受け取るために両方を要求する。 */
+  /** @deprecated capability から決まる。既存プラグイン互換のため残す。 */
   responseModalities?: string[];
   temperature?: number;
   /** 既定 "v1beta"。新モデルの機能が先に載るのは常に v1beta 側。 */
   apiVersion?: string;
+  /** 提供元固有の追い込み。**無くても動くこと。** */
+  providerOptions?: Record<string, unknown>;
 }
 
-/** Gemini 中継の結果。**例外ではなく値で失敗を返す**（鍵入りのスタックを境界へ流さないため）。 */
+/** どこで何によって作られたか。作品の再現性と監査のために持ち回る。 */
+export interface AiProvenance {
+  providerId: string;
+  kind: string;
+  model: string;
+  endpointHost: string;
+}
+
+/**
+ * 中継の結果。**例外ではなく値で失敗を返す**（鍵入りのスタックを境界へ流さないため）。
+ *
+ * <p>🔑 `image` / `text` は**提供元非依存**。提供元ごとの応答の形は main のアダプタが畳む。
+ */
 export type AiGenerateResult =
-  | { ok: true; data: unknown }
+  | {
+      ok: true;
+      image?: { base64: string; mimeType: string };
+      text?: string;
+      /** 何も返らなかった理由（安全フィルタ等）。`image` も `text` も無いときだけ入る。 */
+      blockReason?: string;
+      provenance?: AiProvenance;
+      /** @deprecated 提供元の生レスポンス。移行期間だけ残す。 */
+      data?: unknown;
+    }
   | { ok: false; error: string; status?: number; kind?: string };
 
 /** 名前を付けて保存の結果。`canceled` はユーザーが取り消しただけで、失敗ではない。 */

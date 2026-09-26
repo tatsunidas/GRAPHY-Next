@@ -10,8 +10,19 @@
  * `aiGenerate` が呼ばれてしまうと、その時点で患者画素が外へ出る。
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { requestAiGeneration, forgetAiConsents, AI_EGRESS_PERMISSION } from "./pluginAiApi";
+import {
+  requestAiGeneration,
+  forgetAiConsents,
+  resetAiSettingsCache,
+  peekAiConsent,
+  settleAiConsent,
+  AI_EGRESS_PERMISSION,
+} from "./pluginAiApi";
+import { fetchSettings } from "../settings/settingsApi";
 import type { PluginManifest } from "./pluginTypes";
+
+// 設定の取得はバックエンドへの往復なので差し替える（ここで見たいのはモデルの決まり方）。
+vi.mock("../settings/settingsApi", () => ({ fetchSettings: vi.fn() }));
 
 const IMAGE = new Uint8Array([1, 2, 3, 4]);
 
@@ -88,5 +99,89 @@ describe("requestAiGeneration — 送信前に落ちるべきもの", () => {
     expect(settled).toBe(false);
     expect(aiGenerate).not.toHaveBeenCalled();
     void p;
+  });
+});
+
+// ── 用途 → モデルの解決（設計: fw/ai-routing-design.md §2） ─────────────────
+//
+// 🔑 **プラグインはモデルも宛先も知らなくてよい。** 用途を頼めば本体が決める。
+// ここが狂うと「画像生成の用途にテキストモデルが渡る」形で壊れ、**例外は出ずに
+// 画像だけ返らない**ので気付きにくい。
+describe("requestAiGeneration — 用途からモデルを決める", () => {
+  beforeEach(() => {
+    forgetAiConsents();
+    resetAiSettingsCache();
+    // 前のテストが残した同意待ちを捨てる（1 本しか出せないため、残ると次が即 false になる）。
+    if (peekAiConsent()) settleAiConsent({ ok: false });
+    vi.mocked(fetchSettings).mockReset();
+  });
+
+  /** 同意ダイアログを描く側の代わりに、出てきたら承諾する。 */
+  async function runWithConsent(
+    opts: Parameters<typeof requestAiGeneration>[0],
+  ): Promise<{ model?: string; capability?: string }> {
+    const p = requestAiGeneration(opts);
+    for (let i = 0; i < 200 && !peekAiConsent(); i++) await Promise.resolve();
+    const shown = peekAiConsent();
+    if (shown) settleAiConsent({ ok: true, remember: false });
+    await p;
+    return (shown?.request ?? {}) as { model?: string; capability?: string };
+  }
+
+  const ok = (over: Record<string, unknown> = {}) => ({
+    manifest: manifest([AI_EGRESS_PERMISSION]),
+    prompt: "p",
+    imageBytes: IMAGE,
+    ...over,
+  });
+
+  it("用途ごとに別のモデルが選ばれる（画像用とテキスト用は別物）", async () => {
+    const { aiGenerate } = installBridge();
+    vi.mocked(fetchSettings).mockResolvedValue({});
+
+    await runWithConsent(ok({ capability: "image-to-image" }));
+    expect(aiGenerate.mock.calls[0][0]).toMatchObject({
+      capability: "image-to-image",
+      model: "gemini-3.1-flash-image",
+    });
+
+    await runWithConsent(ok({ capability: "image-to-text" }));
+    expect(aiGenerate.mock.calls[1][0]).toMatchObject({
+      capability: "image-to-text",
+      model: "gemini-2.5-flash",
+    });
+  });
+
+  it("🔴 環境設定のモデルが効く（従来は誰も読んでいなかった）", async () => {
+    const { aiGenerate } = installBridge();
+    vi.mocked(fetchSettings).mockResolvedValue({ "ai.gemini.model": "my-image-model" });
+
+    await runWithConsent(ok({ capability: "image-to-image" }));
+    expect(aiGenerate.mock.calls[0][0]).toMatchObject({ model: "my-image-model" });
+  });
+
+  it("モデルを名指ししてきた古いプラグインは、設定を見ずにそのまま通す", async () => {
+    const { aiGenerate } = installBridge();
+    vi.mocked(fetchSettings).mockResolvedValue({ "ai.gemini.model": "設定側" });
+
+    await runWithConsent(ok({ model: "プラグイン指定" }));
+    expect(aiGenerate.mock.calls[0][0]).toMatchObject({ model: "プラグイン指定" });
+    expect(fetchSettings).not.toHaveBeenCalled();
+  });
+
+  it("設定が読めなくても既定で送れる（送信を止める理由にしない）", async () => {
+    const { aiGenerate } = installBridge();
+    vi.mocked(fetchSettings).mockRejectedValue(new Error("offline"));
+
+    await runWithConsent(ok({ capability: "image-to-text" }));
+    expect(aiGenerate.mock.calls[0][0]).toMatchObject({ model: "gemini-2.5-flash" });
+  });
+
+  it("🔴 同意ダイアログには、実際に使うモデルが出る", async () => {
+    installBridge();
+    vi.mocked(fetchSettings).mockResolvedValue({});
+
+    const shown = await runWithConsent(ok({ capability: "image-to-text" }));
+    expect(shown.model).toBe("gemini-2.5-flash");
   });
 });

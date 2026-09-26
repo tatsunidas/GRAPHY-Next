@@ -1,4 +1,5 @@
-// Gemini へ画像生成リクエストを中継するだけの薄い層。
+// 外部 AI へのリクエストを中継する層。電文の組み立てと応答の正規化は
+// aiAdapters/<kind>.js が持つ（設計: fw/ai-routing-design.md）。
 //
 // なぜ main プロセスに置くのか:
 //   製品ビルドの CSP（frontend/vite.config.ts の cspPlugin）が
@@ -15,7 +16,14 @@
 
 const https = require("node:https");
 const secretStore = require("./secretStore");
+const gemini = require("./aiAdapters/gemini");
 
+/**
+ * 提供元。**段 3 で `ai-providers.json` から読む**ようになる（設計 §4）。
+ * いまは 1 つだけを定数で持つ——提供元が 1 つのうちに契約を提供元非依存へ変えるのが段 2 の目的で、
+ * 「契約の変更」と「提供元の増加」を同時にやらないため。
+ */
+const PROVIDER = { id: "gemini-public", kind: gemini.KIND, adapter: gemini };
 const HOST = "generativelanguage.googleapis.com";
 const SECRET_KEY = "ai.gemini.apiKey";
 const TIMEOUT_MS = 120000;
@@ -98,45 +106,63 @@ function postJson(pathname, apiKey, bodyObj) {
 }
 
 /**
- * 画像 1 枚 ＋ プロンプトを送り、Gemini の生 JSON をそのまま返す。
+ * 画像 1 枚 ＋ 指示を送り、**提供元非依存の形**で返す。
  *
- * @param {{model: string, prompt: string, imageBase64: string, mimeType: string,
- *          responseModalities?: string[], temperature?: number}} req
- * @returns {Promise<{ok: true, data: object} | {ok: false, error: string, status?: number}>}
- *   **例外を投げずに結果で返す。** 鍵入りのスタックトレースが IPC 境界を越えるのを避けるため。
+ * <p>🔑 応答の解釈はアダプタが行う。以前は生 JSON をそのまま返し、プラグインが
+ * `candidates[].content.parts[]` を読んでいた——提供元が増えるとプラグインごとに
+ * 解釈が生えるので、ここへ寄せた（設計 §3.2）。
+ *
+ * @param {{capability?: string, model: string, apiVersion?: string, prompt: string,
+ *          imageBase64: string, mimeType: string, responseModalities?: string[],
+ *          temperature?: number, providerOptions?: object}} req
+ * @returns {Promise<object>} **例外を投げずに結果で返す。**
+ *   鍵入りのスタックトレースが IPC 境界を越えるのを避けるため。
  */
 async function generate(req) {
   const apiKey = secretStore.getSecret(SECRET_KEY);
   if (!apiKey) return { ok: false, error: "no-api-key" };
   if (!req || !validModel(req.model)) return { ok: false, error: "invalid-model" };
-  const apiVersion = req.apiVersion == null ? "v1beta" : req.apiVersion;
+  const apiVersion = req.apiVersion == null ? PROVIDER.adapter.DEFAULT_API_VERSION : req.apiVersion;
   if (!validApiVersion(apiVersion)) return { ok: false, error: "invalid-api-version" };
   if (typeof req.prompt !== "string" || req.prompt.length === 0) return { ok: false, error: "empty-prompt" };
   if (typeof req.imageBase64 !== "string" || req.imageBase64.length === 0) return { ok: false, error: "empty-image" };
   if (req.imageBase64.length > MAX_IMAGE_BYTES) return { ok: false, error: "image-too-large" };
+  // 🔴 扱えない用途は**送る前に**断る。送ってから「できません」と返るのでは課金が発生する。
+  if (req.capability && !PROVIDER.adapter.supports(req.capability)) {
+    return { ok: false, error: "unsupported-capability", kind: "capability" };
+  }
   if (inFlight) return { ok: false, error: "busy" };
 
-  const parts = [{ text: req.prompt }, { inline_data: { mime_type: req.mimeType || "image/png", data: req.imageBase64 } }];
-  const body = {
-    contents: [{ role: "user", parts }],
-    generationConfig: {
-      responseModalities: Array.isArray(req.responseModalities) ? req.responseModalities : ["TEXT", "IMAGE"],
-      ...(typeof req.temperature === "number" ? { temperature: req.temperature } : {}),
-    },
+  const { path, body } = PROVIDER.adapter.buildRequest({ ...req, apiVersion });
+  const provenance = {
+    providerId: PROVIDER.id,
+    kind: PROVIDER.kind,
+    model: req.model,
+    endpointHost: HOST,
   };
 
   inFlight = true;
   try {
-    const res = await postJson(`/${apiVersion}/models/${req.model}:generateContent`, apiKey, body);
+    const res = await postJson(path, apiKey, body);
     if (res.statusCode !== 200) {
       const msg = (res.json && res.json.error && res.json.error.message) || res.text || `HTTP ${res.statusCode}`;
       // 認証失敗だけは呼び出し側で「鍵を入れ直して」と案内したいので区別する。
       const kind = res.statusCode === 400 || res.statusCode === 401 || res.statusCode === 403 ? "auth-or-request" : "http";
-      console.error(`[ai] Gemini エラー ${res.statusCode}:`, mask(msg, apiKey));
+      console.error(`[ai] ${PROVIDER.id} エラー ${res.statusCode}:`, mask(msg, apiKey));
       return { ok: false, error: mask(msg, apiKey), status: res.statusCode, kind };
     }
     if (!res.json) return { ok: false, error: "invalid-json", status: 200 };
-    return { ok: true, data: res.json };
+
+    const norm = PROVIDER.adapter.normalize(res.json);
+    return {
+      ok: true,
+      image: norm.image,
+      text: norm.text,
+      blockReason: norm.blockReason,
+      provenance,
+      // @deprecated 移行期間だけ残す。0.3.0 で配ったプラグインが自分で解釈するため。
+      data: res.json,
+    };
   } catch (e) {
     console.error("[ai] 送信に失敗:", mask(e && e.message, apiKey));
     return { ok: false, error: mask(e && e.message, apiKey) };

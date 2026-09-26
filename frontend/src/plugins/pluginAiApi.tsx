@@ -27,17 +27,84 @@ import { desktop, type AiGenerateResult } from "../desktopBridge";
 import { log } from "../log";
 import { AiEgressConsentDialog, type AiEgressRequest } from "./AiEgressConsentDialog";
 import type { PluginManifest } from "./pluginTypes";
+import { fetchSettings } from "../settings/settingsApi";
+import type { AiCapability } from "../desktopBridge";
 
 /** 送信先。UI に出す値であり、実際の接続は Electron main が行う。 */
 export const AI_HOST = "generativelanguage.googleapis.com";
+/**
+ * 提供元の識別子。**同意を覚える単位に入る。**
+ *
+ * <p>段 3 で `ai-providers.json` から解決した値になる。いまは提供元が 1 つなので定数。
+ */
+export const AI_PROVIDER_ID = "gemini-public";
 /** この権限を `plugin.json` の `permissions` に宣言していないプラグインは送信できない。 */
 export const AI_EGRESS_PERMISSION = "ai-egress";
 const SECRET_KEY = "ai.gemini.apiKey";
 
+/**
+ * 用途ごとの既定モデル。
+ *
+ * <p>🔑 **プラグインはモデルを知らなくてよい。** 用途を頼めば本体が決める
+ * （設計: `fw/ai-routing-design.md` §2）。段 3 で `ai-providers.json` へ移る。
+ *
+ * <p>⚠ 画像生成用のモデルは文章を返さず、その逆も同様なので、**1 つの設定では両方を賄えない**。
+ * 用途ごとに持つ必要がある。
+ */
+const DEFAULT_MODELS: Record<AiCapability, string> = {
+  "image-to-image": "gemini-3.1-flash-image",
+  "image-to-text": "gemini-2.5-flash",
+};
+/** 環境設定のキー。`image-to-image` 側は既存の設定（従来は**誰も読んでいなかった**）。 */
+const MODEL_SETTING_KEYS: Record<AiCapability, string> = {
+  "image-to-image": "ai.gemini.model",
+  "image-to-text": "ai.gemini.textModel",
+};
+const API_VERSION_SETTING_KEY = "ai.gemini.apiVersion";
+
+/** 設定は 1 セッション 1 回だけ読む（生成ごとに往復させない）。 */
+let settingsCache: Record<string, string> | null = null;
+
+async function readSettings(): Promise<Record<string, string>> {
+  if (settingsCache) return settingsCache;
+  try {
+    settingsCache = await fetchSettings();
+  } catch {
+    settingsCache = {}; // 読めなくても既定で動く。ここで送信を止める理由はない。
+  }
+  return settingsCache;
+}
+
+/**
+ * 用途 → モデル。利用者の設定があればそれを使う。
+ *
+ * <p>🔴 **`ai.gemini.model` は設定画面にあるのに、これまで誰も読んでいなかった**
+ * （プラグインが自前の定数を使っていた）。用途で頼む形にしたついでに、設定が効くようにする。
+ */
+async function resolveModel(capability: AiCapability): Promise<{ model: string; apiVersion?: string }> {
+  const values = await readSettings();
+  const configured = values[MODEL_SETTING_KEYS[capability]];
+  return {
+    model: configured && configured.trim() ? configured.trim() : DEFAULT_MODELS[capability],
+    apiVersion: values[API_VERSION_SETTING_KEY] || undefined,
+  };
+}
+
+/** テスト用。設定の読み直しを強制する。 */
+export function resetAiSettingsCache(): void {
+  settingsCache = null;
+}
+
 export interface AiGenerationOptions {
   /** 呼び出し元プラグインのマニフェスト（権限確認と表示に使う）。 */
   manifest: PluginManifest;
-  model: string;
+  /**
+   * 用途。**これを渡すのが新しい書き方**——モデルも宛先も本体が決める
+   * （設計: `fw/ai-routing-design.md`）。
+   */
+  capability?: AiCapability;
+  /** @deprecated `capability` を使う。渡された場合はそのまま尊重する（既存プラグイン互換）。 */
+  model?: string;
   apiVersion?: string;
   prompt: string;
   /** 送信する画像そのもの（PNG 等のエンコード済みバイト列）。 */
@@ -49,7 +116,10 @@ export interface AiGenerationOptions {
    */
   scopeKey?: string;
   temperature?: number;
+  /** @deprecated `capability` から決まる。 */
   responseModalities?: string[];
+  /** 提供元固有の追い込み。**無くても動くこと。** */
+  providerOptions?: Record<string, unknown>;
 }
 
 export type AiGenerationOutcome =
@@ -67,11 +137,20 @@ const listeners = new Set<() => void>();
 function emit(): void {
   for (const l of listeners) l();
 }
-function subscribe(l: () => void): () => void {
+/**
+ * 同意待ちの 1 件を購読する。
+ *
+ * <p>この 3 つ（`subscribeAiConsent` / `peekAiConsent` / `settleAiConsent`）が同意ストアの
+ * 公開 API。**同意ダイアログを描く側**（{@link AiEgressConsentHost}、および同じことをする
+ * 別ウィンドウのルート）がこれを使う。外から見えるようにしてあるのは、
+ * 描く場所が 1 つに限らないため（2D ビューアとメイン画面は別ルート）。
+ */
+export function subscribeAiConsent(l: () => void): () => void {
   listeners.add(l);
   return () => listeners.delete(l);
 }
-function snapshot(): Pending | null {
+/** いま同意を待っている 1 件（無ければ null）。 */
+export function peekAiConsent(): Pending | null {
   return pending;
 }
 
@@ -87,7 +166,8 @@ function askConsent(request: AiEgressRequest): Promise<{ ok: true; remember: boo
   });
 }
 
-function settle(result: { ok: true; remember: boolean } | { ok: false }): void {
+/** 同意の結果を確定する（同意ストアの公開 API・{@link subscribeAiConsent} 参照）。 */
+export function settleAiConsent(result: { ok: true; remember: boolean } | { ok: false }): void {
   const p = pending;
   pending = null;
   emit();
@@ -128,16 +208,25 @@ export async function requestAiGeneration(opts: AiGenerationOptions): Promise<Ai
   const status = await d.secretStatus(SECRET_KEY);
   if (!status.hasValue) return { ok: false, error: "no-api-key" };
 
-  const imageBase64 = bytesToBase64(opts.imageBytes);
-  const scope = `${opts.manifest.id}::${opts.scopeKey ?? ""}`;
+  // (3) 用途 → モデル。プラグインがモデルを名指ししてきた場合はそれを尊重する（互換）。
+  const capability: AiCapability = opts.capability ?? "image-to-image";
+  const resolved = opts.model
+    ? { model: opts.model, apiVersion: opts.apiVersion }
+    : await resolveModel(capability);
 
-  // (3) 同意。覚えているのは「同一プラグイン × 同一スコープ」だけ。
+  const imageBase64 = bytesToBase64(opts.imageBytes);
+  // 🔴 **同意の単位に宛先を含める。** 提供元が増えたとき、ある提供元への同意が
+  //    別の提供元への送信を黙って許してはならない——同じ画像でも送り先が違えば別の外部送信。
+  //    段 3 で解決後の providerId が入る。いまは提供元が 1 つなので AI_PROVIDER_ID。
+  const scope = `${opts.manifest.id}::${AI_PROVIDER_ID}::${opts.scopeKey ?? ""}`;
+
+  // (4) 同意。覚えているのは「同一プラグイン × 同一提供元 × 同一スコープ」だけ。
   if (!remembered.has(scope)) {
     const consent = await askConsent({
       pluginId: opts.manifest.id,
       pluginName: opts.manifest.name,
       host: AI_HOST,
-      model: opts.model,
+      model: resolved.model,
       prompt: opts.prompt,
       imageDataUrl: `data:${opts.mimeType ?? "image/png"};base64,${imageBase64}`,
       imageBytes: opts.imageBytes.length,
@@ -146,21 +235,24 @@ export async function requestAiGeneration(opts: AiGenerationOptions): Promise<Ai
     if (consent.remember && opts.scopeKey) remembered.add(scope);
   }
 
-  // (4) 監査。**画像そのものは残さない**（ログに患者画素を溜め込まない）。
+  // (5) 監査。**画像そのものは残さない**（ログに患者画素を溜め込まない）。
   //     残すのは「いつ・どのプラグインが・どこへ・どれだけ・どんな指示で」出したか。
   log.info(
-    `[ai] egress plugin=${opts.manifest.id} host=${AI_HOST} model=${opts.model} ` +
+    `[ai] egress plugin=${opts.manifest.id} provider=${AI_PROVIDER_ID} host=${AI_HOST} ` +
+      `capability=${capability} model=${resolved.model} ` +
       `bytes=${opts.imageBytes.length} promptChars=${opts.prompt.length}`,
   );
 
   return d.aiGenerate({
-    model: opts.model,
-    apiVersion: opts.apiVersion,
+    capability,
+    model: resolved.model,
+    apiVersion: resolved.apiVersion,
     prompt: opts.prompt,
     imageBase64,
     mimeType: opts.mimeType ?? "image/png",
     responseModalities: opts.responseModalities,
     temperature: opts.temperature,
+    providerOptions: opts.providerOptions,
   });
 }
 
@@ -174,13 +266,13 @@ export function forgetAiConsents(): void {
  * 2D ビューアとメイン画面は別ウィンドウ＝別ルートなので、両方に置く。
  */
 export function AiEgressConsentHost(): ReactNode {
-  const p = useSyncExternalStore(subscribe, snapshot, snapshot);
+  const p = useSyncExternalStore(subscribeAiConsent, peekAiConsent, peekAiConsent);
   if (!p) return null;
   return (
     <AiEgressConsentDialog
       request={p.request}
-      onConfirm={(remember) => settle({ ok: true, remember })}
-      onCancel={() => settle({ ok: false })}
+      onConfirm={(remember) => settleAiConsent({ ok: true, remember })}
+      onCancel={() => settleAiConsent({ ok: false })}
     />
   );
 }

@@ -3,7 +3,7 @@
 > 起点は `fw/security.md` の「外部 AI への送信（AI egress ゲートウェイ）」。
 > セキュリティ上の判断はあちらが正本で、ここには**複数提供元を扱う構造**を書く。
 >
-> 記録開始 2026-09-26。**段 1（設計の確定）まで完了。段 2 以降は未着手。**
+> 記録開始 2026-09-26。**段 2（契約の提供元非依存化）まで完了。段 3 以降は未着手。**
 
 ## 1. なぜ要るのか
 
@@ -155,7 +155,7 @@ AI は元から desktop 専用（`host.ai` は web で `desktop-only` を返す�
 | 段 | 内容 | 状態 |
 |---|---|---|
 | 1 | 設計の確定（この文書）。`graphy-plugin.d.ts` の Gemini 語彙に deprecated を書く | ✅ 2026-09-26 |
-| 2 | `capability` ＋ 正規化応答。**アダプタは Gemini 1 本のみ。** Art of Imaging を移す。利用者から見た挙動は変えない | 未着手 |
+| 2 | `capability` ＋ 正規化応答。**アダプタは Gemini 1 本のみ。** Art of Imaging を移す。利用者から見た挙動は変えない | ✅ 2026-09-26（§10） |
 | 3 | 提供元レジストリ＋設定 UI（一覧・用途ごとの既定・提供元ごとの鍵・**できること表**）。同意鍵に `providerId` | 未着手 |
 | 4 | 2 本目のアダプタ（OpenAI 互換＝Azure も同時に入る）。以降は必要に応じて | 未着手 |
 
@@ -206,3 +206,47 @@ cd backend  && mvn -q -Dfrontend.skip=true test
 - **secretStore**: 接頭辞の検査（`../`・大文字・長すぎる id を弾く）
 - 🔴 **同意**: 提供元 A で「記憶する」に印を付けても、**提供元 B への送信では同意を出し直す**
 - **実機**: §7 の合格条件。`automator/plugins/` に用途を頼むだけの検証プラグインを置く
+
+
+---
+
+## 10. 段 2 でやったこと（2026-09-26）
+
+**利用者から見た挙動は変えていない。** 変えたのは契約と、差の吸収場所。
+
+### 入れたもの
+
+| ファイル | 役割 |
+|---|---|
+| `desktop/aiAdapters/gemini.js` | 用途 → 要求 body、応答 → **提供元非依存の形**。electron を import しない純関数 |
+| `desktop/aiAdapters/gemini.test.js` | 11 件。応答の固定データで正規化を縛る |
+| `desktop/aiGateway.js` | アダプタ経由に。`image` / `text` / `blockReason` / `provenance` を返す |
+| `frontend/src/plugins/pluginAiApi.tsx` | `capability` を受け、用途 → モデルを解決。同意鍵に提供元を含める |
+| `examples/plugin-template/graphy-plugin.d.ts` | `AiCapability` / 正規化応答 / `AiProvenance` を加算 |
+
+プラグイン側（別リポジトリ）は `capability` を頼むだけになり、**モデル名を持たなくなった**。
+新旧どちらの本体でも読めるよう `readGeneration()` を 1 か所に置いてある。
+
+### 🔴 途中で見つけた既存の不具合 — 設定のモデルが効いていなかった
+
+`AI_MODEL_KEY`（`ai.gemini.model`）は**設定画面が書き込むだけで、誰も読んでいなかった。**
+プラグインが自前の定数（`MODEL_FALLBACK`）を使っていたため、**利用者が環境設定でモデルを
+変えても何も起きなかった。** 用途 → モデルの解決を本体に置いたことで、設定が初めて効くようになった。
+
+⚠ 画像用とテキスト用は別のモデルなので、**1 つの設定では両方を賄えない**。
+`image-to-text` 側は `ai.gemini.textModel` を読むが、**設定 UI はまだ無い**（段 3）。
+いまは既定 `gemini-2.5-flash` が使われる。
+
+### 同意の単位に提供元を入れた
+
+`pluginId::scopeKey` → **`pluginId::AI_PROVIDER_ID::scopeKey`**。
+提供元が 1 つのうちに入れておくのが狙い——増えてから入れると、それまでに覚えた同意が
+新しい提供元にも効いてしまう移行期間が生まれる。
+
+### 段 3 へ持ち越すもの
+
+- `ai-providers.json`（提供元レジストリ）。いまは `aiGateway.js` の `PROVIDER` 定数
+- `secretStore` の allowlist を接頭辞へ（いまは `ai.gemini.apiKey` の 1 本）
+- 設定 UI（提供元一覧・用途ごとの既定・**できること表**・`image-to-text` のモデル欄）
+- `graphy-art` メタデータの `provenance`。いまは既存の `model` 欄に
+  **本体が実際に使ったモデル**を入れている（それまではプラグインの定数だった）
