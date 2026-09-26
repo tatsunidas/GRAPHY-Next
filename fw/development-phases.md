@@ -138,9 +138,11 @@ GRAPHY-Next/
 - [ ] Plugin システム
 - [ ] DIMSE (C-FIND/C-MOVE/C-STORE) / TLS / 匿名化
 - [ ] ローカルファイル読み込み / CD・DVD 書き込み
-- [ ] **複数の AI 提供元へのルーティング**（Gemini / OpenAI / Claude / DeepSeek 等を本体の設定で
-      切り替え、プラグインと本体機能の双方から同じ入口で使う）。設計は
-      [ai-routing-design.md](ai-routing-design.md)。**段 1（設計確定）完了・段 2 以降は未着手**
+- [x] **複数の AI 提供元へのルーティング**（用途＝`image-to-image` / `image-to-text` ごとに提供元を
+      本体の設定で切り替え、プラグインと本体機能の双方から同じ入口で使う）。設計は
+      [ai-routing-design.md](ai-routing-design.md)。**段 1〜4 完了（2026-09-26）**。
+      アダプタは Gemini ＋ OpenAI 互換（Azure 含む）。
+      🚨 **OpenAI/Azure の電文は実機未確認**のため出荷時の構成には入れていない（§12）
 
 **完了条件**: 旧 GRAPHY の全機能が Web 版で利用可能（省略・後回しなし）。
 
