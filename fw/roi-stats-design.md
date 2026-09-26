@@ -69,7 +69,7 @@
 |---|---|
 | 2D Viewer（`Viewer2D`）の計測 ROI 10 種 | MPR / 3D Viewer / Slicer / Curved MPR の ROI |
 | 単一スライス（ROI が乗っている 1 枚）の統計 | Z 方向に積んだ 3D ROI の統計（マスクの体積統計で代替） |
-| ROI 脇表示・隅表示・表示モード設定 | Video Viewer（`videoRoiAnalysis.ts` の独自系統をそのまま維持） |
+| ROI 脇表示・隅表示・表示モード設定 | 動画の ROI（2026-09-26 から ROI マネージャには載るが、統計は未対応。段 B で画素源の分岐を足す。`video-viewer-design.md` §5.2.2） |
 | ROI マネージャからのダイアログ表示・CSV | レポート（`fw/report-design.md`）への差し込み |
 | テクスチャ特徴（**FutureWork・§11**） | — |
 

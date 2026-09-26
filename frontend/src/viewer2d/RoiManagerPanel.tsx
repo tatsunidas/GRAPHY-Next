@@ -11,7 +11,7 @@
  * 後続(M2+): 色/線幅/塗り, ZCT scope/メタ編集, ブール演算, 3D 変換, 保存(ImageJ/DICOM)。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { eventTarget, getRenderingEngine, Enums as csEnums } from "@cornerstonejs/core";
+import { eventTarget, getRenderingEngine, getRenderingEngines, Enums as csEnums } from "@cornerstonejs/core";
 import {
   annotation as csAnnotation,
   segmentation as csSeg,
@@ -42,9 +42,29 @@ import { useI18n } from "../i18n/i18n";
 
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
 
-/** 全ビューポートを再描画（スタイル変更の即時反映）。 */
+/**
+ * 全ビューポートを再描画（スタイル変更の即時反映）。
+ *
+ * <p>🔑 **2D ビューアの共有エンジンだけでなく、全エンジンを描き直す。** 動画タイルは動画ごとに
+ * 専用の RenderingEngine を持つ（`VideoViewer.tsx`）ので、共有エンジンだけだと動画の ROI の色や
+ * 線の太さが変わらない（段 A3）。
+ */
 function renderAll(): void {
-  try { getRenderingEngine(ENGINE_ID)?.render(); } catch { /* ignore */ }
+  for (const e of getRenderingEngines() ?? []) {
+    try { e.render(); } catch { /* ignore */ }
+  }
+}
+
+/**
+ * 動画の上に描いた ROI なら、そのフレーム（1 始まり）を返す。動画の注釈は参照 ID が `videoId:` で始まる
+ * （Cornerstone の VideoViewport）。動画の ROI は、保存・統計・複製にまだ対応していない（段 B）。
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function videoFrameOf(a: any): number | null {
+  const ref = a?.metadata?.referencedImageId;
+  if (typeof ref !== "string" || !ref.startsWith("videoId:")) return null;
+  const si = a?.metadata?.sliceIndex;
+  return typeof si === "number" && si >= 0 ? si + 1 : 1;
 }
 
 /** #rrggbb → "rgb(r,g,b)"。 */
@@ -54,7 +74,14 @@ function hexToRgb(hex: string): string {
   return `rgb(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)})`;
 }
 
-interface RoiRow { uid: string; tool: string; visible: boolean; scope: string; }
+interface RoiRow {
+  uid: string;
+  tool: string;
+  visible: boolean;
+  scope: string;
+  /** 動画の ROI ならそのフレーム（1 始まり）。画像の ROI は null。 */
+  videoFrame: number | null;
+}
 interface MaskRow { id: string; label: string; scope: string; visible: boolean; }
 
 /** マスク（segmentation representation）の表示状態を読む（先頭ビューポート基準。未取得は表示扱い）。 */
@@ -183,6 +210,7 @@ export function RoiManagerPanel({
             tool: (a.metadata?.toolName as string) ?? "ROI",
             visible: csAnnotation.visibility.isAnnotationVisible(a.annotationUID) ?? true,
             scope: scopeText(a.annotationUID),
+            videoFrame: videoFrameOf(a),
           })),
       );
     } catch {
@@ -654,9 +682,15 @@ export function RoiManagerPanel({
           <input type="color" defaultValue="#ffff00" onClick={(e) => e.stopPropagation()} onChange={(e) => setRoiStyle(r.uid, { color: hexToRgb(e.target.value) })} title={t("roiMgr.color")} style={colorInput} />
           <input type="number" min={1} max={10} defaultValue={1} onClick={(e) => e.stopPropagation()} onChange={(e) => setRoiStyle(r.uid, { lineWidth: String(e.target.value) })} title={t("roiMgr.lineWidth")} style={numInput} />
           <input type="checkbox" onClick={(e) => e.stopPropagation()} onChange={(e) => setRoiStyle(r.uid, { fillOpacity: e.target.checked ? 0.3 : 0 })} title={t("roiMgr.fill")} />
-          {r.scope && <button onClick={(e) => { e.stopPropagation(); toggleScopeZ(r.uid); }} style={scopeChip} title={t("roiMgr.scopeToggle")}>{r.scope}</button>}
-          {isAreaRoi(r.tool) && <button onClick={(e) => { e.stopPropagation(); runRoiToMask(r.uid); }} disabled={busy} style={editBtn} title={t("roiMgr.toMask")}>▦</button>}
-          {onDuplicateRoi && (
+          {r.scope && r.videoFrame === null && <button onClick={(e) => { e.stopPropagation(); toggleScopeZ(r.uid); }} style={scopeChip} title={t("roiMgr.scopeToggle")}>{r.scope}</button>}
+          {/* 動画の ROI: フレーム（T 軸）を出すだけ。Z の切替・保存・統計・複製・マスク化は未対応（段 B/C） */}
+          {r.videoFrame !== null && (
+            <span style={videoChip} title={t("roiMgr.videoRoi", { f: r.videoFrame })} data-testid="roi-mgr-video-chip">
+              🎞 F{r.videoFrame}
+            </span>
+          )}
+          {r.videoFrame === null && isAreaRoi(r.tool) && <button onClick={(e) => { e.stopPropagation(); runRoiToMask(r.uid); }} disabled={busy} style={editBtn} title={t("roiMgr.toMask")}>▦</button>}
+          {onDuplicateRoi && r.videoFrame === null && (
             <button
               onClick={(e) => { e.stopPropagation(); setFocusedRoi(r.uid); onDuplicateRoi(r.uid); }}
               disabled={busy}
@@ -667,9 +701,9 @@ export function RoiManagerPanel({
               ⧉
             </button>
           )}
-          {/circle/i.test(r.tool) && <button onClick={(e) => { e.stopPropagation(); runDefineSphere(r.uid); }} disabled={busy} style={editBtn} title={t("roiMgr.defineSphere")}>◎</button>}
-          {/circle/i.test(r.tool) && <button onClick={(e) => { e.stopPropagation(); runSphere(r.uid); }} disabled={busy} style={editBtn} title={t("roiMgr.toSphere")}>⬤</button>}
-          <button onClick={(e) => { e.stopPropagation(); setStatsOpen({ focus: r.uid }); }} style={editBtn} title={t("roiMgr.statsRoi")}>Σ</button>
+          {r.videoFrame === null && /circle/i.test(r.tool) && <button onClick={(e) => { e.stopPropagation(); runDefineSphere(r.uid); }} disabled={busy} style={editBtn} title={t("roiMgr.defineSphere")}>◎</button>}
+          {r.videoFrame === null && /circle/i.test(r.tool) && <button onClick={(e) => { e.stopPropagation(); runSphere(r.uid); }} disabled={busy} style={editBtn} title={t("roiMgr.toSphere")}>⬤</button>}
+          {r.videoFrame === null && <button onClick={(e) => { e.stopPropagation(); setStatsOpen({ focus: r.uid }); }} style={editBtn} title={t("roiMgr.statsRoi")}>Σ</button>}
           <button onClick={(e) => { e.stopPropagation(); setEditId(r.uid); }} style={editBtn} title={t("roiMgr.editTitle")}>✎</button>
           <button onClick={(e) => { e.stopPropagation(); deleteRoi(r.uid); }} style={delBtn} title={t("common.delete")}>🗑</button>
         </div>
@@ -811,6 +845,7 @@ const eyeBtn: React.CSSProperties = { border: "none", background: "transparent",
 const colorInput: React.CSSProperties = { width: 22, height: 20, padding: 0, border: "1px solid #cdd5de", borderRadius: 3, background: "#fff", cursor: "pointer" };
 const numInput: React.CSSProperties = { width: 36, border: "1px solid #cdd5de", borderRadius: 4, fontSize: 11 };
 const scopeChip: React.CSSProperties = { fontSize: 10, color: "#5a6672", background: "#eef2f6", border: "1px solid #dde4ea", borderRadius: 4, padding: "1px 4px", whiteSpace: "nowrap", cursor: "pointer" };
+const videoChip: React.CSSProperties = { fontSize: 10, color: "#7a4f00", background: "#fff4dc", border: "1px dashed #e0b050", borderRadius: 4, padding: "1px 4px", whiteSpace: "nowrap", cursor: "help" };
 const opsBar: React.CSSProperties = { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4, padding: "6px 8px", borderTop: "1px solid #eef1f4" };
 const opBtn: React.CSSProperties = { border: "1px solid #cdd5de", borderRadius: 5, background: "#fff", cursor: "pointer", fontSize: 11, padding: "2px 7px" };
 const statLine: React.CSSProperties = { padding: "0 10px 4px 28px", color: "#5a6672", fontSize: 11 };

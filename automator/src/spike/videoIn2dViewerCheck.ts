@@ -45,7 +45,7 @@ function check(cond: boolean, label: string, detail?: unknown): void {
   }
 }
 
-/** 検証用の合成動画（`videoRoiFrameModeCheck` と同じもの）。 */
+/** 検証用の合成動画（横方向の輝度の傾斜が時間とともに明るくなる）。 */
 function ensureFixtureVideo(): string {
   fs.mkdirSync(FIXTURE_DIR, { recursive: true });
   const existing = fs

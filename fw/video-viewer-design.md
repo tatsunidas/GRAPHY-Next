@@ -182,6 +182,27 @@ frontend: VideoViewport（ViewportType.VIDEO）
   canvas の画素で、W/L・階調反転をスクリーンショットで判定する。回転しても ROI が同じ象限に付いてくることも見る。
   🔴 Cornerstone を上げたら必ず回す（内部に手を入れているため）。
 
+### 5.2.2 ROI は 2D ビューアの ROI 機能が管理する（2026-09-26・段 A3）
+動画ビューアが独自に持っていた ROI の UI（ツールの列・ROI 一覧・帰属の切替・時系列解析・フレーム統計・ヒストグラム）を外し、
+ROI は 2D ビューアの ROI 機能に一本化した（計画 `~/.claude/plans/purrfect-knitting-brooks.md` 段 A3）。
+- **ツール**: 画面の ROI メニュー（`setTool`）で選ぶ。`registerViewerDisplayCommands` の `setActiveTool` で動画タイルに届く。
+  動画で使えるのは長さ・長径短径・角度・楕円・矩形・プローブ・ポリゴン（閉/開）・フリーハンド（閉/開）。
+  ブラシ等の塗りのツールは、選んでも動画では何もしない。
+- **ROI マネージャに載せる**: 描き終えたとき（`ANNOTATION_COMPLETED`・グローバル `eventTarget`）、`SeriesViewer` の `roiContext` を使って
+  `setRoiMaskMeta(uid, {patientKey, seriesLabel, scope: {studyUid, seriesUid, z: 0, c: 0, t: フレーム - 1}})` を付ける。
+  🔑 **フレームは T 軸**（XA のフレームスタックと同じ）。フレームは注釈自身の `metadata.sliceIndex`（0 始まり）から取る。
+  全フレーム共通の ROI は `t: "all"`（段 C）。
+- **表示**: 描いた ROI は描いたフレームにだけ出る（Cornerstone の `VideoViewport.isReferenceViewable` が `sliceIndex` を見る）。
+  旧い動画ビューアの既定は「全フレーム共通」だったので、**既定が変わった**。
+- **ROI マネージャの行**: 動画の ROI には「🎞 F{n}」を出す。表示の切替・名前・色・線の太さ・塗り・削除は効く
+  （動画は専用の RenderingEngine なので、マネージャの `renderAll` は全エンジンを描き直す。VideoViewer は削除と表示の切替で自分を描き直す）。
+  ⚠ **保存・統計（Σ）・複製・マスク化・Z の切替はまだ動画の ROI を扱えない**ので、動画の行には出さない（段 B/C）。
+  保存は `sopOfImageId` が `videoId:` を解けないため、今は自然に対象外になっている。
+- **残したもの（段 C で使う）**: `videoRoiAnalysis.ts`（時系列の画素の読み方）・`TimeIntensityChart`・`videoRoiScope.ts`（global 分岐）。
+- **検査**: `videoDisplayOpsCheck.ts` の [18a]〜[31]（ROI メニューで描く・フレームに付く・マネージャに並ぶ・表示切替と削除が
+  動画の絵に効く・長径短径とフリーハンドも描ける）。`videoFrameAccuracyCheck` と `videoMpeg2TranscodeCheck` は
+  画面の描画面の画素を読む形に置き換えた。`videoRoiFrameModeCheck` は機能ごと外したので退役（段 B/C で作り直す）。
+
 ### 5.3 ルーティング（案内表示の置換）
 - `SeriesViewer.tsx`: 現在 `VIDEO_SOP_CLASSES` を GridView 無効化に使っている。ここで
   「先頭インスタンスが video SOP」なら `<Viewer2D>` の代わりに `<VideoViewer sop=.../>` を表示。
@@ -348,6 +369,10 @@ frontend: VideoViewport（ViewportType.VIDEO）
 - doc: `fw/mainscreen-tools.md` 234 行から本ドキュメントへリンク。`fw/development-phases.md` の Video 項更新。
 
 ## 12. 動画 ROI 解析（P3c）
+
+> ⚠ **2026-09-26（段 A3）で、この節の UI は外した。** ROI は 2D ビューアの ROI 機能が管理する（§5.2.2）。
+> 「グローバル／フレーム指定」の 2 モードは、2D ビューアの scope（`t: "all"` ／ `t: フレーム - 1`）に吸収する（段 C）。
+> 以下は旧実装の記録として残す（画素の読み方・フレーム精度の知見は段 B/C で再利用する）。
 
 > ステータス: **P3c 実装済・実機検証済み（時系列解析 2026-07-24／ROI 管理 UI 2026-07-27／
 > フレーム指定 ROI モードと単一フレーム統計・複数 ROI の選択解析・フレーム精度 2026-07-30）**。グローバル ROI（矩形/楕円）の時系列解析

@@ -11,6 +11,10 @@
  *   4. W/L プリセット・左ドラッグの W/L・階調反転が効く（CSS の filter なので canvas の画素ではなく**スクリーンショット**で読む）
  *   5. 回転しても、描いた ROI が動画上の同じ場所に付いてくる（描画と注釈の座標変換がそろっている）
  *   6. 動画タイルの 🔗（同期）は押せない
+ *   7. （段 A3）ROI は 2D ビューアの ROI 機能が管理する: 画面の ROI メニューで選んだツールで動画に描け、
+ *      ROI マネージャにフレームつき（🎞 F1）で並び、マネージャの表示切替・削除が動画の絵に効く。
+ *      描いた ROI はそのフレームにだけ出る（フレームは T 軸。全フレーム共通は段 C）。
+ *      動画独自のツールの列・ROI 一覧・解析のボタンは無くなっている
  *
  * 前提: backend jar（`cd backend && mvn -q -Dfrontend.skip=true -DskipTests package`）。
  * フィクスチャは無ければ ffmpeg で自動生成する（`fixtures/video-mp4-avi/display-ops/`）。
@@ -163,6 +167,45 @@ async function click(page: Page, testId: string, wait = 350): Promise<void> {
   await page.waitForTimeout(wait);
 }
 
+/**
+ * 画面の ROI メニュー（2D ビューアのメニュー）からツールを選ぶ。項目名は ✓ が付くことがあるので前方を許す。
+ * メニューが開き切る前に押すと取りこぼすので、見つかるまで数回開き直す（`angioHostApiCheck` と同じ）。
+ */
+async function pickRoiTool(page: Page, name: RegExp): Promise<void> {
+  const item = page.getByRole("button", { name });
+  for (let i = 0; i < 3; i++) {
+    await page.keyboard.press("Escape").catch(() => undefined);
+    await page.getByTestId("viewer2d-menu-roi").click();
+    try {
+      await item.first().waitFor({ state: "visible", timeout: 2000 });
+      await item.first().click();
+      await page.waitForTimeout(300);
+      return;
+    } catch {
+      /* 開き直す */
+    }
+  }
+  throw new Error(`ROI メニューの ${name} を選べませんでした`);
+}
+
+async function openRoiManager(page: Page): Promise<void> {
+  if (await page.getByTestId("roi-mgr-save").isVisible().catch(() => false)) return;
+  await page.getByTestId("viewer2d-menu-roiTools").click();
+  await page.getByRole("button", { name: /ROI マネージャ|ROI manager/ }).first().click();
+  await page.getByTestId("roi-mgr-save").waitFor({ state: "visible", timeout: 10_000 });
+}
+
+/** 動画の上に描かれている注釈の図形（SVG）の数。 */
+async function drawnShapes(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const host = document.querySelector('[data-testid="video-viewport-host"]') as HTMLElement;
+    return Array.from(host.querySelectorAll("svg path, svg rect, svg polyline, svg line, svg ellipse")).filter((e) => {
+      const r = e.getBoundingClientRect();
+      return r.width > 2 || r.height > 2;
+    }).length;
+  });
+}
+
 /** 動画の注釈（SVG）の外接矩形の中心を、canvas の中心からの相対（CSS px）で返す。無ければ null。 */
 async function annotationCenter(page: Page): Promise<[number, number] | null> {
   return (await page.evaluate(() => {
@@ -219,6 +262,11 @@ async function main(): Promise<void> {
       (url) => url.includes("2dviewer"),
     );
     page.on("dialog", (d) => void d.accept().catch(() => {}));
+    const pageErrors: string[] = [];
+    page.on("pageerror", (e) => pageErrors.push(String(e?.stack ?? e)));
+    page.on("console", (m) => {
+      if (m.type() === "error" || m.type() === "warning") console.log(`    [console.${m.type()}] ${m.text().slice(0, 300)}`);
+    });
     await page.getByTestId("video-display-bar").waitFor({ state: "visible", timeout: 60_000 });
     await page.waitForTimeout(1_500);
     check(true, "[1] 2D ビューアで動画タイルが開き、表示の操作バーが出る");
@@ -324,7 +372,12 @@ async function main(): Promise<void> {
     check(colorName(back) === "red", "[17] もう一度押すと戻る", back);
 
     // ── 5. 回転しても ROI が動画上の同じ場所に付いてくる
-    await click(page, "video-tool-rectangle");
+    // 🔑 段 A3: 動画独自のツールの列は無い。**画面の ROI メニュー**から選ぶ
+    check(
+      (await page.locator('[data-testid^="video-tool-"], [data-testid="video-analyze-run"], [data-testid="video-roi-list"]').count()) === 0,
+      "[18a] 動画独自のツールの列・ROI 一覧・解析のボタンは無い（ROI は 2D ビューアの ROI 機能に一本化）",
+    );
+    await pickRoiTool(page, /^(✓\s*)?(矩形 ROI|Rectangle ROI)$/);
     await dragOnCanvasHost(page, HOST, k, k, 0, 12, {
       fracX: 0.5 - (1.6 * k) / (await page.getByTestId(HOST).evaluate((e) => (e as HTMLElement).clientWidth)),
       fracY: 0.5 - (1.6 * k) / (await page.getByTestId(HOST).evaluate((e) => (e as HTMLElement).clientHeight)),
@@ -346,6 +399,74 @@ async function main(): Promise<void> {
     await click(page, "video-frame-next", 400);
     const shown = ((await page.getByTestId("video-frame-number").textContent()) ?? "").trim();
     check(/\b2 \/ 30\b/.test(shown), "[21] フレーム送りは今まで通り（▶ で 2 / 30）", shown);
+
+    // ── 7. ROI は 2D ビューアの ROI マネージャが管理する（段 A3）
+    check((await drawnShapes(page)) === 0, "[22] ★フレーム 1 に描いた ROI は、フレーム 2 では出ない（フレームに付く）");
+    await click(page, "video-frame-prev", 400);
+    check((await drawnShapes(page)) > 0, "[23] フレーム 1 に戻ると ROI が出る");
+
+    await openRoiManager(page);
+    const rows = page.locator('[data-testid="roi-mgr-row"]');
+    check((await rows.count()) === 1, "[24] ★動画に描いた ROI が ROI マネージャに並ぶ", await rows.count());
+    const row0 = rows.first();
+    const rowText = ((await row0.textContent()) ?? "").trim();
+    check(
+      ((await row0.getByTestId("roi-mgr-video-chip").textContent()) ?? "").includes("F1"),
+      "[25] ★行にフレーム（🎞 F1）が出る（scope は T 軸: t=0）",
+      rowText,
+    );
+    check(
+      (await row0.getByRole("button", { name: "Σ" }).count()) === 0 && (await row0.getByTestId("roi-mgr-duplicate").count()) === 0,
+      "[26] 動画の ROI の行には、まだ対応していない統計（Σ）・複製（⧉）を出さない",
+    );
+    await page.screenshot({ path: path.join(OUT_DIR, "5-roi-manager.png") }).catch(() => {});
+
+    await row0.getByRole("button", { name: "👁" }).click();
+    await page.waitForTimeout(400);
+    check((await drawnShapes(page)) === 0, "[27] ★ROI マネージャで非表示にすると、動画の上から消える");
+    await row0.getByRole("button", { name: "🚫" }).click();
+    await page.waitForTimeout(400);
+    check((await drawnShapes(page)) > 0, "[28] もう一度押すと出る");
+
+    // 画像タイルと同じ計測ツール（双方向）も動画に描ける。
+    // ⚠ 最初の ROI の統計の文字枠（緑・右下の灰の象限）の上から始めると、描かずに文字枠を動かしてしまう。
+    //   何も無い青の象限で描く
+    await pickRoiTool(page, /^(✓\s*)?(長径・短径|Long\/short axis)/);
+    await dragOnCanvasHost(page, HOST, 60, 20, 0, 12, { fracX: 0.12, fracY: 0.55 });
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: path.join(OUT_DIR, "6-bidirectional.png") }).catch(() => {});
+    check((await rows.count()) === 2, "[29] 双方向計測のツールでも描け、ROI マネージャに並ぶ", await rows.count());
+
+    // 輪郭系（閉じたフリーハンド）も描ける。閉じた輪郭は面積が要るので、円を描くようにドラッグする（緑の象限）
+    await pickRoiTool(page, /^(✓\s*)?(フリーハンド ROI（閉）|Freehand ROI \(closed\))$/);
+    {
+      const box = (await page.getByTestId(HOST).boundingBox())!;
+      const cx = box.x + box.width * 0.75;
+      const cy = box.y + box.height * 0.36;
+      const r = Math.min(box.width, box.height) * 0.08;
+      await page.mouse.move(cx + r, cy);
+      await page.mouse.down();
+      for (let i = 1; i <= 36; i++) {
+        const th = (i / 36) * 2 * Math.PI;
+        await page.mouse.move(cx + r * Math.cos(th), cy + r * Math.sin(th));
+        await page.waitForTimeout(15);
+      }
+      await page.mouse.up();
+    }
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: path.join(OUT_DIR, "7-freehand.png") }).catch(() => {});
+    check((await rows.count()) === 3, "[29b] 輪郭系（フリーハンド）のツールでも描け、ROI マネージャに並ぶ", await rows.count());
+
+    for (let i = (await rows.count()) - 1; i >= 0; i--) {
+      await rows.nth(i).getByRole("button", { name: "🗑" }).click();
+      await page.waitForTimeout(300);
+    }
+    await page.waitForTimeout(300);
+    check((await rows.count()) === 0 && (await drawnShapes(page)) === 0, "[30] ★ROI マネージャで削除すると、動画の上からも消える", {
+      rows: await rows.count(),
+      shapes: await drawnShapes(page),
+    });
+    check(pageErrors.length === 0, "[31] 画面の例外（pageerror）が 0 件", pageErrors.slice(0, 3));
   } finally {
     await driver.stop();
   }
