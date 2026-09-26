@@ -277,4 +277,143 @@ function resolveCapability(capability) {
   };
 }
 
-module.exports = { generate, resolveCapability, SECRET_KEY, MAX_IMAGE_BYTES };
+// ── 接続テスト（疎通確認） ─────────────────────────────────────────────────
+//
+// 🔑 **なぜ要るのか。** 利用者が自分で提供元を足せる形にした以上、**私たちが全社を事前に
+// 検証することはできない**（各社の API は版が変わる）。だから「登録したら押して確かめる」
+// 手段を本体が持つ。これが無いと、最初の 1 回が必ず患者画像での試行になり、
+// 失敗しても原因（鍵・パス・応答の形）が切り分けられない。
+//
+// 🔴 **呼び出し側は「どの提供元の・どの用途か」しか決められない。** 送る指示と画像は
+//    ここにある定数。プラグインも同じレンダラに居るのでこの口を呼べてしまうが、
+//    **内容を決められないので患者画像は絶対に出ない**——これが安全性の根拠。
+
+/** 送る画像。**1×1 の白 1 枚**（69 バイト）。患者画像は使わない。 */
+const TEST_IMAGE_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC";
+const TEST_IMAGE_MIME = "image/png";
+/** 送る指示。**短く・当たり障りがなく・返答の形が読みやすいもの。** */
+const TEST_PROMPT = "Reply with OK.";
+/** 連続で押されたときの最短間隔。課金と相手への負荷を抑える。 */
+const TEST_MIN_INTERVAL_MS = 3000;
+let lastTestAt = 0;
+
+/** HTTP の結果を「何を直せばよいか」へ写す。 */
+function verdictForStatus(status) {
+  if (status === 401 || status === 403) return "auth-failed";
+  if (status === 404) return "not-found";
+  if (status === 400 || status === 422) return "bad-request";
+  if (status === 429) return "rate-limited";
+  if (status >= 500) return "server-error";
+  return "http-error";
+}
+
+/** 例外を「何を直せばよいか」へ写す。 */
+function verdictForError(message) {
+  const m = String(message || "");
+  if (/タイムアウト|ETIMEDOUT|ESOCKETTIMEDOUT/i.test(m)) return "timeout";
+  if (/CERT|SELF_SIGNED|UNABLE_TO_VERIFY|DEPTH_ZERO/i.test(m)) return "tls";
+  if (/ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH/i.test(m)) return "network";
+  return "network";
+}
+
+/**
+ * 1 度だけ実物の API へ送って、電文が通るかを確かめる。
+ *
+ * <p>返すのは**診断に必要な最小限**。🔴 **ヘッダは名前だけ**（値は絶対に返さない——
+ * 認証ヘッダ名を設定で選べる以上、どのヘッダに鍵が載るか固定できない）。
+ *
+ * @param {{providerId: string, capability: string}} args
+ */
+async function testConnection(args) {
+  const providerId = args && args.providerId;
+  const capability = args && args.capability;
+  const provider = aiProviders.byId(providerId);
+  if (!provider) return { ok: false, verdict: "config", error: "unknown-provider" };
+  if (!aiProviders.CAPABILITIES.includes(capability)) {
+    return { ok: false, verdict: "config", error: "unsupported-capability" };
+  }
+  const model = provider.models[capability];
+  if (!model) return { ok: false, verdict: "config", error: "no-provider-for-capability" };
+  const adapter = ADAPTERS[provider.kind];
+  if (!adapter || !adapter.supports(capability)) {
+    return { ok: false, verdict: "config", error: "unsupported-capability" };
+  }
+  const apiKey = secretForProvider(provider.id);
+  if (!apiKey) return { ok: false, verdict: "no-api-key", error: "no-api-key" };
+  if (!validModel(model, adapter.modelInPath(provider))) {
+    return { ok: false, verdict: "config", error: "invalid-model" };
+  }
+  // 🔴 本番の送信と同じ 1 本の錠を使う（試験連打で生成が止まる／その逆を防ぐ）。
+  if (inFlight) return { ok: false, verdict: "busy", error: "busy" };
+  const since = Date.now() - lastTestAt;
+  if (since < TEST_MIN_INTERVAL_MS) {
+    return { ok: false, verdict: "too-soon", error: "too-soon", retryAfterMs: TEST_MIN_INTERVAL_MS - since };
+  }
+
+  const apiVersion = resolveApiVersion(provider, adapter, {});
+  const target = targetOf(provider);
+  // 🔑 **`generate()` と同じ組み立てを通す。** 別経路で組むと、設定の効き方を確かめられない。
+  const built = adapter.buildRequest({
+    capability,
+    model,
+    apiVersion,
+    apiKey,
+    prompt: TEST_PROMPT,
+    imageBase64: TEST_IMAGE_BASE64,
+    mimeType: TEST_IMAGE_MIME,
+    provider,
+  });
+  if (built.error) return { ok: false, verdict: "config", error: built.error };
+
+  const requestLine = `POST ${target.plaintext ? "http" : "https"}://${target.display}${built.path}`;
+  const headerNames = Object.keys(built.headers).map((k) => k.toLowerCase()).sort();
+  console.log(`[ai] connection-test provider=${provider.id} host=${target.display} capability=${capability}`);
+
+  inFlight = true;
+  lastTestAt = Date.now();
+  const startedAt = Date.now();
+  try {
+    const res = await aiHttp.post(target, built.path, built.headers, built.body);
+    const elapsedMs = Date.now() - startedAt;
+    const bodyPreview = mask(res.text, apiKey).replace(/[\u0000-\u001f]+/g, " ").slice(0, 1000);
+    if (res.statusCode !== 200) {
+      const msg = (res.json && res.json.error && res.json.error.message) || res.text || `HTTP ${res.statusCode}`;
+      return {
+        ok: false, verdict: verdictForStatus(res.statusCode), status: res.statusCode, elapsedMs,
+        requestLine, headerNames, bodyPreview, plaintext: target.plaintext || undefined,
+        error: mask(msg, apiKey),
+      };
+    }
+    const norm = res.json ? adapter.normalize(res.json) : {};
+    const base = {
+      status: 200, elapsedMs, requestLine, headerNames, bodyPreview,
+      plaintext: target.plaintext || undefined,
+    };
+    if (norm.image) return { ok: true, verdict: "reachable", imageBytes: norm.image.base64.length, ...base };
+    if (norm.text) return { ok: true, verdict: "reachable", text: mask(norm.text, apiKey).slice(0, 200), ...base };
+    if (norm.blockReason) return { ok: true, verdict: "blocked", blockReason: norm.blockReason, ...base };
+    // 200 なのに読めない＝**別の API を指している**ことが多い（`paths` の設定間違い）。
+    return { ok: false, verdict: "unreadable-response", error: "empty-response", ...base };
+  } catch (e) {
+    const message = mask(e && e.message, apiKey);
+    return {
+      ok: false, verdict: verdictForError(message), error: message,
+      elapsedMs: Date.now() - startedAt, requestLine, headerNames,
+      plaintext: target.plaintext || undefined,
+    };
+  } finally {
+    inFlight = false;
+  }
+}
+
+module.exports = {
+  generate,
+  resolveCapability,
+  testConnection,
+  SECRET_KEY,
+  MAX_IMAGE_BYTES,
+  TEST_PROMPT,
+  TEST_IMAGE_BASE64,
+  TEST_MIN_INTERVAL_MS,
+};

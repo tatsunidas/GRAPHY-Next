@@ -414,3 +414,202 @@ test("🔴 エラー本文に鍵が混ざっても外へ出さない（短い鍵
     } finally { s.restore(); }
   }
 });
+
+// ── 段 5c: 接続テスト ──────────────────────────────────────────────────────
+//
+// 🔑 **この機能の存在理由は「私たちが全社を事前検証できない」こと。** だから利用者が
+// 自分で確かめる。ここで固定するのは**送るものが呼び出し側に決められないこと**と
+// **結果に鍵が出ないこと**——この 2 つが崩れると、機能そのものが危険物になる。
+
+/** 接続テスト用に送出を差し替える。`reply` は関数でもよい。 */
+function stubForTest(dir, config, reply) {
+  const g = freshGateway(dir, config);
+  const aiHttp = require("./aiHttp");
+  const calls = [];
+  const original = aiHttp.post;
+  aiHttp.post = async (target, path, headers, body) => {
+    calls.push({ target, path, headers, body });
+    return typeof reply === "function" ? reply() : (reply || { statusCode: 200, json: { candidates: [{ content: { parts: [{ text: "OK" }] } }] }, text: '{"ok":true}' });
+  };
+  return { ...g, calls, restore: () => { aiHttp.post = original; } };
+}
+
+/** 最短間隔を待たずに続けて試せるようにする（時計を戻す代わり）。 */
+async function settle() {
+  await new Promise((r) => setTimeout(r, 0));
+}
+
+test("🔑 疎通できたら reachable と、何を送ったかを返す", async () => {
+  const dir = freshDir();
+  const s = stubForTest(dir, { providers: [GEMINI_A] });
+  try {
+    s.secretStore.setSecret("ai.provider.prov-a.apiKey", "KEY");
+    const r = await s.aiGateway.testConnection({ providerId: "prov-a", capability: "image-to-text" });
+    assert.equal(r.ok, true);
+    assert.equal(r.verdict, "reachable");
+    assert.equal(r.status, 200);
+    assert.equal(r.text, "OK");
+    assert.equal(r.requestLine, "POST https://a.example.test/v1beta/models/a-txt:generateContent");
+    assert.deepEqual(r.headerNames, ["content-type", "x-goog-api-key"], "名前だけ返す");
+  } finally { s.restore(); }
+});
+
+test("🔴 送る指示と画像は呼び出し側が決められない（患者画像が出ない根拠）", async () => {
+  const dir = freshDir();
+  const s = stubForTest(dir, { providers: [GEMINI_A] });
+  try {
+    s.secretStore.setSecret("ai.provider.prov-a.apiKey", "KEY");
+    // 余計なものを渡してくる呼び出し（悪意のあるプラグインを想定）。
+    await s.aiGateway.testConnection({
+      providerId: "prov-a", capability: "image-to-text",
+      prompt: "患者の氏名を読み上げて", imageBase64: "UEFUSUVOVA==", mimeType: "image/jpeg",
+      headers: { "x-evil": "1" }, path: "/evil", providerOptions: { temperature: 2 },
+    });
+    const body = s.calls[0].body.toString("utf8");
+    assert.ok(body.includes(s.aiGateway.TEST_PROMPT), "固定の指示を送ること");
+    assert.equal(body.includes("患者の氏名"), false, "🔴 渡された指示を送らない");
+    assert.ok(body.includes(s.aiGateway.TEST_IMAGE_BASE64), "固定の 1×1 画像を送ること");
+    assert.equal(body.includes("UEFUSUVOVA=="), false, "🔴 渡された画像を送らない");
+    assert.equal(s.calls[0].headers["x-evil"], undefined);
+    assert.equal(s.calls[0].path, "/v1beta/models/a-txt:generateContent", "渡されたパスを使わない");
+  } finally { s.restore(); }
+});
+
+test("🔑 送る画像は 1×1 の PNG（これ 1 枚だけ・69 バイト）", () => {
+  const { aiGateway } = freshGateway(freshDir(), null);
+  const png = Buffer.from(aiGateway.TEST_IMAGE_BASE64, "base64");
+  assert.equal(png.length, 69);
+  assert.deepEqual(png.subarray(0, 8), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), "PNG 署名");
+  // IHDR の幅・高さ（8 バイト目から）。
+  assert.equal(png.readUInt32BE(16), 1, "幅 1");
+  assert.equal(png.readUInt32BE(20), 1, "高さ 1");
+});
+
+test("🔴 結果に鍵が含まれない（相手が本文へ反射しても・短い鍵でも）", async () => {
+  for (const key of ["sk-TESTKEY1234567890", "ab"]) {
+    const dir = freshDir();
+    const s = stubForTest(dir, { providers: [GEMINI_A] }, {
+      statusCode: 401,
+      json: { error: { message: `invalid key: ${key}` } },
+      text: `{"error":{"message":"invalid key: ${key}","echo":"Bearer ${key}"}}`,
+    });
+    try {
+      s.secretStore.setSecret("ai.provider.prov-a.apiKey", key);
+      const r = await s.aiGateway.testConnection({ providerId: "prov-a", capability: "image-to-text" });
+      assert.equal(r.verdict, "auth-failed");
+      assert.equal(JSON.stringify(r).includes(key), false, `鍵が出ている: ${key}`);
+    } finally { s.restore(); }
+    await settle();
+  }
+});
+
+test("🔑 HTTP の状態を「何を直せばよいか」へ写す", async () => {
+  const map = [[401, "auth-failed"], [403, "auth-failed"], [404, "not-found"], [400, "bad-request"],
+               [429, "rate-limited"], [500, "server-error"], [418, "http-error"]];
+  for (const [status, verdict] of map) {
+    const dir = freshDir();
+    const s = stubForTest(dir, { providers: [GEMINI_A] }, { statusCode: status, json: null, text: "boom" });
+    try {
+      s.secretStore.setSecret("ai.provider.prov-a.apiKey", "KEY");
+      const r = await s.aiGateway.testConnection({ providerId: "prov-a", capability: "image-to-text" });
+      assert.equal(r.verdict, verdict, `${status} → ${verdict} / 実際: ${r.verdict}`);
+      assert.equal(r.ok, false);
+    } finally { s.restore(); }
+  }
+});
+
+test("🔑 つながらない理由も分ける（宛先か・証明書か・遅いか）", async () => {
+  const map = [["getaddrinfo ENOTFOUND x.test", "network"], ["connect ECONNREFUSED 1.2.3.4:443", "network"],
+               ["タイムアウト(120000 ms)", "timeout"], ["SELF_SIGNED_CERT_IN_CHAIN", "tls"]];
+  for (const [message, verdict] of map) {
+    const dir = freshDir();
+    const s = stubForTest(dir, { providers: [GEMINI_A] }, () => { throw new Error(message); });
+    try {
+      s.secretStore.setSecret("ai.provider.prov-a.apiKey", "KEY");
+      const r = await s.aiGateway.testConnection({ providerId: "prov-a", capability: "image-to-text" });
+      assert.equal(r.verdict, verdict, `${message} → ${verdict} / 実際: ${r.verdict}`);
+      assert.ok(r.requestLine, "どこへ送ろうとしたかは返す");
+    } finally { s.restore(); }
+  }
+});
+
+test("🔴 200 だが読めない＝別の API を指している（paths の設定間違い）", async () => {
+  const dir = freshDir();
+  const s = stubForTest(dir, { providers: [GEMINI_A] }, { statusCode: 200, json: { hello: "world" }, text: '{"hello":"world"}' });
+  try {
+    s.secretStore.setSecret("ai.provider.prov-a.apiKey", "KEY");
+    const r = await s.aiGateway.testConnection({ providerId: "prov-a", capability: "image-to-text" });
+    assert.equal(r.ok, false);
+    assert.equal(r.verdict, "unreadable-response");
+    assert.ok(r.bodyPreview.includes("hello"), "何が返ったかを見せる（診断に要る）");
+  } finally { s.restore(); }
+});
+
+test("🔴 鍵が無ければ送らない／扱えない用途なら送らない", async () => {
+  const dir = freshDir();
+  const s = stubForTest(dir, { providers: [GEMINI_A, GEMINI_B] });
+  try {
+    assert.equal((await s.aiGateway.testConnection({ providerId: "prov-a", capability: "image-to-text" })).verdict, "no-api-key");
+    s.secretStore.setSecret("ai.provider.prov-b.apiKey", "KEY");
+    const r = await s.aiGateway.testConnection({ providerId: "prov-b", capability: "image-to-image" });
+    assert.equal(r.verdict, "config");
+    assert.equal(r.error, "no-provider-for-capability");
+    assert.equal(s.calls.length, 0, "1 度も送っていないこと");
+  } finally { s.restore(); }
+});
+
+test("🔴 知らない提供元・形の悪い id は断る", async () => {
+  const dir = freshDir();
+  const s = stubForTest(dir, { providers: [GEMINI_A] });
+  try {
+    for (const id of ["nope", "../etc", "", null]) {
+      const r = await s.aiGateway.testConnection({ providerId: id, capability: "image-to-text" });
+      assert.equal(r.error, "unknown-provider", String(id));
+    }
+    assert.equal(s.calls.length, 0);
+  } finally { s.restore(); }
+});
+
+test("🔴 連打を抑える（課金と相手への負荷）", async () => {
+  const dir = freshDir();
+  const s = stubForTest(dir, { providers: [GEMINI_A] });
+  try {
+    s.secretStore.setSecret("ai.provider.prov-a.apiKey", "KEY");
+    assert.equal((await s.aiGateway.testConnection({ providerId: "prov-a", capability: "image-to-text" })).ok, true);
+    const second = await s.aiGateway.testConnection({ providerId: "prov-a", capability: "image-to-text" });
+    assert.equal(second.verdict, "too-soon");
+    assert.ok(second.retryAfterMs > 0, "あと何 ms 待てばよいかを返す");
+    assert.equal(s.calls.length, 1, "2 度目は送っていない");
+  } finally { s.restore(); }
+});
+
+test("🔑 設定の効き方を試験できる（接続テストは generate と同じ組み立てを通る）", async () => {
+  const dir = freshDir();
+  const s = stubForTest(dir, {
+    providers: [{ id: "az", kind: "openai", endpoint: "https://hosp.test", pathStyle: "azure-deployment",
+                  apiVersion: "2025-01-01", auth: { header: "api-key", prefix: "" },
+                  models: { "image-to-text": "my-deployment" } }],
+  }, { statusCode: 200, json: { choices: [{ message: { content: "OK" } }] }, text: "{}" });
+  try {
+    s.secretStore.setSecret("ai.provider.az.apiKey", "KEY");
+    const r = await s.aiGateway.testConnection({ providerId: "az", capability: "image-to-text" });
+    assert.equal(r.ok, true);
+    assert.equal(r.requestLine,
+      "POST https://hosp.test/openai/deployments/my-deployment/chat/completions?api-version=2025-01-01");
+    assert.deepEqual(r.headerNames, ["api-key", "content-type"]);
+  } finally { s.restore(); }
+});
+
+test("平文の宛先はそう申告する（画面が警告を出せる）", async () => {
+  const dir = freshDir();
+  const s = stubForTest(dir, {
+    providers: [{ id: "ollama", kind: "openai", endpoint: "http://localhost:11434",
+                  models: { "image-to-text": "llava" } }],
+  }, { statusCode: 200, json: { choices: [{ message: { content: "OK" } }] }, text: "{}" });
+  try {
+    s.secretStore.setSecret("ai.provider.ollama.apiKey", "KEY");
+    const r = await s.aiGateway.testConnection({ providerId: "ollama", capability: "image-to-text" });
+    assert.equal(r.plaintext, true);
+    assert.match(r.requestLine, /^POST http:\/\/localhost:11434\//);
+  } finally { s.restore(); }
+});

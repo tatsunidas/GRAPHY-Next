@@ -15,7 +15,7 @@
  */
 import React, { useCallback, useEffect, useState } from "react";
 import { useI18n } from "../i18n/i18n";
-import { desktop, type AiProviderEntry, type AiProvidersConfig } from "../desktopBridge";
+import { desktop, type AiProviderEntry, type AiProvidersConfig, type AiTestResult } from "../desktopBridge";
 
 export function AiPanel() {
   const { t } = useI18n();
@@ -26,6 +26,8 @@ export function AiPanel() {
   const [error, setError] = useState<string | null>(null);
   /** 提供元 id → 入力中の鍵。画面に残さないよう、保存したら消す。 */
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  /** 提供元 id → 直近の疎通確認の結果。 */
+  const [tests, setTests] = useState<Record<string, AiTestResult | "running">>({});
 
   const refresh = useCallback(async () => {
     if (!d?.aiProvidersGet) return;
@@ -83,6 +85,23 @@ export function AiPanel() {
     } finally {
       setBusy(false);
       d.refocus?.();
+    }
+  };
+
+  /**
+   * 疎通確認を走らせる。
+   *
+   * <p>渡すのは**提供元と用途だけ**。送る指示と画像は main が持つ定数なので、
+   * ここから患者の画像が出ることはない。
+   */
+  const runTest = async (p: AiProviderEntry, capability: string) => {
+    if (!d.aiTestConnection) return;
+    setTests((s) => ({ ...s, [p.id]: "running" }));
+    try {
+      const r = await d.aiTestConnection(p.id, capability as never);
+      setTests((s) => ({ ...s, [p.id]: r }));
+    } catch (e) {
+      setTests((s) => ({ ...s, [p.id]: { ok: false, verdict: "network", error: String(e) } }));
     }
   };
 
@@ -158,7 +177,15 @@ export function AiPanel() {
             <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
               <b style={{ fontSize: 12 }}>{p.label}</b>
               <span style={mono}>{p.endpoint}</span>
-              <span style={{ fontSize: 11, color: "#6b7785" }}>{`kind=${p.kind}`}</span>
+              <span style={{ fontSize: 11, color: "#6b7785" }}>
+                {`kind=${p.kind}${p.pathStyle ? `/${p.pathStyle}` : ""}`}
+              </span>
+              {/* 🔴 平文で出る宛先は必ず印を出す（院内に自分で立てたサーバだけ起こりうる）。 */}
+              {p.plaintext ? (
+                <span style={warnBadge} data-testid={`ai-plaintext-${p.id}`} title={t("settings.ai.plaintext.help")}>
+                  {t("settings.ai.plaintext")}
+                </span>
+              ) : null}
             </div>
 
             {/* できること。**無い用途は出さずに「使えない」と書く**——推測させない。 */}
@@ -210,9 +237,38 @@ export function AiPanel() {
                 {t("settings.ai.clear")}
               </button>
             </div>
+
+            {/* ── 疎通確認 ───────────────────────────────────────────────
+                🔑 **私たちが全社を事前検証することはできない**ので、利用者が自分で確かめる。
+                送るのは 1×1 の白い画像と短い指示だけ（患者の画像は使わない）。 */}
+            <div style={row}>
+              <span style={label}>{t("settings.ai.test")}</span>
+              {capabilities.filter((cap) => p.models[cap]).map((cap) => (
+                <button
+                  key={cap}
+                  style={btn}
+                  disabled={busy || !p.hasApiKey || tests[p.id] === "running"}
+                  onClick={() => void runTest(p, cap)}
+                  // 🔴 画像生成の疎通は 1 枚生成＝課金。押す前に分かるようにする。
+                  title={cap === "image-to-image" ? t("settings.ai.test.i2iCost") : undefined}
+                  data-testid={`ai-test-${p.id}-${cap}`}
+                >
+                  {cap === "image-to-image"
+                    ? `${t(`settings.ai.cap.${cap}`)} ⚠`
+                    : t(`settings.ai.cap.${cap}`)}
+                </button>
+              ))}
+              {tests[p.id] === "running" ? (
+                <span style={{ fontSize: 11, color: "#6b7785" }}>{t("settings.ai.test.running")}</span>
+              ) : null}
+            </div>
+            {tests[p.id] && tests[p.id] !== "running" ? (
+              <TestReport result={tests[p.id] as AiTestResult} id={p.id} t={t} />
+            ) : null}
           </div>
         ))}
         <p style={help}>{t("settings.ai.sec.providers.help")}</p>
+        <p style={help}>{t("settings.ai.test.help")}</p>
       </section>
 
       {/* 読み込み時に捨てた設定。**黙って捨てない。** */}
@@ -287,6 +343,72 @@ const badgeBase: React.CSSProperties = {
 const badgeOn: React.CSSProperties = { ...badgeBase, background: "#e8f5e9", color: "#2e7d32", borderColor: "#c8e6c9" };
 const badgeOff: React.CSSProperties = { ...badgeBase, background: "#f4f7fa", color: "#8a949f", borderColor: "#dfe6ee" };
 const help: React.CSSProperties = { fontSize: 11, color: "#6b7785", margin: "2px 0 0 158px" };
+/**
+ * 疎通確認の結果。**「何を直せばよいか」を先に出す。**
+ *
+ * <p>🔴 返ってくるヘッダは名前だけ（値は main が返さない）。ここで値を出す実装を足さないこと。
+ */
+function TestReport({ result, id, t }: { result: AiTestResult; id: string; t: (k: string, v?: Record<string, string | number>) => string }) {
+  const good = result.ok && result.verdict === "reachable";
+  return (
+    <div style={testBox} data-testid={`ai-test-result-${id}`}>
+      <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+        <b style={{ color: good ? "#2e7d32" : "#b00020", fontSize: 12 }} data-testid={`ai-test-verdict-${id}`}>
+          {t(`settings.ai.test.verdict.${result.verdict}`)}
+        </b>
+        {result.status ? <span style={mono}>{`HTTP ${result.status}`}</span> : null}
+        {result.elapsedMs != null ? <span style={mono}>{`${result.elapsedMs} ms`}</span> : null}
+        {result.plaintext ? <span style={warnBadge}>{t("settings.ai.plaintext")}</span> : null}
+      </div>
+      {result.requestLine ? <div style={mono}>{result.requestLine}</div> : null}
+      {result.headerNames?.length ? (
+        <div style={{ ...mono, color: "#6b7785" }}>
+          {t("settings.ai.test.headers", { names: result.headerNames.join(", ") })}
+        </div>
+      ) : null}
+      {result.text ? <div style={{ fontSize: 11 }}>{result.text}</div> : null}
+      {result.imageBytes ? (
+        <div style={{ fontSize: 11 }}>{t("settings.ai.test.gotImage", { bytes: result.imageBytes })}</div>
+      ) : null}
+      {result.error ? <div style={{ fontSize: 11, color: "#b00020" }}>{result.error}</div> : null}
+      {result.bodyPreview && !result.ok ? (
+        <pre style={pre}>{result.bodyPreview}</pre>
+      ) : null}
+    </div>
+  );
+}
+
+const testBox: React.CSSProperties = {
+  margin: "4px 0 0 148px",
+  padding: "6px 8px",
+  background: "#f7f9fb",
+  border: "1px solid #dfe6ee",
+  borderRadius: 4,
+  display: "flex",
+  flexDirection: "column",
+  gap: 3,
+};
+
+const pre: React.CSSProperties = {
+  margin: 0,
+  fontSize: 10,
+  fontFamily: "monospace",
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-all",
+  maxHeight: 96,
+  overflow: "auto",
+  color: "#42505f",
+};
+
+const warnBadge: React.CSSProperties = {
+  fontSize: 10,
+  padding: "1px 6px",
+  borderRadius: 8,
+  background: "#fdf0e3",
+  border: "1px solid #e0b884",
+  color: "#8a4b00",
+};
+
 const notice: React.CSSProperties = { fontSize: 12, color: "#6b7785" };
 const warn: React.CSSProperties = { fontSize: 12, color: "#8a4b00", margin: "6px 0" };
 const noticeList: React.CSSProperties = {

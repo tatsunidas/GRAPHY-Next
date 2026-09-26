@@ -855,6 +855,14 @@ ipcMain.handle("graphy:ai-providers-get", () => {
       kind: p.kind,
       endpoint: p.endpoint,
       models: p.models,
+      // 設定で差を吸収する項目（段 5）。**鍵は含まれない。**
+      ...(p.auth !== undefined ? { auth: p.auth } : {}),
+      ...(p.pathStyle ? { pathStyle: p.pathStyle } : {}),
+      ...(p.apiVersion ? { apiVersion: p.apiVersion } : {}),
+      ...(p.paths ? { paths: p.paths } : {}),
+      ...(p.headers ? { headers: p.headers } : {}),
+      // 平文 http の宛先。画面が印を出す（院内アドレスのみ許される）。
+      ...(p.plaintext ? { plaintext: true } : {}),
       // 鍵が入っているかだけを返す。**値は返さない。**
       hasApiKey: !!aiProviders.secretKeyCandidates(p.id).find((k) => secretStore.statusOf(k).hasValue),
       secretKey: aiProviders.secretKeyFor(p.id),
@@ -865,6 +873,38 @@ ipcMain.handle("graphy:ai-providers-get", () => {
   };
 });
 ipcMain.handle("graphy:ai-providers-set", (_e, cfg) => aiProviders.save(cfg || {}));
+
+// 検査だけ（**書かない**）。設定画面が入力中に叩く。
+// 🔴 検査規則をレンダラ側に書き写さないため（二重に持つと必ずずれる）。
+ipcMain.handle("graphy:ai-providers-validate", (_e, cfg) => aiProviders.validate(cfg || {}));
+
+/**
+ * 接続テスト（疎通確認）。
+ *
+ * <p>🔑 **私たちが全社を事前検証することはできない**ので、利用者が自分で確かめる手段を持つ。
+ * 送るのは 1×1 の白画像と固定の指示だけ（`aiGateway` 内の定数）。**患者画像は使わない。**
+ *
+ * <p>🔴 **画像生成の疎通は 1 枚生成＝課金が発生する**ので、ここで確認を取る。
+ * `dialog` は main が描くので、レンダラ（＝プラグイン）からは迂回できない。
+ */
+ipcMain.handle("graphy:ai-test-connection", async (e, payload) => {
+  const providerId = String((payload && payload.providerId) || "");
+  const capability = String((payload && payload.capability) || "");
+  if (capability === "image-to-image") {
+    const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
+    const choice = dialog.showMessageBoxSync(win, {
+      type: "warning",
+      buttons: ["実行する", "取り消す"],
+      defaultId: 1,
+      cancelId: 1,
+      title: "接続を確かめる（画像生成）",
+      message: "画像を 1 枚生成するため、提供元に課金されます。",
+      detail: `提供元: ${providerId}\n1×1 の白い画像と短い指示だけを送ります（患者の画像は送りません）。`,
+    });
+    if (choice !== 0) return { ok: false, verdict: "canceled", error: "canceled" };
+  }
+  return aiGateway.testConnection({ providerId, capability });
+});
 
 // 名前を付けて保存。OS ネイティブのダイアログを使うので、**同名ファイルの上書き確認は
 // OS が標準で出す**（アプリ側で自前実装しない）。保存したパスを返す。取り消しなら null。

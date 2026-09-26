@@ -116,6 +116,37 @@ export interface AiProviderEntry {
   headers?: Record<string, string>;
 }
 
+/**
+ * 疎通確認の結果。
+ *
+ * <p>🔑 `verdict` は**何を直せばよいか**の分類。状態コードをそのまま見せても
+ * 利用者は次の行動を決められない。
+ * <p>🔴 **ヘッダは名前だけ**（値は返ってこない）。認証ヘッダ名は設定で選べるので、
+ * どのヘッダに鍵が載るかは固定できない。
+ */
+export type AiTestResult = {
+  ok: boolean;
+  verdict:
+    | "reachable" | "blocked" | "unreadable-response"
+    | "auth-failed" | "not-found" | "bad-request" | "rate-limited" | "server-error" | "http-error"
+    | "network" | "timeout" | "tls"
+    | "no-api-key" | "config" | "busy" | "too-soon" | "canceled";
+  status?: number;
+  elapsedMs?: number;
+  /** 送った先（`POST https://host/path`）。**組み立てた結果そのもの。** */
+  requestLine?: string;
+  /** 送ったヘッダの名前だけ。 */
+  headerNames?: string[];
+  /** 返ってきた本文の先頭（マスク済み・1000 文字まで）。 */
+  bodyPreview?: string;
+  text?: string;
+  imageBytes?: number;
+  blockReason?: string;
+  plaintext?: boolean;
+  retryAfterMs?: number;
+  error?: string;
+};
+
 export interface AiProvidersConfig {
   providers: AiProviderEntry[];
   /** 用途 → 提供元 id。 */
@@ -210,6 +241,14 @@ export interface GraphyDesktop {
   aiResolve?: (capability: AiCapability) => Promise<AiResolveResult>;
   /** 提供元の一覧と用途ごとの既定。**鍵の値は返らない**（有無だけ）。 */
   aiProvidersGet?: () => Promise<AiProvidersConfig>;
+  /** 検査だけ（書かない）。入力中に叩く。 */
+  aiProvidersValidate?: (cfg: { providers: AiProviderEntry[]; defaults?: Record<string, string> }) =>
+    Promise<{ ok: boolean; problems: string[] }>;
+  /**
+   * 疎通確認。**渡せるのは提供元と用途だけ**——送る指示と画像は main が持つ定数。
+   * これにより、この口を呼べても患者画像を外へ出すことはできない。
+   */
+  aiTestConnection?: (providerId: string, capability: AiCapability) => Promise<AiTestResult>;
   aiProvidersSet?: (cfg: { providers: AiProviderEntry[]; defaults: Record<string, string> }) =>
     Promise<{ ok: boolean; problems: string[] }>;
   /** 名前を付けて保存（OS ダイアログ）。**上書き確認は OS が出す。** */
