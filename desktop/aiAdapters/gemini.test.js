@@ -115,3 +115,34 @@ test("🔴 止められたときは理由を渡す（「返らなかった」と
   assert.equal(ok.blockReason, undefined);
   assert.equal(ok.text, "出た");
 });
+
+// ── 段 5b: 設定で差を吸収する ──────────────────────────────────────────────
+
+test("🔑 Gemini でも認証ヘッダとパスを設定で上書きできる（Vertex 系の互換口）", () => {
+  const provider = {
+    kind: "gemini",
+    endpoint: "https://gw.hosp.test",
+    auth: { header: "authorization", prefix: "Bearer " },
+    paths: { "image-to-text": "/ai/gemini/generate" },
+  };
+  const r = gemini.buildRequest({
+    provider, capability: "image-to-text", model: "m", apiKey: "KEY",
+    prompt: "指示", imageBase64: "aGk=", mimeType: "image/png",
+  });
+  assert.equal(r.path, "/ai/gemini/generate");
+  assert.equal(r.headers.authorization, "Bearer KEY");
+  assert.equal(r.headers["x-goog-api-key"], undefined, "既定の認証ヘッダを残さない");
+});
+
+test("設定が無ければ従来どおり（既定の認証ヘッダとパス）", () => {
+  const r = gemini.buildRequest({
+    capability: "image-to-text", model: "m", apiKey: "KEY",
+    prompt: "指示", imageBase64: "aGk=", mimeType: "image/png",
+  });
+  assert.equal(r.path, "/v1beta/models/m:generateContent");
+  assert.equal(r.headers["x-goog-api-key"], "KEY");
+});
+
+test("Gemini はモデルが常にパスに入る（検査を緩めてはいけない）", () => {
+  assert.equal(gemini.modelInPath({ kind: "gemini" }), true);
+});

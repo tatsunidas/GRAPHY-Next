@@ -232,3 +232,185 @@ test("🔴 openai の提供元へ、用途無しの古い呼び出しは通さ�
   assert.equal(r.ok, false);
   assert.equal(r.error, "unsupported-capability");
 });
+
+// ── 段 5b: 設定が電文と宛先に効く ──────────────────────────────────────────
+//
+// 🔑 **送出を差し替えて、実際に組まれた要求を見る。** ここまでの検査は「組み立て」を
+// 単体で見ていたが、提供元の設定が**解決 → 組み立て → 送出**を通って効いているかは
+// ここでしか確かめられない。🔴 ネットワークには 1 バイトも出さない。
+
+/** 送出を横取りして、渡された引数を記録する。 */
+function stubPost(dir, config, reply) {
+  const g = freshGateway(dir, config);
+  const aiHttp = require("./aiHttp");
+  const calls = [];
+  const original = aiHttp.post;
+  aiHttp.post = async (target, path, headers, body) => {
+    calls.push({ target, path, headers, body });
+    return reply || { statusCode: 200, json: { candidates: [{ content: { parts: [{ text: "OK" }] } }] }, text: "" };
+  };
+  return { ...g, calls, restore: () => { aiHttp.post = original; } };
+}
+
+test("🔑 ポートが宛先に届く（以前は host にポート込みで渡していて名前解決で落ちていた）", async () => {
+  const dir = freshDir();
+  const s = stubPost(dir, {
+    providers: [{ id: "h", kind: "gemini", endpoint: "https://ai.hosp.local:8443",
+                  models: { "image-to-text": "m" } }],
+  });
+  try {
+    s.secretStore.setSecret("ai.provider.h.apiKey", "KEY");
+    const r = await s.aiGateway.generate({ ...REQ, capability: "image-to-text" });
+    assert.equal(r.ok, true);
+    assert.deepEqual(
+      { hostname: s.calls[0].target.hostname, port: s.calls[0].target.port, plaintext: s.calls[0].target.plaintext },
+      { hostname: "ai.hosp.local", port: 8443, plaintext: false },
+    );
+    assert.equal(r.provenance.endpointHost, "ai.hosp.local:8443", "由来にもポートを残す");
+  } finally { s.restore(); }
+});
+
+test("🔑 院内の平文 http へ送れる（そして平文だと申告する）", async () => {
+  const dir = freshDir();
+  const s = stubPost(dir, {
+    providers: [{ id: "ollama", kind: "openai", endpoint: "http://192.168.1.9:11434",
+                  models: { "image-to-text": "llava" } }],
+  }, { statusCode: 200, json: { choices: [{ message: { content: "OK" } }] }, text: "" });
+  try {
+    s.secretStore.setSecret("ai.provider.ollama.apiKey", "KEY");
+    const r = await s.aiGateway.generate({ ...REQ, capability: "image-to-text" });
+    assert.equal(r.ok, true);
+    assert.equal(s.calls[0].target.plaintext, true);
+    assert.equal(s.calls[0].target.port, 11434);
+    assert.equal(r.provenance.plaintext, true, "🔴 平文で出したことを由来に残す");
+    assert.equal(s.aiGateway.resolveCapability("image-to-text").plaintext, true, "画面が警告を出せる");
+  } finally { s.restore(); }
+});
+
+test("🔑 認証ヘッダとパスの上書きが送出まで届く", async () => {
+  const dir = freshDir();
+  const s = stubPost(dir, {
+    providers: [{ id: "r", kind: "openai", endpoint: "https://openrouter.test",
+                  auth: { header: "x-api-key", prefix: "" },
+                  paths: { "image-to-text": "/api/v1/chat/completions" },
+                  models: { "image-to-text": "openai/gpt-4o" } }],
+  }, { statusCode: 200, json: { choices: [{ message: { content: "OK" } }] }, text: "" });
+  try {
+    s.secretStore.setSecret("ai.provider.r.apiKey", "KEY");
+    const r = await s.aiGateway.generate({ ...REQ, capability: "image-to-text" });
+    assert.equal(r.ok, true, `実際: ${JSON.stringify(r)}`);
+    assert.equal(s.calls[0].path, "/api/v1/chat/completions");
+    assert.equal(s.calls[0].headers["x-api-key"], "KEY");
+    assert.equal(s.calls[0].headers.Authorization, undefined);
+  } finally { s.restore(); }
+});
+
+test("🔑 body に入るモデル名はスラッシュを許す（OpenRouter 形式が弾かれていた）", async () => {
+  const dir = freshDir();
+  const s = stubPost(dir, {
+    providers: [{ id: "r", kind: "openai", endpoint: "https://openrouter.test",
+                  models: { "image-to-text": "anthropic/claude-sonnet-4" } }],
+  }, { statusCode: 200, json: { choices: [{ message: { content: "OK" } }] }, text: "" });
+  try {
+    s.secretStore.setSecret("ai.provider.r.apiKey", "KEY");
+    const r = await s.aiGateway.generate({ ...REQ, capability: "image-to-text" });
+    assert.equal(r.ok, true, "以前は invalid-model で送れなかった");
+    assert.equal(JSON.parse(s.calls[0].body.toString("utf8")).model, "anthropic/claude-sonnet-4");
+  } finally { s.restore(); }
+});
+
+test("🔴 パスに入るモデル名はスラッシュを許さない（パス・インジェクション）", async () => {
+  const dir = freshDir();
+  const s = stubPost(dir, {
+    providers: [{ id: "az", kind: "azure-openai", endpoint: "https://h.test",
+                  models: { "image-to-text": "a/../../evil" } }],
+  });
+  try {
+    s.secretStore.setSecret("ai.provider.az.apiKey", "KEY");
+    const r = await s.aiGateway.generate({ ...REQ, capability: "image-to-text" });
+    assert.equal(r.error, "invalid-model");
+    assert.equal(s.calls.length, 0, "送っていないこと");
+  } finally { s.restore(); }
+});
+
+// ── apiVersion の優先順位 ─────────────────────────────────────────────────
+
+test("🔑 提供元の apiVersion が、プラグインの指定より強い（宛先は本体が決める）", async () => {
+  const dir = freshDir();
+  const s = stubPost(dir, {
+    providers: [{ id: "g", kind: "gemini", endpoint: "https://g.test", apiVersion: "v1",
+                  models: { "image-to-text": "m" } }],
+  });
+  try {
+    s.secretStore.setSecret("ai.provider.g.apiKey", "KEY");
+    await s.aiGateway.generate({ ...REQ, capability: "image-to-text", apiVersion: "v1beta" });
+    assert.match(s.calls[0].path, /^\/v1\/models\/m:generateContent$/);
+  } finally { s.restore(); }
+});
+
+test("🔴 プラグインの apiVersion を Gemini 以外へ渡さない（Azure で 404 になる）", async () => {
+  const dir = freshDir();
+  const s = stubPost(dir, {
+    providers: [{ id: "az", kind: "azure-openai", endpoint: "https://h.test",
+                  models: { "image-to-text": "dep" } }],
+  }, { statusCode: 200, json: { choices: [{ message: { content: "OK" } }] }, text: "" });
+  try {
+    s.secretStore.setSecret("ai.provider.az.apiKey", "KEY");
+    // Gemini の語彙をそのまま渡してくるプラグイン。
+    await s.aiGateway.generate({ ...REQ, capability: "image-to-text", apiVersion: "v1beta" });
+    // 黙って無視し、Azure の既定へ落ちること（エラーにはしない＝0.3.0 のプラグインを止めない）。
+    assert.match(s.calls[0].path, /\?api-version=2024-10-21$/);
+  } finally { s.restore(); }
+});
+
+test("提供元の apiVersion は保存時に形を検査済み（.. を通さない）", () => {
+  const dir = freshDir();
+  const { aiProviders } = freshGateway(dir, null);
+  assert.equal(aiProviders.save({
+    providers: [{ id: "g", kind: "gemini", endpoint: "https://g.test",
+                  apiVersion: "v1../..", models: { "image-to-text": "m" } }],
+  }).ok, false);
+});
+
+// ── 空の応答を成功にしない ────────────────────────────────────────────────
+
+test("🔴 200 でも画像も文章も取れなければ失敗にする（設定の誤りが成功に見える経路）", async () => {
+  const dir = freshDir();
+  const s = stubPost(dir, { providers: [GEMINI_A] }, { statusCode: 200, json: { unexpected: true }, text: "" });
+  try {
+    s.secretStore.setSecret("ai.provider.prov-a.apiKey", "KEY");
+    const r = await s.aiGateway.generate({ ...REQ, capability: "image-to-text" });
+    assert.equal(r.ok, false);
+    assert.equal(r.error, "empty-response");
+    assert.deepEqual(r.data, { unexpected: true }, "生の応答は診断のために返す");
+  } finally { s.restore(); }
+});
+
+test("拒否された理由が取れているなら成功として扱う（「返らなかった」とは違う）", async () => {
+  const dir = freshDir();
+  const s = stubPost(dir, { providers: [GEMINI_A] },
+    { statusCode: 200, json: { promptFeedback: { blockReason: "SAFETY" } }, text: "" });
+  try {
+    s.secretStore.setSecret("ai.provider.prov-a.apiKey", "KEY");
+    const r = await s.aiGateway.generate({ ...REQ, capability: "image-to-text" });
+    assert.equal(r.ok, true);
+    assert.equal(r.blockReason, "SAFETY");
+  } finally { s.restore(); }
+});
+
+// ── 鍵の伏せ方 ────────────────────────────────────────────────────────────
+
+test("🔴 エラー本文に鍵が混ざっても外へ出さない（短い鍵でも）", async () => {
+  for (const key of ["sk-verylongkey1234567890", "ab"]) {
+    const dir = freshDir();
+    const s = stubPost(dir, { providers: [GEMINI_A] },
+      { statusCode: 400, json: { error: { message: `bad request with key=${key} and sk-otherleak123456` } }, text: "" });
+    try {
+      s.secretStore.setSecret("ai.provider.prov-a.apiKey", key);
+      const r = await s.aiGateway.generate({ ...REQ, capability: "image-to-text" });
+      assert.equal(r.ok, false);
+      assert.equal(JSON.stringify(r).includes(key), false, `鍵が出ている: ${key}`);
+      assert.equal(JSON.stringify(r).includes("sk-otherleak"), false, "形だけで消せること");
+    } finally { s.restore(); }
+  }
+});

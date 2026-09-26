@@ -158,3 +158,61 @@ test("🔴 拒否された理由を渡す（content_filter は「返らなかっ
   assert.equal(ok.blockReason, undefined);
   assert.equal(ok.text, "出た");
 });
+
+// ── 段 5b: 設定で差を吸収する ──────────────────────────────────────────────
+
+test("🔑 pathStyle だけで Azure の作法にできる（kind は openai のまま）", () => {
+  const p = { kind: "openai", endpoint: "https://hosp.example.test", pathStyle: "azure-deployment" };
+  const r = openai.buildRequest(req({ provider: p, capability: "image-to-text" }));
+  assert.match(r.path, /^\/openai\/deployments\/m\/chat\/completions\?api-version=/);
+  assert.equal(r.headers["api-key"], "KEY");
+  assert.equal(r.headers.Authorization, undefined);
+});
+
+test("🔑 kind:azure-openai と pathStyle:azure-deployment は同じ電文を作る", () => {
+  const a = openai.buildRequest(req({ provider: AZURE, capability: "image-to-text" }));
+  const b = openai.buildRequest(req({
+    provider: { kind: "openai", endpoint: AZURE.endpoint, pathStyle: "azure-deployment" },
+    capability: "image-to-text",
+  }));
+  assert.equal(a.path, b.path);
+  assert.deepEqual(a.headers, b.headers);
+  assert.equal(a.body.toString("utf8"), b.body.toString("utf8"));
+});
+
+test("pathStyle:openai で Azure の kind を公開 API の作法へ戻せる", () => {
+  const p = { kind: "azure-openai", endpoint: "https://x.test", pathStyle: "openai" };
+  const r = openai.buildRequest(req({ provider: p, capability: "image-to-text" }));
+  assert.equal(r.path, "/v1/chat/completions");
+  assert.equal(r.headers.Authorization, "Bearer KEY");
+});
+
+test("🔑 認証ヘッダを設定で差し替えられる（互換サーバが独自の名前を使う場合）", () => {
+  const p = { ...PUBLIC, auth: { header: "x-api-key", prefix: "" } };
+  const r = openai.buildRequest(req({ provider: p, capability: "image-to-text" }));
+  assert.equal(r.headers["x-api-key"], "KEY");
+  assert.equal(r.headers.Authorization, undefined, "既定の Bearer を残さない");
+});
+
+test("🔑 パスを設定で上書きできる（OpenRouter / 互換口）", () => {
+  const p = { ...PUBLIC, paths: { "image-to-text": "/api/v1/chat/completions" } };
+  const r = openai.buildRequest(req({ provider: p, capability: "image-to-text" }));
+  assert.equal(r.path, "/api/v1/chat/completions");
+  // 画像生成の方は上書きしていないので既定のまま。
+  const i2i = openai.buildRequest(req({ provider: p, capability: "image-to-image" }));
+  assert.equal(i2i.path, "/v1/images/edits");
+});
+
+test("🔴 追加ヘッダは認証と Content-Type を上書きできない", () => {
+  const p = { ...PUBLIC, headers: { "authorization": "Bearer EVIL", "openai-beta": "assistants=v2" } };
+  const r = openai.buildRequest(req({ provider: p, capability: "image-to-text" }));
+  assert.equal(r.headers.Authorization, "Bearer KEY");
+  assert.equal(r.headers.authorization, undefined);
+  assert.equal(r.headers["openai-beta"], "assistants=v2");
+});
+
+test("モデル名がパスに入るのは Azure の作法のときだけ", () => {
+  assert.equal(openai.modelInPath({ kind: "openai", endpoint: "https://x.test" }), false);
+  assert.equal(openai.modelInPath({ kind: "azure-openai", endpoint: "https://x.test" }), true);
+  assert.equal(openai.modelInPath({ kind: "openai", endpoint: "https://x.test", pathStyle: "azure-deployment" }), true);
+});

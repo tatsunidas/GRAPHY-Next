@@ -16,6 +16,8 @@
 //
 // 🔴 **`electron` を import しないこと**（CI の Desktop ジョブは npm install しない）。
 
+const wire = require("./wire");
+
 const KIND = "openai";
 const KIND_AZURE = "azure-openai";
 
@@ -29,13 +31,44 @@ function supports(capability) {
   return SUPPORTED.has(capability);
 }
 
-function isAzure(req) {
-  return !!(req.provider && req.provider.kind === KIND_AZURE);
+/**
+ * パスと認証の作法を決める。
+ *
+ * <p>🔑 **`kind: "azure-openai"` と `pathStyle: "azure-deployment"` のどちらでも同じ扱い。**
+ * kind は「電文の系統」を表す既存の入口（互換のため残す）、`pathStyle` は
+ * 「同じ系統の中でのパスの組み方」を設定で選ぶための後から足した口（§14）。
+ * 畳まずに並べているので、既存の設定ファイルもテストもそのまま通る。
+ */
+function effectiveStyle(req) {
+  const p = req.provider || {};
+  if (p.pathStyle === "azure-deployment") return "azure-deployment";
+  if (p.pathStyle === "openai") return "openai";
+  return p.kind === KIND_AZURE ? "azure-deployment" : "openai";
 }
 
-/** 認証ヘッダ。公開 API は Bearer、Azure は `api-key`。 */
+function isAzure(req) {
+  return effectiveStyle(req) === "azure-deployment";
+}
+
+/**
+ * モデル名が URL のパスに入るか。
+ *
+ * <p>Azure はデプロイ名をパスに入れるので**厳格な検査が要る**。公開 API は body に入れるので、
+ * `openai/gpt-4o` のような**スラッシュ入りのモデル名**（OpenRouter 形式）を許せる。
+ */
+function modelInPath(provider) {
+  return effectiveStyle({ provider }) === "azure-deployment";
+}
+
+/**
+ * 既定の認証。**公開 API は Bearer、Azure は `api-key`。** 提供元の設定があればそちらが勝つ。
+ */
+function defaultAuth(req) {
+  return isAzure(req) ? { header: "api-key", prefix: "" } : { header: "Authorization", prefix: "Bearer " };
+}
+
 function authHeaders(req) {
-  return isAzure(req) ? { "api-key": req.apiKey } : { Authorization: `Bearer ${req.apiKey}` };
+  return wire.authHeaders(req.provider || {}, req.apiKey, defaultAuth(req));
 }
 
 /** Azure は `?api-version=` が無いと 404 になる。公開 API では付けない。 */
@@ -71,12 +104,13 @@ function buildChat(req) {
       if (k !== "messages") body[k] = v;
     }
   }
-  const path = isAzure(req)
+  const fallbackPath = isAzure(req)
     ? `/openai/deployments/${encodeURIComponent(req.model)}/chat/completions${query(req)}`
     : "/v1/chat/completions";
+  const own = { "Content-Type": "application/json", ...authHeaders(req) };
   return {
-    path,
-    headers: { "Content-Type": "application/json", ...authHeaders(req) },
+    path: wire.pathFor(req.provider, req.capability, fallbackPath),
+    headers: wire.mergeHeaders(own, req.provider && req.provider.headers),
     body: Buffer.from(JSON.stringify(body), "utf8"),
   };
 }
@@ -119,12 +153,13 @@ function buildImageEdit(req) {
     Buffer.from(`\r\n--${boundary}--\r\n`, "utf8"),
   );
 
-  const path = isAzure(req)
+  const fallbackPath = isAzure(req)
     ? `/openai/deployments/${encodeURIComponent(req.model)}/images/edits${query(req)}`
     : "/v1/images/edits";
+  const own = { "Content-Type": `multipart/form-data; boundary=${boundary}`, ...authHeaders(req) };
   return {
-    path,
-    headers: { "Content-Type": `multipart/form-data; boundary=${boundary}`, ...authHeaders(req) },
+    path: wire.pathFor(req.provider, req.capability, fallbackPath),
+    headers: wire.mergeHeaders(own, req.provider && req.provider.headers),
     body: Buffer.concat(parts),
   };
 }
@@ -201,6 +236,8 @@ function normalize(json) {
 module.exports = {
   KIND,
   KIND_AZURE,
+  effectiveStyle,
+  modelInPath,
   DEFAULT_API_VERSION: undefined, // 公開 API は不要。Azure は DEFAULT_AZURE_API_VERSION
   DEFAULT_AZURE_API_VERSION,
   supports,

@@ -82,6 +82,12 @@ export type AiResolveResult =
       model: string;
       endpointHost: string;
       hasApiKey: boolean;
+      /**
+       * 平文 http で送る宛先か（院内に自分で立てたサーバだけ起こりうる）。
+       *
+       * 🔴 **同意ダイアログで必ず言う。** 患者画素が院内 LAN を暗号化されずに流れる。
+       */
+      plaintext?: boolean;
     }
   | { ok: false; error: string };
 
@@ -96,6 +102,18 @@ export interface AiProviderEntry {
   hasApiKey?: boolean;
   /** 鍵を保存するときのキー名（`secretSet` に渡す）。 */
   secretKey?: string;
+  /** 平文 http の宛先（院内アドレスのみ許される）。画面に印を出す。 */
+  plaintext?: boolean;
+  /** 認証の載せ方。未指定ならアダプタの既定。旧い形の文字列も来る。 */
+  auth?: { header?: string; prefix?: string } | string;
+  /** パスの組み方（`kind` の既定を上書きしたいときだけ）。 */
+  pathStyle?: string;
+  /** API バージョン（Azure は必須・Gemini は `v1beta` 等）。 */
+  apiVersion?: string;
+  /** 用途 → パスの上書き。差し込みは無く、完全置換。 */
+  paths?: Record<string, string>;
+  /** 追加ヘッダ。**UI には出さない**（鍵を貼られるため・設計 §14）。 */
+  headers?: Record<string, string>;
 }
 
 export interface AiProvidersConfig {
@@ -113,6 +131,8 @@ export interface AiProvenance {
   kind: string;
   model: string;
   endpointHost: string;
+  /** 平文 http で送った（院内ホストのみ）。作品の由来として残す。 */
+  plaintext?: boolean;
 }
 
 /**

@@ -18,9 +18,24 @@
 const KIND = "gemini";
 
 /** 公開エンドポイント。企業向け（Vertex 等）は設定の `endpoint` で差し替える（段 3）。 */
+const wire = require("./wire");
+
 const DEFAULT_ENDPOINT = "https://generativelanguage.googleapis.com";
 
 const DEFAULT_API_VERSION = "v1beta";
+
+/** 既定の認証の載せ方。提供元の設定（`auth`）があればそちらが勝つ。 */
+const DEFAULT_AUTH = { header: "x-goog-api-key", prefix: "" };
+
+/**
+ * モデル名が URL のパスに入るか。
+ *
+ * <p>🔴 Gemini は**常にパスに入る**（`/models/<model>:generateContent`）ので、
+ * モデル名の検査は厳格側でなければならない（ゲートウェイが参照する）。
+ */
+function modelInPath() {
+  return true;
+}
 
 /**
  * 用途 → 要求する応答の種類。
@@ -77,10 +92,15 @@ function buildRequest(req) {
     Object.assign(body.generationConfig, req.providerOptions);
   }
 
+  const provider = req.provider || {};
+  const own = {
+    "Content-Type": "application/json",
+    ...wire.authHeaders(provider, req.apiKey, DEFAULT_AUTH),
+  };
   return {
-    path: `/${apiVersion}/models/${req.model}:generateContent`,
-    // 認証の載せ方は提供元ごとに違うので、アダプタが持つ。
-    headers: { "Content-Type": "application/json", "x-goog-api-key": req.apiKey },
+    path: wire.pathFor(provider, req.capability, `/${apiVersion}/models/${req.model}:generateContent`),
+    // 認証の載せ方は提供元ごとに違う。既定はここが持ち、設定があればそれが勝つ。
+    headers: wire.mergeHeaders(own, provider.headers),
     body: Buffer.from(JSON.stringify(body), "utf8"),
   };
 }
@@ -145,6 +165,8 @@ function normalize(json) {
 
 module.exports = {
   KIND,
+  DEFAULT_AUTH,
+  modelInPath,
   DEFAULT_ENDPOINT,
   DEFAULT_API_VERSION,
   /**

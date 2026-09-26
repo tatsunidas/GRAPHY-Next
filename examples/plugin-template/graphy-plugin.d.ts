@@ -1144,6 +1144,8 @@ export interface AiProvenance {
   kind: string;
   model: string;
   endpointHost: string;
+  /** 平文 http で送った（院内に立てたサーバのみ起こりうる）。 */
+  plaintext?: boolean;
 }
 
 /**

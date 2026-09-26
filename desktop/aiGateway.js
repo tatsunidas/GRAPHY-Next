@@ -14,7 +14,7 @@
 //   それらは全部プラグイン側の TypeScript に置いて vitest で試験する。
 //   main.js には単体テストの仕組みが無いため、テストできない層を厚くしない。
 
-const https = require("node:https");
+const aiHttp = require("./aiHttp");
 const secretStore = require("./secretStore");
 const gemini = require("./aiAdapters/gemini");
 const openai = require("./aiAdapters/openai");
@@ -29,18 +29,24 @@ const ADAPTERS = {
 
 /** 旧名（`statusOf` の既存呼び出し互換のために公開したまま）。 */
 const SECRET_KEY = aiProviders.LEGACY_SECRET_KEY;
-const TIMEOUT_MS = 120000;
-/** 画像生成のレスポンスは base64 で数 MB になる。青天井にはしない。 */
-const MAX_RESPONSE_BYTES = 20 * 1024 * 1024;
 /** 送信画像の上限。これを超えるものはプラグイン側の縮小漏れなので、ここで弾く。 */
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
 /** 同時実行は 1 本に限る。誤操作や暴走ループで課金が積み上がるのを防ぐ。 */
 let inFlight = false;
 
-/** URL パスに入る値なので、モデル名は形を検査する（パス・インジェクション防止）。 */
-function validModel(model) {
-  return typeof model === "string" && model.length > 0 && model.length <= 120 && /^[A-Za-z0-9._-]+$/.test(model);
+/**
+ * モデル名の形。**入る場所で厳しさを変える。**
+ *
+ * <p>🔴 **URL のパスに入るときは厳格**（パス・インジェクション防止）。Gemini は常にパス、
+ * Azure はデプロイ名をパスに入れる。
+ * <p>🔑 **body に入るときはスラッシュを許す。** OpenRouter 系のモデル名は `openai/gpt-4o` の形で、
+ * 厳格側だけで検査していると**足せるはずの提供元が登録できない**（一般化を妨げていた 1 つ）。
+ * それでも制御文字・引用符・空白は許さない（JSON の中に入るため）。
+ */
+function validModel(model, inPath) {
+  if (typeof model !== "string" || model.length === 0 || model.length > 120) return false;
+  return inPath ? /^[A-Za-z0-9._-]+$/.test(model) : /^[A-Za-z0-9._\-\/:]+$/.test(model);
 }
 
 /**
@@ -52,7 +58,9 @@ function validApiVersion(v) {
   // 🔑 使わない提供元もある（OpenAI の公開 API はパスに版を持たない）。未指定は許す。
   //    Azure の `2024-10-21` のような日付形も通す必要がある。
   if (v == null) return true;
-  return typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9.-]{0,31}$/.test(v);
+  // 🔴 `..` はパス要素に入ると 1 つ上の階層を指す。`.` を許しているので明示的に弾く。
+  if (typeof v !== "string" || v.includes("..")) return false;
+  return /^[A-Za-z0-9][A-Za-z0-9.-]{0,31}$/.test(v);
 }
 
 /**
@@ -61,63 +69,27 @@ function validApiVersion(v) {
  */
 function mask(text, key) {
   let s = String(text == null ? "" : text);
-  if (key && key.length >= 8) s = s.split(key).join("***REDACTED***");
+  // 🔴 **長さの下限を付けない。** 短い鍵（試験用の値や院内サーバの簡易鍵）が素通りする。
+  if (key) s = s.split(key).join("***REDACTED***");
+  s = scrubSecrets(s);
   return s.length > 2000 ? `${s.slice(0, 2000)}…` : s;
 }
 
 /**
- * POST する。**認証ヘッダと本文の形はアダプタが決める。**
+ * 鍵らしい文字列を消す。
  *
- * <p>🔑 提供元ごとに認証の載せ方が違う（`x-goog-api-key` / `Authorization: Bearer` /
- * Azure の `api-key`）。ここで 1 つに決め打ちにすると、提供元を足すたびにこの層を触ることになる。
- *
- * @param headers アダプタが組んだヘッダ（`Content-Type` と認証を含む）
- * @param body    送る本文（Buffer）。JSON でも multipart でもここでは区別しない
+ * <p>🔑 **鍵そのものと一致しなくても消す。** 提供元が鍵を一部だけ（`sk-abc…XYZ`）返すことがあり、
+ * `auth.header` を設定で選べる以上、**相手が本文に反射する経路を全部は読めない**。
+ * だから形で消す。
  */
-function post(host, pathname, headers, body) {
-  return new Promise((resolve, reject) => {
-    const req = https.request(
-      {
-        host,
-        path: pathname,
-        method: "POST",
-        headers: {
-          "Content-Length": body.length,
-          "User-Agent": "GRAPHY-Next",
-          ...headers,
-        },
-        timeout: TIMEOUT_MS,
-      },
-      (res) => {
-        const chunks = [];
-        let size = 0;
-        res.on("data", (c) => {
-          size += c.length;
-          if (size > MAX_RESPONSE_BYTES) {
-            res.destroy();
-            reject(new Error(`レスポンスが上限(${MAX_RESPONSE_BYTES} バイト)を超えました`));
-            return;
-          }
-          chunks.push(c);
-        });
-        res.on("end", () => {
-          const text = Buffer.concat(chunks).toString("utf8");
-          let json = null;
-          try {
-            json = JSON.parse(text);
-          } catch {
-            /* 下で statusCode とともに扱う */
-          }
-          resolve({ statusCode: res.statusCode, json, text });
-        });
-      },
-    );
-    req.on("error", reject);
-    req.on("timeout", () => req.destroy(new Error(`タイムアウト(${TIMEOUT_MS} ms)`)));
-    req.end(body);
-  });
+function scrubSecrets(text) {
+  return String(text)
+    .replace(/\b(sk|xai|gsk|sk-ant|sk-proj)-[A-Za-z0-9_-]{6,}/g, "***REDACTED***")
+    .replace(/\bAIza[0-9A-Za-z_-]{10,}/g, "***REDACTED***")
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]{6,}=*/gi, "Bearer ***REDACTED***");
 }
 
+// 送出は aiHttp.js（テストで差し替えられるようにモジュール越しに呼ぶ）。
 /**
  * 画像 1 枚 ＋ 指示を送り、**提供元非依存の形**で返す。
  *
@@ -142,22 +114,29 @@ async function generate(req) {
 
   const apiKey = secretForProvider(provider.id);
   if (!apiKey) return { ok: false, error: "no-api-key" };
-  if (!validModel(model)) return { ok: false, error: "invalid-model" };
-  const apiVersion = req.apiVersion == null ? adapter.DEFAULT_API_VERSION : req.apiVersion;
+  if (!validModel(model, adapter.modelInPath(provider))) return { ok: false, error: "invalid-model" };
+  const apiVersion = resolveApiVersion(provider, adapter, req);
   if (!validApiVersion(apiVersion)) return { ok: false, error: "invalid-api-version" };
   if (typeof req.prompt !== "string" || req.prompt.length === 0) return { ok: false, error: "empty-prompt" };
   if (typeof req.imageBase64 !== "string" || req.imageBase64.length === 0) return { ok: false, error: "empty-image" };
   if (req.imageBase64.length > MAX_IMAGE_BYTES) return { ok: false, error: "image-too-large" };
   if (inFlight) return { ok: false, error: "busy" };
 
-  const host = hostOf(provider.endpoint);
+  const target = targetOf(provider);
   const built = adapter.buildRequest({ ...req, model, apiVersion, apiKey, provider });
   if (built.error) return { ok: false, error: built.error, kind: "capability" };
-  const provenance = { providerId: provider.id, kind: provider.kind, model, endpointHost: host };
+  const provenance = {
+    providerId: provider.id,
+    kind: provider.kind,
+    model,
+    endpointHost: target.display,
+    // 🔑 平文で送ったことは作品の由来として残す（院内ホストだけ起こりうる）。
+    ...(target.plaintext ? { plaintext: true } : {}),
+  };
 
   inFlight = true;
   try {
-    const res = await post(host, built.path, built.headers, built.body);
+    const res = await aiHttp.post(target, built.path, built.headers, built.body);
     if (res.statusCode !== 200) {
       const msg = (res.json && res.json.error && res.json.error.message) || res.text || `HTTP ${res.statusCode}`;
       // 認証失敗だけは呼び出し側で「鍵を入れ直して」と案内したいので区別する。
@@ -168,6 +147,13 @@ async function generate(req) {
     if (!res.json) return { ok: false, error: "invalid-json", status: 200 };
 
     const norm = adapter.normalize(res.json);
+    // 🔴 **何も取れていないのに成功を返さない。** 200 が返っても中身が読めないことがある
+    //    （`paths` が別の API を指している等）。成功として返すと、プラグインは
+    //    「成功したが何も無い」を受け取り、**設定の誤りが成功として報告される**。
+    if (!norm.image && !norm.text && !norm.blockReason) {
+      console.error(`[ai] ${provider.id}: 応答から画像も文章も取れませんでした`);
+      return { ok: false, error: "empty-response", status: 200, data: res.json };
+    }
     return {
       ok: true,
       image: norm.image,
@@ -218,6 +204,22 @@ function resolvePlan(req) {
   return { ok: true, provider: fallback.provider, adapter, model: req.model };
 }
 
+/**
+ * 使う API バージョンを決める。
+ *
+ * <p>🔴 **提供元の設定がいちばん強い。** これは宛先（URL）に入る値であり、
+ * 「宛先は本体が決める」（§3.1）の一部だから——呼び出し側に決めさせない。
+ * <p>🔴 **プラグインの指定は Gemini のときだけ見る。** `apiVersion` は Gemini の語彙で入った
+ * 項目なので、そのまま Azure へ渡すと `?api-version=v1beta` で 404 になる。
+ * 用途なし呼び出しを Gemini 以外へ流さないのと同じ理由（黙って無視し、エラーにはしない
+ * ——0.3.0 のプラグインを止めないため）。
+ */
+function resolveApiVersion(provider, adapter, req) {
+  if (provider.apiVersion != null) return provider.apiVersion;
+  if (req.apiVersion != null && adapter.acceptsLegacyRequest) return req.apiVersion;
+  return adapter.DEFAULT_API_VERSION;
+}
+
 /** その提供元の鍵。出荷時の Gemini は旧名も見る（版を上げて鍵が消えたように見えるのを防ぐ）。 */
 function secretForProvider(providerId) {
   for (const key of aiProviders.secretKeyCandidates(providerId)) {
@@ -227,12 +229,26 @@ function secretForProvider(providerId) {
   return null;
 }
 
-/** `https://host` からホスト名だけを取る。検査済みなので失敗しない前提。 */
-function hostOf(endpoint) {
+/**
+ * 提供元の宛先。**ホスト名・ポート・平文かどうかを分けて持つ。**
+ *
+ * <p>🔑 `display` は画面（同意ダイアログ）とログに出す表記。**ポートを含める**——
+ * 同じホストの別ポートに別のモデルが立っていることがあり、宛先が同じに見えてはいけない。
+ */
+function targetOf(provider) {
+  const endpoint = provider.endpoint;
   try {
-    return new URL(endpoint).host;
+    const u = new URL(endpoint);
+    const plaintext = u.protocol === "http:";
+    return {
+      hostname: u.hostname,
+      port: u.port ? Number(u.port) : plaintext ? 80 : 443,
+      plaintext,
+      display: u.host,
+    };
   } catch {
-    return endpoint.replace(/^https:\/\//, "");
+    const host = String(endpoint).replace(/^https?:\/\//, "");
+    return { hostname: host, port: 443, plaintext: false, display: host };
   }
 }
 
@@ -254,7 +270,9 @@ function resolveCapability(capability) {
     label: r.provider.label,
     kind: r.provider.kind,
     model: r.model,
-    endpointHost: hostOf(r.provider.endpoint),
+    endpointHost: targetOf(r.provider).display,
+    // 🔑 画面（同意ダイアログ）が「平文で出ます」と言えるようにする。
+    ...(r.provider.plaintext ? { plaintext: true } : {}),
     hasApiKey: !!secretForProvider(r.provider.id),
   };
 }
