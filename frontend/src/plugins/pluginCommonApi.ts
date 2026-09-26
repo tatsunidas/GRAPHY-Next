@@ -139,7 +139,15 @@ export async function runBackendJob(
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
-  const url = `/api/plugin-jobs/${encodeURIComponent(started.jobId)}`;
+  return pollPluginJob(started.jobId, opts);
+}
+
+/**
+ * 投入済みのジョブ（`/api/plugin-jobs/{jobId}`）が終わるまで待つ。プラグインの JAR のジョブ（H45）と、
+ * 本体がプラグインのために走らせる処理（H48 の動画の取り込み）の両方が同じ口を使う。
+ */
+export async function pollPluginJob(jobId: string, opts: PluginJobOptions = {}): Promise<PluginJobOutcome> {
+  const url = `/api/plugin-jobs/${encodeURIComponent(jobId)}`;
   let cancelSent = false;
   const pollMs = Math.max(100, opts.pollMs ?? 400);
   for (;;) {

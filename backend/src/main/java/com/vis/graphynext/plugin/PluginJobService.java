@@ -132,22 +132,45 @@ public class PluginJobService {
      */
     public Status submit(String pluginId, Map<String, Object> payload) {
         registry.checkRunnable(pluginId);
+        Map<String, Object> args = new HashMap<>(payload == null ? Map.of() : payload);
+        return submitTask(pluginId, ctx -> {
+            args.put(PROGRESS_KEY, ctx.progress());
+            args.put(CANCELLED_KEY, ctx.cancelled());
+            return registry.run(pluginId, args);
+        });
+    }
+
+    /** ジョブの中から見える進み具合の口と取り消しの問い合わせ。 */
+    public record TaskContext(BiConsumer<Double, String> progress, BooleanSupplier cancelled) {
+    }
+
+    /** ジョブとして走らせる処理。 */
+    @FunctionalInterface
+    public interface Task {
+        Object run(TaskContext ctx) throws Exception;
+    }
+
+    /**
+     * <b>本体の処理</b>をプラグインのジョブとして走らせる（プラグインのために本体が行う重い処理。
+     * 例: H48 の動画の取り込み）。状態・取り消しの口はプラグインの JAR と同じ
+     * （{@code /api/plugin-jobs/{jobId}}）ので、画面側は 1 つの待ち方で済む。
+     *
+     * @param pluginId 依頼したプラグイン（状態に出すだけ。存在の確認は呼び出し側が行う）
+     */
+    public Status submitTask(String pluginId, Task task) {
         sweep();
         Job job = new Job(UUID.randomUUID().toString(), pluginId);
         jobs.put(job.id, job);
-        Map<String, Object> args = new HashMap<>(payload == null ? Map.of() : payload);
         BiConsumer<Double, String> progress = (p, msg) -> {
             if (p != null && Double.isFinite(p)) job.progress = Math.max(0, Math.min(1, p));
             if (msg != null) job.message = msg;
         };
-        BooleanSupplier cancelled = job.cancelled::get;
-        args.put(PROGRESS_KEY, progress);
-        args.put(CANCELLED_KEY, cancelled);
-        pool.submit(() -> execute(job, args));
+        TaskContext ctx = new TaskContext(progress, job.cancelled::get);
+        pool.submit(() -> execute(job, task, ctx));
         return job.status();
     }
 
-    private void execute(Job job, Map<String, Object> args) {
+    private void execute(Job job, Task task, TaskContext ctx) {
         if (job.cancelled.get()) {
             finish(job, State.CANCELLED, null, null);
             return;
@@ -155,7 +178,7 @@ public class PluginJobService {
         job.state = State.RUNNING;
         job.startedAt = System.currentTimeMillis();
         try {
-            Object result = registry.run(job.pluginId, args);
+            Object result = task.run(ctx);
             // 取り消しを受けたプラグインが途中の結果を返しても、「取り消し」として見せる
             finish(job, job.cancelled.get() ? State.CANCELLED : State.DONE, result, null);
         } catch (Exception e) {

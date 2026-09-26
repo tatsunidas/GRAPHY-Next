@@ -119,6 +119,30 @@ import type {
   PluginPickFilesOptions,
 } from "./pluginCommonApi";
 export type { PickFilesResult, PluginJobOptions, PluginJobOutcome, PluginPatient, PluginPickFilesOptions };
+import type {
+  PluginFrameValues,
+  PluginFrameValuesRead,
+  PluginFrameValuesSeries,
+  PluginVideoConsentRequest,
+  PluginVideoConsentResult,
+  PluginVideoImportOutcome,
+  PluginVideoImportRequest,
+  PluginVideoImportResult,
+  PluginVideoPatient,
+  PluginVideoProbe,
+} from "./pluginVideoApi";
+export type {
+  PluginFrameValues,
+  PluginFrameValuesRead,
+  PluginFrameValuesSeries,
+  PluginVideoConsentRequest,
+  PluginVideoConsentResult,
+  PluginVideoImportOutcome,
+  PluginVideoImportRequest,
+  PluginVideoImportResult,
+  PluginVideoPatient,
+  PluginVideoProbe,
+};
 
 export type PluginSurface =
   | "viewer2d.menu"
@@ -228,6 +252,28 @@ interface PluginHostBase {
      * これを呼ぶのはプラグインが別の経路で DB を変えたときだけ。
      */
     notifyChanged: (detail?: { studyUids?: string[]; patientId?: string }) => void;
+  };
+  /**
+   * **動画の取り込み**（H47〜H49）。standalone 専用（web は 501）。
+   *
+   * <p>🔴 **DICOM はプラグインに書かせない**（H4b / H9 と同じ）。変換・DICOM・UID・患者属性・出所は本体が書き、
+   * 保管庫へ書く前に本体が**必ず**確認ダイアログを出す。流れ:
+   * `probe`（重複の確認）→ `requestImportConsent`（ダイアログ 1 回）→ 1 本ずつ `importAsDicom`。
+   * 札はダイアログで見せた**患者・ファイル・書くもの**の範囲でしか使えない。
+   */
+  video: {
+    /** H47: 諸元・指紋（SHA-256）・既に取り込み済みか。本体の ffmpeg で調べる（ffprobe 不要）。 */
+    probe: (path: string) => Promise<PluginVideoProbe>;
+    /** H48（前半）: 本体の確認ダイアログを出し、同意の札を返す。取り消しは `cancelled`。 */
+    requestImportConsent: (req: PluginVideoConsentRequest) => Promise<PluginVideoConsentResult>;
+    /**
+     * H48（後半）: 1 本取り込む（ジョブ。進み具合・取り消しあり）。同じ動画（同じ SHA-256）が既にあれば
+     * 書かずに `duplicate: true`。`frameValues` を渡すと「フレームごとの値」の SR も書く（長さが動画の
+     * フレーム数と違えば SR だけ書かず `frameValuesError`）。成功すると一覧の読み直しを本体が知らせる。
+     */
+    importAsDicom: (req: PluginVideoImportRequest, opts?: PluginJobOptions) => Promise<PluginVideoImportOutcome>;
+    /** H49: その動画に、このプラグインが書いた「フレームごとの値」を読む。無ければ null。 */
+    readFrameValues: (sopInstanceUid: string) => Promise<PluginFrameValuesRead | null>;
   };
 }
 
@@ -922,7 +968,7 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
  * `launchPlugin` が一箇所で注入する。呼び出し側に作らせると、マニフェストの渡し忘れが
  * そのまま権限チェックの素通りになる。
  */
-export type PluginHostSeed = DistributiveOmit<PluginHost, "ai" | "file" | "runBackendJob" | "db">;
+export type PluginHostSeed = DistributiveOmit<PluginHost, "ai" | "file" | "runBackendJob" | "db" | "video">;
 
 /**
  * プラグイン UI バンドル（ES モジュール）が公開する契約。

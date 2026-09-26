@@ -14,6 +14,7 @@ import { DEMO_MODULES, MOCK_ENABLED, MOCK_MANIFESTS } from "./mockPlugins";
 import { requestAiGeneration, type AiGenerationOptions } from "./pluginAiApi";
 import { saveFileAs } from "./pluginFileApi";
 import { notifyDbChanged, pickFiles, runBackendJob, searchPatients } from "./pluginCommonApi";
+import { importVideoAsDicom, probeVideo, readVideoFrameValues, requestVideoImportConsent } from "./pluginVideoApi";
 
 let manifestsCache: Promise<PluginManifest[]> | null = null;
 
@@ -98,6 +99,13 @@ function withHostApis(m: PluginManifest, host: PluginHostSeed): PluginHost {
     db: {
       searchPatients,
       notifyChanged: (detail) => notifyDbChanged(m.id, detail),
+    },
+    // H47〜H49: 出所（id・名前）はマニフェストから本体が入れる。プラグインに名乗らせない
+    video: {
+      probe: (path) => probeVideo(m.id, path),
+      requestImportConsent: (req) => requestVideoImportConsent({ id: m.id, name: m.name }, req),
+      importAsDicom: (req, opts) => importVideoAsDicom(m.id, req, opts),
+      readFrameValues: (sop) => readVideoFrameValues(m.id, sop),
     },
   } as PluginHost;
 }

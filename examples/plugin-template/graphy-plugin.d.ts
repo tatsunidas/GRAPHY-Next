@@ -1105,6 +1105,121 @@ interface PluginHostBase {
      */
     notifyChanged: (detail?: { studyUids?: string[]; patientId?: string }) => void;
   };
+  /**
+   * **動画の取り込み**（H47〜H49・**0.3.0 以降**）。standalone 専用。
+   *
+   * <p>🔴 **DICOM はプラグインに書かせない**。変換・DICOM・UID・患者属性・出所は本体が書き、保管庫へ書く前に
+   * 本体が**必ず**確認ダイアログを出す。流れ: `probe`（重複の確認）→ `requestImportConsent`（ダイアログ 1 回）
+   * → 1 本ずつ `importAsDicom`。札はダイアログで見せた**患者・ファイル・書くもの**の範囲でしか使えない。
+   */
+  video: {
+    /** H47: 諸元・指紋（SHA-256）・既に取り込み済みか。本体の ffmpeg で調べる。 */
+    probe: (path: string) => Promise<PluginVideoProbe>;
+    /** H48（前半）: 本体の確認ダイアログを出し、同意の札を返す。取り消しは `cancelled`。 */
+    requestImportConsent: (req: PluginVideoConsentRequest) => Promise<PluginVideoConsentResult>;
+    /**
+     * H48（後半）: 1 本取り込む（ジョブ）。同じ動画が既にあれば書かずに `duplicate: true`。
+     * `frameValues` を渡すと「フレームごとの値」の SR も書く（長さが動画のフレーム数と違えば SR だけ書かない）。
+     */
+    importAsDicom: (req: PluginVideoImportRequest, opts?: PluginJobOptions) => Promise<PluginVideoImportOutcome>;
+    /** H49: その動画に、このプラグインが書いた「フレームごとの値」を読む。無ければ null。 */
+    readFrameValues: (sopInstanceUid: string) => Promise<PluginFrameValuesRead | null>;
+  };
+}
+
+/** `host.video.probe()` の結果（H47）。 */
+export interface PluginVideoProbe {
+  path: string;
+  fileName: string;
+  sizeBytes: number;
+  /** 元ファイルの SHA-256（16 進）。 */
+  sha256: string;
+  codec: string;
+  width: number;
+  height: number;
+  fps: number;
+  /** 数え直したフレーム数。 */
+  frameCount: number;
+  durationSec: number;
+  /** 同じ動画が既にあればその所在（あれば取り込まれない）。 */
+  alreadyImported: { sopInstanceUid: string; studyInstanceUid: string; patientId: string; patientName: string } | null;
+}
+
+/** 患者の指定（H48）。既存（`db.searchPatients` の `patientKey`）か新しい患者か。 */
+export type PluginVideoPatient =
+  | { patientKey: string }
+  | { create: { patientId: string; patientName?: string; birthDate?: string; sex?: string } };
+
+/** フレームごとの値の 1 系列（フレーム 1〜N の順）。 */
+export interface PluginFrameValuesSeries {
+  /** 英数字と _ の 1〜16 文字。 */
+  key: string;
+  label: string;
+  /** UCUM。無次元は "1"（既定）。 */
+  unit?: string;
+  values: number[];
+}
+
+/** フレームごとの値（H48）。系列の長さは動画のフレーム数と一致すること。 */
+export interface PluginFrameValues {
+  series: PluginFrameValuesSeries[];
+  params?: Record<string, string>;
+}
+
+/** `host.video.requestImportConsent()` の要求（確認ダイアログに出す中身）。 */
+export interface PluginVideoConsentRequest {
+  patient: PluginVideoPatient;
+  paths: string[];
+  /** `"US"` は US Multi-frame。既定は Video Photographic。 */
+  modality?: "US";
+  /** フレームごとの値の SR も書くなら、その説明（ダイアログにそのまま出る）。 */
+  frameValues?: { description: string };
+}
+
+export type PluginVideoConsentResult =
+  | { ok: true; consentToken: string }
+  | { ok: false; cancelled?: boolean; error?: string };
+
+/** `host.video.importAsDicom()` の 1 本分の要求。 */
+export interface PluginVideoImportRequest {
+  consentToken: string;
+  path: string;
+  /** 同意のときと同じ指定であること。 */
+  patient: PluginVideoPatient;
+  modality?: "US";
+  /** 同じ取り込みの 2 本目以降は 1 本目の `studyInstanceUid` を渡すと同じ検査に入る。 */
+  studyInstanceUid?: string;
+  studyDescription?: string;
+  seriesDescription?: string;
+  frameValues?: PluginFrameValues;
+}
+
+/** `host.video.importAsDicom()` の 1 本分の結果。 */
+export interface PluginVideoImportResult {
+  duplicate: boolean;
+  sopInstanceUid: string;
+  seriesInstanceUid: string | null;
+  studyInstanceUid: string;
+  patientId: string;
+  numberOfFrames: number;
+  transcoded: boolean;
+  frameValuesSopInstanceUid: string | null;
+  /** SR を書けなかった理由（動画は取り込まれている）。 */
+  frameValuesError: string | null;
+}
+
+export type PluginVideoImportOutcome =
+  | { ok: true; result: PluginVideoImportResult }
+  | { ok: false; cancelled?: boolean; error?: string };
+
+/** `host.video.readFrameValues()` の結果（H49）。 */
+export interface PluginFrameValuesRead {
+  sopInstanceUid: string;
+  videoSopInstanceUid: string;
+  producerId: string;
+  contentDate: string;
+  series: { key: string; label: string; unit: string; values: number[] }[];
+  params: Record<string, string>;
 }
 
 /** `host.file.pickFiles()` の引数（H43）。 */
