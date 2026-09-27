@@ -13,10 +13,12 @@
  * </ul>
  * 設計: `fw/plugin-architecture.md`（host API の表）。
  */
+import { fetchInstances, fetchSeries, fetchStudies, type Study } from "../api";
 import { desktop, type PickFilesResult } from "../desktopBridge";
 import { emitDbChanged } from "../dbEvents";
 import { httpGet, httpSend } from "../http";
 import { log } from "../log";
+import { isVideoInstance } from "../viewer/seriesRenderable";
 
 export type { PickFilesResult };
 
@@ -81,6 +83,71 @@ export async function searchPatients(query: string): Promise<PluginPatient[]> {
       studyCount: Number(p.numberOfStudies) || 0,
     }))
     .filter((p) => p.patientKey !== "");
+}
+
+/** H51 の 1 件（保管庫にある動画 1 本）。 */
+export interface PluginVideoEntry {
+  /** H44 と同じ規則（patientId、無ければ氏名）。プラグインの保存領域の鍵にそのまま使える。 */
+  patientKey: string;
+  patientId: string;
+  patientName: string;
+  studyUid: string;
+  /** YYYYMMDD（無ければ空）。 */
+  studyDate: string;
+  studyDescription: string;
+  seriesUid: string;
+  seriesNumber: number | null;
+  seriesDescription: string;
+  modality: string;
+  sopInstanceUid: string;
+}
+
+/** H51 の問い合わせ: 検査 1 つ、または患者 1 人。 */
+export type PluginVideoListQuery = { studyUid: string } | { patientKey: string };
+
+/**
+ * 保管庫にある**動画**を並べる（H51・読み取りのみ）。検査（例: メイン画面で選んだ検査）か患者で引く。
+ *
+ * <p>動画の判定は 2D ビューアと同じ `isVideoInstance`（Video 系 SOP クラス、または H.264 等で包まれた
+ * US Multi-frame など）。新しい検査から順に、検査の中はシリーズ番号の順。
+ */
+export async function listVideos(query: PluginVideoListQuery): Promise<PluginVideoEntry[]> {
+  let studies: Study[];
+  if ("studyUid" in query) {
+    if (!query.studyUid) return [];
+    studies = (await fetchStudies({ studyInstanceUid: query.studyUid })).filter((s) => s.studyInstanceUid === query.studyUid);
+  } else {
+    const key = query.patientKey.trim();
+    if (!key) return [];
+    // patientKey は patientId（無ければ氏名）。本体の検索は部分一致もあり得るので完全一致に絞る
+    const byId = (await fetchStudies({ patientId: key })).filter((s) => (s.patientId ?? "") === key);
+    studies = byId.length > 0 ? byId : (await fetchStudies({ patientName: key })).filter((s) => !s.patientId && s.patientName === key);
+  }
+  studies.sort((a, b) => (b.studyDate ?? "").localeCompare(a.studyDate ?? ""));
+  const out: PluginVideoEntry[] = [];
+  for (const st of studies) {
+    const series = [...(await fetchSeries(st.studyInstanceUid))].sort((a, b) => (a.seriesNumber ?? 0) - (b.seriesNumber ?? 0));
+    for (const se of series) {
+      const instances = await fetchInstances(st.studyInstanceUid, se.seriesInstanceUid);
+      for (const inst of instances) {
+        if (!isVideoInstance(inst)) continue;
+        out.push({
+          patientKey: st.patientId || st.patientName || "",
+          patientId: st.patientId ?? "",
+          patientName: st.patientName ?? "",
+          studyUid: st.studyInstanceUid,
+          studyDate: st.studyDate ?? "",
+          studyDescription: st.studyDescription ?? "",
+          seriesUid: se.seriesInstanceUid,
+          seriesNumber: se.seriesNumber ?? null,
+          seriesDescription: se.seriesDescription ?? "",
+          modality: se.modality ?? "",
+          sopInstanceUid: inst.sopInstanceUid,
+        });
+      }
+    }
+  }
+  return out;
 }
 
 /**
