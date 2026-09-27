@@ -851,6 +851,7 @@ export const en: Record<string, string> = {
   "roiMgr.opSplit": "SPLIT (3D connected components) → new Mask (segment per component)",
   "roiMgr.splitConn": "Split connectivity (26=all / 18=face+edge / 6=face only. Higher links diagonal touches, reducing over-splitting)",
   "roiMgr.opFailed": "Operation failed. Check that selected masks share the same series/stack.",
+  "pluginWindow.keepOpen": "Keep open",
   "pluginVideo.consent.title": "A plugin will import videos into the archive",
   "pluginVideo.consent.plugin": "Plugin",
   "pluginVideo.consent.patient": "Patient",

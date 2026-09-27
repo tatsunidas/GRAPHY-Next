@@ -830,6 +830,13 @@ export interface PluginWindowHandle {
   /** 閉じられたときに呼ばれる（ユーザーが × を押した場合も含む）。 */
   onClose(listener: () => void): void;
   readonly closed: boolean;
+  /**
+   * H52: × で閉じる前の確認。`fn` が文言を返したら、本体が窓の中に確認を出し、「閉じる」を選んだときだけ閉じる
+   * （null なら確認なしで閉じる）。長い処理の途中で誤って閉じないために使う。`close()` を直接呼んだときは効かない。
+   */
+  setCloseGuard?(fn: (() => string | null) | null): void;
+  /** H52: この窓を最前面へ出す（同じものを 2 枚開かず、開いている窓を見せるときなど）。 */
+  focus?(): void;
 }
 
 export interface PluginWindowOptions {

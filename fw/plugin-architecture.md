@@ -289,6 +289,7 @@ H1・H2 は実質「これを本番向けの契約として切り出す」作業
 | **H49** ✅ | **フレームごとの値を読む** | `video.readFrameValues(sop) => PluginFrameValuesRead \| null` | backend `GET /api/plugins/{id}/video/frame-values/{sop}`。**そのプラグインが書いたもの**だけを読む（UID が決め打ちなので保管庫の索引で引ける。SR の中の参照先が違えば null） | ✅（standalone の保管庫にあるもの） |
 | **H50** ✅ | **本体の REST の基点** | `host.apiBase: string` | 全ての host に入る（`withHostApis`・`apiBase()`）。`ViewerTarget.apiBase` と同じ値。**メイン画面の host からも** `/api/instances/{sop}/rendered` などを組み立てられるので、取り込んだ動画を 2D ビューアを開かずに扱える（UVS の「取り込み → そのまま要約」） | ✅ |
 | **H51** ✅ | **保管庫の動画を並べる** | `db.listVideos({studyUid} \| {patientKey}) => PluginVideoEntry[]` | 読み取りのみ。既存の `/api/studies`・`/series`・`/instances` を束ね、2D ビューアと同じ `isVideoInstance` で動画だけ拾う（新しい検査から）。メイン画面の `selectedStudyUid` と組み合わせて、**取り込み済みの動画をメイン画面から開き直せる**（UVS の「取り込み済みの動画を要約」。2026-09-27 ユーザ要望） | ✅ |
+| **H52** ✅ | **窓を閉じる前の確認・最前面へ** | `PluginWindowHandle.setCloseGuard(fn: () => string \| null)`・`focus()` | × を押したとき `fn` が文言を返せば、本体が窓の中に確認（続ける／閉じる）を出す。長い処理（UVS の全フレーム予測など）の途中で誤って閉じないため。`close()` の直接呼び出しと `closeAllPluginWindows`（ビューアを閉じる等）には効かない。`focus()` は同じ z-index の中で最前面へ（同じ対象の窓を 2 枚開かない）。SDK では古い本体に無いので任意（`?.`）。2026-09-27 ユーザ要望 | ✅ |
 | ~~**H25**~~ | **H39 に統合した**（2026-08-27） | — | 🔴 **H25 と H39 は同じ機能を独立に実装していた**（どちらも A14 の登録簿へ積む）。H25 は**プラグインが `studyUid` / `seriesUid` を指定できる**形で、「参照を素通しにすると他患者の検査へレポートが生える」という**書き込み系 host API の罠**（HANDOFF 冒頭）そのものだった。**H39 を残す**——host が表示中タイルから study/series を入れ、id には `plugin:<id>:` の名前空間を強制する | — |
 
 H1〜H3 は**フロント面だけで完結**するため、web モードでも同じように動く（backend の契約 `/api/plugins` は不変）。
