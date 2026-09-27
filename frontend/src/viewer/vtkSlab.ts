@@ -7,6 +7,7 @@
  *
  * `vtkImageResliceMapper` のスラブ機能（GPU シェーダで面法線 ±厚/2 を最小ボクセル間隔の半分刻みで
  * サンプルし MAX/MIN/MEAN）を使い、スラブ面を<b>カメラに固定</b>する（{@link slabPlaneFromCamera}）。
+ * 面は常に焦点（＝回転中心）を通る。前後移動・中心指定はカメラ側の平行移動で行う（`vtkVolumeView`）。
  * 回転すれば任意斜めスラブになり、Ziosoft 記事の「関心点を中心に置き、回転して多方向から見る」
  * 操作をそのまま行える。幾何は `vtkImageDataFromVolume` の患者 LPS をそのまま使う（単一幾何）。
  *
@@ -19,7 +20,7 @@ import vtkImageResliceMapper from "@kitware/vtk.js/Rendering/Core/ImageResliceMa
 import { SlabTypes } from "@kitware/vtk.js/Rendering/Core/ImageResliceMapper/Constants";
 import vtkPlane from "@kitware/vtk.js/Common/DataModel/Plane";
 import type { SlabProjection } from "./slabPresets";
-import { clampSlabDepth, maxSlabDepthMm, slabPlaneFromCamera } from "./slabGeometry";
+import { maxSlabDepthMm, slabPlaneFromCamera } from "./slabGeometry";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
@@ -28,9 +29,7 @@ export interface SlabView {
   setVisible(on: boolean): void;
   setThickness(mm: number): void;
   setProjection(p: SlabProjection): void;
-  /** 焦点からの視線方向オフセット(mm)。±{@link getMaxDepth} に丸める。 */
-  setDepth(mm: number): void;
-  getDepth(): number;
+  /** 深さ（回転中心の前後移動）の可動域(±mm)。 */
   getMaxDepth(): number;
   destroy(): void;
 }
@@ -65,12 +64,11 @@ export function createSlabView(
   renderer.addActor(actor);
 
   const maxDepth = maxSlabDepthMm((imageData.getBounds?.() as number[]) ?? []);
-  let depth = 0;
   let visible = false;
 
   const updatePlane = () => {
     const cam = renderer.getActiveCamera();
-    const { origin, normal } = slabPlaneFromCamera(cam.getFocalPoint(), cam.getDirectionOfProjection(), depth);
+    const { origin, normal } = slabPlaneFromCamera(cam.getFocalPoint(), cam.getDirectionOfProjection());
     plane.setOrigin(origin);
     plane.setNormal(normal);
   };
@@ -100,12 +98,6 @@ export function createSlabView(
       mapper.setSlabType(slabTypeFor(p));
       render();
     },
-    setDepth(mm) {
-      depth = clampSlabDepth(mm, maxDepth);
-      if (visible) updatePlane();
-      render();
-    },
-    getDepth: () => depth,
     getMaxDepth: () => maxDepth,
     destroy() {
       try {

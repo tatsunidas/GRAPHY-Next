@@ -39,6 +39,18 @@ import vtkAnnotatedCubeActor from "@kitware/vtk.js/Rendering/Core/AnnotatedCubeA
 import { Corners as OrientationCorners } from "@kitware/vtk.js/Interaction/Widgets/OrientationMarkerWidget/Constants";
 import { createOrthoSlices, type OrthoSlices } from "./vtkOrthoSlices";
 import { createSlabView } from "./vtkSlab";
+import {
+  depthAlongView,
+  pickSlabPoint,
+  spinStep,
+  targetForDepth,
+  translateCameraTo,
+  type SpinOptions,
+  type SpinState,
+} from "./slabGeometry";
+import { snapCamera, type SnapKind } from "./cameraSnap";
+import { geomFromImageData, worldToVoxel } from "./labelVolume";
+import { makeUnprojector } from "../viewer3d/measure3d";
 import { defaultSlabThickness, type SlabProjection } from "./slabPresets";
 import actorRotateManipulator from "./actorRotateManipulator";
 
@@ -48,11 +60,17 @@ type Any = any;
 /** レンダリングモード。 */
 export type VtkRenderMode = "VR" | "MIP" | "MINIP" | "ORTHO" | "SLAB";
 
-/** SLAB モード（Slab MIP）のパラメータ。厚みは全幅 mm、depth は焦点から視線方向のオフセット mm。 */
+/** SLAB モード（Slab MIP）のパラメータ。厚みは全幅 mm。スラブ中心は常に回転中心（焦点）。 */
 export interface VtkSlabParams {
   thicknessMm: number;
   projection: SlabProjection;
+}
+
+/** SLAB の現在値。depthMm = ボリューム中心から回転中心までの現在の視線方向の距離、center = 回転中心（LPS mm）。 */
+export interface VtkSlabState extends VtkSlabParams {
   depthMm: number;
+  maxDepthMm: number;
+  center: [number, number, number];
 }
 
 /** 不透明度カーブ点（value=HU/SUV, opacity=0..1）。 */
@@ -106,10 +124,27 @@ export interface VtkVolumeView {
   setWindowLevel(center: number, width: number): void;
   /** Ortho モードの各軸スライス位置（0..1 の割合）。 */
   setOrthoPositions(fx: number, fy: number, fz: number): void;
-  /** SLAB モードのパラメータ（指定フィールドのみ）。Shift+ホイールでも depth が動く。 */
+  /** SLAB モードのパラメータ（指定フィールドのみ）。 */
   setSlab(params: Partial<VtkSlabParams>): void;
-  /** 現在の SLAB パラメータと depth の可動域(±mm)。 */
-  getSlab(): VtkSlabParams & { maxDepthMm: number };
+  /** 現在の SLAB 状態（回転中心・深さ・可動域を含む）。 */
+  getSlab(): VtkSlabState;
+  /** 回転中心（＝スラブ中心）を視線方向へ動かし、深さを mm にする（Shift+ホイールと同じ）。 */
+  setSlabDepth(mm: number): void;
+  /** 回転中心を world 点へ（カメラを平行移動。向き・ズームは不変）。 */
+  setRotationCenter(p: [number, number, number]): void;
+  /** 回転中心をボリューム中心へ戻す。 */
+  centerRotation(): void;
+  /**
+   * SLAB のダブルクリック中心指定。CSS 座標のレイ上でスラブ内の MIP=最大/MinIP=最小の深さ（AvgIP は中心面）を
+   * 回転中心にする。移動したら true。
+   */
+  pickSlabCenterAt(cssX: number, cssY: number, cssWidth: number, cssHeight: number): boolean;
+  /** 回転中心まわりの自動回転シネ。マウス押下・モード切替で止まる。 */
+  startSpin(opts: SpinOptions): void;
+  stopSpin(): void;
+  isSpinning(): boolean;
+  /** 向きスナップ（全モード）。焦点・距離・ズームは保持。Actor 回転の蓄積もリセット。 */
+  snapOrientation(kind: SnapKind, flip?: boolean): void;
   /** 色 LUT（256 の r/g/b 0..255）を適用。null でグレースケールへ。 */
   setColorLut(lut: { r: number[]; g: number[]; b: number[] } | null): void;
   /** VR プリセット（cornerstone VIEWPORT_PRESETS 名）を適用。null で解除（グレースケール/W-L へ）。 */
@@ -515,13 +550,21 @@ export function createVtkVolumeView(
   const ortho: OrthoSlices = createOrthoSlices(renderer, imageData, render, { center, width });
 
   // SLAB（Slab MIP・カメラ固定スラブ）。初期は非表示。色 TF は volume と共有（W/L・LUT 追従）。
-  const slabParams: VtkSlabParams = { thicknessMm: defaultSlabThickness("MIP"), projection: "MIP", depthMm: 0 };
+  const slabParams: VtkSlabParams = { thicknessMm: defaultSlabThickness("MIP"), projection: "MIP" };
   const slab = createSlabView(renderer, imageData, ctf, render, {
     thicknessMm: slabParams.thicknessMm,
     projection: slabParams.projection,
   });
   // SLAB 中は平行投影を強制（スラブ厚が画面全域で一定の意味を持つように）。抜けるとき元へ戻す。
   let parallelBeforeSlab: boolean | null = null;
+  // 自動回転シネ（requestAnimationFrame）。
+  let spinRaf = 0;
+  const stopSpinLoop = (): boolean => {
+    if (!spinRaf) return false;
+    cancelAnimationFrame(spinRaf);
+    spinRaf = 0;
+    return true;
+  };
 
   // 状態変化の通知（Info オーバーレイ更新用）。
   const stateListeners = new Set<() => void>();
@@ -551,6 +594,7 @@ export function createVtkVolumeView(
 
   // モード切替（setMode と applyState で共用）。render/notify は呼び元で行う。
   const applyMode = (next: VtkRenderMode) => {
+    if (stopSpinLoop()) notifyState();
     mode = next;
     customOpacity = null;
     const isOrtho = next === "ORTHO";
@@ -670,7 +714,31 @@ export function createVtkVolumeView(
   const actorRotate = actorRotateManipulator.newInstance({ button: 1, center: volCenter });
   let rotateMode: "camera" | "actor" = "camera";
   // 全マウスマニピュレータを張り替える（個別 remove より確実）。回転だけ mode で差し替え。
-  // Shift+ホイール = SLAB の depth（視線方向の前後スライド）。修飾キー一致で判定されるため
+  // ── 回転中心（＝スラブ中心）の平行移動 ──
+  // カメラの焦点と位置を同じベクトルだけ動かす（向き・距離・ズーム不変）。回転は焦点まわりなので回転中心も動く。
+  const moveFocalTo = (target: readonly number[]) => {
+    try {
+      const cam: Any = renderer.getActiveCamera();
+      const r = translateCameraTo(cam.getFocalPoint(), cam.getPosition(), target);
+      cam.setFocalPoint(r.focal[0], r.focal[1], r.focal[2]);
+      cam.setPosition(r.position[0], r.position[1], r.position[2]);
+      renderer.resetCameraClippingRange();
+    } catch {
+      /* ignore */
+    }
+    render();
+    notifyState();
+  };
+  const currentDepth = (): number => {
+    const cam: Any = renderer.getActiveCamera();
+    return depthAlongView(cam.getFocalPoint(), volCenter, cam.getDirectionOfProjection());
+  };
+  const setSlabDepthImpl = (mm: number) => {
+    const cam: Any = renderer.getActiveCamera();
+    moveFocalTo(targetForDepth(cam.getFocalPoint(), cam.getDirectionOfProjection(), volCenter, mm, slab.getMaxDepth()));
+  };
+
+  // Shift+ホイール = 回転中心（スラブ中心）を視線方向へ前後。修飾キー一致で判定されるため
   // 素のホイール（Zoom）とは衝突しない。SLAB 以外では何もしない。
   const depthManip = vtkMouseRangeManipulator.newInstance({ scrollEnabled: true, shift: true });
   const depthMax = slab.getMaxDepth() || 1;
@@ -678,12 +746,10 @@ export function createVtkVolumeView(
     -depthMax,
     depthMax,
     fine,
-    () => slabParams.depthMm,
+    () => currentDepth(),
     (v: number) => {
       if (mode !== "SLAB") return;
-      slab.setDepth(v);
-      slabParams.depthMm = slab.getDepth();
-      notifyState();
+      setSlabDepthImpl(v);
     },
   );
   installManipulators = () => {
@@ -742,6 +808,35 @@ export function createVtkVolumeView(
     axesWidget = null;
   }
 
+  // Actor 回転モードで蓄積した各アクターの回転を初期表示（原点・無回転）に戻す（resetView・向きスナップで共用）。
+  // ⚠️ rotateWXYZ は model.rotation 行列に蓄積するが model.orientation(Euler) は変えないため、
+  // setOrientation(0,0,0) は「orientation 未変化＝早期 return」で rotation 行列をクリアしない。
+  // 一旦別値にしてから 0 に戻すことで rotation 行列を確実に identity へリセットする。
+  const resetActorRotations = () => {
+    try {
+      const props: Any[] = [...renderer.getActors(), ...renderer.getVolumes()];
+      props.forEach((p) => {
+        if (!p.setOrientation) return;
+        p.setOrientation(0, 0, 0.0001);
+        p.setOrientation(0, 0, 0);
+        p.setOrigin?.(0, 0, 0);
+      });
+    } catch {
+      /* ignore */
+    }
+  };
+
+  // シネはマウス操作（回転・Pan）を始めたら止める（手動操作を優先）。
+  const stopSpinOnUser = () => {
+    if (stopSpinLoop()) notifyState();
+  };
+  try {
+    interactor.onLeftButtonPress(stopSpinOnUser);
+    interactor.onMiddleButtonPress(stopSpinOnUser);
+  } catch {
+    /* ignore */
+  }
+
   // 初期カメラ（向き/位置/pan/zoom）を控える。Reset View で完全復元する
   // （vtk の resetCamera は再フィットのみで回転を戻さないため）。
   const cam0 = renderer.getActiveCamera();
@@ -781,14 +876,103 @@ export function createVtkVolumeView(
         slabParams.projection = p.projection;
         slab.setProjection(p.projection);
       }
-      if (typeof p.depthMm === "number") {
-        slab.setDepth(p.depthMm);
-        slabParams.depthMm = slab.getDepth();
-      }
       notifyState();
     },
     getSlab() {
-      return { ...slabParams, maxDepthMm: slab.getMaxDepth() };
+      const f = renderer.getActiveCamera().getFocalPoint() as number[];
+      return {
+        ...slabParams,
+        depthMm: currentDepth(),
+        maxDepthMm: slab.getMaxDepth(),
+        center: [f[0], f[1], f[2]],
+      };
+    },
+    setSlabDepth(mm) {
+      setSlabDepthImpl(mm);
+    },
+    setRotationCenter(p) {
+      moveFocalTo(p);
+    },
+    centerRotation() {
+      moveFocalTo(volCenter);
+    },
+    pickSlabCenterAt(cssX, cssY, cssW, cssH) {
+      try {
+        const unproject = makeUnprojector(renderer, cssW, cssH);
+        const ray = unproject?.(cssX, cssY);
+        const geom = geomFromImageData(imageData);
+        const data = imageData.getPointData().getScalars()?.getData() as ArrayLike<number> | undefined;
+        if (!ray || !geom || !data) return false;
+        const [nx, ny, nz] = geom.dims;
+        const sample = (w: [number, number, number]): number | null => {
+          const v = worldToVoxel(geom, w);
+          const i = Math.round(v[0]);
+          const j = Math.round(v[1]);
+          const k = Math.round(v[2]);
+          if (i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) return null;
+          return data[(k * ny + j) * nx + i];
+        };
+        const cam: Any = renderer.getActiveCamera();
+        const pt = pickSlabPoint(
+          ray,
+          sample,
+          cam.getFocalPoint(),
+          cam.getDirectionOfProjection(),
+          slabParams.thicknessMm,
+          slabParams.projection,
+          fine / 2,
+        );
+        if (!pt) return false;
+        moveFocalTo(pt);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    startSpin(opts) {
+      stopSpinLoop();
+      let state: SpinState = { angle: 0, dir: 1 };
+      let last = performance.now();
+      const loop = (now: number) => {
+        const dt = Math.min(0.1, Math.max(0, (now - last) / 1000)); // タブ復帰時の大ジャンプを抑える
+        last = now;
+        const r = spinStep(state, dt, opts);
+        state = r.next;
+        try {
+          const cam: Any = renderer.getActiveCamera();
+          if (opts.axis === "horizontal") cam.azimuth(r.delta);
+          else cam.elevation(r.delta);
+          cam.orthogonalizeViewUp();
+          renderer.resetCameraClippingRange();
+        } catch {
+          /* ignore */
+        }
+        render();
+        spinRaf = requestAnimationFrame(loop);
+      };
+      spinRaf = requestAnimationFrame(loop);
+      notifyState();
+    },
+    stopSpin() {
+      if (stopSpinLoop()) notifyState();
+    },
+    isSpinning: () => spinRaf !== 0,
+    snapOrientation(kind, flip = false) {
+      resetActorRotations();
+      try {
+        const cam: Any = renderer.getActiveCamera();
+        const f = cam.getFocalPoint() as number[];
+        const dist = cam.getDistance() as number;
+        const { dop, viewUp } = snapCamera(kind, flip);
+        cam.setPosition(f[0] - dop[0] * dist, f[1] - dop[1] * dist, f[2] - dop[2] * dist);
+        cam.setViewUp(viewUp[0], viewUp[1], viewUp[2]);
+        cam.orthogonalizeViewUp();
+        renderer.resetCameraClippingRange();
+      } catch {
+        /* ignore */
+      }
+      render();
+      notifyState();
     },
     setColorLut(next) {
       lut = next;
@@ -875,21 +1059,7 @@ export function createVtkVolumeView(
       render();
     },
     resetView() {
-      // Actor 回転モードで蓄積した各アクターの回転を初期表示（原点・無回転）に戻す。
-      // ⚠️ rotateWXYZ は model.rotation 行列に蓄積するが model.orientation(Euler) は変えないため、
-      // setOrientation(0,0,0) は「orientation 未変化＝早期 return」で rotation 行列をクリアしない。
-      // 一旦別値にしてから 0 に戻すことで rotation 行列を確実に identity へリセットする。
-      try {
-        const props: Any[] = [...renderer.getActors(), ...renderer.getVolumes()];
-        props.forEach((p) => {
-          if (!p.setOrientation) return;
-          p.setOrientation(0, 0, 0.0001);
-          p.setOrientation(0, 0, 0);
-          p.setOrigin?.(0, 0, 0);
-        });
-      } catch {
-        /* ignore */
-      }
+      resetActorRotations();
       // 初期カメラを完全復元（向き＋pan＋zoom）。resetCamera だけだと回転が戻らない。
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1073,6 +1243,7 @@ export function createVtkVolumeView(
       } catch {
         /* ignore */
       }
+      stopSpinLoop();
       try {
         slab.destroy();
       } catch {

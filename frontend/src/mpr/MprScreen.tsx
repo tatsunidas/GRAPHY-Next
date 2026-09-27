@@ -48,6 +48,7 @@ import { useI18n } from "../i18n/i18n";
 import {
   SLAB_PROJECTIONS,
   SLAB_THICKNESS_PRESETS_MM,
+  clampSlabThickness,
   defaultSlabThickness,
   type SlabProjection,
 } from "../viewer/slabPresets";
@@ -379,9 +380,11 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
             </select>
             <select
               style={wlSelect}
-              value={slabMm}
+              value={(SLAB_THICKNESS_PRESETS_MM as readonly number[]).includes(slabMm) ? String(slabMm) : "custom"}
               disabled={!slabProj}
-              onChange={(e) => setSlabMm(Number(e.target.value))}
+              onChange={(e) => {
+                if (e.target.value !== "custom") setSlabMm(Number(e.target.value));
+              }}
               data-testid="mpr-slab-thickness"
             >
               {SLAB_THICKNESS_PRESETS_MM.map((mm) => (
@@ -389,7 +392,32 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
                   {mm} mm
                 </option>
               ))}
+              {!(SLAB_THICKNESS_PRESETS_MM as readonly number[]).includes(slabMm) && (
+                <option value="custom">{t("viewer3d.slab.custom")}</option>
+              )}
             </select>
+            {/* 任意の厚み（全幅 mm、0.5〜200 に丸め）。確定（Enter/フォーカス移動）で反映。 */}
+            <input
+              key={slabMm}
+              type="number"
+              min={0.5}
+              max={200}
+              step={0.5}
+              defaultValue={slabMm}
+              disabled={!slabProj}
+              onBlur={(e) => {
+                const v = Number(e.target.value);
+                if (e.target.value !== "" && Number.isFinite(v)) setSlabMm(clampSlabThickness(v));
+                else e.target.value = String(slabMm);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              }}
+              style={{ ...wlSelect, width: 60 }}
+              aria-label={t("viewer3d.slab.thickness")}
+              data-testid="mpr-slab-thickness-input"
+            />
+            <span style={wlLabel}>mm</span>
           </label>
         )}
         {tilt !== null && (

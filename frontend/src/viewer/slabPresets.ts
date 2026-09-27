@@ -20,8 +20,8 @@ export type SlabProjection = "MIP" | "MINIP" | "AVG";
 
 export const SLAB_PROJECTIONS: readonly SlabProjection[] = ["MIP", "MINIP", "AVG"];
 
-/** UI に出すスラブ厚(mm)のプリセット（全幅）。 */
-export const SLAB_THICKNESS_PRESETS_MM = [3, 5, 8, 10, 15, 20] as const;
+/** UI に出すスラブ厚(mm)のプリセット（全幅）。1〜2mm は薄い MIP 用（利用者要望 2026-09-27）。 */
+export const SLAB_THICKNESS_PRESETS_MM = [1, 2, 3, 5, 8, 10, 15, 20] as const;
 
 /** 任意入力で受け付ける厚みの範囲(mm)。 */
 export const SLAB_MIN_MM = 0.5;

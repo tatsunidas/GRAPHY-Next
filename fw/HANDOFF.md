@@ -8,6 +8,8 @@
 > 面はカメラ固定＝回転で任意斜め・Shift+ホイールで前後）、MPR 画面ヘッダに**スラブ select＋厚み**
 > （cornerstone `setSlabThickness`/`setBlendMode`）、2D ThickSlab に**投影方式**と**表示 > Slab MIP**。
 > 厚みは全幅 mm、プリセット 3/5/8/10/15/20（文献根拠は設計 §6）。typecheck/vitest/build green。
+> **2026-09-27 改訂**: 3D Slab を「スラブ中心 ≡ 回転中心」に（Shift+ホイールは回転中心ごと前後）。ダブルクリック中心指定・自動回転シネ・
+> 回転中心の表示、**向きスナップ（全モード）**を追加（設計 §7）。
 > **次**: 利用者の `make dev-desktop` 実機確認（特に MPR の slab が効くか・3D の GPU メモリ）。
 >
 > ## ▶ 2026-09-26 — ✅ **外部 AI を「用途で頼む」形に作り替えた（段 1〜4 完了・`c72c6cb`）**

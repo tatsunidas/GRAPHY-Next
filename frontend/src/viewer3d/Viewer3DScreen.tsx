@@ -141,6 +141,8 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
   const [cutTargetId, setCutTargetId] = useState<string | null>(null);
   // 3D 計測（ルーラー）モード。
   const [measureMode, setMeasureMode] = useState(false);
+  // 向きスナップの「反対側から」トグル（全モード共通）。
+  const [snapFlip, setSnapFlip] = useState(false);
   // 手動内視鏡経路 編集モード。
   const [endoPathMode, setEndoPathMode] = useState(false);
   // 中心線解析ダイアログ対象（ROI/メッシュ）。
@@ -578,7 +580,21 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
       )}
       <div style={bodyWrap}>
         <div style={body}>
-          <div ref={vpRef} style={vpEl} onContextMenu={(e) => e.preventDefault()} />
+          <div
+            ref={vpRef}
+            style={vpEl}
+            onContextMenu={(e) => e.preventDefault()}
+            onDoubleClick={(e) => {
+              // Slab: ダブルクリックした構造（MIP=最大/MinIP=最小の深さ）を回転中心＝スラブ中心に。
+              if (mode !== "SLAB" || measureMode || !viewRef.current) return;
+              const r = e.currentTarget.getBoundingClientRect();
+              viewRef.current.pickSlabCenterAt(e.clientX - r.left, e.clientY - r.top, r.width, r.height);
+            }}
+          />
+          {phase === "ready" && mode === "SLAB" && (
+            // 平行投影では回転中心（焦点）が常に画面中央に写るので、中央に十字で示す。
+            <div style={centerMark} data-testid="viewer3d-slab-center-mark" aria-hidden />
+          )}
           {phase === "ready" && viewRef.current && (
             <ViewInfoOverlay view={viewRef.current} lutName={lutName} />
           )}
@@ -689,6 +705,32 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
                 </select>
               </div>
             )}
+
+            <div style={panelSection}>
+              <div style={panelLabel}>{t("viewer3d.snap")}</div>
+              <div style={modeRow}>
+                {(["AX", "COR", "SAG"] as const).map((k) => (
+                  <button
+                    key={k}
+                    style={modeBtn}
+                    onClick={() => viewRef.current?.snapOrientation(k, snapFlip)}
+                    title={t(`viewer3d.snap.${k.toLowerCase()}.title`)}
+                    data-testid={`viewer3d-snap-${k.toLowerCase()}`}
+                  >
+                    {t(`viewer3d.snap.${k.toLowerCase()}`)}
+                  </button>
+                ))}
+                <button
+                  style={snapFlip ? modeBtnActive : modeBtn}
+                  onClick={() => setSnapFlip((v) => !v)}
+                  title={t("viewer3d.snap.flip.title")}
+                  aria-pressed={snapFlip}
+                  data-testid="viewer3d-snap-flip"
+                >
+                  {t("viewer3d.snap.flip")}
+                </button>
+              </div>
+            </div>
 
             {mode === "SLAB" && (
               <SlabPanel
@@ -859,6 +901,21 @@ const body: React.CSSProperties = { position: "relative", flex: 1, minWidth: 0 }
 // touchAction: none — 無いとタッチ端末で回転/ピンチがページスクロールに奪われる
 // （`fw/mobile-ui-design.md` §3.3）。実際の回転/ピンチは vtk.js の interactor が処理する。
 const vpEl: React.CSSProperties = { position: "absolute", inset: 0, touchAction: "none" };
+// Slab の回転中心マーカー（画面中央の十字）。操作を邪魔しないよう pointerEvents なし。
+const centerMark: React.CSSProperties = {
+  position: "absolute",
+  left: "50%",
+  top: "50%",
+  width: 18,
+  height: 18,
+  marginLeft: -9,
+  marginTop: -9,
+  pointerEvents: "none",
+  zIndex: 4,
+  background:
+    "linear-gradient(#ffcc33,#ffcc33) center/2px 100% no-repeat, linear-gradient(#ffcc33,#ffcc33) center/100% 2px no-repeat",
+  opacity: 0.85,
+};
 const panel: React.CSSProperties = {
   width: 240,
   flexShrink: 0,

@@ -13,7 +13,7 @@
 | 入れる場所 | 3D Viewer の新モード・MPR 画面・2D ThickSlab の **3 本すべて** |
 | 投影方式 | MIP（最大値）/ MinIP（最小値）/ AvgIP（平均）。型は `slabPresets.ts` `SlabProjection` を 3 経路で共有 |
 | 厚み | **常に全幅 mm**（中心面 ±厚/2）。スライス枚数では持たない（非等方シリーズでも臨床的意味が同じになる） |
-| プリセット | 文献値ベース `3 / 5 / 8 / 10 / 15 / 20 mm`。既定 MIP 5mm・MinIP 3mm・AvgIP 5mm（§6） |
+| プリセット | 文献値ベース `3 / 5 / 8 / 10 / 15 / 20 mm`＋薄い MIP 用 `1 / 2 mm`（2026-09-27 追加）。MPR・3D は任意入力（0.5〜200mm）も可。既定 MIP 5mm・MinIP 3mm・AvgIP 5mm（§6） |
 | 保存 | 新規シリーズとしては保存しない（表示のみ） |
 
 ## 2. 構成
@@ -21,10 +21,12 @@
 | ファイル | 役割 |
 | :- | :- |
 | `frontend/src/viewer/slabPresets.ts` | `SlabProjection`・厚みプリセット・既定厚・任意入力のクランプ |
-| **A** `frontend/src/viewer/slabGeometry.ts` | 純関数: カメラ（焦点・視線方向）＋depth → スラブ面、depth 可動域（外接箱対角の半分） |
+| **A** `frontend/src/viewer/slabGeometry.ts` | 純関数: スラブ面（=焦点・視線）、深さ `depthAlongView`・`targetForDepth`・`translateCameraTo`、ダブルクリックの奥行き `pickSlabPoint`、シネ `spinStep` |
+| **A** `frontend/src/viewer/cameraSnap.ts` | 純関数: 向きスナップ（Axial/Coronal/Sagittal＋反対側）。**全モード共通** |
 | **A** `frontend/src/viewer/vtkSlab.ts` | `vtkImageSlice` + `vtkImageResliceMapper`（`setSlabThickness`/`setSlabType`/`setSlicePlane`）。面はカメラの `onModified` で追従 |
-| **A** `frontend/src/viewer/vtkVolumeView.ts` | `VtkRenderMode` に `"SLAB"`。`setSlab`/`getSlab`。SLAB 中は volume 非表示・**平行投影を強制**（抜けると元へ）・**回転はカメラ周回に固定**・Shift+ホイール＝depth |
-| **A** `frontend/src/viewer3d/SlabPanel.tsx` | 右パネル: 投影 3 択・厚み（プリセット＋数値）・深さスライダー＋「中心」 |
+| **A** `frontend/src/viewer/vtkVolumeView.ts` | `VtkRenderMode` に `"SLAB"`。`setSlab`/`getSlab`/`setSlabDepth`/`setRotationCenter`/`centerRotation`/`pickSlabCenterAt`/`startSpin`・`stopSpin`/`snapOrientation`。SLAB 中は volume 非表示・**平行投影を強制**（抜けると元へ）・**回転はカメラ周回に固定** |
+| **A** `frontend/src/viewer3d/SlabPanel.tsx` | 右パネル: 投影 3 択・厚み・深さ・回転中心座標＋「ボリューム中心へ」・自動回転シネ |
+| **A** `frontend/src/viewer3d/Viewer3DScreen.tsx` | 「向き」スナップ（全モード）・ダブルクリック中心指定・中央十字マーカー。Info オーバーレイは Slab 中「回転中心」「スラブ」 |
 | **B** `frontend/src/viewer/mpr.ts` `applyMprSlab` | 3 面の `VolumeViewport` に `setBlendMode` + `setSlabThickness`（OFF は `COMPOSITE` + `resetSlabThickness`） |
 | **B** `frontend/src/mpr/MprScreen.tsx` | ヘッダに「スラブ」select（OFF/AvgIP/MIP/MinIP）＋厚み。W/L 既定へ戻すと cornerstone がスラブ厚も戻すので掛け直す |
 | **C** `frontend/src/viewer/thickSlab.ts` | セッション/トークンに `projection`。累積を純関数 `projectSamples` に切り出し MEAN/MAX/MIN |
@@ -34,7 +36,7 @@
 ## 3. 数式・サンプリングの約束
 
 - **A（vtk.js ImageResliceMapper）**: シェーダが面法線方向に ±厚/2 を `min(spacing)×0.5` 刻みでサンプル（トリリニア）し、
-  MAX/MIN/MEAN を取る。ボリューム外のサンプルは捨てる。面 = 原点 `焦点 + n·depth`、法線 `n = 視線方向`。
+  MAX/MIN/MEAN を取る。ボリューム外のサンプルは捨てる。面 = 原点 **焦点（＝回転中心）**、法線 `n = 視線方向`（2026-09-27 改訂、§7）。
   色は volume と**同じ色 TF を共有**（`setUseLookupTableScalarRange(true)`）→ W/L・LUT がそのまま効く。
 - **B（cornerstone VolumeViewport）**: cornerstone が焦点面 ±厚/2 のクリップ面で切り出し、VolumeMapper のブレンドで投影。
   cornerstone は厚み < 0.1mm を 0.1mm に丸める。
@@ -69,3 +71,21 @@
 - 角辻（Ziosoft 記事）: 冠動脈長軸 **5mm**、左室 5–10mm、短軸プラーク評価は最薄（MPR）。
 - 実装参照: vtk.js ImageResliceMapper（v27+）、Cornerstone3D `setSlabThickness`/`setBlendMode`、OHIF PR #6268、
   3D Slicer SlabReconstruction（`vtkImageReslice` SlabMode）。
+
+## 7. 改訂 2026-09-27 — スラブ中心 ≡ 回転中心（3D Slab）
+
+初版は Shift+ホイールで**スラブ面だけ**を動かしていた（面中心 = 焦点 + 視線×depth）ため、depth≠0 で回すとスラブが
+回転中心のまわりを公転し、関心点が外れた。利用者の方針「Ziosoft より扱いやすく」で次のとおり改めた。
+
+| 操作 | 挙動 |
+| :- | :- |
+| Shift+ホイール / 深さスライダー | カメラの**焦点と位置を同じベクトルだけ視線方向へ平行移動**＝回転中心とスラブが一緒に前後。表示値はボリューム中心からの視線方向距離 `dot(f−c, n)`（回すと値が変わる） |
+| ダブルクリック | クリックのレイ上でスラブ内の **MIP=最大／MinIP=最小の深さ**（AvgIP は中心面）を拾い、そこを回転中心に（画面中央へ寄る）。計測モード中は無効 |
+| 左ドラッグ / 中ドラッグ | 回転中心まわりの回転 / 面内 Pan（回転中心も面内で動く） |
+| 自動回転 | 回転中心まわり。左右（azimuth）/上下（elevation）、360° 連続 / ±30° / ±60° 往復、15/30/60°/s。マウス押下・モード切替で停止 |
+| 向きスナップ（全モード） | Axial=足側から（上=A）、Coronal=前から（上=S）、Sagittal=左から（上=S、前が画面左）。「反対」で視線反転。焦点・距離・ズーム保持、Actor 回転リセット |
+| 表示 | パネルに回転中心（LPS mm）、Info の「回転中心」「スラブ」行、画面中央の十字（平行投影では焦点が常に中央） |
+
+- Slab を抜けても焦点は移動後のまま（VR/MIP の回転中心もそこ）。`Reset View` で初期に戻る。
+- 奥行きの拾い方は最近傍サンプル（`fine/2` 刻み）。表示（GPU トリリニア）とは最大半ボクセルずれうる。
+- vitest: `slabGeometry.test.ts`（14 件: 深さ・平行移動・pickSlabPoint の MIP/MinIP/AVG・spinStep 往復・スナップの画面右）。
