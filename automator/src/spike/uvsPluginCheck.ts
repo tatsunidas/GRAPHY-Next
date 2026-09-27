@@ -1594,10 +1594,12 @@ async function main(): Promise<void> {
         const phases = new Set<string>();
         const counts = new Set<string>();
         const remainings = new Set<string>();
+        // 🔑 無い要素を待たない（innerText は既定で 30 秒待つ。完了後に進み具合が消えると、その分だけ所要時間が水増しされた）
+        const text = (id: string) => screen.getByTestId(id).innerText({ timeout: 300 }).catch(() => "");
         const sample = async () => {
-          const ph = await screen.getByTestId("uvs-progress-phase").innerText().catch(() => "");
-          const ct = await screen.getByTestId("uvs-progress-count").innerText().catch(() => "");
-          const rm = await screen.getByTestId("uvs-progress-remaining").innerText().catch(() => "");
+          const ph = await text("uvs-progress-phase");
+          const ct = await text("uvs-progress-count");
+          const rm = await text("uvs-progress-remaining");
           if (ph) phases.add(ph);
           if (ct) counts.add(ct);
           if (rm) remainings.add(rm);
