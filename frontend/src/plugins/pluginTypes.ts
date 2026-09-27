@@ -117,8 +117,18 @@ import type {
   PluginJobOutcome,
   PluginPatient,
   PluginPickFilesOptions,
+  PluginVideoEntry,
+  PluginVideoListQuery,
 } from "./pluginCommonApi";
-export type { PickFilesResult, PluginJobOptions, PluginJobOutcome, PluginPatient, PluginPickFilesOptions };
+export type {
+  PickFilesResult,
+  PluginJobOptions,
+  PluginJobOutcome,
+  PluginPatient,
+  PluginPickFilesOptions,
+  PluginVideoEntry,
+  PluginVideoListQuery,
+};
 import type {
   PluginFrameValues,
   PluginFrameValuesRead,
@@ -249,13 +259,19 @@ interface PluginHostBase {
    * standalone 専用（web は backend 面が無いので失敗が返る）。
    */
   runBackendJob: (payload?: unknown, opts?: PluginJobOptions) => Promise<PluginJobOutcome>;
-  /** 本体の DB（H44・H46）。 */
+  /** 本体の DB（H44・H46・H51）。 */
   db: {
     /**
      * 患者を ID・氏名の部分一致で探す（H44）。**読み取りのみ**。空文字は全件。
      * `patientKey` は保存領域（H8）などの患者の鍵と同じもの。
      */
     searchPatients: (query: string) => Promise<PluginPatient[]>;
+    /**
+     * 保管庫にある**動画**を並べる（H51）。**読み取りのみ**。検査（`{ studyUid }`。例: メイン画面の
+     * `selectedStudyUid`）か患者（`{ patientKey }`）で引く。新しい検査から順。動画の判定は 2D ビューアと同じ
+     * （Video 系 SOP クラス、または H.264 等で包まれた US Multi-frame など）。
+     */
+    listVideos: (query: PluginVideoListQuery) => Promise<PluginVideoEntry[]>;
     /**
      * DB を変えたことを知らせる（H46）。メイン画面の一覧（呼んだウィンドウ自身も含む）と、
      * 開いている他のウィンドウが読み直す。本体の書き込み API（H4b・H9 等）は自分で知らせるので、

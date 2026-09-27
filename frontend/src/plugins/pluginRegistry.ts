@@ -13,7 +13,7 @@ import type { PluginHost, PluginHostSeed, PluginManifest, PluginModule, PluginSu
 import { DEMO_MODULES, MOCK_ENABLED, MOCK_MANIFESTS } from "./mockPlugins";
 import { requestAiGeneration, type AiGenerationOptions } from "./pluginAiApi";
 import { saveFileAs } from "./pluginFileApi";
-import { notifyDbChanged, pickFiles, runBackendJob, searchPatients } from "./pluginCommonApi";
+import { listVideos, notifyDbChanged, pickFiles, runBackendJob, searchPatients } from "./pluginCommonApi";
 import { importVideoAsDicom, probeVideo, readVideoFrameValues, requestVideoImportConsent } from "./pluginVideoApi";
 
 let manifestsCache: Promise<PluginManifest[]> | null = null;
@@ -100,6 +100,7 @@ function withHostApis(m: PluginManifest, host: PluginHostSeed): PluginHost {
     runBackendJob: (payload, opts) => runBackendJob(m.id, payload, opts),
     db: {
       searchPatients,
+      listVideos,
       notifyChanged: (detail) => notifyDbChanged(m.id, detail),
     },
     // H47〜H49: 出所（id・名前）はマニフェストから本体が入れる。プラグインに名乗らせない

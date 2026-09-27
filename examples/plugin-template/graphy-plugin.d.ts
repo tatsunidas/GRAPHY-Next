@@ -1099,10 +1099,16 @@ interface PluginHostBase {
    * `cancelled: true` は利用者の取り消しで、エラーとして表示しないこと。standalone 専用。
    */
   runBackendJob: (payload?: unknown, opts?: PluginJobOptions) => Promise<PluginJobOutcome>;
-  /** 本体の DB（H44・H46・**0.3.0 以降**）。 */
+  /** 本体の DB（H44・H46・H51・**0.3.0 以降**）。 */
   db: {
     /** 患者を ID・氏名の部分一致で探す（H44）。**読み取りのみ**。空文字は全件。 */
     searchPatients: (query: string) => Promise<PluginPatient[]>;
+    /**
+     * 保管庫にある**動画**を並べる（H51）。**読み取りのみ**。検査（`{ studyUid }`。例: メイン画面の
+     * `selectedStudyUid`）か患者（`{ patientKey }`）で引く。新しい検査から順。動画の判定は 2D ビューアと同じ
+     * （Video 系 SOP クラス、または H.264 等で包まれた US Multi-frame など）。
+     */
+    listVideos: (query: PluginVideoListQuery) => Promise<PluginVideoEntry[]>;
     /**
      * DB を変えたことを知らせる（H46）。メイン画面の一覧（呼んだウィンドウ自身も含む）と、
      * 開いている他のウィンドウが読み直す。本体の書き込み API は自分で知らせるので、
@@ -1288,6 +1294,26 @@ export interface PluginPatient {
   birthDate: string;
   sex: string;
   studyCount: number;
+}
+
+/** `host.db.listVideos()` の問い合わせ（H51）: 検査 1 つ、または患者 1 人。 */
+export type PluginVideoListQuery = { studyUid: string } | { patientKey: string };
+
+/** `host.db.listVideos()` の 1 件（保管庫にある動画 1 本）。 */
+export interface PluginVideoEntry {
+  /** `searchPatients` の `patientKey` と同じ（保存領域の鍵にそのまま使える）。 */
+  patientKey: string;
+  patientId: string;
+  patientName: string;
+  studyUid: string;
+  /** YYYYMMDD（無ければ空）。 */
+  studyDate: string;
+  studyDescription: string;
+  seriesUid: string;
+  seriesNumber: number | null;
+  seriesDescription: string;
+  modality: string;
+  sopInstanceUid: string;
 }
 
 /** `host.ai.generate()` の要求（H40）。 */
