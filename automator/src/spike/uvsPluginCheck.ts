@@ -316,6 +316,11 @@ async function importCheck(driver: DesktopDriver, mainPage: Page, closeViewer: (
     await mainPage.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
     const screen = mainPage.getByTestId("uvs-import").last();
     await screen.waitFor({ state: "visible", timeout: 30_000 });
+    // メイン画面で検査を選んでいると「取り込み済みの動画を要約」タブで開く。タブが決まってから取り込みタブへ
+    await screen.getByTestId("uvs-import-pick").or(screen.getByTestId("uvs-list")).first().waitFor({ state: "visible", timeout: 20_000 });
+    const importTab = screen.getByTestId("uvs-tab-import");
+    if (await importTab.isVisible().catch(() => false)) await importTab.click();
+    await screen.getByTestId("uvs-import-pick").waitFor({ state: "visible", timeout: 10_000 });
     return screen;
   };
   const rowStatus = async (screen: Locator, want: string[], maxMs: number): Promise<string | null> => {
@@ -529,6 +534,99 @@ async function importCheck(driver: DesktopDriver, mainPage: Page, closeViewer: (
     { doneMix, got },
   );
   await mainPage.screenshot({ path: path.join(OUT_DIR, "import-per-file-done.png") }).catch(() => {});
+
+  // ── 取り込み済みの動画をメイン画面から要約しなおす（本体 H51・2026-09-27 ユーザ要望）──
+  // メイン画面のスタディ一覧で 1 本目の検査を選んでから UVS を開くと、「取り込み済みの動画を要約」に
+  // その検査の動画が並ぶ。前回の続きから開き、「最初からやり直す」で取り込み時の状態に戻る。
+  {
+    await mainPage.evaluate(() => document.querySelectorAll<HTMLElement>(".graphy-plugin-window__close").forEach((b) => b.click()));
+    await mainPage.getByTestId("search-patientid-input").fill("UVS-IMP-001");
+    const d2 = mainPage.locator('input[type="date"]');
+    await d2.nth(0).fill("");
+    await d2.nth(1).fill("");
+    await mainPage.getByTestId("search-submit-button").click();
+    await mainPage.getByTestId(`study-row-${studyUid}`).click();
+    await mainPage.getByTestId("mainscreen-menu-plugins").click();
+    await mainPage.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
+    const list = mainPage.getByTestId("uvs-list").last();
+    const listShown = await list.waitFor({ state: "visible", timeout: 20_000 }).then(() => true, () => false);
+    const studyRow = list.getByTestId("uvs-list-study").locator(`[data-testid="uvs-list-row"][data-sop="${sop}"]`);
+    const rowShown = await studyRow.waitFor({ state: "visible", timeout: 20_000 }).then(() => true, () => false);
+    check(listShown && rowShown, "[12] ★★メイン画面で検査を選んで開くと「取り込み済みの動画を要約」にその検査の動画が並ぶ", { listShown, rowShown });
+
+    const summarizerOnMain = () => mainPage.getByTestId("uvs-summarizer").last();
+    const closeLastWindow = async () => {
+      await mainPage.evaluate(() => {
+        const all = document.querySelectorAll<HTMLElement>(".graphy-plugin-window__close");
+        all[all.length - 1]?.click();
+      });
+      await mainPage.waitForTimeout(300);
+    };
+    const madInput = () => summarizerOnMain().locator("#set-staticMeanAbsDiffThreshold");
+
+    // 開いて閾値を変える（入力欄を離れると保存される）→ 閉じる
+    let changed = false;
+    if (rowShown) {
+      await studyRow.getByTestId("uvs-list-open").click();
+      if (await summarizerOnMain().waitFor({ state: "visible", timeout: 30_000 }).then(() => true, () => false)) {
+        await mainPage.waitForTimeout(2_000);
+        await madInput().fill("0.3");
+        await madInput().press("Tab");
+        await mainPage.waitForTimeout(1_500);
+        changed = true;
+        await closeLastWindow();
+      }
+    }
+    await list.getByTestId("uvs-list-reload").click();
+    await mainPage.waitForTimeout(1_500);
+    const summarized = await studyRow.getAttribute("data-summarized").catch(() => null);
+    check(changed && summarized === "1", "[12] 要約画面で変えた状態が保存され、一覧は「要約済み」になる", { changed, summarized });
+
+    // もう一度開くと前回の続きから
+    await studyRow.getByTestId("uvs-list-open").click();
+    const reopened = await summarizerOnMain().waitFor({ state: "visible", timeout: 30_000 }).then(() => true, () => false);
+    await mainPage.waitForTimeout(2_000);
+    const kept = reopened ? await madInput().inputValue().catch(() => "") : "";
+    check(Number(kept) === 0.3, "[12] ★★開き直すと前回の続きから（変えた閾値のまま）", { kept });
+
+    // 最初からやり直す → 取り込み時の状態（元動画のスコア・静止 0.5）に戻る
+    const resetBtn = summarizerOnMain().getByTestId("uvs-reset");
+    const hasReset = await resetBtn.isVisible().catch(() => false);
+    if (hasReset) {
+      await resetBtn.click();
+      await summarizerOnMain().getByTestId("uvs-reset-ok").click();
+      await mainPage.waitForTimeout(2_000);
+    }
+    const afterReset = hasReset ? await madInput().inputValue().catch(() => "") : "";
+    const srcText = hasReset ? await summarizerOnMain().innerText() : "";
+    await mainPage.screenshot({ path: path.join(OUT_DIR, "resummarize-reset.png") }).catch(() => {});
+    check(
+      hasReset && Number(afterReset) === 0.5 && srcText.includes("スコアは圧縮前の元動画で採点されています"),
+      "[12] ★★「最初からやり直す」で取り込み時の状態（元動画のスコア・静止 0.5）に戻る",
+      { hasReset, afterReset },
+    );
+    await closeLastWindow();
+
+    // 患者から探す: UVS-IMP-002 の動画が並び、開ける
+    await list.getByTestId("uvs-list-search").fill("UVS-IMP-002");
+    await list.getByTestId("uvs-list-search").press("Enter");
+    const pRow = list.locator('[data-testid="uvs-list-patient-row"][data-patient-key="UVS-IMP-002"]');
+    const pShown = await pRow.waitFor({ state: "visible", timeout: 15_000 }).then(() => true, () => false);
+    if (pShown) await pRow.click();
+    const pVideos = list.getByTestId("uvs-list-patient").getByTestId("uvs-list-row");
+    await pVideos.first().waitFor({ state: "visible", timeout: 20_000 }).catch(() => {});
+    const nVideos = await pVideos.count();
+    let opened120 = false;
+    if (nVideos > 0) {
+      await pVideos.first().getByTestId("uvs-list-open").click();
+      if (await summarizerOnMain().waitFor({ state: "visible", timeout: 30_000 }).then(() => true, () => false)) {
+        await mainPage.waitForTimeout(2_000);
+        opened120 = /120 フレーム/.test(await summarizerOnMain().innerText());
+      }
+      await mainPage.screenshot({ path: path.join(OUT_DIR, "resummarize-by-patient.png") }).catch(() => {});
+    }
+    check(pShown && nVideos === 1 && opened120, "[12] ★患者から探すと、その患者の動画が並び要約を開ける", { pShown, nVideos, opened120 });
+  }
 
   check(pageErrors.length === 0, "[12] 画面のエラーが無い", pageErrors.slice(0, 3));
 }
