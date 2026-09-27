@@ -23,11 +23,11 @@
  * {@link AiEgressConsentHost} が購読し、`createPortal` で body へ出す。
  */
 import { useSyncExternalStore, type ReactNode } from "react";
-import { desktop, type AiGenerateResult } from "../desktopBridge";
+import { desktop } from "../desktopBridge";
 import { log } from "../log";
 import { AiEgressConsentDialog, type AiEgressRequest } from "./AiEgressConsentDialog";
 import type { PluginManifest } from "./pluginTypes";
-import type { AiCapability, AiResolveResult } from "../desktopBridge";
+import type { AiCapability, AiProvenance, AiResolveResult } from "../desktopBridge";
 
 /** 送信先。UI に出す値であり、実際の接続は Electron main が行う。 */
 export const AI_HOST = "generativelanguage.googleapis.com";
@@ -105,9 +105,32 @@ export interface AiGenerationOptions {
   providerOptions?: Record<string, unknown>;
 }
 
+/**
+ * 生成できたときの形。**プラグインに渡すのはこれ。**
+ *
+ * <p>🔴 **`image` は `Uint8Array`。** Electron main は base64 で返すが、**変換は本体が行う**
+ * （設計 §3.2「正規化は本体で」）。
+ *
+ * <p>🚨 **2026-09-27 に実機で発覚した不具合の場所。** main の結果を素通しにしていたため、
+ * 契約は `bytes` と言っているのに `base64` が届き、プラグインは
+ * **「画像が返らなかった」と表示していた**（`plugin-art` の `errNoImage`）。
+ * 単体テストは「送る前に止まる」経路しか通っておらず、
+ * `.d.ts` の照合テストは**名前だけ**を見る作りなので、どちらも捕まえられなかった。
+ * → 下の `toOutcome()` が唯一の変換点。ここを素通しに戻さないこと。
+ */
+export interface AiGenerationSuccess {
+  ok: true;
+  image?: { bytes: Uint8Array; mimeType: string };
+  text?: string;
+  blockReason?: string;
+  provenance?: AiProvenance;
+  /** @deprecated 提供元の生レスポンス。移行期間だけ残す。 */
+  data?: unknown;
+}
+
 export type AiGenerationOutcome =
-  | AiGenerateResult
-  | { ok: false; error: "desktop-only" | "permission-denied" | "no-api-key" | "canceled" };
+  | AiGenerationSuccess
+  | { ok: false; error: string; status?: number; kind?: string };
 
 // ── 同意待ちの 1 件（本体のツリーが購読する） ────────────────────────────────
 interface Pending {
@@ -158,6 +181,22 @@ export function settleAiConsent(result: { ok: true; remember: boolean } | { ok: 
 }
 
 /** 大きい配列で `String.fromCharCode(...bytes)` はスタックを溢れさせるので分割する。 */
+/**
+ * base64 → バイト列。**契約が `Uint8Array` なので、境界でここだけが変換する。**
+ *
+ * <p>壊れた base64 で例外を投げない（提供元の応答は信用しない）。
+ */
+function base64ToBytes(base64: string): Uint8Array | null {
+  try {
+    const bin = atob(base64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+    return out;
+  } catch {
+    return null;
+  }
+}
+
 function bytesToBase64(bytes: Uint8Array): string {
   const chunk = 0x8000;
   let bin = "";
@@ -230,7 +269,7 @@ export async function requestAiGeneration(opts: AiGenerationOptions): Promise<Ai
       `bytes=${opts.imageBytes.length} promptChars=${opts.prompt.length}`,
   );
 
-  return d.aiGenerate({
+  const result = await d.aiGenerate({
     capability,
     model,
     apiVersion: opts.apiVersion,
@@ -241,6 +280,26 @@ export async function requestAiGeneration(opts: AiGenerationOptions): Promise<Ai
     temperature: opts.temperature,
     providerOptions: opts.providerOptions,
   });
+  if (!result.ok) return result;
+
+  // 🔴 **ここが唯一の変換点。** main の形（base64）を契約の形（bytes）へ畳む。
+  let image: { bytes: Uint8Array; mimeType: string } | undefined;
+  if (result.image) {
+    const bytes = base64ToBytes(result.image.base64);
+    if (!bytes) {
+      log.warn(`[ai] ${opts.manifest.id}: 画像を復号できませんでした`);
+      return { ok: false, error: "invalid-image" };
+    }
+    image = { bytes, mimeType: result.image.mimeType };
+  }
+  return {
+    ok: true,
+    ...(image ? { image } : {}),
+    ...(result.text !== undefined ? { text: result.text } : {}),
+    ...(result.blockReason ? { blockReason: result.blockReason } : {}),
+    ...(result.provenance ? { provenance: result.provenance } : {}),
+    ...(result.data !== undefined ? { data: result.data } : {}),
+  };
 }
 
 /** テスト・画面遷移用。セッション中に覚えた同意を捨てる。 */
