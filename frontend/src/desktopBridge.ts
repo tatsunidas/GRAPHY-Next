@@ -249,8 +249,15 @@ export interface GraphyDesktop {
    * これにより、この口を呼べても患者画像を外へ出すことはできない。
    */
   aiTestConnection?: (providerId: string, capability: AiCapability) => Promise<AiTestResult>;
+  /**
+   * 用途ごとの既定だけを差し替える。**確認ダイアログは出ない**
+   * （提供元の一覧を送らないので、この口からは新しい送信先が生えない）。
+   */
+  aiDefaultsSet?: (defaults: Record<string, string>) => Promise<{ ok: boolean; problems: string[] }>;
   aiProvidersSet?: (cfg: { providers: AiProviderEntry[]; defaults: Record<string, string> }) =>
-    Promise<{ ok: boolean; problems: string[] }>;
+    // 🔑 `canceled` は「main の確認ダイアログで利用者が取り消した」。失敗ではないので
+    //    エラーとして見せない（`problems` は空で返る）。
+    Promise<{ ok: boolean; problems: string[]; canceled?: boolean }>;
   /** 名前を付けて保存（OS ダイアログ）。**上書き確認は OS が出す。** */
   saveFile?: (payload: {
     defaultName: string;

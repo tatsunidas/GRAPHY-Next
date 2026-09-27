@@ -54,6 +54,8 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   // 提供元の一覧と既定。鍵の値は返らない（有無だけ）。
   aiProvidersGet: () => ipcRenderer.invoke("graphy:ai-providers-get"),
   aiProvidersSet: (cfg) => ipcRenderer.invoke("graphy:ai-providers-set", cfg),
+  // 既定の切り替えだけ。**この口からは新しい送信先が生えない**ので確認を出さない。
+  aiDefaultsSet: (defaults) => ipcRenderer.invoke("graphy:ai-defaults-set", defaults),
   // 検査だけ（書かない）。検査規則をレンダラに二重化しないための口。
   aiProvidersValidate: (cfg) => ipcRenderer.invoke("graphy:ai-providers-validate", cfg),
   // 疎通確認。送る内容は main が決める（呼び出し側は提供元と用途だけ）。

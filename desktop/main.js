@@ -872,7 +872,66 @@ ipcMain.handle("graphy:ai-providers-get", () => {
     capabilities: aiProviders.CAPABILITIES,
   };
 });
-ipcMain.handle("graphy:ai-providers-set", (_e, cfg) => aiProviders.save(cfg || {}));
+/**
+ * 用途ごとの既定だけを差し替える。**確認は出さない**（日常操作を重くしない）。
+ *
+ * <p>🔑 提供元の一覧を渡させないので、**この口からは新しい送信先が生えない**。
+ */
+ipcMain.handle("graphy:ai-defaults-set", (_e, defaults) => {
+  const current = aiProviders.get();
+  return aiProviders.save({
+    providers: current.providers,
+    defaults: { ...current.defaults, ...(defaults || {}) },
+  });
+});
+
+/** 提供元 1 件の「送信先としての同一性」。ここが変わったら利用者に聞く。 */
+function destinationOf(p) {
+  return JSON.stringify({
+    endpoint: p.endpoint,
+    paths: p.paths || null,
+    auth: p.auth || null,
+    pathStyle: p.pathStyle || null,
+    headers: p.headers || null,
+  });
+}
+
+/**
+ * 提供元の一覧を保存する。
+ *
+ * <p>🔴 **新しい送信先が増える／変わるときは main が利用者に聞く。** この口はレンダラに
+ * 公開されており、プラグインも同じ realm に居るので呼べてしまう——**悪意やバグのある
+ * プラグインが「自分のサーバを提供元として追加し、既定にする」ことを防ぐ唯一の実効的な手段が
+ * これ**（ダイアログは main が描くのでレンダラから偽装・迂回できない）。
+ */
+ipcMain.handle("graphy:ai-providers-set", async (e, cfg) => {
+  const incoming = (cfg && Array.isArray(cfg.providers) ? cfg.providers : []);
+  const before = new Map(aiProviders.get().providers.map((p) => [p.id, destinationOf(p)]));
+  const added = [];
+  for (const p of incoming) {
+    if (!p || typeof p.endpoint !== "string") continue;
+    const prev = before.get(p.id);
+    if (prev === undefined || prev !== destinationOf(p)) added.push(`${p.id}: ${p.endpoint}`);
+  }
+  if (added.length > 0) {
+    const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
+    const choice = dialog.showMessageBoxSync(win, {
+      type: "warning",
+      buttons: ["許可する", "取り消す"],
+      defaultId: 1,
+      cancelId: 1,
+      title: "外部 AI の送信先を変更します",
+      message: "以下の送信先を追加・変更しようとしています。",
+      detail: `${added.join("\n")}\n\nここへ画像と指示が送られます。心当たりがない場合は取り消してください。`,
+    });
+    if (choice !== 0) return { ok: false, canceled: true, problems: [] };
+  }
+  const result = aiProviders.save(cfg || {});
+  if (result.ok && added.length > 0) {
+    console.log(`[ai] registry change: ${added.join(" / ")}`);
+  }
+  return result;
+});
 
 // 検査だけ（**書かない**）。設定画面が入力中に叩く。
 // 🔴 検査規則をレンダラ側に書き写さないため（二重に持つと必ずずれる）。

@@ -16,6 +16,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import { desktop, type AiProviderEntry, type AiProvidersConfig, type AiTestResult } from "../desktopBridge";
+import { AiProviderForm, describeProblem, emptyDraft, toDraft, type ProviderDraft } from "./AiProviderForm";
 
 export function AiPanel() {
   const { t } = useI18n();
@@ -28,6 +29,8 @@ export function AiPanel() {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   /** 提供元 id → 直近の疎通確認の結果。 */
   const [tests, setTests] = useState<Record<string, AiTestResult | "running">>({});
+  /** 編集中の提供元（`null` なら編集していない）。 */
+  const [editing, setEditing] = useState<{ draft: ProviderDraft; isNew: boolean } | null>(null);
 
   const refresh = useCallback(async () => {
     if (!d?.aiProvidersGet) return;
@@ -105,16 +108,19 @@ export function AiPanel() {
     }
   };
 
+  /**
+   * 用途の既定を切り替える。
+   *
+   * <p>🔑 **提供元の一覧を送らない専用の口を使う。** 一覧を送る口は「新しい送信先が
+   * 増えるかもしれない」ので main が確認を出す——既定を変えるだけで確認が出るのは煩わしい。
+   */
   const setDefault = async (capability: string, providerId: string) => {
-    if (!config || !d.aiProvidersSet) return;
+    if (!config || !d.aiDefaultsSet) return;
     setBusy(true);
     setError(null);
     setMessage(null);
     try {
-      const r = await d.aiProvidersSet({
-        providers: config.providers,
-        defaults: { ...config.defaults, [capability]: providerId },
-      });
+      const r = await d.aiDefaultsSet({ [capability]: providerId });
       if (!r.ok) setError(r.problems.join(" / "));
       else setMessage(t("settings.ai.defaultSaved"));
       await refresh();
@@ -122,6 +128,82 @@ export function AiPanel() {
       setError(t("common.fetchError", { error: String(e) }));
     } finally {
       setBusy(false);
+    }
+  };
+
+  /** 提供元を 1 件保存する（追加も編集も同じ経路）。 */
+  const saveProvider = async (entry: AiProviderEntry) => {
+    if (!config || !d.aiProvidersSet) return;
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const others = config.providers.filter((p) => p.id !== entry.id);
+      const r = await d.aiProvidersSet({ providers: [...others, entry], defaults: config.defaults });
+      if (r.canceled) {
+        setMessage(t("settings.ai.provider.canceled"));
+      } else if (!r.ok) {
+        setError(r.problems.map((x) => describeProblem(x, t)).join(" / "));
+        return; // フォームを開いたままにして直させる
+      } else {
+        setMessage(t("settings.ai.provider.saved", { label: entry.label }));
+      }
+      setEditing(null);
+      await refresh();
+    } catch (e) {
+      setError(t("common.fetchError", { error: String(e) }));
+    } finally {
+      setBusy(false);
+      d.refocus?.();
+    }
+  };
+
+  /**
+   * 提供元を削除する。
+   *
+   * <p>🔴 **鍵も一緒に消す。** 残すと、同じ id で別の会社の提供元を作ったときに
+   * **前の会社の鍵がそちらへ送られる**（「鍵を提供元間で共用しない」の違反）。
+   * <p>🔴 削除でその用途の既定が別の提供元へ移ることがある。**黙って送り先が変わるのは最悪**なので、
+   * 移った先を画面で言う。
+   */
+  const deleteProvider = async (p: AiProviderEntry) => {
+    if (!config || !d.aiProvidersSet) return;
+    if (!window.confirm(t("settings.ai.provider.deleteConfirm", { label: p.label }))) {
+      d.refocus?.();
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const rest = config.providers.filter((x) => x.id !== p.id);
+      if (rest.length === 0) {
+        setError(t("settings.ai.provider.deleteLast"));
+        return;
+      }
+      const r = await d.aiProvidersSet({ providers: rest, defaults: config.defaults });
+      if (r.canceled) return;
+      if (!r.ok) {
+        setError(r.problems.map((x) => describeProblem(x, t)).join(" / "));
+        return;
+      }
+      if (p.hasApiKey && p.secretKey) await d.secretClear?.(p.secretKey);
+      const next = await d.aiProvidersGet!();
+      const moved = Object.entries(next.defaults)
+        .filter(([cap, id]) => config.defaults[cap] === p.id && id !== p.id)
+        .map(([cap, id]) => `${t(`settings.ai.cap.${cap}`)} → ${next.providers.find((x) => x.id === id)?.label ?? id}`);
+      setConfig(next);
+      setTests((s) => ({ ...s, [p.id]: undefined as never }));
+      setMessage(
+        moved.length > 0
+          ? t("settings.ai.provider.deletedMoved", { label: p.label, moved: moved.join(" / ") })
+          : t("settings.ai.provider.deleted", { label: p.label }),
+      );
+    } catch (e) {
+      setError(t("common.fetchError", { error: String(e) }));
+    } finally {
+      setBusy(false);
+      d.refocus?.();
     }
   };
 
@@ -186,7 +268,39 @@ export function AiPanel() {
                   {t("settings.ai.plaintext")}
                 </span>
               ) : null}
+              <span style={{ flex: 1 }} />
+              <button
+                style={smallBtn}
+                disabled={busy}
+                onClick={() => setEditing({ draft: toDraft(p, capabilities), isNew: false })}
+                data-testid={`ai-provider-edit-${p.id}`}
+              >
+                {t("settings.ai.provider.edit")}
+              </button>
+              <button
+                style={{ ...smallBtn, color: "#b00020" }}
+                disabled={busy}
+                title={t("common.delete")}
+                onClick={() => void deleteProvider(p)}
+                data-testid={`ai-provider-delete-${p.id}`}
+              >
+                ✕
+              </button>
             </div>
+
+            {/* 編集中はこの提供元の下にフォームを開く（別ウィンドウにしない）。 */}
+            {editing && !editing.isNew && editing.draft.id === p.id ? (
+              <AiProviderForm
+                draft={editing.draft}
+                isNew={false}
+                capabilities={capabilities}
+                others={(config?.providers ?? []).filter((x) => x.id !== p.id)}
+                defaults={config?.defaults ?? {}}
+                busy={busy}
+                onCancel={() => setEditing(null)}
+                onSave={(entry) => void saveProvider(entry)}
+              />
+            ) : null}
 
             {/* できること。**無い用途は出さずに「使えない」と書く**——推測させない。 */}
             <div style={{ display: "flex", gap: 6, margin: "4px 0", flexWrap: "wrap" }}>
@@ -267,6 +381,27 @@ export function AiPanel() {
             ) : null}
           </div>
         ))}
+        {editing?.isNew ? (
+          <AiProviderForm
+            draft={editing.draft}
+            isNew
+            capabilities={capabilities}
+            others={config?.providers ?? []}
+            defaults={config?.defaults ?? {}}
+            busy={busy}
+            onCancel={() => setEditing(null)}
+            onSave={(entry) => void saveProvider(entry)}
+          />
+        ) : (
+          <button
+            style={addBtn}
+            disabled={busy}
+            onClick={() => setEditing({ draft: emptyDraft(capabilities), isNew: true })}
+            data-testid="ai-provider-add"
+          >
+            {`＋ ${t("settings.ai.provider.add")}`}
+          </button>
+        )}
         <p style={help}>{t("settings.ai.sec.providers.help")}</p>
         <p style={help}>{t("settings.ai.test.help")}</p>
       </section>
@@ -274,7 +409,7 @@ export function AiPanel() {
       {/* 読み込み時に捨てた設定。**黙って捨てない。** */}
       {config?.problems.length ? (
         <p style={warn} data-testid="ai-config-problems">
-          {`${t("settings.ai.configProblems")} ${config.problems.join(" / ")}`}
+          {`${t("settings.ai.configProblems")} ${config.problems.map((x) => describeProblem(x, t)).join(" / ")}`}
         </p>
       ) : null}
       {message ? <p style={{ color: "#2e7d32", fontSize: 12 }} data-testid="ai-message">{message}</p> : null}
@@ -398,6 +533,25 @@ const pre: React.CSSProperties = {
   maxHeight: 96,
   overflow: "auto",
   color: "#42505f",
+};
+
+const smallBtn: React.CSSProperties = {
+  padding: "1px 8px",
+  border: "1px solid #cdd5de",
+  borderRadius: 3,
+  background: "#fff",
+  fontSize: 11,
+  cursor: "pointer",
+};
+
+const addBtn: React.CSSProperties = {
+  padding: "4px 10px",
+  border: "1px dashed #9db3c8",
+  borderRadius: 4,
+  background: "#fff",
+  fontSize: 12,
+  cursor: "pointer",
+  color: "#0b5cad",
 };
 
 const warnBadge: React.CSSProperties = {
