@@ -853,6 +853,7 @@ export const ja: Record<string, string> = {
   "roiMgr.opSplit": "SPLIT（3D 連結成分で分割）→ 新規 Mask（成分ごと segment）",
   "roiMgr.splitConn": "Split の連結性（26=全て/18=面+辺/6=面のみ。大きいほど斜め接続もつなぎ過分割が減る）",
   "roiMgr.opFailed": "演算に失敗しました。選択 Mask が同一シリーズ/同一スタックか確認してください。",
+  "pluginWindow.keepOpen": "続ける",
   "pluginVideo.consent.title": "プラグインが動画を保管庫に取り込みます",
   "pluginVideo.consent.plugin": "プラグイン",
   "pluginVideo.consent.patient": "患者",
