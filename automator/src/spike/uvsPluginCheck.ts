@@ -1582,7 +1582,73 @@ async function main(): Promise<void> {
           got: gotStatic, expected: expStatic, madThreshold: madTh,
         });
 
-        const predictDone = await runAndWait("全フレームを予測", 600_000);
+        // ── 予測の見込み・進み具合・予測中の安全策（2026-09-27 ユーザ要望）──
+        const estText = await screen.getByTestId("uvs-predict-estimate").innerText().catch(() => "");
+        check(/見込み 約 .+（取り出し \d+ 枚・推論 \d+ 枚/.test(estText), "[10] ★予測を始める前に所要時間の見込みが出る", { estText });
+        const thBefore = await screen.locator("#set-predictionThreshold").inputValue();
+        const predictBtn = screen.getByRole("button", { name: /^全フレームを予測/ });
+        const tPredict0 = Date.now();
+        await predictBtn.click();
+        const progress = screen.getByTestId("uvs-progress");
+        const progShown = await progress.waitFor({ state: "visible", timeout: 15_000 }).then(() => true, () => false);
+        const phases = new Set<string>();
+        const counts = new Set<string>();
+        const remainings = new Set<string>();
+        const sample = async () => {
+          const ph = await screen.getByTestId("uvs-progress-phase").innerText().catch(() => "");
+          const ct = await screen.getByTestId("uvs-progress-count").innerText().catch(() => "");
+          const rm = await screen.getByTestId("uvs-progress-remaining").innerText().catch(() => "");
+          if (ph) phases.add(ph);
+          if (ct) counts.add(ct);
+          if (rm) remainings.add(rm);
+        };
+        await sample();
+        // 予測中: 設定は触れず、閾値の線をドラッグしても変わらない
+        const locked = await screen.getByTestId("uvs-locked").isVisible().catch(() => false);
+        const inputDisabled = await screen.locator("#set-staticMeanAbsDiffThreshold").isDisabled().catch(() => false);
+        const svg = screen.locator(".chart-svg").first();
+        const box = await svg.boundingBox().catch(() => null);
+        if (box) {
+          const y = box.y + (1 - Number(thBefore)) * box.height;
+          await viewer.mouse.move(box.x + box.width / 2, y);
+          await viewer.mouse.down();
+          await viewer.mouse.move(box.x + box.width / 2, y + box.height * 0.3, { steps: 5 });
+          await viewer.mouse.up();
+          await viewer.waitForTimeout(300);
+        }
+        const thDuring = await screen.locator("#set-predictionThreshold").inputValue();
+        check(progShown && locked && inputDisabled && !!box && thDuring === thBefore,
+          "[10] ★★予測中は設定を変えられない（入力欄は無効・閾値の線をドラッグしても変わらない・その旨を表示）",
+          { progShown, locked, inputDisabled, thBefore, thDuring });
+        // 予測中にプラグイン窓の × → 本体が確認を出す。「続ける」なら閉じずに予測は続く
+        await viewer.locator(".graphy-plugin-window__close").last().click();
+        const guard = viewer.getByTestId("plugin-window-close-guard");
+        const guardShown = await guard.waitFor({ state: "visible", timeout: 5_000 }).then(() => true, () => false);
+        if (guardShown) await viewer.getByTestId("plugin-window-close-guard-stay").click();
+        const stillOpen = await screen.isVisible().catch(() => false);
+        // 走り切るまで段階と件数を見続ける
+        const deadline = Date.now() + 600_000;
+        let predictDone = false;
+        while (Date.now() < deadline) {
+          await sample();
+          if (await predictBtn.isEnabled().catch(() => false)) {
+            predictDone = true;
+            break;
+          }
+          await viewer.waitForTimeout(700);
+        }
+        const predictSec = Math.round((Date.now() - tPredict0) / 1000);
+        check(guardShown && stillOpen && predictDone, "[10] ★★予測中に窓の × を押すと確認が出て、「続ける」なら閉じずに完走する", {
+          guardShown, stillOpen, predictDone,
+        });
+        const phaseList = [...phases];
+        check(
+          phaseList.some((x) => x.includes("1/2")) && phaseList.some((x) => x.includes("2/2")) && counts.size >= 3,
+          "[10] ★★予測の進み具合が出る（段階 1/2 取り出し → 2/2 推論・件数が進む）",
+          { phases: phaseList, counts: counts.size, remaining: [...remainings].slice(0, 4) },
+        );
+        const rates = await viewer.evaluate(() => localStorage.getItem("uvs.rates.v1"));
+        observe("[10] 予測の実時間と見込み（見込みの既定値の校正に使う）", { predictSec, estText, rates });
         const chartEmpty = await screen.getByText("予測がまだ実行されていません").count();
         check(predictDone && chartEmpty === 0, "[10] ★予測が最後まで走り、確率カーブが出る", { predictDone, chartEmpty });
 
