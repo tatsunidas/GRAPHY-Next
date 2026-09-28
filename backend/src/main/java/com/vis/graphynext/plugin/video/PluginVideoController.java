@@ -30,6 +30,8 @@ import java.util.Optional;
  *   <li>{@code POST /api/plugins/{id}/video/imports} — 取り込みをジョブとして投入（H48。状態は
  *       {@code /api/plugin-jobs/{jobId}}）</li>
  *   <li>{@code GET  /api/plugins/{id}/video/frame-values/{sop}} — フレームごとの値の SR を読む（H49）</li>
+ *   <li>{@code POST /api/plugins/{id}/video/derived} — プラグインが作った MP4（H53 の成果物）を派生シリーズとして
+ *       本体が DICOM に書く（H54。保管庫へ／.dcm ファイルへ。ジョブ）</li>
  * </ul>
  * 🔴 <b>出所（プラグイン名・版）は本体がマニフェストから入れる</b>。要求本文に名乗らせない。
  * 確認ダイアログは画面側の host が必ず出す（H4b / H9 と同じ。{@code pluginVideoApi.ts}）。
@@ -42,11 +44,31 @@ public class PluginVideoController {
     private final PluginRegistry registry;
     private final PluginJobService jobs;
     private final PluginVideoImportService service;
+    private final PluginDerivedVideoService derived;
+    private final com.vis.graphynext.plugin.PluginArtifacts artifacts;
 
-    public PluginVideoController(PluginRegistry registry, PluginJobService jobs, PluginVideoImportService service) {
+    public PluginVideoController(PluginRegistry registry, PluginJobService jobs, PluginVideoImportService service,
+                                 PluginDerivedVideoService derived, com.vis.graphynext.plugin.PluginArtifacts artifacts) {
         this.registry = registry;
         this.jobs = jobs;
         this.service = service;
+        this.derived = derived;
+        this.artifacts = artifacts;
+    }
+
+    @PostMapping("/api/plugins/{id}/video/derived")
+    public ResponseEntity<Object> derived(@PathVariable String id, @RequestBody PluginDerivedVideoService.DerivedRequest req) {
+        Optional<ResponseEntity<Object>> denied = guard(id);
+        if (denied.isPresent()) return denied.get();
+        if (req == null || req.artifactJobId() == null) return bad("artifactJobId は必須です");
+        // 🔴 ほかのプラグインの成果物は使わせない
+        Optional<PluginJobService.Status> st = jobs.status(req.artifactJobId());
+        if (st.isEmpty() || !id.equals(st.get().pluginId())) return bad("成果物が見つかりません（このプラグインのジョブのものに限ります）");
+        Optional<java.nio.file.Path> mp4 = artifacts.find(req.artifactJobId());
+        if (mp4.isEmpty()) return bad("成果物のファイルが見つかりません");
+        PluginManifest m = manifest(id).orElseThrow();
+        FrameValuesSr.Producer producer = new FrameValuesSr.Producer(m.id(), m.name(), m.version());
+        return ResponseEntity.ok(jobs.submitTask(id, ctx -> derived.write(req, mp4.get(), producer, ctx)));
     }
 
     @PostMapping("/api/plugins/{id}/video/probe")

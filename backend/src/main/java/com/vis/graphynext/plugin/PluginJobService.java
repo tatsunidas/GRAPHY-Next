@@ -42,6 +42,9 @@ import java.util.function.BooleanSupplier;
  * 同期の {@code run} で呼ばれたときはどちらも入らないので、プラグインは「無ければ何もしない」で書くこと。
  * 要求本文に同名のキーがあっても<b>ここで上書きする</b>（JSON から関数は作れないが、文字列で
  * 塞がれてプラグインが型エラーで落ちるのを防ぐ）。
+ *
+ * <p>H53: 結果に {@code __artifact}（一時フォルダに書いたファイルのパス）があれば {@link PluginArtifacts} が預かり、
+ * {@code GET /api/plugin-jobs/{jobId}/artifact} で配る。
  */
 @Service
 public class PluginJobService {
@@ -106,11 +109,19 @@ public class PluginJobService {
     }
 
     private final PluginRegistry registry;
+    private final PluginArtifacts artifacts;
     private final Map<String, Job> jobs = new ConcurrentHashMap<>();
     private final ExecutorService pool;
 
+    /** テスト用（成果物は OS の一時フォルダへ）。 */
     public PluginJobService(PluginRegistry registry) {
+        this(registry, new PluginArtifacts());
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public PluginJobService(PluginRegistry registry, PluginArtifacts artifacts) {
         this.registry = registry;
+        this.artifacts = artifacts;
         AtomicInteger seq = new AtomicInteger();
         this.pool = Executors.newFixedThreadPool(WORKERS, r -> {
             Thread t = new Thread(r, "plugin-job-" + seq.incrementAndGet());
@@ -179,6 +190,8 @@ public class PluginJobService {
         job.startedAt = System.currentTimeMillis();
         try {
             Object result = task.run(ctx);
+            // H53: 結果に成果物（一時フォルダのファイルのパス）があれば預かり、配れる形に差し替える
+            if (!job.cancelled.get()) result = artifacts.adopt(job.id, result);
             // 取り消しを受けたプラグインが途中の結果を返しても、「取り消し」として見せる
             finish(job, job.cancelled.get() ? State.CANCELLED : State.DONE, result, null);
         } catch (Exception e) {

@@ -1096,6 +1096,11 @@ interface PluginHostBase {
      * パスはバックエンド面（JAR）へ渡して読む想定。デスクトップ専用（web は `desktop-only`）。
      */
     pickFiles: (opts?: PluginPickFilesOptions) => Promise<PickFilesResult>;
+    /**
+     * H53: ジョブの成果物（JAR が一時フォルダに書き、結果の `__artifact` に入れて返したファイル）を、
+     * OS の保存ダイアログで保存する。`jobId` は結果の `__artifact.jobId`。デスクトップ専用。
+     */
+    saveJobArtifact?: (jobId: string, opts: PluginSaveArtifactOptions) => Promise<SaveFileResult>;
   };
   /**
    * バックエンド面を**ジョブとして**走らせる（H45・**0.3.0 以降**）。進み具合と取り消しがある。
@@ -1142,6 +1147,11 @@ interface PluginHostBase {
     importAsDicom: (req: PluginVideoImportRequest, opts?: PluginJobOptions) => Promise<PluginVideoImportOutcome>;
     /** H49: その動画に、このプラグインが書いた「フレームごとの値」を読む。無ければ null。 */
     readFrameValues: (sopInstanceUid: string) => Promise<PluginFrameValuesRead | null>;
+    /**
+     * H54: プラグインが作った MP4（H53 の成果物）を、元の動画から派生したシリーズとして本体が DICOM に書く。
+     * `target: "db"` は保管庫へ（本体の確認ダイアログを必ず出す）、`"file"` は .dcm の成果物（`file.saveJobArtifact` で保存）。
+     */
+    saveDerivedVideo?: (req: PluginDerivedVideoRequest, opts?: PluginJobOptions) => Promise<PluginDerivedVideoOutcome>;
   };
 }
 
@@ -1922,3 +1932,39 @@ export type PluginHost = Viewer2DPluginHost | MainScreenPluginHost;
 export interface PluginModule {
   activate(host: PluginHost): void | Promise<void>;
 }
+
+/** `host.file.saveJobArtifact()` の指定（H53）。 */
+export interface PluginSaveArtifactOptions {
+  defaultName: string;
+  filters?: { name: string; extensions: string[] }[];
+}
+
+/** `host.video.saveDerivedVideo()` の要求（H54）。 */
+export interface PluginDerivedVideoRequest {
+  /** 動画の MP4 を作ったジョブ（`runBackendJob` の結果の `__artifact.jobId`）。H.264・偶数寸法。 */
+  artifactJobId: string;
+  /** 元の動画の SOP Instance UID（患者・検査・属性はここから継ぐ）。 */
+  sourceSopInstanceUid: string;
+  /** 元の動画のどのフレームを採ったか（1 始まり）。 */
+  referencedFrames?: number[];
+  seriesDescription?: string;
+  derivationDescription?: string;
+  /** `"db"` は保管庫へ（本体の確認ダイアログ）、`"file"` は .dcm の成果物。 */
+  target: "db" | "file";
+}
+
+/** `host.video.saveDerivedVideo()` の結果（H54）。 */
+export interface PluginDerivedVideoResult {
+  target: "db" | "file";
+  sopInstanceUid: string;
+  seriesInstanceUid: string;
+  studyInstanceUid: string;
+  seriesNumber: number;
+  numberOfFrames: number;
+  seriesDescription: string;
+  artifact: { jobId: string; name: string; size: number } | null;
+}
+
+export type PluginDerivedVideoOutcome =
+  | { ok: true; result: PluginDerivedVideoResult }
+  | { ok: false; cancelled?: boolean; error?: string };

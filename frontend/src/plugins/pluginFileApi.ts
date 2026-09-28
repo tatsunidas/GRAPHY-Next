@@ -16,6 +16,7 @@
  * （`PluginSaveConfirmDialog`）の対象外である。代わりに、書き出す中身に患者情報が
  * 含まれ得ることはプラグイン側が利用者へ伝える責任を負う。
  */
+import { apiBase } from "../apiBase";
 import { desktop, type SaveFileResult } from "../desktopBridge";
 import { log } from "../log";
 
@@ -50,4 +51,33 @@ export async function saveFileAs(opts: PluginSaveFileOptions): Promise<SaveFileR
     log.error(`[save] 失敗: ${result.error ?? "unknown"}`);
   }
   return result;
+}
+
+/** H53 の保存の指定。 */
+export interface PluginSaveArtifactOptions {
+  /** 保存ダイアログの初期ファイル名（拡張子込み）。 */
+  defaultName: string;
+  /** 拡張子フィルタ。 */
+  filters?: { name: string; extensions: string[] }[];
+}
+
+/**
+ * H53: プラグインのジョブの成果物（JAR が一時フォルダに書いたファイル。結果の `__artifact`）を、
+ * OS の保存ダイアログで利用者の選んだ場所へ保存する。
+ *
+ * <p>成果物は本体が預かり（`PluginArtifacts`・24 時間）、`GET /api/plugin-jobs/{jobId}/artifact` で取り寄せる。
+ * 中身をいったん画面へ持ってくるので、極端に大きなファイル（数 GB）には向かない。
+ */
+export async function saveJobArtifact(jobId: string, opts: PluginSaveArtifactOptions): Promise<SaveFileResult> {
+  const d = desktop();
+  if (!d?.saveFile) return { ok: false, error: "desktop-only" };
+  let bytes: Uint8Array;
+  try {
+    const res = await fetch(`${apiBase()}/api/plugin-jobs/${encodeURIComponent(jobId)}/artifact`);
+    if (!res.ok) return { ok: false, error: `artifact-${res.status}` };
+    bytes = new Uint8Array(await res.arrayBuffer());
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  return saveFileAs({ defaultName: opts.defaultName, bytes, filters: opts.filters ?? [{ name: "All files", extensions: ["*"] }] });
 }
