@@ -1142,7 +1142,9 @@ async function batchCheck(driver: DesktopDriver, mainPage: Page): Promise<void> 
   const settingsFile = path.join(OUT_DIR, "batch-settings.json");
   fs.writeFileSync(settingsFile, JSON.stringify({
     uvsBatchSettings: 1,
-    analysis: { predictionSamplingInterval: 30, predictionThreshold: 0.5 },
+    // 🔑 サンプルの 2 本は画面の注記（カラー画素）でほぼ全フレームが色判定に落ちる（既定 0.0035）。
+    //    全部の出力を確かめたいので比率のしきい値を上げる（設定ファイルが効くことの確認も兼ねる）
+    analysis: { predictionSamplingInterval: 30, predictionThreshold: 0.5, colorPixelRatioThreshold: 0.5 },
     outputs: { db: true, folder: { mp4: true, avi: true, dicom: true }, csv: true },
     concurrency: 2,
   }, null, 2));
