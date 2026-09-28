@@ -987,6 +987,134 @@ async function viewToolsCheck(viewer: Page, closeWindows: () => Promise<void>): 
   await viewer.waitForTimeout(500);
 }
 
+// ── 15. 要約の出力（DICOM ファイル・MP4・AVI・GRAPHY の DB）（UVS 段 5・本体 H53/H54）──────
+async function exportCheck(driver: DesktopDriver, viewer: Page, closeWindows: () => Promise<void>): Promise<void> {
+  const port = driver.ports.http;
+  // OS の保存ダイアログは自動では押せないので、主プロセスの dialog を差し替える（保存先は OUT_DIR/export-*）
+  const outDir = path.join(OUT_DIR, "export");
+  fs.mkdirSync(outDir, { recursive: true });
+  await driver.app.evaluate(({ dialog }, dir) => {
+    (dialog as unknown as { showSaveDialog: unknown }).showSaveDialog = async (_w: unknown, o: { defaultPath?: string }) => ({
+      canceled: false,
+      filePath: `${dir}\\${(o?.defaultPath ?? "out.bin").replace(/[\\/]/g, "_")}`,
+    });
+  }, outDir);
+
+  await closeWindows();
+  await viewer.getByTestId("viewer2d-menu-plugins").click();
+  await viewer.waitForTimeout(300);
+  await viewer.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
+  const screen = viewer.getByTestId("uvs-summarizer").last();
+  await screen.waitFor({ state: "visible", timeout: 30_000 });
+  await viewer.waitForTimeout(3_000);
+
+  // 要約を 10・20・30 の 3 枚にする
+  const add = screen.locator("#sel-add");
+  const remove = screen.locator("#sel-remove");
+  await remove.fill("1-600");
+  await remove.press("Enter");
+  await viewer.waitForTimeout(500);
+  await add.fill("10,20,30");
+  await add.press("Enter");
+  await viewer.waitForTimeout(800);
+
+  const hasExport = (await screen.getByTestId("uvs-export-mp4").count()) > 0;
+  check(hasExport, "[15] ★出力のボタン（DICOM ファイル・MP4・AVI・GRAPHY の DB）が出る（本体に H53/H54 がある）", {
+    kinds: await screen.locator('[data-testid^="uvs-export-"]').evaluateAll((els) => els.map((e) => e.getAttribute("data-testid"))),
+  });
+  if (!hasExport) return;
+
+  const countFrames = (file: string): number => {
+    try {
+      const out = execFileSync("ffmpeg", ["-hide_banner", "-i", file, "-map", "0:v:0", "-c", "copy", "-f", "null", "-"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      return Number(/frame=\s*(\d+)/.exec(out)?.[1] ?? "0");
+    } catch (e) {
+      const s = String((e as { stderr?: string }).stderr ?? "");
+      const all = [...s.matchAll(/frame=\s*(\d+)/g)];
+      return all.length ? Number(all[all.length - 1][1]) : 0;
+    }
+  };
+  const waitSaved = async (ext: string, maxMs: number): Promise<string> => {
+    const until = Date.now() + maxMs;
+    while (Date.now() < until) {
+      const t = await screen.getByTestId("uvs-export-saved").innerText({ timeout: 300 }).catch(() => "");
+      if (t.includes(`.${ext}`)) return t;
+      await viewer.waitForTimeout(500);
+    }
+    return "";
+  };
+  const savedFile = (ext: string) => fs.readdirSync(outDir).find((n) => n.endsWith(`_summary_3f.${ext}`));
+
+  // 1. MP4 / AVI: 採用 3 フレームだけ
+  for (const ext of ["mp4", "avi"] as const) {
+    await screen.getByTestId(`uvs-export-${ext}`).locator("button").click();
+    const text = await waitSaved(ext, 120_000);
+    const f = savedFile(ext);
+    const frames = f ? countFrames(path.join(outDir, f)) : 0;
+    check(!!text && !!f && frames === 3, `[15] ★★${ext.toUpperCase()} として保存すると、採用フレーム（3 枚）だけの動画になる`, { text, file: f, frames });
+  }
+
+  // 2. DICOM ファイル（.dcm）: 本体が書いた派生の属性
+  await screen.getByTestId("uvs-export-dicomFile").locator("button").click();
+  const dcmText = await waitSaved("dcm", 120_000);
+  const dcm = savedFile("dcm");
+  let dcmTags: Record<string, unknown> = {};
+  if (dcm) {
+    const py = process.platform === "win32" ? "C:\\Users\\t_kob\\anaconda3\\python.exe" : "python3";
+    const code =
+      "import sys,json,pydicom;d=pydicom.dcmread(sys.argv[1]);" +
+      "r=d.ReferencedSeriesSequence[0].ReferencedInstanceSequence[0];" +
+      "print(json.dumps({'imageType':list(d.ImageType),'desc':d.SeriesDescription,'frames':int(d.NumberOfFrames)," +
+      "'ts':str(d.file_meta.TransferSyntaxUID),'refFrames':[int(x) for x in r.ReferencedFrameNumber],'deriv':str(d.DerivationDescription)}))";
+    try {
+      dcmTags = JSON.parse(execFileSync(py, ["-c", code, path.join(outDir, dcm)], { encoding: "utf8" }));
+    } catch (e) {
+      dcmTags = { error: String(e).slice(0, 200) };
+    }
+  }
+  check(
+    !!dcmText && JSON.stringify(dcmTags.imageType) === JSON.stringify(["DERIVED", "SECONDARY"]) && dcmTags.frames === 3 &&
+      JSON.stringify(dcmTags.refFrames) === "[10,20,30]" && String(dcmTags.desc).startsWith("[Plugin] Summarized") &&
+      dcmTags.ts === "1.2.840.10008.1.2.4.102" && String(dcmTags.deriv).includes("600→3 frames"),
+    "[15] ★★DICOM ファイル（.dcm）: 本体が派生（DERIVED）として書き、元のフレーム 10・20・30 への参照と [Plugin] が入る",
+    { file: dcm, dcmTags },
+  );
+
+  // 3. GRAPHY の DB: 本体の確認ダイアログ → 同じ検査に派生シリーズが増える
+  const before = (await (await fetch(`http://127.0.0.1:${port}/api/studies`)).json()) as { studyInstanceUid: string }[];
+  const studyUid = before[0]?.studyInstanceUid;
+  const seriesBefore = (await (await fetch(`http://127.0.0.1:${port}/api/studies/${studyUid}/series`)).json()) as { seriesInstanceUid: string }[];
+  await screen.getByTestId("uvs-export-dicom").locator("button").click();
+  const consent = viewer.getByTestId("plugin-derived-consent");
+  const consentShown = await consent.waitFor({ state: "visible", timeout: 20_000 }).then(() => true, () => false);
+  if (consentShown) {
+    await viewer.screenshot({ path: path.join(OUT_DIR, "export-db-consent.png") }).catch(() => {});
+    await viewer.getByTestId("plugin-derived-consent-ok").click();
+  }
+  let savedText = "";
+  const until = Date.now() + 120_000;
+  while (Date.now() < until) {
+    savedText = await screen.locator(".export-result", { hasText: "保存しました" }).first().innerText({ timeout: 300 }).catch(() => "");
+    if (savedText.includes("[Plugin]")) break;
+    await viewer.waitForTimeout(500);
+  }
+  const seriesAfter = (await (await fetch(`http://127.0.0.1:${port}/api/studies/${studyUid}/series`)).json()) as {
+    seriesInstanceUid: string; seriesDescription: string | null;
+  }[];
+  const added = seriesAfter.filter((s) => !seriesBefore.some((b) => b.seriesInstanceUid === s.seriesInstanceUid));
+  check(consentShown && added.length === 1 && String(added[0]?.seriesDescription).startsWith("[Plugin] Summarized") && savedText.includes("3 フレーム"),
+    "[15] ★★GRAPHY の DB に保存: 本体の確認ダイアログの後、同じ検査に派生シリーズ（3 フレーム）が増える",
+    { consentShown, added, savedText });
+  await viewer.screenshot({ path: path.join(OUT_DIR, "export-done.png") }).catch(() => {});
+
+  // 後始末
+  await add.fill("");
+  await add.press("Enter");
+  await remove.fill("");
+  await remove.press("Enter");
+  await viewer.waitForTimeout(500);
+}
+
 async function main(): Promise<void> {
   fs.rmSync(OUT_DIR, { recursive: true, force: true });
   fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -1108,6 +1236,11 @@ async function main(): Promise<void> {
     // 🔑 `UVS_ONLY_MANUAL=1` で [13]（手動のフレーム選択・除外）だけを回す
     if (process.env.UVS_ONLY_MANUAL && EXTERNAL_PLUGIN_DIR) {
       await manualCheck(viewer, closePluginWindows);
+      return;
+    }
+    // 🔑 `UVS_ONLY_EXPORT=1` で [15]（要約の出力）だけを回す
+    if (process.env.UVS_ONLY_EXPORT && EXTERNAL_PLUGIN_DIR) {
+      await exportCheck(driver, viewer, closePluginWindows);
       return;
     }
     // 🔑 `UVS_ONLY_VIEW=1` で [14]（画像操作・要約のみ表示・再生）だけを回す
@@ -2119,6 +2252,7 @@ async function main(): Promise<void> {
 
         await manualCheck(viewer, closePluginWindows);
         await viewToolsCheck(viewer, closePluginWindows);
+        await exportCheck(driver, viewer, closePluginWindows);
         check(pageErrors.length === 0, "[10] 画面のエラーが無い", pageErrors.slice(0, 3));
         await viewer.screenshot({ path: path.join(OUT_DIR, "uvs-react.png") }).catch(() => {});
       }
