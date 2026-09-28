@@ -81,3 +81,37 @@ export async function saveJobArtifact(jobId: string, opts: PluginSaveArtifactOpt
   }
   return saveFileAs({ defaultName: opts.defaultName, bytes, filters: opts.filters ?? [{ name: "All files", extensions: ["*"] }] });
 }
+
+/** H56 の結果: 選んだフォルダ（`dirToken` を書き込みに渡す）。 */
+export type PickDirectoryResult = { ok: true; path: string; dirToken: string } | { ok: false; canceled?: boolean; error?: string };
+
+/**
+ * H56: フォルダを選ばせる（デスクトップ専用）。バッチの入力フォルダ・出力先に使う。
+ * 🔴 プラグインが書けるのは、ここで利用者が選んだフォルダの直下だけ（main が選ばれたフォルダを覚えて確かめる）。
+ */
+export async function pickDirectory(opts: { title?: string } = {}): Promise<PickDirectoryResult> {
+  const d = desktop();
+  if (!d?.pluginPickDirectory) return { ok: false, error: "desktop-only" };
+  const r = await d.pluginPickDirectory({ title: opts.title });
+  return r.ok ? { ok: true, path: r.path, dirToken: r.path } : r;
+}
+
+/** H56: ジョブの成果物（H53）を選んだフォルダへ保存する（ダイアログなし・上書きしない名前にする）。 */
+export async function saveJobArtifactTo(jobId: string, opts: { dirToken: string; name: string }): Promise<SaveFileResult> {
+  const d = desktop();
+  if (!d?.pluginDownloadIntoDirectory) return { ok: false, error: "desktop-only" };
+  const url = new URL(`${apiBase()}/api/plugin-jobs/${encodeURIComponent(jobId)}/artifact`, window.location.href).href;
+  const r = await d.pluginDownloadIntoDirectory({ dir: opts.dirToken, name: opts.name, url });
+  if (r.ok) log.info(`[save] ${r.filePath}`);
+  return r;
+}
+
+/** H56: バイト列（例: 集計 CSV）を選んだフォルダへ書く（ダイアログなし・上書きしない名前にする）。 */
+export async function writeToDirectory(opts: { dirToken: string; name: string; bytes: Uint8Array }): Promise<SaveFileResult> {
+  const d = desktop();
+  if (!d?.pluginWriteIntoDirectory) return { ok: false, error: "desktop-only" };
+  const r = await d.pluginWriteIntoDirectory({ dir: opts.dirToken, name: opts.name, bytes: opts.bytes });
+  if (r.ok) log.info(`[save] ${r.filePath} (${opts.bytes.length} bytes)`);
+  return r;
+}
+

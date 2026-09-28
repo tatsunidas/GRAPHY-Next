@@ -347,6 +347,7 @@ export async function importVideoAsDicom(
   const out = await pollPluginJob(jobId, opts);
   if (!out.ok) return out;
   const result = out.result as PluginVideoImportResult;
+  linkImportedToDerived(req.consentToken, req.path, result.sopInstanceUid);
   if (!result.duplicate) {
     // 一覧（メイン画面・他のウィンドウ）を読み直させる
     notifyDbChanged(pluginId, { studyUids: [result.studyInstanceUid], patientId: result.patientId });
@@ -382,6 +383,8 @@ export interface PluginDerivedVideoRequest {
   derivationDescription?: string;
   /** `"db"` は保管庫へ登録（本体の確認ダイアログを出す）、`"file"` は .dcm を成果物にする（`file.saveJobArtifact` で保存）。 */
   target: "db" | "file";
+  /** H55 のバッチの札（`derivedToken`）。範囲内なら確認ダイアログを出さない。 */
+  consentToken?: string;
 }
 
 /** H54 の結果。 */
@@ -406,6 +409,8 @@ export interface DerivedConfirmLines {
   pluginName: string;
   seriesDescription: string;
   frames: number;
+  /** バッチの確認（H55）のときの中身。 */
+  batch?: BatchConfirmLines;
 }
 export type DerivedConfirmFn = (lines: DerivedConfirmLines) => Promise<boolean>;
 let derivedConfirmImpl: DerivedConfirmFn = showDerivedDialog;
@@ -427,7 +432,9 @@ export async function saveDerivedVideo(
 ): Promise<PluginDerivedVideoOutcome> {
   if (!req || !req.artifactJobId || !req.sourceSopInstanceUid) return { ok: false, error: "bad-request" };
   if (req.target !== "db" && req.target !== "file") return { ok: false, error: "bad-target" };
-  if (req.target === "db") {
+  // H55 のバッチの札の範囲（元の SOP ごとに 1 回）なら、確認ダイアログは開始時に済んでいる
+  const preConsented = req.target === "db" && useBatchToken(derivedConsents, plugin.id, req.consentToken, req.sourceSopInstanceUid);
+  if (req.target === "db" && !preConsented) {
     const ok = await derivedConfirmImpl({
       pluginName: plugin.name,
       seriesDescription: `[Plugin] ${req.seriesDescription?.trim() || "Derived video"}`,
@@ -459,6 +466,188 @@ export async function saveDerivedVideo(
   return { ok: true, result };
 }
 
+// ── H55: バッチの同意（取り込み・DICOM 取り込み・派生シリーズを 1 回のダイアログで） ──
+
+/** H55 の要求。どれも省略できる（あるものだけダイアログに出る）。 */
+export interface PluginBatchConsentRequest {
+  /** 非 DICOM の動画の取り込み（H48 と同じ items）。 */
+  importVideos?: PluginVideoConsentItem[];
+  /** DICOM ファイルの取り込み（H57）。 */
+  importDicom?: { paths: string[] };
+  /**
+   * 派生シリーズの保管庫への保存（H54）。元の SOP ごとに 1 回。
+   * まだ取り込んでいない動画は `sourcePath`（同じ要求の `importVideos` の path）で指す。
+   * そのファイルがこの札（`importToken`）で取り込まれると、できた SOP が範囲に入る。
+   */
+  derived?: { sourceSopInstanceUid?: string; sourcePath?: string; seriesDescription: string }[];
+  modality?: "US";
+  frameValues?: { description: string };
+}
+
+/** H55 の結果: 種類ごとの札（無い種類は null）。 */
+export type PluginBatchConsentResult =
+  | { ok: true; importToken: string | null; dicomToken: string | null; derivedToken: string | null }
+  | { ok: false; cancelled?: boolean; error?: string; issues?: PluginVideoConsentIssue[] };
+
+interface BatchConsent {
+  pluginId: string;
+  sops: Set<string>;
+  used: Set<string>;
+  expiresAt: number;
+  /** 派生: まだ取り込んでいない動画（path）。`linkedImportToken` で取り込まれたら SOP を sops に足す。 */
+  pendingPaths?: Set<string>;
+  linkedImportToken?: string | null;
+}
+/** バッチは長い（数百本・一晩）ので、札も長めに持つ。 */
+const BATCH_TTL_MS = 24 * 60 * 60 * 1000;
+const derivedConsents = new Map<string, BatchConsent>();
+const dicomConsents = new Map<string, BatchConsent>();
+
+export interface BatchConfirmLines {
+  pluginName: string;
+  importVideos: number;
+  importDicom: number;
+  derived: number;
+  derivedDescription: string | null;
+  modality: string;
+  frameValues: string | null;
+}
+export type BatchConfirmFn = (lines: BatchConfirmLines) => Promise<boolean>;
+let batchConfirmImpl: BatchConfirmFn = (l) => showDerivedDialog({ pluginName: l.pluginName, seriesDescription: "", frames: 0, batch: l });
+
+/** テスト用: バッチの確認ダイアログの代わりを入れる。 */
+export function __setBatchConfirm(fn: BatchConfirmFn | null): void {
+  batchConfirmImpl = fn ?? ((l) => showDerivedDialog({ pluginName: l.pluginName, seriesDescription: "", frames: 0, batch: l }));
+}
+
+/**
+ * H55: バッチを始める前に、本体の確認ダイアログを **1 回だけ** 出し、取り込み（H48）・DICOM の取り込み（H57）・
+ * 派生シリーズの保存（H54）の札をまとめて返す。数十〜数百本を放置で処理できるようにするため。
+ * 動画の取り込みがあれば H48 と同じく先に患者を確かめる（問題があればダイアログを出さない）。
+ */
+export async function requestBatchConsent(
+  plugin: { id: string; name: string },
+  req: PluginBatchConsentRequest,
+): Promise<PluginBatchConsentResult> {
+  const videos = req?.importVideos ?? [];
+  const dicom = req?.importDicom?.paths ?? [];
+  const derived = req?.derived ?? [];
+  if (videos.length + dicom.length + derived.length === 0) return { ok: false, error: "empty" };
+  const videoPaths = new Set(videos.map((v) => v.path));
+  for (const d of derived) {
+    if (!d || (!d.sourceSopInstanceUid && !d.sourcePath)) return { ok: false, error: "derived-source-missing" };
+    // path で指せるのは、同じ要求で取り込む動画だけ（取り込み済みの SOP は sourceSopInstanceUid で）
+    if (!d.sourceSopInstanceUid && !videoPaths.has(d.sourcePath!)) return { ok: false, error: "derived-path-not-imported" };
+  }
+  if (videos.length > 0) {
+    if (new Set(videos.map((i) => i.path)).size !== videos.length) return { ok: false, error: "duplicate-paths" };
+    try {
+      const issues = await validateItems(plugin.id, videos);
+      if (issues.length > 0) return { ok: false, error: issues[0].code, issues };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+  const descs = [...new Set(derived.map((d) => d.seriesDescription))];
+  const ok = await batchConfirmImpl({
+    pluginName: plugin.name,
+    importVideos: videos.length,
+    importDicom: dicom.length,
+    derived: derived.length,
+    derivedDescription: descs.length === 1 ? `[Plugin] ${descs[0]}` : descs.length > 1 ? `[Plugin] ${descs[0]} ほか` : null,
+    modality: t(req.modality === "US" ? "pluginVideo.consent.modalityUS" : "pluginVideo.consent.modalityVideo"),
+    frameValues: req.frameValues ? req.frameValues.description : null,
+  });
+  if (!ok) return { ok: false, cancelled: true };
+  const now = Date.now();
+  let importToken: string | null = null;
+  if (videos.length > 0) {
+    importToken = `${plugin.id}:${crypto.randomUUID()}`;
+    consents.set(importToken, {
+      pluginId: plugin.id,
+      paths: new Map(videos.map((it) => [it.path, { patient: patientSig(it.patient), seriesDescription: it.seriesDescription ?? null }])),
+      used: new Set(),
+      modality: req.modality ?? "",
+      frameValues: !!req.frameValues,
+      expiresAt: now + BATCH_TTL_MS,
+    });
+  }
+  const token = (m: Map<string, BatchConsent>, keys: string[]) => {
+    if (keys.length === 0) return null;
+    const tk = `${plugin.id}:${crypto.randomUUID()}`;
+    m.set(tk, { pluginId: plugin.id, sops: new Set(keys), used: new Set(), expiresAt: now + BATCH_TTL_MS });
+    return tk;
+  };
+  const dicomToken = token(dicomConsents, dicom);
+  let derivedToken: string | null = null;
+  if (derived.length > 0) {
+    // 取り込み前の動画（sourcePath）は、この札の取り込みが済んだときに SOP が範囲に入る（linkImportedToDerived）
+    derivedToken = `${plugin.id}:${crypto.randomUUID()}`;
+    derivedConsents.set(derivedToken, {
+      pluginId: plugin.id,
+      sops: new Set(derived.flatMap((d) => (d.sourceSopInstanceUid ? [d.sourceSopInstanceUid] : []))),
+      used: new Set(),
+      expiresAt: now + BATCH_TTL_MS,
+      pendingPaths: new Set(derived.flatMap((d) => (!d.sourceSopInstanceUid && d.sourcePath ? [d.sourcePath] : []))),
+      linkedImportToken: importToken,
+    });
+  }
+  log.info(`[plugin-video] batch consent: ${plugin.id} videos=${videos.length} dicom=${dicom.length} derived=${derived.length}`);
+  return { ok: true, importToken, dicomToken, derivedToken };
+}
+
+/** バッチの取り込み（H48）が済んだら、その path を指していた派生の札に SOP を足す。 */
+function linkImportedToDerived(importToken: string, path: string, sopInstanceUid: string): void {
+  for (const c of derivedConsents.values()) {
+    if (c.linkedImportToken === importToken && c.pendingPaths?.has(path)) {
+      c.pendingPaths.delete(path);
+      c.sops.add(sopInstanceUid);
+    }
+  }
+}
+
+/** 札の範囲なら使った印を付けて true。 */
+function useBatchToken(m: Map<string, BatchConsent>, pluginId: string, token: string | undefined, key: string): boolean {
+  if (!token) return false;
+  const c = m.get(token);
+  if (!c || c.pluginId !== pluginId || Date.now() > c.expiresAt || !c.sops.has(key) || c.used.has(key)) return false;
+  c.used.add(key);
+  return true;
+}
+
+/** H57 の結果。 */
+export type PluginDicomImportOutcome =
+  | { ok: true; imported: number; skipped: number; failed: number; errors: string[] }
+  | { ok: false; error?: string };
+
+/**
+ * H57: DICOM ファイルを保管庫へ取り込む（本体の通常の取り込み・`POST /api/import/paths`）。
+ * バッチの同意（H55 の `dicomToken`）の範囲のファイルだけ。DICOM の中身（患者・UID）はファイルのまま。
+ */
+export async function importDicomFiles(
+  pluginId: string,
+  req: { consentToken: string; paths: string[] },
+): Promise<PluginDicomImportOutcome> {
+  const paths = req?.paths ?? [];
+  if (paths.length === 0) return { ok: false, error: "no-paths" };
+  for (const p of paths) {
+    if (!useBatchToken(dicomConsents, pluginId, req.consentToken, p)) return { ok: false, error: "path-not-consented" };
+  }
+  try {
+    const r = await httpSend<{ imported: number; skipped: number; failed: number; errors: string[] }>("/api/import/paths", "POST", { paths });
+    if (r.imported > 0) notifyDbChanged(pluginId, {});
+    return { ok: true, imported: r.imported, skipped: r.skipped, failed: r.failed, errors: r.errors ?? [] };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** テスト用: バッチの札を捨てる。 */
+export function __resetBatchConsents(): void {
+  derivedConsents.clear();
+  dicomConsents.clear();
+}
+
 /** 派生シリーズを保管庫へ保存する前の本体の確認ダイアログ（抑止不可・文言は本体が決める）。 */
 function showDerivedDialog(lines: DerivedConfirmLines): Promise<boolean> {
   return new Promise((resolve) => {
@@ -487,10 +676,20 @@ function showDerivedDialog(lines: DerivedConfirmLines): Promise<boolean> {
       box.appendChild(d);
     };
     row(t("pluginVideo.consent.plugin"), lines.pluginName);
-    row(t("pluginVideo.derived.series"), lines.seriesDescription);
-    row(t("pluginVideo.derived.frames"), String(lines.frames));
+    const b = lines.batch;
+    if (b) {
+      overlay.setAttribute("data-testid", "plugin-batch-consent");
+      h.textContent = t("pluginVideo.batch.title");
+      if (b.importVideos > 0) row(t("pluginVideo.batch.importVideos"), `${b.importVideos}（${b.modality}）`);
+      if (b.importDicom > 0) row(t("pluginVideo.batch.importDicom"), String(b.importDicom));
+      if (b.derived > 0) row(t("pluginVideo.batch.derived"), `${b.derived}${b.derivedDescription ? `（${b.derivedDescription}）` : ""}`);
+      if (b.frameValues) row(t("pluginVideo.consent.frameValues"), b.frameValues);
+    } else {
+      row(t("pluginVideo.derived.series"), lines.seriesDescription);
+      row(t("pluginVideo.derived.frames"), String(lines.frames));
+    }
     const note = document.createElement("div");
-    note.textContent = t("pluginVideo.derived.note");
+    note.textContent = t(b ? "pluginVideo.batch.note" : "pluginVideo.derived.note");
     Object.assign(note.style, { color: "#667", fontSize: "12px", margin: "10px 0 12px" });
     box.appendChild(note);
     const bar = document.createElement("div");
@@ -498,11 +697,12 @@ function showDerivedDialog(lines: DerivedConfirmLines): Promise<boolean> {
     const cancel = document.createElement("button");
     cancel.type = "button";
     cancel.textContent = t("common.cancel");
-    cancel.setAttribute("data-testid", "plugin-derived-consent-cancel");
+    cancel.setAttribute("data-testid", lines.batch ? "plugin-batch-consent-cancel" : "plugin-derived-consent-cancel");
     const ok = document.createElement("button");
     ok.type = "button";
     ok.textContent = t("pluginVideo.derived.ok");
-    ok.setAttribute("data-testid", "plugin-derived-consent-ok");
+    ok.setAttribute("data-testid", lines.batch ? "plugin-batch-consent-ok" : "plugin-derived-consent-ok");
+    if (lines.batch) ok.textContent = t("pluginVideo.batch.ok");
     for (const [btn, primary] of [[cancel, false], [ok, true]] as const) {
       Object.assign(btn.style, {
         padding: "6px 14px", borderRadius: "6px", cursor: "pointer", fontSize: "13px",

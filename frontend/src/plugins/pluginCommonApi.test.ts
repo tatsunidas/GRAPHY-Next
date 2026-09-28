@@ -115,7 +115,8 @@ describe("listVideos（H51）", () => {
       ["v1", "[Plugin] a"],
       ["v2", "[Plugin] b"],
     ]);
-    expect(r[0]).toMatchObject({ patientKey: "K12", studyUid: "S1", studyDate: "20260901", modality: "US" });
+    expect(r[0]).toMatchObject({ patientKey: "K12", studyUid: "S1", studyDate: "20260901", modality: "US",
+      sopClassUid: US_MF, transferSyntaxUid: H264 });
   });
 
   it("患者で引くと、ID が完全一致する患者の検査を新しい順に返す（部分一致の別人は混ぜない）", async () => {
