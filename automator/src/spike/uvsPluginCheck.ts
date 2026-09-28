@@ -1267,6 +1267,14 @@ async function batchCheck(driver: DesktopDriver, mainPage: Page): Promise<void> 
   const derivedAfter = await derivedSeries();
   check(derivedAfter - derivedBefore === 3, "[16] ★★GRAPHY の DB に派生シリーズが 3 本増える", { derivedBefore, derivedAfter });
 
+  // 4b. 過去のバッチの「中身」「CSV を保存」（2026-09-28 ユーザ指摘: 押しても何も起こらないように見えた）
+  await queueDirs([outDir]);
+  await screen.getByTestId("uvs-batch-show").first().click();
+  const showing = await screen.locator(".histrow.showing").count();
+  await screen.getByTestId("uvs-batch-csv").first().click();
+  const csvNote = await screen.getByTestId("uvs-batch-csv-note").first().innerText({ timeout: 10_000 }).catch(() => "");
+  check(showing === 1 && /CSV を保存しました: .*\.csv/.test(csvNote), "[16] 「中身」で表示中の印が付き、「CSV を保存」は保存先を選ばせて場所を出す", { showing, csvNote });
+
   // 5. 同じ設定でもう一度 → 飛ばす（フォルダの 2 本）
   await screen.getByTestId("uvs-batch-new").click();
   await queueDirs([inDir, outDir]);
