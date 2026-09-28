@@ -1959,6 +1959,7 @@ export interface PluginDerivedVideoResult {
   sopInstanceUid: string;
   seriesInstanceUid: string;
   studyInstanceUid: string;
+  seriesNumber: number;
   numberOfFrames: number;
   seriesDescription: string;
   artifact: { jobId: string; name: string; size: number } | null;

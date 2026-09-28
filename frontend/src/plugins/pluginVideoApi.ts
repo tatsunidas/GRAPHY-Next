@@ -390,6 +390,7 @@ export interface PluginDerivedVideoResult {
   sopInstanceUid: string;
   seriesInstanceUid: string;
   studyInstanceUid: string;
+  seriesNumber: number;
   numberOfFrames: number;
   seriesDescription: string;
   /** `target: "file"` のときの .dcm（`file.saveJobArtifact(artifact.jobId, …)` で保存する）。 */

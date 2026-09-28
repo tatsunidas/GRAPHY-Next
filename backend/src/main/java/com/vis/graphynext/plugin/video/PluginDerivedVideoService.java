@@ -91,7 +91,7 @@ public class PluginDerivedVideoService {
 
     /** H54 の結果。{@code target=file} のときは SOP 等に加え、結果の {@code __artifact} に .dcm が載る。 */
     public record DerivedResult(String target, String sopInstanceUid, String seriesInstanceUid, String studyInstanceUid,
-                                int numberOfFrames, String seriesDescription) {
+                                int seriesNumber, int numberOfFrames, String seriesDescription) {
     }
 
     /**
@@ -122,7 +122,7 @@ public class PluginDerivedVideoService {
             VideoConverter.writeEncapsulated(a, info.transferSyntaxUid(), mp4, part10);
             checkCancelled(ctx);
             DerivedResult r = new DerivedResult(toFile ? "file" : "db", a.getString(Tag.SOPInstanceUID),
-                    a.getString(Tag.SeriesInstanceUID), a.getString(Tag.StudyInstanceUID), frames,
+                    a.getString(Tag.SeriesInstanceUID), a.getString(Tag.StudyInstanceUID), a.getInt(Tag.SeriesNumber, 0), frames,
                     a.getString(Tag.SeriesDescription));
             if (toFile) {
                 // H53 に預ける（ジョブの結果の __artifact を PluginJobService が拾う）
