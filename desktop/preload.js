@@ -63,4 +63,6 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
     ipcRenderer.invoke("graphy:ai-test-connection", { providerId, capability }),
   // 名前を付けて保存。上書き確認は OS のダイアログが出す。
   saveFile: (payload) => ipcRenderer.invoke("graphy:save-file", payload),
+  // 開くダイアログ（プラグインの H43 file.pickFiles）。ファイルだけ。選んだ絶対パスを返す。
+  pickFiles: (payload) => ipcRenderer.invoke("graphy:pick-files", payload),
 });

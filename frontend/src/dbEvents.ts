@@ -19,10 +19,24 @@ export interface DbChangedDetail {
 
 const CHANNEL = "graphy-db";
 const LS_KEY = "graphy-db-changed";
+/** 同じウィンドウの中へ配る印（`includeSelf` のときだけ出す）。 */
+const LOCAL_EVENT = "graphy-db-changed-local";
 
-/** DB 変更を他ウィンドウへ通知する。 */
-export function emitDbChanged(detail: Omit<DbChangedDetail, "ts">): void {
+/**
+ * DB 変更を他ウィンドウへ通知する。
+ *
+ * @param opts.includeSelf 送信元のウィンドウにも配る。既定は配らない（呼び出し側が自分で処理する前提）。
+ *   プラグインの `db.notifyChanged`（H46）は、呼んだ窓がメイン画面そのものなので、自分の一覧も読み直させる。
+ */
+export function emitDbChanged(detail: Omit<DbChangedDetail, "ts">, opts: { includeSelf?: boolean } = {}): void {
   const full: DbChangedDetail = { ...detail, ts: Date.now() };
+  if (opts.includeSelf) {
+    try {
+      window.dispatchEvent(new CustomEvent<DbChangedDetail>(LOCAL_EVENT, { detail: full }));
+    } catch {
+      // 配れなくても他ウィンドウへの通知は続ける
+    }
+  }
   try {
     const bc = new BroadcastChannel(CHANNEL);
     bc.postMessage(full);
@@ -56,8 +70,11 @@ export function subscribeDbChanged(cb: (detail: DbChangedDetail) => void): () =>
     }
   };
   window.addEventListener("storage", onStorage);
+  const onLocal = (e: Event) => cb((e as CustomEvent<DbChangedDetail>).detail);
+  window.addEventListener(LOCAL_EVENT, onLocal);
   return () => {
     bc?.close();
     window.removeEventListener("storage", onStorage);
+    window.removeEventListener(LOCAL_EVENT, onLocal);
   };
 }

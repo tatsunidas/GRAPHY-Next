@@ -68,6 +68,7 @@ public class DemoModeFilter extends OncePerRequestFilter {
             new BlockedRoute(null, "/api/system/**"),
             new BlockedRoute(null, "/api/imagej/**"),
             new BlockedRoute(HttpMethod.POST, "/api/plugins/*/run"),
+            new BlockedRoute(HttpMethod.POST, "/api/plugins/*/jobs"), // H45: /run と同じ実行の口
             // 2026-07-14 追加: Export/SSRF/サーバー設定書き換え系の監査で発見したガード漏れ。
             // 参照: fw/web-demo-hosting.md「バックエンドガード漏れの追加監査」
             new BlockedRoute(null, "/api/export/**"),

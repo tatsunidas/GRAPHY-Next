@@ -8,11 +8,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -27,30 +27,34 @@ import java.util.Optional;
  *   <li>{@code GET  /api/plugins} — マニフェスト一覧</li>
  *   <li>{@code GET  /api/plugins/{id}/ui.js} — UI バンドル（ES モジュール）配信</li>
  *   <li>{@code POST /api/plugins/{id}/run} — バックエンド面の実行</li>
+ *   <li>{@code POST /api/plugins/{id}/jobs} — バックエンド面をジョブとして実行（H45。進捗・取り消しあり）</li>
+ *   <li>{@code GET / DELETE /api/plugin-jobs/{jobId}} — ジョブの状態 / 取り消し</li>
  * </ul>
+ * ジョブは {@code /api/plugins/jobs/...} に置かない（プラグイン id が "jobs" だと {@code /{id}/...} と紛れる）。
  * 実体は起動プロファイルで {@link StandalonePluginRegistry} / {@link WebPluginRegistry} が注入される。
  */
 @RestController
-@RequestMapping("/api/plugins")
 public class PluginController {
 
     private static final Logger log = LoggerFactory.getLogger(PluginController.class);
     private static final MediaType JS = MediaType.parseMediaType("text/javascript");
 
     private final PluginRegistry registry;
+    private final PluginJobService jobs;
 
-    public PluginController(PluginRegistry registry) {
+    public PluginController(PluginRegistry registry, PluginJobService jobs) {
         this.registry = registry;
+        this.jobs = jobs;
     }
 
     /** マニフェスト一覧。 */
-    @GetMapping
+    @GetMapping("/api/plugins")
     public List<PluginManifest> list() {
         return registry.manifests();
     }
 
     /** UI バンドル（ES モジュール）を配信。 */
-    @GetMapping("/{id}/ui.js")
+    @GetMapping("/api/plugins/{id}/ui.js")
     public ResponseEntity<byte[]> ui(@PathVariable String id) {
         Optional<byte[]> bundle = registry.uiBundle(id);
         if (bundle.isEmpty()) return ResponseEntity.notFound().build();
@@ -58,7 +62,7 @@ public class PluginController {
     }
 
     /** バックエンド面を実行。存在しない=404 / モード非対応=501 / それ以外=500。 */
-    @PostMapping("/{id}/run")
+    @PostMapping("/api/plugins/{id}/run")
     public ResponseEntity<Object> run(@PathVariable String id,
                                       @RequestBody(required = false) Map<String, Object> payload) {
         try {
@@ -73,5 +77,31 @@ public class PluginController {
             log.warn("[plugins] run failed {}: {}", id, e.getMessage());
             return ResponseEntity.status(500).body(Map.of("error", String.valueOf(e.getMessage())));
         }
+    }
+
+    /** バックエンド面をジョブとして投入（H45）。存在しない=404 / モード非対応=501（投入の時点で弾く）。 */
+    @PostMapping("/api/plugins/{id}/jobs")
+    public ResponseEntity<Object> submitJob(@PathVariable String id,
+                                            @RequestBody(required = false) Map<String, Object> payload) {
+        try {
+            return ResponseEntity.ok(jobs.submit(id, payload));
+        } catch (NoSuchElementException e) {
+            return ResponseEntity.notFound().build();
+        } catch (UnsupportedOperationException e) {
+            log.info("[plugins] job not available for {}: {}", id, e.getMessage());
+            return ResponseEntity.status(501).body(Map.of("error", String.valueOf(e.getMessage())));
+        }
+    }
+
+    /** ジョブの状態（進み具合・結果・エラー）。 */
+    @GetMapping("/api/plugin-jobs/{jobId}")
+    public ResponseEntity<PluginJobService.Status> jobStatus(@PathVariable String jobId) {
+        return ResponseEntity.of(jobs.status(jobId));
+    }
+
+    /** ジョブの取り消しを求める（止まるのはプラグインが取り消しを見たとき）。 */
+    @DeleteMapping("/api/plugin-jobs/{jobId}")
+    public ResponseEntity<PluginJobService.Status> cancelJob(@PathVariable String jobId) {
+        return ResponseEntity.of(jobs.cancel(jobId));
     }
 }

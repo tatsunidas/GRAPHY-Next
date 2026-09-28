@@ -1,0 +1,12 @@
+{
+  "id": "mainscreen-host-check",
+  "name": "Main Screen Host Check",
+  "version": "0.1.0",
+  "engines": { "graphy": ">=0.3.0", "os": ["win32", "darwin", "linux"] },
+  "description": "Verifies the main-screen host (H42) and the common host APIs H43-H46: openWindow / store / pickFiles / searchPatients / runBackendJob / notifyChanged.",
+  "author": "automator",
+  "license": "MIT",
+  "contributes": ["mainscreen.menu"],
+  "ui": "ui.js",
+  "entrypoint": "automator.JobProbe"
+}
