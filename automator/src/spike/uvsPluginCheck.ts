@@ -631,6 +631,185 @@ async function importCheck(driver: DesktopDriver, mainPage: Page, closeViewer: (
   check(pageErrors.length === 0, "[12] 画面のエラーが無い", pageErrors.slice(0, 3));
 }
 
+// ── 13. 手動のフレーム選択・除外（2026-09-28 ユーザ依頼「検証してほしい」）──────
+/**
+ * 2D ビューアの要約画面（HLHS-600）で、「要約に追加」「要約から除外」を利用者と同じ操作で確かめる。
+ * 規則は (心臓 − 色・静止 − 手動除外) ∪ 手動追加（追加が勝つ）。記法 `1,5-8,12`。
+ * 🔑 範囲外（9999・0）は**振る舞いを記録するだけ**（合否にしない。直すかはユーザ判断）。
+ */
+async function manualCheck(viewer: Page, closeWindows: () => Promise<void>): Promise<void> {
+  const open = async (): Promise<Locator> => {
+    await closeWindows();
+    await viewer.getByTestId("viewer2d-menu-plugins").click();
+    await viewer.waitForTimeout(300);
+    await viewer.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
+    const s = viewer.getByTestId("uvs-summarizer").last();
+    await s.waitFor({ state: "visible", timeout: 30_000 });
+    await viewer.waitForTimeout(2_500);
+    return s;
+  };
+  let screen = await open();
+  const N = 600;
+
+  const setFrame = async (f: number) => {
+    await screen.locator('input[type="range"]').first().evaluate((el, v) => {
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      set.call(el, String(v));
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }, f);
+    await viewer.waitForTimeout(400);
+  };
+  const apply = async (mode: "add" | "remove", spec: string) => {
+    const input = screen.locator(`#sel-${mode}`);
+    await input.fill(spec);
+    await input.press("Enter");
+    await viewer.waitForTimeout(800);
+  };
+  /** 色帯の件数（要約から除外・手動で除外 など）と、指定欄の件数・結果欄の手動。 */
+  const read = async () => {
+    const rows = await screen.locator(".color-bar-row").allInnerTexts();
+    const bar = (label: string) => {
+      const r = rows.find((x) => x.trim().startsWith(label));
+      const m = r ? /\((\d+)\)/.exec(r) : null;
+      return m ? Number(m[1]) : null;
+    };
+    const selectors = await screen.locator(".frame-selector label").allInnerTexts();
+    const sel = (label: string) => {
+      const r = selectors.find((x) => x.trim().startsWith(label));
+      const m = r ? /\((\d+)\)/.exec(r) : null;
+      return m ? Number(m[1]) : null;
+    };
+    const manual = await screen.locator(".result-item", { hasText: "手動" }).locator(".result-value").innerText().catch(() => "");
+    const note = await screen.locator(".bar-note").innerText().catch(() => "");
+    return {
+      summaryExcluded: bar("要約から除外"),
+      userExcluded: bar("手動で除外"),
+      addCount: sel("要約に追加"),
+      removeCount: sel("要約から除外"),
+      manual: manual.trim(),
+      note: note.trim(),
+    };
+  };
+  /** 現在フレームが要約に入っているか（入っていなければ除外の理由）。 */
+  const frameState = async (f: number) => {
+    await setFrame(f);
+    const reason = await screen.locator(".view-excluded").first().innerText({ timeout: 500 }).catch(() => "");
+    return reason.trim() || "included";
+  };
+
+  // 初期化（前の検査の手動指定を空に）
+  await apply("add", "");
+  await apply("remove", "");
+  // まだ色・静止を判定していなければ判定しておく（「追加が色・静止の除外に勝つ」を見るため）
+  if (((await read()).summaryExcluded ?? 0) === 0) {
+    for (const name of ["静止フレームを全判定", "カラーフレームを全判定"]) {
+      const btn = screen.getByRole("button", { name: new RegExp(`^${name}`) });
+      await btn.click();
+      await viewer.waitForTimeout(500);
+      const until = Date.now() + 180_000;
+      while (Date.now() < until && !(await btn.isEnabled().catch(() => false))) await viewer.waitForTimeout(500);
+    }
+  }
+  const s0 = await read();
+  observe("[13] 手動指定の前", s0);
+  observe("[13] 手動指定の前の色帯と理由", {
+    rows: (await screen.locator(".color-bar-row").allInnerTexts()).map((x) => x.replace(/\s+/g, " ").trim()),
+    settings: {
+      ratio: await screen.locator("#set-colorPixelRatioThreshold").inputValue(),
+      mad: await screen.locator("#set-staticMeanAbsDiffThreshold").inputValue(),
+    },
+    reasons: Object.fromEntries(await Promise.all([1, 2, 100, 300, 599].map(async (f) => [f, await frameState(f)] as const))),
+    results: (await screen.locator(".results-panel").innerText().catch(() => "")).replace(/\s+/g, " ").slice(0, 300),
+  });
+
+  // 1. 除外 5,20-22（Enter で適用）
+  await apply("remove", "5,20-22");
+  const s1 = await read();
+  const f20 = await frameState(20);
+  const delta1 = (s1.summaryExcluded ?? 0) - (s0.summaryExcluded ?? 0);
+  check(
+    s1.removeCount === 4 && s1.userExcluded === 4 && f20 === "手動で除外" && delta1 >= 0 && delta1 <= 4,
+    "[13] ★「要約から除外」に 5,20-22 → 4 件が手動で除外される（件数・色帯・フレーム 20 の理由）",
+    { s1, f20, delta1 },
+  );
+
+  // 2. 追加が除外に勝つ（同じ番号 20 を追加にも入れる）
+  await apply("add", "20");
+  const s2 = await read();
+  const f20b = await frameState(20);
+  check(
+    s2.addCount === 1 && f20b === "included" && /1 件/.test(s2.note) && (s2.summaryExcluded ?? 0) === (s1.summaryExcluded ?? 0) - 1,
+    "[13] ★★同じフレームを追加と除外の両方に入れると追加が勝つ（フレーム 20 が要約に戻る）",
+    { s2, f20b },
+  );
+
+  // 3. 色・静止で除外されたフレームも、追加すれば要約に入る
+  let target = -1;
+  for (const f of [1, 2, 3, 4, 6, 7, 8, 9, 10, 590, 595, 598, 599, 600]) {
+    const st = await frameState(f);
+    if (st === "カラー" || st.startsWith("静止") || st.includes("静止")) {
+      target = f;
+      break;
+    }
+  }
+  if (target > 0) {
+    await apply("add", `20,${target}`);
+    const ft = await frameState(target);
+    check(ft === "included", "[13] ★色・静止で除外されたフレームも、手動で追加すれば要約に入る", { target, ft });
+  } else {
+    observe("[13] 色・静止で除外されたフレームが見つからなかったので飛ばした", {});
+  }
+
+  // 4. 「現在フレーム N を切替」: 30 へ移動 → 追加に入る → もう一度で外れる
+  await setFrame(30);
+  const toggle = screen.locator(".frame-selector").first().getByRole("button", { name: /現在フレーム 30 を切替/ });
+  const hasToggle = (await toggle.count()) > 0;
+  let in30 = false;
+  let out30 = false;
+  if (hasToggle) {
+    await toggle.click();
+    await viewer.waitForTimeout(800);
+    in30 = (await screen.locator("#sel-add").inputValue()).split(",").some((p) => p === "30" || (p.includes("-") && Number(p.split("-")[0]) <= 30 && 30 <= Number(p.split("-")[1])));
+    await toggle.click();
+    await viewer.waitForTimeout(800);
+    const v = await screen.locator("#sel-add").inputValue();
+    out30 = !v.split(",").some((p) => p === "30");
+  }
+  check(hasToggle && in30 && out30, "[13] 「現在フレーム 30 を切替」で追加に入り、もう一度押すと外れる", { hasToggle, in30, out30 });
+
+  // 5. 保存: 閉じて開き直しても手動指定が残る
+  const before = { add: await screen.locator("#sel-add").inputValue(), remove: await screen.locator("#sel-remove").inputValue() };
+  screen = await open();
+  const after = { add: await screen.locator("#sel-add").inputValue(), remove: await screen.locator("#sel-remove").inputValue() };
+  check(before.add === after.add && before.remove === after.remove && after.remove === "5,20-22",
+    "[13] ★閉じて開き直しても手動指定が残る（保存領域）", { before, after });
+
+  // 6. 範囲外・0・負数（記録だけ）
+  await apply("add", "9999");
+  const sOut = await read();
+  await apply("add", "0");
+  const sZero = await read();
+  observe("[13] 範囲外の番号（9999・0）を「要約に追加」に入れたとき", {
+    n: N,
+    "9999": { addCount: sOut.addCount, note: sOut.note, summaryExcluded: sOut.summaryExcluded },
+    "0": { addCount: sZero.addCount, note: sZero.note, summaryExcluded: sZero.summaryExcluded },
+  });
+  await viewer.screenshot({ path: path.join(OUT_DIR, "manual-out-of-range.png") }).catch(() => {});
+
+  // 7. 「最初からやり直す」で手動指定が消える
+  await apply("add", "");
+  const reset = screen.getByTestId("uvs-reset");
+  if (await reset.isVisible().catch(() => false)) {
+    await reset.click();
+    await screen.getByTestId("uvs-reset-ok").click();
+    await viewer.waitForTimeout(1_500);
+  }
+  const cleared = { add: await screen.locator("#sel-add").inputValue(), remove: await screen.locator("#sel-remove").inputValue() };
+  check(cleared.add === "" && cleared.remove === "", "[13] 「最初からやり直す」で手動指定が消える", cleared);
+  await viewer.screenshot({ path: path.join(OUT_DIR, "manual-done.png") }).catch(() => {});
+}
+
 async function main(): Promise<void> {
   fs.rmSync(OUT_DIR, { recursive: true, force: true });
   fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -748,6 +927,12 @@ async function main(): Promise<void> {
       });
       await viewer.waitForTimeout(200);
     };
+
+    // 🔑 `UVS_ONLY_MANUAL=1` で [13]（手動のフレーム選択・除外）だけを回す
+    if (process.env.UVS_ONLY_MANUAL && EXTERNAL_PLUGIN_DIR) {
+      await manualCheck(viewer, closePluginWindows);
+      return;
+    }
 
     // ── 1. プラグインが一覧に出て、起動できる ──────────────────────
     const menu = viewer.getByTestId("viewer2d-menu-plugins");
@@ -1749,6 +1934,7 @@ async function main(): Promise<void> {
           });
         }
 
+        await manualCheck(viewer, closePluginWindows);
         check(pageErrors.length === 0, "[10] 画面のエラーが無い", pageErrors.slice(0, 3));
         await viewer.screenshot({ path: path.join(OUT_DIR, "uvs-react.png") }).catch(() => {});
       }
