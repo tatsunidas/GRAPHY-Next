@@ -1111,6 +1111,213 @@ async function exportCheck(driver: DesktopDriver, viewer: Page, closeWindows: ()
   await viewer.waitForTimeout(500);
 }
 
+// ── 16. バッチ処理（UVS 段 2b・本体の H55〜H57）──────────────────────────────────
+/**
+ * 利用者と同じ経路: メイン画面で検査を選んだまま UVS →「バッチ処理」タブ → 設定ファイルを読む →
+ * フォルダ（AVI・US の DICOM・CT の DICOM・テキスト）を走査 → 対象を足す → DB の動画も足す → 出力フォルダ →
+ * 開始 → 本体の確認（1 回）→ 全部終わるまで待つ。OS のフォルダ選択は主プロセスの dialog を差し替える。
+ * そのあと: 同じ設定での再実行は飛ばすこと、中止して開き直すと「続きから再開」できることを見る。
+ */
+async function batchCheck(driver: DesktopDriver, mainPage: Page): Promise<void> {
+  const port = driver.ports.http;
+  const srcData = prepareImportSource();
+  if (!srcData) return;
+  const py = process.platform === "win32" ? "C:\\Users\\t_kob\\anaconda3\\python.exe" : "python3";
+  // 入力フォルダ（毎回作り直す）
+  const inDir = path.join(OUT_DIR, "batch-in");
+  const outDir = path.join(OUT_DIR, "batch-out");
+  fs.rmSync(inDir, { recursive: true, force: true });
+  fs.mkdirSync(inDir, { recursive: true });
+  fs.mkdirSync(outDir, { recursive: true });
+  fs.copyFileSync(srcData.extras[0], path.join(inDir, "BATCH-V1.avi"));
+  execFileSync(py, [path.join(AUTOMATOR_ROOT, "..", "scripts", "wrap-video-as-us-multiframe.py"), srcData.extras[1], path.join(inDir, "us-wrapped.dcm"),
+    "--patient-id", "BATCH-D1", "--patient-name", "BATCH^DICOM", "--description", "Batch US"]);
+  execFileSync(py, ["-c",
+    "import sys;from pydicom.dataset import Dataset,FileMetaDataset;from pydicom.uid import generate_uid,ExplicitVRLittleEndian\n" +
+    "m=FileMetaDataset();m.MediaStorageSOPClassUID='1.2.840.10008.5.1.4.1.1.2';m.MediaStorageSOPInstanceUID=generate_uid();m.TransferSyntaxUID=ExplicitVRLittleEndian\n" +
+    "d=Dataset();d.file_meta=m;d.SOPClassUID=m.MediaStorageSOPClassUID;d.SOPInstanceUID=m.MediaStorageSOPInstanceUID;d.Modality='CT';d.PatientID='CT1'\n" +
+    "d.StudyInstanceUID=generate_uid();d.SeriesInstanceUID=generate_uid();d.save_as(sys.argv[1],enforce_file_format=True)",
+    path.join(inDir, "ct.dcm")]);
+  fs.writeFileSync(path.join(inDir, "notes.txt"), "not a video");
+  const settingsFile = path.join(OUT_DIR, "batch-settings.json");
+  fs.writeFileSync(settingsFile, JSON.stringify({
+    uvsBatchSettings: 1,
+    analysis: { predictionSamplingInterval: 30, predictionThreshold: 0.5 },
+    outputs: { db: true, folder: { mp4: true, avi: true, dicom: true }, csv: true },
+    concurrency: 2,
+  }, null, 2));
+
+  // OS のフォルダ選択の代わり（呼ばれた順に返す）
+  const queueDirs = async (dirs: string[]) =>
+    driver.app.evaluate(({ dialog }, list) => {
+      const q = [...list];
+      (dialog as unknown as { showOpenDialog: unknown }).showOpenDialog = async () => ({ canceled: q.length === 0, filePaths: q.length ? [q.shift()!] : [] });
+    }, dirs);
+
+  const openBatch = async (): Promise<Locator> => {
+    await mainPage.evaluate(() => document.querySelectorAll<HTMLElement>(".graphy-plugin-window__close").forEach((b) => b.click()));
+    await mainPage.waitForTimeout(500);
+    await mainPage.getByTestId("mainscreen-menu-plugins").click();
+    await mainPage.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
+    const screen = mainPage.getByTestId("uvs-import").last();
+    await screen.waitFor({ state: "visible", timeout: 30_000 });
+    await screen.getByTestId("uvs-tab-batch").click();
+    await screen.getByTestId("uvs-batch").waitFor({ state: "visible", timeout: 10_000 });
+    return screen;
+  };
+  const waitState = async (screen: Locator, want: string[], maxMs: number): Promise<string | null> => {
+    const deadline = Date.now() + maxMs;
+    let st: string | null = null;
+    while (Date.now() < deadline) {
+      st = await screen.getByTestId("uvs-batch-progress").getAttribute("data-state", { timeout: 300 }).catch(() => null);
+      if (st && want.includes(st)) return st;
+      await mainPage.waitForTimeout(1_000);
+    }
+    return st;
+  };
+  const itemStatuses = async (screen: Locator) =>
+    screen.getByTestId("uvs-batch-item").evaluateAll((els) => els.map((e) => e.getAttribute("data-status")));
+  const derivedSeries = async (): Promise<number> => {
+    const studies = (await (await fetch(`http://127.0.0.1:${port}/api/studies`)).json()) as { studyInstanceUid: string }[];
+    let n = 0;
+    for (const s of studies) {
+      const series = (await (await fetch(`http://127.0.0.1:${port}/api/studies/${s.studyInstanceUid}/series`)).json()) as { seriesDescription: string | null }[];
+      n += series.filter((x) => String(x.seriesDescription).startsWith("[Plugin] Summarized")).length;
+    }
+    return n;
+  };
+  const acceptConsent = async () => {
+    const c = mainPage.getByTestId("plugin-batch-consent");
+    if (await c.waitFor({ state: "visible", timeout: 20_000 }).then(() => true, () => false)) await mainPage.getByTestId("plugin-batch-consent-ok").click();
+  };
+
+  // 1. 画面・設定ファイル
+  await queueDirs([inDir, outDir]);
+  let screen = await openBatch();
+  check(true, "[16] ★メイン画面の UVS に「バッチ処理」タブがある");
+  await mainPage.evaluate((p) => ((window as unknown as { __uvsPickSettings?: string }).__uvsPickSettings = p), settingsFile);
+  await screen.getByTestId("uvs-batch-load-settings").click();
+  const note = await screen.getByTestId("uvs-batch-settings-note").innerText({ timeout: 10_000 }).catch(() => "");
+  const outChecks = await Promise.all(["db", "mp4", "avi", "dicom", "csv"].map((k) => screen.getByTestId(`uvs-batch-out-${k}`).isChecked()));
+  check(note.includes("batch-settings.json") && !note.includes("読めなかった") && outChecks.every(Boolean),
+    "[16] 設定ファイル（JSON）を読むと画面の設定・出力に反映される", { note, outChecks });
+
+  // 2. フォルダを走査（拡張子・DICOM の US を確かめる）
+  await screen.getByTestId("uvs-batch-pick-folder").click();
+  await screen.getByTestId("uvs-batch-cands").waitFor({ state: "visible", timeout: 30_000 });
+  const cands = await screen.getByTestId("uvs-batch-cand").evaluateAll((els) => els.map((e) => ({ ok: e.getAttribute("data-ok"), text: (e as HTMLElement).innerText })));
+  const okCount = cands.filter((c) => c.ok === "1").length;
+  const ct = cands.find((c) => c.text.includes("ct"));
+  const txt = cands.find((c) => c.text.includes("notes"));
+  check(cands.length === 4 && okCount === 2 && !!ct && ct.ok === "0" && /US ではありません/.test(ct.text) && !!txt && txt.ok === "0",
+    "[16] ★★フォルダを走査: AVI と US の DICOM は対象、CT の DICOM（US でない）とテキストは理由つきで外す", { cands });
+  await screen.getByTestId("uvs-batch-add").click();
+
+  // 3. DB から（メイン画面で選んだ検査の動画）
+  await screen.getByTestId("uvs-batch-src-db").click();
+  await screen.getByTestId("uvs-batch-cand").first().waitFor({ state: "visible", timeout: 20_000 });
+  await screen.getByTestId("uvs-batch-add").click();
+  const count = await screen.getByTestId("uvs-batch-target-count").innerText();
+  check(count.includes("3"), "[16] DB の動画も対象に加えられる（フォルダと混ぜて 3 本）", { count });
+
+  // 4. 出力フォルダ → 開始 → 本体の確認は 1 回
+  await screen.getByTestId("uvs-batch-pick-outdir").click();
+  await mainPage.waitForTimeout(500);
+  const derivedBefore = await derivedSeries();
+  let perItemDialogs = 0;
+  const watcher = setInterval(() => {
+    void mainPage.getByTestId("plugin-video-consent").or(mainPage.getByTestId("plugin-derived-consent")).count()
+      .then((n) => (perItemDialogs += n > 0 ? 1 : 0)).catch(() => {});
+  }, 1_000);
+  await screen.getByTestId("uvs-batch-start").click();
+  const consent = mainPage.getByTestId("plugin-batch-consent");
+  const consentShown = await consent.waitFor({ state: "visible", timeout: 30_000 }).then(() => true, () => false);
+  const consentText = consentShown ? await consent.innerText() : "";
+  await mainPage.screenshot({ path: path.join(OUT_DIR, "batch-consent.png") }).catch(() => {});
+  check(consentShown && /3/.test(consentText), "[16] ★開始時に本体の確認が 1 回出る（取り込み・DICOM・派生シリーズをまとめて）", { consentText });
+  if (!consentShown) {
+    clearInterval(watcher);
+    return;
+  }
+  await mainPage.getByTestId("plugin-batch-consent-ok").click();
+  const t0 = Date.now();
+  await mainPage.waitForTimeout(15_000);
+  const overall = await screen.getByTestId("uvs-batch-overall").innerText().catch(() => "");
+  await mainPage.screenshot({ path: path.join(OUT_DIR, "batch-running.png") }).catch(() => {});
+  check(/本済み/.test(overall), "[16] 実行中は全体の進み具合が出る", { overall });
+  const state = await waitState(screen, ["done", "cancelled", "paused"], 20 * 60_000);
+  clearInterval(watcher);
+  const statuses = await itemStatuses(screen);
+  const sec = Math.round((Date.now() - t0) / 1000);
+  const itemsText = await screen.getByTestId("uvs-batch-items").innerText().catch(() => "");
+  await mainPage.screenshot({ path: path.join(OUT_DIR, "batch-done.png") }).catch(() => {});
+  check(state === "done" && statuses.length === 3 && statuses.every((s) => s === "done"), "[16] ★★3 本とも要約まで済む（放置で）", { state, statuses, sec, itemsText });
+  check(perItemDialogs === 0, "[16] 途中で 1 本ごとの確認ダイアログは出ない", { perItemDialogs });
+  const files = fs.readdirSync(outDir);
+  const ext = (e: string) => files.filter((f) => f.endsWith(e)).length;
+  check(ext(".mp4") === 3 && ext(".avi") === 3 && ext(".dcm") === 3 && ext(".csv") === 1,
+    "[16] ★★出力フォルダに MP4・AVI・DICOM が 3 本ずつと集計 CSV", { files });
+  const csvName = files.find((f) => f.endsWith(".csv"));
+  const csv = csvName ? fs.readFileSync(path.join(outDir, csvName), "utf8") : "";
+  const csvRows = csv.split(/\r\n/).filter((l) => /^\d+,/.test(l));
+  check(csv.startsWith("\uFEFFindex,label,") && csvRows.length === 3 && csvRows.every((l) => l.includes(",DONE,")),
+    "[16] CSV は単体アプリと同じ列で 3 行（DONE）", { head: csv.slice(0, 200), rows: csvRows.length });
+  const derivedAfter = await derivedSeries();
+  check(derivedAfter - derivedBefore === 3, "[16] ★★GRAPHY の DB に派生シリーズが 3 本増える", { derivedBefore, derivedAfter });
+
+  // 5. 同じ設定でもう一度 → 飛ばす（フォルダの 2 本）
+  await screen.getByTestId("uvs-batch-new").click();
+  await queueDirs([inDir, outDir]);
+  await screen.getByTestId("uvs-batch-load-settings").click();
+  await mainPage.waitForTimeout(500);
+  await screen.getByTestId("uvs-batch-src-folder").click();
+  await screen.getByTestId("uvs-batch-pick-folder").click();
+  await screen.getByTestId("uvs-batch-cands").waitFor({ state: "visible", timeout: 30_000 });
+  await screen.getByTestId("uvs-batch-add").click();
+  await screen.getByTestId("uvs-batch-pick-outdir").click();
+  await mainPage.waitForTimeout(500);
+  await screen.getByTestId("uvs-batch-start").click();
+  await acceptConsent();
+  const st2 = await waitState(screen, ["done", "cancelled"], 5 * 60_000);
+  const s2 = await itemStatuses(screen);
+  check(st2 === "done" && s2.length === 2 && s2.every((s) => s === "skipped"), "[16] ★同じ設定で要約済みの動画は飛ばす", { st2, s2 });
+
+  // 6. 中止 → 窓を閉じる → 開き直すと「続きから再開」
+  await screen.getByTestId("uvs-batch-new").click();
+  await queueDirs([outDir]);
+  // しきい値を変えて、飛ばされないようにする
+  await screen.getByTestId("uvs-batch-th").fill("0.4");
+  await screen.getByTestId("uvs-batch-th").blur();
+  await screen.getByTestId("uvs-batch-src-db").click();
+  await screen.getByTestId("uvs-batch-cand").first().waitFor({ state: "visible", timeout: 20_000 });
+  await screen.getByTestId("uvs-batch-add").click();
+  await screen.getByTestId("uvs-batch-pick-outdir").click();
+  await mainPage.waitForTimeout(500);
+  await screen.getByTestId("uvs-batch-start").click();
+  await acceptConsent();
+  const until = Date.now() + 120_000;
+  while (Date.now() < until && !(await itemStatuses(screen)).includes("summarizing")) await mainPage.waitForTimeout(500);
+  await mainPage.waitForTimeout(3_000);
+  await screen.getByTestId("uvs-batch-cancel").click();
+  const st3 = await waitState(screen, ["cancelled", "done"], 120_000);
+  check(st3 === "cancelled", "[16] 実行中に中止できる", { st3, items: await itemStatuses(screen) });
+  await queueDirs([outDir]);
+  screen = await openBatch();
+  const resumeBtn = screen.getByTestId("uvs-batch-resume").first();
+  const canResume = await resumeBtn.waitFor({ state: "visible", timeout: 20_000 }).then(() => true, () => false);
+  await mainPage.screenshot({ path: path.join(OUT_DIR, "batch-interrupted.png") }).catch(() => {});
+  check(canResume, "[16] ★開き直すと中断したバッチが「続きから再開」に出る");
+  if (!canResume) return;
+  await screen.getByTestId("uvs-batch-pick-outdir").click();
+  await mainPage.waitForTimeout(500);
+  await resumeBtn.click();
+  await acceptConsent();
+  const st4 = await waitState(screen, ["done", "cancelled"], 10 * 60_000);
+  const s4 = await itemStatuses(screen);
+  await mainPage.screenshot({ path: path.join(OUT_DIR, "batch-resumed.png") }).catch(() => {});
+  check(st4 === "done" && s4.length === 1 && s4[0] === "done", "[16] ★★再開すると残り（中止した 1 本）を最後までやる", { st4, s4 });
+}
+
 async function main(): Promise<void> {
   fs.rmSync(OUT_DIR, { recursive: true, force: true });
   fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -1197,6 +1404,11 @@ async function main(): Promise<void> {
     await mainPage.getByTestId("search-submit-button").click();
     await mainPage.getByTestId(`study-row-${studyUid}`).click();
     await mainPage.locator('[data-testid^="series-row-"]').first().click();
+    // 🔑 `UVS_ONLY_BATCH=1` で [16]（バッチ処理）だけを回す。メイン画面で検査を選んだ状態で開く
+    if (process.env.UVS_ONLY_BATCH && EXTERNAL_PLUGIN_DIR) {
+      await batchCheck(driver, mainPage);
+      return;
+    }
 
     const viewer = await driver.waitForNewPage(
       () => mainPage.getByTestId("viewer2d-toolbar-button").click(),
