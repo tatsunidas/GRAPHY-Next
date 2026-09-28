@@ -16,7 +16,9 @@ vi.mock("../dbEvents", () => ({ emitDbChanged: (d: unknown) => emitted.push(d) }
 
 import {
   __resetVideoConsents,
+  __setDerivedConfirm,
   __setVideoConsentConfirm,
+  saveDerivedVideo,
   importVideoAsDicom,
   requestVideoImportConsent,
   type ConsentLines,
@@ -186,5 +188,52 @@ describe("H48 の同意の札", () => {
     const r = await requestVideoImportConsent(PLUGIN, { items: [{ path: "a.avi", patient: NEW }, { path: "a.avi", patient: NEW }] });
     expect(r).toEqual({ ok: false, error: "duplicate-paths" });
     expect(shown).toEqual([]);
+  });
+});
+
+describe("H54 派生の動画シリーズ", () => {
+  afterEach(() => __setDerivedConfirm(null));
+  const base = { artifactJobId: "j-mp4", sourceSopInstanceUid: "2.25.1", referencedFrames: [10, 20, 30], seriesDescription: "Summarized" };
+  const jobResult = (extra: Record<string, unknown> = {}) =>
+    done({
+      result: { target: "db", sopInstanceUid: "2.25.9", seriesInstanceUid: "2.25.8", studyInstanceUid: "1.2", numberOfFrames: 3, seriesDescription: "[Plugin] Summarized" },
+      ...extra,
+    });
+
+  it("保管庫へ（db）は本体の確認ダイアログを出してから書き、一覧の読み直しを知らせる", async () => {
+    const seen: unknown[] = [];
+    __setDerivedConfirm(async (l) => {
+      seen.push(l);
+      return true;
+    });
+    httpSend.mockImplementation(async (url: string) => (String(url).endsWith("/video/derived") ? { jobId: "j2" } : undefined));
+    httpGet.mockResolvedValueOnce(jobResult());
+    const r = await saveDerivedVideo(PLUGIN, { ...base, target: "db" }, { pollMs: 1 });
+    expect(seen).toEqual([{ pluginName: "UVS", seriesDescription: "[Plugin] Summarized", frames: 3 }]);
+    expect(httpSend).toHaveBeenCalledWith("/api/plugins/uvs/video/derived", "POST", expect.objectContaining({ target: "db", referencedFrames: [10, 20, 30] }));
+    expect(r).toMatchObject({ ok: true, result: { target: "db", sopInstanceUid: "2.25.9", artifact: null } });
+    expect(emitted).toEqual([expect.objectContaining({ reason: "plugin:uvs", studyUids: ["1.2"] })]);
+  });
+
+  it("確認ダイアログで取り消すと何も書かない", async () => {
+    __setDerivedConfirm(async () => false);
+    expect(await saveDerivedVideo(PLUGIN, { ...base, target: "db" })).toEqual({ ok: false, cancelled: true });
+    expect(httpSend).not.toHaveBeenCalledWith("/api/plugins/uvs/video/derived", expect.anything(), expect.anything());
+  });
+
+  it("ファイルへ（file）は確認ダイアログを出さず、.dcm の成果物を返す（一覧は読み直させない）", async () => {
+    __setDerivedConfirm(async () => {
+      throw new Error("出してはいけない");
+    });
+    httpSend.mockImplementation(async (url: string) => (String(url).endsWith("/video/derived") ? { jobId: "j3" } : undefined));
+    httpGet.mockResolvedValueOnce(
+      done({
+        result: { target: "file", sopInstanceUid: "2.25.9", seriesInstanceUid: "2.25.8", studyInstanceUid: "1.2", numberOfFrames: 3, seriesDescription: "x" },
+        __artifact: { jobId: "j3", name: "summary.dcm", size: 123 },
+      }),
+    );
+    const r = await saveDerivedVideo(PLUGIN, { ...base, target: "file" }, { pollMs: 1 });
+    expect(r).toMatchObject({ ok: true, result: { target: "file", artifact: { jobId: "j3", name: "summary.dcm" } } });
+    expect(emitted).toEqual([]);
   });
 });

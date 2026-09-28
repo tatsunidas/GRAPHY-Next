@@ -109,7 +109,8 @@ export type {
  * host の中身は `viewer2d.menu` と完全に同一で、違うのは出る場所だけである。
  */
 import type { AiGenerationOptions, AiGenerationOutcome } from "./pluginAiApi";
-import type { PluginSaveFileOptions } from "./pluginFileApi";
+import type { PluginSaveArtifactOptions, PluginSaveFileOptions } from "./pluginFileApi";
+export type { PluginSaveArtifactOptions };
 import type { SaveFileResult } from "../desktopBridge";
 import type {
   PickFilesResult,
@@ -133,6 +134,9 @@ import type {
   PluginFrameValues,
   PluginFrameValuesRead,
   PluginFrameValuesSeries,
+  PluginDerivedVideoOutcome,
+  PluginDerivedVideoRequest,
+  PluginDerivedVideoResult,
   PluginVideoConsentIssue,
   PluginVideoConsentItem,
   PluginVideoConsentRequest,
@@ -147,6 +151,9 @@ export type {
   PluginFrameValues,
   PluginFrameValuesRead,
   PluginFrameValuesSeries,
+  PluginDerivedVideoOutcome,
+  PluginDerivedVideoRequest,
+  PluginDerivedVideoResult,
   PluginVideoConsentIssue,
   PluginVideoConsentItem,
   PluginVideoConsentRequest,
@@ -241,6 +248,11 @@ interface PluginHostBase {
   file: {
     saveAs: (opts: PluginSaveFileOptions) => Promise<SaveFileResult>;
     /**
+     * H53: ジョブの成果物（JAR が一時フォルダに書き、結果の `__artifact` に入れて返したファイル）を、
+     * OS の保存ダイアログで保存する。`jobId` は結果の `__artifact.jobId`。デスクトップ専用。
+     */
+    saveJobArtifact: (jobId: string, opts: PluginSaveArtifactOptions) => Promise<SaveFileResult>;
+    /**
      * **開くダイアログ**（H43）。OS のダイアログでファイルを選ばせ、**絶対パス**を返す。
      * フォルダは選べない。取り消しは `{ok:false, canceled:true}`（失敗ではない）。
      *
@@ -300,6 +312,11 @@ interface PluginHostBase {
     importAsDicom: (req: PluginVideoImportRequest, opts?: PluginJobOptions) => Promise<PluginVideoImportOutcome>;
     /** H49: その動画に、このプラグインが書いた「フレームごとの値」を読む。無ければ null。 */
     readFrameValues: (sopInstanceUid: string) => Promise<PluginFrameValuesRead | null>;
+    /**
+     * H54: プラグインが作った MP4（H53 の成果物）を、元の動画から派生したシリーズとして本体が DICOM に書く。
+     * `target: "db"` は保管庫へ（本体の確認ダイアログを必ず出す）、`"file"` は .dcm の成果物（`file.saveJobArtifact` で保存）。
+     */
+    saveDerivedVideo: (req: PluginDerivedVideoRequest, opts?: PluginJobOptions) => Promise<PluginDerivedVideoOutcome>;
   };
 }
 

@@ -29,6 +29,7 @@ import java.util.Optional;
  *   <li>{@code POST /api/plugins/{id}/run} — バックエンド面の実行</li>
  *   <li>{@code POST /api/plugins/{id}/jobs} — バックエンド面をジョブとして実行（H45。進捗・取り消しあり）</li>
  *   <li>{@code GET / DELETE /api/plugin-jobs/{jobId}} — ジョブの状態 / 取り消し</li>
+ *   <li>{@code GET  /api/plugin-jobs/{jobId}/artifact} — ジョブの成果物（H53。要約した動画など）</li>
  * </ul>
  * ジョブは {@code /api/plugins/jobs/...} に置かない（プラグイン id が "jobs" だと {@code /{id}/...} と紛れる）。
  * 実体は起動プロファイルで {@link StandalonePluginRegistry} / {@link WebPluginRegistry} が注入される。
@@ -41,8 +42,10 @@ public class PluginController {
 
     private final PluginRegistry registry;
     private final PluginJobService jobs;
+    private final PluginArtifacts artifacts;
 
-    public PluginController(PluginRegistry registry, PluginJobService jobs) {
+    public PluginController(PluginRegistry registry, PluginJobService jobs, PluginArtifacts artifacts) {
+        this.artifacts = artifacts;
         this.registry = registry;
         this.jobs = jobs;
     }
@@ -97,6 +100,19 @@ public class PluginController {
     @GetMapping("/api/plugin-jobs/{jobId}")
     public ResponseEntity<PluginJobService.Status> jobStatus(@PathVariable String jobId) {
         return ResponseEntity.of(jobs.status(jobId));
+    }
+
+    /** ジョブの成果物（H53）。画面は取り寄せて本体の保存ダイアログ（{@code file.saveJobArtifact}）で保存させる。 */
+    @GetMapping("/api/plugin-jobs/{jobId}/artifact")
+    public ResponseEntity<org.springframework.core.io.Resource> jobArtifact(@PathVariable String jobId) {
+        Optional<java.nio.file.Path> f = artifacts.find(jobId);
+        if (f.isEmpty()) return ResponseEntity.notFound().build();
+        java.nio.file.Path p = f.get();
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .header("Content-Disposition", org.springframework.http.ContentDisposition.attachment()
+                        .filename(p.getFileName().toString()).build().toString())
+                .body(new org.springframework.core.io.FileSystemResource(p));
     }
 
     /** ジョブの取り消しを求める（止まるのはプラグインが取り消しを見たとき）。 */

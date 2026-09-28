@@ -366,6 +366,171 @@ export async function readVideoFrameValues(pluginId: string, sopInstanceUid: str
   }
 }
 
+// ── H54: 派生の動画シリーズ ──
+
+/** H54 の要求。 */
+export interface PluginDerivedVideoRequest {
+  /** 動画の MP4 を作ったジョブ（H45 `runBackendJob` の結果の `__artifact.jobId`）。H.264・偶数寸法。 */
+  artifactJobId: string;
+  /** 元の動画の SOP Instance UID（患者・検査・属性はここから継ぐ）。 */
+  sourceSopInstanceUid: string;
+  /** 元の動画のどのフレームを採ったか（1 始まり）。ReferencedFrameNumber に残る。 */
+  referencedFrames?: number[];
+  /** シリーズの説明（本体が `[Plugin] ` を前に付ける）。 */
+  seriesDescription?: string;
+  /** DerivationDescription（どう作ったか）。 */
+  derivationDescription?: string;
+  /** `"db"` は保管庫へ登録（本体の確認ダイアログを出す）、`"file"` は .dcm を成果物にする（`file.saveJobArtifact` で保存）。 */
+  target: "db" | "file";
+}
+
+/** H54 の結果。 */
+export interface PluginDerivedVideoResult {
+  target: "db" | "file";
+  sopInstanceUid: string;
+  seriesInstanceUid: string;
+  studyInstanceUid: string;
+  numberOfFrames: number;
+  seriesDescription: string;
+  /** `target: "file"` のときの .dcm（`file.saveJobArtifact(artifact.jobId, …)` で保存する）。 */
+  artifact: { jobId: string; name: string; size: number } | null;
+}
+
+export type PluginDerivedVideoOutcome =
+  | { ok: true; result: PluginDerivedVideoResult }
+  | { ok: false; cancelled?: boolean; error?: string };
+
+/** 派生シリーズの保存の確認ダイアログに出す中身。 */
+export interface DerivedConfirmLines {
+  pluginName: string;
+  seriesDescription: string;
+  frames: number;
+}
+export type DerivedConfirmFn = (lines: DerivedConfirmLines) => Promise<boolean>;
+let derivedConfirmImpl: DerivedConfirmFn = showDerivedDialog;
+
+/** テスト用: 確認ダイアログの代わりを入れる。 */
+export function __setDerivedConfirm(fn: DerivedConfirmFn | null): void {
+  derivedConfirmImpl = fn ?? showDerivedDialog;
+}
+
+/**
+ * H54: プラグインが作った MP4 を、元の動画から派生したシリーズとして本体が DICOM に書く。
+ * `target: "db"` は保管庫へ（**本体の確認ダイアログを必ず出す**。成功すると一覧の読み直しを知らせる）、
+ * `"file"` は .dcm の成果物を返す（保存は `file.saveJobArtifact`）。
+ */
+export async function saveDerivedVideo(
+  plugin: { id: string; name: string },
+  req: PluginDerivedVideoRequest,
+  opts: PluginJobOptions = {},
+): Promise<PluginDerivedVideoOutcome> {
+  if (!req || !req.artifactJobId || !req.sourceSopInstanceUid) return { ok: false, error: "bad-request" };
+  if (req.target !== "db" && req.target !== "file") return { ok: false, error: "bad-target" };
+  if (req.target === "db") {
+    const ok = await derivedConfirmImpl({
+      pluginName: plugin.name,
+      seriesDescription: `[Plugin] ${req.seriesDescription?.trim() || "Derived video"}`,
+      frames: req.referencedFrames?.length ?? 0,
+    });
+    if (!ok) return { ok: false, cancelled: true };
+  }
+  let jobId: string;
+  try {
+    jobId = (
+      await httpSend<{ jobId: string }>(`/api/plugins/${encodeURIComponent(plugin.id)}/video/derived`, "POST", {
+        artifactJobId: req.artifactJobId,
+        sourceSopInstanceUid: req.sourceSopInstanceUid,
+        referencedFrames: req.referencedFrames ?? [],
+        seriesDescription: req.seriesDescription ?? null,
+        derivationDescription: req.derivationDescription ?? null,
+        target: req.target,
+      })
+    ).jobId;
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  const out = await pollPluginJob(jobId, opts);
+  if (!out.ok) return out;
+  const body = (out.result ?? {}) as { result?: Omit<PluginDerivedVideoResult, "artifact">; __artifact?: PluginDerivedVideoResult["artifact"] };
+  if (!body.result) return { ok: false, error: "no-result" };
+  const result: PluginDerivedVideoResult = { ...body.result, artifact: body.__artifact ?? null };
+  if (result.target === "db") notifyDbChanged(plugin.id, { studyUids: [result.studyInstanceUid] });
+  return { ok: true, result };
+}
+
+/** 派生シリーズを保管庫へ保存する前の本体の確認ダイアログ（抑止不可・文言は本体が決める）。 */
+function showDerivedDialog(lines: DerivedConfirmLines): Promise<boolean> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.setAttribute("data-testid", "plugin-derived-consent");
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    Object.assign(overlay.style, {
+      position: "fixed", inset: "0", zIndex: "100000", background: "rgba(10,20,30,0.45)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+    } as Partial<CSSStyleDeclaration>);
+    const box = document.createElement("div");
+    Object.assign(box.style, {
+      background: "#fff", color: "#223", borderRadius: "10px", padding: "18px 20px", width: "min(520px, 92vw)",
+      boxShadow: "0 10px 40px rgba(0,0,0,0.3)", fontSize: "13px", lineHeight: "1.6",
+    } as Partial<CSSStyleDeclaration>);
+    const h = document.createElement("div");
+    h.textContent = t("pluginVideo.derived.title");
+    Object.assign(h.style, { fontSize: "15px", fontWeight: "700", marginBottom: "10px" });
+    box.appendChild(h);
+    const row = (label: string, value: string) => {
+      const d = document.createElement("div");
+      const b = document.createElement("b");
+      b.textContent = `${label}: `;
+      d.append(b, document.createTextNode(value));
+      box.appendChild(d);
+    };
+    row(t("pluginVideo.consent.plugin"), lines.pluginName);
+    row(t("pluginVideo.derived.series"), lines.seriesDescription);
+    row(t("pluginVideo.derived.frames"), String(lines.frames));
+    const note = document.createElement("div");
+    note.textContent = t("pluginVideo.derived.note");
+    Object.assign(note.style, { color: "#667", fontSize: "12px", margin: "10px 0 12px" });
+    box.appendChild(note);
+    const bar = document.createElement("div");
+    Object.assign(bar.style, { display: "flex", justifyContent: "flex-end", gap: "8px" });
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = t("common.cancel");
+    cancel.setAttribute("data-testid", "plugin-derived-consent-cancel");
+    const ok = document.createElement("button");
+    ok.type = "button";
+    ok.textContent = t("pluginVideo.derived.ok");
+    ok.setAttribute("data-testid", "plugin-derived-consent-ok");
+    for (const [btn, primary] of [[cancel, false], [ok, true]] as const) {
+      Object.assign(btn.style, {
+        padding: "6px 14px", borderRadius: "6px", cursor: "pointer", fontSize: "13px",
+        border: primary ? "1px solid #0b5cad" : "1px solid #cdd5de",
+        background: primary ? "#0b5cad" : "#f4f7fa", color: primary ? "#fff" : "#334",
+      } as Partial<CSSStyleDeclaration>);
+    }
+    bar.append(cancel, ok);
+    box.appendChild(bar);
+    overlay.appendChild(box);
+    const done = (v: boolean) => {
+      overlay.remove();
+      window.removeEventListener("keydown", onKey, true);
+      resolve(v);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        done(false);
+      }
+    };
+    cancel.addEventListener("click", () => done(false));
+    ok.addEventListener("click", () => done(true));
+    window.addEventListener("keydown", onKey, true);
+    document.body.appendChild(overlay);
+    cancel.focus();
+  });
+}
+
 // ── 確認ダイアログ（DOM。メイン画面・2D ビューアのどちらでも出せるよう React に載せない） ──
 
 /**
