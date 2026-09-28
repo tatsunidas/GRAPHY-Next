@@ -635,7 +635,7 @@ async function importCheck(driver: DesktopDriver, mainPage: Page, closeViewer: (
 /**
  * 2D ビューアの要約画面（HLHS-600）で、「要約に追加」「要約から除外」を利用者と同じ操作で確かめる。
  * 規則は (心臓 − 色・静止 − 手動除外) ∪ 手動追加（追加が勝つ）。記法 `1,5-8,12`。
- * 🔑 範囲外（9999・0）は**振る舞いを記録するだけ**（合否にしない。直すかはユーザ判断）。
+ * 範囲外・読めない部分は取り込まず理由を出す（2026-09-28 に直した。以前は範囲外も取り込んでいた）。
  */
 async function manualCheck(viewer: Page, closeWindows: () => Promise<void>): Promise<void> {
   const open = async (): Promise<Locator> => {
@@ -785,17 +785,19 @@ async function manualCheck(viewer: Page, closeWindows: () => Promise<void>): Pro
   check(before.add === after.add && before.remove === after.remove && after.remove === "5,20-22",
     "[13] ★閉じて開き直しても手動指定が残る（保存領域）", { before, after });
 
-  // 6. 範囲外・0・負数（記録だけ）
-  await apply("add", "9999");
+  // 6. 範囲外・0・読めない部分は取り込まず理由を出す／全角・「、」は読み替える（2026-09-28 の修正）
+  await apply("add", "9999,0,a1b2,２０、６００");
   const sOut = await read();
-  await apply("add", "0");
-  const sZero = await read();
-  observe("[13] 範囲外の番号（9999・0）を「要約に追加」に入れたとき", {
-    n: N,
-    "9999": { addCount: sOut.addCount, note: sOut.note, summaryExcluded: sOut.summaryExcluded },
-    "0": { addCount: sZero.addCount, note: sZero.note, summaryExcluded: sZero.summaryExcluded },
-  });
-  await viewer.screenshot({ path: path.join(OUT_DIR, "manual-out-of-range.png") }).catch(() => {});
+  const ignoredText = await screen.getByTestId("frames-ignored-add").innerText().catch(() => "");
+  const addValue = await screen.locator("#sel-add").inputValue();
+  await viewer.screenshot({ path: path.join(OUT_DIR, "manual-ignored.png") }).catch(() => {});
+  check(
+    sOut.addCount === 2 && /9999（1〜600 の外）/.test(ignoredText) && /0（1〜600 の外）/.test(ignoredText) && /a1b2（読めない）/.test(ignoredText),
+    "[13] ★★範囲外（9999・0）と読めない部分（a1b2）は取り込まず理由を出す。全角の２０と「、」は読み替える",
+    { sOut, ignoredText, addValue },
+  );
+  const f600 = await frameState(600);
+  check(f600 === "included", "[13] 全角で入れた 600 が要約に入る", { f600 });
 
   // 7. 「最初からやり直す」で手動指定が消える
   await apply("add", "");
