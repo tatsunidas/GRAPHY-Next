@@ -249,6 +249,8 @@ function installPlugin(): void {
     if (fs.statSync(from).isDirectory()) continue;
     fs.copyFileSync(from, path.join(dst, name));
   }
+  // プラグインのデータ置き場（H58・入れ直しても残る。前の回で追加したモデルを持ち越さない）
+  fs.rmSync(path.join(DESKTOP_RUN_DATA_DIR, "plugin-data", PLUGIN_ID), { recursive: true, force: true });
   console.log(`検証用プラグインを配置: ${dst}`);
   console.log(`  中身: ${fs.readdirSync(dst).join(", ")}`);
 }
@@ -621,12 +623,16 @@ async function importCheck(driver: DesktopDriver, mainPage: Page, closeViewer: (
     await pVideos.first().waitFor({ state: "visible", timeout: 20_000 }).catch(() => {});
     const nVideos = await pVideos.count();
     let opened120 = false;
+    let inListAlready = false;
     if (nVideos > 0) {
       const psop = (await pVideos.first().getAttribute("data-sop")) ?? "";
-      const cb = pVideos.first().locator('input[type="checkbox"]');
-      if (await cb.isEnabled()) await cb.check();
-      await add.getByTestId("uvs-add-run").click();
-      await mainPage.waitForTimeout(800);
+      // ファイルから取り込んだ動画は取り込んだときに一覧へ入っている（「一覧にあります」）
+      inListAlready = (await pVideos.first().getAttribute("data-inlist")) === "1";
+      if (!inListAlready) {
+        await pVideos.first().locator('input[type="checkbox"]').check();
+        await add.getByTestId("uvs-add-run").click();
+        await mainPage.waitForTimeout(800);
+      }
       await add.getByTestId("uvs-drawer-close").click();
       const prow = list.locator(`[data-testid="uvs-dash-row"][data-sop="${psop}"]`);
       await prow.waitFor({ state: "visible", timeout: 15_000 }).catch(() => {});
@@ -637,7 +643,7 @@ async function importCheck(driver: DesktopDriver, mainPage: Page, closeViewer: (
       }
       await mainPage.screenshot({ path: path.join(OUT_DIR, "resummarize-by-patient.png") }).catch(() => {});
     }
-    check(pShown && nVideos === 1 && opened120, "[12] ★「GRAPHY-DB から追加」で患者から探した動画を一覧に入れ、要約を開ける", { pShown, nVideos, opened120 });
+    check(pShown && nVideos === 1 && inListAlready && opened120, "[12] ★「GRAPHY-DB から追加」で患者から探せる（取り込んだ動画は既に一覧にある）・一覧から要約を開ける", { pShown, nVideos, inListAlready, opened120 });
   }
 
   check(pageErrors.length === 0, "[12] 画面のエラーが無い", pageErrors.slice(0, 3));
@@ -1463,7 +1469,7 @@ async function dashboardCheck(mainPage: Page): Promise<void> {
   const badRows = await mp.locator('[data-testid="uvs-model-row"][data-model="uvs-lr-bad"]').count();
   check(badRows === 0 && /並び/.test(badNote), "[17] ★特徴量の並びが manifest と違うモデルは理由つきで断る", { badNote, badRows });
 
-  await added.getByTestId("uvs-model-use").check();
+  await added.getByTestId("uvs-model-use").click(); // 選んだ状態は切り替えが済んでから付く（check() は即時に確かめるので使わない）
   await mainPage.waitForTimeout(1_500);
   const b1 = await badge();
   const hint = await mp.innerText().catch(() => "");
@@ -1606,7 +1612,16 @@ async function main(): Promise<void> {
     }
     // 🔑 `UVS_ONLY_DASH=1` で [17]（ダッシュボードとモデル管理）だけを回す。メイン画面で検査を選んだ状態で開く
     if (process.env.UVS_ONLY_DASH && EXTERNAL_PLUGIN_DIR) {
-      await dashboardCheck(mainPage);
+      const errs: string[] = [];
+      mainPage.on("pageerror", (e) => errs.push(e.message));
+      mainPage.on("console", (m) => m.type() === "error" && errs.push(m.text()));
+      try {
+        await dashboardCheck(mainPage);
+      } catch (e) {
+        await mainPage.screenshot({ path: path.join(OUT_DIR, "dash-failed.png") }).catch(() => {});
+        console.log("page errors:", errs.slice(0, 10));
+        throw e;
+      }
       return;
     }
 
