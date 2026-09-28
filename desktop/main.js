@@ -802,6 +802,82 @@ ipcMain.handle("graphy:pick-directory", async () => {
   return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// H56: プラグインのフォルダ（バッチの入力・出力先）
+//
+// 🔴 プラグインが書けるのは、**利用者がこの起動中にフォルダ選択で選んだフォルダの中だけ**。
+//   選ばれたフォルダを main が覚え、書き込みの要求はその直下に限る（ファイル名に区切りを許さない・
+//   既にあれば「名前 (2).拡張子」にして上書きしない）。
+// ─────────────────────────────────────────────────────────────────────────────
+const pluginPickedDirs = new Set();
+
+ipcMain.handle("graphy:plugin-pick-directory", async (e, payload) => {
+  const title = (payload && typeof payload.title === "string" && payload.title) || "フォルダを選択";
+  const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
+  const result = await dialog.showOpenDialog(win, { title, properties: ["openDirectory", "createDirectory"] });
+  if (result.canceled || result.filePaths.length === 0) return { ok: false, canceled: true };
+  const dir = path.resolve(result.filePaths[0]);
+  pluginPickedDirs.add(dir);
+  return { ok: true, path: dir };
+});
+
+/** 選ばれたフォルダの直下の、上書きしないファイルのパス。書けなければ null。 */
+function pluginTargetIn(dir, name) {
+  const d = path.resolve(String(dir || ""));
+  if (!pluginPickedDirs.has(d)) return null;
+  const base = path.basename(String(name || ""));
+  if (!base || base !== String(name) || base === "." || base === "..") return null;
+  const ext = path.extname(base);
+  const stem = base.slice(0, base.length - ext.length);
+  let target = path.join(d, base);
+  for (let i = 2; fs.existsSync(target) && i < 10000; i++) target = path.join(d, `${stem} (${i})${ext}`);
+  return target;
+}
+
+ipcMain.handle("graphy:plugin-write-into-directory", async (_e, payload) => {
+  const target = pluginTargetIn(payload && payload.dir, payload && payload.name);
+  if (!target) return { ok: false, error: "directory-not-picked-or-bad-name" };
+  const bytes = payload && payload.bytes;
+  if (!bytes || typeof bytes.byteLength !== "number") return { ok: false, error: "empty" };
+  try {
+    fs.writeFileSync(target, Buffer.from(bytes));
+    return { ok: true, filePath: target };
+  } catch (err) {
+    return { ok: false, error: String(err.message) };
+  }
+});
+
+// ジョブの成果物（H53）を backend から直接フォルダへ落とす（大きな動画をレンダラのメモリに載せない）
+ipcMain.handle("graphy:plugin-download-into-directory", async (_e, payload) => {
+  const target = pluginTargetIn(payload && payload.dir, payload && payload.name);
+  if (!target) return { ok: false, error: "directory-not-picked-or-bad-name" };
+  let url;
+  try {
+    url = new URL(String(payload && payload.url));
+  } catch {
+    return { ok: false, error: "bad-url" };
+  }
+  // 自分の backend の成果物だけ
+  if (url.protocol !== "http:" || !["127.0.0.1", "localhost"].includes(url.hostname) ||
+      !/^\/api\/plugin-jobs\/[A-Za-z0-9-]+\/artifact$/.test(url.pathname)) {
+    return { ok: false, error: "bad-url" };
+  }
+  return await new Promise((resolve) => {
+    const req = http.get(url, (res) => {
+      if (res.statusCode !== 200) {
+        res.resume();
+        resolve({ ok: false, error: `artifact-${res.statusCode}` });
+        return;
+      }
+      const out = fs.createWriteStream(target);
+      res.pipe(out);
+      out.on("finish", () => out.close(() => resolve({ ok: true, filePath: target })));
+      out.on("error", (err) => resolve({ ok: false, error: String(err.message) }));
+    });
+    req.on("error", (err) => resolve({ ok: false, error: String(err.message) }));
+  });
+});
+
 // アプリ全体を再起動する（DICOM 自局設定など、SCP リスナー起動時にしか反映されない設定の変更後に使う）。
 // before-quit で stopBackend が走るため、次回起動時に新しい設定で backend が立ち上がる。
 ipcMain.handle("graphy:relaunch", () => {

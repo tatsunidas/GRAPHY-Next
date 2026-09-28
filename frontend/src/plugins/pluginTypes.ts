@@ -109,8 +109,8 @@ export type {
  * host の中身は `viewer2d.menu` と完全に同一で、違うのは出る場所だけである。
  */
 import type { AiGenerationOptions, AiGenerationOutcome } from "./pluginAiApi";
-import type { PluginSaveArtifactOptions, PluginSaveFileOptions } from "./pluginFileApi";
-export type { PluginSaveArtifactOptions };
+import type { PickDirectoryResult, PluginSaveArtifactOptions, PluginSaveFileOptions } from "./pluginFileApi";
+export type { PickDirectoryResult, PluginSaveArtifactOptions };
 import type { SaveFileResult } from "../desktopBridge";
 import type {
   PickFilesResult,
@@ -134,9 +134,12 @@ import type {
   PluginFrameValues,
   PluginFrameValuesRead,
   PluginFrameValuesSeries,
+  PluginBatchConsentRequest,
+  PluginBatchConsentResult,
   PluginDerivedVideoOutcome,
   PluginDerivedVideoRequest,
   PluginDerivedVideoResult,
+  PluginDicomImportOutcome,
   PluginVideoConsentIssue,
   PluginVideoConsentItem,
   PluginVideoConsentRequest,
@@ -151,9 +154,12 @@ export type {
   PluginFrameValues,
   PluginFrameValuesRead,
   PluginFrameValuesSeries,
+  PluginBatchConsentRequest,
+  PluginBatchConsentResult,
   PluginDerivedVideoOutcome,
   PluginDerivedVideoRequest,
   PluginDerivedVideoResult,
+  PluginDicomImportOutcome,
   PluginVideoConsentIssue,
   PluginVideoConsentItem,
   PluginVideoConsentRequest,
@@ -252,6 +258,12 @@ interface PluginHostBase {
      * OS の保存ダイアログで保存する。`jobId` は結果の `__artifact.jobId`。デスクトップ専用。
      */
     saveJobArtifact: (jobId: string, opts: PluginSaveArtifactOptions) => Promise<SaveFileResult>;
+    /** H56: フォルダを選ばせる（デスクトップ専用）。書き込みは選んだフォルダの直下だけ。 */
+    pickDirectory: (opts?: { title?: string }) => Promise<PickDirectoryResult>;
+    /** H56: ジョブの成果物を選んだフォルダへ保存する（ダイアログなし・上書きしない名前）。 */
+    saveJobArtifactTo: (jobId: string, opts: { dirToken: string; name: string }) => Promise<SaveFileResult>;
+    /** H56: バイト列を選んだフォルダへ書く（例: 集計 CSV）。 */
+    writeToDirectory: (opts: { dirToken: string; name: string; bytes: Uint8Array }) => Promise<SaveFileResult>;
     /**
      * **開くダイアログ**（H43）。OS のダイアログでファイルを選ばせ、**絶対パス**を返す。
      * フォルダは選べない。取り消しは `{ok:false, canceled:true}`（失敗ではない）。
@@ -284,6 +296,8 @@ interface PluginHostBase {
      * （Video 系 SOP クラス、または H.264 等で包まれた US Multi-frame など）。
      */
     listVideos: (query: PluginVideoListQuery) => Promise<PluginVideoEntry[]>;
+    /** H57: DICOM ファイルを保管庫へ取り込む（H55 の `dicomToken` の範囲だけ）。 */
+    importDicomFiles: (req: { consentToken: string; paths: string[] }) => Promise<PluginDicomImportOutcome>;
     /**
      * DB を変えたことを知らせる（H46）。メイン画面の一覧（呼んだウィンドウ自身も含む）と、
      * 開いている他のウィンドウが読み直す。本体の書き込み API（H4b・H9 等）は自分で知らせるので、
@@ -317,6 +331,11 @@ interface PluginHostBase {
      * `target: "db"` は保管庫へ（本体の確認ダイアログを必ず出す）、`"file"` は .dcm の成果物（`file.saveJobArtifact` で保存）。
      */
     saveDerivedVideo: (req: PluginDerivedVideoRequest, opts?: PluginJobOptions) => Promise<PluginDerivedVideoOutcome>;
+    /**
+     * H55: バッチを始める前に本体の確認ダイアログを 1 回だけ出し、取り込み（H48）・DICOM の取り込み（H57）・
+     * 派生シリーズの保存（H54）の札をまとめて返す。
+     */
+    requestBatchConsent: (req: PluginBatchConsentRequest) => Promise<PluginBatchConsentResult>;
   };
 }
 

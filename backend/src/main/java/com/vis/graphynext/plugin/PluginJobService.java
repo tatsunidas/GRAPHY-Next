@@ -56,7 +56,12 @@ public class PluginJobService {
     /** 取り消しの問い合わせ（{@code BooleanSupplier}）を入れる args のキー。 */
     public static final String CANCELLED_KEY = "__cancelled";
 
-    /** 同時に走らせるジョブの数。動画の読み出しのように I/O と CPU を両方使うので 2 本に抑える。 */
+    /**
+     * 同時に走らせるジョブの数（プラグインの計算・本体の書き込みそれぞれ）。動画の読み出しのように I/O と CPU を
+     * 両方使うので 2 本に抑える。🔑 **2 つの列に分ける**: プラグインの JAR のジョブ（バッチの要約など・長い）と、
+     * 本体が走らせる書き込み（H48 取り込み・H54 派生シリーズ・短い）。同じ列だと、バッチの長い計算の後ろで
+     * 取り込み・保存が待たされる（2026-09-28 バッチの計画で分けた）。
+     */
     private static final int WORKERS = 2;
     /** 終わったジョブを覚えておく上限と時間（結果を取りに来る前に消さないため）。 */
     private static final int MAX_FINISHED_JOBS = 50;
@@ -112,6 +117,7 @@ public class PluginJobService {
     private final PluginArtifacts artifacts;
     private final Map<String, Job> jobs = new ConcurrentHashMap<>();
     private final ExecutorService pool;
+    private final ExecutorService hostPool;
 
     /** テスト用（成果物は OS の一時フォルダへ）。 */
     public PluginJobService(PluginRegistry registry) {
@@ -128,11 +134,17 @@ public class PluginJobService {
             t.setDaemon(true);
             return t;
         });
+        this.hostPool = Executors.newFixedThreadPool(WORKERS, r -> {
+            Thread t = new Thread(r, "plugin-host-job-" + seq.incrementAndGet());
+            t.setDaemon(true);
+            return t;
+        });
     }
 
     @PreDestroy
     void shutdown() {
         pool.shutdownNow();
+        hostPool.shutdownNow();
     }
 
     /**
@@ -144,7 +156,7 @@ public class PluginJobService {
     public Status submit(String pluginId, Map<String, Object> payload) {
         registry.checkRunnable(pluginId);
         Map<String, Object> args = new HashMap<>(payload == null ? Map.of() : payload);
-        return submitTask(pluginId, ctx -> {
+        return enqueue(pool, pluginId, ctx -> {
             args.put(PROGRESS_KEY, ctx.progress());
             args.put(CANCELLED_KEY, ctx.cancelled());
             return registry.run(pluginId, args);
@@ -169,6 +181,10 @@ public class PluginJobService {
      * @param pluginId 依頼したプラグイン（状態に出すだけ。存在の確認は呼び出し側が行う）
      */
     public Status submitTask(String pluginId, Task task) {
+        return enqueue(hostPool, pluginId, task);
+    }
+
+    private Status enqueue(ExecutorService lane, String pluginId, Task task) {
         sweep();
         Job job = new Job(UUID.randomUUID().toString(), pluginId);
         jobs.put(job.id, job);
@@ -177,7 +193,7 @@ public class PluginJobService {
             if (msg != null) job.message = msg;
         };
         TaskContext ctx = new TaskContext(progress, job.cancelled::get);
-        pool.submit(() -> execute(job, task, ctx));
+        lane.submit(() -> execute(job, task, ctx));
         return job.status();
     }
 

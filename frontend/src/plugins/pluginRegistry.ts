@@ -12,9 +12,17 @@ import { log } from "../log";
 import type { PluginHost, PluginHostSeed, PluginManifest, PluginModule, PluginSurface } from "./pluginTypes";
 import { DEMO_MODULES, MOCK_ENABLED, MOCK_MANIFESTS } from "./mockPlugins";
 import { requestAiGeneration, type AiGenerationOptions } from "./pluginAiApi";
-import { saveFileAs, saveJobArtifact } from "./pluginFileApi";
+import { pickDirectory, saveFileAs, saveJobArtifact, saveJobArtifactTo, writeToDirectory } from "./pluginFileApi";
 import { listVideos, notifyDbChanged, pickFiles, runBackendJob, searchPatients } from "./pluginCommonApi";
-import { importVideoAsDicom, probeVideo, readVideoFrameValues, requestVideoImportConsent, saveDerivedVideo } from "./pluginVideoApi";
+import {
+  importDicomFiles,
+  importVideoAsDicom,
+  probeVideo,
+  readVideoFrameValues,
+  requestBatchConsent,
+  requestVideoImportConsent,
+  saveDerivedVideo,
+} from "./pluginVideoApi";
 
 let manifestsCache: Promise<PluginManifest[]> | null = null;
 
@@ -95,12 +103,13 @@ function withHostApis(m: PluginManifest, host: PluginHostSeed): PluginHost {
       generate: (req: Omit<AiGenerationOptions, "manifest">) =>
         requestAiGeneration({ ...req, manifest: m }),
     },
-    file: { saveAs: saveFileAs, pickFiles, saveJobArtifact },
+    file: { saveAs: saveFileAs, pickFiles, saveJobArtifact, pickDirectory, saveJobArtifactTo, writeToDirectory },
     // H45: ジョブの投入先はマニフェストの id に固定する（他のプラグインの JAR は走らせられない）
     runBackendJob: (payload, opts) => runBackendJob(m.id, payload, opts),
     db: {
       searchPatients,
       listVideos,
+      importDicomFiles: (req) => importDicomFiles(m.id, req),
       notifyChanged: (detail) => notifyDbChanged(m.id, detail),
     },
     // H47〜H49: 出所（id・名前）はマニフェストから本体が入れる。プラグインに名乗らせない
@@ -110,6 +119,7 @@ function withHostApis(m: PluginManifest, host: PluginHostSeed): PluginHost {
       importAsDicom: (req, opts) => importVideoAsDicom(m.id, req, opts),
       readFrameValues: (sop) => readVideoFrameValues(m.id, sop),
       saveDerivedVideo: (req, opts) => saveDerivedVideo({ id: m.id, name: m.name }, req, opts),
+      requestBatchConsent: (req) => requestBatchConsent({ id: m.id, name: m.name }, req),
     },
   } as PluginHost;
 }

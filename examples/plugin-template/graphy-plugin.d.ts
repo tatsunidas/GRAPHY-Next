@@ -1101,6 +1101,12 @@ interface PluginHostBase {
      * OS の保存ダイアログで保存する。`jobId` は結果の `__artifact.jobId`。デスクトップ専用。
      */
     saveJobArtifact?: (jobId: string, opts: PluginSaveArtifactOptions) => Promise<SaveFileResult>;
+    /** H56: フォルダを選ばせる（デスクトップ専用）。書き込みは選んだフォルダの直下だけ。 */
+    pickDirectory?: (opts?: { title?: string }) => Promise<PickDirectoryResult>;
+    /** H56: ジョブの成果物を選んだフォルダへ保存する（ダイアログなし・上書きしない名前）。 */
+    saveJobArtifactTo?: (jobId: string, opts: { dirToken: string; name: string }) => Promise<SaveFileResult>;
+    /** H56: バイト列を選んだフォルダへ書く（例: 集計 CSV）。 */
+    writeToDirectory?: (opts: { dirToken: string; name: string; bytes: Uint8Array }) => Promise<SaveFileResult>;
   };
   /**
    * バックエンド面を**ジョブとして**走らせる（H45・**0.3.0 以降**）。進み具合と取り消しがある。
@@ -1121,6 +1127,8 @@ interface PluginHostBase {
      * （Video 系 SOP クラス、または H.264 等で包まれた US Multi-frame など）。
      */
     listVideos: (query: PluginVideoListQuery) => Promise<PluginVideoEntry[]>;
+    /** H57: DICOM ファイルを保管庫へ取り込む（H55 の `dicomToken` の範囲だけ）。 */
+    importDicomFiles?: (req: { consentToken: string; paths: string[] }) => Promise<PluginDicomImportOutcome>;
     /**
      * DB を変えたことを知らせる（H46）。メイン画面の一覧（呼んだウィンドウ自身も含む）と、
      * 開いている他のウィンドウが読み直す。本体の書き込み API は自分で知らせるので、
@@ -1152,6 +1160,11 @@ interface PluginHostBase {
      * `target: "db"` は保管庫へ（本体の確認ダイアログを必ず出す）、`"file"` は .dcm の成果物（`file.saveJobArtifact` で保存）。
      */
     saveDerivedVideo?: (req: PluginDerivedVideoRequest, opts?: PluginJobOptions) => Promise<PluginDerivedVideoOutcome>;
+    /**
+     * H55: バッチを始める前に本体の確認ダイアログを 1 回だけ出し、取り込み（H48）・DICOM の取り込み（H57）・
+     * 派生シリーズの保存（H54）の札をまとめて返す。
+     */
+    requestBatchConsent?: (req: PluginBatchConsentRequest) => Promise<PluginBatchConsentResult>;
   };
 }
 
@@ -1331,6 +1344,8 @@ export interface PluginVideoEntry {
   seriesDescription: string;
   modality: string;
   sopInstanceUid: string;
+  sopClassUid: string;
+  transferSyntaxUid: string;
 }
 
 /** `host.ai.generate()` の要求（H40）。 */
@@ -1951,6 +1966,8 @@ export interface PluginDerivedVideoRequest {
   derivationDescription?: string;
   /** `"db"` は保管庫へ（本体の確認ダイアログ）、`"file"` は .dcm の成果物。 */
   target: "db" | "file";
+  /** H55 のバッチの札（`derivedToken`）。範囲内なら確認ダイアログを出さない。 */
+  consentToken?: string;
 }
 
 /** `host.video.saveDerivedVideo()` の結果（H54）。 */
@@ -1968,3 +1985,26 @@ export interface PluginDerivedVideoResult {
 export type PluginDerivedVideoOutcome =
   | { ok: true; result: PluginDerivedVideoResult }
   | { ok: false; cancelled?: boolean; error?: string };
+
+/** `host.file.pickDirectory()` の結果（H56）。 */
+export type PickDirectoryResult = { ok: true; path: string; dirToken: string } | { ok: false; canceled?: boolean; error?: string };
+
+/** `host.video.requestBatchConsent()` の要求（H55）。 */
+export interface PluginBatchConsentRequest {
+  importVideos?: PluginVideoConsentItem[];
+  importDicom?: { paths: string[] };
+  derived?: { sourceSopInstanceUid: string; seriesDescription: string }[];
+  modality?: "US";
+  frameValues?: { description: string };
+}
+
+/** `host.video.requestBatchConsent()` の結果（H55）。 */
+export type PluginBatchConsentResult =
+  | { ok: true; importToken: string | null; dicomToken: string | null; derivedToken: string | null }
+  | { ok: false; cancelled?: boolean; error?: string; issues?: PluginVideoConsentIssue[] };
+
+/** `host.db.importDicomFiles()` の結果（H57）。 */
+export type PluginDicomImportOutcome =
+  | { ok: true; imported: number; skipped: number; failed: number; errors: string[] }
+  | { ok: false; error?: string };
+

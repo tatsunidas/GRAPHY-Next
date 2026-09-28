@@ -100,6 +100,10 @@ export interface PluginVideoEntry {
   seriesDescription: string;
   modality: string;
   sopInstanceUid: string;
+  /** SOP クラス（例 US Multi-frame `1.2.840.10008.5.1.4.1.1.3.1`）。 */
+  sopClassUid: string;
+  /** 転送構文（動画は H.264・MPEG2 など）。web では空のことがある。 */
+  transferSyntaxUid: string;
 }
 
 /** H51 の問い合わせ: 検査 1 つ、または患者 1 人。 */
@@ -143,6 +147,8 @@ export async function listVideos(query: PluginVideoListQuery): Promise<PluginVid
           seriesDescription: se.seriesDescription ?? "",
           modality: se.modality ?? "",
           sopInstanceUid: inst.sopInstanceUid,
+          sopClassUid: inst.sopClassUid ?? "",
+          transferSyntaxUid: inst.transferSyntaxUid ?? "",
         });
       }
     }
