@@ -812,6 +812,150 @@ async function manualCheck(viewer: Page, closeWindows: () => Promise<void>): Pro
   await viewer.screenshot({ path: path.join(OUT_DIR, "manual-done.png") }).catch(() => {});
 }
 
+// ── 14. ビューの画像操作（連動）・要約のみ表示・再生（2026-09-28 ユーザ要望）──────
+async function viewToolsCheck(viewer: Page, closeWindows: () => Promise<void>): Promise<void> {
+  await closeWindows();
+  await viewer.getByTestId("viewer2d-menu-plugins").click();
+  await viewer.waitForTimeout(300);
+  await viewer.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
+  const screen = viewer.getByTestId("uvs-summarizer").last();
+  await screen.waitFor({ state: "visible", timeout: 30_000 });
+  await viewer.waitForTimeout(3_000);
+
+  const orig = screen.getByTestId("uvs-view-original");
+  const summ = screen.getByTestId("uvs-view-summary");
+  const stageOf = (pane: Locator) => pane.locator(".view-stage").first();
+  const styles = async () => ({
+    wl: (await screen.getByTestId("uvs-view-wl").innerText().catch(() => "")).trim(),
+    origT: await stageOf(orig).evaluate((el) => (el as HTMLElement).style.transform).catch(() => ""),
+    summT: await stageOf(summ).evaluate((el) => (el as HTMLElement).style.transform).catch(() => ""),
+    origF: await orig.locator("img").first().evaluate((el) => (el as HTMLElement).style.filter).catch(() => ""),
+  });
+
+  // 要約を 10・20・30 の 3 枚にする（全部を手動で除外し、3 枚だけ追加＝追加が勝つ）
+  const addInput = screen.locator("#sel-add");
+  const removeInput = screen.locator("#sel-remove");
+  await removeInput.fill("1-600");
+  await removeInput.press("Enter");
+  await viewer.waitForTimeout(500);
+  await addInput.fill("10,20,30");
+  await addInput.press("Enter");
+  await viewer.waitForTimeout(800);
+  // 要約に入っているフレーム 10 を出す（SUMMARY にも絵が出て、2 つのビューを比べられる）
+  await screen.locator('.frame-controls input[type="range"]').first().evaluate((el) => {
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    set.call(el, "10");
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await viewer.waitForTimeout(1_000);
+
+  // 1. WW/WL: ORIGINAL を左ドラッグ → 表示と filter が変わり、SUMMARY は同じ変換（連動）
+  const s0 = await styles();
+  const body = orig.locator(".view-body");
+  // 🔑 座標でドラッグする前に見える所へ出す（出さないと窓の外を押して、何も起きない）
+  await body.scrollIntoViewIfNeeded();
+  await viewer.waitForTimeout(300);
+  const box = await body.boundingBox();
+  if (box) {
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    await viewer.mouse.move(cx, cy);
+    await viewer.mouse.down();
+    await viewer.mouse.move(cx + 40, cy + 20, { steps: 4 });
+    await viewer.mouse.up();
+    await viewer.waitForTimeout(300);
+  }
+  const s1 = await styles();
+  check(s0.wl.startsWith("WW 255 / WL 128") && s1.wl.startsWith("WW 295 / WL 148") && s1.origF.includes("feColorMatrix"),
+    "[14] ★WW/WL: 左ドラッグ（右 40・下 20）で幅 295・中心 148 になり、画像に窓が掛かる", { s0: s0.wl, s1: s1.wl });
+
+  // 2. 回転・左右反転・拡大 → 2 つのビューが同じ変換
+  await screen.getByTestId("uvs-view-rotate").click();
+  await screen.getByTestId("uvs-view-flip-h").click();
+  await screen.getByTestId("uvs-view-zoom-in").click();
+  await viewer.waitForTimeout(300);
+  const s2 = await styles();
+  check(/scale\(1\.2\)/.test(s2.origT) && /matrix\(0, 1, 1, 0/.test(s2.origT) && s2.origT === s2.summT,
+    "[14] ★回転・左右反転・拡大が 2 つのビューに同じく効く（連動）", { origT: s2.origT, summT: s2.summT });
+
+  // 3. 右ドラッグでズーム・中ドラッグでパン
+  if (box) {
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    await viewer.mouse.move(cx, cy);
+    await viewer.mouse.down({ button: "right" });
+    await viewer.mouse.move(cx, cy + 40, { steps: 4 });
+    await viewer.mouse.up({ button: "right" });
+    await viewer.mouse.move(cx, cy);
+    await viewer.mouse.down({ button: "middle" });
+    await viewer.mouse.move(cx + 30, cy, { steps: 3 });
+    await viewer.mouse.up({ button: "middle" });
+    await viewer.waitForTimeout(300);
+  }
+  const s3 = await styles();
+  const scale3 = Number(/scale\(([\d.]+)\)/.exec(s3.origT)?.[1] ?? "0");
+  check(scale3 > 1.2 && !/translate\(0px, 0px\)/.test(s3.origT), "[14] 右ドラッグで拡大・中ドラッグで移動", { origT: s3.origT });
+  await viewer.screenshot({ path: path.join(OUT_DIR, "view-tools.png") }).catch(() => {});
+
+  // 4. リセットで全部戻る
+  await screen.getByTestId("uvs-view-reset").click();
+  await viewer.waitForTimeout(300);
+  const s4 = await styles();
+  check(s4.origT === "translate(0px, 0px) scale(1) matrix(1, 0, 0, 1, 0, 0)" && s4.origF === "" && s4.wl.startsWith("WW 255 / WL 128"),
+    "[14] ★リセットで WW/WL・回転・反転・拡大・移動がすべて戻る", s4);
+
+  // 5. 要約のみ表示: ◀▶ が要約フレーム（10・20・30）だけを辿り、説明・ブラックアウトを出さない
+  await screen.getByTestId("uvs-mode-summary").click();
+  await viewer.waitForTimeout(800);
+  const label = () => screen.getByTestId("uvs-frame-label").innerText();
+  const l0 = await label();
+  const next = screen.locator(".frame-controls button").nth(1);
+  await next.click();
+  await viewer.waitForTimeout(500);
+  const l1 = await label();
+  const excludedShown = await summ.locator(".view-excluded").count();
+  check(/要約 1 \/ 3（フレーム 10）/.test(l0) && /要約 2 \/ 3（フレーム 20）/.test(l1) && excludedShown === 0,
+    "[14] ★★要約のみ表示: 要約フレームだけを辿り（10 → 20）、SUMMARY に説明やブラックアウトを出さない", { l0, l1, excludedShown });
+
+  // 6. 再生（要約のみ・ループなし）: 20 から始めて 30 へ進み、末尾で止まる（ボタンが「再生」に戻る）
+  const lStart = await label();
+  await screen.getByTestId("uvs-play").click();
+  const until = Date.now() + 15_000;
+  let stopped = false;
+  await viewer.waitForTimeout(300);
+  while (Date.now() < until) {
+    if ((await screen.getByTestId("uvs-play").innerText()).includes("再生")) {
+      stopped = true;
+      break;
+    }
+    await viewer.waitForTimeout(150);
+  }
+  const lEnd = await label();
+  check(stopped && /要約 2 \/ 3/.test(lStart) && /要約 3 \/ 3（フレーム 30）/.test(lEnd),
+    "[14] ★再生: 要約フレームを順に出し（20 → 30）、ループなしなら末尾で止まる", { lStart, lEnd, stopped });
+
+  // 7. 全フレームで再生 → 1 つずつ進む（数枚で止める）
+  if (!(await screen.getByTestId("uvs-play").innerText()).includes("再生")) await screen.getByTestId("uvs-play").click();
+  await screen.getByTestId("uvs-mode-all").click();
+  await viewer.waitForTimeout(300);
+  const a0 = await label();
+  await screen.getByTestId("uvs-play").click();
+  await viewer.waitForTimeout(2_000);
+  await screen.getByTestId("uvs-play").click();
+  const a1 = await label();
+  const n0 = Number(/フレーム (\d+)/.exec(a0)?.[1] ?? "0");
+  const n1 = Number(/フレーム (\d+)/.exec(a1)?.[1] ?? "0");
+  check(n1 > n0, "[14] 全フレームの再生で 1 つずつ進む", { a0, a1 });
+  observe("[14] 全フレームの再生で 2 秒に進んだ枚数（プラグインはシークで取るので fps より遅いことがある）", { frames: n1 - n0 });
+
+  // 後始末（手動の指定を消す）
+  await addInput.fill("");
+  await addInput.press("Enter");
+  await removeInput.fill("");
+  await removeInput.press("Enter");
+  await viewer.waitForTimeout(500);
+}
+
 async function main(): Promise<void> {
   fs.rmSync(OUT_DIR, { recursive: true, force: true });
   fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -933,6 +1077,11 @@ async function main(): Promise<void> {
     // 🔑 `UVS_ONLY_MANUAL=1` で [13]（手動のフレーム選択・除外）だけを回す
     if (process.env.UVS_ONLY_MANUAL && EXTERNAL_PLUGIN_DIR) {
       await manualCheck(viewer, closePluginWindows);
+      return;
+    }
+    // 🔑 `UVS_ONLY_VIEW=1` で [14]（画像操作・要約のみ表示・再生）だけを回す
+    if (process.env.UVS_ONLY_VIEW && EXTERNAL_PLUGIN_DIR) {
+      await viewToolsCheck(viewer, closePluginWindows);
       return;
     }
 
@@ -1796,6 +1945,7 @@ async function main(): Promise<void> {
         const locked = await screen.getByTestId("uvs-locked").isVisible().catch(() => false);
         const inputDisabled = await screen.locator("#set-staticMeanAbsDiffThreshold").isDisabled().catch(() => false);
         const svg = screen.locator(".chart-svg").first();
+        await svg.scrollIntoViewIfNeeded().catch(() => {});
         const box = await svg.boundingBox().catch(() => null);
         if (box) {
           const y = box.y + (1 - Number(thBefore)) * box.height;
@@ -1937,6 +2087,7 @@ async function main(): Promise<void> {
         }
 
         await manualCheck(viewer, closePluginWindows);
+        await viewToolsCheck(viewer, closePluginWindows);
         check(pageErrors.length === 0, "[10] 画面のエラーが無い", pageErrors.slice(0, 3));
         await viewer.screenshot({ path: path.join(OUT_DIR, "uvs-react.png") }).catch(() => {});
       }
