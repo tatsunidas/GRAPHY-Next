@@ -812,7 +812,7 @@ async function manualCheck(viewer: Page, closeWindows: () => Promise<void>): Pro
   await viewer.screenshot({ path: path.join(OUT_DIR, "manual-done.png") }).catch(() => {});
 }
 
-// ── 14. ビューの画像操作（連動）・要約のみ表示・再生（2026-09-28 ユーザ要望）──────
+// ── 14. ビューの画像操作（連動）・再生（選んだ方を再生。SUMMARY は要約フレームだけ）（2026-09-28 ユーザ要望）──────
 async function viewToolsCheck(viewer: Page, closeWindows: () => Promise<void>): Promise<void> {
   await closeWindows();
   await viewer.getByTestId("viewer2d-menu-plugins").click();
@@ -904,49 +904,71 @@ async function viewToolsCheck(viewer: Page, closeWindows: () => Promise<void>): 
   check(s4.origT === "translate(0px, 0px) scale(1) matrix(1, 0, 0, 1, 0, 0)" && s4.origF === "" && s4.wl.startsWith("WW 255 / WL 128"),
     "[14] ★リセットで WW/WL・回転・反転・拡大・移動がすべて戻る", s4);
 
-  // 5. 要約のみ表示: ◀▶ が要約フレーム（10・20・30）だけを辿り、説明・ブラックアウトを出さない
-  await screen.getByTestId("uvs-mode-summary").click();
-  await viewer.waitForTimeout(800);
-  const label = () => screen.getByTestId("uvs-frame-label").innerText();
-  const l0 = await label();
-  const next = screen.locator(".frame-controls button").nth(1);
-  await next.click();
-  await viewer.waitForTimeout(500);
-  const l1 = await label();
-  const excludedShown = await summ.locator(".view-excluded").count();
-  check(/要約 1 \/ 3（フレーム 10）/.test(l0) && /要約 2 \/ 3（フレーム 20）/.test(l1) && excludedShown === 0,
-    "[14] ★★要約のみ表示: 要約フレームだけを辿り（10 → 20）、SUMMARY に説明やブラックアウトを出さない", { l0, l1, excludedShown });
+  // 5. フレーム送りで除外フレーム（15）へ → SUMMARY はこれまで通りブラックアウト＋理由
+  const setFrame = async (f: number) => {
+    await screen.locator('.frame-controls input[type="range"]').first().evaluate((el, v) => {
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      set.call(el, String(v));
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    }, f);
+    await viewer.waitForTimeout(600);
+  };
+  const frameOf = async (pane: Locator) => {
+    const t = await pane.locator(".view-frame").first().innerText({ timeout: 300 }).catch(() => "");
+    return Number(/フレーム (\d+)/.exec(t)?.[1] ?? "0");
+  };
+  await setFrame(15);
+  const reason15 = await summ.locator(".view-excluded").innerText({ timeout: 1_000 }).catch(() => "");
+  check(reason15.includes("手動で除外"), "[14] ★フレーム送りで除外フレームへ行くと、SUMMARY はブラックアウト＋理由（これまで通り）", { reason15 });
 
-  // 6. 再生（要約のみ・ループなし）: 20 から始めて 30 へ進み、末尾で止まる（ボタンが「再生」に戻る）
-  const lStart = await label();
+  // 6. 再生のツール群はビューの直下（プロットの上）
+  const viewsBox = await screen.locator(".views").first().boundingBox();
+  const playBox = await screen.getByTestId("uvs-play-controls").boundingBox();
+  const chartBox = await screen.locator(".chart-svg").first().boundingBox();
+  check(!!viewsBox && !!playBox && !!chartBox && playBox.y >= viewsBox.y + viewsBox.height - 1 && playBox.y < chartBox.y,
+    "[14] 再生のツール群が画像パネルの直下にある", { viewsBox, playBox, chartBox });
+
+  // 7. SUMMARY を再生: 要約フレーム（10・20・30）だけが続けて出て、ORIGINAL は 15 のまま。プロットに再生位置の印
+  await screen.getByTestId("uvs-play-summary").click();
+  await screen.getByTestId("uvs-speed").selectOption("0.25");
+  await screen.getByTestId("uvs-loop").check();
   await screen.getByTestId("uvs-play").click();
-  const until = Date.now() + 15_000;
-  let stopped = false;
-  await viewer.waitForTimeout(300);
-  while (Date.now() < until) {
-    if ((await screen.getByTestId("uvs-play").innerText()).includes("再生")) {
-      stopped = true;
-      break;
-    }
-    await viewer.waitForTimeout(150);
+  const seenSummary = new Set<number>();
+  const seenOriginal = new Set<number>();
+  let excludedDuring = 0;
+  let playCursor = false;
+  const tEnd = Date.now() + 3_000;
+  while (Date.now() < tEnd) {
+    seenSummary.add(await frameOf(summ));
+    seenOriginal.add(await frameOf(orig));
+    excludedDuring += await summ.locator(".view-excluded").count();
+    playCursor ||= (await screen.getByTestId("uvs-chart-play-cursor").count()) > 0;
+    await viewer.waitForTimeout(60);
   }
-  const lEnd = await label();
-  check(stopped && /要約 2 \/ 3/.test(lStart) && /要約 3 \/ 3（フレーム 30）/.test(lEnd),
-    "[14] ★再生: 要約フレームを順に出し（20 → 30）、ループなしなら末尾で止まる", { lStart, lEnd, stopped });
+  await screen.getByTestId("uvs-play").click(); // 一時停止
+  await viewer.waitForTimeout(500);
+  const sumList = [...seenSummary].filter((n) => n > 0).sort((a, b) => a - b);
+  check(
+    sumList.every((n) => [10, 20, 30].includes(n)) && sumList.length >= 2 && [...seenOriginal].every((n) => n === 15) && excludedDuring === 0 && playCursor,
+    "[14] ★★SUMMARY を再生すると要約フレームだけが続けて出る（ブラックアウトなし）。ORIGINAL は止まったまま・プロットに再生位置",
+    { summary: sumList, original: [...seenOriginal], excludedDuring, playCursor },
+  );
+  const afterStop = await summ.locator(".view-excluded").innerText({ timeout: 1_000 }).catch(() => "");
+  check(afterStop.includes("手動で除外"), "[14] 止めると SUMMARY は今のフレーム（15・ブラックアウト＋理由）に戻る", { afterStop });
 
-  // 7. 全フレームで再生 → 1 つずつ進む（数枚で止める）
-  if (!(await screen.getByTestId("uvs-play").innerText()).includes("再生")) await screen.getByTestId("uvs-play").click();
-  await screen.getByTestId("uvs-mode-all").click();
-  await viewer.waitForTimeout(300);
-  const a0 = await label();
+  // 8. ORIGINAL を再生: 今のフレームが進み、SUMMARY も同じフレームを追う（除外はブラックアウト）
+  await screen.getByTestId("uvs-loop").uncheck();
+  await screen.getByTestId("uvs-speed").selectOption("1");
+  await screen.getByTestId("uvs-play-original").click();
+  const o0 = await frameOf(orig);
   await screen.getByTestId("uvs-play").click();
   await viewer.waitForTimeout(2_000);
   await screen.getByTestId("uvs-play").click();
-  const a1 = await label();
-  const n0 = Number(/フレーム (\d+)/.exec(a0)?.[1] ?? "0");
-  const n1 = Number(/フレーム (\d+)/.exec(a1)?.[1] ?? "0");
-  check(n1 > n0, "[14] 全フレームの再生で 1 つずつ進む", { a0, a1 });
-  observe("[14] 全フレームの再生で 2 秒に進んだ枚数（プラグインはシークで取るので fps より遅いことがある）", { frames: n1 - n0 });
+  await viewer.waitForTimeout(400);
+  const o1 = await frameOf(orig);
+  const sumExcluded = await summ.locator(".view-excluded").count();
+  check(o1 > o0 && sumExcluded === 1, "[14] ★ORIGINAL を再生すると今のフレームが進み、SUMMARY は同じフレームを追う（除外はブラックアウト）", { o0, o1, sumExcluded });
+  observe("[14] ORIGINAL の再生で 2 秒に進んだ枚数", { frames: o1 - o0 });
 
   // 後始末（手動の指定を消す）
   await addInput.fill("");
