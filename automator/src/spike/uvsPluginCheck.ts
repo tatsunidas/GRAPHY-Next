@@ -316,10 +316,9 @@ async function importCheck(driver: DesktopDriver, mainPage: Page, closeViewer: (
     await mainPage.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
     const screen = mainPage.getByTestId("uvs-import").last();
     await screen.waitFor({ state: "visible", timeout: 30_000 });
-    // メイン画面で検査を選んでいると「取り込み済みの動画を要約」タブで開く。タブが決まってから取り込みタブへ
-    await screen.getByTestId("uvs-import-pick").or(screen.getByTestId("uvs-list")).first().waitFor({ state: "visible", timeout: 20_000 });
-    const importTab = screen.getByTestId("uvs-tab-import");
-    if (await importTab.isVisible().catch(() => false)) await importTab.click();
+    // 0.4.0: メイン画面の UVS はダッシュボード。「ファイルから取り込む」の引き出しを開く
+    await screen.getByTestId("uvs-dashboard").waitFor({ state: "visible", timeout: 20_000 });
+    await screen.getByTestId("uvs-dash-import").click();
     await screen.getByTestId("uvs-import-pick").waitFor({ state: "visible", timeout: 10_000 });
     return screen;
   };
@@ -548,11 +547,15 @@ async function importCheck(driver: DesktopDriver, mainPage: Page, closeViewer: (
     await mainPage.getByTestId(`study-row-${studyUid}`).click();
     await mainPage.getByTestId("mainscreen-menu-plugins").click();
     await mainPage.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
-    const list = mainPage.getByTestId("uvs-list").last();
+    const list = mainPage.getByTestId("uvs-dashboard").last();
     const listShown = await list.waitFor({ state: "visible", timeout: 20_000 }).then(() => true, () => false);
-    const studyRow = list.getByTestId("uvs-list-study").locator(`[data-testid="uvs-list-row"][data-sop="${sop}"]`);
+    const studyRow = list.locator(`[data-testid="uvs-dash-row"][data-sop="${sop}"]`);
     const rowShown = await studyRow.waitFor({ state: "visible", timeout: 20_000 }).then(() => true, () => false);
-    check(listShown && rowShown, "[12] ★★メイン画面で検査を選んで開くと「取り込み済みの動画を要約」にその検査の動画が並ぶ", { listShown, rowShown });
+    check(listShown && rowShown, "[12] ★★メイン画面で検査を選んで開くと、ダッシュボードの一覧にその検査の動画が並ぶ", { listShown, rowShown });
+    const openFromList = async (row: Locator) => {
+      await row.click();
+      await list.getByTestId("uvs-dash-open").click();
+    };
 
     const summarizerOnMain = () => mainPage.getByTestId("uvs-summarizer").last();
     const closeLastWindow = async () => {
@@ -567,7 +570,7 @@ async function importCheck(driver: DesktopDriver, mainPage: Page, closeViewer: (
     // 開いて閾値を変える（入力欄を離れると保存される）→ 閉じる
     let changed = false;
     if (rowShown) {
-      await studyRow.getByTestId("uvs-list-open").click();
+      await openFromList(studyRow);
       if (await summarizerOnMain().waitFor({ state: "visible", timeout: 30_000 }).then(() => true, () => false)) {
         await mainPage.waitForTimeout(2_000);
         await madInput().fill("0.3");
@@ -577,13 +580,12 @@ async function importCheck(driver: DesktopDriver, mainPage: Page, closeViewer: (
         await closeLastWindow();
       }
     }
-    await list.getByTestId("uvs-list-reload").click();
-    await mainPage.waitForTimeout(1_500);
-    const summarized = await studyRow.getAttribute("data-summarized").catch(() => null);
-    check(changed && summarized === "1", "[12] 要約画面で変えた状態が保存され、一覧は「要約済み」になる", { changed, summarized });
+    await mainPage.waitForTimeout(2_000);
+    const rowText = await studyRow.innerText().catch(() => "");
+    check(changed && /予測前/.test(rowText), "[12] 要約画面で変えた状態が保存され、一覧に「採点・手直しあり（予測前）」と出る（閉じると自動で描き直す）", { changed, rowText });
 
     // もう一度開くと前回の続きから
-    await studyRow.getByTestId("uvs-list-open").click();
+    await openFromList(studyRow);
     const reopened = await summarizerOnMain().waitFor({ state: "visible", timeout: 30_000 }).then(() => true, () => false);
     await mainPage.waitForTimeout(2_000);
     const kept = reopened ? await madInput().inputValue().catch(() => "") : "";
@@ -607,25 +609,35 @@ async function importCheck(driver: DesktopDriver, mainPage: Page, closeViewer: (
     );
     await closeLastWindow();
 
-    // 患者から探す: UVS-IMP-002 の動画が並び、開ける
-    await list.getByTestId("uvs-list-search").fill("UVS-IMP-002");
-    await list.getByTestId("uvs-list-search").press("Enter");
-    const pRow = list.locator('[data-testid="uvs-list-patient-row"][data-patient-key="UVS-IMP-002"]');
+    // GRAPHY-DB から追加 → 患者から探す: UVS-IMP-002 の動画が並び、一覧に入れて開ける
+    await list.getByTestId("uvs-dash-add").click();
+    const add = list.getByTestId("uvs-drawer-add");
+    await add.getByTestId("uvs-add-search").fill("UVS-IMP-002");
+    await add.getByTestId("uvs-add-search").press("Enter");
+    const pRow = add.locator('[data-testid="uvs-add-patient-row"][data-patient-key="UVS-IMP-002"]');
     const pShown = await pRow.waitFor({ state: "visible", timeout: 15_000 }).then(() => true, () => false);
     if (pShown) await pRow.click();
-    const pVideos = list.getByTestId("uvs-list-patient").getByTestId("uvs-list-row");
+    const pVideos = add.getByTestId("uvs-add-patient").getByTestId("uvs-add-row");
     await pVideos.first().waitFor({ state: "visible", timeout: 20_000 }).catch(() => {});
     const nVideos = await pVideos.count();
     let opened120 = false;
     if (nVideos > 0) {
-      await pVideos.first().getByTestId("uvs-list-open").click();
+      const psop = (await pVideos.first().getAttribute("data-sop")) ?? "";
+      const cb = pVideos.first().locator('input[type="checkbox"]');
+      if (await cb.isEnabled()) await cb.check();
+      await add.getByTestId("uvs-add-run").click();
+      await mainPage.waitForTimeout(800);
+      await add.getByTestId("uvs-drawer-close").click();
+      const prow = list.locator(`[data-testid="uvs-dash-row"][data-sop="${psop}"]`);
+      await prow.waitFor({ state: "visible", timeout: 15_000 }).catch(() => {});
+      await openFromList(prow);
       if (await summarizerOnMain().waitFor({ state: "visible", timeout: 30_000 }).then(() => true, () => false)) {
         await mainPage.waitForTimeout(2_000);
         opened120 = /120 フレーム/.test(await summarizerOnMain().innerText());
       }
       await mainPage.screenshot({ path: path.join(OUT_DIR, "resummarize-by-patient.png") }).catch(() => {});
     }
-    check(pShown && nVideos === 1 && opened120, "[12] ★患者から探すと、その患者の動画が並び要約を開ける", { pShown, nVideos, opened120 });
+    check(pShown && nVideos === 1 && opened120, "[12] ★「GRAPHY-DB から追加」で患者から探した動画を一覧に入れ、要約を開ける", { pShown, nVideos, opened120 });
   }
 
   check(pageErrors.length === 0, "[12] 画面のエラーが無い", pageErrors.slice(0, 3));
@@ -1163,7 +1175,7 @@ async function batchCheck(driver: DesktopDriver, mainPage: Page): Promise<void> 
     await mainPage.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
     const screen = mainPage.getByTestId("uvs-import").last();
     await screen.waitFor({ state: "visible", timeout: 30_000 });
-    await screen.getByTestId("uvs-tab-batch").click();
+    await screen.getByTestId("uvs-dash-batch").click();
     await screen.getByTestId("uvs-batch").waitFor({ state: "visible", timeout: 10_000 });
     return screen;
   };
@@ -1196,7 +1208,7 @@ async function batchCheck(driver: DesktopDriver, mainPage: Page): Promise<void> 
   // 1. 画面・設定ファイル
   await queueDirs([inDir, outDir]);
   let screen = await openBatch();
-  check(true, "[16] ★メイン画面の UVS に「バッチ処理」タブがある");
+  check(true, "[16] ★ダッシュボードから「バッチ処理」を開ける");
   await mainPage.evaluate((p) => ((window as unknown as { __uvsPickSettings?: string }).__uvsPickSettings = p), settingsFile);
   await screen.getByTestId("uvs-batch-load-settings").click();
   const note = await screen.getByTestId("uvs-batch-settings-note").innerText({ timeout: 10_000 }).catch(() => "");
@@ -1267,6 +1279,15 @@ async function batchCheck(driver: DesktopDriver, mainPage: Page): Promise<void> 
   const derivedAfter = await derivedSeries();
   check(derivedAfter - derivedBefore === 3, "[16] ★★GRAPHY の DB に派生シリーズが 3 本増える", { derivedBefore, derivedAfter });
 
+  // 4a. ダッシュボードの一覧にも 3 本が「要約済み」（出力の印つき）で出る
+  await screen.getByTestId("uvs-drawer-close").first().click();
+  await mainPage.waitForTimeout(1_500);
+  const doneRows = await screen.locator('[data-testid="uvs-dash-row"][data-status="done"]').count();
+  const outsText = await screen.locator('[data-testid="uvs-dash-row"][data-status="done"] td.outs').allInnerTexts();
+  await mainPage.screenshot({ path: path.join(OUT_DIR, "batch-dashboard.png") }).catch(() => {});
+  check(doneRows >= 3 && outsText.filter((x) => /DB/.test(x) && /MP4/.test(x)).length >= 3, "[16] ★★ダッシュボードの一覧に、バッチで要約した動画が「要約済み」と出力の印（DB・MP4）つきで並ぶ", { doneRows, outsText });
+  await screen.getByTestId("uvs-dash-batch").click();
+
   // 4b. 過去のバッチの「中身」「CSV を保存」（2026-09-28 ユーザ指摘: 押しても何も起こらないように見えた）
   await queueDirs([outDir]);
   await screen.getByTestId("uvs-batch-show").first().click();
@@ -1326,6 +1347,170 @@ async function batchCheck(driver: DesktopDriver, mainPage: Page): Promise<void> 
   const s4 = await itemStatuses(screen);
   await mainPage.screenshot({ path: path.join(OUT_DIR, "batch-resumed.png") }).catch(() => {});
   check(st4 === "done" && s4.length === 1 && s4[0] === "done", "[16] ★★再開すると残り（中止した 1 本）を最後までやる", { st4, s4 });
+}
+
+// ── 17. ダッシュボードとモデル管理（2026-09-28 ユーザ要望・プラグイン 0.4.0）──────
+/**
+ * メイン画面の UVS（ダッシュボード）で:
+ * - 検査を選んで開くと、その検査の動画が一覧に並ぶ（未要約）
+ * - 一覧で選んだ動画をバッチへ → 走っている間は一覧に「処理中」、済むと「要約済み」
+ * - モデルを追加（検証つき・本体のデータ置き場 H58）→ 使用中にすると一覧は「旧モデル」→ 再要約で「要約済み」に戻る
+ * - 使用中のモデルを削除すると同梱のモデルに戻る
+ */
+async function dashboardCheck(mainPage: Page): Promise<void> {
+  const pageErrors: string[] = [];
+  mainPage.on("pageerror", (e) => pageErrors.push(e.message));
+  const pluginDir = EXTERNAL_PLUGIN_DIR!;
+  // 同梱のモデルを ID だけ変えた「新しいモデル」（推奨の設定つき）
+  const modelDir = path.join(OUT_DIR, "model-spike");
+  fs.rmSync(modelDir, { recursive: true, force: true });
+  fs.mkdirSync(modelDir, { recursive: true });
+  fs.writeFileSync(path.join(modelDir, "manifest.json"),
+    fs.readFileSync(path.join(pluginDir, "model-manifest.json"), "utf8").replace(/"modelId":\s*"[^"]+"/, '"modelId": "uvs-lr-spike"'));
+  fs.copyFileSync(path.join(pluginDir, "reference-params.json"), path.join(modelDir, "reference-params.json"));
+  fs.writeFileSync(path.join(modelDir, "model-settings.json"), JSON.stringify({ analysis: { predictionThreshold: 0.6 } }));
+
+  await mainPage.evaluate(() => document.querySelectorAll<HTMLElement>(".graphy-plugin-window__close").forEach((b) => b.click()));
+  await mainPage.waitForTimeout(300);
+  await mainPage.getByTestId("mainscreen-menu-plugins").click();
+  await mainPage.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
+  const dash = mainPage.getByTestId("uvs-dashboard").last();
+  await dash.waitFor({ state: "visible", timeout: 30_000 });
+  const badge = () => dash.getByTestId("uvs-dash-model-id").innerText().catch(() => "");
+  await mainPage.waitForTimeout(1_500);
+  const row = dash.getByTestId("uvs-dash-row").first();
+  const rowShown = await row.waitFor({ state: "visible", timeout: 20_000 }).then(() => true, () => false);
+  const st0 = await row.getAttribute("data-status").catch(() => null);
+  const b0 = await badge();
+  await mainPage.screenshot({ path: path.join(OUT_DIR, "dash-open.png") }).catch(() => {});
+  check(rowShown && st0 === "notYet" && b0 === "uvs-lr-20250611", "[17] ★★検査を選んで開くと、その検査の動画が一覧に「未要約」で並び、上に使用中のモデルが出る", { rowShown, st0, b0 });
+  if (!rowShown) return;
+  const sop = (await row.getAttribute("data-sop")) ?? "";
+  const theRow = dash.locator(`[data-testid="uvs-dash-row"][data-sop="${sop}"]`);
+  const status = () => theRow.getAttribute("data-status").catch(() => null);
+  const waitStatus = async (want: string[], maxMs: number) => {
+    const until = Date.now() + maxMs;
+    let s: string | null = null;
+    while (Date.now() < until) {
+      s = await status();
+      if (s && want.includes(s)) return s;
+      await mainPage.waitForTimeout(700);
+    }
+    return s;
+  };
+
+  // 一覧で選んで → バッチ（出力なし・間引きを粗くして速く）
+  const runBatchFromList = async (via: () => Promise<void>): Promise<{ target: string; sawRunning: boolean; end: string | null }> => {
+    await via();
+    const batch = dash.getByTestId("uvs-drawer-batch");
+    await batch.getByTestId("uvs-batch").waitFor({ state: "visible", timeout: 10_000 });
+    const target = await batch.getByTestId("uvs-batch-target-count").innerText().catch(() => "");
+    for (const k of ["db", "mp4", "csv"]) {
+      const cb = batch.getByTestId(`uvs-batch-out-${k}`);
+      if (await cb.isChecked()) await cb.uncheck();
+    }
+    await batch.getByTestId("uvs-batch-interval").fill("60");
+    await batch.getByTestId("uvs-batch-interval").blur();
+    await batch.getByTestId("uvs-batch-start").click();
+    await mainPage.waitForTimeout(1_000);
+    // 引き出しを閉じても走り続け、一覧に進み具合が出る
+    await batch.getByTestId("uvs-drawer-close").click();
+    let sawRunning = false;
+    const until = Date.now() + 10 * 60_000;
+    let end: string | null = null;
+    while (Date.now() < until) {
+      const live = await theRow.locator('[data-live="1"]').count();
+      const s = await status();
+      if (live > 0 || s === "running" || s === "queued") sawRunning = true;
+      if (s === "done" || s === "failed") {
+        end = s;
+        break;
+      }
+      await mainPage.waitForTimeout(700);
+    }
+    return { target, sawRunning, end };
+  };
+  await theRow.locator('input[type="checkbox"]').check();
+  const r1 = await runBatchFromList(() => dash.getByTestId("uvs-dash-batch-selected").click());
+  const bar = await dash.getByTestId("uvs-dash-batchbar").innerText().catch(() => "");
+  await mainPage.screenshot({ path: path.join(OUT_DIR, "dash-after-batch.png") }).catch(() => {});
+  check(/1/.test(r1.target) && r1.sawRunning && r1.end === "done", "[17] ★★一覧で選んだ動画をバッチへ → 引き出しを閉じても走り、一覧に進み具合 → 「要約済み」", { ...r1, bar });
+
+  // モデルを追加 → 使用中に
+  await mainPage.evaluate((p) => ((window as unknown as { __uvsPickModel?: string }).__uvsPickModel = p), path.join(modelDir, "manifest.json"));
+  await dash.getByTestId("uvs-dash-model").click();
+  const mp = dash.getByTestId("uvs-drawer-model");
+  await mp.getByTestId("uvs-model-list").waitFor({ state: "visible", timeout: 15_000 });
+  const bundledOk = await mp.locator('[data-testid="uvs-model-row"][data-model="uvs-lr-20250611"][data-active="1"]').count();
+  await mp.getByTestId("uvs-model-add").click();
+  const added = mp.locator('[data-testid="uvs-model-row"][data-model="uvs-lr-spike"]');
+  const addedShown = await added.waitFor({ state: "visible", timeout: 15_000 }).then(() => true, () => false);
+  const addNote = await mp.getByTestId("uvs-model-notice").innerText().catch(() => "");
+  check(bundledOk === 1 && addedShown && /追加/.test(addNote), "[17] ★★モデルを追加できる（検証してから本体のデータ置き場へ）", { bundledOk, addedShown, addNote });
+  // 壊れたモデル（特徴量の並びが違う）は追加しない
+  const badDir = path.join(OUT_DIR, "model-bad");
+  fs.rmSync(badDir, { recursive: true, force: true });
+  fs.mkdirSync(badDir, { recursive: true });
+  const man = JSON.parse(fs.readFileSync(path.join(modelDir, "manifest.json"), "utf8")) as { modelId: string; features: unknown[] };
+  man.modelId = "uvs-lr-bad";
+  man.features.reverse();
+  fs.writeFileSync(path.join(badDir, "manifest.json"), JSON.stringify(man));
+  fs.copyFileSync(path.join(modelDir, "reference-params.json"), path.join(badDir, "reference-params.json"));
+  await mainPage.evaluate((p) => ((window as unknown as { __uvsPickModel?: string }).__uvsPickModel = p), path.join(badDir, "manifest.json"));
+  await mp.getByTestId("uvs-model-add").click();
+  await mainPage.waitForTimeout(1_500);
+  const badNote = await mp.getByTestId("uvs-model-notice").innerText().catch(() => "");
+  const badRows = await mp.locator('[data-testid="uvs-model-row"][data-model="uvs-lr-bad"]').count();
+  check(badRows === 0 && /並び/.test(badNote), "[17] ★特徴量の並びが manifest と違うモデルは理由つきで断る", { badNote, badRows });
+
+  await added.getByTestId("uvs-model-use").check();
+  await mainPage.waitForTimeout(1_500);
+  const b1 = await badge();
+  const hint = await mp.innerText().catch(() => "");
+  await mp.getByTestId("uvs-drawer-close").click();
+  const st1 = await waitStatus(["stale"], 15_000);
+  const banner = await dash.getByTestId("uvs-dash-stale").isVisible().catch(() => false);
+  await mainPage.screenshot({ path: path.join(OUT_DIR, "dash-stale.png") }).catch(() => {});
+  check(b1 === "uvs-lr-spike" && /モデルの推奨 0\.6/.test(hint) && st1 === "stale" && banner,
+    "[17] ★★使用中のモデルを切り替えると、前のモデルで要約した動画は「旧モデル」になり、再要約を促す", { b1, st1, banner });
+
+  // 再要約（旧モデルの帯から）→ 新しいモデルで「要約済み」
+  const r2 = await runBatchFromList(async () => {
+    await dash.getByTestId("uvs-dash-stale").getByRole("button").click();
+  });
+  await theRow.click();
+  const detail = await dash.getByTestId("uvs-dash-detail").innerText().catch(() => "");
+  check(r2.end === "done" && /uvs-lr-spike/.test(detail), "[17] ★★再要約すると新しいモデルで「要約済み」に戻る（詳細に使ったモデル）", { ...r2, detail: detail.slice(0, 200) });
+
+  // 使用中のモデルを削除 → 同梱に戻る
+  await dash.getByTestId("uvs-dash-model").click();
+  await mp.getByTestId("uvs-model-list").waitFor({ state: "visible", timeout: 15_000 });
+  const rm = mp.locator('[data-testid="uvs-model-row"][data-model="uvs-lr-spike"]').getByTestId("uvs-model-remove");
+  await rm.click();
+  await rm.click();
+  await mainPage.waitForTimeout(1_500);
+  const b2 = await badge();
+  const left = await mp.locator('[data-testid="uvs-model-row"][data-model="uvs-lr-spike"]').count();
+  await mp.getByTestId("uvs-drawer-close").click();
+  check(b2 === "uvs-lr-20250611" && left === 0, "[17] 使用中のモデルを削除すると同梱のモデルに戻る", { b2, left });
+
+  // 一覧から外す → GRAPHY-DB から追加し直すと、要約済みのまま戻る（患者の保存領域の要約から）
+  await theRow.click();
+  await dash.getByTestId("uvs-dash-remove-one").click();
+  await mainPage.waitForTimeout(1_000);
+  const gone = (await theRow.count()) === 0;
+  await dash.getByTestId("uvs-dash-add").click();
+  const add = dash.getByTestId("uvs-drawer-add");
+  const addRow = add.locator(`[data-testid="uvs-add-row"][data-sop="${sop}"]`);
+  await addRow.waitFor({ state: "visible", timeout: 15_000 }).catch(() => {});
+  await addRow.locator('input[type="checkbox"]').check().catch(() => {});
+  await add.getByTestId("uvs-add-run").click();
+  await mainPage.waitForTimeout(1_000);
+  await add.getByTestId("uvs-drawer-close").click();
+  const back = await waitStatus(["stale", "done"], 15_000);
+  check(gone && (back === "stale" || back === "done"), "[17] ★一覧から外しても、GRAPHY-DB から追加し直すと要約の状態が戻る", { gone, back });
+
+  check(pageErrors.length === 0, "[17] 画面のエラーが無い", pageErrors.slice(0, 3));
 }
 
 async function main(): Promise<void> {
@@ -1417,6 +1602,11 @@ async function main(): Promise<void> {
     // 🔑 `UVS_ONLY_BATCH=1` で [16]（バッチ処理）だけを回す。メイン画面で検査を選んだ状態で開く
     if (process.env.UVS_ONLY_BATCH && EXTERNAL_PLUGIN_DIR) {
       await batchCheck(driver, mainPage);
+      return;
+    }
+    // 🔑 `UVS_ONLY_DASH=1` で [17]（ダッシュボードとモデル管理）だけを回す。メイン画面で検査を選んだ状態で開く
+    if (process.env.UVS_ONLY_DASH && EXTERNAL_PLUGIN_DIR) {
+      await dashboardCheck(mainPage);
       return;
     }
 
