@@ -38,7 +38,7 @@ const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "uvs-plugin");
  * 解析コアは uvs-core を同梱）を検査する。そちらの鮮度は UVS-Web の `tools/assemble.mjs` が見る。
  */
 const EXTERNAL_PLUGIN_DIR = process.env.UVS_PLUGIN_DIR ?? null;
-const PLUGIN_ID = "uvs-skeleton";
+const PLUGIN_ID = "vis-uvs";
 const DEFAULT_DICOM = path.join(os.homedir(), "graphy_sample_images", "uvs", "HLHS-600.dcm");
 
 const failures: string[] = [];
