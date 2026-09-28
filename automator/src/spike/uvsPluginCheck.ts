@@ -18,7 +18,7 @@
  * 🚨 **JAR を変えたらアプリ再起動が要る**（ローダが id 単位でキャッシュされる）。
  *    automator は毎回プロセスを立て直すので問題にならないが、手元の dev-desktop では効かない。
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1024,15 +1024,11 @@ async function exportCheck(driver: DesktopDriver, viewer: Page, closeWindows: ()
   });
   if (!hasExport) return;
 
+  // ffmpeg は進み具合（frame=）を stderr に出す
   const countFrames = (file: string): number => {
-    try {
-      const out = execFileSync("ffmpeg", ["-hide_banner", "-i", file, "-map", "0:v:0", "-c", "copy", "-f", "null", "-"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-      return Number(/frame=\s*(\d+)/.exec(out)?.[1] ?? "0");
-    } catch (e) {
-      const s = String((e as { stderr?: string }).stderr ?? "");
-      const all = [...s.matchAll(/frame=\s*(\d+)/g)];
-      return all.length ? Number(all[all.length - 1][1]) : 0;
-    }
+    const r = spawnSync("ffmpeg", ["-hide_banner", "-i", file, "-map", "0:v:0", "-c", "copy", "-f", "null", "-"], { encoding: "utf8" });
+    const all = [...String(r.stderr ?? "").matchAll(/frame=\s*(\d+)/g)];
+    return all.length ? Number(all[all.length - 1][1]) : 0;
   };
   const waitSaved = async (ext: string, maxMs: number): Promise<string> => {
     const until = Date.now() + maxMs;
