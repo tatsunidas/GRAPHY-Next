@@ -295,6 +295,32 @@ describe("H55 バッチの同意（1 回）と H57 DICOM の取り込み", () =>
     expect(emitted).toEqual([expect.objectContaining({ reason: "plugin:uvs" })]);
   });
 
+  it("取り込み前の動画は path で指し、同じバッチで取り込まれた SOP だけが派生の範囲に入る", async () => {
+    __setBatchConfirm(async () => true);
+    __setDerivedConfirm(async () => false);
+    // path で指せるのは同じ要求で取り込む動画だけ
+    expect(await requestBatchConsent(PLUGIN, { derived: [{ sourcePath: "x.avi", seriesDescription: "S" }] })).toEqual({
+      ok: false,
+      error: "derived-path-not-imported",
+    });
+    const c = await requestBatchConsent(PLUGIN, {
+      importVideos: [{ path: "a.avi", patient: NEW }],
+      modality: "US",
+      derived: [{ sourcePath: "a.avi", seriesDescription: "S" }],
+    });
+    if (!c.ok) throw new Error("no consent");
+    const req = { artifactJobId: "j", sourceSopInstanceUid: "2.25.7", target: "db" as const, consentToken: c.derivedToken! };
+    // 取り込む前は範囲外（個別の確認＝ここでは取り消し）
+    expect(await saveDerivedVideo(PLUGIN, req)).toEqual({ ok: false, cancelled: true });
+    httpSend.mockImplementation(async (url: string) =>
+      String(url).endsWith("/video/imports") ? { jobId: "ji" } : String(url).endsWith("/video/derived") ? { jobId: "jd" } : undefined,
+    );
+    httpGet.mockResolvedValueOnce(done({ duplicate: false, studyInstanceUid: "1.2", patientId: "K12", sopInstanceUid: "2.25.7" }));
+    expect((await importVideoAsDicom("uvs", { consentToken: c.importToken!, path: "a.avi", patient: NEW, modality: "US" }, { pollMs: 1 })).ok).toBe(true);
+    httpGet.mockResolvedValueOnce(done({ result: { target: "db", sopInstanceUid: "d", seriesInstanceUid: "ds", studyInstanceUid: "1.2", seriesNumber: 2, numberOfFrames: 3, seriesDescription: "x" } }));
+    expect((await saveDerivedVideo(PLUGIN, req, { pollMs: 1 })).ok).toBe(true);
+  });
+
   it("取り消せば札は出ない・空の要求は受けない", async () => {
     __setBatchConfirm(async () => false);
     expect(await requestBatchConsent(PLUGIN, { importDicom: { paths: ["a.dcm"] } })).toEqual({ ok: false, cancelled: true });

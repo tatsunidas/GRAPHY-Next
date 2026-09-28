@@ -347,6 +347,7 @@ export async function importVideoAsDicom(
   const out = await pollPluginJob(jobId, opts);
   if (!out.ok) return out;
   const result = out.result as PluginVideoImportResult;
+  linkImportedToDerived(req.consentToken, req.path, result.sopInstanceUid);
   if (!result.duplicate) {
     // 一覧（メイン画面・他のウィンドウ）を読み直させる
     notifyDbChanged(pluginId, { studyUids: [result.studyInstanceUid], patientId: result.patientId });
@@ -473,8 +474,12 @@ export interface PluginBatchConsentRequest {
   importVideos?: PluginVideoConsentItem[];
   /** DICOM ファイルの取り込み（H57）。 */
   importDicom?: { paths: string[] };
-  /** 派生シリーズの保管庫への保存（H54）。元の SOP ごとに 1 回。 */
-  derived?: { sourceSopInstanceUid: string; seriesDescription: string }[];
+  /**
+   * 派生シリーズの保管庫への保存（H54）。元の SOP ごとに 1 回。
+   * まだ取り込んでいない動画は `sourcePath`（同じ要求の `importVideos` の path）で指す。
+   * そのファイルがこの札（`importToken`）で取り込まれると、できた SOP が範囲に入る。
+   */
+  derived?: { sourceSopInstanceUid?: string; sourcePath?: string; seriesDescription: string }[];
   modality?: "US";
   frameValues?: { description: string };
 }
@@ -489,6 +494,9 @@ interface BatchConsent {
   sops: Set<string>;
   used: Set<string>;
   expiresAt: number;
+  /** 派生: まだ取り込んでいない動画（path）。`linkedImportToken` で取り込まれたら SOP を sops に足す。 */
+  pendingPaths?: Set<string>;
+  linkedImportToken?: string | null;
 }
 /** バッチは長い（数百本・一晩）ので、札も長めに持つ。 */
 const BATCH_TTL_MS = 24 * 60 * 60 * 1000;
@@ -525,6 +533,12 @@ export async function requestBatchConsent(
   const dicom = req?.importDicom?.paths ?? [];
   const derived = req?.derived ?? [];
   if (videos.length + dicom.length + derived.length === 0) return { ok: false, error: "empty" };
+  const videoPaths = new Set(videos.map((v) => v.path));
+  for (const d of derived) {
+    if (!d || (!d.sourceSopInstanceUid && !d.sourcePath)) return { ok: false, error: "derived-source-missing" };
+    // path で指せるのは、同じ要求で取り込む動画だけ（取り込み済みの SOP は sourceSopInstanceUid で）
+    if (!d.sourceSopInstanceUid && !videoPaths.has(d.sourcePath!)) return { ok: false, error: "derived-path-not-imported" };
+  }
   if (videos.length > 0) {
     if (new Set(videos.map((i) => i.path)).size !== videos.length) return { ok: false, error: "duplicate-paths" };
     try {
@@ -565,9 +579,31 @@ export async function requestBatchConsent(
     return tk;
   };
   const dicomToken = token(dicomConsents, dicom);
-  const derivedToken = token(derivedConsents, derived.map((d) => d.sourceSopInstanceUid));
+  let derivedToken: string | null = null;
+  if (derived.length > 0) {
+    // 取り込み前の動画（sourcePath）は、この札の取り込みが済んだときに SOP が範囲に入る（linkImportedToDerived）
+    derivedToken = `${plugin.id}:${crypto.randomUUID()}`;
+    derivedConsents.set(derivedToken, {
+      pluginId: plugin.id,
+      sops: new Set(derived.flatMap((d) => (d.sourceSopInstanceUid ? [d.sourceSopInstanceUid] : []))),
+      used: new Set(),
+      expiresAt: now + BATCH_TTL_MS,
+      pendingPaths: new Set(derived.flatMap((d) => (!d.sourceSopInstanceUid && d.sourcePath ? [d.sourcePath] : []))),
+      linkedImportToken: importToken,
+    });
+  }
   log.info(`[plugin-video] batch consent: ${plugin.id} videos=${videos.length} dicom=${dicom.length} derived=${derived.length}`);
   return { ok: true, importToken, dicomToken, derivedToken };
+}
+
+/** バッチの取り込み（H48）が済んだら、その path を指していた派生の札に SOP を足す。 */
+function linkImportedToDerived(importToken: string, path: string, sopInstanceUid: string): void {
+  for (const c of derivedConsents.values()) {
+    if (c.linkedImportToken === importToken && c.pendingPaths?.has(path)) {
+      c.pendingPaths.delete(path);
+      c.sops.add(sopInstanceUid);
+    }
+  }
 }
 
 /** 札の範囲なら使った印を付けて true。 */

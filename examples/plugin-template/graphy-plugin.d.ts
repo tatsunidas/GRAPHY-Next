@@ -1993,7 +1993,11 @@ export type PickDirectoryResult = { ok: true; path: string; dirToken: string } |
 export interface PluginBatchConsentRequest {
   importVideos?: PluginVideoConsentItem[];
   importDicom?: { paths: string[] };
-  derived?: { sourceSopInstanceUid: string; seriesDescription: string }[];
+  /**
+   * 派生シリーズの保存（H54）。取り込み済みは `sourceSopInstanceUid`、同じ要求で取り込む動画は `sourcePath`
+   * （その取り込みが済むと、できた SOP が範囲に入る）。
+   */
+  derived?: { sourceSopInstanceUid?: string; sourcePath?: string; seriesDescription: string }[];
   modality?: "US";
   frameValues?: { description: string };
 }
