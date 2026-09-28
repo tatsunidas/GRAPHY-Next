@@ -936,23 +936,32 @@ async function viewToolsCheck(viewer: Page, closeWindows: () => Promise<void>): 
   const seenSummary = new Set<number>();
   const seenOriginal = new Set<number>();
   let excludedDuring = 0;
-  let playCursor = false;
+  const seenGreen = new Set<number>();
+  // 緑の線（表示中のフレームの位置）の x（viewBox 0..1000）→ フレーム番号
+  const greenFrame = async () => {
+    const x = Number(await screen.locator(".chart-cursor").first().getAttribute("x1").catch(() => "NaN"));
+    return Number.isFinite(x) ? Math.round((x / 1000) * 599) + 1 : 0;
+  };
   const tEnd = Date.now() + 3_000;
   while (Date.now() < tEnd) {
     seenSummary.add(await frameOf(summ));
     seenOriginal.add(await frameOf(orig));
     excludedDuring += await summ.locator(".view-excluded").count();
-    playCursor ||= (await screen.getByTestId("uvs-chart-play-cursor").count()) > 0;
+    seenGreen.add(await greenFrame());
     await viewer.waitForTimeout(60);
   }
   await screen.getByTestId("uvs-play").click(); // 一時停止
   await viewer.waitForTimeout(500);
   const sumList = [...seenSummary].filter((n) => n > 0).sort((a, b) => a - b);
+  const greenList = [...seenGreen].filter((n) => n > 0).sort((a, b) => a - b);
   check(
-    sumList.every((n) => [10, 20, 30].includes(n)) && sumList.length >= 2 && [...seenOriginal].every((n) => n === 15) && excludedDuring === 0 && playCursor,
-    "[14] ★★SUMMARY を再生すると要約フレームだけが続けて出る（ブラックアウトなし）。ORIGINAL は止まったまま・プロットに再生位置",
-    { summary: sumList, original: [...seenOriginal], excludedDuring, playCursor },
+    sumList.every((n) => [10, 20, 30].includes(n)) && sumList.length >= 2 && [...seenOriginal].every((n) => n === 15) && excludedDuring === 0 &&
+      greenList.every((n) => [10, 20, 30].includes(n)) && greenList.length >= 2,
+    "[14] ★★SUMMARY を再生すると要約フレームだけが続けて出る（ブラックアウトなし）。ORIGINAL の画像は止まったまま・プロットの緑の線は再生位置を追う",
+    { summary: sumList, original: [...seenOriginal], excludedDuring, green: greenList },
   );
+  const greenAfter = await greenFrame();
+  check(greenAfter === 15, "[14] 止めると緑の線は今のフレーム（15）へ戻る", { greenAfter });
   const afterStop = await summ.locator(".view-excluded").innerText({ timeout: 1_000 }).catch(() => "");
   check(afterStop.includes("手動で除外"), "[14] 止めると SUMMARY は今のフレーム（15・ブラックアウト＋理由）に戻る", { afterStop });
 
