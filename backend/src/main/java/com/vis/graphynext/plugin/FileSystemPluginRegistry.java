@@ -48,6 +48,19 @@ abstract class FileSystemPluginRegistry implements PluginRegistry {
     /** ログ用のモード名。 */
     protected abstract String modeName();
 
+    /**
+     * H58: プラグインごとのデータ置き場 {@code <plugins の隣>/plugin-data/<id>/}。
+     *
+     * <p>プラグインのフォルダは入れ直し（更新）のたびに丸ごと置き換わるので、利用者が後から入れたもの
+     * （学習済みモデルの差し替えなど）はここに置く。入れ直し・削除では消さない。
+     */
+    public Path dataDirFor(String id) {
+        Path base = root.getParent() == null ? root : root.getParent();
+        Path dir = base.resolve("plugin-data").resolve(id).normalize();
+        if (!dir.startsWith(base.resolve("plugin-data"))) throw new IllegalArgumentException("invalid id: " + id);
+        return dir;
+    }
+
     @Override
     public List<PluginManifest> manifests() {
         List<PluginManifest> out = new ArrayList<>();
