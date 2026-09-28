@@ -62,6 +62,7 @@ class PluginArtifactsTest {
     void ジョブidやファイル名に使えない文字はパスを抜けさせない() throws IOException {
         PluginArtifacts a = new PluginArtifacts(tmp);
         Path p = a.place("../../evil", "../x.dcm");
-        assertThat(p.normalize().startsWith(tmp.resolve("graphy-plugin-artifacts"))).isTrue();
+        // 🔑 本体は一時フォルダを実パスで扱う（macOS の /var → /private/var・Windows の短い名前）。比べる側も実パスにする
+        assertThat(p.normalize().startsWith(tmp.toRealPath().resolve("graphy-plugin-artifacts"))).isTrue();
     }
 }
