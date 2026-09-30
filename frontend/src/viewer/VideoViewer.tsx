@@ -21,6 +21,8 @@ import { useI18n } from "../i18n/i18n";
 import { fetchVideoMetadata, videoRenderedUrl, type VideoMetadata } from "../api";
 import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
 import { ensureVideoMetadataProvider, registerVideoMetadata } from "./videoMetadataProvider";
+import { createWheelStepper } from "./wheelScroll";
+import { isInsideViewerOverlay } from "./viewerOverlay";
 import {
   analyzeFrameRoi,
   analyzeGlobalRoi,
@@ -66,6 +68,13 @@ const { MouseBindings } = csToolsEnums;
  * 左ドラッグ（Primary）に割り当て可能な動画ツール。WW/WL と計測/ROI を切り替える
  * （Pan=中ドラッグ・Zoom=右ドラッグは固定）。P3c で ROI 解析（時系列）を載せる土台。
  */
+/**
+ * 🔧 ツールの列（W/L・計測・ROI・グローバル ROI 解析・フレーム統計）・ROI の帰属・ROI 一覧・解析パネルを**画面に出すか**。
+ * 2026-09-30 ユーザ指示「US のシリーズビューで ROI 群は不要。UI から除外。コードは残して」→「ツールの列ごと」。
+ * 処理とコードは残してある（戻すときは true にする）。左ドラッグ＝WW/WL・中＝Pan・右＝Zoom は ToolGroup のまま効く。
+ */
+const SHOW_VIDEO_TOOLS = false;
+
 const VIDEO_PRIMARY_TOOLS: { name: string; key: string }[] = [
   { name: WindowLevelTool.toolName, key: "wwwl" },
   { name: LengthTool.toolName, key: "length" },
@@ -973,6 +982,30 @@ export function VideoViewer({
     }
   };
 
+  // 🔑 ホイール＝フレーム送り（1 ノッチ 1 フレーム・2D ビューアと同じ wheelScroll）、Ctrl＋ホイール＝拡大縮小
+  //    （トラックパッドのピンチも ctrlKey 付きの wheel で来る）。2026-09-30 ユーザ要望（以前はホイールが何もしなかった）。
+  //    frame は state なので、最新の値と関数は ref から読む（古い値で送らない）。
+  const wheelRef = useRef({ frame, seekToFrame, zoomView });
+  wheelRef.current = { frame, seekToFrame, zoomView };
+  useEffect(() => {
+    const el = hostRef.current;
+    if (phase !== "viewport" || !el) return;
+    const stepper = createWheelStepper();
+    const onWheel = (e: WheelEvent) => {
+      if (isInsideViewerOverlay(e.target)) return;
+      e.preventDefault();
+      const w = wheelRef.current;
+      if (e.ctrlKey) {
+        w.zoomView(e.deltaY < 0 ? 1.1 : 1 / 1.1);
+        return;
+      }
+      const d = stepper(e.deltaY, e.deltaMode, e.timeStamp);
+      if (d !== 0) w.seekToFrame(w.frame + d);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [phase]);
+
   // 🔑 表示領域の大きさが変わったら、描画面（canvas）の解像度を合わせる。これが無いと枠だけが
   //    伸び縮みして絵が引き伸ばされ、縦横比が崩れていた（2026-09-25 ユーザ報告）。表示の状態は保つ。
   useEffect(() => {
@@ -1103,8 +1136,16 @@ export function VideoViewer({
             <button type="button" style={iconBtn} data-testid="video-reset" onClick={resetView} title={t("viewer.reset")}>
               <ToolIcon file={UI_ICON_FILES.reset} size={16} />
             </button>
+            {!SHOW_VIDEO_TOOLS && (
+              <span style={{ color: "#889", fontSize: 11, marginLeft: 8 }} data-testid="video-mouse-hint">
+                {t("video.mouseHint")}
+              </span>
+            )}
           </div>
 
+          {/* ツールの列・ROI の帰属・ROI 一覧は SHOW_VIDEO_TOOLS のときだけ（2026-09-30 画面から外した）。 */}
+          {SHOW_VIDEO_TOOLS && (
+          <>
           {/* ツールバー（左ドラッグ=WW/WL・計測/ROI 切替。中=Pan・右=Zoom は固定）。 */}
           <div style={{ ...controlRowStyle, gap: 6 }}>
             {VIDEO_PRIMARY_TOOLS.map(({ name, key }) => (
@@ -1246,6 +1287,8 @@ export function VideoViewer({
               </button>
             </div>
           )}
+          </>
+          )}
 
           {/* シークバー（フレーム精度。1..totalFrames）。 */}
           <div style={{ ...controlRowStyle, gap: 10 }}>
@@ -1338,7 +1381,7 @@ export function VideoViewer({
           )}
 
           {/* グローバル ROI 時系列解析パネル（P3c）。 */}
-          {series && series.length > 0 && analyzedRoi && (
+          {SHOW_VIDEO_TOOLS && series && series.length > 0 && analyzedRoi && (
             <div style={analysisPanel}>
               <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 6 }}>
                 <strong style={{ fontSize: 13, color: "#334" }}>{t("video.analyze.title")}</strong>
@@ -1395,7 +1438,7 @@ export function VideoViewer({
           )}
 
           {/* フレーム指定 ROI の単一フレーム統計パネル（§12 モード①）。 */}
-          {frameResult && (
+          {SHOW_VIDEO_TOOLS && frameResult && (
             <div style={analysisPanel} data-testid="video-frame-stats-panel">
               <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 6 }}>
                 <strong style={{ fontSize: 13, color: "#334" }}>
