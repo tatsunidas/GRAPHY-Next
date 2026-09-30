@@ -65,4 +65,8 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   saveFile: (payload) => ipcRenderer.invoke("graphy:save-file", payload),
   // 開くダイアログ（プラグインの H43 file.pickFiles）。ファイルだけ。選んだ絶対パスを返す。
   pickFiles: (payload) => ipcRenderer.invoke("graphy:pick-files", payload),
+  // H56: プラグインのフォルダ（選んだフォルダの中にだけ書ける）
+  pluginPickDirectory: (payload) => ipcRenderer.invoke("graphy:plugin-pick-directory", payload),
+  pluginWriteIntoDirectory: (payload) => ipcRenderer.invoke("graphy:plugin-write-into-directory", payload),
+  pluginDownloadIntoDirectory: (payload) => ipcRenderer.invoke("graphy:plugin-download-into-directory", payload),
 });

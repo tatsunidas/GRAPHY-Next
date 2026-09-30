@@ -77,6 +77,25 @@ public final class VideoConverter {
 
     private record Parsed(MP4Parser parser, String tsuid) {}
 
+    /** MP4 の解析結果（H.264/HEVC で DICOM に包めるときだけ）。 */
+    public record Mp4Info(Attributes attrs, String transferSyntaxUid) {}
+
+    /**
+     * MP4 を解析し、DICOM に包むための属性（Rows/Columns/NumberOfFrames/FrameTime/Photometric 等）と
+     * 転送構文を返す。包めない（H.264/HEVC の対応プロファイルでない・MP4 でない）なら null。
+     */
+    public static Mp4Info inspectMp4(Path mp4) {
+        Parsed p = tryParse(mp4);
+        if (p == null) return null;
+        Attributes a = new Attributes();
+        try {
+            p.parser.getAttributes(a);
+        } catch (RuntimeException e) {
+            return null;
+        }
+        return new Mp4Info(a, p.tsuid);
+    }
+
     /** MP4 を解析して parser と転送構文を返す。解析不可/非対応プロファイルなら null。 */
     private static Parsed tryParse(Path mp4) {
         try (SeekableByteChannel ch = Files.newByteChannel(mp4, StandardOpenOption.READ)) {
@@ -90,7 +109,7 @@ public final class VideoConverter {
     }
 
     /** attrs（PixelData 無し）＋ encapsulated PixelData（MP4 全体を 1 フラグメント）で Part-10 を書く。 */
-    private static void writeEncapsulated(Attributes attrs, String tsuid, Path video, Path out) throws IOException {
+    public static void writeEncapsulated(Attributes attrs, String tsuid, Path video, Path out) throws IOException {
         long len = Files.size(video);
         boolean odd = (len & 1L) != 0;
         long itemLen = odd ? len + 1 : len;
@@ -150,10 +169,12 @@ public final class VideoConverter {
      * 動画をピクセルデコードせず MP4 を丸ごと 1 フラグメントとして DICOM にラップするだけだが、同じ不具合を
      * 将来のビューア実装（フレーム順次デコード）で再発させないよう、エンコード側で同じ保証を先に入れておく。
      */
-    static List<String> transcodeCommand(String ffmpeg, Path input, Path out) {
+    public static List<String> transcodeCommand(String ffmpeg, Path input, Path out) {
         return List.of(
                 ffmpeg, "-y", "-i", input.toString(),
                 "-an",                       // 音声を除去（DICOM video は映像のみ扱い）
+                // H.264 の 4:2:0 は偶数寸法が要る（奇数だと libx264 が失敗する）。偶数なら実質何もしない
+                "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
                 "-c:v", "libx264",
                 "-profile:v", "high", "-level:v", "4.1",
                 "-bf", "0",                  // frame順序保証（旧 GRAPHY のフレーム順序バグ対策）

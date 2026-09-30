@@ -68,7 +68,7 @@ export function MenuBar({
       openPluginWindow(
         { id: m.id, name: m.name },
         // 出所の表示は本体が入れる。プラグインからは消せない
-        { ...opts, originLabel: t("viewer2d.plugin.overlayLabel", { name: m.name }), closeLabel: t("common.close") },
+        { ...opts, originLabel: t("viewer2d.plugin.overlayLabel", { name: m.name }), closeLabel: t("common.close"), keepOpenLabel: t("pluginWindow.keepOpen") },
       ),
     loadStore: (patientKey) => loadPluginStore(m.id, patientKey),
     saveStore: (json, opts) => savePluginStore(m.id, opts.patientKey, json, opts.version ?? null),

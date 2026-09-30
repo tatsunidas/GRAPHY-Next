@@ -38,6 +38,13 @@ export interface PluginWindowHandle {
   onClose(listener: () => void): void;
   /** 既に閉じているか。 */
   readonly closed: boolean;
+  /**
+   * H52: × で閉じる前の確認。`fn` が文言を返したら、本体が窓の中に確認を出し、「閉じる」を選んだときだけ閉じる
+   * （null なら確認なしで閉じる）。長い処理の途中で誤って閉じないために使う。`close()` を直接呼んだときは効かない。
+   */
+  setCloseGuard(fn: (() => string | null) | null): void;
+  /** H52: この窓を最前面へ出す（同じものを 2 枚開かず、開いている窓を見せるときなど）。 */
+  focus(): void;
 }
 
 export interface PluginWindowOptions {
@@ -51,6 +58,8 @@ export interface PluginWindowOptions {
   originLabel?: string;
   /** 閉じるボタンの説明（本体が `common.close` を渡す）。 */
   closeLabel?: string;
+  /** H52 の確認で「閉じない」ボタンの文言（本体が渡す）。 */
+  keepOpenLabel?: string;
 }
 
 const CLASS = "graphy-plugin-window";
@@ -76,6 +85,13 @@ function ensureStyles(): void {
 .${CLASS}__close{background:none;border:0;color:#aaa;font-size:18px;line-height:1;cursor:pointer}
 .${CLASS}__close:hover{color:#fff}
 .${CLASS}__body{flex:1 1 auto;min-height:0;overflow:auto;position:relative}
+.${CLASS}__guard{position:absolute;inset:0;z-index:10;display:flex;align-items:center;justify-content:center;
+  background:rgba(10,20,30,.45)}
+.${CLASS}__guard-box{background:#fff;color:#223;border-radius:8px;padding:14px 16px;max-width:min(440px,90%);
+  box-shadow:0 8px 30px rgba(0,0,0,.35);font-size:13px;line-height:1.6}
+.${CLASS}__guard-bar{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
+.${CLASS}__guard-bar button{padding:5px 12px;border-radius:6px;cursor:pointer;font:inherit;border:1px solid #cdd5de;background:#f4f7fa;color:#334}
+.${CLASS}__guard-bar button.danger{background:#b3261e;border-color:#b3261e;color:#fff}
 `;
   document.head.appendChild(style);
 }
@@ -177,7 +193,54 @@ export function openPluginWindow(
   };
   const entry = { close };
   open.add(entry);
-  closeButton.addEventListener("click", close);
+
+  // H52: × で閉じる前の確認（プラグインが処理中など）。文言はプラグインが決めるが、出すのは本体
+  let guard: (() => string | null) | null = null;
+  let guardShown: HTMLElement | null = null;
+  const requestClose = () => {
+    if (closed) return;
+    let message: string | null = null;
+    try {
+      message = guard ? guard() : null;
+    } catch (e) {
+      console.error("[plugin-window] close guard failed", e);
+    }
+    if (!message) {
+      close();
+      return;
+    }
+    if (guardShown) return;
+    const overlay = document.createElement("div");
+    overlay.className = `${CLASS}__guard`;
+    overlay.setAttribute("data-testid", "plugin-window-close-guard");
+    const box = document.createElement("div");
+    box.className = `${CLASS}__guard-box`;
+    const text = document.createElement("div");
+    text.textContent = message;
+    const bar2 = document.createElement("div");
+    bar2.className = `${CLASS}__guard-bar`;
+    const stay = document.createElement("button");
+    stay.type = "button";
+    stay.textContent = opts.keepOpenLabel ?? "続ける";
+    stay.setAttribute("data-testid", "plugin-window-close-guard-stay");
+    const leave = document.createElement("button");
+    leave.type = "button";
+    leave.className = "danger";
+    leave.textContent = opts.closeLabel ?? "閉じる";
+    leave.setAttribute("data-testid", "plugin-window-close-guard-close");
+    bar2.append(stay, leave);
+    box.append(text, bar2);
+    overlay.appendChild(box);
+    root.appendChild(overlay);
+    guardShown = overlay;
+    stay.addEventListener("click", () => {
+      overlay.remove();
+      guardShown = null;
+    });
+    leave.addEventListener("click", close);
+    stay.focus();
+  };
+  closeButton.addEventListener("click", requestClose);
 
   return {
     container: body,
@@ -185,6 +248,12 @@ export function openPluginWindow(
     onClose: (listener) => listeners.push(listener),
     get closed() {
       return closed;
+    },
+    setCloseGuard: (fn) => {
+      guard = fn;
+    },
+    focus: () => {
+      if (!closed) document.body.appendChild(root); // 同じ z-index の中で最後に置いたものが上に出る
     },
   };
 }

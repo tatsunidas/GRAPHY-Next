@@ -42,6 +42,9 @@ import java.util.function.BooleanSupplier;
  * 同期の {@code run} で呼ばれたときはどちらも入らないので、プラグインは「無ければ何もしない」で書くこと。
  * 要求本文に同名のキーがあっても<b>ここで上書きする</b>（JSON から関数は作れないが、文字列で
  * 塞がれてプラグインが型エラーで落ちるのを防ぐ）。
+ *
+ * <p>H53: 結果に {@code __artifact}（一時フォルダに書いたファイルのパス）があれば {@link PluginArtifacts} が預かり、
+ * {@code GET /api/plugin-jobs/{jobId}/artifact} で配る。
  */
 @Service
 public class PluginJobService {
@@ -53,7 +56,12 @@ public class PluginJobService {
     /** 取り消しの問い合わせ（{@code BooleanSupplier}）を入れる args のキー。 */
     public static final String CANCELLED_KEY = "__cancelled";
 
-    /** 同時に走らせるジョブの数。動画の読み出しのように I/O と CPU を両方使うので 2 本に抑える。 */
+    /**
+     * 同時に走らせるジョブの数（プラグインの計算・本体の書き込みそれぞれ）。動画の読み出しのように I/O と CPU を
+     * 両方使うので 2 本に抑える。🔑 **2 つの列に分ける**: プラグインの JAR のジョブ（バッチの要約など・長い）と、
+     * 本体が走らせる書き込み（H48 取り込み・H54 派生シリーズ・短い）。同じ列だと、バッチの長い計算の後ろで
+     * 取り込み・保存が待たされる（2026-09-28 バッチの計画で分けた）。
+     */
     private static final int WORKERS = 2;
     /** 終わったジョブを覚えておく上限と時間（結果を取りに来る前に消さないため）。 */
     private static final int MAX_FINISHED_JOBS = 50;
@@ -106,14 +114,28 @@ public class PluginJobService {
     }
 
     private final PluginRegistry registry;
+    private final PluginArtifacts artifacts;
     private final Map<String, Job> jobs = new ConcurrentHashMap<>();
     private final ExecutorService pool;
+    private final ExecutorService hostPool;
 
+    /** テスト用（成果物は OS の一時フォルダへ）。 */
     public PluginJobService(PluginRegistry registry) {
+        this(registry, new PluginArtifacts());
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public PluginJobService(PluginRegistry registry, PluginArtifacts artifacts) {
         this.registry = registry;
+        this.artifacts = artifacts;
         AtomicInteger seq = new AtomicInteger();
         this.pool = Executors.newFixedThreadPool(WORKERS, r -> {
             Thread t = new Thread(r, "plugin-job-" + seq.incrementAndGet());
+            t.setDaemon(true);
+            return t;
+        });
+        this.hostPool = Executors.newFixedThreadPool(WORKERS, r -> {
+            Thread t = new Thread(r, "plugin-host-job-" + seq.incrementAndGet());
             t.setDaemon(true);
             return t;
         });
@@ -122,6 +144,7 @@ public class PluginJobService {
     @PreDestroy
     void shutdown() {
         pool.shutdownNow();
+        hostPool.shutdownNow();
     }
 
     /**
@@ -132,22 +155,49 @@ public class PluginJobService {
      */
     public Status submit(String pluginId, Map<String, Object> payload) {
         registry.checkRunnable(pluginId);
+        Map<String, Object> args = new HashMap<>(payload == null ? Map.of() : payload);
+        return enqueue(pool, pluginId, ctx -> {
+            args.put(PROGRESS_KEY, ctx.progress());
+            args.put(CANCELLED_KEY, ctx.cancelled());
+            return registry.run(pluginId, args);
+        });
+    }
+
+    /** ジョブの中から見える進み具合の口と取り消しの問い合わせ。 */
+    public record TaskContext(BiConsumer<Double, String> progress, BooleanSupplier cancelled) {
+    }
+
+    /** ジョブとして走らせる処理。 */
+    @FunctionalInterface
+    public interface Task {
+        Object run(TaskContext ctx) throws Exception;
+    }
+
+    /**
+     * <b>本体の処理</b>をプラグインのジョブとして走らせる（プラグインのために本体が行う重い処理。
+     * 例: H48 の動画の取り込み）。状態・取り消しの口はプラグインの JAR と同じ
+     * （{@code /api/plugin-jobs/{jobId}}）ので、画面側は 1 つの待ち方で済む。
+     *
+     * @param pluginId 依頼したプラグイン（状態に出すだけ。存在の確認は呼び出し側が行う）
+     */
+    public Status submitTask(String pluginId, Task task) {
+        return enqueue(hostPool, pluginId, task);
+    }
+
+    private Status enqueue(ExecutorService lane, String pluginId, Task task) {
         sweep();
         Job job = new Job(UUID.randomUUID().toString(), pluginId);
         jobs.put(job.id, job);
-        Map<String, Object> args = new HashMap<>(payload == null ? Map.of() : payload);
         BiConsumer<Double, String> progress = (p, msg) -> {
             if (p != null && Double.isFinite(p)) job.progress = Math.max(0, Math.min(1, p));
             if (msg != null) job.message = msg;
         };
-        BooleanSupplier cancelled = job.cancelled::get;
-        args.put(PROGRESS_KEY, progress);
-        args.put(CANCELLED_KEY, cancelled);
-        pool.submit(() -> execute(job, args));
+        TaskContext ctx = new TaskContext(progress, job.cancelled::get);
+        lane.submit(() -> execute(job, task, ctx));
         return job.status();
     }
 
-    private void execute(Job job, Map<String, Object> args) {
+    private void execute(Job job, Task task, TaskContext ctx) {
         if (job.cancelled.get()) {
             finish(job, State.CANCELLED, null, null);
             return;
@@ -155,7 +205,9 @@ public class PluginJobService {
         job.state = State.RUNNING;
         job.startedAt = System.currentTimeMillis();
         try {
-            Object result = registry.run(job.pluginId, args);
+            Object result = task.run(ctx);
+            // H53: 結果に成果物（一時フォルダのファイルのパス）があれば預かり、配れる形に差し替える
+            if (!job.cancelled.get()) result = artifacts.adopt(job.id, result);
             // 取り消しを受けたプラグインが途中の結果を返しても、「取り消し」として見せる
             finish(job, job.cancelled.get() ? State.CANCELLED : State.DONE, result, null);
         } catch (Exception e) {

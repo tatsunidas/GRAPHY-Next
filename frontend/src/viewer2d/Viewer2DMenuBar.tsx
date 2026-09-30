@@ -178,6 +178,7 @@ export function Viewer2DMenuBar({
           ...opts,
           originLabel: t("viewer2d.plugin.overlayLabel", { name: m.name }),
           closeLabel: t("common.close"),
+          keepOpenLabel: t("pluginWindow.keepOpen"),
         },
       ),
     mountViewport: (el, volume, referenceTileId, opts) => {

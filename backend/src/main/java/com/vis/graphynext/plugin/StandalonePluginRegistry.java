@@ -17,6 +17,7 @@ import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -50,6 +51,11 @@ public class StandalonePluginRegistry extends FileSystemPluginRegistry {
     }
 
     @Override
+    public boolean localFilesAllowed() {
+        return true;
+    }
+
+    @Override
     public void checkRunnable(String id) {
         Discovered d = discover(id).orElseThrow(() -> new NoSuchElementException("plugin not found: " + id));
         String entry = d.descriptor().entrypoint();
@@ -67,13 +73,32 @@ public class StandalonePluginRegistry extends FileSystemPluginRegistry {
         }
         try {
             GraphyPlugin plugin = instantiate(id, d, entry);
-            return plugin.run(payload == null ? Map.of() : payload);
+            return plugin.run(withDataDir(id, payload));
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
             throw new RuntimeException("plugin run failed: " + id, e);
         }
     }
+
+    /**
+     * H58: 引数に {@value #DATA_DIR_KEY}（このプラグインのデータ置き場・作っておく）を入れて渡す。
+     * 本体が決める値なので、画面から同じ鍵が来ても上書きする（ほかのフォルダを指させない）。
+     */
+    Map<String, Object> withDataDir(String id, Map<String, Object> payload) {
+        Map<String, Object> args = new HashMap<>(payload == null ? Map.of() : payload);
+        Path dir = dataDirFor(id);
+        try {
+            Files.createDirectories(dir);
+        } catch (IOException e) {
+            log.warn("[plugins] cannot create data dir {}: {}", dir, e.getMessage());
+        }
+        args.put(DATA_DIR_KEY, dir.toString());
+        return args;
+    }
+
+    /** H58 の引数の鍵。 */
+    public static final String DATA_DIR_KEY = "__pluginDataDir";
 
     private GraphyPlugin instantiate(String id, Discovered d, String entrypoint) throws Exception {
         URLClassLoader cl = loaders.computeIfAbsent(id, k -> newLoader(d.dir()));

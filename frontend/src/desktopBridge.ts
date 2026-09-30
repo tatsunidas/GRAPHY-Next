@@ -275,6 +275,12 @@ export interface GraphyDesktop {
     multiple?: boolean;
     filters?: { name: string; extensions: string[] }[];
   }) => Promise<PickFilesResult>;
+  /** H56: プラグインのフォルダ選択。選んだフォルダは main が覚え、その中にだけ書ける。 */
+  pluginPickDirectory?: (payload: { title?: string }) => Promise<{ ok: true; path: string } | { ok: false; canceled?: boolean; error?: string }>;
+  /** H56: 選んだフォルダの直下へ書く（上書きしない名前にする）。 */
+  pluginWriteIntoDirectory?: (payload: { dir: string; name: string; bytes: Uint8Array }) => Promise<SaveFileResult>;
+  /** H56: backend のジョブの成果物を選んだフォルダへ直接落とす。 */
+  pluginDownloadIntoDirectory?: (payload: { dir: string; name: string; url: string }) => Promise<SaveFileResult>;
 }
 
 export function desktop(): GraphyDesktop | undefined {

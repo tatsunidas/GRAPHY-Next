@@ -109,7 +109,8 @@ export type {
  * host の中身は `viewer2d.menu` と完全に同一で、違うのは出る場所だけである。
  */
 import type { AiGenerationOptions, AiGenerationOutcome } from "./pluginAiApi";
-import type { PluginSaveFileOptions } from "./pluginFileApi";
+import type { PickDirectoryResult, PluginSaveArtifactOptions, PluginSaveFileOptions } from "./pluginFileApi";
+export type { PickDirectoryResult, PluginSaveArtifactOptions };
 import type { SaveFileResult } from "../desktopBridge";
 import type {
   PickFilesResult,
@@ -117,8 +118,58 @@ import type {
   PluginJobOutcome,
   PluginPatient,
   PluginPickFilesOptions,
+  PluginVideoEntry,
+  PluginVideoListQuery,
 } from "./pluginCommonApi";
-export type { PickFilesResult, PluginJobOptions, PluginJobOutcome, PluginPatient, PluginPickFilesOptions };
+export type {
+  PickFilesResult,
+  PluginJobOptions,
+  PluginJobOutcome,
+  PluginPatient,
+  PluginPickFilesOptions,
+  PluginVideoEntry,
+  PluginVideoListQuery,
+};
+import type {
+  PluginFrameValues,
+  PluginFrameValuesRead,
+  PluginFrameValuesSeries,
+  PluginBatchConsentRequest,
+  PluginBatchConsentResult,
+  PluginDerivedVideoOutcome,
+  PluginDerivedVideoRequest,
+  PluginDerivedVideoResult,
+  PluginDicomImportOutcome,
+  PluginVideoConsentIssue,
+  PluginVideoConsentItem,
+  PluginVideoConsentRequest,
+  PluginVideoConsentResult,
+  PluginVideoImportOutcome,
+  PluginVideoImportRequest,
+  PluginVideoImportResult,
+  PluginVideoPatient,
+  PluginVideoProbe,
+} from "./pluginVideoApi";
+export type {
+  PluginFrameValues,
+  PluginFrameValuesRead,
+  PluginFrameValuesSeries,
+  PluginBatchConsentRequest,
+  PluginBatchConsentResult,
+  PluginDerivedVideoOutcome,
+  PluginDerivedVideoRequest,
+  PluginDerivedVideoResult,
+  PluginDicomImportOutcome,
+  PluginVideoConsentIssue,
+  PluginVideoConsentItem,
+  PluginVideoConsentRequest,
+  PluginVideoConsentResult,
+  PluginVideoImportOutcome,
+  PluginVideoImportRequest,
+  PluginVideoImportResult,
+  PluginVideoPatient,
+  PluginVideoProbe,
+};
 
 export type PluginSurface =
   | "viewer2d.menu"
@@ -158,6 +209,12 @@ export interface PluginManifest {
 
 interface PluginHostBase {
   pluginId: string;
+  /**
+   * H50: 本体の REST の基点（例 `http://localhost:8080`。同じ origin なら空文字）。
+   * `ViewerTarget.apiBase` と同じ値。**メイン画面の host からも** `/api/instances/{sop}/rendered` などを
+   * 組み立てられる（2D ビューアを開かずに取り込んだ動画を扱うため）。
+   */
+  apiBase: string;
   /** i18n 取得関数（プラグイン UI がホスト言語に追従できるよう渡す）。 */
   t: (key: string) => string;
   /**
@@ -197,6 +254,17 @@ interface PluginHostBase {
   file: {
     saveAs: (opts: PluginSaveFileOptions) => Promise<SaveFileResult>;
     /**
+     * H53: ジョブの成果物（JAR が一時フォルダに書き、結果の `__artifact` に入れて返したファイル）を、
+     * OS の保存ダイアログで保存する。`jobId` は結果の `__artifact.jobId`。デスクトップ専用。
+     */
+    saveJobArtifact: (jobId: string, opts: PluginSaveArtifactOptions) => Promise<SaveFileResult>;
+    /** H56: フォルダを選ばせる（デスクトップ専用）。書き込みは選んだフォルダの直下だけ。 */
+    pickDirectory: (opts?: { title?: string }) => Promise<PickDirectoryResult>;
+    /** H56: ジョブの成果物を選んだフォルダへ保存する（ダイアログなし・上書きしない名前）。 */
+    saveJobArtifactTo: (jobId: string, opts: { dirToken: string; name: string }) => Promise<SaveFileResult>;
+    /** H56: バイト列を選んだフォルダへ書く（例: 集計 CSV）。 */
+    writeToDirectory: (opts: { dirToken: string; name: string; bytes: Uint8Array }) => Promise<SaveFileResult>;
+    /**
      * **開くダイアログ**（H43）。OS のダイアログでファイルを選ばせ、**絶対パス**を返す。
      * フォルダは選べない。取り消しは `{ok:false, canceled:true}`（失敗ではない）。
      *
@@ -215,7 +283,7 @@ interface PluginHostBase {
    * standalone 専用（web は backend 面が無いので失敗が返る）。
    */
   runBackendJob: (payload?: unknown, opts?: PluginJobOptions) => Promise<PluginJobOutcome>;
-  /** 本体の DB（H44・H46）。 */
+  /** 本体の DB（H44・H46・H51）。 */
   db: {
     /**
      * 患者を ID・氏名の部分一致で探す（H44）。**読み取りのみ**。空文字は全件。
@@ -223,11 +291,51 @@ interface PluginHostBase {
      */
     searchPatients: (query: string) => Promise<PluginPatient[]>;
     /**
+     * 保管庫にある**動画**を並べる（H51）。**読み取りのみ**。検査（`{ studyUid }`。例: メイン画面の
+     * `selectedStudyUid`）か患者（`{ patientKey }`）で引く。新しい検査から順。動画の判定は 2D ビューアと同じ
+     * （Video 系 SOP クラス、または H.264 等で包まれた US Multi-frame など）。
+     */
+    listVideos: (query: PluginVideoListQuery) => Promise<PluginVideoEntry[]>;
+    /** H57: DICOM ファイルを保管庫へ取り込む（H55 の `dicomToken` の範囲だけ）。 */
+    importDicomFiles: (req: { consentToken: string; paths: string[] }) => Promise<PluginDicomImportOutcome>;
+    /**
      * DB を変えたことを知らせる（H46）。メイン画面の一覧（呼んだウィンドウ自身も含む）と、
      * 開いている他のウィンドウが読み直す。本体の書き込み API（H4b・H9 等）は自分で知らせるので、
      * これを呼ぶのはプラグインが別の経路で DB を変えたときだけ。
      */
     notifyChanged: (detail?: { studyUids?: string[]; patientId?: string }) => void;
+  };
+  /**
+   * **動画の取り込み**（H47〜H49）。standalone 専用（web は 501）。
+   *
+   * <p>🔴 **DICOM はプラグインに書かせない**（H4b / H9 と同じ）。変換・DICOM・UID・患者属性・出所は本体が書き、
+   * 保管庫へ書く前に本体が**必ず**確認ダイアログを出す。流れ:
+   * `probe`（重複の確認）→ `requestImportConsent`（ダイアログ 1 回）→ 1 本ずつ `importAsDicom`。
+   * 札はダイアログで見せた**患者・ファイル・書くもの**の範囲でしか使えない。
+   */
+  video: {
+    /** H47: 諸元・指紋（SHA-256）・既に取り込み済みか。本体の ffmpeg で調べる（ffprobe 不要）。 */
+    probe: (path: string) => Promise<PluginVideoProbe>;
+    /** H48（前半）: 本体の確認ダイアログを出し、同意の札を返す。取り消しは `cancelled`。 */
+    requestImportConsent: (req: PluginVideoConsentRequest) => Promise<PluginVideoConsentResult>;
+    /**
+     * H48（後半）: 1 本取り込む（ジョブ。進み具合・取り消しあり）。同じ動画（同じ SHA-256）が既にあれば
+     * 書かずに `duplicate: true`。`frameValues` を渡すと「フレームごとの値」の SR も書く（長さが動画の
+     * フレーム数と違えば SR だけ書かず `frameValuesError`）。成功すると一覧の読み直しを本体が知らせる。
+     */
+    importAsDicom: (req: PluginVideoImportRequest, opts?: PluginJobOptions) => Promise<PluginVideoImportOutcome>;
+    /** H49: その動画に、このプラグインが書いた「フレームごとの値」を読む。無ければ null。 */
+    readFrameValues: (sopInstanceUid: string) => Promise<PluginFrameValuesRead | null>;
+    /**
+     * H54: プラグインが作った MP4（H53 の成果物）を、元の動画から派生したシリーズとして本体が DICOM に書く。
+     * `target: "db"` は保管庫へ（本体の確認ダイアログを必ず出す）、`"file"` は .dcm の成果物（`file.saveJobArtifact` で保存）。
+     */
+    saveDerivedVideo: (req: PluginDerivedVideoRequest, opts?: PluginJobOptions) => Promise<PluginDerivedVideoOutcome>;
+    /**
+     * H55: バッチを始める前に本体の確認ダイアログを 1 回だけ出し、取り込み（H48）・DICOM の取り込み（H57）・
+     * 派生シリーズの保存（H54）の札をまとめて返す。
+     */
+    requestBatchConsent: (req: PluginBatchConsentRequest) => Promise<PluginBatchConsentResult>;
   };
 }
 
@@ -922,7 +1030,7 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
  * `launchPlugin` が一箇所で注入する。呼び出し側に作らせると、マニフェストの渡し忘れが
  * そのまま権限チェックの素通りになる。
  */
-export type PluginHostSeed = DistributiveOmit<PluginHost, "ai" | "file" | "runBackendJob" | "db">;
+export type PluginHostSeed = DistributiveOmit<PluginHost, "ai" | "file" | "runBackendJob" | "db" | "video" | "apiBase">;
 
 /**
  * プラグイン UI バンドル（ES モジュール）が公開する契約。

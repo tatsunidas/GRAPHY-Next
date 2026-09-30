@@ -830,6 +830,13 @@ export interface PluginWindowHandle {
   /** 閉じられたときに呼ばれる（ユーザーが × を押した場合も含む）。 */
   onClose(listener: () => void): void;
   readonly closed: boolean;
+  /**
+   * H52: × で閉じる前の確認。`fn` が文言を返したら、本体が窓の中に確認を出し、「閉じる」を選んだときだけ閉じる
+   * （null なら確認なしで閉じる）。長い処理の途中で誤って閉じないために使う。`close()` を直接呼んだときは効かない。
+   */
+  setCloseGuard?(fn: (() => string | null) | null): void;
+  /** H52: この窓を最前面へ出す（同じものを 2 枚開かず、開いている窓を見せるときなど）。 */
+  focus?(): void;
 }
 
 export interface PluginWindowOptions {
@@ -1043,6 +1050,11 @@ export interface PluginCurveFrameOptions {
 interface PluginHostBase {
   /** 自分の plugin.json の id。 */
   pluginId: string;
+  /**
+   * H50: 本体の REST の基点（`ViewerTarget.apiBase` と同じ。同じ origin なら空文字）。
+   * メイン画面の host からも `/api/instances/{sop}/rendered` などを組み立てられる。
+   */
+  apiBase: string;
   /** i18n 取得関数（ホスト言語に追従）。 */
   t: (key: string) => string;
   /**
@@ -1084,6 +1096,17 @@ interface PluginHostBase {
      * パスはバックエンド面（JAR）へ渡して読む想定。デスクトップ専用（web は `desktop-only`）。
      */
     pickFiles: (opts?: PluginPickFilesOptions) => Promise<PickFilesResult>;
+    /**
+     * H53: ジョブの成果物（JAR が一時フォルダに書き、結果の `__artifact` に入れて返したファイル）を、
+     * OS の保存ダイアログで保存する。`jobId` は結果の `__artifact.jobId`。デスクトップ専用。
+     */
+    saveJobArtifact?: (jobId: string, opts: PluginSaveArtifactOptions) => Promise<SaveFileResult>;
+    /** H56: フォルダを選ばせる（デスクトップ専用）。書き込みは選んだフォルダの直下だけ。 */
+    pickDirectory?: (opts?: { title?: string }) => Promise<PickDirectoryResult>;
+    /** H56: ジョブの成果物を選んだフォルダへ保存する（ダイアログなし・上書きしない名前）。 */
+    saveJobArtifactTo?: (jobId: string, opts: { dirToken: string; name: string }) => Promise<SaveFileResult>;
+    /** H56: バイト列を選んだフォルダへ書く（例: 集計 CSV）。 */
+    writeToDirectory?: (opts: { dirToken: string; name: string; bytes: Uint8Array }) => Promise<SaveFileResult>;
   };
   /**
    * バックエンド面を**ジョブとして**走らせる（H45・**0.3.0 以降**）。進み具合と取り消しがある。
@@ -1094,10 +1117,18 @@ interface PluginHostBase {
    * `cancelled: true` は利用者の取り消しで、エラーとして表示しないこと。standalone 専用。
    */
   runBackendJob: (payload?: unknown, opts?: PluginJobOptions) => Promise<PluginJobOutcome>;
-  /** 本体の DB（H44・H46・**0.3.0 以降**）。 */
+  /** 本体の DB（H44・H46・H51・**0.3.0 以降**）。 */
   db: {
     /** 患者を ID・氏名の部分一致で探す（H44）。**読み取りのみ**。空文字は全件。 */
     searchPatients: (query: string) => Promise<PluginPatient[]>;
+    /**
+     * 保管庫にある**動画**を並べる（H51）。**読み取りのみ**。検査（`{ studyUid }`。例: メイン画面の
+     * `selectedStudyUid`）か患者（`{ patientKey }`）で引く。新しい検査から順。動画の判定は 2D ビューアと同じ
+     * （Video 系 SOP クラス、または H.264 等で包まれた US Multi-frame など）。
+     */
+    listVideos: (query: PluginVideoListQuery) => Promise<PluginVideoEntry[]>;
+    /** H57: DICOM ファイルを保管庫へ取り込む（H55 の `dicomToken` の範囲だけ）。 */
+    importDicomFiles?: (req: { consentToken: string; paths: string[] }) => Promise<PluginDicomImportOutcome>;
     /**
      * DB を変えたことを知らせる（H46）。メイン画面の一覧（呼んだウィンドウ自身も含む）と、
      * 開いている他のウィンドウが読み直す。本体の書き込み API は自分で知らせるので、
@@ -1105,6 +1136,154 @@ interface PluginHostBase {
      */
     notifyChanged: (detail?: { studyUids?: string[]; patientId?: string }) => void;
   };
+  /**
+   * **動画の取り込み**（H47〜H49・**0.3.0 以降**）。standalone 専用。
+   *
+   * <p>🔴 **DICOM はプラグインに書かせない**。変換・DICOM・UID・患者属性・出所は本体が書き、保管庫へ書く前に
+   * 本体が**必ず**確認ダイアログを出す。流れ: `probe`（重複の確認）→ `requestImportConsent`（ダイアログ 1 回）
+   * → 1 本ずつ `importAsDicom`。札はダイアログで見せた**患者・ファイル・書くもの**の範囲でしか使えない。
+   */
+  video: {
+    /** H47: 諸元・指紋（SHA-256）・既に取り込み済みか。本体の ffmpeg で調べる。 */
+    probe: (path: string) => Promise<PluginVideoProbe>;
+    /** H48（前半）: 本体の確認ダイアログを出し、同意の札を返す。取り消しは `cancelled`。 */
+    requestImportConsent: (req: PluginVideoConsentRequest) => Promise<PluginVideoConsentResult>;
+    /**
+     * H48（後半）: 1 本取り込む（ジョブ）。同じ動画が既にあれば書かずに `duplicate: true`。
+     * `frameValues` を渡すと「フレームごとの値」の SR も書く（長さが動画のフレーム数と違えば SR だけ書かない）。
+     */
+    importAsDicom: (req: PluginVideoImportRequest, opts?: PluginJobOptions) => Promise<PluginVideoImportOutcome>;
+    /** H49: その動画に、このプラグインが書いた「フレームごとの値」を読む。無ければ null。 */
+    readFrameValues: (sopInstanceUid: string) => Promise<PluginFrameValuesRead | null>;
+    /**
+     * H54: プラグインが作った MP4（H53 の成果物）を、元の動画から派生したシリーズとして本体が DICOM に書く。
+     * `target: "db"` は保管庫へ（本体の確認ダイアログを必ず出す）、`"file"` は .dcm の成果物（`file.saveJobArtifact` で保存）。
+     */
+    saveDerivedVideo?: (req: PluginDerivedVideoRequest, opts?: PluginJobOptions) => Promise<PluginDerivedVideoOutcome>;
+    /**
+     * H55: バッチを始める前に本体の確認ダイアログを 1 回だけ出し、取り込み（H48）・DICOM の取り込み（H57）・
+     * 派生シリーズの保存（H54）の札をまとめて返す。
+     */
+    requestBatchConsent?: (req: PluginBatchConsentRequest) => Promise<PluginBatchConsentResult>;
+  };
+}
+
+/** `host.video.probe()` の結果（H47）。 */
+export interface PluginVideoProbe {
+  path: string;
+  fileName: string;
+  sizeBytes: number;
+  /** 元ファイルの SHA-256（16 進）。 */
+  sha256: string;
+  codec: string;
+  width: number;
+  height: number;
+  fps: number;
+  /** 数え直したフレーム数。 */
+  frameCount: number;
+  durationSec: number;
+  /** 同じ動画が既にあればその所在（あれば取り込まれない）。 */
+  alreadyImported: { sopInstanceUid: string; studyInstanceUid: string; patientId: string; patientName: string } | null;
+}
+
+/** 患者の指定（H48）。既存（`db.searchPatients` の `patientKey`）か新しい患者か。 */
+export type PluginVideoPatient =
+  | { patientKey: string }
+  | { create: { patientId: string; patientName?: string; birthDate?: string; sex?: string } };
+
+/** フレームごとの値の 1 系列（フレーム 1〜N の順）。 */
+export interface PluginFrameValuesSeries {
+  /** 英数字と _ の 1〜16 文字。 */
+  key: string;
+  label: string;
+  /** UCUM。無次元は "1"（既定）。 */
+  unit?: string;
+  values: number[];
+}
+
+/** フレームごとの値（H48）。系列の長さは動画のフレーム数と一致すること。 */
+export interface PluginFrameValues {
+  series: PluginFrameValuesSeries[];
+  params?: Record<string, string>;
+}
+
+/** `host.video.requestImportConsent()` の要求（確認ダイアログに出す中身）。 */
+/** H48 の同意の 1 本分（動画ごとに患者・シリーズの説明を変えられる）。 */
+export interface PluginVideoConsentItem {
+  path: string;
+  patient: PluginVideoPatient;
+  /** シリーズの説明（ダイアログに出る。渡したら `importAsDicom` でも同じ値であること）。 */
+  seriesDescription?: string;
+}
+
+/** 動画ごとの患者は `items`。全部同じ患者なら従来の `patient` + `paths` でもよい。 */
+export interface PluginVideoConsentRequest {
+  items?: PluginVideoConsentItem[];
+  patient?: PluginVideoPatient;
+  paths?: string[];
+  /** `"US"` は US Multi-frame。既定は Video Photographic。 */
+  modality?: "US";
+  /** フレームごとの値の SR も書くなら、その説明（ダイアログにそのまま出る）。 */
+  frameValues?: { description: string };
+}
+
+/**
+ * 事前確認の問題（ダイアログは出ない）。`code`: `patient-exists`（新しい患者の ID が既にある。
+ * `existingPatientKey` で既存の患者を指せる）/ `patient-not-found` / `patient-invalid` / `patient-conflict` / `patient-missing`。
+ */
+export interface PluginVideoConsentIssue {
+  index: number;
+  path: string | null;
+  code: string;
+  message: string;
+  existingPatientKey?: string | null;
+  existingPatientName?: string | null;
+}
+
+export type PluginVideoConsentResult =
+  | { ok: true; consentToken: string }
+  | { ok: false; cancelled?: boolean; error?: string; issues?: PluginVideoConsentIssue[] };
+
+/** `host.video.importAsDicom()` の 1 本分の要求。 */
+export interface PluginVideoImportRequest {
+  consentToken: string;
+  path: string;
+  /** 同意のときと同じ指定であること。 */
+  patient: PluginVideoPatient;
+  modality?: "US";
+  /** 同じ取り込みの 2 本目以降は 1 本目の `studyInstanceUid` を渡すと同じ検査に入る。 */
+  studyInstanceUid?: string;
+  studyDescription?: string;
+  seriesDescription?: string;
+  frameValues?: PluginFrameValues;
+}
+
+/** `host.video.importAsDicom()` の 1 本分の結果。 */
+export interface PluginVideoImportResult {
+  duplicate: boolean;
+  sopInstanceUid: string;
+  seriesInstanceUid: string | null;
+  studyInstanceUid: string;
+  patientId: string;
+  numberOfFrames: number;
+  transcoded: boolean;
+  frameValuesSopInstanceUid: string | null;
+  /** SR を書けなかった理由（動画は取り込まれている）。 */
+  frameValuesError: string | null;
+}
+
+export type PluginVideoImportOutcome =
+  | { ok: true; result: PluginVideoImportResult }
+  | { ok: false; cancelled?: boolean; error?: string };
+
+/** `host.video.readFrameValues()` の結果（H49）。 */
+export interface PluginFrameValuesRead {
+  sopInstanceUid: string;
+  videoSopInstanceUid: string;
+  producerId: string;
+  contentDate: string;
+  series: { key: string; label: string; unit: string; values: number[] }[];
+  params: Record<string, string>;
 }
 
 /** `host.file.pickFiles()` の引数（H43）。 */
@@ -1145,6 +1324,28 @@ export interface PluginPatient {
   birthDate: string;
   sex: string;
   studyCount: number;
+}
+
+/** `host.db.listVideos()` の問い合わせ（H51）: 検査 1 つ、または患者 1 人。 */
+export type PluginVideoListQuery = { studyUid: string } | { patientKey: string };
+
+/** `host.db.listVideos()` の 1 件（保管庫にある動画 1 本）。 */
+export interface PluginVideoEntry {
+  /** `searchPatients` の `patientKey` と同じ（保存領域の鍵にそのまま使える）。 */
+  patientKey: string;
+  patientId: string;
+  patientName: string;
+  studyUid: string;
+  /** YYYYMMDD（無ければ空）。 */
+  studyDate: string;
+  studyDescription: string;
+  seriesUid: string;
+  seriesNumber: number | null;
+  seriesDescription: string;
+  modality: string;
+  sopInstanceUid: string;
+  sopClassUid: string;
+  transferSyntaxUid: string;
 }
 
 /**
@@ -1822,3 +2023,68 @@ export type PluginHost = Viewer2DPluginHost | MainScreenPluginHost;
 export interface PluginModule {
   activate(host: PluginHost): void | Promise<void>;
 }
+
+/** `host.file.saveJobArtifact()` の指定（H53）。 */
+export interface PluginSaveArtifactOptions {
+  defaultName: string;
+  filters?: { name: string; extensions: string[] }[];
+}
+
+/** `host.video.saveDerivedVideo()` の要求（H54）。 */
+export interface PluginDerivedVideoRequest {
+  /** 動画の MP4 を作ったジョブ（`runBackendJob` の結果の `__artifact.jobId`）。H.264・偶数寸法。 */
+  artifactJobId: string;
+  /** 元の動画の SOP Instance UID（患者・検査・属性はここから継ぐ）。 */
+  sourceSopInstanceUid: string;
+  /** 元の動画のどのフレームを採ったか（1 始まり）。 */
+  referencedFrames?: number[];
+  seriesDescription?: string;
+  derivationDescription?: string;
+  /** `"db"` は保管庫へ（本体の確認ダイアログ）、`"file"` は .dcm の成果物。 */
+  target: "db" | "file";
+  /** H55 のバッチの札（`derivedToken`）。範囲内なら確認ダイアログを出さない。 */
+  consentToken?: string;
+}
+
+/** `host.video.saveDerivedVideo()` の結果（H54）。 */
+export interface PluginDerivedVideoResult {
+  target: "db" | "file";
+  sopInstanceUid: string;
+  seriesInstanceUid: string;
+  studyInstanceUid: string;
+  seriesNumber: number;
+  numberOfFrames: number;
+  seriesDescription: string;
+  artifact: { jobId: string; name: string; size: number } | null;
+}
+
+export type PluginDerivedVideoOutcome =
+  | { ok: true; result: PluginDerivedVideoResult }
+  | { ok: false; cancelled?: boolean; error?: string };
+
+/** `host.file.pickDirectory()` の結果（H56）。 */
+export type PickDirectoryResult = { ok: true; path: string; dirToken: string } | { ok: false; canceled?: boolean; error?: string };
+
+/** `host.video.requestBatchConsent()` の要求（H55）。 */
+export interface PluginBatchConsentRequest {
+  importVideos?: PluginVideoConsentItem[];
+  importDicom?: { paths: string[] };
+  /**
+   * 派生シリーズの保存（H54）。取り込み済みは `sourceSopInstanceUid`、同じ要求で取り込む動画は `sourcePath`
+   * （その取り込みが済むと、できた SOP が範囲に入る）。
+   */
+  derived?: { sourceSopInstanceUid?: string; sourcePath?: string; seriesDescription: string }[];
+  modality?: "US";
+  frameValues?: { description: string };
+}
+
+/** `host.video.requestBatchConsent()` の結果（H55）。 */
+export type PluginBatchConsentResult =
+  | { ok: true; importToken: string | null; dicomToken: string | null; derivedToken: string | null }
+  | { ok: false; cancelled?: boolean; error?: string; issues?: PluginVideoConsentIssue[] };
+
+/** `host.db.importDicomFiles()` の結果（H57）。 */
+export type PluginDicomImportOutcome =
+  | { ok: true; imported: number; skipped: number; failed: number; errors: string[] }
+  | { ok: false; error?: string };
+
