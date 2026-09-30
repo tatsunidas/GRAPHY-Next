@@ -22,6 +22,11 @@ function cspPlugin(): Plugin {
     // インラインの style 属性を多用しているため style のみ unsafe-inline を許可（script より低リスク）
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
+    // 🚨 動画（<video>）。backend の /rendered（localhost）と、取り出した動画を包んだ blob: を許可する。
+    // これが無いと default-src 'self' へフォールバックし、**製品版（file://）だけ動画ビューアもプラグインも
+    // 真っ黒で「読み込み中」のまま**になる（2026-09-30 v0.3.3 の実機で発覚。dev は CSP を注入しないので気付けない。
+    // portable 版は 2026-07-31 に直していたが、こちらに入っていなかった）。desktop/scripts/check-packaged.js がリリースで確かめる。
+    "media-src 'self' blob: http://localhost:* http://127.0.0.1:*",
     // backend(localhost) へ接続。file:// 由来でも localhost を許可。
     "connect-src 'self' http://localhost:* http://127.0.0.1:*",
     // Cornerstone3D 等の Web Worker（blob: からの生成を許可）
