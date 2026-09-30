@@ -52,22 +52,136 @@ export interface SecretSetResult extends SecretStatus {
 }
 
 /** Gemini 中継の要求。解釈は一切せず、生 JSON がそのまま返る。 */
+/** 用途。**提供元ではなくこれで頼む**（設計: fw/ai-routing-design.md §2）。 */
+export type AiCapability = "image-to-image" | "image-to-text";
+
 export interface AiGenerateRequest {
+  /** 用途。main 側が応答の種類を決める。 */
+  capability?: AiCapability;
   model: string;
   prompt: string;
   /** 送信画像（base64、データ URL の接頭辞は含めない）。 */
   imageBase64: string;
   mimeType?: string;
-  /** 既定 ["TEXT", "IMAGE"]。画像と鑑賞説明を 1 回で受け取るために両方を要求する。 */
+  /** @deprecated capability から決まる。既存プラグイン互換のため残す。 */
   responseModalities?: string[];
   temperature?: number;
   /** 既定 "v1beta"。新モデルの機能が先に載るのは常に v1beta 側。 */
   apiVersion?: string;
+  /** 提供元固有の追い込み。**無くても動くこと。** */
+  providerOptions?: Record<string, unknown>;
 }
 
-/** Gemini 中継の結果。**例外ではなく値で失敗を返す**（鍵入りのスタックを境界へ流さないため）。 */
+/** 用途の解決結果。 */
+export type AiResolveResult =
+  | {
+      ok: true;
+      providerId: string;
+      label: string;
+      kind: string;
+      model: string;
+      endpointHost: string;
+      hasApiKey: boolean;
+      /**
+       * 平文 http で送る宛先か（院内に自分で立てたサーバだけ起こりうる）。
+       *
+       * 🔴 **同意ダイアログで必ず言う。** 患者画素が院内 LAN を暗号化されずに流れる。
+       */
+      plaintext?: boolean;
+    }
+  | { ok: false; error: string };
+
+/** 提供元 1 件。**鍵は含まない**（`hasApiKey` で有無だけ）。 */
+export interface AiProviderEntry {
+  id: string;
+  label: string;
+  kind: string;
+  endpoint: string;
+  /** 用途 → モデル ID。**無い用途はその提供元では使えない。** */
+  models: Record<string, string>;
+  hasApiKey?: boolean;
+  /** 鍵を保存するときのキー名（`secretSet` に渡す）。 */
+  secretKey?: string;
+  /** 平文 http の宛先（院内アドレスのみ許される）。画面に印を出す。 */
+  plaintext?: boolean;
+  /** 認証の載せ方。未指定ならアダプタの既定。旧い形の文字列も来る。 */
+  auth?: { header?: string; prefix?: string } | string;
+  /** パスの組み方（`kind` の既定を上書きしたいときだけ）。 */
+  pathStyle?: string;
+  /** API バージョン（Azure は必須・Gemini は `v1beta` 等）。 */
+  apiVersion?: string;
+  /** 用途 → パスの上書き。差し込みは無く、完全置換。 */
+  paths?: Record<string, string>;
+  /** 追加ヘッダ。**UI には出さない**（鍵を貼られるため・設計 §14）。 */
+  headers?: Record<string, string>;
+}
+
+/**
+ * 疎通確認の結果。
+ *
+ * <p>🔑 `verdict` は**何を直せばよいか**の分類。状態コードをそのまま見せても
+ * 利用者は次の行動を決められない。
+ * <p>🔴 **ヘッダは名前だけ**（値は返ってこない）。認証ヘッダ名は設定で選べるので、
+ * どのヘッダに鍵が載るかは固定できない。
+ */
+export type AiTestResult = {
+  ok: boolean;
+  verdict:
+    | "reachable" | "blocked" | "unreadable-response"
+    | "auth-failed" | "not-found" | "bad-request" | "rate-limited" | "server-error" | "http-error"
+    | "network" | "timeout" | "tls"
+    | "no-api-key" | "config" | "busy" | "too-soon" | "canceled";
+  status?: number;
+  elapsedMs?: number;
+  /** 送った先（`POST https://host/path`）。**組み立てた結果そのもの。** */
+  requestLine?: string;
+  /** 送ったヘッダの名前だけ。 */
+  headerNames?: string[];
+  /** 返ってきた本文の先頭（マスク済み・1000 文字まで）。 */
+  bodyPreview?: string;
+  text?: string;
+  imageBytes?: number;
+  blockReason?: string;
+  plaintext?: boolean;
+  retryAfterMs?: number;
+  error?: string;
+};
+
+export interface AiProvidersConfig {
+  providers: AiProviderEntry[];
+  /** 用途 → 提供元 id。 */
+  defaults: Record<string, string>;
+  /** 読み込み時に捨てた設定の理由。**黙って捨てない。** */
+  problems: string[];
+  capabilities: string[];
+}
+
+/** どこで何によって作られたか。作品の再現性と監査のために持ち回る。 */
+export interface AiProvenance {
+  providerId: string;
+  kind: string;
+  model: string;
+  endpointHost: string;
+  /** 平文 http で送った（院内ホストのみ）。作品の由来として残す。 */
+  plaintext?: boolean;
+}
+
+/**
+ * 中継の結果。**例外ではなく値で失敗を返す**（鍵入りのスタックを境界へ流さないため）。
+ *
+ * <p>🔑 `image` / `text` は**提供元非依存**。提供元ごとの応答の形は main のアダプタが畳む。
+ */
 export type AiGenerateResult =
-  | { ok: true; data: unknown }
+  | {
+      ok: true;
+      image?: { base64: string; mimeType: string };
+      text?: string;
+      /** 何も返らなかった理由（安全フィルタ等）。`image` も `text` も無いときだけ入る。 */
+      blockReason?: string;
+      provenance?: AiProvenance;
+      /** @deprecated 提供元の生レスポンス。移行期間だけ残す。 */
+      data?: unknown;
+    }
   | { ok: false; error: string; status?: number; kind?: string };
 
 /** 名前を付けて保存の結果。`canceled` はユーザーが取り消しただけで、失敗ではない。 */
@@ -123,6 +237,32 @@ export interface GraphyDesktop {
    * 呼び出しは必ず `plugins/pluginAiApi.ts` の `requestAiGeneration()` を通す。
    */
   aiGenerate?: (req: AiGenerateRequest) => Promise<AiGenerateResult>;
+  /**
+   * 用途 → どこへ何で送るか。**同意ダイアログに出す宛先を知るため**に呼ぶ。
+   *
+   * <p>🔑 解決の権限は Electron main に 1 つだけ（レンダラ側に同じ計算を持つと、
+   * 同意画面に出す宛先と実際の宛先がずれる余地ができる）。
+   */
+  aiResolve?: (capability: AiCapability) => Promise<AiResolveResult>;
+  /** 提供元の一覧と用途ごとの既定。**鍵の値は返らない**（有無だけ）。 */
+  aiProvidersGet?: () => Promise<AiProvidersConfig>;
+  /** 検査だけ（書かない）。入力中に叩く。 */
+  aiProvidersValidate?: (cfg: { providers: AiProviderEntry[]; defaults?: Record<string, string> }) =>
+    Promise<{ ok: boolean; problems: string[] }>;
+  /**
+   * 疎通確認。**渡せるのは提供元と用途だけ**——送る指示と画像は main が持つ定数。
+   * これにより、この口を呼べても患者画像を外へ出すことはできない。
+   */
+  aiTestConnection?: (providerId: string, capability: AiCapability) => Promise<AiTestResult>;
+  /**
+   * 用途ごとの既定だけを差し替える。**確認ダイアログは出ない**
+   * （提供元の一覧を送らないので、この口からは新しい送信先が生えない）。
+   */
+  aiDefaultsSet?: (defaults: Record<string, string>) => Promise<{ ok: boolean; problems: string[] }>;
+  aiProvidersSet?: (cfg: { providers: AiProviderEntry[]; defaults: Record<string, string> }) =>
+    // 🔑 `canceled` は「main の確認ダイアログで利用者が取り消した」。失敗ではないので
+    //    エラーとして見せない（`problems` は空で返る）。
+    Promise<{ ok: boolean; problems: string[]; canceled?: boolean }>;
   /** 名前を付けて保存（OS ダイアログ）。**上書き確認は OS が出す。** */
   saveFile?: (payload: {
     defaultName: string;

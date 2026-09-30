@@ -10,6 +10,7 @@
  * タイル群（選択 or 全）へ送出するための薄い仲介。キーは tileId（= Viewer2D の commandKey）。
  */
 import { type SortMode } from "./seriesSort";
+import type { SlabProjection } from "./slabPresets";
 
 export interface SeriesCommands {
   /** Z 並べ替えを適用（動画/IPP 不在などは実装側でブロック＋トースト）。 */
@@ -21,6 +22,11 @@ export interface SeriesCommands {
    * **読み出し（getPixelData）とは別**にしてある: 読むたびに画面が動くのは事故のもと。
    */
   goTo(dims: { z?: number; c?: number; t?: number }): void;
+  /**
+   * Slab 投影（ThickSlab の MIP/MinIP/AvgIP）を切替える。null で OFF（Original）。
+   * 投影方式の既定厚（slabPresets.defaultSlabThickness）で ON にする。
+   */
+  setSlab(projection: SlabProjection | null): void;
 }
 
 const registry = new Map<string, SeriesCommands>();

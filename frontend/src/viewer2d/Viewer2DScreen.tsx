@@ -1371,6 +1371,7 @@ function TileGrid({
       editPresets: () => setPresetsOpen(true),
       // Z 並べ替えはシリーズレベル（seriesCommands）。動画/IPP不在は SeriesViewer 側でブロック。
       sort: (mode) => runSeriesCommand(resolveTargets(), (c) => c.setSortMode(mode)),
+      setSlab: (projection) => runSeriesCommand(resolveTargets(), (c) => c.setSlab(projection)),
       // ツールはグローバルモード（タブ内全タイルへ適用）。
       setTool: (toolName) => {
         setActiveTool(toolName);

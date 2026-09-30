@@ -29,6 +29,7 @@ const { createWindowStateKeeper } = require("./windowState");
 const messages = require("./startupMessages");
 const secretStore = require("./secretStore");
 const aiGateway = require("./aiGateway");
+const aiProviders = require("./aiProviders");
 
 const PORT = process.env.GRAPHY_BACKEND_PORT || String(cfg.backend.port);
 const PROFILE = process.env.GRAPHY_BACKEND_PROFILE || cfg.backend.profile;
@@ -923,8 +924,135 @@ ipcMain.handle("graphy:secret-status", (_e, key) => secretStore.statusOf(String(
 ipcMain.handle("graphy:secret-clear", (_e, key) => secretStore.clearSecret(String(key || "")));
 
 // AI 中継。CSP によりレンダラからは外部 API を叩けないため main が肩代わりする。
-// 解釈は一切せず、Gemini の生 JSON をそのまま返す（解析はプラグイン側の TS で試験する）。
+// 用途 → 提供元の解決と応答の正規化は aiGateway / aiAdapters が行う（fw/ai-routing-design.md）。
 ipcMain.handle("graphy:ai-generate", async (_e, req) => aiGateway.generate(req || {}));
+
+// 用途 → どこへ何で送るか。**同意ダイアログに出す宛先をレンダラが知るため**に要る。
+// 🔑 解決の権限は main に 1 つだけ置く（レンダラ側に同じ計算を持つと、同意画面に出す宛先と
+//    実際の宛先がずれる余地ができる）。
+ipcMain.handle("graphy:ai-resolve", (_e, capability) =>
+  aiGateway.resolveCapability(String(capability || "")),
+);
+
+// 提供元の一覧と用途ごとの既定。**鍵は含まない**（secretStore が持ち、値は返らない）。
+ipcMain.handle("graphy:ai-providers-get", () => {
+  const c = aiProviders.get();
+  return {
+    providers: c.providers.map((p) => ({
+      id: p.id,
+      label: p.label,
+      kind: p.kind,
+      endpoint: p.endpoint,
+      models: p.models,
+      // 設定で差を吸収する項目（段 5）。**鍵は含まれない。**
+      ...(p.auth !== undefined ? { auth: p.auth } : {}),
+      ...(p.pathStyle ? { pathStyle: p.pathStyle } : {}),
+      ...(p.apiVersion ? { apiVersion: p.apiVersion } : {}),
+      ...(p.paths ? { paths: p.paths } : {}),
+      ...(p.headers ? { headers: p.headers } : {}),
+      // 平文 http の宛先。画面が印を出す（院内アドレスのみ許される）。
+      ...(p.plaintext ? { plaintext: true } : {}),
+      // 鍵が入っているかだけを返す。**値は返さない。**
+      hasApiKey: !!aiProviders.secretKeyCandidates(p.id).find((k) => secretStore.statusOf(k).hasValue),
+      secretKey: aiProviders.secretKeyFor(p.id),
+    })),
+    defaults: c.defaults,
+    problems: c.problems,
+    capabilities: aiProviders.CAPABILITIES,
+  };
+});
+/**
+ * 用途ごとの既定だけを差し替える。**確認は出さない**（日常操作を重くしない）。
+ *
+ * <p>🔑 提供元の一覧を渡させないので、**この口からは新しい送信先が生えない**。
+ */
+ipcMain.handle("graphy:ai-defaults-set", (_e, defaults) => {
+  const current = aiProviders.get();
+  return aiProviders.save({
+    providers: current.providers,
+    defaults: { ...current.defaults, ...(defaults || {}) },
+  });
+});
+
+/** 提供元 1 件の「送信先としての同一性」。ここが変わったら利用者に聞く。 */
+function destinationOf(p) {
+  return JSON.stringify({
+    endpoint: p.endpoint,
+    paths: p.paths || null,
+    auth: p.auth || null,
+    pathStyle: p.pathStyle || null,
+    headers: p.headers || null,
+  });
+}
+
+/**
+ * 提供元の一覧を保存する。
+ *
+ * <p>🔴 **新しい送信先が増える／変わるときは main が利用者に聞く。** この口はレンダラに
+ * 公開されており、プラグインも同じ realm に居るので呼べてしまう——**悪意やバグのある
+ * プラグインが「自分のサーバを提供元として追加し、既定にする」ことを防ぐ唯一の実効的な手段が
+ * これ**（ダイアログは main が描くのでレンダラから偽装・迂回できない）。
+ */
+ipcMain.handle("graphy:ai-providers-set", async (e, cfg) => {
+  const incoming = (cfg && Array.isArray(cfg.providers) ? cfg.providers : []);
+  const before = new Map(aiProviders.get().providers.map((p) => [p.id, destinationOf(p)]));
+  const added = [];
+  for (const p of incoming) {
+    if (!p || typeof p.endpoint !== "string") continue;
+    const prev = before.get(p.id);
+    if (prev === undefined || prev !== destinationOf(p)) added.push(`${p.id}: ${p.endpoint}`);
+  }
+  if (added.length > 0) {
+    const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
+    const choice = dialog.showMessageBoxSync(win, {
+      type: "warning",
+      buttons: ["許可する", "取り消す"],
+      defaultId: 1,
+      cancelId: 1,
+      title: "外部 AI の送信先を変更します",
+      message: "以下の送信先を追加・変更しようとしています。",
+      detail: `${added.join("\n")}\n\nここへ画像と指示が送られます。心当たりがない場合は取り消してください。`,
+    });
+    if (choice !== 0) return { ok: false, canceled: true, problems: [] };
+  }
+  const result = aiProviders.save(cfg || {});
+  if (result.ok && added.length > 0) {
+    console.log(`[ai] registry change: ${added.join(" / ")}`);
+  }
+  return result;
+});
+
+// 検査だけ（**書かない**）。設定画面が入力中に叩く。
+// 🔴 検査規則をレンダラ側に書き写さないため（二重に持つと必ずずれる）。
+ipcMain.handle("graphy:ai-providers-validate", (_e, cfg) => aiProviders.validate(cfg || {}));
+
+/**
+ * 接続テスト（疎通確認）。
+ *
+ * <p>🔑 **私たちが全社を事前検証することはできない**ので、利用者が自分で確かめる手段を持つ。
+ * 送るのは 1×1 の白画像と固定の指示だけ（`aiGateway` 内の定数）。**患者画像は使わない。**
+ *
+ * <p>🔴 **画像生成の疎通は 1 枚生成＝課金が発生する**ので、ここで確認を取る。
+ * `dialog` は main が描くので、レンダラ（＝プラグイン）からは迂回できない。
+ */
+ipcMain.handle("graphy:ai-test-connection", async (e, payload) => {
+  const providerId = String((payload && payload.providerId) || "");
+  const capability = String((payload && payload.capability) || "");
+  if (capability === "image-to-image") {
+    const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
+    const choice = dialog.showMessageBoxSync(win, {
+      type: "warning",
+      buttons: ["実行する", "取り消す"],
+      defaultId: 1,
+      cancelId: 1,
+      title: "接続を確かめる（画像生成）",
+      message: "画像を 1 枚生成するため、提供元に課金されます。",
+      detail: `提供元: ${providerId}\n1×1 の白い画像と短い指示だけを送ります（患者の画像は送りません）。`,
+    });
+    if (choice !== 0) return { ok: false, verdict: "canceled", error: "canceled" };
+  }
+  return aiGateway.testConnection({ providerId, capability });
+});
 
 // 名前を付けて保存。OS ネイティブのダイアログを使うので、**同名ファイルの上書き確認は
 // OS が標準で出す**（アプリ側で自前実装しない）。保存したパスを返す。取り消しなら null。
@@ -984,6 +1112,7 @@ function reportStartupFailure(e) {
 app.whenReady().then(async () => {
   // 秘密情報の置き場は backend の CWD（H2・DICOM 保管庫と同じ場所）に揃える。
   secretStore.init(resolveDataDir());
+  aiProviders.init(resolveDataDir());
   createSplash();
   try {
     startBackend();

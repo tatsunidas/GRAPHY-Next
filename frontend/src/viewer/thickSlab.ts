@@ -8,7 +8,8 @@
  * <p>GRAPHY 本家 {@code Praparat.computeThickSlabProcessor} の移植。中心スライス位置を連続実 Z に
  * 変換し、厚み ±半分の Z 範囲を面内ピクセル間隔で等方サブサンプル（最大 64 点）して
  * <b>Trilinear 補間（実装は面内格子が共通なので Z 方向 1D 線形補間に縮退）</b>で平均合成（Average
- * projection）する。MIP/MinIP は本家 ThickSlab に無いため平均のみ。
+ * projection）する。MIP/MinIP（最大値/最小値投影）も選べる（本家 ThickSlab には無い拡張。
+ * fw/slab-mip-design.md）。
  *
  * <h3>Cornerstone への注入</h3>
  * 合成結果を <b>{@code graphy-thickslab:} スキームのカスタム画像ローダ</b>で StackViewport へ
@@ -25,9 +26,18 @@
  */
 import { metaData, registerImageLoader, utilities as csUtils } from "@cornerstonejs/core";
 import { readModalitySlice } from "./pixelCalibration";
+import type { SlabProjection } from "./slabPresets";
 
 /** UI に出す厚み(mm)の選択肢。実スライス厚と一致した値が選ばれたら「Original（合成しない）」扱い。 */
 export const THICK_SLAB_THICKNESSES = [0.1, 0.3, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0] as const;
+/** MIP/MinIP のときだけ追加で出す厚い選択肢(mm)（肺結節 8–10mm・CTA 15–20mm。slabPresets.ts）。 */
+export const THICK_SLAB_PROJ_EXTRA = [8.0, 10.0, 15.0, 20.0] as const;
+
+/** 投影方式に応じた厚みの選択肢。平均は従来どおり、MIP/MinIP は厚い選択肢を足す。 */
+export function thickSlabThicknessesFor(projection: SlabProjection): number[] {
+  const base: number[] = [...THICK_SLAB_THICKNESSES];
+  return projection === "AVG" ? base : [...base, ...THICK_SLAB_PROJ_EXTRA];
+}
 
 /** 合成 imageId のスキーム（カスタムローダ登録名）。 */
 const SCHEME = "graphy-thickslab";
@@ -106,6 +116,8 @@ interface ThickSlabSession {
   thicknessMm: number;
   /** 厚み / 間隔。 */
   slicesPerStep: number;
+  /** 投影方式（平均/最大/最小）。 */
+  projection: SlabProjection;
 }
 
 const sessions = new Map<string, ThickSlabSession>();
@@ -122,15 +134,19 @@ export function registerThickSlabSession(params: {
   thicknessMm: number;
   spacingZmm: number;
   nativeIds: string[];
+  /** 既定は平均（従来動作）。 */
+  projection?: SlabProjection;
 }): string {
+  const projection = params.projection ?? "AVG";
   const stackHash = hashStr(params.nativeIds.join("|"));
-  const rawKey = `${params.seriesUid}|${params.c}|${params.t}|${params.thicknessMm}|${params.spacingZmm.toFixed(4)}|${params.nativeIds.length}|${stackHash}`;
+  const rawKey = `${params.seriesUid}|${params.c}|${params.t}|${params.thicknessMm}|${params.spacingZmm.toFixed(4)}|${params.nativeIds.length}|${stackHash}|${projection}`;
   const token = encodeURIComponent(rawKey); // ':' / '#' / '/' を含まない
   sessions.set(token, {
     nativeIds: params.nativeIds,
     spacingZmm: params.spacingZmm,
     thicknessMm: params.thicknessMm,
     slicesPerStep: slicesPerStepOf(params.thicknessMm, params.spacingZmm),
+    projection,
   });
   return token;
 }
@@ -169,6 +185,52 @@ function isotropicStepMm(centerNativeId: string): number {
   const col = Number(plane.columnPixelSpacing);
   const cands = [row, col].filter((v) => Number.isFinite(v) && v > 0);
   return cands.length ? Math.min(...cands) : 1;
+}
+
+/** 1 サンプル面 = 隣接 2 枚（s0,s1）の Z 方向線形補間（f は s1 の重み）。片方欠けは他方で代用。 */
+export interface SlabSample {
+  s0: ArrayLike<number> | null;
+  s1: ArrayLike<number> | null;
+  f: number;
+}
+
+/**
+ * サンプル面列を画素ごとに投影して 1 枚に畳む（純関数）。AVG=平均 / MIP=最大 / MINIP=最小。
+ * 両方欠けたサンプル面は寄与しない（平均の分母は全サンプル数＝従来の平均合成と同じ扱い）。
+ */
+export function projectSamples(samples: SlabSample[], size: number, projection: SlabProjection): Float32Array {
+  const out = new Float32Array(size);
+  const n = samples.length;
+  if (n === 0) return out;
+  if (projection === "AVG") {
+    for (const { s0, s1, f } of samples) {
+      const w0 = 1 - f;
+      if (s0 && s1) {
+        for (let p = 0; p < size; p++) out[p] += s0[p] * w0 + s1[p] * f;
+      } else if (s0) {
+        for (let p = 0; p < size; p++) out[p] += s0[p];
+      } else if (s1) {
+        for (let p = 0; p < size; p++) out[p] += s1[p];
+      }
+    }
+    const inv = 1 / n;
+    for (let p = 0; p < size; p++) out[p] *= inv;
+    return out;
+  }
+  const isMax = projection === "MIP";
+  out.fill(isMax ? -Infinity : Infinity);
+  let any = false;
+  for (const { s0, s1, f } of samples) {
+    const w0 = 1 - f;
+    if (!s0 && !s1) continue;
+    any = true;
+    for (let p = 0; p < size; p++) {
+      const v = s0 && s1 ? s0[p] * w0 + s1[p] * f : s0 ? s0[p] : s1![p];
+      if (isMax ? v > out[p] : v < out[p]) out[p] = v;
+    }
+  }
+  if (!any) out.fill(0);
+  return out;
 }
 
 /** 合成スライスの IImage を組み立てて返す（cache への put は cornerstone 側が行うため呼ばない）。 */
@@ -224,28 +286,18 @@ async function computeThickSlabImage(imageId: string): Promise<Record<string, un
   );
   if (!width || !height) throw new Error("thickslab: no pixel data");
 
-  // Z 方向線形補間で各ビンをサンプルし、平均（Average projection）。
+  // Z 方向線形補間で各ビンをサンプルし、投影（平均/最大/最小）。
   const size = width * height;
-  const acc = new Float32Array(size);
-  for (let k = 0; k < n; k++) {
-    const { z0, z1, f } = bins[k];
-    const s0 = slices.get(z0) ?? null;
-    const s1 = slices.get(z1) ?? null;
-    const w0 = 1 - f;
-    if (s0 && s1) {
-      for (let p = 0; p < size; p++) acc[p] += s0[p] * w0 + s1[p] * f;
-    } else if (s0) {
-      for (let p = 0; p < size; p++) acc[p] += s0[p];
-    } else if (s1) {
-      for (let p = 0; p < size; p++) acc[p] += s1[p];
-    }
-  }
-  const inv = 1 / n;
+  const samples = bins.map(({ z0, z1, f }) => ({
+    s0: slices.get(z0) ?? null,
+    s1: slices.get(z1) ?? null,
+    f,
+  }));
+  const acc = projectSamples(samples, size, session.projection);
   let minPixelValue = Infinity;
   let maxPixelValue = -Infinity;
   for (let p = 0; p < size; p++) {
-    const v = acc[p] * inv;
-    acc[p] = v;
+    const v = acc[p];
     if (v < minPixelValue) minPixelValue = v;
     if (v > maxPixelValue) maxPixelValue = v;
   }

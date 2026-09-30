@@ -45,6 +45,7 @@ import { computeOrientationMarkers, type OrientationMarkers } from "./orientatio
 import { getModalityCalibration } from "./pixelCalibration";
 import { installWheelSliceGate } from "./wheelScroll";
 import { VolumeMemoryExceededError } from "./volumeMemory";
+import type { SlabProjection } from "./slabPresets";
 
 /** MPR の VOI(W/L) 同期 ID。3 面は同一ボリュームを見るため VOI は絶対値同期でよい。 */
 export const MPR_VOI_SYNC_ID = "graphy-mpr-voi";
@@ -399,6 +400,41 @@ export function applyMprWl(
     try {
       const vp = engine.getViewport(id) as Types.IVolumeViewport;
       vp.setProperties({ voiRange: { lower, upper } });
+      vp.render();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/** MPR のスラブ設定。projection=null で通常の薄い MPR（COMPOSITE・最小厚）。厚みは全幅 mm。 */
+export interface MprSlab {
+  projection: SlabProjection | null;
+  thicknessMm: number;
+}
+
+/** 投影方式 → cornerstone の BlendMode。 */
+export function mprBlendModeFor(projection: SlabProjection | null): Enums.BlendModes {
+  if (projection === "MIP") return Enums.BlendModes.MAXIMUM_INTENSITY_BLEND;
+  if (projection === "MINIP") return Enums.BlendModes.MINIMUM_INTENSITY_BLEND;
+  if (projection === "AVG") return Enums.BlendModes.AVERAGE_INTENSITY_BLEND;
+  return Enums.BlendModes.COMPOSITE;
+}
+
+/**
+ * 3 面へスラブ投影（Slab MIP/MinIP/AvgIP）を一括適用する（fw/slab-mip-design.md §B）。
+ *
+ * <p>ORTHOGRAPHIC の `VolumeViewport` では cornerstone が焦点面 ±厚/2 のクリップ面で切り出し、
+ * vtk の VolumeMapper を MIP 等のブレンドで描く（OHIF と同方式）。表示専用であり、確定計算
+ * （probe の値など）には使わない（fw/cornerstone-3d-geometry-caveat.md）。
+ */
+export function applyMprSlab(engine: RenderingEngine, viewportIds: string[], slab: MprSlab): void {
+  for (const id of viewportIds) {
+    try {
+      const vp = engine.getViewport(id) as Types.IVolumeViewport;
+      vp.setBlendMode(mprBlendModeFor(slab.projection));
+      if (slab.projection) vp.setSlabThickness(slab.thicknessMm);
+      else vp.resetSlabThickness();
       vp.render();
     } catch {
       /* ignore */
