@@ -2491,6 +2491,7 @@ export const en: Record<string, string> = {
   "video.tool.probe": "Probe",
   "video.tool.fit": "Fit",
   "video.tool.hint": "Left = selected tool / Middle = Pan / Right = Zoom",
+  "video.mouseHint": "Left drag: W/L / Middle: pan / Right: zoom / Wheel: step frames / Ctrl+wheel: zoom",
   "video.analyze.button": "Analyze ROI (global)",
   "video.analyze.hint": "Apply the rectangle/ellipse ROI to every frame and compute a mean-intensity time series.",
   "video.analyze.noGlobalRoi": "Draw one global-scoped rectangle or ellipse ROI first, then analyze.",

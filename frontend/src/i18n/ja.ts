@@ -2482,6 +2482,7 @@ export const ja: Record<string, string> = {
   "video.tool.probe": "プローブ",
   "video.tool.fit": "フィット",
   "video.tool.hint": "左=選択ツール / 中=Pan / 右=Zoom",
+  "video.mouseHint": "左ドラッグ: W/L／中: 移動／右: 拡大縮小／ホイール: フレーム送り／Ctrl+ホイール: 拡大縮小",
   "video.analyze.button": "グローバルROI解析",
   "video.analyze.hint": "矩形/楕円ROIを全フレームに適用し、平均輝度の時系列を算出します。",
   "video.analyze.noGlobalRoi": "グローバル帰属の矩形/楕円ROIを1つ描いてから解析してください。",
