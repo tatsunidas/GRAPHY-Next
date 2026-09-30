@@ -49,6 +49,18 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   secretClear: (key) => ipcRenderer.invoke("graphy:secret-clear", key),
   // Gemini への中継（CSP でレンダラからは外部 API に届かないため main が肩代わりする）。
   aiGenerate: (req) => ipcRenderer.invoke("graphy:ai-generate", req),
+  // 用途 → どこへ何で送るか（同意ダイアログの宛先表示に使う）。
+  aiResolve: (capability) => ipcRenderer.invoke("graphy:ai-resolve", capability),
+  // 提供元の一覧と既定。鍵の値は返らない（有無だけ）。
+  aiProvidersGet: () => ipcRenderer.invoke("graphy:ai-providers-get"),
+  aiProvidersSet: (cfg) => ipcRenderer.invoke("graphy:ai-providers-set", cfg),
+  // 既定の切り替えだけ。**この口からは新しい送信先が生えない**ので確認を出さない。
+  aiDefaultsSet: (defaults) => ipcRenderer.invoke("graphy:ai-defaults-set", defaults),
+  // 検査だけ（書かない）。検査規則をレンダラに二重化しないための口。
+  aiProvidersValidate: (cfg) => ipcRenderer.invoke("graphy:ai-providers-validate", cfg),
+  // 疎通確認。送る内容は main が決める（呼び出し側は提供元と用途だけ）。
+  aiTestConnection: (providerId, capability) =>
+    ipcRenderer.invoke("graphy:ai-test-connection", { providerId, capability }),
   // 名前を付けて保存。上書き確認は OS のダイアログが出す。
   saveFile: (payload) => ipcRenderer.invoke("graphy:save-file", payload),
   // 開くダイアログ（プラグインの H43 file.pickFiles）。ファイルだけ。選んだ絶対パスを返す。

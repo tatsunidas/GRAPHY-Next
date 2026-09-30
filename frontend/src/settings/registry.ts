@@ -590,9 +590,9 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
     sections: [],
   },
   {
-    // 外部 AI（Gemini）は専用パネル。**API キーは通常の設定に載せない**
-    // ——設定は H2 の平文行になり GET /api/settings が全件返すため。
-    // キーは Electron main の safeStorage へ預ける（AiPanel.tsx 参照）。
+    // 外部 AI は専用パネル。**設定を通常の設定（backend）に載せない**
+    // ——H2 の平文行になり GET /api/settings が全件返すため。提供元・接続先・モデルは
+    // Electron main の ai-providers.json、鍵は safeStorage（fw/ai-routing-design.md §4.1）。
     id: "ai",
     labelKey: "settings.cat.ai",
     icon: "✨",

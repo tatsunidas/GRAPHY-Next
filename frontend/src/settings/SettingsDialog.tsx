@@ -115,14 +115,10 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
             ) : category.id === "monitor" ? (
               <MonitorQcPanel />
             ) : category.id === "ai" ? (
-              // モデル ID 等は通常の設定（平文で構わない）、キーだけ safeStorage。
-              <AiPanel
-                values={map}
-                onChange={(key, value) => {
-                  setMap((prev) => ({ ...prev, [key]: value }));
-                  saveSettings({ [key]: value }).catch((e: unknown) => setError(String(e)));
-                }}
-              />
+              // 🔴 **AI の設定は backend の Settings に載せない。** 提供元・接続先・モデルは
+              //    Electron main の ai-providers.json、鍵は safeStorage（fw/ai-routing-design.md §4.1）。
+              //    `GET /api/settings` が平文で全件返すため、どこへ送る設定もそちらへ置かない。
+              <AiPanel />
             ) : category.id === "plugins" ? (
               <PluginManagerPanel />
             ) : category.id === "about" ? (

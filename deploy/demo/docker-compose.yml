@@ -44,6 +44,7 @@ services:
     volumes:
       - ./data/ldap:/var/lib/openldap/openldap-data
       - ./data/slapd.d:/etc/openldap/slapd.d
+    restart: unless-stopped
 
   db:
     image: dcm4che/postgres-dcm4chee:17.1-33
@@ -58,6 +59,7 @@ services:
       POSTGRES_PASSWORD: pacs
     volumes:
       - ./data/db:/var/lib/postgresql/data
+    restart: unless-stopped
 
   arc:
     image: dcm4che/dcm4chee-arc-psql:5.33.1
@@ -79,6 +81,7 @@ services:
     volumes:
       - ./data/storage:/storage
       - ./data/wildfly:/opt/wildfly/standalone
+    restart: unless-stopped
 
   graphy-backend:
     build:

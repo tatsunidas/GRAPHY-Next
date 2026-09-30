@@ -32,7 +32,18 @@ export function ViewInfoOverlay({ view, lutName }: { view: VtkVolumeView; lutNam
       {line(t("viewer3d.info.mode"), t(`viewer3d.mode.${s.mode.toLowerCase()}`))}
       {line(t("viewer3d.info.rotation"), `Az ${s.azimuth.toFixed(0)}° / El ${s.elevation.toFixed(0)}°`)}
       {line(t("viewer3d.info.zoom"), s.parallelScale.toFixed(1))}
-      {line(t("viewer3d.info.origin"), `${f[0].toFixed(1)}, ${f[1].toFixed(1)}, ${f[2].toFixed(1)}`)}
+      {line(
+        s.mode === "SLAB" ? t("viewer3d.info.rotCenter") : t("viewer3d.info.origin"),
+        `${f[0].toFixed(1)}, ${f[1].toFixed(1)}, ${f[2].toFixed(1)}`,
+      )}
+      {s.mode === "SLAB" &&
+        (() => {
+          const sl = view.getSlab();
+          return line(
+            t("viewer3d.info.slab"),
+            `${t(`series.thickSlab.proj.${sl.projection.toLowerCase()}`)} ${sl.thicknessMm} mm`,
+          );
+        })()}
       {line(t("viewer3d.info.wl"), `${Math.round(s.center)} / ${Math.round(s.width)}`)}
       {line(t("viewer3d.info.lut"), lutName ? lutName.replace(/_/g, " ") : t("viewer3d.repr.lutGray"))}
     </div>

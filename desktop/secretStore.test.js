@@ -151,3 +151,41 @@ test("壊れたファイルでも起動を止めない", () => {
   const store = freshStore(dir);
   assert.strictEqual(store.statusOf(KEY).hasValue, false);
 });
+
+// ── 保存を許すキー名（提供元ごとの鍵・設計: fw/ai-routing-design.md §4.3） ──
+//
+// 🔴 allowlist は「レンダラから任意の名前で書き込めると、ここが素朴な平文 KVS として
+// 濫用される」ために在る。提供元 id を受けるようにした以上、**形の検査が唯一の防御線**。
+test("提供元ごとの鍵は形で許す", () => {
+  const store = require("./secretStore");
+  for (const ok of ["ai.gemini.apiKey", "ai.provider.gemini-public.apiKey",
+                    "ai.provider.g.apiKey", `ai.provider.${"a".repeat(32)}.apiKey`]) {
+    assert.equal(store.isAllowedKey(ok), true, `許すべき: ${ok}`);
+  }
+  for (const bad of [
+    "ai.provider..apiKey",
+    "ai.provider.../../etc.apiKey",
+    "ai.provider.UPPER.apiKey",
+    `ai.provider.${"a".repeat(33)}.apiKey`,
+    "ai.provider.a b.apiKey",
+    "ai.provider.a.apiKey.extra",
+    "ai.provider.a.token",
+    "anything.else",
+    "",
+    null,
+    undefined,
+  ]) {
+    assert.equal(store.isAllowedKey(bad), false, `弾くべき: ${JSON.stringify(bad)}`);
+  }
+});
+
+test("🔴 許さないキー名では保存しない（値がディスクへ出ない）", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "graphy-secret-allow-"));
+  const store = freshStore(dir);
+  const r = store.setSecret("ai.provider.../../evil.apiKey", "秘密");
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, "unknown-key");
+  // ファイルごと作られていないこと（＝値がどこにも書かれていない）。
+  const files = fs.readdirSync(dir);
+  assert.deepEqual(files, [], `何も書かれていないこと: ${files.join(",")}`);
+});

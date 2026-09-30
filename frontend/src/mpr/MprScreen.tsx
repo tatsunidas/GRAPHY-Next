@@ -33,6 +33,7 @@ import {
   teardownMpr,
   applyMprWl,
   resetMprWl,
+  applyMprSlab,
   readMprOverlay,
   probeMpr,
   setMprTouchTool,
@@ -44,6 +45,13 @@ import {
 import { presetLabel } from "../viewer2d/wlPresets";
 import { useWlPresets } from "../viewer2d/wlPresetStore";
 import { useI18n } from "../i18n/i18n";
+import {
+  SLAB_PROJECTIONS,
+  SLAB_THICKNESS_PRESETS_MM,
+  clampSlabThickness,
+  defaultSlabThickness,
+  type SlabProjection,
+} from "../viewer/slabPresets";
 
 const ENGINE_ID = "graphy-mpr-engine";
 const TOOL_GROUP_ID = "graphy-mpr-tg";
@@ -91,6 +99,9 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
   const [tilt, setTilt] = useState<number | null>(null);
   const [overlays, setOverlays] = useState<Record<string, MprOverlay>>({});
   const [probe, setProbe] = useState<MprProbe | null>(null);
+  // Slab MIP（fw/slab-mip-design.md §B）。null=通常 MPR。厚みは全幅 mm。
+  const [slabProj, setSlabProj] = useState<SlabProjection | null>(null);
+  const [slabMm, setSlabMm] = useState<number>(5);
 
   const mode = status?.mode === "standalone" ? "standalone" : "web";
 
@@ -295,10 +306,29 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
     if (!engine) return;
     if (value === "default") {
       resetMprWl(engine, viewportIds);
+      // resetProperties はスラブ厚も既定へ戻すので、選択中のスラブを掛け直す。
+      applyMprSlab(engine, viewportIds, { projection: slabProj, thicknessMm: slabMm });
     } else {
       const p = presets.find((x) => x.key === value);
       if (p) applyMprWl(engine, viewportIds, p.center, p.width);
     }
+  };
+
+  // スラブ設定の変更を 3 面へ反映（ready 後のみ）。
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (phase !== "ready" || !engine) return;
+    applyMprSlab(engine, [VIEWPORT_IDS.axial, VIEWPORT_IDS.sagittal, VIEWPORT_IDS.coronal], {
+      projection: slabProj,
+      thicknessMm: slabMm,
+    });
+  }, [phase, slabProj, slabMm]);
+
+  const onSlabProj = (value: string) => {
+    const next = value === "OFF" ? null : (value as SlabProjection);
+    // OFF から入るときだけ投影方式の既定厚にする（利用者が選んだ厚みは保つ）。
+    if (next && !slabProj) setSlabMm(defaultSlabThickness(next));
+    setSlabProj(next);
   };
 
   const busy = phase === "loading" || phase === "idle";
@@ -332,6 +362,64 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
             </select>
           </label>
         )}
+        {phase === "ready" && (
+          <label style={wlWrap} title={t("mpr.slab.title")}>
+            <span style={wlLabel}>{t("mpr.slab")}</span>
+            <select
+              style={wlSelect}
+              value={slabProj ?? "OFF"}
+              onChange={(e) => onSlabProj(e.target.value)}
+              data-testid="mpr-slab-projection"
+            >
+              <option value="OFF">{t("mpr.slab.off")}</option>
+              {SLAB_PROJECTIONS.map((p) => (
+                <option key={p} value={p}>
+                  {t(`series.thickSlab.proj.${p.toLowerCase()}`)}
+                </option>
+              ))}
+            </select>
+            <select
+              style={wlSelect}
+              value={(SLAB_THICKNESS_PRESETS_MM as readonly number[]).includes(slabMm) ? String(slabMm) : "custom"}
+              disabled={!slabProj}
+              onChange={(e) => {
+                if (e.target.value !== "custom") setSlabMm(Number(e.target.value));
+              }}
+              data-testid="mpr-slab-thickness"
+            >
+              {SLAB_THICKNESS_PRESETS_MM.map((mm) => (
+                <option key={mm} value={mm}>
+                  {mm} mm
+                </option>
+              ))}
+              {!(SLAB_THICKNESS_PRESETS_MM as readonly number[]).includes(slabMm) && (
+                <option value="custom">{t("viewer3d.slab.custom")}</option>
+              )}
+            </select>
+            {/* 任意の厚み（全幅 mm、0.5〜200 に丸め）。確定（Enter/フォーカス移動）で反映。 */}
+            <input
+              key={slabMm}
+              type="number"
+              min={0.5}
+              max={200}
+              step={0.5}
+              defaultValue={slabMm}
+              disabled={!slabProj}
+              onBlur={(e) => {
+                const v = Number(e.target.value);
+                if (e.target.value !== "" && Number.isFinite(v)) setSlabMm(clampSlabThickness(v));
+                else e.target.value = String(slabMm);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              }}
+              style={{ ...wlSelect, width: 60 }}
+              aria-label={t("viewer3d.slab.thickness")}
+              data-testid="mpr-slab-thickness-input"
+            />
+            <span style={wlLabel}>mm</span>
+          </label>
+        )}
         {tilt !== null && (
           <span style={tiltChip} title={t("mpr.tiltCorrectedHint")}>
             {t("mpr.tiltCorrected", { deg: tilt.toFixed(1) })}
@@ -356,6 +444,7 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
               <span style={roItem}>
                 <b style={roKey}>{t("mpr.value")}</b>{" "}
                 {probe.value === null ? "—" : Math.round(probe.value)}
+                {slabProj && <span style={roUnit}> {t("mpr.slab.probeNote")}</span>}
               </span>
             </>
           ) : (

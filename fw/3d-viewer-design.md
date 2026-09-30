@@ -649,3 +649,13 @@ GRAPHY `view/D3/*`＋`centerline/*`＋`slicer/*` を GRAPHY-Next と照合した
 
 ### 実装順（ユーザー選択 2026-07-02）
 **(1) Undo/Redo 基盤を最初に** → 以降 3D Cut / 3D計測 / 中心線解析拡充+CPR/ストレート化 を土台の上に載せる。
+
+## 追記 2026-09-26 — モード「Slab」（Slab MIP）
+
+`VtkRenderMode` に `"SLAB"`。`vtkSlab.ts`（`vtkImageResliceMapper` のスラブ）で画面に平行なスラブを投影し、
+回転で任意斜め・Shift+ホイールで前後。SLAB 中は平行投影・カメラ周回に固定。正本 [`slab-mip-design.md`](slab-mip-design.md) §A。
+
+### 向きスナップ（2026-09-27・全モード）
+
+右パネル「向き」: Axial（足側から・上=A）/ Coronal（前から・上=S）/ Sagittal（左から・上=S）＋「反対」。焦点・距離・ズームは保持し、
+Actor 回転の蓄積はリセット（`vtkVolumeView.snapOrientation`・`viewer/cameraSnap.ts`）。Slab の回転中心・シネは [`slab-mip-design.md`](slab-mip-design.md) §7。

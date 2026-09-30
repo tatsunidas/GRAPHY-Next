@@ -1348,11 +1348,37 @@ export interface PluginVideoEntry {
   transferSyntaxUid: string;
 }
 
-/** `host.ai.generate()` の要求（H40）。 */
+/**
+ * `host.ai.generate()` の要求（H40）。
+ *
+ * ⚠ **`model` / `apiVersion` / `responseModalities` は Gemini の語彙で、複数提供元への
+ * ルーティングを入れる際に `capability` へ置き換わる**（設計: `fw/ai-routing-design.md`）。
+ * 新しいプラグインは**宛先やモデルを名指しせず、用途を頼む**形で書くこと。
+ * 提供元の差（電文の形・応答の形）は本体が吸収する。
+ */
 export interface AiGenerationRequest {
-  /** モデル ID（例 `gemini-3.1-flash-image`）。利用者の設定値を使うこと。 */
-  model: string;
-  /** API バージョン。既定 `v1beta`。 */
+  /**
+   * 何をしてほしいか。**新しいプラグインはこれを渡す。**
+   *
+   * <p>モデルも宛先も本体が決める（利用者の環境設定に従う）。提供元が増えても
+   * プラグインは書き換えなくてよい。設計: `fw/ai-routing-design.md` §2。
+   *
+   * <p>⚠ 提供元によって**できる用途が違う**（画像を生成しない提供元がある）。
+   * 扱えない用途は送信前に `unsupported-capability` で断られる。
+   */
+  capability?: AiCapability;
+  /**
+   * モデル ID（例 `gemini-3.1-flash-image`）。
+   *
+   * @deprecated 提供元に固有の語彙。`capability` を使うこと
+   *             （`fw/ai-routing-design.md` §3.1）。渡された場合はそのまま尊重する。
+   */
+  model?: string;
+  /**
+   * API バージョン。既定 `v1beta`。
+   *
+   * @deprecated Gemini に固有。提供元ごとの接続先設定へ移る。
+   */
   apiVersion?: string;
   /** 指示文。**同意ダイアログに全文が表示される**ので、患者情報を混ぜないこと。 */
   prompt: string;
@@ -1362,16 +1388,66 @@ export interface AiGenerationRequest {
   /** 同意を覚える単位。通常はシリーズ UID。省略すると毎回確認になる。 */
   scopeKey?: string;
   temperature?: number;
-  /** 既定 `["TEXT","IMAGE"]`。画像と説明文を 1 回で受け取るために両方を要求する。 */
+  /**
+   * 既定 `["TEXT","IMAGE"]`。画像と説明文を 1 回で受け取るために両方を要求する。
+   *
+   * @deprecated Gemini に固有。用途（`image-to-image` / `image-to-text`）で表す形に移る。
+   */
   responseModalities?: string[];
+  /**
+   * 提供元固有の追い込み（temperature 以外の細かい指定）。
+   *
+   * <p>🔴 **無くても動くように書くこと。** 提供元が変わると無視される。
+   */
+  providerOptions?: Record<string, unknown>;
 }
 
-/** `host.ai.generate()` の結果。`data` はモデルの生レスポンス（解釈はプラグイン側の責任）。 */
+/** 用途。提供元ではなくこれで頼む（`fw/ai-routing-design.md` §2）。 */
+export type AiCapability = "image-to-image" | "image-to-text";
+
+/** どこで何によって作られたか。作品の再現性と監査のために持ち回る。 */
+export interface AiProvenance {
+  providerId: string;
+  kind: string;
+  model: string;
+  endpointHost: string;
+  /** 平文 http で送った（院内に立てたサーバのみ起こりうる）。 */
+  plaintext?: boolean;
+}
+
+/**
+ * `host.ai.generate()` の結果。
+ *
+ * <p>🔑 **`image` / `text` は提供元非依存。** 提供元ごとの応答の形は本体のアダプタが畳むので、
+ * プラグインはこの 2 つだけを見ればよい（`fw/ai-routing-design.md` §3.2）。
+ *
+ * <p>⚠ **`ok: true` でも `image` / `text` が無いことがある。** 安全フィルタで止まった場合など。
+ * そのときは `blockReason` が入るので、利用者への案内を分けられる。
+ */
 export type AiGenerationOutcome =
-  | { ok: true; data: unknown }
+  | {
+      ok: true;
+      /** 生成された画像（`image-to-image` のとき）。 */
+      image?: { bytes: Uint8Array; mimeType: string };
+      /** 返ってきた文章。 */
+      text?: string;
+      /** 何も返らなかった理由。`image` も `text` も無いときだけ入る。 */
+      blockReason?: string;
+      provenance?: AiProvenance;
+      /**
+       * 提供元の生レスポンス。
+       *
+       * @deprecated 提供元ごとに形が違う。`image` / `text` を使うこと。
+       *             移行期間のあいだだけ残す。
+       */
+      data?: unknown;
+    }
   | {
       ok: false;
-      /** `desktop-only` / `permission-denied` / `no-api-key` / `canceled` / `busy` / API 側のメッセージ。 */
+      /**
+       * `desktop-only` / `permission-denied` / `no-api-key` / `canceled` / `busy` /
+       * `unsupported-capability` / API 側のメッセージ。
+       */
       error: string;
       status?: number;
       kind?: string;
