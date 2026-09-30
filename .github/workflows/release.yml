@@ -139,7 +139,16 @@ jobs:
         # （--publish never＋GH_TOKEN 非注入で app-update.yml 生成/repository 解決を回避）。
         run: |
           npm install
+          # 🚨 起動に要るファイルが build.files に全部あるか（v0.3.0〜0.3.2 は secretStore.js 等が抜けて起動直後に落ちた）
+          node --test packagedFiles.test.js
           npm run dist -- --publish never
+      # 🚨 **公開の前に、できたインストーラの中身（app.asar）を確かめる。** 足りなければここで落ち、この OS の
+      #    インストーラはアップロードされない。開発起動（desktop/ をそのまま読む）と CI では気付けない壊れ方
+      #    （2026-09-30・fw/release-checklist.md）。
+      - name: Check packaged app (起動に要るファイルが app.asar にあるか)
+        working-directory: desktop
+        shell: bash
+        run: node scripts/check-packaged.js dist
       - name: Upload installers
         uses: softprops/action-gh-release@v2
         with:
