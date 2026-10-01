@@ -140,6 +140,12 @@ GRAPHY / GRAPHY-Next の新バージョンを公開したら、登録済みユ�
 > **2026-10-01 確認**: デモ機の `ANNOUNCEMENT_DELIVERY` は **0 行**（購読者は 9 件）。v0.3.5 まで
 > 一度も配信されていない。cron は別マシンで動いているため、そのマシンで鍵の配置とログの確認が必要。
 
+### 操作ガイド（PDF）のリンク（2026-10-01 追加）
+
+`POST /admin/announce` は任意の `guideUrl`（https のみ）を受け、あれば本文に「操作ガイド（PDF）:」として載せる
+（購読者・Group とも）。`auto-deploy.sh` が `docs/release-guides/<tag>.pdf` をタグ→main の順に探し、
+見つかれば GitHub の表示ページの URL を渡す。PDF の作り方は `fw/release-checklist.md`。
+
 ### Google Group への投稿（2026-10-01 追加）
 
 `GRAPHY_AUTH_ANNOUNCE_GROUP_ADDRESS`（例: `graphy-users@googlegroups.com`）を設定すると、

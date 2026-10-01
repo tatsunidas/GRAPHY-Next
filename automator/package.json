@@ -10,6 +10,7 @@
   },
   "scripts": {
     "automator": "tsx src/cli.ts",
+    "guide": "tsx src/guide/run.ts",
     "typecheck": "tsc -b --noEmit",
     "install-browsers": "playwright install chromium"
   },

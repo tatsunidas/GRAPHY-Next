@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>GRAPHY-Next v0.3.5 操作ガイド — Slab MIP</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../guide.css">
+</head>
+<body>
+
+<section class="page cover">
+  <div class="left">
+    <p class="eyebrow">GRAPHY-NEXT v0.3.5 / 操作ガイド</p>
+    <h1>Slab MIP を<br>HCC_001 で試す</h1>
+    <p class="lead">厚みのある範囲を 1 枚に投影して、血管や骨・石灰化のつながりを見やすくする機能です。2D・MPR・3D の 3 か所で使えます。</p>
+    <div class="chips">
+      <span class="chip on">MIP 最大値</span>
+      <span class="chip">MinIP 最小値</span>
+      <span class="chip">AvgIP 平均</span>
+    </div>
+  </div>
+  <div class="panel">
+    <h3>準備</h3>
+    <ol class="steps">
+      <li><span class="n">01</span><p>demo.vis-ionary.com を開く<small>デスクトップ版でも同じ手順です</small></p></li>
+      <li><span class="n">02</span><p>スタディ一覧で患者 ID <b>HCC_001</b> を検索</p></li>
+      <li><span class="n">03</span><p>2D は <b>#3 C-A-P</b>（造影）、MPR・3D は <b>#2 PRE LIVER</b> を選ぶ<small>どちらもスライス厚 5 mm の CT</small></p></li>
+      <li><span class="n">04</span><p>ツールバーの 2D Viewer・MPR Viewer・3D Viewer で開く</p></li>
+    </ol>
+  </div>
+  <div class="footer"><span>データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0　doi.org/10.7937/TCIA.5FNA-0924</span><span>1 / 4</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">STEP 1 / 2D Viewer・#3 C-A-P</p>
+    <h2>厚みを付けて、スライスを送る</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="2d"><img src="shots/2d.png" alt="2D Viewer で ThickSlab 15 mm・MIP を掛けた腹部 CT"></figure>
+    <div style="display:flex;flex-direction:column;gap:32px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>メニュー「表示」→「Slab MIP」→「MIP（最大値投影・5mm）」</p></li>
+        <li><span class="num">2</span><p>ThickSlab の厚みを <b>15 mm</b> に。造影された血管が線としてつながります</p></li>
+        <li><span class="num">3</span><p>投影方式を切り替え。MIP・MinIP・AvgIP</p></li>
+      </ol>
+      <p class="callout">ホイールで送ると、厚みを保ったまま上下に動きます。</p>
+      <p class="note">ThickSlab 中は ROI・計測を作れません。測るときは Original に戻します。</p>
+    </div>
+  </div>
+  <div class="footer"><span>データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0</span><span>2 / 4</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">STEP 2 / MPR Viewer・#2 PRE LIVER</p>
+    <h2>3 断面すべてにスラブを掛ける</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="mpr"><img src="shots/mpr.png" alt="MPR Viewer の 3 断面にスラブ MIP 15 mm を掛けた画面"></figure>
+    <div style="display:flex;flex-direction:column;gap:32px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>ヘッダの「スラブ」で <b>MIP</b> を選ぶ</p></li>
+        <li><span class="num">2</span><p>厚み（全幅 mm）を <b>15</b> に。Axial・Sagittal・Coronal の 3 面に同時に効きます</p></li>
+      </ol>
+      <p class="callout">5 mm 未満は元の画像とほぼ同じ。10 mm 以上で違いが分かります。</p>
+      <p class="note">MinIP は 3 mm、AvgIP は 5 mm が目安。W/L プリセットは「腹部」にしています。</p>
+    </div>
+  </div>
+  <div class="footer"><span>データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0</span><span>3 / 4</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">STEP 3 / 3D Viewer・#2 PRE LIVER</p>
+    <h2>スラブを回して、狙った構造を中心にする</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="3d"><img src="shots/3d.png" alt="3D Viewer の Slab モードで MIP 20 mm を Coronal から見た画面"></figure>
+    <div style="display:flex;flex-direction:column;gap:24px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>レンダリングモード「Slab」</p></li>
+        <li><span class="num">2</span><p>スラブ投影「MIP」</p></li>
+        <li><span class="num">3</span><p>スラブ厚 <b>20 mm</b></p></li>
+        <li><span class="num">4</span><p>向き「Coronal」で正面から</p></li>
+        <li><span class="num">5</span><p>自動回転 ▶ で左右に回して見せる</p></li>
+      </ol>
+      <table class="ops">
+        <tr><th style="width:44%">操作</th><th>動き</th></tr>
+        <tr><td>ダブルクリック</td><td>最も明るい深さを回転中心に</td></tr>
+        <tr><td>Shift＋ホイール</td><td>スラブと回転中心が前後に</td></tr>
+        <tr><td>左ドラッグ</td><td>回転中心のまわりで回る</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="footer"><span>データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0</span><span>4 / 4</span></div>
+</section>
+
+<script src="shots/marks.js"></script>
+<script src="../guide.js"></script>
+</body>
+</html>

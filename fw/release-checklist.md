@@ -27,6 +27,12 @@
       前のタグからの main の履歴を **PR タイトル**の `feat:` → 新機能 / `fix:` → バグ修正 / `perf:` → 改善 に振り分け、
       `docs` `test` `ci` `chore` などは載せない。ワークフローが同じものを Release 本文に付け、製品サイトの
       お知らせ・RSS・更新通知メールにも流れる。**利用者に見せたい変更は PR タイトルを `feat:` / `fix:` で書く**
+- [ ] **機能追加・改良がある版は操作ガイド（PDF）を作る**。前の版のファイルを複製して書き換える:
+      `automator/src/guide/scenarios/vX.Y.Z.ts`（撮る画面と番号を振る部品）と
+      `docs/release-guides/vX.Y.Z/guide.html`（本文）。`cd automator && npm run guide -- vX.Y.Z` で
+      アプリを起動して HCC_001 等（`~/graphy-demo-samples`、デモと同じデータ）で撮影し、
+      `docs/release-guides/vX.Y.Z.pdf` ができる。**PDF を開いて目で確かめてから、タグより前にコミット**。
+      通知メール・Google Group の本文にリンクが自動で載る（`fw/update-notification-design.md`）
 - [ ] 大きな版は `.github/release-highlights/vX.Y.Z.md` に「ハイライト」を書いて**タグより前にコミット**する
       （あればノートの先頭に付く）。ノートは前回の**公開済み**リリースから数えるので、下書きに戻した版の変更も含まれる
 

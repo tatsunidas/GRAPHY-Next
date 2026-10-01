@@ -73,6 +73,7 @@ public class AnnouncementController {
             @RequestParam String product,
             @RequestParam String version,
             @RequestParam(required = false) String releaseUrl,
+            @RequestParam(required = false) String guideUrl,
             HttpServletRequest request) {
 
         if (!isAuthorized(request)) {
@@ -95,6 +96,10 @@ public class AnnouncementController {
             return ResponseEntity.unprocessableEntity()
                     .body(Map.of("error", "releaseUrl must be https"));
         }
+        if (guideUrl != null && !guideUrl.isBlank() && !guideUrl.startsWith("https://")) {
+            return ResponseEntity.unprocessableEntity()
+                    .body(Map.of("error", "guideUrl must be https"));
+        }
 
         SubscriptionProduct subscriptionProduct = target.get();
         AnnouncementService.Acceptance acceptance =
@@ -106,7 +111,7 @@ public class AnnouncementController {
 
         deliveryExecutor.submit(() -> {
             try {
-                announcementService.deliver(subscriptionProduct, normalizedVersion, releaseUrl);
+                announcementService.deliver(subscriptionProduct, normalizedVersion, releaseUrl, guideUrl);
             } catch (RuntimeException e) {
                 // 配信スレッドで握り潰すと、記録が「開始したまま」で残り原因が追えなくなる。
                 log.error("更新通知: {} {} の配信中に失敗しました", product, normalizedVersion, e);

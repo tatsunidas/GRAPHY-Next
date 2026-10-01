@@ -67,8 +67,9 @@ public class AnnouncementService {
      * 実際に送る。{@link #claim} が {@link Acceptance#ACCEPTED} を返した後にのみ呼ぶ。
      *
      * @param releaseUrl リリースノートのURL（GitHub Releases）。null なら本文から省く
+     * @param guideUrl   操作ガイド（PDF）のURL。null なら本文から省く
      */
-    public void deliver(SubscriptionProduct product, String version, String releaseUrl) {
+    public void deliver(SubscriptionProduct product, String version, String releaseUrl, String guideUrl) {
         List<MailingListSubscriber> recipients = subscriberRepository.findActiveByProduct(product);
         String group = properties.getAnnounceGroupAddress();
         boolean postToGroup = group != null && !group.isBlank();
@@ -85,7 +86,7 @@ public class AnnouncementService {
 
         if (postToGroup) {
             // Group は個人の購読ではないので配信停止リンクを付けない（解除は Group 側で行う）。
-            if (!mailerClient.send(group, subject, body(product, version, releaseUrl, null), null).success()) {
+            if (!mailerClient.send(group, subject, body(product, version, releaseUrl, guideUrl, null), null).success()) {
                 failed++;
                 log.warn("更新通知: Google Group への投稿に失敗しました");
             }
@@ -97,7 +98,7 @@ public class AnnouncementService {
         for (int i = 0; i < recipients.size(); i++) {
             MailingListSubscriber recipient = recipients.get(i);
             String unsubscribeUrl = unsubscribeUrl(recipient.getEmail());
-            String body = body(product, version, releaseUrl, unsubscribeUrl);
+            String body = body(product, version, releaseUrl, guideUrl, unsubscribeUrl);
 
             if (!mailerClient.send(recipient.getEmail(), subject, body, unsubscribeUrl).success()) {
                 failed++;
@@ -136,7 +137,7 @@ public class AnnouncementService {
         return "[" + displayName(product) + "] v" + version + " を公開しました";
     }
 
-    private String body(SubscriptionProduct product, String version, String releaseUrl,
+    private String body(SubscriptionProduct product, String version, String releaseUrl, String guideUrl,
             String unsubscribeUrl) {
         StringBuilder sb = new StringBuilder();
         sb.append(displayName(product)).append(" の新しいバージョン v").append(version)
@@ -144,6 +145,9 @@ public class AnnouncementService {
         sb.append("ダウンロード:\n").append(downloadUrl(product)).append("\n\n");
         if (releaseUrl != null && !releaseUrl.isBlank()) {
             sb.append("変更点:\n").append(releaseUrl).append("\n\n");
+        }
+        if (guideUrl != null && !guideUrl.isBlank()) {
+            sb.append("操作ガイド（PDF）:\n").append(guideUrl).append("\n\n");
         }
         if (unsubscribeUrl != null) {
             sb.append("――――――\n");

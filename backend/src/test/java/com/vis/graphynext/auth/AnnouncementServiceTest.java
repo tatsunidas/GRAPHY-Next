@@ -86,7 +86,7 @@ class AnnouncementServiceTest {
         subscribers.save(new MailingListSubscriber("both@example.com", SubscriptionProduct.all()));
 
         service.claim(SubscriptionProduct.GRAPHY_NEXT, "0.1.8");
-        service.deliver(SubscriptionProduct.GRAPHY_NEXT, "0.1.8", "https://example.com/releases/v0.1.8");
+        service.deliver(SubscriptionProduct.GRAPHY_NEXT, "0.1.8", "https://example.com/releases/v0.1.8", null);
 
         assertEquals(List.of("both@example.com", "next@example.com"), sentRecipients());
         verify(mailer, never()).send(eq("classic@example.com"), anyString(), anyString(), any());
@@ -101,7 +101,7 @@ class AnnouncementServiceTest {
         subscribers.save(new MailingListSubscriber("active@example.com", SubscriptionProduct.all()));
 
         service.claim(SubscriptionProduct.GRAPHY, "0.0.21");
-        service.deliver(SubscriptionProduct.GRAPHY, "0.0.21", null);
+        service.deliver(SubscriptionProduct.GRAPHY, "0.0.21", null, null);
 
         assertEquals(List.of("active@example.com"), sentRecipients());
     }
@@ -112,7 +112,7 @@ class AnnouncementServiceTest {
         subscribers.save(new MailingListSubscriber("a+tag@example.com", SubscriptionProduct.all()));
 
         service.claim(SubscriptionProduct.GRAPHY_NEXT, "0.1.8");
-        service.deliver(SubscriptionProduct.GRAPHY_NEXT, "0.1.8", null);
+        service.deliver(SubscriptionProduct.GRAPHY_NEXT, "0.1.8", null, null);
 
         ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> listUnsubscribe = ArgumentCaptor.forClass(String.class);
@@ -134,7 +134,7 @@ class AnnouncementServiceTest {
     void deliver_withNoRecipients_releasesTheClaimSoItCanBeRetried() {
         assertEquals(AnnouncementService.Acceptance.ACCEPTED,
                 service.claim(SubscriptionProduct.GRAPHY, "0.0.21"));
-        service.deliver(SubscriptionProduct.GRAPHY, "0.0.21", null);
+        service.deliver(SubscriptionProduct.GRAPHY, "0.0.21", null, null);
 
         assertTrue(deliveries.find(SubscriptionProduct.GRAPHY, "0.0.21").isEmpty());
         assertEquals(AnnouncementService.Acceptance.ACCEPTED,
@@ -151,7 +151,7 @@ class AnnouncementServiceTest {
                 .thenReturn(new MailerClient.SendResult(false));
 
         service.claim(SubscriptionProduct.GRAPHY_NEXT, "0.1.8");
-        service.deliver(SubscriptionProduct.GRAPHY_NEXT, "0.1.8", null);
+        service.deliver(SubscriptionProduct.GRAPHY_NEXT, "0.1.8", null, null);
 
         assertEquals(3, sentRecipients().size(), "失敗した宛先の後も送信を続けること");
 
@@ -169,7 +169,7 @@ class AnnouncementServiceTest {
         subscribers.save(new MailingListSubscriber("next@example.com", SubscriptionProduct.all()));
 
         service.claim(SubscriptionProduct.GRAPHY_NEXT, "0.1.8");
-        service.deliver(SubscriptionProduct.GRAPHY_NEXT, "0.1.8", "https://example.com/releases/v0.1.8");
+        service.deliver(SubscriptionProduct.GRAPHY_NEXT, "0.1.8", "https://example.com/releases/v0.1.8", null);
 
         assertEquals(List.of("next@example.com", "users@groups.example.com"), sentRecipients());
         ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
@@ -185,11 +185,25 @@ class AnnouncementServiceTest {
         properties.setAnnounceGroupAddress("users@groups.example.com");
 
         service.claim(SubscriptionProduct.GRAPHY, "0.0.21");
-        service.deliver(SubscriptionProduct.GRAPHY, "0.0.21", null);
+        service.deliver(SubscriptionProduct.GRAPHY, "0.0.21", null, null);
 
         assertEquals(List.of("users@groups.example.com"), sentRecipients());
         assertEquals(AnnouncementService.Acceptance.ALREADY_SENT,
                 service.claim(SubscriptionProduct.GRAPHY, "0.0.21"));
+    }
+
+    @Test
+    void deliver_includesGuideLinkWhenGiven() {
+        properties.setAnnounceGroupAddress("users@groups.example.com");
+        subscribers.save(new MailingListSubscriber("next@example.com", SubscriptionProduct.all()));
+
+        service.claim(SubscriptionProduct.GRAPHY_NEXT, "0.3.5");
+        service.deliver(SubscriptionProduct.GRAPHY_NEXT, "0.3.5", null, "https://example.com/v0.3.5.pdf");
+
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(mailer, org.mockito.Mockito.times(2)).send(anyString(), anyString(), body.capture(), any());
+        body.getAllValues().forEach(b -> assertTrue(b.contains("操作ガイド（PDF）:\nhttps://example.com/v0.3.5.pdf"),
+                "購読者・Group の両方にガイドのリンクが載ること"));
     }
 
     private List<String> sentRecipients() {

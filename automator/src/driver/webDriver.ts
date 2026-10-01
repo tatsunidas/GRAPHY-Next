@@ -24,7 +24,14 @@ export class WebDriver implements Driver {
   private context: BrowserContext | null = null;
   private mainPage: Page | null = null;
 
-  constructor(ports: Partial<DriverPorts> = {}) {
+  /**
+   * shooting: 操作ガイドの撮影用。backend を standalone（取り込んだ保管庫をそのまま検索できる）で起動し、
+   * 画面の大きさと言語を固定する。未指定なら従来どおり web プロファイル・Playwright の既定。
+   */
+  constructor(
+    ports: Partial<DriverPorts> = {},
+    private readonly shooting?: { viewport: { width: number; height: number }; locale: string; deviceScaleFactor?: number },
+  ) {
     this.ports = { ...DEFAULT_PORTS, ...ports };
   }
 
@@ -47,7 +54,7 @@ export class WebDriver implements Driver {
       "java",
       [
         "-jar", BACKEND_JAR,
-        "--spring.profiles.active=web",
+        `--spring.profiles.active=${this.shooting ? "standalone" : "web"}`,
         `--server.port=${this.ports.http}`,
       ],
       {
@@ -65,14 +72,21 @@ export class WebDriver implements Driver {
       ["run", "dev", "--", "--port", String(this.ports.vite), "--strictPort"],
       // detached: npm→node(vite) をプロセスグループリーダー化し、stop() の killProcessTree が
       // 負pid(グループ)で子孫ごと殺せるようにする（里子化した vite の残留とハングを防ぐ）。
-      { cwd: FRONTEND_DIR, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" },
+      // 転送先を自前で起動した backend に向ける。無指定だと vite.config.ts の既定 :8080 へ行き、
+      // そこに別のサーバー（dcm4chee 等）が居る機械では一覧が 404 になる。
+      {
+        cwd: FRONTEND_DIR,
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: process.platform !== "win32",
+        env: { ...process.env, VITE_BACKEND_URL: `http://localhost:${this.ports.http}` },
+      },
     );
     this.viteProc.stdout?.on("data", () => {});
     this.viteProc.stderr?.on("data", () => {});
     await waitForHttp({ host: "localhost", port: this.ports.vite, path: "/", timeoutMs: 60_000 });
 
     this.browser = await chromium.launch();
-    this.context = await this.browser.newContext();
+    this.context = await this.browser.newContext(this.shooting ?? {});
     this.mainPage = await this.context.newPage();
     await this.mainPage.goto(`http://localhost:${this.ports.vite}`);
     await this.mainPage.waitForLoadState("domcontentloaded");
