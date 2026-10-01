@@ -48,6 +48,9 @@ jobs:
       - name: リリースノートを作る
         id: notes
         shell: bash
+        env:
+          # 前回の「公開済み」リリースを調べるのに使う（下書きに戻した版の変更もこの版に含めるため）。
+          GH_TOKEN: ${{ github.token }}
         run: |
           {
             echo "notes<<RELEASE_NOTES_EOF"
