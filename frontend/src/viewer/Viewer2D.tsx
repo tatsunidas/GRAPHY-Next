@@ -114,6 +114,7 @@ import { dsaNativeImageId, dsaStateForImageId, readXaDsaTags } from "./dsaLoader
 // H40: シネの時間軸。**決定そのものは既存の単一入口に委譲する**（規則を 2 か所に持たない）。
 import { readXaCineSource } from "./xaCine";
 import { frameStartTimesMs, isUniformFrameTime, resolveXaFps } from "./xaCineTiming";
+import { worldToImageCoords } from "./imageCoords";
 
 type ViewSnapshot = { transform: ViewTransform; voi: { lower: number; upper: number } | null };
 
@@ -2175,7 +2176,7 @@ export function Viewer2D({
       //    その換算は `roiRead.roiPointsPx()` に集約してある（統計エンジンも同じものを通る）。
       const points = roiPointsPx(
         world,
-        (w) => utilities.worldToImageCoords(refId, w as Types.Point3) as [number, number],
+        (w) => worldToImageCoords(refId, w as Types.Point3) as [number, number],
         sx,
         sy,
       );

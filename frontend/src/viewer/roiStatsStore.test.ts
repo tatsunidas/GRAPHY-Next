@@ -20,9 +20,11 @@ vi.mock("@cornerstonejs/core", () => ({
   eventTarget: { addEventListener: () => undefined, removeEventListener: () => undefined },
   getRenderingEngines: () => [],
   metaData: { get: () => ({ columnPixelSpacing: 0.5, rowPixelSpacing: 0.5 }) },
-  utilities: {
-    worldToImageCoords: (_id: string, w: number[]) => [w[0], w[1]] as [number, number],
-  },
+}));
+
+// world → 画素は自前の変換（./imageCoords）を通る。ここでは恒等写像に差し替える。
+vi.mock("./imageCoords", () => ({
+  worldToImageCoords: (_id: string, w: number[]) => [w[0], w[1]] as [number, number],
 }));
 
 vi.mock("@cornerstonejs/tools", () => ({

@@ -19,7 +19,7 @@
  * 置換のため、前回書き込んだボクセルの**元値**を保持し、再実行時にまず復元してから新結果を書く
  * （`wandTool.ts` の `tracked`/`restoreTracked` と同じ発想）。
  */
-import { getEnabledElement, cache, utilities as csUtils } from "@cornerstonejs/core";
+import { getEnabledElement, cache } from "@cornerstonejs/core";
 import { BaseTool, segmentation as csSeg } from "@cornerstonejs/tools";
 import { getSegEditTarget } from "./roiMaskStore";
 import { ensureStackSegmentation } from "./segmentation";
@@ -34,6 +34,7 @@ import {
   type ActiveContoursParams,
 } from "./levelSetsStore";
 import type { LevelSetWorkerRequest, LevelSetWorkerResponse } from "./levelSetsProtocol";
+import { worldToImageCoords } from "./imageCoords";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
@@ -268,7 +269,7 @@ async function startLevelSet(viewport: AnyObj, world: [number, number, number]):
   const cols = Number(src.columns ?? src.width);
   const rows = Number(src.rows ?? src.height);
   if (!cols || !rows) return;
-  const ic = csUtils.worldToImageCoords(refImageId, world) as [number, number] | undefined;
+  const ic = worldToImageCoords(refImageId, world) as [number, number] | undefined;
   if (!ic) return;
   const sx = Math.round(ic[0]);
   const sy = Math.round(ic[1]);

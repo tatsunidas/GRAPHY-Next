@@ -12,9 +12,10 @@
  * 前提: 入力 Mask は同一 source スタック（同じ referencedImageId 列）であること（同一 series/C/T）。
  * 設計: `fw/roi-manager-design.md` 第4章。
  */
-import { cache, imageLoader, getRenderingEngines, utilities as csUtils } from "@cornerstonejs/core";
+import { cache, imageLoader, getRenderingEngines } from "@cornerstonejs/core";
 import { annotation as csAnnotation, segmentation as csSeg, Enums as csToolsEnums } from "@cornerstonejs/tools";
 import { getRoiMaskMeta, setRoiMaskMeta } from "./roiMaskStore";
+import { worldToImageCoords } from "./imageCoords";
 
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
 const MAX_SEGMENTS = 64; // SPLIT の成分数上限（色枯渇/重さ回避）。
@@ -163,7 +164,7 @@ function rasterizeRoi(
   const ipts: Array<[number, number]> = [];
   for (const w of world) {
     try {
-      const ic = csUtils.worldToImageCoords(refImageId, w as [number, number, number]) as [number, number];
+      const ic = worldToImageCoords(refImageId, w as [number, number, number]) as [number, number];
       ipts.push([ic[0], ic[1]]);
     } catch {
       /* skip */

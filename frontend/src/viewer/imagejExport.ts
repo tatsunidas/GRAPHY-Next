@@ -9,11 +9,11 @@
  * ROI 種別（oval/rect/freehand/polyline/angle/point/polygon）へマップし、頂点/範囲を `worldToImageCoords`
  * で画素へ変換する。保存優先=ImageJ（`fw/roi-manager-design.md`）。
  */
-import { utilities as csUtils } from "@cornerstonejs/core";
 import { annotation as csAnnotation } from "@cornerstonejs/tools";
 import { resolveRoiStack } from "./roiBooleanOps";
 import { getRoiMaskMeta } from "./roiMaskStore";
 import type { ImageJRoiDto } from "../api";
+import { worldToImageCoords } from "./imageCoords";
 
 /** 単一アノテーション → ImageJ DTO（面積/線/点系。変換不能なら null）。 */
 export function annotationToImageJDto(annotationUid: string): ImageJRoiDto | null {
@@ -29,7 +29,7 @@ export function annotationToImageJDto(annotationUid: string): ImageJRoiDto | nul
   const ys: number[] = [];
   for (const w of world) {
     try {
-      const ic = csUtils.worldToImageCoords(refId, w as [number, number, number]) as [number, number];
+      const ic = worldToImageCoords(refId, w as [number, number, number]) as [number, number];
       xs.push(ic[0]);
       ys.push(ic[1]);
     } catch {
