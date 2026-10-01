@@ -39,13 +39,22 @@ export type XaCalibSource =
   | "geometric-sid-sod"
   /** P5: ImagerPixelSpacing ÷ 推定拡大率。 */
   | "geometric-magfactor"
-  /** P6: 検出器面の値しか無い（**校正できていない**）。 */
+  /** P6: 検出器面の値しか無い（**校正できていない**）。XA ではこれを未校正として扱う。 */
   | "detector-plane"
+  /**
+   * P6': 一般撮影（CR/DX/MG/IO）で検出器面の値しか無い。倍率は補正されていないが、
+   * 一般撮影の慣行（Cornerstone の PROJECTION 扱い・IHE）に合わせて mm で出し、近似と明示する。
+   */
+  | "detector-plane-measured"
+  /** 超音波: Sequence of Ultrasound Regions の PhysicalDeltaX/Y（{@link ./usCalibration}）。 */
+  | "us-region"
+  /** 一般撮影で `PixelSpacing` だけがある（CR の普通の形）。 */
+  | "dicom-pixel-spacing"
   /** P7: 何も無い。 */
   | "none";
 
 /** その mm/px が妥当な平面。 */
-export type XaCalibPlane = "fiducial-depth" | "isocenter" | "central-ray" | "detector" | "unknown";
+export type XaCalibPlane = "fiducial-depth" | "isocenter" | "central-ray" | "detector" | "us-region" | "unknown";
 
 /** 表示の縮退（§7.4）。 */
 export type XaCalibTier = "calibrated" | "approximate" | "uncalibrated";
@@ -56,7 +65,9 @@ export type XaCalibWarning =
   | "sidSodDiffersFromMagFactor"
   | "calibrationTypeMissing"
   | "pixelSpacingEqualsImager"
-  | "anisotropic";
+  | "anisotropic"
+  /** 超音波: 2-D 空間領域が複数あり、PhysicalDelta が一致しない（どれを採るか決められない）。 */
+  | "usRegionsDiffer";
 
 /** 校正の材料（DICOM タグ）。すべて任意。 */
 export interface XaCalibTags {
@@ -146,9 +157,23 @@ const UNCALIBRATED: XaCalibration = {
  * @param tags     DICOM タグ（{@link readXaCalibTags} で読む）
  * @param override 人が確定した校正（あれば最優先）
  */
+export interface ResolveOptions {
+  /**
+   * 一般撮影（CR/DX/MG/IO）として解決する。XA/XRF との違いは 2 点:
+   * <ul>
+   *   <li>`ImagerPixelSpacing` が無く `PixelSpacing` だけがある（CR の普通の形）なら、
+   *       それを素直に採る（XA の「種別の記載なし」警告は出さない）。</li>
+   *   <li>検出器面の値しか無い（P6）ときも「近似の mm」として採る。XA は採らずに px に落とす。
+   *       倍率未補正であることは出自（`detector-plane-measured`）で明示する。</li>
+   * </ul>
+   */
+  generalRadiography?: boolean;
+}
+
 export function resolveXaCalibration(
   tags: XaCalibTags,
   override?: XaUserCalibration | null,
+  opts?: ResolveOptions,
 ): XaCalibration {
   const warnings: XaCalibWarning[] = [];
   const ps = pair(tags.pixelSpacing);
@@ -161,7 +186,18 @@ export function resolveXaCalibration(
 
   // 装置由来の校正（P1〜P3）。P3' は「未校正」として採用しない。
   let device: XaCalibration | null = null;
-  if (ps) {
+  if (ps && !imager && !type && opts?.generalRadiography) {
+    device = {
+      mmPerPxRow: ps[0],
+      mmPerPxCol: ps[1],
+      source: "dicom-pixel-spacing",
+      confidence: "medium",
+      plane: "unknown",
+      tier: "calibrated",
+      provenance: "DICOM PixelSpacing",
+      warnings: [],
+    };
+  } else if (ps) {
     const desc = tags.pixelSpacingCalibrationDescription?.trim();
     if (type === "FIDUCIAL" || type === "GEOMETRY") {
       // 校正種別の明記があるならそれが結論。ただし値が検出器面と同じなら不審なので警告。
@@ -247,6 +283,19 @@ export function resolveXaCalibration(
         provenance: bySidSod
           ? `geometric (ImagerPixelSpacing × SOD/SID = ${sod}/${sid})`
           : `geometric (ImagerPixelSpacing ÷ magnification ${mag})`,
+        warnings,
+      });
+    }
+    // P6': 一般撮影では検出器面の値を近似の mm として採る（倍率は未補正と明示）。
+    if (opts?.generalRadiography) {
+      return withAnisotropyCheck({
+        mmPerPxRow: imager[0],
+        mmPerPxCol: imager[1],
+        source: "detector-plane-measured",
+        confidence: "low",
+        plane: "detector",
+        tier: "approximate",
+        provenance: "ImagerPixelSpacing (detector plane, not corrected for magnification)",
         warnings,
       });
     }

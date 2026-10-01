@@ -112,7 +112,12 @@ export function ImageInfoPanel({
           </div>
           {info.xaCalibration.tier === "approximate" && (
             <div style={{ textAlign: "right", color: "#d8b25a", fontSize: 11 }}>
-              {t("xa.calib.approximate")}
+              {/* カテーテル校正の勧めは XA/XRF にだけ当てはまる。一般撮影には別の文言を出す。 */}
+              {t(
+                info.modality === "XA" || info.modality === "RF" || info.modality === "XRF"
+                  ? "xa.calib.approximate"
+                  : "xa.calib.approximateRadiography",
+              )}
             </div>
           )}
           {info.xaCalibration.tier === "uncalibrated" && (

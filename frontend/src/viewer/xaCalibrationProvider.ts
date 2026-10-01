@@ -22,6 +22,7 @@
 import { Enums, metaData } from "@cornerstonejs/core";
 import { dsaNativeImageId } from "./dsaLoader";
 import { xaDataSetOf } from "./xaCine";
+import { readUsRegions, resolveUsCalibration } from "./usCalibration";
 import {
   calibrationScaleFor,
   resolveXaCalibration,
@@ -37,6 +38,28 @@ const XA_SOP_CLASSES = new Set([
   "1.2.840.10008.5.1.4.1.1.12.2",
   "1.2.840.10008.5.1.4.1.1.12.2.1",
   "1.2.840.10008.5.1.4.1.1.12.3",
+]);
+
+/**
+ * 一般撮影（CR/DX/MG/IO）。XA と同じ解決連鎖に乗せるが、`generalRadiography` として
+ * `PixelSpacing` 単独をそのまま採り、検出器面の値も近似の mm として採る（{@link resolveXaCalibration}）。
+ */
+const GENERAL_RADIOGRAPHY_SOP_CLASSES = new Set([
+  "1.2.840.10008.5.1.4.1.1.1", // CR
+  "1.2.840.10008.5.1.4.1.1.1.1", // DX for presentation
+  "1.2.840.10008.5.1.4.1.1.1.1.1", // DX for processing
+  "1.2.840.10008.5.1.4.1.1.1.2", // MG for presentation
+  "1.2.840.10008.5.1.4.1.1.1.2.1", // MG for processing
+  "1.2.840.10008.5.1.4.1.1.1.3", // intra-oral for presentation
+  "1.2.840.10008.5.1.4.1.1.1.3.1", // intra-oral for processing
+]);
+
+/** 超音波（単フレーム・マルチフレーム。退役版も含む）。校正は Sequence of Ultrasound Regions から。 */
+const US_SOP_CLASSES = new Set([
+  "1.2.840.10008.5.1.4.1.1.6.1",
+  "1.2.840.10008.5.1.4.1.1.3.1",
+  "1.2.840.10008.5.1.4.1.1.6",
+  "1.2.840.10008.5.1.4.1.1.3",
 ]);
 
 interface MinimalDataSet {
@@ -99,7 +122,13 @@ function calibrationPayloadFor(
   if (calib.mmPerPxRow != null && calib.mmPerPxCol != null) {
     if (calib.source === "user-catheter" || calib.source === "user-ruler") {
       type = CalibrationTypes.USER;
-    } else if (calib.source === "geometric-sid-sod" || calib.source === "geometric-magfactor") {
+    } else if (calib.source === "us-region") {
+      type = CalibrationTypes.REGION;
+    } else if (
+      calib.source === "geometric-sid-sod" ||
+      calib.source === "geometric-magfactor" ||
+      calib.source === "detector-plane-measured"
+    ) {
       // 幾何倍率による近似＝投影補正。
       type = CalibrationTypes.PROJECTION;
     } else {
@@ -144,7 +173,7 @@ export function readXaCalibTags(imageId: string): XaCalibTags | null {
   const ds = dataSetFor(imageId);
   if (!ds) return null;
   const sopClass = ds.string("x00080016");
-  if (!sopClass || !XA_SOP_CLASSES.has(sopClass)) return null;
+  if (!sopClass || !(XA_SOP_CLASSES.has(sopClass) || GENERAL_RADIOGRAPHY_SOP_CLASSES.has(sopClass))) return null;
   return {
     pixelSpacing: readPair(ds, "x00280030"),
     pixelSpacingCalibrationType: ds.string("x00280a02") ?? null,
@@ -178,6 +207,12 @@ export function calibrationForImageId(rawImageId: string): XaCalibration | null 
   const imageId = nativeXaImageId(rawImageId);
   const hit = resolved.get(imageId);
   if (hit !== undefined) return hit;
+  const sop = dataSetFor(imageId)?.string("x00080016") ?? "";
+  if (US_SOP_CLASSES.has(sop)) {
+    const calib = resolveUsCalibration(readUsRegions(dataSetFor(imageId)));
+    resolved.set(imageId, calib);
+    return calib;
+  }
   const tags = readXaCalibTags(imageId);
   if (!tags) {
     // dataSet 未取得の段階では memo しない（プリウォーム後に再解決させる）。
@@ -186,7 +221,9 @@ export function calibrationForImageId(rawImageId: string): XaCalibration | null 
   }
   const ds = dataSetFor(imageId);
   const seriesUid = ds?.string("x0020000e") ?? "";
-  const calib = resolveXaCalibration(tags, userCalibrations.get(seriesUid) ?? null);
+  const calib = resolveXaCalibration(tags, userCalibrations.get(seriesUid) ?? null, {
+    generalRadiography: GENERAL_RADIOGRAPHY_SOP_CLASSES.has(sop),
+  });
   resolved.set(imageId, calib);
   return calib;
 }
@@ -211,6 +248,8 @@ export function registerXaCalibrationProvider(): void {
     if (typeof imageId !== "string") return undefined;
     const calib = calibrationForImageId(imageId);
     if (!calib) return undefined;
+    // CR の PixelSpacing 単独はローダの既定と同じ値。注入せず、ローダの挙動（単位 "mm"）をそのまま残す。
+    if (calib.source === "dicom-pixel-spacing") return undefined;
 
     // 計測ツールの単位（mm / px）はここで決まる。imagePlaneModule の spacing だけでは px にできない。
     if (type === "calibratedPixelSpacing") {
