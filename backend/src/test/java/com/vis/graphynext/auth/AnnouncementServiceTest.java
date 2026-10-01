@@ -35,11 +35,12 @@ class AnnouncementServiceTest {
     private MailingListSubscriberRepository subscribers;
     private AnnouncementDeliveryRepository deliveries;
     private MailerClient mailer;
+    private AuthProperties properties;
     private AnnouncementService service;
 
     @BeforeEach
     void setUp() {
-        AuthProperties properties = new AuthProperties();
+        properties = new AuthProperties();
         properties.setSubscriberDbUrl(
                 "jdbc:h2:mem:announce-" + System.nanoTime() + ";DB_CLOSE_DELAY=-1");
         properties.setPublicBaseUrl("https://demo.example.com");
@@ -159,6 +160,36 @@ class AnnouncementServiceTest {
         assertEquals(3, record.recipientCount());
         assertEquals(1, record.failedCount());
         assertFalse(record.finishedAt() == null, "完了時刻が記録されること");
+    }
+
+    /** Group 宛は購読者とは別に 1 通だけ、個人用の配信停止リンク無しで送ること。 */
+    @Test
+    void deliver_postsOnceToGroupWithoutUnsubscribeLink() {
+        properties.setAnnounceGroupAddress("users@groups.example.com");
+        subscribers.save(new MailingListSubscriber("next@example.com", SubscriptionProduct.all()));
+
+        service.claim(SubscriptionProduct.GRAPHY_NEXT, "0.1.8");
+        service.deliver(SubscriptionProduct.GRAPHY_NEXT, "0.1.8", "https://example.com/releases/v0.1.8");
+
+        assertEquals(List.of("next@example.com", "users@groups.example.com"), sentRecipients());
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(mailer).send(eq("users@groups.example.com"), anyString(), body.capture(), eq(null));
+        assertFalse(body.getValue().contains("/unsubscribe"));
+        assertTrue(body.getValue().contains("https://example.com/releases/v0.1.8"));
+        assertEquals(2, deliveries.find(SubscriptionProduct.GRAPHY_NEXT, "0.1.8").orElseThrow().recipientCount());
+    }
+
+    /** 購読者0件でも Group に投稿したなら送信済みとして残し、次回 Group へ二重投稿しないこと。 */
+    @Test
+    void deliver_withOnlyGroup_keepsTheClaim() {
+        properties.setAnnounceGroupAddress("users@groups.example.com");
+
+        service.claim(SubscriptionProduct.GRAPHY, "0.0.21");
+        service.deliver(SubscriptionProduct.GRAPHY, "0.0.21", null);
+
+        assertEquals(List.of("users@groups.example.com"), sentRecipients());
+        assertEquals(AnnouncementService.Acceptance.ALREADY_SENT,
+                service.claim(SubscriptionProduct.GRAPHY, "0.0.21"));
     }
 
     private List<String> sentRecipients() {

@@ -137,6 +137,19 @@ GRAPHY / GRAPHY-Next の新バージョンを公開したら、登録済みユ�
 > ⚠ **未確認**: cron が別マシン（Windows 機）でも動いていて、そちらに鍵があるなら
 > v0.2.0 の通知は既に出ている可能性がある。判定はデモ機の `ANNOUNCEMENT_DELIVERY` を見るのが確実。
 
+> **2026-10-01 確認**: デモ機の `ANNOUNCEMENT_DELIVERY` は **0 行**（購読者は 9 件）。v0.3.5 まで
+> 一度も配信されていない。cron は別マシンで動いているため、そのマシンで鍵の配置とログの確認が必要。
+
+### Google Group への投稿（2026-10-01 追加）
+
+`GRAPHY_AUTH_ANNOUNCE_GROUP_ADDRESS`（例: `graphy-users@googlegroups.com`）を設定すると、
+購読者への配信と同じタイミングで Group にも 1 通投稿する。
+
+- 本文は購読者向けと同じだが、個人用の配信停止リンクと `List-Unsubscribe` は付けない。
+- 購読者 0 件でも Group に投稿した場合は送信済みとして記録し、claim を解放しない（二重投稿防止）。
+  `RECIPIENT_COUNT` は Group の 1 通を含む。
+- Group 側で差出人（`SMTP_FROM` = customerservices@）の投稿を許可しておくこと。
+
 `graphy-site/auto-deploy.sh`（vis-ionary-web）に組み込んだ。
 
 - **`.deploy-state` とは別に `.announce-state` を持つ**。通知の失敗（デモ停止・ネットワーク）を、

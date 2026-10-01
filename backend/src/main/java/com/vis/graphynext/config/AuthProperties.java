@@ -74,6 +74,12 @@ public class AuthProperties {
      */
     private int announceRatePerMinute = 30;
 
+    /**
+     * 更新通知を購読者とは別に 1 通投稿する Google Group の投稿アドレス（例: graphy-users@googlegroups.com）。
+     * 未設定（null/空）なら投稿しない。Group 側で差出人（SMTP_FROM）の投稿を許可しておくこと。
+     */
+    private String announceGroupAddress;
+
     /** 製品サイトの公開URL。更新通知メール本文のダウンロード導線に使う。 */
     private String siteBaseUrl = "https://graphy.vis-ionary.com";
 
@@ -161,6 +167,14 @@ public class AuthProperties {
 
     public void setAnnounceRatePerMinute(int announceRatePerMinute) {
         this.announceRatePerMinute = announceRatePerMinute;
+    }
+
+    public String getAnnounceGroupAddress() {
+        return announceGroupAddress;
+    }
+
+    public void setAnnounceGroupAddress(String announceGroupAddress) {
+        this.announceGroupAddress = announceGroupAddress;
     }
 
     public String getSiteBaseUrl() {

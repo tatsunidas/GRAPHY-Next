@@ -105,6 +105,7 @@ services:
       # auto-deploy.sh（vis-ionary-web）から叩かれる。/subscribe 用とは別の値にすること。
       GRAPHY_AUTH_ANNOUNCE_API_KEY: ${GRAPHY_AUTH_ANNOUNCE_API_KEY}
       GRAPHY_AUTH_ANNOUNCE_RATE_PER_MINUTE: ${GRAPHY_AUTH_ANNOUNCE_RATE_PER_MINUTE:-30}
+      GRAPHY_AUTH_ANNOUNCE_GROUP_ADDRESS: ${GRAPHY_AUTH_ANNOUNCE_GROUP_ADDRESS:-}
     depends_on:
       - arc
       - mailer

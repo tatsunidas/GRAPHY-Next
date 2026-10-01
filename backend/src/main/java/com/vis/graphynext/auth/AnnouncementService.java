@@ -70,7 +70,9 @@ public class AnnouncementService {
      */
     public void deliver(SubscriptionProduct product, String version, String releaseUrl) {
         List<MailingListSubscriber> recipients = subscriberRepository.findActiveByProduct(product);
-        if (recipients.isEmpty()) {
+        String group = properties.getAnnounceGroupAddress();
+        boolean postToGroup = group != null && !group.isBlank();
+        if (recipients.isEmpty() && !postToGroup) {
             // 宛先0件で履歴を残すと「送信済み」と区別できず、登録者が増えてからの再送ができない。
             deliveryRepository.release(product, version);
             log.info("更新通知: {} {} は宛先0件のため送信しませんでした", product.token(), version);
@@ -80,6 +82,14 @@ public class AnnouncementService {
         long intervalMillis = intervalMillis();
         String subject = subject(product, version);
         int failed = 0;
+
+        if (postToGroup) {
+            // Group は個人の購読ではないので配信停止リンクを付けない（解除は Group 側で行う）。
+            if (!mailerClient.send(group, subject, body(product, version, releaseUrl, null), null).success()) {
+                failed++;
+                log.warn("更新通知: Google Group への投稿に失敗しました");
+            }
+        }
 
         log.info("更新通知: {} {} を {} 件へ送信開始（{} 通/分）",
                 product.token(), version, recipients.size(), properties.getAnnounceRatePerMinute());
@@ -106,9 +116,10 @@ public class AnnouncementService {
             }
         }
 
-        deliveryRepository.complete(product, version, recipients.size(), failed);
+        int total = recipients.size() + (postToGroup ? 1 : 0);
+        deliveryRepository.complete(product, version, total, failed);
         log.info("更新通知: {} {} の送信完了（{} 件中 {} 件失敗）",
-                product.token(), version, recipients.size(), failed);
+                product.token(), version, total, failed);
     }
 
     private long intervalMillis() {
@@ -134,9 +145,11 @@ public class AnnouncementService {
         if (releaseUrl != null && !releaseUrl.isBlank()) {
             sb.append("変更点:\n").append(releaseUrl).append("\n\n");
         }
-        sb.append("――――――\n");
-        sb.append("このメールは、更新のお知らせを希望されたアドレスにお送りしています。\n");
-        sb.append("配信停止:\n").append(unsubscribeUrl).append("\n");
+        if (unsubscribeUrl != null) {
+            sb.append("――――――\n");
+            sb.append("このメールは、更新のお知らせを希望されたアドレスにお送りしています。\n");
+            sb.append("配信停止:\n").append(unsubscribeUrl).append("\n");
+        }
         return sb.toString();
     }
 
