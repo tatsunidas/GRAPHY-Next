@@ -23,6 +23,10 @@
 - [ ] 版数を 6 か所そろえる（`backend/pom.xml`・`package.json`・`desktop/package.json`・`desktop/package-lock.json`・
       `frontend/package.json`・`frontend/package-lock.json`）。前回の `chore(release): x.y.z` と同じ差分になる
 - [ ] main の CI が緑
+- [ ] リリースノートを確かめる: `python3 scripts/release-notes.py vX.Y.Z`（タグを打つ前は `HEAD` を渡す）。
+      前のタグからの main の履歴を **PR タイトル**の `feat:` → 新機能 / `fix:` → バグ修正 / `perf:` → 改善 に振り分け、
+      `docs` `test` `ci` `chore` などは載せない。ワークフローが同じものを Release 本文に付け、製品サイトの
+      お知らせ・RSS・更新通知メールにも流れる。**利用者に見せたい変更は PR タイトルを `feat:` / `fix:` で書く**
 
 ## 2. タグを切ったあと（Release ワークフロー）
 

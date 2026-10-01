@@ -14,8 +14,13 @@ jobs:
   verify-version:
     name: Verify tag == code version
     runs-on: ubuntu-latest
+    outputs:
+      notes: ${{ steps.notes.outputs.notes }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 前のタグからの履歴でリリースノートを作るため、全履歴とタグを取る。
+          fetch-depth: 0
       - name: タグと desktop/frontend/backend の版数を突き合わせる
         shell: bash
         run: |
@@ -38,6 +43,17 @@ jobs:
             exit 1
           fi
           echo "OK: すべての版数がタグ ($tag) と一致しています。"
+      # 新機能／バグ修正などに分けたリリースノート（PR タイトルの feat:/fix: で分類）。
+      # 各ジョブのアップロードで同じ本文を渡すので、どのジョブがリリースを作っても同じになる。
+      - name: リリースノートを作る
+        id: notes
+        shell: bash
+        run: |
+          {
+            echo "notes<<RELEASE_NOTES_EOF"
+            python3 scripts/release-notes.py "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY"
+            echo "RELEASE_NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
 
   # Web 配布物: UI を同梱した実行可能 jar
   web-jar:
@@ -70,7 +86,7 @@ jobs:
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          body: ${{ needs.verify-version.outputs.notes }}
           files: |
             backend/target/graphy-next-backend.jar
             backend/target/graphy-plugin-api-*.jar
@@ -153,7 +169,7 @@ jobs:
       - name: Upload installers
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          body: ${{ needs.verify-version.outputs.notes }}
           files: |
             desktop/dist/*.AppImage
             desktop/dist/*.exe
