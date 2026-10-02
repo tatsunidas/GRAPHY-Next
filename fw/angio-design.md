@@ -5887,6 +5887,9 @@ path インデックスが別の物理位置を指す場合（§8.6 の `centerl
 **決定**: アンギオの**定量解析だけ**を非公開プラグインへ切り出す。表示（2D ビューア・シネ・
 DSA）・**空間校正**・DICOM 書き出しは**本体に残す**。
 
+> 🔁 **2026-09-05 に QFR / IMRangio の置き場として再開した（リポジトリは現役）。**
+> 段 3・段 5（解析 UI の移設・本体からの削除）は未着手のまま。経緯は `fw/angio-plugin-migration.md`。
+>
 > 🔴 **この決定は 2026-09-02 に段 2 で止めた。** リポジトリ `graphy-next-plugin-angio-quant` は
 > 畳み、**G1〜G6 の由来・移行の段取り・実機で踏んだ写し間違いは
 > `fw/angio-plugin-migration.md` に移した**（再開するならそこの段 3 から）。
@@ -5895,7 +5898,7 @@ DSA）・**空間校正**・DICOM 書き出しは**本体に残す**。
 
 | | |
 | :- | :- |
-| リポジトリ | `graphy-next-plugin-angio-quant`（private・**2026-09-02 に削除**） |
+| リポジトリ | `graphy-next-plugin-angio-quant`（private・2026-09-02 に畳んだが **2026-09-05 に QFR の置き場として再開・現役**。削除はされていない） |
 | plugin id | `angio-quant`（H8 の保存領域と導入先ディレクトリの鍵だった） |
 | 正本 | 移設後は `fw/angio-plugin-migration.md` |
 
