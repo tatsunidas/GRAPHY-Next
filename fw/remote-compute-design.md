@@ -1,6 +1,6 @@
 # リモート GPU カーネル（Remote Compute）設計
 
-> 記録開始 2026-10-02。**段 0（この設計書）。コードはまだ無い。**
+> 記録開始 2026-10-02。**段 1（Jupyter クライアント）まで完了**（§10）。段 2 以降は未着手。
 > セキュリティ上の判断の正本は `fw/security.md`。外部 AI の送信経路は `fw/ai-routing-design.md`。
 > ここには**外部の Jupyter カーネルで任意のコードを動かす**という、AI egress より一段強い経路を書く。
 >
@@ -240,3 +240,55 @@ AI egress の同意（`AiEgressConsentDialog`）はレンダラが描く。こ�
 - 公開範囲についての保守者の回答: https://github.com/googlecolab/colab-mcp/discussions/41
 - Colab ToS: https://research.google.com/colaboratory/tos_v5.html ・ FAQ: https://research.google.com/colaboratory/faq.html
 - Google Cloud HIPAA 対象サービス: https://docs.cloud.google.com/docs/security/compliance/hipaa
+
+---
+
+## 10. 段 1 でやったこと（2026-10-02）
+
+### 入れたもの（`backend/src/main/java/com/vis/graphynext/compute/`）
+
+| ファイル | 中身 |
+|---|---|
+| `JupyterEndpoint` | 接続先（URL＋トークン）。https 必須・平文 http は loopback／プライベート IP だけ（名前解決しない）。URL にトークン・クエリ・認証情報を入れさせない。`toString` に鍵を出さない |
+| `JupyterServerClient` | REST: `status` / `kernelSpecs` / `startKernel` / `kernel` / `interruptKernel` / `shutdownKernel` / `mkdirs` / `upload`（8MB ごとに `chunk` で分割）/ `download`（上限 512MB）/ `list` / `delete`（中身ごと）。**リダイレクトは追わない** |
+| `KernelChannel` | カーネルの WebSocket（サブプロトコル無しの JSON）。`awaitReady`（`kernel_info_request` を返事が来るまで送り直す）・`execute`。1 メッセージ 64M 文字で打ち切る |
+| `ExecutionCollector` / `ExecutionResult` | 1 回の実行の stdout / stderr / 出力 / エラーを集める。stdout・stderr は各 100 万文字まで |
+| `KernelMessages` | メッセージ v5.3 の組み立て。`allow_stdin=false`・`store_history=false` |
+
+Spring の bean にはまだしていない（段 2 で接続先の登録・トークンの受け渡しと一緒に公開する）。
+`ComputeProvider`（SPI）も段 9（Colab）で 2 つ目の実装が来るときに切り出す——実装が 1 つのうちに
+抽象を決めると、Colab の都合（ランタイムの確保・トークンの更新）を外す。
+
+### テスト（25/0）
+
+- 単体: `JupyterEndpointTest`（6）・`ExecutionCollectorTest`（6）・`JupyterServerClientTest`（7、`com.sun.net.httpserver` の偽サーバ）
+- 結合: `JupyterServerIntegrationTest`（6）。本物の jupyter_server を起動して、実行・エラー・`input()` の拒否・
+  **16MB 超のアップロード（分割）→ カーネルで SHA-256 → 結果のダウンロード**・中断・カーネル情報を確かめる。
+  環境変数 `GRAPHY_JUPYTER_PYTHON` があるときだけ動く（開発機は anaconda の python、jupyter_server 2.10）。
+
+```bash
+cd backend && GRAPHY_JUPYTER_PYTHON='C:\Users\t_kob\anaconda3\python.exe' \
+  mvn -q -Dfrontend.skip=true -Dtest='com.vis.graphynext.compute.*Test' -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+### 🔴 実測で分かったこと
+
+1. **カーネルは `path` を渡さないとサーバのプロセスの作業フォルダで起動する。** アップロードしたファイルが
+   相対パスで見えない（`FileNotFoundError`）。`startKernel` は必ず `"path": ""`（Contents の根）を渡す。
+2. **Windows のカーネルは長い 1 回の待ち（`time.sleep(120)`）を中断できない。** 中断は `interrupt_main()` で
+   伝わるので、待ちが明けてから `KeyboardInterrupt` になる。Linux（Colab・GPU 機）は SIGINT で即座に抜ける。
+   → 段 5 の取消は「interrupt → 一定時間で応答が無ければ shutdown」にする。
+3. **`stop_on_error=true` だと、エラーになった実行の後ろに並んでいた実行は `aborted` で返る。**
+   ジョブ型では 1 ジョブ 1 実行なので問題ないが、セッション型（H60）では利用者に見える形で返す。
+4. **Contents API は中身のあるフォルダを消せない（400）。** `delete` は中から順に消す。
+
+### 段 2 へ持ち越すもの
+
+- bean 化・接続先の登録（main）・トークンの受け渡し（`GRAPHY_MAIN_SECRET`）・接続テストの口
+- Contents API の 1 回あたりの上限とスループットの実測（今は 8MB 分割で 16MB 超が通ることだけ確かめた）
+
+### ⚠ 既存の失敗（今回の変更とは無関係）
+
+この機の `mvn test` 全体では 4 クラスが落ちる: Mockito を使う 3 クラス（`AnonymizePreflightTest` /
+`AnonymizeBurnScopeTest` / `AnnouncementServiceTest`。**JDK 25 で Mockito が動かない**——この機には JDK 21 が無い）と、
+`VideoRenderServiceTest.ensureRendered_servesMp4PayloadAsIsWithoutFfmpeg`（7877 / 7878 バイトの 1 バイト差）。
