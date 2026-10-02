@@ -17,7 +17,7 @@
   "build": {
     "appId": "com.vis.graphynext",
     "productName": "GRAPHY-Next",
-    "files": ["main.js", "preload.js", "windowState.js", "windowGeometry.js", "splash.html", "splash-preload.js", "startupMessages.js", "secretStore.js", "aiGateway.js", "aiHttp.js", "aiProviders.js", "computeEndpoints.js", "computeBridge.js", "aiAdapters/*.js", "!**/*.test.js", "config.json", "renderer/**"],
+    "files": ["main.js", "preload.js", "windowState.js", "windowGeometry.js", "splash.html", "splash-preload.js", "startupMessages.js", "secretStore.js", "aiGateway.js", "aiHttp.js", "aiProviders.js", "computeEndpoints.js", "computeBridge.js", "computeConsent.js", "computeConsent-preload.js", "computeConsent.html", "computeConsent-view.js", "aiAdapters/*.js", "!**/*.test.js", "config.json", "renderer/**"],
     "extraResources": [
       { "from": "resources/backend", "to": "backend" },
       { "from": "resources/jre", "to": "jre" },

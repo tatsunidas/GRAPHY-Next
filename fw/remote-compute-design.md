@@ -1,6 +1,6 @@
 # リモート GPU カーネル（Remote Compute）設計
 
-> 記録開始 2026-10-02。**段 3（匿名化したデータセット）まで完了**（§10〜§12）。段 4 以降は未着手。
+> 記録開始 2026-10-02。**段 4（送る前の同意・監査ログ）まで完了**（§10〜§13）。段 5 以降は未着手。
 > セキュリティ上の判断の正本は `fw/security.md`。外部 AI の送信経路は `fw/ai-routing-design.md`。
 > ここには**外部の Jupyter カーネルで任意のコードを動かす**という、AI egress より一段強い経路を書く。
 >
@@ -397,3 +397,54 @@ cd backend && mvn -q -Dfrontend.skip=true "-Djvm=C:\Users\t_kob\AppData\Local\Pr
   計算機側で検査をまたいで突き合わせる用途が出たら足す。
 - 多フレームが複数あるシリーズ・カラー・Big Endian は npz にしない（dicom-zip なら送れる。理由のコードを返す）。
 - データセットを作る口（REST / Host API）はまだ無い。段 4（同意・監査）・段 5（H59）でつなぐ。
+
+---
+
+## 13. 段 4 でやったこと（2026-10-02）— 送る前の同意と監査ログ
+
+### 再利用したもの・しなかったもの
+
+| 既存 | 扱い |
+|---|---|
+| スプラッシュの窓の作り方（main が作る・専用の html と preload・sandbox） | **同意の窓に流用**（`computeConsent.js` / `computeConsent.html` / `computeConsent-preload.js` / `computeConsent-view.js`） |
+| 外部 AI の同意の規則（送るものを送る形のまま見せる・確認のチェックまで送信を押せない） | **そのまま採用**。見せるのは宛先・データ（種類・枚数・形式・大きさ・塗った枚数・SHA-256）・**コードの全文** |
+| 段 2 の内部経路（`MainChannelFilter`・`computeBridge`） | 同意の内容の取り直しと決定の返却に使う |
+| 段 3 の `ComputeDatasetService` | 要求を作るときにデータセットを作る（既存の匿名化を通る） |
+| `PluginRegistry.manifests()` の `permissions` | `remote-compute` を **backend で**確かめる |
+| 外部 AI の同意の**画面**（`AiEgressConsentDialog`） | **使わなかった。** レンダラが描くので、同じ realm に居るプラグインから迂回・偽装できる。任意のコードが外で動く経路には弱い |
+| 外部 AI の監査（レンダラのログに 1 行） | **使わなかった。** 後から辿れないので、ファイルに残す `ComputeAuditLog` を足した |
+
+### 新しく書いたもの
+
+| ファイル | 中身 |
+|---|---|
+| `compute/CodeInspector` | コードの長さ（ジョブ 64KB）・base64 らしい連なり（200 字以上）・数字の並び（400 字以上）の合計が 4KB を超えたら `code-embedded-data`。§5.1 の残るリスクの抑え |
+| `compute/ComputeEgressService` | 要求（宛先・データセットの要約・コード・内容のハッシュ）を確定 → main が取り直して聞く → **見せた内容のハッシュ付きでのみ承認** → 送る直前に `consume`（承認済み・5 分以内・データが残っている・**1 回きり**）。拒否・期限切れでデータセットを消す |
+| `compute/ComputeAuditLog` | `<dataDir>/compute-audit.jsonl` に追記。要求・承認・拒否・期限切れ・使用・弾いた要求（権限なし・コード・宛先）。**患者名・ID・元の UID・コード全文・トークン・ファイルの場所は残さない**（コードは SHA-256 と先頭 200 字） |
+| `compute/ComputeEgressController` | `POST /api/plugins/{id}/compute/egress`（standalone）。権限なし 403・コード／宛先は匿名化の前に弾く・データセットを作って要求を返す。**何も送らない** |
+| `ComputeInternalController` に 2 本 | `GET /api/internal/compute/egress/{id}`（main が内容を取り直す）・`POST …/{id}/decision` |
+| desktop `main.js` | IPC `graphy:compute-confirm(requestId)`。**レンダラが渡せるのは id だけ**。同時に開く同意の窓は 1 つ。4.5 分で自動的に取り消す |
+| desktop `packagedFiles.js` | 🔴 **`require` 以外で読むファイル（`path.join(__dirname, "x.html")` の loadFile・preload・html の `<script src>`）もたどるようにした。** 同意の窓の html / preload は require されないので、従来の検査では載せ忘れに気付けなかった（v0.3.0〜0.3.2 の起動不能と同じ種類の事故） |
+
+### テスト
+
+- backend: `ComputeEgressServiceTest` 9（1 回きり・ハッシュ違い・拒否でデータ削除・期限・弾く要求・監査の中身・早期の拒否も監査・内容ハッシュ・コード検査）。compute 全体 58/0。**全体 733/734**（失敗は既存の動画テスト）
+- desktop 172/0（`packagedFiles` に html・preload・view を足した）・frontend typecheck OK
+- **実機 21/0**（`automator/src/spike/computeEgressCheck.ts`・本物の CT 43 枚を匿名化した npz 13.1MB）:
+  未宣言 403／埋め込みコード 422／同意は main の窓で出て URL・コード全文・SHA-256 が出る／チェックまで送信不可／
+  送信→approved・取り消し→not approved／決定済みは二度と聞かない／**レンダラからの承認の偽造は弾かれる**／
+  監査ログに弾いた要求・要求 3 件・承認・拒否が残り、患者名・ID・元のシリーズ UID・コード全文が入らない
+
+```bash
+cd automator && npx tsx src/spike/computeEgressCheck.ts
+```
+
+### 判断したこと
+
+- **同意は毎回聞く**（「このセッションは聞かない」を用意しない）。外部 AI は同じシリーズなら省略できるが、こちらはコードが毎回違いうる。
+- 監査ログは backend の CWD（＝データの置き場）に置く。main ではなく backend にしたのは、要求の作成・承認・使用がすべて backend を通るため（1 か所で漏れなく書ける）。
+
+### 段 5 へ持ち越すもの
+
+- H59 `compute.runJob`: 要求を作る → `compute:confirm` → 承認されたら `consume` → アップロード → 実行 → 結果の回収（`PluginJobService` に乗せる）
+- `egress-consumed` の後に「実際に送った・実行した・結果」の行を足す

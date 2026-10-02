@@ -49,6 +49,21 @@ function walk(entry, seen) {
     if (target.endsWith(".js")) walk(target, seen);
     else seen.add(target);
   }
+  // require 以外で読むファイル: `path.join(__dirname, "x.html")` の loadFile や preload の指定
+  // （2026-10-02: 同意画面の html / preload は require されないので、ここを見ないと載せ忘れに気付けない）。
+  // 引数 1 つの字句だけを見る（"..", "renderer", … のように組み立てるものは開発用や別の検査の担当）。
+  for (const m of src.matchAll(/path\.join\(\s*__dirname\s*,\s*["']([^"'/\\]+\.(?:js|html))["']\s*\)/g)) {
+    if (m[1].endsWith(".js")) walk(m[1], seen);
+    else walkHtml(m[1], seen);
+  }
+}
+
+/** html と、そこから `<script src="…">` で読む手元の js。 */
+function walkHtml(entry, seen) {
+  if (seen.has(entry)) return;
+  seen.add(entry);
+  const src = fs.readFileSync(path.join(root, entry), "utf8");
+  for (const m of src.matchAll(/<script\s+src=["']([^"':]+\.js)["']/g)) walk(m[1], seen);
 }
 
 /** 起動に要る手元のファイル（posix の相対パス）。 */

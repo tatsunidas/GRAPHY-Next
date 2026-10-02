@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -34,10 +35,13 @@ public class ComputeInternalController {
 
     private final ComputeEndpointRegistry registry;
     private final ComputeConnectionTester tester;
+    private final ComputeEgressService egress;
 
-    public ComputeInternalController(ComputeEndpointRegistry registry, ComputeConnectionTester tester) {
+    public ComputeInternalController(ComputeEndpointRegistry registry, ComputeConnectionTester tester,
+                                     ComputeEgressService egress) {
         this.registry = registry;
         this.tester = tester;
+        this.egress = egress;
     }
 
     public record EndpointsBody(List<ComputeEndpointRegistry.Incoming> endpoints) {
@@ -55,6 +59,26 @@ public class ComputeInternalController {
         log.info("[compute] endpoints registered: {}", registry.all().stream()
                 .map(e -> e.id() + "=" + e.endpoint().base().getHost()).toList());
         return ResponseEntity.ok(Map.of("ok", true, "count", registry.all().size()));
+    }
+
+    /**
+     * 同意画面に出す全文（main が自分で取り直す。レンダラが渡した内容は使わない）。
+     * 期限切れ・決定済みなら 404。
+     */
+    @GetMapping("/egress/{id}")
+    public ResponseEntity<ComputeEgressService.EgressRequest> egressDetail(@PathVariable String id) {
+        return egress.detail(id).map(ResponseEntity::ok).orElse(ResponseEntity.notFound().build());
+    }
+
+    public record DecisionBody(boolean approve, String contentHash) {
+    }
+
+    /** main の同意画面の結果。承認は見せた内容のハッシュと一致するときだけ通る。 */
+    @PostMapping("/egress/{id}/decision")
+    public ResponseEntity<Map<String, Object>> egressDecision(@PathVariable String id, @RequestBody DecisionBody body) {
+        return egress.decide(id, body != null && body.approve(), body == null ? null : body.contentHash())
+                .<ResponseEntity<Map<String, Object>>>map(s -> ResponseEntity.ok(Map.of("ok", true, "status", s.name())))
+                .orElse(ResponseEntity.status(409).body(Map.of("ok", false, "error", "not-pending-or-changed")));
     }
 
     /** 接続テスト。実行するコードは {@link ComputeConnectionTester#PROBE} の定数だけ。 */

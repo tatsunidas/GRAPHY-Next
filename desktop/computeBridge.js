@@ -88,4 +88,17 @@ async function testEndpoint(id) {
   };
 }
 
-module.exports = { createSecret, init, enabled, pushEndpoints, testEndpoint };
+/** 同意画面に出す内容（backend が確定したもの）を取り直す。レンダラが渡した内容は使わない。 */
+async function getEgress(id) {
+  return call("GET", `/api/internal/compute/egress/${encodeURIComponent(id)}`);
+}
+
+/** 同意画面の結果を返す。承認は見せた内容のハッシュを添える（backend が今の内容と突き合わせる）。 */
+async function decideEgress(id, approve, contentHash) {
+  return call("POST", `/api/internal/compute/egress/${encodeURIComponent(id)}/decision`, {
+    approve: approve === true,
+    contentHash: approve ? contentHash : null,
+  });
+}
+
+module.exports = { createSecret, init, enabled, pushEndpoints, testEndpoint, getEgress, decideEgress };

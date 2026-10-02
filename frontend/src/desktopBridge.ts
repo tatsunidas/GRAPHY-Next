@@ -276,6 +276,13 @@ export interface GraphyDesktop {
     Promise<{ ok: boolean; problems: string[]; canceled?: boolean }>;
   /** 接続テスト。**渡せるのは id だけ**——実行するコードは backend の定数。 */
   computeTestConnection?: (id: string) => Promise<ComputeTestResult>;
+  /**
+   * 外部の計算機へ送る前の同意。**渡せるのは要求の id だけ**——見せる内容（宛先・データ・コード全文）は
+   * main が backend から取り直し、main の窓で聞く（プラグインからは迂回できない）。
+   */
+  computeConfirm?: (requestId: string) => Promise<
+    { ok: true; approved: boolean } | { ok: false; error: string }
+  >;
   /** 名前を付けて保存（OS ダイアログ）。**上書き確認は OS が出す。** */
   saveFile?: (payload: {
     defaultName: string;

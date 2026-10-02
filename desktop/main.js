@@ -32,6 +32,7 @@ const aiGateway = require("./aiGateway");
 const aiProviders = require("./aiProviders");
 const computeEndpoints = require("./computeEndpoints");
 const computeBridge = require("./computeBridge");
+const computeConsent = require("./computeConsent");
 
 const PORT = process.env.GRAPHY_BACKEND_PORT || String(cfg.backend.port);
 const PROFILE = process.env.GRAPHY_BACKEND_PROFILE || cfg.backend.profile;
@@ -1151,6 +1152,29 @@ ipcMain.handle("graphy:compute-test-connection", async (_e, id) => {
   if (!computeEndpoints.byId(String(id || ""))) return { ok: false, stage: "bridge", error: "unknown-endpoint" };
   await pushComputeEndpoints(); // backend が再起動していても最新を入れてから試す
   return computeBridge.testEndpoint(String(id));
+});
+
+/**
+ * 外部の計算機へ送る前の同意（fw/remote-compute-design.md §4.2）。
+ *
+ * <p>🔴 **レンダラが渡せるのは要求の id だけ。** 見せる内容（宛先・データ・コード全文）は main が backend から
+ * 取り直し、main の窓（computeConsent）で聞く。承認は見せた内容のハッシュ付きで backend へ返す。
+ * 同時に開く同意画面は 1 つだけ（プラグインが要求を連打しても窓が積み上がらない）。
+ */
+ipcMain.handle("graphy:compute-confirm", async (e, requestId) => {
+  if (!computeBridge.enabled()) return { ok: false, error: "main-channel-disabled" };
+  const id = String(requestId || "");
+  if (!/^egr_[0-9a-f-]{36}$/.test(id)) return { ok: false, error: "bad-request-id" };
+  if (computeConsent.busy()) return { ok: false, error: "consent-busy" };
+  const d = await computeBridge.getEgress(id);
+  if (!d.ok || !d.body) return { ok: false, error: "not-pending" };
+  const parent = BrowserWindow.fromWebContents(e.sender);
+  const locale = String(app.getLocale() || "").startsWith("ja") ? "ja" : "en";
+  const approve = await computeConsent.ask(parent, d.body, locale);
+  const r = await computeBridge.decideEgress(id, approve, d.body.contentHash);
+  console.log(`[compute] consent ${id} plugin=${d.body.pluginId} endpoint=${d.body.endpointId} approve=${approve} ok=${r.ok}`);
+  if (!approve) return { ok: true, approved: false };
+  return r.ok ? { ok: true, approved: true } : { ok: false, error: "decision-rejected" };
 });
 
 // 名前を付けて保存。OS ネイティブのダイアログを使うので、**同名ファイルの上書き確認は

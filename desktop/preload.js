@@ -68,6 +68,8 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   computeEndpointsValidate: (cfg) => ipcRenderer.invoke("graphy:compute-endpoints-validate", cfg),
   // 接続テスト。渡せるのは id だけ（実行するコードは backend の定数）
   computeTestConnection: (id) => ipcRenderer.invoke("graphy:compute-test-connection", id),
+  // 送る前の同意。渡せるのは要求の id だけ（見せる内容は main が backend から取り直し、main の窓で聞く）
+  computeConfirm: (requestId) => ipcRenderer.invoke("graphy:compute-confirm", requestId),
   // 名前を付けて保存。上書き確認は OS のダイアログが出す。
   saveFile: (payload) => ipcRenderer.invoke("graphy:save-file", payload),
   // 開くダイアログ（プラグインの H43 file.pickFiles）。ファイルだけ。選んだ絶対パスを返す。
