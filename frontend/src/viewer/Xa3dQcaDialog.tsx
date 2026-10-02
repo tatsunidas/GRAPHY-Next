@@ -22,6 +22,7 @@ import { desktop } from "../desktopBridge";
 import { publishAnalysisResult } from "../report/analysisResultStore";
 import { qca3dRecord } from "../report/xaAnalysisRecords";
 import { writeGeometry3dContext } from "../viewer3d/geometry3dContext";
+import { useXa3dPluginItems } from "../plugins/xa3dPluginItems";
 import { buildQca3dVesselModel } from "./xaVesselModelBuild";
 import { registerVesselModel } from "./xaVesselModelStore";
 import { useI18n } from "../i18n/i18n";
@@ -75,6 +76,8 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
    * 逆向き、という一番気付けない状態になる。
    */
   const [proximalEnd, setProximalEnd] = useState<"start" | "end" | null>(null);
+  /** H63: このダイアログから呼べるプラグイン（面 `viewer2d.xa3d`）。 */
+  const pluginItems = useXa3dPluginItems();
 
   // 🚨 鍵は runKey（同じフレームでも解析区間が違えば別の登録・§21.4 の分岐部で必要になった）。
   const runA = runs.find((r) => r.runKey === keyA) ?? null;
@@ -594,6 +597,18 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
                   </button>
                   <span style={faint}>{t("xa3d.open3dHint")}</span>
                 </div>
+                {/* H63: 再構成を見ながら外部の解析（QFR など）を掛ける。**ダイアログは閉じない。**
+                    プラグインの窓はこのダイアログより上に出る（z-index 8000 > 1000）。 */}
+                {vesselModel && pluginItems.length > 0 ? (
+                  <div style={row} data-testid="xa3d-plugins">
+                    {pluginItems.map((p) => (
+                      <button key={p.id} style={btn} data-testid={`xa3d-plugin-${p.id}`} onClick={p.onClick}>
+                        {p.label}
+                      </button>
+                    ))}
+                    <span style={faint}>{t("xa3d.pluginsHint")}</span>
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </div>

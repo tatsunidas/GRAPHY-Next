@@ -1695,6 +1695,7 @@ export const ja: Record<string, string> = {
   "xa3d.stenosisNote": "参照径は 2D QCA と同じ当てはめ（狭窄側を捨てる反復 1 次回帰）です。半値法の系統誤差が一律の倍率である限り、狭窄率は比なので打ち消されます（MLD/RVD の絶対値には残ります）。実際には倍率が半径に依存するぶんだけ残ります。",
   "xa3d.open3d": "3D ビューアで開く",
   "xa3d.open3dHint": "中心線を 3D ウィンドウで回して確認できます（ボリュームは無いので W/L・プリセット・断面は出ません）。",
+  "xa3d.pluginsHint": "このダイアログを開いたまま、再構成した血管に外部の解析を掛けます（プラグイン）。",
   "xa3d.proximal": "近位端",
   "xa3d.proximal.unset": "未確認",
   "xa3d.proximal.start": "始点 S が近位",

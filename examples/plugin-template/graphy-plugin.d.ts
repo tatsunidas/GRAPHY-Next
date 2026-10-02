@@ -17,15 +17,21 @@
  * `viewer2d.menu`（＝「プラグイン」メニュー）とは**出る場所だけ**が違い、host の中身は同一。
  * 本体の解析機能と並ぶ位置なので、**本体が区切り線と「（プラグイン）」の印を付ける**
  * — プラグイン側で名前に「プラグイン」と入れる必要はない（二重に出る）。
+ *
+ * <p>`viewer2d.xa3d` は **3D QCA のダイアログの中**にボタンとして出す（**H63・0.3.6 以降**）。
+ * ダイアログは全画面の背景を持ちメニューを押せないので、「再構成を見ながら解析を掛ける」
+ * （QFR など）にはこの面が要る。押してもダイアログは閉じない。host の中身は `viewer2d.menu` と同一。
+ * 旧本体はこの面を知らないだけで、宣言しても害は無い（`contributes` で絞るだけ）。
  */
 export type PluginSurface =
   | "viewer2d.menu"
   | "viewer2d.menu.analysis"
   | "viewer2d.toolbar"
+  | "viewer2d.xa3d"
   | "mainscreen.menu";
 
 /** 2D Viewer 系サーフェス（host の形が同じもの）。 */
-export type Viewer2DSurface = "viewer2d.menu" | "viewer2d.menu.analysis" | "viewer2d.toolbar";
+export type Viewer2DSurface = "viewer2d.menu" | "viewer2d.menu.analysis" | "viewer2d.toolbar" | "viewer2d.xa3d";
 
 /**
  * 2D Viewer プラグインから使える表示中タイルへの操作（安定サブセット）。

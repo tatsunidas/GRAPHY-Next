@@ -1706,6 +1706,7 @@ export const en: Record<string, string> = {
   "xa3d.stenosisNote": "The reference diameter uses the same fit as 2D QCA (iterative linear regression that discards the stenotic side). As long as the half-maximum bias is a uniform factor it cancels in the ratio, so percent stenosis is unaffected while absolute MLD/RVD are. In practice a residual remains because the factor depends on radius.",
   "xa3d.open3d": "Open in 3D viewer",
   "xa3d.open3dHint": "Rotate the centerline in a 3D window (no volume, so no W/L, presets or cross-sections).",
+  "xa3d.pluginsHint": "Run an external analysis (plugin) on the reconstructed vessel without closing this dialog.",
   "xa3d.proximal": "Proximal end",
   "xa3d.proximal.unset": "Not confirmed",
   "xa3d.proximal.start": "Start S is proximal",
