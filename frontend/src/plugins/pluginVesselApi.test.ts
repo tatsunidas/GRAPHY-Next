@@ -31,6 +31,8 @@ const PRODUCER = { id: "acme.ffr", name: "ACME FFR", version: "1.2.0" };
 function makeModel(over: Partial<XaVesselModel> = {}): XaVesselModel {
   return {
     runId: "xa-qca3d:a|b",
+    stableKey: "xa-qca3d:1.2.3.4.1@0#1,1-9,9|1.2.3.5.1@0#2,2-8,8",
+    orientation: { proximalFirst: true, source: "user" },
     kind: "xa-qca3d",
     label: "3D QCA",
     segments: [
@@ -63,6 +65,7 @@ function makeModel(over: Partial<XaVesselModel> = {}): XaVesselModel {
       visibleFractions: [0.9, 0.88],
       anchorReprojectionPx: 0.8,
       separationDeg: 62,
+      frameIndices: [0, 0],
     },
     at: 1000,
     ...over,
@@ -120,6 +123,17 @@ describe("H11 getVesselModel / listVesselModels", () => {
   it("要約の tier は最も弱い方向に合わせる", () => {
     const m = makeModel({ calibration: { ...makeModel().calibration, tiers: ["calibrated", "approximate"] } });
     expect(summarizeVesselModel(m).tier).toBe("approximate");
+  });
+
+  it("H62: 安定した鍵と向きの確認を一覧にも出す（選ぶ前に保存の有無・向きを判断できる）", () => {
+    const s = summarizeVesselModel(makeModel());
+    expect(s.stableKey).toBe("xa-qca3d:1.2.3.4.1@0#1,1-9,9|1.2.3.5.1@0#2,2-8,8");
+    expect(s.proximalFirst).toBe(true);
+    const u = summarizeVesselModel(
+      makeModel({ stableKey: null, orientation: { proximalFirst: null, source: null } }),
+    );
+    expect(u.stableKey).toBeNull();
+    expect(u.proximalFirst).toBeNull();
   });
 });
 

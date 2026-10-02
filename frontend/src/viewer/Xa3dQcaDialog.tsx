@@ -69,6 +69,12 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
+  /**
+   * 利用者が選んだ近位端（H62・G9）。null は未確認。
+   * 🔴 **既定で "start" にしない。** 描いた順を近位→遠位と推測すると、旗が立っているのに
+   * 逆向き、という一番気付けない状態になる。
+   */
+  const [proximalEnd, setProximalEnd] = useState<"start" | "end" | null>(null);
 
   // 🚨 鍵は runKey（同じフレームでも解析区間が違えば別の登録・§21.4 の分岐部で必要になった）。
   const runA = runs.find((r) => r.runKey === keyA) ?? null;
@@ -113,9 +119,10 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
             diameterMethod,
             separationDeg,
             label: `3D QCA — ${runA.label} / ${runB.label}`,
+            proximalEnd,
           })
         : null,
-    [runA, runB, result, profile, refinement, diameterMethod, separationDeg],
+    [runA, runB, result, profile, refinement, diameterMethod, separationDeg, proximalEnd],
   );
 
   useEffect(() => {
@@ -146,6 +153,7 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
     setStenosis(null);
     setSaved(null);
     setError(null);
+    setProximalEnd(null);
   };
 
   const pickView = (side: "a" | "b", key: string) => {
@@ -496,6 +504,32 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
                   diameterMethod={diameterMethod}
                 />
               ) : null}
+              {result?.acceptable ? (
+                <>
+                  <div style={row} data-testid="xa3d-proximal">
+                    <span style={metric}>{t("xa3d.proximal")}</span>
+                    {(
+                      [
+                        [null, "xa3d.proximal.unset", "unset"],
+                        ["start", "xa3d.proximal.start", "start"],
+                        ["end", "xa3d.proximal.end", "end"],
+                      ] as const
+                    ).map(([v, key, id]) => (
+                      <label key={id} style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
+                        <input
+                          type="radio"
+                          name="xa3d-proximal"
+                          data-testid={`xa3d-proximal-${id}`}
+                          checked={proximalEnd === v}
+                          onChange={() => setProximalEnd(v)}
+                        />
+                        {t(key)}
+                      </label>
+                    ))}
+                  </div>
+                  <div style={hint}>{t("xa3d.proximal.hint")}</div>
+                </>
+              ) : null}
             </div>
 
             {/* ── 保存 ─────────────────────────────────────── */}
@@ -531,7 +565,14 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
                         name: `3D QCA — ${runA?.label ?? ""} / ${runB?.label ?? ""}`,
                         // 解析値（H12）の宛先。これが無いと 3D 側は色を乗せる相手が分からない。
                         runId: vesselModel?.runId,
-                        centerlineLps: result.points.map((p) => [p[0], p[1], p[2]]),
+                        // 🔴 **モデルの点列を渡す。** H12 の色は `model.segments[0].points` の添字で
+                        // 塗られるので、近位端を「終点」にして反転したモデルに元の点列を描くと
+                        // 色が前後逆に乗る（狭窄の色が反対側に出る）。
+                        centerlineLps: (vesselModel?.segments[0]?.points ?? result.points).map((p) => [
+                          p[0],
+                          p[1],
+                          p[2],
+                        ]),
                         info: {
                           lengthMm: result.lengthMm,
                           percentDiameterStenosis: stenosis?.percentDiameterStenosis,
@@ -826,9 +867,17 @@ function CenterlineCanvas({
     >
       <polyline points={pts.map((p) => toScreen(p).join(",")).join(" ")} fill="none" stroke="#2f6f9f" strokeWidth={1.6} />
       {/* 端点は常にアンカー。丸で明示する（「勝手に使われている」状態にしない）。 */}
+      {/* 始点 S / 終点 E を書く。近位端の選択（H62）はこの文字で指す。 */}
       {[0, pts.length - 1].map((i) => {
         const s = toScreen(pts[i]);
-        return <circle key={`end-${i}`} cx={s[0]} cy={s[1]} r={4} fill="none" stroke="#3f8f6f" strokeWidth={1.6} />;
+        return (
+          <g key={`end-${i}`}>
+            <circle cx={s[0]} cy={s[1]} r={4} fill="none" stroke="#3f8f6f" strokeWidth={1.6} />
+            <text x={s[0] + 6} y={s[1] + 12} fontSize={10} fontWeight={700} fill="#3f8f6f">
+              {i === 0 ? "S" : "E"}
+            </text>
+          </g>
+        );
       })}
       {anchors.map((i, k) => {
         const s = toScreen(pts[i] ?? pts[0]);
