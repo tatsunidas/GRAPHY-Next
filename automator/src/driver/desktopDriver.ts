@@ -1,6 +1,7 @@
 import { _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
 import { createRequire } from "node:module";
 import { spawn, type ChildProcess } from "node:child_process";
+import crypto from "node:crypto";
 import path from "node:path";
 import fs from "node:fs";
 
@@ -69,6 +70,9 @@ export class DesktopDriver implements Driver {
 
     const dataDir = DESKTOP_RUN_DATA_DIR;
     fs.mkdirSync(dataDir, { recursive: true });
+    // backend を Electron とは別に起動するので、main だけが使う内部経路（/api/internal/**）の
+    // 乱数を両方へ同じ値で渡す（本番は main が backend を spawn するときに渡す。fw/remote-compute-design.md §4.1）。
+    const mainSecret = crypto.randomBytes(32).toString("hex");
 
     this.backendProc = spawn(
       "java",
@@ -83,7 +87,7 @@ export class DesktopDriver implements Driver {
         stdio: ["ignore", "pipe", "pipe"],
         // reset エンドポイント(/api/automator/reset)を有効化。automator が spawn する backend には
         // 常にこれを設定する（本物の standalone インストーラ起動では絶対に設定してはならない）。
-        env: { ...process.env, GRAPHY_AUTOMATOR: "1" },
+        env: { ...process.env, GRAPHY_AUTOMATOR: "1", GRAPHY_MAIN_SECRET: mainSecret },
       },
     );
     this.backendProc.stdout?.on("data", () => {});
@@ -114,6 +118,7 @@ export class DesktopDriver implements Driver {
         GRAPHY_BACKEND_EXTERNAL: "1",
         GRAPHY_BACKEND_PORT: String(this.ports.http),
         GRAPHY_DEV_SERVER_URL: `http://localhost:${this.ports.vite}`,
+        GRAPHY_MAIN_SECRET: mainSecret,
       },
     });
 

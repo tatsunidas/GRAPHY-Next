@@ -4,10 +4,8 @@
  */
 package com.vis.graphynext.compute;
 
-import java.net.InetAddress;
 import java.net.URI;
 import java.net.URLEncoder;
-import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
@@ -91,31 +89,40 @@ public record JupyterEndpoint(URI base, String token) {
     }
 
     /**
-     * 平文 http を許す宛先か。名前解決はしない（DNS の答えで規則が変わるのを避ける）——
-     * IP リテラルか {@code localhost} だけを見る。
+     * 平文 http を許す宛先か。
+     *
+     * <p>🔴 <b>{@code desktop/aiProviders.js} の {@code allowsPlainHttp} と同じ規則にする</b>
+     * （接続先は main が検査してから backend へ渡す。規則がずれると「設定画面では通るのに
+     * backend で弾かれる」になる）。許すのは: ループバック・RFC1918・単一ラベル名（社内名）・
+     * {@code .local} {@code .internal} {@code .lan} {@code .home.arpa}・{@code .localhost}。
+     * IPv6 は {@code ::1} だけ。公開 IP とそれ以外の名前は許さない。名前解決はしない。
      */
     static boolean allowsPlainHttp(String host) {
         String h = host.toLowerCase(Locale.ROOT);
         if (h.startsWith("[") && h.endsWith("]")) {
             h = h.substring(1, h.length() - 1);
         }
-        if (h.equals("localhost")) {
-            return true;
-        }
-        if (!h.matches("[0-9.]+") && !h.contains(":")) {
-            return false; // 名前は解決しない
-        }
-        try {
-            InetAddress a = InetAddress.getByName(h); // IP リテラルなので問い合わせは起きない
-            return a.isLoopbackAddress() || a.isSiteLocalAddress() || isUniqueLocalV6(a);
-        } catch (UnknownHostException e) {
+        if (h.isEmpty()) {
             return false;
         }
+        if (h.equals("localhost") || h.equals("::1") || h.equals("127.0.0.1") || h.endsWith(".localhost")) {
+            return true;
+        }
+        java.util.regex.Matcher m = IPV4.matcher(h);
+        if (m.matches()) {
+            int a = Integer.parseInt(m.group(1));
+            int b = Integer.parseInt(m.group(2));
+            return a == 127 || a == 10 || (a == 172 && b >= 16 && b <= 31) || (a == 192 && b == 168);
+        }
+        if (h.matches("[0-9a-f:]+")) {
+            return false; // ::1 以外の IPv6 リテラル
+        }
+        if (!h.contains(".")) {
+            return true; // 単一ラベル＝社内名
+        }
+        return h.endsWith(".local") || h.endsWith(".internal") || h.endsWith(".lan") || h.endsWith(".home.arpa");
     }
 
-    /** IPv6 の fc00::/7（ULA）。{@code isSiteLocalAddress} は古い fec0::/10 しか見ない。 */
-    private static boolean isUniqueLocalV6(InetAddress a) {
-        byte[] b = a.getAddress();
-        return b.length == 16 && (b[0] & 0xfe) == 0xfc;
-    }
+    private static final java.util.regex.Pattern IPV4 =
+            java.util.regex.Pattern.compile("(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})");
 }

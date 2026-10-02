@@ -127,7 +127,9 @@ function isPlainObject(v) {
  * **それ以外の名前と公開 IP で http は許さない**（インターネットへ平文で出る）。
  */
 function allowsPlainHttp(hostname) {
-  const h = String(hostname || "").toLowerCase();
+  // 🔴 `new URL().hostname` は IPv6 を `[...]` 付きで返す。外さないと下の IPv6 の判定を素通りし、
+  //    「`.` を含まない＝単一ラベルの社内名」と読まれて**公開 IPv6 へも平文で送れていた**（2026-10-02 修正）。
+  const h = String(hostname || "").toLowerCase().replace(/^\[(.*)\]$/, "$1");
   if (!h) return false;
   if (h === "localhost" || h === "::1" || h === "127.0.0.1") return true;
   if (h.endsWith(".localhost")) return true;

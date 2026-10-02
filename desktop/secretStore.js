@@ -31,9 +31,14 @@ const path = require("node:path");
  */
 const LEGACY_KEYS = new Set(["ai.gemini.apiKey"]);
 const PROVIDER_KEY_RE = /^ai\.provider\.[a-z0-9-]{1,32}\.apiKey$/;
+// 外部の計算機（Jupyter Server）のトークン。id の形は computeEndpoints（＝aiProviders.ID_RE）と同じ。
+// fw/remote-compute-design.md §4.1
+const COMPUTE_KEY_RE = /^compute\.endpoint\.[a-z0-9-]{1,32}\.token$/;
 
 function isAllowedKey(key) {
-  return typeof key === "string" && (LEGACY_KEYS.has(key) || PROVIDER_KEY_RE.test(key));
+  return (
+    typeof key === "string" && (LEGACY_KEYS.has(key) || PROVIDER_KEY_RE.test(key) || COMPUTE_KEY_RE.test(key))
+  );
 }
 
 /** `{ "<key>": "<base64 の暗号文>" }` を収めたファイル。dataDir 直下に置く。 */

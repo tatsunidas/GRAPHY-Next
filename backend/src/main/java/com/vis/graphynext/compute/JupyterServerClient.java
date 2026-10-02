@@ -65,6 +65,11 @@ public final class JupyterServerClient {
         return json(send(get("api/status"), 200));
     }
 
+    /** サーバの版（{@code GET /api}）。分からなければ null。 */
+    public String version() {
+        return json(send(get("api"), 200)).path("version").asText(null);
+    }
+
     /** 使えるカーネルの種類。{@code {default, kernelspecs:{name:{spec:{display_name, language}}}}}。 */
     public JsonNode kernelSpecs() {
         return json(send(get("api/kernelspecs"), 200));

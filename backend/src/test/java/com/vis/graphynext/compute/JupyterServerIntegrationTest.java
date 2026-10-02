@@ -172,6 +172,30 @@ class JupyterServerIntegrationTest {
     }
 
     @Test
+    void connectionTesterRunsTheFixedProbe() {
+        ComputeEndpointRegistry reg = new ComputeEndpointRegistry();
+        JupyterEndpoint ep = client.endpoint();
+        assertTrue(reg.replaceAll(List.of(new ComputeEndpointRegistry.Incoming(
+                "local", "Local", ep.base().toString(), ep.token()))).isEmpty());
+        ComputeConnectionTester tester = new ComputeConnectionTester(reg, new ObjectMapper());
+        ComputeConnectionTester.Result r = tester.test("local", Duration.ofSeconds(90));
+        assertTrue(r.ok(), r.toString());
+        assertEquals("done", r.stage());
+        assertNotNull(r.serverVersion());
+        assertTrue(r.kernels().contains("python3"));
+        assertFalse(r.probe().path("python").asText().isEmpty());
+        assertTrue(r.probe().path("gpus").isArray());
+
+        // トークン違いは「接続」の段で 403 として返る（利用者が直せる形）
+        reg.replaceAll(List.of(new ComputeEndpointRegistry.Incoming("local", "Local", ep.base().toString(), "wrong")));
+        ComputeConnectionTester.Result bad = tester.test("local", Duration.ofSeconds(30));
+        assertFalse(bad.ok());
+        assertEquals("connect", bad.stage());
+        assertTrue(bad.httpStatus() == 403 || bad.httpStatus() == 401, bad.toString());
+        assertFalse(bad.error().contains("wrong"), "トークンを返さない");
+    }
+
+    @Test
     void kernelSpecsAndStateAreReadable() throws IOException {
         assertNotNull(client.kernelSpecs().path("kernelspecs").get("python3"));
         assertNotNull(client.kernel(kernelId));

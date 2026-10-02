@@ -445,3 +445,14 @@ test("検査だけして書かない口がある（設定画面が入力中に�
   assert.ok(r.problems.some((x) => x.includes("endpoint-has-path")));
   assert.equal(fs.existsSync(path.join(dir, p.FILE_NAME)), false, "書いていないこと");
 });
+
+// 🔴 2026-10-02: URL の hostname は IPv6 を [] 付きで返すため、IPv6 の判定を素通りして
+// 「単一ラベルの社内名」と読まれ、公開 IPv6 へも平文 http で送れていた。
+test("🔴 平文 http: IPv6 は ::1 だけ（[] 付きの hostname でも）", () => {
+  const p = freshStore(freshDir());
+  assert.equal(p.parseEndpoint("http://[::1]:11434").ok, true);
+  for (const ng of ["http://[2001:db8::1]", "http://[fd00::1]:8080", "http://[::ffff:8.8.8.8]"]) {
+    assert.equal(p.parseEndpoint(ng).reason, "endpoint-plain-http", ng);
+  }
+  assert.equal(p.allowsPlainHttp("[2001:db8::1]"), false);
+});

@@ -189,3 +189,22 @@ test("🔴 許さないキー名では保存しない（値がディスクへ出
   const files = fs.readdirSync(dir);
   assert.deepEqual(files, [], `何も書かれていないこと: ${files.join(",")}`);
 });
+
+// ── 外部の計算機のトークン（fw/remote-compute-design.md §4.1） ──
+test("計算機のトークンも形で許す（id の形は提供元と同じ）", () => {
+  const store = require("./secretStore");
+  for (const ok of ["compute.endpoint.lab-gpu.token", `compute.endpoint.${"a".repeat(32)}.token`]) {
+    assert.equal(store.isAllowedKey(ok), true, `許すべき: ${ok}`);
+  }
+  for (const bad of [
+    "compute.endpoint..token",
+    "compute.endpoint.../../x.token",
+    "compute.endpoint.Lab.token",
+    `compute.endpoint.${"a".repeat(33)}.token`,
+    "compute.endpoint.a.apiKey",
+    "compute.endpoint.a.token.extra",
+    "compute.a.token",
+  ]) {
+    assert.equal(store.isAllowedKey(bad), false, `弾くべき: ${JSON.stringify(bad)}`);
+  }
+});

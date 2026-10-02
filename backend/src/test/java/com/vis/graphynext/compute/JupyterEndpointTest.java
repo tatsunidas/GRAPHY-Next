@@ -24,12 +24,14 @@ class JupyterEndpointTest {
 
     @Test
     void plainHttp_onlyForLoopbackAndPrivateAddresses() {
+        // desktop/aiProviders.js の allowsPlainHttp と同じ表（ずれると画面と backend で判定が食い違う）
         for (String ok : new String[]{"http://localhost:8888", "http://127.0.0.1:8888", "http://10.1.2.3",
-                "http://172.16.0.5", "http://192.168.1.20:8888", "http://[::1]:8888", "http://[fd12::1]"}) {
+                "http://172.16.0.5", "http://192.168.1.20:8888", "http://[::1]:8888", "http://gpuserver:8888",
+                "http://my-gpu.local", "http://gpu.lab.internal", "http://a.lan", "http://box.home.arpa"}) {
             JupyterEndpoint.of(ok, null);
         }
         for (String ng : new String[]{"http://gpu.example.org", "http://8.8.8.8", "http://172.32.0.1",
-                "http://my-gpu.local"}) {
+                "http://[fd12::1]", "http://192.169.0.1"}) {
             assertThrows(IllegalArgumentException.class, () -> JupyterEndpoint.of(ng, null), ng);
         }
     }

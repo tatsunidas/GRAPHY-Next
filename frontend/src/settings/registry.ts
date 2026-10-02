@@ -599,6 +599,15 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
     sections: [],
   },
   {
+    // 外部の計算機（Jupyter Server）も専用パネル。AI と同じ理由で backend の設定に載せない
+    // ——接続先は Electron main の compute-endpoints.json、トークンは safeStorage
+    // （fw/remote-compute-design.md §4）。
+    id: "compute",
+    labelKey: "settings.cat.compute",
+    icon: "🧮",
+    sections: [],
+  },
+  {
     // プラグイン（導入・有効無効・削除）は専用パネル（/api/plugin-manager/*）。SettingsDialog で特別扱い。
     id: "plugins",
     labelKey: "settings.cat.plugins",

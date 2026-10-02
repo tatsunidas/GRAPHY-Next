@@ -1,6 +1,6 @@
 # リモート GPU カーネル（Remote Compute）設計
 
-> 記録開始 2026-10-02。**段 1（Jupyter クライアント）まで完了**（§10）。段 2 以降は未着手。
+> 記録開始 2026-10-02。**段 2（接続先の登録・main↔backend の内部経路・設定画面）まで完了**（§10・§11）。段 3 以降は未着手。
 > セキュリティ上の判断の正本は `fw/security.md`。外部 AI の送信経路は `fw/ai-routing-design.md`。
 > ここには**外部の Jupyter カーネルで任意のコードを動かす**という、AI egress より一段強い経路を書く。
 >
@@ -292,3 +292,55 @@ cd backend && GRAPHY_JUPYTER_PYTHON='C:\Users\t_kob\anaconda3\python.exe' \
 この機の `mvn test` 全体では 4 クラスが落ちる: Mockito を使う 3 クラス（`AnonymizePreflightTest` /
 `AnonymizeBurnScopeTest` / `AnnouncementServiceTest`。**JDK 25 で Mockito が動かない**——この機には JDK 21 が無い）と、
 `VideoRenderServiceTest.ensureRendered_servesMp4PayloadAsIsWithoutFfmpeg`（7877 / 7878 バイトの 1 バイト差）。
+
+---
+
+## 11. 段 2 でやったこと（2026-10-02）
+
+### 入れたもの
+
+| 層 | ファイル | 中身 |
+|---|---|---|
+| backend | `compute/MainChannelFilter` | `/api/internal/**` を main だけに開く。Bearer（`GRAPHY_MAIN_SECRET`・32 文字以上・定数時間比較）＋送信元 loopback＋**`Origin` ヘッダ無し**。どれか欠けたら **404**。secret が無ければ口ごと無い |
+| backend | `compute/ComputeEndpointRegistry` | 接続先の登録簿。main が丸ごと入れる。**メモリにだけ**持つ。1 件でも不正なら何も変えない |
+| backend | `compute/ComputeConnectionTester` | 接続テスト。段（connect / kernelspecs / kernel / probe）ごとに失敗を返す。実行するのは定数 `PROBE`（Python・`nvidia-smi`・PyTorch）だけ |
+| backend | `compute/ComputeInternalController` | `PUT /api/internal/compute/endpoints`・`POST /api/internal/compute/endpoints/{id}/test`（standalone のみ） |
+| desktop | `computeEndpoints.js` | `<dataDir>/compute-endpoints.json`。検査規則はここに 1 つ（パスは許す・クエリ／認証情報は不可・平文は院内だけ・16 件まで）。1 件でも不正なら保存しない |
+| desktop | `computeBridge.js` | main → backend の内部経路。起動ごとの乱数を作る。loopback 以外の backend には送らない |
+| desktop | `main.js` | spawn 時に `GRAPHY_MAIN_SECRET` を渡す・起動後に接続先を backend へ入れる・IPC 4 本（get / validate / set / test）。**送信先が増える・変わる保存は main が確認ダイアログ**。削除した接続先のトークンは消す。トークンの保存・消去でも backend へ入れ直す |
+| desktop | `secretStore.js` | allowlist に `compute.endpoint.<id>.token` |
+| frontend | `settings/ComputePanel.tsx` | 環境設定 ＞ 外部の計算機。登録・編集・削除・トークン・接続テスト（GPU と PyTorch の有無を出す）。i18n は ja / en |
+| automator | `driver/desktopDriver.ts` | backend を別に起動するので、同じ `GRAPHY_MAIN_SECRET` を backend と Electron の両方へ渡す |
+
+### テスト
+
+- backend 36/0（`MainChannelFilterTest` 6・`ComputeEndpointRegistryTest` 4・結合テストに接続テスト 1 を追加）
+- desktop 171/0（`computeEndpoints.test.js`・`computeBridge.test.js`・secretStore の allowlist）
+- frontend: typecheck・vitest 1880/0
+- **実機 16/0**（`automator/src/spike/computeSettingsCheck.ts`。本物の Electron＋backend＋jupyter_server）:
+  内部経路は secret 無し・違う secret で 404／追加で main の確認ダイアログ（宛先 URL が載る）／平文の印／
+  トークンが `/api/settings`・接続先ファイル・秘密ファイルに平文で出ない／接続テストで Python と GPU の有無が出る／
+  違うトークンで「計算機に届きませんでした」＋トークンの案内（トークンは画面に出ない）／削除でトークンも消える
+
+```bash
+cd automator && GRAPHY_JUPYTER_PYTHON='C:\Users\t_kob\anaconda3\python.exe' npx tsx src/spike/computeSettingsCheck.ts
+```
+
+### 🔴 途中で見つけた既存の不具合 — 平文 http の判定を公開 IPv6 が素通りしていた
+
+`aiProviders.allowsPlainHttp` は `new URL().hostname` を受けるが、IPv6 はそこで **`[...]` 付き**で来る。
+IPv6 の判定（`/^[0-9a-f:]+$/`）を素通りして「`.` を含まない＝単一ラベルの社内名」と読まれ、
+**`http://[2001:db8::1]` のような公開 IPv6 へも外部 AI が平文で送れていた**（関数のコメントは「その他の IPv6 リテラルは許さない」）。
+`[]` を外してから判定するよう直し、回帰テストを足した（`aiProviders.test.js`）。計算機の接続先も同じ関数を使う。
+Java 側（`JupyterEndpoint.allowsPlainHttp`）も同じ表にそろえた（段 1 では IP リテラルしか見ておらず、社内名・`.local` を弾いていた）。
+
+### 残るリスク（設計書に追記）
+
+- **プラグインの JAR は backend と同じ JVM で動くので、`System.getenv("GRAPHY_MAIN_SECRET")` を読める。**
+  読めば内部経路を叩いて接続先を差し替えられる。JAR は元々 backend と同じ権限で動く（ファイルもネットワークも自由）ので
+  新しく開いた穴ではないが、「main だけ」の保証は**レンダラ（ui.js）に対して**のもの。JAR を入れる判断が信頼の境界のまま。
+
+### 段 3 へ持ち越すもの
+
+- `ComputeDatasetService`（シリーズ単位の匿名化・npz / dicom-zip・§3.2 の拒否）
+- 接続先の一覧をレンダラが読む口（H61 `compute.status()`）は段 5 で。今は設定画面が main の IPC から読む

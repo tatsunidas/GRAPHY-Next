@@ -263,6 +263,19 @@ export interface GraphyDesktop {
     // 🔑 `canceled` は「main の確認ダイアログで利用者が取り消した」。失敗ではないので
     //    エラーとして見せない（`problems` は空で返る）。
     Promise<{ ok: boolean; problems: string[]; canceled?: boolean }>;
+  /** 外部の計算機（Jupyter Server）の一覧。**トークンの値は返らない**（有無だけ）。fw/remote-compute-design.md */
+  computeEndpointsGet?: () => Promise<ComputeEndpointsConfig>;
+  /** 検査だけ（書かない）。入力中に叩く。検査規則は main に 1 つだけ。 */
+  computeEndpointsValidate?: (cfg: { endpoints: ComputeEndpointInput[] }) =>
+    Promise<{ ok: boolean; problems: string[] }>;
+  /**
+   * 一覧を保存する。送信先が増える・変わるときは **main が確認ダイアログを出す**
+   * （`canceled` は利用者が取り消した。失敗ではない）。
+   */
+  computeEndpointsSet?: (cfg: { endpoints: ComputeEndpointInput[] }) =>
+    Promise<{ ok: boolean; problems: string[]; canceled?: boolean }>;
+  /** 接続テスト。**渡せるのは id だけ**——実行するコードは backend の定数。 */
+  computeTestConnection?: (id: string) => Promise<ComputeTestResult>;
   /** 名前を付けて保存（OS ダイアログ）。**上書き確認は OS が出す。** */
   saveFile?: (payload: {
     defaultName: string;
@@ -281,6 +294,47 @@ export interface GraphyDesktop {
   pluginWriteIntoDirectory?: (payload: { dir: string; name: string; bytes: Uint8Array }) => Promise<SaveFileResult>;
   /** H56: backend のジョブの成果物を選んだフォルダへ直接落とす。 */
   pluginDownloadIntoDirectory?: (payload: { dir: string; name: string; url: string }) => Promise<SaveFileResult>;
+}
+
+/** 外部の計算機の入力（保存・検査に渡す形）。トークンは含めない（`secretSet` で別に預ける）。 */
+export interface ComputeEndpointInput {
+  id: string;
+  label: string;
+  url: string;
+}
+
+export interface ComputeEndpointEntry extends ComputeEndpointInput {
+  kind: "jupyter";
+  /** 平文 http（院内アドレスだけ許される）。画面は印を出す。 */
+  plaintext?: boolean;
+  /** トークンを預けるキー名（`secretSet` に渡す）。 */
+  secretKey: string;
+  hasToken: boolean;
+}
+
+export interface ComputeEndpointsConfig {
+  endpoints: ComputeEndpointEntry[];
+  problems: string[];
+  /** main と backend の内部経路が使えるか（backend を別に起動した開発では false）。 */
+  available: boolean;
+}
+
+/** 接続テストの結果（backend の ComputeConnectionTester.Result）。 */
+export interface ComputeTestResult {
+  ok: boolean;
+  /** 落ちた段: connect / kernelspecs / kernel / probe / bridge。成功なら done */
+  stage: string;
+  error?: string | null;
+  httpStatus?: number;
+  serverVersion?: string | null;
+  kernels?: string[];
+  probe?: {
+    python?: string;
+    platform?: string;
+    gpus?: { name: string; memory?: string | null; driver?: string | null }[];
+    torch?: { version: string; cuda: boolean; devices: string[] } | null;
+  } | null;
+  elapsedMs?: number;
 }
 
 export function desktop(): GraphyDesktop | undefined {

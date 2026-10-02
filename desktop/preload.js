@@ -61,6 +61,13 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   // 疎通確認。送る内容は main が決める（呼び出し側は提供元と用途だけ）。
   aiTestConnection: (providerId, capability) =>
     ipcRenderer.invoke("graphy:ai-test-connection", { providerId, capability }),
+  // 外部の計算機（Jupyter Server）。トークンの値は返らない（有無だけ）。fw/remote-compute-design.md
+  computeEndpointsGet: () => ipcRenderer.invoke("graphy:compute-endpoints-get"),
+  // 送信先が増える・変わる保存は main が確認ダイアログを出す
+  computeEndpointsSet: (cfg) => ipcRenderer.invoke("graphy:compute-endpoints-set", cfg),
+  computeEndpointsValidate: (cfg) => ipcRenderer.invoke("graphy:compute-endpoints-validate", cfg),
+  // 接続テスト。渡せるのは id だけ（実行するコードは backend の定数）
+  computeTestConnection: (id) => ipcRenderer.invoke("graphy:compute-test-connection", id),
   // 名前を付けて保存。上書き確認は OS のダイアログが出す。
   saveFile: (payload) => ipcRenderer.invoke("graphy:save-file", payload),
   // 開くダイアログ（プラグインの H43 file.pickFiles）。ファイルだけ。選んだ絶対パスを返す。
