@@ -1,6 +1,6 @@
 # リモート GPU カーネル（Remote Compute）設計
 
-> 記録開始 2026-10-02。**段 2（接続先の登録・main↔backend の内部経路・設定画面）まで完了**（§10・§11）。段 3 以降は未着手。
+> 記録開始 2026-10-02。**段 3（匿名化したデータセット）まで完了**（§10〜§12）。段 4 以降は未着手。
 > セキュリティ上の判断の正本は `fw/security.md`。外部 AI の送信経路は `fw/ai-routing-design.md`。
 > ここには**外部の Jupyter カーネルで任意のコードを動かす**という、AI egress より一段強い経路を書く。
 >
@@ -344,3 +344,56 @@ Java 側（`JupyterEndpoint.allowsPlainHttp`）も同じ表にそろえた（段
 
 - `ComputeDatasetService`（シリーズ単位の匿名化・npz / dicom-zip・§3.2 の拒否）
 - 接続先の一覧をレンダラが読む口（H61 `compute.status()`）は段 5 で。今は設定画面が main の IPC から読む
+
+---
+
+## 12. 段 3 でやったこと（2026-10-02）— 匿名化したデータセット
+
+🔑 **方針（利用者の指示）: 既存の機能を使う。** 新しく書いたのは、既存に無かったものだけ。
+
+### 再利用したもの
+
+| 既存 | 使い方 |
+|---|---|
+| `AnonymizeService` の匿名化の本体（`run` → 焼き込み `burnInto` → `DicomAnonymizerEngine.deidentify`） | **そのまま通す。** シリーズ単位の入口 `anonymizeSeries(study, series, cfg, burnIn, sink)` を足し、検査単位と共通の `runOn(instances, …)` に分けただけ（検査単位の挙動は変えていない） |
+| `burnPreflight`（マスクで塗れるかの事前検査）・`burnBlocker`・`AnonymizeMaskStore` | ループを `burnPreflightOf(instances)` に切り出し、シリーズでも使えるようにした |
+| `DicomInstanceRepository.findBySeries(study, series)` | 新しいクエリは足していない |
+| `PixelCodec`（圧縮画素の伸長） | npz の画素の取り出しに使う |
+| `AnonymizeConfig`（PS3.15 の Basic ＋ `CleanPixelData`） | 外へ出す設定はこれで組む（保持オプション無し＝いちばん厳しい。UID は置換・日付と記述は削除・幾何は残る） |
+| テスト用の `TestDicomFiles`（焼き込みあり XA の生成） | public にして compute のテストからも使う |
+
+### 新しく書いたもの（既存に無かった）
+
+| ファイル | 中身 |
+|---|---|
+| `AnonymizeService.seriesBurnFacts` | 元ファイルの `BurnedInAnnotation`（画素の手前まで読む）・モダリティ・SOP クラス・事前検査をまとめて返す |
+| `compute/RemoteBurnPolicy` | §3.2 の表。マスクで全部塗れる → 塗って送る／塗れない・半端 → 拒否／申告 YES・危ないモダリティ（US XA RF ES SC OT DX CR MG XC GM SM IVUS IVOCT DOC）・危ない SOP（二次キャプチャ・可視光・PDF）→ マスクが無ければ拒否／モダリティ不明 → 拒否 |
+| `compute/NpyWriter` | `.npy`（形式 1.0）の書き手。本体に npy / npz / NIfTI の書き手は無かった（`nifti` パッケージは読み込み専用） |
+| `compute/VolumeAssembler` | **匿名化の出力（Sink）だけ**からボリュームを組む（元ファイルを読み直さない＝塗る前の画素を出さない）。IPP を法線に射影して並べ、Rescale を適用した float32 `[z, y, x]`・`spacing [dz, dy, dx]`・`origin`（LPS）・`direction`・`meta.json`。元の画素 1GiB まで。グレースケールのみ |
+| `compute/ComputeDatasetService` | 判定 → 既存の匿名化 → dicom-zip か npz を一時フォルダへ → SHA-256 → ハンドル `dsh_<uuid>`（中身はプラグインに渡さない）。**1 件でも匿名化に失敗・塗り残しがあれば作らない**。2 時間で消す |
+
+### テスト
+
+- `RemoteBurnPolicyTest` 7・`ComputeDatasetServiceTest` 6（CT→npz の並べ替え・HU・幾何／CT→dicom-zip で患者名・ID・施設・生年月日・UID が残らない／
+  焼き込みあり XA はマスク無しで拒否・マスクありなら塗って `BurnedInAnnotation=NO`／破棄でファイルが消える／**本物の numpy で読める**）
+- compute 全体 49/0
+- **backend 全体 724/725**（失敗 1 件は既存の `VideoRenderServiceTest` の 1 バイト差。今回と無関係）
+
+### 🔑 この開発機で Mockito のテストを回す方法
+
+開発機の JDK は 25 だけで、Mockito（byte-buddy 1.14）が動かず 3 クラスが落ちていた（§10）。
+**インストール済みの GRAPHY-Next に同梱の Java 21 で回せば通る**（テストのクラスは release 21 で作られる）:
+
+```bash
+cd backend && mvn -q -Dfrontend.skip=true "-Djvm=C:\Users\t_kob\AppData\Local\Programs\GRAPHY-Next\resources\jre\bin\java.exe" test
+```
+
+今回いじった `AnonymizeService` を見ている `AnonymizeBurnScopeTest` / `AnonymizePreflightTest` もこれで通ることを確かめた。
+
+### 決めたこと・持ち越し
+
+- **患者の仮名は固定の `GRAPHY-ANON`。** 同じ患者を何度送っても同じ仮名にする（§3.3）には、
+  施設ごとの秘密の種で元 ID をハッシュする必要があり、その種の置き場所（safeStorage）を決めてからにする。
+  計算機側で検査をまたいで突き合わせる用途が出たら足す。
+- 多フレームが複数あるシリーズ・カラー・Big Endian は npz にしない（dicom-zip なら送れる。理由のコードを返す）。
+- データセットを作る口（REST / Host API）はまだ無い。段 4（同意・監査）・段 5（H59）でつなぐ。
