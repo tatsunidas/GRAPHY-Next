@@ -50,6 +50,10 @@ export interface XaVesselModelSummary {
   diameterCalibrated: boolean;
   /** 校正の縮退区分のうち最も弱いもの（`approximate` が 1 つでもあれば `approximate`）。 */
   tier: "calibrated" | "approximate" | "uncalibrated";
+  /** H62: 起動し直しても変わらない鍵。SOP が取れなければ null（保存できない）。 */
+  stableKey: string | null;
+  /** H62: 人が近位端を確かめたか。null は未確認（点順は描いた順のまま）。 */
+  proximalFirst: true | null;
   at: number;
 }
 
@@ -87,6 +91,8 @@ export function summarizeVesselModel(m: XaVesselModel): XaVesselModelSummary {
     pointCount: m.segments.reduce((n, s) => n + s.points.length, 0),
     diameterCalibrated: m.calibration.diameterCalibrated,
     tier: weakestTier(m.calibration.tiers),
+    stableKey: m.stableKey ?? null,
+    proximalFirst: m.orientation?.proximalFirst ?? null,
     at: m.at,
   };
 }

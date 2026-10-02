@@ -107,6 +107,11 @@ export type {
  * （`viewer2d.menu` ＝「プラグイン」メニューとは別）。本体の解析機能と並ぶ位置に出るため、
  * **プラグイン由来であることの表示が必須**（区切り線 ＋ 印。`fw/subtraction-design.md` §15.8）。
  * host の中身は `viewer2d.menu` と完全に同一で、違うのは出る場所だけである。
+ *
+ * <p>`viewer2d.xa3d` は **3D QCA のダイアログの中**にボタンとして出す（**H63・0.3.7 以降**）。
+ * ダイアログは全画面の背景を持ちメニューを押せないので、「再構成を見ながら解析を掛ける」
+ * （QFR など）にはこの面が要る。押してもダイアログは閉じない。host の中身は `viewer2d.menu` と同一。
+ * 旧本体はこの面を知らないだけで、宣言しても害は無い（`contributes` で絞るだけ）。
  */
 import type { AiGenerationOptions, AiGenerationOutcome } from "./pluginAiApi";
 import type { PickDirectoryResult, PluginSaveArtifactOptions, PluginSaveFileOptions } from "./pluginFileApi";
@@ -175,10 +180,11 @@ export type PluginSurface =
   | "viewer2d.menu"
   | "viewer2d.menu.analysis"
   | "viewer2d.toolbar"
+  | "viewer2d.xa3d"
   | "mainscreen.menu";
 
 /** 2D ビューア系サーフェス（host の形が同じもの）。 */
-export type Viewer2DSurface = "viewer2d.menu" | "viewer2d.menu.analysis" | "viewer2d.toolbar";
+export type Viewer2DSurface = "viewer2d.menu" | "viewer2d.menu.analysis" | "viewer2d.toolbar" | "viewer2d.xa3d";
 
 /** backend の GET /api/plugins が返すマニフェスト 1 件。 */
 export interface PluginManifest {

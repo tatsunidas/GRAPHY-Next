@@ -38,6 +38,8 @@ function makeModel(store: Store, runId: string, at = 1): import("./xaVesselModel
   void store;
   return {
     runId,
+    stableKey: null,
+    orientation: { proximalFirst: null, source: null },
     kind: "xa-qca3d",
     label: runId,
     segments: [{ id: "main", points: [[0, 0, 0], [1, 0, 0]], diameterMm: [3, 3], parentId: null }],
@@ -56,6 +58,7 @@ function makeModel(store: Store, runId: string, at = 1): import("./xaVesselModel
       visibleFractions: [0.9],
       anchorReprojectionPx: 0.7,
       separationDeg: 60,
+      frameIndices: [0],
     },
     at,
   };
