@@ -403,7 +403,10 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
                   >
                     <option value="">—</option>
                     {runs
-                      .filter((r) => r.imageId !== keyA)
+                      // 方向 A と同じフレームは方向 B にならない（同じ投影からは奥行きが出ない）。
+                      // 🔴 以前は `r.imageId !== keyA` で、鍵が runKey に替わったあと
+                      // （imageId と runKey は一致しない）何も除外していなかった。
+                      .filter((r) => r.imageId !== runA?.imageId)
                       .map((r) => (
                         <option key={r.runKey} value={r.runKey}>
                           {r.label}
