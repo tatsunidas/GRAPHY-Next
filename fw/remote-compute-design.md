@@ -1,6 +1,6 @@
 # リモート GPU カーネル（Remote Compute）設計
 
-> 記録開始 2026-10-02。**段 4（送る前の同意・監査ログ）まで完了**（§10〜§13）。段 5 以降は未着手。
+> 記録開始 2026-10-02。**段 5（H59 `compute.runJob`＝実際に送って実行）まで完了**（§10〜§14）。段 6 以降は未着手。
 > セキュリティ上の判断の正本は `fw/security.md`。外部 AI の送信経路は `fw/ai-routing-design.md`。
 > ここには**外部の Jupyter カーネルで任意のコードを動かす**という、AI egress より一段強い経路を書く。
 >
@@ -448,3 +448,54 @@ cd automator && npx tsx src/spike/computeEgressCheck.ts
 
 - H59 `compute.runJob`: 要求を作る → `compute:confirm` → 承認されたら `consume` → アップロード → 実行 → 結果の回収（`PluginJobService` に乗せる）
 - `egress-consumed` の後に「実際に送った・実行した・結果」の行を足す
+
+---
+
+## 14. 段 5 でやったこと（2026-10-02）— H59 `compute.runJob`（実際に送って実行する）
+
+### 再利用したもの
+
+| 既存 | 使い方 |
+|---|---|
+| `PluginJobService.submitTask`（H45 の本体側ジョブ） | 実行をジョブとして走らせる。進み具合・取り消し・`/api/plugin-jobs/{jobId}` の問い合わせはプラグインの JAR のジョブと同じ |
+| `PluginArtifacts.adopt`（H53） | 結果の `outputs.zip` を成果物として預ける。`file.saveJobArtifact(jobId)` でそのまま保存もできる |
+| フロントの `pollPluginJob`・`httpSend`・`apiBase` | `compute.runJob` はこれらを並べただけ |
+| 段 1〜4 | Jupyter クライアント・登録簿・匿名化データセット・承認の札（`consumeFor`）・監査ログ |
+| `withHostApis`（`ai` と同じ形） | `compute` もマニフェストに縛って渡す（他のプラグインを名乗れない） |
+
+### 新しく書いたもの
+
+| ファイル | 中身 |
+|---|---|
+| `compute/ComputeJobRunner` | 承認の札を使う（**別のプラグインの承認は使えない・1 回きり**）→ `graphy/<run>/inputs/<i>.npz` へアップロード（**承認した SHA-256 と一致しなければ送らない**）→ カーネルを `graphy/<run>` で起動して実行 → `__progress__` 行を進み具合に → `outputs/`（下の階層も）を**無圧縮の zip**に → 必ずカーネルを止め、**計算機のフォルダを消し**、データセットを捨てる。取り消し・時間切れは interrupt → 10 秒で止まらなければカーネルごと止める |
+| `ComputeEgressController` に `POST /api/plugins/{id}/compute/jobs` | 権限を確かめ、ジョブを投入して H45 の状態を返す |
+| `JupyterServerClient.startKernel(name, path)` | 作業フォルダを指定して起動 |
+| frontend `plugins/pluginComputeApi.ts` | `runComputeJob`（要求 → main の同意 → 実行 → 待つ）と `readStoredZipEntry`（無圧縮 zip から 1 ファイル。ライブラリなし） |
+| 型 | `pluginTypes.ts`（`compute`・`PluginHostSeed` から除外）と `examples/plugin-template/graphy-plugin.d.ts`（`ComputeRunJobOptions` 等）。`pluginTemplateTypes.test.ts` が一致を見る |
+| `fw/plugin-architecture.md` §7.2 | **H59 の行**。あわせて、コードにはあったのに表に無かった **H58（プラグインのデータ置き場）**を足した |
+| テストの共有部品 | `LocalJupyter`（jupyter_server の起動）・`DatasetFixture`（CT の作成と索引）を既存のテストから切り出した |
+
+### テスト
+
+- `ComputeJobRunnerIntegrationTest` 4（本物の jupyter_server）: 実行して outputs（下の階層も）が無圧縮 zip で返る／Python の例外でも途中の outputs は返る／取り消しで CANCELLED・計算機に残らない／**別のプラグインの承認は使えない・同じ承認で 2 回は走らない**・監査に送信と終了が残る
+- frontend `pluginComputeApi.test.ts` 3（zip から取り出す・無い名前・圧縮エントリは null）
+- compute 66/0・**backend 737/738**（失敗は既存の動画テスト）・desktop 172/0・frontend 1883/0
+- **実機 21/0**（`automator/src/spike/computeRunJobCheck.ts`・検証用プラグイン `automator/plugins/compute-runjob-check`）:
+  プラグインの ui.js から runJob → 同意（main の窓）→ 実行 → `readFile` で mask.npy / summary.json／
+  **計算機に届いたバイト列の SHA-256 が同意画面の値と一致**／届いた npz に患者 ID・元の UID が無い／
+  進み具合が届き戻らない／**計算機にファイルが残らない**／監査に要求〜終了の 5 段／取り消すと何も送らない
+
+```bash
+cd automator && GRAPHY_JUPYTER_PYTHON='C:\Users\t_kob\anaconda3\python.exe' npx tsx src/spike/computeRunJobCheck.ts
+```
+
+### 実測で分かったこと
+
+- **Jupyter はフォルダを消すと空の `.ipynb_checkpoints` を親に残すことがある。** 中身は無い（データは残らない）。
+  検査は「ファイルが残っていないか」で見る。
+- 短いコードは画面のポーリング（400ms）より速く終わるので、途中の進み具合が 1 度も見えないことがある（正常）。
+
+### 段 6 へ持ち越すもの
+
+- サンプルプラグイン（`examples/remote-compute-demo`）: 結果のマスクを H4b で派生シリーズとして保存するところまで
+- `readFile` の結果を H4b / H22（SEG）/ オーバーレイへつなぐ手本

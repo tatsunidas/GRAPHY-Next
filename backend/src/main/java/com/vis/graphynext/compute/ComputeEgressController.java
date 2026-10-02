@@ -38,12 +38,14 @@ public class ComputeEgressController {
     private final PluginRegistry plugins;
     private final ComputeDatasetService datasets;
     private final ComputeEgressService egress;
+    private final ComputeJobRunner runner;
 
     public ComputeEgressController(PluginRegistry plugins, ComputeDatasetService datasets,
-                                   ComputeEgressService egress) {
+                                   ComputeEgressService egress, ComputeJobRunner runner) {
         this.plugins = plugins;
         this.datasets = datasets;
         this.egress = egress;
+        this.runner = runner;
     }
 
     public record Input(String studyUid, String seriesUid, String format) {
@@ -95,6 +97,31 @@ public class ComputeEgressController {
         } catch (RuntimeException e) {
             handles.forEach(datasets::discard);
             throw e;
+        }
+    }
+
+    public record JobBody(String requestId, Integer timeoutSec) {
+    }
+
+    /**
+     * 承認済みの要求を実行する（H59）。<b>承認の札はここで使用済みになる。</b>
+     * 進み具合・結果・取り消しは既存の {@code /api/plugin-jobs/{jobId}}（H45）で扱う。
+     */
+    @PostMapping("/api/plugins/{id}/compute/jobs")
+    public ResponseEntity<?> run(@PathVariable String id, @RequestBody JobBody body) {
+        PluginManifest m = plugins.manifests().stream().filter(x -> x.id().equals(id)).findFirst().orElse(null);
+        if (m == null) {
+            return error(HttpStatus.NOT_FOUND, "unknown-plugin");
+        }
+        if (m.permissions() == null || !m.permissions().contains(PERMISSION)) {
+            egress.refused(id, null, "permission-denied");
+            return error(HttpStatus.FORBIDDEN, "permission-denied");
+        }
+        try {
+            return ResponseEntity.ok(runner.submit(id, body == null ? null : body.requestId(),
+                    body == null ? null : body.timeoutSec()));
+        } catch (ComputeEgressService.EgressRefused e) {
+            return error(HttpStatus.CONFLICT, e.reason());
         }
     }
 

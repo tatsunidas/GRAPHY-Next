@@ -1117,6 +1117,17 @@ interface PluginHostBase {
    * `cancelled: true` は利用者の取り消しで、エラーとして表示しないこと。standalone 専用。
    */
   runBackendJob: (payload?: unknown, opts?: PluginJobOptions) => Promise<PluginJobOutcome>;
+  /**
+   * 外部の計算機（Jupyter Server・GPU）で計算する（H59・**0.4.0 以降**）。
+   *
+   * <p>`plugin.json` の `permissions` に `"remote-compute"` が要る。送るたびに本体の窓で、宛先・データ・
+   * **コードの全文**を見せて同意を取る。データは本体が匿名化して作り（渡すのはシリーズの参照だけ）、
+   * 計算機の上では作業フォルダに `inputs/0.npz` … が置かれる。`outputs/` に書いたものが返る。
+   * 進み具合は `print("__progress__", 0.4, "message")`。例外は投げない。デスクトップ専用。
+   */
+  compute: {
+    runJob: (opts: ComputeRunJobOptions, jobOpts?: PluginJobOptions) => Promise<ComputeRunOutcome>;
+  };
   /** 本体の DB（H44・H46・H51・**0.3.0 以降**）。 */
   db: {
     /** 患者を ID・氏名の部分一致で探す（H44）。**読み取りのみ**。空文字は全件。 */
@@ -1314,6 +1325,52 @@ export interface PluginJobOptions {
 export type PluginJobOutcome =
   | { ok: true; result: unknown }
   | { ok: false; cancelled?: boolean; error?: string };
+
+/** `host.compute.runJob()` に渡すシリーズ（H59）。 */
+export interface ComputeJobInput {
+  studyUid: string;
+  seriesUid: string;
+  /**
+   * 既定 `npz`: `volume`（float32 `[z, y, x]`・Rescale 適用済み）・`spacing` `[dz, dy, dx]`・`origin`（LPS）・
+   * `direction`（3×3）・`meta.json`。`dicom-zip` は匿名化した DICOM の zip。
+   */
+  format?: "npz" | "dicom-zip";
+}
+
+/** `host.compute.runJob()` の引数（H59）。 */
+export interface ComputeRunJobOptions {
+  /** 実行する Python（64KB まで）。データを文字列で埋め込んだコードは弾かれる。 */
+  script: string;
+  inputs: ComputeJobInput[];
+  /** 環境設定 ＞ 外部の計算機 の ID。省略するとトークンの入った最初の計算機。 */
+  endpointId?: string;
+  /** 秒。既定 3600・上限 6 時間。 */
+  timeoutSec?: number;
+}
+
+/** `outputs/` のファイル。 */
+export interface ComputeOutputFile {
+  name: string;
+  size: number;
+}
+
+/** `host.compute.runJob()` の結果（H59）。 */
+export type ComputeRunOutcome =
+  | {
+      ok: true;
+      jobId: string;
+      /** `error` は Python の例外（ジョブ自体は終わっている）。 */
+      status: "ok" | "error";
+      stdout: string;
+      stderr: string;
+      errorName?: string;
+      errorValue?: string;
+      traceback?: string[];
+      files: ComputeOutputFile[];
+      /** `outputs/` のファイルを取り出す。無ければ null。まとめて保存するなら `file.saveJobArtifact(jobId)`。 */
+      readFile: (name: string) => Promise<Uint8Array | null>;
+    }
+  | { ok: false; cancelled?: boolean; error: string };
 
 /** `host.db.searchPatients()` の 1 件。`patientKey` は保存領域（H8/H42）の患者の鍵と同じ。 */
 export interface PluginPatient {

@@ -109,6 +109,8 @@ export type {
  * host の中身は `viewer2d.menu` と完全に同一で、違うのは出る場所だけである。
  */
 import type { AiGenerationOptions, AiGenerationOutcome } from "./pluginAiApi";
+import type { ComputeRunJobOptions, ComputeRunOutcome } from "./pluginComputeApi";
+export type { ComputeJobInput, ComputeOutputFile, ComputeRunJobOptions, ComputeRunOutcome } from "./pluginComputeApi";
 import type { PickDirectoryResult, PluginSaveArtifactOptions, PluginSaveFileOptions } from "./pluginFileApi";
 export type { PickDirectoryResult, PluginSaveArtifactOptions };
 import type { SaveFileResult } from "../desktopBridge";
@@ -283,6 +285,19 @@ interface PluginHostBase {
    * standalone 専用（web は backend 面が無いので失敗が返る）。
    */
   runBackendJob: (payload?: unknown, opts?: PluginJobOptions) => Promise<PluginJobOutcome>;
+  /**
+   * 外部の計算機（Jupyter Server・GPU）で計算する（H59）。実装は `pluginComputeApi.ts`。
+   *
+   * <p>⚠ **患者由来のデータと任意のコードを外の計算機へ出す API である。** `plugin.json` の
+   * `permissions` に `"remote-compute"` が要り（backend でも確かめる）、送るたびに**本体の窓**で
+   * 宛先・データ・コードの全文を見せて同意を取る。データは本体が既存の匿名化で作る
+   * （プラグインが渡すのはシリーズの参照だけ）。焼き込みのあるシリーズはマスクが無ければ送れない。
+   *
+   * <p>例外は投げない。`cancelled: true` は利用者の取り消し。デスクトップ専用。
+   */
+  compute: {
+    runJob: (opts: ComputeRunJobOptions, jobOpts?: PluginJobOptions) => Promise<ComputeRunOutcome>;
+  };
   /** 本体の DB（H44・H46・H51）。 */
   db: {
     /**
@@ -1030,7 +1045,10 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
  * `launchPlugin` が一箇所で注入する。呼び出し側に作らせると、マニフェストの渡し忘れが
  * そのまま権限チェックの素通りになる。
  */
-export type PluginHostSeed = DistributiveOmit<PluginHost, "ai" | "file" | "runBackendJob" | "db" | "video" | "apiBase">;
+export type PluginHostSeed = DistributiveOmit<
+  PluginHost,
+  "ai" | "file" | "runBackendJob" | "db" | "video" | "apiBase" | "compute"
+>;
 
 /**
  * プラグイン UI バンドル（ES モジュール）が公開する契約。

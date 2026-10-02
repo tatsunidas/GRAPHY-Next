@@ -83,7 +83,16 @@ public final class JupyterServerClient {
      * 相対パスで見えない（実測 2026-10-02・jupyter_server 2.10）。
      */
     public String startKernel(String name) {
-        ObjectNode body = mapper.createObjectNode().put("path", "");
+        return startKernel(name, "");
+    }
+
+    /**
+     * {@code path}（Contents の根からの相対フォルダ）を作業フォルダにしてカーネルを起動する。
+     * ジョブはここに {@code inputs/} {@code outputs/} を置き、コードは相対パスで読み書きする。
+     */
+    public String startKernel(String name, String path) {
+        String p = path == null || path.isBlank() ? "" : String.join("/", segments(path));
+        ObjectNode body = mapper.createObjectNode().put("path", p);
         if (name != null) {
             body.put("name", name);
         }

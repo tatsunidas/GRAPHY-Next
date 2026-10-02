@@ -41,44 +41,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class JupyterServerIntegrationTest {
 
-    private static Process proc;
-    private static Path root;
+    private static LocalJupyter jupyter;
     private static JupyterServerClient client;
     private static String kernelId;
     private static KernelChannel ch;
 
     @BeforeAll
     static void startServer() throws Exception {
-        String python = System.getenv("GRAPHY_JUPYTER_PYTHON");
-        Assumptions.assumeTrue(python != null && !python.isBlank() && Files.isRegularFile(Path.of(python)),
-                "GRAPHY_JUPYTER_PYTHON not set; skipping Jupyter integration test");
-        root = Files.createTempDirectory("graphy-jupyter-it");
-        int port;
-        try (ServerSocket s = new ServerSocket(0)) {
-            port = s.getLocalPort();
-        }
-        String token = UUID.randomUUID().toString();
-        proc = new ProcessBuilder(python, "-m", "jupyter_server",
-                "--ServerApp.ip=127.0.0.1", "--ServerApp.port=" + port, "--ServerApp.port_retries=0",
-                "--ServerApp.open_browser=False", "--IdentityProvider.token=" + token,
-                "--ServerApp.root_dir=" + root)
-                .redirectErrorStream(true)
-                .redirectOutput(root.resolve("server.log").toFile())
-                .start();
-        client = new JupyterServerClient(JupyterEndpoint.of("http://127.0.0.1:" + port, token), new ObjectMapper());
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
-        while (true) {
-            try {
-                client.status();
-                break;
-            } catch (JupyterException e) {
-                if (!proc.isAlive() || System.nanoTime() > deadline) {
-                    throw new IllegalStateException("jupyter_server did not start:\n"
-                            + Files.readString(root.resolve("server.log")), e);
-                }
-                Thread.sleep(300);
-            }
-        }
+        jupyter = LocalJupyter.start();
+        client = jupyter.client;
         kernelId = client.startKernel("python3");
         ch = client.connect(kernelId, Duration.ofSeconds(60));
     }
@@ -95,9 +66,8 @@ class JupyterServerIntegrationTest {
                 // サーバごと止めるので構わない
             }
         }
-        if (proc != null) {
-            proc.descendants().forEach(ProcessHandle::destroyForcibly);
-            proc.destroyForcibly();
+        if (jupyter != null) {
+            jupyter.close();
         }
     }
 

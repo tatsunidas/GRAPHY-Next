@@ -198,6 +198,18 @@ public class ComputeEgressService {
         return Optional.of(r);
     }
 
+    /**
+     * {@link #consume} に「そのプラグインの要求であること」を足したもの。別のプラグインの承認を横取りさせない。
+     * 違うプラグインのものなら札は使わない（持ち主はまだ使える）。
+     */
+    public Optional<EgressRequest> consumeFor(String pluginId, String id) {
+        EgressRequest r = current(id);
+        if (r == null || !r.pluginId().equals(pluginId)) {
+            return Optional.empty();
+        }
+        return consume(id);
+    }
+
     public Optional<Status> status(String id) {
         EgressRequest r = current(id);
         return Optional.ofNullable(r == null ? null : r.status());
@@ -273,6 +285,14 @@ public class ComputeEgressService {
                     .append(d.bytes()).append('\n');
         }
         return sha256(sb.toString());
+    }
+
+    static String sha256Hex(byte[] b) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(b));
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException(ex);
+        }
     }
 
     static String sha256(String s) {
