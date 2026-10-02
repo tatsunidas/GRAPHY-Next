@@ -18,6 +18,9 @@
  *    画素統計で見る
  * 4. 全フレーム走査の所要時間が実用範囲か
  *
+ * <p>段階 4（2026-10-02 追加）: **H62**（向きの旗・起動し直しても変わらない鍵）と
+ * **H63**（3D QCA ダイアログの中からプラグインを呼ぶ）、プラグイン 0.2.0 の**入力の保存と復元**。
+ *
  * <h3>🔴 これは QFR の精度の検証ではない</h3>
  * 確かめるのは**経路**（モデルが渡り、値が出て、色が乗り、レポートに載るか）と、
  * **出さないことの検査**（Pa 未入力・向き未確認では計算しない）だけ。
@@ -624,6 +627,127 @@ async function main(): Promise<void> {
       path.join(OUT_DIR, "qfr-panel.txt"),
       (await viewer.getByTestId("qfr-panel").textContent()) ?? "",
     );
+    check(
+      panelText.includes("入力を保存しました"),
+      "[3] ★入力を H8 に保存した（H62 の鍵がある本体）",
+      panelText.slice(-160).trim(),
+    );
+
+    /* ══════════════════════════════════════════════════════════
+     * 4. 向きの旗・ダイアログからの起動・入力の復元（H62 / H63）
+     * ══════════════════════════════════════════════════════════ */
+    console.log("\n── 4. H62 / H63 と入力の復元 ──");
+    type ModelFacts = {
+      runId: string;
+      stableKey: string | null | undefined;
+      orientation: { proximalFirst: true | null; source: string | null } | undefined;
+      first: number[] | null;
+      last: number[] | null;
+    };
+    const facts = async (): Promise<ModelFacts | null> => {
+      const raw = (await viewer.evaluate(`(() => {
+        const g = window.__graphyDebug;
+        const m = g && g.getVesselModel ? g.getVesselModel() : null;
+        if (!m) return null;
+        const seg = (m.segments || [])[0];
+        return JSON.stringify({
+          runId: m.runId, stableKey: m.stableKey, orientation: m.orientation,
+          first: seg ? seg.points[0] : null, last: seg ? seg.points[seg.points.length - 1] : null,
+        });
+      })()`)) as string | null;
+      return raw ? (JSON.parse(raw) as ModelFacts) : null;
+    };
+    const near = (a: number[] | null, b: number[] | null) =>
+      !!a && !!b && Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) < 1e-6;
+
+    // 🚨 段階 3 の QFR / angio-quant の窓が開いたままだと「3D QCA」ボタンに重なって押せない
+    //    （2026-10-02 に踏んだ）。プラグインの窓を × で全部閉じてから始める。
+    await viewer.evaluate(`(() => {
+      document.querySelectorAll(".graphy-plugin-window__close").forEach((b) => b.click());
+    })()`);
+    await viewer.waitForTimeout(500);
+    await viewer.getByTestId("xa3d-open").click();
+    await viewer.getByTestId("xa3d-dialog").waitFor({ state: "visible", timeout: 10_000 });
+    await viewer.waitForTimeout(500);
+    if (values.length >= 2) {
+      await viewer.selectOption('[data-testid="xa3d-view-a"]', values[0]);
+      await viewer.selectOption('[data-testid="xa3d-view-b"]', values[1]);
+      await viewer.waitForTimeout(300);
+      await viewer.getByTestId("xa3d-run").click();
+      await viewer.waitForTimeout(4_000);
+    }
+    const f0 = await facts();
+    check(f0?.orientation?.proximalFirst === null, "[4] ★近位端を選ぶまで向きは未確認（推測で立てない）", f0?.orientation);
+    check(
+      typeof f0?.stableKey === "string" && !/https?:|127\.0\.0\.1|localhost/.test(f0.stableKey),
+      "[4] ★stableKey があり、本体の URL（ポート）を含まない（H62）",
+      f0?.stableKey,
+    );
+
+    // 近位端 = 始点 S。点順はそのまま、旗が立つ。
+    await viewer.getByTestId("xa3d-proximal-start").check();
+    await viewer.waitForTimeout(400);
+    const f1 = await facts();
+    check(
+      f1?.orientation?.proximalFirst === true && f1.orientation.source === "user",
+      "[4] ★S を選ぶと proximalFirst: true（source: user）",
+      f1?.orientation,
+    );
+    check(near(f1?.first ?? null, f0?.first ?? null), "[4] S が近位なら点順は変わらない");
+    check(f1?.stableKey === f0?.stableKey, "[4] 向きを選んでも鍵は変わらない");
+
+    // ── H63: ダイアログを開いたまま呼ぶ ──
+    const inDialog = viewer.getByTestId("xa3d-plugin-angio-quant");
+    check(await inDialog.isVisible().catch(() => false), "[4] ★★ダイアログの中に angio-quant のボタンが出る（H63）");
+    const panelsBefore = await viewer.getByTestId("qfr-panel").count();
+    await inDialog.click();
+    await viewer.waitForFunction(
+      (n) => document.querySelectorAll('[data-testid="qfr-panel"]').length > n,
+      panelsBefore,
+      { timeout: 20_000 },
+    );
+    check(true, "[4] ★ダイアログのボタンから QFR の窓が直接開く");
+    check(
+      await viewer.getByTestId("xa3d-dialog").isVisible().catch(() => false),
+      "[4] ★★QFR の窓を開いてもダイアログは閉じない",
+    );
+    const panel4 = viewer.getByTestId("qfr-panel").last();
+    await viewer.waitForTimeout(1_500); // H8 の読み出しを待つ
+    const restoreText = (await panel4.getByTestId("qfr-restore").textContent()) ?? "";
+    check(restoreText.includes("前回"), "[4] ★★同じ再構成の入力を復元した（H8 ＋ H62）", restoreText.trim());
+    check(
+      (await panel4.getByTestId("qfr-pa").inputValue()) === "100",
+      "[4] Pa が前回の値（100）に戻る",
+      await panel4.getByTestId("qfr-pa").inputValue(),
+    );
+    const p4text = (await panel4.textContent()) ?? "";
+    check(p4text.includes("近位端を確認済み"), "[4] ★本体で近位端を選んだので、プラグインでは聞き直さない");
+    const run4 = panel4.getByTestId("qfr-run");
+    check(!(await run4.isDisabled()), "[4] 復元した入力だけで計算できる");
+    await run4.click();
+    await viewer.waitForTimeout(5_000);
+    const primary4 = Number(((await panel4.getByTestId("qfr-primary").textContent()) ?? "").replace(/[^0-9.]/g, ""));
+    check(
+      Math.abs(primary4 - primary) < 1e-3,
+      "[4] ★★復元した入力で計算し直すと前回と同じ QFR（結果は保存せず再計算）",
+      { before: primary, after: primary4 },
+    );
+    await viewer.screenshot({ path: path.join(OUT_DIR, "4-dialog-and-qfr.png") }).catch(() => {});
+
+    // ── 反転: E を近位に ──
+    // QFR の窓がラジオに重なっていることがあるので、要素へ直接クリックを送る。
+    await viewer.evaluate(`(() => {
+      const r = document.querySelector('[data-testid="xa3d-proximal-end"]');
+      if (r) r.click();
+    })()`);
+    await viewer.waitForTimeout(400);
+    const f2 = await facts();
+    check(near(f2?.first ?? null, f1?.last ?? null), "[4] ★★E を選ぶと点が逆順になる（先頭が元の末尾）", {
+      first: f2?.first,
+      prevLast: f1?.last,
+    });
+    check(f2?.orientation?.proximalFirst === true, "[4] 反転後も proximalFirst: true", f2?.orientation);
+    check(f2?.stableKey === f0?.stableKey && f2?.runId === f0?.runId, "[4] 反転しても鍵は同じ");
   } finally {
     await driver.stop().catch(() => {});
   }
