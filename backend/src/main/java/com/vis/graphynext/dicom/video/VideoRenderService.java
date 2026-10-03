@@ -114,6 +114,8 @@ public class VideoRenderService {
                 Payload kind = sniff(raw);
                 if (kind == Payload.MP4) {
                     // 主経路: 取込済み動画は MP4 そのもの。move するだけ（ffmpeg 不要）。
+                    // ただし DICOM は値を偶数長にするため、奇数長の MP4 には末尾に 0 が 1 バイト足されている。外して返す。
+                    trimDicomPad(raw);
                     move(raw, mp4);
                     log.debug("rendered: MP4 をそのまま配信 sop={}", sopUid);
                     return mp4;
@@ -166,6 +168,48 @@ public class VideoRenderService {
         } catch (IOException e) {
             return false; // 元ファイルが読めない等は作り直す側に倒す
         }
+    }
+
+    /**
+     * DICOM の偶数長の埋め草（末尾の 0 が 1 バイト）を MP4 から外す。
+     *
+     * <p>最上位のボックスの長さを足して MP4 の終わりを求め、<b>ちょうど 1 バイトだけ余り、それが 0 のときだけ</b>切る
+     * （ボックスの並びが読めない・余りが 1 バイトでない・0 でないときは触らない＝中身を削らない）。
+     *
+     * @return 切ったら true
+     */
+    static boolean trimDicomPad(Path file) throws IOException {
+        long len = Files.size(file);
+        if (len < 9 || len % 2 != 0) return false;
+        long end = 0;
+        try (java.nio.channels.FileChannel ch = java.nio.channels.FileChannel.open(file,
+                java.nio.file.StandardOpenOption.READ)) {
+            java.nio.ByteBuffer head = java.nio.ByteBuffer.allocate(16);
+            while (end < len - 1) {
+                if (len - end < 8) return false;
+                head.clear();
+                ch.read(head, end);
+                head.flip();
+                long size = head.getInt(0) & 0xffffffffL;
+                if (size == 1) {
+                    if (head.limit() < 16) return false;
+                    size = head.getLong(8);
+                } else if (size == 0) {
+                    return false; // 「末尾まで」のボックス: 埋め草と区別できない
+                }
+                if (size < 8) return false;
+                end += size;
+            }
+            if (end != len - 1) return false;
+            java.nio.ByteBuffer last = java.nio.ByteBuffer.allocate(1);
+            ch.read(last, len - 1);
+            if (last.get(0) != 0) return false;
+        }
+        try (java.nio.channels.FileChannel ch = java.nio.channels.FileChannel.open(file,
+                java.nio.file.StandardOpenOption.WRITE)) {
+            ch.truncate(len - 1);
+        }
+        return true;
     }
 
     private static void move(Path from, Path to) throws IOException {
