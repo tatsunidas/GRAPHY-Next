@@ -18,10 +18,10 @@
 /**
  * 選べる Bundle（2026-10-03 に Hugging Face の MONAI 組織で configs/metadata.json を読んで確かめた）。
  * modality は送る前の絞り込みにだけ使う。使えるかの最終判定は計算機の上で metadata.json から行う。
- * checked: 実機（Colab の T4）で最後まで通したもの。
+ * 8 本とも 2026-10-03 に Colab の T4 で最後まで通した（automator/src/spike/computeMonaiCatalogCheck.ts）。
  */
 export const CATALOG = [
-  { name: "spleen_ct_segmentation", label: "脾臓", modality: "CT", labels: 1, checked: true },
+  { name: "spleen_ct_segmentation", label: "脾臓", modality: "CT", labels: 1 },
   { name: "wholeBody_ct_segmentation", label: "全身 104 臓器", modality: "CT", labels: 104 },
   { name: "swin_unetr_btcv_segmentation", label: "腹部 13 臓器（BTCV）", modality: "CT", labels: 13 },
   { name: "multi_organ_segmentation", label: "腹部 7 臓器", modality: "CT", labels: 7 },
@@ -80,6 +80,13 @@ def pip(*pk):
 
 # Bundle は実行フォルダの外に置く（同じランタイムなら 2 回目はダウンロードしない）
 CACHE = '/content/graphy-cache' if COLAB else os.path.join(os.path.expanduser('~'), '.graphy-cache')
+
+# MONAI 公式の Bundle は、モデルの構造ファイル（DiNTS の search_code_*.pt など）に numpy の配列が入っていて、
+# PyTorch 2.6 以降の既定（weights_only=True）では読めない。公式（Model Zoo・Hugging Face の MONAI 組織）に限って
+# 従来の読み込みを許す。誰でも置ける任意のリポジトリには許さない（pickle でコードを実行される余地を残さない）
+OFFICIAL = '/' not in B['name'] or B['name'].startswith('MONAI/')
+if OFFICIAL:
+    os.environ.setdefault('TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD', '1')
 
 stage('setup', 0.02)
 # ignite は monai より先に入れる（monai は import の時点で ignite の有無を覚えるので、あとから入れても効かない）。
@@ -178,6 +185,73 @@ def judge(meta, modality):
     return reasons
 
 
+def drop_unknown_args(config):
+    """
+    今の MONAI が受け付けない引数を、部品（_target_）の設定から外す。Bundle は作られた版（多くは 1.4）の書き方のままで、
+    新しい版で廃止された引数（例: SwinUNETR の img_size）があると組み立てで止まる。外すのは、同名の候補の
+    どれにも無い引数だけ（**kwargs を受ける部品は触らない）。外したものは結果に残す。
+    """
+    import inspect
+    import pydoc
+    from monai.bundle.config_item import ComponentLocator
+    locator = ComponentLocator()
+    dropped = []
+
+    def candidates(name):
+        if '.' in name:
+            obj = pydoc.locate(name)
+            return [obj] if obj is not None else []
+        mods = locator.get_component_module_name(name) or []
+        if isinstance(mods, str):
+            mods = [mods]
+        return [o for o in (pydoc.locate(m + '.' + name) for m in mods) if o is not None]
+
+    def walk(node, where):
+        if isinstance(node, dict):
+            target = node.get('_target_')
+            if isinstance(target, str) and target and target[0] not in '$@%':
+                params, open_kw = set(), False
+                for obj in candidates(target):
+                    try:
+                        sig = inspect.signature(obj)
+                    except (TypeError, ValueError):
+                        open_kw = True
+                        continue
+                    params |= set(sig.parameters)
+                    open_kw = open_kw or any(q.kind == q.VAR_KEYWORD for q in sig.parameters.values())
+                if params and not open_kw:
+                    for k in [k for k in node if not k.startswith('_') and k not in params]:
+                        node.pop(k)
+                        dropped.append(where + target.split('.')[-1] + '.' + k)
+            for k, v in node.items():
+                walk(v, where + k + '#')
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk(v, where + str(i) + '#')
+
+    walk(config, '')
+    return dropped
+
+
+def run_id_of(config):
+    """推論の入口。新しい Bundle は run、古いものは evaluating。"""
+    for k in ('run', 'evaluating', 'inferring'):
+        if k in config:
+            return k
+    raise RuntimeError('no-run-entry: 推論の入口（run / evaluating）が設定にありません')
+
+
+def datalist_for(config, image_path):
+    """設定のどこかで "@datalist" がそのまま使われていれば dict の一覧、そうでなければパスの一覧。"""
+    def raw_use(node):
+        if isinstance(node, dict):
+            return any(raw_use(v) for v in node.values())
+        if isinstance(node, list):
+            return any(raw_use(v) for v in node)
+        return isinstance(node, str) and node.strip() == '@datalist'
+    return [{'image': image_path}] if raw_use(config) else [image_path]
+
+
 root = fetch()
 meta_path = os.path.join(root, 'configs', 'metadata.json')
 meta = json.load(open(meta_path, encoding='utf-8'))
@@ -240,20 +314,57 @@ image_path = os.path.join(work, 'in', 'image.nii.gz')
 nib.save(img, image_path)
 stage('prepared', 0.4)
 
-from monai.bundle import run as bundle_run
+# 設定が使う画像の読み手に要るパッケージ（metadata の optional_packages_version に書かれていないことがある）
+READER_PACKAGES = {'ITKReader': ('itk', 'itk'), 'NrrdReader': ('pynrrd', 'nrrd'), 'PydicomReader': ('pydicom', 'pydicom')}
+inf_text = open(inf_path, encoding='utf-8').read()
+for reader, (dist, mod) in READER_PACKAGES.items():
+    if reader in inf_text and not importable(mod):
+        pip(dist)
+# datalist の形は Bundle ごとに違う。多くは「パスの一覧」を "$[{'image': i} for i in @datalist]" で包むが、
+# DiNTS 系（multi_organ・pancreas）は "@datalist" をそのまま dataset に渡すので {'image': パス} の一覧が要る
 kw = dict(config_file=inf_path, meta_file=meta_path, bundle_root=root,
-          datalist=[image_path], dataset_dir=os.path.join(work, 'in'), output_dir=out_dir)
+          datalist=datalist_for(parser.get(), image_path), dataset_dir=os.path.join(work, 'in'), output_dir=out_dir)
 logging_conf = os.path.join(root, 'configs', 'logging.conf')
 if os.path.isfile(logging_conf):
     kw['logging_file'] = logging_conf
 kw.update(OVR)
+# 互換の手当て: 今の MONAI が受け付けない引数を外した設定を書いて、それで走らせる
+config = parser.get()
+dropped = drop_unknown_args(config)
+if dropped:
+    print('compat: dropped', dropped, flush=True)
+    patched = os.path.join(work, 'inference.patched.json')
+    json.dump(config, open(patched, 'w', encoding='utf-8'))
+    kw['config_file'] = patched
+kw['run_id'] = run_id_of(config)
+# 推論は新しい Python のプロセスで走らせる。monai は import の時点で ignite・itk などの有無を覚えるので、
+# この kernel で入れたパッケージが効くように（この kernel は Bundle の取得と判定にだけ monai を使う）
+RUNNER = '''
+import json, sys
+kw = json.load(open(sys.argv[1], encoding='utf-8'))
 try:
     import torch
-    if torch.cuda.is_available():
-        torch.cuda.reset_peak_memory_stats()
+    cuda = torch.cuda.is_available()
 except Exception:
-    pass
-bundle_run(**kw)
+    cuda = False
+if cuda:
+    torch.cuda.reset_peak_memory_stats()
+from monai.bundle import run
+run(**kw)
+json.dump({'peakMiB': round(torch.cuda.max_memory_allocated() / 1048576) if cuda else None}, open(sys.argv[2], 'w'))
+'''
+kw_path = os.path.join(work, 'run-args.json')
+peak_path = os.path.join(work, 'run-peak.json')
+json.dump(kw, open(kw_path, 'w', encoding='utf-8'))
+proc = subprocess.run([sys.executable, '-c', RUNNER, kw_path, peak_path], capture_output=True, text=True)
+if proc.stdout:
+    print(proc.stdout[-4000:], flush=True)
+if proc.returncode != 0:
+    tail = (proc.stderr or '').strip().splitlines()[-30:]
+    print('\n'.join(tail), file=sys.stderr, flush=True)
+    last = next((l for l in reversed(tail) if l.strip()), 'unknown error')
+    raise RuntimeError('bundle-run-failed: ' + last[:500])
+run_peak = json.load(open(peak_path)) if os.path.isfile(peak_path) else {}
 stage('inferred', 0.85)
 
 outs = sorted(glob.glob(os.path.join(out_dir, '**', '*.nii*'), recursive=True))
@@ -298,8 +409,10 @@ json.dump({
     'geometry': {'spacing': sp.tolist(), 'origin': org.tolist(), 'direction': dr.tolist()},
     'outputFile': os.path.relpath(outs[0], work),
     'resampled': bool(resampled),
+    'compat': dropped,
+    'runId': kw['run_id'],
     'stages': STAGES,
-    'gpu': gpu(),
+    'gpu': ({**gpu(), 'peakMiB': run_peak.get('peakMiB')} if gpu() else None),
     'monai': monai.__version__,
 }, open('outputs/labels.json', 'w', encoding='utf-8'), ensure_ascii=False)
 `;
@@ -527,7 +640,7 @@ export async function activate(host) {
     ...CATALOG.map((c) => {
       const o = el("option", {
         value: c.name,
-        textContent: `${c.label}（${c.modality}）— ${c.name}${c.checked ? "・確認済み" : ""}`,
+        textContent: `${c.label}（${c.modality}）— ${c.name}`,
       });
       if (c.modality !== have) { o.disabled = true; o.textContent += `（${have || "?"} には使えない）`; }
       return o;
@@ -686,7 +799,14 @@ export async function activate(host) {
     preview.width = nx; preview.height = ny;
     const ctx = /** @type {CanvasRenderingContext2D} */ (preview.getContext("2d"));
     const im = ctx.createImageData(nx, ny);
-    const lo = 40 - 200, hi = 40 + 200;
+    // 濃淡の窓: CT は腹部の窓（HU 40±200）、それ以外（MR など）はそのスライスの 2〜98 パーセンタイル
+    let lo = 40 - 200, hi = 40 + 200;
+    if (String(vol.modality).toUpperCase() !== "CT") {
+      const sl = Array.from(vol.data.subarray(kv * nxy, (kv + 1) * nxy)).sort((a, b) => a - b);
+      lo = sl[Math.floor(sl.length * 0.02)];
+      hi = sl[Math.floor(sl.length * 0.98)];
+      if (!(hi > lo)) hi = lo + 1;
+    }
     for (let p = 0; p < nxy; p++) {
       const g = Math.max(0, Math.min(255, ((vol.data[kv * nxy + p] - lo) / (hi - lo)) * 255));
       const v = data[bestK * nxy + p];

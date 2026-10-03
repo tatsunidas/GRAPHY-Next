@@ -182,6 +182,17 @@ const PYTHON = process.env.GRAPHY_TEST_PYTHON;
 const FAKE_MONAI = {
   "monai/__init__.py": "__version__ = '0.0-fake'\n",
   "ignite/__init__.py": "",
+  "monai/bundle/config_item.py": `
+class ComponentLocator:
+    def get_component_module_name(self, name):
+        return ['monai.networks.fake'] if name == 'FakeNet' else None
+`,
+  "monai/networks/__init__.py": "",
+  "monai/networks/fake.py": `
+class FakeNet:
+    def __init__(self, in_channels, out_channels):
+        pass
+`,
   "monai/bundle/__init__.py": `
 import json, os, shutil
 import numpy as np
@@ -199,9 +210,22 @@ def download(name, bundle_dir, source, progress=True, version=None, repo=None):
     shutil.copytree(os.environ['FAKE_BUNDLE_SRC'], os.path.join(bundle_dir, name))
 
 
-def run(config_file, meta_file, bundle_root, datalist, dataset_dir, output_dir, logging_file=None, **kw):
+def run(config_file, meta_file, bundle_root, datalist, dataset_dir, output_dir, logging_file=None, run_id='run', **kw):
+    cfg = json.load(open(config_file))
+    assert run_id in cfg, ('run id', run_id, list(cfg))
+    net = cfg.get('network_def')
+    if net is not None:
+        assert 'img_size' not in net, 'img_size should have been dropped'
+        assert net['in_channels'] == 1
     import nibabel as nib
-    img = nib.load(datalist[0])
+    first = datalist[0]
+    if os.environ.get('FAKE_DICT_DATALIST'):
+        assert isinstance(first, dict) and 'image' in first, ('want dict datalist', datalist)
+        first = first['image']
+    else:
+        assert isinstance(first, str), ('want path datalist', datalist)
+    assert (os.environ.get('TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD') or '') == (os.environ.get('WANT_NO_WEIGHTS_ONLY') or ''), 'weights_only env'
+    img = nib.load(first)
     a = np.asanyarray(img.dataobj)
     lab = (a > 500).astype(np.uint8) + (a > 1500).astype(np.uint8)
     aff = img.affine
@@ -233,7 +257,7 @@ with zipfile.ZipFile('inputs/0.npz', 'a') as zf:
     zf.writestr('meta.json', json.dumps({'format': 'graphy-npz/1', 'modality': os.environ.get('FAKE_MODALITY', 'CT')}))
 `;
 
-for (const mode of ["same", "flip", "onehot"]) {
+for (const mode of ["same", "flip", "onehot", "dict-datalist", "third-party"]) {
   test(`PY round trip keeps the voxel grid (${mode})`, { skip: !PYTHON && "GRAPHY_TEST_PYTHON is not set" }, () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "graphy-monai-"));
     try {
@@ -245,7 +269,14 @@ for (const mode of ["same", "flip", "onehot"]) {
       const bundle = path.join(dir, "bundle");
       fs.mkdirSync(path.join(bundle, "configs"), { recursive: true });
       fs.writeFileSync(path.join(bundle, "configs", "metadata.json"), JSON.stringify(spleenMeta));
-      fs.writeFileSync(path.join(bundle, "configs", "inference.json"), JSON.stringify({ datalist: [], output_dir: "x" }));
+      // DiNTS 系は "@datalist" をそのまま dataset に渡す
+      const dataset = mode === "dict-datalist" ? { data: "@datalist" } : { data: "$[{'image': i} for i in @datalist]" };
+      // 古い書き方（evaluating の入口・廃止された引数）も通ること
+      const legacy = mode === "flip";
+      const cfg = { datalist: [], output_dir: "x", dataset, ...(legacy
+        ? { evaluating: ["$@evaluator.run()"], network_def: { _target_: "FakeNet", in_channels: 1, out_channels: 2, img_size: [96, 96, 96] } }
+        : { run: ["$@evaluator.run()"] }) };
+      fs.writeFileSync(path.join(bundle, "configs", "inference.json"), JSON.stringify(cfg));
       const run = path.join(dir, "run");
       fs.mkdirSync(run);
       const env = {
@@ -253,18 +284,22 @@ for (const mode of ["same", "flip", "onehot"]) {
         PYTHONPATH: [lib, process.env.GRAPHY_TEST_PYTHONPATH].filter(Boolean).join(path.delimiter),
         FAKE_BUNDLE_SRC: bundle,
         FAKE_MODE: mode,
+        FAKE_DICT_DATALIST: mode === "dict-datalist" ? "1" : "",
+        // 公式（名前に / が無い・MONAI/…）だけ従来の torch.load を許す
+        WANT_NO_WEIGHTS_ONLY: mode === "third-party" ? "" : "1",
         HOME: dir,
         USERPROFILE: dir,
         PIP_NO_INDEX: "1", PYTHONIOENCODING: "utf-8", // 万一 pip が呼ばれても手元の環境を書き換えない
       };
       delete env.COLAB_RELEASE_TAG;
+      delete env.TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD;
       const py = (code) => {
         const r = spawnSync(PYTHON, ["-c", code], { cwd: run, env, encoding: "utf8" });
         assert.equal(r.status, 0, r.stderr);
         return r.stdout;
       };
       py(MAKE_INPUT);
-      const out = py(buildScript({ name: "fake_bundle" }));
+      const out = py(buildScript({ name: mode === "third-party" ? "someone/fake_bundle" : "fake_bundle" }));
       assert.match(out, /__progress__ 1\.0 done/);
       // NIfTI の向き: voxel (i,j,k) の RAS は npz の LPS の x・y を反転したもの
       py(`
@@ -284,6 +319,8 @@ assert v[3, 2, 1] == 1000 and v[7, 5, 4] == 2000
       assert.deepEqual([...labels.data], [...expected.data]);
       const summary = JSON.parse(fs.readFileSync(path.join(run, "outputs", "labels.json"), "utf8"));
       assert.equal(summary.resampled, mode === "flip");
+      assert.equal(summary.runId, mode === "flip" ? "evaluating" : "run");
+      assert.deepEqual(summary.compat, mode === "flip" ? ["network_def#FakeNet.img_size"] : []);
       assert.deepEqual(summary.labels, { 0: 6 * 7 * 9 - 3, 1: 2, 2: 1 });
       assert.deepEqual(summary.channelDef, { 0: "background", 1: "spleen" });
       // 本体の格子（スライスが逆順）へ写しても目印が同じ場所に来る

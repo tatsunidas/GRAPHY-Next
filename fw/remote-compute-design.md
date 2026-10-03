@@ -677,3 +677,42 @@ cd automator && npx tsx src/spike/computeMonaiCheck.ts [bundle名]   # Colab に
   - 既に何か登録されていれば足さない（利用者が選んだものを変えない）。
 - テスト: `desktop/computeDefault.test.js` 5、frontend `pluginComputeStatus.test.ts`（既定の選び方・ensure の失敗・名指しのときは足さない）。
 
+---
+
+## 18. 一覧の 8 本を全部通す（2026-10-03）
+
+利用者の要望: 「どのモデルを選んでも成功するように」。`automator/src/spike/computeMonaiCatalogCheck.ts` で、一覧（`CATALOG`）の 8 本を本物の Colab（GPU T4）で順に通す。
+**33/0**。MR は公開データを手元に置いて使う（`automator/fixtures/mr-monai/`・git に入れない）: MSD Task05 の prostate_16 の T2（CC-BY-SA 4.0）、TemplateFlow の MNI152NLin2009cAsym T1w 1mm。
+
+| Bundle | シリーズ | ジョブ全体 | Colab の上（うち推論） | GPU 最大 | ラベル |
+|---|---|---|---|---|---|
+| spleen_ct_segmentation | CT PRE LIVER 43 枚 | 143 秒 | 73 秒（26） | 913 MiB | 1 |
+| wholeBody_ct_segmentation | 同 | 103 秒 | 58 秒（24） | 8,392 MiB | 59 |
+| swin_unetr_btcv_segmentation | 同 | 180 秒 | 92 秒（61） | 5,417 MiB | 13 |
+| multi_organ_segmentation | 同 | 167 秒 | 127 秒（79） | 5,832 MiB | 6 |
+| pancreas_ct_dints_segmentation | 同 | 173 秒 | 114 秒（79） | 3,362 MiB | 1 |
+| renalStructures_UNEST_segmentation | 同 | 269 秒 | 191 秒（155） | 5,865 MiB | 3 |
+| prostate_mri_anatomy | MR T2 20 枚 | 85 秒 | 65 秒（32） | 3,958 MiB | 2 |
+| wholeBrainSeg_Large_UNEST_segmentation | MR T1 193 枚 | 235 秒 | 193 秒（163） | 11,546 MiB | 132 |
+
+（同じランタイムで続けて走らせたので、2 本目以降はパッケージの導入が済んでいる。初回は monai・ignite・nibabel の導入で +20〜40 秒）
+
+### 実機で分かった、Bundle ごとの違い（どれも「Bundle は作られた MONAI の版（多くは 1.4）の書き方のまま」が原因）
+
+1. **DiNTS 系（multi_organ・pancreas）の構造ファイルが読めない**: `torch.load` で numpy の配列を含む `search_code_*.pt` を読むが、PyTorch 2.6 以降の
+   既定（`weights_only=True`）が拒否する。→ **MONAI 公式の Bundle（名前に `/` が無い・`MONAI/…`）に限って** `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1`。
+   任意の Hugging Face のリポジトリには許さない（pickle でコードを実行される余地を残さない）。
+2. **DiNTS 系は datalist を `{'image': パス}` の一覧で受ける**（ほかは「パスの一覧」を `$[{'image': i} for i in @datalist]` で包む）。→ 設定の中で
+   `"@datalist"` がそのまま使われているかを見て形を合わせる（`datalist_for`）。
+3. **古い書き方の入口（renal・wholeBrain は `evaluating`）**: `monai.bundle.run` の既定 `run` が無い。→ 設定から入口を探す（`run_id_of`）。
+4. **廃止された引数（swin_unetr の `img_size`。MONAI 1.5 で削除）**: → 部品（`_target_`）の署名を見て、今の MONAI が受け付けない引数を外す
+   （同名の候補のどれにも無いものだけ・`**kwargs` の部品は触らない）。外したものは `labels.json` の `compat` に残す（`drop_unknown_args`）。
+5. **metadata に書かれていない依存（swin_unetr の `ITKReader` → itk）**: → 設定が使う読み手から入れる（`READER_PACKAGES`）。
+6. 🔴 **monai は import の時点で ignite・itk などの有無を覚える**（あとから pip で入れても効かない。ignite で 1 回、itk で 1 回踏んだ）。
+   → **推論は新しい Python のプロセスで走らせる**（kernel は Bundle の取得と判定にだけ monai を使う）。GPU の最大メモリはそのプロセスが書き出す。
+
+### そのほか
+- 下見の画像の窓: CT は HU 40±200、それ以外はそのスライスの 2〜98 パーセンタイル（MR で背景が真っ白になっていた）。
+- wholeBrain は T4 の 15 GB に対して 11.5 GB。入力が大きい MR（例: 0.5 mm 等方）では足りない可能性がある。
+- Colab のカーネルが `HF_TOKEN` を Colab の秘密情報から読もうとして時間切れの警告を出す（UI からでないと読めない）。無害。
+
