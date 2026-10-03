@@ -145,6 +145,8 @@ async function main(): Promise<void> {
     check(typeof s.bundle?.license === "string" && s.bundle.license.length > 0, "ライセンスが返る");
     console.log(`    ${JSON.stringify({ stages: s.summary?.stages, gpu: s.summary?.gpu, labels: Object.keys(s.summary?.labels ?? {}).length, resampled: s.summary?.resampled })}`);
     check(/T4/.test(s.summary?.gpu?.name ?? ""), "GPU T4 で走った", s.summary?.gpu);
+    check(s.shown?.ok === true && s.shown.segmentCount === Object.keys(s.summary?.labels ?? {}).filter((k) => k !== "0").length,
+      "H63: 結果がそのまま ROI マネージャに読み込まれる（ラベルの数が一致）", s.shown);
     const fg = Object.entries(s.summary?.labels ?? {}).filter(([k]) => k !== "0").reduce((a, [, c]) => a + Number(c), 0);
     check(fg > 100, "前景のラベルが返る", s.summary?.labels);
     check(await viewer.getByTestId("monai-preview").isVisible(), "下見の画像が出る");

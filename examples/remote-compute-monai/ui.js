@@ -31,8 +31,6 @@ export const CATALOG = [
   { name: "wholeBrainSeg_Large_UNEST_segmentation", label: "脳 133 領域（T1 MR）", modality: "MR", labels: 132 },
 ];
 const OTHER = "__other__";
-/** SEG に渡すマスクの合計（セグメントごとに volume と同じ大きさの配列が要る）。 */
-const MAX_SEG_BYTES = 1.5e9;
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*(\/[A-Za-z0-9][A-Za-z0-9_.-]*)?$/;
 
 // ---------------------------------------------------------------------------
@@ -462,25 +460,28 @@ export function mapSlices(g, shapeZyx, vol) {
 }
 
 /**
- * ラベルの volume から、選んだラベルごとの 0/1 マスク（loadVolume の並び）を作る。
- * @param {ArrayLike<number>} labels [z, y, x]
- * @param {Int32Array} kMap
+ * 計算機から返ったラベル（npz の並び）を、`loadVolume` の並びの 1 本の volume に写す（同じ型のまま）。
+ * 保存（H62）も表示（H63）もこの 1 本を渡す（ラベルごとに volume 大の配列を作らない）。
+ * @param {Uint8Array | Uint16Array} labels [z, y, x]
+ * @param {Int32Array} kMap  npz の k → 本体の k
  * @param {number} nxy  1 スライスの画素数
- * @param {number[]} values
  */
-export function splitSegments(labels, kMap, nxy, values) {
-  const nz = kMap.length;
-  const index = new Map(values.map((v, i) => [v, i]));
-  const masks = values.map(() => new Uint8Array(nxy * nz));
-  for (let k = 0; k < nz; k++) {
-    const src = k * nxy;
-    const dst = kMap[k] * nxy;
-    for (let p = 0; p < nxy; p++) {
-      const i = index.get(labels[src + p]);
-      if (i !== undefined) masks[i][dst + p] = 1;
-    }
+export function reorderLabels(labels, kMap, nxy) {
+  const out = new /** @type {any} */ (labels.constructor)(labels.length);
+  for (let k = 0; k < kMap.length; k++) {
+    out.set(labels.subarray(k * nxy, (k + 1) * nxy), kMap[k] * nxy);
   }
-  return masks;
+  return out;
+}
+
+/**
+ * ラベルの表（H62・H63 に渡す形）。名前は Bundle の channel_def、無ければ番号。
+ * @param {number[]} values
+ * @param {Map<number, string>} names
+ * @param {string} description
+ */
+export function labelTable(values, names, description) {
+  return values.map((v) => ({ value: v, label: names.get(v) ?? `label ${v}`, color: colorFor(v), description }));
 }
 
 /** ラベル番号ごとに見分けやすい色（黄金角で色相を回す）。 */
@@ -544,6 +545,11 @@ export async function activate(host) {
   const result = el("div", { testid: "monai-result" });
   const otherRow = el("div", { style: "display: none; gap: 6px" }, nameInput);
   root.append(
+    el("div", {
+      testid: "monai-research-only",
+      textContent: "研究用です。診断には使わないでください。結果は必ず画像で確かめてから使ってください。",
+      style: "font-size: 12px; color: #8a4b00; background: #fdf0e3; border: 1px solid #e0b884; border-radius: 4px; padding: 4px 8px",
+    }),
     el("div", {}, `対象: ${target.seriesLabel}（${target.modality}・${target.sliceCount} 枚）`),
     el("div", { style: "display: flex; gap: 6px" }, picker, runBtn),
     otherRow,
@@ -642,15 +648,29 @@ export async function activate(host) {
     const mapped = mapSlices(summary.geometry, /** @type {any} */ (npy.shape), vol);
     if (!mapped.ok) { state.error = mapped.error; setStatus(`失敗: ${mapped.error}`); busy(false); return; }
     state.summary = summary;
-    state.labels = { data: npy.data, kMap: mapped.kMap, vol };
+    state.labels = { data: reorderLabels(/** @type {any} */ (npy.data), mapped.kMap, vol.dims[0] * vol.dims[1]), vol };
     showResult(summary);
+    // H63: 結果をそのまま ROI マネージャへ（表示だけ。保存は「SEG で保存」）
+    if (host.showLabelVolume) {
+      const names = new Map((state.verdict?.labels ?? []).map((l) => [l.value, l.name]));
+      const values = state.present.map((x) => x.value);
+      state.shown = await host.showLabelVolume(target.tileId, {
+        grid: { dims: vol.dims, ipp: vol.ipp, sliceStep: vol.sliceStep },
+        data: state.labels.data,
+        table: labelTable(values, names, ""),
+        label: `MONAI ${state.bundle?.name ?? ""}`.trim(),
+      });
+      result.textContent = state.shown.ok
+        ? `ROI マネージャに読み込みました（${state.shown.segmentCount} ラベル）。保存するときは下の「SEG で保存」を押してください。`
+        : `ROI マネージャに読み込めませんでした: ${state.shown.error}`;
+    }
     setStatus(`できました（${summary.stages?.done ?? "?"} 秒${summary.gpu ? "・" + summary.gpu.name + "・最大 " + summary.gpu.peakMiB + " MiB" : ""}）`);
     busy(false);
   });
 
   /** @param {any} summary */
   function showResult(summary) {
-    const { data, kMap, vol } = state.labels;
+    const { data, vol } = state.labels;
     const [nx, ny, nz] = vol.dims;
     const nxy = nx * ny;
     const names = new Map((state.verdict?.labels ?? []).map((l) => [l.value, l.name]));
@@ -662,7 +682,7 @@ export async function activate(host) {
       for (let p = k * nxy; p < (k + 1) * nxy; p++) if (data[p] > 0) c++;
       if (c > best) { best = c; bestK = k; }
     }
-    const kv = kMap[bestK];
+    const kv = bestK; // data は本体の並びに写してある
     preview.width = nx; preview.height = ny;
     const ctx = /** @type {CanvasRenderingContext2D} */ (preview.getContext("2d"));
     const im = ctx.createImageData(nx, ny);
@@ -680,7 +700,7 @@ export async function activate(host) {
     preview.style.display = "block";
     preview.style.width = Math.min(nx, 512) + "px";
     labelBox.replaceChildren(...present.map((x) => {
-      const cb = el("input", { type: "checkbox", checked: present.length <= 8, value: String(x.value) });
+      const cb = el("input", { type: "checkbox", checked: true, value: String(x.value) });
       const [r, g, b] = colorFor(x.value);
       return el("label", {},
         cb, el("span", { textContent: "■", style: `color: rgb(${r},${g},${b})` }),
@@ -693,28 +713,18 @@ export async function activate(host) {
     if (!state.labels) return;
     const values = [...labelBox.querySelectorAll("input:checked")].map((c) => Number(/** @type {HTMLInputElement} */ (c).value));
     if (values.length === 0) { setStatus("保存するラベルを選んでください"); return; }
-    const { data, kMap, vol } = state.labels;
-    const nvox = vol.dims[0] * vol.dims[1] * vol.dims[2];
-    if (nvox * values.length > MAX_SEG_BYTES) {
-      setStatus(`選んだラベルが多すぎます（${values.length} 個）。${Math.floor(MAX_SEG_BYTES / nvox)} 個までにしてください`);
-      return;
-    }
+    const { data, vol } = state.labels;
     busy(true);
     const names = new Map((state.verdict?.labels ?? []).map((l) => [l.value, l.name]));
-    const masks = splitSegments(data, kMap, vol.dims[0] * vol.dims[1], values);
+    // H62: ラベルの volume 1 本と表を渡す（選ばなかったラベルは表に入れない＝背景になる）
     const res = await host.saveSegmentation({
       reference: { studyUid: target.studyUid, seriesUid: target.seriesUid },
       grid: { dims: vol.dims, spacing: vol.spacing, ipp: vol.ipp, iop: vol.iop, sliceStep: vol.sliceStep },
       seriesDescription: `MONAI ${state.bundle.name}`,
-      segments: values.map((v, i) => ({
-        label: names.get(v) ?? `label ${v}`,
-        color: colorFor(v),
-        description: `${state.bundle.name} ${state.summary.version ?? ""}`.trim(),
-        data: masks[i],
-      })),
+      labels: { data, table: labelTable(values, names, `${state.bundle.name} ${state.summary.version ?? ""}`.trim()) },
     });
     state.saved = res;
-    result.textContent = res.ok ? `保存しました（${res.seriesInstanceUid}）。ROI マネージャの SEG 読み込みで表示できます。`
+    result.textContent = res.ok ? `SEG を保存しました（${values.length} ラベル・${res.seriesInstanceUid}）。`
       : res.cancelled ? "保存を取り消しました" : `保存に失敗しました: ${res.error}`;
     busy(false);
   });

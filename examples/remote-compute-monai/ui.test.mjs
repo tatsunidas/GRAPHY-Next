@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { CATALOG, buildScript, colorFor, judge, mapSlices, parseNpy, splitSegments, validBundleName } from "./ui.js";
+import { CATALOG, buildScript, colorFor, judge, labelTable, mapSlices, parseNpy, reorderLabels, validBundleName } from "./ui.js";
 
 function npy(descr, shape, bytes) {
   let header = `{'descr': '${descr}', 'fortran_order': False, 'shape': (${shape.join(", ")}${shape.length === 1 ? "," : ""}), }`;
@@ -143,12 +143,17 @@ test("mapSlices refuses a grid that is off by one slice or a different size", ()
   assert.equal(mapSlices(flippedX, [4, 3, 5], volGrid(geom, 5, 3, 4, false)).ok, false);
 });
 
-test("splitSegments writes each label into the mapped slice", () => {
+test("reorderLabels writes each npz slice into the mapped host slice, keeping the type", () => {
   // 2 スライス × 2 画素。スライスは逆順に対応
-  const labels = new Uint8Array([1, 0, 2, 1]);
-  const [m1, m2] = splitSegments(labels, new Int32Array([1, 0]), 2, [1, 2]);
-  assert.deepEqual([...m1], [0, 1, 1, 0]);
-  assert.deepEqual([...m2], [1, 0, 0, 0]);
+  const out = reorderLabels(new Uint16Array([1, 0, 300, 1]), new Int32Array([1, 0]), 2);
+  assert.ok(out instanceof Uint16Array);
+  assert.deepEqual([...out], [300, 1, 1, 0]);
+});
+
+test("labelTable names labels from channel_def and falls back to the number", () => {
+  const t = labelTable([1, 5], new Map([[1, "spleen"]]), "d");
+  assert.deepEqual(t.map((x) => [x.value, x.label, x.description]), [[1, "spleen", "d"], [5, "label 5", "d"]]);
+  assert.equal(t[0].color.length, 3);
 });
 
 test("colorFor gives distinct colors for neighbours", () => {
@@ -284,9 +289,9 @@ assert v[3, 2, 1] == 1000 and v[7, 5, 4] == 2000
       // 本体の格子（スライスが逆順）へ写しても目印が同じ場所に来る
       const mapped = mapSlices(summary.geometry, labels.shape, volGrid(summary.geometry, 9, 7, 6, true));
       assert.equal(mapped.ok, true);
-      const [m1, m2] = splitSegments(labels.data, mapped.kMap, 63, [1, 2]);
-      assert.equal(m1[(5 - 1) * 63 + 2 * 9 + 3], 1);
-      assert.equal(m2[(5 - 4) * 63 + 5 * 9 + 7], 1);
+      const host = reorderLabels(labels.data, mapped.kMap, 63);
+      assert.equal(host[(5 - 1) * 63 + 2 * 9 + 3], 1);
+      assert.equal(host[(5 - 4) * 63 + 5 * 9 + 7], 2);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
