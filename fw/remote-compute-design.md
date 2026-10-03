@@ -732,3 +732,17 @@ cd automator && npx tsx src/spike/computeMonaiCheck.ts [bundle名]   # Colab に
   （パスフレーズ付きの鍵なら `MINISIGN_PASSWORD` も）。
 - ⚠ 既存の公式プラグイン `graphy-next-plugin-art` v0.1.0 は**署名なしで出ている**（secrets が鍵だけで、ワークフローが鍵とパスフレーズの両方を要求して署名を飛ばした）。
 
+---
+
+## 20. 配布物に Colab の OAuth クライアントを入れる（2026-10-03）
+
+開発では `desktop/colab-oauth-client.json`（.gitignore）を手で置いている。配布物には、リリースのワークフロー（`.github/workflows/release.yml` の
+Desktop ジョブ）が **`secrets.GRAPHY_COLAB_OAUTH_CLIENT`** から書き出して入れる（`build.files` に載せてある・app.asar に入る）。
+
+- secrets が無ければ警告だけ出して進む（Colab だけが「設定がありません」になる配布物）。あれば JSON の形（`installed.client_id`／`client_secret`）を確かめ、
+  `scripts/check-packaged.js` が app.asar に入ったことを確かめる（`GRAPHY_REQUIRE_COLAB_CLIENT=1`）。
+- デスクトップ アプリ型のクライアントの secret は、Google の扱いでは機密ではない（配布物から取り出せる前提の方式。PKCE と loopback で守る）。
+  公開リポジトリに置かないのは、他人のアプリが当社のクライアントを名乗るのを少しでも難しくするため。
+- 🔴 **登録が要る**: `gh secret set GRAPHY_COLAB_OAUTH_CLIENT -R tatsunidas/GRAPHY-Next < desktop/colab-oauth-client.json`（Google からダウンロードした JSON）。
+- 併せて、同意画面が「テスト中」のままだと、テストユーザー以外はログインできず、ログインは 7 日で切れる。配布の前に「本番」へ切り替える（非機密スコープなのでブランドの確認だけの見込み）。
+

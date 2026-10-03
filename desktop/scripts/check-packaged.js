@@ -47,6 +47,11 @@ for (const a of asars) {
     failed = true;
     for (const p of cspProblems) console.error(`::error::${a} の画面の CSP: ${p}（frontend/vite.config.ts）`);
   }
+  // Colab の OAuth クライアント: リリースで入れたときだけ（secrets が無い配布物では入らないのが正しい）
+  if (process.env.GRAPHY_REQUIRE_COLAB_CLIENT === "1" && !inside.has("colab-oauth-client.json")) {
+    failed = true;
+    console.error(`::error::${a} に colab-oauth-client.json がありません（desktop/package.json の build.files）`);
+  }
   if (!missing.length && !cspProblems.length) console.log(`OK: ${a}（${need.length} ファイル・画面の CSP）`);
 
 }

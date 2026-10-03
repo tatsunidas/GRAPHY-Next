@@ -152,6 +152,23 @@ jobs:
         run: |
           bash scripts/fetch-dcm4che-tools.sh
           bash scripts/fetch-dcm4che-tools.sh --check
+      # Google Colab に接続するための OAuth クライアント（デスクトップ アプリ型）を入れる。
+      # 公開リポジトリには置かない（.gitignore）。secrets.GRAPHY_COLAB_OAUTH_CLIENT に Google から
+      # ダウンロードした JSON（"installed"）をそのまま登録する。設計: fw/remote-compute-design.md §20。
+      # 無ければ入れずに進む（Colab だけが「設定がありません」になる配布物）。あれば中身を確かめ、
+      # 入ったことを check-packaged.js にも確かめさせる。
+      - name: Write Colab OAuth client
+        shell: bash
+        env:
+          COLAB_CLIENT: ${{ secrets.GRAPHY_COLAB_OAUTH_CLIENT }}
+        run: |
+          if [ -z "$COLAB_CLIENT" ]; then
+            echo "::warning::secrets.GRAPHY_COLAB_OAUTH_CLIENT がありません。この配布物では Google Colab に接続できません。"
+            exit 0
+          fi
+          printf '%s' "$COLAB_CLIENT" > desktop/colab-oauth-client.json
+          node -e "const j=require('./desktop/colab-oauth-client.json'); if(!j.installed||!j.installed.client_id||!j.installed.client_secret){console.error('::error::colab-oauth-client.json に installed.client_id / client_secret がありません（デスクトップ アプリ型の JSON を登録してください）');process.exit(1)}"
+          echo "GRAPHY_REQUIRE_COLAB_CLIENT=1" >> "$GITHUB_ENV"
       - name: Install desktop deps & build installer
         working-directory: desktop
         shell: bash
