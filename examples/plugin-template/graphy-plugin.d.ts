@@ -1127,6 +1127,13 @@ interface PluginHostBase {
    */
   compute: {
     runJob: (opts: ComputeRunJobOptions, jobOpts?: PluginJobOptions) => Promise<ComputeRunOutcome>;
+    /** H61: 計算機の一覧と、Colab のランタイムを確保しているか（トークンや URL は出さない）。 */
+    status: () => Promise<ComputeEndpointStatus[]>;
+    /**
+     * H61: Colab のランタイムを解放する。`ask: true` なら本体が確認を出す（文言は本体が決める）。
+     * 確保していなければ `{ok:true, released:false}`。次の `runJob` が自動で確保し直す。
+     */
+    releaseRuntime: (endpointId: string, opts?: { ask?: boolean }) => Promise<ComputeReleaseOutcome>;
   };
   /** 本体の DB（H44・H46・H51・**0.3.0 以降**）。 */
   db: {
@@ -2146,3 +2153,14 @@ export type PluginDicomImportOutcome =
   | { ok: true; imported: number; skipped: number; failed: number; errors: string[] }
   | { ok: false; error?: string };
 
+/** `host.compute.status()` の要素（H61）。 */
+export interface ComputeEndpointStatus {
+  id: string;
+  label: string;
+  kind: "jupyter" | "colab";
+  /** colab のとき: ランタイムを確保しているか・アクセラレータ（例 T4）。jupyter は null。 */
+  runtime: { allocated: boolean; accelerator: string | null } | null;
+}
+
+/** `host.compute.releaseRuntime()` の結果（H61）。 */
+export type ComputeReleaseOutcome = { ok: true; released: boolean } | { ok: false; error: string };

@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { buildScript, colorFor, judge, mapSlices, parseNpy, splitSegments, validBundleName } from "./ui.js";
+import { CATALOG, buildScript, colorFor, judge, mapSlices, parseNpy, splitSegments, validBundleName } from "./ui.js";
 
 function npy(descr, shape, bytes) {
   let header = `{'descr': '${descr}', 'fortran_order': False, 'shape': (${shape.join(", ")}${shape.length === 1 ? "," : ""}), }`;
@@ -60,6 +60,35 @@ test("judge refuses obvious mismatches", () => {
   assert.match(v.reasons.join(), /チャネル数が 4/);
   const cls = { network_data_format: { inputs: { image: { modality: "CT", num_channels: 1 } }, outputs: { pred: { format: "classification" } } } };
   assert.equal(judge(cls, { modality: "CT" }).ok, false);
+});
+
+test("judge tolerates how real bundles describe themselves", () => {
+  // prostate_mri_anatomy は出力の形式を "labels" と書く
+  const prostate = {
+    network_data_format: {
+      inputs: { image: { format: "magnitude", modality: "MR", num_channels: 1 } },
+      outputs: { pred: { format: "labels", channel_def: { 0: "background", 1: "TZ", 2: "PZ" } } },
+    },
+  };
+  assert.equal(judge(prostate, { modality: "MR" }).ok, true);
+  // wholeBrainSeg_Large_UNEST_segmentation は MRI なのに format を "hounsfield" と書く
+  const brain = {
+    network_data_format: {
+      inputs: { image: { format: "hounsfield", modality: "MRI", num_channels: 1 } },
+      outputs: { pred: { format: "segmentation", channel_def: { 0: "background", 1: "a" } } },
+    },
+  };
+  assert.equal(judge(brain, { modality: "MR" }).ok, true);
+  assert.equal(judge(brain, { modality: "CT" }).ok, false);
+});
+
+test("the catalog only lists single-series segmentation bundles with valid names", () => {
+  assert.ok(CATALOG.length >= 5);
+  for (const c of CATALOG) {
+    assert.equal(validBundleName(c.name), true, c.name);
+    assert.ok(c.modality === "CT" || c.modality === "MR", c.name);
+  }
+  assert.equal(new Set(CATALOG.map((c) => c.name)).size, CATALOG.length);
 });
 
 test("judge without network_data_format warns but does not block", () => {
@@ -128,11 +157,11 @@ test("colorFor gives distinct colors for neighbours", () => {
 });
 
 test("buildScript embeds only the bundle settings and passes the code inspector limits", () => {
-  assert.throws(() => buildScript("inspect", { name: "x'; import os" }), /bad-bundle-name/);
+  assert.throws(() => buildScript({ name: "x'; import os" }), /bad-bundle-name/);
   assert.equal(validBundleName("MONAI/spleen_ct_segmentation"), true);
   assert.equal(validBundleName("../etc"), false);
   assert.equal(validBundleName(".."), false);
-  const code = buildScript("infer", { name: "spleen_ct_segmentation" }, { highres: false });
+  const code = buildScript({ name: "spleen_ct_segmentation" }, { highres: false });
   assert.ok(code.length < 64 * 1024);
   // CodeInspector: base64 風の 200 文字以上・数字の 400 文字以上の連なりがあると「埋め込みデータ」とみなされる
   assert.equal(/[A-Za-z0-9+/=_-]{200,}/.test(code), false);
@@ -194,6 +223,9 @@ os.makedirs('inputs', exist_ok=True); os.makedirs('outputs', exist_ok=True)
 np.savez('inputs/0.npz', volume=vol, spacing=np.array([2.5, 0.8, 0.7]), origin=np.array([-100.0, -120.0, 50.0]),
          direction=np.array([[c, s, 0], [-s, c, 0], [0, 0, 1.0]]))
 np.save('expected.npy', ((vol > 500).astype(np.uint8) + (vol > 1500).astype(np.uint8)))
+import zipfile
+with zipfile.ZipFile('inputs/0.npz', 'a') as zf:
+    zf.writestr('meta.json', json.dumps({'format': 'graphy-npz/1', 'modality': os.environ.get('FAKE_MODALITY', 'CT')}))
 `;
 
 for (const mode of ["same", "flip", "onehot"]) {
@@ -218,7 +250,7 @@ for (const mode of ["same", "flip", "onehot"]) {
         FAKE_MODE: mode,
         HOME: dir,
         USERPROFILE: dir,
-        PIP_NO_INDEX: "1", // 万一 pip が呼ばれても手元の環境を書き換えない
+        PIP_NO_INDEX: "1", PYTHONIOENCODING: "utf-8", // 万一 pip が呼ばれても手元の環境を書き換えない
       };
       delete env.COLAB_RELEASE_TAG;
       const py = (code) => {
@@ -227,7 +259,7 @@ for (const mode of ["same", "flip", "onehot"]) {
         return r.stdout;
       };
       py(MAKE_INPUT);
-      const out = py(buildScript("infer", { name: "fake_bundle" }));
+      const out = py(buildScript({ name: "fake_bundle" }));
       assert.match(out, /__progress__ 1\.0 done/);
       // NIfTI の向き: voxel (i,j,k) の RAS は npz の LPS の x・y を反転したもの
       py(`
@@ -264,12 +296,53 @@ assert v[3, 2, 1] == 1000 and v[7, 5, 4] == 2000
 test("PY does not install packages outside Colab", { skip: !PYTHON && "GRAPHY_TEST_PYTHON is not set" }, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "graphy-monai-"));
   try {
-    const env = { ...process.env, PIP_NO_INDEX: "1", HOME: dir, USERPROFILE: dir, PYTHONPATH: path.join(dir, "empty") };
+    const env = { ...process.env, PIP_NO_INDEX: "1", PYTHONIOENCODING: "utf-8", HOME: dir, USERPROFILE: dir, PYTHONPATH: path.join(dir, "empty") };
     delete env.COLAB_RELEASE_TAG;
-    const r = spawnSync(PYTHON, ["-c", buildScript("inspect", { name: "spleen_ct_segmentation" })], { cwd: dir, env, encoding: "utf8" });
+    const r = spawnSync(PYTHON, ["-c", buildScript({ name: "spleen_ct_segmentation" })], { cwd: dir, env, encoding: "utf8" });
     // 手元の Python に MONAI が入っていれば先へ進むので、そのときは「pip を呼んでいない」ことだけ確かめる
     assert.doesNotMatch(r.stdout + r.stderr, /Collecting|Successfully installed/);
     if (r.status !== 0 && /monai|nibabel/.test(r.stderr)) assert.match(r.stderr, /missing-packages/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("PY stops before inference when the series does not fit, but still returns the model description", { skip: !PYTHON && "GRAPHY_TEST_PYTHON is not set" }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "graphy-monai-"));
+  try {
+    const lib = path.join(dir, "lib");
+    for (const [p, body] of Object.entries(FAKE_MONAI)) {
+      fs.mkdirSync(path.dirname(path.join(lib, p)), { recursive: true });
+      fs.writeFileSync(path.join(lib, p), body);
+    }
+    const bundle = path.join(dir, "bundle");
+    fs.mkdirSync(path.join(bundle, "configs"), { recursive: true });
+    fs.writeFileSync(path.join(bundle, "configs", "metadata.json"), JSON.stringify(spleenMeta));
+    fs.writeFileSync(path.join(bundle, "configs", "inference.json"), JSON.stringify({ datalist: [], output_dir: "x" }));
+    fs.writeFileSync(path.join(bundle, "LICENSE"), "Apache License\n");
+    const run = path.join(dir, "run");
+    fs.mkdirSync(run);
+    const env = {
+      ...process.env,
+      PYTHONPATH: [lib, process.env.GRAPHY_TEST_PYTHONPATH].filter(Boolean).join(path.delimiter),
+      FAKE_BUNDLE_SRC: bundle,
+      FAKE_MODALITY: "MR",
+      HOME: dir,
+      USERPROFILE: dir,
+      PIP_NO_INDEX: "1", PYTHONIOENCODING: "utf-8",
+    };
+    delete env.COLAB_RELEASE_TAG;
+    const py = (code) => spawnSync(PYTHON, ["-c", code], { cwd: run, env, encoding: "utf8" });
+    assert.equal(py(MAKE_INPUT).status, 0);
+    const r = py(buildScript({ name: "fake_bundle" }));
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /not-applicable: このモデルは CT 用です（このシリーズは MR）/);
+    const b = JSON.parse(fs.readFileSync(path.join(run, "outputs", "bundle.json"), "utf8"));
+    assert.equal(b.modality, "MR");
+    assert.equal(b.license.trim(), "Apache License");
+    assert.deepEqual(b.reasons, ["このモデルは CT 用です（このシリーズは MR）"]);
+    assert.equal(fs.existsSync(path.join(run, "outputs", "labels.npy")), false, "推論していない");
+    assert.equal(fs.existsSync(path.join(run, "work")), false, "画像を NIfTI にもしていない");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

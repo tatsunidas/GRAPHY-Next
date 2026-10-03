@@ -109,8 +109,8 @@ export type {
  * host の中身は `viewer2d.menu` と完全に同一で、違うのは出る場所だけである。
  */
 import type { AiGenerationOptions, AiGenerationOutcome } from "./pluginAiApi";
-import type { ComputeRunJobOptions, ComputeRunOutcome } from "./pluginComputeApi";
-export type { ComputeJobInput, ComputeOutputFile, ComputeRunJobOptions, ComputeRunOutcome } from "./pluginComputeApi";
+import type { ComputeRunJobOptions, ComputeRunOutcome, ComputeEndpointStatus, ComputeReleaseOutcome } from "./pluginComputeApi";
+export type { ComputeEndpointStatus, ComputeJobInput, ComputeOutputFile, ComputeReleaseOutcome, ComputeRunJobOptions, ComputeRunOutcome } from "./pluginComputeApi";
 import type { PickDirectoryResult, PluginSaveArtifactOptions, PluginSaveFileOptions } from "./pluginFileApi";
 export type { PickDirectoryResult, PluginSaveArtifactOptions };
 import type { SaveFileResult } from "../desktopBridge";
@@ -297,6 +297,13 @@ interface PluginHostBase {
    */
   compute: {
     runJob: (opts: ComputeRunJobOptions, jobOpts?: PluginJobOptions) => Promise<ComputeRunOutcome>;
+    /** H61: 計算機の一覧と、Colab のランタイムを確保しているか（トークンや URL は出さない）。 */
+    status: () => Promise<ComputeEndpointStatus[]>;
+    /**
+     * H61: Colab のランタイムを解放する。`ask: true` なら本体が確認を出す（文言は本体が決める）。
+     * 確保していなければ `{ok:true, released:false}`。次の `runJob` が自動で確保し直す。
+     */
+    releaseRuntime: (endpointId: string, opts?: { ask?: boolean }) => Promise<ComputeReleaseOutcome>;
   };
   /** 本体の DB（H44・H46・H51）。 */
   db: {

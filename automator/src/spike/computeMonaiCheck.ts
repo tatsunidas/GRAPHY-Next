@@ -7,10 +7,11 @@
  * 🔴 前提: Colab にログイン済み（computeColabCheck を一度通してある）。利用者の Colab の枠を数分〜十数分使い、最後に解放する。
  *
  * 確かめること:
- *   1. 下見のジョブ: 同意画面の「送るデータ」が「なし」・Bundle のラベル名とライセンスが出る・CT に「使える」と判定される
- *   2. 推論のジョブ: Colab の T4 で最後まで走る・ラベルが返る・本体の格子へ写せる
+ *   1. 「実行」1 回・同意 1 回で、計算機の上でモデルの説明を読み、判定し、推論まで走る
+ *   2. ラベル名・ライセンスが返る・CT に「使える」と判定される・GPU T4 で走る
  *   3. SEG（H22）で保存され、ラベル名どおりのセグメントが DB にある・脾臓が患者の左側にある（向きの確認）
- *   4. 監査ログ: 2 回の実行が ok で残り、下見はデータ 0 件
+ *   4. 監査ログ: 送信 1 回・実行 ok
+ *   5. 窓を閉じると本体が「解放しますか」を聞き、「解放する」でランタイムが解放される（H61）
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -117,52 +118,32 @@ async function main(): Promise<void> {
     await viewer.getByTestId("viewer2d-menu-analysis").click();
     await viewer.getByTestId(`plugin-analysis-item-${PLUGIN_ID}`).click();
     await viewer.getByTestId("monai-bundle").waitFor({ state: "visible", timeout: 10_000 });
-    await viewer.getByTestId("monai-bundle").fill(BUNDLE);
+    await viewer.getByTestId("monai-bundle").selectOption(BUNDLE);
 
-    // --- 2. 下見（画像を送らない） ---
-    console.log(`\n[2] 下見: ${BUNDLE}`);
-    const t0 = Date.now();
-    await viewer.getByTestId("monai-inspect").click();
-    const w1 = await consentWindow(driver, 300_000);
-    const dataText = (await w1.getByTestId("consent-datasets").textContent()) ?? "";
-    check(dataText.includes("なし"), "🔴 下見の同意画面: 送るデータは「なし」", dataText);
-    await approve(driver, "1-consent-inspect.png");
-    await waitPhaseIdle(viewer, 900_000);
-    let s = await state(viewer);
-    check(!!s.bundle, `下見が終わる（${Math.round((Date.now() - t0) / 1000)} 秒）`, s.error ?? (await viewer.getByTestId("monai-status").textContent()));
-    if (!s.bundle) {
-      const tb = (s.traceback ?? []).join("\n").replace(/\u001b\[[0-9;]*m/g, "");
-      fs.writeFileSync(path.join(OUT_DIR, "inspect-error.txt"), `${s.error}\n\n${tb}`);
-      console.log(tb.split("\n").slice(-30).join("\n"));
-      throw new Error("下見に失敗したので中断します");
-    }
-    const labels = s.verdict?.labels ?? [];
-    console.log(`    ラベル ${labels.length} 個: ${labels.slice(0, 8).map((l: { name: string }) => l.name).join(", ")}`);
-    check(labels.length > 0, "Bundle のラベル名が読める", s.bundle?.metadata?.network_data_format);
-    check(s.verdict?.ok === true, "CT のシリーズに「使える」と判定される", s.verdict);
-    check(typeof s.bundle?.license === "string" && s.bundle.license.length > 0, "ライセンスが読める");
-    await viewer.screenshot({ path: path.join(OUT_DIR, "2-inspect.png") });
-
-    // --- 3. 推論 ---
-    console.log("\n[3] 推論（Colab の T4）");
+    // --- 2. 実行（1 回のクリック・同意 1 回。判定は計算機の上） ---
+    console.log(`\n[2] 実行: ${BUNDLE}（Colab の T4）`);
     const t1 = Date.now();
     await viewer.getByTestId("monai-run").click();
-    const w2 = await consentWindow(driver, 300_000);
-    const sha = await approvedSha(w2);
-    check(sha.length === 64, "推論の同意画面: npz 1 件と SHA-256", sha);
-    await approve(driver, "3-consent-infer.png");
+    const w = await consentWindow(driver, 300_000);
+    const sha = await approvedSha(w);
+    check(sha.length === 64, "同意画面は 1 回だけ・npz 1 件と SHA-256", sha);
+    await approve(driver, "1-consent.png");
     await waitPhaseIdle(viewer, 3_600_000);
-    s = await state(viewer);
+    let s = await state(viewer);
     const sec = Math.round((Date.now() - t1) / 1000);
-    check(!!s.summary && !s.error, `推論が最後まで走る（${sec} 秒）`, s.error);
+    check(!!s.summary && !s.error, `最後まで走る（${sec} 秒）`, s.error);
     if (!s.summary) {
       // Jupyter の traceback は ANSI の色付き
       const tb = (s.traceback ?? []).join("\n").replace(/\u001b\[[0-9;]*m/g, "");
-      fs.writeFileSync(path.join(OUT_DIR, "infer-error.txt"), `${s.error}\n\n${tb}\n\nstderr:\n${s.stderr ?? ""}`);
+      fs.writeFileSync(path.join(OUT_DIR, "run-error.txt"), `${s.error}\n\n${tb}\n\nstderr:\n${s.stderr ?? ""}`);
       console.log(tb.split("\n").slice(-40).join("\n"));
-      throw new Error("推論に失敗したので中断します");
+      throw new Error("実行に失敗したので中断します");
     }
-    console.log(`    ${JSON.stringify({ stages: s.summary?.stages, gpu: s.summary?.gpu, labels: s.summary?.labels, resampled: s.summary?.resampled })}`);
+    const labels = s.verdict?.labels ?? [];
+    console.log(`    ラベル ${labels.length} 個: ${labels.slice(0, 8).map((l: { name: string }) => l.name).join(", ")}`);
+    check(labels.length > 0 && s.verdict?.ok === true, "モデルの説明（ラベル名）が返り、CT に使えると判定される", s.verdict);
+    check(typeof s.bundle?.license === "string" && s.bundle.license.length > 0, "ライセンスが返る");
+    console.log(`    ${JSON.stringify({ stages: s.summary?.stages, gpu: s.summary?.gpu, labels: Object.keys(s.summary?.labels ?? {}).length, resampled: s.summary?.resampled })}`);
     check(/T4/.test(s.summary?.gpu?.name ?? ""), "GPU T4 で走った", s.summary?.gpu);
     const fg = Object.entries(s.summary?.labels ?? {}).filter(([k]) => k !== "0").reduce((a, [, c]) => a + Number(c), 0);
     check(fg > 100, "前景のラベルが返る", s.summary?.labels);
@@ -198,9 +179,27 @@ async function main(): Promise<void> {
     console.log("\n[5] 監査");
     const events = fs.readFileSync(AUDIT, "utf8").trim().split("\n").map((l) => JSON.parse(l));
     const fin = events.filter((e: { event: string }) => e.event === "compute-finished");
-    check(fin.length === 2 && fin.every((e: { outcome: string }) => e.outcome === "ok"), "監査: 2 回の実行が ok", fin);
+    check(fin.length === 1 && fin[0].outcome === "ok", "監査: 実行が ok", fin);
     const consumed = events.filter((e: { event: string }) => e.event === "egress-consumed");
-    check(consumed[0]?.datasets?.length === 0 && consumed[1]?.datasets?.length === 1, "監査: 下見はデータ 0 件・推論は 1 件", consumed.map((e: { datasets: unknown[] }) => e.datasets.length));
+    check(consumed.length === 1 && consumed[0]?.datasets?.length === 1, "監査: 送信は 1 回（npz 1 件）", consumed.map((e: { datasets: unknown[] }) => e.datasets.length));
+    // --- 6. 窓を閉じると、本体が「解放しますか」を聞く（H61） ---
+    console.log("\n[6] 閉じて解放");
+    const runtimeOf = () => viewer.evaluate(async (id) => {
+      const c = await (window as unknown as { graphyDesktop: any }).graphyDesktop.computeEndpointsGet();
+      return c.endpoints.find((e: { id: string }) => e.id === id)?.runtime;
+    }, endpointId);
+    check((await runtimeOf())?.allocated === true, "閉じる前はランタイムを確保している");
+    await viewer.locator(".graphy-plugin-window__close").click();
+    await viewer.getByTestId("compute-release-confirm").waitFor({ state: "visible", timeout: 30_000 });
+    const msg = ((await viewer.getByTestId("compute-release-confirm").textContent()) ?? "").replace(/\s+/g, " ");
+    check(/T4/.test(msg) && /解放/.test(msg), "本体の確認に「T4 ランタイムを解放しますか」と出る", msg);
+    await viewer.screenshot({ path: path.join(OUT_DIR, "5-release-confirm.png") });
+    await viewer.getByTestId("compute-release-ok").click();
+    await viewer.waitForFunction(() => !!(window as unknown as { __monaiState?: { release?: unknown } }).__monaiState?.release, null, { timeout: 120_000 });
+    s = await state(viewer);
+    check(s.release?.ok === true && s.release?.released === true, "「解放する」で解放される", s.release);
+    check((await runtimeOf())?.allocated === false, "解放後は未確保", await runtimeOf());
+
     fs.writeFileSync(path.join(OUT_DIR, "state.json"), JSON.stringify({ bundle: s.bundle?.name, verdict: s.verdict, summary: s.summary, saved: s.saved }, null, 2));
   } finally {
     await driver.page.evaluate((id) => (window as unknown as { graphyDesktop: any }).graphyDesktop.computeColabRelease(id), endpointId).catch(() => undefined);

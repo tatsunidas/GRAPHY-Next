@@ -20,6 +20,7 @@
 import { apiBase } from "../apiBase";
 import { desktop } from "../desktopBridge";
 import { HttpError, httpSend } from "../http";
+import { tOutsideReact as t } from "../i18n/i18n";
 import { pollPluginJob, type PluginJobOptions, type PluginJobStatus } from "./pluginCommonApi";
 import type { PluginManifest } from "./pluginTypes";
 
@@ -199,4 +200,107 @@ export function readStoredZipEntry(zip: Uint8Array, name: string): Uint8Array | 
     p += 46 + nameLen + extraLen + commentLen;
   }
   return null;
+}
+
+// ── H61: 計算機の状態と、Colab のランタイムの解放 ──
+
+/** プラグインに見せる計算機（トークンや接続先の URL は出さない）。 */
+export interface ComputeEndpointStatus {
+  id: string;
+  label: string;
+  kind: "jupyter" | "colab";
+  /** colab のとき: ランタイムを確保しているか・アクセラレータ（例 T4）。jupyter は常に null。 */
+  runtime: { allocated: boolean; accelerator: string | null } | null;
+}
+
+/** H61 `compute.status()`。デスクトップ以外・権限の無いプラグインは空。 */
+export async function computeStatus(m: PluginManifest): Promise<ComputeEndpointStatus[]> {
+  const d = desktop();
+  if (!d?.computeEndpointsGet || !(m.permissions ?? []).includes(REMOTE_COMPUTE_PERMISSION)) return [];
+  const cfg = await d.computeEndpointsGet();
+  return cfg.endpoints.map((e) => ({
+    id: e.id,
+    label: e.label,
+    kind: e.kind,
+    runtime: e.kind === "colab"
+      ? { allocated: !!e.runtime?.allocated, accelerator: e.runtime?.spec?.accelerator ?? e.spec?.accelerator ?? null }
+      : null,
+  }));
+}
+
+export type ComputeReleaseOutcome = { ok: true; released: boolean } | { ok: false; error: string };
+
+/**
+ * H61 `compute.releaseRuntime(endpointId, { ask })`。Colab のランタイムを解放する（確保していなければ何もしない）。
+ * `ask: true` なら<b>本体が</b>確認を出し、「解放する」のときだけ解放する（文言はプラグインから変えられない）。
+ * 解放しても次の `runJob` が自動で確保し直す。
+ */
+export async function releaseComputeRuntime(
+  m: PluginManifest,
+  endpointId: string,
+  opts: { ask?: boolean } = {},
+): Promise<ComputeReleaseOutcome> {
+  const d = desktop();
+  if (!d?.computeEndpointsGet || !d.computeColabRelease) return { ok: false, error: "desktop-only" };
+  if (!(m.permissions ?? []).includes(REMOTE_COMPUTE_PERMISSION)) return { ok: false, error: "permission-denied" };
+  const e = (await d.computeEndpointsGet()).endpoints.find((x) => x.id === endpointId);
+  if (!e) return { ok: false, error: "unknown-endpoint" };
+  if (e.kind !== "colab" || !e.runtime?.allocated) return { ok: true, released: false };
+  if (opts.ask) {
+    const accel = e.runtime.spec?.accelerator ?? e.spec?.accelerator ?? "";
+    const yes = await confirmRelease(m.name, e.label, accel);
+    if (!yes) return { ok: true, released: false };
+  }
+  const r = await d.computeColabRelease(endpointId);
+  return r.ok ? { ok: true, released: !!r.released } : { ok: false, error: r.error ?? "release-failed" };
+}
+
+/** 本体が描く確認（DOM。メイン画面・2D ビューアのどちらでも出せるよう React に載せない）。 */
+function confirmRelease(pluginName: string, endpointLabel: string, accelerator: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.setAttribute("data-testid", "compute-release-confirm");
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    Object.assign(overlay.style, {
+      position: "fixed", inset: "0", zIndex: "100000", background: "rgba(10,20,30,0.45)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+    } as Partial<CSSStyleDeclaration>);
+    const box = document.createElement("div");
+    Object.assign(box.style, {
+      background: "#fff", color: "#223", borderRadius: "10px", padding: "18px 20px", width: "min(480px, 92vw)",
+      boxShadow: "0 10px 40px rgba(0,0,0,0.3)", fontSize: "13px", lineHeight: "1.6",
+    } as Partial<CSSStyleDeclaration>);
+    const title = document.createElement("div");
+    title.textContent = t("pluginCompute.release.title", { accelerator: accelerator || "GPU" });
+    Object.assign(title.style, { fontSize: "15px", fontWeight: "700", marginBottom: "8px" });
+    const body = document.createElement("div");
+    body.textContent = t("pluginCompute.release.body", { endpoint: endpointLabel, plugin: pluginName });
+    const foot = document.createElement("div");
+    Object.assign(foot.style, { display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "14px" });
+    const keep = document.createElement("button");
+    keep.textContent = t("pluginCompute.release.keep");
+    keep.setAttribute("data-testid", "compute-release-keep");
+    const ok = document.createElement("button");
+    ok.textContent = t("pluginCompute.release.ok");
+    ok.setAttribute("data-testid", "compute-release-ok");
+    for (const b of [keep, ok]) Object.assign(b.style, { padding: "5px 14px", borderRadius: "4px", border: "1px solid #9aa5b1", cursor: "pointer" });
+    Object.assign(ok.style, { background: "#0b5cad", color: "#fff", borderColor: "#0b5cad" });
+    foot.append(keep, ok);
+    box.append(title, body, foot);
+    overlay.appendChild(box);
+    const done = (v: boolean) => {
+      window.removeEventListener("keydown", onKey, true);
+      overlay.remove();
+      resolve(v);
+    };
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") { ev.preventDefault(); done(false); }
+    };
+    keep.addEventListener("click", () => done(false));
+    ok.addEventListener("click", () => done(true));
+    window.addEventListener("keydown", onKey, true);
+    document.body.appendChild(overlay);
+    ok.focus();
+  });
 }

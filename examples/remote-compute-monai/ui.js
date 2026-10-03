@@ -4,17 +4,33 @@
  * MONAI Bundle を外部の計算機（Google Colab の GPU など）で動かすサンプル（H59 compute.runJob）。
  * 設計: fw/remote-compute-design.md §16。
  *
- * 流れ:
- *   1. Bundle の名前を入れて「調べる」→ 画像を送らない下見のジョブで、Bundle の metadata.json
- *      （network_data_format: 入力のモダリティ・チャネル数・形式、出力のラベル名）とライセンスを読む
- *   2. 表示中のシリーズに使えるかを判定する（明らかに合わないものだけ止める）
- *   3. 「実行」→ 本体が匿名化した npz を送り、計算機の上で monai.bundle の推論を走らせる
- *   4. ラベルの volume を受け取り、下見の画像を見せ、選んだラベルを DICOM SEG（H22）で保存する
+ * 流れ（「実行」1 回・同意 1 回）:
+ *   1. 一覧から Bundle を選ぶ（表示中のシリーズのモダリティに合わないものは選べない）。一覧に無いものは名前を入れる
+ *   2. 「実行」→ 本体が匿名化した npz を送る。計算機の上で Bundle の metadata.json
+ *      （network_data_format: 入力のモダリティ・チャネル数、出力のラベル名）を読み、使えるかを判定する。
+ *      合わなければ推論せずに止まる（モデルの説明と止めた理由は返る）
+ *   3. 使えれば monai.bundle の推論を走らせ、ラベルの volume を返す
+ *   4. 下見の画像を見せ、選んだラベルを DICOM SEG（H22）で保存する
  *
  * 計算機の上のコード（PY）は、同意画面に全文が出る。Bundle の名前と上書きの設定だけが差し込まれる。
  */
 
-const DEFAULT_BUNDLES = ["spleen_ct_segmentation", "wholeBody_ct_segmentation"];
+/**
+ * 選べる Bundle（2026-10-03 に Hugging Face の MONAI 組織で configs/metadata.json を読んで確かめた）。
+ * modality は送る前の絞り込みにだけ使う。使えるかの最終判定は計算機の上で metadata.json から行う。
+ * checked: 実機（Colab の T4）で最後まで通したもの。
+ */
+export const CATALOG = [
+  { name: "spleen_ct_segmentation", label: "脾臓", modality: "CT", labels: 1, checked: true },
+  { name: "wholeBody_ct_segmentation", label: "全身 104 臓器", modality: "CT", labels: 104 },
+  { name: "swin_unetr_btcv_segmentation", label: "腹部 13 臓器（BTCV）", modality: "CT", labels: 13 },
+  { name: "multi_organ_segmentation", label: "腹部 7 臓器", modality: "CT", labels: 7 },
+  { name: "pancreas_ct_dints_segmentation", label: "膵臓・膵腫瘍", modality: "CT", labels: 2 },
+  { name: "renalStructures_UNEST_segmentation", label: "腎臓の構造（造影 CT）", modality: "CT", labels: 3 },
+  { name: "prostate_mri_anatomy", label: "前立腺（T2 MR）", modality: "MR", labels: 2 },
+  { name: "wholeBrainSeg_Large_UNEST_segmentation", label: "脳 133 領域（T1 MR）", modality: "MR", labels: 132 },
+];
+const OTHER = "__other__";
 /** SEG に渡すマスクの合計（セグメントごとに volume と同じ大きさの配列が要る）。 */
 const MAX_SEG_BYTES = 1.5e9;
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*(\/[A-Za-z0-9][A-Za-z0-9_.-]*)?$/;
@@ -23,10 +39,9 @@ const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*(\/[A-Za-z0-9][A-Za-z0-9_.-]*)?$/;
 // 計算機の上で走る Python（下見と推論で共通）。先頭に GRAPHY（mode・bundle・overrides）が足される。
 // ---------------------------------------------------------------------------
 export const PY = String.raw`
-import glob, json, os, subprocess, sys, time
+import glob, json, os, re, subprocess, sys, time
 from importlib import metadata as _md
 
-MODE = GRAPHY['mode']
 B = GRAPHY['bundle']
 OVR = GRAPHY.get('overrides') or {}
 T0 = time.time()
@@ -135,138 +150,170 @@ def gpu():
     return None
 
 
+def norm(m):
+    u = str(m or '').upper()
+    return 'MR' if u == 'MRI' else u
+
+
+def judge(meta, modality):
+    """このシリーズに使えるか。止めるのは明らかに合わないときだけ（プラグインの judge と同じ規則）。"""
+    reasons = []
+    fmt = meta.get('network_data_format') or {}
+    ins, outs = fmt.get('inputs') or {}, fmt.get('outputs') or {}
+    if len(ins) > 1:
+        reasons.append('入力が %d つ要るモデルです（%s）。1 シリーズでは動かせません' % (len(ins), '・'.join(ins)))
+    image = ins.get('image') or (next(iter(ins.values())) if ins else None)
+    if image:
+        ch = int(image.get('num_channels') or 1)
+        if ch != 1:
+            reasons.append('入力のチャネル数が %d です（例: 複数の MR 系列を重ねるモデル）。1 シリーズでは動かせません' % ch)
+        want = [norm(x) for x in re.split(r'[/,\s]+', str(image.get('modality') or '')) if x]
+        have = norm(modality)
+        if want and have not in want:
+            reasons.append('このモデルは %s 用です（このシリーズは %s）' % ('・'.join(want), have or '不明'))
+        # HU の規則はモダリティが書かれていないときだけ（MR なのに hounsfield と書いた Bundle がある）
+        if not want and str(image.get('format') or '').lower() == 'hounsfield' and have != 'CT':
+            reasons.append('入力は CT の HU 値を前提にしています')
+    pred = outs.get('pred') or (next(iter(outs.values())) if outs else None)
+    if pred and str(pred.get('format') or '').lower() not in ('segmentation', 'labels', 'label'):
+        reasons.append('出力が「%s」です。このサンプルはセグメンテーションだけを扱います' % pred.get('format'))
+    return reasons
+
+
 root = fetch()
 meta_path = os.path.join(root, 'configs', 'metadata.json')
 meta = json.load(open(meta_path, encoding='utf-8'))
 inf_path = inference_config(root)
-stage('fetched', 0.3 if MODE == 'infer' else 0.8)
+stage('fetched', 0.25)
 
-if MODE == 'inspect':
-    parser = ConfigParser()
-    parser.read_config(inf_path)
-    keys = list((parser.get() or {}).keys())
-    size = sum(os.path.getsize(p) for p in glob.glob(os.path.join(root, '**'), recursive=True) if os.path.isfile(p))
-    json.dump({
-        'name': B['name'],
-        'metadata': meta,
-        'inferenceConfig': os.path.basename(inf_path),
-        'hasDatalist': 'datalist' in keys,
-        'hasOutputDir': 'output_dir' in keys,
-        'license': head(os.path.join(root, 'LICENSE')),
-        'dataLicense': head(os.path.join(root, 'docs', 'data_license.txt')),
-        'bytes': size,
-        'monai': monai.__version__,
-        'gpu': gpu(),
-    }, open('outputs/bundle.json', 'w', encoding='utf-8'), ensure_ascii=False)
-    stage('done', 1.0)
-else:
-    # Bundle が求める追加のパッケージ（torch・numpy・monai は Colab のものを使う）
-    for dist, ver in (meta.get('optional_packages_version') or {}).items():
-        if dist.lower() in ('torch', 'torchvision', 'numpy', 'monai', 'pytorch') or have(dist):
-            continue
-        try:
-            pip(dist + '==' + str(ver))
-        except Exception:
-            pip(dist)
-    import nibabel as nib
-    stage('packages', 0.35)
+# モデルの説明は、合わなくても先に書いて返す（プラグインが画面に出す）
+z0 = np.load('inputs/0.npz')
+series_meta = json.loads(bytes(z0['meta.json'])) if 'meta.json' in z0.files else {}
+reasons = judge(meta, series_meta.get('modality'))
+parser = ConfigParser()
+parser.read_config(inf_path)
+keys = list((parser.get() or {}).keys())
+json.dump({
+    'name': B['name'],
+    'metadata': meta,
+    'inferenceConfig': os.path.basename(inf_path),
+    'hasDatalist': 'datalist' in keys,
+    'license': head(os.path.join(root, 'LICENSE')),
+    'dataLicense': head(os.path.join(root, 'docs', 'data_license.txt')),
+    'bytes': sum(os.path.getsize(p) for p in glob.glob(os.path.join(root, '**'), recursive=True) if os.path.isfile(p)),
+    'monai': monai.__version__,
+    'modality': series_meta.get('modality'),
+    'reasons': reasons,
+}, open('outputs/bundle.json', 'w', encoding='utf-8'), ensure_ascii=False)
+if reasons:
+    raise RuntimeError('not-applicable: ' + ' / '.join(reasons))   # 推論はしない
 
-    # npz（本体が匿名化して作ったもの）→ NIfTI。volume は [z, y, x]、origin/direction は LPS
-    z = np.load('inputs/0.npz')
-    vol, sp, org, dr = z['volume'], z['spacing'], z['origin'], z['direction']
-    if not (np.all(np.isfinite(sp)) and np.all(np.isfinite(org)) and np.all(np.isfinite(dr))):
-        raise RuntimeError('no-geometry: このシリーズには患者座標（間隔・位置・向き）がありません')
-    nz, ny, nx = vol.shape
-    lps = np.eye(4)
-    lps[:3, 0] = dr[0] * sp[2]
-    lps[:3, 1] = dr[1] * sp[1]
-    lps[:3, 2] = dr[2] * sp[0]
-    lps[:3, 3] = org
-    ras = np.diag([-1.0, -1.0, 1.0, 1.0]) @ lps   # NIfTI は RAS
-    work = os.path.abspath('work')
-    os.makedirs(os.path.join(work, 'in'), exist_ok=True)
-    out_dir = os.path.join(work, 'out')
-    img = nib.Nifti1Image(np.ascontiguousarray(vol.transpose(2, 1, 0)), ras)
-    img.set_qform(ras, 1)
-    img.set_sform(ras, 1)
-    img.header.set_xyzt_units('mm')
-    image_path = os.path.join(work, 'in', 'image.nii.gz')
-    nib.save(img, image_path)
-    stage('prepared', 0.4)
-
-    from monai.bundle import run as bundle_run
-    kw = dict(config_file=inf_path, meta_file=meta_path, bundle_root=root,
-              datalist=[image_path], dataset_dir=os.path.join(work, 'in'), output_dir=out_dir)
-    logging_conf = os.path.join(root, 'configs', 'logging.conf')
-    if os.path.isfile(logging_conf):
-        kw['logging_file'] = logging_conf
-    kw.update(OVR)
+# Bundle が求める追加のパッケージ（torch・numpy・monai は Colab のものを使う）
+for dist, ver in (meta.get('optional_packages_version') or {}).items():
+    if dist.lower() in ('torch', 'torchvision', 'numpy', 'monai', 'pytorch') or have(dist):
+        continue
     try:
-        import torch
-        if torch.cuda.is_available():
-            torch.cuda.reset_peak_memory_stats()
+        pip(dist + '==' + str(ver))
     except Exception:
-        pass
-    bundle_run(**kw)
-    stage('inferred', 0.85)
+        pip(dist)
+import nibabel as nib
+stage('packages', 0.35)
 
-    outs = sorted(glob.glob(os.path.join(out_dir, '**', '*.nii*'), recursive=True))
-    if not outs:
-        raise RuntimeError('no-output: output_dir に NIfTI が出ませんでした（datalist / output_dir の上書きに対応していない Bundle かもしれません）')
-    o = nib.load(outs[0])
-    lab = np.asanyarray(o.dataobj)
-    while lab.ndim > 3 and lab.shape[-1] == 1:
-        lab = lab[..., 0]
-    if lab.ndim == 4:
-        lab = np.argmax(lab, axis=-1)   # チャネルごとの確率・one-hot
-    if lab.ndim != 3:
-        raise RuntimeError('unexpected-output-shape: ' + str(lab.shape))
-    lab = np.rint(lab).astype(np.int32)
+# npz（本体が匿名化して作ったもの）→ NIfTI。volume は [z, y, x]、origin/direction は LPS
+z = np.load('inputs/0.npz')
+vol, sp, org, dr = z['volume'], z['spacing'], z['origin'], z['direction']
+if not (np.all(np.isfinite(sp)) and np.all(np.isfinite(org)) and np.all(np.isfinite(dr))):
+    raise RuntimeError('no-geometry: このシリーズには患者座標（間隔・位置・向き）がありません')
+nz, ny, nx = vol.shape
+lps = np.eye(4)
+lps[:3, 0] = dr[0] * sp[2]
+lps[:3, 1] = dr[1] * sp[1]
+lps[:3, 2] = dr[2] * sp[0]
+lps[:3, 3] = org
+ras = np.diag([-1.0, -1.0, 1.0, 1.0]) @ lps   # NIfTI は RAS
+work = os.path.abspath('work')
+os.makedirs(os.path.join(work, 'in'), exist_ok=True)
+out_dir = os.path.join(work, 'out')
+img = nib.Nifti1Image(np.ascontiguousarray(vol.transpose(2, 1, 0)), ras)
+img.set_qform(ras, 1)
+img.set_sform(ras, 1)
+img.header.set_xyzt_units('mm')
+image_path = os.path.join(work, 'in', 'image.nii.gz')
+nib.save(img, image_path)
+stage('prepared', 0.4)
 
-    # 出力の格子 → 入力の格子（同じなら写すだけ。違えば最近傍で取り直す）
-    m = np.linalg.inv(o.affine) @ ras
-    resampled = not (lab.shape == (nx, ny, nz) and np.allclose(m, np.eye(4), atol=1e-3))
-    if resampled:
-        # 先に整数へ丸める（端の画素が計算誤差で -1e-12 になり、範囲外として落ちないように）
-        res = np.zeros((nx, ny, nz), np.int32)
-        ii, jj = np.meshgrid(np.arange(nx), np.arange(ny), indexing='ij')
-        for k in range(nz):
-            p = m @ np.stack([ii.ravel(), jj.ravel(), np.full(ii.size, k), np.ones(ii.size)])
-            q = np.rint(p[:3]).astype(np.int64)
-            inside = np.all((q >= 0) & (q < np.array(lab.shape)[:, None]), axis=0)
-            v = np.zeros(ii.size, np.int32)
-            v[inside] = lab[q[0, inside], q[1, inside], q[2, inside]]
-            res[:, :, k] = v.reshape(nx, ny)
-        lab = res
-    zyx = np.ascontiguousarray(lab.transpose(2, 1, 0))
-    dtype = np.uint8 if zyx.max() < 256 else np.uint16
-    np.save('outputs/labels.npy', zyx.astype(dtype))
-    values, counts = np.unique(zyx, return_counts=True)
-    stage('done', 1.0)
-    json.dump({
-        'name': B['name'],
-        'version': meta.get('version'),
-        'channelDef': ((meta.get('network_data_format') or {}).get('outputs') or {}).get('pred', {}).get('channel_def'),
-        'labels': {str(int(v)): int(c) for v, c in zip(values, counts)},
-        'shape': [int(nz), int(ny), int(nx)],
-        'geometry': {'spacing': sp.tolist(), 'origin': org.tolist(), 'direction': dr.tolist()},
-        'outputFile': os.path.relpath(outs[0], work),
-        'resampled': bool(resampled),
-        'stages': STAGES,
-        'gpu': gpu(),
-        'monai': monai.__version__,
-    }, open('outputs/labels.json', 'w', encoding='utf-8'), ensure_ascii=False)
+from monai.bundle import run as bundle_run
+kw = dict(config_file=inf_path, meta_file=meta_path, bundle_root=root,
+          datalist=[image_path], dataset_dir=os.path.join(work, 'in'), output_dir=out_dir)
+logging_conf = os.path.join(root, 'configs', 'logging.conf')
+if os.path.isfile(logging_conf):
+    kw['logging_file'] = logging_conf
+kw.update(OVR)
+try:
+    import torch
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+except Exception:
+    pass
+bundle_run(**kw)
+stage('inferred', 0.85)
+
+outs = sorted(glob.glob(os.path.join(out_dir, '**', '*.nii*'), recursive=True))
+if not outs:
+    raise RuntimeError('no-output: output_dir に NIfTI が出ませんでした（datalist / output_dir の上書きに対応していない Bundle かもしれません）')
+o = nib.load(outs[0])
+lab = np.asanyarray(o.dataobj)
+while lab.ndim > 3 and lab.shape[-1] == 1:
+    lab = lab[..., 0]
+if lab.ndim == 4:
+    lab = np.argmax(lab, axis=-1)   # チャネルごとの確率・one-hot
+if lab.ndim != 3:
+    raise RuntimeError('unexpected-output-shape: ' + str(lab.shape))
+lab = np.rint(lab).astype(np.int32)
+
+# 出力の格子 → 入力の格子（同じなら写すだけ。違えば最近傍で取り直す）
+m = np.linalg.inv(o.affine) @ ras
+resampled = not (lab.shape == (nx, ny, nz) and np.allclose(m, np.eye(4), atol=1e-3))
+if resampled:
+    # 先に整数へ丸める（端の画素が計算誤差で -1e-12 になり、範囲外として落ちないように）
+    res = np.zeros((nx, ny, nz), np.int32)
+    ii, jj = np.meshgrid(np.arange(nx), np.arange(ny), indexing='ij')
+    for k in range(nz):
+        p = m @ np.stack([ii.ravel(), jj.ravel(), np.full(ii.size, k), np.ones(ii.size)])
+        q = np.rint(p[:3]).astype(np.int64)
+        inside = np.all((q >= 0) & (q < np.array(lab.shape)[:, None]), axis=0)
+        v = np.zeros(ii.size, np.int32)
+        v[inside] = lab[q[0, inside], q[1, inside], q[2, inside]]
+        res[:, :, k] = v.reshape(nx, ny)
+    lab = res
+zyx = np.ascontiguousarray(lab.transpose(2, 1, 0))
+dtype = np.uint8 if zyx.max() < 256 else np.uint16
+np.save('outputs/labels.npy', zyx.astype(dtype))
+values, counts = np.unique(zyx, return_counts=True)
+stage('done', 1.0)
+json.dump({
+    'name': B['name'],
+    'version': meta.get('version'),
+    'channelDef': ((meta.get('network_data_format') or {}).get('outputs') or {}).get('pred', {}).get('channel_def'),
+    'labels': {str(int(v)): int(c) for v, c in zip(values, counts)},
+    'shape': [int(nz), int(ny), int(nx)],
+    'geometry': {'spacing': sp.tolist(), 'origin': org.tolist(), 'direction': dr.tolist()},
+    'outputFile': os.path.relpath(outs[0], work),
+    'resampled': bool(resampled),
+    'stages': STAGES,
+    'gpu': gpu(),
+    'monai': monai.__version__,
+}, open('outputs/labels.json', 'w', encoding='utf-8'), ensure_ascii=False)
 `;
 
 /**
  * 計算機へ送るコード。設定は JSON 文字列として埋め込む（JSON の文字列リテラルは Python でもそのまま読める）。
- * @param {"inspect" | "infer"} mode
  * @param {{ name: string, version?: string | null }} bundle
  * @param {Record<string, unknown>} [overrides] Bundle の設定の上書き（例: wholeBody の highres）
  */
-export function buildScript(mode, bundle, overrides = {}) {
+export function buildScript(bundle, overrides = {}) {
   if (!NAME_RE.test(bundle.name)) throw new Error("bad-bundle-name");
-  const cfg = JSON.stringify({ mode, bundle: { name: bundle.name, version: bundle.version ?? null }, overrides });
+  const cfg = JSON.stringify({ bundle: { name: bundle.name, version: bundle.version ?? null }, overrides });
   return `GRAPHY = __import__('json').loads(${JSON.stringify(cfg)})\n` + PY;
 }
 
@@ -351,12 +398,13 @@ export function judge(meta, target) {
       .split(/[\/,\s]+/).map(normModality).filter(Boolean);
     const have = normModality(target.modality);
     if (want.length > 0 && !want.includes(have)) reasons.push(`このモデルは ${want.join("・")} 用です（表示中は ${have || "不明"}）`);
-    if (String(image.format ?? "").toLowerCase() === "hounsfield" && have !== "CT") {
+    // HU の規則はモダリティが書かれていないときだけ（MR なのに hounsfield と書いた Bundle がある）
+    if (want.length === 0 && String(image.format ?? "").toLowerCase() === "hounsfield" && have !== "CT") {
       reasons.push("入力は CT の HU 値を前提にしています");
     }
   }
   const pred = outputs.pred ?? outputs[outKeys[0]];
-  if (pred && String(pred.format ?? "").toLowerCase() !== "segmentation") {
+  if (pred && !["segmentation", "labels", "label"].includes(String(pred.format ?? "").toLowerCase())) {
     reasons.push(`出力が「${pred.format}」です。このサンプルはセグメンテーションだけを扱います`);
   }
   const labels = [];
@@ -470,53 +518,54 @@ export async function activate(host) {
     for (const c of kids) e.append(c);
     return e;
   };
-  const list = el("datalist", { id: "monai-bundles" }, ...DEFAULT_BUNDLES.map((b) => el("option", { value: b })));
-  const nameInput = el("input", { value: DEFAULT_BUNDLES[0], testid: "monai-bundle", style: "flex: 1" });
-  nameInput.setAttribute("list", "monai-bundles");
-  const inspectBtn = el("button", { textContent: "調べる", testid: "monai-inspect" });
+  const have = normModality(target.modality);
+  const picker = el("select", { testid: "monai-bundle", style: "flex: 1" },
+    ...CATALOG.map((c) => {
+      const o = el("option", {
+        value: c.name,
+        textContent: `${c.label}（${c.modality}）— ${c.name}${c.checked ? "・確認済み" : ""}`,
+      });
+      if (c.modality !== have) { o.disabled = true; o.textContent += `（${have || "?"} には使えない）`; }
+      return o;
+    }),
+    el("option", { value: OTHER, textContent: "その他（名前を入れる）" }));
+  const firstUsable = CATALOG.find((c) => c.modality === have);
+  picker.value = firstUsable ? firstUsable.name : OTHER;
+  const nameInput = el("input", { testid: "monai-bundle-name", placeholder: "例: MONAI/spleen_ct_segmentation", style: "flex: 1" });
+  const runBtn = el("button", { textContent: "実行", testid: "monai-run" });
   const status = el("div", { testid: "monai-status", style: "color: #52606d; min-height: 1.2em" });
   const info = el("div", { testid: "monai-info" });
-  const runBtn = el("button", { textContent: "このシリーズで実行", testid: "monai-run", disabled: true });
   const preview = el("canvas", { testid: "monai-preview", style: "display: none; max-width: 100%; image-rendering: pixelated; border: 1px solid #ccd" });
   const labelBox = el("div", { testid: "monai-labels", style: "display: flex; flex-wrap: wrap; gap: 4px 12px" });
   const saveBtn = el("button", { textContent: "選んだラベルを SEG で保存", testid: "monai-save", disabled: true });
   const result = el("div", { testid: "monai-result" });
+  const otherRow = el("div", { style: "display: none; gap: 6px" }, nameInput);
   root.append(
     el("div", {}, `対象: ${target.seriesLabel}（${target.modality}・${target.sliceCount} 枚）`),
-    el("div", { style: "display: flex; gap: 6px" }, nameInput, list, inspectBtn),
+    el("div", { style: "display: flex; gap: 6px" }, picker, runBtn),
+    otherRow,
     el("div", { style: "font-size: 11px; color: #52606d" },
-      "MONAI Model Zoo の名前、または Hugging Face の「組織/名前」。調べるときは画像を送りません（コードだけを実行します）。"),
-    status, info, runBtn, preview, labelBox, saveBtn, result,
+      "「実行」で、匿名化したこのシリーズを送り、計算機の上でモデルの説明（metadata.json）を読んで使えるかを判定してから推論します。" +
+      "合わなければ推論せずに止まります。ライセンスは結果と一緒に出ます。"),
+    status, info, preview, labelBox, saveBtn, result,
   );
+  const syncPicker = () => { otherRow.style.display = picker.value === OTHER ? "flex" : "none"; };
+  picker.addEventListener("change", syncPicker);
+  syncPicker();
   const setStatus = (t) => { status.textContent = t; };
   const onProgress = (p, m) => setStatus(`${Math.round(p * 100)}% ${m ?? ""}`);
   // phase は結果を読み終えてから idle に戻す（外から「終わったか」を見る印）
-  const busy = (b) => { state.phase = b ? "running" : "idle"; inspectBtn.disabled = b; runBtn.disabled = b || !state.verdict?.ok; saveBtn.disabled = b || !state.labels; };
+  const busy = (b) => { state.phase = b ? "running" : "idle"; runBtn.disabled = b; picker.disabled = b; saveBtn.disabled = b || !state.labels; };
   win.setCloseGuard?.(() => (state.phase === "running" ? "計算の途中です。閉じると結果を受け取れません。" : null));
-
-  inspectBtn.addEventListener("click", async () => {
-    const name = nameInput.value.trim();
-    if (!validBundleName(name)) { setStatus("名前に使えない文字があります"); return; }
-    state.bundle = null; state.verdict = null; state.labels = null; state.error = undefined;
-    info.replaceChildren(); labelBox.replaceChildren(); result.replaceChildren(); preview.style.display = "none";
-    busy(true);
-    setStatus("下見のジョブを送っています…");
-    const r = await host.compute.runJob({ inputs: [], script: buildScript("inspect", { name }), timeoutSec: 900 }, { onProgress });
-    if (!r.ok || r.status !== "ok") {
-      state.error = r.ok ? `${r.errorName}: ${r.errorValue}` : r.error;
-      state.traceback = r.ok ? r.traceback : undefined;
-      setStatus(r.ok ? `失敗: ${r.errorValue}` : r.cancelled ? "取り消しました" : `失敗: ${explain(r.error)}`);
-      busy(false);
-      return;
+  // 閉じたら、この窓で計算に使った Colab のランタイムを解放するかを聞く（確認は本体が出す）。
+  // 解放しても次の「実行」が自動で確保し直す
+  win.onClose(async () => {
+    if (!state.usedCompute || !host.compute.status) return;
+    for (const e of await host.compute.status()) {
+      if (e.kind === "colab" && e.runtime?.allocated) {
+        state.release = await host.compute.releaseRuntime(e.id, { ask: true });
+      }
     }
-    const raw = await r.readFile("bundle.json");
-    const b = raw ? JSON.parse(new TextDecoder().decode(raw)) : null;
-    if (!b) { setStatus("失敗: bundle.json が返りませんでした"); busy(false); return; }
-    state.bundle = b;
-    state.verdict = judge(b.metadata, target);
-    showInfo(b, state.verdict);
-    setStatus(state.verdict.ok ? "このシリーズに使えます" : "このシリーズには使えません");
-    busy(false);
   });
 
   /** @param {any} b @param {ReturnType<typeof judge>} v */
@@ -532,7 +581,7 @@ export async function activate(host) {
       ["権利", m.copyright ?? ""],
       ["ライセンス", (b.license ?? "（LICENSE ファイルなし）").split("\n").find((l) => l.trim()) ?? ""],
       ["学習データの条件", (b.dataLicense ?? "").split("\n").find((l) => l.trim()) ?? "（記載なし）"],
-      ["大きさ", `${(b.bytes / 1048576).toFixed(0)} MB・MONAI ${b.monai}${b.gpu ? "・" + b.gpu.name : ""}`],
+      ["大きさ", `${(b.bytes / 1048576).toFixed(0)} MB・MONAI ${b.monai}`],
     ];
     const table = el("table", { style: "border-collapse: collapse; font-size: 12px" },
       ...rows.map(([k, val]) => el("tr", {},
@@ -540,24 +589,43 @@ export async function activate(host) {
         el("td", { textContent: val, style: "padding: 2px 0" }))));
     info.replaceChildren(table);
     for (const w of v.warnings) info.append(el("div", { textContent: "⚠ " + w, style: "color: #8a4b00" }));
-    for (const r of v.reasons) info.append(el("div", { textContent: "✕ " + r, style: "color: #b42318" }));
-    if (!b.hasDatalist) info.append(el("div", { textContent: "⚠ inference の設定に datalist がありません。入力を差し替えられず失敗するかもしれません", style: "color: #8a4b00" }));
+    // 止めた理由は計算機の上の判定（bundle.json の reasons）を正とする
+    for (const r of b.reasons ?? v.reasons) info.append(el("div", { textContent: "✕ " + r, style: "color: #b42318" }));
   }
 
   runBtn.addEventListener("click", async () => {
-    if (!state.bundle || !state.verdict?.ok) return;
-    state.error = undefined; state.summary = undefined; busy(true); result.replaceChildren();
-    setStatus("推論のジョブを送っています…");
+    const name = picker.value === OTHER ? nameInput.value.trim() : picker.value;
+    if (!validBundleName(name)) { setStatus("名前に使えない文字があります"); return; }
+    state.bundle = null; state.verdict = null; state.labels = null; state.summary = undefined; state.error = undefined;
+    info.replaceChildren(); labelBox.replaceChildren(); result.replaceChildren(); preview.style.display = "none";
+    busy(true);
+    state.usedCompute = true;
+    setStatus("送っています…");
     const r = await host.compute.runJob({
       inputs: [{ studyUid: target.studyUid, seriesUid: target.seriesUid, format: "npz" }],
-      script: buildScript("infer", { name: state.bundle.name }),
+      script: buildScript({ name }),
       timeoutSec: 3600,
     }, { onProgress });
-    if (!r.ok || r.status !== "ok") {
-      state.error = r.ok ? `${r.errorName}: ${r.errorValue}` : r.error;
-      state.traceback = r.ok ? r.traceback : undefined;
-      state.stderr = r.ok ? r.stderr : undefined;
-      setStatus(r.ok ? `失敗: ${r.errorName}: ${r.errorValue}` : r.cancelled ? "取り消しました" : `失敗: ${explain(r.error)}`);
+    if (!r.ok) {
+      state.error = r.error;
+      setStatus(r.cancelled ? "取り消しました" : `失敗: ${explain(r.error)}`);
+      busy(false);
+      return;
+    }
+    // モデルの説明は、合わなかったとき（推論しない）も返る
+    const raw = await r.readFile("bundle.json");
+    const b = raw ? JSON.parse(new TextDecoder().decode(raw)) : null;
+    if (b) {
+      state.bundle = b;
+      state.verdict = judge(b.metadata, target);
+      showInfo(b, state.verdict);
+    }
+    if (r.status !== "ok") {
+      state.error = `${r.errorName}: ${r.errorValue}`;
+      state.traceback = r.traceback;
+      state.stderr = r.stderr;
+      const notApplicable = /^not-applicable/.test(r.errorValue ?? "");
+      setStatus(notApplicable ? "このシリーズには使えないモデルです（推論はしていません）" : `失敗: ${r.errorName}: ${r.errorValue}`);
       busy(false);
       return;
     }

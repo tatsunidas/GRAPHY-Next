@@ -5,7 +5,7 @@
 // プラグインの読み込み（両モード共通）。
 // 起動時に GET /api/plugins でマニフェストを取得し、クリック時に UI バンドルを
 // 動的 import して activate(host) を呼ぶ。設計: fw/plugin-architecture.md。
-import { runComputeJob } from "./pluginComputeApi";
+import { runComputeJob, computeStatus, releaseComputeRuntime } from "./pluginComputeApi";
 import { useEffect, useState } from "react";
 import { httpGet, httpSend } from "../http";
 import { apiBase } from "../apiBase";
@@ -106,7 +106,12 @@ function withHostApis(m: PluginManifest, host: PluginHostSeed): PluginHost {
     },
     file: { saveAs: saveFileAs, pickFiles, saveJobArtifact, pickDirectory, saveJobArtifactTo, writeToDirectory },
     // H59: 外部の計算機。要求・同意・ジョブはマニフェストの id に固定する（権限もそこで見る）
-    compute: { runJob: (opts, jobOpts) => runComputeJob(m, opts, jobOpts) },
+    compute: {
+      runJob: (opts, jobOpts) => runComputeJob(m, opts, jobOpts),
+      // H61: 状態と解放（解放の確認は本体が出す）
+      status: () => computeStatus(m),
+      releaseRuntime: (endpointId, opts) => releaseComputeRuntime(m, endpointId, opts),
+    },
     // H45: ジョブの投入先はマニフェストの id に固定する（他のプラグインの JAR は走らせられない）
     runBackendJob: (payload, opts) => runBackendJob(m.id, payload, opts),
     db: {
