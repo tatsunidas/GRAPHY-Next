@@ -27,7 +27,6 @@ import {
   eventTarget,
   getRenderingEngines,
   metaData,
-  utilities as csCoreUtilities,
 } from "@cornerstonejs/core";
 import { annotation as csAnnotation, Enums as csToolsEnums } from "@cornerstonejs/tools";
 import { triggerAnnotationRenderForViewportIds } from "@cornerstonejs/tools/utilities";
@@ -39,6 +38,7 @@ import {
 } from "./pixelCalibration";
 import { roiPointsPx, type PointPx } from "./roiRead";
 import { computeRoiStatsFrom, type RoiStatsResult } from "./roiStats";
+import { worldToImageCoords } from "./imageCoords";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
@@ -113,7 +113,7 @@ function resolveInputs(ann: Any): Resolved | null {
   // 幾何(IPP/IOP)が無いシリーズ（XA）でも頂点を失わない換算は roiRead に集約してある。
   const pointsPx = roiPointsPx(
     world,
-    (w) => csCoreUtilities.worldToImageCoords(refImageId, w as [number, number, number]) as PointPx,
+    (w) => worldToImageCoords(refImageId, w as [number, number, number]) as PointPx,
     spacingX,
     spacingY,
   );

@@ -15,6 +15,7 @@ import { annotation as csAnnotation, utilities as csToolsUtil } from "@cornersto
 import { getViewerContext } from "./viewerContext";
 import { setRoiMaskMeta } from "./roiMaskStore";
 import type { ImageJRoiDto } from "../api";
+import { imageToWorldCoords } from "./imageCoords";
 
 type V3 = [number, number, number];
 
@@ -52,7 +53,7 @@ export function importImageJDtos(dtos: ImageJRoiDto[]): number {
     const imageId = imageIds[zIdx];
     if (!imageId) continue;
     const toWorld = (x: number, y: number): V3 =>
-      csUtils.imageToWorldCoords(imageId, [x, y]) as V3;
+      imageToWorldCoords(imageId, [x, y]) as V3;
 
     let toolName: string;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

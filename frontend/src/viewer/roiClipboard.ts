@@ -33,6 +33,7 @@ import { addSavedRoiToViewport, sopOfImageId, type RestoreViewport } from "./roi
 import { frameOfImageId } from "./imageId";
 import { log } from "../log";
 import type { SavedRoi } from "./roiPersistence";
+import { imageToWorldCoords, worldToImageCoords } from "./imageCoords";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Any = any;
@@ -77,7 +78,7 @@ export function makePixelToWorld(imageId: string): (p: PointPx) => number[] {
   const row = positive(plane?.rowPixelSpacing) ?? 1;
   return (p) => {
     try {
-      const w = (csCoreUtilities as Any).imageToWorldCoords(imageId, [p[0], p[1]]) as number[] | undefined;
+      const w = imageToWorldCoords(imageId, [p[0], p[1]]) as number[] | undefined;
       if (w && w.length >= 3 && w.every((n: number) => Number.isFinite(n))) return [w[0], w[1], w[2]];
     } catch {
       /* 幾何が無いスタックではフォールバックへ */
@@ -170,7 +171,7 @@ function readRoiAsEntry(roiUid: string): RoiClipboardEntry | null {
   const row = positive(plane?.rowPixelSpacing);
   const toPx = (w: ArrayLike<number>) => {
     try {
-      return (csCoreUtilities as Any).worldToImageCoords(refId, w as [number, number, number]) as PointPx;
+      return worldToImageCoords(refId, w as [number, number, number]) as PointPx;
     } catch {
       return null;
     }

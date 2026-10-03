@@ -294,3 +294,42 @@ describe("★H35 — プラグインへ渡す校正（出自ごと渡す）", ()
     expect(c.warnings).not.toContain("tampered");
   });
 });
+
+describe("resolveXaCalibration — general radiography (CR/DX/MG/IO)", () => {
+  const gr = { generalRadiography: true };
+
+  it("CR with PixelSpacing only takes it as is, without the XA warning", () => {
+    const c = resolveXaCalibration({ pixelSpacing: [0.2, 0.2] }, null, gr);
+    expect(c.source).toBe("dicom-pixel-spacing");
+    expect(c.tier).toBe("calibrated");
+    expect(c.mmPerPxCol).toBe(0.2);
+    expect(c.warnings).toEqual([]);
+  });
+
+  it("DX with ImagerPixelSpacing and ERMF divides by the magnification", () => {
+    const c = resolveXaCalibration({ imagerPixelSpacing: [0.15, 0.15], estimatedRadiographicMagnificationFactor: 1.25 }, null, gr);
+    expect(c.source).toBe("geometric-magfactor");
+    expect(c.mmPerPxCol).toBeCloseTo(0.12, 12);
+    expect(c.mmPerPxRow).toBeCloseTo(0.12, 12);
+  });
+
+  it("DX with ImagerPixelSpacing only is measured at the detector plane, marked approximate", () => {
+    const c = resolveXaCalibration({ imagerPixelSpacing: [0.143, 0.143] }, null, gr);
+    expect(c.source).toBe("detector-plane-measured");
+    expect(c.tier).toBe("approximate");
+    expect(c.mmPerPxCol).toBe(0.143);
+  });
+
+  it("DX with PixelSpacing equal to ImagerPixelSpacing falls to the detector plane, not to pixels", () => {
+    const c = resolveXaCalibration({ pixelSpacing: [0.143, 0.143], imagerPixelSpacing: [0.143, 0.143] }, null, gr);
+    expect(c.source).toBe("detector-plane-measured");
+    expect(c.warnings).toContain("pixelSpacingEqualsImager");
+  });
+
+  it("XA keeps the strict rule: ImagerPixelSpacing alone stays uncalibrated", () => {
+    const c = resolveXaCalibration({ imagerPixelSpacing: [0.3, 0.3] });
+    expect(c.source).toBe("detector-plane");
+    expect(c.tier).toBe("uncalibrated");
+    expect(c.mmPerPxCol).toBeNull();
+  });
+});

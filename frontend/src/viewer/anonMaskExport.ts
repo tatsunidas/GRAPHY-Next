@@ -24,11 +24,12 @@
  * 分け方に合わせた。vitest は `.ts` の純ロジックしか見ない）。
  */
 import { annotation as csAnnotation } from "@cornerstonejs/tools";
-import { metaData, utilities as csCoreUtilities } from "@cornerstonejs/core";
+import { metaData } from "@cornerstonejs/core";
 import { roiPointsPx, type PointPx } from "./roiRead";
 import { buildRoiMesh, pickSampleKind } from "./roiStats";
 import { frameOfImageId, sopFromImageId, sopUidFromImageId } from "./imageId";
 import type { AnonMaskPolygon } from "../api";
+import { worldToImageCoords } from "./imageCoords";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Any = any;
@@ -172,7 +173,7 @@ export function annotationsToMaskPolygons(roiUids: readonly string[]): MaskExpor
     // 幾何(IPP/IOP)が無いシリーズ（XA）でも頂点を失わない換算は roiRead に集約してある。
     const pointsPx = roiPointsPx(
       world,
-      (w) => csCoreUtilities.worldToImageCoords(refId, w as [number, number, number]) as PointPx,
+      (w) => worldToImageCoords(refId, w as [number, number, number]) as PointPx,
       numOrNull(plane?.columnPixelSpacing),
       numOrNull(plane?.rowPixelSpacing),
     );

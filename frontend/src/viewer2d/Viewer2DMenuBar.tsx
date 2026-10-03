@@ -310,7 +310,7 @@ export function Viewer2DMenuBar({
           ],
         },
         { label: `${t("viewer2d.wl.adjust.title")}…`, onClick: () => actions.openWindowLevel() },
-        { label: `${t("suv.menu")}…`, onClick: () => actions.openSuv() },
+        { label: `${t("suv.menu")}…`, onClick: () => actions.openSuv(), testId: "menu-suv" },
         { label: t("viewer.invert"), onClick: actions.invert },
         { label: `${t("viewer.lut")}…`, onClick: actions.openLut },
         { label: t("viewer.rotate"), onClick: actions.rotate90 },

@@ -141,7 +141,7 @@ export function SUVCalibrationDialog({
 
   return (
     <div style={overlay} onMouseDown={onClose}>
-      <div style={panel} onMouseDown={(e) => e.stopPropagation()}>
+      <div style={panel} onMouseDown={(e) => e.stopPropagation()} data-testid="suv-dialog">
         <div style={header}>{t("suv.title")}</div>
 
         {locked && (
@@ -152,7 +152,7 @@ export function SUVCalibrationDialog({
         )}
 
         <Field label={t("suv.field.type")}>
-          <select value={type} onChange={(e) => setType(e.target.value as SuvType)} disabled={locked} style={input}>
+          <select data-testid="suv-type" value={type} onChange={(e) => setType(e.target.value as SuvType)} disabled={locked} style={input}>
             {TYPES.map((tp) => (
               <option key={tp.value} value={tp.value}>{t(tp.labelKey)}</option>
             ))}
@@ -164,7 +164,7 @@ export function SUVCalibrationDialog({
         </Field>
 
         <Field label={t("suv.field.weight")}>
-          <input value={weight} onChange={(e) => setWeight(e.target.value)} disabled={locked} inputMode="decimal" style={input} />
+          <input data-testid="suv-weight" value={weight} onChange={(e) => setWeight(e.target.value)} disabled={locked} inputMode="decimal" style={input} />
         </Field>
         <Field label={t("suv.field.height")}>
           <input value={height} onChange={(e) => setHeight(e.target.value)} disabled={locked} inputMode="decimal" style={input} />
@@ -176,16 +176,16 @@ export function SUVCalibrationDialog({
           </select>
         </Field>
         <Field label={t("suv.field.dose")}>
-          <input value={dose} onChange={(e) => setDose(e.target.value)} disabled={locked} inputMode="decimal" style={input} />
+          <input data-testid="suv-dose" value={dose} onChange={(e) => setDose(e.target.value)} disabled={locked} inputMode="decimal" style={input} />
         </Field>
         <Field label={t("suv.field.halfLife")}>
-          <input value={halfLife} onChange={(e) => setHalfLife(e.target.value)} disabled={locked} inputMode="decimal" style={input} />
+          <input data-testid="suv-half-life" value={halfLife} onChange={(e) => setHalfLife(e.target.value)} disabled={locked} inputMode="decimal" style={input} />
         </Field>
         <Field label={t("suv.field.injTime")}>
-          <input value={injTime} onChange={(e) => setInjTime(e.target.value)} disabled={locked} placeholder="HH:mm:ss" style={input} />
+          <input data-testid="suv-inj-time" value={injTime} onChange={(e) => setInjTime(e.target.value)} disabled={locked} placeholder="HH:mm:ss" style={input} />
         </Field>
         <Field label={t("suv.field.serTime")}>
-          <input value={serTime} onChange={(e) => setSerTime(e.target.value)} disabled={locked} placeholder="HH:mm:ss" style={input} />
+          <input data-testid="suv-ser-time" value={serTime} onChange={(e) => setSerTime(e.target.value)} disabled={locked} placeholder="HH:mm:ss" style={input} />
         </Field>
 
         {error && <div style={errText}>{error}</div>}
@@ -195,7 +195,7 @@ export function SUVCalibrationDialog({
             <button onClick={onClear} style={btn}>{t("suv.clear")}</button>
           )}
           <button onClick={onClose} style={btn}>{t("common.cancel")}</button>
-          <button onClick={onApply} disabled={locked} style={{ ...btnPrimary, opacity: locked ? 0.5 : 1 }}>
+          <button data-testid="suv-apply" onClick={onApply} disabled={locked} style={{ ...btnPrimary, opacity: locked ? 0.5 : 1 }}>
             {t("suv.apply")}
           </button>
         </div>

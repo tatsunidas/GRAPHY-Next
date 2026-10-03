@@ -19,6 +19,7 @@ import { createResultSeg, resolveRoiStack } from "./roiBooleanOps";
 import { getRoiMaskMeta, setRoiMaskMeta } from "./roiMaskStore";
 import { addSphere3D, getSphere3D } from "./sphere3dStore";
 import { getModalityCalibration } from "./pixelCalibration";
+import { worldToImageOnPlane } from "./imageCoords";
 
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
 const MAX_SLICE_MASKS = 64; // 3D→2D split の出力上限。
@@ -68,17 +69,16 @@ function planeOf(imageId: string): Plane | null {
   };
 }
 
-/** world → 画素 [x(列), y(行)]（worldToImageCoords と同規約。slice 平面へ射影）。 */
+/**
+ * world → 画素 [x(列), y(行)]（slice 平面へ射影）。
+ * 🚨 x は**列間隔**（colSp）、y は**行間隔**（rowSp）で割る。上流 `worldToImageCoords` は
+ * ここを入れ替えており、非等方画素で球が楕円にずれる（{@link ./imageCoords} 参照）。
+ */
 function worldToPx(p: Plane, w: V3): [number, number] {
-  // newOrigin = ipp - rowCos*rowSp/2 - colCos*colSp/2（worldToImageCoords と同じ）
-  const r = p.rowCos, c = p.colCos;
-  const o: V3 = [
-    p.ipp[0] - r[0] * (p.rowSp / 2) - c[0] * (p.colSp / 2),
-    p.ipp[1] - r[1] * (p.rowSp / 2) - c[1] * (p.colSp / 2),
-    p.ipp[2] - r[2] * (p.rowSp / 2) - c[2] * (p.colSp / 2),
-  ];
-  const d = sub(w, o);
-  return [dot(d, r) / p.rowSp, dot(d, c) / p.colSp];
+  return worldToImageOnPlane(
+    { imagePositionPatient: p.ipp, rowCosines: p.rowCos, columnCosines: p.colCos, rowPixelSpacing: p.rowSp, columnPixelSpacing: p.colSp },
+    w,
+  );
 }
 
 /**
@@ -114,7 +114,7 @@ export async function rasterizeSphereToMask(
     const cols = pl.cols, rows = pl.rows;
     if (!vm || !cols || !rows) continue;
     const [cx, cy] = worldToPx(pl, center);
-    const rx = crossR / pl.rowSp, ry = crossR / pl.colSp; // 画素半径（異方性対応）
+    const rx = crossR / pl.colSp, ry = crossR / pl.rowSp; // 画素半径（x は列間隔・y は行間隔）
     const x0 = Math.max(0, Math.floor(cx - rx)), x1 = Math.min(cols - 1, Math.ceil(cx + rx));
     const y0 = Math.max(0, Math.floor(cy - ry)), y1 = Math.min(rows - 1, Math.ceil(cy + ry));
     let touched = false;
