@@ -716,3 +716,19 @@ cd automator && npx tsx src/spike/computeMonaiCheck.ts [bundle名]   # Colab に
 - wholeBrain は T4 の 15 GB に対して 11.5 GB。入力が大きい MR（例: 0.5 mm 等方）では足りない可能性がある。
 - Colab のカーネルが `HF_TOKEN` を Colab の秘密情報から読もうとして時間切れの警告を出す（UI からでないと読めない）。無害。
 
+---
+
+## 19. 公式プラグインへ移した（2026-10-03）
+
+利用者の判断（「公式プラグイン＋本体に汎用の口」）に従い、MONAI のプラグインを本体の `examples/remote-compute-monai` から
+**公開リポジトリ [tatsunidas/graphy-next-plugin-monai](https://github.com/tatsunidas/graphy-next-plugin-monai)** へ移した（id `vis-monai`・0.1.0・`engines.graphy >=0.4.0`）。
+§16〜§18 で `examples/remote-compute-monai` と書いているものは、いまはこのリポジトリにある。
+
+- 本体の `examples/remote-compute-demo` は作者向けの最小の見本（閾値 → H63 で ROI マネージャへ・閉じたら H61 で解放を聞く）。
+- 実機の確認（`computeMonaiCheck.ts`・`computeMonaiCatalogCheck.ts`）は公式リポジトリの作業コピー（既定は GRAPHY-Next の隣・`GRAPHY_MONAI_PLUGIN_DIR`）を使う。
+  開発版（0.3.x）でも読み込めるよう、置き場へ写すときだけ `engines.graphy` を外す。
+- リリース（`v*` のタグ）は **公式鍵で署名できないと止まる**（公式プラグインを署名なしで出さない）。
+  🔴 **secrets の登録が要る**（鍵はこの Windows 機に無い）: `gh secret set MINISIGN_SECRET_KEY -R tatsunidas/graphy-next-plugin-monai < graphy-plugins.key`
+  （パスフレーズ付きの鍵なら `MINISIGN_PASSWORD` も）。
+- ⚠ 既存の公式プラグイン `graphy-next-plugin-art` v0.1.0 は**署名なしで出ている**（secrets が鍵だけで、ワークフローが鍵とパスフレーズの両方を要求して署名を飛ばした）。
+

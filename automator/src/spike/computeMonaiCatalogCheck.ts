@@ -1,5 +1,5 @@
 /*
- * MONAI のサンプル（examples/remote-compute-monai）の一覧にある Bundle を、本物の Google Colab（GPU T4）で全部通す。
+ * MONAI のサンプル（tatsunidas/graphy-next-plugin-monai）の一覧にある Bundle を、本物の Google Colab（GPU T4）で全部通す。
  * 設計: fw/remote-compute-design.md §18。
  *
  * 実行:  cd automator && npx tsx src/spike/computeMonaiCatalogCheck.ts [bundle名…]（省略時は一覧の全部）
@@ -25,8 +25,7 @@ import { importFixtureCategory } from "../fixtures/importFixtures.js";
 import { AUTOMATOR_ROOT, FIXTURES_ROOT } from "../fixtures/manifest.js";
 import { consentWindow, createChecker } from "./computeSpikeShared.js";
 
-const PLUGIN_ID = "remote-compute-monai";
-const PLUGIN_SRC = path.join(AUTOMATOR_ROOT, "..", "examples", PLUGIN_ID);
+const PLUGIN_ID = "vis-monai";
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "compute-monai-catalog");
 const MR_DIR = path.join(FIXTURES_ROOT, "mr-monai");
 const { check, summary } = createChecker();
@@ -66,13 +65,30 @@ async function openViewer(driver: DesktopDriver, page: Page, studyUid: string, s
   return viewer;
 }
 
+/**
+ * 公式プラグイン（tatsunidas/graphy-next-plugin-monai）を、検証用のプラグインの置き場へ入れる。
+ * 手元の作業コピー（既定: GRAPHY-Next の隣。GRAPHY_MONAI_PLUGIN_DIR で変えられる）から取る。
+ * 🔴 plugin.json の engines.graphy は公開する版（>=0.4.0）のまま。開発版（0.3.x）でも読み込めるよう、
+ *    置き場へ写すときだけ外す（リポジトリのものは変えない）。
+ */
+function installOfficialPlugin(): void {
+  const src = process.env.GRAPHY_MONAI_PLUGIN_DIR ?? path.join(AUTOMATOR_ROOT, "..", "..", "graphy-next-plugin-monai");
+  if (!fs.existsSync(path.join(src, "ui.js"))) {
+    throw new Error(`公式プラグインの作業コピーがありません: ${src}（git clone https://github.com/tatsunidas/graphy-next-plugin-monai）`);
+  }
+  const dst = path.join(DESKTOP_RUN_DATA_DIR, "plugins", PLUGIN_ID);
+  fs.mkdirSync(dst, { recursive: true });
+  const manifest = JSON.parse(fs.readFileSync(path.join(src, "plugin.json"), "utf8"));
+  manifest.engines = { ...manifest.engines, graphy: ">=0.0.0" };
+  fs.writeFileSync(path.join(dst, "plugin.json"), JSON.stringify(manifest, null, 2));
+  fs.copyFileSync(path.join(src, "ui.js"), path.join(dst, "ui.js"));
+}
+
 async function main(): Promise<void> {
   const only = process.argv.slice(2);
   const plan = only.length ? PLAN.filter((p) => only.includes(p.bundle)) : PLAN;
   fs.mkdirSync(OUT_DIR, { recursive: true });
-  const dst = path.join(DESKTOP_RUN_DATA_DIR, "plugins", PLUGIN_ID);
-  fs.mkdirSync(dst, { recursive: true });
-  for (const n of ["plugin.json", "ui.js"]) fs.copyFileSync(path.join(PLUGIN_SRC, n), path.join(dst, n));
+  installOfficialPlugin();
 
   const driver = new DesktopDriver();
   let endpointsFile: string | null = null;
