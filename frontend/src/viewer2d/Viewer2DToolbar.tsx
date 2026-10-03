@@ -114,7 +114,7 @@ export interface ViewerActions {
   showOverlay(tileId: string | undefined, overlay: ViewerOverlay): boolean;
   /** プラグインオーバーレイを消す。tileId 省略時は対象タイル全部。 */
   clearOverlay(tileId?: string): void;
-  /** ラベルの volume を対象タイルの Mask として読み込む（H63）。tileId 省略時は対象の先頭。 */
+  /** ラベルの volume を対象タイルの Mask として読み込む（H65）。tileId 省略時は対象の先頭。 */
   showLabelVolume(tileId: string | undefined, req: ViewerLabelVolume, producer: { name: string }): Promise<ViewerLabelVolumeResult>;
   /**
    * プラグインの出力を派生シリーズとして保存する（H4b）。**確認ダイアログを必ず挟む**

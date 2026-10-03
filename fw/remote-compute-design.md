@@ -724,7 +724,7 @@ cd automator && npx tsx src/spike/computeMonaiCheck.ts [bundle名]   # Colab に
 **公開リポジトリ [tatsunidas/graphy-next-plugin-monai](https://github.com/tatsunidas/graphy-next-plugin-monai)** へ移した（id `vis-monai`・0.1.0・`engines.graphy >=0.4.0`）。
 §16〜§18 で `examples/remote-compute-monai` と書いているものは、いまはこのリポジトリにある。
 
-- 本体の `examples/remote-compute-demo` は作者向けの最小の見本（閾値 → H63 で ROI マネージャへ・閉じたら H61 で解放を聞く）。
+- 本体の `examples/remote-compute-demo` は作者向けの最小の見本（閾値 → H65 で ROI マネージャへ・閉じたら H61 で解放を聞く）。
 - 実機の確認（`computeMonaiCheck.ts`・`computeMonaiCatalogCheck.ts`）は公式リポジトリの作業コピー（既定は GRAPHY-Next の隣・`GRAPHY_MONAI_PLUGIN_DIR`）を使う。
   開発版（0.3.x）でも読み込めるよう、置き場へ写すときだけ `engines.graphy` を外す。
 - リリース（`v*` のタグ）は **公式鍵で署名できないと止まる**（公式プラグインを署名なしで出さない）。
@@ -746,3 +746,5 @@ Desktop ジョブ）が **`secrets.GRAPHY_COLAB_OAUTH_CLIENT`** から書き出�
 - 🔴 **登録が要る**: `gh secret set GRAPHY_COLAB_OAUTH_CLIENT -R tatsunidas/GRAPHY-Next < desktop/colab-oauth-client.json`（Google からダウンロードした JSON）。
 - 併せて、同意画面が「テスト中」のままだと、テストユーザー以外はログインできず、ログインは 7 日で切れる。配布の前に「本番」へ切り替える（非機密スコープなのでブランドの確認だけの見込み）。
 
+
+> 📝 2026-10-04: Host API の番号を付け直した（**H62 → H64**・**H63 → H65**）。main で angio-quant が先に H62（3D 血管モデルの向きの旗）・H63（3D QCA ダイアログからの呼び出し）を使っていたため。本文の H64・H65 は、ラベルの volume で SEG を保存する口と、ROI マネージャへ読み込む口のこと。

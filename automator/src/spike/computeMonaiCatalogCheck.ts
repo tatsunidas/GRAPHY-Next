@@ -11,7 +11,7 @@
  *    - mni152_t1.nii.gz   … TemplateFlow の MNI152NLin2009cAsym T1w 1mm
  *
  * 確かめること（Bundle ごと）: 「実行」1 回・同意 1 回で最後まで走る／GPU T4／前景のあるラベルが返る／
- * H63 で ROI マネージャに読み込まれる（ラベルの数が一致）。所要時間・GPU メモリを記録する。
+ * H65 で ROI マネージャに読み込まれる（ラベルの数が一致）。所要時間・GPU メモリを記録する。
  */
 import fs from "node:fs";
 import path from "node:path";

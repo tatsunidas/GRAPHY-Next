@@ -108,7 +108,7 @@ describe("gridFrameOffsets", () => {
   });
 });
 
-describe("labelPlanes（H62: ラベルの volume → スライスごとの平面）", () => {
+describe("labelPlanes（H64: ラベルの volume → スライスごとの平面）", () => {
   it("keeps only slices with labels from the table and counts voxels per label", () => {
     // 2×1×3。z=0 は空、z=1 にラベル 1 と表に無い 9、z=2 にラベル 5
     const data = new Uint8Array([0, 0, 1, 9, 5, 5]);

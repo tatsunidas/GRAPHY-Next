@@ -281,7 +281,7 @@ export interface ViewerOverlay {
 }
 
 /**
- * プラグインが渡すラベルの volume（H63）。格子は `loadVolume` が返したもの（`dims`・`ipp`・`sliceStep`）。
+ * プラグインが渡すラベルの volume（H65）。格子は `loadVolume` が返したもの（`dims`・`ipp`・`sliceStep`）。
  * 表にある値だけが Mask のセグメントになり、名前は ROI マネージャの札に出る。
  */
 export interface ViewerLabelVolume {
@@ -639,7 +639,7 @@ export interface ViewerCommands {
   showOverlay(overlay: ViewerOverlay): boolean;
   /** オーバーレイを消す（無ければ何もしない）。 */
   clearOverlay(): void;
-  /** ラベルの volume を表示中スタックの Mask として読み込む（H63。ROI マネージャに出る）。 */
+  /** ラベルの volume を表示中スタックの Mask として読み込む（H65。ROI マネージャに出る）。 */
   importLabelVolume(req: ViewerLabelVolume, label: string): Promise<ViewerLabelVolumeResult>;
   /**
    * 保存要求が通るか検証する（H4b）。エラー理由の文字列、問題なければ null。

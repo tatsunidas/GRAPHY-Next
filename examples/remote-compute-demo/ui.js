@@ -4,7 +4,7 @@
  * 外部の計算機（Colab の GPU・Jupyter Server）を使う最小の見本。設計: fw/remote-compute-design.md。
  *
  *   H59 host.compute.runJob   … 本体が匿名化したシリーズ（npz）を送り、Python を実行して outputs/ を受け取る
- *   H63 host.showLabelVolume  … 受け取ったラベルの volume を ROI マネージャに出す
+ *   H65 host.showLabelVolume  … 受け取ったラベルの volume を ROI マネージャに出す
  *   H61 host.compute.status / releaseRuntime … 窓を閉じたら Colab のランタイムを解放するかを本体に聞いてもらう
  *
  * 実用のプラグイン（MONAI Bundle）は公式リポジトリ tatsunidas/graphy-next-plugin-monai を参照。
@@ -69,7 +69,7 @@ export async function activate(host) {
   const data = new Uint8Array(nxy * nz);
   for (let k = 0; k < nz; k++) data.set(mask.subarray(k * nxy, (k + 1) * nxy), (reversed ? nz - 1 - k : k) * nxy);
 
-  // H63: ROI マネージャに出す（保存はしない。保存するなら saveSegmentation の labels）
+  // H65: ROI マネージャに出す（保存はしない。保存するなら saveSegmentation の labels）
   const shown = await host.showLabelVolume(target.tileId, {
     grid: { dims: vol.dims, ipp: vol.ipp, sliceStep: vol.sliceStep },
     data,

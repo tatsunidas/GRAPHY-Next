@@ -187,7 +187,7 @@ export function gridFrameOffsets(iop: number[], sliceStep: Vec3, nz: number): nu
 }
 
 /**
- * ラベルの volume（z-major・0 は背景）を、前景のあるスライスごとの平面に切る（H62）。
+ * ラベルの volume（z-major・0 は背景）を、前景のあるスライスごとの平面に切る（H64）。
  * 値は表にあるものだけを残し、ほかは 0（背景）にする。ラベルごとの前景ボクセル数（表の順）も返す。
  * uint16 はリトルエンディアンのバイト列にする（backend の読み方と同じ）。
  */

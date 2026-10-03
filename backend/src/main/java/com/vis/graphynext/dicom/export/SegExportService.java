@@ -80,7 +80,7 @@ public class SegExportService {
         final int cols = req.columns();
         final int frameSize = rows * cols;
 
-        // ラベルの平面（H62）なら、ラベルごとのセグメントとフレームに展開する（平面はデコードして 1 回だけ持つ）
+        // ラベルの平面（H64）なら、ラベルごとのセグメントとフレームに展開する（平面はデコードして 1 回だけ持つ）
         LabelExpansion labels = req.labelPlanes() != null ? expandLabelPlanes(req.labelPlanes(), frameSize) : null;
         // PerFrame の順序でフレームを平坦化（bit-pack と同順）。
         final List<SegExportRequest.Segment> segs = labels != null ? labels.segments() : req.segments();
@@ -281,7 +281,7 @@ public class SegExportService {
                           int bytesPerVoxel) {}
 
     /**
-     * ラベルの平面（H62）を、ラベルごとのセグメントとフレームに展開する。前景の無いラベルはセグメントにしない
+     * ラベルの平面（H64）を、ラベルごとのセグメントとフレームに展開する。前景の無いラベルはセグメントにしない
      * （受け側で「あるはずのラベルが空」に見え、切り忘れと区別できないため。H22 と同じ）。
      * セグメント番号は表の順に 1 から振り直す。
      */

@@ -2484,7 +2484,7 @@ export function Viewer2D({
     if (pk) scheduleRoiSave(pk);
   };
 
-  // H63: ラベルの volume を Mask として読み込む（格子は IPP で照合する。1 枚ずれていれば拒否）
+  // H65: ラベルの volume を Mask として読み込む（格子は IPP で照合する。1 枚ずれていれば拒否）
   const importLabelVolumeCmd = async (req: ViewerLabelVolume, label: string): Promise<ViewerLabelVolumeResult> => {
     const vp = viewportRef.current;
     if (!vp) return { ok: false, error: "viewport is not ready" };

@@ -34,7 +34,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * H62: ラベルの volume（スライスごとの平面）から BINARY SEG を作る。
+ * H64: ラベルの volume（スライスごとの平面）から BINARY SEG を作る。
  * 104 ラベルのような多ラベルの結果を「ラベル × スライス」の 0/1 マスクで送らずに済ませる形。
  */
 class SegExportLabelPlanesTest {

@@ -2,7 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-/** H63: プラグインの格子（loadVolume）→ 表示中スタックの z の照合。 */
+/** H65: プラグインの格子（loadVolume）→ 表示中スタックの z の照合。 */
 import { describe, expect, it } from "vitest";
 import { mapGridToStack } from "./maskFrames";
 

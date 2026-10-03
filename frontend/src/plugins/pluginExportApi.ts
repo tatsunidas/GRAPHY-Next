@@ -188,7 +188,7 @@ export async function prepareSegExport(
     producer,
   };
 
-  // H62: ラベルの volume。平面はスライスごとに 1 枚（前景のあるスライスだけ）、展開は backend
+  // H64: ラベルの volume。平面はスライスごとに 1 枚（前景のあるスライスだけ）、展開は backend
   if (req.labels) {
     let lp;
     try {

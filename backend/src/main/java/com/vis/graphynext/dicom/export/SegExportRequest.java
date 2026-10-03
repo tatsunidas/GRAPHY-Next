@@ -24,7 +24,7 @@ import java.util.List;
  * @param seriesDescription       生成シリーズの説明（null 可）
  * @param segments                セグメント群（{@code labelPlanes} を渡すときは空でよい）
  * @param producer                プラグイン由来の場合の出所（null なら本体の機能による生成）
- * @param labelPlanes             ラベルの volume をスライスごとの平面で渡す形（host API の H62）。null なら {@code segments} だけ
+ * @param labelPlanes             ラベルの volume をスライスごとの平面で渡す形（host API の H64）。null なら {@code segments} だけ
  */
 public record SegExportRequest(
         String studyInstanceUid,
@@ -50,7 +50,7 @@ public record SegExportRequest(
     }
 
     /**
-     * ラベルの volume（1 ボクセル 1 値・0 は背景）をスライスごとの平面で受ける（H62）。
+     * ラベルの volume（1 ボクセル 1 値・0 は背景）をスライスごとの平面で受ける（H64）。
      *
      * <p>セグメントごとに volume 大の 0/1 マスクを送る形（{@link Segment}）では、104 ラベルのような多ラベルの結果が
      * 「ラベル × 前景のあるスライス」枚の平面になり、画面側のメモリも JSON も GB 級になる。こちらは「前景のあるスライス」

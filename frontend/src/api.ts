@@ -829,7 +829,7 @@ export interface SegExportRequest {
   /** プラグイン由来のときの出所（本体が接頭辞と ContributingEquipment を書く）。 */
   producer?: { id: string; name: string; version: string } | null;
   /**
-   * ラベルの volume をスライスごとの平面で渡す形（H62。`segments` は空にする）。
+   * ラベルの volume をスライスごとの平面で渡す形（H64。`segments` は空にする）。
    * 平面は前景のあるスライスだけ・rows*cols*bytesPerVoxel を Base64（uint16 はリトルエンディアン）。
    */
   labelPlanes?: {

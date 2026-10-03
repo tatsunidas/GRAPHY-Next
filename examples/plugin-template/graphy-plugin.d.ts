@@ -1657,7 +1657,7 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    */
   showOverlay: (tileId: string | undefined, overlay: Overlay) => boolean;
   /**
-   * **ラベルの volume をビューアの Mask として読み込む**（H63・**0.4.0 以降**）。ROI マネージャに出て、
+   * **ラベルの volume をビューアの Mask として読み込む**（H65・**0.4.0 以降**）。ROI マネージャに出て、
    * セグメントの札には表の名前が出る。格子は `loadVolume` が返したもの（`dims`・`ipp`・`sliceStep`）を渡す。
    * スライスが IPP で 0.5 mm 以内に揃わなければ拒否。前景の無いラベルは入らない（255 ラベルまで）。
    * **表示だけで保存はしない**（保存は `saveSegmentation`）。
@@ -1942,7 +1942,7 @@ export interface SegmentationRequest {
     data: Uint8Array;
   }>;
   /**
-   * **ラベルの volume で渡す形（H62・0.4.0 以降）**。`segments` の代わりに使う（どちらか一方）。
+   * **ラベルの volume で渡す形（H64・0.4.0 以降）**。`segments` の代わりに使う（どちらか一方）。
    * 1 ボクセル 1 値（0 は背景）で、`table` にある値だけがセグメントになる（前景の無いラベルは入らない）。
    * 多ラベル（例: 104 臓器）でも、セグメントごとに volume 大の配列を作らずに済む。
    */
@@ -2182,7 +2182,7 @@ export interface ComputeEndpointStatus {
 /** `host.compute.releaseRuntime()` の結果（H61）。 */
 export type ComputeReleaseOutcome = { ok: true; released: boolean } | { ok: false; error: string };
 
-/** `showLabelVolume` に渡すラベルの volume（H63）。 */
+/** `showLabelVolume` に渡すラベルの volume（H65）。 */
 export interface LabelVolumeRequest {
   grid: { dims: [number, number, number]; ipp: [number, number, number]; sliceStep: [number, number, number] };
   /** z-major・1 ボクセル 1 値（0 は背景）。 */

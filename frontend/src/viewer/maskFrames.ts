@@ -210,7 +210,7 @@ export async function importMaskFrames(
   return { segmentationId, segmentCount: segIndices.length };
 }
 
-/** ラベルの volume（H63）。格子はプラグインが `loadVolume` で受け取ったもの。 */
+/** ラベルの volume（H65）。格子はプラグインが `loadVolume` で受け取ったもの。 */
 export interface LabelVolumeInput {
   /** [nx, ny, nz]。nx = columns・ny = rows。 */
   dims: [number, number, number];
@@ -250,7 +250,7 @@ export function mapGridToStack(
 }
 
 /**
- * ラベルの volume を、表示中スタックの新しい Mask（labelmap）として書き込む（H63）。
+ * ラベルの volume を、表示中スタックの新しい Mask（labelmap）として書き込む（H65）。
  * 表にある値だけを、前景のあるものから 1..n のセグメントにする（n は 255 まで）。名前は ROI マネージャの札に出る。
  */
 export async function importLabelVolume(

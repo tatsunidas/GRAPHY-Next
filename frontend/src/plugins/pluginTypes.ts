@@ -425,7 +425,7 @@ export interface PluginSegmentationRequest {
     data: Uint8Array;
   }>;
   /**
-   * **ラベルの volume で渡す形（H62）**。`segments` の代わりに使う（どちらか一方）。
+   * **ラベルの volume で渡す形（H64）**。`segments` の代わりに使う（どちらか一方）。
    * 1 ボクセル 1 値（0 は背景）で、`table` にある値だけがセグメントになる（前景の無いラベルは入らない）。
    * 多ラベル（例: 104 臓器）でも、セグメントごとに volume 大の配列を作らずに済む。
    */
@@ -667,7 +667,7 @@ export interface Viewer2DPluginHost extends PluginHostBase {
   /** プラグインオーバーレイを消す（H4a）。`tileId` 省略時は対象タイル全部。 */
   clearOverlay: (tileId?: string) => void;
   /**
-   * **ラベルの volume をビューアの Mask として読み込む**（H63）。ROI マネージャに出て、セグメントの札には表の名前が出る。
+   * **ラベルの volume をビューアの Mask として読み込む**（H65）。ROI マネージャに出て、セグメントの札には表の名前が出る。
    * 格子は `loadVolume` が返したもの（`dims`・`ipp`・`sliceStep`）を渡す。スライスが IPP で 0.5 mm 以内に揃わなければ拒否。
    * 前景の無いラベルは入らない（255 ラベルまで）。**表示だけで保存はしない**（保存は `saveSegmentation`）。
    */
