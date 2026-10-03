@@ -661,3 +661,19 @@ cd automator && npx tsx src/spike/computeMonaiCheck.ts [bundle名]   # Colab に
 - 出力がセグメンテーション以外（分類・検出）は扱っていない
 - ROI マネージャで SEG を開くところは自動では確かめていない（DB の SEG を backend から読んで、ラベル名と左右を確かめた）
 
+---
+
+## 17. 既定の計算機を Colab の GPU T4 にする（2026-10-03）
+
+利用者の要望: 「既定の GPU を Colab の T4 にし、環境設定で設定されていなければ自動で設定する」。**すべて本体側**（プラグインは計算機を選ばない・増やせない）。
+
+- **選び方**（`pluginComputeApi.ts` の `defaultEndpoint`）: Colab の T4（ログイン済み）→ トークンの入った最初の計算機 → 最初。プラグインが `endpointId` を指定したときは今まで通り。
+  環境設定の一覧で既定のものに「既定」の印。
+- **自動の設定は main**（`desktop/computeDefault.js` の `ensureDefaultEndpoint`、IPC `graphy:compute-ensure-default`）。`runJob` は計算機が 1 つも無いときに 1 回だけ呼ぶ。
+  - 未登録・ログイン済み・T4 がプランで使える → `colab-t4`（Google Colab（GPU T4））を**確認ダイアログなしで**足す。送り先は利用者自身の Google アカウントの Colab に固定で、
+    足しただけでは何も送らない（毎回の実行で同意画面に送り先が出る）。任意の URL を足せる口ではないので、`compute-endpoints-set` の確認とは別に扱う。
+  - 足さずに理由を返す: `colab-signin-required`（未ログイン。ログインだけは自動にできない）／`t4-not-available`（**黙って CPU に落とさない**）／
+    `colab-not-configured`（配布物に OAuth の設定が無い）／`config-unreadable`（設定のファイルが壊れている。上書きすると利用者の接続先が消える）。
+  - 既に何か登録されていれば足さない（利用者が選んだものを変えない）。
+- テスト: `desktop/computeDefault.test.js` 5、frontend `pluginComputeStatus.test.ts`（既定の選び方・ensure の失敗・名指しのときは足さない）。
+

@@ -329,6 +329,9 @@ const REFUSALS = {
   "npz-too-large": "シリーズが大きすぎます",
   "permission-denied": "このプラグインに外部の計算機を使う許可がありません",
   "no-endpoint": "環境設定 ＞ 外部の計算機 で計算機を登録してください",
+  "colab-signin-required": "環境設定 ＞ 外部の計算機 で Google にログインしてください（ログインすると Colab の GPU T4 が自動で登録されます）",
+  "t4-not-available": "いまのプランでは Colab の GPU T4 が使えません。環境設定 ＞ 外部の計算機 で別の種類を登録してください",
+  "colab-not-configured": "このアプリには Colab に接続するための設定が入っていません。Jupyter Server を登録してください",
 };
 export const explain = (code) => (code && REFUSALS[code] ? `${REFUSALS[code]}（${code}）` : String(code));
 

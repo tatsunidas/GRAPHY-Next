@@ -18,7 +18,7 @@
  * 例外は投げない（`ai.generate` と同じ流儀）。`cancelled: true` は利用者の取り消しで、エラーとして出さないこと。
  */
 import { apiBase } from "../apiBase";
-import { desktop } from "../desktopBridge";
+import { desktop, type ComputeEndpointEntry } from "../desktopBridge";
 import { HttpError, httpSend } from "../http";
 import { tOutsideReact as t } from "../i18n/i18n";
 import { pollPluginJob, type PluginJobOptions, type PluginJobStatus } from "./pluginCommonApi";
@@ -84,10 +84,14 @@ export async function runComputeJob(
   if (!d?.computeConfirm || !d.computeEndpointsGet) return { ok: false, error: "desktop-only" };
   if (!(m.permissions ?? []).includes(REMOTE_COMPUTE_PERMISSION)) return { ok: false, error: "permission-denied" };
 
-  const cfg = await d.computeEndpointsGet();
-  const endpoint = opts.endpointId
-    ? cfg.endpoints.find((e) => e.id === opts.endpointId)
-    : (cfg.endpoints.find((e) => e.hasToken) ?? cfg.endpoints[0]);
+  let cfg = await d.computeEndpointsGet();
+  // 1 つも登録が無ければ、main に既定の計算機（Colab の GPU T4）を用意してもらう（ログイン済みのときだけ足せる）
+  if (!opts.endpointId && cfg.endpoints.length === 0 && d.computeEnsureDefault) {
+    const ensured = await d.computeEnsureDefault();
+    if (!ensured.ok) return { ok: false, error: ensured.error };
+    cfg = await d.computeEndpointsGet();
+  }
+  const endpoint = opts.endpointId ? cfg.endpoints.find((e) => e.id === opts.endpointId) : defaultEndpoint(cfg.endpoints);
   if (!endpoint) return { ok: false, error: opts.endpointId ? "unknown-endpoint" : "no-endpoint" };
   const endpointId = endpoint.id;
   // Colab はランタイムを確保してから要求を作る（同意画面に実際の送り先が出るように）。
@@ -149,6 +153,23 @@ export async function runComputeJob(
       return bytes ? readStoredZipEntry(bytes, name) : null;
     },
   };
+}
+
+/** 既定にする Colab のランタイムの種類（desktop/computeDefault.js と同じ）。 */
+const DEFAULT_SPEC = { variant: "VARIANT_GPU", accelerator: "T4", shape: "SHAPE_STANDARD" } as const;
+
+/** Colab の GPU T4 か（既定の計算機）。 */
+export function isDefaultSpec(e: Pick<ComputeEndpointEntry, "kind" | "spec">): boolean {
+  return e.kind === "colab" && e.spec?.variant === DEFAULT_SPEC.variant && e.spec?.accelerator === DEFAULT_SPEC.accelerator
+    && e.spec?.shape === DEFAULT_SPEC.shape;
+}
+
+/**
+ * 既定の計算機: Colab の T4 → トークンの入った最初 → 最初（desktop/computeDefault.js の pickDefault と同じ規則）。
+ * Colab は Google にログインしていれば hasToken。
+ */
+export function defaultEndpoint<T extends Pick<ComputeEndpointEntry, "kind" | "spec" | "hasToken">>(endpoints: T[]): T | undefined {
+  return endpoints.find((e) => isDefaultSpec(e) && e.hasToken) ?? endpoints.find((e) => e.hasToken) ?? endpoints[0];
 }
 
 function errorCode(e: unknown): string {

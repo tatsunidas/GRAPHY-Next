@@ -295,6 +295,11 @@ export interface GraphyDesktop {
   computeColabEnsure?: (id: string) => Promise<{ ok: boolean; error?: string; allocated?: boolean; expireTime?: string }>;
   /** Colab: ランタイムを解放する。 */
   computeColabRelease?: (id: string) => Promise<{ ok: boolean; released?: boolean; error?: string }>;
+  /**
+   * 既定の計算機を用意する（計算機が 1 つも無く、Google にログイン済みなら Colab の GPU T4 を足す。足すのは main）。
+   * error: colab-not-configured / colab-signin-required / t4-not-available / config-unreadable
+   */
+  computeEnsureDefault?: () => Promise<{ ok: true; endpointId: string; added: boolean } | { ok: false; error: string }>;
   /** 名前を付けて保存（OS ダイアログ）。**上書き確認は OS が出す。** */
   saveFile?: (payload: {
     defaultName: string;

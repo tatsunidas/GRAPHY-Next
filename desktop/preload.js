@@ -77,6 +77,8 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   computeColabSpecs: () => ipcRenderer.invoke("graphy:compute-colab-specs"),
   computeColabEnsure: (id) => ipcRenderer.invoke("graphy:compute-colab-ensure", id),
   computeColabRelease: (id) => ipcRenderer.invoke("graphy:compute-colab-release", id),
+  // 既定の計算機（未登録で Google にログイン済みなら Colab の T4 を足す。足すのは main）
+  computeEnsureDefault: () => ipcRenderer.invoke("graphy:compute-ensure-default"),
   // 名前を付けて保存。上書き確認は OS のダイアログが出す。
   saveFile: (payload) => ipcRenderer.invoke("graphy:save-file", payload),
   // 開くダイアログ（プラグインの H43 file.pickFiles）。ファイルだけ。選んだ絶対パスを返す。

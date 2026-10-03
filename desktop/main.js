@@ -31,6 +31,7 @@ const secretStore = require("./secretStore");
 const aiGateway = require("./aiGateway");
 const aiProviders = require("./aiProviders");
 const computeEndpoints = require("./computeEndpoints");
+const { ensureDefaultEndpoint } = require("./computeDefault");
 const computeBridge = require("./computeBridge");
 const computeConsent = require("./computeConsent");
 const { createColabAuth, REFRESH_KEY: COLAB_REFRESH_KEY } = require("./colabAuth");
@@ -1166,6 +1167,20 @@ ipcMain.handle("graphy:compute-colab-ensure", async (_e, id) => {
 });
 
 ipcMain.handle("graphy:compute-colab-release", async (_e, id) => colabRuntimes.release(String(id || "")));
+
+/**
+ * 既定の計算機を用意する（計算機が 1 つも無く、Google にログイン済みなら Colab の T4 を 1 本だけ足す）。
+ * <p>確認ダイアログは出さない: 送り先は利用者自身の Google アカウントの Colab に固定で、足しただけでは何も送らない
+ * （毎回の実行で同意画面に送り先が出る）。任意の URL を足せる口ではないので、compute-endpoints-set の確認とは別に扱う。
+ */
+ipcMain.handle("graphy:compute-ensure-default", async () => {
+  const r = await ensureDefaultEndpoint({ endpoints: computeEndpoints, colabAuth, colabApi });
+  if (r.ok && r.added) {
+    console.log(`[compute] default endpoint added: ${r.endpointId}`);
+    await pushComputeEndpoints();
+  }
+  return r;
+});
 
 // 接続先の一覧。**トークンは含まない**（入っているかだけ）。
 ipcMain.handle("graphy:compute-endpoints-get", () => {

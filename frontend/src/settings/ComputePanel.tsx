@@ -16,6 +16,7 @@
  */
 import React, { useCallback, useEffect, useState } from "react";
 import { useI18n, type TFn } from "../i18n/i18n";
+import { defaultEndpoint } from "../plugins/pluginComputeApi";
 import {
   desktop,
   type ColabSpecsResult,
@@ -290,11 +291,17 @@ export function ComputePanel() {
         {endpoints.length === 0 ? <p style={notice}>{t("settings.compute.none")}</p> : null}
         {endpoints.map((e) => {
           const test = tests[e.id];
+          const isDefault = defaultEndpoint(endpoints)?.id === e.id;
           return (
             <div key={e.id} style={box} data-testid={`compute-endpoint-${e.id}`}>
               <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
                 <b style={{ fontSize: 12 }}>{e.label}</b>
                 <span style={mono}>{e.kind === "colab" ? "Google Colab" : e.url}</span>
+                {isDefault ? (
+                  <span style={defaultBadge} title={t("settings.compute.default.help")} data-testid={`compute-default-${e.id}`}>
+                    {t("settings.compute.default")}
+                  </span>
+                ) : null}
                 {e.plaintext ? (
                   <span style={warnBadge} title={t("settings.compute.plaintext.help")}>
                     {t("settings.ai.plaintext")}
@@ -569,6 +576,15 @@ const addBtn: React.CSSProperties = {
   cursor: "pointer",
   color: "#0b5cad",
 };
+const defaultBadge: React.CSSProperties = {
+  fontSize: 10,
+  padding: "1px 6px",
+  borderRadius: 8,
+  background: "#e3effc",
+  color: "#0b5cad",
+  border: "1px solid #a9c8ec",
+};
+
 const warnBadge: React.CSSProperties = {
   fontSize: 10,
   padding: "1px 6px",
