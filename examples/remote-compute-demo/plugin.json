@@ -1,0 +1,12 @@
+{
+  "id": "remote-compute-demo",
+  "name": "Remote compute demo",
+  "version": "0.1.0",
+  "engines": { "graphy": ">=0.4.0", "os": ["win32", "darwin", "linux"] },
+  "description": "Minimal sample of host.compute (H59 runJob, H61 status/releaseRuntime) and showLabelVolume (H65): threshold the displayed series on an external computer and show the mask in the ROI manager.",
+  "author": "Visionary Imaging Services, Inc.",
+  "license": "MIT",
+  "contributes": ["viewer2d.menu.analysis"],
+  "ui": "ui.js",
+  "permissions": ["remote-compute"]
+}

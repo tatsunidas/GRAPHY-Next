@@ -24,25 +24,7 @@ import type {
 } from "./pluginCenterlineApi";
 import type { Vec3 } from "../viewer/reslice";
 import type { PluginSeriesPanelHandle, PluginSeriesPanelOptions } from "./pluginSeriesPanelApi";
-import type {
-  ViewerDerivedSeriesRequest,
-  ViewerDerivedSeriesResult,
-  ViewerOverlay,
-  ViewerPixelDataOptions,
-  ViewerRoiMeasurements,
-  ViewerTarget,
-  ViewerAngioReportRequest,
-  ViewerPresentationStateRequest,
-  ViewerTilePixelData,
-  ViewerTileSpatialCalibration,
-  ViewerTileXaState,
-  ViewerTileXaCine,
-  ViewerTileRoi,
-  ViewerTileViewState,
-  ViewerSrMeasurementGroup,
-  ViewerSrRequest,
-  ViewerSrResult,
-} from "../viewer/viewerCommands";
+import type { ViewerDerivedSeriesRequest, ViewerDerivedSeriesResult, ViewerOverlay, ViewerPixelDataOptions, ViewerRoiMeasurements, ViewerTarget, ViewerAngioReportRequest, ViewerPresentationStateRequest, ViewerTilePixelData, ViewerTileSpatialCalibration, ViewerTileXaState, ViewerTileXaCine, ViewerTileRoi, ViewerTileViewState, ViewerSrMeasurementGroup, ViewerSrRequest, ViewerSrResult, ViewerLabelVolume, ViewerLabelVolumeResult } from "../viewer/viewerCommands";
 
 export type { PluginStoreDoc, PluginStoreSaveResult };
 
@@ -114,6 +96,8 @@ export type {
  * 旧本体はこの面を知らないだけで、宣言しても害は無い（`contributes` で絞るだけ）。
  */
 import type { AiGenerationOptions, AiGenerationOutcome } from "./pluginAiApi";
+import type { ComputeRunJobOptions, ComputeRunOutcome, ComputeEndpointStatus, ComputeReleaseOutcome } from "./pluginComputeApi";
+export type { ComputeEndpointStatus, ComputeJobInput, ComputeOutputFile, ComputeReleaseOutcome, ComputeRunJobOptions, ComputeRunOutcome } from "./pluginComputeApi";
 import type { PickDirectoryResult, PluginSaveArtifactOptions, PluginSaveFileOptions } from "./pluginFileApi";
 export type { PickDirectoryResult, PluginSaveArtifactOptions };
 import type { SaveFileResult } from "../desktopBridge";
@@ -289,6 +273,26 @@ interface PluginHostBase {
    * standalone 専用（web は backend 面が無いので失敗が返る）。
    */
   runBackendJob: (payload?: unknown, opts?: PluginJobOptions) => Promise<PluginJobOutcome>;
+  /**
+   * 外部の計算機（Jupyter Server・GPU）で計算する（H59）。実装は `pluginComputeApi.ts`。
+   *
+   * <p>⚠ **患者由来のデータと任意のコードを外の計算機へ出す API である。** `plugin.json` の
+   * `permissions` に `"remote-compute"` が要り（backend でも確かめる）、送るたびに**本体の窓**で
+   * 宛先・データ・コードの全文を見せて同意を取る。データは本体が既存の匿名化で作る
+   * （プラグインが渡すのはシリーズの参照だけ）。焼き込みのあるシリーズはマスクが無ければ送れない。
+   *
+   * <p>例外は投げない。`cancelled: true` は利用者の取り消し。デスクトップ専用。
+   */
+  compute: {
+    runJob: (opts: ComputeRunJobOptions, jobOpts?: PluginJobOptions) => Promise<ComputeRunOutcome>;
+    /** H61: 計算機の一覧と、Colab のランタイムを確保しているか（トークンや URL は出さない）。 */
+    status: () => Promise<ComputeEndpointStatus[]>;
+    /**
+     * H61: Colab のランタイムを解放する。`ask: true` なら本体が確認を出す（文言は本体が決める）。
+     * 確保していなければ `{ok:true, released:false}`。次の `runJob` が自動で確保し直す。
+     */
+    releaseRuntime: (endpointId: string, opts?: { ask?: boolean }) => Promise<ComputeReleaseOutcome>;
+  };
   /** 本体の DB（H44・H46・H51）。 */
   db: {
     /**
@@ -417,7 +421,7 @@ export interface PluginSegmentationRequest {
   /** マスクが乗っている格子（= H10 が返したボリュームの幾何）。 */
   grid: PluginExportGrid;
   seriesDescription?: string;
-  segments: Array<{
+  segments?: Array<{
     label: string;
     /** RGB 0..255。 */
     color?: [number, number, number];
@@ -426,6 +430,16 @@ export interface PluginSegmentationRequest {
     /** `grid.dims` のボクセル数と同じ長さ。**0 以外が前景**。 */
     data: Uint8Array;
   }>;
+  /**
+   * **ラベルの volume で渡す形（H64）**。`segments` の代わりに使う（どちらか一方）。
+   * 1 ボクセル 1 値（0 は背景）で、`table` にある値だけがセグメントになる（前景の無いラベルは入らない）。
+   * 多ラベル（例: 104 臓器）でも、セグメントごとに volume 大の配列を作らずに済む。
+   */
+  labels?: {
+    /** `grid.dims` のボクセル数と同じ長さ・z-major（`loadVolume` と同じ並び）。 */
+    data: Uint8Array | Uint16Array;
+    table: Array<{ value: number; label: string; color?: [number, number, number]; description?: string }>;
+  };
 }
 
 export interface PluginSegmentationResult {
@@ -658,6 +672,12 @@ export interface Viewer2DPluginHost extends PluginHostBase {
   showOverlay: (tileId: string | undefined, overlay: ViewerOverlay) => boolean;
   /** プラグインオーバーレイを消す（H4a）。`tileId` 省略時は対象タイル全部。 */
   clearOverlay: (tileId?: string) => void;
+  /**
+   * **ラベルの volume をビューアの Mask として読み込む**（H65）。ROI マネージャに出て、セグメントの札には表の名前が出る。
+   * 格子は `loadVolume` が返したもの（`dims`・`ipp`・`sliceStep`）を渡す。スライスが IPP で 0.5 mm 以内に揃わなければ拒否。
+   * 前景の無いラベルは入らない（255 ラベルまで）。**表示だけで保存はしない**（保存は `saveSegmentation`）。
+   */
+  showLabelVolume: (tileId: string | undefined, req: ViewerLabelVolume) => Promise<ViewerLabelVolumeResult>;
   /**
    * 処理結果を**派生シリーズとして保存する**（H4b）。standalone はローカル保管庫、
    * web は外部 PACS（STOW-RS）へ書き戻す。
@@ -1036,7 +1056,10 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
  * `launchPlugin` が一箇所で注入する。呼び出し側に作らせると、マニフェストの渡し忘れが
  * そのまま権限チェックの素通りになる。
  */
-export type PluginHostSeed = DistributiveOmit<PluginHost, "ai" | "file" | "runBackendJob" | "db" | "video" | "apiBase">;
+export type PluginHostSeed = DistributiveOmit<
+  PluginHost,
+  "ai" | "file" | "runBackendJob" | "db" | "video" | "apiBase" | "compute"
+>;
 
 /**
  * プラグイン UI バンドル（ES モジュール）が公開する契約。

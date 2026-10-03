@@ -1,0 +1,11 @@
+{
+  "id": "compute-egress-denied",
+  "name": "Compute Egress Denied",
+  "version": "0.1.0",
+  "engines": { "graphy": ">=0.3.5", "os": ["win32", "darwin", "linux"] },
+  "description": "Does not declare remote-compute; the backend must refuse it (fw/remote-compute-design.md stage 4).",
+  "author": "automator",
+  "license": "MIT",
+  "contributes": [],
+  "permissions": []
+}

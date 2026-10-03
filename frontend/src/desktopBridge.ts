@@ -263,6 +263,43 @@ export interface GraphyDesktop {
     // 🔑 `canceled` は「main の確認ダイアログで利用者が取り消した」。失敗ではないので
     //    エラーとして見せない（`problems` は空で返る）。
     Promise<{ ok: boolean; problems: string[]; canceled?: boolean }>;
+  /** 外部の計算機（Jupyter Server）の一覧。**トークンの値は返らない**（有無だけ）。fw/remote-compute-design.md */
+  computeEndpointsGet?: () => Promise<ComputeEndpointsConfig>;
+  /** 検査だけ（書かない）。入力中に叩く。検査規則は main に 1 つだけ。 */
+  computeEndpointsValidate?: (cfg: { endpoints: ComputeEndpointInput[] }) =>
+    Promise<{ ok: boolean; problems: string[] }>;
+  /**
+   * 一覧を保存する。送信先が増える・変わるときは **main が確認ダイアログを出す**
+   * （`canceled` は利用者が取り消した。失敗ではない）。
+   */
+  computeEndpointsSet?: (cfg: { endpoints: ComputeEndpointInput[] }) =>
+    Promise<{ ok: boolean; problems: string[]; canceled?: boolean }>;
+  /** 接続テスト。**渡せるのは id だけ**——実行するコードは backend の定数。 */
+  computeTestConnection?: (id: string) => Promise<ComputeTestResult>;
+  /**
+   * 外部の計算機へ送る前の同意。**渡せるのは要求の id だけ**——見せる内容（宛先・データ・コード全文）は
+   * main が backend から取り直し、main の窓で聞く（プラグインからは迂回できない）。
+   */
+  computeConfirm?: (requestId: string) => Promise<
+    { ok: true; approved: boolean } | { ok: false; error: string }
+  >;
+  /** Colab: ログインの状態（トークンは返らない）。fw/remote-compute-design.md §15 */
+  computeColabStatus?: () => Promise<ColabStatus>;
+  /** Colab: Google でログイン（利用者のブラウザが開く）。 */
+  computeColabSignIn?: () => Promise<{ ok: boolean; email?: string | null; error?: string }>;
+  /** Colab: ログアウト（確保したランタイムを解放し、Google 側の許可も取り消す）。 */
+  computeColabSignOut?: () => Promise<{ ok: boolean; error?: string }>;
+  /** Colab: プランと、選べるランタイムの種類。 */
+  computeColabSpecs?: () => Promise<ColabSpecsResult>;
+  /** Colab: その接続先のランタイムを確保する（済んでいれば何もしない）。データは送らない。 */
+  computeColabEnsure?: (id: string) => Promise<{ ok: boolean; error?: string; allocated?: boolean; expireTime?: string }>;
+  /** Colab: ランタイムを解放する。 */
+  computeColabRelease?: (id: string) => Promise<{ ok: boolean; released?: boolean; error?: string }>;
+  /**
+   * 既定の計算機を用意する（計算機が 1 つも無く、Google にログイン済みなら Colab の GPU T4 を足す。足すのは main）。
+   * error: colab-not-configured / colab-signin-required / t4-not-available / config-unreadable
+   */
+  computeEnsureDefault?: () => Promise<{ ok: true; endpointId: string; added: boolean } | { ok: false; error: string }>;
   /** 名前を付けて保存（OS ダイアログ）。**上書き確認は OS が出す。** */
   saveFile?: (payload: {
     defaultName: string;
@@ -281,6 +318,73 @@ export interface GraphyDesktop {
   pluginWriteIntoDirectory?: (payload: { dir: string; name: string; bytes: Uint8Array }) => Promise<SaveFileResult>;
   /** H56: backend のジョブの成果物を選んだフォルダへ直接落とす。 */
   pluginDownloadIntoDirectory?: (payload: { dir: string; name: string; url: string }) => Promise<SaveFileResult>;
+}
+
+/** 外部の計算機の入力（保存・検査に渡す形）。トークンは含めない（`secretSet` で別に預ける）。 */
+export interface ComputeEndpointInput {
+  id: string;
+  label: string;
+  /** `jupyter`（既定・URL とトークン）か `colab`（Google の Colab・ランタイムの種類だけ持つ）。 */
+  kind?: "jupyter" | "colab";
+  /** jupyter のとき。 */
+  url?: string;
+  /** colab のとき（Colab API の RuntimeSpec）。 */
+  spec?: ColabRuntimeSpec;
+}
+
+/** Colab のランタイムの種類（例 VARIANT_GPU / T4 / SHAPE_STANDARD）。 */
+export interface ColabRuntimeSpec {
+  variant: string;
+  accelerator: string;
+  shape: string;
+}
+
+export interface ComputeEndpointEntry extends ComputeEndpointInput {
+  kind: "jupyter" | "colab";
+  /** 平文 http（院内アドレスだけ許される）。画面は印を出す。 */
+  plaintext?: boolean;
+  /** トークンを預けるキー名（`secretSet` に渡す・jupyter のとき）。 */
+  secretKey?: string;
+  /** jupyter はトークンが入っているか、colab は Google でログインしているか。 */
+  hasToken: boolean;
+  /** colab のとき: 確保したランタイム（トークンは返らない）。 */
+  runtime?: { allocated: boolean; name?: string; spec?: ColabRuntimeSpec; expireTime?: string };
+}
+
+export interface ColabStatus {
+  /** OAuth クライアントの設定があるか（無ければログインできない）。 */
+  configured: boolean;
+  signedIn: boolean;
+  email: string | null;
+}
+
+export type ColabSpecsResult =
+  | { ok: true; tier: string | null; specs: (ColabRuntimeSpec & { eligible: boolean })[] }
+  | { ok: false; error: string };
+
+export interface ComputeEndpointsConfig {
+  endpoints: ComputeEndpointEntry[];
+  problems: string[];
+  /** main と backend の内部経路が使えるか（backend を別に起動した開発では false）。 */
+  available: boolean;
+}
+
+/** 接続テストの結果（backend の ComputeConnectionTester.Result）。 */
+export interface ComputeTestResult {
+  ok: boolean;
+  /** 落ちた段: connect / kernelspecs / kernel / probe / bridge。成功なら done */
+  stage: string;
+  error?: string | null;
+  httpStatus?: number;
+  serverVersion?: string | null;
+  kernels?: string[];
+  probe?: {
+    python?: string;
+    platform?: string;
+    gpus?: { name: string; memory?: string | null; driver?: string | null }[];
+    torch?: { version: string; cuda: boolean; devices: string[] } | null;
+  } | null;
+  elapsedMs?: number;
 }
 
 export function desktop(): GraphyDesktop | undefined {

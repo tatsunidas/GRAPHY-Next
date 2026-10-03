@@ -162,6 +162,59 @@ jobs:
         run: |
           bash scripts/fetch-dcm4che-tools.sh
           bash scripts/fetch-dcm4che-tools.sh --check
+      # Google Colab に接続するための OAuth クライアント（デスクトップ アプリ型）を入れる。
+      # 公開リポジトリには置かない（.gitignore）。secrets.GRAPHY_COLAB_OAUTH_CLIENT に Google から
+      # ダウンロードした JSON（"installed"）をそのまま登録する。設計: fw/remote-compute-design.md §20。
+      # 無ければ入れずに進む（Colab だけが「設定がありません」になる配布物）。あれば中身を確かめ、
+      # 入ったことを check-packaged.js にも確かめさせる。
+      - name: Write Colab OAuth client
+        shell: bash
+        env:
+          COLAB_CLIENT: ${{ secrets.GRAPHY_COLAB_OAUTH_CLIENT }}
+        run: |
+          if [ -z "$COLAB_CLIENT" ]; then
+            echo "::warning::secrets.GRAPHY_COLAB_OAUTH_CLIENT がありません。この配布物では Google Colab に接続できません。"
+            exit 0
+          fi
+          printf '%s' "$COLAB_CLIENT" > desktop/colab-oauth-client.json
+          node -e "const j=require('./desktop/colab-oauth-client.json'); if(!j.installed||!j.installed.client_id||!j.installed.client_secret){console.error('::error::colab-oauth-client.json に installed.client_id / client_secret がありません（デスクトップ アプリ型の JSON を登録してください）');process.exit(1)}"
+          echo "GRAPHY_REQUIRE_COLAB_CLIENT=1" >> "$GITHUB_ENV"
+      # 同梱の公式プラグイン（desktop/bundled-plugins.json）。GitHub Release から zip・sha256・minisig を取り、
+      # **公式鍵の署名を確かめてから** desktop/resources/bundled-plugins に置く（起動時に backend がもう一度確かめて入れる）。
+      # 署名の無い版は入れない（公式プラグインを署名なしで配らない）。取れなければ警告して同梱なしで進む。
+      - name: Fetch bundled official plugins
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          out=desktop/resources/bundled-plugins
+          mkdir -p "$out"
+          pub=$(yq -r '.graphy.plugins."trusted-keys"[0]' backend/src/main/resources/application.yml 2>/dev/null || true)
+          if [ -z "$pub" ] || [ "$pub" = "null" ]; then
+            pub=$(grep -A2 'trusted-keys:' backend/src/main/resources/application.yml | grep -o '"RW[^"]*"' | head -1 | tr -d '"')
+          fi
+          printf 'untrusted comment: official\n%s\n' "$pub" > /tmp/official.pub
+          if ! command -v minisign >/dev/null; then sudo apt-get update -qq && sudo apt-get install -y -qq minisign 2>/dev/null || true; fi
+          jq -c '.plugins[]' desktop/bundled-plugins.json | while read -r p; do
+            repo=$(echo "$p" | jq -r .repo); ver=$(echo "$p" | jq -r .version)
+            tmp=$(mktemp -d)
+            if ! gh release download "v$ver" -R "$repo" -D "$tmp" -p '*.zip' -p '*.zip.sha256' -p '*.zip.minisig'; then
+              echo "::warning::$repo v$ver を取得できません。同梱しません。"; continue
+            fi
+            zip=$(ls "$tmp"/*.zip | head -1)
+            if [ ! -f "$zip.minisig" ]; then
+              echo "::warning::$repo v$ver に署名（.minisig）がありません。公式プラグインは署名なしで同梱しません。"; continue
+            fi
+            (cd "$tmp" && sha256sum -c "$(basename "$zip").sha256")
+            if command -v minisign >/dev/null; then
+              minisign -V -p /tmp/official.pub -m "$zip" -x "$zip.minisig" \
+                || { echo "::error::$repo v$ver の署名が公式鍵で検証できません"; exit 1; }
+            fi
+            cp "$zip" "$zip.minisig" "$out/"
+            [ -f "$zip.sha256" ] && cp "$zip.sha256" "$out/"
+            echo "bundled: $(basename "$zip")"
+          done
+          ls -la "$out"
       - name: Install desktop deps & build installer
         working-directory: desktop
         shell: bash

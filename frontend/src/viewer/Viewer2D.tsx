@@ -2,6 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
+import { importLabelVolume } from "./maskFrames";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { RenderingEngine, Enums, EVENTS, eventTarget, metaData, utilities, type Types } from "@cornerstonejs/core";
 import {
@@ -55,25 +56,7 @@ import { computeOrientationMarkers, type OrientationMarkers } from "./orientatio
 import { computeScaleBar, type ScaleBar } from "./scaleBar";
 import { getOrCreateCameraSync, getOrCreateVoiSync, getOrCreatePresentationSync, getOrCreateSeriesVoiSync, broadcastSeriesProperties, captureVoiBaseline, clearVoiBaseline } from "./sync";
 import { registerReferenceSource, bumpReference, subscribeReference, computeReferenceSegments, type RefSegment } from "./referenceLines";
-import {
-  registerViewerCommands,
-  type ViewerCommands,
-  type ViewerDerivedSeriesRequest,
-  type ViewerDerivedSeriesResult,
-  type ViewerOverlay,
-  type ViewerPixelData,
-  type ViewerSrRequest,
-  type ViewerSrResult,
-  type ViewerPixelDataOptions,
-  type ViewerAngioReportRequest,
-  type ViewerPresentationStateRequest,
-  type ViewerRoi,
-  type ViewerSpatialCalibration,
-  type ViewerTargetInfo,
-  type ViewerViewState,
-  type ViewerXaState,
-  type ViewerXaCine,
-} from "./viewerCommands";
+import { registerViewerCommands, type ViewerCommands, type ViewerDerivedSeriesRequest, type ViewerDerivedSeriesResult, type ViewerOverlay, type ViewerPixelData, type ViewerSrRequest, type ViewerSrResult, type ViewerPixelDataOptions, type ViewerAngioReportRequest, type ViewerPresentationStateRequest, type ViewerRoi, type ViewerSpatialCalibration, type ViewerTargetInfo, type ViewerViewState, type ViewerXaState, type ViewerXaCine, ViewerLabelVolume, ViewerLabelVolumeResult } from "./viewerCommands";
 import { buildPluginMeta, computeCalipers, hasShapeCalipers, pickPluginMeta, readRoiStats, roiPointsPx } from "./roiRead";
 import { CONTOUR_TOOL_NAMES } from "./roiContourTools";
 import { measureToolConfig } from "./roiStatsTextBox";
@@ -2501,10 +2484,19 @@ export function Viewer2D({
     if (pk) scheduleRoiSave(pk);
   };
 
+  // H65: ラベルの volume を Mask として読み込む（格子は IPP で照合する。1 枚ずれていれば拒否）
+  const importLabelVolumeCmd = async (req: ViewerLabelVolume, label: string): Promise<ViewerLabelVolumeResult> => {
+    const vp = viewportRef.current;
+    if (!vp) return { ok: false, error: "viewport is not ready" };
+    const r = await importLabelVolume(vp, { ...req.grid, data: req.data, table: req.table }, label);
+    return "error" in r ? { ok: false, error: r.error } : { ok: true, ...r };
+  };
+
   // 画面メニュー/ツールバーからの一括コマンド。最新の実装を ref に保持し、登録は wrapper 経由で常に最新を呼ぶ。
   const commandsRef = useRef<ViewerCommands>({
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
     getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
+    importLabelVolume: importLabelVolumeCmd,
     getSpatialCalibration, getXaState, getXaCine,
     getStackImageIds: () => [...imageIdsRef.current],
     validateDerivedSeries, saveDerivedSeries, saveStructuredReport, saveAngioReport, savePresentationState,
@@ -2517,6 +2509,7 @@ export function Viewer2D({
   commandsRef.current = {
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
     getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
+    importLabelVolume: importLabelVolumeCmd,
     getSpatialCalibration, getXaState, getXaCine,
     // 重畳・派生シリーズ保存・貸したビューポートが**同じ並び**を見るための入口（H31）。
     getStackImageIds: () => [...imageIdsRef.current],
@@ -2553,6 +2546,7 @@ export function Viewer2D({
       getStackImageIds: () => commandsRef.current.getStackImageIds(),
       showOverlay: (o) => commandsRef.current.showOverlay(o),
       clearOverlay: () => commandsRef.current.clearOverlay(),
+      importLabelVolume: (r, l) => commandsRef.current.importLabelVolume(r, l),
       validateDerivedSeries: (r) => commandsRef.current.validateDerivedSeries(r),
       saveDerivedSeries: (r, p) => commandsRef.current.saveDerivedSeries(r, p),
       saveStructuredReport: (r, p) => commandsRef.current.saveStructuredReport(r, p),

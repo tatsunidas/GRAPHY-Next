@@ -406,3 +406,21 @@ PluginManagerService → PluginInstaller(release フック) → PluginRegistry#r
 
 回帰テスト `HttpGitHubReleaseClientTest`（JDK 内蔵の `HttpServer` で 504 を 2 回返してから 200 を返し、
 **3 回叩いて成功する**ことと、404 は **1 回で諦める**ことを固定）。
+
+## 10. 同梱の公式プラグイン（2026-10-04 追加）
+
+インストーラに当社の公式プラグインを入れておき、初回の起動で入れる。最初の対象は `tatsunidas/graphy-next-plugin-monai`（`vis-monai`）。
+
+- **何を同梱するか**: `desktop/bundled-plugins.json`（`repo`・`version`）。リリースのワークフロー（Desktop ジョブの「Fetch bundled official plugins」）が
+  GitHub Release から `<id>-<ver>.zip`・`.sha256`・`.minisig` を取り、sha256 と**公式鍵の署名**を確かめて `desktop/resources/bundled-plugins/` に置く
+  （`extraResources` → 配布物の `resources/bundled-plugins`）。署名が無い版・取れない版は警告して同梱しない（公式プラグインを署名なしで配らない）。
+- **入れる**: desktop の main が配布物に同梱フォルダがあるときだけ `--graphy.plugins.bundled-dir` を渡し、backend の `BundledPluginInstaller`（起動時の ApplicationRunner）が
+  `PluginManagerService.installBundled` で 1 つずつ入れる。開発では `GRAPHY_BUNDLED_PLUGINS_DIR` で試せる。
+  - 🔴 **公式鍵（trusted-keys）で署名が通ったものだけ**。通常の導入と同じ `evaluateSignature` と `PluginInstaller.install` を通る。台帳には `source.type = "bundled"`・`trust = "verified"`。
+  - 利用者の「導入を許可する」（オプトイン）は見ない（当社が署名した `verified` と同じ扱い）。管理者ゲート（standalone ＋ `manager-enabled`）は見る。
+  - **利用者が消したら入れ直さない**: 一度提示した id と版を `<pluginsDir>/bundled.json` に残す。台帳に無くて `bundled.json` にある＝利用者が消した。
+  - 同梱から入ったものが古ければ、新しい同梱で上げる。GitHub やファイルから入れたもの（`source.type` が `bundled` 以外）は触らない。
+  - 1 つ失敗しても残りは続け、起動は止めない。
+- テスト: `PluginManagerServiceTest`（オプトインなしで入る・`verified`／署名なし・別の鍵は入れない・管理者ゲート／同じ版は入れ直さない・新しい版で上げる・消したら入れ直さない）。
+- ⚠ 実物（公式鍵で署名された zip）での通しは、`graphy-next-plugin-monai` の署名つきリリース（secrets の登録待ち）が出てから、インストーラで確かめる。
+

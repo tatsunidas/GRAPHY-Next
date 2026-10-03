@@ -281,6 +281,21 @@ export interface ViewerOverlay {
 }
 
 /**
+ * プラグインが渡すラベルの volume（H65）。格子は `loadVolume` が返したもの（`dims`・`ipp`・`sliceStep`）。
+ * 表にある値だけが Mask のセグメントになり、名前は ROI マネージャの札に出る。
+ */
+export interface ViewerLabelVolume {
+  grid: { dims: [number, number, number]; ipp: [number, number, number]; sliceStep: [number, number, number] };
+  /** z-major・1 ボクセル 1 値（0 は背景）。 */
+  data: Uint8Array | Uint16Array;
+  table: Array<{ value: number; label: string; color?: [number, number, number]; description?: string }>;
+  /** ROI マネージャに出す Mask の名前（省略時はプラグイン名）。 */
+  label?: string;
+}
+
+export type ViewerLabelVolumeResult = { ok: true; segmentationId: string; segmentCount: number } | { ok: false; error: string };
+
+/**
  * プラグインの処理結果を派生シリーズとして保存する要求（プラグイン host API の H4b）。
  *
  * <p>**幾何はプラグインに書かせない**: 各フレームは「元シリーズのどのスライスに対応するか」
@@ -624,6 +639,8 @@ export interface ViewerCommands {
   showOverlay(overlay: ViewerOverlay): boolean;
   /** オーバーレイを消す（無ければ何もしない）。 */
   clearOverlay(): void;
+  /** ラベルの volume を表示中スタックの Mask として読み込む（H65。ROI マネージャに出る）。 */
+  importLabelVolume(req: ViewerLabelVolume, label: string): Promise<ViewerLabelVolumeResult>;
   /**
    * 保存要求が通るか検証する（H4b）。エラー理由の文字列、問題なければ null。
    * **同意を求める前**に画面側が呼ぶ（通らない要求で確認ダイアログを見せないため）。

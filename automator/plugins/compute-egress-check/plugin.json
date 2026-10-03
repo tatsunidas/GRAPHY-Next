@@ -1,0 +1,11 @@
+{
+  "id": "compute-egress-check",
+  "name": "Compute Egress Check",
+  "version": "0.1.0",
+  "engines": { "graphy": ">=0.3.5", "os": ["win32", "darwin", "linux"] },
+  "description": "Verifies the remote-compute egress consent and audit (fw/remote-compute-design.md stage 4). Has no UI; automator calls the backend directly.",
+  "author": "automator",
+  "license": "MIT",
+  "contributes": [],
+  "permissions": ["remote-compute"]
+}

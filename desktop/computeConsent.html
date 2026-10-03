@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- 外部の資源は一切読まない。表示する文字列は textContent で入れる（HTML として解釈しない）。 -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'" />
+    <style>
+      html, body { margin: 0; height: 100%; font-family: system-ui, "Segoe UI", "Yu Gothic UI", sans-serif; background: #fff; color: #1f2933; }
+      .wrap { box-sizing: border-box; height: 100%; display: flex; flex-direction: column; padding: 16px 20px; gap: 10px; }
+      h1 { font-size: 16px; margin: 0; }
+      .lead { font-size: 13px; margin: 0; }
+      .row { font-size: 12px; display: flex; gap: 8px; }
+      .key { width: 90px; color: #52606d; flex: none; }
+      .mono { font-family: Consolas, "Courier New", monospace; }
+      .warn { font-size: 12px; color: #8a4b00; background: #fdf0e3; border: 1px solid #e0b884; border-radius: 4px; padding: 4px 8px; }
+      table { border-collapse: collapse; font-size: 12px; width: 100%; }
+      th, td { border: 1px solid #dfe6ee; padding: 3px 6px; text-align: left; }
+      th { background: #f5f7fa; font-weight: 600; }
+      .sec { font-size: 12px; font-weight: 600; color: #334e68; margin-top: 4px; }
+      pre { flex: 1; min-height: 120px; margin: 0; overflow: auto; background: #0b1b2b; color: #e6edf3; font-size: 12px; padding: 8px 10px; border-radius: 4px; white-space: pre; tab-size: 4; }
+      .meta { font-size: 11px; color: #52606d; }
+      .foot { display: flex; align-items: center; gap: 10px; }
+      .foot label { font-size: 12px; flex: 1; }
+      button { font-size: 13px; padding: 5px 16px; border-radius: 4px; border: 1px solid #9aa5b1; background: #fff; cursor: pointer; }
+      button.primary { background: #0b5cad; color: #fff; border-color: #0b5cad; }
+      button:disabled { opacity: 0.45; cursor: default; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1 id="title"></h1>
+      <p class="lead" id="lead"></p>
+      <div class="row"><span class="key" id="k-dest"></span><span><b id="dest-label"></b> <span class="mono" id="dest-url" data-testid="consent-url"></span></span></div>
+      <div class="warn" id="plaintext" hidden></div>
+      <div class="row"><span class="key" id="k-anon"></span><span id="anon"></span></div>
+      <div class="sec" id="k-data"></div>
+      <table data-testid="consent-datasets">
+        <thead><tr id="data-head"></tr></thead>
+        <tbody id="data-body"></tbody>
+      </table>
+      <div class="sec" id="k-code"></div>
+      <pre id="code" data-testid="consent-code"></pre>
+      <div class="meta" id="code-meta"></div>
+      <div class="foot">
+        <label><input type="checkbox" id="ack" data-testid="consent-ack" /> <span id="ack-text"></span></label>
+        <button id="cancel" data-testid="consent-cancel"></button>
+        <button id="send" class="primary" disabled data-testid="consent-send"></button>
+      </div>
+    </div>
+    <script src="computeConsent-view.js"></script>
+  </body>
+</html>

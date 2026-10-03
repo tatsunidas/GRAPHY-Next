@@ -1151,6 +1151,24 @@ interface PluginHostBase {
    * `cancelled: true` は利用者の取り消しで、エラーとして表示しないこと。standalone 専用。
    */
   runBackendJob: (payload?: unknown, opts?: PluginJobOptions) => Promise<PluginJobOutcome>;
+  /**
+   * 外部の計算機（Jupyter Server・GPU）で計算する（H59・**0.4.0 以降**）。
+   *
+   * <p>`plugin.json` の `permissions` に `"remote-compute"` が要る。送るたびに本体の窓で、宛先・データ・
+   * **コードの全文**を見せて同意を取る。データは本体が匿名化して作り（渡すのはシリーズの参照だけ）、
+   * 計算機の上では作業フォルダに `inputs/0.npz` … が置かれる。`outputs/` に書いたものが返る。
+   * 進み具合は `print("__progress__", 0.4, "message")`。例外は投げない。デスクトップ専用。
+   */
+  compute: {
+    runJob: (opts: ComputeRunJobOptions, jobOpts?: PluginJobOptions) => Promise<ComputeRunOutcome>;
+    /** H61: 計算機の一覧と、Colab のランタイムを確保しているか（トークンや URL は出さない）。 */
+    status: () => Promise<ComputeEndpointStatus[]>;
+    /**
+     * H61: Colab のランタイムを解放する。`ask: true` なら本体が確認を出す（文言は本体が決める）。
+     * 確保していなければ `{ok:true, released:false}`。次の `runJob` が自動で確保し直す。
+     */
+    releaseRuntime: (endpointId: string, opts?: { ask?: boolean }) => Promise<ComputeReleaseOutcome>;
+  };
   /** 本体の DB（H44・H46・H51・**0.3.0 以降**）。 */
   db: {
     /** 患者を ID・氏名の部分一致で探す（H44）。**読み取りのみ**。空文字は全件。 */
@@ -1348,6 +1366,53 @@ export interface PluginJobOptions {
 export type PluginJobOutcome =
   | { ok: true; result: unknown }
   | { ok: false; cancelled?: boolean; error?: string };
+
+/** `host.compute.runJob()` に渡すシリーズ（H59）。 */
+export interface ComputeJobInput {
+  studyUid: string;
+  seriesUid: string;
+  /**
+   * 既定 `npz`: `volume`（float32 `[z, y, x]`・Rescale 適用済み）・`spacing` `[dz, dy, dx]`・`origin`（LPS）・
+   * `direction`（3×3）・`meta.json`。`dicom-zip` は匿名化した DICOM の zip。
+   */
+  format?: "npz" | "dicom-zip";
+}
+
+/** `host.compute.runJob()` の引数（H59）。 */
+export interface ComputeRunJobOptions {
+  /** 実行する Python（64KB まで）。データを文字列で埋め込んだコードは弾かれる。 */
+  script: string;
+  /** 0〜8 件。0 件なら画像を送らずコードだけを実行する（同意画面と監査は同じ）。 */
+  inputs: ComputeJobInput[];
+  /** 環境設定 ＞ 外部の計算機 の ID。省略するとトークンの入った最初の計算機。 */
+  endpointId?: string;
+  /** 秒。既定 3600・上限 6 時間。 */
+  timeoutSec?: number;
+}
+
+/** `outputs/` のファイル。 */
+export interface ComputeOutputFile {
+  name: string;
+  size: number;
+}
+
+/** `host.compute.runJob()` の結果（H59）。 */
+export type ComputeRunOutcome =
+  | {
+      ok: true;
+      jobId: string;
+      /** `error` は Python の例外（ジョブ自体は終わっている）。 */
+      status: "ok" | "error";
+      stdout: string;
+      stderr: string;
+      errorName?: string;
+      errorValue?: string;
+      traceback?: string[];
+      files: ComputeOutputFile[];
+      /** `outputs/` のファイルを取り出す。無ければ null。まとめて保存するなら `file.saveJobArtifact(jobId)`。 */
+      readFile: (name: string) => Promise<Uint8Array | null>;
+    }
+  | { ok: false; cancelled?: boolean; error: string };
 
 /** `host.db.searchPatients()` の 1 件。`patientKey` は保存領域（H8/H42）の患者の鍵と同じ。 */
 export interface PluginPatient {
@@ -1625,6 +1690,13 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * シリーズ切替では破棄）。**保存はされない**（派生シリーズ保存は未実装）。
    */
   showOverlay: (tileId: string | undefined, overlay: Overlay) => boolean;
+  /**
+   * **ラベルの volume をビューアの Mask として読み込む**（H65・**0.4.0 以降**）。ROI マネージャに出て、
+   * セグメントの札には表の名前が出る。格子は `loadVolume` が返したもの（`dims`・`ipp`・`sliceStep`）を渡す。
+   * スライスが IPP で 0.5 mm 以内に揃わなければ拒否。前景の無いラベルは入らない（255 ラベルまで）。
+   * **表示だけで保存はしない**（保存は `saveSegmentation`）。
+   */
+  showLabelVolume: (tileId: string | undefined, req: LabelVolumeRequest) => Promise<LabelVolumeResult>;
   /** オーバーレイを消す。`tileId` 省略時は対象タイル全部。**0.1.9 以降**。 */
   clearOverlay: (tileId?: string) => void;
   /**
@@ -1895,7 +1967,7 @@ export interface SegmentationRequest {
   reference: PluginSeriesRef;
   grid: ExportGrid;
   seriesDescription?: string;
-  segments: Array<{
+  segments?: Array<{
     label: string;
     /** RGB 0..255。 */
     color?: [number, number, number];
@@ -1903,6 +1975,16 @@ export interface SegmentationRequest {
     /** `grid.dims` のボクセル数と同じ長さ。**0 以外が前景**。 */
     data: Uint8Array;
   }>;
+  /**
+   * **ラベルの volume で渡す形（H64・0.4.0 以降）**。`segments` の代わりに使う（どちらか一方）。
+   * 1 ボクセル 1 値（0 は背景）で、`table` にある値だけがセグメントになる（前景の無いラベルは入らない）。
+   * 多ラベル（例: 104 臓器）でも、セグメントごとに volume 大の配列を作らずに済む。
+   */
+  labels?: {
+    /** `grid.dims` のボクセル数と同じ長さ・z-major（`loadVolume` と同じ並び）。 */
+    data: Uint8Array | Uint16Array;
+    table: Array<{ value: number; label: string; color?: [number, number, number]; description?: string }>;
+  };
 }
 
 export interface SegmentationResult {
@@ -2122,3 +2204,26 @@ export type PluginDicomImportOutcome =
   | { ok: true; imported: number; skipped: number; failed: number; errors: string[] }
   | { ok: false; error?: string };
 
+/** `host.compute.status()` の要素（H61）。 */
+export interface ComputeEndpointStatus {
+  id: string;
+  label: string;
+  kind: "jupyter" | "colab";
+  /** colab のとき: ランタイムを確保しているか・アクセラレータ（例 T4）。jupyter は null。 */
+  runtime: { allocated: boolean; accelerator: string | null } | null;
+}
+
+/** `host.compute.releaseRuntime()` の結果（H61）。 */
+export type ComputeReleaseOutcome = { ok: true; released: boolean } | { ok: false; error: string };
+
+/** `showLabelVolume` に渡すラベルの volume（H65）。 */
+export interface LabelVolumeRequest {
+  grid: { dims: [number, number, number]; ipp: [number, number, number]; sliceStep: [number, number, number] };
+  /** z-major・1 ボクセル 1 値（0 は背景）。 */
+  data: Uint8Array | Uint16Array;
+  table: Array<{ value: number; label: string; color?: [number, number, number]; description?: string }>;
+  /** ROI マネージャに出す Mask の名前（省略時はプラグイン名）。 */
+  label?: string;
+}
+
+export type LabelVolumeResult = { ok: true; segmentationId: string; segmentCount: number } | { ok: false; error: string };

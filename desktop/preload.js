@@ -61,6 +61,24 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   // 疎通確認。送る内容は main が決める（呼び出し側は提供元と用途だけ）。
   aiTestConnection: (providerId, capability) =>
     ipcRenderer.invoke("graphy:ai-test-connection", { providerId, capability }),
+  // 外部の計算機（Jupyter Server）。トークンの値は返らない（有無だけ）。fw/remote-compute-design.md
+  computeEndpointsGet: () => ipcRenderer.invoke("graphy:compute-endpoints-get"),
+  // 送信先が増える・変わる保存は main が確認ダイアログを出す
+  computeEndpointsSet: (cfg) => ipcRenderer.invoke("graphy:compute-endpoints-set", cfg),
+  computeEndpointsValidate: (cfg) => ipcRenderer.invoke("graphy:compute-endpoints-validate", cfg),
+  // 接続テスト。渡せるのは id だけ（実行するコードは backend の定数）
+  computeTestConnection: (id) => ipcRenderer.invoke("graphy:compute-test-connection", id),
+  // 送る前の同意。渡せるのは要求の id だけ（見せる内容は main が backend から取り直し、main の窓で聞く）
+  computeConfirm: (requestId) => ipcRenderer.invoke("graphy:compute-confirm", requestId),
+  // Colab（Google でログイン・ランタイムの確保と解放）。トークンは返らない
+  computeColabStatus: () => ipcRenderer.invoke("graphy:compute-colab-status"),
+  computeColabSignIn: () => ipcRenderer.invoke("graphy:compute-colab-signin"),
+  computeColabSignOut: () => ipcRenderer.invoke("graphy:compute-colab-signout"),
+  computeColabSpecs: () => ipcRenderer.invoke("graphy:compute-colab-specs"),
+  computeColabEnsure: (id) => ipcRenderer.invoke("graphy:compute-colab-ensure", id),
+  computeColabRelease: (id) => ipcRenderer.invoke("graphy:compute-colab-release", id),
+  // 既定の計算機（未登録で Google にログイン済みなら Colab の T4 を足す。足すのは main）
+  computeEnsureDefault: () => ipcRenderer.invoke("graphy:compute-ensure-default"),
   // 名前を付けて保存。上書き確認は OS のダイアログが出す。
   saveFile: (payload) => ipcRenderer.invoke("graphy:save-file", payload),
   // 開くダイアログ（プラグインの H43 file.pickFiles）。ファイルだけ。選んだ絶対パスを返す。

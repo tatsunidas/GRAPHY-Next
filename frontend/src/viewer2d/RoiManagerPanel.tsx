@@ -731,14 +731,16 @@ export function RoiManagerPanel({
           <div style={segLine}>
             <span style={{ color: "#5a6672" }}>{t("roiMgr.segments")}:</span>
             {segs.map((si) => {
+              // SEG の SegmentLabel・プラグインのラベル表から来た名前（例: 臓器名）。無ければ番号
+              const segNames = getRoiMaskMeta(m.id)?.segmentLabels;
               const col = segColorHex(m.id, si);
               return (
               <button
                 key={si}
                 onClick={() => { activateMask(m.id, si); refresh(); }}
                 style={{ ...(si === activeSeg ? segChipActive : segChip), ...(col ? { boxShadow: `inset 5px 0 0 ${col}` } : {}) }}
-                title={t("roiMgr.activeSegment")}
-              >{si}</button>
+                title={segNames?.[String(si)] ? `${si}: ${segNames[String(si)]}` : t("roiMgr.activeSegment")}
+              >{segNames?.[String(si)] ?? si}</button>
               );
             })}
             <input type="color" value={segColorHex(m.id, activeSeg) ?? "#ff0000"} onChange={(e) => { setMaskColor(m.id, e.target.value, activeSeg); refresh(); }} title={t("roiMgr.color")} style={colorInput} />

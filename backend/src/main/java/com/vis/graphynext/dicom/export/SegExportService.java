@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -79,8 +80,10 @@ public class SegExportService {
         final int cols = req.columns();
         final int frameSize = rows * cols;
 
+        // ラベルの平面（H64）なら、ラベルごとのセグメントとフレームに展開する（平面はデコードして 1 回だけ持つ）
+        LabelExpansion labels = req.labelPlanes() != null ? expandLabelPlanes(req.labelPlanes(), frameSize) : null;
         // PerFrame の順序でフレームを平坦化（bit-pack と同順）。
-        final List<SegExportRequest.Segment> segs = req.segments();
+        final List<SegExportRequest.Segment> segs = labels != null ? labels.segments() : req.segments();
         int totalFrames = 0;
         for (SegExportRequest.Segment s : segs) {
             totalFrames += s.frames() != null ? s.frames().size() : 0;
@@ -188,7 +191,17 @@ public class SegExportService {
                 // mask が空文字＝前景ゼロの平面（dense のプレースホルダ）。転送量削減のため frontend は
                 // 平面バイト列を省略してくる。packed は既定でゼロ初期化されているため、bitPos を
                 // frameSize 分進めるだけでよい（`fw/dicom-seg-rtstruct-design.md` §3.1'）。
-                if (fr.mask() == null || fr.mask().isEmpty()) {
+                LabelSource src = labels != null ? labels.sources().get(fr) : null;
+                if (src != null) {
+                    byte[] plane = src.plane();
+                    int bpv = labels.bytesPerVoxel();
+                    for (int idx = 0; idx < frameSize; idx++, bitPos++) {
+                        int v = bpv == 1 ? plane[idx] & 0xff : (plane[2 * idx] & 0xff) | ((plane[2 * idx + 1] & 0xff) << 8);
+                        if (v == src.value()) {
+                            packed[(int) (bitPos >> 3)] |= (byte) (1 << (int) (bitPos & 7));
+                        }
+                    }
+                } else if (fr.mask() == null || fr.mask().isEmpty()) {
                     bitPos += frameSize;
                 } else {
                     byte[] plane = Base64.getDecoder().decode(fr.mask());
@@ -251,9 +264,86 @@ public class SegExportService {
         if (req.pixelSpacing() == null || req.pixelSpacing().length != 2) {
             throw new IllegalArgumentException("pixelSpacing は 2 要素 [row,col] が必要です");
         }
-        if (req.segments() == null || req.segments().isEmpty()) {
+        if (req.labelPlanes() == null && (req.segments() == null || req.segments().isEmpty())) {
             throw new IllegalArgumentException("segments が空です");
         }
+        if (req.labelPlanes() != null && req.segments() != null && !req.segments().isEmpty()) {
+            throw new IllegalArgumentException("segments と labelPlanes はどちらか一方だけ渡してください");
+        }
+    }
+
+    /** ラベルの平面のフレーム 1 枚が、どの平面のどの値か。 */
+    record LabelSource(byte[] plane, int value) {}
+
+    /** ラベルの平面を展開したもの（セグメント・フレーム→平面の対応）。 */
+    record LabelExpansion(List<SegExportRequest.Segment> segments,
+                          java.util.IdentityHashMap<SegExportRequest.Frame, LabelSource> sources,
+                          int bytesPerVoxel) {}
+
+    /**
+     * ラベルの平面（H64）を、ラベルごとのセグメントとフレームに展開する。前景の無いラベルはセグメントにしない
+     * （受け側で「あるはずのラベルが空」に見え、切り忘れと区別できないため。H22 と同じ）。
+     * セグメント番号は表の順に 1 から振り直す。
+     */
+    static LabelExpansion expandLabelPlanes(SegExportRequest.LabelPlanes lp, int frameSize) {
+        int bpv = lp.bytesPerVoxel();
+        if (bpv != 1 && bpv != 2) {
+            throw new IllegalArgumentException("labelPlanes.bytesPerVoxel は 1 か 2 です (got=" + bpv + ")");
+        }
+        if (lp.labels() == null || lp.labels().isEmpty() || lp.planes() == null || lp.planes().isEmpty()) {
+            throw new IllegalArgumentException("labelPlanes のラベルか平面が空です");
+        }
+        Map<Integer, Integer> index = new java.util.HashMap<>();
+        for (int i = 0; i < lp.labels().size(); i++) {
+            int v = lp.labels().get(i).value();
+            if (v <= 0 || v >= (bpv == 1 ? 256 : 65536) || index.putIfAbsent(v, i) != null) {
+                throw new IllegalArgumentException("labelPlanes のラベルの値が不正か重複しています (value=" + v + ")");
+            }
+        }
+        List<byte[]> planes = new ArrayList<>(lp.planes().size());
+        // ラベルごとに、前景のある平面の番号
+        List<List<Integer>> present = new ArrayList<>();
+        for (int i = 0; i < lp.labels().size(); i++) {
+            present.add(new ArrayList<>());
+        }
+        for (int z = 0; z < lp.planes().size(); z++) {
+            SegExportRequest.Plane pl = lp.planes().get(z);
+            byte[] data = Base64.getDecoder().decode(pl.data() == null ? "" : pl.data());
+            if (data.length != frameSize * bpv) {
+                throw new IllegalArgumentException("labelPlanes の平面のバイト長が rows*cols*bytesPerVoxel と不一致 (got="
+                        + data.length + ", expected=" + frameSize * bpv + ")");
+            }
+            planes.add(data);
+            boolean[] seen = new boolean[lp.labels().size()];
+            for (int idx = 0; idx < frameSize; idx++) {
+                int v = bpv == 1 ? data[idx] & 0xff : (data[2 * idx] & 0xff) | ((data[2 * idx + 1] & 0xff) << 8);
+                Integer li = v == 0 ? null : index.get(v);
+                if (li != null && !seen[li]) {
+                    seen[li] = true;
+                    present.get(li).add(z);
+                }
+            }
+        }
+        List<SegExportRequest.Segment> segments = new ArrayList<>();
+        java.util.IdentityHashMap<SegExportRequest.Frame, LabelSource> sources = new java.util.IdentityHashMap<>();
+        for (int i = 0; i < lp.labels().size(); i++) {
+            if (present.get(i).isEmpty()) {
+                continue;
+            }
+            SegExportRequest.Label l = lp.labels().get(i);
+            List<SegExportRequest.Frame> frames = new ArrayList<>();
+            for (int z : present.get(i)) {
+                SegExportRequest.Plane pl = lp.planes().get(z);
+                SegExportRequest.Frame fr = new SegExportRequest.Frame(pl.sopInstanceUid(), pl.imagePositionPatient(), null);
+                frames.add(fr);
+                sources.put(fr, new LabelSource(planes.get(z), l.value()));
+            }
+            segments.add(new SegExportRequest.Segment(segments.size() + 1, l.label(), l.color(), l.description(), frames));
+        }
+        if (segments.isEmpty()) {
+            throw new IllegalArgumentException("どのラベルにも前景がありません（空の SEG は作りません）");
+        }
+        return new LabelExpansion(segments, sources, bpv);
     }
 
     private Attributes segmentItem(SegExportRequest.Segment s) {

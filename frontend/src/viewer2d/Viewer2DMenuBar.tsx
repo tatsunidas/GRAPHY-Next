@@ -121,6 +121,7 @@ export function Viewer2DMenuBar({
       putVesselAnalysis(runId, result, { id: m.id, name: m.name, version: m.version }),
     // 出所ラベルはプラグイン任せにしない: host が必ずマニフェストの表示名を入れる。
     showOverlay: (tileId, overlay) => actions.showOverlay(tileId, { ...overlay, label: m.name }),
+    showLabelVolume: (tileId, req) => actions.showLabelVolume(tileId, req, { name: m.name }),
     clearOverlay: (tileId) => actions.clearOverlay(tileId),
     // 出所（id/name/version）は host がマニフェストから入れる。プラグインに名乗らせない。
     saveDerivedSeries: (tileId, req) =>
