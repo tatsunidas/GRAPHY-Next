@@ -9,7 +9,7 @@
  * 量子化の往復・NaN の扱い・法線と平行でない格子。
  */
 import { describe, expect, it } from "vitest";
-import { gridFrameOffsets, quantizeDoseGrid, sliceMask } from "./pluginExportCore";
+import { gridFrameOffsets, labelPlanes, quantizeDoseGrid, sliceMask } from "./pluginExportCore";
 
 describe("sliceMask", () => {
   it("前景のある z だけを平面として返す", () => {
@@ -105,5 +105,31 @@ describe("gridFrameOffsets", () => {
   it("スライスが 1 枚なら移動量が無くても書ける", () => {
     const out = gridFrameOffsets(axial, [0, 0, 0], 1);
     expect(out).toEqual([0]);
+  });
+});
+
+describe("labelPlanes（H62: ラベルの volume → スライスごとの平面）", () => {
+  it("keeps only slices with labels from the table and counts voxels per label", () => {
+    // 2×1×3。z=0 は空、z=1 にラベル 1 と表に無い 9、z=2 にラベル 5
+    const data = new Uint8Array([0, 0, 1, 9, 5, 5]);
+    const r = labelPlanes([2, 1, 3], data, [{ value: 1 }, { value: 5 }, { value: 7 }]);
+    expect(r.bytesPerVoxel).toBe(1);
+    expect(r.planes.map((p) => p.z)).toEqual([1, 2]);
+    expect([...r.planes[0].bytes]).toEqual([1, 0]); // 9 は表に無いので背景
+    expect([...r.planes[1].bytes]).toEqual([5, 5]);
+    expect(r.foregroundVoxels).toEqual([1, 2, 0]);
+  });
+
+  it("writes uint16 as little endian", () => {
+    const r = labelPlanes([1, 1, 1], new Uint16Array([300]), [{ value: 300 }]);
+    expect(r.bytesPerVoxel).toBe(2);
+    expect([...r.planes[0].bytes]).toEqual([0x2c, 0x01]);
+  });
+
+  it("rejects a wrong length and bad or duplicate values", () => {
+    expect(() => labelPlanes([2, 1, 1], new Uint8Array(3), [{ value: 1 }])).toThrow(/長さ/);
+    expect(() => labelPlanes([1, 1, 1], new Uint8Array(1), [{ value: 1 }, { value: 1 }])).toThrow(/重複/);
+    expect(() => labelPlanes([1, 1, 1], new Uint8Array(1), [{ value: 300 }])).toThrow(/不正/);
+    expect(() => labelPlanes([1, 1, 1], new Uint8Array(1), [])).toThrow(/空/);
   });
 });

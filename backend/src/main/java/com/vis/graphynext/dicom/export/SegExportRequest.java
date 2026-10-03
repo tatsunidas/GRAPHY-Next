@@ -22,8 +22,9 @@ import java.util.List;
  * @param sliceThickness          mm（0 なら省略）
  * @param frameOfReferenceUID     参照シリーズの FoR（null/空なら省略）
  * @param seriesDescription       生成シリーズの説明（null 可）
- * @param segments                セグメント群
+ * @param segments                セグメント群（{@code labelPlanes} を渡すときは空でよい）
  * @param producer                プラグイン由来の場合の出所（null なら本体の機能による生成）
+ * @param labelPlanes             ラベルの volume をスライスごとの平面で渡す形（host API の H62）。null なら {@code segments} だけ
  */
 public record SegExportRequest(
         String studyInstanceUid,
@@ -36,7 +37,36 @@ public record SegExportRequest(
         String frameOfReferenceUID,
         String seriesDescription,
         List<Segment> segments,
-        Producer producer) {
+        Producer producer,
+        LabelPlanes labelPlanes) {
+
+    /** 既存の呼び出し（ラベルの平面なし）。 */
+    public SegExportRequest(String studyInstanceUid, String seriesInstanceUid, int rows, int columns,
+                            double[] imageOrientationPatient, double[] pixelSpacing, double sliceThickness,
+                            String frameOfReferenceUID, String seriesDescription, List<Segment> segments,
+                            Producer producer) {
+        this(studyInstanceUid, seriesInstanceUid, rows, columns, imageOrientationPatient, pixelSpacing,
+                sliceThickness, frameOfReferenceUID, seriesDescription, segments, producer, null);
+    }
+
+    /**
+     * ラベルの volume（1 ボクセル 1 値・0 は背景）をスライスごとの平面で受ける（H62）。
+     *
+     * <p>セグメントごとに volume 大の 0/1 マスクを送る形（{@link Segment}）では、104 ラベルのような多ラベルの結果が
+     * 「ラベル × 前景のあるスライス」枚の平面になり、画面側のメモリも JSON も GB 級になる。こちらは「前景のあるスライス」
+     * 枚だけで済み、ラベルごとのフレームへの展開は backend が行う。出力は同じ BINARY SEG。
+     *
+     * @param bytesPerVoxel 1（uint8）か 2（uint16・リトルエンディアン）
+     * @param labels        保存するラベル（値・名前・色・説明）。ここに無い値は背景として捨てる
+     * @param planes        前景のあるスライスの平面（空のスライスは送らない）
+     */
+    public record LabelPlanes(int bytesPerVoxel, List<Label> labels, List<Plane> planes) {}
+
+    /** @param value ボクセルの値（1 以上） */
+    public record Label(int value, String label, int[] color, String description) {}
+
+    /** @param data rows*cols*bytesPerVoxel のバイト列（行優先）を Base64 */
+    public record Plane(String sopInstanceUid, double[] imagePositionPatient, String data) {}
 
     /**
      * プラグインが作った SEG であることの出所（host API の H22）。

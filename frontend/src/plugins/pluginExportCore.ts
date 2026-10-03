@@ -185,3 +185,47 @@ export function gridFrameOffsets(iop: number[], sliceStep: Vec3, nz: number): nu
   for (let k = 0; k < nz; k++) offsets[k] = k * along;
   return offsets;
 }
+
+/**
+ * ラベルの volume（z-major・0 は背景）を、前景のあるスライスごとの平面に切る（H62）。
+ * 値は表にあるものだけを残し、ほかは 0（背景）にする。ラベルごとの前景ボクセル数（表の順）も返す。
+ * uint16 はリトルエンディアンのバイト列にする（backend の読み方と同じ）。
+ */
+export function labelPlanes(
+  dims: [number, number, number],
+  data: Uint8Array | Uint16Array,
+  table: { value: number }[],
+): { bytesPerVoxel: 1 | 2; planes: { z: number; bytes: Uint8Array }[]; foregroundVoxels: number[] } {
+  const [nx, ny, nz] = dims;
+  const per = nx * ny;
+  if (data.length !== per * nz) throw new Error(`labels.data の長さ ${data.length} が格子 ${nx}×${ny}×${nz} と合いません`);
+  if (!table.length) throw new Error("labels.table が空です");
+  const bpv: 1 | 2 = data instanceof Uint16Array ? 2 : 1;
+  const max = bpv === 1 ? 255 : 65535;
+  const index = new Map<number, number>();
+  table.forEach((t, i) => {
+    if (!Number.isInteger(t.value) || t.value <= 0 || t.value > max || index.has(t.value)) {
+      throw new Error(`labels.table の値 ${t.value} が不正か重複しています`);
+    }
+    index.set(t.value, i);
+  });
+  const fg = table.map(() => 0);
+  const planes: { z: number; bytes: Uint8Array }[] = [];
+  for (let z = 0; z < nz; z++) {
+    let any = false;
+    const bytes = new Uint8Array(per * bpv);
+    for (let p = 0; p < per; p++) {
+      const v = data[z * per + p];
+      if (v === 0) continue;
+      const i = index.get(v);
+      if (i === undefined) continue;
+      fg[i]++;
+      any = true;
+      if (bpv === 1) bytes[p] = v;
+      else { bytes[2 * p] = v & 0xff; bytes[2 * p + 1] = v >> 8; }
+    }
+    if (any) planes.push({ z, bytes });
+  }
+  return { bytesPerVoxel: bpv, planes, foregroundVoxels: fg };
+}
+

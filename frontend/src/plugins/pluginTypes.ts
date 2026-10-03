@@ -433,7 +433,7 @@ export interface PluginSegmentationRequest {
   /** マスクが乗っている格子（= H10 が返したボリュームの幾何）。 */
   grid: PluginExportGrid;
   seriesDescription?: string;
-  segments: Array<{
+  segments?: Array<{
     label: string;
     /** RGB 0..255。 */
     color?: [number, number, number];
@@ -442,6 +442,16 @@ export interface PluginSegmentationRequest {
     /** `grid.dims` のボクセル数と同じ長さ。**0 以外が前景**。 */
     data: Uint8Array;
   }>;
+  /**
+   * **ラベルの volume で渡す形（H62）**。`segments` の代わりに使う（どちらか一方）。
+   * 1 ボクセル 1 値（0 は背景）で、`table` にある値だけがセグメントになる（前景の無いラベルは入らない）。
+   * 多ラベル（例: 104 臓器）でも、セグメントごとに volume 大の配列を作らずに済む。
+   */
+  labels?: {
+    /** `grid.dims` のボクセル数と同じ長さ・z-major（`loadVolume` と同じ並び）。 */
+    data: Uint8Array | Uint16Array;
+    table: Array<{ value: number; label: string; color?: [number, number, number]; description?: string }>;
+  };
 }
 
 export interface PluginSegmentationResult {
