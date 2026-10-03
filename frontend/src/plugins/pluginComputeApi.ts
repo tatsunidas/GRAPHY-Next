@@ -1,0 +1,327 @@
+/*
+ * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
+ * Author: Tatsuaki Kobayashi
+ */
+/**
+ * 外部の計算機（Jupyter Server）で計算する（H59 `compute.runJob`）。設計: `fw/remote-compute-design.md` §5。
+ *
+ * <p>流れ（どの段も既存の仕組みに乗る）:
+ * <ol>
+ *   <li>要求を作る（`POST /api/plugins/{id}/compute/egress`）——本体が<b>既存の匿名化</b>でデータを作る。まだ送らない</li>
+ *   <li>同意（`desktop.computeConfirm`）——<b>main の窓</b>で、宛先・データ・コードの全文を見せて聞く</li>
+ *   <li>実行（`POST /api/plugins/{id}/compute/jobs`）——承認の札を使い、`PluginJobService` のジョブとして走る</li>
+ *   <li>待つ（既存の `pollPluginJob`。進み具合・取り消しは H45 と同じ）</li>
+ *   <li>結果のファイルは H53 の成果物（`outputs.zip`）。`readFile(name)` で 1 つずつ取り出せる</li>
+ * </ol>
+ *
+ * <p>プラグインが渡せるのは<b>シリーズの参照とコード</b>だけ。画素のバイト列を外へ送る口は無い。
+ * 例外は投げない（`ai.generate` と同じ流儀）。`cancelled: true` は利用者の取り消しで、エラーとして出さないこと。
+ */
+import { apiBase } from "../apiBase";
+import { desktop, type ComputeEndpointEntry } from "../desktopBridge";
+import { HttpError, httpSend } from "../http";
+import { tOutsideReact as t } from "../i18n/i18n";
+import { pollPluginJob, type PluginJobOptions, type PluginJobStatus } from "./pluginCommonApi";
+import type { PluginManifest } from "./pluginTypes";
+
+/** 必要な権限（`plugin.json` の `permissions`）。backend でも確かめる。 */
+export const REMOTE_COMPUTE_PERMISSION = "remote-compute";
+
+export interface ComputeJobInput {
+  studyUid: string;
+  seriesUid: string;
+  /** 既定 `npz`（float32 の volume＋spacing/origin/direction）。`dicom-zip` は匿名化した DICOM。 */
+  format?: "npz" | "dicom-zip";
+}
+
+export interface ComputeRunJobOptions {
+  /**
+   * 実行する Python。計算機の上では作業フォルダに `inputs/0.npz` … が置かれ、`outputs/` に書いたものが返る。
+   * 進み具合は `print("__progress__", 0.4, "message")` で伝わる。64KB まで。
+   */
+  script: string;
+  /** 0〜8 件。0 件なら画像を送らずコードだけを実行する（同意画面と監査は同じ）。 */
+  inputs: ComputeJobInput[];
+  /** 環境設定 ＞ 外部の計算機 の ID。省略するとトークンの入った最初の計算機。 */
+  endpointId?: string;
+  /** 秒。既定 3600・上限 6 時間。過ぎたら中断する。 */
+  timeoutSec?: number;
+}
+
+export interface ComputeOutputFile {
+  name: string;
+  size: number;
+}
+
+export type ComputeRunOutcome =
+  | {
+      ok: true;
+      jobId: string;
+      /** コードが最後まで走ったか（`error` は Python の例外。ジョブ自体は成功している）。 */
+      status: "ok" | "error";
+      stdout: string;
+      stderr: string;
+      errorName?: string;
+      errorValue?: string;
+      traceback?: string[];
+      files: ComputeOutputFile[];
+      /** `outputs/` のファイルを取り出す（名前は `files[].name`）。無ければ null。 */
+      readFile: (name: string) => Promise<Uint8Array | null>;
+    }
+  | { ok: false; cancelled?: boolean; error: string };
+
+interface EgressCreated {
+  requestId: string;
+}
+
+/** H59。 */
+export async function runComputeJob(
+  m: PluginManifest,
+  opts: ComputeRunJobOptions,
+  jobOpts: PluginJobOptions = {},
+): Promise<ComputeRunOutcome> {
+  const d = desktop();
+  if (!d?.computeConfirm || !d.computeEndpointsGet) return { ok: false, error: "desktop-only" };
+  if (!(m.permissions ?? []).includes(REMOTE_COMPUTE_PERMISSION)) return { ok: false, error: "permission-denied" };
+
+  let cfg = await d.computeEndpointsGet();
+  // 1 つも登録が無ければ、main に既定の計算機（Colab の GPU T4）を用意してもらう（ログイン済みのときだけ足せる）
+  if (!opts.endpointId && cfg.endpoints.length === 0 && d.computeEnsureDefault) {
+    const ensured = await d.computeEnsureDefault();
+    if (!ensured.ok) return { ok: false, error: ensured.error };
+    cfg = await d.computeEndpointsGet();
+  }
+  const endpoint = opts.endpointId ? cfg.endpoints.find((e) => e.id === opts.endpointId) : defaultEndpoint(cfg.endpoints);
+  if (!endpoint) return { ok: false, error: opts.endpointId ? "unknown-endpoint" : "no-endpoint" };
+  const endpointId = endpoint.id;
+  // Colab はランタイムを確保してから要求を作る（同意画面に実際の送り先が出るように）。
+  // 確保だけでは患者のデータもコードも出ない——送るのは同意のあと。
+  if (endpoint.kind === "colab") {
+    if (!d.computeColabEnsure) return { ok: false, error: "desktop-only" };
+    const rt = await d.computeColabEnsure(endpointId);
+    if (!rt.ok) return { ok: false, error: rt.error ?? "colab-runtime-failed" };
+  }
+  const id = encodeURIComponent(m.id);
+
+  // 1. 要求（本体が匿名化したデータを作る。まだ送らない）
+  let created: EgressCreated;
+  try {
+    created = await httpSend<EgressCreated>(`/api/plugins/${id}/compute/egress`, "POST", {
+      endpointId,
+      inputs: opts.inputs.map((i) => ({ ...i, format: i.format ?? "npz" })),
+      code: opts.script,
+    });
+  } catch (e) {
+    return { ok: false, error: errorCode(e) };
+  }
+
+  // 2. 同意（main の窓）
+  const consent = await d.computeConfirm(created.requestId);
+  if (!consent.ok) return { ok: false, error: consent.error };
+  if (!consent.approved) return { ok: false, cancelled: true, error: "canceled" };
+
+  // 3. 実行
+  let started: PluginJobStatus;
+  try {
+    started = await httpSend<PluginJobStatus>(`/api/plugins/${id}/compute/jobs`, "POST", {
+      requestId: created.requestId,
+      timeoutSec: opts.timeoutSec,
+    });
+  } catch (e) {
+    return { ok: false, error: errorCode(e) };
+  }
+
+  // 4. 待つ（H45 と同じ）
+  const out = await pollPluginJob(started.jobId, jobOpts);
+  if (!out.ok) return { ok: false, cancelled: out.cancelled, error: out.error ?? (out.cancelled ? "canceled" : "failed") };
+  const r = (out.result ?? {}) as Record<string, unknown>;
+  const jobId = started.jobId;
+  let zip: Promise<Uint8Array | null> | null = null;
+  return {
+    ok: true,
+    jobId,
+    status: r.status === "ok" ? "ok" : "error",
+    stdout: String(r.stdout ?? ""),
+    stderr: String(r.stderr ?? ""),
+    ...(typeof r.errorName === "string" ? { errorName: r.errorName } : {}),
+    ...(typeof r.errorValue === "string" ? { errorValue: r.errorValue } : {}),
+    ...(Array.isArray(r.traceback) ? { traceback: r.traceback.map(String) } : {}),
+    files: Array.isArray(r.files) ? (r.files as ComputeOutputFile[]) : [],
+    readFile: async (name: string) => {
+      zip ??= fetchArtifact(jobId);
+      const bytes = await zip;
+      return bytes ? readStoredZipEntry(bytes, name) : null;
+    },
+  };
+}
+
+/** 既定にする Colab のランタイムの種類（desktop/computeDefault.js と同じ）。 */
+const DEFAULT_SPEC = { variant: "VARIANT_GPU", accelerator: "T4", shape: "SHAPE_STANDARD" } as const;
+
+/** Colab の GPU T4 か（既定の計算機）。 */
+export function isDefaultSpec(e: Pick<ComputeEndpointEntry, "kind" | "spec">): boolean {
+  return e.kind === "colab" && e.spec?.variant === DEFAULT_SPEC.variant && e.spec?.accelerator === DEFAULT_SPEC.accelerator
+    && e.spec?.shape === DEFAULT_SPEC.shape;
+}
+
+/**
+ * 既定の計算機: Colab の T4 → トークンの入った最初 → 最初（desktop/computeDefault.js の pickDefault と同じ規則）。
+ * Colab は Google にログインしていれば hasToken。
+ */
+export function defaultEndpoint<T extends Pick<ComputeEndpointEntry, "kind" | "spec" | "hasToken">>(endpoints: T[]): T | undefined {
+  return endpoints.find((e) => isDefaultSpec(e) && e.hasToken) ?? endpoints.find((e) => e.hasToken) ?? endpoints[0];
+}
+
+function errorCode(e: unknown): string {
+  return e instanceof HttpError || e instanceof Error ? e.message : String(e);
+}
+
+async function fetchArtifact(jobId: string): Promise<Uint8Array | null> {
+  try {
+    const res = await fetch(`${apiBase()}/api/plugin-jobs/${encodeURIComponent(jobId)}/artifact`);
+    if (!res.ok) return null;
+    return new Uint8Array(await res.arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 無圧縮（STORED）の zip から 1 ファイル取り出す。本体が outputs を無圧縮でまとめるので、
+ * ライブラリなしで中央ディレクトリを読むだけで済む。圧縮されたエントリ・見つからない名前は null。
+ */
+export function readStoredZipEntry(zip: Uint8Array, name: string): Uint8Array | null {
+  const v = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
+  // 終端レコード（EOCD）を後ろから探す（コメントは最大 64KB）
+  let eocd = -1;
+  for (let i = zip.length - 22; i >= Math.max(0, zip.length - 22 - 0xffff); i--) {
+    if (v.getUint32(i, true) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) return null;
+  const count = v.getUint16(eocd + 10, true);
+  let p = v.getUint32(eocd + 16, true);
+  const dec = new TextDecoder();
+  for (let n = 0; n < count && p + 46 <= zip.length; n++) {
+    if (v.getUint32(p, true) !== 0x02014b50) return null;
+    const method = v.getUint16(p + 10, true);
+    const size = v.getUint32(p + 20, true);
+    const nameLen = v.getUint16(p + 28, true);
+    const extraLen = v.getUint16(p + 30, true);
+    const commentLen = v.getUint16(p + 32, true);
+    const local = v.getUint32(p + 42, true);
+    const entryName = dec.decode(zip.subarray(p + 46, p + 46 + nameLen));
+    if (entryName === name) {
+      if (method !== 0 || v.getUint32(local, true) !== 0x04034b50) return null;
+      const start = local + 30 + v.getUint16(local + 26, true) + v.getUint16(local + 28, true);
+      return zip.slice(start, start + size);
+    }
+    p += 46 + nameLen + extraLen + commentLen;
+  }
+  return null;
+}
+
+// ── H61: 計算機の状態と、Colab のランタイムの解放 ──
+
+/** プラグインに見せる計算機（トークンや接続先の URL は出さない）。 */
+export interface ComputeEndpointStatus {
+  id: string;
+  label: string;
+  kind: "jupyter" | "colab";
+  /** colab のとき: ランタイムを確保しているか・アクセラレータ（例 T4）。jupyter は常に null。 */
+  runtime: { allocated: boolean; accelerator: string | null } | null;
+}
+
+/** H61 `compute.status()`。デスクトップ以外・権限の無いプラグインは空。 */
+export async function computeStatus(m: PluginManifest): Promise<ComputeEndpointStatus[]> {
+  const d = desktop();
+  if (!d?.computeEndpointsGet || !(m.permissions ?? []).includes(REMOTE_COMPUTE_PERMISSION)) return [];
+  const cfg = await d.computeEndpointsGet();
+  return cfg.endpoints.map((e) => ({
+    id: e.id,
+    label: e.label,
+    kind: e.kind,
+    runtime: e.kind === "colab"
+      ? { allocated: !!e.runtime?.allocated, accelerator: e.runtime?.spec?.accelerator ?? e.spec?.accelerator ?? null }
+      : null,
+  }));
+}
+
+export type ComputeReleaseOutcome = { ok: true; released: boolean } | { ok: false; error: string };
+
+/**
+ * H61 `compute.releaseRuntime(endpointId, { ask })`。Colab のランタイムを解放する（確保していなければ何もしない）。
+ * `ask: true` なら<b>本体が</b>確認を出し、「解放する」のときだけ解放する（文言はプラグインから変えられない）。
+ * 解放しても次の `runJob` が自動で確保し直す。
+ */
+export async function releaseComputeRuntime(
+  m: PluginManifest,
+  endpointId: string,
+  opts: { ask?: boolean } = {},
+): Promise<ComputeReleaseOutcome> {
+  const d = desktop();
+  if (!d?.computeEndpointsGet || !d.computeColabRelease) return { ok: false, error: "desktop-only" };
+  if (!(m.permissions ?? []).includes(REMOTE_COMPUTE_PERMISSION)) return { ok: false, error: "permission-denied" };
+  const e = (await d.computeEndpointsGet()).endpoints.find((x) => x.id === endpointId);
+  if (!e) return { ok: false, error: "unknown-endpoint" };
+  if (e.kind !== "colab" || !e.runtime?.allocated) return { ok: true, released: false };
+  if (opts.ask) {
+    const accel = e.runtime.spec?.accelerator ?? e.spec?.accelerator ?? "";
+    const yes = await confirmRelease(m.name, e.label, accel);
+    if (!yes) return { ok: true, released: false };
+  }
+  const r = await d.computeColabRelease(endpointId);
+  return r.ok ? { ok: true, released: !!r.released } : { ok: false, error: r.error ?? "release-failed" };
+}
+
+/** 本体が描く確認（DOM。メイン画面・2D ビューアのどちらでも出せるよう React に載せない）。 */
+function confirmRelease(pluginName: string, endpointLabel: string, accelerator: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.setAttribute("data-testid", "compute-release-confirm");
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    Object.assign(overlay.style, {
+      position: "fixed", inset: "0", zIndex: "100000", background: "rgba(10,20,30,0.45)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+    } as Partial<CSSStyleDeclaration>);
+    const box = document.createElement("div");
+    Object.assign(box.style, {
+      background: "#fff", color: "#223", borderRadius: "10px", padding: "18px 20px", width: "min(480px, 92vw)",
+      boxShadow: "0 10px 40px rgba(0,0,0,0.3)", fontSize: "13px", lineHeight: "1.6",
+    } as Partial<CSSStyleDeclaration>);
+    const title = document.createElement("div");
+    title.textContent = t("pluginCompute.release.title", { accelerator: accelerator || "GPU" });
+    Object.assign(title.style, { fontSize: "15px", fontWeight: "700", marginBottom: "8px" });
+    const body = document.createElement("div");
+    body.textContent = t("pluginCompute.release.body", { endpoint: endpointLabel, plugin: pluginName });
+    const foot = document.createElement("div");
+    Object.assign(foot.style, { display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "14px" });
+    const keep = document.createElement("button");
+    keep.textContent = t("pluginCompute.release.keep");
+    keep.setAttribute("data-testid", "compute-release-keep");
+    const ok = document.createElement("button");
+    ok.textContent = t("pluginCompute.release.ok");
+    ok.setAttribute("data-testid", "compute-release-ok");
+    for (const b of [keep, ok]) Object.assign(b.style, { padding: "5px 14px", borderRadius: "4px", border: "1px solid #9aa5b1", cursor: "pointer" });
+    Object.assign(ok.style, { background: "#0b5cad", color: "#fff", borderColor: "#0b5cad" });
+    foot.append(keep, ok);
+    box.append(title, body, foot);
+    overlay.appendChild(box);
+    const done = (v: boolean) => {
+      window.removeEventListener("keydown", onKey, true);
+      overlay.remove();
+      resolve(v);
+    };
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") { ev.preventDefault(); done(false); }
+    };
+    keep.addEventListener("click", () => done(false));
+    ok.addEventListener("click", () => done(true));
+    window.addEventListener("keydown", onKey, true);
+    document.body.appendChild(overlay);
+    ok.focus();
+  });
+}

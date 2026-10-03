@@ -171,7 +171,8 @@ export async function exportMaskAsSeg(
       frames.push({ sopInstanceUid: sop, imagePositionPatient: ipp, mask });
     }
     if (!frames.length || !anyOverall) continue; // 前景ゼロの segment は出さない
-    const label = segIndices.length > 1 ? `${meta?.label ?? "Mask"} #${segIndex}` : (meta?.label ?? `Segment ${segIndex}`);
+    const label = meta?.segmentLabels?.[String(segIndex)]
+      ?? (segIndices.length > 1 ? `${meta?.label ?? "Mask"} #${segIndex}` : (meta?.label ?? `Segment ${segIndex}`));
     // Volumetry（体積計測）結果を SegmentDescription として書き込み、SEG 単体で持ち運べるようにする
     // （`fw/mask-driven-pipelines-gap-analysis.md` 課題#4。SEG インポート側で meta.custom へ復元）。
     const vol = maskVolumeStats(segmentationId, segIndex);

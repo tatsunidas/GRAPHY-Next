@@ -19,13 +19,7 @@
  */
 import { exportDicomSeg, exportRtDose, fetchSeriesLayout, type RtDoseExportRequest, type SegExportRequest, type SegExportSegment } from "../api";
 import type { ViewerMode } from "../viewer/imageId";
-import {
-  gridFrameOffsets,
-  quantizeDoseGrid,
-  sliceMask,
-  u8ToBase64,
-  type Vec3,
-} from "./pluginExportCore";
+import { gridFrameOffsets, quantizeDoseGrid, sliceMask, u8ToBase64, type Vec3, labelPlanes } from "./pluginExportCore";
 import type {
   PluginExportGrid,
   PluginRtDoseRequest,
@@ -171,17 +165,64 @@ export async function prepareSegExport(
 ): Promise<SegPrepared> {
   const studyUid = req.reference.studyUid ?? resolver(req.reference.seriesUid);
   if (!studyUid) return { ok: false, error: "元シリーズのスタディを解決できません" };
-  if (!req.segments?.length) return { ok: false, error: "セグメントが空です" };
+  if (req.labels && req.segments?.length) return { ok: false, error: "segments と labels はどちらか一方だけ渡してください" };
+  if (!req.labels && !req.segments?.length) return { ok: false, error: "セグメントが空です" };
 
   const geom = await refGeometry(req.reference, studyUid);
   if (typeof geom === "string") return { ok: false, error: geom };
   const mismatch = matchGrid(geom, req.grid);
   if (mismatch) return { ok: false, error: mismatch };
 
+  const step = norm(req.grid.sliceStep);
+  const base = {
+    studyInstanceUid: studyUid,
+    seriesInstanceUid: req.reference.seriesUid,
+    rows: geom.rows,
+    columns: geom.columns,
+    imageOrientationPatient: geom.iop,
+    pixelSpacing: geom.pixelSpacing,
+    sliceThickness: step > 0 ? step : 1,
+    frameOfReferenceUID: geom.frameOfReferenceUid,
+    seriesDescription: req.seriesDescription ?? "Segmentation",
+    // 出所は**本体が付ける**（プラグインに名乗らせない）。
+    producer,
+  };
+
+  // H64: ラベルの volume。平面はスライスごとに 1 枚（前景のあるスライスだけ）、展開は backend
+  if (req.labels) {
+    let lp;
+    try {
+      lp = labelPlanes(req.grid.dims, req.labels.data, req.labels.table);
+    } catch (e) {
+      return { ok: false, error: String(e instanceof Error ? e.message : e) };
+    }
+    const segmentCount = lp.foregroundVoxels.filter((n) => n > 0).length;
+    if (segmentCount === 0) return { ok: false, error: "どのラベルにも前景がありません（空の SEG は作りません）" };
+    return {
+      ok: true,
+      segmentCount,
+      foregroundVoxels: lp.foregroundVoxels,
+      request: {
+        ...base,
+        segments: [],
+        labelPlanes: {
+          bytesPerVoxel: lp.bytesPerVoxel,
+          labels: req.labels.table.map((t) => ({ value: t.value, label: t.label, color: t.color ?? null, description: t.description ?? null })),
+          planes: lp.planes.map((p) => ({
+            sopInstanceUid: geom.slices[p.z].sopInstanceUid,
+            imagePositionPatient: geom.slices[p.z].ipp,
+            data: u8ToBase64(p.bytes),
+          })),
+        },
+      },
+    };
+  }
+  const segmentsIn = req.segments ?? [];
+
   const segments: SegExportSegment[] = [];
   const foreground: number[] = [];
-  for (let i = 0; i < req.segments.length; i++) {
-    const s = req.segments[i];
+  for (let i = 0; i < segmentsIn.length; i++) {
+    const s = segmentsIn[i];
     let sliced;
     try {
       sliced = sliceMask(req.grid.dims, s.data);
@@ -208,25 +249,11 @@ export async function prepareSegExport(
     return { ok: false, error: "どのセグメントにも前景がありません（空の SEG は作りません）" };
   }
 
-  const step = norm(req.grid.sliceStep);
   return {
     ok: true,
     segmentCount: segments.length,
     foregroundVoxels: foreground,
-    request: {
-      studyInstanceUid: studyUid,
-      seriesInstanceUid: req.reference.seriesUid,
-      rows: geom.rows,
-      columns: geom.columns,
-      imageOrientationPatient: geom.iop,
-      pixelSpacing: geom.pixelSpacing,
-      sliceThickness: step > 0 ? step : 1,
-      frameOfReferenceUID: geom.frameOfReferenceUid,
-      seriesDescription: req.seriesDescription ?? "Segmentation",
-      segments,
-      // 出所は**本体が付ける**（プラグインに名乗らせない）。
-      producer,
-    },
+    request: { ...base, segments },
   };
 }
 

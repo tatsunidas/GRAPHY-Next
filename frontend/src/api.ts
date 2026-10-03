@@ -828,6 +828,15 @@ export interface SegExportRequest {
   segments: SegExportSegment[];
   /** プラグイン由来のときの出所（本体が接頭辞と ContributingEquipment を書く）。 */
   producer?: { id: string; name: string; version: string } | null;
+  /**
+   * ラベルの volume をスライスごとの平面で渡す形（H64。`segments` は空にする）。
+   * 平面は前景のあるスライスだけ・rows*cols*bytesPerVoxel を Base64（uint16 はリトルエンディアン）。
+   */
+  labelPlanes?: {
+    bytesPerVoxel: 1 | 2;
+    labels: { value: number; label: string; color?: [number, number, number] | null; description?: string | null }[];
+    planes: { sopInstanceUid: string; imagePositionPatient: [number, number, number]; data: string }[];
+  } | null;
 }
 export interface SegExportResult {
   seriesInstanceUid: string;

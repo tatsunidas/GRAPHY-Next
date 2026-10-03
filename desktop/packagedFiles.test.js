@@ -24,3 +24,9 @@ test("テストのファイルはインストーラに入れない", () => {
   assert.strictEqual(included("secretStore.test.js"), false);
   assert.strictEqual(included("aiAdapters/wire.js"), true);
 });
+
+test("require 以外で読むファイル（loadFile の html・preload・html の script）もたどる", () => {
+  const req = requiredFiles();
+  for (const f of ["splash.html", "splash-preload.js", "computeConsent.html", "computeConsent-preload.js",
+                   "computeConsent-view.js"]) assert.ok(req.includes(f), f);
+});

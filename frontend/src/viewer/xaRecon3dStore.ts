@@ -249,6 +249,24 @@ export function qcaRunKey(imageId: string, start: readonly number[], end: readon
   return `${imageId}#${r(start[0])},${r(start[1])}-${r(end[0])},${r(end[1])}`;
 }
 
+/**
+ * {@link qcaRunKey} の imageId を `SOPInstanceUID@フレーム番号` に置き換えた鍵（H62）。
+ *
+ * <p>🔴 imageId は `wadouri:<本体の URL>/api/...` で**ポートを含み、起動し直すと変わる**。
+ * 保存した解析を引き当てる鍵には使えないので、DICOM の識別子だけで作り直す。
+ * 解析区間の端点（`runKey` の `#` 以降）はそのまま使う——同じフレームから
+ * 複数区間を解析する分岐部で、区間を区別するのはそこしかない。
+ * SOPInstanceUID が取れなければ null。
+ */
+export function stableQcaRunKey(
+  run: Pick<XaQcaRun, "sopInstanceUid" | "frameIndex" | "runKey">,
+): string | null {
+  if (!run.sopInstanceUid) return null;
+  const hash = run.runKey.lastIndexOf("#");
+  const segment = hash >= 0 ? run.runKey.slice(hash) : "";
+  return `${run.sopInstanceUid}@${run.frameIndex}${segment}`;
+}
+
 /** 一覧に出す名前。角度が分かれば角度で呼ぶ（利用者が方向を選ぶときの手掛かりはそれ）。 */
 export function describeView(g: XaViewGeometry, frameIndex: number): string {
   return `${formatViewAngles(g.primaryAngleDeg, g.secondaryAngleDeg)} · f${frameIndex + 1}`;

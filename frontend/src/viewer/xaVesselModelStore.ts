@@ -88,11 +88,43 @@ export interface XaVesselProvenance {
   anchorReprojectionPx: number;
   /** 2 方向の角度差 [deg]。 */
   separationDeg: number;
+  /**
+   * 方向ごとのフレーム番号（0 origin）。`seriesUids` と同じ並び。
+   * `sopUids` だけではマルチフレームのどのフレームか分からない（H62）。
+   */
+  frameIndices: number[];
+}
+
+/**
+ * 中心線の向き（H62・G9）。
+ *
+ * <p>🔴 **`points` の並びは描いた順で、近位→遠位は保証されていない。** 2D の中心線は
+ * 利用者が引いた長さ計測の始点→終点で、3D の点順は方向 A のそれに従う。
+ * 圧力を近位から積む解析（QFR）は、逆向きだと**符号が丸ごと反転する**のに気付けない。
+ * したがって「近位→遠位である」と言えるのは**人が確かめたときだけ**で、確かめていなければ
+ * `proximalFirst: null`（推測で true を入れない）。
+ */
+export interface XaVesselOrientation {
+  /** true: `points[0]` が近位。null: 誰も確かめていない。 */
+  proximalFirst: true | null;
+  /** 誰が確かめたか。`"user"` = 3D QCA のダイアログで利用者が近位端を選んだ。 */
+  source: "user" | null;
 }
 
 export interface XaVesselModel {
   /** プラグインが指す鍵。セッション内で一意。 */
   runId: string;
+  /**
+   * **起動し直しても変わらない鍵**（H62・G9）。保存した解析入力を引き当てるのに使う。
+   *
+   * <p>`runId` は imageId 由来で**本体の URL（ポート）を含む**ので、起動し直すと変わる。
+   * こちらは SOPInstanceUID・フレーム番号・解析区間の端点だけから作る。
+   * どちらかの方向の SOPInstanceUID が取れなければ null（**保存できないと正直に言う**）。
+   * 向きを反転しても変わらない（同じ 2 区間の再構成であることに変わりはない）。
+   */
+  stableKey: string | null;
+  /** 中心線の向き（H62）。 */
+  orientation: XaVesselOrientation;
   kind: "xa-qca3d" | "xa-bifurcation3d";
   /** 一覧・凡例に出す名前。 */
   label: string;
@@ -303,4 +335,16 @@ export function useVesselAnalysis(runId: string | null): XaVesselAnalysis | null
  */
 export function vesselRunId(kind: XaVesselModel["kind"], runKeys: readonly string[]): string {
   return `${kind}:${[...runKeys].sort().join("|")}`;
+}
+
+/**
+ * 起動し直しても変わらない再構成の鍵（H62）。作り方は {@link vesselRunId} と同じで、
+ * 材料が `stableQcaRunKey` に替わるだけ。1 つでも null（SOP が取れない）なら null。
+ */
+export function vesselStableKey(
+  kind: XaVesselModel["kind"],
+  stableRunKeys: readonly (string | null)[],
+): string | null {
+  if (stableRunKeys.some((k) => k == null)) return null;
+  return vesselRunId(kind, stableRunKeys as string[]);
 }

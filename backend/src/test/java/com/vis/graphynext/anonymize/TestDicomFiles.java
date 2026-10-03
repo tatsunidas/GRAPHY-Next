@@ -29,16 +29,16 @@ import java.nio.file.Path;
  * <p>🔴 {@code BurnedInAnnotation=YES} を必ず入れる。<b>原本が「焼き込みあり」と言っている</b>
  * ことが、申告の真偽を判定できる前提になる（NO に書き換わったかどうかを見る）。
  */
-final class TestDicomFiles {
+public final class TestDicomFiles {
 
-    static final int COLS = 16;
-    static final int ROWS = 16;
+    public static final int COLS = 16;
+    public static final int ROWS = 16;
 
     private TestDicomFiles() {
     }
 
     /** 非圧縮（Explicit VR LE）。全画素 {@code value}。 */
-    static Path writeUncompressed(Path file, String studyUid, String seriesUid, String sopUid,
+    public static Path writeUncompressed(Path file, String studyUid, String seriesUid, String sopUid,
             int frames, int value) throws IOException {
         Attributes ds = header(studyUid, seriesUid, sopUid, frames);
         byte[] px = new byte[ROWS * COLS * frames];
@@ -48,7 +48,7 @@ final class TestDicomFiles {
     }
 
     /** JPEG Baseline で encapsulate（1 フレーム 1 フラグメント）。 */
-    static Path writeJpegBaseline(Path file, String studyUid, String seriesUid, String sopUid,
+    public static Path writeJpegBaseline(Path file, String studyUid, String seriesUid, String sopUid,
             int frames, int value) throws IOException {
         Attributes ds = header(studyUid, seriesUid, sopUid, frames);
         byte[] jpeg = jpegFrame(value);

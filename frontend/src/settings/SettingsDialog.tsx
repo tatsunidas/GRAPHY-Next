@@ -11,6 +11,7 @@ import { AboutPanel } from "./AboutPanel";
 import { MonitorQcPanel } from "./MonitorQcPanel";
 import { PluginManagerPanel } from "./PluginManagerPanel";
 import { AiPanel } from "./AiPanel";
+import { ComputePanel } from "./ComputePanel";
 import { useI18n, type Locale, type TFn } from "../i18n/i18n";
 import { markRestartRequired } from "../restartRequiredEvents";
 
@@ -119,6 +120,9 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
               //    Electron main の ai-providers.json、鍵は safeStorage（fw/ai-routing-design.md §4.1）。
               //    `GET /api/settings` が平文で全件返すため、どこへ送る設定もそちらへ置かない。
               <AiPanel />
+            ) : category.id === "compute" ? (
+              // 接続先は main の compute-endpoints.json、トークンは safeStorage（fw/remote-compute-design.md §4）
+              <ComputePanel />
             ) : category.id === "plugins" ? (
               <PluginManagerPanel />
             ) : category.id === "about" ? (

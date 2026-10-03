@@ -70,6 +70,11 @@ public class PluginInstaller {
     }
 
     /** 台帳（導入済み一覧）。 */
+    /** プラグインの置き場（絶対パス）。 */
+    public Path pluginsDir() {
+        return pluginsDir;
+    }
+
     public List<InstalledPlugin> installed() {
         return ledger.readAll();
     }

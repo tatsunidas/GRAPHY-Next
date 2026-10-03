@@ -12,9 +12,10 @@
  */
 
 import type { CrossSectionProfile, GeometryRefinement, Recon3DResult } from "./xaRecon3d";
-import type { XaQcaRun } from "./xaRecon3dStore";
+import { stableQcaRunKey, type XaQcaRun } from "./xaRecon3dStore";
 import {
   vesselRunId,
+  vesselStableKey,
   type XaVesselModel,
   type XaVesselSegment,
 } from "./xaVesselModelStore";
@@ -35,6 +36,12 @@ export interface BuildQca3dModelArgs {
   diameterMethod: QcaDiameterMethod | "mixed" | null;
   separationDeg: number | null;
   label: string;
+  /**
+   * 利用者が選んだ近位端（H62）。`"start"` = 方向 A の中心線の始点側、`"end"` = 終点側。
+   * null / 省略は「確かめていない」——点順は描いた順のまま、`orientation` も null。
+   * `"end"` なら点と径を逆順にして、`points[0]` が近位になるように渡す。
+   */
+  proximalEnd?: "start" | "end" | null;
 }
 
 /**
@@ -67,18 +74,30 @@ function toPoints(points: Recon3DResult["points"]): [number, number, number][] {
 /** 単一血管（A6a）の再構成結果からモデルを作る。結果が使えないなら null。 */
 export function buildQca3dVesselModel(args: BuildQca3dModelArgs): XaVesselModel | null {
   const { runA, runB, result, profile, refinement, diameterMethod, separationDeg, label } = args;
+  const proximalEnd = args.proximalEnd ?? null;
   // blocking な警告がある結果は表示もしない（§10.2）。渡すのはなおさら駄目。
   if (!result.acceptable || result.points.length < 2) return null;
 
+  const points = toPoints(result.points);
+  const diameterMm = diametersForPoints(result.points.length, profile);
+  // 🔴 点と径は**必ず一緒に**反転する（径は点と 1 対 1）。片方だけだと狭窄の位置がずれる。
+  if (proximalEnd === "end") {
+    points.reverse();
+    diameterMm.reverse();
+  }
   const segment: XaVesselSegment = {
     id: MAIN_SEGMENT_ID,
-    points: toPoints(result.points),
-    diameterMm: diametersForPoints(result.points.length, profile),
+    points,
+    diameterMm,
     parentId: null,
   };
 
   return {
     runId: vesselRunId("xa-qca3d", [runA.runKey, runB.runKey]),
+    stableKey: vesselStableKey("xa-qca3d", [stableQcaRunKey(runA), stableQcaRunKey(runB)]),
+    orientation: proximalEnd
+      ? { proximalFirst: true, source: "user" }
+      : { proximalFirst: null, source: null },
     kind: "xa-qca3d",
     label,
     segments: [segment],
@@ -105,6 +124,7 @@ export function buildQca3dVesselModel(args: BuildQca3dModelArgs): XaVesselModel 
       ],
       anchorReprojectionPx: result.anchorReprojectionPx,
       separationDeg: separationDeg ?? result.separationDeg,
+      frameIndices: [runA.frameIndex, runB.frameIndex],
     },
     at: Date.now(),
   };

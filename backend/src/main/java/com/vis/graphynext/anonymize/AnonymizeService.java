@@ -113,8 +113,26 @@ public class AnonymizeService {
         });
     }
 
-    private interface Sink {
+    /**
+     * 匿名化済みの 1 インスタンスを受け取る先。{@code tsuid} は出力に使う転送構文
+     * （焼き込みで伸長したら非圧縮になっている）。
+     */
+    public interface Sink {
         void accept(Attributes anonymized, String tsuid) throws IOException;
+    }
+
+    /**
+     * <b>1 シリーズだけ</b>を匿名化して {@code sink} へ渡す（外部の計算機へ送るデータを作るため。
+     * fw/remote-compute-design.md §3）。匿名化・焼き込みは {@link #anonymizeToZip} と同じ経路を通る。
+     */
+    @Transactional(readOnly = true)
+    public Result anonymizeSeries(String studyUid, String seriesUid, AnonymizeConfig cfg, boolean burnIn, Sink sink) {
+        return runOn(repo.findBySeries(studyUid, seriesUid), cfg, burnIn, sink);
+    }
+
+    /** 匿名化済みのインスタンスを Part 10 形式で書く（{@link #anonymizeSeries} の受け取り側が使う）。 */
+    public static void writeDicom(Attributes ds, String tsuid, OutputStream out) throws IOException {
+        writePart10(ds, tsuid, out);
     }
 
     /** 事前見積り（ZIP を流し始める前の健全性チェック用）。 */
@@ -183,15 +201,68 @@ public class AnonymizeService {
      */
     @Transactional(readOnly = true)
     public BurnPreflight burnPreflight(List<String> studyUids) {
-        List<String> problems = new ArrayList<>();
-        int burnable = 0;
-        int blocked = 0;
-        int unmasked = 0;
+        List<DicomInstance> all = new ArrayList<>();
         for (String su : studyUids) {
             if (su == null || su.isBlank()) {
                 continue;
             }
-            for (DicomInstance inst : repo.findByStudyInstanceUid(su)) {
+            all.addAll(repo.findByStudyInstanceUid(su));
+        }
+        return burnPreflightOf(all);
+    }
+
+    /**
+     * 1 シリーズの焼き込みに関わる事実（外部へ送ってよいかの判定材料。fw/remote-compute-design.md §3.2）。
+     *
+     * @param preflight          {@link #burnPreflight} と同じ判定（マスクで塗れるか）
+     * @param burnedInYes        <b>元ファイル</b>の BurnedInAnnotation が YES のインスタンス数。
+     *                           🔴 出力側の値は見ない（匿名化の出力は塗ったときだけ NO を書く）
+     * @param modalities         索引のモダリティ
+     * @param sopClassUids       索引の SOP クラス
+     * @param instances          シリーズのインスタンス数（ファイルの有無によらない）
+     */
+    public record SeriesBurnFacts(BurnPreflight preflight, int burnedInYes, java.util.Set<String> modalities,
+            java.util.Set<String> sopClassUids, int instances) {
+    }
+
+    @Transactional(readOnly = true)
+    public SeriesBurnFacts seriesBurnFacts(String studyUid, String seriesUid) {
+        List<DicomInstance> insts = repo.findBySeries(studyUid, seriesUid);
+        int yes = 0;
+        java.util.Set<String> mods = new java.util.TreeSet<>();
+        java.util.Set<String> sops = new java.util.TreeSet<>();
+        for (DicomInstance inst : insts) {
+            if (inst.getModality() != null) {
+                mods.add(inst.getModality());
+            }
+            if (inst.getSopClassUid() != null) {
+                sops.add(inst.getSopClassUid());
+            }
+            Path src = fileOf(inst);
+            if (src == null) {
+                continue;
+            }
+            try (DicomInputStream in = new DicomInputStream(src.toFile())) {
+                in.setIncludeBulkData(IncludeBulkData.NO);
+                in.readFileMetaInformation();
+                Attributes ds = in.readDataset(-1, Tag.PixelData); // 画素は読まない
+                if ("YES".equalsIgnoreCase(ds.getString(Tag.BurnedInAnnotation, "").strip())) {
+                    yes++;
+                }
+            } catch (IOException e) {
+                // 読めないファイルは匿名化の段で errors に載る。ここでは数えない
+            }
+        }
+        return new SeriesBurnFacts(burnPreflightOf(insts), yes, mods, sops, insts.size());
+    }
+
+    private BurnPreflight burnPreflightOf(List<DicomInstance> instances) {
+        List<String> problems = new ArrayList<>();
+        int burnable = 0;
+        int blocked = 0;
+        int unmasked = 0;
+        {
+            for (DicomInstance inst : instances) {
                 Path src = fileOf(inst);
                 if (src == null) {
                     continue; // ファイル欠けは preflight() の担当
@@ -249,19 +320,33 @@ public class AnonymizeService {
     }
 
     private Result run(List<String> studyUids, AnonymizeConfig cfg, boolean burnIn, Sink sink) {
-        List<String> errors = new ArrayList<>();
-        // 対象インスタンスを収集し、患者マッピングを事前構築。
+        // 対象インスタンスを収集
         List<DicomInstance> all = new ArrayList<>();
         java.util.Set<String> studySet = new java.util.LinkedHashSet<>();
-        java.util.Set<String> seriesSet = new java.util.LinkedHashSet<>();
         for (String su : studyUids) {
             if (su == null || su.isBlank()) {
                 continue;
             }
-            List<DicomInstance> insts = repo.findByStudyInstanceUid(su);
-            all.addAll(insts);
+            all.addAll(repo.findByStudyInstanceUid(su));
             studySet.add(su);
         }
+        return runOn(all, studySet, cfg, burnIn, sink);
+    }
+
+    private Result runOn(List<DicomInstance> all, AnonymizeConfig cfg, boolean burnIn, Sink sink) {
+        java.util.Set<String> studySet = new java.util.LinkedHashSet<>();
+        for (DicomInstance i : all) {
+            studySet.add(i.getStudyInstanceUid());
+        }
+        return runOn(all, studySet, cfg, burnIn, sink);
+    }
+
+    /** 渡されたインスタンスを匿名化する（検査単位・シリーズ単位の共通部分）。 */
+    private Result runOn(List<DicomInstance> all, java.util.Set<String> studySet, AnonymizeConfig cfg,
+            boolean burnIn, Sink sink) {
+        List<String> errors = new ArrayList<>();
+        java.util.Set<String> seriesSet = new java.util.LinkedHashSet<>();
+        // 患者マッピングを事前構築
         long dateSeed = resolveDateSeed(cfg);
         Map<String, DicomAnonymizerEngine.PatientMapping> pmap = buildPatientMappings(all, cfg, dateSeed);
         Map<String, String> uidMap = new HashMap<>();

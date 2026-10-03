@@ -1,0 +1,12 @@
+{
+  "id": "compute-runjob-check",
+  "name": "Compute RunJob Check",
+  "version": "0.1.0",
+  "engines": { "graphy": ">=0.3.5", "os": ["win32", "darwin", "linux"] },
+  "description": "Verifies host.compute.runJob() end to end on a local Jupyter Server (fw/remote-compute-design.md stage 5).",
+  "author": "automator",
+  "license": "MIT",
+  "contributes": ["mainscreen.menu"],
+  "ui": "ui.js",
+  "permissions": ["remote-compute"]
+}

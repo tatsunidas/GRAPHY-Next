@@ -21,6 +21,7 @@ import { mountValueViewport, mountVolumeView } from "../plugins/pluginViewportAp
 import { measureMask } from "../plugins/pluginMeshApi";
 import { extractCenterline, sampleCenterlineFrames } from "../plugins/pluginCenterlineApi";
 import { deletePluginStore, loadPluginStore, savePluginStore } from "../plugins/pluginStore";
+import { publishXa3dPluginItems } from "../plugins/xa3dPluginItems";
 import { openLogViewer } from "../system/LogViewer";
 import { openMemoryMonitor } from "../system/memoryMonitor";
 import { openUsersCommunity } from "../help/links";
@@ -120,6 +121,7 @@ export function Viewer2DMenuBar({
       putVesselAnalysis(runId, result, { id: m.id, name: m.name, version: m.version }),
     // 出所ラベルはプラグイン任せにしない: host が必ずマニフェストの表示名を入れる。
     showOverlay: (tileId, overlay) => actions.showOverlay(tileId, { ...overlay, label: m.name }),
+    showLabelVolume: (tileId, req) => actions.showLabelVolume(tileId, req, { name: m.name }),
     clearOverlay: (tileId) => actions.clearOverlay(tileId),
     // 出所（id/name/version）は host がマニフェストから入れる。プラグインに名乗らせない。
     saveDerivedSeries: (tileId, req) =>
@@ -215,6 +217,15 @@ export function Viewer2DMenuBar({
     "viewer2d.menu.analysis",
     makeViewerHost("viewer2d.menu.analysis"),
   );
+  /**
+   * H63: 3D QCA ダイアログに出すもの。ダイアログは `actions` に届かないので、
+   * host はここで組み立てて置き場（`xa3dPluginItems`）へ渡す。公開デモでは出さない（他のメニューと同じ）。
+   */
+  const xa3dPluginItems = usePluginMenu("viewer2d.xa3d", makeViewerHost("viewer2d.xa3d"));
+  useEffect(() => {
+    publishXa3dPluginItems(isDemo ? [] : xa3dPluginItems);
+  });
+  useEffect(() => () => publishXa3dPluginItems([]), []);
   const [open, setOpen] = useState<string | null>(null);
   useEffect(() => {
     const close = () => setOpen(null);
