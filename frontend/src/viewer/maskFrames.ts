@@ -145,10 +145,12 @@ export async function importMaskFrames(
   const segIndices: number[] = [];
   const modifiedByZ = new Map<number, Set<number>>();
   const descByIdx: Record<string, string> = {};
+  const nameByIdx: Record<string, string> = {};
   for (const [segNo, seg] of input.segments.entries()) {
     const segIndex = seg.number > 0 ? seg.number : segIndices.length + 1;
     segIndices.push(segIndex);
     if (seg.description) descByIdx[String(segIndex)] = seg.description;
+    if (seg.label) nameByIdx[String(segIndex)] = seg.label;
     for (const fr of seg.frames) {
       const z = resolveZ(fr, sopToId, imageIds);
       if (z == null) continue;
@@ -202,9 +204,147 @@ export async function importMaskFrames(
     Object.assign(meta, { patientKey: ctx.patientKey, seriesLabel: ctx.seriesLabel, scope: sc, origin: sc });
   }
   if (Object.keys(descByIdx).length) meta.custom = descByIdx;
+  if (Object.keys(nameByIdx).length) meta.segmentLabels = nameByIdx;
   setRoiMaskMeta(segmentationId, meta);
 
   return { segmentationId, segmentCount: segIndices.length };
+}
+
+/** ラベルの volume（H63）。格子はプラグインが `loadVolume` で受け取ったもの。 */
+export interface LabelVolumeInput {
+  /** [nx, ny, nz]。nx = columns・ny = rows。 */
+  dims: [number, number, number];
+  /** 先頭スライスの IPP と、スライスが 1 進むときの移動（mm）。 */
+  ipp: V3;
+  sliceStep: V3;
+  /** z-major・1 ボクセル 1 値（0 は背景）。 */
+  data: Uint8Array | Uint16Array;
+  table: { value: number; label: string; color?: [number, number, number] | null; description?: string | null }[];
+}
+
+/**
+ * 格子の k 枚目 → 表示中スタックの z。IPP が 0.5 mm 以内で一致しなければ null（1 枚ずれた結果を黙って出さない）。
+ * 純関数（テストしやすいように、スタックの IPP の配列を受ける）。
+ */
+export function mapGridToStack(
+  grid: { dims: [number, number, number]; ipp: V3; sliceStep: V3 },
+  stackIpps: (V3 | undefined)[],
+  tolMm = 0.5,
+): number[] | null {
+  const out: number[] = [];
+  const used = new Set<number>();
+  for (let k = 0; k < grid.dims[2]; k++) {
+    const p: V3 = [grid.ipp[0] + k * grid.sliceStep[0], grid.ipp[1] + k * grid.sliceStep[1], grid.ipp[2] + k * grid.sliceStep[2]];
+    let best = -1;
+    let bestD = Infinity;
+    stackIpps.forEach((q, z) => {
+      if (!q) return;
+      const d = Math.hypot(q[0] - p[0], q[1] - p[1], q[2] - p[2]);
+      if (d < bestD) { bestD = d; best = z; }
+    });
+    if (best < 0 || bestD > tolMm || used.has(best)) return null;
+    used.add(best);
+    out.push(best);
+  }
+  return out;
+}
+
+/**
+ * ラベルの volume を、表示中スタックの新しい Mask（labelmap）として書き込む（H63）。
+ * 表にある値だけを、前景のあるものから 1..n のセグメントにする（n は 255 まで）。名前は ROI マネージャの札に出る。
+ */
+export async function importLabelVolume(
+  vp: AnyObj,
+  input: LabelVolumeInput,
+  label: string,
+): Promise<{ segmentationId: string; segmentCount: number } | { error: string }> {
+  const imageIds = vp.getImageIds() as string[];
+  if (!imageIds.length) return { error: "no images in the viewport" };
+  const [nx, ny, nz] = input.dims;
+  const frameSize = nx * ny;
+  if (input.data.length !== frameSize * nz) return { error: `data length ${input.data.length} does not match ${nx}x${ny}x${nz}` };
+  const pm0 = planeMeta(imageIds[0]);
+  if (pm0.rows && (Number(pm0.rows) !== ny || Number(pm0.columns) !== nx)) {
+    return { error: `grid ${nx}x${ny} does not match the series (${pm0.columns}x${pm0.rows})` };
+  }
+  await Promise.all(imageIds.map((id) => imageLoader.loadAndCacheImage(id).catch(() => null)));
+  const stackIpps = imageIds.map((id) => {
+    const q = planeMeta(id).imagePositionPatient as V3 | undefined;
+    return q ? ([Number(q[0]), Number(q[1]), Number(q[2])] as V3) : undefined;
+  });
+  const zOf = mapGridToStack(input, stackIpps);
+  if (!zOf) return { error: "grid-mismatch: the slices do not line up with the series" };
+
+  // 表の値 → 出現数（前景の無いラベルはセグメントにしない）
+  const tableIdx = new Map<number, number>();
+  input.table.forEach((t, i) => tableIdx.set(t.value, i));
+  const counts = input.table.map(() => 0);
+  for (let i = 0; i < input.data.length; i++) {
+    const v = input.data[i];
+    if (v === 0) continue;
+    const ti = tableIdx.get(v);
+    if (ti !== undefined) counts[ti]++;
+  }
+  const present = input.table.map((t, i) => ({ t, i })).filter((x) => counts[x.i] > 0);
+  if (present.length === 0) return { error: "no labels with foreground" };
+  if (present.length > 255) return { error: `too many labels (${present.length} > 255)` };
+  const segOfValue = new Map<number, number>();
+  present.forEach((x, j) => segOfValue.set(x.t.value, j + 1));
+
+  const derived = imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
+  const labelmapIds = derived.map((d) => d.imageId);
+  const segmentationId = `graphy-labelvolume-${++seq}`;
+  csSeg.addSegmentations([{ segmentationId, representation: { type: LABELMAP, data: { imageIds: labelmapIds } } }]);
+  try {
+    csSeg.addLabelmapRepresentationToViewport(vp.id, [{ segmentationId, type: LABELMAP }]);
+  } catch {
+    /* ignore */
+  }
+  const modified = new Map<number, Set<number>>();
+  for (let k = 0; k < nz; k++) {
+    const vm = (cache.getImage(labelmapIds[zOf[k]]) as AnyObj | undefined)?.voxelManager;
+    if (!vm) continue;
+    const off = k * frameSize;
+    for (let i = 0; i < frameSize; i++) {
+      const v = input.data[off + i];
+      if (v === 0) continue;
+      const si = segOfValue.get(v);
+      if (si === undefined) continue;
+      vm.setAtIndex(i, si);
+      if (!modified.has(si)) modified.set(si, new Set());
+      modified.get(si)!.add(zOf[k]);
+    }
+  }
+  const names: Record<string, string> = {};
+  const descs: Record<string, string> = {};
+  present.forEach((x, j) => {
+    const si = j + 1;
+    names[String(si)] = x.t.label;
+    if (x.t.description) descs[String(si)] = x.t.description;
+    if (x.t.color) {
+      try {
+        (csSeg.config.color as AnyObj).setSegmentIndexColor(vp.id, segmentationId, si, [...x.t.color, 255]);
+      } catch {
+        /* ignore */
+      }
+    }
+  });
+  for (const [si, zs] of modified) {
+    try {
+      csSeg.triggerSegmentationEvents.triggerSegmentationDataModified(segmentationId, [...zs], si);
+    } catch {
+      /* ignore */
+    }
+  }
+  const ctx = getViewerContext(vp.id);
+  const meta: AnyObj = { segments: present.map((_, j) => j + 1), label, segmentLabels: names };
+  if (ctx) {
+    const sc = { studyUid: ctx.studyUid, seriesUid: ctx.seriesUid, z: "all" as const, c: ctx.c, t: ctx.t };
+    Object.assign(meta, { patientKey: ctx.patientKey, seriesLabel: ctx.seriesLabel, scope: sc, origin: sc });
+  }
+  if (Object.keys(descs).length) meta.custom = descs;
+  setRoiMaskMeta(segmentationId, meta);
+  return { segmentationId, segmentCount: present.length };
 }
 
 function u8ToBase64(u8: Uint8Array): string {
@@ -296,7 +436,8 @@ export function extractMaskFrames(segmentationId: string): MaskFramesInput | nul
       frames.push({ referencedSopInstanceUid: sop, imagePositionPatient: ipp, mask: u8ToBase64(plane) });
     }
     if (!frames.length || !any) continue;
-    const label = segIndices.length > 1 ? `${meta?.label ?? "Mask"} #${segIndex}` : (meta?.label ?? `Segment ${segIndex}`);
+    const named = meta?.segmentLabels?.[String(segIndex)];
+    const label = named ?? (segIndices.length > 1 ? `${meta?.label ?? "Mask"} #${segIndex}` : (meta?.label ?? `Segment ${segIndex}`));
     const description = meta?.custom?.[String(segIndex)] ?? null;
     segments.push({ number: segIndex, label, color, description, frames });
   }

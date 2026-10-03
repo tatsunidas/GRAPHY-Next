@@ -24,25 +24,7 @@ import type {
 } from "./pluginCenterlineApi";
 import type { Vec3 } from "../viewer/reslice";
 import type { PluginSeriesPanelHandle, PluginSeriesPanelOptions } from "./pluginSeriesPanelApi";
-import type {
-  ViewerDerivedSeriesRequest,
-  ViewerDerivedSeriesResult,
-  ViewerOverlay,
-  ViewerPixelDataOptions,
-  ViewerRoiMeasurements,
-  ViewerTarget,
-  ViewerAngioReportRequest,
-  ViewerPresentationStateRequest,
-  ViewerTilePixelData,
-  ViewerTileSpatialCalibration,
-  ViewerTileXaState,
-  ViewerTileXaCine,
-  ViewerTileRoi,
-  ViewerTileViewState,
-  ViewerSrMeasurementGroup,
-  ViewerSrRequest,
-  ViewerSrResult,
-} from "../viewer/viewerCommands";
+import type { ViewerDerivedSeriesRequest, ViewerDerivedSeriesResult, ViewerOverlay, ViewerPixelDataOptions, ViewerRoiMeasurements, ViewerTarget, ViewerAngioReportRequest, ViewerPresentationStateRequest, ViewerTilePixelData, ViewerTileSpatialCalibration, ViewerTileXaState, ViewerTileXaCine, ViewerTileRoi, ViewerTileViewState, ViewerSrMeasurementGroup, ViewerSrRequest, ViewerSrResult, ViewerLabelVolume, ViewerLabelVolumeResult } from "../viewer/viewerCommands";
 
 export type { PluginStoreDoc, PluginStoreSaveResult };
 
@@ -684,6 +666,12 @@ export interface Viewer2DPluginHost extends PluginHostBase {
   showOverlay: (tileId: string | undefined, overlay: ViewerOverlay) => boolean;
   /** プラグインオーバーレイを消す（H4a）。`tileId` 省略時は対象タイル全部。 */
   clearOverlay: (tileId?: string) => void;
+  /**
+   * **ラベルの volume をビューアの Mask として読み込む**（H63）。ROI マネージャに出て、セグメントの札には表の名前が出る。
+   * 格子は `loadVolume` が返したもの（`dims`・`ipp`・`sliceStep`）を渡す。スライスが IPP で 0.5 mm 以内に揃わなければ拒否。
+   * 前景の無いラベルは入らない（255 ラベルまで）。**表示だけで保存はしない**（保存は `saveSegmentation`）。
+   */
+  showLabelVolume: (tileId: string | undefined, req: ViewerLabelVolume) => Promise<ViewerLabelVolumeResult>;
   /**
    * 処理結果を**派生シリーズとして保存する**（H4b）。standalone はローカル保管庫、
    * web は外部 PACS（STOW-RS）へ書き戻す。

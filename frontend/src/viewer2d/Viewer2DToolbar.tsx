@@ -8,23 +8,7 @@ import { useWlPresets } from "./wlPresetStore";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { type SortMode } from "../viewer/seriesSort";
 import type { SlabProjection } from "../viewer/slabPresets";
-import {
-  type ViewerDerivedSeriesRequest,
-  type ViewerDerivedSeriesResult,
-  type ViewerOverlay,
-  type ViewerPixelDataOptions,
-  type ViewerSrRequest,
-  type ViewerSrResult,
-  type ViewerTarget,
-  type ViewerAngioReportRequest,
-  type ViewerPresentationStateRequest,
-  type ViewerTilePixelData,
-  type ViewerTileSpatialCalibration,
-  type ViewerTileXaState,
-  type ViewerTileXaCine,
-  type ViewerTileRoi,
-  type ViewerTileViewState,
-} from "../viewer/viewerCommands";
+import { type ViewerDerivedSeriesRequest, type ViewerDerivedSeriesResult, type ViewerOverlay, type ViewerPixelDataOptions, type ViewerSrRequest, type ViewerSrResult, type ViewerTarget, type ViewerAngioReportRequest, type ViewerPresentationStateRequest, type ViewerTilePixelData, type ViewerTileSpatialCalibration, type ViewerTileXaState, type ViewerTileXaCine, type ViewerTileRoi, type ViewerTileViewState, ViewerLabelVolume, ViewerLabelVolumeResult } from "../viewer/viewerCommands";
 import type { PluginAnalysisInput } from "../report/analysisResults";
 import type {
   PluginRegistrationRequest,
@@ -130,6 +114,8 @@ export interface ViewerActions {
   showOverlay(tileId: string | undefined, overlay: ViewerOverlay): boolean;
   /** プラグインオーバーレイを消す。tileId 省略時は対象タイル全部。 */
   clearOverlay(tileId?: string): void;
+  /** ラベルの volume を対象タイルの Mask として読み込む（H63）。tileId 省略時は対象の先頭。 */
+  showLabelVolume(tileId: string | undefined, req: ViewerLabelVolume, producer: { name: string }): Promise<ViewerLabelVolumeResult>;
   /**
    * プラグインの出力を派生シリーズとして保存する（H4b）。**確認ダイアログを必ず挟む**
    * （抑止不可。ユーザーが拒否したら `cancelled: true`）。

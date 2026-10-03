@@ -1130,6 +1130,13 @@ function TileGrid({
         const ids = tileId ? [tileId] : resolveTargets();
         runViewerCommand(ids, (c) => c.clearOverlay());
       },
+      // H63: ラベルの volume を Mask として読み込む。表示だけで保存はしない（保存は H22/H62・確認あり）
+      showLabelVolume: async (tileId, req, producer) => {
+        const id = tileId ?? resolveTargets()[0];
+        if (!id) return { ok: false, error: "no target tile" };
+        const label = (req.label?.trim() || producer.name).slice(0, 64);
+        return (await queryViewerCommand(id, (c) => c.importLabelVolume(req, label))) ?? { ok: false, error: "tile is not available" };
+      },
       // H4b: プラグインの出力を派生シリーズとして保存する。**必ず確認ダイアログを挟む**
       // （抑止不可）。ここで同意が取れてからタイル側の保存コマンドを呼ぶ。
       saveDerivedSeries: (tileId, req, producer) => {
