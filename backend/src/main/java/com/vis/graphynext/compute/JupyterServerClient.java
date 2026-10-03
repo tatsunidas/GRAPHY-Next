@@ -5,6 +5,8 @@
 package com.vis.graphynext.compute;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.StreamReadConstraints;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
@@ -36,6 +38,16 @@ public final class JupyterServerClient {
     static final int UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
     /** ダウンロードの上限。Contents API は 1 回の JSON で丸ごと返すので、ここで抑える。 */
     static final long MAX_DOWNLOAD_BYTES = 512L * 1024 * 1024;
+
+    /**
+     * ダウンロードの応答を読むためのもの。中身は base64 の文字列 1 本で、Jackson の既定の上限（1 文字列 2000 万字
+     * ＝約 15 MB のファイル）をすぐ超える（512×512×66 の uint8 ラベルで実際に超えた）。上限は受け取れる大きさに合わせる。
+     */
+    private static final ObjectMapper DOWNLOAD_MAPPER = new ObjectMapper(JsonFactory.builder()
+            .streamReadConstraints(StreamReadConstraints.builder()
+                    .maxStringLength((int) Math.min(Integer.MAX_VALUE, MAX_DOWNLOAD_BYTES * 4 / 3 + 4096))
+                    .build())
+            .build());
 
     private final JupyterEndpoint ep;
     private final ObjectMapper mapper;
@@ -181,7 +193,12 @@ public final class JupyterServerClient {
         if (r.body().length > MAX_DOWNLOAD_BYTES * 4 / 3 + 4096) {
             throw new JupyterException("file too large to download: " + path, 0);
         }
-        JsonNode m = json(r);
+        JsonNode m;
+        try {
+            m = DOWNLOAD_MAPPER.readTree(r.body());
+        } catch (IOException e) {
+            throw new JupyterException("unparsable response from " + path(r.request()) + ": " + e.getMessage(), e);
+        }
         String content = m.path("content").asText(null);
         if (content == null) {
             throw new JupyterException("not a file: " + path, 0);

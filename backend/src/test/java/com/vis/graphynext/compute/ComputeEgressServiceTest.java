@@ -91,6 +91,20 @@ class ComputeEgressServiceTest {
     }
 
     @Test
+    void codeOnlyRequestNeedsTheSameApproval() throws Exception {
+        // データを送らない要求（例: モデルの説明を取りに行く）も、同意・1 回きり・監査は同じ
+        ComputeEgressService.EgressRequest r = svc.create("seg-plugin", "Segmentation", "lab", List.of(), CODE,
+                CodeInspector.MAX_JOB_CHARS);
+        assertTrue(r.datasets().isEmpty());
+        assertTrue(svc.consume(r.id()).isEmpty(), "承認前は使えない");
+        assertEquals(ComputeEgressService.Status.APPROVED, svc.decide(r.id(), true, r.contentHash()).orElseThrow());
+        assertTrue(svc.consume(r.id()).isPresent());
+        assertTrue(svc.consume(r.id()).isEmpty());
+        assertTrue(auditLines().stream().anyMatch(l -> l.path("event").asText().equals("egress-consumed")
+                && l.path("datasets").isEmpty()));
+    }
+
+    @Test
     void approvalWithADifferentHashIsRejected() throws Exception {
         ComputeEgressService.EgressRequest r = create();
         assertTrue(svc.decide(r.id(), true, "0".repeat(64)).isEmpty(), "🔴 見せた内容と違えば通さない");

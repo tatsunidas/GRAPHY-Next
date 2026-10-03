@@ -177,8 +177,21 @@ final class VolumeAssembler implements AnonymizeService.Sink {
                 for (int i = 1; i < sorted.size(); i++) {
                     d[i - 1] = dot(sorted.get(i).ipp(), normal) - dot(sorted.get(i - 1).ipp(), normal);
                 }
-                java.util.Arrays.sort(d);
-                dz = d[d.length / 2]; // 中央値（欠けたスライスに引きずられない）
+                double[] sortedGaps = d.clone();
+                java.util.Arrays.sort(sortedGaps);
+                dz = sortedGaps[sortedGaps.length / 2];
+                // 🔴 npz は「k 枚目は origin + k·dz」という格子なので、間隔が揃っていないと幾何が嘘になる。
+                // 同じ位置に 2 枚（撮影が 2 回ぶん混ざったシリーズ。どちらを残すかは決められない）や
+                // 欠けたスライスは断る（dicom-zip なら送れる）。実例: ct-basic の C-A-P（66 枚・28 か所で重複）
+                double tol = Math.max(0.01, 0.01 * Math.abs(dz));
+                for (double g : d) {
+                    if (g < tol) {
+                        throw new UnsupportedLayout("npz-duplicate-positions");
+                    }
+                    if (Math.abs(g - dz) > tol) {
+                        throw new UnsupportedLayout("npz-uneven-spacing");
+                    }
+                }
             }
         }
         double dy = pixelSpacing != null && pixelSpacing.length == 2 ? pixelSpacing[0] : Double.NaN;

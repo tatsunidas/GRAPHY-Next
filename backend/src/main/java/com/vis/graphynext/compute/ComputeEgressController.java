@@ -65,7 +65,8 @@ public class ComputeEgressController {
             egress.refused(id, endpointId, "permission-denied");
             return error(HttpStatus.FORBIDDEN, "permission-denied");
         }
-        if (body == null || body.inputs() == null || body.inputs().isEmpty() || body.inputs().size() > 8) {
+        // 入力 0 件（コードだけ。例: モデルの説明を取りに行く）も許す。同意画面と監査は同じように通る
+        if (body == null || body.inputs() == null || body.inputs().size() > 8) {
             return error(HttpStatus.BAD_REQUEST, "bad-inputs");
         }
         // 宛先とコードはデータセットを作る前に確かめる（作ってから断ると匿名化が無駄になる）。弾いたら監査に残る

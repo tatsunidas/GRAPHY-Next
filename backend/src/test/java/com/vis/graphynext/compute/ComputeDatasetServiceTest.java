@@ -147,6 +147,25 @@ class ComputeDatasetServiceTest {
     }
 
     @Test
+    void npzRefusesSlicesThatDoNotFormAnEvenGrid() throws Exception {
+        // 同じ位置に 2 枚（撮影が 2 回ぶん混ざったシリーズ）
+        fx.writeCtSeriesAt(5.0, 5.0, 10.0);
+        ComputeDatasetService.DatasetRefused dup = assertThrows(ComputeDatasetService.DatasetRefused.class,
+                () -> service().create(STUDY, CT_SERIES, ComputeDatasetService.Format.NPZ));
+        assertEquals("npz-duplicate-positions", dup.reason());
+        // dicom-zip ならそのまま送れる
+        assertEquals(3, service().create(STUDY, CT_SERIES, ComputeDatasetService.Format.DICOM_ZIP).instances());
+    }
+
+    @Test
+    void npzRefusesAMissingSlice() throws Exception {
+        fx.writeCtSeriesAt(5.0, 7.5, 12.5); // 10.0 が欠けている
+        ComputeDatasetService.DatasetRefused gap = assertThrows(ComputeDatasetService.DatasetRefused.class,
+                () -> service().create(STUDY, CT_SERIES, ComputeDatasetService.Format.NPZ));
+        assertEquals("npz-uneven-spacing", gap.reason());
+    }
+
+    @Test
     void ctToDicomZip_isAnonymizedByTheExistingEngine() throws Exception {
         writeCtSeries();
         ComputeDatasetService.Dataset d = service().create(STUDY, CT_SERIES, ComputeDatasetService.Format.DICOM_ZIP);

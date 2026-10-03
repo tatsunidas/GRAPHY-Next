@@ -87,6 +87,11 @@ final class DatasetFixture {
      * 画素値 = 100*z + 10*y + x（格納値）。HU = 格納値 − 1024。
      */
     void writeCtSeries() throws IOException {
+        writeCtSeriesAt(5.0, 7.5, 10.0);
+    }
+
+    /** {@link #writeCtSeries} と同じものを、位置（z）だけ指定して作る。{@code zs[k]} が位置の順で k 枚目。 */
+    void writeCtSeriesAt(double... zs) throws IOException {
         int[] zOrderByInstance = {2, 0, 1};
         for (int i = 0; i < 3; i++) {
             int z = zOrderByInstance[i];
@@ -103,7 +108,7 @@ final class DatasetFixture {
             ds.setString(Tag.InstitutionName, VR.LO, "VIS GENERAL HOSPITAL");
             ds.setString(Tag.Modality, VR.CS, "CT");
             ds.setInt(Tag.InstanceNumber, VR.IS, i + 1);
-            ds.setDouble(Tag.ImagePositionPatient, VR.DS, -10.0, -20.0, 5.0 + 2.5 * z);
+            ds.setDouble(Tag.ImagePositionPatient, VR.DS, -10.0, -20.0, zs[z]);
             ds.setDouble(Tag.ImageOrientationPatient, VR.DS, 1, 0, 0, 0, 1, 0);
             ds.setDouble(Tag.PixelSpacing, VR.DS, 0.8, 0.5);
             ds.setDouble(Tag.RescaleSlope, VR.DS, SLOPE);

@@ -144,7 +144,11 @@ public class ComputeDatasetService {
                         throw new DatasetRefused(va.failure(), null);
                     }
                     check(r, decision);
-                    va.writeNpz(out, mapper);
+                    try {
+                        va.writeNpz(out, mapper);
+                    } catch (VolumeAssembler.UnsupportedLayout e) {
+                        throw new DatasetRefused(e.getMessage(), null); // 並べてみて分かる形（重なり・欠け）
+                    }
                 } else {
                     try (ZipOutputStream zip = new ZipOutputStream(out)) {
                         int[] n = {0};

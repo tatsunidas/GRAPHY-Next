@@ -1,6 +1,6 @@
 # リモート GPU カーネル（Remote Compute）設計
 
-> 記録開始 2026-10-02。**段 0〜5 と段 9（Google Colab）まで完了**（§10〜§15）。本物の Colab（GPU T4）で通しの実機 15/0。段 6〜8 は未着手。
+> 記録開始 2026-10-02。**段 0〜6 と段 9（Google Colab）まで完了**（§10〜§16）。本物の Colab（GPU T4）で通しの実機 15/0、MONAI Bundle のサンプル（段 6）も実機 15/0。段 7・8 は未着手。
 > セキュリティ上の判断の正本は `fw/security.md`。外部 AI の送信経路は `fw/ai-routing-design.md`。
 > ここには**外部の Jupyter カーネルで任意のコードを動かす**という、AI egress より一段強い経路を書く。
 >
@@ -211,7 +211,7 @@ AI egress の同意（`AiEgressConsentDialog`）はレンダラが描く。こ�
 | **3** | `ComputeDatasetService`（シリーズ単位・npz / dicom-zip・§3.2 の拒否） | 匿名化後に PHI タグが残らない（既存の匿名化テストと同じ表）、npz の geometry、拒否の表 |
 | **4** | `EgressRequest`・main の同意ダイアログ・監査ログ | 札の 1 回使用・失効・ハッシュ違い |
 | **5** | H59 ジョブ型・`pluginComputeApi.ts` | 型 2 か所の一致・permission 拒否 |
-| **6** | サンプル `examples/remote-compute-demo`（numpy で閾値 → mask の npz → H4b で派生保存。torch があれば GPU 名を出す） | automator の `src/spike/remoteComputeCheck.mts` でローカル jupyter_server 相手に通す |
+| **6** | サンプル `examples/remote-compute-monai`: **MONAI Bundle の汎用実行**（2026-10-03 に方針変更。§16）。Bundle の `metadata.json` から使えるシリーズとラベル名を自動で判定し、推論結果を H22（DICOM SEG）で保存 | `node --test examples/remote-compute-monai`（偽の MONAI で npz→NIfTI→npz の往復）、`automator/src/spike/computeMonaiCheck.ts`（本物の Colab・T4） |
 | **7** | H60 セッション型 | コード検査（長さ・base64 らしさ） |
 | **8** | GPU 情報（`nvidia-smi`）・idle 表示・ステータスバー | — |
 | **9** | **（許可後）** `ColabProvider`: main で loopback OAuth＋PKCE、refresh token は safeStorage、`CreateRuntime`（LRO）→ `GetRuntime`、トークンは期限 5 分前に更新、`FAILED_PRECONDITION` →「GPU が空いていない」、無料 12h / Pro+ 24h・idle 約 30 分の注意 | 実アカウントで |
@@ -500,6 +500,8 @@ cd automator && GRAPHY_JUPYTER_PYTHON='C:\Users\t_kob\anaconda3\python.exe' npx 
 - サンプルプラグイン（`examples/remote-compute-demo`）: 結果のマスクを H4b で派生シリーズとして保存するところまで
 - `readFile` の結果を H4b / H22（SEG）/ オーバーレイへつなぐ手本
 
+→ 段 6 で**形を変えて**片付けた（§16）。マスクは H4b（画像扱いになる）ではなく **H22 の SEG** で保存する。
+
 ---
 
 ## 15. 段 9（Colab）— 承認と実測（2026-10-03）
@@ -569,4 +571,79 @@ cd automator && npx tsx src/spike/computeColabCheck.ts   # 初回はブラウザ
 - **同意画面を「本番」にする**: テスト中はテストユーザーだけ・ログインは 7 日ごと。非機密スコープなのでブランドの確認だけの見込み。
 - Colab 独自のカーネルメッセージ（`colab_request` / `request_auth`。`drive.mount` などで来る）には応えていない。来るとコードが待つので時間切れで止まる。
 - Web 版（ウェブ アプリケーション型のクライアント・backend がログイン情報を持つ・同意の窓）は別途。
-- 段 6（サンプルプラグイン）・段 7（H60 セッション型）・段 8（ステータスバー）は未着手。
+- 段 7（H60 セッション型）・段 8（ステータスバー）は未着手。段 6 は §16。
+
+---
+
+## 16. 段 6 でやったこと（2026-10-03）— MONAI Bundle を Colab の T4 で動かすサンプル
+
+当初の予定（numpy の閾値 → H4b）を、利用者の判断で **MONAI Bundle の汎用実行**に変えた。
+「Hugging Face でモデルを選ぶと、入力と出力が自動で分かる標準は無いか」という問いへの答えが MONAI Bundle で、
+`configs/metadata.json` の `network_data_format` に入力（モダリティ・`format: hounsfield`・チャネル数）と出力
+（`format: segmentation`・`channel_def` ＝ラベル名）が書かれている。Hugging Face の `pipeline_tag` は 2D の自然画像向けで、
+3D・HU・ボクセル間隔を持たないので採らなかった。
+
+### 作ったもの
+
+| どこ | もの | 中身 |
+|---|---|---|
+| `examples/remote-compute-monai/` | `ui.js`（ビルド不要の 1 ファイル）・`plugin.json`・`README.md`・`ui.test.mjs` | 2D ビューアの「解析」メニュー。Bundle 名 →（**画像を送らない**）下見のジョブで metadata とライセンス → 表示中のシリーズに使えるかの判定 → 推論のジョブ → 下見の画像 → 選んだラベルを **H22（DICOM SEG）** で保存 |
+| backend | `ComputeEgressController` | **入力 0 件のジョブを許す**（コードだけ。同意画面・1 回きりの札・監査は同じ） |
+| desktop | `computeConsent*.js` | 0 件なら「送るデータ: なし（画像は送りません。コードだけを実行します）」 |
+| automator | `src/spike/computeMonaiCheck.ts` | 本物の Colab・T4 で通す |
+
+**再利用したもの**: H59 `runJob`（送る・同意・実行・受け取り）、段 3 の npz（`spacing`/`origin`/`direction`）、H10 `loadVolume`（本体の格子）、
+H22 `saveSegmentation`（SEG の組み立て・確認ダイアログ）、H30 `openWindow`、MONAI の `monai.bundle.download` / `monai.bundle.run`（前処理・推論は Bundle の `inference.json` のまま。書き直さない）。
+
+### 計算機の上のコード（同意画面に全文が出る）
+
+- npz（LPS）→ NIfTI（RAS。`diag(-1,-1,1)` を掛ける）→ `monai.bundle.run(datalist=[画像], output_dir=…)` → 出力の NIfTI を affine で入力の格子へ戻す
+  （同じ格子なら写すだけ、違えば最近傍）→ `labels.npy`（uint8/uint16 `[z,y,x]`）＋`labels.json`（ラベル名・個数・幾何・所要時間・GPU・最大メモリ）
+- 差し込むのは Bundle 名（`^[A-Za-z0-9][A-Za-z0-9_.-]*(/…)?$`）と上書きの設定だけで、JSON の文字列として埋め込む
+- Bundle は `/content/graphy-cache/bundles`（実行フォルダの外）に置き、同じランタイムなら 2 回目はダウンロードしない
+- 🔴 **パッケージを自分で入れるのは Colab のときだけ**（`COLAB_RELEASE_TAG` か `google.colab`）。利用者が立てた Jupyter では環境を書き換えず、
+  足りない名前を示して止める（下の「やらかし」参照）
+- 🔴 **`pytorch-ignite` は `monai` より先に入れる**。monai は import の時点で ignite の有無を覚えるので、あとから入れても評価器（`SupervisedEvaluator`）が作れない
+- プラグイン側は、返ったラベルのスライスを**患者座標で** `loadVolume` のスライスに対応づける（`mapSlices`）。並び順の違いは吸収し、
+  大きさ・面内の向き・1 枚のずれが合わなければ止める
+
+### テスト
+
+- `node --test examples/remote-compute-monai` 13/0。`GRAPHY_TEST_PYTHON` を渡すと**偽の MONAI** で npz → NIfTI → 結果 → 格子の往復を通す
+  （同じ格子・x を反転して保存・one-hot の 3 通り。非対称な目印 3 点がずれないこと、NIfTI の affine が LPS→RAS になっていること）
+- backend: `ComputeEgressServiceTest`（0 件の要求も同意・1 回きり・監査）、`ComputeDatasetServiceTest`（下の 2 件）、`JupyterServerClientTest`（16MB のダウンロード）
+- **実機（本物の Colab・GPU T4）15/0**（`computeMonaiCheck.ts`・`spleen_ct_segmentation`・ct-basic の PRE LIVER 43 枚）:
+  下見の同意画面が「なし」／下見 60 秒（monai と ignite の導入込み）・ラベル `spleen`・ライセンス Apache・CT に「使える」／
+  推論のジョブ 56 秒（うち Colab の上 22 秒、推論そのものは約 6 秒）・**Tesla T4・最大 913 MiB**・前景 130,175 ボクセル・格子はそのまま（リサンプル無し）／
+  SEG が保存され、セグメント名が Bundle のラベル名／**脾臓の重心が画像の右半分＝患者の左**（左右の取り違えが無い）／監査に 2 回 ok・下見はデータ 0 件
+
+```bash
+cd automator && npx tsx src/spike/computeMonaiCheck.ts [bundle名]   # Colab にログイン済みであること・利用者の Colab の枠を数分使う
+```
+
+### 🔴 実機で見つけた既存の不具合（段 3・段 5 から）
+
+1. **npz が「撮影 2 回ぶんが重なったシリーズ」を黙って壊れた格子にしていた（段 3）**。ct-basic の C-A-P は 66 枚のうち 28 か所が同じ位置
+   （AcquisitionNumber 1 と 2）。`VolumeAssembler` は全部を位置順に並べ、間隔を中央値（5 mm）にしていたので、**66 枚 × 5 mm という実在しない体**を送っていた。
+   本体の `loadVolume` は 38 枚にまとめるので、プラグインの照合（`mapSlices`）で `grid-mismatch: 512x512x66 vs 512x512x38` として止まって発覚した。
+   → **重なり（`npz-duplicate-positions`）と欠け・不揃い（`npz-uneven-spacing`）は npz では断る**（許容は max(0.01 mm, 間隔の 1%)）。dicom-zip なら送れる。
+   どちらの撮影を残すかは決められない（造影の相が違うことがある）ので、間引いて送ることはしない。
+2. **15 MB を超える結果を受け取れなかった（段 5）**。Jupyter の contents API はファイルを base64 の JSON 文字列 1 本で返し、Jackson の既定の上限
+   （1 文字列 2000 万字）を 512×512×66 の uint8（17 MB → 2005 万字）で超えた。→ ダウンロードの応答だけ専用の読み手で、上限を受け取れる大きさ（512 MB の base64）に合わせた。
+
+### 🚨 やらかし（同じことをする人へ）
+
+手元のテストで「偽の MONAI」を `PYTHONPATH` に置いたが、偽物にはパッケージの情報（dist-info）が無いので、計算機の上のコードが「monai が無い」と判断して
+**手元の anaconda に本物の monai と torch を pip で入れた**（setuptools と sympy の版も上がった）。気付いてすぐ元に戻した。
+対策として、パッケージを入れるのは Colab のときだけにし、テストは `PIP_NO_INDEX=1` で走らせ、`COLAB_RELEASE_TAG` を消す。
+**計算機の上で pip を呼ぶコードを、手元の Python で試すときは必ず隔離する**こと。
+
+### 残っていること
+
+- `wholeBody_ct_segmentation`（104 臓器）は未確認。T4（15 GB）に収まる設定（highres の有無）と所要時間を実測する。
+  ラベルが多いと SEG に渡すマスクが大きくなる（セグメントごとに volume と同じ大きさ。合計 1.5 GB で止めて選ばせている）——
+  H22 にラベルの volume をそのまま渡せる形があると良い
+- 入力が複数のモデル（BraTS の 4 系列など）は「使えない」と出すだけ。シリーズを複数選ぶ画面が要る
+- 出力がセグメンテーション以外（分類・検出）は扱っていない
+- ROI マネージャで SEG を開くところは自動では確かめていない（DB の SEG を backend から読んで、ラベル名と左右を確かめた）
+

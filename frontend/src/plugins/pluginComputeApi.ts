@@ -39,6 +39,7 @@ export interface ComputeRunJobOptions {
    * 進み具合は `print("__progress__", 0.4, "message")` で伝わる。64KB まで。
    */
   script: string;
+  /** 0〜8 件。0 件なら画像を送らずコードだけを実行する（同意画面と監査は同じ）。 */
   inputs: ComputeJobInput[];
   /** 環境設定 ＞ 外部の計算機 の ID。省略するとトークンの入った最初の計算機。 */
   endpointId?: string;

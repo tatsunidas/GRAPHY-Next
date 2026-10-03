@@ -1341,6 +1341,7 @@ export interface ComputeJobInput {
 export interface ComputeRunJobOptions {
   /** 実行する Python（64KB まで）。データを文字列で埋め込んだコードは弾かれる。 */
   script: string;
+  /** 0〜8 件。0 件なら画像を送らずコードだけを実行する（同意画面と監査は同じ）。 */
   inputs: ComputeJobInput[];
   /** 環境設定 ＞ 外部の計算機 の ID。省略するとトークンの入った最初の計算機。 */
   endpointId?: string;

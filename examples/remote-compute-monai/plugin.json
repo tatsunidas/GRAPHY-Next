@@ -1,0 +1,12 @@
+{
+  "id": "remote-compute-monai",
+  "name": "MONAI Bundle (remote GPU)",
+  "version": "0.1.0",
+  "engines": { "graphy": ">=0.3.5", "os": ["win32", "darwin", "linux"] },
+  "description": "Runs a MONAI Bundle segmentation model on an external computer (e.g. Google Colab GPU) and saves the labels as DICOM SEG. Sample for host.compute.runJob (H59).",
+  "author": "Visionary Imaging Services, Inc.",
+  "license": "MIT",
+  "contributes": ["viewer2d.menu.analysis"],
+  "ui": "ui.js",
+  "permissions": ["remote-compute"]
+}

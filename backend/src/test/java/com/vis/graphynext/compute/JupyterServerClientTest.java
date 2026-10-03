@@ -145,4 +145,17 @@ class JupyterServerClientTest {
         assertArrayEquals("hi".getBytes(StandardCharsets.UTF_8), c.download("job/out.txt"));
         assertNull(c.download("job/none.txt"));
     }
+
+    @Test
+    void downloadsFilesLargerThanJacksonsDefaultStringLimit() {
+        // Jackson の既定は 1 文字列 2000 万字。base64 で 2000 万字を超える 16 MB のファイル（実機の Colab で詰まった大きさ）
+        byte[] data = new byte[16 * 1024 * 1024];
+        for (int i = 0; i < data.length; i++) {
+            data[i] = (byte) (i * 31);
+        }
+        String body = "{\"type\":\"file\",\"format\":\"base64\",\"content\":\""
+                + java.util.Base64.getEncoder().encodeToString(data) + "\"}";
+        handler = ex -> Reply.json(200, body);
+        assertArrayEquals(data, client(null).download("job/outputs/labels.npy"));
+    }
 }

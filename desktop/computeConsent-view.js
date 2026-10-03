@@ -16,6 +16,10 @@ window.graphyConsent.onShow(({ detail, strings: s }) => {
   for (const h of [s.colModality, s.colInstances, s.colFormat, s.colSize, s.colBurned, s.colSha]) {
     const th = document.createElement("th"); th.textContent = h; $("data-head").appendChild(th);
   }
+  if (detail.datasets.length === 0) {
+    const tr = document.createElement("tr"); const td = document.createElement("td");
+    td.colSpan = 6; td.textContent = s.noData; tr.appendChild(td); $("data-body").appendChild(tr);
+  }
   for (const d of detail.datasets) {
     const tr = document.createElement("tr");
     for (const v of [d.modality ?? "?", d.instances, d.format, size(d.bytes), d.burnedInstances, d.sha256]) {
