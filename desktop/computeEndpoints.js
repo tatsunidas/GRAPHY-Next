@@ -15,7 +15,9 @@ const FILE_NAME = "compute-endpoints.json";
 const SCHEMA_VERSION = 1;
 const MAX_ENDPOINTS = 16;
 const MAX_LABEL = 64;
-const KINDS = new Set(["jupyter"]);
+const KINDS = new Set(["jupyter", "colab"]);
+/** Colab の RuntimeSpec の値（VARIANT_GPU・T4・SHAPE_STANDARD など）。 */
+const SPEC_VALUE_RE = /^[A-Z0-9_]{1,32}$/;
 
 let filePath = null;
 let config = null;
@@ -66,6 +68,17 @@ function validateEndpoint(e) {
   const kind = e.kind === undefined ? "jupyter" : e.kind;
   if (!KINDS.has(kind)) return { ok: false, reason: "bad-kind" };
   const label = typeof e.label === "string" && e.label.trim() ? e.label.trim().slice(0, MAX_LABEL) : e.id;
+  if (kind === "colab") {
+    // Colab は URL を持たない（ランタイムを確保するたびに Colab が決める）。持つのはランタイムの種類だけ
+    const s = e.spec || {};
+    if (![s.variant, s.accelerator, s.shape].every((v) => typeof v === "string" && SPEC_VALUE_RE.test(v))) {
+      return { ok: false, reason: "bad-colab-spec" };
+    }
+    return {
+      ok: true,
+      endpoint: { id: e.id, label, kind, spec: { variant: s.variant, accelerator: s.accelerator, shape: s.shape } },
+    };
+  }
   const u = parseUrl(e.url);
   if (!u.ok) return { ok: false, reason: u.reason };
   return { ok: true, endpoint: { id: e.id, label, kind, url: u.url, ...(u.plaintext ? { plaintext: true } : {}) } };
@@ -139,7 +152,9 @@ function save(raw) {
 }
 
 function toStored(e) {
-  return { id: e.id, label: e.label, kind: e.kind, url: e.url };
+  return e.kind === "colab"
+    ? { id: e.id, label: e.label, kind: e.kind, spec: e.spec }
+    : { id: e.id, label: e.label, kind: e.kind, url: e.url };
 }
 
 /** 検査だけ（書かない）。設定画面が入力中に叩く。 */
@@ -155,6 +170,8 @@ function byId(id) {
 
 /** 「送信先としての同一性」。ここが変わる保存は main が利用者に聞く。 */
 function destinationOf(e) {
+  // Colab の宛先は Google の Colab（*.prod.colab.dev）で、ランタイムの種類が変わっても送り先は同じ
+  if (e.kind === "colab") return JSON.stringify({ kind: "colab" });
   return JSON.stringify({ kind: e.kind || "jupyter", url: e.url });
 }
 

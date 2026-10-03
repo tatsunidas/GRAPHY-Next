@@ -67,4 +67,17 @@ class JupyterEndpointTest {
         assertThrows(IllegalArgumentException.class, () -> JupyterServerClient.segments("a/../b"));
         assertEquals(java.util.List.of("a", "b"), JupyterServerClient.segments("/a//b/"));
     }
+
+    @Test
+    void colabUsesTheProxyTokenHeaderAndContentFolder() {
+        JupyterEndpoint ep = JupyterEndpoint.of("https://8080-m-s-x.asia-southeast1-2.prod.colab.dev", "SECRET-RT",
+                JupyterEndpoint.Auth.COLAB);
+        assertEquals(java.util.Map.of("X-Colab-Client-Agent", "graphy-next", "X-Colab-Runtime-Proxy-Token", "SECRET-RT"),
+                ep.headers());
+        assertNull(ep.authorization(), "Colab へ Authorization は付けない");
+        assertEquals("content/graphy", ep.workRoot(), "Colab の Contents の根は OS の根なので content/ の下");
+        assertEquals("graphy", JupyterEndpoint.of("https://x.org", "t").workRoot());
+        assertEquals(java.util.Map.of("Authorization", "token t"), JupyterEndpoint.of("https://x.org", "t").headers());
+        assertFalse(ep.toString().contains("SECRET-RT"));
+    }
 }

@@ -283,6 +283,18 @@ export interface GraphyDesktop {
   computeConfirm?: (requestId: string) => Promise<
     { ok: true; approved: boolean } | { ok: false; error: string }
   >;
+  /** Colab: ログインの状態（トークンは返らない）。fw/remote-compute-design.md §15 */
+  computeColabStatus?: () => Promise<ColabStatus>;
+  /** Colab: Google でログイン（利用者のブラウザが開く）。 */
+  computeColabSignIn?: () => Promise<{ ok: boolean; email?: string | null; error?: string }>;
+  /** Colab: ログアウト（確保したランタイムを解放し、Google 側の許可も取り消す）。 */
+  computeColabSignOut?: () => Promise<{ ok: boolean; error?: string }>;
+  /** Colab: プランと、選べるランタイムの種類。 */
+  computeColabSpecs?: () => Promise<ColabSpecsResult>;
+  /** Colab: その接続先のランタイムを確保する（済んでいれば何もしない）。データは送らない。 */
+  computeColabEnsure?: (id: string) => Promise<{ ok: boolean; error?: string; allocated?: boolean; expireTime?: string }>;
+  /** Colab: ランタイムを解放する。 */
+  computeColabRelease?: (id: string) => Promise<{ ok: boolean; released?: boolean; error?: string }>;
   /** 名前を付けて保存（OS ダイアログ）。**上書き確認は OS が出す。** */
   saveFile?: (payload: {
     defaultName: string;
@@ -307,17 +319,43 @@ export interface GraphyDesktop {
 export interface ComputeEndpointInput {
   id: string;
   label: string;
-  url: string;
+  /** `jupyter`（既定・URL とトークン）か `colab`（Google の Colab・ランタイムの種類だけ持つ）。 */
+  kind?: "jupyter" | "colab";
+  /** jupyter のとき。 */
+  url?: string;
+  /** colab のとき（Colab API の RuntimeSpec）。 */
+  spec?: ColabRuntimeSpec;
+}
+
+/** Colab のランタイムの種類（例 VARIANT_GPU / T4 / SHAPE_STANDARD）。 */
+export interface ColabRuntimeSpec {
+  variant: string;
+  accelerator: string;
+  shape: string;
 }
 
 export interface ComputeEndpointEntry extends ComputeEndpointInput {
-  kind: "jupyter";
+  kind: "jupyter" | "colab";
   /** 平文 http（院内アドレスだけ許される）。画面は印を出す。 */
   plaintext?: boolean;
-  /** トークンを預けるキー名（`secretSet` に渡す）。 */
-  secretKey: string;
+  /** トークンを預けるキー名（`secretSet` に渡す・jupyter のとき）。 */
+  secretKey?: string;
+  /** jupyter はトークンが入っているか、colab は Google でログインしているか。 */
   hasToken: boolean;
+  /** colab のとき: 確保したランタイム（トークンは返らない）。 */
+  runtime?: { allocated: boolean; name?: string; spec?: ColabRuntimeSpec; expireTime?: string };
 }
+
+export interface ColabStatus {
+  /** OAuth クライアントの設定があるか（無ければログインできない）。 */
+  configured: boolean;
+  signedIn: boolean;
+  email: string | null;
+}
+
+export type ColabSpecsResult =
+  | { ok: true; tier: string | null; specs: (ColabRuntimeSpec & { eligible: boolean })[] }
+  | { ok: false; error: string };
 
 export interface ComputeEndpointsConfig {
   endpoints: ComputeEndpointEntry[];

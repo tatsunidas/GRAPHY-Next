@@ -208,3 +208,9 @@ test("計算機のトークンも形で許す（id の形は提供元と同じ�
     assert.equal(store.isAllowedKey(bad), false, `弾くべき: ${JSON.stringify(bad)}`);
   }
 });
+
+test("Colab の refresh token の鍵は許す（書けるのは main の IPC で絞る・main.js の MAIN_ONLY_SECRET_KEYS）", () => {
+  const store = require("./secretStore");
+  assert.equal(store.isAllowedKey("compute.colab.refreshToken"), true);
+  assert.equal(store.isAllowedKey("compute.colab.other"), false);
+});

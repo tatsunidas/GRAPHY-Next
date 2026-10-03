@@ -99,3 +99,17 @@ test("送信先の同一性は URL で決まる（ラベルの変更では確認
   assert.equal(c.destinationOf(a), c.destinationOf({ ...a, label: "B" }));
   assert.notEqual(c.destinationOf(a), c.destinationOf({ ...a, url: "https://b.org/" }));
 });
+
+test("Colab: URL を持たずランタイムの種類だけ持つ・種類の値の形を確かめる・宛先は Colab で 1 つ", () => {
+  const c = fresh(tmp());
+  const ok = c.validate({ endpoints: [{ id: "colab", label: "Colab T4", kind: "colab",
+    spec: { variant: "VARIANT_GPU", accelerator: "T4", shape: "SHAPE_STANDARD" } }] });
+  assert.equal(ok.ok, true);
+  assert.deepEqual(ok.endpoints[0], { id: "colab", label: "Colab T4", kind: "colab",
+    spec: { variant: "VARIANT_GPU", accelerator: "T4", shape: "SHAPE_STANDARD" } });
+  const bad = c.validate({ endpoints: [{ id: "colab", kind: "colab", spec: { variant: "../x", accelerator: "T4", shape: "S" } }] });
+  assert.deepEqual(bad.problems, ["colab:bad-colab-spec"]);
+  const a = { id: "colab", kind: "colab", spec: { variant: "VARIANT_GPU", accelerator: "T4", shape: "SHAPE_STANDARD" } };
+  assert.equal(c.destinationOf(a), c.destinationOf({ ...a, spec: { ...a.spec, accelerator: "A100" } }),
+    "GPU の種類を変えても送り先（Google の Colab）は同じ");
+});

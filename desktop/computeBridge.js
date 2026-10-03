@@ -59,11 +59,9 @@ async function call(method, pathname, body, timeoutMs = 15000) {
 
 /**
  * 接続先をトークン込みで backend へ丸ごと入れる。
- * @param endpoints computeEndpoints.get().endpoints
- * @param tokenOf   (id) => string|null（secretStore.getSecret を包んだもの）
+ * @param list [{ id, label, url, token, kind }]（jupyter はトークンを secretStore から、colab は確保したランタイムから）
  */
-async function pushEndpoints(endpoints, tokenOf) {
-  const list = endpoints.map((e) => ({ id: e.id, label: e.label, url: e.url, token: tokenOf(e.id) || null }));
+async function pushEndpoints(list) {
   const r = await call("PUT", "/api/internal/compute/endpoints", { endpoints: list });
   if (!r.ok) {
     // トークンは出さない（id だけ）

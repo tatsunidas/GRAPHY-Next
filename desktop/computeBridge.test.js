@@ -34,7 +34,7 @@ test("secret が無ければ何も送らない", async () => {
   const b = fresh();
   b.init({ secret: null, apiBase: "http://localhost:1" });
   assert.equal(b.enabled(), false);
-  const r = await b.pushEndpoints([{ id: "a", label: "A", url: "https://a.org/" }], () => "t");
+  const r = await b.pushEndpoints([{ id: "a", label: "A", url: "https://a.org/", token: "t" }]);
   assert.equal(r.error, "main-channel-disabled");
 });
 
@@ -55,9 +55,7 @@ test("一覧はトークン込み・Bearer 付き・Origin 無しで届く", asy
     const b = fresh();
     const secret = "k".repeat(64);
     b.init({ secret, apiBase: `http://127.0.0.1:${port}` });
-    const r = await b.pushEndpoints([{ id: "lab", label: "Lab", url: "https://gpu.example.org/" }], (id) =>
-      id === "lab" ? "TOKEN" : null,
-    );
+    const r = await b.pushEndpoints([{ id: "lab", label: "Lab", url: "https://gpu.example.org/", token: "TOKEN" }]);
     assert.equal(r.ok, true);
     assert.equal(seen[0].method, "PUT");
     assert.equal(seen[0].url, "/api/internal/compute/endpoints");

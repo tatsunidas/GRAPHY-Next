@@ -93,7 +93,7 @@ public class ComputeJobRunner {
         long t0 = System.nanoTime();
         JupyterServerClient c = endpoints.client(r.endpointId(), mapper)
                 .orElseThrow(() -> new IllegalStateException("endpoint no longer registered: " + r.endpointId()));
-        String runDir = "graphy/" + UUID.randomUUID().toString().substring(0, 12);
+        String runDir = c.endpoint().workRoot() + "/" + UUID.randomUUID().toString().substring(0, 12);
         String kernelId = null;
         String outcome = "failed";
         Map<String, Object> result = new LinkedHashMap<>();
@@ -123,6 +123,14 @@ public class ComputeJobRunner {
             kernelId = c.startKernel(null, runDir);
             ExecutionResult er;
             try (KernelChannel ch = c.connect(kernelId, Duration.ofSeconds(120))) {
+                String root = c.endpoint().contentsRootInKernel();
+                if (root != null) {
+                    // 作業フォルダへ移る（本体の固定コード。データには触れない・同意画面のコードには含めない）
+                    ExecutionResult cd = ch.execute(chdirCode(root + runDir), null).get(60, TimeUnit.SECONDS);
+                    if (!cd.ok()) {
+                        throw new IllegalStateException("cannot enter the job folder: " + cd.errorValue());
+                    }
+                }
                 CompletableFuture<ExecutionResult> f = ch.execute(r.code(), (name, text) -> progressFrom(text, ctx));
                 er = await(f, c, kernelId, timeout, ctx);
             }
@@ -197,6 +205,14 @@ public class ComputeJobRunner {
                 throw new IllegalStateException("timeout after " + timeout.toSeconds() + "s");
             }
         }
+    }
+
+    /** 作業フォルダへ移る固定コード。パスは本体が作った（英数字とハイフンと /）ものだけ。 */
+    static String chdirCode(String absDir) {
+        if (!absDir.matches("[A-Za-z0-9/_-]+")) {
+            throw new IllegalArgumentException("unexpected job folder: " + absDir);
+        }
+        return "import os as _graphy_os\n_graphy_os.chdir('" + absDir + "')\ndel _graphy_os";
     }
 
     private static void progressFrom(String text, PluginJobService.TaskContext ctx) {

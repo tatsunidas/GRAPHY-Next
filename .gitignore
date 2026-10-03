@@ -58,6 +58,9 @@ desktop/secrets.enc.json
 desktop/ai-providers.json
 # 外部の計算機（Jupyter Server）の接続先。理由は ai-providers.json と同じ（トークンは入らない）。
 desktop/compute-endpoints.json
+# Colab の OAuth クライアント（デスクトップ アプリ型）。Google の扱いでは機密ではないが公開リポジトリには入れない。
+# 配布物にはビルド時に入れる（fw/remote-compute-design.md §15）。
+desktop/colab-oauth-client.json
 # Art of Imaging が生成した作品が CWD=desktop に残ったもの
 desktop/graphy-art-*.png
 

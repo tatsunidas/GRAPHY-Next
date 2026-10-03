@@ -20,29 +20,19 @@ import net from "node:net";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
-import type { Page } from "@playwright/test";
 
 import { DesktopDriver, DESKTOP_RUN_DATA_DIR } from "../driver/desktopDriver.js";
 import { resetDb } from "../backend/dbReset.js";
 import { importFixtureCategory } from "../fixtures/importFixtures.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
+import { approvedSha as readApprovedSha, consentWindow, createChecker, launchRunJobPlugin as launchPlugin, runJobOutcome as outcome } from "./computeSpikeShared.js";
+
+const { check, summary } = createChecker();
 
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "compute-runjob-check");
 const PLUGIN_ID = "compute-runjob-check";
 const ENDPOINT_ID = "automator-runjob";
 const AUDIT = path.join(DESKTOP_RUN_DATA_DIR, "compute-audit.jsonl");
-
-const failures: string[] = [];
-let passed = 0;
-function check(cond: boolean, label: string, detail?: unknown): void {
-  if (cond) {
-    passed++;
-    console.log(`  [ok  ] ${label}`);
-  } else {
-    console.log(`  [FAIL] ${label}${detail === undefined ? "" : ` — ${JSON.stringify(detail)}`}`);
-    failures.push(label);
-  }
-}
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -72,38 +62,6 @@ async function startJupyter(python: string, port: number, token: string, root: s
   }
   proc.kill();
   throw new Error("jupyter_server did not start");
-}
-
-async function consentWindow(driver: DesktopDriver): Promise<Page> {
-  const deadline = Date.now() + 60_000; // 匿名化（CT 43 枚）が終わってから開く
-  while (Date.now() < deadline) {
-    const win = driver.app.windows().find((w) => w.url().endsWith("computeConsent.html"));
-    if (win) {
-      await win.waitForFunction(() => (document.getElementById("code")?.textContent ?? "").length > 0);
-      return win;
-    }
-    await new Promise((r) => setTimeout(r, 200));
-  }
-  throw new Error("同意の窓が開きません");
-}
-
-async function launchPlugin(page: Page, input: Record<string, string>): Promise<void> {
-  await page.evaluate((i) => {
-    const w = window as unknown as Record<string, unknown>;
-    w.__computeInput = i;
-    w.__computeRun = undefined;
-  }, input);
-  await page.getByTestId("mainscreen-menu-plugins").click();
-  await page.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
-}
-
-async function outcome(page: Page, timeoutMs: number): Promise<any> {
-  await page.waitForFunction(
-    () => !!(window as unknown as { __computeRun?: { outcome?: unknown } }).__computeRun?.outcome,
-    null,
-    { timeout: timeoutMs },
-  );
-  return page.evaluate(() => (window as unknown as { __computeRun: unknown }).__computeRun);
 }
 
 async function main(): Promise<void> {
@@ -164,8 +122,7 @@ async function main(): Promise<void> {
     console.log("\n[1] runJob（送信する）");
     await launchPlugin(page, input);
     const win = await consentWindow(driver);
-    // SHA-256 の欄だけを読む（表全体の文字列だと隣の欄の数字がくっつく）
-    const approvedSha = ((await win.locator("#data-body td.mono").first().textContent()) ?? "").trim();
+    const approvedSha = await readApprovedSha(win);
     await win.getByTestId("consent-ack").check();
     await win.getByTestId("consent-send").click();
     const run = await outcome(page, 180_000);
@@ -230,8 +187,7 @@ async function main(): Promise<void> {
       else fs.rmSync(endpointsFile, { force: true });
     }
   }
-  console.log(`\n${passed} passed, ${failures.length} failed`);
-  if (failures.length > 0) process.exitCode = 1;
+  if (summary() > 0) process.exitCode = 1;
 }
 
 main().catch((e) => {

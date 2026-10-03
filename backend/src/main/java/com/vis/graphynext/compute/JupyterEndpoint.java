@@ -19,11 +19,30 @@ import java.util.Locale;
  * <p>トークンは {@link #toString()} に出さない（ログに鍵を残さない）。
  *
  * @param base  サーバのベース URL（例 {@code https://gpu.example.org/user/a/}）。末尾の / は付けても付けなくてもよい
- * @param token Jupyter の API トークン。無認証のサーバなら null か空
+ * @param token Jupyter の API トークン（Colab ならランタイムの接続トークン）。無認証のサーバなら null か空
+ * @param auth  トークンの渡し方
  */
-public record JupyterEndpoint(URI base, String token) {
+public record JupyterEndpoint(URI base, String token, Auth auth) {
+
+    /**
+     * トークンの渡し方。
+     * <ul>
+     *   <li>{@code JUPYTER}: {@code Authorization: token <token>}（普通の Jupyter Server）</li>
+     *   <li>{@code COLAB}: {@code X-Colab-Runtime-Proxy-Token: <token>}（Colab のランタイム。トークンは約 1 時間で
+     *       切れるので main が GetRuntime で取り直して入れ直す。fw/remote-compute-design.md §15）</li>
+     * </ul>
+     */
+    public enum Auth { JUPYTER, COLAB }
+
+    /** Colab へ名乗るクライアント名（{@code X-Colab-Client-Agent}）。 */
+    static final String COLAB_CLIENT_AGENT = "graphy-next";
+
+    public JupyterEndpoint(URI base, String token) {
+        this(base, token, Auth.JUPYTER);
+    }
 
     public JupyterEndpoint {
+        auth = auth == null ? Auth.JUPYTER : auth;
         if (base == null) {
             throw new IllegalArgumentException("base URL is required");
         }
@@ -57,6 +76,45 @@ public record JupyterEndpoint(URI base, String token) {
         return new JupyterEndpoint(URI.create(base.strip()), token);
     }
 
+    public static JupyterEndpoint of(String base, String token, Auth auth) {
+        return new JupyterEndpoint(URI.create(base.strip()), token, auth);
+    }
+
+    /**
+     * 要求に付けるヘッダ（HTTP と WebSocket の両方）。トークンが無ければ空。
+     */
+    public java.util.Map<String, String> headers() {
+        java.util.Map<String, String> h = new java.util.LinkedHashMap<>();
+        if (auth == Auth.COLAB) {
+            h.put("X-Colab-Client-Agent", COLAB_CLIENT_AGENT);
+            if (token != null) {
+                h.put("X-Colab-Runtime-Proxy-Token", token);
+            }
+        } else if (token != null) {
+            h.put("Authorization", "token " + token);
+        }
+        return h;
+    }
+
+    /**
+     * ジョブのフォルダを置く場所（Contents の根からの相対）。Colab は Contents の根が OS の根（{@code /}）なので
+     * 作業用の {@code content/} の下に置く（実測 2026-10-03）。
+     */
+    public String workRoot() {
+        return auth == Auth.COLAB ? "content/graphy" : "graphy";
+    }
+
+    /**
+     * カーネルの中から見た Contents の根（絶対パス）。分かっていれば、ジョブの前に作業フォルダへ chdir する。
+     *
+     * <p>🔴 <b>Colab はカーネルの起動時の {@code path} を無視する</b>（実測 2026-10-03: {@code inputs/0.npz} が
+     * 見つからなかった）。Contents の根は {@code /} と分かっているので、本体の固定コードで移る。
+     * 普通の Jupyter Server は {@code path} が効くので null（根の絶対パスはサーバの設定次第で分からない）。
+     */
+    public String contentsRootInKernel() {
+        return auth == Auth.COLAB ? "/" : null;
+    }
+
     /** {@code api/...} のような相対パスを解決する（先頭に / を付けない）。 */
     public URI http(String relative) {
         return base.resolve(relative);
@@ -70,14 +128,14 @@ public record JupyterEndpoint(URI base, String token) {
         return URI.create(ws + u.toString().substring(u.getScheme().length()));
     }
 
-    /** {@code Authorization} ヘッダの値。トークンが無ければ null。 */
+    /** {@code Authorization} ヘッダの値（{@code JUPYTER} のとき）。無ければ null。 */
     public String authorization() {
-        return token == null ? null : "token " + token;
+        return headers().get("Authorization");
     }
 
     @Override
     public String toString() {
-        return "JupyterEndpoint[" + base + (token == null ? "" : ", token=***") + "]";
+        return "JupyterEndpoint[" + base + ", " + auth + (token == null ? "" : ", token=***") + "]";
     }
 
     /** パスの 1 区切りを URL に入れられる形にする（/ を含めさせない）。 */

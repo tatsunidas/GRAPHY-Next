@@ -18,6 +18,8 @@ import React, { useCallback, useEffect, useState } from "react";
 import { useI18n, type TFn } from "../i18n/i18n";
 import {
   desktop,
+  type ColabSpecsResult,
+  type ColabStatus,
   type ComputeEndpointEntry,
   type ComputeEndpointInput,
   type ComputeEndpointsConfig,
@@ -39,11 +41,20 @@ export function ComputePanel() {
   const [editing, setEditing] = useState<{ draft: ComputeEndpointInput; isNew: boolean; problems: string[] } | null>(
     null,
   );
+  const [colab, setColab] = useState<ColabStatus | null>(null);
+  const [colabSpecs, setColabSpecs] = useState<ColabSpecsResult | null>(null);
+  /** 追加しようとしている Colab のランタイムの種類（"VARIANT/ACCELERATOR/SHAPE"）。 */
+  const [colabPick, setColabPick] = useState("");
 
   const refresh = useCallback(async () => {
     if (!d?.computeEndpointsGet) return;
     try {
       setConfig(await d.computeEndpointsGet());
+      if (d.computeColabStatus) {
+        const st = await d.computeColabStatus();
+        setColab(st);
+        if (st.signedIn && d.computeColabSpecs) setColabSpecs(await d.computeColabSpecs());
+      }
     } catch (e) {
       setError(t("common.fetchError", { error: String(e) }));
     }
@@ -58,7 +69,10 @@ export function ComputePanel() {
   }
 
   const endpoints = config?.endpoints ?? [];
-  const asInput = (e: ComputeEndpointEntry): ComputeEndpointInput => ({ id: e.id, label: e.label, url: e.url });
+  const asInput = (e: ComputeEndpointEntry): ComputeEndpointInput =>
+    e.kind === "colab"
+      ? { id: e.id, label: e.label, kind: "colab", spec: e.spec }
+      : { id: e.id, label: e.label, kind: "jupyter", url: e.url };
 
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -124,6 +138,7 @@ export function ComputePanel() {
     run(async () => {
       const value = (tokens[e.id] ?? "").trim();
       if (!value) return;
+      if (!e.secretKey) return;
       const r = await d.secretSet!(e.secretKey, value);
       if (!r.ok) {
         setError(t(`settings.ai.err.${r.reason ?? "unknown"}`));
@@ -137,9 +152,57 @@ export function ComputePanel() {
 
   const clearToken = (e: ComputeEndpointEntry) =>
     run(async () => {
-      if (!window.confirm(t("settings.compute.token.clearConfirm"))) return;
+      if (!e.secretKey || !window.confirm(t("settings.compute.token.clearConfirm"))) return;
       await d.secretClear!(e.secretKey);
       setMessage(t("settings.compute.tokenCleared"));
+      await refresh();
+    });
+
+  // ── Colab ──
+  const colabSignIn = () =>
+    run(async () => {
+      setMessage(t("settings.compute.colab.signingIn"));
+      const r = await d.computeColabSignIn!();
+      if (!r.ok) setError(t("settings.compute.colab.err", { error: r.error ?? "" }));
+      else setMessage(t("settings.compute.colab.signedInAs", { email: r.email ?? "" }));
+      await refresh();
+    });
+
+  const colabSignOut = () =>
+    run(async () => {
+      if (!window.confirm(t("settings.compute.colab.signOutConfirm"))) return;
+      await d.computeColabSignOut!();
+      setColabSpecs(null);
+      setMessage(t("settings.compute.colab.signedOut"));
+      await refresh();
+    });
+
+  /** 選んだ種類の Colab の計算機を足す。送り先（Google の Colab）が増えるので main が確認を出す。 */
+  const colabAdd = () =>
+    run(async () => {
+      const [variant, accelerator, shape] = colabPick.split("/");
+      if (!variant) return;
+      const id = `colab-${accelerator.toLowerCase()}${shape === "SHAPE_HIGHMEM" ? "-highmem" : ""}`.replace(/_/g, "-");
+      const list = [...endpoints.filter((e) => e.id !== id).map(asInput),
+        { id, label: `Colab ${specLabel(t, { variant, accelerator, shape })}`, kind: "colab" as const, spec: { variant, accelerator, shape } }];
+      if (await saveList(list)) setMessage(t("settings.compute.saved"));
+    });
+
+  const colabEnsure = (e: ComputeEndpointEntry) =>
+    run(async () => {
+      setMessage(t("settings.compute.colab.allocating"));
+      const r = await d.computeColabEnsure!(e.id);
+      if (!r.ok) setError(t(`settings.compute.colab.err.${r.error}`) === `settings.compute.colab.err.${r.error}`
+        ? t("settings.compute.colab.err", { error: r.error ?? "" })
+        : t(`settings.compute.colab.err.${r.error}`));
+      else setMessage(t("settings.compute.colab.allocated"));
+      await refresh();
+    });
+
+  const colabRelease = (e: ComputeEndpointEntry) =>
+    run(async () => {
+      await d.computeColabRelease!(e.id);
+      setMessage(t("settings.compute.colab.released"));
       await refresh();
     });
 
@@ -168,6 +231,60 @@ export function ComputePanel() {
         </ul>
       ) : null}
 
+      {colab ? (
+        <section style={{ marginBottom: 22 }} data-testid="compute-colab">
+          <h3 style={sectionTitle}>{t("settings.compute.colab.title")}</h3>
+          {!colab.configured ? (
+            <p style={notice}>{t("settings.compute.colab.notConfigured")}</p>
+          ) : !colab.signedIn ? (
+            <div style={row}>
+              <button style={smallBtn} disabled={busy} onClick={() => void colabSignIn()} data-testid="compute-colab-signin">
+                {t("settings.compute.colab.signIn")}
+              </button>
+              <span style={{ fontSize: 11, color: "#6b7785" }}>{t("settings.compute.colab.signIn.help")}</span>
+            </div>
+          ) : (
+            <>
+              <div style={row}>
+                <span style={{ fontSize: 12 }} data-testid="compute-colab-account">
+                  {t("settings.compute.colab.account", {
+                    email: colab.email ?? "?",
+                    tier: colabSpecs && colabSpecs.ok ? tierLabel(t, colabSpecs.tier) : "…",
+                  })}
+                </span>
+                <span style={{ flex: 1 }} />
+                <button style={smallBtn} disabled={busy} onClick={() => void colabSignOut()} data-testid="compute-colab-signout">
+                  {t("settings.compute.colab.signOut")}
+                </button>
+              </div>
+              {colabSpecs && colabSpecs.ok ? (
+                <div style={row}>
+                  <select
+                    style={{ ...input, maxWidth: 280 }}
+                    value={colabPick}
+                    onChange={(ev) => setColabPick(ev.target.value)}
+                    data-testid="compute-colab-spec"
+                  >
+                    <option value="">{t("settings.compute.colab.pick")}</option>
+                    {colabSpecs.specs.map((s) => (
+                      <option key={`${s.variant}/${s.accelerator}/${s.shape}`} value={`${s.variant}/${s.accelerator}/${s.shape}`} disabled={!s.eligible}>
+                        {specLabel(t, s) + (s.eligible ? "" : ` — ${t("settings.compute.colab.notEligible")}`)}
+                      </option>
+                    ))}
+                  </select>
+                  <button style={smallBtn} disabled={busy || !colabPick} onClick={() => void colabAdd()} data-testid="compute-colab-add">
+                    {t("settings.compute.colab.add")}
+                  </button>
+                </div>
+              ) : colabSpecs && !colabSpecs.ok ? (
+                <p style={warn}>{t("settings.compute.colab.err", { error: colabSpecs.error })}</p>
+              ) : null}
+              <p style={help}>{t("settings.compute.colab.help")}</p>
+            </>
+          )}
+        </section>
+      ) : null}
+
       <section style={{ marginBottom: 22 }}>
         <h3 style={sectionTitle}>{t("settings.compute.sec.endpoints")}</h3>
         {endpoints.length === 0 ? <p style={notice}>{t("settings.compute.none")}</p> : null}
@@ -177,21 +294,23 @@ export function ComputePanel() {
             <div key={e.id} style={box} data-testid={`compute-endpoint-${e.id}`}>
               <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
                 <b style={{ fontSize: 12 }}>{e.label}</b>
-                <span style={mono}>{e.url}</span>
+                <span style={mono}>{e.kind === "colab" ? "Google Colab" : e.url}</span>
                 {e.plaintext ? (
                   <span style={warnBadge} title={t("settings.compute.plaintext.help")}>
                     {t("settings.ai.plaintext")}
                   </span>
                 ) : null}
                 <span style={{ flex: 1 }} />
-                <button
-                  style={smallBtn}
-                  disabled={busy}
-                  onClick={() => setEditing({ draft: asInput(e), isNew: false, problems: [] })}
-                  data-testid={`compute-edit-${e.id}`}
-                >
-                  {t("settings.ai.provider.edit")}
-                </button>
+                {e.kind !== "colab" ? (
+                  <button
+                    style={smallBtn}
+                    disabled={busy}
+                    onClick={() => setEditing({ draft: asInput(e), isNew: false, problems: [] })}
+                    data-testid={`compute-edit-${e.id}`}
+                  >
+                    {t("settings.ai.provider.edit")}
+                  </button>
+                ) : null}
                 <button
                   style={{ ...smallBtn, color: "#b00020" }}
                   disabled={busy}
@@ -203,6 +322,25 @@ export function ComputePanel() {
                 </button>
               </div>
 
+              {e.kind === "colab" ? (
+                <div style={row} data-testid={`compute-colab-runtime-${e.id}`}>
+                  <span style={label}>{t("settings.compute.colab.runtime")}</span>
+                  <span style={{ fontSize: 11, color: e.runtime?.allocated ? "#1b7a3a" : "#6b7785" }}>
+                    {e.runtime?.allocated
+                      ? t("settings.compute.colab.runtime.on", { until: new Date(e.runtime.expireTime ?? "").toLocaleTimeString() })
+                      : t("settings.compute.colab.runtime.off")}
+                  </span>
+                  {e.runtime?.allocated ? (
+                    <button style={smallBtn} disabled={busy} onClick={() => void colabRelease(e)} data-testid={`compute-colab-release-${e.id}`}>
+                      {t("settings.compute.colab.release")}
+                    </button>
+                  ) : (
+                    <button style={smallBtn} disabled={busy || !e.hasToken} onClick={() => void colabEnsure(e)} data-testid={`compute-colab-ensure-${e.id}`}>
+                      {t("settings.compute.colab.ensure")}
+                    </button>
+                  )}
+                </div>
+              ) : (
               <div style={row}>
                 <span style={label}>{t("settings.compute.token")}</span>
                 <span style={{ fontSize: 11, color: e.hasToken ? "#1b7a3a" : "#8a4b00" }}>
@@ -230,11 +368,12 @@ export function ComputePanel() {
                   </button>
                 ) : null}
               </div>
+              )}
 
               <div style={row}>
                 <button
                   style={smallBtn}
-                  disabled={busy || test === "running"}
+                  disabled={busy || test === "running" || (e.kind === "colab" && !e.runtime?.allocated)}
                   onClick={() => void runTest(e)}
                   data-testid={`compute-test-${e.id}`}
                 >
@@ -347,6 +486,19 @@ function TestResultView({ r }: { r: ComputeTestResult }) {
       </span>
     </div>
   );
+}
+
+/** Colab のランタイムの種類を読める名前に（例「GPU T4」「CPU（高メモリ）」）。 */
+function specLabel(t: TFn, s: { variant: string; accelerator: string; shape: string }): string {
+  const kind = s.variant.replace(/^VARIANT_/, "");
+  const accel = s.accelerator === "NONE" ? "" : ` ${s.accelerator}`;
+  return `${kind}${accel}${s.shape === "SHAPE_HIGHMEM" ? ` ${t("settings.compute.colab.highmem")}` : ""}`;
+}
+
+function tierLabel(t: TFn, tier: string | null): string {
+  const key = `settings.compute.colab.tier.${tier ?? "unknown"}`;
+  const s = t(key);
+  return s === key ? (tier ?? "?") : s;
 }
 
 /** main の検査結果（`<id>:<理由>`）を読める文に。 */

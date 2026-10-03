@@ -33,8 +33,14 @@ public class ComputeEndpointRegistry {
     public record Entry(String id, String label, JupyterEndpoint endpoint) {
     }
 
-    /** main から届く形。 */
-    public record Incoming(String id, String label, String url, String token) {
+    /**
+     * main から届く形。{@code kind} は {@code jupyter}（既定）か {@code colab}（確保済みのランタイム。
+     * {@code url} と {@code token} は GetRuntime の connectionInfo）。
+     */
+    public record Incoming(String id, String label, String url, String token, String kind) {
+        public Incoming(String id, String label, String url, String token) {
+            this(id, label, url, token, null);
+        }
     }
 
     private volatile Map<String, Entry> entries = Map.of();
@@ -63,7 +69,12 @@ public class ComputeEndpointRegistry {
                 continue;
             }
             try {
-                JupyterEndpoint ep = JupyterEndpoint.of(in.url() == null ? "" : in.url(), in.token());
+                JupyterEndpoint.Auth auth = "colab".equals(in.kind()) ? JupyterEndpoint.Auth.COLAB
+                        : JupyterEndpoint.Auth.JUPYTER;
+                if (in.kind() != null && !in.kind().equals("colab") && !in.kind().equals("jupyter")) {
+                    throw new IllegalArgumentException("unknown kind " + in.kind());
+                }
+                JupyterEndpoint ep = JupyterEndpoint.of(in.url() == null ? "" : in.url(), in.token(), auth);
                 String label = in.label() == null || in.label().isBlank() ? in.id() : in.label().strip();
                 next.put(in.id(), new Entry(in.id(), label.length() > 64 ? label.substring(0, 64) : label, ep));
             } catch (IllegalArgumentException e) {

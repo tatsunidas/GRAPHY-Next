@@ -269,9 +269,7 @@ public final class JupyterServerClient {
         URI u = ep.http(relative);
         HttpRequest.Builder b = HttpRequest.newBuilder(u).timeout(requestTimeout)
                 .header("Accept", "application/json");
-        if (ep.authorization() != null) {
-            b.header("Authorization", ep.authorization());
-        }
+        ep.headers().forEach(b::header);
         return b;
     }
 

@@ -29,7 +29,8 @@ const path = require("node:path");
  * `../` や長大な名前が通らないことが唯一の防御線になる
  * （id の形は `aiProviders.ID_RE` と同じ。両方を緩めない）。
  */
-const LEGACY_KEYS = new Set(["ai.gemini.apiKey"]);
+// compute.colab.refreshToken: Google（Colab API）の refresh token（colabAuth.js・fw/remote-compute-design.md §15）
+const LEGACY_KEYS = new Set(["ai.gemini.apiKey", "compute.colab.refreshToken"]);
 const PROVIDER_KEY_RE = /^ai\.provider\.[a-z0-9-]{1,32}\.apiKey$/;
 // 外部の計算機（Jupyter Server）のトークン。id の形は computeEndpoints（＝aiProviders.ID_RE）と同じ。
 // fw/remote-compute-design.md §4.1

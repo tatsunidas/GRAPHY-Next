@@ -33,6 +33,9 @@ const aiProviders = require("./aiProviders");
 const computeEndpoints = require("./computeEndpoints");
 const computeBridge = require("./computeBridge");
 const computeConsent = require("./computeConsent");
+const { createColabAuth, REFRESH_KEY: COLAB_REFRESH_KEY } = require("./colabAuth");
+const { createColabApi } = require("./colabApi");
+const { createColabRuntimes } = require("./colabRuntimes");
 
 const PORT = process.env.GRAPHY_BACKEND_PORT || String(cfg.backend.port);
 const PROFILE = process.env.GRAPHY_BACKEND_PROFILE || cfg.backend.profile;
@@ -922,9 +925,17 @@ ipcMain.on("graphy:refocus", (e) => {
 // 意図的に「取り出す」IPC を持たない。平文が main プロセスの外へ出る経路を作らないため、
 // レンダラが知れるのは statusOf が返す「入っているか否か」だけである。
 // ─────────────────────────────────────────────────────────────────────────────
+/**
+ * main だけが書く鍵。🔴 **レンダラ（＝同じ realm のプラグイン）から書かせない。**
+ * Colab の refresh token を差し替えられると、ランタイムが**別人の Google アカウント**に作られ、
+ * 匿名化したデータとコードがそこへ送られる。書くのはログインの流れ（colabAuth）だけ。
+ */
+const MAIN_ONLY_SECRET_KEYS = new Set([COLAB_REFRESH_KEY]);
+
 ipcMain.handle("graphy:secret-set", async (_e, payload) => {
   const key = payload && payload.key;
   const value = payload && payload.value;
+  if (MAIN_ONLY_SECRET_KEYS.has(String(key))) return { ok: false, persisted: false, reason: "unknown-key" };
   const r = secretStore.setSecret(String(key || ""), String(value == null ? "" : value));
   if (r.ok && isComputeKey(key)) await pushComputeEndpoints();
   return r;
@@ -933,6 +944,7 @@ ipcMain.handle("graphy:secret-set", async (_e, payload) => {
 ipcMain.handle("graphy:secret-status", (_e, key) => secretStore.statusOf(String(key || "")));
 
 ipcMain.handle("graphy:secret-clear", async (_e, key) => {
+  if (MAIN_ONLY_SECRET_KEYS.has(String(key))) return false; // ログアウトは compute-colab-signout で
   const ok = secretStore.clearSecret(String(key || ""));
   if (ok && isComputeKey(key)) await pushComputeEndpoints();
   return ok;
@@ -1082,20 +1094,92 @@ function isComputeKey(key) {
 /** 接続先をトークン込みで backend へ入れ直す（起動時・保存時・トークン変更時）。 */
 async function pushComputeEndpoints() {
   if (!computeBridge.enabled()) return { ok: false, error: "main-channel-disabled" };
-  return computeBridge.pushEndpoints(computeEndpoints.get().endpoints, (id) =>
-    secretStore.getSecret(computeEndpoints.secretKeyFor(id)),
-  );
+  const all = computeEndpoints.get().endpoints;
+  const jupyter = all
+    .filter((e) => e.kind !== "colab")
+    .map((e) => ({ id: e.id, label: e.label, url: e.url, kind: "jupyter",
+      token: secretStore.getSecret(computeEndpoints.secretKeyFor(e.id)) || null }));
+  // Colab は確保したランタイムだけ（URL とトークンはランタイムごとに Colab が決める）
+  const colabIds = new Set(all.filter((e) => e.kind === "colab").map((e) => e.id));
+  const colab = colabRuntimes ? colabRuntimes.endpoints().filter((e) => colabIds.has(e.id)) : [];
+  return computeBridge.pushEndpoints([...jupyter, ...colab]);
 }
+
+// ── Colab（fw/remote-compute-design.md §15）──────────────────────────────────
+// ログインは colabAuth（refresh token は secretStore・main だけ）、API は colabApi（公式 v1beta だけ）、
+// ランタイムは colabRuntimes（確保・トークン更新・解放）。backend からは普通の Jupyter に見える。
+let colabAuth = null;
+let colabApi = null;
+let colabRuntimes = null;
+
+function initColab() {
+  colabAuth = createColabAuth({
+    // 開発時は desktop/、配布物はアプリの中かデータの置き場（.gitignore 済み・配布物にはビルド時に入れる）
+    dirs: [__dirname, resolveDataDir()],
+    secrets: secretStore,
+    openExternal: (url) => shell.openExternal(url),
+  });
+  colabApi = createColabApi(() => colabAuth.accessToken());
+  colabRuntimes = createColabRuntimes(colabApi, () => pushComputeEndpoints().then(() => undefined));
+}
+
+/** 画面へ返す Colab の状態（トークンは返さない）。 */
+ipcMain.handle("graphy:compute-colab-status", async () => ({
+  configured: !!colabAuth && colabAuth.configured(),
+  signedIn: !!colabAuth && colabAuth.signedIn(),
+  email: colabAuth ? await colabAuth.ensureEmail() : null,
+}));
+
+// Google でログイン（利用者のブラウザで）
+ipcMain.handle("graphy:compute-colab-signin", async () => (colabAuth ? colabAuth.signIn() : { ok: false, error: "not-ready" }));
+
+// ログアウト（確保したランタイムを解放してから、Google 側の許可も取り消す）
+ipcMain.handle("graphy:compute-colab-signout", async () => {
+  if (!colabAuth) return { ok: false, error: "not-ready" };
+  await colabRuntimes.releaseAll();
+  return colabAuth.signOut();
+});
+
+/** プランと、選べるランタイムの種類（eligible のものに印）。 */
+ipcMain.handle("graphy:compute-colab-specs", async () => {
+  try {
+    const [sub, specs] = await Promise.all([colabApi.subscription(), colabApi.runtimeSpecs()]);
+    return { ok: true, tier: sub.tier || null, specs };
+  } catch (e) {
+    return { ok: false, error: (e && e.code) || String(e && e.message) };
+  }
+});
+
+/**
+ * その Colab 接続先のランタイムを確保する（済んでいれば何もしない）。
+ * <p>確保だけでは患者のデータは出ない（データとコードは同意のあとで送る）。利用者の Colab の利用枠は使う。
+ */
+ipcMain.handle("graphy:compute-colab-ensure", async (_e, id) => {
+  const ep = computeEndpoints.byId(String(id || ""));
+  if (!ep || ep.kind !== "colab") return { ok: false, error: "not-a-colab-endpoint" };
+  if (!colabAuth.signedIn()) return { ok: false, error: "not-signed-in" };
+  try {
+    return { ok: true, ...(await colabRuntimes.ensure(ep.id, ep.label, ep.spec)) };
+  } catch (e) {
+    return { ok: false, error: (e && e.code) || String(e && e.message) };
+  }
+});
+
+ipcMain.handle("graphy:compute-colab-release", async (_e, id) => colabRuntimes.release(String(id || "")));
 
 // 接続先の一覧。**トークンは含まない**（入っているかだけ）。
 ipcMain.handle("graphy:compute-endpoints-get", () => {
   const c = computeEndpoints.get();
   return {
-    endpoints: c.endpoints.map((e) => ({
-      ...e,
-      secretKey: computeEndpoints.secretKeyFor(e.id),
-      hasToken: secretStore.statusOf(computeEndpoints.secretKeyFor(e.id)).hasValue,
-    })),
+    endpoints: c.endpoints.map((e) =>
+      e.kind === "colab"
+        ? { ...e, hasToken: !!colabAuth && colabAuth.signedIn(), runtime: colabRuntimes ? colabRuntimes.status(e.id) : { allocated: false } }
+        : {
+            ...e,
+            secretKey: computeEndpoints.secretKeyFor(e.id),
+            hasToken: secretStore.statusOf(computeEndpoints.secretKeyFor(e.id)).hasValue,
+          },
+    ),
     problems: c.problems,
     // 内部経路が使えない（backend を別に起動した開発など）ときは画面が理由を出す
     available: computeBridge.enabled(),
@@ -1118,7 +1202,11 @@ ipcMain.handle("graphy:compute-endpoints-set", async (e, cfg) => {
   const before = new Map(computeEndpoints.get().endpoints.map((x) => [x.id, computeEndpoints.destinationOf(x)]));
   const added = checked.endpoints
     .filter((x) => before.get(x.id) !== computeEndpoints.destinationOf(x))
-    .map((x) => `${x.id}: ${x.url}${x.plaintext ? "  (http・暗号化なし)" : ""}`);
+    .map((x) =>
+      x.kind === "colab"
+        ? `${x.id}: Google Colab（${x.spec.variant.replace(/^VARIANT_/, "")} ${x.spec.accelerator}・あなたの Google アカウント）`
+        : `${x.id}: ${x.url}${x.plaintext ? "  (http・暗号化なし)" : ""}`,
+    );
   if (added.length > 0) {
     const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
     const choice = dialog.showMessageBoxSync(win, {
@@ -1137,7 +1225,10 @@ ipcMain.handle("graphy:compute-endpoints-set", async (e, cfg) => {
   const removed = computeEndpoints.get().endpoints.filter((x) => !keep.has(x.id));
   const result = computeEndpoints.save({ endpoints: checked.endpoints });
   if (result.ok) {
-    for (const x of removed) secretStore.clearSecret(computeEndpoints.secretKeyFor(x.id));
+    for (const x of removed) {
+      if (x.kind === "colab") await colabRuntimes.release(x.id);
+      else secretStore.clearSecret(computeEndpoints.secretKeyFor(x.id));
+    }
     if (added.length > 0) console.log(`[compute] registry change: ${added.join(" / ")}`);
     await pushComputeEndpoints();
   }
@@ -1237,6 +1328,7 @@ app.whenReady().then(async () => {
   secretStore.init(resolveDataDir());
   aiProviders.init(resolveDataDir());
   computeEndpoints.init(resolveDataDir());
+  initColab();
   if (MAIN_SECRET) computeBridge.init({ secret: MAIN_SECRET, apiBase: API_BASE });
   createSplash();
   try {
@@ -1267,5 +1359,14 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
+// 確保した Colab のランタイムは閉じる前に解放する（利用者の Colab の利用枠を使い続けない）。
+// 解放は非同期なので一度だけ終了を止めて待つ（最大 10 秒）。
+let colabReleasedOnQuit = false;
+app.on("before-quit", (event) => {
+  if (colabReleasedOnQuit || !colabRuntimes || colabRuntimes.endpoints().length === 0) return;
+  event.preventDefault();
+  colabReleasedOnQuit = true;
+  Promise.race([colabRuntimes.releaseAll(), new Promise((r) => setTimeout(r, 10000))]).finally(() => app.quit());
+});
 app.on("before-quit", stopBackend);
 process.on("exit", stopBackend);

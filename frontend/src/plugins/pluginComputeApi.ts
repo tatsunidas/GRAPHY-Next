@@ -82,11 +82,18 @@ export async function runComputeJob(
   if (!d?.computeConfirm || !d.computeEndpointsGet) return { ok: false, error: "desktop-only" };
   if (!(m.permissions ?? []).includes(REMOTE_COMPUTE_PERMISSION)) return { ok: false, error: "permission-denied" };
 
-  let endpointId = opts.endpointId;
-  if (!endpointId) {
-    const cfg = await d.computeEndpointsGet();
-    endpointId = cfg.endpoints.find((e) => e.hasToken)?.id ?? cfg.endpoints[0]?.id;
-    if (!endpointId) return { ok: false, error: "no-endpoint" };
+  const cfg = await d.computeEndpointsGet();
+  const endpoint = opts.endpointId
+    ? cfg.endpoints.find((e) => e.id === opts.endpointId)
+    : (cfg.endpoints.find((e) => e.hasToken) ?? cfg.endpoints[0]);
+  if (!endpoint) return { ok: false, error: opts.endpointId ? "unknown-endpoint" : "no-endpoint" };
+  const endpointId = endpoint.id;
+  // Colab はランタイムを確保してから要求を作る（同意画面に実際の送り先が出るように）。
+  // 確保だけでは患者のデータもコードも出ない——送るのは同意のあと。
+  if (endpoint.kind === "colab") {
+    if (!d.computeColabEnsure) return { ok: false, error: "desktop-only" };
+    const rt = await d.computeColabEnsure(endpointId);
+    if (!rt.ok) return { ok: false, error: rt.error ?? "colab-runtime-failed" };
   }
   const id = encodeURIComponent(m.id);
 

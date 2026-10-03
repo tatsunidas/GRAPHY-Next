@@ -1,6 +1,6 @@
 # リモート GPU カーネル（Remote Compute）設計
 
-> 記録開始 2026-10-02。**段 5（H59 `compute.runJob`＝実際に送って実行）まで完了**（§10〜§14）。段 6 以降は未着手。
+> 記録開始 2026-10-02。**段 0〜5 と段 9（Google Colab）まで完了**（§10〜§15）。本物の Colab（GPU T4）で通しの実機 15/0。段 6〜8 は未着手。
 > セキュリティ上の判断の正本は `fw/security.md`。外部 AI の送信経路は `fw/ai-routing-design.md`。
 > ここには**外部の Jupyter カーネルで任意のコードを動かす**という、AI egress より一段強い経路を書く。
 >
@@ -499,3 +499,74 @@ cd automator && GRAPHY_JUPYTER_PYTHON='C:\Users\t_kob\anaconda3\python.exe' npx 
 
 - サンプルプラグイン（`examples/remote-compute-demo`）: 結果のマスクを H4b で派生シリーズとして保存するところまで
 - `readFile` の結果を H4b / H22（SEG）/ オーバーレイへつなぐ手本
+
+---
+
+## 15. 段 9（Colab）— 承認と実測（2026-10-03）
+
+### 承認と準備（利用者がしたこと）
+
+- 2026-10-02 に **Colab API の allowlist が承認された**（GCP プロジェクト `graphy-next-colab`／451186636030。条件の記載なし）。
+- API の有効化は **Cloud Shell の `gcloud services enable colaboratory.googleapis.com`** で行う。
+  コンソールの API ライブラリでは「読み込めませんでした」になる（allowlist 制の API はライブラリに出ない）。
+- OAuth 同意画面: 外部・**テスト中**（テストユーザーだけ・ログインは 7 日ごとにやり直し）。
+  🔑 **`auth/colaboratory` は「非機密のスコープ」に分類された**——一般公開にはブランドの確認だけで済む見込み（セキュリティ審査は不要）。
+- OAuth クライアント: **デスクトップ アプリ型**（`installed`）。開発時は `desktop/colab-oauth-client.json`（`.gitignore` 済み）。
+  「AI-powered agent が使う」のチェックは入れない（ログインするのは利用者本人）。
+- **Web 版で使うときは「ウェブ アプリケーション」型のクライアントを別に作る**（固定の戻り先・シークレットは backend だけが持つ）。
+  デスクトップ版は空きポートの loopback で受けるので Web 型は使えない。
+
+### 疎通の実測（作ったクライアントで v1beta を叩いた）
+
+| 項目 | 結果 |
+|---|---|
+| OAuth（loopback＋PKCE・`access_type=offline`） | 通った。refresh token が返る。スコープは openid / email / profile / colaboratory |
+| `GET /v1beta/subscription` | `SUBSCRIPTION_TIER_FREE` |
+| `GET /v1beta/runtimespecs` | 無料枠で `eligible` は **CPU 標準・GPU T4 標準・TPU V5E1**。A100 / H100 / L4 / G4 / 高メモリは不可（Pro 以上と思われる） |
+| `POST /v1beta/runtimes`（CPU） | LRO。`GET /v1/operations/{id}:wait` で **3 秒**で完了。`metadata.@type = google.colab.v1beta.CreateRuntimeMetadata`、`response.@type = google.colab.v1beta.Runtime`、名前は `runtimes/r-<uuid>` |
+| `connectionInfo` | `url` = `https://8080-m-s-…-a.asia-southeast1-2.prod.colab.dev`（パス無し）、`expireTime` は**約 1 時間後**、`token` |
+| Jupyter（`X-Colab-Runtime-Proxy-Token` ヘッダ） | **Jupyter Server 2.20.0**。`/api/status` `/api/kernelspecs`（python3・julia・ir）`/api/kernels` が通る。**トークン無しは 404** |
+| Contents の根 | **`/`（OS の根）**。作業は `content/` の下で行う（`content/graphy/<run>`） |
+| `DELETE /v1beta/runtimes/{id}` | `{}`。直後の一覧は空 |
+
+### 段 9 でやったこと（2026-10-03）— Colab をアプリに組み込んだ
+
+🔑 **段 1〜5 の仕組みはそのまま使う。** Colab のランタイムは「接続トークンが付く普通の Jupyter」なので、
+backend の変更は**トークンの渡し方と作業フォルダ**だけ。匿名化・同意・runJob・監査は何も変えていない。
+
+| 層 | ファイル | 中身 |
+|---|---|---|
+| backend | `JupyterEndpoint` | `Auth`（`JUPYTER`＝`Authorization: token` ／ `COLAB`＝`X-Colab-Runtime-Proxy-Token`＋`X-Colab-Client-Agent: graphy-next`）・`headers()`（HTTP と WebSocket で共通）・`workRoot()`（Colab は `content/graphy`）・`contentsRootInKernel()` |
+| backend | `ComputeEndpointRegistry` | main から `kind: "colab"` を受ける |
+| backend | `ComputeJobRunner` | 作業フォルダは `workRoot()` の下。🔴 **Colab はカーネルの起動時の `path` を無視する**（実測：`inputs/0.npz` が見つからなかった）ので、プラグインのコードの前に**本体の固定コード**で `chdir` する（データに触れない・同意画面のコードには含めない） |
+| desktop | `colabAuth.js` | Google ログイン（loopback＋PKCE・`access_type=offline`）。refresh token は secretStore（`compute.colab.refreshToken`）、アクセストークンはメモリ。`invalid_grant`（取り消し・テスト中の 7 日切れ）で refresh token を捨てる。保存したログインで起動し直したらメールアドレスを userinfo で引き直す |
+| desktop | `colabApi.js` | 公式 v1beta だけ（subscription / runtimespecs / runtimes の作成（LRO を `:wait`）・取得・削除）。Operation の error を理由のコード（gpu-unavailable / too-many-runtimes / quota-exceeded / denylisted）に |
+| desktop | `colabRuntimes.js` | 接続先ごとに 1 つ確保・**接続トークンを期限の 5 分前に取り直して backend へ入れ直す**・Colab が回収したら捨てる・**アプリを閉じるときに解放** |
+| desktop | `main.js` | 🔴 **`compute.colab.refreshToken` はレンダラの `secret-set` / `secret-clear` から書けない**（`MAIN_ONLY_SECRET_KEYS`）。書けると、プラグインが**別人の Google アカウント**の refresh token を入れ、ランタイムをそのアカウントに作らせて匿名化データとコードを受け取れてしまう。IPC 6 本（status / signin / signout / specs / ensure / release）。Colab の接続先を足すと main の確認ダイアログに「Google Colab（GPU T4・あなたの Google アカウント）」と出る |
+| desktop | `computeEndpoints.js` | `kind: "colab"`（URL を持たずランタイムの種類だけ。送り先の同一性は「Colab」1 つ） |
+| frontend | `ComputePanel.tsx` | Google でログイン／アカウントとプラン／選べる種類（プランで使えないものは選べない）／確保・解放・接続テスト。ja / en |
+| frontend | `pluginComputeApi.ts` | Colab の接続先なら、要求を作る前にランタイムを確保（同意画面に実際の送り先が出るように。確保だけではデータもコードも出ない） |
+| automator | `computeSpikeShared.ts` | 実機検証の共通部品（同意の窓・プラグインの起動・結果待ち）を切り出し、`computeRunJobCheck` も寄せた |
+
+### テスト
+
+- desktop 184/0（`colab.test.js` 12: ログインの PKCE と state・権限を外されたら失敗・refresh・取り消しで捨てる・LRO・エラーの読み替え・名前の形・確保は 1 回・期限前の更新・回収・解放・メールの引き直し）
+- backend 739/740（既存の動画テスト）・frontend 1883/0
+- **実機（本物の Google Colab・無料版・GPU T4）15/0**（`automator/src/spike/computeColabCheck.ts`）:
+  ログイン（ブラウザ）・プラン／main の確認に「Google Colab」／**T4 を 4 秒で確保**／接続テストで **Tesla T4 15GB・PyTorch 2.11（CUDA 可）**／
+  同意画面の送り先が `*.prod.colab.dev`／**Colab に届いたバイト列の SHA-256 が同意画面の値と一致**／届いた npz に患者 ID・元の UID が無い／
+  mask.npy を取り出せる／解放できる／監査に Colab の host と ok が残る
+- ローカルの Jupyter の通し（`computeRunJobCheck`）も 21/0 のまま
+
+```bash
+cd automator && npx tsx src/spike/computeColabCheck.ts   # 初回はブラウザでログインが要る・利用者の Colab の利用枠を数分使う
+```
+
+### 残っていること
+
+- **配布物に OAuth クライアントを入れる**: いまは `desktop/colab-oauth-client.json`（`.gitignore`）を手で置いている。
+  リリースのワークフローで GitHub の secret から書き出して同梱する（`build.files` に足す）。入っていなければ設定画面は「設定がありません」と出す。
+- **同意画面を「本番」にする**: テスト中はテストユーザーだけ・ログインは 7 日ごと。非機密スコープなのでブランドの確認だけの見込み。
+- Colab 独自のカーネルメッセージ（`colab_request` / `request_auth`。`drive.mount` などで来る）には応えていない。来るとコードが待つので時間切れで止まる。
+- Web 版（ウェブ アプリケーション型のクライアント・backend がログイン情報を持つ・同意の窓）は別途。
+- 段 6（サンプルプラグイン）・段 7（H60 セッション型）・段 8（ステータスバー）は未着手。

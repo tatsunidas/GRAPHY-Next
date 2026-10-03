@@ -60,4 +60,14 @@ class ComputeEndpointRegistryTest {
         r.replaceAll(List.of(in("lab", "https://gpu.example.org")));
         assertFalse(r.all().toString().contains("tok-lab"));
     }
+
+    @Test
+    void colabEntriesUseColabAuth_andUnknownKindIsRejected() {
+        ComputeEndpointRegistry r = new ComputeEndpointRegistry();
+        assertTrue(r.replaceAll(List.of(new ComputeEndpointRegistry.Incoming("colab", "Colab T4",
+                "https://8080-m-s-x.prod.colab.dev", "rt", "colab"))).isEmpty());
+        assertEquals(JupyterEndpoint.Auth.COLAB, r.get("colab").orElseThrow().endpoint().auth());
+        assertFalse(r.replaceAll(List.of(new ComputeEndpointRegistry.Incoming("x", "X", "https://a.org", "t", "ssh")))
+                .isEmpty());
+    }
 }

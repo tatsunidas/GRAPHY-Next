@@ -55,9 +55,7 @@ public final class KernelChannel implements AutoCloseable {
                               Duration timeout) {
         KernelChannel ch = new KernelChannel(mapper);
         WebSocket.Builder b = http.newWebSocketBuilder().connectTimeout(timeout);
-        if (ep.authorization() != null) {
-            b.header("Authorization", ep.authorization());
-        }
+        ep.headers().forEach(b::header);
         try {
             ch.ws = b.buildAsync(ep.kernelChannels(kernelId, ch.session), ch.new Receiver())
                     .get(timeout.toMillis(), TimeUnit.MILLISECONDS);
