@@ -17,15 +17,21 @@
  * `viewer2d.menu`（＝「プラグイン」メニュー）とは**出る場所だけ**が違い、host の中身は同一。
  * 本体の解析機能と並ぶ位置なので、**本体が区切り線と「（プラグイン）」の印を付ける**
  * — プラグイン側で名前に「プラグイン」と入れる必要はない（二重に出る）。
+ *
+ * <p>`viewer2d.xa3d` は **3D QCA のダイアログの中**にボタンとして出す（**H63・0.3.7 以降**）。
+ * ダイアログは全画面の背景を持ちメニューを押せないので、「再構成を見ながら解析を掛ける」
+ * （QFR など）にはこの面が要る。押してもダイアログは閉じない。host の中身は `viewer2d.menu` と同一。
+ * 旧本体はこの面を知らないだけで、宣言しても害は無い（`contributes` で絞るだけ）。
  */
 export type PluginSurface =
   | "viewer2d.menu"
   | "viewer2d.menu.analysis"
   | "viewer2d.toolbar"
+  | "viewer2d.xa3d"
   | "mainscreen.menu";
 
 /** 2D Viewer 系サーフェス（host の形が同じもの）。 */
-export type Viewer2DSurface = "viewer2d.menu" | "viewer2d.menu.analysis" | "viewer2d.toolbar";
+export type Viewer2DSurface = "viewer2d.menu" | "viewer2d.menu.analysis" | "viewer2d.toolbar" | "viewer2d.xa3d";
 
 /**
  * 2D Viewer プラグインから使える表示中タイルへの操作（安定サブセット）。
@@ -440,6 +446,21 @@ export interface VesselProvenance {
   anchorReprojectionPx: number;
   /** 2 方向の角度差 [deg]。 */
   separationDeg: number;
+  /** 方向ごとのフレーム番号（0 origin）。`seriesUids` と同じ並び。**H62**。 */
+  frameIndices: number[];
+}
+
+/**
+ * 中心線の向き。**H62**。
+ *
+ * 🔴 `points` は**描いた順**で、近位→遠位は保証されない。`proximalFirst: true` は
+ * 利用者が 3D QCA のダイアログで近位端を選んだとき**だけ**立つ（そのとき本体は
+ * `points[0]` が近位になるよう並べ替えて渡す）。null は「誰も確かめていない」。
+ * 圧力を近位から積む解析は、null のまま計算しないこと。
+ */
+export interface VesselOrientation {
+  proximalFirst: true | null;
+  source: "user" | null;
 }
 
 /**
@@ -449,7 +470,16 @@ export interface VesselProvenance {
  * 本体はモデルを渡し、返ってきた値を色で見せるだけ。
  */
 export interface VesselModel {
+  /** セッション内の鍵。🔴 本体の URL（ポート）を含み、**起動し直すと変わる**。保存の鍵にしない。 */
   runId: string;
+  /**
+   * 起動し直しても変わらない鍵（SOPInstanceUID・フレーム番号・解析区間から作る）。**H62**。
+   * 解析入力を `saveStore` に残して引き当てるのはこちら。SOP が取れなければ null。
+   * 向きを反転しても変わらない。
+   */
+  stableKey: string | null;
+  /** 中心線の向き。**H62**。 */
+  orientation: VesselOrientation;
   kind: "xa-qca3d" | "xa-bifurcation3d";
   label: string;
   segments: VesselSegment[];
@@ -468,6 +498,10 @@ export interface VesselModelSummary {
   diameterCalibrated: boolean;
   /** 最も弱い縮退区分（1 方向でも近似なら "approximate"）。 */
   tier: "calibrated" | "approximate" | "uncalibrated";
+  /** {@link VesselModel.stableKey}。**H62**。 */
+  stableKey: string | null;
+  /** {@link VesselOrientation.proximalFirst}。**H62**。 */
+  proximalFirst: true | null;
   at: number;
 }
 
