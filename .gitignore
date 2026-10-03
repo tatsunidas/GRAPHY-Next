@@ -17,6 +17,7 @@ desktop/resources/backend/
 desktop/resources/jre/
 desktop/resources/ffmpeg/
 desktop/resources/dcm4che/
+desktop/resources/bundled-plugins/
 desktop/dist/
 
 # --- IDE ---

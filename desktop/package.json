@@ -23,6 +23,7 @@
       { "from": "resources/jre", "to": "jre" },
       { "from": "resources/ffmpeg", "to": "ffmpeg" },
       { "from": "resources/dcm4che", "to": "dcm4che" },
+      { "from": "resources/bundled-plugins", "to": "bundled-plugins" },
       { "from": "uninstall", "to": "uninstall" }
     ],
     "linux": { "target": ["AppImage"] },

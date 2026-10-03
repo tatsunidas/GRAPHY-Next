@@ -180,6 +180,103 @@ public class PluginManagerService {
         return installer.install(zip, new InstalledPlugin.Source("file", filename), null, "local");
     }
 
+    // --- 同梱の公式プラグイン（fw/plugin-manager-design.md §10） ----------------
+
+    /** 同梱の導入の結果。{@code installed=false} のときは {@code reason} が理由。 */
+    public record BundledOutcome(String id, String version, boolean installed, String reason) {}
+
+    /**
+     * インストーラに同梱した公式プラグインを入れる（起動時に {@link BundledPluginInstaller} が呼ぶ）。
+     *
+     * <p>🔴 <b>公式鍵（trusted-keys）の署名が通ったものだけ</b>を入れる。署名が無い・別の鍵・壊れているものは入れない。
+     * 通常の導入と同じ検証（{@link #evaluateSignature}）と導入（{@link PluginInstaller#install}）を通る。
+     *
+     * <p>利用者の「導入を許可する」（オプトイン）は見ない: 同梱は当社が署名して配るもので、確認画面なしで入る
+     * {@code verified} と同じ扱い。管理者ゲート（standalone ＋ manager-enabled）は見る（施設が一律禁止したい場合）。
+     *
+     * <p>一度入れた（提示した）同梱プラグインは {@code bundled.json} に残し、<b>利用者が消したら入れ直さない</b>。
+     * 同梱から入ったものが古ければ、新しい同梱で上げる（別の経路で入れたものは触らない）。
+     *
+     * @param zipPath {@code <id>-<version>.zip}。隣に {@code .minisig} が要る（{@code .sha256} があれば照合する）
+     */
+    public BundledOutcome installBundled(Path zipPath) throws IOException {
+        byte[] bytes = java.nio.file.Files.readAllBytes(zipPath);
+        String base = PluginPackage.manifestBasePrefix(bytes);
+        PluginDescriptor desc = PluginPackage.readDescriptor(bytes, base, mapper);
+        String id = desc.id();
+        String version = desc.version();
+        if (!canOptIn()) return new BundledOutcome(id, version, false, "manager-disabled");
+        Path sigPath = zipPath.resolveSibling(zipPath.getFileName() + ".minisig");
+        if (!java.nio.file.Files.isRegularFile(sigPath)) return new BundledOutcome(id, version, false, "unsigned");
+        SignatureState sig = evaluateSignature(bytes, java.nio.file.Files.readString(sigPath), null, id);
+        if (!"trusted".equals(sig.state())) {
+            return new BundledOutcome(id, version, false, "not-official: " + sig.state()
+                    + (sig.problem() == null ? "" : " (" + sig.problem() + ")"));
+        }
+        Path shaPath = zipPath.resolveSibling(zipPath.getFileName() + ".sha256");
+        String expected = java.nio.file.Files.isRegularFile(shaPath)
+                ? java.nio.file.Files.readString(shaPath).trim().split("\\s+")[0] : null;
+
+        BundledRecord seen = new BundledRecord(installer.pluginsDir().resolve("bundled.json"), mapper);
+        Optional<InstalledPlugin> cur = installer.installed().stream().filter(p -> p.id().equals(id)).findFirst();
+        if (cur.isEmpty()) {
+            if (seen.contains(id)) return new BundledOutcome(id, version, false, "removed-by-user");
+        } else {
+            InstalledPlugin c = cur.get();
+            if (c.source() == null || !"bundled".equals(c.source().type())) {
+                return new BundledOutcome(id, version, false, "installed-otherwise");
+            }
+            if (SemVer.parse(c.version()).compareTo(SemVer.parse(version)) >= 0) {
+                seen.put(id, version);
+                return new BundledOutcome(id, version, false, "up-to-date");
+            }
+        }
+        String keyText = props.getTrustedKeys().stream().filter(k -> {
+            try {
+                return Minisign.parseKey(k).keyId().equalsIgnoreCase(sig.keyId());
+            } catch (PluginInstallException e) {
+                return false;
+            }
+        }).findFirst().orElse(null);
+        installer.install(bytes, new InstalledPlugin.Source("bundled", zipPath.getFileName().toString()),
+                expected, "verified", sig.keyId(), keyText);
+        seen.put(id, version);
+        log.info("[plugin-manager] bundled plugin installed: {} {}", id, version);
+        return new BundledOutcome(id, version, true, cur.isEmpty() ? "installed" : "updated");
+    }
+
+    /** 同梱から一度でも提示した id と版（{@code <pluginsDir>/bundled.json}）。消されたことを知るために使う。 */
+    static final class BundledRecord {
+        private final Path file;
+        private final ObjectMapper mapper;
+        private final java.util.Map<String, String> map;
+
+        BundledRecord(Path file, ObjectMapper mapper) throws IOException {
+            this.file = file;
+            this.mapper = mapper;
+            java.util.Map<String, String> m = new java.util.TreeMap<>();
+            if (java.nio.file.Files.isRegularFile(file)) {
+                m.putAll(mapper.readValue(file.toFile(),
+                        new com.fasterxml.jackson.core.type.TypeReference<java.util.Map<String, String>>() {}));
+            }
+            this.map = m;
+        }
+
+        boolean contains(String id) {
+            return map.containsKey(id);
+        }
+
+        void put(String id, String version) throws IOException {
+            if (version.equals(map.get(id))) return;
+            map.put(id, version);
+            java.nio.file.Files.createDirectories(file.getParent());
+            Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
+            mapper.writerWithDefaultPrettyPrinter().writeValue(tmp.toFile(), map);
+            java.nio.file.Files.move(tmp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+        }
+    }
+
     /** 同意画面で提示した成果物と、いま導入しようとしているものが同一であることを保証する。 */
     private void requireConfirmed(byte[] bytes, String confirmedSha256) {
         if (confirmedSha256 == null || confirmedSha256.isBlank()) return; // 未指定＝検査を経ていない呼び出し

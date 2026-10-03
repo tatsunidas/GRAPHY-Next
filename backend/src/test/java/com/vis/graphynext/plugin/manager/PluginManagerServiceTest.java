@@ -468,4 +468,72 @@ class PluginManagerServiceTest {
         assertTrue(!service(dir, fakeClient(pluginZip()), false, "standalone", true).managerStatus().canOptIn());
         assertTrue(!service(dir, fakeClient(pluginZip()), true, "web", true).managerStatus().canOptIn());
     }
+
+    // --- 同梱の公式プラグイン（installBundled） --------------------------------
+
+    private static byte[] versionedZip(String version) throws Exception {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        try (ZipOutputStream zos = new ZipOutputStream(baos)) {
+            zos.putNextEntry(new ZipEntry("plugin.json"));
+            zos.write(("{\"id\":\"vis-acme\",\"name\":\"Acme\",\"version\":\"" + version + "\","
+                    + "\"contributes\":[\"viewer2d.menu\"],\"ui\":\"ui.js\","
+                    + "\"engines\":{\"graphy\":\">=0.2.0 <0.3.0\"}}").getBytes(StandardCharsets.UTF_8));
+            zos.closeEntry();
+            zos.putNextEntry(new ZipEntry("ui.js"));
+            zos.write("export function activate(h){}".getBytes(StandardCharsets.UTF_8));
+            zos.closeEntry();
+        }
+        return baos.toByteArray();
+    }
+
+    /** 同梱の置き場に zip（と、key があれば .minisig）を書く。 */
+    private static Path bundle(Path dir, String version, MinisignFixture key) throws Exception {
+        Files.createDirectories(dir);
+        byte[] zip = versionedZip(version);
+        Path p = dir.resolve("vis-acme-" + version + ".zip");
+        Files.write(p, zip);
+        if (key != null) Files.writeString(dir.resolve(p.getFileName() + ".minisig"), key.sign(zip, "vis-acme-" + version));
+        return p;
+    }
+
+    @Test
+    void bundledOfficialPluginInstallsWithoutTheUserOptIn(@TempDir Path dir) throws Exception {
+        MinisignFixture official = new MinisignFixture("98ea7c6ba2d50118");
+        // 利用者は「導入を許可する」を ON にしていない
+        PluginManagerService svc = service(dir.resolve("plugins"), null, true, "standalone", false, List.of(official.publicKey()));
+        PluginManagerService.BundledOutcome r = svc.installBundled(bundle(dir.resolve("bundled"), "1.0.0", official));
+        assertTrue(r.installed(), r.reason());
+        InstalledPlugin p = svc.installed().get(0);
+        assertEquals("vis-acme", p.id());
+        assertEquals("verified", p.trust());
+        assertEquals("bundled", p.source().type());
+        assertTrue(Files.readString(dir.resolve("plugins").resolve("bundled.json")).contains("vis-acme"));
+    }
+
+    @Test
+    void bundledPluginMustBeSignedByTheOfficialKey(@TempDir Path dir) throws Exception {
+        MinisignFixture official = new MinisignFixture("98ea7c6ba2d50118");
+        MinisignFixture other = new MinisignFixture("00112233445566cc");
+        PluginManagerService svc = service(dir.resolve("plugins"), null, true, "standalone", false, List.of(official.publicKey()));
+        assertEquals("unsigned", svc.installBundled(bundle(dir.resolve("a"), "1.0.0", null)).reason());
+        assertTrue(svc.installBundled(bundle(dir.resolve("b"), "1.0.0", other)).reason().startsWith("not-official"));
+        assertTrue(svc.installed().isEmpty());
+        // 管理者ゲートが閉じていれば入れない
+        PluginManagerService gated = service(dir.resolve("plugins2"), null, false, "standalone", false, List.of(official.publicKey()));
+        assertEquals("manager-disabled", gated.installBundled(bundle(dir.resolve("c"), "1.0.0", official)).reason());
+    }
+
+    @Test
+    void bundledPluginIsNotReinstalledAfterTheUserRemovedIt_butIsUpdatedWhileInstalled(@TempDir Path dir) throws Exception {
+        MinisignFixture official = new MinisignFixture("98ea7c6ba2d50118");
+        PluginManagerService svc = service(dir.resolve("plugins"), null, true, "standalone", true, List.of(official.publicKey()));
+        assertTrue(svc.installBundled(bundle(dir.resolve("v1"), "1.0.0", official)).installed());
+        assertEquals("up-to-date", svc.installBundled(bundle(dir.resolve("v1b"), "1.0.0", official)).reason());
+        PluginManagerService.BundledOutcome up = svc.installBundled(bundle(dir.resolve("v2"), "1.1.0", official));
+        assertEquals("updated", up.reason());
+        assertEquals("1.1.0", svc.installed().get(0).version());
+        svc.uninstall("vis-acme");
+        assertEquals("removed-by-user", svc.installBundled(bundle(dir.resolve("v3"), "1.2.0", official)).reason());
+        assertTrue(svc.installed().isEmpty());
+    }
 }

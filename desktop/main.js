@@ -172,6 +172,13 @@ function resolveDataDir() {
   return dir;
 }
 
+/** 同梱の公式プラグインの置き場を backend に渡す引数（無ければ空）。開発では GRAPHY_BUNDLED_PLUGINS_DIR で試せる。 */
+function bundledPluginsArgs() {
+  const dir = process.env.GRAPHY_BUNDLED_PLUGINS_DIR
+    || (app.isPackaged ? path.join(process.resourcesPath, "bundled-plugins") : null);
+  return dir && fs.existsSync(dir) ? [`--graphy.plugins.bundled-dir=${dir}`] : [];
+}
+
 function startBackend() {
   // 沈黙の検出はここを起点にする（external モードでは backend の出力が来ないため、
   // 初期化しないと「起動直後に無応答」と誤判定してしまう）。
@@ -217,6 +224,9 @@ function startBackend() {
       jar,
       `--spring.profiles.active=${PROFILE}`,
       `--server.port=${PORT}`,
+      // 同梱の公式プラグイン（配布物に resources/bundled-plugins があるときだけ。backend が起動時に、
+      // 公式鍵の署名を確かめてから入れる。利用者が消したものは入れ直さない）。fw/plugin-manager-design.md §10
+      ...bundledPluginsArgs(),
     ],
     { cwd: dataDir, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GRAPHY_MAIN_SECRET: MAIN_SECRET } },
   );

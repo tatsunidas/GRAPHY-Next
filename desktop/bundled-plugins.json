@@ -1,0 +1,6 @@
+{
+  "_comment": "インストーラに同梱する公式プラグイン（GitHub Release の版）。リリースのワークフローが取得し、公式鍵の署名を確かめてから入れる。設計: fw/plugin-manager-design.md §10",
+  "plugins": [
+    { "repo": "tatsunidas/graphy-next-plugin-monai", "version": "0.1.0" }
+  ]
+}
