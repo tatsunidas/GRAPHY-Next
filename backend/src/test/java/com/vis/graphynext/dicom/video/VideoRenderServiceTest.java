@@ -208,6 +208,46 @@ class VideoRenderServiceTest {
         assertEquals("29.970000", VideoRenderService.formatFps(29.97));
     }
 
+    /** 最上位のボックス（型 + 中身の長さ）を並べた MP4 もどき。 */
+    private static byte[] boxes(int... payloadSizes) {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        String[] types = {"ftyp", "moov", "mdat", "free"};
+        for (int i = 0; i < payloadSizes.length; i++) {
+            int size = 8 + payloadSizes[i];
+            out.writeBytes(java.nio.ByteBuffer.allocate(4).putInt(size).array());
+            out.writeBytes(types[i % types.length].getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+            out.writeBytes(new byte[payloadSizes[i]]);
+        }
+        return out.toByteArray();
+    }
+
+    @Test
+    void trimDicomPad_removesOnlyTheEvenLengthPadByte(@TempDir Path dir) throws IOException {
+        // 奇数長の MP4（7 + 8 + 8 = 23）に DICOM の埋め草 0 が 1 バイト → 24 バイト。外れて 23 になる
+        Path padded = dir.resolve("padded.mp4");
+        byte[] mp4 = boxes(7, 0, 0);
+        Files.write(padded, java.util.Arrays.copyOf(mp4, mp4.length + 1));
+        assertTrue(VideoRenderService.trimDicomPad(padded));
+        assertEquals(mp4.length, Files.size(padded));
+
+        // 偶数長の MP4（埋め草なし）は触らない
+        Path even = dir.resolve("even.mp4");
+        Files.write(even, boxes(8, 0));
+        assertTrue(!VideoRenderService.trimDicomPad(even));
+        assertEquals(24, Files.size(even));
+
+        // 余りが 0 でない・ボックスの並びと合わないときは触らない（中身を削らない）
+        Path notZero = dir.resolve("notzero.mp4");
+        byte[] nz = java.util.Arrays.copyOf(mp4, mp4.length + 1);
+        nz[nz.length - 1] = 7;
+        Files.write(notZero, nz);
+        assertTrue(!VideoRenderService.trimDicomPad(notZero));
+        Path broken = dir.resolve("broken.mp4");
+        byte[] br = java.util.Arrays.copyOf(mp4, mp4.length + 3);
+        Files.write(broken, java.util.Arrays.copyOf(br, br.length - (br.length % 2)));
+        assertTrue(!VideoRenderService.trimDicomPad(broken));
+    }
+
     @Test
     void cacheName_sanitizesPathSeparators() {
         assertEquals("1.2.3", VideoRenderService.cacheName("1.2.3"));
