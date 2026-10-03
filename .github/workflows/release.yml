@@ -14,8 +14,6 @@ jobs:
   verify-version:
     name: Verify tag == code version
     runs-on: ubuntu-latest
-    outputs:
-      notes: ${{ steps.notes.outputs.notes }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,7 +42,7 @@ jobs:
           fi
           echo "OK: すべての版数がタグ ($tag) と一致しています。"
       # 新機能／バグ修正などに分けたリリースノート（PR タイトルの feat:/fix: で分類）。
-      # 各ジョブのアップロードで同じ本文を渡すので、どのジョブがリリースを作っても同じになる。
+      # 本文は下書きを作るときに一度だけ付ける。
       - name: リリースノートを作る
         id: notes
         shell: bash
@@ -57,6 +55,18 @@ jobs:
             python3 scripts/release-notes.py "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY"
             echo "RELEASE_NOTES_EOF"
           } >> "$GITHUB_OUTPUT"
+      # 公開はせず下書きを作る。下書きのインストーラを実機で入れて確かめてから、人が
+      # `gh release edit vX.Y.Z --draft=false` で公開する（fw/release-checklist.md）。
+      # 下書きは releases/latest に出ないので、製品サイト・RSS・更新通知メールは公開まで動かない。
+      - name: 下書きのリリースを作る
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ steps.notes.outputs.notes }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+              --title "$GITHUB_REF_NAME" --notes "$NOTES"
 
   # Web 配布物: UI を同梱した実行可能 jar
   web-jar:
@@ -87,12 +97,12 @@ jobs:
           ver="${GITHUB_REF_NAME#v}"
           cp backend/target/graphy-next-backend-plugin-api.jar "backend/target/graphy-plugin-api-${ver}.jar"
       - name: Upload to release
-        uses: softprops/action-gh-release@v2
-        with:
-          body: ${{ needs.verify-version.outputs.notes }}
-          files: |
-            backend/target/graphy-next-backend.jar
-            backend/target/graphy-plugin-api-*.jar
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber \
+            backend/target/graphy-next-backend.jar backend/target/graphy-plugin-api-*.jar
 
   # デスクトップ配布物: 各 OS で Electron インストーラをビルド
   desktop:
@@ -155,7 +165,7 @@ jobs:
       - name: Install desktop deps & build installer
         working-directory: desktop
         shell: bash
-        # アップロードは softprops が担うため electron-builder 側は publish しない
+        # アップロードは gh release upload が担うため electron-builder 側は publish しない
         # （--publish never＋GH_TOKEN 非注入で app-update.yml 生成/repository 解決を回避）。
         run: |
           npm install
@@ -170,10 +180,11 @@ jobs:
         shell: bash
         run: node scripts/check-packaged.js dist
       - name: Upload installers
-        uses: softprops/action-gh-release@v2
-        with:
-          body: ${{ needs.verify-version.outputs.notes }}
-          files: |
-            desktop/dist/*.AppImage
-            desktop/dist/*.exe
-            desktop/dist/*.dmg
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          files=(desktop/dist/*.AppImage desktop/dist/*.exe desktop/dist/*.dmg)
+          (( ${#files[@]} )) || { echo "no installer in desktop/dist"; exit 1; }
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber "${files[@]}"
