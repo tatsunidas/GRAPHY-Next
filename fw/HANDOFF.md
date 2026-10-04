@@ -10,6 +10,38 @@
 > - 壊れた版は同じ番号で焼き直さず、下書きに戻して次の版を出す
 > - 同じ日に v0.3.3 でも**製品版だけ動画が真っ黒**（CSP に `media-src` が無かった・dev は CSP を入れないので動く）→ v0.3.4。**実機で動画を 1 本開くまで確かめる**
 
+> ## ▶ 2026-10-04 10:06（pop-os）— ✅ **公式プラグインの署名を 3 台共通の手順にした・過去リリースに後付け・下書きリリースに統一**
+>
+> 正本 **`fw/plugin-signing-runbook.md` §6〜6.2**、全機共通の要点はハーネスのスキル **`/graphy-plugin-signing`**。
+>
+> **0. 次にやること**
+> - Windows 機・Mac 機: `~/graphy-signing/` に `graphy-plugins.key`・`graphy-plugins.pub`・`.env`（`MINISIGN_PASSWORD=…`）を本人が置き、
+>   `python3 scripts/plugin-signing/graphy_sign.py check` が `OK:` になるか確かめる（**パスフレーズを stdin で渡せるかは Linux でしか確認していない**）
+> - 次にどれかのプラグインでタグを切ったら、**下書きの Release ができること**を確かめる（`draft: true` は未実測）。公開後に「GitHub から導入」で `verified` を見る
+> - uvs の初回リリース（`v0.6.x`）の後、環境変数 `GRAPHY_PLUGINS_GITHUBTOKEN` でトークンを渡した本体から導入できるか確かめる（未確認）
+>
+> **1. 現在の状態**
+> - `scripts/plugin-signing/graphy_sign.py`（#202）: `check` / `setup-repo` / `sign-release [--upload]` / `sign-file`。パスフレーズは `~/graphy-signing/.env` か環境変数から読み stdin でだけ渡す
+> - secrets 登録済み（9 リポジトリ）: monai・art・dosimetry・aneurysm-detector・gemini-findings・mean-filter・hello・angio-quant・UltrasoundVideoSummarization-Web。各リポジトリの手動実行（署名だけの dry-run）は全部緑・Release は増えていない
+> - 9 リポジトリの release.yml を monai の形に統一: 鍵が無ければ止める／公開前に `minisign -V`／`workflow_dispatch` は dry-run／**Release は下書き**
+> - 後付け署名済み 8 本（zip は作り直さず `.minisig`＋`minisign.pub` を追加・取り直して検証済み）: art v0.1.0、dosimetry v0.1.1、aneurysm-detector v0.1.0・v0.1.1、gemini-findings v0.2.0・v0.2.1、mean-filter v0.1.0、hello v0.1.0
+> - 実機: main をビルドした本体（専用ポート）で art を「GitHub から導入」→ 確認画面なし・信頼欄 `verified`（スクリーンショットで確認）
+> - monai v0.1.0 は公開済み（2026-10-04・署名つき）。angio-quant はリリース無し（初回から署名される）
+> - uvs（UltrasoundVideoSummarization-Web・private）は `release-graphy-plugin.yml` で GitHub Release 配布に切替（#2）。手動実行で JAR・ui.js・zip・署名まで通った
+>
+> **2. 決めたこと・理由**
+> - 署名は CI（タグ push）で行う。開発機は secrets 登録と後付けだけ（鍵を CI に置くのは 1 回で済み、手元で署名する場面を減らす）
+> - パスフレーズは各機の `.env`（`chmod 600`）。3 台に置く代償として、その機が乗っ取られると鍵を守るものが無い（ユーザー判断）
+> - プラグインのリリースも本体（#199）と同じ: タグ → 下書き → 下書きの zip を現行の公開版の本体で確認 → `gh release edit --draft=false`
+> - private なプラグイン（dosimetry・aneurysm-detector・angio-quant・uvs）はトークンで配る（`graphy.plugins.github-token`）
+> - uvs は private のモノレポのまま。**このリポジトリの `v*` タグと Release はプラグイン専用**（本体は v 付きタグの最大版の最初の `.zip` を入れるため）
+>
+> **3. 未解決・注意点**
+> - 🔴 Claude は秘密鍵・`.env`・パスフレーズを読まない・表示しない。パスフレーズを入れるコマンドを `!` で頼まない（TTY が無く止まる）
+> - uvs で `setup-repo` が「minisign.pub が無い」と警告するのは、スクリプトが直下しか見ないため（実物は `graphy-plugin/minisign.pub`・署名は通る）
+> - 第三者向けの雛形 `examples/plugin-template/.github/workflows/release.yml` は署名任意・即公開のまま（公式用ではないので変えていない）
+> - ポート 8099 の java は論文ベンチ（`graphy-paper/bench/.run/sa036rc`）のもの。触らない
+
 > 更新日: 2026-09-27（**再開はすぐ下の「▶ ここから再開」から**）
 >
 > ## ▶ 2026-09-27 — 🚧 **どの AI が来ても設定だけで足せるようにした（段 5・`feat/ai-routing-general`）**
