@@ -151,6 +151,14 @@ cp ~/graphy-signing/graphy-plugins.pub <リポジトリ>/minisign.pub
 
 `release.yml` は monai（`tatsunidas/graphy-next-plugin-monai`）の形に揃える: 鍵が無ければ止める・
 公開前に `minisign -V`・`workflow_dispatch` は署名と検証だけの dry-run（Release を作らない）。
+Release は本体と同じく**下書き**（`draft: true`）。下書きの zip を現行の公開版の本体に入れて確かめてから
+`gh release edit v<版> --draft=false` で公開し、公開後に「GitHub から導入」で信頼欄が `verified` になるのを見る
+（下書きは利用者の本体から見えない）。
+
+**private なリポジトリのプラグイン**は、本体がトークンなしでは Release を読めない（HTTP 404）。
+配るときは利用者の本体に、そのリポジトリを読める GitHub トークン（fine-grained PAT・Contents: Read-only）を
+`graphy.plugins.github-token`（環境変数なら `GRAPHY_PLUGINS_GITHUBTOKEN`）で設定してもらう。
+2026-10-04 時点で private なのは dosimetry・aneurysm-detector・angio-quant・UltrasoundVideoSummarization-Web（uvs）。
 
 ### 6.1 開発機の準備（各機 1 回）
 
