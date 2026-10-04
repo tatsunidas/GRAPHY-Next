@@ -78,6 +78,15 @@ const resolved = new Map<string, XaCalibration | null>();
  */
 const calibrationPayloads = new Map<string, { type: string; scale: number }>();
 
+/** 校正が変わったときに呼ぶもの（画面が ROI の統計を作り直すため）。 */
+const calibrationListeners = new Set<() => void>();
+
+/** 人の校正が変わったら知らせる。返り値で解除。 */
+export function subscribeXaCalibration(fn: () => void): () => void {
+  calibrationListeners.add(fn);
+  return () => calibrationListeners.delete(fn);
+}
+
 /** 人が確定した校正を設定する（A4 のカテーテル校正 UI から呼ぶ）。 */
 export function setXaUserCalibration(seriesUid: string, calib: XaUserCalibration | null): void {
   if (calib) userCalibrations.set(seriesUid, calib);
@@ -85,6 +94,15 @@ export function setXaUserCalibration(seriesUid: string, calib: XaUserCalibration
   // calibration 種別（mm/px の別）も校正で変わるので**両方**捨てる。
   resolved.clear();
   calibrationPayloads.clear();
+  // 🔴 ROI の統計（長さ・面積）も作り直させる。画素の位置は校正で変わらない（world の基準は画像の間隔のまま）ので、
+  //    頂点の署名だけでは作り直しが起きない（以前は画素の位置が誤って変わっていたので、たまたま作り直されていた）。
+  for (const fn of calibrationListeners) {
+    try {
+      fn();
+    } catch {
+      /* 購読側の失敗で校正を止めない */
+    }
+  }
 }
 
 /** 人が確定した校正を取り出す。 */

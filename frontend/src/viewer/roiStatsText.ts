@@ -57,7 +57,7 @@ export function formatMeanSd(s: RoiValueStats, t: TFn): string {
 
 /** 面積の表示（mm² が無ければ px²）。出せなければ null。 */
 export function formatArea(r: RoiStatsResult): string | null {
-  if (r.geometry.areaMm2 !== undefined) return `${formatNumber(r.geometry.areaMm2)} mm²`;
+  if (r.geometry.areaMm2 !== undefined) return `${formatNumber(r.geometry.areaMm2)} mm²${calibSuffix(r)}`;
   if (r.geometry.areaPx2 !== undefined) return `${formatNumber(r.geometry.areaPx2)} px²`;
   return null;
 }
@@ -75,9 +75,14 @@ export function formatPixelCoord(g: RoiGeometryStats): string | null {
   return `(${p[0]}, ${p[1]})`;
 }
 
+/** mm の後ろに付ける空間校正の種別（例 " User"）。DICOM の PixelSpacing なら空。 */
+function calibSuffix(r: RoiStatsResult): string {
+  return r.spatialCalibration ? ` ${r.spatialCalibration}` : "";
+}
+
 /** 長さ（閉なら周囲長・開なら線長）の表示。出せなければ null。 */
 export function formatLength(r: RoiStatsResult): string | null {
-  if (r.geometry.perimeterMm !== undefined) return `${formatNumber(r.geometry.perimeterMm)} mm`;
+  if (r.geometry.perimeterMm !== undefined) return `${formatNumber(r.geometry.perimeterMm)} mm${calibSuffix(r)}`;
   if (r.geometry.perimeterPx !== undefined) return `${formatNumber(r.geometry.perimeterPx)} px`;
   return null;
 }

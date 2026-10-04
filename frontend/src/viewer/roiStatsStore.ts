@@ -38,7 +38,7 @@ import {
 } from "./pixelCalibration";
 import { roiPointsPx, type PointPx } from "./roiRead";
 import { computeRoiStatsFrom, type RoiStatsResult } from "./roiStats";
-import { worldToImageCoords } from "./imageCoords";
+import { worldSpacingOf, worldToImageCoords } from "./imageCoords";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
@@ -111,11 +111,15 @@ function resolveInputs(ann: Any): Resolved | null {
   const spacingX = numOrNull(plane?.columnPixelSpacing);
   const spacingY = numOrNull(plane?.rowPixelSpacing);
   // 幾何(IPP/IOP)が無いシリーズ（XA）でも頂点を失わない換算は roiRead に集約してある。
+  // 🔴 幾何の無いシリーズで world → 画素に戻すときは「world の基準の間隔」（画像が作られたときの間隔）で割る。
+  //    imagePlaneModule の値（校正値）で割ると、読み込みの後で校正した XA で画素の位置が 1/mmPerPx 倍に膨らみ、
+  //    長さが px の値のまま mm と出ていた（fw/viewer-2d-architecture.md「画素間隔の縦横と…」）。
+  const basis = worldSpacingOf(refImageId);
   const pointsPx = roiPointsPx(
     world,
     (w) => worldToImageCoords(refImageId, w as [number, number, number]) as PointPx,
-    spacingX,
-    spacingY,
+    basis.col,
+    basis.row,
   );
   if (!pointsPx.length) return null;
 
@@ -128,6 +132,17 @@ function resolveInputs(ann: Any): Resolved | null {
     spacingY,
     unit: resolveValueUnit(refImageId),
   };
+}
+
+/** 計測ラベルに出す空間校正の種別（Cornerstone の calibratedPixelSpacing の type。出す種類は Cornerstone の計測ツールと同じ）。 */
+const SHOWN_CALIBRATION_TYPES = new Set(["User", "Proj", "Calibrated", "ERMF", "Error", "Unknown"]);
+function spatialCalibrationType(imageId: string): string | null {
+  try {
+    const c = metaData.get("calibratedPixelSpacing", imageId) as { type?: unknown } | undefined;
+    return typeof c?.type === "string" && SHOWN_CALIBRATION_TYPES.has(c.type) ? c.type : null;
+  } catch {
+    return null;
+  }
 }
 
 function numOrNull(v: unknown): number | null {
@@ -196,6 +211,8 @@ function computeWithSlice(
     withProfile: !!detail.withProfile,
     withHistogram: !!detail.withHistogram,
   });
+  const calibType = spatialCalibrationType(r.refImageId);
+  if (calibType && result) result.spatialCalibration = calibType;
   store(uid, ann?.data, { result, signature: signatureOf(r) });
   return result;
 }

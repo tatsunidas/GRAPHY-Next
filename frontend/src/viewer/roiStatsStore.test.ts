@@ -25,6 +25,7 @@ vi.mock("@cornerstonejs/core", () => ({
 // world → 画素は自前の変換（./imageCoords）を通る。ここでは恒等写像に差し替える。
 vi.mock("./imageCoords", () => ({
   worldToImageCoords: (_id: string, w: number[]) => [w[0], w[1]] as [number, number],
+  worldSpacingOf: () => ({ row: 0.5, col: 0.5 }),
 }));
 
 vi.mock("@cornerstonejs/tools", () => ({

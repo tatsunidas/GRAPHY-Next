@@ -79,6 +79,7 @@ import { fetchSettings } from "../settings/settingsApi";
 import { applyGlobalLabelmapStyle, applyGlobalAnnotationStyle } from "../viewer/cornerstoneSetup";
 import { parseRoiStatsDisplay, setRoiStatsDisplay } from "../viewer/roiStatsDisplay";
 import { installRoiStatsWatcher, invalidateAllRoiStats } from "../viewer/roiStatsStore";
+import { subscribeXaCalibration } from "../viewer/xaCalibrationProvider";
 import { installRoiStatsDisplayWatcher } from "../viewer/roiStatsTextBox";
 import { Viewer2DToolbar, type ViewerActions } from "./Viewer2DToolbar";
 import {
@@ -958,6 +959,8 @@ function TileGrid({
   // 校正が変われば統計は嘘になる。SUV 校正の変更で全 ROI を再計算させる
   // （`roiPersistence.ts` の「古い統計を持ち回らない」と同じ方針）。
   useEffect(() => subscribeSuvStore(() => invalidateAllRoiStats()), []);
+  // XA の空間校正（カテーテル・定規）が変わったら ROI の統計も作り直す（長さ・面積の単位と値が変わる）
+  useEffect(() => subscribeXaCalibration(() => invalidateAllRoiStats()), []);
   /**
    * seriesUid → studyUid（H10 / H21 で `studyUid` 省略時に使う）。
    *

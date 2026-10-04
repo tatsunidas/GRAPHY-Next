@@ -63,8 +63,9 @@ async function lengthLabels(page: Page): Promise<string[]> {
 
 /** 計測値を数値と単位に分解する。 */
 function parseMeasure(label: string): { value: number; unit: string; type: string | null } | null {
-  // Cornerstone は校正種別を単位に付ける（"2.00 mm User" / "318 px"）。
-  const m = /([\d.]+)\s*(mm|px)(?:\s+(\S+))?/.exec(label);
+  // 校正種別は単位の後ろに付く（"2 mm User" / "318 px"）。ラベルの行は区切り無しで連結されて届く
+  // （"2 mm User平均: …"）ので、種別は英字だけを取る。
+  const m = /([\d.]+)\s*(mm|px)(?:\s+([A-Za-z]+))?/.exec(label);
   return m ? { value: Number(m[1]), unit: m[2], type: m[3] ?? null } : null;
 }
 
