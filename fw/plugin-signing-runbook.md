@@ -11,10 +11,11 @@
 | 1 | アプリ側の署名検証の実装 | ✅ 完了（PR #71 / #73 / #74） |
 | 2 | 公式配布鍵の生成（`minisign -G`） | ✅ 完了。鍵 ID **`98EA7C6BA2D50118`** |
 | 3 | 公開鍵を `application.yml` の `trusted-keys` に登録 | ✅ 完了（PR #75）。`OfficialTrustedKeyTest` が退行を検知する |
-| 4 | 自社の公式プラグイン用リポジトリへ secrets を登録 | ⏸ **配布を始めるときに実施 → §6** |
-| 5 | 実際に署名付きリリースを出して動作確認 | ⏸ 同上 → §7 |
+| 4 | 自社の公式プラグイン用リポジトリへ secrets を登録 | ✅ monai（2026-10-04）。ほかは `graphy_sign.py setup-repo` で順次 → §6 |
+| 5 | 実際に署名付きリリースを出して動作確認 | ✅ monai v0.1.0（2026-10-04・CI で署名と検証） → §7 |
+| 6 | 開発機 3 台（Linux / Windows / Mac）で同じ手順にする | `scripts/plugin-signing/graphy_sign.py` → §6.1 |
 
-**秘密鍵とパスフレーズは生成した本人の手元にのみある**（リポジトリにも CI にもエージェントにも渡していない）。
+**秘密鍵とパスフレーズは本人が各開発機に置く**（リポジトリにもエージェントにも渡さない。CI には secrets としてだけ入る）。
 
 ### 誰の鍵の話をしているのか（混同しやすい）
 
@@ -73,6 +74,9 @@ minisign -G -p minisign.pub -s minisign.key
 - **オフラインのバックアップを 2 か所**（例: 暗号化 USB ＋ 金庫、あるいはパスワードマネージャの
   セキュアノート）。クラウドの平文ストレージに置かない。
 - パスフレーズは鍵ファイルと**別の場所**に保管する。
+- 開発機（3 台）に置く場合は §6.1 の場所に置き、所有者だけが読める権限にする。パスフレーズを
+  `.env` に置くと、その開発機が乗っ取られたときに鍵を守るものが無くなる（3 台に置くことを選んだ代償）。
+  オフラインのバックアップは別に持つ。
 - リリース CI に載せる場合は GitHub の repository secrets へ:
   - `MINISIGN_SECRET_KEY` … `minisign.key` の中身そのまま
   - `MINISIGN_PASSWORD` … パスフレーズ
@@ -134,16 +138,55 @@ graphy:
 > **当社が所有するリポジトリから公式プラグインを配布する場合にのみ**適用する。
 > 第三者作者は §5 のとおり**自分の鍵**を使う（当社の鍵は渡さない・預からない）。
 
-自社の公式プラグインを配るリポジトリで、1 回だけ:
+自社の公式プラグインを配るリポジトリで、1 回だけ（§6.1 の準備が済んだ開発機ならどれでも）:
 
 ```bash
-cd <当社が所有するプラグインのリポジトリ>
-cp ~/graphy-signing/graphy-plugins.pub minisign.pub   # 公開鍵はコミットしてよい
-git add minisign.pub && git commit -m "add signing public key" && git push
-
-gh secret set MINISIGN_SECRET_KEY < ~/graphy-signing/graphy-plugins.key
-gh secret set MINISIGN_PASSWORD            # プロンプトでパスフレーズを入力
+python3 scripts/plugin-signing/graphy_sign.py setup-repo tatsunidas/<リポジトリ>
+# 公開鍵が無いと言われたら、そのリポジトリに minisign.pub としてコミットする
+cp ~/graphy-signing/graphy-plugins.pub <リポジトリ>/minisign.pub
 ```
+
+`setup-repo` は先に手元で署名と検証を試し、通ったときだけ `MINISIGN_SECRET_KEY` と
+`MINISIGN_PASSWORD` を登録する（間違ったパスフレーズを secrets に入れない）。
+
+`release.yml` は monai（`tatsunidas/graphy-next-plugin-monai`）の形に揃える: 鍵が無ければ止める・
+公開前に `minisign -V`・`workflow_dispatch` は署名と検証だけの dry-run（Release を作らない）。
+
+### 6.1 開発機の準備（各機 1 回）
+
+| | Linux | Windows | Mac |
+|---|---|---|---|
+| minisign | 公式の静的バイナリを `/usr/local/bin` へ | 公式の Windows 用 zip を展開して PATH へ | `brew install minisign` |
+| 置き場所 | `~/graphy-signing/` | `%USERPROFILE%\graphy-signing\` | `~/graphy-signing/` |
+
+置くもの（本人がオフラインのバックアップから写す。チャット・メール・クラウドの平文で運ばない）:
+
+- `graphy-plugins.key`（秘密鍵）・`graphy-plugins.pub`（公開鍵）
+- `.env` … `MINISIGN_PASSWORD=<パスフレーズ>` の 1 行
+- Linux / Mac は `chmod 600 ~/graphy-signing/graphy-plugins.key ~/graphy-signing/.env`
+
+確かめる（GRAPHY-Next の作業コピーで）:
+
+```bash
+python3 scripts/plugin-signing/graphy_sign.py check
+```
+
+手元で署名し、公式の公開鍵（本体の `trusted-keys` と照合）で検証できれば OK。
+環境変数 `MINISIGN_PASSWORD` / `MINISIGN_SECRET_KEY_FILE` / `MINISIGN_PUBLIC_KEY_FILE` / `MINISIGN_BIN`
+があれば `.env` と既定の場所より優先する。
+
+### 6.2 既存のリリースや手元の zip に署名する
+
+```bash
+# 署名の無い過去のリリース: zip は作り直さず .minisig と minisign.pub を足す（既定は dry-run）
+python3 scripts/plugin-signing/graphy_sign.py sign-release tatsunidas/<リポジトリ> v0.1.0
+python3 scripts/plugin-signing/graphy_sign.py sign-release tatsunidas/<リポジトリ> v0.1.0 --upload
+# 手渡しする zip
+python3 scripts/plugin-signing/graphy_sign.py sign-file dist/<id>-<ver>.zip
+```
+
+`sign-release` は `.sha256` と照合してから署名し、trusted comment は CI と同じ `<id>-<ver>`。
+既に `.minisig` がある版には何もしない。
 
 自社で複数の公式プラグインを配るなら **organization secret** にまとめてもよい
 （`gh secret set --org <当社の org> MINISIGN_SECRET_KEY < ...`）。組織外へは共有されない。
