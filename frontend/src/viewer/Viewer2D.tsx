@@ -97,7 +97,7 @@ import { dsaNativeImageId, dsaStateForImageId, readXaDsaTags } from "./dsaLoader
 // H40: シネの時間軸。**決定そのものは既存の単一入口に委譲する**（規則を 2 か所に持たない）。
 import { readXaCineSource } from "./xaCine";
 import { frameStartTimesMs, isUniformFrameTime, resolveXaFps } from "./xaCineTiming";
-import { worldToImageCoords } from "./imageCoords";
+import { worldSpacingOf, worldToImageCoords } from "./imageCoords";
 
 type ViewSnapshot = { transform: ViewTransform; voi: { lower: number; upper: number } | null };
 
@@ -2157,11 +2157,13 @@ export function Viewer2D({
       // 🚨 **XA には幾何（IPP/IOP）が無いことがある**。そのとき `worldToImageCoords` は
       //    1 点も変換できず、**計測が丸ごと落ちる**（実機で判明・2026-08-25）。
       //    その換算は `roiRead.roiPointsPx()` に集約してある（統計エンジンも同じものを通る）。
+      // 幾何の無いシリーズの換算は world の基準の間隔で（計測の sx/sy＝校正値とは別。読み込みの後の校正でずれる）
+      const basis = worldSpacingOf(refId);
       const points = roiPointsPx(
         world,
         (w) => worldToImageCoords(refId, w as Types.Point3) as [number, number],
-        sx,
-        sy,
+        basis.col,
+        basis.row,
       );
       if (!points.length) continue;
       const stats = readRoiStats(a.data?.cachedStats, refId);

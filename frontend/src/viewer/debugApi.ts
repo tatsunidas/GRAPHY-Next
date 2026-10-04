@@ -5,14 +5,16 @@
 import { cache, getRenderingEngine, metaData } from "@cornerstonejs/core";
 import { ENGINE_ID } from "./Viewer2D";
 import { readCamera, readColormapName, readInvert, readVoiWindow } from "./viewportRead";
-import { annotation as csAnnotation } from "@cornerstonejs/tools";
+import { annotation as csAnnotation, utilities as csToolsUtilities } from "@cornerstonejs/tools";
 import { getRoiStats, getRoiStatsByData } from "./roiStatsStore";
 import {
   getVesselModel,
   listVesselModels,
   putVesselAnalysis,
 } from "../plugins/pluginVesselApi";
-import { calibrationForImageId } from "./xaCalibrationProvider";
+import { calibrationForImageId, loaderSpacingFor, setXaUserCalibration } from "./xaCalibrationProvider";
+import { getViewerContext } from "./viewerContext";
+import { worldToImageCoords } from "./imageCoords";
 import type { Geometry3DPixelStats } from "./vtkGeometryView";
 
 /**
@@ -806,9 +808,108 @@ function getRoiStatsPair(): Array<{
   });
 }
 
+/**
+ * 画素間隔の照合（fw/viewer-2d-architecture.md「world の基準の間隔」）。表示中の各ビューポートについて、
+ * Cornerstone が画像に付けた間隔・描画の間隔・imagePlaneModule（校正の差し込み後）・loaderSpacingFor を並べ、
+ * 既知の画素 (10, 20) の中心を描画の world へ写してから、各経路で画素へ戻した値を返す（正しければ 10.5, 20.5）。
+ */
+function getSpacingProbe() {
+  const engine = getRenderingEngine(ENGINE_ID);
+  if (!engine) return [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return engine.getViewports().map((vp: any) => {
+    const id = vp.getCurrentImageId?.() as string | undefined;
+    if (!id) return { viewportId: vp.id, imageId: null };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const img = cache.getImage(id) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const plane = metaData.get("imagePlaneModule", id) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const d = vp.getImageData?.() as any;
+    const calib = calibrationForImageId(id);
+    const loader = loaderSpacingFor(id);
+    let world: number[] | null = null;
+    try {
+      world = Array.from(d.imageData.indexToWorld([10, 20, 0]) as number[]);
+    } catch { /* ignore */ }
+    const round = (v: number) => Math.round(v * 1e4) / 1e4;
+    const via = (fn: () => ArrayLike<number> | null | undefined) => {
+      try {
+        const r = fn();
+        return r ? [round(r[0]), round(r[1])] : null;
+      } catch {
+        return null;
+      }
+    };
+    return {
+      viewportId: vp.id,
+      imageId: id,
+      imageSpacing: img ? { row: img.rowPixelSpacing ?? null, col: img.columnPixelSpacing ?? null } : null,
+      renderSpacing: d?.spacing ? Array.from(d.spacing as number[]) : null,
+      planeModule: plane ? { row: plane.rowPixelSpacing ?? null, col: plane.columnPixelSpacing ?? null, ipp: plane.imagePositionPatient ?? null } : null,
+      loaderSpacing: loader,
+      calibration: calib ? { tier: calib.tier, source: calib.source, mmPerPxRow: calib.mmPerPxRow, mmPerPxCol: calib.mmPerPxCol } : null,
+      world,
+      // Length ツールと同じ計算で、横 40 画素・縦 20 画素の線を測る（表示 = world の長さ ÷ scale）
+      lengths: (() => {
+        try {
+          const w = (i: number, j: number) => Array.from(d.imageData.indexToWorld([i, j, 0]) as number[]);
+          const len = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+          const h = [w(10, 20), w(50, 20)];
+          const v = [w(10, 20), w(10, 40)];
+          const uh = csToolsUtilities.getCalibratedLengthUnitsAndScale(d, [[10, 20, 0], [50, 20, 0]]);
+          const uv = csToolsUtilities.getCalibratedLengthUnitsAndScale(d, [[10, 20, 0], [10, 40, 0]]);
+          return {
+            horizontal40px: { value: round(len(h[0], h[1]) / uh.scale), unit: uh.unit, scale: uh.scale },
+            vertical20px: { value: round(len(v[0], v[1]) / uv.scale), unit: uv.unit, scale: uv.scale },
+          };
+        } catch (e) {
+          return { error: String(e) };
+        }
+      })(),
+      // 既知の画素 (10, 20) の中心（左上隅 0 の座標で 10.5, 20.5）に戻るか
+      back: world ? {
+        imageCoords: via(() => worldToImageCoords(id, world as [number, number, number])),
+        fallbackPlane: via(() => [world![0] / (plane?.columnPixelSpacing || 1), world![1] / (plane?.rowPixelSpacing || 1)]),
+        fallbackLoader: via(() => [world![0] / loader.col, world![1] / loader.row]),
+      } : null,
+    };
+  });
+}
+
+/**
+ * 読み込みの後で校正した場合（カテーテル・定規）の照合。表示中のシリーズに人の校正 {@code mmPerPx} を一時的に入れ、
+ * 計測ツールに渡る倍率で横 40 画素・縦 20 画素の線を測る（world は作り直されない）。終わったら校正を外す。
+ */
+function probeUserCalibration(mmPerPx: number) {
+  const engine = getRenderingEngine(ENGINE_ID);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const vp = engine?.getViewports()[0] as any;
+  const id = vp?.getCurrentImageId?.() as string | undefined;
+  const series = vp ? getViewerContext(vp.id)?.seriesUid : undefined;
+  if (!vp || !id || !series) return null;
+  setXaUserCalibration(series, { mmPerPx, method: "catheter", note: "probe" });
+  try {
+    const payload = metaData.get("calibratedPixelSpacing", id) as { type: string; scale: number } | undefined;
+    const d = vp.getImageData();
+    const w = (i: number, j: number) => Array.from(d.imageData.indexToWorld([i, j, 0]) as number[]);
+    const len = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+    const sc = payload?.scale || 1;
+    return {
+      payload,
+      horizontal40px: Math.round((len(w(10, 20), w(50, 20)) / sc) * 1e4) / 1e4,
+      vertical20px: Math.round((len(w(10, 20), w(10, 40)) / sc) * 1e4) / 1e4,
+    };
+  } finally {
+    setXaUserCalibration(series, null);
+  }
+}
+
 declare global {
   interface Window {
     __graphyDebug?: {
+      getSpacingProbe: typeof getSpacingProbe;
+      probeUserCalibration: typeof probeUserCalibration;
       getRoiStatsPair: typeof getRoiStatsPair;
       getImagePixelRange: typeof getImagePixelRange;
       getPixelStats: typeof getPixelStats;
@@ -952,6 +1053,8 @@ let installed = false;
 export function installDebugApi(): void {
   if (installed || !import.meta.env.DEV) return;
   window.__graphyDebug = {
+    getSpacingProbe,
+    probeUserCalibration,
     getRoiStatsPair,
     getImagePixelRange,
     getPixelStats,

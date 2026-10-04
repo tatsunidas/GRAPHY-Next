@@ -16,6 +16,7 @@ import {
   worldToPixelOnPlane,
   type PointPx,
 } from "./roiRead";
+import { worldToImageOnPlane } from "./imageCoords";
 
 /** 中心 (cx,cy)・半径 r(px) の円を n 点で近似（RECIST 検証用のデジタルファントムと同じ形）。 */
 function circlePx(cx: number, cy: number, r: number, n: number): PointPx[] {
@@ -424,14 +425,32 @@ describe("worldToPixelOnPlane", () => {
         const w = pixelToWorld(px, py, c.ipp, c.iop, c.row, c.col);
         const back = worldToPixelOnPlane(w, c.ipp, c.iop, c.row, c.col);
         expect(back).not.toBeNull();
-        expect(back![0]).toBeCloseTo(px, 9);
-        expect(back![1]).toBeCloseTo(py, 9);
+        // 画素の左上隅が 0 の座標（DICOM の画素 (px,py) の中心は px+0.5, py+0.5）
+        expect(back![0]).toBeCloseTo(px + 0.5, 9);
+        expect(back![1]).toBeCloseTo(py + 0.5, 9);
       }
     });
   }
 
-  it("原点（IPP）は画素 (0,0)", () => {
-    expect(worldToPixelOnPlane([10, -20, 30], [10, -20, 30], [1, 0, 0, 0, 1, 0], 1, 1)).toEqual([0, 0]);
+  it("原点（IPP）は画素 (0,0) の中心＝左上隅から (0.5, 0.5)", () => {
+    expect(worldToPixelOnPlane([10, -20, 30], [10, -20, 30], [1, 0, 0, 0, 1, 0], 1, 1)).toEqual([0.5, 0.5]);
+  });
+
+  it("ビューアの換算（imageCoords.worldToImageOnPlane）と同じ値になる（非等方・斜めの面）", () => {
+    // メイン画面の匿名化（この関数）とビューアの匿名化（imageCoords）が同じ画素を塗ること
+    const ipp = [-120.5, 33.2, 7.0];
+    const s2 = Math.SQRT1_2;
+    const iop = [s2, s2, 0, 0, 0, -1];
+    const row = 0.9, col = 0.6; // PixelSpacing = [行間隔 0.9（縦）, 列間隔 0.6（横）]
+    for (const w of [[-100, 40, 2], [-118, 35.1, -10], [-90.25, 61.5, 0.4]]) {
+      const a = worldToPixelOnPlane(w, ipp, iop, row, col)!;
+      const b = worldToImageOnPlane(
+        { imagePositionPatient: ipp, rowCosines: iop.slice(0, 3), columnCosines: iop.slice(3, 6), rowPixelSpacing: row, columnPixelSpacing: col },
+        w,
+      );
+      expect(a[0]).toBeCloseTo(b[0], 9);
+      expect(a[1]).toBeCloseTo(b[1], 9);
+    }
   });
 
   it("幾何が無い / 画素間隔が無いときは null（捏造しない）", () => {

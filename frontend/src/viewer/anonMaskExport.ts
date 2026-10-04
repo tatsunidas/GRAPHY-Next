@@ -29,7 +29,7 @@ import { roiPointsPx, type PointPx } from "./roiRead";
 import { buildRoiMesh, pickSampleKind } from "./roiStats";
 import { frameOfImageId, sopFromImageId, sopUidFromImageId } from "./imageId";
 import type { AnonMaskPolygon } from "../api";
-import { worldToImageCoords } from "./imageCoords";
+import { worldSpacingOf, worldToImageCoords } from "./imageCoords";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Any = any;
@@ -169,13 +169,14 @@ export function annotationsToMaskPolygons(roiUids: readonly string[]): MaskExpor
       skipped.push({ roiUid, tool, reason: "noVertices" });
       continue;
     }
-    const plane = metaData.get("imagePlaneModule", refId) as Any;
     // 幾何(IPP/IOP)が無いシリーズ（XA）でも頂点を失わない換算は roiRead に集約してある。
+    // world の基準の間隔で戻す（imagePlaneModule の校正値ではない。読み込みの後で校正した XA でずれる）
+    const basis = worldSpacingOf(refId);
     const pointsPx = roiPointsPx(
       world,
       (w) => worldToImageCoords(refId, w as [number, number, number]) as PointPx,
-      numOrNull(plane?.columnPixelSpacing),
-      numOrNull(plane?.rowPixelSpacing),
+      basis.col,
+      basis.row,
     );
     const r = maskPolygonFrom(tool, pointsPx, ann?.data?.contour?.closed as boolean | undefined, refId);
     if ("polygon" in r) {
@@ -197,6 +198,3 @@ export function seriesUidOfRoi(roiUid: string): string | null {
   return typeof uid === "string" && uid ? uid : null;
 }
 
-function numOrNull(v: unknown): number | null {
-  return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
-}

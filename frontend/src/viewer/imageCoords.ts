@@ -21,7 +21,7 @@
  * 上流と同じ「画素の左上隅が 0」の連続座標（画素 i の中心が i + 0.5）を返す。
  * 等方画素では上流と**同じ値**になるので、呼び出し側の他の前提は変わらない。
  */
-import { metaData } from "@cornerstonejs/core";
+import { cache, metaData } from "@cornerstonejs/core";
 
 type V3 = [number, number, number];
 
@@ -88,4 +88,25 @@ export function worldToImageCoords(imageId: string, world: ArrayLike<number>): [
 /** `utilities.imageToWorldCoords` の置き換え。 */
 export function imageToWorldCoords(imageId: string, ic: ArrayLike<number>): V3 {
   return imageToWorldOnPlane(planeOf(imageId), ic);
+}
+
+/**
+ * **world の基準の間隔**（行＝縦, 列＝横）。幾何（IPP/IOP）の無い画像で world を画素へ戻すとき（world ＝ 画素 × この間隔）に使う。
+ *
+ * <p>world は「画像オブジェクトが作られたときの間隔」で決まる。読み込みの後で校正した（カテーテル・定規）ときは
+ * imagePlaneModule には校正値が入るが、画像は作り直されないので world は前の間隔のまま。**imagePlaneModule の値で割らない**
+ * （割ると画素の位置が 1/mmPerPx 倍に膨らむ。fw/viewer-2d-architecture.md「画素間隔の縦横と…」）。
+ * 画像が無ければ imagePlaneModule（作られるときに入る値）、それも無ければ 1。
+ */
+export function worldSpacingOf(imageId: string): { row: number; col: number } {
+  let img: { rowPixelSpacing?: number | null; columnPixelSpacing?: number | null } | undefined;
+  try {
+    img = cache.getImage(imageId) as typeof img;
+  } catch {
+    img = undefined; // テストの差し替えなど cache が無い環境
+  }
+  const pos = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 1);
+  if (img) return { row: pos(img.rowPixelSpacing), col: pos(img.columnPixelSpacing) };
+  const m = metaData.get("imagePlaneModule", imageId) as { rowPixelSpacing?: number; columnPixelSpacing?: number } | undefined;
+  return { row: pos(m?.rowPixelSpacing), col: pos(m?.columnPixelSpacing) };
 }

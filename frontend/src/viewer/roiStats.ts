@@ -110,6 +110,11 @@ export interface RoiProfile {
 export interface RoiStatsResult {
   roiUid: string;
   tool: string;
+  /**
+   * 空間校正の種別（Cornerstone の表記: `User`＝カテーテル・定規、`Proj`＝幾何倍率・検出器面、`Calibrated` など）。
+   * mm の長さ・面積の後ろに出す（どの校正で測った値かを計測そのものに出す。angio-design §7.4）。DICOM の PixelSpacing なら無し。
+   */
+  spatialCalibration?: string;
   /** どの画像で計算したか。グローバル ROI（z:"all"）では「いま見ているスライス」を指す。 */
   imageId: string;
   geometry: RoiGeometryStats;

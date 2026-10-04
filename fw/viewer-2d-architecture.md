@@ -340,3 +340,39 @@ SeriesDescription が化ける。**シリーズ一覧は正しく出る**。
 > **今後 dicom-parser でテキストを読むときは、必ず `readDicomString` を使うこと。**
 > `dataSet.string()` を直接呼ぶと同じ化け方が再発する。数値・日付・コード値は ASCII なので
 > 実害は出ないが、読み方を 1 か所に揃えておく方が間違いが起きない。
+
+## 画素間隔の縦横と、校正した画像の world の基準 — 2026-10-04
+
+利用者の依頼で、a1641a11（非等方画素の world→画素の取り違え）を「DICOM の PixelSpacing は [行と行の間隔（縦）, 列と列の間隔（横）]」の観点で確かめた。
+
+- **縦横の扱いは正しい**: ローダ（dicom-image-loader 3.33.5）は `rowPixelSpacing = PixelSpacing[0]`（縦）・`columnPixelSpacing = PixelSpacing[1]`（横）、
+  描画は x に columnPixelSpacing・y に rowPixelSpacing。取り違えていたのは上流の `utilities.worldToImageCoords` / `imageToWorldCoords` だけで、
+  `viewer/imageCoords.ts` に置き換え済み（呼び出しは残っていない）。frontend 約 50 か所・backend 約 20 か所を洗い、ほかに取り違えは無い。
+- 🔴 **校正した画像では、world は「画像が作られたときの間隔」で決まる**（実機 `automator/src/spike/spacingCalibrationCheck.ts`・合成データ
+  `automator/fixtures/spacing-calib/`）。ローダは画像を作るときに `imagePlaneModule` を `xaCalibrationProvider` 経由で読むので、
+  **読み込みの時点で校正が決まる画像（ImagerPixelSpacing だけの DX・CR・MG、領域のある US、SID/SOD のある XA）は world が校正済みの mm** になる。
+  読み込みの後で校正した（カテーテル・定規）ときは、画像は作り直されないので world は前の間隔のまま。
+- **直した不具合（PR #196 の一般撮影・超音波の校正で表に出た）**:
+  1. 計測の倍率を「DICOM の PixelSpacing タグ ÷ 校正値」で出していたため、world が校正済みの画像でもう一度割り、
+     **DX（0.1 mm/px）の長さが 10 倍小さく**出ていた（SID/SOD の XA も同じ）。→ 割る基準を「画像に付いている間隔」（`loaderSpacingFor`）にした。
+  2. 超音波は、ローダが入れる領域（`calibrationModule` の sequenceOfUltrasoundRegions）で計測ツールがもう一度換算し、
+     **縦横の値が違う領域では単位が px** に落ちていた。→ 領域の値を注入するときは `calibrationModule` を空にする。
+  3. `loaderSpacingFor` は「DICOM の PixelSpacing（無ければ 1）」を返していた（XA の解析ダイアログが使う）。→ 画像に付いている間隔を返す。
+     画像があって間隔が無い（未校正で読み込んだ XA）ときは 1。
+  4. メイン画面の匿名化から作る焼き込みマスクが半画素ずれていた（`roiRead.worldToPixelOnPlane` が IPP を 0 にしていた。ビューア・塗る側は左上隅が 0）。
+  5. **読み込みの後で校正した XA の長さが px の値のまま mm と出ていた**（`xaCalibCheck` の [5b]。以前から落ちていた）。
+     幾何の無い画像で world を画素へ戻すときに imagePlaneModule の校正値で割っていたため、画素の位置が 1/mmPerPx 倍に膨らみ、
+     長さ＝膨らんだ画素の距離 × 校正値＝px の値になっていた（画素の値の統計も別の場所を読んでいた）。
+     → world を画素へ戻すときは `imageCoords.worldSpacingOf`（画像に付いている間隔）で割る（統計・匿名化マスク・プラグインへ渡す ROI）。
+  6. XA の空間校正を変えても ROI の統計が作り直されなかった（`invalidateAllRoiStats` は SUV の校正でしか呼ばれていなかった。
+     5 の誤りで画素の位置が変わっていたので、たまたま作り直されていた）。→ `subscribeXaCalibration` で知らせる。
+  7. 統計エンジンが計測ラベルを作るようになって（2026-08-27）から、校正の種別（`User`・`Proj` など）がラベルから消えていた。
+     → mm の長さ・面積の後ろに付ける（Cornerstone の計測ツールと同じ表記）。
+- XA の実機確認: `xaCalibCheck` 11/0（直す前は [5b][5c] が落ちていた）、`xaPhantomCheck` 104/0。
+  `xaQcaCheck` の [4c]（校正後の MLD）は main でも同じ値で落ちる既存の失敗: 305 px の線を 2 mm として校正（0.0066 mm/px）しているので
+  血管の径が 0.1 mm 程度になり MLD が 0 に丸まる。間隔の扱いの不具合ではない（スクリプトの校正の置き方を直す必要がある）。
+- 実機の結果（横 40 px・縦 20 px の線）: CT 24 / 18 mm、DX 0.2×0.1 で 4 / 4 mm（直す前 0.4 / 0.4 mm）、DX 0.143 で 5.72 / 2.86 mm、
+  US 0.2×0.1 で 4 / 4 mm（直す前は px）、US 0.1 で 4 / 2 mm、XA 未校正 40 / 20 px、XA SID1200/SOD800 で 8 / 4 mm、
+  読み込みの後でカテーテル校正 0.25 mm/px にすると 10 / 5 mm。
+- 参考: backend の `SeriesLayoutAssembler` などは `PixelSpacing` だけを読む。PixelSpacing の無い US / DX は backend の利用者
+  （radiomics・ImageJ・融合の DTO）からは「未校正」に見える（検出器面の値を患者面とみなさない）。
