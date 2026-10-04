@@ -19,7 +19,7 @@
  * <p>注入は「上書き」だけでなく「**取り消し**」も行う: 未校正と判定したら spacing を落として
  * px 表示に戻す。これが無いと「未校正なのに mm が出る」という一番危ない状態が残る。
  */
-import { Enums, metaData } from "@cornerstonejs/core";
+import { Enums, cache, metaData } from "@cornerstonejs/core";
 import { dsaNativeImageId } from "./dsaLoader";
 import { xaDataSetOf } from "./xaCine";
 import { readUsRegions, resolveUsCalibration } from "./usCalibration";
@@ -113,7 +113,6 @@ export function clearXaCalibrationCache(): void {
 function calibrationPayloadFor(
   imageId: string,
   calib: XaCalibration,
-  tags: XaCalibTags | null,
 ): { type: string; scale: number } {
   const hit = calibrationPayloads.get(imageId);
   if (hit) return hit;
@@ -135,8 +134,12 @@ function calibrationPayloadFor(
       type = CalibrationTypes.CALIBRATED;
     }
   }
-  // world 長 → 表示値の比。imagePlaneModule への注入だけでは world が変わらないのでここで渡す。
-  const scale = calibrationScaleFor(tags?.pixelSpacing?.[1] ?? null, calib.mmPerPxCol);
+  // world 長 → 表示値の比。🔴 割る基準は「**画像が作られたときの間隔**」（＝ world の基準。loaderSpacingFor）。
+  // 読み込みの時点で校正が決まっていれば imagePlaneModule への注入がそのまま world になるので倍率は 1、
+  // 読み込みの後で校正した（カテーテル・定規）なら world は前の間隔のままなので、その比を渡す。
+  // 以前は DICOM の PixelSpacing タグ（無ければ 1）で割っていて、PixelSpacing の無い DX・US では
+  // world（校正済みの mm）をもう一度割り、長さが「1 / 画素間隔」倍ずれていた（DX 0.1 mm/px で 10 倍小さい）。
+  const scale = calibrationScaleFor(loaderSpacingFor(imageId).col, calib.mmPerPxCol);
   const payload = { type, scale };
   calibrationPayloads.set(imageId, payload);
   return payload;
@@ -186,14 +189,29 @@ export function readXaCalibTags(imageId: string): XaCalibTags | null {
 }
 
 /**
- * **Cornerstone の world 座標が使っている**列/行 spacing。
+ * **Cornerstone の world 座標が使っている**列/行 spacing（＝**画像が作られたときの間隔**）。
  *
- * <p>🚨 world は「ローダが画像オブジェクトに付けた spacing」で決まる（DICOM の `PixelSpacing`、
- * 無ければ 1）。**`imagePlaneModule` へ注入した校正値ではない**。world ↔ 画像ピクセルの換算は
- * 必ずこちらを使うこと。校正値で割ると、校正した瞬間に座標が桁違いになる
- * （実機で「校正後に QCA が失敗し、古い結果が残る」形で出た）。
+ * <p>world は「ローダが画像オブジェクトを作ったときの `imagePlaneModule`」で決まる。ローダはこの provider を通して
+ * 読むので、**読み込みの時点で校正が決まっていれば、注入した校正値がそのまま world になる**
+ * （2026-10-04 に実機で確認: ImagerPixelSpacing だけの DX・領域のある US）。読み込みの後で校正した（カテーテル・定規）なら
+ * 画像は作り直されないので、world は前の間隔のまま（実機で「校正後に QCA が失敗し、古い結果が残る」形で出たのはこちら）。
+ * どちらの場合も正しいのは「画像オブジェクトに付いている間隔」なので、それを返す。world ↔ 画像ピクセルの換算は必ずこれを使う。
+ *
+ * <p>画像がまだ作られていなければ、作られるときに入る値（注入する校正値・無ければ DICOM の PixelSpacing・無ければ 1）を返す。
  */
 export function loaderSpacingFor(imageId: string): { row: number; col: number } {
+  const img = cache.getImage(imageId) as { rowPixelSpacing?: number | null; columnPixelSpacing?: number | null } | undefined;
+  if (img) {
+    // 🔴 画像がもう作られているなら、その間隔が world。間隔の無い画像（未校正で読み込んだ XA）は 1（world は px）。
+    //    ここで後から決まった校正値（カテーテル）を返すと、倍率が 1 になって「px の値に mm」を付けてしまう。
+    const r = img.rowPixelSpacing ?? 0;
+    const c = img.columnPixelSpacing ?? 0;
+    return { row: r > 0 ? r : 1, col: c > 0 ? c : 1 };
+  }
+  const calib = calibrationForImageId(imageId);
+  if (calib && calib.source !== "dicom-pixel-spacing" && calib.mmPerPxRow != null && calib.mmPerPxCol != null) {
+    return { row: calib.mmPerPxRow, col: calib.mmPerPxCol };
+  }
   const ps = readXaCalibTags(imageId)?.pixelSpacing;
   const row = ps && ps[0] > 0 ? ps[0] : 1;
   const col = ps && ps[1] > 0 ? ps[1] : 1;
@@ -242,7 +260,7 @@ export function registerXaCalibrationProvider(): void {
   registered = true;
 
   metaData.addProvider((type: string, ...query: unknown[]): unknown => {
-    if (type !== "imagePlaneModule" && type !== "calibratedPixelSpacing") return undefined;
+    if (type !== "imagePlaneModule" && type !== "calibratedPixelSpacing" && type !== "calibrationModule") return undefined;
     if (reentrant) return undefined;
     const imageId = query[0];
     if (typeof imageId !== "string") return undefined;
@@ -251,9 +269,16 @@ export function registerXaCalibrationProvider(): void {
     // CR の PixelSpacing 単独はローダの既定と同じ値。注入せず、ローダの挙動（単位 "mm"）をそのまま残す。
     if (calib.source === "dicom-pixel-spacing") return undefined;
 
+    // 超音波の領域: ローダは calibrationModule に領域（sequenceOfUltrasoundRegions）を入れ、計測ツールは
+    // 「world は px」とみなして PhysicalDelta で換算する。こちらは領域の値を imagePlaneModule に注入して world を mm に
+    // しているので、領域の換算を残すと二重になる（縦横の値が違う領域では単位が px に落ちる）。注入するときは外す。
+    if (type === "calibrationModule") {
+      return calib.source === "us-region" && calib.mmPerPxRow != null && calib.mmPerPxCol != null ? {} : undefined;
+    }
+
     // 計測ツールの単位（mm / px）はここで決まる。imagePlaneModule の spacing だけでは px にできない。
     if (type === "calibratedPixelSpacing") {
-      return calibrationPayloadFor(imageId, calib, readXaCalibTags(imageId));
+      return calibrationPayloadFor(imageId, calib);
     }
 
     reentrant = true;

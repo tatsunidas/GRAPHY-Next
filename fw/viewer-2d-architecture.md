@@ -340,3 +340,28 @@ SeriesDescription が化ける。**シリーズ一覧は正しく出る**。
 > **今後 dicom-parser でテキストを読むときは、必ず `readDicomString` を使うこと。**
 > `dataSet.string()` を直接呼ぶと同じ化け方が再発する。数値・日付・コード値は ASCII なので
 > 実害は出ないが、読み方を 1 か所に揃えておく方が間違いが起きない。
+
+## 画素間隔の縦横と、校正した画像の world の基準 — 2026-10-04
+
+利用者の依頼で、a1641a11（非等方画素の world→画素の取り違え）を「DICOM の PixelSpacing は [行と行の間隔（縦）, 列と列の間隔（横）]」の観点で確かめた。
+
+- **縦横の扱いは正しい**: ローダ（dicom-image-loader 3.33.5）は `rowPixelSpacing = PixelSpacing[0]`（縦）・`columnPixelSpacing = PixelSpacing[1]`（横）、
+  描画は x に columnPixelSpacing・y に rowPixelSpacing。取り違えていたのは上流の `utilities.worldToImageCoords` / `imageToWorldCoords` だけで、
+  `viewer/imageCoords.ts` に置き換え済み（呼び出しは残っていない）。frontend 約 50 か所・backend 約 20 か所を洗い、ほかに取り違えは無い。
+- 🔴 **校正した画像では、world は「画像が作られたときの間隔」で決まる**（実機 `automator/src/spike/spacingCalibrationCheck.ts`・合成データ
+  `automator/fixtures/spacing-calib/`）。ローダは画像を作るときに `imagePlaneModule` を `xaCalibrationProvider` 経由で読むので、
+  **読み込みの時点で校正が決まる画像（ImagerPixelSpacing だけの DX・CR・MG、領域のある US、SID/SOD のある XA）は world が校正済みの mm** になる。
+  読み込みの後で校正した（カテーテル・定規）ときは、画像は作り直されないので world は前の間隔のまま。
+- **直した不具合（PR #196 の一般撮影・超音波の校正で表に出た）**:
+  1. 計測の倍率を「DICOM の PixelSpacing タグ ÷ 校正値」で出していたため、world が校正済みの画像でもう一度割り、
+     **DX（0.1 mm/px）の長さが 10 倍小さく**出ていた（SID/SOD の XA も同じ）。→ 割る基準を「画像に付いている間隔」（`loaderSpacingFor`）にした。
+  2. 超音波は、ローダが入れる領域（`calibrationModule` の sequenceOfUltrasoundRegions）で計測ツールがもう一度換算し、
+     **縦横の値が違う領域では単位が px** に落ちていた。→ 領域の値を注入するときは `calibrationModule` を空にする。
+  3. `loaderSpacingFor` は「DICOM の PixelSpacing（無ければ 1）」を返していた（XA の解析ダイアログが使う）。→ 画像に付いている間隔を返す。
+     画像があって間隔が無い（未校正で読み込んだ XA）ときは 1。
+  4. メイン画面の匿名化から作る焼き込みマスクが半画素ずれていた（`roiRead.worldToPixelOnPlane` が IPP を 0 にしていた。ビューア・塗る側は左上隅が 0）。
+- 実機の結果（横 40 px・縦 20 px の線）: CT 24 / 18 mm、DX 0.2×0.1 で 4 / 4 mm（直す前 0.4 / 0.4 mm）、DX 0.143 で 5.72 / 2.86 mm、
+  US 0.2×0.1 で 4 / 4 mm（直す前は px）、US 0.1 で 4 / 2 mm、XA 未校正 40 / 20 px、XA SID1200/SOD800 で 8 / 4 mm、
+  読み込みの後でカテーテル校正 0.25 mm/px にすると 10 / 5 mm。
+- 参考: backend の `SeriesLayoutAssembler` などは `PixelSpacing` だけを読む。PixelSpacing の無い US / DX は backend の利用者
+  （radiomics・ImageJ・融合の DTO）からは「未校正」に見える（検出器面の値を患者面とみなさない）。
