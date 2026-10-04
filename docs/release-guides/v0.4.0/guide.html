@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>GRAPHY-Next v0.4.0 操作ガイド — 外部の GPU で AI を動かす</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../guide.css">
+</head>
+<body>
+
+<section class="page cover">
+  <div class="left">
+    <p class="eyebrow">GRAPHY-NEXT v0.4.0 / 操作ガイド</p>
+    <h1>Google Colab の GPU で<br>臓器を自動で分割する</h1>
+    <p class="lead">外部の計算機（Google Colab の GPU・自分で立てた Jupyter）でプラグインの計算を動かせるようになりました。公式プラグイン「MONAI Bundle」で、CT から臓器を分割して ROI マネージャに読み込めます。</p>
+    <div class="chips">
+      <span class="chip on">Colab GPU T4</span>
+      <span class="chip">匿名化してから送る</span>
+      <span class="chip">送る前に必ず確認</span>
+    </div>
+  </div>
+  <div class="panel">
+    <h3>準備（デスクトップ版のみ）</h3>
+    <ol class="steps">
+      <li><span class="n">01</span><p>環境設定 ＞ 外部の計算機 で <b>Google でログイン</b><small>計算機が未登録なら、最初の実行で Colab の GPU T4 が自動で登録されます</small></p></li>
+      <li><span class="n">02</span><p>スタディ一覧で患者 ID <b>HCC_001</b> を検索し、<b>#2 PRE LIVER</b> を 2D Viewer で開く</p></li>
+      <li><span class="n">03</span><p>メニュー「解析」→「<b>MONAI Bundle (remote GPU)</b>」<small>公式プラグインはインストーラに同梱され、初回起動で入ります</small></p></li>
+    </ol>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0　doi.org/10.7937/TCIA.5FNA-0924</span><span>1 / 5</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">STEP 1 / 環境設定 ＞ 外部の計算機</p>
+    <h2>Google でログインし、Colab の GPU を使えるようにする</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="settings"><img src="shots/settings.png" alt="環境設定の外部の計算機。Google のアカウントと Colab GPU T4 が既定として登録されている"></figure>
+    <div style="display:flex;flex-direction:column;gap:32px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>ログインした Google アカウントとプラン。計算はご自身の Colab の利用枠で行われます</p></li>
+        <li><span class="num">2</span><p><b>既定</b>の計算機。プラグインが計算機を指定しないときに使います（Colab の T4 があればそれ）</p></li>
+        <li><span class="num">3</span><p>ランタイムの確保・解放。実行するときは自動で確保します</p></li>
+      </ol>
+      <p class="callout">自分で立てた Jupyter Server も登録できます（トークンは OS の鍵束に保存）。</p>
+      <p class="note">無料版の Colab は医療情報の取り扱い（HIPAA 等）の対象外です。送るのは匿名化した画像とコードだけです。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。</span><span>2 / 5</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">STEP 2 / 送る前の確認（本体の窓）</p>
+    <h2>送り先・データ・実行するコードを、送る前に必ず確かめる</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="consent"><img src="shots/consent.png" alt="外部の計算機へ送る前の確認の窓"></figure>
+    <div style="display:flex;flex-direction:column;gap:32px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>送り先（あなたの Colab のランタイム）</p></li>
+        <li><span class="num">2</span><p>送るデータ。本体が<b>匿名化して</b>作り、SHA-256 を出します</p></li>
+        <li><span class="num">3</span><p>計算機で実行するコードの<b>全文</b></p></li>
+        <li><span class="num">4</span><p>確認のチェックを入れてから「送信する」</p></li>
+      </ol>
+      <p class="callout">この窓は本体が出します。プラグインからは出さずに済ませたり、書き換えたりできません。</p>
+      <p class="note">送ったこと・結果は監査ログ（compute-audit.jsonl）に残ります。画素は残しません。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。</span><span>3 / 5</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">STEP 3 / MONAI Bundle・#2 PRE LIVER</p>
+    <h2>モデルを選んで実行し、結果を ROI マネージャへ</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="monai"><img src="shots/monai.png" alt="MONAI Bundle の窓。全身 104 臓器のモデルで PRE LIVER を分割した結果"></figure>
+    <div style="display:flex;flex-direction:column;gap:16px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>モデルを選ぶ（MONAI Model Zoo の 8 本。合わない種類の画像には選べません）</p></li>
+        <li><span class="num">2</span><p>「実行」。Colab の上でモデルの説明を読み、使えるかを判定してから推論します</p></li>
+        <li><span class="num">3</span><p>所要時間・GPU・使ったメモリ</p></li>
+        <li><span class="num">4</span><p>結果の下見。臓器名つきで <b>ROI マネージャ</b>に読み込まれ、選んだラベルは <b>DICOM SEG</b> で保存できます</p></li>
+      </ol>
+      <table class="ops">
+        <tr><th style="width:76%">モデル</th><th>対象</th></tr>
+        <tr><td>全身 104・腹部 13 / 7 臓器</td><td>CT</td></tr>
+        <tr><td>脾臓・膵臓・腎臓</td><td>CT</td></tr>
+        <tr><td>前立腺・脳 133 領域</td><td>MR</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。モデルのライセンスはそれぞれの Bundle に従います。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>4 / 5</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">STEP 4 / 終わったら</p>
+    <h2>窓を閉じると、Colab の GPU を解放するかを聞かれる</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="release"><img src="shots/release.png" alt="Colab のランタイムを解放するかの確認"></figure>
+    <div style="display:flex;flex-direction:column;gap:32px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>「解放する」で Colab の利用枠を使わなくなります</p></li>
+        <li><span class="num">2</span><p>続けて計算するなら「確保したままにする」</p></li>
+      </ol>
+      <p class="callout">解放しても、次の「実行」で自動的に確保し直します（数秒〜数十秒）。</p>
+      <p class="note">アプリを閉じたときも解放されます。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。</span><span>5 / 5</span></div>
+</section>
+
+<script src="shots/marks.js"></script>
+<script src="../guide.js"></script>
+</body>
+</html>

@@ -95,13 +95,17 @@ async function shoot(tag: string): Promise<void> {
       async shot(page, name, targets = []) {
         await page.screenshot({ path: path.join(shotsDir, `${name}.png`) });
         const boxes: Mark[] = [];
+        // Electron の窓は viewportSize() が null なので、実際の大きさを測る
+        const vp = page.viewportSize() ?? (await page.evaluate(() => ({ width: innerWidth, height: innerHeight })));
         for (const t of targets) {
           const { at, side } = "at" in t ? t : { at: t, side: "top" as const };
           const b = await at.boundingBox();
           if (!b) throw new Error(`${name}: 番号を振る要素が画面にありません: ${at}`);
-          boxes.push({ x: b.x, y: b.y, w: b.width, h: b.height, side });
+          // 一部が画面の外にある要素（スクロールの途中など）は、見えている範囲で囲む
+          const x0 = Math.max(0, b.x), y0 = Math.max(0, b.y);
+          const x1 = Math.min(vp.width, b.x + b.width), y1 = Math.min(vp.height, b.y + b.height);
+          boxes.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0, side });
         }
-        const vp = page.viewportSize() ?? SCREEN;
         marks[name] = { width: vp.width, height: vp.height, marks: boxes };
         console.log(`撮影: ${name}.png（番号 ${boxes.length}）`);
       },
