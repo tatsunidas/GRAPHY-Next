@@ -151,6 +151,12 @@ async function main(): Promise<void> {
     await viewer.waitForTimeout(400);
     await dragOnCanvasHost(viewer, HOST, 90, 60, 0, 12, { fracX: 0.42, fracY: 0.35 });
     await viewer.waitForTimeout(1_200);
+    // 校正の線は**別に**短く引く（カテーテルの太さを横切る線のつもり。約 10 画面 px）。
+    // 🚨 以前は解析区間の長い線（約 275 px）をそのままカテーテル（2 mm）として校正していて、0.0073 mm/px という
+    //    あり得ない校正値になり、MLD が 0 に丸まっていた（[4c] が落ちていた）。
+    //    この線はカテーテルの上には無いので、ここで確かめるのは「校正の手順と単位」だけ。精度は xaCatheterCalibCheck（ファントム）。
+    await dragOnCanvasHost(viewer, HOST, 0, 10, 0, 8, { fracX: 0.25, fracY: 0.62 });
+    await viewer.waitForTimeout(800);
     await viewer.screenshot({ path: path.join(OUT_DIR, "0-segment.png") }).catch(() => {});
 
     // ── 条件 1: 解析 ────────────────────────────────────────────────
@@ -191,9 +197,16 @@ async function main(): Promise<void> {
     check(/Research Use Only|研究用/.test(dialogText), "[6] 研究用（Research Use Only）が出ている");
 
     // ── 校正してから再解析（条件 4b）────────────────────────────────
+    const calibOpts = await viewer.getByTestId("xa-calib-pick").locator("option").allTextContents();
+    const calibIdx = calibOpts.findIndex((o) => o.trim().startsWith("#2"));
+    await viewer.getByTestId("xa-calib-pick").selectOption(String(Math.max(0, calibIdx)));
+    check((await viewer.getByTestId("xa-calib-same-as-analysis").count()) === 0, "[4d] 校正に解析区間と別の線を使う（同じ線の警告が出ない）", calibOpts);
     await viewer.getByTestId("xa-catheter-fr").fill(String(CATHETER_FR));
     await viewer.getByTestId("xa-calibrate-catheter").click();
     await viewer.waitForTimeout(1_500);
+    const calibStatus = (await viewer.getByTestId("xa-calib-status").textContent()) ?? "";
+    const calibMmPerPx = Number(/\(([\d.]+) mm\/px\)/.exec(calibStatus)?.[1] ?? NaN);
+    check(calibMmPerPx > 0.05 && calibMmPerPx < 1, "[4e] 校正値が装置の現実的な範囲（0.05〜1 mm/px）", { calibStatus, calibMmPerPx });
     await viewer.getByRole("button", { name: /解析する|Analyze/ }).click();
     await viewer.waitForTimeout(6_000);
     const unit1 = await qcaUnit(viewer);
