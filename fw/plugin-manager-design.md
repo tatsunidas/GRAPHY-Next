@@ -422,5 +422,6 @@ PluginManagerService → PluginInstaller(release フック) → PluginRegistry#r
   - 同梱から入ったものが古ければ、新しい同梱で上げる。GitHub やファイルから入れたもの（`source.type` が `bundled` 以外）は触らない。
   - 1 つ失敗しても残りは続け、起動は止めない。
 - テスト: `PluginManagerServiceTest`（オプトインなしで入る・`verified`／署名なし・別の鍵は入れない・管理者ゲート／同じ版は入れ直さない・新しい版で上げる・消したら入れ直さない）。
-- ⚠ 実物（公式鍵で署名された zip）での通しは、`graphy-next-plugin-monai` の署名つきリリース（secrets の登録待ち）が出てから、インストーラで確かめる。
+- 実物での通し（2026-10-04）: `graphy-next-plugin-monai` v0.1.0（公式鍵で署名）の zip・sha256・minisig を同梱フォルダに置いて起動すると、`installed vis-monai v0.1.0 from bundled (verified)`・
+  台帳は `source.type = bundled`・`trust = verified`・鍵 ID `98EA7C6BA2D50118`、`bundled.json` に `vis-monai: 0.1.0`。インストーラでの通しは v0.4.0 の下書きで確かめる。
 
