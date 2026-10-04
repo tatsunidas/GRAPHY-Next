@@ -198,7 +198,7 @@ export function distanceMm(
 /**
  * IPP / IOP / 画素間隔から world(患者 LPS mm) → 画像画素座標。純関数。
  *
- * <p>Cornerstone の `worldToImageCoords` と同じものを、**Cornerstone が無い場所**でも
+ * <p>ビューアの {@link ./imageCoords.worldToImageOnPlane} と同じものを、**Cornerstone が無い場所**でも
  * 出せるようにするための実装。匿名化ダイアログ（MainScreen ウィンドウ）は 2D ビューアと
  * 別レンダラで、その画像を読み込んでいないため上流の変換器を呼べない。
  *
@@ -229,8 +229,11 @@ export function worldToPixelOnPlane(
   const dz = world[2] - ipp[2];
   if (!Number.isFinite(dx) || !Number.isFinite(dy) || !Number.isFinite(dz)) return null;
   // iop[0..2] = 列 index が増える向き（= x）、iop[3..5] = 行 index が増える向き（= y）。
-  const x = (dx * iop[0] + dy * iop[1] + dz * iop[2]) / (col as number);
-  const y = (dx * iop[3] + dy * iop[4] + dz * iop[5]) / (row as number);
+  // 🔴 返すのは「画素の左上隅が 0」の座標（IPP は画素 (0,0) の**中心**なので +0.5）。
+  //    ビューア側（viewer/imageCoords.ts）と、塗る側（backend PolygonRasterizer の contains(x+0.5, y+0.5)）と
+  //    同じ規約。以前は IPP を 0 にしていて、メイン画面から作る焼き込みマスクだけが縦横とも半画素ずれていた。
+  const x = (dx * iop[0] + dy * iop[1] + dz * iop[2]) / (col as number) + 0.5;
+  const y = (dx * iop[3] + dy * iop[4] + dz * iop[5]) / (row as number) + 0.5;
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
   return [x, y];
 }

@@ -76,8 +76,9 @@ describe("loadAnonRoiCandidates", () => {
     expect(candidates).toHaveLength(1);
     expect(candidates[0].label).toBe("右上ラベル");
     expect(candidates[0].seriesLabel).toBe("#3 AXIAL");
-    expect(candidates[0].polygon.xs).toEqual([10, 20, 20, 10]);
-    expect(candidates[0].polygon.ys).toEqual([10, 10, 20, 20]);
+    // 画素の左上隅が 0 の座標（IPP は画素 (0,0) の中心なので world 10 は 10.5）。ビューアの換算・塗る側と同じ規約
+    expect(candidates[0].polygon.xs).toEqual([10.5, 20.5, 20.5, 10.5]);
+    expect(candidates[0].polygon.ys).toEqual([10.5, 10.5, 20.5, 20.5]);
     // 適用先は SOP で指定する（index は並び順が変われば別スライスを塗る）。
     expect(candidates[0].polygon.sopInstanceUids).toEqual(["1.2.sop"]);
   });
