@@ -19,6 +19,7 @@ import { dismissStartupDialogs } from "../../common/dismissDialogs.js";
 import { DesktopDriver, DESKTOP_RUN_DATA_DIR } from "../../driver/desktopDriver.js";
 import { importPaths } from "../../fixtures/importFixtures.js";
 import { AUTOMATOR_ROOT } from "../../fixtures/manifest.js";
+import { openAnalysisPlugin } from "../../spike/computeSpikeShared.js";
 import type { Scenario } from "../run.js";
 
 const PLUGIN_ID = "vis-monai";
@@ -87,8 +88,7 @@ const scenario: Scenario = async ({ shot }) => {
     await viewer.getByTestId("series-viewer-root").first().waitFor({ state: "visible", timeout: 60_000 });
     await fit(viewer);
     await viewer.waitForTimeout(3_000);
-    await viewer.getByTestId("viewer2d-menu-analysis").click();
-    await viewer.getByTestId(`plugin-analysis-item-${PLUGIN_ID}`).click();
+    await openAnalysisPlugin(viewer, PLUGIN_ID);
     await viewer.getByTestId("monai-bundle").waitFor({ timeout: 10_000 });
     await viewer.getByTestId("monai-bundle").selectOption(BUNDLE);
     await viewer.getByTestId("monai-run").click();

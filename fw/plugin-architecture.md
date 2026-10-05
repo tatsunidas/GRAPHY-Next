@@ -74,6 +74,23 @@ GRAPHY と同様、プラグインは **どの画面のどのメニューに出�
 > 将来 surface は追加可能（例 `mpr.menu`, `slicer.menu`）。フロントは未知の surface を
 > 無視する（前方互換）。
 
+### 2.1.1 束ね先（`category`）— 2026-10-05・0.4.0 の次の版から
+
+`contributes` は「どの画面のどのメニューか」、**`category` は「その中でどう束ねるか」**。
+CT・MR の AI を増やしていく方針（開発計画 2026-10）なので、AI 系が解析メニューに平置きで
+並び続けないよう、`plugin.json` に任意の `"category": "ai"` を置けるようにした。
+
+| `category` | 2D ビューアでの出方 |
+|---|---|
+| `"ai"` | `viewer2d.menu`・`viewer2d.menu.analysis` の**どちらに宣言しても「解析 ＞ AI ▸」1 か所**にまとめる。両方宣言しても 1 回だけ。印「（プラグイン）」は付ける。AI が 0 件ならサブメニュー自体を出さない |
+| 未指定・未知の値 | 今までどおり宣言したサーフェスに平置き。未知の値は backend が warn を出して null にして配る（`PluginManifest.KNOWN_CATEGORIES`） |
+
+- 旧本体（0.4.0 以前）は `category` を知らない（`@JsonIgnoreProperties(ignoreUnknown=true)`）ので平置きのまま動く。
+- AI プラグインは **1 プラグイン＝メニュー 1 項目**にし、モデルや指標の選択は窓の中に置く（vis-monai の作り）。
+- `mainscreen.menu` はサブメニューを描けないので束ねない（いまは gemini-findings だけ）。
+- 右端の「解析」から開くサブメニューは画面外にはみ出していた（実機で発見）。入りきらないときは左に開く（`Viewer2DMenuBar.tsx` の `MenuRow`）。
+- 実機: `automator/src/spike/pluginAiMenuCheck.ts`（10/0・Colab 不要）。
+
 ### 2 面 × 2 メニューの整理
 
 - **2D Viewer 系プラグイン**（`viewer2d.menu` / `viewer2d.toolbar`）

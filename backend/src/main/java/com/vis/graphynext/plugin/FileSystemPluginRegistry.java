@@ -139,7 +139,12 @@ abstract class FileSystemPluginRegistry implements PluginRegistry {
                 ? new PluginManifest.Backend(d.entrypoint(), d.permissions())
                 : null;
         // permissions は backend 面の有無に関わらず載せる（UI 完結プラグインでも強制できるように）。
-        return new PluginManifest(d.id(), d.name(), d.version(), fe, be, d.permissions());
+        String category = d.category();
+        if (category != null && !PluginManifest.KNOWN_CATEGORIES.contains(category)) {
+            log.warn("[plugins] {}: unknown category '{}' (shown ungrouped)", d.id(), category);
+            category = null;
+        }
+        return new PluginManifest(d.id(), d.name(), d.version(), fe, be, d.permissions(), category);
     }
 
     /** 走査で見つかった 1 プラグイン（フォルダ + 記述）。 */

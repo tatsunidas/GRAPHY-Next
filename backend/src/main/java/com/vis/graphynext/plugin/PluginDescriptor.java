@@ -38,7 +38,12 @@ public record PluginDescriptor(
         /** ホームページ URL（表示用）。 */
         String homepage,
         /** ライセンス識別子（SPDX 等、表示・法務用）。 */
-        String license) {
+        String license,
+        /**
+         * メニューでの束ね先（{@link PluginManifest#KNOWN_CATEGORIES} の値だけ有効）。
+         * 例 {@code "ai"} は 2D ビューアの「解析 ＞ AI」にまとめて出る。旧本体は無視して平置きにする。
+         */
+        String category) {
 
     /**
      * 互換宣言。

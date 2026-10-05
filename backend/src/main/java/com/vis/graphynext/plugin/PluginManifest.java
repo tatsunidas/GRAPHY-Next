@@ -7,6 +7,7 @@ package com.vis.graphynext.plugin;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * {@code GET /api/plugins} が返すマニフェスト（フロントとの契約）。
@@ -29,7 +30,15 @@ public record PluginManifest(
          * 強制したい権限（{@code ai-egress}）は UI 完結プラグインこそが要求するため、
          * それでは強制のしようが無い。フロントの実行時チェックはこの項目を見る。
          */
-        List<String> permissions) {
+        List<String> permissions,
+        /**
+         * メニューでの束ね先。{@link #KNOWN_CATEGORIES} に無い値は null にして配る
+         * （フロントは未知の値を見ずに済み、今までどおり平置きになる）。
+         */
+        String category) {
+
+    /** 本体が束ね方を知っている category。足すときはフロントの {@code PluginCategory} も足す。 */
+    public static final Set<String> KNOWN_CATEGORIES = Set.of("ai");
 
     /** フロント面（UI バンドル）。UI を持たないプラグインでは null。 */
     @JsonInclude(JsonInclude.Include.NON_NULL)

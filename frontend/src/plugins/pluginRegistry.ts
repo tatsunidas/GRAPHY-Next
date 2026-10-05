@@ -10,7 +10,7 @@ import { useEffect, useState } from "react";
 import { httpGet, httpSend } from "../http";
 import { apiBase } from "../apiBase";
 import { log } from "../log";
-import type { PluginHost, PluginHostSeed, PluginManifest, PluginModule, PluginSurface } from "./pluginTypes";
+import type { PluginHost, PluginHostSeed, PluginManifest, PluginCategory, PluginModule, PluginSurface } from "./pluginTypes";
 import { DEMO_MODULES, MOCK_ENABLED, MOCK_MANIFESTS } from "./mockPlugins";
 import { requestAiGeneration, type AiGenerationOptions } from "./pluginAiApi";
 import { pickDirectory, saveFileAs, saveJobArtifact, saveJobArtifactTo, writeToDirectory } from "./pluginFileApi";
@@ -163,6 +163,7 @@ export interface PluginMenuItem {
   id: string;
   label: string;
   onClick: () => void;
+  category?: PluginCategory;
 }
 
 /**
@@ -177,6 +178,7 @@ export function usePluginMenu(
   return manifests.map((m) => ({
     id: m.id,
     label: m.name,
+    category: m.category,
     onClick: () => {
       launchPlugin(m, makeHost(m)).catch((e) => log.error("plugin launch failed", m.id, e));
     },

@@ -10,6 +10,7 @@ import { useWlPresets } from "./wlPresetStore";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { changeRoiStatsDisplay, useRoiStatsDisplay } from "../viewer/roiStatsDisplay";
 import { usePluginMenu, runPluginBackend } from "../plugins/pluginRegistry";
+import { groupViewerPluginItems } from "../plugins/pluginMenuGroups";
 import type { PluginHostSeed, PluginManifest, Viewer2DSurface } from "../plugins/pluginTypes";
 import {
   getVesselModel,
@@ -217,6 +218,8 @@ export function Viewer2DMenuBar({
     "viewer2d.menu.analysis",
     makeViewerHost("viewer2d.menu.analysis"),
   );
+  /** `category: "ai"` は「解析 ＞ AI ▸」にまとめる（どちらのサーフェスに宣言しても）。 */
+  const pluginGroups = groupViewerPluginItems(pluginItems, analysisPluginItems);
   /**
    * H63: 3D QCA ダイアログに出すもの。ダイアログは `actions` に届かないので、
    * host はここで組み立てて置き場（`xa3dPluginItems`）へ渡す。公開デモでは出さない（他のメニューと同じ）。
@@ -430,12 +433,28 @@ export function Viewer2DMenuBar({
         // 設計: fw/subtraction-design.md §15.8。
         ...(isDemo
           ? []
-          : analysisPluginItems.map((p, i) => ({
+          : pluginGroups.analysis.map((p, i) => ({
               label: `${p.label}${t("viewer2d.menu.pluginSuffix")}`,
               onClick: p.onClick,
               separatorBefore: i === 0,
               testId: `plugin-analysis-item-${p.id}`,
             }))),
+        // AI 系のプラグインは 1 つのサブメニューに束ねる（増えても解析メニューが伸びない）。
+        // 中身はすべてプラグインなので印も付ける。
+        ...(isDemo || pluginGroups.ai.length === 0
+          ? []
+          : [
+              {
+                label: t("viewer2d.menu.ai"),
+                separatorBefore: true,
+                testId: "viewer2d-menu-ai",
+                submenu: pluginGroups.ai.map((p) => ({
+                  label: `${p.label}${t("viewer2d.menu.pluginSuffix")}`,
+                  onClick: p.onClick,
+                  testId: `plugin-ai-item-${p.id}`,
+                })),
+              },
+            ]),
       ],
     },
     {
@@ -443,9 +462,9 @@ export function Viewer2DMenuBar({
       label: t("viewer2d.menu.plugins"),
       items: isDemo
         ? [{ label: t("viewer2d.menu.pluginsNone"), onClick: () => actions.comingSoon(t("viewer2d.menu.plugins")) }]
-        : pluginItems.length
+        : pluginGroups.plugins.length
           // testId は automator が個別プラグインを掴むため（表示名はプラグイン任せで安定しない）。
-          ? pluginItems.map((p) => ({ label: p.label, onClick: p.onClick, testId: `plugin-item-${p.id}` }))
+          ? pluginGroups.plugins.map((p) => ({ label: p.label, onClick: p.onClick, testId: `plugin-item-${p.id}` }))
           : [{ label: t("viewer2d.menu.pluginsNone"), onClick: () => actions.comingSoon(t("viewer2d.menu.plugins")) }],
     },
     {
@@ -495,9 +514,13 @@ export function Viewer2DMenuBar({
   );
 }
 
-/** ドロップダウン 1 行。submenu があればホバーで右にフライアウト展開。 */
+/**
+ * ドロップダウン 1 行。submenu があればホバーで右にフライアウト展開。
+ * 右に入りきらないとき（右端の「解析」メニューの AI など）は左に開く。
+ */
 function MenuRow({ it, onClose }: { it: MenuItem; onClose: () => void }) {
   const [hover, setHover] = useState(false);
+  const [openLeft, setOpenLeft] = useState(false);
   const sep = it.separatorBefore ? <div style={separator} /> : null;
   if (it.render) {
     return (
@@ -514,7 +537,10 @@ function MenuRow({ it, onClose }: { it: MenuItem; onClose: () => void }) {
         <div
           data-testid={it.testId}
           style={{ position: "relative" }}
-          onMouseEnter={() => setHover(true)}
+          onMouseEnter={(e) => {
+            setOpenLeft(e.currentTarget.getBoundingClientRect().right + FLYOUT_MIN_WIDTH > window.innerWidth);
+            setHover(true);
+          }}
           onMouseLeave={() => setHover(false)}
         >
           <button style={{ ...item, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -522,7 +548,7 @@ function MenuRow({ it, onClose }: { it: MenuItem; onClose: () => void }) {
             <span style={{ marginLeft: 12, color: "#8a97a4" }}>▸</span>
           </button>
           {hover && (
-            <div style={{ ...dropdown, top: -4, left: "100%" }}>
+            <div style={{ ...dropdown, top: -4, ...(openLeft ? { left: "auto", right: "100%" } : { left: "100%" }) }}>
               {it.submenu.map((sub) => (
                 <MenuRow key={sub.label} it={sub} onClose={onClose} />
               ))}
@@ -552,8 +578,9 @@ const bar: React.CSSProperties = {
   fontSize: 13,
 };
 const menuBtn: React.CSSProperties = { border: "none", borderRadius: 5, padding: "4px 12px", cursor: "pointer", fontSize: 13 };
+const FLYOUT_MIN_WIDTH = 200;
 const dropdown: React.CSSProperties = {
-  position: "absolute", top: "100%", left: 0, minWidth: 200, background: "#fff",
+  position: "absolute", top: "100%", left: 0, minWidth: FLYOUT_MIN_WIDTH, background: "#fff",
   border: "1px solid #dfe3e8", borderRadius: 6, boxShadow: "0 6px 20px rgba(0,0,0,0.15)", padding: 4, zIndex: 50,
 };
 const item: React.CSSProperties = {
