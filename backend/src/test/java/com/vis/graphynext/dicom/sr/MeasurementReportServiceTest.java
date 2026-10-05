@@ -339,6 +339,48 @@ class MeasurementReportServiceTest {
                 .getNestedDataset(Tag.MeasurementUnitsCodeSequence).getString(Tag.CodeValue));
     }
 
+    // ------------------------------------------------------------------
+    // H66: 定量（面積・平均値・標準偏差）。fw/ct-quant-design.md §6
+    // ------------------------------------------------------------------
+
+    @Test
+    void 面積と平均CT値が入り平均は負も受け付ける() {
+        MeasurementGroup g = new MeasurementGroup("subcutaneous fat", null, null, "1.2.3.4.9", "1.2.3.4.9.1",
+                List.of(new Measurement("area", 12.5, null),
+                        new Measurement("meanValue", -95.25, "[hnsf'U]"),
+                        new Measurement("stdDev", 18.0, "[hnsf'U]")));
+        Attributes sr = service.build(template(), request(List.of(g), null), NOW);
+
+        Attributes area = find(sr, "AREA").get(0).getNestedDataset(Tag.MeasuredValueSequence);
+        assertEquals("12.5", area.getString(Tag.NumericValue));
+        assertEquals("cm2", area.getNestedDataset(Tag.MeasurementUnitsCodeSequence).getString(Tag.CodeValue));
+        Attributes mean = find(sr, "MEAN_VALUE").get(0).getNestedDataset(Tag.MeasuredValueSequence);
+        assertEquals("-95.25", mean.getString(Tag.NumericValue));
+        assertEquals("[hnsf'U]", mean.getNestedDataset(Tag.MeasurementUnitsCodeSequence).getString(Tag.CodeValue));
+        assertEquals("99GRAPHY", find(sr, "STD_DEV").get(0).getNestedDataset(Tag.ConceptNameCodeSequence)
+                .getString(Tag.CodingSchemeDesignator));
+    }
+
+    @Test
+    void 平均値と標準偏差は単位が無ければ拒否する() {
+        for (String type : List.of("meanValue", "stdDev")) {
+            MeasurementGroup g = new MeasurementGroup("liver", null, null, "s", "i",
+                    List.of(new Measurement(type, 50.0, null)));
+            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                    () -> service.create(request(List.of(g), null)));
+            assertTrue(e.getMessage().contains(type), e.getMessage());
+        }
+    }
+
+    @Test
+    void 負を許すのは平均値だけ() {
+        for (String type : List.of("area", "stdDev", "volume")) {
+            MeasurementGroup g = new MeasurementGroup("liver", null, null, "s", "i",
+                    List.of(new Measurement(type, -1.0, "[hnsf'U]")));
+            assertThrows(IllegalArgumentException.class, () -> service.create(request(List.of(g), null)), type);
+        }
+    }
+
     @Test
     void 中身が無い要求は拒否する() {
         assertThrows(IllegalArgumentException.class,

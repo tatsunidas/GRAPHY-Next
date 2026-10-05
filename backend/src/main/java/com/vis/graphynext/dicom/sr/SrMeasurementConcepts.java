@@ -62,9 +62,15 @@ final class SrMeasurementConcepts {
      * @param codeValue   CodeValue (0008,0100)
      * @param scheme      CodingSchemeDesignator (0008,0102)
      * @param meaning     CodeMeaning (0008,0104)
-     * @param defaultUnit 呼び出し側が単位を指定しなかったときの UCUM 単位
+     * @param defaultUnit 呼び出し側が単位を指定しなかったときの UCUM 単位。null なら単位は必須
+     *                    （値の単位がモダリティで変わる種別。HU と SUV を取り違えて書かない）
+     * @param signed      負の値を受け付けるか（平均 CT 値は脂肪などで負になる）
      */
-    record Concept(String codeValue, String scheme, String meaning, String defaultUnit) {
+    record Concept(String codeValue, String scheme, String meaning, String defaultUnit, boolean signed) {
+        Concept(String codeValue, String scheme, String meaning, String defaultUnit) {
+            this(codeValue, scheme, meaning, defaultUnit, false);
+        }
+
         boolean isPrivate() {
             return PRIVATE_SCHEME.equals(scheme);
         }
@@ -90,6 +96,10 @@ final class SrMeasurementConcepts {
         put("effectiveHalfLife", new Concept("T_EFF", PRIVATE_SCHEME, "Effective Half-Life", "h"));
         put("bed", new Concept("BED", PRIVATE_SCHEME, "Biologically Effective Dose", "Gy"));
         put("eqd2", new Concept("EQD2", PRIVATE_SCHEME, "Equivalent Dose in 2 Gy Fractions", "Gy"));
+        // H66 の定量（fw/ct-quant-design.md §6）。面積はスライス上の画素の数え上げ。
+        put("area", new Concept("AREA", PRIVATE_SCHEME, "Area", "cm2"));
+        put("meanValue", new Concept("MEAN_VALUE", PRIVATE_SCHEME, "Mean Value", null, true));
+        put("stdDev", new Concept("STD_DEV", PRIVATE_SCHEME, "Standard Deviation", null));
     }
 
     /** 表に無ければ null（＝呼び出し側が拒否する）。 */

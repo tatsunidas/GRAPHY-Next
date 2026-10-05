@@ -987,6 +987,13 @@ SR に私用コードで線量が入ること・`caveats` が空の登録が拒�
    Playwright がそれを await し、「ダイアログを操作するまで返らない evaluate」を待ち続ける。
    IIFE で包んで非 thenable を返す。
 
+#### H66 の実装（2026-10-05・CT 定量からの要求）
+
+`measureLabels(labels, values, opts)`——ラベルの volume（1 ボクセル 1 ラベル）を H10 のボリュームと突き合わせ、
+ラベルごとの体積（数え上げ）・値の統計（ROI 統計の `summarizeValues`）・重心（LPS mm）・指定スライスの面積
+（画素の数え上げ・値の範囲ごと）を返す。格子が合わなければ例外。設計と量の定義は `fw/ct-quant-design.md` §3。
+併せて SR の計測種別に `area`・`meanValue`・`stdDev` を足した（私用スキーム・§6）。
+
 ### 7.3 副作用（着手時に必ずセットで行うこと）
 
 - ✅ **型定義の同期（本体側 1/5）**: `examples/plugin-template/graphy-plugin.d.ts` に `ViewerTarget` /

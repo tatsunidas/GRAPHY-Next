@@ -20,6 +20,7 @@ import {
 import { openPluginWindow } from "../plugins/pluginWindowApi";
 import { mountValueViewport, mountVolumeView } from "../plugins/pluginViewportApi";
 import { measureMask } from "../plugins/pluginMeshApi";
+import { measureLabels } from "../plugins/pluginLabelStatsApi";
 import { extractCenterline, sampleCenterlineFrames } from "../plugins/pluginCenterlineApi";
 import { deletePluginStore, loadPluginStore, savePluginStore } from "../plugins/pluginStore";
 import { publishXa3dPluginItems } from "../plugins/xa3dPluginItems";
@@ -207,6 +208,7 @@ export function Viewer2DMenuBar({
     },
     mountVolumeView: (el, volume, opts) => mountVolumeView(el, m.id, volume, opts),
     measureMask: (mask, opts) => measureMask(mask, opts),
+    measureLabels: (labels, values, opts) => measureLabels(labels, values, opts),
     extractCenterline: (mask, opts) => extractCenterline(mask, opts),
     sampleCenterlineFrames: (polyline, opts) => sampleCenterlineFrames(polyline, opts),
     mountSeriesPanel: (el, series, opts) => actions.mountSeriesPanel(el, series, opts),
