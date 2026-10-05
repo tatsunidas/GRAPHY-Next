@@ -87,12 +87,14 @@ measureLabels(
 
 ### 4.3 L3 レベル
 
-- **L3 のスライス**: `vertebrae_L3` の重心（患者座標）に最も近い格子のスライス k。L3 が写っていない・切れている（`kRange` が端に接する）ときは出さない（理由を表示）。
+- **L3 のスライス**: `vertebrae_L3` の重心（患者座標）に最も近い格子のスライス k。L3 が写っていない・撮影範囲で切れているときは出さない（理由を表示）。
+  - 切れているかは、**すぐ上の L2 とすぐ下の L4 がどちらも写っているか**で見る（写っていれば L3 は両者の間に収まる）。どちらかが無いときだけ「L3 のラベルが端のスライスに触れているか」で見る。
+  - 当初は「端に触れたら切れている」だけで判定していたが、2026-10-05 の実機（PRE LIVER・43 枚）で、収まっている L3 を弾いた。L3 のラベルは k=4〜13 にまとまり、端の k=0・1 に 4・12 画素だけ出ていた——L4 の高さまで下りる L3 の下関節突起と考えられる（`automator/.results/compute-ct-quant-check/vertebrae-per-slice.json`）。
 - そのスライスで: 大腰筋（`iliopsoas_left` + `iliopsoas_right`）と脊柱起立筋（`autochthon_left` + `autochthon_right`）の面積（cm²）・平均 HU、うち筋の HU 範囲（−29〜150 HU）に入る面積。
 - 身長（m）を入力すれば **大腰筋の面積 ÷ 身長²（cm²/m²）**も出す。身長は H10 が返さず、DICOM の PatientSize も空のことが多いので、入力欄にする。
 - 基準値（カットオフ）での判定はしない（研究版・SaMD に向けた方針）。
 
-HU 範囲の出典は、L3 の体組成で広く使われる骨格筋 −29〜+150 HU・脂肪 −190〜−30 HU の設定（Mitsiopoulos らの 1998 年の報告にさかのぼる）。**文献の照合はまだ（Q4 で原典を確認して出典を設計書に書く）**。値は画面で変えられるようにする（既定だけこの値）。
+HU 範囲は、L3 の体組成で広く使われる骨格筋 −29〜+150 HU・脂肪 −190〜−30 HU の設定。出典として挙げられることの多い Mitsiopoulos N, et al. Cadaver validation of skeletal muscle measurement by magnetic resonance imaging and computerized tomography. J Appl Physiol 1998;85(1):115 の書誌は確認した。**本文にこの閾値が書かれているかは、まだ原典で確かめていない**（Q4 の残り）。v1 の画面では範囲を変えられない（既定のみ）。
 
 ### 4.4 v1 に入れない指標と理由
 
@@ -133,7 +135,7 @@ HU 範囲の出典は、L3 の体組成で広く使われる骨格筋 −29〜+1
 | Q0 | この設計書 | ✅ 2026-10-05 |
 | Q1 | 本体 H66 `measureLabels`（純関数＋host への配線＋vitest） | ✅ 2026-10-05（`pluginLabelStatsApi.ts`・vitest 9 件。値の統計は ROI 統計の `summarizeValues` を通す＝母標準偏差。実機は Q3 で） |
 | Q2 | SR の種別追加（area・meanValue・stdDev）＋backend テスト | ✅ 2026-10-05（3 つとも私用スキーム。meanValue・stdDev は単位必須、負は meanValue だけ許す） |
-| Q3 | プラグイン `vis-ct-quant`（Colab で TotalSegmentator・3 タブ・保存） | 未着手 |
+| Q3 | プラグイン `vis-ct-quant`（Colab で TotalSegmentator・3 タブ・保存） | ✅ 2026-10-05（作業コピー `graphy-workspace/graphy-next-plugin-ct-quant`・node --test 13/0。実機 `automator/src/spike/computeCtQuantCheck.ts` 23/0：T4 で 233 秒・最大 1819 MiB。H66 のボクセル数が計算機の数え上げと 54 構造すべてで一致、肝は右・脾は左、L3 は k=9 で大腰筋 15.91 cm²・39.5 HU、SEG・SR（AREA・MEAN_VALUE・[hnsf'U] を確認）・CSV を保存。L3 の重ね表示はスクリーンショットで確認。公開リポジトリは未作成） |
 | Q4 | 検証（合成 DICOM・経路の一致・公開データの参考値）＋HU 範囲の出典の確認 | 未着手 |
 | Q5 | 本体の版上げ・プラグインの署名つきリリース（署名は Linux 機） | 未着手 |
 
