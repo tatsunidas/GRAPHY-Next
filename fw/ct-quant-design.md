@@ -135,7 +135,7 @@ HU 範囲は、L3 の体組成で広く使われる骨格筋 −29〜+150 HU・�
 | Q0 | この設計書 | ✅ 2026-10-05 |
 | Q1 | 本体 H66 `measureLabels`（純関数＋host への配線＋vitest） | ✅ 2026-10-05（`pluginLabelStatsApi.ts`・vitest 9 件。値の統計は ROI 統計の `summarizeValues` を通す＝母標準偏差。実機は Q3 で） |
 | Q2 | SR の種別追加（area・meanValue・stdDev）＋backend テスト | ✅ 2026-10-05（3 つとも私用スキーム。meanValue・stdDev は単位必須、負は meanValue だけ許す） |
-| Q3 | プラグイン `vis-ct-quant`（Colab で TotalSegmentator・3 タブ・保存） | ✅ 2026-10-05（作業コピー `graphy-workspace/graphy-next-plugin-ct-quant`・node --test 13/0。実機 `automator/src/spike/computeCtQuantCheck.ts` 23/0：T4 で 233 秒・最大 1819 MiB。H66 のボクセル数が計算機の数え上げと 54 構造すべてで一致、肝は右・脾は左、L3 は k=9 で大腰筋 15.91 cm²・39.5 HU、SEG・SR（AREA・MEAN_VALUE・[hnsf'U] を確認）・CSV を保存。L3 の重ね表示はスクリーンショットで確認。公開リポジトリは未作成） |
+| Q3 | プラグイン `vis-ct-quant`（Colab で TotalSegmentator・3 タブ・保存） | ✅ 2026-10-05（作業コピー `graphy-workspace/graphy-next-plugin-ct-quant`・node --test 13/0。実機 `automator/src/spike/computeCtQuantCheck.ts` 23/0：T4 で 233 秒・最大 1819 MiB。H66 のボクセル数が計算機の数え上げと 54 構造すべてで一致、肝は右・脾は左、L3 は k=9 で大腰筋 15.91 cm²・39.5 HU、SEG・SR（AREA・MEAN_VALUE・[hnsf'U] を確認）・CSV を保存。L3 の重ね表示はスクリーンショットで確認。公開リポジトリ tatsunidas/graphy-next-plugin-ct-quant を 2026-10-05 に作成・リリースはまだ） |
 | Q4 | 検証（合成 DICOM・経路の一致・公開データの参考値）＋HU 範囲の出典の確認 | 未着手 |
 | Q5 | 本体の版上げ・プラグインの署名つきリリース（署名は Linux 機） | 未着手 |
 
