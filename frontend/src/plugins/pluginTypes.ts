@@ -16,6 +16,7 @@ import type {
   PluginVolumeViewMode,
 } from "./pluginViewportApi";
 import type { PluginMaskInput, PluginMeshMeasurement, PluginMeshOptions } from "./pluginMeshApi";
+import type { PluginLabelInput, PluginLabelMeasurement, PluginLabelStatsOptions } from "./pluginLabelStatsApi";
 import type {
   PluginCenterlineGraph,
   PluginCenterlineOptions,
@@ -44,6 +45,7 @@ export type {
   PluginVolumeViewMode,
 } from "./pluginViewportApi";
 export type { PluginMaskInput, PluginMeshMeasurement, PluginMeshOptions } from "./pluginMeshApi";
+export type { PluginLabelInput, PluginLabelMeasurement, PluginLabelSliceMeasurement, PluginLabelStatsOptions, PluginValueStats } from "./pluginLabelStatsApi";
 export type {
   PluginCenterlineBranch,
   PluginCenterlineGraph,
@@ -976,6 +978,19 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * （平滑化した曲面）は**一致しない**。どちらが正しいでもないので両方返す。
    */
   measureMask: (mask: PluginMaskInput, opts?: PluginMeshOptions) => PluginMeshMeasurement[];
+  /**
+   * **ラベルの volume を測る**（H66）。0=背景。ラベルごとの体積（数え上げ）・値の統計（`values.unit` のまま）・
+   * 重心（LPS mm）と、指定したスライスでの面積（画素の数え上げ・値の範囲ごとの面積も）を返す。
+   * メッシュは作らないので 100 を超えるラベルでも軽い。設計は `fw/ct-quant-design.md` §3。
+   *
+   * <p>🔴 `values` は H10 で読んだボリュームそのもの。格子（dims・indexToWorld）が合わなければ**例外**
+   * （ずれたまま測らない）。前景の無いラベルは返さない。
+   */
+  measureLabels: (
+    labels: PluginLabelInput,
+    values: PluginVolume,
+    opts?: PluginLabelStatsOptions,
+  ) => PluginLabelMeasurement[];
   /**
    * **マスクを 3D 細線化して中心線グラフにする**（H41）。0=背景 / >0=前景。
    *

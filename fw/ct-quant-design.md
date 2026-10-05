@@ -1,0 +1,142 @@
+# CT 臓器体積・体組成の定量（研究版）設計
+
+> 記録開始 2026-10-05。開発計画（Documents/GRAPHY-Next_開発計画_2026-10.pdf）の Phase 1「研究版の CT・MR 定量」の最初の 1 本で、
+> 2027-06 の判断点で SaMD の対象にする候補の 1 位（「CT の体組成・臓器体積の定量」）の素地にする。
+> **研究用（非医療機器）**。診断や判定（サルコペニアの有無など）は出さない。
+
+## 0. 要約
+
+- 公式プラグイン **`vis-ct-quant`（「CT 臓器体積・体組成」）** を作る。`category: "ai"` で「解析 ＞ AI」に 1 項目だけ出す（§2.1.1 of `plugin-architecture.md`）。
+- セグメンテーションは **TotalSegmentator の `total` タスク**（重みは Apache-2.0）を、vis-monai と同じ経路（H59・匿名化・同意・監査）で Colab の GPU で動かす。
+- 数値は**本体の新しい host API（H66 `measureLabels`）で出す**。ラベルの volume と H10 の校正済みボリュームから、ラベルごとの体積・HU 統計と、指定スライスでの面積を返す。プラグインに計測を書かせない（H5・H33 と同じ理由）。
+- 出すもの: 臓器ごとの体積・平均 HU、肝・脾の HU、**L3 レベルの大腰筋・脊柱起立筋の面積と平均 HU**。結果は SEG（H64）・ROI（H65）・SR・CSV に出す。
+- **v1 に入れないもの**: 皮下脂肪・内臓脂肪の分離、骨格筋の全周面積（SMI）、L1 の骨密度。オープンな重みだけではきちんと出せないため（§4.4）。
+
+## 1. 位置づけと既存の部品
+
+| 使うもの | 中身 | 場所 |
+|---|---|---|
+| H59 `compute.runJob` | 匿名化した npz を外部の計算機へ送り、結果のファイルを受け取る。同意・監査つき | `fw/remote-compute-design.md` |
+| vis-monai の実行部 | npz → NIfTI（LPS）、推論、ラベルを元の格子へ戻す（k の対応づけ・再標本化） | `graphy-next-plugin-monai/ui.js`（§16〜18） |
+| H10 `loadVolume` | 校正済みの値（HU）のボリュームと幾何 | `pluginTypes.ts` |
+| H64 `saveSegmentation({labels})` | ラベルの volume のまま SEG 保存 | 同上 |
+| H65 | ラベルの volume を ROI マネージャへ読み込む | 同上 |
+| `saveStructuredReport` | Comprehensive SR。計測の種別は `SrMeasurementConcepts` の表にあるものだけ | `viewerCommands.ts`・`backend/.../sr/SrMeasurementConcepts.java` |
+| `file.saveAs` | CSV の保存 | `pluginFileApi.ts` |
+
+H33 `measureMask` はメッシュ化するので 117 ラベルには重く、HU 統計も持たない。そこで H66 を足す（§3）。
+
+## 2. モデルとライセンス（2026-10-05 に GitHub の README で確認）
+
+出典: https://github.com/wasserth/TotalSegmentator （README の License 節）
+
+| 対象 | ライセンス | v1 で使うか |
+|---|---|---|
+| コード | Apache-2.0 | 使う（Colab で `pip install TotalSegmentator`） |
+| `total`（CT 117 構造）・`total_mr` と多くのサブタスクの重み | Apache-2.0 | **`total` を使う** |
+| `tissue_types` / `tissue_types_mr` / `tissue_4_types`、`abdominal_muscles`、`heartchambers_highres`、`appendicular_bones`、`brain_structures`、`face`、`thigh_shoulder_muscles`、`coronary_arteries`、`aortic_sinuses`、`liver_segments_mr`、`liver_lesions` など | 非商用は無料・商用は別途ライセンス | **使わない**（商用版・医療版へ持ち込めないため） |
+| `brain_aneurysm` | CC BY-NC 4.0（商用ライセンスなし） | 使わない（TODO の脳動脈瘤検出で別途判断） |
+
+- 版は実行時に `totalsegmentator --version` 相当で取得し、**結果（SEG の説明・SR・CSV）に版を書く**。版を固定するか最新にするかは Q3 で決める（固定を推奨：数値の再現性のため）。
+- ⚠ README の記述は変わりうる。医療版（非公開版）で使う前に、重みのライセンスを原典で取り直す（開発計画 §5「AI のデータ」）。
+- `body` タスク（体表）が無料枠か有料枠かは README の一覧からは読み取れなかった（**未確認**）。v1 では使わない。
+
+## 3. 本体: H66 `measureLabels`
+
+### 3.1 形
+
+```ts
+measureLabels(
+  labels: { data: Uint8Array | Uint16Array; dims: [nx, ny, nz]; indexToWorld: number[] },  // 0=背景
+  values: PluginVolume,            // H10 の戻り値そのもの（格子が一致しなければ例外）
+  opts?: {
+    labels?: number[];             // 測るラベル。省略時は出てくる全部
+    erodeVoxels?: 0 | 1;           // HU 統計で境界の 1 ボクセルを除いた値も出す（体積は常に全体）
+    slices?: number[];             // 面積を出すスライス k（格子の k。取得した断面そのもの）
+    valueRanges?: Array<{ name: string; min: number; max: number }>;  // スライス内でこの値の範囲に入る画素の面積も出す
+  },
+): PluginLabelMeasurement[]
+```
+
+返り値（ラベルごと）: `label`、`voxelCount`、`volumeMl`（ボクセル数 × ボクセル体積）、`stats`（ROI 統計と同じ `summarizeValues` の結果：`n`/`mean`/`sd`/`min`/`max`/`median`/`p5`/`p95` など。単位は `values.unit` のまま。標準偏差は母標準偏差）、`eroded`（境界を除いた同じ統計）、`kRange`、`centroidLps`（mm）、`slices[]`（`k`・`areaCm2`・`mean`・`rangeAreasCm2{name→cm²}`）。
+
+### 3.2 決めごと
+
+- **体積はボクセルの数え上げ**（H33 の `voxelVolumeMm3` と同じ定義）。1 ボクセルの体積は `indexToWorld` の 3 列の三重積の絶対値で出す（斜めの格子でも正しい）。
+- **スライスの面積はラスタの画素数 × 画素面積**（画素面積は `indexToWorld` の 1・2 列の外積の大きさ）。ROI 統計の「面積はメッシュ」（`roi-stats-design.md`）とは別の量なので、名前と説明で区別する。体組成の文献の面積（L3 の筋面積など）は画素の数え上げで定義されているため、こちらに合わせる。
+- 格子の一致は `dims` と `indexToWorld`（許容差は間隔の 1e-3 倍）で判定し、合わなければ例外にする（黙って測らない）。
+- 境界の除去を 1 ボクセルにする理由: 部分容積で値が混ざるのは境界の 1 ボクセルの幅なので。除いた値と除かない値を両方返し、どちらかに決めつけない。
+- 実装は純関数（`frontend/src/plugins/pluginLabelStatsApi.ts`）。値は H10 の校正済み配列をそのまま読む（ルール 2：二重校正しない）。
+
+### 3.3 テスト（vitest）
+
+- 合成した格子（等方・非等方・斜め）に、体積・面積・平均が手計算で分かる直方体と球を置いて照合する。
+- 値の範囲の面積: 筋（−29〜150 HU）と脂肪（−190〜−30 HU）の画素が既知の数だけある断面。
+- 負例: 格子が 1 ボクセルずれていれば例外、ラベル 0 は測らない、前景の無いラベルは返さない。
+
+## 4. 出す指標（v1）
+
+### 4.1 臓器ごと
+
+`total` の全ラベル（出てきたもの）について、体積（mL）・平均 HU・標準偏差・境界を除いた平均 HU。画面は主要臓器（肝・脾・腎・膵・胆嚢・心・肺葉の合計など）を上に出し、全件は CSV で出す。
+
+### 4.2 肝・脾
+
+- 肝体積・脾体積、肝の平均 HU、脾の平均 HU、**肝 − 脾の HU 差**。
+- ⚠ HU の意味は撮影の時相（単純か造影か）で変わる。v1 は時相を判定しないので、画面に「単純 CT のときだけ脂肪肝の目安として読める」と出し、判定（脂肪肝あり・なし）は出さない。時相の自動判定（ContrastBolusAgent のタグや大動脈の HU）は後の段。
+
+### 4.3 L3 レベル
+
+- **L3 のスライス**: `vertebrae_L3` の重心（患者座標）に最も近い格子のスライス k。L3 が写っていない・切れている（`kRange` が端に接する）ときは出さない（理由を表示）。
+- そのスライスで: 大腰筋（`iliopsoas_left` + `iliopsoas_right`）と脊柱起立筋（`autochthon_left` + `autochthon_right`）の面積（cm²）・平均 HU、うち筋の HU 範囲（−29〜150 HU）に入る面積。
+- 身長（m）を入力すれば **大腰筋の面積 ÷ 身長²（cm²/m²）**も出す。身長は H10 が返さず、DICOM の PatientSize も空のことが多いので、入力欄にする。
+- 基準値（カットオフ）での判定はしない（研究版・SaMD に向けた方針）。
+
+HU 範囲の出典は、L3 の体組成で広く使われる骨格筋 −29〜+150 HU・脂肪 −190〜−30 HU の設定（Mitsiopoulos らの 1998 年の報告にさかのぼる）。**文献の照合はまだ（Q4 で原典を確認して出典を設計書に書く）**。値は画面で変えられるようにする（既定だけこの値）。
+
+### 4.4 v1 に入れない指標と理由
+
+| 指標 | 入れない理由 | 解決の道 |
+|---|---|---|
+| 皮下脂肪・内臓脂肪の面積（SAT/VAT） | 腹壁の筋で内外を分ける必要があるが、それを出すのは有料枠（`tissue_types`・`abdominal_muscles`） | ライセンス取得、または自社のモデル（Phase 1 のデータ収集後） |
+| 骨格筋の全周の面積（SMA/SMI） | `total` の筋は大腰筋・脊柱起立筋・殿筋などで、腹壁の筋が無い | 同上 |
+| L1 椎体の骨密度の目安（HU） | `vertebrae_L1` は椎弓を含む椎骨全体で、文献の「椎体の海綿骨」ではない | 椎体だけを出すタスクの有無とライセンスを確認してから |
+
+## 5. プラグイン `vis-ct-quant`
+
+- リポジトリ `tatsunidas/graphy-next-plugin-ct-quant`（公開・MIT）。`id: vis-ct-quant`、`category: "ai"`、`contributes: ["viewer2d.menu.analysis"]`、`permissions: ["remote-compute"]`、`engines.graphy` は H66 を含む本体の版以上。
+- 実行部は vis-monai から写す（npz → NIfTI、計算機の上で別プロセスで推論、ラベルを元の格子へ戻す）。共通部品のパッケージ化は 2 本目の AI プラグインを作るときに判断する。
+- 計算機の上: `pip install TotalSegmentator`（版を固定）→ `TotalSegmentator -i in.nii.gz -o out --ml --task total`。T4 で動かない大きさのときは `--fast` に切り替えるのではなく、止めて理由を出す（解像度が変わると数値が変わるため。`--fast` は利用者が明示的に選ぶ）。
+- 窓（1 つ）: 対象シリーズ → 実行 → 「臓器」「肝・脾」「L3」の 3 タブ → 保存（SEG・SR・CSV）。研究用の注意書きを常に出す。L3 のタブにはそのスライスの画像とラベルの重ね表示を出し、**目で確かめてから保存**できるようにする（H31 のビューポート）。
+- CT 以外・空間情報の無いシリーズ（H10 の `spatial: false`）は実行前に止める。
+
+## 6. SR
+
+- 1 つの SR に、臓器ごと・L3 の構造ごとに計測グループを作る（`trackingId` は構造名）。
+- 種別を足す: `area`（cm²）、`meanValue`（HU は UCUM `[hnsf'U]`）、`stdDev`。**標準コードを PS3.16 で確認できたものだけ標準コードにし、確認できないものは既存の線量系と同じ私用スキーム**（`SrMeasurementConcepts` の方針：誤った標準コードより害が小さい）。
+- 本体側の変更: `SrMeasurementConcepts` の表、`viewerCommands.ts` の型、backend のテスト。
+
+## 7. 検証
+
+| 何を | どう | 合格の基準 |
+|---|---|---|
+| H66 の計算 | 合成ボリューム（§3.3） | 手計算と浮動小数の誤差内で一致 |
+| 本体を通した数値 | 既知の形と HU の合成 DICOM（直方体の「筋」「脂肪」「臓器」）を取り込み、プラグインと同じ経路で測る | 体積・面積・平均が真値と一致（数え上げなので誤差は 0〜浮動小数の範囲） |
+| 経路の正しさ（向き・格子） | 同じ NIfTI に TotalSegmentator を直接かけた結果と、GRAPHY を通した結果（npz → 推論 → 元の格子へ戻す）を比べる | 同じモデル・同じ入力なので**ラベルが一致する**こと（Dice 1.0）。ずれたら経路の不具合 |
+| モデルの精度（参考値として記録） | TotalSegmentator データセット v2（Zenodo・CC BY 4.0・1228 例・23.6 GB）の公式の test 分割から数例。NIfTI 取り込み経由 | 合否ではなく数値を残す: 臓器ごとの Dice・体積誤差、L3 の大腰筋の面積誤差。test 分割が学習に入っていないことを meta.csv で確認してから使う（**未確認**） |
+| 実機 | automator のスパイク（Colab T4）。L3 の重ね表示はスクリーンショットで判定 | 実行・保存（SEG・SR・CSV）・ROI 読み込みが通る |
+
+## 8. 段
+
+| 段 | 内容 | 状態 |
+|---|---|---|
+| Q0 | この設計書 | ✅ 2026-10-05 |
+| Q1 | 本体 H66 `measureLabels`（純関数＋host への配線＋vitest） | ✅ 2026-10-05（`pluginLabelStatsApi.ts`・vitest 9 件。値の統計は ROI 統計の `summarizeValues` を通す＝母標準偏差。実機は Q3 で） |
+| Q2 | SR の種別追加（area・meanValue・stdDev）＋backend テスト | ✅ 2026-10-05（3 つとも私用スキーム。meanValue・stdDev は単位必須、負は meanValue だけ許す） |
+| Q3 | プラグイン `vis-ct-quant`（Colab で TotalSegmentator・3 タブ・保存） | 未着手 |
+| Q4 | 検証（合成 DICOM・経路の一致・公開データの参考値）＋HU 範囲の出典の確認 | 未着手 |
+| Q5 | 本体の版上げ・プラグインの署名つきリリース（署名は Linux 機） | 未着手 |
+
+## 9. このあとの AI（TODO・2026-10-05 にユーザが追加）
+
+CT 肺結節検出、胸部 X 線の所見検出、MRA 脳動脈瘤検出。いずれも「解析 ＞ AI」に 1 項目ずつ・研究用。H66 は検出の後処理（候補ごとの体積・HU）にも使える。モデルとライセンスは着手時に原典で確認する（脳動脈瘤は TotalSegmentator の `brain_aneurysm` が CC BY-NC 4.0 で商用不可）。

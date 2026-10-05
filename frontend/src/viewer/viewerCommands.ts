@@ -198,7 +198,8 @@ export interface ViewerSrMeasurementGroup {
    *
    * <p>`unit` を省略すると種別ごとの既定（UCUM）が入る:
    * 長径/短径 `mm` ／ 体積 `mL` ／ 質量 `g` ／ 吸収線量・BED・EQD2 `Gy` ／
-   * 時間積分放射能 `Bq.s` ／ 有効半減期 `h`。**換算はしない**（値はそのまま入る）。
+   * 時間積分放射能 `Bq.s` ／ 有効半減期 `h` ／ 面積 `cm2`。平均値・標準偏差は既定が無く `unit` 必須
+   * （CT は UCUM の `[hnsf'U]`）。**換算はしない**（値はそのまま入る）。
    *
    * <p>⚠ 線量系の概念は PS3.16 の標準コードを確認できていないため、
    * **私用コーディングスキームで私用と分かる形**で書かれる（誤った標準コードより害が小さい）。
@@ -213,7 +214,11 @@ export interface ViewerSrMeasurementGroup {
       | "timeIntegratedActivity"
       | "effectiveHalfLife"
       | "bed"
-      | "eqd2";
+      | "eqd2"
+      // H66 の定量（fw/ct-quant-design.md §6）。meanValue・stdDev は unit 必須（HU / SUV を取り違えない）。meanValue は負も可
+      | "area"
+      | "meanValue"
+      | "stdDev";
     value: number;
     unit?: string;
   }[];

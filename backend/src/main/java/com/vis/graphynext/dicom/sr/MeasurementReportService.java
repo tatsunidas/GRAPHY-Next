@@ -469,12 +469,16 @@ public class MeasurementReportService {
                     throw new IllegalArgumentException("計測が空のグループがあります: " + g.trackingId());
                 }
                 for (MeasurementReportRequest.Measurement m : g.measurements()) {
-                    if (SrMeasurementConcepts.of(m.type()) == null) {
+                    SrMeasurementConcepts.Concept concept = SrMeasurementConcepts.of(m.type());
+                    if (concept == null) {
                         // **知らない種別を黙って落とさない。** 落とすと「入れたはずの計測が無い」SR ができる。
                         throw new IllegalArgumentException("未知の計測種別: " + m.type()
                                 + "（対応: " + SrMeasurementConcepts.supportedTypes() + "）");
                     }
-                    if (m.value() == null || !Double.isFinite(m.value()) || m.value() < 0) {
+                    if (concept.defaultUnit() == null && (m.unit() == null || m.unit().isBlank())) {
+                        throw new IllegalArgumentException("計測種別 " + m.type() + " は単位が必須です");
+                    }
+                    if (m.value() == null || !Double.isFinite(m.value()) || (m.value() < 0 && !concept.signed())) {
                         // 負値は「引き算の向きを間違えた」等の取り違えでしか出ない。
                         // 線量・体積・半減期はいずれも非負なので、ここで落として気付かせる。
                         throw new IllegalArgumentException("計測値が不正です: " + m.value());

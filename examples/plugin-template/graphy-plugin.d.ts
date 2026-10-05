@@ -1013,6 +1013,62 @@ export interface PluginMeshMeasurement {
   boundsMax: [number, number, number];
 }
 
+/** 測るラベルの volume（H66）。`loadVolume` と同じ z-major の並び。0=背景。 */
+export interface PluginLabelInput {
+  data: Uint8Array | Uint16Array;
+  dims: [number, number, number];
+  indexToWorld: number[];
+}
+
+export interface PluginLabelStatsOptions {
+  /** 測るラベル。省略時は出てくる全部。 */
+  labels?: number[];
+  /** 1 にすると、境界の 1 ボクセル（6 近傍）を除いた統計（`eroded`）も返す。 */
+  erodeVoxels?: 0 | 1;
+  /** 面積を出すスライス（格子の k）。 */
+  slices?: number[];
+  /** スライス内で、値がこの範囲（両端を含む）に入る画素の面積も出す。 */
+  valueRanges?: Array<{ name: string; min: number; max: number }>;
+}
+
+/** 値の統計（ROI 統計と同じ実装。母標準偏差・非有限値は除く）。 */
+export interface PluginValueStats {
+  n: number;
+  mean: number;
+  sd: number;
+  min: number;
+  max: number;
+  median: number;
+  sum: number;
+  p5: number;
+  p95: number;
+  unit: string;
+}
+
+export interface PluginLabelSliceMeasurement {
+  k: number;
+  pixelCount: number;
+  /** 画素の数え上げ × 画素面積（ROI 統計のメッシュの面積とは別の量）。 */
+  areaCm2: number;
+  /** 前景が無ければ NaN。 */
+  mean: number;
+  rangeAreasCm2: Record<string, number>;
+}
+
+export interface PluginLabelMeasurement {
+  label: number;
+  voxelCount: number;
+  volumeMm3: number;
+  volumeMl: number;
+  unit: string;
+  stats: PluginValueStats | null;
+  eroded?: PluginValueStats | null;
+  kRange: [number, number];
+  /** ボクセル中心の重心（患者 LPS mm）。 */
+  centroidLps: [number, number, number];
+  slices: PluginLabelSliceMeasurement[];
+}
+
 /** 中心線グラフの節点（H41・**0.2.9 以降**）。端点 degree=1 / 分岐点 degree>=3。 */
 export interface PluginCenterlineNode {
   id: number;
@@ -1866,6 +1922,11 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    */
   measureMask: (mask: PluginMaskInput, opts?: PluginMeshOptions) => PluginMeshMeasurement[];
   /**
+   * **ラベルの volume を測る**（H66・**0.4.0 の次の版から**）。体積（数え上げ）・値の統計・重心・
+   * 指定スライスの面積。`values` は H10 で読んだボリュームそのもの（格子が合わなければ例外）。
+   */
+  measureLabels: (labels: PluginLabelInput, values: PluginVolume, opts?: PluginLabelStatsOptions) => PluginLabelMeasurement[];
+  /**
    * **マスクを 3D 細線化して中心線グラフにする**（H41・**0.2.9 以降**）。0=背景 / >0=前景。
    *
    * <p>本体の Lee-Kashyap-Chu 1994 細線化（Fiji Skeletonize3D と数値一致）＋ 26 近傍歩行を
@@ -2071,7 +2132,11 @@ export interface SrMeasurementGroup {
       | "timeIntegratedActivity"
       | "effectiveHalfLife"
       | "bed"
-      | "eqd2";
+      | "eqd2"
+      // H66 の定量（fw/ct-quant-design.md §6）。meanValue・stdDev は unit 必須（HU / SUV を取り違えない）。meanValue は負も可
+      | "area"
+      | "meanValue"
+      | "stdDev";
     value: number;
     unit?: string;
   }[];
