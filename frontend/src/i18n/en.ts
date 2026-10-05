@@ -545,6 +545,7 @@ export const en: Record<string, string> = {
   "viewer2d.menu.roi": "ROI",
   "viewer2d.menu.roiTools": "ROI Tools",
   "viewer2d.menu.analysis": "Analysis",
+  "viewer2d.menu.ai": "AI",
   "viewer2d.menu.plugins": "Plug-ins",
   // Marker on plug-in items shown in the Analysis menu (they sit next to built-in features).
   "viewer2d.menu.pluginSuffix": " (plug-in)",

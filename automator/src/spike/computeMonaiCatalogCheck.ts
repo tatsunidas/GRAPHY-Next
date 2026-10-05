@@ -23,7 +23,7 @@ import { dismissStartupDialogs } from "../common/dismissDialogs.js";
 import { DesktopDriver, DESKTOP_RUN_DATA_DIR } from "../driver/desktopDriver.js";
 import { importFixtureCategory } from "../fixtures/importFixtures.js";
 import { AUTOMATOR_ROOT, FIXTURES_ROOT } from "../fixtures/manifest.js";
-import { consentWindow, createChecker } from "./computeSpikeShared.js";
+import { consentWindow, createChecker, openAnalysisPlugin } from "./computeSpikeShared.js";
 
 const PLUGIN_ID = "vis-monai";
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "compute-monai-catalog");
@@ -59,8 +59,7 @@ async function openViewer(driver: DesktopDriver, page: Page, studyUid: string, s
   );
   await viewer.getByTestId("series-viewer-root").first().waitFor({ state: "visible", timeout: 30_000 });
   await viewer.waitForTimeout(3_000);
-  await viewer.getByTestId("viewer2d-menu-analysis").click();
-  await viewer.getByTestId(`plugin-analysis-item-${PLUGIN_ID}`).click();
+  await openAnalysisPlugin(viewer, PLUGIN_ID);
   await viewer.getByTestId("monai-bundle").waitFor({ state: "visible", timeout: 10_000 });
   return viewer;
 }

@@ -69,3 +69,18 @@ export async function runJobOutcome(page: Page, timeoutMs: number): Promise<any>
   );
   return page.evaluate(() => (window as unknown as { __computeRun: unknown }).__computeRun);
 }
+
+/**
+ * 2D ビューアの「解析」メニューからプラグインを起動する。`category: "ai"` のプラグインは
+ * 「解析 ＞ AI ▸」の中に、それ以外は解析メニューに平置きで出る（fw/plugin-architecture.md）。
+ */
+export async function openAnalysisPlugin(viewer: Page, pluginId: string): Promise<void> {
+  await viewer.getByTestId("viewer2d-menu-analysis").click();
+  const flat = viewer.getByTestId(`plugin-analysis-item-${pluginId}`);
+  if ((await flat.count()) > 0) {
+    await flat.click();
+    return;
+  }
+  await viewer.getByTestId("viewer2d-menu-ai").hover();
+  await viewer.getByTestId(`plugin-ai-item-${pluginId}`).click();
+}

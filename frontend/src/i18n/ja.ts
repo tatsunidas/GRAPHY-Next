@@ -545,6 +545,7 @@ export const ja: Record<string, string> = {
   "viewer2d.menu.roi": "ROI",
   "viewer2d.menu.roiTools": "ROI ツール",
   "viewer2d.menu.analysis": "解析",
+  "viewer2d.menu.ai": "AI",
   "viewer2d.menu.plugins": "プラグイン",
   // 解析メニューに出るプラグイン項目に付ける印（本体機能と並ぶので出所を明示する）。
   "viewer2d.menu.pluginSuffix": "（プラグイン）",

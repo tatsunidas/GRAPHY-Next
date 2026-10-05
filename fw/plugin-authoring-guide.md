@@ -39,6 +39,7 @@ GRAPHY-Next のプラグインを作る・入れる手順を、動くサンプ�
 | `ui` | UI を出すなら必要 | フォルダ直下の ES モジュールのファイル名（例 `ui.js`） |
 | `entrypoint` | バックエンド面を持つなら必要 | `GraphyPlugin` 実装クラスの完全修飾名 |
 | `permissions` | 任意 | 要求権限（現状は情報表示のみ） |
+| `category` | 任意 | 束ね先。`"ai"` で 2D ビューアの「解析 ＞ AI ▸」にまとめて出る（0.4.0 の次の版から。詳細は plugin-architecture.md §2.1.1） |
 
 **サーフェスと出る場所**（詳細は plugin-architecture.md §2.1）
 

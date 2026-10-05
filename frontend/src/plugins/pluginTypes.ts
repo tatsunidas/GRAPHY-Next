@@ -170,6 +170,12 @@ export type PluginSurface =
 /** 2D ビューア系サーフェス（host の形が同じもの）。 */
 export type Viewer2DSurface = "viewer2d.menu" | "viewer2d.menu.analysis" | "viewer2d.toolbar" | "viewer2d.xa3d";
 
+/**
+ * メニューでの束ね先（`plugin.json` の `category`）。backend は本体が知っている値だけを配る
+ * （`PluginManifest.KNOWN_CATEGORIES`）。`"ai"` は 2D ビューアの「解析 ＞ AI ▸」にまとめる。
+ */
+export type PluginCategory = "ai";
+
 /** backend の GET /api/plugins が返すマニフェスト 1 件。 */
 export interface PluginManifest {
   id: string;
@@ -195,6 +201,8 @@ export interface PluginManifest {
    * ホスト API を渡さない）。
    */
   permissions?: string[];
+  /** メニューでの束ね先。未指定は今までどおり宣言したサーフェスに平置き。 */
+  category?: PluginCategory;
 }
 
 interface PluginHostBase {
