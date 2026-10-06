@@ -239,6 +239,10 @@ public class WebDicomDataService {
         if (rows <= 0 || cols <= 0) {
             return null;
         }
+        // Parametric Map は float の NaN で埋めた 1 フレーム（standalone と同じもの）
+        if (com.vis.graphynext.dicom.ParametricMapFrameExpander.isParametricMap(src)) {
+            return com.vis.graphynext.dicom.ParametricMapFrameExpander.blankFrame(src, ipp);
+        }
         try {
             Attributes a = new Attributes();
             for (int tag : BLANK_PATIENT_TAGS) {

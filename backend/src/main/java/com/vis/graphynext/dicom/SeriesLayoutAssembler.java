@@ -36,6 +36,11 @@ public final class SeriesLayoutAssembler {
 
     /** Attributes 列（各インスタンスの全属性）から ZCT レイアウトを組む。空なら noSpatial(0,0,0)。 */
     public static SeriesLayout fromAttributes(List<Attributes> instances) {
+        // Parametric Map（fw/nifti-import.md §3.1）。standalone の DicomStorageService と同じ展開器
+        SeriesLayout pmap = ParametricMapFrameExpander.layout(instances);
+        if (pmap != null) {
+            return pmap;
+        }
         List<Attributes> segHeaders = new ArrayList<>();
         for (Attributes ds : instances) {
             if (SegFrameExpander.isSegDataset(ds)) {

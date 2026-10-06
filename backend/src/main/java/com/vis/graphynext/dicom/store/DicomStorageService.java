@@ -267,6 +267,12 @@ public class DicomStorageService {
         if (mosaic != null) {
             return mosaic;
         }
+        // Parametric Map（Float Pixel Data・幾何は Functional Groups）はフレーム単位に並べる（fw/nifti-import.md §3.1）。
+        // 🚨 web の SeriesLayoutAssembler にも同じものを繋いである（片方だけだと実機で 1 枚しか出ない）。
+        com.vis.graphynext.dicom.SeriesLayout pmap = parametricMapLayoutIfApplicable(insts);
+        if (pmap != null) {
+            return pmap;
+        }
         // DICOM SEG（マルチフレーム）は per-frame 解析して 各セグメント=C・各スライス=Z に展開する。
         com.vis.graphynext.dicom.SeriesLayout seg = segLayoutIfApplicable(insts);
         if (seg != null) {
@@ -396,6 +402,17 @@ public class DicomStorageService {
      * ロジックは web モードと共有（{@link com.vis.graphynext.dicom.XaFrameExpander}）。
      */
     /** NM（SPECT）の古典マルチフレーム断層なら フレーム=Z のレイアウトを返す（H28）。 */
+    private com.vis.graphynext.dicom.SeriesLayout parametricMapLayoutIfApplicable(java.util.List<DicomInstance> insts) {
+        java.util.List<Attributes> headers = new java.util.ArrayList<>();
+        for (DicomInstance inst : insts) {
+            Attributes ds = readHeaderQuietly(inst);
+            if (ds != null) {
+                headers.add(ds);
+            }
+        }
+        return com.vis.graphynext.dicom.ParametricMapFrameExpander.layout(headers);
+    }
+
     private com.vis.graphynext.dicom.SeriesLayout nmLayoutIfApplicable(java.util.List<DicomInstance> insts) {
         java.util.List<Attributes> headers = new java.util.ArrayList<>();
         for (DicomInstance inst : insts) {
@@ -739,6 +756,10 @@ public class DicomStorageService {
             if (com.vis.graphynext.dicom.SegFrameExpander.isSegDataset(ds)) {
                 return segBlankDicom(ds, rows, cols, ipp);
             }
+            // Parametric Map は float の NaN で埋めた 1 フレーム（16 bit で書くと形式が食い違う）
+            if (com.vis.graphynext.dicom.ParametricMapFrameExpander.isParametricMap(ds)) {
+                return com.vis.graphynext.dicom.ParametricMapFrameExpander.blankFrame(ds, ipp);
+            }
             int bits = ds.getInt(Tag.BitsAllocated, 16);
             int samples = ds.getInt(Tag.SamplesPerPixel, 1);
 
@@ -868,11 +889,33 @@ public class DicomStorageService {
         if (isMosaic(head)) {
             return mosaicTileDicom(sopUid, frame);
         }
+        // Parametric Map は Float Pixel Data を float の単一フレームにして返す（fw/nifti-import.md §3.1）。
+        if (com.vis.graphynext.dicom.ParametricMapFrameExpander.isParametricMap(head)) {
+            return parametricMapFrameDicom(sopUid, frame);
+        }
         // NM 断層は per-frame の幾何を持たないので、こちらで作って与える（H28）。
         if (com.vis.graphynext.dicom.NmFrameExpander.isNmTomo(head)) {
             return nmFrameDicom(sopUid, frame);
         }
         return multiFrameDicom(sopUid, frame);
+    }
+
+    /** Parametric Map の指定フレームを、float の単一フレーム（トップレベルに幾何）で返す。 */
+    @Transactional(readOnly = true)
+    public byte[] parametricMapFrameDicom(String sopUid, int frame) {
+        Path path = resolveInstanceFile(sopUid);
+        if (path == null) {
+            return null;
+        }
+        try (DicomInputStream in = new DicomInputStream(path.toFile())) {
+            in.setIncludeBulkData(IncludeBulkData.YES);
+            in.readFileMetaInformation();
+            Attributes ds = in.readDataset(-1, -1);
+            return com.vis.graphynext.dicom.ParametricMapFrameExpander.extractFrame(ds, frame);
+        } catch (IOException e) {
+            log.warn("Parametric Map frame の抽出に失敗 sop={} frame={}", sopUid, frame, e);
+            return null;
+        }
     }
 
     /** NM 断層マルチフレームの指定フレームを、幾何（IPP/IOP/スライス厚）を補って単一フレームで返す。 */

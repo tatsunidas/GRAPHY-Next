@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.zip.GZIPInputStream;
 
 import org.dcm4che3.data.Attributes;
+import org.dcm4che3.data.Sequence;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.UID;
 import org.dcm4che3.data.VR;
@@ -147,15 +148,25 @@ public final class NiftiToDicom {
                         if (raw.length < frameBytes) {
                             throw new IOException("画素データが足りません（スライス " + z + " / 時相 " + t + "）");
                         }
-                        short[] pixels = spec.toPixels(raw, h.byteOrder, (int) frameVoxels);
-                        if (geom.flipRows) {
-                            flipRows(pixels, nx, ny, spec.samplesPerPixel);
-                        }
                         Attributes ds = baseDataset(h, geom, opts, spec, studyUid, seriesUid, frameOfRef,
                                 sopClass, studyDate, z, t, c, instance, nx, ny, nt);
                         metaApplied = NiftiMetadataMapper.apply(ds, opts.metadata());
-                        ds.setBytes(Tag.PixelData, spec.samplesPerPixel == 3 || spec.bitsAllocated == 8 ? VR.OB : VR.OW,
-                                toBytes(pixels, spec));
+                        if (spec.floatMode()) {
+                            // 整数で 16 bit に収まらないもの・NaN を含む float は Parametric Map（32 bit float）
+                            float[] values = spec.toFloats(raw, h.byteOrder, (int) frameVoxels);
+                            if (geom.flipRows) {
+                                flipRows(values, nx, ny);
+                            }
+                            toParametricMap(ds, geom, h, z, t, nt);
+                            ds.setBytes(Tag.FloatPixelData, VR.OF, toBytes(values));
+                        } else {
+                            short[] pixels = spec.toPixels(raw, h.byteOrder, (int) frameVoxels);
+                            if (geom.flipRows) {
+                                flipRows(pixels, nx, ny, spec.samplesPerPixel);
+                            }
+                            ds.setBytes(Tag.PixelData, spec.samplesPerPixel == 3 || spec.bitsAllocated == 8 ? VR.OB : VR.OW,
+                                    toBytes(pixels, spec));
+                        }
                         sink.accept(ds, UID.ExplicitVRLittleEndian);
                         instance++;
                     }
@@ -255,11 +266,121 @@ public final class NiftiToDicom {
             ds.setDouble(Tag.RescaleSlope, VR.DS, spec.rescaleSlope);
             ds.setDouble(Tag.RescaleIntercept, VR.DS, spec.rescaleIntercept);
         }
-        if (spec.paddingValue != null) {
-            // NaN・無限大を置いた符号（fw/nifti-import.md §3）
-            ds.setInt(Tag.PixelPaddingValue, spec.signed ? VR.SS : VR.US, spec.paddingValue);
-        }
+
         return ds;
+    }
+
+    /**
+     * 通常の画像のデータセットを Parametric Map（1 インスタンス 1 フレーム）に組み替える（fw/nifti-import.md §3.1）。
+     * 幾何はトップレベルから Functional Groups へ移し、Rescale の代わりに RealWorldValueMapping（傾き 1・切片 0）を書く。
+     * PixelRepresentation・BitsStored・HighBit は Float Pixel Data には無いので書かない。
+     */
+    private static void toParametricMap(Attributes ds, NiftiGeometry geom, NiftiHeader h, int z, int t, int nt) {
+        double[] ipp = ds.getDoubles(Tag.ImagePositionPatient);
+        double[] iop = ds.getDoubles(Tag.ImageOrientationPatient);
+        double[] ps = ds.getDoubles(Tag.PixelSpacing);
+        for (int tag : new int[] { Tag.ImagePositionPatient, Tag.ImageOrientationPatient, Tag.PixelSpacing,
+                Tag.SliceThickness, Tag.SpacingBetweenSlices, Tag.SliceLocation, Tag.RescaleSlope, Tag.RescaleIntercept,
+                Tag.RescaleType, Tag.BitsStored, Tag.HighBit, Tag.PixelRepresentation, Tag.PixelPaddingValue,
+                Tag.TemporalPositionIndex }) {
+            ds.remove(tag);
+        }
+        ds.setString(Tag.SOPClassUID, VR.UI, UID.ParametricMapStorage);
+        ds.setString(Tag.ImageType, VR.CS, "DERIVED", "PRIMARY");
+        ds.setInt(Tag.NumberOfFrames, VR.IS, 1);
+        ds.setInt(Tag.BitsAllocated, VR.US, 32);
+        ds.setString(Tag.ContentLabel, VR.CS, "NIFTI");
+        ds.setString(Tag.ContentDescription, VR.LO, "Imported from NIfTI as 32-bit float");
+        ds.setString(Tag.ContentCreatorName, VR.PN, "GRAPHY-Next");
+        ds.setString(Tag.ContentDate, VR.DA, ds.getString(Tag.SeriesDate, ""));
+        ds.setString(Tag.ContentTime, VR.TM, "000000");
+        ds.setString(Tag.Manufacturer, VR.LO, "Visionary Imaging Services, Inc.");
+        ds.setString(Tag.ManufacturerModelName, VR.LO, "GRAPHY-Next");
+        ds.setString(Tag.DeviceSerialNumber, VR.LO, "NIFTI-IMPORT");
+        ds.setString(Tag.SoftwareVersions, VR.LO, "GRAPHY-Next");
+        ds.setString(Tag.PresentationLUTShape, VR.CS, "IDENTITY");
+
+        String dimOrgUid = ds.getString(Tag.SeriesInstanceUID) + ".1";
+        if (dimOrgUid.length() > 64) {
+            dimOrgUid = UIDUtils.createUID();
+        }
+        Attributes org = new Attributes();
+        org.setString(Tag.DimensionOrganizationUID, VR.UI, dimOrgUid);
+        ds.newSequence(Tag.DimensionOrganizationSequence, 1).add(org);
+        Sequence dims = ds.newSequence(Tag.DimensionIndexSequence, 2);
+        dims.add(dimIndexItem(dimOrgUid, Tag.ImagePositionPatient, Tag.PlanePositionSequence));
+        if (nt > 1) {
+            dims.add(dimIndexItem(dimOrgUid, Tag.TemporalPositionIndex, Tag.FrameContentSequence));
+        }
+
+        Attributes shared = new Attributes();
+        Attributes po = new Attributes();
+        po.setDouble(Tag.ImageOrientationPatient, VR.DS, iop);
+        shared.newSequence(Tag.PlaneOrientationSequence, 1).add(po);
+        Attributes pm = new Attributes();
+        pm.setDouble(Tag.PixelSpacing, VR.DS, ps);
+        pm.setDouble(Tag.SliceThickness, VR.DS, geom.sliceSpacing());
+        pm.setDouble(Tag.SpacingBetweenSlices, VR.DS, geom.sliceSpacing());
+        shared.newSequence(Tag.PixelMeasuresSequence, 1).add(pm);
+        Attributes ft = new Attributes();
+        ft.setString(Tag.FrameType, VR.CS, "DERIVED", "PRIMARY");
+        shared.newSequence(Tag.ParametricMapFrameTypeSequence, 1).add(ft);
+        // 値はそのまま実際の量（傾き 1・切片 0）。単位は取り込みの画面で選ぶ（段 F2）。それまでは無次元「1」
+        Attributes rw = new Attributes();
+        rw.setDouble(Tag.DoubleFloatRealWorldValueFirstValueMapped, VR.FD, -Float.MAX_VALUE);
+        rw.setDouble(Tag.DoubleFloatRealWorldValueLastValueMapped, VR.FD, Float.MAX_VALUE);
+        rw.setDouble(Tag.RealWorldValueSlope, VR.FD, 1.0);
+        rw.setDouble(Tag.RealWorldValueIntercept, VR.FD, 0.0);
+        rw.setString(Tag.LUTLabel, VR.SH, "NIFTI");
+        rw.setString(Tag.LUTExplanation, VR.LO, "Values as stored in the NIfTI file");
+        Attributes unit = new Attributes();
+        unit.setString(Tag.CodeValue, VR.SH, "1");
+        unit.setString(Tag.CodingSchemeDesignator, VR.SH, "UCUM");
+        unit.setString(Tag.CodeMeaning, VR.LO, "no units");
+        rw.newSequence(Tag.MeasurementUnitsCodeSequence, 1).add(unit);
+        shared.newSequence(Tag.RealWorldValueMappingSequence, 1).add(rw);
+        ds.newSequence(Tag.SharedFunctionalGroupsSequence, 1).add(shared);
+
+        Attributes frame = new Attributes();
+        Attributes pp = new Attributes();
+        pp.setDouble(Tag.ImagePositionPatient, VR.DS, ipp);
+        frame.newSequence(Tag.PlanePositionSequence, 1).add(pp);
+        Attributes fc = new Attributes();
+        if (nt > 1) {
+            fc.setInt(Tag.DimensionIndexValues, VR.UL, z + 1, t + 1);
+            fc.setInt(Tag.TemporalPositionIndex, VR.UL, t + 1);
+        } else {
+            fc.setInt(Tag.DimensionIndexValues, VR.UL, z + 1);
+        }
+        frame.newSequence(Tag.FrameContentSequence, 1).add(fc);
+        ds.newSequence(Tag.PerFrameFunctionalGroupsSequence, 1).add(frame);
+    }
+
+    private static Attributes dimIndexItem(String dimOrgUid, int pointer, int functionalGroupPointer) {
+        Attributes item = new Attributes();
+        item.setString(Tag.DimensionOrganizationUID, VR.UI, dimOrgUid);
+        item.setInt(Tag.DimensionIndexPointer, VR.AT, pointer);
+        item.setInt(Tag.FunctionalGroupPointer, VR.AT, functionalGroupPointer);
+        return item;
+    }
+
+    private static void flipRows(float[] values, int cols, int rows) {
+        float[] tmp = new float[cols];
+        for (int y = 0; y < rows / 2; y++) {
+            int top = y * cols;
+            int bottom = (rows - 1 - y) * cols;
+            System.arraycopy(values, top, tmp, 0, cols);
+            System.arraycopy(values, bottom, values, top, cols);
+            System.arraycopy(tmp, 0, values, bottom, cols);
+        }
+    }
+
+    private static byte[] toBytes(float[] values) {
+        ByteBuffer buf = ByteBuffer.allocate(values.length * 4).order(ByteOrder.LITTLE_ENDIAN);
+        for (float v : values) {
+            buf.putFloat(v);
+        }
+        return buf.array();
     }
 
     private static void flipRows(short[] pixels, int cols, int rows, int samples) {
@@ -324,29 +445,24 @@ public final class NiftiToDicom {
     }
 
     /**
-     * NIfTI のデータ型 → DICOM の画素表現（標準の画像 IOD は 8/16 bit 整数＋Rescale）。
+     * NIfTI のデータ型 → DICOM の画素表現（fw/nifti-import.md §3・§3.1）。
      *
-     * <p>8/16 bit の整数型はそのまま入れる。32 bit 以上の整数・浮動小数は、取り込みの前にボリューム全体を 1 度走査し
-     * （{@link #calibrateGlobally}）、次の順で決める（fw/nifti-import.md §3）。
+     * <p>8/16 bit の整数型は通常の画像（16 bit ＋ Rescale）にそのまま入れる。32 bit 以上の整数・浮動小数は、取り込みの前に
+     * ボリューム全体を 1 度走査し（{@link #calibrateGlobally}）、次のどちらかにする。
      * <ol>
-     *   <li><b>値がすべて整数で、範囲が 16 bit の符号の数に収まる</b> → <b>可逆</b>。生の値をそのまま（必要なら一定の
-     *       オフセットだけずらして）入れ、Rescale でオフセットと scl_slope / scl_inter を戻す。
-     *       int32 の CT や、HU を float で保存した CT はここに入る。</li>
-     *   <li>それ以外（整数でない浮動小数、範囲が広すぎる整数） → 16 bit の全域を使って量子化し、最大誤差（刻みの半分）を
-     *       説明に出す。量子化は「値域を 16 bit に収める」だけで情報を作らない。</li>
+     *   <li><b>値がすべて整数で、範囲が 16 bit の符号の数に収まり、NaN・無限大が無い</b> → 通常の画像に<b>可逆</b>
+     *       （生の値をそのまま、必要なら一定のオフセットだけずらして入れ、Rescale で戻す）。int32 の CT、HU を float で持つ CT。</li>
+     *   <li>それ以外 → <b>Parametric Map（32 bit float）</b>。float32 は誤差なし、float64・2^24 を超える整数は float32 への丸め
+     *       （最大誤差を説明に出す）。<b>NaN はそのまま</b>、無限大も NaN にする（2026-10-06 のユーザ判断）。</li>
      * </ol>
-     * NaN・無限大は 16 bit で表せないので、使わない最小の符号（−32768）に置き、{@code PixelPaddingValue} にする。
-     * 件数は説明に出す（黙って別の値に変えない）。
      */
     static final class PixelSpec {
         /** 8/16 bit の整数型をそのまま入れる。 */
         private static final int DIRECT = 0;
         /** 32 bit 以上の型だが、整数値で 16 bit に収まるので可逆に入れる。 */
         private static final int LOSSLESS = 1;
-        /** 16 bit の全域へ量子化する。 */
-        private static final int QUANTIZE = 2;
-        /** NaN・無限大を置く符号（符号付き 16 bit の最小）。 */
-        static final short PADDING_CODE = Short.MIN_VALUE;
+        /** Parametric Map（32 bit float）で入れる。 */
+        private static final int FLOAT = 2;
 
         final int datatype;
         final int bitsAllocated;
@@ -355,16 +471,12 @@ public final class NiftiToDicom {
         double rescaleSlope;
         double rescaleIntercept;
         String description;
-        /** NaN・無限大があったときの PixelPaddingValue（無ければ null）。 */
-        Short paddingValue;
         /** NIfTI 側のスケーリング（scl_slope / scl_inter）。 */
         private final double sclSlope;
         private final double sclInter;
         private int mode = DIRECT;
         /** LOSSLESS のとき: 保存する値 = 生の値 − offset。 */
         private long offset;
-        /** QUANTIZE のとき: 有限値が使う最小の符号（パディングがあれば −32767）。 */
-        private int lowestCode = Short.MIN_VALUE;
 
         private PixelSpec(int datatype, int bitsAllocated, boolean signed, int samplesPerPixel,
                 double sclSlope, double sclInter, String description) {
@@ -394,7 +506,7 @@ public final class NiftiToDicom {
                 case NiftiHeader.DT_FLOAT32, NiftiHeader.DT_FLOAT64, NiftiHeader.DT_INT32, NiftiHeader.DT_UINT32,
                         NiftiHeader.DT_INT64, NiftiHeader.DT_UINT64 ->
                     new PixelSpec(h.datatype, 16, true, 1, h.sclSlope, h.sclInter,
-                            typeName(h.datatype) + " → 16bit（取り込み時に値を見て、可逆か量子化かを決める）");
+                            typeName(h.datatype) + "（取り込み時に値を見て、16bit で可逆か 32bit float かを決める）");
                 default -> throw new IOException("未対応の NIfTI データ型です: datatype=" + h.datatype);
             };
         }
@@ -413,6 +525,11 @@ public final class NiftiToDicom {
 
         private boolean isFloat() {
             return datatype == NiftiHeader.DT_FLOAT32 || datatype == NiftiHeader.DT_FLOAT64;
+        }
+
+        /** Parametric Map（32 bit float）で書くか。 */
+        boolean floatMode() {
+            return mode == FLOAT;
         }
 
         /** 取り込み前の全走査が要る型か（32 bit 以上の整数・浮動小数）。 */
@@ -442,13 +559,7 @@ public final class NiftiToDicom {
                         out[i] = b.getShort(i * 2);
                     }
                 }
-                default -> {
-                    if (mode == LOSSLESS) {
-                        storeLossless(b, out, n);
-                    } else {
-                        quantize(b, out, n);
-                    }
-                }
+                default -> storeLossless(b, out, n);
             }
             return out;
         }
@@ -467,6 +578,7 @@ public final class NiftiToDicom {
             long longMax = Long.MIN_VALUE;
             boolean allInteger = true;
             long nonFinite = 0;
+            double maxFloatError = 0;
             byte[] buf = new byte[unit * 8192];
             try (InputStream in = open(file)) {
                 skipFully(in, h.voxOffset);
@@ -487,6 +599,7 @@ public final class NiftiToDicom {
                         }
                         rawMin = Math.min(rawMin, v);
                         rawMax = Math.max(rawMax, v);
+                        maxFloatError = Math.max(maxFloatError, floatError(b, i, v));
                         if (allInteger) {
                             Long lv = rawLong(b, i, v);
                             if (lv == null) {
@@ -500,62 +613,52 @@ public final class NiftiToDicom {
                     remaining -= count;
                 }
             }
-            int pad = nonFinite > 0 ? 1 : 0;
-            if (nonFinite > 0) {
-                paddingValue = PADDING_CODE;
-            }
-            String nanNote = nonFinite > 0
-                    ? "・NaN/無限大 " + nonFinite + " ボクセルはパディング値（" + PADDING_CODE + "）"
-                    : "";
-            if (rawMin > rawMax) {
-                // 有限値が 1 つも無い（すべて NaN）。全部パディングになる
-                mode = QUANTIZE;
-                lowestCode = Short.MIN_VALUE + pad;
-                rescaleSlope = 1.0;
-                rescaleIntercept = 0.0;
-                description = typeName(datatype) + " → 16bit（有限値なし" + nanNote + "）";
-                return;
-            }
-            // 1) 整数値で、範囲が 16 bit の符号の数（パディングに 1 つ取るならその残り）に収まる → 可逆
-            // 差が long を桁あふれする（int64 の両端など）ときは、16 bit に収まらないので量子化へ
-            boolean fits = allInteger && longMax - longMin >= 0 && longMax - longMin <= 65535L - pad;
+            // 1) 整数値で、範囲が 16 bit の符号の数に収まり、NaN・無限大が無い → 通常の画像に可逆
+            //    （差が long を桁あふれする int64 の両端などは収まらない側へ）
+            boolean fits = nonFinite == 0 && rawMin <= rawMax && allInteger
+                    && longMax - longMin >= 0 && longMax - longMin <= 65535L;
             if (fits) {
                 mode = LOSSLESS;
-                if (pad == 0 && longMin >= Short.MIN_VALUE && longMax <= Short.MAX_VALUE) {
+                if (longMin >= Short.MIN_VALUE && longMax <= Short.MAX_VALUE) {
                     offset = 0;
                     signed = true;
-                } else if (pad == 0 && longMin >= 0 && longMax <= 65535) {
+                } else if (longMin >= 0 && longMax <= 65535) {
                     offset = 0;
                     signed = false;
-                } else if (longMin >= Short.MIN_VALUE + pad && longMax <= Short.MAX_VALUE) {
-                    offset = 0;
-                    signed = true;
                 } else {
-                    // 符号付き 16 bit の下端（パディングの次）へ寄せる
-                    offset = longMin - (Short.MIN_VALUE + pad);
+                    // 符号付き 16 bit の下端へ寄せる
+                    offset = longMin - Short.MIN_VALUE;
                     signed = true;
                 }
                 // 元の値 = (保存した値 + offset) × scl_slope + scl_inter
                 rescaleSlope = sclSlope;
                 rescaleIntercept = offset * sclSlope + sclInter;
                 description = typeName(datatype) + " → 16bit " + (signed ? "signed" : "unsigned") + "（整数値のため可逆"
-                        + (offset != 0 ? "・オフセット " + offset : "") + nanNote + "）";
+                        + (offset != 0 ? "・オフセット " + offset : "") + "）";
                 return;
             }
-            // 2) 量子化。16 bit の全域（パディングの分を除く）を使う
-            mode = QUANTIZE;
-            signed = true;
-            lowestCode = Short.MIN_VALUE + pad;
-            double vMin = Math.min(rawMin * sclSlope + sclInter, rawMax * sclSlope + sclInter);
-            double vMax = Math.max(rawMin * sclSlope + sclInter, rawMax * sclSlope + sclInter);
-            int levels = Short.MAX_VALUE - lowestCode; // 符号の数 − 1
-            double range = vMax - vMin;
-            rescaleSlope = range > 0 ? range / levels : 1.0;
-            rescaleIntercept = vMin - lowestCode * rescaleSlope;
-            description = typeName(datatype) + " → 16bit signed（"
-                    + (allInteger ? "整数だが範囲が 16bit を超えるため" : "整数でない値を含むため")
-                    + "量子化・最大誤差 ±" + String.format(java.util.Locale.ROOT, "%.6g", range > 0 ? rescaleSlope / 2 : 0.0)
-                    + nanNote + "）";
+            // 2) Parametric Map（32 bit float）。float32 は誤差なし。それ以外は float32 への丸めの最大誤差を出す
+            mode = FLOAT;
+            rescaleSlope = 1.0;
+            rescaleIntercept = 0.0;
+            String err = maxFloatError > 0
+                    ? "・float32 への丸めの最大誤差 ±" + String.format(java.util.Locale.ROOT, "%.6g", maxFloatError)
+                    : "・誤差なし";
+            String nan = nonFinite > 0 ? "・NaN/無限大 " + nonFinite + " ボクセルは NaN のまま" : "";
+            description = typeName(datatype) + " → 32bit float（Parametric Map" + err + nan + "）";
+        }
+
+        /**
+         * その値を float32 にしたときの誤差。整数型は<b>元の 64 bit 整数と</b>比べる（double に直してから比べると、
+         * 2^53 を超える整数は double の段階で丸まっていて誤差が見えない）。
+         */
+        private double floatError(ByteBuffer b, int i, double v) {
+            Long lv = (sclSlope == 1.0 && sclInter == 0.0 && !isFloat()) ? rawLong(b, i, v) : null;
+            if (lv != null) {
+                return new java.math.BigDecimal(lv).subtract(new java.math.BigDecimal((double) (float) v)).abs().doubleValue();
+            }
+            double real = v * sclSlope + sclInter;
+            return Math.abs(real - (double) (float) real);
         }
 
         /** 整数型ならその値、浮動小数なら整数値のときだけ long。整数でなければ null。 */
@@ -590,28 +693,21 @@ public final class NiftiToDicom {
         /** 可逆: 保存する値 = 生の値 − offset（{@link #calibrateGlobally} で 16 bit に収まることを確かめてある）。 */
         private void storeLossless(ByteBuffer b, short[] out, int n) {
             for (int i = 0; i < n; i++) {
-                double v = rawValue(b, i);
-                if (!Double.isFinite(v)) {
-                    out[i] = PADDING_CODE;
-                    continue;
-                }
-                long stored = rawLong(b, i, v) - offset;
+                long stored = rawLong(b, i, rawValue(b, i)) - offset;
                 // unsigned のときは 0〜65535 を short のビット列として入れる
                 out[i] = (short) stored;
             }
         }
 
-        /** 全体で決めた係数（{@link #calibrateGlobally}）で 16bit へ落とす。 */
-        private void quantize(ByteBuffer b, short[] out, int n) {
-            for (int i = 0; i < n; i++) {
+        /** Parametric Map の値（scl を掛けた実際の量・float32）。無限大は NaN にする。 */
+        float[] toFloats(byte[] raw, ByteOrder order, int voxels) {
+            ByteBuffer b = ByteBuffer.wrap(raw).order(order);
+            float[] out = new float[voxels];
+            for (int i = 0; i < voxels; i++) {
                 double v = rawValue(b, i) * sclSlope + sclInter;
-                if (!Double.isFinite(v)) {
-                    out[i] = PADDING_CODE;
-                    continue;
-                }
-                double q = (v - rescaleIntercept) / rescaleSlope;
-                out[i] = (short) Math.max(lowestCode, Math.min(Short.MAX_VALUE, Math.round(q)));
+                out[i] = Double.isFinite(v) ? (float) v : Float.NaN;
             }
+            return out;
         }
     }
 }

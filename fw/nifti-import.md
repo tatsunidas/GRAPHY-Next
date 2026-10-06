@@ -147,11 +147,21 @@ qform_code > 0 → クォータニオン（method 2）から作る
 
 | 段 | 内容 |
 |---|---|
-| F1 | backend の土台: PM の書き出し（NiftiToDicom・PROTECTED_TAGS）、展開器（layout・extractFrame）を standalone・web の両方に配線、フレームの振り分け、空白画像、受信 SOP。単体テスト（往復で値が一致・NaN が残る） |
+| F1 | backend の土台: PM の書き出し（NiftiToDicom・PROTECTED_TAGS）、展開器（layout・extractFrame）を standalone・web の両方に配線、フレームの振り分け、空白画像、受信 SOP。単体テスト（往復で値が一致・NaN が残る）。**✅ 2026-10-06**（下の「F1 の結果」） |
 | F2 | 単位の選択（取り込みの画面・RWVM・RescaleType）。段 1 の整数の画像にも |
 | F3 | frontend: MPR の入口、H10 の単位、ヒストグラム・W/L の NaN と小さい値域、seriesRenderable。実機（2D・MPR・3D・ROI・H10）でスクリーンショット |
 | F4 | npz（VolumeAssembler）・派生シリーズ・テクスチャ・ImageJ・焼き込みの事前検査 |
 | F5 | 書き出し → 取り込み直しの往復、設計書の状態を更新 |
+
+### F1 の結果（2026-10-06）
+
+- 規則を 1 つに絞った: **整数で 16 bit に収まり NaN が無いもの → 通常の画像（可逆）、それ以外 → すべて Parametric Map**。NaN を含む float もこちら（NaN を保つため）。段 1 で入れた「NaN をパディング値に置く」経路と 16 bit への量子化は使わなくなったので外した。
+- `ParametricMapFrameExpander`（layout・extractFrame・blankFrame）を standalone（`DicomStorageService` の layout・frameDicom・blankDicom）と web（`SeriesLayoutAssembler`・`StudyController.extractWebFrame`・`WebDicomDataService.blankDicom`）の両方に繋いだ。受信 SOP に ParametricMapStorage。
+- float32 への丸め誤差は、整数型は**元の 64 bit 整数と**比べる（double に直してから比べると 2^53 を超える整数は double の段階で丸まっていて誤差が 0 に見えた——int64 の両端のテストで発覚）。
+- サイドカー JSON の保護に ImageType を足して、通常の画像で JSON の ImageType が入らなくなる退行を出した（既存テストで発覚・外した。PM の ImageType は JSON を当てた後で上書きしている）。
+- テスト: `ParametricMapRoundTripTest` 5/0（4D・NaN・layout・切り出した単一フレームが表示側の読める形〔Float Pixel Data・PixelRepresentation なし・トップレベルに幾何〕・空白は NaN・web の組み立ても同じ）、`NiftiPixelExactnessTest` 12/0、`NiftiToDicomTest` 11/0、backend 全体 762/0。
+- 実機 `automator/src/spike/niftiFloatCheck.ts` **14/0**: ADC のような float32（0.0007〜0.0018・NaN 32 ボクセル）を取り込み、レイアウト（48×40×12・IOP・z の位置・32 bit）、**H10 の値が元の float32 とビット単位で一致**（患者座標で突き合わせ・`scripts/make-float-nifti.py` がアフィンから独立に出した答え）、NaN は 32 ボクセルのまま、2D 表示はスクリーンショットで確認。
+- F3 で直すことを実機で確認: 上の帯の「W/L 0/0」（0.1 刻みに丸めるので小さい値が 0 に潰れる。画像は DICOM の窓で正しく描かれている）。
 
 ### 検証（実装後）
 

@@ -208,7 +208,7 @@ class NiftiToDicomTest {
     }
 
     @Test
-    void float32_は_16bit_へ量子化し_Rescale_で戻せる() throws IOException, Exception {
+    void 整数でない_float32_は_Parametric_Map_の_32bit_float_で正確に入る() throws IOException, Exception {
         int voxels = 4 * 4 * 2;
         ByteBuffer d = ByteBuffer.allocate(voxels * 4).order(ByteOrder.LITTLE_ENDIAN);
         for (int i = 0; i < voxels; i++) {
@@ -223,18 +223,13 @@ class NiftiToDicomTest {
         List<Attributes> frames = convert(f, opts());
 
         Attributes first = frames.get(0);
-        assertThat(first.getInt(Tag.BitsAllocated, 0)).isEqualTo(16);
-        double slope = first.getDouble(Tag.RescaleSlope, 0);
-        double intercept = first.getDouble(Tag.RescaleIntercept, Double.NaN);
-        // 切片は「16 bit の全域を使う」位置に置く（最小値ではない。正確さの詳細は NiftiPixelExactnessTest）
-        assertThat(intercept).isFinite();
-        // **係数はボリューム全体で 1 つ**（スライスごとに変わらない）
-        assertThat(frames.get(1).getDouble(Tag.RescaleSlope, -1)).isEqualTo(slope);
-        // 復元して元の値に戻る（量子化誤差の範囲で）
-        byte[] px = first.getBytes(Tag.PixelData);
-        short[] shorts = new short[16];
-        ByteBuffer.wrap(px).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(shorts);
-        assertThat(shorts[3] * slope + intercept).isCloseTo(1.5, org.assertj.core.data.Offset.offset(slope / 2));
+        assertThat(first.getString(Tag.SOPClassUID)).isEqualTo(UID.ParametricMapStorage);
+        assertThat(first.getInt(Tag.BitsAllocated, 0)).isEqualTo(32);
+        // 1 インスタンス 1 フレーム（fw/nifti-import.md §3.1）
+        assertThat(first.getInt(Tag.NumberOfFrames, 0)).isEqualTo(1);
+        float[] v = new float[16];
+        ByteBuffer.wrap(first.getBytes(Tag.FloatPixelData)).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer().get(v);
+        assertThat(v[3]).isEqualTo(1.5f);
     }
 
     @Test

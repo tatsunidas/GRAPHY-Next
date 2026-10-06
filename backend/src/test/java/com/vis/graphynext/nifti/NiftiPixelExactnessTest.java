@@ -23,7 +23,8 @@ import org.junit.jupiter.api.Test;
  * NIfTI の画素の取り込みの正確さ（fw/nifti-import.md §3）。
  *
  * <p>既知の値で NIfTI を作り、取り込んだ DICOM から Rescale で値を戻して元と比べる。
- * <b>整数値で 16 bit に収まるものは完全一致</b>、それ以外は<b>誤差が刻み（RescaleSlope）の半分以内</b>。
+ * <b>整数値で 16 bit に収まるものは通常の画像で完全一致</b>、それ以外は <b>Parametric Map（32 bit float）で
+ * float32 の値と完全一致</b>（fw/nifti-import.md §3.1）。NaN はそのまま残る。
  * 2026-10-06 に NLSTseg の int32 CT（−2048〜1508）が量子化されて最大 0.056 HU ずれたのが発端。
  */
 class NiftiPixelExactnessTest {
@@ -88,6 +89,15 @@ class NiftiPixelExactnessTest {
             double[] out = new double[N];
             int k = 0;
             for (Attributes ds : frames) {
+                if (ds.contains(Tag.FloatPixelData)) {
+                    float[] f = new float[NX * NY];
+                    ByteBuffer.wrap(ds.getBytes(Tag.FloatPixelData)).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer().get(f);
+                    for (int i = 0; i < NX * NY; i++) {
+                        out[k + i] = f[i];
+                    }
+                    k += NX * NY;
+                    continue;
+                }
                 boolean signed = ds.getInt(Tag.PixelRepresentation, 0) == 1;
                 double slope = ds.getDouble(Tag.RescaleSlope, 1);
                 double intercept = ds.getDouble(Tag.RescaleIntercept, 0);
@@ -107,8 +117,8 @@ class NiftiPixelExactnessTest {
             return out;
         }
 
-        double slope() {
-            return frames.get(0).getDouble(Tag.RescaleSlope, 1);
+        boolean parametricMap() {
+            return frames.stream().allMatch(ds -> org.dcm4che3.data.UID.ParametricMapStorage.equals(ds.getString(Tag.SOPClassUID)));
         }
     }
 
@@ -137,7 +147,7 @@ class NiftiPixelExactnessTest {
         double[] v = ramp(-2048, 155); // −2048〜1517
         Converted c = convert(nifti(NiftiHeader.DT_INT32, v, 1, 0));
         assertExact(c, v);
-        assertThat(c.slope()).isEqualTo(1.0);
+        assertThat(c.frames().get(0).getDouble(Tag.RescaleSlope, 0)).isEqualTo(1.0);
         assertThat(c.frames().get(0).getInt(Tag.PixelRepresentation, -1)).isEqualTo(1);
     }
 
@@ -158,17 +168,12 @@ class NiftiPixelExactnessTest {
     }
 
     @Test
-    void 範囲が16bitを超える整数は全域で量子化し誤差は刻みの半分以内() throws IOException {
-        double[] v = ramp(0, 4500); // 0〜103500
+    void 範囲が16bitを超える整数は_Parametric_Map_の_float32_で正確() throws IOException {
+        double[] v = ramp(0, 4500); // 0〜103500（2^24 以下の整数は float32 で正確）
         Converted c = convert(nifti(NiftiHeader.DT_INT32, v, 1, 0));
-        assertThat(c.summary().pixelConversion()).contains("量子化");
-        double half = c.slope() / 2;
-        double[] got = c.values();
-        for (int i = 0; i < N; i++) {
-            assertThat(Math.abs(got[i] - v[i])).isLessThanOrEqualTo(half + 1e-9);
-        }
-        // 16 bit の全域を使う（今までは 32000 段階だけだった）
-        assertThat(c.slope()).isCloseTo(103500.0 / 65535, org.assertj.core.data.Offset.offset(1e-9));
+        assertThat(c.parametricMap()).isTrue();
+        assertThat(c.values()).containsExactly(v);
+        assertThat(c.summary().pixelConversion()).contains("32bit float").contains("誤差なし");
     }
 
     @Test
@@ -180,12 +185,17 @@ class NiftiPixelExactnessTest {
     }
 
     @Test
-    void int64_の両端のような極端な範囲でも落ちずに量子化する() throws IOException {
+    void int64_の両端のような極端な範囲は_float32_に丸めて最大誤差を出す() throws IOException {
         double[] v = ramp(0, 1);
         v[0] = Long.MIN_VALUE;
         v[N - 1] = Long.MAX_VALUE;
         Converted c = convert(nifti(NiftiHeader.DT_INT64, v, 1, 0));
-        assertThat(c.summary().pixelConversion()).contains("量子化");
+        assertThat(c.parametricMap()).isTrue();
+        assertThat(c.summary().pixelConversion()).contains("最大誤差");
+        double[] got = c.values();
+        for (int i = 1; i < N - 1; i++) {
+            assertThat(got[i]).isEqualTo(v[i]); // 小さい整数は正確
+        }
     }
 
     @Test
@@ -207,26 +217,46 @@ class NiftiPixelExactnessTest {
     }
 
     @Test
-    void 整数でない_float_は全域で量子化し誤差は刻みの半分以内() throws IOException {
+    void 整数でない_float32_は_Parametric_Map_で完全一致() throws IOException {
         double[] v = ramp(0.001, 0.0137); // ADC のような小さい値
         Converted c = convert(nifti(NiftiHeader.DT_FLOAT32, v, 1, 0));
-        assertThat(c.summary().pixelConversion()).contains("量子化").contains("最大誤差");
-        double half = c.slope() / 2;
+        assertThat(c.parametricMap()).isTrue();
         double[] got = c.values();
         for (int i = 0; i < N; i++) {
-            assertThat(Math.abs(got[i] - (float) v[i])).isLessThanOrEqualTo(half + 1e-12);
+            assertThat(got[i]).isEqualTo((double) (float) v[i]);
+        }
+        assertThat(c.summary().pixelConversion()).contains("誤差なし");
+        Attributes first = c.frames().get(0);
+        // Float Pixel Data には PixelRepresentation が無い（あると表示側が整数として読む）
+        assertThat(first.contains(Tag.PixelRepresentation)).isFalse();
+        assertThat(first.contains(Tag.PixelData)).isFalse();
+        assertThat(first.getInt(Tag.BitsAllocated, 0)).isEqualTo(32);
+        // 幾何は Functional Groups へ
+        assertThat(first.contains(Tag.ImagePositionPatient)).isFalse();
+        assertThat(com.vis.graphynext.dicom.SegFrameExpander.perFrameIpp(first, 0)).isNotNull();
+    }
+
+    @Test
+    void 整数でない_float64_は_float32_に丸めて最大誤差を出す() throws IOException {
+        double[] v = ramp(0.1, 0.123456789012);
+        Converted c = convert(nifti(NiftiHeader.DT_FLOAT64, v, 1, 0));
+        assertThat(c.parametricMap()).isTrue();
+        assertThat(c.summary().pixelConversion()).contains("最大誤差");
+        double[] got = c.values();
+        for (int i = 0; i < N; i++) {
+            assertThat(got[i]).isEqualTo((double) (float) v[i]);
         }
     }
 
     @Test
-    void NaN_と無限大はパディング値になりほかの値は可逆のまま() throws IOException {
-        double[] v = ramp(-1000, 50);
+    void NaN_と無限大は_NaN_のまま_Parametric_Map_に入る() throws IOException {
+        double[] v = ramp(-1000, 50); // 値は整数だが NaN を含むので可逆の 16bit には入れない
         v[3] = Double.NaN;
         v[10] = Double.POSITIVE_INFINITY;
         v[17] = Double.NEGATIVE_INFINITY;
         Converted c = convert(nifti(NiftiHeader.DT_FLOAT32, v, 1, 0));
-        assertThat(c.frames().get(0).getInt(Tag.PixelPaddingValue, 0)).isEqualTo(Short.MIN_VALUE);
-        assertThat(c.summary().pixelConversion()).contains("可逆").contains("3 ボクセル");
+        assertThat(c.parametricMap()).isTrue();
+        assertThat(c.summary().pixelConversion()).contains("3 ボクセルは NaN のまま");
         double[] got = c.values();
         for (int i = 0; i < N; i++) {
             if (Double.isFinite(v[i])) {
@@ -234,21 +264,6 @@ class NiftiPixelExactnessTest {
             } else {
                 assertThat(got[i]).isNaN();
             }
-        }
-    }
-
-    @Test
-    void NaN_があっても量子化の係数は壊れない() throws IOException {
-        // 以前は NaN が最小・最大に混ざって係数が 1 になり、画像全体が潰れていた
-        double[] v = ramp(0.5, 0.25);
-        v[0] = Double.NaN;
-        Converted c = convert(nifti(NiftiHeader.DT_FLOAT32, v, 1, 0));
-        double half = c.slope() / 2;
-        assertThat(c.slope()).isLessThan(1e-3);
-        double[] got = c.values();
-        assertThat(got[0]).isNaN();
-        for (int i = 1; i < N; i++) {
-            assertThat(Math.abs(got[i] - v[i])).isLessThanOrEqualTo(half + 1e-12);
         }
     }
 
