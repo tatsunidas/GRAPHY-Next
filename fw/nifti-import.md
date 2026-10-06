@@ -130,7 +130,7 @@ qform_code > 0 → クォータニオン（method 2）から作る
 
 **frontend**
 11. MPR の入口（`mpr/MprScreen.tsx:191`）をレイアウトのセルから imageId を作る形にする（3D・Slicer はすでにセル優先）。
-12. H10 の単位（`plugins/pluginVolumeApi.ts:79`）をフレーム付きの imageId から取る。
+12. H10 の単位（`plugins/pluginVolumeApi.ts:79`）をフレーム付きの imageId から取る。**F2 で済み**（`loadRegVolume` が実際に読んだ先頭の imageId を返す）。
 13. NaN を含む画像: `viewer/histogram.ts`（NaN を除く）、W/L 調整（`viewer2d/WwWlAdjustDialog.tsx`: NaN を除いた最小・最大、0.1 刻みの丸めをやめて値域に合わせた刻みにする＝ADC のような小さい値が扱えない）。
 14. `viewer/seriesRenderable.ts` で Parametric Map を開ける種類として明示する。
 
@@ -148,7 +148,7 @@ qform_code > 0 → クォータニオン（method 2）から作る
 | 段 | 内容 |
 |---|---|
 | F1 | backend の土台: PM の書き出し（NiftiToDicom・PROTECTED_TAGS）、展開器（layout・extractFrame）を standalone・web の両方に配線、フレームの振り分け、空白画像、受信 SOP。単体テスト（往復で値が一致・NaN が残る）。**✅ 2026-10-06**（下の「F1 の結果」） |
-| F2 | 単位の選択（取り込みの画面・RWVM・RescaleType）。段 1 の整数の画像にも |
+| F2 | 単位の選択（取り込みの画面・RWVM・RescaleType）。段 1 の整数の画像にも。**✅ 2026-10-06**（下の「F2 の結果」） |
 | F3 | frontend: MPR の入口、H10 の単位、ヒストグラム・W/L の NaN と小さい値域、seriesRenderable。実機（2D・MPR・3D・ROI・H10）でスクリーンショット |
 | F4 | npz（VolumeAssembler）・派生シリーズ・テクスチャ・ImageJ・焼き込みの事前検査 |
 | F5 | 書き出し → 取り込み直しの往復、設計書の状態を更新 |
@@ -162,6 +162,15 @@ qform_code > 0 → クォータニオン（method 2）から作る
 - テスト: `ParametricMapRoundTripTest` 5/0（4D・NaN・layout・切り出した単一フレームが表示側の読める形〔Float Pixel Data・PixelRepresentation なし・トップレベルに幾何〕・空白は NaN・web の組み立ても同じ）、`NiftiPixelExactnessTest` 12/0、`NiftiToDicomTest` 11/0、backend 全体 762/0。
 - 実機 `automator/src/spike/niftiFloatCheck.ts` **14/0**: ADC のような float32（0.0007〜0.0018・NaN 32 ボクセル）を取り込み、レイアウト（48×40×12・IOP・z の位置・32 bit）、**H10 の値が元の float32 とビット単位で一致**（患者座標で突き合わせ・`scripts/make-float-nifti.py` がアフィンから独立に出した答え）、NaN は 32 ボクセルのまま、2D 表示はスクリーンショットで確認。
 - F3 で直すことを実機で確認: 上の帯の「W/L 0/0」（0.1 刻みに丸めるので小さい値が 0 に潰れる。画像は DICOM の窓で正しく描かれている）。
+
+### F2 の結果（2026-10-06）
+
+- 取り込みの要求に `valueUnit`（UCUM のコード）。画面は NIfTI の節の「値の単位」（単位なし・SUV・Bq/ml・mm²/s・ms・HU・その他（UCUM・16 文字以内））。候補と検査は `frontend/src/mainscreen/niftiUnits.ts`。
+- 保存: Parametric Map は RWVM の MeasurementUnitsCodeSequence（UCUM・CodeMeaning は表示名）、通常の画像は RescaleType に表示名（`[hnsf'U]`→HU、`{SUVbw}g/ml`→SUVbw、ほかはコードのまま）。切り出したフレームは RWVM の表示名を RescaleType に写す。
+- 実機で見つけて直した: **H10 の unit が "raw" になっていた**（単位をインスタンスの imageId から取っていて、Parametric Map では Rescale の無い生のファイルを指していた）。`loadRegVolume` が実際に読んだ先頭の imageId（`firstImageId`）を返し、そこから取る（frontend 12）。H3 は初めから正しかった。
+- テスト: `ParametricMapRoundTripTest` 8/0（RWVM の UCUM・切り出しの RescaleType・単位なしは「1」で表示は空・既知のコードの表示名・17 文字は不可）、`NiftiPixelExactnessTest` 13/0（通常の画像の RescaleType）、`niftiUnits.test.ts` 3/0、backend 766/0、frontend 1944/0。
+- 実機 `niftiFloatCheck` **16/0**: mm2/s を付けて取り込み、H10・H3 の unit が mm2/s。取り込みの画面に候補 7 つ・「その他」で入力欄（スクリーンショット）。
+- 見つけたが触っていない: 非 DICOM 取り込みのファイル一覧で `.nii.gz` の印が「?」になる（今回より前からの見た目の問題）。
 
 ### 検証（実装後）
 

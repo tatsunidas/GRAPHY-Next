@@ -274,4 +274,14 @@ class NiftiPixelExactnessTest {
         Converted c = convert(nifti(NiftiHeader.DT_FLOAT32, v, 1, 0));
         assertThat(java.util.Arrays.stream(c.values()).allMatch(Double::isNaN)).isTrue();
     }
+
+    @Test
+    void 通常の画像にも単位の表示名が_RescaleType_に入る() throws IOException {
+        List<Attributes> out = new ArrayList<>();
+        NiftiToDicom.convert(nifti(NiftiHeader.DT_INT32, ramp(-1024, 97), 1, 0),
+                new NiftiToDicom.Options("CT", "P", "T^P", "", "", "20261006", "s", "s", 1, null, null, Map.of(), "[hnsf'U]"),
+                (ds, ts) -> out.add(new Attributes(ds)));
+        assertThat(out.get(0).getString(Tag.SOPClassUID)).isNotEqualTo(org.dcm4che3.data.UID.ParametricMapStorage);
+        assertThat(out.get(0).getString(Tag.RescaleType)).isEqualTo("HU");
+    }
 }

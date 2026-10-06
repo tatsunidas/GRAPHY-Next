@@ -40,7 +40,7 @@ export async function activate(host) {
   let nan = 0;
   for (let p = 0; p < vol.data.length; p++) if (Number.isNaN(vol.data[p])) nan++;
   const px = await host.getPixelData(t.tileId);
-  window.__probe = { dims: vol.dims, unit: vol.unit, at, nan, pixelSample: px ? Array.from(px.data.slice(0, 5)) : null };
+  window.__probe = { dims: vol.dims, unit: vol.unit, at, nan, pixelSample: px ? Array.from(px.data.slice(0, 5)) : null, pixelUnit: px ? px.unit : null };
 }
 `;
 
@@ -68,7 +68,8 @@ async function main(): Promise<void> {
     const base = `http://localhost:${driver.ports.http}`;
     const res = await fetch(`${base}/api/nifti/import`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: nii, modality: "MR", patientId: "NIFTI-FLOAT", patientName: "Float^Nifti", seriesDescription: "ADC float" }),
+      // 単位（F2）: mm²/s を付けて取り込む
+      body: JSON.stringify({ path: nii, modality: "MR", patientId: "NIFTI-FLOAT", patientName: "Float^Nifti", seriesDescription: "ADC float", valueUnit: "mm2/s" }),
     });
     const r = (await res.json()) as { studyInstanceUid: string; seriesInstanceUid: string; imported: number; pixelConversion: string; error: string | null };
     console.log(`    取り込み: ${r.imported} 件・${r.pixelConversion}`);
@@ -108,8 +109,22 @@ async function main(): Promise<void> {
           `ボクセル ${s.index.join(",")}: H10 ${got} = 元の float32 ${s.value}`, { got, want: s.value, ijk: p.at[i].ijk });
       });
       check(p.nan === truth.nanVoxels, `NaN は ${truth.nanVoxels} ボクセルのまま（H10 で ${p.nan}）`);
+      check(p.unit === "mm2/s" && p.pixelUnit === "mm2/s", "取り込みで選んだ単位が H10・H3 の unit に出る", { h10: p.unit, h3: p.pixelUnit });
       check(Array.isArray(p.pixelSample) && p.pixelSample.every((v: number) => Number.isFinite(v) && Math.abs(v) < 0.01), "H3（表示中のスライス）も小さい float の値", p.pixelSample);
     }
+
+    // 取り込みの画面: NIfTI を選ぶと「値の単位」が出て選べる（F2）
+    await viewer.close();
+    // メニューとツールバーに同じ文字の項目があるので、ツールバーのボタン（同じダイアログを開く）を押す
+    await page.getByText("非DICOM取込", { exact: true }).first().click();
+    await page.locator('input[type="file"][multiple]').setInputFiles(nii);
+    const unitSel = page.getByTestId("nifti-unit");
+    await unitSel.waitFor({ state: "visible", timeout: 10_000 });
+    await unitSel.selectOption("other");
+    await page.getByTestId("nifti-unit-custom").fill("10*-3.mm2/s");
+    await page.screenshot({ path: path.join(OUT_DIR, "import-dialog-unit.png") });
+    const options = await unitSel.locator("option").allTextContents();
+    check(options.length === 7 && options.includes("mm²/s（ADC など）"), "取り込みの画面に単位の候補が 7 つ出る", options);
   } finally {
     await driver.stop();
     fs.rmSync(probeDir, { recursive: true, force: true });

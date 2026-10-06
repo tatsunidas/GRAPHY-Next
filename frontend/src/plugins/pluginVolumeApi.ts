@@ -76,7 +76,9 @@ export async function loadPluginVolume(
   // 画像は直前の読み込みでキャッシュ済みなので、ここでの取得は実質ゼロコスト。
   let unit = "";
   let sliceThickness: number | null = null;
-  const firstId = imageIdForInstance(mode, instances[0].sopInstanceUid, studyUid, ref.seriesUid);
+  // 実際に読んだスライスの imageId を使う（Parametric Map ではフレーム付き。インスタンスの imageId だと
+  // Float Pixel Data を持つ生のファイルを指し、Rescale が無いので単位が "raw" になる——fw/nifti-import.md §3.1）
+  const firstId = loaded.firstImageId ?? imageIdForInstance(mode, instances[0].sopInstanceUid, studyUid, ref.seriesUid);
   try {
     const img = await imageLoader.loadAndCacheImage(firstId);
     unit = getModalityCalibration(img, firstId).unit ?? "";

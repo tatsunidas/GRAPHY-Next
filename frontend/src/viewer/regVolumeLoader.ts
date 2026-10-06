@@ -54,6 +54,11 @@ export interface LoadedRegVolume {
    * 並べ替えの答えが 2 つになる（この repo が繰り返し避けてきた事態）。
    */
   readonly slices: ReadonlyArray<{ readonly sopInstanceUid: string | null; readonly ipp: Vec3 }>;
+  /**
+   * 実際に読んだ先頭スライスの imageId（多フレーム・Parametric Map ではフレーム付き）。
+   * 単位やスライス厚はここから取る（インスタンスの imageId だと、Parametric Map は未校正の生のファイルを指す）。
+   */
+  readonly firstImageId: string | null;
 }
 
 /** 読み込み前の見積り。**着手前に予測して確認する**（設計 §7-1）。 */
@@ -216,5 +221,6 @@ export async function loadRegVolume(
     modality,
     // 並べ替え後の順（＝ボリュームの z 順）で返す。
     slices: loaded.map((s) => ({ sopInstanceUid: sopOf(s.imageId), ipp: s.ipp })),
+    firstImageId: firstId ?? null,
   };
 }
