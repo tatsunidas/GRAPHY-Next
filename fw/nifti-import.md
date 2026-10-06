@@ -80,6 +80,85 @@ qform_code > 0 → クォータニオン（method 2）から作る
 - 以前は量子化を 32000 段階（16 bit の半分）で行っていたので、誤差が必要の 2 倍あった。
 - 未対応の型（float128 等）は**理由を添えて失敗**する（黙って落とさない）。
 
+## 3.1 段 2: 整数でない浮動小数を 32 bit float で格納する（設計・2026-10-06）
+
+> ユーザの決定（2026-10-06）: 整数でない float（PET の SUV、MR の ADC・T1 マップなど）は 16 bit に量子化せず、**32 bit float のまま**入れる。
+> この節は設計。**実装の前にユーザの確認を取る。**
+
+### 対象
+
+段 1（§3）の判定で「量子化」に落ちていたもののうち:
+
+| 入力 | 段 2 での扱い | 誤差 |
+|---|---|---|
+| float32 で整数でない値を含む | float32 のまま | なし |
+| float64 で整数でない値を含む | float32 に丸める（読み込み部品が 64 bit float を読めないため。§調査） | 相対 6×10⁻⁸ 程度。最大誤差を表示 |
+| 整数だが範囲が 16 bit を超え、絶対値が 2²⁴ 以下 | float32（2²⁴ までの整数は float32 で正確） | なし |
+| 整数で絶対値が 2²⁴ を超える | float32 に丸める | 最大誤差を表示 |
+
+段 1 で可逆に入るもの（整数で 16 bit に収まるもの）は、今の通常の CT/MR 画像のまま（互換性が一番高い）。
+
+### 保存形式
+
+- **Parametric Map Storage（1.2.840.10008.5.1.4.1.1.30）、1 インスタンス 1 フレーム**（NumberOfFrames=1）。Float Pixel Data (7FE0,0008)、BitsAllocated 32、**PixelRepresentation は書かない**。
+  - 1 ボリュームを 1 インスタンスにしない理由: 512×512×300 の float32 は約 300 MB になり、表示でフレームを 1 枚取り出すたびに大きいファイルを読む。Enhanced 系の IOD は 1 フレームを認めるので、今の NIfTI 取り込みと同じ「1 枚 1 インスタンス」を保てる。
+- 幾何・時相・チャネルは Functional Groups に入れる（Shared: PlaneOrientation・PixelMeasures、PerFrame: PlanePosition・FrameContent の DimensionIndex＝z/t/c）。
+- **値は float のまま実際の量**。RealWorldValueMapping は傾き 1・切片 0、単位は NIfTI に無いので「単位なし」。→ フロントは RWVM を読まなくても値が正しい（今の校正処理は Rescale が無ければ傾き 1・切片 0 として扱う）。
+- NaN・無限大: **要決定**（下の「決めてほしいこと」）。
+
+### 読み込み部品で確かめたこと（2026-10-06）
+
+`@cornerstonejs/dicom-image-loader` 3.33.5 の `shared/decoders/decodeLittleEndian.js`: BitsAllocated 32 で **PixelRepresentation が無ければ Float32Array**、0 なら Uint32、1 なら Int32 として読む。Float Pixel Data (x7fe00008) は `wadouri/getPixelData.js`・`getUncompressedImageFrame.js` が拾う。**64 bit の Double Float Pixel Data (7FE0,0009) には対応していない**。RWVM・Parametric Map の SOP はどこにも出てこない。
+
+### 本体で要る変更（調査: Explore 2 本・2026-10-06。要の主張はコードで確かめた）
+
+**backend**
+1. `NiftiToDicom`: 段 2 の対象を Parametric Map として書く（Functional Groups・Float Pixel Data・RWVM）。
+2. 新しい展開器 `ParametricMapFrameExpander`（`NmFrameExpander` と同じ形）: `layout()` で Functional Groups から z/t/c・IOP・z の並び（zSpatial）・PixelFormat（32 bit・float）を返し、`extractFrame()` で 1 フレームを**トップレベルに幾何を持つ単一フレーム**（Float Pixel Data・PixelRepresentation なし）にして返す。
+   - 🚨 展開器は standalone（`DicomStorageService` の `…LayoutIfApplicable`）と web（`SeriesLayoutAssembler.fromAttributes`）の**両方**に繋ぐ（片方だけだと実機で 1 枚しか出ない・2026-09-03 に踏んだ）。
+   - 今のフレーム切り出し（`SegFrameExpander.extractFrame`）は PixelData しか読まず PixelRepresentation=0 を書くので、float には使えない。
+3. C-STORE の受信 SOP の一覧（`storage-sop-classes.properties`）に ParametricMapStorage を足す（今は無い＝C-STORE・自局宛ての C-MOVE で拒否される）。
+4. フレームの振り分け: `DicomStorageService.frameDicom`・`StudyController.extractWebFrame` で NM より前に PM を振り分ける。
+5. 空白画像（`DicomStorageService.blankDicom`・`WebDicomDataService.blankDicom`）: 先頭のヘッダを複製して 16 bit で書くので、PM 用の分岐（float の単一フレーム）。
+6. 外部の計算機へ送る npz（`compute/VolumeAssembler.java`）: PixelData しか読まない（PM は `npz-pixels-unreadable`）・32 bit を整数として書く・幾何をトップレベルから取る → Float Pixel Data を読み、Functional Groups から幾何を取る。
+7. 派生シリーズ（`DerivedSeriesService.buildInstance`）: 元の SOP Class を写すので、元が PM だと「PM なのに 16 bit・FG なし」の不正なインスタンスができる → PM を元にするときは画像の SOP（`sopClassOf`）にする。
+8. `NiftiMetadataMapper.PROTECTED_TAGS` に Float Pixel Data・NumberOfFrames・Functional Groups・DimensionIndex などを足す（サイドカー JSON で上書きされないように）。
+9. テクスチャ（`RadiomicsMapEngine.processorFrom`）・ImageJ 連携（`ImageJBridgeService.loadProcessor`）: 8/16 bit しか読まない → float のフレームは FloatProcessor を直接組む。
+10. 匿名化の焼き込みの事前検査（`AnonymizeService.geometryOf`）: float を「塗れる」と判定しているので外す（焼き込み本体は PixelData しか読まないので塗らない＝安全側）。
+- 変更不要と確かめたもの: ZIP 書き出し（バイト列のままコピー・DICOMDIR は PM 対応済み）、匿名化（UID は Functional Groups の中も置き換わる）、DB のスキーマ、SEG・RTDOSE・RTSTRUCT の書き出し、圧縮形式の変換（float は圧縮できない規定）。
+- 流用できるもの: SEG の書き出し（`SegExportService.export`・`perFrameItem`・`dimIndexItem`）の Functional Groups の組み方。dcm4che 5.34.3 は `UID.ParametricMapStorage`・`Tag.FloatPixelData`・`VR.OF` を持ち、ヘッダだけを読む箇所（`IncludeBulkData.NO`）は Float Pixel Data を読み飛ばす。
+
+**frontend**
+11. MPR の入口（`mpr/MprScreen.tsx:191`）をレイアウトのセルから imageId を作る形にする（3D・Slicer はすでにセル優先）。
+12. H10 の単位（`plugins/pluginVolumeApi.ts:79`）をフレーム付きの imageId から取る。
+13. NaN を含む画像: `viewer/histogram.ts`（NaN を除く）、W/L 調整（`viewer2d/WwWlAdjustDialog.tsx`: NaN を除いた最小・最大、0.1 刻みの丸めをやめて値域に合わせた刻みにする＝ADC のような小さい値が扱えない）。
+14. `viewer/seriesRenderable.ts` で Parametric Map を開ける種類として明示する。
+
+### 決めたこと（2026-10-06・ユーザ）
+
+- **NaN・無限大は NaN のまま入れ、表示・統計で除く**（float は NaN を表せる。無限大も NaN にする。件数は取り込み結果に出す）。
+  ROI 統計（`summarizeValues`）・H66 はすでに非有限値を除く。ヒストグラムと W/L 調整（13）は直す。
+- **単位は取り込みの画面で選べるようにする**。非 DICOM 取り込みの NIfTI の節に「値の単位」を足す（候補: 単位なし・SUV（g/ml）・Bq/ml・mm²/s・ms・HU・その他（UCUM を入力））。
+  - 保存: RWVM の MeasurementUnitsCodeSequence（UCUM）に入れる。
+  - 表示: フレームを切り出すとき、単位を RescaleType にも写す（傾き 1・切片 0）。今のフロントの単位の判定（`pixelCalibration.ts` の `resolveValueUnit` は RescaleType を見る）がそのまま使える。
+  - 段 1 の 16 bit の画像（整数）にも同じ単位を付ける（RescaleType）。
+
+### 段
+
+| 段 | 内容 |
+|---|---|
+| F1 | backend の土台: PM の書き出し（NiftiToDicom・PROTECTED_TAGS）、展開器（layout・extractFrame）を standalone・web の両方に配線、フレームの振り分け、空白画像、受信 SOP。単体テスト（往復で値が一致・NaN が残る） |
+| F2 | 単位の選択（取り込みの画面・RWVM・RescaleType）。段 1 の整数の画像にも |
+| F3 | frontend: MPR の入口、H10 の単位、ヒストグラム・W/L の NaN と小さい値域、seriesRenderable。実機（2D・MPR・3D・ROI・H10）でスクリーンショット |
+| F4 | npz（VolumeAssembler）・派生シリーズ・テクスチャ・ImageJ・焼き込みの事前検査 |
+| F5 | 書き出し → 取り込み直しの往復、設計書の状態を更新 |
+
+### 検証（実装後）
+
+- 整数でない float32（と NaN）の合成 NIfTI を取り込み、H3・H10・ROI 統計の値が元の float32 と**完全一致**、MPR・3D が開く、NaN の扱いが決めたとおり。表示はスクリーンショットで判定。
+- 保存した DICOM を pydicom で読み、Float Pixel Data の値が元と一致（`automator/scripts/dicom-series-to-nifti.py` を Float Pixel Data に対応させる）。
+- 書き出し（ZIP）→ 別の保管庫へ取り込み直して値が一致。外部の計算機へ送る npz の値が一致。
+
 ## 4. サイドカー JSON（メタデータ）
 
 Swing 版と同じく、**JSON のキーを DICOM キーワードとして解釈**する
