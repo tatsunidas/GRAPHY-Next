@@ -288,6 +288,10 @@ public class StudyController {
                     || ts.equals(UID.ExplicitVRBigEndian))) {
                 return null;
             }
+            // Parametric Map は float の単一フレームにする（fw/nifti-import.md §3.1）
+            if (ParametricMapFrameExpander.isParametricMap(ds)) {
+                return ParametricMapFrameExpander.extractFrame(ds, frame);
+            }
             // NM 断層は per-frame の幾何を持たないので、そちらの経路で幾何を補う（H28）。
             if (NmFrameExpander.isNmTomo(ds)) {
                 return NmFrameExpander.extractFrame(ds, frame);

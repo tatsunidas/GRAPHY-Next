@@ -45,6 +45,10 @@ public final class NiftiMetadataMapper {
         Tag.FrameOfReferenceUID, Tag.PatientID, Tag.PatientName, Tag.Modality, Tag.InstanceNumber,
         Tag.SeriesNumber, Tag.TemporalPositionIndex, Tag.NumberOfTemporalPositions, Tag.SliceLocation,
         Tag.TransferSyntaxUID, Tag.SpecificCharacterSet,
+        // Parametric Map（fw/nifti-import.md §3.1）
+        Tag.FloatPixelData, Tag.DoubleFloatPixelData, Tag.NumberOfFrames, Tag.SharedFunctionalGroupsSequence,
+        Tag.PerFrameFunctionalGroupsSequence, Tag.DimensionOrganizationSequence, Tag.DimensionIndexSequence,
+        // ImageType は守らない（通常の画像ではサイドカーの値を入れる。PM は JSON を当てた後で上書きする）
     };
 
     private NiftiMetadataMapper() {
