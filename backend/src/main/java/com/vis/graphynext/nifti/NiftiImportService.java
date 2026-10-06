@@ -65,7 +65,7 @@ public class NiftiImportService {
             NiftiToDicom.Options full = new NiftiToDicom.Options(
                     opts.modality(), opts.patientId(), opts.patientName(), opts.patientBirthDate(),
                     opts.patientSex(), opts.studyDate(), opts.studyDescription(), opts.seriesDescription(),
-                    opts.seriesNumber(), opts.studyInstanceUid(), opts.seriesInstanceUid(), metadata);
+                    opts.seriesNumber(), opts.studyInstanceUid(), opts.seriesInstanceUid(), metadata, opts.valueUnit());
 
             NiftiToDicom.Summary summary = NiftiToDicom.convert(nifti, full, (ds, tsuid) -> {
                 Path tmp = Files.createTempFile(tmpDir, "frame-", ".dcm");
@@ -101,7 +101,7 @@ public class NiftiImportService {
         }
     }
 
-    private static Result failure(String message) {
+    static Result failure(String message) {
         return new Result(0, 0, 0, 0, 0, 0, 0, null, false, null, null, 0, null, null, message);
     }
 

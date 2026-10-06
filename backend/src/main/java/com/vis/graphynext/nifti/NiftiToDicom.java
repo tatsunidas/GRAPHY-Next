@@ -55,7 +55,37 @@ public final class NiftiToDicom {
             int seriesNumber,
             String studyInstanceUid,
             String seriesInstanceUid,
-            Map<String, Object> metadata) {
+            Map<String, Object> metadata,
+            /** 値の単位（UCUM のコード。null・空・"1" は単位なし）。fw/nifti-import.md §3.1 */
+            String valueUnit) {
+
+        /** 単位を指定しない従来の形。 */
+        public Options(String modality, String patientId, String patientName, String patientBirthDate,
+                String patientSex, String studyDate, String studyDescription, String seriesDescription,
+                int seriesNumber, String studyInstanceUid, String seriesInstanceUid, Map<String, Object> metadata) {
+            this(modality, patientId, patientName, patientBirthDate, patientSex, studyDate, studyDescription,
+                    seriesDescription, seriesNumber, studyInstanceUid, seriesInstanceUid, metadata, null);
+        }
+    }
+
+    /**
+     * 値の単位（UCUM のコード）→ 画面に出す名前。知らないコードはコードのまま出す。単位なし（"1"・空）は空文字。
+     * 表示名は RescaleType に入る（フロントの単位の判定が RescaleType を見る）。
+     */
+    public static String unitLabel(String ucum) {
+        if (ucum == null || ucum.isBlank() || "1".equals(ucum.trim())) {
+            return "";
+        }
+        return switch (ucum.trim()) {
+            case "[hnsf'U]" -> "HU";
+            case "{SUVbw}g/ml" -> "SUVbw";
+            default -> ucum.trim();
+        };
+    }
+
+    /** 単位のコードが DICOM の CodeValue（SH・16 文字以内・区切りの \ を含まない）に入るか。 */
+    public static boolean validUnit(String ucum) {
+        return ucum == null || ucum.isBlank() || (ucum.trim().length() <= 16 && !ucum.contains("\\"));
     }
 
     /** 変換結果の要約。 */
@@ -157,7 +187,7 @@ public final class NiftiToDicom {
                             if (geom.flipRows) {
                                 flipRows(values, nx, ny);
                             }
-                            toParametricMap(ds, geom, h, z, t, nt);
+                            toParametricMap(ds, geom, h, z, t, nt, opts.valueUnit());
                             ds.setBytes(Tag.FloatPixelData, VR.OF, toBytes(values));
                         } else {
                             short[] pixels = spec.toPixels(raw, h.byteOrder, (int) frameVoxels);
@@ -265,6 +295,10 @@ public final class NiftiToDicom {
         if (spec.samplesPerPixel == 1) {
             ds.setDouble(Tag.RescaleSlope, VR.DS, spec.rescaleSlope);
             ds.setDouble(Tag.RescaleIntercept, VR.DS, spec.rescaleIntercept);
+            String label = unitLabel(opts.valueUnit());
+            if (!label.isEmpty()) {
+                ds.setString(Tag.RescaleType, VR.LO, label);
+            }
         }
 
         return ds;
@@ -275,7 +309,8 @@ public final class NiftiToDicom {
      * 幾何はトップレベルから Functional Groups へ移し、Rescale の代わりに RealWorldValueMapping（傾き 1・切片 0）を書く。
      * PixelRepresentation・BitsStored・HighBit は Float Pixel Data には無いので書かない。
      */
-    private static void toParametricMap(Attributes ds, NiftiGeometry geom, NiftiHeader h, int z, int t, int nt) {
+    private static void toParametricMap(Attributes ds, NiftiGeometry geom, NiftiHeader h, int z, int t, int nt,
+            String valueUnit) {
         double[] ipp = ds.getDoubles(Tag.ImagePositionPatient);
         double[] iop = ds.getDoubles(Tag.ImageOrientationPatient);
         double[] ps = ds.getDoubles(Tag.PixelSpacing);
@@ -325,7 +360,7 @@ public final class NiftiToDicom {
         Attributes ft = new Attributes();
         ft.setString(Tag.FrameType, VR.CS, "DERIVED", "PRIMARY");
         shared.newSequence(Tag.ParametricMapFrameTypeSequence, 1).add(ft);
-        // 値はそのまま実際の量（傾き 1・切片 0）。単位は取り込みの画面で選ぶ（段 F2）。それまでは無次元「1」
+        // 値はそのまま実際の量（傾き 1・切片 0）。単位は取り込みの画面で選ぶ（UCUM。単位なしは「1」）
         Attributes rw = new Attributes();
         rw.setDouble(Tag.DoubleFloatRealWorldValueFirstValueMapped, VR.FD, -Float.MAX_VALUE);
         rw.setDouble(Tag.DoubleFloatRealWorldValueLastValueMapped, VR.FD, Float.MAX_VALUE);
@@ -333,10 +368,11 @@ public final class NiftiToDicom {
         rw.setDouble(Tag.RealWorldValueIntercept, VR.FD, 0.0);
         rw.setString(Tag.LUTLabel, VR.SH, "NIFTI");
         rw.setString(Tag.LUTExplanation, VR.LO, "Values as stored in the NIfTI file");
+        String label = unitLabel(valueUnit);
         Attributes unit = new Attributes();
-        unit.setString(Tag.CodeValue, VR.SH, "1");
+        unit.setString(Tag.CodeValue, VR.SH, label.isEmpty() ? "1" : valueUnit.trim());
         unit.setString(Tag.CodingSchemeDesignator, VR.SH, "UCUM");
-        unit.setString(Tag.CodeMeaning, VR.LO, "no units");
+        unit.setString(Tag.CodeMeaning, VR.LO, label.isEmpty() ? "no units" : label);
         rw.newSequence(Tag.MeasurementUnitsCodeSequence, 1).add(unit);
         shared.newSequence(Tag.RealWorldValueMappingSequence, 1).add(rw);
         ds.newSequence(Tag.SharedFunctionalGroupsSequence, 1).add(shared);

@@ -95,9 +95,13 @@ class ParametricMapRoundTripTest {
     }
 
     private static List<Attributes> convert() throws IOException {
+        return convert(null);
+    }
+
+    private static List<Attributes> convert(String unit) throws IOException {
         List<Attributes> out = new ArrayList<>();
         NiftiToDicom.convert(nifti4d(), new NiftiToDicom.Options("MR", "P", "T^P", "", "", "20261006",
-                "s", "adc", 1, null, null, Map.of()), (ds, ts) -> out.add(new Attributes(ds)));
+                "s", "adc", 1, null, null, Map.of(), unit), (ds, ts) -> out.add(new Attributes(ds)));
         return out;
     }
 
@@ -211,5 +215,42 @@ class ParametricMapRoundTripTest {
         assertThat(ParametricMapFrameExpander.isParametricMap(ct)).isFalse();
         assertThat(ParametricMapFrameExpander.layout(List.of(ct))).isNull();
         assertThat(ParametricMapFrameExpander.extractFrame(ct, 0)).isNull();
+    }
+
+    private static Attributes rwvmUnit(Attributes pm) {
+        return pm.getNestedDataset(Tag.SharedFunctionalGroupsSequence)
+                .getNestedDataset(Tag.RealWorldValueMappingSequence)
+                .getNestedDataset(Tag.MeasurementUnitsCodeSequence);
+    }
+
+    @Test
+    void 単位は_RWVM_の_UCUM_に入り_切り出したフレームの_RescaleType_に出る() throws IOException {
+        Attributes pm = convert("mm2/s").get(0);
+        Attributes u = rwvmUnit(pm);
+        assertThat(u.getString(Tag.CodeValue)).isEqualTo("mm2/s");
+        assertThat(u.getString(Tag.CodingSchemeDesignator)).isEqualTo("UCUM");
+        Attributes out = parse(ParametricMapFrameExpander.extractFrame(pm, 0));
+        assertThat(out.getString(Tag.RescaleType)).isEqualTo("mm2/s");
+    }
+
+    @Test
+    void 単位を指定しなければ無次元の_1_で表示は空() throws IOException {
+        Attributes pm = convert(null).get(0);
+        assertThat(rwvmUnit(pm).getString(Tag.CodeValue)).isEqualTo("1");
+        Attributes out = parse(ParametricMapFrameExpander.extractFrame(pm, 0));
+        assertThat(out.getString(Tag.RescaleType, "")).isEmpty();
+    }
+
+    @Test
+    void 既知の_UCUM_は表示名に直す() throws IOException {
+        assertThat(NiftiToDicom.unitLabel("[hnsf'U]")).isEqualTo("HU");
+        assertThat(NiftiToDicom.unitLabel("{SUVbw}g/ml")).isEqualTo("SUVbw");
+        assertThat(NiftiToDicom.unitLabel("1")).isEmpty();
+        assertThat(NiftiToDicom.unitLabel("ms")).isEqualTo("ms");
+        Attributes pm = convert("[hnsf'U]").get(0);
+        assertThat(rwvmUnit(pm).getString(Tag.CodeMeaning)).isEqualTo("HU");
+        assertThat(parse(ParametricMapFrameExpander.extractFrame(pm, 0)).getString(Tag.RescaleType)).isEqualTo("HU");
+        assertThat(NiftiToDicom.validUnit("ABCDEFGHIJKLMNOPQ")).isFalse(); // 17 文字
+        assertThat(NiftiToDicom.validUnit("mm2/s")).isTrue();
     }
 }

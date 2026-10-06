@@ -217,7 +217,7 @@ public final class ParametricMapFrameExpander {
         return null;
     }
 
-    /** RWVM の単位（UCUM のコード）。単位なし・不明は空文字。 */
+    /** RWVM の単位の表示名（CodeMeaning、無ければコード）。単位なし（UCUM の「1」）・不明は空文字。 */
     public static String unitOf(Attributes mapping) {
         if (mapping == null) {
             return "";
@@ -227,8 +227,11 @@ public final class ParametricMapFrameExpander {
             return "";
         }
         String code = u.getString(Tag.CodeValue, "");
-        // UCUM の「1」は無次元（単位なし）。表示では空にする
-        return "1".equals(code) ? "" : code;
+        if (code.isEmpty() || "1".equals(code)) {
+            return "";
+        }
+        String meaning = u.getString(Tag.CodeMeaning, "");
+        return meaning.isBlank() ? code : meaning;
     }
 
     /**

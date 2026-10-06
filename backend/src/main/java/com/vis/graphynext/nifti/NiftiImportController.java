@@ -72,7 +72,9 @@ public class NiftiImportController {
             String studyDescription,
             String seriesDescription,
             Integer seriesNumber,
-            String studyInstanceUid) {
+            String studyInstanceUid,
+            /** 値の単位（UCUM のコード。省略・"1" は単位なし）。fw/nifti-import.md §3.1 */
+            String valueUnit) {
     }
 
     @PostMapping("/probe")
@@ -108,13 +110,17 @@ public class NiftiImportController {
         if (file == null) {
             return ResponseEntity.badRequest().build();
         }
+        if (!NiftiToDicom.validUnit(req.valueUnit())) {
+            return ResponseEntity.badRequest().body(NiftiImportService.failure(
+                    "単位のコードが長すぎるか、使えない文字を含みます（UCUM・16 文字以内）: " + req.valueUnit()));
+        }
         Map<String, Object> meta = readMetadata(req.metadataPath());
         NiftiToDicom.Options opts = new NiftiToDicom.Options(
                 req.modality() == null ? "MR" : req.modality(),
                 req.patientId(), req.patientName(), req.patientBirthDate(), req.patientSex(),
                 req.studyDate(), req.studyDescription(), req.seriesDescription(),
                 req.seriesNumber() == null ? 1 : req.seriesNumber(),
-                req.studyInstanceUid(), null, meta);
+                req.studyInstanceUid(), null, meta, req.valueUnit());
         NiftiImportService.Result result = service.importFile(file, meta, opts);
         return result.error() == null ? ResponseEntity.ok(result) : ResponseEntity.badRequest().body(result);
     }

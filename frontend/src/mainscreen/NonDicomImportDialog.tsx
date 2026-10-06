@@ -2,6 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
+import { NIFTI_UNIT_OPTIONS, niftiUnitCode, type NiftiUnitKey } from "./niftiUnits";
 import { useEffect, useRef, useState } from "react";
 import {
   importNifti,
@@ -78,6 +79,8 @@ export function NonDicomImportDialog({
   // NIfTI（.nii/.nii.gz）は DICOM へ変換して取り込む。ヘッダの下読み結果とサイドカー JSON を持つ。
   const [niftiProbes, setNiftiProbes] = useState<Record<string, NiftiProbe>>({});
   const [niftiModality, setNiftiModality] = useState("MR");
+  const [niftiUnit, setNiftiUnit] = useState<NiftiUnitKey>("none");
+  const [niftiUnitCustom, setNiftiUnitCustom] = useState("");
   const [metadataPath, setMetadataPath] = useState<string | null>(null);
   const [niftiSummary, setNiftiSummary] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -98,6 +101,8 @@ export function NonDicomImportDialog({
     setResult(null);
     setNiftiProbes({});
     setNiftiModality("MR");
+    setNiftiUnit("none");
+    setNiftiUnitCustom("");
     setMetadataPath(null);
     setNiftiSummary(null);
   }, [open, study]);
@@ -189,6 +194,11 @@ export function NonDicomImportDialog({
   /** NIfTI を 1 本ずつ変換して取り込む（1 ファイル＝1 シリーズ）。 */
   async function runNifti(): Promise<void> {
     const targets = paths.filter(isNifti);
+    const valueUnit = niftiUnitCode(niftiUnit, niftiUnitCustom);
+    if (valueUnit === null) {
+      setError(t("nifti.unit.invalid"));
+      return;
+    }
     let imported = 0;
     let synthesized = 0;
     const spacingNotes: string[] = [];
@@ -198,6 +208,7 @@ export function NonDicomImportDialog({
         path: p,
         metadataPath: metadataPath ?? undefined,
         modality: niftiModality,
+        valueUnit,
         patientId: effectivePatientId,
         patientName: target === "existing" ? study?.patientName ?? "" : pname,
         patientBirthDate: target === "existing" ? "" : birth,
@@ -300,6 +311,32 @@ export function NonDicomImportDialog({
                   <option value="PT">PT</option>
                   <option value="NM">NM</option>
                 </select>
+              </Field>
+              <Field label={t("nifti.unit")}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <select
+                    value={niftiUnit}
+                    onChange={(e) => setNiftiUnit(e.target.value as NiftiUnitKey)}
+                    style={input}
+                    data-testid="nifti-unit"
+                  >
+                    {NIFTI_UNIT_OPTIONS.map((o) => (
+                      <option key={o.key} value={o.key}>
+                        {t(o.labelKey)}
+                      </option>
+                    ))}
+                  </select>
+                  {niftiUnit === "other" && (
+                    <input
+                      value={niftiUnitCustom}
+                      onChange={(e) => setNiftiUnitCustom(e.target.value)}
+                      placeholder={t("nifti.unit.otherPlaceholder")}
+                      maxLength={16}
+                      style={input}
+                      data-testid="nifti-unit-custom"
+                    />
+                  )}
+                </div>
               </Field>
               <Field label={t("nifti.metadata")}>
                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>

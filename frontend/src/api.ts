@@ -622,6 +622,8 @@ export interface NiftiImportRequest {
   seriesDescription?: string;
   seriesNumber?: number;
   studyInstanceUid?: string;
+  /** 値の単位（UCUM のコード。"1" は単位なし）。fw/nifti-import.md §3.1 */
+  valueUnit?: string;
 }
 
 export interface NiftiImportResult {
