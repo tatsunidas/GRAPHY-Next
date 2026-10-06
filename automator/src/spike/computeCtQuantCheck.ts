@@ -219,7 +219,14 @@ async function main(): Promise<void> {
       check(await viewer.getByTestId("ctq-l3-preview").isVisible(), "L3: 重ね表示の画像が出る");
       console.log(`    L3 k=${s.l3.k}: ${JSON.stringify(s.l3Rows)}`);
     }
-    for (const tab of ["organs", "liver", "l3"]) {
+    // L1 椎体（vertebrae_body と vertebrae_L1 の重なり）。PRE LIVER は T12〜L5 が写っている
+    check(s.l1?.ok === true, "L1 椎体: T12・L2 が写っているので測れる", s.l1);
+    check(s.l1BodyMeasure?.voxelCount === s.summary.l1BodyVoxels && s.summary.l1BodyVoxels > 0,
+      "L1 椎体: H66 のボクセル数が計算機の数え上げと一致", { h66: s.l1BodyMeasure?.voxelCount, computed: s.summary.l1BodyVoxels });
+    const l1Whole = byLabel.get(ids.get("vertebrae_L1")!);
+    check(!!l1Whole && s.l1BodyMeasure.voxelCount < l1Whole.voxelCount, "L1 椎体は L1 椎骨全体より小さい（椎弓を含まない）", { body: s.l1BodyMeasure?.voxelCount, whole: l1Whole?.voxelCount });
+    console.log(`    L1 椎体: ${JSON.stringify(s.l1)}／L1 椎骨全体 ${l1Whole?.stats?.mean.toFixed(1)} HU`);
+    for (const tab of ["organs", "liver", "l3", "bone"]) {
       await viewer.getByTestId(`ctq-tab-${tab}`).click();
       await viewer.waitForTimeout(300);
       await viewer.screenshot({ path: path.join(OUT_DIR, `2-tab-${tab}.png`) });
@@ -247,10 +254,12 @@ async function main(): Promise<void> {
       const bytes = Buffer.from(await (await fetch(`${base}/api/instances/${s.savedSr.sopInstanceUid}/file`)).arrayBuffer()).toString("latin1");
       check(/MEAN_VALUE/.test(bytes) && /\[hnsf'U\]/.test(bytes) && /VOLUME/.test(bytes) && (!s.l3?.ok || /AREA/.test(bytes)),
         "SR に体積・平均 CT 値（[hnsf'U]）・L3 の面積が入る", { len: bytes.length });
+      check(!s.l1?.ok || /L1 vertebral body/.test(bytes), "SR に L1 椎体のグループが入る");
     }
     if (s.savedCsv?.ok) {
       const csv = fs.readFileSync(s.savedCsv.filePath, "utf8");
       check(csv.charCodeAt(0) === 0xfeff && /TotalSegmentator 2\.18\.0/.test(csv) && /"肝臓"/.test(csv), "CSV に版と肝臓の行がある");
+      check(!s.l1?.ok || /^L1,"L1 vertebral body",/m.test(csv), "CSV に L1 椎体の行がある");
     }
 
     // --- 5. 監査 ---
@@ -270,7 +279,7 @@ async function main(): Promise<void> {
     s = await state(viewer);
     check(s.release?.ok === true && s.release?.released === true, "「解放する」で解放される", s.release);
 
-    fs.writeFileSync(path.join(OUT_DIR, "state.json"), JSON.stringify({ summary: s.summary, organs: s.organs, ls: s.ls, l3: s.l3, l3Rows: s.l3Rows }, null, 2));
+    fs.writeFileSync(path.join(OUT_DIR, "state.json"), JSON.stringify({ summary: s.summary, organs: s.organs, ls: s.ls, l3: s.l3, l3Rows: s.l3Rows, l1: s.l1 }, null, 2));
   } finally {
     await driver.page.evaluate((id) => (window as unknown as { graphyDesktop: any }).graphyDesktop.computeColabRelease(id), endpointId).catch(() => undefined);
     await driver.stop();
