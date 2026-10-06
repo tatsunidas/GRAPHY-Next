@@ -774,6 +774,42 @@ function getSelectedAnnotations(): string[] {
 }
 
 /**
+ * 各注釈の形（`handles.points` と輪郭の `polyline`）を、表示中のビューポートの canvas 座標（CSS px）で返す。
+ *
+ * <p>ROI を内側のドラッグで動かしたとき、**全点がドラッグ量だけ平行移動したか**を数値で突き合わせる口
+ * （`automator/src/spike/roiMoveCheck.ts`）。参照画像を表示しているビューポートで変換する。
+ */
+function getAnnotationCanvasPoints(): Array<{
+  uid: string;
+  tool: string;
+  points: number[][];
+  polyline: number[][];
+  /** 統計の文字ボックスの外接矩形 [左上, 右下]。上流はここを先に掴む（ハンドル扱い）。 */
+  textBox: number[][] | null;
+}> {
+  const engine = getRenderingEngine(ENGINE_ID);
+  if (!engine) return [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const anns = ((csAnnotation.state as any).getAllAnnotations?.() ?? []) as any[];
+  return anns.map((a) => {
+    const ref = a?.metadata?.referencedImageId as string | undefined;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vp = engine.getViewports().find((v: any) => v.getCurrentImageId?.() === ref) ?? engine.getViewports()[0];
+    const toCanvas = (w: number[]) => Array.from(vp.worldToCanvas(w as [number, number, number]));
+    return {
+      uid: (a?.annotationUID as string) ?? "",
+      tool: (a?.metadata?.toolName as string) ?? "",
+      points: ((a?.data?.handles?.points ?? []) as number[][]).map(toCanvas),
+      polyline: ((a?.data?.contour?.polyline ?? []) as number[][]).map(toCanvas),
+      textBox: (() => {
+        const bb = a?.data?.handles?.textBox?.worldBoundingBox;
+        return bb ? [toCanvas(bb.topLeft), toCanvas(bb.bottomRight)] : null;
+      })(),
+    };
+  });
+}
+
+/**
  * ROI 統計の**同じ ROI に対する 2 つの読み口**を並べて返す（automator の切り分け用）。
  *
  * <p>表示（`annotation.data` をキーにした WeakMap）と問い合わせ（annotationUID の Map）が
@@ -911,6 +947,7 @@ declare global {
       getSpacingProbe: typeof getSpacingProbe;
       probeUserCalibration: typeof probeUserCalibration;
       getRoiStatsPair: typeof getRoiStatsPair;
+      getAnnotationCanvasPoints: typeof getAnnotationCanvasPoints;
       getImagePixelRange: typeof getImagePixelRange;
       getPixelStats: typeof getPixelStats;
       getViewportGeometry: typeof getViewportGeometry;
@@ -1056,6 +1093,7 @@ export function installDebugApi(): void {
     getSpacingProbe,
     probeUserCalibration,
     getRoiStatsPair,
+    getAnnotationCanvasPoints,
     getImagePixelRange,
     getPixelStats,
     getViewportGeometry,

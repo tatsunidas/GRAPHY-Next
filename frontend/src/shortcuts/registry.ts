@@ -81,6 +81,8 @@ export const SHORTCUTS: ShortcutDef[] = [
   // ROI の複製（同じ形の ROI をもう 1 つ置く）。貼り付け先は**現在表示中のスライス**。
   { id: "roi-copy", combo: "Mod+C", descriptionKey: "sc.roiCopy", group: "system" },
   { id: "roi-paste", combo: "Mod+V", descriptionKey: "sc.roiPaste", group: "system" },
+  // ROI の選択を外す。選択中の ROI は内側のドラッグで移動になるので、その内側に別の ROI を描く前に使う。
+  { id: "roi-deselect", combo: "Escape", descriptionKey: "sc.roiDeselect", group: "system" },
 ];
 
 /**

@@ -2,6 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
+import { deselectAllRois } from "../viewer/roiInteriorGrab";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchStudies,
@@ -1624,6 +1625,9 @@ function TileGrid({
       } else if (matchesShortcut("roi-paste", e)) {
         e.preventDefault();
         actionsRef.current.pasteRoi();
+      } else if (matchesShortcut("roi-deselect", e)) {
+        // preventDefault しない（同じ Esc でダイアログやメニューも閉じる）。
+        deselectAllRois();
       }
     };
     window.addEventListener("keydown", onKey);
