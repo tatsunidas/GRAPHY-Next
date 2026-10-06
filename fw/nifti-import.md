@@ -60,11 +60,24 @@ qform_code > 0 → クォータニオン（method 2）から作る
 |---|---|
 | uint8 / RGB24 | 8bit（RGB は SamplesPerPixel=3） |
 | int8 / int16 / uint16 | 16bit |
-| float32 / float64 / int32 / uint32 | **16bit へ量子化**し、Rescale Slope/Intercept で元の値へ戻せるようにする |
+| float32 / float64 / int32 / uint32 / int64 / uint64 | 取り込み前に全走査して決める（下の 1・2）。16bit ＋ Rescale Slope/Intercept |
 
-- 量子化係数は**ボリューム全体で 1 つ**（先に 1 度全走査して min/max を取る）。
-  フレームごとに決めると、スライスごとに Rescale が変わって同じ値が別の意味になる。
-- NIfTI の `scl_slope` / `scl_inter` は量子化前に適用し、最終的な Rescale に合成する。
+32 bit 以上の型は、先にボリューム全体を 1 度走査し（有限値の最小・最大、すべて整数か、NaN・無限大の数）、次の順で決める（2026-10-06 改訂）。
+
+1. **値がすべて整数で、範囲が 16 bit の符号の数（65536。NaN があれば 65535）に収まる → 可逆**。生の値をそのまま
+   （int16 に収まれば int16、0〜65535 なら uint16、それ以外は一定のオフセットだけずらした int16）入れ、
+   Rescale にオフセットと `scl_slope` / `scl_inter` を合成する。int32 の CT、HU を float で保存した CT はここに入る。
+2. それ以外（整数でない浮動小数・範囲が 16 bit を超える整数）→ **16 bit の全域**へ量子化する。最大誤差（刻みの半分）を取り込み結果の
+   `pixelConversion` に出す。
+   - ⚠ 整数でない浮動小数は、ユーザ判断（2026-10-06）で **32 bit float（Parametric Map・Float Pixel Data）で格納する**ことに決めた。
+     本体の読み込み・表示・解析・書き出しに広く手が要るので段 2 として別に進める（それまではこの量子化）。
+- **NaN・無限大**は 16 bit で表せないので、使わない最小の符号（−32768）に置き、`PixelPaddingValue` にする。件数は `pixelConversion` に出す。
+  以前は NaN が最小・最大に混ざって係数が壊れ、画像全体が潰れていた。
+- 係数は**ボリューム全体で 1 つ**（フレームごとに決めると、スライスごとに Rescale が変わって同じ値が別の意味になる）。
+- 発端: NLSTseg 100147（int32・−2048〜1508）が量子化されて最大 0.056 HU ずれた（`fw/lung-nodule-design.md` §9.2）。
+  改訂後は保管された DICOM から戻した値が元の NIfTI と**全 3040 万ボクセルで差 0**（`automator/scripts/dicom-series-to-nifti.py` ＋ `compare-nifti.py`）。
+  型ごとの往復は `NiftiPixelExactnessTest`（12 件。旧実装では 12 件とも落ちることを確認）。
+- 以前は量子化を 32000 段階（16 bit の半分）で行っていたので、誤差が必要の 2 倍あった。
 - 未対応の型（float128 等）は**理由を添えて失敗**する（黙って落とさない）。
 
 ## 4. サイドカー JSON（メタデータ）

@@ -34,8 +34,8 @@ import org.dcm4che3.util.UIDUtils;
  *   <li>サイドカー JSON は {@link NiftiMetadataMapper} で属性へ写す。</li>
  * </ul>
  *
- * <p><b>浮動小数・32bit 整数は 16bit へ量子化</b>し、Rescale Slope/Intercept で元の値域に戻せる形にする
- * （標準の画像 IOD が 8/16bit しか持てないため）。量子化係数は NIfTI の scl_slope / scl_inter と合成する。
+ * <p><b>32 bit 以上の整数・浮動小数は、値がすべて整数で 16 bit に収まれば可逆に、そうでなければ 16 bit へ量子化</b>し、
+ * Rescale Slope/Intercept で元の値に戻せる形にする（標準の画像 IOD が 8/16bit しか持てないため）。詳細は {@link PixelSpec}。
  */
 public final class NiftiToDicom {
 
@@ -255,6 +255,10 @@ public final class NiftiToDicom {
             ds.setDouble(Tag.RescaleSlope, VR.DS, spec.rescaleSlope);
             ds.setDouble(Tag.RescaleIntercept, VR.DS, spec.rescaleIntercept);
         }
+        if (spec.paddingValue != null) {
+            // NaN・無限大を置いた符号（fw/nifti-import.md §3）
+            ds.setInt(Tag.PixelPaddingValue, spec.signed ? VR.SS : VR.US, spec.paddingValue);
+        }
         return ds;
     }
 
@@ -320,22 +324,47 @@ public final class NiftiToDicom {
     }
 
     /**
-     * NIfTI のデータ型 → DICOM の画素表現。
+     * NIfTI のデータ型 → DICOM の画素表現（標準の画像 IOD は 8/16 bit 整数＋Rescale）。
      *
-     * <p>32bit 以上（float / int32 / double）は 16bit へ量子化し、Rescale で元の値へ戻せるようにする。
-     * <b>量子化は「値域を 16bit に収める」だけで情報を作らない</b>（元の分解能は落ちる）。
+     * <p>8/16 bit の整数型はそのまま入れる。32 bit 以上の整数・浮動小数は、取り込みの前にボリューム全体を 1 度走査し
+     * （{@link #calibrateGlobally}）、次の順で決める（fw/nifti-import.md §3）。
+     * <ol>
+     *   <li><b>値がすべて整数で、範囲が 16 bit の符号の数に収まる</b> → <b>可逆</b>。生の値をそのまま（必要なら一定の
+     *       オフセットだけずらして）入れ、Rescale でオフセットと scl_slope / scl_inter を戻す。
+     *       int32 の CT や、HU を float で保存した CT はここに入る。</li>
+     *   <li>それ以外（整数でない浮動小数、範囲が広すぎる整数） → 16 bit の全域を使って量子化し、最大誤差（刻みの半分）を
+     *       説明に出す。量子化は「値域を 16 bit に収める」だけで情報を作らない。</li>
+     * </ol>
+     * NaN・無限大は 16 bit で表せないので、使わない最小の符号（−32768）に置き、{@code PixelPaddingValue} にする。
+     * 件数は説明に出す（黙って別の値に変えない）。
      */
     static final class PixelSpec {
+        /** 8/16 bit の整数型をそのまま入れる。 */
+        private static final int DIRECT = 0;
+        /** 32 bit 以上の型だが、整数値で 16 bit に収まるので可逆に入れる。 */
+        private static final int LOSSLESS = 1;
+        /** 16 bit の全域へ量子化する。 */
+        private static final int QUANTIZE = 2;
+        /** NaN・無限大を置く符号（符号付き 16 bit の最小）。 */
+        static final short PADDING_CODE = Short.MIN_VALUE;
+
         final int datatype;
         final int bitsAllocated;
-        final boolean signed;
+        boolean signed;
         final int samplesPerPixel;
         double rescaleSlope;
         double rescaleIntercept;
-        final String description;
+        String description;
+        /** NaN・無限大があったときの PixelPaddingValue（無ければ null）。 */
+        Short paddingValue;
         /** NIfTI 側のスケーリング（scl_slope / scl_inter）。 */
         private final double sclSlope;
         private final double sclInter;
+        private int mode = DIRECT;
+        /** LOSSLESS のとき: 保存する値 = 生の値 − offset。 */
+        private long offset;
+        /** QUANTIZE のとき: 有限値が使う最小の符号（パディングがあれば −32767）。 */
+        private int lowestCode = Short.MIN_VALUE;
 
         private PixelSpec(int datatype, int bitsAllocated, boolean signed, int samplesPerPixel,
                 double sclSlope, double sclInter, String description) {
@@ -362,20 +391,37 @@ public final class NiftiToDicom {
                     new PixelSpec(h.datatype, 16, false, 1, h.sclSlope, h.sclInter, "uint16 → 16bit unsigned");
                 case NiftiHeader.DT_RGB24 ->
                     new PixelSpec(h.datatype, 8, false, 3, 1, 0, "RGB24 → 8bit RGB");
-                case NiftiHeader.DT_FLOAT32, NiftiHeader.DT_INT32, NiftiHeader.DT_UINT32, NiftiHeader.DT_FLOAT64 ->
+                case NiftiHeader.DT_FLOAT32, NiftiHeader.DT_FLOAT64, NiftiHeader.DT_INT32, NiftiHeader.DT_UINT32,
+                        NiftiHeader.DT_INT64, NiftiHeader.DT_UINT64 ->
                     new PixelSpec(h.datatype, 16, true, 1, h.sclSlope, h.sclInter,
-                            "float/32bit → 16bit signed（Rescale で復元）");
+                            typeName(h.datatype) + " → 16bit（取り込み時に値を見て、可逆か量子化かを決める）");
                 default -> throw new IOException("未対応の NIfTI データ型です: datatype=" + h.datatype);
             };
         }
 
-        /** 量子化が要る型か（float / 32bit 整数）。 */
-        boolean quantizes() {
-            return datatype == NiftiHeader.DT_FLOAT32 || datatype == NiftiHeader.DT_INT32
-                    || datatype == NiftiHeader.DT_UINT32 || datatype == NiftiHeader.DT_FLOAT64;
+        private static String typeName(int datatype) {
+            return switch (datatype) {
+                case NiftiHeader.DT_FLOAT32 -> "float32";
+                case NiftiHeader.DT_FLOAT64 -> "float64";
+                case NiftiHeader.DT_INT32 -> "int32";
+                case NiftiHeader.DT_UINT32 -> "uint32";
+                case NiftiHeader.DT_INT64 -> "int64";
+                case NiftiHeader.DT_UINT64 -> "uint64";
+                default -> "datatype " + datatype;
+            };
         }
 
-        /** 生バイト列 → 16bit（または 8bit 相当）画素。量子化型では値域から係数を決める。 */
+        private boolean isFloat() {
+            return datatype == NiftiHeader.DT_FLOAT32 || datatype == NiftiHeader.DT_FLOAT64;
+        }
+
+        /** 取り込み前の全走査が要る型か（32 bit 以上の整数・浮動小数）。 */
+        boolean quantizes() {
+            return isFloat() || datatype == NiftiHeader.DT_INT32 || datatype == NiftiHeader.DT_UINT32
+                    || datatype == NiftiHeader.DT_INT64 || datatype == NiftiHeader.DT_UINT64;
+        }
+
+        /** 生バイト列 → 16bit（または 8bit 相当）画素。 */
         short[] toPixels(byte[] raw, ByteOrder order, int voxels) {
             ByteBuffer b = ByteBuffer.wrap(raw).order(order);
             int n = samplesPerPixel == 3 ? voxels * 3 : voxels;
@@ -396,17 +442,31 @@ public final class NiftiToDicom {
                         out[i] = b.getShort(i * 2);
                     }
                 }
-                default -> quantize(b, out, n);
+                default -> {
+                    if (mode == LOSSLESS) {
+                        storeLossless(b, out, n);
+                    } else {
+                        quantize(b, out, n);
+                    }
+                }
             }
             return out;
         }
 
-        /** ボリューム全体を 1 度走査して量子化係数（Rescale）を決める。 */
+        /**
+         * ボリューム全体を 1 度走査して、可逆に入れられるか・量子化の係数・NaN の有無を決める。
+         * 係数は<b>ボリューム全体で 1 つ</b>（フレームごとに決めると同じ値が別の意味になる）。
+         */
         void calibrateGlobally(Path file, NiftiHeader h) throws IOException {
             long voxels = (long) h.nx() * h.ny() * h.nz() * h.nt() * h.nc();
             int unit = h.bytesPerVoxel();
-            double min = Double.POSITIVE_INFINITY;
-            double max = Double.NEGATIVE_INFINITY;
+            // 生の値（scl を掛ける前）の有限値の最小・最大。整数かどうか、long に収まるかも見る
+            double rawMin = Double.POSITIVE_INFINITY;
+            double rawMax = Double.NEGATIVE_INFINITY;
+            long longMin = Long.MAX_VALUE;
+            long longMax = Long.MIN_VALUE;
+            boolean allInteger = true;
+            long nonFinite = 0;
             byte[] buf = new byte[unit * 8192];
             try (InputStream in = open(file)) {
                 skipFully(in, h.voxOffset);
@@ -420,20 +480,96 @@ public final class NiftiToDicom {
                     ByteBuffer b = ByteBuffer.wrap(buf, 0, read).order(h.byteOrder);
                     int count = read / unit;
                     for (int i = 0; i < count; i++) {
-                        double v = rawValue(b, i) * sclSlope + sclInter;
-                        min = Math.min(min, v);
-                        max = Math.max(max, v);
+                        double v = rawValue(b, i);
+                        if (!Double.isFinite(v)) {
+                            nonFinite++;
+                            continue;
+                        }
+                        rawMin = Math.min(rawMin, v);
+                        rawMax = Math.max(rawMax, v);
+                        if (allInteger) {
+                            Long lv = rawLong(b, i, v);
+                            if (lv == null) {
+                                allInteger = false;
+                            } else {
+                                longMin = Math.min(longMin, lv);
+                                longMax = Math.max(longMax, lv);
+                            }
+                        }
                     }
                     remaining -= count;
                 }
             }
-            if (!Double.isFinite(min) || !Double.isFinite(max)) {
-                min = 0;
-                max = 0;
+            int pad = nonFinite > 0 ? 1 : 0;
+            if (nonFinite > 0) {
+                paddingValue = PADDING_CODE;
             }
-            double range = max - min;
-            this.rescaleSlope = range > 0 ? range / 32000.0 : 1.0; // 余裕を持って ±32000 に収める
-            this.rescaleIntercept = min;
+            String nanNote = nonFinite > 0
+                    ? "・NaN/無限大 " + nonFinite + " ボクセルはパディング値（" + PADDING_CODE + "）"
+                    : "";
+            if (rawMin > rawMax) {
+                // 有限値が 1 つも無い（すべて NaN）。全部パディングになる
+                mode = QUANTIZE;
+                lowestCode = Short.MIN_VALUE + pad;
+                rescaleSlope = 1.0;
+                rescaleIntercept = 0.0;
+                description = typeName(datatype) + " → 16bit（有限値なし" + nanNote + "）";
+                return;
+            }
+            // 1) 整数値で、範囲が 16 bit の符号の数（パディングに 1 つ取るならその残り）に収まる → 可逆
+            // 差が long を桁あふれする（int64 の両端など）ときは、16 bit に収まらないので量子化へ
+            boolean fits = allInteger && longMax - longMin >= 0 && longMax - longMin <= 65535L - pad;
+            if (fits) {
+                mode = LOSSLESS;
+                if (pad == 0 && longMin >= Short.MIN_VALUE && longMax <= Short.MAX_VALUE) {
+                    offset = 0;
+                    signed = true;
+                } else if (pad == 0 && longMin >= 0 && longMax <= 65535) {
+                    offset = 0;
+                    signed = false;
+                } else if (longMin >= Short.MIN_VALUE + pad && longMax <= Short.MAX_VALUE) {
+                    offset = 0;
+                    signed = true;
+                } else {
+                    // 符号付き 16 bit の下端（パディングの次）へ寄せる
+                    offset = longMin - (Short.MIN_VALUE + pad);
+                    signed = true;
+                }
+                // 元の値 = (保存した値 + offset) × scl_slope + scl_inter
+                rescaleSlope = sclSlope;
+                rescaleIntercept = offset * sclSlope + sclInter;
+                description = typeName(datatype) + " → 16bit " + (signed ? "signed" : "unsigned") + "（整数値のため可逆"
+                        + (offset != 0 ? "・オフセット " + offset : "") + nanNote + "）";
+                return;
+            }
+            // 2) 量子化。16 bit の全域（パディングの分を除く）を使う
+            mode = QUANTIZE;
+            signed = true;
+            lowestCode = Short.MIN_VALUE + pad;
+            double vMin = Math.min(rawMin * sclSlope + sclInter, rawMax * sclSlope + sclInter);
+            double vMax = Math.max(rawMin * sclSlope + sclInter, rawMax * sclSlope + sclInter);
+            int levels = Short.MAX_VALUE - lowestCode; // 符号の数 − 1
+            double range = vMax - vMin;
+            rescaleSlope = range > 0 ? range / levels : 1.0;
+            rescaleIntercept = vMin - lowestCode * rescaleSlope;
+            description = typeName(datatype) + " → 16bit signed（"
+                    + (allInteger ? "整数だが範囲が 16bit を超えるため" : "整数でない値を含むため")
+                    + "量子化・最大誤差 ±" + String.format(java.util.Locale.ROOT, "%.6g", range > 0 ? rescaleSlope / 2 : 0.0)
+                    + nanNote + "）";
+        }
+
+        /** 整数型ならその値、浮動小数なら整数値のときだけ long。整数でなければ null。 */
+        private Long rawLong(ByteBuffer b, int i, double asDouble) {
+            return switch (datatype) {
+                case NiftiHeader.DT_INT32 -> (long) b.getInt(i * 4);
+                case NiftiHeader.DT_UINT32 -> b.getInt(i * 4) & 0xFFFFFFFFL;
+                case NiftiHeader.DT_INT64 -> b.getLong(i * 8);
+                case NiftiHeader.DT_UINT64 -> {
+                    long v = b.getLong(i * 8);
+                    yield v >= 0 ? v : null; // 2^63 以上は long で扱わない（量子化へ）
+                }
+                default -> asDouble == Math.rint(asDouble) && Math.abs(asDouble) < 0x1p62 ? (long) asDouble : null;
+            };
         }
 
         private double rawValue(ByteBuffer b, int i) {
@@ -442,16 +578,39 @@ public final class NiftiToDicom {
                 case NiftiHeader.DT_FLOAT64 -> b.getDouble(i * 8);
                 case NiftiHeader.DT_INT32 -> b.getInt(i * 4);
                 case NiftiHeader.DT_UINT32 -> b.getInt(i * 4) & 0xFFFFFFFFL;
+                case NiftiHeader.DT_INT64 -> b.getLong(i * 8);
+                case NiftiHeader.DT_UINT64 -> {
+                    long v = b.getLong(i * 8);
+                    yield v >= 0 ? (double) v : (double) (v >>> 1) * 2.0 + (v & 1);
+                }
                 default -> 0;
             };
+        }
+
+        /** 可逆: 保存する値 = 生の値 − offset（{@link #calibrateGlobally} で 16 bit に収まることを確かめてある）。 */
+        private void storeLossless(ByteBuffer b, short[] out, int n) {
+            for (int i = 0; i < n; i++) {
+                double v = rawValue(b, i);
+                if (!Double.isFinite(v)) {
+                    out[i] = PADDING_CODE;
+                    continue;
+                }
+                long stored = rawLong(b, i, v) - offset;
+                // unsigned のときは 0〜65535 を short のビット列として入れる
+                out[i] = (short) stored;
+            }
         }
 
         /** 全体で決めた係数（{@link #calibrateGlobally}）で 16bit へ落とす。 */
         private void quantize(ByteBuffer b, short[] out, int n) {
             for (int i = 0; i < n; i++) {
                 double v = rawValue(b, i) * sclSlope + sclInter;
+                if (!Double.isFinite(v)) {
+                    out[i] = PADDING_CODE;
+                    continue;
+                }
                 double q = (v - rescaleIntercept) / rescaleSlope;
-                out[i] = (short) Math.max(Short.MIN_VALUE, Math.min(Short.MAX_VALUE, Math.round(q)));
+                out[i] = (short) Math.max(lowestCode, Math.min(Short.MAX_VALUE, Math.round(q)));
             }
         }
     }

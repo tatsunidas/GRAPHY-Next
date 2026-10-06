@@ -35,6 +35,8 @@ public final class NiftiHeader {
     public static final int DT_UINT32 = 768;
     public static final int DT_RGB24 = 128;
     public static final int DT_FLOAT64 = 64;
+    public static final int DT_INT64 = 1024;
+    public static final int DT_UINT64 = 1280;
 
     /** 次元（dim[0]=次元数, dim[1]=X, dim[2]=Y, dim[3]=Z, dim[4]=T, dim[5]=C）。 */
     public final long[] dim = new long[8];
