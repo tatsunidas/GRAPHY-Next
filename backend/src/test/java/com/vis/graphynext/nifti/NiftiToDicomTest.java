@@ -226,14 +226,15 @@ class NiftiToDicomTest {
         assertThat(first.getInt(Tag.BitsAllocated, 0)).isEqualTo(16);
         double slope = first.getDouble(Tag.RescaleSlope, 0);
         double intercept = first.getDouble(Tag.RescaleIntercept, Double.NaN);
-        assertThat(intercept).isEqualTo(0.0); // 最小値
+        // 切片は「16 bit の全域を使う」位置に置く（最小値ではない。正確さの詳細は NiftiPixelExactnessTest）
+        assertThat(intercept).isFinite();
         // **係数はボリューム全体で 1 つ**（スライスごとに変わらない）
         assertThat(frames.get(1).getDouble(Tag.RescaleSlope, -1)).isEqualTo(slope);
         // 復元して元の値に戻る（量子化誤差の範囲で）
         byte[] px = first.getBytes(Tag.PixelData);
         short[] shorts = new short[16];
         ByteBuffer.wrap(px).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(shorts);
-        assertThat(shorts[3] * slope + intercept).isCloseTo(1.5, org.assertj.core.data.Offset.offset(0.001));
+        assertThat(shorts[3] * slope + intercept).isCloseTo(1.5, org.assertj.core.data.Offset.offset(slope / 2));
     }
 
     @Test
