@@ -39,7 +39,7 @@ H33 `measureMask` はメッシュ化するので 117 ラベルには重く、HU 
 
 - 版は実行時に `totalsegmentator --version` 相当で取得し、**結果（SEG の説明・SR・CSV）に版を書く**。版を固定するか最新にするかは Q3 で決める（固定を推奨：数値の再現性のため）。
 - ⚠ README の記述は変わりうる。医療版（非公開版）で使う前に、重みのライセンスを原典で取り直す（開発計画 §5「AI のデータ」）。
-- `body` タスク（体表）が無料枠か有料枠かは README の一覧からは読み取れなかった（**未確認**）。v1 では使わない。
+- `body` タスク（体表）は、`resources/improvements_in_v2.md` の「非商用のみのタスク」（appendicular_bones・tissue_types・face・heartchambers_highres・vertebrae_body）に入っておらず、同じ箇所に「ほかのタスクは商用でも使える」とある（2026-10-06 確認）。ただし README の有料の一覧（§2 の表）とこの一覧は一致していないので、使う前に両方を取り直す。v1 では使わない。
 
 ## 3. 本体: H66 `measureLabels`
 
@@ -94,7 +94,7 @@ measureLabels(
 - 身長（m）を入力すれば **大腰筋の面積 ÷ 身長²（cm²/m²）**も出す。身長は H10 が返さず、DICOM の PatientSize も空のことが多いので、入力欄にする。
 - 基準値（カットオフ）での判定はしない（研究版・SaMD に向けた方針）。
 
-HU 範囲は、L3 の体組成で広く使われる骨格筋 −29〜+150 HU・脂肪 −190〜−30 HU の設定。出典として挙げられることの多い Mitsiopoulos N, et al. Cadaver validation of skeletal muscle measurement by magnetic resonance imaging and computerized tomography. J Appl Physiol 1998;85(1):115 の書誌は確認した。**本文にこの閾値が書かれているかは、まだ原典で確かめていない**（Q4 の残り）。v1 の画面では範囲を変えられない（既定のみ）。
+HU 範囲は、L3 の体組成で広く使われる骨格筋 −29〜+150 HU・脂肪 −190〜−30 HU の設定。出典は Mitsiopoulos N, et al. Cadaver validation of skeletal muscle measurement by magnetic resonance imaging and computerized tomography. J Appl Physiol 1998;85(1):115–122。総説 Engelke K, et al. "Quantitative analysis of skeletal muscle by computed tomography imaging—State of the art"（J Orthop Translat 2018・PMC6260391）の表 1 が、この論文の値として骨格筋 −29〜150・脂肪 −190〜−30 HU を挙げ、さらに古い Lönn 1994（Am J Clin Nutr 60:921）の −29〜151・−190〜−30 も載せている（2026-10-06 確認）。**原典の本文は出版社のサイトが 403 で読めず、総説経由の確認にとどまる。**v1 の画面では範囲を変えられない（既定のみ）。
 
 ### 4.4 v1 に入れない指標と理由
 
@@ -102,7 +102,7 @@ HU 範囲は、L3 の体組成で広く使われる骨格筋 −29〜+150 HU・�
 |---|---|---|
 | 皮下脂肪・内臓脂肪の面積（SAT/VAT） | 腹壁の筋で内外を分ける必要があるが、それを出すのは有料枠（`tissue_types`・`abdominal_muscles`） | ライセンス取得、または自社のモデル（Phase 1 のデータ収集後） |
 | 骨格筋の全周の面積（SMA/SMI） | `total` の筋は大腰筋・脊柱起立筋・殿筋などで、腹壁の筋が無い | 同上 |
-| L1 椎体の骨密度の目安（HU） | `vertebrae_L1` は椎弓を含む椎骨全体で、文献の「椎体の海綿骨」ではない | 椎体だけを出すタスクの有無とライセンスを確認してから |
+| L1 椎体の骨密度の目安（HU） | `vertebrae_L1` は椎弓を含む椎骨全体で、文献の「椎体の海綿骨」ではない。椎体だけを出す `vertebrae_body` タスクは非商用のみ（TotalSegmentator `resources/improvements_in_v2.md`・2026-10-06 確認） | ライセンス取得、または自社のモデル |
 
 ## 5. プラグイン `vis-ct-quant`
 
@@ -136,9 +136,40 @@ HU 範囲は、L3 の体組成で広く使われる骨格筋 −29〜+150 HU・�
 | Q1 | 本体 H66 `measureLabels`（純関数＋host への配線＋vitest） | ✅ 2026-10-05（`pluginLabelStatsApi.ts`・vitest 9 件。値の統計は ROI 統計の `summarizeValues` を通す＝母標準偏差。実機は Q3 で） |
 | Q2 | SR の種別追加（area・meanValue・stdDev）＋backend テスト | ✅ 2026-10-05（3 つとも私用スキーム。meanValue・stdDev は単位必須、負は meanValue だけ許す） |
 | Q3 | プラグイン `vis-ct-quant`（Colab で TotalSegmentator・3 タブ・保存） | ✅ 2026-10-05（作業コピー `graphy-workspace/graphy-next-plugin-ct-quant`・node --test 13/0。実機 `automator/src/spike/computeCtQuantCheck.ts` 23/0：T4 で 233 秒・最大 1819 MiB。H66 のボクセル数が計算機の数え上げと 54 構造すべてで一致、肝は右・脾は左、L3 は k=9 で大腰筋 15.91 cm²・39.5 HU、SEG・SR（AREA・MEAN_VALUE・[hnsf'U] を確認）・CSV を保存。L3 の重ね表示はスクリーンショットで確認。公開リポジトリ tatsunidas/graphy-next-plugin-ct-quant を 2026-10-05 に作成・リリースはまだ） |
-| Q4 | 検証（合成 DICOM・経路の一致・公開データの参考値）＋HU 範囲の出典の確認 | 未着手 |
+| Q4 | 検証（合成 DICOM・経路の一致・公開データの参考値）＋HU 範囲の出典の確認 | ✅ 2026-10-06（§7.1〜7.3） |
 | Q5 | 本体の版上げ・プラグインの署名つきリリース（署名は Linux 機） | 未着手 |
 
 ## 9. このあとの AI（TODO・2026-10-05 にユーザが追加）
 
 CT 肺結節検出、胸部 X 線の所見検出、MRA 脳動脈瘤検出。いずれも「解析 ＞ AI」に 1 項目ずつ・研究用。H66 は検出の後処理（候補ごとの体積・HU）にも使える。モデルとライセンスは着手時に原典で確認する（脳動脈瘤は TotalSegmentator の `brain_aneurysm` が CC BY-NC 4.0 で商用不可）。
+
+## 7.1 合成 DICOM での真値照合（2026-10-06・Q4）
+
+`automator/scripts/make-ct-quant-phantom.py` が、CT 値が既知の直方体 4 つ（−100・50・60 HU と、40／−120 HU を半分ずつ持つもの）を
+空気の中に置いた CT を作る（128 × 112 × 40・間隔 列 0.7・行 0.8・スライス 2.5 mm・**RescaleSlope 2・Intercept −1024**）。
+真値は直方体の大きさ（mm）から解析的に出し、ボクセルは数えない。`automator/src/spike/ctQuantPhantomCheck.ts` が取り込み、
+検証用のプラグインが H10 で読んで CT 値の一致でラベルを作り、H66 で測る。
+
+**23/0**: 体積・平均 CT 値・境界を除いたボクセル数・k=30 の面積・筋（−29〜150）と脂肪（−190〜−30）の範囲の面積が、すべて真値と一致した
+（相対 1e-6 以内）。校正の傾き 2 を読み落とすと CT 値が一致せずラベルが空になるので、校正の経路の負例も兼ねる。
+
+## 7.2 公開データでの参考値（2026-10-06・Q4）
+
+- **test 分割を使ってよいか**: TotalSegmentator `resources/improvements_in_v2.md` は「学習画像を 1139 から 1559 に増やした・追加の被験者は公開していない・公開データの train と val は v1 と同じ被験者」と書く。meta.csv の分割は train 1082・val 57・test 89 で、**1082 + 57 = 1139**。よって配布されている重みは公開の test 分割を学習に使っていないと読める（原典が直接そう書いているわけではなく、数からの推定）。
+- **症例**: test 分割のうち study_type に "abdomen" を含むものを、meta.csv の並びの先頭から 5 例（s0311・s0308・s0291・s0235・s0236）。選り好みはしていない。23.6 GB の zip は丸ごと落とさず、HTTP の Range で必要なメンバーだけを取った（`automator/scripts/fetch-totalseg-test-cases.py`）。
+- **経路**: NIfTI を CT として本体に取り込み → vis-ct-quant を Colab T4 で実行（1 例 103〜157 秒）→ ラベルを書き出し（`automator/src/spike/computeCtQuantPublicCheck.ts`・10/0）→ `automator/scripts/eval-ct-quant-public.py` が正解と照合。正解の格子は NIfTI のアフィンから、本体の格子は indexToWorld から患者座標でつなぎ、写像が整数の並べ替えになることを確かめてから比べる（向きの取り違えがあれば止まる）。正解の体積は NIfTI のボクセル数 × |det(アフィン)| で、本体の計算を使わない。
+
+| 構造 | Dice（5 例の範囲） | 体積の誤差 % |
+|---|---|---|
+| 肝 | 0.990〜0.995 | −0.3〜+0.7 |
+| 脾 | 0.984〜0.993 | −1.0〜+2.0 |
+| 左腎 | 0.989〜0.993 | −0.7〜+0.9 |
+| 右腎 | 0.985〜0.993 | −0.2〜+2.3 |
+| 膵 | 0.936〜0.973 | −6.1〜−1.6 |
+
+L3: 本体が選んだスライスは 5 例とも正解の L3 の重心のスライスと一致。そのスライスでの面積の誤差は、大腰筋 −1.4〜+1.3%・脊柱起立筋 −0.3〜+1.4%。
+本体（H66）の大腰筋の面積は、照合スクリプトが数え直した値と 5 例とも一致した。症例ごとの値は `automator/.results/compute-ct-quant-public/eval.json`（git には入れない）。
+
+⚠ 5 例・1 施設（すべて Siemens）なので、精度の主張には使えない。膵は体積を小さめに出す傾向（5 例とも負）。
+⚠ test 分割が学習に入っていないことは数からの推定なので、SaMD の評価には自社で集めた独立のデータを使う（開発計画 W5）。論文の報告値との比較はしていない。
+
