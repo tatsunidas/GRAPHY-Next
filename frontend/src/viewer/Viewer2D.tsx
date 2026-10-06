@@ -58,7 +58,8 @@ import { getOrCreateCameraSync, getOrCreateVoiSync, getOrCreatePresentationSync,
 import { registerReferenceSource, bumpReference, subscribeReference, computeReferenceSegments, type RefSegment } from "./referenceLines";
 import { registerViewerCommands, type ViewerCommands, type ViewerDerivedSeriesRequest, type ViewerDerivedSeriesResult, type ViewerOverlay, type ViewerPixelData, type ViewerSrRequest, type ViewerSrResult, type ViewerPixelDataOptions, type ViewerAngioReportRequest, type ViewerPresentationStateRequest, type ViewerRoi, type ViewerSpatialCalibration, type ViewerTargetInfo, type ViewerViewState, type ViewerXaState, type ViewerXaCine, ViewerLabelVolume, ViewerLabelVolumeResult } from "./viewerCommands";
 import { buildPluginMeta, computeCalipers, hasShapeCalipers, pickPluginMeta, readRoiStats, roiPointsPx } from "./roiRead";
-import { CONTOUR_TOOL_NAMES } from "./roiContourTools";
+import { CLOSED_CONTOUR_TOOLS, CONTOUR_TOOL_NAMES } from "./roiContourTools";
+import { installInteriorGrab } from "./roiInteriorGrab";
 import { measureToolConfig } from "./roiStatsTextBox";
 import { useRoiStatsDisplay } from "./roiStatsDisplay";
 import { computeRoiStatsNow, getRoiStats, subscribeRoiStats } from "./roiStatsStore";
@@ -968,6 +969,13 @@ export function Viewer2D({
       if (!ctx) return;
       const sc = { studyUid: ctx.studyUid, seriesUid: ctx.seriesUid, z: ctx.z, c: ctx.c, t: ctx.t };
       setRoiMaskMeta(uid, { patientKey: ctx.patientKey, seriesLabel: ctx.seriesLabel, scope: sc, origin: sc });
+      // 描き終えた ROI を選択する（選択中の ROI は内側のドラッグで移動できる＝作る→動かすが続けて行える）。
+      try {
+        csAnnotation.selection.setAnnotationSelected(uid, true, false);
+        csToolsUtilities.triggerAnnotationRenderForViewportIds([viewportIdRef.current]);
+      } catch {
+        /* 選択できなくても描いた ROI は残る */
+      }
     };
     eventTarget.addEventListener(csToolsEnums.Events.ANNOTATION_COMPLETED, onAnnotationDone as EventListener);
 
@@ -1204,6 +1212,12 @@ export function Viewer2D({
             // ImageJ インポートの polygon/freehand ROI 描画用（メニューには出さず passive で追加）。
             tg.addTool(PlanarFreehandROITool.toolName, measureToolConfig(PlanarFreehandROITool.toolName));
             tg.setToolPassive(PlanarFreehandROITool.toolName);
+            // 選択中の閉じた ROI は内側のドラッグで移動できるようにする（viewer/roiInteriorGrab.ts）。
+            // 判定はツールグループ単位（GridView リンクでは複数タイルで共有）なので、このグループの左ドラッグを見る。
+            const measureActive = () => MEASURE_TOOLS.includes(tg.getActivePrimaryMouseButtonTool());
+            for (const tn of [RectangleROITool.toolName, EllipticalROITool.toolName, ...CLOSED_CONTOUR_TOOLS, PlanarFreehandROITool.toolName]) {
+              installInteriorGrab(tg.getToolInstance(tn), { isMeasureToolActive: measureActive });
+            }
             // ROI ブラシ（セグメンテーション編集）。passive で追加。
             tg.addTool(BrushTool.toolName);
             tg.setToolPassive(BrushTool.toolName);

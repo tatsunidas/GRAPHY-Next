@@ -2195,6 +2195,7 @@ export const en: Record<string, string> = {
   "sc.sysDelete": "Delete selected measurement / ROI",
   "sc.roiCopy": "Copy the selected ROI",
   "sc.roiPaste": "Paste the ROI onto the displayed slice",
+  "sc.roiDeselect": "Deselect ROIs (drag inside a selected ROI to move it; deselect to draw a new ROI inside it)",
 
   // db admin
   "dbadmin.title": "Database Tables",
