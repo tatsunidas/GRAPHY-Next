@@ -216,6 +216,12 @@ async function main(): Promise<void> {
       check(psoas?.areaCm2 > 0 && Number.isFinite(psoas?.meanHu), "L3: 大腰筋の面積と平均 CT 値が出る", psoas);
       check(Math.abs(psoas.indexCm2PerM2 - psoas.areaCm2 / 1.7 ** 2) < 1e-9, "L3: 身長 170 cm で 面積 ÷ 身長² になる", psoas);
       check(psoas.muscleRangeAreaCm2 <= psoas.areaCm2 + 1e-9, "L3: 筋の CT 値の範囲の面積は全体の面積以下", psoas);
+      // SMA（abdominal_muscles・腹横筋を除く）。経路の確認は計算機の数え上げとの一致で見る
+      const smaBad = (s.smaMeasure ?? []).filter((m: { label: number; voxelCount: number }) => s.summary.muscleVoxels?.[String(m.label)] !== m.voxelCount);
+      check((s.smaMeasure ?? []).length > 0 && smaBad.length === 0, "SMA: abdominal_muscles の H66 のボクセル数が計算機の数え上げと一致", smaBad.slice(0, 3));
+      check(s.sma?.total?.areaCm2 > psoas.areaCm2, "SMA: 合計は大腰筋だけの面積より大きい", { sma: s.sma?.total, psoasTotal: psoas.areaCm2 });
+      check(Math.abs(s.sma.total.smiCm2PerM2 - s.sma.total.areaCm2 / 1.7 ** 2) < 1e-9, "SMA: 身長 170 cm で SMI = SMA ÷ 身長²", s.sma?.total);
+      console.log(`    SMA: ${JSON.stringify(s.sma)}`);
       check(await viewer.getByTestId("ctq-l3-preview").isVisible(), "L3: 重ね表示の画像が出る");
       console.log(`    L3 k=${s.l3.k}: ${JSON.stringify(s.l3Rows)}`);
     }
@@ -255,11 +261,13 @@ async function main(): Promise<void> {
       check(/MEAN_VALUE/.test(bytes) && /\[hnsf'U\]/.test(bytes) && /VOLUME/.test(bytes) && (!s.l3?.ok || /AREA/.test(bytes)),
         "SR に体積・平均 CT 値（[hnsf'U]）・L3 の面積が入る", { len: bytes.length });
       check(!s.l1?.ok || /L1 vertebral body/.test(bytes), "SR に L1 椎体のグループが入る");
+      check(!s.l3?.ok || /L3 skeletal muscle area/.test(bytes), "SR に SMA のグループが入る");
     }
     if (s.savedCsv?.ok) {
       const csv = fs.readFileSync(s.savedCsv.filePath, "utf8");
       check(csv.charCodeAt(0) === 0xfeff && /TotalSegmentator 2\.18\.0/.test(csv) && /"肝臓"/.test(csv), "CSV に版と肝臓の行がある");
       check(!s.l1?.ok || /^L1,"L1 vertebral body",/m.test(csv), "CSV に L1 椎体の行がある");
+      check(!s.l3?.ok || /^L3_SMA,"skeletal muscle area without transversus abdominis",/m.test(csv), "CSV に SMA（腹横筋を除く）の行がある");
     }
 
     // --- 5. 監査 ---
@@ -279,7 +287,7 @@ async function main(): Promise<void> {
     s = await state(viewer);
     check(s.release?.ok === true && s.release?.released === true, "「解放する」で解放される", s.release);
 
-    fs.writeFileSync(path.join(OUT_DIR, "state.json"), JSON.stringify({ summary: s.summary, organs: s.organs, ls: s.ls, l3: s.l3, l3Rows: s.l3Rows, l1: s.l1 }, null, 2));
+    fs.writeFileSync(path.join(OUT_DIR, "state.json"), JSON.stringify({ summary: s.summary, organs: s.organs, ls: s.ls, l3: s.l3, l3Rows: s.l3Rows, l1: s.l1, sma: s.sma }, null, 2));
   } finally {
     await driver.page.evaluate((id) => (window as unknown as { graphyDesktop: any }).graphyDesktop.computeColabRelease(id), endpointId).catch(() => undefined);
     await driver.stop();
