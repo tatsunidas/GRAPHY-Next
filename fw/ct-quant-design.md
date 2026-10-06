@@ -120,7 +120,7 @@ HU 範囲は、L3 の体組成で広く使われる骨格筋 −29〜+150 HU・�
 - **腹横筋は `abdominal_muscles` に無いので入らない。文献の SMA より小さく出る**。画面・CSV（`skeletal muscle area without transversus abdominis`）・SR の文に明記する。広背筋・前鋸筋・大胸筋・僧帽筋は入れない。
 - 筋ごとの面積・平均 CT 値・−29〜150 HU の面積と、合計（SMA）、身長があれば SMI（cm²/m²）。基準値による判定はしない。
 - 重ね表示は SMA の筋を優先して色を付ける。
-- 状態（2026-10-06）: プラグインは node --test 16/0（`l3Sma` の合計・広背筋を入れない・SMI、偽の abdominal_muscles での往復）。**実機（Colab）は未確認**——この PC のディスクが満杯になり、肺結節の検証と一緒に止めた。プラグインの PR は実機確認まで main に入れない。
+- 状態（2026-10-06）: プラグインは node --test 16/0（`l3Sma` の合計・広背筋を入れない・SMI、偽の abdominal_muscles での往復）。実機は 2026-10-06 に `computeCtQuantCheck` 33/0（PRE LIVER・T4 で 316 秒・最大 5913 MiB）: SMA 141.5 cm²・平均 20.5 HU・SMI 49.0 cm²/m²（170 cm）。abdominal_muscles の H66 のボクセル数は計算機の数え上げと一致。腹壁の筋に色が付くことをスクリーンショットで確認。大腰筋は abdominal_muscles で 19.3 cm²、total の iliopsoas で 15.9 cm²（モデルが違うと同じ筋でも値が違うので、画面では別の表にしている）。プラグインは ct-quant の PR でマージ済み。
 
 ## 5. プラグイン `vis-ct-quant`
 
