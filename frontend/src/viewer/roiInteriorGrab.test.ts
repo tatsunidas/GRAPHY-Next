@@ -3,8 +3,8 @@
  * Author: Tatsuaki Kobayashi
  */
 import { describe, expect, it } from "vitest";
-import { RectangleROITool } from "@cornerstonejs/tools";
-import { interiorHit, installInteriorGrab, isInsideClosedRoi, pointInPolygon } from "./roiInteriorGrab";
+import { LengthTool, RectangleROITool } from "@cornerstonejs/tools";
+import { groupMembers, interiorHit, installInteriorGrab, isInsideClosedRoi, pointInPolygon, shiftAnnotation } from "./roiInteriorGrab";
 import { CONTOUR_TOOL_NAMES, FreehandRoiTool } from "./roiContourTools";
 
 // world の x,y をそのまま canvas とみなす（z は捨てる）。
@@ -93,14 +93,23 @@ describe("内側を掴む条件", () => {
 
 describe("上流ツールへの差し込み（上流を上げたらここで刺さるか確かめる）", () => {
   const opts = { isMeasureToolActive: () => true };
-  it("矩形は isPointNearTool だけを包む（移動は上流の toolSelectedCallback がする）", () => {
+  it("矩形は isPointNearTool・toolSelectedCallback・handleSelectedCallback を包む（まとめて移動・選択の保持）", () => {
     const tool = new RectangleROITool() as unknown as Record<string, unknown>;
     const near = tool.isPointNearTool;
     const selected = tool.toolSelectedCallback;
+    const handle = tool.handleSelectedCallback;
     expect(typeof near).toBe("function");
     installInteriorGrab(tool, opts);
     expect(tool.isPointNearTool).not.toBe(near);
-    expect(tool.toolSelectedCallback).toBe(selected);
+    expect(tool.toolSelectedCallback).not.toBe(selected);
+    expect(tool.handleSelectedCallback).not.toBe(handle);
+  });
+  it("Length（面を持たない計測）にもかかる（選択していればまとめて動く）", () => {
+    const tool = new LengthTool() as unknown as Record<string, unknown>;
+    const selected = tool.toolSelectedCallback;
+    expect(typeof selected).toBe("function");
+    installInteriorGrab(tool, opts);
+    expect(tool.toolSelectedCallback).not.toBe(selected);
   });
   it("フリーハンドは toolSelectedCallback も包む（線を掴むと描き直し編集になるため）", () => {
     const tool = new FreehandRoiTool() as unknown as Record<string, unknown>;
@@ -120,5 +129,51 @@ describe("上流ツールへの差し込み（上流を上げたらここで刺�
     const tool = { isPointNearTool: () => true } as Record<string, unknown>;
     installInteriorGrab(tool, { isMeasureToolActive: () => false });
     expect((tool.isPointNearTool as (...a: unknown[]) => boolean)({}, rect(0, 0, 1, 1), [0, 0], 6)).toBe(true);
+  });
+});
+
+describe("まとめて動かす注釈の選び方", () => {
+  const ann = (uid: string, img: string, extra: Record<string, unknown> = {}) => ({
+    annotationUID: uid,
+    metadata: { referencedImageId: img },
+    ...extra,
+  });
+  const all = [
+    ann("a", "img10"),
+    ann("b", "img10"),
+    ann("c", "img10"), // 未選択
+    ann("d", "img11"), // 別スライス
+    ann("e", "img10", { isLocked: true }),
+    ann("f", "img10", { isVisible: false }),
+  ];
+  it("選択中・表示中のスライス・ロックも非表示もないものだけ", () => {
+    expect(groupMembers(["a", "b", "d", "e", "f"], all, "img10").map((a) => a.annotationUID)).toEqual(["a", "b"]);
+  });
+  it("別スライスを表示していれば、そちらの選択だけ", () => {
+    expect(groupMembers(["a", "b", "d"], all, "img11").map((a) => a.annotationUID)).toEqual(["d"]);
+  });
+  it("表示中の画像が分からなければ何も動かさない", () => {
+    expect(groupMembers(["a", "b"], all, undefined)).toEqual([]);
+  });
+});
+
+describe("注釈の平行移動", () => {
+  it("handles.points と輪郭、利用者が動かした文字ボックスを同じ量だけ動かす", () => {
+    const a = {
+      data: {
+        handles: { points: [[0, 0, 0], [1, 1, 1]], textBox: { hasMoved: true, worldPosition: [5, 5, 5] } },
+        contour: { polyline: [[2, 2, 2]] },
+      },
+    } as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+    shiftAnnotation(a, [1, -2, 0.5]);
+    expect(a.data.handles.points).toEqual([[1, -2, 0.5], [2, -1, 1.5]]);
+    expect(a.data.contour.polyline).toEqual([[3, 0, 2.5]]);
+    expect(a.data.handles.textBox.worldPosition).toEqual([6, 3, 5.5]);
+    expect(a.invalidated).toBe(true);
+  });
+  it("利用者が動かしていない文字ボックスは動かさない（上流が ROI に合わせて置き直す）", () => {
+    const a = { data: { handles: { points: [[0, 0, 0]], textBox: { hasMoved: false, worldPosition: [5, 5, 5] } } } } as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+    shiftAnnotation(a, [1, 1, 1]);
+    expect(a.data.handles.textBox.worldPosition).toEqual([5, 5, 5]);
   });
 });

@@ -58,8 +58,8 @@ import { getOrCreateCameraSync, getOrCreateVoiSync, getOrCreatePresentationSync,
 import { registerReferenceSource, bumpReference, subscribeReference, computeReferenceSegments, type RefSegment } from "./referenceLines";
 import { registerViewerCommands, type ViewerCommands, type ViewerDerivedSeriesRequest, type ViewerDerivedSeriesResult, type ViewerOverlay, type ViewerPixelData, type ViewerSrRequest, type ViewerSrResult, type ViewerPixelDataOptions, type ViewerAngioReportRequest, type ViewerPresentationStateRequest, type ViewerRoi, type ViewerSpatialCalibration, type ViewerTargetInfo, type ViewerViewState, type ViewerXaState, type ViewerXaCine, ViewerLabelVolume, ViewerLabelVolumeResult } from "./viewerCommands";
 import { buildPluginMeta, computeCalipers, hasShapeCalipers, pickPluginMeta, readRoiStats, roiPointsPx } from "./roiRead";
-import { CLOSED_CONTOUR_TOOLS, CONTOUR_TOOL_NAMES } from "./roiContourTools";
-import { installInteriorGrab } from "./roiInteriorGrab";
+import { CONTOUR_TOOL_NAMES } from "./roiContourTools";
+import { installInteriorGrab, installSelectionGestures } from "./roiInteriorGrab";
 import { measureToolConfig } from "./roiStatsTextBox";
 import { useRoiStatsDisplay } from "./roiStatsDisplay";
 import { computeRoiStatsNow, getRoiStats, subscribeRoiStats } from "./roiStatsStore";
@@ -919,6 +919,7 @@ export function Viewer2D({
     const viewportId = viewportIdRef.current;
     const toolGroupId = `${viewportId}-tg`;
     let resizeObserver: ResizeObserver | null = null;
+    let removeSelectionGestures: (() => void) | undefined;
 
     // カーソル位置の輝度値（モダリティ値=HU 等）を読む。tools の入力は妨げない（受動的）。
     const onMove = (e: MouseEvent) => {
@@ -1193,6 +1194,8 @@ export function Viewer2D({
         element.addEventListener(EVENTS.CAMERA_MODIFIED, onCameraModified);
         // フォーカス中タイルを記録（ROI マネージャの「＋新規マスク」対象）。base ビューポートのみ。
         if (!compact) element.addEventListener("pointerdown", onFocusPointerDown);
+        // Ctrl/⌘＋クリックで ROI の選択を足す・外す、押した瞬間の選択を控える（viewer/roiInteriorGrab.ts）。
+        removeSelectionGestures = installSelectionGestures(element);
 
         const wireTools = (tg: ReturnType<typeof ToolGroupManager.createToolGroup>) => {
           if (!tg) return;
@@ -1212,10 +1215,10 @@ export function Viewer2D({
             // ImageJ インポートの polygon/freehand ROI 描画用（メニューには出さず passive で追加）。
             tg.addTool(PlanarFreehandROITool.toolName, measureToolConfig(PlanarFreehandROITool.toolName));
             tg.setToolPassive(PlanarFreehandROITool.toolName);
-            // 選択中の閉じた ROI は内側のドラッグで移動できるようにする（viewer/roiInteriorGrab.ts）。
+            // 選択中の閉じた ROI は内側のドラッグで移動、選択中の ROI はまとめて移動（viewer/roiInteriorGrab.ts）。
             // 判定はツールグループ単位（GridView リンクでは複数タイルで共有）なので、このグループの左ドラッグを見る。
             const measureActive = () => MEASURE_TOOLS.includes(tg.getActivePrimaryMouseButtonTool());
-            for (const tn of [RectangleROITool.toolName, EllipticalROITool.toolName, ...CLOSED_CONTOUR_TOOLS, PlanarFreehandROITool.toolName]) {
+            for (const tn of [...MEASURE_TOOLS, PlanarFreehandROITool.toolName]) {
               installInteriorGrab(tg.getToolInstance(tn), { isMeasureToolActive: measureActive });
             }
             // ROI ブラシ（セグメンテーション編集）。passive で追加。
@@ -1302,6 +1305,7 @@ export function Viewer2D({
       resizeObserver?.disconnect();
       element.removeEventListener(EVENTS.CAMERA_MODIFIED, onCameraModified);
       element.removeEventListener("pointerdown", onFocusPointerDown);
+      removeSelectionGestures?.();
       element.removeEventListener(EVENTS.VOI_MODIFIED, onVoiModified);
       element.removeEventListener("mousemove", onMove);
       element.removeEventListener("mouseleave", onLeave);

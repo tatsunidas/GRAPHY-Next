@@ -83,6 +83,8 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "roi-paste", combo: "Mod+V", descriptionKey: "sc.roiPaste", group: "system" },
   // ROI の選択を外す。選択中の ROI は内側のドラッグで移動になるので、その内側に別の ROI を描く前に使う。
   { id: "roi-deselect", combo: "Escape", descriptionKey: "sc.roiDeselect", group: "system" },
+  // ROI の複数選択（画像上・ROI マネージャの行）。マウス操作なのでキー入力では一致しない（ヘルプ表示用）。
+  { id: "roi-multi-select", combo: "Mod+Click", descriptionKey: "sc.roiMultiSelect", group: "system" },
 ];
 
 /**
