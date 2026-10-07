@@ -10,6 +10,7 @@
  * 設計: `fw/roi-manager-design.md`（M1=骨組み＋表示属性）。
  * 後続(M2+): 色/線幅/塗り, ZCT scope/メタ編集, ブール演算, 3D 変換, 保存(ImageJ/DICOM)。
  */
+import { toggleRoiSelection } from "../viewer/roiInteriorGrab";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { eventTarget, getRenderingEngine, Enums as csEnums } from "@cornerstonejs/core";
 import {
@@ -641,7 +642,11 @@ export function RoiManagerPanel({
         <div
           key={r.uid}
           style={focusedRoi === r.uid ? { ...row, ...focusedRowBox } : row}
-          onClick={() => { setFocusedRoi(r.uid); onRevealRoi?.(r.uid); }}
+          onClick={(e) => {
+            // Ctrl/⌘＋クリックは画像上と同じく選択を足す・外す。スライスは動かさない（表示中のスライスでまとめて動かすため）。
+            if (e.ctrlKey || e.metaKey) { toggleRoiSelection(r.uid); return; }
+            setFocusedRoi(r.uid); onRevealRoi?.(r.uid);
+          }}
           data-testid="roi-mgr-row"
           data-roi-uid={r.uid}
         >

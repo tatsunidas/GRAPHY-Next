@@ -15,11 +15,16 @@
  * `toolSelectedCallback` も包み、線から離れた内側なら平行移動を自前で行う。統計の文字ボックスを掴んだときも
  * 上流は何もしない（開いた輪郭用の処理に入る）ので、`handleSelectedCallback` を包んで文字ボックスの移動にする。
  *
+ * <p>**複数選択と同時移動**: Ctrl（Mac は ⌘）＋クリックで選択を足す・外す（{@link installSelectionGestures}）。
+ * 選択中の ROI を掴んで動かすと、**表示中のスライスにある選択中の ROI がすべて**同じ量だけ動く。
+ * 上流は押した時点で選択を「掴んだ 1 つだけ」に置き換える（`mouseDown.js` の `toggleAnnotationSelection`）ので、
+ * 押した瞬間の選択を控えておき、選択中の ROI を掴んだときはその選択に戻す。
+ *
  * <p>🔴 **上流の内部実装（`isPointNearTool` / `toolSelectedCallback` がインスタンスのアロー関数）に依存している。**
  * `@cornerstonejs/tools` を上げたら `roiInteriorGrab.test.ts` と実機スパイク `roiMoveCheck.ts` を回す。
  */
-import { Enums as csToolsEnums, annotation as csAnnotation, state as csToolsState } from "@cornerstonejs/tools";
-import { triggerAnnotationRenderForViewportIds } from "@cornerstonejs/tools/utilities";
+import { AnnotationTool, Enums as csToolsEnums, annotation as csAnnotation, state as csToolsState } from "@cornerstonejs/tools";
+import { getAnnotationNearPoint, triggerAnnotationRenderForViewportIds } from "@cornerstonejs/tools/utilities";
 import { getEnabledElement, getRenderingEngines } from "@cornerstonejs/core";
 
 type Vec2 = [number, number] | number[];
@@ -105,7 +110,81 @@ export function interiorHit(
   return isInsideClosedRoi(annotation, toCanvas, p);
 }
 
-/** ツールのインスタンスに内側掴みを入れる。二重にはかけない。 */
+/**
+ * まとめて動かす注釈（純関数）。押した時点で選択中で、**表示中の画像に属し**、ロック・非表示でないもの。
+ * 別スライスの ROI は、見えないまま動くと気付けないので含めない。
+ */
+export function groupMembers(selectedUids: readonly string[], annotations: readonly Any[], displayedImageId: string | undefined): Any[] {
+  if (!displayedImageId) return [];
+  const sel = new Set(selectedUids);
+  return annotations.filter(
+    (a) =>
+      sel.has(a?.annotationUID) &&
+      a?.metadata?.referencedImageId === displayedImageId &&
+      !a?.isLocked &&
+      a?.isVisible !== false,
+  );
+}
+
+function shiftPoints(pts: Vec3[] | undefined, d: Vec3): void {
+  for (const q of pts ?? []) {
+    q[0] += d[0];
+    q[1] += d[1];
+    q[2] += d[2];
+  }
+}
+
+/**
+ * 注釈を world 差分 d だけ平行移動する（純関数ではないが DOM に触らない）。`handles.points` と `contour.polyline`、
+ * 利用者が動かした文字ボックスを動かす。スプライン系は描画時に `handles.points` から輪郭を作り直すので、
+ * 両方動かしても二重にはならない。
+ */
+export function shiftAnnotation(annotation: Any, d: Vec3): void {
+  const data = annotation?.data;
+  if (!data) return;
+  shiftPoints(data.contour?.polyline, d);
+  shiftPoints(data.handles?.points, d);
+  const tb = data.handles?.textBox;
+  if (tb?.hasMoved && tb.worldPosition) shiftPoints([tb.worldPosition], d);
+  annotation.invalidated = true;
+}
+
+/** 押した瞬間の選択（{@link installSelectionGestures} が控える）。上流が掴んだ 1 つに置き換える前の状態。 */
+let selectionAtPress: string[] = [];
+
+function currentSelection(): string[] {
+  try {
+    return [...(csAnnotation.selection.getAnnotationsSelected() ?? [])];
+  } catch {
+    return [];
+  }
+}
+
+/** 選択中の ROI を掴んだのなら、押した瞬間の選択に戻す（掴んだだけで複数選択が外れないように）。 */
+function keepSelectionIfGrabbedSelected(uid: string): boolean {
+  if (!selectionAtPress.includes(uid)) return false;
+  try {
+    for (const u of selectionAtPress) {
+      if (csAnnotation.state.getAnnotation(u)) csAnnotation.selection.setAnnotationSelected(u, true, true);
+    }
+  } catch {
+    /* 選択を戻せなくても操作自体は続ける */
+  }
+  return true;
+}
+
+function allAnnotations(): Any[] {
+  try {
+    return ((csAnnotation.state as Any).getAllAnnotations?.() ?? []) as Any[];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * ツールのインスタンスに、内側掴み・まとめて移動・選択の保持を入れる。二重にはかけない。
+ * 閉じた ROI 以外（Length など）にかけても、内側判定は常に偽なので線の掴みだけが対象になる。
+ */
 export function installInteriorGrab(tool: Any, opts: InteriorGrabOptions): void {
   if (!tool || tool.__graphyInteriorGrab) return;
   const originalNear = tool.isPointNearTool;
@@ -129,71 +208,89 @@ export function installInteriorGrab(tool: Any, opts: InteriorGrabOptions): void 
     return insideFor(element, annotation, canvasCoords);
   };
 
-  // フリーハンドは線を掴むと描き直し編集になる（上流 `PlanarFreehandROITool.toolSelectedCallback`）。
-  // 線から離れた内側を掴んだときだけ、平行移動へ切り替える。
-  if (!tool.activateClosedContourEdit) return;
+  const isFreehand = !!tool.activateClosedContourEdit;
   const originalSelected = tool.toolSelectedCallback;
-  if (typeof originalSelected !== "function") return;
-  tool.toolSelectedCallback = (evt: Any, annotation: Any, ...rest: unknown[]) => {
-    const { element, currentPoints } = evt.detail;
-    const canvas = currentPoints?.canvas as Vec2 | undefined;
-    const onLine = canvas ? originalNear.call(tool, element, annotation, canvas, 6, "mouse") : true;
-    if (!onLine && canvas && insideFor(element, annotation, canvas)) {
-      startDrag(tool, element, annotation, "shape");
-      evt.preventDefault();
-      return;
-    }
-    return originalSelected.call(tool, evt, annotation, ...rest);
-  };
+  if (typeof originalSelected === "function") {
+    tool.toolSelectedCallback = (evt: Any, annotation: Any, ...rest: unknown[]) => {
+      const { element, currentPoints } = evt.detail;
+      const canvas = currentPoints?.canvas as Vec2 | undefined;
+      const onLine = canvas ? originalNear.call(tool, element, annotation, canvas, 6, "mouse") : true;
+      const wasSelected = keepSelectionIfGrabbedSelected(annotation?.annotationUID);
+      // フリーハンドの線を掴んだら、従来どおり描き直し編集（上流 `PlanarFreehandROITool.toolSelectedCallback`）。
+      if (isFreehand && onLine) return originalSelected.call(tool, evt, annotation, ...rest);
+      if (wasSelected) {
+        const vp = getEnabledElement(element)?.viewport;
+        const group = groupMembers(selectionAtPress, allAnnotations(), vp?.getCurrentImageId?.());
+        if (group.length >= 2 && group.includes(annotation)) {
+          startDrag(element, group, "shape");
+          evt.preventDefault();
+          return;
+        }
+      }
+      // フリーハンドは上流に移動の手段が無いので、内側を掴んだら自前で平行移動する。
+      if (isFreehand && canvas && insideFor(element, annotation, canvas)) {
+        startDrag(element, [annotation], "shape", tool);
+        evt.preventDefault();
+        return;
+      }
+      return originalSelected.call(tool, evt, annotation, ...rest);
+    };
+  }
 
-  // 上流のフリーハンドは統計の文字ボックスを掴むと「開いた輪郭の端の編集」に入り、閉じた輪郭では何も起きない。
-  // 文字ボックスは ROI の内側に大きく重なって置かれるので、そこを掴んだ内側のドラッグが黙って効かなくなる
-  // （実機スパイクで発覚）。ほかの ROI と同じく、文字ボックスのドラッグは文字ボックスの移動にする。
   const originalHandle = tool.handleSelectedCallback;
-  if (typeof originalHandle !== "function") return;
-  tool.handleSelectedCallback = (evt: Any, annotation: Any, handle: Any, ...rest: unknown[]) => {
-    if (handle && handle === annotation?.data?.handles?.textBox) {
-      startDrag(tool, evt.detail.element, annotation, "textBox");
-      evt.preventDefault();
-      return;
-    }
-    return originalHandle.call(tool, evt, annotation, handle, ...rest);
-  };
+  if (typeof originalHandle === "function") {
+    tool.handleSelectedCallback = (evt: Any, annotation: Any, handle: Any, ...rest: unknown[]) => {
+      // ハンドルで形を変えるのは掴んだ 1 つだけ。ただし複数選択は外さない。
+      keepSelectionIfGrabbedSelected(annotation?.annotationUID);
+      // 上流のフリーハンドは統計の文字ボックスを掴むと「開いた輪郭の端の編集」に入り、閉じた輪郭では何も起きない。
+      // 文字ボックスは ROI の内側に大きく重なって置かれるので、そこを掴んだ内側のドラッグが黙って効かなくなる
+      // （実機スパイクで発覚）。ほかの ROI と同じく、文字ボックスのドラッグは文字ボックスの移動にする。
+      if (isFreehand && handle && handle === annotation?.data?.handles?.textBox) {
+        startDrag(evt.detail.element, [annotation], "textBox", tool);
+        evt.preventDefault();
+        return;
+      }
+      return originalHandle.call(tool, evt, annotation, handle, ...rest);
+    };
+  }
 }
 
 /**
- * world 差分で動かすドラッグを始める。`shape` は輪郭の全点（文字ボックスは利用者が動かしていれば一緒に）、
- * `textBox` は文字ボックスだけ。
+ * world 差分で動かすドラッグを始める。`shape` は注釈全体（{@link shiftAnnotation}）、`textBox` は文字ボックスだけ。
+ * Undo は上流の履歴に積む。1 つなら掴んだツールの memo、複数ならグループ記録で 1 段にまとめる。
  */
-function startDrag(tool: Any, element: HTMLDivElement, annotation: Any, what: "shape" | "textBox"): void {
+function startDrag(element: HTMLDivElement, annotations: Any[], what: "shape" | "textBox", tool?: Any): void {
   const E = csToolsEnums.Events;
   const viewportIds = [getEnabledElement(element)?.viewport?.id].filter(Boolean) as string[];
-  annotation.highlighted = true;
+  for (const a of annotations) a.highlighted = true;
   let memoStarted = false;
-  const shift = (pts: Vec3[] | undefined, d: Vec3) => {
-    for (const q of pts ?? []) {
-      q[0] += d[0];
-      q[1] += d[1];
-      q[2] += d[2];
+  const startMemo = () => {
+    memoStarted = true;
+    try {
+      if (annotations.length === 1 && typeof tool?.createMemo === "function") {
+        tool.createMemo(element, annotations[0]);
+        return;
+      }
+      AnnotationTool.startGroupRecording();
+      for (const a of annotations) AnnotationTool.createAnnotationMemo(element, a);
+      AnnotationTool.endGroupRecording();
+    } catch {
+      /* 履歴に積めなくても移動はする */
     }
   };
   const onDrag = (e: Any) => {
-    if (!memoStarted && typeof tool.createMemo === "function") {
-      tool.createMemo(element, annotation);
-      memoStarted = true;
-    }
+    if (!memoStarted) startMemo();
     const d = e.detail.deltaPoints.world as Vec3;
-    const tb = annotation.data.handles?.textBox;
-    if (what === "textBox") {
-      if (tb?.worldPosition) {
-        shift([tb.worldPosition], d);
-        tb.hasMoved = true;
+    for (const a of annotations) {
+      const tb = a.data.handles?.textBox;
+      if (what === "textBox") {
+        if (tb?.worldPosition) {
+          shiftPoints([tb.worldPosition], d);
+          tb.hasMoved = true;
+        }
+      } else {
+        shiftAnnotation(a, d);
       }
-    } else {
-      shift(annotation.data.contour?.polyline, d);
-      shift(annotation.data.handles?.points, d);
-      if (tb?.hasMoved && tb.worldPosition) shift([tb.worldPosition], d);
-      annotation.invalidated = true;
     }
     triggerAnnotationRenderForViewportIds(viewportIds);
   };
@@ -202,13 +299,81 @@ function startDrag(tool: Any, element: HTMLDivElement, annotation: Any, what: "s
     element.removeEventListener(E.MOUSE_UP, onEnd);
     element.removeEventListener(E.MOUSE_CLICK, onEnd);
     csToolsState.isInteractingWithTool = false;
-    if (memoStarted && typeof tool.doneEditMemo === "function") tool.doneEditMemo();
+    if (memoStarted && annotations.length === 1 && typeof tool?.doneEditMemo === "function") tool.doneEditMemo();
     triggerAnnotationRenderForViewportIds(viewportIds);
   };
   csToolsState.isInteractingWithTool = true;
   element.addEventListener(E.MOUSE_DRAG, onDrag as EventListener);
   element.addEventListener(E.MOUSE_UP, onEnd);
   element.addEventListener(E.MOUSE_CLICK, onEnd);
+}
+
+/** 外接矩形の面積（canvas px²）。入れ子の ROI を Ctrl＋クリックしたとき、内側の小さい方を選ぶのに使う。 */
+function canvasBoxArea(annotation: Any, toCanvas: (w: Vec3) => Vec2): number {
+  const pts: Vec3[] = annotation?.data?.contour?.polyline?.length ? annotation.data.contour.polyline : annotation?.data?.handles?.points ?? [];
+  if (pts.length === 0) return Infinity;
+  const c = pts.map(toCanvas);
+  const xs = c.map((p) => p[0]);
+  const ys = c.map((p) => p[1]);
+  return (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
+}
+
+/**
+ * ビューポートの element に、選択まわりの押下の扱いを付ける。戻り値で外す。
+ *
+ * <ul>
+ *   <li>押した瞬間の選択を控える（上流が選択を置き換える前。{@link keepSelectionIfGrabbedSelected}）。</li>
+ *   <li>**Ctrl（Mac は ⌘）＋左クリック**で、そこにある ROI の選択を足す・外す。線・ハンドルの近くを先に見て、
+ *       無ければ表示中の閉じた ROI の内側（入れ子なら小さい方）。当たったら上流に渡さない
+ *       （新規作成・移動・W/L を起こさない）。当たらなければ素通し。</li>
+ * </ul>
+ *
+ * <p>Shift は使わない（タイル選択 `Viewer2DScreen` と同時に起きる）。Mac の Ctrl＋クリックは右クリックになるので ⌘ も受ける。
+ * 上流が聞くのは `mousedown`（`eventListeners/mouse/mouseDownListener.js`）なので、その捕捉段階で止める。
+ */
+export function installSelectionGestures(element: HTMLDivElement): () => void {
+  const onDown = (e: MouseEvent) => {
+    selectionAtPress = currentSelection();
+    if (e.button !== 0 || !(e.ctrlKey || e.metaKey)) return;
+    const vp = getEnabledElement(element)?.viewport as Any;
+    const canvas = vp?.canvas as HTMLCanvasElement | undefined;
+    if (!vp || !canvas) return;
+    const r = canvas.getBoundingClientRect();
+    const p: Vec2 = [e.clientX - r.left, e.clientY - r.top];
+    let hit: Any = null;
+    try {
+      hit = getAnnotationNearPoint(element, p as Any, 6);
+    } catch {
+      hit = null;
+    }
+    if (!hit) {
+      const toCanvas = (w: Vec3) => vp.worldToCanvas(w) as Vec2;
+      const imageId = vp.getCurrentImageId?.();
+      const inside = allAnnotations().filter(
+        (a) => a?.metadata?.referencedImageId === imageId && !a?.isLocked && a?.isVisible !== false && isInsideClosedRoi(a, toCanvas, p),
+      );
+      inside.sort((x, y) => canvasBoxArea(x, toCanvas) - canvasBoxArea(y, toCanvas));
+      hit = inside[0] ?? null;
+    }
+    if (!hit) return;
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    toggleRoiSelection(hit.annotationUID);
+  };
+  element.addEventListener("mousedown", onDown, true);
+  return () => element.removeEventListener("mousedown", onDown, true);
+}
+
+/** ROI の選択を足す・外す（ほかの選択は残す）。Ctrl＋クリック（画像上・ROI マネージャの行）。 */
+export function toggleRoiSelection(uid: string): void {
+  try {
+    const on = !csAnnotation.selection.isAnnotationSelected(uid);
+    csAnnotation.selection.setAnnotationSelected(uid, on, true);
+    const ids = (getRenderingEngines() ?? []).flatMap((re) => re.getViewports().map((v) => v.id));
+    triggerAnnotationRenderForViewportIds(ids);
+  } catch {
+    /* 選択できなくても致命的ではない */
+  }
 }
 
 /** ROI の選択をすべて外して描き直す（Esc）。何も選択していなければ何もしない。 */

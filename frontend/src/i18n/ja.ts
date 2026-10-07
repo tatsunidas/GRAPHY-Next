@@ -2186,6 +2186,7 @@ export const ja: Record<string, string> = {
   "sc.sysDelete": "選択中の計測 / ROI を削除",
   "sc.roiCopy": "選択中の ROI をコピー",
   "sc.roiPaste": "ROI を表示中のスライスへ貼り付け",
+  "sc.roiMultiSelect": "ROI の選択を足す・外す（選択中の ROI は表示中のスライスでまとめて動かせる）",
   "sc.roiDeselect": "ROI の選択を解除（選択中の ROI は内側をドラッグで移動。解除すると内側に新しく描ける）",
 
   // db admin

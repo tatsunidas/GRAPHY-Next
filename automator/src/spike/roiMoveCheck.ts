@@ -64,15 +64,18 @@ async function windowLevel(page: Page): Promise<{ center: number; width: number 
  * canvas 座標（CSS px）の折れ線に沿って、生の Pointer/Mouse イベントでドラッグする
  * （Playwright の page.mouse は Cornerstone に届かない。`common/pointerDrag.ts` の罠その1）。
  */
-async function dragPath(page: Page, pts: number[][], steps = 8): Promise<void> {
-  const args = JSON.stringify({ host: HOST, pts, steps });
+type Mods = { ctrl?: boolean; shift?: boolean; click?: boolean };
+
+async function dragPath(page: Page, pts: number[][], steps = 8, mods: Mods = {}): Promise<void> {
+  const args = JSON.stringify({ host: HOST, pts, steps, mods });
   await page.evaluate(`
     (function (a) {
       var canvas = document.querySelector('[data-testid="' + a.host + '"] canvas');
       if (!canvas) throw new Error("canvas not found");
       var r = canvas.getBoundingClientRect();
       function fire(type, x, y, btns) {
-        var c = { bubbles: true, cancelable: true, composed: true, clientX: r.left + x, clientY: r.top + y, button: 0, buttons: btns };
+        var c = { bubbles: true, cancelable: true, composed: true, clientX: r.left + x, clientY: r.top + y, button: 0, buttons: btns,
+          ctrlKey: !!a.mods.ctrl, shiftKey: !!a.mods.shift };
         canvas.dispatchEvent(new PointerEvent(type, Object.assign({}, c, { pointerId: 1, pointerType: "mouse", isPrimary: true })));
         canvas.dispatchEvent(new MouseEvent(type.replace("pointer", "mouse"), c));
       }
@@ -86,6 +89,8 @@ async function dragPath(page: Page, pts: number[][], steps = 8): Promise<void> {
       }
       var e = a.pts[a.pts.length - 1];
       fire("pointerup", e[0], e[1], 0);
+      if (a.mods.click) canvas.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true,
+        clientX: r.left + e[0], clientY: r.top + e[1], button: 0, ctrlKey: !!a.mods.ctrl, shiftKey: !!a.mods.shift }));
     })(${args})
   `);
   await page.waitForTimeout(700);
@@ -95,9 +100,26 @@ async function drag(page: Page, from: number[], d: number[]): Promise<void> {
   await dragPath(page, [from, [from[0] + d[0], from[1] + d[1]]]);
 }
 
-async function click(page: Page, p: number[]): Promise<void> {
-  await dragPath(page, [p], 0);
+async function click(page: Page, p: number[], mods: Mods = {}): Promise<void> {
+  await dragPath(page, [p], 0, mods);
 }
+
+async function setSlice(page: Page, z: number): Promise<void> {
+  await page.getByTestId("dim-slider-z").fill(String(z));
+  await page.waitForTimeout(900);
+}
+
+/** 新しく 1 つ増えた注釈（描く前後の差）。 */
+async function drawRoi(page: Page, toolRe: RegExp, from: number[], d: number[]): Promise<Ann> {
+  const before = new Set((await anns(page)).map((a) => a.uid));
+  await pickTool(page, toolRe);
+  await drag(page, from, d);
+  const added = (await anns(page)).filter((a) => !before.has(a.uid));
+  if (added.length !== 1) throw new Error(`ROI を 1 つ描けなかった: ${added.length}`);
+  return added[0];
+}
+
+const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
 
 async function pickTool(page: Page, labelRe: RegExp): Promise<void> {
   await page.getByTestId("viewer2d-menu-roi").click();
@@ -317,6 +339,86 @@ async function main(): Promise<void> {
         check(!!b && err > TOL, "フリーハンドの線を掴むと平行移動ではなく編集になる", { pointsBefore: a.polyline.length, pointsAfter: b?.polyline.length });
         await v.screenshot({ path: path.join(OUT_DIR, "freehand-edited.png") });
       }
+    }
+
+    // ── 7. 複数選択と同時移動 ─────────────────────────────────────
+    console.log("\n[7] Ctrl＋クリックで複数選択 → 表示中のスライスの選択中 ROI がまとめて動く");
+    await clearRois(v);
+    await setSlice(v, 12);
+    {
+      const RECT = /矩形 ROI|Rectangle ROI/;
+      const A = await drawRoi(v, RECT, at(0.3, 0.3), [100, 70]);
+      const B = await drawRoi(v, RECT, at(0.5, 0.3), [100, 70]);
+      const C = await drawRoi(v, /楕円 ROI|Ellipse ROI|Elliptical ROI/, at(0.3, 0.6), [100, 60]);
+      await setSlice(v, 10);
+      const D = await drawRoi(v, RECT, at(0.3, 0.3), [100, 70]);
+      await setSlice(v, 12);
+      check(sameSet(await selected(v), [D.uid]), "別スライスに描いた D だけが選択されている", await selected(v));
+      const count0 = (await anns(v)).length;
+
+      // A は輪郭線、B は内側（未選択）を Ctrl＋クリック。
+      await click(v, [Math.round((A.points[0][0] + A.points[1][0]) / 2), Math.round(A.points[0][1])], { ctrl: true });
+      await click(v, grabPoint(B)!, { ctrl: true });
+      check(sameSet(await selected(v), [D.uid, A.uid, B.uid]), "Ctrl＋クリックで A（輪郭線）と B（内側）が選択に足された", await selected(v));
+      check((await anns(v)).length === count0, "Ctrl＋クリックで新しい ROI はできない", (await anns(v)).length);
+
+      // A の内側をドラッグ → A・B が同じ量。C（未選択）と D（別スライス）は動かない。
+      const before = await anns(v);
+      const pick = (list: Ann[], u: string) => list.find((x) => x.uid === u)!;
+      const g = grabPoint(pick(before, A.uid))!;
+      await drag(v, g, [40, 25]);
+      const after = await anns(v);
+      const eA = maxShiftError(pick(before, A.uid).points, pick(after, A.uid).points, [40, 25]);
+      const eB = maxShiftError(pick(before, B.uid).points, pick(after, B.uid).points, [40, 25]);
+      check(eA <= TOL && eB <= TOL, `A と B が (40, 25) px だけ一緒に動いた（誤差 A ${eA.toFixed(2)} / B ${eB.toFixed(2)} px）`, { eA, eB });
+      check(maxShiftError(pick(before, C.uid).points, pick(after, C.uid).points, [0, 0]) <= TOL, "未選択の C は動かない");
+      check(after.length === count0, "まとめて動かしても ROI は増えない");
+      check(sameSet(await selected(v), [D.uid, A.uid, B.uid]), "動かした後も複数選択が保たれている", await selected(v));
+      await v.screenshot({ path: path.join(OUT_DIR, "multi-moved.png") });
+      await setSlice(v, 10);
+      const dNow = pick(await anns(v), D.uid);
+      check(maxShiftError(D.points, dNow.points, [0, 0]) <= TOL, "別スライスの D は動かない（選択中でも）");
+      await setSlice(v, 12);
+
+      // B を Ctrl＋クリックで外す → A だけ動く。
+      const b1 = pick(await anns(v), B.uid);
+      await click(v, grabPoint(b1)!, { ctrl: true });
+      check(sameSet(await selected(v), [D.uid, A.uid]), "B を Ctrl＋クリックすると選択から外れる", await selected(v));
+      const before2 = await anns(v);
+      await drag(v, grabPoint(pick(before2, A.uid))!, [-30, 20]);
+      const after2 = await anns(v);
+      check(maxShiftError(pick(before2, A.uid).points, pick(after2, A.uid).points, [-30, 20]) <= TOL, "A だけ動く");
+      check(maxShiftError(pick(before2, B.uid).points, pick(after2, B.uid).points, [0, 0]) <= TOL, "外した B は動かない");
+
+      // B を戻してから A の角をドラッグ → A だけ形が変わり、選択は保たれる。
+      await click(v, grabPoint(pick(after2, B.uid))!, { ctrl: true });
+      const before3 = await anns(v);
+      const a3 = pick(before3, A.uid);
+      await drag(v, a3.points[3], [20, 15]);
+      const after3 = await anns(v);
+      const a4 = pick(after3, A.uid);
+      check(Math.hypot(a4.points[3][0] - a3.points[3][0] - 20, a4.points[3][1] - a3.points[3][1] - 15) <= TOL &&
+        Math.hypot(a4.points[0][0] - a3.points[0][0], a4.points[0][1] - a3.points[0][1]) <= TOL, "グループ選択中でも、ハンドルは A の形だけを変える");
+      check(maxShiftError(pick(before3, B.uid).points, pick(after3, B.uid).points, [0, 0]) <= TOL, "そのとき B は動かない");
+      check(sameSet(await selected(v), [D.uid, A.uid, B.uid]), "ハンドル操作の後も複数選択が保たれている", await selected(v));
+
+      // ROI マネージャの行を Ctrl＋クリック → C が足される。スライスは動かない。
+      await v.getByTestId("viewer2d-menu-roiTools").click();
+      await v.getByRole("button", { name: /ROI マネージャ|ROI manager/i }).first().click();
+      await v.getByTestId("roi-mgr-save").waitFor({ state: "visible", timeout: 10_000 });
+      await v.locator(`[data-testid="roi-mgr-row"][data-roi-uid="${C.uid}"]`).click({ position: { x: 2, y: 2 }, modifiers: ["Control"] });
+      await v.waitForTimeout(600);
+      check((await selected(v)).includes(C.uid), "ROI マネージャの行を Ctrl＋クリックすると選択に足される", await selected(v));
+      check(Number(await v.getByTestId("dim-slider-z").inputValue()) === 12, "そのときスライスは動かない");
+      await v.screenshot({ path: path.join(OUT_DIR, "multi-manager.png") });
+
+      // Shift＋クリックのタイル選択は従来どおり。
+      const shadow = () => v.evaluate(`(document.querySelector('[data-tile-id]') || {}).style ? document.querySelector('[data-tile-id]').style.boxShadow : null`) as Promise<string | null>;
+      const s0 = await shadow();
+      await click(v, at(0.9, 0.9), { shift: true, click: true });
+      const s1 = await shadow();
+      check(s0 !== s1, "Shift＋クリックでタイル選択が切り替わる（従来どおり）", { s0, s1 });
+      await click(v, at(0.9, 0.9), { shift: true, click: true });
     }
 
     // ── 6. W/L ツールでは内側を掴まない ─────────────────────────────
