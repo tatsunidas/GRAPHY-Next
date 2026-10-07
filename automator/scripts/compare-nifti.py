@@ -4,7 +4,7 @@
     python compare-nifti.py <元.nii.gz> <GRAPHY 経由.nii.gz>
 
 ボクセルの格子は患者座標（RAS のアフィン）でつなぐ（軸の並びや向きが違っても、写像が整数の並べ替えなら比べられる）。
-値の差は、取り込みで float → 16 bit に量子化したぶん（Rescale の刻みの半分）までなら同じとみなす。刻みは表示する。
+NaN は位置が一致すること。値の差は、元の型が float32 で表せないとき（float64 など）の float32 への丸めだけを許す。
 """
 import sys
 
@@ -28,15 +28,19 @@ inside = np.all((q >= 0) & (q < np.array(a.shape)[:, None]), axis=0)
 print("b voxels inside a: %d / %d" % (inside.sum(), inside.size))
 av = a[q[0, inside], q[1, inside], q[2, inside]]
 bv = b.reshape(-1)[inside]
+# NaN（値なし）は位置が一致していること。差は有限値どうしで見る
+nan_a, nan_b = np.isnan(av), np.isnan(bv)
+print("NaN a %d  b %d  same positions %s" % (nan_a.sum(), nan_b.sum(), bool(np.array_equal(nan_a, nan_b))))
+fin = ~nan_a & ~nan_b
+av, bv = av[fin], bv[fin]
 d = np.abs(av - bv)
-print("max |diff| %.6f  mean |diff| %.6f  a range [%.1f, %.1f]  b range [%.1f, %.1f]" % (d.max(), d.mean(), av.min(), av.max(), bv.min(), bv.max()))
-# 取り込みの量子化の刻み（float の元を 16 bit に詰めた幅）
-# 「整数＋スケール係数（scl_slope）」で保存された NIfTI も、取り込みでは float として 16 bit に詰め直される
-slope = a_img.dataobj.slope if hasattr(a_img.dataobj, "slope") else 1.0
+print("max |diff| %.9g  mean |diff| %.9g  a range [%.6g, %.6g]  b range [%.6g, %.6g]" % (d.max(), d.mean(), av.min(), av.max(), bv.min(), bv.max()))
+# 今の取り込み（fw/nifti-import.md §3・§3.1）は、整数で 16 bit に収まり NaN の無いものを可逆に、それ以外を float32 で入れる。
+# 差が出てよいのは float32 で表せない元の型（float64・32 bit を超える整数など）を float32 に丸めたぶんだけ（相対 2^-24）。
 dt = a_img.get_data_dtype()
-# float・32 bit 以上の整数・スケール係数つきは、取り込みで 16 bit に詰め直される（int32 で範囲が 16 bit に収まっても）
-src_float = dt.kind == "f" or dt.itemsize > 2 or not (slope == 1.0 or np.isnan(slope))
-step = (av.max() - av.min()) / 65535.0 if src_float else 0.0
-print("source dtype %s, quantization step (-> 16 bit) about %.6f" % (dt, step))
-# 許容は刻み 1 つ分（値の丸め＝刻みの半分に、Rescale の係数の丸めが重なる）
-print("RESULT", "same" if d.max() <= step + 1e-6 else "different")
+slope = a_img.dataobj.slope if hasattr(a_img.dataobj, "slope") else 1.0
+exact_in_f32 = (dt.kind in "iu" and dt.itemsize <= 2) or dt == np.float32
+exact_in_f32 = exact_in_f32 and (slope == 1.0 or np.isnan(slope))
+tol = np.zeros_like(av) if exact_in_f32 else np.abs(av) * 2.0 ** -24
+print("source dtype %s, allowed difference %s" % (dt, "0" if exact_in_f32 else "float32 rounding (|a| * 2^-24)"))
+print("RESULT", "same" if np.array_equal(nan_a, nan_b) and np.all(d <= tol) else "different")

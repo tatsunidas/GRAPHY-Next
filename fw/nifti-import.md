@@ -1,6 +1,6 @@
 # NIfTI インポート
 
-> 起票: 2026-08-11 ／ ステータス: **実装済み（backend ＋ MainScreen の非 DICOM インポート導線）**
+> 起票: 2026-08-11 ／ ステータス: **実装済み（backend ＋ MainScreen の非 DICOM インポート導線）。整数は可逆・それ以外は 32 bit float の Parametric Map（§3・§3.1・2026-10-07）**
 > 参考: Swing 版 GRAPHY の `com.vis.core.media.NIfTIToDicomConverter` / `ImportNIfTIPanel`
 > 関連: [`nondicom-ffmpeg.md`](nondicom-ffmpeg.md)（同じダイアログの動画経路）／
 > [`dicom-data-layer.md`](dicom-data-layer.md)（保管庫）
@@ -80,10 +80,10 @@ qform_code > 0 → クォータニオン（method 2）から作る
 - 以前は量子化を 32000 段階（16 bit の半分）で行っていたので、誤差が必要の 2 倍あった。
 - 未対応の型（float128 等）は**理由を添えて失敗**する（黙って落とさない）。
 
-## 3.1 段 2: 整数でない浮動小数を 32 bit float で格納する（設計・2026-10-06）
+## 3.1 段 2: 整数でない浮動小数を 32 bit float で格納する（設計 2026-10-06・実装済み 2026-10-07）
 
 > ユーザの決定（2026-10-06）: 整数でない float（PET の SUV、MR の ADC・T1 マップなど）は 16 bit に量子化せず、**32 bit float のまま**入れる。
-> この節は設計。**実装の前にユーザの確認を取る。**
+> 設計はユーザの確認を経て F1〜F5 で実装した（PR #222・#223・#225・#227・F5）。各段の結果は下の「F1〜F5 の結果」、残りは「段 2 で残っていること」。
 
 ### 対象
 
@@ -151,7 +151,7 @@ qform_code > 0 → クォータニオン（method 2）から作る
 | F2 | 単位の選択（取り込みの画面・RWVM・RescaleType）。段 1 の整数の画像にも。**✅ 2026-10-06**（下の「F2 の結果」） |
 | F3 | frontend: MPR の入口、H10 の単位、ヒストグラム・W/L の NaN と小さい値域、seriesRenderable。実機（2D・MPR・3D・ROI・H10）でスクリーンショット。**✅ 2026-10-07**（下の「F3 の結果」） |
 | F4 | npz（VolumeAssembler）・派生シリーズ・テクスチャ・ImageJ・焼き込みの事前検査。**✅ 2026-10-07**（下の「F4 の結果」） |
-| F5 | 書き出し → 取り込み直しの往復、設計書の状態を更新 |
+| F5 | 書き出し → 取り込み直しの往復、設計書の状態を更新。**✅ 2026-10-07**（下の「F5 の結果」） |
 
 ### F1 の結果（2026-10-06）
 
@@ -209,6 +209,27 @@ qform_code > 0 → クォータニオン（method 2）から作る
   - `ImageJFloatFrameTest`・`DerivedSopClassTest`。テスト用の NIfTI は `nifti/FloatNiftiFixture`。
 - 実機 `niftiFloatCheck` **30/0**: テクスチャの API が NaN を含むシリーズを 400・理由つきで断る。ImageJ の橋渡しの API は寸法しか返さないので実機では見ていない（値は単体テスト）。
 - 残り: NaN を含む float のテクスチャ（NaN をマスクから外して計算できるかは RadiomicsJ の窓の扱いを確かめてから）。
+
+### F5 の結果（2026-10-07）
+
+- 実機 `automator/src/spike/niftiRoundTripCheck.ts` **24/0**（ADC のような float32・NaN 32 ボクセル・単位 mm2/s）:
+  - **そのままの ZIP**（DICOMDIR つき）→ 元の検査を消す → 取り込み直す: 12 件・失敗 0、レイアウト（z の位置・IOP・32 bit）が元と同じ、UID は元のまま。
+  - **匿名化 ZIP** → 取り込む: 12 件・失敗 0、UID は置き換わり、z の位置は元と同じ。
+  - どちらも画面から H10 で読んだ値が、元の float32 とビット単位で一致（NaN は NaN・32 ボクセル）、単位 mm2/s が残る。
+  - **本体と独立した読み手**: 書き出したファイルを pydicom で読み、元の NIfTI と全 23040 ボクセルを比べて差 0・NaN の位置一致（両方の ZIP）。
+- DICOMDIR: Parametric Map の記録は `IMAGE`（dcm4che の `RecordFactory.xml` が SEG などと同じく IMAGE に割り当てている）・参照 SOP Class は PM。
+- 照合スクリプト: `dicom-series-to-nifti.py` を PM に対応（Float Pixel Data・RWVM・Functional Groups の幾何・下位のフォルダを探して DICOMDIR を飛ばす）。`compare-nifti.py` を今の取り込み規則に合わせた（NaN の位置一致を見る・差は元の型が float32 で表せないときの丸めだけ許す。段 1 のころの「16 bit に量子化する」許容幅を外した）。負例: float32 の 1 ULP の違い・NaN が 1 つ消えたもの・整数の +1 を「different」と判定。整数（int16・int32）の一致は「same」。
+- backend: `ComputeDatasetServiceTest.parametricMapToDicomZip_staysAParametricMapWithTheSameValues`（匿名化した DICOM ZIP の中身が PM のまま、値と NaN・単位が元と同じ、UID が置き換わる）。CI で往復の書き出し側を見張る。
+- 確認ツール: `DesktopDriver.maximizeWindows` が開いたばかりのウィンドウと重なると「Execution context was destroyed」で落ちた（3 回に 1 回）。見た目のためだけの処理なので、500 ms 待って 1 回だけやり直す。
+
+### 段 2 で残っていること（2026-10-07）
+
+- 2D で NaN の画素の色が決まっていない（LINEAR では白、LINEAR_EXACT では黒に描かれた。GPU 任せ）。
+- Slicer の再構成は Int16 で、float は整数に丸められる。既定の窓も幅の下限が 1。
+- プラグインが渡す float のボリュームの既定の窓も幅の下限が 1。
+- NaN を含む float のテクスチャ（いまは理由つきで断る。RadiomicsJ の窓の中の NaN の扱いを確かめてから）。
+- ヒストグラムの画面が 1368×912 の窓に収まらない。非 DICOM 取り込みの一覧で `.nii.gz` の印が「?」。
+- 64 bit（Double Float Pixel Data）の PM は表示のために 32 bit にする（よそから来た PM のみ。取り込みは float32 で書く）。
 
 ### 検証（実装後）
 
