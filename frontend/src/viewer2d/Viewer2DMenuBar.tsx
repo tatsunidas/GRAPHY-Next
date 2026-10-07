@@ -314,7 +314,7 @@ export function Viewer2DMenuBar({
             { label: t("viewer2d.wl.edit"), onClick: actions.editPresets, separatorBefore: true },
           ],
         },
-        { label: `${t("viewer2d.wl.adjust.title")}…`, onClick: () => actions.openWindowLevel() },
+        { label: `${t("viewer2d.wl.adjust.title")}…`, onClick: () => actions.openWindowLevel(), testId: "menu-wl-adjust" },
         { label: `${t("suv.menu")}…`, onClick: () => actions.openSuv(), testId: "menu-suv" },
         { label: t("viewer.invert"), onClick: actions.invert },
         { label: `${t("viewer.lut")}…`, onClick: actions.openLut },
@@ -424,7 +424,7 @@ export function Viewer2DMenuBar({
       id: "analysis",
       label: t("viewer2d.menu.analysis"),
       items: [
-        { label: t("viewer2d.menu.histogram"), onClick: () => actions.openHistogram() },
+        { label: t("viewer2d.menu.histogram"), onClick: () => actions.openHistogram(), testId: "menu-histogram" },
         { label: `${t("fourier.menu")}…`, onClick: () => actions.openFourier(), testId: "menu-fourier" },
         { label: `${t("texture.menu")}…`, onClick: () => actions.openTexture() },
         { label: `${t("glam.menu")}…`, onClick: () => actions.openGlamAnalysis() },

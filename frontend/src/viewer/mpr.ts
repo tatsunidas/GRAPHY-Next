@@ -350,6 +350,8 @@ export async function setupMprViewports(
     viewportIds.map(async (id) => {
       const vp = engine.getViewport(id) as Types.IVolumeViewport;
       await vp.setVolumes([{ volumeId }]);
+      const exact = exactMetadataVoiRange(volumeId);
+      if (exact) vp.setProperties({ voiRange: exact });
     }),
   );
 
@@ -385,6 +387,26 @@ export async function setupMprViewports(
   for (const id of viewportIds) voiSync.add({ renderingEngineId: engineId, viewportId: id });
 
   engine.renderViewports(viewportIds);
+}
+
+/**
+ * DICOM が VOI LUT Function に LINEAR_EXACT を指定した窓の範囲（中央のスライスの VOI＝cornerstone と同じ選び方）。
+ * 指定が無ければ null（cornerstone の既定のまま）。
+ *
+ * <p>cornerstone 3.33 の `getVOIFromMetadata` は VOILUTFunction を読んだ直後に上書きして捨て、常に LINEAR
+ * （幅から 1 を引く整数の画像向けの式）で範囲にする。幅 0.002 の ADC（Parametric Map）では上下が逆転して
+ * 3 面とも真っ白になった（fw/nifti-import.md §3.1・F3）。
+ */
+export function exactMetadataVoiRange(volumeId: string): { lower: number; upper: number } | null {
+  const vol = cache.getVolume(volumeId) as AnyObj | undefined;
+  const ids: string[] | undefined = vol?.imageIds;
+  if (!ids?.length) return null;
+  const m: AnyObj | undefined = metaData.get("voiLutModule", ids[Math.floor(ids.length / 2)]);
+  if (m?.voiLUTFunction !== "LINEAR_EXACT") return null;
+  const w = Number(Array.isArray(m.windowWidth) ? m.windowWidth[0] : m.windowWidth);
+  const c = Number(Array.isArray(m.windowCenter) ? m.windowCenter[0] : m.windowCenter);
+  if (!(w > 0) || !Number.isFinite(c)) return null;
+  return { lower: c - w / 2, upper: c + w / 2 };
 }
 
 /** W/L プリセット（HU の center/width）を 3 面へ適用する。 */
@@ -448,6 +470,8 @@ export function resetMprWl(engine: RenderingEngine, viewportIds: string[]): void
     try {
       const vp = engine.getViewport(id) as Types.IVolumeViewport & { resetProperties?: () => void };
       vp.resetProperties?.();
+      const exact = exactMetadataVoiRange((vp as AnyObj).getVolumeId?.() ?? "");
+      if (exact) vp.setProperties({ voiRange: exact });
       vp.render();
     } catch {
       /* ignore */

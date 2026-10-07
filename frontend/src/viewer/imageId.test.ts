@@ -3,7 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { describe, expect, it, vi } from "vitest";
-import { sopFromImageId, frameOfImageId, imageIdForXaFrame } from "./imageId";
+import { sopFromImageId, frameOfImageId, imageIdForXaFrame, imageIdsForLayoutStack } from "./imageId";
 
 // apiBase() は window を要するため、`imageId.ts` が組み立てるのと同じ形を直接書く。
 const SOP = "1.2.826.0.1.3680043.8.498.5416630003827624298512855";
@@ -65,6 +65,27 @@ describe("frameOfImageId — マルチフレームの復元先（2026-08-28）",
       for (const f of [0, 1, 9, 128]) {
         expect(frameOfImageId(imageIdForXaFrame("standalone", "1.2.3", f))).toBe(f);
       }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("imageIdsForLayoutStack — MPR などのボリュームの入口", () => {
+  it("(c,t) のセルだけを z 昇順で、フレーム付きのセルはフレームの imageId にする", () => {
+    vi.stubGlobal("window", { __GRAPHY_API_BASE__: "http://localhost:8080" });
+    try {
+      const cells = [
+        { c: 0, t: 0, z: 2, sopInstanceUid: "s2", frame: 0 },
+        { c: 0, t: 1, z: 0, sopInstanceUid: "x", frame: 0 },
+        { c: 0, t: 0, z: 0, sopInstanceUid: "s0", frame: 0 },
+        { c: 0, t: 0, z: 1, sopInstanceUid: "s1", frame: -1 },
+      ];
+      const ids = imageIdsForLayoutStack(cells, "standalone", 0, 0, "st", "se");
+      expect(ids.map(sopFromImageId)).toEqual(["s0", "s1", "s2"]);
+      expect(ids[0]).toContain("/frames/0/file");
+      expect(ids[1]).toContain("/instances/s1/file");
+      expect(ids[2]).toContain("/frames/0/file");
     } finally {
       vi.unstubAllGlobals();
     }

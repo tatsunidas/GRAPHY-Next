@@ -2874,7 +2874,9 @@ export function Viewer2D({
               voi
                 ? suvScale
                   ? `${(voi.wc * suvScale).toFixed(2)}/${(voi.ww * suvScale).toFixed(2)}`
-                  : `${Math.round(voi.wc)}/${Math.round(voi.ww)}`
+                  : voi.ww >= 10
+                    ? `${Math.round(voi.wc)}/${Math.round(voi.ww)}`
+                    : `${fmtValue(voi.wc)}/${fmtValue(voi.ww)}` // ADC など値域の小さい画像を 0/0 に潰さない
                 : "—"
             }
           />

@@ -149,7 +149,7 @@ qform_code > 0 → クォータニオン（method 2）から作る
 |---|---|
 | F1 | backend の土台: PM の書き出し（NiftiToDicom・PROTECTED_TAGS）、展開器（layout・extractFrame）を standalone・web の両方に配線、フレームの振り分け、空白画像、受信 SOP。単体テスト（往復で値が一致・NaN が残る）。**✅ 2026-10-06**（下の「F1 の結果」） |
 | F2 | 単位の選択（取り込みの画面・RWVM・RescaleType）。段 1 の整数の画像にも。**✅ 2026-10-06**（下の「F2 の結果」） |
-| F3 | frontend: MPR の入口、H10 の単位、ヒストグラム・W/L の NaN と小さい値域、seriesRenderable。実機（2D・MPR・3D・ROI・H10）でスクリーンショット |
+| F3 | frontend: MPR の入口、H10 の単位、ヒストグラム・W/L の NaN と小さい値域、seriesRenderable。実機（2D・MPR・3D・ROI・H10）でスクリーンショット。**✅ 2026-10-07**（下の「F3 の結果」） |
 | F4 | npz（VolumeAssembler）・派生シリーズ・テクスチャ・ImageJ・焼き込みの事前検査 |
 | F5 | 書き出し → 取り込み直しの往復、設計書の状態を更新 |
 
@@ -171,6 +171,29 @@ qform_code > 0 → クォータニオン（method 2）から作る
 - テスト: `ParametricMapRoundTripTest` 8/0（RWVM の UCUM・切り出しの RescaleType・単位なしは「1」で表示は空・既知のコードの表示名・17 文字は不可）、`NiftiPixelExactnessTest` 13/0（通常の画像の RescaleType）、`niftiUnits.test.ts` 3/0、backend 766/0、frontend 1944/0。
 - 実機 `niftiFloatCheck` **16/0**: mm2/s を付けて取り込み、H10・H3 の unit が mm2/s。取り込みの画面に候補 7 つ・「その他」で入力欄（スクリーンショット）。
 - 見つけたが触っていない: 非 DICOM 取り込みのファイル一覧で `.nii.gz` の印が「?」になる（今回より前からの見た目の問題）。
+
+### F3 の結果（2026-10-07）
+
+- MPR の入口をレイアウトのセル（c=0・t=0）から組む（`viewer/imageId.ts` の `imageIdsForLayoutStack`）。インスタンスから組むと Parametric Map の生のファイル（幾何が Functional Groups の中）を指していた。レイアウトが取れないときと 1 時相のときは今まで通りインスタンスから。
+- **MPR が 3 面とも真っ白だった**（スクリーンショットと canvas の輝度の段階＝2 で発覚）。cornerstone 3.33 の `getVOIFromMetadata`（`setDefaultVolumeVOI.js`）が VOILUTFunction を読んだ直後に `voi = { windowWidth, windowCenter }` で上書きして捨て、常に LINEAR（幅から 1 を引く整数の画像向けの式）で範囲にするため、幅 0.0022 では上下が逆転する。
+  - backend: 切り出したフレームに VOI LUT Function = **LINEAR_EXACT**（PS3.3 C.11.2.1.3.2・実数の値の式）。
+  - frontend: `mpr.ts` の `exactMetadataVoiRange` — DICOM が LINEAR_EXACT を指定していれば、窓を中心 ± 幅/2 で当て直す（初期表示と「既定（DICOM）」へのリセット）。LINEAR の画像（CT など）は今まで通り。
+- W/L: 上の帯は幅 10 未満なら有効数字で（`0.00079/0.0022`。前は `0/0`）。調整の画面は、幅の下限を整数の画像なら 1 段・非整数ならスライダー 1 目盛り（値域/1000）、表示の桁を目盛りが見分けられるだけに（`viewer2d/wlScale.ts`）。ヒストグラムの最小・最大は NaN を除く。
+- ヒストグラム: NaN を数えない（`analyzeValues`）。非整数の画像は最初の 1 回だけビン幅を Freedman–Diaconis 則（2·IQR·n^(-1/3)）で提案（既定の 10 だと 1 ビンに潰れる）。統計・軸の数字は 0.1 未満を有効数字で。
+- MPR のカーソル値・3D の Info の W/L・3D のレジェンドを、1 未満は有効数字で（前は整数・小数 1 桁に丸めて 0）。3D の既定の窓は幅の下限 1 をやめた。
+- `seriesRenderable`: Parametric Map（…1.1.30）を開ける種類として明示（テスト付き）。
+- テスト: frontend 1962/0（`imageId`・`histogram`・`wlScale`・`seriesRenderable` に追加）、backend 766/0（同梱 Java 21 で Mockito）。
+- 実機 `niftiFloatCheck` **29/0**（F1・F2 の 16 に加えて）:
+  - NaN の塊がある 4 枚目（16 画素）へ動かしてから見る。ROI 統計（H66）は NaN にかかる箱で、有限値 96/128・平均が numpy と一致。
+  - W/L: 帯が潰れない、調整の画面で幅 0.0011 を入れると画像の幅も 0.0011、「自動」で表示中のスライスの値域（NaN を除く）0.0022 に戻る。
+  - ヒストグラム: ビン幅 0.00011、画素数は NaN を除いた 1904。
+  - MPR: 横断 12 枚、カーソル値 0.000829、canvas の輝度 256 段階（直す前は 2 段階＝真っ白・この検査で FAIL を確認）。3D はエラーなく開き、W/L は 0.000865 / 0.00253。スクリーンショット: `automator/.results/nifti-float-check/`。
+- 見つけたが直していない（F3 の範囲外・指示待ち）:
+  - **2D で NaN の画素の色が決まっていない**: LINEAR のときは白、LINEAR_EXACT にした後は黒で描かれた。NaN を GPU がどう描くかに任せている。
+  - Slicer の再構成は Int16（`viewer/slicer.ts`）なので、ADC のような float は整数に丸められる。既定の窓も幅の下限が 1（`SlicerScreen.tsx`）。
+  - プラグインが渡す float のボリュームの既定の窓（`pluginViewportApi.ts`）も幅の下限が 1。
+  - ヒストグラムの画面が 1368×912 の窓に収まらず、左右が切れる。
+  - 非 DICOM 取り込みのファイル一覧で `.nii.gz` の印が「?」。
 
 ### 検証（実装後）
 

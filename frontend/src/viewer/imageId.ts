@@ -182,3 +182,23 @@ export function imageIdForBlank(
   const q = ipp ? `?ipp=${ipp[0]},${ipp[1]},${ipp[2]}` : "";
   return `wadouri:${base}${q}`;
 }
+
+/**
+ * レイアウトのセルから (c,t) 固定の単一 Z スタックの imageId を z 昇順で返す。
+ * インスタンスから組むと、1 インスタンスにフレームが入ったシリーズ（Parametric Map・モザイク）や
+ * 複数の時相・チャネルを持つシリーズで正しいボリュームにならない。
+ */
+export function imageIdsForLayoutStack(
+  cells: readonly { c: number; t: number; z: number; sopInstanceUid: string; frame?: number }[],
+  mode: ViewerMode,
+  c: number,
+  t: number,
+  studyUid: string,
+  seriesUid: string,
+): string[] {
+  return cells
+    .filter((cell) => cell.c === c && cell.t === t)
+    .slice()
+    .sort((a, b) => a.z - b.z)
+    .map((cell) => imageIdForCell(mode, cell.sopInstanceUid, cell.frame, studyUid, seriesUid));
+}

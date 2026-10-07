@@ -1,6 +1,7 @@
 /*
  * 整数でない float の NIfTI を Parametric Map（32 bit float）で取り込んで、表示・H10 で値が保たれるかを見る
- * （fw/nifti-import.md §3.1・段 F1）。Colab は使わない。
+ * （fw/nifti-import.md §3.1・段 F1〜F3）。Colab は使わない。
+ * F3: 2D の W/L（上の帯・調整の画面）・ヒストグラム・ROI 統計（H66）・MPR・3D が小さい float と NaN で使えるか。
  *
  * 実行:  cd automator && GRAPHY_TEST_PYTHON=<numpy と nibabel のある python> npx tsx src/spike/niftiFloatCheck.ts
  *
@@ -39,8 +40,24 @@ export async function activate(host) {
   });
   let nan = 0;
   for (let p = 0; p < vol.data.length; p++) if (Number.isNaN(vol.data[p])) nan++;
+  // NaN の塊がある 4 枚目（k=3）へ動かしてから、表示中のスライスを読む
+  host.goTo(t.tileId, { sliceIndex: 3 });
+  await new Promise((r) => setTimeout(r, 1500));
   const px = await host.getPixelData(t.tileId);
-  window.__probe = { dims: vol.dims, unit: vol.unit, at, nan, pixelSample: px ? Array.from(px.data.slice(0, 5)) : null, pixelUnit: px ? px.unit : null };
+  // 表示中のスライス（H3）の有限値の数と範囲（W/L の自動・ヒストグラムの答え）
+  let pxN = 0, pxNaN = 0, pxMin = Infinity, pxMax = -Infinity;
+  if (px) for (const v of px.data) if (Number.isFinite(v)) { pxN++; if (v < pxMin) pxMin = v; if (v > pxMax) pxMax = v; } else pxNaN++;
+  // ROI 統計（H66）: 答えの箱（患者座標）にボクセル中心が入るものをラベル 1 にする
+  const roi = window.__probeRoi;
+  const m = vol.indexToWorld;
+  const lab = new Uint8Array(nx * ny * nz);
+  for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    const p = [m[0] * i + m[1] * j + m[2] * k + m[3], m[4] * i + m[5] * j + m[6] * k + m[7], m[8] * i + m[9] * j + m[10] * k + m[11]];
+    if (p.every((x, a) => x > roi.lpsMin[a] && x < roi.lpsMax[a])) lab[i + nx * (j + ny * k)] = 1;
+  }
+  const meas = host.measureLabels({ data: lab, dims: vol.dims, indexToWorld: vol.indexToWorld }, vol)[0];
+  window.__probe = { dims: vol.dims, unit: vol.unit, at, nan, pixelSample: px ? Array.from(px.data.slice(0, 5)) : null, pixelUnit: px ? px.unit : null,
+    pxN, pxNaN, pxMin, pxMax, roi: meas ? { voxels: meas.voxelCount, n: meas.stats ? meas.stats.n : null, mean: meas.stats ? meas.stats.mean : null } : null };
 }
 `;
 
@@ -93,7 +110,7 @@ async function main(): Promise<void> {
     await viewer.waitForTimeout(3_000);
     await viewer.screenshot({ path: path.join(OUT_DIR, "viewer.png") });
 
-    await viewer.evaluate((s) => { (window as unknown as { __probeSamples: unknown }).__probeSamples = s; }, truth.samples);
+    await viewer.evaluate(([s, r]) => { Object.assign(window, { __probeSamples: s, __probeRoi: r }); }, [truth.samples, truth.roi]);
     await viewer.getByTestId("viewer2d-menu-plugins").click();
     await viewer.getByTestId(`plugin-item-${PROBE_ID}`).click();
     await viewer.waitForFunction(() => !!(window as unknown as { __probe?: unknown }).__probe, null, { timeout: 60_000 });
@@ -111,10 +128,94 @@ async function main(): Promise<void> {
       check(p.nan === truth.nanVoxels, `NaN は ${truth.nanVoxels} ボクセルのまま（H10 で ${p.nan}）`);
       check(p.unit === "mm2/s" && p.pixelUnit === "mm2/s", "取り込みで選んだ単位が H10・H3 の unit に出る", { h10: p.unit, h3: p.pixelUnit });
       check(Array.isArray(p.pixelSample) && p.pixelSample.every((v: number) => Number.isFinite(v) && Math.abs(v) < 0.01), "H3（表示中のスライス）も小さい float の値", p.pixelSample);
+      // ROI 統計（F3）: NaN の塊にかかる箱。NaN を除いた数と平均が numpy の答えと合う
+      check(p.roi && p.roi.voxels === truth.roi.voxels && p.roi.n === truth.roi.n,
+        `ROI 統計（H66）: 箱 ${truth.roi.voxels} ボクセルのうち有限値 ${truth.roi.n}（NaN を除く）`, p.roi);
+      check(p.roi && Math.abs(p.roi.mean - truth.roi.mean) <= Math.abs(truth.roi.mean) * 1e-6,
+        `ROI 統計の平均 ${p.roi?.mean} = numpy ${truth.roi.mean}`, p.roi);
     }
 
-    // 取り込みの画面: NIfTI を選ぶと「値の単位」が出て選べる（F2）
+    check(p.pxNaN === truth.nanPerSlice[3] && p.pxNaN > 0, `表示中の 4 枚目（H3）に NaN が ${truth.nanPerSlice[3]} 画素（以下の W/L・ヒストグラムは NaN を含むスライスで見る）`, { nan: p.pxNaN, n: p.pxN });
+
+    // ── F3: 2D の W/L ──
+    const band = (await viewer.getByTestId("status-wl").textContent()) ?? "";
+    const bm = /^(-?[\d.e+-]+)\/([\d.e+-]+)$/.exec(band.trim());
+    check(!!bm && Number(bm[2]) > 0 && Number(bm[2]) < 0.01, `上の帯の W/L が潰れない（${band}）`, band);
+    await viewer.getByTestId("viewer2d-menu-image").click();
+    await viewer.getByTestId("menu-wl-adjust").click();
+    const dlg = viewer.getByTestId("wl-adjust-dialog");
+    await dlg.waitFor({ state: "visible", timeout: 10_000 });
+    await viewer.waitForTimeout(1_500);
+    const range = p.pxMax - p.pxMin;
+    const bandWw = async () => Number(/\/([\d.e+-]+)$/.exec(((await viewer.getByTestId("status-wl").textContent()) ?? "").trim())?.[1]);
+    // 幅を値域の半分に直接入れて「設定」→ 画像に効く（下限 1 で潰されない）
+    await dlg.locator('input[type="number"]').nth(1).fill(String(Number((range / 2).toPrecision(3))));
+    await dlg.getByRole("button", { name: "設定", exact: true }).click();
+    await viewer.waitForTimeout(500);
+    const wwHalf = await bandWw();
+    check(Math.abs(wwHalf - range / 2) <= range * 0.01, `W/L 調整で幅 ${(range / 2).toPrecision(3)} を入れると画像の幅も ${wwHalf}`);
+    await dlg.getByRole("button", { name: "自動", exact: true }).click();
+    await viewer.waitForTimeout(500);
+    const wAuto = parseFloat((await viewer.getByTestId("wl-adjust-width").textContent()) ?? "");
+    const cAuto = parseFloat((await viewer.getByTestId("wl-adjust-center").textContent()) ?? "");
+    check(Math.abs(wAuto - range) <= range * 0.01 && Math.abs(cAuto - (p.pxMax + p.pxMin) / 2) <= range * 0.01,
+      `W/L 調整の「自動」が表示中のスライスの値域（NaN を除く）に合う: 幅 ${wAuto}・中心 ${cAuto}（答え ${range.toPrecision(4)}・${((p.pxMax + p.pxMin) / 2).toPrecision(4)}）`);
+    const wwAuto = await bandWw();
+    check(Math.abs(wwAuto - range) <= range * 0.01, `「自動」で画像の幅も値域に戻る（${wwHalf} → ${wwAuto}）`);
+    await viewer.screenshot({ path: path.join(OUT_DIR, "wl-dialog.png") });
+    await dlg.getByRole("button", { name: "閉じる", exact: true }).click();
+
+    // ── F3: ヒストグラム ──
+    await viewer.getByTestId("viewer2d-menu-analysis").click();
+    await viewer.getByTestId("menu-histogram").click();
+    const binInput = viewer.getByTestId("histogram-bin-value");
+    await binInput.waitFor({ state: "visible", timeout: 10_000 });
+    await viewer.waitForTimeout(2_000);
+    const binW = Number(await binInput.inputValue());
+    check(binW > 0 && binW < range, `ヒストグラムのビン幅が値に合う（${binW}・値域 ${range.toPrecision(3)}）`);
+    const stats = (await viewer.getByTestId("histogram-stats").textContent()) ?? "";
+    check(stats.includes(String(p.pxN)) && !/NaN/.test(stats), `ヒストグラムの画素数は NaN を除いた ${p.pxN}`, stats.slice(0, 200));
+    await viewer.screenshot({ path: path.join(OUT_DIR, "histogram.png") });
+
     await viewer.close();
+
+    // ── F3: MPR（レイアウトのセルから組む）──
+    const mpr = await driver.waitForNewPage(() => page.locator('button[title="MPR Viewer"]').click(), (url) => url.includes("mpr"));
+    await mpr.getByTestId("mpr-slab-projection").waitFor({ timeout: 60_000 });
+    await mpr.waitForTimeout(6_000);
+    const mprText = await mpr.evaluate(() => document.body.innerText);
+    check(new RegExp(String.raw`\d+ / ${truth.dims[2]}\b`).test(mprText), `MPR の横断が ${truth.dims[2]} 枚のボリューム`, mprText.slice(0, 300));
+    const vp = mpr.getByTestId("mpr-viewport").first();
+    const box = await vp.boundingBox();
+    if (box) await mpr.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.5);
+    await mpr.waitForTimeout(800);
+    const vm = /値\s+(-?[\d.e+-]+)/.exec(await mpr.evaluate(() => document.body.innerText));
+    check(!!vm && Number(vm[1]) > 0 && Number(vm[1]) < 0.01, `MPR のカーソル値が小さい float のまま（${vm?.[1]}）`);
+    // 描けているか: 横断の canvas の輝度の幅（真っ白・真っ黒の一様なら 0 近く）
+    const lum = await mpr.evaluate(() => {
+      const c = document.querySelector('[data-testid="mpr-viewport"] canvas') as HTMLCanvasElement | null;
+      const g = c?.getContext("2d");
+      if (!c || !g) return null;
+      const d = g.getImageData(0, 0, c.width, c.height).data;
+      let mn = 255, mx = 0;
+      const hist = new Array(256).fill(0);
+      for (let i = 0; i < d.length; i += 4) { const y = Math.round((d[i] + d[i + 1] + d[i + 2]) / 3); hist[y]++; if (y < mn) mn = y; if (y > mx) mx = y; }
+      return { mn, mx, levels: hist.filter((h) => h > 0).length };
+    });
+    check(!!lum && lum.levels > 64, `MPR の横断が濃淡で描かれる（輝度の段階 ${lum?.levels}・${lum?.mn}〜${lum?.mx}）`, lum);
+    await mpr.screenshot({ path: path.join(OUT_DIR, "mpr.png") });
+    await mpr.close();
+
+    // ── F3: 3D ──
+    const v3d = await driver.waitForNewPage(() => page.locator('button[title="3D Viewer"]').click(), (url) => url.includes("viewer3d"));
+    await v3d.locator('[data-testid="viewer3d-mode-slab"]').waitFor({ timeout: 60_000 });
+    await v3d.waitForTimeout(8_000);
+    const v3dText = await v3d.evaluate(() => document.body.innerText);
+    check(!/再試行|Retry/.test(v3dText), "3D がエラーなく開く", v3dText.slice(0, 300));
+    await v3d.screenshot({ path: path.join(OUT_DIR, "viewer3d.png") });
+    await v3d.close();
+
+    // 取り込みの画面: NIfTI を選ぶと「値の単位」が出て選べる（F2）
     // メニューとツールバーに同じ文字の項目があるので、ツールバーのボタン（同じダイアログを開く）を押す
     await page.getByText("非DICOM取込", { exact: true }).first().click();
     await page.locator('input[type="file"][multiple]').setInputFiles(nii);

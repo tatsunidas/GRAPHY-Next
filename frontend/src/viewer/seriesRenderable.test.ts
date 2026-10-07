@@ -33,6 +33,10 @@ describe("classifySeriesRenderability", () => {
     expect(surface.kind).toBe("Surface Segmentation");
   });
 
+  it("Parametric Map（float の画素）は開ける", () => {
+    expect(classifySeriesRenderability({ sopClassUid: "1.2.840.10008.5.1.4.1.1.30", modality: "MR" }).renderable).toBe(true);
+  });
+
   it("SOP クラスが分かれば Modality は見ない（SOP クラスが結論）", () => {
     // 索引の Modality が汚れていても、SOP クラスが画像なら開ける。
     const r = classifySeriesRenderability({ sopClassUid: "1.2.840.10008.5.1.4.1.1.2", modality: "RTSTRUCT" });

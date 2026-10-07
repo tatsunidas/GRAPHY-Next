@@ -9,6 +9,7 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import type { VtkVolumeView } from "../viewer/vtkVolumeView";
+import { formatNumber } from "../viewer/roiStatsText";
 
 export function ViewInfoOverlay({ view, lutName }: { view: VtkVolumeView; lutName: string | null }) {
   const { t } = useI18n();
@@ -44,7 +45,7 @@ export function ViewInfoOverlay({ view, lutName }: { view: VtkVolumeView; lutNam
             `${t(`series.thickSlab.proj.${sl.projection.toLowerCase()}`)} ${sl.thicknessMm} mm`,
           );
         })()}
-      {line(t("viewer3d.info.wl"), `${Math.round(s.center)} / ${Math.round(s.width)}`)}
+      {line(t("viewer3d.info.wl"), `${formatNumber(s.center, 0)} / ${formatNumber(s.width, 0)}`)}
       {line(t("viewer3d.info.lut"), lutName ? lutName.replace(/_/g, " ") : t("viewer3d.repr.lutGray"))}
     </div>
   );

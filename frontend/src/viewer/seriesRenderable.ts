@@ -32,6 +32,7 @@ const NON_IMAGE_SOP_CLASSES: Readonly<Record<string, string>> = {
   "1.2.840.10008.5.1.4.1.1.66.2": "Spatial Fiducials",
   "1.2.840.10008.5.1.4.1.1.66.3": "Deformable Spatial Registration",
   // 66.4（Segmentation）は labelmap のピクセルを持つので**開ける**。
+  // 30（Parametric Map）は Float Pixel Data を持つので**開ける**（NIfTI の float の取り込み・fw/nifti-import.md §3.1）。
   "1.2.840.10008.5.1.4.1.1.66.5": "Surface Segmentation",
   "1.2.840.10008.5.1.4.1.1.66.6": "Tractography Results",
   "1.2.840.10008.5.1.4.1.1.11.1": "Grayscale Softcopy Presentation State",
