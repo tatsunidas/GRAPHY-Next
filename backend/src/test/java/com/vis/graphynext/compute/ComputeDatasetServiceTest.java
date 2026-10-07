@@ -225,6 +225,46 @@ class ComputeDatasetServiceTest {
     }
 
     @Test
+    void parametricMapToDicomZip_staysAParametricMapWithTheSameValues() throws Exception {
+        // 書き出し → 取り込み直しの往復（fw/nifti-import.md §3.1・F5）の書き出し側: 匿名化しても PM のまま、値・NaN・単位が残る
+        writeParametricMapSeries();
+        List<Attributes> originals = new ArrayList<>();
+        for (DicomInstance inst : fx.bySeries.get(PM_SERIES)) {
+            try (DicomInputStream in = new DicomInputStream(Path.of(java.net.URI.create(inst.getUri())).toFile())) {
+                in.setIncludeBulkData(DicomInputStream.IncludeBulkData.YES);
+                originals.add(in.readDataset());
+            }
+        }
+        ComputeDatasetService.Dataset d = service().create(STUDY, PM_SERIES, ComputeDatasetService.Format.DICOM_ZIP);
+        Map<String, byte[]> files = unzip(d.file());
+        assertEquals(PZ, files.size());
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (byte[] dcm : files.values()) {
+            Attributes ds;
+            try (DicomInputStream in = new DicomInputStream(new ByteArrayInputStream(dcm))) {
+                in.setIncludeBulkData(DicomInputStream.IncludeBulkData.YES);
+                ds = in.readDataset();
+            }
+            assertEquals(UID.ParametricMapStorage, ds.getString(Tag.SOPClassUID));
+            assertEquals("mm2/s", com.vis.graphynext.dicom.ParametricMapFrameExpander.unitOfFrame(ds, 0));
+            double[] ipp = com.vis.graphynext.dicom.SegFrameExpander.perFrameIpp(ds, 0);
+            Attributes src = originals.stream()
+                    .filter(o -> java.util.Arrays.equals(com.vis.graphynext.dicom.SegFrameExpander.perFrameIpp(o, 0), ipp))
+                    .findFirst().orElseThrow(() -> new AssertionError("同じ位置の元のフレームが無い " + java.util.Arrays.toString(ipp)));
+            assertArrayEquals(com.vis.graphynext.dicom.ParametricMapFrameExpander.frameValues(src, 0),
+                    com.vis.graphynext.dicom.ParametricMapFrameExpander.frameValues(ds, 0), 0f,
+                    "値（NaN を含む）がそのまま");
+            assertNotEquals(src.getString(Tag.SOPInstanceUID), ds.getString(Tag.SOPInstanceUID), "UID は置き換わる");
+            seen.add(java.util.Arrays.toString(ipp));
+        }
+        assertEquals(PZ, seen.size(), "全部の位置が 1 枚ずつ");
+        String all = new String(Files.readAllBytes(d.file()), StandardCharsets.ISO_8859_1);
+        for (String phi : List.of(PHI_NAME, PHI_ID, PM_SERIES, STUDY)) {
+            assertFalse(all.contains(phi), phi);
+        }
+    }
+
+    @Test
     void parametricMapWithMask_isBlockedByThePreflight() throws Exception {
         // 塗る処理は PixelData しか塗らない。float の画素にマスクを当てても塗れないので、事前検査で断る
         //（前は「塗れる」と答え、塗った後の検査で burnin-incomplete になっていた）

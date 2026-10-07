@@ -151,11 +151,21 @@ export class DesktopDriver implements Driver {
    */
   async maximizeWindows(): Promise<void> {
     if (!this.electronApp) return;
-    await this.electronApp.evaluate(({ BrowserWindow }) => {
-      for (const w of BrowserWindow.getAllWindows()) {
-        if (!w.webContents.getURL().startsWith("devtools://")) w.maximize();
-      }
-    });
+    const maximize = () =>
+      this.electronApp!.evaluate(({ BrowserWindow }) => {
+        for (const w of BrowserWindow.getAllWindows()) {
+          if (!w.webContents.getURL().startsWith("devtools://")) w.maximize();
+        }
+      });
+    try {
+      await maximize();
+    } catch (e) {
+      // 開いたばかりのウィンドウの読み込みと重なると「Execution context was destroyed」で落ちることがある
+      // （niftiRoundTripCheck で 3 回に 1 回）。最大化は見た目のためだけなので、少し待って 1 回だけやり直す。
+      if (!/Execution context was destroyed/.test(String(e))) throw e;
+      await new Promise((r) => setTimeout(r, 500));
+      await maximize();
+    }
   }
 
   /** 条件に合う url を持つウィンドウが現れるまでポーリングする（about:blank 経過を吸収する）。 */
