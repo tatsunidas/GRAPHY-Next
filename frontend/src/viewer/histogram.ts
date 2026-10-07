@@ -61,6 +61,30 @@ export function binHigh(d: HistogramData, index: number): number {
  */
 export const loadSlice = readModalitySlice;
 
+/**
+ * 非整数の値（Parametric Map の ADC など）に合うビン幅を Freedman–Diaconis 則（2·IQR·n^(-1/3)）で返す。
+ * 値がすべて整数なら null（呼び出し側の既定の幅を使う）。有限値だけを見る。
+ * 有効数字 2 桁に丸める（入力欄に出すため）。IQR が 0 なら値域を同じ式の n で割った幅。
+ */
+export function suggestBinWidth(values: ArrayLike<number>): number | null {
+  const finite: number[] = [];
+  let integral = true;
+  for (let i = 0; i < values.length; i++) {
+    const x = values[i];
+    if (!Number.isFinite(x)) continue;
+    finite.push(x);
+    if (integral && !Number.isInteger(x)) integral = false;
+  }
+  if (integral || finite.length < 2) return null;
+  finite.sort((a, b) => a - b);
+  const q = (p: number) => finite[Math.min(finite.length - 1, Math.floor(p * (finite.length - 1)))];
+  const n3 = Math.cbrt(finite.length);
+  let w = (2 * (q(0.75) - q(0.25))) / n3;
+  if (!(w > 0)) w = (finite[finite.length - 1] - finite[0]) / n3;
+  if (!(w > 0)) return null;
+  return Number(w.toPrecision(2));
+}
+
 /** 単一スライスのヒストグラム。 */
 export function analyzeSlice(slice: Slice, spec: BinSpec): HistogramData {
   return analyze([slice], spec);
@@ -102,6 +126,7 @@ export function analyzeValues(
   for (const v of chunks) {
     for (let i = 0; i < v.length; i++) {
       const x = v[i];
+      if (!Number.isFinite(x)) continue; // Parametric Map の NaN（値なし）は数えない
       if (x < min) min = x;
       if (x > max) max = x;
       sum += x;
@@ -133,6 +158,7 @@ export function analyzeValues(
   for (const v of chunks) {
     for (let i = 0; i < v.length; i++) {
       const x = v[i];
+      if (!Number.isFinite(x)) continue;
       const d = x - mean;
       const d2 = d * d;
       sumSq += d2;

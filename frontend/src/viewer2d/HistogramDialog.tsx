@@ -19,6 +19,7 @@ import {
   analyze,
   loadSlice,
   computeBinMask,
+  suggestBinWidth,
   binLow,
   binHigh,
   type Slice,
@@ -104,6 +105,7 @@ export function HistogramDialog({
   const [mask, setMask] = useState<Uint8Array | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const loadToken = useRef(0);
+  const binSuggested = useRef(false);
 
   // Effect A: ピクセル読み込み（z/c/t/scope/layout が変わった時のみ）。
   useEffect(() => {
@@ -121,6 +123,15 @@ export function HistogramDialog({
         return;
       }
       setPreviewSlice(preview);
+      // 非整数の画像（ADC など）は既定の幅 10 だと 1 ビンに潰れるので、最初の 1 回だけ値に合う幅にする。
+      if (!binSuggested.current) {
+        binSuggested.current = true;
+        const w = suggestBinWidth(preview.values);
+        if (w !== null) {
+          setBinMode("width");
+          setBinValue(w);
+        }
+      }
       if (scope === "slice") {
         setAnalyzeSlices([preview]);
       } else {
@@ -282,14 +293,15 @@ function Controls({
         <label style={{ color: "#5a6672", marginLeft: 4 }}>{t("histogram.bin.value")}</label>
         <input
           type="number"
-          min={binMode === "width" ? 0.01 : 1}
-          step={binMode === "width" ? 1 : 1}
+          min={binMode === "width" ? 0 : 1}
+          step={binMode === "width" ? "any" : 1}
           value={binValue}
           onChange={(e) => {
             const v = Number(e.target.value);
             if (Number.isFinite(v) && v > 0) onBinValue(v);
           }}
           style={numInput}
+          data-testid="histogram-bin-value"
         />
       </div>
     </div>
@@ -544,7 +556,7 @@ function StatsPanel({
     ]);
   }
   return (
-    <div style={statsBox}>
+    <div style={statsBox} data-testid="histogram-stats">
       {rows.map(([k, v]) => (
         <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
           <span style={{ color: "#8a98a6" }}>{k}</span>
@@ -557,12 +569,15 @@ function StatsPanel({
 
 // ── 書式 ────────────────────────────────────────────────────────
 
+// 0.1 未満は有効数字で出す（小数 3 桁固定だと ADC の 0.0005 が 0.001・0.000 に潰れる）。
 function fmt(v: number): string {
   if (!Number.isFinite(v)) return "-";
+  if (v !== 0 && Math.abs(v) < 0.1) return String(Number(v.toPrecision(4)));
   return v.toFixed(3);
 }
 function fmtAxis(v: number): string {
-  if (Math.abs(v) >= 1000 || (v !== 0 && Math.abs(v) < 1)) return v.toFixed(0);
+  if (v !== 0 && Math.abs(v) < 1) return String(Number(v.toPrecision(2)));
+  if (Math.abs(v) >= 1000) return v.toFixed(0);
   return String(Math.trunc(v));
 }
 function fmtCount(v: number): string {

@@ -15,6 +15,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import { loadSlice, type Slice } from "../viewer/histogram";
 import { suvForImageId } from "../viewer/suvStore";
+import { decimalsFor, minWindowWidth, roundTo } from "./wlScale";
 
 const SLIDER_MAX = 1000;
 const PLOT_W = 260;
@@ -53,11 +54,9 @@ export function WwWlAdjustDialog({
   //   ・未校正(raw): 1（voiRange も raw）
   // により、ヒストグラム(校正値)と W/L(校正値)の空間を一致させる。
   const displayScale = useMemo(() => suvForImageId(target.imageId)?.scale ?? 1, [target.imageId]);
-  // 幅の下限（0 割回避）。モダリティ空間の 1 単位を表示空間へ換算（CT/raw では 1、SUV では極小）。
-  const minW = displayScale;
 
   const [center, setCenter] = useState(target.center * displayScale);
-  const [width, setWidth] = useState(Math.max(minW, target.width * displayScale));
+  const [width, setWidth] = useState(target.width * displayScale);
 
   // 対象スライスの校正値を読み込む（ヒストグラム・データレンジ算出用）。
   useEffect(() => {
@@ -75,10 +74,13 @@ export function WwWlAdjustDialog({
   const dataMin = hist ? hist.min : 0;
   const dataMax = hist ? hist.max : 255;
   const unit = slice && slice.unit !== "raw" ? slice.unit : "";
+  // 幅の下限（0 割回避）。整数の画像はモダリティ値の 1 段を表示空間へ換算（CT/raw では 1、SUV では極小）、
+  // ADC のような非整数の画像はスライダー 1 目盛り（1 だと値域 0.001 の画像を潰す）。
+  const minW = hist ? minWindowWidth(hist.integral, dataMin, dataMax, displayScale, SLIDER_MAX) : displayScale;
 
   // スライダーの固定可動域（GRAPHY calculateBaseRange と同式）。校正値空間で算出。
   const base = useMemo(() => {
-    const range = Math.max(dataMax - dataMin, 1);
+    const range = dataMax > dataMin ? dataMax - dataMin : minW;
     const curMin = center - width / 2;
     const curMax = center + width / 2;
     const baseMin = Math.min(dataMin, curMin) - range * 0.5;
@@ -87,7 +89,7 @@ export function WwWlAdjustDialog({
     return { baseMin, baseMax, baseMaxWW };
     // width/center は初期スナップショットからしか動かさない（可動域を固定するため）。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dataMin, dataMax, target.center, target.width]);
+  }, [dataMin, dataMax, minW, target.center, target.width]);
 
   // c/w は表示(校正値)空間。適用時にモダリティ値空間へ戻して voiRange に反映する。
   const applyBoth = (c: number, w: number) => {
@@ -110,19 +112,23 @@ export function WwWlAdjustDialog({
     applyBoth(center, Math.max(minW, pct * base.baseMaxWW));
   };
 
+  // 表示の桁はスライダー 1 目盛りが見分けられるだけ（CT は 1 桁、ADC は 6 桁）。
+  const digits = decimalsFor((base.baseMax - base.baseMin) / SLIDER_MAX);
+  const fmtWl = (v: number) => roundTo(v, digits);
+
   // 直接入力（WL/WW）。下書きを保持し Set/Enter で確定。
-  const [wlText, setWlText] = useState(String(round1(center)));
-  const [wwText, setWwText] = useState(String(round1(width)));
+  const [wlText, setWlText] = useState(String(fmtWl(center)));
+  const [wwText, setWwText] = useState(String(fmtWl(width)));
   useEffect(() => {
-    setWlText(String(round1(center)));
-    setWwText(String(round1(width)));
-  }, [center, width]);
+    setWlText(String(roundTo(center, digits)));
+    setWwText(String(roundTo(width, digits)));
+  }, [center, width, digits]);
   const applyDirect = () => {
     const wl = Number(wlText);
     const ww = Number(wwText);
     if (!Number.isFinite(wl) || !Number.isFinite(ww)) {
-      setWlText(String(round1(center)));
-      setWwText(String(round1(width)));
+      setWlText(String(fmtWl(center)));
+      setWwText(String(fmtWl(width)));
       return;
     }
     applyBoth(wl, Math.max(minW, ww));
@@ -140,20 +146,20 @@ export function WwWlAdjustDialog({
   };
 
   return (
-    <div style={panel}>
+    <div style={panel} data-testid="wl-adjust-dialog">
       <div style={header}>{t("viewer2d.wl.adjust.title")}</div>
 
       <ContrastPlot hist={hist} dataMin={dataMin} dataMax={dataMax} curMin={center - width / 2} curMax={center + width / 2} />
 
       <div style={rowLabel}>
         <span>{t("viewer2d.wl.adjust.center")}</span>
-        <span style={mono}>{round1(center)}{unit ? ` ${unit}` : ""}</span>
+        <span style={mono} data-testid="wl-adjust-center">{fmtWl(center)}{unit ? ` ${unit}` : ""}</span>
       </div>
       <input type="range" min={0} max={SLIDER_MAX} value={wlSlider} onChange={(e) => onWlSlider(Number(e.target.value))} style={{ width: "100%" }} />
 
       <div style={rowLabel}>
         <span>{t("viewer2d.wl.adjust.width")}</span>
-        <span style={mono}>{round1(width)}{unit ? ` ${unit}` : ""}</span>
+        <span style={mono} data-testid="wl-adjust-width">{fmtWl(width)}{unit ? ` ${unit}` : ""}</span>
       </div>
       <input type="range" min={0} max={SLIDER_MAX} value={wwSlider} onChange={(e) => onWwSlider(Number(e.target.value))} style={{ width: "100%" }} />
 
@@ -161,6 +167,7 @@ export function WwWlAdjustDialog({
         <label style={dim}>WL</label>
         <input
           type="number"
+          step="any"
           value={wlText}
           onChange={(e) => setWlText(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") applyDirect(); }}
@@ -169,6 +176,7 @@ export function WwWlAdjustDialog({
         <label style={dim}>WW</label>
         <input
           type="number"
+          step="any"
           value={wwText}
           onChange={(e) => setWwText(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") applyDirect(); }}
@@ -193,6 +201,8 @@ interface Hist {
   hmax: number; // ピーククリップ済み表示最大
   min: number;
   max: number;
+  /** 有限値がすべて整数（幅の下限の決め方が変わる）。 */
+  integral: boolean;
 }
 
 function computeHistogram(slice: Slice | null): Hist | null {
@@ -200,15 +210,19 @@ function computeHistogram(slice: Slice | null): Hist | null {
   const v = slice.values;
   let min = Number.POSITIVE_INFINITY;
   let max = Number.NEGATIVE_INFINITY;
+  let integral = true;
   for (let i = 0; i < v.length; i++) {
     const x = v[i];
+    if (!Number.isFinite(x)) continue; // Parametric Map の NaN（値なし）
     if (x < min) min = x;
     if (x > max) max = x;
+    if (integral && !Number.isInteger(x)) integral = false;
   }
   if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
   const range = Math.max(max - min, 1e-9);
   const counts = new Array<number>(HBINS).fill(0);
   for (let i = 0; i < v.length; i++) {
+    if (!Number.isFinite(v[i])) continue;
     let b = Math.floor(((v[i] - min) / range) * HBINS);
     if (b < 0) b = 0;
     if (b >= HBINS) b = HBINS - 1;
@@ -232,7 +246,7 @@ function computeHistogram(slice: Slice | null): Hist | null {
     hmax = Math.round(maxCount2 * 1.5);
     counts[mode] = hmax;
   }
-  return { counts, hmax: Math.max(1, hmax), min, max };
+  return { counts, hmax: Math.max(1, hmax), min, max, integral };
 }
 
 function ContrastPlot({
@@ -317,9 +331,6 @@ function line(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number,
 function clampInt(v: number): number {
   if (!Number.isFinite(v)) return 0;
   return Math.max(0, Math.min(SLIDER_MAX, Math.round(v)));
-}
-function round1(v: number): number {
-  return Math.round(v * 10) / 10;
 }
 
 // ── スタイル（WandDialog 準拠のモーダルレス浮動パネル）─────────────

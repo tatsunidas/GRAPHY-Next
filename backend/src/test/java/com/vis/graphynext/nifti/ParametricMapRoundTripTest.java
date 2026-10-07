@@ -190,6 +190,7 @@ class ParametricMapRoundTripTest {
                 }
                 // W/L は NaN を除いた最小・最大から
                 assertThat(Double.isFinite(out.getDouble(Tag.WindowCenter, Double.NaN))).isTrue();
+                assertThat(out.getString(Tag.VOILUTFunction)).isEqualTo("LINEAR_EXACT");
             }
         }
     }

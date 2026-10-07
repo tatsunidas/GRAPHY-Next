@@ -7,7 +7,7 @@
  * 委譲でふるまいが変わっていないこと、および ROI 側が依存する性質を固定する。
  */
 import { describe, expect, it } from "vitest";
-import { analyze, analyzeValues, computeBinMask, type Slice } from "./histogram";
+import { analyze, analyzeValues, computeBinMask, suggestBinWidth, type Slice } from "./histogram";
 
 const slice = (values: number[], unit = "HU"): Slice => ({
   values: Float32Array.from(values),
@@ -57,5 +57,31 @@ describe("analyze / analyzeValues", () => {
   it("computeBinMask は [lo, hi) の半開区間", () => {
     const m = computeBinMask(slice([0, 5, 10, 15]), 5, 15);
     expect(Array.from(m)).toEqual([0, 1, 1, 0]);
+  });
+});
+
+describe("NaN を含む float の画像（Parametric Map）", () => {
+  it("NaN は数えず、統計とビンは有限値だけから出る", () => {
+    const h = analyzeValues([[0.001, Number.NaN, 0.002, 0.003, Number.NaN]], "mm2/s", { mode: "count", value: 3 });
+    expect(h.totalCount).toBe(3);
+    expect(h.min).toBe(0.001);
+    expect(h.max).toBe(0.003);
+    expect(h.mean).toBeCloseTo(0.002, 12);
+    expect(h.counts.reduce((a, b) => a + b, 0)).toBe(3);
+    expect(Number.isFinite(h.stdDev)).toBe(true);
+  });
+
+  it("NaN だけなら空の母集団として例外", () => {
+    expect(() => analyzeValues([[Number.NaN, Number.NaN]], "raw", { mode: "count", value: 4 })).toThrow();
+  });
+
+  it("ビン幅の提案: 整数の画像は null（既定の幅のまま）、小さい float は値域に見合う幅", () => {
+    expect(suggestBinWidth([0, 1, 2, 3, 100])).toBeNull();
+    const adc = Array.from({ length: 1000 }, (_, i) => 0.0007 + (0.0011 * i) / 999);
+    adc.push(Number.NaN);
+    const w = suggestBinWidth(adc)!;
+    // 一様分布 1000 個: IQR = 0.00055、2·IQR/10 = 0.00011
+    expect(w).toBeCloseTo(0.00011, 6);
+    expect(analyzeValues([adc], "mm2/s", { mode: "width", value: w }).binCount).toBe(10);
   });
 });

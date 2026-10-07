@@ -24,7 +24,8 @@ import { ensureCornerstoneInitialized } from "../viewer/cornerstoneSetup";
 import { getAppliedVolumeMaxMb, isCacheSizeExceeded } from "../viewer/volumeMemory";
 import { confirmVolumeMemory } from "../viewer/volumeMemoryGuard";
 import { useDeviceClass } from "../mobile/useDeviceClass";
-import { imageIdForInstance } from "../viewer/imageId";
+import { imageIdForInstance, imageIdsForLayoutStack } from "../viewer/imageId";
+import { formatNumber } from "../viewer/roiStatsText";
 import { stepViewportSlice } from "../viewer/sliceStep";
 import { matchesShortcut } from "../shortcuts/registry";
 import {
@@ -182,23 +183,28 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
       }
       setTitle(series.seriesDescription || series.seriesInstanceUid);
 
-      const instances = await fetchInstances(ctx.study.studyInstanceUid, series.seriesInstanceUid);
-      if (instances.length < 3) {
-        setPhase("error");
-        setMessage(t("mpr.needVolume"));
-        return;
-      }
-      const imageIds = instances.map((i) =>
-        imageIdForInstance(mode, i.sopInstanceUid, ctx.study.studyInstanceUid, series.seriesInstanceUid),
-      );
-
-      // ボリューム構築で確保しようとする量を先に見積もり、バジェットを超えるなら確認する
-      // （fw/volume-memory-guard.md V2）。MPR は本来 layout を取らないが、面内サイズと
-      // ピクセル形式が予測に要るためここで 1 回だけ取得する（失敗しても予測を諦めるだけ）。
+      // レイアウトのセル（c=0・t=0）から組む。インスタンスから組むと、フレームを持つシリーズ
+      // （Parametric Map）や複数時相のシリーズで正しいボリュームにならない。
+      // レイアウトは面内サイズと画素形式としてメモリの予測（fw/volume-memory-guard.md V2）にも使う。
       const guardLayout = await fetchSeriesLayout(
         ctx.study.studyInstanceUid,
         series.seriesInstanceUid,
       ).catch(() => null);
+      let imageIds = guardLayout
+        ? imageIdsForLayoutStack(guardLayout.cells, mode, 0, 0, ctx.study.studyInstanceUid, series.seriesInstanceUid)
+        : [];
+      if (imageIds.length < 3 && (!guardLayout || (guardLayout.nC <= 1 && guardLayout.nT <= 1))) {
+        const instances = await fetchInstances(ctx.study.studyInstanceUid, series.seriesInstanceUid);
+        imageIds = instances.map((i) =>
+          imageIdForInstance(mode, i.sopInstanceUid, ctx.study.studyInstanceUid, series.seriesInstanceUid),
+        );
+      }
+      if (imageIds.length < 3) {
+        setPhase("error");
+        setMessage(t("mpr.needVolume"));
+        return;
+      }
+
       const memDecision = await confirmVolumeMemory({
         layout: guardLayout,
         sliceCount: imageIds.length,
@@ -443,7 +449,7 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
               )}
               <span style={roItem}>
                 <b style={roKey}>{t("mpr.value")}</b>{" "}
-                {probe.value === null ? "—" : Math.round(probe.value)}
+                {probe.value === null ? "—" : formatNumber(probe.value, 0) /* 1 未満は有効数字 3 桁（ADC を 0 に潰さない） */}
                 {slabProj && <span style={roUnit}> {t("mpr.slab.probeNote")}</span>}
               </span>
             </>
@@ -550,6 +556,7 @@ function Cell({
       <div
         ref={refEl}
         style={vpEl}
+        data-testid="mpr-viewport"
         // クリックでフォーカスが乗り、↑↓ / テンキー 8・2 が届くようにする。
         tabIndex={0}
         onContextMenu={(e) => e.preventDefault()}

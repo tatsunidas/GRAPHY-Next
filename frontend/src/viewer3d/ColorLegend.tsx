@@ -17,6 +17,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import { fetchLutData } from "../api";
 import type { VtkVolumeView } from "../viewer/vtkVolumeView";
+import { formatNumber } from "../viewer/roiStatsText";
+
 
 export type LegendCorner = "tl" | "tr" | "bl" | "br";
 
@@ -126,7 +128,9 @@ export function ColorLegend({
 
   const unit = unitFor(modality);
   const mid = (range.lo + range.hi) / 2;
-  const fmt = (v: number) => (Math.abs(v) >= 1000 ? v.toFixed(0) : v.toFixed(Math.abs(v) < 10 ? 1 : 0));
+  // 1 未満は有効数字で（ADC の 0.0007 を 0.0 に潰さない）
+  const fmt = (v: number) =>
+    v !== 0 && Math.abs(v) < 1 ? formatNumber(v) : Math.abs(v) >= 1000 ? v.toFixed(0) : v.toFixed(Math.abs(v) < 10 ? 1 : 0);
 
   return (
     <div style={{ ...box, ...cornerStyle(corner) }}>

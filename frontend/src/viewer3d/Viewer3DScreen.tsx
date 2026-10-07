@@ -99,7 +99,8 @@ const MODES: VtkRenderMode[] = ["VR", "MIP", "MINIP", "ORTHO", "SLAB"];
 function defaultWl(modality: string | null, range: [number, number]): { center: number; width: number } {
   if ((modality ?? "").toUpperCase() === "CT") return { center: 40, width: 400 };
   const [mn, mx] = range;
-  return { center: (mn + mx) / 2, width: Math.max(1, mx - mn) };
+  // 幅を 1 以上にすると、値域 0.001 の ADC（Parametric Map）が一様に潰れる。
+  return { center: (mn + mx) / 2, width: mx > mn ? mx - mn : 1 };
 }
 
 export function Viewer3DScreen({ status }: { status: AppStatus | null }) {

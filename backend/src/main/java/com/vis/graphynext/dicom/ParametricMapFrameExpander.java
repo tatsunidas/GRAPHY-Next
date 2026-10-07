@@ -341,6 +341,9 @@ public final class ParametricMapFrameExpander {
             double width = Math.max(max - min, Math.ulp(Math.max(Math.abs(min), Math.abs(max))) * 2);
             out.setDouble(Tag.WindowCenter, VR.DS, min + (max - min) / 2.0);
             out.setDouble(Tag.WindowWidth, VR.DS, width);
+            // LINEAR（既定）は幅から 1 を引く整数の画像向けの式で、幅 0.002 の ADC では上下が逆転する
+            // （MPR が真っ白になった）。実数の値には LINEAR_EXACT（PS3.3 C.11.2.1.3.2）。
+            out.setString(Tag.VOILUTFunction, VR.CS, "LINEAR_EXACT");
         }
         out.setBytes(Tag.FloatPixelData, VR.OF, outPx.array());
         try {
