@@ -1,6 +1,6 @@
 /*
  * 整数でない float の NIfTI を Parametric Map（32 bit float）で取り込んで、表示・H10 で値が保たれるかを見る
- * （fw/nifti-import.md §3.1・段 F1〜F3）。Colab は使わない。
+ * （fw/nifti-import.md §3.1・段 F1〜F4）。Colab は使わない。
  * F3: 2D の W/L（上の帯・調整の画面）・ヒストグラム・ROI 統計（H66）・MPR・3D が小さい float と NaN で使えるか。
  *
  * 実行:  cd automator && GRAPHY_TEST_PYTHON=<numpy と nibabel のある python> npx tsx src/spike/niftiFloatCheck.ts
@@ -95,6 +95,15 @@ async function main(): Promise<void> {
     check(lay.nZ === truth.dims[2] && lay.imageWidth === truth.dims[0] && lay.imageHeight === truth.dims[1], `レイアウト: ${lay.imageWidth}×${lay.imageHeight}×${lay.nZ}`, lay);
     check(Array.isArray(lay.zSpatial) && lay.zSpatial.length === truth.dims[2] && lay.imageOrientationPatient?.length === 6, "レイアウトに幾何（IOP・z の位置）がある");
     check(lay.pixelFormat?.bitsAllocated === 32, "レイアウトの画素形式は 32 bit", lay.pixelFormat);
+
+    // F4: テクスチャは NaN を含むシリーズを理由つきで断る（前は「スライスをデコードできません」）
+    const tex = await fetch(`${base}/api/series/texture`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ studyInstanceUid: r.studyInstanceUid, sourceSeriesUid: r.seriesInstanceUid, maskChannel: 0, feature: "GLCM_JointEntropy",
+        filterSize: 3, stride: 1, force2D: false, channel: 0, timePoint: 0, settings: { MASK_LABEL_INT: "1" } }),
+    });
+    const texBody = await tex.text();
+    check(tex.status >= 400 && tex.status < 500 && /NaN/.test(texBody), `テクスチャは NaN を含むシリーズを断る（${tex.status}）`, texBody.slice(0, 300));
 
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.getByTestId("search-patientid-input").waitFor({ state: "visible", timeout: 60_000 });

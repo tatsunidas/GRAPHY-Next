@@ -13,6 +13,7 @@ import com.vis.graphynext.anonymize.TestDicomFiles;
 import com.vis.graphynext.dicom.DicomProperties;
 import com.vis.graphynext.dicom.store.DicomInstance;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
+import com.vis.graphynext.nifti.FloatNiftiFixture;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.UID;
@@ -146,6 +147,96 @@ class ComputeDatasetServiceTest {
         }
     }
 
+    // ── Parametric Map（NIfTI の float の取り込み・fw/nifti-import.md §3.1・F4）──
+
+    private static final String PM_SERIES = "1.2.3.100.9";
+    private static final int PX = 4, PY = 3, PZ = 3;
+    private static final double PDX = 0.9, PDY = 1.1, PDZ = 2.5;
+
+    /** NIfTI のボクセル (i, j, k) の値。整数でない小さい値（ADC のよう）。(1, 2, 1) は NaN。 */
+    private static float pmValue(int i, int j, int k) {
+        return i == 1 && j == 2 && k == 1 ? Float.NaN : (float) (0.0005 + 0.0001 * ((k * PY + j) * PX + i));
+    }
+
+    /** float32 の NIfTI（RAS の sform・原点 (10, 20, 30)）を Parametric Map にして保管庫に置く。 */
+    private void writeParametricMapSeries() throws IOException {
+        Path nii = FloatNiftiFixture.write(dir.resolve("adc.nii"), PX, PY, PZ, PDX, PDY, PDZ,
+                ComputeDatasetServiceTest::pmValue);
+        int n = 0;
+        for (Attributes ds : FloatNiftiFixture.toParametricMap(nii, PHI_ID, PHI_NAME, STUDY, PM_SERIES, "mm2/s")) {
+            assertEquals(UID.ParametricMapStorage, ds.getString(Tag.SOPClassUID));
+            Path f = dir.resolve("pm" + (n++) + ".dcm");
+            try (DicomOutputStream out = new DicomOutputStream(f.toFile())) {
+                out.writeDataset(ds.createFileMetaInformation(UID.ExplicitVRLittleEndian), ds);
+            }
+            index(PM_SERIES, ds.getString(Tag.SOPInstanceUID), f, "MR", UID.ParametricMapStorage);
+        }
+    }
+
+    @Test
+    void parametricMapToNpz_keepsFloatValuesNaNAndGeometry() throws Exception {
+        writeParametricMapSeries();
+        ComputeDatasetService.Dataset d = service().create(STUDY, PM_SERIES, ComputeDatasetService.Format.NPZ);
+        Map<String, byte[]> npz = unzip(d.file());
+        Object[] vol = readNpy(npz.get("volume.npy"));
+        assertTrue(((String) vol[0]).contains("'shape': (" + PZ + ", " + PY + ", " + PX + ")"), (String) vol[0]);
+        ByteBuffer sp = (ByteBuffer) readNpy(npz.get("spacing.npy"))[1];
+        double[] spacing = {sp.getDouble(), sp.getDouble(), sp.getDouble()}; // dz, dy, dx
+        ByteBuffer ob = (ByteBuffer) readNpy(npz.get("origin.npy"))[1];
+        double[] origin = {ob.getDouble(), ob.getDouble(), ob.getDouble()};
+        ByteBuffer db = (ByteBuffer) readNpy(npz.get("direction.npy"))[1];
+        double[] dir3 = new double[9];
+        for (int i = 0; i < 9; i++) {
+            dir3[i] = db.getDouble();
+        }
+        // 答え: npz の (z, y, x) の患者座標 → RAS → NIfTI のボクセル → 元の値（npz の幾何を通して突き合わせる）
+        ByteBuffer v = (ByteBuffer) vol[1];
+        int nan = 0;
+        for (int z = 0; z < PZ; z++) {
+            for (int y = 0; y < PY; y++) {
+                for (int x = 0; x < PX; x++) {
+                    double[] lps = new double[3];
+                    for (int a = 0; a < 3; a++) {
+                        lps[a] = origin[a] + x * spacing[2] * dir3[a] + y * spacing[1] * dir3[3 + a] + z * spacing[0] * dir3[6 + a];
+                    }
+                    int i = (int) Math.round((-lps[0] - 10) / PDX);
+                    int j = (int) Math.round((-lps[1] - 20) / PDY);
+                    int k = (int) Math.round((lps[2] - 30) / PDZ);
+                    float want = pmValue(i, j, k);
+                    float got = v.getFloat();
+                    if (Float.isNaN(want)) {
+                        assertTrue(Float.isNaN(got), "NaN のまま z=" + z + " y=" + y + " x=" + x);
+                        nan++;
+                    } else {
+                        assertEquals(want, got, 0f, "float32 のまま z=" + z + " y=" + y + " x=" + x + " ← NIfTI " + i + "," + j + "," + k);
+                    }
+                }
+            }
+        }
+        assertEquals(1, nan);
+        JsonNode meta = mapper.readTree(npz.get("meta.json"));
+        assertTrue(meta.path("float").asBoolean());
+        assertEquals("mm2/s", meta.path("valueUnit").asText());
+        assertEquals("position", meta.path("order").asText());
+        String all = new String(Files.readAllBytes(d.file()), StandardCharsets.ISO_8859_1);
+        for (String phi : List.of(PHI_NAME, PHI_ID, PM_SERIES, STUDY)) {
+            assertFalse(all.contains(phi), phi);
+        }
+    }
+
+    @Test
+    void parametricMapWithMask_isBlockedByThePreflight() throws Exception {
+        // 塗る処理は PixelData しか塗らない。float の画素にマスクを当てても塗れないので、事前検査で断る
+        //（前は「塗れる」と答え、塗った後の検査で burnin-incomplete になっていた）
+        writeParametricMapSeries();
+        fx.masks.put(new AnonymizeMaskStore.SeriesMask(PM_SERIES, List.of(), List.of(), List.of(
+                new AnonymizeMaskStore.MaskPolygon(new double[]{0, 2, 2, 0}, new double[]{0, 0, 2, 2},
+                        List.of(), List.of()))));
+        ComputeDatasetService.DatasetRefused e = assertThrows(ComputeDatasetService.DatasetRefused.class,
+                () -> service().create(STUDY, PM_SERIES, ComputeDatasetService.Format.NPZ));
+        assertEquals("burnin-mask-blocked", e.reason());
+    }
+
     @Test
     void npzRefusesSlicesThatDoNotFormAnEvenGrid() throws Exception {
         // 同じ位置に 2 枚（撮影が 2 回ぶん混ざったシリーズ）
@@ -255,5 +346,26 @@ class ComputeDatasetServiceTest {
         assertTrue(p.waitFor(60, TimeUnit.SECONDS));
         assertEquals("float32 (3, 3, 4) " + (100 + 23 + INTERCEPT) + " [2.5, 0.8, 0.5] position",
                 out.lines().reduce((a, b) -> b).orElse(out), out);
+    }
+
+    @Test
+    void numpyCanLoadTheParametricMapNpz() throws Exception {
+        String python = System.getenv("GRAPHY_JUPYTER_PYTHON");
+        Assumptions.assumeTrue(python != null && Files.isRegularFile(Path.of(python)), "no python");
+        writeParametricMapSeries();
+        ComputeDatasetService.Dataset d = service().create(STUDY, PM_SERIES, ComputeDatasetService.Format.NPZ);
+        Process p = new ProcessBuilder(python, "-c", """
+                import sys, json, numpy as np
+                z = np.load(sys.argv[1])
+                v = z['volume']
+                m = json.loads(bytes(z['meta.json']))
+                print(v.dtype, v.shape, int(np.isnan(v).sum()), repr(float(np.nanmin(v))), m['float'], m['valueUnit'])
+                """, d.file().toString()).redirectErrorStream(true).start();
+        String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8).strip();
+        assertTrue(p.waitFor(60, TimeUnit.SECONDS));
+        String[] f = out.lines().reduce((a, b) -> b).orElse(out).split(" ");
+        assertEquals("float32 (" + PZ + ", " + PY + ", " + PX + ") 1", String.join(" ", f[0], f[1], f[2], f[3], f[4]), out);
+        assertEquals(pmValue(0, 0, 0), (float) Double.parseDouble(f[5]), 0f, out);
+        assertEquals("True mm2/s", f[6] + " " + f[7], out);
     }
 }

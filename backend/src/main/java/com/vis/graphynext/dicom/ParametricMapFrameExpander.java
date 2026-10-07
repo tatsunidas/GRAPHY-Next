@@ -234,16 +234,23 @@ public final class ParametricMapFrameExpander {
         return meaning.isBlank() ? code : meaning;
     }
 
+    /** Float Pixel Data か Double Float Pixel Data を持つか（画素まで読んだデータセット）。 */
+    public static boolean hasFloatPixels(Attributes ds) {
+        return ds != null && (ds.contains(Tag.FloatPixelData) || ds.contains(Tag.DoubleFloatPixelData));
+    }
+
+    /** そのフレームの単位の表示名（{@link #unitOf}）。 */
+    public static String unitOfFrame(Attributes ds, int frame) {
+        return unitOf(rwvm(ds, frame));
+    }
+
     /**
-     * 1 フレームを、トップレベルに幾何を持つ単一フレーム（Float Pixel Data）として返す。
-     * 値は RWVM で実際の量に直す（傾き 1・切片 0 なら値はそのまま）。NaN はそのまま残す。
+     * 1 フレームの値を実際の量（RWVM を適用）の float で返す。NaN はそのまま。読めなければ null。
+     * Parametric Map の元のファイルにも、{@link #extractFrame} で切り出した単一フレーム（RWVM なし＝そのまま）にも使える。
      *
-     * @param ds 画素（Float Pixel Data）まで読んだデータセット
+     * @param ds 画素（Float / Double Float Pixel Data）まで読んだデータセット
      */
-    public static byte[] extractFrame(Attributes ds, int frame) {
-        if (!isParametricMap(ds)) {
-            return null;
-        }
+    public static float[] frameValues(Attributes ds, int frame) {
         int rows = ds.getInt(Tag.Rows, 0);
         int cols = ds.getInt(Tag.Columns, 0);
         int nf = Math.max(1, ds.getInt(Tag.NumberOfFrames, 1));
@@ -284,12 +291,38 @@ public final class ParametricMapFrameExpander {
         Attributes mapping = rwvm(ds, frame);
         double slope = mapping == null ? 1.0 : mapping.getDouble(Tag.RealWorldValueSlope, 1.0);
         double intercept = mapping == null ? 0.0 : mapping.getDouble(Tag.RealWorldValueIntercept, 0.0);
+        if (slope != 1.0 || intercept != 0.0) {
+            for (int i = 0; i < n; i++) {
+                v[i] = (float) (v[i] * slope + intercept);
+            }
+        }
+        return v;
+    }
+
+    /**
+     * 1 フレームを、トップレベルに幾何を持つ単一フレーム（Float Pixel Data）として返す。
+     * 値は RWVM で実際の量に直す（傾き 1・切片 0 なら値はそのまま）。NaN はそのまま残す。
+     *
+     * @param ds 画素（Float Pixel Data）まで読んだデータセット
+     */
+    public static byte[] extractFrame(Attributes ds, int frame) {
+        if (!isParametricMap(ds)) {
+            return null;
+        }
+        int rows = ds.getInt(Tag.Rows, 0);
+        int cols = ds.getInt(Tag.Columns, 0);
+        int nf = Math.max(1, ds.getInt(Tag.NumberOfFrames, 1));
+        if (rows <= 0 || cols <= 0 || frame < 0 || frame >= nf) {
+            return null;
+        }
+        int n = rows * cols;
+        float[] v = frameValues(ds, frame);
+        if (v == null) {
+            return null;
+        }
         float min = Float.POSITIVE_INFINITY;
         float max = Float.NEGATIVE_INFINITY;
         for (int i = 0; i < n; i++) {
-            if (slope != 1.0 || intercept != 0.0) {
-                v[i] = (float) (v[i] * slope + intercept);
-            }
             if (Float.isFinite(v[i])) {
                 min = Math.min(min, v[i]);
                 max = Math.max(max, v[i]);
@@ -336,7 +369,7 @@ public final class ParametricMapFrameExpander {
         // 値はもう実際の量なので傾き 1・切片 0。単位は RescaleType（フロントの単位の判定が見る）
         out.setDouble(Tag.RescaleSlope, VR.DS, 1.0);
         out.setDouble(Tag.RescaleIntercept, VR.DS, 0.0);
-        out.setString(Tag.RescaleType, VR.LO, unitOf(mapping));
+        out.setString(Tag.RescaleType, VR.LO, unitOfFrame(ds, frame));
         if (min <= max) {
             double width = Math.max(max - min, Math.ulp(Math.max(Math.abs(min), Math.abs(max))) * 2);
             out.setDouble(Tag.WindowCenter, VR.DS, min + (max - min) / 2.0);
