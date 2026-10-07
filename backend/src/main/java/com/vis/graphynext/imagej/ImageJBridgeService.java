@@ -4,6 +4,7 @@
  */
 package com.vis.graphynext.imagej;
 
+import com.vis.graphynext.dicom.ParametricMapFrameExpander;
 import com.vis.graphynext.dicom.SeriesLayout;
 import com.vis.graphynext.dicom.store.DicomStorageService;
 import ij.IJ;
@@ -12,13 +13,17 @@ import ij.ImagePlus;
 import ij.ImageStack;
 import ij.io.Opener;
 import ij.measure.Calibration;
+import ij.process.FloatProcessor;
 import ij.process.ImageProcessor;
 import ij.process.ShortProcessor;
+import org.dcm4che3.data.Attributes;
+import org.dcm4che3.io.DicomInputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.awt.GraphicsEnvironment;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -124,7 +129,7 @@ public class ImageJBridgeService {
     }
 
     /** 読み込んだ 1 枚: ImageProcessor（画素）＋ source ImagePlus の Calibration（HU 等の値校正）。 */
-    private record Loaded(ImageProcessor ip, Calibration cal) {}
+    record Loaded(ImageProcessor ip, Calibration cal) {}
 
     /** セル（(c,z,t)→SOP, frame）から ImageProcessor と Calibration を得る。 */
     private Loaded loadProcessor(SeriesLayout.Cell cell) throws IOException {
@@ -132,6 +137,8 @@ public class ImageJBridgeService {
             // マルチフレーム/モザイク: 単一フレーム DICOM を一時ファイルに書き出して開く。
             byte[] dicom = storage.frameDicom(cell.sopInstanceUid(), cell.frame());
             if (dicom == null) return null;
+            Loaded floats = floatProcessor(dicom);
+            if (floats != null) return floats;
             Path tmp = Files.createTempFile("graphy-ij-", ".dcm");
             try {
                 Files.write(tmp, dicom);
@@ -143,6 +150,24 @@ public class ImageJBridgeService {
         Path path = storage.resolveInstanceFile(cell.sopInstanceUid());
         if (path == null) return null;
         return openProcessor(path, 0);
+    }
+
+    /**
+     * Float Pixel Data のフレーム（Parametric Map から切り出したもの）なら FloatProcessor を返す。それ以外は null。
+     * ImageJ の DICOM の読み込みは PixelData (7FE0,0010) しか知らないので、dcm4che で直接読む。
+     * 値は実際の量（RWVM 適用済み）なので値の校正は付けない。NaN はそのまま（ImageJ の統計は NaN を除く）。
+     */
+    static Loaded floatProcessor(byte[] dicom) throws IOException {
+        Attributes ds;
+        try (DicomInputStream in = new DicomInputStream(new ByteArrayInputStream(dicom))) {
+            in.setIncludeBulkData(DicomInputStream.IncludeBulkData.YES);
+            ds = in.readDataset();
+        }
+        if (!ParametricMapFrameExpander.hasFloatPixels(ds)) return null;
+        float[] v = ParametricMapFrameExpander.frameValues(ds, 0);
+        if (v == null) return null;
+        return new Loaded(new FloatProcessor(ds.getInt(org.dcm4che3.data.Tag.Columns, 0),
+                ds.getInt(org.dcm4che3.data.Tag.Rows, 0), v, null), null);
     }
 
     /** ImageJ Opener で DICOM を開き、指定フレームの ImageProcessor と Calibration を返す。 */

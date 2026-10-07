@@ -4,6 +4,7 @@
  */
 package com.vis.graphynext.dicom.derived;
 
+import com.vis.graphynext.dicom.ParametricMapFrameExpander;
 import com.vis.graphynext.dicom.store.DicomStorageService;
 import com.vis.graphynext.dicom.web.WebDicomDataService;
 import org.dcm4che3.data.Attributes;
@@ -168,6 +169,27 @@ public class DerivedSeriesService {
         }
     }
 
+    /**
+     * 派生シリーズの SOP Class。元のものを引き継ぐが、元が Parametric Map なら画像の SOP にする
+     * （ここが書くのは 16 bit の PixelData とトップレベルの幾何なので、Parametric Map のままだと
+     * Functional Groups も Float Pixel Data も無い不正なインスタンスになる）。
+     */
+    static String derivedSopClass(String srcSopClass, String modality) {
+        if (srcSopClass == null) {
+            return UID.SecondaryCaptureImageStorage;
+        }
+        if (!UID.ParametricMapStorage.equals(srcSopClass)) {
+            return srcSopClass;
+        }
+        return switch (modality == null ? "" : modality.toUpperCase()) {
+            case "CT" -> UID.CTImageStorage;
+            case "MR" -> UID.MRImageStorage;
+            case "PT" -> UID.PositronEmissionTomographyImageStorage;
+            case "NM" -> UID.NuclearMedicineImageStorage;
+            default -> UID.SecondaryCaptureImageStorage;
+        };
+    }
+
     /** 1 スライスの Attributes を構築する（属性引き継ぎ＋幾何/画素更新）。 */
     private Attributes buildInstance(Attributes tmpl, DerivedSeriesRequest req, String newSeriesUid,
                                      int seriesNumber, String modality, DerivedSeriesRequest.Frame f, byte[] px) {
@@ -203,7 +225,7 @@ public class DerivedSeriesService {
         // モダリティ / SOP Class は元を維持（CT なら CT Image Storage 等）。
         a.setString(Tag.Modality, VR.CS, modality);
         String srcSopClass = tmpl.getString(Tag.SOPClassUID);
-        a.setString(Tag.SOPClassUID, VR.UI, srcSopClass != null ? srcSopClass : UID.SecondaryCaptureImageStorage);
+        a.setString(Tag.SOPClassUID, VR.UI, derivedSopClass(srcSopClass, modality));
 
         // シリーズ（新規）。
         a.setString(Tag.SeriesInstanceUID, VR.UI, newSeriesUid);
@@ -253,6 +275,10 @@ public class DerivedSeriesService {
         a.setDouble(Tag.RescaleSlope, VR.DS, slope);
         if (req.rescaleType() != null && !req.rescaleType().isBlank()) {
             a.setString(Tag.RescaleType, VR.LO, req.rescaleType());
+        } else if (UID.ParametricMapStorage.equals(srcSopClass)) {
+            // 元が Parametric Map なら単位は RWVM にある（取り込みで選んだ単位・fw/nifti-import.md §3.1）
+            ModalityAttributeInheritance.setString(a, Tag.RescaleType, VR.LO,
+                    ParametricMapFrameExpander.unitOfFrame(tmpl, 0));
         } else {
             // モダリティと Units から決める。PET は画素が Units の示す量（BQML 等）なので、
             // 「CT なら HU」だけでは PET に何も入らなかった。

@@ -4,6 +4,7 @@
  */
 package com.vis.graphynext.radiomics;
 
+import com.vis.graphynext.dicom.ParametricMapFrameExpander;
 import com.vis.graphynext.dicom.SeriesLayout;
 import com.vis.graphynext.dicom.store.DicomStorageService;
 import ij.ImagePlus;
@@ -150,6 +151,12 @@ public class RadiomicsMapEngine {
             if (loaded == null) {
                 throw new IllegalArgumentException("スライスをデコードできません z=" + z + " sop=" + sopPerZ[z]
                         + "（圧縮転送構文の可能性。backend ログを確認してください）");
+            }
+            long nan = countNaN(loaded.ip());
+            if (nan > 0) {
+                // 窓の中の NaN を離散化がどう扱うか（RadiomicsJ）を確かめられていないので、黙って計算しない
+                throw new IllegalArgumentException("値の無い画素（NaN）を含むシリーズはテクスチャを計算できません"
+                        + "（z=" + z + " に " + nan + " 画素）。Parametric Map の NaN は背景などの「値なし」です。");
             }
             procs.add(loaded.ip());
             if (cal == null && loaded.cal() != null && loaded.cal().calibrated()) cal = loaded.cal();
@@ -640,6 +647,11 @@ public class RadiomicsMapEngine {
             log.warn("[texture] SamplesPerPixel={} (color) not supported: {}", spp, sop);
             return null;
         }
+        if (ParametricMapFrameExpander.hasFloatPixels(ds)) {
+            // Parametric Map から切り出した float のフレーム（値は実際の量）。NaN は呼び出し側で断る
+            float[] v = ParametricMapFrameExpander.frameValues(ds, 0);
+            return v == null ? null : new Loaded(new FloatProcessor(cols, rows, v, null), null);
+        }
         int ba = ds.getInt(Tag.BitsAllocated, 16);
         int bs = ds.getInt(Tag.BitsStored, ba);
         int pr = ds.getInt(Tag.PixelRepresentation, 0);
@@ -681,6 +693,15 @@ public class RadiomicsMapEngine {
         // 値は既にモダリティ値（HU/SUV 等）。Calibration は identity 扱い（radiomicsj は画素値で離散化）。
         FloatProcessor fp = new FloatProcessor(cols, rows, f, null);
         return new Loaded(fp, null);
+    }
+
+    private static long countNaN(ImageProcessor ip) {
+        if (!(ip instanceof FloatProcessor fp)) return 0;
+        long n = 0;
+        for (float v : (float[]) fp.getPixels()) {
+            if (Float.isNaN(v)) n++;
+        }
+        return n;
     }
 
     private static int oddUp(int n) {

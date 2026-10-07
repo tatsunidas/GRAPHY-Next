@@ -8,6 +8,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.vis.graphynext.anonymize.AnonymizeService;
 import com.vis.graphynext.anonymize.PixelCodec;
+import com.vis.graphynext.dicom.ParametricMapFrameExpander;
+import com.vis.graphynext.dicom.SegFrameExpander;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 
@@ -34,7 +36,12 @@ import java.util.zip.ZipOutputStream;
  *   <li>{@code spacing}: float64 {@code [dz, dy, dx]}（mm）。分からなければ NaN</li>
  *   <li>{@code origin}: float64 {@code [x, y, z]}（患者座標 LPS・mm。先頭スライスの左上画素の中心）。分からなければ NaN</li>
  *   <li>{@code direction}: float64 {@code [3, 3]}。行 0/1/2 が volume の x/y/z 軸の向き（LPS の単位ベクトル）</li>
- *   <li>{@code meta.json}: モダリティ・光度解釈・匿名化後の UID・並べ方（{@code numpy.load} では bytes で読める）</li>
+ *   <li>{@code meta.json}: モダリティ・光度解釈・匿名化後の UID・並べ方・値の単位（{@code numpy.load} では bytes で読める）</li>
+ * </ul>
+ *
+ * <p>Parametric Map（NIfTI の float の取り込み・fw/nifti-import.md §3.1）は Float Pixel Data を RWVM で実際の量にして
+ * そのまま入れる（NaN も NaN のまま）。幾何は Functional Groups（共有の向き・画素間隔、フレームごとの位置）から取る。
+ * <ul>
  * </ul>
  */
 final class VolumeAssembler implements AnonymizeService.Sink {
@@ -42,7 +49,9 @@ final class VolumeAssembler implements AnonymizeService.Sink {
     /** 元の画素の合計の上限。これを超えるシリーズは dicom-zip で送ってもらう。 */
     static final long MAX_RAW_BYTES = 1L << 30;
 
-    private record Slice(byte[] raw, int frame, double[] ipp, int instanceNumber, double slope, double intercept) {
+    /** 整数の画像は {@code raw}、Parametric Map は実際の量の {@code values}（どちらか一方）。 */
+    private record Slice(byte[] raw, float[] values, int frame, double[] ipp, int instanceNumber, double slope,
+            double intercept) {
     }
 
     private final PixelCodec codec;
@@ -60,6 +69,9 @@ final class VolumeAssembler implements AnonymizeService.Sink {
     private String seriesUid;
     private String studyUid;
     private int multiFrameInstances;
+    /** Parametric Map（float の値）か。1 本のボリュームに整数の画像と混ぜない。 */
+    private Boolean floatValues;
+    private String valueUnit;
 
     VolumeAssembler(PixelCodec codec) {
         this.codec = codec;
@@ -89,6 +101,14 @@ final class VolumeAssembler implements AnonymizeService.Sink {
         if (org.dcm4che3.data.UID.ExplicitVRBigEndian.equals(tsuid)) {
             throw new UnsupportedLayout("npz-big-endian");
         }
+        if (ParametricMapFrameExpander.isParametricMap(ds)) {
+            addParametricMap(ds);
+            return;
+        }
+        if (Boolean.TRUE.equals(floatValues)) {
+            throw new UnsupportedLayout("npz-mixed-geometry");
+        }
+        floatValues = false;
         int r = ds.getInt(Tag.Rows, 0);
         int c = ds.getInt(Tag.Columns, 0);
         int spp = ds.getInt(Tag.SamplesPerPixel, 1);
@@ -112,6 +132,7 @@ final class VolumeAssembler implements AnonymizeService.Sink {
             photometric = pi;
             seriesUid = ds.getString(Tag.SeriesInstanceUID);
             studyUid = ds.getString(Tag.StudyInstanceUID);
+            valueUnit = ds.getString(Tag.RescaleType, "");
         } else if (r != rows || c != cols || ba != bitsAllocated) {
             throw new UnsupportedLayout("npz-mixed-geometry");
         }
@@ -135,7 +156,46 @@ final class VolumeAssembler implements AnonymizeService.Sink {
         for (int f = 0; f < frames; f++) {
             byte[] one = frames == 1 && all.length == frameBytes ? all
                     : java.util.Arrays.copyOfRange(all, f * frameBytes, (f + 1) * frameBytes);
-            slices.add(new Slice(one, f, frames == 1 ? ipp : null, in, slope, intercept));
+            slices.add(new Slice(one, null, f, frames == 1 ? ipp : null, in, slope, intercept));
+        }
+    }
+
+    /** Parametric Map: フレームごとに実際の量（float）と位置（フレームごとの PlanePosition）を積む。 */
+    private void addParametricMap(Attributes ds) throws IOException {
+        if (Boolean.FALSE.equals(floatValues)) {
+            throw new UnsupportedLayout("npz-mixed-geometry");
+        }
+        int r = ds.getInt(Tag.Rows, 0);
+        int c = ds.getInt(Tag.Columns, 0);
+        if (rows < 0) {
+            floatValues = true;
+            rows = r;
+            cols = c;
+            bitsAllocated = 32;
+            bitsStored = 32;
+            signed = true;
+            iop = SegFrameExpander.sharedIop(ds);
+            pixelSpacing = SegFrameExpander.sharedPixelSpacing(ds);
+            modality = ds.getString(Tag.Modality);
+            photometric = ds.getString(Tag.PhotometricInterpretation, "MONOCHROME2");
+            seriesUid = ds.getString(Tag.SeriesInstanceUID);
+            studyUid = ds.getString(Tag.StudyInstanceUID);
+            valueUnit = ParametricMapFrameExpander.unitOfFrame(ds, 0);
+        } else if (r != rows || c != cols) {
+            throw new UnsupportedLayout("npz-mixed-geometry");
+        }
+        int frames = Math.max(1, ds.getInt(Tag.NumberOfFrames, 1));
+        rawBytes += (long) rows * cols * 4 * frames;
+        if (rawBytes > MAX_RAW_BYTES) {
+            throw new UnsupportedLayout("npz-too-large");
+        }
+        int in = ds.getInt(Tag.InstanceNumber, 0);
+        for (int f = 0; f < frames; f++) {
+            float[] v = ParametricMapFrameExpander.frameValues(ds, f);
+            if (v == null) {
+                throw new UnsupportedLayout("npz-pixels-unreadable");
+            }
+            slices.add(new Slice(null, v, f, SegFrameExpander.perFrameIpp(ds, f), in, 1.0, 0.0));
         }
     }
 
@@ -231,6 +291,8 @@ final class VolumeAssembler implements AnonymizeService.Sink {
                 .put("photometricInterpretation", photometric)
                 .put("bitsStored", bitsStored)
                 .put("signed", signed)
+                .put("float", Boolean.TRUE.equals(floatValues))
+                .put("valueUnit", valueUnit == null ? "" : valueUnit)
                 .put("order", order)
                 .put("slices", sorted.size())
                 .put("anonymizedStudyInstanceUid", studyUid)
@@ -242,6 +304,12 @@ final class VolumeAssembler implements AnonymizeService.Sink {
     }
 
     private void writeFloats(Slice s, ByteBuffer out) {
+        if (s.values() != null) {
+            for (float v : s.values()) {
+                out.putFloat(v);
+            }
+            return;
+        }
         ByteBuffer in = ByteBuffer.wrap(s.raw()).order(ByteOrder.LITTLE_ENDIAN);
         int n = rows * cols;
         int shift = 32 - bitsStored;

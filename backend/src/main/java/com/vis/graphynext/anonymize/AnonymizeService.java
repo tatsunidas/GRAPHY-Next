@@ -4,6 +4,7 @@
  */
 package com.vis.graphynext.anonymize;
 
+import com.vis.graphynext.dicom.ParametricMapFrameExpander;
 import com.vis.graphynext.dicom.store.DicomInstance;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
 import com.vis.graphynext.dicom.web.WebDicomDataService;
@@ -308,6 +309,9 @@ public class AnonymizeService {
         if (!applies) {
             return "このインスタンスに適用されるマスクがありません";
         }
+        if (ParametricMapFrameExpander.isParametricMap(ds)) {
+            return "float の画素（Parametric Map）は焼き込みで塗れません";
+        }
         if (geometryOf(ds) == null) {
             return "画素の並びが焼き込みに対応していません"
                     + "（BitsAllocated=" + ds.getInt(Tag.BitsAllocated, 0)
@@ -588,6 +592,12 @@ public class AnonymizeService {
         int rows = ds.getInt(Tag.Rows, 0);
         int cols = ds.getInt(Tag.Columns, 0);
         if (rows <= 0 || cols <= 0) {
+            return null;
+        }
+        // 🔴 float の画素（Parametric Map の Float Pixel Data）は塗る処理が読まない（PixelData だけを塗る）。
+        // 事前検査で「塗れる」と答えると「検査は通ったのに塗れなかった」になるので対象外にする。
+        // ヘッダだけを読むと Float Pixel Data 自体は除かれているので SOP Class でも見る。
+        if (ParametricMapFrameExpander.isParametricMap(ds) || ParametricMapFrameExpander.hasFloatPixels(ds)) {
             return null;
         }
         int bits = ds.getInt(Tag.BitsAllocated, 8);

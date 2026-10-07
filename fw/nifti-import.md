@@ -150,7 +150,7 @@ qform_code > 0 → クォータニオン（method 2）から作る
 | F1 | backend の土台: PM の書き出し（NiftiToDicom・PROTECTED_TAGS）、展開器（layout・extractFrame）を standalone・web の両方に配線、フレームの振り分け、空白画像、受信 SOP。単体テスト（往復で値が一致・NaN が残る）。**✅ 2026-10-06**（下の「F1 の結果」） |
 | F2 | 単位の選択（取り込みの画面・RWVM・RescaleType）。段 1 の整数の画像にも。**✅ 2026-10-06**（下の「F2 の結果」） |
 | F3 | frontend: MPR の入口、H10 の単位、ヒストグラム・W/L の NaN と小さい値域、seriesRenderable。実機（2D・MPR・3D・ROI・H10）でスクリーンショット。**✅ 2026-10-07**（下の「F3 の結果」） |
-| F4 | npz（VolumeAssembler）・派生シリーズ・テクスチャ・ImageJ・焼き込みの事前検査 |
+| F4 | npz（VolumeAssembler）・派生シリーズ・テクスチャ・ImageJ・焼き込みの事前検査。**✅ 2026-10-07**（下の「F4 の結果」） |
 | F5 | 書き出し → 取り込み直しの往復、設計書の状態を更新 |
 
 ### F1 の結果（2026-10-06）
@@ -194,6 +194,21 @@ qform_code > 0 → クォータニオン（method 2）から作る
   - プラグインが渡す float のボリュームの既定の窓（`pluginViewportApi.ts`）も幅の下限が 1。
   - ヒストグラムの画面が 1368×912 の窓に収まらず、左右が切れる。
   - 非 DICOM 取り込みのファイル一覧で `.nii.gz` の印が「?」。
+
+### F4 の結果（2026-10-07）
+
+- 共通の部品: `ParametricMapFrameExpander.frameValues(ds, frame)`（1 フレームを RWVM 適用済みの float で。元の PM にも切り出した単一フレームにも使える）・`hasFloatPixels`・`unitOfFrame`。`extractFrame` もこれを使う形にした。
+- **npz**（`VolumeAssembler`）: PM は Float Pixel Data を実際の量のまま（NaN も NaN）入れ、向き・画素間隔は共有の Functional Groups、位置はフレームごとの PlanePosition から取る。`meta.json` に `float`・`valueUnit`。整数の画像と 1 本に混ぜない（`npz-mixed-geometry`）。前は `npz-pixels-unreadable` で断っていた（旧コードで再現）。
+- **派生シリーズ**（`DerivedSeriesService`）: 元が PM なら SOP Class をモダリティの画像の SOP（CT/MR/PT/NM、ほかは Secondary Capture）にする（16 bit の PixelData とトップレベルの幾何を書くので、PM のままだと不正）。RescaleType は RWVM の単位から。
+- **テクスチャ**（`RadiomicsMapEngine`）: float のフレームは FloatProcessor を直接組む。**NaN を含むシリーズは理由つきで断る**（RadiomicsJ 2.4.0 はソースが手元に無く、窓の中の NaN を離散化がどう扱うか確かめられない。黙って最小のビンに入る恐れがある）。前は「スライスをデコードできません」（旧コードで再現）。
+- **ImageJ 連携**（`ImageJBridgeService`）: ImageJ の DICOM の読み込みは PixelData しか知らないので、Float Pixel Data のフレームは dcm4che で読んで FloatProcessor にする（NaN はそのまま。ImageJ の統計は NaN を除く）。
+- **焼き込みの事前検査**（`AnonymizeService.geometryOf`・`burnBlocker`）: PM は「塗れない」と答える（理由: float の画素は塗る処理が読まない）。外部送信は事前検査で `burnin-mask-blocked`。前は「塗れる」と答え、塗った後の検査で `burnin-incomplete` になっていた（旧コードで再現）。
+- テスト: backend 774/0（スキップ 10 は既存の環境依存）。追加:
+  - `ComputeDatasetServiceTest`: NIfTI → PM → 保管庫 → 匿名化 → npz で、npz の幾何を通して患者座標 → NIfTI のボクセルへ戻した値が float32 のまま一致・NaN 1 個・単位・患者情報が無い。マスク付きの PM は事前検査で断る。numpy で読める（`GRAPHY_JUPYTER_PYTHON` を付けて実行・PM と CT の両方）。
+  - `ParametricMapTextureIntegrationTest`（Spring・保管庫あり）: float の PM からテクスチャのマップができる、NaN を含むと断る。
+  - `ImageJFloatFrameTest`・`DerivedSopClassTest`。テスト用の NIfTI は `nifti/FloatNiftiFixture`。
+- 実機 `niftiFloatCheck` **30/0**: テクスチャの API が NaN を含むシリーズを 400・理由つきで断る。ImageJ の橋渡しの API は寸法しか返さないので実機では見ていない（値は単体テスト）。
+- 残り: NaN を含む float のテクスチャ（NaN をマスクから外して計算できるかは RadiomicsJ の窓の扱いを確かめてから）。
 
 ### 検証（実装後）
 
