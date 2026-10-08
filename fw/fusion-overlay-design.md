@@ -99,3 +99,4 @@
 - Fusion 専用の左ドラッグ W/L モード（前景/背景切替）は将来拡張候補。
 - 別患者タブ間の Fusion（比較ビューア）は別コンポーネントで将来対応（`fw/viewer-2d-screen.md`）。
 - 二段表示は状態バーのみ。右の情報パネル（`ImageInfoPanel`）と ROI 統計は背景のみのまま。
+- 同じ座標系で分けて撮った複数シリーズの結合（和集合の格子・条件判定・重なりの平均）: [volume-regrid-design.md](volume-regrid-design.md)
