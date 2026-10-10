@@ -18,7 +18,7 @@ import { annotation as csAnnotation, segmentation as csSeg, Enums as csToolsEnum
 import { createResultSeg, resolveRoiStack } from "./roiBooleanOps";
 import { getRoiMaskMeta, setRoiMaskMeta } from "./roiMaskStore";
 import { addSphere3D, getSphere3D } from "./sphere3dStore";
-import { getModalityCalibration } from "./pixelCalibration";
+import { getModalityCalibration, resolveValueUnit } from "./pixelCalibration";
 import { accumulateMaskStats, type MaskSliceInput } from "./maskStatsCore";
 import { worldToImageOnPlane } from "./imageCoords";
 
@@ -282,6 +282,7 @@ export interface MaskVolumeStats {
   unit?: string;
   valuedVoxels?: number; // 値を読めた前景ボクセル数
   missingValueSlices?: number; // 値を読めない前景スライス数
+  meanTimesVolumeMl?: number; // 平均 × 体積(mL)。単位は `${unit}·mL`
 }
 
 /**
@@ -351,9 +352,9 @@ export function maskVolumeStats(segmentationId: string, segmentIndex?: number): 
     out.sd = core.sd;
     out.min = core.min;
     out.max = core.max;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const gs = (sourceIds[0] && (metaData.get("generalSeriesModule", sourceIds[0]) as any)) || null;
-    out.unit = gs?.modality === "CT" ? "HU" : "";
+    // 単位は 2D 統計と同じ resolveValueUnit に一元化（SUV→RescaleType→モダリティ既定→"raw"）。
+    out.unit = sourceIds[0] ? resolveValueUnit(sourceIds[0]) : "";
+    out.meanTimesVolumeMl = core.mean * out.volumeMl;
   }
   return out;
 }

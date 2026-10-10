@@ -40,6 +40,8 @@ import { saveRoiNow, scheduleRoiSave, subscribeRoiSave } from "../viewer/roiSave
 import { RoiMetaEditDialog } from "./RoiMetaEditDialog";
 import { RoiStatsDialog } from "./RoiStatsDialog";
 import { useI18n } from "../i18n/i18n";
+import { formatNumber, valueUnitLabel } from "../viewer/roiStatsText";
+import { meanTimesVolumeLabelKey } from "../viewer/maskStatsCore";
 
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
 
@@ -711,7 +713,7 @@ export function RoiManagerPanel({
           <input type="number" min={0} max={10} defaultValue={maskDefaults.outlineWidth} onChange={(e) => setMaskStyle(m.id, { outlineWidth: Number(e.target.value) })} title={t("roiMgr.lineWidth")} style={numInput} />
           <input type="checkbox" defaultChecked onChange={(e) => setMaskStyle(m.id, { renderFill: e.target.checked })} title={t("roiMgr.fill")} />
           {m.scope && <button onClick={() => toggleScopeZ(m.id)} style={scopeChip} title={t("roiMgr.scopeToggleMask")}>{m.scope}</button>}
-          <button onClick={() => runStats(m.id)} style={editBtn} title={t("roiMgr.stats")}>Σ³</button>
+          <button onClick={() => runStats(m.id)} data-testid="mask-stats-run" style={editBtn} title={t("roiMgr.stats")}>Σ³</button>
           <button onClick={() => runSplitToSlices(m.id)} disabled={busy} style={editBtn} title={t("roiMgr.toSlices")}>⬚</button>
           {/* SEG書き出しは毎晩の自動リストアで確実に消えるため、他の持ち出し系と異なりデモでも許可
              （backend DemoModeFilter・fw/web-demo-hosting.md 参照）。 */}
@@ -720,14 +722,20 @@ export function RoiManagerPanel({
           <button onClick={() => deleteMask(m.id)} style={delBtn} title={t("common.delete")}>🗑</button>
         </div>
         {stats[m.id] && (
-          <div style={statLine}>
+          <div style={statLine} data-testid="mask-stats">
             {t("roiMgr.statVol")}: {stats[m.id].volumeMl.toFixed(2)} mL ({stats[m.id].volumeMm3.toFixed(0)} mm³) ·
             {" "}{t("roiMgr.statVoxels")}: {stats[m.id].voxels.toLocaleString()} · {t("roiMgr.statSlices")}: {stats[m.id].slices}
             {stats[m.id].mean !== undefined && (
               <>
                 <br />
-                {t("roiMgr.statMean")}: {stats[m.id].mean!.toFixed(1)} ± {stats[m.id].sd!.toFixed(1)} ·
-                {" "}min {stats[m.id].min!.toFixed(0)} / max {stats[m.id].max!.toFixed(0)} {stats[m.id].unit}
+                {t("roiMgr.statMean")}: {formatNumber(stats[m.id].mean!)} ± {formatNumber(stats[m.id].sd!)} ·
+                {" "}min {formatNumber(stats[m.id].min!)} / max {formatNumber(stats[m.id].max!)} {valueUnitLabel(stats[m.id].unit ?? "", t)}
+                {meanTimesVolumeLabelKey(stats[m.id].unit) && stats[m.id].meanTimesVolumeMl !== undefined && (
+                  <>
+                    <br />
+                    {t("roiMgr.statTlg")}: {formatNumber(stats[m.id].meanTimesVolumeMl!)} {valueUnitLabel(stats[m.id].unit ?? "", t)}·mL
+                  </>
+                )}
               </>
             )}
           </div>

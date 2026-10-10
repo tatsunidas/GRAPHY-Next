@@ -928,6 +928,7 @@ export const ja: Record<string, string> = {
   "roiMgr.statVol": "体積",
   "roiMgr.statVoxels": "ボクセル",
   "roiMgr.statSlices": "スライス",
+  "roiMgr.statTlg": "TLG（平均×体積）",
   "roiMgr.statMean": "平均",
   "roiMgr.toSlices": "3D→2D 分割（非空スライスごとに単一スライス Mask 化）",
   "roiMgr.exportSeg": "DICOM SEG で保存（新シリーズとして DB へ）",

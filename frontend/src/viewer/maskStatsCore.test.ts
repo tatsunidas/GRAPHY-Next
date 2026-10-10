@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accumulateMaskStats } from "./maskStatsCore";
+import { accumulateMaskStats, meanTimesVolumeLabelKey } from "./maskStatsCore";
 
 const close = (a: number, b: number) => expect(Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(b))).toBe(true);
 
@@ -63,5 +63,15 @@ describe("accumulateMaskStats", () => {
     const r = accumulateMaskStats([{ labels: [-1, 0, 1], values: [9, 9, 7] }]);
     expect(r.voxels).toBe(1);
     expect(r.mean).toBe(7);
+  });
+});
+
+describe("meanTimesVolumeLabelKey", () => {
+  it("SUV 系は TLG", () => {
+    expect(meanTimesVolumeLabelKey("SUVbw")).toBe("roiMgr.statTlg");
+    expect(meanTimesVolumeLabelKey("SUVlbm")).toBe("roiMgr.statTlg");
+  });
+  it("SUV 以外は行を出さない", () => {
+    for (const u of ["HU", "Bq/ml", "raw", "", undefined]) expect(meanTimesVolumeLabelKey(u)).toBeNull();
   });
 });

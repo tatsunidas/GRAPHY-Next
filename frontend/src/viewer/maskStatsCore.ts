@@ -57,3 +57,8 @@ export function accumulateMaskStats(slices: MaskSliceInput[], segmentIndex?: num
   }
   return out;
 }
+
+/** 平均×体積の行の語。単位が `SUV` で始まるときだけ TLG。それ以外は null（行を出さない）。 */
+export function meanTimesVolumeLabelKey(unit: string | undefined): "roiMgr.statTlg" | null {
+  return unit && unit.startsWith("SUV") ? "roiMgr.statTlg" : null;
+}
