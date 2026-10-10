@@ -18,7 +18,8 @@ import { annotation as csAnnotation, segmentation as csSeg, Enums as csToolsEnum
 import { createResultSeg, resolveRoiStack } from "./roiBooleanOps";
 import { getRoiMaskMeta, setRoiMaskMeta } from "./roiMaskStore";
 import { addSphere3D, getSphere3D } from "./sphere3dStore";
-import { getModalityCalibration } from "./pixelCalibration";
+import { getModalityCalibration, resolveValueUnit } from "./pixelCalibration";
+import { accumulateMaskStats, type MaskSliceInput } from "./maskStatsCore";
 import { worldToImageOnPlane } from "./imageCoords";
 
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
@@ -279,6 +280,9 @@ export interface MaskVolumeStats {
   min?: number;
   max?: number;
   unit?: string;
+  valuedVoxels?: number; // 値を読めた前景ボクセル数
+  missingValueSlices?: number; // 値を読めない前景スライス数
+  meanTimesVolumeMl?: number; // 平均 × 体積(mL)。単位は `${unit}·mL`
 }
 
 /**
@@ -317,47 +321,40 @@ export function maskVolumeStats(segmentationId: string, segmentIndex?: number): 
   }
   const voxelMm3 = p0.rowSp * p0.colSp * sliceSp;
 
-  let voxels = 0, slices = 0;
-  // 画素値統計の集計。
-  let sum = 0, sumSq = 0, valCount = 0, vmin = Infinity, vmax = -Infinity;
+  // 各スライスの labels と校正済み値を集めて純関数で集計する（校正は pixelCalibration に一元化。
+  // scale/offset は preScale 済みなら {1,0}。cache に無いスライスは values=null）。
+  const inputs: MaskSliceInput[] = [];
   for (let z = 0; z < labelmapIds.length; z++) {
     const vm = img(labelmapIds[z])?.voxelManager;
     if (!vm) continue;
     const len = vm.getScalarDataLength();
-    // source 画素をモダリティ値（HU 等）で読む。cache に無ければ画素値統計はスキップ。
-    // 校正は pixelCalibration に一元化（preScale 二重適用を防ぐ。scale/offset は preScale 済みなら {1,0}）。
+    const labels = new Int32Array(len);
+    for (let i = 0; i < len; i++) labels[i] = vm.getAtIndex(i);
     const sImg = sourceIds[z] ? img(sourceIds[z]) : null;
     const px = sImg?.getPixelData?.() as ArrayLike<number> | undefined;
-    const { scale, offset } = getModalityCalibration(sImg, sourceIds[z] ?? "");
-    let sliceCount = 0;
-    for (let i = 0; i < len; i++) {
-      const idx = vm.getAtIndex(i);
-      if (idx <= 0) continue;
-      if (segmentIndex != null && idx !== segmentIndex) continue;
-      sliceCount++;
-      if (px && i < px.length) {
-        const v = px[i] * scale + offset;
-        sum += v;
-        sumSq += v * v;
-        valCount++;
-        if (v < vmin) vmin = v;
-        if (v > vmax) vmax = v;
-      }
+    let values: Float64Array | null = null;
+    if (px) {
+      const { scale, offset } = getModalityCalibration(sImg, sourceIds[z] ?? "");
+      values = new Float64Array(px.length);
+      for (let i = 0; i < px.length; i++) values[i] = px[i] * scale + offset;
     }
-    if (sliceCount > 0) slices++;
-    voxels += sliceCount;
+    inputs.push({ labels, values });
   }
+  const core = accumulateMaskStats(inputs, segmentIndex);
+  const { voxels, slices } = core;
   const volumeMm3 = voxels * voxelMm3;
-  const out: MaskVolumeStats = { voxels, volumeMm3, volumeMl: volumeMm3 / 1000, slices };
-  if (valCount > 0) {
-    const mean = sum / valCount;
-    out.mean = mean;
-    out.sd = Math.sqrt(Math.max(0, sumSq / valCount - mean * mean));
-    out.min = vmin;
-    out.max = vmax;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const gs = (sourceIds[0] && (metaData.get("generalSeriesModule", sourceIds[0]) as any)) || null;
-    out.unit = gs?.modality === "CT" ? "HU" : "";
+  const out: MaskVolumeStats = {
+    voxels, volumeMm3, volumeMl: volumeMm3 / 1000, slices,
+    valuedVoxels: core.valuedVoxels, missingValueSlices: core.missingValueSlices,
+  };
+  if (core.mean !== undefined) {
+    out.mean = core.mean;
+    out.sd = core.sd;
+    out.min = core.min;
+    out.max = core.max;
+    // 単位は 2D 統計と同じ resolveValueUnit に一元化（SUV→RescaleType→モダリティ既定→"raw"）。
+    out.unit = sourceIds[0] ? resolveValueUnit(sourceIds[0]) : "";
+    out.meanTimesVolumeMl = core.mean * out.volumeMl;
   }
   return out;
 }

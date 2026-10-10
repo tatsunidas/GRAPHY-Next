@@ -926,6 +926,8 @@ export const en: Record<string, string> = {
   "roiMgr.statVol": "Volume",
   "roiMgr.statVoxels": "Voxels",
   "roiMgr.statSlices": "Slices",
+  "roiMgr.statTlg": "TLG (mean × volume)",
+  "roiMgr.statMissingSlices": "{{n}} slice(s) with unreadable values (mean/SD/min/max not shown)",
   "roiMgr.statMean": "Mean",
   "roiMgr.toSlices": "3D→2D split (single-slice Mask per non-empty slice)",
   "roiMgr.exportSeg": "Save as DICOM SEG (new series to DB)",
