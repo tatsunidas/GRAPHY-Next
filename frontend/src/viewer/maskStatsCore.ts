@@ -48,7 +48,8 @@ export function accumulateMaskStats(slices: MaskSliceInput[], segmentIndex?: num
     voxels += count;
   }
   const out: MaskStatsCore = { voxels, slices: nSlices, valuedVoxels: valued, missingValueSlices: missing };
-  if (valued > 0) {
+  // 値を読めないスライスがあれば値の統計は出さない（体積と平均が別の母集団になるのを防ぐ）。
+  if (valued > 0 && missing === 0) {
     const mean = sum / valued;
     out.mean = mean;
     out.sd = Math.sqrt(Math.max(0, sumSq / valued - mean * mean));

@@ -66,6 +66,24 @@ describe("accumulateMaskStats", () => {
   });
 });
 
+describe("値を読めないスライス", () => {
+  it("1 枚欠け: 体積側は全数、値の統計は出さない", () => {
+    const r = accumulateMaskStats([S[0], { labels: S[2].labels, values: null }]);
+    expect(r.voxels).toBe(6);
+    expect(r.valuedVoxels).toBe(3);
+    expect(r.missingValueSlices).toBe(1);
+    expect(r.mean).toBeUndefined();
+    expect(r.sd).toBeUndefined();
+    expect(r.min).toBeUndefined();
+    expect(r.max).toBeUndefined();
+  });
+  it("前景の無いスライスの欠けは数えない", () => {
+    const r = accumulateMaskStats([S[0], { labels: [0, 0], values: null }]);
+    expect(r.missingValueSlices).toBe(0);
+    expect(r.mean).toBeDefined();
+  });
+});
+
 describe("meanTimesVolumeLabelKey", () => {
   it("SUV 系は TLG", () => {
     expect(meanTimesVolumeLabelKey("SUVbw")).toBe("roiMgr.statTlg");

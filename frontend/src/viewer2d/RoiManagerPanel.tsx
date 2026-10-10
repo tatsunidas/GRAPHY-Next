@@ -725,6 +725,12 @@ export function RoiManagerPanel({
           <div style={statLine} data-testid="mask-stats">
             {t("roiMgr.statVol")}: {stats[m.id].volumeMl.toFixed(2)} mL ({stats[m.id].volumeMm3.toFixed(0)} mm³) ·
             {" "}{t("roiMgr.statVoxels")}: {stats[m.id].voxels.toLocaleString()} · {t("roiMgr.statSlices")}: {stats[m.id].slices}
+            {(stats[m.id].missingValueSlices ?? 0) > 0 && (
+              <>
+                <br />
+                {t("roiMgr.statMissingSlices", { n: stats[m.id].missingValueSlices! })}
+              </>
+            )}
             {stats[m.id].mean !== undefined && (
               <>
                 <br />
