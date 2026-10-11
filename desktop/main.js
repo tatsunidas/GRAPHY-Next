@@ -31,6 +31,7 @@ const secretStore = require("./secretStore");
 const aiGateway = require("./aiGateway");
 const aiProviders = require("./aiProviders");
 const computeEndpoints = require("./computeEndpoints");
+const dbFolders = require("./dbFolders");
 const { ensureDefaultEndpoint } = require("./computeDefault");
 const computeBridge = require("./computeBridge");
 const computeConsent = require("./computeConsent");
@@ -88,6 +89,8 @@ let backendExit = null;
 // spawn 自体が失敗した場合（java が無い等）の記録。
 let backendSpawnError = null;
 let backendHealthy = false;
+// この起動で backend が使っている DB フォルダ（resolveStartupDbFolder で決める）。
+let activeDbFolder = null;
 
 /** 起動失敗を「コード＋技術的な詳細」で表現する。コードはスプラッシュ側で ja/en に訳す。 */
 class StartupError extends Error {
@@ -215,7 +218,7 @@ function startBackend() {
   );
   // データ(DB/DICOM/plugins)は CWD 相対で作られるため、CWD を固定する（パッケージ版は userData）。
   const dataDir = resolveDataDir();
-  console.log(`[backend] starting: ${jar} (java=${javaCmd}, profile=${PROFILE}, port=${PORT}, maxHeapMb=${maxHeapMb || "default"}, dataDir=${dataDir})`);
+  console.log(`[backend] starting: ${jar} (java=${javaCmd}, profile=${PROFILE}, port=${PORT}, maxHeapMb=${maxHeapMb || "default"}, dataDir=${dataDir}, dbFolder=${activeDbFolder})`);
   backendProc = spawn(
     javaCmd,
     [
@@ -227,6 +230,8 @@ function startBackend() {
       // 同梱の公式プラグイン（配布物に resources/bundled-plugins があるときだけ。backend が起動時に、
       // 公式鍵の署名を確かめてから入れる。利用者が消したものは入れ直さない）。fw/plugin-manager-design.md §10
       ...bundledPluginsArgs(),
+      // DB フォルダ（索引と DICOM 保管庫）と、DB をまたいで共通の環境設定ファイル
+      ...dbFolders.springArgs(activeDbFolder, path.join(dataDir, "settings.json")),
     ],
     { cwd: dataDir, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GRAPHY_MAIN_SECRET: MAIN_SECRET } },
   );
@@ -909,6 +914,62 @@ ipcMain.handle("graphy:relaunch", () => {
   app.quit();
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DB フォルダ（索引と DICOM 保管庫）の切り替え。切り替えは記録してから再起動する。
+// フォルダの選択と最終確認は main が描く（レンダラからは任意のパスへ黙って切り替えられない）。
+// ─────────────────────────────────────────────────────────────────────────────
+ipcMain.handle("graphy:db-folders-list", () => dbFolders.list(activeDbFolder));
+
+async function pickDbDirectory(e, title) {
+  const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
+  const result = await dialog.showOpenDialog(win, { title, properties: ["openDirectory", "createDirectory"] });
+  return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+}
+
+// 新規: 空のフォルダを選ばせて目印を書く（切り替えはしない。続けて switch を呼ぶ）。
+ipcMain.handle("graphy:db-folders-create", async (e, payload) => {
+  const p = await pickDbDirectory(e, String((payload && payload.title) || ""));
+  if (!p) return { ok: false, canceled: true };
+  return dbFolders.create(p);
+});
+
+// 開く: DB フォルダか空のフォルダを選ばせて検査する（切り替えはしない）。
+ipcMain.handle("graphy:db-folders-pick", async (e, payload) => {
+  const p = await pickDbDirectory(e, String((payload && payload.title) || ""));
+  if (!p) return { ok: false, canceled: true };
+  return dbFolders.validateOpen(p);
+});
+
+// 切り替え: 検査し直し、利用者に確かめてから記録して再起動する。
+ipcMain.handle("graphy:db-folders-switch", (e, payload) => {
+  const folder = String((payload && payload.folder) || "");
+  const isDefault = folder !== "" && path.isAbsolute(folder) && dbFolders.isDefault(folder);
+  const v = isDefault ? { ok: true, folder } : dbFolders.validateOpen(folder);
+  if (!v.ok) return v;
+  if (activeDbFolder && dbFolders.samePath(v.folder, activeDbFolder)) return { ok: false, reason: "already-active" };
+  const ja = String(app.getLocale() || "").startsWith("ja");
+  const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
+  const choice = dialog.showMessageBoxSync(win, {
+    type: "question",
+    buttons: ja ? ["切り替えて再起動", "取り消す"] : ["Switch and restart", "Cancel"],
+    defaultId: 0,
+    cancelId: 1,
+    title: ja ? "DB フォルダの切り替え" : "Switch database folder",
+    message: ja ? "この DB フォルダに切り替えて、アプリを再起動します。" : "GRAPHY-Next will restart with this database folder.",
+    detail: v.network
+      ? `${v.folder}\n\n${ja ? "⚠ ネットワーク上のフォルダは、ファイルのロックが不安定なことがあります。" : "⚠ File locking on network folders can be unreliable."}`
+      : v.folder,
+  });
+  if (choice !== 0) return { ok: false, canceled: true };
+  if (v.kind === "empty") dbFolders.writeMarker(v.folder);
+  dbFolders.select(v.folder);
+  app.relaunch();
+  app.quit();
+  return { ok: true };
+});
+
+ipcMain.handle("graphy:db-folders-forget", (_e, payload) => dbFolders.forget(String((payload && payload.folder) || "")));
+
 // ネイティブダイアログ（window.confirm/alert/prompt）を閉じた後、レンダラのキーボード
 // フォーカスが失われて入力できなくなる Electron の既知挙動への対処（特に Linux/GTK ダイアログ）。
 // クローズ直後の即時 focus はダイアログの終了処理に上書きされがちなので、
@@ -1348,6 +1409,66 @@ function reportStartupFailure(e) {
   }
 }
 
+/**
+ * この起動で使う DB フォルダを決める。既定の DB は従来どおり作る（無ければ）。
+ * 選んだ DB フォルダが無い（外付けディスクを外した等）ときは**作らずに**利用者に聞く。
+ * @returns {string|null} null は「終了」
+ */
+function resolveStartupDbFolder() {
+  const t = dbFolders.messages(app.getLocale());
+  for (;;) {
+    const folder = dbFolders.currentFolder();
+    if (dbFolders.isDefault(folder)) {
+      fs.mkdirSync(folder, { recursive: true });
+      dbFolders.writeMarker(folder);
+      return folder;
+    }
+    const v = dbFolders.validateOpen(folder);
+    if (v.ok) {
+      if (v.kind === "empty") dbFolders.writeMarker(folder);
+      return folder;
+    }
+    console.error(`[db-folder] cannot open ${folder}: ${v.reason}`);
+    const choice = dialog.showMessageBoxSync({
+      type: "warning",
+      buttons: [t.retry, t.useDefault, t.quit],
+      defaultId: 0,
+      cancelId: 2,
+      title: t.missingTitle,
+      message: t.missingMessage,
+      detail: `${folder}\n(${v.reason})`,
+    });
+    if (choice === 1) dbFolders.select(dbFolders.defaultFolder());
+    if (choice === 2) {
+      app.quit();
+      return null;
+    }
+  }
+}
+
+/** 既定以外の DB で起動できなかったとき、既定の DB で起動し直す道を出す（ロック・途中終了など）。 */
+function offerDefaultDbAfterFailure(e) {
+  if (EXTERNAL_BACKEND || !activeDbFolder || dbFolders.isDefault(activeDbFolder)) return;
+  if (!(e instanceof StartupError) || !FATAL_CODES.has(e.code)) return;
+  setTimeout(() => {
+    const t = dbFolders.messages(app.getLocale());
+    const choice = dialog.showMessageBoxSync({
+      type: "question",
+      buttons: [t.switchDefault, t.close],
+      defaultId: 0,
+      cancelId: 1,
+      title: t.failedTitle,
+      message: t.failedMessage,
+      detail: activeDbFolder,
+    });
+    if (choice === 0) {
+      dbFolders.select(dbFolders.defaultFolder());
+      app.relaunch();
+      app.quit();
+    }
+  }, 0);
+}
+
 app.whenReady().then(async () => {
   // 秘密情報の置き場は backend の CWD（H2・DICOM 保管庫と同じ場所）に揃える。
   secretStore.init(resolveDataDir());
@@ -1355,6 +1476,9 @@ app.whenReady().then(async () => {
   computeEndpoints.init(resolveDataDir());
   initColab();
   if (MAIN_SECRET) computeBridge.init({ secret: MAIN_SECRET, apiBase: API_BASE });
+  dbFolders.init(resolveDataDir());
+  activeDbFolder = resolveStartupDbFolder();
+  if (!activeDbFolder) return; // 利用者が「終了」を選んだ
   createSplash();
   try {
     startBackend();
@@ -1363,6 +1487,7 @@ app.whenReady().then(async () => {
     pushComputeEndpoints().catch((err) => console.error("[compute] push failed:", err));
   } catch (e) {
     reportStartupFailure(e);
+    offerDefaultDbAfterFailure(e);
   }
   createWindow(); // スプラッシュは createWindow の ready-to-show で閉じる
 

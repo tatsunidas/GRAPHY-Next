@@ -40,6 +40,12 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   checkForUpdate: () => ipcRenderer.invoke("graphy:check-update"),
   // アプリ全体を再起動する（DICOM 自局設定などの反映用）。
   relaunch: () => ipcRenderer.invoke("graphy:relaunch"),
+  // DB フォルダ（索引と DICOM 保管庫）。選択と最終確認のダイアログは main が出す。
+  dbFoldersList: () => ipcRenderer.invoke("graphy:db-folders-list"),
+  dbFoldersCreate: (title) => ipcRenderer.invoke("graphy:db-folders-create", { title }),
+  dbFoldersPick: (title) => ipcRenderer.invoke("graphy:db-folders-pick", { title }),
+  dbFoldersSwitch: (folder) => ipcRenderer.invoke("graphy:db-folders-switch", { folder }),
+  dbFoldersForget: (folder) => ipcRenderer.invoke("graphy:db-folders-forget", { folder }),
   // ネイティブダイアログ後にレンダラのキーボードフォーカスを復帰させる。
   refocus: () => ipcRenderer.send("graphy:refocus"),
   // API キー等の秘密情報。**取り出す口は無い**（平文を main の外へ出さないため）。

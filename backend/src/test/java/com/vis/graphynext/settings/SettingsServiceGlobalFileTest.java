@@ -4,6 +4,7 @@
  */
 package com.vis.graphynext.settings;
 
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -149,9 +150,8 @@ class SettingsServiceGlobalFileTest {
 
     @Test
     void ファイルは所有者だけが読める(@TempDir Path dir) throws IOException {
-        if (!FileSystems.getDefault().supportedFileAttributeViews().contains("posix")) {
-            return;
-        }
+        Assumptions.assumeTrue(FileSystems.getDefault().supportedFileAttributeViews().contains("posix"),
+                "POSIX 権限の無いファイルシステム（Windows）");
         Path file = dir.resolve("settings.json");
         new Db(Map.of()).service(file).putAll(Map.of("dicom.tls", "{\"keyStorePassword\":\"x\"}"));
         assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(file)));
