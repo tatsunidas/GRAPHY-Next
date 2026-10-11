@@ -261,9 +261,12 @@ async function main(): Promise<void> {
 
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().forEach((w: { maximize(): void }) => w.maximize())).catch(() => {});
     await dismissStartupDialogs(main);
+    // 日付の絞り込みは「All」ボタンで外す（利用者と同じ操作。入力欄を空にするだけだと、状態が反映される前に
+    // 検索が走って空振りすることがあった）。
     const dates = main.locator('input[type="date"]');
-    await dates.nth(0).fill("");
-    await dates.nth(1).fill("");
+    await main.getByRole("button", { name: "All", exact: true }).click();
+    await main.waitForTimeout(500);
+    console.log(`  [情報] 日付欄: ${JSON.stringify([await dates.nth(0).inputValue(), await dates.nth(1).inputValue()])}`);
     // 起動直後は backend との接続中（画面下部の「Connecting…」）で、最初の検索が空振りすることがあるので数回やり直す。
     const row = main.locator('[data-testid^="study-row-"]').first();
     // 画面が backend へ投げる検索の URL と応答（一覧が空のとき、画面の問い合わせ側かを見る）。
