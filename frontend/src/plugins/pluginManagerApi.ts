@@ -7,7 +7,7 @@
 // 実行レイヤの /api/plugins（pluginRegistry.ts・起動時キャッシュ）とは別系統で、常にライブ取得する。
 import { apiBase } from "../apiBase";
 import { httpGet, httpSend } from "../http";
-import { saveSettings } from "../settings/settingsApi";
+import { desktop } from "../desktopBridge";
 
 /** 取得元。 */
 export interface PluginSource {
@@ -47,8 +47,6 @@ export interface ManagerStatus {
   hasGithubToken: boolean;
 }
 
-/** オプトイン トグルの設定キー（backend: SettingsService.PLUGIN_INSTALL_ENABLED_KEY）。 */
-export const PLUGIN_INSTALL_ENABLED_KEY = "plugins.installEnabled";
 
 /**
  * 導入前の検査結果（同意画面に出す内容）。この時点では展開も保存もされていない。
@@ -115,11 +113,20 @@ export interface AvailableVersion {
 export const fetchManagerStatus = () => httpGet<ManagerStatus>("/api/plugin-manager/status");
 
 /**
- * 導入オプトインの切替。専用 API は設けず、汎用の設定ストアに保存する
- * （backend の SettingsInstallOptIn が同じキーを読む）。
+ * 導入オプトインの切替。Electron main が（有効にするときは）確認ダイアログを出してから、
+ * main だけが通れる口で保存する。🔴 汎用の設定の API（PUT /api/settings）はこのキーを 400 で拒む——
+ * レンダラ（同じ realm で動くプラグインも）から書けると、利用者の了承なしに導入を開けてしまうため。
+ *
+ * @returns 変わったか（利用者が確認ダイアログで取り消したら false）
  */
-export const setPluginInstallEnabled = (enabled: boolean) =>
-  saveSettings({ [PLUGIN_INSTALL_ENABLED_KEY]: String(enabled) });
+export async function setPluginInstallEnabled(enabled: boolean): Promise<boolean> {
+  const d = desktop();
+  if (!d?.pluginInstallOptIn) throw new Error("plugin-opt-in-desktop-only");
+  const r = await d.pluginInstallOptIn(enabled);
+  if (r.ok) return true;
+  if (r.canceled) return false;
+  throw new Error(r.reason ?? "plugin-opt-in-failed");
+}
 
 export const fetchInstalledPlugins = () => httpGet<InstalledPlugin[]>("/api/plugin-manager/installed");
 

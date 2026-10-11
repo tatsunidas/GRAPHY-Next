@@ -35,8 +35,17 @@ public class SettingsController {
         return service.getAll();
     }
 
+    /**
+     * 🔴 プラグイン導入の同意（{@link SettingsService#PLUGIN_INSTALL_ENABLED_KEY}）はここでは変えさせない。
+     * この口はレンダラ（同じ realm で動くプラグインも）から自由に呼べるので、同意を書けると
+     * 利用者の了承なしに導入を開けてしまう。変えるのは Electron main が確認ダイアログのあとに
+     * 呼ぶ {@code /api/internal/plugin-manager/opt-in} だけ。
+     */
     @PutMapping
     public Map<String, String> update(@RequestBody Map<String, String> updates) {
+        if (updates != null && updates.containsKey(SettingsService.PLUGIN_INSTALL_ENABLED_KEY)) {
+            throw new IllegalArgumentException("プラグイン導入の許可は、環境設定のプラグイン画面から変えてください（デスクトップ版のみ）");
+        }
         return service.putAll(updates);
     }
 }

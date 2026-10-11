@@ -99,4 +99,12 @@ async function decideEgress(id, approve, contentHash) {
   });
 }
 
-module.exports = { createSecret, init, enabled, pushEndpoints, testEndpoint, getEgress, decideEgress };
+/**
+ * プラグイン導入の同意を変える（main が確認ダイアログを出したあとにだけ呼ぶ）。
+ * 一般の設定の API はこのキーを受け付けない（レンダラ・プラグインから書けないように）。
+ */
+async function setPluginOptIn(enabled) {
+  return call("PUT", "/api/internal/plugin-manager/opt-in", { enabled: enabled === true });
+}
+
+module.exports = { createSecret, init, enabled, pushEndpoints, testEndpoint, getEgress, decideEgress, setPluginOptIn };

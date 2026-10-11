@@ -242,6 +242,11 @@ export interface GraphyDesktop {
   } | null>;
   /** アプリ全体を再起動する（DICOM 自局設定などの反映用、デスクトップのみ）。 */
   relaunch?: () => Promise<void>;
+  /**
+   * プラグイン導入の同意を変える。有効にするときは main が確認ダイアログを出す。
+   * 汎用の設定の API ではこのキーを書けない（main だけが通れる口で保存する）。
+   */
+  pluginInstallOptIn?: (enabled: boolean) => Promise<{ ok: boolean; canceled?: boolean; reason?: string; installEnabled?: boolean }>;
   /** DB フォルダの一覧（既定・最近使ったもの）と、今使っている DB。 */
   dbFoldersList?: () => Promise<DbFolderList>;
   /** 空のフォルダを選んで新しい DB フォルダにする（切り替えはしない）。 */
