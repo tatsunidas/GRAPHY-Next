@@ -26,6 +26,7 @@ import { VBarChart, HBarChart, PieChart, formatBytes } from "./charts";
 import { useI18n } from "../i18n/i18n";
 import { desktop } from "../desktopBridge";
 import { DbTransferDialog } from "./DbTransferDialog";
+import { deleteRelatedNote } from "./dbAdminApi";
 
 type Tab = "patients" | "stats";
 
@@ -42,11 +43,16 @@ export function DbAdminDialog({
   const { t } = useI18n();
   const [tab, setTab] = useState<Tab>("patients");
   const [confirmDelete, setConfirmDelete] = useState(true);
+  // ファイルも消す設定のときは、ROI などの付随データも消える（確認文に添える）
+  const [deleteFiles, setDeleteFiles] = useState(true);
 
   useEffect(() => {
     if (!open) return;
     fetchSettings()
-      .then((s) => setConfirmDelete(s["data.confirmBeforeDelete"] !== "false"))
+      .then((s) => {
+        setConfirmDelete(s["data.confirmBeforeDelete"] !== "false");
+        setDeleteFiles(s["data.deleteFilesOnDisk"] !== "false");
+      })
       .catch(() => setConfirmDelete(true));
   }, [open]);
 
@@ -78,7 +84,7 @@ export function DbAdminDialog({
         </div>
 
         <div style={{ flex: 1, overflow: "auto", padding: "14px 18px" }}>
-          {tab === "patients" ? <PatientsTab confirmDelete={confirmDelete} notify={notify} /> : <StatsTab />}
+          {tab === "patients" ? <PatientsTab confirmDelete={confirmDelete} deleteFiles={deleteFiles} notify={notify} /> : <StatsTab />}
         </div>
       </div>
     </div>
@@ -87,12 +93,15 @@ export function DbAdminDialog({
 
 function PatientsTab({
   confirmDelete,
+  deleteFiles,
   notify,
 }: {
   confirmDelete: boolean;
+  deleteFiles: boolean;
   notify: (detail: Omit<DbChangedDetail, "ts">) => void;
 }) {
   const { t } = useI18n();
+  const withRelatedNote = (msg: string) => deleteRelatedNote(msg, deleteFiles, t);
   const [q, setQ] = useState("");
   const [patients, setPatients] = useState<Patient[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -173,7 +182,7 @@ function PatientsTab({
   };
 
   const onDeletePatient = async (p: Patient) => {
-    if (confirmDelete && !window.confirm(t("dbadmin.delete.confirm", { name: p.patientName || p.patientId }))) return;
+    if (confirmDelete && !window.confirm(withRelatedNote(t("dbadmin.delete.confirm", { name: p.patientName || p.patientId })))) return;
     try {
       await deletePatient(p.patientId);
       notify({ reason: "patient-delete", patientId: p.patientId });
@@ -184,7 +193,7 @@ function PatientsTab({
   };
 
   const onDeleteStudy = async (p: Patient, s: Study) => {
-    if (confirmDelete && !window.confirm(t("dbadmin.delete.studyConfirm", { desc: studyLabel(s) }))) return;
+    if (confirmDelete && !window.confirm(withRelatedNote(t("dbadmin.delete.studyConfirm", { desc: studyLabel(s) })))) return;
     try {
       await deleteStudy(s.studyInstanceUid);
       notify({ reason: "study-delete", patientId: p.patientId, studyUids: [s.studyInstanceUid] });
@@ -216,7 +225,7 @@ function PatientsTab({
   };
 
   const onDeleteSeries = async (p: Patient, s: Study, se: Series) => {
-    if (confirmDelete && !window.confirm(t("dbadmin.delete.seriesConfirm", { desc: seriesLabel(se) }))) return;
+    if (confirmDelete && !window.confirm(withRelatedNote(t("dbadmin.delete.seriesConfirm", { desc: seriesLabel(se) })))) return;
     try {
       await deleteSeries(s.studyInstanceUid, se.seriesInstanceUid);
       notify({ reason: "series-delete", patientId: p.patientId, studyUids: [s.studyInstanceUid] });
@@ -246,7 +255,7 @@ function PatientsTab({
   };
 
   const onDeleteInstance = async (p: Patient, s: Study, se: Series, inst: Instance) => {
-    if (confirmDelete && !window.confirm(t("dbadmin.delete.instanceConfirm", { desc: instanceLabel(inst) }))) return;
+    if (confirmDelete && !window.confirm(withRelatedNote(t("dbadmin.delete.instanceConfirm", { desc: instanceLabel(inst) })))) return;
     try {
       await deleteInstance(s.studyInstanceUid, se.seriesInstanceUid, inst.sopInstanceUid);
       notify({ reason: "instance-delete", patientId: p.patientId, studyUids: [s.studyInstanceUid] });

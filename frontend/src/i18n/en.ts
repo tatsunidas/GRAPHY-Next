@@ -2268,6 +2268,7 @@ export const en: Record<string, string> = {
   "dbadmin.search.placeholder": "Search by Patient ID / Name",
   "dbadmin.searchPrompt": "Search by Patient ID or Name (the full list is not shown initially).",
   "dbadmin.patients.empty": "No matching patients.",
+  "dbadmin.delete.relatedNote": "ROIs, registrations, GLAM analyses, XA calibrations and other records attached to these images will also be deleted. Reports are kept.",
   "dbadmin.delete.confirm": 'Delete patient "{{name}}"? This cannot be undone.',
   "dbadmin.delete.studyConfirm": 'Delete study "{{desc}}"? This cannot be undone.',
   "dbadmin.delete.seriesConfirm": 'Delete series "{{desc}}"? This cannot be undone.',

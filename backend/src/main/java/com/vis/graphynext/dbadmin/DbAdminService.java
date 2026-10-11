@@ -78,34 +78,43 @@ public class DbAdminService {
                 repo.volumeBytesByModality().stream().map(kv -> new StatsDto.Bucket(orUnknown(kv.getK()), kv.getV())).toList());
     }
 
+    /** 削除の結果。related はファイルも消す設定のときに片付けた付随データ（そうでなければ null）。 */
+    public record DeleteResult(int deletedInstances, PatientRecordMover.Cleanup related) {
+    }
+
     /** 患者を削除（その患者の全インスタンス）。設定で実ファイルも削除。 */
     @Transactional
-    public int deletePatient(String patientId) {
+    public DeleteResult deletePatient(String patientId) {
         return deleteAll(repo.findByPatientId(patientId));
     }
 
     /** スタディを削除（その全インスタンス）。設定で実ファイルも削除。 */
     @Transactional
-    public int deleteStudy(String studyUid) {
+    public DeleteResult deleteStudy(String studyUid) {
         return deleteAll(repo.findByStudyInstanceUid(studyUid));
     }
 
     /** シリーズを削除（その全インスタンス）。設定で実ファイルも削除。 */
     @Transactional
-    public int deleteSeries(String studyUid, String seriesUid) {
+    public DeleteResult deleteSeries(String studyUid, String seriesUid) {
         return deleteAll(repo.findBySeries(studyUid, seriesUid));
     }
 
     /** インスタンス（画像）を 1 件削除。設定で実ファイルも削除。study+series で絞ってから SOP 一致を抽出。 */
     @Transactional
-    public int deleteInstance(String studyUid, String seriesUid, String sopUid) {
+    public DeleteResult deleteInstance(String studyUid, String seriesUid, String sopUid) {
         List<DicomInstance> rows = repo.findBySeries(studyUid, seriesUid).stream()
                 .filter(r -> sopUid != null && sopUid.equals(r.getSopInstanceUid()))
                 .toList();
         return deleteAll(rows);
     }
 
-    private int deleteAll(List<DicomInstance> rows) {
+    /**
+     * 行とファイルを消す。ファイルも消す設定のときは、消えた画像に結び付いていた付随データ（ROI など）も片付ける。
+     * ファイルを残す設定のときは付随データも残す（残したファイルを取り込み直せば元どおりになる）。
+     * 🔴 レポートには触れない（画像とは別に管理し、消すのはレポート機能からだけ）。
+     */
+    private DeleteResult deleteAll(List<DicomInstance> rows) {
         boolean deleteFiles = boolSetting("data.deleteFilesOnDisk", true);
         for (DicomInstance r : rows) {
             Path file = deleteFiles ? layout.resolveForWrite(r) : null;
@@ -119,7 +128,11 @@ public class DbAdminService {
             }
         }
         repo.deleteAll(rows);
-        return rows.size();
+        PatientRecordMover.Cleanup related = deleteFiles ? records.afterDelete(rows) : null;
+        if (related != null) {
+            log.info("削除に伴い付随データを片付けた: {}", related);
+        }
+        return new DeleteResult(rows.size(), related);
     }
 
     /**
