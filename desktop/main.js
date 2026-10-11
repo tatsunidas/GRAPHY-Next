@@ -33,6 +33,7 @@ const aiProviders = require("./aiProviders");
 const computeEndpoints = require("./computeEndpoints");
 const dbFolders = require("./dbFolders");
 const tlsPasswords = require("./tlsPasswords");
+const { waitPortFree } = require("./portWait");
 const { ensureDefaultEndpoint } = require("./computeDefault");
 const computeBridge = require("./computeBridge");
 const computeConsent = require("./computeConsent");
@@ -1545,6 +1546,11 @@ app.whenReady().then(async () => {
   if (!activeDbFolder) return; // 利用者が「終了」を選んだ
   createSplash();
   try {
+    // 再起動のあとは、前のアプリの backend がポートを離すのを待つ（後始末と並んで起動するため）
+    if (process.env.GRAPHY_RELAUNCHED === "1" && !EXTERNAL_BACKEND) {
+      delete process.env.GRAPHY_RELAUNCHED; // backend やほかの子プロセスへ引き継がない
+      if (!(await waitPortFree(Number(PORT)))) console.warn(`[backend] port ${PORT} is still in use after waiting`);
+    }
     startBackend();
     await waitForBackend();
     // 外部の計算機の接続先を backend へ（失敗してもアプリの起動は止めない）
@@ -1594,12 +1600,32 @@ process.on("exit", stopBackend);
  * 外で起動し、スクリプトは「アプリが終わった」と見て Vite を止めるので、画面が真っ白になる（2026-10-11）。
  * スクリプトが渡す GRAPHY_DEV_RELAUNCH_EXIT の終了コードで終え、Electron の起動し直しはスクリプトに任せる。
  */
+// 標準入出力（0〜2）以外の引き継いだファイル記述子をすべて閉じてから、引数のコマンドに置き換わる。
+const CLOSE_INHERITED_FDS_AND_EXEC =
+  'for fd in $(ls /proc/$$/fd); do [ "$fd" -gt 2 ] && eval "exec $fd>&-" 2>/dev/null; done; exec "$@"';
 const DEV_RELAUNCH_EXIT = app.isPackaged ? 0 : Number(process.env.GRAPHY_DEV_RELAUNCH_EXIT || 0);
 let devRelaunchRequested = false;
 function relaunchApp() {
   if (DEV_RELAUNCH_EXIT > 0) {
     devRelaunchRequested = true;
+  } else if (process.env.APPIMAGE) {
+    // AppImage の実行ファイル（process.execPath）は一時的なマウント先にあり、今のアプリが終わると
+    // マウントの提供元も終わる。app.relaunch はそこから起動し直す（指定先を渡しても、起動し直す係が
+    // 壊れていくマウント先から動くため効かなかった。2026-10-11 実測）。AppImage のファイル自体を
+    // 別のプロセスとして起動し、新しいマウント先で動かす。
+    // 引き継いだ管（AppImage の実行部分とつながったもの）は閉じてから起動する。閉じないと、前の
+    // 実行部分が「アプリがまだ動いている」と見てマウントを片付けず、再起動のたびに残る（実測）。
+    // 🔴 bash で行う。dash（多くの /bin/sh）は 2 桁の fd を `exec 23>&-` で閉じられず、シェルごと失敗する（実測）。
+    //    bash が無ければ閉じずに起動する（前のマウントが残るだけで、再起動はできる）。
+    const opts = { detached: true, stdio: "ignore", env: { ...process.env, GRAPHY_RELAUNCHED: "1" } };
+    const args = process.argv.slice(1);
+    if (fs.existsSync("/bin/bash")) {
+      spawn("/bin/bash", ["-c", CLOSE_INHERITED_FDS_AND_EXEC, "bash", process.env.APPIMAGE, ...args], opts).unref();
+    } else {
+      spawn(process.env.APPIMAGE, args, opts).unref();
+    }
   } else {
+    process.env.GRAPHY_RELAUNCHED = "1"; // app.relaunch は今の環境変数を引き継ぐ
     app.relaunch();
   }
   app.quit();
