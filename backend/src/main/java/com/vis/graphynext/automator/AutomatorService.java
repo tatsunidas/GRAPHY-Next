@@ -6,6 +6,7 @@ package com.vis.graphynext.automator;
 
 import com.vis.graphynext.dicom.store.DicomInstance;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
+import com.vis.graphynext.dicom.store.StorageLayout;
 import com.vis.graphynext.report.ReportRepository;
 import com.vis.graphynext.plugin.store.PluginDocumentRepository;
 import com.vis.graphynext.roi.RoiDocumentRepository;
@@ -15,7 +16,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -44,13 +44,16 @@ public class AutomatorService {
     private final RoiDocumentRepository roiRepo;
     private final PluginDocumentRepository pluginRepo;
     private final SettingsService settings;
+    private final StorageLayout layout;
 
     public AutomatorService(
             DicomInstanceRepository dicomRepo,
             ReportRepository reportRepo,
             RoiDocumentRepository roiRepo,
             PluginDocumentRepository pluginRepo,
-            SettingsService settings) {
+            SettingsService settings,
+            StorageLayout layout) {
+        this.layout = layout;
         this.dicomRepo = dicomRepo;
         this.reportRepo = reportRepo;
         this.roiRepo = roiRepo;
@@ -81,9 +84,10 @@ public class AutomatorService {
     public ResetResult reset() {
         List<DicomInstance> instances = dicomRepo.findAll();
         for (DicomInstance inst : instances) {
-            if (inst.getUri() != null) {
+            Path file = layout.resolveForWrite(inst);
+            if (file != null) {
                 try {
-                    Files.deleteIfExists(Path.of(URI.create(inst.getUri())));
+                    Files.deleteIfExists(file);
                 } catch (Exception e) {
                     log.warn("[automator] ファイル削除に失敗: {} ({})", inst.getUri(), e.toString());
                 }

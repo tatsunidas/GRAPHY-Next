@@ -6,6 +6,7 @@ package com.vis.graphynext.export;
 
 import com.vis.graphynext.dicom.store.DicomInstance;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
+import com.vis.graphynext.dicom.store.StorageLayout;
 import com.vis.graphynext.dicom.video.VideoRenderService;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
@@ -76,10 +77,12 @@ public class ExportService {
     private final DicomInstanceRepository repo;
     /** 動画の MP4 化（P5: portable viewer は backend 非同伴なので媒体に MP4 実体を同梱する）。 */
     private final VideoRenderService videoRender;
+    private final StorageLayout layout;
 
-    public ExportService(DicomInstanceRepository repo, VideoRenderService videoRender) {
+    public ExportService(DicomInstanceRepository repo, VideoRenderService videoRender, StorageLayout layout) {
         this.repo = repo;
         this.videoRender = videoRender;
+        this.layout = layout;
     }
 
     /**
@@ -275,12 +278,7 @@ public class ExportService {
     }
 
     private Path resolveFile(DicomInstance inst) {
-        String uri = inst.getUri();
-        if (uri == null || !uri.startsWith("file:")) {
-            return null;
-        }
-        Path p = Path.of(java.net.URI.create(uri));
-        return Files.exists(p) ? p : null;
+        return layout.resolveForRead(inst);
     }
 
     /**

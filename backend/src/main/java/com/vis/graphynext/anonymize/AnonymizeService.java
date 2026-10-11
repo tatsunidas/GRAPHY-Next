@@ -7,6 +7,7 @@ package com.vis.graphynext.anonymize;
 import com.vis.graphynext.dicom.ParametricMapFrameExpander;
 import com.vis.graphynext.dicom.store.DicomInstance;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
+import com.vis.graphynext.dicom.store.StorageLayout;
 import com.vis.graphynext.dicom.web.WebDicomDataService;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
@@ -48,14 +49,17 @@ public class AnonymizeService {
     private final AnonymizeMaskStore maskStore;
     private final ObjectProvider<WebDicomDataService> webProvider;
     private final PixelCodec codec;
+    private final StorageLayout layout;
     private final DicomAnonymizerEngine engine = new DicomAnonymizerEngine();
 
     public AnonymizeService(DicomInstanceRepository repo, AnonymizeMaskStore maskStore,
-                            ObjectProvider<WebDicomDataService> webProvider, PixelCodec codec) {
+                            ObjectProvider<WebDicomDataService> webProvider, PixelCodec codec,
+                            StorageLayout layout) {
         this.repo = repo;
         this.maskStore = maskStore;
         this.webProvider = webProvider;
         this.codec = codec;
+        this.layout = layout;
     }
 
     /**
@@ -166,7 +170,7 @@ public class AnonymizeService {
                 indexed++;
                 if (fileOf(inst) == null) {
                     if (problems.size() < 20) {
-                        problems.add("ファイル無し: " + inst.getSopInstanceUid() + " (" + inst.getUri() + ")");
+                        problems.add("ファイル無し: " + inst.getSopInstanceUid() + " (" + layout.resolveForWrite(inst) + ")");
                     }
                 } else {
                     resolvable++;
@@ -627,17 +631,8 @@ public class AnonymizeService {
         dos.flush();
     }
 
-    private static Path fileOf(DicomInstance inst) {
-        String uri = inst.getUri();
-        if (uri == null || !uri.startsWith("file:")) {
-            return null;
-        }
-        try {
-            Path p = Path.of(java.net.URI.create(uri));
-            return Files.exists(p) ? p : null;
-        } catch (Exception e) {
-            return null;
-        }
+    private Path fileOf(DicomInstance inst) {
+        return layout.resolveForRead(inst);
     }
 
     private static String blank(String s, String fb) {

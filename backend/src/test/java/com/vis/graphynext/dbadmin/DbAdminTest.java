@@ -50,6 +50,9 @@ class DbAdminTest {
     }
 
     @Autowired
+    private com.vis.graphynext.dicom.store.StorageLayout layout;
+
+    @Autowired
     DbAdminService dbAdmin;
     @Autowired
     DicomStorageService storage;
@@ -113,7 +116,7 @@ class DbAdminTest {
         assertEquals("19800101", rows.get(0).getPatientBirthDate());
 
         // 実ファイルのタグも書き換わっている
-        Path f = Path.of(URI.create(rows.get(0).getUri()));
+        Path f = layout.resolveForRead(rows.get(0));
         try (DicomInputStream in = new DicomInputStream(f.toFile())) {
             in.readFileMetaInformation();
             Attributes ds = in.readDataset();
@@ -126,7 +129,7 @@ class DbAdminTest {
     void deletePatient_removesRowsAndFiles() throws Exception {
         ingest("DEL1", "Del", "DEL1.s", "se", "DEL1.sop", "CT");
         List<DicomInstance> rows = repo.findByPatientId("DEL1");
-        Path f = Path.of(URI.create(rows.get(0).getUri()));
+        Path f = layout.resolveForRead(rows.get(0));
         assertTrue(Files.exists(f));
 
         int n = dbAdmin.deletePatient("DEL1");
@@ -139,7 +142,7 @@ class DbAdminTest {
     void deleteSeries_removesOnlyThatSeries() throws Exception {
         ingest("DS1", "P", "DS1.study", "DS1.se1", "DS1.sop1", "CT");
         ingest("DS1", "P", "DS1.study", "DS1.se2", "DS1.sop2", "CT");
-        Path f1 = Path.of(URI.create(repo.findBySeries("DS1.study", "DS1.se1").get(0).getUri()));
+        Path f1 = layout.resolveForRead(repo.findBySeries("DS1.study", "DS1.se1").get(0));
 
         int n = dbAdmin.deleteSeries("DS1.study", "DS1.se1");
 
@@ -168,7 +171,7 @@ class DbAdminTest {
         assertEquals(1, sp1.size());
         assertEquals("SP1.studyB", sp1.get(0).getStudyInstanceUid());
         // ファイルのタグも SP2 へ
-        Path f = Path.of(URI.create(sp2.get(0).getUri()));
+        Path f = layout.resolveForRead(sp2.get(0));
         try (DicomInputStream in = new DicomInputStream(f.toFile())) {
             in.readFileMetaInformation();
             Attributes ds = in.readDataset();
@@ -199,7 +202,7 @@ class DbAdminTest {
         assertEquals(List.of(1, 2, 3), nums);
         for (DicomInstance m : merged) {
             assertEquals(99, m.getSeriesNumber());
-            Path f = Path.of(URI.create(m.getUri()));
+            Path f = layout.resolveForRead(m);
             assertTrue(Files.exists(f), "新パスにファイルがある");
             assertTrue(f.toString().contains(r.seriesInstanceUid()), "パスが統合先シリーズ配下");
             try (DicomInputStream in = new DicomInputStream(f.toFile())) {
@@ -235,7 +238,7 @@ class DbAdminTest {
         assertEquals(List.of(1, 2), nums, "InstanceNumber は保持される");
         for (DicomInstance m : newSer) {
             assertEquals("Part A", m.getSeriesDescription());
-            Path f = Path.of(URI.create(m.getUri()));
+            Path f = layout.resolveForRead(m);
             assertTrue(Files.exists(f) && f.toString().contains(r.newSeriesUids().get(0)));
         }
     }
