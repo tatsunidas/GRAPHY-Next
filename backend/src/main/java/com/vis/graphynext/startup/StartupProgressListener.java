@@ -38,6 +38,7 @@ public class StartupProgressListener implements ApplicationListener<ApplicationE
                 return;
             }
             StartupProgress.report("init", "running", "起動を開始しています");
+            StartupProgress.report("init", "ok", "起動を開始しました");
             // 必要なサブフォルダの確認・作成
             StartupProgress.report("folders", "running", "必要なフォルダを確認しています");
             ensureDir(env.getProperty("graphy.dicom.storage-dir", "./data/dicom"));
@@ -50,10 +51,10 @@ public class StartupProgressListener implements ApplicationListener<ApplicationE
             return;
         }
         if (event instanceof ApplicationPreparedEvent) {
-            StartupProgress.report("database", "running", "データベースを確認・マイグレーションしています");
+            // 部品の準備。データベースの段階は DatabaseStartupProgress が entityManagerFactory の前後で切り替える
+            StartupProgress.report("context", "running", "アプリの部品を準備しています");
         } else if (event instanceof ApplicationStartedEvent started) {
-            // ここまでで JPA(Hibernate)のスキーマ更新は完了している
-            StartupProgress.report("database", "ok", "データベースの準備が完了しました");
+            StartupProgress.report("services", "ok", "機能の準備が完了しました");
             reportPlugins(started.getApplicationContext());
         } else if (event instanceof ApplicationReadyEvent) {
             StartupProgress.report("ready", "ok", "起動が完了しました");

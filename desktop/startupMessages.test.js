@@ -58,3 +58,13 @@ test("未知の step はそのまま返る（訳を持たない backend 側の�
   assert.strictEqual(messages.stepLabel("ja", "brand-new-step"), null);
   assert.strictEqual(messages.stepNoun("en", "brand-new-step"), "brand-new-step");
 });
+
+test("起動の段階（部品の準備・データベース・機能の準備）は ja / en の両方に名前と文がある", () => {
+  for (const step of ["context", "database", "services"]) {
+    for (const locale of ["ja", "en"]) {
+      assert.ok(messages.stepLabel(locale, step) && messages.stepLabel(locale, step) !== step, `${locale}/${step} label`);
+      assert.ok(messages.stepNoun(locale, step) && messages.stepNoun(locale, step) !== step || step === "database", `${locale}/${step} noun`);
+    }
+  }
+  assert.doesNotMatch(messages.stepLabel("ja", "database"), /マイグレーション/, "DB の段階は表の確認だけ（全体の準備ではない）");
+});
