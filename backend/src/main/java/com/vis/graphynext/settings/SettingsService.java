@@ -155,6 +155,35 @@ public class SettingsService {
     }
 
     /**
+     * キーを完全一致で消す（前方一致の {@link #deleteByPrefix} だと {@code ...1.2.3} が {@code ...1.2.34} も消す）。
+     *
+     * @return 消した件数
+     */
+    @Transactional
+    public synchronized int deleteKeys(java.util.Collection<String> keys) {
+        int n = 0;
+        Map<String, String> global = globalFile == null ? null : readGlobal();
+        for (String k : keys) {
+            if (k == null) {
+                continue;
+            }
+            if (inDb(k)) {
+                if (repo.existsById(k)) {
+                    repo.deleteById(k);
+                    n++;
+                }
+            } else if (global.containsKey(k)) {
+                global.remove(k);
+                n++;
+            }
+        }
+        if (global != null) {
+            writeGlobal(global);
+        }
+        return n;
+    }
+
+    /**
      * 共通ファイルを読む。無ければ今の DB の値（校正以外）から作る。
      * 読めない（壊れた）ファイルは消さずに {@code .corrupt-<日時>} へ退けてから作り直す。
      */

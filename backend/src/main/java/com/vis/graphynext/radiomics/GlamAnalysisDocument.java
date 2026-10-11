@@ -124,4 +124,9 @@ public class GlamAnalysisDocument {
     public Instant getSavedAt() {
         return savedAt;
     }
+
+    /** 別の DB から運んだとき、元の保存日時を保つ（コンストラクタは「今」を入れる）。 */
+    public void setSavedAt(Instant savedAt) {
+        this.savedAt = savedAt;
+    }
 }
