@@ -194,6 +194,26 @@ export type PickFilesResult =
   | { ok: true; paths: string[] }
   | { ok: false; canceled?: boolean; error?: string };
 
+/** DB フォルダ（索引と DICOM 保管庫をまとめたフォルダ）。 */
+export interface DbFolderRow {
+  path: string;
+  isDefault: boolean;
+  exists: boolean;
+  active: boolean;
+}
+
+export interface DbFolderList {
+  /** この起動で使っている DB。 */
+  active: string | null;
+  /** 次の起動で使う DB。 */
+  next: string;
+  folders: DbFolderRow[];
+}
+
+export type DbFolderPickResult =
+  | { ok: true; folder?: string; kind?: "db" | "empty"; network?: boolean }
+  | { ok: false; canceled?: boolean; reason?: string };
+
 export interface GraphyDesktop {
   pickImportPaths: () => Promise<string[]>;
   /** 単一の出力先フォルダを選ぶ（SeriesExtractor のコピー先など）。キャンセル時 null。 */
@@ -222,6 +242,16 @@ export interface GraphyDesktop {
   } | null>;
   /** アプリ全体を再起動する（DICOM 自局設定などの反映用、デスクトップのみ）。 */
   relaunch?: () => Promise<void>;
+  /** DB フォルダの一覧（既定・最近使ったもの）と、今使っている DB。 */
+  dbFoldersList?: () => Promise<DbFolderList>;
+  /** 空のフォルダを選んで新しい DB フォルダにする（切り替えはしない）。 */
+  dbFoldersCreate?: (title: string) => Promise<DbFolderPickResult>;
+  /** 既存の DB フォルダ（または空のフォルダ）を選んで検査する（切り替えはしない）。 */
+  dbFoldersPick?: (title: string) => Promise<DbFolderPickResult>;
+  /** main が確認ダイアログを出し、了承されたら記録してアプリを再起動する。 */
+  dbFoldersSwitch?: (folder: string) => Promise<DbFolderPickResult>;
+  /** 最近使った一覧から外す（フォルダの中身には触れない）。 */
+  dbFoldersForget?: (folder: string) => Promise<{ ok: boolean; reason?: string }>;
   /** ネイティブダイアログ（confirm/alert/prompt）後にレンダラのキーボードフォーカスを復帰させる。 */
   refocus?: () => void;
   /** 秘密情報を OS のキーチェーンで暗号化して保存する（デスクトップのみ）。 */

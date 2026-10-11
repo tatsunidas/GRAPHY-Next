@@ -59,6 +59,9 @@ desktop/secrets.enc.json
 desktop/ai-providers.json
 # 外部の計算機（Jupyter Server）の接続先。理由は ai-providers.json と同じ（トークンは入らない）。
 desktop/compute-endpoints.json
+# 共通の環境設定・DB フォルダの記録（開発時は CWD=desktop に作られる）
+desktop/settings.json
+desktop/db-folders.json
 desktop/compute-audit.jsonl
 # Colab の OAuth クライアント（デスクトップ アプリ型）。Google の扱いでは機密ではないが公開リポジトリには入れない。
 # 配布物にはビルド時に入れる（fw/remote-compute-design.md §15）。
