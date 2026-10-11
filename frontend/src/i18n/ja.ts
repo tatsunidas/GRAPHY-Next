@@ -2271,6 +2271,7 @@ export const ja: Record<string, string> = {
   "dbadmin.edit.patientAll": "患者編集",
   "dbadmin.edit.patientStudy": "患者編集(このSTUDY)",
   "dbadmin.edit.birthDate": "生年月日 (YYYYMMDD)",
+  "dbadmin.edit.recordsKept": "患者の情報を変更しました。ただし、次のものは元の患者に残しました（上書きしないため）: プラグインの記録 {{plugins}} 件、移し先にすでにあった ROI {{overlaps}} 件。",
   "dbadmin.edit.newId": "患者ID変更 (任意)",
   "dbadmin.merge.button": "シリーズ統合",
   "dbadmin.merge.selected": "{{count}} シリーズ選択中",

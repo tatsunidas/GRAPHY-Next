@@ -213,6 +213,7 @@ public class DbTransferService {
             if (f != null) {
                 try {
                     Files.deleteIfExists(f);
+                    layout.pruneEmptyDirs(f);
                 } catch (IOException e) {
                     log.warn("[db-transfer] 移し元のファイルを消せません: {} ({})", f, e.toString());
                 }

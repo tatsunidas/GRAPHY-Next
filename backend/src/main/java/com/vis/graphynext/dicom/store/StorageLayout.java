@@ -102,6 +102,29 @@ public class StorageLayout {
         return conventional(inst);
     }
 
+    /**
+     * ファイルを消したあとに呼ぶ。親（シリーズ）とその親（検査）が空なら消す。
+     * ルートそのものと、ルートの外には触れない。中身が残っていれば何もしない。
+     */
+    public void pruneEmptyDirs(Path deletedFile) {
+        Path dir = deletedFile.toAbsolutePath().normalize().getParent();
+        for (int i = 0; i < 2 && dir != null && dir.startsWith(root) && !dir.equals(root); i++) {
+            try (java.util.stream.Stream<Path> s = Files.list(dir)) {
+                if (s.findAny().isPresent()) {
+                    return;
+                }
+            } catch (java.io.IOException e) {
+                return;
+            }
+            try {
+                Files.deleteIfExists(dir);
+            } catch (java.io.IOException e) {
+                return; // 別の処理が同時に書き込んだなど。空フォルダが残るだけなので続けない
+            }
+            dir = dir.getParent();
+        }
+    }
+
     private static boolean isLegacy(String uri) {
         return uri.startsWith("file:");
     }

@@ -7,6 +7,7 @@ import {
   fetchPatients,
   fetchStats,
   savePatient,
+  recordsNotice,
   deletePatient,
   deleteStudy,
   deleteSeries,
@@ -742,7 +743,9 @@ function PatientEditForm({
     setSaving(true);
     setError(null);
     try {
-      await savePatient(patient.patientId, { patientName: name, patientBirthDate: birth, patientSex: sex, newPatientId: newId });
+      const r = await savePatient(patient.patientId, { patientName: name, patientBirthDate: birth, patientSex: sex, newPatientId: newId });
+      const notice = recordsNotice(r, t);
+      if (notice) window.alert(notice);
       onSaved({ reason: "patient-edit", patientId: newId || patient.patientId });
     } catch (e) {
       setError(String(e));
@@ -792,7 +795,9 @@ function StudyPatientEditForm({
     setSaving(true);
     setError(null);
     try {
-      await updateStudyPatient(study.studyInstanceUid, { patientName: name, patientBirthDate: birth, patientSex: sex, newPatientId: newId });
+      const r = await updateStudyPatient(study.studyInstanceUid, { patientName: name, patientBirthDate: birth, patientSex: sex, newPatientId: newId });
+      const notice = recordsNotice(r, t);
+      if (notice) window.alert(notice);
       onSaved({ reason: "study-patient-edit", patientId: newId || patient.patientId, studyUids: [study.studyInstanceUid] });
     } catch (e) {
       setError(String(e));
