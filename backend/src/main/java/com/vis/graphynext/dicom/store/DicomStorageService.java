@@ -88,9 +88,10 @@ public class DicomStorageService {
             Files.move(dest, backup);
         }
         try {
-            Files.move(tempFile, dest, StandardCopyOption.REPLACE_EXISTING);
+            moveIntoPlace(tempFile, dest);
         } catch (IOException e) {
             restore(backup, dest);
+            layout.pruneEmptyDirs(dest); // 新しく作った検査・シリーズのフォルダを空のまま残さない
             throw e;
         }
 
@@ -125,6 +126,7 @@ public class DicomStorageService {
                 // ベストエフォート
             }
             restore(backup, dest);
+            layout.pruneEmptyDirs(dest); // 元のファイルを戻したならフォルダは空でないので何もしない
             log.warn("INDEX failed, deleted new file{}: {}", backup != null ? " and restored the previous one" : "", dest, ex);
             throw ex;
         }
@@ -133,6 +135,22 @@ public class DicomStorageService {
         }
         log.debug("indexed sop={} study={} -> {}", iuid, studyUid, dest); // 検証済み: 大量取込で冗長なため DEBUG
         return saved;
+    }
+
+    /**
+     * 一時ファイルを正規の場所へ移す。移し先のフォルダが消えていたら（並行する取り込みや削除が、空になった
+     * フォルダを片付けた直後など）作り直して 1 回だけやり直す。移す元が無いときは失敗のまま。
+     */
+    static void moveIntoPlace(Path source, Path dest) throws IOException {
+        try {
+            Files.move(source, dest, StandardCopyOption.REPLACE_EXISTING);
+        } catch (java.nio.file.NoSuchFileException e) {
+            if (!Files.exists(source)) {
+                throw e;
+            }
+            Files.createDirectories(dest.getParent());
+            Files.move(source, dest, StandardCopyOption.REPLACE_EXISTING);
+        }
     }
 
     private static void restore(Path backup, Path dest) {
