@@ -227,9 +227,6 @@ async function main(): Promise<void> {
   delete env.GRAPHY_DEV; // 製品版として起動する（dev 経路に入らない）
   delete env.GRAPHY_BACKEND_EXTERNAL;
 
-  // 本体が動くか（共有ライブラリ不足などは Playwright の「Process failed to launch!」だけでは原因が見えない）。
-  const ver = spawnSync(inst.exe, [...inst.args, "--version"], { env, encoding: "utf8", timeout: 60_000 });
-  console.log(`[preflight] --version → status=${ver.status} stdout=${(ver.stdout ?? "").trim()} stderr=${(ver.stderr ?? "").trim().slice(0, 600)}`);
   console.log(`[launch] ${inst.exe}`);
   const app = await electron.launch({ executablePath: inst.exe, args: inst.args, env, timeout: 120_000 });
   const proc = app.process();
@@ -258,15 +255,20 @@ async function main(): Promise<void> {
     const imp2 = await importNonDicomPaths(PORT, [mpeg4], { patientId: "SMOKE2", patientName: "SMOKE^MPEG4", seriesDescription: "mpeg4 avi" });
     check(imp2.imported === 1, "[4] 非 H.264 動画（MPEG-4 AVI）を、同梱 ffmpeg のトランスコードで取り込める", imp2);
 
-    await main.reload();
-    await waitForMainScreenReady(main, 60_000);
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().forEach((w: { maximize(): void }) => w.maximize())).catch(() => {});
     await dismissStartupDialogs(main);
     const dates = main.locator('input[type="date"]');
     await dates.nth(0).fill("");
     await dates.nth(1).fill("");
-    await main.getByTestId("search-submit-button").click();
+    // 起動直後は backend との接続中（画面下部の「Connecting…」）で、最初の検索が空振りすることがあるので数回やり直す。
     const row = main.locator('[data-testid^="study-row-"]').first();
-    await row.waitFor({ state: "visible", timeout: 30_000 });
+    let found = false;
+    for (let i = 0; i < 4 && !found; i++) {
+      await main.getByTestId("search-submit-button").click();
+      found = await row.waitFor({ state: "visible", timeout: 10_000 }).then(() => true, () => false);
+    }
+    check(found, "[5] 取り込んだスタディが一覧に出る");
+    if (!found) return;
     await row.click();
     const seriesRow = main.locator('[data-testid^="series-row-"]').first();
     await seriesRow.waitFor({ state: "visible", timeout: 30_000 });
@@ -314,6 +316,16 @@ async function main(): Promise<void> {
 
     // ── 3. 画面の異常 ───────────────────────────────────────
     check(pageProblems.length === 0, "[3] ★★画面に CSP 違反・未捕捉エラーが出ていない", pageProblems.slice(0, 5));
+  } catch (e) {
+    // 失敗したときの画面を残す（CI の Artifact で目視できる）。
+    let n = 0;
+    for (const w of app.windows()) {
+      n++;
+      await w.screenshot({ path: path.join(OUT, `failure-window-${n}.png`) }).catch(() => {});
+      const txt = await w.evaluate("document.body ? document.body.innerText.slice(0, 2000) : ''").catch(() => "");
+      fs.writeFileSync(path.join(OUT, `failure-window-${n}.txt`), `${w.url()}\n${txt}`);
+    }
+    throw e;
   } finally {
     fs.writeFileSync(path.join(OUT, "page-problems.txt"), pageProblems.join("\n"));
     await Promise.race([app.close().catch(() => {}), new Promise((r) => setTimeout(r, 20_000))]);
