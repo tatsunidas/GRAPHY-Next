@@ -916,8 +916,7 @@ ipcMain.handle("graphy:plugin-download-into-directory", async (_e, payload) => {
 // アプリ全体を再起動する（DICOM 自局設定など、SCP リスナー起動時にしか反映されない設定の変更後に使う）。
 // before-quit で stopBackend が走るため、次回起動時に新しい設定で backend が立ち上がる。
 ipcMain.handle("graphy:relaunch", () => {
-  app.relaunch();
-  app.quit();
+  relaunchApp();
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -998,8 +997,7 @@ ipcMain.handle("graphy:db-folders-switch", (e, payload) => {
   if (choice !== 0) return { ok: false, canceled: true };
   if (v.kind === "empty") dbFolders.writeMarker(v.folder);
   dbFolders.select(v.folder);
-  app.relaunch();
-  app.quit();
+  relaunchApp();
   return { ok: true };
 });
 
@@ -1530,8 +1528,7 @@ function offerDefaultDbAfterFailure(e) {
     });
     if (choice === 0) {
       dbFolders.select(dbFolders.defaultFolder());
-      app.relaunch();
-      app.quit();
+      relaunchApp();
     }
   }, 0);
 }
@@ -1589,3 +1586,28 @@ app.on("before-quit", (event) => {
 });
 app.on("before-quit", stopBackend);
 process.on("exit", stopBackend);
+
+/**
+ * アプリを再起動する（設定の反映・DB フォルダの切り替え）。
+ *
+ * <p>開発用の起動（scripts/dev-desktop.sh）では `app.relaunch()` を使わない。新しい Electron がスクリプトの
+ * 外で起動し、スクリプトは「アプリが終わった」と見て Vite を止めるので、画面が真っ白になる（2026-10-11）。
+ * スクリプトが渡す GRAPHY_DEV_RELAUNCH_EXIT の終了コードで終え、Electron の起動し直しはスクリプトに任せる。
+ */
+const DEV_RELAUNCH_EXIT = app.isPackaged ? 0 : Number(process.env.GRAPHY_DEV_RELAUNCH_EXIT || 0);
+let devRelaunchRequested = false;
+function relaunchApp() {
+  if (DEV_RELAUNCH_EXIT > 0) {
+    devRelaunchRequested = true;
+  } else {
+    app.relaunch();
+  }
+  app.quit();
+}
+// before-quit の後始末（Colab の解放・backend の停止）が済んだあとに、終了コードを付けて終える
+app.on("will-quit", (event) => {
+  if (!devRelaunchRequested) return;
+  event.preventDefault();
+  stopBackend();
+  app.exit(DEV_RELAUNCH_EXIT);
+});
