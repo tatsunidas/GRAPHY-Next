@@ -5,7 +5,7 @@
 package com.vis.graphynext.dbtransfer;
 
 import jakarta.servlet.ServletRequest;
-import jakarta.servlet.ServletRequestWrapper;
+import com.vis.graphynext.web.RawRequest;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
@@ -69,10 +69,7 @@ public class DbTransferController {
      * {@code X-Forwarded-For} で接続元を書き換えるので、ラッパーをはがした生の接続元で判定する。
      */
     static void requireLoopback(HttpServletRequest http) {
-        ServletRequest raw = http;
-        while (raw instanceof ServletRequestWrapper w) {
-            raw = w.getRequest();
-        }
+        ServletRequest raw = RawRequest.unwrap(http);
         boolean loopback;
         try {
             loopback = InetAddress.getByName(raw.getRemoteAddr()).isLoopbackAddress();

@@ -38,9 +38,10 @@ class CorsConfigTest {
     }
 
     @Test
-    void allowsOpaqueNullOrigin() throws Exception {
+    void rejectsOpaqueNullOrigin() throws Exception {
+        // どのサイトでもサンドボックスの iframe から Origin: null を送れる。許すと悪意あるページから API を呼べる
         mockMvc.perform(get("/api/status").header("Origin", "null"))
-                .andExpect(status().isOk());
+                .andExpect(status().isForbidden());
     }
 
     @Test

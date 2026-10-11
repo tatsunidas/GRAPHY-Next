@@ -918,6 +918,35 @@ ipcMain.handle("graphy:relaunch", () => {
 // DB フォルダ（索引と DICOM 保管庫）の切り替え。切り替えは記録してから再起動する。
 // フォルダの選択と最終確認は main が描く（レンダラからは任意のパスへ黙って切り替えられない）。
 // ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// プラグイン導入の同意。有効にする前に main が確認ダイアログを出す（レンダラ・プラグインからは迂回できない）。
+// 一般の設定の API（PUT /api/settings）はこのキーを受け付けないので、変える経路はここだけ。
+// ─────────────────────────────────────────────────────────────────────────────
+ipcMain.handle("graphy:plugin-install-opt-in", async (e, payload) => {
+  const enable = !!(payload && payload.enabled === true);
+  if (!computeBridge.enabled()) return { ok: false, reason: "main-channel-disabled" };
+  if (enable) {
+    const ja = String(app.getLocale() || "").startsWith("ja");
+    const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
+    const choice = dialog.showMessageBoxSync(win, {
+      type: "warning",
+      buttons: ja ? ["許可する", "取り消す"] : ["Allow", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+      title: ja ? "プラグインの導入を許可" : "Allow plugin installation",
+      message: ja
+        ? "プラグインはこの PC で動くプログラムです。導入を許可しますか？"
+        : "Plugins are programs that run on this computer. Allow installing them?",
+      detail: ja
+        ? "許可すると、環境設定のプラグイン画面から取得・導入できるようになります。信頼できる提供元のものだけを導入してください。"
+        : "Once allowed, plugins can be fetched and installed from the Plugins page in Preferences. Install only plugins from sources you trust.",
+    });
+    if (choice !== 0) return { ok: false, canceled: true };
+  }
+  const r = await computeBridge.setPluginOptIn(enable);
+  return r.ok ? { ok: true, installEnabled: enable } : { ok: false, reason: r.error || `backend-${r.status}` };
+});
+
 ipcMain.handle("graphy:db-folders-list", () => dbFolders.list(activeDbFolder));
 
 async function pickDbDirectory(e, title) {
