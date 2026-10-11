@@ -263,12 +263,14 @@ async function main(): Promise<void> {
     // 起動直後は backend との接続中（画面下部の「Connecting…」）で、最初の検索が空振りすることがあるので数回やり直す。
     const row = main.locator('[data-testid^="study-row-"]').first();
     let found = false;
-    for (let i = 0; i < 4 && !found; i++) {
+    let attempts = 0;
+    for (; attempts < 6 && !found; attempts++) {
       await main.getByTestId("search-submit-button").click();
       found = await row.waitFor({ state: "visible", timeout: 10_000 }).then(() => true, () => false);
     }
-    check(found, "[5] 取り込んだスタディが一覧に出る");
-    if (!found) return;
+    console.log(`  [情報] 検索の試行回数: ${attempts}`);
+    if (!found) throw new Error("取り込んだスタディが一覧に出ない（検索を 6 回やり直した）");
+    check(true, "[5] 取り込んだスタディが一覧に出る", { attempts });
     await row.click();
     const seriesRow = main.locator('[data-testid^="series-row-"]').first();
     await seriesRow.waitFor({ state: "visible", timeout: 30_000 });
