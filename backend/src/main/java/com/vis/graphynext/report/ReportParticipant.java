@@ -73,6 +73,11 @@ public class ReportParticipant {
         this.report = report;
     }
 
+    /** 別の DB から運んだとき、元の日時を保つ（コンストラクタは「今」を入れる）。 */
+    public void setParticipatedAt(Instant participatedAt) {
+        this.participatedAt = participatedAt;
+    }
+
     public String getName() {
         return name;
     }

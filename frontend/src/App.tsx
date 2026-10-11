@@ -11,6 +11,7 @@ import { DbAdminDialog } from "./dbadmin/DbAdminDialog";
 import { KeyboardHelp } from "./shortcuts/KeyboardHelp";
 import { useGlobalShortcuts } from "./shortcuts/useGlobalShortcuts";
 import { MainScreen } from "./mainscreen/MainScreen";
+import { InboxNotice } from "./dbadmin/InboxNotice";
 import { Viewer2DScreen } from "./viewer2d/Viewer2DScreen";
 import { MprScreen } from "./mpr/MprScreen";
 import { Viewer3DScreen } from "./viewer3d/Viewer3DScreen";
@@ -198,6 +199,7 @@ export function App() {
       ) : screen === "qr" ? (
         <QRScreen status={status} />
       ) : (
+        <>
         <MainScreen
           status={status}
           error={error}
@@ -211,6 +213,9 @@ export function App() {
             window.location.hash = mobileHash("studies");
           }}
         />
+        {/* 他の DB から届いた検査を、この DB を開いたときに取り込んだ結果（standalone のみ・一度だけ） */}
+        {status?.mode === "standalone" && <InboxNotice onImported={() => setDbVersion((v) => v + 1)} />}
+        </>
       )}
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       {/* 外部 AI 送信の同意ダイアログ。2D ビューアは別ウィンドウ＝別ルートなので両方に要る。 */}

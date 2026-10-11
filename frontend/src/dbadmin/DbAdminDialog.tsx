@@ -23,6 +23,8 @@ import { fetchInstances, fetchSeries, fetchStudies, type Instance, type Series, 
 import { emitDbChanged, type DbChangedDetail } from "../dbEvents";
 import { VBarChart, HBarChart, PieChart, formatBytes } from "./charts";
 import { useI18n } from "../i18n/i18n";
+import { desktop } from "../desktopBridge";
+import { DbTransferDialog } from "./DbTransferDialog";
 
 type Tab = "patients" | "stats";
 
@@ -109,6 +111,9 @@ function PatientsTab({
   const [seriesSel, setSeriesSel] = useState<Map<string, Set<string>>>(new Map());
   const [merging, setMerging] = useState<{ study: Study; series: Series[] } | null>(null);
   const [splitting, setSplitting] = useState<{ study: Study; series: Series } | null>(null);
+  // 別の DB フォルダへコピー・移動（デスクトップのみ。DB フォルダの一覧は Electron main が持つ）
+  const [transferring, setTransferring] = useState<{ study: Study; patient: Patient } | null>(null);
+  const canTransfer = !!desktop()?.dbFoldersList;
 
   const reload = (query: string) => {
     setError(null);
@@ -337,6 +342,11 @@ function PatientsTab({
                             >
                               {t("dbadmin.edit.patientStudy")}
                             </button>
+                            {canTransfer && (
+                              <button onClick={() => setTransferring({ study: s, patient: p })} style={smallBtn}>
+                                {t("dbTransfer.button")}
+                              </button>
+                            )}
                             <button onClick={() => void onDeleteStudy(p, s)} style={{ ...smallBtn, color: "#b00020" }}>
                               {t("common.delete")}
                             </button>
@@ -464,6 +474,21 @@ function PatientsTab({
           onSaved={(detail) => {
             setEditingStudy(null);
             notify(detail);
+            reload(q);
+          }}
+        />
+      )}
+      {transferring && (
+        <DbTransferDialog
+          studyUid={transferring.study.studyInstanceUid}
+          studyLabel={studyLabel(transferring.study)}
+          onClose={() => setTransferring(null)}
+          onMoved={() => {
+            const { study: s, patient: p } = transferring;
+            notify({ reason: "study-move", patientId: p.patientId, studyUids: [s.studyInstanceUid] });
+            setStudiesByPatient((m) =>
+              new Map(m).set(p.patientId, (m.get(p.patientId) ?? []).filter((x) => x.studyInstanceUid !== s.studyInstanceUid)),
+            );
             reload(q);
           }}
         />
