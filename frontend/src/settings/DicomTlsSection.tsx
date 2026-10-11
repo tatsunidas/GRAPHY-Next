@@ -4,7 +4,9 @@
  */
 import { useEffect, useState } from "react";
 import { fetchTlsConfig, saveTlsConfig, type TlsConfig } from "../api";
+import { desktop } from "../desktopBridge";
 import { useI18n } from "../i18n/i18n";
+import { NO_CHANGE, passwordStateKey, tlsSavePlan, type PendingPasswords, type TlsPasswordWhich } from "./tlsPasswordPlan";
 
 /**
  * グローバル DIMSE TLS（相互 TLS）設定セクション。
@@ -12,6 +14,9 @@ import { useI18n } from "../i18n/i18n";
  * <p>通信先の TLS チェックを ON にしたノードへ接続する際に共通で使う自局の鍵材料
  * （キーストア＝鍵+証明書 / トラストストア＝信頼する相手の証明書）を編集する。SCU 送信（Echo/Send/QR）は
  * 保存後すぐ反映され、SCP 受信リスナーの TLS 有効化はアプリ再起動後に反映される。
+ *
+ * <p>🔴 パスワードは backend から返らない（設定済みかどうかだけ）。入力したときだけ変える。
+ * デスクトップは OS のキーチェーン（main）へ、web は REST で送る（{@link tlsSavePlan}）。
  */
 export function DicomTlsSection() {
   const { t } = useI18n();
@@ -19,14 +24,28 @@ export function DicomTlsSection() {
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
+  const [pending, setPending] = useState<PendingPasswords>(NO_CHANGE);
+  const [warning, setWarning] = useState<string | null>(null);
+  const d = desktop();
+  const viaKeychain = !!d?.tlsPasswordSet;
 
   useEffect(() => {
     let cancelled = false;
     fetchTlsConfig()
       .then((c) => { if (!cancelled) setCfg(c); })
       .catch(() => { if (!cancelled) setCfg(null); });
+    d?.tlsPasswordStatus?.()
+      .then((st) => { if (!cancelled && !st.encryptionAvailable) setWarning(t("settings.tls.pw.noKeychain")); })
+      .catch(() => {});
     return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const setPw = (which: TlsPasswordWhich, value: string | null) => {
+    setPending((p) => ({ ...p, [which]: value }));
+    setDirty(true);
+    setSavedMsg(null);
+  };
 
   const set = <K extends keyof TlsConfig>(key: K, val: TlsConfig[K]) => {
     setCfg((c) => (c ? { ...c, [key]: val } : c));
@@ -39,10 +58,19 @@ export function DicomTlsSection() {
     setSaving(true);
     setSavedMsg(null);
     try {
-      const saved = await saveTlsConfig(cfg);
-      setCfg(saved);
+      const plan = tlsSavePlan(cfg, pending, viaKeychain);
+      let plaintext = false;
+      for (const [which, value] of plan.keychain) {
+        const r = await d!.tlsPasswordSet!(which, value);
+        if (!r.ok) throw new Error(r.reason ?? "tls-password-failed");
+        if (r.persisted === "plaintext") plaintext = true;
+      }
+      await saveTlsConfig(plan.config);
+      setCfg(await fetchTlsConfig()); // パスワードを入れ直したあとの usable を取り直す
+      setPending(NO_CHANGE);
       setDirty(false);
       setSavedMsg(t("settings.tls.saved"));
+      if (plaintext) setWarning(t("settings.tls.pw.plaintextWarning"));
     } catch (e) {
       setSavedMsg(t("common.fetchError", { error: String(e) }));
     } finally {
@@ -84,8 +112,14 @@ export function DicomTlsSection() {
         </div>
 
         <label style={lbl}>{t("settings.tls.keyStorePassword")}</label>
-        <input style={{ ...input, width: 240 }} type="password" value={cfg.keyStorePassword} autoComplete="off"
-          onChange={(e) => set("keyStorePassword", e.target.value)} />
+        <div style={inline}>
+          <input style={{ ...input, width: 240 }} type="password" value={pending.keyStore ?? ""} autoComplete="off"
+            placeholder={t("settings.tls.pw.placeholder")} onChange={(e) => setPw("keyStore", e.target.value)} />
+          <span style={{ fontSize: 12, color: "#6b7785" }}>{t(passwordStateKey(cfg.keyStorePasswordSet, pending.keyStore))}</span>
+          {cfg.keyStorePasswordSet && pending.keyStore !== "" && (
+            <button style={{ fontSize: 12 }} onClick={() => setPw("keyStore", "")}>{t("settings.tls.pw.clear")}</button>
+          )}
+        </div>
 
         <label style={lbl}>{t("settings.tls.trustStore")}</label>
         <div style={inline}>
@@ -98,8 +132,14 @@ export function DicomTlsSection() {
         </div>
 
         <label style={lbl}>{t("settings.tls.trustStorePassword")}</label>
-        <input style={{ ...input, width: 240 }} type="password" value={cfg.trustStorePassword} autoComplete="off"
-          onChange={(e) => set("trustStorePassword", e.target.value)} />
+        <div style={inline}>
+          <input style={{ ...input, width: 240 }} type="password" value={pending.trustStore ?? ""} autoComplete="off"
+            placeholder={t("settings.tls.pw.placeholder")} onChange={(e) => setPw("trustStore", e.target.value)} />
+          <span style={{ fontSize: 12, color: "#6b7785" }}>{t(passwordStateKey(cfg.trustStorePasswordSet, pending.trustStore))}</span>
+          {cfg.trustStorePasswordSet && pending.trustStore !== "" && (
+            <button style={{ fontSize: 12 }} onClick={() => setPw("trustStore", "")}>{t("settings.tls.pw.clear")}</button>
+          )}
+        </div>
 
         <label style={lbl}>{t("settings.tls.protocols")}</label>
         <input style={{ ...input, flex: 1 }} value={listToText(cfg.protocols)} spellCheck={false}
@@ -130,6 +170,7 @@ export function DicomTlsSection() {
           {saving ? t("common.saving") : t("common.save")}
         </button>
         {savedMsg && <span style={{ fontSize: 12, color: "#2e5d27" }}>{savedMsg}</span>}
+        {warning && <span style={{ fontSize: 12, color: "#8a5a00" }}>⚠ {warning}</span>}
         <span style={{ fontSize: 11.5, color: "#9aa4ad" }}>{t("settings.tls.restartNote")}</span>
       </div>
     </div>

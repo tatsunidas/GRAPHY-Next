@@ -1343,15 +1343,18 @@ export interface TlsConfig {
   enabled: boolean;
   port: number;
   keyStore: string;
-  keyStorePassword: string;
+  /** 🔴 backend は返さない（常に null）。保存時: null は変えない・空文字は消す（web だけ。デスクトップはキーチェーン）。 */
+  keyStorePassword: string | null;
   keyStoreType: string;
   trustStore: string;
-  trustStorePassword: string;
+  trustStorePassword: string | null;
   trustStoreType: string;
   protocols: string[];
   cipherSuites: string[];
   needClientAuth: boolean;
   usable: boolean;
+  keyStorePasswordSet: boolean;
+  trustStorePasswordSet: boolean;
 }
 
 /** グローバル TLS 設定を取得する（保存が無ければ application.yml の既定）。 */

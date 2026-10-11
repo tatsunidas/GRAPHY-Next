@@ -155,6 +155,20 @@ public class SettingsService {
     }
 
     /**
+     * DB（{@code app_setting}）の行だけを書き換える。共通ファイルを使っているときも、旧来の行が
+     * DB に残っている（旧版に戻せるように消していない）ので、そこに残る秘密を消すのに使う。
+     */
+    @Transactional
+    public synchronized void rewriteDbRow(String key, java.util.function.UnaryOperator<String> fn) {
+        repo.findById(key).ifPresent(row -> {
+            if (row.getValue() != null && !row.getValue().isBlank()) {
+                row.setValue(fn.apply(row.getValue()));
+                repo.save(row);
+            }
+        });
+    }
+
+    /**
      * キーを完全一致で消す（前方一致の {@link #deleteByPrefix} だと {@code ...1.2.3} が {@code ...1.2.34} も消す）。
      *
      * @return 消した件数

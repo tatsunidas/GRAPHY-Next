@@ -242,6 +242,10 @@ export interface GraphyDesktop {
   } | null>;
   /** アプリ全体を再起動する（DICOM 自局設定などの反映用、デスクトップのみ）。 */
   relaunch?: () => Promise<void>;
+  /** DIMSE TLS のパスワードを OS のキーチェーンに預ける（空文字は消す）。キーチェーンが無い環境は設定に平文で保存する。 */
+  tlsPasswordSet?: (which: "keyStore" | "trustStore", value: string) => Promise<{ ok: boolean; persisted?: "keychain" | "plaintext"; reason?: string }>;
+  /** TLS のパスワードが設定済みか・キーチェーンが使えるか（値は返らない）。 */
+  tlsPasswordStatus?: () => Promise<{ encryptionAvailable: boolean; keyStore: boolean; trustStore: boolean }>;
   /**
    * プラグイン導入の同意を変える。有効にするときは main が確認ダイアログを出す。
    * 汎用の設定の API ではこのキーを書けない（main だけが通れる口で保存する）。

@@ -107,4 +107,4 @@ async function setPluginOptIn(enabled) {
   return call("PUT", "/api/internal/plugin-manager/opt-in", { enabled: enabled === true });
 }
 
-module.exports = { createSecret, init, enabled, pushEndpoints, testEndpoint, getEgress, decideEgress, setPluginOptIn };
+module.exports = { createSecret, init, enabled, call, pushEndpoints, testEndpoint, getEgress, decideEgress, setPluginOptIn };

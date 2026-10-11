@@ -32,6 +32,7 @@ const aiGateway = require("./aiGateway");
 const aiProviders = require("./aiProviders");
 const computeEndpoints = require("./computeEndpoints");
 const dbFolders = require("./dbFolders");
+const tlsPasswords = require("./tlsPasswords");
 const { ensureDefaultEndpoint } = require("./computeDefault");
 const computeBridge = require("./computeBridge");
 const computeConsent = require("./computeConsent");
@@ -233,7 +234,12 @@ function startBackend() {
       // DB フォルダ（索引と DICOM 保管庫）と、DB をまたいで共通の環境設定ファイル
       ...dbFolders.springArgs(activeDbFolder, path.join(dataDir, "settings.json")),
     ],
-    { cwd: dataDir, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GRAPHY_MAIN_SECRET: MAIN_SECRET } },
+    {
+      cwd: dataDir,
+      stdio: ["ignore", "pipe", "pipe"],
+      // TLS の受信は起動の途中でキーストアを開くので、キーチェーンのパスワードはここで渡す（起動引数は ps で見える）
+      env: { ...process.env, GRAPHY_MAIN_SECRET: MAIN_SECRET, ...tlsPasswords.envFor(secretStore.getSecret) },
+    },
   );
   wireBackendOutput(backendProc);
   // spawn 自体の失敗（java.exe が無い＝ENOENT など）。exit は来ないのでここで拾う。
@@ -1031,7 +1037,8 @@ ipcMain.on("graphy:refocus", (e) => {
  * Colab の refresh token を差し替えられると、ランタイムが**別人の Google アカウント**に作られ、
  * 匿名化したデータとコードがそこへ送られる。書くのはログインの流れ（colabAuth）だけ。
  */
-const MAIN_ONLY_SECRET_KEYS = new Set([COLAB_REFRESH_KEY]);
+// TLS のパスワードは tlsPasswords の経路だけで扱う（backend への受け渡しと、キーチェーンが無いときの代わりの経路があるため）
+const MAIN_ONLY_SECRET_KEYS = new Set([COLAB_REFRESH_KEY, ...Object.values(tlsPasswords.KEYS)]);
 
 ipcMain.handle("graphy:secret-set", async (_e, payload) => {
   const key = payload && payload.key;
@@ -1050,6 +1057,37 @@ ipcMain.handle("graphy:secret-clear", async (_e, key) => {
   if (ok && isComputeKey(key)) await pushComputeEndpoints();
   return ok;
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DIMSE TLS のパスワード。OS のキーチェーンに預け、backend へは main だけが通れる口で渡す。
+// 🔴 値はレンダラへ返さない（設定済みかどうかだけ）。
+// ─────────────────────────────────────────────────────────────────────────────
+ipcMain.handle("graphy:tls-password-set", (_e, payload) =>
+  tlsPasswords.setPassword({
+    which: String((payload && payload.which) || ""),
+    value: payload && typeof payload.value === "string" ? payload.value : null,
+    encryptionAvailable: secretStore.encryptionAvailable(),
+    setSecret: secretStore.setSecret,
+    clearSecret: secretStore.clearSecret,
+    call: computeBridge.call,
+  }));
+
+ipcMain.handle("graphy:tls-password-status", () =>
+  tlsPasswords.status({ statusOf: secretStore.statusOf, encryptionAvailable: secretStore.encryptionAvailable() }));
+
+function migrateTlsPasswords() {
+  if (!computeBridge.enabled()) return;
+  tlsPasswords
+    .migrateLegacy({
+      encryptionAvailable: secretStore.encryptionAvailable(),
+      setSecret: secretStore.setSecret,
+      call: computeBridge.call,
+    })
+    .then((r) => {
+      if (r.moved > 0 || r.reason) console.log(`[tls] 平文のパスワードの移行: moved=${r.moved} cleared=${r.cleared} ${r.reason || ""}`);
+    })
+    .catch((err) => console.error("[tls] 移行に失敗:", err));
+}
 
 // AI 中継。CSP によりレンダラからは外部 API を叩けないため main が肩代わりする。
 // 用途 → 提供元の解決と応答の正規化は aiGateway / aiAdapters が行う（fw/ai-routing-design.md）。
@@ -1514,6 +1552,8 @@ app.whenReady().then(async () => {
     await waitForBackend();
     // 外部の計算機の接続先を backend へ（失敗してもアプリの起動は止めない）
     pushComputeEndpoints().catch((err) => console.error("[compute] push failed:", err));
+    // 設定に平文で残っている TLS のパスワードをキーチェーンへ移す（失敗しても起動は止めない・平文は消さない）
+    migrateTlsPasswords();
   } catch (e) {
     reportStartupFailure(e);
     offerDefaultDbAfterFailure(e);

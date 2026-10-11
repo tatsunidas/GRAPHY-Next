@@ -124,6 +124,24 @@ standalone の backend には認証が無い。だから「誰が呼んでいる
 
 ---
 
+## DICOM TLS のパスワードの置き場（2026-10-11）
+
+キーストア・トラストストアのパスワードは、**API で返さない**（`GET /api/settings` の `dicom.tls` も
+`GET /api/dicom/tls-config` も null と「設定済みか」だけ）。画面と同じ場所で動くプラグインからも読めるため。
+
+| モード・環境 | 保存先 | backend への渡し方 |
+|---|---|---|
+| standalone（OS のキーチェーンあり） | Electron main の secretStore（safeStorage で暗号化） | 起動時は環境変数 `GRAPHY_TLS_*_PASSWORD`（TLS の受信は起動の途中で開くため）、起動中の変更は `/api/internal/dicom/tls-secrets`。backend はメモリにだけ持つ |
+| standalone（キーチェーンなし） | 設定ファイルに平文（権限 600）。画面で警告する | 同じ口に `persistPlaintext: true` |
+| web | サーバーの DB（従来どおり） | `POST /api/dicom/tls-config`（null は変えない・空は消す） |
+
+- 起動引数にしないのは、`ps` で他のユーザーにも見えるため。
+- 旧来の平文は、main が起動後にキーチェーンへ移し、**全部移せたときだけ**設定ファイルと DB の旧来の行から消す。
+  旧い版に戻すと TLS のパスワードを入れ直す必要がある。
+- 一般の `PUT /api/settings` は `dicom.tls` を 400 で拒む（伏せた JSON を書き戻してパスワードを消さないため）。
+
+---
+
 ## 🚨 「CORS エラー」に見えるが CORS ではない — URL が長すぎる（2026-08-27・PR #155）
 
 上の §CORS とは**別の原因**で、ブラウザには**まったく同じ顔**で出る。先に疑うべきはこちら
