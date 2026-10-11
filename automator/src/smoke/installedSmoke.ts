@@ -255,6 +255,10 @@ async function main(): Promise<void> {
     const imp2 = await importNonDicomPaths(PORT, [mpeg4], { patientId: "SMOKE2", patientName: "SMOKE^MPEG4", seriesDescription: "mpeg4 avi" });
     check(imp2.imported === 1, "[4] 非 H.264 動画（MPEG-4 AVI）を、同梱 ffmpeg のトランスコードで取り込める", imp2);
 
+    // 画面の前に backend 自体が取り込みを一覧に持っているかを見る（画面と backend のどちらの不具合かを切り分ける）。
+    const listed = await fetch(`http://127.0.0.1:${PORT}/api/studies`).then((r) => r.json() as Promise<unknown[]>, () => null);
+    check(Array.isArray(listed) && listed.length >= 2, "[5] backend の /api/studies に取り込んだ 2 スタディがある", { count: Array.isArray(listed) ? listed.length : listed });
+
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().forEach((w: { maximize(): void }) => w.maximize())).catch(() => {});
     await dismissStartupDialogs(main);
     const dates = main.locator('input[type="date"]');
@@ -269,6 +273,15 @@ async function main(): Promise<void> {
       found = await row.waitFor({ state: "visible", timeout: 10_000 }).then(() => true, () => false);
     }
     console.log(`  [情報] 検索の試行回数: ${attempts}`);
+    if (!found) {
+      // 画面（renderer）から backend へ届いているか。localhost は macOS で ::1 を先に引く。
+      for (const host of ["localhost", "127.0.0.1"]) {
+        const r = await main
+          .evaluate(`fetch("http://${host}:${PORT}/api/studies").then(async (r) => r.status + " len=" + (await r.text()).length, (e) => "ERR " + e)`)
+          .catch((e) => `evaluate失敗 ${e}`);
+        console.log(`  [情報] 画面から http://${host}:${PORT}/api/studies → ${r}`);
+      }
+    }
     if (!found) throw new Error("取り込んだスタディが一覧に出ない（検索を 6 回やり直した）");
     check(true, "[5] 取り込んだスタディが一覧に出る", { attempts });
     await row.click();
