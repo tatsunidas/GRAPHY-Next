@@ -22,7 +22,9 @@
     ja: {
       init: "起動を開始しています",
       folders: "必要なフォルダを確認しています",
-      database: "データベースを確認・マイグレーションしています",
+      context: "アプリの部品を準備しています",
+      database: "データベースを開いて確認しています",
+      services: "機能を準備しています",
       scp: "DICOM 受信(SCP)を開始しています",
       plugins: "プラグインを読み込んでいます",
       pluginsDone: "プラグインを読み込みました",
@@ -33,7 +35,9 @@
     en: {
       init: "Starting up",
       folders: "Checking required folders",
-      database: "Checking / migrating the database",
+      context: "Preparing application components",
+      database: "Opening and checking the database",
+      services: "Preparing features",
       scp: "Starting DICOM receiver (SCP)",
       plugins: "Loading plugins",
       pluginsDone: "Plugins loaded",
@@ -48,7 +52,9 @@
     ja: {
       init: "起動開始",
       folders: "フォルダ確認",
+      context: "部品の準備",
       database: "データベース",
+      services: "機能の準備",
       scp: "DICOM 受信(SCP)",
       plugins: "プラグイン",
       ready: "仕上げ",
@@ -56,7 +62,9 @@
     en: {
       init: "startup",
       folders: "folders",
+      context: "app components",
       database: "database",
+      services: "features",
       scp: "DICOM receiver (SCP)",
       plugins: "plugins",
       ready: "finishing",
