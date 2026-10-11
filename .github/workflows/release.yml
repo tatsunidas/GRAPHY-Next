@@ -118,6 +118,8 @@ jobs:
     # タグのときは版数の検証が通ったものだけ。予行演習（verify-version が skipped）でも走らせる。
     if: ${{ !cancelled() && needs.verify-version.result != 'failure' }}
     strategy:
+      # 1 つの OS が落ちても他の OS の結果は最後まで見る（OS ごとに落ち方が違うので）。
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     # 上限を切る（2026-08-27 に macOS で Maven の取得が詰まり 2h11m かかった。通常 5〜6 分）。

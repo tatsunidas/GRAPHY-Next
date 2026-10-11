@@ -112,13 +112,17 @@ function install(root: string): Installed {
   // FUSE が無い環境（CI）でも動くよう、実行ではなく展開する。
   execFileSync(image, ["--appimage-extract"], { cwd: root, stdio: "inherit" });
   const sq = path.join(root, "squashfs-root");
-  const desktopFile = fs.readdirSync(sq).find((f) => f.endsWith(".desktop"));
-  if (!desktopFile) throw new Error(`展開結果に .desktop がありません: ${JSON.stringify(fs.readdirSync(sq))}`);
-  const execLine = fs.readFileSync(path.join(sq, desktopFile), "utf8").split("\n").find((l) => l.startsWith("Exec="));
-  const bin = execLine?.slice("Exec=".length).trim().replace(/^"([^"]+)".*$/, "$1").split(/\s+/)[0];
-  if (!bin) throw new Error(`.desktop に Exec= がありません: ${desktopFile}`);
+  // AppRun（シェルのラッパー）ではなく Electron 本体を直接起動する（Playwright が繋げるのは本体）。
+  // 本体 = 最上位の実行ファイルのうち、AppRun・chrome-sandbox・crashpad を除いた最大のもの。
+  const skip = new Set(["AppRun", "chrome-sandbox", "chrome_crashpad_handler"]);
+  const bin = fs
+    .readdirSync(sq, { withFileTypes: true })
+    .filter((e) => e.isFile() && !skip.has(e.name) && (fs.statSync(path.join(sq, e.name)).mode & 0o111) !== 0)
+    .map((e) => ({ name: e.name, size: fs.statSync(path.join(sq, e.name)).size }))
+    .sort((a, b) => b.size - a.size)[0];
+  if (!bin) throw new Error(`展開結果に Electron 本体が見つかりません: ${JSON.stringify(fs.readdirSync(sq))}`);
   // chrome-sandbox の SUID が付かない環境なので --no-sandbox（ランナー専用。製品の起動オプションではない）。
-  return { exe: path.join(sq, path.basename(bin)), resources: path.join(sq, "resources"), args: ["--no-sandbox"] };
+  return { exe: path.join(sq, bin.name), resources: path.join(sq, "resources"), args: ["--no-sandbox"] };
 }
 
 function findFile(dir: string, names: string[]): string | null {
@@ -223,6 +227,9 @@ async function main(): Promise<void> {
   delete env.GRAPHY_DEV; // 製品版として起動する（dev 経路に入らない）
   delete env.GRAPHY_BACKEND_EXTERNAL;
 
+  // 本体が動くか（共有ライブラリ不足などは Playwright の「Process failed to launch!」だけでは原因が見えない）。
+  const ver = spawnSync(inst.exe, [...inst.args, "--version"], { env, encoding: "utf8", timeout: 60_000 });
+  console.log(`[preflight] --version → status=${ver.status} stdout=${(ver.stdout ?? "").trim()} stderr=${(ver.stderr ?? "").trim().slice(0, 600)}`);
   console.log(`[launch] ${inst.exe}`);
   const app = await electron.launch({ executablePath: inst.exe, args: inst.args, env, timeout: 120_000 });
   const proc = app.process();
