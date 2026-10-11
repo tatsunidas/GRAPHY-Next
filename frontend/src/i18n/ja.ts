@@ -2259,6 +2259,7 @@ export const ja: Record<string, string> = {
   "dbadmin.search.placeholder": "患者ID / 患者名で検索",
   "dbadmin.searchPrompt": "患者ID または 患者名で検索してください（初期は全件表示しません）。",
   "dbadmin.patients.empty": "該当する患者がいません。",
+  "dbadmin.delete.relatedNote": "この画像に付いている ROI・位置合わせ・GLAM の解析・XA の校正などの記録も消えます。レポートは消えずに残ります。",
   "dbadmin.delete.confirm": "患者「{{name}}」を削除します。よろしいですか？",
   "dbadmin.delete.studyConfirm": "スタディ「{{desc}}」を削除します。よろしいですか？",
   "dbadmin.delete.seriesConfirm": "シリーズ「{{desc}}」を削除します。よろしいですか？",

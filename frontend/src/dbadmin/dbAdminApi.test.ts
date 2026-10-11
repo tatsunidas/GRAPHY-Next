@@ -17,3 +17,15 @@ describe("recordsNotice", () => {
     expect(en["dbadmin.edit.recordsKept"]).toContain("{{overlaps}}");
   });
 });
+
+import { deleteRelatedNote } from "./dbAdminApi";
+
+describe("deleteRelatedNote", () => {
+  const t = (k: string) => `<${k}>`;
+  it("ファイルも消す設定のときだけ、付随データの扱いを添える", () => {
+    expect(deleteRelatedNote("消しますか？", true, t)).toBe("消しますか？\n\n<dbadmin.delete.relatedNote>");
+    expect(deleteRelatedNote("消しますか？", false, t)).toBe("消しますか？");
+    expect(ja["dbadmin.delete.relatedNote"]).toContain("レポートは消えずに残ります");
+    expect(en["dbadmin.delete.relatedNote"]).toContain("Reports are kept");
+  });
+});

@@ -132,7 +132,7 @@ class DbAdminTest {
         Path f = layout.resolveForRead(rows.get(0));
         assertTrue(Files.exists(f));
 
-        int n = dbAdmin.deletePatient("DEL1");
+        int n = dbAdmin.deletePatient("DEL1").deletedInstances();
         assertEquals(1, n);
         assertTrue(repo.findByPatientId("DEL1").isEmpty(), "索引行が消える");
         assertFalse(Files.exists(f), "実ファイルも消える（既定）");
@@ -144,7 +144,7 @@ class DbAdminTest {
         ingest("DS1", "P", "DS1.study", "DS1.se2", "DS1.sop2", "CT");
         Path f1 = layout.resolveForRead(repo.findBySeries("DS1.study", "DS1.se1").get(0));
 
-        int n = dbAdmin.deleteSeries("DS1.study", "DS1.se1");
+        int n = dbAdmin.deleteSeries("DS1.study", "DS1.se1").deletedInstances();
 
         assertEquals(1, n);
         assertTrue(repo.findBySeries("DS1.study", "DS1.se1").isEmpty(), "対象シリーズは消える");

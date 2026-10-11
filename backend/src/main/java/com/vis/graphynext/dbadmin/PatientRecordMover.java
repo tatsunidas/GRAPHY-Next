@@ -12,6 +12,8 @@ import com.vis.graphynext.dbtransfer.RelatedData;
 import com.vis.graphynext.dicom.store.DicomInstance;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
 import com.vis.graphynext.plugin.store.PluginDocument;
+import com.vis.graphynext.radiomics.GlamAnalysisDocument;
+import com.vis.graphynext.radiomics.GlamAnalysisDocumentRepository;
 import com.vis.graphynext.plugin.store.PluginDocumentId;
 import com.vis.graphynext.plugin.store.PluginDocumentRepository;
 import com.vis.graphynext.registration.RegistrationDocument;
@@ -20,6 +22,7 @@ import com.vis.graphynext.report.Report;
 import com.vis.graphynext.report.ReportRepository;
 import com.vis.graphynext.roi.RoiDocument;
 import com.vis.graphynext.roi.RoiDocumentRepository;
+import com.vis.graphynext.settings.SettingsService;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -64,16 +67,122 @@ public class PatientRecordMover {
     private final RegistrationDocumentRepository registrations;
     private final PluginDocumentRepository plugins;
     private final ReportRepository reports;
+    private final GlamAnalysisDocumentRepository glam;
+    private final SettingsService settings;
     private final ObjectMapper mapper = new ObjectMapper();
 
     public PatientRecordMover(DicomInstanceRepository repo, RoiDocumentRepository rois,
                               RegistrationDocumentRepository registrations, PluginDocumentRepository plugins,
-                              ReportRepository reports) {
+                              ReportRepository reports, GlamAnalysisDocumentRepository glam, SettingsService settings) {
         this.repo = repo;
         this.rois = rois;
         this.registrations = registrations;
         this.plugins = plugins;
         this.reports = reports;
+        this.glam = glam;
+        this.settings = settings;
+    }
+
+    /** 画像を削除したあとに片付けた付随データの件数。レポートは数えない（レポートは画像を消しても残す）。 */
+    public record Cleanup(int roisRemoved, int analysesRemoved, int registrationsRemoved, int calibrationsRemoved,
+                          int glamRemoved, int pluginDocsRemoved) {
+    }
+
+    /**
+     * 画像（行）を削除したあとに呼ぶ（同じトランザクション・行は削除済み）。消えた画像に結び付いていた付随データを消す。
+     *
+     * <ul>
+     *   <li>ROI・解析状態: 消えた SOP を指すもの。</li>
+     *   <li>位置合わせ・XA 校正: 消えたシリーズ（DB に 1 枚も残っていない）を指すもの。</li>
+     *   <li>GLAM: 消えた検査のもの、または元のシリーズ・マスクが消えたシリーズのもの。</li>
+     *   <li>患者の画像がすべて消えたとき: その患者キーの ROI・位置合わせの文書とプラグインの記録をまるごと。</li>
+     * </ul>
+     * 🔴 レポートには触れない。レポートは画像とは別に管理し、消すのはレポート機能からだけ。
+     */
+    public Cleanup afterDelete(List<DicomInstance> deleted) {
+        if (deleted.isEmpty()) {
+            return new Cleanup(0, 0, 0, 0, 0, 0);
+        }
+        repo.flush();
+        Set<String> sops = new HashSet<>();
+        Map<String, Set<String>> seriesByStudy = new LinkedHashMap<>();
+        Set<String> keys = new LinkedHashSet<>();
+        for (DicomInstance r : deleted) {
+            sops.add(r.getSopInstanceUid());
+            seriesByStudy.computeIfAbsent(r.getStudyInstanceUid(), x -> new LinkedHashSet<>()).add(r.getSeriesInstanceUid());
+            keys.add(RelatedData.patientKey(r));
+        }
+        Set<String> goneStudies = new LinkedHashSet<>();
+        Set<String> goneSeries = new LinkedHashSet<>();
+        for (var e : seriesByStudy.entrySet()) {
+            if (repo.countByStudyInstanceUid(e.getKey()) == 0) {
+                goneStudies.add(e.getKey());
+            }
+            for (String se : e.getValue()) {
+                if (repo.countByStudyInstanceUidAndSeriesInstanceUid(e.getKey(), se) == 0) {
+                    goneSeries.add(se);
+                }
+            }
+        }
+        int roisRemoved = 0;
+        int analysesRemoved = 0;
+        int regsRemoved = 0;
+        int pluginsRemoved = 0;
+        for (String key : keys) {
+            boolean patientGone = !remains(key);
+            RoiDocument roi = rois.findById(key).orElse(null);
+            if (roi != null) {
+                ObjectNode d = parse(roi.getJson());
+                if (patientGone) {
+                    roisRemoved += array(d, "rois").size();
+                    analysesRemoved += array(d, "analyses").size();
+                    rois.delete(roi);
+                } else {
+                    int r = take(d, "rois", n -> sops.contains(n.path("sopInstanceUid").asText(""))).size();
+                    int a = take(d, "analyses", n -> sops.contains(n.path("sopInstanceUid").asText(""))).size();
+                    if (r + a > 0) {
+                        roi.update(write(d), array(d, "rois").size());
+                        rois.save(roi);
+                    }
+                    roisRemoved += r;
+                    analysesRemoved += a;
+                }
+            }
+            RegistrationDocument reg = registrations.findById(key).orElse(null);
+            if (reg != null) {
+                ObjectNode d = parse(reg.getJson());
+                if (patientGone) {
+                    regsRemoved += array(d, "records").size();
+                    registrations.delete(reg);
+                } else {
+                    int n = take(d, "records", x ->
+                            goneSeries.contains(x.path("fixed").path("seriesInstanceUid").asText(""))
+                                    || goneSeries.contains(x.path("moving").path("seriesInstanceUid").asText(""))).size();
+                    if (n > 0) {
+                        reg.update(write(d), array(d, "records").size());
+                        registrations.save(reg);
+                    }
+                    regsRemoved += n;
+                }
+            }
+            if (patientGone) {
+                List<PluginDocument> docs = plugins.findAll().stream()
+                        .filter(p -> key.equals(p.getId().getPatientKey())).toList();
+                plugins.deleteAll(docs);
+                pluginsRemoved += docs.size();
+            }
+        }
+        int calib = settings.deleteKeys(goneSeries.stream().map(RelatedData::calibrationKey).toList());
+        int glamRemoved = 0;
+        for (String study : seriesByStudy.keySet()) {
+            List<GlamAnalysisDocument> hit = glam.findByStudyInstanceUidOrderBySavedAtDesc(study).stream()
+                    .filter(g -> goneStudies.contains(study) || goneSeries.contains(g.getSourceSeriesUid())
+                            || (g.getMaskSeriesUid() != null && goneSeries.contains(g.getMaskSeriesUid())))
+                    .toList();
+            glam.deleteAll(hit);
+            glamRemoved += hit.size();
+        }
+        return new Cleanup(roisRemoved, analysesRemoved, regsRemoved, calib, glamRemoved, pluginsRemoved);
     }
 
     /** 編集の前に、行ごとの元のキーを控える（SOP → キー）。 */
