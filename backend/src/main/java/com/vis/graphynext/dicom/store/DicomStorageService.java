@@ -80,8 +80,19 @@ public class DicomStorageService {
             throw new IOException(e.getMessage(), e);
         }
         Files.createDirectories(dest.getParent());
-        // 冪等: 同一 SOPInstanceUID の再受信は上書き
-        Files.move(tempFile, dest, StandardCopyOption.REPLACE_EXISTING);
+        // 冪等: 同一 SOPInstanceUID の再受信は上書き。ただし上書きの前に元のファイルを退避する——
+        // 索引の保存に失敗したとき、新しいファイルを消すだけだと元の正しいファイルまで失う（元の行は残る）。
+        Path backup = null;
+        if (Files.exists(dest)) {
+            backup = dest.resolveSibling("." + iuid + ".bak-" + java.util.UUID.randomUUID().toString().substring(0, 8));
+            Files.move(dest, backup);
+        }
+        try {
+            Files.move(tempFile, dest, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            restore(backup, dest);
+            throw e;
+        }
 
         DicomInstance entity = new DicomInstance(iuid);
         entity.setSopClassUid(cuid);
@@ -101,19 +112,37 @@ public class DicomStorageService {
         entity.setInstanceNumber(ds.getInt(Tag.InstanceNumber, 0));
         entity.setSizeBytes(Files.size(dest));
         entity.setUri(layout.toStored(dest));
+        DicomInstance saved;
         try {
-            DicomInstance saved = repo.save(entity);
-            log.debug("indexed sop={} study={} -> {}", iuid, studyUid, dest); // 検証済み: 大量取込で冗長なため DEBUG
-            return saved;
+            saved = repo.save(entity);
         } catch (RuntimeException ex) {
-            // 索引に載らないファイルを残さない（トランザクションはロールバックされる）
+            // 索引に載らないファイルを残さない。元のファイルがあれば戻す（元の行は保存の失敗で変わっていない）。
+            // ※ importFromFile からの呼び出しは同じクラス内なので ingest の @Transactional は効かないが、
+            //    DB への書き込みはこの save 1 回だけで、save 自身のトランザクションで完結する。
             try {
                 Files.deleteIfExists(dest);
             } catch (IOException ignore) {
                 // ベストエフォート
             }
-            log.warn("INDEX failed, rolled back and deleted file: {}", dest, ex);
+            restore(backup, dest);
+            log.warn("INDEX failed, deleted new file{}: {}", backup != null ? " and restored the previous one" : "", dest, ex);
             throw ex;
+        }
+        if (backup != null) {
+            Files.deleteIfExists(backup);
+        }
+        log.debug("indexed sop={} study={} -> {}", iuid, studyUid, dest); // 検証済み: 大量取込で冗長なため DEBUG
+        return saved;
+    }
+
+    private static void restore(Path backup, Path dest) {
+        if (backup == null) {
+            return;
+        }
+        try {
+            Files.move(backup, dest, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            log.error("元のファイルを戻せません（退避先に残っています）: {} -> {}", backup, dest, e);
         }
     }
 

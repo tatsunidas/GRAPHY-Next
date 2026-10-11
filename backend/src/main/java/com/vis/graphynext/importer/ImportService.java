@@ -6,6 +6,7 @@ package com.vis.graphynext.importer;
 
 import com.vis.graphynext.dicom.store.DicomInstance;
 import com.vis.graphynext.dicom.store.DicomStorageService;
+import com.vis.graphynext.dicom.store.StorageLayout;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -54,9 +55,24 @@ public class ImportService {
     }
 
     private final DicomStorageService storage;
+    /**
+     * 走査で中に入らないフォルダ（保管庫の作業用と、DB フォルダの受け取り箱）。保管庫や DB フォルダごと
+     * 取り込んだとき、受信途中・一時ファイル・キャッシュ・他 DB からの荷物を拾わないため。
+     * 保管庫の本体（{@code <study>/<series>/*.dcm}）は取り込める（索引を作り直す用途）。
+     */
+    private final Set<Path> skipDirs;
 
-    public ImportService(DicomStorageService storage) {
+    public ImportService(DicomStorageService storage, StorageLayout layout) {
         this.storage = storage;
+        Path root = layout.root();
+        Set<Path> skip = new java.util.HashSet<>();
+        for (String n : List.of("incoming", ".import", ".cache")) {
+            skip.add(root.resolve(n).normalize());
+        }
+        if (root.getParent() != null) {
+            skip.add(root.getParent().resolve("inbox").normalize());
+        }
+        this.skipDirs = Set.copyOf(skip);
     }
 
     public ImportResult importPaths(List<String> paths) {
@@ -85,6 +101,12 @@ public class ImportService {
     private void walk(Path root, Counter c) {
         try {
             Files.walkFileTree(root, new SimpleFileVisitor<>() {
+                @Override
+                public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+                    return skipDirs.contains(dir.toAbsolutePath().normalize())
+                            ? FileVisitResult.SKIP_SUBTREE : FileVisitResult.CONTINUE;
+                }
+
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
                     if (attrs.isRegularFile()) {

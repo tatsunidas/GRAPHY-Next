@@ -88,6 +88,7 @@ public class AutomatorService {
             if (file != null) {
                 try {
                     Files.deleteIfExists(file);
+                    layout.pruneEmptyDirs(file);
                 } catch (Exception e) {
                     log.warn("[automator] ファイル削除に失敗: {} ({})", inst.getUri(), e.toString());
                 }
