@@ -36,9 +36,13 @@ const PROVIDER_KEY_RE = /^ai\.provider\.[a-z0-9-]{1,32}\.apiKey$/;
 // fw/remote-compute-design.md §4.1
 const COMPUTE_KEY_RE = /^compute\.endpoint\.[a-z0-9-]{1,32}\.token$/;
 
+// DIMSE TLS のキーストア・トラストストアのパスワード（tlsPasswords.js が使う。一般の secret IPC からは書けない）
+const TLS_KEYS = new Set(["dicom.tls.keyStorePassword", "dicom.tls.trustStorePassword"]);
+
 function isAllowedKey(key) {
   return (
-    typeof key === "string" && (LEGACY_KEYS.has(key) || PROVIDER_KEY_RE.test(key) || COMPUTE_KEY_RE.test(key))
+    typeof key === "string" &&
+    (LEGACY_KEYS.has(key) || TLS_KEYS.has(key) || PROVIDER_KEY_RE.test(key) || COMPUTE_KEY_RE.test(key))
   );
 }
 

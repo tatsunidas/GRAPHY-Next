@@ -41,6 +41,9 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   // アプリ全体を再起動する（DICOM 自局設定などの反映用）。
   relaunch: () => ipcRenderer.invoke("graphy:relaunch"),
   // DB フォルダ（索引と DICOM 保管庫）。選択と最終確認のダイアログは main が出す。
+  // DIMSE TLS のパスワード（OS のキーチェーンに預ける。値は返らない）
+  tlsPasswordSet: (which, value) => ipcRenderer.invoke("graphy:tls-password-set", { which, value }),
+  tlsPasswordStatus: () => ipcRenderer.invoke("graphy:tls-password-status"),
   // プラグイン導入の同意（有効にする前に main が確認ダイアログを出す）
   pluginInstallOptIn: (enabled) => ipcRenderer.invoke("graphy:plugin-install-opt-in", { enabled: enabled === true }),
   dbFoldersList: () => ipcRenderer.invoke("graphy:db-folders-list"),
