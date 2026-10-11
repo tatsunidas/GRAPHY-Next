@@ -65,6 +65,7 @@ import { subscribeSeriesRefresh } from "../viewer/viewerRefresh";
 import { WandDialog } from "./WandDialog";
 import { LevelSetsDialog } from "./LevelSetsDialog";
 import { HistogramDialog } from "./HistogramDialog";
+import { ResampleDialog } from "./ResampleDialog";
 import { FourierDialog } from "./FourierDialog";
 import { SUVCalibrationDialog } from "../viewer/SUVCalibrationDialog";
 import { getSuv, subscribeSuvStore } from "../viewer/suvStore";
@@ -699,6 +700,7 @@ function TileGrid({
   const tileDimsRef = useRef<Map<string, { c: number; t: number; z: number }>>(new Map());
   // Histogram 解析ダイアログの対象（開いている時のみ non-null）。
   const [histo, setHisto] = useState<{ tile: Tile; z: number; c: number; t: number } | null>(null);
+  const [resample, setResample] = useState<{ tile: Tile; c: number; t: number } | null>(null);
   const [fourier, setFourier] = useState<{ tileId: string; label: string } | null>(null);
   const [suvTarget, setSuvTarget] = useState<{ imageId: string; seriesUid: string } | null>(null);
   const [tagTarget, setTagTarget] = useState<Tile | null>(null);
@@ -1530,6 +1532,14 @@ function TileGrid({
         const dims = tileDimsRef.current.get(tile.id);
         setHisto({ tile, z: dims?.z ?? 0, c: dims?.c ?? 0, t: dims?.t ?? 0 });
       },
+      // 対象（選択→無ければ先頭）タイルのシリーズでリサンプル・切り抜きダイアログを開く。
+      openResample: () => {
+        const tid = resolveTargets()[0];
+        const tile = patient.tiles.find((tl) => tl.id === tid);
+        if (!tile) { comingSoon(t("viewer2d.menu.resample")); return; }
+        const dims = tileDimsRef.current.get(tile.id);
+        setResample({ tile, c: dims?.c ?? 0, t: dims?.t ?? 0 });
+      },
       // 対象（選択→無ければ先頭）タイルの**表示中スライス 1 枚**でフーリエ解析ダイアログを開く。
       openFourier: () => {
         const tid = resolveTargets()[0];
@@ -1812,6 +1822,18 @@ function TileGrid({
           initialC={histo.c}
           initialT={histo.t}
           onClose={() => setHisto(null)}
+        />
+      )}
+      {resample && (
+        <ResampleDialog
+          key={resample.tile.id}
+          study={resample.tile.study}
+          series={resample.tile.series}
+          instances={resample.tile.instances}
+          mode={mode}
+          c={resample.c}
+          t={resample.t}
+          onClose={() => setResample(null)}
         />
       )}
       {suvTarget && (

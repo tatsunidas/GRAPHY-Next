@@ -236,6 +236,8 @@ export interface ViewerActions {
   launchCurvedMpr(): void;
   /** 対象タイルのシリーズで Histogram 解析ダイアログを開く。 */
   openHistogram(): void;
+  /** 対象タイルのシリーズでリサンプル・切り抜きダイアログを開く。 */
+  openResample(): void;
   /** 対象タイルの表示中スライス 1 枚でフーリエ解析（2D-DFT）ダイアログを開く。 */
   openFourier(): void;
   /** 対象タイル（PET のみ）で SUV 校正ダイアログを開く。 */
