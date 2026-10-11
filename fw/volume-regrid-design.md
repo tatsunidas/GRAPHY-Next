@@ -26,6 +26,9 @@
   ガントリチルトの元は法線方向へ直交化される（出力は直交格子。チルトの角で元の範囲外になる点は NaN）。
 - 各軸の長さ L（先頭〜末尾ボクセル中心間）: 列・行は `(n-1)·間隔`、スライスは `(末尾IPP−先頭IPP)·法線`。
 - 出力点数 `n = floor(L/s + 1e-9) + 1`。`sampleTrilinear` は index が `n-1` を僅かでも超えると NaN になるので、末尾は内側に収める。
+- 格子の端点（元の先頭・末尾のボクセル中心ちょうど）は、index→world→index の往復で ±1e-15 ほど外れ、`sampleTrilinear` が NaN を返す
+  （実測: 斜位で `i=0`・`j=0` の面が NaN になった）。`resampleToGrid` に縁の許容（`edgeTolerance`、保存では `GRID_EDGE_TOLERANCE`＝1e-6 voxel）を
+  opt-in で足し、範囲内の格子で NaN を 0 個にする。既定は 0（プラグイン経路の挙動は変えない）。
 - `s <= 0` や非有限値は例外。
 - データ順は `data[k·ny·nx + j·nx + i]`。`spacing = [列方向, 行方向, スライス]`。DICOM の `PixelSpacing = [行間隔, 列間隔]` とは順が逆なので保存層で入れ替える。
 
