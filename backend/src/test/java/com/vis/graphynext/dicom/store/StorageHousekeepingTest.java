@@ -128,4 +128,30 @@ class StorageHousekeepingTest {
         assertTrue(Files.exists(root.resolve("pr.b/pr.b.merged")));
         assertTrue(Files.isDirectory(root), "ルートは消さない");
     }
+
+    @Test
+    void 新しい検査の取り込みに失敗しても_空のフォルダを残さない() throws Exception {
+        Path tmpFile = phantom("NF1", "N", "nf.st", "nf.se", "nf.1");
+        doThrow(new IllegalStateException("simulated")).when(repo).save(any(DicomInstance.class));
+        try {
+            assertThrows(IllegalStateException.class, () -> storage.ingest(tmpFile));
+        } finally {
+            org.mockito.Mockito.reset(repo);
+        }
+        assertFalse(Files.exists(layout.root().resolve("nf.st")), "新しく作った検査のフォルダを消す");
+        assertTrue(Files.isDirectory(layout.root()), "ルートは消さない");
+    }
+
+    @Test
+    void 移し先のフォルダが消えていたら作り直して移す_移す元が無ければ失敗() throws Exception {
+        Path src = Files.writeString(tmp.resolve("move-src.dcm"), "x");
+        Path dest = tmp.resolve("gone/series/a.dcm");
+        DicomStorageService.moveIntoPlace(src, dest);
+        assertTrue(Files.exists(dest));
+        assertFalse(Files.exists(src));
+
+        Path missing = tmp.resolve("no-such-src.dcm");
+        assertThrows(java.nio.file.NoSuchFileException.class,
+                () -> DicomStorageService.moveIntoPlace(missing, tmp.resolve("gone2/series/b.dcm")));
+    }
 }
