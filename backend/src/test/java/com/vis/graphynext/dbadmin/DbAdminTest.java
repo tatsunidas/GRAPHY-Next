@@ -158,7 +158,7 @@ class DbAdminTest {
         ingest("SP1", "Old^Name", "SP1.studyA", "se", "SP1.sopA", "CT");
         ingest("SP1", "Old^Name", "SP1.studyB", "se", "SP1.sopB", "MR");
 
-        int n = dbAdmin.updateStudyPatient("SP1.studyA", "New^Name", "19900202", "F", "SP2");
+        int n = dbAdmin.updateStudyPatient("SP1.studyA", "New^Name", "19900202", "F", "SP2").updatedInstances();
 
         assertEquals(1, n, "studyA の 1 件のみ更新");
         // studyA は SP2 へ移動

@@ -2280,6 +2280,7 @@ export const en: Record<string, string> = {
   "dbadmin.edit.patientAll": "Edit patient",
   "dbadmin.edit.patientStudy": "Edit patient (this study)",
   "dbadmin.edit.birthDate": "Birth Date (YYYYMMDD)",
+  "dbadmin.edit.recordsKept": "Patient information was updated. The following were left with the original patient so nothing was overwritten: {{plugins}} plugin record(s) and {{overlaps}} ROI(s) that already existed at the destination.",
   "dbadmin.edit.newId": "Change Patient ID (optional)",
   "dbadmin.merge.button": "Merge series",
   "dbadmin.merge.selected": "{{count}} series selected",

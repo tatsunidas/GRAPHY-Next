@@ -45,13 +45,19 @@ public class DbAdminService {
     private final SettingsService settings;
     private final DicomStorageService storage;
     private final StorageLayout layout;
+    private final PatientRecordMover records;
 
     public DbAdminService(DicomInstanceRepository repo, SettingsService settings, DicomStorageService storage,
-                          StorageLayout layout) {
+                          StorageLayout layout, PatientRecordMover records) {
         this.repo = repo;
         this.settings = settings;
         this.storage = storage;
         this.layout = layout;
+        this.records = records;
+    }
+
+    /** 患者情報の編集の結果。records は ROI などを運んだ／残した件数。 */
+    public record EditResult(int updatedInstances, PatientRecordMover.Result records) {
     }
 
     @Transactional(readOnly = true)
@@ -123,12 +129,15 @@ public class DbAdminService {
      * @param newPatientId 患者 ID を変更する場合に指定（null/空で据え置き）
      */
     @Transactional
-    public int updatePatient(String patientId, String patientName, String birthDate, String sex,
-                             String newPatientId) {
+    public EditResult updatePatient(String patientId, String patientName, String birthDate, String sex,
+                                    String newPatientId) {
         boolean changeId = newPatientId != null && !newPatientId.isBlank() && !newPatientId.equals(patientId);
-        int n = applyPatientEdit(repo.findByPatientId(patientId), patientName, birthDate, sex, changeId ? newPatientId : null);
-        log.info("患者情報を更新(患者全体): {} -> name={}, id変更={} ({}件)", patientId, patientName, changeId, n);
-        return n;
+        List<DicomInstance> rows = repo.findByPatientId(patientId);
+        var before = PatientRecordMover.keysBefore(rows);
+        int n = applyPatientEdit(rows, patientName, birthDate, sex, changeId ? newPatientId : null);
+        var moved = records.afterEdit(rows, before, changeId ? newPatientId : null);
+        log.info("患者情報を更新(患者全体): {} -> name={}, id変更={} ({}件) 記録: {}", patientId, patientName, changeId, n, moved);
+        return new EditResult(n, moved);
     }
 
     /**
@@ -139,15 +148,17 @@ public class DbAdminService {
      * 一覧から消える＝患者レコード削除に相当）。
      */
     @Transactional
-    public int updateStudyPatient(String studyUid, String patientName, String birthDate, String sex,
-                                  String newPatientId) {
+    public EditResult updateStudyPatient(String studyUid, String patientName, String birthDate, String sex,
+                                         String newPatientId) {
         List<DicomInstance> rows = repo.findByStudyInstanceUid(studyUid);
         String oldId = rows.isEmpty() ? "" : rows.get(0).getPatientId();
         boolean changeId = newPatientId != null && !newPatientId.isBlank() && !newPatientId.equals(oldId);
+        var before = PatientRecordMover.keysBefore(rows);
         int n = applyPatientEdit(rows, patientName, birthDate, sex, changeId ? newPatientId : null);
-        log.info("患者情報を更新(スタディ単位): study={} {} -> name={}, id変更={} ({}件)",
-                studyUid, oldId, patientName, changeId, n);
-        return n;
+        var moved = records.afterEdit(rows, before, changeId ? newPatientId : null);
+        log.info("患者情報を更新(スタディ単位): study={} {} -> name={}, id変更={} ({}件) 記録: {}",
+                studyUid, oldId, patientName, changeId, n, moved);
+        return new EditResult(n, moved);
     }
 
     /** シリーズ統合の結果（移動できた件数・失敗件数・統合先 SeriesInstanceUID）。 */

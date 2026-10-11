@@ -38,9 +38,9 @@ public class DbAdminController {
     /** 患者情報（患者レベル）の編集。 */
     @PutMapping("/api/patients/{patientId}")
     public Map<String, Object> updatePatient(@PathVariable String patientId, @RequestBody PatientEdit edit) {
-        int n = service.updatePatient(patientId, edit.patientName(), edit.patientBirthDate(),
+        DbAdminService.EditResult r = service.updatePatient(patientId, edit.patientName(), edit.patientBirthDate(),
                 edit.patientSex(), edit.newPatientId());
-        return Map.of("updatedInstances", n);
+        return Map.of("updatedInstances", r.updatedInstances(), "records", r.records());
     }
 
     /** 患者の削除（全スタディ）。 */
@@ -71,9 +71,9 @@ public class DbAdminController {
     /** スタディ単位の患者情報編集（そのスタディのみ。PatientID 変更で別患者へ移動）。 */
     @PutMapping("/api/studies/{studyUid}/patient")
     public Map<String, Object> updateStudyPatient(@PathVariable String studyUid, @RequestBody PatientEdit edit) {
-        int n = service.updateStudyPatient(studyUid, edit.patientName(), edit.patientBirthDate(),
+        DbAdminService.EditResult r = service.updateStudyPatient(studyUid, edit.patientName(), edit.patientBirthDate(),
                 edit.patientSex(), edit.newPatientId());
-        return Map.of("updatedInstances", n);
+        return Map.of("updatedInstances", r.updatedInstances(), "records", r.records());
     }
 
     /** シリーズ統合（同一スタディ内 N→1・InstanceNumber 再採番）。 */
