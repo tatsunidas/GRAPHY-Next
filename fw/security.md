@@ -72,7 +72,7 @@ Electron はパッケージ後は警告を出さない**（本番は上記 CSP �
 |---|---|
 | `http://localhost:*` / `http://127.0.0.1:*` | dev の Vite、および web モード |
 | **`file://`** | **Electron のレンダラ（パッケージ版）** |
-| `null` | sandbox iframe 等の不透明オリジン |
+| ~~`null`~~ | **許可しない**（2026-10-11 に削除。下の「ブラウザで開いた悪意あるページから」を参照） |
 
 🔴 **`file://` を足すまで、パッケージ版のプラグインは 100% 導入後に起動できなかった。**
 設定のコメントは以前「Electron file:// = null を想定」と書いていたが、**実測では
@@ -99,6 +99,28 @@ Electron はパッケージ後は警告を出さない**（本番は上記 CSP �
 
 再発防止: `backend/src/test/java/com/vis/graphynext/web/CorsConfigTest.java`
 （`file://` / `null` / `http://localhost:5173` は 200、外部サイトは 403 を固定）。
+
+---
+
+## ブラウザで開いた悪意あるページから standalone の API を呼ばせない（2026-10-11）
+
+standalone の backend には認証が無い。だから「誰が呼んでいるか」を、次の 4 つで絞っている。
+
+| 守り | 塞ぐ経路 | 置き場所 |
+|---|---|---|
+| HTTP を `127.0.0.1` だけで待ち受ける | LAN の別の端末 | `application-standalone.yml` の `server.address` |
+| `Host` が `localhost`・`127.0.0.1`・`[::1]` 以外なら 403 | DNS リバインディング（相手のドメインを 127.0.0.1 に向け直して「同一オリジン」になる） | `web/LocalHostOnlyFilter` |
+| CORS で `Origin: null` を許さない | どのサイトでも作れるサンドボックスの iframe | `application.yml` の `graphy.cors` |
+| プラグイン導入の同意は main だけが変える | レンダラ（同じ realm で動くプラグインも）からの書き換え | `PUT /api/settings` は 400、`/api/internal/plugin-manager/opt-in`（`MainChannelFilter`）、main の確認ダイアログ |
+
+**実測（直す前）**: `Origin: null` の事前確認が 200 で、`PUT /api/settings` で `plugins.installEnabled` を
+`true` にできた。偽の `Host: evil.example` でも 200 だった。外部サイトの `Origin` そのままは 403 だった
+（そこだけは守られていた）。
+
+- `X-Forwarded-For` / `X-Forwarded-Host` は、`forward-headers-strategy: framework` のもとで外側のラッパーが
+  接続元・ホスト名を書き換える。送る側が自由に付けられるので、判定には `web/RawRequest.unwrap` ではがした生の値を使う。
+- `Host` の無い要求は通す。ブラウザは必ず `Host` を付けるので、ブラウザ経由の攻撃では作れない。
+- 残っていること: 導入済みのプラグイン（レンダラと同じ realm）は、同意が入っていれば別のプラグインを導入できる。設計の前提の範囲。
 
 ---
 

@@ -78,7 +78,7 @@ export function PluginManagerPanel() {
     setBusy("optin");
     setMsg(null);
     try {
-      await setPluginInstallEnabled(next);
+      if (!(await setPluginInstallEnabled(next))) return; // 確認ダイアログで取り消した
       setStatus(await fetchManagerStatus());
       setMsg({ text: t(next ? "pluginmgr.optIn.enabled" : "pluginmgr.optIn.disabled"), ok: true });
     } catch (e) {
