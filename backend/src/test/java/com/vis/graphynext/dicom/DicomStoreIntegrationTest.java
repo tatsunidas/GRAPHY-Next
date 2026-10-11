@@ -51,13 +51,16 @@ class DicomStoreIntegrationTest {
     }
 
     @Autowired
+    private com.vis.graphynext.dicom.store.StorageLayout layout;
+
+    @Autowired
     DicomStorageService storage;
 
     @Autowired
     DicomSendService sendService;
 
     @Test
-    void ingest_isIdempotent_and_indexed_with_fileUri() throws Exception {
+    void ingest_isIdempotent_and_indexed_with_relativePath() throws Exception {
         Attributes ds = DicomPhantomFactory.scImage("PID1", "1.2.study.1", "1.2.series.1", "1.2.sop.1");
 
         // 同じインスタンスを 2 回取り込む（冪等のはず）
@@ -68,8 +71,8 @@ class DicomStoreIntegrationTest {
         assertEquals(1, byStudy.size(), "再受信しても索引は 1 行（冪等）");
 
         DicomInstance inst = byStudy.get(0);
-        assertTrue(inst.getUri().startsWith("file:"), "URI は file: スキーム");
-        assertTrue(Files.exists(Path.of(URI.create(inst.getUri()))), "FS にファイルが存在する");
+        assertEquals("1.2.study.1/1.2.series.1/1.2.sop.1.dcm", inst.getUri(), "索引は保管庫からの相対パス");
+        assertTrue(Files.exists(layout.resolveForRead(inst)), "FS にファイルが存在する");
 
         // マッチングの各レベル
         assertEquals(1, storage.findMatches("PID1", null, null, null).size());

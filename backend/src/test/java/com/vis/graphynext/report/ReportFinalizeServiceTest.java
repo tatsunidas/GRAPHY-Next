@@ -54,6 +54,9 @@ class ReportFinalizeServiceTest {
     }
 
     @Autowired
+    private com.vis.graphynext.dicom.store.StorageLayout layout;
+
+    @Autowired
     ReportService reportService;
     @Autowired
     DicomStorageService storage;
@@ -93,7 +96,7 @@ class ReportFinalizeServiceTest {
         assertEquals(studyUid, srInstance.get().getStudyInstanceUid());
         assertEquals("SR", srInstance.get().getModality());
 
-        Attributes srDataset = readHeader(Path.of(java.net.URI.create(srInstance.get().getUri())));
+        Attributes srDataset = readHeader(layout.resolveForRead(srInstance.get()));
         assertEquals("山田^一郎", srDataset.getString(Tag.PatientName), "参照インスタンスから患者名を継承");
         assertEquals("CONTAINER", srDataset.getString(Tag.ValueType));
         assertEquals("UNVERIFIED", srDataset.getString(Tag.VerificationFlag), "VERIFIER 参加者が無いので未検証");
@@ -139,7 +142,7 @@ class ReportFinalizeServiceTest {
         assertEquals(UID.KeyObjectSelectionDocumentStorage, koInstance.get().getSopClassUid());
         assertEquals("KO", koInstance.get().getModality());
 
-        Attributes koDataset = readHeader(Path.of(java.net.URI.create(koInstance.get().getUri())));
+        Attributes koDataset = readHeader(layout.resolveForRead(koInstance.get()));
         assertEquals("CONTAINER", koDataset.getString(Tag.ValueType));
         Attributes koConcept = koDataset.getNestedDataset(Tag.ConceptNameCodeSequence);
         assertEquals("113000", koConcept.getString(Tag.CodeValue));
@@ -156,7 +159,7 @@ class ReportFinalizeServiceTest {
 
         // SR 側の ContentSequence にも同じキー画像が IMAGE として入っていること。
         Optional<DicomInstance> srInstance = dicomInstanceRepo.findById(finalized.srSopInstanceUid());
-        Attributes srDataset = readHeader(Path.of(java.net.URI.create(srInstance.orElseThrow().getUri())));
+        Attributes srDataset = readHeader(layout.resolveForRead(srInstance.orElseThrow()));
         boolean srHasKeyImage = readContentSequence(srDataset).stream().anyMatch(item ->
                 "IMAGE".equals(item.getString(Tag.ValueType))
                         && "SOP.FIN4.KEY".equals(item.getNestedDataset(Tag.ReferencedSOPSequence).getString(Tag.ReferencedSOPInstanceUID)));

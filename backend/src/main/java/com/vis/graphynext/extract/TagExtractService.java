@@ -6,6 +6,7 @@ package com.vis.graphynext.extract;
 
 import com.vis.graphynext.dicom.store.DicomInstance;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
+import com.vis.graphynext.dicom.store.StorageLayout;
 import com.vis.graphynext.dicom.web.WebDicomDataService;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
@@ -58,10 +59,13 @@ public class TagExtractService {
 
     private final DicomInstanceRepository repo;
     private final ObjectProvider<WebDicomDataService> webProvider;
+    private final StorageLayout layout;
 
-    public TagExtractService(DicomInstanceRepository repo, ObjectProvider<WebDicomDataService> webProvider) {
+    public TagExtractService(DicomInstanceRepository repo, ObjectProvider<WebDicomDataService> webProvider,
+                             StorageLayout layout) {
         this.repo = repo;
         this.webProvider = webProvider;
+        this.layout = layout;
     }
 
     /** タグパスの 1 セグメント。tag は 8 桁 16 進。creator は Private creator（任意）。 */
@@ -148,15 +152,12 @@ public class TagExtractService {
         return insts.get(0);
     }
 
-    private static String seriesSource(DicomInstance rep) {
-        String uri = rep.getUri();
-        if (uri != null && uri.startsWith("file:")) {
-            try {
-                return Path.of(java.net.URI.create(uri)).toString();
-            } catch (Exception ignore) {
-                // fall through
-            }
+    private String seriesSource(DicomInstance rep) {
+        Path p = layout.resolveForRead(rep);
+        if (p != null) {
+            return p.toString();
         }
+        String uri = rep.getUri();
         return uri == null ? "" : uri;
     }
 
@@ -273,9 +274,8 @@ public class TagExtractService {
     }
 
     private Attributes readHeaderQuietly(DicomInstance inst) {
-        Path path = (inst.getUri() != null && inst.getUri().startsWith("file:"))
-                ? Path.of(java.net.URI.create(inst.getUri())) : null;
-        if (path == null || !Files.exists(path)) {
+        Path path = layout.resolveForRead(inst);
+        if (path == null) {
             return null;
         }
         try (DicomInputStream in = new DicomInputStream(path.toFile())) {

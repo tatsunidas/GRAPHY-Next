@@ -14,7 +14,8 @@ import jakarta.persistence.Table;
  * ローカル索引の 1 インスタンス（DICOM SOP Instance）。
  *
  * <p>主キーは {@code sopInstanceUid}（再受信は upsert で冪等）。ピクセル本体は FS に置き、
- * ここには {@code file:} URI と、スタディ/シリーズ ナビゲーション表示に必要な属性を保持する。
+ * ここには保管庫ルートからの相対パス（旧来の行は {@code file:} URI）と、スタディ/シリーズ ナビゲーション
+ * 表示に必要な属性を保持する。実ファイルへの解決は必ず {@link StorageLayout} を通す。
  */
 @Entity
 @Table(name = "dicom_instance", indexes = {
