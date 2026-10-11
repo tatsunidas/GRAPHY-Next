@@ -266,13 +266,18 @@ async function main(): Promise<void> {
     await dates.nth(1).fill("");
     // 起動直後は backend との接続中（画面下部の「Connecting…」）で、最初の検索が空振りすることがあるので数回やり直す。
     const row = main.locator('[data-testid^="study-row-"]').first();
+    // 画面が backend へ投げる検索の URL と応答（一覧が空のとき、画面の問い合わせ側かを見る）。
+    const searchCalls: string[] = [];
+    main.on("response", (r) => {
+      if (/\/api\/studies(\?|$)/.test(r.url())) searchCalls.push(`${r.status()} ${r.url()}`);
+    });
     let found = false;
     let attempts = 0;
     for (; attempts < 6 && !found; attempts++) {
       await main.getByTestId("search-submit-button").click();
       found = await row.waitFor({ state: "visible", timeout: 10_000 }).then(() => true, () => false);
     }
-    console.log(`  [情報] 検索の試行回数: ${attempts}`);
+    console.log(`  [情報] 検索の試行回数: ${attempts}\n  [情報] 画面の検索リクエスト: ${JSON.stringify(searchCalls.slice(0, 4))}`);
     if (!found) {
       // 画面（renderer）から backend へ届いているか。localhost は macOS で ::1 を先に引く。
       for (const host of ["localhost", "127.0.0.1"]) {
