@@ -28,6 +28,7 @@ import { importRtStructForCurrentView } from "../viewer/rtstructImport";
 import { importSegForCurrentView } from "../viewer/segImport";
 import { LoadingSpinner } from "../viewer/LoadingSpinner";
 import { emitToast } from "../viewer/toast";
+import { isRoiLocked, setRoiLocked } from "../viewer/roiLock";
 import { emitSeriesRefresh } from "../viewer/viewerRefresh";
 import { emitDbChanged } from "../dbEvents";
 import { combineMasks, splitMask, roiToMask, isAreaRoi, type BoolOp, type SplitConnectivity } from "../viewer/roiBooleanOps";
@@ -55,7 +56,7 @@ function hexToRgb(hex: string): string {
   return `rgb(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)})`;
 }
 
-interface RoiRow { uid: string; tool: string; visible: boolean; scope: string; }
+interface RoiRow { uid: string; tool: string; visible: boolean; locked: boolean; scope: string; }
 interface MaskRow { id: string; label: string; scope: string; visible: boolean; }
 
 /** マスク（segmentation representation）の表示状態を読む（先頭ビューポート基準。未取得は表示扱い）。 */
@@ -183,6 +184,7 @@ export function RoiManagerPanel({
             uid: a.annotationUID as string,
             tool: (a.metadata?.toolName as string) ?? "ROI",
             visible: csAnnotation.visibility.isAnnotationVisible(a.annotationUID) ?? true,
+            locked: isRoiLocked(a.annotationUID),
             scope: scopeText(a.annotationUID),
           })),
       );
@@ -218,6 +220,8 @@ export function RoiManagerPanel({
       ev.ANNOTATION_ADDED,
       ev.ANNOTATION_REMOVED,
       ev.ANNOTATION_MODIFIED,
+      ev.ANNOTATION_LOCK_CHANGE,
+      ev.ANNOTATION_VISIBILITY_CHANGE,
       ev.SEGMENTATION_MODIFIED,
       ev.SEGMENTATION_REMOVED,
       csEnums.Events.STACK_NEW_IMAGE,
@@ -233,6 +237,7 @@ export function RoiManagerPanel({
   }, [refresh]);
 
   const deleteRoi = (uid: string) => {
+    if (isRoiLocked(uid)) return;
     try { csAnnotation.state.removeAnnotation(uid); } catch { /* ignore */ }
     deleteRoiMaskMeta(uid);
     // 削除も保存対象。イベント購読でも拾えるが、経路ごとの発火差に依存しないよう明示的に予約する。
@@ -271,6 +276,10 @@ export function RoiManagerPanel({
     } catch {
       return null;
     }
+  };
+  const toggleRoiLock = (uid: string, locked: boolean) => {
+    setRoiLocked(uid, locked);
+    refresh();
   };
   const toggleRoi = (uid: string, vis: boolean) => {
     try { csAnnotation.visibility.setAnnotationVisibility(uid, vis); } catch { /* ignore */ }
@@ -651,6 +660,15 @@ export function RoiManagerPanel({
           data-roi-uid={r.uid}
         >
           <button onClick={(e) => { e.stopPropagation(); toggleRoi(r.uid, !r.visible); }} style={eyeBtn} title={t("roiMgr.visible")}>{r.visible ? "👁" : "🚫"}</button>
+          <button
+            onClick={(e) => { e.stopPropagation(); toggleRoiLock(r.uid, !r.locked); }}
+            style={eyeBtn}
+            title={r.locked ? t("roiMgr.unlock") : t("roiMgr.lock")}
+            aria-pressed={r.locked}
+            data-testid="roi-mgr-lock"
+          >
+            {r.locked ? "🔒" : "🔓"}
+          </button>
           <input
             type="text" style={name} title={r.tool}
             defaultValue={getRoiMaskMeta(r.uid)?.label ?? r.tool}
@@ -676,7 +694,15 @@ export function RoiManagerPanel({
           {/circle/i.test(r.tool) && <button onClick={(e) => { e.stopPropagation(); runSphere(r.uid); }} disabled={busy} style={editBtn} title={t("roiMgr.toSphere")}>⬤</button>}
           <button onClick={(e) => { e.stopPropagation(); setStatsOpen({ focus: r.uid }); }} style={editBtn} title={t("roiMgr.statsRoi")}>Σ</button>
           <button onClick={(e) => { e.stopPropagation(); setEditId(r.uid); }} style={editBtn} title={t("roiMgr.editTitle")}>✎</button>
-          <button onClick={(e) => { e.stopPropagation(); deleteRoi(r.uid); }} style={delBtn} title={t("common.delete")}>🗑</button>
+          <button
+            onClick={(e) => { e.stopPropagation(); deleteRoi(r.uid); }}
+            disabled={r.locked}
+            style={r.locked ? { ...delBtn, opacity: 0.35, cursor: "not-allowed" } : delBtn}
+            title={r.locked ? t("roiMgr.lockedNoDelete") : t("common.delete")}
+            data-testid="roi-mgr-delete"
+          >
+            🗑
+          </button>
         </div>
       ))}
 

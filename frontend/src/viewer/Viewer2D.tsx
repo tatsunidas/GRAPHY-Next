@@ -29,6 +29,7 @@ import { TOOL_IDS } from "./toolIds";
 import { ToolIcon } from "../icons/ToolIcon";
 import { UI_ICON_FILES, ACTIVE_ICON_STYLE } from "../icons/toolIcons";
 import { emitToast } from "./toast";
+import { partitionByLock } from "./roiLock";
 import { ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID } from "./toolIds";
 import { setViewerContext, clearViewerContext, getViewerContext, type ViewerContext } from "./viewerContext";
 import { getRoiMaskMeta, setRoiMaskMeta, subscribeRoiMaskStore } from "./roiMaskStore";
@@ -1565,13 +1566,15 @@ export function Viewer2D({
         e.preventDefault();
         toggleInvert();
       } else if (e.key === "Delete" || e.key === "Backspace") {
-        // 選択中の ROI（計測注釈）を 1 つずつ削除。ROI をクリックで選択 → Delete/Backspace。
+        // 選択中の ROI（計測注釈）を 1 つずつ削除。ROI をクリックで選択 → Delete/Backspace。ロック中は消さない。
         const sel = csAnnotation.selection.getAnnotationsSelected();
         if (sel.length) {
           e.preventDefault();
-          for (const uid of sel) {
+          const { removable, kept } = partitionByLock(sel);
+          for (const uid of removable) {
             try { csAnnotation.state.removeAnnotation(uid); } catch { /* ignore */ }
           }
+          if (kept.length) emitToast(t("roi.keptLocked", { n: kept.length }));
           viewportRef.current?.render();
         }
       }
@@ -2490,17 +2493,25 @@ export function Viewer2D({
     return uid;
   };
 
-  // この viewport の注釈（計測 ROI）を全消去。
+  // 注釈（計測 ROI）を全消去。ロック中の ROI は残す。
   const clearAnnotations = () => {
     const v = vp();
     try {
-      csAnnotation.state.removeAllAnnotations();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const uids = (csAnnotation.state.getAllAnnotations() as any[])
+        .map((a) => a?.annotationUID as string | undefined)
+        .filter((u): u is string => !!u);
+      const { removable, kept } = partitionByLock(uids);
+      for (const uid of removable) {
+        try { csAnnotation.state.removeAnnotation(uid); } catch { /* ignore */ }
+      }
+      if (kept.length) emitToast(t("roi.keptLocked", { n: kept.length }));
       if (v) v.render();
     } catch {
       /* ignore */
     }
-    // 保存を**明示的に**予約する。`removeAllAnnotations()` は個々の ANNOTATION_REMOVED を
-    // 発火しないため、イベント購読だけに任せると全消去が保存されない（実機検証で判明）。
+    // 保存を**明示的に**予約する（以前の `removeAllAnnotations()` は個々の ANNOTATION_REMOVED を
+    // 発火せず、全消去が保存されなかった。1 件ずつ消す今も、経路ごとの発火差に依存しない）。
     const pk = roiContextRef.current?.patientKey;
     if (pk) scheduleRoiSave(pk);
   };
