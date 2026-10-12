@@ -31,6 +31,8 @@ export const TOOL_ICON_FILES: Partial<Record<string, string>> = {
   [TOOL_IDS.length]: "outline_square_foot_black_48dp.png",
   [TOOL_IDS.bidirectional]: "outline_square_foot_black_48dp.png",
   [TOOL_IDS.angle]: "roi_angle.png",
+  [TOOL_IDS.cobbAngle]: "roi_angle.png",
+  [TOOL_IDS.magnify]: "others/zoom.png",
   [TOOL_IDS.ellipse]: "roi_oval_circle.png",
   [TOOL_IDS.rect]: "roi_rectangle.png",
   [TOOL_IDS.probe]: "roi_point_scan_64dp.png",

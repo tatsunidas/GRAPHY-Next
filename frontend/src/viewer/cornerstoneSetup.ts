@@ -32,6 +32,8 @@ import {
   LengthTool,
   BidirectionalTool,
   AngleTool,
+  CobbAngleTool,
+  MagnifyTool,
   EllipticalROITool,
   RectangleROITool,
   ProbeTool,
@@ -152,6 +154,8 @@ export function ensureCornerstoneInitialized(): Promise<void> {
       // プラグイン host API の H5 は、この 2 軸を measurements.length / shortAxis として返す。
       addTool(BidirectionalTool);
       addTool(AngleTool);
+      addTool(CobbAngleTool);
+      addTool(MagnifyTool);
       addTool(EllipticalROITool);
       addTool(RectangleROITool);
       addTool(ProbeTool);
