@@ -13,7 +13,7 @@
 //   GRAPHY_BACKEND_PROFILE     … backend プロファイル（既定 config.backend.profile）
 //   GRAPHY_DEV_SERVER_URL      … Vite dev サーバの URL（既定 config.devServerUrl の 5173）
 
-const { app, BrowserWindow, shell, dialog, ipcMain, nativeImage, screen } = require("electron");
+const { app, BrowserWindow, shell, dialog, ipcMain, nativeImage, screen, clipboard } = require("electron");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 const os = require("node:os");
@@ -688,6 +688,22 @@ ipcMain.on("graphy:start-drag", (e, payload) => {
     e.sender.startDrag({ file: filePath, icon });
   } catch (err) {
     console.error("[start-drag]", err);
+  }
+});
+
+// ビューアのタイル画像（PNG dataURL）をクリップボードへ書く。PNG の dataURL 以外は受けない。
+ipcMain.handle("graphy:copy-image", (_e, dataUrl) => {
+  try {
+    if (typeof dataUrl !== "string") return false;
+    const m = /^data:image\/png;base64,([\s\S]+)$/.exec(dataUrl);
+    if (!m) return false;
+    const img = nativeImage.createFromBuffer(Buffer.from(m[1], "base64"));
+    if (img.isEmpty()) return false;
+    clipboard.writeImage(img);
+    return true;
+  } catch (err) {
+    console.error("[copy-image]", err);
+    return false;
   }
 });
 

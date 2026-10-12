@@ -242,7 +242,10 @@ export function Viewer2DMenuBar({
     {
       id: "file",
       label: t("main.menu.file"),
-      items: [{ label: t("common.close"), onClick: onClose }],
+      items: [
+        { label: t("viewer2d.copyImageMenu"), onClick: () => actions.copyImage() },
+        { label: t("common.close"), onClick: onClose },
+      ],
     },
     {
       id: "view",

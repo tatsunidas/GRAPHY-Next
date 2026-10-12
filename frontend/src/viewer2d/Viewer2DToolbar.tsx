@@ -248,6 +248,8 @@ export interface ViewerActions {
   openGlamAnalysis(): void;
   /** 対象タイルのスタディでレポート編集ダイアログを開く。 */
   openReport(): void;
+  /** 対象タイルの画像をクリップボードへコピーする（ROI・文字の重ね描きは含まない）。 */
+  copyImage(): void;
 }
 
 /** 2D Viewer 画面ツールバー。グループ分けしたアイコン行（対象=選択 or 全）。 */

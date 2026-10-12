@@ -30,6 +30,8 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   openMonitorQc: (displayId) => ipcRenderer.invoke("graphy:open-monitor-qc", displayId),
   // PNG dataURL を OS のネイティブドラッグに乗せて外部へ書き出す。
   startDrag: (dataUrl, filename) => ipcRenderer.send("graphy:start-drag", { dataUrl, filename }),
+  // PNG dataURL をクリップボードへ書く。成否を返す。
+  copyImage: (dataUrl) => ipcRenderer.invoke("graphy:copy-image", dataUrl),
   // OS 標準のメモリ/システムモニタを起動する。
   openMemoryMonitor: () => ipcRenderer.invoke("graphy:open-memory-monitor"),
   // OS の物理メモリ量を取得（ボリューム構築のバジェット決定用）。
