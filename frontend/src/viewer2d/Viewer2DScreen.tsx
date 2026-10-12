@@ -217,6 +217,21 @@ function captureAndDownload(tileId: string): void {
   a.click();
 }
 
+/** 指定タイルの画像をクリップボードへコピーする（ROI・文字の重ね描きは含まない＝PNG 保存と同じ）。 */
+async function copyTileImage(tileId: string): Promise<boolean> {
+  const url = captureTileDataUrl(tileId);
+  if (!url) return false;
+  const copy = desktop()?.copyImage;
+  if (copy) return copy(url).catch(() => false);
+  try {
+    const blob = await (await fetch(url)).blob();
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * タイル画像を外部（デスクトップ/他アプリ）へネイティブドラッグする。
  * Electron では本物のファイルドラッグになり、禁止カーソルが出ず、
@@ -1592,6 +1607,11 @@ function TileGrid({
         else window.open(`${window.location.pathname}#glam`, "graphy-glam");
       },
       // レポート: 対象（選択→無ければ先頭）タイルのスタディでレポート編集ダイアログを開く。
+      copyImage: () => {
+        const tid = resolveTargets()[0];
+        if (!tid) return;
+        void copyTileImage(tid).then((ok) => emitToast(t(ok ? "viewer2d.copyImageDone" : "viewer2d.copyImageFailed")));
+      },
       openReport: () => {
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
@@ -2322,6 +2342,19 @@ function TileCell({
           title={t("viewer2d.exportDrag")}
         >
           ⤓
+        </span>
+        <span
+          role="button"
+          tabIndex={0}
+          onClick={(e) => {
+            e.stopPropagation();
+            void copyTileImage(tile.id).then((ok) => emitToast(t(ok ? "viewer2d.copyImageDone" : "viewer2d.copyImageFailed")));
+          }}
+          style={{ ...xbtn, fontSize: 12, lineHeight: 1, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+          title={t("viewer2d.copyImage")}
+          data-testid="tile-copy-image"
+        >
+          📋
         </span>
 
         {/* Sync トグルボタン（動画タイルは同期の対象外なので押せない） */}

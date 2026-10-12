@@ -226,6 +226,8 @@ export interface GraphyDesktop {
   openMonitorQc?: (displayId: number) => Promise<void>;
   /** PNG dataURL を OS のネイティブドラッグで外部（デスクトップ/他アプリ）へ書き出す。 */
   startDrag?: (dataUrl: string, filename: string) => void;
+  /** PNG dataURL をクリップボードへ書く（成否）。 */
+  copyImage?: (dataUrl: string) => Promise<boolean>;
   /** OS 標準のメモリ/システムモニタ（Windows=タスクマネージャ, macOS=アクティビティモニタ, Linux=システムモニタ）を起動する。 */
   openMemoryMonitor?: () => Promise<void>;
   /** OS の物理メモリ量を取得（ボリューム構築のバジェット決定用、デスクトップのみ）。 */
