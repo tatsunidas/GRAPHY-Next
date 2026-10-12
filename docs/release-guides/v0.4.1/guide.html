@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>GRAPHY-Next v0.4.1 操作ガイド — DB フォルダの切り替えと細かな改良</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../guide.css">
+<style>
+  table.ops td:first-child { white-space: nowrap; color: var(--sub); }
+  table.ops td, table.ops th { font-size: 23px; padding: 7px 12px; }
+</style>
+</head>
+<body>
+
+<section class="page cover">
+  <div class="left">
+    <p class="eyebrow">GRAPHY-NEXT v0.4.1 / 操作ガイド</p>
+    <h1>DB フォルダを<br>使い分ける</h1>
+    <p class="lead">検査の索引と画像をまとめた「DB フォルダ」を、研究ごと・外付けディスクなどに分けて使えるようになりました。検査を別の DB フォルダへコピー・移動することもできます。あわせて 2D・MPR などの細かな改良が入っています。</p>
+    <div class="chips">
+      <span class="chip on">DB フォルダ</span>
+      <span class="chip">コピー・移動</span>
+      <span class="chip">ROI のロック</span>
+    </div>
+  </div>
+  <div class="panel">
+    <h3>使い方（デスクトップ版のみ）</h3>
+    <ol class="steps">
+      <li><span class="n">01</span><p>環境設定 ＞ データ管理 ＞ <b>DB フォルダ</b><small>新しく作る・既存のものを開く・一覧から切り替える。切り替えるとアプリが再起動します</small></p></li>
+      <li><span class="n">02</span><p>DB テーブル管理で検査の「<b>別の DB へ…</b>」<small>コピーか移動を選ぶ。移し先は、次にその DB を開いたときに取り込まれます</small></p></li>
+      <li><span class="n">03</span><p>環境設定（表示・通信先など）は<b>どの DB でも共通</b><small>DB フォルダの中には、検査の索引と DICOM ファイルだけが入ります</small></p></li>
+    </ol>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0　doi.org/10.7937/TCIA.5FNA-0924</span><span>1 / 7</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">STEP 1 / 環境設定 ＞ データ管理 ＞ DB フォルダ</p>
+    <h2>DB フォルダを作る・開く・切り替える</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="dbfolders"><img src="shots/dbfolders.png" alt="環境設定のデータ管理。DB フォルダの一覧に、使用中の既定の DB と、もう 1 つの DB が並んでいる"></figure>
+    <div style="display:flex;flex-direction:column;gap:28px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>いま使っている DB（使用中）。最初からある DB は「既定」</p></li>
+        <li><span class="num">2</span><p>前に使った DB。「<b>切り替え</b>」で再起動して切り替わります</p></li>
+        <li><span class="num">3</span><p>空のフォルダを選び、新しい DB を作る</p></li>
+        <li><span class="num">4</span><p>別の PC で作った DB・複製した DB を開く</p></li>
+      </ol>
+      <p class="callout">画像はフォルダからの相対パスで記録します。フォルダごと複製・移動しても開けます。</p>
+      <p class="note">外付けディスクが見つからないときは、再試行・既定の DB で起動・終了を選べます。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。</span><span>2 / 7</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">STEP 2 / DB テーブル管理 ＞ 検査の「別の DB へ…」</p>
+    <h2>検査を別の DB フォルダへコピー・移動する</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="transfer"><img src="shots/transfer.png" alt="別の DB フォルダへコピー・移動する窓。移し先と、コピーか移動かを選ぶ"></figure>
+    <div style="display:flex;flex-direction:column;gap:28px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>移し先の DB フォルダ。一覧に無いものは「フォルダを選ぶ…」から</p></li>
+        <li><span class="num">2</span><p>方法。<b>コピー</b>は今の DB にも残し、<b>移動</b>は運び終えて照合できたら今の DB から消します</p></li>
+        <li><span class="num">3</span><p>「コピーする」（移動のときは「移動する」）</p></li>
+      </ol>
+      <p class="callout">レポート・ROI・位置合わせ・プラグインの記録なども一緒に運びます。移し先に同じものがあれば、上書きせずに残します。</p>
+      <p class="note">移し先の DB に切り替えたときに取り込まれ、右下に件数が出ます。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>3 / 7</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">STEP 3 / 2D ビューアの改良</p>
+    <h2>Cobb 角・ROI のロック・画像のコピー</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="roi"><img src="shots/roi.png" alt="2D ビューア。椎体に Cobb 角、肝臓に矩形 ROI。ROI マネージャで矩形 ROI をロックしている"></figure>
+    <div style="display:flex;flex-direction:column;gap:28px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>ROI メニューの <b>Cobb 角</b>。離れた 2 本の線のなす角を測ります</p></li>
+        <li><span class="num">2</span><p><b>ロック</b>（ROI マネージャの 🔒）。ロックした ROI は動かず、Delete・ゴミ箱・全消去でも消えません</p></li>
+        <li><span class="num">3</span><p>📋 で表示中の画像を<b>クリップボードへコピー</b>（ROI・文字は含みません）。Word などにそのまま貼れます</p></li>
+      </ol>
+      <p class="callout"><b>拡大レンズ（4×）</b>: 画像メニューで選び、左ボタンを押している間だけ、カーソルのまわりを 4 倍で表示します。</p>
+      <p class="note">ロックと表示・非表示は保存され、開き直しても残ります。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>4 / 7</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">STEP 4 / MPR Viewer</p>
+    <h2>MPR の十字線が表示されるようになりました</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="mpr"><img src="shots/mpr.png" alt="MPR Viewer。Axial・Sagittal・Coronal の 3 面に、ほかの面の位置を示す十字線が出ている"></figure>
+    <div style="display:flex;flex-direction:column;gap:28px">
+      <p>各面に、ほかの 2 面の位置が線で出ます。画像をクリックすると、3 面がその点へ移ります。</p>
+      <p class="callout">以前の版では、色の渡し方の誤りで十字線が描かれていませんでした（クリックで移る操作は動いていました）。</p>
+      <p>線の色は 環境設定 ＞ 表示 ＞ MPR の「十字線の色」で、<b>面ごとの色</b>（Axial 緑・Sagittal 黄・Coronal 青）か<b>単色</b>（色も選べる）を選べます。</p>
+      <p class="note">設定を変えたら、MPR を開き直すと反映されます。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>5 / 7</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">そのほかの改良</p>
+    <h2>操作が少し便利になったところ</h2>
+  </div>
+  <table class="ops">
+    <tr><th style="width:24%">どこで</th><th>何ができるようになったか</th></tr>
+    <tr><td>一覧画面</td><td>エクスプローラー・Finder からファイルやフォルダを<b>ドラッグ＆ドロップ</b>して取り込める（デスクトップ版）</td></tr>
+    <tr><td>キーボード</td><td><b>F</b> で全画面（どの窓でも。Esc でも戻る）。2D ビューアで <b>W / P / Z / L / A / R / E</b> を押すと、W/L・移動・拡大・長さ・角度・矩形・楕円に切り替わる</td></tr>
+    <tr><td>2D ビューアの ROI</td><td>選択中の ROI は<b>内側をドラッグして移動</b>できる。Ctrl（Mac は ⌘）＋クリックで<b>複数選択</b>し、表示中のスライスの選択中 ROI をまとめて動かせる</td></tr>
+    <tr><td>Fusion</td><td>操作バーの「重ね方」で<b>差分・乗算</b>を選べる。表示上の合成で、画素値（HU・SUV）の引き算ではない</td></tr>
+    <tr><td>3D ビューア</td><td>環境設定 ＞ 表示 ＞ 3D ビューアで<b>背景色</b>を変えられる（VR・MIP・Ortho・Slab）</td></tr>
+    <tr><td>NIfTI の取り込み</td><td>整数でない値（ADC・T1 マップなど）を 32 bit float の Parametric Map として取り込み、単位を選べる。2D の W/L・MPR・3D・テクスチャでも扱える</td></tr>
+    <tr><td>起動の表示</td><td>スプラッシュの段階を「部品の準備・データベース・機能の準備」に分け、何を待っているかが分かるようにした</td></tr>
+    <tr><td>画像の削除</td><td>ファイルも消す設定のとき、消した画像の ROI・位置合わせ・プラグインの記録なども片付ける（レポートは残す）</td></tr>
+  </table>
+  <div class="footer"><span>研究用です。診断には使わないでください。</span><span>6 / 7</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">直したこと・安全性</p>
+    <h2>気付かないうちに起きていたことを直しました</h2>
+  </div>
+  <table class="ops">
+    <tr><th style="width:24%">どこで</th><th>直したこと</th></tr>
+    <tr><td>接続の制限</td><td>デスクトップ版の HTTP を、その PC（127.0.0.1）からだけ受けるようにした。ブラウザ経由の不正な呼び出しも塞いだ</td></tr>
+    <tr><td>DICOM TLS</td><td>TLS のパスワードを OS の鍵束に保存し、画面の API でも返さないようにした（鍵束の無い環境では、警告を出して従来どおり保存）</td></tr>
+    <tr><td>プラグイン</td><td>プラグインの導入の同意を、本体の確認の窓からしか変えられないようにした</td></tr>
+    <tr><td>取り込み</td><td>失敗しても元のファイルを失わない。空のフォルダや作業用のフォルダを残さない</td></tr>
+    <tr><td>患者 ID の変更</td><td>ROI などの記録も新しい患者 ID へ運ぶ</td></tr>
+    <tr><td>DSA</td><td>Alt＋↑ / ↓（マスクの上下のシフト）が効いていなかったのを直した</td></tr>
+    <tr><td>ROI</td><td>開き直すとロックが外れて見えた・表示の切り替えが保存されなかったのを直した。双方向計測を ImageJ 形式で書き出すと矩形になっていたのを直した</td></tr>
+    <tr><td>再起動（Linux）</td><td>AppImage で DB フォルダの切り替えなどの再起動が失敗していたのを直した</td></tr>
+  </table>
+  <p class="note">変更の全体はリリースノート（GitHub の Releases）にあります。</p>
+  <div class="footer"><span>研究用です。診断には使わないでください。</span><span>7 / 7</span></div>
+</section>
+
+<script src="shots/marks.js"></script>
+<script src="../guide.js"></script>
+</body>
+</html>
