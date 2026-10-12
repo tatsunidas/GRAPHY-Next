@@ -2,6 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
+import { fusionBlendCss, type FusionBlend } from "./fusionBlend";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { imageLoader, metaData } from "@cornerstonejs/core";
 import {
@@ -147,6 +148,7 @@ export function FusionImageViewer({
   overlayT,
   lut,
   opacity,
+  blend,
   windowCenter,
   windowWidth,
   adjust,
@@ -177,6 +179,8 @@ export function FusionImageViewer({
   lut?: { r: number[]; g: number[]; b: number[] } | null;
   /** 不透明度（0–1）。 */
   opacity: number;
+  /** 重ね方（表示上の合成。未指定は通常）。 */
+  blend?: FusionBlend;
   /** オーバーレイ W/L の上書き（未指定/null なら DICOM 既定 or 自動 W/L）。 */
   windowCenter?: number | null;
   windowWidth?: number | null;
@@ -520,6 +524,7 @@ export function FusionImageViewer({
       style={{
         ...overlayPlacement(rect),
         opacity,
+        mixBlendMode: fusionBlendCss(blend),
         pointerEvents: "none",
         imageRendering: "pixelated",
       }}

@@ -2,6 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
+import { FUSION_BLENDS, fusionBlendCss, type FusionBlend } from "../viewer/fusionBlend";
 import { deselectAllRois } from "../viewer/roiInteriorGrab";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -114,6 +115,8 @@ interface FusionOverlay {
   series: Series;
   instances: Instance[];
   opacity: number; // 0.0 – 1.0
+  /** 重ね方（表示上の合成）。未指定は通常。保存しない。 */
+  blend?: FusionBlend;
   /** ドロップ元タイルで表示中だった C/T。fusion オーバーレイの初期 C/T に使う（無ければ 0）。 */
   initialC?: number;
   initialT?: number;
@@ -2203,6 +2206,7 @@ function TileCell({
         overlayT={fusionT}
         lut={fusionLut}
         opacity={fusion.opacity}
+        blend={fusion.blend}
         windowCenter={fusionWL?.center ?? null}
         windowWidth={fusionWL?.width ?? null}
         adjust={fusionAdjust}
@@ -2427,6 +2431,8 @@ function TileCell({
           adjust={fusionAdjust}
           adjustEnabled={fusionSpatial}
           onOpacityChange={(v) => onFusionChange({ ...tile.fusion!, opacity: v })}
+          blend={fusionBlendCss(tile.fusion.blend)}
+          onBlendChange={(b) => onFusionChange({ ...tile.fusion!, blend: b })}
           onCChange={setFusionC}
           onTChange={setFusionT}
           onLutChange={setFusionLut}
@@ -2546,6 +2552,8 @@ function FusionControlBar({
   registered,
   onOpenRegistration,
   onOpacityChange,
+  blend,
+  onBlendChange,
   onCChange,
   onTChange,
   onLutChange,
@@ -2574,6 +2582,8 @@ function FusionControlBar({
   /** 自動位置合わせのパネルを開く。 */
   onOpenRegistration: () => void;
   onOpacityChange: (v: number) => void;
+  blend: FusionBlend;
+  onBlendChange: (b: FusionBlend) => void;
   onCChange: (v: number) => void;
   onTChange: (v: number) => void;
   onLutChange: (lut: LutData | null) => void;
@@ -2634,6 +2644,20 @@ function FusionControlBar({
         <span style={{ fontSize: 11, color: "#5a6672", minWidth: 28, textAlign: "right" }}>
           {Math.round(opacity * 100)}%
         </span>
+
+        {/* 重ね方（表示上の合成。画素値の引き算ではない） */}
+        <select
+          value={blend}
+          onChange={(e) => onBlendChange(fusionBlendCss(e.target.value))}
+          title={t("fusion.blend.help")}
+          aria-label={t("fusion.blend")}
+          data-testid="fusion-blend"
+          style={{ fontSize: 11, flex: "none" }}
+        >
+          {FUSION_BLENDS.map((b) => (
+            <option key={b} value={b}>{t(`fusion.blend.${b}`)}</option>
+          ))}
+        </select>
 
         {/* LUT ボタン */}
         <div style={{ display: "flex", alignItems: "center", gap: 3, flex: "none" }}>
