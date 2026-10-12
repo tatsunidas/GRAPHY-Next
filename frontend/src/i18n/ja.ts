@@ -971,6 +971,8 @@ export const ja: Record<string, string> = {
   "viewer2d.drop.center": "Fusion オーバーレイ",
   "main.import.action": "インポート",
   "main.import.running": "インポート中…",
+  "main.import.dropHint": "ここにドロップして取り込み",
+  "main.import.dropNoPath": "ファイルの場所を読めませんでした。「インポート」から選んでください。",
   "main.import.result": "取込 {{imported}} 件 / スキップ {{skipped}} / 失敗 {{failed}}",
   "main.import.noStudyDate": "うち検査日なしのスタディ {{count}} 件。既定の「今日」では表示されません（「全期間」で検索してください）。",
   "main.search.title": "検索",
