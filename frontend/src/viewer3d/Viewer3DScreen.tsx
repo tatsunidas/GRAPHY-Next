@@ -64,6 +64,8 @@ import { fetchLutData } from "../api";
 import { attachSceneRenderer, resetScene, setClipContext, updateClip, setOrthoSlice } from "./scene3d";
 import { geomFromImageData, type VolumeGeom } from "../viewer/labelVolume";
 import { useI18n } from "../i18n/i18n";
+import { fetchSettings } from "../settings/settingsApi";
+import { hexToRgb01 } from "../viewer/hexColor";
 
 interface Viewer3DContext {
   study: Study;
@@ -320,6 +322,12 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         width: wl.width,
       });
       viewRef.current = view;
+      // 背景色（環境設定）。読めなければ黒のまま。設定を変えたら開き直すと反映する（2D と同じ）。
+      fetchSettings()
+        .then((m) => {
+          if (viewRef.current === view) view.setBackground(hexToRgb01(m["viewer3d.background"]));
+        })
+        .catch(() => undefined);
       // mesh / 3D ROI アクターを同一 vtk シーンへ重畳するため renderer を接続。
       try {
         const parts = view.getSceneParts();

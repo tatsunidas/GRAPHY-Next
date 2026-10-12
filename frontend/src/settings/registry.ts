@@ -475,6 +475,18 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
           },
         ],
       },
+      {
+        titleKey: "settings.sec.viewer3d",
+        fields: [
+          {
+            key: "viewer3d.background",
+            labelKey: "settings.field.viewer3dBackground",
+            type: "color",
+            default: "#000000",
+            helpKey: "settings.field.viewer3dBackground.help",
+          },
+        ],
+      },
     ],
   },
   {
