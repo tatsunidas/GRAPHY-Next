@@ -75,3 +75,6 @@ CLAUDE.md
 
 # 社内向け価格プラン（非公開・リポジトリに含めない）
 PRICING-PLAN.md
+
+# Google Drive 用の OAuth クライアント（デスクトップ アプリ型）。公開リポジトリには入れない。
+desktop/gdrive-oauth-client.json
