@@ -155,6 +155,11 @@ export function App() {
       if (status?.mode === "standalone") setDbOpen(true);
     },
     "show-help": () => setHelpOpen(true),
+    // F: 全画面の切り替え（どのウィンドウでも。抜けるのは F か Esc）。
+    "disp-fullscreen": () => {
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+      else void document.documentElement.requestFullscreen().catch(() => undefined);
+    },
     // Esc: 開いているダイアログを閉じる（ビューア実装後はビューア側で表示リセットに割当）
     "close-dialog": () => {
       setSettingsOpen(false);
