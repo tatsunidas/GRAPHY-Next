@@ -3,7 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { describe, expect, it } from "vitest";
-import { hexToRgb01 } from "./hexColor";
+import { hexToRgb01, hexToRgb255 } from "./hexColor";
 
 describe("hexToRgb01", () => {
   it("#rrggbb を 0..1 の RGB に直す", () => {
@@ -17,5 +17,13 @@ describe("hexToRgb01", () => {
     expect(hexToRgb01(undefined)).toEqual([0, 0, 0]);
     expect(hexToRgb01("")).toEqual([0, 0, 0]);
     expect(hexToRgb01("white")).toEqual([0, 0, 0]);
+  });
+});
+
+describe("hexToRgb255", () => {
+  it("#rrggbb を 0..255 の RGB に、読めない値は null", () => {
+    expect(hexToRgb255("#ff00ff")).toEqual([255, 0, 255]);
+    expect(hexToRgb255("x")).toBeNull();
+    expect(hexToRgb255(undefined)).toBeNull();
   });
 });
