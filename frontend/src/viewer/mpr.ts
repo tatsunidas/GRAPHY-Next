@@ -101,6 +101,37 @@ export function setMprTouchTool(toolGroupId: string, tool: MprTouchTool): void {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
 
+export type MprCrosshairColorMode = "perPlane" | "single";
+
+/** 十字線の色。面ごと（Axial 緑・Sagittal 黄・Coronal 青）か、全部を 1 色にする。知らない面は灰色。 */
+export function crosshairColorFor(
+  viewportId: string,
+  ids: MprViewportIds,
+  mode: MprCrosshairColorMode,
+  single: [number, number, number],
+): [number, number, number] {
+  if (mode === "single") return single;
+  if (viewportId === ids.axial) return [0, 220, 0];
+  if (viewportId === ids.sagittal) return [220, 220, 0];
+  if (viewportId === ids.coronal) return [0, 160, 255];
+  return [200, 200, 200];
+}
+
+/** [r, g, b]（0..255）→ "rgb(r, g, b)"。 */
+export function rgbCss(rgb: readonly [number, number, number]): string {
+  return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+}
+
+// CrosshairsTool は色の関数をツールを作るときに 1 度だけ読むので、設定はここを経由させる。
+let crosshairColorMode: MprCrosshairColorMode = "perPlane";
+let crosshairSingleColor: [number, number, number] = [255, 255, 255];
+
+/** 環境設定の十字線の色を当てる（次に作る MPR から効く）。読めない値は既定（面ごとの色・白）。 */
+export function setMprCrosshairColors(mode: string | undefined, single: [number, number, number] | null): void {
+  crosshairColorMode = mode === "single" ? "single" : "perPlane";
+  crosshairSingleColor = single ?? [255, 255, 255];
+}
+
 export interface MprViewportIds {
   axial: string;
   sagittal: string;
@@ -361,13 +392,11 @@ export async function setupMprViewports(
   tg = ToolGroupManager.createToolGroup(toolGroupId);
   if (!tg) return;
 
-  const refColors: Record<string, Types.Point3> = {
-    [ids.axial]: [0, 220, 0],
-    [ids.sagittal]: [220, 220, 0],
-    [ids.coronal]: [0, 160, 255],
-  };
   tg.addTool(CrosshairsTool.toolName, {
-    getReferenceLineColor: (viewportId: string) => refColors[viewportId] ?? [200, 200, 200],
+    // 🔴 色は "rgb(r, g, b)" の文字列で返す。CrosshairsTool はそのまま SVG の stroke に書くので、
+    //    配列を返すと stroke="0,220,0"（無効な色）になり、十字線が描かれない（2026-10-12 まで見えていなかった）。
+    getReferenceLineColor: (viewportId: string) =>
+      rgbCss(crosshairColorFor(viewportId, ids, crosshairColorMode, crosshairSingleColor)),
   });
   tg.addTool(WindowLevelTool.toolName);
   tg.addTool(PanTool.toolName);

@@ -487,6 +487,28 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
           },
         ],
       },
+      {
+        titleKey: "settings.sec.mpr",
+        fields: [
+          {
+            key: "mpr.crosshairColorMode",
+            labelKey: "settings.field.mprCrosshairColorMode",
+            type: "select",
+            default: "perPlane",
+            options: [
+              { value: "perPlane", labelKey: "settings.opt.mprCrosshair.perPlane" },
+              { value: "single", labelKey: "settings.opt.mprCrosshair.single" },
+            ],
+            helpKey: "settings.field.mprCrosshairColorMode.help",
+          },
+          {
+            key: "mpr.crosshairColor",
+            labelKey: "settings.field.mprCrosshairColor",
+            type: "color",
+            default: "#ffffff",
+          },
+        ],
+      },
     ],
   },
   {

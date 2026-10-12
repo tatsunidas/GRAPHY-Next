@@ -31,6 +31,7 @@ import { matchesShortcut } from "../shortcuts/registry";
 import {
   buildMprVolume,
   setupMprViewports,
+  setMprCrosshairColors,
   teardownMpr,
   applyMprWl,
   resetMprWl,
@@ -46,6 +47,8 @@ import {
 import { presetLabel } from "../viewer2d/wlPresets";
 import { useWlPresets } from "../viewer2d/wlPresetStore";
 import { useI18n } from "../i18n/i18n";
+import { fetchSettings } from "../settings/settingsApi";
+import { hexToRgb255 } from "../viewer/hexColor";
 import {
   SLAB_PROJECTIONS,
   SLAB_THICKNESS_PRESETS_MM,
@@ -241,6 +244,10 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
         return;
       }
 
+      // 十字線の色（環境設定）。読めなければ既定（面ごとの色）。設定を変えたら開き直すと反映する。
+      await fetchSettings()
+        .then((m) => setMprCrosshairColors(m["mpr.crosshairColorMode"], hexToRgb255(m["mpr.crosshairColor"])))
+        .catch(() => setMprCrosshairColors(undefined, null));
       const engine = new RenderingEngine(ENGINE_ID);
       engineRef.current = engine;
       await setupMprViewports(
