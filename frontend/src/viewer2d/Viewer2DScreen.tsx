@@ -270,6 +270,17 @@ const ANGIO_SR_DESCRIPTION: Record<"qca" | "qlv" | "qca3d", string> = {
   qca3d: "QCA 3D",
 };
 
+/** ツールの切り替えキー（`shortcuts/registry.ts` の id）と、選ぶツール。 */
+const TOOL_KEYS: ReadonlyArray<readonly [string, string]> = [
+  ["tool-wl", TOOL_IDS.windowLevel],
+  ["tool-pan", TOOL_IDS.pan],
+  ["tool-zoom", TOOL_IDS.zoom],
+  ["tool-length", TOOL_IDS.length],
+  ["tool-angle", TOOL_IDS.angle],
+  ["tool-roi-rect", TOOL_IDS.rect],
+  ["tool-roi-ellipse", TOOL_IDS.ellipse],
+];
+
 export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
   const { t } = useI18n();
   const mode = status?.mode === "standalone" ? "standalone" : "web";
@@ -1609,6 +1620,7 @@ function TileGrid({
     emitRoiReveal({ sopInstanceUid: sop, frame: frameOfImageId(refId) });
   }, [patient.tiles]);
 
+  // ツールの切り替えキー（W/P/Z/L/A/R/E）。ツールバー・メニューと同じ setTool を通す。
   // ROI のコピー / 貼り付け（Mod+C / Mod+V）。
   //
   // 🔴 **ここ（画面）に 1 本だけ置く。** Viewer2D 側に置くとタイルの数だけ window リスナが
@@ -1633,6 +1645,12 @@ function TileGrid({
       } else if (matchesShortcut("roi-deselect", e)) {
         // preventDefault しない（同じ Esc でダイアログやメニューも閉じる）。
         deselectAllRois();
+      } else {
+        const tool = TOOL_KEYS.find(([id]) => matchesShortcut(id, e));
+        if (tool) {
+          e.preventDefault();
+          actionsRef.current.setTool(tool[1]);
+        }
       }
     };
     window.addEventListener("keydown", onKey);
