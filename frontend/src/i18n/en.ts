@@ -969,6 +969,8 @@ export const en: Record<string, string> = {
   "viewer2d.drop.center": "Fusion overlay",
   "main.import.action": "Import",
   "main.import.running": "Importing…",
+  "main.import.dropHint": "Drop here to import",
+  "main.import.dropNoPath": "Could not read the location of the dropped files. Use Import instead.",
   "main.import.result": "Imported {{imported}} / Skipped {{skipped}} / Failed {{failed}}",
   "main.import.noStudyDate": "{{count}} of them have no study date and are hidden by the default \"Today\" filter (search with \"All\").",
   "main.search.title": "Search",

@@ -2,9 +2,10 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { importPaths, type AppStatus, type Study, type Series, type StudyFilters } from "../api";
 import { desktop } from "../desktopBridge";
+import { droppedPaths, hasDroppedFiles } from "./droppedPaths";
 import { useI18n } from "../i18n/i18n";
 import { StudyList } from "../StudyList";
 import { MenuBar } from "./MenuBar";
@@ -74,11 +75,31 @@ export function MainScreen({
   // ReportManagerDialog から特定レポートを開いたときだけ設定（新規/報告ボタンからの通常オープンは null=自動解決）。
   const [reportEditorId, setReportEditorId] = useState<string | null>(null);
 
+  // ボタン・メニューとドロップの両方から使う。取り込み中は次を受けない。
+  const importingRef = useRef(false);
+  const [dropActive, setDropActive] = useState(false);
+  // dragenter/dragleave は子要素の出入りでも飛ぶので、入った回数で数える。
+  const dragDepth = useRef(0);
+
   const handleImport = async () => {
     const d = desktop();
-    if (!d) return;
+    if (!d || importingRef.current) return;
     const paths = await d.pickImportPaths();
     if (!paths || paths.length === 0) return;
+    await runImport(paths);
+  };
+
+  const runImport = async (paths: string[]) => {
+    if (importingRef.current) return;
+    importingRef.current = true;
+    try {
+      await runImportOnce(paths);
+    } finally {
+      importingRef.current = false;
+    }
+  };
+
+  const runImportOnce = async (paths: string[]) => {
     setImportMsg(t("main.import.running"));
     try {
       const r = await importPaths(paths);
@@ -266,8 +287,47 @@ export function MainScreen({
     setTimeout(() => setImportMsg(null), 4000);
   };
 
+  const dropHandlers = canImport
+    ? {
+        onDragEnter: (e: React.DragEvent) => {
+          if (!hasDroppedFiles(e.dataTransfer?.types)) return;
+          dragDepth.current += 1;
+          setDropActive(true);
+        },
+        onDragOver: (e: React.DragEvent) => {
+          if (!hasDroppedFiles(e.dataTransfer?.types)) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = importingRef.current ? "none" : "copy";
+        },
+        onDragLeave: (e: React.DragEvent) => {
+          if (!hasDroppedFiles(e.dataTransfer?.types)) return;
+          dragDepth.current = Math.max(0, dragDepth.current - 1);
+          if (dragDepth.current === 0) setDropActive(false);
+        },
+        onDrop: (e: React.DragEvent) => {
+          if (!hasDroppedFiles(e.dataTransfer?.types)) return;
+          e.preventDefault();
+          dragDepth.current = 0;
+          setDropActive(false);
+          if (importingRef.current) return;
+          const paths = droppedPaths(e.dataTransfer.files);
+          if (paths.length === 0) {
+            setImportMsg(t("main.import.dropNoPath"));
+            setTimeout(() => setImportMsg(null), 6000);
+            return;
+          }
+          void runImport(paths);
+        },
+      }
+    : {};
+
   return (
-    <div style={shell}>
+    <div style={shell} {...dropHandlers} data-testid="main-screen">
+      {dropActive && (
+        <div style={dropOverlay} data-testid="main-drop-overlay">
+          <div style={dropOverlayLabel}>{t("main.import.dropHint")}</div>
+        </div>
+      )}
       <MenuBar
         isStandalone={isStandalone}
         canImport={canImport}
@@ -385,6 +445,27 @@ const shell: React.CSSProperties = {
 };
 const middle: React.CSSProperties = { flex: 1, display: "flex", minHeight: 0 };
 const treeArea: React.CSSProperties = { flex: 1, overflow: "auto", padding: "8px 18px" };
+const dropOverlay: React.CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  zIndex: 50,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  background: "rgba(30, 90, 160, 0.12)",
+  border: "3px dashed #1e5aa0",
+  pointerEvents: "none",
+};
+
+const dropOverlayLabel: React.CSSProperties = {
+  padding: "12px 20px",
+  borderRadius: 8,
+  background: "#1e5aa0",
+  color: "#fff",
+  fontSize: 15,
+  fontWeight: 600,
+};
+
 const banner: React.CSSProperties = {
   padding: "6px 14px",
   background: "#eef6ec",
