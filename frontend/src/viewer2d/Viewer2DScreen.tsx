@@ -670,9 +670,14 @@ function TileGrid({
     if (!pk) return;
     const unregister = registerRoiCollector(pk, () => collectRoisForPatient(pk, getLoadedRois(pk)));
     const ev = csToolsEnums.Events;
-    const names = [ev.ANNOTATION_ADDED, ev.ANNOTATION_MODIFIED, ev.ANNOTATION_REMOVED].filter(
-      Boolean,
-    ) as string[];
+    // ロックと表示の切り替えも保存項目（isLocked・isVisible）なので聞く。
+    const names = [
+      ev.ANNOTATION_ADDED,
+      ev.ANNOTATION_MODIFIED,
+      ev.ANNOTATION_REMOVED,
+      ev.ANNOTATION_LOCK_CHANGE,
+      ev.ANNOTATION_VISIBILITY_CHANGE,
+    ].filter(Boolean) as string[];
     const onChange = () => scheduleRoiSave(pk);
     for (const name of names) eventTarget.addEventListener(name, onChange);
     // ラベル・scope・プラグイン属性の変更も保存対象なのでメタ store も見る。
