@@ -13,6 +13,8 @@ import {
   LengthTool,
   BidirectionalTool,
   AngleTool,
+  CobbAngleTool,
+  MagnifyTool,
   EllipticalROITool,
   RectangleROITool,
   ProbeTool,
@@ -30,6 +32,7 @@ import { ToolIcon } from "../icons/ToolIcon";
 import { UI_ICON_FILES, ACTIVE_ICON_STYLE } from "../icons/toolIcons";
 import { emitToast } from "./toast";
 import { partitionByLock } from "./roiLock";
+import { installTrueMagnification } from "./magnifier";
 import { ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID } from "./toolIds";
 import { setViewerContext, clearViewerContext, getViewerContext, type ViewerContext } from "./viewerContext";
 import { getRoiMaskMeta, setRoiMaskMeta, subscribeRoiMaskStore } from "./roiMaskStore";
@@ -149,6 +152,7 @@ const MEASURE_TOOLS = [
   LengthTool.toolName,
   BidirectionalTool.toolName,
   AngleTool.toolName,
+  CobbAngleTool.toolName,
   EllipticalROITool.toolName,
   RectangleROITool.toolName,
   ProbeTool.toolName,
@@ -159,7 +163,7 @@ const MEASURE_TOOLS = [
   CONTOUR_TOOL_NAMES.freeLine,
 ];
 // 左ドラッグに割り当て可能なツール一覧（操作＋計測＋ブラシ＋3D Wand＋Level Sets）。
-const PRIMARY_TOOLS = [WindowLevelTool.toolName, PanTool.toolName, ZoomTool.toolName, ...MEASURE_TOOLS, BrushTool.toolName, WandTool.toolName, LevelSetTool.toolName];
+const PRIMARY_TOOLS = [WindowLevelTool.toolName, PanTool.toolName, ZoomTool.toolName, MagnifyTool.toolName, ...MEASURE_TOOLS, BrushTool.toolName, WandTool.toolName, LevelSetTool.toolName];
 // 描画/計測/セグメンテーション系ツール（左ドラッグ占有）。これらが有効な間は per-tile の Pan↔W/L 切替を抑止し、
 // 先にツールバーで解除するよう促す（グローバルツールが優先＝ナビ切替が黙って効かないのを避ける）。
 const BLOCKING_TOOLS = new Set<string>([...MEASURE_TOOLS, BrushTool.toolName, ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID]);
@@ -1205,6 +1209,10 @@ export function Viewer2D({
             tg.addTool(WindowLevelTool.toolName);
             tg.addTool(PanTool.toolName);
             tg.addTool(ZoomTool.toolName);
+            // 拡大レンズ。倍率は 4 倍（viewer/magnifier.ts。magnifySize は倍率ではない）。
+            tg.addTool(MagnifyTool.toolName);
+            installTrueMagnification(tg.getToolInstance(MagnifyTool.toolName));
+            tg.setToolPassive(MagnifyTool.toolName);
             // 計測（ROI）ツールは passive で追加。setActiveTool で左ドラッグに割当。
             for (const tn of MEASURE_TOOLS) {
               // 設定は登録時にしか渡せない（2 度目の addTool は無視される）。

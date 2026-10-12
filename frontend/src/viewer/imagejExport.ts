@@ -47,13 +47,25 @@ export function annotationToImageJDto(annotationUid: string): ImageJRoiDto | nul
   const minY = Math.min(...ys), maxY = Math.max(...ys);
   const bbox = { bx: minX, by: minY, bw: maxX - minX, bh: maxY - minY };
 
-  if (/ellip|circle/i.test(tool)) return { name, type: "oval", position, ...bbox };
-  if (/rect/i.test(tool)) return { name, type: "rect", position, ...bbox };
-  if (/freehand/i.test(tool)) return { name, type: "freehand", position, xs, ys };
-  if (/angle/i.test(tool)) return { name, type: "angle", position, xs, ys };
-  if (/length|bidirectional|line/i.test(tool)) return { name, type: "polyline", position, xs, ys };
-  if (/probe|point/i.test(tool)) return { name, type: "point", position, xs, ys };
-  return { name, type: "polygon", position, xs, ys };
+  const type = imagejRoiType(tool);
+  if (!type) return null;
+  if (type === "oval" || type === "rect") return { name, type, position, ...bbox };
+  return { name, type, position, xs, ys };
+}
+
+/** ツール名 → ImageJ の ROI の種類。書き出せないものは null。 */
+export function imagejRoiType(tool: string): "oval" | "rect" | "freehand" | "angle" | "polyline" | "point" | "polygon" | null {
+  if (/ellip|circle/i.test(tool)) return "oval";
+  // Bidirectional は名前に "rect" を含むので、矩形の判定より先に線へ振る（以前は矩形で書き出していた）。
+  if (/bidirectional/i.test(tool)) return "polyline";
+  if (/rect/i.test(tool)) return "rect";
+  if (/freehand/i.test(tool)) return "freehand";
+  // Cobb 角（2 本の線・4 点）は ImageJ に同じ種類が無い。ANGLE（3 点）にすると壊れるので書き出さない。
+  if (/cobb/i.test(tool)) return null;
+  if (/angle/i.test(tool)) return "angle";
+  if (/length|bidirectional|line/i.test(tool)) return "polyline";
+  if (/probe|point/i.test(tool)) return "point";
+  return "polygon";
 }
 
 /** 複数アノテーション → DTO 群（変換できたもののみ）。 */

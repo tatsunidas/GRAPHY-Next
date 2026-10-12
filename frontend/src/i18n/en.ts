@@ -734,6 +734,8 @@ export const en: Record<string, string> = {
   "viewer2d.roi.length": "Length",
   "viewer2d.roi.bidirectional": "Long/short axis (RECIST)",
   "viewer2d.roi.angle": "Angle",
+  "viewer2d.roi.cobb": "Cobb angle",
+  "viewer2d.tool.magnify": "Magnifier (4×)",
   "viewer2d.roi.ellipse": "Ellipse ROI",
   "viewer2d.roi.rect": "Rectangle ROI",
   "viewer2d.roi.polygon": "Polygon ROI (closed)",

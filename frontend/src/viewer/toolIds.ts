@@ -10,6 +10,8 @@ import {
   LengthTool,
   BidirectionalTool,
   AngleTool,
+  CobbAngleTool,
+  MagnifyTool,
   EllipticalROITool,
   RectangleROITool,
   ProbeTool,
@@ -33,6 +35,10 @@ export const TOOL_IDS = {
   /** 双方向計測（長径＋直交短径）。RECIST 1.1 の計測はこれを使う。 */
   bidirectional: BidirectionalTool.toolName,
   angle: AngleTool.toolName,
+  /** 離れた 2 本の線のなす角（Cobb 角）。 */
+  cobbAngle: CobbAngleTool.toolName,
+  /** 拡大レンズ（押している間だけカーソルのまわりを拡大。ROI にはならない）。 */
+  magnify: MagnifyTool.toolName,
   ellipse: EllipticalROITool.toolName,
   rect: RectangleROITool.toolName,
   probe: ProbeTool.toolName,
