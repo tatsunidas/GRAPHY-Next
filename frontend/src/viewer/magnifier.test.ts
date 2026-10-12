@@ -21,7 +21,7 @@ describe("installTrueMagnification", () => {
     const calls: number[] = [];
     const tool = {
       configuration: { magnifySize: 10, magnifyHeight: 250 },
-      preMouseDownCallback(this: void) { calls.push(tool.configuration.magnifySize); return true; },
+      preMouseDownCallback(_evt: unknown) { calls.push(tool.configuration.magnifySize); return true; },
     };
     installTrueMagnification(tool, 4);
     installTrueMagnification(tool, 4); // 二重に包まない
