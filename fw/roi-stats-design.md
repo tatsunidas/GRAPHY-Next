@@ -422,6 +422,20 @@ Cornerstone の annotation スタイルに **`textBoxVisibility`** がある
   1 行 1 ROI・ヘッダ付き・単位を列名に含める（`mean[HU]`）。
 - ダイアログは `RoiMetaEditDialog` と同じく `RoiManagerPanel` の中でマウントする（既存パターン）。
 
+#### 画素ダンプ（⬇ 画素）
+
+詳細に出ている 1 件の ROI について、**統計に使った画素を 1 行 1 画素**で CSV に書き出す
+（`viewer/roiPixelDump.ts`・純関数）。
+
+- 列: `label, roiUid, col, row, x[mm], y[mm], z[mm], value[<unit>], imageId`。BOM 付き・CRLF・空セルの規則は統計 CSV と同じ。
+- **母集団は統計と同じ**。面型は `sampleInsideMeshIndices`（`sampleInsideMesh` と同じ画素中心の偶奇則・1 画素も入らないときの最寄り 1 画素）の添字。
+  行数は表の n 列（`geometry.sampleCount`）、空でない値セルの平均は `values.mean`（丸める前）と一致する。
+  非有限値（NaN/Inf）の画素は行を残して値セルを空にする（0 で埋めない）。詳細の `n=`（非有限を除く）とは別の数。
+- 点型は統計と同じ `nearestIndex` の 1 行（col/row は `geometry.samplePx` と一致）。
+- 座標 x/y/z は患者 LPS mm で、画素中心（col+0.5, row+0.5）を `imageToWorldOnPlane` で変換したもの。
+  幾何（IPP/IOP）が無い画像（XA 等）では x/y/z を**空セル**にする（0 で埋めない）。col/row と値は出る。
+- 線 ROI は双一次補間の値で画素ではないため対象外（ボタンは押せず、理由をツールチップに出す）。
+
 ---
 
 ## 7. プラグイン host API（H5 `getRois`）を自前統計へ切り替える（決定・2026-08-27）

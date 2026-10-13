@@ -36,7 +36,7 @@ export function csvValueUnit(rows: ReadonlyArray<RoiStatsCsvRow>): string {
 }
 
 /** 1 セル分のエスケープ（RFC 4180）。 */
-function cell(v: string | number | undefined | null): string {
+export function cell(v: string | number | undefined | null): string {
   if (v === undefined || v === null) return "";
   const s = String(v);
   if (!/[",\n\r]/.test(s)) return s;
