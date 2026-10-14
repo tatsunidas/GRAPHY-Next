@@ -436,6 +436,26 @@ Cornerstone の annotation スタイルに **`textBoxVisibility`** がある
   幾何（IPP/IOP）が無い画像（XA 等）では x/y/z を**空セル**にする（0 で埋めない）。col/row と値は出る。
 - 線 ROI は双一次補間の値で画素ではないため対象外（ボタンは押せず、理由をツールチップに出す）。
 
+### 6.3 3D ROI（マスク）も同じダイアログに載せる（2026-10-15）
+
+マスク行の `Σ³`（行内の体積統計）だけでは SD・中央値・ヒストグラム・CSV が出なかった。
+マスクも `RoiStatsDialog` の対象にする（パネル上の `Σ` は ROI の後ろにマスクを並べ、マスク行にも `Σ` を置く）。
+`Σ³` の行内表示はそのまま残す。焼き込む前のパラメトリック球は対象外（焼き込んでマスクにしてから測る）。
+
+- **母集団**: label &gt; 0 の前景ボクセル。segment が複数あってもマスク 1 行にまとめる（`Σ³` と同じ数え方）。
+- **体積**: `roi3d.maskGrid` を `Σ³`（`maskVolumeStats`）と共有するので、ボクセル数・体積は必ず一致する。
+- **値**: `computeMaskStatsAsync` が前景のあるスライスの元画像を `readModalitySlice` で**読み込んでから**集計し、
+  2D と同じ `summarizeValues`（非有限値は除く）に通す。読めないスライスが残れば `no-pixels` を出して値の統計は出さない。
+  - `Σ³` は cache に載っている画像だけを読み、非有限値も足し込む（`accumulateMaskStats`）。NaN を含むマスクでは両者が食い違う。
+  - `Σ³` は Float64、ダイアログは `readModalitySlice` の Float32 なので、末尾の桁が違うことがある。
+- **統計 CSV**: マスクの行は `kind=volume`・`tool=mask`・`samples`=ボクセル数。面積・長さの列は空。
+  既存の列の位置を変えないよう、末尾に `volume[mL]` と `slices` を足した（2D の行では空）。
+- **ボクセル CSV（⬇ 画素）**: `viewer/maskVoxelDump.ts`（純関数）。1 枚の表で、スライス順・画素順。
+  - 列: `label, maskId, slice, segment, col, row, x[mm], y[mm], z[mm], value[<unit>], imageId`。
+  - `slice` はビューアのスライス番号と同じ **1 始まり**。col/row は 2D の画素 CSV と同じ 0 始まり。
+  - 座標と空セルの規則は 2D の画素ダンプと同じ。行数は表の n 列（ボクセル数）と一致する。
+  - 数十万行になり得るので、1 本の文字列にせず塊の配列で `Blob` を作る。ファイル名は `mask-voxels-<番号>.csv`。
+
 ---
 
 ## 7. プラグイン host API（H5 `getRois`）を自前統計へ切り替える（決定・2026-08-27）
