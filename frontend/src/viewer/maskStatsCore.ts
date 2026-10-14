@@ -63,3 +63,41 @@ export function accumulateMaskStats(slices: MaskSliceInput[], segmentIndex?: num
 export function meanTimesVolumeLabelKey(unit: string | undefined): "roiMgr.statTlg" | null {
   return unit && unit.startsWith("SUV") ? "roiMgr.statTlg" : null;
 }
+
+export interface MaskValueSample {
+  voxels: number;
+  slices: number;
+  /** 値を読めなかった前景スライス数。0 でなければ `values` は母集団の一部しか持たない。 */
+  missingValueSlices: number;
+  /** 前景ボクセルの値（スライス順）。非有限値も含む（除外は要約側で行う）。 */
+  values: Float64Array;
+}
+
+/**
+ * 前景（label &gt; 0）の値を 1 本に集める。ROI 計測結果ダイアログが `summarizeValues` へ渡す母集団。
+ * 数え方（voxels / slices）は {@link accumulateMaskStats} と同じ。
+ */
+export function collectMaskValues(slices: MaskSliceInput[]): MaskValueSample {
+  let voxels = 0, nSlices = 0, missing = 0;
+  for (const s of slices) {
+    let count = 0, unread = 0;
+    for (let i = 0; i < s.labels.length; i++) {
+      if (!(s.labels[i] > 0)) continue;
+      count++;
+      if (!s.values || i >= s.values.length) unread++;
+    }
+    if (count > 0) nSlices++;
+    if (unread > 0) missing++;
+    voxels += count;
+  }
+  const values = new Float64Array(voxels);
+  let k = 0;
+  for (const s of slices) {
+    const vals = s.values;
+    for (let i = 0; i < s.labels.length; i++) {
+      if (!(s.labels[i] > 0)) continue;
+      values[k++] = vals && i < vals.length ? vals[i] : NaN;
+    }
+  }
+  return { voxels, slices: nSlices, missingValueSlices: missing, values };
+}

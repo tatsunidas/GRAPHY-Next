@@ -39,7 +39,7 @@ import { importImageJDtos } from "../viewer/imagejImport";
 import { exportImageJRoiSet, importImageJRoiSet } from "../api";
 import { saveRoiNow, scheduleRoiSave, subscribeRoiSave } from "../viewer/roiSaveStore";
 import { RoiMetaEditDialog } from "./RoiMetaEditDialog";
-import { RoiStatsDialog } from "./RoiStatsDialog";
+import { RoiStatsDialog, type RoiStatsTarget } from "./RoiStatsDialog";
 import { useI18n } from "../i18n/i18n";
 import { formatNumber, valueUnitLabel } from "../viewer/roiStatsText";
 import { meanTimesVolumeLabelKey } from "../viewer/maskStatsCore";
@@ -114,7 +114,13 @@ export function RoiManagerPanel({
   // ⚠ ダイアログの `targets` は毎レンダで作り直さない。参照が変わるたびに統計の再計算
   // （非同期ループ）が最初からやり直しになり、表がちらつく。保存通知などで
   // このパネルは頻繁に再レンダされる。
-  const statsTargets = useMemo(() => rois.map((r) => ({ uid: r.uid, tool: r.tool })), [rois]);
+  const statsTargets = useMemo<RoiStatsTarget[]>(
+    () => [
+      ...rois.map((r) => ({ uid: r.uid, tool: r.tool })),
+      ...masks.map((m) => ({ uid: m.id, tool: "mask", kind: "mask" as const, label: m.label })),
+    ],
+    [rois, masks],
+  );
   const [selected, setSelected] = useState<Set<string>>(new Set());
   /** 一覧で選んでいる ROI（ハイライト＋スライス移動の対象）。マスクの選択チェックとは別物。 */
   const [focusedRoi, setFocusedRoi] = useState<string | null>(null);
@@ -740,6 +746,7 @@ export function RoiManagerPanel({
           <input type="checkbox" defaultChecked onChange={(e) => setMaskStyle(m.id, { renderFill: e.target.checked })} title={t("roiMgr.fill")} />
           {m.scope && <button onClick={() => toggleScopeZ(m.id)} style={scopeChip} title={t("roiMgr.scopeToggleMask")}>{m.scope}</button>}
           <button onClick={() => runStats(m.id)} data-testid="mask-stats-run" style={editBtn} title={t("roiMgr.stats")}>Σ³</button>
+          <button onClick={() => setStatsOpen({ focus: m.id })} data-testid="mask-stats-dialog" style={editBtn} title={t("roiMgr.statsMask")}>Σ</button>
           <button onClick={() => runSplitToSlices(m.id)} disabled={busy} style={editBtn} title={t("roiMgr.toSlices")}>⬚</button>
           {/* SEG書き出しは毎晩の自動リストアで確実に消えるため、他の持ち出し系と異なりデモでも許可
              （backend DemoModeFilter・fw/web-demo-hosting.md 参照）。 */}
