@@ -208,6 +208,8 @@ Rows = rows, Columns = cols
 
 ## 7. セカンダリシリーズ保存（backend 新規）
 
+> 元の向きのまま格子を作り直して保存する経路（等方化など）は [volume-regrid-design.md](volume-regrid-design.md)。
+
 ### 7.1 エンドポイント
 
 ```
