@@ -60,6 +60,7 @@ class ImportServiceTest {
         assertEquals(0, r.failed());
         assertTrue(Files.exists(dcm), "原本は保持される（移動しない）");
         assertEquals(1, storage.findMatches(null, "1.2.imp.study", null, null).size(), "索引に載る");
+        assertEquals(List.of("1.2.imp.study"), r.studyInstanceUids(), "取り込んだスタディを返す");
     }
 
     /**
@@ -86,6 +87,7 @@ class ImportServiceTest {
         assertEquals(2, r.imported(), "深い階層も再帰で拾う");
         assertEquals(0, r.failed());
         assertEquals(1, r.studiesWithoutDate(), "検査日なしのスタディ数を返す");
+        assertEquals(List.of("1.2.n.study"), r.studyInstanceUids(), "同じスタディは 1 つにまとめて返す");
         assertEquals(2, storage.listSeries("1.2.n.study").size(), "1 スタディ 2 シリーズに束ねる");
     }
 
@@ -126,4 +128,5 @@ class ImportServiceTest {
             Files.setPosixFilePermissions(denied, PosixFilePermissions.fromString("rwx------"));
         }
     }
+
 }

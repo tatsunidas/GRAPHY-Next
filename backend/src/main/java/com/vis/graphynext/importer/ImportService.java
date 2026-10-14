@@ -50,8 +50,11 @@ public class ImportService {
      *     検索の既定条件は「今日」で、SQL の NULL 比較の性質上、日付範囲を指定すると
      *     検査日の無いスタディは必ず除外される（＝取り込めているのに一覧に出ない）。
      *     利用者が「取り込みに失敗した」と誤読するため、件数を返して UI で注意を出す。
+     * @param studyInstanceUids 取り込んだ画像のスタディ（重複なし・出会った順）。UI が一覧を
+     *     「いま取り込んだ検査」に絞って出すのに使う（既定の検索条件「今日」では、過去の検査は出ない）。
      */
-    public record ImportResult(int imported, int skipped, int failed, int studiesWithoutDate, List<String> errors) {
+    public record ImportResult(int imported, int skipped, int failed, int studiesWithoutDate, List<String> errors,
+            List<String> studyInstanceUids) {
     }
 
     private final DicomStorageService storage;
@@ -94,7 +97,8 @@ public class ImportService {
         }
         log.info("インポート完了: 取込={} スキップ={} 失敗={} 検査日なしスタディ={}",
                 c.imported, c.skipped, c.failed, c.studiesWithoutDate.size());
-        return new ImportResult(c.imported, c.skipped, c.failed, c.studiesWithoutDate.size(), c.errors);
+        return new ImportResult(c.imported, c.skipped, c.failed, c.studiesWithoutDate.size(), c.errors,
+                List.copyOf(c.studies));
     }
 
     /** フォルダを再帰走査する。読めない要素は 1 件の失敗として数え、走査は続ける。 */
@@ -149,6 +153,9 @@ public class ImportService {
         try {
             DicomInstance saved = storage.importFromFile(file);
             c.imported++;
+            if (saved != null && saved.getStudyInstanceUid() != null) {
+                c.studies.add(saved.getStudyInstanceUid());
+            }
             if (saved != null && isBlank(saved.getStudyDate()) && saved.getStudyInstanceUid() != null) {
                 c.studiesWithoutDate.add(saved.getStudyInstanceUid());
             }
@@ -185,6 +192,7 @@ public class ImportService {
         int failed;
         /** StudyDate が空だったスタディの UID（件数を UI に返すため）。 */
         final Set<String> studiesWithoutDate = new LinkedHashSet<>();
+        final Set<String> studies = new LinkedHashSet<>();
         final List<String> errors = new ArrayList<>();
 
         void fail(Path path, Exception e) {
