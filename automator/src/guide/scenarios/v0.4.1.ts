@@ -229,6 +229,79 @@ const scenario: Scenario = async ({ shot }) => {
       viewer.getByTestId("tile-copy-image").first(),
     ]);
 
+    // 5. ROI 計測結果の「⬇ 画素」（矩形 ROI）
+    await viewer.getByTestId("roi-mgr-lock").nth(1).waitFor();
+    await viewer.locator('[data-testid="roi-mgr-row"]').nth(1).getByRole("button", { name: "Σ", exact: true }).click();
+    const statsDlg = viewer.getByTestId("roi-stats-dialog");
+    await statsDlg.waitFor({ timeout: 30_000 });
+    await viewer.waitForTimeout(2_500);
+    await shot(viewer, "pixeldump", [
+      { at: viewer.getByTestId("roi-stats-dump"), side: "top" },
+      { at: statsDlg.locator("tbody tr").nth(1), side: "left" },
+    ]);
+    await statsDlg.getByTitle("閉じる").click();
+    await viewer.waitForTimeout(500);
+
+    // 6. 2D Wand: 絶対値のしきい値（範囲）
+    // 肝臓が大きく写る Z 32 まで送る（先頭のスライスは骨盤寄りで肝臓が無い）
+    await viewer.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    for (let k = 0; k < 31; k++) {
+      await viewer.mouse.wheel(0, 100);
+      await viewer.waitForTimeout(250);
+    }
+    await viewer.waitForTimeout(1_000);
+    await menu(viewer, "roiTools", "2D Wand（輝度領域成長）");
+    // fit() の寸法の上書きで、cornerstone は画面上の位置を 2 倍の大きさの座標として読む（canvas は CSS の 2 倍の画素）。
+    // 画面で肝臓が見えている位置（590, 335）を押すには、canvas の左上からの距離を 2 倍にした所を押す。
+    const cvBox = await viewer.locator('[data-testid="viewer2d-canvas-host"] canvas').first().boundingBox();
+    if (!cvBox) throw new Error("2D の画像がありません");
+    await viewer.mouse.click(cvBox.x + 2 * (590 - cvBox.x), cvBox.y + 2 * (335 - cvBox.y));
+    await viewer.getByTestId("wand-method-range").waitFor({ timeout: 60_000 });
+    await viewer.getByTestId("wand-method-range").click();
+    await viewer.waitForTimeout(1_500);
+    for (const [id, v] of [["wand-threshold-lower", "40"], ["wand-threshold-upper", "200"]] as const) {
+      const f = viewer.getByTestId(id);
+      await f.fill(v);
+      await f.press("Enter");
+      await viewer.waitForTimeout(2_000);
+    }
+    const count = await viewer.getByTestId("wand-count").innerText();
+    console.log(`wand-count: ${count}`);
+    await shot(viewer, "wand", [
+      { at: viewer.getByTestId("wand-method-range"), side: "left" },
+      { at: viewer.getByTestId("wand-threshold-lower"), side: "left" },
+      { at: viewer.getByTestId("wand-threshold-upper"), side: "left" },
+      { at: viewer.getByTestId("wand-count"), side: "left" },
+    ]);
+    await viewer.getByTestId("wand-commit").click();
+    await viewer.waitForTimeout(2_000);
+
+    // 7. ROI マネージャの 3D 統計（Wand で作ったマスク）
+    // ROI マネージャは「roi」の撮影から開いたまま
+    const run = viewer.getByTestId("mask-stats-run").first();
+    await run.waitFor({ timeout: 20_000 });
+    await run.click();
+    await viewer.getByTestId("mask-stats").first().waitFor({ timeout: 120_000 });
+    await viewer.waitForTimeout(800);
+    await shot(viewer, "maskstats", [
+      { at: run, side: "left" },
+      { at: viewer.getByTestId("mask-stats").first(), side: "left" },
+    ]);
+
+    // 8. リサンプル・切り抜き
+    await menu(viewer, "image", "リサンプル・切り抜き…");
+    await viewer.getByTestId("resample-dialog").waitFor({ timeout: 10_000 });
+    await viewer.getByTestId("resample-output").filter({ hasText: "出力" }).waitFor({ timeout: 120_000 });
+    await viewer.waitForTimeout(800);
+    console.log(`resample-source: ${await viewer.getByTestId("resample-source").innerText()}`);
+    console.log(`resample-output: ${await viewer.getByTestId("resample-output").innerText()}`);
+    await shot(viewer, "resample", [
+      { at: viewer.getByTestId("resample-source"), side: "left" },
+      { at: viewer.getByTestId("resample-kind-iso").locator(".."), side: "left" },
+      { at: viewer.getByTestId("resample-output"), side: "left" },
+    ]);
+    await viewer.getByTestId("resample-close").click();
+
     // 拡大レンズは撮らない: 撮影用に画面の寸法を上書きすると、レンズが押した所からずれて写る
     // （上書き無しの普段の画面では押した所に 4 倍で出ることを確かめている）。本文の表で説明する。
     await viewer.close();
