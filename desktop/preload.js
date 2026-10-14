@@ -96,6 +96,7 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   gdriveSignOut: () => ipcRenderer.invoke("graphy:gdrive-signout"),
   gdriveEnable: () => ipcRenderer.invoke("graphy:gdrive-enable"),
   gdriveDisable: () => ipcRenderer.invoke("graphy:gdrive-disable"),
+  gdriveRestore: (title) => ipcRenderer.invoke("graphy:gdrive-restore", { title }),
   // 既定の計算機（未登録で Google にログイン済みなら Colab の T4 を足す。足すのは main）
   computeEnsureDefault: () => ipcRenderer.invoke("graphy:compute-ensure-default"),
   // 名前を付けて保存。上書き確認は OS のダイアログが出す。

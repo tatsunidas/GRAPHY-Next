@@ -1377,6 +1377,41 @@ ipcMain.handle("graphy:gdrive-enable", async () => {
   return { ok: true, name: made.name, parentName: made.parentName, shared: !!made.driveId };
 });
 
+// 復元: Drive のバックアップ（GRAPHY-DB-… フォルダ）を Picker で選び、空のフォルダへ取り戻す。
+// 取り戻しは backend が行う（進み具合は画面が /api/gdrive/restore で見る）。終わったら画面が通常の切替を呼ぶ。
+ipcMain.handle("graphy:gdrive-restore", async (e, payload) => {
+  if (!gdriveAuth) return { ok: false, error: "not-ready" };
+  const client = gdriveAuth.clientInfo();
+  if (!client) return { ok: false, error: "no-oauth-client" };
+  if (!client.pickerApiKey) return { ok: false, error: "no-picker-key" };
+  if (!gdriveAuth.signedIn()) return { ok: false, error: "not-signed-in" };
+  const token = await gdriveAuth.accessToken();
+  const refresh = secretStore.getSecret(GDRIVE_REFRESH_KEY);
+  if (!token || !refresh) return { ok: false, error: "token" };
+  const locale = String(app.getLocale() || "").startsWith("ja") ? "ja" : "en";
+  const picked = await gdrivePicker.pick({
+    token,
+    apiKey: client.pickerApiKey,
+    projectNumber: client.projectNumber,
+    locale,
+    openExternal: (url) => shell.openExternal(url),
+  });
+  if (!picked.ok) return { ok: false, error: picked.error, canceled: picked.error === "cancelled" };
+  const dest = await pickDbDirectory(e, String((payload && payload.title) || ""));
+  if (!dest) return { ok: false, canceled: true };
+  const made = dbFolders.create(dest); // 空のフォルダだけを受け付け、目印を書く
+  if (!made.ok) return { ok: false, error: made.reason };
+  const r = await computeBridge.call("POST", "/api/internal/gdrive/restore", {
+    clientId: client.clientId,
+    clientSecret: client.clientSecret,
+    refreshToken: refresh,
+    sourceFolderId: picked.id,
+    destDir: made.folder,
+  });
+  if (!r.ok) return { ok: false, error: (r.body && r.body.error) || r.error || "restore-start" };
+  return { ok: true, folder: made.folder };
+});
+
 // 解除: Drive のデータには触れない（消さない）。確認してから設定を外す。
 ipcMain.handle("graphy:gdrive-disable", async (e) => {
   if (!activeDbFolder || !dbFolders.getGdrive(activeDbFolder)) return { ok: false, error: "not-enabled" };
