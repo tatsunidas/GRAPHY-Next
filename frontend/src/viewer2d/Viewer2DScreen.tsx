@@ -30,8 +30,8 @@ import { RegistrationPanel } from "./RegistrationPanel";
 import type { RenderOverlay } from "../viewer/Viewer2D";
 import { buildSeriesLayout, type SeriesLayout } from "../viewer/seriesLayout";
 import { LutDialog, ColorBar } from "../viewer/LutDialog";
-import { eventTarget } from "@cornerstonejs/core";
-import { Enums as csToolsEnums } from "@cornerstonejs/tools";
+import { eventTarget, getEnabledElement } from "@cornerstonejs/core";
+import { Enums as csToolsEnums, annotation as csAnnotation } from "@cornerstonejs/tools";
 import {
   runViewerCommand,
   useIsDisplayOnlyTile,
@@ -61,6 +61,8 @@ import { isInsideViewerOverlay } from "../viewer/viewerOverlay";
 import { runSeriesCommand } from "../viewer/seriesCommands";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { emitToast, subscribeToast } from "../viewer/toast";
+import { composeTileWithAnnotations, visibleRoiCount } from "../viewer/tileCapture";
+import { askCopyWithRoi, CopyImageAskHost } from "./CopyImageAsk";
 import { classifySeriesRenderability } from "../viewer/seriesRenderable";
 import { subscribeSeriesRefresh } from "../viewer/viewerRefresh";
 import { WandDialog } from "./WandDialog";
@@ -220,10 +222,36 @@ function captureAndDownload(tileId: string): void {
   a.click();
 }
 
-/** 指定タイルの画像をクリップボードへコピーする（ROI・文字の重ね描きは含まない＝PNG 保存と同じ）。 */
-async function copyTileImage(tileId: string): Promise<boolean> {
-  const url = captureTileDataUrl(tileId);
+/** タイルの Cornerstone の要素（canvas と注釈の `.svg-layer` を持つ）。 */
+function tileViewportElement(tileId: string): HTMLDivElement | null {
+  const el = document.querySelector(`[data-tile-id="${CSS.escape(tileId)}"]`);
+  return (el?.querySelector(".viewport-element")?.parentElement as HTMLDivElement | null) ?? null;
+}
+
+/** タイルの表示中の画像に描かれている ROI の数。 */
+function tileVisibleRoiCount(tileId: string): number {
+  const element = tileViewportElement(tileId);
+  if (!element) return 0;
+  const vp = getEnabledElement(element)?.viewport as { getCurrentImageId?: () => string } | undefined;
+  return visibleRoiCount(
+    csAnnotation.state.getAllAnnotations(),
+    vp?.getCurrentImageId?.(),
+    (uid) => csAnnotation.visibility.isAnnotationVisible(uid) ?? true,
+  );
+}
+
+/** 指定タイルの画像をクリップボードへコピーする。withRoi なら ROI の線と計測の文字を重ねる（四隅の文字は含まない）。 */
+async function copyTileImage(tileId: string, withRoi: boolean): Promise<boolean> {
+  let url = captureTileDataUrl(tileId);
   if (!url) return false;
+  if (withRoi) {
+    const element = tileViewportElement(tileId);
+    const canvas = element?.querySelector("canvas") as HTMLCanvasElement | null;
+    const svg = element?.querySelector(".svg-layer") as SVGSVGElement | null;
+    if (!canvas || !svg) return false;
+    url = await composeTileWithAnnotations(canvas, svg).catch(() => null);
+    if (!url) return false;
+  }
   const copy = desktop()?.copyImage;
   if (copy) return copy(url).catch(() => false);
   try {
@@ -233,6 +261,18 @@ async function copyTileImage(tileId: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** 📋 とメニューの「画像をコピー」。表示中の画像に ROI があれば、含めるかを聞く。 */
+async function copyTileImageAsking(tileId: string, t: (k: string) => string): Promise<void> {
+  let withRoi = false;
+  if (tileVisibleRoiCount(tileId) > 0) {
+    const choice = await askCopyWithRoi();
+    if (choice === "cancel") return;
+    withRoi = choice === "roi";
+  }
+  const ok = await copyTileImage(tileId, withRoi);
+  emitToast(t(!ok ? "viewer2d.copyImageFailed" : withRoi ? "viewer2d.copyImageDoneWithRoi" : "viewer2d.copyImageDone"));
 }
 
 /**
@@ -616,6 +656,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
           )}
         </div>
       </div>
+      <CopyImageAskHost />
     </div>
   );
 }
@@ -1613,7 +1654,7 @@ function TileGrid({
       copyImage: () => {
         const tid = resolveTargets()[0];
         if (!tid) return;
-        void copyTileImage(tid).then((ok) => emitToast(t(ok ? "viewer2d.copyImageDone" : "viewer2d.copyImageFailed")));
+        void copyTileImageAsking(tid, t);
       },
       openReport: () => {
         const tid = resolveTargets()[0];
@@ -2352,7 +2393,7 @@ function TileCell({
           tabIndex={0}
           onClick={(e) => {
             e.stopPropagation();
-            void copyTileImage(tile.id).then((ok) => emitToast(t(ok ? "viewer2d.copyImageDone" : "viewer2d.copyImageFailed")));
+            void copyTileImageAsking(tile.id, t);
           }}
           style={{ ...xbtn, fontSize: 12, lineHeight: 1, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
           title={t("viewer2d.copyImage")}
