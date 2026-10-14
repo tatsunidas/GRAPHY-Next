@@ -288,6 +288,23 @@ const scenario: Scenario = async ({ shot }) => {
       { at: viewer.getByTestId("mask-stats").first(), side: "left" },
     ]);
 
+    // 7b. マスクの計測結果の窓（ボクセルの CSV）
+    await viewer.getByTestId("mask-stats-dialog").first().click();
+    const maskDlg = viewer.getByTestId("roi-stats-dialog");
+    await maskDlg.waitFor({ timeout: 30_000 });
+    // 2D の ROI の行のあとにマスクの行が並ぶ。体積（mL）の出た行を待つ
+    const maskRow = maskDlg.locator("tbody tr").filter({ hasText: " mL" }).first();
+    await maskRow.waitFor({ timeout: 120_000 });
+    await viewer.waitForTimeout(1_500);
+    console.log(`maskdump-row: ${await maskRow.innerText()}`);
+    await shot(viewer, "maskdump", [
+      { at: viewer.getByTestId("mask-stats-dialog").first(), side: "left" },
+      { at: viewer.getByTestId("roi-stats-dump"), side: "top" },
+      { at: maskRow, side: "left" },
+    ]);
+    await maskDlg.getByTitle("閉じる").click();
+    await viewer.waitForTimeout(500);
+
     // 8. リサンプル・切り抜き
     await menu(viewer, "image", "リサンプル・切り抜き…");
     await viewer.getByTestId("resample-dialog").waitFor({ timeout: 10_000 });
