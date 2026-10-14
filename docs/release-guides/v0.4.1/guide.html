@@ -31,7 +31,7 @@
       <li><span class="n">03</span><p>環境設定（表示・通信先など）は<b>どの DB でも共通</b><small>DB フォルダの中には、検査の索引と DICOM ファイルだけが入ります</small></p></li>
     </ol>
   </div>
-  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0　doi.org/10.7937/TCIA.5FNA-0924</span><span>1 / 11</span></div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0　doi.org/10.7937/TCIA.5FNA-0924</span><span>1 / 12</span></div>
 </section>
 
 <section class="page">
@@ -52,7 +52,7 @@
       <p class="note">外付けディスクが見つからないときは、再試行・既定の DB で起動・終了を選べます。</p>
     </div>
   </div>
-  <div class="footer"><span>研究用です。診断には使わないでください。</span><span>2 / 11</span></div>
+  <div class="footer"><span>研究用です。診断には使わないでください。</span><span>2 / 12</span></div>
 </section>
 
 <section class="page">
@@ -72,7 +72,7 @@
       <p class="note">移し先の DB に切り替えたときに取り込まれ、右下に件数が出ます。</p>
     </div>
   </div>
-  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>3 / 11</span></div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>3 / 12</span></div>
 </section>
 
 <section class="page">
@@ -92,7 +92,7 @@
       <p class="note">ロックと表示・非表示は保存され、開き直しても残ります。</p>
     </div>
   </div>
-  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>4 / 11</span></div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>4 / 12</span></div>
 </section>
 
 <section class="page">
@@ -109,7 +109,7 @@
       <p class="note">設定を変えたら、MPR を開き直すと反映されます。</p>
     </div>
   </div>
-  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>5 / 11</span></div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>5 / 12</span></div>
 </section>
 
 <section class="page">
@@ -130,7 +130,7 @@
       <p class="note">シードが条件の外なら理由が出ます。校正の無い画像（カラーなど）では、以上・以下・範囲は選べません。</p>
     </div>
   </div>
-  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>6 / 11</span></div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>6 / 12</span></div>
 </section>
 <section class="page">
   <div>
@@ -148,7 +148,7 @@
       <p class="note">値を読めないスライスがあるときは、平均などを出さずに「値を読めないスライス n 枚」と表示します（体積とボクセル数は出ます）。</p>
     </div>
   </div>
-  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>7 / 11</span></div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>7 / 12</span></div>
 </section>
 <section class="page">
   <div>
@@ -166,7 +166,26 @@
       <p class="note">位置の情報が無い画像（XA など）では x/y/z を空欄にします。線の ROI では押せません。</p>
     </div>
   </div>
-  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>8 / 11</span></div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>8 / 12</span></div>
+</section>
+<section class="page">
+  <div>
+    <p class="eyebrow">STEP 7 / ROI マネージャ ＞ マスクの Σ</p>
+    <h2>マスク（3D ROI）の計測結果とボクセルの書き出し</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="maskdump"><img src="shots/maskdump.png" alt="マスクの行の Σ から開いた ROI 計測結果の窓。体積・ボクセル数・平均とヒストグラムが出ている"></figure>
+    <div style="display:flex;flex-direction:column;gap:28px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>マスクの行の <b>Σ</b> で、そのマスクの計測結果を開きます</p></li>
+        <li><span class="num">2</span><p><b>⬇ 画素</b>: 統計に使ったボクセルを、<b>スライス順に 1 つの CSV</b> に保存します（mask-voxels-番号.csv）</p></li>
+        <li><span class="num">3</span><p>マスクの行。大きさの欄は体積（mL）、画素数の欄はボクセル数で、Σ³ の値と一致します</p></li>
+      </ol>
+      <p class="callout">CSV の列は ラベル・マスクの ID・slice（ビューアと同じ 1 始まりの番号）・segment・col・row・x/y/z（患者座標 LPS の mm）・値・画像 ID です。</p>
+      <p class="note">パラメトリック球は、焼き込んでマスクにしてから測ります。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>9 / 12</span></div>
 </section>
 <section class="page">
   <div>
@@ -185,7 +204,7 @@
       <p class="note">間隔が 0・負・空のときは保存できません。見積りが大きすぎるときは確認が出ます。</p>
     </div>
   </div>
-  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>9 / 11</span></div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>10 / 12</span></div>
 </section>
 
 <section class="page">
@@ -205,7 +224,7 @@
     <tr><td>起動の表示</td><td>スプラッシュの段階を「部品の準備・データベース・機能の準備」に分け、何を待っているかが分かるようにした</td></tr>
     <tr><td>画像の削除</td><td>ファイルも消す設定のとき、消した画像の ROI・位置合わせ・プラグインの記録なども片付ける（レポートは残す）</td></tr>
   </table>
-  <div class="footer"><span>研究用です。診断には使わないでください。</span><span>10 / 11</span></div>
+  <div class="footer"><span>研究用です。診断には使わないでください。</span><span>11 / 12</span></div>
 </section>
 
 <section class="page">
@@ -226,7 +245,7 @@
     <tr><td>再起動（Linux）</td><td>AppImage で DB フォルダの切り替えなどの再起動が失敗していたのを直した</td></tr>
   </table>
   <p class="note">変更の全体はリリースノート（GitHub の Releases）にあります。</p>
-  <div class="footer"><span>研究用です。診断には使わないでください。</span><span>11 / 11</span></div>
+  <div class="footer"><span>研究用です。診断には使わないでください。</span><span>12 / 12</span></div>
 </section>
 
 <script src="shots/marks.js"></script>
