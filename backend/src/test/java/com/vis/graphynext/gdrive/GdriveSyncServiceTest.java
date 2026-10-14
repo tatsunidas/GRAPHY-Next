@@ -50,13 +50,26 @@ class GdriveSyncServiceTest {
     void setUp() throws IOException {
         drive = new FakeDrive();
         drive.files.put(FOLDER, folder(FOLDER));
-        svc = new GdriveSyncService(repo, root, drive.base(), drive.tokenUrl(), clock, () -> 0.5, 30_000, 600_000, false);
-        svc.configure(new GdriveConfig("cid", "csecret", "rtoken-SECRET", FOLDER, null, "t"));
+        svc = new GdriveSyncService(repo, root, drive.base(), drive.tokenUrl(), clock, () -> 0.5, 30_000, 600_000, false, GdriveSyncServiceTest::fakeBackup, 600_000, 3_600_000, 3);
+        svc.configure(cfg(FOLDER));
     }
 
     @AfterEach
     void tearDown() {
         drive.close();
+    }
+
+    static GdriveConfig cfg(String folder) {
+        return new GdriveConfig("cid", "csecret", "rtoken-SECRET", folder, null, "t", "dev-AAAA-0001", "hostA");
+    }
+
+    /** 索引スナップショットの代わり（H2 の実物は別のテストで確かめる）。 */
+    static void fakeBackup(Path zip) throws IOException {
+        try (java.util.zip.ZipOutputStream z = new java.util.zip.ZipOutputStream(Files.newOutputStream(zip))) {
+            z.putNextEntry(new java.util.zip.ZipEntry("graphy-index.mv.db"));
+            z.write("INDEX-V1".getBytes());
+            z.closeEntry();
+        }
     }
 
     private static FakeDrive.File folder(String id) {
@@ -107,10 +120,10 @@ class GdriveSyncServiceTest {
     void 同期済みの再実行は何も送らない() throws Exception {
         put("a/b/c.dcm", rnd(1000, 2));
         svc.cycle();
-        long uploads = drive.log.stream().filter(l -> l.startsWith("POST /upload")).count();
+        long uploads = drive.dcmStarts();
         svc.syncNow();
         svc.cycle();
-        assertEquals(uploads, drive.log.stream().filter(l -> l.startsWith("POST /upload")).count());
+        assertEquals(uploads, drive.dcmStarts());
         assertEquals(1, drive.liveCount());
     }
 
@@ -120,7 +133,7 @@ class GdriveSyncServiceTest {
         svc.cycle();
         repo.deleteAll();
         repo.flush();
-        svc.configure(new GdriveConfig("cid", "csecret", "rtoken-SECRET", FOLDER, null, "t"));
+        svc.configure(cfg(FOLDER));
         svc.cycle();
         assertEquals(1, drive.liveCount(), "二重に作らない");
         assertEquals(1, svc.status().synced());
@@ -182,11 +195,11 @@ class GdriveSyncServiceTest {
         for (int i = 0; i < 5; i++) {
             put("a/b/f" + i + ".dcm", rnd(100, 20 + i));
         }
-        drive.faults.add((m, path, ex) -> path.startsWith("/upload") ? -1 : null);
+        drive.faults.add((m, path, ex) -> drive.dcmStart(path) ? -1 : null);
         svc.cycle();
         assertEquals(GdriveSyncService.State.OFFLINE, svc.status().state());
         assertEquals(0, drive.liveCount());
-        assertEquals(1, drive.log.stream().filter(l -> l.startsWith("POST /upload")).count(), "つながらないのに全件叩かない");
+        assertEquals(1, drive.dcmStarts(), "つながらないのに全件叩かない");
         assertEquals(5, svc.status().pending());
         advance(60_000);
         svc.cycle();
@@ -201,7 +214,7 @@ class GdriveSyncServiceTest {
         put("a/b/big.dcm", data);
         // 2 回目のチャンク（最後の 1MB）の PUT で切る
         java.util.concurrent.atomic.AtomicInteger puts = new java.util.concurrent.atomic.AtomicInteger();
-        drive.faults.add((m, path, ex) -> m.equals("PUT") && path.startsWith("/session/") && puts.incrementAndGet() == 2 ? -1 : null);
+        drive.faults.add((m, path, ex) -> m.equals("PUT") && drive.dcmSession(path) && puts.incrementAndGet() == 2 ? -1 : null);
         svc.cycle();
         assertEquals(0, drive.liveCount(), "途中では完了していない");
         long first = drive.bytesReceived;
@@ -217,11 +230,11 @@ class GdriveSyncServiceTest {
     @Test
     void 一時的なエラー_429と503_は再試行し_待ち時間が延びる() throws Exception {
         put("a/b/c.dcm", rnd(100, 40));
-        drive.faults.add((m, path, ex) -> path.startsWith("/upload") ? 429 : null);
+        drive.faults.add((m, path, ex) -> drive.dcmStart(path) ? 429 : null);
         svc.cycle();
         assertEquals(1, repo.findAll().get(0).getAttempts());
         long first = repo.findAll().get(0).getNextAttemptAt() - now;
-        drive.faults.add((m, path, ex) -> path.startsWith("/upload") ? 503 : null);
+        drive.faults.add((m, path, ex) -> drive.dcmStart(path) ? 503 : null);
         advance(first + 1);
         svc.cycle();
         long second = repo.findAll().get(0).getNextAttemptAt() - now;
@@ -235,18 +248,18 @@ class GdriveSyncServiceTest {
     @Test
     void 時間が来るまで再試行しない() throws Exception {
         put("a/b/c.dcm", rnd(100, 41));
-        drive.faults.add((m, path, ex) -> path.startsWith("/upload") ? 503 : null);
+        drive.faults.add((m, path, ex) -> drive.dcmStart(path) ? 503 : null);
         svc.cycle();
-        long calls = drive.log.stream().filter(l -> l.startsWith("POST /upload")).count();
+        long calls = drive.dcmStarts();
         svc.cycle();
-        assertEquals(calls, drive.log.stream().filter(l -> l.startsWith("POST /upload")).count());
+        assertEquals(calls, drive.dcmStarts());
     }
 
     @Test
     void 認証が401ならトークンを取り直して1回だけやり直す() throws Exception {
         put("a/b/c.dcm", rnd(100, 42));
         java.util.concurrent.atomic.AtomicInteger n = new java.util.concurrent.atomic.AtomicInteger();
-        drive.faults.add((m, path, ex) -> path.startsWith("/upload") && n.getAndIncrement() == 0 ? 401 : null);
+        drive.faults.add((m, path, ex) -> drive.dcmStart(path) && n.getAndIncrement() == 0 ? 401 : null);
         svc.cycle();
         assertEquals(1, drive.liveCount());
         assertTrue(drive.tokenCalls.get() >= 2, "取り直した");
@@ -269,11 +282,11 @@ class GdriveSyncServiceTest {
             put("a/b/f" + i + ".dcm", rnd(100, 50 + i));
         }
         drive.reason403 = "storageQuotaExceeded";
-        drive.faults.add((m, path, ex) -> path.startsWith("/upload") ? 403 : null);
+        drive.faults.add((m, path, ex) -> drive.dcmStart(path) ? 403 : null);
         svc.cycle();
         assertEquals(GdriveSyncService.State.NEEDS_ATTENTION, svc.status().state());
         assertEquals("quota", svc.status().reason());
-        assertEquals(1, drive.log.stream().filter(l -> l.startsWith("POST /upload")).count());
+        assertEquals(1, drive.dcmStarts());
         assertEquals(4, svc.status().pending());
     }
 
@@ -307,8 +320,8 @@ class GdriveSyncServiceTest {
     void 状態と設定の文字列に秘密を含めない() throws Exception {
         put("a/b/c.dcm", rnd(100, 80));
         svc.cycle();
-        String dump = svc.status().toString() + new GdriveConfig("cid", "csecret", "rtoken-SECRET", FOLDER, null, "t")
-                + new GdriveInternalController.ConfigBody("cid", "csecret", "rtoken-SECRET", FOLDER, null, "t");
+        String dump = svc.status().toString() + cfg(FOLDER)
+                + new GdriveInternalController.ConfigBody(true, "cid", "csecret", "rtoken-SECRET", FOLDER, null, "t", null, "dev-AAAA-0001", "hostA");
         assertFalse(dump.contains("rtoken-SECRET"));
         assertFalse(dump.contains("csecret"));
     }
@@ -318,7 +331,7 @@ class GdriveSyncServiceTest {
         put("a/b/c.dcm", rnd(100, 90));
         svc.cycle();
         drive.files.put("OTHERfolder0001x", folder("OTHERfolder0001x"));
-        svc.configure(new GdriveConfig("cid", "csecret", "rtoken-SECRET", "OTHERfolder0001x", null, "t"));
+        svc.configure(cfg("OTHERfolder0001x"));
         svc.cycle();
         assertEquals(2, drive.liveCount(), "新しい同期先へも出す");
         assertTrue(repo.findAll().stream().allMatch(i -> i.getFolderId().equals("OTHERfolder0001x")));

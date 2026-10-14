@@ -1277,6 +1277,21 @@ function initGdrive() {
 }
 
 /** backend へ Drive の設定を入れ直す（起動時・ログイン／ログアウト・有効化／解除のあと）。トークンは backend のメモリにだけ置かれる。 */
+/** この PC の識別子（排他ロックの持ち主を区別する）。DB フォルダを別の PC へ移しても付いていかないよう、データ置き場に持つ。 */
+function gdriveDeviceId() {
+  const file = path.join(resolveDataDir(), "gdrive-device-id");
+  try {
+    const v = fs.readFileSync(file, "utf8").trim();
+    if (/^[A-Za-z0-9-]{8,64}$/.test(v)) return v;
+  } catch {
+    // 初回
+  }
+  const id = require("node:crypto").randomUUID();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, id, { mode: 0o600 });
+  return id;
+}
+
 async function pushGdriveConfig() {
   if (!computeBridge.enabled()) return { ok: false, error: "main-channel-disabled" };
   const cfg = activeDbFolder ? dbFolders.getGdrive(activeDbFolder) : null;
@@ -1292,6 +1307,9 @@ async function pushGdriveConfig() {
         folderId: cfg.driveFolderId,
         driveId: cfg.driveId,
         email: cfg.email,
+        name: cfg.name,
+        deviceId: gdriveDeviceId(),
+        host: os.hostname(),
       }
     : { enabled: false };
   const r = await computeBridge.call("PUT", "/api/internal/gdrive/config", body);

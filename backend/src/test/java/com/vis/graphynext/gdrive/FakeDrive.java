@@ -47,6 +47,7 @@ class FakeDrive implements AutoCloseable {
     final AtomicInteger tokenCalls = new AtomicInteger();
     volatile String reason403 = "forbidden";
     volatile String tokenError;          // invalid_grant など
+    volatile boolean corruptDownloads;   // 取得した中身を壊す（途中で化けた想定）
     volatile String wrongMd5;            // 完了時に返す md5 を偽る
     volatile long wasted;                // 受け取り済みの位置から外れて送られた（無駄になった）バイト数
     volatile long bytesReceived;         // PUT で受け取ったバイト総量
@@ -91,8 +92,28 @@ class FakeDrive implements AutoCloseable {
         return out;
     }
 
+    /** 生きている DICOM（.dcm）の数。ロックやスナップショットは数えない。 */
     synchronized int liveCount() {
-        return (int) files.values().stream().filter(f -> !f.folder && !f.trashed).count();
+        return (int) files.values().stream().filter(f -> !f.folder && !f.trashed && f.name.endsWith(".dcm")).count();
+    }
+
+    private volatile String currentBody = "";
+    private final Map<String, String> sessionNames = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 新しい DICOM のアップロード開始の要求か（ロック・スナップショットを除く）。 */
+    boolean dcmStart(String path) {
+        return path.startsWith("/upload") && currentBody.contains(".dcm\"");
+    }
+
+    /** DICOM のアップロードセッションへの PUT か。 */
+    boolean dcmSession(String path) {
+        String n = sessionNames.get(path.substring(path.lastIndexOf('/') + 1));
+        return path.startsWith("/session/") && n != null && n.endsWith(".dcm");
+    }
+
+    /** 開始要求の本文（ファイル名を含む）が .dcm のアップロード開始の回数。 */
+    long dcmStarts() {
+        return log.stream().filter(l -> l.equals("REQ-DCM")).count();
     }
 
     static String md5(byte[] b) {
@@ -109,6 +130,10 @@ class FakeDrive implements AutoCloseable {
         String query = ex.getRequestURI().getRawQuery() == null ? "" : ex.getRequestURI().getRawQuery();
         log.add(method + " " + path);
         byte[] body = ex.getRequestBody().readAllBytes();
+        currentBody = path.startsWith("/upload") ? new String(body, StandardCharsets.UTF_8) : "";
+        if (dcmStart(path)) {
+            log.add("REQ-DCM"); // 失敗させた要求も数える
+        }
         if (path.equals("/token")) {
             tokenCalls.incrementAndGet();
             if (tokenError != null) {
@@ -141,6 +166,25 @@ class FakeDrive implements AutoCloseable {
             list(ex, query);
         } else if (path.equals("/drive/v3/files") && method.equals("POST")) {
             createFolder(ex, body);
+        } else if (path.startsWith("/drive/v3/files/") && method.equals("GET") && query.contains("alt=media")) {
+            File t = files.get(path.substring("/drive/v3/files/".length()));
+            if (t == null || t.trashed) {
+                reply(ex, 404, "{\"error\":{\"errors\":[{\"reason\":\"notFound\"}]}}");
+                return;
+            }
+            byte[] out = t.bytes;
+            if (corruptDownloads) {
+                out = out.clone();
+                if (out.length > 0) {
+                    out[0] ^= 0x55;
+                }
+            }
+            ex.getResponseHeaders().add("Content-Type", "application/octet-stream");
+            ex.sendResponseHeaders(200, out.length == 0 ? -1 : out.length);
+            if (out.length > 0) {
+                ex.getResponseBody().write(out);
+            }
+            ex.close();
         } else if (path.startsWith("/drive/v3/files/") && method.equals("PATCH")) {
             File t = files.get(path.substring("/drive/v3/files/".length()));
             if (t == null) {
@@ -218,6 +262,8 @@ class FakeDrive implements AutoCloseable {
         }
         String sid = "s" + (++seq);
         sessions.put(sid, se);
+        sessionNames.put(sid, se.name);
+        log.add("START " + se.name);
         ex.getResponseHeaders().add("Location", base() + "/session/" + sid);
         reply(ex, 200, "{}");
     }
@@ -229,15 +275,20 @@ class FakeDrive implements AutoCloseable {
             return;
         }
         String cr = ex.getRequestHeaders().getFirst("Content-Range");
-        bytesReceived += body.length;
+        boolean dcm = se.name != null && se.name.endsWith(".dcm");
+        if (dcm) {
+            bytesReceived += body.length;
+        }
         if (cr != null && cr.startsWith("bytes */") && body.length == 0) {
             // 状態問い合わせ
         } else if (cr != null && !cr.startsWith("bytes */")) {
             long from = Long.parseLong(cr.substring(6, cr.indexOf('-')));
             if (from != se.buf.size()) {
                 // Drive は受け取り済みの位置から外れた送信を 308 で正す
-                bytesReceived -= body.length;
-                wasted += body.length;
+                if (dcm) {
+                    bytesReceived -= body.length;
+                    wasted += body.length;
+                }
             } else {
                 se.buf.write(body);
             }

@@ -59,7 +59,7 @@ public class GdriveSyncService {
     public enum State { DISABLED, CONNECTED, SYNCING, OFFLINE, NEEDS_LOGIN, NEEDS_ATTENTION }
 
     public record Status(State state, String reason, long pending, long blocked, long synced, Long lastSyncAt,
-                         String lastError) {
+                         String lastError, String lockedBy, Long lastSnapshotAt) {
     }
 
     private final GdriveSyncRepository repo;
@@ -71,6 +71,10 @@ public class GdriveSyncService {
     private final long intervalMs;
     private final long reconcileMs;
     private final boolean autoRun;
+    private final GdriveSnapshots.IndexBackup indexBackup;
+    private final long leaseMs;
+    private final long snapshotIntervalMs;
+    private final int snapshotKeep;
     private final HttpClient http = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER)
             .connectTimeout(Duration.ofSeconds(15)).build();
 
@@ -87,19 +91,35 @@ public class GdriveSyncService {
     private volatile String reason;
     private volatile String lastError;
     private volatile Long lastSyncAt;
+    private GdriveLock lock;
+    private boolean lockHeld;
+    private volatile boolean takeover;
+    private volatile String lockedBy;
+    private GdriveSnapshots snapshots;
+    private volatile long lastSnapshotAt = -1; // -1＝Drive の一覧からまだ読んでいない
+    private long lastSnapshotAttemptAt;
 
     @Autowired
-    public GdriveSyncService(GdriveSyncRepository repo, StorageLayout layout,
+    public GdriveSyncService(GdriveSyncRepository repo, StorageLayout layout, org.springframework.jdbc.core.JdbcTemplate jdbc,
                              @Value("${graphy.gdrive.api-base:https://www.googleapis.com}") String apiBase,
                              @Value("${graphy.gdrive.token-url:https://oauth2.googleapis.com/token}") String tokenUrl,
                              @Value("${graphy.gdrive.interval-seconds:30}") long intervalSeconds,
-                             @Value("${graphy.gdrive.reconcile-minutes:10}") long reconcileMinutes) {
+                             @Value("${graphy.gdrive.reconcile-minutes:10}") long reconcileMinutes,
+                             @Value("${graphy.gdrive.lock-lease-minutes:10}") long leaseMinutes,
+                             @Value("${graphy.gdrive.snapshot-interval-minutes:60}") long snapshotMinutes,
+                             @Value("${graphy.gdrive.snapshot-keep:3}") int snapshotKeep) {
         this(repo, layout.root(), apiBase, tokenUrl, Clock.systemUTC(), Math::random, intervalSeconds * 1000,
-                reconcileMinutes * 60_000, true);
+                reconcileMinutes * 60_000, true, zip -> jdbc.execute("BACKUP TO '" + zip.toString().replace("'", "''") + "'"),
+                leaseMinutes * 60_000, snapshotMinutes * 60_000, snapshotKeep);
     }
 
     GdriveSyncService(GdriveSyncRepository repo, Path root, String apiBase, String tokenUrl, Clock clock,
-                      DoubleSupplier jitter, long intervalMs, long reconcileMs, boolean autoRun) {
+                      DoubleSupplier jitter, long intervalMs, long reconcileMs, boolean autoRun,
+                      GdriveSnapshots.IndexBackup indexBackup, long leaseMs, long snapshotIntervalMs, int snapshotKeep) {
+        this.indexBackup = indexBackup;
+        this.leaseMs = leaseMs;
+        this.snapshotIntervalMs = snapshotIntervalMs;
+        this.snapshotKeep = snapshotKeep;
         this.repo = repo;
         this.root = root.toAbsolutePath().normalize();
         this.apiBase = apiBase;
@@ -116,7 +136,16 @@ public class GdriveSyncService {
     /** main から設定が届いた（null なら無効化）。台帳は、同期先のフォルダが変わったときだけ捨てる。 */
     public synchronized void configure(GdriveConfig cfg) {
         this.config = cfg;
+        if (lock != null && lockHeld) {
+            lock.release();
+        }
         this.client = null;
+        this.lock = null;
+        this.lockHeld = false;
+        this.lockedBy = null;
+        this.takeover = false;
+        this.snapshots = null;
+        this.lastSnapshotAt = -1;
         this.dicomFolderId = null;
         this.forceReconcile = true;
         this.lastError = null;
@@ -128,6 +157,8 @@ public class GdriveSyncService {
         state = State.SYNCING;
         GdriveTokenSource tokens = new GdriveTokenSource(http, tokenUrl, () -> this.config, clock);
         this.client = new DriveClient(http, apiBase, tokens);
+        this.lock = new GdriveLock(client, clock, leaseMs, cfg.folderId(), cfg.deviceId(), cfg.host());
+        this.snapshots = new GdriveSnapshots(client, indexBackup, clock, cfg.folderId(), snapshotKeep);
         if (autoRun) {
             if (executor == null) {
                 executor = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -145,12 +176,13 @@ public class GdriveSyncService {
     public Status status() {
         GdriveConfig c = config;
         if (c == null) {
-            return new Status(State.DISABLED, null, 0, 0, 0, null, null);
+            return new Status(State.DISABLED, null, 0, 0, 0, null, null, null, null);
         }
         long pending = repo.countByFolderIdAndState(c.folderId(), GdriveSyncItem.PENDING)
                 + repo.countByFolderIdAndState(c.folderId(), GdriveSyncItem.REMOVE);
         return new Status(state, reason, pending, repo.countByFolderIdAndState(c.folderId(), GdriveSyncItem.BLOCKED),
-                repo.countByFolderIdAndState(c.folderId(), GdriveSyncItem.SYNCED), lastSyncAt, lastError);
+                repo.countByFolderIdAndState(c.folderId(), GdriveSyncItem.SYNCED), lastSyncAt, lastError, lockedBy,
+                lastSnapshotAt > 0 ? lastSnapshotAt : null);
     }
 
     /** 今すぐ全走査して同期する（止まっている項目も再試行する）。 */
@@ -178,11 +210,34 @@ public class GdriveSyncService {
         });
     }
 
+    /** 他端末が使用中でも、その端末のロックを外して使い始める（利用者が確認したあとに呼ぶ）。 */
+    public void takeOver() {
+        takeover = true;
+        kick();
+    }
+
     @PreDestroy
     void shutdown() {
         if (executor != null) {
             executor.shutdownNow();
         }
+        shutdownWork();
+    }
+
+    /** 終了時の後始末（ベストエフォート）: 最後の索引スナップショットとロックの解放。つながらなければ諦める。 */
+    synchronized void shutdownWork() {
+        if (config == null || !lockHeld) {
+            return;
+        }
+        try {
+            if (repo.countByFolderIdAndState(config.folderId(), GdriveSyncItem.PENDING) == 0) {
+                lastSnapshotAt = snapshots.createAndUpload();
+            }
+        } catch (GdriveException | RuntimeException e) {
+            log.info("[gdrive] exit snapshot skipped: {}", e.getMessage());
+        }
+        lock.release();
+        lockHeld = false;
     }
 
     // ── 1 周期 ────────────────────────────────────────────────────
@@ -209,9 +264,17 @@ public class GdriveSyncService {
             reason = problem;
             return;
         }
+        if (c.refreshToken() == null || c.refreshToken().isBlank()) {
+            state = State.NEEDS_LOGIN;
+            reason = null;
+            return;
+        }
         try {
             if (dicomFolderId == null) {
                 dicomFolderId = client.ensureFolder(c.folderId(), DICOM_FOLDER);
+            }
+            if (!ensureLock()) {
+                return;
             }
             repo.deleteOtherFolders(c.folderId());
             long now = clock.millis();
@@ -222,6 +285,7 @@ public class GdriveSyncService {
             }
             applyHints(c.folderId());
             processQueue(c.folderId());
+            maybeSnapshot(c.folderId());
             long blocked = repo.countByFolderIdAndState(c.folderId(), GdriveSyncItem.BLOCKED);
             long pending = repo.countByFolderIdAndState(c.folderId(), GdriveSyncItem.PENDING)
                     + repo.countByFolderIdAndState(c.folderId(), GdriveSyncItem.REMOVE);
@@ -260,6 +324,47 @@ public class GdriveSyncService {
             }
             log.info("[gdrive] cycle stopped: {} ({})", state, e.getMessage());
         }
+    }
+
+    /** 排他。使える状態なら true。他端末が使用中・奪われたときは状態を立てて false。 */
+    private boolean ensureLock() throws GdriveException {
+        if (!lockHeld) {
+            GdriveLock.Holder h = lock.acquire(takeover);
+            takeover = false;
+            if (h != null) {
+                state = State.NEEDS_ATTENTION;
+                reason = "locked-by-other";
+                lockedBy = h.host().isBlank() ? h.deviceId() : h.host();
+                return false;
+            }
+            lockHeld = true;
+            lockedBy = null;
+            return true;
+        }
+        if (!lock.heartbeatIfDue()) {
+            lockHeld = false;
+            state = State.NEEDS_ATTENTION;
+            reason = "lock-lost";
+            return false;
+        }
+        return true;
+    }
+
+    /** 待ちが空で、前回から間が空いていれば索引のスナップショットを送る。失敗しても 5 分は再試行しない。 */
+    private void maybeSnapshot(String folderId) throws GdriveException {
+        if (repo.countByFolderIdAndState(folderId, GdriveSyncItem.PENDING)
+                + repo.countByFolderIdAndState(folderId, GdriveSyncItem.REMOVE) > 0) {
+            return; // 索引が、まだ Drive に無いファイルを指す状態のスナップショットは作らない
+        }
+        long now = clock.millis();
+        if (lastSnapshotAt < 0) {
+            lastSnapshotAt = snapshots.latestAt();
+        }
+        if (now - lastSnapshotAt < snapshotIntervalMs || now - lastSnapshotAttemptAt < 300_000) {
+            return;
+        }
+        lastSnapshotAttemptAt = now;
+        lastSnapshotAt = snapshots.createAndUpload();
     }
 
     // ── 台帳の突き合わせ ──────────────────────────────────────────

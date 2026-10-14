@@ -244,6 +244,53 @@ public class DriveClient {
                 n.path("size").asLong(0));
     }
 
+    // ── 取得 ──────────────────────────────────────────────────────
+
+    /** 内容を取り出して {@code dest} に置く（途中までのものを残さない: 一時ファイル→移動）。 */
+    public void download(String fileId, Path dest) throws GdriveException {
+        Path part = dest.resolveSibling(dest.getFileName() + ".part");
+        for (int attempt = 0; ; attempt++) {
+            HttpRequest req = request(api("/files/" + enc(fileId) + "?alt=media&supportsAllDrives=true"),
+                    tokens.accessToken()).GET().build();
+            try {
+                HttpResponse<java.io.InputStream> r = http.send(req, HttpResponse.BodyHandlers.ofInputStream());
+                try (java.io.InputStream in = r.body()) {
+                    if (r.statusCode() == 401 && attempt == 0) {
+                        tokens.invalidate();
+                        continue;
+                    }
+                    if (r.statusCode() != 200) {
+                        throw error(r.statusCode(), in.readNBytes(8192));
+                    }
+                    java.nio.file.Files.createDirectories(dest.getParent());
+                    java.nio.file.Files.copy(in, part, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                }
+                java.nio.file.Files.move(part, dest, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                return;
+            } catch (IOException e) {
+                try {
+                    java.nio.file.Files.deleteIfExists(part);
+                } catch (IOException ignore) {
+                    // 次の取得で上書きする
+                }
+                throw new GdriveException(Kind.OFFLINE, "network", e);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new GdriveException(Kind.OFFLINE, "interrupted", e);
+            }
+        }
+    }
+
+    /** 小さいファイル（ロックなど）の中身。 */
+    public byte[] readSmall(String fileId) throws GdriveException {
+        HttpResponse<byte[]> r = exec(t -> request(api("/files/" + enc(fileId) + "?alt=media&supportsAllDrives=true"), t)
+                .GET().build());
+        if (r.statusCode() != 200) {
+            throw error(r);
+        }
+        return r.body();
+    }
+
     // ── 通信の共通部分 ────────────────────────────────────────────
 
     private String api(String path) {
@@ -300,10 +347,13 @@ public class DriveClient {
     }
 
     static GdriveException error(HttpResponse<byte[]> r) {
-        int s = r.statusCode();
+        return error(r.statusCode(), r.body());
+    }
+
+    static GdriveException error(int s, byte[] body) {
         String reason = "";
         try {
-            reason = JSON.readTree(r.body()).path("error").path("errors").path(0).path("reason").asText("");
+            reason = JSON.readTree(body).path("error").path("errors").path(0).path("reason").asText("");
         } catch (IOException | RuntimeException ignore) {
             // 本文が JSON でなければ status だけで判断
         }

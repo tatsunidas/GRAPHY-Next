@@ -11,15 +11,20 @@ import java.util.regex.Pattern;
  * 🔴 {@link #toString()} に秘密を出さない。
  */
 public record GdriveConfig(String clientId, String clientSecret, String refreshToken,
-                           String folderId, String driveId, String name) {
+                           String folderId, String driveId, String name, String deviceId, String host) {
 
     /** {@code desktop/dbFolders.js} の {@code DRIVE_ID_RE} と同じ形。 */
     static final Pattern ID_RE = Pattern.compile("[A-Za-z0-9_-]{10,128}");
 
+    static final Pattern DEVICE_RE = Pattern.compile("[A-Za-z0-9-]{8,64}");
+
     /** 問題があれば理由、無ければ null。 */
     public String problem() {
-        if (blank(clientId) || blank(refreshToken)) {
+        if (blank(clientId)) {
             return "credentials-missing";
+        }
+        if (deviceId == null || !DEVICE_RE.matcher(deviceId).matches()) {
+            return "bad-device-id";
         }
         if (folderId == null || !ID_RE.matcher(folderId).matches()) {
             return "bad-folder-id";

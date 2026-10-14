@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -55,16 +56,17 @@ class GdriveRealDriveTest {
         String parent = System.getenv("GDRIVE_REAL_PARENT");
 
         GdriveConfig boot = new GdriveConfig(client.path("client_id").asText(), client.path("client_secret").asText(),
-                refresh, parent, null, "real");
+                refresh, parent, null, "real", "real-device-0001", "real-host");
         java.net.http.HttpClient http = java.net.http.HttpClient.newBuilder()
                 .followRedirects(java.net.http.HttpClient.Redirect.NEVER).build();
         DriveClient admin = new DriveClient(http, "https://www.googleapis.com",
                 new GdriveTokenSource(http, "https://oauth2.googleapis.com/token", () -> boot, Clock.systemUTC()));
         String dbFolder = admin.ensureFolder(parent, "GRAPHY-DB-real-test-" + System.currentTimeMillis());
-        GdriveConfig cfg = new GdriveConfig(boot.clientId(), boot.clientSecret(), refresh, dbFolder, null, "real");
+        GdriveConfig cfg = new GdriveConfig(boot.clientId(), boot.clientSecret(), refresh, dbFolder, null, "real", "real-device-0001", "real-host");
         try {
             GdriveSyncService svc = new GdriveSyncService(repo, root, "https://www.googleapis.com",
-                    "https://oauth2.googleapis.com/token", Clock.systemUTC(), Math::random, 30_000, 600_000, false);
+                    "https://oauth2.googleapis.com/token", Clock.systemUTC(), Math::random, 30_000, 600_000, false,
+                    GdriveSyncServiceTest::fakeBackup, 600_000, 3_600_000, 3);
             svc.configure(cfg);
 
             byte[] small = rnd(200_000, 1);
@@ -106,6 +108,29 @@ class GdriveRealDriveTest {
             assertEquals(1, remote.size());
             assertTrue(remote.get(0).name().endsWith("3.1.dcm"));
             assertEquals(0, svc.status().pending());
+
+            // 排他: 別の端末は使えない
+            GdriveSyncService other = new GdriveSyncService(repo, Files.createTempDirectory("other"), "https://www.googleapis.com",
+                    "https://oauth2.googleapis.com/token", Clock.systemUTC(), Math::random, 30_000, 600_000, false,
+                    GdriveSyncServiceTest::fakeBackup, 600_000, 3_600_000, 3);
+            other.configure(new GdriveConfig(boot.clientId(), boot.clientSecret(), refresh, dbFolder, null, "real",
+                    "other-device-0002", "other-host"));
+            other.cycle();
+            assertEquals("locked-by-other", other.status().reason());
+            assertEquals("real-host", other.status().lockedBy());
+
+            // スナップショット（索引の代わりの zip）が置かれ、別フォルダへ復元できる
+            assertNotNull(svc.status().lastSnapshotAt());
+            Path restored = Files.createTempDirectory("restored");
+            GdriveRestoreService rs = new GdriveRestoreService("https://www.googleapis.com", "https://oauth2.googleapis.com/token");
+            rs.runSync(new GdriveConfig(boot.clientId(), boot.clientSecret(), refresh, dbFolder, null, "restore",
+                    "restore-device", ""), restored);
+            assertEquals(GdriveRestoreService.Phase.DONE, rs.progress().phase(), String.valueOf(rs.progress()));
+            assertEquals(1, rs.progress().done());
+            assertTrue(rs.progress().snapshotRestored());
+            assertEquals(GdriveSyncService.md5(p1), GdriveSyncService.md5(restored.resolve("dicom/1.1/2.1/3.1.dcm")));
+            assertEquals("INDEX-V1", Files.readString(restored.resolve("graphy-index.mv.db")));
+            svc.shutdownWork(); // ロックを解放（ゴミ箱へ）
         } finally {
             admin.trash(dbFolder);
         }

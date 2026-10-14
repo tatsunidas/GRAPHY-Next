@@ -47,6 +47,9 @@ public class GdriveTokenSource {
         if (c == null) {
             throw new GdriveException(GdriveException.Kind.FATAL, 0, "not-configured");
         }
+        if (c.refreshToken() == null || c.refreshToken().isBlank()) {
+            throw new GdriveException(GdriveException.Kind.RELOGIN, 0, "no-refresh-token");
+        }
         StringBuilder form = new StringBuilder("grant_type=refresh_token");
         form.append("&client_id=").append(enc(c.clientId()));
         if (c.clientSecret() != null && !c.clientSecret().isEmpty()) {

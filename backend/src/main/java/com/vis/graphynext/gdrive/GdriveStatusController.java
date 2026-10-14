@@ -20,9 +20,23 @@ import java.util.Map;
 public class GdriveStatusController {
 
     private final GdriveSyncService sync;
+    private final GdriveRestoreService restore;
 
-    public GdriveStatusController(GdriveSyncService sync) {
+    public GdriveStatusController(GdriveSyncService sync, GdriveRestoreService restore) {
         this.sync = sync;
+        this.restore = restore;
+    }
+
+    @GetMapping("/restore")
+    public GdriveRestoreService.Progress restoreProgress() {
+        return restore.progress();
+    }
+
+    /** 他端末が使用中でも使い始める。画面で確認を取ったあとに呼ぶ。 */
+    @PostMapping("/takeover")
+    public ResponseEntity<Map<String, Object>> takeOver() {
+        sync.takeOver();
+        return ResponseEntity.accepted().body(Map.of("ok", true));
     }
 
     @GetMapping("/status")
