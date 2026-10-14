@@ -16,7 +16,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import { emitToast } from "../viewer/toast";
 import { getRoiMaskMeta } from "../viewer/roiMaskStore";
-import { computeRoiStatsAsync } from "../viewer/roiStatsStore";
+import { buildRoiPixelDumpAsync, computeRoiStatsAsync } from "../viewer/roiStatsStore";
+import { roiPixelDumpBlobText } from "../viewer/roiPixelDump";
 import { roiStatsCsvBlobText, roiStatsToCsv, type RoiStatsCsvRow } from "../viewer/roiStatsCsv";
 import {
   formatArea,
@@ -112,6 +113,32 @@ export function RoiStatsDialog({
   }, [rows]);
 
   const focused = focus ? stats[focus] : undefined;
+  // 画素ダンプは面型・点型だけ（線は双一次補間で画素ではない）。
+  const dumpKind = focused?.geometry.kind;
+  const dumpable = dumpKind === "area" || dumpKind === "point";
+
+  const saveDump = useCallback(async () => {
+    if (!focus || !dumpable) return;
+    try {
+      const idx = targets.findIndex((x) => x.uid === focus);
+      const label = getRoiMaskMeta(focus)?.label ?? "";
+      const d = await buildRoiPixelDumpAsync(focus, label);
+      if (!d) {
+        emitToast(t("roiStats.dumpPixelsFailed"));
+        return;
+      }
+      const url = URL.createObjectURL(
+        new Blob([roiPixelDumpBlobText(d.rows, d)], { type: "text/csv;charset=utf-8" }),
+      );
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `roi-pixels-${idx + 1}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      emitToast(t("roiStats.dumpPixelsFailed"));
+    }
+  }, [focus, dumpable, targets, t]);
 
   return (
     <div style={backdrop} onClick={onClose}>
@@ -123,6 +150,15 @@ export function RoiStatsDialog({
           <button onClick={() => setGeneration((g) => g + 1)} style={hbtn} title={t("roiStats.recompute")}>⟳</button>
           <button onClick={copyCsv} style={hbtn} title={t("roiStats.copyCsv")}>⧉ CSV</button>
           <button onClick={saveCsv} style={hbtn} title={t("roiStats.saveCsv")}>⬇ CSV</button>
+          <button
+            onClick={saveDump}
+            disabled={!dumpable}
+            style={{ ...hbtn, opacity: dumpable ? 1 : 0.4, cursor: dumpable ? "pointer" : "not-allowed" }}
+            title={dumpable ? t("roiStats.dumpPixels") : t("roiStats.dumpPixelsUnsupported")}
+            data-testid="roi-stats-dump"
+          >
+            {t("roiStats.dumpPixelsBtn")}
+          </button>
           <button onClick={onClose} style={hbtn} title={t("common.close")}>×</button>
         </div>
 

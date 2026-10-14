@@ -37,7 +37,8 @@ import {
   type ModalitySlice,
 } from "./pixelCalibration";
 import { roiPointsPx, type PointPx } from "./roiRead";
-import { computeRoiStatsFrom, type RoiStatsResult } from "./roiStats";
+import { buildRoiMesh, computeRoiStatsFrom, pickSampleKind, type RoiStatsResult } from "./roiStats";
+import { buildRoiPixelDump, type RoiPixelDumpRow } from "./roiPixelDump";
 import { worldSpacingOf, worldToImageCoords } from "./imageCoords";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -269,6 +270,49 @@ export async function computeRoiStatsAsync(
   }
   const slice = await readModalitySlice(r.refImageId);
   return computeWithSlice(uid, ann, r, slice, opts ?? {});
+}
+
+/** 画素ダンプの結果（ダイアログが CSV 化する）。 */
+export interface RoiPixelDumpResult {
+  rows: RoiPixelDumpRow[];
+  roiUid: string;
+  label: string;
+  imageId: string;
+  unit: string;
+}
+
+/**
+ * ROI の統計に使った画素を行にして返す（**非同期**・画素が未ロードなら読み込む）。
+ * 線 ROI・非対応ツール・画素が読めない場合は `undefined`。幾何（IPP/IOP）が無ければ plane=null で渡す。
+ */
+export async function buildRoiPixelDumpAsync(uid: string, label: string): Promise<RoiPixelDumpResult | undefined> {
+  const ann = getAnnotation(uid);
+  if (!ann) return undefined;
+  const r = resolveInputs(ann);
+  if (!r) return undefined;
+  const kind = pickSampleKind(r.tool, r.closed);
+  if (kind !== "area" && kind !== "point") return undefined;
+  const mesh = buildRoiMesh(r.tool, r.pointsPx, r.closed);
+  if (!mesh) return undefined;
+  const slice = await readModalitySlice(r.refImageId);
+  if (!slice || !slice.width || !slice.height) return undefined;
+  const m = metaData.get("imagePlaneModule", r.refImageId) as Any;
+  const finite3 = (v: ArrayLike<number> | undefined) =>
+    !!v && v.length >= 3 && Number.isFinite(v[0]) && Number.isFinite(v[1]) && Number.isFinite(v[2]);
+  const plane =
+    m && numOrNull(m.rowPixelSpacing) !== null && numOrNull(m.columnPixelSpacing) !== null &&
+    finite3(m.imagePositionPatient) && finite3(m.rowCosines) && finite3(m.columnCosines)
+      ? {
+          imagePositionPatient: m.imagePositionPatient,
+          rowCosines: m.rowCosines,
+          columnCosines: m.columnCosines,
+          rowPixelSpacing: numOrNull(m.rowPixelSpacing),
+          columnPixelSpacing: numOrNull(m.columnPixelSpacing),
+        }
+      : null;
+  const rows = buildRoiPixelDump({ kind, mesh, slice, plane });
+  if (!rows) return undefined;
+  return { rows, roiUid: uid, label, imageId: r.refImageId, unit: r.unit };
 }
 
 function getAnnotation(uid: string): Any {

@@ -15,15 +15,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // ── Cornerstone のうち、このモジュールが触る口だけを差し替える ──────────────
 const annotations: Record<string, unknown>[] = [];
 let sliceLoaded = true;
+let planeMeta: Record<string, unknown> = { columnPixelSpacing: 0.5, rowPixelSpacing: 0.5 };
 
 vi.mock("@cornerstonejs/core", () => ({
   eventTarget: { addEventListener: () => undefined, removeEventListener: () => undefined },
   getRenderingEngines: () => [],
-  metaData: { get: () => ({ columnPixelSpacing: 0.5, rowPixelSpacing: 0.5 }) },
+  metaData: { get: () => planeMeta },
 }));
 
 // world → 画素は自前の変換（./imageCoords）を通る。ここでは恒等写像に差し替える。
-vi.mock("./imageCoords", () => ({
+vi.mock("./imageCoords", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./imageCoords")>()),
   worldToImageCoords: (_id: string, w: number[]) => [w[0], w[1]] as [number, number],
   worldSpacingOf: () => ({ row: 0.5, col: 0.5 }),
 }));
@@ -52,7 +54,7 @@ function slice() {
   return { values: new Float32Array(32 * 32).fill(70), width: 32, height: 32, unit: "HU" };
 }
 
-import { computeRoiStatsAsync, computeRoiStatsNow, getRoiStats, invalidateAllRoiStats } from "./roiStatsStore";
+import { buildRoiPixelDumpAsync, computeRoiStatsAsync, computeRoiStatsNow, getRoiStats, invalidateAllRoiStats } from "./roiStatsStore";
 
 function rect(uid: string, x0: number, y0: number, x1: number, y1: number) {
   return {
@@ -143,5 +145,40 @@ describe("計算とキャッシュ", () => {
     expect(computeRoiStatsNow(id)!.histogram).toBeUndefined();
     const detailed = await computeRoiStatsAsync(id, { withHistogram: true });
     expect(detailed?.histogram?.totalCount).toBe(100);
+  });
+});
+
+describe("画素ダンプ（buildRoiPixelDumpAsync）", () => {
+  it("IPP/IOP が無いと x/y/z が空（plane=null）、あれば座標が入る。線は undefined", async () => {
+    const id = uid();
+    annotations.push(rect(id, 4, 4, 14, 14));
+    planeMeta = { columnPixelSpacing: 0.5, rowPixelSpacing: 0.5 };
+    const a = await buildRoiPixelDumpAsync(id, "L");
+    expect(a!.rows.length).toBe(100);
+    expect(a!.rows[0].x).toBeUndefined();
+    expect(a!.rows[0].value).toBe(70);
+
+    planeMeta = {
+      columnPixelSpacing: 0.5,
+      rowPixelSpacing: 0.5,
+      imagePositionPatient: [10, 20, 30],
+      rowCosines: [1, 0, 0],
+      columnCosines: [0, 1, 0],
+    };
+    const b = await buildRoiPixelDumpAsync(id, "L");
+    const r0 = b!.rows[0];
+    expect([r0.col, r0.row]).toEqual([4, 4]);
+    expect(r0.x).toBeCloseTo(10 + 4 * 0.5, 9);
+    expect(r0.y).toBeCloseTo(20 + 4 * 0.5, 9);
+    expect(r0.z).toBeCloseTo(30, 9);
+    planeMeta = { columnPixelSpacing: 0.5, rowPixelSpacing: 0.5 };
+
+    const lineId = uid();
+    annotations.push({
+      annotationUID: lineId,
+      metadata: { toolName: "Length", referencedImageId: "wadouri:x" },
+      data: { handles: { points: [[2, 2, 0], [20, 2, 0]] } },
+    });
+    expect(await buildRoiPixelDumpAsync(lineId, "")).toBeUndefined();
   });
 });
