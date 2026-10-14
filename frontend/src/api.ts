@@ -66,7 +66,7 @@ export interface StudyFilters {
   studyDateTo?: string;
   modality?: string; // カンマ区切りの複数モダリティ（例 "CT,MR"）
   accessionNumber?: string;
-  /** IHE IID 起動: StudyInstanceUID 直接指定（他条件は無視して当該 study を返す）。 */
+  /** StudyInstanceUID 直接指定（他条件は無視して当該 study を返す。カンマ区切りで複数）。IHE IID 起動と取り込み直後の一覧。 */
   studyInstanceUid?: string;
 }
 
@@ -540,6 +540,8 @@ export interface ImportResult {
    */
   studiesWithoutDate: number;
   errors: string[];
+  /** 取り込んだ画像のスタディ（重複なし）。一覧を「いま取り込んだ検査」に絞って出すのに使う。 */
+  studyInstanceUids?: string[];
 }
 
 export const importPaths = (paths: string[]) =>

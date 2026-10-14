@@ -6,6 +6,7 @@ import { useRef, useState } from "react";
 import { importPaths, type AppStatus, type Study, type Series, type StudyFilters } from "../api";
 import { desktop } from "../desktopBridge";
 import { droppedPaths, hasDroppedFiles } from "./droppedPaths";
+import { importedStudiesView, type ImportedView } from "./importedView";
 import { useI18n } from "../i18n/i18n";
 import { StudyList } from "../StudyList";
 import { MenuBar } from "./MenuBar";
@@ -55,6 +56,14 @@ export function MainScreen({
   // null = まだ検索していない。SearchPanel が初期条件(今日)で onSearch を呼ぶと埋まる。
   const [filters, setFilters] = useState<StudyFilters | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // 取り込み直後は、一覧を「いま取り込んだ検査」に絞る（既定の検索条件「今日」では過去の検査が出ないため）。
+  const [importedView, setImportedView] = useState<ImportedView | null>(null);
+  const searchFiltersRef = useRef<StudyFilters | null>(null);
+  const onSearch = (f: StudyFilters) => {
+    searchFiltersRef.current = f;
+    setImportedView(null);
+    setFilters(f);
+  };
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
   const [selectedSeries, setSelectedSeries] = useState<Series | null>(null);
@@ -106,11 +115,16 @@ export function MainScreen({
       const base = t("main.import.result", { imported: r.imported, skipped: r.skipped, failed: r.failed });
       // 検査日の無いスタディは既定の検索条件（今日）では出ない。取り込めているのに
       // 「失敗した」と読まれるため、件数があるときだけ理由と対処を添える。
+      const view = importedStudiesView(r.studyInstanceUids);
       const withDateNote =
-        r.studiesWithoutDate > 0
+        !view && r.studiesWithoutDate > 0
           ? `${base} — ${t("main.import.noStudyDate", { count: r.studiesWithoutDate })}`
           : base;
       setImportMsg(withDateNote);
+      if (view) {
+        setImportedView(view);
+        setFilters(view.filters);
+      }
       setReloadKey((k) => k + 1);
       // 注意文つきのときは読む時間が要る（既定の 6 秒では消えるのが早い）。
       setTimeout(() => setImportMsg(null), r.studiesWithoutDate > 0 ? 20000 : 6000);
@@ -357,8 +371,26 @@ export function MainScreen({
       <div style={middle}>
         {/* status（isDemo）は非同期取得のため、確定後に isDemo が変わったら SearchPanel を
             再マウントして初期日付(1900/01/01〜当日)を再計算させる。 */}
-        <SearchPanel key={String(isDemo)} onSearch={setFilters} isDemo={isDemo} />
+        <SearchPanel key={String(isDemo)} onSearch={onSearch} isDemo={isDemo} />
         <div style={treeArea}>
+          {importedView && (
+            <div style={importedBanner} data-testid="imported-view-banner">
+              <span>
+                {importedView.shown < importedView.total
+                  ? t("main.import.showingImportedPartial", { shown: importedView.shown, total: importedView.total })
+                  : t("main.import.showingImported", { count: importedView.total })}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setImportedView(null);
+                  setFilters(searchFiltersRef.current);
+                }}
+              >
+                {t("main.import.backToSearch")}
+              </button>
+            </div>
+          )}
           <StudyList
             filters={filters}
             reloadKey={reloadKey + dbVersion}
@@ -472,4 +504,17 @@ const banner: React.CSSProperties = {
   borderBottom: "1px solid #d6e6d0",
   fontSize: 13,
   color: "#2e5d27",
+};
+
+const importedBanner: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 12,
+  padding: "6px 10px",
+  marginBottom: 8,
+  background: "#eaf2fb",
+  border: "1px solid #c9dcf0",
+  borderRadius: 4,
+  fontSize: 13,
+  color: "#1a4a80",
 };
