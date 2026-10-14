@@ -230,8 +230,8 @@ GRAPHY `Image > Segmentation`（New/Import ROIs/Save SEG/Import SEG/Stop）は**
 | GRAPHY | 機能 | Next 実装 | 状態 |
 |---|---|---|---|
 | Brush（Alt=消去） | 手描き塗り/消去 | `BrushTool` FILL/ERASE（対象を選べるよう拡張） | ✅→拡張 |
-| Wand 2D（ImageJ Wand flood fill） | スライス内領域成長 | `PaintFillTool`（トレランス） | ✅ |
-| Wand 3D（BFS region grow） | ボリューム領域成長 | `RegionSegmentPlusTool`/`growCut`（内部 on-demand volume） | 登録済→未結線 |
+| Wand 2D（ImageJ Wand flood fill） | スライス内領域成長 | `PaintFillTool`（トレランス）。方式＝許容差（生値）／以上・以下・範囲（校正値）。§6.1 | ✅ |
+| Wand 3D（BFS region grow） | ボリューム領域成長 | `RegionSegmentPlusTool`/`growCut`（内部 on-demand volume）。方式は 2D と同じ。§6.1 | 登録済→未結線 |
 | （しきい値ダイアログ相当） | しきい値塗り | `RectangleROIThresholdTool`＋`thresholdSegmentationByRange` | 登録済→未結線 |
 | （Scissors 相当なし） | 矩形/円/球で fill-erase | `Rectangle/Circle/SphereScissorsTool`（球は内部 on-demand volume） | 登録済→未結線 |
 | Import selected ROIs→mask | ROI ラスタ化→結合 | 既存 `roiToMask` を「アクティブ segment へ結合」に拡張・複数選択バッチ | ◐ |
@@ -241,6 +241,22 @@ GRAPHY `Image > Segmentation`（New/Import ROIs/Save SEG/Import SEG/Stop）は**
 | Import DICOM SEG（編集可） | SEG→編集可マスク | backend SEG→stack labelmap 復元 | ◐（表示のみ→編集化） |
 | ROI Manager: AND/OR/XOR/Split | ブール演算 | 既存 `roiBooleanOps`（segment 粒度へ） | ✅ |
 | Sphere3D（パラメトリック保持） | 球 ROI 保持→焼込 | 既存 `sphere3dStore`/`roi3d`（volume へ焼込に統一） | ✅→調整 |
+
+### 6.1 Wand の判定方式（`viewer/wandFlood.ts`）
+
+フラッドの芯は純関数 `floodRegion(read, dims, seed, accept, offsets, maxVoxels)`（Cornerstone に依存しない）。
+方式は判定関数と `read`（判定に使う値）の組で決まる。
+
+| 方式 | 判定 | 判定に使う値 |
+|---|---|---|
+| 許容差（既定） | \|v − シード値\| ≤ しきい値 | **生値**（`getPixelData()` のまま。従来どおり） |
+| 以上 / 以下 / 範囲 | v ≥ t / v ≤ t / lo ≤ v ≤ hi（**両端を含む**） | **校正値**（`getModalityCalibration` の `px*scale+offset`、スライスごとの係数。SUV 校正済みなら SUV） |
+
+- 許容差と絶対値の方式では**値の意味が違う**（許容差は生値、他は HU・SUV 等）。ダイアログにも注記を出す。許容差を校正値へ移すかは未決定で、今回は変えない。
+- 絶対値の方式の初期しきい値は「シードの校正値」（シードは必ず条件を満たす）。単位が `raw`（未校正・カラー）のときは絶対値の方式を選べず、理由を出す。
+- シード自身が条件を満たさないときは何も塗らず `seedRejected` を立てて理由を表示する。
+- 上限 4,000,000 ボクセルに達し、まだ未処理の候補が残るときは `truncated` を立て、結果は残したまま「上限で打ち切った」と表示する（従来は黙って止まっていた）。
+- 塗ったボクセル数をダイアログに表示する。
 
 ---
 

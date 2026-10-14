@@ -16,8 +16,10 @@ import { getEnabledElement, cache, imageLoader } from "@cornerstonejs/core";
 import { BaseTool, segmentation as csSeg } from "@cornerstonejs/tools";
 import { getSegEditTarget } from "./roiMaskStore";
 import { ensureStackSegmentation } from "./segmentation";
-import { openWandSession, clearWandSession, getWandSession, type WandSession, type WandMode } from "./wandStore";
-import { worldToImageCoords } from "./imageCoords";
+import { openWandSession, updateWandSession, clearWandSession, getWandSession, type WandSession, type WandMode } from "./wandStore";
+import { worldToImageCoords, imageToWorldCoords } from "./imageCoords";
+import { getModalityCalibration, resolveValueUnit } from "./pixelCalibration";
+import { floodRegion, offsets2D, offsets3D, acceptTolerance, acceptGe, acceptLe, acceptRange } from "./wandFlood";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
@@ -30,32 +32,6 @@ let tracked: Map<number, number> | null = null;
 function labelmapVmAt(labelmapIds: string[], z: number): AnyObj | null {
   const img = cache.getImage(labelmapIds[z]) as AnyObj | undefined;
   return img?.voxelManager ?? null;
-}
-
-/** 2D 近傍オフセット。4=辺, 8=辺＋角。 */
-function offsets2D(conn: number): [number, number][] {
-  const four: [number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-  if (conn === 4) return four;
-  return [...four, [1, 1], [1, -1], [-1, 1], [-1, -1]];
-}
-/**
- * 3D 近傍オフセット。6=面(manh1)、12=面+辺(manh1,2)、8=面+角(manh1,3)、26=全て。
- * いずれも面(manh1)を必ず含める。面を含めない辺/角のみの近傍（旧実装のバグ）は、格子を
- * パリティで2分割してしまい（市松模様）、フラッド結果がメッシュの網目状になる
- * （`roiBooleanOps.ts` の `splitOffsets` と同様、面を基底として累積させるのが正しい）。
- */
-function offsets3D(conn: number): [number, number, number][] {
-  const all: { o: [number, number, number]; m: number }[] = [];
-  for (let dz = -1; dz <= 1; dz++)
-    for (let dy = -1; dy <= 1; dy++)
-      for (let dx = -1; dx <= 1; dx++) {
-        if (dx === 0 && dy === 0 && dz === 0) continue;
-        all.push({ o: [dx, dy, dz], m: Math.abs(dx) + Math.abs(dy) + Math.abs(dz) });
-      }
-  if (conn === 6) return all.filter((a) => a.m === 1).map((a) => a.o);
-  if (conn === 12) return all.filter((a) => a.m === 1 || a.m === 2).map((a) => a.o);
-  if (conn === 8) return all.filter((a) => a.m === 1 || a.m === 3).map((a) => a.o);
-  return all.map((a) => a.o);
 }
 
 /** tracked を元値へ復元（前回結果を消す）。影響スライスを返す。 */
@@ -98,63 +74,54 @@ export function runWand(s: WandSession): void {
     const img = cache.getImage(sourceImageIds[z]) as AnyObj | undefined;
     return img ? (img.getPixelData() as ArrayLike<number>) : null;
   };
-  const within = (v: number) => Math.abs(v - seedValue) <= threshold;
 
-  let count = 0;
-  if (s.mode === "2d") {
-    const px = pxOf(s.seedZ);
-    if (px) {
-      const offs = offsets2D(s.connectivity);
-      const visited = new Uint8Array(sliceLen);
-      const stack: number[] = [s.seedY * cols + s.seedX];
-      visited[stack[0]] = 1;
-      while (stack.length && count < MAX_VOXELS) {
-        const i = stack.pop() as number;
-        if (!within(px[i])) continue;
-        write(s.seedZ, i);
-        count++;
-        const y = Math.floor(i / cols);
-        const x = i - y * cols;
-        for (const [dx, dy] of offs) {
-          const nx = x + dx;
-          const ny = y + dy;
-          if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
-          const ni = ny * cols + nx;
-          if (!visited[ni]) { visited[ni] = 1; stack.push(ni); }
+  // 判定に使う値: 許容差＝生値（従来どおり）／以上・以下・範囲＝校正値（スライスごとの係数。規則 2）。
+  const method = s.method ?? "tolerance";
+  const depth = sourceImageIds.length;
+  const pxCache: (ArrayLike<number> | null | undefined)[] = new Array(depth).fill(undefined);
+  const getPx = (z: number) => (pxCache[z] === undefined ? (pxCache[z] = pxOf(z)) : pxCache[z]) as ArrayLike<number> | null;
+  const calCache: ({ scale: number; offset: number } | undefined)[] = new Array(depth).fill(undefined);
+  const getCal = (z: number) => {
+    let c = calCache[z];
+    if (!c) {
+      const img = cache.getImage(sourceImageIds[z]) as AnyObj | undefined;
+      const m = getModalityCalibration(img, sourceImageIds[z]);
+      c = calCache[z] = { scale: m.scale, offset: m.offset };
+    }
+    return c;
+  };
+  const readOf = (zMap: (z: number) => number) =>
+    method === "tolerance"
+      ? (z: number, i: number): number | null => {
+          const px = getPx(zMap(z));
+          return px ? Number(px[i]) : null;
         }
-      }
-    }
-  } else {
-    const depth = sourceImageIds.length;
-    const offs = offsets3D(s.connectivity);
-    const pxCache: (ArrayLike<number> | null)[] = new Array(depth).fill(undefined as unknown as null);
-    const getPx = (z: number) => (pxCache[z] === undefined ? (pxCache[z] = pxOf(z)) : pxCache[z]);
-    const visited = new Set<number>();
-    const startG = s.seedZ * sliceLen + (s.seedY * cols + s.seedX);
-    const stack: number[] = [startG];
-    visited.add(startG);
-    while (stack.length && count < MAX_VOXELS) {
-      const g = stack.pop() as number;
-      const z = Math.floor(g / sliceLen);
-      const rem = g - z * sliceLen;
-      const y = Math.floor(rem / cols);
-      const x = rem - y * cols;
-      const px = getPx(z);
-      if (!px || !within(px[rem])) continue;
-      write(z, rem);
-      count++;
-      for (const [dx, dy, dz] of offs) {
-        const nx = x + dx;
-        const ny = y + dy;
-        const nz = z + dz;
-        if (nx < 0 || ny < 0 || nx >= cols || ny >= rows || nz < 0 || nz >= depth) continue;
-        const ng = nz * sliceLen + (ny * cols + nx);
-        if (!visited.has(ng)) { visited.add(ng); stack.push(ng); }
-      }
-    }
+      : (z: number, i: number): number | null => {
+          const zz = zMap(z);
+          const px = getPx(zz);
+          if (!px) return null;
+          const c = getCal(zz);
+          return px[i] * c.scale + c.offset;
+        };
+  const lower = s.lower ?? s.seedCal ?? 0;
+  const upper = s.upper ?? s.seedCal ?? 0;
+  const accept =
+    method === "ge" ? acceptGe(lower)
+    : method === "le" ? acceptLe(upper)
+    : method === "range" ? acceptRange(lower, upper)
+    : acceptTolerance(seedValue, threshold);
+
+  const res =
+    s.mode === "2d"
+      ? floodRegion(readOf(() => s.seedZ), { cols, rows, depth: 1 }, { x: s.seedX, y: s.seedY, z: 0 }, accept, offsets2D(s.connectivity), MAX_VOXELS)
+      : floodRegion(readOf((z) => z), { cols, rows, depth }, { x: s.seedX, y: s.seedY, z: s.seedZ }, accept, offsets3D(s.connectivity), MAX_VOXELS);
+  for (const g of res.indices) {
+    const z = Math.floor(g / sliceLen);
+    write(s.mode === "2d" ? s.seedZ : z, g - z * sliceLen);
   }
 
   tracked = nextTracked;
+  updateWandSession({ count: res.indices.length, truncated: res.truncated, seedRejected: res.seedRejected });
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (csSeg as any).triggerSegmentationEvents.triggerSegmentationDataModified(s.segId, [...modified], segIndex);
@@ -228,6 +195,14 @@ async function startWand(viewport: AnyObj, world: [number, number, number], mode
     await Promise.all(stack.map((id) => imageLoader.loadAndCacheImage(id).catch(() => null)));
   }
 
+  // 校正値（以上/以下/範囲方式用）。シードスライスの係数で、シード値・値域・単位・LPS 位置を作る。
+  const cal = getModalityCalibration(src, refImageId);
+  const unit = resolveValueUnit(refImageId);
+  const seedCal = seedValue * cal.scale + cal.offset;
+  const c0 = rangeMin * cal.scale + cal.offset;
+  const c1 = rangeMax * cal.scale + cal.offset;
+  const seedWorld = imageToWorldCoords(refImageId, [sx + 0.5, sy + 0.5]) as [number, number, number];
+
   const prev = getWandSession();
   const threshold = prev ? prev.threshold : Math.max(1, Math.round((rangeMax - rangeMin) * 0.02));
   const connectivity = prev && prev.mode === mode ? prev.connectivity : mode === "2d" ? 8 : 6;
@@ -248,6 +223,16 @@ async function startWand(viewport: AnyObj, world: [number, number, number], mode
     connectivity,
     rangeMin,
     rangeMax,
+    // 方式は再シードでも保つ。新規セッションは「許容差」（従来の既定）。
+    method: prev?.method ?? "tolerance",
+    // 絶対値の方式の初期しきい値＝シードの校正値（シードは必ず条件を満たす）。再シードでは前回値を保つ。
+    lower: prev?.lower ?? seedCal,
+    upper: prev?.upper ?? (prev?.method === "range" ? Math.max(Math.max(c0, c1), seedCal) : seedCal),
+    unit,
+    seedCal,
+    calMin: Math.min(c0, c1),
+    calMax: Math.max(c0, c1),
+    seedWorld,
   };
   // 再シード時は前回結果を消してから新シードでフラッド（tracked は runWand が復元）。
   openWandSession(session);
