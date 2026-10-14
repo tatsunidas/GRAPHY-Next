@@ -214,3 +214,9 @@ test("Colab の refresh token の鍵は許す（書けるのは main の IPC で
   assert.equal(store.isAllowedKey("compute.colab.refreshToken"), true);
   assert.equal(store.isAllowedKey("compute.colab.other"), false);
 });
+
+test("Drive の refresh token の鍵は許す（書けるのは main の IPC で絞る・main.js の MAIN_ONLY_SECRET_KEYS）", () => {
+  const store = require("./secretStore");
+  assert.equal(store.isAllowedKey("gdrive.refreshToken"), true);
+  assert.equal(store.isAllowedKey("gdrive.other"), false);
+});

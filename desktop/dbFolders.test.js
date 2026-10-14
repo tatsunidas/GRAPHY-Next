@@ -120,3 +120,55 @@ test("同じフォルダの判定: linux は大文字小文字を区別、Window
   assert.equal(d.isNetworkPath("\\\\server\\share\\db"), true);
   assert.equal(d.isNetworkPath("C:\\db"), false);
 });
+
+// --- Drive バックアップの設定（fw/gdrive-p0.md）---
+// 守りたいのは: 設定が DB フォルダの切替・一覧からの除外で**黙って消えない**こと、形の合わない値は保存・読み込みされないこと。
+
+const GCFG = { driveFolderId: "1ZZzSqsb-tbQJf0x720J", driveId: null, name: "GRAPHY-DB-test", email: "a@example.com" };
+
+test("Drive 設定: 保存でき、別のフォルダの選択・一覧からの除外でも消えない。list に印が付く", () => {
+  const dir = tmp();
+  const d = fresh(dir);
+  const a = path.join(dir, "a");
+  const b = path.join(dir, "b");
+  fs.mkdirSync(a);
+  fs.mkdirSync(b);
+  d.create(a);
+  d.create(b);
+  d.select(a);
+  assert.equal(d.getGdrive(a), null);
+  assert.deepEqual(d.setGdrive(a, GCFG), { ok: true });
+  d.select(b);
+  d.forget(a);
+  assert.deepEqual(d.getGdrive(a), GCFG);
+  assert.equal(d.getGdrive(b), null);
+  d.select(a);
+  assert.equal(d.list(a).folders.find((r) => r.path === a).gdrive, true);
+  assert.equal(d.list(a).folders.find((r) => r.path === b)?.gdrive ?? false, false);
+});
+
+test("Drive 設定: 形の合わない値は保存しない（負例）。壊れた項目は読み込みで落とす", () => {
+  const dir = tmp();
+  const d = fresh(dir);
+  const a = path.join(dir, "a");
+  fs.mkdirSync(a);
+  for (const bad of [null, {}, { ...GCFG, driveFolderId: "../x" }, { ...GCFG, driveFolderId: "short" }, { ...GCFG, driveId: "a b" }, { ...GCFG, name: 1 }]) {
+    assert.deepEqual(d.setGdrive(a, bad), { ok: false, reason: "invalid" });
+  }
+  assert.equal(d.getGdrive(a), null);
+  fs.writeFileSync(path.join(dir, "db-folders.json"), JSON.stringify({ current: null, recent: [], gdrive: { [a]: { driveFolderId: "x" }, relative: GCFG } }));
+  assert.equal(d.getGdrive(a), null);
+});
+
+test("Drive 設定: 外すと消える。既存の（gdrive の無い）状態ファイルもそのまま読める", () => {
+  const dir = tmp();
+  const d = fresh(dir);
+  const a = path.join(dir, "a");
+  fs.mkdirSync(a);
+  fs.writeFileSync(path.join(dir, "db-folders.json"), JSON.stringify({ current: a, recent: [a] }));
+  assert.equal(d.currentFolder(), a);
+  d.setGdrive(a, GCFG);
+  d.clearGdrive(a);
+  assert.equal(d.getGdrive(a), null);
+  assert.equal(d.currentFolder(), a);
+});

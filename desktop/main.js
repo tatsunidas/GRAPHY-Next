@@ -40,6 +40,9 @@ const computeConsent = require("./computeConsent");
 const { createColabAuth, REFRESH_KEY: COLAB_REFRESH_KEY } = require("./colabAuth");
 const { createColabApi } = require("./colabApi");
 const { createColabRuntimes } = require("./colabRuntimes");
+const { createGdriveAuth, REFRESH_KEY: GDRIVE_REFRESH_KEY } = require("./gdriveAuth");
+const gdrivePicker = require("./gdrivePicker");
+const { createBackupFolder } = require("./gdriveFolder");
 
 const PORT = process.env.GRAPHY_BACKEND_PORT || String(cfg.backend.port);
 const PROFILE = process.env.GRAPHY_BACKEND_PROFILE || cfg.backend.profile;
@@ -1051,9 +1054,10 @@ ipcMain.on("graphy:refocus", (e) => {
  * main だけが書く鍵。🔴 **レンダラ（＝同じ realm のプラグイン）から書かせない。**
  * Colab の refresh token を差し替えられると、ランタイムが**別人の Google アカウント**に作られ、
  * 匿名化したデータとコードがそこへ送られる。書くのはログインの流れ（colabAuth）だけ。
+ * Drive の refresh token も同じ（差し替えられると、バックアップ（患者データ）が**別人の Drive**へ送られる。gdriveAuth だけが書く）。
  */
 // TLS のパスワードは tlsPasswords の経路だけで扱う（backend への受け渡しと、キーチェーンが無いときの代わりの経路があるため）
-const MAIN_ONLY_SECRET_KEYS = new Set([COLAB_REFRESH_KEY, ...Object.values(tlsPasswords.KEYS)]);
+const MAIN_ONLY_SECRET_KEYS = new Set([COLAB_REFRESH_KEY, GDRIVE_REFRESH_KEY, ...Object.values(tlsPasswords.KEYS)]);
 
 ipcMain.handle("graphy:secret-set", async (_e, payload) => {
   const key = payload && payload.key;
@@ -1258,6 +1262,122 @@ async function pushComputeEndpoints() {
   const colab = colabRuntimes ? colabRuntimes.endpoints().filter((e) => colabIds.has(e.id)) : [];
   return computeBridge.pushEndpoints([...jupyter, ...colab]);
 }
+
+// ── Google Drive バックアップ（計画: ~/.claude/plans/graphy-next-db-googledrive-agile-cupcake.md、実測: fw/gdrive-p0.md）──
+// ログイン・Picker・保存先フォルダの作成は main。同期そのものは backend（refresh token は内部経路でメモリにだけ渡す）。
+// 設定は DB フォルダごと（db-folders.json）。有効にできるのは今開いている DB だけ。
+let gdriveAuth = null;
+
+function initGdrive() {
+  gdriveAuth = createGdriveAuth({
+    dirs: [__dirname, resolveDataDir()],
+    secrets: secretStore,
+    openExternal: (url) => shell.openExternal(url),
+  });
+}
+
+/** backend へ Drive の設定を入れ直す（起動時・ログイン／ログアウト・有効化／解除のあと）。トークンは backend のメモリにだけ置かれる。 */
+async function pushGdriveConfig() {
+  if (!computeBridge.enabled()) return { ok: false, error: "main-channel-disabled" };
+  const cfg = activeDbFolder ? dbFolders.getGdrive(activeDbFolder) : null;
+  const client = gdriveAuth && gdriveAuth.clientInfo();
+  const refresh = secretStore.getSecret(GDRIVE_REFRESH_KEY);
+  const enabled = !!(cfg && client);
+  const body = enabled
+    ? {
+        enabled: true,
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+        refreshToken: refresh || null, // 無ければ backend は「要ログイン」状態で待つ
+        folderId: cfg.driveFolderId,
+        driveId: cfg.driveId,
+        email: cfg.email,
+      }
+    : { enabled: false };
+  const r = await computeBridge.call("PUT", "/api/internal/gdrive/config", body);
+  if (!r.ok) console.error(`[gdrive] backend への設定の登録に失敗 (status=${r.status} ${r.error || ""})`);
+  return r;
+}
+
+/** 画面へ返す状態（トークン・API キーは返さない）。 */
+ipcMain.handle("graphy:gdrive-status", async () => {
+  const client = gdriveAuth && gdriveAuth.clientInfo();
+  const cfg = activeDbFolder ? dbFolders.getGdrive(activeDbFolder) : null;
+  return {
+    configured: !!client,
+    pickerReady: !!(client && client.pickerApiKey),
+    signedIn: !!gdriveAuth && gdriveAuth.signedIn(),
+    email: gdriveAuth ? await gdriveAuth.ensureEmail() : null,
+    folder: cfg ? { name: cfg.name, shared: !!cfg.driveId, email: cfg.email } : null,
+  };
+});
+
+ipcMain.handle("graphy:gdrive-signin", async () => {
+  if (!gdriveAuth) return { ok: false, error: "not-ready" };
+  const r = await gdriveAuth.signIn();
+  if (r.ok) await pushGdriveConfig();
+  return r;
+});
+
+ipcMain.handle("graphy:gdrive-signout", async () => {
+  if (!gdriveAuth) return { ok: false, error: "not-ready" };
+  const r = await gdriveAuth.signOut();
+  await pushGdriveConfig();
+  return r;
+});
+
+// 有効にする: Picker で保存先の親を選ぶ → 直下にバックアップ用フォルダを作る → 記録して backend へ。
+ipcMain.handle("graphy:gdrive-enable", async () => {
+  if (!gdriveAuth || !activeDbFolder) return { ok: false, error: "not-ready" };
+  const client = gdriveAuth.clientInfo();
+  if (!client) return { ok: false, error: "no-oauth-client" };
+  if (!client.pickerApiKey) return { ok: false, error: "no-picker-key" };
+  if (!gdriveAuth.signedIn()) return { ok: false, error: "not-signed-in" };
+  if (dbFolders.getGdrive(activeDbFolder)) return { ok: false, error: "already-enabled" };
+  const token = await gdriveAuth.accessToken();
+  if (!token) return { ok: false, error: "token" };
+  const locale = String(app.getLocale() || "").startsWith("ja") ? "ja" : "en";
+  // 利用者の既定ブラウザで開く（Picker は Google のセッションを使う。gdrivePicker.js）
+  const picked = await gdrivePicker.pick({
+    token,
+    apiKey: client.pickerApiKey,
+    projectNumber: client.projectNumber,
+    locale,
+    openExternal: (url) => shell.openExternal(url),
+  });
+  if (!picked.ok) return { ok: false, error: picked.error, canceled: picked.error === "cancelled" };
+  const made = await createBackupFolder({ token, parentId: picked.id, dbName: path.basename(activeDbFolder) });
+  if (!made.ok) return { ok: false, error: made.error };
+  const saved = dbFolders.setGdrive(activeDbFolder, {
+    driveFolderId: made.folderId,
+    driveId: made.driveId,
+    name: made.name,
+    email: gdriveAuth.email(),
+  });
+  if (!saved.ok) return { ok: false, error: saved.reason };
+  await pushGdriveConfig();
+  return { ok: true, name: made.name, parentName: made.parentName, shared: !!made.driveId };
+});
+
+// 解除: Drive のデータには触れない（消さない）。確認してから設定を外す。
+ipcMain.handle("graphy:gdrive-disable", async (e) => {
+  if (!activeDbFolder || !dbFolders.getGdrive(activeDbFolder)) return { ok: false, error: "not-enabled" };
+  const ja = String(app.getLocale() || "").startsWith("ja");
+  const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
+  const choice = dialog.showMessageBoxSync(win, {
+    type: "question",
+    buttons: ja ? ["バックアップを止める", "取り消す"] : ["Stop backing up", "Cancel"],
+    defaultId: 1,
+    cancelId: 1,
+    title: ja ? "Drive バックアップの解除" : "Stop Drive backup",
+    message: ja ? "この DB の Drive バックアップを止めます。" : "Drive backup of this database will stop.",
+    detail: ja ? "Drive にあるデータは消しません。" : "Data already on Drive is not deleted.",
+  });
+  if (choice !== 0) return { ok: false, canceled: true };
+  dbFolders.clearGdrive(activeDbFolder);
+  await pushGdriveConfig();
+  return { ok: true };
+});
 
 // ── Colab（fw/remote-compute-design.md §15）──────────────────────────────────
 // ログインは colabAuth（refresh token は secretStore・main だけ）、API は colabApi（公式 v1beta だけ）、
@@ -1556,6 +1676,7 @@ app.whenReady().then(async () => {
   aiProviders.init(resolveDataDir());
   computeEndpoints.init(resolveDataDir());
   initColab();
+  initGdrive();
   if (MAIN_SECRET) computeBridge.init({ secret: MAIN_SECRET, apiBase: API_BASE });
   dbFolders.init(resolveDataDir());
   activeDbFolder = resolveStartupDbFolder();
@@ -1571,6 +1692,7 @@ app.whenReady().then(async () => {
     await waitForBackend();
     // 外部の計算機の接続先を backend へ（失敗してもアプリの起動は止めない）
     pushComputeEndpoints().catch((err) => console.error("[compute] push failed:", err));
+    pushGdriveConfig().catch((err) => console.error("[gdrive] push failed:", err));
     // 設定に平文で残っている TLS のパスワードをキーチェーンへ移す（失敗しても起動は止めない・平文は消さない）
     migrateTlsPasswords();
   } catch (e) {
