@@ -4,6 +4,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { fetchStatus, fetchStudies, fetchSeries, type AppStatus, type Study, type Series } from "./api";
+import { pollStatus } from "./statusPoll";
 import { parseIidLaunch } from "./iid";
 import { SettingsDialog } from "./settings/SettingsDialog";
 import { AiEgressConsentHost } from "./plugins/pluginAiApi";
@@ -55,11 +56,21 @@ export function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  useEffect(() => {
-    fetchStatus()
-      .then(setStatus)
-      .catch((e: unknown) => setError(String(e)));
-  }, []);
+  useEffect(
+    () =>
+      pollStatus(fetchStatus, {
+        intervalMs: 3000,
+        onOk: (s, afterError) => {
+          setStatus(s);
+          if (afterError) {
+            setError(null);
+            setDbVersion((v) => v + 1); // 失敗のまま出ている一覧を取り直す
+          }
+        },
+        onError: (e) => setError(String(e)),
+      }),
+    [],
+  );
 
   // IHE IID 起動（web のみ・メインウィンドウのみ・1 回だけ）。URL `?studyUID=...` があれば、その study を
   // 検索ポータルを介さず 2D ビューアで直接開く（graphy-viewer-ctx に書いて #2dviewer へ遷移）。
