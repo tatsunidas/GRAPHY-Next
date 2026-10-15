@@ -16,6 +16,7 @@ import {
   CobbAngleTool,
   MagnifyTool,
   EllipticalROITool,
+  CircleROITool,
   RectangleROITool,
   ProbeTool,
   PlanarFreehandROITool,
@@ -157,6 +158,7 @@ const MEASURE_TOOLS = [
   AngleTool.toolName,
   CobbAngleTool.toolName,
   EllipticalROITool.toolName,
+  CircleROITool.toolName,
   RectangleROITool.toolName,
   ProbeTool.toolName,
   // 輪郭系（ポリゴン/フリーハンド × 閉じる/閉じない）。viewer/roiContourTools.ts
