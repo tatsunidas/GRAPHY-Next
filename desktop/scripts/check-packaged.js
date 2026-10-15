@@ -52,7 +52,13 @@ for (const a of asars) {
     failed = true;
     console.error(`::error::${a} に colab-oauth-client.json がありません（desktop/package.json の build.files）`);
   }
-  if (!missing.length && !cspProblems.length) console.log(`OK: ${a}（${need.length} ファイル・画面の CSP）`);
+  // Drive バックアップの OAuth クライアント（同上）
+  const gdriveMissing = process.env.GRAPHY_REQUIRE_GDRIVE_CLIENT === "1" && !inside.has("gdrive-oauth-client.json");
+  if (gdriveMissing) {
+    failed = true;
+    console.error(`::error::${a} に gdrive-oauth-client.json がありません（desktop/package.json の build.files）`);
+  }
+  if (!missing.length && !cspProblems.length && !gdriveMissing) console.log(`OK: ${a}（${need.length} ファイル・画面の CSP）`);
 
 }
 process.exit(failed ? 1 : 0);

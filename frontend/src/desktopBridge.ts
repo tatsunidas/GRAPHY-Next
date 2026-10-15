@@ -200,7 +200,24 @@ export interface DbFolderRow {
   isDefault: boolean;
   exists: boolean;
   active: boolean;
+  /** この DB に Drive バックアップが設定されている。 */
+  gdrive?: boolean;
 }
+
+/** Drive バックアップ: main が返す状態（トークン・API キーは返らない）。 */
+export interface GdriveDesktopStatus {
+  /** OAuth クライアントがこのアプリに入っているか。 */
+  configured: boolean;
+  /** Picker に使う API キーがあるか。 */
+  pickerReady: boolean;
+  signedIn: boolean;
+  email: string | null;
+  /** 使用中の DB に設定された保存先。無ければ null。 */
+  folder: { name: string; shared: boolean; email: string | null } | null;
+}
+
+export type GdriveActionResult = { ok: true; name?: string; parentName?: string; shared?: boolean; email?: string | null }
+  | { ok: false; error?: string; canceled?: boolean };
 
 export interface DbFolderList {
   /** この起動で使っている DB。 */
@@ -263,6 +280,14 @@ export interface GraphyDesktop {
   dbFoldersSwitch?: (folder: string) => Promise<DbFolderPickResult>;
   /** 最近使った一覧から外す（フォルダの中身には触れない）。 */
   dbFoldersForget?: (folder: string) => Promise<{ ok: boolean; reason?: string }>;
+  /** Drive バックアップ: 状態 / ログイン / ログアウト / 保存先を選んで有効化 / 解除（確認は main）。 */
+  gdriveStatus?: () => Promise<GdriveDesktopStatus>;
+  gdriveSignIn?: () => Promise<{ ok: boolean; email?: string | null; error?: string }>;
+  gdriveSignOut?: () => Promise<{ ok: boolean; error?: string }>;
+  gdriveEnable?: () => Promise<GdriveActionResult>;
+  gdriveDisable?: () => Promise<{ ok: boolean; canceled?: boolean; error?: string }>;
+  /** Drive のバックアップを選び、空のフォルダへ取り戻し始める。進み具合は backend の /api/gdrive/restore。 */
+  gdriveRestore?: (title: string) => Promise<{ ok: true; folder: string } | { ok: false; error?: string; canceled?: boolean }>;
   /** ネイティブダイアログ（confirm/alert/prompt）後にレンダラのキーボードフォーカスを復帰させる。 */
   refocus?: () => void;
   /** 秘密情報を OS のキーチェーンで暗号化して保存する（デスクトップのみ）。 */

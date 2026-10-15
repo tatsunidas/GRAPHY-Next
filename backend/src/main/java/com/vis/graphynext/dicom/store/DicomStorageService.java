@@ -41,11 +41,18 @@ public class DicomStorageService {
     private final DicomInstanceRepository repo;
     private final StorageLayout layout;
     private final Path storageDir;
+    /** Drive バックアップへの合図。無くても動く（テスト・web モード）。 */
+    private org.springframework.context.ApplicationEventPublisher events;
 
     public DicomStorageService(DicomInstanceRepository repo, StorageLayout layout) {
         this.repo = repo;
         this.layout = layout;
         this.storageDir = layout.root();
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setEvents(org.springframework.context.ApplicationEventPublisher events) {
+        this.events = events;
     }
 
     /**
@@ -132,6 +139,9 @@ public class DicomStorageService {
         }
         if (backup != null) {
             Files.deleteIfExists(backup);
+        }
+        if (events != null) {
+            events.publishEvent(new com.vis.graphynext.gdrive.StorageChanged(layout.toStored(dest)));
         }
         log.debug("indexed sop={} study={} -> {}", iuid, studyUid, dest); // 検証済み: 大量取込で冗長なため DEBUG
         return saved;
