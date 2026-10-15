@@ -15,7 +15,7 @@
  */
 import { cache, imageLoader, metaData } from "@cornerstonejs/core";
 import { annotation as csAnnotation, segmentation as csSeg, Enums as csToolsEnums } from "@cornerstonejs/tools";
-import { createResultSeg, resolveRoiStack } from "./roiBooleanOps";
+import { createResultSeg, resolveRoiStack, setScopeZFromForeground } from "./roiBooleanOps";
 import { getRoiMaskMeta, setRoiMaskMeta } from "./roiMaskStore";
 import { addSphere3D, getSphere3D } from "./sphere3dStore";
 import { getModalityCalibration, readModalitySlice, resolveValueUnit } from "./pixelCalibration";
@@ -135,6 +135,7 @@ export async function rasterizeSphereToMask(
   }
   if (modified.length === 0) return null;
   csSeg.triggerSegmentationEvents.triggerSegmentationDataModified(res.segId, modified, 1);
+  setScopeZFromForeground(res.segId, stack.sourceIds, modified);
   return res.segId;
 }
 

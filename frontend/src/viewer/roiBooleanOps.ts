@@ -9,19 +9,21 @@
  * 生成・登録する。SPLIT は単一 Mask を 3D 連結成分でラベリングし、成分ごとに segment index を割り当てた
  * 新規 Mask を作る。出力は設計どおり Mask（ラスタ）に統一。
  *
- * 前提: 入力 Mask は同一 source スタック（同じ referencedImageId 列）であること（同一 series/C/T）。
+ * 前提: 入力 Mask は同一 source スタック（同一 series/C/T）に載っていること。1 枚だけのラベルマップ
+ * （⬚ 分割の出力）も、referencedImageId で元のスタックへ当てはめて演算する（{@link alignToStack}）。
  * 設計: `fw/roi-manager-design.md` 第4章。
  */
 import { cache, imageLoader, getRenderingEngines } from "@cornerstonejs/core";
 import { annotation as csAnnotation, segmentation as csSeg, Enums as csToolsEnums } from "@cornerstonejs/tools";
 import { getRoiMaskMeta, setRoiMaskMeta } from "./roiMaskStore";
 import { worldToImageCoords } from "./imageCoords";
+import { alignToStack, boolOn, scopeZFromForeground, type BoolOp } from "./maskScope";
 
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
 const MAX_SEGMENTS = 64; // SPLIT の成分数上限（色枯渇/重さ回避）。
 let opSeq = 0;
 
-export type BoolOp = "or" | "and" | "xor";
+export type { BoolOp };
 
 interface MaskData {
   labelmapIds: string[]; // スライスごとの labelmap imageId
@@ -48,8 +50,25 @@ function readMask(segId: string): MaskData | null {
   return { labelmapIds, sourceIds };
 }
 
-function sameStack(a: string[], b: string[]): boolean {
-  return a.length === b.length && a.every((v, i) => v === b[i]);
+/**
+ * 結果のマスクの scope.z を、前景を塗ったスライスから決め直す。
+ * 入力のメタ（createResultSeg の scopeFrom）の z は中身と合わないことがあるため（⬤ の球・演算の結果）。
+ * `localIndices` はラベルマップ上の番号。1 枚だけのラベルマップもあるので、表示中のスタック上の番号に直してから決める。
+ */
+export function setScopeZFromForeground(
+  segId: string,
+  sourceIds: ReadonlyArray<string>,
+  localIndices: ReadonlyArray<number>,
+): void {
+  const stack = sourceIds.length ? resolveRoiStack(sourceIds[0])?.sourceIds : undefined;
+  const stackIndices = localIndices.map((k) => {
+    const s = stack ? stack.indexOf(sourceIds[k]) : -1;
+    return s >= 0 ? s : k;
+  });
+  const z = scopeZFromForeground(stackIndices);
+  if (z === null) return;
+  const base = getRoiMaskMeta(segId);
+  setRoiMaskMeta(segId, { scope: { ...base?.scope, z }, origin: { ...base?.origin, z } });
 }
 
 /** 結果用の新規 labelmap セグメンテーションを生成・ビューポート登録し、メタを継承する。 */
@@ -97,24 +116,30 @@ export async function combineMasks(
   if (maskIds.length < 2) return null;
   const masks = maskIds.map(readMask);
   if (masks.some((m) => !m)) return null;
-  const m0 = masks[0] as MaskData;
-  if (!masks.every((m) => sameStack((m as MaskData).sourceIds, m0.sourceIds))) return null;
+  const ms = masks as MaskData[];
+  // 当てはめ先: シリーズ全体の大きさのマスクがあればその列、無ければ表示中のスタック。
+  const full = ms.reduce((a, b) => (b.sourceIds.length > a.sourceIds.length ? b : a));
+  const target = resolveRoiStack(full.sourceIds[0])?.sourceIds ?? full.sourceIds;
+  const aligned = ms.map((m) => alignToStack(target, m.sourceIds));
+  if (aligned.some((a) => !a)) return null;
 
-  const res = await createResultSeg(m0.sourceIds, viewportIds, op.toUpperCase(), maskIds[0]);
+  const res = await createResultSeg(target, viewportIds, op.toUpperCase(), maskIds[0]);
   if (!res) return null;
 
   const modified: number[] = [];
-  for (let s = 0; s < m0.labelmapIds.length; s++) {
+  for (let s = 0; s < target.length; s++) {
     const outVm = img(res.labelmapIds[s])?.voxelManager;
     if (!outVm) continue;
     const len = outVm.getScalarDataLength();
-    const inVms = masks.map((m) => img((m as MaskData).labelmapIds[s])?.voxelManager);
+    const inVms = ms.map((m, k) => {
+      const j = (aligned[k] as Int32Array)[s];
+      return j >= 0 ? img(m.labelmapIds[j])?.voxelManager : null;
+    });
     let touched = false;
     for (let i = 0; i < len; i++) {
       let cnt = 0;
       for (const vm of inVms) if (vm && vm.getAtIndex(i) > 0) cnt++;
-      const on = op === "or" ? cnt > 0 : op === "and" ? cnt === inVms.length : cnt % 2 === 1;
-      if (on) {
+      if (boolOn(op, cnt, inVms.length)) {
         outVm.setAtIndex(i, 1);
         touched = true;
       }
@@ -122,6 +147,7 @@ export async function combineMasks(
     if (touched) modified.push(s);
   }
   csSeg.triggerSegmentationEvents.triggerSegmentationDataModified(res.segId, modified, 1);
+  setScopeZFromForeground(res.segId, target, modified);
   return res.segId;
 }
 
@@ -246,6 +272,7 @@ export async function roiToMask(annotationUid: string): Promise<string | null> {
   if (!vm) return null;
   for (let i = 0; i < fg.length; i++) if (fg[i]) vm.setAtIndex(i, 1);
   csSeg.triggerSegmentationEvents.triggerSegmentationDataModified(res.segId, [homeZ], 1);
+  setScopeZFromForeground(res.segId, stack.sourceIds, [homeZ]);
   return res.segId;
 }
 
@@ -334,6 +361,7 @@ export async function splitMask(maskId: string, viewportIds: string[], connectiv
     if (touched) modified.push(z);
   }
   csSeg.triggerSegmentationEvents.triggerSegmentationDataModified(res.segId, modified, undefined);
+  setScopeZFromForeground(res.segId, m.sourceIds, modified);
   // 成分ごとの segment index(1..N, MAX_SEGMENTS 上限) をパネルへ（segment チップ表示・選択用）。
   const segCount = Math.min(next, MAX_SEGMENTS);
   setRoiMaskMeta(res.segId, { segments: Array.from({ length: segCount }, (_, i) => i + 1) });

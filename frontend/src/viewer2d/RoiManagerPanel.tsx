@@ -744,7 +744,8 @@ export function RoiManagerPanel({
           />
           <input type="number" min={0} max={10} defaultValue={maskDefaults.outlineWidth} onChange={(e) => setMaskStyle(m.id, { outlineWidth: Number(e.target.value) })} title={t("roiMgr.lineWidth")} style={numInput} />
           <input type="checkbox" defaultChecked onChange={(e) => setMaskStyle(m.id, { renderFill: e.target.checked })} title={t("roiMgr.fill")} />
-          {m.scope && <button onClick={() => toggleScopeZ(m.id)} style={scopeChip} title={t("roiMgr.scopeToggleMask")}>{m.scope}</button>}
+          {/* マスクの範囲は中身（塗ったスライス）で決まる。メタを書き換えても中身は変わらないので押せない表示にする */}
+          {m.scope && <span style={scopeChipStatic} title={t("roiMgr.scopeToggleMask")} data-testid="mask-scope">{m.scope}</span>}
           <button onClick={() => runStats(m.id)} data-testid="mask-stats-run" style={editBtn} title={t("roiMgr.stats")}>Σ³</button>
           <button onClick={() => setStatsOpen({ focus: m.id })} data-testid="mask-stats-dialog" style={editBtn} title={t("roiMgr.statsMask")}>Σ</button>
           <button onClick={() => runSplitToSlices(m.id)} disabled={busy} style={editBtn} title={t("roiMgr.toSlices")}>⬚</button>
@@ -865,6 +866,7 @@ const eyeBtn: React.CSSProperties = { border: "none", background: "transparent",
 const colorInput: React.CSSProperties = { width: 22, height: 20, padding: 0, border: "1px solid #cdd5de", borderRadius: 3, background: "#fff", cursor: "pointer" };
 const numInput: React.CSSProperties = { width: 36, border: "1px solid #cdd5de", borderRadius: 4, fontSize: 11 };
 const scopeChip: React.CSSProperties = { fontSize: 10, color: "#5a6672", background: "#eef2f6", border: "1px solid #dde4ea", borderRadius: 4, padding: "1px 4px", whiteSpace: "nowrap", cursor: "pointer" };
+const scopeChipStatic: React.CSSProperties = { ...scopeChip, cursor: "default", background: "transparent" };
 const opsBar: React.CSSProperties = { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4, padding: "6px 8px", borderTop: "1px solid #eef1f4" };
 const opBtn: React.CSSProperties = { border: "1px solid #cdd5de", borderRadius: 5, background: "#fff", cursor: "pointer", fontSize: 11, padding: "2px 7px" };
 const statLine: React.CSSProperties = { padding: "0 10px 4px 28px", color: "#5a6672", fontSize: 11 };
