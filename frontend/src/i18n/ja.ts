@@ -176,6 +176,8 @@ export const ja: Record<string, string> = {
   "mpr.slab.title": "Slab MIP: 表示面を中心に厚み（全幅 mm）の範囲を MIP / MinIP / AvgIP で投影",
   "mpr.slab.off": "OFF",
   "mpr.slab.probeNote": "（中心面の値）",
+  "viewer3d.unevenSpacing": "スライス間隔が不均一（{{steps}} mm）",
+  "viewer3d.unevenSpacingHint": "このシリーズはスライスの間隔が等しくありません。3D の体積は等間隔として描くため、奥行きの位置は実際とずれます。2D から取り込んだ ROI は、描かれている画像と同じスライスに載せています。",
   "viewer3d.loading": "3D ボリュームを構築中…",
   "viewer3d.noContext": "3D Viewer 対象が指定されていません。メインスクリーンでスタディ/シリーズを選択してください。",
   "viewer3d.noSeries": "シリーズが見つかりません。",

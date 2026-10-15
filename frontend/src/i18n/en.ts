@@ -176,6 +176,8 @@ export const en: Record<string, string> = {
   "mpr.slab.title": "Slab MIP: project a slab (full thickness in mm) centered on the view plane by MIP / MinIP / AvgIP",
   "mpr.slab.off": "Off",
   "mpr.slab.probeNote": "(center-plane value)",
+  "viewer3d.unevenSpacing": "Uneven slice spacing ({{steps}} mm)",
+  "viewer3d.unevenSpacingHint": "Slices in this series are not evenly spaced. The 3D volume is drawn as evenly spaced, so depth positions differ from the real ones. ROIs imported from the 2D viewer are placed on the same slice as the image drawn there.",
   "viewer3d.loading": "Building 3D volume…",
   "viewer3d.noContext": "No 3D Viewer target specified. Select a study/series in the main screen.",
   "viewer3d.noSeries": "No series found.",

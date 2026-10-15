@@ -83,6 +83,7 @@ function download(name: string, buf: ArrayBuffer): void {
 
 export function SceneObjectPanel({
   geom,
+  sopToK,
   onStartCut,
   onAnalyzeCenterline,
   onRepairMesh,
@@ -97,6 +98,8 @@ export function SceneObjectPanel({
   isDemo,
 }: {
   geom: VolumeGeom | null;
+  /** 体積のスライス順の SOP → k。2D の ROI を、描かれている画像と同じスライスに載せる。 */
+  sopToK?: ReadonlyMap<string, number>;
   onStartCut?: (id: string) => void;
   onAnalyzeCenterline?: (id: string, name: string) => void;
   onRepairMesh?: (id: string, name: string) => void;
@@ -205,7 +208,7 @@ export function SceneObjectPanel({
       lv = buildLabelVolumeFromSegmentation(e.segmentationId, e.segmentIndex);
     } else {
       const frames = await requestRemoteMaskFrames(e.windowId, e.segmentationId, e.segmentIndex);
-      lv = frames ? framesToLabelVolume(frames, geom, e.segmentIndex) : null;
+      lv = frames ? framesToLabelVolume(frames, geom, e.segmentIndex, sopToK) : null;
     }
     if (!lv) return false;
     const source: SceneObjectSource =
@@ -251,7 +254,7 @@ export function SceneObjectPanel({
         const result = await readDicomSeg(studyUid, s.seriesInstanceUid).catch(() => null);
         if (!result?.segments.length) continue;
         for (const seg of filterSegSegments(result.segments, sops)) {
-          const lv = framesToLabelVolume(result, geom, seg.number);
+          const lv = framesToLabelVolume(result, geom, seg.number, sopToK);
           if (!lv) continue;
           const id = addRoiObject(lv, { name: seg.label || seg.description || undefined, color: rgb01(seg.color), source });
           if (id) added++;
@@ -262,7 +265,7 @@ export function SceneObjectPanel({
       for (const s of rtSeries) {
         const rois = await readDicomRtStruct(studyUid, s.seriesInstanceUid).catch(() => []);
         for (const roi of filterRtRois(rois, sops)) {
-          const lv = rtStructRoiToLabelVolume(roi, geom);
+          const lv = rtStructRoiToLabelVolume(roi, geom, 1, sopToK);
           if (!lv) continue;
           const color: [number, number, number] | null =
             roi.color && roi.color.length >= 3 ? [roi.color[0], roi.color[1], roi.color[2]] : null;
