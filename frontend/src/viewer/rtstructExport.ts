@@ -13,7 +13,7 @@ import { annotation as csAnnotation, segmentation as csSeg } from "@cornerstonej
 import { traceMaskContours, type Pt } from "./maskContour";
 import { imageToWorldOnPlane, type PlaneGeometry } from "./imageCoords";
 import { getRoiMaskMeta } from "./roiMaskStore";
-import { exportDicomRtStruct, type RtStructRoi, type RtStructExportRequest, type SegExportResult } from "../api";
+import { exportDicomRtStruct, type RtStructContour, type RtStructRoi, type RtStructExportRequest, type SegExportResult } from "../api";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
@@ -106,7 +106,7 @@ export function maskToRtStructRois(segId: string): { rois: Omit<RtStructRoi, "nu
     return { rois: [] };
   }
   const meta = getRoiMaskMeta(segId);
-  const bySeg = new Map<number, { sopInstanceUid: string; points: number[] }[]>();
+  const bySeg = new Map<number, RtStructContour[]>();
   let refImageId: string | undefined;
   for (const lmId of labelmapIds) {
     const lm = cache.getImage(lmId) as AnyObj | undefined;
@@ -135,16 +135,28 @@ export function maskToRtStructRois(segId: string): { rois: Omit<RtStructRoi, "nu
     for (const seg of [...present].sort((a, b) => a - b)) {
       const list = bySeg.get(seg) ?? [];
       for (const c of traceMaskContours(labels, w, h, seg)) {
-        for (const ring of [c.outer, ...c.holes]) list.push({ sopInstanceUid: sop, points: flatten(ring.map(toWorld)) });
+        for (const ring of [c.outer, ...c.holes]) {
+          list.push({ sopInstanceUid: sop, points: flatten(ring.map(toWorld)), geometricType: "CLOSED_PLANAR" });
+        }
       }
       bySeg.set(seg, list);
     }
   }
   const base = meta?.label || segId;
   const names = meta?.segmentLabels ?? {};
+  // 色は segment 色（マスクを表示している viewport のもの）。取れなければ null。
+  const vpIds = ((csSeg.state as AnyObj).getViewportIdsWithSegmentation?.(segId) as string[] | undefined) ?? [];
+  const segColor = (seg: number): [number, number, number] | null => {
+    try {
+      if (!vpIds[0]) return null;
+      const c = (csSeg.config.color as AnyObj).getSegmentIndexColor(vpIds[0], segId, seg) as number[] | undefined;
+      if (c && c.length >= 3) return [Math.round(c[0]), Math.round(c[1]), Math.round(c[2])];
+    } catch { /* ignore */ }
+    return null;
+  };
   const rois = [...bySeg.entries()].map(([seg, contours]) => ({
     name: names[seg] || (bySeg.size > 1 ? `${base} #${seg}` : base),
-    color: null,
+    color: segColor(seg),
     type: "ORGAN",
     contours,
   }));

@@ -265,7 +265,7 @@ export async function splitMaskToSlices(segmentationId: string): Promise<string[
       seriesLabel: base?.seriesLabel,
       scope,
       origin: scope,
-      label: `${base?.label ?? "Mask"} z${z}`,
+      label: `${base?.label ?? "Mask"} z${z + 1}`,
     });
     csSeg.triggerSegmentationEvents.triggerSegmentationDataModified(segId, [0], undefined);
     created.push(segId);

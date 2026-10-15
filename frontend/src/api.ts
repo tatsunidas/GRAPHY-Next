@@ -901,6 +901,8 @@ export const exportRtDose = (req: RtDoseExportRequest) =>
 export interface RtStructContour {
   sopInstanceUid: string;
   points: number[]; // [x,y,z,x,y,z,...] 患者座標 mm（閉輪郭）
+  /** 省略は CLOSED_PLANAR。 */
+  geometricType?: "CLOSED_PLANAR" | "OPEN_PLANAR" | "POINT";
 }
 export interface RtStructRoi {
   number: number;
@@ -924,6 +926,8 @@ export const exportDicomRtStruct = (req: RtStructExportRequest) =>
 export interface RtStructImportContour {
   referencedSopInstanceUid: string | null;
   points: number[]; // [x,y,z,...] 患者座標 mm
+  /** ContourGeometricType（未記載は backend が CLOSED_PLANAR にして返す）。 */
+  geometricType: string;
 }
 export interface RtStructImportRoi {
   name: string;

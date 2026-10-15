@@ -85,7 +85,7 @@ public class RtStructReadService {
         return List.of();
     }
 
-    private List<RtStructRoiDto> parse(Attributes ds) {
+    List<RtStructRoiDto> parse(Attributes ds) {
         // ROINumber → 名前 / 種別。
         Map<Integer, String> names = new HashMap<>();
         Sequence ssRoi = ds.getSequence(Tag.StructureSetROISequence);
@@ -113,7 +113,8 @@ public class RtStructReadService {
                 if (cs != null) {
                     for (Attributes ci : cs) {
                         double[] pts = ci.getDoubles(Tag.ContourData);
-                        if (pts == null || pts.length < 9 || pts.length % 3 != 0) {
+                        // POINT は 1 点・OPEN_PLANAR は 2 点以上あり得るので、点数の下限は種別ごとに見ず 3 の倍数だけ確かめる。
+                        if (pts == null || pts.length < 3 || pts.length % 3 != 0) {
                             continue;
                         }
                         String refSop = null;
@@ -121,7 +122,9 @@ public class RtStructReadService {
                         if (ciImg != null && !ciImg.isEmpty()) {
                             refSop = ciImg.get(0).getString(Tag.ReferencedSOPInstanceUID);
                         }
-                        contours.add(new RtStructRoiDto.Contour(refSop, pts));
+                        String gt = ci.getString(Tag.ContourGeometricType);
+                        contours.add(new RtStructRoiDto.Contour(refSop, pts,
+                                gt == null || gt.isBlank() ? "CLOSED_PLANAR" : gt.trim()));
                     }
                 }
                 if (!contours.isEmpty()) {

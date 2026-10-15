@@ -225,7 +225,7 @@ export function SceneObjectPanel({
       for (const segIndex of segIndices) {
         const lv = buildLabelVolumeFromSegmentation(segmentationId, segIndex);
         if (!lv) continue;
-        const segLabel = meta?.custom?.[String(segIndex)];
+        const segLabel = meta?.segmentLabels?.[String(segIndex)] || meta?.custom?.[String(segIndex)];
         const name = segLabel || (meta?.label ? `${meta.label} #${segIndex}` : undefined);
         const color = segColor01(segmentationId, segIndex);
         const id = addRoiObject(lv, { name, color, volumeFrom: "mesh" });
