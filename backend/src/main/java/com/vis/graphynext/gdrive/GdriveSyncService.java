@@ -61,7 +61,7 @@ public class GdriveSyncService implements com.vis.graphynext.dicom.store.Storage
     /** {@code mode}: "backup"（ローカル正本）/ "cache"（Drive 正本）。{@code cache*} と {@code localCount} は cache のときだけ意味がある。 */
     public record Status(State state, String reason, long pending, long blocked, long synced, Long lastSyncAt,
                          String lastError, String lockedBy, Long lastSnapshotAt, String mode, long cacheBytes,
-                         long cacheLimitBytes, long localCount, long evictedCount, long adopted) {
+                         long cacheLimitBytes, long localCount, long evictedCount, long adopted, long usableBytes) {
     }
 
     /** 「すべてローカルに保存」の進み具合。phase: IDLE / RUNNING / DONE / FAILED / CANCELLED。 */
@@ -218,7 +218,7 @@ public class GdriveSyncService implements com.vis.graphynext.dicom.store.Storage
     public Status status() {
         GdriveConfig c = config;
         if (c == null) {
-            return new Status(State.DISABLED, null, 0, 0, 0, null, null, null, null, null, 0, 0, 0, 0, 0);
+            return new Status(State.DISABLED, null, 0, 0, 0, null, null, null, null, null, 0, 0, 0, 0, 0, 0);
         }
         long pending = repo.countByFolderIdAndState(c.folderId(), GdriveSyncItem.PENDING)
                 + repo.countByFolderIdAndState(c.folderId(), GdriveSyncItem.REMOVE);
@@ -226,7 +226,8 @@ public class GdriveSyncService implements com.vis.graphynext.dicom.store.Storage
                 repo.countByFolderIdAndState(c.folderId(), GdriveSyncItem.SYNCED), lastSyncAt, lastError, lockedBy,
                 lastSnapshotAt > 0 ? lastSnapshotAt : null, c.cache() ? "cache" : "backup",
                 c.cache() ? repo.localBytes(c.folderId()) : 0, c.cache() ? c.cacheLimitBytes() : 0,
-                c.cache() ? repo.localCount(c.folderId()) : 0, repo.countByFolderIdAndEvictedTrue(c.folderId()), adopted.get());
+                c.cache() ? repo.localCount(c.folderId()) : 0, repo.countByFolderIdAndEvictedTrue(c.folderId()), adopted.get(),
+                c.cache() ? usableSpace.getAsLong() : 0);
     }
 
     @Override

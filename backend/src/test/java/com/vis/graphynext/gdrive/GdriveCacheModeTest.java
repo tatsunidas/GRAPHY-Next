@@ -245,6 +245,15 @@ class GdriveCacheModeTest {
     }
 
     @Test
+    void 状態に手元の空き容量を載せる_モードAだけ() throws Exception {
+        cacheOn(250_000);
+        svc.usableSpace = () -> 123_456_789L;
+        assertEquals(123_456_789L, svc.status().usableBytes());
+        svc.configure(new GdriveConfig("cid", "csecret", "rtoken-SECRET", FOLDER, null, "t", "dev-AAAA-0001", "hostA", false, 0));
+        assertEquals(0, svc.status().usableBytes(), "モード B には上限が無いので空き容量は出さない");
+    }
+
+    @Test
     void モード_B_では追い出さない() throws Exception {
         svc.configure(new GdriveConfig("cid", "csecret", "rtoken-SECRET", FOLDER, null, "t", "dev-AAAA-0001", "hostA", false, 0));
         syncThree();

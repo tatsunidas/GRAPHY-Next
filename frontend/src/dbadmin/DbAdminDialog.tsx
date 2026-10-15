@@ -27,6 +27,7 @@ import { useI18n } from "../i18n/i18n";
 import { desktop } from "../desktopBridge";
 import { DbTransferDialog } from "./DbTransferDialog";
 import { deleteRelatedNote } from "./dbAdminApi";
+import { friendlyDbAdminError } from "./dbAdminErrors";
 
 type Tab = "patients" | "stats";
 
@@ -142,7 +143,7 @@ function PatientsTab({
     setLoading(true);
     fetchPatients(qq)
       .then((ps) => setPatients(ps))
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(friendlyDbAdminError(e, t)))
       .finally(() => setLoading(false));
   };
   // 開いた直後は自動取得しない（検索を促す）。
@@ -157,7 +158,7 @@ function PatientsTab({
           const studies = await fetchStudies({ patientId: pid });
           setStudiesByPatient((m) => new Map(m).set(pid, studies));
         } catch (e) {
-          setError(String(e));
+          setError(friendlyDbAdminError(e, t));
         }
       }
     }
@@ -174,7 +175,7 @@ function PatientsTab({
           const series = await fetchSeries(studyUid);
           setSeriesByStudy((m) => new Map(m).set(studyUid, series));
         } catch (e) {
-          setError(String(e));
+          setError(friendlyDbAdminError(e, t));
         }
       }
     }
@@ -188,7 +189,7 @@ function PatientsTab({
       notify({ reason: "patient-delete", patientId: p.patientId });
       reload(q);
     } catch (e) {
-      setError(String(e));
+      setError(friendlyDbAdminError(e, t));
     }
   };
 
@@ -200,7 +201,7 @@ function PatientsTab({
       setStudiesByPatient((m) => new Map(m).set(p.patientId, (m.get(p.patientId) ?? []).filter((x) => x.studyInstanceUid !== s.studyInstanceUid)));
       reload(q);
     } catch (e) {
-      setError(String(e));
+      setError(friendlyDbAdminError(e, t));
     }
   };
 
@@ -209,7 +210,7 @@ function PatientsTab({
       const series = await fetchSeries(studyUid);
       setSeriesByStudy((m) => new Map(m).set(studyUid, series));
     } catch (e) {
-      setError(String(e));
+      setError(friendlyDbAdminError(e, t));
     }
   };
 
@@ -232,7 +233,7 @@ function PatientsTab({
       setSeriesByStudy((m) => new Map(m).set(s.studyInstanceUid, (m.get(s.studyInstanceUid) ?? []).filter((x) => x.seriesInstanceUid !== se.seriesInstanceUid)));
       reload(q);
     } catch (e) {
-      setError(String(e));
+      setError(friendlyDbAdminError(e, t));
     }
   };
 
@@ -247,7 +248,7 @@ function PatientsTab({
           const insts = await fetchInstances(studyUid, seriesUid);
           setInstancesBySeries((m) => new Map(m).set(seriesUid, insts));
         } catch (e) {
-          setError(String(e));
+          setError(friendlyDbAdminError(e, t));
         }
       }
     }
@@ -266,7 +267,7 @@ function PatientsTab({
       await reloadSeries(s.studyInstanceUid);
       reload(q);
     } catch (e) {
-      setError(String(e));
+      setError(friendlyDbAdminError(e, t));
     }
   };
 
@@ -562,7 +563,7 @@ function SplitSeriesForm({
   useEffect(() => {
     fetchInstances(study.studyInstanceUid, series.seriesInstanceUid)
       .then(setInstances)
-      .catch((e: unknown) => setError(String(e)));
+      .catch((e: unknown) => setError(friendlyDbAdminError(e, t)));
   }, [study.studyInstanceUid, series.seriesInstanceUid]);
 
   const setGroup = (sop: string, g: number) => setAssign((prev) => new Map(prev).set(sop, g));
@@ -591,7 +592,7 @@ function SplitSeriesForm({
       }
       onSplit();
     } catch (e) {
-      setError(String(e));
+      setError(friendlyDbAdminError(e, t));
       setBusy(false);
     }
   };
@@ -691,7 +692,7 @@ function MergeSeriesForm({
       }
       onMerged();
     } catch (e) {
-      setError(String(e));
+      setError(friendlyDbAdminError(e, t));
       setBusy(false);
     }
   };
@@ -757,7 +758,7 @@ function PatientEditForm({
       if (notice) window.alert(notice);
       onSaved({ reason: "patient-edit", patientId: newId || patient.patientId });
     } catch (e) {
-      setError(String(e));
+      setError(friendlyDbAdminError(e, t));
       setSaving(false);
     }
   };
@@ -809,7 +810,7 @@ function StudyPatientEditForm({
       if (notice) window.alert(notice);
       onSaved({ reason: "study-patient-edit", patientId: newId || patient.patientId, studyUids: [study.studyInstanceUid] });
     } catch (e) {
-      setError(String(e));
+      setError(friendlyDbAdminError(e, t));
       setSaving(false);
     }
   };
@@ -897,7 +898,7 @@ function StatsTab() {
   useEffect(() => {
     fetchStats()
       .then(setStats)
-      .catch((e: unknown) => setError(String(e)));
+      .catch((e: unknown) => setError(friendlyDbAdminError(e, t)));
   }, []);
 
   if (error) return <div style={{ color: "#b00020" }}>{error}</div>;
