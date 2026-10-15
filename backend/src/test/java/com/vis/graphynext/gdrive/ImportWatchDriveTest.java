@@ -107,7 +107,7 @@ class ImportWatchDriveTest {
         sync.configure(GdriveSyncServiceTest.cfg(FOLDER));
         src = Files.createDirectories(outside.resolve("src" + (seq++)));
         settings.putAll(Map.of(ImportWatchService.KEY_ENABLED, "true", ImportWatchService.KEY_FOLDER, src.toString(),
-                ImportWatchService.KEY_INTERVAL, "5"));
+                ImportWatchService.KEY_INTERVAL, "5", ImportWatchService.KEY_CSV_OVERWRITE_DICOM, "false"));
     }
 
     @AfterEach
@@ -198,5 +198,29 @@ class ImportWatchDriveTest {
             assertArrayEquals(Files.readAllBytes(layout.resolveForRead(inst)), f.get(0).bytes);
         }
         assertEquals(instances.count(), drive.liveCount(), "Drive の件数は索引と同じ（保留中の NIfTI は索引にも Drive にも無い）");
+    }
+
+    @Test
+    void CSVで患者属性を上書きしたDICOMは_書き換え後の中身でDriveに1件だけ載る() throws Exception {
+        settings.putAll(Map.of(ImportWatchService.KEY_CSV_OVERWRITE_DICOM, "true"));
+        Path unit = Files.createDirectories(src.resolve("csvunit"));
+        Attributes ds = DicomPhantomFactory.scImage("WD-OLD", "1.2.wd.csv", "1.2.wd.csv.s", "1.2.wd.csv.1");
+        DicomPhantomFactory.writeFile(unit.resolve("a.dcm"), ds, UID.ExplicitVRLittleEndian);
+        Files.writeString(unit.resolve("p.csv"), "PatientID,PatientName\nWD-NEW,New^Drive\n");
+        watch.scanOnce();
+        watch.scanOnce();
+        watch.scanOnce();
+        assertEquals(1, instances.findByPatientId("WD-NEW").size(), "CSV の値で上書きされている");
+
+        sync.cycle();
+
+        var inst = instances.findByPatientId("WD-NEW").get(0);
+        String name = inst.getStudyInstanceUid() + "~" + inst.getSeriesInstanceUid() + "~" + inst.getSopInstanceUid() + ".dcm";
+        List<FakeDrive.File> f = drive.live(name);
+        assertEquals(1, f.size(), "Drive に 1 件");
+        assertArrayEquals(Files.readAllBytes(layout.resolveForRead(inst)), f.get(0).bytes, "上書き後の中身が Drive にある");
+        sync.cycle();
+        assertEquals(1, drive.live(name).size(), "再同期しても 1 件のまま");
+        assertEquals(0, sync.status().pending());
     }
 }

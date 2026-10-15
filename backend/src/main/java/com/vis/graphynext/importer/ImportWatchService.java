@@ -6,6 +6,9 @@ package com.vis.graphynext.importer;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.vis.graphynext.dbadmin.DbAdminService;
+import com.vis.graphynext.dicom.store.DicomInstance;
+import com.vis.graphynext.dicom.store.DicomInstanceRepository;
 import com.vis.graphynext.dicom.store.StorageLayout;
 import com.vis.graphynext.nifti.NiftiImportService;
 import com.vis.graphynext.nifti.NiftiToDicom;
@@ -56,6 +59,8 @@ public class ImportWatchService {
     public static final String KEY_ENABLED = SettingsService.IMPORT_WATCH_PREFIX + "enabled";
     public static final String KEY_FOLDER = SettingsService.IMPORT_WATCH_PREFIX + "folder";
     public static final String KEY_INTERVAL = SettingsService.IMPORT_WATCH_PREFIX + "intervalSec";
+    /** 納品フォルダの CSV で、DICOM の患者属性も上書きするか（既定 false。患者の取り違えにつながるため）。 */
+    public static final String KEY_CSV_OVERWRITE_DICOM = SettingsService.IMPORT_WATCH_PREFIX + "csvOverwriteDicom";
 
     /** 画面に出す失敗の件数（表示の上限。台帳には全件残る）。 */
     static final int FAILURES_SHOWN = 20;
@@ -73,16 +78,19 @@ public class ImportWatchService {
      * @param changed 取り込み済みの NIfTI が後から変わったのを検知した数（再取り込みはしない）。
      * @param held 取り込まずに保留しているファイル数（理由は {@code heldItems}。条件が変われば再判定する）。
      */
-    public record Status(boolean enabled, String folder, Integer intervalSec, boolean scanning, Long lastScanAt,
+    public record Status(boolean enabled, String folder, Integer intervalSec, boolean csvOverwriteDicom,
+                         boolean scanning, Long lastScanAt,
                          int waiting, long imported, long skipped, long failed, long changed, long held,
                          String error, List<Failure> failures, List<Failure> heldItems) {
     }
 
-    private record Config(boolean enabled, String folder, Integer intervalSec) {
+    private record Config(boolean enabled, String folder, Integer intervalSec, boolean csvOverwriteDicom) {
     }
 
     private final ImportService importService;
     private final NiftiImportService niftiImport;
+    private final DbAdminService dbAdmin;
+    private final DicomInstanceRepository instanceRepo;
     private final ImportWatchRepository repo;
     private final SettingsService settings;
     private final StorageLayout layout;
@@ -99,16 +107,20 @@ public class ImportWatchService {
     private volatile String scanError;
 
     @Autowired
-    public ImportWatchService(ImportService importService, NiftiImportService niftiImport, ImportWatchRepository repo,
+    public ImportWatchService(ImportService importService, NiftiImportService niftiImport, DbAdminService dbAdmin,
+                              DicomInstanceRepository instanceRepo, ImportWatchRepository repo,
                               SettingsService settings, StorageLayout layout,
                               @Value("${graphy.import-watch.auto-run:true}") boolean autoRun) {
-        this(importService, niftiImport, repo, settings, layout, Clock.systemUTC(), autoRun);
+        this(importService, niftiImport, dbAdmin, instanceRepo, repo, settings, layout, Clock.systemUTC(), autoRun);
     }
 
-    ImportWatchService(ImportService importService, NiftiImportService niftiImport, ImportWatchRepository repo,
+    ImportWatchService(ImportService importService, NiftiImportService niftiImport, DbAdminService dbAdmin,
+                       DicomInstanceRepository instanceRepo, ImportWatchRepository repo,
                        SettingsService settings, StorageLayout layout, Clock clock, boolean autoRun) {
         this.importService = importService;
         this.niftiImport = niftiImport;
+        this.dbAdmin = dbAdmin;
+        this.instanceRepo = instanceRepo;
         this.repo = repo;
         this.settings = settings;
         this.layout = layout;
@@ -158,7 +170,8 @@ public class ImportWatchService {
         } catch (NumberFormatException ignore) {
             // 不正な値は interval-invalid として画面に出す
         }
-        return new Config(enabled, folder == null ? null : folder.trim(), interval);
+        boolean overwrite = Boolean.parseBoolean(all.getOrDefault(KEY_CSV_OVERWRITE_DICOM, "false"));
+        return new Config(enabled, folder == null ? null : folder.trim(), interval, overwrite);
     }
 
     /** 設定の異常（コード）か、正常なら null。走査のたび・状態の問い合わせのたびに評価する。 */
@@ -213,7 +226,8 @@ public class ImportWatchService {
                 .limit(FAILURES_SHOWN).map(i -> new Failure(i.getPath(), i.getError())).toList();
         List<Failure> heldItems = repo.findTop20ByStatusOrderByAtDesc(ImportWatchItem.HELD).stream()
                 .limit(FAILURES_SHOWN).map(i -> new Failure(i.getPath(), i.getError())).toList();
-        return new Status(cfg.enabled(), cfg.folder(), cfg.intervalSec(), scanning, lastScanAt, waiting,
+        return new Status(cfg.enabled(), cfg.folder(), cfg.intervalSec(), cfg.csvOverwriteDicom(), scanning, lastScanAt,
+                waiting,
                 repo.countByStatus(ImportWatchItem.IMPORTED), repo.countByStatus(ImportWatchItem.SKIPPED),
                 repo.countByStatus(ImportWatchItem.FAILED), repo.countByStatus(ImportWatchItem.CHANGED),
                 repo.countByStatus(ImportWatchItem.HELD), error, failures, heldItems);
@@ -285,18 +299,25 @@ public class ImportWatchService {
         // 2. ユニットごとに処理する。1 つのファイル・ユニットの異常で、他の処理を止めない。
         Map<String, long[]> nextSeen = new HashMap<>();
         Map<String, String> nextSigs = new HashMap<>();
+        Map<String, CachedCsv> nextCsv = new HashMap<>();
+        Map<String, Map<String, String>> toApply = new java.util.LinkedHashMap<>();
+        boolean overwrite = readConfig().csvOverwriteDicom();
         for (Map.Entry<String, List<FileInfo>> u : units.entrySet()) {
             String sig = signature(u.getValue());
             nextSigs.put(u.getKey(), sig);
             boolean unitStable = sig.equals(unitSigs.get(u.getKey()));
+            UnitCsv csv = unitCsv(folder, folder.resolve(u.getKey()), u.getValue(), nextCsv);
+            UnitCtx ctx = new UnitCtx(folder, unitStable, csv, overwrite, toApply);
             for (FileInfo f : u.getValue()) {
                 try {
-                    visit(f, unitStable, ledger, nextSeen);
+                    visit(f, ctx, ledger, nextSeen);
                 } catch (RuntimeException e) {
                     record(f.path().toString(), f.size(), f.mtime(), ImportWatchItem.FAILED, e.toString(), ledger);
                 }
             }
         }
+        applyCsvToStudies(toApply);
+        csvCache = nextCsv;
         seen = nextSeen;
         unitSigs = nextSigs;
         waiting = nextSeen.size();
@@ -338,13 +359,62 @@ public class ImportWatchService {
         return Files.isRegularFile(file.resolveSibling(base + ".nii")) || Files.isRegularFile(file.resolveSibling(base + ".nii.gz"));
     }
 
-    private void visit(FileInfo f, boolean unitStable, Map<String, ImportWatchItem> ledger,
+    /** ユニット（納品フォルダ）の被験者 CSV の状態。 */
+    private record UnitCsv(boolean present, Map<String, String> values, String error) {
+        static final UnitCsv NONE = new UnitCsv(false, Map.of(), null);
+    }
+
+    private record CachedCsv(long size, long mtime, UnitCsv csv) {
+    }
+
+    private record UnitCtx(Path root, boolean stable, UnitCsv csv, boolean overwrite,
+                           Map<String, Map<String, String>> toApply) {
+    }
+
+    private Map<String, CachedCsv> csvCache = new HashMap<>();
+
+    /** ユニット直下の {@code *.csv}。ちょうど 1 つなら読む（大きさ・更新時刻が変わったときだけ読み直す）。 */
+    private UnitCsv unitCsv(Path root, Path unitDir, List<FileInfo> files, Map<String, CachedCsv> nextCache) {
+        List<FileInfo> csvs = files.stream().filter(f -> isUnitCsv(root, f.path())).toList();
+        if (csvs.isEmpty() || !unitDir.getParent().equals(root)) {
+            return UnitCsv.NONE;
+        }
+        if (csvs.size() > 1) {
+            return new UnitCsv(true, Map.of(), ImportWatchCsv.ERR_MULTIPLE);
+        }
+        FileInfo f = csvs.get(0);
+        String key = f.path().toString();
+        CachedCsv c = csvCache.get(key);
+        if (c == null || c.size() != f.size() || c.mtime() != f.mtime()) {
+            UnitCsv parsed;
+            try {
+                ImportWatchCsv.Parsed p = ImportWatchCsv.parse(
+                        new String(Files.readAllBytes(f.path()), java.nio.charset.StandardCharsets.UTF_8));
+                parsed = new UnitCsv(true, p.values(), p.error());
+            } catch (IOException | RuntimeException e) {
+                parsed = new UnitCsv(true, Map.of(), ImportWatchCsv.ERR_UNREADABLE);
+            }
+            c = new CachedCsv(f.size(), f.mtime(), parsed);
+        }
+        nextCache.put(key, c);
+        return c.csv();
+    }
+
+    /** 監視フォルダ直下のサブフォルダの直下にある {@code .csv}（被験者 CSV）か。 */
+    private static boolean isUnitCsv(Path root, Path file) {
+        Path parent = file.getParent();
+        return file.getFileName().toString().toLowerCase(java.util.Locale.ROOT).endsWith(".csv")
+                && parent != null && parent.getParent() != null && parent.getParent().equals(root);
+    }
+
+    private void visit(FileInfo f, UnitCtx ctx, Map<String, ImportWatchItem> ledger,
                        Map<String, long[]> nextSeen) {
         String key = f.path().toString();
         long size = f.size();
         long mtime = f.mtime();
-        if (isSidecar(f.path())) {
-            return; // NIfTI のペア。台帳にも待機にも数えない
+        boolean unitStable = ctx.stable();
+        if (isSidecar(f.path()) || isUnitCsv(ctx.root(), f.path())) {
+            return; // NIfTI のペアと、納品フォルダの被験者 CSV。台帳にも待機にも数えない
         }
         boolean nifti = isNifti(f.path());
         ImportWatchItem done = ledger.get(key);
@@ -366,7 +436,9 @@ public class ImportWatchService {
                 return;
             }
         }
-        if (nifti && !unitStable) {
+        // NIfTI と、CSV で DICOM を上書きする設定のときの DICOM は、納品（サイドカー・CSV）が揃うのを待つ
+        boolean needsUnit = nifti || ctx.overwrite();
+        if (needsUnit && !unitStable) {
             if (!held) {
                 nextSeen.put(key, new long[] {size, mtime}); // 納品（サイドカーなど）が揃うのを待つ
             }
@@ -376,13 +448,21 @@ public class ImportWatchService {
         String error = null;
         try {
             if (nifti) {
-                ImportOutcome o = importNifti(f.path());
+                ImportOutcome o = importNifti(f.path(), ctx.csv());
                 status = o.status();
                 error = o.error();
+            } else if (ctx.overwrite() && ctx.csv().present() && ctx.csv().error() != null) {
+                status = ImportWatchItem.HELD; // CSV が無効なので、上書きできるようになるまで取り込まない
+                error = "csv-invalid:" + ctx.csv().error();
             } else {
                 ImportService.ImportResult r = importService.importPaths(List.of(key));
                 if (r.imported() > 0) {
                     status = ImportWatchItem.IMPORTED;
+                    if (ctx.overwrite() && ctx.csv().present() && !ctx.csv().values().isEmpty()) {
+                        for (String study : r.studyInstanceUids()) {
+                            ctx.toApply().put(study, ctx.csv().values());
+                        }
+                    }
                 } else if (r.failed() > 0) {
                     status = ImportWatchItem.FAILED;
                     error = reason(key, r.errors().isEmpty() ? null : r.errors().get(0));
@@ -412,27 +492,37 @@ public class ImportWatchService {
     private static final List<String> PATIENT_KEYS = List.of("PatientID", "PatientName", "PatientBirthDate", "PatientSex");
 
     /** NIfTI を取り込む。患者情報（ID か名前）が無ければ保留。 */
-    private ImportOutcome importNifti(Path file) {
+    private ImportOutcome importNifti(Path file, UnitCsv csv) {
         try {
             NiftiToDicom.readHeader(file); // NIfTI として読めないものは、患者情報の有無より先に失敗にする
         } catch (IOException | RuntimeException e) {
             return new ImportOutcome(ImportWatchItem.FAILED, "not-nifti: " + e.getMessage());
         }
+        if (csv.present() && csv.error() != null) {
+            // CSV が無効のうちは取り込まない（取り込むと台帳に残り、CSV を直しても値が付かないため）
+            return new ImportOutcome(ImportWatchItem.HELD, "csv-invalid:" + csv.error());
+        }
         Map<String, Object> sidecar = readSidecar(file);
-        String id = PatientFields.ifValid(PatientFields.clean(sidecar.get("PatientID")), PatientFields::validLo);
-        String name = PatientFields.ifValid(PatientFields.clean(sidecar.get("PatientName")), PatientFields::validPn);
+        // 患者情報は CSV が優先、無ければサイドカー。どちらも検査済みの値だけ使う
+        String id = first(csv.values().get("PatientID"),
+                PatientFields.ifValid(PatientFields.clean(sidecar.get("PatientID")), PatientFields::validLo));
+        String name = first(csv.values().get("PatientName"),
+                PatientFields.ifValid(PatientFields.clean(sidecar.get("PatientName")), PatientFields::validPn));
         if (id == null && name == null) {
             return new ImportOutcome(ImportWatchItem.HELD, "no-patient-info");
         }
-        String birth = PatientFields.ifValid(PatientFields.clean(sidecar.get("PatientBirthDate")), PatientFields::validDa);
-        String sex = PatientFields.ifValid(PatientFields.clean(sidecar.get("PatientSex")), PatientFields::validSex);
+        String birth = first(csv.values().get("PatientBirthDate"),
+                PatientFields.ifValid(PatientFields.clean(sidecar.get("PatientBirthDate")), PatientFields::validDa));
+        String sex = first(csv.values().get("PatientSex"),
+                PatientFields.ifValid(PatientFields.clean(sidecar.get("PatientSex")), PatientFields::validSex));
         // 患者の 4 項目は検査済みの値だけを Options で渡す。サイドカーの生の値は、変換側が写してしまわないよう外す
         Map<String, Object> meta = new HashMap<>(sidecar);
         for (String k : PATIENT_KEYS) {
             meta.remove(k);
         }
-        NiftiToDicom.Options opts = new NiftiToDicom.Options("MR", id, name, birth, sex, null, null,
-                niftiBaseName(file), 1, null, null, meta, null);
+        NiftiToDicom.Options opts = new NiftiToDicom.Options(
+                first(csv.values().get("Modality"), "MR"), id, name, birth, sex, null,
+                csv.values().get("StudyDescription"), niftiBaseName(file), 1, null, null, meta, null);
         NiftiImportService.Result r = niftiImport.importFile(file, meta, opts);
         if (r.error() != null) {
             return new ImportOutcome(ImportWatchItem.FAILED, r.error());
@@ -444,6 +534,37 @@ public class ImportWatchService {
             return new ImportOutcome(ImportWatchItem.FAILED, "partial: " + r.failed() + " frames failed");
         }
         return new ImportOutcome(ImportWatchItem.IMPORTED, null);
+    }
+
+    private static String first(String a, String b) {
+        return a != null ? a : b;
+    }
+
+    /**
+     * 納品の CSV で、取り込んだ DICOM のスタディの患者属性を上書きする（設定が ON のときだけ）。スタディごとに 1 回。
+     * CSV に無い列は今の値のまま。失敗しても他の処理は止めず、状態にコードを出す。ログには個人情報を出さない。
+     */
+    private void applyCsvToStudies(Map<String, Map<String, String>> toApply) {
+        int done = 0;
+        for (Map.Entry<String, Map<String, String>> e : toApply.entrySet()) {
+            try {
+                List<DicomInstance> rows = instanceRepo.findByStudyInstanceUid(e.getKey());
+                if (rows.isEmpty()) {
+                    continue;
+                }
+                Map<String, String> v = e.getValue();
+                String name = v.getOrDefault("PatientName", rows.get(0).getPatientName());
+                dbAdmin.updateStudyPatient(e.getKey(), name, v.get("PatientBirthDate"), v.get("PatientSex"),
+                        v.get("PatientID"));
+                done++;
+            } catch (RuntimeException ex) {
+                scanError = "csv-apply-failed";
+                log.warn("CSV による患者属性の上書きに失敗しました（続行）: {}", ex.toString());
+            }
+        }
+        if (done > 0) {
+            log.info("納品フォルダの CSV で患者属性を上書きしました: {} スタディ", done);
+        }
     }
 
     /** サイドカー JSON（無い・壊れていれば空）。 */

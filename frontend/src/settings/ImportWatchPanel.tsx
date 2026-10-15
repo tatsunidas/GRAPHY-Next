@@ -14,7 +14,7 @@ import { fetchImportWatchStatus, scanImportWatchNow } from "./importWatchApi";
 import {
   canSave,
   errorKey,
-  heldKey,
+  heldView,
   formFromStatus,
   toSettings,
   type ImportWatchForm,
@@ -105,6 +105,13 @@ export function ImportWatchPanel() {
     }
   };
 
+  const heldText = (code: string | null): string => {
+    const v = heldView(code);
+    return v.reasonKey
+      ? t(v.key, { reason: t(v.reasonKey, { column: v.column ?? "" }) })
+      : t(v.key);
+  };
+
   const err = status.enabled && status.error ? status.error : null;
 
   return (
@@ -148,6 +155,18 @@ export function ImportWatchPanel() {
         <span style={muted}>{t("importWatch.intervalUnit")}</span>
       </div>
       <p style={muted}>{t("importWatch.rule")}</p>
+
+      <p style={note}>{t("importWatch.delivery")}</p>
+      <label style={row}>
+        <input
+          type="checkbox"
+          data-testid="import-watch-csv-overwrite"
+          checked={form.csvOverwriteDicom}
+          onChange={(e) => edit({ csvOverwriteDicom: e.target.checked })}
+        />
+        <span>{t("importWatch.csvOverwrite")}</span>
+      </label>
+      <p style={muted}>{t("importWatch.csvOverwrite.warn")}</p>
 
       <div style={{ ...row, justifyContent: "flex-end" }}>
         {message && <span style={muted}>{message}</span>}
@@ -206,7 +225,7 @@ export function ImportWatchPanel() {
         <ul style={heldList} data-testid="import-watch-held-items">
           {status.heldItems.map((f) => (
             <li key={f.path}>
-              <code>{f.path}</code>: {t(heldKey(f.error))}
+              <code>{f.path}</code>: {heldText(f.error)}
             </li>
           ))}
         </ul>

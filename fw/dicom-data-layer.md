@@ -198,10 +198,19 @@ Spring DI（`@Profile`）でプロファイルに応じて自動注入。
   警告を状態に出す**（取り込むと台帳に残り、後から値を付けられないため）。保留は他のファイル・他のユニット・DICOM の処理を止めず、
   ユニットが変わる（サイドカーが揃う）たびに再判定する。取り込み済みの NIfTI が後から変わっても再取り込みはせず（NIfTI は取り込むたびに
   新しい UID のシリーズができる）、「更新を検知（再取込なし）」として数える。同じユニットの複数ファイルは、それぞれ別のスタディになる。
+- **被験者 CSV（納品フォルダごと）**: 1 患者ぶんを 1 つのフォルダ（監視フォルダ直下のサブフォルダ）にまとめ、画像（DICOM または NIfTI）と
+  CSV を一緒に置く。CSV はそのフォルダ直下の `*.csv` ちょうど 1 つ（2 つ以上は異常）。UTF-8（BOM 可）、1 行目が列名、**データ行はちょうど 1 行**。
+  列は `PatientID`・`PatientName`・`PatientBirthDate`（DA: `yyyyMMdd`）・`PatientSex`（M/F/O）・`Modality`・`StudyDescription`（後ろ 2 つは NIfTI のみ）。
+  知らない列・重複した列・データ行が 1 行でない・値の形式違いが 1 つでもあれば **CSV 全体を拒否し、何も適用しない**（理由は種別と列名だけで、値は出さない）。
+  - **NIfTI**: CSV の値が優先、無ければサイドカー `.json`。ID も名前も得られなければ保留。CSV が無効（または 2 つ以上）なら保留（取り込むと台帳に残り、
+    CSV を直しても値が付かないため）。直すと次の安定で取り込まれる。
+  - **DICOM**: 既定は CSV があっても**元のまま**取り込む。設定 `import.watch.csvOverwriteDicom` を ON にしたときだけ、納品フォルダが揃うのを待ち（CSV が後から来ても値が付くように）、
+    取り込み後にスタディごとに 1 回、既存の患者編集（`DbAdminService.updateStudyPatient`）で CSV の値に書き換える。CSV に無い列は今の値のまま。CSV が無ければそのまま取り込み、
+    CSV が無効なら保留。上書きは患者の取り違えにつながるので既定 OFF（画面に注意書き）。ログには個人情報を出さず、スタディ数だけ。
 - 検証: `ImportWatchServiceTest`・`ImportWatchDriveTest`（偽の Drive）・`ImportWatchHttpTest`・`ImportWatchWebProfileTest`、
   画面からの `automator/src/spike/watchFolderCheck.ts`。
 - 未検証: Drive が正本でローカルがキャッシュのモード、Windows のローカル・ネットワーク共有・Google Drive for desktop の
-  フォルダでの書き込み途中の判定、被験者 CSV（段 4）。
+  フォルダでの書き込み途中の判定。
 
 ## 5. Web（BFF）仕様
 

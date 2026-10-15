@@ -3,7 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { describe, expect, it } from "vitest";
-import { barView, canSave, errorKey, heldKey, nextBaseline, formFromStatus, parseInterval, toSettings, type ImportWatchStatus } from "./importWatchView";
+import { barView, canSave, errorKey, heldView, nextBaseline, formFromStatus, parseInterval, toSettings, type ImportWatchStatus } from "./importWatchView";
 
 describe("importWatchView", () => {
   it("間隔は 1 以上の整数だけ受ける", () => {
@@ -13,22 +13,24 @@ describe("importWatchView", () => {
   });
 
   it("有効にして保存するにはフォルダと間隔が要る。無効にするだけなら要らない", () => {
-    expect(canSave({ enabled: true, folder: "/d", intervalSec: "5" })).toBe(true);
-    expect(canSave({ enabled: true, folder: "", intervalSec: "5" })).toBe(false);
-    expect(canSave({ enabled: true, folder: "  ", intervalSec: "5" })).toBe(false);
-    expect(canSave({ enabled: true, folder: "/d", intervalSec: "" })).toBe(false);
-    expect(canSave({ enabled: false, folder: "", intervalSec: "" })).toBe(true);
+    expect(canSave({ enabled: true, folder: "/d", intervalSec: "5", csvOverwriteDicom: false })).toBe(true);
+    expect(canSave({ enabled: true, folder: "", intervalSec: "5", csvOverwriteDicom: false })).toBe(false);
+    expect(canSave({ enabled: true, folder: "  ", intervalSec: "5", csvOverwriteDicom: false })).toBe(false);
+    expect(canSave({ enabled: true, folder: "/d", intervalSec: "", csvOverwriteDicom: false })).toBe(false);
+    expect(canSave({ enabled: false, folder: "", intervalSec: "", csvOverwriteDicom: false })).toBe(true);
   });
 
   it("保存する設定は backend のキーで、不正な間隔は送らない", () => {
-    expect(toSettings({ enabled: true, folder: " /d ", intervalSec: "7" })).toEqual({
+    expect(toSettings({ enabled: true, folder: " /d ", intervalSec: "7", csvOverwriteDicom: true })).toEqual({
       "import.watch.enabled": "true",
       "import.watch.folder": "/d",
+      "import.watch.csvOverwriteDicom": "true",
       "import.watch.intervalSec": "7",
     });
-    expect(toSettings({ enabled: false, folder: "", intervalSec: "x" })).toEqual({
+    expect(toSettings({ enabled: false, folder: "", intervalSec: "x", csvOverwriteDicom: false })).toEqual({
       "import.watch.enabled": "false",
       "import.watch.folder": "",
+      "import.watch.csvOverwriteDicom": "false",
     });
   });
 
@@ -39,12 +41,12 @@ describe("importWatchView", () => {
   });
 
   it("状態から入力欄の初期値を作る（未設定は空）", () => {
-    const s = { enabled: false, folder: null, intervalSec: null } as unknown as ImportWatchStatus;
-    expect(formFromStatus(s)).toEqual({ enabled: false, folder: "", intervalSec: "" });
+    const s = { enabled: false, folder: null, intervalSec: null, csvOverwriteDicom: false } as unknown as ImportWatchStatus;
+    expect(formFromStatus(s)).toEqual({ enabled: false, folder: "", intervalSec: "", csvOverwriteDicom: false });
   });
 
   const st = (o: Partial<ImportWatchStatus> = {}): ImportWatchStatus => ({
-    enabled: true, folder: "/d", intervalSec: 5, scanning: false, lastScanAt: 1, waiting: 0, imported: 0,
+    enabled: true, folder: "/d", intervalSec: 5, csvOverwriteDicom: false, scanning: false, lastScanAt: 1, waiting: 0, imported: 0,
     skipped: 0, failed: 0, changed: 0, held: 0, error: null, failures: [], heldItems: [], ...o,
   });
 
@@ -73,10 +75,18 @@ describe("importWatchView", () => {
     expect(v).toMatchObject({ visible: true, error: "folder-not-found", waiting: 2, failed: 1 });
   });
 
-  it("保留の理由は文言に、未知の理由は汎用の文言に。状態バー用に件数を持つ", () => {
-    expect(heldKey("no-patient-info")).toBe("importWatch.held.no-patient-info");
-    expect(heldKey("whatever")).toBe("importWatch.held.unknown");
-    expect(heldKey(null)).toBe("importWatch.held.unknown");
+  it("保留の理由は文言に、CSV の理由は詳細つきで、未知の理由は汎用の文言に。状態バー用に件数を持つ", () => {
+    expect(heldView("no-patient-info").key).toBe("importWatch.held.no-patient-info");
+    expect(heldView("whatever").key).toBe("importWatch.held.unknown");
+    expect(heldView(null).key).toBe("importWatch.held.unknown");
+    expect(heldView("csv-invalid:csv-bad-value:PatientSex")).toEqual({
+      key: "importWatch.held.csv-invalid",
+      reasonKey: "importWatch.csv.err.csv-bad-value",
+      column: "PatientSex",
+    });
+    expect(heldView("csv-invalid:csv-multiple").reasonKey).toBe("importWatch.csv.err.csv-multiple");
+    expect(heldView("csv-invalid:something-new").reasonKey).toBe("importWatch.csv.err.unknown");
+    expect(errorKey("csv-apply-failed")).toBe("importWatch.err.csv-apply-failed");
     expect(barView(st({ held: 3 }), 0).held).toBe(3);
   });
 });

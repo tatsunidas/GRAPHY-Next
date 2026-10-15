@@ -9,6 +9,8 @@ export interface ImportWatchStatus {
   enabled: boolean;
   folder: string | null;
   intervalSec: number | null;
+  /** 納品フォルダの CSV で、DICOM の患者属性も上書きするか。 */
+  csvOverwriteDicom: boolean;
   scanning: boolean;
   lastScanAt: number | null;
   waiting: number;
@@ -30,6 +32,7 @@ export interface ImportWatchForm {
   folder: string;
   /** 入力欄の文字列（空は未入力）。 */
   intervalSec: string;
+  csvOverwriteDicom: boolean;
 }
 
 /** backend が返す異常コード → i18n キー。未知のコードは汎用の文言（コードは別に添える）。 */
@@ -41,15 +44,22 @@ export function errorKey(code: string): string {
     case "folder-overlaps-db":
     case "interval-invalid":
     case "scan-failed":
+    case "csv-apply-failed":
       return `importWatch.err.${code}`;
     default:
       return "importWatch.err.unknown";
   }
 }
 
-/** 保留の理由コード → i18n キー。未知のコードは汎用の文言。 */
-export function heldKey(code: string | null): string {
-  return code === "no-patient-info" ? "importWatch.held.no-patient-info" : "importWatch.held.unknown";
+/** 保留の理由コード → 文言のキーと、CSV の理由なら詳細（コード・列名）。未知のコードは汎用の文言。 */
+export function heldView(code: string | null): { key: string; reasonKey?: string; column?: string } {
+  if (code === "no-patient-info") return { key: "importWatch.held.no-patient-info" };
+  if (code && code.startsWith("csv-invalid:")) {
+    const [reason, column] = code.slice("csv-invalid:".length).split(":");
+    const known = ["csv-empty", "csv-unknown-column", "csv-duplicate-column", "csv-rows", "csv-bad-value", "csv-unreadable", "csv-multiple"];
+    return { key: "importWatch.held.csv-invalid", reasonKey: known.includes(reason) ? `importWatch.csv.err.${reason}` : "importWatch.csv.err.unknown", column };
+  }
+  return { key: "importWatch.held.unknown" };
 }
 
 /** 間隔は 1 以上の整数の秒。それ以外は null。 */
@@ -70,6 +80,7 @@ export function toSettings(f: ImportWatchForm): Record<string, string> {
   const out: Record<string, string> = {
     "import.watch.enabled": String(f.enabled),
     "import.watch.folder": f.folder.trim(),
+    "import.watch.csvOverwriteDicom": String(f.csvOverwriteDicom),
   };
   const n = parseInterval(f.intervalSec);
   if (n !== null) out["import.watch.intervalSec"] = String(n);
@@ -81,6 +92,7 @@ export function formFromStatus(s: ImportWatchStatus): ImportWatchForm {
     enabled: s.enabled,
     folder: s.folder ?? "",
     intervalSec: s.intervalSec == null ? "" : String(s.intervalSec),
+    csvOverwriteDicom: s.csvOverwriteDicom,
   };
 }
 
