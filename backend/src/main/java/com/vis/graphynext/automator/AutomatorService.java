@@ -7,6 +7,7 @@ package com.vis.graphynext.automator;
 import com.vis.graphynext.dicom.store.DicomInstance;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
 import com.vis.graphynext.dicom.store.StorageLayout;
+import com.vis.graphynext.importer.ImportWatchRepository;
 import com.vis.graphynext.report.ReportRepository;
 import com.vis.graphynext.plugin.store.PluginDocumentRepository;
 import com.vis.graphynext.roi.RoiDocumentRepository;
@@ -44,6 +45,7 @@ public class AutomatorService {
     private final RoiDocumentRepository roiRepo;
     private final PluginDocumentRepository pluginRepo;
     private final SettingsService settings;
+    private final ImportWatchRepository importWatchRepo;
     private final StorageLayout layout;
 
     public AutomatorService(
@@ -52,8 +54,10 @@ public class AutomatorService {
             RoiDocumentRepository roiRepo,
             PluginDocumentRepository pluginRepo,
             SettingsService settings,
-            StorageLayout layout) {
+            StorageLayout layout,
+            ImportWatchRepository importWatchRepo) {
         this.layout = layout;
+        this.importWatchRepo = importWatchRepo;
         this.dicomRepo = dicomRepo;
         this.reportRepo = reportRepo;
         this.roiRepo = roiRepo;
@@ -71,7 +75,7 @@ public class AutomatorService {
 
     /**
      * 症例データ（DICOMインスタンス索引＋実ファイル、レポート、ROI 保存、プラグイン保存領域、
-     * <b>XA の空間校正</b>）を全削除する。環境設定(Setting)は原則対象外だが、
+     * <b>XA の空間校正</b>、監視取り込みの台帳）を全削除する。環境設定(Setting)は原則対象外だが、
      * <b>{@code xa.calibration.*} だけは症例に紐づくデータなので消す</b>。
      *
      * <p>🚨 消し残すと<b>前の実行で確定した校正が次の実行に効く</b>——
@@ -107,9 +111,15 @@ public class AutomatorService {
 
         int calibCount = settings.deleteByPrefix(SettingsService.XA_CALIBRATION_PREFIX);
 
+        // 監視取り込みの設定と台帳も消す。消し残すと前の実行で有効にした監視が次の実行で動き、台帳が
+        // 「取り込み済み」と覚えたままになって、検証の結果が前の実行に汚染される（実際に踏んだ形）。
+        int watchSettings = settings.deleteByPrefix(SettingsService.IMPORT_WATCH_PREFIX);
+        long watchLedger = importWatchRepo.count();
+        importWatchRepo.deleteAll();
+
         log.info("[automator] reset: instances={}, reports={}, roiDocuments={}, pluginDocuments={}, "
-                + "xaCalibrations={}",
-                instances.size(), reportCount, roiCount, pluginCount, calibCount);
+                + "xaCalibrations={}, importWatchSettings={}, importWatchLedger={}",
+                instances.size(), reportCount, roiCount, pluginCount, calibCount, watchSettings, watchLedger);
         return new ResetResult(
                 instances.size(), (int) reportCount, (int) roiCount, (int) pluginCount, calibCount);
     }

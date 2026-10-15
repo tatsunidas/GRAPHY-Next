@@ -294,3 +294,9 @@ Study Instance UID 63 文字 × **131 件** ≒ **8,383 バイト**で破綻。
 
 ⚠ `AiGenerationRequest` は**プラグイン向けの公開契約**なので、提供元を増やすときに
 形を変えると既存プラグインが壊れる。**加算で拡張できる形**にしてから広げること。
+
+## 監視フォルダの自動取り込みは standalone 限定（2026-10-15）
+
+`ImportWatchService` と `/api/import/watch/*` は `@Profile("standalone")`。web モードでは設定 API を利用者が書けるので、
+監視先を任意のパスにされると、サーバー上のファイルを保管庫へ取り込める経路になる（OWASP A01）。web では Bean を作らず、
+API は 404（`ImportWatchWebProfileTest`）。走査はシンボリックリンクを辿らず、ログにはパスと理由だけを出す。
