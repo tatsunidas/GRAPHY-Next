@@ -13,6 +13,7 @@ import {
   CobbAngleTool,
   MagnifyTool,
   EllipticalROITool,
+  CircleROITool,
   RectangleROITool,
   ProbeTool,
   BrushTool,
@@ -41,6 +42,8 @@ export const TOOL_IDS = {
   /** 拡大レンズ（押している間だけカーソルのまわりを拡大。ROI にはならない）。 */
   magnify: MagnifyTool.toolName,
   ellipse: EllipticalROITool.toolName,
+  /** 円 ROI（中心＋半径）。◎ でパラメトリック球、⬤ で塗りの球にできる。 */
+  circle: CircleROITool.toolName,
   rect: RectangleROITool.toolName,
   probe: ProbeTool.toolName,
   /** ポリゴン（閉）。クリックで頂点、ダブルクリック or 始点で閉じる。 */

@@ -787,6 +787,7 @@ export const en: Record<string, string> = {
   "viewer2d.roi.cobb": "Cobb angle",
   "viewer2d.tool.magnify": "Magnifier (4×)",
   "viewer2d.roi.ellipse": "Ellipse ROI",
+  "viewer2d.roi.circle": "Circle ROI",
   "viewer2d.roi.rect": "Rectangle ROI",
   "viewer2d.roi.polygon": "Polygon ROI (closed)",
   "viewer2d.roi.freehand": "Freehand ROI (closed)",
