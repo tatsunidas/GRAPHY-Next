@@ -496,7 +496,7 @@ export function RoiManagerPanel({
         n[r.key] = v;
         // Volumetry 結果をメタへ持ち回す（SEG エクスポート時の SegmentDescription 生成にも利用）。
         // マスクに複数 segment があるとき 1 つの segment の体積をマスク全体のメタに書くと誤るので、行＝マスク全体のときだけ。
-        if (r.single) setRoiMaskMeta(r.maskId, { custom: { volumeMl: v.volumeMl.toFixed(2), volumeComputedAt: new Date().toISOString() } });
+        if (r.single && v.volumeMl !== undefined) setRoiMaskMeta(r.maskId, { custom: { volumeMl: v.volumeMl.toFixed(2), volumeComputedAt: new Date().toISOString() } });
       }
       return n;
     });
@@ -761,8 +761,14 @@ export function RoiManagerPanel({
         </div>
         {st && (
           <div style={statLine} data-testid="mask-stats">
-            {t("roiMgr.statVol")}: {st.volumeMl.toFixed(2)} mL ({st.volumeMm3.toFixed(0)} mm³) ·
+            {t("roiMgr.statVol")}: {st.volumeMl === undefined ? "—" : `${st.volumeMl.toFixed(2)} mL (${st.volumeMm3!.toFixed(0)} mm³)`} ·
             {" "}{t("roiMgr.statVoxels")}: {st.voxels.toLocaleString()} · {t("roiMgr.statSlices")}: {st.slices}
+            {st.warnings.length > 0 && (
+              <>
+                <br />
+                <span data-testid="mask-stats-warn">{st.warnings.map((w) => t(`roiStats.warn.${w}`)).join(" / ")}</span>
+              </>
+            )}
             {(st.missingValueSlices ?? 0) > 0 && (
               <>
                 <br />

@@ -62,10 +62,8 @@ export interface SceneObject {
   diameters?: [number, number, number];
   /** ROI: 前景ボクセル数。 */
   voxels?: number;
-  /** ROI: ボクセル数 × ボクセル体積（2D の Σ³ と同じ定義）。 */
-  voxelVolumeMm3?: number;
-  /** ROI: 表示メッシュ（平滑化後）から算出した体積。 */
-  meshVolumeMm3?: number;
+  /** ROI: 体積の奥行きの出どころ。"thickness" は推定。 */
+  volumeDepthSource?: "ipp" | "sbs" | "thickness" | "unknown";
   numTriangles?: number;
   /** 中心線: 全長 mm。 */
   lengthMm?: number;
