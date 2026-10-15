@@ -14,10 +14,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 
-import { _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
+import { _electron as electron, type ElectronApplication, type Locator, type Page } from "@playwright/test";
 
 import { AUTOMATOR_ROOT } from "../../fixtures/manifest.js";
-import type { Scenario } from "../run.js";
+import type { MarkTarget, Scenario } from "../run.js";
 
 const REPO = path.resolve(AUTOMATOR_ROOT, "..");
 const DESKTOP_DIR = path.join(REPO, "desktop");
@@ -107,6 +107,121 @@ function prepareDataDir(): void {
   fs.writeFileSync(path.join(APP_DIR, "db-folders.json"), JSON.stringify({ current: null, recent: [OTHER_DB] }, null, 2));
   fs.writeFileSync(path.join(APP_DIR, "settings.json"), JSON.stringify({ "dicom.localAePort": String(SCP_PORT) }, null, 2));
 }
+
+/** 監視フォルダ（DB フォルダの外）。1 患者 = 1 つの納品フォルダ。 */
+const WATCH_DIR = path.join(ROOT, "watch");
+
+/** 小さな NIfTI-1（int16、64×64×10、中央に球）。間隔 1 × 1 × 3 mm。 */
+function writePhantomNifti(file: string): void {
+  const [nx, ny, nz] = [64, 64, 10];
+  const head = Buffer.alloc(352);
+  head.writeInt32LE(348, 0);
+  [3, nx, ny, nz, 1, 1, 1, 1].forEach((v, i) => head.writeInt16LE(v, 40 + 2 * i));
+  head.writeInt16LE(4, 70); // int16
+  head.writeInt16LE(16, 72);
+  [1, 1, 1, 3, 1, 1, 1, 1].forEach((v, i) => head.writeFloatLE(v, 76 + 4 * i));
+  head.writeFloatLE(352, 108);
+  head.writeFloatLE(1, 112);
+  head.writeInt16LE(1, 254); // sform
+  [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 3, 0]].forEach((row, r) => row.forEach((v, i) => head.writeFloatLE(v, 280 + 16 * r + 4 * i)));
+  head.write("n+1\0", 344, "latin1");
+  const data = Buffer.alloc(nx * ny * nz * 2);
+  for (let z = 0; z < nz; z++)
+    for (let y = 0; y < ny; y++)
+      for (let x = 0; x < nx; x++) {
+        const d = Math.hypot(x - 32, y - 32, (z - 4.5) * 3);
+        data.writeInt16LE(d < 20 ? 800 : 100, 2 * (z * nx * ny + y * nx + x));
+      }
+  fs.writeFileSync(file, Buffer.concat([head, data]));
+}
+
+function prepareWatchDir(): void {
+  fs.rmSync(WATCH_DIR, { recursive: true, force: true });
+  // 被験者 CSV つき → 取り込まれる
+  const a = path.join(WATCH_DIR, "SUBJ-001");
+  fs.mkdirSync(a, { recursive: true });
+  writePhantomNifti(path.join(a, "t1.nii"));
+  fs.writeFileSync(path.join(a, "subject.csv"), "PatientID,PatientName,StudyDescription\nGUIDE-001,Guide^Phantom,Phantom\n");
+  // 患者情報なし → 保留
+  const b = path.join(WATCH_DIR, "SUBJ-002");
+  fs.mkdirSync(b, { recursive: true });
+  writePhantomNifti(path.join(b, "t1.nii"));
+}
+
+const GIB = 1024 ** 3;
+const DESK_BASE = {
+  configured: true,
+  pickerReady: true,
+  signedIn: true,
+  email: "user@example.com",
+  defaultCacheLimitBytes: 15 * GIB,
+  minCacheLimitBytes: 1 * GIB,
+};
+const SYNC_BASE = {
+  state: "CONNECTED",
+  reason: null,
+  pending: 0,
+  blocked: 0,
+  synced: 1284,
+  lastError: null,
+  lockedBy: null,
+  adopted: 0,
+};
+/** Drive のパネルの画面例（有効にする前・モード B・モード A）。値は例で、実際の Drive にはつながない。 */
+const GDRIVE_EXAMPLES: {
+  name: string;
+  desktop: unknown;
+  sync: unknown;
+  marks: (gp: Locator) => MarkTarget[];
+}[] = [
+  {
+    name: "gdrive-choose",
+    desktop: { ...DESK_BASE, folder: null },
+    sync: null,
+    marks: (gp) => [
+      { at: gp.getByTestId("gdrive-mode-backup").locator(".."), side: "left" },
+      { at: gp.getByTestId("gdrive-mode-cache").locator(".."), side: "left" },
+      { at: gp.getByTestId("gdrive-enable"), side: "left" },
+    ],
+  },
+  {
+    name: "gdrive-backup",
+    desktop: {
+      ...DESK_BASE,
+      folder: { name: "GRAPHY-DB-研究用", shared: false, email: "user@example.com", mode: "backup", cacheLimitBytes: 15 * GIB },
+    },
+    sync: { ...SYNC_BASE, mode: "backup", cacheBytes: 0, cacheLimitBytes: 0, localCount: 0, evictedCount: 0, usableBytes: 0 },
+    marks: (gp) => [
+      { at: gp.getByTestId("gdrive-mode-badge"), side: "left" },
+      { at: gp.getByTestId("gdrive-state"), side: "left" },
+      { at: gp.getByRole("button", { name: "今すぐ同期" }), side: "left" },
+      { at: gp.getByTestId("gdrive-switch-mode"), side: "top" },
+    ],
+  },
+  {
+    name: "gdrive-cache",
+    desktop: {
+      ...DESK_BASE,
+      folder: { name: "GRAPHY-DB-研究用", shared: true, email: "user@example.com", mode: "cache", cacheLimitBytes: 15 * GIB },
+    },
+    sync: {
+      ...SYNC_BASE,
+      mode: "cache",
+      cacheBytes: 9.6 * GIB,
+      cacheLimitBytes: 15 * GIB,
+      localCount: 812,
+      evictedCount: 472,
+      usableBytes: 210 * GIB,
+    },
+    marks: (gp) => [
+      { at: gp.getByTestId("gdrive-mode-badge"), side: "left" },
+      { at: gp.getByTestId("gdrive-usage"), side: "left" },
+      { at: gp.getByTestId("gdrive-limit-input"), side: "left" },
+      { at: gp.getByTestId("gdrive-localize"), side: "left" },
+      { at: gp.getByTestId("gdrive-switch-mode"), side: "top" },
+    ],
+  },
+];
 
 const scenario: Scenario = async ({ shot }) => {
   prepareDataDir();
@@ -324,6 +439,19 @@ const scenario: Scenario = async ({ shot }) => {
       { at: viewer.getByTestId("measure-row").first(), side: "left" },
     ]);
 
+    // 7e の前に、肝臓に楕円 ROI を描く（形の ROI のまま 3D に取り込む撮影に使う）。
+    // 押す位置は Wand と同じく、画面上の位置を canvas の左上からの距離の 2 倍で渡す。
+    await menu(viewer, "roi", "楕円 ROI");
+    // Wand のクリックと同じく、撮影用の寸法の上書きのため、画面上の位置を canvas の左上からの距離の 2 倍で押す
+    // （drag() の合成イベントでは、画面に見える位置と ROI の実座標がずれる）。楕円は中心から外へ描く。
+    const at = (x: number, y: number): [number, number] => [cvBox.x + 2 * (x - cvBox.x), cvBox.y + 2 * (y - cvBox.y)];
+    await viewer.mouse.move(...at(585, 330));
+    await viewer.mouse.down();
+    for (let i = 1; i <= 10; i++) await viewer.mouse.move(...at(585 + 3 * i, 330 + 2.5 * i));
+    await viewer.mouse.up();
+    await viewer.waitForTimeout(600);
+    await viewer.keyboard.press("Escape");
+
     // 7e. 3D ビューワへ ROI 単位で取り込む
     await menu(viewer, "view", "3D Viewer…");
     const v3 = await findWindow(app, (u) => u.includes("#viewer3d"), 120_000);
@@ -338,6 +466,41 @@ const scenario: Scenario = async ({ shot }) => {
     await shot(v3, "import3d", [
       { at: importBtn, side: "left" },
       { at: v3.getByText("取り込み済み").first(), side: "left" },
+    ]);
+
+    // 7f. 楕円 ROI を、塗りにせず形のまま 3D に取り込む（スライスの幅で立ち上げた形）
+    // 取り込み済みの行からは「追加」が消えるので、番号でなく楕円 ROI の行の中のボタンを押す
+    await v3
+      .getByText("EllipticalROI", { exact: true })
+      .first()
+      .locator("xpath=ancestor::*[.//button[normalize-space()='追加']][1]")
+      .getByRole("button", { name: "追加", exact: true })
+      .click();
+    const ellipseImported = await Promise.race([
+      v3.locator('span[title="EllipticalROI"]').nth(1).waitFor({ timeout: 120_000 }).then(() => true),
+      v3.getByText("2D ビューアの ROI を取り込めませんでした").waitFor({ timeout: 120_000 }).then(() => false),
+    ]);
+    if (!ellipseImported) throw new Error("楕円 ROI を 3D に取り込めませんでした");
+    const ellipseObj = v3.locator('span[title="EllipticalROI"]').last();
+    await ellipseObj.waitFor({ timeout: 120_000 });
+    // 取り込んだオブジェクトは選ばれた状態になる。名前を押すと選択が外れるので、選ばれていないときだけ押す
+    const smooth = v3.getByTestId("roi3d-smooth");
+    if (!(await smooth.waitFor({ timeout: 5_000 }).then(() => true, () => false))) await ellipseObj.click();
+    await v3.getByText("ボクセル数").first().waitFor({ timeout: 60_000 });
+    // 右の欄を、オブジェクトの行から体積までが入るように送る
+    await v3.getByTestId("roi3d-smooth").evaluate((el) => el.scrollIntoView({ block: "center" }));
+    await v3.waitForTimeout(3_000);
+    console.log(
+      `roi3d: ${await v3.evaluate(() => {
+        const L = document.body.innerText.split("\n");
+        const i = L.indexOf("ボクセル数");
+        return L.slice(i, i + 10).join(" | ");
+      })}`,
+    );
+    await shot(v3, "roi3d", [
+      { at: ellipseObj, side: "left" },
+      { at: v3.getByTestId("roi3d-smooth"), side: "left" },
+      { at: v3.getByText("体積", { exact: true }).first(), side: "left" },
     ]);
     await v3.close();
     await viewer.waitForTimeout(1_000);
@@ -370,6 +533,93 @@ const scenario: Scenario = async ({ shot }) => {
     await mpr.waitForTimeout(2_000);
     await shot(mpr, "mpr", []);
     await mpr.close();
+
+    // 9. 自動取り込み（監視フォルダ）。設定と走査は API で行い、状態バーとパネルを撮る。
+    prepareWatchDir();
+    const api = async (method: string, p: string, body?: unknown) =>
+      main.evaluate(
+        async ([port, method, p, body]) => {
+          const r = await fetch(`http://localhost:${port}${p}`, {
+            method,
+            headers: { "Content-Type": "application/json" },
+            body: body === undefined ? undefined : JSON.stringify(body),
+          });
+          if (!r.ok) throw new Error(`${method} ${p}: ${r.status}`);
+          return r.json();
+        },
+        [PORT, method, p, body] as const,
+      );
+    await api("PUT", "/api/settings", {
+      "import.watch.enabled": "true",
+      "import.watch.folder": WATCH_DIR,
+      "import.watch.intervalSec": "30",
+      "import.watch.csvOverwriteDicom": "false",
+    });
+    let ws: { imported: number; held: number } = { imported: 0, held: 0 };
+    for (let i = 0; i < 10 && !(ws.imported >= 1 && ws.held >= 1); i++) {
+      ws = await api("POST", "/api/import/watch/scan");
+      await main.waitForTimeout(1_500);
+    }
+    console.log(`import-watch: ${JSON.stringify(ws)}`);
+    if (!(ws.imported >= 1 && ws.held >= 1)) throw new Error("自動取り込みの取込・保留が揃いません");
+    const newItems = main.getByTestId("statusbar-import-watch-new");
+    await newItems.waitFor({ timeout: 30_000 });
+    await shot(main, "watchbar", [
+      { at: main.getByTestId("statusbar-import-watch"), side: "top" },
+      { at: newItems, side: "top" },
+    ]);
+
+    await main.getByTestId("mainscreen-menu-system").click();
+    await main.getByTestId("menu-item-settings").click();
+    await main.getByTestId("settings-cat-importWatch").click();
+    await main.getByTestId("import-watch-held-items").waitFor({ timeout: 20_000 });
+    // 監視フォルダの欄の値（マシンのパス）も、画面の表示だけ「…」にする
+    await main.getByTestId("import-watch-folder").evaluate((el, root) => {
+      const input = el as HTMLInputElement;
+      input.value = input.value.split(root).join("…");
+    }, ROOT);
+    // パネルは画面より縦に長い。走査の間隔から保留の一覧までが入るように送る
+    await main.getByTestId("import-watch-interval").evaluate((el) => el.scrollIntoView({ block: "start" }));
+    await main.waitForTimeout(800);
+    await hideRootPath(main);
+    await shot(main, "watch", [
+      { at: main.getByTestId("import-watch-interval"), side: "left" },
+      { at: main.getByTestId("import-watch-scan-now"), side: "left" },
+      { at: main.getByTestId("import-watch-csv-overwrite"), side: "left" },
+      { at: main.getByTestId("import-watch-stats"), side: "left" },
+      { at: main.getByTestId("import-watch-held-items"), side: "left" },
+    ]);
+    await main.getByTestId("dialog-close-button").click();
+    await api("PUT", "/api/settings", { "import.watch.enabled": "false" });
+
+    // 10. Google Drive（画面例）。Drive にはつながず、main の状態の返事と backend の状態の返事だけを差し替える。
+    for (const ex of GDRIVE_EXAMPLES) {
+      await app.evaluate(({ ipcMain }, desk) => {
+        ipcMain.removeHandler("graphy:gdrive-status");
+        ipcMain.handle("graphy:gdrive-status", () => desk);
+      }, ex.desktop);
+      await main.unrouteAll();
+      if (ex.sync) {
+        const body = JSON.stringify({ ...ex.sync, lastSyncAt: Date.now() - 4 * 60_000, lastSnapshotAt: Date.now() - 50 * 60_000 });
+        await main.route("**/api/gdrive/status", (r) => r.fulfill({ contentType: "application/json", body }));
+        await main.route("**/api/gdrive/localize", (r) =>
+          r.fulfill({ contentType: "application/json", body: JSON.stringify({ phase: "IDLE", total: 0, done: 0, failed: 0, bytesTotal: 0, error: null }) }),
+        );
+      }
+      await main.getByTestId("mainscreen-menu-system").click();
+      await main.getByTestId("menu-item-settings").click();
+      await main.getByTestId("settings-cat-data").click();
+      const gp = main.getByTestId("gdrive-panel");
+      await gp.waitFor({ timeout: 20_000 });
+      await (ex.sync ? gp.getByTestId("gdrive-state") : gp.getByTestId("gdrive-mode-choice")).waitFor({ timeout: 20_000 });
+      // 有効にした後は、保存先の行から下（方式の切り替えのボタンまで）が入るように送る
+      const top = ex.sync ? gp.getByTestId("gdrive-enabled") : gp;
+      await top.evaluate((el) => el.scrollIntoView({ block: "start" }));
+      await main.waitForTimeout(1_000);
+      await shot(main, ex.name, ex.marks(gp));
+      await main.getByTestId("dialog-close-button").click();
+    }
+    await main.unrouteAll();
   } finally {
     await app?.close().catch(() => undefined);
     if (vite?.pid) {
