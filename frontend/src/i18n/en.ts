@@ -920,7 +920,7 @@ export const en: Record<string, string> = {
   "roiMgr.fill": "Fill",
   "roiMgr.scope": "ZCT scope (creation position)",
   "roiMgr.scopeToggle": "Click to toggle Z between global (all) and local (creation slice)",
-  "roiMgr.scopeToggleMask": "ZCT scope. For volume masks (fixed Z:all) the Z toggle has no effect (use ⬚ to split into per-slice masks)",
+  "roiMgr.scopeToggleMask": "ZCT scope (display only). Results of operations, split, sphere and ROI→Mask show the slice number when they cover one slice, Z:all for two or more. Masks made with the brush or wand are volumes (Z:all). Use ⬚ to split into per-slice masks",
   "roiMgr.editTitle": "Edit attributes",
   "roiMgr.label": "Label",
   "roiMgr.description": "Description",

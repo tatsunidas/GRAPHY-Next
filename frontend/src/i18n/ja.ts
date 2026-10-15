@@ -922,7 +922,7 @@ export const ja: Record<string, string> = {
   "roiMgr.fill": "塗りつぶし",
   "roiMgr.scope": "ZCT スコープ（作成時の位置）",
   "roiMgr.scopeToggle": "クリックで Z をグローバル(all)/ローカル(作成スライス)に切替",
-  "roiMgr.scopeToggleMask": "ZCT スコープ。マスクはボリューム（Z:all 固定）のため Z 切替は有効になりません（特定スライスへの分解は ⬚）",
+  "roiMgr.scopeToggleMask": "ZCT スコープ（表示のみ・押しても変わりません）。演算・分割・球・ROI→Mask の結果は、塗ったスライスが 1 枚ならその番号、2 枚以上なら Z:all です。ブラシ・Wand で作るマスクはボリューム（Z:all）です。特定スライスへの分解は ⬚",
   "roiMgr.editTitle": "属性編集",
   "roiMgr.label": "ラベル",
   "roiMgr.description": "説明",
