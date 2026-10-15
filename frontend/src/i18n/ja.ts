@@ -523,6 +523,8 @@ export const ja: Record<string, string> = {
   "viewer2d.title": "2D Viewer",
   "viewer2d.empty": "左のツリーからシリーズを選び（＋）でタイルを追加してください。",
   "viewer2d.removeTile": "タイルを削除",
+  "viewer2d.tile.soloEnter": "ダブルクリックで 1 枚表示",
+  "viewer2d.tile.soloExit": "ダブルクリックで元の表示に戻す",
   "viewer2d.exportDrag": "画像を外部へドラッグ保存（クリックでダウンロード）",
   "viewer2d.copyImage": "画像をクリップボードへコピー（ROI があれば含めるか聞きます。四隅の文字は含みません）",
   "viewer2d.copyImageMenu": "表示中の画像をコピー",

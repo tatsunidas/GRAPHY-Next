@@ -26,6 +26,7 @@ import {
 } from "../viewer/registrationRecord";
 import { loadRegistrations, saveRegistrations } from "../viewer/registrationPersistence";
 import { fetchSeriesLayout } from "../api";
+import { reconcileSolo, toggleSolo } from "./soloTile";
 import { RegistrationPanel } from "./RegistrationPanel";
 import type { RenderOverlay } from "../viewer/Viewer2D";
 import { buildSeriesLayout, type SeriesLayout } from "../viewer/seriesLayout";
@@ -145,6 +146,8 @@ interface PatientSession {
   tiles: Tile[];
   gridCols: number;   // 0 = 自動（ceil(√N)）、>0 = 手動指定列数
   gridRows: number;   // 0 = 自動（列数から行が流れる）、>0 = 手動指定行数（Row×Col 固定レイアウト）
+  /** ヘッダのダブルクリックで単独表示にしているタイルの ID。行×列・順序は書き換えない（soloTile.ts）。 */
+  soloTileId?: string | null;
 }
 
 /** localStorage に保存するコンテキスト形式。MainScreen が書き込み、Viewer が読む。 */
@@ -400,7 +403,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
       if (idx >= 0) {
         if (prev[idx].tiles.some((t) => t.id === tileId)) return prev; // 重複スキップ
         const updated = [...prev];
-        updated[idx] = { ...prev[idx], tiles: [...prev[idx].tiles, tile] };
+        updated[idx] = { ...prev[idx], tiles: [...prev[idx].tiles, tile], soloTileId: null };
         return updated;
       }
       return [
@@ -442,7 +445,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
         return next;
       }
       const updated = [...prev];
-      updated[idx] = { ...prev[idx], tiles: nextTiles };
+      updated[idx] = { ...prev[idx], tiles: nextTiles, soloTileId: null };
       return updated;
     });
   };
@@ -460,7 +463,18 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
     setPatients((prev) =>
       prev.map((p) =>
         p.patientKey === patientKey
-          ? { ...p, gridRows: Math.max(0, Math.floor(rows)), gridCols: Math.max(0, Math.floor(cols)) }
+          ? { ...p, gridRows: Math.max(0, Math.floor(rows)), gridCols: Math.max(0, Math.floor(cols)), soloTileId: null }
+          : p,
+      ),
+    );
+  };
+
+  /** タイルヘッダのダブルクリック: 単独表示（1 枚）⇔ 通常表示。 */
+  const toggleTileSolo = (patientKey: string, tileId: string) => {
+    setPatients((prev) =>
+      prev.map((p) =>
+        p.patientKey === patientKey
+          ? { ...p, soloTileId: toggleSolo(reconcileSolo(p.soloTileId, p.tiles.map((tl) => tl.id)), tileId, p.tiles.length) }
           : p,
       ),
     );
@@ -486,10 +500,10 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
         if (p.patientKey !== patientKey) return p;
         if (p.tiles.some((t) => t.id === newId)) return p; // 重複スキップ
         const idx = p.tiles.findIndex((t) => t.id === targetTileId);
-        if (idx < 0) return { ...p, tiles: [...p.tiles, tile] };
+        if (idx < 0) return { ...p, tiles: [...p.tiles, tile], soloTileId: null };
         const next = [...p.tiles];
         next.splice(before ? idx : idx + 1, 0, tile);
-        return { ...p, tiles: next };
+        return { ...p, tiles: next, soloTileId: null };
       }),
     );
     setActiveKey(patientKey);
@@ -649,6 +663,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
                   isDemo={isDemo}
                   onRemoveTile={removeTile}
                   onSetGrid={setPatientGrid}
+                  onToggleSolo={toggleTileSolo}
                   onInsertAdjacent={insertAdjacentTile}
                   onSwap={swapTiles}
                   onSetSync={setTileSync}
@@ -711,6 +726,7 @@ function TileGrid({
   isDemo,
   onRemoveTile,
   onSetGrid,
+  onToggleSolo,
   onInsertAdjacent,
   onSwap,
   onSetSync,
@@ -722,6 +738,7 @@ function TileGrid({
   isDemo: boolean;
   onRemoveTile: (patientKey: string, tileId: string) => void;
   onSetGrid: (patientKey: string, rows: number, cols: number) => void;
+  onToggleSolo: (patientKey: string, tileId: string) => void;
   onInsertAdjacent: (patientKey: string, targetId: string, before: boolean, study: Study, series: Series) => void;
   onSwap: (patientKey: string, fromId: string, toId: string) => void;
   onSetSync: (patientKey: string, tileId: string, enabled: boolean) => void;
@@ -729,6 +746,8 @@ function TileGrid({
 }) {
   const { t } = useI18n();
   const n = patient.tiles.length;
+  // 単独表示中のタイル（消された・1 枚だけのときは通常表示）。
+  const soloTileId = n > 1 ? reconcileSolo(patient.soloTileId, patient.tiles.map((tl) => tl.id)) : null;
   // actions（useMemo）から**最新の**タイル一覧を引くための参照。actions を tiles に依存させると
   // タイルを開くたびに host が作り直され、プラグイン側の購読が切れる。
   const tilesRef = useRef<Tile[]>(patient.tiles);
@@ -1801,10 +1820,13 @@ function TileGrid({
       <WandDialog />
       <LevelSetsDialog />
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+      {/* 単独表示のタイルは、このグリッドの外枠いっぱいに重ねる（他のタイルの大きさは変えない）。 */}
+      <div style={{ position: "relative", flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
       <div
         data-testid="viewer2d-tile-grid"
         data-grid-rows={rows}
         data-grid-cols={cols}
+        data-solo-tile={soloTileId ?? ""}
         style={{
           display: "grid",
           gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
@@ -1816,13 +1838,17 @@ function TileGrid({
           gap: 8,
           padding: 8,
           flex: 1,
+          minHeight: 0,
           overflowY: "auto",
         }}
       >
-        {patient.tiles.map((tile) => (
+        {patient.tiles.flatMap((tile) => [
           <TileCell
             key={tile.id}
             tile={tile}
+            solo={soloTileId === tile.id}
+            hiddenBySolo={soloTileId !== null && soloTileId !== tile.id}
+            onToggleSolo={() => onToggleSolo(patient.patientKey, tile.id)}
             mode={mode}
             patientKey={patient.patientKey}
             syncActive={isSyncActive && tile.syncEnabled}
@@ -1838,8 +1864,11 @@ function TileGrid({
             onFusionChange={(overlay) => onSetFusion(patient.patientKey, tile.id, overlay)}
             onDimChange={(c, tIdx, z) => tileDimsRef.current.set(tile.id, { c, t: tIdx, z })}
             onDrop={handleDrop}
-          />
-        ))}
+          />,
+          // 単独表示のタイルは絶対配置でグリッドの流れから外れるので、同じ升に空の占位を置いて他のタイルが動かないようにする。
+          soloTileId === tile.id ? <div key={`${tile.id}#solo-placeholder`} aria-hidden="true" /> : null,
+        ])}
+      </div>
       </div>
       {/* タイル枠の右クリックメニュー。View メニューと同じ panelVisible を操作するため表示は常に一致。 */}
       {frameMenu && (
@@ -2027,6 +2056,9 @@ function TileGrid({
 
 function TileCell({
   tile,
+  solo,
+  hiddenBySolo,
+  onToggleSolo,
   mode,
   patientKey,
   syncActive,
@@ -2044,6 +2076,11 @@ function TileCell({
   onDrop,
 }: {
   tile: Tile;
+  /** ヘッダのダブルクリックで単独表示中（グリッドの外枠いっぱいに重ねる）。 */
+  solo: boolean;
+  /** 別のタイルが単独表示中（大きさは保ったまま見えなくする。viewport を作り直さず、戻したとき同じ状態にする）。 */
+  hiddenBySolo: boolean;
+  onToggleSolo: () => void;
   mode: "standalone" | "web";
   patientKey: string;
   syncActive: boolean;
@@ -2375,6 +2412,8 @@ function TileCell({
         // 選択中はオレンジのリングで明示（sync の青アウトラインと併存可能）。
         boxShadow: selected ? "0 0 0 3px #ff9800" : undefined,
         position: "relative",
+        ...(solo ? { position: "absolute", inset: 0, height: "auto", zIndex: 2 } : null),
+        ...(hiddenBySolo ? { visibility: "hidden" } : null),
       }}
       // Shift+左クリックで選択トグル（W/L 等のツールは単純クリックでは実質無変化）。
       onClick={(e) => {
@@ -2421,8 +2460,17 @@ function TileCell({
         draggable
         onDragStart={handleHeaderDragStart}
         onDragEnd={handleHeaderDragEnd}
+        onDoubleClick={(e) => {
+          // ヘッダ内のボタン（書き出し・コピー・Sync・削除）の連打では切り替えない。
+          if ((e.target as HTMLElement).closest("button,[role='button']")) return;
+          onToggleSolo();
+        }}
       >
-        <span style={tileTitle}>
+        <span
+          style={tileTitle}
+          title={solo ? t("viewer2d.tile.soloExit") : t("viewer2d.tile.soloEnter")}
+        >
+          {solo ? "◱ " : ""}
           {[dateLabel, studyDesc, seriesLabel].filter(Boolean).join(" / ")}
         </span>
 
