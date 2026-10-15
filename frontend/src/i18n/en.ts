@@ -519,6 +519,8 @@ export const en: Record<string, string> = {
   "viewer2d.title": "2D Viewer",
   "viewer2d.empty": "Pick a series from the left tree (＋) to add a tile.",
   "viewer2d.removeTile": "Remove tile",
+  "viewer2d.tile.soloEnter": "Double-click to show this tile alone",
+  "viewer2d.tile.soloExit": "Double-click to restore all tiles",
   "viewer2d.exportDrag": "Drag image out to save (click to download)",
   "viewer2d.copyImage": "Copy image to clipboard (asks whether to include ROIs; corner text is not included)",
   "viewer2d.copyImageMenu": "Copy displayed image",
