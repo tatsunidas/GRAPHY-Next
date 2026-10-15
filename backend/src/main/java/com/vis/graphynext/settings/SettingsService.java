@@ -35,7 +35,7 @@ import java.util.Map;
  * <p>置き場は 2 つ:
  * <ul>
  *   <li>{@code graphy.settings.global-file} 指定時（standalone で Electron が渡す）: 症例に紐づく
- *       {@link #XA_CALIBRATION_PREFIX} 以外は、DB フォルダをまたいで共通の JSON ファイルに置く。
+ *       {@link #XA_CALIBRATION_PREFIX}・{@link #IMPORT_WATCH_PREFIX} 以外は、DB フォルダをまたいで共通の JSON ファイルに置く。
  *       ファイルが無ければ、今の DB の値を写して作る（DB の行は消さない＝旧版に戻せる）。</li>
  *   <li>未指定（web・テスト）: すべて DB（{@code app_setting}）。</li>
  * </ul>
@@ -63,6 +63,12 @@ public class SettingsService {
      */
     public static final String XA_CALIBRATION_PREFIX = "xa.calibration.";
 
+    /**
+     * 監視フォルダからの自動取り込みの設定（{@code import.watch.*}）。取り込み済みの台帳が DB フォルダごとなので、
+     * 設定も DB に置く（共通ファイルに置くと、DB フォルダを切り替えたとき、別の DB に監視フォルダの中身が全部入る）。
+     */
+    public static final String IMPORT_WATCH_PREFIX = "import.watch.";
+
     private static final Logger log = LoggerFactory.getLogger(SettingsService.class);
     private static final TypeReference<LinkedHashMap<String, String>> MAP_TYPE = new TypeReference<>() {
     };
@@ -81,9 +87,13 @@ public class SettingsService {
                 ? null : Path.of(globalFile).toAbsolutePath().normalize();
     }
 
-    /** DB に置くキーか（共通ファイル使用時は症例に紐づく校正だけ）。 */
+    /** DB に置くキーか（共通ファイル使用時は、症例に紐づく校正と、DB ごとの監視取り込みの設定だけ）。 */
     private boolean inDb(String key) {
-        return globalFile == null || key.startsWith(XA_CALIBRATION_PREFIX);
+        return globalFile == null || isDbScoped(key);
+    }
+
+    private static boolean isDbScoped(String key) {
+        return key.startsWith(XA_CALIBRATION_PREFIX) || key.startsWith(IMPORT_WATCH_PREFIX);
     }
 
     @Transactional(readOnly = true)
@@ -219,7 +229,7 @@ public class SettingsService {
         }
         Map<String, String> seeded = new LinkedHashMap<>();
         for (Setting s : repo.findAll()) {
-            if (s.getKey() != null && !s.getKey().startsWith(XA_CALIBRATION_PREFIX)) {
+            if (s.getKey() != null && !isDbScoped(s.getKey())) {
                 seeded.put(s.getKey(), s.getValue());
             }
         }

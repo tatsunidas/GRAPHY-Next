@@ -14,6 +14,7 @@ import { AiPanel } from "./AiPanel";
 import { ComputePanel } from "./ComputePanel";
 import { DbFolderPanel } from "./DbFolderPanel";
 import { GdrivePanel } from "./GdrivePanel";
+import { ImportWatchPanel } from "./ImportWatchPanel";
 import { isDesktop } from "../desktopBridge";
 import { useI18n, type Locale, type TFn } from "../i18n/i18n";
 import { markRestartRequired } from "../restartRequiredEvents";
@@ -118,6 +119,8 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
               <RemoteAePanel />
             ) : category.id === "monitor" ? (
               <MonitorQcPanel />
+            ) : category.id === "importWatch" ? (
+              <ImportWatchPanel />
             ) : category.id === "ai" ? (
               // 🔴 **AI の設定は backend の Settings に載せない。** 提供元・接続先・モデルは
               //    Electron main の ai-providers.json、鍵は safeStorage（fw/ai-routing-design.md §4.1）。

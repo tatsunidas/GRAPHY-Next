@@ -169,6 +169,30 @@ Spring DI（`@Profile`）でプロファイルに応じて自動注入。
 
 ---
 
+### 4.3 監視フォルダからの自動取り込み（standalone のみ）
+
+指定したフォルダ（サブフォルダを含む）を一定間隔で走査し、**大きさと更新時刻が 2 回続けて同じ**になったファイルだけを
+既存の取り込み（`ImportService.importPaths`）へ渡す。取り込みそのものは新しく書かない。
+
+- 実装: `importer/ImportWatchService`（`@Profile("standalone")`、`scanOnce()` を直接呼べる）、台帳 `ImportWatchItem`
+  （キーは正規化した絶対パス。大きさ・更新時刻が変われば別のファイルとして待ち直す）、状態 `GET /api/import/watch/status`・
+  手動走査 `POST /api/import/watch/scan`。web モードでは Bean もこの API も無い。
+- 設定は `import.watch.enabled|folder|intervalSec`（既定は無効）。**共通設定ファイルではなく DB 側に置く**
+  （台帳が DB フォルダごとなので、共通にすると DB を切り替えたとき別の DB に監視フォルダの中身が全部入る）。
+  走査のたびに読むので、変更は再起動なしで次の走査から効く。間隔に既定値は置かない（実機で測るまで決めない）。
+- 原本は読むだけ（移動も削除もしない）。同じ大きさ・更新時刻のファイルは二度と取り込まない。非 DICOM は「スキップ」、
+  壊れた DICOM は「失敗」（パス付きで画面に出る）で、走査は止まらない。
+- **監視先は DB フォルダの中、または DB フォルダを含む場所にできない**（取り込んだ物を取り込み直す循環になるため）。
+  保存時ではなく走査のたび・状態の問い合わせのたびに検査し、異常は状態のコード（`folder-overlaps-db` など）で返す。
+- Google Drive との関係: 取り込みは手動と同じ `DicomStorageService.ingest` を通るので、Drive への増分送信（`StorageChanged`）も
+  同じ経路。Drive に送れない間（オフライン・要ログイン）も取り込みはローカルに対して成功し、送信は同期が後で行う。
+  監視と手動で同じファイルを取り込んでも、索引・Drive とも 1 件のまま。
+- 復元（別の PC）では、索引のスナップショットとともに設定と台帳も戻る。フォルダが無ければ状態にエラーが出て、アプリは動き続ける。
+- 検証: `ImportWatchServiceTest`・`ImportWatchDriveTest`（偽の Drive）・`ImportWatchHttpTest`・`ImportWatchWebProfileTest`、
+  画面からの `automator/src/spike/watchFolderCheck.ts`。
+- 未検証: Drive が正本でローカルがキャッシュのモード、Windows のローカル・ネットワーク共有・Google Drive for desktop の
+  フォルダでの書き込み途中の判定、NIfTI（段 3）・被験者 CSV（段 4）。
+
 ## 5. Web（BFF）仕様
 
 - frontend → `WebDicomDataService`(REST) → PACS の DICOMweb。
