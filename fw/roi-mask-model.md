@@ -206,3 +206,17 @@ ROI マネージャには「ROI」だけを見せ、中身の持ち方（注釈�
   - 塗りの行は `value === segIndex` のボクセルだけを前景にする（マスク全体ではない）。
   - 形の ROI は先に `roiToMask` で**一時マスク**にラスタ化して計算し、**演算が終わったら一時マスクを取り除く**（結果の新規 ROI だけを残す。パネルに中間物を残さないため）。面積型でない形が混ざると失敗（null）。
   - SPLIT は塗りの ROI 1 件に対して、その segment のボクセルだけを連結成分に分け、元の segment を置き換える。
+
+### 段 2 PR 4（3D ビューワ）
+3D ビューワは別 BrowserWindow で、2D とメモリを共有しない。2D の ROI は `BroadcastChannel`（`viewer/maskBridge.ts`）で渡す。純関数は `viewer/maskBridgeCore.ts`。
+- **一覧（announce）は ROI 単位**。要求は `{studyUid, seriesUid, c, t}`、応答は次のどちらかの配列。
+  - `{kind:"painted", segmentationId, segmentIndex, label, color, c, t}` … 塗りの ROI（segment 1 つ）。名前は 2D の行と同じ規則（`paintedRowName`）。名前が無ければ中立の `ROI n`。
+  - `{kind:"sphere", sphereId, label, color, center, radiusMm, c, t}` … パラメトリック球。
+  - 絞り込みは study/series と C/T の両方。scope の c/t が `"all"` か未設定なら、どの C/T にも一致する。
+- **フレーム取得（frames-request）は `segmentIndex` を受け取り**、その segment だけを返す（`extractMaskFrames(id, segIndex)`）。球はフレームを使わず、3D 側で中心＋半径を表示ボリュームの格子へラスタ化して ROI（kind "roi"）にする（`viewer/sphereRaster.ts`。メッシュではない）。
+- **取り込みの入口は 1 つ**「2D ビューアの ROI から 3D ROI を追加…」。ROI を 1 件ずつ、または「すべて追加」。⟳ で再取得。3D パネルと同じウィンドウ（モバイル）にある ROI は同じ一覧に混ぜ、`segmentationId + segmentIndex` で重複を落とす。
+- **取り込み元の参照**: `SceneObject.source`（`seriesUid / c / t / segmentationId / segmentIndex / sphereId / origin: "2d" | "server"`）。一覧では取り込み済みに印を付け、「すべて追加」は取り込み済みを飛ばす。
+- **サーバの SEG/RTSTRUCT** は、表示中シリーズを参照するものだけ。backend は参照シリーズ UID を返さないので、フレーム/輪郭の `referencedSopInstanceUid` が表示中シリーズのインスタンス集合に含まれるかで判定する（参照が 1 つも無いものは除外）。
+- **体積は 2 つ並べる**。ボクセル体積＝前景ボクセル数 × ボクセル体積（2D の Σ³ と同じ定義。格子が一致すれば同じ値）と、表示メッシュ（平滑化後）の体積。後者はメッシュ由来なので 2D の数値とは一致しない。
+- **再起動**: 3D ウィンドウが開いたまま 2D が `graphy-viewer3d-ctx` を別の study/series/C/T で書き直したら、`storage` イベントで検知して画面ごと再読込する（`viewer3d/viewer3dCtx.ts`。`ts` だけの違いは無視）。
+- 2D 側: 新しい塗りの ROI の既定名は `ROI n`（`label` と `segmentLabels["1"]` を作成時に設定）。塗りの行は 🗑 を 1 行目に移し、操作ボタンを 3 行目に分けた。

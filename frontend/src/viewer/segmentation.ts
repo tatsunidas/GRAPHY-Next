@@ -28,6 +28,8 @@ import {
   deleteRoiMaskMeta,
 } from "./roiMaskStore";
 import { hasPlaneMetadata } from "./segMetadata";
+import { nextDefaultRoiNumber } from "./roiRows";
+import { tOutsideReact } from "../i18n/i18n";
 
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
 
@@ -115,7 +117,12 @@ async function createStackSeg(viewportId: string, sourceImageIds: string[], stac
   csSeg.addLabelmapRepresentationToViewport(viewportId, [{ segmentationId, type: LABELMAP }]);
   // 患者・シリーズ・C/T を紐付け（z="all"＝3D ボリュームマスク）。segment #1 を既定。
   const ctx = getViewerContext(viewportId);
-  const meta: Parameters<typeof setRoiMaskMeta>[1] = { segments: [1] };
+  // 内部 ID ではなく読みやすい既定名（"ROI 1" …）を付ける。
+  const existing = (
+    ((csSeg.state as unknown as { getSegmentations?: () => { segmentationId: string }[] }).getSegmentations?.() ?? [])
+  ).map((s) => getRoiMaskMeta(s.segmentationId)?.label);
+  const defaultName = tOutsideReact("roi.defaultName", { n: nextDefaultRoiNumber(existing) });
+  const meta: Parameters<typeof setRoiMaskMeta>[1] = { segments: [1], label: defaultName, segmentLabels: { "1": defaultName } };
   if (ctx) {
     const sc = { studyUid: ctx.studyUid, seriesUid: ctx.seriesUid, z: "all" as const, c: ctx.c, t: ctx.t };
     Object.assign(meta, { patientKey: ctx.patientKey, seriesLabel: ctx.seriesLabel, scope: sc, origin: sc });

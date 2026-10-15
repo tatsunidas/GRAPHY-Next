@@ -142,3 +142,13 @@ export function buildRoiPanelModel(
     .map((s) => ({ rowKind: "sphere", key: s.id, id: s.id }));
   return { rois: [...shapes, ...painted, ...sphereRows], measures };
 }
+
+/** 新規の塗り ROI の既定名の番号。既存名の中で "ROI <n>" 形式の最大番号 + 1（無ければ 1）。 */
+export function nextDefaultRoiNumber(existingLabels: ReadonlyArray<string | undefined>): number {
+  let max = 0;
+  for (const l of existingLabels) {
+    const m = /^ROI (\d+)$/.exec(l ?? "");
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return max + 1;
+}

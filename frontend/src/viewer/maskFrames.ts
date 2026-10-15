@@ -13,6 +13,7 @@ import { segmentation as csSeg, Enums as csToolsEnums } from "@cornerstonejs/too
 import { getViewerContext } from "./viewerContext";
 import { setRoiMaskMeta, getRoiMaskMeta, getMaskSegments } from "./roiMaskStore";
 import { worldToVoxel, type LabelVolume, type VolumeGeom } from "./labelVolume";
+import { segmentRoiLabel, selectSegmentIndices } from "./maskBridgeCore";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
@@ -361,7 +362,7 @@ function u8ToBase64(u8: Uint8Array): string {
  * ウィンドウ間マスク同期（`maskBridge.ts`）が、他ウィンドウへ渡すフレームデータを組み立てるのに使う。
  * 幾何が引けない（source imageId が cache に無い）スライスはスキップ。
  */
-export function extractMaskFrames(segmentationId: string): MaskFramesInput | null {
+export function extractMaskFrames(segmentationId: string, onlySegment?: number): MaskFramesInput | null {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const labelmapIds = (csSeg as any).getLabelmapImageIds?.(segmentationId) as string[] | undefined;
   if (!labelmapIds?.length) return null;
@@ -388,7 +389,8 @@ export function extractMaskFrames(segmentationId: string): MaskFramesInput | nul
   if (!rows || !cols) return null;
   const frameSize = rows * cols;
 
-  const segIndices = getMaskSegments(segmentationId);
+  const segIndices = selectSegmentIndices(getMaskSegments(segmentationId), onlySegment);
+  const single = getMaskSegments(segmentationId).length === 1;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const vpIds = ((csSeg.state as any).getViewportIdsWithSegmentation?.(segmentationId) as string[] | undefined) ?? [];
   const vp0 = vpIds[0];
@@ -436,8 +438,7 @@ export function extractMaskFrames(segmentationId: string): MaskFramesInput | nul
       frames.push({ referencedSopInstanceUid: sop, imagePositionPatient: ipp, mask: u8ToBase64(plane) });
     }
     if (!frames.length || !any) continue;
-    const named = meta?.segmentLabels?.[String(segIndex)];
-    const label = named ?? (segIndices.length > 1 ? `${meta?.label ?? "Mask"} #${segIndex}` : (meta?.label ?? `Segment ${segIndex}`));
+    const label = segmentRoiLabel(meta, segIndex, single);
     const description = meta?.custom?.[String(segIndex)] ?? null;
     segments.push({ number: segIndex, label, color, description, frames });
   }
