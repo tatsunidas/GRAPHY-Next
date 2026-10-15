@@ -16,9 +16,10 @@
 import { cache, imageLoader, getRenderingEngines } from "@cornerstonejs/core";
 import { annotation as csAnnotation, segmentation as csSeg, Enums as csToolsEnums } from "@cornerstonejs/tools";
 import { roiKindOf } from "./roiKind";
-import { getRoiMaskMeta, setRoiMaskMeta } from "./roiMaskStore";
+import { deleteRoiMaskMeta, getRoiMaskMeta, setRoiMaskMeta } from "./roiMaskStore";
 import { worldToImageCoords } from "./imageCoords";
-import { alignToStack, boolOn, scopeZFromForeground, type BoolOp } from "./maskScope";
+import { alignToStack, combineLabelSlices, scopeZFromForeground, type BoolOp } from "./maskScope";
+import { isSegmentForeground } from "./maskStatsCore";
 import { fillPolygonsEvenOdd } from "./maskContour";
 
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
@@ -105,18 +106,25 @@ export async function createResultSeg(
   return { segId, labelmapIds };
 }
 
+/** ブール演算の入力 1 件（塗りの ROI）。`segIndex` を指定するとその segment のみ前景、無ければ非ゼロすべて。 */
+export interface MaskOperand {
+  maskId: string;
+  segIndex?: number;
+}
+
 /**
- * 複数 Mask を OR/AND/XOR（前景=非ゼロ）で合成し新規 Mask（segment 1）を返す。
+ * 複数の塗りの ROI を OR/AND/XOR で合成し新規 Mask（segment 1）を返す。
+ * - 前景: `segIndex` 指定ならその値のボクセル、無ければ非ゼロ。
  * - or: いずれかが前景。and: すべて前景。xor: 前景数の奇偶（パリティ）。
  * 入力が同一 source スタックでない/2 件未満なら null。
  */
 export async function combineMasks(
-  maskIds: string[],
+  operands: MaskOperand[],
   op: BoolOp,
   viewportIds: string[],
 ): Promise<string | null> {
-  if (maskIds.length < 2) return null;
-  const masks = maskIds.map(readMask);
+  if (operands.length < 2) return null;
+  const masks = operands.map((o) => readMask(o.maskId));
   if (masks.some((m) => !m)) return null;
   const ms = masks as MaskData[];
   // 当てはめ先: シリーズ全体の大きさのマスクがあればその列、無ければ表示中のスタック。
@@ -125,7 +133,7 @@ export async function combineMasks(
   const aligned = ms.map((m) => alignToStack(target, m.sourceIds));
   if (aligned.some((a) => !a)) return null;
 
-  const res = await createResultSeg(target, viewportIds, op.toUpperCase(), maskIds[0]);
+  const res = await createResultSeg(target, viewportIds, op.toUpperCase(), operands[0].maskId);
   if (!res) return null;
 
   const modified: number[] = [];
@@ -133,15 +141,20 @@ export async function combineMasks(
     const outVm = img(res.labelmapIds[s])?.voxelManager;
     if (!outVm) continue;
     const len = outVm.getScalarDataLength();
-    const inVms = ms.map((m, k) => {
+    const inputs = ms.map((m, k) => {
       const j = (aligned[k] as Int32Array)[s];
-      return j >= 0 ? img(m.labelmapIds[j])?.voxelManager : null;
+      const vm = j >= 0 ? img(m.labelmapIds[j])?.voxelManager : null;
+      let labels: Int32Array | null = null;
+      if (vm) {
+        labels = new Int32Array(len);
+        for (let i = 0; i < len; i++) labels[i] = vm.getAtIndex(i);
+      }
+      return { labels, segIndex: operands[k].segIndex };
     });
+    const fg = combineLabelSlices(op, inputs, len);
     let touched = false;
     for (let i = 0; i < len; i++) {
-      let cnt = 0;
-      for (const vm of inVms) if (vm && vm.getAtIndex(i) > 0) cnt++;
-      if (boolOn(op, cnt, inVms.length)) {
+      if (fg[i]) {
         outVm.setAtIndex(i, 1);
         touched = true;
       }
@@ -151,6 +164,37 @@ export async function combineMasks(
   csSeg.triggerSegmentationEvents.triggerSegmentationDataModified(res.segId, modified, 1);
   setScopeZFromForeground(res.segId, target, modified);
   return res.segId;
+}
+
+/** ROI 一覧で選んだ 1 行。形のまま（annotation）か、塗り（labelmap）か。`segIndex` 未指定はマスク全体。 */
+export type RoiOperand = { kind: "shape"; uid: string } | { kind: "painted"; maskId: string; segIndex?: number };
+
+/**
+ * 選んだ ROI（形・塗りの混在可）を合成する。形の ROI は先に一時マスクへラスタ化して演算に入れ、
+ * 演算後に一時マスクは取り除く（パネルに結果以外のマスクを残さないため）。
+ * 形をラスタ化できない（面積型でない/表示先が見つからない）ものが 1 つでもあれば null。
+ */
+export async function combineRois(operands: RoiOperand[], op: BoolOp, viewportIds: string[]): Promise<string | null> {
+  const temps: string[] = [];
+  try {
+    const resolved: MaskOperand[] = [];
+    for (const o of operands) {
+      if (o.kind === "painted") {
+        resolved.push({ maskId: o.maskId, segIndex: o.segIndex });
+        continue;
+      }
+      const tmp = await roiToMask(o.uid);
+      if (!tmp) return null;
+      temps.push(tmp);
+      resolved.push({ maskId: tmp });
+    }
+    return await combineMasks(resolved, op, viewportIds);
+  } finally {
+    for (const id of temps) {
+      try { csSeg.removeSegmentation(id); } catch { /* ignore */ }
+      deleteRoiMaskMeta(id);
+    }
+  }
 }
 
 /** エリア型 ROI（面積を持つ＝ラスタ化可能）の toolName か。 */
@@ -289,9 +333,15 @@ function splitOffsets(conn: SplitConnectivity): [number, number, number][] {
 /**
  * 単一 Mask を 3D 連結成分で分割し、成分ごとに segment index(1..N) を割り当てた新規 Mask を返す。
  * connectivity: 6(面)/18(面+辺)/26(全て)。既定 26（見た目の塊数に近い＝斜め接続もつなぐ）。
+ * `segIndex` を指定するとその segment のボクセルだけを分割する（塗りの ROI 1 件）。
  * 前景が無ければ null。成分数は {@link MAX_SEGMENTS} で上限（超過分は最終 index にまとめる）。
  */
-export async function splitMask(maskId: string, viewportIds: string[], connectivity: SplitConnectivity = 26): Promise<string | null> {
+export async function splitMask(
+  maskId: string,
+  viewportIds: string[],
+  connectivity: SplitConnectivity = 26,
+  segIndex?: number,
+): Promise<string | null> {
   const m = readMask(maskId);
   if (!m) return null;
   const first = img(m.labelmapIds[0]);
@@ -307,7 +357,7 @@ export async function splitMask(maskId: string, viewportIds: string[], connectiv
     const vm = img(m.labelmapIds[z])?.voxelManager;
     if (!vm) continue;
     const base = z * sliceLen;
-    for (let i = 0; i < sliceLen; i++) if (vm.getAtIndex(i) > 0) fg[base + i] = 1;
+    for (let i = 0; i < sliceLen; i++) if (isSegmentForeground(vm.getAtIndex(i), segIndex)) fg[base + i] = 1;
   }
 
   // 連結成分ラベリング（明示スタックの反復 flood fill）。近傍は connectivity で決定。

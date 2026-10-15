@@ -99,7 +99,7 @@ function annColorRgb(uid: string): [number, number, number] | null {
  * RTSTRUCT の一般的な書き方）。輪郭は画素の境界をなぞる（`maskContour.ts`。`fw/roi-mask-model.md` §10）。
  * 幾何（IPP/IOP/画素間隔）の無いスライスは書かない。
  */
-export function maskToRtStructRois(segId: string): { rois: Omit<RtStructRoi, "number">[]; refImageId?: string } {
+export function maskToRtStructRois(segId: string, segIndex?: number): { rois: Omit<RtStructRoi, "number">[]; refImageId?: string } {
   let labelmapIds: string[];
   try {
     labelmapIds = ((csSeg as AnyObj).getLabelmapImageIds(segId) as string[]) ?? [];
@@ -134,6 +134,7 @@ export function maskToRtStructRois(segId: string): { rois: Omit<RtStructRoi, "nu
     refImageId ??= srcId;
     const toWorld = (p: Pt) => imageToWorldOnPlane(plane as PlaneGeometry, p);
     for (const seg of [...present].sort((a, b) => a - b)) {
+      if (segIndex != null && seg !== segIndex) continue;
       const list = bySeg.get(seg) ?? [];
       for (const c of traceMaskContours(labels, w, h, seg)) {
         for (const ring of [c.outer, ...c.holes]) {
@@ -156,7 +157,7 @@ export function maskToRtStructRois(segId: string): { rois: Omit<RtStructRoi, "nu
     return null;
   };
   const rois = [...bySeg.entries()].map(([seg, contours]) => ({
-    name: names[seg] || (bySeg.size > 1 ? `${base} #${seg}` : base),
+    name: names[seg] || (bySeg.size > 1 || (meta?.segments?.length ?? 1) > 1 ? `${base} #${seg}` : base),
     color: segColor(seg),
     type: "ORGAN",
     contours,
@@ -164,7 +165,13 @@ export function maskToRtStructRois(segId: string): { rois: Omit<RtStructRoi, "nu
   return { rois, refImageId };
 }
 
-export async function exportRoisAsRtStruct(uids: string[], maskIds: string[] = []): Promise<SegExportResult | null> {
+/** 書き出すマスク。`segIndex` を指定するとその segment だけ（塗りの ROI 1 件）、無ければ全 segment。 */
+export interface RtStructMaskRef {
+  maskId: string;
+  segIndex?: number;
+}
+
+export async function exportRoisAsRtStruct(uids: string[], masks: RtStructMaskRef[] = []): Promise<SegExportResult | null> {
   let studyUid: string | undefined;
   let seriesUid: string | undefined;
   let forUid: string | undefined;
@@ -230,8 +237,8 @@ export async function exportRoisAsRtStruct(uids: string[], maskIds: string[] = [
     });
   }
 
-  for (const id of maskIds) {
-    const m = maskToRtStructRois(id);
+  for (const { maskId: id, segIndex } of masks) {
+    const m = maskToRtStructRois(id, segIndex);
     if (!m.rois.length || !m.refImageId) continue;
     if (!studyUid || !seriesUid) {
       const meta = getRoiMaskMeta(id);

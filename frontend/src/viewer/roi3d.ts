@@ -19,7 +19,7 @@ import { createResultSeg, resolveRoiStack, setScopeZFromForeground } from "./roi
 import { getRoiMaskMeta, setRoiMaskMeta } from "./roiMaskStore";
 import { addSphere3D, getSphere3D } from "./sphere3dStore";
 import { getModalityCalibration, readModalitySlice, resolveValueUnit } from "./pixelCalibration";
-import { accumulateMaskStats, collectMaskValues, type MaskSliceInput } from "./maskStatsCore";
+import { accumulateMaskStats, collectMaskValues, isSegmentForeground, type MaskSliceInput } from "./maskStatsCore";
 import { maskVoxelDumpCsvChunks, type MaskDumpSlice } from "./maskVoxelDump";
 import { roiHistogram, summarizeValues, type RoiValueStats } from "./roiStats";
 import type { HistogramData } from "./histogram";
@@ -211,7 +211,7 @@ export async function bakeSphere3D(sphereId: string): Promise<string | null> {
  * 各出力は当該 source 1 枚から派生する軽量な単一スライス labelmap（scope.z=その index）。
  * 生成した segmentationId 配列を返す（非空スライスが {@link MAX_SLICE_MASKS} を超える分は無視）。
  */
-export async function splitMaskToSlices(segmentationId: string): Promise<string[]> {
+export async function splitMaskToSlices(segmentationId: string, segmentIndex?: number): Promise<string[]> {
   let labelmapIds: string[];
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -239,7 +239,7 @@ export async function splitMaskToSlices(segmentationId: string): Promise<string[
     const len = srcVm.getScalarDataLength();
     // 非空判定。
     let any = false;
-    for (let i = 0; i < len; i++) if (srcVm.getAtIndex(i) > 0) { any = true; break; }
+    for (let i = 0; i < len; i++) if (isSegmentForeground(srcVm.getAtIndex(i), segmentIndex)) { any = true; break; }
     if (!any) continue;
 
     await imageLoader.loadAndCacheImage(sourceId).catch(() => null);
@@ -256,16 +256,22 @@ export async function splitMaskToSlices(segmentationId: string): Promise<string[
         /* ignore */
       }
     }
-    // ボクセルを当該スライスへコピー（segment index を保持）。
+    // ボクセルを当該スライスへコピー。マスク全体なら segment index を保持し、
+    // segment 指定なら単一 ROI の塗りとして 1 に振り直す（新マスクの segments は既定の [1]）。
     const outVm = img(labelmapId)?.voxelManager;
-    if (outVm) for (let i = 0; i < len; i++) { const v = srcVm.getAtIndex(i); if (v > 0) outVm.setAtIndex(i, v); }
+    if (outVm) {
+      for (let i = 0; i < len; i++) {
+        const v = srcVm.getAtIndex(i);
+        if (isSegmentForeground(v, segmentIndex)) outVm.setAtIndex(i, segmentIndex != null ? 1 : v);
+      }
+    }
     const scope = base?.scope ? { ...base.scope, z } : { z };
     setRoiMaskMeta(segId, {
       patientKey: base?.patientKey,
       seriesLabel: base?.seriesLabel,
       scope,
       origin: scope,
-      label: `${base?.label ?? "Mask"} z${z + 1}`,
+      label: `${segmentIndex != null ? (base?.segmentLabels?.[String(segmentIndex)] ?? `${base?.label ?? "ROI"} #${segmentIndex}`) : (base?.label ?? "ROI")} z${z + 1}`,
     });
     csSeg.triggerSegmentationEvents.triggerSegmentationDataModified(segId, [0], undefined);
     created.push(segId);
@@ -391,6 +397,8 @@ export function maskVolumeStats(segmentationId: string, segmentIndex?: number): 
 /** ROI 計測結果ダイアログに出すマスクの統計（`fw/roi-stats-design.md` §6.3）。 */
 export interface MaskStatsResult {
   maskId: string;
+  /** 指定した segment の統計のとき、その番号。未指定はマスク全体。 */
+  segmentIndex?: number;
   voxels: number;
   slices: number;
   volumeMm3: number;
@@ -418,7 +426,7 @@ interface LoadedMaskSlice {
 }
 
 /** 前景のあるスライスだけ、labels と校正済み値（未ロードなら読み込む）を集める。 */
-async function loadMaskSlices(grid: MaskGrid): Promise<LoadedMaskSlice[]> {
+async function loadMaskSlices(grid: MaskGrid, segmentIndex?: number): Promise<LoadedMaskSlice[]> {
   const out: LoadedMaskSlice[] = [];
   for (let z = 0; z < grid.labelmapIds.length; z++) {
     const lm = img(grid.labelmapIds[z]);
@@ -430,7 +438,7 @@ async function loadMaskSlices(grid: MaskGrid): Promise<LoadedMaskSlice[]> {
     for (let i = 0; i < len; i++) {
       const v = vm.getAtIndex(i);
       labels[i] = v;
-      if (v > 0) any = true;
+      if (isSegmentForeground(v, segmentIndex)) any = true;
     }
     if (!any) continue;
     const sourceId = grid.sourceIds[z] ?? "";
@@ -444,17 +452,18 @@ async function loadMaskSlices(grid: MaskGrid): Promise<LoadedMaskSlice[]> {
 /** マスクの統計（**非同期**・元画像が未ロードなら読み込む）。取得不能なら null。 */
 export async function computeMaskStatsAsync(
   segmentationId: string,
-  opts?: { withHistogram?: boolean },
+  opts?: { withHistogram?: boolean; segmentIndex?: number },
 ): Promise<MaskStatsResult | null> {
   const grid = maskGrid(segmentationId);
   if (!grid) return null;
-  const loaded = await loadMaskSlices(grid);
-  const sample = collectMaskValues(loaded.map((s) => ({ labels: s.labels, values: s.values })));
+  const loaded = await loadMaskSlices(grid, opts?.segmentIndex);
+  const sample = collectMaskValues(loaded.map((s) => ({ labels: s.labels, values: s.values })), opts?.segmentIndex);
   const imageId = loaded[0]?.sourceId ?? grid.sourceIds.find(Boolean) ?? "";
   const unit = imageId ? resolveValueUnit(imageId) : "";
   const volumeMm3 = sample.voxels * grid.voxelMm3;
   const out: MaskStatsResult = {
     maskId: segmentationId,
+    segmentIndex: opts?.segmentIndex,
     voxels: sample.voxels,
     slices: sample.slices,
     volumeMm3,
@@ -478,10 +487,14 @@ export async function computeMaskStatsAsync(
 }
 
 /** マスクの統計に使ったボクセルの CSV（BOM 付き）を塊で返す。取得不能・空なら null。 */
-export async function buildMaskVoxelDumpAsync(segmentationId: string, label: string): Promise<string[] | null> {
+export async function buildMaskVoxelDumpAsync(
+  segmentationId: string,
+  label: string,
+  segmentIndex?: number,
+): Promise<string[] | null> {
   const grid = maskGrid(segmentationId);
   if (!grid) return null;
-  const loaded = await loadMaskSlices(grid);
+  const loaded = await loadMaskSlices(grid, segmentIndex);
   if (!loaded.length) return null;
   const slices: MaskDumpSlice[] = loaded.map((s) => ({
     sliceIndex: s.sliceIndex,
@@ -492,7 +505,7 @@ export async function buildMaskVoxelDumpAsync(segmentationId: string, label: str
     plane: dumpPlaneOf(s.sourceId),
   }));
   const unit = resolveValueUnit(loaded[0].sourceId);
-  return maskVoxelDumpCsvChunks(slices, { label, maskId: segmentationId, unit });
+  return maskVoxelDumpCsvChunks(slices, { label, maskId: segmentationId, unit, segmentIndex });
 }
 
 /** 画素 CSV 用の幾何。IPP/IOP/画素間隔が揃わなければ null（座標セルを空にする。既定値で埋めない）。 */

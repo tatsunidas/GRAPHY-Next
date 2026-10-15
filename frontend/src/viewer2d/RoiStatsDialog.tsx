@@ -43,6 +43,10 @@ export interface RoiStatsTarget {
   kind?: "roi" | "mask";
   /** マスクの表示名（注釈 ROI は roiMaskStore のラベルを使う）。 */
   label?: string;
+  /** マスクの segmentationId。未指定は `uid` を使う（segment ごとに uid を分けるときに指定する）。 */
+  maskId?: string;
+  /** 指定するとマスクのうちその segment だけを対象にする（塗りの ROI 1 件）。 */
+  segmentIndex?: number;
 }
 
 export function RoiStatsDialog({
@@ -74,7 +78,10 @@ export function RoiStatsDialog({
         // 詳細（ヒストグラム/プロファイル）は選択中の 1 件だけ作る。全件ぶん作ると重い。
         const detail = target.uid === focus;
         if (target.kind === "mask") {
-          const m = await computeMaskStatsAsync(target.uid, { withHistogram: detail });
+          const m = await computeMaskStatsAsync(target.maskId ?? target.uid, {
+            withHistogram: detail,
+            segmentIndex: target.segmentIndex,
+          });
           if (cancelled) return;
           if (m) outMask[target.uid] = m;
           continue;
@@ -131,7 +138,8 @@ export function RoiStatsDialog({
 
   const focused = focus ? stats[focus] : undefined;
   const focusedMask = focus ? maskStats[focus] : undefined;
-  const focusIsMask = targets.find((x) => x.uid === focus)?.kind === "mask";
+  const focusTarget = targets.find((x) => x.uid === focus);
+  const focusIsMask = focusTarget?.kind === "mask";
   // 画素ダンプは面型・点型・マスクだけ（線は双一次補間で画素ではない）。
   const dumpKind = focused?.geometry.kind;
   const dumpable = focusIsMask ? !!focusedMask && focusedMask.voxels > 0 : dumpKind === "area" || dumpKind === "point";
@@ -141,7 +149,11 @@ export function RoiStatsDialog({
     try {
       const idx = targets.findIndex((x) => x.uid === focus);
       if (focusIsMask) {
-        const chunks = await buildMaskVoxelDumpAsync(focus, targetLabel(targets[idx]));
+        const chunks = await buildMaskVoxelDumpAsync(
+          focusTarget?.maskId ?? focus,
+          targetLabel(targets[idx]),
+          focusTarget?.segmentIndex,
+        );
         if (!chunks) {
           emitToast(t("roiStats.dumpPixelsFailed"));
           return;

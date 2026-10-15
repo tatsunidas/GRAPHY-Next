@@ -14,6 +14,7 @@
  */
 import { imageToWorldOnPlane, type PlaneGeometry } from "./imageCoords";
 import { cell } from "./roiStatsCsv";
+import { isSegmentForeground } from "./maskStatsCore";
 
 export interface MaskDumpSlice {
   /** スタック内の位置（0 始まり）。CSV には +1 して出す。 */
@@ -44,16 +45,21 @@ export interface MaskVoxelDumpMeta {
   label: string;
   maskId: string;
   unit: string;
+  /** 指定すると、その segment のボクセルだけを出す（ROI 1 件ぶん）。 */
+  segmentIndex?: number;
 }
 
 /** 前景ボクセルをスライス順・画素順に 1 行ずつ返す。 */
-export function* iterateMaskVoxels(slices: ReadonlyArray<MaskDumpSlice>): Generator<MaskVoxelRow> {
+export function* iterateMaskVoxels(
+  slices: ReadonlyArray<MaskDumpSlice>,
+  segmentIndex?: number,
+): Generator<MaskVoxelRow> {
   const ordered = [...slices].sort((a, b) => a.sliceIndex - b.sliceIndex);
   for (const s of ordered) {
     const { labels, values, plane, width } = s;
     for (let i = 0; i < labels.length; i++) {
       const seg = labels[i];
-      if (!(seg > 0)) continue;
+      if (!isSegmentForeground(seg, segmentIndex)) continue;
       const row = Math.floor(i / width);
       const col = i - row * width;
       const out: MaskVoxelRow = { slice: s.sliceIndex + 1, segment: seg, col, row, imageId: s.imageId };
@@ -99,7 +105,7 @@ export function maskVoxelDumpCsvChunks(
   const label = cell(meta.label);
   const maskId = cell(meta.maskId);
   let buf: string[] = [maskVoxelDumpHeader(meta.unit).map(cell).join(",")];
-  for (const r of iterateMaskVoxels(slices)) {
+  for (const r of iterateMaskVoxels(slices, meta.segmentIndex)) {
     buf.push(
       [label, maskId, r.slice, r.segment, r.col, r.row, n(r.x), n(r.y), n(r.z), n(r.value), cell(r.imageId)].join(","),
     );
