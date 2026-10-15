@@ -56,6 +56,8 @@ export interface SceneObject {
   source?: SceneObjectSource;
   // ── 計測サマリ（患者 LPS mm）──
   volumeMm3?: number;
+  /** 表示をなめらかにするか（ROI のみ。体積は平滑化前の形で求める）。既定 false（階段状）。 */
+  smooth?: boolean;
   volumeMl?: number;
   surfaceAreaMm2?: number;
   /** 主径 [long, mid, short] mm。 */

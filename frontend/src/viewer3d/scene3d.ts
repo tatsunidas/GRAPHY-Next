@@ -25,7 +25,8 @@ import {
   withNormals,
   type MeshActor,
 } from "../viewer/mesh3d";
-import { labelVolumeToMesh, meshToLabelVolume } from "../viewer/roiMesh";
+import { labelVolumeToSlabSurface, meshToLabelVolume } from "../viewer/roiMesh";
+import { slabRanges } from "../viewer/slabMesh";
 import { labelVolumeMeshVolume } from "../viewer/depthVolume";
 import type { DepthSource, SliceLayoutKind } from "../viewer/sliceGeometry";
 import { Centerline3D } from "../viewer/centerline";
@@ -463,12 +464,49 @@ export interface VolumeDepthContext {
   /** 奥行きの順の元スライスが当たる格子の面。無ければ全面を等幅で扱う。 */
   gridIndexOf?: number[];
   widths: number[];
+  /** 元スライスの奥行きの位置（mm、先頭を 0）。表示メッシュの層の範囲に使う。 */
+  positions?: number[];
+  /** 体積の格子の層の数。ROI の格子がこれと同じときだけ、元スライスの範囲で描く。 */
+  gridCount?: number;
   source: DepthSource;
   kind: SliceLayoutKind;
 }
 let volumeDepth: VolumeDepthContext | null = null;
 export function setVolumeDepth(c: VolumeDepthContext | null): void {
   volumeDepth = c;
+}
+
+/** ROI の表示用メッシュ。体積と同じく、元スライスの位置と幅で立ち上げた形にする。 */
+function roiSurface(lv: LabelVolume, smooth = false): Any | null {
+  const c = volumeDepth;
+  const nz = lv.geom.dims[2];
+  const ranges =
+    c?.gridIndexOf && c.positions && c.gridCount === nz
+      ? slabRanges(nz, lv.geom.spacing[2], { gridIndexOf: c.gridIndexOf, positions: c.positions })
+      : undefined;
+  return labelVolumeToSlabSurface(lv, { ranges, smooth });
+}
+
+/** ROI の表示をなめらかにする／階段状に戻す。体積は変えない。 */
+export function setRoiSmooth(id: string, smooth: boolean): void {
+  const d = dataById.get(id);
+  if (!d?.labelVolume || !d.ma) return;
+  const surf = roiSurface(d.labelVolume, smooth);
+  d.polydata = surf ?? undefined;
+  try {
+    d.ma.mapper.setInputData(surf ?? vtkPolyData.newInstance());
+  } catch {
+    /* ignore */
+  }
+  const m = surf ? measureMesh(surf) : null;
+  updateSceneObject(id, {
+    smooth,
+    surfaceAreaMm2: m?.surfaceAreaMm2 ?? 0,
+    diameters: m?.diameters ?? [0, 0, 0],
+    numTriangles: m?.numTriangles ?? 0,
+  });
+  applyObjectClip(id);
+  render();
 }
 
 /** ROI の体積。メッシュ（元スライスの角柱）で求める。表示用の滑らかなメッシュの体積は使わない。奥行きが不明なら undefined。 */
@@ -513,10 +551,10 @@ export function addMeshObject(polydata: Any, opts: AddOptions = {}): string | nu
 
 /**
  * 3D ROI（LabelVolume, 実空間 labelmap）をシーンに追加。
- * 表面メッシュ（marching cubes）を生成して描画し、体積は元のスライスの角柱（メッシュ）から求める。
+ * 表示メッシュも体積も、元のスライスの位置と幅で立ち上げた同じ形（slabMesh）から作る。
  */
 export function addRoiObject(lv: LabelVolume, opts: AddOptions = {}): string | null {
-  const surf = labelVolumeToMesh(lv);
+  const surf = roiSurface(lv);
   if (!surf) return null;
   const id = nextSceneId("roi");
   const color = nextColor(opts.color);
@@ -633,7 +671,7 @@ export function convertRoiToMesh(id: string): string | null {
   const d = dataById.get(id);
   const obj = getSceneObject(id);
   if (!d?.labelVolume) return null;
-  const mesh = labelVolumeToMesh(d.labelVolume);
+  const mesh = roiSurface(d.labelVolume, !!obj?.smooth);
   if (!mesh) return null;
   return addMeshObject(mesh, { name: `${obj?.name ?? "ROI"} → mesh` });
 }
@@ -667,7 +705,7 @@ function applyRoiVolumeInternal(id: string, data: Uint8Array): void {
   if (!d?.labelVolume || !d.ma) return;
   const lv: LabelVolume = { geom: d.labelVolume.geom, data, voxelMm3: d.labelVolume.voxelMm3 };
   d.labelVolume = lv;
-  const surf = labelVolumeToMesh(lv);
+  const surf = roiSurface(lv, !!getSceneObject(id)?.smooth);
   d.polydata = surf ?? undefined;
   try {
     d.ma.mapper.setInputData(surf ?? vtkPolyData.newInstance());
