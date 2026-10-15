@@ -100,6 +100,8 @@ export type {
 import type { AiGenerationOptions, AiGenerationOutcome } from "./pluginAiApi";
 import type { ComputeRunJobOptions, ComputeRunOutcome, ComputeEndpointStatus, ComputeReleaseOutcome } from "./pluginComputeApi";
 export type { ComputeEndpointStatus, ComputeJobInput, ComputeOutputFile, ComputeReleaseOutcome, ComputeRunJobOptions, ComputeRunOutcome } from "./pluginComputeApi";
+import type { StorageEnsureOutcome, StorageEnsureRequest, StorageStatus } from "./pluginStorageApi";
+export type { StorageEnsureOutcome, StorageEnsureRequest, StorageStatus };
 import type { PickDirectoryResult, PluginSaveArtifactOptions, PluginSaveFileOptions } from "./pluginFileApi";
 export type { PickDirectoryResult, PluginSaveArtifactOptions };
 import type { SaveFileResult } from "../desktopBridge";
@@ -302,6 +304,21 @@ interface PluginHostBase {
      * 確保していなければ `{ok:true, released:false}`。次の `runJob` が自動で確保し直す。
      */
     releaseRuntime: (endpointId: string, opts?: { ask?: boolean }) => Promise<ComputeReleaseOutcome>;
+  };
+  /**
+   * **保管庫の画像を手元に確保する**（H67）。Drive が正本のモード（手元は上限つきのキャッシュ）で、手元に無い画像を
+   * Drive から取り寄せる。**パスは返さない**（検査・シリーズの UID を渡すだけ）。新しい権限・同意は要らない
+   * （利用者自身の Drive のデータを手元へ戻すだけで、外へは出ない）。モード A でなければ何もしない（`cacheMode: false`）。
+   */
+  storage: {
+    /**
+     * 検査（`seriesUids` を渡せばそのシリーズだけ）の画像のうち、手元に無いものを取り寄せる。進み具合・取り消しは
+     * `runBackendJob` と同じ（`onProgress`・`signal`）。結果は例外でなく値で返る（`error` は理由コード）。
+     * 取り寄せた直後の画像は、しばらく手元から消されない。
+     */
+    ensureLocal: (req: StorageEnsureRequest, opts?: PluginJobOptions) => Promise<StorageEnsureOutcome>;
+    /** モード・手元の使用量と上限・Drive にだけある画像の数（読み取りのみ）。 */
+    status: () => Promise<StorageStatus>;
   };
   /** 本体の DB（H44・H46・H51）。 */
   db: {
@@ -1081,7 +1098,7 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
  */
 export type PluginHostSeed = DistributiveOmit<
   PluginHost,
-  "ai" | "file" | "runBackendJob" | "db" | "video" | "apiBase" | "compute"
+  "ai" | "file" | "runBackendJob" | "db" | "video" | "apiBase" | "compute" | "storage"
 >;
 
 /**

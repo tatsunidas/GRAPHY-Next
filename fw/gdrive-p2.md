@@ -63,6 +63,14 @@
 - テスト: vitest +36（`gdriveView.test.ts`・`dbAdminErrors.test.ts`・`dbTransferView.test.ts`）。変異確認 5 種。**実際の画面を開発サーバー＋スタブで 11 状態スクリーンショットで確認**し、そこで見つかった 2 点（Drive 正本のオフライン表示が「未送信 0 件」と不自然・解除ボタンの文言）を直した。操作（有効化・上限・切替・全件保存・復元・解除）がメインプロセスへ正しく渡ることを、実際にクリックして 17 項目すべて確認（上限の負例 4 種を含む）。
 - **未対応**: ビューアで手元に無い画像を開けなかったとき（503）の理由の表示。ビューアの読み込み失敗は従来の汎用表示で、理由コードはネットワークログにだけ残る。
 
+## プラグインへの公開 (a)（P2-5b・H67）
+`host.storage.ensureLocal({studyUid, seriesUids?})`・`host.storage.status()`（フロント）と、JAR の args の `__ensureLocal`（SOP UID → 手元のパス）。契約は `fw/plugin-architecture.md` の H67、使い方は `fw/plugin-authoring-guide.md` §2-3b・§3。
+- backend: `PluginStorageController`（`POST /api/plugins/{id}/storage/ensure`・`GET .../status`。プラグインの存在と standalone を確かめる。UID の形と数を検査）、`PluginStorageService`（手元に無いものだけを 16 件ずつ `StorageLayout.prefetch` し、進み具合を通知。失敗は理由コードで返す）、`PluginJobService.submitStorageTask`（**専用の列 1 本**。取り込み・派生シリーズの列を塞がない）。
+- **パスは host API では返さない。新しい権限・同意は作らない**（利用者自身の Drive のデータを手元へ戻すだけ。`/api/instances/...` を直接叩いても同じ取得が走る）。JAR には JDK の型（`Function<String,String>`）で渡し、画面から同名のキーが来ても本体が上書き（構成に口が無いときは消す）。
+- 配線の不具合を統合テストが見つけた: `PluginStorageService` のコンストラクタが 2 つで Spring が選べなかった（`@Autowired` で解決）。単体テストだけでは通っていた。
+- **実アプリ・実 Drive での確認**（2026-10-15、パッケージ版・マイドライブ・手元の上限 20 MB）: テンプレート相当の小さなプラグイン（`ui.js`）を実際の「Plug-ins」メニューから起動し、`host.storage` を呼んだ。手元 19 件・Drive にだけ 95 件の状態から、`status()` は `{cacheMode:true, usedBytes≈20 MB, limitBytes=20 MB, remoteOnlyCount:95}`、`ensureLocal` は 2 検査（4 件・110 件）で成功して **95 件を取り寄せ**（手元に増えた 95 件はすべて Drive と md5 一致・不一致 0）、進み具合は最後に 100、不正な要求は `invalid-study-uid`・存在しない検査は `not-found`（どちらも値）、結果にパス・ファイル名なし、Drive の件数は 114 のまま。合格 10 / 失敗 0。
+- テスト: backend 23（`PluginStorageServiceTest` 12・`PluginStorageHttpTest` 4＝実際の HTTP・ジョブ・プラグイン登録・`PluginJobServiceTest` +2、変異確認 6 種）、frontend 9（変異確認 4 種）。
+
 ## 既知の制約・仮の値
 - 直近 10 分の読み出し保護（`GdriveSyncService.RECENT_ACCESS_MS`）は仮。返した `Path` を後で開く経路（`FileSystemResource` の Range 配信、エクスポートのコピーループ）があるため、参照カウントの代わりに時間で守っている。実測で見直す。
 - 追い出しでは空になった親フォルダを消さない（取り込みとの競合を避けるため）。空のフォルダが残る。
@@ -77,3 +85,4 @@
 | P2-3 | モード A の復元（索引のみ）・解除条件・「すべてローカルに保存」・B→A 切替・Drive にだけあるファイルの取り込み | backend・desktop 実装・テスト済み（画面は P2-4、実 Drive は P2-5） |
 | P2-4 | GdrivePanel（モード・上限・使用量・全件保存・復元のモード選択）・i18n・vitest・スクリーンショット | 実装・テスト済み（ビューアの 503 表示は未対応） |
 | P2-5 | 実 Drive 検証（小さな上限で追い出し→取得）・文書 | 実機で通し 28/1/0・復元 9/0/0。見つかった終了処理の不具合（ロック残り・スナップショット欠落）を修正し、実アプリで修正前後を確認（`fw/verify-db-gdrive.md` §5） |
+| P2-5b | プラグインへの公開 (a): `host.storage.ensureLocal/status`・JAR の `__ensureLocal`（H67） | 実装・テスト済み（実アプリでの確認は下記の記録） |

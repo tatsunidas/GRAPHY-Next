@@ -86,6 +86,8 @@ export function activate(host) {
 
 ### 2-3. host（`activate` に渡るコンテキスト）
 
+> 手元に無い画像（Drive が正本のモード）を読む前に確保したいときは、下の「2-3b」を見てください。
+
 共通:
 
 | プロパティ | 説明 |
@@ -309,6 +311,29 @@ if (graph) {
 
 ---
 
+### 2-3b. 手元に無い画像を確保する（`host.storage`・H67）
+
+利用者が「Drive を正本、手元は上限つきのキャッシュ」で使っているとき、古い画像は手元から消えて Drive にだけあります。
+プラグインが画素を読む前に、検査（またはシリーズ）を手元へ取り寄せておくと安全です。**新しい権限は要りません**。パスは返りません（UID を渡すだけ）。
+
+```js
+const st = await host.storage.status();            // {cacheMode, usedBytes, limitBytes, remoteOnlyCount}
+if (st.cacheMode) {
+  const r = await host.storage.ensureLocal(
+    { studyUid, seriesUids },                       // seriesUids は省略可（検査全体）
+    { onProgress: (p) => host.notify(`${Math.round(p * 100)}%`), signal },
+  );
+  if (!r.ok && r.cancelled) return;                 // 利用者の取り消し
+  if (!r.ok) { host.notify(`取り寄せ失敗: ${r.error}`); return; }   // offline / needs-login / md5-mismatch ...
+}
+// ここから通常どおり読む（/api/instances/{sop}/file など）
+```
+
+- 結果は例外でなく値で返ります。`error` は理由コード（`offline`・`needs-login`・`drive-disabled`・`md5-mismatch`・`no-checksum`・`not-on-drive`・`drive-error`、検査が無ければ `not-found`）。
+- 取り寄せた画像は、しばらく（既定 10 分）手元から消されません。長い解析では、区切りごとに呼び直してください。
+- Drive が正本でないとき（バックアップのみ・Drive なし）は何もせず `cacheMode: false` で返ります。呼んで構いません。
+- 画像を `/api/instances/{sop}/file` などで直接取得するだけなら、本体が自動で取り寄せます（手元に無ければ Drive から取得。取れなければ `503`）。確保が要るのは、**先にまとめて取り寄せたい**とき・進み具合を出したいときです。
+
 ## 3. サンプル B：バックエンド面つき（JAR）— 現状 standalone のみ
 
 重い計算を Java 側で行う例。`GraphyPlugin` を実装した JAR を同梱し、UI から `runBackend()` で呼ぶ。
@@ -340,6 +365,22 @@ public class HelloPlugin implements GraphyPlugin {
     }
 }
 ```
+
+`args` には、要求本文のほかに本体が次の値を入れます（要求本文に同名のキーがあっても本体が上書きします）。ジョブ（`runBackendJob`）として呼ばれたときだけ入るので、**無ければ何もしない**書き方にしてください。
+
+| キー | 型 | 内容 |
+|---|---|---|
+| `__progress` | `BiConsumer<Double,String>` | 進み具合（0〜1）と短い説明 |
+| `__cancelled` | `BooleanSupplier` | 取り消されたら true |
+| `__ensureLocal` | `Function<String,String>` | **SOP UID → 手元のパス**。無い SOP は `null`。Drive が正本で手元に無ければ取り寄せてから返す。取れなければ `IllegalStateException("storage-unavailable: <理由>")`（H67） |
+
+```java
+@SuppressWarnings("unchecked")
+Function<String,String> ensure = (Function<String,String>) args.get("__ensureLocal");
+String path = ensure == null ? null : ensure.apply(sopUid);   // 読む前にこれを通す
+```
+
+⚠ 保管庫のフォルダ構成（`<study>/<series>/<sop>.dcm`）を自分で組み立てて読むと、追い出し済みの画像は読めません。`__ensureLocal` を使ってください。
 
 ### 3-3. コンパイルと JAR 化
 
