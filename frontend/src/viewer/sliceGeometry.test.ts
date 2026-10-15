@@ -57,12 +57,12 @@ describe("sliceGeometry: 並びの分類", () => {
     expect(g.missingCount).toBe(1);
     expect(g.minSpacing).toBe(3);
   });
-  it("実例 31.4 / 55.4 / 61.4 は欠け（6 mm の整数倍）として扱い、幅は [24, 15, 6]", () => {
+  it("実例 31.4 / 55.4 / 61.4 は欠け（6 mm の整数倍）として扱い、幅は [15, 15, 6]（端の外側は最小の間隔の半分）", () => {
     const g = sliceGeometry(ax([31.4243, 55.4243, 61.4243]));
     expect(g.kind).toBe("missing");
     expect(g.missingCount).toBe(3);
     expect(g.minSpacing).toBeCloseTo(6, 9);
-    expect(g.widths.map((w) => Math.round(w * 1000) / 1000)).toEqual([24, 15, 6]);
+    expect(g.widths.map((w) => Math.round(w * 1000) / 1000)).toEqual([15, 15, 6]);
   });
   it("整数倍でなければ不規則", () => {
     expect(sliceGeometry(ax([0, 5, 12, 20])).kind).toBe("irregular");

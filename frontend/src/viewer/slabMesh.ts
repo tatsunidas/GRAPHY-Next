@@ -21,7 +21,7 @@ export interface SlabRange {
 /**
  * 層ごとの奥行きの範囲。
  * - `orig` が無い（均一な体積）: 層 k は k·s ± s/2。
- * - `orig` がある（補間した格子）: 元のスライス i の範囲は、前後のスライスとの中点まで（端は隣への距離の半分を外にも）。
+ * - `orig` がある（補間した格子）: 元のスライス i の範囲は、前後のスライスとの中点まで（端の外側は s/2）。
  *   元のスライスでない層は、元のスライスの範囲に含まれるので null（ただし `fallbackFor` に入れた層は k·s ± s/2）。
  */
 export function slabRanges(
@@ -42,8 +42,9 @@ export function slabRanges(
       out[k] = uniform(k);
       continue;
     }
-    const lo = i === 0 ? p[0] - (p[1] - p[0]) / 2 : (p[i - 1] + p[i]) / 2;
-    const hi = i === m - 1 ? p[m - 1] + (p[m - 1] - p[m - 2]) / 2 : (p[i] + p[i + 1]) / 2;
+    // 端の外側は格子の間隔（＝最小の間隔）の半分まで。画像の体積の端と同じ（`sliceGeometry.widths` と同じ規則）。
+    const lo = i === 0 ? p[0] - s / 2 : (p[i - 1] + p[i]) / 2;
+    const hi = i === m - 1 ? p[m - 1] + s / 2 : (p[i] + p[i + 1]) / 2;
     out[k] = { z0: lo, z1: hi };
   }
   if (fallbackFor) for (const k of fallbackFor) if (k >= 0 && k < nz && !out[k]) out[k] = uniform(k);

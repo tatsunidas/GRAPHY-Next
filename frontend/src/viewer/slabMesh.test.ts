@@ -65,9 +65,21 @@ describe("slabRanges（補間した格子）", () => {
   const rel = g.positions.map((p) => p - g.positions[0]);
   const ranges = slabRanges(grid.count, grid.spacing, { gridIndexOf: grid.gridIndexOf, positions: rel });
 
-  it("元のスライスの範囲は前後との中点まで。幅は [24, 15, 6]", () => {
+  it("元のスライスの範囲は前後との中点まで。端の外側は最小の間隔の半分。幅は [15, 15, 6]", () => {
     const w = [0, 4, 5].map((k) => ranges[k]!.z1 - ranges[k]!.z0);
-    expect(w.map((x) => Math.round(x * 1000) / 1000)).toEqual([24, 15, 6]);
+    expect(w.map((x) => Math.round(x * 1000) / 1000)).toEqual([15, 15, 6]);
+  });
+  it("同じ体積から作った ROI は、画像の範囲（先頭の中心 − 3 mm 〜 末尾の中心 + 3 mm）からはみ出さない", () => {
+    const labels = new Uint8Array(6);
+    for (const k of [0, 4, 5]) labels[k] = 1;
+    const m = slabMesh(labels, [1, 1, 6], 1, 1, ranges);
+    const zs = Array.from(m.points).filter((_, i) => i % 3 === 2);
+    expect(Math.min(...zs)).toBeGreaterThanOrEqual(0 - 3 - 1e-9);
+    expect(Math.max(...zs)).toBeLessThanOrEqual(30 + 3 + 1e-9);
+  });
+  it("幅は sliceGeometry.widths と一致する（見た目と体積が同じ形）", () => {
+    const w = [0, 4, 5].map((k) => ranges[k]!.z1 - ranges[k]!.z0);
+    w.forEach((x, i) => expect(x).toBeCloseTo(g.widths[i], 9));
   });
   it("元のスライスでない層は範囲を持たず、面を出さない", () => {
     expect([1, 2, 3].map((k) => ranges[k])).toEqual([null, null, null]);

@@ -98,20 +98,20 @@ describe("maskVolumeFromGeometry", () => {
     expect(r.volumeMm3).toBeCloseTo(12 * 0.5 * 0.25 * 3, 9);
   });
   it("不均一な間隔: 面積 × スライスの幅の和", () => {
-    const g = sliceGeometry(infos([0, 1, 4])); // 幅 1, 2, 3
-    expect(g.widths).toEqual([1, 2, 3]);
+    const g = sliceGeometry(infos([0, 1, 4])); // 幅 1, 2, 2（端の外側は最小の間隔 1 の半分）
+    expect(g.widths).toEqual([1, 2, 2]);
     const r = maskVolumeFromGeometry([slice(0), slice(1), slice(2)], g, 1, 1);
-    expect(r.volumeMm3).toBeCloseTo(4 * (1 + 2 + 3), 9);
+    expect(r.volumeMm3).toBeCloseTo(4 * (1 + 2 + 2), 9);
     // 公称の間隔（2 mm）を全部に当てると全体の合計は偶然一致するので、スライス単位でも確かめる
     expect(maskVolumeFromGeometry([slice(0)], g, 1, 1).volumeMm3).toBeCloseTo(4 * 1, 9);
-    expect(maskVolumeFromGeometry([slice(2)], g, 1, 1).volumeMm3).toBeCloseTo(4 * 3, 9);
+    expect(maskVolumeFromGeometry([slice(2)], g, 1, 1).volumeMm3).toBeCloseTo(4 * 2, 9);
     // 均一とみなした値ではない
     expect(r.volumeMm3).not.toBeCloseTo(4 * 1 * 3, 3);
   });
   it("入力の順が奥行きの順でなくても、位置の幅で引く", () => {
-    const g = sliceGeometry(infos([4, 0, 1])); // order = [1, 2, 0]、幅は 1, 2, 3
-    const r = maskVolumeFromGeometry([slice(0)], g, 1, 1); // 添字 0 は z=4 の端 → 幅 3
-    expect(r.volumeMm3).toBeCloseTo(12, 9);
+    const g = sliceGeometry(infos([4, 0, 1])); // order = [1, 2, 0]、幅は 1, 2, 2
+    const r = maskVolumeFromGeometry([slice(0)], g, 1, 1); // 添字 0 は z=4 の端 → 幅 2（内 1.5＋外 0.5）
+    expect(r.volumeMm3).toBeCloseTo(8, 9);
   });
 });
 
