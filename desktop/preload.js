@@ -94,7 +94,8 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   gdriveStatus: () => ipcRenderer.invoke("graphy:gdrive-status"),
   gdriveSignIn: () => ipcRenderer.invoke("graphy:gdrive-signin"),
   gdriveSignOut: () => ipcRenderer.invoke("graphy:gdrive-signout"),
-  gdriveEnable: () => ipcRenderer.invoke("graphy:gdrive-enable"),
+  gdriveEnable: (mode) => ipcRenderer.invoke("graphy:gdrive-enable", { mode }),
+  gdriveSetCacheLimit: (bytes) => ipcRenderer.invoke("graphy:gdrive-set-cache-limit", { bytes }),
   gdriveDisable: () => ipcRenderer.invoke("graphy:gdrive-disable"),
   gdriveRestore: (title) => ipcRenderer.invoke("graphy:gdrive-restore", { title }),
   // 既定の計算機（未登録で Google にログイン済みなら Colab の T4 を足す。足すのは main）

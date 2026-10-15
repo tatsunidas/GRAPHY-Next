@@ -122,6 +122,7 @@ public class DbAdminService {
                 try {
                     Files.deleteIfExists(file);
                     layout.pruneEmptyDirs(file);
+                    layout.notifyRemoved(file);
                 } catch (Exception e) {
                     log.warn("ファイル削除に失敗: {} ({})", r.getUri(), e.toString());
                 }
@@ -337,6 +338,7 @@ public class DbAdminService {
         if (!dest.equals(orig)) {
             Files.deleteIfExists(orig);
             layout.pruneEmptyDirs(orig);
+            layout.notifyRemoved(orig);
         }
         r.setSeriesInstanceUid(newSeriesUid);
         if (seriesNumber != null) {

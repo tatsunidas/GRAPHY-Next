@@ -56,13 +56,13 @@ class GdriveRealDriveTest {
         String parent = System.getenv("GDRIVE_REAL_PARENT");
 
         GdriveConfig boot = new GdriveConfig(client.path("client_id").asText(), client.path("client_secret").asText(),
-                refresh, parent, null, "real", "real-device-0001", "real-host");
+                refresh, parent, null, "real", "real-device-0001", "real-host", false, 0);
         java.net.http.HttpClient http = java.net.http.HttpClient.newBuilder()
                 .followRedirects(java.net.http.HttpClient.Redirect.NEVER).build();
         DriveClient admin = new DriveClient(http, "https://www.googleapis.com",
                 new GdriveTokenSource(http, "https://oauth2.googleapis.com/token", () -> boot, Clock.systemUTC()));
         String dbFolder = admin.ensureFolder(parent, "GRAPHY-DB-real-test-" + System.currentTimeMillis());
-        GdriveConfig cfg = new GdriveConfig(boot.clientId(), boot.clientSecret(), refresh, dbFolder, null, "real", "real-device-0001", "real-host");
+        GdriveConfig cfg = new GdriveConfig(boot.clientId(), boot.clientSecret(), refresh, dbFolder, null, "real", "real-device-0001", "real-host", false, 0);
         try {
             GdriveSyncService svc = new GdriveSyncService(repo, root, "https://www.googleapis.com",
                     "https://oauth2.googleapis.com/token", Clock.systemUTC(), Math::random, 30_000, 600_000, false,
@@ -114,7 +114,7 @@ class GdriveRealDriveTest {
                     "https://oauth2.googleapis.com/token", Clock.systemUTC(), Math::random, 30_000, 600_000, false,
                     GdriveSyncServiceTest::fakeBackup, 600_000, 3_600_000, 3);
             other.configure(new GdriveConfig(boot.clientId(), boot.clientSecret(), refresh, dbFolder, null, "real",
-                    "other-device-0002", "other-host"));
+                    "other-device-0002", "other-host", false, 0));
             other.cycle();
             assertEquals("locked-by-other", other.status().reason());
             assertEquals("real-host", other.status().lockedBy());
@@ -124,7 +124,7 @@ class GdriveRealDriveTest {
             Path restored = Files.createTempDirectory("restored");
             GdriveRestoreService rs = new GdriveRestoreService("https://www.googleapis.com", "https://oauth2.googleapis.com/token");
             rs.runSync(new GdriveConfig(boot.clientId(), boot.clientSecret(), refresh, dbFolder, null, "restore",
-                    "restore-device", ""), restored);
+                    "restore-device", "", false, 0), restored);
             assertEquals(GdriveRestoreService.Phase.DONE, rs.progress().phase(), String.valueOf(rs.progress()));
             assertEquals(1, rs.progress().done());
             assertTrue(rs.progress().snapshotRestored());

@@ -1319,6 +1319,8 @@ async function pushGdriveConfig() {
         name: cfg.name,
         deviceId: gdriveDeviceId(),
         host: os.hostname(),
+        cache: cfg.mode === "cache",
+        cacheLimitBytes: cfg.cacheLimitBytes || dbFolders.DEFAULT_CACHE_LIMIT_BYTES,
       }
     : { enabled: false };
   const r = await computeBridge.call("PUT", "/api/internal/gdrive/config", body);
@@ -1335,8 +1337,27 @@ ipcMain.handle("graphy:gdrive-status", async () => {
     pickerReady: !!(client && client.pickerApiKey),
     signedIn: !!gdriveAuth && gdriveAuth.signedIn(),
     email: gdriveAuth ? await gdriveAuth.ensureEmail() : null,
-    folder: cfg ? { name: cfg.name, shared: !!cfg.driveId, email: cfg.email } : null,
+    folder: cfg
+      ? {
+          name: cfg.name,
+          shared: !!cfg.driveId,
+          email: cfg.email,
+          mode: cfg.mode || "backup",
+          cacheLimitBytes: cfg.cacheLimitBytes || dbFolders.DEFAULT_CACHE_LIMIT_BYTES,
+        }
+      : null,
+    defaultCacheLimitBytes: dbFolders.DEFAULT_CACHE_LIMIT_BYTES,
+    minCacheLimitBytes: dbFolders.MIN_CACHE_LIMIT_BYTES,
   };
+});
+
+// モード A のキャッシュ上限（バイト）。下限未満・モード A でないときは受け付けない。
+ipcMain.handle("graphy:gdrive-set-cache-limit", async (e, payload) => {
+  if (!activeDbFolder) return { ok: false, error: "not-ready" };
+  const saved = dbFolders.setGdriveCacheLimit(activeDbFolder, payload && payload.bytes);
+  if (!saved.ok) return { ok: false, error: saved.reason };
+  await pushGdriveConfig();
+  return { ok: true };
 });
 
 ipcMain.handle("graphy:gdrive-signin", async () => {
@@ -1354,8 +1375,10 @@ ipcMain.handle("graphy:gdrive-signout", async () => {
 });
 
 // 有効にする: Picker で保存先の親を選ぶ → 直下にバックアップ用フォルダを作る → 記録して backend へ。
-ipcMain.handle("graphy:gdrive-enable", async () => {
+ipcMain.handle("graphy:gdrive-enable", async (e, payload) => {
   if (!gdriveAuth || !activeDbFolder) return { ok: false, error: "not-ready" };
+  const mode = payload && payload.mode ? payload.mode : "backup";
+  if (!dbFolders.GDRIVE_MODES.includes(mode)) return { ok: false, error: "invalid-mode" };
   const client = gdriveAuth.clientInfo();
   if (!client) return { ok: false, error: "no-oauth-client" };
   if (!client.pickerApiKey) return { ok: false, error: "no-picker-key" };
@@ -1380,6 +1403,8 @@ ipcMain.handle("graphy:gdrive-enable", async () => {
     driveId: made.driveId,
     name: made.name,
     email: gdriveAuth.email(),
+    mode,
+    cacheLimitBytes: mode === "cache" ? dbFolders.DEFAULT_CACHE_LIMIT_BYTES : null,
   });
   if (!saved.ok) return { ok: false, error: saved.reason };
   await pushGdriveConfig();

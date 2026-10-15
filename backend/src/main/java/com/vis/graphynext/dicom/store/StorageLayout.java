@@ -44,6 +44,28 @@ public class StorageLayout {
         return root;
     }
 
+    private org.springframework.context.ApplicationEventPublisher events;
+
+    @Autowired(required = false)
+    void setEvents(org.springframework.context.ApplicationEventPublisher events) {
+        this.events = events;
+    }
+
+    /**
+     * 保管庫のファイルを消した（消そうとした）あとに呼ぶ。Drive 同期（モード A）へ、削除が利用者の意思であることを伝える。
+     * モード A では手元に無いこと自体は削除を意味しないので、この通知が Drive 側の削除の唯一の経路になる。
+     */
+    public void notifyRemoved(Path file) {
+        if (events == null || file == null) {
+            return;
+        }
+        try {
+            events.publishEvent(new com.vis.graphynext.gdrive.StorageChanged(toStored(file)));
+        } catch (IllegalArgumentException ignore) {
+            // 保管庫の外のファイルは同期の対象ではない
+        }
+    }
+
     /** 規約パス {@code <root>/<studyUid>/<seriesUid>/<sopUid>.dcm}。UID が区切りや {@code ..} を含めば拒否する。 */
     public Path instancePath(String studyUid, String seriesUid, String sopUid) {
         return root.resolve(segment(studyUid)).resolve(segment(seriesUid)).resolve(segment(sopUid) + ".dcm");

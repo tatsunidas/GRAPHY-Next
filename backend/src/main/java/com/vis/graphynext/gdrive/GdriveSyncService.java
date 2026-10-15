@@ -58,9 +58,15 @@ public class GdriveSyncService {
 
     public enum State { DISABLED, CONNECTED, SYNCING, OFFLINE, NEEDS_LOGIN, NEEDS_ATTENTION }
 
+    /** {@code mode}: "backup"（ローカル正本）/ "cache"（Drive 正本）。{@code cache*} と {@code localCount} は cache のときだけ意味がある。 */
     public record Status(State state, String reason, long pending, long blocked, long synced, Long lastSyncAt,
-                         String lastError, String lockedBy, Long lastSnapshotAt) {
+                         String lastError, String lockedBy, Long lastSnapshotAt, String mode, long cacheBytes,
+                         long cacheLimitBytes, long localCount, long evictedCount) {
     }
+
+    /** 直近にこの時間内に読まれたファイルは追い出さない（返した Path を後で開く経路があるため）。 */
+    static final long RECENT_ACCESS_MS = 10 * 60_000;
+    private static final int EVICT_BATCH = 2000;
 
     private final GdriveSyncRepository repo;
     private final Path root;
@@ -98,6 +104,8 @@ public class GdriveSyncService {
     private GdriveSnapshots snapshots;
     private volatile long lastSnapshotAt = -1; // -1＝Drive の一覧からまだ読んでいない
     private long lastSnapshotAttemptAt;
+    /** 読まれた時刻（周期ごとに台帳へ書く。読み出しのたびに DB を更新しない）。 */
+    private final java.util.concurrent.ConcurrentHashMap<String, Long> accessed = new java.util.concurrent.ConcurrentHashMap<>();
 
     @Autowired
     public GdriveSyncService(GdriveSyncRepository repo, StorageLayout layout, org.springframework.jdbc.core.JdbcTemplate jdbc,
@@ -176,13 +184,27 @@ public class GdriveSyncService {
     public Status status() {
         GdriveConfig c = config;
         if (c == null) {
-            return new Status(State.DISABLED, null, 0, 0, 0, null, null, null, null);
+            return new Status(State.DISABLED, null, 0, 0, 0, null, null, null, null, null, 0, 0, 0, 0);
         }
         long pending = repo.countByFolderIdAndState(c.folderId(), GdriveSyncItem.PENDING)
                 + repo.countByFolderIdAndState(c.folderId(), GdriveSyncItem.REMOVE);
         return new Status(state, reason, pending, repo.countByFolderIdAndState(c.folderId(), GdriveSyncItem.BLOCKED),
                 repo.countByFolderIdAndState(c.folderId(), GdriveSyncItem.SYNCED), lastSyncAt, lastError, lockedBy,
-                lastSnapshotAt > 0 ? lastSnapshotAt : null);
+                lastSnapshotAt > 0 ? lastSnapshotAt : null, c.cache() ? "cache" : "backup",
+                c.cache() ? repo.localBytes(c.folderId()) : 0, c.cache() ? c.cacheLimitBytes() : 0,
+                c.cache() ? repo.localCount(c.folderId()) : 0, repo.countByFolderIdAndEvictedTrue(c.folderId()));
+    }
+
+    private boolean cacheMode() {
+        GdriveConfig c = config;
+        return c != null && c.cache();
+    }
+
+    /** ファイルが読まれた（モード A の追い出しの順序に使う）。安い呼び出し。 */
+    public void touch(String relPath) {
+        if (cacheMode() && relPath != null) {
+            accessed.put(relPath, clock.millis());
+        }
     }
 
     /** 今すぐ全走査して同期する（止まっている項目も再試行する）。 */
@@ -285,6 +307,10 @@ public class GdriveSyncService {
             }
             applyHints(c.folderId());
             processQueue(c.folderId());
+            if (c.cache()) {
+                flushAccess();
+                evict(c.folderId(), c.cacheLimitBytes());
+            }
             maybeSnapshot(c.folderId());
             long blocked = repo.countByFolderIdAndState(c.folderId(), GdriveSyncItem.BLOCKED);
             long pending = repo.countByFolderIdAndState(c.folderId(), GdriveSyncItem.PENDING)
@@ -428,6 +454,13 @@ public class GdriveSyncService {
                 requeue(r, l);
                 r.setDriveFileId(null); // ゴミ箱へ移す途中か済み。作り直す（まだ生きていれば名前検索で拾う）
                 dirty.add(r);
+            } else if (r.isEvicted()) {
+                // 追い出したはずの実体が手元にある（利用者が戻した・取得した）。台帳の印を外す
+                r.setEvicted(false);
+                if (r.getSize() != l.size() || r.getMtime() != l.mtime()) {
+                    requeue(r, l);
+                }
+                dirty.add(r);
             } else if (r.getSize() != l.size() || r.getMtime() != l.mtime()
                     || (retryBlocked && GdriveSyncItem.BLOCKED.equals(r.getState()))) {
                 requeue(r, l);
@@ -437,6 +470,19 @@ public class GdriveSyncService {
         for (GdriveSyncItem r : rows.values()) {
             if (local.containsKey(r.getRelPath()) || GdriveSyncItem.BLOCKED.equals(r.getState())
                     || GdriveSyncItem.REMOVE.equals(r.getState())) {
+                continue;
+            }
+            if (r.isEvicted()) {
+                continue; // 追い出し済み: 手元に無くて正常（Drive が正本）。消された扱いにしない
+            }
+            if (cacheMode() && r.getDriveFileId() != null) {
+                // モード A では、手元に無いことは削除を意味しない（削除は利用者の操作で明示的に伝わる）。
+                // Drive に正本があるので、追い出し済みとして扱い、必要なときに取得する
+                r.setEvicted(true);
+                r.setState(GdriveSyncItem.SYNCED);
+                r.setAttempts(0);
+                r.setSessionUri(null);
+                dirty.add(r);
                 continue;
             }
             if (r.getDriveFileId() == null) {
@@ -479,6 +525,7 @@ public class GdriveSyncService {
                         r.setDriveFileId(null);
                     }
                     requeue(r, new Local(Files.size(f), Files.getLastModifiedTime(f).toMillis()));
+                    r.setEvicted(false);
                     repo.save(r);
                 } else if (existing.isPresent() && existing.get().getDriveFileId() != null
                         && !GdriveSyncItem.BLOCKED.equals(existing.get().getState())) {
@@ -525,6 +572,11 @@ public class GdriveSyncService {
         if (!Files.isRegularFile(f)) {
             if (item.getDriveFileId() == null) {
                 repo.delete(item);
+            } else if (cacheMode()) {
+                item.setEvicted(true); // 手元に無い。Drive の内容が正本（削除ではない）
+                item.setState(GdriveSyncItem.SYNCED);
+                item.setSessionUri(null);
+                repo.save(item);
             } else {
                 item.setState(GdriveSyncItem.REMOVE);
                 repo.save(item);
@@ -600,7 +652,58 @@ public class GdriveSyncService {
         item.setNextAttemptAt(0);
         item.setSessionUri(null);
         item.setLastError(null);
+        item.setEvicted(false);
+        item.setLastAccessAt(clock.millis());
         repo.save(item);
+    }
+
+    private void flushAccess() {
+        for (String rel : new ArrayList<>(accessed.keySet())) {
+            Long at = accessed.remove(rel);
+            if (at == null) {
+                continue;
+            }
+            repo.findById(rel).ifPresent(r -> {
+                if (at > r.getLastAccessAt()) {
+                    r.setLastAccessAt(at);
+                    repo.save(r);
+                }
+            });
+        }
+    }
+
+    /**
+     * 手元の使用量が上限を超えていたら、Drive に載っている（SYNCED）古いものから手元の実体を消す。
+     * 🔴 Drive には触れない。未送信・失敗中・直近に読まれたものは消さない。
+     */
+    private void evict(String folderId, long limit) {
+        long used = repo.localBytes(folderId);
+        if (used <= limit) {
+            return;
+        }
+        long cutoff = clock.millis() - RECENT_ACCESS_MS;
+        for (GdriveSyncItem item : repo.evictable(folderId, cutoff, org.springframework.data.domain.PageRequest.of(0, EVICT_BATCH))) {
+            if (used <= limit) {
+                break;
+            }
+            Path f = root.resolve(item.getRelPath()).normalize();
+            if (!f.startsWith(root)) {
+                continue;
+            }
+            try {
+                if (Files.isRegularFile(f)) {
+                    if (Files.size(f) != item.getSize() || Files.getLastModifiedTime(f).toMillis() != item.getMtime()) {
+                        continue; // 同期のあとで変わった。reconcile が送り直す。消さない
+                    }
+                    Files.delete(f);
+                }
+                item.setEvicted(true);
+                repo.save(item);
+                used -= item.getSize();
+            } catch (IOException e) {
+                log.warn("[gdrive] evict failed: {} ({})", item.getRelPath(), e.toString());
+            }
+        }
     }
 
     private void remove(GdriveSyncItem item) throws GdriveException {

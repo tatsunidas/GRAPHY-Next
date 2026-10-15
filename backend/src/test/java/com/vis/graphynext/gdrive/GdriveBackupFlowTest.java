@@ -76,7 +76,7 @@ class GdriveBackupFlowTest {
                     backups.incrementAndGet();
                     GdriveSyncServiceTest.fakeBackup(zip);
                 }, LEASE, SNAP_EVERY, 3);
-        s.configure(new GdriveConfig("cid", "csecret", "rtoken-SECRET", FOLDER, null, "t", device, host));
+        s.configure(new GdriveConfig("cid", "csecret", "rtoken-SECRET", FOLDER, null, "t", device, host, false, 0));
         return s;
     }
 
@@ -221,7 +221,7 @@ class GdriveBackupFlowTest {
     // ── 復元 ──
 
     private GdriveConfig source() {
-        return new GdriveConfig("cid", "csecret", "rtoken-SECRET", FOLDER, null, "restore", "restore-device", "");
+        return new GdriveConfig("cid", "csecret", "rtoken-SECRET", FOLDER, null, "restore", "restore-device", "", false, 0);
     }
 
     private GdriveRestoreService restoreService() {
@@ -264,7 +264,7 @@ class GdriveBackupFlowTest {
         child.parent = p.id;
         child.folder = true;
         drive.files.put(child.id, child);
-        GdriveConfig parentOnly = new GdriveConfig("cid", "csecret", "rtoken-SECRET", p.id, null, "restore", "restore-device", "");
+        GdriveConfig parentOnly = new GdriveConfig("cid", "csecret", "rtoken-SECRET", p.id, null, "restore", "restore-device", "", false, 0);
         GdriveRestoreService r = restoreService();
         r.runSync(parentOnly, restored);
         assertEquals(GdriveRestoreService.Phase.FAILED, r.progress().phase(), String.valueOf(r.progress()));

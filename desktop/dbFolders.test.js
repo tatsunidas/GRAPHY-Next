@@ -140,7 +140,7 @@ test("Drive 設定: 保存でき、別のフォルダの選択・一覧からの
   assert.deepEqual(d.setGdrive(a, GCFG), { ok: true });
   d.select(b);
   d.forget(a);
-  assert.deepEqual(d.getGdrive(a), GCFG);
+  assert.deepEqual(d.getGdrive(a), { ...GCFG, mode: "backup", cacheLimitBytes: null });
   assert.equal(d.getGdrive(b), null);
   d.select(a);
   assert.equal(d.list(a).folders.find((r) => r.path === a).gdrive, true);
@@ -171,4 +171,42 @@ test("Drive 設定: 外すと消える。既存の（gdrive の無い）状態�
   d.clearGdrive(a);
   assert.equal(d.getGdrive(a), null);
   assert.equal(d.currentFolder(), a);
+});
+
+// --- モード A（Drive 正本・キャッシュ）の設定 ---
+
+const GIB = 1024 ** 3;
+
+test("Drive 設定: モード A の保存と上限の変更。下限未満・モード B・未設定は受け付けない（負例）", () => {
+  const dir = tmp();
+  const d = fresh(dir);
+  const a = path.join(dir, "a");
+  fs.mkdirSync(a);
+  assert.deepEqual(d.setGdriveCacheLimit(a, 20 * GIB), { ok: false, reason: "not-enabled" });
+  assert.deepEqual(d.setGdrive(a, GCFG), { ok: true });
+  assert.deepEqual(d.setGdriveCacheLimit(a, 20 * GIB), { ok: false, reason: "not-cache-mode" }, "モード B には上限が無い");
+  assert.deepEqual(d.setGdrive(a, { ...GCFG, mode: "cache", cacheLimitBytes: d.DEFAULT_CACHE_LIMIT_BYTES }), { ok: true });
+  assert.equal(d.getGdrive(a).mode, "cache");
+  assert.equal(d.getGdrive(a).cacheLimitBytes, 15 * GIB, "既定は 15 GB");
+  assert.deepEqual(d.setGdriveCacheLimit(a, 40 * GIB), { ok: true });
+  assert.equal(d.getGdrive(a).cacheLimitBytes, 40 * GIB);
+  for (const bad of [1 * GIB - 1, 0, -5, 1.5 * GIB + 0.5, "20", null, NaN, Infinity]) {
+    assert.deepEqual(d.setGdriveCacheLimit(a, bad), { ok: false, reason: "invalid-limit" }, String(bad));
+  }
+  assert.equal(d.getGdrive(a).cacheLimitBytes, 40 * GIB, "拒否したら値は変わらない");
+  assert.deepEqual(d.setGdriveCacheLimit(a, 1 * GIB), { ok: true }, "下限ちょうどは可");
+});
+
+test("Drive 設定: 不明なモード・壊れた上限は保存も読み込みもしない。mode の無い古い設定はそのまま読める", () => {
+  const dir = tmp();
+  const d = fresh(dir);
+  const a = path.join(dir, "a");
+  fs.mkdirSync(a);
+  for (const bad of [{ ...GCFG, mode: "mirror" }, { ...GCFG, mode: "cache", cacheLimitBytes: -1 }, { ...GCFG, cacheLimitBytes: "15" }]) {
+    assert.deepEqual(d.setGdrive(a, bad), { ok: false, reason: "invalid" });
+  }
+  fs.writeFileSync(path.join(dir, "db-folders.json"), JSON.stringify({ current: null, recent: [], gdrive: { [a]: GCFG } }));
+  const old = d.getGdrive(a);
+  assert.equal(old.driveFolderId, GCFG.driveFolderId);
+  assert.equal(old.mode, undefined, "古い設定には mode が無い（main は backup として扱う）");
 });
