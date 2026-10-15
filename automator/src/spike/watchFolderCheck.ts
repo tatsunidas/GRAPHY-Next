@@ -223,11 +223,39 @@ async function main(): Promise<void> {
     const ps = await patientsApi();
     check(ps.some((p) => p.patientId === "SP-A" && p.patientName === "Spike^Alpha"), "NIfTI の患者情報がサイドカーの値で入る");
     check(!ps.some((p) => p.patientId === "NIFTI"), "保留の NIfTI は取り込まれていない（既定の患者が増えていない）");
+    await page.getByTestId("import-watch-held-items").scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(OUT_DIR, "03e-held.png") });
     fs.writeFileSync(path.join(WATCH_DIR, "subjB", "t2.json"), JSON.stringify({ PatientID: "SP-B" }));
     check(await until(async () => (await num(page, "import-watch-held")) === 0 && (await patientsApi()).some((p) => p.patientId === "SP-B"), 8 * INTERVAL_SEC * 1000), "あとからサイドカーが揃うと保留が解けて取り込まれる");
     expected += 1;
     await page.screenshot({ path: path.join(OUT_DIR, "03f-held-resolved.png") });
+
+    console.log("\n[3g] 納品フォルダの被験者 CSV");
+    check(!(await page.getByTestId("import-watch-csv-overwrite").isChecked()), "DICOM の上書きは既定オフ");
+    const importedC = await num(page, "import-watch-imported");
+    makeNifti(path.join(WATCH_DIR, "subjC", "c.nii.gz"), 300); // サイドカーなし、CSV だけ
+    fs.writeFileSync(path.join(WATCH_DIR, "subjC", "subject.csv"), "PatientID,PatientName,PatientSex\nSP-C,Spike^Charlie,M\n");
+    makeNifti(path.join(WATCH_DIR, "subjD", "d.nii.gz"), 400);
+    fs.writeFileSync(path.join(WATCH_DIR, "subjD", "subject.csv"), "PatientID,PatientSex\nSP-D,Z\n"); // 性別の値が不正
+    check(await until(async () => (await patientsApi()).some((p) => p.patientId === "SP-C" && p.patientName === "Spike^Charlie"), 8 * INTERVAL_SEC * 1000), "CSV の患者情報で NIfTI が取り込まれる（サイドカーなし）");
+    check(await until(async () => (await num(page, "import-watch-held")) === 1, 4 * INTERVAL_SEC * 1000), "不正な CSV のユニットは保留 1");
+    const heldText = await page.getByTestId("import-watch-held-items").innerText();
+    check(heldText.includes("d.nii.gz") && /PatientSex/.test(heldText), "保留の理由に問題の列名が出る（値は出ない）", heldText);
+    check(!heldText.includes("SP-D") && !(await patientsApi()).some((p) => p.patientId === "SP-D"), "不正な CSV の値は取り込まれず、画面にも出ない（部分適用なし）");
+    check((await num(page, "import-watch-imported")) === importedC + 1, "他のユニットは止まらない（取込は 1 つだけ増える）");
+    await page.getByTestId("import-watch-held-items").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(OUT_DIR, "03g-csv-held.png") });
+    fs.writeFileSync(path.join(WATCH_DIR, "subjD", "subject.csv"), "PatientID,PatientSex\nSP-D,M\n");
+    check(await until(async () => (await num(page, "import-watch-held")) === 0 && (await patientsApi()).some((p) => p.patientId === "SP-D"), 8 * INTERVAL_SEC * 1000), "CSV を直すと取り込まれる");
+    expected += 2;
+    await page.getByTestId("import-watch-csv-overwrite").check();
+    await page.getByTestId("import-watch-save").click();
+    check(await until(async () => ((await (await fetch(`${base}/api/import/watch/status`)).json()) as { csvOverwriteDicom: boolean }).csvOverwriteDicom === true, 6000), "上書きの設定が保存される");
+    await page.screenshot({ path: path.join(OUT_DIR, "03h-overwrite-on.png") });
+    await page.getByTestId("import-watch-csv-overwrite").uncheck();
+    await page.getByTestId("import-watch-save").click();
+    check(await until(async () => ((await (await fetch(`${base}/api/import/watch/status`)).json()) as { csvOverwriteDicom: boolean }).csvOverwriteDicom === false, 6000), "オフに戻せる");
+    await sleep(1500);
 
     console.log("\n[4] 非 DICOM はスキップ、壊れた DICOM は失敗");
     fs.writeFileSync(path.join(WATCH_DIR, "readme.txt"), "not dicom");
