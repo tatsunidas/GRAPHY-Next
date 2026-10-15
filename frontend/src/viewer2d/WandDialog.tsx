@@ -10,6 +10,7 @@
  */
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n/i18n";
+import { NumField } from "./NumField";
 import { getWandSession, subscribeWand, updateWandSession, type WandMethod, type WandSession } from "../viewer/wandStore";
 import { runWand, commitWand, cancelWand } from "../viewer/wandTool";
 
@@ -24,29 +25,6 @@ const CONN_3D = [
   { v: 26, label: "26 (full)" },
 ];
 const METHODS: WandMethod[] = ["tolerance", "ge", "le", "range"];
-
-/** 数値入力（下書きを持ち、Enter/フォーカスアウトで確定。不正入力は元へ戻す）。 */
-function NumField({ value, onCommit, testid, title }: { value: number; onCommit: (v: number) => void; testid: string; title?: string }) {
-  const [text, setText] = useState(String(value));
-  useEffect(() => setText(String(value)), [value]);
-  const apply = () => {
-    const v = Number(text);
-    if (text.trim() !== "" && Number.isFinite(v)) onCommit(v);
-    else setText(String(value));
-  };
-  return (
-    <input
-      type="number"
-      data-testid={testid}
-      value={text}
-      title={title}
-      onChange={(e) => setText(e.target.value)}
-      onKeyDown={(e) => { if (e.key === "Enter") { apply(); (e.target as HTMLInputElement).blur(); } }}
-      onBlur={apply}
-      style={numInput}
-    />
-  );
-}
 
 export function WandDialog() {
   const { t } = useI18n();
@@ -211,6 +189,7 @@ export function WandDialog() {
               style={{ flex: 1 }}
             />
             <NumField
+              style={numInput}
               testid="wand-threshold"
               value={method === "ge" ? lower : upper}
               onCommit={(v) => setBound(method === "ge" ? "lower" : "upper", v)}
@@ -225,12 +204,12 @@ export function WandDialog() {
         <div style={block}>
           <div style={rangeRow}>
             <span style={label}>{t("wand.lower")}</span>
-            <NumField testid="wand-threshold-lower" value={lower} onCommit={(v) => setBound("lower", v)} title={t("wand.thresholdInput")} />
+            <NumField style={numInput} testid="wand-threshold-lower" value={lower} onCommit={(v) => setBound("lower", v)} title={t("wand.thresholdInput")} />
             <span style={label}>{unit}</span>
           </div>
           <div style={rangeRow}>
             <span style={label}>{t("wand.upper")}</span>
-            <NumField testid="wand-threshold-upper" value={upper} onCommit={(v) => setBound("upper", v)} title={t("wand.thresholdInput")} />
+            <NumField style={numInput} testid="wand-threshold-upper" value={upper} onCommit={(v) => setBound("upper", v)} title={t("wand.thresholdInput")} />
             <span style={label}>{unit}</span>
           </div>
         </div>

@@ -41,6 +41,7 @@ import { saveRoiNow, scheduleRoiSave, subscribeRoiSave } from "../viewer/roiSave
 import { RoiMetaEditDialog } from "./RoiMetaEditDialog";
 import { RoiStatsDialog, type RoiStatsTarget } from "./RoiStatsDialog";
 import { useI18n } from "../i18n/i18n";
+import { NumField } from "./NumField";
 import { formatNumber, valueUnitLabel } from "../viewer/roiStatsText";
 import { meanTimesVolumeLabelKey } from "../viewer/maskStatsCore";
 
@@ -700,7 +701,7 @@ export function RoiManagerPanel({
               ⧉
             </button>
           )}
-          {/circle/i.test(r.tool) && <button onClick={(e) => { e.stopPropagation(); runDefineSphere(r.uid); }} disabled={busy} style={editBtn} title={t("roiMgr.defineSphere")}>◎</button>}
+          {/circle/i.test(r.tool) && <button onClick={(e) => { e.stopPropagation(); runDefineSphere(r.uid); }} disabled={busy} style={editBtn} title={t("roiMgr.defineSphere")} data-testid="roi-mgr-define-sphere">◎</button>}
           {/circle/i.test(r.tool) && <button onClick={(e) => { e.stopPropagation(); runSphere(r.uid); }} disabled={busy} style={editBtn} title={t("roiMgr.toSphere")}>⬤</button>}
           <button onClick={(e) => { e.stopPropagation(); setStatsOpen({ focus: r.uid }); }} style={editBtn} title={t("roiMgr.statsRoi")}>Σ</button>
           <button onClick={(e) => { e.stopPropagation(); setEditId(r.uid); }} style={editBtn} title={t("roiMgr.editTitle")}>✎</button>
@@ -808,13 +809,25 @@ export function RoiManagerPanel({
 
       {spheres.length > 0 && <div style={section}>{t("roiMgr.spheres")} ({spheres.length})</div>}
       {spheres.map((s) => (
-        <div key={s.id} style={row}>
+        <div key={s.id} style={row} data-testid="sphere-row">
           <input type="checkbox" checked={s.visible} onChange={(e) => updateSphere3D(s.id, { visible: e.target.checked })} title={t("roiMgr.visible")} />
           <input type="text" style={name} defaultValue={s.label ?? "Sphere"} onChange={(e) => updateSphere3D(s.id, { label: e.target.value })} />
           <input type="color" defaultValue={s.color} onChange={(e) => updateSphere3D(s.id, { color: e.target.value })} title={t("roiMgr.color")} style={colorInput} />
-          <input type="number" min={0.1} step={0.5} defaultValue={Number(s.radiusMm.toFixed(1))} onChange={(e) => { const v = Number(e.target.value); if (v > 0) updateSphere3D(s.id, { radiusMm: v }); }} title={t("roiMgr.radiusMm")} style={numInput} />
+          <input type="number" min={0.1} step={0.5} defaultValue={Number(s.radiusMm.toFixed(1))} onChange={(e) => { const v = Number(e.target.value); if (v > 0) updateSphere3D(s.id, { radiusMm: v }); }} title={t("roiMgr.radiusMm")} style={numInput} data-testid="sphere-radius" />
           <span style={{ color: "#9aa6b2", fontSize: 10 }}>mm</span>
-          <button onClick={() => runBakeSphere(s.id)} disabled={busy} style={editBtn} title={t("roiMgr.bakeSphere")}>⬤</button>
+          <span style={{ color: "#9aa6b2", fontSize: 10 }}>{t("roiMgr.centerMm")}</span>
+          {(["X", "Y", "Z"] as const).map((ax, i) => (
+            <NumField
+              key={ax}
+              testid={`sphere-center-${ax.toLowerCase()}`}
+              value={s.center[i]}
+              format={(v) => v.toFixed(2)}
+              title={t(`roiMgr.center${ax}` as const)}
+              style={numInput}
+              onCommit={(v) => { const c = [...s.center] as [number, number, number]; c[i] = v; updateSphere3D(s.id, { center: c }); }}
+            />
+          ))}
+          <button onClick={() => runBakeSphere(s.id)} disabled={busy} style={editBtn} title={t("roiMgr.bakeSphere")} data-testid="sphere-bake">⬤</button>
           <button onClick={() => deleteSphere3D(s.id)} style={delBtn} title={t("common.delete")}>🗑</button>
         </div>
       ))}
