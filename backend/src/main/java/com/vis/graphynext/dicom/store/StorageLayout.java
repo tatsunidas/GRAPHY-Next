@@ -140,6 +140,11 @@ public class StorageLayout {
         }
     }
 
+    /** このインスタンスのファイルが手元にあるか（取り寄せはしない）。 */
+    public boolean isLocal(DicomInstance inst) {
+        return resolveLocal(inst) != null;
+    }
+
     /** 手元にある実在のファイル（無ければ null）。取り寄せはしない。 */
     private Path resolveLocal(DicomInstance inst) {
         String uri = inst.getUri();

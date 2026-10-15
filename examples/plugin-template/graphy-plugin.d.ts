@@ -1225,6 +1225,21 @@ interface PluginHostBase {
      */
     releaseRuntime: (endpointId: string, opts?: { ask?: boolean }) => Promise<ComputeReleaseOutcome>;
   };
+  /**
+   * **保管庫の画像を手元に確保する**（H62・**0.5.0 以降**）。Drive が正本のモード（手元は上限つきのキャッシュ）で、
+   * 手元に無い画像を Drive から取り寄せる。**パスは返さない**（検査・シリーズの UID を渡すだけ）。
+   * 新しい権限・同意は要らない（利用者自身の Drive のデータを手元へ戻すだけで、外へは出ない）。
+   * モード A でなければ何もしない（`cacheMode: false`）。
+   */
+  storage: {
+    /**
+     * 検査（`seriesUids` を渡せばそのシリーズだけ）の画像のうち、手元に無いものを取り寄せる。進み具合・取り消しは
+     * `runBackendJob` と同じ。結果は例外でなく値で返る（`error` は理由コード）。取り寄せた直後の画像は、しばらく手元から消されない。
+     */
+    ensureLocal: (req: StorageEnsureRequest, opts?: PluginJobOptions) => Promise<StorageEnsureOutcome>;
+    /** モード・手元の使用量と上限・Drive にだけある画像の数（読み取りのみ）。 */
+    status: () => Promise<StorageStatus>;
+  };
   /** 本体の DB（H44・H46・H51・**0.3.0 以降**）。 */
   db: {
     /** 患者を ID・氏名の部分一致で探す（H44）。**読み取りのみ**。空文字は全件。 */
@@ -1407,6 +1422,31 @@ export interface PluginPickFilesOptions {
 export type PickFilesResult =
   | { ok: true; paths: string[] }
   | { ok: false; canceled?: boolean; error?: string };
+
+/** `host.storage.ensureLocal()` の要求（H62）。 */
+export interface StorageEnsureRequest {
+  studyUid: string;
+  /** 省略すると検査全体。 */
+  seriesUids?: string[];
+}
+
+/**
+ * `host.storage.ensureLocal()` の結果（H62）。例外は投げない。`cancelled: true` は利用者の取り消し。
+ * `error` は理由コード: `offline`・`needs-login`・`drive-disabled`・`md5-mismatch`・`no-checksum`・`not-on-drive`・
+ * `drive-error`（取り寄せ）、`not-found`（検査・シリーズが無い）、`invalid-*`（要求の形）。
+ */
+export type StorageEnsureOutcome =
+  | { ok: true; total: number; fetched: number; alreadyLocal: number; cacheMode: boolean }
+  | { ok: false; cancelled?: boolean; error?: string; fetched?: number };
+
+/** `host.storage.status()` の結果（H62）。 */
+export interface StorageStatus {
+  cacheMode: boolean;
+  usedBytes: number;
+  limitBytes: number;
+  /** Drive にだけある（手元に無い）画像の数。 */
+  remoteOnlyCount: number;
+}
 
 /** `host.runBackendJob()` の引数（H45）。 */
 export interface PluginJobOptions {

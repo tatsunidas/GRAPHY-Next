@@ -14,6 +14,7 @@ import type { PluginHost, PluginHostSeed, PluginManifest, PluginCategory, Plugin
 import { DEMO_MODULES, MOCK_ENABLED, MOCK_MANIFESTS } from "./mockPlugins";
 import { requestAiGeneration, type AiGenerationOptions } from "./pluginAiApi";
 import { pickDirectory, saveFileAs, saveJobArtifact, saveJobArtifactTo, writeToDirectory } from "./pluginFileApi";
+import { ensureLocal, storageStatus } from "./pluginStorageApi";
 import { listVideos, notifyDbChanged, pickFiles, runBackendJob, searchPatients } from "./pluginCommonApi";
 import {
   importDicomFiles,
@@ -114,6 +115,11 @@ function withHostApis(m: PluginManifest, host: PluginHostSeed): PluginHost {
     },
     // H45: ジョブの投入先はマニフェストの id に固定する（他のプラグインの JAR は走らせられない）
     runBackendJob: (payload, opts) => runBackendJob(m.id, payload, opts),
+    // H62: 手元への確保。呼び出しはマニフェストの id に固定する
+    storage: {
+      ensureLocal: (req, opts) => ensureLocal(m.id, req, opts),
+      status: () => storageStatus(m.id),
+    },
     db: {
       searchPatients,
       listVideos,
