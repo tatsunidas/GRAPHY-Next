@@ -188,6 +188,9 @@ Spring DI（`@Profile`）でプロファイルに応じて自動注入。
   同じ経路。Drive に送れない間（オフライン・要ログイン）も取り込みはローカルに対して成功し、送信は同期が後で行う。
   監視と手動で同じファイルを取り込んでも、索引・Drive とも 1 件のまま。
 - 復元（別の PC）では、索引のスナップショットとともに設定と台帳も戻る。フォルダが無ければ状態にエラーが出て、アプリは動き続ける。
+- 画面: 環境設定の「自動取り込み」パネルに状態と [今すぐ走査]（`POST /scan`。間隔を待たずに 1 回走る）。メイン画面の状態バーに
+  「取込・待機・失敗」の件数を出し（standalone で有効なときだけ。3 秒ごとに問い合わせ）、一覧を最後に読み込んだ時点より取込が
+  増えていれば「新しい取り込みが n 件あります」を出す。押すと一覧を読み込み直す（自動では読み込み直さない。選択中の検査を外さないため）。
 - 検証: `ImportWatchServiceTest`・`ImportWatchDriveTest`（偽の Drive）・`ImportWatchHttpTest`・`ImportWatchWebProfileTest`、
   画面からの `automator/src/spike/watchFolderCheck.ts`。
 - 未検証: Drive が正本でローカルがキャッシュのモード、Windows のローカル・ネットワーク共有・Google Drive for desktop の

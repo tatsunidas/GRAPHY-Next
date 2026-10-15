@@ -2077,6 +2077,11 @@ export const en: Record<string, string> = {
   "importWatch.err.interval-invalid": "Enter the scan interval as a whole number of seconds (1 or more).",
   "importWatch.err.scan-failed": "The folder could not be scanned. Check permissions and the network connection (it will be retried on the next scan).",
   "importWatch.err.unknown": "Auto import hit a problem.",
+  "importWatch.scanNow": "Scan now",
+  "importWatch.bar.label": "Auto import",
+  "importWatch.bar.counts": "imported {{imported}} · waiting {{waiting}} · failed {{failed}}",
+  "importWatch.bar.error": "error",
+  "importWatch.bar.newItems": "{{n}} newly imported — refresh list",
 
   // monitor QC (mqc)
   "mqc.intro": "Simple, sensor-free monitor diagnostics: inspect connected displays and run visual test patterns for routine visual QC.",

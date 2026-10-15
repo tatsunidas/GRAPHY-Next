@@ -13,6 +13,7 @@ import { MenuBar } from "./MenuBar";
 import { Toolbar, type ToolKind } from "./Toolbar";
 import { SearchPanel } from "./SearchPanel";
 import { StatusBar } from "./StatusBar";
+import { useImportWatchStatus } from "./useImportWatchStatus";
 import { TagExtractorDialog } from "./TagExtractorDialog";
 import { SeriesExtractorDialog } from "./SeriesExtractorDialog";
 import { AnonymizerDialog } from "./AnonymizerDialog";
@@ -56,6 +57,7 @@ export function MainScreen({
   // null = まだ検索していない。SearchPanel が初期条件(今日)で onSearch を呼ぶと埋まる。
   const [filters, setFilters] = useState<StudyFilters | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const importWatch = useImportWatchStatus(isStandalone);
   // 取り込み直後は、一覧を「いま取り込んだ検査」に絞る（既定の検索条件「今日」では過去の検査が出ないため）。
   const [importedView, setImportedView] = useState<ImportedView | null>(null);
   const searchFiltersRef = useRef<StudyFilters | null>(null);
@@ -400,7 +402,15 @@ export function MainScreen({
           />
         </div>
       </div>
-      <StatusBar status={status} error={error} />
+      <StatusBar
+        status={status}
+        error={error}
+        importWatch={importWatch.view}
+        onReloadList={() => {
+          setReloadKey((k) => k + 1);
+          importWatch.acknowledge();
+        }}
+      />
       <TagExtractorDialog
         open={openTool === "tagExtractor"}
         onClose={() => setOpenTool(null)}
