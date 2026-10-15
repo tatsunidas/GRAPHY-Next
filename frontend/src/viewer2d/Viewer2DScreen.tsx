@@ -56,6 +56,8 @@ import { frameOfImageId } from "../viewer/imageId";
 import { derivePatientKey } from "../viewer/patientKey";
 import { getFocusedTile } from "../viewer/focusedTile";
 import { hasClipboardRoi } from "../viewer/roiClipboard";
+import { annotationRoiKind } from "../viewer/roiKind";
+import { canConvertMeasureToRoi } from "../viewer/measureToRoi";
 import { isTextEntryTarget, matchesShortcut } from "../shortcuts/registry";
 import { isInsideViewerOverlay } from "../viewer/viewerOverlay";
 import { runSeriesCommand } from "../viewer/seriesCommands";
@@ -795,7 +797,7 @@ function TileGrid({
   // タイル枠の右クリックメニュー（画面座標）。null=非表示。
   const [frameMenu, setFrameMenu] = useState<{ x: number; y: number } | null>(null);
   /** ROI の上での右クリックメニュー（スプライン Fit）。null=非表示。 */
-  const [roiMenu, setRoiMenu] = useState<{ x: number; y: number; uid: string; fitted: boolean; splineable: boolean } | null>(null);
+  const [roiMenu, setRoiMenu] = useState<{ x: number; y: number; uid: string; fitted: boolean; splineable: boolean; measure: boolean; convertible: boolean } | null>(null);
   const openFrameMenu = useCallback((e: React.MouseEvent) => {
     // 画像キャンバス上は cornerstone の右ドラッグ Zoom を優先し、原則メニューを出さない。
     // **ただし ROI の上だけは例外**（その ROI への操作を出す。空きスペースでは従来どおり Zoom）。
@@ -812,6 +814,8 @@ function TileGrid({
           uid: hit.annotationUID as string,
           fitted: isSplineFitted(hit),
           splineable: canSplineFit(hit),
+          measure: annotationRoiKind(hit) === "measure",
+          convertible: canConvertMeasureToRoi(hit?.metadata?.toolName),
         });
       }
       return;
@@ -1470,8 +1474,18 @@ function TileGrid({
       clearRois: () => {
         // 全消去は破壊的なので確認する。
         if (window.confirm(t("viewer2d.roi.clearConfirm"))) {
-          runViewerCommand(resolveTargets(), (c) => c.clearAnnotations());
+          runViewerCommand(resolveTargets(), (c) => c.clearAnnotations("roi"));
         }
+      },
+      clearMeasurements: () => {
+        if (window.confirm(t("viewer2d.measure.clearConfirm"))) {
+          runViewerCommand(resolveTargets(), (c) => c.clearAnnotations("measure"));
+        }
+      },
+      convertMeasureToRoi: (measureUid) => {
+        const target = resolveRoiEditTarget();
+        if (!target) { notify(t("roi.paste.noTile")); return; }
+        queryViewerCommand(target, (c) => c.convertMeasureToRoi(measureUid));
       },
       // 表示位置の移動（プラグイン H14）。対象タイル省略時は現在の対象。
       goTo: (tileId, dims) => {
@@ -1864,6 +1878,21 @@ function TileGrid({
             <span style={{ width: 14, display: "inline-block" }} />
             {t("viewer2d.roi.copy")}
           </button>
+          {roiMenu.measure && (
+            <button
+              style={roiMenu.convertible ? ctxMenuItem : { ...ctxMenuItem, opacity: 0.4, cursor: "not-allowed" }}
+              data-testid="roi-ctx-to-roi"
+              disabled={!roiMenu.convertible}
+              title={roiMenu.convertible ? undefined : t("roi.toRoi.unsupported")}
+              onClick={() => {
+                actions.convertMeasureToRoi(roiMenu.uid);
+                setRoiMenu(null);
+              }}
+            >
+              <span style={{ width: 14, display: "inline-block" }} />
+              {t("viewer2d.roi.toRoi")}
+            </button>
+          )}
           {roiMenu.splineable && (
             <button
               style={ctxMenuItem}
@@ -1887,6 +1916,7 @@ function TileGrid({
           mode={mode}
           onRevealRoi={revealRoi}
           onDuplicateRoi={(uid) => actions.duplicateRoi(uid)}
+          onConvertToRoi={(uid) => actions.convertMeasureToRoi(uid)}
           onClose={() => setShowRoiMgr(false)}
         />
       )}

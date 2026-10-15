@@ -189,8 +189,12 @@ export interface ViewerActions {
   setBrushSize(size: number): void;
   /** 2D Wand のトレランス（シード輝度からの許容差）。 */
   setWandTolerance(tol: number): void;
-  /** 計測 ROI を全消去（対象タイル）。 */
+  /** ROI（面・線・点）を全消去（対象タイル）。計測は残す。 */
   clearRois(): void;
+  /** 計測（Length / Bidirectional / Angle / Cobb / Probe）を全消去（対象タイル）。ROI は残す。 */
+  clearMeasurements(): void;
+  /** 計測を ROI に変える（Length → 線 ROI、Probe → 点 ROI）。元の計測は消える。 */
+  convertMeasureToRoi(measureUid: string): void;
   /**
    * 選択中（または指定）の ROI をアプリ内クリップボードへ取る。
    *

@@ -196,7 +196,7 @@ async function openStudy(page: Page, studyUid: string): Promise<void> {
  * 区間は ±40mm 取るので参照径を当てる健常部が両側に十分残る。
  */
 async function selectLengthTool(viewer: Page): Promise<void> {
-  await viewer.getByTestId("viewer2d-menu-roi").click();
+  await viewer.getByTestId("viewer2d-menu-measure").click();
   await viewer.waitForTimeout(250);
   await viewer.getByText("長さ", { exact: true }).first().click();
   await viewer.waitForTimeout(300);

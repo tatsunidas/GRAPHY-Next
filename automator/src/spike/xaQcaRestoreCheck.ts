@@ -206,7 +206,7 @@ async function main(): Promise<void> {
     //    落ちた（1 回目で選んだツールは残るので、開き直す必要がそもそも無い）。
     //    1 本目 = 解析区間（狭窄を挟む長い線・一覧の #1）、
     //    2 本目 = 校正用（カテーテルの太さを横切る短い直線・一覧の #2）。
-    await viewer.getByTestId("viewer2d-menu-roi").click();
+    await viewer.getByTestId("viewer2d-menu-measure").click();
     await viewer.waitForTimeout(300);
     await viewer.getByText("長さ", { exact: true }).first().click();
     await viewer.waitForTimeout(400);

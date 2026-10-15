@@ -122,7 +122,7 @@ async function main(): Promise<void> {
       await viewer.waitForTimeout(3_000);
 
       // 長さツールで 2 本引く: #1 血管に沿う解析区間（横）、#2 カテーテルを横切る校正の線（縦・外径ちょうど）
-      await viewer.getByTestId("viewer2d-menu-roi").click();
+      await viewer.getByTestId("viewer2d-menu-measure").click();
       await viewer.waitForTimeout(250);
       await viewer.getByText("長さ", { exact: true }).first().click();
       await viewer.waitForTimeout(300);

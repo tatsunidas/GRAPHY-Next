@@ -154,7 +154,7 @@ async function main(): Promise<void> {
     check(before.roiCount === 0 && before.json === null, "描く前は未保存（空の器が返る）", before);
 
     // ROI メニュー → 長径・短径（RECIST）→ canvas をドラッグ。
-    await viewer.getByTestId("viewer2d-menu-roi").click();
+    await viewer.getByTestId("viewer2d-menu-measure").click();
     await viewer.getByRole("button", { name: /長径・短径|Long\/short axis/ }).first().click();
     await viewer.waitForTimeout(300);
     await dragOnCanvasHost(viewer, "viewer2d-canvas-host", 120, 0, 0, 10, { fracX: 0.3, fracY: 0.35 });
@@ -247,6 +247,10 @@ async function main(): Promise<void> {
     });
     await viewer.getByTestId("viewer2d-menu-roi").click();
     await viewer.getByRole("button", { name: /^(ROI を全消去|Clear ROIs)$/ }).first().click();
+    await viewer.waitForTimeout(1500);
+    // RECIST（長径・短径）は計測なので、「計測を全消去」でも消す。
+    await viewer.getByTestId("viewer2d-menu-measure").click();
+    await viewer.getByRole("button", { name: /^(計測を全消去|Clear measurements)$/ }).first().click();
     await viewer.waitForTimeout(1500);
     const afterClear = await runPlugin(viewer);
     check((afterClear.rois ?? []).length === 0, "画面上の ROI が消えている", afterClear.rois?.length);

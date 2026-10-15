@@ -184,7 +184,7 @@ async function main(): Promise<void> {
     const viewer = await openViewerForPatient(d1);
 
     // ベースラインの病変 A を Bidirectional で測る。
-    await viewer.getByTestId("viewer2d-menu-roi").click();
+    await viewer.getByTestId("viewer2d-menu-measure").click();
     await viewer.getByRole("button", { name: /長径・短径|Long\/short axis/ }).first().click();
     await viewer.waitForTimeout(300);
     // 病変 A は画像座標 (170, 256) 中心・直径 40mm。Fit 表示なので中心やや左に描く。

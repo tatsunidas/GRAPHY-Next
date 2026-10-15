@@ -51,6 +51,7 @@ describe("pickSampleKind", () => {
   it("Length は line、Probe は point", () => {
     expect(pickSampleKind("Length", undefined)).toBe("line");
     expect(pickSampleKind("Probe", undefined)).toBe("point");
+    expect(pickSampleKind("GraphyPointROI", undefined)).toBe("point");
   });
 
   it("Bidirectional / Angle / 未知のツールには値を出さない", () => {

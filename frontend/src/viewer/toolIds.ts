@@ -18,6 +18,7 @@ import {
   BrushTool,
 } from "@cornerstonejs/tools";
 import { CONTOUR_TOOL_NAMES } from "./roiContourTools";
+import { POINT_ROI_TOOL_NAME } from "./pointRoiTool";
 
 /** 消しゴムの合成ツール ID（BrushTool の ERASE ストラテジに対応する内部値）。 */
 export const ERASER_TOOL_ID = "__graphy_eraser__";
@@ -50,6 +51,8 @@ export const TOOL_IDS = {
   freehand: CONTOUR_TOOL_NAMES.freehand,
   /** フリーライン（開）。ドラッグで描き、閉じない。 */
   freeLine: CONTOUR_TOOL_NAMES.freeLine,
+  /** 点 ROI（Probe は計測、こちらは ROI）。 */
+  point: POINT_ROI_TOOL_NAME,
   brush: BrushTool.toolName,
   eraser: ERASER_TOOL_ID,
   /** 3D Wand（対話型・輝度領域成長。ダイアログで seed/connectivity/threshold）。 */
