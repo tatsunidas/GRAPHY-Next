@@ -48,7 +48,7 @@ import java.util.stream.Stream;
  */
 @Service
 @Profile("standalone")
-public class GdriveSyncService {
+public class GdriveSyncService implements com.vis.graphynext.dicom.store.StorageBackend {
 
     private static final Logger log = LoggerFactory.getLogger(GdriveSyncService.class);
     static final String DICOM_FOLDER = "dicom";
@@ -89,7 +89,7 @@ public class GdriveSyncService {
     private ScheduledExecutorService executor;
 
     private volatile GdriveConfig config;
-    private DriveClient client;
+    private volatile DriveClient client; // 取り寄せ（読み出しのスレッド）からも使う
     private String dicomFolderId;
     private volatile boolean forceReconcile = true;
     private long lastReconcileAt;
@@ -119,6 +119,7 @@ public class GdriveSyncService {
         this(repo, layout.root(), apiBase, tokenUrl, Clock.systemUTC(), Math::random, intervalSeconds * 1000,
                 reconcileMinutes * 60_000, true, zip -> jdbc.execute("BACKUP TO '" + zip.toString().replace("'", "''") + "'"),
                 leaseMinutes * 60_000, snapshotMinutes * 60_000, snapshotKeep);
+        layout.setBackend(this); // 読み出し（resolveForRead）が、手元に無いファイルを取り寄せる口として使う
     }
 
     GdriveSyncService(GdriveSyncRepository repo, Path root, String apiBase, String tokenUrl, Clock clock,
@@ -195,12 +196,14 @@ public class GdriveSyncService {
                 c.cache() ? repo.localCount(c.folderId()) : 0, repo.countByFolderIdAndEvictedTrue(c.folderId()));
     }
 
-    private boolean cacheMode() {
+    @Override
+    public boolean cacheMode() {
         GdriveConfig c = config;
         return c != null && c.cache();
     }
 
     /** ファイルが読まれた（モード A の追い出しの順序に使う）。安い呼び出し。 */
+    @Override
     public void touch(String relPath) {
         if (cacheMode() && relPath != null) {
             accessed.put(relPath, clock.millis());
@@ -242,6 +245,9 @@ public class GdriveSyncService {
     void shutdown() {
         if (executor != null) {
             executor.shutdownNow();
+        }
+        if (prefetchPool != null) {
+            prefetchPool.shutdownNow();
         }
         shutdownWork();
     }
@@ -655,6 +661,143 @@ public class GdriveSyncService {
         item.setEvicted(false);
         item.setLastAccessAt(clock.millis());
         repo.save(item);
+    }
+
+    // ── 取り寄せ（モード A: 読み出しから呼ばれる。cycle() とは別のスレッド） ──────────────
+
+    private final java.util.concurrent.ConcurrentHashMap<String, Object> fetchLocks = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final int PREFETCH_THREADS = 4;
+    private java.util.concurrent.ExecutorService prefetchPool;
+
+    /**
+     * 手元に無ければ Drive から取り寄せる。台帳が「追い出し済み」としているものだけが対象で、それ以外は null。
+     * 同じファイルへの同時要求は 1 回だけ取得する。取得したら md5 とサイズを台帳と照合し、
+     * mtime を台帳の値に戻す（そうしないと reconcile が「変わった」と取り違えて送り直す）。
+     */
+    @Override
+    public Path ensureLocal(String rel) {
+        Path dest = root.resolve(rel).normalize();
+        if (!dest.startsWith(root)) {
+            return null;
+        }
+        GdriveSyncItem row = repo.findById(rel).orElse(null);
+        if (row == null || !row.isEvicted()) {
+            return Files.isRegularFile(dest) ? dest : null;
+        }
+        Object lock = fetchLocks.computeIfAbsent(rel, k -> new Object());
+        try {
+            synchronized (lock) {
+                row = repo.findById(rel).orElse(null); // 待っている間に別のスレッドが取得したかもしれない
+                if (row == null || !row.isEvicted()) {
+                    return Files.isRegularFile(dest) ? dest : null;
+                }
+                fetch(row, dest);
+                return dest;
+            }
+        } finally {
+            fetchLocks.remove(rel);
+        }
+    }
+
+    private void fetch(GdriveSyncItem row, Path dest) {
+        GdriveConfig c = config;
+        DriveClient cl = client;
+        if (c == null || cl == null || !row.getFolderId().equals(c.folderId())) {
+            throw new com.vis.graphynext.dicom.store.StorageUnavailableException(
+                    com.vis.graphynext.dicom.store.StorageUnavailableException.DISABLED);
+        }
+        if (row.getDriveFileId() == null) {
+            throw new com.vis.graphynext.dicom.store.StorageUnavailableException(
+                    com.vis.graphynext.dicom.store.StorageUnavailableException.NOT_ON_DRIVE);
+        }
+        if (row.getMd5() == null) {
+            // 照合できないものは置かない（壊れた内容を黙って画像として返さない）
+            throw new com.vis.graphynext.dicom.store.StorageUnavailableException(
+                    com.vis.graphynext.dicom.store.StorageUnavailableException.NO_CHECKSUM);
+        }
+        // 走査（reconcile）に見えない名前（先頭が "."）へ落として検証し、検証済みのものだけを本来の名前へ移す
+        Path tmp = dest.resolveSibling("." + dest.getFileName() + ".fetch");
+        try {
+            cl.download(row.getDriveFileId(), tmp);
+            if (Files.size(tmp) != row.getSize() || !row.getMd5().equalsIgnoreCase(md5(tmp))) {
+                Files.deleteIfExists(tmp);
+                throw new com.vis.graphynext.dicom.store.StorageUnavailableException(
+                        com.vis.graphynext.dicom.store.StorageUnavailableException.MD5_MISMATCH);
+            }
+            Files.setLastModifiedTime(tmp, java.nio.file.attribute.FileTime.fromMillis(row.getMtime()));
+            Files.move(tmp, dest, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+        } catch (GdriveException e) {
+            deleteQuietly(tmp);
+            String reason = switch (e.kind()) {
+                case OFFLINE, RETRY -> com.vis.graphynext.dicom.store.StorageUnavailableException.OFFLINE;
+                case RELOGIN -> com.vis.graphynext.dicom.store.StorageUnavailableException.NEEDS_LOGIN;
+                case NOT_FOUND -> com.vis.graphynext.dicom.store.StorageUnavailableException.NOT_ON_DRIVE;
+                default -> com.vis.graphynext.dicom.store.StorageUnavailableException.DRIVE_ERROR;
+            };
+            throw new com.vis.graphynext.dicom.store.StorageUnavailableException(reason, e);
+        } catch (IOException e) {
+            deleteQuietly(tmp);
+            throw new com.vis.graphynext.dicom.store.StorageUnavailableException(
+                    com.vis.graphynext.dicom.store.StorageUnavailableException.DRIVE_ERROR, e);
+        }
+        row.setEvicted(false);
+        row.setLastAccessAt(clock.millis());
+        repo.save(row);
+    }
+
+    private static void deleteQuietly(Path p) {
+        try {
+            Files.deleteIfExists(p);
+        } catch (IOException ignore) {
+            // 次の取得で上書きする
+        }
+    }
+
+    /** 複数を並列（4 本）で先に取り寄せる。1 件でも失敗したら、最初の失敗を投げる。 */
+    @Override
+    public void prefetch(java.util.Collection<String> rels, java.util.function.BooleanSupplier cancelled) {
+        if (rels.isEmpty()) {
+            return;
+        }
+        java.util.concurrent.ExecutorService pool = prefetchPool();
+        java.util.List<java.util.concurrent.Future<?>> jobs = new ArrayList<>();
+        for (String rel : rels) {
+            jobs.add(pool.submit(() -> {
+                if (!cancelled.getAsBoolean()) {
+                    ensureLocal(rel);
+                }
+            }));
+        }
+        RuntimeException first = null;
+        for (java.util.concurrent.Future<?> j : jobs) {
+            try {
+                j.get();
+            } catch (java.util.concurrent.ExecutionException e) {
+                if (first == null) {
+                    first = e.getCause() instanceof RuntimeException re ? re
+                            : new com.vis.graphynext.dicom.store.StorageUnavailableException(
+                                    com.vis.graphynext.dicom.store.StorageUnavailableException.DRIVE_ERROR, e.getCause());
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new com.vis.graphynext.dicom.store.StorageUnavailableException(
+                        com.vis.graphynext.dicom.store.StorageUnavailableException.OFFLINE, e);
+            }
+        }
+        if (first != null) {
+            throw first;
+        }
+    }
+
+    private synchronized java.util.concurrent.ExecutorService prefetchPool() {
+        if (prefetchPool == null) {
+            prefetchPool = Executors.newFixedThreadPool(PREFETCH_THREADS, r -> {
+                Thread t = new Thread(r, "gdrive-fetch");
+                t.setDaemon(true);
+                return t;
+            });
+        }
+        return prefetchPool;
     }
 
     private void flushAccess() {

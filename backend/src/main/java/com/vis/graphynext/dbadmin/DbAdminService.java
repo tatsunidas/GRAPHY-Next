@@ -122,7 +122,7 @@ public class DbAdminService {
                 try {
                     Files.deleteIfExists(file);
                     layout.pruneEmptyDirs(file);
-                    layout.notifyRemoved(file);
+                    layout.notifyChanged(file);
                 } catch (Exception e) {
                     log.warn("ファイル削除に失敗: {} ({})", r.getUri(), e.toString());
                 }
@@ -330,6 +330,7 @@ public class DbAdminService {
         if (orig == null) {
             throw new IOException("保管庫内のファイルを特定できません: " + r.getSopInstanceUid());
         }
+        layout.resolveForRead(r); // モード A: 手元に無ければ取り寄せる（取れなければ例外）
         Path dest = storage.instanceStoragePath(studyUid, newSeriesUid, r.getSopInstanceUid());
         Files.createDirectories(dest.getParent());
         Path tmp = Files.createTempFile(dest.getParent(), "reloc-", ".tmp");
@@ -338,7 +339,7 @@ public class DbAdminService {
         if (!dest.equals(orig)) {
             Files.deleteIfExists(orig);
             layout.pruneEmptyDirs(orig);
-            layout.notifyRemoved(orig);
+            layout.notifyChanged(orig);
         }
         r.setSeriesInstanceUid(newSeriesUid);
         if (seriesNumber != null) {
@@ -386,8 +387,12 @@ public class DbAdminService {
         for (DicomInstance r : rows) {
             Path file = applyToFiles ? layout.resolveForWrite(r) : null;
             if (file != null) {
+                // モード A: 書き換える前に手元へ取り寄せる。取れなければ例外（try の外）で止める。
+                // 握りつぶして DB だけ更新すると、索引と実体（Drive の正本）が食い違う
+                layout.resolveForRead(r);
                 try {
                     rewriteFile(file, patientName, birthDate, sex, newId);
+                    layout.notifyChanged(file);
                 } catch (Exception e) {
                     log.warn("DICOM ファイルの書換に失敗: {} ({})", r.getUri(), e.toString());
                 }
