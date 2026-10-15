@@ -124,6 +124,7 @@ const ACTION_ERROR_KEYS: Record<string, string> = {
   "parent-not-folder": "settings.gdrive.err.notFolder",
   timeout: "settings.gdrive.err.timeout",
   busy: "settings.gdrive.err.busy",
+  "not-backup-folder": "settings.gdrive.err.notBackup",
   "dest-not-empty": "settings.gdrive.err.destNotEmpty",
   "not-empty": "settings.gdrive.err.destNotEmpty",
   "already-running": "settings.gdrive.err.alreadyRunning",

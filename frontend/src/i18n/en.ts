@@ -3227,6 +3227,7 @@ export const en: Record<string, string> = {
   "settings.gdrive.err.notSignedIn": "Sign in with Google first",
   "settings.gdrive.err.alreadyEnabled": "Already enabled for this database",
   "settings.gdrive.err.readOnly": "The chosen folder is not writable. Choose a folder you can write to",
+  "settings.gdrive.err.notBackup": "The chosen folder is not a backup. Choose the folder named \"GRAPHY-DB-…\" itself",
   "settings.gdrive.err.notFolder": "Choose a folder",
   "settings.gdrive.err.timeout": "No folder was chosen in time",
   "settings.gdrive.err.busy": "Another folder selection is in progress",

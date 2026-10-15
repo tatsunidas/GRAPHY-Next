@@ -121,7 +121,7 @@ describe("gdriveView", () => {
     }
     keys.add(stateView(null).labelKey);
     for (const c of ["no-oauth-client", "no-picker-key", "not-signed-in", "already-enabled", "parent-read-only",
-      "parent-not-folder", "timeout", "busy", "dest-not-empty", "not-empty", "already-running",
+      "parent-not-folder", "timeout", "busy", "dest-not-empty", "not-empty", "not-backup-folder", "already-running",
       "main-channel-disabled", "md5-mismatch", "snapshot-md5-mismatch", "network", "http-404", "http-403", "???"]) {
       keys.add(actionErrorKey(c));
     }

@@ -3218,6 +3218,7 @@ export const ja: Record<string, string> = {
   "settings.gdrive.err.notSignedIn": "先に Google でログインしてください",
   "settings.gdrive.err.alreadyEnabled": "この DB ではすでに有効です",
   "settings.gdrive.err.readOnly": "選んだフォルダには書き込めません。書き込み権限のあるフォルダを選んでください",
+  "settings.gdrive.err.notBackup": "選んだフォルダはバックアップではありません。「GRAPHY-DB-…」という名前のフォルダそのものを選んでください",
   "settings.gdrive.err.notFolder": "フォルダを選んでください",
   "settings.gdrive.err.timeout": "時間内にフォルダが選ばれませんでした",
   "settings.gdrive.err.busy": "別のフォルダ選択が進行中です",

@@ -247,6 +247,30 @@ class GdriveBackupFlowTest {
         assertEquals("INDEX-V1", extractIndex(restored.resolve("graphy-index.mv.db")));
     }
 
+    @Test
+    void バックアップでないフォルダ_親など_を選ぶと完了にせず失敗にする() throws Exception {
+        GdriveSyncService a = service(rootA, "dev-AAAA-0001", "hostA");
+        put(rootA, "1.1/2.1/3.1.dcm", rnd(1000, 3));
+        a.cycle();
+        // 実バックアップを 1 つ下に持つ「親」を選んだ状況: dicom/ も index-snapshots/ も直下に無い
+        FakeDrive.File p = new FakeDrive.File();
+        p.id = "PARENTfolder0001";
+        p.name = "parent-only";
+        p.folder = true;
+        drive.files.put(p.id, p);
+        FakeDrive.File child = new FakeDrive.File();
+        child.id = FOLDER + "x";
+        child.name = "GRAPHY-DB-nested";
+        child.parent = p.id;
+        child.folder = true;
+        drive.files.put(child.id, child);
+        GdriveConfig parentOnly = new GdriveConfig("cid", "csecret", "rtoken-SECRET", p.id, null, "restore", "restore-device", "");
+        GdriveRestoreService r = restoreService();
+        r.runSync(parentOnly, restored);
+        assertEquals(GdriveRestoreService.Phase.FAILED, r.progress().phase(), String.valueOf(r.progress()));
+        assertEquals("not-backup-folder", r.progress().error());
+    }
+
     /** 2 件目の取得を落とす。JDK の HttpClient は閉じた接続の GET を 1 回だけ自動でやり直すので、2 回続けて落とす。 */
     private static boolean isDrop(int n) {
         return n == 2 || n == 3;

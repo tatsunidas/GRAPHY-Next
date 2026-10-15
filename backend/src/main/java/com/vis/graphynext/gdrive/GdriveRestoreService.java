@@ -127,6 +127,10 @@ public class GdriveRestoreService {
             DriveClient client = new DriveClient(http, apiBase, tokens);
             Path dicomRoot = dest.resolve("dicom");
             Optional<DriveClient.RemoteFile> folder = client.findByName(source.folderId(), GdriveSyncService.DICOM_FOLDER, true);
+            if (folder.isEmpty() && client.findByName(source.folderId(), GdriveSnapshots.FOLDER, true).isEmpty()) {
+                // 親フォルダなど、バックアップでない所を選んだ。空の「完了」にしない
+                throw new GdriveException(GdriveException.Kind.FATAL, 0, "not-backup-folder");
+            }
             List<DriveClient.RemoteFile> files = folder.isPresent() ? client.listFiles(folder.get().id()) : List.of();
             long total = files.size();
             long done = 0;

@@ -184,7 +184,7 @@ export function GdrivePanel() {
             </>
           ) : (
             <>
-              <button style={btn} disabled={!!busy} onClick={signIn}>
+              <button data-testid="gdrive-signin" style={btn} disabled={!!busy} onClick={signIn}>
                 {busy === "signin" ? t("settings.gdrive.signingIn") : t("settings.gdrive.signIn")}
               </button>
               <p style={note}>{t("settings.gdrive.signIn.help")}</p>
@@ -200,7 +200,7 @@ export function GdrivePanel() {
 
       {ds?.configured && ds.signedIn && !enabled && (
         <div style={{ margin: "8px 0" }}>
-          <button style={btn} disabled={!!busy || !ds.pickerReady} onClick={enable}>
+          <button data-testid="gdrive-enable" style={btn} disabled={!!busy || !ds.pickerReady} onClick={enable}>
             {busy === "enable" ? t("settings.gdrive.enabling") : t("settings.gdrive.enable")}
           </button>
           <p style={note}>{t("settings.gdrive.enable.help")}</p>
@@ -254,7 +254,7 @@ export function GdrivePanel() {
         <div data-testid="gdrive-restore" style={{ marginTop: 14 }}>
           <h4 style={{ fontSize: 13, margin: "0 0 4px", color: "#444" }}>{t("settings.gdrive.restore.title")}</h4>
           <p style={note}>{t("settings.gdrive.restore.help")}</p>
-          <button style={btn} disabled={!!busy || restoring} onClick={startRestore}>
+          <button data-testid="gdrive-restore-button" style={btn} disabled={!!busy || restoring} onClick={startRestore}>
             {busy === "restore" ? t("settings.gdrive.restore.starting") : t("settings.gdrive.restore.button")}
           </button>
           {restoring && (

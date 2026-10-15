@@ -117,7 +117,7 @@ async function putRange(session: string, data: Buffer, from: number, to: number,
   return fetch(session, {
     method: "PUT",
     headers: hdr({ "Content-Range": `bytes ${from}-${to - 1}/${total}`, "Content-Length": String(to - from) }),
-    body: data.subarray(from, to),
+    body: new Uint8Array(data.subarray(from, to)),
   });
 }
 
