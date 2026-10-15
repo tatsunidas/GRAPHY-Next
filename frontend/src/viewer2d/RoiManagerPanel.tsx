@@ -452,18 +452,20 @@ export function RoiManagerPanel({
       setBusy(false);
     }
   };
-  // ROI 群を DICOM RTSTRUCT として保存（新シリーズ）。
+  // ROI 群とマスク（segment ごとに 1 構造）を DICOM RTSTRUCT として保存（新シリーズ）。
   const runExportRtStruct = async () => {
     if (busy) return;
     setBusy(true);
     try {
-      const res = await exportRoisAsRtStruct(rois.map((r) => r.uid));
+      const res = await exportRoisAsRtStruct(rois.map((r) => r.uid), masks.map((m) => m.id));
       if (res) {
         emitToast(t("roiMgr.exportRtDone"));
         emitSeriesRefresh();
         // 他ウィンドウ（メイン画面の検索リスト等）へ新規シリーズ発生を通知（CPR/中心線解析/Slicer と同様）。
         const studyUids = [...new Set(
-          rois.map((r) => getRoiMaskMeta(r.uid)?.scope?.studyUid).filter((v): v is string => !!v),
+          [...rois.map((r) => r.uid), ...masks.map((m) => m.id)]
+            .map((id) => getRoiMaskMeta(id)?.scope?.studyUid)
+            .filter((v): v is string => !!v),
         )];
         emitDbChanged({ reason: "series-create", studyUids });
       } else window.alert(t("roiMgr.exportRtFail"));
@@ -642,11 +644,11 @@ export function RoiManagerPanel({
             "SEG ⬆"
           )}
         </button>
-        {rois.length > 0 && (
-          <button onClick={() => setStatsOpen({})} style={opBtn} title={t("roiMgr.statsAll")}>Σ</button>
+        {rois.length + masks.length > 0 && (
+          <button onClick={() => setStatsOpen({})} style={opBtn} title={t("roiMgr.statsAll")} data-testid="roi-mgr-stats-all">Σ</button>
         )}
         {!isDemo && rois.length > 0 && <button onClick={runExportRois} disabled={busy} style={opBtn} title={t("roiMgr.exportIJ")}>IJ ⬇</button>}
-        {!isDemo && rois.length > 0 && <button onClick={runExportRtStruct} disabled={busy} style={opBtn} title={t("roiMgr.exportRt")}>RT ⬇</button>}
+        {!isDemo && rois.length + masks.length > 0 && <button onClick={runExportRtStruct} disabled={busy} style={opBtn} title={t("roiMgr.exportRt")} data-testid="roi-mgr-export-rt">RT ⬇</button>}
       </div>
       {rois.length === 0 && <div style={empty}>{t("roiMgr.empty")}</div>}
       {rois.map((r) => (

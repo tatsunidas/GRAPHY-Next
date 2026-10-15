@@ -8,8 +8,10 @@
  * 楕円/円はポリゴン近似、矩形は 4 隅、フリーハンドは polyline をそのまま使う。
  * 線/角度/点は閉輪郭に不向きのため対象外（ImageJ/SR/GSPS 側で扱う）。設計 `fw/dicom-seg-rtstruct-design.md` S2。
  */
-import { metaData } from "@cornerstonejs/core";
-import { annotation as csAnnotation } from "@cornerstonejs/tools";
+import { cache, metaData } from "@cornerstonejs/core";
+import { annotation as csAnnotation, segmentation as csSeg } from "@cornerstonejs/tools";
+import { traceMaskContours, type Pt } from "./maskContour";
+import { imageToWorldOnPlane, type PlaneGeometry } from "./imageCoords";
 import { getRoiMaskMeta } from "./roiMaskStore";
 import { exportDicomRtStruct, type RtStructRoi, type RtStructExportRequest, type SegExportResult } from "../api";
 
@@ -90,7 +92,66 @@ function annColorRgb(uid: string): [number, number, number] | null {
 }
 
 /** 面積型 ROI 群を RTSTRUCT として書き出す。成功時 { seriesInstanceUid }、対象が無ければ null。 */
-export async function exportRoisAsRtStruct(uids: string[]): Promise<SegExportResult | null> {
+/**
+ * マスク（ラベルマップ）→ RTSTRUCT の構造。segment ごとに 1 構造。
+ * スライスごとに外周と穴を、それぞれ閉じた輪郭（CLOSED_PLANAR）として入れる（穴を別の輪郭で書くのは
+ * RTSTRUCT の一般的な書き方）。輪郭は画素の境界をなぞる（`maskContour.ts`。`fw/roi-mask-model.md` §10）。
+ * 幾何（IPP/IOP/画素間隔）の無いスライスは書かない。
+ */
+export function maskToRtStructRois(segId: string): { rois: Omit<RtStructRoi, "number">[]; refImageId?: string } {
+  let labelmapIds: string[];
+  try {
+    labelmapIds = ((csSeg as AnyObj).getLabelmapImageIds(segId) as string[]) ?? [];
+  } catch {
+    return { rois: [] };
+  }
+  const meta = getRoiMaskMeta(segId);
+  const bySeg = new Map<number, { sopInstanceUid: string; points: number[] }[]>();
+  let refImageId: string | undefined;
+  for (const lmId of labelmapIds) {
+    const lm = cache.getImage(lmId) as AnyObj | undefined;
+    const vm = lm?.voxelManager;
+    const srcId = lm?.referencedImageId as string | undefined;
+    if (!vm || !srcId) continue;
+    const w = (lm.columns ?? lm.width) as number;
+    const h = (lm.rows ?? lm.height) as number;
+    const len = vm.getScalarDataLength() as number;
+    const labels = new Uint8Array(len);
+    const present = new Set<number>();
+    for (let i = 0; i < len; i++) {
+      const v = vm.getAtIndex(i) as number;
+      if (v > 0) {
+        labels[i] = v;
+        present.add(v);
+      }
+    }
+    if (!present.size) continue;
+    const plane = metaData.get("imagePlaneModule", srcId) as AnyObj | undefined;
+    const sop = sopOf(srcId);
+    if (!plane?.imagePositionPatient || !plane.rowCosines || !plane.columnCosines || !sop) continue;
+    if (!(plane.rowPixelSpacing > 0) || !(plane.columnPixelSpacing > 0)) continue;
+    refImageId ??= srcId;
+    const toWorld = (p: Pt) => imageToWorldOnPlane(plane as PlaneGeometry, p);
+    for (const seg of [...present].sort((a, b) => a - b)) {
+      const list = bySeg.get(seg) ?? [];
+      for (const c of traceMaskContours(labels, w, h, seg)) {
+        for (const ring of [c.outer, ...c.holes]) list.push({ sopInstanceUid: sop, points: flatten(ring.map(toWorld)) });
+      }
+      bySeg.set(seg, list);
+    }
+  }
+  const base = meta?.label || segId;
+  const names = meta?.segmentLabels ?? {};
+  const rois = [...bySeg.entries()].map(([seg, contours]) => ({
+    name: names[seg] || (bySeg.size > 1 ? `${base} #${seg}` : base),
+    color: null,
+    type: "ORGAN",
+    contours,
+  }));
+  return { rois, refImageId };
+}
+
+export async function exportRoisAsRtStruct(uids: string[], maskIds: string[] = []): Promise<SegExportResult | null> {
   let studyUid: string | undefined;
   let seriesUid: string | undefined;
   let forUid: string | undefined;
@@ -144,6 +205,20 @@ export async function exportRoisAsRtStruct(uids: string[]): Promise<SegExportRes
       type: "ORGAN",
       contours: [{ sopInstanceUid: sop, points: flatten(ring) }],
     });
+  }
+
+  for (const id of maskIds) {
+    const m = maskToRtStructRois(id);
+    if (!m.rois.length || !m.refImageId) continue;
+    if (!studyUid || !seriesUid) {
+      const meta = getRoiMaskMeta(id);
+      const gsm = (metaData.get("generalSeriesModule", m.refImageId) as AnyObj) ?? {};
+      const plane = (metaData.get("imagePlaneModule", m.refImageId) as AnyObj) ?? {};
+      studyUid = meta?.scope?.studyUid ?? gsm.studyInstanceUID;
+      seriesUid = meta?.scope?.seriesUid ?? gsm.seriesInstanceUID;
+      forUid = plane.frameOfReferenceUID ?? undefined;
+    }
+    for (const r of m.rois) rois.push({ number: ++n, ...r });
   }
 
   if (!rois.length || !studyUid || !seriesUid || !forUid) return null;
