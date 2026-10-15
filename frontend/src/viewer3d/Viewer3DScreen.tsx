@@ -33,7 +33,9 @@ import {
 import { confirmVolumeMemory } from "../viewer/volumeMemoryGuard";
 import { useDeviceClass } from "../mobile/useDeviceClass";
 import { imageIdForInstance, imageIdForCell } from "../viewer/imageId";
+import { metaData } from "@cornerstonejs/core";
 import { buildMprVolume } from "../viewer/mpr";
+import { sliceSpacingReport, sopIndexMap } from "../viewer/sliceLayout";
 import {
   createVtkVolumeView,
   vtkImageDataFromVolume,
@@ -119,6 +121,9 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
   const [message, setMessage] = useState<string>("");
   const [title, setTitle] = useState<string>("");
   const [tilt, setTilt] = useState<number | null>(null);
+  // 体積のスライス順の SOP → k（2D の ROI を描かれている画像に合わせて載せる）と、間隔が不均一なときの各間隔。
+  const [sopToK, setSopToK] = useState<Map<string, number> | undefined>(undefined);
+  const [unevenSteps, setUnevenSteps] = useState<number[] | null>(null);
   const [mode, setMode] = useState<VtkRenderMode>("VR");
   const [orthoPos, setOrthoPos] = useState<{ x: number; y: number; z: number }>({ x: 0.5, y: 0.5, z: 0.5 });
   const [lutName, setLutName] = useState<string | null>(null);
@@ -287,6 +292,25 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         maxBytes: memDecision.enforceMaxBytes,
       });
       setTilt(built.corrected ? (built.tiltAngleDeg ?? null) : null);
+      if (built.sortedImageIds) {
+        const ids = built.sortedImageIds;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const plane0 = (metaData.get("imagePlaneModule", ids[0]) ?? {}) as any;
+        const iop = (plane0.imageOrientationPatient ?? [1, 0, 0, 0, 1, 0]).map(Number);
+        const n = [iop[1] * iop[5] - iop[2] * iop[4], iop[2] * iop[3] - iop[0] * iop[5], iop[0] * iop[4] - iop[1] * iop[3]];
+        const positions = ids.map((id) => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const ipp = ((metaData.get("imagePlaneModule", id) ?? {}) as any).imagePositionPatient;
+          return Array.isArray(ipp) ? Number(ipp[0]) * n[0] + Number(ipp[1]) * n[1] + Number(ipp[2]) * n[2] : NaN;
+        });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        setSopToK(sopIndexMap(ids.map((id) => ((metaData.get("sopCommonModule", id) ?? {}) as any).sopInstanceUID)));
+        const rep = positions.every(Number.isFinite) ? sliceSpacingReport(positions) : null;
+        setUnevenSteps(rep && !rep.uniform ? rep.steps : null);
+      } else {
+        setSopToK(undefined);
+        setUnevenSteps(null);
+      }
       setVolumeId(volId);
 
       // Cornerstone が構築したボリュームから scalar 付き vtkImageData を組み立てて pure vtk へ渡す
@@ -582,6 +606,11 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         )}
         <span style={hTitle}>{t("main.toolbar.viewer3d")}</span>
         {title && <span style={hSeries}>{title}</span>}
+        {unevenSteps && (
+          <span style={tiltChip} title={t("viewer3d.unevenSpacingHint")} data-testid="viewer3d-uneven-spacing">
+            {t("viewer3d.unevenSpacing", { steps: unevenSteps.map((s) => Math.abs(s).toFixed(1)).join(" / ") })}
+          </span>
+        )}
         {tilt !== null && (
           <span style={tiltChip} title={t("mpr.tiltCorrectedHint")}>
             {t("mpr.tiltCorrected", { deg: tilt.toFixed(1) })}
@@ -849,6 +878,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
             <div style={panelSection}>
               <SceneObjectPanel
                 geom={sceneGeom}
+                sopToK={sopToK}
                 onStartCut={startCut}
                 onAnalyzeCenterline={analyzeCenterline}
                 onRepairMesh={(id, name) => setRepairTarget({ id, name })}

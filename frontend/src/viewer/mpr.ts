@@ -148,6 +148,8 @@ export interface BuildVolumeResult {
   volumeId: string;
   corrected: boolean; // ガントリチルト補正を適用したか
   tiltAngleDeg?: number;
+  /** 体積のスライス順の imageId（チルト補正で作り直した体積では無い）。 */
+  sortedImageIds?: string[];
 }
 
 // ── ベクトル小道具 ────────────────────────────────────────────
@@ -339,7 +341,7 @@ export async function buildMprVolume(
   } catch {
     /* ignore */
   }
-  return { volumeId, corrected: false };
+  return { volumeId, corrected: false, sortedImageIds };
 }
 
 /**

@@ -32,7 +32,12 @@ export function fillSliceEvenOdd(polys: ReadonlyArray<ReadonlyArray<[number, num
  * 面内解像度・向きが `geom` と一致している前提（ウィンドウ間マスク同期の `framesToLabelVolume` と同様、
  * 不一致は検出しない）。
  */
-export function rtStructRoiToLabelVolume(roi: RtStructImportRoi, geom: VolumeGeom, value = 1): LabelVolume | null {
+export function rtStructRoiToLabelVolume(
+  roi: RtStructImportRoi,
+  geom: VolumeGeom,
+  value = 1,
+  sopToK?: ReadonlyMap<string, number>,
+): LabelVolume | null {
   const [nx, ny, nz] = geom.dims;
   const data = new Uint8Array(nx * ny * nz);
   let any = false;
@@ -51,7 +56,9 @@ export function rtStructRoiToLabelVolume(roi: RtStructImportRoi, geom: VolumeGeo
       kCount++;
     }
     if (!kCount) continue;
-    const k = Math.round(kSum / kCount);
+    // 参照画像（SOP）が体積にあれば、その画像が描かれている k に載せる（不均一な間隔でも画像と合う）。
+    const bySop = c.referencedSopInstanceUid ? sopToK?.get(c.referencedSopInstanceUid) : undefined;
+    const k = bySop ?? Math.round(kSum / kCount);
     if (k < 0 || k >= nz) continue;
     const list = polysByK.get(k) ?? [];
     list.push(voxelPts);

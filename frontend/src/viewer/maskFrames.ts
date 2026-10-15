@@ -457,6 +457,8 @@ export function framesToLabelVolume(
   input: MaskFramesInput,
   geom: VolumeGeom,
   segmentIndex?: number,
+  /** 体積のスライス順の SOP → k（`sliceLayout.sopIndexMap`）。あれば IPP より優先して、描かれている画像と同じ k に載せる。 */
+  sopToK?: ReadonlyMap<string, number>,
 ): LabelVolume | null {
   const [nx, ny, nz] = geom.dims;
   if (nx !== input.columns || ny !== input.rows) return null; // 面内解像度不一致
@@ -471,7 +473,8 @@ export function framesToLabelVolume(
       const idx = worldToVoxel(geom, fr.imagePositionPatient);
       // フレーム IPP は当該スライスの voxel(0,0) 実座標のはず。面内残差が大きければ幾何不一致とみなす。
       if (Math.abs(idx[0]) > 0.5 || Math.abs(idx[1]) > 0.5) continue;
-      const k = Math.round(idx[2]);
+      const bySop = fr.referencedSopInstanceUid ? sopToK?.get(fr.referencedSopInstanceUid) : undefined;
+      const k = bySop ?? Math.round(idx[2]);
       if (k < 0 || k >= nz) continue;
       const plane = base64ToU8(fr.mask);
       if (plane.length !== frameSize) continue;
