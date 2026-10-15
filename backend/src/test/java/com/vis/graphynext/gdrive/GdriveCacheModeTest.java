@@ -245,6 +245,20 @@ class GdriveCacheModeTest {
     }
 
     @Test
+    void 直近の保護の長さは設定で変えられる_0分なら同期した直後でも追い出す() throws Exception {
+        svc.recentAccessMs = 0;
+        cacheOn(150_000);
+        for (String rel : new String[] {A, B, C}) {
+            put(rel, KB100, rel.hashCode());
+            svc.onStorageChanged(new StorageChanged(rel));
+        }
+        svc.cycle();
+        long local = java.util.stream.Stream.of(A, B, C).filter(r -> Files.exists(root.resolve(r))).count();
+        assertEquals(1, local, "保護が 0 分なら、同じ周期のうちに上限（150KB）まで追い出される");
+        assertEquals(3, drive.liveCount(), "Drive には 3 件とも残る");
+    }
+
+    @Test
     void 状態に手元の空き容量を載せる_モードAだけ() throws Exception {
         cacheOn(250_000);
         svc.usableSpace = () -> 123_456_789L;

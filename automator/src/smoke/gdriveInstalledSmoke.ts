@@ -19,6 +19,11 @@
  *   5. ローカルで削除 → Drive ではゴミ箱へ（完全削除でない）
  *   6. **強制終了**（SIGKILL）直後の起動で、重複なく収束する
  *   7. 正常終了で、索引スナップショットが Drive に置かれ、ロックが解放される
+ * --scenario cache（モード A: Drive が正本）:
+ *   C1 取り込み → C2 ログイン・「Drive が正本」で有効化 → C3 初回の同期 → C4 上限を小さくして再起動 → 追い出し（Drive は減らない）
+ *   → C5 追い出された画像を開くと Drive から取り寄せる／切替・解除は断られる → C6 ネット断で 503・手元のものは開ける
+ *   → C7 手元に無い検査を削除 → Drive のゴミ箱 → C8 すべてローカルに保存（完了後は追い出されない）→ C9 手元を正本へ切替 → C10 正常終了
+ *   続けて --mode restore --scenario cache（別の PC を模す。索引だけ復元 → 開くと取り寄せる）
  * --mode restore:
  *   8. 別のプロファイル（＝別の PC）でログインし、Drive から空フォルダへ復元 → 全ファイルの md5 一致・索引が一致（検査 UID の一覧）
  */
@@ -191,7 +196,7 @@ function localFiles(dicomRoot: string): Map<string, string> {
 
 const dataDir = (): string => path.join(PROFILE, "GRAPHY-Next");
 const dbFolder = (): string => path.join(dataDir(), "data");
-const state = (): { gdrive?: Record<string, { driveFolderId: string }> } => {
+const state = (): { current?: string; recent?: string[]; gdrive?: Record<string, { driveFolderId: string; mode?: string; cacheLimitBytes?: number }> } => {
   try {
     return JSON.parse(fs.readFileSync(path.join(dataDir(), "db-folders.json"), "utf8"));
   } catch {
@@ -206,12 +211,13 @@ interface Running {
   pid: number;
 }
 
-async function launch(relay: Relay | null): Promise<Running> {
+async function launch(relay: Relay | null, extraEnv: Record<string, string> = {}): Promise<Running> {
   fs.mkdirSync(PROFILE, { recursive: true });
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     GRAPHY_BACKEND_PORT: String(PORT),
     XDG_CONFIG_HOME: PROFILE,
+    ...extraEnv,
     ...(relay
       ? {
           GRAPHY_GDRIVE_API_BASE: `http://127.0.0.1:${relay.port}`,
@@ -255,10 +261,11 @@ async function signInIfNeeded(main: Page): Promise<boolean> {
   return !!(await until("ログイン", async () => (await desk(main)).signedIn, 600_000, 1500));
 }
 
-async function enableIfNeeded(main: Page, which: string): Promise<boolean> {
+async function enableIfNeeded(main: Page, which: string, mode: "backup" | "cache" = "backup"): Promise<boolean> {
   await openDrivePanel(main);
   if ((await desk(main)).folder) return true;
   say(`🔴【操作 2/2】ブラウザでフォルダ選択（Picker）が開きます。${which} を選んで確定してください（10 分以内）。`);
+  if (mode === "cache") await main.getByTestId("gdrive-mode-cache").check();
   await main.getByTestId("gdrive-enable").click();
   return !!(await until("有効化", async () => (await desk(main)).folder, 600_000, 1500));
 }
@@ -312,7 +319,8 @@ async function main(): Promise<void> {
   const relay = new Relay();
   await relay.start();
 
-  if (MODE === "restore") return restoreMode(dc);
+  if (MODE === "restore") return SCENARIO === "cache" ? restoreCacheMode(dc) : restoreMode(dc);
+  if (SCENARIO === "cache") return cacheScenario(dc, relay);
 
   const pick = SCENARIO === "short" ? "共有ドライブ内のフォルダ（書き込める所）" : "マイドライブのフォルダ（どれでも可）";
   const hcc = path.join(SAMPLES, "HCC_001");
@@ -472,6 +480,257 @@ async function restoreMode(dc: DriveCheck): Promise<void> {
   const got = st.map((s) => s.studyInstanceUid).sort();
   check(JSON.stringify(got) === JSON.stringify(exp.studies), "[8] 復元した DB を開くと、検査の一覧（UID）が元と一致する", `元 ${exp.studies.length} / 復元 ${got.length}`);
   await shot(run.main, "8-opened.png");
+  await run.app.close().catch(() => undefined);
+}
+
+// ── モード A（Drive が正本）─────────────────────────────────────────────
+const MB = 1024 * 1024;
+/** 試験用の小さな上限。画面から選べる下限は 1 GB なので、アプリを閉じている間に設定ファイルへ書く（試料が約 60MB のため）。 */
+const TEST_LIMIT_BYTES = 20 * MB;
+const FAST_ENV = { GRAPHY_GDRIVE_RECENT_ACCESS_MINUTES: "0" }; // 直近に読んだものの保護を外す（待たずに追い出しを見るため）
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const syncAny = async (): Promise<any> => fetch(`http://127.0.0.1:${PORT}/api/gdrive/status`).then((r) => (r.ok ? r.json() : null), () => null);
+const sopOf = (name: string): string => name.replace(/\.dcm$/, "").split("~").pop()!;
+
+async function driveDicom(dc: DriveCheck, includeTrashed = false): Promise<{ name: string; md5?: string; trashed: boolean }[]> {
+  const folderId = Object.values(state().gdrive ?? {})[0].driveFolderId;
+  const dicomId = await dc.child(folderId, "dicom");
+  return dicomId ? (await dc.list(dicomId, includeTrashed)).filter((f) => f.name.endsWith(".dcm")).map((f) => ({ name: f.name, md5: f.md5Checksum, trashed: f.trashed })) : [];
+}
+
+async function getInstance(sop: string): Promise<{ status: number; md5: string; message: string }> {
+  const r = await fetch(`http://127.0.0.1:${PORT}/api/instances/${encodeURIComponent(sop)}/file`);
+  const buf = Buffer.from(await r.arrayBuffer());
+  let message = "";
+  if (!r.ok) {
+    try {
+      message = JSON.parse(buf.toString("utf8")).message ?? "";
+    } catch {
+      message = buf.toString("utf8").slice(0, 100);
+    }
+  }
+  return { status: r.status, md5: r.ok ? crypto.createHash("md5").update(buf).digest("hex") : "", message };
+}
+
+async function closeAndWait(run: Running): Promise<void> {
+  await run.app.close().catch(() => undefined);
+  await until("backend の終了", async () => (await fetch(`http://127.0.0.1:${PORT}/api/gdrive/status`).then(() => false, () => true)) || null, 180_000, 2000);
+}
+
+async function cacheScenario(dc: DriveCheck, relay: Relay): Promise<void> {
+  const hcc = path.join(SAMPLES, "HCC_001");
+  const others = ["US_LEE_IR6.dcm", "MG_CC_L_LEE_IR87a.dcm", "MG_CC_R_LEE_IR87a.dcm", "MG_MLO_L_LEE_IR87a.dcm", "MG_MLO_R_LEE_IR87a.dcm"].map((f) => path.join(SAMPLES, f));
+  for (const p of [hcc, ...others]) if (!fs.existsSync(p)) throw new Error(`試料がありません: ${p}`);
+  const dicomRoot = path.join(dbFolder(), "dicom");
+  const pick = "マイドライブのフォルダ（どれでも可）";
+
+  // ── C1〜C3: 取り込み → ログイン → Drive が正本で有効化 → 初回の同期 ──
+  let run = await launch(relay, FAST_ENV);
+  check(true, "[C1] 配布物が起動し、メイン画面が出る");
+  await openDrivePanel(run.main);
+  const imp = await importPaths(PORT, [hcc, ...others]);
+  check(imp.imported > 0, "[C1] 試料を取り込めた", JSON.stringify({ imported: imp.imported, failed: imp.failed }));
+  const expected = localFiles(dicomRoot); // 名前 → md5（これが Drive に載るべき全件）
+  const totalBytes = [...expected.keys()].reduce((n, k) => n + fs.statSync(path.join(dicomRoot, k.split("~").join(path.sep))).size, 0);
+  console.log(`  取り込んだ ${expected.size} 件・${(totalBytes / MB).toFixed(1)} MB（試験用の上限 ${TEST_LIMIT_BYTES / MB} MB）`);
+  check(totalBytes > TEST_LIMIT_BYTES * 1.5, "[C1] 試料の大きさが試験用の上限を十分に超える（追い出しが起きる前提）", `${(totalBytes / MB).toFixed(1)} MB`);
+  if (!(await signInIfNeeded(run.main))) return void rec("[C2] ログイン", "未達", "10 分以内にログインされなかった");
+  rec("[C2] ログイン", "合格", "main の状態が signedIn");
+  if (!(await enableIfNeeded(run.main, pick, "cache"))) return void rec("[C2] 有効化", "未達", "10 分以内に保存先が選ばれなかった");
+  rec("[C2] 有効化", "合格", "保存先が記録された");
+  const mode0 = (await desk(run.main)) as unknown as { folder: { mode: string; cacheLimitBytes: number } };
+  check(mode0.folder.mode === "cache" && mode0.folder.cacheLimitBytes === 15 * 1024 ** 3, "[C2] 「Drive が正本」で有効化され、上限は既定の 15 GB", JSON.stringify(mode0.folder));
+  await shot(run.main, "c2-enabled-cache.png");
+  CONVERGE_DC = dc;
+  check(await converge("初回の同期"), "[C3] 初回の同期が完了（CONNECTED・残 0・Drive が全件）");
+  const d3 = await driveDicom(dc);
+  const bad3 = d3.filter((f) => expected.get(f.name) !== f.md5).length;
+  check(d3.length === expected.size && bad3 === 0, "[C3] Drive に全件が md5 つきで載った", `Drive ${d3.length} / ローカル ${expected.size} / 不一致 ${bad3}`);
+
+  // ── C4: 上限を小さくして再起動 → 追い出し（Drive は減らない） ──
+  await closeAndWait(run);
+  const st = state();
+  const key = Object.keys(st.gdrive ?? {})[0];
+  st.gdrive![key].cacheLimitBytes = TEST_LIMIT_BYTES;
+  fs.writeFileSync(path.join(dataDir(), "db-folders.json"), JSON.stringify(st));
+  run = await launch(relay, FAST_ENV);
+  const ev = await until("追い出し", async () => {
+    const x = await syncAny();
+    return x && x.mode === "cache" && x.evictedCount > 0 && x.cacheBytes <= TEST_LIMIT_BYTES ? x : null;
+  }, 240_000, 3000);
+  check(!!ev, "[C4] 上限を超えた分が手元から消え、使用量が上限以下になる", ev ? `手元 ${(ev.cacheBytes / MB).toFixed(1)} MB / 上限 ${TEST_LIMIT_BYTES / MB} MB・Drive にだけ ${ev.evictedCount} 件` : "");
+  await sleep(4000);
+  await openDrivePanel(run.main);
+  await shot(run.main, "c4-evicted.png");
+  const local4 = localFiles(dicomRoot);
+  const badLocal = [...local4].filter(([k, v]) => expected.get(k) !== v).length;
+  check(local4.size < expected.size && badLocal === 0, "[C4] 手元に残ったものは壊れておらず、件数は全件より少ない", `手元 ${local4.size} / 全件 ${expected.size} / 不一致 ${badLocal}`);
+  const d4 = await driveDicom(dc, true);
+  check(d4.filter((f) => !f.trashed).length === expected.size && d4.filter((f) => f.trashed).length === 0, "[C4] 追い出しで Drive は減らず、ゴミ箱にも入らない", `Drive ${d4.filter((f) => !f.trashed).length} 件・ゴミ箱 ${d4.filter((f) => f.trashed).length} 件`);
+  await sleep(2000);
+
+  // ── C5: 追い出された画像を開くと Drive から取り寄せる／切替・解除は断られる ──
+  let evicted = [...expected.keys()].filter((k) => !localFiles(dicomRoot).has(k));
+  const target = evicted[0];
+  const got = await getInstance(sopOf(target));
+  check(got.status === 200 && got.md5 === expected.get(target), "[C5] 追い出された画像を開くと Drive から取り寄せられ、内容が元と一致する", `HTTP ${got.status} md5 ${got.md5 === expected.get(target) ? "一致" : "不一致"}`);
+  const after5 = await until("取り寄せ後の同期", async () => {
+    const x = await syncAny();
+    return x && x.state === "CONNECTED" && x.pending === 0 ? x : null;
+  }, 120_000, 3000);
+  const d5 = await driveDicom(dc, true);
+  check(!!after5 && d5.filter((f) => !f.trashed).length === expected.size && d5.filter((f) => f.trashed).length === 0, "[C5] 取り寄せたあと Drive へ送り直されず（件数不変・重複なし・ゴミ箱なし）", `Drive ${d5.filter((f) => !f.trashed).length} 件`);
+  run.main.on("dialog", (d) => void d.accept());
+  await openDrivePanel(run.main);
+  await run.main.getByTestId("gdrive-switch-mode").click();
+  await sleep(1500);
+  const modeAfterTry = ((await desk(run.main)) as unknown as { folder: { mode: string } }).folder.mode;
+  const panelText = await run.main.getByTestId("gdrive-panel").innerText();
+  // 画面の言語（アプリの OS ロケール）に依らないよう、理由コード（画面の文言に併記される）で判定する
+  check(modeAfterTry === "cache" && panelText.includes("not-all-local"), "[C5] 手元に無い画像があるうちは「手元を正本にする」が断られ、理由（not-all-local）が出る", `mode=${modeAfterTry}`);
+  await run.main.locator('[data-testid="gdrive-enabled"] button').last().click(); // 並びの最後が「連携を解除」
+  await sleep(1500);
+  const folderStill = ((await desk(run.main)) as unknown as { folder: unknown }).folder;
+  check(!!folderStill, "[C5] 手元に無い画像があるうちは連携の解除も断られる（設定が残る）");
+  await shot(run.main, "c5-refused.png");
+
+  // ── C6: ネット断 ──
+  evicted = [...expected.keys()].filter((k) => !localFiles(dicomRoot).has(k));
+  const onDisk = [...localFiles(dicomRoot).keys()];
+  relay.setCut(true);
+  await sleep(2000);
+  if (evicted.length > 0 && onDisk.length > 0) {
+    const off = await getInstance(sopOf(evicted[evicted.length - 1]));
+    check(off.status === 503 && off.message === "offline", "[C6] ネットが切れていて手元に無い画像は、404 でなく 503＋理由 offline", `HTTP ${off.status} ${off.message}`);
+    const here = await getInstance(sopOf(onDisk[0]));
+    check(here.status === 200 && here.md5 === expected.get(onDisk[0]), "[C6] ネットが切れていても、手元にある画像は開ける", `HTTP ${here.status}`);
+  } else {
+    rec("[C6] ネット断の試験", "失敗", `前提が崩れた（手元に無い ${evicted.length} 件・手元にある ${onDisk.length} 件）`);
+  }
+  relay.setCut(false);
+  const back = await until("復帰後の取り寄せ", async () => {
+    const r = await getInstance(sopOf(evicted[evicted.length - 1]));
+    return r.status === 200 ? r : null;
+  }, 120_000, 3000);
+  check(!!back && back.md5 === expected.get(evicted[evicted.length - 1]), "[C6] 復帰後は取り寄せられる（内容一致）");
+
+  // ── C7: 手元に無い検査を削除 → Drive のゴミ箱 ──
+  const studies = (await fetch(`http://127.0.0.1:${PORT}/api/studies`).then((r) => r.json())) as { studyInstanceUid: string; modality?: string }[];
+  const localNow = localFiles(dicomRoot);
+  const absentStudy = studies.find((s) => {
+    const names = [...expected.keys()].filter((k) => k.startsWith(`${s.studyInstanceUid}~`));
+    return names.length > 0 && names.every((k) => !localNow.has(k));
+  });
+  const victim = absentStudy ?? studies.find((s) => s.modality === "US") ?? studies[studies.length - 1];
+  const victimNames = [...expected.keys()].filter((k) => k.startsWith(`${victim.studyInstanceUid}~`));
+  check(!!absentStudy, "[C7] 削除する検査は、手元に 1 つも無い（Drive にだけある）もの", `${victimNames.length} 件`);
+  const del = await fetch(`http://127.0.0.1:${PORT}/api/studies/${encodeURIComponent(victim.studyInstanceUid)}`, { method: "DELETE" });
+  check(del.ok, "[C7] 削除の操作が通る", `HTTP ${del.status}`);
+  await fetch(`http://127.0.0.1:${PORT}/api/gdrive/sync`, { method: "POST" });
+  const trashed = await until("ゴミ箱", async () => {
+    const l = await driveDicom(dc, true);
+    const mine = l.filter((f) => victimNames.includes(f.name));
+    return mine.length > 0 && mine.every((f) => f.trashed) && !l.some((f) => !f.trashed && victimNames.includes(f.name)) ? l : null;
+  }, 240_000, 4000);
+  check(!!trashed, "[C7] 手元に無かった検査の削除が、Drive ではゴミ箱への移動になる（完全削除でない）", `${victimNames.length} 件`);
+  for (const n of victimNames) expected.delete(n);
+  const d7 = await driveDicom(dc);
+  check(d7.length === expected.size, "[C7] 残りの検査は Drive に残っている", `Drive ${d7.length} / 期待 ${expected.size}`);
+
+  // ── C8: すべてローカルに保存（完了後は追い出されない） ──
+  await openDrivePanel(run.main);
+  await run.main.getByTestId("gdrive-localize").click();
+  const loc = await until("全件保存", async () => {
+    const p = await fetch(`http://127.0.0.1:${PORT}/api/gdrive/localize`).then((r) => r.json(), () => null);
+    return p && (p.phase === "DONE" || p.phase === "FAILED") ? p : null;
+  }, 600_000, 2000);
+  check(!!loc && loc.phase === "DONE", "[C8] すべてローカルに保存が完了する", JSON.stringify(loc));
+  await shot(run.main, "c8-localized.png");
+  const local8 = localFiles(dicomRoot);
+  const bad8 = [...expected].filter(([k, v]) => local8.get(k) !== v).length;
+  check(local8.size === expected.size && bad8 === 0, "[C8] 全件が手元にあり、md5 が一致する", `手元 ${local8.size} / 期待 ${expected.size} / 不一致 ${bad8}`);
+  await sleep(70_000); // 同期の周期を 2 回以上またぐ（上限 20MB を超えていても追い出されない）
+  const local8b = localFiles(dicomRoot);
+  const x8 = await syncAny();
+  check(local8b.size === expected.size && x8 && x8.evictedCount === 0, "[C8] 完了後は、上限を超えていても追い出されない（周期を 2 回以上またいだあと）", `手元 ${local8b.size} / 追い出し済み ${x8?.evictedCount}`);
+
+  // ── C9: 手元を正本へ切替 ──
+  await openDrivePanel(run.main);
+  await run.main.getByTestId("gdrive-switch-mode").click();
+  const sw = await until("切替", async () => (((await desk(run.main)) as unknown as { folder: { mode: string } }).folder.mode === "backup" ? true : null), 30_000, 1000);
+  check(!!sw, "[C9] 全件が手元にあれば「手元を正本にする」が通り、保存方式がバックアップになる");
+  await sleep(2000);
+  await shot(run.main, "c9-switched.png");
+  const badge = await run.main.getByTestId("gdrive-mode-badge").getAttribute("data-mode");
+  check(badge === "backup", "[C9] 画面の札もバックアップになる", String(badge));
+
+  // ── C10: 正常終了 → 復元の期待値 ──
+  const studiesNow = (await fetch(`http://127.0.0.1:${PORT}/api/studies`).then((r) => r.json())) as { studyInstanceUid: string }[];
+  const folderId = Object.values(state().gdrive ?? {})[0].driveFolderId;
+  fs.writeFileSync(path.join(OUT, "expected.json"), JSON.stringify({ studies: studiesNow.map((s) => s.studyInstanceUid).sort(), folderId, files: [...expected] }, null, 2));
+  const snapDir = await dc.child(folderId, "index-snapshots");
+  const snapsBefore = snapDir ? (await dc.list(snapDir)).filter((f) => f.name.endsWith(".zip")).map((f) => f.name) : [];
+  await closeAndWait(run);
+  const snapsAfter = snapDir ? (await dc.list(snapDir)).filter((f) => f.name.endsWith(".zip")).map((f) => f.name) : [];
+  check(snapsAfter.some((n) => !snapsBefore.includes(n)), "[C10] 正常終了で、削除を反映した索引スナップショットが Drive に置かれた", `${snapsBefore.length} → ${snapsAfter.length} 世代`);
+  const locks = (await dc.list(folderId)).filter((f) => f.name.startsWith("lock-"));
+  check(locks.length === 0, "[C10] ロックが解放されている", `${locks.length} 件`);
+  relay.stop();
+}
+
+/** 別の PC を模す: 索引だけを復元し、DICOM は開くときに取り寄せる。 */
+async function restoreCacheMode(dc: DriveCheck): Promise<void> {
+  const exp = JSON.parse(fs.readFileSync(path.join(OUT, "expected.json"), "utf8")) as { studies: string[]; folderId: string; files: [string, string][] };
+  const want = new Map(exp.files);
+  const dest = path.join(PROFILE, "restored-db");
+  fs.rmSync(dest, { recursive: true, force: true });
+  fs.mkdirSync(dest, { recursive: true });
+  let run = await launch(null, FAST_ENV);
+  if (!(await signInIfNeeded(run.main))) return void rec("[R1] ログイン（別の PC を模す）", "未達");
+  rec("[R1] ログイン（別の PC を模す）", "合格");
+  await run.app.evaluate(({ dialog }, d) => {
+    dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [d] })) as typeof dialog.showOpenDialog;
+  }, dest);
+  say("🔴【操作】ブラウザで Picker が開きます。**バックアップの GRAPHY-DB-… フォルダ**（先ほどの通し試験のもの）を選んで確定してください（10 分以内）。");
+  await openDrivePanel(run.main);
+  await run.main.getByTestId("gdrive-restore-mode-cache").check();
+  await run.main.getByTestId("gdrive-restore-button").click();
+  const done = await until("復元", async () => {
+    const p = await fetch(`http://127.0.0.1:${PORT}/api/gdrive/restore`).then((r) => r.json(), () => null);
+    return p && (p.phase === "DONE" || p.phase === "FAILED") ? p : null;
+  }, 600_000, 2000);
+  check(!!done && done.phase === "DONE" && done.total === 0 && done.snapshotRestored === true, "[R2] 索引だけの復元が完了する（DICOM は 0 件・スナップショットは復元）", JSON.stringify(done));
+  await sleep(1500);
+  await shot(run.main, "r2-restored.png");
+  check(localFiles(path.join(dest, "dicom")).size === 0, "[R2] 復元した DB の手元に DICOM は 1 つも無い");
+  check(fs.existsSync(path.join(dest, "graphy-index.mv.db")), "[R2] 索引（graphy-index.mv.db）が復元されている");
+  const link = Object.entries(state().gdrive ?? {}).find(([k]) => path.resolve(k) === path.resolve(dest))?.[1];
+  check(!!link && link.driveFolderId === exp.folderId && link.mode === "cache", "[R2] 復元先が同じ Drive フォルダに「Drive が正本」で紐付いた", JSON.stringify(link ?? null));
+  await closeAndWait(run);
+
+  // 復元した DB を開く（紐付けは残したまま、使う DB だけを切り替える）
+  const s2 = state();
+  s2.current = dest;
+  s2.recent = [dest];
+  fs.writeFileSync(path.join(dataDir(), "db-folders.json"), JSON.stringify(s2));
+  run = await launch(null, FAST_ENV);
+  const studies = (await fetch(`http://127.0.0.1:${PORT}/api/studies`).then((r) => r.json())) as { studyInstanceUid: string }[];
+  const got = studies.map((s) => s.studyInstanceUid).sort();
+  check(JSON.stringify(got) === JSON.stringify(exp.studies), "[R3] 復元した DB を開くと、検査の一覧（UID）が元と一致する", `元 ${exp.studies.length} / 復元 ${got.length}`);
+  const ready = await until("同期の状態", async () => {
+    const x = await syncAny();
+    return x && x.mode === "cache" && x.evictedCount === want.size ? x : null;
+  }, 240_000, 3000);
+  check(!!ready, "[R3] 手元に無い画像が、すべて「Drive にだけある」として扱われる", ready ? `追い出し済み ${ready.evictedCount} / 期待 ${want.size}` : JSON.stringify(await syncAny()));
+  const names = [...want.keys()];
+  const one = names[Math.floor(names.length / 2)];
+  const r3 = await getInstance(sopOf(one));
+  check(r3.status === 200 && r3.md5 === want.get(one), "[R3] 復元した DB で画像を開くと、Drive から取り寄せられ内容が元と一致する", `HTTP ${r3.status}`);
+  const dAfter = await driveDicom(dc, true);
+  check(dAfter.filter((f) => !f.trashed).length === want.size && dAfter.filter((f) => f.trashed && want.has(f.name)).length === 0, "[R3] 復元・取り寄せで Drive の中身は変わらない（件数不変・ゴミ箱なし）", `Drive ${dAfter.filter((f) => !f.trashed).length} 件`);
+  await openDrivePanel(run.main);
+  await shot(run.main, "r3-opened.png");
   await run.app.close().catch(() => undefined);
 }
 

@@ -78,6 +78,8 @@ public class GdriveSyncService implements com.vis.graphynext.dicom.store.Storage
 
     /** 直近にこの時間内に読まれたファイルは追い出さない（返した Path を後で開く経路があるため）。 */
     static final long RECENT_ACCESS_MS = 10 * 60_000;
+    /** 実機試験で短くできるよう設定にしてある（{@code graphy.gdrive.recent-access-minutes}、既定 10 分）。 */
+    long recentAccessMs = RECENT_ACCESS_MS;
     private static final int EVICT_BATCH = 2000;
 
     private final GdriveSyncRepository repo;
@@ -144,10 +146,12 @@ public class GdriveSyncService implements com.vis.graphynext.dicom.store.Storage
                              @Value("${graphy.gdrive.lock-lease-minutes:10}") long leaseMinutes,
                              @Value("${graphy.gdrive.snapshot-interval-minutes:60}") long snapshotMinutes,
                              @Value("${graphy.gdrive.snapshot-keep:3}") int snapshotKeep,
+                             @Value("${graphy.gdrive.recent-access-minutes:10}") long recentAccessMinutes,
                              org.springframework.beans.factory.ObjectProvider<com.vis.graphynext.dicom.store.DicomStorageService> storage) {
         this(repo, layout.root(), apiBase, tokenUrl, Clock.systemUTC(), Math::random, intervalSeconds * 1000,
                 reconcileMinutes * 60_000, true, zip -> jdbc.execute("BACKUP TO '" + zip.toString().replace("'", "''") + "'"),
                 leaseMinutes * 60_000, snapshotMinutes * 60_000, snapshotKeep);
+        this.recentAccessMs = Math.max(0, recentAccessMinutes) * 60_000;
         this.indexer = file -> storage.getObject().ingest(file);
         layout.setBackend(this); // 読み出し（resolveForRead）が、手元に無いファイルを取り寄せる口として使う
     }
@@ -286,20 +290,33 @@ public class GdriveSyncService implements com.vis.graphynext.dicom.store.Storage
         shutdownWork();
     }
 
-    /** 終了時の後始末（ベストエフォート）: 最後の索引スナップショットとロックの解放。つながらなければ諦める。 */
+    /**
+     * 終了時の後始末（ベストエフォート）: 最後の索引スナップショットとロックの解放。つながらなければ諦める。
+     *
+     * <p>🔴 {@code lockHeld} が false でも、自分のロックが Drive に残っていることがある。{@link #shutdown()} は
+     * 同期の周期を割り込みで止めるので、周期が「ロックを書いた直後・印を立てる前」で終わると、
+     * 印は false のまま Drive にだけロックが残る（保存方式の切替・設定の変更の直後に終了すると起きる。実機で再現）。
+     * 残ると、リースが切れるまで別の PC から「使用中」に見え、終了時のスナップショットも作られない。
+     * だから印に頼らず、いったん取り直してから（他の端末が使用中なら取れない＝スナップショットは作らない）、
+     * 必ず自分のロックを解放する。
+     */
     synchronized void shutdownWork() {
-        if (config == null || !lockHeld) {
+        if (config == null || lock == null) {
             return;
         }
         try {
-            if (repo.countByFolderIdAndState(config.folderId(), GdriveSyncItem.PENDING) == 0) {
+            if (!lockHeld) {
+                lockHeld = lock.acquire(false) == null;
+            }
+            if (lockHeld && repo.countByFolderIdAndState(config.folderId(), GdriveSyncItem.PENDING) == 0) {
                 lastSnapshotAt = snapshots.createAndUpload();
             }
         } catch (GdriveException | RuntimeException e) {
             log.info("[gdrive] exit snapshot skipped: {}", e.getMessage());
+        } finally {
+            lock.release();
+            lockHeld = false;
         }
-        lock.release();
-        lockHeld = false;
     }
 
     // ── 1 周期 ────────────────────────────────────────────────────
@@ -999,7 +1016,7 @@ public class GdriveSyncService implements com.vis.graphynext.dicom.store.Storage
         if (used <= limit) {
             return;
         }
-        long cutoff = clock.millis() - RECENT_ACCESS_MS;
+        long cutoff = clock.millis() - recentAccessMs;
         for (GdriveSyncItem item : repo.evictable(folderId, cutoff, org.springframework.data.domain.PageRequest.of(0, EVICT_BATCH))) {
             if (used <= limit) {
                 break;

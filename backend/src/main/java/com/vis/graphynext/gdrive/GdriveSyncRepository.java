@@ -41,6 +41,6 @@ public interface GdriveSyncRepository extends JpaRepository<GdriveSyncItem, Stri
 
     /** 追い出してよい候補（Drive に md5 一致で載っている・手元にある・{@code cutoff} より前に最後に使われた）。古い順。 */
     @Query("select i from GdriveSyncItem i where i.folderId = :folderId and i.state = 'SYNCED' and i.evicted = false "
-            + "and i.lastAccessAt < :cutoff order by i.lastAccessAt, i.relPath")
+            + "and i.lastAccessAt <= :cutoff order by i.lastAccessAt, i.relPath")
     List<GdriveSyncItem> evictable(String folderId, long cutoff, org.springframework.data.domain.Pageable page);
 }

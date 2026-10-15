@@ -271,6 +271,42 @@ class GdriveBackupFlowTest {
         assertEquals("not-backup-folder", r.progress().error());
     }
 
+    private long liveLocks() {
+        return drive.files.values().stream().filter(f -> !f.folder && !f.trashed && f.name.startsWith("lock-")).count();
+    }
+
+    @Test
+    void 周期が中断されてロックの印が立っていなくても_終了時に取り直して_スナップショットを置き_ロックを解放する() throws Exception {
+        // 実機で再現: 保存方式の切替（configure）の直後に終了すると、周期がロックを書いた直後・印を立てる前に割り込みで終わる
+        GdriveSyncService a = service(rootA, "dev-AAAA-0001", "hostA"); // configure 済み・周期はまだ走っていない（印は false）
+        // 中断された周期が残した、自分のロック
+        FakeDrive.File stale = new FakeDrive.File();
+        stale.id = "stalelock0001xx";
+        stale.name = "lock-dev-AAAA-0001.json";
+        stale.parent = FOLDER;
+        stale.bytes = "{\"deviceId\":\"dev-AAAA-0001\",\"startedAt\":1,\"heartbeatAt\":1}".getBytes();
+        drive.files.put(stale.id, stale);
+        assertEquals(1, liveLocks());
+        int before = backups.get();
+        a.shutdownWork();
+        assertEquals(before + 1, backups.get(), "取り直して、終了時のスナップショットを置いた");
+        assertEquals(0, liveLocks(), "自分のロックは解放（ゴミ箱）される。Drive に残らない");
+    }
+
+    @Test
+    void 他の端末が使用中なら_終了時にスナップショットは作らず_相手のロックには触れない() throws Exception {
+        GdriveSyncService b = service(rootB, "dev-BBBB-0002", "hostB");
+        b.cycle(); // B がロックを持っている
+        assertEquals(1, liveLocks());
+        GdriveSyncService a = service(rootA, "dev-AAAA-0001", "hostA"); // 周期は走っていない（印は false）
+        int before = backups.get();
+        a.shutdownWork();
+        assertEquals(before, backups.get(), "使用中の相手がいるので、索引のスナップショットは作らない");
+        assertEquals(1, liveLocks(), "B のロックはそのまま");
+        b.shutdownWork();
+        assertEquals(0, liveLocks());
+    }
+
     @Test
     void 索引のみの復元_モードA_はスナップショットだけを取り_DICOM_は取らない() throws Exception {
         GdriveSyncService a = service(rootA, "dev-AAAA-0001", "hostA");
