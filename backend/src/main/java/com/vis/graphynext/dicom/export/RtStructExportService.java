@@ -148,7 +148,7 @@ public class RtStructExportService {
                 if (c.sopInstanceUid() != null && !c.sopInstanceUid().isBlank()) {
                     ci.newSequence(Tag.ContourImageSequence, 1).add(imageRef(srcClassUid, c.sopInstanceUid()));
                 }
-                ci.setString(Tag.ContourGeometricType, VR.CS, "CLOSED_PLANAR");
+                ci.setString(Tag.ContourGeometricType, VR.CS, geometricTypeOf(c));
                 ci.setInt(Tag.NumberOfContourPoints, VR.IS, c.points().length / 3);
                 ci.setDouble(Tag.ContourData, VR.DS, c.points());
                 cont.add(ci);
@@ -181,7 +181,7 @@ public class RtStructExportService {
 
     // --- helpers ---
 
-    private void validate(RtStructExportRequest req) {
+    void validate(RtStructExportRequest req) {
         if (req.studyInstanceUid() == null || req.studyInstanceUid().isBlank()
                 || req.seriesInstanceUid() == null || req.seriesInstanceUid().isBlank()) {
             throw new IllegalArgumentException("studyInstanceUid / seriesInstanceUid は必須です");
@@ -197,11 +197,25 @@ public class RtStructExportService {
                 throw new IllegalArgumentException("ROI " + roi.number() + " に輪郭がありません");
             }
             for (RtStructExportRequest.Contour c : roi.contours()) {
-                if (c.points() == null || c.points().length < 9 || c.points().length % 3 != 0) {
-                    throw new IllegalArgumentException("輪郭点列は 3 の倍数かつ 3 点以上が必要です (roi=" + roi.number() + ")");
+                String gt = geometricTypeOf(c);
+                int min = switch (gt) {
+                    case "CLOSED_PLANAR" -> 3;
+                    case "OPEN_PLANAR" -> 2;
+                    case "POINT" -> 1;
+                    default -> throw new IllegalArgumentException(
+                            "未対応の ContourGeometricType です: " + gt + " (roi=" + roi.number() + ")");
+                };
+                int n = c.points() == null ? 0 : c.points().length;
+                if (n % 3 != 0 || n / 3 < min || ("POINT".equals(gt) && n / 3 != 1)) {
+                    throw new IllegalArgumentException("輪郭点列は 3 の倍数で、" + gt + " は "
+                            + ("POINT".equals(gt) ? "ちょうど 1 点" : min + " 点以上") + "が必要です (roi=" + roi.number() + ")");
                 }
             }
         }
+    }
+
+    static String geometricTypeOf(RtStructExportRequest.Contour c) {
+        return c.geometricType() == null || c.geometricType().isBlank() ? "CLOSED_PLANAR" : c.geometricType();
     }
 
     private Attributes imageRef(String sopClassUid, String sopInstanceUid) {

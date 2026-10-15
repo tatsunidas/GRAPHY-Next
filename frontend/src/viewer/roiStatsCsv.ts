@@ -18,25 +18,31 @@
  * </ul>
  */
 import type { RoiStatsResult } from "./roiStats";
+import type { MaskStatsResult } from "./roi3d";
 
 export interface RoiStatsCsvRow {
   index: number;
   label: string;
   tool: string;
   stats: RoiStatsResult | undefined;
+  /** マスク（3D ROI）の行。あれば `stats` の代わりにこちらを出す（kind=volume）。 */
+  mask?: MaskStatsResult;
 }
 
 /** 値の単位（複数 ROI で混在し得るので、代表を 1 つ選んで列名に入れる）。 */
 export function csvValueUnit(rows: ReadonlyArray<RoiStatsCsvRow>): string {
   const units = new Set<string>();
-  for (const r of rows) if (r.stats?.values?.unit) units.add(r.stats.values.unit);
+  for (const r of rows) {
+    const unit = r.mask ? r.mask.values?.unit : r.stats?.values?.unit;
+    if (unit) units.add(unit);
+  }
   if (units.size === 1) return [...units][0];
   // 混在（PET と CT を並べた等）なら列名では断定せず、単位列を別に立てる。
   return units.size === 0 ? "" : "mixed";
 }
 
 /** 1 セル分のエスケープ（RFC 4180）。 */
-function cell(v: string | number | undefined | null): string {
+export function cell(v: string | number | undefined | null): string {
   if (v === undefined || v === null) return "";
   const s = String(v);
   if (!/[",\n\r]/.test(s)) return s;
@@ -80,9 +86,16 @@ export function roiStatsToCsv(rows: ReadonlyArray<RoiStatsCsvRow>): string {
     "valueUnit",
     "imageId",
     "warnings",
+    // マスク用。既存の列の位置を変えないよう末尾に足す。
+    "volume[mL]",
+    "slices",
   ];
   const lines = [header.map(cell).join(",")];
   for (const r of rows) {
+    if (r.mask) {
+      lines.push(maskRow(r.index, r.label, r.tool, r.mask));
+      continue;
+    }
     const g = r.stats?.geometry;
     const v = r.stats?.values;
     lines.push(
@@ -112,12 +125,44 @@ export function roiStatsToCsv(rows: ReadonlyArray<RoiStatsCsvRow>): string {
         v?.unit ?? "",
         r.stats?.imageId ?? "",
         (r.stats?.warnings ?? []).join(" "),
+        "",
+        "",
       ]
         .map(cell)
         .join(","),
     );
   }
   return lines.join("\r\n");
+}
+
+function maskRow(index: number, label: string, tool: string, m: MaskStatsResult): string {
+  const v = m.values;
+  return [
+    index,
+    label,
+    tool,
+    "volume",
+    "", "", "", "", "", "",
+    n(m.voxels),
+    n(v?.mean),
+    n(v?.sd),
+    n(v?.min),
+    n(v?.max),
+    n(v?.median),
+    n(v?.p5),
+    n(v?.p95),
+    n(v?.sum),
+    n(v?.skewness),
+    n(v?.kurtosis),
+    n(v?.entropy),
+    v?.unit ?? "",
+    m.imageId,
+    m.warnings.join(" "),
+    n(m.volumeMl),
+    n(m.slices),
+  ]
+    .map(cell)
+    .join(",");
 }
 
 /** ダウンロード用（Excel が UTF-8 を化けさせないよう BOM を付ける）。 */

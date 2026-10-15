@@ -10,12 +10,15 @@ import {
   LengthTool,
   BidirectionalTool,
   AngleTool,
+  CobbAngleTool,
+  MagnifyTool,
   EllipticalROITool,
   RectangleROITool,
   ProbeTool,
   BrushTool,
 } from "@cornerstonejs/tools";
 import { CONTOUR_TOOL_NAMES } from "./roiContourTools";
+import { POINT_ROI_TOOL_NAME } from "./pointRoiTool";
 
 /** 消しゴムの合成ツール ID（BrushTool の ERASE ストラテジに対応する内部値）。 */
 export const ERASER_TOOL_ID = "__graphy_eraser__";
@@ -33,6 +36,10 @@ export const TOOL_IDS = {
   /** 双方向計測（長径＋直交短径）。RECIST 1.1 の計測はこれを使う。 */
   bidirectional: BidirectionalTool.toolName,
   angle: AngleTool.toolName,
+  /** 離れた 2 本の線のなす角（Cobb 角）。 */
+  cobbAngle: CobbAngleTool.toolName,
+  /** 拡大レンズ（押している間だけカーソルのまわりを拡大。ROI にはならない）。 */
+  magnify: MagnifyTool.toolName,
   ellipse: EllipticalROITool.toolName,
   rect: RectangleROITool.toolName,
   probe: ProbeTool.toolName,
@@ -44,6 +51,8 @@ export const TOOL_IDS = {
   freehand: CONTOUR_TOOL_NAMES.freehand,
   /** フリーライン（開）。ドラッグで描き、閉じない。 */
   freeLine: CONTOUR_TOOL_NAMES.freeLine,
+  /** 点 ROI（Probe は計測、こちらは ROI）。 */
+  point: POINT_ROI_TOOL_NAME,
   brush: BrushTool.toolName,
   eraser: ERASER_TOOL_ID,
   /** 3D Wand（対話型・輝度領域成長。ダイアログで seed/connectivity/threshold）。 */

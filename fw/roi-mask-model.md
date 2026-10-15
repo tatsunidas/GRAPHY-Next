@@ -151,4 +151,72 @@ segmentation.segmentIndex.setActiveSegmentIndex(segmentationId, 1);
 7. **ImageJ ブリッジ**（backend ij.jar。別ドキュメントで設計後）。 ✅
 
 > 詳細な進捗・実機確認状況は `fw/roi-mask-progress.md` 参照。残る未実装は 4（ワンドの結線）のみ。
-</content>
+
+## 10. ROI とマスクの統合（2026-10-15 決定）
+
+ROI マネージャには「ROI」だけを見せ、中身の持ち方（注釈＝ベクタ／ラベルマップ＝ラスタ）は内部で使い分ける。
+足りない向きは変換で補う。動いているマスク系（Wand・ブラシ・演算・SEG・3D Viewer）は作り替えない。
+
+**ユーザーの決定**
+- Wand（2D/3D）の出力は、塗った ROI のまま（中身はラベルマップ）。輪郭線で表示し、ブラシで直す。
+  RT・IJ へは書き出すときに輪郭へ変換する。
+- segment が複数あるマスクは、segment ごとに 1 つの ROI として扱う。
+- 「計測」メニューを作り、計測（長さ・RECIST・角度・Cobb 角・プローブ）と ROI を分ける。
+  - ROI の種類は「領域」「線」「点」の 3 つ。
+  - 計測はマスクにしない。
+  - 計測の行に「ROI にする」を置く（長さ→線 ROI、プローブ→点 ROI）。
+- パネルは「ROI」と「計測」の 2 つの欄にする。
+
+**段**
+- 0: 2D/3D の判定を狂わせる不整合を直す（本節の規則）。
+- 1: マスク→ROI の変換（`viewer/maskContour.ts`）。
+- 2: メニューの分割・ROI の種類・パネルの 1 本化。
+- 3: 入口をそろえる（RTSTRUCT 読み込みを構造ごとに 1 ROI にする）。
+- 4: 出口をそろえる（塗った ROI の RT・IJ・匿名化・`getRois`・保存）。
+
+**段 0 の規則**（`viewer/maskScope.ts`）
+- 演算・SPLIT・⬤ の球・ROI→Mask の結果の `scope.z` は、入力のメタを引き継がず、前景を塗ったスライスから決める。
+  - 1 枚だけならそのスタック上の番号、2 枚以上なら `"all"`。前景が無ければメタを変えない。
+- 1 スライスのマスクは、次の 2 通りの持ち方を許す。
+  - シリーズ全体の大きさに 1 枚だけ塗った形（`roiToMask`・RTSTRUCT 読み込み）
+  - 1 枚だけのラベルマップ（⬚ 分割）
+  - 演算は、各スライスを `referencedImageId` で元のスタックに当てはめて重ねる（`alignToStack`）。
+  - `roiToMask` を 1 枚だけにそろえないのは、別のスライスにブラシで塗れなくなるため。
+- マスクの ZCT は表示だけにする（押しても変わらない）。ブラシ・Wand で作るマスクはボリューム（`Z:all`）。
+
+**段 1 の変換**（`viewer/maskContour.ts`）
+- 画素の境界をなぞる（頂点は画素の角）。4 近傍の成分ごとに、外周（時計回り）と穴（反時計回り）を返す。
+- 画素中心の偶奇判定（`fillPolygonsEvenOdd`）で塗り直すと、元と同じ画素に戻る。
+  - この往復はテストで固定する。
+  - 判定は `rasterizeRoi` の点の内外判定と同じ式。
+
+**段 2 PR 3（パネル）**（`viewer2d/RoiManagerPanel.tsx`、行モデルは `viewer/roiRows.ts`）
+- 欄は「ROI」と「計測」の 2 つ。「マスク」「3D 球」の欄は無い。
+  - ROI: 1 件 1 行。形の ROI（面積・線・点）、塗りの ROI（**ラベルマップの segment 1 つにつき 1 行**）、パラメトリック球（アイコンで区別）。
+  - 計測: Length / Bidirectional / Angle / Cobb / Probe。種別不明のツール（矢印注記など）も落とさずここに出す。
+  - 「＋新規 ROI（塗り）」はこれまでの新規マスク（segment 1 の新しいラベルマップ）。「＋セグメント」は無い（segment は SEG 取り込み・SPLIT で生じる）。
+- 塗りの ROI の行
+  - 行を押す／ラジオ＝その segment を塗り先（`activateMask(id, segIndex)`）。👁・色・不透明度・塗りは segment 単位、輪郭線の太さだけマスク単位（Cornerstone の制約）。
+  - 名前は `segmentLabels[segIndex]`。segment が 1 つだけのマスクは `label` も同じ値にそろえる（表示は `label` が優先）。
+  - Σ / Σ³ / CSV は segment 単位（`segmentIndex`）。🗑 は `removeSegment` でその segment だけ消し、最後の 1 つならマスクごと消す。
+  - ⬚（スライス分割）・RT ⬇ も segment 単位。**SEG ⬇ だけはマスク全体**（同じマスクの ROI すべてを書く。ツールチップに明記）。
+  - segment が 1 つだけの行は「行＝マスク全体」として従来どおり非ゼロすべてを前景にする（`segmentIndex` を渡さない）。
+- 前景の定義は `isSegmentForeground(value, segmentIndex?)` の 1 か所（`maskStatsCore.ts`）。統計・ボクセル CSV・ブール演算・SPLIT が共有する。
+- 演算バー（MERGE(OR) / AND / XOR / SPLIT）は、**選択した ROI 行**（形・塗りの両方にチェックボックス）に働く。
+  - 塗りの行は `value === segIndex` のボクセルだけを前景にする（マスク全体ではない）。
+  - 形の ROI は先に `roiToMask` で**一時マスク**にラスタ化して計算し、**演算が終わったら一時マスクを取り除く**（結果の新規 ROI だけを残す。パネルに中間物を残さないため）。面積型でない形が混ざると失敗（null）。
+  - SPLIT は塗りの ROI 1 件に対して、その segment のボクセルだけを連結成分に分け、元の segment を置き換える。
+
+### 段 2 PR 4（3D ビューワ）
+3D ビューワは別 BrowserWindow で、2D とメモリを共有しない。2D の ROI は `BroadcastChannel`（`viewer/maskBridge.ts`）で渡す。純関数は `viewer/maskBridgeCore.ts`。
+- **一覧（announce）は ROI 単位**。要求は `{studyUid, seriesUid, c, t}`、応答は次のどちらかの配列。
+  - `{kind:"painted", segmentationId, segmentIndex, label, color, c, t}` … 塗りの ROI（segment 1 つ）。名前は 2D の行と同じ規則（`paintedRowName`）。名前が無ければ中立の `ROI n`。
+  - `{kind:"sphere", sphereId, label, color, center, radiusMm, c, t}` … パラメトリック球。
+  - 絞り込みは study/series と C/T の両方。scope の c/t が `"all"` か未設定なら、どの C/T にも一致する。
+- **フレーム取得（frames-request）は `segmentIndex` を受け取り**、その segment だけを返す（`extractMaskFrames(id, segIndex)`）。球はフレームを使わず、3D 側で中心＋半径を表示ボリュームの格子へラスタ化して ROI（kind "roi"）にする（`viewer/sphereRaster.ts`。メッシュではない）。
+- **取り込みの入口は 1 つ**「2D ビューアの ROI から 3D ROI を追加…」。ROI を 1 件ずつ、または「すべて追加」。⟳ で再取得。3D パネルと同じウィンドウ（モバイル）にある ROI は同じ一覧に混ぜ、`segmentationId + segmentIndex` で重複を落とす。
+- **取り込み元の参照**: `SceneObject.source`（`seriesUid / c / t / segmentationId / segmentIndex / sphereId / origin: "2d" | "server"`）。一覧では取り込み済みに印を付け、「すべて追加」は取り込み済みを飛ばす。
+- **サーバの SEG/RTSTRUCT** は、表示中シリーズを参照するものだけ。backend は参照シリーズ UID を返さないので、フレーム/輪郭の `referencedSopInstanceUid` が表示中シリーズのインスタンス集合に含まれるかで判定する（参照が 1 つも無いものは除外）。
+- **体積は 2 つ並べる**。ボクセル体積＝前景ボクセル数 × ボクセル体積（2D の Σ³ と同じ定義。格子が一致すれば同じ値）と、表示メッシュ（平滑化後）の体積。後者はメッシュ由来なので 2D の数値とは一致しない。
+- **再起動**: 3D ウィンドウが開いたまま 2D が `graphy-viewer3d-ctx` を別の study/series/C/T で書き直したら、`storage` イベントで検知して画面ごと再読込する（`viewer3d/viewer3dCtx.ts`。`ts` だけの違いは無視）。
+- 2D 側: 新しい塗りの ROI の既定名は `ROI n`（`label` と `segmentLabels["1"]` を作成時に設定）。塗りの行は 🗑 を 1 行目に移し、操作ボタンを 3 行目に分けた。

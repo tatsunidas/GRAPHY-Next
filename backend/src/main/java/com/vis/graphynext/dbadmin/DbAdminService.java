@@ -6,6 +6,7 @@ package com.vis.graphynext.dbadmin;
 
 import com.vis.graphynext.dicom.store.DicomInstance;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
+import com.vis.graphynext.dicom.store.StorageLayout;
 import com.vis.graphynext.dicom.store.DicomStorageService;
 import com.vis.graphynext.settings.SettingsService;
 import org.dcm4che3.data.Attributes;
@@ -21,7 +22,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
-import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -44,11 +44,20 @@ public class DbAdminService {
     private final DicomInstanceRepository repo;
     private final SettingsService settings;
     private final DicomStorageService storage;
+    private final StorageLayout layout;
+    private final PatientRecordMover records;
 
-    public DbAdminService(DicomInstanceRepository repo, SettingsService settings, DicomStorageService storage) {
+    public DbAdminService(DicomInstanceRepository repo, SettingsService settings, DicomStorageService storage,
+                          StorageLayout layout, PatientRecordMover records) {
         this.repo = repo;
         this.settings = settings;
         this.storage = storage;
+        this.layout = layout;
+        this.records = records;
+    }
+
+    /** 患者情報の編集の結果。records は ROI などを運んだ／残した件数。 */
+    public record EditResult(int updatedInstances, PatientRecordMover.Result records) {
     }
 
     @Transactional(readOnly = true)
@@ -69,46 +78,61 @@ public class DbAdminService {
                 repo.volumeBytesByModality().stream().map(kv -> new StatsDto.Bucket(orUnknown(kv.getK()), kv.getV())).toList());
     }
 
+    /** 削除の結果。related はファイルも消す設定のときに片付けた付随データ（そうでなければ null）。 */
+    public record DeleteResult(int deletedInstances, PatientRecordMover.Cleanup related) {
+    }
+
     /** 患者を削除（その患者の全インスタンス）。設定で実ファイルも削除。 */
     @Transactional
-    public int deletePatient(String patientId) {
+    public DeleteResult deletePatient(String patientId) {
         return deleteAll(repo.findByPatientId(patientId));
     }
 
     /** スタディを削除（その全インスタンス）。設定で実ファイルも削除。 */
     @Transactional
-    public int deleteStudy(String studyUid) {
+    public DeleteResult deleteStudy(String studyUid) {
         return deleteAll(repo.findByStudyInstanceUid(studyUid));
     }
 
     /** シリーズを削除（その全インスタンス）。設定で実ファイルも削除。 */
     @Transactional
-    public int deleteSeries(String studyUid, String seriesUid) {
+    public DeleteResult deleteSeries(String studyUid, String seriesUid) {
         return deleteAll(repo.findBySeries(studyUid, seriesUid));
     }
 
     /** インスタンス（画像）を 1 件削除。設定で実ファイルも削除。study+series で絞ってから SOP 一致を抽出。 */
     @Transactional
-    public int deleteInstance(String studyUid, String seriesUid, String sopUid) {
+    public DeleteResult deleteInstance(String studyUid, String seriesUid, String sopUid) {
         List<DicomInstance> rows = repo.findBySeries(studyUid, seriesUid).stream()
                 .filter(r -> sopUid != null && sopUid.equals(r.getSopInstanceUid()))
                 .toList();
         return deleteAll(rows);
     }
 
-    private int deleteAll(List<DicomInstance> rows) {
+    /**
+     * 行とファイルを消す。ファイルも消す設定のときは、消えた画像に結び付いていた付随データ（ROI など）も片付ける。
+     * ファイルを残す設定のときは付随データも残す（残したファイルを取り込み直せば元どおりになる）。
+     * 🔴 レポートには触れない（画像とは別に管理し、消すのはレポート機能からだけ）。
+     */
+    private DeleteResult deleteAll(List<DicomInstance> rows) {
         boolean deleteFiles = boolSetting("data.deleteFilesOnDisk", true);
         for (DicomInstance r : rows) {
-            if (deleteFiles && r.getUri() != null) {
+            Path file = deleteFiles ? layout.resolveForWrite(r) : null;
+            if (file != null) {
                 try {
-                    Files.deleteIfExists(Path.of(URI.create(r.getUri())));
+                    Files.deleteIfExists(file);
+                    layout.pruneEmptyDirs(file);
                 } catch (Exception e) {
                     log.warn("ファイル削除に失敗: {} ({})", r.getUri(), e.toString());
                 }
             }
         }
         repo.deleteAll(rows);
-        return rows.size();
+        PatientRecordMover.Cleanup related = deleteFiles ? records.afterDelete(rows) : null;
+        if (related != null) {
+            log.info("削除に伴い付随データを片付けた: {}", related);
+        }
+        return new DeleteResult(rows.size(), related);
     }
 
     /**
@@ -118,12 +142,15 @@ public class DbAdminService {
      * @param newPatientId 患者 ID を変更する場合に指定（null/空で据え置き）
      */
     @Transactional
-    public int updatePatient(String patientId, String patientName, String birthDate, String sex,
-                             String newPatientId) {
+    public EditResult updatePatient(String patientId, String patientName, String birthDate, String sex,
+                                    String newPatientId) {
         boolean changeId = newPatientId != null && !newPatientId.isBlank() && !newPatientId.equals(patientId);
-        int n = applyPatientEdit(repo.findByPatientId(patientId), patientName, birthDate, sex, changeId ? newPatientId : null);
-        log.info("患者情報を更新(患者全体): {} -> name={}, id変更={} ({}件)", patientId, patientName, changeId, n);
-        return n;
+        List<DicomInstance> rows = repo.findByPatientId(patientId);
+        var before = PatientRecordMover.keysBefore(rows);
+        int n = applyPatientEdit(rows, patientName, birthDate, sex, changeId ? newPatientId : null);
+        var moved = records.afterEdit(rows, before, changeId ? newPatientId : null);
+        log.info("患者情報を更新(患者全体): {} -> name={}, id変更={} ({}件) 記録: {}", patientId, patientName, changeId, n, moved);
+        return new EditResult(n, moved);
     }
 
     /**
@@ -134,15 +161,17 @@ public class DbAdminService {
      * 一覧から消える＝患者レコード削除に相当）。
      */
     @Transactional
-    public int updateStudyPatient(String studyUid, String patientName, String birthDate, String sex,
-                                  String newPatientId) {
+    public EditResult updateStudyPatient(String studyUid, String patientName, String birthDate, String sex,
+                                         String newPatientId) {
         List<DicomInstance> rows = repo.findByStudyInstanceUid(studyUid);
         String oldId = rows.isEmpty() ? "" : rows.get(0).getPatientId();
         boolean changeId = newPatientId != null && !newPatientId.isBlank() && !newPatientId.equals(oldId);
+        var before = PatientRecordMover.keysBefore(rows);
         int n = applyPatientEdit(rows, patientName, birthDate, sex, changeId ? newPatientId : null);
-        log.info("患者情報を更新(スタディ単位): study={} {} -> name={}, id変更={} ({}件)",
-                studyUid, oldId, patientName, changeId, n);
-        return n;
+        var moved = records.afterEdit(rows, before, changeId ? newPatientId : null);
+        log.info("患者情報を更新(スタディ単位): study={} {} -> name={}, id変更={} ({}件) 記録: {}",
+                studyUid, oldId, patientName, changeId, n, moved);
+        return new EditResult(n, moved);
     }
 
     /** シリーズ統合の結果（移動できた件数・失敗件数・統合先 SeriesInstanceUID）。 */
@@ -296,7 +325,10 @@ public class DbAdminService {
     /** 1 インスタンスを別シリーズへ移す（ファイル書換＋移動＋索引更新）。失敗は例外で通知。 */
     private void relocateInstance(DicomInstance r, String studyUid, String newSeriesUid, Integer seriesNumber,
                                   String seriesDesc, Integer instanceNumber) throws IOException {
-        Path orig = Path.of(URI.create(r.getUri()));
+        Path orig = layout.resolveForWrite(r);
+        if (orig == null) {
+            throw new IOException("保管庫内のファイルを特定できません: " + r.getSopInstanceUid());
+        }
         Path dest = storage.instanceStoragePath(studyUid, newSeriesUid, r.getSopInstanceUid());
         Files.createDirectories(dest.getParent());
         Path tmp = Files.createTempFile(dest.getParent(), "reloc-", ".tmp");
@@ -304,6 +336,7 @@ public class DbAdminService {
         Files.move(tmp, dest, StandardCopyOption.REPLACE_EXISTING);
         if (!dest.equals(orig)) {
             Files.deleteIfExists(orig);
+            layout.pruneEmptyDirs(orig);
         }
         r.setSeriesInstanceUid(newSeriesUid);
         if (seriesNumber != null) {
@@ -315,7 +348,7 @@ public class DbAdminService {
         if (instanceNumber != null) {
             r.setInstanceNumber(instanceNumber);
         }
-        r.setUri(dest.toUri().toString());
+        r.setUri(layout.toStored(dest));
         repo.save(r);
     }
 
@@ -349,9 +382,10 @@ public class DbAdminService {
                                  String newId) {
         boolean applyToFiles = boolSetting("data.applyPatientEditToFiles", true);
         for (DicomInstance r : rows) {
-            if (applyToFiles && r.getUri() != null) {
+            Path file = applyToFiles ? layout.resolveForWrite(r) : null;
+            if (file != null) {
                 try {
-                    rewriteFile(Path.of(URI.create(r.getUri())), patientName, birthDate, sex, newId);
+                    rewriteFile(file, patientName, birthDate, sex, newId);
                 } catch (Exception e) {
                     log.warn("DICOM ファイルの書換に失敗: {} ({})", r.getUri(), e.toString());
                 }

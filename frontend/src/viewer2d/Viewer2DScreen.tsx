@@ -2,6 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
+import { FUSION_BLENDS, fusionBlendCss, type FusionBlend } from "../viewer/fusionBlend";
 import { deselectAllRois } from "../viewer/roiInteriorGrab";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -25,12 +26,13 @@ import {
 } from "../viewer/registrationRecord";
 import { loadRegistrations, saveRegistrations } from "../viewer/registrationPersistence";
 import { fetchSeriesLayout } from "../api";
+import { reconcileSolo, toggleSolo } from "./soloTile";
 import { RegistrationPanel } from "./RegistrationPanel";
 import type { RenderOverlay } from "../viewer/Viewer2D";
 import { buildSeriesLayout, type SeriesLayout } from "../viewer/seriesLayout";
 import { LutDialog, ColorBar } from "../viewer/LutDialog";
-import { eventTarget } from "@cornerstonejs/core";
-import { Enums as csToolsEnums } from "@cornerstonejs/tools";
+import { eventTarget, getEnabledElement } from "@cornerstonejs/core";
+import { Enums as csToolsEnums, annotation as csAnnotation } from "@cornerstonejs/tools";
 import {
   runViewerCommand,
   useIsDisplayOnlyTile,
@@ -55,16 +57,21 @@ import { frameOfImageId } from "../viewer/imageId";
 import { derivePatientKey } from "../viewer/patientKey";
 import { getFocusedTile } from "../viewer/focusedTile";
 import { hasClipboardRoi } from "../viewer/roiClipboard";
+import { annotationRoiKind } from "../viewer/roiKind";
+import { canConvertMeasureToRoi } from "../viewer/measureToRoi";
 import { isTextEntryTarget, matchesShortcut } from "../shortcuts/registry";
 import { isInsideViewerOverlay } from "../viewer/viewerOverlay";
 import { runSeriesCommand } from "../viewer/seriesCommands";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { emitToast, subscribeToast } from "../viewer/toast";
+import { composeTileWithAnnotations, visibleRoiCount } from "../viewer/tileCapture";
+import { askCopyWithRoi, CopyImageAskHost } from "./CopyImageAsk";
 import { classifySeriesRenderability } from "../viewer/seriesRenderable";
 import { subscribeSeriesRefresh } from "../viewer/viewerRefresh";
 import { WandDialog } from "./WandDialog";
 import { LevelSetsDialog } from "./LevelSetsDialog";
 import { HistogramDialog } from "./HistogramDialog";
+import { ResampleDialog } from "./ResampleDialog";
 import { FourierDialog } from "./FourierDialog";
 import { SUVCalibrationDialog } from "../viewer/SUVCalibrationDialog";
 import { getSuv, subscribeSuvStore } from "../viewer/suvStore";
@@ -114,6 +121,8 @@ interface FusionOverlay {
   series: Series;
   instances: Instance[];
   opacity: number; // 0.0 – 1.0
+  /** 重ね方（表示上の合成）。未指定は通常。保存しない。 */
+  blend?: FusionBlend;
   /** ドロップ元タイルで表示中だった C/T。fusion オーバーレイの初期 C/T に使う（無ければ 0）。 */
   initialC?: number;
   initialT?: number;
@@ -137,6 +146,8 @@ interface PatientSession {
   tiles: Tile[];
   gridCols: number;   // 0 = 自動（ceil(√N)）、>0 = 手動指定列数
   gridRows: number;   // 0 = 自動（列数から行が流れる）、>0 = 手動指定行数（Row×Col 固定レイアウト）
+  /** ヘッダのダブルクリックで単独表示にしているタイルの ID。行×列・順序は書き換えない（soloTile.ts）。 */
+  soloTileId?: string | null;
 }
 
 /** localStorage に保存するコンテキスト形式。MainScreen が書き込み、Viewer が読む。 */
@@ -217,6 +228,59 @@ function captureAndDownload(tileId: string): void {
   a.click();
 }
 
+/** タイルの Cornerstone の要素（canvas と注釈の `.svg-layer` を持つ）。 */
+function tileViewportElement(tileId: string): HTMLDivElement | null {
+  const el = document.querySelector(`[data-tile-id="${CSS.escape(tileId)}"]`);
+  return (el?.querySelector(".viewport-element")?.parentElement as HTMLDivElement | null) ?? null;
+}
+
+/** タイルの表示中の画像に描かれている ROI の数。 */
+function tileVisibleRoiCount(tileId: string): number {
+  const element = tileViewportElement(tileId);
+  if (!element) return 0;
+  const vp = getEnabledElement(element)?.viewport as { getCurrentImageId?: () => string } | undefined;
+  return visibleRoiCount(
+    csAnnotation.state.getAllAnnotations(),
+    vp?.getCurrentImageId?.(),
+    (uid) => csAnnotation.visibility.isAnnotationVisible(uid) ?? true,
+  );
+}
+
+/** 指定タイルの画像をクリップボードへコピーする。withRoi なら ROI の線と計測の文字を重ねる（四隅の文字は含まない）。 */
+async function copyTileImage(tileId: string, withRoi: boolean): Promise<boolean> {
+  let url = captureTileDataUrl(tileId);
+  if (!url) return false;
+  if (withRoi) {
+    const element = tileViewportElement(tileId);
+    const canvas = element?.querySelector("canvas") as HTMLCanvasElement | null;
+    const svg = element?.querySelector(".svg-layer") as SVGSVGElement | null;
+    if (!canvas || !svg) return false;
+    url = await composeTileWithAnnotations(canvas, svg).catch(() => null);
+    if (!url) return false;
+  }
+  const copy = desktop()?.copyImage;
+  if (copy) return copy(url).catch(() => false);
+  try {
+    const blob = await (await fetch(url)).blob();
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 📋 とメニューの「画像をコピー」。表示中の画像に ROI があれば、含めるかを聞く。 */
+async function copyTileImageAsking(tileId: string, t: (k: string) => string): Promise<void> {
+  let withRoi = false;
+  if (tileVisibleRoiCount(tileId) > 0) {
+    const choice = await askCopyWithRoi();
+    if (choice === "cancel") return;
+    withRoi = choice === "roi";
+  }
+  const ok = await copyTileImage(tileId, withRoi);
+  emitToast(t(!ok ? "viewer2d.copyImageFailed" : withRoi ? "viewer2d.copyImageDoneWithRoi" : "viewer2d.copyImageDone"));
+}
+
 /**
  * タイル画像を外部（デスクトップ/他アプリ）へネイティブドラッグする。
  * Electron では本物のファイルドラッグになり、禁止カーソルが出ず、
@@ -269,6 +333,17 @@ const ANGIO_SR_DESCRIPTION: Record<"qca" | "qlv" | "qca3d", string> = {
   qlv: "QLV",
   qca3d: "QCA 3D",
 };
+
+/** ツールの切り替えキー（`shortcuts/registry.ts` の id）と、選ぶツール。 */
+const TOOL_KEYS: ReadonlyArray<readonly [string, string]> = [
+  ["tool-wl", TOOL_IDS.windowLevel],
+  ["tool-pan", TOOL_IDS.pan],
+  ["tool-zoom", TOOL_IDS.zoom],
+  ["tool-length", TOOL_IDS.length],
+  ["tool-angle", TOOL_IDS.angle],
+  ["tool-roi-rect", TOOL_IDS.rect],
+  ["tool-roi-ellipse", TOOL_IDS.ellipse],
+];
 
 export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
   const { t } = useI18n();
@@ -328,7 +403,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
       if (idx >= 0) {
         if (prev[idx].tiles.some((t) => t.id === tileId)) return prev; // 重複スキップ
         const updated = [...prev];
-        updated[idx] = { ...prev[idx], tiles: [...prev[idx].tiles, tile] };
+        updated[idx] = { ...prev[idx], tiles: [...prev[idx].tiles, tile], soloTileId: null };
         return updated;
       }
       return [
@@ -370,7 +445,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
         return next;
       }
       const updated = [...prev];
-      updated[idx] = { ...prev[idx], tiles: nextTiles };
+      updated[idx] = { ...prev[idx], tiles: nextTiles, soloTileId: null };
       return updated;
     });
   };
@@ -388,7 +463,18 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
     setPatients((prev) =>
       prev.map((p) =>
         p.patientKey === patientKey
-          ? { ...p, gridRows: Math.max(0, Math.floor(rows)), gridCols: Math.max(0, Math.floor(cols)) }
+          ? { ...p, gridRows: Math.max(0, Math.floor(rows)), gridCols: Math.max(0, Math.floor(cols)), soloTileId: null }
+          : p,
+      ),
+    );
+  };
+
+  /** タイルヘッダのダブルクリック: 単独表示（1 枚）⇔ 通常表示。 */
+  const toggleTileSolo = (patientKey: string, tileId: string) => {
+    setPatients((prev) =>
+      prev.map((p) =>
+        p.patientKey === patientKey
+          ? { ...p, soloTileId: toggleSolo(reconcileSolo(p.soloTileId, p.tiles.map((tl) => tl.id)), tileId, p.tiles.length) }
           : p,
       ),
     );
@@ -414,10 +500,10 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
         if (p.patientKey !== patientKey) return p;
         if (p.tiles.some((t) => t.id === newId)) return p; // 重複スキップ
         const idx = p.tiles.findIndex((t) => t.id === targetTileId);
-        if (idx < 0) return { ...p, tiles: [...p.tiles, tile] };
+        if (idx < 0) return { ...p, tiles: [...p.tiles, tile], soloTileId: null };
         const next = [...p.tiles];
         next.splice(before ? idx : idx + 1, 0, tile);
-        return { ...p, tiles: next };
+        return { ...p, tiles: next, soloTileId: null };
       }),
     );
     setActiveKey(patientKey);
@@ -577,6 +663,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
                   isDemo={isDemo}
                   onRemoveTile={removeTile}
                   onSetGrid={setPatientGrid}
+                  onToggleSolo={toggleTileSolo}
                   onInsertAdjacent={insertAdjacentTile}
                   onSwap={swapTiles}
                   onSetSync={setTileSync}
@@ -587,6 +674,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
           )}
         </div>
       </div>
+      <CopyImageAskHost />
     </div>
   );
 }
@@ -638,6 +726,7 @@ function TileGrid({
   isDemo,
   onRemoveTile,
   onSetGrid,
+  onToggleSolo,
   onInsertAdjacent,
   onSwap,
   onSetSync,
@@ -649,6 +738,7 @@ function TileGrid({
   isDemo: boolean;
   onRemoveTile: (patientKey: string, tileId: string) => void;
   onSetGrid: (patientKey: string, rows: number, cols: number) => void;
+  onToggleSolo: (patientKey: string, tileId: string) => void;
   onInsertAdjacent: (patientKey: string, targetId: string, before: boolean, study: Study, series: Series) => void;
   onSwap: (patientKey: string, fromId: string, toId: string) => void;
   onSetSync: (patientKey: string, tileId: string, enabled: boolean) => void;
@@ -656,6 +746,8 @@ function TileGrid({
 }) {
   const { t } = useI18n();
   const n = patient.tiles.length;
+  // 単独表示中のタイル（消された・1 枚だけのときは通常表示）。
+  const soloTileId = n > 1 ? reconcileSolo(patient.soloTileId, patient.tiles.map((tl) => tl.id)) : null;
   // actions（useMemo）から**最新の**タイル一覧を引くための参照。actions を tiles に依存させると
   // タイルを開くたびに host が作り直され、プラグイン側の購読が切れる。
   const tilesRef = useRef<Tile[]>(patient.tiles);
@@ -670,9 +762,14 @@ function TileGrid({
     if (!pk) return;
     const unregister = registerRoiCollector(pk, () => collectRoisForPatient(pk, getLoadedRois(pk)));
     const ev = csToolsEnums.Events;
-    const names = [ev.ANNOTATION_ADDED, ev.ANNOTATION_MODIFIED, ev.ANNOTATION_REMOVED].filter(
-      Boolean,
-    ) as string[];
+    // ロックと表示の切り替えも保存項目（isLocked・isVisible）なので聞く。
+    const names = [
+      ev.ANNOTATION_ADDED,
+      ev.ANNOTATION_MODIFIED,
+      ev.ANNOTATION_REMOVED,
+      ev.ANNOTATION_LOCK_CHANGE,
+      ev.ANNOTATION_VISIBILITY_CHANGE,
+    ].filter(Boolean) as string[];
     const onChange = () => scheduleRoiSave(pk);
     for (const name of names) eventTarget.addEventListener(name, onChange);
     // ラベル・scope・プラグイン属性の変更も保存対象なのでメタ store も見る。
@@ -699,6 +796,7 @@ function TileGrid({
   const tileDimsRef = useRef<Map<string, { c: number; t: number; z: number }>>(new Map());
   // Histogram 解析ダイアログの対象（開いている時のみ non-null）。
   const [histo, setHisto] = useState<{ tile: Tile; z: number; c: number; t: number } | null>(null);
+  const [resample, setResample] = useState<{ tile: Tile; c: number; t: number } | null>(null);
   const [fourier, setFourier] = useState<{ tileId: string; label: string } | null>(null);
   const [suvTarget, setSuvTarget] = useState<{ imageId: string; seriesUid: string } | null>(null);
   const [tagTarget, setTagTarget] = useState<Tile | null>(null);
@@ -718,7 +816,7 @@ function TileGrid({
   // タイル枠の右クリックメニュー（画面座標）。null=非表示。
   const [frameMenu, setFrameMenu] = useState<{ x: number; y: number } | null>(null);
   /** ROI の上での右クリックメニュー（スプライン Fit）。null=非表示。 */
-  const [roiMenu, setRoiMenu] = useState<{ x: number; y: number; uid: string; fitted: boolean; splineable: boolean } | null>(null);
+  const [roiMenu, setRoiMenu] = useState<{ x: number; y: number; uid: string; fitted: boolean; splineable: boolean; measure: boolean; convertible: boolean } | null>(null);
   const openFrameMenu = useCallback((e: React.MouseEvent) => {
     // 画像キャンバス上は cornerstone の右ドラッグ Zoom を優先し、原則メニューを出さない。
     // **ただし ROI の上だけは例外**（その ROI への操作を出す。空きスペースでは従来どおり Zoom）。
@@ -735,6 +833,8 @@ function TileGrid({
           uid: hit.annotationUID as string,
           fitted: isSplineFitted(hit),
           splineable: canSplineFit(hit),
+          measure: annotationRoiKind(hit) === "measure",
+          convertible: canConvertMeasureToRoi(hit?.metadata?.toolName),
         });
       }
       return;
@@ -1393,8 +1493,18 @@ function TileGrid({
       clearRois: () => {
         // 全消去は破壊的なので確認する。
         if (window.confirm(t("viewer2d.roi.clearConfirm"))) {
-          runViewerCommand(resolveTargets(), (c) => c.clearAnnotations());
+          runViewerCommand(resolveTargets(), (c) => c.clearAnnotations("roi"));
         }
+      },
+      clearMeasurements: () => {
+        if (window.confirm(t("viewer2d.measure.clearConfirm"))) {
+          runViewerCommand(resolveTargets(), (c) => c.clearAnnotations("measure"));
+        }
+      },
+      convertMeasureToRoi: (measureUid) => {
+        const target = resolveRoiEditTarget();
+        if (!target) { notify(t("roi.paste.noTile")); return; }
+        queryViewerCommand(target, (c) => c.convertMeasureToRoi(measureUid));
       },
       // 表示位置の移動（プラグイン H14）。対象タイル省略時は現在の対象。
       goTo: (tileId, dims) => {
@@ -1530,6 +1640,14 @@ function TileGrid({
         const dims = tileDimsRef.current.get(tile.id);
         setHisto({ tile, z: dims?.z ?? 0, c: dims?.c ?? 0, t: dims?.t ?? 0 });
       },
+      // 対象（選択→無ければ先頭）タイルのシリーズでリサンプル・切り抜きダイアログを開く。
+      openResample: () => {
+        const tid = resolveTargets()[0];
+        const tile = patient.tiles.find((tl) => tl.id === tid);
+        if (!tile) { comingSoon(t("viewer2d.menu.resample")); return; }
+        const dims = tileDimsRef.current.get(tile.id);
+        setResample({ tile, c: dims?.c ?? 0, t: dims?.t ?? 0 });
+      },
       // 対象（選択→無ければ先頭）タイルの**表示中スライス 1 枚**でフーリエ解析ダイアログを開く。
       openFourier: () => {
         const tid = resolveTargets()[0];
@@ -1576,6 +1694,11 @@ function TileGrid({
         else window.open(`${window.location.pathname}#glam`, "graphy-glam");
       },
       // レポート: 対象（選択→無ければ先頭）タイルのスタディでレポート編集ダイアログを開く。
+      copyImage: () => {
+        const tid = resolveTargets()[0];
+        if (!tid) return;
+        void copyTileImageAsking(tid, t);
+      },
       openReport: () => {
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
@@ -1604,6 +1727,7 @@ function TileGrid({
     emitRoiReveal({ sopInstanceUid: sop, frame: frameOfImageId(refId) });
   }, [patient.tiles]);
 
+  // ツールの切り替えキー（W/P/Z/L/A/R/E）。ツールバー・メニューと同じ setTool を通す。
   // ROI のコピー / 貼り付け（Mod+C / Mod+V）。
   //
   // 🔴 **ここ（画面）に 1 本だけ置く。** Viewer2D 側に置くとタイルの数だけ window リスナが
@@ -1628,6 +1752,12 @@ function TileGrid({
       } else if (matchesShortcut("roi-deselect", e)) {
         // preventDefault しない（同じ Esc でダイアログやメニューも閉じる）。
         deselectAllRois();
+      } else {
+        const tool = TOOL_KEYS.find(([id]) => matchesShortcut(id, e));
+        if (tool) {
+          e.preventDefault();
+          actionsRef.current.setTool(tool[1]);
+        }
       }
     };
     window.addEventListener("keydown", onKey);
@@ -1690,10 +1820,13 @@ function TileGrid({
       <WandDialog />
       <LevelSetsDialog />
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+      {/* 単独表示のタイルは、このグリッドの外枠いっぱいに重ねる（他のタイルの大きさは変えない）。 */}
+      <div style={{ position: "relative", flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
       <div
         data-testid="viewer2d-tile-grid"
         data-grid-rows={rows}
         data-grid-cols={cols}
+        data-solo-tile={soloTileId ?? ""}
         style={{
           display: "grid",
           gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
@@ -1705,13 +1838,17 @@ function TileGrid({
           gap: 8,
           padding: 8,
           flex: 1,
+          minHeight: 0,
           overflowY: "auto",
         }}
       >
-        {patient.tiles.map((tile) => (
+        {patient.tiles.flatMap((tile) => [
           <TileCell
             key={tile.id}
             tile={tile}
+            solo={soloTileId === tile.id}
+            hiddenBySolo={soloTileId !== null && soloTileId !== tile.id}
+            onToggleSolo={() => onToggleSolo(patient.patientKey, tile.id)}
             mode={mode}
             patientKey={patient.patientKey}
             syncActive={isSyncActive && tile.syncEnabled}
@@ -1727,8 +1864,11 @@ function TileGrid({
             onFusionChange={(overlay) => onSetFusion(patient.patientKey, tile.id, overlay)}
             onDimChange={(c, tIdx, z) => tileDimsRef.current.set(tile.id, { c, t: tIdx, z })}
             onDrop={handleDrop}
-          />
-        ))}
+          />,
+          // 単独表示のタイルは絶対配置でグリッドの流れから外れるので、同じ升に空の占位を置いて他のタイルが動かないようにする。
+          soloTileId === tile.id ? <div key={`${tile.id}#solo-placeholder`} aria-hidden="true" /> : null,
+        ])}
+      </div>
       </div>
       {/* タイル枠の右クリックメニュー。View メニューと同じ panelVisible を操作するため表示は常に一致。 */}
       {frameMenu && (
@@ -1767,6 +1907,21 @@ function TileGrid({
             <span style={{ width: 14, display: "inline-block" }} />
             {t("viewer2d.roi.copy")}
           </button>
+          {roiMenu.measure && (
+            <button
+              style={roiMenu.convertible ? ctxMenuItem : { ...ctxMenuItem, opacity: 0.4, cursor: "not-allowed" }}
+              data-testid="roi-ctx-to-roi"
+              disabled={!roiMenu.convertible}
+              title={roiMenu.convertible ? undefined : t("roi.toRoi.unsupported")}
+              onClick={() => {
+                actions.convertMeasureToRoi(roiMenu.uid);
+                setRoiMenu(null);
+              }}
+            >
+              <span style={{ width: 14, display: "inline-block" }} />
+              {t("viewer2d.roi.toRoi")}
+            </button>
+          )}
           {roiMenu.splineable && (
             <button
               style={ctxMenuItem}
@@ -1790,6 +1945,7 @@ function TileGrid({
           mode={mode}
           onRevealRoi={revealRoi}
           onDuplicateRoi={(uid) => actions.duplicateRoi(uid)}
+          onConvertToRoi={(uid) => actions.convertMeasureToRoi(uid)}
           onClose={() => setShowRoiMgr(false)}
         />
       )}
@@ -1812,6 +1968,18 @@ function TileGrid({
           initialC={histo.c}
           initialT={histo.t}
           onClose={() => setHisto(null)}
+        />
+      )}
+      {resample && (
+        <ResampleDialog
+          key={resample.tile.id}
+          study={resample.tile.study}
+          series={resample.tile.series}
+          instances={resample.tile.instances}
+          mode={mode}
+          c={resample.c}
+          t={resample.t}
+          onClose={() => setResample(null)}
         />
       )}
       {suvTarget && (
@@ -1888,6 +2056,9 @@ function TileGrid({
 
 function TileCell({
   tile,
+  solo,
+  hiddenBySolo,
+  onToggleSolo,
   mode,
   patientKey,
   syncActive,
@@ -1905,6 +2076,11 @@ function TileCell({
   onDrop,
 }: {
   tile: Tile;
+  /** ヘッダのダブルクリックで単独表示中（グリッドの外枠いっぱいに重ねる）。 */
+  solo: boolean;
+  /** 別のタイルが単独表示中（大きさは保ったまま見えなくする。viewport を作り直さず、戻したとき同じ状態にする）。 */
+  hiddenBySolo: boolean;
+  onToggleSolo: () => void;
   mode: "standalone" | "web";
   patientKey: string;
   syncActive: boolean;
@@ -2160,6 +2336,7 @@ function TileCell({
         overlayT={fusionT}
         lut={fusionLut}
         opacity={fusion.opacity}
+        blend={fusion.blend}
         windowCenter={fusionWL?.center ?? null}
         windowWidth={fusionWL?.width ?? null}
         adjust={fusionAdjust}
@@ -2235,6 +2412,8 @@ function TileCell({
         // 選択中はオレンジのリングで明示（sync の青アウトラインと併存可能）。
         boxShadow: selected ? "0 0 0 3px #ff9800" : undefined,
         position: "relative",
+        ...(solo ? { position: "absolute", inset: 0, height: "auto", zIndex: 2 } : null),
+        ...(hiddenBySolo ? { visibility: "hidden" } : null),
       }}
       // Shift+左クリックで選択トグル（W/L 等のツールは単純クリックでは実質無変化）。
       onClick={(e) => {
@@ -2281,8 +2460,17 @@ function TileCell({
         draggable
         onDragStart={handleHeaderDragStart}
         onDragEnd={handleHeaderDragEnd}
+        onDoubleClick={(e) => {
+          // ヘッダ内のボタン（書き出し・コピー・Sync・削除）の連打では切り替えない。
+          if ((e.target as HTMLElement).closest("button,[role='button']")) return;
+          onToggleSolo();
+        }}
       >
-        <span style={tileTitle}>
+        <span
+          style={tileTitle}
+          title={solo ? t("viewer2d.tile.soloExit") : t("viewer2d.tile.soloEnter")}
+        >
+          {solo ? "◱ " : ""}
           {[dateLabel, studyDesc, seriesLabel].filter(Boolean).join(" / ")}
         </span>
 
@@ -2299,6 +2487,19 @@ function TileCell({
           title={t("viewer2d.exportDrag")}
         >
           ⤓
+        </span>
+        <span
+          role="button"
+          tabIndex={0}
+          onClick={(e) => {
+            e.stopPropagation();
+            void copyTileImageAsking(tile.id, t);
+          }}
+          style={{ ...xbtn, fontSize: 12, lineHeight: 1, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+          title={t("viewer2d.copyImage")}
+          data-testid="tile-copy-image"
+        >
+          📋
         </span>
 
         {/* Sync トグルボタン（動画タイルは同期の対象外なので押せない） */}
@@ -2371,6 +2572,8 @@ function TileCell({
           adjust={fusionAdjust}
           adjustEnabled={fusionSpatial}
           onOpacityChange={(v) => onFusionChange({ ...tile.fusion!, opacity: v })}
+          blend={fusionBlendCss(tile.fusion.blend)}
+          onBlendChange={(b) => onFusionChange({ ...tile.fusion!, blend: b })}
           onCChange={setFusionC}
           onTChange={setFusionT}
           onLutChange={setFusionLut}
@@ -2490,6 +2693,8 @@ function FusionControlBar({
   registered,
   onOpenRegistration,
   onOpacityChange,
+  blend,
+  onBlendChange,
   onCChange,
   onTChange,
   onLutChange,
@@ -2518,6 +2723,8 @@ function FusionControlBar({
   /** 自動位置合わせのパネルを開く。 */
   onOpenRegistration: () => void;
   onOpacityChange: (v: number) => void;
+  blend: FusionBlend;
+  onBlendChange: (b: FusionBlend) => void;
   onCChange: (v: number) => void;
   onTChange: (v: number) => void;
   onLutChange: (lut: LutData | null) => void;
@@ -2578,6 +2785,20 @@ function FusionControlBar({
         <span style={{ fontSize: 11, color: "#5a6672", minWidth: 28, textAlign: "right" }}>
           {Math.round(opacity * 100)}%
         </span>
+
+        {/* 重ね方（表示上の合成。画素値の引き算ではない） */}
+        <select
+          value={blend}
+          onChange={(e) => onBlendChange(fusionBlendCss(e.target.value))}
+          title={t("fusion.blend.help")}
+          aria-label={t("fusion.blend")}
+          data-testid="fusion-blend"
+          style={{ fontSize: 11, flex: "none" }}
+        >
+          {FUSION_BLENDS.map((b) => (
+            <option key={b} value={b}>{t(`fusion.blend.${b}`)}</option>
+          ))}
+        </select>
 
         {/* LUT ボタン */}
         <div style={{ display: "flex", alignItems: "center", gap: 3, flex: "none" }}>

@@ -6,6 +6,7 @@ package com.vis.graphynext.importer;
 
 import com.vis.graphynext.dicom.store.DicomInstance;
 import com.vis.graphynext.dicom.store.DicomStorageService;
+import com.vis.graphynext.dicom.store.StorageLayout;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -49,14 +50,32 @@ public class ImportService {
      *     検索の既定条件は「今日」で、SQL の NULL 比較の性質上、日付範囲を指定すると
      *     検査日の無いスタディは必ず除外される（＝取り込めているのに一覧に出ない）。
      *     利用者が「取り込みに失敗した」と誤読するため、件数を返して UI で注意を出す。
+     * @param studyInstanceUids 取り込んだ画像のスタディ（重複なし・出会った順）。UI が一覧を
+     *     「いま取り込んだ検査」に絞って出すのに使う（既定の検索条件「今日」では、過去の検査は出ない）。
      */
-    public record ImportResult(int imported, int skipped, int failed, int studiesWithoutDate, List<String> errors) {
+    public record ImportResult(int imported, int skipped, int failed, int studiesWithoutDate, List<String> errors,
+            List<String> studyInstanceUids) {
     }
 
     private final DicomStorageService storage;
+    /**
+     * 走査で中に入らないフォルダ（保管庫の作業用と、DB フォルダの受け取り箱）。保管庫や DB フォルダごと
+     * 取り込んだとき、受信途中・一時ファイル・キャッシュ・他 DB からの荷物を拾わないため。
+     * 保管庫の本体（{@code <study>/<series>/*.dcm}）は取り込める（索引を作り直す用途）。
+     */
+    private final Set<Path> skipDirs;
 
-    public ImportService(DicomStorageService storage) {
+    public ImportService(DicomStorageService storage, StorageLayout layout) {
         this.storage = storage;
+        Path root = layout.root();
+        Set<Path> skip = new java.util.HashSet<>();
+        for (String n : List.of("incoming", ".import", ".cache")) {
+            skip.add(root.resolve(n).normalize());
+        }
+        if (root.getParent() != null) {
+            skip.add(root.getParent().resolve("inbox").normalize());
+        }
+        this.skipDirs = Set.copyOf(skip);
     }
 
     public ImportResult importPaths(List<String> paths) {
@@ -78,13 +97,20 @@ public class ImportService {
         }
         log.info("インポート完了: 取込={} スキップ={} 失敗={} 検査日なしスタディ={}",
                 c.imported, c.skipped, c.failed, c.studiesWithoutDate.size());
-        return new ImportResult(c.imported, c.skipped, c.failed, c.studiesWithoutDate.size(), c.errors);
+        return new ImportResult(c.imported, c.skipped, c.failed, c.studiesWithoutDate.size(), c.errors,
+                List.copyOf(c.studies));
     }
 
     /** フォルダを再帰走査する。読めない要素は 1 件の失敗として数え、走査は続ける。 */
     private void walk(Path root, Counter c) {
         try {
             Files.walkFileTree(root, new SimpleFileVisitor<>() {
+                @Override
+                public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+                    return skipDirs.contains(dir.toAbsolutePath().normalize())
+                            ? FileVisitResult.SKIP_SUBTREE : FileVisitResult.CONTINUE;
+                }
+
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
                     if (attrs.isRegularFile()) {
@@ -127,6 +153,9 @@ public class ImportService {
         try {
             DicomInstance saved = storage.importFromFile(file);
             c.imported++;
+            if (saved != null && saved.getStudyInstanceUid() != null) {
+                c.studies.add(saved.getStudyInstanceUid());
+            }
             if (saved != null && isBlank(saved.getStudyDate()) && saved.getStudyInstanceUid() != null) {
                 c.studiesWithoutDate.add(saved.getStudyInstanceUid());
             }
@@ -163,6 +192,7 @@ public class ImportService {
         int failed;
         /** StudyDate が空だったスタディの UID（件数を UI に返すため）。 */
         final Set<String> studiesWithoutDate = new LinkedHashSet<>();
+        final Set<String> studies = new LinkedHashSet<>();
         final List<String> errors = new ArrayList<>();
 
         void fail(Path path, Exception e) {

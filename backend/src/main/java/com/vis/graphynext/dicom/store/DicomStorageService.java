@@ -4,7 +4,6 @@
  */
 package com.vis.graphynext.dicom.store;
 
-import com.vis.graphynext.dicom.DicomProperties;
 import com.vis.graphynext.dicom.SeriesLayoutBuilder;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
@@ -19,7 +18,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.List;
 
@@ -32,7 +30,7 @@ import java.util.List;
  *       置いたファイルも削除して<b>孤児ファイルを残さない</b>（GRAPHY の C-STORE 不整合を回避）。</li>
  *   <li>主キー=SOPInstanceUID により再受信は upsert で<b>冪等</b>。</li>
  *   <li>検索はリポジトリの 1 クエリに委譲。</li>
- *   <li>索引には FS ファイルへの {@code file:} URI を保持。</li>
+ *   <li>索引には保管庫ルートからの相対パスを保持（旧来の {@code file:} URI も読める。{@link StorageLayout}）。</li>
  * </ol>
  */
 @Service
@@ -41,11 +39,20 @@ public class DicomStorageService {
     private static final Logger log = LoggerFactory.getLogger(DicomStorageService.class);
 
     private final DicomInstanceRepository repo;
+    private final StorageLayout layout;
     private final Path storageDir;
+    /** Drive バックアップへの合図。無くても動く（テスト・web モード）。 */
+    private org.springframework.context.ApplicationEventPublisher events;
 
-    public DicomStorageService(DicomInstanceRepository repo, DicomProperties props) {
+    public DicomStorageService(DicomInstanceRepository repo, StorageLayout layout) {
         this.repo = repo;
-        this.storageDir = Paths.get(props.getStorageDir());
+        this.layout = layout;
+        this.storageDir = layout.root();
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setEvents(org.springframework.context.ApplicationEventPublisher events) {
+        this.events = events;
     }
 
     /**
@@ -73,10 +80,27 @@ public class DicomStorageService {
             throw new IOException("必須 UID が欠落しています (sop=" + iuid + ", study=" + studyUid + ", series=" + seriesUid + ")");
         }
 
-        Path dest = storageDir.resolve(Paths.get(studyUid, seriesUid, iuid + ".dcm"));
+        Path dest;
+        try {
+            dest = layout.instancePath(studyUid, seriesUid, iuid);
+        } catch (IllegalArgumentException e) {
+            throw new IOException(e.getMessage(), e);
+        }
         Files.createDirectories(dest.getParent());
-        // 冪等: 同一 SOPInstanceUID の再受信は上書き
-        Files.move(tempFile, dest, StandardCopyOption.REPLACE_EXISTING);
+        // 冪等: 同一 SOPInstanceUID の再受信は上書き。ただし上書きの前に元のファイルを退避する——
+        // 索引の保存に失敗したとき、新しいファイルを消すだけだと元の正しいファイルまで失う（元の行は残る）。
+        Path backup = null;
+        if (Files.exists(dest)) {
+            backup = dest.resolveSibling("." + iuid + ".bak-" + java.util.UUID.randomUUID().toString().substring(0, 8));
+            Files.move(dest, backup);
+        }
+        try {
+            moveIntoPlace(tempFile, dest);
+        } catch (IOException e) {
+            restore(backup, dest);
+            layout.pruneEmptyDirs(dest); // 新しく作った検査・シリーズのフォルダを空のまま残さない
+            throw e;
+        }
 
         DicomInstance entity = new DicomInstance(iuid);
         entity.setSopClassUid(cuid);
@@ -95,20 +119,58 @@ public class DicomStorageService {
         entity.setSeriesDescription(ds.getString(Tag.SeriesDescription));
         entity.setInstanceNumber(ds.getInt(Tag.InstanceNumber, 0));
         entity.setSizeBytes(Files.size(dest));
-        entity.setUri(dest.toUri().toString());
+        entity.setUri(layout.toStored(dest));
+        DicomInstance saved;
         try {
-            DicomInstance saved = repo.save(entity);
-            log.debug("indexed sop={} study={} -> {}", iuid, studyUid, dest); // 検証済み: 大量取込で冗長なため DEBUG
-            return saved;
+            saved = repo.save(entity);
         } catch (RuntimeException ex) {
-            // 索引に載らないファイルを残さない（トランザクションはロールバックされる）
+            // 索引に載らないファイルを残さない。元のファイルがあれば戻す（元の行は保存の失敗で変わっていない）。
+            // ※ importFromFile からの呼び出しは同じクラス内なので ingest の @Transactional は効かないが、
+            //    DB への書き込みはこの save 1 回だけで、save 自身のトランザクションで完結する。
             try {
                 Files.deleteIfExists(dest);
             } catch (IOException ignore) {
                 // ベストエフォート
             }
-            log.warn("INDEX failed, rolled back and deleted file: {}", dest, ex);
+            restore(backup, dest);
+            layout.pruneEmptyDirs(dest); // 元のファイルを戻したならフォルダは空でないので何もしない
+            log.warn("INDEX failed, deleted new file{}: {}", backup != null ? " and restored the previous one" : "", dest, ex);
             throw ex;
+        }
+        if (backup != null) {
+            Files.deleteIfExists(backup);
+        }
+        if (events != null) {
+            events.publishEvent(new com.vis.graphynext.gdrive.StorageChanged(layout.toStored(dest)));
+        }
+        log.debug("indexed sop={} study={} -> {}", iuid, studyUid, dest); // 検証済み: 大量取込で冗長なため DEBUG
+        return saved;
+    }
+
+    /**
+     * 一時ファイルを正規の場所へ移す。移し先のフォルダが消えていたら（並行する取り込みや削除が、空になった
+     * フォルダを片付けた直後など）作り直して 1 回だけやり直す。移す元が無いときは失敗のまま。
+     */
+    static void moveIntoPlace(Path source, Path dest) throws IOException {
+        try {
+            Files.move(source, dest, StandardCopyOption.REPLACE_EXISTING);
+        } catch (java.nio.file.NoSuchFileException e) {
+            if (!Files.exists(source)) {
+                throw e;
+            }
+            Files.createDirectories(dest.getParent());
+            Files.move(source, dest, StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    private static void restore(Path backup, Path dest) {
+        if (backup == null) {
+            return;
+        }
+        try {
+            Files.move(backup, dest, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            log.error("元のファイルを戻せません（退避先に残っています）: {} -> {}", backup, dest, e);
         }
     }
 
@@ -213,13 +275,12 @@ public class DicomStorageService {
      * {@code <storageDir>/<studyUid>/<seriesUid>/<sopUid>.dcm}）。シリーズ統合/分割の移動先算出に使う。
      */
     public Path instanceStoragePath(String studyUid, String seriesUid, String sopUid) {
-        return storageDir.resolve(Paths.get(studyUid, seriesUid, sopUid + ".dcm"));
+        return layout.instancePath(studyUid, seriesUid, sopUid);
     }
 
     /**
      * 指定スタディ（必要ならシリーズで絞り込み）に属するインスタンスのローカル DICOM ファイルパス一覧を返す。
-     * DICOM Send（C-STORE SCU）が送信対象を解決するために使う。索引に無い／{@code file:} でない／実在しない
-     * ものは除外する。{@code seriesUids} が null/空ならスタディ全体。
+     * DICOM Send（C-STORE SCU）が送信対象を解決するために使う。索引に無い／実在しないものは除外する。{@code seriesUids} が null/空ならスタディ全体。
      */
     @Transactional(readOnly = true)
     public List<Path> resolveFiles(String studyUid, List<String> seriesUids) {
@@ -233,24 +294,19 @@ public class DicomStorageService {
             }
         }
         return insts.stream()
-                .map(DicomInstance::getUri)
-                .filter(u -> u != null && u.startsWith("file:"))
-                .map(u -> Path.of(java.net.URI.create(u)))
-                .filter(Files::exists)
+                .map(layout::resolveForRead)
+                .filter(java.util.Objects::nonNull)
                 .toList();
     }
 
     /**
-     * sopUid のローカル DICOM ファイルパスを返す（索引に無い／URI が file: でない場合は null）。
+     * sopUid のローカル DICOM ファイルパスを返す（索引に無い／実在しない場合は null）。
      * 2D ビューア（standalone）が wadouri で読むための Part-10 配信に使う。
      */
     @Transactional(readOnly = true)
     public Path resolveInstanceFile(String sopUid) {
         return repo.findById(sopUid)
-                .map(DicomInstance::getUri)
-                .filter(u -> u != null && u.startsWith("file:"))
-                .map(u -> Path.of(java.net.URI.create(u)))
-                .filter(Files::exists)
+                .map(layout::resolveForRead)
                 .orElse(null);
     }
 
@@ -995,9 +1051,8 @@ public class DicomStorageService {
     }
 
     private Attributes readHeaderQuietly(DicomInstance inst) {
-        Path path = (inst.getUri() != null && inst.getUri().startsWith("file:"))
-                ? Path.of(java.net.URI.create(inst.getUri())) : null;
-        if (path == null || !Files.exists(path)) {
+        Path path = layout.resolveForRead(inst);
+        if (path == null) {
             return null;
         }
         try (DicomInputStream in = new DicomInputStream(path.toFile())) {

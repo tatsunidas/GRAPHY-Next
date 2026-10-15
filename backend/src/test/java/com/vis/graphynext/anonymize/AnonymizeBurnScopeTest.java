@@ -168,7 +168,8 @@ class AnonymizeBurnScopeTest {
                 Mockito.mock(ObjectProvider.class);
         Mockito.when(web.getIfAvailable()).thenReturn(null);
 
-        AnonymizeService service = new AnonymizeService(repo, store, web, new PixelCodec(new DicomProperties()));
+        AnonymizeService service = new AnonymizeService(repo, store, web, new PixelCodec(new DicomProperties()),
+                new com.vis.graphynext.dicom.store.StorageLayout(java.nio.file.Path.of("target", "no-storage-root")));
         AnonymizeConfig cfg = new AnonymizeConfig();
         cfg.addOption(AnonymizeConfig.Option.CleanPixelData);
         cfg.setBurnDilatePx(0); // 膨張させない（塗った範囲を画素単位で確かめたいので）

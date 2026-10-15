@@ -2,9 +2,11 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fetchTlsConfig, saveTlsConfig, type TlsConfig } from "../api";
+import { desktop } from "../desktopBridge";
 import { useI18n } from "../i18n/i18n";
+import { NO_CHANGE, passwordStateKey, tlsSavePlan, type PendingPasswords, type TlsPasswordWhich } from "./tlsPasswordPlan";
 
 /**
  * グローバル DIMSE TLS（相互 TLS）設定セクション。
@@ -12,6 +14,9 @@ import { useI18n } from "../i18n/i18n";
  * <p>通信先の TLS チェックを ON にしたノードへ接続する際に共通で使う自局の鍵材料
  * （キーストア＝鍵+証明書 / トラストストア＝信頼する相手の証明書）を編集する。SCU 送信（Echo/Send/QR）は
  * 保存後すぐ反映され、SCP 受信リスナーの TLS 有効化はアプリ再起動後に反映される。
+ *
+ * <p>🔴 パスワードは backend から返らない（設定済みかどうかだけ）。入力したときだけ変える。
+ * デスクトップは OS のキーチェーン（main）へ、web は REST で送る（{@link tlsSavePlan}）。
  */
 export function DicomTlsSection() {
   const { t } = useI18n();
@@ -19,14 +24,38 @@ export function DicomTlsSection() {
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
+  const [pending, setPending] = useState<PendingPasswords>(NO_CHANGE);
+  const [warning, setWarning] = useState<string | null>(null);
+  const d = desktop();
+  const viaKeychain = !!d?.tlsPasswordSet;
+  // 欄が狭いとき（ウィンドウを細くしたとき）は見出しを入力の上に置く 1 列にする（2 列のままだと右へはみ出す）
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setNarrow(el.clientWidth < NARROW_PX));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [cfg !== null]);
 
   useEffect(() => {
     let cancelled = false;
     fetchTlsConfig()
       .then((c) => { if (!cancelled) setCfg(c); })
       .catch(() => { if (!cancelled) setCfg(null); });
+    d?.tlsPasswordStatus?.()
+      .then((st) => { if (!cancelled && !st.encryptionAvailable) setWarning(t("settings.tls.pw.noKeychain")); })
+      .catch(() => {});
     return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const setPw = (which: TlsPasswordWhich, value: string | null) => {
+    setPending((p) => ({ ...p, [which]: value }));
+    setDirty(true);
+    setSavedMsg(null);
+  };
 
   const set = <K extends keyof TlsConfig>(key: K, val: TlsConfig[K]) => {
     setCfg((c) => (c ? { ...c, [key]: val } : c));
@@ -39,10 +68,19 @@ export function DicomTlsSection() {
     setSaving(true);
     setSavedMsg(null);
     try {
-      const saved = await saveTlsConfig(cfg);
-      setCfg(saved);
+      const plan = tlsSavePlan(cfg, pending, viaKeychain);
+      let plaintext = false;
+      for (const [which, value] of plan.keychain) {
+        const r = await d!.tlsPasswordSet!(which, value);
+        if (!r.ok) throw new Error(r.reason ?? "tls-password-failed");
+        if (r.persisted === "plaintext") plaintext = true;
+      }
+      await saveTlsConfig(plan.config);
+      setCfg(await fetchTlsConfig()); // パスワードを入れ直したあとの usable を取り直す
+      setPending(NO_CHANGE);
       setDirty(false);
       setSavedMsg(t("settings.tls.saved"));
+      if (plaintext) setWarning(t("settings.tls.pw.plaintextWarning"));
     } catch (e) {
       setSavedMsg(t("common.fetchError", { error: String(e) }));
     } finally {
@@ -57,7 +95,7 @@ export function DicomTlsSection() {
   const textToList = (s: string) => s.split(",").map((x) => x.trim()).filter((x) => x !== "");
 
   return (
-    <div style={{ marginTop: 26, borderTop: "1px solid #e6eaee", paddingTop: 16 }}>
+    <div ref={rootRef} style={{ marginTop: 26, borderTop: "1px solid #e6eaee", paddingTop: 16 }}>
       <div style={{ fontSize: 14, fontWeight: 700, color: "#33404d", marginBottom: 4 }}>
         {t("settings.tls.title")}
       </div>
@@ -68,7 +106,7 @@ export function DicomTlsSection() {
         {t("settings.tls.enabled")}
       </label>
 
-      <div style={grid}>
+      <div style={narrow ? gridNarrow : grid}>
         <label style={lbl}>{t("settings.tls.port")}</label>
         <input style={{ ...input, width: 100 }} type="number" value={cfg.port}
           onChange={(e) => set("port", Number(e.target.value) || 0)} />
@@ -84,8 +122,14 @@ export function DicomTlsSection() {
         </div>
 
         <label style={lbl}>{t("settings.tls.keyStorePassword")}</label>
-        <input style={{ ...input, width: 240 }} type="password" value={cfg.keyStorePassword} autoComplete="off"
-          onChange={(e) => set("keyStorePassword", e.target.value)} />
+        <div style={inline}>
+          <input style={{ ...input, ...pwInput }} type="password" value={pending.keyStore ?? ""} autoComplete="off"
+            placeholder={t("settings.tls.pw.placeholder")} onChange={(e) => setPw("keyStore", e.target.value)} />
+          <span style={{ fontSize: 12, color: "#6b7785" }}>{t(passwordStateKey(cfg.keyStorePasswordSet, pending.keyStore))}</span>
+          {cfg.keyStorePasswordSet && pending.keyStore !== "" && (
+            <button style={{ fontSize: 12 }} onClick={() => setPw("keyStore", "")}>{t("settings.tls.pw.clear")}</button>
+          )}
+        </div>
 
         <label style={lbl}>{t("settings.tls.trustStore")}</label>
         <div style={inline}>
@@ -98,15 +142,21 @@ export function DicomTlsSection() {
         </div>
 
         <label style={lbl}>{t("settings.tls.trustStorePassword")}</label>
-        <input style={{ ...input, width: 240 }} type="password" value={cfg.trustStorePassword} autoComplete="off"
-          onChange={(e) => set("trustStorePassword", e.target.value)} />
+        <div style={inline}>
+          <input style={{ ...input, ...pwInput }} type="password" value={pending.trustStore ?? ""} autoComplete="off"
+            placeholder={t("settings.tls.pw.placeholder")} onChange={(e) => setPw("trustStore", e.target.value)} />
+          <span style={{ fontSize: 12, color: "#6b7785" }}>{t(passwordStateKey(cfg.trustStorePasswordSet, pending.trustStore))}</span>
+          {cfg.trustStorePasswordSet && pending.trustStore !== "" && (
+            <button style={{ fontSize: 12 }} onClick={() => setPw("trustStore", "")}>{t("settings.tls.pw.clear")}</button>
+          )}
+        </div>
 
         <label style={lbl}>{t("settings.tls.protocols")}</label>
-        <input style={{ ...input, flex: 1 }} value={listToText(cfg.protocols)} spellCheck={false}
+        <input style={{ ...input, ...fullWidth }} value={listToText(cfg.protocols)} spellCheck={false}
           placeholder="TLSv1.2, TLSv1.3" onChange={(e) => set("protocols", textToList(e.target.value))} />
 
         <label style={lbl}>{t("settings.tls.ciphers")}</label>
-        <textarea style={{ ...input, flex: 1, minHeight: 44, resize: "vertical", fontFamily: "monospace" }}
+        <textarea style={{ ...input, ...fullWidth, minHeight: 44, resize: "vertical", fontFamily: "monospace" }}
           value={listToText(cfg.cipherSuites)} spellCheck={false}
           placeholder="TLS_AES_128_GCM_SHA256, TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
           onChange={(e) => set("cipherSuites", textToList(e.target.value))} />
@@ -130,6 +180,7 @@ export function DicomTlsSection() {
           {saving ? t("common.saving") : t("common.save")}
         </button>
         {savedMsg && <span style={{ fontSize: 12, color: "#2e5d27" }}>{savedMsg}</span>}
+        {warning && <span style={{ fontSize: 12, color: "#8a5a00" }}>⚠ {warning}</span>}
         <span style={{ fontSize: 11.5, color: "#9aa4ad" }}>{t("settings.tls.restartNote")}</span>
       </div>
     </div>
@@ -137,11 +188,17 @@ export function DicomTlsSection() {
 }
 
 const rowCheck: React.CSSProperties = { display: "flex", alignItems: "center", gap: 7, fontSize: 13, cursor: "pointer" };
+// 入力の列は 0 まで縮める（"1fr" だと最小幅が中身の幅になり、パネルの右へはみ出す）。見出しは最大 180px で折り返す。
 const grid: React.CSSProperties = {
-  display: "grid", gridTemplateColumns: "auto 1fr", alignItems: "center", gap: "8px 12px", marginTop: 10,
+  display: "grid", gridTemplateColumns: "minmax(auto, 180px) minmax(0, 1fr)", alignItems: "center",
+  gap: "8px 12px", marginTop: 10,
 };
-const lbl: React.CSSProperties = { fontSize: 12.5, color: "#33404d", whiteSpace: "nowrap" };
-const inline: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
+const NARROW_PX = 420;
+const gridNarrow: React.CSSProperties = { ...grid, gridTemplateColumns: "minmax(0, 1fr)", gap: "4px 0" };
+const lbl: React.CSSProperties = { fontSize: 12.5, color: "#33404d" };
+const inline: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, minWidth: 0, flexWrap: "wrap" };
+const pwInput: React.CSSProperties = { flex: "1 1 140px", maxWidth: 240 };
+const fullWidth: React.CSSProperties = { width: "100%", boxSizing: "border-box" };
 const input: React.CSSProperties = {
   minWidth: 0, padding: "5px 8px", border: "1px solid #cdd5de", borderRadius: 5, fontSize: 13,
 };

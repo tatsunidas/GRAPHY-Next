@@ -85,7 +85,8 @@ class ExportVideoBundleTest {
         DicomProperties props = new DicomProperties();
         props.setStorageDir(storageDir.toString());
         // repo は copyPlayableVideo では使わない（ZIP 書き出しの単体検証）。
-        return new ExportService(null, new VideoRenderService(new FfmpegLocator("ffmpeg", ""), props));
+        return new ExportService(null, new VideoRenderService(new FfmpegLocator("ffmpeg", ""), props),
+                new com.vis.graphynext.dicom.store.StorageLayout(storageDir));
     }
 
     private static Map<String, byte[]> unzip(byte[] zipBytes) throws IOException {

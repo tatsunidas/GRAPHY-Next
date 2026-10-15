@@ -13,6 +13,8 @@ import {
   LengthTool,
   BidirectionalTool,
   AngleTool,
+  CobbAngleTool,
+  MagnifyTool,
   EllipticalROITool,
   RectangleROITool,
   ProbeTool,
@@ -29,6 +31,8 @@ import { TOOL_IDS } from "./toolIds";
 import { ToolIcon } from "../icons/ToolIcon";
 import { UI_ICON_FILES, ACTIVE_ICON_STYLE } from "../icons/toolIcons";
 import { emitToast } from "./toast";
+import { partitionByLock } from "./roiLock";
+import { installTrueMagnification } from "./magnifier";
 import { ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID } from "./toolIds";
 import { setViewerContext, clearViewerContext, getViewerContext, type ViewerContext } from "./viewerContext";
 import { getRoiMaskMeta, setRoiMaskMeta, subscribeRoiMaskStore } from "./roiMaskStore";
@@ -59,6 +63,9 @@ import { registerReferenceSource, bumpReference, subscribeReference, computeRefe
 import { registerViewerCommands, type ViewerCommands, type ViewerDerivedSeriesRequest, type ViewerDerivedSeriesResult, type ViewerOverlay, type ViewerPixelData, type ViewerSrRequest, type ViewerSrResult, type ViewerPixelDataOptions, type ViewerAngioReportRequest, type ViewerPresentationStateRequest, type ViewerRoi, type ViewerSpatialCalibration, type ViewerTargetInfo, type ViewerViewState, type ViewerXaState, type ViewerXaCine, ViewerLabelVolume, ViewerLabelVolumeResult } from "./viewerCommands";
 import { buildPluginMeta, computeCalipers, hasShapeCalipers, pickPluginMeta, readRoiStats, roiPointsPx } from "./roiRead";
 import { CONTOUR_TOOL_NAMES } from "./roiContourTools";
+import { POINT_ROI_TOOL_NAME } from "./pointRoiTool";
+import { annotationRoiKind } from "./roiKind";
+import { convertMeasureToRoi } from "./measureToRoi";
 import { installInteriorGrab, installSelectionGestures } from "./roiInteriorGrab";
 import { measureToolConfig } from "./roiStatsTextBox";
 import { useRoiStatsDisplay } from "./roiStatsDisplay";
@@ -148,6 +155,7 @@ const MEASURE_TOOLS = [
   LengthTool.toolName,
   BidirectionalTool.toolName,
   AngleTool.toolName,
+  CobbAngleTool.toolName,
   EllipticalROITool.toolName,
   RectangleROITool.toolName,
   ProbeTool.toolName,
@@ -156,9 +164,11 @@ const MEASURE_TOOLS = [
   CONTOUR_TOOL_NAMES.polyline,
   CONTOUR_TOOL_NAMES.freehand,
   CONTOUR_TOOL_NAMES.freeLine,
+  // 点 ROI（Probe と同じ操作。計測ではなく ROI として扱う）。viewer/pointRoiTool.ts
+  POINT_ROI_TOOL_NAME,
 ];
 // 左ドラッグに割り当て可能なツール一覧（操作＋計測＋ブラシ＋3D Wand＋Level Sets）。
-const PRIMARY_TOOLS = [WindowLevelTool.toolName, PanTool.toolName, ZoomTool.toolName, ...MEASURE_TOOLS, BrushTool.toolName, WandTool.toolName, LevelSetTool.toolName];
+const PRIMARY_TOOLS = [WindowLevelTool.toolName, PanTool.toolName, ZoomTool.toolName, MagnifyTool.toolName, ...MEASURE_TOOLS, BrushTool.toolName, WandTool.toolName, LevelSetTool.toolName];
 // 描画/計測/セグメンテーション系ツール（左ドラッグ占有）。これらが有効な間は per-tile の Pan↔W/L 切替を抑止し、
 // 先にツールバーで解除するよう促す（グローバルツールが優先＝ナビ切替が黙って効かないのを避ける）。
 const BLOCKING_TOOLS = new Set<string>([...MEASURE_TOOLS, BrushTool.toolName, ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID]);
@@ -1204,6 +1214,10 @@ export function Viewer2D({
             tg.addTool(WindowLevelTool.toolName);
             tg.addTool(PanTool.toolName);
             tg.addTool(ZoomTool.toolName);
+            // 拡大レンズ。倍率は 4 倍（viewer/magnifier.ts。magnifySize は倍率ではない）。
+            tg.addTool(MagnifyTool.toolName);
+            installTrueMagnification(tg.getToolInstance(MagnifyTool.toolName));
+            tg.setToolPassive(MagnifyTool.toolName);
             // 計測（ROI）ツールは passive で追加。setActiveTool で左ドラッグに割当。
             for (const tn of MEASURE_TOOLS) {
               // 設定は登録時にしか渡せない（2 度目の addTool は無視される）。
@@ -1565,13 +1579,15 @@ export function Viewer2D({
         e.preventDefault();
         toggleInvert();
       } else if (e.key === "Delete" || e.key === "Backspace") {
-        // 選択中の ROI（計測注釈）を 1 つずつ削除。ROI をクリックで選択 → Delete/Backspace。
+        // 選択中の ROI（計測注釈）を 1 つずつ削除。ROI をクリックで選択 → Delete/Backspace。ロック中は消さない。
         const sel = csAnnotation.selection.getAnnotationsSelected();
         if (sel.length) {
           e.preventDefault();
-          for (const uid of sel) {
+          const { removable, kept } = partitionByLock(sel);
+          for (const uid of removable) {
             try { csAnnotation.state.removeAnnotation(uid); } catch { /* ignore */ }
           }
+          if (kept.length) emitToast(t("roi.keptLocked", { n: kept.length }));
           viewportRef.current?.render();
         }
       }
@@ -2490,19 +2506,50 @@ export function Viewer2D({
     return uid;
   };
 
-  // この viewport の注釈（計測 ROI）を全消去。
-  const clearAnnotations = () => {
+  // 注釈を種別ごとに全消去する（ROI だけ / 計測だけ）。ロック中は残す。
+  // 種別不明（矢印など）は ROI 側で消える——全消去で残り続けるものを作らない。
+  const clearAnnotations = (scope: "roi" | "measure") => {
     const v = vp();
     try {
-      csAnnotation.state.removeAllAnnotations();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const uids = (csAnnotation.state.getAllAnnotations() as any[])
+        .filter((a) => (annotationRoiKind(a) === "measure") === (scope === "measure"))
+        .map((a) => a?.annotationUID as string | undefined)
+        .filter((u): u is string => !!u);
+      const { removable, kept } = partitionByLock(uids);
+      for (const uid of removable) {
+        try { csAnnotation.state.removeAnnotation(uid); } catch { /* ignore */ }
+      }
+      if (kept.length) emitToast(t("roi.keptLocked", { n: kept.length }));
       if (v) v.render();
     } catch {
       /* ignore */
     }
-    // 保存を**明示的に**予約する。`removeAllAnnotations()` は個々の ANNOTATION_REMOVED を
-    // 発火しないため、イベント購読だけに任せると全消去が保存されない（実機検証で判明）。
+    // 保存を**明示的に**予約する（以前の `removeAllAnnotations()` は個々の ANNOTATION_REMOVED を
+    // 発火せず、全消去が保存されなかった。1 件ずつ消す今も、経路ごとの発火差に依存しない）。
     const pk = roiContextRef.current?.patientKey;
     if (pk) scheduleRoiSave(pk);
+  };
+
+  /** 計測を ROI に変える。失敗は理由つきでトーストに出し、null を返す。 */
+  const convertMeasureToRoiCmd = (measureUid: string): string | null => {
+    if (roiEditBlocked()) return null;
+    const v = vp();
+    if (!v) return null;
+    const r = convertMeasureToRoi(measureUid, {
+      viewport: v as unknown as Parameters<typeof convertMeasureToRoi>[1]["viewport"],
+      imageIds: imageIdsRef.current,
+      patientKey: roiContextRef.current?.patientKey ?? "",
+      seriesLabel: roiContextRef.current?.seriesLabel,
+    });
+    if (!r.ok) {
+      emitToast(t(`roi.toRoi.${r.reason}`));
+      return null;
+    }
+    const imageId = (csAnnotation.state.getAnnotation(r.uid) as { metadata?: { referencedImageId?: string } } | undefined)
+      ?.metadata?.referencedImageId;
+    if (imageId) afterPaste(r.uid, imageId);
+    return r.uid;
   };
 
   // H65: ラベルの volume を Mask として読み込む（格子は IPP で照合する。1 枚ずれていれば拒否）
@@ -2524,7 +2571,7 @@ export function Viewer2D({
     publishAnalysisResult: publishPluginAnalysis,
     setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
-    copyRoi, pasteRoi, duplicateRoi,
+    copyRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd,
     undo, redo,
   });
   commandsRef.current = {
@@ -2538,7 +2585,7 @@ export function Viewer2D({
     publishAnalysisResult: publishPluginAnalysis,
     setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
-    copyRoi, pasteRoi, duplicateRoi,
+    copyRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd,
     undo, redo,
   };
   useEffect(() => {
@@ -2581,7 +2628,8 @@ export function Viewer2D({
       getRois: () => commandsRef.current.getRois(),
       getRoiMeta: (u, p) => commandsRef.current.getRoiMeta(u, p),
       setRoiMeta: (u, p, patch) => commandsRef.current.setRoiMeta(u, p, patch),
-      clearAnnotations: () => commandsRef.current.clearAnnotations(),
+      clearAnnotations: (s) => commandsRef.current.clearAnnotations(s),
+      convertMeasureToRoi: (u) => commandsRef.current.convertMeasureToRoi(u),
       copyRoi: (u) => commandsRef.current.copyRoi(u),
       pasteRoi: () => commandsRef.current.pasteRoi(),
       duplicateRoi: (u) => commandsRef.current.duplicateRoi(u),

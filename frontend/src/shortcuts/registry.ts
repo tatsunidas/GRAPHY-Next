@@ -36,14 +36,14 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "show-help", combo: "?", descriptionKey: "sc.showHelp", group: "global" },
   { id: "close-dialog", combo: "Escape", descriptionKey: "sc.closeDialog", group: "global" },
 
-  // --- ツール（将来・予約） ---
-  { id: "tool-wl", combo: "W", descriptionKey: "sc.toolWl", group: "tools", planned: true },
-  { id: "tool-pan", combo: "P", descriptionKey: "sc.toolPan", group: "tools", planned: true },
-  { id: "tool-zoom", combo: "Z", descriptionKey: "sc.toolZoom", group: "tools", planned: true },
-  { id: "tool-length", combo: "L", descriptionKey: "sc.toolLength", group: "tools", planned: true },
-  { id: "tool-angle", combo: "A", descriptionKey: "sc.toolAngle", group: "tools", planned: true },
-  { id: "tool-roi-rect", combo: "R", descriptionKey: "sc.toolRoiRect", group: "tools", planned: true },
-  { id: "tool-roi-ellipse", combo: "E", descriptionKey: "sc.toolRoiEllipse", group: "tools", planned: true },
+  // --- ツール（2D ビューア。C は 2D に十字線ツールが無いので予約のまま） ---
+  { id: "tool-wl", combo: "W", descriptionKey: "sc.toolWl", group: "tools" },
+  { id: "tool-pan", combo: "P", descriptionKey: "sc.toolPan", group: "tools" },
+  { id: "tool-zoom", combo: "Z", descriptionKey: "sc.toolZoom", group: "tools" },
+  { id: "tool-length", combo: "L", descriptionKey: "sc.toolLength", group: "tools" },
+  { id: "tool-angle", combo: "A", descriptionKey: "sc.toolAngle", group: "tools" },
+  { id: "tool-roi-rect", combo: "R", descriptionKey: "sc.toolRoiRect", group: "tools" },
+  { id: "tool-roi-ellipse", combo: "E", descriptionKey: "sc.toolRoiEllipse", group: "tools" },
   { id: "tool-crosshairs", combo: "C", descriptionKey: "sc.toolCrosshairs", group: "tools", planned: true },
 
   // --- 画像ナビゲーション ---
@@ -60,7 +60,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "disp-reset", combo: "Escape", descriptionKey: "sc.dispReset", group: "display", planned: true },
   { id: "disp-invert", combo: "I", descriptionKey: "sc.dispInvert", group: "display" },
   { id: "disp-overlay", combo: "O", descriptionKey: "sc.dispOverlay", group: "display" },
-  { id: "disp-fullscreen", combo: "F", descriptionKey: "sc.dispFullscreen", group: "display", planned: true },
+  { id: "disp-fullscreen", combo: "F", descriptionKey: "sc.dispFullscreen", group: "display" },
 
   // --- DSA のピクセルシフト（`fw/angio-design.md` §6.4 / §6.7） ---
   // 🔴 **`Alt` を付けるのは、素の矢印が既にスライス送りだから**（`nav-next-slice` /
@@ -77,7 +77,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   // --- 汎用・システム（Redo は Win:Ctrl+Y / Mac:Cmd+Shift+Z） ---
   { id: "sys-undo", combo: "Mod+Z", descriptionKey: "sc.sysUndo", group: "system" },
   { id: "sys-redo", combo: "Mod+Shift+Z", descriptionKey: "sc.sysRedo", group: "system" },
-  { id: "sys-delete", combo: "Delete", descriptionKey: "sc.sysDelete", group: "system", planned: true },
+  { id: "sys-delete", combo: "Delete", descriptionKey: "sc.sysDelete", group: "system" },
   // ROI の複製（同じ形の ROI をもう 1 つ置く）。貼り付け先は**現在表示中のスライス**。
   { id: "roi-copy", combo: "Mod+C", descriptionKey: "sc.roiCopy", group: "system" },
   { id: "roi-paste", combo: "Mod+V", descriptionKey: "sc.roiPaste", group: "system" },
@@ -136,11 +136,14 @@ export function matchesCombo(combo: string, e: KeyboardEvent): boolean {
   const parts = combo.split("+");
   const wantMod = parts.includes("Mod");
   const wantShift = parts.includes("Shift");
+  const wantAlt = parts.includes("Alt");
   const key = parts[parts.length - 1];
 
   const mod = IS_MAC ? e.metaKey : e.ctrlKey;
   if (wantMod !== mod) return false;
   if (wantShift !== e.shiftKey) return false;
+  // Alt も一致を見る。見ないと Alt+↑（DSA のシフト）が素の ↑（スライス送り）に先に一致する。
+  if (wantAlt !== e.altKey) return false;
   // Mod 不要なのに Ctrl/Cmd が押されていたら不一致（Ctrl+R リロード等の誤爆防止）
   if (!wantMod && (IS_MAC ? e.metaKey : e.ctrlKey)) return false;
 

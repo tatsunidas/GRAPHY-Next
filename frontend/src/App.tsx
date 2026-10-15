@@ -4,6 +4,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { fetchStatus, fetchStudies, fetchSeries, type AppStatus, type Study, type Series } from "./api";
+import { pollStatus } from "./statusPoll";
 import { parseIidLaunch } from "./iid";
 import { SettingsDialog } from "./settings/SettingsDialog";
 import { AiEgressConsentHost } from "./plugins/pluginAiApi";
@@ -11,6 +12,7 @@ import { DbAdminDialog } from "./dbadmin/DbAdminDialog";
 import { KeyboardHelp } from "./shortcuts/KeyboardHelp";
 import { useGlobalShortcuts } from "./shortcuts/useGlobalShortcuts";
 import { MainScreen } from "./mainscreen/MainScreen";
+import { InboxNotice } from "./dbadmin/InboxNotice";
 import { Viewer2DScreen } from "./viewer2d/Viewer2DScreen";
 import { MprScreen } from "./mpr/MprScreen";
 import { Viewer3DScreen } from "./viewer3d/Viewer3DScreen";
@@ -54,11 +56,21 @@ export function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  useEffect(() => {
-    fetchStatus()
-      .then(setStatus)
-      .catch((e: unknown) => setError(String(e)));
-  }, []);
+  useEffect(
+    () =>
+      pollStatus(fetchStatus, {
+        intervalMs: 3000,
+        onOk: (s, afterError) => {
+          setStatus(s);
+          if (afterError) {
+            setError(null);
+            setDbVersion((v) => v + 1); // 失敗のまま出ている一覧を取り直す
+          }
+        },
+        onError: (e) => setError(String(e)),
+      }),
+    [],
+  );
 
   // IHE IID 起動（web のみ・メインウィンドウのみ・1 回だけ）。URL `?studyUID=...` があれば、その study を
   // 検索ポータルを介さず 2D ビューアで直接開く（graphy-viewer-ctx に書いて #2dviewer へ遷移）。
@@ -154,6 +166,11 @@ export function App() {
       if (status?.mode === "standalone") setDbOpen(true);
     },
     "show-help": () => setHelpOpen(true),
+    // F: 全画面の切り替え（どのウィンドウでも。抜けるのは F か Esc）。
+    "disp-fullscreen": () => {
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+      else void document.documentElement.requestFullscreen().catch(() => undefined);
+    },
     // Esc: 開いているダイアログを閉じる（ビューア実装後はビューア側で表示リセットに割当）
     "close-dialog": () => {
       setSettingsOpen(false);
@@ -198,6 +215,7 @@ export function App() {
       ) : screen === "qr" ? (
         <QRScreen status={status} />
       ) : (
+        <>
         <MainScreen
           status={status}
           error={error}
@@ -211,6 +229,9 @@ export function App() {
             window.location.hash = mobileHash("studies");
           }}
         />
+        {/* 他の DB から届いた検査を、この DB を開いたときに取り込んだ結果（standalone のみ・一度だけ） */}
+        {status?.mode === "standalone" && <InboxNotice onImported={() => setDbVersion((v) => v + 1)} />}
+        </>
       )}
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       {/* 外部 AI 送信の同意ダイアログ。2D ビューアは別ウィンドウ＝別ルートなので両方に要る。 */}

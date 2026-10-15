@@ -13,7 +13,7 @@
 //   GRAPHY_BACKEND_PROFILE     … backend プロファイル（既定 config.backend.profile）
 //   GRAPHY_DEV_SERVER_URL      … Vite dev サーバの URL（既定 config.devServerUrl の 5173）
 
-const { app, BrowserWindow, shell, dialog, ipcMain, nativeImage, screen } = require("electron");
+const { app, BrowserWindow, shell, dialog, ipcMain, nativeImage, screen, clipboard } = require("electron");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 const os = require("node:os");
@@ -31,12 +31,18 @@ const secretStore = require("./secretStore");
 const aiGateway = require("./aiGateway");
 const aiProviders = require("./aiProviders");
 const computeEndpoints = require("./computeEndpoints");
+const dbFolders = require("./dbFolders");
+const tlsPasswords = require("./tlsPasswords");
+const { waitPortFree } = require("./portWait");
 const { ensureDefaultEndpoint } = require("./computeDefault");
 const computeBridge = require("./computeBridge");
 const computeConsent = require("./computeConsent");
 const { createColabAuth, REFRESH_KEY: COLAB_REFRESH_KEY } = require("./colabAuth");
 const { createColabApi } = require("./colabApi");
 const { createColabRuntimes } = require("./colabRuntimes");
+const { createGdriveAuth, REFRESH_KEY: GDRIVE_REFRESH_KEY } = require("./gdriveAuth");
+const gdrivePicker = require("./gdrivePicker");
+const { createBackupFolder } = require("./gdriveFolder");
 
 const PORT = process.env.GRAPHY_BACKEND_PORT || String(cfg.backend.port);
 const PROFILE = process.env.GRAPHY_BACKEND_PROFILE || cfg.backend.profile;
@@ -88,6 +94,8 @@ let backendExit = null;
 // spawn 自体が失敗した場合（java が無い等）の記録。
 let backendSpawnError = null;
 let backendHealthy = false;
+// この起動で backend が使っている DB フォルダ（resolveStartupDbFolder で決める）。
+let activeDbFolder = null;
 
 /** 起動失敗を「コード＋技術的な詳細」で表現する。コードはスプラッシュ側で ja/en に訳す。 */
 class StartupError extends Error {
@@ -215,7 +223,7 @@ function startBackend() {
   );
   // データ(DB/DICOM/plugins)は CWD 相対で作られるため、CWD を固定する（パッケージ版は userData）。
   const dataDir = resolveDataDir();
-  console.log(`[backend] starting: ${jar} (java=${javaCmd}, profile=${PROFILE}, port=${PORT}, maxHeapMb=${maxHeapMb || "default"}, dataDir=${dataDir})`);
+  console.log(`[backend] starting: ${jar} (java=${javaCmd}, profile=${PROFILE}, port=${PORT}, maxHeapMb=${maxHeapMb || "default"}, dataDir=${dataDir}, dbFolder=${activeDbFolder})`);
   backendProc = spawn(
     javaCmd,
     [
@@ -227,8 +235,15 @@ function startBackend() {
       // 同梱の公式プラグイン（配布物に resources/bundled-plugins があるときだけ。backend が起動時に、
       // 公式鍵の署名を確かめてから入れる。利用者が消したものは入れ直さない）。fw/plugin-manager-design.md §10
       ...bundledPluginsArgs(),
+      // DB フォルダ（索引と DICOM 保管庫）と、DB をまたいで共通の環境設定ファイル
+      ...dbFolders.springArgs(activeDbFolder, path.join(dataDir, "settings.json")),
     ],
-    { cwd: dataDir, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GRAPHY_MAIN_SECRET: MAIN_SECRET } },
+    {
+      cwd: dataDir,
+      stdio: ["ignore", "pipe", "pipe"],
+      // TLS の受信は起動の途中でキーストアを開くので、キーチェーンのパスワードはここで渡す（起動引数は ps で見える）
+      env: { ...process.env, GRAPHY_MAIN_SECRET: MAIN_SECRET, ...tlsPasswords.envFor(secretStore.getSecret) },
+    },
   );
   wireBackendOutput(backendProc);
   // spawn 自体の失敗（java.exe が無い＝ENOENT など）。exit は来ないのでここで拾う。
@@ -679,6 +694,22 @@ ipcMain.on("graphy:start-drag", (e, payload) => {
   }
 });
 
+// ビューアのタイル画像（PNG dataURL）をクリップボードへ書く。PNG の dataURL 以外は受けない。
+ipcMain.handle("graphy:copy-image", (_e, dataUrl) => {
+  try {
+    if (typeof dataUrl !== "string") return false;
+    const m = /^data:image\/png;base64,([\s\S]+)$/.exec(dataUrl);
+    if (!m) return false;
+    const img = nativeImage.createFromBuffer(Buffer.from(m[1], "base64"));
+    if (img.isEmpty()) return false;
+    clipboard.writeImage(img);
+    return true;
+  } catch (err) {
+    console.error("[copy-image]", err);
+    return false;
+  }
+});
+
 // OS 標準のメモリ/システムモニタを起動する（System メニューの MemoryMonitor）。
 //   Windows … タスクマネージャ (taskmgr)
 //   macOS   … アクティビティモニタ (Activity Monitor)
@@ -905,9 +936,92 @@ ipcMain.handle("graphy:plugin-download-into-directory", async (_e, payload) => {
 // アプリ全体を再起動する（DICOM 自局設定など、SCP リスナー起動時にしか反映されない設定の変更後に使う）。
 // before-quit で stopBackend が走るため、次回起動時に新しい設定で backend が立ち上がる。
 ipcMain.handle("graphy:relaunch", () => {
-  app.relaunch();
-  app.quit();
+  relaunchApp();
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DB フォルダ（索引と DICOM 保管庫）の切り替え。切り替えは記録してから再起動する。
+// フォルダの選択と最終確認は main が描く（レンダラからは任意のパスへ黙って切り替えられない）。
+// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// プラグイン導入の同意。有効にする前に main が確認ダイアログを出す（レンダラ・プラグインからは迂回できない）。
+// 一般の設定の API（PUT /api/settings）はこのキーを受け付けないので、変える経路はここだけ。
+// ─────────────────────────────────────────────────────────────────────────────
+ipcMain.handle("graphy:plugin-install-opt-in", async (e, payload) => {
+  const enable = !!(payload && payload.enabled === true);
+  if (!computeBridge.enabled()) return { ok: false, reason: "main-channel-disabled" };
+  if (enable) {
+    const ja = String(app.getLocale() || "").startsWith("ja");
+    const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
+    const choice = dialog.showMessageBoxSync(win, {
+      type: "warning",
+      buttons: ja ? ["許可する", "取り消す"] : ["Allow", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+      title: ja ? "プラグインの導入を許可" : "Allow plugin installation",
+      message: ja
+        ? "プラグインはこの PC で動くプログラムです。導入を許可しますか？"
+        : "Plugins are programs that run on this computer. Allow installing them?",
+      detail: ja
+        ? "許可すると、環境設定のプラグイン画面から取得・導入できるようになります。信頼できる提供元のものだけを導入してください。"
+        : "Once allowed, plugins can be fetched and installed from the Plugins page in Preferences. Install only plugins from sources you trust.",
+    });
+    if (choice !== 0) return { ok: false, canceled: true };
+  }
+  const r = await computeBridge.setPluginOptIn(enable);
+  return r.ok ? { ok: true, installEnabled: enable } : { ok: false, reason: r.error || `backend-${r.status}` };
+});
+
+ipcMain.handle("graphy:db-folders-list", () => dbFolders.list(activeDbFolder));
+
+async function pickDbDirectory(e, title) {
+  const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
+  const result = await dialog.showOpenDialog(win, { title, properties: ["openDirectory", "createDirectory"] });
+  return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+}
+
+// 新規: 空のフォルダを選ばせて目印を書く（切り替えはしない。続けて switch を呼ぶ）。
+ipcMain.handle("graphy:db-folders-create", async (e, payload) => {
+  const p = await pickDbDirectory(e, String((payload && payload.title) || ""));
+  if (!p) return { ok: false, canceled: true };
+  return dbFolders.create(p);
+});
+
+// 開く: DB フォルダか空のフォルダを選ばせて検査する（切り替えはしない）。
+ipcMain.handle("graphy:db-folders-pick", async (e, payload) => {
+  const p = await pickDbDirectory(e, String((payload && payload.title) || ""));
+  if (!p) return { ok: false, canceled: true };
+  return dbFolders.validateOpen(p);
+});
+
+// 切り替え: 検査し直し、利用者に確かめてから記録して再起動する。
+ipcMain.handle("graphy:db-folders-switch", (e, payload) => {
+  const folder = String((payload && payload.folder) || "");
+  const isDefault = folder !== "" && path.isAbsolute(folder) && dbFolders.isDefault(folder);
+  const v = isDefault ? { ok: true, folder } : dbFolders.validateOpen(folder);
+  if (!v.ok) return v;
+  if (activeDbFolder && dbFolders.samePath(v.folder, activeDbFolder)) return { ok: false, reason: "already-active" };
+  const ja = String(app.getLocale() || "").startsWith("ja");
+  const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
+  const choice = dialog.showMessageBoxSync(win, {
+    type: "question",
+    buttons: ja ? ["切り替えて再起動", "取り消す"] : ["Switch and restart", "Cancel"],
+    defaultId: 0,
+    cancelId: 1,
+    title: ja ? "DB フォルダの切り替え" : "Switch database folder",
+    message: ja ? "この DB フォルダに切り替えて、アプリを再起動します。" : "GRAPHY-Next will restart with this database folder.",
+    detail: v.network
+      ? `${v.folder}\n\n${ja ? "⚠ ネットワーク上のフォルダは、ファイルのロックが不安定なことがあります。" : "⚠ File locking on network folders can be unreliable."}`
+      : v.folder,
+  });
+  if (choice !== 0) return { ok: false, canceled: true };
+  if (v.kind === "empty") dbFolders.writeMarker(v.folder);
+  dbFolders.select(v.folder);
+  relaunchApp();
+  return { ok: true };
+});
+
+ipcMain.handle("graphy:db-folders-forget", (_e, payload) => dbFolders.forget(String((payload && payload.folder) || "")));
 
 // ネイティブダイアログ（window.confirm/alert/prompt）を閉じた後、レンダラのキーボード
 // フォーカスが失われて入力できなくなる Electron の既知挙動への対処（特に Linux/GTK ダイアログ）。
@@ -940,8 +1054,10 @@ ipcMain.on("graphy:refocus", (e) => {
  * main だけが書く鍵。🔴 **レンダラ（＝同じ realm のプラグイン）から書かせない。**
  * Colab の refresh token を差し替えられると、ランタイムが**別人の Google アカウント**に作られ、
  * 匿名化したデータとコードがそこへ送られる。書くのはログインの流れ（colabAuth）だけ。
+ * Drive の refresh token も同じ（差し替えられると、バックアップ（患者データ）が**別人の Drive**へ送られる。gdriveAuth だけが書く）。
  */
-const MAIN_ONLY_SECRET_KEYS = new Set([COLAB_REFRESH_KEY]);
+// TLS のパスワードは tlsPasswords の経路だけで扱う（backend への受け渡しと、キーチェーンが無いときの代わりの経路があるため）
+const MAIN_ONLY_SECRET_KEYS = new Set([COLAB_REFRESH_KEY, GDRIVE_REFRESH_KEY, ...Object.values(tlsPasswords.KEYS)]);
 
 ipcMain.handle("graphy:secret-set", async (_e, payload) => {
   const key = payload && payload.key;
@@ -960,6 +1076,46 @@ ipcMain.handle("graphy:secret-clear", async (_e, key) => {
   if (ok && isComputeKey(key)) await pushComputeEndpoints();
   return ok;
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DIMSE TLS のパスワード。OS のキーチェーンに預け、backend へは main だけが通れる口で渡す。
+// 🔴 値はレンダラへ返さない（設定済みかどうかだけ）。
+// ─────────────────────────────────────────────────────────────────────────────
+ipcMain.handle("graphy:tls-password-set", (_e, payload) =>
+  tlsPasswords.setPassword({
+    which: String((payload && payload.which) || ""),
+    value: payload && typeof payload.value === "string" ? payload.value : null,
+    encryptionAvailable: secretStore.encryptionAvailable(),
+    setSecret: secretStore.setSecret,
+    clearSecret: secretStore.clearSecret,
+    call: computeBridge.call,
+  }));
+
+ipcMain.handle("graphy:tls-password-status", () =>
+  tlsPasswords.status({ statusOf: secretStore.statusOf, encryptionAvailable: secretStore.encryptionAvailable() }));
+
+/** backend が応答するようになってから 1 回だけ行う処理。 */
+function afterBackendReady() {
+  // 外部の計算機の接続先を backend へ（失敗してもアプリの起動は止めない）
+  pushComputeEndpoints().catch((err) => console.error("[compute] push failed:", err));
+  pushGdriveConfig().catch((err) => console.error("[gdrive] push failed:", err));
+  // 設定に平文で残っている TLS のパスワードをキーチェーンへ移す（失敗しても起動は止めない・平文は消さない）
+  migrateTlsPasswords();
+}
+
+function migrateTlsPasswords() {
+  if (!computeBridge.enabled()) return;
+  tlsPasswords
+    .migrateLegacy({
+      encryptionAvailable: secretStore.encryptionAvailable(),
+      setSecret: secretStore.setSecret,
+      call: computeBridge.call,
+    })
+    .then((r) => {
+      if (r.moved > 0 || r.reason) console.log(`[tls] 平文のパスワードの移行: moved=${r.moved} cleared=${r.cleared} ${r.reason || ""}`);
+    })
+    .catch((err) => console.error("[tls] 移行に失敗:", err));
+}
 
 // AI 中継。CSP によりレンダラからは外部 API を叩けないため main が肩代わりする。
 // 用途 → 提供元の解決と応答の正規化は aiGateway / aiAdapters が行う（fw/ai-routing-design.md）。
@@ -1115,6 +1271,175 @@ async function pushComputeEndpoints() {
   const colab = colabRuntimes ? colabRuntimes.endpoints().filter((e) => colabIds.has(e.id)) : [];
   return computeBridge.pushEndpoints([...jupyter, ...colab]);
 }
+
+// ── Google Drive バックアップ（計画: ~/.claude/plans/graphy-next-db-googledrive-agile-cupcake.md、実測: fw/gdrive-p0.md）──
+// ログイン・Picker・保存先フォルダの作成は main。同期そのものは backend（refresh token は内部経路でメモリにだけ渡す）。
+// 設定は DB フォルダごと（db-folders.json）。有効にできるのは今開いている DB だけ。
+let gdriveAuth = null;
+
+function initGdrive() {
+  gdriveAuth = createGdriveAuth({
+    dirs: [__dirname, resolveDataDir()],
+    secrets: secretStore,
+    openExternal: (url) => shell.openExternal(url),
+  });
+}
+
+/** backend へ Drive の設定を入れ直す（起動時・ログイン／ログアウト・有効化／解除のあと）。トークンは backend のメモリにだけ置かれる。 */
+/** この PC の識別子（排他ロックの持ち主を区別する）。DB フォルダを別の PC へ移しても付いていかないよう、データ置き場に持つ。 */
+function gdriveDeviceId() {
+  const file = path.join(resolveDataDir(), "gdrive-device-id");
+  try {
+    const v = fs.readFileSync(file, "utf8").trim();
+    if (/^[A-Za-z0-9-]{8,64}$/.test(v)) return v;
+  } catch {
+    // 初回
+  }
+  const id = require("node:crypto").randomUUID();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, id, { mode: 0o600 });
+  return id;
+}
+
+async function pushGdriveConfig() {
+  if (!computeBridge.enabled()) return { ok: false, error: "main-channel-disabled" };
+  const cfg = activeDbFolder ? dbFolders.getGdrive(activeDbFolder) : null;
+  const client = gdriveAuth && gdriveAuth.clientInfo();
+  const refresh = secretStore.getSecret(GDRIVE_REFRESH_KEY);
+  const enabled = !!(cfg && client);
+  const body = enabled
+    ? {
+        enabled: true,
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+        refreshToken: refresh || null, // 無ければ backend は「要ログイン」状態で待つ
+        folderId: cfg.driveFolderId,
+        driveId: cfg.driveId,
+        email: cfg.email,
+        name: cfg.name,
+        deviceId: gdriveDeviceId(),
+        host: os.hostname(),
+      }
+    : { enabled: false };
+  const r = await computeBridge.call("PUT", "/api/internal/gdrive/config", body);
+  if (!r.ok) console.error(`[gdrive] backend への設定の登録に失敗 (status=${r.status} ${r.error || ""})`);
+  return r;
+}
+
+/** 画面へ返す状態（トークン・API キーは返さない）。 */
+ipcMain.handle("graphy:gdrive-status", async () => {
+  const client = gdriveAuth && gdriveAuth.clientInfo();
+  const cfg = activeDbFolder ? dbFolders.getGdrive(activeDbFolder) : null;
+  return {
+    configured: !!client,
+    pickerReady: !!(client && client.pickerApiKey),
+    signedIn: !!gdriveAuth && gdriveAuth.signedIn(),
+    email: gdriveAuth ? await gdriveAuth.ensureEmail() : null,
+    folder: cfg ? { name: cfg.name, shared: !!cfg.driveId, email: cfg.email } : null,
+  };
+});
+
+ipcMain.handle("graphy:gdrive-signin", async () => {
+  if (!gdriveAuth) return { ok: false, error: "not-ready" };
+  const r = await gdriveAuth.signIn();
+  if (r.ok) await pushGdriveConfig();
+  return r;
+});
+
+ipcMain.handle("graphy:gdrive-signout", async () => {
+  if (!gdriveAuth) return { ok: false, error: "not-ready" };
+  const r = await gdriveAuth.signOut();
+  await pushGdriveConfig();
+  return r;
+});
+
+// 有効にする: Picker で保存先の親を選ぶ → 直下にバックアップ用フォルダを作る → 記録して backend へ。
+ipcMain.handle("graphy:gdrive-enable", async () => {
+  if (!gdriveAuth || !activeDbFolder) return { ok: false, error: "not-ready" };
+  const client = gdriveAuth.clientInfo();
+  if (!client) return { ok: false, error: "no-oauth-client" };
+  if (!client.pickerApiKey) return { ok: false, error: "no-picker-key" };
+  if (!gdriveAuth.signedIn()) return { ok: false, error: "not-signed-in" };
+  if (dbFolders.getGdrive(activeDbFolder)) return { ok: false, error: "already-enabled" };
+  const token = await gdriveAuth.accessToken();
+  if (!token) return { ok: false, error: "token" };
+  const locale = String(app.getLocale() || "").startsWith("ja") ? "ja" : "en";
+  // 利用者の既定ブラウザで開く（Picker は Google のセッションを使う。gdrivePicker.js）
+  const picked = await gdrivePicker.pick({
+    token,
+    apiKey: client.pickerApiKey,
+    projectNumber: client.projectNumber,
+    locale,
+    openExternal: (url) => shell.openExternal(url),
+  });
+  if (!picked.ok) return { ok: false, error: picked.error, canceled: picked.error === "cancelled" };
+  const made = await createBackupFolder({ token, parentId: picked.id, dbName: path.basename(activeDbFolder) });
+  if (!made.ok) return { ok: false, error: made.error };
+  const saved = dbFolders.setGdrive(activeDbFolder, {
+    driveFolderId: made.folderId,
+    driveId: made.driveId,
+    name: made.name,
+    email: gdriveAuth.email(),
+  });
+  if (!saved.ok) return { ok: false, error: saved.reason };
+  await pushGdriveConfig();
+  return { ok: true, name: made.name, parentName: made.parentName, shared: !!made.driveId };
+});
+
+// 復元: Drive のバックアップ（GRAPHY-DB-… フォルダ）を Picker で選び、空のフォルダへ取り戻す。
+// 取り戻しは backend が行う（進み具合は画面が /api/gdrive/restore で見る）。終わったら画面が通常の切替を呼ぶ。
+ipcMain.handle("graphy:gdrive-restore", async (e, payload) => {
+  if (!gdriveAuth) return { ok: false, error: "not-ready" };
+  const client = gdriveAuth.clientInfo();
+  if (!client) return { ok: false, error: "no-oauth-client" };
+  if (!client.pickerApiKey) return { ok: false, error: "no-picker-key" };
+  if (!gdriveAuth.signedIn()) return { ok: false, error: "not-signed-in" };
+  const token = await gdriveAuth.accessToken();
+  const refresh = secretStore.getSecret(GDRIVE_REFRESH_KEY);
+  if (!token || !refresh) return { ok: false, error: "token" };
+  const locale = String(app.getLocale() || "").startsWith("ja") ? "ja" : "en";
+  const picked = await gdrivePicker.pick({
+    token,
+    apiKey: client.pickerApiKey,
+    projectNumber: client.projectNumber,
+    locale,
+    openExternal: (url) => shell.openExternal(url),
+  });
+  if (!picked.ok) return { ok: false, error: picked.error, canceled: picked.error === "cancelled" };
+  const dest = await pickDbDirectory(e, String((payload && payload.title) || ""));
+  if (!dest) return { ok: false, canceled: true };
+  const made = dbFolders.create(dest); // 空のフォルダだけを受け付け、目印を書く
+  if (!made.ok) return { ok: false, error: made.reason };
+  const r = await computeBridge.call("POST", "/api/internal/gdrive/restore", {
+    clientId: client.clientId,
+    clientSecret: client.clientSecret,
+    refreshToken: refresh,
+    sourceFolderId: picked.id,
+    destDir: made.folder,
+  });
+  if (!r.ok) return { ok: false, error: (r.body && r.body.error) || r.error || "restore-start" };
+  return { ok: true, folder: made.folder };
+});
+
+// 解除: Drive のデータには触れない（消さない）。確認してから設定を外す。
+ipcMain.handle("graphy:gdrive-disable", async (e) => {
+  if (!activeDbFolder || !dbFolders.getGdrive(activeDbFolder)) return { ok: false, error: "not-enabled" };
+  const ja = String(app.getLocale() || "").startsWith("ja");
+  const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
+  const choice = dialog.showMessageBoxSync(win, {
+    type: "question",
+    buttons: ja ? ["バックアップを止める", "取り消す"] : ["Stop backing up", "Cancel"],
+    defaultId: 1,
+    cancelId: 1,
+    title: ja ? "Drive バックアップの解除" : "Stop Drive backup",
+    message: ja ? "この DB の Drive バックアップを止めます。" : "Drive backup of this database will stop.",
+    detail: ja ? "Drive にあるデータは消しません。" : "Data already on Drive is not deleted.",
+  });
+  if (choice !== 0) return { ok: false, canceled: true };
+  dbFolders.clearGdrive(activeDbFolder);
+  await pushGdriveConfig();
+  return { ok: true };
+});
 
 // ── Colab（fw/remote-compute-design.md §15）──────────────────────────────────
 // ログインは colabAuth（refresh token は secretStore・main だけ）、API は colabApi（公式 v1beta だけ）、
@@ -1348,21 +1673,98 @@ function reportStartupFailure(e) {
   }
 }
 
+/**
+ * この起動で使う DB フォルダを決める。既定の DB は従来どおり作る（無ければ）。
+ * 選んだ DB フォルダが無い（外付けディスクを外した等）ときは**作らずに**利用者に聞く。
+ * @returns {string|null} null は「終了」
+ */
+function resolveStartupDbFolder() {
+  const t = dbFolders.messages(app.getLocale());
+  for (;;) {
+    const folder = dbFolders.currentFolder();
+    if (dbFolders.isDefault(folder)) {
+      fs.mkdirSync(folder, { recursive: true });
+      dbFolders.writeMarker(folder);
+      return folder;
+    }
+    const v = dbFolders.validateOpen(folder);
+    if (v.ok) {
+      if (v.kind === "empty") dbFolders.writeMarker(folder);
+      return folder;
+    }
+    console.error(`[db-folder] cannot open ${folder}: ${v.reason}`);
+    const choice = dialog.showMessageBoxSync({
+      type: "warning",
+      buttons: [t.retry, t.useDefault, t.quit],
+      defaultId: 0,
+      cancelId: 2,
+      title: t.missingTitle,
+      message: t.missingMessage,
+      detail: `${folder}\n(${v.reason})`,
+    });
+    if (choice === 1) dbFolders.select(dbFolders.defaultFolder());
+    if (choice === 2) {
+      app.quit();
+      return null;
+    }
+  }
+}
+
+/** 既定以外の DB で起動できなかったとき、既定の DB で起動し直す道を出す（ロック・途中終了など）。 */
+function offerDefaultDbAfterFailure(e) {
+  if (EXTERNAL_BACKEND || !activeDbFolder || dbFolders.isDefault(activeDbFolder)) return;
+  if (!(e instanceof StartupError) || !FATAL_CODES.has(e.code)) return;
+  setTimeout(() => {
+    const t = dbFolders.messages(app.getLocale());
+    const choice = dialog.showMessageBoxSync({
+      type: "question",
+      buttons: [t.switchDefault, t.close],
+      defaultId: 0,
+      cancelId: 1,
+      title: t.failedTitle,
+      message: t.failedMessage,
+      detail: activeDbFolder,
+    });
+    if (choice === 0) {
+      dbFolders.select(dbFolders.defaultFolder());
+      relaunchApp();
+    }
+  }, 0);
+}
+
 app.whenReady().then(async () => {
   // 秘密情報の置き場は backend の CWD（H2・DICOM 保管庫と同じ場所）に揃える。
   secretStore.init(resolveDataDir());
   aiProviders.init(resolveDataDir());
   computeEndpoints.init(resolveDataDir());
   initColab();
+  initGdrive();
   if (MAIN_SECRET) computeBridge.init({ secret: MAIN_SECRET, apiBase: API_BASE });
+  dbFolders.init(resolveDataDir());
+  activeDbFolder = resolveStartupDbFolder();
+  if (!activeDbFolder) return; // 利用者が「終了」を選んだ
   createSplash();
   try {
+    // 再起動のあとは、前のアプリの backend がポートを離すのを待つ（後始末と並んで起動するため）
+    if (process.env.GRAPHY_RELAUNCHED === "1" && !EXTERNAL_BACKEND) {
+      delete process.env.GRAPHY_RELAUNCHED; // backend やほかの子プロセスへ引き継がない
+      if (!(await waitPortFree(Number(PORT)))) console.warn(`[backend] port ${PORT} is still in use after waiting`);
+    }
     startBackend();
     await waitForBackend();
-    // 外部の計算機の接続先を backend へ（失敗してもアプリの起動は止めない）
-    pushComputeEndpoints().catch((err) => console.error("[compute] push failed:", err));
+    afterBackendReady();
   } catch (e) {
     reportStartupFailure(e);
+    offerDefaultDbAfterFailure(e);
+    // 待ちきれなかっただけなら、裏で待ち続ける（遅れて立ち上がることがある。窓の側は自分で取り直す）。
+    if (e instanceof StartupError && e.code === "backend-timeout") {
+      waitForBackend(Infinity)
+        .then(() => {
+          console.log("[startup] backend ready after timeout");
+          afterBackendReady();
+        })
+        .catch(reportStartupFailure);
+    }
   }
   createWindow(); // スプラッシュは createWindow の ready-to-show で閉じる
 
@@ -1395,3 +1797,48 @@ app.on("before-quit", (event) => {
 });
 app.on("before-quit", stopBackend);
 process.on("exit", stopBackend);
+
+/**
+ * アプリを再起動する（設定の反映・DB フォルダの切り替え）。
+ *
+ * <p>開発用の起動（scripts/dev-desktop.sh）では `app.relaunch()` を使わない。新しい Electron がスクリプトの
+ * 外で起動し、スクリプトは「アプリが終わった」と見て Vite を止めるので、画面が真っ白になる（2026-10-11）。
+ * スクリプトが渡す GRAPHY_DEV_RELAUNCH_EXIT の終了コードで終え、Electron の起動し直しはスクリプトに任せる。
+ */
+// 標準入出力（0〜2）以外の引き継いだファイル記述子をすべて閉じてから、引数のコマンドに置き換わる。
+const CLOSE_INHERITED_FDS_AND_EXEC =
+  'for fd in $(ls /proc/$$/fd); do [ "$fd" -gt 2 ] && eval "exec $fd>&-" 2>/dev/null; done; exec "$@"';
+const DEV_RELAUNCH_EXIT = app.isPackaged ? 0 : Number(process.env.GRAPHY_DEV_RELAUNCH_EXIT || 0);
+let devRelaunchRequested = false;
+function relaunchApp() {
+  if (DEV_RELAUNCH_EXIT > 0) {
+    devRelaunchRequested = true;
+  } else if (process.env.APPIMAGE) {
+    // AppImage の実行ファイル（process.execPath）は一時的なマウント先にあり、今のアプリが終わると
+    // マウントの提供元も終わる。app.relaunch はそこから起動し直す（指定先を渡しても、起動し直す係が
+    // 壊れていくマウント先から動くため効かなかった。2026-10-11 実測）。AppImage のファイル自体を
+    // 別のプロセスとして起動し、新しいマウント先で動かす。
+    // 引き継いだ管（AppImage の実行部分とつながったもの）は閉じてから起動する。閉じないと、前の
+    // 実行部分が「アプリがまだ動いている」と見てマウントを片付けず、再起動のたびに残る（実測）。
+    // 🔴 bash で行う。dash（多くの /bin/sh）は 2 桁の fd を `exec 23>&-` で閉じられず、シェルごと失敗する（実測）。
+    //    bash が無ければ閉じずに起動する（前のマウントが残るだけで、再起動はできる）。
+    const opts = { detached: true, stdio: "ignore", env: { ...process.env, GRAPHY_RELAUNCHED: "1" } };
+    const args = process.argv.slice(1);
+    if (fs.existsSync("/bin/bash")) {
+      spawn("/bin/bash", ["-c", CLOSE_INHERITED_FDS_AND_EXEC, "bash", process.env.APPIMAGE, ...args], opts).unref();
+    } else {
+      spawn(process.env.APPIMAGE, args, opts).unref();
+    }
+  } else {
+    process.env.GRAPHY_RELAUNCHED = "1"; // app.relaunch は今の環境変数を引き継ぐ
+    app.relaunch();
+  }
+  app.quit();
+}
+// before-quit の後始末（Colab の解放・backend の停止）が済んだあとに、終了コードを付けて終える
+app.on("will-quit", (event) => {
+  if (!devRelaunchRequested) return;
+  event.preventDefault();
+  stopBackend();
+  app.exit(DEV_RELAUNCH_EXIT);
+});

@@ -72,7 +72,7 @@ Electron はパッケージ後は警告を出さない**（本番は上記 CSP �
 |---|---|
 | `http://localhost:*` / `http://127.0.0.1:*` | dev の Vite、および web モード |
 | **`file://`** | **Electron のレンダラ（パッケージ版）** |
-| `null` | sandbox iframe 等の不透明オリジン |
+| ~~`null`~~ | **許可しない**（2026-10-11 に削除。下の「ブラウザで開いた悪意あるページから」を参照） |
 
 🔴 **`file://` を足すまで、パッケージ版のプラグインは 100% 導入後に起動できなかった。**
 設定のコメントは以前「Electron file:// = null を想定」と書いていたが、**実測では
@@ -99,6 +99,46 @@ Electron はパッケージ後は警告を出さない**（本番は上記 CSP �
 
 再発防止: `backend/src/test/java/com/vis/graphynext/web/CorsConfigTest.java`
 （`file://` / `null` / `http://localhost:5173` は 200、外部サイトは 403 を固定）。
+
+---
+
+## ブラウザで開いた悪意あるページから standalone の API を呼ばせない（2026-10-11）
+
+standalone の backend には認証が無い。だから「誰が呼んでいるか」を、次の 4 つで絞っている。
+
+| 守り | 塞ぐ経路 | 置き場所 |
+|---|---|---|
+| HTTP を `127.0.0.1` だけで待ち受ける | LAN の別の端末 | `application-standalone.yml` の `server.address` |
+| `Host` が `localhost`・`127.0.0.1`・`[::1]` 以外なら 403 | DNS リバインディング（相手のドメインを 127.0.0.1 に向け直して「同一オリジン」になる） | `web/LocalHostOnlyFilter` |
+| CORS で `Origin: null` を許さない | どのサイトでも作れるサンドボックスの iframe | `application.yml` の `graphy.cors` |
+| プラグイン導入の同意は main だけが変える | レンダラ（同じ realm で動くプラグインも）からの書き換え | `PUT /api/settings` は 400、`/api/internal/plugin-manager/opt-in`（`MainChannelFilter`）、main の確認ダイアログ |
+
+**実測（直す前）**: `Origin: null` の事前確認が 200 で、`PUT /api/settings` で `plugins.installEnabled` を
+`true` にできた。偽の `Host: evil.example` でも 200 だった。外部サイトの `Origin` そのままは 403 だった
+（そこだけは守られていた）。
+
+- `X-Forwarded-For` / `X-Forwarded-Host` は、`forward-headers-strategy: framework` のもとで外側のラッパーが
+  接続元・ホスト名を書き換える。送る側が自由に付けられるので、判定には `web/RawRequest.unwrap` ではがした生の値を使う。
+- `Host` の無い要求は通す。ブラウザは必ず `Host` を付けるので、ブラウザ経由の攻撃では作れない。
+- 残っていること: 導入済みのプラグイン（レンダラと同じ realm）は、同意が入っていれば別のプラグインを導入できる。設計の前提の範囲。
+
+---
+
+## DICOM TLS のパスワードの置き場（2026-10-11）
+
+キーストア・トラストストアのパスワードは、**API で返さない**（`GET /api/settings` の `dicom.tls` も
+`GET /api/dicom/tls-config` も null と「設定済みか」だけ）。画面と同じ場所で動くプラグインからも読めるため。
+
+| モード・環境 | 保存先 | backend への渡し方 |
+|---|---|---|
+| standalone（OS のキーチェーンあり） | Electron main の secretStore（safeStorage で暗号化） | 起動時は環境変数 `GRAPHY_TLS_*_PASSWORD`（TLS の受信は起動の途中で開くため）、起動中の変更は `/api/internal/dicom/tls-secrets`。backend はメモリにだけ持つ |
+| standalone（キーチェーンなし） | 設定ファイルに平文（権限 600）。画面で警告する | 同じ口に `persistPlaintext: true` |
+| web | サーバーの DB（従来どおり） | `POST /api/dicom/tls-config`（null は変えない・空は消す） |
+
+- 起動引数にしないのは、`ps` で他のユーザーにも見えるため。
+- 旧来の平文は、main が起動後にキーチェーンへ移し、**全部移せたときだけ**設定ファイルと DB の旧来の行から消す。
+  旧い版に戻すと TLS のパスワードを入れ直す必要がある。
+- 一般の `PUT /api/settings` は `dicom.tls` を 400 で拒む（伏せた JSON を書き戻してパスワードを消さないため）。
 
 ---
 

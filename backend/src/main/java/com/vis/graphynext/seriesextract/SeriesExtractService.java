@@ -6,6 +6,7 @@ package com.vis.graphynext.seriesextract;
 
 import com.vis.graphynext.dicom.store.DicomInstance;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
+import com.vis.graphynext.dicom.store.StorageLayout;
 import com.vis.graphynext.dicom.web.WebDicomDataService;
 import com.vis.graphynext.export.ExportNaming;
 import com.vis.graphynext.extract.TagExtractService;
@@ -42,10 +43,13 @@ public class SeriesExtractService {
 
     private final DicomInstanceRepository repo;
     private final ObjectProvider<WebDicomDataService> webProvider;
+    private final StorageLayout layout;
 
-    public SeriesExtractService(DicomInstanceRepository repo, ObjectProvider<WebDicomDataService> webProvider) {
+    public SeriesExtractService(DicomInstanceRepository repo, ObjectProvider<WebDicomDataService> webProvider,
+                                StorageLayout layout) {
         this.repo = repo;
         this.webProvider = webProvider;
+        this.layout = layout;
     }
 
     /** 一致した 1 シリーズ。 */
@@ -284,17 +288,8 @@ public class SeriesExtractService {
         return p;
     }
 
-    private static Path fileOf(DicomInstance inst) {
-        String uri = inst.getUri();
-        if (uri == null || !uri.startsWith("file:")) {
-            return null;
-        }
-        try {
-            Path p = Path.of(java.net.URI.create(uri));
-            return Files.exists(p) ? p : null;
-        } catch (Exception e) {
-            return null;
-        }
+    private Path fileOf(DicomInstance inst) {
+        return layout.resolveForRead(inst);
     }
 
     private Attributes readHeader(DicomInstance inst) {

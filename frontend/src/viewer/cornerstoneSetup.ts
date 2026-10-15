@@ -16,6 +16,7 @@ import {
 } from "./volumeMemory";
 import { resolveVolumeBudgetMb } from "./volumeMemoryGuard";
 import { registerSegMetadataProvider } from "./segMetadata";
+import { setSpacingBetweenSlicesReader } from "./sliceInfoMeta";
 import { registerThickSlabLoader } from "./thickSlab";
 import { registerPluginVolumeLoader } from "../plugins/pluginVolumeScheme";
 import { registerXaCalibrationProvider } from "./xaCalibrationProvider";
@@ -32,6 +33,8 @@ import {
   LengthTool,
   BidirectionalTool,
   AngleTool,
+  CobbAngleTool,
+  MagnifyTool,
   EllipticalROITool,
   RectangleROITool,
   ProbeTool,
@@ -58,6 +61,21 @@ import {
   PolygonRoiTool,
   PolylineRoiTool,
 } from "./roiContourTools";
+import { PointRoiTool } from "./pointRoiTool";
+
+// wadouri の imagePlaneModule は SpacingBetweenSlices(0018,0088) を持たないので、キャッシュ済みデータセットから生で読む
+// （符号付き。NM では負がありうる）。奥行きの決め方（sliceGeometry）の入力になる。
+setSpacingBetweenSlicesReader((imageId) => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const wadouri = (dicomImageLoader as any).wadouri;
+    const { url } = wadouri.parseImageId(imageId);
+    const v = wadouri.dataSetCacheManager.get(url)?.floatString?.("x00180088");
+    return typeof v === "number" && Number.isFinite(v) && v !== 0 ? v : undefined;
+  } catch {
+    return undefined;
+  }
+});
 
 /**
  * マスク（labelmap）のグローバル既定スタイルを適用する。新規マスクの塗り不透明度（fillAlpha 0..1）・
@@ -152,6 +170,8 @@ export function ensureCornerstoneInitialized(): Promise<void> {
       // プラグイン host API の H5 は、この 2 軸を measurements.length / shortAxis として返す。
       addTool(BidirectionalTool);
       addTool(AngleTool);
+      addTool(CobbAngleTool);
+      addTool(MagnifyTool);
       addTool(EllipticalROITool);
       addTool(RectangleROITool);
       addTool(ProbeTool);
@@ -163,6 +183,7 @@ export function ensureCornerstoneInitialized(): Promise<void> {
       addTool(PolylineRoiTool);
       addTool(FreehandRoiTool);
       addTool(FreeLineRoiTool);
+      addTool(PointRoiTool);
       // セグメンテーション（Mask）編集: ROI ブラシ/消しゴム（2D 円 / 3D 球ストラテジ）。
       addTool(BrushTool);
       // セグメンテーション拡充（segmentation-tools-design.md）。3D 系ツールは stack labelmap から

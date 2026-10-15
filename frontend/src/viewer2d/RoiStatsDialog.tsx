@@ -16,7 +16,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import { emitToast } from "../viewer/toast";
 import { getRoiMaskMeta } from "../viewer/roiMaskStore";
-import { computeRoiStatsAsync } from "../viewer/roiStatsStore";
+import { buildRoiPixelDumpAsync, computeRoiStatsAsync } from "../viewer/roiStatsStore";
+import { roiPixelDumpBlobText } from "../viewer/roiPixelDump";
 import { roiStatsCsvBlobText, roiStatsToCsv, type RoiStatsCsvRow } from "../viewer/roiStatsCsv";
 import {
   formatArea,
@@ -26,7 +27,10 @@ import {
   formatValue,
   valueUnitLabel,
 } from "../viewer/roiStatsText";
-import { ENTROPY_BINS, type RoiStatsResult } from "../viewer/roiStats";
+import { ENTROPY_BINS, type RoiStatsResult, type RoiValueStats } from "../viewer/roiStats";
+import { buildMaskVoxelDumpAsync, computeMaskStatsAsync, type MaskStatsResult } from "../viewer/roi3d";
+import { meanTimesVolumeLabelKey } from "../viewer/maskStatsCore";
+import type { HistogramData } from "../viewer/histogram";
 import { LoadingSpinner } from "../viewer/LoadingSpinner";
 
 const CHART_W = 520;
@@ -35,6 +39,14 @@ const CHART_H = 150;
 export interface RoiStatsTarget {
   uid: string;
   tool: string;
+  /** 既定は 2D の注釈 ROI。`mask` はマスク（3D ROI, segmentationId）。 */
+  kind?: "roi" | "mask";
+  /** マスクの表示名（注釈 ROI は roiMaskStore のラベルを使う）。 */
+  label?: string;
+  /** マスクの segmentationId。未指定は `uid` を使う（segment ごとに uid を分けるときに指定する）。 */
+  maskId?: string;
+  /** 指定するとマスクのうちその segment だけを対象にする（塗りの ROI 1 件）。 */
+  segmentIndex?: number;
 }
 
 export function RoiStatsDialog({
@@ -51,6 +63,7 @@ export function RoiStatsDialog({
   const { t } = useI18n();
   const [stats, setStats] = useState<Record<string, RoiStatsResult>>({});
   const [busy, setBusy] = useState(false);
+  const [maskStats, setMaskStats] = useState<Record<string, MaskStatsResult>>({});
   const [focus, setFocus] = useState<string | null>(initialUid ?? targets[0]?.uid ?? null);
   const [generation, setGeneration] = useState(0);
 
@@ -60,9 +73,19 @@ export function RoiStatsDialog({
     setBusy(true);
     (async () => {
       const out: Record<string, RoiStatsResult> = {};
+      const outMask: Record<string, MaskStatsResult> = {};
       for (const target of targets) {
         // 詳細（ヒストグラム/プロファイル）は選択中の 1 件だけ作る。全件ぶん作ると重い。
         const detail = target.uid === focus;
+        if (target.kind === "mask") {
+          const m = await computeMaskStatsAsync(target.maskId ?? target.uid, {
+            withHistogram: detail,
+            segmentIndex: target.segmentIndex,
+          });
+          if (cancelled) return;
+          if (m) outMask[target.uid] = m;
+          continue;
+        }
         const r = await computeRoiStatsAsync(target.uid, {
           withProfile: detail,
           withHistogram: detail,
@@ -73,6 +96,7 @@ export function RoiStatsDialog({
       }
       if (cancelled) return;
       setStats(out);
+      setMaskStats(outMask);
       setBusy(false);
     })().catch(() => {
       if (!cancelled) setBusy(false);
@@ -86,11 +110,12 @@ export function RoiStatsDialog({
     () =>
       targets.map((target, i) => ({
         index: i + 1,
-        label: getRoiMaskMeta(target.uid)?.label ?? "",
+        label: targetLabel(target),
         tool: target.tool,
         stats: stats[target.uid],
+        mask: maskStats[target.uid],
       })),
-    [targets, stats],
+    [targets, stats, maskStats],
   );
 
   const copyCsv = useCallback(() => {
@@ -112,6 +137,41 @@ export function RoiStatsDialog({
   }, [rows]);
 
   const focused = focus ? stats[focus] : undefined;
+  const focusedMask = focus ? maskStats[focus] : undefined;
+  const focusTarget = targets.find((x) => x.uid === focus);
+  const focusIsMask = focusTarget?.kind === "mask";
+  // 画素ダンプは面型・点型・マスクだけ（線は双一次補間で画素ではない）。
+  const dumpKind = focused?.geometry.kind;
+  const dumpable = focusIsMask ? !!focusedMask && focusedMask.voxels > 0 : dumpKind === "area" || dumpKind === "point";
+
+  const saveDump = useCallback(async () => {
+    if (!focus || !dumpable) return;
+    try {
+      const idx = targets.findIndex((x) => x.uid === focus);
+      if (focusIsMask) {
+        const chunks = await buildMaskVoxelDumpAsync(
+          focusTarget?.maskId ?? focus,
+          targetLabel(targets[idx]),
+          focusTarget?.segmentIndex,
+        );
+        if (!chunks) {
+          emitToast(t("roiStats.dumpPixelsFailed"));
+          return;
+        }
+        downloadCsv(chunks, `mask-voxels-${idx + 1}.csv`);
+        return;
+      }
+      const label = getRoiMaskMeta(focus)?.label ?? "";
+      const d = await buildRoiPixelDumpAsync(focus, label);
+      if (!d) {
+        emitToast(t("roiStats.dumpPixelsFailed"));
+        return;
+      }
+      downloadCsv([roiPixelDumpBlobText(d.rows, d)], `roi-pixels-${idx + 1}.csv`);
+    } catch {
+      emitToast(t("roiStats.dumpPixelsFailed"));
+    }
+  }, [focus, focusIsMask, dumpable, targets, t]);
 
   return (
     <div style={backdrop} onClick={onClose}>
@@ -123,6 +183,21 @@ export function RoiStatsDialog({
           <button onClick={() => setGeneration((g) => g + 1)} style={hbtn} title={t("roiStats.recompute")}>⟳</button>
           <button onClick={copyCsv} style={hbtn} title={t("roiStats.copyCsv")}>⧉ CSV</button>
           <button onClick={saveCsv} style={hbtn} title={t("roiStats.saveCsv")}>⬇ CSV</button>
+          <button
+            onClick={saveDump}
+            disabled={!dumpable}
+            style={{ ...hbtn, opacity: dumpable ? 1 : 0.4, cursor: dumpable ? "pointer" : "not-allowed" }}
+            title={
+              focusIsMask
+                ? t("roiStats.dumpVoxels")
+                : dumpable
+                  ? t("roiStats.dumpPixels")
+                  : t("roiStats.dumpPixelsUnsupported")
+            }
+            data-testid="roi-stats-dump"
+          >
+            {t("roiStats.dumpPixelsBtn")}
+          </button>
           <button onClick={onClose} style={hbtn} title={t("common.close")}>×</button>
         </div>
 
@@ -147,9 +222,12 @@ export function RoiStatsDialog({
                 <tbody>
                   {rows.map((r, i) => {
                     const s = r.stats;
-                    const v = s?.values;
+                    const m = r.mask;
+                    const v = m ? m.values : s?.values;
                     const uid = targets[i].uid;
-                    const size = s ? (s.geometry.kind === "area" ? formatArea(s) : formatLength(s)) : null;
+                    const size = m
+                      ? (m.volumeMl === undefined ? "—" : `${formatNumber(m.volumeMl)} mL`)
+                      : s ? (s.geometry.kind === "area" ? formatArea(s) : formatLength(s)) : null;
                     return (
                       <tr
                         key={uid}
@@ -163,7 +241,7 @@ export function RoiStatsDialog({
                         <td style={tdNum}>{v ? formatNumber(v.sd) : "—"}</td>
                         <td style={tdNum}>{v ? formatNumber(v.min) : "—"}</td>
                         <td style={tdNum}>{v ? formatNumber(v.max) : "—"}</td>
-                        <td style={tdNum}>{s ? s.geometry.sampleCount : "—"}</td>
+                        <td style={tdNum}>{m ? m.voxels : s ? s.geometry.sampleCount : "—"}</td>
                       </tr>
                     );
                   })}
@@ -171,7 +249,15 @@ export function RoiStatsDialog({
               </table>
             </div>
 
-            <div style={detailBox}>{focused ? <Detail stats={focused} /> : <span style={dim}>—</span>}</div>
+            <div style={detailBox}>
+              {focusIsMask ? (
+                focusedMask ? <MaskDetail stats={focusedMask} /> : <span style={dim}>—</span>
+              ) : focused ? (
+                <Detail stats={focused} />
+              ) : (
+                <span style={dim}>—</span>
+              )}
+            </div>
           </>
         )}
       </div>
@@ -203,17 +289,7 @@ function Detail({ stats }: { stats: RoiStatsResult }) {
   return (
     <>
       <div style={detailLine}>{geomParts.join(" / ")}</div>
-      {v ? (
-        <div style={detailLine}>
-          {`n=${v.n}  ${t("roiStats.mean")} ${formatValue(v.mean, v.unit, t)}  SD ${formatNumber(v.sd)}  `}
-          {`${t("roiStats.median")} ${formatNumber(v.median)}  p5 ${formatNumber(v.p5)}  p95 ${formatNumber(v.p95)}  `}
-          {`${t("roiStats.skewness")} ${formatNumber(v.skewness)}  ${t("roiStats.kurtosis")} ${formatNumber(v.kurtosis)}  `}
-          {`${t("roiStats.entropy")} ${formatNumber(v.entropy)}`}
-          <span style={dim}> ({t("roiStats.bins", { n: ENTROPY_BINS })})</span>
-        </div>
-      ) : (
-        <div style={{ ...detailLine, ...dim }}>{t("roiStats.noValues")}</div>
-      )}
+      <ValueLine v={v} />
 
       {stats.profile ? (
         <LineChart
@@ -241,6 +317,72 @@ function Detail({ stats }: { stats: RoiStatsResult }) {
       )}
     </>
   );
+}
+
+/** 値の要約の 1 行（2D の ROI とマスクで共通）。 */
+function ValueLine({ v }: { v: RoiValueStats | undefined }) {
+  const { t } = useI18n();
+  if (!v) return <div style={{ ...detailLine, ...dim }}>{t("roiStats.noValues")}</div>;
+  return (
+    <div style={detailLine}>
+      {`n=${v.n}  ${t("roiStats.mean")} ${formatValue(v.mean, v.unit, t)}  SD ${formatNumber(v.sd)}  `}
+      {`${t("roiStats.median")} ${formatNumber(v.median)}  p5 ${formatNumber(v.p5)}  p95 ${formatNumber(v.p95)}  `}
+      {`${t("roiStats.skewness")} ${formatNumber(v.skewness)}  ${t("roiStats.kurtosis")} ${formatNumber(v.kurtosis)}  `}
+      {`${t("roiStats.entropy")} ${formatNumber(v.entropy)}`}
+      <span style={dim}> ({t("roiStats.bins", { n: ENTROPY_BINS })})</span>
+    </div>
+  );
+}
+
+/** マスク（3D ROI）の詳細。体積は Σ³ と同じ求め方、値の要約は 2D と同じ関数。 */
+function MaskDetail({ stats }: { stats: MaskStatsResult }) {
+  const { t } = useI18n();
+  const v = stats.values;
+  const [cx, cy, cz] = stats.voxelMm;
+  const tlgKey = meanTimesVolumeLabelKey(stats.unit);
+  const parts = [
+    `${t("roiMgr.statVol")}: ${stats.volumeMl === undefined || stats.volumeMm3 === undefined ? "—" : `${formatNumber(stats.volumeMl)} mL (${formatNumber(stats.volumeMm3, 1)} mm³)`}`,
+    `${t("roiMgr.statVoxels")}: ${stats.voxels}`,
+    `${t("roiMgr.statSlices")}: ${stats.slices}`,
+    `${t("roiStats.voxelSize")}: ${formatNumber(cx, 3)} × ${formatNumber(cy, 3)} × ${cz === null ? "?" : formatNumber(cz, 3)} mm`,
+  ];
+  return (
+    <>
+      <div style={detailLine}>{parts.join(" / ")}</div>
+      <ValueLine v={v} />
+      {tlgKey && stats.meanTimesVolumeMl !== undefined && (
+        <div style={detailLine}>{`${t(tlgKey)}: ${formatNumber(stats.meanTimesVolumeMl)} ${stats.unit}·mL`}</div>
+      )}
+      {stats.histogram && <HistogramOf h={stats.histogram} unit={v?.unit ?? stats.unit} />}
+      <div style={{ ...detailLine, ...dim }}>
+        {t("roiStats.source", { imageId: shortImageId(stats.imageId) })}
+      </div>
+      {stats.warnings.length > 0 && (
+        <div style={{ ...detailLine, color: "#b26a00" }}>
+          {stats.warnings.map((w) => t(`roiStats.warn.${w}`)).join(" / ")}
+        </div>
+      )}
+    </>
+  );
+}
+
+function HistogramOf({ h, unit }: { h: HistogramData; unit: string }) {
+  const { t } = useI18n();
+  return <Histogram counts={h.counts} binStart={h.binStart} binWidth={h.binWidth} yLabel={valueUnitLabel(unit, t)} />;
+}
+
+function targetLabel(target: RoiStatsTarget | undefined): string {
+  if (!target) return "";
+  return target.kind === "mask" ? (target.label ?? "") : (getRoiMaskMeta(target.uid)?.label ?? "");
+}
+
+function downloadCsv(chunks: string[], filename: string): void {
+  const url = URL.createObjectURL(new Blob(chunks, { type: "text/csv;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 /** imageId は長い URL なので、末尾（SOP とフレーム）だけ見せる。 */

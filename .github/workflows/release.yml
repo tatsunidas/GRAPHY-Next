@@ -3,6 +3,10 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # タグを切る前の予行演習。ブランチを選んで手動で走らせると、Release は作らず、各 OS のインストーラを
+  # ビルドして「入れて起動して動画を再生する」スモークまで回し、インストーラは Artifact に置く
+  # （`gh workflow run release.yml --ref <branch>`）。
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -13,6 +17,7 @@ jobs:
   # （タグ v0.1.7 を package.json=0.1.6 のコミットに打つと 0.1.6 の資産が出る、の再発防止）。
   verify-version:
     name: Verify tag == code version
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -72,6 +77,8 @@ jobs:
   web-jar:
     name: Web jar
     needs: verify-version
+    # 予行演習（workflow_dispatch）では Release を作らないので、jar の公開もしない。
+    if: startsWith(github.ref, 'refs/tags/')
     # 上限を切る（2026-08-27 に macOS で Maven の取得が詰まり 2h11m かかった。通常 5〜6 分）。
     timeout-minutes: 60
     runs-on: ubuntu-latest
@@ -108,7 +115,11 @@ jobs:
   desktop:
     name: Desktop (${{ matrix.os }})
     needs: verify-version
+    # タグのときは版数の検証が通ったものだけ。予行演習（verify-version が skipped）でも走らせる。
+    if: ${{ !cancelled() && needs.verify-version.result != 'failure' }}
     strategy:
+      # 1 つの OS が落ちても他の OS の結果は最後まで見る（OS ごとに落ち方が違うので）。
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     # 上限を切る（2026-08-27 に macOS で Maven の取得が詰まり 2h11m かかった。通常 5〜6 分）。
@@ -179,6 +190,23 @@ jobs:
           printf '%s' "$COLAB_CLIENT" > desktop/colab-oauth-client.json
           node -e "const j=require('./desktop/colab-oauth-client.json'); if(!j.installed||!j.installed.client_id||!j.installed.client_secret){console.error('::error::colab-oauth-client.json に installed.client_id / client_secret がありません（デスクトップ アプリ型の JSON を登録してください）');process.exit(1)}"
           echo "GRAPHY_REQUIRE_COLAB_CLIENT=1" >> "$GITHUB_ENV"
+      # Google Drive バックアップに使う OAuth クライアント（デスクトップ アプリ型）と、フォルダ選択（Picker）の API キー。
+      # 公開リポジトリには置かない（.gitignore）。secrets.GRAPHY_GDRIVE_OAUTH_CLIENT に、Google からダウンロードした
+      # JSON（"installed"）のトップレベルへ "picker_api_key" を足したものをそのまま登録する。設計: fw/gdrive-p0.md。
+      # 無ければ入れずに進む（Drive バックアップだけが「設定がありません」になる配布物）。あれば中身を確かめ、
+      # 入ったことを check-packaged.js にも確かめさせる。
+      - name: Write Google Drive OAuth client
+        shell: bash
+        env:
+          GDRIVE_CLIENT: ${{ secrets.GRAPHY_GDRIVE_OAUTH_CLIENT }}
+        run: |
+          if [ -z "$GDRIVE_CLIENT" ]; then
+            echo "::warning::secrets.GRAPHY_GDRIVE_OAUTH_CLIENT がありません。この配布物では Google Drive バックアップを使えません。"
+            exit 0
+          fi
+          printf '%s' "$GDRIVE_CLIENT" > desktop/gdrive-oauth-client.json
+          node -e "const j=require('./desktop/gdrive-oauth-client.json'); if(!j.installed||!j.installed.client_id||!j.installed.client_secret){console.error('::error::gdrive-oauth-client.json に installed.client_id / client_secret がありません（デスクトップ アプリ型の JSON を登録してください）');process.exit(1)} if(typeof j.picker_api_key!=='string'||j.picker_api_key.length<20){console.error('::error::gdrive-oauth-client.json に picker_api_key がありません（フォルダ選択の API キーをトップレベルに足してください）');process.exit(1)}"
+          echo "GRAPHY_REQUIRE_GDRIVE_CLIENT=1" >> "$GITHUB_ENV"
       # 同梱の公式プラグイン（desktop/bundled-plugins.json）。GitHub Release から zip・sha256・minisig を取り、
       # **公式鍵の署名を確かめてから** desktop/resources/bundled-plugins に置く（起動時に backend がもう一度確かめて入れる）。
       # 署名の無い版は入れない（公式プラグインを署名なしで配らない）。取れなければ警告して同梱なしで進む。
@@ -232,7 +260,49 @@ jobs:
         working-directory: desktop
         shell: bash
         run: node scripts/check-packaged.js dist
+      # 🚨 **できたインストーラを実際に入れて、起動して、動画を再生する**（automator/src/smoke/installedSmoke.ts）。
+      #    check-packaged は app.asar の中身（静的）しか見ない。v0.3.0〜0.3.2（起動直後に落ちる）・
+      #    v0.3.3（製品版だけ動画が真っ黒＝CSP）は、これが無かったので公開後に分かった。
+      #    落ちたらこの OS のインストーラは公開されない。製品版にしか無いもの（同梱の JRE・ffmpeg・CSP・file:// の
+      #    オリジン）はここでしか確かめられない。見た目・操作感・上書きアップデートは人が見る（fw/release-checklist.md §3）。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install smoke driver (automator)
+        working-directory: automator
+        shell: bash
+        run: npm ci
+      - name: Smoke test (インストール → 起動 → 動画再生)
+        timeout-minutes: 20
+        shell: bash
+        run: |
+          cd automator
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            command -v xvfb-run >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq xvfb; }
+            xvfb-run -a --server-args="-screen 0 1600x1000x24" npx tsx src/smoke/installedSmoke.ts --dist ../desktop/dist
+          else
+            npx tsx src/smoke/installedSmoke.ts --dist ../desktop/dist
+          fi
+      - name: Upload smoke screenshots & logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installed-smoke-${{ matrix.os }}
+          path: automator/.results/installed-smoke
+          retention-days: 14
+          if-no-files-found: ignore
+      - name: Upload installers (予行演習は Artifact へ)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.os }}
+          path: |
+            desktop/dist/*.AppImage
+            desktop/dist/*.exe
+            desktop/dist/*.dmg
+          retention-days: 3
       - name: Upload installers
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

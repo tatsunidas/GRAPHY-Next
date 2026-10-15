@@ -63,3 +63,25 @@ describe("displayShortcut", () => {
     expect(displayShortcut(home)).toBe("Home");
   });
 });
+
+describe("matchesShortcut — Alt の扱い", () => {
+  it("🔴 Alt+↑ はスライス送りではなく DSA のシフトに一致する", () => {
+    expect(matchesShortcut("nav-prev-slice", key({ key: "ArrowUp", alt: true }))).toBe(false);
+    expect(matchesShortcut("nav-next-slice", key({ key: "ArrowDown", alt: true }))).toBe(false);
+    expect(matchesShortcut("dsa-shift-up", key({ key: "ArrowUp", alt: true }))).toBe(true);
+    expect(matchesShortcut("dsa-shift-down", key({ key: "ArrowDown", alt: true }))).toBe(true);
+    expect(matchesShortcut("nav-prev-slice", key({ key: "ArrowUp" }))).toBe(true);
+  });
+
+  it("ツールの切り替えキーは素の文字だけで一致する（Alt・Ctrl 付きでは一致しない）", () => {
+    expect(matchesShortcut("tool-wl", key({ key: "w" }))).toBe(true);
+    expect(matchesShortcut("tool-wl", key({ key: "w", alt: true }))).toBe(false);
+    expect(matchesShortcut("tool-roi-rect", key({ key: "r", ctrl: true }))).toBe(false);
+    expect(matchesShortcut("disp-fullscreen", key({ key: "f" }))).toBe(true);
+  });
+
+  it("Ctrl+Z は従来どおり元に戻す", () => {
+    expect(matchesShortcut("sys-undo", key({ key: "z", ctrl: true }))).toBe(true);
+    expect(matchesShortcut("tool-zoom", key({ key: "z", ctrl: true }))).toBe(false);
+  });
+});

@@ -170,7 +170,7 @@ const AREA_TOOLS = new Set([
 const LINE_TOOLS = new Set(["length", "graphypolylineroi", "graphyfreelineroi"]);
 
 /** 点型。 */
-const POINT_TOOLS = new Set(["probe", "dragprobe"]);
+const POINT_TOOLS = new Set(["probe", "dragprobe", "graphypointroi"]);
 
 /**
  * そのツール／開閉から、画素値の拾い方を決める。純関数。
@@ -409,6 +409,42 @@ export function sampleInsideMesh(
     if (v !== null) out.push(v);
   }
   return Float32Array.from(out);
+}
+
+/**
+ * {@link sampleInsideMesh} と**同じ母集団**の画素の線形添字（`y*width+x`・row-major）。純関数。
+ *
+ * <p>判定（画素中心の偶奇則）と、1 画素も入らないときの最寄り 1 画素（値が有限のときだけ）は
+ * `sampleInsideMesh` と同じ。画素ダンプが統計と食い違わないよう、`values` を取って条件を揃える。
+ * 非有限値の画素も（`sampleInsideMesh` と同様に）添字には含める。
+ */
+export function sampleInsideMeshIndices(
+  mesh: RoiMesh,
+  values: ArrayLike<number>,
+  width: number,
+  height: number,
+): Int32Array {
+  const box = meshBBoxPx(mesh);
+  if (!box || !mesh.closed || mesh.pointsPx.length < 3) return new Int32Array(0);
+  const x0 = Math.max(0, Math.floor(box[0]));
+  const y0 = Math.max(0, Math.floor(box[1]));
+  const x1 = Math.min(width - 1, Math.ceil(box[2]));
+  const y1 = Math.min(height - 1, Math.ceil(box[3]));
+  if (x1 < x0 || y1 < y0) return new Int32Array(0);
+
+  const out: number[] = [];
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      if (pointInPolygon(x + 0.5, y + 0.5, mesh.pointsPx)) out.push(y * width + x);
+    }
+  }
+  if (!out.length) {
+    const c = meshCentroidPx(mesh);
+    const v = c ? nearestValue(c[0], c[1], values, width, height) : null;
+    const idx = v !== null && c ? nearestIndex(c[0], c[1], width, height) : null;
+    if (idx) out.push(idx[1] * width + idx[0]);
+  }
+  return Int32Array.from(out);
 }
 
 /**

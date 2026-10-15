@@ -609,10 +609,10 @@ async function main(): Promise<void> {
     const spY = beforeDraw.pixels?.spacing?.[1] ?? 0;
 
     // 1) Bidirectional（ROI メニューの「長径・短径（RECIST）」）— ユーザーが 2 軸を引く RECIST の標準計測。
-    await viewerPage.getByTestId("viewer2d-menu-roi").click();
+    await viewerPage.getByTestId("viewer2d-menu-measure").click();
     const biItem = viewerPage.getByRole("button", { name: /長径・短径|Long\/short axis/ });
     const biFound = (await biItem.count()) > 0;
-    check(biFound, "ROI メニューに「長径・短径（RECIST）」が出る（BidirectionalTool の登録）");
+    check(biFound, "計測メニューに「長径・短径（RECIST）」が出る（BidirectionalTool の登録）");
     if (biFound) {
       await biItem.first().click();
       await viewerPage.waitForTimeout(300);

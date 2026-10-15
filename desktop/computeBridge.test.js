@@ -71,3 +71,30 @@ test("一覧はトークン込み・Bearer 付き・Origin 無しで届く", asy
     server.close();
   }
 });
+
+test("プラグイン導入の同意: 内部の口へ Bearer 付き・Origin 無しで、真偽だけを送る", async () => {
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      seen.push({ method: req.method, url: req.url, auth: req.headers.authorization, origin: req.headers.origin, body });
+      res.setHeader("Content-Type", "application/json");
+      res.end('{"installEnabled":true}');
+    });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    const b = fresh();
+    b.init({ secret: "k".repeat(64), apiBase: `http://127.0.0.1:${server.address().port}` });
+    const r = await b.setPluginOptIn(true);
+    assert.equal(r.ok, true);
+    await b.setPluginOptIn("yes");
+    assert.deepEqual(seen.map((x) => [x.method, x.url, x.auth, x.origin, x.body]), [
+      ["PUT", "/api/internal/plugin-manager/opt-in", `Bearer ${"k".repeat(64)}`, undefined, '{"enabled":true}'],
+      ["PUT", "/api/internal/plugin-manager/opt-in", `Bearer ${"k".repeat(64)}`, undefined, '{"enabled":false}'],
+    ]);
+  } finally {
+    server.close();
+  }
+});

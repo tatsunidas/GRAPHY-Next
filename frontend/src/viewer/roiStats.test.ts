@@ -18,6 +18,7 @@ import {
   polygonizeEllipse,
   sampleAlongMesh,
   sampleInsideMesh,
+  sampleInsideMeshIndices,
   summarizeValues,
   type RoiMesh,
 } from "./roiStats";
@@ -50,6 +51,7 @@ describe("pickSampleKind", () => {
   it("Length は line、Probe は point", () => {
     expect(pickSampleKind("Length", undefined)).toBe("line");
     expect(pickSampleKind("Probe", undefined)).toBe("point");
+    expect(pickSampleKind("GraphyPointROI", undefined)).toBe("point");
   });
 
   it("Bidirectional / Angle / 未知のツールには値を出さない", () => {
@@ -643,5 +645,57 @@ describe("退化した形（描いている最中の輪郭）", () => {
     });
     expect(r.warnings).not.toContain("empty-mesh");
     expect(r.values?.mean).toBeCloseTo(100, 9);
+  });
+});
+
+describe("sampleInsideMeshIndices（sampleInsideMesh と同じ母集団）", () => {
+  const W = 40;
+  const H = 30;
+  const img = (): Float32Array => {
+    const a = new Float32Array(W * H);
+    for (let i = 0; i < a.length; i++) a[i] = ((i * 7919) % 251) - 100;
+    return a;
+  };
+  const shapes: Record<string, PointPx[]> = {
+    円: polygonizeCircle([
+      [15, 12],
+      [15, 5],
+    ]),
+    凹多角形: [[5, 5], [30, 5], [30, 25], [20, 25], [20, 12], [12, 12], [12, 25], [5, 25]],
+    画像の端にかかる: [[-5, -5], [8, -5], [8, 6], [-5, 6]],
+    右下の端: [[35, 25], [50, 25], [50, 40], [35, 40]],
+    極小: [[10.6, 10.6], [10.9, 10.6], [10.9, 10.9], [10.6, 10.9]],
+  };
+  for (const [name, pts] of Object.entries(shapes)) {
+    it(`${name}: 添字から引いた値の列が sampleInsideMesh の戻りと要素ごとに一致`, () => {
+      const v = img();
+      const m = closedMesh(pts);
+      const idx = sampleInsideMeshIndices(m, v, W, H);
+      const ref = sampleInsideMesh(m, v, W, H);
+      expect(idx.length).toBe(ref.length);
+      expect(idx.length).toBeGreaterThan(0);
+      for (let i = 0; i < idx.length; i++) expect(v[idx[i]]).toBe(ref[i]);
+    });
+  }
+  it("NaN を含む画像でも一致（NaN の画素も添字に残る）", () => {
+    const v = img();
+    v[8 * W + 12] = NaN;
+    const m = closedMesh([[10, 6], [16, 6], [16, 12], [10, 12]]);
+    const idx = sampleInsideMeshIndices(m, v, W, H);
+    const ref = sampleInsideMesh(m, v, W, H);
+    expect(idx.length).toBe(ref.length);
+    for (let i = 0; i < idx.length; i++) expect(Object.is(v[idx[i]], ref[i])).toBe(true);
+    expect(Array.from(idx)).toContain(8 * W + 12);
+  });
+  it("負例: 極小 ROI で最寄り画素が NaN のとき、両方とも空", () => {
+    const v = img();
+    v[10 * W + 10] = NaN;
+    const m = closedMesh(shapes["極小"]);
+    expect(sampleInsideMesh(m, v, W, H).length).toBe(0);
+    expect(sampleInsideMeshIndices(m, v, W, H).length).toBe(0);
+  });
+  it("開メッシュは空", () => {
+    const m = openMesh([[1, 1], [5, 5], [9, 1]]);
+    expect(sampleInsideMeshIndices(m, img(), W, H).length).toBe(0);
   });
 });

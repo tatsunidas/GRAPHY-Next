@@ -73,12 +73,13 @@ graphy:
     # しかも Origin を送るのは module script の取得（動的 import）だけで、通常の fetch/XHR は
     # file:// ページからは Origin を送らない＝CORS フィルタを素通りする。このため
     # 「アプリ本体は全部動くのにプラグインの ui.js だけ 403」という形で現れた（2026-08-24 実機）。
-    # "null" も残す（sandbox iframe 等）。詳細: fw/security.md §CORS
+    # 🔴 "null" は許可しない。どのサイトでもサンドボックスの iframe から Origin: null を送れるので、
+    # 許可すると普通のブラウザで開いた悪意あるページから API を呼べてしまう（2026-10-11 実測で
+    # 設定の書き換えが 200）。正規に null を送るものは無い。詳細: fw/security.md §CORS
     allowed-origin-patterns:
       - "http://localhost:*"
       - "http://127.0.0.1:*"
       - "file://"
-      - "null"
     allowed-methods:
       - GET
       - POST

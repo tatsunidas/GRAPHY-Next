@@ -13,6 +13,8 @@ import { segmentation as csSeg, Enums as csToolsEnums } from "@cornerstonejs/too
 import { getViewerContext } from "./viewerContext";
 import { setRoiMaskMeta, getRoiMaskMeta, getMaskSegments } from "./roiMaskStore";
 import { worldToVoxel, type LabelVolume, type VolumeGeom } from "./labelVolume";
+import { segmentRoiLabel, selectSegmentIndices } from "./maskBridgeCore";
+import { maskMeshVolumeOf } from "./maskVolume";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
@@ -40,6 +42,12 @@ export interface MaskFramesInput {
   rows: number;
   columns: number;
   segments: MaskSegmentSource[];
+  /**
+   * 2D 側で求めた体積（mm³。スライスごとの輪郭の角柱。2D の Σ³ と同じ値）。ウィンドウ間の受け渡しだけが持つ。
+   * 間隔が不明なら無い。`depthSource` があるときは、体積を出せなくても 3D 側で再計算しない合図になる。
+   */
+  volumeMm3?: number;
+  depthSource?: "ipp" | "sbs" | "thickness" | "unknown";
 }
 
 /** 表示中の base ビューポート（source 画像を持つもの）を探す。無ければ null。 */
@@ -361,7 +369,7 @@ function u8ToBase64(u8: Uint8Array): string {
  * ウィンドウ間マスク同期（`maskBridge.ts`）が、他ウィンドウへ渡すフレームデータを組み立てるのに使う。
  * 幾何が引けない（source imageId が cache に無い）スライスはスキップ。
  */
-export function extractMaskFrames(segmentationId: string): MaskFramesInput | null {
+export function extractMaskFrames(segmentationId: string, onlySegment?: number): MaskFramesInput | null {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const labelmapIds = (csSeg as any).getLabelmapImageIds?.(segmentationId) as string[] | undefined;
   if (!labelmapIds?.length) return null;
@@ -388,7 +396,8 @@ export function extractMaskFrames(segmentationId: string): MaskFramesInput | nul
   if (!rows || !cols) return null;
   const frameSize = rows * cols;
 
-  const segIndices = getMaskSegments(segmentationId);
+  const segIndices = selectSegmentIndices(getMaskSegments(segmentationId), onlySegment);
+  const single = getMaskSegments(segmentationId).length === 1;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const vpIds = ((csSeg.state as any).getViewportIdsWithSegmentation?.(segmentationId) as string[] | undefined) ?? [];
   const vp0 = vpIds[0];
@@ -436,13 +445,13 @@ export function extractMaskFrames(segmentationId: string): MaskFramesInput | nul
       frames.push({ referencedSopInstanceUid: sop, imagePositionPatient: ipp, mask: u8ToBase64(plane) });
     }
     if (!frames.length || !any) continue;
-    const named = meta?.segmentLabels?.[String(segIndex)];
-    const label = named ?? (segIndices.length > 1 ? `${meta?.label ?? "Mask"} #${segIndex}` : (meta?.label ?? `Segment ${segIndex}`));
+    const label = segmentRoiLabel(meta, segIndex, single);
     const description = meta?.custom?.[String(segIndex)] ?? null;
     segments.push({ number: segIndex, label, color, description, frames });
   }
   if (!segments.length) return null;
-  return { rows, columns: cols, segments };
+  const mv = maskMeshVolumeOf(segmentationId, onlySegment ?? undefined);
+  return { rows, columns: cols, segments, ...(mv ? { volumeMm3: mv.volumeMm3, depthSource: mv.depthSource } : {}) };
 }
 
 /**
@@ -456,6 +465,8 @@ export function framesToLabelVolume(
   input: MaskFramesInput,
   geom: VolumeGeom,
   segmentIndex?: number,
+  /** SOP → 体積の格子の番号（`depthVolume.sopGridIndexMap`。補間した面には SOP が当たらない）。あれば IPP より優先して、描かれている画像と同じ k に載せる。 */
+  sopToK?: ReadonlyMap<string, number>,
 ): LabelVolume | null {
   const [nx, ny, nz] = geom.dims;
   if (nx !== input.columns || ny !== input.rows) return null; // 面内解像度不一致
@@ -470,7 +481,8 @@ export function framesToLabelVolume(
       const idx = worldToVoxel(geom, fr.imagePositionPatient);
       // フレーム IPP は当該スライスの voxel(0,0) 実座標のはず。面内残差が大きければ幾何不一致とみなす。
       if (Math.abs(idx[0]) > 0.5 || Math.abs(idx[1]) > 0.5) continue;
-      const k = Math.round(idx[2]);
+      const bySop = fr.referencedSopInstanceUid ? sopToK?.get(fr.referencedSopInstanceUid) : undefined;
+      const k = bySop ?? Math.round(idx[2]);
       if (k < 0 || k >= nz) continue;
       const plane = base64ToU8(fr.mask);
       if (plane.length !== frameSize) continue;

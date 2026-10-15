@@ -124,6 +124,7 @@ export function computeFusionSlice(
 | Worker の型付きプロトコル前例 | `viewer/levelSetsProtocol.ts` / `levelSetsWorker.ts` | そのままレジストレーション Worker の雛形にする |
 | メモリガード | `viewer/volumeMemory.ts` / `volumeMemoryGuard.ts` | §7 で拡張。予算判定の枠組みは既にある |
 | 派生シリーズ符号化 | `viewer/derivedSeriesEncode.ts` ＋ `POST /api/series/derived` | 位置合わせ後シリーズの保存（§8 の PET 注意点あり） |
+| 再格子化の派生保存 | `viewer/gridResample.ts` / `viewer/derivedVolumeSave.ts` | 利用者向けのリサンプル保存。[volume-regrid-design.md](volume-regrid-design.md) |
 | SUV 計算コア | `viewer/suv.ts` | 定量性の保存判定（§8） |
 | 検証ファントム生成器 | `bench/make_phantom_a.py` / `bench/dicom_io.py` | §9 の GNBP-2R / GNBP-3S はこれを土台に作る |
 | 決定的 UID 生成・自己検証の作法 | `bench/README.md` | ファントムの再現性を壊さないための既存ルール |

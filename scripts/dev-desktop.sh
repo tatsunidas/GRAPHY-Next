@@ -54,5 +54,25 @@ for i in $(seq 1 120); do
   sleep 0.5
 done
 
-echo "[dev-desktop] launching Electron (standalone backend を spawn) ..."
-cd desktop && GRAPHY_DEV=1 npm start
+# アプリの再起動（DB フォルダの切り替え・設定の反映）は、Electron がこの終了コードで終わって知らせる。
+# そのときは Vite を止めずに Electron だけを起動し直す（app.relaunch だとスクリプトの外で起動し、
+# ここが「終わった」と見て Vite を止めるので画面が真っ白になる）。
+RELAUNCH_EXIT=75
+BACKEND_STATUS_URL="http://127.0.0.1:${GRAPHY_BACKEND_PORT:-8080}/api/status"
+cd desktop
+while true; do
+  echo "[dev-desktop] launching Electron (standalone backend を spawn) ..."
+  set +e
+  GRAPHY_DEV=1 GRAPHY_DEV_RELAUNCH_EXIT="$RELAUNCH_EXIT" npm start
+  code=$?
+  set -e
+  if [ "$code" -ne "$RELAUNCH_EXIT" ]; then
+    exit "$code"
+  fi
+  echo "[dev-desktop] 再起動の依頼を受けました。Vite はそのままで Electron を起動し直します"
+  # 前の backend がポートを離すまで待つ（最大 30 秒）
+  for i in $(seq 1 60); do
+    curl -fsS -o /dev/null "$BACKEND_STATUS_URL" 2>/dev/null || break
+    sleep 0.5
+  done
+done

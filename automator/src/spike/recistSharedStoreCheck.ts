@@ -192,7 +192,7 @@ async function openViewerForPatient(driver: DesktopDriver): Promise<Page> {
 }
 
 async function drawBidirectional(viewer: Page): Promise<void> {
-  await viewer.getByTestId("viewer2d-menu-roi").click();
+  await viewer.getByTestId("viewer2d-menu-measure").click();
   await viewer.getByRole("button", { name: /長径・短径|Long\/short axis/ }).first().click();
   await viewer.waitForTimeout(300);
   await dragOnCanvasHost(viewer, "viewer2d-canvas-host", 70, 0, 0, 24, { fracX: 0.28, fracY: 0.5 });

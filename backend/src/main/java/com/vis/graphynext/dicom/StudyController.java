@@ -26,10 +26,13 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * スタディ/シリーズ/インスタンスのナビゲーション REST。モードに依らずフロントは同じ URL を叩く。
@@ -63,14 +66,17 @@ public class StudyController {
             @RequestParam(required = false) String accessionNumber,
             @RequestParam(required = false) String studyInstanceUid) {
         WebDicomDataService web = webProvider.getIfAvailable();
-        // IHE IID 起動: StudyInstanceUID 直接指定（検索条件は無視して当該 study を返す）。
+        // StudyInstanceUID 直接指定（検索条件は無視して当該 study を返す）。IHE IID 起動と、取り込み直後の一覧。
+        // カンマ区切りで複数（QIDO-RS の UID リスト照合と同じ書き方）。
         if (studyInstanceUid != null && !studyInstanceUid.isBlank()) {
             if (web != null) {
                 return web.searchStudies(Map.of("StudyInstanceUID", studyInstanceUid)).stream()
                         .map(StudyController::studyOf).toList();
             }
+            Set<String> uids = Arrays.stream(studyInstanceUid.split(","))
+                    .map(String::trim).filter(u -> !u.isEmpty()).collect(Collectors.toSet());
             return storage.listStudies(new StudySearch(null, null, null, null, null, null).normalized()).stream()
-                    .filter(s -> studyInstanceUid.equals(s.studyInstanceUid())).toList();
+                    .filter(s -> uids.contains(s.studyInstanceUid())).toList();
         }
         StudySearch search = new StudySearch(patientId, patientName, studyDateFrom, studyDateTo, modality,
                 accessionNumber).normalized();

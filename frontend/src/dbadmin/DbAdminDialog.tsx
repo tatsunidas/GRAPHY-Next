@@ -7,6 +7,7 @@ import {
   fetchPatients,
   fetchStats,
   savePatient,
+  recordsNotice,
   deletePatient,
   deleteStudy,
   deleteSeries,
@@ -23,6 +24,9 @@ import { fetchInstances, fetchSeries, fetchStudies, type Instance, type Series, 
 import { emitDbChanged, type DbChangedDetail } from "../dbEvents";
 import { VBarChart, HBarChart, PieChart, formatBytes } from "./charts";
 import { useI18n } from "../i18n/i18n";
+import { desktop } from "../desktopBridge";
+import { DbTransferDialog } from "./DbTransferDialog";
+import { deleteRelatedNote } from "./dbAdminApi";
 
 type Tab = "patients" | "stats";
 
@@ -39,11 +43,16 @@ export function DbAdminDialog({
   const { t } = useI18n();
   const [tab, setTab] = useState<Tab>("patients");
   const [confirmDelete, setConfirmDelete] = useState(true);
+  // ファイルも消す設定のときは、ROI などの付随データも消える（確認文に添える）
+  const [deleteFiles, setDeleteFiles] = useState(true);
 
   useEffect(() => {
     if (!open) return;
     fetchSettings()
-      .then((s) => setConfirmDelete(s["data.confirmBeforeDelete"] !== "false"))
+      .then((s) => {
+        setConfirmDelete(s["data.confirmBeforeDelete"] !== "false");
+        setDeleteFiles(s["data.deleteFilesOnDisk"] !== "false");
+      })
       .catch(() => setConfirmDelete(true));
   }, [open]);
 
@@ -75,7 +84,7 @@ export function DbAdminDialog({
         </div>
 
         <div style={{ flex: 1, overflow: "auto", padding: "14px 18px" }}>
-          {tab === "patients" ? <PatientsTab confirmDelete={confirmDelete} notify={notify} /> : <StatsTab />}
+          {tab === "patients" ? <PatientsTab confirmDelete={confirmDelete} deleteFiles={deleteFiles} notify={notify} /> : <StatsTab />}
         </div>
       </div>
     </div>
@@ -84,12 +93,15 @@ export function DbAdminDialog({
 
 function PatientsTab({
   confirmDelete,
+  deleteFiles,
   notify,
 }: {
   confirmDelete: boolean;
+  deleteFiles: boolean;
   notify: (detail: Omit<DbChangedDetail, "ts">) => void;
 }) {
   const { t } = useI18n();
+  const withRelatedNote = (msg: string) => deleteRelatedNote(msg, deleteFiles, t);
   const [q, setQ] = useState("");
   const [patients, setPatients] = useState<Patient[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -109,6 +121,9 @@ function PatientsTab({
   const [seriesSel, setSeriesSel] = useState<Map<string, Set<string>>>(new Map());
   const [merging, setMerging] = useState<{ study: Study; series: Series[] } | null>(null);
   const [splitting, setSplitting] = useState<{ study: Study; series: Series } | null>(null);
+  // 別の DB フォルダへコピー・移動（デスクトップのみ。DB フォルダの一覧は Electron main が持つ）
+  const [transferring, setTransferring] = useState<{ study: Study; patient: Patient } | null>(null);
+  const canTransfer = !!desktop()?.dbFoldersList;
 
   const reload = (query: string) => {
     setError(null);
@@ -167,7 +182,7 @@ function PatientsTab({
   };
 
   const onDeletePatient = async (p: Patient) => {
-    if (confirmDelete && !window.confirm(t("dbadmin.delete.confirm", { name: p.patientName || p.patientId }))) return;
+    if (confirmDelete && !window.confirm(withRelatedNote(t("dbadmin.delete.confirm", { name: p.patientName || p.patientId })))) return;
     try {
       await deletePatient(p.patientId);
       notify({ reason: "patient-delete", patientId: p.patientId });
@@ -178,7 +193,7 @@ function PatientsTab({
   };
 
   const onDeleteStudy = async (p: Patient, s: Study) => {
-    if (confirmDelete && !window.confirm(t("dbadmin.delete.studyConfirm", { desc: studyLabel(s) }))) return;
+    if (confirmDelete && !window.confirm(withRelatedNote(t("dbadmin.delete.studyConfirm", { desc: studyLabel(s) })))) return;
     try {
       await deleteStudy(s.studyInstanceUid);
       notify({ reason: "study-delete", patientId: p.patientId, studyUids: [s.studyInstanceUid] });
@@ -210,7 +225,7 @@ function PatientsTab({
   };
 
   const onDeleteSeries = async (p: Patient, s: Study, se: Series) => {
-    if (confirmDelete && !window.confirm(t("dbadmin.delete.seriesConfirm", { desc: seriesLabel(se) }))) return;
+    if (confirmDelete && !window.confirm(withRelatedNote(t("dbadmin.delete.seriesConfirm", { desc: seriesLabel(se) })))) return;
     try {
       await deleteSeries(s.studyInstanceUid, se.seriesInstanceUid);
       notify({ reason: "series-delete", patientId: p.patientId, studyUids: [s.studyInstanceUid] });
@@ -240,7 +255,7 @@ function PatientsTab({
   };
 
   const onDeleteInstance = async (p: Patient, s: Study, se: Series, inst: Instance) => {
-    if (confirmDelete && !window.confirm(t("dbadmin.delete.instanceConfirm", { desc: instanceLabel(inst) }))) return;
+    if (confirmDelete && !window.confirm(withRelatedNote(t("dbadmin.delete.instanceConfirm", { desc: instanceLabel(inst) })))) return;
     try {
       await deleteInstance(s.studyInstanceUid, se.seriesInstanceUid, inst.sopInstanceUid);
       notify({ reason: "instance-delete", patientId: p.patientId, studyUids: [s.studyInstanceUid] });
@@ -337,6 +352,11 @@ function PatientsTab({
                             >
                               {t("dbadmin.edit.patientStudy")}
                             </button>
+                            {canTransfer && (
+                              <button onClick={() => setTransferring({ study: s, patient: p })} style={smallBtn}>
+                                {t("dbTransfer.button")}
+                              </button>
+                            )}
                             <button onClick={() => void onDeleteStudy(p, s)} style={{ ...smallBtn, color: "#b00020" }}>
                               {t("common.delete")}
                             </button>
@@ -464,6 +484,21 @@ function PatientsTab({
           onSaved={(detail) => {
             setEditingStudy(null);
             notify(detail);
+            reload(q);
+          }}
+        />
+      )}
+      {transferring && (
+        <DbTransferDialog
+          studyUid={transferring.study.studyInstanceUid}
+          studyLabel={studyLabel(transferring.study)}
+          onClose={() => setTransferring(null)}
+          onMoved={() => {
+            const { study: s, patient: p } = transferring;
+            notify({ reason: "study-move", patientId: p.patientId, studyUids: [s.studyInstanceUid] });
+            setStudiesByPatient((m) =>
+              new Map(m).set(p.patientId, (m.get(p.patientId) ?? []).filter((x) => x.studyInstanceUid !== s.studyInstanceUid)),
+            );
             reload(q);
           }}
         />
@@ -717,7 +752,9 @@ function PatientEditForm({
     setSaving(true);
     setError(null);
     try {
-      await savePatient(patient.patientId, { patientName: name, patientBirthDate: birth, patientSex: sex, newPatientId: newId });
+      const r = await savePatient(patient.patientId, { patientName: name, patientBirthDate: birth, patientSex: sex, newPatientId: newId });
+      const notice = recordsNotice(r, t);
+      if (notice) window.alert(notice);
       onSaved({ reason: "patient-edit", patientId: newId || patient.patientId });
     } catch (e) {
       setError(String(e));
@@ -767,7 +804,9 @@ function StudyPatientEditForm({
     setSaving(true);
     setError(null);
     try {
-      await updateStudyPatient(study.studyInstanceUid, { patientName: name, patientBirthDate: birth, patientSex: sex, newPatientId: newId });
+      const r = await updateStudyPatient(study.studyInstanceUid, { patientName: name, patientBirthDate: birth, patientSex: sex, newPatientId: newId });
+      const notice = recordsNotice(r, t);
+      if (notice) window.alert(notice);
       onSaved({ reason: "study-patient-edit", patientId: newId || patient.patientId, studyUids: [study.studyInstanceUid] });
     } catch (e) {
       setError(String(e));

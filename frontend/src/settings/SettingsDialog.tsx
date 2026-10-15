@@ -12,6 +12,9 @@ import { MonitorQcPanel } from "./MonitorQcPanel";
 import { PluginManagerPanel } from "./PluginManagerPanel";
 import { AiPanel } from "./AiPanel";
 import { ComputePanel } from "./ComputePanel";
+import { DbFolderPanel } from "./DbFolderPanel";
+import { GdrivePanel } from "./GdrivePanel";
+import { isDesktop } from "../desktopBridge";
 import { useI18n, type Locale, type TFn } from "../i18n/i18n";
 import { markRestartRequired } from "../restartRequiredEvents";
 
@@ -128,14 +131,19 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
             ) : category.id === "about" ? (
               <AboutPanel />
             ) : (
-              category.sections.map((section) => (
-                <section key={section.titleKey} style={{ marginBottom: 22 }}>
-                  <h3 style={sectionTitle}>{t(section.titleKey)}</h3>
-                  {section.fields.map((field) => (
-                    <Field key={field.key} field={field} t={t} value={valueOf(field)} onChange={update} />
-                  ))}
-                </section>
-              ))
+              <>
+                {/* DB フォルダの切り替えは Electron main が受け持つ（デスクトップのみ） */}
+                {category.id === "data" && isDesktop() && <DbFolderPanel />}
+                {category.id === "data" && isDesktop() && <GdrivePanel />}
+                {category.sections.map((section) => (
+                  <section key={section.titleKey} style={{ marginBottom: 22 }}>
+                    <h3 style={sectionTitle}>{t(section.titleKey)}</h3>
+                    {section.fields.map((field) => (
+                      <Field key={field.key} field={field} t={t} value={valueOf(field)} onChange={update} />
+                    ))}
+                  </section>
+                ))}
+              </>
             )}
           </div>
         </div>

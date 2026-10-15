@@ -15,6 +15,7 @@ import { log } from "../log";
 import { frameOfImageId, sopFromImageId } from "./imageId";
 import { getRoiMaskMeta, setRoiMaskMeta } from "./roiMaskStore";
 import { ensureSplineInstance } from "./roiContourTools";
+import { setRoiLocked } from "./roiLock";
 import {
   buildAnnotationData,
   buildRestoredMeta,
@@ -305,6 +306,9 @@ export function addSavedRoiToViewport(
     return false;
   }
   setRoiMaskMeta(roi.roiUid, buildRestoredMeta(roi, opts.patientKey, opts.seriesLabel));
+  // Cornerstone はロックを注釈の isLocked と全体のロック集合の 2 か所で持つ。集合にも載せないと
+  // 移動は拒まれるのに「ロックなし」に見え、ROI マネージャや削除の判定が食い違う。
+  if (roi.isLocked === true) setRoiLocked(roi.roiUid, true);
   if (roi.isVisible === false) {
     try {
       csAnnotation.visibility.setAnnotationVisibility(roi.roiUid, false);

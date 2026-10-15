@@ -195,7 +195,7 @@ async function main(): Promise<void> {
 
     // ファントムの病変 A は画像座標 (170, 256) 中心・直径 40mm（1 画素 1mm）。
     // Fit 表示なので fracX ≈ 170/512 ≈ 0.33。少し左から右へ引いて病変を横断する。
-    await viewer.getByTestId("viewer2d-menu-roi").click();
+    await viewer.getByTestId("viewer2d-menu-measure").click();
     await viewer.getByRole("button", { name: /長径・短径|Long\/short axis/ }).first().click();
     await viewer.waitForTimeout(300);
     // 病変 A の中心は画像 (170, 256)。Fit 表示では画像が**高さ基準で収まり左右に余白**が付くため、

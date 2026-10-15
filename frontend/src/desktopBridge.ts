@@ -194,6 +194,43 @@ export type PickFilesResult =
   | { ok: true; paths: string[] }
   | { ok: false; canceled?: boolean; error?: string };
 
+/** DB フォルダ（索引と DICOM 保管庫をまとめたフォルダ）。 */
+export interface DbFolderRow {
+  path: string;
+  isDefault: boolean;
+  exists: boolean;
+  active: boolean;
+  /** この DB に Drive バックアップが設定されている。 */
+  gdrive?: boolean;
+}
+
+/** Drive バックアップ: main が返す状態（トークン・API キーは返らない）。 */
+export interface GdriveDesktopStatus {
+  /** OAuth クライアントがこのアプリに入っているか。 */
+  configured: boolean;
+  /** Picker に使う API キーがあるか。 */
+  pickerReady: boolean;
+  signedIn: boolean;
+  email: string | null;
+  /** 使用中の DB に設定された保存先。無ければ null。 */
+  folder: { name: string; shared: boolean; email: string | null } | null;
+}
+
+export type GdriveActionResult = { ok: true; name?: string; parentName?: string; shared?: boolean; email?: string | null }
+  | { ok: false; error?: string; canceled?: boolean };
+
+export interface DbFolderList {
+  /** この起動で使っている DB。 */
+  active: string | null;
+  /** 次の起動で使う DB。 */
+  next: string;
+  folders: DbFolderRow[];
+}
+
+export type DbFolderPickResult =
+  | { ok: true; folder?: string; kind?: "db" | "empty"; network?: boolean }
+  | { ok: false; canceled?: boolean; reason?: string };
+
 export interface GraphyDesktop {
   pickImportPaths: () => Promise<string[]>;
   /** 単一の出力先フォルダを選ぶ（SeriesExtractor のコピー先など）。キャンセル時 null。 */
@@ -206,6 +243,8 @@ export interface GraphyDesktop {
   openMonitorQc?: (displayId: number) => Promise<void>;
   /** PNG dataURL を OS のネイティブドラッグで外部（デスクトップ/他アプリ）へ書き出す。 */
   startDrag?: (dataUrl: string, filename: string) => void;
+  /** PNG dataURL をクリップボードへ書く（成否）。 */
+  copyImage?: (dataUrl: string) => Promise<boolean>;
   /** OS 標準のメモリ/システムモニタ（Windows=タスクマネージャ, macOS=アクティビティモニタ, Linux=システムモニタ）を起動する。 */
   openMemoryMonitor?: () => Promise<void>;
   /** OS の物理メモリ量を取得（ボリューム構築のバジェット決定用、デスクトップのみ）。 */
@@ -222,6 +261,33 @@ export interface GraphyDesktop {
   } | null>;
   /** アプリ全体を再起動する（DICOM 自局設定などの反映用、デスクトップのみ）。 */
   relaunch?: () => Promise<void>;
+  /** DIMSE TLS のパスワードを OS のキーチェーンに預ける（空文字は消す）。キーチェーンが無い環境は設定に平文で保存する。 */
+  tlsPasswordSet?: (which: "keyStore" | "trustStore", value: string) => Promise<{ ok: boolean; persisted?: "keychain" | "plaintext"; reason?: string }>;
+  /** TLS のパスワードが設定済みか・キーチェーンが使えるか（値は返らない）。 */
+  tlsPasswordStatus?: () => Promise<{ encryptionAvailable: boolean; keyStore: boolean; trustStore: boolean }>;
+  /**
+   * プラグイン導入の同意を変える。有効にするときは main が確認ダイアログを出す。
+   * 汎用の設定の API ではこのキーを書けない（main だけが通れる口で保存する）。
+   */
+  pluginInstallOptIn?: (enabled: boolean) => Promise<{ ok: boolean; canceled?: boolean; reason?: string; installEnabled?: boolean }>;
+  /** DB フォルダの一覧（既定・最近使ったもの）と、今使っている DB。 */
+  dbFoldersList?: () => Promise<DbFolderList>;
+  /** 空のフォルダを選んで新しい DB フォルダにする（切り替えはしない）。 */
+  dbFoldersCreate?: (title: string) => Promise<DbFolderPickResult>;
+  /** 既存の DB フォルダ（または空のフォルダ）を選んで検査する（切り替えはしない）。 */
+  dbFoldersPick?: (title: string) => Promise<DbFolderPickResult>;
+  /** main が確認ダイアログを出し、了承されたら記録してアプリを再起動する。 */
+  dbFoldersSwitch?: (folder: string) => Promise<DbFolderPickResult>;
+  /** 最近使った一覧から外す（フォルダの中身には触れない）。 */
+  dbFoldersForget?: (folder: string) => Promise<{ ok: boolean; reason?: string }>;
+  /** Drive バックアップ: 状態 / ログイン / ログアウト / 保存先を選んで有効化 / 解除（確認は main）。 */
+  gdriveStatus?: () => Promise<GdriveDesktopStatus>;
+  gdriveSignIn?: () => Promise<{ ok: boolean; email?: string | null; error?: string }>;
+  gdriveSignOut?: () => Promise<{ ok: boolean; error?: string }>;
+  gdriveEnable?: () => Promise<GdriveActionResult>;
+  gdriveDisable?: () => Promise<{ ok: boolean; canceled?: boolean; error?: string }>;
+  /** Drive のバックアップを選び、空のフォルダへ取り戻し始める。進み具合は backend の /api/gdrive/restore。 */
+  gdriveRestore?: (title: string) => Promise<{ ok: true; folder: string } | { ok: false; error?: string; canceled?: boolean }>;
   /** ネイティブダイアログ（confirm/alert/prompt）後にレンダラのキーボードフォーカスを復帰させる。 */
   refocus?: () => void;
   /** 秘密情報を OS のキーチェーンで暗号化して保存する（デスクトップのみ）。 */

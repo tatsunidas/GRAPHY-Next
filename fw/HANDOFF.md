@@ -10,6 +10,86 @@
 > - 壊れた版は同じ番号で焼き直さず、下書きに戻して次の版を出す
 > - 同じ日に v0.3.3 でも**製品版だけ動画が真っ黒**（CSP に `media-src` が無かった・dev は CSP を入れないので動く）→ v0.3.4。**実機で動画を 1 本開くまで確かめる**
 
+> ## ▶ 2026-10-12 12:10（pop-os）— ✅ **0.4.1 に入れる追加機能 10 件が main にそろった・Windows の実機確認は 2-10〜2-13 が残り**
+>
+> **0. 次にやること**
+> - **Windows 機**: 2026-10-12 の確認（#256）は 2-9 まで全項目合格。そのあとに入った 4 件（**2-10〜2-13**）が未確認。
+>   main（e36b0d0 以降）から下の 10-11 の節と同じ手順で配布物を作り直し、`fw/verify-db-folders.md` の 2-10〜2-13 を通す。
+>   - 2-10: 3D ビューアの背景色（#254）
+>   - 2-11: 画像をクリップボードへコピー（#255）
+>   - 2-12: MPR の十字線（#257）
+>   - 2-13: Fusion の重ね方（#258）
+> - **macOS**: `fw/verify-db-folders.md` は全項目が未実施。
+> - **リリース**: 版番号 0.4.1 はユーザーの決定（2026-10-12）。タグ（`v0.4.1`）はユーザーの指示があるまで切らない。
+>   切るときは `fw/release-checklist.md` に従う。操作ガイドの項目は `fw/release-guide-pending.md` にたまっている。
+>
+> **1. 今回 main に入ったもの（2026-10-12）**
+>
+> | PR | 内容 |
+> |---|---|
+> | #250 | ROI のロック。あわせて、開き直すとロックが外れて見えた不具合と、表示・非表示の切り替えが保存されない不具合を直した |
+> | #251 | 一覧画面へのドラッグ＆ドロップで取り込む（デスクトップ版） |
+> | #252 | `F` で全画面、`W` `P` `Z` `L` `A` `R` `E` でツールを切り替える。あわせて、DSA の `Alt+↑` / `Alt+↓` が効かなかったのを直した |
+> | #253 | Cobb 角と拡大レンズ（4×）。あわせて、双方向計測の ImageJ 書き出しが矩形になるのを直した |
+> | #254 | 3D ビューアの背景色（環境設定） |
+> | #255 | 表示中の画像をクリップボードへコピー（📋・ファイルメニュー） |
+> | #257 | MPR の十字線が描かれていなかったのを直し、色（面ごと／単色）を選べるようにした |
+> | #258 | Fusion の重ね方（差分・乗算＝表示上の合成） |
+>
+> - どれも Linux の開発版で、Electron を playwright で操作して確かめた。スクリーンショットと、画素・保存内容の数値で判定している。
+>
+> **2. 注意**
+> - **E2E の Vite**: 開発版を別のポートで E2E するときは、Vite を `VITE_BACKEND_URL=http://localhost:<backend のポート>` 付きで起動する。付けないと `.env` の 8080（利用者の開発版）へ転送される。
+> - **frontend の型検査**: CI と同じ `tsc -b` で行う。`tsc --noEmit -p .` はテストのファイルを見ない。
+> - **vitest の結果**: 「Tests」の行だけでなく「Test Files」の行も見る。読み込みに失敗したファイルは、Tests の件数に出てこない。
+
+> ## ▶ 2026-10-11 17:24（pop-os）— 🧪 **Windows 機で DB フォルダ・保管庫の実機確認をする（次の版の前提）**
+>
+> 正本の手順は **`fw/verify-db-folders.md`**（0〜9 節。結果は各項目の `[ ]` と冒頭の「実施環境の記録」の表に書く）。
+>
+> **0. 次にやること（Windows 機）**
+> 1. **先にデータを控える**（手順 0-1）: アプリを閉じて `%APPDATA%\GRAPHY-Next` を丸ごと別の場所へ複製する。旧い版に戻すときに要る。
+> 2. 配布物を作る（タグは切らない。Git Bash で、リリース CI `release.yml` と同じ順）。Java 21（JDK）・Node・Git Bash が要る:
+>    ```bash
+>    git pull                                   # db8fbe6 以降（#246 を含む）
+>    (cd backend && mvn -B -DskipTests clean package)   # frontend も同時に作る（ここでは -Dfrontend.skip を付けない）
+>    rm -rf desktop/renderer desktop/resources/backend desktop/resources/jre
+>    mkdir -p desktop/renderer desktop/resources/backend
+>    cp -r frontend/dist/. desktop/renderer/
+>    cp backend/target/graphy-next-backend.jar desktop/resources/backend/
+>    "$JAVA_HOME/bin/jlink" --add-modules ALL-MODULE-PATH --strip-debug --no-man-pages --no-header-files --output desktop/resources/jre
+>    bash scripts/fetch-ffmpeg.sh win-x64
+>    bash scripts/fetch-dcm4che-tools.sh && bash scripts/fetch-dcm4che-tools.sh --check
+>    cd desktop && npm install && node --test packagedFiles.test.js && npm run dist -- --publish never
+>    node scripts/check-packaged.js dist         # できたインストーラの中身の検査
+>    ```
+>    同梱の公式プラグインと Colab の OAuth クライアントは入らない（CI だけの工程）。今回の確認には関係しない。
+> 3. 今の版の上に `desktop/dist` の `.exe` をインストールし、`fw/verify-db-folders.md` の 1〜9 を順に通す。
+> 4. 失敗した項目は、画面・`システム ＞ ログ`・手順の番号を残し、直す前に一覧にしてユーザーに聞く。
+> 5. 全部通ったら、結果を `fw/verify-db-folders.md` に書いて PR（常時許可の範囲）。macOS も同じ手順で残っている。
+>
+> **1. 現在の状態**
+> - main db8fbe6。DB フォルダの切り替え（#234）・別の DB フォルダへのコピーと移動（#235）・相対パス（#232）・共通の設定ファイル（#233）、
+>   接続の制限（#236・#237）、TLS のパスワード（#238・#239）、後始末（#240〜#242）、起動表示（#245）、再起動の修正（#244・#246）。
+> - Linux で確かめたこと: 自動テスト、開発版（`make dev-desktop`）での DB フォルダの切り替えと再起動、
+>   AppImage での再起動 2 回連続（毎回 27 秒で backend が戻り、前のマウントが残らない）。
+> - **Windows・macOS は一度も動かしていない。** 特に再起動は、Windows では Electron の `app.relaunch()` のまま
+>   （#246 で足した「前の backend がポートを離すまで最大 30 秒待つ」だけが効く）。
+>
+> **2. 決めたこと・理由**
+> - DB フォルダは standalone（デスクトップ）だけ。中身は H2 と `dicom`。画像のパスは DB フォルダからの相対パス。
+> - 切り替えは再起動で反映する（起動中の DB を差し替えない）。環境設定は DB フォルダの外の共通ファイル（`settings.json`）。
+> - 別の DB へのコピー・移動は、付随データ（ROI など）も運び、衝突しても上書きしない。移し先は次に開いたとき受け取り口から取り込む。
+> - 画像を削除してもレポートは消さない（レポートは画像と別に管理する）。ファイルを残す設定のときは付随データも残す。
+>
+> **3. Windows で特に見るところ（未確認・推測を含む）**
+> - 🔴 **再起動（手順 2-3・2-4・3-1）**: ウィンドウが 1 つだけ開き直り、backend が起動するか。真っ白のまま・「ポートが使用中」・ウィンドウが 2 つ、のどれかになったら失敗。
+>   タスクマネージャーで GRAPHY-Next と `java` が 1 組だけか見る。
+> - 日本語と空白を含むパス（手順 2-2）。外付けディスクを外した想定（3-7）。
+> - TLS のパスワードは Windows の DPAPI（Electron の safeStorage）で暗号化される。`settings.json` に平文が無いこと（1-7・8 節）。
+> - HTTP は 127.0.0.1 だけで待ち受ける（7 節）。PowerShell では `curl` でなく `curl.exe`。
+> - 🔴 旧い版のアプリで、新しい版が書き換えた DB を開かない（戻すときは 0-1 の控えを丸ごと戻す。手順の「旧い版に戻すとき」）。
+
 > ## ▶ 2026-10-04 17:52（pop-os・2 台目の Linux）— ✅ **この Linux 機でも公式鍵の署名の準備ができた**
 >
 > - `graphy_sign.py check` が `OK:`（手元で署名し、`trusted-keys` の `98EA7C6BA2D50118` で検証）。鍵が無い状態では正しく失敗することも先に確認

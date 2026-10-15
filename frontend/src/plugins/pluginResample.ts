@@ -9,7 +9,8 @@
  * ブラウザ無しでテストできることが、幾何の正しさを守る唯一の現実的な方法である
  * （`fw/cornerstone-3d-geometry-caveat.md`）。
  */
-import { sampleWorld, type RegVolume } from "../viewer/regGeometry";
+import type { RegVolume } from "../viewer/regGeometry";
+import { resampleToGrid } from "../viewer/gridResample";
 import type { WorldTransform } from "../viewer/regTransform";
 import type { PluginVolume, PluginVolumeGrid } from "./pluginTypes";
 
@@ -38,25 +39,8 @@ export function resamplePluginVolume(
   const src = toRegVolume(source);
   const t = (transform ?? null) as WorldTransform | null;
   const [nx, ny, nz] = target.dims;
-  const out = new Float32Array(nx * ny * nz);
   const m = Float64Array.from(target.indexToWorld);
-  const p: [number, number, number] = [0, 0, 0];
-  let o = 0;
-  for (let k = 0; k < nz; k++) {
-    for (let j = 0; j < ny; j++) {
-      for (let i = 0; i < nx; i++) {
-        const x = m[0] * i + m[1] * j + m[2] * k + m[3];
-        const y = m[4] * i + m[5] * j + m[6] * k + m[7];
-        const z = m[8] * i + m[9] * j + m[10] * k + m[11];
-        if (t) {
-          t.mapPoint(x, y, z, p);
-          out[o++] = sampleWorld(src, p[0], p[1], p[2]);
-        } else {
-          out[o++] = sampleWorld(src, x, y, z);
-        }
-      }
-    }
-  }
+  const out = resampleToGrid(src, t, target);
   return {
     ...source,
     data: out,

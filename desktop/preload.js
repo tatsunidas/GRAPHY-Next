@@ -30,6 +30,8 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   openMonitorQc: (displayId) => ipcRenderer.invoke("graphy:open-monitor-qc", displayId),
   // PNG dataURL を OS のネイティブドラッグに乗せて外部へ書き出す。
   startDrag: (dataUrl, filename) => ipcRenderer.send("graphy:start-drag", { dataUrl, filename }),
+  // PNG dataURL をクリップボードへ書く。成否を返す。
+  copyImage: (dataUrl) => ipcRenderer.invoke("graphy:copy-image", dataUrl),
   // OS 標準のメモリ/システムモニタを起動する。
   openMemoryMonitor: () => ipcRenderer.invoke("graphy:open-memory-monitor"),
   // OS の物理メモリ量を取得（ボリューム構築のバジェット決定用）。
@@ -40,6 +42,17 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   checkForUpdate: () => ipcRenderer.invoke("graphy:check-update"),
   // アプリ全体を再起動する（DICOM 自局設定などの反映用）。
   relaunch: () => ipcRenderer.invoke("graphy:relaunch"),
+  // DB フォルダ（索引と DICOM 保管庫）。選択と最終確認のダイアログは main が出す。
+  // DIMSE TLS のパスワード（OS のキーチェーンに預ける。値は返らない）
+  tlsPasswordSet: (which, value) => ipcRenderer.invoke("graphy:tls-password-set", { which, value }),
+  tlsPasswordStatus: () => ipcRenderer.invoke("graphy:tls-password-status"),
+  // プラグイン導入の同意（有効にする前に main が確認ダイアログを出す）
+  pluginInstallOptIn: (enabled) => ipcRenderer.invoke("graphy:plugin-install-opt-in", { enabled: enabled === true }),
+  dbFoldersList: () => ipcRenderer.invoke("graphy:db-folders-list"),
+  dbFoldersCreate: (title) => ipcRenderer.invoke("graphy:db-folders-create", { title }),
+  dbFoldersPick: (title) => ipcRenderer.invoke("graphy:db-folders-pick", { title }),
+  dbFoldersSwitch: (folder) => ipcRenderer.invoke("graphy:db-folders-switch", { folder }),
+  dbFoldersForget: (folder) => ipcRenderer.invoke("graphy:db-folders-forget", { folder }),
   // ネイティブダイアログ後にレンダラのキーボードフォーカスを復帰させる。
   refocus: () => ipcRenderer.send("graphy:refocus"),
   // API キー等の秘密情報。**取り出す口は無い**（平文を main の外へ出さないため）。
@@ -77,6 +90,13 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   computeColabSpecs: () => ipcRenderer.invoke("graphy:compute-colab-specs"),
   computeColabEnsure: (id) => ipcRenderer.invoke("graphy:compute-colab-ensure", id),
   computeColabRelease: (id) => ipcRenderer.invoke("graphy:compute-colab-release", id),
+  // Drive バックアップ（Google でログイン・保存先を Picker で選ぶ・解除）。トークンは返らない
+  gdriveStatus: () => ipcRenderer.invoke("graphy:gdrive-status"),
+  gdriveSignIn: () => ipcRenderer.invoke("graphy:gdrive-signin"),
+  gdriveSignOut: () => ipcRenderer.invoke("graphy:gdrive-signout"),
+  gdriveEnable: () => ipcRenderer.invoke("graphy:gdrive-enable"),
+  gdriveDisable: () => ipcRenderer.invoke("graphy:gdrive-disable"),
+  gdriveRestore: (title) => ipcRenderer.invoke("graphy:gdrive-restore", { title }),
   // 既定の計算機（未登録で Google にログイン済みなら Colab の T4 を足す。足すのは main）
   computeEnsureDefault: () => ipcRenderer.invoke("graphy:compute-ensure-default"),
   // 名前を付けて保存。上書き確認は OS のダイアログが出す。

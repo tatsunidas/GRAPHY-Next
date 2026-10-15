@@ -45,6 +45,9 @@ import { computeOrientationMarkers, type OrientationMarkers } from "./orientatio
 import { getModalityCalibration } from "./pixelCalibration";
 import { installWheelSliceGate } from "./wheelScroll";
 import { VolumeMemoryExceededError } from "./volumeMemory";
+import { regularGrid, sliceGeometry, type SliceGeometry } from "./sliceGeometry";
+import { sliceInfosOf } from "./sliceInfoMeta";
+import { interpolateToGrid, SliceDuplicatesError } from "./depthVolume";
 import type { SlabProjection } from "./slabPresets";
 
 /** MPR の VOI(W/L) 同期 ID。3 面は同一ボリュームを見るため VOI は絶対値同期でよい。 */
@@ -101,6 +104,37 @@ export function setMprTouchTool(toolGroupId: string, tool: MprTouchTool): void {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
 
+export type MprCrosshairColorMode = "perPlane" | "single";
+
+/** 十字線の色。面ごと（Axial 緑・Sagittal 黄・Coronal 青）か、全部を 1 色にする。知らない面は灰色。 */
+export function crosshairColorFor(
+  viewportId: string,
+  ids: MprViewportIds,
+  mode: MprCrosshairColorMode,
+  single: [number, number, number],
+): [number, number, number] {
+  if (mode === "single") return single;
+  if (viewportId === ids.axial) return [0, 220, 0];
+  if (viewportId === ids.sagittal) return [220, 220, 0];
+  if (viewportId === ids.coronal) return [0, 160, 255];
+  return [200, 200, 200];
+}
+
+/** [r, g, b]（0..255）→ "rgb(r, g, b)"。 */
+export function rgbCss(rgb: readonly [number, number, number]): string {
+  return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+}
+
+// CrosshairsTool は色の関数をツールを作るときに 1 度だけ読むので、設定はここを経由させる。
+let crosshairColorMode: MprCrosshairColorMode = "perPlane";
+let crosshairSingleColor: [number, number, number] = [255, 255, 255];
+
+/** 環境設定の十字線の色を当てる（次に作る MPR から効く）。読めない値は既定（面ごとの色・白）。 */
+export function setMprCrosshairColors(mode: string | undefined, single: [number, number, number] | null): void {
+  crosshairColorMode = mode === "single" ? "single" : "perPlane";
+  crosshairSingleColor = single ?? [255, 255, 255];
+}
+
 export interface MprViewportIds {
   axial: string;
   sagittal: string;
@@ -117,6 +151,15 @@ export interface BuildVolumeResult {
   volumeId: string;
   corrected: boolean; // ガントリチルト補正を適用したか
   tiltAngleDeg?: number;
+  /** 体積のスライス順の imageId（チルト補正で作り直した体積では無い）。 */
+  sortedImageIds?: string[];
+  /** 奥行きの決め方と並びの分類（`fw/slice-depth-policy.md`）。 */
+  geometry: SliceGeometry;
+  /**
+   * 不均一な並びを均一な格子に取り直したとき（kind が missing / irregular）。
+   * `gridIndexOf[i]` は sortedImageIds の i 番目の画像が当たる格子の番号。補間で作った面は元の画像を持たない。
+   */
+  grid?: { count: number; spacing: number; gridIndexOf: number[]; interpolated: boolean };
 }
 
 // ── ベクトル小道具 ────────────────────────────────────────────
@@ -211,32 +254,6 @@ async function assembleCtSourceVolume(
   };
 }
 
-/**
- * imageIds を IPP の法線投影で空間順にソートする。
- * Cornerstone の `sortImageIdsAndGetSpacing` は **wadouri の場合フルソートせず入力順を信頼**する
- * （先頭/中央の距離で全体の向きを反転するのみ）。`fetchInstances` は InstanceNumber 順で返すため、
- * 空間順と一致しないシリーズ（例: 末尾スライスが最下部）では Z 方向に折り返る。これを防ぐため
- * volume 構築前に空間順へ並べ替える。メタデータ（imagePlaneModule）がロード済みであること。
- */
-function sortImageIdsByIpp(imageIds: string[]): string[] {
-  const plane0: AnyObj = metaData.get("imagePlaneModule", imageIds[0]) ?? {};
-  const iopRaw = plane0.imageOrientationPatient ?? [1, 0, 0, 0, 1, 0];
-  const iop = iopRaw.map(Number);
-  const nRaw = cross([iop[0], iop[1], iop[2]], [iop[3], iop[4], iop[5]]);
-  const nl = norm(nRaw) || 1;
-  const normal: Vec3 = [nRaw[0] / nl, nRaw[1] / nl, nRaw[2] / nl];
-  const withDist = imageIds.map((id) => {
-    const p: AnyObj = metaData.get("imagePlaneModule", id) ?? {};
-    const ipp = p.imagePositionPatient;
-    const d = Array.isArray(ipp) && ipp.length >= 3
-      ? dot([Number(ipp[0]), Number(ipp[1]), Number(ipp[2])], normal)
-      : Number.POSITIVE_INFINITY; // IPP 欠落は末尾へ
-    return { id, d };
-  });
-  withDist.sort((a, b) => a.d - b.d);
-  return withDist.map((x) => x.id);
-}
-
 /** 補正済みローカルボリューム用の metadata（`makeVolumeMetadata` と同形）。データは HU(Int16 signed)。 */
 function buildCorrectedMetadata(imageId0: string, spacing: Vec3, cols: number, rows: number): AnyObj {
   const gsm: AnyObj = metaData.get("generalSeriesModule", imageId0) ?? {};
@@ -261,7 +278,75 @@ function buildCorrectedMetadata(imageId0: string, spacing: Vec3, cols: number, r
 }
 
 /**
+ * 不均一な並び（欠け・不規則）を、間隔 = 最小の間隔の均一な格子に取り直したローカルボリュームを作る。
+ * 奥行き方向だけの線形補間（面内は触らない）。値は校正済みのモダリティ値（Float32）。
+ * 画素が 1 成分でない（カラー等）ときは null（呼び出し側が通常の経路に戻す）。
+ */
+function buildInterpolatedVolume(
+  sortedIds: string[],
+  g: SliceGeometry,
+  volumeId: string,
+  modality: string | null,
+  maxBytes?: number,
+): { grid: { count: number; spacing: number; gridIndexOf: number[] } } | null {
+  const grid = regularGrid(g);
+  const plane0: AnyObj = metaData.get("imagePlaneModule", sortedIds[0]) ?? {};
+  const cols = Number(plane0.columns);
+  const rows = Number(plane0.rows);
+  const iop = (plane0.imageOrientationPatient as ArrayLike<number> | undefined);
+  const ipp = (plane0.imagePositionPatient as ArrayLike<number> | undefined);
+  if (!cols || !rows || !iop || iop.length < 6 || !ipp || !g.normal) return null;
+  const sliceLen = cols * rows;
+  if (maxBytes !== undefined) {
+    const needed = sliceLen * (sortedIds.length + grid.count) * 4;
+    if (needed > maxBytes) throw new VolumeMemoryExceededError(needed, maxBytes);
+  }
+  const slices: Float32Array[] = [];
+  for (const id of sortedIds) {
+    const img = cache.getImage(id) as AnyObj | undefined;
+    if (!img) return null;
+    const px = img.getPixelData() as ArrayLike<number>;
+    if (px.length !== sliceLen) return null;
+    const { scale, offset } = getModalityCalibration(img, id);
+    const v = new Float32Array(sliceLen);
+    for (let i = 0; i < sliceLen; i++) v[i] = px[i] * scale + offset;
+    slices.push(v);
+  }
+  const positions = g.order.map((_, i) => g.positions[i]);
+  const { data } = interpolateToGrid(slices, positions, grid, sliceLen);
+  const ps = plane0.pixelSpacing ?? [1, 1]; // [row, col]
+  const spacing: Vec3 = [Number(ps[1]) || 1, Number(ps[0]) || 1, grid.spacing];
+  const md = buildCorrectedMetadata(sortedIds[0], spacing, cols, rows);
+  md.BitsAllocated = 32;
+  md.BitsStored = 32;
+  md.HighBit = 31;
+  md.ImageOrientationPatient = Array.from(iop).slice(0, 6).map(Number);
+  if ((modality ?? "").toUpperCase() !== "CT") {
+    let lo = Infinity, hi = -Infinity;
+    for (const s of slices) for (let i = 0; i < sliceLen; i++) { const x = s[i]; if (x < lo) lo = x; if (x > hi) hi = x; }
+    if (hi > lo) md.voiLut = [{ windowWidth: hi - lo, windowCenter: (hi + lo) / 2 }];
+  }
+  const dir: number[] = [
+    Number(iop[0]), Number(iop[1]), Number(iop[2]),
+    Number(iop[3]), Number(iop[4]), Number(iop[5]),
+    g.normal[0], g.normal[1], g.normal[2],
+  ];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (volumeLoader.createLocalVolume as any)(volumeId, {
+    metadata: md,
+    dimensions: [cols, rows, grid.count],
+    spacing,
+    origin: [Number(ipp[0]), Number(ipp[1]), Number(ipp[2])],
+    direction: dir,
+    scalarData: data,
+  });
+  return { grid: { count: grid.count, spacing: grid.spacing, gridIndexOf: grid.gridIndexOf } };
+}
+
+/**
  * MPR 用ボリュームを構築してキャッシュする。CT でチルトがあれば前処理補正を適用。
+ * 間隔が不均一なシリーズ（欠け・不規則）は均一な格子に補間して組む。同じ位置に重なるスライスがあれば
+ * {@link SliceDuplicatesError}。
  *
  * @param opts.maxBytes 二重防御（`fw/volume-memory-guard.md` V2）。**呼び出し側が事前予測
  *   できなかったときだけ渡す**。ロード後に確定した寸法で超過していれば
@@ -276,6 +361,10 @@ export async function buildMprVolume(
   opts?: { maxBytes?: number },
 ): Promise<BuildVolumeResult> {
   const isCT = (modality ?? "").toUpperCase() === "CT";
+  // 奥行きの決定と CrosshairsTool（getClosestImageId）の IPP 参照のため、メタデータを先に揃える。
+  await Promise.all(imageIds.map((id) => imageLoader.loadAndCacheImage(id).catch(() => null)));
+  const geometry = sliceGeometry(sliceInfosOf(imageIds));
+  if (geometry.kind === "duplicates") throw new SliceDuplicatesError();
   if (isCT) {
     const src = await assembleCtSourceVolume(imageIds, opts?.maxBytes);
     if (src && needsTiltCorrection(src.ippFirst, src.ippLast, src.iop)) {
@@ -291,15 +380,24 @@ export async function buildMprVolume(
         direction: c.direction,
         scalarData: c.data,
       });
-      return { volumeId, corrected: true, tiltAngleDeg };
+      return { volumeId, corrected: true, tiltAngleDeg, geometry };
     }
   }
-  // CrosshairsTool（getClosestImageId）は各 imageId の imagePlaneModule(IPP) を要求する。
-  // streaming 経路では画像未ロード時にメタデータが未登録のことがあるため、先読みして登録する
-  // （CT 経路は assembleCtSourceVolume が既に先読み済み。キャッシュ済みなら実質 no-op）。
-  await Promise.all(imageIds.map((id) => imageLoader.loadAndCacheImage(id).catch(() => null)));
   // wadouri は入力順を信頼するため、空間順（IPP 法線投影）に並べ替えてから volume 化する（Z 折り返り防止）。
-  const sortedImageIds = sortImageIdsByIpp(imageIds);
+  // 位置が分からないシリーズは入力の順のまま（sliceGeometry の order も恒等）。
+  const sortedImageIds = geometry.order.map((i) => imageIds[i]);
+  if (geometry.kind === "missing" || geometry.kind === "irregular") {
+    const built = buildInterpolatedVolume(sortedImageIds, geometry, volumeId, modality, opts?.maxBytes);
+    if (built) {
+      return {
+        volumeId,
+        corrected: false,
+        sortedImageIds,
+        geometry,
+        grid: { ...built.grid, interpolated: true },
+      };
+    }
+  }
   const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds: sortedImageIds });
   // ピクセルデータのストリーミングを開始して待つ（未ロードだと VolumeViewport が黒のまま）。
   try {
@@ -308,7 +406,7 @@ export async function buildMprVolume(
   } catch {
     /* ignore */
   }
-  return { volumeId, corrected: false };
+  return { volumeId, corrected: false, sortedImageIds, geometry };
 }
 
 /**
@@ -361,13 +459,11 @@ export async function setupMprViewports(
   tg = ToolGroupManager.createToolGroup(toolGroupId);
   if (!tg) return;
 
-  const refColors: Record<string, Types.Point3> = {
-    [ids.axial]: [0, 220, 0],
-    [ids.sagittal]: [220, 220, 0],
-    [ids.coronal]: [0, 160, 255],
-  };
   tg.addTool(CrosshairsTool.toolName, {
-    getReferenceLineColor: (viewportId: string) => refColors[viewportId] ?? [200, 200, 200],
+    // 🔴 色は "rgb(r, g, b)" の文字列で返す。CrosshairsTool はそのまま SVG の stroke に書くので、
+    //    配列を返すと stroke="0,220,0"（無効な色）になり、十字線が描かれない（2026-10-12 まで見えていなかった）。
+    getReferenceLineColor: (viewportId: string) =>
+      rgbCss(crosshairColorFor(viewportId, ids, crosshairColorMode, crosshairSingleColor)),
   });
   tg.addTool(WindowLevelTool.toolName);
   tg.addTool(PanTool.toolName);

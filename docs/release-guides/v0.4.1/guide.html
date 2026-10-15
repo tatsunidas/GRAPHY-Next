@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>GRAPHY-Next v0.4.1 操作ガイド — DB フォルダの切り替えと細かな改良</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../guide.css">
+<style>
+  table.ops td:first-child { white-space: nowrap; color: var(--sub); }
+  table.ops td, table.ops th { font-size: 23px; padding: 7px 12px; }
+</style>
+</head>
+<body>
+
+<section class="page cover">
+  <div class="left">
+    <p class="eyebrow">GRAPHY-NEXT v0.4.1 / 操作ガイド</p>
+    <h1>DB フォルダを<br>使い分ける</h1>
+    <p class="lead">検査の索引と画像をまとめた「DB フォルダ」を、研究ごと・外付けディスクなどに分けて使えるようになりました。検査を別の DB フォルダへコピー・移動することもできます。あわせて 2D・MPR・ワンド・ROI 統計などの改良が入っています。</p>
+    <div class="chips">
+      <span class="chip on">DB フォルダ</span>
+      <span class="chip">コピー・移動</span>
+      <span class="chip">ワンド・ROI 統計</span>
+    </div>
+  </div>
+  <div class="panel">
+    <h3>使い方（デスクトップ版のみ）</h3>
+    <ol class="steps">
+      <li><span class="n">01</span><p>環境設定 ＞ データ管理 ＞ <b>DB フォルダ</b><small>新しく作る・既存のものを開く・一覧から切り替える。切り替えるとアプリが再起動します</small></p></li>
+      <li><span class="n">02</span><p>DB テーブル管理で検査の「<b>別の DB へ…</b>」<small>コピーか移動を選ぶ。移し先は、次にその DB を開いたときに取り込まれます</small></p></li>
+      <li><span class="n">03</span><p>環境設定（表示・通信先など）は<b>どの DB でも共通</b><small>DB フォルダの中には、検査の索引と DICOM ファイルだけが入ります</small></p></li>
+    </ol>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0　doi.org/10.7937/TCIA.5FNA-0924</span><span>1 / 15</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">STEP 1 / 環境設定 ＞ データ管理 ＞ DB フォルダ</p>
+    <h2>DB フォルダを作る・開く・切り替える</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="dbfolders"><img src="shots/dbfolders.png" alt="環境設定のデータ管理。DB フォルダの一覧に、使用中の既定の DB と、もう 1 つの DB が並んでいる"></figure>
+    <div style="display:flex;flex-direction:column;gap:28px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>いま使っている DB（使用中）。最初からある DB は「既定」</p></li>
+        <li><span class="num">2</span><p>前に使った DB。「<b>切り替え</b>」で再起動して切り替わります</p></li>
+        <li><span class="num">3</span><p>空のフォルダを選び、新しい DB を作る</p></li>
+        <li><span class="num">4</span><p>別の PC で作った DB・複製した DB を開く</p></li>
+      </ol>
+      <p class="callout">画像はフォルダからの相対パスで記録します。フォルダごと複製・移動しても開けます。</p>
+      <p class="note">外付けディスクが見つからないときは、再試行・既定の DB で起動・終了を選べます。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。</span><span>2 / 15</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">STEP 2 / DB テーブル管理 ＞ 検査の「別の DB へ…」</p>
+    <h2>検査を別の DB フォルダへコピー・移動する</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="transfer"><img src="shots/transfer.png" alt="別の DB フォルダへコピー・移動する窓。移し先と、コピーか移動かを選ぶ"></figure>
+    <div style="display:flex;flex-direction:column;gap:28px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>移し先の DB フォルダ。一覧に無いものは「フォルダを選ぶ…」から</p></li>
+        <li><span class="num">2</span><p>方法。<b>コピー</b>は今の DB にも残し、<b>移動</b>は運び終えて照合できたら今の DB から消します</p></li>
+        <li><span class="num">3</span><p>「コピーする」（移動のときは「移動する」）</p></li>
+      </ol>
+      <p class="callout">レポート・ROI・位置合わせ・プラグインの記録なども一緒に運びます。移し先に同じものがあれば、上書きせずに残します。</p>
+      <p class="note">移し先の DB に切り替えたときに取り込まれ、右下に件数が出ます。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>3 / 15</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">STEP 3 / 2D ビューアの改良</p>
+    <h2>Cobb 角・ROI のロック・画像のコピー</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="roi"><img src="shots/roi.png" alt="2D ビューア。椎体に Cobb 角、肝臓に矩形 ROI。ROI マネージャで矩形 ROI をロックしている"></figure>
+    <div style="display:flex;flex-direction:column;gap:28px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>ROI メニューの <b>Cobb 角</b>。離れた 2 本の線のなす角を測ります</p></li>
+        <li><span class="num">2</span><p><b>ロック</b>（ROI マネージャの 🔒）。動かず、Delete・ゴミ箱・全消去でも消えません</p></li>
+        <li><span class="num">3</span><p>📋 で画像を<b>クリップボードへコピー</b>。ROI があれば「<b>ROI も含めてキャプチャしますか？</b>」と聞きます（四隅の文字は含みません）</p></li>
+      </ol>
+      <p class="callout"><b>拡大レンズ（4×）</b>: 画像メニューで選び、左ボタンを押している間だけ、カーソルのまわりを 4 倍で表示します。</p>
+      <p class="note">ロックと表示・非表示は保存され、開き直しても残ります。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>4 / 15</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">STEP 4 / MPR Viewer</p>
+    <h2>MPR の十字線が表示されるようになりました</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="mpr"><img src="shots/mpr.png" alt="MPR Viewer。Axial・Sagittal・Coronal の 3 面に、ほかの面の位置を示す十字線が出ている"></figure>
+    <div style="display:flex;flex-direction:column;gap:28px">
+      <p>各面に、ほかの 2 面の位置が線で出ます。画像をクリックすると、3 面がその点へ移ります。</p>
+      <p class="callout">以前の版では、色の渡し方の誤りで十字線が描かれていませんでした（クリックで移る操作は動いていました）。</p>
+      <p>線の色は 環境設定 ＞ 表示 ＞ MPR の「十字線の色」で、<b>面ごとの色</b>（Axial 緑・Sagittal 黄・Coronal 青）か<b>単色</b>（色も選べる）を選べます。</p>
+      <p class="note">設定を変えたら、MPR を開き直すと反映されます。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>5 / 15</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">STEP 5 / ROI ツール ＞ 2D Wand</p>
+    <h2>ワンドを HU・SUV のしきい値で塗る</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="wand"><img src="shots/wand.png" alt="2D Wand のパネル。方式で範囲を選び、下限 40 HU・上限 200 HU で肝臓を塗っている"></figure>
+    <div style="display:flex;flex-direction:column;gap:28px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>方式に<b>以上・以下・範囲</b>が加わりました。HU・SUV などの<b>校正値</b>で判定します</p></li>
+        <li><span class="num">2</span><p>下限（以上・範囲のとき）</p></li>
+        <li><span class="num">3</span><p>上限（以下・範囲のとき）</p></li>
+        <li><span class="num">4</span><p><b>塗ったボクセル</b>の数。上限（400 万）で打ち切ったときは警告が出ます</p></li>
+      </ol>
+      <p class="callout">「許容差」（既定）は今までどおり<b>保存された画素値</b>で判定します。値の意味が違うので注意してください。</p>
+      <p class="note">シードが条件の外なら理由が出ます。校正の無い画像（カラーなど）では、以上・以下・範囲は選べません。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>6 / 15</span></div>
+</section>
+<section class="page">
+  <div>
+    <p class="eyebrow">STEP 6 / ROI マネージャ ＞ 塗りの ROI の Σ³</p>
+    <h2>塗りの ROI の 3D 統計に単位と TLG</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="maskstats"><img src="shots/maskstats.png" alt="ROI マネージャ。ワンドで作った塗りの ROI の Σ³ を押し、体積・ボクセル数・平均・最小・最大が HU つきで出ている"></figure>
+    <div style="display:flex;flex-direction:column;gap:28px">
+      <ol class="explain">
+        <li><span class="num">1</span><p><b>Σ³</b> で塗りの ROI の 3D 統計を出します</p></li>
+        <li><span class="num">2</span><p>体積（mL）・ボクセル数・スライス数と、平均 ± SD・最小・最大。単位は 2D の ROI と同じ（CT は HU、PET は SUVbw など）</p></li>
+      </ol>
+      <p class="callout">PET（SUV）では <b>TLG</b>（平均 × 体積）の行が出ます。CT・MR では出ません。</p>
+      <p class="note">値を読めないスライスがあるときは、平均などを出さずに「値を読めないスライス n 枚」と表示します（体積とボクセル数は出ます）。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>7 / 15</span></div>
+</section>
+<section class="page">
+  <div>
+    <p class="eyebrow">STEP 7 / ROI 計測結果 ＞ 画素の書き出し</p>
+    <h2>統計に使った画素を CSV に書き出す</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="pixeldump"><img src="shots/pixeldump.png" alt="ROI 計測結果の窓。見出しに ⬇ 画素 のボタンがあり、矩形 ROI の行を選んでいる"></figure>
+    <div style="display:flex;flex-direction:column;gap:28px">
+      <ol class="explain">
+        <li><span class="num">1</span><p><b>⬇ 画素</b>: 選んでいる ROI の、統計に使った画素を 1 行 1 画素で保存します（roi-pixels-番号.csv）</p></li>
+        <li><span class="num">2</span><p>書き出す ROI の行。行数は「画素数」と同じで、値の平均は「平均」と一致します</p></li>
+      </ol>
+      <p class="callout">列は ラベル・ROI の ID・col・row・x/y/z（患者座標 LPS の mm、画素の中心）・値（単位つき）・画像 ID です。</p>
+      <p class="note">位置の情報が無い画像（XA など）では x/y/z を空欄にします。線の ROI では押せません。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>8 / 15</span></div>
+</section>
+<section class="page">
+  <div>
+    <p class="eyebrow">STEP 7 / ROI マネージャ ＞ 塗りの ROI の Σ</p>
+    <h2>塗りの ROI（3D）の計測結果とボクセルの書き出し</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="maskdump"><img src="shots/maskdump.png" alt="塗りの ROI の行の Σ から開いた ROI 計測結果の窓。体積・ボクセル数・平均とヒストグラムが出ている"></figure>
+    <div style="display:flex;flex-direction:column;gap:28px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>塗りの ROI の行の <b>Σ</b> で、その ROI の計測結果を開きます</p></li>
+        <li><span class="num">2</span><p><b>⬇ 画素</b>: 統計に使ったボクセルを、<b>スライス順に 1 つの CSV</b> に保存します（mask-voxels-番号.csv）</p></li>
+        <li><span class="num">3</span><p>塗りの ROI の行。大きさの欄は体積（mL）、画素数の欄はボクセル数で、Σ³ の値と一致します</p></li>
+      </ol>
+      <p class="callout">CSV の列は ラベル・ROI の ID・slice（ビューアと同じ 1 始まりの番号）・segment・col・row・x/y/z（患者座標 LPS の mm）・値・画像 ID です。</p>
+      <p class="note">パラメトリック球は、「塗りにする」で塗りの ROI にしてから測ります。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>9 / 15</span></div>
+</section>
+<section class="page">
+  <div>
+    <p class="eyebrow">STEP 7 / 計測メニュー</p>
+    <h2>計測と ROI を別のメニューに分けました</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="measure"><img src="shots/measure.png" alt="計測メニューを開いたところ。長さ・長径と短径・角度・Cobb 角・プローブ・計測を全消去が並ぶ"></figure>
+    <div style="display:flex;flex-direction:column;gap:28px">
+      <ol class="explain">
+        <li><span class="num">1</span><p><b>計測</b>メニュー（新規）。長さ・長径と短径・角度・Cobb 角・プローブはここから</p></li>
+        <li><span class="num">2</span><p>計測はマスク（塗り）にはしません。長さとプローブは、ROI マネージャの <b>→ROI</b> で線 ROI・点 ROI に変えられます</p></li>
+        <li><span class="num">3</span><p><b>計測を全消去</b>は計測だけを消します（ROI は残ります）。ROI メニューの「ROI を全消去」は ROI だけを消します</p></li>
+      </ol>
+      <p class="callout">ROI メニューは面・線・<b>点 ROI</b>（新規）です。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>10 / 15</span></div>
+</section>
+<section class="page">
+  <div>
+    <p class="eyebrow">STEP 7 / ROI ツール ＞ ROI マネージャ</p>
+    <h2>ROI マネージャは「ROI」と「計測」の 2 つの欄に</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="roipanel"><img src="shots/roipanel.png" alt="ROI マネージャ。ROI の欄に形の ROI と塗りの ROI が並び、下に計測の欄がある"></figure>
+    <div style="display:flex;flex-direction:column;gap:28px">
+      <ol class="explain">
+        <li><span class="num">1</span><p><b>＋新規 ROI（塗り）</b>: 新しい塗りの ROI を作ります。ROI ごとに別に持つので、ROI どうしを重ねて塗れます</p></li>
+        <li><span class="num">2</span><p>塗りの ROI の行（Wand・ブラシ・SEG など）。1 つの ROI に 1 行です。行を選ぶと、ブラシや Wand の塗り先になります</p></li>
+        <li><span class="num">3</span><p>計測の行（長さ・Cobb 角など）。ROI とは別の欄です</p></li>
+      </ol>
+      <p class="callout">これまでの「マスク」の欄はなくなり、塗りの ROI も ROI の欄に並びます。表示・名前・統計（Σ・Σ³）・RT⬇・削除は行ごとに行えます。</p>
+      <p class="note">SEG⬇ は、その ROI を含むマスク全体を書き出します。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>11 / 15</span></div>
+</section>
+<section class="page">
+  <div>
+    <p class="eyebrow">STEP 7 / 3D ビューワ ＞ シーンオブジェクト</p>
+    <h2>2D の ROI を 1 つずつ 3D ROI にする</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="import3d" style="max-height:600px;overflow:hidden"><img src="shots/import3d.png" alt="3D ビューワの取り込みの一覧。2D の ROI と同じ名前で並び、取り込んだものに「取り込み済み」と出ている"></figure>
+    <div style="display:flex;flex-direction:column;gap:28px">
+      <ol class="explain">
+        <li><span class="num">1</span><p><b>2D ビューアの ROI から 3D ROI を追加…</b>: 2D の ROI マネージャの行と同じ名前・色で並びます。1 つずつ「追加」、または「すべて追加」</p></li>
+        <li><span class="num">2</span><p>取り込んだ ROI には「取り込み済み」と出ます</p></li>
+      </ol>
+      <p class="callout">3D ROI の体積は「体積（ボクセル）」が 2D の Σ³ と同じ数え方です。「体積（メッシュ）」は表示用の表面から求めた値です。</p>
+      <p class="note">2D ビューアは開いたままにしてください。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>12 / 15</span></div>
+</section>
+<section class="page">
+  <div>
+    <p class="eyebrow">STEP 8 / 画像 ＞ リサンプル・切り抜き…</p>
+    <h2>画素の間隔を引き直して保存する</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="resample"><img src="shots/resample.png" alt="リサンプル・切り抜きの窓。元の格子、等方 0.78 mm、出力 512×512×270（約 270 MB）が出ている"></figure>
+    <div style="display:flex;flex-direction:column;gap:28px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>元のシリーズの大きさと画素の間隔。読み込めた枚数も並べて出します</p></li>
+        <li><span class="num">2</span><p><b>等方</b>（全軸同じ間隔）か、<b>軸ごと</b>（列・行・スライス）を選びます</p></li>
+        <li><span class="num">3</span><p>出力の大きさとメモリの見積り</p></li>
+      </ol>
+      <p class="callout">「保存」で、引き直した画像を<b>別のシリーズ</b>として保存します。元のシリーズは変わりません。向きと原点は元と同じです。</p>
+      <p class="note">間隔が 0・負・空のときは保存できません。見積りが大きすぎるときは確認が出ます。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>13 / 15</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">そのほかの改良</p>
+    <h2>操作が少し便利になったところ</h2>
+  </div>
+  <table class="ops">
+    <tr><th style="width:24%">どこで</th><th>何ができるようになったか</th></tr>
+    <tr><td>一覧画面</td><td>エクスプローラー・Finder からファイルやフォルダを<b>ドラッグ＆ドロップ</b>して取り込める（デスクトップ版）</td></tr>
+    <tr><td>RTSTRUCT</td><td>読み込みで<b>穴が埋まらない</b>ようにし、構造ごとに 1 つの塗り ROI にした。RT⬇ で塗りの ROI・線 ROI・点 ROI も書き出せる</td></tr>
+    <tr><td>ROI の範囲</td><td>z・c・t の番号を<b>ビューアと同じ 1 始まり</b>で表示（z1 c1 t1）</td></tr>
+    <tr><td>取り込みのあと</td><td>一覧に<b>いま取り込んだ検査</b>だけを出す（検査日が今日でなくても見える）。帯の「検索条件の一覧に戻る」で元の一覧へ</td></tr>
+    <tr><td>キーボード</td><td><b>F</b> で全画面（どの窓でも。Esc でも戻る）。2D ビューアで <b>W / P / Z / L / A / R / E</b> を押すと、W/L・移動・拡大・長さ・角度・矩形・楕円に切り替わる</td></tr>
+    <tr><td>2D ビューアの ROI</td><td>選択中の ROI は<b>内側をドラッグして移動</b>できる。Ctrl（Mac は ⌘）＋クリックで<b>複数選択</b>し、表示中のスライスの選択中 ROI をまとめて動かせる</td></tr>
+    <tr><td>Fusion</td><td>操作バーの「重ね方」で<b>差分・乗算</b>を選べる。表示上の合成で、画素値（HU・SUV）の引き算ではない</td></tr>
+    <tr><td>3D ビューア</td><td>環境設定 ＞ 表示 ＞ 3D ビューアで<b>背景色</b>を変えられる（VR・MIP・Ortho・Slab）</td></tr>
+    <tr><td>NIfTI の取り込み</td><td>整数でない値（ADC・T1 マップなど）を 32 bit float の Parametric Map として取り込み、単位を選べる。2D の W/L・MPR・3D・テクスチャでも扱える</td></tr>
+    <tr><td>起動の表示</td><td>スプラッシュの段階を「部品の準備・データベース・機能の準備」に分け、何を待っているかが分かるようにした</td></tr>
+    <tr><td>画像の削除</td><td>ファイルも消す設定のとき、消した画像の ROI・位置合わせ・プラグインの記録なども片付ける（レポートは残す）</td></tr>
+  </table>
+  <div class="footer"><span>研究用です。診断には使わないでください。</span><span>14 / 15</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">直したこと・安全性</p>
+    <h2>気付かないうちに起きていたことを直しました</h2>
+  </div>
+  <table class="ops">
+    <tr><th style="width:24%">どこで</th><th>直したこと</th></tr>
+    <tr><td>接続の制限</td><td>デスクトップ版の HTTP を、その PC（127.0.0.1）からだけ受けるようにした。ブラウザ経由の不正な呼び出しも塞いだ</td></tr>
+    <tr><td>DICOM TLS</td><td>TLS のパスワードを OS の鍵束に保存し、画面の API でも返さないようにした（鍵束の無い環境では、警告を出して従来どおり保存）</td></tr>
+    <tr><td>プラグイン</td><td>プラグインの導入の同意を、本体の確認の窓からしか変えられないようにした</td></tr>
+    <tr><td>取り込み</td><td>失敗しても元のファイルを失わない。空のフォルダや作業用のフォルダを残さない</td></tr>
+    <tr><td>患者 ID の変更</td><td>ROI などの記録も新しい患者 ID へ運ぶ</td></tr>
+    <tr><td>DSA</td><td>Alt＋↑ / ↓（マスクの上下のシフト）が効いていなかったのを直した</td></tr>
+    <tr><td>ROI</td><td>開き直すとロックが外れて見えた・表示の切り替えが保存されなかったのを直した。双方向計測を ImageJ 形式で書き出すと矩形になっていたのを直した</td></tr>
+    <tr><td>起動が遅いとき</td><td>起動の待ち（60 秒）を超えても、あとで本体が立ち上がれば自動でつながるようにした（以前は「Disconnected」のまま）</td></tr>
+    <tr><td>再起動（Linux）</td><td>AppImage で DB フォルダの切り替えなどの再起動が失敗していたのを直した</td></tr>
+  </table>
+  <p class="note">変更の全体はリリースノート（GitHub の Releases）にあります。</p>
+  <div class="footer"><span>研究用です。診断には使わないでください。</span><span>15 / 15</span></div>
+</section>
+
+<script src="shots/marks.js"></script>
+<script src="../guide.js"></script>
+</body>
+</html>

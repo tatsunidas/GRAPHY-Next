@@ -145,6 +145,8 @@ export interface VtkVolumeView {
   isSpinning(): boolean;
   /** 向きスナップ（全モード）。焦点・距離・ズームは保持。Actor 回転の蓄積もリセット。 */
   snapOrientation(kind: SnapKind, flip?: boolean): void;
+  /** 背景色（0..1 の RGB）。 */
+  setBackground(rgb: [number, number, number]): void;
   /** 色 LUT（256 の r/g/b 0..255）を適用。null でグレースケールへ。 */
   setColorLut(lut: { r: number[]; g: number[]; b: number[] } | null): void;
   /** VR プリセット（cornerstone VIEWPORT_PRESETS 名）を適用。null で解除（グレースケール/W-L へ）。 */
@@ -855,6 +857,10 @@ export function createVtkVolumeView(
   }
 
   return {
+    setBackground(rgb) {
+      renderer.setBackground(rgb[0], rgb[1], rgb[2]);
+      render();
+    },
     setMode(next) {
       applyMode(next);
       applyCinematic(); // 陰影設定を維持

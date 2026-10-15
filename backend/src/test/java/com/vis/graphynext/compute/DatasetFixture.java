@@ -68,7 +68,8 @@ final class DatasetFixture {
                 (ObjectProvider<com.vis.graphynext.dicom.web.WebDicomDataService>) Proxy.newProxyInstance(
                         getClass().getClassLoader(), new Class<?>[]{ObjectProvider.class}, (p, m, a) -> null);
         PixelCodec codec = new PixelCodec(new DicomProperties());
-        return new ComputeDatasetService(new AnonymizeService(repo, masks, web, codec), codec, mapper);
+        return new ComputeDatasetService(new AnonymizeService(repo, masks, web, codec,
+                new com.vis.graphynext.dicom.store.StorageLayout(java.nio.file.Path.of("target", "no-storage-root"))), codec, mapper);
     }
 
     void index(String series, String sop, Path file, String modality, String sopClass) {

@@ -6,12 +6,15 @@
  * 2D ベクタ ROI（面積型）→ DICOM RTSTRUCT 書き出しリクエストの組み立て（frontend 側）。
  * 各 ROI をスライス面の**閉輪郭（患者座標 mm 点列）**にして backend `/api/dicom/rtstruct` へ送る。
  * 楕円/円はポリゴン近似、矩形は 4 隅、フリーハンドは polyline をそのまま使う。
- * 線/角度/点は閉輪郭に不向きのため対象外（ImageJ/SR/GSPS 側で扱う）。設計 `fw/dicom-seg-rtstruct-design.md` S2。
+ * 線 ROI は OPEN_PLANAR、点 ROI は POINT（MARKER）で書く。計測（Length/Angle/Probe 等）は書き出さない。設計 `fw/dicom-seg-rtstruct-design.md` S2。
  */
-import { metaData } from "@cornerstonejs/core";
-import { annotation as csAnnotation } from "@cornerstonejs/tools";
+import { cache, metaData } from "@cornerstonejs/core";
+import { annotation as csAnnotation, segmentation as csSeg } from "@cornerstonejs/tools";
+import { traceMaskContours, type Pt } from "./maskContour";
+import { imageToWorldOnPlane, type PlaneGeometry } from "./imageCoords";
 import { getRoiMaskMeta } from "./roiMaskStore";
-import { exportDicomRtStruct, type RtStructRoi, type RtStructExportRequest, type SegExportResult } from "../api";
+import { roiKindOf } from "./roiKind";
+import { exportDicomRtStruct, type RtStructContour, type RtStructRoi, type RtStructExportRequest, type SegExportResult } from "../api";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
@@ -90,7 +93,85 @@ function annColorRgb(uid: string): [number, number, number] | null {
 }
 
 /** 面積型 ROI 群を RTSTRUCT として書き出す。成功時 { seriesInstanceUid }、対象が無ければ null。 */
-export async function exportRoisAsRtStruct(uids: string[]): Promise<SegExportResult | null> {
+/**
+ * マスク（ラベルマップ）→ RTSTRUCT の構造。segment ごとに 1 構造。
+ * スライスごとに外周と穴を、それぞれ閉じた輪郭（CLOSED_PLANAR）として入れる（穴を別の輪郭で書くのは
+ * RTSTRUCT の一般的な書き方）。輪郭は画素の境界をなぞる（`maskContour.ts`。`fw/roi-mask-model.md` §10）。
+ * 幾何（IPP/IOP/画素間隔）の無いスライスは書かない。
+ */
+export function maskToRtStructRois(segId: string, segIndex?: number): { rois: Omit<RtStructRoi, "number">[]; refImageId?: string } {
+  let labelmapIds: string[];
+  try {
+    labelmapIds = ((csSeg as AnyObj).getLabelmapImageIds(segId) as string[]) ?? [];
+  } catch {
+    return { rois: [] };
+  }
+  const meta = getRoiMaskMeta(segId);
+  const bySeg = new Map<number, RtStructContour[]>();
+  let refImageId: string | undefined;
+  for (const lmId of labelmapIds) {
+    const lm = cache.getImage(lmId) as AnyObj | undefined;
+    const vm = lm?.voxelManager;
+    const srcId = lm?.referencedImageId as string | undefined;
+    if (!vm || !srcId) continue;
+    const w = (lm.columns ?? lm.width) as number;
+    const h = (lm.rows ?? lm.height) as number;
+    const len = vm.getScalarDataLength() as number;
+    const labels = new Uint8Array(len);
+    const present = new Set<number>();
+    for (let i = 0; i < len; i++) {
+      const v = vm.getAtIndex(i) as number;
+      if (v > 0) {
+        labels[i] = v;
+        present.add(v);
+      }
+    }
+    if (!present.size) continue;
+    const plane = metaData.get("imagePlaneModule", srcId) as AnyObj | undefined;
+    const sop = sopOf(srcId);
+    if (!plane?.imagePositionPatient || !plane.rowCosines || !plane.columnCosines || !sop) continue;
+    if (!(plane.rowPixelSpacing > 0) || !(plane.columnPixelSpacing > 0)) continue;
+    refImageId ??= srcId;
+    const toWorld = (p: Pt) => imageToWorldOnPlane(plane as PlaneGeometry, p);
+    for (const seg of [...present].sort((a, b) => a - b)) {
+      if (segIndex != null && seg !== segIndex) continue;
+      const list = bySeg.get(seg) ?? [];
+      for (const c of traceMaskContours(labels, w, h, seg)) {
+        for (const ring of [c.outer, ...c.holes]) {
+          list.push({ sopInstanceUid: sop, points: flatten(ring.map(toWorld)), geometricType: "CLOSED_PLANAR" });
+        }
+      }
+      bySeg.set(seg, list);
+    }
+  }
+  const base = meta?.label || segId;
+  const names = meta?.segmentLabels ?? {};
+  // 色は segment 色（マスクを表示している viewport のもの）。取れなければ null。
+  const vpIds = ((csSeg.state as AnyObj).getViewportIdsWithSegmentation?.(segId) as string[] | undefined) ?? [];
+  const segColor = (seg: number): [number, number, number] | null => {
+    try {
+      if (!vpIds[0]) return null;
+      const c = (csSeg.config.color as AnyObj).getSegmentIndexColor(vpIds[0], segId, seg) as number[] | undefined;
+      if (c && c.length >= 3) return [Math.round(c[0]), Math.round(c[1]), Math.round(c[2])];
+    } catch { /* ignore */ }
+    return null;
+  };
+  const rois = [...bySeg.entries()].map(([seg, contours]) => ({
+    name: names[seg] || (bySeg.size > 1 || (meta?.segments?.length ?? 1) > 1 ? `${base} #${seg}` : base),
+    color: segColor(seg),
+    type: "ORGAN",
+    contours,
+  }));
+  return { rois, refImageId };
+}
+
+/** 書き出すマスク。`segIndex` を指定するとその segment だけ（塗りの ROI 1 件）、無ければ全 segment。 */
+export interface RtStructMaskRef {
+  maskId: string;
+  segIndex?: number;
+}
+
+export async function exportRoisAsRtStruct(uids: string[], masks: RtStructMaskRef[] = []): Promise<SegExportResult | null> {
   let studyUid: string | undefined;
   let seriesUid: string | undefined;
   let forUid: string | undefined;
@@ -102,12 +183,12 @@ export async function exportRoisAsRtStruct(uids: string[]): Promise<SegExportRes
     const refId = ann?.metadata?.referencedImageId as string | undefined;
     if (!ann || !refId) continue;
     const tool = String(ann.metadata?.toolName ?? "");
-    // 面積型のみ（線/角度/点は不対応）。
-    const isEllipse = /ellip/i.test(tool);
-    const isCircle = /circle/i.test(tool);
-    const isRect = /rect/i.test(tool);
-    const isFreehand = /freehand|polygon|spline/i.test(tool);
-    if (!(isEllipse || isCircle || isRect || isFreehand)) continue;
+    // 計測（Length/Angle/Probe 等）は書き出さない。ROI は面→CLOSED_PLANAR・線→OPEN_PLANAR・点→POINT。
+    const kind = roiKindOf(tool, ann.data?.contour?.closed as boolean | undefined);
+    if (!kind || kind === "measure") continue;
+    const isEllipse = /^ellipticalroi$/i.test(tool);
+    const isCircle = /^circleroi$/i.test(tool);
+    const isRect = /^rectangleroi/i.test(tool);
 
     const plane = (metaData.get("imagePlaneModule", refId) as AnyObj) ?? {};
     const iop = plane.imageOrientationPatient as number[] | undefined;
@@ -119,13 +200,23 @@ export async function exportRoisAsRtStruct(uids: string[]): Promise<SegExportRes
     const handles = (ann.data?.handles?.points as V3[] | undefined) ?? [];
     const polyline = (ann.data?.contour?.polyline as V3[] | undefined) ?? [];
     let ring: V3[] = [];
-    if (isFreehand && polyline.length >= 3) ring = polyline;
-    else if (isEllipse) ring = ellipsePolygon(handles);
-    else if (isCircle) ring = circlePolygon(handles, rowCos, colCos);
-    else if (isRect) ring = rectPolygon(handles, rowCos, colCos);
-    else if (polyline.length >= 3) ring = polyline;
-    else ring = handles;
-    if (ring.length < 3) continue;
+    let geometricType: RtStructContour["geometricType"] = "CLOSED_PLANAR";
+    if (kind === "point") {
+      if (handles.length < 1) continue;
+      ring = [handles[0]];
+      geometricType = "POINT";
+    } else if (kind === "line") {
+      ring = polyline.length >= 2 ? polyline : handles;
+      if (ring.length < 2) continue;
+      geometricType = "OPEN_PLANAR";
+    } else {
+      if (isEllipse) ring = ellipsePolygon(handles);
+      else if (isCircle) ring = circlePolygon(handles, rowCos, colCos);
+      else if (isRect) ring = rectPolygon(handles, rowCos, colCos);
+      else if (polyline.length >= 3) ring = polyline;
+      else ring = handles;
+      if (ring.length < 3) continue;
+    }
 
     // 参照 study/series/FoR は最初の ROI から採用（同一シリーズ前提）。
     if (!studyUid || !seriesUid) {
@@ -141,9 +232,23 @@ export async function exportRoisAsRtStruct(uids: string[]): Promise<SegExportRes
       number: n,
       name: getRoiMaskMeta(uid)?.label || tool || `ROI ${n}`,
       color: annColorRgb(uid),
-      type: "ORGAN",
-      contours: [{ sopInstanceUid: sop, points: flatten(ring) }],
+      type: kind === "point" ? "MARKER" : "ORGAN",
+      contours: [{ sopInstanceUid: sop, points: flatten(ring), geometricType }],
     });
+  }
+
+  for (const { maskId: id, segIndex } of masks) {
+    const m = maskToRtStructRois(id, segIndex);
+    if (!m.rois.length || !m.refImageId) continue;
+    if (!studyUid || !seriesUid) {
+      const meta = getRoiMaskMeta(id);
+      const gsm = (metaData.get("generalSeriesModule", m.refImageId) as AnyObj) ?? {};
+      const plane = (metaData.get("imagePlaneModule", m.refImageId) as AnyObj) ?? {};
+      studyUid = meta?.scope?.studyUid ?? gsm.studyInstanceUID;
+      seriesUid = meta?.scope?.seriesUid ?? gsm.seriesInstanceUID;
+      forUid = plane.frameOfReferenceUID ?? undefined;
+    }
+    for (const r of m.rois) rois.push({ number: ++n, ...r });
   }
 
   if (!rois.length || !studyUid || !seriesUid || !forUid) return null;

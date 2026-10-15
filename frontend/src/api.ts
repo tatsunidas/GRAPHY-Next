@@ -66,7 +66,7 @@ export interface StudyFilters {
   studyDateTo?: string;
   modality?: string; // カンマ区切りの複数モダリティ（例 "CT,MR"）
   accessionNumber?: string;
-  /** IHE IID 起動: StudyInstanceUID 直接指定（他条件は無視して当該 study を返す）。 */
+  /** StudyInstanceUID 直接指定（他条件は無視して当該 study を返す。カンマ区切りで複数）。IHE IID 起動と取り込み直後の一覧。 */
   studyInstanceUid?: string;
 }
 
@@ -540,6 +540,8 @@ export interface ImportResult {
    */
   studiesWithoutDate: number;
   errors: string[];
+  /** 取り込んだ画像のスタディ（重複なし）。一覧を「いま取り込んだ検査」に絞って出すのに使う。 */
+  studyInstanceUids?: string[];
 }
 
 export const importPaths = (paths: string[]) =>
@@ -899,6 +901,8 @@ export const exportRtDose = (req: RtDoseExportRequest) =>
 export interface RtStructContour {
   sopInstanceUid: string;
   points: number[]; // [x,y,z,x,y,z,...] 患者座標 mm（閉輪郭）
+  /** 省略は CLOSED_PLANAR。 */
+  geometricType?: "CLOSED_PLANAR" | "OPEN_PLANAR" | "POINT";
 }
 export interface RtStructRoi {
   number: number;
@@ -922,6 +926,8 @@ export const exportDicomRtStruct = (req: RtStructExportRequest) =>
 export interface RtStructImportContour {
   referencedSopInstanceUid: string | null;
   points: number[]; // [x,y,z,...] 患者座標 mm
+  /** ContourGeometricType（未記載は backend が CLOSED_PLANAR にして返す）。 */
+  geometricType: string;
 }
 export interface RtStructImportRoi {
   name: string;
@@ -1343,15 +1349,18 @@ export interface TlsConfig {
   enabled: boolean;
   port: number;
   keyStore: string;
-  keyStorePassword: string;
+  /** 🔴 backend は返さない（常に null）。保存時: null は変えない・空文字は消す（web だけ。デスクトップはキーチェーン）。 */
+  keyStorePassword: string | null;
   keyStoreType: string;
   trustStore: string;
-  trustStorePassword: string;
+  trustStorePassword: string | null;
   trustStoreType: string;
   protocols: string[];
   cipherSuites: string[];
   needClientAuth: boolean;
   usable: boolean;
+  keyStorePasswordSet: boolean;
+  trustStorePasswordSet: boolean;
 }
 
 /** グローバル TLS 設定を取得する（保存が無ければ application.yml の既定）。 */

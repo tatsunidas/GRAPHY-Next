@@ -20,6 +20,25 @@ export type SceneObjKind = "mesh" | "roi" | "centerline";
  */
 export type SceneDisplayMode = "float" | "embedded";
 
+/** 取り込み元（2D ビューアの ROI / サーバの SEG・RTSTRUCT）への参照。重複取り込みの判定に使う。 */
+export interface SceneObjectSource {
+  seriesUid?: string;
+  c?: number | "all";
+  t?: number | "all";
+  segmentationId?: string;
+  segmentIndex?: number;
+  sphereId?: string;
+  origin: "2d" | "server";
+}
+
+/** 同じ元かを比べるキー。`maskBridgeCore.announceKey` と同じ規則（2D 由来のみ。server は null）。 */
+export function sceneSourceKey(s: SceneObjectSource | undefined): string | null {
+  if (!s || s.origin !== "2d") return null;
+  if (s.sphereId) return `sphere:${s.sphereId}`;
+  if (s.segmentationId != null && s.segmentIndex != null) return `painted:${s.segmentationId}#${s.segmentIndex}`;
+  return null;
+}
+
 /** シーンオブジェクトのメタデータ（描画データは持たない）。 */
 export interface SceneObject {
   id: string;
@@ -33,6 +52,8 @@ export interface SceneObject {
   selected?: boolean;
   /** ボリュームのクリップ箱と一緒にカットされるか（埋め込み）/されないか（浮き立たせ）。既定 float。 */
   displayMode: SceneDisplayMode;
+  /** 取り込み元（2D の ROI 等）。メッシュ単体などは持たない。 */
+  source?: SceneObjectSource;
   // ── 計測サマリ（患者 LPS mm）──
   volumeMm3?: number;
   volumeMl?: number;
@@ -41,6 +62,8 @@ export interface SceneObject {
   diameters?: [number, number, number];
   /** ROI: 前景ボクセル数。 */
   voxels?: number;
+  /** ROI: 体積の奥行きの出どころ。"thickness" は推定。 */
+  volumeDepthSource?: "ipp" | "sbs" | "thickness" | "unknown";
   numTriangles?: number;
   /** 中心線: 全長 mm。 */
   lengthMm?: number;

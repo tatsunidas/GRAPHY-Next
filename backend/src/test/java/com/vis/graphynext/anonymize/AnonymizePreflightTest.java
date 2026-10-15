@@ -39,7 +39,8 @@ class AnonymizePreflightTest {
         ObjectProvider<com.vis.graphynext.dicom.web.WebDicomDataService> web =
                 Mockito.mock(ObjectProvider.class);
         Mockito.when(web.getIfAvailable()).thenReturn(null); // standalone
-        return new AnonymizeService(repo, masks, web, new PixelCodec(new com.vis.graphynext.dicom.DicomProperties()));
+        return new AnonymizeService(repo, masks, web, new PixelCodec(new com.vis.graphynext.dicom.DicomProperties()),
+                new com.vis.graphynext.dicom.store.StorageLayout(java.nio.file.Path.of("target", "no-storage-root")));
     }
 
     private static DicomInstance instance(String sop, String uri) {
