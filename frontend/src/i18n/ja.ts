@@ -1013,7 +1013,7 @@ export const ja: Record<string, string> = {
   "pluginVideo.consent.colFile": "ファイル",
   "pluginVideo.consent.colSeries": "シリーズの説明",
   "roiMgr.duplicate": "この ROI を複製（表示中のスライスへ）",
-  "roiMgr.toMask": "塗りの ROI にする（ラスタ化して新しい塗り ROI を作る）",
+  "roiMgr.toMask": "ブラシで塗り足せる塗りの ROI を作る（元の形の ROI は残る。3D・SEG・演算には不要で、使うときに自動で塗りに変わる）",
   "roiMgr.toSphere": "円 ROI を 3D 球の塗り ROI にする（中心+半径→ボリューム）",
   "roiMgr.stats": "この ROI（塗り）の体積統計を表示/非表示",
   "roiMgr.statsAll": "計測結果を一覧で見る（すべての ROI）",

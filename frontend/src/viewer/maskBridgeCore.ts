@@ -5,11 +5,12 @@
 /**
  * ウィンドウ間 ROI 同期（`maskBridge.ts`）の純関数部分。Cornerstone に触れないのでそのままテストできる。
  *
- * 2D ビューアの ROI マネージャと同じ粒度（塗りの ROI = segment 1 つ、パラメトリック球 1 つ）で
- * 3D ビューアへ一覧を渡す。名前は 2D の行と同じ規則（`roiRows.paintedRowName`）で決める。
+ * 2D ビューアの ROI マネージャと同じ粒度（塗りの ROI = segment 1 つ、面積型の形の ROI 1 つ、
+ * パラメトリック球 1 つ）で 3D ビューアへ一覧を渡す。形の ROI は、取り込むときに 2D 側で一時的に塗りへ変える。名前は 2D の行と同じ規則（`roiRows.paintedRowName`）で決める。
  */
 import type { DimScope, RoiMaskMeta } from "./roiMaskStore";
 import { paintedRowName } from "./roiRows";
+import { roiKindOf } from "./roiKind";
 
 export interface PaintedAnnounce {
   kind: "painted";
@@ -33,7 +34,17 @@ export interface SphereAnnounce {
   t: DimScope;
 }
 
-export type AnnounceEntry = PaintedAnnounce | SphereAnnounce;
+/** 面積型の形の ROI（annotation）。画素は取り込むときに 2D 側でラスタ化して渡す。 */
+export interface ShapeAnnounce {
+  kind: "shape";
+  annotationUid: string;
+  label: string;
+  color: [number, number, number] | null;
+  c: DimScope;
+  t: DimScope;
+}
+
+export type AnnounceEntry = PaintedAnnounce | ShapeAnnounce | SphereAnnounce;
 
 /** 3D 側のコンテキスト（表示中の study/series と C/T）。c/t 未指定は「問わない」。 */
 export interface AnnounceQuery {
@@ -56,12 +67,23 @@ export interface AnnounceSphereInput {
   color: string;
 }
 
+export interface AnnounceShapeInput {
+  annotationUid: string;
+  toolName: string;
+  /** 輪郭ツールの開閉（`contour.closed`）。開いた輪郭は線なので一覧に入れない。 */
+  closed?: boolean;
+  meta: RoiMaskMeta | undefined;
+  color: [number, number, number] | null;
+}
+
 export interface AnnounceSource {
   segmentations: ReadonlyArray<{ segmentationId: string; label?: string }>;
   metaOf(segmentationId: string): RoiMaskMeta | undefined;
   segmentsOf(segmentationId: string): number[];
   colorOf(segmentationId: string, segmentIndex: number): [number, number, number] | null;
   spheres: ReadonlyArray<AnnounceSphereInput>;
+  /** 形の ROI（annotation）。面積型でないもの（線・点）は渡しても一覧に入らない。 */
+  shapes?: ReadonlyArray<AnnounceShapeInput>;
 }
 
 /** 次元の絞り込み。どちらかが未指定/"all" なら一致、数値同士は等しいときだけ一致。 */
@@ -108,6 +130,20 @@ export function buildAnnounceEntries(q: AnnounceQuery, src: AnnounceSource): Ann
       });
     }
   }
+  for (const a of src.shapes ?? []) {
+    if (roiKindOf(a.toolName, a.closed) !== "area") continue;
+    const sc = a.meta?.scope;
+    if (!sc || sc.studyUid !== q.studyUid || sc.seriesUid !== q.seriesUid) continue;
+    if (!dimMatches(sc.c, q.c) || !dimMatches(sc.t, q.t)) continue;
+    out.push({
+      kind: "shape",
+      annotationUid: a.annotationUid,
+      label: a.meta?.label || a.toolName,
+      color: a.color,
+      c: sc.c ?? "all",
+      t: sc.t ?? "all",
+    });
+  }
   src.spheres.forEach((s, i) => {
     if (s.studyUid !== q.studyUid || s.seriesUid !== q.seriesUid) return;
     if (!dimMatches(s.c, q.c) || !dimMatches(s.t, q.t)) return;
@@ -127,7 +163,9 @@ export function buildAnnounceEntries(q: AnnounceQuery, src: AnnounceSource): Ann
 
 /** 取り込み済み判定・重複排除に使うキー（3D の `SceneObject.source` と同じ規則）。 */
 export function announceKey(e: AnnounceEntry): string {
-  return e.kind === "painted" ? `painted:${e.segmentationId}#${e.segmentIndex}` : `sphere:${e.sphereId}`;
+  if (e.kind === "painted") return `painted:${e.segmentationId}#${e.segmentIndex}`;
+  if (e.kind === "shape") return `shape:${e.annotationUid}`;
+  return `sphere:${e.sphereId}`;
 }
 
 /** key で重複を落とす（先に現れたものを残す）。 */
