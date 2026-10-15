@@ -121,3 +121,34 @@ describe("nextDefaultRoiNumber", () => {
     expect(nextDefaultRoiNumber(["ROI 1", "ROI 3", "Liver", undefined])).toBe(4);
   });
 });
+
+describe("shape ROIs in the announce list", () => {
+  const q = { studyUid: "S", seriesUid: "R", c: 0, t: 0 };
+  const shape = (uid: string, toolName: string, meta: RoiMaskMeta | undefined, closed?: boolean) => ({
+    annotationUid: uid, toolName, closed, meta, color: [1, 2, 3] as [number, number, number],
+  });
+
+  it("lists area shapes of the same series and c/t only; lines, points, open contours and other series are left out", () => {
+    const src: AnnounceSource = {
+      ...source({}, {}),
+      shapes: [
+        shape("a", "RectangleROI", { label: "Tumor", scope: scope(0, 0) }),
+        shape("b", "EllipticalROI", { scope: scope("all", undefined) }),
+        shape("c", "RectangleROI", { scope: scope(1, 0) }),
+        shape("d", "RectangleROI", { scope: { studyUid: "S", seriesUid: "X" } }),
+        shape("e", "Length", { scope: scope(0, 0) }),
+        shape("f", "PlanarFreehandROI", { scope: scope(0, 0) }, false),
+        shape("g", "PlanarFreehandROI", { scope: scope(0, 0) }, true),
+        shape("h", "RectangleROI", undefined),
+      ],
+    };
+    const out = buildAnnounceEntries(q, src);
+    expect(out.map((e) => e.kind === "shape" && [e.annotationUid, e.label, e.c, e.t])).toEqual([
+      ["a", "Tumor", 0, 0],
+      ["b", "EllipticalROI", "all", "all"],
+      ["g", "PlanarFreehandROI", 0, 0],
+    ]);
+    expect(announceKey(out[0])).toBe("shape:a");
+    expect(sceneSourceKey({ origin: "2d", annotationUid: "a" })).toBe("shape:a");
+  });
+});

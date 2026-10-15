@@ -28,6 +28,8 @@ export interface SceneObjectSource {
   segmentationId?: string;
   segmentIndex?: number;
   sphereId?: string;
+  /** 形の ROI（annotation）から取り込んだとき。 */
+  annotationUid?: string;
   origin: "2d" | "server";
 }
 
@@ -35,6 +37,7 @@ export interface SceneObjectSource {
 export function sceneSourceKey(s: SceneObjectSource | undefined): string | null {
   if (!s || s.origin !== "2d") return null;
   if (s.sphereId) return `sphere:${s.sphereId}`;
+  if (s.annotationUid) return `shape:${s.annotationUid}`;
   if (s.segmentationId != null && s.segmentIndex != null) return `painted:${s.segmentationId}#${s.segmentIndex}`;
   return null;
 }

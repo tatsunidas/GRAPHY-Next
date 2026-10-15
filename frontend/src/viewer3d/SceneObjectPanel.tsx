@@ -19,6 +19,7 @@ import { framesToLabelVolume } from "../viewer/maskFrames";
 import { rtStructRoiToLabelVolume } from "../viewer/rtstructToLabelVolume";
 import { rasterizeSphereToLabelVolume } from "../viewer/sphereRaster";
 import { collectLocalRois, requestRemoteRois, requestRemoteMaskFrames } from "../viewer/maskBridge";
+import { withTempMask } from "../viewer/roiBooleanOps";
 import { announceKey, dedupeAnnounce, type AnnounceEntry } from "../viewer/maskBridgeCore";
 import { filterRtRois, filterSegSegments } from "../viewer/serverRoiFilter";
 import { fetchInstances, fetchSeries, readDicomSeg, readDicomRtStruct } from "../api";
@@ -207,6 +208,15 @@ export function SceneObjectPanel({
     let vol2d: { volumeMm3?: number; depthSource?: SceneObject["volumeDepthSource"] } | null = null;
     if (e.kind === "sphere") {
       lv = rasterizeSphereToLabelVolume(geom, e.center, e.radiusMm);
+    } else if (e.kind === "shape") {
+      // 形の ROI は 2D 側で一時的に塗りへ変えて受け取る（2D のパネルに塗りの行は残らない）。
+      if (e.windowId == null) {
+        lv = await withTempMask(e.annotationUid, (tmp) => buildLabelVolumeFromSegmentation(tmp));
+      } else {
+        const frames = await requestRemoteMaskFrames(e.windowId, "", undefined, 8000, e.annotationUid);
+        lv = frames ? framesToLabelVolume(frames, geom, 1, sopToK) : null;
+        if (frames?.depthSource) vol2d = { volumeMm3: frames.volumeMm3, depthSource: frames.depthSource };
+      }
     } else if (e.windowId == null) {
       lv = buildLabelVolumeFromSegmentation(e.segmentationId, e.segmentIndex);
     } else {
@@ -215,10 +225,13 @@ export function SceneObjectPanel({
       if (frames?.depthSource) vol2d = { volumeMm3: frames.volumeMm3, depthSource: frames.depthSource };
     }
     if (!lv) return false;
+    const base = { origin: "2d" as const, seriesUid, c: e.c, t: e.t };
     const source: SceneObjectSource =
       e.kind === "sphere"
-        ? { origin: "2d", seriesUid, c: e.c, t: e.t, sphereId: e.sphereId }
-        : { origin: "2d", seriesUid, c: e.c, t: e.t, segmentationId: e.segmentationId, segmentIndex: e.segmentIndex };
+        ? { ...base, sphereId: e.sphereId }
+        : e.kind === "shape"
+          ? { ...base, annotationUid: e.annotationUid }
+          : { ...base, segmentationId: e.segmentationId, segmentIndex: e.segmentIndex };
     return !!addRoiObject(lv, {
       name: e.label,
       color: rgb01(e.color),
@@ -424,8 +437,8 @@ export function SceneObjectPanel({
                     const col = e.color ? `rgb(${e.color[0]},${e.color[1]},${e.color[2]})` : "#8a96a3";
                     return (
                       <div key={announceKey(e)} style={roiItem}>
-                        <span style={{ color: col }} title={e.kind === "sphere" ? "sphere" : "painted"}>
-                          {e.kind === "sphere" ? "◍" : "▨"}
+                        <span style={{ color: col }} title={e.kind}>
+                          {e.kind === "sphere" ? "◍" : e.kind === "shape" ? "▭" : "▨"}
                         </span>
                         <span style={roiItemName} title={e.label}>
                           {e.label}

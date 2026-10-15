@@ -212,6 +212,7 @@ ROI マネージャには「ROI」だけを見せ、中身の持ち方（注釈�
 - **一覧（announce）は ROI 単位**。要求は `{studyUid, seriesUid, c, t}`、応答は次のどちらかの配列。
   - `{kind:"painted", segmentationId, segmentIndex, label, color, c, t}` … 塗りの ROI（segment 1 つ）。名前は 2D の行と同じ規則（`paintedRowName`）。名前が無ければ中立の `ROI n`。
   - `{kind:"sphere", sphereId, label, color, center, radiusMm, c, t}` … パラメトリック球。
+  - `{kind:"shape", annotationUid, label, color, c, t}` … 面積型の形の ROI（2026-10-15 追加。下の「形の ROI は使うときに塗りに変える」）。
   - 絞り込みは study/series と C/T の両方。scope の c/t が `"all"` か未設定なら、どの C/T にも一致する。
 - **フレーム取得（frames-request）は `segmentIndex` を受け取り**、その segment だけを返す（`extractMaskFrames(id, segIndex)`）。球はフレームを使わず、3D 側で中心＋半径を表示ボリュームの格子へラスタ化して ROI（kind "roi"）にする（`viewer/sphereRaster.ts`。メッシュではない）。
 - **取り込みの入口は 1 つ**「2D ビューアの ROI から 3D ROI を追加…」。ROI を 1 件ずつ、または「すべて追加」。⟳ で再取得。3D パネルと同じウィンドウ（モバイル）にある ROI は同じ一覧に混ぜ、`segmentationId + segmentIndex` で重複を落とす。
@@ -220,3 +221,12 @@ ROI マネージャには「ROI」だけを見せ、中身の持ち方（注釈�
 - **体積は 2 つ並べる**。ボクセル体積＝前景ボクセル数 × ボクセル体積（2D の Σ³ と同じ定義。格子が一致すれば同じ値）と、表示メッシュ（平滑化後）の体積。後者はメッシュ由来なので 2D の数値とは一致しない。
 - **再起動**: 3D ウィンドウが開いたまま 2D が `graphy-viewer3d-ctx` を別の study/series/C/T で書き直したら、`storage` イベントで検知して画面ごと再読込する（`viewer3d/viewer3dCtx.ts`。`ts` だけの違いは無視）。
 - 2D 側: 新しい塗りの ROI の既定名は `ROI n`（`label` と `segmentLabels["1"]` を作成時に設定）。塗りの行は 🗑 を 1 行目に移し、操作ボタンを 3 行目に分けた。
+
+### 形の ROI は使うときに塗りに変える（2026-10-15 決定）
+- 形の ROI（面積型）を塗りが要る機能に使うとき、ユーザーに ▦（塗りの ROI にする）を押させない。
+  - その場で `withTempMask`（`viewer/roiBooleanOps.ts`）が一時の塗りを作り、使い終わったら成功・失敗にかかわらず消す（パネルに中間物を残さない）。
+  - 使う所: ブール演算、3D への取り込み、SEG ⬇（形の ROI の行）。
+- 3D への取り込み: 一覧に `kind:"shape"` を載せる。フレーム要求に `annotationUid` があれば、2D 側で一時の塗りにしてから `extractMaskFrames` で返す。3D の `SceneObject.source.annotationUid`、取り込み済みのキーは `shape:<uid>`。
+- SEG ⬇: 2 回目以降に前の SEG を置き換えるための記録（`lastSegExport`）は、形の ROI のメタに残す（一時の塗りは毎回作り直すため）。
+- ▦ は「ブラシで塗り足したいとき」だけに使う。元の形の ROI は残る。
+- 対象外: SPLIT・⬚ は 1 枚に載る形の ROI では意味が無いので、塗りの ROI だけ。Z:all にした形の ROI も、塗るのは元のスライス 1 枚（`roiToMask` と同じ）。

@@ -67,3 +67,21 @@ export function combineLabelSlices(op: BoolOp, inputs: ReadonlyArray<CombineInpu
   }
   return out;
 }
+
+/**
+ * 一時のマスクを作って `fn` に渡し、成功でも失敗でも必ず片付ける。作れなければ `fn` を呼ばず null。
+ * 形の ROI を、使うときだけ塗りに変えるため（演算・3D への取り込み・SEG の書き出し）。
+ */
+export async function withTemp<T>(
+  create: () => Promise<string | null>,
+  dispose: (id: string) => void,
+  fn: (id: string) => Promise<T> | T,
+): Promise<T | null> {
+  const id = await create();
+  if (!id) return null;
+  try {
+    return await fn(id);
+  } finally {
+    dispose(id);
+  }
+}

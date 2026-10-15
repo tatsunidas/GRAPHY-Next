@@ -1011,7 +1011,7 @@ export const en: Record<string, string> = {
   "pluginVideo.consent.colFile": "File",
   "pluginVideo.consent.colSeries": "Series description",
   "roiMgr.duplicate": "Duplicate this ROI (onto the displayed slice)",
-  "roiMgr.toMask": "Make a painted ROI (rasterize this shape into a new painted ROI)",
+  "roiMgr.toMask": "Make a painted ROI you can edit with the brush (the shape ROI stays. Not needed for 3D, SEG or operations: they rasterize the shape automatically)",
   "roiMgr.toSphere": "Circle ROI → 3D sphere painted ROI (center+radius → volume)",
   "roiMgr.stats": "Show/hide volume statistics of this painted ROI",
   "roiMgr.statsAll": "Show measurements for all ROIs",
