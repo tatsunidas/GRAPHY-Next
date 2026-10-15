@@ -18,6 +18,7 @@ import { annotation as csAnnotation, segmentation as csSeg, Enums as csToolsEnum
 import { getRoiMaskMeta, setRoiMaskMeta } from "./roiMaskStore";
 import { worldToImageCoords } from "./imageCoords";
 import { alignToStack, boolOn, scopeZFromForeground, type BoolOp } from "./maskScope";
+import { fillPolygonsEvenOdd } from "./maskContour";
 
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
 const MAX_SEGMENTS = 64; // SPLIT の成分数上限（色枯渇/重さ回避）。
@@ -156,16 +157,6 @@ export function isAreaRoi(toolName: string | undefined): boolean {
   return /ellip|circle|rect|freehand|polygon|spline/i.test(toolName ?? "");
 }
 
-/** 多角形内判定（レイキャスト, 画素中心 [px,py]）。 */
-function pointInPoly(px: number, py: number, poly: Array<[number, number]>): boolean {
-  let inside = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const xi = poly[i][0], yi = poly[i][1], xj = poly[j][0], yj = poly[j][1];
-    if ((yi > py) !== (yj > py) && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) inside = !inside;
-  }
-  return inside;
-}
-
 /**
  * ベクタ ROI（annotation）を 1 スライス分の前景 Uint8（cols*rows）にラスタ化する。
  * worldToImageCoords は [x(列), y(行)] を返す（imageToWorldCoords の逆対応で確認済）。
@@ -229,7 +220,9 @@ function rasterizeRoi(
   } else if (/rect/i.test(tool)) {
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) set(x, y);
   } else {
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (pointInPoly(x + 0.5, y + 0.5, ipts)) set(x, y);
+    // 画素中心の偶奇判定。マスク→輪郭（maskContour）の塗り直しと同じ関数を使う。
+    const filled = fillPolygonsEvenOdd([ipts], cols, rows);
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (filled[y * cols + x]) set(x, y);
   }
   return fg;
 }
