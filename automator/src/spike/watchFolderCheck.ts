@@ -12,6 +12,7 @@
  */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import zlib from "node:zlib";
 import path from "node:path";
 
 import type { Page } from "@playwright/test";
@@ -41,6 +42,26 @@ async function until(fn: () => Promise<boolean>, timeoutMs: number, stepMs = 500
 
 async function num(page: Page, id: string): Promise<number> {
   return Number((await page.getByTestId(id).innerText()).trim());
+}
+
+/** 合成 NIfTI-1（int16、6×5×4、間隔 列 2・行 3・スライス 5 mm）。 */
+function makeNifti(file: string, seed: number): void {
+  const nx = 6, ny = 5, nz = 4;
+  const b = Buffer.alloc(352 + nx * ny * nz * 2);
+  b.writeInt32LE(348, 0);
+  [3, nx, ny, nz, 1, 1].forEach((v, i) => b.writeInt16LE(v, 40 + i * 2));
+  b.writeInt16LE(4, 70); // int16
+  b.writeInt16LE(16, 72);
+  [1, 2, 3, 5, 0, 0, 0, 0].forEach((v, i) => b.writeFloatLE(v, 76 + i * 4));
+  b.writeFloatLE(352, 108);
+  b.writeFloatLE(1, 112);
+  b.writeUInt8(2, 123);
+  b.writeInt16LE(1, 254);
+  const srow = [[2, 0, 0, 10], [0, 3, 0, 20], [0, 0, 5, 30]];
+  srow.forEach((r, ri) => r.forEach((v, i) => b.writeFloatLE(v, 280 + ri * 16 + i * 4)));
+  for (let i = 0; i < nx * ny * nz; i++) b.writeInt16LE(seed + i, 352 + i * 2);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, file.endsWith(".gz") ? zlib.gzipSync(b) : b);
 }
 
 async function openPanel(page: Page): Promise<void> {
@@ -186,6 +207,27 @@ async function main(): Promise<void> {
     await page.getByTestId("import-watch-interval").fill(String(INTERVAL_SEC));
     await page.getByTestId("import-watch-save").click();
     await sleep(1500);
+
+    console.log("\n[3d] NIfTI（患者情報はサイドカー）と、患者情報が無い NIfTI の保留");
+    const patientsApi = async (): Promise<{ patientId: string; patientName: string | null }[]> => (await (await fetch(`${base}/api/studies`)).json()) as { patientId: string; patientName: string | null }[];
+    const importedNow = await num(page, "import-watch-imported");
+    makeNifti(path.join(WATCH_DIR, "subjA", "t1.nii.gz"), 100);
+    fs.writeFileSync(path.join(WATCH_DIR, "subjA", "t1.json"), JSON.stringify({ PatientID: "SP-A", PatientName: "Spike^Alpha", PatientBirthDate: "19800102", PatientSex: "F" }));
+    makeNifti(path.join(WATCH_DIR, "subjB", "t2.nii.gz"), 200); // 患者情報なし
+    fs.copyFileSync(first, path.join(WATCH_DIR, "loose2.dcm")); // DICOM は保留に巻き込まれない
+    check(await until(async () => (await num(page, "import-watch-imported")) === importedNow + 2, 8 * INTERVAL_SEC * 1000), "NIfTI（サイドカーつき）と DICOM が取り込まれる", await num(page, "import-watch-imported"));
+    expected += 2;
+    check(await until(async () => (await num(page, "import-watch-held")) === 1, 4 * INTERVAL_SEC * 1000), "患者情報の無い NIfTI は保留 1");
+    check((await page.getByTestId("import-watch-held-items").innerText()).includes("t2.nii.gz"), "保留の警告にパスが出る");
+    check((await page.getByTestId("import-watch-error").count()) === 0, "保留は異常ではない（走査は止まらない）");
+    const ps = await patientsApi();
+    check(ps.some((p) => p.patientId === "SP-A" && p.patientName === "Spike^Alpha"), "NIfTI の患者情報がサイドカーの値で入る");
+    check(!ps.some((p) => p.patientId === "NIFTI"), "保留の NIfTI は取り込まれていない（既定の患者が増えていない）");
+    await page.screenshot({ path: path.join(OUT_DIR, "03e-held.png") });
+    fs.writeFileSync(path.join(WATCH_DIR, "subjB", "t2.json"), JSON.stringify({ PatientID: "SP-B" }));
+    check(await until(async () => (await num(page, "import-watch-held")) === 0 && (await patientsApi()).some((p) => p.patientId === "SP-B"), 8 * INTERVAL_SEC * 1000), "あとからサイドカーが揃うと保留が解けて取り込まれる");
+    expected += 1;
+    await page.screenshot({ path: path.join(OUT_DIR, "03f-held-resolved.png") });
 
     console.log("\n[4] 非 DICOM はスキップ、壊れた DICOM は失敗");
     fs.writeFileSync(path.join(WATCH_DIR, "readme.txt"), "not dicom");

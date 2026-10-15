@@ -15,9 +15,14 @@ export interface ImportWatchStatus {
   imported: number;
   skipped: number;
   failed: number;
+  /** 取り込み済みの NIfTI が後から変わったのを検知した数（再取り込みはしない）。 */
+  changed: number;
+  /** 取り込まずに保留しているファイル数（条件が変われば再判定される）。 */
+  held: number;
   /** 設定または走査の異常のコード。正常なら null。 */
   error: string | null;
   failures: { path: string; error: string | null }[];
+  heldItems: { path: string; error: string | null }[];
 }
 
 export interface ImportWatchForm {
@@ -40,6 +45,11 @@ export function errorKey(code: string): string {
     default:
       return "importWatch.err.unknown";
   }
+}
+
+/** 保留の理由コード → i18n キー。未知のコードは汎用の文言。 */
+export function heldKey(code: string | null): string {
+  return code === "no-patient-info" ? "importWatch.held.no-patient-info" : "importWatch.held.unknown";
 }
 
 /** 間隔は 1 以上の整数の秒。それ以外は null。 */
@@ -82,6 +92,7 @@ export interface WatchBarView {
   imported: number;
   waiting: number;
   failed: number;
+  held: number;
   /** 一覧を最後に読み込んだ（基準にした）時点より増えた取込の件数。 */
   newCount: number;
 }
@@ -98,7 +109,7 @@ export function nextBaseline(status: ImportWatchStatus | null, baseline: number 
 
 export function barView(status: ImportWatchStatus | null, baseline: number | null): WatchBarView {
   if (!status || !status.enabled) {
-    return { visible: false, error: null, imported: 0, waiting: 0, failed: 0, newCount: 0 };
+    return { visible: false, error: null, imported: 0, waiting: 0, failed: 0, held: 0, newCount: 0 };
   }
   return {
     visible: true,
@@ -106,6 +117,7 @@ export function barView(status: ImportWatchStatus | null, baseline: number | nul
     imported: status.imported,
     waiting: status.waiting,
     failed: status.failed,
+    held: status.held,
     newCount: baseline === null ? 0 : Math.max(0, status.imported - baseline),
   };
 }

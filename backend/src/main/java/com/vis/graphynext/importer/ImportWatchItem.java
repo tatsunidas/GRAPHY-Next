@@ -20,6 +20,10 @@ public class ImportWatchItem {
     public static final String IMPORTED = "IMPORTED";
     public static final String SKIPPED = "SKIPPED";
     public static final String FAILED = "FAILED";
+    /** 取り込まずに保留（例: 患者情報の無い NIfTI）。完了扱いにせず、条件が変われば再判定する。理由は {@code error}。 */
+    public static final String HELD = "HELD";
+    /** 取り込み済みの NIfTI の中身が後から変わった（再取り込みはしない）。 */
+    public static final String CHANGED = "CHANGED";
 
     @Id
     @Column(length = 1024)

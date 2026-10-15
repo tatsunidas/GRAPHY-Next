@@ -10,6 +10,7 @@ import com.vis.graphynext.dicom.store.StorageLayout;
 import com.vis.graphynext.importer.ImportService;
 import com.vis.graphynext.importer.ImportWatchRepository;
 import com.vis.graphynext.importer.ImportWatchService;
+import com.vis.graphynext.importer.WatchNiftiFixture;
 import com.vis.graphynext.settings.SettingsService;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.UID;
@@ -76,6 +77,8 @@ class ImportWatchDriveTest {
     StorageLayout layout;
     @Autowired
     GdriveSyncRepository syncRepo;
+    @Autowired
+    com.vis.graphynext.dicom.store.DicomInstanceRepository instances;
 
     FakeDrive drive;
     GdriveSyncService sync;
@@ -173,5 +176,27 @@ class ImportWatchDriveTest {
         sync.cycle();
         assertEquals(1, storage.findMatches(null, "1.2.wd.d", null, null).size(), "索引は 1 件");
         assertEquals(1, drive.live(driveName("1.2.wd.d", "1.2.wd.d.1")).size(), "Drive も 1 件のまま");
+    }
+
+    @Test
+    void NIfTI由来のDICOMもDriveへ載り_保留中のNIfTIは何も載らない() throws Exception {
+        Path ok = src.resolve("subj");
+        WatchNiftiFixture.write(ok.resolve("t1.nii.gz"), 3);
+        Files.writeString(ok.resolve("t1.json"), "{\"PatientID\":\"WD-NIFTI\"}");
+        WatchNiftiFixture.write(src.resolve("noinfo").resolve("n.nii.gz"), 4); // 患者情報なし → 保留
+        watchImports();
+        assertEquals(WatchNiftiFixture.NZ, instances.findByPatientId("WD-NIFTI").size());
+        assertEquals(1, watch.status().held());
+
+        sync.cycle();
+
+        List<com.vis.graphynext.dicom.store.DicomInstance> got = instances.findByPatientId("WD-NIFTI");
+        for (var inst : got) {
+            String name = inst.getStudyInstanceUid() + "~" + inst.getSeriesInstanceUid() + "~" + inst.getSopInstanceUid() + ".dcm";
+            List<FakeDrive.File> f = drive.live(name);
+            assertEquals(1, f.size(), "NIfTI 由来の DICOM が Drive に 1 件");
+            assertArrayEquals(Files.readAllBytes(layout.resolveForRead(inst)), f.get(0).bytes);
+        }
+        assertEquals(instances.count(), drive.liveCount(), "Drive の件数は索引と同じ（保留中の NIfTI は索引にも Drive にも無い）");
     }
 }

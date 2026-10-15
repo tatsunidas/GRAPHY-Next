@@ -13,4 +13,6 @@ public interface ImportWatchRepository extends JpaRepository<ImportWatchItem, St
     long countByStatus(String status);
 
     List<ImportWatchItem> findTop20ByStatusOrderByAtDesc(String status);
+
+    List<ImportWatchItem> findByStatus(String status);
 }

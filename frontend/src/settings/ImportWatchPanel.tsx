@@ -14,6 +14,7 @@ import { fetchImportWatchStatus, scanImportWatchNow } from "./importWatchApi";
 import {
   canSave,
   errorKey,
+  heldKey,
   formFromStatus,
   toSettings,
   type ImportWatchForm,
@@ -194,7 +195,22 @@ export function ImportWatchPanel() {
         <span>
           {t("importWatch.failed")}: <b data-testid="import-watch-failed">{status.failed}</b>
         </span>
+        <span>
+          {t("importWatch.changed")}: <b data-testid="import-watch-changed">{status.changed}</b>
+        </span>
+        <span>
+          {t("importWatch.held")}: <b data-testid="import-watch-held">{status.held}</b>
+        </span>
       </div>
+      {status.heldItems.length > 0 && (
+        <ul style={heldList} data-testid="import-watch-held-items">
+          {status.heldItems.map((f) => (
+            <li key={f.path}>
+              <code>{f.path}</code>: {t(heldKey(f.error))}
+            </li>
+          ))}
+        </ul>
+      )}
       {status.failures.length > 0 && (
         <ul style={failList} data-testid="import-watch-failures">
           {status.failures.map((f) => (
@@ -225,6 +241,7 @@ const errBox: CSSProperties = {
   fontSize: 12.5,
   margin: "0 0 8px",
 };
+const heldList: CSSProperties = { fontSize: 12, color: "#8a5a00", margin: "8px 0", paddingLeft: 18, wordBreak: "break-all" };
 const failList: CSSProperties = { fontSize: 12, color: "#8a1f11", margin: "8px 0", paddingLeft: 18, wordBreak: "break-all" };
 const ghostBtn: CSSProperties = { background: "transparent", color: "#0b5cad", border: "1px solid #b8d0ea", borderRadius: 6, padding: "3px 10px", cursor: "pointer", fontSize: 12 };
 const primaryBtn: CSSProperties = { background: "#0b5cad", color: "#fff", border: "none", borderRadius: 6, padding: "5px 16px", cursor: "pointer", fontSize: 13 };
