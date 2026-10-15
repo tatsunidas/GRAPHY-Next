@@ -19,7 +19,7 @@ import {
   Enums as csToolsEnums,
 } from "@cornerstonejs/tools";
 import { ENGINE_ID } from "../viewer/Viewer2D";
-import { getRoiMaskMeta, setRoiMaskMeta, deleteRoiMaskMeta, subscribeRoiMaskStore, getSegEditTarget, getMaskSegments } from "../viewer/roiMaskStore";
+import { formatScope, getRoiMaskMeta, setRoiMaskMeta, deleteRoiMaskMeta, subscribeRoiMaskStore, getSegEditTarget, getMaskSegments } from "../viewer/roiMaskStore";
 import { createNewMask, addSegmentToActiveMask, activateMask, getLastSegViewport } from "../viewer/segmentation";
 import { fetchSettings } from "../settings/settingsApi";
 import { exportMaskAsSeg } from "../viewer/segExport";
@@ -76,14 +76,9 @@ function getMaskVisible(id: string): boolean {
   }
 }
 
-/** scope メタ → 表示文字列。 */
+/** scope メタ → 表示文字列（1 始まり）。 */
 function scopeText(itemId: string): string {
-  const s = getRoiMaskMeta(itemId)?.scope;
-  if (!s) return "";
-  const z = s.z === "all" ? "Z:all" : `z${s.z}`;
-  const c = s.c === "all" ? "C:all" : `c${s.c}`;
-  const tt = s.t === "all" ? "T:all" : `t${s.t}`;
-  return `${z} ${c} ${tt}`;
+  return formatScope(getRoiMaskMeta(itemId)?.scope);
 }
 
 export function RoiManagerPanel({
@@ -480,9 +475,15 @@ export function RoiManagerPanel({
     if (busy) return;
     setBusy(true);
     try {
-      const { roiCount, maskCount } = await importRtStructForCurrentView();
-      if (roiCount === 0) window.alert(t("roiMgr.importRtEmpty"));
-      else emitToast(t("roiMgr.importRtDone", { n: roiCount, m: maskCount }));
+      const { structureCount, skippedNotClosed, skippedNoSlice } = await importRtStructForCurrentView();
+      if (structureCount === 0) window.alert(t("roiMgr.importRtEmpty"));
+      else {
+        const skipped = skippedNotClosed + skippedNoSlice;
+        emitToast(
+          t("roiMgr.importRtDone", { n: structureCount }) +
+            (skipped > 0 ? t("roiMgr.importRtSkipped", { open: skippedNotClosed, nosop: skippedNoSlice }) : ""),
+        );
+      }
     } catch {
       window.alert(t("roiMgr.opFailed"));
     } finally {

@@ -20,6 +20,15 @@ export interface RoiScope {
   t?: DimScope;
 }
 
+/** scope → 表示文字列。保存は 0 始まりだが、ビューアのスライス番号に合わせて表示は 1 始まり。 */
+export function formatScope(s: RoiScope | undefined): string {
+  if (!s) return "";
+  const z = s.z === "all" ? "Z:all" : `z${(s.z ?? 0) + 1}`;
+  const c = s.c === "all" ? "C:all" : `c${(s.c ?? 0) + 1}`;
+  const tt = s.t === "all" ? "T:all" : `t${(s.t ?? 0) + 1}`;
+  return `${z} ${c} ${tt}`;
+}
+
 export interface RoiMaskMeta {
   label?: string;
   description?: string;

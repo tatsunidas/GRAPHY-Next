@@ -146,5 +146,3 @@ native synchronizer をグローバル ID で 2 つ用意し、Sync ON タイル
 1. **座標 On/Off の対応**: On=座標同期 / Off=単純同期 で良いか（本設計の前提）。
 2. **表示状態同期の粒度**: W/L・Zoom・Pan・Flip・Rotation・**Invert・LUT** を Sync ON タイルで**一括連動**（個別 On/Off は設けない）で良いか。
 3. **マージン既定値**: 5mm で良いか（スライス厚に応じ調整可）。
-</content>
-</invoke>

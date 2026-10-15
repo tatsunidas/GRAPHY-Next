@@ -171,4 +171,3 @@ Cornerstone3D のセグメンテーション系ツール（stack/volume labelmap
 - QRScreen は別作業者が編集中。エラーを見ても触らない。
 - 座標規約: `worldToImageCoords(imageId,[x,y,z])` は **[x=列, y=行]** を返す（`imageToWorldCoords` の逆算で確認済）。labelmap index = y*cols + x。
 - ビルド: フロントは必ず `frontend/` で `npm run build`（ルートだと Maven が走る）。backend は `backend/` で `mvn -q -o compile -Dfrontend.skip=true`、テストは `-Dtest=ImageJRoiServiceTest`。
-</content>
