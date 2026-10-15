@@ -177,3 +177,18 @@ describe("注釈の平行移動", () => {
     expect(a.data.handles.textBox.worldPosition).toEqual([5, 5, 5]);
   });
 });
+
+describe("isInsideClosedRoi: circle", () => {
+  // CircleROI の handles.points は [中心, 縁の 1 点]。
+  const circle = { metadata: { toolName: "CircleROI" }, data: { handles: { points: [[10, 10, 0], [10, 4, 0]] } } };
+  it("中心と半径の内側は内、外側は外", () => {
+    expect(isInsideClosedRoi(circle, id, [10, 10])).toBe(true);
+    expect(isInsideClosedRoi(circle, id, [15.9, 10])).toBe(true);
+    expect(isInsideClosedRoi(circle, id, [16.1, 10])).toBe(false);
+    expect(isInsideClosedRoi(circle, id, [14.5, 14.5])).toBe(false);
+  });
+  it("半径 0 は内側を持たない", () => {
+    const dot = { metadata: { toolName: "CircleROI" }, data: { handles: { points: [[3, 3, 0], [3, 3, 0]] } } };
+    expect(isInsideClosedRoi(dot, id, [3, 3])).toBe(false);
+  });
+});

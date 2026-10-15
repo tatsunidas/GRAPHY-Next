@@ -36,6 +36,7 @@ import {
   CobbAngleTool,
   MagnifyTool,
   EllipticalROITool,
+  CircleROITool,
   RectangleROITool,
   ProbeTool,
   PlanarFreehandROITool,
@@ -173,6 +174,7 @@ export function ensureCornerstoneInitialized(): Promise<void> {
       addTool(CobbAngleTool);
       addTool(MagnifyTool);
       addTool(EllipticalROITool);
+      addTool(CircleROITool);
       addTool(RectangleROITool);
       addTool(ProbeTool);
       // ImageJ 由来の polygon/freehand ROI 描画用（インポート再構築の受け皿）。

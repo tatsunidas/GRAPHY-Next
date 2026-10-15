@@ -345,9 +345,10 @@ export function Viewer2DMenuBar({
       id: "roi",
       label: t("viewer2d.menu.roi"),
       items: [
-        // ROI は面（楕円・矩形・ポリゴン・フリーハンド）・線（ポリゴンライン・フリーライン）・点。
+        // ROI は面（楕円・円・矩形・ポリゴン・フリーハンド）・線（ポリゴンライン・フリーライン）・点。
         // 計測（長さ・角度など）は「計測」メニュー。計測はマスクにも RTSTRUCT にもならない。
         { label: t("viewer2d.roi.ellipse"), onClick: () => actions.setTool(TOOL_IDS.ellipse), checked: activeTool === TOOL_IDS.ellipse },
+        { label: t("viewer2d.roi.circle"), onClick: () => actions.setTool(TOOL_IDS.circle), checked: activeTool === TOOL_IDS.circle },
         { label: t("viewer2d.roi.rect"), onClick: () => actions.setTool(TOOL_IDS.rect), checked: activeTool === TOOL_IDS.rect },
         // 輪郭系（Swing 版の POLYGON / FREEHAND / POLYLINE / FREELINE 相当）。
         // **閉じる（面）と閉じない（線）を別項目にする**（後から閉じ忘れに気付けないため）。

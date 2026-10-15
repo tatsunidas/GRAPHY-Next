@@ -789,6 +789,7 @@ export const ja: Record<string, string> = {
   "viewer2d.roi.cobb": "Cobb 角",
   "viewer2d.tool.magnify": "拡大レンズ（4×）",
   "viewer2d.roi.ellipse": "楕円 ROI",
+  "viewer2d.roi.circle": "円 ROI",
   "viewer2d.roi.rect": "矩形 ROI",
   "viewer2d.roi.polygon": "ポリゴン ROI（閉）",
   "viewer2d.roi.freehand": "フリーハンド ROI（閉）",
