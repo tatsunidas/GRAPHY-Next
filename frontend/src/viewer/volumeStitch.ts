@@ -180,7 +180,7 @@ export function unionGrid(
   inputs: readonly StitchInput[],
   spacingOverride?: readonly [number, number, number],
 ): StitchGrid {
-  if (inputs.length === 0) throw new Error("gridResample: 入力が無い");
+  if (inputs.length === 0) throw new Error("volumeStitch: 入力が無い");
   const iop = inputs[0].iop;
   const rc = unit(iop[0], iop[1], iop[2]);
   const rr = unit(iop[3], iop[4], iop[5]);
@@ -201,7 +201,7 @@ export function unionGrid(
         Math.min(...inputs.map((x) => x.volume.spacing[2])),
       ];
   if (spacing.some((s) => !(s > 0) || !Number.isFinite(s))) {
-    throw new Error("gridResample: 間隔が正の有限値でない");
+    throw new Error("volumeStitch: 間隔が正の有限値でない");
   }
 
   // 法線方向で最も手前（w が最小）の入力を基準にする。
@@ -269,7 +269,7 @@ export function stitchToGrid(
   grid: StitchGrid,
   overlap: "mean",
 ): Float32Array[] {
-  if (overlap !== "mean") throw new Error(`gridResample: 未対応の重なりの扱い ${overlap}`);
+  if (overlap !== "mean") throw new Error(`volumeStitch: 未対応の重なりの扱い ${overlap}`);
   const [nx, ny, nz] = grid.dims;
   const m = grid.indexToWorld;
   const slices: Float32Array[] = [];

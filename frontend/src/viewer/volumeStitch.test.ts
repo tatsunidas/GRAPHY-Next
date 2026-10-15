@@ -11,7 +11,7 @@ import {
   type StitchGrid,
   type StitchInput,
   type StitchPetInfo,
-} from "./gridResample";
+} from "./volumeStitch";
 
 // 真値: 世界座標の 1 次関数を 1 つの連続した範囲で定義し、そこから入力を切り出す
 // （格子の作り方とは独立。trilinear は 1 次関数を厳密に再現するので ε は丸めだけ）。
