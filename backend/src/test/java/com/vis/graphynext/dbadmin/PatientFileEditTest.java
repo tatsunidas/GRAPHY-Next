@@ -54,7 +54,7 @@ class PatientFileEditTest {
 
     private List<String> leftovers() throws IOException {
         try (Stream<Path> s = Files.walk(root)) {
-            return s.filter(Files::isRegularFile).map(p -> root.relativize(p).toString())
+            return s.filter(Files::isRegularFile).map(p -> root.relativize(p).toString()).map(n -> n.replace(java.io.File.separatorChar, '/'))
                     .filter(n -> n.contains(".edit") || n.contains(".orig") || n.endsWith(".journal")).sorted().toList();
         }
     }
