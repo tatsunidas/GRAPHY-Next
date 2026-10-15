@@ -127,4 +127,13 @@ DICOM の定義と、使い分けの理由:
 | バックエンドの Radiomics / Texture | 間隔の決め方が別 |
 | NIfTI の取り込み（`NiftiToDicom`） | SliceThickness = 間隔 |
 | 拡張 CT/MR のマルチフレーム | フレームを展開していない |
-| 3D のボリュームの向き（direction 行列） | 行と列の取り違えの疑い。別途確認 |
+
+## 3D のボリュームの向き（direction 行列）の並び（2026-10-15 修正）
+- vtk の `get/setDirection` と Cornerstone の `volume.direction` は、先頭 3 つが i 軸（行の向き）、次が j 軸、最後が k 軸（法線）。
+- `VolumeGeom.direction`（`viewer/labelVolume.ts`）は行優先で、軸 b は列 `[d[b], d[3+b], d[6+b]]`。中の計算（`worldToVoxel`・`voxelToWorld`・`meshToLabelVolume`・クリップ面・パストレーサ）はすべてこの約束で読む。
+- 境目で `transposeDirection` を通す。
+  - 読む側: `geomFromImageData`。
+  - 書く側: `imageDataFromGeom`、プラグインの `createLocalVolume`。
+- 以前は境目で入れ替えていなかった。軸に沿ったシリーズでは 2 つの並びが同じ値になるので、ずれが見えなかった。
+  - 実データ（約 1.5° 傾いた横断、512²）で、面内のずれが最大 15 ボクセルになった。
+  - 2D の ROI のフレームが「面内残差 > 0.5 ボクセル」で全部捨てられ、3D への取り込みが「解像度不一致・取得タイムアウト等」で失敗していた。
