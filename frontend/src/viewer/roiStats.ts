@@ -170,7 +170,7 @@ const AREA_TOOLS = new Set([
 const LINE_TOOLS = new Set(["length", "graphypolylineroi", "graphyfreelineroi"]);
 
 /** 点型。 */
-const POINT_TOOLS = new Set(["probe", "dragprobe"]);
+const POINT_TOOLS = new Set(["probe", "dragprobe", "graphypointroi"]);
 
 /**
  * そのツール／開閉から、画素値の拾い方を決める。純関数。

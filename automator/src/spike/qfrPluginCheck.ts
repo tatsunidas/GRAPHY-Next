@@ -205,7 +205,7 @@ async function geo3dStats(page: Page): Promise<Geo3dStats | null> {
 
 async function selectLengthTool(viewer: Page): Promise<void> {
   await viewer.keyboard.press("Escape").catch(() => undefined);
-  await viewer.getByTestId("viewer2d-menu-roi").click();
+  await viewer.getByTestId("viewer2d-menu-measure").click();
   await viewer.waitForTimeout(250);
   await viewer.getByText("長さ", { exact: true }).first().click();
   await viewer.waitForTimeout(300);

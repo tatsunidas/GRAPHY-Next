@@ -88,8 +88,8 @@ async function clickCanvas(page: Page, fracX: number, fracY: number): Promise<vo
   `);
 }
 
-async function pickTool(page: Page, labelRe: RegExp): Promise<void> {
-  await page.getByTestId("viewer2d-menu-roi").click();
+async function pickTool(page: Page, labelRe: RegExp, menu: "roi" | "measure" = "roi"): Promise<void> {
+  await page.getByTestId(`viewer2d-menu-${menu}`).click();
   await page.getByRole("button", { name: labelRe }).first().click();
   await page.waitForTimeout(250);
 }
@@ -97,6 +97,10 @@ async function pickTool(page: Page, labelRe: RegExp): Promise<void> {
 async function clearRois(page: Page): Promise<void> {
   await page.getByTestId("viewer2d-menu-roi").click();
   await page.getByRole("button", { name: /^(ROI を全消去|Clear ROIs)$/ }).first().click();
+  await page.waitForTimeout(800);
+  // 計測（長さ・プローブなど）は「計測」メニューの別の全消去。ROI と計測の両方を空にする。
+  await page.getByTestId("viewer2d-menu-measure").click();
+  await page.getByRole("button", { name: /^(計測を全消去|Clear measurements)$/ }).first().click();
   await page.waitForTimeout(800);
 }
 
@@ -175,7 +179,7 @@ async function main(): Promise<void> {
     // ── 1. プローブに画素座標が出る ──────────────────────────────
     console.log("\n[1] プローブに「読んだ画素の座標」が出る");
     await clearRois(viewer);
-    await pickTool(viewer, /プローブ|^Probe$/);
+    await pickTool(viewer, /プローブ|^Probe$/, "measure");
     await clickCanvas(viewer, 0.40, 0.40);
     await viewer.waitForTimeout(1200);
     const p1 = await readTextBoxLines(viewer);

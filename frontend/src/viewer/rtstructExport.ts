@@ -6,13 +6,14 @@
  * 2D ベクタ ROI（面積型）→ DICOM RTSTRUCT 書き出しリクエストの組み立て（frontend 側）。
  * 各 ROI をスライス面の**閉輪郭（患者座標 mm 点列）**にして backend `/api/dicom/rtstruct` へ送る。
  * 楕円/円はポリゴン近似、矩形は 4 隅、フリーハンドは polyline をそのまま使う。
- * 線/角度/点は閉輪郭に不向きのため対象外（ImageJ/SR/GSPS 側で扱う）。設計 `fw/dicom-seg-rtstruct-design.md` S2。
+ * 線 ROI は OPEN_PLANAR、点 ROI は POINT（MARKER）で書く。計測（Length/Angle/Probe 等）は書き出さない。設計 `fw/dicom-seg-rtstruct-design.md` S2。
  */
 import { cache, metaData } from "@cornerstonejs/core";
 import { annotation as csAnnotation, segmentation as csSeg } from "@cornerstonejs/tools";
 import { traceMaskContours, type Pt } from "./maskContour";
 import { imageToWorldOnPlane, type PlaneGeometry } from "./imageCoords";
 import { getRoiMaskMeta } from "./roiMaskStore";
+import { roiKindOf } from "./roiKind";
 import { exportDicomRtStruct, type RtStructContour, type RtStructRoi, type RtStructExportRequest, type SegExportResult } from "../api";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -175,12 +176,12 @@ export async function exportRoisAsRtStruct(uids: string[], maskIds: string[] = [
     const refId = ann?.metadata?.referencedImageId as string | undefined;
     if (!ann || !refId) continue;
     const tool = String(ann.metadata?.toolName ?? "");
-    // 面積型のみ（線/角度/点は不対応）。
-    const isEllipse = /ellip/i.test(tool);
-    const isCircle = /circle/i.test(tool);
-    const isRect = /rect/i.test(tool);
-    const isFreehand = /freehand|polygon|spline/i.test(tool);
-    if (!(isEllipse || isCircle || isRect || isFreehand)) continue;
+    // 計測（Length/Angle/Probe 等）は書き出さない。ROI は面→CLOSED_PLANAR・線→OPEN_PLANAR・点→POINT。
+    const kind = roiKindOf(tool, ann.data?.contour?.closed as boolean | undefined);
+    if (!kind || kind === "measure") continue;
+    const isEllipse = /^ellipticalroi$/i.test(tool);
+    const isCircle = /^circleroi$/i.test(tool);
+    const isRect = /^rectangleroi/i.test(tool);
 
     const plane = (metaData.get("imagePlaneModule", refId) as AnyObj) ?? {};
     const iop = plane.imageOrientationPatient as number[] | undefined;
@@ -192,13 +193,23 @@ export async function exportRoisAsRtStruct(uids: string[], maskIds: string[] = [
     const handles = (ann.data?.handles?.points as V3[] | undefined) ?? [];
     const polyline = (ann.data?.contour?.polyline as V3[] | undefined) ?? [];
     let ring: V3[] = [];
-    if (isFreehand && polyline.length >= 3) ring = polyline;
-    else if (isEllipse) ring = ellipsePolygon(handles);
-    else if (isCircle) ring = circlePolygon(handles, rowCos, colCos);
-    else if (isRect) ring = rectPolygon(handles, rowCos, colCos);
-    else if (polyline.length >= 3) ring = polyline;
-    else ring = handles;
-    if (ring.length < 3) continue;
+    let geometricType: RtStructContour["geometricType"] = "CLOSED_PLANAR";
+    if (kind === "point") {
+      if (handles.length < 1) continue;
+      ring = [handles[0]];
+      geometricType = "POINT";
+    } else if (kind === "line") {
+      ring = polyline.length >= 2 ? polyline : handles;
+      if (ring.length < 2) continue;
+      geometricType = "OPEN_PLANAR";
+    } else {
+      if (isEllipse) ring = ellipsePolygon(handles);
+      else if (isCircle) ring = circlePolygon(handles, rowCos, colCos);
+      else if (isRect) ring = rectPolygon(handles, rowCos, colCos);
+      else if (polyline.length >= 3) ring = polyline;
+      else ring = handles;
+      if (ring.length < 3) continue;
+    }
 
     // 参照 study/series/FoR は最初の ROI から採用（同一シリーズ前提）。
     if (!studyUid || !seriesUid) {
@@ -214,8 +225,8 @@ export async function exportRoisAsRtStruct(uids: string[], maskIds: string[] = [
       number: n,
       name: getRoiMaskMeta(uid)?.label || tool || `ROI ${n}`,
       color: annColorRgb(uid),
-      type: "ORGAN",
-      contours: [{ sopInstanceUid: sop, points: flatten(ring) }],
+      type: kind === "point" ? "MARKER" : "ORGAN",
+      contours: [{ sopInstanceUid: sop, points: flatten(ring), geometricType }],
     });
   }
 

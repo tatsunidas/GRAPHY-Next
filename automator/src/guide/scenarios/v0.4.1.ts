@@ -211,7 +211,7 @@ const scenario: Scenario = async ({ shot }) => {
     const box = await viewer.locator('[data-testid="viewer2d-canvas-host"] canvas').first().boundingBox();
     if (!box) throw new Error("2D の画像がありません");
     // 椎体の上下に 2 本の線（Cobb 角）と、肝臓に矩形 ROI
-    await menu(viewer, "roi", "Cobb 角");
+    await menu(viewer, "measure", "Cobb 角");
     await drag(viewer, [box.width * 0.49, box.height * 0.57], [55, -6]);
     await drag(viewer, [box.width * 0.49, box.height * 0.72], [55, 10]);
     await viewer.keyboard.press("Escape");

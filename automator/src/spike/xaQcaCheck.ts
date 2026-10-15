@@ -145,7 +145,7 @@ async function main(): Promise<void> {
     await viewer.waitForTimeout(1_500);
 
     // 血管に沿って Length を引く（QCA の解析区間）。
-    await viewer.getByTestId("viewer2d-menu-roi").click();
+    await viewer.getByTestId("viewer2d-menu-measure").click();
     await viewer.waitForTimeout(300);
     await viewer.getByText("長さ", { exact: true }).first().click();
     await viewer.waitForTimeout(400);

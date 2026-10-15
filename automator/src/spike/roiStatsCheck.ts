@@ -121,8 +121,8 @@ async function clickPolygon(
 }
 
 /** ROI メニューからツールを選ぶ。 */
-async function pickTool(page: Page, labelRe: RegExp): Promise<void> {
-  await page.getByTestId("viewer2d-menu-roi").click();
+async function pickTool(page: Page, labelRe: RegExp, menu: "roi" | "measure" = "roi"): Promise<void> {
+  await page.getByTestId(`viewer2d-menu-${menu}`).click();
   await page.getByRole("button", { name: labelRe }).first().click();
   await page.waitForTimeout(250);
 }
@@ -137,11 +137,17 @@ async function clearRois(page: Page): Promise<void> {
   await page.getByTestId("viewer2d-menu-roi").click();
   await page.getByRole("button", { name: /^(ROI を全消去|Clear ROIs)$/ }).first().click();
   await page.waitForTimeout(800);
+  // 計測（長さ・プローブなど）は「計測」メニューの別の全消去。ROI と計測の両方を空にする。
+  await page.getByTestId("viewer2d-menu-measure").click();
+  await page.getByRole("button", { name: /^(計測を全消去|Clear measurements)$/ }).first().click();
+  await page.waitForTimeout(800);
 }
 
 interface ToolCase {
   key: string;
   label: RegExp;
+  /** 項目があるメニュー（計測は "measure"）。既定は ROI。 */
+  menu?: "roi" | "measure";
   /** 描き方。 */
   draw: (page: Page) => Promise<void>;
   /** textBox に必ず出ているべきもの。 */
@@ -200,6 +206,7 @@ const CASES: ToolCase[] = [
   {
     key: "length",
     label: /^長さ$|^Length$/,
+    menu: "measure",
     draw: (p) => dragOnCanvasHost(p, HOST, 120, 30, 0, 10, { fracX: 0.30, fracY: 0.30 }),
     expect: [LENGTH],
   },
@@ -272,7 +279,7 @@ async function main(): Promise<void> {
     console.log("\n[1] ツールごとに ROI 脇へ統計が出るか");
     for (const c of CASES) {
       await clearRois(viewer);
-      await pickTool(viewer, c.label);
+      await pickTool(viewer, c.label, c.menu);
       await c.draw(viewer);
       await viewer.waitForTimeout(1200); // 掃除のデバウンス（100ms）＋画素読み込み＋再描画
       const lines = await readTextBoxLines(viewer);

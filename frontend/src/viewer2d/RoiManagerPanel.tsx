@@ -23,6 +23,7 @@ import { formatScope, getRoiMaskMeta, setRoiMaskMeta, deleteRoiMaskMeta, subscri
 import { createNewMask, addSegmentToActiveMask, activateMask, getLastSegViewport } from "../viewer/segmentation";
 import { fetchSettings } from "../settings/settingsApi";
 import { exportMaskAsSeg } from "../viewer/segExport";
+import { canConvertMeasureToRoi } from "../viewer/measureToRoi";
 import { exportRoisAsRtStruct } from "../viewer/rtstructExport";
 import { importRtStructForCurrentView } from "../viewer/rtstructImport";
 import { importSegForCurrentView } from "../viewer/segImport";
@@ -87,6 +88,7 @@ export function RoiManagerPanel({
   mode,
   onRevealRoi,
   onDuplicateRoi,
+  onConvertToRoi,
   onClose,
 }: {
   activePatientKey: string;
@@ -98,6 +100,8 @@ export function RoiManagerPanel({
   onRevealRoi?: (roiUid: string) => void;
   /** ROI を複製する（貼り付け先は現在表示中のスライス）。 */
   onDuplicateRoi?: (roiUid: string) => void;
+  /** 計測（Length / Probe）を ROI に変える。 */
+  onConvertToRoi?: (roiUid: string) => void;
   onClose: () => void;
 }) {
   const { t } = useI18n();
@@ -690,6 +694,17 @@ export function RoiManagerPanel({
           <input type="checkbox" onClick={(e) => e.stopPropagation()} onChange={(e) => setRoiStyle(r.uid, { fillOpacity: e.target.checked ? 0.3 : 0 })} title={t("roiMgr.fill")} />
           {r.scope && <button onClick={(e) => { e.stopPropagation(); toggleScopeZ(r.uid); }} style={scopeChip} title={t("roiMgr.scopeToggle")}>{r.scope}</button>}
           {isAreaRoi(r.tool) && <button onClick={(e) => { e.stopPropagation(); runRoiToMask(r.uid); }} disabled={busy} style={editBtn} title={t("roiMgr.toMask")}>▦</button>}
+          {onConvertToRoi && canConvertMeasureToRoi(r.tool) && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setFocusedRoi(r.uid); onConvertToRoi(r.uid); }}
+              disabled={busy || r.locked}
+              style={editBtn}
+              title={r.locked ? t("roi.toRoi.locked") : t("viewer2d.roi.toRoi")}
+              data-testid="roi-mgr-to-roi"
+            >
+              →ROI
+            </button>
+          )}
           {onDuplicateRoi && (
             <button
               onClick={(e) => { e.stopPropagation(); setFocusedRoi(r.uid); onDuplicateRoi(r.uid); }}

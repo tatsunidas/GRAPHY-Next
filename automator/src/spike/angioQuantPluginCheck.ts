@@ -80,7 +80,7 @@ async function selectLengthTool(page: Page): Promise<void> {
   const item = page.getByRole("button", { name: /^(✓\s*)?(長さ|Length)$/ });
   await page.keyboard.press("Escape").catch(() => undefined);
   for (let i = 0; i < 3; i++) {
-    await page.getByTestId("viewer2d-menu-roi").click();
+    await page.getByTestId("viewer2d-menu-measure").click();
     try {
       await item.first().waitFor({ state: "visible", timeout: 2000 });
       await item.first().click();

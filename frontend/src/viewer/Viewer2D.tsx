@@ -63,6 +63,9 @@ import { registerReferenceSource, bumpReference, subscribeReference, computeRefe
 import { registerViewerCommands, type ViewerCommands, type ViewerDerivedSeriesRequest, type ViewerDerivedSeriesResult, type ViewerOverlay, type ViewerPixelData, type ViewerSrRequest, type ViewerSrResult, type ViewerPixelDataOptions, type ViewerAngioReportRequest, type ViewerPresentationStateRequest, type ViewerRoi, type ViewerSpatialCalibration, type ViewerTargetInfo, type ViewerViewState, type ViewerXaState, type ViewerXaCine, ViewerLabelVolume, ViewerLabelVolumeResult } from "./viewerCommands";
 import { buildPluginMeta, computeCalipers, hasShapeCalipers, pickPluginMeta, readRoiStats, roiPointsPx } from "./roiRead";
 import { CONTOUR_TOOL_NAMES } from "./roiContourTools";
+import { POINT_ROI_TOOL_NAME } from "./pointRoiTool";
+import { annotationRoiKind } from "./roiKind";
+import { convertMeasureToRoi } from "./measureToRoi";
 import { installInteriorGrab, installSelectionGestures } from "./roiInteriorGrab";
 import { measureToolConfig } from "./roiStatsTextBox";
 import { useRoiStatsDisplay } from "./roiStatsDisplay";
@@ -161,6 +164,8 @@ const MEASURE_TOOLS = [
   CONTOUR_TOOL_NAMES.polyline,
   CONTOUR_TOOL_NAMES.freehand,
   CONTOUR_TOOL_NAMES.freeLine,
+  // 点 ROI（Probe と同じ操作。計測ではなく ROI として扱う）。viewer/pointRoiTool.ts
+  POINT_ROI_TOOL_NAME,
 ];
 // 左ドラッグに割り当て可能なツール一覧（操作＋計測＋ブラシ＋3D Wand＋Level Sets）。
 const PRIMARY_TOOLS = [WindowLevelTool.toolName, PanTool.toolName, ZoomTool.toolName, MagnifyTool.toolName, ...MEASURE_TOOLS, BrushTool.toolName, WandTool.toolName, LevelSetTool.toolName];
@@ -2501,12 +2506,14 @@ export function Viewer2D({
     return uid;
   };
 
-  // 注釈（計測 ROI）を全消去。ロック中の ROI は残す。
-  const clearAnnotations = () => {
+  // 注釈を種別ごとに全消去する（ROI だけ / 計測だけ）。ロック中は残す。
+  // 種別不明（矢印など）は ROI 側で消える——全消去で残り続けるものを作らない。
+  const clearAnnotations = (scope: "roi" | "measure") => {
     const v = vp();
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const uids = (csAnnotation.state.getAllAnnotations() as any[])
+        .filter((a) => (annotationRoiKind(a) === "measure") === (scope === "measure"))
         .map((a) => a?.annotationUID as string | undefined)
         .filter((u): u is string => !!u);
       const { removable, kept } = partitionByLock(uids);
@@ -2522,6 +2529,27 @@ export function Viewer2D({
     // 発火せず、全消去が保存されなかった。1 件ずつ消す今も、経路ごとの発火差に依存しない）。
     const pk = roiContextRef.current?.patientKey;
     if (pk) scheduleRoiSave(pk);
+  };
+
+  /** 計測を ROI に変える。失敗は理由つきでトーストに出し、null を返す。 */
+  const convertMeasureToRoiCmd = (measureUid: string): string | null => {
+    if (roiEditBlocked()) return null;
+    const v = vp();
+    if (!v) return null;
+    const r = convertMeasureToRoi(measureUid, {
+      viewport: v as unknown as Parameters<typeof convertMeasureToRoi>[1]["viewport"],
+      imageIds: imageIdsRef.current,
+      patientKey: roiContextRef.current?.patientKey ?? "",
+      seriesLabel: roiContextRef.current?.seriesLabel,
+    });
+    if (!r.ok) {
+      emitToast(t(`roi.toRoi.${r.reason}`));
+      return null;
+    }
+    const imageId = (csAnnotation.state.getAnnotation(r.uid) as { metadata?: { referencedImageId?: string } } | undefined)
+      ?.metadata?.referencedImageId;
+    if (imageId) afterPaste(r.uid, imageId);
+    return r.uid;
   };
 
   // H65: ラベルの volume を Mask として読み込む（格子は IPP で照合する。1 枚ずれていれば拒否）
@@ -2543,7 +2571,7 @@ export function Viewer2D({
     publishAnalysisResult: publishPluginAnalysis,
     setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
-    copyRoi, pasteRoi, duplicateRoi,
+    copyRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd,
     undo, redo,
   });
   commandsRef.current = {
@@ -2557,7 +2585,7 @@ export function Viewer2D({
     publishAnalysisResult: publishPluginAnalysis,
     setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
-    copyRoi, pasteRoi, duplicateRoi,
+    copyRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd,
     undo, redo,
   };
   useEffect(() => {
@@ -2600,7 +2628,8 @@ export function Viewer2D({
       getRois: () => commandsRef.current.getRois(),
       getRoiMeta: (u, p) => commandsRef.current.getRoiMeta(u, p),
       setRoiMeta: (u, p, patch) => commandsRef.current.setRoiMeta(u, p, patch),
-      clearAnnotations: () => commandsRef.current.clearAnnotations(),
+      clearAnnotations: (s) => commandsRef.current.clearAnnotations(s),
+      convertMeasureToRoi: (u) => commandsRef.current.convertMeasureToRoi(u),
       copyRoi: (u) => commandsRef.current.copyRoi(u),
       pasteRoi: () => commandsRef.current.pasteRoi(),
       duplicateRoi: (u) => commandsRef.current.duplicateRoi(u),

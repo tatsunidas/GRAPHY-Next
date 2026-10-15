@@ -721,8 +721,16 @@ export interface ViewerCommands {
    * プラグインが本体や他プラグインのキーを踏めない。ROI が存在しなければ false。
    */
   setRoiMeta(roiUid: string, pluginId: string, patch: Record<string, string>): boolean;
-  /** 計測（ROI）注釈を全消去。 */
-  clearAnnotations(): void;
+  /**
+   * 注釈を種別ごとに全消去する。`"roi"` は ROI（面・線・点。種別不明のものも含む）、
+   * `"measure"` は計測（Length / Bidirectional / Angle / Cobb / Probe）だけ。ロック中は残す。
+   */
+  clearAnnotations(scope: "roi" | "measure"): void;
+  /**
+   * 計測を ROI に変える（Length → 線 ROI、Probe → 点 ROI）。元の計測は消える。
+   * 作った ROI の annotationUID（変換できない・ロック中などは null。理由は画面側がトーストで出す）。
+   */
+  convertMeasureToRoi(measureUid: string): string | null;
   /**
    * ROI をアプリ内クリップボードへ取る。`roiUid` 省略時は**選択中の先頭 1 件**。取れたら true。
    *

@@ -7,7 +7,8 @@
  *
  * backend `/api/imagej/import` がデコードした {@link ImageJRoiDto} 群を、表示中の stack ビューポートへ
  * Cornerstone アノテーションとして復元する。`imageToWorldCoords`（export の逆）で画素→world 化し、
- * oval→EllipticalROI / rect→RectangleROI / それ以外→PlanarFreehandROI（閉輪郭）にマップする。
+ * oval→EllipticalROI / rect→RectangleROI / point→GraphyPointROI / polyline→GraphyPolylineROI（開）/
+ * それ以外→PlanarFreehandROI（閉輪郭）にマップする。
  * position（1-based）でスライスを選び、`roiMaskStore` にメタ（patient/series/scope）を紐付ける。
  */
 import { getRenderingEngines, utilities as csUtils } from "@cornerstonejs/core";
@@ -16,6 +17,8 @@ import { getViewerContext } from "./viewerContext";
 import { setRoiMaskMeta } from "./roiMaskStore";
 import type { ImageJRoiDto } from "../api";
 import { imageToWorldCoords } from "./imageCoords";
+import { CONTOUR_TOOL_NAMES, SPLINE_TYPE_LINEAR, ensureSplineInstance } from "./roiContourTools";
+import { POINT_ROI_TOOL_NAME } from "./pointRoiTool";
 
 type V3 = [number, number, number];
 
@@ -79,12 +82,32 @@ export function importImageJDtos(dtos: ImageJRoiDto[]): number {
         },
         cachedStats: {},
       };
+    } else if (d.type === "point" && d.xs?.length) {
+      // 点 ROI（Probe は計測なので使わない）。複数点は先頭だけ（1 注釈 1 点）。
+      toolName = POINT_ROI_TOOL_NAME;
+      data = {
+        handles: { points: [toWorld(d.xs[0], (d.ys ?? [])[0])], activeHandleIndex: null, textBox: emptyTextBox() },
+        cachedStats: {},
+      };
+    } else if (d.type === "polyline" && (d.xs?.length ?? 0) >= 2) {
+      // 開いた折れ線 → ポリゴンライン ROI（制御点＝頂点。直線補間なので polyline も頂点そのもの）。
+      const xs = d.xs ?? [], ys = d.ys ?? [];
+      const polyline = xs.map((x, i) => toWorld(x, ys[i]));
+      toolName = CONTOUR_TOOL_NAMES.polyline;
+      data = {
+        handles: { points: polyline.map((p) => [...p]), activeHandleIndex: null, textBox: emptyTextBox() },
+        contour: { polyline, closed: false },
+        polyline,
+        isOpenContour: true,
+        spline: { type: SPLINE_TYPE_LINEAR },
+        cachedStats: {},
+      };
     } else {
-      // polygon / freehand / polyline / point / angle → 閉/開輪郭（PlanarFreehandROI）。
+      // polygon / freehand / angle → 閉/開輪郭（PlanarFreehandROI）。
       const xs = d.xs ?? [], ys = d.ys ?? [];
       if (!xs.length) continue;
       const polyline = xs.map((x, i) => toWorld(x, ys[i]));
-      const closed = !(d.type === "polyline" || d.type === "angle" || d.type === "point");
+      const closed = !(d.type === "polyline" || d.type === "angle" || d.type === "point"); // polyline/point は点列不足のときだけここに来る
       toolName = "PlanarFreehandROI";
       data = {
         handles: {
@@ -118,6 +141,8 @@ export function importImageJDtos(dtos: ImageJRoiDto[]): number {
       },
       data,
     };
+    // スプライン系（ポリゴンライン）は補間インスタンスが無いと描画ループで落ちる。addAnnotation より前に用意する。
+    ensureSplineInstance(annotation);
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (csAnnotation.state as any).addAnnotation(annotation, vp.element);

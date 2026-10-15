@@ -15,6 +15,7 @@
  */
 import { cache, imageLoader, getRenderingEngines } from "@cornerstonejs/core";
 import { annotation as csAnnotation, segmentation as csSeg, Enums as csToolsEnums } from "@cornerstonejs/tools";
+import { roiKindOf } from "./roiKind";
 import { getRoiMaskMeta, setRoiMaskMeta } from "./roiMaskStore";
 import { worldToImageCoords } from "./imageCoords";
 import { alignToStack, boolOn, scopeZFromForeground, type BoolOp } from "./maskScope";
@@ -154,7 +155,7 @@ export async function combineMasks(
 
 /** エリア型 ROI（面積を持つ＝ラスタ化可能）の toolName か。 */
 export function isAreaRoi(toolName: string | undefined): boolean {
-  return /ellip|circle|rect|freehand|polygon|spline/i.test(toolName ?? "");
+  return roiKindOf(toolName) === "area";
 }
 
 /**
