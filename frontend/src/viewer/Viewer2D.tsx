@@ -2755,7 +2755,7 @@ export function Viewer2D({
             <svg style={refLineSvg}>
               {sphereCircles.map((c, i) => (
                 <g key={i}>
-                  <circle cx={c.cx} cy={c.cy} r={c.r} fill="none" stroke={c.color} strokeWidth={1.5} strokeDasharray="4 3" opacity={0.9} />
+                  <circle data-testid="sphere-preview" cx={c.cx} cy={c.cy} r={c.r} fill="none" stroke={c.color} strokeWidth={1.5} strokeDasharray="4 3" opacity={0.9} />
                   <circle cx={c.cx} cy={c.cy} r={1.5} fill={c.color} />
                   {c.label && <text x={c.cx + c.r + 4} y={c.cy} fill={c.color} fontSize={11} style={refLineText}>{c.label}</text>}
                 </g>
