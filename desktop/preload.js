@@ -90,6 +90,13 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   computeColabSpecs: () => ipcRenderer.invoke("graphy:compute-colab-specs"),
   computeColabEnsure: (id) => ipcRenderer.invoke("graphy:compute-colab-ensure", id),
   computeColabRelease: (id) => ipcRenderer.invoke("graphy:compute-colab-release", id),
+  // Drive バックアップ（Google でログイン・保存先を Picker で選ぶ・解除）。トークンは返らない
+  gdriveStatus: () => ipcRenderer.invoke("graphy:gdrive-status"),
+  gdriveSignIn: () => ipcRenderer.invoke("graphy:gdrive-signin"),
+  gdriveSignOut: () => ipcRenderer.invoke("graphy:gdrive-signout"),
+  gdriveEnable: () => ipcRenderer.invoke("graphy:gdrive-enable"),
+  gdriveDisable: () => ipcRenderer.invoke("graphy:gdrive-disable"),
+  gdriveRestore: (title) => ipcRenderer.invoke("graphy:gdrive-restore", { title }),
   // 既定の計算機（未登録で Google にログイン済みなら Colab の T4 を足す。足すのは main）
   computeEnsureDefault: () => ipcRenderer.invoke("graphy:compute-ensure-default"),
   // 名前を付けて保存。上書き確認は OS のダイアログが出す。

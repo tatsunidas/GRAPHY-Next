@@ -53,11 +53,36 @@ function loadState() {
     const s = JSON.parse(fs.readFileSync(path.join(dataDir, STATE_FILE), "utf8"));
     const recent = Array.isArray(s.recent) ? s.recent.filter((p) => typeof p === "string" && path.isAbsolute(p)) : [];
     const current = typeof s.current === "string" && path.isAbsolute(s.current) ? s.current : null;
-    return { current, recent };
+    // Drive バックアップの設定は DB フォルダごと。ここで落とすと select() の保存で消えるので必ず持ち回る
+    const gdrive = {};
+    if (s.gdrive && typeof s.gdrive === "object") {
+      for (const [k, v] of Object.entries(s.gdrive)) {
+        if (path.isAbsolute(k) && validGdrive(v)) gdrive[k] = v;
+      }
+    }
+    return { current, recent, gdrive };
   } catch {
     // 無い・壊れている → 既定の DB で起動する（データは失わない: 各 DB フォルダはそのまま）
-    return { current: null, recent: [] };
+    return { current: null, recent: [], gdrive: {} };
   }
+}
+
+/** Drive の ID（フォルダ・共有ドライブ）の形。Picker の結果と保存済みの値の両方をこれで通す。 */
+const DRIVE_ID_RE = /^[A-Za-z0-9_-]{10,128}$/;
+
+/**
+ * Drive バックアップの設定。driveFolderId＝アプリが作った `GRAPHY-DB-…` フォルダ、
+ * parentId＝利用者が Picker で選んだ親（共有ドライブかどうかは driveId で表す）。
+ */
+function validGdrive(v) {
+  return (
+    !!v &&
+    typeof v === "object" &&
+    DRIVE_ID_RE.test(v.driveFolderId || "") &&
+    (v.driveId == null || DRIVE_ID_RE.test(v.driveId)) &&
+    typeof v.name === "string" &&
+    (v.email == null || typeof v.email === "string")
+  );
 }
 
 function saveState(state) {
@@ -153,6 +178,43 @@ function forget(folder) {
   return { ok: true };
 }
 
+function gdriveKey(state, folder) {
+  return Object.keys(state.gdrive).find((k) => samePath(k, folder)) || null;
+}
+
+/** この DB フォルダの Drive バックアップ設定。無ければ null。 */
+function getGdrive(folder) {
+  const s = loadState();
+  const k = gdriveKey(s, folder);
+  return k ? s.gdrive[k] : null;
+}
+
+/** 設定する。形が合わなければ { ok:false, reason:"invalid" }。 */
+function setGdrive(folder, cfg) {
+  if (!validGdrive(cfg)) return { ok: false, reason: "invalid" };
+  const s = loadState();
+  const k = gdriveKey(s, folder) || norm(folder);
+  s.gdrive[k] = {
+    driveFolderId: cfg.driveFolderId,
+    driveId: cfg.driveId || null,
+    name: cfg.name,
+    email: cfg.email || null,
+  };
+  saveState(s);
+  return { ok: true };
+}
+
+/** 設定を外す（Drive 側のデータには触れない）。 */
+function clearGdrive(folder) {
+  const s = loadState();
+  const k = gdriveKey(s, folder);
+  if (k) {
+    delete s.gdrive[k];
+    saveState(s);
+  }
+  return { ok: true };
+}
+
 /** 画面に出す一覧。active は今 backend が使っている DB。 */
 function list(active) {
   const s = loadState();
@@ -162,7 +224,13 @@ function list(active) {
   for (const p of [defaultFolder(), ...s.recent]) {
     if (seen.some((q) => samePath(q, p))) continue;
     seen.push(p);
-    rows.push({ path: p, isDefault: isDefault(p), exists: isDefault(p) || exists(p), active: samePath(p, active) });
+    rows.push({
+      path: p,
+      isDefault: isDefault(p),
+      exists: isDefault(p) || exists(p),
+      active: samePath(p, active),
+      gdrive: gdriveKey(s, p) !== null,
+    });
   }
   return { active, next: s.current || defaultFolder(), folders: rows };
 }
@@ -225,6 +293,10 @@ module.exports = {
   list,
   springArgs,
   loadState,
+  getGdrive,
+  setGdrive,
+  clearGdrive,
+  DRIVE_ID_RE,
   messages,
   MARKER,
 };
