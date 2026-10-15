@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { desktop } from "../desktopBridge";
 import { useI18n } from "../i18n/i18n";
-import { fetchImportWatchStatus } from "./importWatchApi";
+import { fetchImportWatchStatus, scanImportWatchNow } from "./importWatchApi";
 import {
   canSave,
   errorKey,
@@ -31,6 +31,7 @@ export function ImportWatchPanel() {
   const [form, setForm] = useState<ImportWatchForm | null>(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [scanningNow, setScanningNow] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const alive = useRef(true);
   const dirtyRef = useRef(false);
@@ -90,6 +91,19 @@ export function ImportWatchPanel() {
     }
   };
 
+  const scanNow = async () => {
+    setScanningNow(true);
+    setMessage(null);
+    try {
+      const s = await scanImportWatchNow();
+      if (alive.current) setStatus(s);
+    } catch (e) {
+      if (alive.current) setMessage(String(e));
+    } finally {
+      if (alive.current) setScanningNow(false);
+    }
+  };
+
   const err = status.enabled && status.error ? status.error : null;
 
   return (
@@ -136,6 +150,14 @@ export function ImportWatchPanel() {
 
       <div style={{ ...row, justifyContent: "flex-end" }}>
         {message && <span style={muted}>{message}</span>}
+        <button
+          style={ghostBtn}
+          data-testid="import-watch-scan-now"
+          disabled={scanningNow || saving || !status.enabled}
+          onClick={() => void scanNow()}
+        >
+          {t("importWatch.scanNow")}
+        </button>
         <button
           style={primaryBtn}
           data-testid="import-watch-save"

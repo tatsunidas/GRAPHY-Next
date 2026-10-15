@@ -2066,6 +2066,11 @@ export const ja: Record<string, string> = {
   "importWatch.err.interval-invalid": "走査の間隔は 1 以上の整数（秒）で指定してください。",
   "importWatch.err.scan-failed": "フォルダを走査できませんでした。権限やネットワークの接続を確認してください（次の走査で再試行します）。",
   "importWatch.err.unknown": "自動取り込みで異常が起きました。",
+  "importWatch.scanNow": "今すぐ走査",
+  "importWatch.bar.label": "自動取り込み",
+  "importWatch.bar.counts": "取込 {{imported}} ・ 待機 {{waiting}} ・ 失敗 {{failed}}",
+  "importWatch.bar.error": "エラー",
+  "importWatch.bar.newItems": "新しい取り込みが {{n}} 件あります（一覧を更新）",
 
   // monitor QC (mqc)
   "mqc.intro": "外部センサーを使わない簡易モニター診断。接続モニターの表示環境を確認し、日常の目視 QC 用テストパターンを表示します。",

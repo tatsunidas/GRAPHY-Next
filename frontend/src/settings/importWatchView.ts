@@ -73,3 +73,39 @@ export function formFromStatus(s: ImportWatchStatus): ImportWatchForm {
     intervalSec: s.intervalSec == null ? "" : String(s.intervalSec),
   };
 }
+
+/** メイン画面の状態バーに出す内容。無効・未取得（web モード・backend に届かない）なら出さない。 */
+export interface WatchBarView {
+  visible: boolean;
+  /** 設定または走査の異常のコード。 */
+  error: string | null;
+  imported: number;
+  waiting: number;
+  failed: number;
+  /** 一覧を最後に読み込んだ（基準にした）時点より増えた取込の件数。 */
+  newCount: number;
+}
+
+/**
+ * 基準（一覧を最後に読み込んだ時点の取込件数）を進める。最初の応答で置く（開く前の取込では促さない）。
+ * 取込が基準より減ったとき（DB のリセットなど）は引き直す。
+ */
+export function nextBaseline(status: ImportWatchStatus | null, baseline: number | null): number | null {
+  if (!status) return baseline;
+  if (baseline === null || status.imported < baseline) return status.imported;
+  return baseline;
+}
+
+export function barView(status: ImportWatchStatus | null, baseline: number | null): WatchBarView {
+  if (!status || !status.enabled) {
+    return { visible: false, error: null, imported: 0, waiting: 0, failed: 0, newCount: 0 };
+  }
+  return {
+    visible: true,
+    error: status.error,
+    imported: status.imported,
+    waiting: status.waiting,
+    failed: status.failed,
+    newCount: baseline === null ? 0 : Math.max(0, status.imported - baseline),
+  };
+}

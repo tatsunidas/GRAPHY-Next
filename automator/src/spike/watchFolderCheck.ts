@@ -43,6 +43,13 @@ async function num(page: Page, id: string): Promise<number> {
   return Number((await page.getByTestId(id).innerText()).trim());
 }
 
+async function openPanel(page: Page): Promise<void> {
+  await page.getByTestId("mainscreen-menu-system").click();
+  await page.getByTestId("menu-item-settings").click();
+  await page.getByTestId("settings-cat-importWatch").click();
+  await page.getByTestId("import-watch-panel").waitFor({ state: "visible", timeout: 10_000 });
+}
+
 async function main(): Promise<void> {
   fs.rmSync(OUT_DIR, { recursive: true, force: true });
   fs.mkdirSync(WATCH_DIR, { recursive: true });
@@ -74,17 +81,20 @@ async function main(): Promise<void> {
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.getByTestId("search-patientid-input").waitFor({ state: "visible", timeout: 60_000 });
     await dismissStartupDialogs(page);
+    // 一覧は「全期間」で検索しておく（取り込みのあと、更新を押すまで一覧が変わらないことを見るため）
+    const dates = page.locator('input[type="date"]');
+    await dates.nth(0).fill("");
+    await dates.nth(1).fill("");
+    await page.getByTestId("search-submit-button").click();
 
+    let expected = slices.length;
     console.log("\n[0] 前提: web でない backend（standalone）で状態 API が 200");
     const st = await fetch(`${base}/api/import/watch/status`);
     check(st.status === 200, "GET /api/import/watch/status が 200", st.status);
     check((await studyCount()) === 0, "操作前は対象の検査が 0 件（検出器が空振りでないことの前提）");
 
     console.log("\n[1] 画面で有効化");
-    await page.getByTestId("mainscreen-menu-system").click();
-    await page.getByTestId("menu-item-settings").click();
-    await page.getByTestId("settings-cat-importWatch").click();
-    await page.getByTestId("import-watch-panel").waitFor({ state: "visible", timeout: 10_000 });
+    await openPanel(page);
     await page.screenshot({ path: path.join(OUT_DIR, "01-initial.png") });
     check((await page.getByTestId("import-watch-last").innerText()).trim() !== "" && (await num(page, "import-watch-imported")) === 0, "初期は取込 0");
     check(await page.getByTestId("import-watch-save").isEnabled(), "無効のままなら保存できる");
@@ -131,12 +141,58 @@ async function main(): Promise<void> {
     await sleep(3 * INTERVAL_SEC * 1000);
     check((await num(page, "import-watch-imported")) === slices.length && (await instanceCount()) === slices.length, "何回走査しても増えない（1 回しか取り込まない）");
 
+    console.log("\n[3b] 状態バー: 件数・一覧の更新を促す表示");
+    const bar = page.getByTestId("statusbar-import-watch");
+    const apiImported = async (): Promise<number> => ((await (await fetch(`${base}/api/import/watch/status`)).json()) as { imported: number }).imported;
+    check(await until(async () => (await bar.count()) > 0 && (await bar.innerText()).includes(String(slices.length)), 8000), "状態バーの「取込」が増える", await bar.innerText().catch(() => ""));
+    check((await apiImported()) === slices.length, "状態バーの数値が backend の状態と一致", await apiImported());
+    const newBtn = page.getByTestId("statusbar-import-watch-new");
+    check(await until(async () => (await newBtn.count()) > 0, 8000), "「新しい取り込みがあります」が出る");
+    check((await newBtn.innerText()).includes(String(slices.length)), "件数が取り込んだ数", await newBtn.innerText());
+    await page.screenshot({ path: path.join(OUT_DIR, "03b-statusbar.png") });
+    await page.getByTestId("dialog-close-button").click();
+    await sleep(500);
+    check((await page.locator(`[data-testid="study-row-${truth.studyUid}"]`).count()) === 0, "更新を押すまで、一覧は勝手に変わらない（負例）");
+    await newBtn.click();
+    await page.locator(`[data-testid="study-row-${truth.studyUid}"]`).waitFor({ state: "visible", timeout: 10_000 });
+    check(true, "更新を押すと一覧に検査が出る");
+    check(await until(async () => (await newBtn.count()) === 0, 8000), "押したあと、促す表示が消える");
+    await page.screenshot({ path: path.join(OUT_DIR, "03c-after-reload.png") });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.getByTestId("search-patientid-input").waitFor({ state: "visible", timeout: 60_000 });
+    await dismissStartupDialogs(page);
+    check(await until(async () => (await bar.count()) > 0, 10_000), "再読み込み後も状態バーに出る");
+    await sleep(2 * 3000 + 1000); // 状態バーの問い合わせ周期（3 秒）を 2 回待つ
+    check((await newBtn.count()) === 0, "画面を開く前の取込では促さない（負例）");
+
+    console.log("\n[3c] [今すぐ走査]: 間隔を待たずに 1 回走る");
+    await openPanel(page);
+    await page.getByTestId("import-watch-interval").fill("600");
+    await page.getByTestId("import-watch-save").click();
+    await sleep(1500);
+    const idleLast = await page.getByTestId("import-watch-last").innerText();
+    fs.copyFileSync(first, path.join(WATCH_DIR, "now1.dcm"));
+    await sleep(3000);
+    check((await page.getByTestId("import-watch-last").innerText()) === idleLast, "間隔が 600 秒なら、置いても自動では走査されない（前提）");
+    const beforeNow = await num(page, "import-watch-imported");
+    await page.getByTestId("import-watch-scan-now").click();
+    check(await until(async () => (await num(page, "import-watch-waiting")) === 1, 8000), "1 回押すと走査が走り、待機 1");
+    check((await page.getByTestId("import-watch-last").innerText()) !== idleLast, "最終走査の時刻が進む");
+    check((await num(page, "import-watch-imported")) === beforeNow, "1 回目はまだ取り込まない（初見）");
+    await page.getByTestId("import-watch-scan-now").click();
+    check(await until(async () => (await num(page, "import-watch-imported")) === beforeNow + 1, 8000), "もう 1 回押すと取り込まれる");
+    expected += 1;
+    await page.screenshot({ path: path.join(OUT_DIR, "03d-scan-now.png") });
+    await page.getByTestId("import-watch-interval").fill(String(INTERVAL_SEC));
+    await page.getByTestId("import-watch-save").click();
+    await sleep(1500);
+
     console.log("\n[4] 非 DICOM はスキップ、壊れた DICOM は失敗");
     fs.writeFileSync(path.join(WATCH_DIR, "readme.txt"), "not dicom");
     fs.writeFileSync(path.join(WATCH_DIR, "bad.dcm"), bytes.subarray(0, 140));
     check(await until(async () => (await num(page, "import-watch-failed")) === 1 && (await num(page, "import-watch-skipped")) === 1, 6 * INTERVAL_SEC * 1000), "スキップ 1・失敗 1", { skipped: await num(page, "import-watch-skipped"), failed: await num(page, "import-watch-failed") });
     check((await page.getByTestId("import-watch-failures").innerText()).includes("bad.dcm"), "失敗はパス付きで画面に出る");
-    check((await num(page, "import-watch-imported")) === slices.length, "他の取込は影響を受けない");
+    check((await num(page, "import-watch-imported")) === expected, "他の取込は影響を受けない");
     await page.screenshot({ path: path.join(OUT_DIR, "04-failures.png") });
 
     console.log("\n[5] DB フォルダの中は監視先にできない");
