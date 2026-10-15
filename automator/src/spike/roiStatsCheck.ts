@@ -339,6 +339,34 @@ async function main(): Promise<void> {
     } else {
       console.log("  [skip] クリップボードを読めないため CSV の中身は未検証");
     }
+    // 画素ダンプ（⬇ 画素）。保存される Blob を createObjectURL の差し替えで横取りして読む。
+    await viewer.evaluate(`
+      (function () {
+        window.__dumpBlob = null;
+        var orig = URL.createObjectURL.bind(URL);
+        URL.createObjectURL = function (b) { window.__dumpBlob = b; return orig(b); };
+      })()
+    `);
+    const dumpBtn = viewer.getByTestId("roi-stats-dump");
+    check(await dumpBtn.isEnabled(), "面型 ROI で「⬇ 画素」が押せる");
+    await dumpBtn.click();
+    await viewer.waitForTimeout(800);
+    const dump = await viewer.evaluate(
+      `window.__dumpBlob ? window.__dumpBlob.text() : Promise.resolve("")`,
+    ) as string;
+    if (dump) {
+      const lines = dump.replace(/^﻿/, "").split("\r\n").filter((l) => l.length > 0);
+      const body = lines.slice(1);
+      const nCell = rows[0] ? Number(String(rows[0][7]).replace(/,/g, "")) : NaN;
+      check(/value\[HU\]/.test(lines[0] ?? ""), "画素 CSV のヘッダに単位が入る（value[HU]）", lines[0]);
+      check(body.length === nCell, "画素 CSV の行数がダイアログの n と一致する", { rows: body.length, n: nCell });
+      const vals = body.map((l) => l.split(",")).map((c) => Number(c[c.length - 2])).filter((v) => Number.isFinite(v));
+      const dumpMean = vals.reduce((s, v) => s + v, 0) / vals.length;
+      check(Math.abs(dumpMean - dialogMean) < 0.0051, "画素 CSV の値の平均がダイアログの平均と一致する（画面の丸め幅で）", { dumpMean, dialogMean });
+      fs.writeFileSync(path.join(OUT_DIR, "roi-pixels.csv"), dump);
+    } else {
+      check(false, "「⬇ 画素」で CSV が保存される（Blob を取得できない）");
+    }
     await closeStatsDialog(viewer);
 
     // ── 3. プラグイン（H5）が受け取る値が画面と同じか ────────────────

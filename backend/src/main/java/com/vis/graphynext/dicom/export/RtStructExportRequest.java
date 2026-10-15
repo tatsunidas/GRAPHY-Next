@@ -36,7 +36,8 @@ public record RtStructExportRequest(
     /**
      * @param sopInstanceUid 輪郭が乗るスライスの参照 SOPInstanceUID
      * @param points         [x,y,z,x,y,z,...]（患者座標 mm、閉輪郭の頂点列）
+     * @param geometricType  CLOSED_PLANAR / OPEN_PLANAR / POINT。null は CLOSED_PLANAR
      */
-    public record Contour(String sopInstanceUid, double[] points) {
+    public record Contour(String sopInstanceUid, double[] points, String geometricType) {
     }
 }

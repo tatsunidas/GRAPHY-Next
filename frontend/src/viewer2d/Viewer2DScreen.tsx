@@ -2,6 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
+import { FUSION_BLENDS, fusionBlendCss, type FusionBlend } from "../viewer/fusionBlend";
 import { deselectAllRois } from "../viewer/roiInteriorGrab";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -29,8 +30,8 @@ import { RegistrationPanel } from "./RegistrationPanel";
 import type { RenderOverlay } from "../viewer/Viewer2D";
 import { buildSeriesLayout, type SeriesLayout } from "../viewer/seriesLayout";
 import { LutDialog, ColorBar } from "../viewer/LutDialog";
-import { eventTarget } from "@cornerstonejs/core";
-import { Enums as csToolsEnums } from "@cornerstonejs/tools";
+import { eventTarget, getEnabledElement } from "@cornerstonejs/core";
+import { Enums as csToolsEnums, annotation as csAnnotation } from "@cornerstonejs/tools";
 import {
   runViewerCommand,
   useIsDisplayOnlyTile,
@@ -60,11 +61,14 @@ import { isInsideViewerOverlay } from "../viewer/viewerOverlay";
 import { runSeriesCommand } from "../viewer/seriesCommands";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { emitToast, subscribeToast } from "../viewer/toast";
+import { composeTileWithAnnotations, visibleRoiCount } from "../viewer/tileCapture";
+import { askCopyWithRoi, CopyImageAskHost } from "./CopyImageAsk";
 import { classifySeriesRenderability } from "../viewer/seriesRenderable";
 import { subscribeSeriesRefresh } from "../viewer/viewerRefresh";
 import { WandDialog } from "./WandDialog";
 import { LevelSetsDialog } from "./LevelSetsDialog";
 import { HistogramDialog } from "./HistogramDialog";
+import { ResampleDialog } from "./ResampleDialog";
 import { FourierDialog } from "./FourierDialog";
 import { SUVCalibrationDialog } from "../viewer/SUVCalibrationDialog";
 import { getSuv, subscribeSuvStore } from "../viewer/suvStore";
@@ -114,6 +118,8 @@ interface FusionOverlay {
   series: Series;
   instances: Instance[];
   opacity: number; // 0.0 – 1.0
+  /** 重ね方（表示上の合成）。未指定は通常。保存しない。 */
+  blend?: FusionBlend;
   /** ドロップ元タイルで表示中だった C/T。fusion オーバーレイの初期 C/T に使う（無ければ 0）。 */
   initialC?: number;
   initialT?: number;
@@ -217,10 +223,36 @@ function captureAndDownload(tileId: string): void {
   a.click();
 }
 
-/** 指定タイルの画像をクリップボードへコピーする（ROI・文字の重ね描きは含まない＝PNG 保存と同じ）。 */
-async function copyTileImage(tileId: string): Promise<boolean> {
-  const url = captureTileDataUrl(tileId);
+/** タイルの Cornerstone の要素（canvas と注釈の `.svg-layer` を持つ）。 */
+function tileViewportElement(tileId: string): HTMLDivElement | null {
+  const el = document.querySelector(`[data-tile-id="${CSS.escape(tileId)}"]`);
+  return (el?.querySelector(".viewport-element")?.parentElement as HTMLDivElement | null) ?? null;
+}
+
+/** タイルの表示中の画像に描かれている ROI の数。 */
+function tileVisibleRoiCount(tileId: string): number {
+  const element = tileViewportElement(tileId);
+  if (!element) return 0;
+  const vp = getEnabledElement(element)?.viewport as { getCurrentImageId?: () => string } | undefined;
+  return visibleRoiCount(
+    csAnnotation.state.getAllAnnotations(),
+    vp?.getCurrentImageId?.(),
+    (uid) => csAnnotation.visibility.isAnnotationVisible(uid) ?? true,
+  );
+}
+
+/** 指定タイルの画像をクリップボードへコピーする。withRoi なら ROI の線と計測の文字を重ねる（四隅の文字は含まない）。 */
+async function copyTileImage(tileId: string, withRoi: boolean): Promise<boolean> {
+  let url = captureTileDataUrl(tileId);
   if (!url) return false;
+  if (withRoi) {
+    const element = tileViewportElement(tileId);
+    const canvas = element?.querySelector("canvas") as HTMLCanvasElement | null;
+    const svg = element?.querySelector(".svg-layer") as SVGSVGElement | null;
+    if (!canvas || !svg) return false;
+    url = await composeTileWithAnnotations(canvas, svg).catch(() => null);
+    if (!url) return false;
+  }
   const copy = desktop()?.copyImage;
   if (copy) return copy(url).catch(() => false);
   try {
@@ -230,6 +262,18 @@ async function copyTileImage(tileId: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** 📋 とメニューの「画像をコピー」。表示中の画像に ROI があれば、含めるかを聞く。 */
+async function copyTileImageAsking(tileId: string, t: (k: string) => string): Promise<void> {
+  let withRoi = false;
+  if (tileVisibleRoiCount(tileId) > 0) {
+    const choice = await askCopyWithRoi();
+    if (choice === "cancel") return;
+    withRoi = choice === "roi";
+  }
+  const ok = await copyTileImage(tileId, withRoi);
+  emitToast(t(!ok ? "viewer2d.copyImageFailed" : withRoi ? "viewer2d.copyImageDoneWithRoi" : "viewer2d.copyImageDone"));
 }
 
 /**
@@ -613,6 +657,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
           )}
         </div>
       </div>
+      <CopyImageAskHost />
     </div>
   );
 }
@@ -730,6 +775,7 @@ function TileGrid({
   const tileDimsRef = useRef<Map<string, { c: number; t: number; z: number }>>(new Map());
   // Histogram 解析ダイアログの対象（開いている時のみ non-null）。
   const [histo, setHisto] = useState<{ tile: Tile; z: number; c: number; t: number } | null>(null);
+  const [resample, setResample] = useState<{ tile: Tile; c: number; t: number } | null>(null);
   const [fourier, setFourier] = useState<{ tileId: string; label: string } | null>(null);
   const [suvTarget, setSuvTarget] = useState<{ imageId: string; seriesUid: string } | null>(null);
   const [tagTarget, setTagTarget] = useState<Tile | null>(null);
@@ -1561,6 +1607,14 @@ function TileGrid({
         const dims = tileDimsRef.current.get(tile.id);
         setHisto({ tile, z: dims?.z ?? 0, c: dims?.c ?? 0, t: dims?.t ?? 0 });
       },
+      // 対象（選択→無ければ先頭）タイルのシリーズでリサンプル・切り抜きダイアログを開く。
+      openResample: () => {
+        const tid = resolveTargets()[0];
+        const tile = patient.tiles.find((tl) => tl.id === tid);
+        if (!tile) { comingSoon(t("viewer2d.menu.resample")); return; }
+        const dims = tileDimsRef.current.get(tile.id);
+        setResample({ tile, c: dims?.c ?? 0, t: dims?.t ?? 0 });
+      },
       // 対象（選択→無ければ先頭）タイルの**表示中スライス 1 枚**でフーリエ解析ダイアログを開く。
       openFourier: () => {
         const tid = resolveTargets()[0];
@@ -1610,7 +1664,7 @@ function TileGrid({
       copyImage: () => {
         const tid = resolveTargets()[0];
         if (!tid) return;
-        void copyTileImage(tid).then((ok) => emitToast(t(ok ? "viewer2d.copyImageDone" : "viewer2d.copyImageFailed")));
+        void copyTileImageAsking(tid, t);
       },
       openReport: () => {
         const tid = resolveTargets()[0];
@@ -1855,6 +1909,18 @@ function TileGrid({
           initialC={histo.c}
           initialT={histo.t}
           onClose={() => setHisto(null)}
+        />
+      )}
+      {resample && (
+        <ResampleDialog
+          key={resample.tile.id}
+          study={resample.tile.study}
+          series={resample.tile.series}
+          instances={resample.tile.instances}
+          mode={mode}
+          c={resample.c}
+          t={resample.t}
+          onClose={() => setResample(null)}
         />
       )}
       {suvTarget && (
@@ -2203,6 +2269,7 @@ function TileCell({
         overlayT={fusionT}
         lut={fusionLut}
         opacity={fusion.opacity}
+        blend={fusion.blend}
         windowCenter={fusionWL?.center ?? null}
         windowWidth={fusionWL?.width ?? null}
         adjust={fusionAdjust}
@@ -2348,7 +2415,7 @@ function TileCell({
           tabIndex={0}
           onClick={(e) => {
             e.stopPropagation();
-            void copyTileImage(tile.id).then((ok) => emitToast(t(ok ? "viewer2d.copyImageDone" : "viewer2d.copyImageFailed")));
+            void copyTileImageAsking(tile.id, t);
           }}
           style={{ ...xbtn, fontSize: 12, lineHeight: 1, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
           title={t("viewer2d.copyImage")}
@@ -2427,6 +2494,8 @@ function TileCell({
           adjust={fusionAdjust}
           adjustEnabled={fusionSpatial}
           onOpacityChange={(v) => onFusionChange({ ...tile.fusion!, opacity: v })}
+          blend={fusionBlendCss(tile.fusion.blend)}
+          onBlendChange={(b) => onFusionChange({ ...tile.fusion!, blend: b })}
           onCChange={setFusionC}
           onTChange={setFusionT}
           onLutChange={setFusionLut}
@@ -2546,6 +2615,8 @@ function FusionControlBar({
   registered,
   onOpenRegistration,
   onOpacityChange,
+  blend,
+  onBlendChange,
   onCChange,
   onTChange,
   onLutChange,
@@ -2574,6 +2645,8 @@ function FusionControlBar({
   /** 自動位置合わせのパネルを開く。 */
   onOpenRegistration: () => void;
   onOpacityChange: (v: number) => void;
+  blend: FusionBlend;
+  onBlendChange: (b: FusionBlend) => void;
   onCChange: (v: number) => void;
   onTChange: (v: number) => void;
   onLutChange: (lut: LutData | null) => void;
@@ -2634,6 +2707,20 @@ function FusionControlBar({
         <span style={{ fontSize: 11, color: "#5a6672", minWidth: 28, textAlign: "right" }}>
           {Math.round(opacity * 100)}%
         </span>
+
+        {/* 重ね方（表示上の合成。画素値の引き算ではない） */}
+        <select
+          value={blend}
+          onChange={(e) => onBlendChange(fusionBlendCss(e.target.value))}
+          title={t("fusion.blend.help")}
+          aria-label={t("fusion.blend")}
+          data-testid="fusion-blend"
+          style={{ fontSize: 11, flex: "none" }}
+        >
+          {FUSION_BLENDS.map((b) => (
+            <option key={b} value={b}>{t(`fusion.blend.${b}`)}</option>
+          ))}
+        </select>
 
         {/* LUT ボタン */}
         <div style={{ display: "flex", alignItems: "center", gap: 3, flex: "none" }}>

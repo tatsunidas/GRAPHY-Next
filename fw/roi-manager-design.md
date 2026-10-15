@@ -78,6 +78,19 @@ interface MaskItem {
 - **3D→2D split**: 3D マスクを各スライスへ投影し per-slice 2D ROI/Mask に分解。
 - 体積・サーフェス統計。3D 表示は将来（VolumeViewport/3D Viewer 連携）。
 
+### 5.1 3D 統計（Σ³）の単位・平均×体積・値を読めないスライス
+
+- **単位**は 2D の ROI 統計と同じ `resolveValueUnit`（SUV → RescaleType → モダリティ既定 → "raw"）に一元化する。
+  PET は `SUVbw` 等 / `Bq/ml`、RescaleSlope/Intercept の無い MR などは "raw"（表示は「未校正」）。値の計算自体は
+  従来どおり `getModalityCalibration` 経由で、SUV 校正済みならすでに SUV 値になっている。
+- **平均×体積**: `meanTimesVolumeMl = 平均 × 体積(mL)`（単位は `<単位>·mL`）。単位が `SUV` で始まるときだけ「TLG」の語で行を出す。
+  それ以外では行を出さない（本体は土台、解釈はプラグイン）。
+- **値の母集団**: 前景ボクセルのうち値を読めたものを `valuedVoxels` に数える。source 画像が cache に無いスライスがあれば
+  `missingValueSlices` に数え、**平均・SD・最小・最大・平均×体積は出さない**（体積・ボクセル数は出す）。
+  体積は全ボクセル、平均は一部ボクセルという別の母集団になるのを防ぐため。
+- 集計の芯は Cornerstone に依存しない純関数 `maskStatsCore.accumulateMaskStats`（vitest で検査）。SD は母分散（従来式）。
+- 桁は 2D と同じ `formatNumber`。体積・ボクセル数・スライス間隔の計算は変えない（SEG の SegmentDescription も不変）。
+
 ---
 
 ## 6. 保存・入出力
@@ -150,7 +163,6 @@ interface MaskItem {
 4. **ローカル/グローバルの既定**: 新規 ROI/Mask は既定 **ローカル（z,c,t 完全指定）**でよいか（後で "all" に昇格可）。
 5. **3D の実体**: マスクは 3D バイナリボリューム（`roi-mask-model.md` 決定どおり）。ベクタ 3D（積層輪郭）は持つか。
 6. **最初に着手するフェーズ**: M1（store＋UI 骨組み＋表示属性）から、で良いか。
-</content>
 
 ---
 

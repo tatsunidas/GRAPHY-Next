@@ -1094,6 +1094,15 @@ ipcMain.handle("graphy:tls-password-set", (_e, payload) =>
 ipcMain.handle("graphy:tls-password-status", () =>
   tlsPasswords.status({ statusOf: secretStore.statusOf, encryptionAvailable: secretStore.encryptionAvailable() }));
 
+/** backend が応答するようになってから 1 回だけ行う処理。 */
+function afterBackendReady() {
+  // 外部の計算機の接続先を backend へ（失敗してもアプリの起動は止めない）
+  pushComputeEndpoints().catch((err) => console.error("[compute] push failed:", err));
+  pushGdriveConfig().catch((err) => console.error("[gdrive] push failed:", err));
+  // 設定に平文で残っている TLS のパスワードをキーチェーンへ移す（失敗しても起動は止めない・平文は消さない）
+  migrateTlsPasswords();
+}
+
 function migrateTlsPasswords() {
   if (!computeBridge.enabled()) return;
   tlsPasswords
@@ -1743,14 +1752,19 @@ app.whenReady().then(async () => {
     }
     startBackend();
     await waitForBackend();
-    // 外部の計算機の接続先を backend へ（失敗してもアプリの起動は止めない）
-    pushComputeEndpoints().catch((err) => console.error("[compute] push failed:", err));
-    pushGdriveConfig().catch((err) => console.error("[gdrive] push failed:", err));
-    // 設定に平文で残っている TLS のパスワードをキーチェーンへ移す（失敗しても起動は止めない・平文は消さない）
-    migrateTlsPasswords();
+    afterBackendReady();
   } catch (e) {
     reportStartupFailure(e);
     offerDefaultDbAfterFailure(e);
+    // 待ちきれなかっただけなら、裏で待ち続ける（遅れて立ち上がることがある。窓の側は自分で取り直す）。
+    if (e instanceof StartupError && e.code === "backend-timeout") {
+      waitForBackend(Infinity)
+        .then(() => {
+          console.log("[startup] backend ready after timeout");
+          afterBackendReady();
+        })
+        .catch(reportStartupFailure);
+    }
   }
   createWindow(); // スプラッシュは createWindow の ready-to-show で閉じる
 

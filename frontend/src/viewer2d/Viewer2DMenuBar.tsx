@@ -329,9 +329,9 @@ export function Viewer2DMenuBar({
         { label: t("viewer.reset"), onClick: actions.reset },
         { label: t("viewer.undo"), onClick: actions.undo },
         { label: t("viewer.redo"), onClick: actions.redo },
+        { label: t("viewer2d.menu.resample"), onClick: () => actions.openResample(), testId: "menu-resample", separatorBefore: true },
         {
           label: t("viewer2d.menu.sort"),
-          separatorBefore: true,
           submenu: [
             { label: t("viewer2d.sort.instanceAsc"), onClick: () => actions.sort("instanceAsc") },
             { label: t("viewer2d.sort.instanceDesc"), onClick: () => actions.sort("instanceDesc") },

@@ -19,7 +19,7 @@ import {
   Enums as csToolsEnums,
 } from "@cornerstonejs/tools";
 import { ENGINE_ID } from "../viewer/Viewer2D";
-import { getRoiMaskMeta, setRoiMaskMeta, deleteRoiMaskMeta, subscribeRoiMaskStore, getSegEditTarget, getMaskSegments } from "../viewer/roiMaskStore";
+import { formatScope, getRoiMaskMeta, setRoiMaskMeta, deleteRoiMaskMeta, subscribeRoiMaskStore, getSegEditTarget, getMaskSegments } from "../viewer/roiMaskStore";
 import { createNewMask, addSegmentToActiveMask, activateMask, getLastSegViewport } from "../viewer/segmentation";
 import { fetchSettings } from "../settings/settingsApi";
 import { exportMaskAsSeg } from "../viewer/segExport";
@@ -39,8 +39,10 @@ import { importImageJDtos } from "../viewer/imagejImport";
 import { exportImageJRoiSet, importImageJRoiSet } from "../api";
 import { saveRoiNow, scheduleRoiSave, subscribeRoiSave } from "../viewer/roiSaveStore";
 import { RoiMetaEditDialog } from "./RoiMetaEditDialog";
-import { RoiStatsDialog } from "./RoiStatsDialog";
+import { RoiStatsDialog, type RoiStatsTarget } from "./RoiStatsDialog";
 import { useI18n } from "../i18n/i18n";
+import { formatNumber, valueUnitLabel } from "../viewer/roiStatsText";
+import { meanTimesVolumeLabelKey } from "../viewer/maskStatsCore";
 
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
 
@@ -74,14 +76,9 @@ function getMaskVisible(id: string): boolean {
   }
 }
 
-/** scope メタ → 表示文字列。 */
+/** scope メタ → 表示文字列（1 始まり）。 */
 function scopeText(itemId: string): string {
-  const s = getRoiMaskMeta(itemId)?.scope;
-  if (!s) return "";
-  const z = s.z === "all" ? "Z:all" : `z${s.z}`;
-  const c = s.c === "all" ? "C:all" : `c${s.c}`;
-  const tt = s.t === "all" ? "T:all" : `t${s.t}`;
-  return `${z} ${c} ${tt}`;
+  return formatScope(getRoiMaskMeta(itemId)?.scope);
 }
 
 export function RoiManagerPanel({
@@ -112,7 +109,13 @@ export function RoiManagerPanel({
   // ⚠ ダイアログの `targets` は毎レンダで作り直さない。参照が変わるたびに統計の再計算
   // （非同期ループ）が最初からやり直しになり、表がちらつく。保存通知などで
   // このパネルは頻繁に再レンダされる。
-  const statsTargets = useMemo(() => rois.map((r) => ({ uid: r.uid, tool: r.tool })), [rois]);
+  const statsTargets = useMemo<RoiStatsTarget[]>(
+    () => [
+      ...rois.map((r) => ({ uid: r.uid, tool: r.tool })),
+      ...masks.map((m) => ({ uid: m.id, tool: "mask", kind: "mask" as const, label: m.label })),
+    ],
+    [rois, masks],
+  );
   const [selected, setSelected] = useState<Set<string>>(new Set());
   /** 一覧で選んでいる ROI（ハイライト＋スライス移動の対象）。マスクの選択チェックとは別物。 */
   const [focusedRoi, setFocusedRoi] = useState<string | null>(null);
@@ -444,18 +447,20 @@ export function RoiManagerPanel({
       setBusy(false);
     }
   };
-  // ROI 群を DICOM RTSTRUCT として保存（新シリーズ）。
+  // ROI 群とマスク（segment ごとに 1 構造）を DICOM RTSTRUCT として保存（新シリーズ）。
   const runExportRtStruct = async () => {
     if (busy) return;
     setBusy(true);
     try {
-      const res = await exportRoisAsRtStruct(rois.map((r) => r.uid));
+      const res = await exportRoisAsRtStruct(rois.map((r) => r.uid), masks.map((m) => m.id));
       if (res) {
         emitToast(t("roiMgr.exportRtDone"));
         emitSeriesRefresh();
         // 他ウィンドウ（メイン画面の検索リスト等）へ新規シリーズ発生を通知（CPR/中心線解析/Slicer と同様）。
         const studyUids = [...new Set(
-          rois.map((r) => getRoiMaskMeta(r.uid)?.scope?.studyUid).filter((v): v is string => !!v),
+          [...rois.map((r) => r.uid), ...masks.map((m) => m.id)]
+            .map((id) => getRoiMaskMeta(id)?.scope?.studyUid)
+            .filter((v): v is string => !!v),
         )];
         emitDbChanged({ reason: "series-create", studyUids });
       } else window.alert(t("roiMgr.exportRtFail"));
@@ -470,9 +475,15 @@ export function RoiManagerPanel({
     if (busy) return;
     setBusy(true);
     try {
-      const { roiCount, maskCount } = await importRtStructForCurrentView();
-      if (roiCount === 0) window.alert(t("roiMgr.importRtEmpty"));
-      else emitToast(t("roiMgr.importRtDone", { n: roiCount, m: maskCount }));
+      const { structureCount, skippedNotClosed, skippedNoSlice } = await importRtStructForCurrentView();
+      if (structureCount === 0) window.alert(t("roiMgr.importRtEmpty"));
+      else {
+        const skipped = skippedNotClosed + skippedNoSlice;
+        emitToast(
+          t("roiMgr.importRtDone", { n: structureCount }) +
+            (skipped > 0 ? t("roiMgr.importRtSkipped", { open: skippedNotClosed, nosop: skippedNoSlice }) : ""),
+        );
+      }
     } catch {
       window.alert(t("roiMgr.opFailed"));
     } finally {
@@ -634,11 +645,11 @@ export function RoiManagerPanel({
             "SEG ⬆"
           )}
         </button>
-        {rois.length > 0 && (
-          <button onClick={() => setStatsOpen({})} style={opBtn} title={t("roiMgr.statsAll")}>Σ</button>
+        {rois.length + masks.length > 0 && (
+          <button onClick={() => setStatsOpen({})} style={opBtn} title={t("roiMgr.statsAll")} data-testid="roi-mgr-stats-all">Σ</button>
         )}
         {!isDemo && rois.length > 0 && <button onClick={runExportRois} disabled={busy} style={opBtn} title={t("roiMgr.exportIJ")}>IJ ⬇</button>}
-        {!isDemo && rois.length > 0 && <button onClick={runExportRtStruct} disabled={busy} style={opBtn} title={t("roiMgr.exportRt")}>RT ⬇</button>}
+        {!isDemo && rois.length + masks.length > 0 && <button onClick={runExportRtStruct} disabled={busy} style={opBtn} title={t("roiMgr.exportRt")} data-testid="roi-mgr-export-rt">RT ⬇</button>}
       </div>
       {rois.length === 0 && <div style={empty}>{t("roiMgr.empty")}</div>}
       {rois.map((r) => (
@@ -736,8 +747,10 @@ export function RoiManagerPanel({
           />
           <input type="number" min={0} max={10} defaultValue={maskDefaults.outlineWidth} onChange={(e) => setMaskStyle(m.id, { outlineWidth: Number(e.target.value) })} title={t("roiMgr.lineWidth")} style={numInput} />
           <input type="checkbox" defaultChecked onChange={(e) => setMaskStyle(m.id, { renderFill: e.target.checked })} title={t("roiMgr.fill")} />
-          {m.scope && <button onClick={() => toggleScopeZ(m.id)} style={scopeChip} title={t("roiMgr.scopeToggleMask")}>{m.scope}</button>}
-          <button onClick={() => runStats(m.id)} style={editBtn} title={t("roiMgr.stats")}>Σ³</button>
+          {/* マスクの範囲は中身（塗ったスライス）で決まる。メタを書き換えても中身は変わらないので押せない表示にする */}
+          {m.scope && <span style={scopeChipStatic} title={t("roiMgr.scopeToggleMask")} data-testid="mask-scope">{m.scope}</span>}
+          <button onClick={() => runStats(m.id)} data-testid="mask-stats-run" style={editBtn} title={t("roiMgr.stats")}>Σ³</button>
+          <button onClick={() => setStatsOpen({ focus: m.id })} data-testid="mask-stats-dialog" style={editBtn} title={t("roiMgr.statsMask")}>Σ</button>
           <button onClick={() => runSplitToSlices(m.id)} disabled={busy} style={editBtn} title={t("roiMgr.toSlices")}>⬚</button>
           {/* SEG書き出しは毎晩の自動リストアで確実に消えるため、他の持ち出し系と異なりデモでも許可
              （backend DemoModeFilter・fw/web-demo-hosting.md 参照）。 */}
@@ -746,14 +759,26 @@ export function RoiManagerPanel({
           <button onClick={() => deleteMask(m.id)} style={delBtn} title={t("common.delete")}>🗑</button>
         </div>
         {stats[m.id] && (
-          <div style={statLine}>
+          <div style={statLine} data-testid="mask-stats">
             {t("roiMgr.statVol")}: {stats[m.id].volumeMl.toFixed(2)} mL ({stats[m.id].volumeMm3.toFixed(0)} mm³) ·
             {" "}{t("roiMgr.statVoxels")}: {stats[m.id].voxels.toLocaleString()} · {t("roiMgr.statSlices")}: {stats[m.id].slices}
+            {(stats[m.id].missingValueSlices ?? 0) > 0 && (
+              <>
+                <br />
+                {t("roiMgr.statMissingSlices", { n: stats[m.id].missingValueSlices! })}
+              </>
+            )}
             {stats[m.id].mean !== undefined && (
               <>
                 <br />
-                {t("roiMgr.statMean")}: {stats[m.id].mean!.toFixed(1)} ± {stats[m.id].sd!.toFixed(1)} ·
-                {" "}min {stats[m.id].min!.toFixed(0)} / max {stats[m.id].max!.toFixed(0)} {stats[m.id].unit}
+                {t("roiMgr.statMean")}: {formatNumber(stats[m.id].mean!)} ± {formatNumber(stats[m.id].sd!)} ·
+                {" "}min {formatNumber(stats[m.id].min!)} / max {formatNumber(stats[m.id].max!)} {valueUnitLabel(stats[m.id].unit ?? "", t)}
+                {meanTimesVolumeLabelKey(stats[m.id].unit) && stats[m.id].meanTimesVolumeMl !== undefined && (
+                  <>
+                    <br />
+                    {t("roiMgr.statTlg")}: {formatNumber(stats[m.id].meanTimesVolumeMl!)} {valueUnitLabel(stats[m.id].unit ?? "", t)}·mL
+                  </>
+                )}
               </>
             )}
           </div>
@@ -844,6 +869,7 @@ const eyeBtn: React.CSSProperties = { border: "none", background: "transparent",
 const colorInput: React.CSSProperties = { width: 22, height: 20, padding: 0, border: "1px solid #cdd5de", borderRadius: 3, background: "#fff", cursor: "pointer" };
 const numInput: React.CSSProperties = { width: 36, border: "1px solid #cdd5de", borderRadius: 4, fontSize: 11 };
 const scopeChip: React.CSSProperties = { fontSize: 10, color: "#5a6672", background: "#eef2f6", border: "1px solid #dde4ea", borderRadius: 4, padding: "1px 4px", whiteSpace: "nowrap", cursor: "pointer" };
+const scopeChipStatic: React.CSSProperties = { ...scopeChip, cursor: "default", background: "transparent" };
 const opsBar: React.CSSProperties = { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4, padding: "6px 8px", borderTop: "1px solid #eef1f4" };
 const opBtn: React.CSSProperties = { border: "1px solid #cdd5de", borderRadius: 5, background: "#fff", cursor: "pointer", fontSize: 11, padding: "2px 7px" };
 const statLine: React.CSSProperties = { padding: "0 10px 4px 28px", color: "#5a6672", fontSize: 11 };

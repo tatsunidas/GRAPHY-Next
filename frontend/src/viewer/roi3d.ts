@@ -15,11 +15,15 @@
  */
 import { cache, imageLoader, metaData } from "@cornerstonejs/core";
 import { annotation as csAnnotation, segmentation as csSeg, Enums as csToolsEnums } from "@cornerstonejs/tools";
-import { createResultSeg, resolveRoiStack } from "./roiBooleanOps";
+import { createResultSeg, resolveRoiStack, setScopeZFromForeground } from "./roiBooleanOps";
 import { getRoiMaskMeta, setRoiMaskMeta } from "./roiMaskStore";
 import { addSphere3D, getSphere3D } from "./sphere3dStore";
-import { getModalityCalibration } from "./pixelCalibration";
-import { worldToImageOnPlane } from "./imageCoords";
+import { getModalityCalibration, readModalitySlice, resolveValueUnit } from "./pixelCalibration";
+import { accumulateMaskStats, collectMaskValues, type MaskSliceInput } from "./maskStatsCore";
+import { maskVoxelDumpCsvChunks, type MaskDumpSlice } from "./maskVoxelDump";
+import { roiHistogram, summarizeValues, type RoiValueStats } from "./roiStats";
+import type { HistogramData } from "./histogram";
+import { worldToImageOnPlane, type PlaneGeometry } from "./imageCoords";
 
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
 const MAX_SLICE_MASKS = 64; // 3D→2D split の出力上限。
@@ -131,6 +135,7 @@ export async function rasterizeSphereToMask(
   }
   if (modified.length === 0) return null;
   csSeg.triggerSegmentationEvents.triggerSegmentationDataModified(res.segId, modified, 1);
+  setScopeZFromForeground(res.segId, stack.sourceIds, modified);
   return res.segId;
 }
 
@@ -260,7 +265,7 @@ export async function splitMaskToSlices(segmentationId: string): Promise<string[
       seriesLabel: base?.seriesLabel,
       scope,
       origin: scope,
-      label: `${base?.label ?? "Mask"} z${z}`,
+      label: `${base?.label ?? "Mask"} z${z + 1}`,
     });
     csSeg.triggerSegmentationEvents.triggerSegmentationDataModified(segId, [0], undefined);
     created.push(segId);
@@ -279,14 +284,27 @@ export interface MaskVolumeStats {
   min?: number;
   max?: number;
   unit?: string;
+  valuedVoxels?: number; // 値を読めた前景ボクセル数
+  missingValueSlices?: number; // 値を読めない前景スライス数
+  meanTimesVolumeMl?: number; // 平均 × 体積(mL)。単位は `${unit}·mL`
 }
 
 /**
- * Mask の体積統計（前景=非ゼロ。`segmentIndex` を渡すとその segment のみに限定）。
- * ボクセル体積 = rowSp×colSp×sliceSp。sliceSp は隣接スライス IPP の法線方向距離（無ければスライス厚→1）。
- * 取得不能なら null。source 画像が cache にあれば前景の画素値統計（mean/SD/min/max, modality LUT 適用）も併せて返す。
+ * Mask の格子（labelmap と元画像の対応・ボクセルの大きさ）。Σ³ と計測結果ダイアログで共有し、
+ * 体積が両者で必ず同じになるようにする。
+ * sliceSp は隣接スライス IPP の法線方向距離（無ければスライス厚→1）。取得不能なら null。
  */
-export function maskVolumeStats(segmentationId: string, segmentIndex?: number): MaskVolumeStats | null {
+interface MaskGrid {
+  labelmapIds: string[];
+  sourceIds: string[];
+  planes: (Plane | null)[];
+  colSp: number;
+  rowSp: number;
+  sliceSp: number;
+  voxelMm3: number;
+}
+
+function maskGrid(segmentationId: string): MaskGrid | null {
   let labelmapIds: string[];
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -315,49 +333,182 @@ export function maskVolumeStats(segmentationId: string, segmentIndex?: number): 
     const m = (sourceIds[0] && (metaData.get("imagePlaneModule", sourceIds[0]) as any)) || null;
     sliceSp = (m?.sliceThickness as number) || 1;
   }
-  const voxelMm3 = p0.rowSp * p0.colSp * sliceSp;
+  return {
+    labelmapIds, sourceIds, planes,
+    colSp: p0.colSp, rowSp: p0.rowSp, sliceSp,
+    voxelMm3: p0.rowSp * p0.colSp * sliceSp,
+  };
+}
 
-  let voxels = 0, slices = 0;
-  // 画素値統計の集計。
-  let sum = 0, sumSq = 0, valCount = 0, vmin = Infinity, vmax = -Infinity;
+/**
+ * Mask の体積統計（前景=非ゼロ。`segmentIndex` を渡すとその segment のみに限定）。
+ * ボクセル体積 = rowSp×colSp×sliceSp。sliceSp は隣接スライス IPP の法線方向距離（無ければスライス厚→1）。
+ * 取得不能なら null。source 画像が cache にあれば前景の画素値統計（mean/SD/min/max, modality LUT 適用）も併せて返す。
+ */
+export function maskVolumeStats(segmentationId: string, segmentIndex?: number): MaskVolumeStats | null {
+  const grid = maskGrid(segmentationId);
+  if (!grid) return null;
+  const { labelmapIds, sourceIds, voxelMm3 } = grid;
+
+  // 各スライスの labels と校正済み値を集めて純関数で集計する（校正は pixelCalibration に一元化。
+  // scale/offset は preScale 済みなら {1,0}。cache に無いスライスは values=null）。
+  const inputs: MaskSliceInput[] = [];
   for (let z = 0; z < labelmapIds.length; z++) {
     const vm = img(labelmapIds[z])?.voxelManager;
     if (!vm) continue;
     const len = vm.getScalarDataLength();
-    // source 画素をモダリティ値（HU 等）で読む。cache に無ければ画素値統計はスキップ。
-    // 校正は pixelCalibration に一元化（preScale 二重適用を防ぐ。scale/offset は preScale 済みなら {1,0}）。
+    const labels = new Int32Array(len);
+    for (let i = 0; i < len; i++) labels[i] = vm.getAtIndex(i);
     const sImg = sourceIds[z] ? img(sourceIds[z]) : null;
     const px = sImg?.getPixelData?.() as ArrayLike<number> | undefined;
-    const { scale, offset } = getModalityCalibration(sImg, sourceIds[z] ?? "");
-    let sliceCount = 0;
-    for (let i = 0; i < len; i++) {
-      const idx = vm.getAtIndex(i);
-      if (idx <= 0) continue;
-      if (segmentIndex != null && idx !== segmentIndex) continue;
-      sliceCount++;
-      if (px && i < px.length) {
-        const v = px[i] * scale + offset;
-        sum += v;
-        sumSq += v * v;
-        valCount++;
-        if (v < vmin) vmin = v;
-        if (v > vmax) vmax = v;
-      }
+    let values: Float64Array | null = null;
+    if (px) {
+      const { scale, offset } = getModalityCalibration(sImg, sourceIds[z] ?? "");
+      values = new Float64Array(px.length);
+      for (let i = 0; i < px.length; i++) values[i] = px[i] * scale + offset;
     }
-    if (sliceCount > 0) slices++;
-    voxels += sliceCount;
+    inputs.push({ labels, values });
   }
+  const core = accumulateMaskStats(inputs, segmentIndex);
+  const { voxels, slices } = core;
   const volumeMm3 = voxels * voxelMm3;
-  const out: MaskVolumeStats = { voxels, volumeMm3, volumeMl: volumeMm3 / 1000, slices };
-  if (valCount > 0) {
-    const mean = sum / valCount;
-    out.mean = mean;
-    out.sd = Math.sqrt(Math.max(0, sumSq / valCount - mean * mean));
-    out.min = vmin;
-    out.max = vmax;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const gs = (sourceIds[0] && (metaData.get("generalSeriesModule", sourceIds[0]) as any)) || null;
-    out.unit = gs?.modality === "CT" ? "HU" : "";
+  const out: MaskVolumeStats = {
+    voxels, volumeMm3, volumeMl: volumeMm3 / 1000, slices,
+    valuedVoxels: core.valuedVoxels, missingValueSlices: core.missingValueSlices,
+  };
+  if (core.mean !== undefined) {
+    out.mean = core.mean;
+    out.sd = core.sd;
+    out.min = core.min;
+    out.max = core.max;
+    // 単位は 2D 統計と同じ resolveValueUnit に一元化（SUV→RescaleType→モダリティ既定→"raw"）。
+    out.unit = sourceIds[0] ? resolveValueUnit(sourceIds[0]) : "";
+    out.meanTimesVolumeMl = core.mean * out.volumeMl;
   }
   return out;
+}
+
+/** ROI 計測結果ダイアログに出すマスクの統計（`fw/roi-stats-design.md` §6.3）。 */
+export interface MaskStatsResult {
+  maskId: string;
+  voxels: number;
+  slices: number;
+  volumeMm3: number;
+  volumeMl: number;
+  /** ボクセルの大きさ [列間隔, 行間隔, スライス間隔] (mm)。Σ³ と同じ求め方。 */
+  voxelMm: [number, number, number];
+  /** 値の要約。2D の ROI と同じ {@link summarizeValues}（非有限値は除く）。 */
+  values?: RoiValueStats;
+  histogram?: HistogramData;
+  unit: string;
+  /** 平均 × 体積(mL)。単位は `${unit}·mL`。 */
+  meanTimesVolumeMl?: number;
+  /** 前景を含む最初のスライス。 */
+  imageId: string;
+  /** `"no-pixels"`: 読めないスライスがあり、値の統計を出していない（体積と別の母集団にしない）。 */
+  warnings: string[];
+}
+
+interface LoadedMaskSlice {
+  sliceIndex: number;
+  sourceId: string;
+  width: number;
+  labels: Int32Array;
+  values: Float32Array | null;
+}
+
+/** 前景のあるスライスだけ、labels と校正済み値（未ロードなら読み込む）を集める。 */
+async function loadMaskSlices(grid: MaskGrid): Promise<LoadedMaskSlice[]> {
+  const out: LoadedMaskSlice[] = [];
+  for (let z = 0; z < grid.labelmapIds.length; z++) {
+    const lm = img(grid.labelmapIds[z]);
+    const vm = lm?.voxelManager;
+    if (!vm) continue;
+    const len = vm.getScalarDataLength();
+    const labels = new Int32Array(len);
+    let any = false;
+    for (let i = 0; i < len; i++) {
+      const v = vm.getAtIndex(i);
+      labels[i] = v;
+      if (v > 0) any = true;
+    }
+    if (!any) continue;
+    const sourceId = grid.sourceIds[z] ?? "";
+    const slice = sourceId ? await readModalitySlice(sourceId) : null;
+    const width = (lm.columns ?? lm.width ?? slice?.width ?? 0) as number;
+    out.push({ sliceIndex: z, sourceId, width, labels, values: slice?.values ?? null });
+  }
+  return out;
+}
+
+/** マスクの統計（**非同期**・元画像が未ロードなら読み込む）。取得不能なら null。 */
+export async function computeMaskStatsAsync(
+  segmentationId: string,
+  opts?: { withHistogram?: boolean },
+): Promise<MaskStatsResult | null> {
+  const grid = maskGrid(segmentationId);
+  if (!grid) return null;
+  const loaded = await loadMaskSlices(grid);
+  const sample = collectMaskValues(loaded.map((s) => ({ labels: s.labels, values: s.values })));
+  const imageId = loaded[0]?.sourceId ?? grid.sourceIds.find(Boolean) ?? "";
+  const unit = imageId ? resolveValueUnit(imageId) : "";
+  const volumeMm3 = sample.voxels * grid.voxelMm3;
+  const out: MaskStatsResult = {
+    maskId: segmentationId,
+    voxels: sample.voxels,
+    slices: sample.slices,
+    volumeMm3,
+    volumeMl: volumeMm3 / 1000,
+    voxelMm: [grid.colSp, grid.rowSp, grid.sliceSp],
+    unit,
+    imageId,
+    warnings: [],
+  };
+  if (sample.missingValueSlices > 0) {
+    out.warnings.push("no-pixels");
+    return out;
+  }
+  const v = summarizeValues(sample.values, unit);
+  if (v) {
+    out.values = v;
+    out.meanTimesVolumeMl = v.mean * out.volumeMl;
+    if (opts?.withHistogram) out.histogram = roiHistogram(sample.values, unit) ?? undefined;
+  }
+  return out;
+}
+
+/** マスクの統計に使ったボクセルの CSV（BOM 付き）を塊で返す。取得不能・空なら null。 */
+export async function buildMaskVoxelDumpAsync(segmentationId: string, label: string): Promise<string[] | null> {
+  const grid = maskGrid(segmentationId);
+  if (!grid) return null;
+  const loaded = await loadMaskSlices(grid);
+  if (!loaded.length) return null;
+  const slices: MaskDumpSlice[] = loaded.map((s) => ({
+    sliceIndex: s.sliceIndex,
+    imageId: s.sourceId,
+    width: s.width,
+    labels: s.labels,
+    values: s.values,
+    plane: dumpPlaneOf(s.sourceId),
+  }));
+  const unit = resolveValueUnit(loaded[0].sourceId);
+  return maskVoxelDumpCsvChunks(slices, { label, maskId: segmentationId, unit });
+}
+
+/** 画素 CSV 用の幾何。IPP/IOP/画素間隔が揃わなければ null（座標セルを空にする。既定値で埋めない）。 */
+function dumpPlaneOf(imageId: string): PlaneGeometry | null {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const m = imageId ? (metaData.get("imagePlaneModule", imageId) as any) : null;
+  const finite3 = (v: ArrayLike<number> | undefined) =>
+    !!v && v.length >= 3 && Number.isFinite(v[0]) && Number.isFinite(v[1]) && Number.isFinite(v[2]);
+  const pos = (v: unknown) => typeof v === "number" && v > 0;
+  if (!m || !pos(m.rowPixelSpacing) || !pos(m.columnPixelSpacing)) return null;
+  if (!finite3(m.imagePositionPatient) || !finite3(m.rowCosines) || !finite3(m.columnCosines)) return null;
+  return {
+    imagePositionPatient: m.imagePositionPatient,
+    rowCosines: m.rowCosines,
+    columnCosines: m.columnCosines,
+    rowPixelSpacing: m.rowPixelSpacing,
+    columnPixelSpacing: m.columnPixelSpacing,
+  };
 }

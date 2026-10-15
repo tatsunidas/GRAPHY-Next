@@ -132,3 +132,36 @@ describe("roiStatsCsvBlobText", () => {
     expect(roiStatsCsvBlobText([row()]).charCodeAt(0)).toBe(0xfeff);
   });
 });
+
+describe("roiStatsToCsv（マスクの行）", () => {
+  const mask = {
+    maskId: "seg-1",
+    voxels: 120,
+    slices: 3,
+    volumeMm3: 810,
+    volumeMl: 0.81,
+    voxelMm: [1.5, 1.5, 3] as [number, number, number],
+    unit: "ms",
+    imageId: "img",
+    warnings: [],
+    values: { n: 120, mean: 812.5, sd: 0, min: 812.5, max: 812.5, median: 812.5, sum: 97500, p5: 812.5, p95: 812.5, skewness: 0, kurtosis: 0, entropy: 0, unit: "ms" },
+  };
+  it("既存の列の位置は変えず、末尾に volume[mL] と slices を足す", () => {
+    const [header, data] = parse(roiStatsToCsv([{ index: 1, label: "Cyl", tool: "mask", stats: undefined, mask }]));
+    expect(header.slice(0, 3)).toEqual(["#", "label", "tool"]);
+    expect(header.indexOf("warnings")).toBe(header.length - 3);
+    expect(header.slice(-2)).toEqual(["volume[mL]", "slices"]);
+    expect(data).toHaveLength(header.length);
+    expect(data[header.indexOf("kind")]).toBe("volume");
+    expect(data[header.indexOf("samples")]).toBe("120");
+    expect(data[header.indexOf("mean[ms]")]).toBe("812.5");
+    expect(data[header.indexOf("area[mm2]")]).toBe("");
+    expect(data[header.indexOf("volume[mL]")]).toBe("0.81");
+    expect(data[header.indexOf("slices")]).toBe("3");
+  });
+  it("2D の ROI の行は末尾 2 列が空で、列数が揃う", () => {
+    const [header, data] = parse(roiStatsToCsv([row()]));
+    expect(data).toHaveLength(header.length);
+    expect(data.slice(-2)).toEqual(["", ""]);
+  });
+});

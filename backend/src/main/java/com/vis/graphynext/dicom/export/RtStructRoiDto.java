@@ -19,7 +19,8 @@ public record RtStructRoiDto(String name, int[] color, String type, List<Contour
     /**
      * @param referencedSopInstanceUid 輪郭が乗るスライスの参照 SOPInstanceUID
      * @param points                   [x,y,z,...] 患者座標 mm
+     * @param geometricType            ContourGeometricType（CLOSED_PLANAR / OPEN_PLANAR / POINT 等。未記載は CLOSED_PLANAR）
      */
-    public record Contour(String referencedSopInstanceUid, double[] points) {
+    public record Contour(String referencedSopInstanceUid, double[] points, String geometricType) {
     }
 }
