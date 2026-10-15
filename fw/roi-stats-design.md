@@ -444,6 +444,9 @@ Cornerstone の annotation スタイルに **`textBoxVisibility`** がある
 
 - **母集団**: label &gt; 0 の前景ボクセル。segment が複数あってもマスク 1 行にまとめる（`Σ³` と同じ数え方）。
 - **体積**: `roi3d.maskGrid` を `Σ³`（`maskVolumeStats`）と共有するので、ボクセル数・体積は必ず一致する。
+  体積は「ボクセル数 × ボクセルの体積」ではなく、**スライスごとの輪郭の角柱（面積 × スライスの幅）の和**（メッシュの規則。
+  `fw/slice-depth-policy.md` §4）。均一な間隔ではボクセル数 × ボクセルの体積と同じ値になる。
+  PixelSpacing や奥行きが不明なら mL を出さず警告（`spacing-unknown` / `depth-unknown`）、スライス厚からの推定なら `depth-estimated`。
 - **値**: `computeMaskStatsAsync` が前景のあるスライスの元画像を `readModalitySlice` で**読み込んでから**集計し、
   2D と同じ `summarizeValues`（非有限値は除く）に通す。読めないスライスが残れば `no-pixels` を出して値の統計は出さない。
   - `Σ³` は cache に載っている画像だけを読み、非有限値も足し込む（`accumulateMaskStats`）。NaN を含むマスクでは両者が食い違う。

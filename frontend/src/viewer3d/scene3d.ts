@@ -26,6 +26,8 @@ import {
   type MeshActor,
 } from "../viewer/mesh3d";
 import { labelVolumeToMesh, meshToLabelVolume } from "../viewer/roiMesh";
+import { labelVolumeMeshVolume } from "../viewer/depthVolume";
+import type { DepthSource, SliceLayoutKind } from "../viewer/sliceGeometry";
 import { Centerline3D } from "../viewer/centerline";
 import { extractCenterlineGraph, graphSummary, type CenterlineGraph } from "../viewer/centerlineGraph";
 import { createEndoController, type EndoController } from "../viewer/endoscopy";
@@ -439,10 +441,11 @@ export interface AddOptions {
   name?: string;
   color?: V3;
   opacity?: number;
-  /** ROI の体積算出方式。既定 "voxel"（ボクセルカウント確定計算）。
-   * "mesh" はメッシュ（平滑化後）から算出した体積を使う（セグメント単位インポート等、
-   * 表示メッシュと数値を一致させたい用途向け）。 */
-  volumeFrom?: "voxel" | "mesh";
+  /**
+   * ROI の体積（mm³）を 2D 側で求めた値で上書きする（2D から取り込んだ ROI。2D の Σ³ と同じ値になる）。
+   * 省略すると、この体積の奥行き（{@link setVolumeDepth}）から元のスライスの角柱で求める。
+   */
+  volumeOverride?: { volumeMm3?: number; depthSource?: DepthSource };
   /** 取り込み元への参照（`SceneObject.source`）。 */
   source?: SceneObjectSource;
   /**
@@ -453,6 +456,31 @@ export interface AddOptions {
    * 省略時は従来どおり単色（`color`）。
    */
   pointColors?: Uint8Array;
+}
+
+/** 表示中の体積の奥行き（`fw/slice-depth-policy.md`）。ROI の体積を元のスライスの角柱で求めるのに使う。 */
+export interface VolumeDepthContext {
+  /** 奥行きの順の元スライスが当たる格子の面。無ければ全面を等幅で扱う。 */
+  gridIndexOf?: number[];
+  widths: number[];
+  source: DepthSource;
+  kind: SliceLayoutKind;
+}
+let volumeDepth: VolumeDepthContext | null = null;
+export function setVolumeDepth(c: VolumeDepthContext | null): void {
+  volumeDepth = c;
+}
+
+/** ROI の体積。メッシュ（元スライスの角柱）で求める。表示用の滑らかなメッシュの体積は使わない。奥行きが不明なら undefined。 */
+function roiMeshVolume(lv: LabelVolume): { volumeMm3?: number; source?: DepthSource } {
+  if (volumeDepth && (volumeDepth.source === "unknown" || volumeDepth.kind === "duplicates")) {
+    return { source: volumeDepth.source };
+  }
+  const depth = volumeDepth?.gridIndexOf
+    ? { gridIndexOf: volumeDepth.gridIndexOf, widths: volumeDepth.widths }
+    : undefined;
+  const r = labelVolumeMeshVolume(lv.data, lv.geom.dims, lv.geom.spacing, depth);
+  return { volumeMm3: r.volumeMm3, source: volumeDepth?.source };
 }
 
 /** メッシュ（`vtkPolyData`, LPS mm）をシーンに追加。追加した id を返す。 */
@@ -485,7 +513,7 @@ export function addMeshObject(polydata: Any, opts: AddOptions = {}): string | nu
 
 /**
  * 3D ROI（LabelVolume, 実空間 labelmap）をシーンに追加。
- * 表面メッシュ（marching cubes）を生成して描画し、体積はボクセルから確定計算する。
+ * 表面メッシュ（marching cubes）を生成して描画し、体積は元のスライスの角柱（メッシュ）から求める。
  */
 export function addRoiObject(lv: LabelVolume, opts: AddOptions = {}): string | null {
   const surf = labelVolumeToMesh(lv);
@@ -497,7 +525,10 @@ export function addRoiObject(lv: LabelVolume, opts: AddOptions = {}): string | n
   const data: SceneData = { polydata: surf, labelVolume: lv, ma };
   const voxels = countForeground(lv);
   const m = measureMesh(surf);
-  const volumeMm3 = opts.volumeFrom === "mesh" ? m.volumeMm3 : voxels * lv.voxelMm3;
+  const own = opts.volumeOverride
+    ? { volumeMm3: opts.volumeOverride.volumeMm3, source: opts.volumeOverride.depthSource }
+    : roiMeshVolume(lv);
+  const volumeMm3 = own.volumeMm3;
   const obj: SceneObject = {
     id,
     kind: "roi",
@@ -508,10 +539,9 @@ export function addRoiObject(lv: LabelVolume, opts: AddOptions = {}): string | n
     displayMode: "float",
     source: opts.source,
     voxels,
-    voxelVolumeMm3: voxels * lv.voxelMm3,
-    meshVolumeMm3: m.volumeMm3,
+    volumeDepthSource: own.source,
     volumeMm3,
-    volumeMl: volumeMm3 / 1000,
+    volumeMl: volumeMm3 === undefined ? undefined : volumeMm3 / 1000,
     surfaceAreaMm2: m.surfaceAreaMm2,
     diameters: m.diameters,
     numTriangles: m.numTriangles,
@@ -645,14 +675,14 @@ function applyRoiVolumeInternal(id: string, data: Uint8Array): void {
     /* ignore */
   }
   const voxels = countForeground(lv);
-  const volumeMm3 = voxels * lv.voxelMm3;
+  const own = roiMeshVolume(lv);
+  const volumeMm3 = own.volumeMm3;
   const m = surf ? measureMesh(surf) : null;
   updateSceneObject(id, {
     voxels,
-    voxelVolumeMm3: voxels * lv.voxelMm3,
-    meshVolumeMm3: m?.volumeMm3 ?? 0,
+    volumeDepthSource: own.source,
     volumeMm3,
-    volumeMl: volumeMm3 / 1000,
+    volumeMl: volumeMm3 === undefined ? undefined : volumeMm3 / 1000,
     surfaceAreaMm2: m?.surfaceAreaMm2 ?? 0,
     diameters: m?.diameters ?? [0, 0, 0],
     numTriangles: m?.numTriangles ?? 0,

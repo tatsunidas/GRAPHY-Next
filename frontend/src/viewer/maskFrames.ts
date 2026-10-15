@@ -14,6 +14,7 @@ import { getViewerContext } from "./viewerContext";
 import { setRoiMaskMeta, getRoiMaskMeta, getMaskSegments } from "./roiMaskStore";
 import { worldToVoxel, type LabelVolume, type VolumeGeom } from "./labelVolume";
 import { segmentRoiLabel, selectSegmentIndices } from "./maskBridgeCore";
+import { maskMeshVolumeOf } from "./maskVolume";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
@@ -41,6 +42,12 @@ export interface MaskFramesInput {
   rows: number;
   columns: number;
   segments: MaskSegmentSource[];
+  /**
+   * 2D 側で求めた体積（mm³。スライスごとの輪郭の角柱。2D の Σ³ と同じ値）。ウィンドウ間の受け渡しだけが持つ。
+   * 間隔が不明なら無い。`depthSource` があるときは、体積を出せなくても 3D 側で再計算しない合図になる。
+   */
+  volumeMm3?: number;
+  depthSource?: "ipp" | "sbs" | "thickness" | "unknown";
 }
 
 /** 表示中の base ビューポート（source 画像を持つもの）を探す。無ければ null。 */
@@ -443,7 +450,8 @@ export function extractMaskFrames(segmentationId: string, onlySegment?: number):
     segments.push({ number: segIndex, label, color, description, frames });
   }
   if (!segments.length) return null;
-  return { rows, columns: cols, segments };
+  const mv = maskMeshVolumeOf(segmentationId, onlySegment ?? undefined);
+  return { rows, columns: cols, segments, ...(mv ? { volumeMm3: mv.volumeMm3, depthSource: mv.depthSource } : {}) };
 }
 
 /**
@@ -457,7 +465,7 @@ export function framesToLabelVolume(
   input: MaskFramesInput,
   geom: VolumeGeom,
   segmentIndex?: number,
-  /** 体積のスライス順の SOP → k（`sliceLayout.sopIndexMap`）。あれば IPP より優先して、描かれている画像と同じ k に載せる。 */
+  /** SOP → 体積の格子の番号（`depthVolume.sopGridIndexMap`。補間した面には SOP が当たらない）。あれば IPP より優先して、描かれている画像と同じ k に載せる。 */
   sopToK?: ReadonlyMap<string, number>,
 ): LabelVolume | null {
   const [nx, ny, nz] = geom.dims;

@@ -202,6 +202,8 @@ export function SceneObjectPanel({
   const importRoiEntry = async (e: ListedRoi): Promise<boolean> => {
     if (!geom || !seriesUid) return false;
     let lv: LabelVolume | null = null;
+    // 2D 側で求めた体積（2D の Σ³ と同じ値）。ウィンドウ間で受け取ったときだけ。
+    let vol2d: { volumeMm3?: number; depthSource?: SceneObject["volumeDepthSource"] } | null = null;
     if (e.kind === "sphere") {
       lv = rasterizeSphereToLabelVolume(geom, e.center, e.radiusMm);
     } else if (e.windowId == null) {
@@ -209,13 +211,19 @@ export function SceneObjectPanel({
     } else {
       const frames = await requestRemoteMaskFrames(e.windowId, e.segmentationId, e.segmentIndex);
       lv = frames ? framesToLabelVolume(frames, geom, e.segmentIndex, sopToK) : null;
+      if (frames?.depthSource) vol2d = { volumeMm3: frames.volumeMm3, depthSource: frames.depthSource };
     }
     if (!lv) return false;
     const source: SceneObjectSource =
       e.kind === "sphere"
         ? { origin: "2d", seriesUid, c: e.c, t: e.t, sphereId: e.sphereId }
         : { origin: "2d", seriesUid, c: e.c, t: e.t, segmentationId: e.segmentationId, segmentIndex: e.segmentIndex };
-    return !!addRoiObject(lv, { name: e.label, color: rgb01(e.color), source });
+    return !!addRoiObject(lv, {
+      name: e.label,
+      color: rgb01(e.color),
+      source,
+      ...(vol2d ? { volumeOverride: vol2d } : {}),
+    });
   };
 
   const onAddRoi = (e: ListedRoi) => {
@@ -569,14 +577,14 @@ export function SceneObjectPanel({
                 {selected.voxels != null && (
                   <Stat k={t("scene3d.voxels")} v={num(selected.voxels, 0)} />
                 )}
-                {selected.kind === "roi" && selected.voxelVolumeMm3 != null ? (
-                  <>
-                    <Stat k={t("scene3d.volumeVoxel")} v={`${num(selected.voxelVolumeMm3 / 1000, 2)} mL`} />
-                    <Stat k={t("scene3d.volumeMesh")} v={`${num((selected.meshVolumeMm3 ?? 0) / 1000, 2)} mL`} />
-                  </>
-                ) : (
-                  <Stat k={t("scene3d.volume")} v={`${num(selected.volumeMl, 2)} mL`} />
-                )}
+                <Stat
+                  k={t("scene3d.volume")}
+                  v={
+                    selected.volumeMl === undefined
+                      ? "—"
+                      : `${num(selected.volumeMl, 2)} mL${selected.kind === "roi" && selected.volumeDepthSource === "thickness" ? ` (${t("scene3d.volumeEstimated")})` : ""}`
+                  }
+                />
                 <Stat k={t("scene3d.area")} v={`${num(selected.surfaceAreaMm2, 0)} mm²`} />
                 {selected.diameters && (
                   <Stat

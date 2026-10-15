@@ -35,7 +35,8 @@ import { useDeviceClass } from "../mobile/useDeviceClass";
 import { imageIdForInstance, imageIdForCell } from "../viewer/imageId";
 import { metaData } from "@cornerstonejs/core";
 import { buildMprVolume } from "../viewer/mpr";
-import { sliceSpacingReport, sopIndexMap } from "../viewer/sliceLayout";
+import { SliceDuplicatesError, sopGridIndexMap, volumeDepthNote, type VolumeDepthNote } from "../viewer/depthVolume";
+import { VolumeDepthChip } from "../viewer/VolumeDepthChip";
 import {
   createVtkVolumeView,
   vtkImageDataFromVolume,
@@ -63,7 +64,7 @@ import { SlabPanel } from "./SlabPanel";
 import { RepresentationStateDialog } from "./RepresentationStateDialog";
 import { ViewInfoOverlay } from "./ViewInfoOverlay";
 import { fetchLutData } from "../api";
-import { attachSceneRenderer, resetScene, setClipContext, updateClip, setOrthoSlice } from "./scene3d";
+import { attachSceneRenderer, resetScene, setClipContext, updateClip, setOrthoSlice, setVolumeDepth } from "./scene3d";
 import { geomFromImageData, type VolumeGeom } from "../viewer/labelVolume";
 import { useI18n } from "../i18n/i18n";
 import { fetchSettings } from "../settings/settingsApi";
@@ -123,7 +124,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
   const [tilt, setTilt] = useState<number | null>(null);
   // 体積のスライス順の SOP → k（2D の ROI を描かれている画像に合わせて載せる）と、間隔が不均一なときの各間隔。
   const [sopToK, setSopToK] = useState<Map<string, number> | undefined>(undefined);
-  const [unevenSteps, setUnevenSteps] = useState<number[] | null>(null);
+  const [depthNote, setDepthNote] = useState<VolumeDepthNote | null>(null);
   const [mode, setMode] = useState<VtkRenderMode>("VR");
   const [orthoPos, setOrthoPos] = useState<{ x: number; y: number; z: number }>({ x: 0.5, y: 0.5, z: 0.5 });
   const [lutName, setLutName] = useState<string | null>(null);
@@ -294,23 +295,20 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
       setTilt(built.corrected ? (built.tiltAngleDeg ?? null) : null);
       if (built.sortedImageIds) {
         const ids = built.sortedImageIds;
+        // 体積のスライス順の SOP → 格子番号（2D の ROI を、描かれている画像と同じスライスに載せる。補間した面には載せない）。
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const plane0 = (metaData.get("imagePlaneModule", ids[0]) ?? {}) as any;
-        const iop = (plane0.imageOrientationPatient ?? [1, 0, 0, 0, 1, 0]).map(Number);
-        const n = [iop[1] * iop[5] - iop[2] * iop[4], iop[2] * iop[3] - iop[0] * iop[5], iop[0] * iop[4] - iop[1] * iop[3]];
-        const positions = ids.map((id) => {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const ipp = ((metaData.get("imagePlaneModule", id) ?? {}) as any).imagePositionPatient;
-          return Array.isArray(ipp) ? Number(ipp[0]) * n[0] + Number(ipp[1]) * n[1] + Number(ipp[2]) * n[2] : NaN;
-        });
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        setSopToK(sopIndexMap(ids.map((id) => ((metaData.get("sopCommonModule", id) ?? {}) as any).sopInstanceUID)));
-        const rep = positions.every(Number.isFinite) ? sliceSpacingReport(positions) : null;
-        setUnevenSteps(rep && !rep.uniform ? rep.steps : null);
+        const sops = ids.map((id) => ((metaData.get("sopCommonModule", id) ?? {}) as any).sopInstanceUID as string | undefined);
+        setSopToK(sopGridIndexMap(sops, built.grid?.gridIndexOf));
       } else {
         setSopToK(undefined);
-        setUnevenSteps(null);
       }
+      setDepthNote(volumeDepthNote(built.geometry, built.grid));
+      setVolumeDepth({
+        gridIndexOf: built.grid?.gridIndexOf ?? (built.sortedImageIds ? built.geometry.order.map((_, i) => i) : undefined),
+        widths: built.geometry.widths,
+        source: built.geometry.source,
+        kind: built.geometry.kind,
+      });
       setVolumeId(volId);
 
       // Cornerstone が構築したボリュームから scalar 付き vtkImageData を組み立てて pure vtk へ渡す
@@ -386,7 +384,9 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
           ? t("viewer3d.glLost")
           : isCacheSizeExceeded(e)
             ? t("common.volumeMemExceeded", { budgetMb: String(getAppliedVolumeMaxMb()) })
-            : `${t("viewer3d.error")}: ${String(e)}`,
+            : e instanceof SliceDuplicatesError
+              ? t("volumeDepth.duplicates")
+              : `${t("viewer3d.error")}: ${String(e)}`,
       );
     }
   }, [mode2, t]);
@@ -606,11 +606,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         )}
         <span style={hTitle}>{t("main.toolbar.viewer3d")}</span>
         {title && <span style={hSeries}>{title}</span>}
-        {unevenSteps && (
-          <span style={tiltChip} title={t("viewer3d.unevenSpacingHint")} data-testid="viewer3d-uneven-spacing">
-            {t("viewer3d.unevenSpacing", { steps: unevenSteps.map((s) => Math.abs(s).toFixed(1)).join(" / ") })}
-          </span>
-        )}
+        <VolumeDepthChip note={depthNote} style={tiltChip} />
         {tilt !== null && (
           <span style={tiltChip} title={t("mpr.tiltCorrectedHint")}>
             {t("mpr.tiltCorrected", { deg: tilt.toFixed(1) })}
