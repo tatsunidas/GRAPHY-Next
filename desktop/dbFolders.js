@@ -81,8 +81,21 @@ function validGdrive(v) {
     DRIVE_ID_RE.test(v.driveFolderId || "") &&
     (v.driveId == null || DRIVE_ID_RE.test(v.driveId)) &&
     typeof v.name === "string" &&
-    (v.email == null || typeof v.email === "string")
+    (v.email == null || typeof v.email === "string") &&
+    (v.mode == null || GDRIVE_MODES.includes(v.mode)) &&
+    (v.cacheLimitBytes == null || validCacheLimit(v.cacheLimitBytes))
   );
+}
+
+/** "backup"＝ローカルが正本（Drive にバックアップ）、"cache"＝Drive が正本（ローカルは上限つきキャッシュ）。 */
+const GDRIVE_MODES = ["backup", "cache"];
+const GIB = 1024 * 1024 * 1024;
+/** モード A のキャッシュ上限の既定（利用者の決定: 15 GB）と、設定画面から選べる下限。 */
+const DEFAULT_CACHE_LIMIT_BYTES = 15 * GIB;
+const MIN_CACHE_LIMIT_BYTES = 1 * GIB;
+
+function validCacheLimit(n) {
+  return Number.isSafeInteger(n) && n > 0;
 }
 
 function saveState(state) {
@@ -199,7 +212,36 @@ function setGdrive(folder, cfg) {
     driveId: cfg.driveId || null,
     name: cfg.name,
     email: cfg.email || null,
+    mode: cfg.mode || "backup",
+    cacheLimitBytes: cfg.cacheLimitBytes || null,
   };
+  saveState(s);
+  return { ok: true };
+}
+
+/**
+ * モード A（cache）のキャッシュ上限を変える。画面から選べる下限は MIN_CACHE_LIMIT_BYTES。
+ * モード A でない設定・下限未満は受け付けない。
+ */
+function setGdriveCacheLimit(folder, bytes) {
+  const s = loadState();
+  const k = gdriveKey(s, folder);
+  if (!k) return { ok: false, reason: "not-enabled" };
+  if (s.gdrive[k].mode !== "cache") return { ok: false, reason: "not-cache-mode" };
+  if (!validCacheLimit(bytes) || bytes < MIN_CACHE_LIMIT_BYTES) return { ok: false, reason: "invalid-limit" };
+  s.gdrive[k].cacheLimitBytes = bytes;
+  saveState(s);
+  return { ok: true };
+}
+
+/** モードを変える（backup ↔ cache）。条件（同期済み・全件が手元）の検査は呼び出し側（main）。cache にするとき上限が無ければ既定を入れる。 */
+function setGdriveMode(folder, mode) {
+  if (!GDRIVE_MODES.includes(mode)) return { ok: false, reason: "invalid-mode" };
+  const s = loadState();
+  const k = gdriveKey(s, folder);
+  if (!k) return { ok: false, reason: "not-enabled" };
+  s.gdrive[k].mode = mode;
+  if (mode === "cache" && !s.gdrive[k].cacheLimitBytes) s.gdrive[k].cacheLimitBytes = DEFAULT_CACHE_LIMIT_BYTES;
   saveState(s);
   return { ok: true };
 }
@@ -295,7 +337,12 @@ module.exports = {
   loadState,
   getGdrive,
   setGdrive,
+  setGdriveCacheLimit,
+  setGdriveMode,
   clearGdrive,
+  GDRIVE_MODES,
+  DEFAULT_CACHE_LIMIT_BYTES,
+  MIN_CACHE_LIMIT_BYTES,
   DRIVE_ID_RE,
   messages,
   MARKER,

@@ -76,7 +76,7 @@ class GdriveBackupFlowTest {
                     backups.incrementAndGet();
                     GdriveSyncServiceTest.fakeBackup(zip);
                 }, LEASE, SNAP_EVERY, 3);
-        s.configure(new GdriveConfig("cid", "csecret", "rtoken-SECRET", FOLDER, null, "t", device, host));
+        s.configure(new GdriveConfig("cid", "csecret", "rtoken-SECRET", FOLDER, null, "t", device, host, false, 0));
         return s;
     }
 
@@ -221,7 +221,7 @@ class GdriveBackupFlowTest {
     // ── 復元 ──
 
     private GdriveConfig source() {
-        return new GdriveConfig("cid", "csecret", "rtoken-SECRET", FOLDER, null, "restore", "restore-device", "");
+        return new GdriveConfig("cid", "csecret", "rtoken-SECRET", FOLDER, null, "restore", "restore-device", "", false, 0);
     }
 
     private GdriveRestoreService restoreService() {
@@ -264,11 +264,86 @@ class GdriveBackupFlowTest {
         child.parent = p.id;
         child.folder = true;
         drive.files.put(child.id, child);
-        GdriveConfig parentOnly = new GdriveConfig("cid", "csecret", "rtoken-SECRET", p.id, null, "restore", "restore-device", "");
+        GdriveConfig parentOnly = new GdriveConfig("cid", "csecret", "rtoken-SECRET", p.id, null, "restore", "restore-device", "", false, 0);
         GdriveRestoreService r = restoreService();
         r.runSync(parentOnly, restored);
         assertEquals(GdriveRestoreService.Phase.FAILED, r.progress().phase(), String.valueOf(r.progress()));
         assertEquals("not-backup-folder", r.progress().error());
+    }
+
+    private long liveLocks() {
+        return drive.files.values().stream().filter(f -> !f.folder && !f.trashed && f.name.startsWith("lock-")).count();
+    }
+
+    @Test
+    void 周期が中断されてロックの印が立っていなくても_終了時に取り直して_スナップショットを置き_ロックを解放する() throws Exception {
+        // 実機で再現: 保存方式の切替（configure）の直後に終了すると、周期がロックを書いた直後・印を立てる前に割り込みで終わる
+        GdriveSyncService a = service(rootA, "dev-AAAA-0001", "hostA"); // configure 済み・周期はまだ走っていない（印は false）
+        // 中断された周期が残した、自分のロック
+        FakeDrive.File stale = new FakeDrive.File();
+        stale.id = "stalelock0001xx";
+        stale.name = "lock-dev-AAAA-0001.json";
+        stale.parent = FOLDER;
+        stale.bytes = "{\"deviceId\":\"dev-AAAA-0001\",\"startedAt\":1,\"heartbeatAt\":1}".getBytes();
+        drive.files.put(stale.id, stale);
+        assertEquals(1, liveLocks());
+        int before = backups.get();
+        a.shutdownWork();
+        assertEquals(before + 1, backups.get(), "取り直して、終了時のスナップショットを置いた");
+        assertEquals(0, liveLocks(), "自分のロックは解放（ゴミ箱）される。Drive に残らない");
+    }
+
+    @Test
+    void 他の端末が使用中なら_終了時にスナップショットは作らず_相手のロックには触れない() throws Exception {
+        GdriveSyncService b = service(rootB, "dev-BBBB-0002", "hostB");
+        b.cycle(); // B がロックを持っている
+        assertEquals(1, liveLocks());
+        GdriveSyncService a = service(rootA, "dev-AAAA-0001", "hostA"); // 周期は走っていない（印は false）
+        int before = backups.get();
+        a.shutdownWork();
+        assertEquals(before, backups.get(), "使用中の相手がいるので、索引のスナップショットは作らない");
+        assertEquals(1, liveLocks(), "B のロックはそのまま");
+        b.shutdownWork();
+        assertEquals(0, liveLocks());
+    }
+
+    @Test
+    void 索引のみの復元_モードA_はスナップショットだけを取り_DICOM_は取らない() throws Exception {
+        GdriveSyncService a = service(rootA, "dev-AAAA-0001", "hostA");
+        put(rootA, "1.1/2.1/3.1.dcm", rnd(300_000, 7));
+        put(rootA, "1.1/2.2/3.2.dcm", rnd(1000, 8));
+        a.cycle();
+        long gets = drive.log.stream().filter(l -> l.startsWith("GET /drive/v3/files/") && l.contains("?")).count();
+
+        GdriveRestoreService r = restoreService();
+        r.runSync(source(), restored, true);
+        assertEquals(GdriveRestoreService.Phase.DONE, r.progress().phase(), String.valueOf(r.progress()));
+        assertEquals(0, r.progress().total(), "DICOM は一覧にも載せない");
+        assertEquals(0, r.progress().done());
+        assertTrue(r.progress().snapshotRestored());
+        assertEquals("INDEX-V1", extractIndex(restored.resolve("graphy-index.mv.db")));
+        assertFalse(Files.exists(restored.resolve("dicom/1.1/2.1/3.1.dcm")), "DICOM は取らない");
+        assertFalse(Files.exists(restored.resolve("dicom")), "dicom/ も作らない");
+    }
+
+    @Test
+    void 索引のみの復元はスナップショットが無ければ失敗にする() throws Exception {
+        // スナップショットの無い Drive（連携を始める前の空のバックアップ）
+        GdriveRestoreService r = restoreService();
+        FakeDrive.File dicom = new FakeDrive.File();
+        dicom.id = "dicomfolder0001";
+        dicom.name = "dicom";
+        dicom.parent = FOLDER;
+        dicom.folder = true;
+        drive.files.put(dicom.id, dicom);
+        r.runSync(source(), restored, true);
+        assertEquals(GdriveRestoreService.Phase.FAILED, r.progress().phase(), String.valueOf(r.progress()));
+        assertEquals("no-snapshot", r.progress().error());
+        assertFalse(Files.exists(restored.resolve("graphy-index.mv.db")));
+        // DICOM も取る従来の復元は、同じ状態でも完了する（拒否が indexOnly だけの条件であることの対）
+        GdriveRestoreService r2 = restoreService();
+        r2.runSync(source(), restored);
+        assertEquals(GdriveRestoreService.Phase.DONE, r2.progress().phase(), String.valueOf(r2.progress()));
     }
 
     /** 2 件目の取得を落とす。JDK の HttpClient は閉じた接続の GET を 1 回だけ自動でやり直すので、2 回続けて落とす。 */

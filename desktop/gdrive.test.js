@@ -3,7 +3,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { createBackupFolder, safeName, stamp } = require("./gdriveFolder");
+const { createBackupFolder, describeBackupFolder, safeName, stamp } = require("./gdriveFolder");
 
 const json = (status, body) => ({ ok: status < 300, status, json: async () => body });
 
@@ -49,4 +49,24 @@ test("名前: / や制御文字を除く・空は既定名・長さを抑える"
   assert.equal(safeName(""), "db");
   assert.equal(safeName("x".repeat(300)).length, 100);
   assert.equal(stamp(new Date("2026-01-02T03:04:05Z")), "20260102");
+});
+
+test("describeBackupFolder: 名前と共有ドライブの ID を返す。フォルダでない・ゴミ箱・取得失敗は断る（負例）", async () => {
+  const mk = (status, body) => async () => json(status, body);
+  const FOLDER = "application/vnd.google-apps.folder";
+  assert.deepEqual(
+    await describeBackupFolder({ token: "t", folderId: "F", fetchImpl: mk(200, { id: "F", name: "GRAPHY-DB-x-20261015", mimeType: FOLDER, driveId: "D1" }) }),
+    { ok: true, name: "GRAPHY-DB-x-20261015", driveId: "D1" },
+  );
+  assert.deepEqual(
+    await describeBackupFolder({ token: "t", folderId: "F", fetchImpl: mk(200, { id: "F", name: "n", mimeType: FOLDER }) }),
+    { ok: true, name: "n", driveId: null },
+    "マイドライブは driveId なし",
+  );
+  assert.deepEqual(await describeBackupFolder({ token: "t", folderId: "F", fetchImpl: mk(200, { id: "F", name: "n", mimeType: "text/plain" }) }), { ok: false, error: "not-folder" });
+  assert.deepEqual(await describeBackupFolder({ token: "t", folderId: "F", fetchImpl: mk(200, { id: "F", name: "n", mimeType: FOLDER, trashed: true }) }), { ok: false, error: "not-folder" });
+  assert.deepEqual(await describeBackupFolder({ token: "t", folderId: "F", fetchImpl: mk(404, {}) }), { ok: false, error: "folder-404" });
+  const calls = [];
+  await describeBackupFolder({ token: "tok", folderId: "A/B", fetchImpl: async (url, init) => { calls.push({ url, auth: init.headers.Authorization }); return json(200, { mimeType: FOLDER, name: "x" }); } });
+  assert.ok(calls[0].url.includes("supportsAllDrives=true") && calls[0].url.includes("A%2FB") && calls[0].auth === "Bearer tok");
 });

@@ -94,4 +94,14 @@ class GlobalExceptionHandlerTest {
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, res.getStatusCode());
         assertTrue(res.getBody().message().contains("想定外"));
     }
+
+    @Test
+    void storageUnavailable_は_503_と理由コード_で_404_と区別できる() {
+        ResponseEntity<GlobalExceptionHandler.ErrorResponse> res = handler.storageUnavailable(
+                new com.vis.graphynext.dicom.store.StorageUnavailableException("offline"), request());
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, res.getStatusCode());
+        assertEquals(503, res.getBody().status());
+        assertEquals("offline", res.getBody().message());
+        assertEquals("StorageUnavailable", res.getBody().error());
+    }
 }

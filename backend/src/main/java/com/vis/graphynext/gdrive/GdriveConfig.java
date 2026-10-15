@@ -11,7 +11,8 @@ import java.util.regex.Pattern;
  * 🔴 {@link #toString()} に秘密を出さない。
  */
 public record GdriveConfig(String clientId, String clientSecret, String refreshToken,
-                           String folderId, String driveId, String name, String deviceId, String host) {
+                           String folderId, String driveId, String name, String deviceId, String host,
+                           boolean cache, long cacheLimitBytes) {
 
     /** {@code desktop/dbFolders.js} の {@code DRIVE_ID_RE} と同じ形。 */
     static final Pattern ID_RE = Pattern.compile("[A-Za-z0-9_-]{10,128}");
@@ -31,6 +32,9 @@ public record GdriveConfig(String clientId, String clientSecret, String refreshT
         }
         if (driveId != null && !driveId.isEmpty() && !ID_RE.matcher(driveId).matches()) {
             return "bad-drive-id";
+        }
+        if (cache && cacheLimitBytes <= 0) {
+            return "bad-cache-limit";
         }
         return null;
     }

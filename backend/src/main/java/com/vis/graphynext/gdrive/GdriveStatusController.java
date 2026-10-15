@@ -44,6 +44,25 @@ public class GdriveStatusController {
         return sync.status();
     }
 
+    /** すべてローカルに保存する（モード A）。空き容量が足りなければ 400 not-enough-space で、何も取らない。 */
+    @PostMapping("/localize")
+    public ResponseEntity<Map<String, Object>> localize() {
+        String err = sync.startLocalize();
+        return err == null ? ResponseEntity.accepted().body(Map.of("ok", true))
+                : ResponseEntity.badRequest().body(Map.of("ok", false, "error", err));
+    }
+
+    @GetMapping("/localize")
+    public GdriveSyncService.LocalizeProgress localizeProgress() {
+        return sync.localizeProgress();
+    }
+
+    @org.springframework.web.bind.annotation.DeleteMapping("/localize")
+    public Map<String, Object> cancelLocalize() {
+        sync.cancelLocalize();
+        return Map.of("ok", true);
+    }
+
     @PostMapping("/sync")
     public ResponseEntity<Map<String, Object>> syncNow() {
         sync.syncNow();

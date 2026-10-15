@@ -93,6 +93,7 @@ public class AutomatorService {
                 try {
                     Files.deleteIfExists(file);
                     layout.pruneEmptyDirs(file);
+                    layout.notifyChanged(file);
                 } catch (Exception e) {
                     log.warn("[automator] ファイル削除に失敗: {} ({})", inst.getUri(), e.toString());
                 }

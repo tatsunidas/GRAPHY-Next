@@ -312,4 +312,29 @@ class DbTransferTest {
         local.setRemoteAddr("::1");
         DbTransferController.requireLoopback(local);
     }
+
+    @Test
+    void モードA_では転送を拒否し_何も作らず元も消さない() throws Exception {
+        ingest("MA1", "cache-st", "cache-se", "cache.1");
+        layout.setBackend(new com.vis.graphynext.dicom.store.StorageBackend() {
+            @Override public boolean cacheMode() { return true; }
+            @Override public Path ensureLocal(String rel) { return null; }
+            @Override public void prefetch(java.util.Collection<String> r, java.util.function.BooleanSupplier c) { }
+            @Override public void touch(String rel) { }
+        });
+        try {
+            for (var mode : DbTransferService.Mode.values()) {
+                var e = assertThrows(IllegalArgumentException.class,
+                        () -> transfer.transfer(List.of("cache-st"), target.toString(), mode));
+                assertEquals("cache-mode-unsupported", e.getMessage());
+            }
+        } finally {
+            layout.setBackend(null);
+        }
+        assertFalse(Files.exists(target.resolve("inbox")), "移し先に何も作らない");
+        assertTrue(repo.findByStudyInstanceUid("cache-st").size() == 1, "元は消えない（move でも）");
+        assertTrue(Files.exists(layout.resolveForRead(repo.findByStudyInstanceUid("cache-st").get(0))));
+        // モード A でなければ、同じ操作は通る（拒否が条件つきであることの対）
+        assertEquals(1, transfer.transfer(List.of("cache-st"), target.toString(), DbTransferService.Mode.copy).files());
+    }
 }

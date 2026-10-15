@@ -213,8 +213,21 @@ export interface GdriveDesktopStatus {
   signedIn: boolean;
   email: string | null;
   /** 使用中の DB に設定された保存先。無ければ null。 */
-  folder: { name: string; shared: boolean; email: string | null } | null;
+  folder: {
+    name: string;
+    shared: boolean;
+    email: string | null;
+    /** "backup"＝ローカルが正本（Drive にバックアップ）／"cache"＝Drive が正本（手元は上限つきキャッシュ）。 */
+    mode: GdriveMode;
+    /** モード A の手元の上限（バイト）。 */
+    cacheLimitBytes: number;
+  } | null;
+  /** 上限の既定（15 GB）と、画面から選べる下限（1 GB）。バイト。 */
+  defaultCacheLimitBytes: number;
+  minCacheLimitBytes: number;
 }
+
+export type GdriveMode = "backup" | "cache";
 
 export type GdriveActionResult = { ok: true; name?: string; parentName?: string; shared?: boolean; email?: string | null }
   | { ok: false; error?: string; canceled?: boolean };
@@ -284,10 +297,18 @@ export interface GraphyDesktop {
   gdriveStatus?: () => Promise<GdriveDesktopStatus>;
   gdriveSignIn?: () => Promise<{ ok: boolean; email?: string | null; error?: string }>;
   gdriveSignOut?: () => Promise<{ ok: boolean; error?: string }>;
-  gdriveEnable?: () => Promise<GdriveActionResult>;
+  /** mode を省くと "backup"（従来どおり）。 */
+  gdriveEnable?: (mode?: GdriveMode) => Promise<GdriveActionResult>;
+  /** モードの切替。条件（同期済み／全件が手元）を満たさなければ { ok:false, error } を返す（main が検査）。 */
+  gdriveSetMode?: (mode: GdriveMode) => Promise<{ ok: boolean; error?: string }>;
+  /** モード A の手元の上限（バイト）。下限未満は { ok:false, error:"invalid-limit" }。 */
+  gdriveSetCacheLimit?: (bytes: number) => Promise<{ ok: boolean; error?: string }>;
   gdriveDisable?: () => Promise<{ ok: boolean; canceled?: boolean; error?: string }>;
   /** Drive のバックアップを選び、空のフォルダへ取り戻し始める。進み具合は backend の /api/gdrive/restore。 */
-  gdriveRestore?: (title: string) => Promise<{ ok: true; folder: string } | { ok: false; error?: string; canceled?: boolean }>;
+  gdriveRestore?: (
+    title: string,
+    mode?: GdriveMode,
+  ) => Promise<{ ok: true; folder: string; mode?: GdriveMode } | { ok: false; error?: string; canceled?: boolean }>;
   /** ネイティブダイアログ（confirm/alert/prompt）後にレンダラのキーボードフォーカスを復帰させる。 */
   refocus?: () => void;
   /** 秘密情報を OS のキーチェーンで暗号化して保存する（デスクトップのみ）。 */

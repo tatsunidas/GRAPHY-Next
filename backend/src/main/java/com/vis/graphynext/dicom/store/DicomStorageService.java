@@ -293,6 +293,7 @@ public class DicomStorageService {
                 insts.addAll(repo.findBySeries(studyUid, se));
             }
         }
+        layout.prefetch(insts, () -> false); // モード A: 手元に無いものを先にまとめて取り寄せる（失敗は例外）
         return insts.stream()
                 .map(layout::resolveForRead)
                 .filter(java.util.Objects::nonNull)

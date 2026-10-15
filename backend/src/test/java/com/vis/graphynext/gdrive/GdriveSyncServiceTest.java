@@ -60,7 +60,7 @@ class GdriveSyncServiceTest {
     }
 
     static GdriveConfig cfg(String folder) {
-        return new GdriveConfig("cid", "csecret", "rtoken-SECRET", folder, null, "t", "dev-AAAA-0001", "hostA");
+        return new GdriveConfig("cid", "csecret", "rtoken-SECRET", folder, null, "t", "dev-AAAA-0001", "hostA", false, 0);
     }
 
     /** 索引スナップショットの代わり（H2 の実物は別のテストで確かめる）。 */
@@ -321,7 +321,7 @@ class GdriveSyncServiceTest {
         put("a/b/c.dcm", rnd(100, 80));
         svc.cycle();
         String dump = svc.status().toString() + cfg(FOLDER)
-                + new GdriveInternalController.ConfigBody(true, "cid", "csecret", "rtoken-SECRET", FOLDER, null, "t", null, "dev-AAAA-0001", "hostA");
+                + new GdriveInternalController.ConfigBody(true, "cid", "csecret", "rtoken-SECRET", FOLDER, null, "t", null, "dev-AAAA-0001", "hostA", false, 0L);
         assertFalse(dump.contains("rtoken-SECRET"));
         assertFalse(dump.contains("csecret"));
     }

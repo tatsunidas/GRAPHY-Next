@@ -35,7 +35,7 @@ public class GdriveInternalController {
 
     public record ConfigBody(Boolean enabled, String clientId, String clientSecret, String refreshToken,
                              String folderId, String driveId, String name, String email, String deviceId,
-                             String host) {
+                             String host, Boolean cache, Long cacheLimitBytes) {
         @Override
         public String toString() {
             return "ConfigBody[folderId=" + folderId + "]"; // 🔴 秘密を出さない
@@ -49,7 +49,8 @@ public class GdriveInternalController {
             return ResponseEntity.ok(Map.of("ok", true, "enabled", false));
         }
         GdriveConfig cfg = new GdriveConfig(b.clientId(), b.clientSecret(), b.refreshToken(), b.folderId(),
-                b.driveId(), b.name(), b.deviceId(), b.host());
+                b.driveId(), b.name(), b.deviceId(), b.host(), Boolean.TRUE.equals(b.cache()),
+                b.cacheLimitBytes() == null ? 0 : b.cacheLimitBytes());
         String problem = cfg.problem();
         if (problem != null) {
             log.warn("[gdrive] config rejected: {}", problem);
@@ -60,7 +61,7 @@ public class GdriveInternalController {
     }
 
     public record RestoreBody(String clientId, String clientSecret, String refreshToken, String sourceFolderId,
-                              String destDir) {
+                              String destDir, Boolean indexOnly) {
         @Override
         public String toString() {
             return "RestoreBody[sourceFolderId=" + sourceFolderId + "]"; // 🔴 秘密を出さない
@@ -71,8 +72,8 @@ public class GdriveInternalController {
     @PostMapping("/restore")
     public ResponseEntity<Map<String, Object>> restore(@RequestBody RestoreBody b) {
         GdriveConfig src = new GdriveConfig(b.clientId(), b.clientSecret(), b.refreshToken(), b.sourceFolderId(),
-                null, "restore", "restore-device", "");
-        String err = b.destDir() == null ? "dest-not-absolute" : restore.start(src, java.nio.file.Path.of(b.destDir()));
+                null, "restore", "restore-device", "", false, 0);
+        String err = b.destDir() == null ? "dest-not-absolute" : restore.start(src, java.nio.file.Path.of(b.destDir()), Boolean.TRUE.equals(b.indexOnly()));
         return err == null ? ResponseEntity.accepted().body(Map.of("ok", true))
                 : ResponseEntity.badRequest().body(Map.of("ok", false, "error", err));
     }

@@ -20,6 +20,7 @@ const REASON_KEYS: Record<string, string> = {
   "not-enough-space": "dbTransfer.reason.notEnoughSpace",
   "study-not-found": "dbTransfer.reason.studyNotFound",
   "local-only": "dbTransfer.reason.localOnly",
+  "cache-mode-unsupported": "dbTransfer.reason.cacheModeUnsupported",
 };
 
 /** 既知の理由コードなら文言のキー、そうでなければ null（backend の文をそのまま出す）。 */

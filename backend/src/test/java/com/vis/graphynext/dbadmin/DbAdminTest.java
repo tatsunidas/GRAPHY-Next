@@ -33,6 +33,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * standalone のローカル DB 管理（患者一覧/検索・編集[ファイル書換]・削除[ファイル含む]・統計）。
  * 設定未保存なので既定（ファイルも削除/書換）で動作する。
  */
+@org.springframework.test.context.event.RecordApplicationEvents
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.NONE,
         properties = {
@@ -122,6 +123,126 @@ class DbAdminTest {
             Attributes ds = in.readDataset();
             assertEquals("New^Name", ds.getString(Tag.PatientName), "DICOM ファイルのタグも書換");
             assertEquals("19800101", ds.getString(Tag.PatientBirthDate));
+        }
+    }
+
+    /** モード A（Drive 正本）の「手元に無い」を再現する取り寄せ口。ensureLocal は保存しておいた内容を書き戻す／失敗させる。 */
+    private static final class EvictedBackend implements com.vis.graphynext.dicom.store.StorageBackend {
+        final java.util.Map<String, byte[]> remote = new java.util.HashMap<>();
+        final java.util.List<String> fetched = new java.util.ArrayList<>();
+        final Path root;
+        boolean fail;
+
+        EvictedBackend(Path root) {
+            this.root = root;
+        }
+
+        @Override public boolean cacheMode() {
+            return true;
+        }
+
+        @Override public Path ensureLocal(String rel) {
+            byte[] b = remote.get(rel);
+            if (b == null) {
+                return null;
+            }
+            if (fail) {
+                throw new com.vis.graphynext.dicom.store.StorageUnavailableException("offline");
+            }
+            try {
+                Path p = root.resolve(rel);
+                Files.createDirectories(p.getParent());
+                Files.write(p, b);
+                fetched.add(rel);
+                return p;
+            } catch (java.io.IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+        }
+
+        @Override public void prefetch(java.util.Collection<String> rels, java.util.function.BooleanSupplier cancelled) {
+            rels.forEach(this::ensureLocal);
+        }
+
+        @Override public void touch(String rel) {
+        }
+    }
+
+    @Autowired
+    org.springframework.test.context.event.ApplicationEvents events;
+
+    /** 取り込んだファイルを「追い出した」状態にする（手元から消し、正本は backend が持つ）。 */
+    private EvictedBackend evict(String pid) throws Exception {
+        DicomInstance r = repo.findByPatientId(pid).get(0);
+        Path f = layout.resolveForRead(r);
+        EvictedBackend be = new EvictedBackend(layout.root());
+        be.remote.put(layout.toStored(f), Files.readAllBytes(f));
+        Files.delete(f);
+        return be;
+    }
+
+    @Test
+    void モードA_追い出し済みの患者を編集すると_先に取り寄せて書き換え_変更を通知する() throws Exception {
+        ingest("EDITA", "Old^Name", "EDITA.s", "se", "EDITA.sop", "CT");
+        EvictedBackend be = evict("EDITA");
+        layout.setBackend(be);
+        try {
+            events.clear();
+            dbAdmin.updatePatient("EDITA", "New^Name", "19800101", "M", null);
+            assertEquals(1, be.fetched.size(), "書き換える前に取り寄せた");
+            Path f = layout.root().resolve(be.fetched.get(0));
+            try (DicomInputStream in = new DicomInputStream(f.toFile())) {
+                in.readFileMetaInformation();
+                assertEquals("New^Name", in.readDataset().getString(Tag.PatientName), "取り寄せたファイルが書き換わった");
+            }
+            assertTrue(events.stream(com.vis.graphynext.gdrive.StorageChanged.class)
+                    .anyMatch(e -> e.relPath().equals(be.fetched.get(0))), "書き換えを Drive 同期へ通知した（再アップロードされる）");
+            assertEquals("New^Name", repo.findByPatientId("EDITA").get(0).getPatientName());
+        } finally {
+            layout.setBackend(null);
+        }
+    }
+
+    @Test
+    void モードA_取り寄せに失敗したら_患者編集は索引も変えずに失敗する() throws Exception {
+        ingest("EDITB", "Old^Name", "EDITB.s", "se", "EDITB.sop", "CT");
+        EvictedBackend be = evict("EDITB");
+        be.fail = true;
+        layout.setBackend(be);
+        try {
+            org.junit.jupiter.api.Assertions.assertThrows(com.vis.graphynext.dicom.store.StorageUnavailableException.class,
+                    () -> dbAdmin.updatePatient("EDITB", "New^Name", "19800101", "M", null));
+        } finally {
+            layout.setBackend(null);
+        }
+        assertEquals("Old^Name", repo.findByPatientId("EDITB").get(0).getPatientName(),
+                "握りつぶして索引だけ更新すると、索引と実体（Drive の正本）が食い違う");
+    }
+
+    @Test
+    void モードA_追い出し済みの画像を含むシリーズ統合は_取り寄せて移し_元の場所を通知する() throws Exception {
+        ingestInst("MGA", "P", "MGA.study", "MGA.se1", "MGA.s1", "CT", 1, 1);
+        ingestInst("MGA", "P", "MGA.study", "MGA.se2", "MGA.s2", "CT", 2, 1);
+        DicomInstance first = repo.findBySeries("MGA.study", "MGA.se1").get(0);
+        String oldRel = layout.toStored(layout.resolveForRead(first));
+        Path f = layout.resolveForRead(first);
+        EvictedBackend be = new EvictedBackend(layout.root());
+        be.remote.put(oldRel, Files.readAllBytes(f));
+        Files.delete(f);
+        layout.setBackend(be);
+        try {
+            events.clear();
+            DbAdminService.MergeResult r = dbAdmin.mergeSeries("MGA.study", List.of("MGA.se1", "MGA.se2"), null, 7, "M");
+            assertEquals(2, r.moved());
+            assertEquals(0, r.failed(), "手元に無い画像も取り寄せて移せる");
+            assertEquals(List.of(oldRel), be.fetched);
+            assertTrue(events.stream(com.vis.graphynext.gdrive.StorageChanged.class).anyMatch(e -> e.relPath().equals(oldRel)),
+                    "元の場所が消えたことを Drive 同期へ通知した");
+            for (DicomInstance m : repo.findBySeries("MGA.study", r.seriesInstanceUid())) {
+                assertTrue(Files.exists(layout.resolveForRead(m)));
+            }
+        } finally {
+            layout.setBackend(null);
         }
     }
 

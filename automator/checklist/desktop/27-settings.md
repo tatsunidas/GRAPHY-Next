@@ -20,6 +20,8 @@
 | 7 | Google Drive バックアップ: ネット断 → 復帰で残件が空になる。ローカル削除は Drive のゴミ箱へ移る | 要人間確認 | |
 | 8 | Google Drive バックアップ: 別の端末が使用中のときは同期せず、確認して引き継げる | 要人間確認 | |
 | 9 | Google Drive から新しい DB フォルダへ復元し、件数・md5・索引が一致する | 要人間確認 | |
+| 10 | Google Drive を正本にする（モード A）: 上限を超えた分が手元から消え、手元に無い画像を開くと Drive から取り寄せられ、ネット断では理由つきで開けない | 要人間確認 | |
+| 11 | モード A: 「すべてローカルに保存」の完了後に、手元を正本に戻す・Drive 連携を解除できる（手元に無い画像があるうちは断られる） | 要人間確認 | |
 
 ## 小項目詳細
 
@@ -108,3 +110,23 @@
 <!-- AUTOMATOR:BEGIN 27-settings.item-09 -->
 （未実装）
 <!-- AUTOMATOR:END 27-settings.item-09 -->
+
+### 10. Google Drive を正本にする（モード A）: 追い出し・取り寄せ・ネット断
+
+- ソース: fw/gdrive-p2.md
+- 対応 fixture: (未定義)
+- requiresHuman: Google のログインと Picker（保存先の選択）が要る。上限は設定で小さく（1 GB）して試す。
+
+<!-- AUTOMATOR:BEGIN 27-settings.item-10 -->
+（未実装 — 手順は fw/verify-db-gdrive.md の「モード A」）
+<!-- AUTOMATOR:END 27-settings.item-10 -->
+
+### 11. モード A: すべてローカルに保存 → 手元を正本に戻す・解除
+
+- ソース: fw/gdrive-p2.md
+- 対応 fixture: (未定義)
+- requiresHuman: 実 Drive が要る。
+
+<!-- AUTOMATOR:BEGIN 27-settings.item-11 -->
+（未実装）
+<!-- AUTOMATOR:END 27-settings.item-11 -->

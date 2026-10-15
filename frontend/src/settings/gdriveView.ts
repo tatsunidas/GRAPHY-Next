@@ -6,7 +6,7 @@
  * 環境設定 ＞ データ管理 ＞ Google Drive バックアップ の表示ロジック。
  * 状態の判断は backend（`GdriveSyncService`）と main にあり、ここはコードを文言のキーに写すだけ。
  */
-import type { GdriveDesktopStatus } from "../desktopBridge";
+import type { GdriveDesktopStatus, GdriveMode } from "../desktopBridge";
 
 export type GdriveState = "DISABLED" | "CONNECTED" | "SYNCING" | "OFFLINE" | "NEEDS_LOGIN" | "NEEDS_ATTENTION";
 
@@ -21,6 +21,27 @@ export interface GdriveSyncStatus {
   lastError: string | null;
   lockedBy: string | null;
   lastSnapshotAt: number | null;
+  /** "backup" / "cache"。以下のキャッシュの項目は "cache" のときだけ意味がある（"backup" では 0）。 */
+  mode: GdriveMode | null;
+  cacheBytes: number;
+  cacheLimitBytes: number;
+  localCount: number;
+  /** 手元に実体が無い（Drive にだけある）件数。 */
+  evictedCount: number;
+  /** Drive にだけあって、索引へ取り込んだ件数（今回の起動以降）。 */
+  adopted: number;
+  /** 手元の保存先の空き容量（"cache" のときだけ）。 */
+  usableBytes: number;
+}
+
+/** `GET /api/gdrive/localize`（すべてローカルに保存の進み具合） */
+export interface GdriveLocalizeProgress {
+  phase: "IDLE" | "RUNNING" | "DONE" | "FAILED" | "CANCELLED";
+  total: number;
+  done: number;
+  failed: number;
+  bytesTotal: number;
+  error: string | null;
 }
 
 /** `GET /api/gdrive/restore` */
@@ -77,8 +98,9 @@ export function stateView(s: GdriveSyncStatus | null): StateView {
       return {
         tone: "warn",
         labelKey: "settings.gdrive.state.offline",
-        detailKey: "settings.gdrive.offlineHelp",
-        params: { count: s.pending },
+        // Drive が正本のときは、未送信より「手元に無い画像が開けない」ことが利用者に効く
+        detailKey: s.mode === "cache" ? "settings.gdrive.offlineHelpCache" : "settings.gdrive.offlineHelp",
+        params: { count: s.pending, evicted: s.evictedCount },
       };
     case "NEEDS_LOGIN":
       return { tone: "error", labelKey: "settings.gdrive.state.needsLogin", detailKey: "settings.gdrive.needsLoginHelp", params: {} };
@@ -116,6 +138,18 @@ export function restorePercent(p: GdriveRestoreProgress | null): number | null {
 }
 
 const ACTION_ERROR_KEYS: Record<string, string> = {
+  "not-synced": "settings.gdrive.err.notSynced",
+  "not-all-local": "settings.gdrive.err.notAllLocal",
+  "backend-unavailable": "settings.gdrive.err.backendUnavailable",
+  "invalid-limit": "settings.gdrive.err.invalidLimit",
+  "invalid-mode": "settings.gdrive.err.invalidMode",
+  "not-cache-mode": "settings.gdrive.err.notCacheMode",
+  "not-enabled": "settings.gdrive.err.notEnabled",
+  "not-enough-space": "settings.gdrive.err.notEnoughSpace",
+  "no-snapshot": "settings.gdrive.err.noSnapshot",
+  offline: "settings.gdrive.err.network",
+  "needs-login": "settings.gdrive.err.notSignedIn",
+  "not-on-drive": "settings.gdrive.err.notOnDrive",
   "no-oauth-client": "settings.gdrive.err.noClient",
   "no-picker-key": "settings.gdrive.err.noPickerKey",
   "not-signed-in": "settings.gdrive.err.notSignedIn",
@@ -142,4 +176,66 @@ export function actionErrorKey(code: string | undefined): string {
   if (ACTION_ERROR_KEYS[code]) return ACTION_ERROR_KEYS[code];
   const m = /^(http-\d+)/.exec(code);
   return (m && ACTION_ERROR_KEYS[m[1]]) || "settings.gdrive.err.unknown";
+}
+
+const GIB = 1024 ** 3;
+const MIB = 1024 ** 2;
+
+/** バイト → 「15 GB」「800 MB」。1 GB 以上は小数 1 桁まで（整数なら小数なし）。単位は 1024 刻み（OS の表記に合わせる）。 */
+export function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return "?";
+  if (n >= GIB) {
+    const g = n / GIB;
+    return `${Number.isInteger(g) ? g : g.toFixed(1)} GB`;
+  }
+  return `${Math.round(n / MIB)} MB`;
+}
+
+export interface CacheUsage {
+  /** 使用量 / 上限（上限が 0 のとき 0）。1 を超えることがある（未送信・直近に使ったものは消せない）。 */
+  ratio: number;
+  /** 上限を超えている。 */
+  over: boolean;
+  /** 手元の件数 / 全件。 */
+  localCount: number;
+  totalCount: number;
+}
+
+export function cacheUsage(s: GdriveSyncStatus | null): CacheUsage | null {
+  if (!s || s.mode !== "cache") return null;
+  const ratio = s.cacheLimitBytes > 0 ? s.cacheBytes / s.cacheLimitBytes : 0;
+  return { ratio, over: s.cacheBytes > s.cacheLimitBytes, localCount: s.localCount, totalCount: s.localCount + s.evictedCount };
+}
+
+/**
+ * 空きが足りないおそれ: 上限まで増えうる分（上限 − 使用量）より、手元の空きが少ない。
+ * 空きが分からない（0）ときは出さない（黙って安心させず、警告も出さない＝情報なし）。
+ */
+export function lowDiskWarning(s: GdriveSyncStatus | null): boolean {
+  if (!s || s.mode !== "cache" || s.usableBytes <= 0) return false;
+  return s.usableBytes < Math.max(0, s.cacheLimitBytes - s.cacheBytes);
+}
+
+/** 上限の入力（GB）→ バイト。数でない・0 以下・下限未満は理由つきで断る。 */
+export function parseLimitGb(input: string, minBytes: number): { ok: true; bytes: number } | { ok: false; error: "invalid" | "too-small" } {
+  const text = input.trim().replace(/,/g, "");
+  if (!/^\d+(\.\d+)?$/.test(text)) return { ok: false, error: "invalid" };
+  const gb = Number(text);
+  if (!Number.isFinite(gb) || gb <= 0) return { ok: false, error: "invalid" };
+  const bytes = Math.round(gb * GIB);
+  if (!Number.isSafeInteger(bytes)) return { ok: false, error: "invalid" };
+  if (bytes < minBytes) return { ok: false, error: "too-small" };
+  return { ok: true, bytes };
+}
+
+/** すべてローカルに保存を始められるか（モード A・手元に無いものがある・実行中でない）。 */
+export function canLocalize(s: GdriveSyncStatus | null, p: GdriveLocalizeProgress | null): boolean {
+  return !!s && s.mode === "cache" && s.evictedCount > 0 && p?.phase !== "RUNNING";
+}
+
+export function localizePercent(p: GdriveLocalizeProgress | null): number | null {
+  if (!p || p.phase === "IDLE") return null;
+  if (p.phase === "DONE") return 100;
+  if (p.total <= 0) return null;
+  return Math.min(100, Math.floor(((p.done + p.failed) / p.total) * 100));
 }

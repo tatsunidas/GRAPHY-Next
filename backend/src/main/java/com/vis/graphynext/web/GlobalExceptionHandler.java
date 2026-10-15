@@ -84,6 +84,15 @@ public class GlobalExceptionHandler {
                         req.getRequestURI()));
     }
 
+    /** モード A: 手元に無く、Drive からも取り寄せられなかった。「無い」（404）とは区別して 503 と理由コードを返す。 */
+    @ExceptionHandler(com.vis.graphynext.dicom.store.StorageUnavailableException.class)
+    public ResponseEntity<ErrorResponse> storageUnavailable(com.vis.graphynext.dicom.store.StorageUnavailableException e,
+                                                            HttpServletRequest req) {
+        log.warn("Storage unavailable {} {}: {}", req.getMethod(), req.getRequestURI(), e.reason());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(new ErrorResponse(503, "StorageUnavailable", e.reason(), req.getRequestURI()));
+    }
+
     /** 想定外。必ずスタックトレースを残す。 */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> unexpected(Exception e, HttpServletRequest req) {

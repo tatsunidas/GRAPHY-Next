@@ -48,6 +48,12 @@ public class GdriveSyncItem {
     private String sessionUri;
     @Column(length = 200)
     private String lastError;
+    /** モード A: 手元の実体を追い出した（Drive が正本として持っている）。既存の行は false のまま（DEFAULT つきの列追加）。 */
+    @Column(nullable = false, columnDefinition = "boolean default false not null")
+    private boolean evicted;
+    /** 最後に読まれた（または同期済みになった）時刻。追い出しの古い順に使う。 */
+    @Column(nullable = false, columnDefinition = "bigint default 0 not null")
+    private long lastAccessAt;
 
     protected GdriveSyncItem() {
     }
@@ -136,5 +142,21 @@ public class GdriveSyncItem {
 
     public void setLastError(String lastError) {
         this.lastError = lastError == null || lastError.length() <= 200 ? lastError : lastError.substring(0, 200);
+    }
+
+    public boolean isEvicted() {
+        return evicted;
+    }
+
+    public void setEvicted(boolean evicted) {
+        this.evicted = evicted;
+    }
+
+    public long getLastAccessAt() {
+        return lastAccessAt;
+    }
+
+    public void setLastAccessAt(long lastAccessAt) {
+        this.lastAccessAt = lastAccessAt;
     }
 }
