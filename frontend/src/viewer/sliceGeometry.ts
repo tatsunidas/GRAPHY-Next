@@ -49,7 +49,7 @@ export interface SliceGeometry {
   maxDeviationMm: number;
   /** 欠けたスライスの枚数（kind が missing のとき）。 */
   missingCount: number;
-  /** スライスごとの幅（前後への距離の半分ずつ。端は隣への距離）。order の順。 */
+  /** スライスごとの幅（前後への距離の半分ずつ。端の外側は最小の間隔の半分）。order の順。 */
   widths: number[];
   /** IOP の法線と、先頭→末尾の IPP の向きのなす角（度）。 */
   shearDeg: number;
@@ -150,10 +150,12 @@ export function sliceGeometry(slices: ReadonlyArray<SliceInfo>): SliceGeometry {
   }
 
   // スライスごとの幅（体積の計算に使う）。等間隔なら全部が間隔に等しく、合計 = N × 間隔。
+  // 端のスライスの外側は「最小の間隔の半分」まで（画像の体積＝補間した格子の端と同じ）。
+  // 内側の隣までの距離の半分を外側にも取ると、間隔の広い側の端で ROI が画像からはみ出す（実例: 24 mm 先の隣 → 外へ 12 mm）。
   const widths: number[] = positions.map((_, i) => {
     if (n < 2) return fb.spacing;
-    if (i === 0) return Math.abs(positions[1] - positions[0]);
-    if (i === n - 1) return Math.abs(positions[n - 1] - positions[n - 2]);
+    if (i === 0) return Math.abs(positions[1] - positions[0]) / 2 + minSpacing / 2;
+    if (i === n - 1) return Math.abs(positions[n - 1] - positions[n - 2]) / 2 + minSpacing / 2;
     return Math.abs(positions[i + 1] - positions[i - 1]) / 2;
   });
 

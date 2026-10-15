@@ -35,11 +35,11 @@ describe("roiVolumeFromSlices", () => {
     a[0] = 1; a[65] = 1;
     expect(roiVolumeFromSlices([sl(a, 1)]).areasMm2[0]).toBeCloseTo(2 * 2.25, 9);
   });
-  it("不均一な並び（31.4 / 55.4 / 61.4）は、スライスごとの幅 [24, 15, 6] で数える", () => {
+  it("不均一な並び（31.4 / 55.4 / 61.4）は、スライスごとの幅 [15, 15, 6] で数える", () => {
     const g = sliceGeometry([31.4243, 55.4243, 61.4243].map((z, i) => ({ id: `${i}`, ipp: [0, 0, z], iop: [1, 0, 0, 0, 1, 0] })));
     const c = circle(64, 64, 20, 22, 8);
     const r = roiVolumeFromSlices(g.widths.map((w) => sl(c, w)));
-    expect(r.volumeMm3).toBeCloseTo(197 * 2.25 * (24 + 15 + 6), 6);
+    expect(r.volumeMm3).toBeCloseTo(197 * 2.25 * (15 + 15 + 6), 6);
   });
   it("segment を指定すると、その番号だけを数える", () => {
     const a = new Uint8Array(64 * 64);
