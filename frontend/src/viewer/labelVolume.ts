@@ -205,6 +205,16 @@ export function buildLabelVolumeFromSegmentation(
   return { geom, data, voxelMm3: sx * sy * sz };
 }
 
+/**
+ * 3×3 の向きの行列を転置する（vtk・Cornerstone の並び ↔ {@link VolumeGeom} の並び）。
+ * vtk の `get/setDirection` と Cornerstone の `volume.direction` は先頭 3 つが i 軸（行の向き）、次が j 軸、最後が k 軸。
+ * `VolumeGeom.direction` は行優先で、軸 b は列 `[d[b], d[3+b], d[6+b]]`。軸に沿ったシリーズでは同じ値になるが、
+ * 斜めのシリーズでは境目で入れ替えないと位置がずれる（実データ: 約 1.5° の傾きで面内 15 ボクセル）。
+ */
+export function transposeDirection(d: ArrayLike<number>): number[] {
+  return [d[0], d[3], d[6], d[1], d[4], d[7], d[2], d[5], d[8]];
+}
+
 /** LabelVolume（または任意 geom+data）から vtkImageData を組み立てる。 */
 export function labelVolumeToImageData(lv: LabelVolume): Any {
   return imageDataFromGeom(lv.geom, lv.data);
@@ -217,7 +227,7 @@ export function imageDataFromGeom(geom: VolumeGeom, data: ArrayLike<number>): An
   id.setSpacing(geom.spacing[0], geom.spacing[1], geom.spacing[2]);
   id.setOrigin(geom.origin[0], geom.origin[1], geom.origin[2]);
   if (geom.direction && geom.direction.length === 9) {
-    id.setDirection(Float32Array.from(geom.direction));
+    id.setDirection(Float32Array.from(transposeDirection(geom.direction)));
   }
   const scalars = vtkDataArray.newInstance({
     numberOfComponents: 1,
@@ -252,7 +262,7 @@ export function geomFromImageData(imageData: Any): VolumeGeom | null {
       dims: [dims[0], dims[1], dims[2]],
       spacing: [spacing[0], spacing[1], spacing[2]],
       origin: [origin[0], origin[1], origin[2]],
-      direction: Array.from(direction),
+      direction: transposeDirection(direction),
     };
   } catch {
     return null;
