@@ -18,7 +18,7 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * プラグインが手元に確保して読むための口（H62）。
+ * プラグインが手元に確保して読むための口（H67）。
  * <ul>
  *   <li>{@code POST /api/plugins/{id}/storage/ensure} — 検査（任意でシリーズ）を手元に確保するジョブを投入。
  *       状態・取り消しは {@code /api/plugin-jobs/{jobId}}（H45 と同じ）。</li>

@@ -128,7 +128,7 @@ class PluginJobServiceTest {
         assertFalse(s.status("unknown").isPresent());
     }
 
-    // ── H62: JAR に渡す __ensureLocal ──
+    // ── H67: JAR に渡す __ensureLocal ──
 
     @Test
     @SuppressWarnings("unchecked")

@@ -35,7 +35,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * プラグインが検査・シリーズを手元に確保する（H62）。手元に無いものだけを取り寄せ、失敗は例外でなく理由コードで返し、
+ * プラグインが検査・シリーズを手元に確保する（H67）。手元に無いものだけを取り寄せ、失敗は例外でなく理由コードで返し、
  * パスは返さない。取り寄せ先（Drive）は、保存しておいた内容を書き戻す偽物。
  */
 class PluginStorageServiceTest {

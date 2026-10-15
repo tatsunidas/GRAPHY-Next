@@ -43,7 +43,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** H62: 実際の HTTP・ジョブ・プラグイン登録を通して、手元への確保を確かめる。 */
+/** H67: 実際の HTTP・ジョブ・プラグイン登録を通して、手元への確保を確かめる。 */
 @SpringBootTest(properties = {
         "spring.profiles.active=standalone",
         "spring.datasource.url=jdbc:h2:mem:pluginstorage;DB_CLOSE_DELAY=-1",

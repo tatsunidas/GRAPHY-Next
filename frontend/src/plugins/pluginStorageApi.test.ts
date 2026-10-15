@@ -20,7 +20,7 @@ beforeEach(() => {
   httpSend.mockReset();
 });
 
-describe("H62 host.storage.ensureLocal", () => {
+describe("H67 host.storage.ensureLocal", () => {
   it("検査を確保する: 投入の URL・本文はプラグイン id に固定され、結果は値で返る", async () => {
     httpSend.mockResolvedValueOnce(job("QUEUED"));
     httpGet.mockResolvedValueOnce(job("DONE", { ok: true, total: 5, fetched: 4, alreadyLocal: 1, cacheMode: true }));
@@ -101,7 +101,7 @@ describe("H62 host.storage.ensureLocal", () => {
   });
 });
 
-describe("H62 host.storage.status", () => {
+describe("H67 host.storage.status", () => {
   it("状態の URL はプラグイン id に固定される", async () => {
     httpGet.mockResolvedValueOnce({ cacheMode: true, usedBytes: 1, limitBytes: 2, remoteOnlyCount: 3 });
     expect(await storageStatus("a b")).toEqual({ cacheMode: true, usedBytes: 1, limitBytes: 2, remoteOnlyCount: 3 });

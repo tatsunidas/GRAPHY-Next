@@ -306,7 +306,7 @@ interface PluginHostBase {
     releaseRuntime: (endpointId: string, opts?: { ask?: boolean }) => Promise<ComputeReleaseOutcome>;
   };
   /**
-   * **保管庫の画像を手元に確保する**（H62）。Drive が正本のモード（手元は上限つきのキャッシュ）で、手元に無い画像を
+   * **保管庫の画像を手元に確保する**（H67）。Drive が正本のモード（手元は上限つきのキャッシュ）で、手元に無い画像を
    * Drive から取り寄せる。**パスは返さない**（検査・シリーズの UID を渡すだけ）。新しい権限・同意は要らない
    * （利用者自身の Drive のデータを手元へ戻すだけで、外へは出ない）。モード A でなければ何もしない（`cacheMode: false`）。
    */
