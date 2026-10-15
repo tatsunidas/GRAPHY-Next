@@ -111,3 +111,41 @@ describe("collectMaskValues", () => {
     expect(c.missingValueSlices).toBe(1);
   });
 });
+
+describe("segment 指定（塗りの ROI 1 件）", () => {
+  it("iterateMaskVoxels は指定した segment のボクセルだけを出す", () => {
+    expect([...iterateMaskVoxels(slices, 2)].map((r) => [r.slice, r.col, r.row, r.segment])).toEqual([[6, 1, 0, 2]]);
+    const one = [...iterateMaskVoxels(slices, 1)];
+    expect(one.map((r) => r.segment)).toEqual([1, 1, 1]);
+    expect(one).toHaveLength(3);
+  });
+
+  it("存在しない segment は 0 行（全体にはならない）", () => {
+    expect([...iterateMaskVoxels(slices, 9)]).toHaveLength(0);
+  });
+
+  it("CSV は meta.segmentIndex で絞り、行数は同じ segment の Σ³ と一致する", () => {
+    const body = lines(maskVoxelDumpCsvChunks(slices, { label: "L", maskId: "m", unit: "HU", segmentIndex: 1 }, 2)).slice(1);
+    expect(body).toHaveLength(3);
+    expect(body.every((l) => l.split(",")[3] === "1")).toBe(true);
+    const inputs = slices.map((s) => ({ labels: s.labels, values: s.values }));
+    expect(body).toHaveLength(accumulateMaskStats(inputs, 1).voxels);
+  });
+
+  it("collectMaskValues の母集団は accumulateMaskStats の同じ segment と一致する", () => {
+    const inputs = [
+      { labels: [1, 2, 1, 2], values: [1, 100, 3, 200] },
+      { labels: [2, 0, 1, 0], values: [300, 5, 5, 5] },
+    ];
+    for (const seg of [1, 2]) {
+      const a = accumulateMaskStats(inputs, seg);
+      const c = collectMaskValues(inputs, seg);
+      expect(c.voxels).toBe(a.voxels);
+      expect(c.slices).toBe(a.slices);
+      const s = summarizeValues(c.values, "HU")!;
+      expect(s.mean).toBeCloseTo(a.mean!, 10);
+    }
+    expect(collectMaskValues(inputs, 2).voxels).toBe(3);
+    expect(collectMaskValues(inputs).voxels).toBe(6);
+  });
+});

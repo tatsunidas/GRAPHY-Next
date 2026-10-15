@@ -13,6 +13,8 @@
  * </ul>
  */
 
+import { isSegmentForeground } from "./maskStatsCore";
+
 /** 前景のあるスライス（スタック上の番号）から scope.z を決める。前景が無ければ null（メタを変えない）。 */
 export function scopeZFromForeground(stackIndices: ReadonlyArray<number>): number | "all" | null {
   const uniq = new Set(stackIndices);
@@ -42,4 +44,26 @@ export type BoolOp = "or" | "and" | "xor";
 /** n 個の入力のうち cnt 個が前景のとき、結果が前景か。 */
 export function boolOn(op: BoolOp, cnt: number, n: number): boolean {
   return op === "or" ? cnt > 0 : op === "and" ? cnt === n : cnt % 2 === 1;
+}
+
+/** 演算の入力 1 件のスライス。`labels` が null ならそのスライスは全背景。`segIndex` 指定時はその segment のみ前景。 */
+export interface CombineInput {
+  labels: ArrayLike<number> | null;
+  segIndex?: number;
+}
+
+/**
+ * 複数入力の 1 スライスを OR/AND/XOR で合成し、前景 1・背景 0 の Uint8 を返す。
+ * 前景の定義は統計と同じ {@link isSegmentForeground}（segment 指定ならその値だけ）。
+ */
+export function combineLabelSlices(op: BoolOp, inputs: ReadonlyArray<CombineInput>, len: number): Uint8Array {
+  const out = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    let cnt = 0;
+    for (const inp of inputs) {
+      if (inp.labels && i < inp.labels.length && isSegmentForeground(inp.labels[i], inp.segIndex)) cnt++;
+    }
+    if (boolOn(op, cnt, inputs.length)) out[i] = 1;
+  }
+  return out;
 }

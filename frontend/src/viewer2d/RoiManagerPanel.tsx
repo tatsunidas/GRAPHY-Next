@@ -5,10 +5,11 @@
 /**
  * ROI マネージャ（右サイドパネル, M1）。
  *
- * 患者の 2D Viewer ウィンドウ内に存在する ROI（Cornerstone annotation）と
- * Mask（Cornerstone segmentation labelmap）を一覧し、表示/非表示・削除・マスク不透明度を操作する。
- * 設計: `fw/roi-manager-design.md`（M1=骨組み＋表示属性）。
- * 後続(M2+): 色/線幅/塗り, ZCT scope/メタ編集, ブール演算, 3D 変換, 保存(ImageJ/DICOM)。
+ * 2 つの区画に分ける。
+ *  - ROI: 保存形式によらず 1 件 1 行。形の ROI（annotation の面積・線・点）、塗りの ROI
+ *    （labelmap の segment 1 つにつき 1 行）、パラメトリック球。行モデルは `viewer/roiRows.ts`。
+ *  - 計測: 長さ・角度・プローブなど（ROI ではない）。
+ * 設計: `fw/roi-manager-design.md` / `fw/roi-mask-model.md` §10。
  */
 import { toggleRoiSelection } from "../viewer/roiInteriorGrab";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -20,7 +21,7 @@ import {
 } from "@cornerstonejs/tools";
 import { ENGINE_ID } from "../viewer/Viewer2D";
 import { formatScope, getRoiMaskMeta, setRoiMaskMeta, deleteRoiMaskMeta, subscribeRoiMaskStore, getSegEditTarget, getMaskSegments } from "../viewer/roiMaskStore";
-import { createNewMask, addSegmentToActiveMask, activateMask, getLastSegViewport } from "../viewer/segmentation";
+import { createNewMask, activateMask, getLastSegViewport, getSegmentVisible, setSegmentVisible, removeMaskSegment } from "../viewer/segmentation";
 import { fetchSettings } from "../settings/settingsApi";
 import { exportMaskAsSeg } from "../viewer/segExport";
 import { canConvertMeasureToRoi } from "../viewer/measureToRoi";
@@ -32,7 +33,8 @@ import { emitToast } from "../viewer/toast";
 import { isRoiLocked, setRoiLocked } from "../viewer/roiLock";
 import { emitSeriesRefresh } from "../viewer/viewerRefresh";
 import { emitDbChanged } from "../dbEvents";
-import { combineMasks, splitMask, roiToMask, isAreaRoi, type BoolOp, type SplitConnectivity } from "../viewer/roiBooleanOps";
+import { combineRois, splitMask, roiToMask, isAreaRoi, resolveRoiStack, type BoolOp, type RoiOperand, type SplitConnectivity } from "../viewer/roiBooleanOps";
+import { buildRoiPanelModel, type MeasureRow, type PaintedRoiRow, type RoiPanelModel, type RoiRowEnv, type ShapeRoiRow } from "../viewer/roiRows";
 import { sphereFromCircleRoi, createSphere3DFromCircleRoi, bakeSphere3D, splitMaskToSlices, maskVolumeStats, type MaskVolumeStats } from "../viewer/roi3d";
 import { listSpheres3D, updateSphere3D, deleteSphere3D, subscribeSphere3D, type Sphere3D } from "../viewer/sphere3dStore";
 import { annotationsToImageJDtos } from "../viewer/imagejExport";
@@ -59,22 +61,9 @@ function hexToRgb(hex: string): string {
   return `rgb(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)})`;
 }
 
-interface RoiRow { uid: string; tool: string; visible: boolean; locked: boolean; scope: string; }
-interface MaskRow { id: string; label: string; scope: string; visible: boolean; }
-
-/** マスク（segmentation representation）の表示状態を読む（先頭ビューポート基準。未取得は表示扱い）。 */
-function getMaskVisible(id: string): boolean {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const vps = (csSeg.state as any).getViewportIdsWithSegmentation(id) as string[] | undefined;
-    const vp = vps?.[0];
-    if (!vp) return true;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const v = (csSeg.config.visibility as any).getSegmentationRepresentationVisibility(vp, { segmentationId: id, type: LABELMAP });
-    return v !== false;
-  } catch {
-    return true;
-  }
+/** 塗りの ROI の統計・演算が対象にする segment。segment が 1 つだけなら行＝マスク全体（従来どおり非ゼロすべて）。 */
+function segFilterOf(r: Pick<PaintedRoiRow, "single" | "segIndex">): number | undefined {
+  return r.single ? undefined : r.segIndex;
 }
 
 /** scope メタ → 表示文字列（1 始まり）。 */
@@ -105,8 +94,7 @@ export function RoiManagerPanel({
   onClose: () => void;
 }) {
   const { t } = useI18n();
-  const [rois, setRois] = useState<RoiRow[]>([]);
-  const [masks, setMasks] = useState<MaskRow[]>([]);
+  const [model, setModel] = useState<RoiPanelModel>({ rois: [], measures: [] });
   const [editId, setEditId] = useState<string | null>(null);
   // 計測結果ダイアログ。null=閉。{focus} は開いた直後に詳細を出す ROI（ヘッダから開くと未指定）。
   const [statsOpen, setStatsOpen] = useState<{ focus?: string } | null>(null);
@@ -114,11 +102,18 @@ export function RoiManagerPanel({
   // （非同期ループ）が最初からやり直しになり、表がちらつく。保存通知などで
   // このパネルは頻繁に再レンダされる。
   const statsTargets = useMemo<RoiStatsTarget[]>(
-    () => [
-      ...rois.map((r) => ({ uid: r.uid, tool: r.tool })),
-      ...masks.map((m) => ({ uid: m.id, tool: "mask", kind: "mask" as const, label: m.label })),
-    ],
-    [rois, masks],
+    () => {
+      const roiTargets: RoiStatsTarget[] = [];
+      for (const r of model.rois) {
+        if (r.rowKind === "shape") roiTargets.push({ uid: r.uid, tool: r.tool });
+        // 塗りの ROI は segment ごとに 1 件。uid は一意にし、マスクと segment は別フィールドで持つ（文字列を分解しない）。
+        else if (r.rowKind === "painted") {
+          roiTargets.push({ uid: r.key, tool: "mask", kind: "mask", label: r.name, maskId: r.maskId, segmentIndex: segFilterOf(r) });
+        }
+      }
+      return [...roiTargets, ...model.measures.map((m) => ({ uid: m.uid, tool: m.tool }))];
+    },
+    [model],
   );
   const [selected, setSelected] = useState<Set<string>>(new Set());
   /** 一覧で選んでいる ROI（ハイライト＋スライス移動の対象）。マスクの選択チェックとは別物。 */
@@ -176,48 +171,30 @@ export function RoiManagerPanel({
     : t("roiMgr.save");
 
   const refresh = useCallback(() => {
+    const env: RoiRowEnv = {
+      patientKey: activePatientKey,
+      metaOf: getRoiMaskMeta,
+      isAnnotationVisible: (uid) => csAnnotation.visibility.isAnnotationVisible(uid) ?? true,
+      isLocked: isRoiLocked,
+      scopeText,
+      isSegmentVisible: getSegmentVisible,
+    };
+    const allSpheres = listSpheres3D();
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const all = csAnnotation.state.getAllAnnotations() as any[];
-      setRois(
-        all
-          .filter((a) => a?.annotationUID)
-          // 現在の患者に属するもの（未紐付け＝患者不明は表示）。
-          .filter((a) => {
-            const pk = getRoiMaskMeta(a.annotationUID)?.patientKey;
-            return !pk || pk === activePatientKey;
-          })
-          .map((a) => ({
-            uid: a.annotationUID as string,
-            tool: (a.metadata?.toolName as string) ?? "ROI",
-            visible: csAnnotation.visibility.isAnnotationVisible(a.annotationUID) ?? true,
-            locked: isRoiLocked(a.annotationUID),
-            scope: scopeText(a.annotationUID),
-          })),
-      );
+      const anns = csAnnotation.state.getAllAnnotations() as any[];
+      let segs: Array<{ segmentationId: string; label?: string }> = [];
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        segs = ((csSeg.state.getSegmentations() as any[]) ?? []).map((x) => ({ segmentationId: x.segmentationId as string, label: x.label as string | undefined }));
+      } catch {
+        /* マスクが読めなくても形の ROI は出す */
+      }
+      setModel(buildRoiPanelModel(anns, segs, allSpheres, env, getMaskSegments));
     } catch {
-      setRois([]);
+      setModel({ rois: [], measures: [] });
     }
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const segs = csSeg.state.getSegmentations() as any[];
-      setMasks(
-        (segs ?? [])
-          .filter((s) => {
-            const pk = getRoiMaskMeta(s.segmentationId)?.patientKey;
-            return !pk || pk === activePatientKey;
-          })
-          .map((s) => ({
-            id: s.segmentationId as string,
-            label: (s.label as string) || (s.segmentationId as string),
-            scope: scopeText(s.segmentationId),
-            visible: getMaskVisible(s.segmentationId as string),
-          })),
-      );
-    } catch {
-      setMasks([]);
-    }
-    setSpheres(listSpheres3D().filter((s) => !s.patientKey || s.patientKey === activePatientKey));
+    setSpheres(allSpheres.filter((s) => !s.patientKey || s.patientKey === activePatientKey));
   }, [activePatientKey]);
 
   useEffect(() => {
@@ -292,39 +269,6 @@ export function RoiManagerPanel({
     try { csAnnotation.visibility.setAnnotationVisibility(uid, vis); } catch { /* ignore */ }
     refresh();
   };
-  // マスク（labelmap representation）の表示 On/Off。表示中の全ビューポートへ適用。
-  // Cornerstone は representation.segments に **登録済みの segment index** の visible しか
-  // 見ない（setSegmentIndexVisibility は未登録 index を無視する）ため、SEG import / split
-  // 由来など segment 1 以外が未登録のまま残るマスクでは segment 1 にしか反映されなかった。
-  // setActiveSegmentIndex は未登録の segment を自動登録する副作用があるため、
-  // それを使って全 segment を登録してから可視性を切り替える（アクティブ segment は復元）。
-  const setMaskVisible = (id: string, visible: boolean) => {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const vps = (csSeg.state as any).getViewportIdsWithSegmentation(id) as string[] | undefined;
-      const segs = getMaskSegments(id);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const prevActive = (csSeg.segmentIndex as any).getActiveSegmentIndex(id) as number | undefined;
-      for (const segIndex of segs) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        try { (csSeg.segmentIndex as any).setActiveSegmentIndex(id, segIndex); } catch { /* ignore */ }
-      }
-      if (prevActive != null) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        try { (csSeg.segmentIndex as any).setActiveSegmentIndex(id, prevActive); } catch { /* ignore */ }
-      }
-      for (const vp of vps ?? []) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        try { (csSeg.config.visibility as any).setSegmentationRepresentationVisibility(vp, { segmentationId: id, type: LABELMAP }, visible); } catch { /* ignore */ }
-        for (const segIndex of segs) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          try { (csSeg.config.visibility as any).setSegmentIndexVisibility(vp, { segmentationId: id, type: LABELMAP }, segIndex, visible); } catch { /* ignore */ }
-        }
-      }
-      renderAll();
-    } catch { /* ignore */ }
-    refresh();
-  };
   // scope の Z を global("all") ↔ local(原本 index) でトグル。
   const toggleScopeZ = (itemId: string) => {
     const meta = getRoiMaskMeta(itemId);
@@ -332,33 +276,40 @@ export function RoiManagerPanel({
     const base = meta?.origin ?? cur;
     setRoiMaskMeta(itemId, { scope: { ...cur, z: cur.z === "all" ? (base.z ?? 0) : "all" } });
   };
-  const deleteMask = (id: string) => {
-    if (!window.confirm(t("roiMgr.deleteMaskConfirm"))) return;
-    try { csSeg.removeSegmentation(id); } catch { /* ignore */ }
-    deleteRoiMaskMeta(id);
-    setSelected((s) => { const n = new Set(s); n.delete(id); return n; });
+  // 塗りの ROI（segment 1 つ）を削除。最後の 1 つなら（removeMaskSegment が）マスクごと消す。
+  const deletePainted = (r: PaintedRoiRow) => {
+    if (!window.confirm(t(r.single ? "roiMgr.deleteMaskConfirm" : "roiMgr.deleteSegmentConfirm"))) return;
+    removeMaskSegment(r.maskId, r.segIndex);
+    setSelected((s) => { const n = new Set(s); n.delete(r.key); return n; });
+    renderAll();
     refresh();
   };
 
   // ── アクティブ編集対象（D2: モードレス）──
-  // 「＋新規マスク」= 直近でセグメンテーションツールを使ったタイルに新規マスクを作成しアクティブ化。
-  const addNewMask = async () => {
+  // 「＋新規 ROI（塗り）」= 直近でセグメンテーションツールを使ったタイルに新規マスク（segment 1）を作成しアクティブ化。
+  const addNewPainted = async () => {
     const vp = getLastSegViewport();
     if (!vp) { window.alert(t("roiMgr.needSegViewport")); return; }
     setBusy(true);
     try { await createNewMask(vp.viewportId, vp.imageIds); } finally { setBusy(false); }
     refresh();
   };
-  const addSegment = () => { addSegmentToActiveMask(); refresh(); };
   const toggleSelect = (id: string) =>
     setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
-  // 演算結果を表示するビューポート: 選択 Mask を表示中のもの（union）。無ければエンジン全 viewport。
-  const viewportsForMasks = (ids: string[]): string[] => {
+  // 演算結果を表示するビューポート: 選択 ROI を表示中のもの（union）。無ければエンジン全 viewport。
+  // 形の ROI は、その ROI を載せているスタックのビューポート。
+  const viewportsForOperands = (ops: RoiOperand[]): string[] => {
     const set = new Set<string>();
-    for (const id of ids) {
+    for (const o of ops) {
       try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        for (const vp of ((csSeg.state as any).getViewportIdsWithSegmentation(id) as string[] | undefined) ?? []) set.add(vp);
+        if (o.kind === "painted") {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          for (const vp of ((csSeg.state as any).getViewportIdsWithSegmentation(o.maskId) as string[] | undefined) ?? []) set.add(vp);
+        } else {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const ref = (csAnnotation.state as any).getAnnotation(o.uid)?.metadata?.referencedImageId as string | undefined;
+          for (const vp of (ref ? resolveRoiStack(ref)?.viewportIds : undefined) ?? []) set.add(vp);
+        }
       } catch { /* ignore */ }
     }
     if (set.size === 0) {
@@ -366,13 +317,17 @@ export function RoiManagerPanel({
     }
     return [...set];
   };
-  // ブール演算（or/and/xor/merge）。merge=OR。選択 2 件以上で実行。
+  // 選択行 → 演算の入力。球は対象外。
+  const selectedRows = model.rois.filter((r) => selected.has(r.key) && r.rowKind !== "sphere");
+  const operands: RoiOperand[] = selectedRows.map((r) =>
+    r.rowKind === "painted" ? { kind: "painted", maskId: r.maskId, segIndex: segFilterOf(r) } : { kind: "shape", uid: (r as { uid: string }).uid },
+  );
+  // ブール演算（or/and/xor/merge）。merge=OR。選択 2 件以上で実行。形の ROI は一時的にラスタ化して計算し、結果だけを残す。
   const runCombine = async (op: BoolOp) => {
-    const ids = [...selected];
-    if (ids.length < 2 || busy) return;
+    if (operands.length < 2 || busy) return;
     setBusy(true);
     try {
-      const res = await combineMasks(ids, op, viewportsForMasks(ids));
+      const res = await combineRois(operands, op, viewportsForOperands(operands));
       if (!res) window.alert(t("roiMgr.opFailed"));
     } finally {
       setBusy(false);
@@ -419,12 +374,12 @@ export function RoiManagerPanel({
       refresh();
     }
   };
-  // 3D→2D split: ボリューム Mask を非空スライスごとの単一スライス Mask に分解。
-  const runSplitToSlices = async (id: string) => {
+  // 3D→2D split: ボリュームの塗り ROI を非空スライスごとの単一スライスの塗り ROI に分解（segment 指定ならその segment のみ）。
+  const runSplitToSlices = async (r: PaintedRoiRow) => {
     if (busy) return;
     setBusy(true);
     try {
-      const created = await splitMaskToSlices(id);
+      const created = await splitMaskToSlices(r.maskId, segFilterOf(r));
       if (created.length === 0) window.alert(t("roiMgr.opFailed"));
     } finally {
       setBusy(false);
@@ -434,7 +389,7 @@ export function RoiManagerPanel({
   // ROI 群を ImageJ RoiSet.zip として書き出し（保存優先=ImageJ）。
   const runExportRois = async () => {
     if (busy) return;
-    const dtos = annotationsToImageJDtos(rois.map((r) => r.uid));
+    const dtos = annotationsToImageJDtos(annotationUids);
     if (dtos.length === 0) { window.alert(t("roiMgr.exportEmpty")); return; }
     setBusy(true);
     try {
@@ -451,18 +406,22 @@ export function RoiManagerPanel({
       setBusy(false);
     }
   };
-  // ROI 群とマスク（segment ごとに 1 構造）を DICOM RTSTRUCT として保存（新シリーズ）。
-  const runExportRtStruct = async () => {
+  // ROI（形・塗り）を DICOM RTSTRUCT として保存（新シリーズ）。`only` を渡すとその塗りの ROI 1 件だけ。
+  // 計測は書き出さない（exportRoisAsRtStruct 側でも除外）。
+  const runExportRtStruct = async (only?: PaintedRoiRow) => {
     if (busy) return;
     setBusy(true);
     try {
-      const res = await exportRoisAsRtStruct(rois.map((r) => r.uid), masks.map((m) => m.id));
+      const shapeUids = only ? [] : model.rois.flatMap((r) => (r.rowKind === "shape" ? [r.uid] : []));
+      const maskRefs = (only ? [only] : model.rois.filter((r): r is PaintedRoiRow => r.rowKind === "painted"))
+        .map((r) => ({ maskId: r.maskId, segIndex: segFilterOf(r) }));
+      const res = await exportRoisAsRtStruct(shapeUids, maskRefs);
       if (res) {
         emitToast(t("roiMgr.exportRtDone"));
         emitSeriesRefresh();
         // 他ウィンドウ（メイン画面の検索リスト等）へ新規シリーズ発生を通知（CPR/中心線解析/Slicer と同様）。
         const studyUids = [...new Set(
-          [...rois.map((r) => r.uid), ...masks.map((m) => m.id)]
+          [...shapeUids, ...maskRefs.map((m) => m.maskId)]
             .map((id) => getRoiMaskMeta(id)?.scope?.studyUid)
             .filter((v): v is string => !!v),
         )];
@@ -527,16 +486,17 @@ export function RoiManagerPanel({
       refresh();
     }
   };
-  // Mask の体積統計（行下にインライン表示。再クリックで消す）。
-  const runStats = (id: string) => {
+  // 塗りの ROI の体積統計（行下にインライン表示。再クリックで消す）。segment 指定ならその segment のみ。
+  const runStats = (r: PaintedRoiRow) => {
     setStats((s) => {
       const n = { ...s };
-      if (n[id]) { delete n[id]; return n; }
-      const v = maskVolumeStats(id);
+      if (n[r.key]) { delete n[r.key]; return n; }
+      const v = maskVolumeStats(r.maskId, segFilterOf(r));
       if (v) {
-        n[id] = v;
+        n[r.key] = v;
         // Volumetry 結果をメタへ持ち回す（SEG エクスポート時の SegmentDescription 生成にも利用）。
-        setRoiMaskMeta(id, { custom: { volumeMl: v.volumeMl.toFixed(2), volumeComputedAt: new Date().toISOString() } });
+        // マスクに複数 segment があるとき 1 つの segment の体積をマスク全体のメタに書くと誤るので、行＝マスク全体のときだけ。
+        if (r.single) setRoiMaskMeta(r.maskId, { custom: { volumeMl: v.volumeMl.toFixed(2), volumeComputedAt: new Date().toISOString() } });
       }
       return n;
     });
@@ -567,18 +527,18 @@ export function RoiManagerPanel({
       setBusy(false);
     }
   };
-  // SPLIT（連結成分分割）。選択 1 件で実行。
-  // 元マスクを構成成分（segment 1..N）へ再ラベルして**置換**する（元を残すと同一位置で重なり、
-  // 下のマスクが消せない・操作できない混乱を招くため）。元を削除し結果をアクティブ化。
+  // SPLIT（連結成分分割）。選んだ塗りの ROI 1 件で実行。
+  // 元の ROI（その segment）を構成成分（segment 1..N）の新規 ROI で**置換**する（元を残すと同一位置で重なり、
+  // 下の ROI が消せない・操作できない混乱を招くため）。元が最後の segment ならマスクごと消え、結果をアクティブ化。
   const runSplit = async () => {
-    const ids = [...selected];
-    if (ids.length !== 1 || busy) return;
+    if (selectedRows.length !== 1 || busy) return;
+    const r = selectedRows[0];
+    if (r.rowKind !== "painted") { window.alert(t("roiMgr.opNeedPainted")); return; }
     setBusy(true);
     try {
-      const res = await splitMask(ids[0], viewportsForMasks(ids), splitConn);
+      const res = await splitMask(r.maskId, viewportsForOperands(operands), splitConn, segFilterOf(r));
       if (!res) { window.alert(t("roiMgr.opFailed")); return; }
-      try { csSeg.removeSegmentation(ids[0]); } catch { /* ignore */ }
-      deleteRoiMaskMeta(ids[0]);
+      removeMaskSegment(r.maskId, r.segIndex);
       setSelected(new Set());
       activateMask(res);
     } finally {
@@ -586,9 +546,18 @@ export function RoiManagerPanel({
       refresh();
     }
   };
-  const setMaskStyle = (id: string, style: { fillAlpha?: number; renderFill?: boolean; outlineWidth?: number }) => {
+  // 塗りの ROI の不透明度・塗りは segment 単位。輪郭の太さは Cornerstone がマスク単位でしか持てない。
+  const setSegmentStyle = (maskId: string, segIndex: number, style: { fillAlpha?: number; renderFill?: boolean }) => {
     try {
-      csSeg.segmentationStyle.setStyle({ type: LABELMAP, segmentationId: id }, style);
+      csSeg.segmentationStyle.setStyle({ type: LABELMAP, segmentationId: maskId, segmentIndex: segIndex }, style);
+      renderAll();
+    } catch {
+      /* ignore */
+    }
+  };
+  const setMaskOutline = (maskId: string, outlineWidth: number) => {
+    try {
+      csSeg.segmentationStyle.setStyle({ type: LABELMAP, segmentationId: maskId }, { outlineWidth });
       renderAll();
     } catch {
       /* ignore */
@@ -603,6 +572,236 @@ export function RoiManagerPanel({
     } catch {
       /* ignore */
     }
+  };
+
+  const shapeRows = model.rois.filter((r): r is ShapeRoiRow => r.rowKind === "shape");
+  const paintedRows = model.rois.filter((r): r is PaintedRoiRow => r.rowKind === "painted");
+  const shapeCount = shapeRows.length;
+  // IJ RoiSet に書ける annotation（形の ROI と計測。Length 等は線として書き出せる）。
+  const annotationUids = [...shapeRows.map((r) => r.uid), ...model.measures.map((m) => m.uid)];
+
+  // 行の**余白**を押したら「この ROI を見せる」。
+  //
+  // 🔴 **行内のボタンは `stopPropagation()` すること。** しないと子の onClick の後に
+  //    親のこれが走り、**ボタンの結果を上書きする**。実機で踏んだ: ⧉（複製）を押すと
+  //    複製先スライスへ移った直後に、行の reveal が**元 ROI のスライスへ引き戻していた**
+  //    （複製はできているのに「同じ場所に戻った」ようにしか見えない）。
+  const onAnnotationRowClick = (e: React.MouseEvent, uid: string) => {
+    // Ctrl/⌘＋クリックは画像上と同じく選択を足す・外す。スライスは動かさない（表示中のスライスでまとめて動かすため）。
+    if (e.ctrlKey || e.metaKey) { toggleRoiSelection(uid); return; }
+    setFocusedRoi(uid); onRevealRoi?.(uid);
+  };
+  const renameAnnotation = (uid: string, value: string) => setRoiMaskMeta(uid, { label: value });
+  const annotationBasics = (r: { uid: string; tool: string; visible: boolean; locked: boolean }) => (
+    <>
+      <button onClick={(e) => { e.stopPropagation(); toggleRoi(r.uid, !r.visible); }} style={eyeBtn} title={t("roiMgr.visible")} data-testid="roi-row-visible">{r.visible ? "👁" : "🚫"}</button>
+      <button
+        onClick={(e) => { e.stopPropagation(); toggleRoiLock(r.uid, !r.locked); }}
+        style={eyeBtn}
+        title={r.locked ? t("roiMgr.unlock") : t("roiMgr.lock")}
+        aria-pressed={r.locked}
+        data-testid="roi-mgr-lock"
+      >
+        {r.locked ? "🔒" : "🔓"}
+      </button>
+    </>
+  );
+  const annotationDelete = (r: { uid: string; locked: boolean }) => (
+    <button
+      onClick={(e) => { e.stopPropagation(); deleteRoi(r.uid); }}
+      disabled={r.locked}
+      style={r.locked ? { ...delBtn, opacity: 0.35, cursor: "not-allowed" } : delBtn}
+      title={r.locked ? t("roiMgr.lockedNoDelete") : t("common.delete")}
+      data-testid="roi-row-delete"
+    >
+      🗑
+    </button>
+  );
+
+  // 形の ROI（面積・線・点）。
+  const renderShapeRow = (r: ShapeRoiRow) => (
+    <div key={r.key} data-testid="roi-row" data-kind="shape" data-roi-key={r.key}>
+      <div
+        style={focusedRoi === r.uid ? { ...row, ...focusedRowBox } : row}
+        onClick={(e) => onAnnotationRowClick(e, r.uid)}
+        data-testid="roi-mgr-row"
+        data-roi-uid={r.uid}
+      >
+        {annotationBasics(r)}
+        <input type="checkbox" checked={selected.has(r.key)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(r.key)} title={t("roiMgr.select")} data-testid="roi-row-select" />
+        <span title={t("roiMgr.iconShape")} style={{ color: "#5a6672" }}>{r.kind === "area" ? "▭" : r.kind === "line" ? "╱" : "•"}</span>
+        <input
+          type="text" style={name} title={r.tool}
+          defaultValue={getRoiMaskMeta(r.uid)?.label ?? r.tool}
+          onClick={(e) => e.stopPropagation()}
+          onChange={(e) => renameAnnotation(r.uid, e.target.value)}
+        />
+        <input type="color" defaultValue="#ffff00" onClick={(e) => e.stopPropagation()} onChange={(e) => setRoiStyle(r.uid, { color: hexToRgb(e.target.value) })} title={t("roiMgr.color")} style={colorInput} />
+        <input type="number" min={1} max={10} defaultValue={1} onClick={(e) => e.stopPropagation()} onChange={(e) => setRoiStyle(r.uid, { lineWidth: String(e.target.value) })} title={t("roiMgr.lineWidth")} style={numInput} />
+        <input type="checkbox" onClick={(e) => e.stopPropagation()} onChange={(e) => setRoiStyle(r.uid, { fillOpacity: e.target.checked ? 0.3 : 0 })} title={t("roiMgr.fill")} />
+        {r.scope && <button onClick={(e) => { e.stopPropagation(); toggleScopeZ(r.uid); }} style={scopeChip} title={t("roiMgr.scopeToggle")}>{r.scope}</button>}
+        {isAreaRoi(r.tool) && <button onClick={(e) => { e.stopPropagation(); runRoiToMask(r.uid); }} disabled={busy} style={editBtn} title={t("roiMgr.toMask")}>▦</button>}
+        {onDuplicateRoi && (
+          <button
+            onClick={(e) => { e.stopPropagation(); setFocusedRoi(r.uid); onDuplicateRoi(r.uid); }}
+            disabled={busy}
+            style={editBtn}
+            title={t("roiMgr.duplicate")}
+            data-testid="roi-mgr-duplicate"
+          >
+            ⧉
+          </button>
+        )}
+        {/circle/i.test(r.tool) && <button onClick={(e) => { e.stopPropagation(); runDefineSphere(r.uid); }} disabled={busy} style={editBtn} title={t("roiMgr.defineSphere")}>◎</button>}
+        {/circle/i.test(r.tool) && <button onClick={(e) => { e.stopPropagation(); runSphere(r.uid); }} disabled={busy} style={editBtn} title={t("roiMgr.toSphere")}>⬤</button>}
+        <button onClick={(e) => { e.stopPropagation(); setStatsOpen({ focus: r.uid }); }} style={editBtn} title={t("roiMgr.statsRoi")}>Σ</button>
+        <button onClick={(e) => { e.stopPropagation(); setEditId(r.uid); }} style={editBtn} title={t("roiMgr.editTitle")}>✎</button>
+        {annotationDelete(r)}
+      </div>
+    </div>
+  );
+
+  // 計測（長さ・角度・プローブなど）。ROI ではないので、塗り・RT・演算の対象にしない。
+  const renderMeasureRow = (m: MeasureRow) => (
+    <div
+      key={m.key}
+      style={focusedRoi === m.uid ? { ...row, ...focusedRowBox } : row}
+      onClick={(e) => onAnnotationRowClick(e, m.uid)}
+      data-testid="measure-row"
+      data-roi-uid={m.uid}
+    >
+      {annotationBasics(m)}
+      <input
+        type="text" style={name} title={m.tool}
+        defaultValue={getRoiMaskMeta(m.uid)?.label ?? m.tool}
+        onClick={(e) => e.stopPropagation()}
+        onChange={(e) => renameAnnotation(m.uid, e.target.value)}
+      />
+      <input type="color" defaultValue="#ffff00" onClick={(e) => e.stopPropagation()} onChange={(e) => setRoiStyle(m.uid, { color: hexToRgb(e.target.value) })} title={t("roiMgr.color")} style={colorInput} />
+      {onConvertToRoi && canConvertMeasureToRoi(m.tool) && (
+        <button
+          onClick={(e) => { e.stopPropagation(); setFocusedRoi(m.uid); onConvertToRoi(m.uid); }}
+          disabled={busy || m.locked}
+          style={editBtn}
+          title={m.locked ? t("roi.toRoi.locked") : t("viewer2d.roi.toRoi")}
+          data-testid="roi-mgr-to-roi"
+        >
+          →ROI
+        </button>
+      )}
+      <button onClick={(e) => { e.stopPropagation(); setStatsOpen({ focus: m.uid }); }} style={editBtn} title={t("roiMgr.statsRoi")}>Σ</button>
+      <button onClick={(e) => { e.stopPropagation(); setEditId(m.uid); }} style={editBtn} title={t("roiMgr.editTitle")}>✎</button>
+      {annotationDelete(m)}
+    </div>
+  );
+
+  // 塗りの ROI（labelmap の segment 1 つ）。行を押す＝この segment を塗り先（Brush/Wand の編集対象）にする。
+  const renderPaintedRow = (r: PaintedRoiRow) => {
+    const target = getSegEditTarget();
+    const isActive = target.segmentationId === r.maskId && target.segmentIndex === r.segIndex;
+    const col = segColorHex(r.maskId, r.segIndex);
+    const st = stats[r.key];
+    const rename = (value: string) => {
+      const cur = getRoiMaskMeta(r.maskId)?.segmentLabels ?? {};
+      // segment が 1 つだけなら、✎ 属性編集や SEG 書き出しが見る `label` も同じ名前にそろえる。
+      setRoiMaskMeta(r.maskId, { segmentLabels: { ...cur, [String(r.segIndex)]: value }, ...(r.single ? { label: value } : {}) });
+    };
+    return (
+      <div
+        key={r.key}
+        style={isActive ? activeMaskBox : undefined}
+        onClick={(e) => {
+          if ((e.target as HTMLElement).closest("button,input,select")) return;
+          activateMask(r.maskId, r.segIndex); refresh();
+        }}
+        data-testid="roi-row"
+        data-kind="painted"
+        data-roi-key={r.key}
+        data-mask-id={r.maskId}
+        data-seg-index={r.segIndex}
+      >
+        <div style={row}>
+          <input type="radio" name="graphy-active-mask" checked={isActive} onChange={() => { activateMask(r.maskId, r.segIndex); refresh(); }} title={t("roiMgr.activeMask")} />
+          <button
+            onClick={() => { setSegmentVisible(r.maskId, r.segIndex, !r.visible); renderAll(); refresh(); }}
+            style={eyeBtn} title={t("roiMgr.visible")} data-testid="roi-row-visible"
+          >
+            {r.visible ? "👁" : "🚫"}
+          </button>
+          <input type="checkbox" checked={selected.has(r.key)} onChange={() => toggleSelect(r.key)} title={t("roiMgr.select")} data-testid="roi-row-select" />
+          <span title={t("roiMgr.iconPainted")} style={{ color: col ?? "#5a6672" }}>▨</span>
+          <input
+            type="text" style={nameFullLine} title={r.maskId}
+            defaultValue={r.name}
+            onChange={(e) => rename(e.target.value)}
+          />
+        </div>
+        <div style={row}>
+          <input type="color" value={col ?? "#ff0000"} onChange={(e) => { setMaskColor(r.maskId, e.target.value, r.segIndex); refresh(); }} title={t("roiMgr.color")} style={colorInput} />
+          <input
+            type="range" min={0} max={1} step={0.05} defaultValue={maskDefaults.fillOpacity}
+            onChange={(e) => setSegmentStyle(r.maskId, r.segIndex, { fillAlpha: Number(e.target.value) })}
+            style={{ width: 56 }} title={t("roiMgr.opacity")}
+          />
+          <input type="number" min={0} max={10} defaultValue={maskDefaults.outlineWidth} onChange={(e) => setMaskOutline(r.maskId, Number(e.target.value))} title={t("roiMgr.lineWidth")} style={numInput} />
+          <input type="checkbox" defaultChecked onChange={(e) => setSegmentStyle(r.maskId, r.segIndex, { renderFill: e.target.checked })} title={t("roiMgr.fill")} />
+          {/* 範囲は中身（塗ったスライス）で決まる。メタを書き換えても中身は変わらないので押せない表示にする */}
+          {r.scope && <span style={scopeChipStatic} title={t("roiMgr.scopeToggleMask")} data-testid="mask-scope">{r.scope}</span>}
+          <button onClick={() => runStats(r)} data-testid="mask-stats-run" style={editBtn} title={t("roiMgr.stats")}>Σ³</button>
+          <button onClick={() => setStatsOpen({ focus: r.key })} data-testid="mask-stats-dialog" style={editBtn} title={t("roiMgr.statsMask")}>Σ</button>
+          <button onClick={() => runSplitToSlices(r)} disabled={busy} style={editBtn} title={t("roiMgr.toSlices")}>⬚</button>
+          {/* SEG書き出しは毎晩の自動リストアで確実に消えるため、他の持ち出し系と異なりデモでも許可
+             （backend DemoModeFilter・fw/web-demo-hosting.md 参照）。マスク全体（同じマスクの ROI すべて）を書く。 */}
+          <button onClick={() => runExportSeg(r.maskId)} disabled={busy} style={editBtn} title={mode === "standalone" ? t("roiMgr.exportSegStandalone") : t("roiMgr.exportSeg")}>SEG ⬇</button>
+          {!isDemo && <button onClick={() => runExportRtStruct(r)} disabled={busy} style={editBtn} title={t("roiMgr.exportRtOne")} data-testid="roi-row-export-rt">RT ⬇</button>}
+          <button onClick={() => setEditId(r.maskId)} style={editBtn} title={t("roiMgr.editTitle")}>✎</button>
+          <button onClick={() => deletePainted(r)} style={delBtn} title={t("common.delete")} data-testid="roi-row-delete">🗑</button>
+        </div>
+        {st && (
+          <div style={statLine} data-testid="mask-stats">
+            {t("roiMgr.statVol")}: {st.volumeMl.toFixed(2)} mL ({st.volumeMm3.toFixed(0)} mm³) ·
+            {" "}{t("roiMgr.statVoxels")}: {st.voxels.toLocaleString()} · {t("roiMgr.statSlices")}: {st.slices}
+            {(st.missingValueSlices ?? 0) > 0 && (
+              <>
+                <br />
+                {t("roiMgr.statMissingSlices", { n: st.missingValueSlices! })}
+              </>
+            )}
+            {st.mean !== undefined && (
+              <>
+                <br />
+                {t("roiMgr.statMean")}: {formatNumber(st.mean!)} ± {formatNumber(st.sd!)} ·
+                {" "}min {formatNumber(st.min!)} / max {formatNumber(st.max!)} {valueUnitLabel(st.unit ?? "", t)}
+                {meanTimesVolumeLabelKey(st.unit) && st.meanTimesVolumeMl !== undefined && (
+                  <>
+                    <br />
+                    {t("roiMgr.statTlg")}: {formatNumber(st.meanTimesVolumeMl!)} {valueUnitLabel(st.unit ?? "", t)}·mL
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // パラメトリック球（保持＋全スライスのライブ断面）。「塗りにする」で塗りの ROI に焼き込む。
+  const renderSphereRow = (id: string) => {
+    const s = spheres.find((x) => x.id === id);
+    if (!s) return null;
+    return (
+      <div key={s.id} style={row} data-testid="roi-row" data-kind="sphere" data-roi-key={s.id}>
+        <button onClick={() => updateSphere3D(s.id, { visible: !s.visible })} style={eyeBtn} title={t("roiMgr.visible")} data-testid="roi-row-visible">{s.visible ? "👁" : "🚫"}</button>
+        <span title={t("roiMgr.iconSphere")} style={{ color: s.color }}>◍</span>
+        <input type="text" style={name} defaultValue={s.label ?? "Sphere"} onChange={(e) => updateSphere3D(s.id, { label: e.target.value })} />
+        <input type="color" defaultValue={s.color} onChange={(e) => updateSphere3D(s.id, { color: e.target.value })} title={t("roiMgr.color")} style={colorInput} />
+        <input type="number" min={0.1} step={0.5} defaultValue={Number(s.radiusMm.toFixed(1))} onChange={(e) => { const v = Number(e.target.value); if (v > 0) updateSphere3D(s.id, { radiusMm: v }); }} title={t("roiMgr.radiusMm")} style={numInput} />
+        <span style={{ color: "#9aa6b2", fontSize: 10 }}>mm</span>
+        <button onClick={() => runBakeSphere(s.id)} disabled={busy} style={editBtn} title={t("roiMgr.bakeSphere")}>{t("roiMgr.bakeSphereShort")}</button>
+        <button onClick={() => deleteSphere3D(s.id)} style={delBtn} title={t("common.delete")} data-testid="roi-row-delete">🗑</button>
+      </div>
+    );
   };
 
   return (
@@ -626,7 +825,7 @@ export function RoiManagerPanel({
       </div>
 
       <div style={{ ...section, display: "flex", alignItems: "center", gap: 4 }}>
-        <span>{t("roiMgr.rois")} ({rois.length})</span>
+        <span>{t("roiMgr.rois")} ({model.rois.length})</span>
         <span style={{ flex: 1 }} />
         <input
           ref={importInputRef} type="file" accept=".roi,.zip" style={{ display: "none" }}
@@ -649,199 +848,29 @@ export function RoiManagerPanel({
             "SEG ⬆"
           )}
         </button>
-        {rois.length + masks.length > 0 && (
+        {statsTargets.length > 0 && (
           <button onClick={() => setStatsOpen({})} style={opBtn} title={t("roiMgr.statsAll")} data-testid="roi-mgr-stats-all">Σ</button>
         )}
-        {!isDemo && rois.length > 0 && <button onClick={runExportRois} disabled={busy} style={opBtn} title={t("roiMgr.exportIJ")}>IJ ⬇</button>}
-        {!isDemo && rois.length + masks.length > 0 && <button onClick={runExportRtStruct} disabled={busy} style={opBtn} title={t("roiMgr.exportRt")} data-testid="roi-mgr-export-rt">RT ⬇</button>}
+        {!isDemo && annotationUids.length > 0 && <button onClick={runExportRois} disabled={busy} style={opBtn} title={t("roiMgr.exportIJ")}>IJ ⬇</button>}
+        {!isDemo && shapeCount + paintedRows.length > 0 && <button onClick={() => runExportRtStruct()} disabled={busy} style={opBtn} title={t("roiMgr.exportRt")} data-testid="roi-mgr-export-rt">RT ⬇</button>}
       </div>
-      {rois.length === 0 && <div style={empty}>{t("roiMgr.empty")}</div>}
-      {rois.map((r) => (
-        // 行の**余白**を押したら「この ROI を見せる」。
-        //
-        // 🔴 **行内のボタンは `stopPropagation()` すること。** しないと子の onClick の後に
-        //    親のこれが走り、**ボタンの結果を上書きする**。実機で踏んだ: ⧉（複製）を押すと
-        //    複製先スライスへ移った直後に、行の reveal が**元 ROI のスライスへ引き戻していた**
-        //    （複製はできているのに「同じ場所に戻った」ようにしか見えない）。
-        <div
-          key={r.uid}
-          style={focusedRoi === r.uid ? { ...row, ...focusedRowBox } : row}
-          onClick={(e) => {
-            // Ctrl/⌘＋クリックは画像上と同じく選択を足す・外す。スライスは動かさない（表示中のスライスでまとめて動かすため）。
-            if (e.ctrlKey || e.metaKey) { toggleRoiSelection(r.uid); return; }
-            setFocusedRoi(r.uid); onRevealRoi?.(r.uid);
-          }}
-          data-testid="roi-mgr-row"
-          data-roi-uid={r.uid}
-        >
-          <button onClick={(e) => { e.stopPropagation(); toggleRoi(r.uid, !r.visible); }} style={eyeBtn} title={t("roiMgr.visible")}>{r.visible ? "👁" : "🚫"}</button>
-          <button
-            onClick={(e) => { e.stopPropagation(); toggleRoiLock(r.uid, !r.locked); }}
-            style={eyeBtn}
-            title={r.locked ? t("roiMgr.unlock") : t("roiMgr.lock")}
-            aria-pressed={r.locked}
-            data-testid="roi-mgr-lock"
-          >
-            {r.locked ? "🔒" : "🔓"}
-          </button>
-          <input
-            type="text" style={name} title={r.tool}
-            defaultValue={getRoiMaskMeta(r.uid)?.label ?? r.tool}
-            onChange={(e) => setRoiMaskMeta(r.uid, { label: e.target.value })}
-          />
-          <input type="color" defaultValue="#ffff00" onClick={(e) => e.stopPropagation()} onChange={(e) => setRoiStyle(r.uid, { color: hexToRgb(e.target.value) })} title={t("roiMgr.color")} style={colorInput} />
-          <input type="number" min={1} max={10} defaultValue={1} onClick={(e) => e.stopPropagation()} onChange={(e) => setRoiStyle(r.uid, { lineWidth: String(e.target.value) })} title={t("roiMgr.lineWidth")} style={numInput} />
-          <input type="checkbox" onClick={(e) => e.stopPropagation()} onChange={(e) => setRoiStyle(r.uid, { fillOpacity: e.target.checked ? 0.3 : 0 })} title={t("roiMgr.fill")} />
-          {r.scope && <button onClick={(e) => { e.stopPropagation(); toggleScopeZ(r.uid); }} style={scopeChip} title={t("roiMgr.scopeToggle")}>{r.scope}</button>}
-          {isAreaRoi(r.tool) && <button onClick={(e) => { e.stopPropagation(); runRoiToMask(r.uid); }} disabled={busy} style={editBtn} title={t("roiMgr.toMask")}>▦</button>}
-          {onConvertToRoi && canConvertMeasureToRoi(r.tool) && (
-            <button
-              onClick={(e) => { e.stopPropagation(); setFocusedRoi(r.uid); onConvertToRoi(r.uid); }}
-              disabled={busy || r.locked}
-              style={editBtn}
-              title={r.locked ? t("roi.toRoi.locked") : t("viewer2d.roi.toRoi")}
-              data-testid="roi-mgr-to-roi"
-            >
-              →ROI
-            </button>
-          )}
-          {onDuplicateRoi && (
-            <button
-              onClick={(e) => { e.stopPropagation(); setFocusedRoi(r.uid); onDuplicateRoi(r.uid); }}
-              disabled={busy}
-              style={editBtn}
-              title={t("roiMgr.duplicate")}
-              data-testid="roi-mgr-duplicate"
-            >
-              ⧉
-            </button>
-          )}
-          {/circle/i.test(r.tool) && <button onClick={(e) => { e.stopPropagation(); runDefineSphere(r.uid); }} disabled={busy} style={editBtn} title={t("roiMgr.defineSphere")}>◎</button>}
-          {/circle/i.test(r.tool) && <button onClick={(e) => { e.stopPropagation(); runSphere(r.uid); }} disabled={busy} style={editBtn} title={t("roiMgr.toSphere")}>⬤</button>}
-          <button onClick={(e) => { e.stopPropagation(); setStatsOpen({ focus: r.uid }); }} style={editBtn} title={t("roiMgr.statsRoi")}>Σ</button>
-          <button onClick={(e) => { e.stopPropagation(); setEditId(r.uid); }} style={editBtn} title={t("roiMgr.editTitle")}>✎</button>
-          <button
-            onClick={(e) => { e.stopPropagation(); deleteRoi(r.uid); }}
-            disabled={r.locked}
-            style={r.locked ? { ...delBtn, opacity: 0.35, cursor: "not-allowed" } : delBtn}
-            title={r.locked ? t("roiMgr.lockedNoDelete") : t("common.delete")}
-            data-testid="roi-mgr-delete"
-          >
-            🗑
-          </button>
-        </div>
-      ))}
-
-      <div style={{ ...section, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span>{t("roiMgr.masks")} ({masks.length})</span>
-        <button onClick={addNewMask} disabled={busy} style={editBtn} title={t("roiMgr.newMask")}>＋{t("roiMgr.newMaskShort")}</button>
+      <div style={{ ...row, justifyContent: "flex-start" }}>
+        <button onClick={addNewPainted} disabled={busy} style={editBtn} title={t("roiMgr.newMask")} data-testid="roi-new-painted">＋{t("roiMgr.newMaskShort")}</button>
       </div>
-      {masks.length === 0 && <div style={empty}>{t("roiMgr.empty")}</div>}
-      {masks.map((m) => {
-        const isActive = getSegEditTarget().segmentationId === m.id;
-        const segs = getMaskSegments(m.id);
-        const activeSeg = getSegEditTarget().segmentIndex;
-        return (
-        <div key={m.id} style={isActive ? activeMaskBox : undefined}>
-        <div style={row}>
-          <input type="radio" name="graphy-active-mask" checked={isActive} onChange={() => { activateMask(m.id); refresh(); }} title={t("roiMgr.activeMask")} />
-          <button onClick={() => setMaskVisible(m.id, !m.visible)} style={eyeBtn} title={t("roiMgr.visible")}>{m.visible ? "👁" : "🚫"}</button>
-          <input type="checkbox" checked={selected.has(m.id)} onChange={() => toggleSelect(m.id)} title={t("roiMgr.select")} />
-          <input
-            type="text" style={nameFullLine} title={m.id}
-            defaultValue={getRoiMaskMeta(m.id)?.label ?? m.label}
-            onChange={(e) => setRoiMaskMeta(m.id, { label: e.target.value })}
-          />
-        </div>
-        <div style={row}>
-          <input type="color" defaultValue="#ff0000" onChange={(e) => setMaskColor(m.id, e.target.value)} title={t("roiMgr.color")} style={colorInput} />
-          <input
-            type="range" min={0} max={1} step={0.05} defaultValue={maskDefaults.fillOpacity}
-            onChange={(e) => setMaskStyle(m.id, { fillAlpha: Number(e.target.value) })}
-            style={{ width: 56 }} title={t("roiMgr.opacity")}
-          />
-          <input type="number" min={0} max={10} defaultValue={maskDefaults.outlineWidth} onChange={(e) => setMaskStyle(m.id, { outlineWidth: Number(e.target.value) })} title={t("roiMgr.lineWidth")} style={numInput} />
-          <input type="checkbox" defaultChecked onChange={(e) => setMaskStyle(m.id, { renderFill: e.target.checked })} title={t("roiMgr.fill")} />
-          {/* マスクの範囲は中身（塗ったスライス）で決まる。メタを書き換えても中身は変わらないので押せない表示にする */}
-          {m.scope && <span style={scopeChipStatic} title={t("roiMgr.scopeToggleMask")} data-testid="mask-scope">{m.scope}</span>}
-          <button onClick={() => runStats(m.id)} data-testid="mask-stats-run" style={editBtn} title={t("roiMgr.stats")}>Σ³</button>
-          <button onClick={() => setStatsOpen({ focus: m.id })} data-testid="mask-stats-dialog" style={editBtn} title={t("roiMgr.statsMask")}>Σ</button>
-          <button onClick={() => runSplitToSlices(m.id)} disabled={busy} style={editBtn} title={t("roiMgr.toSlices")}>⬚</button>
-          {/* SEG書き出しは毎晩の自動リストアで確実に消えるため、他の持ち出し系と異なりデモでも許可
-             （backend DemoModeFilter・fw/web-demo-hosting.md 参照）。 */}
-          <button onClick={() => runExportSeg(m.id)} disabled={busy} style={editBtn} title={mode === "standalone" ? t("roiMgr.exportSegStandalone") : t("roiMgr.exportSeg")}>SEG ⬇</button>
-          <button onClick={() => setEditId(m.id)} style={editBtn} title={t("roiMgr.editTitle")}>✎</button>
-          <button onClick={() => deleteMask(m.id)} style={delBtn} title={t("common.delete")}>🗑</button>
-        </div>
-        {stats[m.id] && (
-          <div style={statLine} data-testid="mask-stats">
-            {t("roiMgr.statVol")}: {stats[m.id].volumeMl.toFixed(2)} mL ({stats[m.id].volumeMm3.toFixed(0)} mm³) ·
-            {" "}{t("roiMgr.statVoxels")}: {stats[m.id].voxels.toLocaleString()} · {t("roiMgr.statSlices")}: {stats[m.id].slices}
-            {(stats[m.id].missingValueSlices ?? 0) > 0 && (
-              <>
-                <br />
-                {t("roiMgr.statMissingSlices", { n: stats[m.id].missingValueSlices! })}
-              </>
-            )}
-            {stats[m.id].mean !== undefined && (
-              <>
-                <br />
-                {t("roiMgr.statMean")}: {formatNumber(stats[m.id].mean!)} ± {formatNumber(stats[m.id].sd!)} ·
-                {" "}min {formatNumber(stats[m.id].min!)} / max {formatNumber(stats[m.id].max!)} {valueUnitLabel(stats[m.id].unit ?? "", t)}
-                {meanTimesVolumeLabelKey(stats[m.id].unit) && stats[m.id].meanTimesVolumeMl !== undefined && (
-                  <>
-                    <br />
-                    {t("roiMgr.statTlg")}: {formatNumber(stats[m.id].meanTimesVolumeMl!)} {valueUnitLabel(stats[m.id].unit ?? "", t)}·mL
-                  </>
-                )}
-              </>
-            )}
-          </div>
-        )}
-        {isActive && (
-          <div style={segLine}>
-            <span style={{ color: "#5a6672" }}>{t("roiMgr.segments")}:</span>
-            {segs.map((si) => {
-              // SEG の SegmentLabel・プラグインのラベル表から来た名前（例: 臓器名）。無ければ番号
-              const segNames = getRoiMaskMeta(m.id)?.segmentLabels;
-              const col = segColorHex(m.id, si);
-              return (
-              <button
-                key={si}
-                onClick={() => { activateMask(m.id, si); refresh(); }}
-                style={{ ...(si === activeSeg ? segChipActive : segChip), ...(col ? { boxShadow: `inset 5px 0 0 ${col}` } : {}) }}
-                title={segNames?.[String(si)] ? `${si}: ${segNames[String(si)]}` : t("roiMgr.activeSegment")}
-              >{segNames?.[String(si)] ?? si}</button>
-              );
-            })}
-            <input type="color" value={segColorHex(m.id, activeSeg) ?? "#ff0000"} onChange={(e) => { setMaskColor(m.id, e.target.value, activeSeg); refresh(); }} title={t("roiMgr.color")} style={colorInput} />
-            <button onClick={addSegment} style={editBtn} title={t("roiMgr.addSegment")}>＋</button>
-          </div>
-        )}
-        </div>
-        );
+      {model.rois.length === 0 && <div style={empty}>{t("roiMgr.empty")}</div>}
+      {model.rois.map((r) => {
+        if (r.rowKind === "shape") return renderShapeRow(r);
+        if (r.rowKind === "painted") return renderPaintedRow(r);
+        return renderSphereRow(r.id);
       })}
 
-      {spheres.length > 0 && <div style={section}>{t("roiMgr.spheres")} ({spheres.length})</div>}
-      {spheres.map((s) => (
-        <div key={s.id} style={row}>
-          <input type="checkbox" checked={s.visible} onChange={(e) => updateSphere3D(s.id, { visible: e.target.checked })} title={t("roiMgr.visible")} />
-          <input type="text" style={name} defaultValue={s.label ?? "Sphere"} onChange={(e) => updateSphere3D(s.id, { label: e.target.value })} />
-          <input type="color" defaultValue={s.color} onChange={(e) => updateSphere3D(s.id, { color: e.target.value })} title={t("roiMgr.color")} style={colorInput} />
-          <input type="number" min={0.1} step={0.5} defaultValue={Number(s.radiusMm.toFixed(1))} onChange={(e) => { const v = Number(e.target.value); if (v > 0) updateSphere3D(s.id, { radiusMm: v }); }} title={t("roiMgr.radiusMm")} style={numInput} />
-          <span style={{ color: "#9aa6b2", fontSize: 10 }}>mm</span>
-          <button onClick={() => runBakeSphere(s.id)} disabled={busy} style={editBtn} title={t("roiMgr.bakeSphere")}>⬤</button>
-          <button onClick={() => deleteSphere3D(s.id)} style={delBtn} title={t("common.delete")}>🗑</button>
-        </div>
-      ))}
-
-      {masks.length > 0 && (
+      {shapeCount + paintedRows.length > 0 && (
         <div style={opsBar}>
-          <span style={{ color: "#5a6672", marginRight: 2 }}>{t("roiMgr.ops")} ({selected.size})</span>
-          <button onClick={() => runCombine("or")} disabled={busy || selected.size < 2} style={opBtn} title={t("roiMgr.opMerge")}>{t("roiMgr.merge")}</button>
-          <button onClick={() => runCombine("and")} disabled={busy || selected.size < 2} style={opBtn} title={t("roiMgr.opAnd")}>AND</button>
-          <button onClick={() => runCombine("xor")} disabled={busy || selected.size < 2} style={opBtn} title={t("roiMgr.opXor")}>XOR</button>
-          <button onClick={runSplit} disabled={busy || selected.size !== 1} style={opBtn} title={t("roiMgr.opSplit")}>{t("roiMgr.split")}</button>
+          <span style={{ color: "#5a6672", marginRight: 2 }} title={t("roiMgr.ops")}>{t("roiMgr.ops")} ({selectedRows.length})</span>
+          <button onClick={() => runCombine("or")} disabled={busy || operands.length < 2} style={opBtn} title={t("roiMgr.opMerge")}>{t("roiMgr.merge")}</button>
+          <button onClick={() => runCombine("and")} disabled={busy || operands.length < 2} style={opBtn} title={t("roiMgr.opAnd")}>AND</button>
+          <button onClick={() => runCombine("xor")} disabled={busy || operands.length < 2} style={opBtn} title={t("roiMgr.opXor")}>XOR</button>
+          <button onClick={runSplit} disabled={busy || operands.length !== 1 || operands[0].kind !== "painted"} style={opBtn} title={t("roiMgr.opSplit")}>{t("roiMgr.split")}</button>
           <select value={splitConn} onChange={(e) => setSplitConn(Number(e.target.value) as SplitConnectivity)} title={t("roiMgr.splitConn")} style={{ ...opBtn, padding: "2px 4px" }}>
             <option value={26}>26</option>
             <option value={18}>18</option>
@@ -849,6 +878,10 @@ export function RoiManagerPanel({
           </select>
         </div>
       )}
+
+      <div style={section} title={t("roiMgr.measuresNote")}>{t("roiMgr.measures")} ({model.measures.length})</div>
+      {model.measures.length === 0 && <div style={empty}>{t("roiMgr.empty")}</div>}
+      {model.measures.map((m) => renderMeasureRow(m))}
 
       <div style={note}>{t("roiMgr.m1note")}</div>
       {editId && <RoiMetaEditDialog itemId={editId} onClose={() => { setEditId(null); refresh(); }} />}
@@ -890,11 +923,7 @@ const opBtn: React.CSSProperties = { border: "1px solid #cdd5de", borderRadius: 
 const statLine: React.CSSProperties = { padding: "0 10px 4px 28px", color: "#5a6672", fontSize: 11 };
 const empty: React.CSSProperties = { padding: "2px 10px", color: "#9aa6b2" };
 const note: React.CSSProperties = { marginTop: "auto", padding: 8, color: "#9aa6b2", fontSize: 11, borderTop: "1px solid #eef1f4" };
-// アクティブ編集対象（D2）のハイライトと segment チップ。
+// アクティブ編集対象（D2）のハイライト。
 const activeMaskBox: React.CSSProperties = { background: "#eef7ff", borderLeft: "3px solid #2b8aef" };
 // 一覧で選んでいる ROI の行。マスクのアクティブ表示と同じ見た目に揃える（別の意味に見せない）。
 const focusedRowBox: React.CSSProperties = { background: "#eef7ff", borderLeft: "3px solid #2b8aef" };
-const segLine: React.CSSProperties = { display: "flex", alignItems: "center", gap: 4, padding: "0 10px 4px 28px", fontSize: 11 };
-const segChip: React.CSSProperties = { minWidth: 20, border: "1px solid #cdd5de", borderRadius: 4, background: "#fff", cursor: "pointer", fontSize: 11, padding: "1px 6px" };
-// アクティブ枠は border shorthand に統一（borderColor 非shorthand との混在で React 警告が出るため）。
-const segChipActive: React.CSSProperties = { ...segChip, background: "#2b8aef", color: "#fff", border: "1px solid #2b8aef" };

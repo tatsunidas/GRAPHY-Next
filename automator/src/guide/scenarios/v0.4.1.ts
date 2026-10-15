@@ -220,7 +220,8 @@ const scenario: Scenario = async ({ shot }) => {
     await viewer.keyboard.press("Escape");
     await menu(viewer, "roiTools", "ROI マネージャ");
     await viewer.waitForTimeout(800);
-    const lock = viewer.locator('[data-testid="roi-mgr-row"]').nth(1).getByTestId("roi-mgr-lock");
+    // ROI（矩形）は「ROI」の区画、Cobb 角は「計測」の区画。形の ROI の行だけが roi-mgr-row なので先頭が矩形 ROI。
+    const lock = viewer.locator('[data-testid="roi-mgr-row"]').first().getByTestId("roi-mgr-lock");
     await lock.click();
     await viewer.waitForTimeout(800);
     await shot(viewer, "roi", [
@@ -230,8 +231,8 @@ const scenario: Scenario = async ({ shot }) => {
     ]);
 
     // 5. ROI 計測結果の「⬇ 画素」（矩形 ROI）
-    await viewer.getByTestId("roi-mgr-lock").nth(1).waitFor();
-    await viewer.locator('[data-testid="roi-mgr-row"]').nth(1).getByRole("button", { name: "Σ", exact: true }).click();
+    await viewer.locator('[data-testid="roi-mgr-row"]').first().getByTestId("roi-mgr-lock").waitFor();
+    await viewer.locator('[data-testid="roi-mgr-row"]').first().getByRole("button", { name: "Σ", exact: true }).click();
     const statsDlg = viewer.getByTestId("roi-stats-dialog");
     await statsDlg.waitFor({ timeout: 30_000 });
     await viewer.waitForTimeout(2_500);
@@ -276,7 +277,7 @@ const scenario: Scenario = async ({ shot }) => {
     await viewer.getByTestId("wand-commit").click();
     await viewer.waitForTimeout(2_000);
 
-    // 7. ROI マネージャの 3D 統計（Wand で作ったマスク）
+    // 7. ROI マネージャの 3D 統計（Wand で作った塗りの ROI。segment ごとに 1 行）
     // ROI マネージャは「roi」の撮影から開いたまま
     const run = viewer.getByTestId("mask-stats-run").first();
     await run.waitFor({ timeout: 20_000 });
@@ -288,7 +289,7 @@ const scenario: Scenario = async ({ shot }) => {
       { at: viewer.getByTestId("mask-stats").first(), side: "left" },
     ]);
 
-    // 7b. マスクの計測結果の窓（ボクセルの CSV）
+    // 7b. 塗りの ROI の計測結果の窓（ボクセルの CSV）
     await viewer.getByTestId("mask-stats-dialog").first().click();
     const maskDlg = viewer.getByTestId("roi-stats-dialog");
     await maskDlg.waitFor({ timeout: 30_000 });

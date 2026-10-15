@@ -189,3 +189,20 @@ ROI マネージャには「ROI」だけを見せ、中身の持ち方（注釈�
 - 画素中心の偶奇判定（`fillPolygonsEvenOdd`）で塗り直すと、元と同じ画素に戻る。
   - この往復はテストで固定する。
   - 判定は `rasterizeRoi` の点の内外判定と同じ式。
+
+**段 2 PR 3（パネル）**（`viewer2d/RoiManagerPanel.tsx`、行モデルは `viewer/roiRows.ts`）
+- 欄は「ROI」と「計測」の 2 つ。「マスク」「3D 球」の欄は無い。
+  - ROI: 1 件 1 行。形の ROI（面積・線・点）、塗りの ROI（**ラベルマップの segment 1 つにつき 1 行**）、パラメトリック球（アイコンで区別）。
+  - 計測: Length / Bidirectional / Angle / Cobb / Probe。種別不明のツール（矢印注記など）も落とさずここに出す。
+  - 「＋新規 ROI（塗り）」はこれまでの新規マスク（segment 1 の新しいラベルマップ）。「＋セグメント」は無い（segment は SEG 取り込み・SPLIT で生じる）。
+- 塗りの ROI の行
+  - 行を押す／ラジオ＝その segment を塗り先（`activateMask(id, segIndex)`）。👁・色・不透明度・塗りは segment 単位、輪郭線の太さだけマスク単位（Cornerstone の制約）。
+  - 名前は `segmentLabels[segIndex]`。segment が 1 つだけのマスクは `label` も同じ値にそろえる（表示は `label` が優先）。
+  - Σ / Σ³ / CSV は segment 単位（`segmentIndex`）。🗑 は `removeSegment` でその segment だけ消し、最後の 1 つならマスクごと消す。
+  - ⬚（スライス分割）・RT ⬇ も segment 単位。**SEG ⬇ だけはマスク全体**（同じマスクの ROI すべてを書く。ツールチップに明記）。
+  - segment が 1 つだけの行は「行＝マスク全体」として従来どおり非ゼロすべてを前景にする（`segmentIndex` を渡さない）。
+- 前景の定義は `isSegmentForeground(value, segmentIndex?)` の 1 か所（`maskStatsCore.ts`）。統計・ボクセル CSV・ブール演算・SPLIT が共有する。
+- 演算バー（MERGE(OR) / AND / XOR / SPLIT）は、**選択した ROI 行**（形・塗りの両方にチェックボックス）に働く。
+  - 塗りの行は `value === segIndex` のボクセルだけを前景にする（マスク全体ではない）。
+  - 形の ROI は先に `roiToMask` で**一時マスク**にラスタ化して計算し、**演算が終わったら一時マスクを取り除く**（結果の新規 ROI だけを残す。パネルに中間物を残さないため）。面積型でない形が混ざると失敗（null）。
+  - SPLIT は塗りの ROI 1 件に対して、その segment のボクセルだけを連結成分に分け、元の segment を置き換える。

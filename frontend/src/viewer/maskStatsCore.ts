@@ -20,6 +20,14 @@ export interface MaskStatsCore {
   max?: number;
 }
 
+/**
+ * 前景判定の単一の定義。`segmentIndex` を渡すとその segment の値だけ、無ければ背景(0)以外すべて。
+ * 統計・ボクセル CSV・ブール演算・SPLIT がこれを共有する（母集団を食い違わせない）。
+ */
+export function isSegmentForeground(value: number, segmentIndex?: number): boolean {
+  return segmentIndex != null ? value === segmentIndex : value > 0;
+}
+
 export function accumulateMaskStats(slices: MaskSliceInput[], segmentIndex?: number): MaskStatsCore {
   let voxels = 0, nSlices = 0, valued = 0, missing = 0;
   let sum = 0, sumSq = 0, vmin = Infinity, vmax = -Infinity;
@@ -28,9 +36,7 @@ export function accumulateMaskStats(slices: MaskSliceInput[], segmentIndex?: num
     const vals = s.values;
     let count = 0, unread = 0;
     for (let i = 0; i < len; i++) {
-      const idx = s.labels[i];
-      if (idx <= 0) continue;
-      if (segmentIndex != null && idx !== segmentIndex) continue;
+      if (!isSegmentForeground(s.labels[i], segmentIndex)) continue;
       count++;
       if (vals && i < vals.length) {
         const v = vals[i];
@@ -74,15 +80,16 @@ export interface MaskValueSample {
 }
 
 /**
- * 前景（label &gt; 0）の値を 1 本に集める。ROI 計測結果ダイアログが `summarizeValues` へ渡す母集団。
+ * 前景（label &gt; 0、`segmentIndex` 指定時はその segment のみ）の値を 1 本に集める。
+ * ROI 計測結果ダイアログが `summarizeValues` へ渡す母集団。
  * 数え方（voxels / slices）は {@link accumulateMaskStats} と同じ。
  */
-export function collectMaskValues(slices: MaskSliceInput[]): MaskValueSample {
+export function collectMaskValues(slices: MaskSliceInput[], segmentIndex?: number): MaskValueSample {
   let voxels = 0, nSlices = 0, missing = 0;
   for (const s of slices) {
     let count = 0, unread = 0;
     for (let i = 0; i < s.labels.length; i++) {
-      if (!(s.labels[i] > 0)) continue;
+      if (!isSegmentForeground(s.labels[i], segmentIndex)) continue;
       count++;
       if (!s.values || i >= s.values.length) unread++;
     }
@@ -95,7 +102,7 @@ export function collectMaskValues(slices: MaskSliceInput[]): MaskValueSample {
   for (const s of slices) {
     const vals = s.values;
     for (let i = 0; i < s.labels.length; i++) {
-      if (!(s.labels[i] > 0)) continue;
+      if (!isSegmentForeground(s.labels[i], segmentIndex)) continue;
       values[k++] = vals && i < vals.length ? vals[i] : NaN;
     }
   }

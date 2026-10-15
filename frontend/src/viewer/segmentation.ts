@@ -24,7 +24,8 @@ import {
   setActiveSegmentationId,
   setActiveSegmentIndexStore,
   getMaskSegments,
-  addMaskSegment,
+  getRoiMaskMeta,
+  deleteRoiMaskMeta,
 } from "./roiMaskStore";
 import { hasPlaneMetadata } from "./segMetadata";
 
@@ -38,7 +39,7 @@ interface StackEntry {
 const byViewport = new Map<string, StackEntry>();
 let seq = 0;
 
-/** 直近でセグメンテーション操作/フォーカスしたビューポート（パネルの「＋新規マスク」用）。 */
+/** 直近でセグメンテーション操作/フォーカスしたビューポート（パネルの「＋新規 ROI（塗り）」用）。 */
 let lastSegViewport: { viewportId: string; imageIds: string[] } | null = null;
 export function getLastSegViewport(): { viewportId: string; imageIds: string[] } | null {
   return lastSegViewport;
@@ -80,7 +81,7 @@ function applyActiveSegmentIndex(segmentationId: string, index: number): void {
 /**
  * 指定マスクをアクティブ（編集対象）にする。CS の active segmentation ＋ストアを同期。
  * `viewportId` を渡すと、作りたてで `getViewportIdsWithSegmentation` がまだ空を返す場合でも
- * その既知ビューポートに確実に active segmentation を設定する（+新規マスク直後の塗り先ズレ防止）。
+ * その既知ビューポートに確実に active segmentation を設定する（＋新規 ROI 直後の塗り先ズレ防止）。
  */
 export function activateMask(segmentationId: string, segmentIndex?: number, viewportId?: string): void {
   const vps = new Set(viewportIdsOf(segmentationId));
@@ -182,7 +183,7 @@ export async function ensureStackSegmentation(
   }
 }
 
-/** 明示的に新規マスクを作成してアクティブ化（パネルの「＋新規マスク」）。 */
+/** 明示的に新規マスクを作成してアクティブ化（パネルの「＋新規 ROI（塗り）」）。 */
 export async function createNewMask(viewportId: string, sourceImageIds: string[]): Promise<string | null> {
   if (!sourceImageIds.length) return null;
   const stackKey = sourceImageIds.join("|");
@@ -197,15 +198,65 @@ export async function createNewMask(viewportId: string, sourceImageIds: string[]
   }
 }
 
-/** アクティブマスクに次の segment index を追加してアクティブ segment にする（「＋セグメント」）。 */
-export function addSegmentToActiveMask(): number | null {
-  const target = getSegEditTarget();
-  if (!target.segmentationId) return null;
-  const segs = getMaskSegments(target.segmentationId);
-  const next = (segs[segs.length - 1] ?? 0) + 1;
-  addMaskSegment(target.segmentationId, next);
-  applyActiveSegmentIndex(target.segmentationId, next);
-  return next;
+const csVisibility = csSeg.config.visibility as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+const csSegIndex = csSeg.segmentIndex as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+
+/** segment の表示状態（先頭ビューポート基準。ビューポート未取得は表示扱い）。 */
+export function getSegmentVisible(segmentationId: string, segmentIndex: number): boolean {
+  try {
+    const vp = viewportIdsOf(segmentationId)[0];
+    if (!vp) return true;
+    const spec = { segmentationId, type: LABELMAP };
+    if (csVisibility.getSegmentationRepresentationVisibility(vp, spec) === false) return false;
+    return csVisibility.getSegmentIndexVisibility(vp, spec, segmentIndex) !== false;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * segment 1 件の表示 On/Off（表示中の全ビューポート）。
+ * Cornerstone は representation に**登録済みの segment index** の visible しか書き換えない
+ * （未登録は黙って無視）。SEG 取り込み・SPLIT 由来で segment 1 以外が未登録のままのマスクで
+ * 効かなくなるので、setActiveSegmentIndex（未登録なら自動登録する）で登録してから切り替える。
+ * アクティブ segment は元に戻す（表示切替で塗り先を変えない）。
+ */
+export function setSegmentVisible(segmentationId: string, segmentIndex: number, visible: boolean): void {
+  try {
+    const prevActive = csSegIndex.getActiveSegmentIndex(segmentationId) as number | undefined;
+    try { csSegIndex.setActiveSegmentIndex(segmentationId, segmentIndex); } catch { /* ignore */ }
+    if (prevActive != null) {
+      try { csSegIndex.setActiveSegmentIndex(segmentationId, prevActive); } catch { /* ignore */ }
+    }
+    const spec = { segmentationId, type: LABELMAP };
+    for (const vp of viewportIdsOf(segmentationId)) {
+      // マスク全体が非表示のまま segment だけ点けても見えないので、点けるときは全体も戻す。
+      if (visible) {
+        try { csVisibility.setSegmentationRepresentationVisibility(vp, spec, true); } catch { /* ignore */ }
+      }
+      try { csVisibility.setSegmentIndexVisibility(vp, spec, segmentIndex, visible); } catch { /* ignore */ }
+    }
+  } catch { /* ignore */ }
+}
+
+/**
+ * ROI（塗り）1 件 = segment 1 つを削除する。ボクセルは 0 に戻り、ストアの segments/segmentLabels からも外す。
+ * 最後の 1 つだった場合はマスク（segmentation）ごと消す。戻り値は実際に消えた単位。
+ */
+export function removeMaskSegment(segmentationId: string, segmentIndex: number): "segment" | "mask" {
+  const remaining = getMaskSegments(segmentationId).filter((i) => i !== segmentIndex);
+  if (remaining.length === 0) {
+    try { csSeg.removeSegmentation(segmentationId); } catch { /* ignore */ }
+    deleteRoiMaskMeta(segmentationId);
+    return "mask";
+  }
+  try { csSeg.removeSegment(segmentationId, segmentIndex, { setNextSegmentAsActive: false }); } catch { /* ignore */ }
+  const labels = { ...(getRoiMaskMeta(segmentationId)?.segmentLabels ?? {}) };
+  delete labels[String(segmentIndex)];
+  setRoiMaskMeta(segmentationId, { segments: remaining, segmentLabels: labels });
+  const t = getSegEditTarget();
+  if (t.segmentationId === segmentationId && t.segmentIndex === segmentIndex) activateMask(segmentationId, remaining[0]);
+  return "segment";
 }
 
 /** ビューポート破棄時のクリーンアップ。 */
