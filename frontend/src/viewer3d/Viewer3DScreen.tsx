@@ -306,6 +306,8 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
       setVolumeDepth({
         gridIndexOf: built.grid?.gridIndexOf ?? (built.sortedImageIds ? built.geometry.order.map((_, i) => i) : undefined),
         widths: built.geometry.widths,
+        positions: built.geometry.positions.map((p) => p - built.geometry.positions[0]),
+        gridCount: built.grid?.count ?? built.geometry.positions.length,
         source: built.geometry.source,
         kind: built.geometry.kind,
       });

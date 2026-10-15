@@ -32,6 +32,7 @@ import {
   removeObject,
   setObjectColor,
   setObjectDisplayMode,
+  setRoiSmooth,
   setObjectOpacity,
   setObjectVisible,
   startEndoscopy,
@@ -507,6 +508,17 @@ export function SceneObjectPanel({
               </button>
             ))}
           </div>
+          {selected.kind === "roi" && (
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, margin: "4px 0" }} title={t("scene3d.smoothHint")}>
+              <input
+                type="checkbox"
+                data-testid="roi3d-smooth"
+                checked={!!selected.smooth}
+                onChange={(e) => setRoiSmooth(selected.id, e.target.checked)}
+              />
+              {t("scene3d.smooth")}
+            </label>
+          )}
           <div style={detailActions}>
             {selected.kind === "roi" && (
               <button style={btnSm} disabled={busy} onClick={onRoiToMesh}>
@@ -582,7 +594,7 @@ export function SceneObjectPanel({
                   v={
                     selected.volumeMl === undefined
                       ? "—"
-                      : `${num(selected.volumeMl, 2)} mL${selected.kind === "roi" && selected.volumeDepthSource === "thickness" ? ` (${t("scene3d.volumeEstimated")})` : ""}`
+                      : `${num(selected.volumeMl, 2)} mL${selected.kind === "roi" && selected.volumeDepthSource === "thickness" ? ` (${t("scene3d.volumeEstimated")})` : ""}${selected.kind === "roi" && selected.smooth ? ` (${t("scene3d.volumeBeforeSmooth")})` : ""}`
                   }
                 />
                 <Stat k={t("scene3d.area")} v={`${num(selected.surfaceAreaMm2, 0)} mm²`} />
