@@ -731,10 +731,11 @@ export function RoiManagerPanel({
           <input type="checkbox" checked={selected.has(r.key)} onChange={() => toggleSelect(r.key)} title={t("roiMgr.select")} data-testid="roi-row-select" />
           <span title={t("roiMgr.iconPainted")} style={{ color: col ?? "#5a6672" }}>▨</span>
           <input
-            type="text" style={nameFullLine} title={r.maskId}
+            type="text" style={nameInRow} title={r.maskId}
             defaultValue={r.name}
             onChange={(e) => rename(e.target.value)}
           />
+          <button onClick={() => deletePainted(r)} style={delBtn} title={t("common.delete")} data-testid="roi-row-delete">🗑</button>
         </div>
         <div style={row}>
           <input type="color" value={col ?? "#ff0000"} onChange={(e) => { setMaskColor(r.maskId, e.target.value, r.segIndex); refresh(); }} title={t("roiMgr.color")} style={colorInput} />
@@ -747,6 +748,8 @@ export function RoiManagerPanel({
           <input type="checkbox" defaultChecked onChange={(e) => setSegmentStyle(r.maskId, r.segIndex, { renderFill: e.target.checked })} title={t("roiMgr.fill")} />
           {/* 範囲は中身（塗ったスライス）で決まる。メタを書き換えても中身は変わらないので押せない表示にする */}
           {r.scope && <span style={scopeChipStatic} title={t("roiMgr.scopeToggleMask")} data-testid="mask-scope">{r.scope}</span>}
+        </div>
+        <div style={row}>
           <button onClick={() => runStats(r)} data-testid="mask-stats-run" style={editBtn} title={t("roiMgr.stats")}>Σ³</button>
           <button onClick={() => setStatsOpen({ focus: r.key })} data-testid="mask-stats-dialog" style={editBtn} title={t("roiMgr.statsMask")}>Σ</button>
           <button onClick={() => runSplitToSlices(r)} disabled={busy} style={editBtn} title={t("roiMgr.toSlices")}>⬚</button>
@@ -755,7 +758,6 @@ export function RoiManagerPanel({
           <button onClick={() => runExportSeg(r.maskId)} disabled={busy} style={editBtn} title={mode === "standalone" ? t("roiMgr.exportSegStandalone") : t("roiMgr.exportSeg")}>SEG ⬇</button>
           {!isDemo && <button onClick={() => runExportRtStruct(r)} disabled={busy} style={editBtn} title={t("roiMgr.exportRtOne")} data-testid="roi-row-export-rt">RT ⬇</button>}
           <button onClick={() => setEditId(r.maskId)} style={editBtn} title={t("roiMgr.editTitle")}>✎</button>
-          <button onClick={() => deletePainted(r)} style={delBtn} title={t("common.delete")} data-testid="roi-row-delete">🗑</button>
         </div>
         {st && (
           <div style={statLine} data-testid="mask-stats">
@@ -910,7 +912,8 @@ const name: React.CSSProperties = {
 };
 // マスク名は色/不透明度/各種操作ボタンと同じ行だと flex-wrap の詰め合いで幅を奪われ見切れるため、
 // マスク行では名前だけ幅いっぱいの専用行にする（flexBasis 指定で強制的に単独行にする）。
-const nameFullLine: React.CSSProperties = { ...name, flexBasis: "100%" };
+// 塗りの行: 名前は 1 行目の残り幅に収め、🗑 を同じ行の右端に置く。
+const nameInRow: React.CSSProperties = { ...name, minWidth: 80 };
 const delBtn: React.CSSProperties = { border: "1px solid #e3c2c2", borderRadius: 5, background: "#fff", cursor: "pointer", fontSize: 12, padding: "1px 6px" };
 const editBtn: React.CSSProperties = { border: "1px solid #cdd5de", borderRadius: 5, background: "#fff", cursor: "pointer", fontSize: 12, padding: "1px 6px" };
 const eyeBtn: React.CSSProperties = { border: "none", background: "transparent", cursor: "pointer", fontSize: 13, padding: 0, lineHeight: 1 };

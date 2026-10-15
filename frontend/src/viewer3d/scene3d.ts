@@ -34,7 +34,6 @@ import vtkTubeFilter from "@kitware/vtk.js/Filters/General/TubeFilter";
 import vtkDataArray from "@kitware/vtk.js/Common/Core/DataArray";
 import { resampleColorsNearest } from "./vesselColorMap";
 import { activateTubeColors, TUBE_COLOR_ARRAY } from "./tubeColors";
-import vtkSphereSource from "@kitware/vtk.js/Filters/Sources/SphereSource";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 import vtkClipClosedSurface from "@kitware/vtk.js/Filters/General/ClipClosedSurface";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -48,6 +47,7 @@ import {
   clearSceneObjects,
   getSceneObjects,
   type SceneObject,
+  type SceneObjectSource,
 } from "./scene3dStore";
 import { record, clearUndo } from "./undoStore";
 import {
@@ -443,6 +443,8 @@ export interface AddOptions {
    * "mesh" はメッシュ（平滑化後）から算出した体積を使う（セグメント単位インポート等、
    * 表示メッシュと数値を一致させたい用途向け）。 */
   volumeFrom?: "voxel" | "mesh";
+  /** 取り込み元への参照（`SceneObject.source`）。 */
+  source?: SceneObjectSource;
   /**
    * 中心線を**点ごとの色**で描く（RGB 0..255・3 成分・近位→遠位）。A7 の解析値の可視化用。
    *
@@ -482,20 +484,6 @@ export function addMeshObject(polydata: Any, opts: AddOptions = {}): string | nu
 }
 
 /**
- * パラメトリック 3D 球（`sphere3dStore.ts` の `Sphere3D`）を、Mask への焼き込み・再インポートを
- * 経由せず直接メッシュとしてシーンへ追加する（`fw/mask-driven-pipelines-gap-analysis.md` 課題#7）。
- */
-export function addSphereObject(center: V3, radiusMm: number, opts: AddOptions = {}): string | null {
-  if (!(radiusMm > 0)) return null;
-  const src: Any = vtkSphereSource.newInstance();
-  src.setCenter(center[0], center[1], center[2]);
-  src.setRadius(radiusMm);
-  src.setThetaResolution(32);
-  src.setPhiResolution(32);
-  return addMeshObject(src.getOutputData(), opts);
-}
-
-/**
  * 3D ROI（LabelVolume, 実空間 labelmap）をシーンに追加。
  * 表面メッシュ（marching cubes）を生成して描画し、体積はボクセルから確定計算する。
  */
@@ -518,7 +506,10 @@ export function addRoiObject(lv: LabelVolume, opts: AddOptions = {}): string | n
     opacity,
     visible: true,
     displayMode: "float",
+    source: opts.source,
     voxels,
+    voxelVolumeMm3: voxels * lv.voxelMm3,
+    meshVolumeMm3: m.volumeMm3,
     volumeMm3,
     volumeMl: volumeMm3 / 1000,
     surfaceAreaMm2: m.surfaceAreaMm2,
@@ -658,6 +649,8 @@ function applyRoiVolumeInternal(id: string, data: Uint8Array): void {
   const m = surf ? measureMesh(surf) : null;
   updateSceneObject(id, {
     voxels,
+    voxelVolumeMm3: voxels * lv.voxelMm3,
+    meshVolumeMm3: m?.volumeMm3 ?? 0,
     volumeMm3,
     volumeMl: volumeMm3 / 1000,
     surfaceAreaMm2: m?.surfaceAreaMm2 ?? 0,

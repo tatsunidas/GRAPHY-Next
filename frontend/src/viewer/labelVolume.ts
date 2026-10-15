@@ -292,3 +292,8 @@ export function countForeground(lv: LabelVolume): number {
   for (let i = 0; i < d.length; i++) if (d[i] > 0) n++;
   return n;
 }
+
+/** 前景ボクセル数 × 1 ボクセルの体積（2D ROI マネージャの Σ³ と同じ定義）。 */
+export function voxelVolumeMm3(lv: LabelVolume): number {
+  return countForeground(lv) * lv.voxelMm3;
+}

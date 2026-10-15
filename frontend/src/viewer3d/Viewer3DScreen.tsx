@@ -66,6 +66,7 @@ import { geomFromImageData, type VolumeGeom } from "../viewer/labelVolume";
 import { useI18n } from "../i18n/i18n";
 import { fetchSettings } from "../settings/settingsApi";
 import { hexToRgb01 } from "../viewer/hexColor";
+import { VIEWER3D_CTX_KEY, parseViewer3dCtx, viewer3dCtxChanged } from "./viewer3dCtx";
 
 interface Viewer3DContext {
   study: Study;
@@ -136,7 +137,9 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
   const [presetName, setPresetName] = useState<string>("none");
   const modalityRef = useRef<string | null>(null);
   // 派生シリーズ保存（CPR/ストレート化）用の study/series 識別子。
-  const seriesRef = useRef<{ studyUid: string; seriesUid: string; seriesDesc: string } | null>(null);
+  const seriesRef = useRef<{ studyUid: string; seriesUid: string; seriesDesc: string; c: number; t: number } | null>(null);
+  // 起動時に読んだコンテキスト。別シリーズ/C/T で 2D から再起動されたかの判定に使う。
+  const ctxRef = useRef<Viewer3DContext | null>(null);
   const [volumeId, setVolumeId] = useState<string>("");
   // 表示ボリュームの実空間幾何（mesh→ROI ボクセル化の対象）。
   const [sceneGeom, setSceneGeom] = useState<VolumeGeom | null>(null);
@@ -185,11 +188,11 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
   const start = useCallback(async () => {
     let ctx: Viewer3DContext | null = null;
     try {
-      const raw = localStorage.getItem("graphy-viewer3d-ctx");
-      if (raw) ctx = JSON.parse(raw) as Viewer3DContext;
+      ctx = parseViewer3dCtx<Viewer3DContext>(localStorage.getItem(VIEWER3D_CTX_KEY));
     } catch {
       ctx = null;
     }
+    ctxRef.current = ctx;
     if (!ctx?.study) {
       setPhase("error");
       setMessage(t("viewer3d.noContext"));
@@ -220,6 +223,8 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         studyUid: ctx.study.studyInstanceUid,
         seriesUid: series.seriesInstanceUid,
         seriesDesc: series.seriesDescription || series.seriesInstanceUid,
+        c: ctx.c ?? 0,
+        t: ctx.t ?? 0,
       };
 
       // 起動元タイルで表示中だった C/T のスタックのみをボリューム化する（マルチチャンネル/
@@ -232,6 +237,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         const c0 = Math.min(Math.max(0, ctx.c ?? 0), Math.max(0, layout.nC - 1));
         const t0 = Math.min(Math.max(0, ctx.t ?? 0), Math.max(0, layout.nT - 1));
         guardLayout = layout;
+        if (seriesRef.current) seriesRef.current = { ...seriesRef.current, c: c0, t: t0 };
         imageIds = imageIdsForCT(layout, mode2, c0, t0, ctx.study.studyInstanceUid, series.seriesInstanceUid);
         if (imageIds.length < 3 && layout.nC <= 1 && layout.nT <= 1) {
           const instances = await fetchInstances(ctx.study.studyInstanceUid, series.seriesInstanceUid);
@@ -360,6 +366,18 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
       );
     }
   }, [mode2, t]);
+
+  // 3D ウィンドウが開いたまま 2D から別のシリーズ/C/T で再起動されたら、新しいコンテキストで読み込み直す。
+  // 状態（ボリューム・シーンオブジェクト・各種オーバーレイ）が多いので、個別に初期化せず画面ごと再読込する。
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== VIEWER3D_CTX_KEY) return;
+      const next = parseViewer3dCtx<Viewer3DContext>(e.newValue);
+      if (viewer3dCtxChanged(ctxRef.current, next)) window.location.reload();
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   useEffect(() => {
     if (startedRef.current || !status) return;
@@ -840,6 +858,8 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
                 onToggleEndoPath={toggleEndoPath}
                 studyUid={seriesRef.current?.studyUid}
                 seriesUid={seriesRef.current?.seriesUid}
+                ctxC={seriesRef.current?.c}
+                ctxT={seriesRef.current?.t}
                 isDemo={isDemo}
               />
             </div>
