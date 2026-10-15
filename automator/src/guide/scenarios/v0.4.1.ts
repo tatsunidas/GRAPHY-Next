@@ -306,6 +306,42 @@ const scenario: Scenario = async ({ shot }) => {
     await maskDlg.getByTitle("閉じる").click();
     await viewer.waitForTimeout(500);
 
+    // 7c. 計測メニュー（ROI と計測を分けた）
+    await viewer.getByTestId("viewer2d-menu-measure").click();
+    await viewer.waitForTimeout(500);
+    await shot(viewer, "measure", [
+      { at: viewer.getByTestId("viewer2d-menu-measure"), side: "top" },
+      { at: viewer.getByRole("button", { name: "長径・短径（RECIST）", exact: true }).first(), side: "left" },
+      { at: viewer.getByRole("button", { name: "計測を全消去", exact: true }).first(), side: "left" },
+    ]);
+    await viewer.getByTestId("viewer2d-menu-measure").click();
+    await viewer.waitForTimeout(500);
+
+    // 7d. ROI マネージャ（「ROI」と「計測」の 2 欄。塗りの ROI も ROI の行）
+    await shot(viewer, "roipanel", [
+      { at: viewer.getByTestId("roi-new-painted"), side: "left" },
+      { at: viewer.locator('[data-testid="roi-row"][data-kind="painted"]').first(), side: "left" },
+      { at: viewer.getByTestId("measure-row").first(), side: "left" },
+    ]);
+
+    // 7e. 3D ビューワへ ROI 単位で取り込む
+    await menu(viewer, "view", "3D Viewer…");
+    const v3 = await findWindow(app, (u) => u.includes("#viewer3d"), 120_000);
+    const importBtn = v3.getByRole("button", { name: /2D ビューアの ROI から 3D ROI を追加/ });
+    await importBtn.waitFor({ timeout: 300_000 });
+    await v3.waitForTimeout(5_000);
+    await importBtn.click();
+    await v3.getByRole("button", { name: "追加", exact: true }).first().waitFor({ timeout: 30_000 });
+    await v3.getByRole("button", { name: "追加", exact: true }).first().click();
+    await v3.getByText("取り込み済み").first().waitFor({ timeout: 120_000 });
+    await v3.waitForTimeout(3_000);
+    await shot(v3, "import3d", [
+      { at: importBtn, side: "left" },
+      { at: v3.getByText("取り込み済み").first(), side: "left" },
+    ]);
+    await v3.close();
+    await viewer.waitForTimeout(1_000);
+
     // 8. リサンプル・切り抜き
     await menu(viewer, "image", "リサンプル・切り抜き…");
     await viewer.getByTestId("resample-dialog").waitFor({ timeout: 10_000 });
