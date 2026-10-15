@@ -4,7 +4,11 @@
  */
 package com.vis.graphynext.importer;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vis.graphynext.dicom.store.StorageLayout;
+import com.vis.graphynext.nifti.NiftiImportService;
+import com.vis.graphynext.nifti.NiftiToDicom;
 import com.vis.graphynext.settings.SettingsService;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -22,6 +26,7 @@ import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Clock;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -65,15 +70,19 @@ public class ImportWatchService {
      *     {@code folder-not-directory}・{@code folder-overlaps-db}・{@code interval-invalid}・{@code scan-failed}）。
      *     正常なら null。異常でもアプリは動き続ける。
      * @param waiting 見つけたが、大きさ・更新時刻がまだ 2 回続けて同じになっていないファイル数。
+     * @param changed 取り込み済みの NIfTI が後から変わったのを検知した数（再取り込みはしない）。
+     * @param held 取り込まずに保留しているファイル数（理由は {@code heldItems}。条件が変われば再判定する）。
      */
     public record Status(boolean enabled, String folder, Integer intervalSec, boolean scanning, Long lastScanAt,
-                         int waiting, long imported, long skipped, long failed, String error, List<Failure> failures) {
+                         int waiting, long imported, long skipped, long failed, long changed, long held,
+                         String error, List<Failure> failures, List<Failure> heldItems) {
     }
 
     private record Config(boolean enabled, String folder, Integer intervalSec) {
     }
 
     private final ImportService importService;
+    private final NiftiImportService niftiImport;
     private final ImportWatchRepository repo;
     private final SettingsService settings;
     private final StorageLayout layout;
@@ -82,21 +91,24 @@ public class ImportWatchService {
 
     /** 前回の走査で見た未処理ファイルの（大きさ, 更新時刻）。同じなら今回は「止まった」とみなす。 */
     private Map<String, long[]> seen = new HashMap<>();
+    /** 前回の走査でのユニット（納品フォルダ）ごとの中身の署名。同じなら「納品が止まった」とみなす。 */
+    private Map<String, String> unitSigs = new HashMap<>();
     private volatile boolean scanning;
     private volatile Long lastScanAt;
     private volatile int waiting;
     private volatile String scanError;
 
     @Autowired
-    public ImportWatchService(ImportService importService, ImportWatchRepository repo, SettingsService settings,
-                              StorageLayout layout,
+    public ImportWatchService(ImportService importService, NiftiImportService niftiImport, ImportWatchRepository repo,
+                              SettingsService settings, StorageLayout layout,
                               @Value("${graphy.import-watch.auto-run:true}") boolean autoRun) {
-        this(importService, repo, settings, layout, Clock.systemUTC(), autoRun);
+        this(importService, niftiImport, repo, settings, layout, Clock.systemUTC(), autoRun);
     }
 
-    ImportWatchService(ImportService importService, ImportWatchRepository repo, SettingsService settings,
-                       StorageLayout layout, Clock clock, boolean autoRun) {
+    ImportWatchService(ImportService importService, NiftiImportService niftiImport, ImportWatchRepository repo,
+                       SettingsService settings, StorageLayout layout, Clock clock, boolean autoRun) {
         this.importService = importService;
+        this.niftiImport = niftiImport;
         this.repo = repo;
         this.settings = settings;
         this.layout = layout;
@@ -199,9 +211,12 @@ public class ImportWatchService {
         }
         List<Failure> failures = repo.findTop20ByStatusOrderByAtDesc(ImportWatchItem.FAILED).stream()
                 .limit(FAILURES_SHOWN).map(i -> new Failure(i.getPath(), i.getError())).toList();
+        List<Failure> heldItems = repo.findTop20ByStatusOrderByAtDesc(ImportWatchItem.HELD).stream()
+                .limit(FAILURES_SHOWN).map(i -> new Failure(i.getPath(), i.getError())).toList();
         return new Status(cfg.enabled(), cfg.folder(), cfg.intervalSec(), scanning, lastScanAt, waiting,
                 repo.countByStatus(ImportWatchItem.IMPORTED), repo.countByStatus(ImportWatchItem.SKIPPED),
-                repo.countByStatus(ImportWatchItem.FAILED), error, failures);
+                repo.countByStatus(ImportWatchItem.FAILED), repo.countByStatus(ImportWatchItem.CHANGED),
+                repo.countByStatus(ImportWatchItem.HELD), error, failures, heldItems);
     }
 
     /** 1 回走査する。無効なら何もしない（最終走査の時刻も進めない）。テストと「今すぐ走査」から直接呼べる。 */
@@ -226,12 +241,17 @@ public class ImportWatchService {
         return status();
     }
 
+    private record FileInfo(Path path, long size, long mtime) {
+    }
+
     private void scan(Path folder) {
         Map<String, ImportWatchItem> ledger = new HashMap<>();
         for (ImportWatchItem i : repo.findAll()) {
             ledger.put(i.getPath(), i);
         }
-        Map<String, long[]> nextSeen = new HashMap<>();
+        // 1. 走査して、納品の単位（ユニット）ごとに集める。ユニット＝監視フォルダ直下のサブフォルダ（中は再帰）。
+        //    監視フォルダ直下のファイルは、そのファイル 1 つが 1 ユニット。
+        Map<String, List<FileInfo>> units = new java.util.LinkedHashMap<>();
         try {
             Files.walkFileTree(folder, new SimpleFileVisitor<>() {
                 @Override
@@ -242,7 +262,11 @@ public class ImportWatchService {
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
                     if (attrs.isRegularFile()) { // リンク等は辿らない
-                        visit(file, attrs.size(), attrs.lastModifiedTime().toMillis(), ledger, nextSeen);
+                        Path rel = folder.relativize(file.toAbsolutePath().normalize());
+                        String unit = rel.getNameCount() > 1 ? rel.getName(0).toString() : rel.toString();
+                        units.computeIfAbsent(unit, k -> new ArrayList<>())
+                                .add(new FileInfo(file.toAbsolutePath().normalize(), attrs.size(),
+                                        attrs.lastModifiedTime().toMillis()));
                     }
                     return FileVisitResult.CONTINUE;
                 }
@@ -258,39 +282,182 @@ public class ImportWatchService {
             scanError = "scan-failed";
             log.warn("監視フォルダを走査できませんでした（続行）: {}", e.toString());
         }
+        // 2. ユニットごとに処理する。1 つのファイル・ユニットの異常で、他の処理を止めない。
+        Map<String, long[]> nextSeen = new HashMap<>();
+        Map<String, String> nextSigs = new HashMap<>();
+        for (Map.Entry<String, List<FileInfo>> u : units.entrySet()) {
+            String sig = signature(u.getValue());
+            nextSigs.put(u.getKey(), sig);
+            boolean unitStable = sig.equals(unitSigs.get(u.getKey()));
+            for (FileInfo f : u.getValue()) {
+                try {
+                    visit(f, unitStable, ledger, nextSeen);
+                } catch (RuntimeException e) {
+                    record(f.path().toString(), f.size(), f.mtime(), ImportWatchItem.FAILED, e.toString(), ledger);
+                }
+            }
+        }
         seen = nextSeen;
+        unitSigs = nextSigs;
         waiting = nextSeen.size();
     }
 
-    private void visit(Path file, long size, long mtime, Map<String, ImportWatchItem> ledger,
+    /** ユニットの中身（相対パス・大きさ・更新時刻）の署名。順序に依らない。 */
+    private static String signature(List<FileInfo> files) {
+        long h = 1125899906842597L;
+        for (FileInfo f : files) {
+            long x = (f.path().toString() + '|' + f.size() + '|' + f.mtime()).hashCode();
+            h += x * 0x9E3779B97F4A7C15L; // 順序に依らない和
+        }
+        return files.size() + ":" + h;
+    }
+
+    private static boolean isNifti(Path file) {
+        String n = file.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
+        return n.endsWith(".nii") || n.endsWith(".nii.gz");
+    }
+
+    /** {@code a.nii.gz}・{@code a.nii} → {@code a}。 */
+    private static String niftiBaseName(Path file) {
+        String n = file.getFileName().toString();
+        String l = n.toLowerCase(java.util.Locale.ROOT);
+        return n.substring(0, n.length() - (l.endsWith(".nii.gz") ? 7 : 4));
+    }
+
+    private static Path sidecarOf(Path nifti) {
+        return nifti.resolveSibling(niftiBaseName(nifti) + ".json");
+    }
+
+    /** 対になる NIfTI がある {@code .json}（サイドカー）か。 */
+    private static boolean isSidecar(Path file) {
+        String n = file.getFileName().toString();
+        if (!n.toLowerCase(java.util.Locale.ROOT).endsWith(".json")) {
+            return false;
+        }
+        String base = n.substring(0, n.length() - 5);
+        return Files.isRegularFile(file.resolveSibling(base + ".nii")) || Files.isRegularFile(file.resolveSibling(base + ".nii.gz"));
+    }
+
+    private void visit(FileInfo f, boolean unitStable, Map<String, ImportWatchItem> ledger,
                        Map<String, long[]> nextSeen) {
-        String key = file.toAbsolutePath().normalize().toString();
+        String key = f.path().toString();
+        long size = f.size();
+        long mtime = f.mtime();
+        if (isSidecar(f.path())) {
+            return; // NIfTI のペア。台帳にも待機にも数えない
+        }
+        boolean nifti = isNifti(f.path());
         ImportWatchItem done = ledger.get(key);
-        if (done != null && done.getSize() == size && done.getMtime() == mtime) {
+        boolean same = done != null && done.getSize() == size && done.getMtime() == mtime;
+        if (same && !ImportWatchItem.HELD.equals(done.getStatus())) {
             return; // 処理済み（同じ大きさ・更新時刻）
         }
-        long[] prev = seen.get(key);
-        if (prev == null || prev[0] != size || prev[1] != mtime) {
-            nextSeen.put(key, new long[] {size, mtime}); // 初見、または書き込み中: 待機
+        if (nifti && done != null && !same && (ImportWatchItem.IMPORTED.equals(done.getStatus())
+                || ImportWatchItem.CHANGED.equals(done.getStatus()))) {
+            // 取り込み済みの NIfTI が変わった。取り込み直すと新しい UID のシリーズが増えるので、検知だけ記録する
+            record(key, size, mtime, ImportWatchItem.CHANGED, null, ledger);
+            return;
+        }
+        boolean held = same; // 保留中のファイルは、ファイル単位の安定は済んでいる
+        if (!held) {
+            long[] prev = seen.get(key);
+            if (prev == null || prev[0] != size || prev[1] != mtime) {
+                nextSeen.put(key, new long[] {size, mtime}); // 初見、または書き込み中: 待機
+                return;
+            }
+        }
+        if (nifti && !unitStable) {
+            if (!held) {
+                nextSeen.put(key, new long[] {size, mtime}); // 納品（サイドカーなど）が揃うのを待つ
+            }
             return;
         }
         String status;
         String error = null;
         try {
-            ImportService.ImportResult r = importService.importPaths(List.of(key));
-            if (r.imported() > 0) {
-                status = ImportWatchItem.IMPORTED;
-            } else if (r.failed() > 0) {
-                status = ImportWatchItem.FAILED;
-                error = reason(key, r.errors().isEmpty() ? null : r.errors().get(0));
+            if (nifti) {
+                ImportOutcome o = importNifti(f.path());
+                status = o.status();
+                error = o.error();
             } else {
-                status = ImportWatchItem.SKIPPED;
+                ImportService.ImportResult r = importService.importPaths(List.of(key));
+                if (r.imported() > 0) {
+                    status = ImportWatchItem.IMPORTED;
+                } else if (r.failed() > 0) {
+                    status = ImportWatchItem.FAILED;
+                    error = reason(key, r.errors().isEmpty() ? null : r.errors().get(0));
+                } else {
+                    status = ImportWatchItem.SKIPPED;
+                }
             }
         } catch (RuntimeException e) {
             status = ImportWatchItem.FAILED;
             error = e.toString();
         }
+        if (ImportWatchItem.HELD.equals(status)) {
+            if (done == null || !ImportWatchItem.HELD.equals(done.getStatus()) || !java.util.Objects.equals(done.getError(), error)
+                    || !same) {
+                log.warn("取り込みを保留しました（走査は続行）: {} 理由={}", key, error);
+                record(key, size, mtime, status, error, ledger);
+            }
+            return;
+        }
         record(key, size, mtime, status, error, ledger);
+    }
+
+    private record ImportOutcome(String status, String error) {
+    }
+
+    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final List<String> PATIENT_KEYS = List.of("PatientID", "PatientName", "PatientBirthDate", "PatientSex");
+
+    /** NIfTI を取り込む。患者情報（ID か名前）が無ければ保留。 */
+    private ImportOutcome importNifti(Path file) {
+        try {
+            NiftiToDicom.readHeader(file); // NIfTI として読めないものは、患者情報の有無より先に失敗にする
+        } catch (IOException | RuntimeException e) {
+            return new ImportOutcome(ImportWatchItem.FAILED, "not-nifti: " + e.getMessage());
+        }
+        Map<String, Object> sidecar = readSidecar(file);
+        String id = PatientFields.ifValid(PatientFields.clean(sidecar.get("PatientID")), PatientFields::validLo);
+        String name = PatientFields.ifValid(PatientFields.clean(sidecar.get("PatientName")), PatientFields::validPn);
+        if (id == null && name == null) {
+            return new ImportOutcome(ImportWatchItem.HELD, "no-patient-info");
+        }
+        String birth = PatientFields.ifValid(PatientFields.clean(sidecar.get("PatientBirthDate")), PatientFields::validDa);
+        String sex = PatientFields.ifValid(PatientFields.clean(sidecar.get("PatientSex")), PatientFields::validSex);
+        // 患者の 4 項目は検査済みの値だけを Options で渡す。サイドカーの生の値は、変換側が写してしまわないよう外す
+        Map<String, Object> meta = new HashMap<>(sidecar);
+        for (String k : PATIENT_KEYS) {
+            meta.remove(k);
+        }
+        NiftiToDicom.Options opts = new NiftiToDicom.Options("MR", id, name, birth, sex, null, null,
+                niftiBaseName(file), 1, null, null, meta, null);
+        NiftiImportService.Result r = niftiImport.importFile(file, meta, opts);
+        if (r.error() != null) {
+            return new ImportOutcome(ImportWatchItem.FAILED, r.error());
+        }
+        if (r.imported() == 0) {
+            return new ImportOutcome(ImportWatchItem.FAILED, "import-failed");
+        }
+        if (r.failed() > 0) {
+            return new ImportOutcome(ImportWatchItem.FAILED, "partial: " + r.failed() + " frames failed");
+        }
+        return new ImportOutcome(ImportWatchItem.IMPORTED, null);
+    }
+
+    /** サイドカー JSON（無い・壊れていれば空）。 */
+    private static Map<String, Object> readSidecar(Path nifti) {
+        Path p = sidecarOf(nifti);
+        if (!Files.isRegularFile(p)) {
+            return Map.of();
+        }
+        try {
+            return JSON.readValue(p.toFile(), new TypeReference<Map<String, Object>>() { });
+        } catch (IOException e) {
+            log.warn("サイドカー JSON を解釈できません（患者情報なしとして扱います）: {}", p);
+            return Map.of();
+        }
     }
 
     /** 取り込みのエラー文（{@code パス: メッセージ}。メッセージが null のことがある）から、パスと null を除いた理由。 */

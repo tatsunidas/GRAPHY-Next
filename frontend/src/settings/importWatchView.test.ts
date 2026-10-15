@@ -3,7 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { describe, expect, it } from "vitest";
-import { barView, canSave, errorKey, nextBaseline, formFromStatus, parseInterval, toSettings, type ImportWatchStatus } from "./importWatchView";
+import { barView, canSave, errorKey, heldKey, nextBaseline, formFromStatus, parseInterval, toSettings, type ImportWatchStatus } from "./importWatchView";
 
 describe("importWatchView", () => {
   it("間隔は 1 以上の整数だけ受ける", () => {
@@ -45,7 +45,7 @@ describe("importWatchView", () => {
 
   const st = (o: Partial<ImportWatchStatus> = {}): ImportWatchStatus => ({
     enabled: true, folder: "/d", intervalSec: 5, scanning: false, lastScanAt: 1, waiting: 0, imported: 0,
-    skipped: 0, failed: 0, error: null, failures: [], ...o,
+    skipped: 0, failed: 0, changed: 0, held: 0, error: null, failures: [], heldItems: [], ...o,
   });
 
   it("基準は最初の応答で置き、開く前の取込では促さない", () => {
@@ -71,5 +71,12 @@ describe("importWatchView", () => {
     expect(barView(st({ enabled: false, imported: 3 }), 0).visible).toBe(false);
     const v = barView(st({ error: "folder-not-found", waiting: 2, failed: 1 }), 0);
     expect(v).toMatchObject({ visible: true, error: "folder-not-found", waiting: 2, failed: 1 });
+  });
+
+  it("保留の理由は文言に、未知の理由は汎用の文言に。状態バー用に件数を持つ", () => {
+    expect(heldKey("no-patient-info")).toBe("importWatch.held.no-patient-info");
+    expect(heldKey("whatever")).toBe("importWatch.held.unknown");
+    expect(heldKey(null)).toBe("importWatch.held.unknown");
+    expect(barView(st({ held: 3 }), 0).held).toBe(3);
   });
 });

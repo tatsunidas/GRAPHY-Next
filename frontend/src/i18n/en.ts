@@ -2053,7 +2053,7 @@ export const en: Record<string, string> = {
   "pluginmgr.col.trust": "Trust",
 
   // auto import (importWatch)
-  "importWatch.intro": "Periodically scans the chosen folder (including subfolders) and imports DICOM files whose writing has finished into the database. Original files are only read — never moved or deleted. Runs only while the app is open.",
+  "importWatch.intro": "Periodically scans the chosen folder (including subfolders) and imports DICOM and NIfTI (.nii / .nii.gz) files whose writing has finished into the database. Original files are only read — never moved or deleted. A NIfTI file is held (not imported) unless its sidecar .json provides PatientID or PatientName. Runs only while the app is open.",
   "importWatch.enable": "Import automatically from the watch folder",
   "importWatch.folder": "Watch folder",
   "importWatch.pick": "Browse…",
@@ -2077,6 +2077,11 @@ export const en: Record<string, string> = {
   "importWatch.err.interval-invalid": "Enter the scan interval as a whole number of seconds (1 or more).",
   "importWatch.err.scan-failed": "The folder could not be scanned. Check permissions and the network connection (it will be retried on the next scan).",
   "importWatch.err.unknown": "Auto import hit a problem.",
+  "importWatch.changed": "Changed (not re-imported)",
+  "importWatch.held": "Held",
+  "importWatch.held.no-patient-info": "Not imported: no patient information (put PatientID or PatientName in the sidecar .json).",
+  "importWatch.held.unknown": "Not imported yet: waiting for the conditions to be met.",
+  "importWatch.bar.held": "held {{n}}",
   "importWatch.scanNow": "Scan now",
   "importWatch.bar.label": "Auto import",
   "importWatch.bar.counts": "imported {{imported}} · waiting {{waiting}} · failed {{failed}}",

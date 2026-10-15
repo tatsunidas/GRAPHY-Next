@@ -2042,7 +2042,7 @@ export const ja: Record<string, string> = {
   "pluginmgr.col.trust": "信頼",
 
   // auto import (importWatch)
-  "importWatch.intro": "指定したフォルダ（サブフォルダを含む）を一定間隔で見て、書き込みが止まった DICOM を保管庫へ取り込みます。元のファイルは読むだけで、移動も削除もしません。アプリが起動している間だけ動きます。",
+  "importWatch.intro": "指定したフォルダ（サブフォルダを含む）を一定間隔で見て、書き込みが止まった DICOM と NIfTI（.nii / .nii.gz）を保管庫へ取り込みます。NIfTI は患者情報（同名の .json の PatientID か PatientName）が無いと取り込まず、保留にします。元のファイルは読むだけで、移動も削除もしません。アプリが起動している間だけ動きます。",
   "importWatch.enable": "監視フォルダから自動で取り込む",
   "importWatch.folder": "監視フォルダ",
   "importWatch.pick": "参照…",
@@ -2066,6 +2066,11 @@ export const ja: Record<string, string> = {
   "importWatch.err.interval-invalid": "走査の間隔は 1 以上の整数（秒）で指定してください。",
   "importWatch.err.scan-failed": "フォルダを走査できませんでした。権限やネットワークの接続を確認してください（次の走査で再試行します）。",
   "importWatch.err.unknown": "自動取り込みで異常が起きました。",
+  "importWatch.changed": "更新を検知（再取込なし）",
+  "importWatch.held": "保留",
+  "importWatch.held.no-patient-info": "患者情報が無いため取り込んでいません（サイドカーの .json に PatientID か PatientName を書いてください）。",
+  "importWatch.held.unknown": "条件が揃うまで取り込んでいません。",
+  "importWatch.bar.held": "保留 {{n}}",
   "importWatch.scanNow": "今すぐ走査",
   "importWatch.bar.label": "自動取り込み",
   "importWatch.bar.counts": "取込 {{imported}} ・ 待機 {{waiting}} ・ 失敗 {{failed}}",

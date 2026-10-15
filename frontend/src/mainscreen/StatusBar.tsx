@@ -58,6 +58,12 @@ export function StatusBar({
                   waiting: importWatch.waiting,
                   failed: importWatch.failed,
                 })}
+                {importWatch.held > 0 && (
+                  <span data-testid="statusbar-import-watch-held" style={{ color: "#8a5a00" }}>
+                    {" · "}
+                    {t("importWatch.bar.held", { n: importWatch.held })}
+                  </span>
+                )}
               </span>
             )}
             {importWatch.newCount > 0 && onReloadList && (
