@@ -380,41 +380,105 @@ public class DbAdminService {
         }
     }
 
-    /** 患者レベルのタグ編集を rows へ適用（設定 ON でファイルも書換）。newId 非 null で PatientID 変更。 */
+    private final FileRetry fileRetry = new FileRetry();
+
+    /**
+     * 患者レベルのタグ編集を rows へ適用（設定 ON でファイルも書換）。newId 非 null で PatientID 変更。
+     *
+     * <p><b>全か無か</b>: ファイルの書き換えが 1 つでも失敗したら、編集全体を失敗にして、ファイルも索引も編集前のままにする
+     * （一部だけ古いタグのまま索引だけ新しい、という食い違いを残さない）。{@link PatientFileEdit} を参照。
+     */
     private int applyPatientEdit(List<DicomInstance> rows, String patientName, String birthDate, String sex,
                                  String newId) {
         boolean applyToFiles = boolSetting("data.applyPatientEditToFiles", true);
-        for (DicomInstance r : rows) {
-            Path file = applyToFiles ? layout.resolveForWrite(r) : null;
-            if (file != null) {
-                // モード A: 書き換える前に手元へ取り寄せる。取れなければ例外（try の外）で止める。
-                // 握りつぶして DB だけ更新すると、索引と実体（Drive の正本）が食い違う
-                layout.resolveForRead(r);
-                try {
-                    rewriteFile(file, patientName, birthDate, sex, newId);
-                    layout.notifyChanged(file);
-                } catch (Exception e) {
-                    log.warn("DICOM ファイルの書換に失敗: {} ({})", r.getUri(), e.toString());
+        PatientFileEdit edit = applyToFiles ? prepareFileEdit(rows, patientName, birthDate, sex, newId) : null;
+        try {
+            for (DicomInstance r : rows) {
+                r.setPatientName(patientName);
+                r.setPatientBirthDate(birthDate);
+                r.setPatientSex(sex);
+                if (newId != null) {
+                    r.setPatientId(newId);
                 }
+                repo.save(r);
             }
-            r.setPatientName(patientName);
-            r.setPatientBirthDate(birthDate);
-            r.setPatientSex(sex);
-            if (newId != null) {
-                r.setPatientId(newId);
+        } catch (RuntimeException e) {
+            if (edit != null) {
+                edit.rollback();
             }
-            repo.save(r);
+            throw e;
+        }
+        if (edit != null) {
+            settleWithTransaction(edit);
         }
         return rows.size();
     }
 
-    private static void rewriteFile(Path file, String name, String birthDate, String sex, String newId)
+    /**
+     * 準備（取り寄せ・一時ファイルの作成。DB にはまだ何も書かない）→ 入れ替え。失敗は {@code 409}（編集全体が取り消される）。
+     * 遅い処理（Drive からの取り寄せ・リトライの待ち）はここで済ませ、DB への書き込みを最後に短く行う。
+     */
+    private PatientFileEdit prepareFileEdit(List<DicomInstance> rows, String patientName, String birthDate, String sex,
+                                            String newId) {
+        layout.prefetch(rows, () -> false); // モード A: 手元に無いものを先に取り寄せる（失敗は例外＝何も変えずに中止）
+        List<PatientFileEdit.Target> targets = new ArrayList<>();
+        for (DicomInstance r : rows) {
+            Path file = layout.resolveForWrite(r);
+            if (file == null) {
+                continue;
+            }
+            if (Files.isRegularFile(file)) {
+                targets.add(new PatientFileEdit.Target(r.getSopInstanceUid(), file));
+            } else {
+                // 索引にあるが実ファイルが無い（書き換える物が無いので食い違いは生じない）。従来どおり警告だけ
+                log.warn("DICOM ファイルが無いため書換を省略: sop={}", r.getSopInstanceUid());
+            }
+        }
+        if (targets.isEmpty()) {
+            return null;
+        }
+        try {
+            PatientFileEdit edit = PatientFileEdit.prepare(targets,
+                    (src, dst) -> writeRewritten(src, dst, patientName, birthDate, sex, newId),
+                    layout.root().resolve(".edit-journal"), fileRetry, PatientFileEdit.Ops.REAL);
+            edit.swap();
+            // 変更を Drive 同期へ通知する（コミットされたときだけ届く。ロールバックなら破棄される）
+            edit.files().forEach(layout::notifyChanged);
+            return edit;
+        } catch (PatientFileEdit.EditFailedException e) {
+            log.warn("患者編集を中止（ファイル・索引は編集前のまま）: {}", e.getMessage());
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.CONFLICT, e.getMessage(), e);
+        }
+    }
+
+    /** 取引の結果で、確定（退避を消す）か巻き戻し（退避から戻す）。コミット時の失敗もここで拾える。 */
+    private static void settleWithTransaction(PatientFileEdit edit) {
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCompletion(int status) {
+                            if (status == STATUS_COMMITTED) {
+                                edit.commit();
+                            } else {
+                                edit.rollback();
+                            }
+                        }
+                    });
+        } else {
+            edit.commit();
+        }
+    }
+
+    /** {@code source} を読み、患者タグを書き換えた内容を {@code target} へ書く（元は変えない）。 */
+    static void writeRewritten(Path source, Path target, String name, String birthDate, String sex, String newId)
             throws IOException {
         Attributes fmi;
         Attributes ds;
-        try (DicomInputStream in = new DicomInputStream(file.toFile())) {
+        try (DicomInputStream in = new DicomInputStream(source.toFile())) {
             // ピクセル等の bulk data はヒープに載せずファイル参照のまま扱う（メモリ削減）。
-            // 書込先は別ファイル(temp)なので、書込時に元ファイルから bulk をコピーできる。
+            // 書込先は別ファイルなので、書込時に元ファイルから bulk をコピーできる。
             in.setIncludeBulkData(IncludeBulkData.URI);
             fmi = in.readFileMetaInformation();
             ds = in.readDataset();
@@ -429,11 +493,9 @@ public class DbAdminService {
         if (newId != null) {
             ds.setString(Tag.PatientID, VR.LO, newId);
         }
-        Path tmp = Files.createTempFile(file.getParent(), "rewrite-", ".tmp");
-        try (DicomOutputStream out = new DicomOutputStream(tmp.toFile())) {
+        try (DicomOutputStream out = new DicomOutputStream(target.toFile())) {
             out.writeDataset(fmi, ds);
         }
-        Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
     }
 
     private boolean boolSetting(String key, boolean def) {
