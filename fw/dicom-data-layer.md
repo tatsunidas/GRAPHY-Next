@@ -209,7 +209,10 @@ Spring DI（`@Profile`）でプロファイルに応じて自動注入。
     CSV が無効なら保留。上書きは患者の取り違えにつながるので既定 OFF（画面に注意書き）。ログには個人情報を出さず、スタディ数だけ。
 - 検証: `ImportWatchServiceTest`・`ImportWatchDriveTest`（偽の Drive）・`ImportWatchHttpTest`・`ImportWatchWebProfileTest`、
   画面からの `automator/src/spike/watchFolderCheck.ts`。
-- 未検証: Drive が正本でローカルがキャッシュのモード、Windows のローカル・ネットワーク共有・Google Drive for desktop の
+- **Google Drive が正本でローカルがキャッシュのモード**: 監視で取り込んだ DICOM は Drive に載り、追い出されても索引と台帳は残るので取り込み直さない。
+  追い出されたあとに原本が更新されて再取り込みされても、Drive は新しい中身で 1 件のまま（取り込みが発行する `StorageChanged` で送り直される。通知を取りこぼしても全走査が追いつく）。
+  CSV で上書きするとき、追い出し済みの同じスタディの画像は Drive から取り寄せて書き換え、Drive へ送り直す（`ImportWatchCacheModeTest`）。
+- 未検証: Windows のローカル・ネットワーク共有・Google Drive for desktop の
   フォルダでの書き込み途中の判定。
 
 ## 5. Web（BFF）仕様
