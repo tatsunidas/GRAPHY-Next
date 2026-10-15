@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { makeVolume, sampleTrilinear } from "./regGeometry";
 import {
   checkStitchInputs,
+  stitchSlices,
   stitchToGrid,
   unionGrid,
   type StitchGrid,
@@ -102,12 +103,12 @@ const maxErr = (cs: Cell[], add: (w: number) => number) =>
   Math.max(...cs.map((c) => Math.abs(c.value - (c.truthV + add(c.w)))));
 
 describe("unionGrid / stitchToGrid（正例）", () => {
-  it("(a) 重なり 9 枚 × 2.0 mm: 重なり 18.0・隙間 0.0・dims・原点・全ボクセルが真値", () => {
+  it("(a) 重なり: 重なり 20.0（縁で測る。中心の区間では 18）・隙間 0.0・dims・原点・全ボクセルが真値", () => {
     // 1 本目 w=-100..-100+18 (10 枚), 2 本目は 1 本目の末尾 18 mm と重なる
     const a = makeInput({ w0: -100, nz: 20 }); // -100..-62
     const b = makeInput({ w0: -80, nz: 20 }); // -80..-42 → 重なり -80..-62 = 18
     const g = unionGrid([a, b]);
-    expect(g.overlapMm).toBeCloseTo(18.0, 2);
+    expect(g.overlapMm).toBeCloseTo(20.0, 2); // 中心の重なり 18 + 縁の半スライス 1 × 2
     expect(g.gapMm).toBeCloseTo(0.0, 2);
     const L = -42 - -100;
     expect(g.dims[2]).toBe(Math.floor(L / 2 + 1e-9) + 1);
@@ -124,7 +125,7 @@ describe("unionGrid / stitchToGrid（正例）", () => {
     const a = makeInput({ w0: -100, nz: 20, frameTilt: 20, tilt: 20 });
     const b = makeInput({ w0: -80, nz: 20, frameTilt: 20, tilt: 20 });
     const g = unionGrid([a, b]);
-    expect(g.overlapMm).toBeCloseTo(18.0, 2);
+    expect(g.overlapMm).toBeCloseTo(20.0, 2);
     const cs = cells(g, stitchToGrid([a, b], g, "mean"), frame(20));
     expect(cs.every((c) => Number.isFinite(c.value))).toBe(true);
     expect(maxErr(cs, () => 0)).toBeLessThan(EPS);
@@ -159,11 +160,11 @@ describe("unionGrid / stitchToGrid（正例）", () => {
     expect(cs.some((c) => expectedC(c.w) === 100)).toBe(true);
   });
 
-  it("(d) 10 mm の隙間: gapMm 10.0・隙間のボクセルは NaN・他は真値", () => {
+  it("(d) 中心間 10 mm の隙間: gapMm 8.0（縁で測る）・隙間のボクセルは NaN・他は真値", () => {
     const a = makeInput({ w0: -100, nz: 20 }); // -100..-62
     const b = makeInput({ w0: -52, nz: 20 }); // -52..-14
     const g = unionGrid([a, b]);
-    expect(g.gapMm).toBeCloseTo(10.0, 2);
+    expect(g.gapMm).toBeCloseTo(8.0, 2); // 中心間 10 − 半スライス 1 × 2
     expect(g.overlapMm).toBeCloseTo(0.0, 2);
     const cs = cells(g, stitchToGrid([a, b], g, "mean"));
     const inGap = (w: number) => w > -62 + 1e-6 && w < -52 - 1e-6;
@@ -284,5 +285,95 @@ describe("checkStitchInputs（負例）", () => {
   it("複数の違反はすべて返る", () => {
     const r = checkStitchInputs([makeInput({ w0: -100 }), makeInput({ w0: -60, patient: "P2", modality: "MR" })]);
     expect(r.violations).toEqual(["patient", "modality"]);
+  });
+});
+
+describe("縁（半ボクセル）の扱い: 重なりなしで隣り合う入力の継ぎ目", () => {
+  // 1 本目は w=-100..-82（10 枚）。2 本目は次の位置 -80 から δ だけずらして始める（間隔 2 mm）。
+  const seam = (delta: number) => {
+    const a = makeInput({ w0: -100 });
+    const b = makeInput({ w0: -80 + delta });
+    const g = unionGrid([a, b]);
+    return { a, b, g, cs: cells(g, stitchToGrid([a, b], g, "mean")) };
+  };
+
+  // ずれ δ が半スライス（1 mm = 0.5 × 間隔）以内なら、継ぎ目の格子点は 2 本目のボクセルの縁に入る。
+  for (const frac of [0, 0.3, 0.5]) {
+    it(`ずれ ${frac} × 間隔（半スライス以内）: 継ぎ目に NaN が無く、値は真値（縁の複製は C × 半スライス以内）`, () => {
+      const { g, cs } = seam(frac * 2);
+      expect(cs.length).toBeGreaterThan(0);
+      expect(cs.every((c) => Number.isFinite(c.value))).toBe(true);
+      // 縁の複製を使う点だけ真値からずれる。最大でも傾き C × 半スライス（1 mm）。
+      expect(maxErr(cs, () => 0)).toBeLessThanOrEqual(C * 1 + EPS);
+      expect(g.gapMm).toBeCloseTo(frac * 2, 2); // 縁で測った隙間は、ずれの分だけ（物理的な隙間）
+      expect(g.overlapMm).toBeCloseTo(0, 2);
+    });
+  }
+
+  // 半スライスを超えてずれると、継ぎ目の格子点はどちらのボクセルにも入らない（本当の隙間）。
+  for (const frac of [0.7, 0.95]) {
+    it(`ずれ ${frac} × 間隔（半スライス超）: 継ぎ目のスライス 10 だけ NaN、他は有限`, () => {
+      const { g, cs } = seam(frac * 2);
+      const nanW = cs.filter((c) => Number.isNaN(c.value)).map((c) => c.w);
+      expect(nanW.length).toBeGreaterThan(0);
+      expect(nanW.every((w) => Math.abs(w - -80) < 1e-6)).toBe(true);
+      expect(g.gapMm).toBeCloseTo(frac * 2, 2);
+    });
+  }
+
+  it("ずれ 0: ぴったり隣り合う 2 本は gapMm 0・全ボクセルが真値", () => {
+    const { g, cs } = seam(0);
+    expect(g.gapMm).toBeCloseTo(0, 6);
+    expect(maxErr(cs, () => 0)).toBeLessThan(EPS);
+  });
+
+  it("真の隙間（スライス 3 枚分）は NaN のまま・gapMm > 0", () => {
+    const a = makeInput({ w0: -100 });
+    const b = makeInput({ w0: -80 + 6 }); // -74 から。-80, -78, -76 が空く
+    const g = unionGrid([a, b]);
+    expect(g.gapMm).toBeCloseTo(6, 2);
+    const sl = stitchToGrid([a, b], g, "mean");
+    const nanSlices = sl.map((s, k) => (Number.isNaN(s[0]) ? k : -1)).filter((k) => k >= 0);
+    expect(nanSlices).toEqual([10, 11, 12]);
+    // それ以外のスライスは全画素が有限
+    sl.forEach((s, k) => { if (!nanSlices.includes(k)) expect(Array.from(s).every(Number.isFinite)).toBe(true); });
+  });
+
+  it("重なりの中では縁の複製を平均に混ぜない（真値と一致）", () => {
+    const a = makeInput({ w0: -100, nz: 20 });
+    const b = makeInput({ w0: -80 + 0.7, nz: 20 });
+    const g = unionGrid([a, b]);
+    expect(maxErr(cells(g, stitchToGrid([a, b], g, "mean")), () => 0)).toBeLessThan(EPS);
+  });
+});
+
+describe("格子の大きさ・スライスごとの出力", () => {
+  it("voxelCount と inflation: 間隔の違う入力が混ざると膨らむ", () => {
+    const same = unionGrid([makeInput({ w0: -100 }), makeInput({ w0: -80 })]);
+    expect(same.voxelCount).toBe(same.dims[0] * same.dims[1] * same.dims[2]);
+    expect(same.inflation).toBeCloseTo(same.voxelCount / (12 * 10 * 10 * 2), 9);
+    const fine = unionGrid([makeInput({ w0: -100 }), makeInput({ w0: -80, sz: 0.5 })]);
+    expect(fine.inflation).toBeGreaterThan(same.inflation);
+  });
+
+  it("stitchSlices は stitchToGrid と同じ値を 1 枚ずつ返す", () => {
+    const a = makeInput({ w0: -100, nz: 20 });
+    const b = makeInput({ w0: -80 + 0.7, nz: 20 });
+    const g = unionGrid([a, b]);
+    const all = stitchToGrid([a, b], g, "mean");
+    const it = stitchSlices([a, b], g, "mean");
+    const first = it.next();
+    expect(first.done).toBe(false);
+    expect(Array.from(first.value as Float32Array)).toEqual(Array.from(all[0]));
+    expect(all.length).toBe(g.dims[2]);
+  });
+});
+
+describe("向きの許容差は大きさと間隔から導く", () => {
+  // 面内 12×10 画素・間隔 1 × 1.5 mm → L = hypot(11, 13.5) ≈ 17.4 mm, s = 1 mm → θ = s/(2L) ≈ 1.64°
+  const withTilt = (deg: number) => checkStitchInputs([makeInput({ w0: -100 }), makeInput({ w0: -60, tilt: deg })]);
+  it("許容角の内側（1°）は通し、外側（2°）は orientation", () => {
+    expect(withTilt(1).ok).toBe(true);
+    expect(withTilt(2).violations).toEqual(["orientation"]);
   });
 });

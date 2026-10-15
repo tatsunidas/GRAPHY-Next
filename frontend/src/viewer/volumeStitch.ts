@@ -42,7 +42,29 @@ export interface StitchCheck {
   violations: StitchViolation[];
 }
 
-const ORIENT_DOT_MIN = 1 - 1e-6;
+/**
+ * 向きの許容角 [rad]。ボリュームの端が向きのずれで動く量（面内の最長寸法 L × 角）が、面内の最小間隔 s の半分に
+ * 収まる角 s / (2L)。視野が大きいほど・間隔が細かいほど厳しくなる（500 mm・1 mm で 1e-3 rad）。
+ */
+function orientToleranceRad(inputs: readonly StitchInput[]): number {
+  let longest = 0;
+  let finest = Infinity;
+  for (const x of inputs) {
+    const [nx, ny] = x.volume.dims;
+    const [sx, sy] = x.volume.spacing;
+    longest = Math.max(longest, Math.hypot((nx - 1) * sx, (ny - 1) * sy));
+    finest = Math.min(finest, sx, sy);
+  }
+  return longest > 0 ? finest / (2 * longest) : 0;
+}
+
+/** 2 本の単位ベクトルのなす角 [rad]。1 に近い内積から acos で求めると精度が落ちるので外積を使う。 */
+function angleBetween(a: readonly number[], b: readonly number[]): number {
+  const cx = a[1] * b[2] - a[2] * b[1];
+  const cy = a[2] * b[0] - a[0] * b[2];
+  const cz = a[0] * b[1] - a[1] * b[0];
+  return Math.atan2(Math.hypot(cx, cy, cz), dot3(a, b));
+}
 
 function unit(a: number, b: number, c: number): [number, number, number] {
   const n = Math.hypot(a, b, c) || 1;
@@ -76,6 +98,7 @@ export function checkStitchInputs(inputs: readonly StitchInput[]): StitchCheck {
 
     const r0 = unit(f.iop[0], f.iop[1], f.iop[2]);
     const c0 = unit(f.iop[3], f.iop[4], f.iop[5]);
+    const tol = orientToleranceRad(inputs);
     for (const x of inputs) {
       if (x.iop.length < 6 || x.iop.slice(0, 6).some((t) => !Number.isFinite(t))) {
         v.add("orientation");
@@ -83,7 +106,7 @@ export function checkStitchInputs(inputs: readonly StitchInput[]): StitchCheck {
       }
       const r = unit(x.iop[0], x.iop[1], x.iop[2]);
       const c = unit(x.iop[3], x.iop[4], x.iop[5]);
-      if (dot3(r0, r) < ORIENT_DOT_MIN || dot3(c0, c) < ORIENT_DOT_MIN) v.add("orientation");
+      if (!(angleBetween(r0, r) <= tol && angleBetween(c0, c) <= tol)) v.add("orientation");
     }
 
     const isPet = (m: string) => m === "PT" || m === "NM";
@@ -121,8 +144,14 @@ export interface StitchGrid {
   worldToIndex: Float64Array;
   /** 入力ごとの法線方向の区間 [w0, w1]（ボクセル中心、mm）。入力と同じ順。 */
   intervals: Array<[number, number]>;
+  /** 2 本以上が覆う法線方向の長さ [mm]。各入力はボクセルの縁（中心 ± 間隔/2）で測る。 */
   overlapMm: number;
+  /** 和集合の範囲内でどの入力も覆わない法線方向の長さ [mm]（縁で測る）。ぴったり隣り合う 2 本は 0。 */
   gapMm: number;
+  /** 出力のボクセル数 = dims の積。 */
+  voxelCount: number;
+  /** 出力のボクセル数 ÷ 全入力のボクセル数の和。間隔の違う入力が混ざって格子が膨らむと大きくなる。上限は呼び出し側が決める。 */
+  inflation: number;
 }
 
 /** 入力の 8 隅のボクセル中心を (rc, rr, n) へ射影した各軸の [min, max]。 */
@@ -239,40 +268,65 @@ export function unionGrid(
   indexToWorld[15] = 1;
   worldToIndex[15] = 1;
 
-  const { overlap, gap } = coverage(intervals);
-  return { dims, spacing, indexToWorld, worldToIndex, intervals, overlapMm: overlap, gapMm: gap };
+  const edges = intervals.map(([a, b], t) => {
+    const h = inputs[t].volume.spacing[2] / 2;
+    return [a - h, b + h] as [number, number];
+  });
+  const { overlap, gap } = coverage(edges);
+  const voxelCount = dims[0] * dims[1] * dims[2];
+  const inputVoxels = inputs.reduce((sum, x) => sum + x.volume.dims[0] * x.volume.dims[1] * x.volume.dims[2], 0);
+  return {
+    dims, spacing, indexToWorld, worldToIndex, intervals,
+    overlapMm: overlap, gapMm: gap, voxelCount, inflation: voxelCount / inputVoxels,
+  };
 }
 
-/** index の境界を浮動小数の丸め分（1e-6）だけ許して端へ寄せる。範囲外は NaN のまま。 */
-function snap(v: number, max: number): number {
-  const EPS = 1e-6;
-  if (v < 0) return v >= -EPS ? 0 : v;
-  if (v > max) return v <= max + EPS ? max : v;
+/** 浮動小数の丸め分（index で 1e-6）。中心の範囲の端の点を NaN にしないための許容。 */
+const ROUNDING_INDEX = 1e-6;
+/** ボクセルは中心から ±半ボクセルを占める。 */
+const HALF_VOXEL_INDEX = 0.5;
+
+/**
+ * index を端の中心から `tol` 以内なら端へ寄せる。それより外は範囲外の index のまま返す
+ * （`sampleTrilinear` が範囲外を NaN にする）。
+ */
+function clampIndex(v: number, max: number, tol: number): number {
+  if (v < 0) return v >= -tol ? 0 : v;
+  if (v > max) return v <= max + tol ? max : v;
   return v;
 }
 
-function sampleInput(vol: RegVolume, x: number, y: number, z: number): number {
+function sampleInput(vol: RegVolume, x: number, y: number, z: number, tol: number): number {
   const m = vol.worldToIndex;
   const [nx, ny, nz] = vol.dims;
-  const i = snap(m[0] * x + m[1] * y + m[2] * z + m[3], nx - 1);
-  const j = snap(m[4] * x + m[5] * y + m[6] * z + m[7], ny - 1);
-  const k = snap(m[8] * x + m[9] * y + m[10] * z + m[11], nz - 1);
+  const i = clampIndex(m[0] * x + m[1] * y + m[2] * z + m[3], nx - 1, tol);
+  const j = clampIndex(m[4] * x + m[5] * y + m[6] * z + m[7], ny - 1, tol);
+  const k = clampIndex(m[8] * x + m[9] * y + m[10] * z + m[11], nz - 1, tol);
   return sampleTrilinear(vol, i, j, k);
 }
 
+function meanAt(inputs: readonly StitchInput[], x: number, y: number, z: number, tol: number): number {
+  let sum = 0;
+  let cnt = 0;
+  for (const inp of inputs) {
+    const s = sampleInput(inp.volume, x, y, z, tol);
+    if (!Number.isNaN(s)) { sum += s; cnt++; }
+  }
+  return cnt > 0 ? sum / cnt : NaN;
+}
+
 /**
- * 格子の各点を各入力から引き、覆っている入力の算術平均を返す（スライスごと）。
- * どの入力も覆わない点は NaN（0 では空気と区別できない）。
+ * 格子の各点を各入力から引き、覆っている入力の算術平均をスライスごとに 1 枚ずつ返す。
+ * どの入力も覆わない点は NaN（0 では空気と区別できない）。全スライスを一度に持たずに符号化へ渡せる。
  */
-export function stitchToGrid(
+export function* stitchSlices(
   inputs: readonly StitchInput[],
   grid: StitchGrid,
   overlap: "mean",
-): Float32Array[] {
+): Generator<Float32Array, void, undefined> {
   if (overlap !== "mean") throw new Error(`volumeStitch: 未対応の重なりの扱い ${overlap}`);
   const [nx, ny, nz] = grid.dims;
   const m = grid.indexToWorld;
-  const slices: Float32Array[] = [];
   for (let k = 0; k < nz; k++) {
     const out = new Float32Array(nx * ny);
     for (let j = 0; j < ny; j++) {
@@ -280,16 +334,22 @@ export function stitchToGrid(
         const x = m[0] * i + m[1] * j + m[2] * k + m[3];
         const y = m[4] * i + m[5] * j + m[6] * k + m[7];
         const z = m[8] * i + m[9] * j + m[10] * k + m[11];
-        let sum = 0;
-        let cnt = 0;
-        for (const inp of inputs) {
-          const s = sampleInput(inp.volume, x, y, z);
-          if (!Number.isNaN(s)) { sum += s; cnt++; }
-        }
-        out[j * nx + i] = cnt > 0 ? sum / cnt : NaN;
+        // 中心の範囲に入る入力だけで平均する。どれも覆わない点に限り、ボクセルの縁（半ボクセル）まで
+        // 端の値で受ける。重なりの中で端の複製を平均に混ぜると、傾きのある値で継ぎ目に偏りが出る。
+        let value = meanAt(inputs, x, y, z, ROUNDING_INDEX);
+        if (Number.isNaN(value)) value = meanAt(inputs, x, y, z, HALF_VOXEL_INDEX);
+        out[j * nx + i] = value;
       }
     }
-    slices.push(out);
+    yield out;
   }
-  return slices;
+}
+
+/** `stitchSlices` の全スライスを配列にして返す（小さい入力・テスト向け）。 */
+export function stitchToGrid(
+  inputs: readonly StitchInput[],
+  grid: StitchGrid,
+  overlap: "mean",
+): Float32Array[] {
+  return [...stitchSlices(inputs, grid, overlap)];
 }
