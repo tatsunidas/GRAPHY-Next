@@ -61,8 +61,20 @@ public class GdriveSyncService implements com.vis.graphynext.dicom.store.Storage
     /** {@code mode}: "backup"（ローカル正本）/ "cache"（Drive 正本）。{@code cache*} と {@code localCount} は cache のときだけ意味がある。 */
     public record Status(State state, String reason, long pending, long blocked, long synced, Long lastSyncAt,
                          String lastError, String lockedBy, Long lastSnapshotAt, String mode, long cacheBytes,
-                         long cacheLimitBytes, long localCount, long evictedCount) {
+                         long cacheLimitBytes, long localCount, long evictedCount, long adopted) {
     }
+
+    /** 「すべてローカルに保存」の進み具合。phase: IDLE / RUNNING / DONE / FAILED / CANCELLED。 */
+    public record LocalizeProgress(String phase, long total, long done, long failed, long bytesTotal, String error) {
+    }
+
+    /** Drive だけにあったファイルを索引へ載せる（取り込み）。テストでは差し替える。 */
+    interface Indexer {
+        void ingest(Path file) throws IOException;
+    }
+
+    /** 全件保存の前に、空きに残しておく余裕（{@code DbTransferService} と同じ値）。 */
+    static final long FREE_SPACE_MARGIN = 64L * 1024 * 1024;
 
     /** 直近にこの時間内に読まれたファイルは追い出さない（返した Path を後で開く経路があるため）。 */
     static final long RECENT_ACCESS_MS = 10 * 60_000;
@@ -104,6 +116,22 @@ public class GdriveSyncService implements com.vis.graphynext.dicom.store.Storage
     private GdriveSnapshots snapshots;
     private volatile long lastSnapshotAt = -1; // -1＝Drive の一覧からまだ読んでいない
     private long lastSnapshotAttemptAt;
+    private volatile Indexer indexer;
+    private final java.util.concurrent.atomic.AtomicLong adopted = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicReference<LocalizeProgress> localize =
+            new java.util.concurrent.atomic.AtomicReference<>(new LocalizeProgress("IDLE", 0, 0, 0, 0, null));
+    /** 全件保存の実行中・完了後は追い出さない（取った端から消えないように）。設定が変わる（切替・解除）か解放するまで続く。 */
+    private volatile boolean holdLocal;
+    private volatile boolean localizeCancel;
+    java.util.function.LongSupplier usableSpace = this::realUsableSpace; // テストで差し替える
+
+    private long realUsableSpace() {
+        try {
+            return Files.getFileStore(root).getUsableSpace();
+        } catch (IOException e) {
+            return 0;
+        }
+    }
     /** 読まれた時刻（周期ごとに台帳へ書く。読み出しのたびに DB を更新しない）。 */
     private final java.util.concurrent.ConcurrentHashMap<String, Long> accessed = new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -115,10 +143,12 @@ public class GdriveSyncService implements com.vis.graphynext.dicom.store.Storage
                              @Value("${graphy.gdrive.reconcile-minutes:10}") long reconcileMinutes,
                              @Value("${graphy.gdrive.lock-lease-minutes:10}") long leaseMinutes,
                              @Value("${graphy.gdrive.snapshot-interval-minutes:60}") long snapshotMinutes,
-                             @Value("${graphy.gdrive.snapshot-keep:3}") int snapshotKeep) {
+                             @Value("${graphy.gdrive.snapshot-keep:3}") int snapshotKeep,
+                             org.springframework.beans.factory.ObjectProvider<com.vis.graphynext.dicom.store.DicomStorageService> storage) {
         this(repo, layout.root(), apiBase, tokenUrl, Clock.systemUTC(), Math::random, intervalSeconds * 1000,
                 reconcileMinutes * 60_000, true, zip -> jdbc.execute("BACKUP TO '" + zip.toString().replace("'", "''") + "'"),
                 leaseMinutes * 60_000, snapshotMinutes * 60_000, snapshotKeep);
+        this.indexer = file -> storage.getObject().ingest(file);
         layout.setBackend(this); // 読み出し（resolveForRead）が、手元に無いファイルを取り寄せる口として使う
     }
 
@@ -159,6 +189,9 @@ public class GdriveSyncService implements com.vis.graphynext.dicom.store.Storage
         this.forceReconcile = true;
         this.lastError = null;
         this.reason = null;
+        this.holdLocal = false;
+        this.localizeCancel = true; // 実行中の全件保存があれば止める（設定が変わったので）
+        this.adopted.set(0);
         if (cfg == null) {
             state = State.DISABLED;
             return;
@@ -185,7 +218,7 @@ public class GdriveSyncService implements com.vis.graphynext.dicom.store.Storage
     public Status status() {
         GdriveConfig c = config;
         if (c == null) {
-            return new Status(State.DISABLED, null, 0, 0, 0, null, null, null, null, null, 0, 0, 0, 0);
+            return new Status(State.DISABLED, null, 0, 0, 0, null, null, null, null, null, 0, 0, 0, 0, 0);
         }
         long pending = repo.countByFolderIdAndState(c.folderId(), GdriveSyncItem.PENDING)
                 + repo.countByFolderIdAndState(c.folderId(), GdriveSyncItem.REMOVE);
@@ -193,7 +226,7 @@ public class GdriveSyncService implements com.vis.graphynext.dicom.store.Storage
                 repo.countByFolderIdAndState(c.folderId(), GdriveSyncItem.SYNCED), lastSyncAt, lastError, lockedBy,
                 lastSnapshotAt > 0 ? lastSnapshotAt : null, c.cache() ? "cache" : "backup",
                 c.cache() ? repo.localBytes(c.folderId()) : 0, c.cache() ? c.cacheLimitBytes() : 0,
-                c.cache() ? repo.localCount(c.folderId()) : 0, repo.countByFolderIdAndEvictedTrue(c.folderId()));
+                c.cache() ? repo.localCount(c.folderId()) : 0, repo.countByFolderIdAndEvictedTrue(c.folderId()), adopted.get());
     }
 
     @Override
@@ -308,6 +341,9 @@ public class GdriveSyncService implements com.vis.graphynext.dicom.store.Storage
             long now = clock.millis();
             if (forceReconcile || now - lastReconcileAt >= reconcileMs) {
                 reconcile(c.folderId(), forceReconcile);
+                if (c.cache()) {
+                    adoptRemoteStrays(c.folderId());
+                }
                 forceReconcile = false;
                 lastReconcileAt = now;
             }
@@ -663,6 +699,141 @@ public class GdriveSyncService implements com.vis.graphynext.dicom.store.Storage
         repo.save(item);
     }
 
+    void setIndexer(Indexer indexer) {
+        this.indexer = indexer;
+    }
+
+    // ── Drive だけにあるファイルの取り込み（モード A） ─────────────────────────────
+
+    /** Drive 上のファイル名（{@code <study>~<series>~<sop>.dcm}）から保管庫の相対パスへ。形が違えば null。 */
+    static String decodeName(String name) {
+        if (name == null || !name.endsWith(".dcm") || name.indexOf('~') < 0) {
+            return null;
+        }
+        String rel = name.replace('~', '/');
+        for (String seg : rel.split("/", -1)) {
+            if (seg.isEmpty() || seg.startsWith(".")) {
+                return null;
+            }
+        }
+        return rel;
+    }
+
+    /**
+     * 台帳に無い Drive のファイル（別の PC が最後のスナップショットのあとに足した、または索引を失った）を、
+     * 取得して索引へ載せる。索引に載らないファイルが Drive にだけ在る状態を残さない。
+     * 取り込みは通常の経路なので、台帳には「手元にある・Drive と md5 が同じ」として載り、送り直しは起きない。
+     * 1 件の失敗（壊れたファイルなど）は飛ばして続ける。つながらないときは例外（周期の状態が OFFLINE になる）。
+     */
+    private void adoptRemoteStrays(String folderId) throws GdriveException {
+        Indexer idx = indexer;
+        if (idx == null || dicomFolderId == null) {
+            return;
+        }
+        java.util.Set<String> known = new java.util.HashSet<>();
+        repo.findByFolderId(folderId).forEach(r -> known.add(r.getRelPath()));
+        for (DriveClient.RemoteFile f : client.listFiles(dicomFolderId)) {
+            String rel = decodeName(f.name());
+            if (rel == null || known.contains(rel) || f.md5() == null) {
+                continue;
+            }
+            Path tmp = null;
+            try {
+                tmp = Files.createTempFile("gdrive-adopt", ".dcm");
+                client.download(f.id(), tmp);
+                if (!f.md5().equalsIgnoreCase(md5(tmp))) {
+                    log.warn("[gdrive] adopt skipped (md5 mismatch): {}", rel);
+                    continue;
+                }
+                idx.ingest(tmp);
+                adopted.incrementAndGet();
+            } catch (IOException | RuntimeException e) {
+                log.warn("[gdrive] adopt failed: {} ({})", rel, e.toString());
+            } finally {
+                if (tmp != null) {
+                    deleteQuietly(tmp);
+                }
+            }
+        }
+    }
+
+    // ── すべてローカルに保存（モード A → 手元を正本にする前の準備） ─────────────────
+
+    public LocalizeProgress localizeProgress() {
+        return localize.get();
+    }
+
+    /** 全件保存を始める。受け付けられなければ理由（空き容量不足など）。成功は null。 */
+    public synchronized String startLocalize() {
+        GdriveConfig c = config;
+        if (c == null || !c.cache()) {
+            return "not-cache-mode";
+        }
+        if ("RUNNING".equals(localize.get().phase())) {
+            return "already-running";
+        }
+        List<GdriveSyncItem> rows = new ArrayList<>(repo.findByFolderIdAndEvictedTrue(c.folderId()));
+        long need = rows.stream().mapToLong(GdriveSyncItem::getSize).sum();
+        if (need + FREE_SPACE_MARGIN > usableSpace.getAsLong()) {
+            return "not-enough-space"; // 何も取らない
+        }
+        holdLocal = true;
+        localizeCancel = false;
+        localize.set(new LocalizeProgress("RUNNING", rows.size(), 0, 0, need, null));
+        Thread t = new Thread(() -> runLocalize(rows, need), "gdrive-localize");
+        t.setDaemon(true);
+        t.start();
+        return null;
+    }
+
+    /** 取り消し、追い出しの停止も解く。すでに取った分は手元に残る。 */
+    public void cancelLocalize() {
+        localizeCancel = true;
+        holdLocal = false;
+    }
+
+    private void runLocalize(List<GdriveSyncItem> rows, long bytes) {
+        long done = 0;
+        long failed = 0;
+        String error = null;
+        java.util.concurrent.ExecutorService pool = prefetchPool();
+        final int window = 16; // 窓ごとに止める機会を作る（つながらないのに全件を叩かない）
+        for (int i = 0; i < rows.size() && !localizeCancel; i += window) {
+            List<java.util.concurrent.Future<?>> jobs = new ArrayList<>();
+            for (GdriveSyncItem r : rows.subList(i, Math.min(rows.size(), i + window))) {
+                jobs.add(pool.submit(() -> ensureLocal(r.getRelPath())));
+            }
+            boolean stop = false;
+            for (java.util.concurrent.Future<?> j : jobs) {
+                try {
+                    j.get();
+                    done++;
+                } catch (java.util.concurrent.ExecutionException e) {
+                    failed++;
+                    String reason = e.getCause() instanceof com.vis.graphynext.dicom.store.StorageUnavailableException su
+                            ? su.reason() : com.vis.graphynext.dicom.store.StorageUnavailableException.DRIVE_ERROR;
+                    if (error == null) {
+                        error = reason;
+                    }
+                    if (reason.equals(com.vis.graphynext.dicom.store.StorageUnavailableException.OFFLINE)
+                            || reason.equals(com.vis.graphynext.dicom.store.StorageUnavailableException.NEEDS_LOGIN)
+                            || reason.equals(com.vis.graphynext.dicom.store.StorageUnavailableException.DISABLED)) {
+                        stop = true; // 次の窓へ進まない
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    stop = true;
+                }
+            }
+            localize.set(new LocalizeProgress("RUNNING", rows.size(), done, failed, bytes, error));
+            if (stop) {
+                break;
+            }
+        }
+        String phase = localizeCancel ? "CANCELLED" : (failed > 0 || done < rows.size() ? "FAILED" : "DONE");
+        localize.set(new LocalizeProgress(phase, rows.size(), done, failed, bytes, error));
+    }
+
     // ── 取り寄せ（モード A: 読み出しから呼ばれる。cycle() とは別のスレッド） ──────────────
 
     private final java.util.concurrent.ConcurrentHashMap<String, Object> fetchLocks = new java.util.concurrent.ConcurrentHashMap<>();
@@ -820,6 +991,9 @@ public class GdriveSyncService implements com.vis.graphynext.dicom.store.Storage
      * 🔴 Drive には触れない。未送信・失敗中・直近に読まれたものは消さない。
      */
     private void evict(String folderId, long limit) {
+        if (holdLocal) {
+            return;
+        }
         long used = repo.localBytes(folderId);
         if (used <= limit) {
             return;

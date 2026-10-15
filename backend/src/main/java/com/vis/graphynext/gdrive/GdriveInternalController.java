@@ -61,7 +61,7 @@ public class GdriveInternalController {
     }
 
     public record RestoreBody(String clientId, String clientSecret, String refreshToken, String sourceFolderId,
-                              String destDir) {
+                              String destDir, Boolean indexOnly) {
         @Override
         public String toString() {
             return "RestoreBody[sourceFolderId=" + sourceFolderId + "]"; // 🔴 秘密を出さない
@@ -73,7 +73,7 @@ public class GdriveInternalController {
     public ResponseEntity<Map<String, Object>> restore(@RequestBody RestoreBody b) {
         GdriveConfig src = new GdriveConfig(b.clientId(), b.clientSecret(), b.refreshToken(), b.sourceFolderId(),
                 null, "restore", "restore-device", "", false, 0);
-        String err = b.destDir() == null ? "dest-not-absolute" : restore.start(src, java.nio.file.Path.of(b.destDir()));
+        String err = b.destDir() == null ? "dest-not-absolute" : restore.start(src, java.nio.file.Path.of(b.destDir()), Boolean.TRUE.equals(b.indexOnly()));
         return err == null ? ResponseEntity.accepted().body(Map.of("ok", true))
                 : ResponseEntity.badRequest().body(Map.of("ok", false, "error", err));
     }

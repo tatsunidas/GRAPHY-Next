@@ -234,6 +234,18 @@ function setGdriveCacheLimit(folder, bytes) {
   return { ok: true };
 }
 
+/** モードを変える（backup ↔ cache）。条件（同期済み・全件が手元）の検査は呼び出し側（main）。cache にするとき上限が無ければ既定を入れる。 */
+function setGdriveMode(folder, mode) {
+  if (!GDRIVE_MODES.includes(mode)) return { ok: false, reason: "invalid-mode" };
+  const s = loadState();
+  const k = gdriveKey(s, folder);
+  if (!k) return { ok: false, reason: "not-enabled" };
+  s.gdrive[k].mode = mode;
+  if (mode === "cache" && !s.gdrive[k].cacheLimitBytes) s.gdrive[k].cacheLimitBytes = DEFAULT_CACHE_LIMIT_BYTES;
+  saveState(s);
+  return { ok: true };
+}
+
 /** 設定を外す（Drive 側のデータには触れない）。 */
 function clearGdrive(folder) {
   const s = loadState();
@@ -326,6 +338,7 @@ module.exports = {
   getGdrive,
   setGdrive,
   setGdriveCacheLimit,
+  setGdriveMode,
   clearGdrive,
   GDRIVE_MODES,
   DEFAULT_CACHE_LIMIT_BYTES,

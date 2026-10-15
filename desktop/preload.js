@@ -97,7 +97,8 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   gdriveEnable: (mode) => ipcRenderer.invoke("graphy:gdrive-enable", { mode }),
   gdriveSetCacheLimit: (bytes) => ipcRenderer.invoke("graphy:gdrive-set-cache-limit", { bytes }),
   gdriveDisable: () => ipcRenderer.invoke("graphy:gdrive-disable"),
-  gdriveRestore: (title) => ipcRenderer.invoke("graphy:gdrive-restore", { title }),
+  gdriveRestore: (title, mode) => ipcRenderer.invoke("graphy:gdrive-restore", { title, mode }),
+  gdriveSetMode: (mode) => ipcRenderer.invoke("graphy:gdrive-set-mode", { mode }),
   // 既定の計算機（未登録で Google にログイン済みなら Colab の T4 を足す。足すのは main）
   computeEnsureDefault: () => ipcRenderer.invoke("graphy:compute-ensure-default"),
   // 名前を付けて保存。上書き確認は OS のダイアログが出す。

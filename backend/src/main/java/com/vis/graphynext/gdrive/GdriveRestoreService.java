@@ -85,6 +85,14 @@ public class GdriveRestoreService {
 
     /** 開始する。受け付けられなければ理由を返す（実行中・空でない・形の誤り）。成功は null。 */
     public synchronized String start(GdriveConfig source, Path dest) {
+        return start(source, dest, false);
+    }
+
+    /**
+     * {@code indexOnly}（モード A）: 索引のスナップショットだけを取り、DICOM は取らない（必要なときに取り寄せる）。
+     * スナップショットが無ければ失敗（DICOM を取らないので、索引が無いと開ける物が無い）。
+     */
+    public synchronized String start(GdriveConfig source, Path dest, boolean indexOnly) {
         if (progress.get().phase() == Phase.RUNNING) {
             return "already-running";
         }
@@ -97,7 +105,7 @@ public class GdriveRestoreService {
             return d;
         }
         progress.set(new Progress(Phase.RUNNING, 0, 0, 0, false, null));
-        worker = new Thread(() -> run(source, dest), "gdrive-restore");
+        worker = new Thread(() -> run(source, dest, indexOnly), "gdrive-restore");
         worker.setDaemon(true);
         worker.start();
         return null;
@@ -117,11 +125,15 @@ public class GdriveRestoreService {
 
     /** テストから同期的に呼ぶ。 */
     void runSync(GdriveConfig source, Path dest) {
-        progress.set(new Progress(Phase.RUNNING, 0, 0, 0, false, null));
-        run(source, dest);
+        runSync(source, dest, false);
     }
 
-    private void run(GdriveConfig source, Path dest) {
+    void runSync(GdriveConfig source, Path dest, boolean indexOnly) {
+        progress.set(new Progress(Phase.RUNNING, 0, 0, 0, false, null));
+        run(source, dest, indexOnly);
+    }
+
+    private void run(GdriveConfig source, Path dest, boolean indexOnly) {
         try {
             GdriveTokenSource tokens = new GdriveTokenSource(http, tokenUrl, () -> source, clock);
             DriveClient client = new DriveClient(http, apiBase, tokens);
@@ -131,7 +143,7 @@ public class GdriveRestoreService {
                 // 親フォルダなど、バックアップでない所を選んだ。空の「完了」にしない
                 throw new GdriveException(GdriveException.Kind.FATAL, 0, "not-backup-folder");
             }
-            List<DriveClient.RemoteFile> files = folder.isPresent() ? client.listFiles(folder.get().id()) : List.of();
+            List<DriveClient.RemoteFile> files = folder.isPresent() && !indexOnly ? client.listFiles(folder.get().id()) : List.of();
             long total = files.size();
             long done = 0;
             long skipped = 0;
@@ -166,6 +178,9 @@ public class GdriveRestoreService {
                 update(Phase.RUNNING, total, done, skipped, false, null);
             }
             boolean snap = restoreSnapshot(client, source.folderId(), dest);
+            if (indexOnly && !snap) {
+                throw new GdriveException(GdriveException.Kind.FATAL, 0, "no-snapshot");
+            }
             update(Phase.DONE, total, done, skipped, snap, null);
         } catch (GdriveException e) {
             log.warn("[gdrive-restore] failed: {}", e.getMessage());

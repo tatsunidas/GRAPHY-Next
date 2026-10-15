@@ -42,4 +42,19 @@ async function createBackupFolder({ token, parentId, dbName, fetchImpl = fetch, 
   return { ok: true, folderId: f.id, driveId: f.driveId || parent.driveId || null, parentName: String(parent.name || ""), name };
 }
 
-module.exports = { createBackupFolder, safeName, stamp };
+/**
+ * Picker で選ばれた「バックアップ済みの GRAPHY-DB-… フォルダ」の名前と共有ドライブの ID を取る（復元で、同じフォルダへ紐付けるため）。
+ * @returns {Promise<{ok:true, name:string, driveId:string|null}|{ok:false, error:string}>}
+ */
+async function describeBackupFolder({ token, folderId, fetchImpl = fetch }) {
+  const r = await fetchImpl(
+    `${API}/files/${encodeURIComponent(folderId)}?supportsAllDrives=true&fields=id,name,mimeType,driveId,trashed`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (!r.ok) return { ok: false, error: `folder-${r.status}` };
+  const f = await r.json();
+  if (f.mimeType !== FOLDER_MIME || f.trashed) return { ok: false, error: "not-folder" };
+  return { ok: true, name: String(f.name || ""), driveId: f.driveId || null };
+}
+
+module.exports = { createBackupFolder, describeBackupFolder, safeName, stamp };

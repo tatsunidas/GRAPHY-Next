@@ -271,6 +271,45 @@ class GdriveBackupFlowTest {
         assertEquals("not-backup-folder", r.progress().error());
     }
 
+    @Test
+    void 索引のみの復元_モードA_はスナップショットだけを取り_DICOM_は取らない() throws Exception {
+        GdriveSyncService a = service(rootA, "dev-AAAA-0001", "hostA");
+        put(rootA, "1.1/2.1/3.1.dcm", rnd(300_000, 7));
+        put(rootA, "1.1/2.2/3.2.dcm", rnd(1000, 8));
+        a.cycle();
+        long gets = drive.log.stream().filter(l -> l.startsWith("GET /drive/v3/files/") && l.contains("?")).count();
+
+        GdriveRestoreService r = restoreService();
+        r.runSync(source(), restored, true);
+        assertEquals(GdriveRestoreService.Phase.DONE, r.progress().phase(), String.valueOf(r.progress()));
+        assertEquals(0, r.progress().total(), "DICOM は一覧にも載せない");
+        assertEquals(0, r.progress().done());
+        assertTrue(r.progress().snapshotRestored());
+        assertEquals("INDEX-V1", extractIndex(restored.resolve("graphy-index.mv.db")));
+        assertFalse(Files.exists(restored.resolve("dicom/1.1/2.1/3.1.dcm")), "DICOM は取らない");
+        assertFalse(Files.exists(restored.resolve("dicom")), "dicom/ も作らない");
+    }
+
+    @Test
+    void 索引のみの復元はスナップショットが無ければ失敗にする() throws Exception {
+        // スナップショットの無い Drive（連携を始める前の空のバックアップ）
+        GdriveRestoreService r = restoreService();
+        FakeDrive.File dicom = new FakeDrive.File();
+        dicom.id = "dicomfolder0001";
+        dicom.name = "dicom";
+        dicom.parent = FOLDER;
+        dicom.folder = true;
+        drive.files.put(dicom.id, dicom);
+        r.runSync(source(), restored, true);
+        assertEquals(GdriveRestoreService.Phase.FAILED, r.progress().phase(), String.valueOf(r.progress()));
+        assertEquals("no-snapshot", r.progress().error());
+        assertFalse(Files.exists(restored.resolve("graphy-index.mv.db")));
+        // DICOM も取る従来の復元は、同じ状態でも完了する（拒否が indexOnly だけの条件であることの対）
+        GdriveRestoreService r2 = restoreService();
+        r2.runSync(source(), restored);
+        assertEquals(GdriveRestoreService.Phase.DONE, r2.progress().phase(), String.valueOf(r2.progress()));
+    }
+
     /** 2 件目の取得を落とす。JDK の HttpClient は閉じた接続の GET を 1 回だけ自動でやり直すので、2 回続けて落とす。 */
     private static boolean isDrop(int n) {
         return n == 2 || n == 3;

@@ -210,3 +210,21 @@ test("Drive 設定: 不明なモード・壊れた上限は保存も読み込み
   assert.equal(old.driveFolderId, GCFG.driveFolderId);
   assert.equal(old.mode, undefined, "古い設定には mode が無い（main は backup として扱う）");
 });
+
+test("Drive 設定: モードの切替。cache にすると上限が入る。不明なモード・未設定は断る（負例）", () => {
+  const dir = tmp();
+  const d = fresh(dir);
+  const a = path.join(dir, "a");
+  fs.mkdirSync(a);
+  assert.deepEqual(d.setGdriveMode(a, "cache"), { ok: false, reason: "not-enabled" });
+  d.setGdrive(a, GCFG);
+  assert.deepEqual(d.setGdriveMode(a, "mirror"), { ok: false, reason: "invalid-mode" });
+  assert.equal(d.getGdrive(a).mode, "backup");
+  assert.deepEqual(d.setGdriveMode(a, "cache"), { ok: true });
+  assert.equal(d.getGdrive(a).mode, "cache");
+  assert.equal(d.getGdrive(a).cacheLimitBytes, d.DEFAULT_CACHE_LIMIT_BYTES, "既定の上限が入る");
+  d.setGdriveCacheLimit(a, 40 * 1024 ** 3);
+  assert.deepEqual(d.setGdriveMode(a, "backup"), { ok: true });
+  assert.deepEqual(d.setGdriveMode(a, "cache"), { ok: true });
+  assert.equal(d.getGdrive(a).cacheLimitBytes, 40 * 1024 ** 3, "いったん戻しても、決めた上限は保つ");
+});
