@@ -28,6 +28,8 @@ export interface SceneObjectSource {
   segmentationId?: string;
   segmentIndex?: number;
   sphereId?: string;
+  /** 形の ROI（annotation）から取り込んだとき。 */
+  annotationUid?: string;
   origin: "2d" | "server";
 }
 
@@ -35,6 +37,7 @@ export interface SceneObjectSource {
 export function sceneSourceKey(s: SceneObjectSource | undefined): string | null {
   if (!s || s.origin !== "2d") return null;
   if (s.sphereId) return `sphere:${s.sphereId}`;
+  if (s.annotationUid) return `shape:${s.annotationUid}`;
   if (s.segmentationId != null && s.segmentIndex != null) return `painted:${s.segmentationId}#${s.segmentIndex}`;
   return null;
 }
@@ -56,16 +59,16 @@ export interface SceneObject {
   source?: SceneObjectSource;
   // ── 計測サマリ（患者 LPS mm）──
   volumeMm3?: number;
+  /** 表示をなめらかにするか（ROI のみ。体積は平滑化前の形で求める）。既定 false（階段状）。 */
+  smooth?: boolean;
   volumeMl?: number;
   surfaceAreaMm2?: number;
   /** 主径 [long, mid, short] mm。 */
   diameters?: [number, number, number];
   /** ROI: 前景ボクセル数。 */
   voxels?: number;
-  /** ROI: ボクセル数 × ボクセル体積（2D の Σ³ と同じ定義）。 */
-  voxelVolumeMm3?: number;
-  /** ROI: 表示メッシュ（平滑化後）から算出した体積。 */
-  meshVolumeMm3?: number;
+  /** ROI: 体積の奥行きの出どころ。"thickness" は推定。 */
+  volumeDepthSource?: "ipp" | "sbs" | "thickness" | "unknown";
   numTriangles?: number;
   /** 中心線: 全長 mm。 */
   lengthMm?: number;

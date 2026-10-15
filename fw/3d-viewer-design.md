@@ -291,6 +291,8 @@ Henyey-Greenstein 位相関数のボリューム散乱・ソフトシャドウ�
 
 ### 8.2 ROI → メッシュ（marching cubes）
 
+> 2026-10-15: 3D の ROI の**表示**は、体積と同じ「スライスの位置と幅で立ち上げた形」（`viewer/slabMesh.ts`）に変えた（`fw/slice-depth-policy.md` §4）。マーチングキューブ＋平滑化は、プラグインのメッシュの口（`labelVolumeToMesh`）にだけ残る。
+
 - 入力: `labelVolume.ts` の実空間 `vtkImageData` labelmap（0/1 または 0/255）。
 - `vtkImageMarchingCubes`（または高速な `vtkFlyingEdges3D`）を **isovalue 0.5（0/1）/ 127.5（0/255）** で実行。
   `vtkImageData` の direction が効くため**頂点は真の LPS mm**（旧の "voxel×spacing で IOP/IPP 破棄" は不採用）。

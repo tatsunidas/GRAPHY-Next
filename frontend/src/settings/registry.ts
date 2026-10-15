@@ -562,6 +562,13 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
     ],
   },
   {
+    // 自動取り込みは専用パネル（監視フォルダの設定と状態）。SettingsDialog で特別扱い。standalone のみ動く。
+    id: "importWatch",
+    labelKey: "settings.cat.importWatch",
+    icon: "📥",
+    sections: [],
+  },
+  {
     id: "dicom",
     labelKey: "settings.cat.dicom",
     icon: "🌐",

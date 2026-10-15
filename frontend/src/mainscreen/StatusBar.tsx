@@ -5,8 +5,21 @@
 import { useEffect, useState } from "react";
 import { type AppStatus } from "../api";
 import { useI18n } from "../i18n/i18n";
+import { errorKey, type WatchBarView } from "../settings/importWatchView";
 
-export function StatusBar({ status, error }: { status: AppStatus | null; error: string | null }) {
+export function StatusBar({
+  status,
+  error,
+  importWatch,
+  onReloadList,
+}: {
+  status: AppStatus | null;
+  error: string | null;
+  /** 監視フォルダの自動取り込みの状態（有効なときだけ visible）。 */
+  importWatch?: WatchBarView;
+  /** 新しい取り込みがあるとき、一覧を読み込み直す。 */
+  onReloadList?: () => void;
+}) {
   const { t } = useI18n();
   const [now, setNow] = useState(() => new Date());
 
@@ -31,6 +44,35 @@ export function StatusBar({ status, error }: { status: AppStatus | null; error: 
         <span style={{ width: 9, height: 9, borderRadius: "50%", background: dot, display: "inline-block" }} />
         <span>{modeLabel}</span>
         {status && <span style={{ color: "#8a98a6" }}>v{status.version}</span>}
+        {importWatch?.visible && (
+          <span data-testid="statusbar-import-watch" style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: 12 }}>
+            {importWatch.error ? (
+              <span style={{ color: "#b00020" }} title={t(errorKey(importWatch.error))}>
+                {t("importWatch.bar.label")}: {t("importWatch.bar.error")}
+              </span>
+            ) : (
+              <span>
+                {t("importWatch.bar.label")}:{" "}
+                {t("importWatch.bar.counts", {
+                  imported: importWatch.imported,
+                  waiting: importWatch.waiting,
+                  failed: importWatch.failed,
+                })}
+                {importWatch.held > 0 && (
+                  <span data-testid="statusbar-import-watch-held" style={{ color: "#8a5a00" }}>
+                    {" · "}
+                    {t("importWatch.bar.held", { n: importWatch.held })}
+                  </span>
+                )}
+              </span>
+            )}
+            {importWatch.newCount > 0 && onReloadList && (
+              <button data-testid="statusbar-import-watch-new" style={reloadBtn} onClick={onReloadList}>
+                {t("importWatch.bar.newItems", { n: importWatch.newCount })}
+              </button>
+            )}
+          </span>
+        )}
       </div>
       <div style={{ fontVariantNumeric: "tabular-nums", color: "#445" }}>{formatClock(now)}</div>
     </div>
@@ -51,4 +93,14 @@ const bar: React.CSSProperties = {
   background: "#f7f9fb",
   fontSize: 12,
   color: "#333",
+};
+
+const reloadBtn: React.CSSProperties = {
+  background: "#e8f1fb",
+  color: "#0b5cad",
+  border: "1px solid #b8d0ea",
+  borderRadius: 10,
+  padding: "1px 10px",
+  fontSize: 12,
+  cursor: "pointer",
 };

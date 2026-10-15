@@ -19,6 +19,7 @@ import { framesToLabelVolume } from "../viewer/maskFrames";
 import { rtStructRoiToLabelVolume } from "../viewer/rtstructToLabelVolume";
 import { rasterizeSphereToLabelVolume } from "../viewer/sphereRaster";
 import { collectLocalRois, requestRemoteRois, requestRemoteMaskFrames } from "../viewer/maskBridge";
+import { withTempMask } from "../viewer/roiBooleanOps";
 import { announceKey, dedupeAnnounce, type AnnounceEntry } from "../viewer/maskBridgeCore";
 import { filterRtRois, filterSegSegments } from "../viewer/serverRoiFilter";
 import { fetchInstances, fetchSeries, readDicomSeg, readDicomRtStruct } from "../api";
@@ -32,6 +33,7 @@ import {
   removeObject,
   setObjectColor,
   setObjectDisplayMode,
+  setRoiSmooth,
   setObjectOpacity,
   setObjectVisible,
   startEndoscopy,
@@ -83,6 +85,7 @@ function download(name: string, buf: ArrayBuffer): void {
 
 export function SceneObjectPanel({
   geom,
+  sopToK,
   onStartCut,
   onAnalyzeCenterline,
   onRepairMesh,
@@ -97,6 +100,8 @@ export function SceneObjectPanel({
   isDemo,
 }: {
   geom: VolumeGeom | null;
+  /** 体積のスライス順の SOP → k。2D の ROI を、描かれている画像と同じスライスに載せる。 */
+  sopToK?: ReadonlyMap<string, number>;
   onStartCut?: (id: string) => void;
   onAnalyzeCenterline?: (id: string, name: string) => void;
   onRepairMesh?: (id: string, name: string) => void;
@@ -199,20 +204,40 @@ export function SceneObjectPanel({
   const importRoiEntry = async (e: ListedRoi): Promise<boolean> => {
     if (!geom || !seriesUid) return false;
     let lv: LabelVolume | null = null;
+    // 2D 側で求めた体積（2D の Σ³ と同じ値）。ウィンドウ間で受け取ったときだけ。
+    let vol2d: { volumeMm3?: number; depthSource?: SceneObject["volumeDepthSource"] } | null = null;
     if (e.kind === "sphere") {
       lv = rasterizeSphereToLabelVolume(geom, e.center, e.radiusMm);
+    } else if (e.kind === "shape") {
+      // 形の ROI は 2D 側で一時的に塗りへ変えて受け取る（2D のパネルに塗りの行は残らない）。
+      if (e.windowId == null) {
+        lv = await withTempMask(e.annotationUid, (tmp) => buildLabelVolumeFromSegmentation(tmp));
+      } else {
+        const frames = await requestRemoteMaskFrames(e.windowId, "", undefined, 8000, e.annotationUid);
+        lv = frames ? framesToLabelVolume(frames, geom, 1, sopToK) : null;
+        if (frames?.depthSource) vol2d = { volumeMm3: frames.volumeMm3, depthSource: frames.depthSource };
+      }
     } else if (e.windowId == null) {
       lv = buildLabelVolumeFromSegmentation(e.segmentationId, e.segmentIndex);
     } else {
       const frames = await requestRemoteMaskFrames(e.windowId, e.segmentationId, e.segmentIndex);
-      lv = frames ? framesToLabelVolume(frames, geom, e.segmentIndex) : null;
+      lv = frames ? framesToLabelVolume(frames, geom, e.segmentIndex, sopToK) : null;
+      if (frames?.depthSource) vol2d = { volumeMm3: frames.volumeMm3, depthSource: frames.depthSource };
     }
     if (!lv) return false;
+    const base = { origin: "2d" as const, seriesUid, c: e.c, t: e.t };
     const source: SceneObjectSource =
       e.kind === "sphere"
-        ? { origin: "2d", seriesUid, c: e.c, t: e.t, sphereId: e.sphereId }
-        : { origin: "2d", seriesUid, c: e.c, t: e.t, segmentationId: e.segmentationId, segmentIndex: e.segmentIndex };
-    return !!addRoiObject(lv, { name: e.label, color: rgb01(e.color), source });
+        ? { ...base, sphereId: e.sphereId }
+        : e.kind === "shape"
+          ? { ...base, annotationUid: e.annotationUid }
+          : { ...base, segmentationId: e.segmentationId, segmentIndex: e.segmentIndex };
+    return !!addRoiObject(lv, {
+      name: e.label,
+      color: rgb01(e.color),
+      source,
+      ...(vol2d ? { volumeOverride: vol2d } : {}),
+    });
   };
 
   const onAddRoi = (e: ListedRoi) => {
@@ -251,7 +276,7 @@ export function SceneObjectPanel({
         const result = await readDicomSeg(studyUid, s.seriesInstanceUid).catch(() => null);
         if (!result?.segments.length) continue;
         for (const seg of filterSegSegments(result.segments, sops)) {
-          const lv = framesToLabelVolume(result, geom, seg.number);
+          const lv = framesToLabelVolume(result, geom, seg.number, sopToK);
           if (!lv) continue;
           const id = addRoiObject(lv, { name: seg.label || seg.description || undefined, color: rgb01(seg.color), source });
           if (id) added++;
@@ -262,7 +287,7 @@ export function SceneObjectPanel({
       for (const s of rtSeries) {
         const rois = await readDicomRtStruct(studyUid, s.seriesInstanceUid).catch(() => []);
         for (const roi of filterRtRois(rois, sops)) {
-          const lv = rtStructRoiToLabelVolume(roi, geom);
+          const lv = rtStructRoiToLabelVolume(roi, geom, 1, sopToK);
           if (!lv) continue;
           const color: [number, number, number] | null =
             roi.color && roi.color.length >= 3 ? [roi.color[0], roi.color[1], roi.color[2]] : null;
@@ -412,8 +437,8 @@ export function SceneObjectPanel({
                     const col = e.color ? `rgb(${e.color[0]},${e.color[1]},${e.color[2]})` : "#8a96a3";
                     return (
                       <div key={announceKey(e)} style={roiItem}>
-                        <span style={{ color: col }} title={e.kind === "sphere" ? "sphere" : "painted"}>
-                          {e.kind === "sphere" ? "◍" : "▨"}
+                        <span style={{ color: col }} title={e.kind}>
+                          {e.kind === "sphere" ? "◍" : e.kind === "shape" ? "▭" : "▨"}
                         </span>
                         <span style={roiItemName} title={e.label}>
                           {e.label}
@@ -496,6 +521,17 @@ export function SceneObjectPanel({
               </button>
             ))}
           </div>
+          {selected.kind === "roi" && (
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, margin: "4px 0" }} title={t("scene3d.smoothHint")}>
+              <input
+                type="checkbox"
+                data-testid="roi3d-smooth"
+                checked={!!selected.smooth}
+                onChange={(e) => setRoiSmooth(selected.id, e.target.checked)}
+              />
+              {t("scene3d.smooth")}
+            </label>
+          )}
           <div style={detailActions}>
             {selected.kind === "roi" && (
               <button style={btnSm} disabled={busy} onClick={onRoiToMesh}>
@@ -566,14 +602,14 @@ export function SceneObjectPanel({
                 {selected.voxels != null && (
                   <Stat k={t("scene3d.voxels")} v={num(selected.voxels, 0)} />
                 )}
-                {selected.kind === "roi" && selected.voxelVolumeMm3 != null ? (
-                  <>
-                    <Stat k={t("scene3d.volumeVoxel")} v={`${num(selected.voxelVolumeMm3 / 1000, 2)} mL`} />
-                    <Stat k={t("scene3d.volumeMesh")} v={`${num((selected.meshVolumeMm3 ?? 0) / 1000, 2)} mL`} />
-                  </>
-                ) : (
-                  <Stat k={t("scene3d.volume")} v={`${num(selected.volumeMl, 2)} mL`} />
-                )}
+                <Stat
+                  k={t("scene3d.volume")}
+                  v={
+                    selected.volumeMl === undefined
+                      ? "—"
+                      : `${num(selected.volumeMl, 2)} mL${selected.kind === "roi" && selected.volumeDepthSource === "thickness" ? ` (${t("scene3d.volumeEstimated")})` : ""}${selected.kind === "roi" && selected.smooth ? ` (${t("scene3d.volumeBeforeSmooth")})` : ""}`
+                  }
+                />
                 <Stat k={t("scene3d.area")} v={`${num(selected.surfaceAreaMm2, 0)} mm²`} />
                 {selected.diameters && (
                   <Stat

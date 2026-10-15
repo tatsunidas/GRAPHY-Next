@@ -33,7 +33,7 @@ import { emitToast } from "../viewer/toast";
 import { isRoiLocked, setRoiLocked } from "../viewer/roiLock";
 import { emitSeriesRefresh } from "../viewer/viewerRefresh";
 import { emitDbChanged } from "../dbEvents";
-import { combineRois, splitMask, roiToMask, isAreaRoi, resolveRoiStack, type BoolOp, type RoiOperand, type SplitConnectivity } from "../viewer/roiBooleanOps";
+import { combineRois, splitMask, roiToMask, withTempMask, isAreaRoi, resolveRoiStack, type BoolOp, type RoiOperand, type SplitConnectivity } from "../viewer/roiBooleanOps";
 import { buildRoiPanelModel, type MeasureRow, type PaintedRoiRow, type RoiPanelModel, type RoiRowEnv, type ShapeRoiRow } from "../viewer/roiRows";
 import { sphereFromCircleRoi, createSphere3DFromCircleRoi, bakeSphere3D, splitMaskToSlices, maskVolumeStats, type MaskVolumeStats } from "../viewer/roi3d";
 import { listSpheres3D, updateSphere3D, deleteSphere3D, subscribeSphere3D, type Sphere3D } from "../viewer/sphere3dStore";
@@ -496,25 +496,36 @@ export function RoiManagerPanel({
         n[r.key] = v;
         // Volumetry 結果をメタへ持ち回す（SEG エクスポート時の SegmentDescription 生成にも利用）。
         // マスクに複数 segment があるとき 1 つの segment の体積をマスク全体のメタに書くと誤るので、行＝マスク全体のときだけ。
-        if (r.single) setRoiMaskMeta(r.maskId, { custom: { volumeMl: v.volumeMl.toFixed(2), volumeComputedAt: new Date().toISOString() } });
+        if (r.single && v.volumeMl !== undefined) setRoiMaskMeta(r.maskId, { custom: { volumeMl: v.volumeMl.toFixed(2), volumeComputedAt: new Date().toISOString() } });
       }
       return n;
     });
   };
   // マスク → DICOM SEG 書き出し（新シリーズとして DB 保存）。同じマスクを再度書き出すと、
   // standalone なら直前のエクスポート先シリーズを自動削除し「更新」相当にする（exportMaskAsSeg 参照）。
-  const runExportSeg = async (id: string) => {
+  // `shape` があれば、その形の ROI を一時的に塗りへ変えて書き出す。SEG の名前は行と同じ。
+  // 2 回目以降の置き換えに使う記録は形の ROI に残す（一時の塗りは毎回作り直すため）。
+  const runExportSeg = async (id: string, shape?: { uid: string; tool: string }) => {
+    const shapeUid = shape?.uid;
     if (busy) return;
     setBusy(true);
     try {
-      const res = await exportMaskAsSeg(id, { mode });
+      const res = shapeUid
+        ? await withTempMask(shape.uid, async (tmp) => {
+            const m = getRoiMaskMeta(shapeUid);
+            setRoiMaskMeta(tmp, { label: m?.label || shape.tool, lastSegExport: m?.lastSegExport });
+            const r = await exportMaskAsSeg(tmp, { mode });
+            if (r.ok) setRoiMaskMeta(shapeUid, { lastSegExport: getRoiMaskMeta(tmp)?.lastSegExport });
+            return r;
+          }) ?? { ok: false as const, reason: "noMask" as const }
+        : await exportMaskAsSeg(id, { mode });
       if (res.ok) {
         emitToast(res.replacedPrevious ? t("roiMgr.exportSegUpdated") : t("roiMgr.exportSegDone"));
         emitSeriesRefresh(); // 2D Viewer の検索ツリーを再取得（新 SEG シリーズを出す）。
         // 他ウィンドウ（メイン画面の検索リスト等）へ新規シリーズ発生を通知（CPR/中心線解析/Slicer と同様）。
         // これが無いと、実際は保存されているのにメイン画面の検索結果には反映されず「保存されていない」
         // ように見えるバグになる（実機報告により判明）。
-        const studyUid = getRoiMaskMeta(id)?.scope?.studyUid;
+        const studyUid = getRoiMaskMeta(shapeUid ?? id)?.scope?.studyUid;
         emitDbChanged({ reason: "series-create", studyUids: studyUid ? [studyUid] : undefined });
       } else if (res.reason === "empty") {
         window.alert(t("roiMgr.exportSegEmpty"));
@@ -641,6 +652,17 @@ export function RoiManagerPanel({
         <input type="checkbox" onClick={(e) => e.stopPropagation()} onChange={(e) => setRoiStyle(r.uid, { fillOpacity: e.target.checked ? 0.3 : 0 })} title={t("roiMgr.fill")} />
         {r.scope && <button onClick={(e) => { e.stopPropagation(); toggleScopeZ(r.uid); }} style={scopeChip} title={t("roiMgr.scopeToggle")}>{r.scope}</button>}
         {isAreaRoi(r.tool) && <button onClick={(e) => { e.stopPropagation(); runRoiToMask(r.uid); }} disabled={busy} style={editBtn} title={t("roiMgr.toMask")}>▦</button>}
+        {r.kind === "area" && (
+          <button
+            onClick={(e) => { e.stopPropagation(); runExportSeg(r.uid, r); }}
+            disabled={busy}
+            style={editBtn}
+            title={mode === "standalone" ? t("roiMgr.exportSegStandalone") : t("roiMgr.exportSeg")}
+            data-testid="roi-row-export-seg"
+          >
+            SEG ⬇
+          </button>
+        )}
         {onDuplicateRoi && (
           <button
             onClick={(e) => { e.stopPropagation(); setFocusedRoi(r.uid); onDuplicateRoi(r.uid); }}
@@ -761,8 +783,14 @@ export function RoiManagerPanel({
         </div>
         {st && (
           <div style={statLine} data-testid="mask-stats">
-            {t("roiMgr.statVol")}: {st.volumeMl.toFixed(2)} mL ({st.volumeMm3.toFixed(0)} mm³) ·
+            {t("roiMgr.statVol")}: {st.volumeMl === undefined ? "—" : `${st.volumeMl.toFixed(2)} mL (${st.volumeMm3!.toFixed(0)} mm³)`} ·
             {" "}{t("roiMgr.statVoxels")}: {st.voxels.toLocaleString()} · {t("roiMgr.statSlices")}: {st.slices}
+            {st.warnings.length > 0 && (
+              <>
+                <br />
+                <span data-testid="mask-stats-warn">{st.warnings.map((w) => t(`roiStats.warn.${w}`)).join(" / ")}</span>
+              </>
+            )}
             {(st.missingValueSlices ?? 0) > 0 && (
               <>
                 <br />

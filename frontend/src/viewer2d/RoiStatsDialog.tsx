@@ -226,7 +226,7 @@ export function RoiStatsDialog({
                     const v = m ? m.values : s?.values;
                     const uid = targets[i].uid;
                     const size = m
-                      ? `${formatNumber(m.volumeMl)} mL`
+                      ? (m.volumeMl === undefined ? "—" : `${formatNumber(m.volumeMl)} mL`)
                       : s ? (s.geometry.kind === "area" ? formatArea(s) : formatLength(s)) : null;
                     return (
                       <tr
@@ -341,10 +341,10 @@ function MaskDetail({ stats }: { stats: MaskStatsResult }) {
   const [cx, cy, cz] = stats.voxelMm;
   const tlgKey = meanTimesVolumeLabelKey(stats.unit);
   const parts = [
-    `${t("roiMgr.statVol")}: ${formatNumber(stats.volumeMl)} mL (${formatNumber(stats.volumeMm3, 1)} mm³)`,
+    `${t("roiMgr.statVol")}: ${stats.volumeMl === undefined || stats.volumeMm3 === undefined ? "—" : `${formatNumber(stats.volumeMl)} mL (${formatNumber(stats.volumeMm3, 1)} mm³)`}`,
     `${t("roiMgr.statVoxels")}: ${stats.voxels}`,
     `${t("roiMgr.statSlices")}: ${stats.slices}`,
-    `${t("roiStats.voxelSize")}: ${formatNumber(cx, 3)} × ${formatNumber(cy, 3)} × ${formatNumber(cz, 3)} mm`,
+    `${t("roiStats.voxelSize")}: ${formatNumber(cx, 3)} × ${formatNumber(cy, 3)} × ${cz === null ? "?" : formatNumber(cz, 3)} mm`,
   ];
   return (
     <>

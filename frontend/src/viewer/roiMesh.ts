@@ -27,6 +27,8 @@ import {
   emptyLabelVolume,
 } from "./labelVolume";
 import { getMeshArrays, withNormals } from "./mesh3d";
+import vtkPolyData from "@kitware/vtk.js/Common/DataModel/PolyData";
+import { slabMesh, slabRanges, type SlabRange } from "./slabMesh";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
@@ -85,6 +87,64 @@ export function labelVolumeToMesh(lv: LabelVolume, opts: RoiToMeshOptions = {}):
     }
 
     // 頂点を world（患者 LPS mm）へ: world = origin + R·v_local。
+    transformPointsToWorld(pd, origin, direction);
+    return withNormals(pd);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 3D の ROI の表示用メッシュ。体積を求めた形と同じ「各スライスを実際の位置と幅で立ち上げた閉じた面」
+ * （`slabMesh`）を作る。`ranges` を省略すると、各層を ±間隔/2 の均一な格子として扱う。
+ * 範囲の無い層（補間で作った層）にラベルがあれば、その層だけ格子の範囲で描く。
+ * `smooth` のときだけ WindowedSinc で平滑化する（形が少し痩せる。体積は平滑化前の値を使うこと）。
+ */
+export function labelVolumeToSlabSurface(
+  lv: LabelVolume,
+  opts: { ranges?: ReadonlyArray<SlabRange | null>; smooth?: boolean } = {},
+): Any | null {
+  try {
+    const { dims, spacing, origin, direction } = lv.geom;
+    const [nx, ny, nz] = dims;
+    if (nx * ny * nz !== lv.data.length) return null;
+    let ranges = opts.ranges && opts.ranges.length === nz ? opts.ranges : slabRanges(nz, spacing[2]);
+    const missing = new Set<number>();
+    for (let k = 0; k < nz; k++) {
+      if (ranges[k]) continue;
+      const base = k * nx * ny;
+      for (let i = 0; i < nx * ny; i++) if (lv.data[base + i] > 0) { missing.add(k); break; }
+    }
+    if (missing.size) {
+      const uniform = slabRanges(nz, spacing[2]);
+      ranges = ranges.map((r, k) => r ?? (missing.has(k) ? uniform[k] : null));
+    }
+    const m = slabMesh(lv.data, [nx, ny, nz], spacing[0], spacing[1], ranges);
+    if (!m.triangles.length) return null;
+    const polys = new Uint32Array((m.triangles.length / 3) * 4);
+    for (let t = 0, o = 0; t < m.triangles.length; t += 3, o += 4) {
+      polys[o] = 3;
+      polys[o + 1] = m.triangles[t];
+      polys[o + 2] = m.triangles[t + 1];
+      polys[o + 3] = m.triangles[t + 2];
+    }
+    let pd: Any = vtkPolyData.newInstance();
+    pd.getPoints().setData(Float32Array.from(m.points), 3);
+    pd.getPolys().setData(polys);
+    if (opts.smooth) {
+      try {
+        const smooth: Any = vtkWindowedSincPolyDataFilter.newInstance();
+        smooth.setInputData(pd);
+        smooth.setNumberOfIterations(15);
+        smooth.setPassBand?.(0.1);
+        smooth.setFeatureEdgeSmoothing?.(false);
+        smooth.setBoundarySmoothing?.(true);
+        const out = smooth.getOutputData();
+        if (out && out.getNumberOfPoints?.() > 0) pd = out;
+      } catch {
+        /* 平滑化に失敗したら階段状のまま */
+      }
+    }
     transformPointsToWorld(pd, origin, direction);
     return withNormals(pd);
   } catch {

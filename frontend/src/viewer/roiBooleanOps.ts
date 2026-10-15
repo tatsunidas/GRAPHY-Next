@@ -18,7 +18,7 @@ import { annotation as csAnnotation, segmentation as csSeg, Enums as csToolsEnum
 import { roiKindOf } from "./roiKind";
 import { deleteRoiMaskMeta, getRoiMaskMeta, setRoiMaskMeta } from "./roiMaskStore";
 import { worldToImageCoords } from "./imageCoords";
-import { alignToStack, combineLabelSlices, scopeZFromForeground, type BoolOp } from "./maskScope";
+import { alignToStack, combineLabelSlices, scopeZFromForeground, withTemp, type BoolOp } from "./maskScope";
 import { isSegmentForeground } from "./maskStatsCore";
 import { fillPolygonsEvenOdd } from "./maskContour";
 
@@ -175,26 +175,26 @@ export type RoiOperand = { kind: "shape"; uid: string } | { kind: "painted"; mas
  * 形をラスタ化できない（面積型でない/表示先が見つからない）ものが 1 つでもあれば null。
  */
 export async function combineRois(operands: RoiOperand[], op: BoolOp, viewportIds: string[]): Promise<string | null> {
-  const temps: string[] = [];
-  try {
-    const resolved: MaskOperand[] = [];
-    for (const o of operands) {
-      if (o.kind === "painted") {
-        resolved.push({ maskId: o.maskId, segIndex: o.segIndex });
-        continue;
-      }
-      const tmp = await roiToMask(o.uid);
-      if (!tmp) return null;
-      temps.push(tmp);
-      resolved.push({ maskId: tmp });
-    }
-    return await combineMasks(resolved, op, viewportIds);
-  } finally {
-    for (const id of temps) {
-      try { csSeg.removeSegmentation(id); } catch { /* ignore */ }
-      deleteRoiMaskMeta(id);
-    }
-  }
+  const run = async (i: number, resolved: MaskOperand[]): Promise<string | null> => {
+    if (i === operands.length) return combineMasks(resolved, op, viewportIds);
+    const o = operands[i];
+    if (o.kind === "painted") return run(i + 1, [...resolved, { maskId: o.maskId, segIndex: o.segIndex }]);
+    return withTempMask(o.uid, (tmp) => run(i + 1, [...resolved, { maskId: tmp }]));
+  };
+  return run(0, []);
+}
+
+/**
+ * 形の ROI（面積型）を一時の塗りの ROI にして `fn` に渡し、終わったら一時の塗りを消す。
+ * パネルに結果以外の塗りを残さないため。ラスタ化できなければ null。
+ */
+export function withTempMask<T>(annotationUid: string, fn: (maskId: string) => Promise<T> | T): Promise<T | null> {
+  return withTemp(() => roiToMask(annotationUid), removeTempMask, fn);
+}
+
+function removeTempMask(id: string): void {
+  try { csSeg.removeSegmentation(id); } catch { /* ignore */ }
+  deleteRoiMaskMeta(id);
 }
 
 /** エリア型 ROI（面積を持つ＝ラスタ化可能）の toolName か。 */

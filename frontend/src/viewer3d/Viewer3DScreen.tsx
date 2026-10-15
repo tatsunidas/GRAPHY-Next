@@ -33,7 +33,10 @@ import {
 import { confirmVolumeMemory } from "../viewer/volumeMemoryGuard";
 import { useDeviceClass } from "../mobile/useDeviceClass";
 import { imageIdForInstance, imageIdForCell } from "../viewer/imageId";
+import { metaData } from "@cornerstonejs/core";
 import { buildMprVolume } from "../viewer/mpr";
+import { SliceDuplicatesError, sopGridIndexMap, volumeDepthNote, type VolumeDepthNote } from "../viewer/depthVolume";
+import { VolumeDepthChip } from "../viewer/VolumeDepthChip";
 import {
   createVtkVolumeView,
   vtkImageDataFromVolume,
@@ -61,7 +64,7 @@ import { SlabPanel } from "./SlabPanel";
 import { RepresentationStateDialog } from "./RepresentationStateDialog";
 import { ViewInfoOverlay } from "./ViewInfoOverlay";
 import { fetchLutData } from "../api";
-import { attachSceneRenderer, resetScene, setClipContext, updateClip, setOrthoSlice } from "./scene3d";
+import { attachSceneRenderer, resetScene, setClipContext, updateClip, setOrthoSlice, setVolumeDepth } from "./scene3d";
 import { geomFromImageData, type VolumeGeom } from "../viewer/labelVolume";
 import { useI18n } from "../i18n/i18n";
 import { fetchSettings } from "../settings/settingsApi";
@@ -119,6 +122,9 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
   const [message, setMessage] = useState<string>("");
   const [title, setTitle] = useState<string>("");
   const [tilt, setTilt] = useState<number | null>(null);
+  // 体積のスライス順の SOP → k（2D の ROI を描かれている画像に合わせて載せる）と、間隔が不均一なときの各間隔。
+  const [sopToK, setSopToK] = useState<Map<string, number> | undefined>(undefined);
+  const [depthNote, setDepthNote] = useState<VolumeDepthNote | null>(null);
   const [mode, setMode] = useState<VtkRenderMode>("VR");
   const [orthoPos, setOrthoPos] = useState<{ x: number; y: number; z: number }>({ x: 0.5, y: 0.5, z: 0.5 });
   const [lutName, setLutName] = useState<string | null>(null);
@@ -287,6 +293,24 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         maxBytes: memDecision.enforceMaxBytes,
       });
       setTilt(built.corrected ? (built.tiltAngleDeg ?? null) : null);
+      if (built.sortedImageIds) {
+        const ids = built.sortedImageIds;
+        // 体積のスライス順の SOP → 格子番号（2D の ROI を、描かれている画像と同じスライスに載せる。補間した面には載せない）。
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const sops = ids.map((id) => ((metaData.get("sopCommonModule", id) ?? {}) as any).sopInstanceUID as string | undefined);
+        setSopToK(sopGridIndexMap(sops, built.grid?.gridIndexOf));
+      } else {
+        setSopToK(undefined);
+      }
+      setDepthNote(volumeDepthNote(built.geometry, built.grid));
+      setVolumeDepth({
+        gridIndexOf: built.grid?.gridIndexOf ?? (built.sortedImageIds ? built.geometry.order.map((_, i) => i) : undefined),
+        widths: built.geometry.widths,
+        positions: built.geometry.positions.map((p) => p - built.geometry.positions[0]),
+        gridCount: built.grid?.count ?? built.geometry.positions.length,
+        source: built.geometry.source,
+        kind: built.geometry.kind,
+      });
       setVolumeId(volId);
 
       // Cornerstone が構築したボリュームから scalar 付き vtkImageData を組み立てて pure vtk へ渡す
@@ -362,7 +386,9 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
           ? t("viewer3d.glLost")
           : isCacheSizeExceeded(e)
             ? t("common.volumeMemExceeded", { budgetMb: String(getAppliedVolumeMaxMb()) })
-            : `${t("viewer3d.error")}: ${String(e)}`,
+            : e instanceof SliceDuplicatesError
+              ? t("volumeDepth.duplicates")
+              : `${t("viewer3d.error")}: ${String(e)}`,
       );
     }
   }, [mode2, t]);
@@ -582,6 +608,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         )}
         <span style={hTitle}>{t("main.toolbar.viewer3d")}</span>
         {title && <span style={hSeries}>{title}</span>}
+        <VolumeDepthChip note={depthNote} style={tiltChip} />
         {tilt !== null && (
           <span style={tiltChip} title={t("mpr.tiltCorrectedHint")}>
             {t("mpr.tiltCorrected", { deg: tilt.toFixed(1) })}
@@ -849,6 +876,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
             <div style={panelSection}>
               <SceneObjectPanel
                 geom={sceneGeom}
+                sopToK={sopToK}
                 onStartCut={startCut}
                 onAnalyzeCenterline={analyzeCenterline}
                 onRepairMesh={(id, name) => setRepairTarget({ id, name })}

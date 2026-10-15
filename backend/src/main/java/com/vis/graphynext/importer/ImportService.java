@@ -78,6 +78,11 @@ public class ImportService {
         this.skipDirs = Set.copyOf(skip);
     }
 
+    /** 取り込みの走査が中に入らないフォルダか（監視の走査も同じ規則で避ける）。 */
+    boolean isSkippedDir(Path dir) {
+        return skipDirs.contains(dir.toAbsolutePath().normalize());
+    }
+
     public ImportResult importPaths(List<String> paths) {
         Counter c = new Counter();
         if (paths != null) {

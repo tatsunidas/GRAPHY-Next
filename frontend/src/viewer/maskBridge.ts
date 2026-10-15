@@ -14,11 +14,12 @@
  * 各ウィンドウはこのモジュールを import した時点で受信側（サーバ）としても振る舞う（`onmessage` を
  * 即座に登録するため）。要求側（クライアント）としての利用は `requestRemoteMasks`/`requestRemoteMaskFrames`。
  */
-import { segmentation as csSeg } from "@cornerstonejs/tools";
+import { annotation as csAnnotation, segmentation as csSeg } from "@cornerstonejs/tools";
 import { getRoiMaskMeta, getMaskSegments } from "./roiMaskStore";
 import { extractMaskFrames, type MaskFramesInput } from "./maskFrames";
 import { listSpheres3D } from "./sphere3dStore";
-import { buildAnnounceEntries, type AnnounceEntry, type AnnounceQuery } from "./maskBridgeCore";
+import { buildAnnounceEntries, type AnnounceEntry, type AnnounceQuery, type AnnounceShapeInput } from "./maskBridgeCore";
+import { withTempMask } from "./roiBooleanOps";
 
 export type { AnnounceEntry, AnnounceQuery } from "./maskBridgeCore";
 
@@ -33,6 +34,8 @@ type FramesRequest = {
   segmentationId: string;
   /** 指定時はその segment だけを抽出する。 */
   segmentIndex?: number;
+  /** 形の ROI のとき。一時的に塗りへ変えて抽出する（`segmentationId` は使わない）。 */
+  annotationUid?: string;
   from: string;
   target: string;
 };
@@ -64,7 +67,47 @@ function segmentColor255(segmentationId: string, segmentIndex: number): [number,
   }
 }
 
-/** このウィンドウが持つ ROI（塗りの segment 単位 + パラメトリック球）を、3D のコンテキストで絞って返す。 */
+/** "rgb(r, g, b)" / "rgba(...)" / "#rrggbb" → [r,g,b]。読めなければ null。 */
+function cssColor255(c: unknown): [number, number, number] | null {
+  if (typeof c !== "string") return null;
+  const m = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i.exec(c);
+  if (m) return [Number(m[1]), Number(m[2]), Number(m[3])];
+  const h = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(c.trim());
+  return h ? [parseInt(h[1], 16), parseInt(h[2], 16), parseInt(h[3], 16)] : null;
+}
+
+function localShapes(): AnnounceShapeInput[] {
+  let anns: unknown[] = [];
+  try {
+    anns = (csAnnotation.state.getAllAnnotations() as unknown[]) ?? [];
+  } catch {
+    return [];
+  }
+  const out: AnnounceShapeInput[] = [];
+  for (const a of anns) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ann = a as any;
+    const uid = ann?.annotationUID as string | undefined;
+    if (!uid) continue;
+    let color: [number, number, number] | null = null;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      color = cssColor255((csAnnotation.config.style as any).getAnnotationToolStyles?.(uid)?.color);
+    } catch {
+      /* ignore */
+    }
+    out.push({
+      annotationUid: uid,
+      toolName: ann?.metadata?.toolName ?? "",
+      closed: ann?.data?.contour?.closed,
+      meta: getRoiMaskMeta(uid),
+      color,
+    });
+  }
+  return out;
+}
+
+/** このウィンドウが持つ ROI（塗りの segment 単位・面積型の形の ROI・パラメトリック球）を、3D のコンテキストで絞って返す。 */
 export function collectLocalRois(q: AnnounceQuery): AnnounceEntry[] {
   return buildAnnounceEntries(q, {
     segmentations: localSegmentations(),
@@ -82,7 +125,13 @@ export function collectLocalRois(q: AnnounceQuery): AnnounceEntry[] {
       label: s.label,
       color: s.color,
     })),
+    shapes: localShapes(),
   });
+}
+
+/** 形の ROI を一時的に塗りへ変えて、フレームを取り出す（終わったら一時の塗りは消える）。 */
+export function extractShapeFrames(annotationUid: string): Promise<MaskFramesInput | null> {
+  return withTempMask(annotationUid, (tmp) => extractMaskFrames(tmp));
 }
 
 function onMessage(msg: BridgeMessage): void {
@@ -94,6 +143,13 @@ function onMessage(msg: BridgeMessage): void {
     }
   } else if (msg.type === "frames-request") {
     if (msg.target !== selfId) return;
+    if (msg.annotationUid) {
+      const { requestId } = msg;
+      void extractShapeFrames(msg.annotationUid)
+        .catch(() => null)
+        .then((result) => post({ type: "frames-response", requestId, from: selfId, result }));
+      return;
+    }
     if (!localSegmentations().some((s) => s.segmentationId === msg.segmentationId)) return;
     const result = extractMaskFrames(msg.segmentationId, msg.segmentIndex);
     post({ type: "frames-response", requestId: msg.requestId, from: selfId, result });
@@ -140,12 +196,16 @@ export function requestRemoteRois(q: AnnounceQuery, timeoutMs = 400): Promise<Re
   });
 }
 
-/** 指定ウィンドウが持つマスクのフレームデータを取得する（`segmentIndex` 指定でその segment のみ。見つからない/タイムアウトなら null）。 */
+/**
+ * 指定ウィンドウが持つマスクのフレームデータを取得する（`segmentIndex` 指定でその segment のみ。見つからない/タイムアウトなら null）。
+ * `annotationUid` を渡すと、その形の ROI を相手側で一時的に塗りへ変えて取り出す。
+ */
 export function requestRemoteMaskFrames(
   windowId: string,
   segmentationId: string,
   segmentIndex?: number,
   timeoutMs = 8000,
+  annotationUid?: string,
 ): Promise<MaskFramesInput | null> {
   if (!ensureChannel()) return Promise.resolve(null);
   const requestId = newRequestId();
@@ -157,7 +217,7 @@ export function requestRemoteMaskFrames(
       pending.delete(requestId);
       resolve(msg.result);
     });
-    post({ type: "frames-request", requestId, segmentationId, segmentIndex, from: selfId, target: windowId });
+    post({ type: "frames-request", requestId, segmentationId, segmentIndex, annotationUid, from: selfId, target: windowId });
     setTimeout(() => {
       if (done) return;
       done = true;

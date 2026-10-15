@@ -3,7 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { describe, it, expect } from "vitest";
-import { alignToStack, boolOn, combineLabelSlices, scopeZFromForeground } from "./maskScope";
+import { alignToStack, boolOn, combineLabelSlices, scopeZFromForeground, withTemp } from "./maskScope";
 import { isSegmentForeground } from "./maskStatsCore";
 
 describe("scopeZFromForeground", () => {
@@ -89,5 +89,18 @@ describe("isSegmentForeground / combineLabelSlices", () => {
   it("labels が null（そのスライスは背景）や短い配列は背景として数える", () => {
     expect(Array.from(combineLabelSlices("or", [{ labels: null }, { labels: [1, 1] }], 3))).toEqual([1, 1, 0]);
     expect(Array.from(combineLabelSlices("and", [{ labels: null }, { labels: [1, 1, 1] }], 3))).toEqual([0, 0, 0]);
+  });
+});
+
+describe("withTemp", () => {
+  it("成功でも失敗でも一時のものを片付ける。作れなければ fn を呼ばず null", async () => {
+    const disposed: string[] = [];
+    const dispose = (id: string) => disposed.push(id);
+    expect(await withTemp(async () => "t1", dispose, (id) => `done:${id}`)).toBe("done:t1");
+    await expect(withTemp(async () => "t2", dispose, () => { throw new Error("x"); })).rejects.toThrow("x");
+    let called = false;
+    expect(await withTemp(async () => null, dispose, () => { called = true; })).toBeNull();
+    expect(called).toBe(false);
+    expect(disposed).toEqual(["t1", "t2"]);
   });
 });
