@@ -6,6 +6,7 @@
 #   mac-2-blocked   初回起動の警告「開いていません」
 #   mac-3-settings  システム設定 ＞ プライバシーとセキュリティ の「このまま開く」
 #   mac-4-confirm   「このまま開く」を押した後の確認
+#   mac-5-after-open 確認で「このまま開く」を押した後（パスワードを求められるか、起動するか）
 # 撮れなかった画面は report.txt に残し、終了コードは 0 にする（リリースは止めない）。
 set -u
 DMG="$1"; OUT="$2"; mkdir -p "$OUT"
@@ -90,10 +91,14 @@ RES=$(swift /tmp/click-text.swift /tmp/settings.png "このまま開く" 2>&1 | 
 case "$RES" in clicked*)
   sleep 8
   shot mac-4-confirm
+  # 確認でも「このまま開く」を押す。パスワードを求められるか、そのまま起動するかを撮る
+  ax 'tell application "System Events" to tell process "CoreServicesUIAgent" to click (first button of window 1 whose name is "このまま開く" or name is "Open Anyway")'
+  sleep 20
+  shot mac-5-after-open
   ;;
 esac
 
-for n in mac-1-dmg mac-2-blocked mac-3-settings mac-4-confirm; do
+for n in mac-1-dmg mac-2-blocked mac-3-settings mac-4-confirm mac-5-after-open; do
   [ -s "$OUT/$n.png" ] && echo "$n ok" || echo "$n MISSING"
 done | tee "$OUT/report.txt"
 exit 0

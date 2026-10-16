@@ -15,19 +15,27 @@ Add-Type -AssemblyName System.Drawing, System.Windows.Forms, UIAutomationClient,
 $AE = [System.Windows.Automation.AutomationElement]
 function Log($m) { $l = "[$(Get-Date -f HH:mm:ss)] $m"; Write-Host $l; Add-Content "$Out/log.txt" $l }
 
-# 押せる（Invoke できる）要素に限って、名前で探す（同じ名前の文字列やラベルに当たらないように）
+# インストーラの窓（最上位の子で名前が「… Setup」）の中から、名前でボタンを探す。
+# デスクトップ全体を名前で探すと、タスクバーなどの同名の要素に当たって押せないことがあった。
+function SetupWindow {
+  $wins = $AE::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
+  foreach ($w in $wins) { if ($w.Current.Name -like "*Setup*") { return $w } }
+  return $null
+}
 function FindByName([string[]]$names) {
-  $invokable = New-Object System.Windows.Automation.PropertyCondition($AE::IsInvokePatternAvailableProperty, $true)
-  $all = $AE::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, $invokable)
+  $w = SetupWindow
+  if (-not $w) { return $null }
+  $all = $w.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
   foreach ($n in $names) {
-    foreach ($e in $all) { if ($e.Current.Name -eq $n) { return $e } }
+    foreach ($e in $all) { if ($e.Current.Name -eq $n -and $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button) { return $e } }
   }
   return $null
 }
 function DumpButtons {
-  $invokable = New-Object System.Windows.Automation.PropertyCondition($AE::IsInvokePatternAvailableProperty, $true)
-  $names = $AE::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, $invokable) | ForEach-Object { "'$($_.Current.Name)'" }
-  Log "invokable: $($names -join ', ')"
+  $w = SetupWindow
+  if (-not $w) { Log "setup window: none / top: $(($AE::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object { "'$($_.Current.Name)'" }) -join ', ')"; return }
+  $d = $w.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object { "'$($_.Current.Name)'/$($_.Current.ControlType.ProgrammaticName)" }
+  Log "setup window '$($w.Current.Name)': $($d -join ', ')"
 }
 # 要素を含む最上位の窓
 function TopWindowOf($e) {
@@ -54,7 +62,10 @@ function Shot([string]$name, $element) {
 function Invoke-Element($e) {
   for ($i = 0; $i -lt 60 -and -not $e.Current.IsEnabled; $i++) { Start-Sleep 2 }
   try { $e.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); Log "clicked '$($e.Current.Name)'"; return $true }
-  catch { Log "invoke '$($e.Current.Name)' failed: $_"; return $false }
+  catch { Log "invoke '$($e.Current.Name)' failed: $_" }
+  # Invoke が無いときはフォーカスして Enter（既定のボタン）
+  try { $e.SetFocus(); Start-Sleep 1; [System.Windows.Forms.SendKeys]::SendWait("{ENTER}"); Log "enter on '$($e.Current.Name)'"; return $true }
+  catch { Log "enter '$($e.Current.Name)' failed: $_"; return $false }
 }
 function WaitFor([string[]]$names, [int]$sec) {
   $deadline = (Get-Date).AddSeconds($sec)
@@ -71,14 +82,22 @@ Copy-Item $Exe $dst -Force
 Set-Content -Path $dst -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3`r`nHostUrl=https://github.com/"
 Start-Process explorer.exe -ArgumentList "`"$dst`""
 
-# 「More info」はボタンではなくリンクなので、名前だけで探す
-$c = New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, "More info")
-$more = $null
-for ($i = 0; $i -lt 20 -and -not $more; $i++) { $more = $AE::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $c); if (-not $more) { Start-Sleep 2 } }
+# SmartScreen の窓はデスクトップ全体から名前で探す（「More info」はボタンではなくリンク）
+function FindAnywhere([string]$name, [int]$sec) {
+  $c = New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, $name)
+  $deadline = (Get-Date).AddSeconds($sec)
+  while ((Get-Date) -lt $deadline) {
+    $e = $AE::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $c)
+    if ($e) { return $e }
+    Start-Sleep 2
+  }
+  Log "not found: $name"; return $null
+}
+$more = FindAnywhere "More info" 40
 if ($more) {
   Shot "win-1-smartscreen" $more
   Invoke-Element $more | Out-Null; Start-Sleep 3
-  $run = WaitFor @("Run anyway", "実行") 10
+  $run = FindAnywhere "Run anyway" 10
   if ($run) { Shot "win-2-smartscreen-more" $run; Invoke-Element $run | Out-Null }
 }
 
