@@ -631,6 +631,13 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
     sections: [],
   },
   {
+    // 描画環境の自己診断は専用パネル（fw/self-test-design.md）。SettingsDialog で特別扱い。
+    id: "selftest",
+    labelKey: "settings.cat.selftest",
+    icon: "🧪",
+    sections: [],
+  },
+  {
     // 外部 AI は専用パネル。**設定を通常の設定（backend）に載せない**
     // ——H2 の平文行になり GET /api/settings が全件返すため。提供元・接続先・モデルは
     // Electron main の ai-providers.json、鍵は safeStorage（fw/ai-routing-design.md §4.1）。
