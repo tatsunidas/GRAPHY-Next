@@ -60,10 +60,14 @@ GRAPHY-Next は、Microsoft・Apple の有料の署名をまだ受けていま�
 
     ![このまま開く](images/install/mac-3-settings.png){ width="560" }
 
-4. 確認が出たら **このまま開く** を押します（Mac のパスワードを求められることがあります）。
-   次回からは普通に開けます。
+4. 確認が出たら、もう一度 **このまま開く** を押します。
 
     ![確認](images/install/mac-4-confirm.png){ width="560" }
+
+5. Mac の管理者のユーザ名とパスワードを入れて **OK** を押します（Apple の手順では、これで開けるようになります）。
+   次回からは普通に開けます。
+
+    ![パスワードの確認](images/install/mac-5-after-open.png){ width="560" }
 
 ### Linux
 
