@@ -13,6 +13,14 @@ $ErrorActionPreference = "Continue"
 New-Item -ItemType Directory -Force $Out | Out-Null
 Add-Type -AssemblyName System.Drawing, System.Windows.Forms, UIAutomationClient, UIAutomationTypes
 $AE = [System.Windows.Automation.AutomationElement]
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class Win32Mouse {
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
+}
+"@
 function Log($m) { $l = "[$(Get-Date -f HH:mm:ss)] $m"; Write-Host $l; Add-Content "$Out/log.txt" $l }
 
 # インストーラの窓（最上位の子で名前が「… Setup」）の中から、名前でボタンを探す。
@@ -27,7 +35,8 @@ function FindByName([string[]]$names) {
   if (-not $w) { return $null }
   $all = $w.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
   foreach ($n in $names) {
-    foreach ($e in $all) { if ($e.Current.Name -eq $n -and $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button) { return $e } }
+    # NSIS のボタンは UIA で Pane としか見えないことがあるので、種類では絞らない
+    foreach ($e in $all) { if ($e.Current.Name -eq $n) { return $e } }
   }
   return $null
 }
@@ -63,9 +72,15 @@ function Invoke-Element($e) {
   for ($i = 0; $i -lt 60 -and -not $e.Current.IsEnabled; $i++) { Start-Sleep 2 }
   try { $e.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); Log "clicked '$($e.Current.Name)'"; return $true }
   catch { Log "invoke '$($e.Current.Name)' failed: $_" }
-  # Invoke が無いときはフォーカスして Enter（既定のボタン）
-  try { $e.SetFocus(); Start-Sleep 1; [System.Windows.Forms.SendKeys]::SendWait("{ENTER}"); Log "enter on '$($e.Current.Name)'"; return $true }
-  catch { Log "enter '$($e.Current.Name)' failed: $_"; return $false }
+  # Invoke が無いときは、ボタンの中央をマウスでクリックする
+  try {
+    $b = $e.Current.BoundingRectangle
+    $x = [int]($b.X + $b.Width / 2); $y = [int]($b.Y + $b.Height / 2)
+    [Win32Mouse]::SetCursorPos($x, $y) | Out-Null; Start-Sleep -Milliseconds 300
+    [Win32Mouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 100
+    [Win32Mouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+    Log "mouse click on '$($e.Current.Name)' at $x,$y"; return $true
+  } catch { Log "mouse click '$($e.Current.Name)' failed: $_"; return $false }
 }
 function WaitFor([string[]]$names, [int]$sec) {
   $deadline = (Get-Date).AddSeconds($sec)
