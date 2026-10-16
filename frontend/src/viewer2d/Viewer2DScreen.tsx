@@ -72,6 +72,7 @@ import { WandDialog } from "./WandDialog";
 import { LevelSetsDialog } from "./LevelSetsDialog";
 import { HistogramDialog } from "./HistogramDialog";
 import { ResampleDialog } from "./ResampleDialog";
+import { StitchDialog } from "./StitchDialog";
 import { FourierDialog } from "./FourierDialog";
 import { SUVCalibrationDialog } from "../viewer/SUVCalibrationDialog";
 import { getSuv, subscribeSuvStore } from "../viewer/suvStore";
@@ -797,6 +798,7 @@ function TileGrid({
   // Histogram 解析ダイアログの対象（開いている時のみ non-null）。
   const [histo, setHisto] = useState<{ tile: Tile; z: number; c: number; t: number } | null>(null);
   const [resample, setResample] = useState<{ tile: Tile; c: number; t: number } | null>(null);
+  const [stitchOpen, setStitchOpen] = useState(false);
   const [fourier, setFourier] = useState<{ tileId: string; label: string } | null>(null);
   const [suvTarget, setSuvTarget] = useState<{ imageId: string; seriesUid: string } | null>(null);
   const [tagTarget, setTagTarget] = useState<Tile | null>(null);
@@ -1648,6 +1650,8 @@ function TileGrid({
         const dims = tileDimsRef.current.get(tile.id);
         setResample({ tile, c: dims?.c ?? 0, t: dims?.t ?? 0 });
       },
+      // 今の患者のタイル全部を候補に、つなぎ合わせダイアログを開く（2 未満でも開き、理由を出す）。
+      openStitch: () => setStitchOpen(true),
       // 対象（選択→無ければ先頭）タイルの**表示中スライス 1 枚**でフーリエ解析ダイアログを開く。
       openFourier: () => {
         const tid = resolveTargets()[0];
@@ -1980,6 +1984,17 @@ function TileGrid({
           c={resample.c}
           t={resample.t}
           onClose={() => setResample(null)}
+        />
+      )}
+      {stitchOpen && (
+        <StitchDialog
+          patientId={patient.patientId}
+          mode={mode}
+          candidates={patient.tiles.map((tl) => {
+            const d = tileDimsRef.current.get(tl.id);
+            return { id: tl.id, study: tl.study, series: tl.series, instances: tl.instances, c: d?.c ?? 0, t: d?.t ?? 0 };
+          })}
+          onClose={() => setStitchOpen(false)}
         />
       )}
       {suvTarget && (

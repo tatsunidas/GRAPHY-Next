@@ -330,6 +330,7 @@ export function Viewer2DMenuBar({
         { label: t("viewer.undo"), onClick: actions.undo },
         { label: t("viewer.redo"), onClick: actions.redo },
         { label: t("viewer2d.menu.resample"), onClick: () => actions.openResample(), testId: "menu-resample", separatorBefore: true },
+        { label: t("viewer2d.menu.stitch"), onClick: () => actions.openStitch(), testId: "menu-stitch" },
         {
           label: t("viewer2d.menu.sort"),
           submenu: [
