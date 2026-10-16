@@ -488,6 +488,7 @@ export function Viewer2D({
   thickSlab,
   refreshKey,
   pendingImages = false,
+  frameStack = false,
 }: {
   imageIds: string[];
   imageIndex: number;
@@ -532,6 +533,8 @@ export function Viewer2D({
    * 逆に、本当に画像が無いときに待ち続けるのも嘘なので、区別は呼び出し側が持つ。
    */
   pendingImages?: boolean;
+  /** スタックが時間方向のフレーム（XA・US のシネ）か。3D Wand を弾くのに使う（z を空間とみなせない）。 */
+  frameStack?: boolean;
 }) {
   const { t } = useI18n();
   // 合成スライス上でのアノテーション作成をブロックする判定を、setActiveTool から最新参照する。
@@ -550,6 +553,8 @@ export function Viewer2D({
   const swapPendingRef = useRef(0);
   // 識別子は再レンダで変わるが init を再実行しないよう ref で最新を持つ。
   const imageIdsRef = useRef(imageIds);
+  const frameStackRef = useRef(frameStack);
+  frameStackRef.current = frameStack;
   imageIdsRef.current = imageIds;
   const indexRef = useRef(imageIndex);
   indexRef.current = imageIndex;
@@ -2356,6 +2361,11 @@ export function Viewer2D({
         /* ツールグループ未準備時は無視 */
       }
     };
+    // 3D Wand は動画（フレームが時間方向）では使えない。時間を z とみなして塗ってしまうため弾く。
+    if (isWand3d && frameStackRef.current) {
+      emitToast(t("viewer2d.tool.wand3dVideo"));
+      return;
+    }
     // 3D Wand は規則的ボリュームでないシリーズでは動かない（source を volume 走査できない）。UI で弾く。
     if (isWand3d && !utilities.isValidVolume(imageIdsRef.current)) {
       emitToast(t("viewer2d.tool.needVolume"));

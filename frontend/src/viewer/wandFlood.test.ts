@@ -8,6 +8,7 @@ import {
   acceptLe,
   acceptRange,
   inRange,
+  makeValueReader,
 } from "./wandFlood";
 
 // ---- 旧実装（wandTool.ts の runWand 内ループ）の写し。floodRegion との一致確認用。 ----
@@ -240,5 +241,36 @@ describe("floodRegion: シード条件外・打ち切り・範囲の端", () => 
     const vals = [100 - eps, 100, 150, 200, 200 + eps];
     const r = floodRegion((_z, i) => vals[i], { cols: 5, rows: 1, depth: 1 }, { x: 2, y: 0, z: 0 }, acceptRange(100, 200), offsets2D(4), 100);
     expect(r.indices.sort()).toEqual([1, 2, 3]);
+  });
+});
+
+describe("makeValueReader（判定値）", () => {
+  it("1 チャネル: Rescale ありは px*slope+intercept", () => {
+    const r = makeValueReader(Int16Array.from([0, 1000, 2048]), 1, 1, -1024);
+    expect([r(0), r(1), r(2)]).toEqual([-1024, -24, 1024]);
+  });
+  it("1 チャネル: Rescale のタグなし（{1,0}）は保存値そのもの", () => {
+    const r = makeValueReader(Uint8Array.from([0, 37, 255]), 1, 1, 0);
+    expect([r(0), r(1), r(2)]).toEqual([0, 37, 255]);
+  });
+  it("1 チャネル: slope≠1（PET の SUV 合成など）も係数どおり", () => {
+    const r = makeValueReader(Uint16Array.from([100, 200]), 1, 0.01, 0);
+    expect(r(0)).toBeCloseTo(1);
+    expect(r(1)).toBeCloseTo(2);
+  });
+  it("カラー（RGB）は画素ごとの輝度（BT.601）で、校正は掛けない", () => {
+    // 画素0=純赤、画素1=純緑、画素2=白
+    const px = Uint8Array.from([255, 0, 0, 0, 255, 0, 255, 255, 255]);
+    const r = makeValueReader(px, 3, 2, 100);
+    expect(r(0)).toBeCloseTo(0.299 * 255);
+    expect(r(1)).toBeCloseTo(0.587 * 255);
+    expect(r(2)).toBeCloseTo(255);
+    // 負例: RGB を 1 チャネルとして読む（旧実装の px[i]）と画素1は G でなく R/G/B の並びの 2 番目＝0 になる
+    expect(px[1]).not.toBeCloseTo(r(1));
+  });
+  it("RGBA（4 チャネル）も輝度", () => {
+    const r = makeValueReader(Uint8Array.from([0, 0, 0, 255, 0, 0, 255, 255]), 4, 1, 0);
+    expect(r(0)).toBe(0);
+    expect(r(1)).toBeCloseTo(0.114 * 255);
   });
 });
