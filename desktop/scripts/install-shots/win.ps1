@@ -15,9 +15,12 @@ Add-Type -AssemblyName System.Drawing, System.Windows.Forms, UIAutomationClient,
 $AE = [System.Windows.Automation.AutomationElement]
 function Log($m) { $l = "[$(Get-Date -f HH:mm:ss)] $m"; Write-Host $l; Add-Content "$Out/log.txt" $l }
 
+# ボタンに限って探す（同じ名前の文字列やラベルに当たらないように）
 function FindByName([string[]]$names) {
+  $isButton = New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)
   foreach ($n in $names) {
-    $c = New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, $n)
+    $byName = New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, $n)
+    $c = New-Object System.Windows.Automation.AndCondition($byName, $isButton)
     $e = $AE::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $c)
     if ($e) { return $e }
   }
@@ -65,7 +68,10 @@ Copy-Item $Exe $dst -Force
 Set-Content -Path $dst -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3`r`nHostUrl=https://github.com/"
 Start-Process explorer.exe -ArgumentList "`"$dst`""
 
-$more = WaitFor @("More info", "詳細情報") 40
+# 「More info」はボタンではなくリンクなので、名前だけで探す
+$c = New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, "More info")
+$more = $null
+for ($i = 0; $i -lt 20 -and -not $more; $i++) { $more = $AE::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $c); if (-not $more) { Start-Sleep 2 } }
 if ($more) {
   Shot "win-1-smartscreen" $more
   Invoke-Element $more | Out-Null; Start-Sleep 3
@@ -96,6 +102,7 @@ if ($app) {
 } else { Log "app window not found" }
 
 $names = "win-1-smartscreen", "win-2-smartscreen-more", "win-3-options", "win-4-folder", "win-5-finish", "win-6-launched"
-$names | ForEach-Object { if (Test-Path "$Out/$_.png") { "$_ ok" } else { "$_ MISSING" } } | Tee-Object "$Out/report.txt"
+$names | ForEach-Object { if (Test-Path "$Out/$_.png") { "$_ ok" } else { "$_ MISSING" } } | Tee-Object -Variable report | Out-Host
+$report | Out-File -Encoding utf8 "$Out/report.txt"
 Get-Process | Where-Object { $_.ProcessName -eq "GRAPHY-Next" } | Stop-Process -Force -ErrorAction SilentlyContinue
 exit 0

@@ -12,7 +12,8 @@ LANG=ja_JP.UTF-8 LANGUAGE=ja graphy-next-desktop >"$OUT/app.txt" 2>&1 &
 PID=$!
 sleep 45
 if kill -0 "$PID" 2>/dev/null; then
-  import -window root "$OUT/linux-1-launched-deb.png" && log "shot linux-1-launched-deb"
+  # 背景の黒を切り落として、アプリの窓だけにする
+  import -window root png:- | convert - -trim +repage "$OUT/linux-1-launched-deb.png" && log "shot linux-1-launched-deb"
   kill "$PID"
 else
   log "app exited early"; tail -20 "$OUT/app.txt" | tee -a "$OUT/log.txt"

@@ -56,26 +56,38 @@ swift /tmp/scroll.swift $((X + W * 7 / 10)) $((Y + H / 2)) 2>&1 | tail -3 | tee 
 sleep 3
 shot mac-3-settings
 
-cat > /tmp/open-anyway.applescript <<'AS'
-tell application "System Events"
-  tell process "System Settings"
-    repeat with e in (entire contents of window 1)
-      try
-        if class of e is button and (name of e is "このまま開く" or name of e is "Open Anyway") then
-          click e
-          return "clicked"
-        end if
-      end try
-    end repeat
-    return "not found"
-  end tell
-end tell
-AS
-RES=$(osascript /tmp/open-anyway.applescript 2>&1); log "open anyway: $RES"
-if [ "$RES" = "clicked" ]; then
+# 「このまま開く」は SwiftUI の部品で AX から名前で引けないので、画面の文字を読んで（Vision の OCR）押す。
+screencapture -x /tmp/settings.png
+cat > /tmp/click-text.swift <<'SW'
+import AppKit
+import Vision
+// 使い方: swift click-text.swift <画像> <文字列>   画像の中の文字列を探し、その中心をクリックする（画像の座標＝画面のポイント）
+let args = CommandLine.arguments
+guard let img = NSImage(contentsOfFile: args[1]), let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else { print("no image"); exit(1) }
+let screen = NSScreen.main!.frame.size
+let req = VNRecognizeTextRequest()
+req.recognitionLanguages = ["ja-JP", "en-US"]
+req.recognitionLevel = .accurate
+try! VNImageRequestHandler(cgImage: cg).perform([req])
+for o in req.results ?? [] {
+  guard let t = o.topCandidates(1).first, t.string == args[2] else { continue }
+  let b = o.boundingBox  // 0〜1、原点は左下
+  let p = CGPoint(x: b.midX * screen.width, y: (1 - b.midY) * screen.height)
+  for type in [CGEventType.mouseMoved, .leftMouseDown, .leftMouseUp] {
+    CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap)
+    usleep(150000)
+  }
+  print("clicked at \(p)")
+  exit(0)
+}
+print("not found")
+SW
+RES=$(swift /tmp/click-text.swift /tmp/settings.png "このまま開く" 2>&1 | tail -1); log "open anyway: $RES"
+case "$RES" in clicked*)
   sleep 8
   shot mac-4-confirm
-fi
+  ;;
+esac
 
 for n in mac-1-dmg mac-2-blocked mac-3-settings mac-4-confirm; do
   [ -s "$OUT/$n.png" ] && echo "$n ok" || echo "$n MISSING"
