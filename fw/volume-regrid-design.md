@@ -98,7 +98,12 @@
 
 ### 現状と将来の検証（Future Work）
 
-- **現状**: 結合の部品（`volumeStitch.ts`）は純関数のみで、どの画面・保存経路からも呼ばれていない。検証は合成データ（1 次関数の真値から切り出した入力）の単体テストだけ。
+- **現状**: 2D ビューアの 画像 >「つなぎ合わせ…」（`StitchDialog.tsx`）から呼べる。開いている患者のタイルが候補で、チェックした入力ごとに `loadRegVolume` で読み、`checkStitchInputs` → `unionGrid` の結果（条件ごとの可否と理由、各入力の法線方向の区間、重なり・隙間の mm、出力の大きさ）を出す。違反が 1 つでもあれば [保存] は押せない。
+  - 保存: `stitchSlices(…, "mean")` → `concatSlices`（`stitchInputs.ts`）→ `saveDerivedVolume`。テンプレートの study・series は法線方向で手前の入力。`derivationDescription` に全入力の SeriesInstanceUID・格子・重なりの扱い（mean）を残す。
+  - 隙間の値の既定は全入力の有限な値の最小（`stitchBackground`）。欄で変えられる。
+  - SUV: 入力ごとに SUV の乗数（`suvStore`）がかかっていれば、結合の前にその入力の値をその乗数で割ってモダリティ値へ戻し、`suvScale: null` で保存する（入力ごとの乗数が混ざらない）。
+  - PET/NM の基準時刻は `scanTimeMs`（`extractSuvParams`）を一律に使う。DecayCorrection ごとの切り替えは未対応（段 3 の検討事項）。
+  - 検証は合成データの単体テスト（保存の符号化を通した量子化込みの誤差を含む）。画面を押す検査は未実施。
 - **将来の検証（未実施）**: 実際の全身 MRI（複数ステーションの Dixon など）で、結合した結果を目視と数値で確かめる。見るのは次の点。
   - ステーション間の継ぎ目の段差（信号強度の不連続、位置ずれ）。
   - 実データの IOP・IPP の丸め、ステーション間の撮像条件の差（B1・傾斜磁場の歪み）による重なりの食い違い。
