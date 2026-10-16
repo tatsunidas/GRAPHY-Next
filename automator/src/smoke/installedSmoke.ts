@@ -2,7 +2,11 @@
  * 配布物スモーク: できあがったインストーラを**実際に入れて**起動し、動画を 1 本開いて再生する。
  *
  * 実行:  cd automator && npx tsx src/smoke/installedSmoke.ts [--dist ../desktop/dist] [--out .results/installed-smoke] [--port 18190]
+ *          [--linux-package appimage|deb]
  *   Linux は表示が要るので CI では `xvfb-run -a` を付ける。
+ *   Linux の deb は `sudo apt-get install` で実際に入れ、`--no-sandbox` を付けずに起動する。Ubuntu 24.04 の
+ *   AppArmor（unprivileged userns の制限）の下でも Chromium の sandbox が動くことの検査を兼ねる（v0.4.0 の
+ *   AppImage はここで落ちた。2026-10-16）。
  *
  * <h3>なぜ要るのか</h3>
  * check-packaged.js は app.asar の**中身（静的）**しか見ない。次の事故は静的検査も開発版の automator も素通りした
@@ -14,7 +18,7 @@
  * 「インストール → `GRAPHY_DEV` 無しで起動」を持つ。開いた後の操作は videoIn2dViewerCheck と同じ手順。
  *
  * <h3>確かめること</h3>
- *   1. インストーラを無人で入れられる（Windows: NSIS /S、macOS: dmg の .app、Linux: AppImage 展開）
+ *   1. インストーラを無人で入れられる（Windows: NSIS /S、macOS: dmg の .app、Linux: AppImage 展開 / deb を apt で）
  *   2. 製品版が起動して、メイン画面が出る・同梱 backend が /api/status に 200 を返す
  *   3. 画面に **CSP 違反・未捕捉エラーが出ていない**
  *   4. **同梱の ffmpeg が動く**（検査用動画の合成と、非 H.264 動画のトランスコード取込に使う）
@@ -45,6 +49,7 @@ function arg(name: string, fallback: string): string {
 const DIST = path.resolve(arg("dist", path.join(AUTOMATOR_ROOT, "..", "desktop", "dist")));
 const OUT = path.resolve(arg("out", path.join(AUTOMATOR_ROOT, ".results", "installed-smoke")));
 const PORT = Number(arg("port", "18190"));
+const LINUX_PACKAGE = arg("linux-package", "appimage");
 
 const failures: string[] = [];
 let passed = 0;
@@ -105,6 +110,14 @@ function install(root: string): Installed {
     } finally {
       spawnSync("hdiutil", ["detach", mnt, "-force"], { stdio: "ignore" });
     }
+  }
+  if (LINUX_PACKAGE === "deb") {
+    const deb = findInstaller(/\.deb$/i);
+    console.log(`[install] deb を apt で入れる: ${path.basename(deb)}`);
+    execFileSync("sudo", ["apt-get", "install", "-y", deb], { stdio: "inherit", timeout: 300_000 });
+    // 利用者と同じく sandbox を有効にしたまま起動する（--no-sandbox を付けない）。
+    const dir = "/opt/GRAPHY-Next";
+    return { exe: path.join(dir, "graphy-next-desktop"), resources: path.join(dir, "resources"), args: [] };
   }
   const image = findInstaller(/\.AppImage$/i);
   fs.chmodSync(image, 0o755);
@@ -193,7 +206,8 @@ async function main(): Promise<void> {
   const ffmpeg = findFile(path.join(inst.resources, "ffmpeg"), ["ffmpeg", "ffmpeg.exe"]);
   check(!!ffmpeg, "[4] 同梱の ffmpeg がインストール先にある", { ffmpeg });
   if (!ffmpeg) return;
-  if (process.platform !== "win32") fs.chmodSync(ffmpeg, 0o755);
+  // deb の /opt は root 所有で chmod できないので、実行ビットが無いときだけ付ける。
+  if (process.platform !== "win32" && (fs.statSync(ffmpeg).mode & 0o111) === 0) fs.chmodSync(ffmpeg, 0o755);
   const media = path.join(work, "media");
   fs.mkdirSync(media, { recursive: true });
   const synth = (out: string, codec: string[]): void => {

@@ -60,14 +60,19 @@
   ① `codesign --verify --deep --strict` ② app 全体の封（`Sealed Resources`）③ `syspolicy_check` に「Known Malware」「revoked」が無いこと、を確かめる。
   落ちたら Mac 版は公開されない（2026-10-16〜）
 - ワークフローは続けて**配布物スモーク**（`automator/src/smoke/installedSmoke.ts`・2026-10-11〜）を各 OS で走らせる。
-  できたインストーラを**実際に入れ**（Windows: NSIS `/S`、macOS: dmg の .app、Linux: AppImage 展開）、`GRAPHY_DEV` 無しの**製品版**として起動し、
+  できたインストーラを**実際に入れ**（Windows: NSIS `/S`、macOS: dmg の .app、Linux: AppImage 展開と、**.deb を apt で入れて `--no-sandbox` なしで起動**）、`GRAPHY_DEV` 無しの**製品版**として起動し、
   ① メイン画面が開く・同梱 backend が `/api/status` に 200 ② 画面に CSP 違反・未捕捉エラーが無い
   ③ **同梱 ffmpeg が動く**（検査用動画の合成と、非 H.264 動画のトランスコード取込）
   ④ 動画を取り込み、2D ビューアで開き、**再生ボタンを押すとフレームが進み、もう一度押すと止まる**、までを確かめる。
   落ちた OS のインストーラは公開されない。失敗時・成功時とも画面のスクリーンショットが Artifact（`installed-smoke-<OS>`）に残る。
 - **タグを切る前の予行演習**: `gh workflow run release.yml --ref <ブランチ>`（`workflow_dispatch`）。Release は作らず、各 OS のインストーラをビルドしてスモークまで回し、
   インストーラは Artifact（`installer-<OS>`・3 日）に置く。**同じ版番号の焼き直しは禁止**なので、版を出す前に一度回しておくと、落ちて版が 1 つ飛ぶのを避けられる。
+- ワークフローは最後に **install-shots** ジョブで、配布物をブラウザで落とした状態から**インストール時の画面**（SmartScreen・
+  macOS の「開いていません」と「このまま開く」・.deb の起動）を撮り、Artifact（`install-shots-<OS>`・30 日）に置く（2026-10-16〜）。
+  撮れなくてもリリースは止めない。`report.txt` に撮れなかった画面が書いてある
 - [ ] ワークフローが全部緑
+- [ ] 公開後、`bash scripts/fetch-install-shots.sh <run-id>` で画面を `docs/images/install/` に取り込み、**目で見てから** PR にする
+  （画面が変わっていなければ取り込まなくてよい。`docs/install.md` がこの画像を載せている）
 
 ## 3. 公開する前に、下書きのインストーラを実機で（**人が実機で**・これを飛ばさない）
 

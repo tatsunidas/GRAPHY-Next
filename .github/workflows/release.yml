@@ -291,12 +291,24 @@ jobs:
           else
             npx tsx src/smoke/installedSmoke.ts --dist ../desktop/dist
           fi
+      # .deb は apt で実際に入れ、--no-sandbox なしで起動する。Ubuntu 24.04 の AppArmor の下で Chromium の
+      # sandbox が動くこと（desktop/build/linux/after-install.sh のプロファイル）の検査を兼ねる。
+      - name: Smoke test (.deb を apt で入れる → 起動 → 動画再生)
+        if: runner.os == 'Linux'
+        timeout-minutes: 20
+        shell: bash
+        run: |
+          cd automator
+          xvfb-run -a --server-args="-screen 0 1600x1000x24" npx tsx src/smoke/installedSmoke.ts --dist ../desktop/dist \
+            --linux-package deb --out .results/installed-smoke-deb --port 18191
       - name: Upload smoke screenshots & logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: installed-smoke-${{ matrix.os }}
-          path: automator/.results/installed-smoke
+          path: |
+            automator/.results/installed-smoke
+            automator/.results/installed-smoke-deb
           retention-days: 14
           if-no-files-found: ignore
       - name: Upload installers (予行演習は Artifact へ)
@@ -306,6 +318,7 @@ jobs:
           name: installer-${{ matrix.os }}
           path: |
             desktop/dist/*.AppImage
+            desktop/dist/*.deb
             desktop/dist/*.exe
             desktop/dist/*.dmg
           retention-days: 3
@@ -316,6 +329,56 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           shopt -s nullglob
-          files=(desktop/dist/*.AppImage desktop/dist/*.exe desktop/dist/*.dmg)
+          files=(desktop/dist/*.AppImage desktop/dist/*.deb desktop/dist/*.exe desktop/dist/*.dmg)
           (( ${#files[@]} )) || { echo "no installer in desktop/dist"; exit 1; }
           gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber "${files[@]}"
+
+  # インストール手順書（docs/install.md）用の画面を、ブラウザで落とした状態から撮る。
+  # 撮れなくてもリリースは止めない。取り込みは scripts/fetch-install-shots.sh <run-id>（fw/release-checklist.md）。
+  install-shots:
+    name: Install shots (${{ matrix.os }})
+    needs: desktop
+    if: ${{ !cancelled() && needs.desktop.result == 'success' }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get installer (予行演習は Artifact から)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/download-artifact@v4
+        with:
+          name: installer-${{ matrix.os }}
+          path: in
+      - name: Get installer (下書きリリースから)
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "$RUNNER_OS" in macOS) pat='*.dmg';; Windows) pat='*.exe';; Linux) pat='*.deb';; esac
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" -p "$pat" -D in
+      - name: Capture (macOS)
+        if: runner.os == 'macOS'
+        run: bash desktop/scripts/install-shots/mac.sh "$(ls in/*.dmg | head -1)" shots
+      - name: Capture (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $exe = (Get-ChildItem in\*.exe | Where-Object { $_.Name -notmatch 'uninstall' } | Select-Object -First 1).FullName
+          .\desktop\scripts\install-shots\win.ps1 -Exe $exe -Out (Join-Path $PWD 'shots')
+      - name: Capture (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb imagemagick fonts-noto-cjk >/dev/null
+          xvfb-run -a --server-args="-screen 0 1600x1000x24" bash desktop/scripts/install-shots/linux.sh "$(ls in/*.deb | head -1)" shots
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: install-shots-${{ matrix.os }}
+          path: shots/
+          retention-days: 30

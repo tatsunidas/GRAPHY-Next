@@ -64,7 +64,7 @@ Web 版は画像を自分では保管せず、dcm4chee などの PACS にある�
 |---|---|
 | Windows | 10 以降 |
 | macOS | Apple Silicon / Intel |
-| Linux | AppImage が動作するディストリビューション |
+| Linux | Ubuntu / Debian 系（.deb）、その他は AppImage が動作するディストリビューション |
 
 Web 版をご自分で立ち上げる場合は JDK 21 が必要です。詳しくは
 [インストールと起動](install.md)をご覧ください。
