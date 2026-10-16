@@ -1399,7 +1399,7 @@ export function SeriesViewer({
           </div>
         </div>
       ) : (
-        <Viewer2D imageIds={displayImageIds} imageIndex={zc} overlays={overlays} fill={fillHeight} showControls={showControls} viewSyncEnabled={syncOn} referenceLinesEnabled={referenceLinesEnabled} referenceLabel={referenceLabel} commandKey={commandKey} roiContext={roiContext} renderOverlay={renderFusionOverlay} thickSlab={effectiveThick} refreshKey={calibVersion} pendingImages={!xaReady} />
+        <Viewer2D imageIds={displayImageIds} imageIndex={zc} overlays={overlays} fill={fillHeight} showControls={showControls} viewSyncEnabled={syncOn} referenceLinesEnabled={referenceLinesEnabled} referenceLabel={referenceLabel} commandKey={commandKey} roiContext={roiContext} renderOverlay={renderFusionOverlay} thickSlab={effectiveThick} refreshKey={calibVersion} pendingImages={!xaReady} frameStack={!spatialStack} />
       )}
 
       {showControls && (

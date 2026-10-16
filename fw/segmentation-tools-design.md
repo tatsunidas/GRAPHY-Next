@@ -245,10 +245,30 @@ GRAPHY `Image > Segmentation`（New/Import ROIs/Save SEG/Import SEG/Stop）は**
 ### 6.1 Wand の判定方式（`viewer/wandFlood.ts`）
 
 フラッドの芯は純関数 `floodRegion(read, dims, seed, accept, offsets, maxVoxels)`（Cornerstone に依存しない）。
-方式は判定関数と `read`（判定に使う値）の組で決まる。
+方式は判定関数で決まり、**判定に使う値（判定値）はどの方式も同じ**（`makeValueReader`、2026-10-16 に作り直し）。
 
-| 方式 | 判定 | 判定に使う値 |
+| 画像 | 判定値 | ダイアログの表示 |
 |---|---|---|
+| Rescale あり（CT・PET・一部の MR など。既定） | `px*slope+intercept`（`getModalityCalibration`、スライスごとの係数。SUV 校正済みなら SUV） | 「Rescale 適用値（HU 等）」。単位は `resolveValueUnit` |
+| Rescale のタグなし（CR/DX・XA・US・多くの MR） | 保存値そのもの（slope=1・intercept=0。校正が要らないだけで、使えないわけではない） | 「画素値（Rescale なし）」 |
+| カラー（RGB 等） | 輝度（ITU-R BT.601。`readModalitySlice` と同じ式） | 「輝度（カラー画像）」 |
+
+| 方式 | 判定 |
+|---|---|
+| 許容差（既定） | \|v − シード値\| ≤ しきい値 |
+| 以上 / 以下 / 範囲 | v ≥ t / v ≤ t / lo ≤ v ≤ hi（**両端を含む**） |
+
+- 4 つの方式は**どの画像でも選べる**。上限・下限は数値入力とスライダーの両方で設定できる（スライダーの幅はシードスライスの判定値の最小〜最大。数値入力は幅の外も受け付ける）。
+- 旧版は許容差を生値、他を校正値で判定し、Rescale のタグが無い画像を「未校正」として以上・以下・範囲を止めていた（「This image has no calibrated values」）。タグが無いのは校正が要らないだけなので誤りだった。CT（slope=1）では件数は旧版と一致する（HCC_001 で許容差 50・範囲 40〜200・以上で確認）。
+- カラー画像は旧版では RGB の並びを 1 チャネルとして読んでいた。輝度で読む。
+- 幾何（IPP/IOP）が無い画像（CR・US・XA）では、クリック位置の変換が NaN になり Wand が動かなかった。`roiPointsPx`（`viewer/roiRead.ts`）の「world＝画素×画素間隔」の換算へ落とす。
+- 絶対値の方式の初期しきい値は「シードの判定値」（シードは必ず条件を満たす）。許容差の初期値は判定値の値域の 2%（有効数字 3 桁）。
+- シード自身が条件を満たさない（下限 > 上限を含む）ときは何も塗らず `seedRejected` を立てて理由を表示する。
+- 上限 4,000,000 ボクセルに達し、まだ未処理の候補が残るときは `truncated` を立て、結果は残したまま「上限で打ち切った」と表示する。
+- 塗ったボクセル数をダイアログに表示する。
+- **動画（フレームが時間方向に並ぶスタック。XA シネなど、軸が `frame` / `temporal`）では 3D Wand を使えない**。時間を z とみなして塗ってしまうため、`Viewer2D` の `frameStack` で弾いてトーストを出す。2D Wand（1 フレーム内）は使える。US のマルチフレームは軸が `slice` のまま来るが、規則的なボリュームでないため従来の `isValidVolume` の判定で弾かれる。
+
+---|---|---|
 | 許容差（既定） | \|v − シード値\| ≤ しきい値 | **生値**（`getPixelData()` のまま。従来どおり） |
 | 以上 / 以下 / 範囲 | v ≥ t / v ≤ t / lo ≤ v ≤ hi（**両端を含む**） | **校正値**（`getModalityCalibration` の `px*scale+offset`、スライスごとの係数。SUV 校正済みなら SUV） |
 

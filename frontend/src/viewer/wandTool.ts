@@ -6,20 +6,21 @@
  * Wand（対話型リージョングロー）ツール。GRAPHY の 2D/3D Wand 相当を、ダイアログ駆動で改良。
  *
  * - クリック点を **シード（制御点）** として記憶（`wandStore`）。
- * - Threshold（シード輝度からの許容差）・Connectivity をダイアログで変えると、同じシードから
+ * - 方式（許容差・以上・以下・範囲。どれも同じ判定値で判定）・Connectivity をダイアログで変えると、同じシードから
  *   再フラッドして**結果を置換（追加ではなく Update）**する。
  * - 2D=シード面内のみ、3D=ボリューム全体。書込先は**アクティブ (mask, segment)**。
  *
  * 置換のため、前回書き込んだボクセルの**元値**を保持し、再実行時にまず復元してから新結果を書く。
  */
-import { getEnabledElement, cache, imageLoader } from "@cornerstonejs/core";
+import { getEnabledElement, cache, imageLoader, metaData } from "@cornerstonejs/core";
 import { BaseTool, segmentation as csSeg } from "@cornerstonejs/tools";
 import { getSegEditTarget } from "./roiMaskStore";
 import { ensureStackSegmentation } from "./segmentation";
-import { openWandSession, updateWandSession, clearWandSession, getWandSession, type WandSession, type WandMode } from "./wandStore";
+import { openWandSession, updateWandSession, clearWandSession, getWandSession, type WandSession, type WandMode, type WandValueKind } from "./wandStore";
 import { worldToImageCoords, imageToWorldCoords } from "./imageCoords";
 import { getModalityCalibration, resolveValueUnit } from "./pixelCalibration";
-import { floodRegion, offsets2D, offsets3D, acceptTolerance, acceptGe, acceptLe, acceptRange } from "./wandFlood";
+import { roiPointsPx } from "./roiRead";
+import { floodRegion, offsets2D, offsets3D, acceptTolerance, acceptGe, acceptLe, acceptRange, makeValueReader } from "./wandFlood";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
@@ -52,6 +53,20 @@ function restoreTracked(labelmapIds: string[], cols: number, rows: number): Set<
   return slices;
 }
 
+/** 画像 1 枚の判定値の読み手（{@link makeValueReader}）。係数は `getModalityCalibration` の唯一の入口から取る。 */
+function valueReaderOf(img: AnyObj, imageId: string): (i: number) => number {
+  const px = img.getPixelData() as ArrayLike<number>;
+  const n = Number(img.columns ?? img.width) * Number(img.rows ?? img.height);
+  const comps = Math.max(1, Math.round(px.length / n));
+  const cal = getModalityCalibration(img, imageId);
+  return makeValueReader(px, comps, cal.scale, cal.offset);
+}
+
+/** 有効数字 3 桁に丸める（許容差の初期値の表示用）。 */
+function roundSig(v: number): number {
+  return v > 0 ? Number(v.toPrecision(3)) : 0;
+}
+
 /** シードから現在の Threshold/Connectivity でフラッドし、結果を書き込む（前回結果は置換）。 */
 export function runWand(s: WandSession): void {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -70,41 +85,23 @@ export function runWand(s: WandSession): void {
     vm.setAtIndex(idx, segIndex);
     modified.add(z);
   };
-  const pxOf = (z: number): ArrayLike<number> | null => {
-    const img = cache.getImage(sourceImageIds[z]) as AnyObj | undefined;
-    return img ? (img.getPixelData() as ArrayLike<number>) : null;
-  };
-
-  // 判定に使う値: 許容差＝生値（従来どおり）／以上・以下・範囲＝校正値（スライスごとの係数。規則 2）。
+  // 判定値（どの方式も同じ）。係数はスライスごと（Rescale が無ければ保存値、カラーは輝度）。
   const method = s.method ?? "tolerance";
   const depth = sourceImageIds.length;
-  const pxCache: (ArrayLike<number> | null | undefined)[] = new Array(depth).fill(undefined);
-  const getPx = (z: number) => (pxCache[z] === undefined ? (pxCache[z] = pxOf(z)) : pxCache[z]) as ArrayLike<number> | null;
-  const calCache: ({ scale: number; offset: number } | undefined)[] = new Array(depth).fill(undefined);
-  const getCal = (z: number) => {
-    let c = calCache[z];
-    if (!c) {
+  const readerCache: (((i: number) => number) | null | undefined)[] = new Array(depth).fill(undefined);
+  const readerAt = (z: number) => {
+    if (readerCache[z] === undefined) {
       const img = cache.getImage(sourceImageIds[z]) as AnyObj | undefined;
-      const m = getModalityCalibration(img, sourceImageIds[z]);
-      c = calCache[z] = { scale: m.scale, offset: m.offset };
+      readerCache[z] = img ? valueReaderOf(img, sourceImageIds[z]) : null;
     }
-    return c;
+    return readerCache[z];
   };
-  const readOf = (zMap: (z: number) => number) =>
-    method === "tolerance"
-      ? (z: number, i: number): number | null => {
-          const px = getPx(zMap(z));
-          return px ? Number(px[i]) : null;
-        }
-      : (z: number, i: number): number | null => {
-          const zz = zMap(z);
-          const px = getPx(zz);
-          if (!px) return null;
-          const c = getCal(zz);
-          return px[i] * c.scale + c.offset;
-        };
-  const lower = s.lower ?? s.seedCal ?? 0;
-  const upper = s.upper ?? s.seedCal ?? 0;
+  const readOf = (zMap: (z: number) => number) => (z: number, i: number): number | null => {
+    const r = readerAt(zMap(z));
+    return r ? r(i) : null;
+  };
+  const lower = s.lower ?? seedValue;
+  const upper = s.upper ?? seedValue;
   const accept =
     method === "ge" ? acceptGe(lower)
     : method === "le" ? acceptLe(upper)
@@ -174,18 +171,28 @@ async function startWand(viewport: AnyObj, world: [number, number, number], mode
   const cols = Number(src.columns ?? src.width);
   const rows = Number(src.rows ?? src.height);
   if (!cols || !rows) return;
-  const ic = worldToImageCoords(refImageId, world) as [number, number] | undefined;
+  // 幾何（IPP/IOP）が無い画像（CR・US・XA など）は変換が NaN になるので、roiPointsPx の換算へ落とす。
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const plane: any = metaData.get("imagePlaneModule", refImageId) ?? {};
+  const ic = roiPointsPx(
+    [world],
+    (w) => worldToImageCoords(refImageId, w as [number, number, number]) as [number, number] | undefined,
+    plane.columnPixelSpacing,
+    plane.rowPixelSpacing,
+  )[0];
   if (!ic) return;
   const sx = Math.round(ic[0]);
   const sy = Math.round(ic[1]);
   if (sx < 0 || sy < 0 || sx >= cols || sy >= rows) return;
-  const seedValue = Number(px[sy * cols + sx]);
+  const comps = Math.max(1, Math.round(px.length / (cols * rows)));
+  const read = valueReaderOf(src, refImageId);
+  const seedValue = read(sy * cols + sx);
 
-  // シードスライスの輝度 min/max（スライダー範囲）。
+  // シードスライスの判定値の min/max（スライダー範囲）。
   let rangeMin = seedValue;
   let rangeMax = seedValue;
   for (let i = 0; i < cols * rows; i++) {
-    const v = px[i];
+    const v = read(i);
     if (v < rangeMin) rangeMin = v;
     if (v > rangeMax) rangeMax = v;
   }
@@ -195,16 +202,14 @@ async function startWand(viewport: AnyObj, world: [number, number, number], mode
     await Promise.all(stack.map((id) => imageLoader.loadAndCacheImage(id).catch(() => null)));
   }
 
-  // 校正値（以上/以下/範囲方式用）。シードスライスの係数で、シード値・値域・単位・LPS 位置を作る。
-  const cal = getModalityCalibration(src, refImageId);
-  const unit = resolveValueUnit(refImageId);
-  const seedCal = seedValue * cal.scale + cal.offset;
-  const c0 = rangeMin * cal.scale + cal.offset;
-  const c1 = rangeMax * cal.scale + cal.offset;
-  const seedWorld = imageToWorldCoords(refImageId, [sx + 0.5, sy + 0.5]) as [number, number, number];
+  const calUnit = getModalityCalibration(src, refImageId).unit;
+  const valueKind: WandValueKind = comps >= 3 ? "luminance" : calUnit === "raw" ? "stored" : "calibrated";
+  const unit = valueKind === "calibrated" ? resolveValueUnit(refImageId) : "";
+  const w = imageToWorldCoords(refImageId, [sx + 0.5, sy + 0.5]) as [number, number, number];
+  const seedWorld = w.every(Number.isFinite) ? w : undefined; // 幾何が無ければ LPS は出さない
 
   const prev = getWandSession();
-  const threshold = prev ? prev.threshold : Math.max(1, Math.round((rangeMax - rangeMin) * 0.02));
+  const threshold = prev ? prev.threshold : roundSig((rangeMax - rangeMin) * 0.02);
   const connectivity = prev && prev.mode === mode ? prev.connectivity : mode === "2d" ? 8 : 6;
 
   const session: WandSession = {
@@ -225,13 +230,11 @@ async function startWand(viewport: AnyObj, world: [number, number, number], mode
     rangeMax,
     // 方式は再シードでも保つ。新規セッションは「許容差」（従来の既定）。
     method: prev?.method ?? "tolerance",
-    // 絶対値の方式の初期しきい値＝シードの校正値（シードは必ず条件を満たす）。再シードでは前回値を保つ。
-    lower: prev?.lower ?? seedCal,
-    upper: prev?.upper ?? (prev?.method === "range" ? Math.max(Math.max(c0, c1), seedCal) : seedCal),
+    // 絶対値の方式の初期しきい値＝シードの判定値（シードは必ず条件を満たす）。再シードでは前回値を保つ。
+    lower: prev?.lower ?? seedValue,
+    upper: prev?.upper ?? (prev?.method === "range" ? rangeMax : seedValue),
     unit,
-    seedCal,
-    calMin: Math.min(c0, c1),
-    calMax: Math.max(c0, c1),
+    valueKind,
     seedWorld,
   };
   // 再シード時は前回結果を消してから新シードでフラッド（tracked は runWand が復元）。

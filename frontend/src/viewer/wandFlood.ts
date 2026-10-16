@@ -5,7 +5,7 @@
 /**
  * Wand のフラッド（シードからの連結領域）の芯。純関数で、Cornerstone に依存しない。
  *
- * - 判定に使う値は `read(z, idx)` が返す（許容差＝生値、以上/以下/範囲＝校正値。呼び出し側が選ぶ）。
+ * - 判定に使う値は `read(z, idx)` が返す。どの方式も同じ「判定値」で判定する（{@link makeValueReader}）。
  * - 2D は `depth=1`・`seed.z=0` で呼び、`read` 側でシードスライスへ写す。返る index は `z*cols*rows + y*cols + x`。
  * - 上限に達して未処理の「条件を満たす候補」が残るときだけ `truncated` を立てる。
  */
@@ -52,7 +52,22 @@ export function offsets3D(conn: number): [number, number, number][] {
   return all.map((a) => a.o);
 }
 
-/** 許容差（従来の判定そのまま）。 */
+/**
+ * 1 スライスの画素配列から「判定値」を読む関数を作る。
+ * - 1 チャネル: `px*scale+offset`（`getModalityCalibration` の係数。Rescale のタグが無ければ {1,0} で保存値そのもの）。
+ * - 3 チャネル以上（カラー）: 輝度（ITU-R BT.601。`readModalitySlice` と同じ式）。校正は掛けない。
+ */
+export function makeValueReader(px: ArrayLike<number>, comps: number, scale: number, offset: number): (i: number) => number {
+  if (comps >= 3) {
+    return (i) => {
+      const o = i * comps;
+      return 0.299 * px[o] + 0.587 * px[o + 1] + 0.114 * px[o + 2];
+    };
+  }
+  return (i) => px[i] * scale + offset;
+}
+
+/** 許容差（|v − シード値| ≤ th）。 */
 export const acceptTolerance = (seed: number, th: number) => (v: number) => Math.abs(v - seed) <= th;
 /** v ≥ t（t を含む）。 */
 export const acceptGe = (t: number) => (v: number) => v >= t;
