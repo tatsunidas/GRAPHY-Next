@@ -9,6 +9,7 @@ import { OverlayConfigPanel } from "./OverlayConfigPanel";
 import { RemoteAePanel } from "./RemoteAePanel";
 import { AboutPanel } from "./AboutPanel";
 import { MonitorQcPanel } from "./MonitorQcPanel";
+import { SelfTestPanel } from "./SelfTestPanel";
 import { PluginManagerPanel } from "./PluginManagerPanel";
 import { AiPanel } from "./AiPanel";
 import { ComputePanel } from "./ComputePanel";
@@ -119,7 +120,9 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
               <RemoteAePanel />
             ) : category.id === "monitor" ? (
               <MonitorQcPanel />
-            ) : category.id === "importWatch" ? (
+            ) : category.id === "selftest" ? (
+              <SelfTestPanel />
+            ) :category.id === "importWatch" ? (
               <ImportWatchPanel />
             ) : category.id === "ai" ? (
               // 🔴 **AI の設定は backend の Settings に載せない。** 提供元・接続先・モデルは
