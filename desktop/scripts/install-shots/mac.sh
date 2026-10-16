@@ -17,8 +17,12 @@ ax() { osascript -e "$1" 2>&1 | tee -a "$OUT/log.txt"; }
 defaults write -g AppleLanguages -array ja-JP en-US
 defaults write -g AppleLocale ja_JP
 killall cfprefsd 2>/dev/null; sleep 3
-for p in Finder SystemUIServer CoreServicesUIAgent; do killall "$p" 2>/dev/null; done
-sleep 6
+for p in Finder SystemUIServer; do killall "$p" 2>/dev/null; done
+sleep 3
+# 警告を出す側（CoreServicesUIAgent）は、設定が読み直された後に起動し直さないと英語のまま
+killall CoreServicesUIAgent 2>/dev/null
+launchctl kickstart -k "gui/$(id -u)/com.apple.coreservices.uiagent" >/dev/null 2>&1
+sleep 5
 
 cp "$DMG" /tmp/install-shots.dmg
 xattr -w com.apple.quarantine "0081;$(printf %x "$(date +%s)");Safari;" /tmp/install-shots.dmg

@@ -15,16 +15,19 @@ Add-Type -AssemblyName System.Drawing, System.Windows.Forms, UIAutomationClient,
 $AE = [System.Windows.Automation.AutomationElement]
 function Log($m) { $l = "[$(Get-Date -f HH:mm:ss)] $m"; Write-Host $l; Add-Content "$Out/log.txt" $l }
 
-# ボタンに限って探す（同じ名前の文字列やラベルに当たらないように）
+# 押せる（Invoke できる）要素に限って、名前で探す（同じ名前の文字列やラベルに当たらないように）
 function FindByName([string[]]$names) {
-  $isButton = New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)
+  $invokable = New-Object System.Windows.Automation.PropertyCondition($AE::IsInvokePatternAvailableProperty, $true)
+  $all = $AE::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, $invokable)
   foreach ($n in $names) {
-    $byName = New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, $n)
-    $c = New-Object System.Windows.Automation.AndCondition($byName, $isButton)
-    $e = $AE::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $c)
-    if ($e) { return $e }
+    foreach ($e in $all) { if ($e.Current.Name -eq $n) { return $e } }
   }
   return $null
+}
+function DumpButtons {
+  $invokable = New-Object System.Windows.Automation.PropertyCondition($AE::IsInvokePatternAvailableProperty, $true)
+  $names = $AE::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, $invokable) | ForEach-Object { "'$($_.Current.Name)'" }
+  Log "invokable: $($names -join ', ')"
 }
 # 要素を含む最上位の窓
 function TopWindowOf($e) {
@@ -56,7 +59,7 @@ function Invoke-Element($e) {
 function WaitFor([string[]]$names, [int]$sec) {
   $deadline = (Get-Date).AddSeconds($sec)
   while ((Get-Date) -lt $deadline) { $e = FindByName $names; if ($e) { return $e }; Start-Sleep 2 }
-  Log "not found: $($names -join ', ')"; return $null
+  Log "not found: $($names -join ', ')"; DumpButtons; return $null
 }
 
 # ランナーの端末などを最小化しておく
