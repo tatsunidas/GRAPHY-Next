@@ -16,6 +16,14 @@
 > backend の動画（`http://127.0.0.1`）も `blob:` も止められていた。**dev（Vite serve）は CSP を注入しないので開発版は動く**。
 > portable 版は 2026-07-31 に同じ理由で直していたが、本体の設定に入っていなかった（v0.3.4 で修正）。
 >
+> **2026-10-16 の事故（Mac）**: v0.4.0 の Mac 版（arm64 の dmg）を開くと「**マルウェアがブロックされました**」と出て開けなかった。
+> electron-builder が Mac 版を署名しておらず、Electron に元から付いている簡易署名だけ（app 全体の封なし。
+> `codesign --verify --deep --strict` が不合格）で、macOS（`syspolicy_check`）は「失効」「既知のマルウェア」と判定した。
+> **CI の実機検査（スモーク）は隔離の印（`com.apple.quarantine`）が付かないので Gatekeeper を通らず、緑のままだった**。
+> app 全体を簡易署名で署名し直した dmg に、ユーザーの判断で v0.4.0 の dmg を置き直した（版番号は同じ。例外）。
+> 以後は `desktop/scripts/afterPack.js` がビルドの中で署名し、`desktop/scripts/check-mac-gatekeeper.sh` が公開前に判定を見る。
+> Apple の開発者証明書での署名・公証はまだ無いので、利用者には初回に「確認できません」が出る（「このまま開く」で開ける）。
+>
 > 🔑 **製品版にしか無いもの**（開発版・CI では確かめられない）: `build.files` で絞ったファイル・画面の CSP・
 > file:// のオリジン・同梱の JRE / ffmpeg / dcm4che。リリース時の検査（`desktop/scripts/check-packaged.js`）は
 > ファイルと CSP を見るが、**最後は実機で入れて、動画を 1 本開くまで確かめる**。
@@ -47,6 +55,10 @@
 - ワークフローは各 OS で `npm run dist` の**直後・公開の前**に `desktop/scripts/check-packaged.js` を走らせ、
   **できたインストーラの `app.asar` に起動に要るファイルが全部あるか・画面の CSP に動画・接続・プラグインの許可があるか**を確かめる。足りなければその OS は公開されない。
   1 つの OS でも落ちたら公開しない（直して次の版で出す）
+- Mac 版は、`npm run dist` の中（`desktop/scripts/afterPack.js`・dmg を作る前）で **app 全体を簡易署名**する。
+  続けてワークフローが `desktop/scripts/check-mac-gatekeeper.sh` を走らせ、dmg を**ブラウザで落とした状態（隔離の印付き）**にして
+  ① `codesign --verify --deep --strict` ② app 全体の封（`Sealed Resources`）③ `syspolicy_check` に「Known Malware」「revoked」が無いこと、を確かめる。
+  落ちたら Mac 版は公開されない（2026-10-16〜）
 - ワークフローは続けて**配布物スモーク**（`automator/src/smoke/installedSmoke.ts`・2026-10-11〜）を各 OS で走らせる。
   できたインストーラを**実際に入れ**（Windows: NSIS `/S`、macOS: dmg の .app、Linux: AppImage 展開）、`GRAPHY_DEV` 無しの**製品版**として起動し、
   ① メイン画面が開く・同梱 backend が `/api/status` に 200 ② 画面に CSP 違反・未捕捉エラーが無い

@@ -260,6 +260,14 @@ jobs:
         working-directory: desktop
         shell: bash
         run: node scripts/check-packaged.js dist
+      # 🚨 **Mac 版は、ブラウザで落とした状態（隔離の印付き）にして署名と macOS の判定を確かめる。** 不合格ならこの
+      #    dmg は公開されない。v0.4.0 は app 全体の署名が無く「マルウェアがブロックされました」で開けなかった
+      #    （2026-10-16）。下の実機検査は隔離の印が付かないので Gatekeeper を通らず、これに気付けない。
+      #    署名は desktop/scripts/afterPack.js（簡易署名。Apple の開発者証明書・公証はまだ無い）。
+      - name: Check macOS signature / Gatekeeper (ネットから落とした状態の判定)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: bash desktop/scripts/check-mac-gatekeeper.sh desktop/dist
       # 🚨 **できたインストーラを実際に入れて、起動して、動画を再生する**（automator/src/smoke/installedSmoke.ts）。
       #    check-packaged は app.asar の中身（静的）しか見ない。v0.3.0〜0.3.2（起動直後に落ちる）・
       #    v0.3.3（製品版だけ動画が真っ黒＝CSP）は、これが無かったので公開後に分かった。

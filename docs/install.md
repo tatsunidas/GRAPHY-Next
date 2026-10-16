@@ -12,7 +12,7 @@
 | OS | 成果物 | 導入方法 |
 |---|---|---|
 | Windows | `GRAPHY-Next Setup <ver>.exe`（NSIS） | 実行してインストール |
-| macOS | `GRAPHY-Next-<ver>.dmg` | マウントして Applications へ |
+| macOS | `GRAPHY-Next-<ver>.dmg` | マウントして Applications へ。初回は「確認できません」と出るので、「システム設定 ＞ プライバシーとセキュリティ ＞ このまま開く」で開く（Apple の公証はまだ受けていない） |
 | Linux | `GRAPHY-Next-<ver>.AppImage` | `chmod +x` して実行 |
 
 初回起動時に、DICOM 保管フォルダと H2 データベースを作成します。DICOM 受信（SCP）・
