@@ -1,8 +1,9 @@
 #!/bin/bash
-# GRAPHY-Next — Linux アンインストーラ / Uninstaller (AppImage 配布向け)
+# GRAPHY-Next — Linux アンインストーラ / Uninstaller (.deb / AppImage)
 #
-# AppImage は「1 ファイル」で動くため OS 側にインストーラ登録がありません。
-# アンインストール = AppImage ファイルの削除 ＋（任意で）保存データ/デスクトップ統合の削除です。
+# .deb で入れた場合: 本体は apt で外す（sudo が要るので、このスクリプトはコマンドを案内するだけ）。
+# AppImage の場合: OS 側にインストーラ登録が無いので、AppImage ファイルの削除が本体の削除。
+# どちらも、保存データ/デスクトップ統合の削除は任意で、ここで確認します。
 #
 # 使い方: ターミナルで実行  ->  bash uninstall-linux.sh
 #
@@ -11,7 +12,7 @@ set -u
 
 DATA_DIR="$HOME/.config/GRAPHY-Next"
 
-echo "=== GRAPHY-Next Uninstaller (Linux / AppImage) ==="
+echo "=== GRAPHY-Next Uninstaller (Linux) ==="
 
 # AppImage 内部から起動された場合は $APPIMAGE にパスが入る。分かる範囲で削除を申し出る。
 if [ -n "${APPIMAGE:-}" ] && [ -f "${APPIMAGE:-}" ]; then
@@ -21,6 +22,9 @@ if [ -n "${APPIMAGE:-}" ] && [ -f "${APPIMAGE:-}" ]; then
     [yY]|[yY][eE][sS]) rm -f "$APPIMAGE" && echo "AppImage を削除しました / removed." ;;
     *) echo "AppImage は残しました / kept: $APPIMAGE" ;;
   esac
+elif dpkg -s graphy-next-desktop >/dev/null 2>&1; then
+  echo ".deb で入っています。本体は次のコマンドで外してください / installed from .deb; remove it with:"
+  echo "  sudo apt remove graphy-next-desktop"
 else
   echo "AppImage 本体（GRAPHY-Next-*.AppImage）は手動で削除してください / delete the .AppImage file manually."
 fi

@@ -76,9 +76,10 @@ scripts/    開発起動・バージョン更新スクリプト
 
 | OS | 成果物 | 備考 |
 |---|---|---|
-| Windows | `GRAPHY-Next Setup <ver>.exe`（NSIS） | 実行してインストール |
-| macOS | `GRAPHY-Next-<ver>.dmg` | マウントして Applications へ。初回は「確認できません」と出るので、「システム設定 ＞ プライバシーとセキュリティ ＞ このまま開く」で開く（Apple の公証はまだ受けていない） |
-| Linux | `GRAPHY-Next-<ver>.AppImage` | `chmod +x` して実行 |
+| Windows | `GRAPHY-Next.Setup.<ver>.exe`（NSIS） | 実行してインストール。初回は SmartScreen の警告が出るので「詳細情報 ＞ 実行」 |
+| macOS | `GRAPHY-Next-<ver>.dmg` | マウントして Applications へ。初回は「開いていません」と出るので、「システム設定 ＞ プライバシーとセキュリティ ＞ このまま開く」で開く（Apple の公証はまだ受けていない。画面つきの手順は docs/install.md） |
+| Linux（Ubuntu / Debian） | `graphy-next-desktop_<ver>_amd64.deb` | `sudo apt install ./graphy-next-desktop_<ver>_amd64.deb`（推奨） |
+| Linux（その他） | `GRAPHY-Next-<ver>.AppImage` | `chmod +x` して実行。libfuse2 が要る。Ubuntu 24.04 などでは sandbox の制限で起動しないことがあるので `.deb` を使う |
 
 初回起動時にローカルへデータ保管フォルダ / H2 データベースを作成する。DICOM 受信(SCP)・
 ローカル保管・全ビューア機能がオフラインで動作する（`standalone` プロファイル）。
@@ -102,7 +103,7 @@ scripts/    開発起動・バージョン更新スクリプト
 |---|---|
 | Windows | 「設定 ＞ アプリ ＞ GRAPHY-Next ＞ アンインストール」。ウィザードが保存データも削除するか確認する |
 | macOS | GRAPHY-Next.app をゴミ箱へ。保存データも消すには同梱スクリプト `Contents/Resources/uninstall/uninstall-macos.command` を実行 |
-| Linux | `.AppImage` を削除。保存データ / デスクトップ統合も消すには同梱スクリプト `resources/uninstall/uninstall-linux.sh` を実行 |
+| Linux | `.deb`: `sudo apt remove graphy-next-desktop`。AppImage: `.AppImage` を削除。保存データ / デスクトップ統合も消すには同梱スクリプト `resources/uninstall/uninstall-linux.sh` を実行 |
 
 #### 更新の確認
 
@@ -248,7 +249,7 @@ npm run set-version 1.2.3     # pom / frontend / desktop / root を一括更新
 - `push` / `PR` → CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）が
   backend ビルド＆テスト、frontend ビルド。
 - タグ `v*` を push → [`release.yml`](.github/workflows/release.yml) が
-  **UI 同梱 web jar** と **各 OS の Electron インストーラ**（AppImage / exe / dmg）を
+  **UI 同梱 web jar** と **各 OS の Electron インストーラ**（AppImage / deb / exe / dmg）を
   GitHub Release に自動添付。
 
 ```bash

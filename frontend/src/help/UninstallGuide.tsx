@@ -5,7 +5,7 @@
 // Help メニューの「Uninstall」: アンインストーラの場所と手順を OS 別に案内するモーダル。
 //   - Windows … NSIS アンインストーラ（設定＞アプリ、または Uninstall GRAPHY-Next.exe）
 //   - macOS   … アプリを削除 ＋ 同梱スクリプト uninstall-macos.command
-//   - Linux   … AppImage を削除 ＋ 同梱スクリプト uninstall-linux.sh
+//   - Linux   … .deb は apt remove、AppImage はファイル削除 ＋ 同梱スクリプト uninstall-linux.sh
 // 保存データ（DICOM/DB/plugins）は既定で保持され、削除は確認のうえ任意（main.js resolveDataDir）。
 //
 // App に <UninstallGuideHost /> を 1 つだけマウントし、メニューは openUninstallGuide() を呼ぶだけ。
@@ -74,10 +74,10 @@ function UninstallGuideDialog({ onClose }: { onClose: () => void }) {
     },
     {
       id: "linux",
-      title: "Linux (AppImage)",
+      title: "Linux (.deb / AppImage)",
       body: t("help.uninstall.linux.body"),
       loc: t("help.uninstall.linux.loc"),
-      locPath: "…/resources/uninstall/uninstall-linux.sh",
+      locPath: "/opt/GRAPHY-Next/resources/uninstall/uninstall-linux.sh",
       dataPath: "~/.config/GRAPHY-Next",
     },
   ];
