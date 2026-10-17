@@ -1119,6 +1119,7 @@ export const en: Record<string, string> = {
   "series.grid.warnMany": "This series has {{n}} slices. Grid view may be slow / memory-heavy. Switch anyway?",
   "series.controls.expand": "Show tool panel",
   "series.controls.collapse": "Hide tool panel",
+  "series.controls.playing": "Playing (open the panel to stop)",
   "series.grid.linked": "W/L, pan, zoom, rotate and flip are linked across the series",
   "series.fps": "fps",
   "series.ov.text": "Text",
