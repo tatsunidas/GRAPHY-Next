@@ -96,6 +96,7 @@ Spring DI（`@Profile`）でプロファイルに応じて自動注入。
 - **ピクセル本体**: DB に入れず FS に DICOM ファイルとして保存（GRAPHY 同様）。
 - **ROI**: 当面は DB テーブル。将来 DICOM SR/SEG への書き出しに対応。
 - **取り込み経路**: ① ローカルファイル/フォルダ/CD インポート ② `StoreSCP` による C-STORE 受信。
+- **パスを受ける取り込み API は standalone だけ**（web では出さない。理由は `fw/security.md`「web モードではサーバー上のパスを受ける API を出さない」）。
 
 ### 4.1 🔴 高優先 TODO — ドラッグ＆ドロップ取り込み と ZIP 取り込み（旧 GRAPHY からの**移植漏れ**）
 
