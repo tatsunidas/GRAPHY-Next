@@ -65,6 +65,11 @@ public class NiftiImportService {
      * ヘッダの無い画素配列（Raw）を、利用者の入力から作ったヘッダ（{@link NiftiHeader#raw}）で変換して取り込む。
      */
     public Result importRaw(Path data, NiftiHeader header, NiftiToDicom.Options opts) {
+        return importWithHeader(data, header, opts);
+    }
+
+    /** ヘッダを外から渡して変換して取り込む（Raw・ANALYZE・NIfTI の 2 ファイル形式）。 */
+    public Result importWithHeader(Path data, NiftiHeader header, NiftiToDicom.Options opts) {
         return run(data, header, opts);
     }
 

@@ -31,10 +31,19 @@ const VIDEO_EXT = ["mp4", "m4v", "mov", "avi", "mpg", "mpeg", "mkv", "webm", "wm
 
 type FileKind = "pdf" | "image" | "video" | "nifti" | "other";
 
-/** `.nii` / `.nii.gz`（gzip は二重拡張子なので末尾だけ見ると取り違える）。 */
+/**
+ * `.nii` / `.nii.gz`、および 2 ファイル形式（ANALYZE 7.5・NIfTI pair）の `.hdr` / `.img` / `.img.gz`
+ * （gzip は二重拡張子なので末尾だけ見ると取り違える）。fw/nifti-import.md §9
+ */
 function isNifti(path: string): boolean {
   const lower = path.toLowerCase();
-  return lower.endsWith(".nii") || lower.endsWith(".nii.gz");
+  return [".nii", ".nii.gz", ".hdr", ".img", ".img.gz"].some((e) => lower.endsWith(e));
+}
+
+/** 2 ファイル形式の対の鍵（拡張子を除いた絶対パス）。.hdr と .img を両方選んでも 1 本にまとめるため。 */
+function pairKey(path: string): string | null {
+  const m = /^(.*)\.(hdr|img|img\.gz)$/i.exec(path);
+  return m ? m[1].toLowerCase() : null;
 }
 
 function kindOf(path: string): FileKind {
@@ -174,7 +183,20 @@ export function NonDicomImportDialog({
 
   /** ファイルを足し、NIfTI はヘッダを、Raw は大きさを先に読む。 */
   function addPaths(picked: string[]): void {
-    setPaths((prev) => [...new Set([...prev, ...picked])]);
+    setPaths((prev) => {
+      const out = [...prev];
+      const keys = new Set(out.map(pairKey).filter((k): k is string => k !== null));
+      for (const p of picked) {
+        if (out.includes(p)) continue;
+        const k = pairKey(p);
+        if (k !== null) {
+          if (keys.has(k)) continue; // 同じ対の片割れはもう選んである
+          keys.add(k);
+        }
+        out.push(p);
+      }
+      return out;
+    });
     // NIfTI は取り込み前にヘッダを読む（次元と「向きが入っているか」を先に見せる）
     for (const p of picked.filter(isNifti)) {
       probeNifti(p)
@@ -498,7 +520,7 @@ export function NonDicomImportDialog({
                 return (
                   <div key={p} style={{ fontSize: 12, color: "#33404d", marginTop: 4 }}>
                     <div>
-                      {baseName(p)}: {probe.columns}×{probe.rows}×{probe.slices}
+                      {baseName(p)}{probe.format && probe.format !== "NIfTI" ? ` [${probe.format}]` : ""}: {probe.columns}×{probe.rows}×{probe.slices}
                       {probe.phases > 1 ? ` × ${probe.phases} ${t("nifti.phases")}` : ""}
                       {" / "}
                       {probe.spacingX.toFixed(2)}×{probe.spacingY.toFixed(2)}×{probe.spacingZ.toFixed(2)} mm
@@ -506,8 +528,11 @@ export function NonDicomImportDialog({
                     </div>
                     {!probe.supported && <div style={{ color: "#b00020" }}>{probe.error ?? probe.pixelConversion}</div>}
                     {probe.geometrySynthesized && (
-                      <div style={{ color: "#7a4a00" }}>{t("nifti.warn.synthesized")}</div>
+                      <div style={{ color: "#7a4a00" }}>
+                        {probe.format === "ANALYZE" ? t("nifti.warn.analyze") : t("nifti.warn.synthesized")}
+                      </div>
                     )}
+                    {probe.bitpixNote && <div style={{ color: "#7a4a00" }}>{probe.bitpixNote}</div>}
                   </div>
                 );
               })}
@@ -656,7 +681,7 @@ export function NonDicomImportDialog({
                 multiple
                 // 拡張子と MIME ワイルドカードを混在させると Chromium/Electron が拡張子を無視し
                 // PDF 等が選べなくなるため、すべて明示的な拡張子で指定する。
-                accept=".pdf,.png,.jpg,.jpeg,.bmp,.gif,.tif,.tiff,.mp4,.m4v,.mov,.avi,.mpg,.mpeg,.mkv,.webm,.wmv,.nii,.gz"
+                accept=".pdf,.png,.jpg,.jpeg,.bmp,.gif,.tif,.tiff,.mp4,.m4v,.mov,.avi,.mpg,.mpeg,.mkv,.webm,.wmv,.nii,.gz,.hdr,.img"
                 onChange={onFilesChosen}
                 style={{ display: "none" }}
               />
