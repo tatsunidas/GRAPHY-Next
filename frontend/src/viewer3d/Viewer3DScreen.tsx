@@ -38,6 +38,9 @@ import { metaData } from "@cornerstonejs/core";
 import { buildMprVolume } from "../viewer/mpr";
 import { SliceDuplicatesError, sopGridIndexMap, volumeDepthNote, type VolumeDepthNote } from "../viewer/depthVolume";
 import { VolumeDepthChip } from "../viewer/VolumeDepthChip";
+import { loadRenderEnvSummary } from "../viewer/renderEnvReport";
+import type { RenderKind } from "../viewer/renderEnv";
+import { requestOpenSettings } from "../settings/settingsOpenEvents";
 import {
   createVtkVolumeView,
   vtkImageDataFromVolume,
@@ -126,6 +129,17 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
   // 体積のスライス順の SOP → k（2D の ROI を描かれている画像に合わせて載せる）と、間隔が不均一なときの各間隔。
   const [sopToK, setSopToK] = useState<Map<string, number> | undefined>(undefined);
   const [depthNote, setDepthNote] = useState<VolumeDepthNote | null>(null);
+  // 描画の種別（ソフトウェア描画のときだけヘッダに印を出す。fw/render-environment-design.md）。
+  const [renderKind, setRenderKind] = useState<RenderKind | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void loadRenderEnvSummary().then((v) => {
+      if (alive) setRenderKind(v.kind);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
   const [mode, setMode] = useState<VtkRenderMode>("VR");
   const [orthoPos, setOrthoPos] = useState<{ x: number; y: number; z: number }>({ x: 0.5, y: 0.5, z: 0.5 });
   const [lutName, setLutName] = useState<string | null>(null);
@@ -615,6 +629,16 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         )}
         <span style={hTitle}>{t("main.toolbar.viewer3d")}</span>
         {title && <span style={hSeries}>{title}</span>}
+        {renderKind === "software" && (
+          <button
+            style={softwareBadge}
+            onClick={() => requestOpenSettings("renderEnv")}
+            title={t("viewer3d.softwareBadgeHint")}
+            data-testid="viewer3d-software-badge"
+          >
+            ⚠ {t("viewer3d.softwareBadge")}
+          </button>
+        )}
         <VolumeDepthChip note={depthNote} style={tiltChip} />
         {tilt !== null && (
           <span style={tiltChip} title={t("mpr.tiltCorrectedHint")}>
@@ -959,6 +983,12 @@ const tiltChip: React.CSSProperties = {
   background: "#2a220f",
   borderRadius: 4,
   padding: "1px 7px",
+};
+// ソフトウェア描画の印。tiltChip と同じ警告色。押せる（設定＞描画環境を開く）。
+const softwareBadge: React.CSSProperties = {
+  ...tiltChip,
+  marginLeft: 8,
+  cursor: "pointer",
 };
 const bodyWrap: React.CSSProperties = { position: "relative", flex: 1, display: "flex", minHeight: 0 };
 const body: React.CSSProperties = { position: "relative", flex: 1, minWidth: 0 };

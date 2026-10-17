@@ -36,6 +36,8 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   openMemoryMonitor: () => ipcRenderer.invoke("graphy:open-memory-monitor"),
   // OS の物理メモリ量を取得（ボリューム構築のバジェット決定用）。
   getMemoryInfo: () => ipcRenderer.invoke("graphy:get-memory-info"),
+  // Chromium の GPU 機能状態と GPU 一覧（描画環境の自己診断用）。
+  getGpuStatus: () => ipcRenderer.invoke("graphy:gpu-status"),
   // 外部 URL / mailto を OS の既定アプリで開く。
   openExternal: (url) => ipcRenderer.send("graphy:open-external", url),
   // GitHub Releases の最新版情報を取得（更新確認）。失敗時 null。

@@ -9,6 +9,7 @@ import { OverlayConfigPanel } from "./OverlayConfigPanel";
 import { RemoteAePanel } from "./RemoteAePanel";
 import { AboutPanel } from "./AboutPanel";
 import { MonitorQcPanel } from "./MonitorQcPanel";
+import { RenderEnvPanel } from "./RenderEnvPanel";
 import { PluginManagerPanel } from "./PluginManagerPanel";
 import { AiPanel } from "./AiPanel";
 import { ComputePanel } from "./ComputePanel";
@@ -26,7 +27,16 @@ const RESTART_REQUIRED_KEYS = new Set([
   "dicom.localAeBindAddress",
 ]);
 
-export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function SettingsDialog({
+  open,
+  onClose,
+  initialCategoryId,
+}: {
+  open: boolean;
+  onClose: () => void;
+  /** 開いた時点で選んでおくカテゴリ（他画面からの呼び出し用）。無ければ前回のまま。 */
+  initialCategoryId?: string;
+}) {
   const { t, locale, setLocale } = useI18n();
   const [map, setMap] = useState<SettingsMap>({});
   const [selectedId, setSelectedId] = useState<string>(SETTINGS_REGISTRY[0]?.id ?? "");
@@ -34,6 +44,9 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
 
   useEffect(() => {
     if (!open) return;
+    if (initialCategoryId && SETTINGS_REGISTRY.some((c) => c.id === initialCategoryId)) {
+      setSelectedId(initialCategoryId);
+    }
     setError(null);
     fetchSettings()
       .then(setMap)
@@ -119,6 +132,8 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
               <RemoteAePanel />
             ) : category.id === "monitor" ? (
               <MonitorQcPanel />
+            ) : category.id === "renderEnv" ? (
+              <RenderEnvPanel />
             ) : category.id === "importWatch" ? (
               <ImportWatchPanel />
             ) : category.id === "ai" ? (

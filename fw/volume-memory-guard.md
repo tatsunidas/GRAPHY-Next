@@ -4,7 +4,8 @@
 > 対象: ボリュームを構築するすべての経路（`viewer/mpr.ts` の `buildMprVolume` を通る 3D / MPR /
 >       Slicer / Curved MPR）。**モバイル固有の話ではなく、ワークステーション全体の堅牢性の問題**。
 > ⚠️ 着手前に [`cornerstone-3d-geometry-caveat.md`](cornerstone-3d-geometry-caveat.md) を読むこと。
-> 関連: [`mobile-ui-design.md`](mobile-ui-design.md)（このガードを前提にする側）、
+> 関連: [`render-environment-design.md`](render-environment-design.md)（V4 の 3D テクスチャ上限の読み出し元・描画環境の表示）、
+>       [`mobile-ui-design.md`](mobile-ui-design.md)（このガードを前提にする側）、
 >       [`mpr-viewer-design.md`](mpr-viewer-design.md)、[`3d-viewer-design.md`](3d-viewer-design.md)
 
 ## 1. 背景 — 現状は「無警告で落ちるか、不可解な英文が出る」

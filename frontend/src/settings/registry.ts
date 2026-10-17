@@ -638,6 +638,14 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
     sections: [],
   },
   {
+    // 描画環境（GPU 名・ソフトウェア描画か・3D テクスチャ上限）は専用パネル。SettingsDialog で特別扱い。
+    // 設計: fw/render-environment-design.md
+    id: "renderEnv",
+    labelKey: "settings.cat.renderEnv",
+    icon: "🧪",
+    sections: [],
+  },
+  {
     // 外部 AI は専用パネル。**設定を通常の設定（backend）に載せない**
     // ——H2 の平文行になり GET /api/settings が全件返すため。提供元・接続先・モデルは
     // Electron main の ai-providers.json、鍵は safeStorage（fw/ai-routing-design.md §4.1）。
