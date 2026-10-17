@@ -54,11 +54,11 @@
 - `host.microscopy.importVolume(req)`（`frontend/src/plugins/pluginMicroscopyApi.ts`）→ `POST /api/plugins/{id}/microscopy/import`（`PluginMicroscopyController`、standalone のみ）。
 - **毎回、本体が確認画面を出す**（プラグイン名・元のファイル・患者・チャネル・合計のフレーム数・「32 ビットで規格外」の注記）。プラグインからは消せない。
 - **パスの制限**: そのプラグインのジョブが書いた `<java.io.tmpdir>/graphy-plugin-microscopy/<プラグイン ID>/` の下の、実在する通常のファイルだけ。
-  シンボリックリンク・`..`・ほかのプラグインのフォルダ・その外は断る（`toRealPath(NOFOLLOW_LINKS)` で確かめる）。どこのファイルでも受ける `/api/microscopy/import` は、プラグインには使わせない。
+  ファイルそのものがリンクなら断る。途中のフォルダのリンクはたどって実際の場所で比べる（macOS の一時フォルダ `/var/folders` は `/private/var/folders` へのリンクで、たどらないと正しいファイルまで断っていた。macOS の CI で発覚）。`..`・ほかのプラグインのフォルダ・その外・中に置いた外向きのリンクは断る。どこのファイルでも受ける `/api/microscopy/import` は、プラグインには使わせない。
 - 取り込みは本体のジョブ（`PluginJobService.submitTask`）で走り、進み具合はフレーム単位。取り込んだら、その一時ファイルを本体が消す。
 - チャネルを順に取り込み、2 本目からは 1 本目の検査・Frame of Reference・検体の UID を渡す。途中で失敗したら残りを止め、取り込めた分を返す。最後に DB の変更を知らせる。
 - 検証
-  - `PluginMicroscopyControllerTest`（3 件）: 取り込んで一時ファイルが消えること。外・ほかのプラグイン・リンク・`..` を断ること（フォルダの確かめを外すと落ちることを確認）。404・501。
+  - `PluginMicroscopyControllerTest`（4 件。一時フォルダが別名のリンクの場合を含む）: 取り込んで一時ファイルが消えること。外・ほかのプラグイン・リンク・`..` を断ること（フォルダの確かめを外すと落ちることを確認）。404・501。
   - `pluginMicroscopyApi.test.ts`（4 件）: 取り消すと何も送らないこと、UID の受け渡し、途中の失敗で止まること、入力の誤り。
   - `StandaloneOnlyEndpointsTest` に、2 つのコントローラを足した。
 

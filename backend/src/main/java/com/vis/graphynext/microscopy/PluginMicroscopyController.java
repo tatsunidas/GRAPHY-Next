@@ -88,7 +88,10 @@ public class PluginMicroscopyController {
         if (!p.isAbsolute() || Files.isSymbolicLink(p) || !Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS)) {
             throw new IllegalArgumentException("一時フォルダのファイルではありません: " + p.getFileName());
         }
-        Path real = p.toRealPath(LinkOption.NOFOLLOW_LINKS);
+        // ファイルそのものがリンクなら上で断った。途中のフォルダのリンクはたどって実際の場所で比べる
+        // （macOS の一時フォルダ /var/folders は /private/var/folders へのリンク。たどらないと正しいファイルまで断る。
+        //  プラグインのフォルダの中に外を指すリンクを置かれても、たどった先が外になるので断れる）
+        Path real = p.toRealPath();
         Path dir = tmpRoot.resolve(WORK_DIR).resolve(pluginId);
         Path realDir = Files.isDirectory(dir) ? dir.toRealPath() : dir.toAbsolutePath().normalize();
         if (!real.startsWith(realDir)) {

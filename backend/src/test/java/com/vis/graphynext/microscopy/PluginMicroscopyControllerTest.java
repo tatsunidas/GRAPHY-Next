@@ -138,6 +138,29 @@ class PluginMicroscopyControllerTest {
     }
 
     @Test
+    void 一時フォルダが別名のリンクでも受け付け_中のリンクで外へ出るのは断る() throws Exception {
+        // macOS の /var/folders → /private/var/folders と同じ形: tmp の別名（リンク）を本体の tmp として渡す
+        Path realTmp = tmp.resolve("real-tmp");
+        Files.createDirectories(realTmp);
+        Path aliasTmp = tmp.resolve("alias-tmp");
+        Files.createSymbolicLink(aliasTmp, realTmp);
+        PluginMicroscopyController c = new PluginMicroscopyController(registry(true), new PluginJobService(registry(true)),
+                new Recording(), aliasTmp);
+        Path d = aliasTmp.resolve(PluginMicroscopyController.WORK_DIR).resolve("micro").resolve("job1");
+        Files.createDirectories(d);
+        Path f = d.resolve("ch0.raw");
+        Files.write(f, new byte[12]);
+        assertThat(c.allowedPath("micro", f.toString())).exists();
+        // プラグインのフォルダの中に、外を指すフォルダのリンクを置かれても断る
+        Path outsideDir = tmp.resolve("outside-dir");
+        Files.createDirectories(outsideDir);
+        Files.write(outsideDir.resolve("x.raw"), new byte[12]);
+        Path linkDir = aliasTmp.resolve(PluginMicroscopyController.WORK_DIR).resolve("micro").resolve("escape");
+        Files.createSymbolicLink(linkDir, outsideDir);
+        assertThatThrownBy(() -> c.allowedPath("micro", linkDir.resolve("x.raw").toString())).hasMessageContaining("このプラグイン");
+    }
+
+    @Test
     void 知らないプラグインは404_web_は501() throws Exception {
         Path f = work("micro", "ch0.raw");
         assertThat(new PluginMicroscopyController(registry(true), new PluginJobService(registry(true)), new Recording(), tmp)
