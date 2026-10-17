@@ -656,6 +656,42 @@ export const probeNifti = (path: string) =>
 export const importNifti = (req: NiftiImportRequest) =>
   httpSend<NiftiImportResult>("/api/nifti/import", "POST", req);
 
+/** Raw データ（ヘッダの無い画素配列）の読み方。fw/nifti-import.md §8 */
+export interface RawSpec {
+  width: number;
+  height: number;
+  slices: number;
+  phases: number;
+  type: string;
+  byteOrder: "little" | "big";
+  offset: number;
+  /** [x, y, z] mm */
+  spacing: [number, number, number];
+  orientation: "axial" | "coronal" | "sagittal";
+  /** 先頭画素の中心（LPS mm）。省略で原点。 */
+  origin?: [number, number, number] | null;
+}
+
+export interface RawImportRequest extends Omit<NiftiImportRequest, "metadataPath"> {
+  spec: RawSpec;
+}
+
+export interface RawImportResponse {
+  result: NiftiImportResult | null;
+  requiredBytes: number;
+  fileBytes: number;
+  /** 読まずに残るバイト数（申告の誤りの手がかり）。 */
+  trailingBytes: number;
+  error: string | null;
+}
+
+/** Raw のファイルの大きさを読む（画面で必要なバイト数と比べる）。 */
+export const probeRaw = (path: string) =>
+  httpSend<{ fileBytes: number; error: string | null }>("/api/raw/probe", "POST", { path });
+
+/** Raw を DICOM 化して保管庫へ取り込む。画素がファイルに足りなければ 400。 */
+export const importRaw = (req: RawImportRequest) => httpSend<RawImportResponse>("/api/raw/import", "POST", req);
+
 // ── LUT ────────────────────────────────────────────────────────
 
 export interface LutData {

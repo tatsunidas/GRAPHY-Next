@@ -21,6 +21,7 @@ import java.util.Map;
  * 利用者の入力から作ったヘッダを渡す。ローカル FS のパス指定なので standalone だけ。
  *
  * <ul>
+ *   <li>{@code POST /api/raw/probe} … ファイルの大きさを返す（画面が必要なバイト数と比べる）</li>
  *   <li>{@code POST /api/raw/import} … 変換して保管庫へ取り込む。画素がファイルに足りなければ 400</li>
  * </ul>
  */
@@ -58,6 +59,25 @@ public class RawImportController {
      */
     public record ImportResponse(NiftiImportService.Result result, long requiredBytes, long fileBytes,
                                  long trailingBytes, String error) {
+    }
+
+    public record ProbeRequest(String path) {
+    }
+
+    public record Probe(long fileBytes, String error) {
+    }
+
+    @PostMapping("/probe")
+    public ResponseEntity<Probe> probe(@RequestBody ProbeRequest req) {
+        Path file = req == null || req.path() == null || req.path().isBlank() ? null : Path.of(req.path());
+        if (file == null || !Files.isRegularFile(file)) {
+            return ResponseEntity.badRequest().body(new Probe(0, "ファイルが見つかりません"));
+        }
+        try {
+            return ResponseEntity.ok(new Probe(Files.size(file), null));
+        } catch (IOException e) {
+            return ResponseEntity.badRequest().body(new Probe(0, "ファイルを読めません: " + e.getMessage()));
+        }
     }
 
     @PostMapping("/import")
