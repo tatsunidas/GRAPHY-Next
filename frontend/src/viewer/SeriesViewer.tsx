@@ -136,7 +136,7 @@ export function SeriesViewer({
   studyUid,
   seriesUid,
   fillHeight = false,
-  showControls = true,
+  showControls: showControlsProp = true,
   syncEnabled = false,
   referenceLinesEnabled = false,
   referenceLabel,
@@ -185,6 +185,11 @@ export function SeriesViewer({
   acceptsTaskLaunch?: boolean;
 }) {
   const { t } = useI18n();
+  // ツールパネルの開閉。親の showControls を初期値・追従元にし（一括開閉は親が上書き）、
+  // タイル単位のトグルボタンでも切り替える。
+  const [controlsOpen, setControlsOpen] = useState(showControlsProp);
+  useEffect(() => { setControlsOpen(showControlsProp); }, [showControlsProp]);
+  const showControls = controlsOpen;
   // automator（自律検証ツール）用デバッグAPI。dev ビルドのみ、冪等（fw/HANDOFF.md 参照なし・
   // automator/checklist/10-viewer2d-core.md 参照）。
   useEffect(() => { installDebugApi(); }, []);
@@ -1399,9 +1404,21 @@ export function SeriesViewer({
           </div>
         </div>
       ) : (
-        <Viewer2D imageIds={displayImageIds} imageIndex={zc} overlays={overlays} fill={fillHeight} showControls={showControls} viewSyncEnabled={syncOn} referenceLinesEnabled={referenceLinesEnabled} referenceLabel={referenceLabel} commandKey={commandKey} roiContext={roiContext} renderOverlay={renderFusionOverlay} thickSlab={effectiveThick} refreshKey={calibVersion} pendingImages={!xaReady} frameStack={!spatialStack} />
+        <Viewer2D imageIds={displayImageIds} imageIndex={zc} overlays={overlays} fill={fillHeight} viewSyncEnabled={syncOn} referenceLinesEnabled={referenceLinesEnabled} referenceLabel={referenceLabel} commandKey={commandKey} roiContext={roiContext} renderOverlay={renderFusionOverlay} thickSlab={effectiveThick} refreshKey={calibVersion} pendingImages={!xaReady} frameStack={!spatialStack} />
       )}
 
+      {layoutReady && (
+        <button
+          type="button"
+          data-testid="series-controls-toggle"
+          aria-pressed={controlsOpen}
+          onClick={() => setControlsOpen((v) => !v)}
+          title={t(controlsOpen ? "series.controls.collapse" : "series.controls.expand")}
+          style={controlsToggle}
+        >
+          {controlsOpen ? "▾" : "▸"} <ToolIcon file={UI_ICON_FILES.settings} size={14} />
+        </button>
+      )}
       {showControls && (
       <div style={controls} data-testid="series-controls">
         {/* GridView の操作バー（W/L・Pan・Zoom はドラッグ、回転/反転/Fit はボタン。全セルにリンク）。 */}
@@ -2146,6 +2163,21 @@ function Check({
 }
 
 const root: React.CSSProperties = { outline: "none" };
+// ツールパネル（スライダー群）の開閉バー。画像・ツールボタン群の下に全幅で置く。
+const controlsToggle: React.CSSProperties = {
+  marginTop: 6,
+  alignSelf: "flex-start",
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+  padding: "2px 8px",
+  fontSize: 12,
+  border: "1px solid #cdd5de",
+  borderRadius: 4,
+  background: "#f7f9fb",
+  color: "#33404d",
+  cursor: "pointer",
+};
 // レイアウト解決待ちのプレースホルダ（Viewer と同じ黒背景。生モザイクを描かないためのゲート）。
 const layoutPending: React.CSSProperties = {
   flex: 1,
@@ -2168,7 +2200,6 @@ const controls: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: 8,
-  maxWidth: 560,
 };
 /**
  * 操作行。**必ず折り返す**（`flexWrap`）。
