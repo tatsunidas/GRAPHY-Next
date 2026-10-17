@@ -685,6 +685,30 @@ export interface RawImportResponse {
   error: string | null;
 }
 
+/** URL 取り込みのジョブの状態（fw/dicom-data-layer.md §4.4）。 */
+export interface UrlImportStatus {
+  jobId: string;
+  state: "QUEUED" | "DOWNLOADING" | "IMPORTING" | "DONE" | "FAILED" | "CANCELLED";
+  receivedBytes: number;
+  /** Content-Length。分からなければ −1。 */
+  totalBytes: number;
+  /** "dicom"（取り込み済み）/ "file"（path を非 DICOM 取り込みで続ける）。終わるまで null。 */
+  kind: "dicom" | "file" | null;
+  path: string | null;
+  filename: string | null;
+  importResult: ImportResult | null;
+  error: string | null;
+}
+
+/** URL から取り込む（standalone のみ）。http/https だけ。 */
+export const submitUrlImport = (url: string) => httpSend<UrlImportStatus>("/api/import/url", "POST", { url });
+export const getUrlImport = (jobId: string) => httpGet<UrlImportStatus>(`/api/import/url/${encodeURIComponent(jobId)}`);
+export const cancelUrlImport = (jobId: string) =>
+  httpSend<UrlImportStatus>(`/api/import/url/${encodeURIComponent(jobId)}/cancel`, "POST");
+/** 非 DICOM として返した一時ファイルを消す。 */
+export const deleteUrlImportFile = (jobId: string) =>
+  httpSend<void>(`/api/import/url/${encodeURIComponent(jobId)}/file`, "DELETE");
+
 /** Raw のファイルの大きさを読む（画面で必要なバイト数と比べる）。 */
 export const probeRaw = (path: string) =>
   httpSend<{ fileBytes: number; error: string | null }>("/api/raw/probe", "POST", { path });
