@@ -1121,6 +1121,7 @@ export const ja: Record<string, string> = {
   "series.grid.warnMany": "このシリーズは {{n}} 枚あります。グリッド表示は描画/メモリ負荷が大きくなる可能性があります。切り替えますか？",
   "series.controls.expand": "ツールパネルを開く",
   "series.controls.collapse": "ツールパネルを閉じる",
+  "toolbar.more": "その他のツール",
   "series.controls.playing": "再生中（開くと止められます）",
   "series.grid.linked": "W/L・パン・ズーム・回転・反転はシリーズ全体にリンクします",
   "series.fps": "fps",
