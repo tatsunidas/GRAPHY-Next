@@ -69,6 +69,20 @@ public final class NiftiHeader {
     /** 利用者の入力から作った Raw データのヘッダか（{@link #raw}）。画素ファイルに gzip の判定をしない。 */
     public boolean raw;
 
+    /** .hdr＋.img の 2 ファイル形式の種類（{@link #parsePair}）。.nii では null。 */
+    public enum PairKind { NIFTI_PAIR, ANALYZE }
+
+    public PairKind pairKind;
+    /** ANALYZE の hist.orient（252 バイト目）。向きには使わず、記録だけする。 */
+    public int analyzeOrient = -1;
+    /** bitpix が datatype と食い違っていたときの説明（datatype から読み直した）。 */
+    public String bitpixNote;
+    /**
+     * 画素ファイルが gzip か。null は先頭のマジックで判定する（.nii）。true・false は拡張子で決めた（.img／.img.gz）——
+     * 圧縮していない .img の先頭がたまたま 0x1F 0x8B だと、マジックの判定では取り違えるため。
+     */
+    public Boolean dataGzip;
+
     private NiftiHeader() {
     }
 
@@ -90,13 +104,13 @@ public final class NiftiHeader {
         NiftiHeader h = new NiftiHeader();
         h.raw = true;
         h.datatype = datatype;
-        h.bitpix = switch (datatype) {
-            case DT_UINT8, DT_INT8 -> 8;
-            case DT_INT16, DT_UINT16 -> 16;
-            case DT_INT32, DT_UINT32, DT_FLOAT32 -> 32;
-            case DT_FLOAT64 -> 64;
-            default -> throw new IllegalArgumentException("Raw で扱わないデータ型です: datatype=" + datatype);
-        };
+        if (datatype == DT_RGB24 || datatype == DT_INT64 || datatype == DT_UINT64) {
+            throw new IllegalArgumentException("Raw で扱わないデータ型です: datatype=" + datatype);
+        }
+        h.bitpix = bitsOf(datatype);
+        if (h.bitpix == 0) {
+            throw new IllegalArgumentException("Raw で扱わないデータ型です: datatype=" + datatype);
+        }
         h.dim[0] = nt > 1 ? 4 : 3;
         h.dim[1] = nx;
         h.dim[2] = ny;
@@ -233,6 +247,57 @@ public final class NiftiHeader {
             // slope=0 は「スケーリング無し」の意味（NIfTI 仕様）。1 として扱う。
             h.sclSlope = 1;
             h.sclInter = 0;
+        }
+        return h;
+    }
+
+    /** datatype の 1 画素のビット数。知らない型は 0。 */
+    static int bitsOf(int datatype) {
+        return switch (datatype) {
+            case DT_UINT8, DT_INT8 -> 8;
+            case DT_INT16, DT_UINT16 -> 16;
+            case DT_RGB24 -> 24;
+            case DT_INT32, DT_UINT32, DT_FLOAT32 -> 32;
+            case DT_FLOAT64, DT_INT64, DT_UINT64 -> 64;
+            default -> 0;
+        };
+    }
+
+    /**
+     * .hdr＋.img の 2 ファイル形式のヘッダを読む（fw/nifti-import.md §9）。344 バイト目の magic が "ni1" なら NIfTI の 2 ファイル形式、
+     * 無ければ ANALYZE 7.5。
+     *
+     * <p>ANALYZE には患者座標が無く、{@link #parse} が qform・sform として読む 252 バイト目以降は {@code hist.orient}・{@code originator}
+     * なので、qform・sform を 0 にする（向きは合成の軸位断になる）。orient は反転の解釈がソフトごとに割れているので向きには使わない。
+     * voxOffset は .img の先頭からの値をそのまま使う（{@link #parse} の「0 なら 352」は 1 ファイル形式のための補正）。
+     * bitpix は datatype から導き直す（食い違うファイルが実在する。ITK のテストデータの BigEndian.hdr は bitpix=5）。
+     *
+     * <p>.nii（1 ファイル形式）はこれを通らない——magic を書いていない NIfTI がテストに多く、判定を変えると既存の扱いが変わるため。
+     */
+    public static NiftiHeader parsePair(byte[] head) throws IOException {
+        NiftiHeader h = parse(head);
+        if (h.nifti2) {
+            throw new IOException("NIfTI-2 の 2 ファイル形式には対応していません");
+        }
+        boolean niftiPair = head.length >= 348 && head[344] == 'n' && head[345] == 'i' && head[346] == '1' && head[347] == 0;
+        ByteBuffer b = ByteBuffer.wrap(head).order(h.byteOrder);
+        h.voxOffset = Math.max(0, (long) b.getFloat(108));
+        if (niftiPair) {
+            h.pairKind = PairKind.NIFTI_PAIR;
+        } else {
+            h.pairKind = PairKind.ANALYZE;
+            h.analyzeOrient = head[252];
+            h.qformCode = 0;
+            h.sformCode = 0;
+            h.xyztUnits = 0; // ANALYZE に単位の欄は無い（mm とみなす）
+        }
+        int bits = bitsOf(h.datatype);
+        if (bits == 0) {
+            throw new IOException("未対応のデータ型です: datatype=" + h.datatype);
+        }
+        if (h.bitpix != bits) {
+            h.bitpixNote = "bitpix=" + h.bitpix + " は datatype=" + h.datatype + "（" + bits + " bit）と食い違うので datatype から読んだ";
+            h.bitpix = bits;
         }
         return h;
     }

@@ -608,6 +608,10 @@ export interface NiftiProbe {
   description: string | null;
   supported: boolean;
   error: string | null;
+  /** "NIfTI" / "NIfTI pair" / "ANALYZE"（fw/nifti-import.md §9）。 */
+  format?: string | null;
+  /** bitpix が datatype と食い違っていたときの説明。 */
+  bitpixNote?: string | null;
 }
 
 export interface NiftiImportRequest {
