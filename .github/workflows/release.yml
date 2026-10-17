@@ -139,6 +139,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.backfill_tag || github.sha }}
+      # 後から足すときは、検査の仕組みだけ現行（ログを残す版）にする。製品のソースはタグのまま。
+      - if: ${{ inputs.backfill_tag != '' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: _current
+      - if: ${{ inputs.backfill_tag != '' }}
+        shell: bash
+        run: cp _current/automator/src/smoke/installedSmoke.ts automator/src/smoke/installedSmoke.ts && rm -rf _current
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

@@ -244,6 +244,10 @@ async function main(): Promise<void> {
   console.log(`[launch] ${inst.exe}`);
   const app = await electron.launch({ executablePath: inst.exe, args: inst.args, env, timeout: 120_000 });
   const proc = app.process();
+  // main の console.log と backend の出力（"[backend] ..."）は main の stdout/stderr に出る。失敗の原因調査用に残す。
+  const appLog = fs.createWriteStream(path.join(OUT, "app-output.log"));
+  proc.stdout?.on("data", (d) => appLog.write(d));
+  proc.stderr?.on("data", (d) => appLog.write(d));
   app.on("window", (w) => watchPage(w, "window"));
   try {
     const main = await findWindow(app, (u) => /renderer[\\/]index\.html/.test(u) && !u.includes("2dviewer"), 120_000);
@@ -365,6 +369,7 @@ async function main(): Promise<void> {
     throw e;
   } finally {
     fs.writeFileSync(path.join(OUT, "page-problems.txt"), pageProblems.join("\n"));
+    appLog.end();
     await Promise.race([app.close().catch(() => {}), new Promise((r) => setTimeout(r, 20_000))]);
     if (proc && proc.exitCode === null) killProcessTree(proc);
   }
