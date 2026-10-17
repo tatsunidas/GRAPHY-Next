@@ -29,6 +29,7 @@ import { ensureStackSegmentation, disposeViewportSegmentation, noteSegViewport }
 import { WandTool, commitWand } from "./wandTool";
 import { LevelSetTool, commitLevelSet } from "./levelSetsTool";
 import { TOOL_IDS } from "./toolIds";
+import { OverflowRow } from "./OverflowRow";
 import { ToolIcon } from "../icons/ToolIcon";
 import { UI_ICON_FILES, ACTIVE_ICON_STYLE } from "../icons/toolIcons";
 import { emitToast } from "./toast";
@@ -2981,7 +2982,7 @@ export function Viewer2D({
 
         {/* 操作バー（canvas の外＝ツール入力と競合しない）。showControls=false で畳む。 */}
         {showControls && (
-        <div style={toolbar}>
+        <OverflowRow style={toolbar} moreTestId="viewer-toolbar-more">
           <button onClick={fit} style={btn} title={t("viewer.fit")}><ToolIcon file={UI_ICON_FILES.fit} size={16} /></button>
           <button
             onClick={togglePan}
@@ -3014,10 +3015,10 @@ export function Viewer2D({
             {t("viewer.lut")}
           </button>
           <button onClick={reset} style={btn} title={t("viewer.reset")}><ToolIcon file={UI_ICON_FILES.reset} size={16} /></button>
-          <span style={{ width: 1, alignSelf: "stretch", background: "#dde4ea", margin: "0 2px" }} />
+          <span data-sep="" style={{ width: 1, alignSelf: "stretch", background: "#dde4ea", margin: "0 2px" }} />
           <button data-testid="viewer-undo-btn" onClick={undo} disabled={!canUndo} style={btn} title={t("viewer.undo")}>↶</button>
           <button data-testid="viewer-redo-btn" onClick={redo} disabled={!canRedo} style={btn} title={t("viewer.redo")}>↷</button>
-        </div>
+        </OverflowRow>
         )}
       </div>
 
