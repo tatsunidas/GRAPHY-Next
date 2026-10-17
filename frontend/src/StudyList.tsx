@@ -17,6 +17,7 @@ import { useSeries } from "./hooks/useSeries";
 import { useInstances } from "./hooks/useInstances";
 import { useI18n } from "./i18n/i18n";
 import { SeriesViewer } from "./viewer/SeriesViewer";
+import { useToolPanelDefault } from "./viewer/toolPanelDefault";
 import { classifySeriesRenderability, type SeriesRenderability } from "./viewer/seriesRenderable";
 import { VideoViewer } from "./viewer/VideoViewer";
 import { type ViewerMode } from "./viewer/imageId";
@@ -272,6 +273,7 @@ function InstanceList({ study, series, mode }: { study: Study; series: Series; m
   // wadouri の画像ビューアでは表示できず、専用の VideoViewer（/rendered の video/mp4 を
   // <video> 再生）で表示する。
   const isVideo = hasImages && isVideoInstance(instances![0]);
+  const toolPanelDefault = useToolPanelDefault();
 
   return (
     <div style={{ marginTop: 10, color: "#445" }}>
@@ -337,19 +339,30 @@ function InstanceList({ study, series, mode }: { study: Study; series: Series; m
 
       {/* シリーズビューア（スライス送り・シネ・5D・オーバーレイ On/Off のコントローラ）。 */}
       {hasImages && !isPdf && !isVideo && nonImage.renderable && instances && (
-        <div style={{ marginTop: 10, maxWidth: 900 }}>
+        <div style={previewBox}>
           {/* web はピクセルを BFF(WADO-RS)経由で取得して表示（standalone と同一の StackViewport 経路）。 */}
           <SeriesViewer
             instances={instances}
             mode={mode}
             studyUid={study.studyInstanceUid}
             seriesUid={series.seriesInstanceUid}
+            fillHeight
+            showControls={toolPanelDefault ?? false}
           />
         </div>
       )}
     </div>
   );
 }
+
+// シリーズプレビュー: 幅いっぱい、高さはウィンドウ高に追従（画像はこの枠の中央に Fit 表示。ツールは既定で畳む）。
+// 240px はメニュー・ツールバー・ステータスバー・余白の合計の目安。小さい窓でも 320px は確保する。
+const previewBox: React.CSSProperties = {
+  marginTop: 10,
+  display: "flex",
+  flexDirection: "column",
+  height: "max(320px, calc(100vh - 240px))",
+};
 
 /** ピクセルを持たないシリーズの説明ボックス（PDF / 動画の案内と同じ調子）。 */
 const nonImageNotice: React.CSSProperties = {

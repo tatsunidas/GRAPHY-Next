@@ -17,6 +17,7 @@ import {
   type LutData,
 } from "../api";
 import { SeriesViewer } from "../viewer/SeriesViewer";
+import { useToolPanelDefault } from "../viewer/toolPanelDefault";
 import { FusionImageViewer } from "../viewer/FusionOverlayViewer";
 import { ZERO_ADJUST, isZeroAdjust, type ManualAdjust } from "../viewer/regTransform";
 import { registrationToTransform, type RegistrationResult } from "../viewer/regResult";
@@ -811,7 +812,12 @@ function TileGrid({
   // 画像下のツールパネル（操作バー＋スライダー群＋Fusion バー）の表示 ON/OFF（このタブ内の全タイルに適用）。
   // OFF にすると全タイルが同一サイズの画像パネルになり、次元数の違うシリーズも同じ大きさで比較できる。
   // View メニューと右クリックメニューはこの単一の状態を共有するため、常に表示が一致する。
-  const [panelVisible, setPanelVisible] = useState(true);
+  // 初期値は環境設定 viewer.toolPanelDefault（既定: 閉＝画像のみ）。設定の取得が済んだ時点で一度だけ反映する。
+  const [panelVisible, setPanelVisible] = useState(false);
+  const toolPanelDefault = useToolPanelDefault();
+  useEffect(() => {
+    if (toolPanelDefault !== null) setPanelVisible(toolPanelDefault);
+  }, [toolPanelDefault]);
 
   // タイル枠の右クリックメニュー（画面座標）。null=非表示。
   const [frameMenu, setFrameMenu] = useState<{ x: number; y: number } | null>(null);
