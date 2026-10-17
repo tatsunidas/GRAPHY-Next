@@ -41,19 +41,22 @@ const STUDY_SORT: Record<string, Accessor<Study>> = {
 export function StudyList({
   filters,
   reloadKey,
+  connecting = false,
   mode,
   onSelectStudy,
   onSelectSeries,
 }: {
   filters?: StudyFilters | null;
   reloadKey?: number;
+  /** backend にまだつながっていない（起動の待ち）。検索せず「接続中…」を出す。 */
+  connecting?: boolean;
   mode: ViewerMode;
   onSelectStudy?: (s: Study | null) => void;
   onSelectSeries?: (s: Series | null) => void;
 }) {
   const { t } = useI18n();
   // 取得は hooks/useStudies に集約（モバイルシェルと共有。fw/mobile-ui-design.md §3.5）。
-  const { studies, reportCounts, error } = useStudies(filters, { reloadKey, withReportCounts: true });
+  const { studies, reportCounts, error } = useStudies(connecting ? null : filters, { reloadKey, withReportCounts: true });
   const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
   const [page, setPage] = useState(0);
   const { sort, toggleSort } = useTableSort();
@@ -91,9 +94,10 @@ export function StudyList({
         {studies && <span style={{ fontSize: 13, color: "#5a6672" }}>{t("study.list.total", { n: total })}</span>}
       </div>
 
-      {filters == null && <div style={{ color: "#888" }}>{t("study.prompt")}</div>}
+      {connecting && <div style={{ color: "#888" }}>{t("app.connecting")}</div>}
+      {!connecting && filters == null && <div style={{ color: "#888" }}>{t("study.prompt")}</div>}
       {error && <div style={{ color: "#b00020" }}>{t("common.fetchError", { error })}</div>}
-      {filters != null && !error && !studies && <div>{t("common.loading")}</div>}
+      {!connecting && filters != null && !error && !studies && <div>{t("common.loading")}</div>}
       {studies && studies.length === 0 && <div style={{ color: "#666" }}>{t("study.empty")}</div>}
 
       {studies && studies.length > 0 && (
