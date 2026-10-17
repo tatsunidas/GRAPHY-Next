@@ -689,6 +689,25 @@ export interface RawImportResponse {
 export const probeRaw = (path: string) =>
   httpSend<{ fileBytes: number; error: string | null }>("/api/raw/probe", "POST", { path });
 
+/** Raw の中央のスライス（時相 1）の PNG と、濃淡の範囲（そのスライスの有限値の最小・最大）。 */
+export const previewRaw = async (
+  path: string,
+  spec: RawSpec,
+): Promise<{ blob: Blob; min: number; max: number; slice: number }> => {
+  const res = await fetch(`${apiBase()}/api/raw/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, spec }),
+  });
+  if (!res.ok) throw new Error(await extractErrorMessage(res));
+  return {
+    blob: await res.blob(),
+    min: Number(res.headers.get("X-Raw-Min")),
+    max: Number(res.headers.get("X-Raw-Max")),
+    slice: Number(res.headers.get("X-Raw-Slice")),
+  };
+};
+
 /** Raw を DICOM 化して保管庫へ取り込む。画素がファイルに足りなければ 400。 */
 export const importRaw = (req: RawImportRequest) => httpSend<RawImportResponse>("/api/raw/import", "POST", req);
 

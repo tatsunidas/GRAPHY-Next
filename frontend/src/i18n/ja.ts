@@ -2728,6 +2728,8 @@ export const ja: Record<string, string> = {
   "raw.spacing.invalid": "画素間隔は正の数にしてください。",
   "raw.warn.geometry": "⚠ 向きと位置は入力した値です。元データの情報ではありません（取り込んだ画像にもその旨を記録します）。",
   "raw.result": "Raw {{files}} 件を変換し、{{instances}} 枚を取り込みました。",
+  "raw.preview": "中央のスライスを見る",
+  "raw.preview.caption": "{{name}} の {{slice}} 枚目（濃淡: {{min}}〜{{max}}）。模様が崩れていたら型・バイト順・幅を見直してください。",
   "nifti.section": "NIfTI（DICOM へ変換して取り込み）",
   "nifti.modality": "モダリティ",
   "nifti.unit": "値の単位",
