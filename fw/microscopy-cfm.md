@@ -1,6 +1,6 @@
 # 顕微鏡画像を Confocal Microscopy Image（CFM）で持つ
 
-> 起票: 2026-10-17 ／ ステータス: **書き出し（`POST /api/microscopy/import`）・2D 表示・H10・送信／書き出し前の確認は実装済み。MPR・3D は細かすぎるボクセルでは未対応（理由を表示）。LSM・PIC を読むプラグインと host API（H68）は別段**
+> 起票: 2026-10-17 ／ ステータス: **書き出し（`POST /api/microscopy/import`）・2D 表示・H10・送信／書き出し前の確認は実装済み。MPR・3D は細かすぎるボクセルでは未対応（理由を表示）。host API H68（`host.microscopy.importVolume`、§5）も実装済み。LSM・PIC を読むプラグインは別リポジトリ**
 > 関連: [`nifti-import.md`](nifti-import.md) §8（Raw の読み方 `RawSpec`）、[`dicom-data-layer.md`](dicom-data-layer.md)
 
 ## 0. 決めたこと（ユーザー決定 2026-10-17）
@@ -49,6 +49,18 @@
   厚み 0.04 mm の Z スタックは、1 枚のつもりの断面がボリューム全体を含み、MPR も 3D も黒くなる（スクリーンショットで確認）。
 - そこで、**ボクセルの一番細かい寸法が最小の厚み（0.05 mm）より細かければ、MPR・3D は理由を出して止める**（`viewer/volumeScale.ts`。しきい値はライブラリの定数から読む）。2D と H10 は使える。
 - MPR・3D の対応（描画だけ座標を拡大する、ライブラリを直す、など）は別項目で方式を比べる（2026-10-18 ユーザー決定）。
+
+## 5. プラグインから取り込む（H68・2026-10-18）
+- `host.microscopy.importVolume(req)`（`frontend/src/plugins/pluginMicroscopyApi.ts`）→ `POST /api/plugins/{id}/microscopy/import`（`PluginMicroscopyController`、standalone のみ）。
+- **毎回、本体が確認画面を出す**（プラグイン名・元のファイル・患者・チャネル・合計のフレーム数・「32 ビットで規格外」の注記）。プラグインからは消せない。
+- **パスの制限**: そのプラグインのジョブが書いた `<java.io.tmpdir>/graphy-plugin-microscopy/<プラグイン ID>/` の下の、実在する通常のファイルだけ。
+  シンボリックリンク・`..`・ほかのプラグインのフォルダ・その外は断る（`toRealPath(NOFOLLOW_LINKS)` で確かめる）。どこのファイルでも受ける `/api/microscopy/import` は、プラグインには使わせない。
+- 取り込みは本体のジョブ（`PluginJobService.submitTask`）で走り、進み具合はフレーム単位。取り込んだら、その一時ファイルを本体が消す。
+- チャネルを順に取り込み、2 本目からは 1 本目の検査・Frame of Reference・検体の UID を渡す。途中で失敗したら残りを止め、取り込めた分を返す。最後に DB の変更を知らせる。
+- 検証
+  - `PluginMicroscopyControllerTest`（3 件）: 取り込んで一時ファイルが消えること。外・ほかのプラグイン・リンク・`..` を断ること（フォルダの確かめを外すと落ちることを確認）。404・501。
+  - `pluginMicroscopyApi.test.ts`（4 件）: 取り消すと何も送らないこと、UID の受け渡し、途中の失敗で止まること、入力の誤り。
+  - `StandaloneOnlyEndpointsTest` に、2 つのコントローラを足した。
 
 ## 4. 検証（2026-10-17〜18）
 - JUnit `ConfocalMicroscopyTest`（7 件）
