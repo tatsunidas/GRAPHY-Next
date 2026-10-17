@@ -396,6 +396,7 @@ export function MainScreen({
           <StudyList
             filters={filters}
             reloadKey={reloadKey + dbVersion}
+            connecting={!status}
             mode={isStandalone ? "standalone" : "web"}
             onSelectStudy={(s) => { setSelectedStudy(s); setSelectedSeries(null); }}
             onSelectSeries={setSelectedSeries}
