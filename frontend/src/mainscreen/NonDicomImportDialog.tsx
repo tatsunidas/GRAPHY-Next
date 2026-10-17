@@ -8,6 +8,7 @@ import {
   importNifti,
   importNonDicom,
   importRaw,
+  previewRaw,
   probeNifti,
   probeRaw,
   type NiftiProbe,
@@ -99,6 +100,9 @@ export function NonDicomImportDialog({
   const [rawSpacing, setRawSpacing] = useState<[string, string, string]>(["1", "1", "1"]);
   const [rawOrientation, setRawOrientation] = useState<"axial" | "coronal" | "sagittal">("axial");
   const [rawSummary, setRawSummary] = useState<string | null>(null);
+  // 中央のスライスのプレビュー（取り込む前に型・バイト順・寸法の誤りを画像で見る）。入力を変えたら消す
+  const [rawPreview, setRawPreview] = useState<{ url: string; min: number; max: number; slice: number } | null>(null);
+  const [rawPreviewBusy, setRawPreviewBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const rawInputRef = useRef<HTMLInputElement>(null);
   const metaInputRef = useRef<HTMLInputElement>(null);
@@ -134,6 +138,16 @@ export function NonDicomImportDialog({
     setRawOrientation("axial");
     setRawSummary(null);
   }, [open, study]);
+
+  // 読み方・ファイルが変わったら古いプレビューを捨てる（別の読み方の画像を見て判断させない）
+  const rawKey = [rawWidth, rawHeight, rawSlices, rawPhases, rawType, rawOrder, rawOffset, rawOrientation, ...rawSpacing,
+    ...paths.filter((p) => kindOf(p) === "other")].join("|");
+  useEffect(() => {
+    setRawPreview((prev) => {
+      if (prev) URL.revokeObjectURL(prev.url);
+      return null;
+    });
+  }, [rawKey, open]);
 
   if (!open) return null;
 
@@ -300,6 +314,33 @@ export function NonDicomImportDialog({
     if (imported > 0) onImported?.();
   }
 
+  const rawSpecNow = (): RawSpec => ({
+    width: Number(rawWidth),
+    height: Number(rawHeight),
+    slices: Number(rawSlices),
+    phases: Number(rawPhases),
+    type: rawType,
+    byteOrder: rawOrder,
+    offset: Number(rawOffset),
+    spacing: rawSpacingNum,
+    orientation: rawOrientation,
+  });
+
+  /** 1 本目の Raw の中央のスライスを見る。 */
+  async function showRawPreview(): Promise<void> {
+    if (rawPaths.length === 0) return;
+    setRawPreviewBusy(true);
+    setError(null);
+    try {
+      const r = await previewRaw(rawPaths[0], rawSpecNow());
+      setRawPreview({ url: URL.createObjectURL(r.blob), min: r.min, max: r.max, slice: r.slice });
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setRawPreviewBusy(false);
+    }
+  }
+
   /** Raw を 1 本ずつ変換して取り込む（1 ファイル＝1 シリーズ。読み方は全ファイル共通）。 */
   async function runRaw(): Promise<void> {
     if (rawRequired === null) return;
@@ -308,17 +349,7 @@ export function NonDicomImportDialog({
       setError(t("nifti.unit.invalid"));
       return;
     }
-    const spec: RawSpec = {
-      width: Number(rawWidth),
-      height: Number(rawHeight),
-      slices: Number(rawSlices),
-      phases: Number(rawPhases),
-      type: rawType,
-      byteOrder: rawOrder,
-      offset: Number(rawOffset),
-      spacing: rawSpacingNum,
-      orientation: rawOrientation,
-    };
+    const spec = rawSpecNow();
     let imported = 0;
     for (const p of rawPaths) {
       try {
@@ -574,6 +605,29 @@ export function NonDicomImportDialog({
                 {!rawSpacingOk && <div style={{ color: "#b00020" }}>{t("raw.spacing.invalid")}</div>}
               </div>
               <div style={{ fontSize: 12, color: "#7a4a00", marginTop: 4 }}>{t("raw.warn.geometry")}</div>
+              <div style={{ marginTop: 8 }}>
+                <button onClick={showRawPreview} disabled={!rawReady || rawPreviewBusy} style={btn} data-testid="raw-preview-btn">
+                  {t("raw.preview")}
+                </button>
+                {rawPreview && (
+                  <div style={{ marginTop: 6 }}>
+                    <img
+                      src={rawPreview.url}
+                      alt={t("raw.preview")}
+                      data-testid="raw-preview-img"
+                      style={{ width: 256, maxWidth: "100%", height: "auto", imageRendering: "pixelated", border: "1px solid #cdd5de", background: "#000" }}
+                    />
+                    <div style={{ fontSize: 11, color: "#667" }} data-testid="raw-preview-caption">
+                      {t("raw.preview.caption", {
+                        name: baseName(rawPaths[0] ?? ""),
+                        slice: String(rawPreview.slice + 1),
+                        min: String(rawPreview.min),
+                        max: String(rawPreview.max),
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
             </Section>
           )}
 

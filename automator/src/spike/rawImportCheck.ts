@@ -112,6 +112,43 @@ async function main(): Promise<void> {
     await page.waitForFunction(() => /(一致|matches)/.test(document.querySelector('[data-testid="raw-size-status"]')?.textContent ?? ""), null, { timeout: 10_000 });
     check(await runBtn.isEnabled(), "正しく申告すると「一致」になり取込ボタンが押せる", await page.getByTestId("raw-size-status").innerText());
     await page.screenshot({ path: path.join(OUT_DIR, "dialog-exact.png") });
+
+    // ── 中央のスライスのプレビュー（正しい申告と、バイト順を誤った負例）──
+    const previewStats = async () => {
+      await page.getByTestId("raw-preview-btn").click();
+      const img = page.getByTestId("raw-preview-img");
+      await img.waitFor({ state: "visible", timeout: 20_000 });
+      return page.evaluate(() => {
+        const el = document.querySelector('[data-testid="raw-preview-img"]') as HTMLImageElement;
+        const c = document.createElement("canvas");
+        c.width = el.naturalWidth;
+        c.height = el.naturalHeight;
+        const g = c.getContext("2d")!;
+        g.drawImage(el, 0, 0);
+        const d = g.getImageData(0, 0, c.width, c.height).data;
+        // tsx（esbuild）が名前付きの関数に __name を差し込み、ページ側で未定義になるので、関数を作らずに書く
+        const w = c.width;
+        // 中央の行で、右へ 1 画素進むごとに明るくなる割合（正しい申告なら全部）
+        let up = 0;
+        const row = Math.floor(c.height / 2);
+        for (let x = 1; x < w; x++) if (d[(row * w + x) * 4] > d[(row * w + x - 1) * 4]) up++;
+        return { w, h: c.height, tl: d[0], tr: d[(w - 1) * 4], bl: d[((c.height - 1) * w) * 4], upRatio: up / (w - 1),
+          caption: (document.querySelector('[data-testid="raw-preview-caption"]') as HTMLElement | null)?.innerText ?? "" };
+      });
+    };
+    const good = await previewStats();
+    await page.getByTestId("raw-preview-img").screenshot({ path: path.join(OUT_DIR, "preview-good.png") });
+    check(good.w === NX && good.h === NY, `プレビューは ${good.w}×${good.h}`, good);
+    check(good.tr > good.tl && good.tl > good.bl && good.upRatio > 0.95,
+      `プレビューの模様が作った値どおり（右ほど明るく下ほど暗い・右へ明るくなる割合 ${good.upRatio.toFixed(2)}）`, good);
+    // 中央は z=5: 値の範囲は (x=0,y=47) −3517+5000=1483 〜 (x=63,y=0) −669+5000=4331
+    check(/1483/.test(good.caption) && /4331/.test(good.caption), "プレビューの説明に濃淡の範囲（最小・最大）が出る", good.caption);
+    await page.getByTestId("raw-order").selectOption("big");
+    check((await page.getByTestId("raw-preview-img").count()) === 0, "読み方を変えると古いプレビューが消える");
+    const bad = await previewStats();
+    await page.getByTestId("raw-preview-img").screenshot({ path: path.join(OUT_DIR, "preview-wrong-order.png") });
+    check(bad.upRatio < 0.9, `負例: バイト順を誤ると模様が崩れる（右へ明るくなる割合 ${bad.upRatio.toFixed(2)}）`, bad);
+    await page.getByTestId("raw-order").selectOption("little");
     await runBtn.click();
     await page.getByTestId("raw-summary").waitFor({ state: "visible", timeout: 60_000 });
     const sumText = await page.getByTestId("raw-summary").innerText();

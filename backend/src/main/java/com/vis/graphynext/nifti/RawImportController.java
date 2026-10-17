@@ -22,6 +22,7 @@ import java.util.Map;
  *
  * <ul>
  *   <li>{@code POST /api/raw/probe} … ファイルの大きさを返す（画面が必要なバイト数と比べる）</li>
+ *   <li>{@code POST /api/raw/preview} … 中央のスライスを PNG で返す（取り込む前に申告の誤りを画像で見る）</li>
  *   <li>{@code POST /api/raw/import} … 変換して保管庫へ取り込む。画素がファイルに足りなければ 400</li>
  * </ul>
  */
@@ -77,6 +78,41 @@ public class RawImportController {
             return ResponseEntity.ok(new Probe(Files.size(file), null));
         } catch (IOException e) {
             return ResponseEntity.badRequest().body(new Probe(0, "ファイルを読めません: " + e.getMessage()));
+        }
+    }
+
+    public record PreviewRequest(String path, RawSpec spec) {
+    }
+
+    /** 中央のスライスの PNG。濃淡の範囲（有限値の最小・最大）とスライス番号はヘッダで返す。 */
+    @PostMapping("/preview")
+    public ResponseEntity<?> preview(@RequestBody PreviewRequest req) {
+        Path file = req == null || req.path() == null || req.path().isBlank() ? null : Path.of(req.path());
+        if (file == null || !Files.isRegularFile(file)) {
+            return ResponseEntity.badRequest().body(Map.of("error", "ファイルが見つかりません"));
+        }
+        if (req.spec() == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "読み方の指定がありません"));
+        }
+        try {
+            long required = req.spec().requiredBytes();
+            long size = Files.size(file);
+            if (required > size) {
+                return ResponseEntity.badRequest().body(Map.of("error",
+                        "画素がファイルに足りません（必要 " + required + " バイト・ファイル " + size + " バイト）"));
+            }
+            RawPreview.Result r = RawPreview.middleSlice(file, req.spec());
+            return ResponseEntity.ok()
+                    .contentType(org.springframework.http.MediaType.IMAGE_PNG)
+                    .header("X-Raw-Min", String.valueOf(r.min()))
+                    .header("X-Raw-Max", String.valueOf(r.max()))
+                    .header("X-Raw-Slice", String.valueOf(r.slice()))
+                    .header("Access-Control-Expose-Headers", "X-Raw-Min, X-Raw-Max, X-Raw-Slice")
+                    .body(r.png());
+        } catch (RawSpec.InvalidSpec e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (IOException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "読めません: " + e.getMessage()));
         }
     }
 

@@ -2737,6 +2737,8 @@ export const en: Record<string, string> = {
   "raw.spacing.invalid": "Pixel spacing must be a positive number.",
   "raw.warn.geometry": "⚠ Orientation and position are the values you entered, not information from the source data (this is recorded in the imported images).",
   "raw.result": "Converted {{files}} raw file(s) and imported {{instances}} images.",
+  "raw.preview": "Show the middle slice",
+  "raw.preview.caption": "{{name}}, slice {{slice}} (gray scale: {{min}} to {{max}}). If the pattern looks scrambled, check the type, byte order and width.",
   "nifti.section": "NIfTI (converted to DICOM on import)",
   "nifti.modality": "Modality",
   "nifti.unit": "Value unit",
