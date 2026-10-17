@@ -86,16 +86,25 @@ class CheckpointsTest {
     }
 
     @Test
-    void loadAnyReadsTheLengthFromTheHeader(@TempDir Path dir) throws IOException {
+    void variableLengthRoundTrip_andTruncationIsAbsent(@TempDir Path dir) throws IOException {
         Checkpoints c = new Checkpoints(new CacheStore(dir, 0));
-        byte[] data = {1, 2, 3, 4, 5};
-        c.save(KEY, 1, data);
-        assertArrayEquals(data, c.loadAny(KEY, 1).orElseThrow());
-        assertTrue(c.loadAny(KEY, 2).isEmpty());
+        byte[] data = "{\"a\":1}".getBytes();
+        assertTrue(c.save(KEY, 0, data));
+        assertArrayEquals(data, c.load(KEY, 0).orElseThrow());
+        assertArrayEquals(new byte[0], saveAndLoad(c, new byte[0]));
 
-        byte[] raw = Files.readAllBytes(file(dir, 1));
-        Files.write(file(dir, 1), Arrays.copyOf(raw, raw.length - 2));
-        assertTrue(new Checkpoints(new CacheStore(dir, 0)).loadAny(KEY, 1).isEmpty(), "ヘッダの長さと実長が合わなければ無い");
+        assertTrue(c.save(KEY, 0, data));
+        byte[] raw = Files.readAllBytes(file(dir, 0));
+        Files.write(file(dir, 0), Arrays.copyOf(raw, raw.length - 1));
+        assertTrue(c.load(KEY, 0).isEmpty());
+        raw[0] ^= 0x7f;
+        Files.write(file(dir, 0), raw);
+        assertTrue(c.load(KEY, 0).isEmpty());
+    }
+
+    private static byte[] saveAndLoad(Checkpoints c, byte[] data) {
+        assertTrue(c.save(KEY, 1, data));
+        return c.load(KEY, 1).orElseThrow();
     }
 
     @Test
@@ -105,8 +114,8 @@ class CheckpointsTest {
         for (int i : new int[] {0, 5, 999}) { c.save(KEY, i, new byte[4]); c.save(other, i, new byte[4]); }
         assertEquals(3, c.clearAll(KEY));
         for (int i : new int[] {0, 5, 999}) {
-            assertTrue(c.loadAny(KEY, i).isEmpty());
-            assertTrue(c.loadAny(other, i).isPresent());
+            assertTrue(c.load(KEY, i).isEmpty());
+            assertTrue(c.load(other, i).isPresent());
         }
     }
 }

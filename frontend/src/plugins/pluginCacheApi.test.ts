@@ -12,7 +12,7 @@ afterEach(() => vi.unstubAllGlobals());
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const bytes = (b: number[]) => new Response(new Uint8Array(b), { status: 200, headers: { "Content-Type": "application/octet-stream" } });
 
-describe("H68 host.cache", () => {
+describe("H69 host.cache", () => {
   it("put: URL はプラグイン id に固定され、鍵はヘッダ（URL に載せない）、本体はバイナリ", async () => {
     fetchMock.mockResolvedValueOnce(json(200, { ok: true }));
     const r = await createPluginCache("my/plugin").put("再構成 A+B/1", new Uint8Array([1, 2, 3]));

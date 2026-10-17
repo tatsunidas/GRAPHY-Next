@@ -5,6 +5,7 @@
 // プラグインの読み込み（両モード共通）。
 // 起動時に GET /api/plugins でマニフェストを取得し、クリック時に UI バンドルを
 // 動的 import して activate(host) を呼ぶ。設計: fw/plugin-architecture.md。
+import { importMicroscopyVolume } from "./pluginMicroscopyApi";
 import { runComputeJob, computeStatus, releaseComputeRuntime } from "./pluginComputeApi";
 import { useEffect, useState } from "react";
 import { httpGet, httpSend } from "../http";
@@ -121,13 +122,17 @@ function withHostApis(m: PluginManifest, host: PluginHostSeed): PluginHost {
       ensureLocal: (req, opts) => ensureLocal(m.id, req, opts),
       status: () => storageStatus(m.id),
     },
-    // H68: 消えてもよい派生データの置き場。呼び出しはマニフェストの id に固定する
+    // H69: 消えてもよい派生データの置き場。呼び出しはマニフェストの id に固定する
     cache: createPluginCache(m.id),
     db: {
       searchPatients,
       listVideos,
       importDicomFiles: (req) => importDicomFiles(m.id, req),
       notifyChanged: (detail) => notifyDbChanged(m.id, detail),
+    },
+    // H68: 出所（id・名前）はマニフェストから本体が入れる。一時フォルダもその id のものだけ
+    microscopy: {
+      importVolume: (req, opts) => importMicroscopyVolume({ id: m.id, name: m.name }, req, opts),
     },
     // H47〜H49: 出所（id・名前）はマニフェストから本体が入れる。プラグインに名乗らせない
     video: {

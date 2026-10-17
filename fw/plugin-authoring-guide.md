@@ -338,7 +338,7 @@ if (st.cacheMode) {
 
 重い計算を Java 側で行う例。`GraphyPlugin` を実装した JAR を同梱し、UI から `runBackend()` で呼ぶ。
 
-### 2-3c. 消えてもよい派生データを置く（`host.cache`・H68）
+### 2-3c. 消えてもよい派生データを置く（`host.cache`・H69）
 
 再構成結果・特徴量・長い計算の途中経過のように、**作り直せるが作るのが高い**データを、再起動をまたいで置く場所です。
 **新しい権限・同意は要りません**（ローカルの `.cache` だけで外へは出ません）。
@@ -405,7 +405,7 @@ public class HelloPlugin implements GraphyPlugin {
 |---|---|---|
 | `__progress` | `BiConsumer<Double,String>` | 進み具合（0〜1）と短い説明 |
 | `__cancelled` | `BooleanSupplier` | 取り消されたら true |
-| `__cache` | `com.vis.graphynext.plugin.spi.PluginCache` | **消えてもよい派生データの置き場**（H68。API jar の `spi` に入っている JDK 型だけのインターフェース）: `get`/`put`/`has`/`remove`/`checkpoint(jobKey)`。プラグイン id に束縛済み。失敗は例外でなく `null`/`false`。同期の `run` では入らない |
+| `__cache` | `com.vis.graphynext.plugin.spi.PluginCache` | **消えてもよい派生データの置き場**（H69。API jar の `spi` に入っている JDK 型だけのインターフェース）: `get`/`put`/`has`/`remove`/`checkpoint(jobKey)`。プラグイン id に束縛済み。失敗は例外でなく `null`/`false`。同期の `run` では入らない |
 | `__ensureLocal` | `Function<String,String>` | **SOP UID → 手元のパス**。無い SOP は `null`。Drive が正本で手元に無ければ取り寄せてから返す。取れなければ `IllegalStateException("storage-unavailable: <理由>")`（H67） |
 
 ```java

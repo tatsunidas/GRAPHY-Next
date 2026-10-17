@@ -19,7 +19,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.Optional;
 
 /**
- * プラグインの「消えてもよい」派生データの置き場（H68）。{@code <storageDir>/.cache/plugins/}、ローカルのみ。
+ * プラグインの「消えてもよい」派生データの置き場（H69）。{@code <storageDir>/.cache/plugins/}、ローカルのみ。
  *
  * <p>名前空間はここで固定する: {@code p<sha256(pluginId) 先頭16桁>-<sha256(種別+鍵) 先頭32桁>}。
  * <b>鍵の文字列はディスク上の名前に出さない</b>（鍵に患者情報などを入れる作者がいても残さない）。
@@ -79,7 +79,7 @@ public class PluginCacheService {
 
     public Optional<byte[]> get(String pluginId, String key) {
         if (!validKey(key)) return Optional.empty();
-        return checkpoints.loadAny(ns(pluginId, "i", key), 0);
+        return checkpoints.load(ns(pluginId, "i", key), 0);
     }
 
     public boolean has(String pluginId, String key) {
@@ -100,7 +100,7 @@ public class PluginCacheService {
 
     public Optional<byte[]> loadCheckpoint(String pluginId, String jobKey, int index) {
         if (!validKey(jobKey) || index < 0 || index > MAX_INDEX) return Optional.empty();
-        return checkpoints.loadAny(ns(pluginId, "c", jobKey), index);
+        return checkpoints.load(ns(pluginId, "c", jobKey), index);
     }
 
     public void clearCheckpoints(String pluginId, String jobKey) {

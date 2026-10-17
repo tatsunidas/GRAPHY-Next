@@ -323,7 +323,7 @@ interface PluginHostBase {
     status: () => Promise<StorageStatus>;
   };
   /**
-   * **消えてもよい派生データの置き場**（H68）。再構成結果・特徴量・長い計算の途中経過など、作り直せるが高いものを
+   * **消えてもよい派生データの置き場**（H69）。再構成結果・特徴量・長い計算の途中経過など、作り直せるが高いものを
    * 再起動をまたいで置く。🔴 **いつでも消える**（上限・再起動・アプリの更新・利用者の操作）ので、唯一のコピーを
    * 置かないこと。永続させたいものは `saveStore`（H8）へ。新しい権限・同意は要らない（ローカルだけで外へは出ない）。
    *
@@ -363,6 +363,15 @@ interface PluginHostBase {
    * `probe`（重複の確認）→ `requestImportConsent`（ダイアログ 1 回）→ 1 本ずつ `importAsDicom`。
    * 札はダイアログで見せた**患者・ファイル・書くもの**の範囲でしか使えない。
    */
+  /**
+   * 顕微鏡の取り込み（H68）。プラグインが自分のジョブ（H45）で一時フォルダ
+   * `<java.io.tmpdir>/graphy-plugin-microscopy/<プラグイン ID>/` に書いた画素（Raw）を、チャネルごとに
+   * Confocal Microscopy Image（32 ビット・規格外、fw/microscopy-cfm.md）として取り込む。**毎回、本体が確認画面を出す**。
+   * デスクトップ専用（web では `error: "desktop-only"`）。
+   */
+  microscopy: {
+    importVolume: (req: PluginMicroscopyImportRequest, opts?: PluginJobOptions) => Promise<PluginMicroscopyImportOutcome>;
+  };
   video: {
     /** H47: 諸元・指紋（SHA-256）・既に取り込み済みか。本体の ffmpeg で調べる（ffprobe 不要）。 */
     probe: (path: string) => Promise<PluginVideoProbe>;
@@ -1111,7 +1120,7 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
  */
 export type PluginHostSeed = DistributiveOmit<
   PluginHost,
-  "ai" | "file" | "runBackendJob" | "db" | "video" | "apiBase" | "compute" | "storage" | "cache"
+  "ai" | "file" | "runBackendJob" | "db" | "video" | "apiBase" | "compute" | "storage" | "microscopy" | "cache"
 >;
 
 /**
@@ -1121,3 +1130,49 @@ export type PluginHostSeed = DistributiveOmit<
 export interface PluginModule {
   activate(host: PluginHost): void | Promise<void>;
 }
+
+/** H68 の 1 チャネル。`spec` は本体の Raw の読み方（`RawSpec`）と同じ。画素間隔は mm。 */
+export interface PluginMicroscopyChannel {
+  /** そのプラグインの一時フォルダの下の画素ファイル。取り込んだら本体が消す。 */
+  path: string;
+  spec: {
+    width: number;
+    height: number;
+    slices: number;
+    phases: number;
+    type: "uint8" | "int8" | "uint16" | "int16" | "uint32" | "int32" | "float32" | "float64";
+    byteOrder: "little" | "big";
+    offset: number;
+    /** [x, y, z] mm */
+    spacing: [number, number, number];
+    orientation?: "axial";
+  };
+  channelName?: string;
+  /** 照明の波長 nm。分からなければ省く（入れずに「不明」と記録される）。 */
+  wavelengthNm?: number | null;
+}
+
+export interface PluginMicroscopyImportRequest {
+  /** 元のファイル名（確認画面と画像の記録に出る）。 */
+  sourceName: string;
+  /** 例: "Zeiss LSM" / "Bio-Rad PIC" */
+  sourceFormat: string;
+  patient: { patientId: string; patientName?: string; birthDate?: string; sex?: string };
+  studyDescription?: string;
+  /** 省略で SCT 91723000 "Anatomical Structure"。 */
+  anatomy?: { value: string; scheme: string; meaning: string } | null;
+  /** FLUORESCENCE（既定）/ REFLECTANCE */
+  confocalMode?: "FLUORESCENCE" | "REFLECTANCE";
+  channels: PluginMicroscopyChannel[];
+}
+
+export interface PluginMicroscopyImported {
+  seriesInstanceUid: string;
+  channelName: string;
+  frames: number;
+}
+
+/** 途中で失敗しても、取り込めた分は `imported` に入る。 */
+export type PluginMicroscopyImportOutcome =
+  | { ok: true; studyInstanceUid?: string; imported: PluginMicroscopyImported[] }
+  | { ok: false; error?: string; cancelled?: boolean; studyInstanceUid?: string; imported: PluginMicroscopyImported[] };

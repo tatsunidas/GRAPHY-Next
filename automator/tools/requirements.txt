@@ -1,0 +1,7 @@
+# monai_score.py と test_monai_score.py に要る。リポジトリの外の専用 venv に入れる:
+#   python3 -m venv ~/monai-verify-data/.venv && ~/monai-verify-data/.venv/bin/pip install -r requirements.txt
+# 版は 2026-10-18 に実際にテストが通った組み合わせ。
+nibabel==5.4.2
+numpy==2.5.4
+pydicom==3.0.2
+scipy==1.18.1

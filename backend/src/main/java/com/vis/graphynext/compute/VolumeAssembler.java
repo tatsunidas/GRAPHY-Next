@@ -101,7 +101,7 @@ final class VolumeAssembler implements AnonymizeService.Sink {
         if (org.dcm4che3.data.UID.ExplicitVRBigEndian.equals(tsuid)) {
             throw new UnsupportedLayout("npz-big-endian");
         }
-        if (ParametricMapFrameExpander.isParametricMap(ds)) {
+        if (ParametricMapFrameExpander.handles(ds)) {
             addParametricMap(ds);
             return;
         }
@@ -174,7 +174,7 @@ final class VolumeAssembler implements AnonymizeService.Sink {
             bitsAllocated = 32;
             bitsStored = 32;
             signed = true;
-            iop = SegFrameExpander.sharedIop(ds);
+            iop = com.vis.graphynext.dicom.ConfocalGeometry.orientation(ds);
             pixelSpacing = SegFrameExpander.sharedPixelSpacing(ds);
             modality = ds.getString(Tag.Modality);
             photometric = ds.getString(Tag.PhotometricInterpretation, "MONOCHROME2");
@@ -195,7 +195,7 @@ final class VolumeAssembler implements AnonymizeService.Sink {
             if (v == null) {
                 throw new UnsupportedLayout("npz-pixels-unreadable");
             }
-            slices.add(new Slice(null, v, f, SegFrameExpander.perFrameIpp(ds, f), in, 1.0, 0.0));
+            slices.add(new Slice(null, v, f, com.vis.graphynext.dicom.ConfocalGeometry.framePosition(ds, f), in, 1.0, 0.0));
         }
     }
 

@@ -26,7 +26,7 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * プラグインの「消えてもよい」派生データの置き場（H68）。
+ * プラグインの「消えてもよい」派生データの置き場（H69）。
  * <ul>
  *   <li>{@code PUT|GET|HEAD|DELETE /api/plugins/{id}/cache/item} — 1 件（本体は octet-stream）</li>
  *   <li>{@code PUT|GET|DELETE /api/plugins/{id}/cache/checkpoint/{index}}、{@code DELETE .../cache/checkpoint} — 途中結果</li>

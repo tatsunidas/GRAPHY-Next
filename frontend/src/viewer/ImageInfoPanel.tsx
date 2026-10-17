@@ -89,6 +89,11 @@ export function ImageInfoPanel({
     <div style={panel}>
       <div style={title}>{t("viewer.info.title")}</div>
       <Row label={t("field.modality")} value={info.modality || "—"} />
+      {info.modality === "CFM" && (
+        <div style={{ textAlign: "right", color: "#d8b25a", fontSize: 11, marginTop: -1 }} data-testid="info-cfm-note">
+          {t("viewer.info.cfmNote")}
+        </div>
+      )}
       <Row label={t("viewer.info.matrix")} value={matrix} />
       <Row label={t("viewer.info.pixelSpacing")} value={pixelSpacing} />
       <Row label={t("viewer.info.sliceThickness")} value={info.sliceThickness !== undefined ? `${num(info.sliceThickness, 2)} mm` : "—"} />

@@ -46,7 +46,7 @@ public class GlamAnalysisService {
      * 受け付けるボクセル対の上限。実測 7e8 対/秒あたりなので、およそ 60 秒ぶんで切る。
      * これを超える要求は、間引きか ROI 縮小を促して断る。
      */
-    private static final double MAX_ESTIMATED_PAIRS = 4.2e10;
+    static final double MAX_ESTIMATED_PAIRS = 4.2e10;
 
     /** 実測から得た処理速度（対/秒）。所要見積りの表示にだけ使う。 */
     private static final double PAIRS_PER_SECOND = 7e8;
@@ -232,7 +232,7 @@ public class GlamAnalysisService {
         return occupancy;
     }
 
-    private static long countRoiVoxels(ImagePlus mask, int label) {
+    static long countRoiVoxels(ImagePlus mask, int label) {
         long count = 0;
         for (int z = 0; z < mask.getNSlices(); z++) {
             ImageProcessor mp = mask.getStack().getProcessor(z + 1);
@@ -257,7 +257,7 @@ public class GlamAnalysisService {
     }
 
     /** 実際に中心として使われるボクセル数（0＝間引かない＝ROI 全体）。 */
-    private static int referenceVoxelsOf(Map<String, String> settings, long roiVoxels) {
+    static int referenceVoxelsOf(Map<String, String> settings, long roiVoxels) {
         int configured = intOf(settings, "INT_GLAM_maxReferenceVoxels", 0);
         if (configured <= 0) {
             return (int) Math.min(Integer.MAX_VALUE, roiVoxels);

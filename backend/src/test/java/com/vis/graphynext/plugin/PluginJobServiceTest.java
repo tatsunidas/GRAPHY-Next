@@ -163,7 +163,7 @@ class PluginJobServiceTest {
         s.shutdown();
     }
 
-    // ── H68: JAR に渡す __cache ──
+    // ── H69: JAR に渡す __cache ──
 
     @Test
     void 置き場を_JAR_の_args_に渡す_プラグインに束縛され_画面から同名のキーが来ても上書きする() throws Exception {

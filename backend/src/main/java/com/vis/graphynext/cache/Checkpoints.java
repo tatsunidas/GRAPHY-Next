@@ -11,7 +11,6 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Arrays;
 import java.util.Optional;
 
 /**
@@ -81,43 +80,31 @@ public final class Checkpoints {
     }
 
     /**
-     * 長さを知らずに読む（本体の長さはヘッダから取る）。無い・壊れている・ヘッダと実長が合わないときは empty。
+     * 長さの決まっていない項目を読み出す。長さはヘッダから取り、ファイルの大きさと食い違えば
+     * 壊れているものとして empty。
      */
-    public Optional<byte[]> loadAny(String jobKey, int index) {
+    public Optional<byte[]> load(String jobKey, int index) {
         try {
-            Optional<Path> p = store.find(name(jobKey, index), Checkpoints::validAny);
+            Optional<Path> p = store.find(name(jobKey, index), f -> valid(f, -1));
             if (p.isEmpty()) {
                 return Optional.empty();
             }
             byte[] all = Files.readAllBytes(p.get());
-            return Optional.of(Arrays.copyOfRange(all, HEADER, all.length));
+            byte[] out = new byte[all.length - HEADER];
+            System.arraycopy(all, HEADER, out, 0, out.length);
+            return Optional.of(out);
         } catch (IOException e) {
             log.warn("checkpoint: 読み出せませんでした index={}: {}", index, e.toString());
             return Optional.empty();
         }
     }
 
-    private static boolean validAny(Path f) {
-        try {
-            long size = Files.size(f);
-            if (size < HEADER) {
-                return false;
-            }
-            return valid(f, (int) Math.min(Integer.MAX_VALUE, size - HEADER));
-        } catch (IOException e) {
-            return false;
-        }
-    }
-
-    /** その jobKey の項目を、添字を問わずすべて消す。 */
-    public int clearAll(String jobKey) {
-        name(jobKey, 0); // jobKey の検査
-        return store.removeByPrefix(jobKey + ".");
-    }
-
+    /** @param expectedLen 負なら長さを問わない（ヘッダの長さとファイルの大きさが合えばよい） */
     private static boolean valid(Path f, int expectedLen) {
         try {
-            if (Files.size(f) != HEADER + (long) expectedLen) {
+            long size = Files.size(f);
+            if (expectedLen >= 0 ? size != HEADER + (long) expectedLen
+                    : size < HEADER || size - HEADER > Integer.MAX_VALUE) {
                 return false;
             }
             try (var ch = Files.newByteChannel(f)) {
@@ -127,7 +114,7 @@ public final class Checkpoints {
                 }
                 head.flip();
                 return head.remaining() == HEADER && head.getInt() == MAGIC && head.getInt() == VERSION
-                        && head.getLong() == expectedLen;
+                        && head.getLong() == size - HEADER;
             }
         } catch (IOException e) {
             return false;
@@ -139,5 +126,11 @@ public final class Checkpoints {
         for (int i = 0; i < count; i++) {
             store.remove(name(jobKey, i));
         }
+    }
+
+    /** その jobKey の項目を、添字を問わずすべて消す。消せた数を返す。 */
+    public int clearAll(String jobKey) {
+        name(jobKey, 0); // jobKey の検査
+        return store.removeByPrefix(jobKey + ".");
     }
 }

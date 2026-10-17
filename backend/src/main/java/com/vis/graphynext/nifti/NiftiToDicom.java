@@ -120,7 +120,13 @@ public final class NiftiToDicom {
      * gzip と取り違えて読めなくなるため。
      */
     static InputStream open(Path file, NiftiHeader h) throws IOException {
-        return h.raw ? new java.io.BufferedInputStream(Files.newInputStream(file), 1 << 16) : open(file);
+        if (h.raw || Boolean.FALSE.equals(h.dataGzip)) {
+            return new java.io.BufferedInputStream(Files.newInputStream(file), 1 << 16);
+        }
+        if (Boolean.TRUE.equals(h.dataGzip)) {
+            return new GZIPInputStream(Files.newInputStream(file), 1 << 16);
+        }
+        return open(file);
     }
 
     /** gzip かどうかをマジックで判定して開く（拡張子には頼らない）。 */
@@ -265,7 +271,10 @@ public final class NiftiToDicom {
         ds.setString(Tag.ConversionType, VR.CS, "WSD"); // Workstation で作られた画像
         ds.setString(Tag.DerivationDescription, VR.ST, h.raw
                 ? "Converted from raw data (geometry from user input)"
-                : "Converted from NIfTI (geometry from " + geom.source + (geom.synthesized ? ", SYNTHESIZED" : "") + ")");
+                : h.pairKind == NiftiHeader.PairKind.ANALYZE
+                ? "Converted from ANALYZE 7.5 (geometry SYNTHESIZED)"
+                : "Converted from NIfTI" + (h.pairKind == NiftiHeader.PairKind.NIFTI_PAIR ? " pair" : "")
+                        + " (geometry from " + geom.source + (geom.synthesized ? ", SYNTHESIZED" : "") + ")");
 
         // --- 幾何 ---
         double[] ipp = geom.positionOf(z);
@@ -281,6 +290,9 @@ public final class NiftiToDicom {
             // Raw には向き・位置の情報が無い。入力された値であることを画像自身に残す
             ds.setString(Tag.ImageComments, VR.LT,
                     "Geometry from user input: raw data has no orientation or position (NOT from the source)");
+        } else if (h.pairKind == NiftiHeader.PairKind.ANALYZE) {
+            ds.setString(Tag.ImageComments, VR.LT, "Geometry synthesized: ANALYZE 7.5 has no patient coordinates; orient="
+                    + h.analyzeOrient + " is not used (orientation is NOT from the source)");
         } else if (geom.synthesized) {
             // 「向きは合成」であることを画像自身に残す（後から見た人が誤解しないため）
             ds.setString(Tag.ImageComments, VR.LT,

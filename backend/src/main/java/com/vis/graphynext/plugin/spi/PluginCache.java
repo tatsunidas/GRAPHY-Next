@@ -5,7 +5,7 @@
 package com.vis.graphynext.plugin.spi;
 
 /**
- * JAR プラグインが使える、<b>消えてもよい</b>派生データの置き場（H68）。
+ * JAR プラグインが使える、<b>消えてもよい</b>派生データの置き場（H69）。
  *
  * <p>{@link GraphyPlugin#run} の {@code args} の {@code "__cache"} に入る（非同期ジョブのときだけ。
  * 同期の {@code run} では入らないので、無ければ何もしない書き方にすること）。プラグインの id に束縛済みで、

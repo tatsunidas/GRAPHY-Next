@@ -31,7 +31,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** H68: 実際の HTTP・プラグイン登録を通して、置き場のバイナリの往復・分離・上限を確かめる。 */
+/** H69: 実際の HTTP・プラグイン登録を通して、置き場のバイナリの往復・分離・上限を確かめる。 */
 @SpringBootTest(properties = {
         "spring.profiles.active=standalone",
         "spring.datasource.url=jdbc:h2:mem:plugincache;DB_CLOSE_DELAY=-1",

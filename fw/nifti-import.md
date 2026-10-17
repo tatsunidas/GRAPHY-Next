@@ -1,6 +1,6 @@
 # NIfTI インポート
 
-> 起票: 2026-08-11 ／ ステータス: **実装済み（backend ＋ MainScreen の非 DICOM インポート導線）。整数は可逆・それ以外は 32 bit float の Parametric Map（§3・§3.1・2026-10-07）。Raw データの取り込み（§8、2026-10-17〜）**
+> 起票: 2026-08-11 ／ ステータス: **実装済み（backend ＋ MainScreen の非 DICOM インポート導線）。整数は可逆・それ以外は 32 bit float の Parametric Map（§3・§3.1・2026-10-07）。Raw データの取り込み（§8、2026-10-17〜）・ANALYZE 7.5 と NIfTI の 2 ファイル形式（§9、2026-10-17）**
 > 参考: Swing 版 GRAPHY の `com.vis.core.media.NIfTIToDicomConverter` / `ImportNIfTIPanel`
 > 関連: [`nondicom-ffmpeg.md`](nondicom-ffmpeg.md)（同じダイアログの動画経路）／
 > [`dicom-data-layer.md`](dicom-data-layer.md)（保管庫）
@@ -339,6 +339,26 @@ NIfTI ファイルに包み直してから取り込む案は、画素を丸ご�
   float32 の非整数が Parametric Map で差 0、必要量の計算と申告の誤り、画素不足で変換が失敗すること。
 - `RawImportControllerTest`（4 件）: 1 バイト足りなければ変換に入らず 400、ちょうどなら余り 0、多ければ余りを返す。probe はファイルの大きさを返す。
 - NIfTI の既存テスト（`NiftiToDicomTest`・`NiftiPixelExactnessTest`・`ParametricMapRoundTripTest`・`NiftiMetadataMapperTest`）がそのまま通る。
+
+## 9. ANALYZE 7.5 と NIfTI の 2 ファイル形式（.hdr＋.img）（2026-10-17）
+
+> 状態: **実装済み**（backend の変換・`/api/nifti/probe`・`/api/nifti/import`、非DICOM取込の画面）。
+
+- **.hdr／.img／.img.gz を選んだときだけ**この経路を通る（`NiftiPair.resolve` → `NiftiHeader.parsePair`）。どちらを選んでも同じ対になり、画面でも同じ対の片割れは 1 本にまとめる。画素は .img、無ければ .img.gz。
+- 344 バイト目の magic が "ni1" なら **NIfTI の 2 ファイル形式**として、qform・sform をそのまま使う。magic が無ければ **ANALYZE 7.5** として扱う。
+  - **.nii（1 ファイル形式）は magic で判定しない**。magic を書いていない NIfTI がテストの素材に多く、判定を変えると既存の扱いが変わるため。
+- **ANALYZE の向き**: 患者座標が無い。`parse` が qform・sform として読む 252 バイト目以降は `hist.orient`・`originator` なので（そのまま読むと取り違えることを `AnalyzeImportTest` の負例で示した）、qform・sform を 0 にする。
+  向きは §2 の合成の軸位断になる。`orient` は反転の解釈がソフトごとに割れている（放射線科式か神経科式か）ので向きには使わず、値は `ImageComments` に残す。
+  `DerivationDescription` は "Converted from ANALYZE 7.5 (geometry SYNTHESIZED)"。画面では ANALYZE 用の警告を出す。
+- **bitpix は datatype から導き直す**。食い違うファイルが実在する（ITK のテストデータ BigEndian.hdr は bitpix=5・datatype=16）。食い違いは下読みの結果（`bitpixNote`）で画面に出す。
+- **画素ファイルの圧縮は拡張子で決める**（`dataGzip`）。圧縮していない .img の先頭がたまたま 0x1F 0x8B でも取り違えない。
+- voxOffset は .img の先頭からの値（`parse` の「0 なら 352」の補正は 1 ファイル形式のためのもの）。
+- 検証（2026-10-17）
+  - `AnalyzeImportTest` 7 件: 値・合成の向き・.img.gz・どちらを選んでも同じ・orient の負例・"ni1" はアフィンを使う・bitpix の食い違い・対が無いとき・先頭が gzip のマジック。
+  - オープンデータ（リポジトリには同梱しない）
+    - ITK のテストデータ LittleEndian／BigEndian（6×6×8 float32）を取り込むと、.img を直に読んだ値と差 0。
+    - Zenodo 4938032（CC BY 4.0）のヒト脳 FA マップ 139×168×137 float32 を、.img と .img.gz の両方で取り込むと、全ボクセルの差 0、NaN の位置も一致（Parametric Map）。
+  - 自動スパイク `automator/src/spike/analyzeImportCheck.ts`（実アプリ 10 件）: .hdr と .img を両方選んでも 1 検査、[ANALYZE] と警告が出る、H10 の値が一致。
 
 ## 実データで見つかった欠陥: アフィンが向きだけでスケールを持たない（2026-08-12）
 

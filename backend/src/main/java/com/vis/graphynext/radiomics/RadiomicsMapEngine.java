@@ -401,8 +401,10 @@ public class RadiomicsMapEngine {
             if (low != null) {
                 restored++;
             } else {
-                ImagePlus one = FeatureVisualizationMap.generateFeatureMap(img, mask, z + 1, built.calculator(),
-                        filterSize, d2, stride, margin, (done, total) -> { });
+                int slice = z + 1;
+                // 抽出がスライスの切れ目で割り込めるよう、1 枚ずつ取る（RadiomicsLock）。
+                ImagePlus one = RadiomicsLock.get(() -> FeatureVisualizationMap.generateFeatureMap(img, mask, slice,
+                        built.calculator(), filterSize, d2, stride, margin, (done, total) -> { }));
                 low = (float[]) one.getStack().getProcessor(1).convertToFloatProcessor().getPixels();
                 if (key != null && low.length == outW * outH) {
                     checkpoints.save(key, z, low);

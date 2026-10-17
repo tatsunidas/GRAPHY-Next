@@ -62,7 +62,7 @@ public class PluginJobService {
      */
     public static final String ENSURE_LOCAL_KEY = "__ensureLocal";
     /**
-     * 消えてもよい派生データの置き場（{@link com.vis.graphynext.plugin.spi.PluginCache}。H68）を入れる args のキー。
+     * 消えてもよい派生データの置き場（{@link com.vis.graphynext.plugin.spi.PluginCache}。H69）を入れる args のキー。
      * プラグインの id に束縛して渡す。
      */
     public static final String CACHE_KEY = "__cache";

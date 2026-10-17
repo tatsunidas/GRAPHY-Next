@@ -10,6 +10,7 @@
  * ボリューム構築・チルト補正・ビューポート配線は `viewer/mpr.ts`。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { MIN_SLAB_MM, finestVoxelMm, tooFineForVolumeRendering } from "../viewer/volumeScale";
 import { RenderingEngine, Enums, eventTarget } from "@cornerstonejs/core";
 import {
   fetchSeries,
@@ -196,6 +197,12 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
         ctx.study.studyInstanceUid,
         series.seriesInstanceUid,
       ).catch(() => null);
+      if (tooFineForVolumeRendering(guardLayout)) {
+        // ボクセルが描画ライブラリの最小のスラブより細かい（顕微鏡など）。組んでも正しく描けないので、理由を出して止める
+        setPhase("error");
+        setMessage(t("volume.tooFine", { voxel: String(finestVoxelMm(guardLayout)?.toPrecision(3)), min: String(MIN_SLAB_MM) }));
+        return;
+      }
       let imageIds = guardLayout
         ? imageIdsForLayoutStack(guardLayout.cells, mode, 0, 0, ctx.study.studyInstanceUid, series.seriesInstanceUid)
         : [];

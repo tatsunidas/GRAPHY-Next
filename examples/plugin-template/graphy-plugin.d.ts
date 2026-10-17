@@ -1241,7 +1241,7 @@ interface PluginHostBase {
     status: () => Promise<StorageStatus>;
   };
   /**
-   * **消えてもよい派生データの置き場**（H68）。再構成結果・特徴量・長い計算の途中経過など、作り直せるが高いものを
+   * **消えてもよい派生データの置き場**（H69）。再構成結果・特徴量・長い計算の途中経過など、作り直せるが高いものを
    * 再起動をまたいで置く。🔴 **いつでも消える**（上限・再起動・アプリの更新・利用者の操作）ので、唯一のコピーを
    * 置かないこと。永続させたいものは `saveStore`（H8）へ。新しい権限・同意は要らない（ローカルだけで外へは出ない）。
    * 呼び出しはプラグインの id に固定され、他のプラグインの項目は見えない（誤接触の防止で、信頼境界ではない）。
@@ -1249,6 +1249,16 @@ interface PluginHostBase {
    * 全プラグインが 1 つの上限を共有するので、大量に置くと他のプラグインの項目を追い出しうる。デスクトップ専用。
    */
   cache: PluginCache;
+  /**
+   * **顕微鏡の取り込み**（H68・**0.5.0 より後の版**）。プラグインが自分のジョブ（`runBackendJob`）で一時フォルダ
+   * `<java.io.tmpdir>/graphy-plugin-microscopy/<プラグイン ID>/` に書いた画素（Raw）を、チャネルごとに
+   * Confocal Microscopy Image（**32 ビット・DICOM 規格外**）として取り込む。**毎回、本体が確認画面を出す**（消せない）。
+   * 1 チャネル＝1 シリーズ。同じ検査・Frame of Reference にまとまる。取り込んだ画素ファイルは本体が消す。
+   * デスクトップ専用（web では `error: "desktop-only"`）。途中で失敗しても、取り込めた分は `imported` に入る。
+   */
+  microscopy: {
+    importVolume: (req: PluginMicroscopyImportRequest, opts?: PluginJobOptions) => Promise<PluginMicroscopyImportOutcome>;
+  };
   /** 本体の DB（H44・H46・H51・**0.3.0 以降**）。 */
   db: {
     /** 患者を ID・氏名の部分一致で探す（H44）。**読み取りのみ**。空文字は全件。 */
@@ -1432,10 +1442,10 @@ export type PickFilesResult =
   | { ok: true; paths: string[] }
   | { ok: false; canceled?: boolean; error?: string };
 
-/** `host.cache.put()` などの結果（H68）。`error` は `invalid-key`・`invalid-index`・`too-large`・`write-failed`・`desktop-only`・`network`。 */
+/** `host.cache.put()` などの結果（H69）。`error` は `invalid-key`・`invalid-index`・`too-large`・`write-failed`・`desktop-only`・`network`。 */
 export type CachePutOutcome = { ok: true } | { ok: false; error: string };
 
-/** `host.cache.checkpoint(jobKey)`（H68）。同じ `jobKey` で再実行したとき、済んだ部分を読んで続きから計算する。 */
+/** `host.cache.checkpoint(jobKey)`（H69）。同じ `jobKey` で再実行したとき、済んだ部分を読んで続きから計算する。 */
 export interface PluginCacheCheckpoint {
   /** `index`（0〜999999）番目の部分を保存する（上書き）。 */
   save: (index: number, data: Uint8Array | ArrayBuffer) => Promise<CachePutOutcome>;
@@ -1445,7 +1455,7 @@ export interface PluginCacheCheckpoint {
   clear: () => Promise<void>;
 }
 
-/** `host.cache`（H68）。 */
+/** `host.cache`（H69）。 */
 export interface PluginCache {
   /** 保存した値。無い・消えたときは null。 */
   get: (key: string) => Promise<Uint8Array | null>;
@@ -2364,3 +2374,45 @@ export interface LabelVolumeRequest {
 }
 
 export type LabelVolumeResult = { ok: true; segmentationId: string; segmentCount: number } | { ok: false; error: string };
+
+/** H68 の 1 チャネル。`spec` は本体の Raw の読み方と同じ。画素間隔は mm。 */
+export interface PluginMicroscopyChannel {
+  /** そのプラグインの一時フォルダの下の画素ファイル。取り込んだら本体が消す。 */
+  path: string;
+  spec: {
+    width: number;
+    height: number;
+    slices: number;
+    phases: number;
+    type: "uint8" | "int8" | "uint16" | "int16" | "uint32" | "int32" | "float32" | "float64";
+    byteOrder: "little" | "big";
+    offset: number;
+    /** [x, y, z] mm */
+    spacing: [number, number, number];
+    orientation?: "axial";
+  };
+  channelName?: string;
+  /** 照明の波長 nm。分からなければ省く（入れずに「不明」と記録される）。 */
+  wavelengthNm?: number | null;
+}
+
+export interface PluginMicroscopyImportRequest {
+  sourceName: string;
+  sourceFormat: string;
+  patient: { patientId: string; patientName?: string; birthDate?: string; sex?: string };
+  studyDescription?: string;
+  /** 省略で SCT 91723000 "Anatomical Structure"。 */
+  anatomy?: { value: string; scheme: string; meaning: string } | null;
+  confocalMode?: "FLUORESCENCE" | "REFLECTANCE";
+  channels: PluginMicroscopyChannel[];
+}
+
+export interface PluginMicroscopyImported {
+  seriesInstanceUid: string;
+  channelName: string;
+  frames: number;
+}
+
+export type PluginMicroscopyImportOutcome =
+  | { ok: true; studyInstanceUid?: string; imported: PluginMicroscopyImported[] }
+  | { ok: false; error?: string; cancelled?: boolean; studyInstanceUid?: string; imported: PluginMicroscopyImported[] };
