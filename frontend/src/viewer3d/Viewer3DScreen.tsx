@@ -31,6 +31,7 @@ import {
   isCacheSizeExceeded,
 } from "../viewer/volumeMemory";
 import { confirmVolumeMemory } from "../viewer/volumeMemoryGuard";
+import { MIN_SLAB_MM, finestVoxelMm, tooFineForVolumeRendering } from "../viewer/volumeScale";
 import { useDeviceClass } from "../mobile/useDeviceClass";
 import { imageIdForInstance, imageIdForCell } from "../viewer/imageId";
 import { metaData } from "@cornerstonejs/core";
@@ -260,6 +261,12 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
       if (imageIds.length < 3) {
         setPhase("error");
         setMessage(t("viewer3d.needVolume"));
+        return;
+      }
+      if (tooFineForVolumeRendering(guardLayout)) {
+        // ボクセルが描画ライブラリの最小のスラブより細かい（顕微鏡など）。組んでも真っ黒になるので、理由を出して止める
+        setPhase("error");
+        setMessage(t("volume.tooFine", { voxel: String(finestVoxelMm(guardLayout)?.toPrecision(3)), min: String(MIN_SLAB_MM) }));
         return;
       }
 

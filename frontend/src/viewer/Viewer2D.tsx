@@ -2969,6 +2969,7 @@ export function Viewer2D({
           <button
             onClick={() => setShowInfo((v) => !v)}
             aria-pressed={showInfo}
+            data-testid="viewer-info-toggle"
             title={t("viewer.info.toggle")}
             style={{ ...infoBtn, ...(showInfo ? infoBtnOn : null), flexShrink: 0, ...(compact ? infoBtnCompact : null) }}
           >

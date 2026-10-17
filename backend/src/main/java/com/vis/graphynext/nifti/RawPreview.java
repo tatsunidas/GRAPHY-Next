@@ -81,7 +81,7 @@ public final class RawPreview {
         return new Result(png.toByteArray(), any ? min : Double.NaN, any ? max : Double.NaN, z);
     }
 
-    static double[] decode(byte[] raw, RawSpec spec, int n) {
+    public static double[] decode(byte[] raw, RawSpec spec, int n) {
         ByteBuffer b = ByteBuffer.wrap(raw).order(spec.order());
         double[] v = new double[n];
         switch (spec.datatype()) {
