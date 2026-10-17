@@ -66,7 +66,71 @@ public final class NiftiHeader {
     /** ヘッダのバイト順（画素データも同じ順で並ぶ）。 */
     public ByteOrder byteOrder = ByteOrder.LITTLE_ENDIAN;
 
+    /** 利用者の入力から作った Raw データのヘッダか（{@link #raw}）。画素ファイルに gzip の判定をしない。 */
+    public boolean raw;
+
     private NiftiHeader() {
+    }
+
+    /**
+     * ヘッダの無い画素配列（Raw）を、利用者が申告した寸法・型・幾何から NIfTI のヘッダとして組む。
+     * 画素は x が最速 → y → z → t の順で、{@code offset} バイト目から並ぶ前提。
+     *
+     * <p>幾何は患者座標 LPS で受け取り、sform（RAS）に直して入れる。スライス方向は行 × 列（右手系）なので、
+     * {@link NiftiGeometry} の列の反転は起きず、画素は行 0 を上としてそのまま並ぶ。pixdim にも同じ間隔を入れて、
+     * アフィンと pixdim の大きさの照合（{@link NiftiGeometry#of}）が食い違わないようにする。
+     *
+     * @param rowLps    行方向（列番号が増える向き）の単位ベクトル
+     * @param colLps    列方向（行番号が増える向き）の単位ベクトル
+     * @param spacingMm {x, y, z} の画素間隔 mm
+     * @param originLps 先頭画素の中心の位置 mm
+     */
+    public static NiftiHeader raw(int nx, int ny, int nz, int nt, int datatype, ByteOrder order, long offset,
+                                  double[] spacingMm, double[] rowLps, double[] colLps, double[] originLps) {
+        NiftiHeader h = new NiftiHeader();
+        h.raw = true;
+        h.datatype = datatype;
+        h.bitpix = switch (datatype) {
+            case DT_UINT8, DT_INT8 -> 8;
+            case DT_INT16, DT_UINT16 -> 16;
+            case DT_INT32, DT_UINT32, DT_FLOAT32 -> 32;
+            case DT_FLOAT64 -> 64;
+            default -> throw new IllegalArgumentException("Raw で扱わないデータ型です: datatype=" + datatype);
+        };
+        h.dim[0] = nt > 1 ? 4 : 3;
+        h.dim[1] = nx;
+        h.dim[2] = ny;
+        h.dim[3] = nz;
+        h.dim[4] = Math.max(1, nt);
+        h.pixdim[0] = 1;
+        for (int i = 0; i < 3; i++) {
+            h.pixdim[i + 1] = spacingMm[i];
+        }
+        h.voxOffset = offset;
+        h.byteOrder = order;
+        h.sclSlope = 1;
+        h.sclInter = 0;
+        h.xyztUnits = 2; // mm
+        double[] n = {
+            rowLps[1] * colLps[2] - rowLps[2] * colLps[1],
+            rowLps[2] * colLps[0] - rowLps[0] * colLps[2],
+            rowLps[0] * colLps[1] - rowLps[1] * colLps[0],
+        };
+        double[][] lps = new double[3][4];
+        for (int a = 0; a < 3; a++) {
+            lps[a][0] = rowLps[a] * spacingMm[0];
+            lps[a][1] = colLps[a] * spacingMm[1];
+            lps[a][2] = n[a] * spacingMm[2];
+            lps[a][3] = originLps[a];
+        }
+        // LPS → RAS（x 行と y 行の符号を反転）。NiftiGeometry が LPS へ戻す
+        for (int i = 0; i < 4; i++) {
+            h.srowX[i] = lps[0][i] == 0 ? 0 : -lps[0][i];
+            h.srowY[i] = lps[1][i] == 0 ? 0 : -lps[1][i];
+            h.srowZ[i] = lps[2][i];
+        }
+        h.sformCode = 1;
+        return h;
     }
 
     /**
