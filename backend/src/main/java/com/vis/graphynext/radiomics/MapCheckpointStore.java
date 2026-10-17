@@ -33,6 +33,9 @@ import java.util.TreeMap;
  * 特徴・カーネル・stride・2D/3D・margin・設定、RadiomicsJ の版を含める。ファイルの mtime などの間接的な印には
  * 頼らない（画素が同じなら同じ結果、違えば別のキー）。出力のメタ情報（シリーズ説明・番号）は含めない。
  *
+ * <p>ROI 特徴量表の結果（{@link #featureKey}）も同じ置き場所に 1 項目で置く。マップの途中結果と違い、
+ * 取り込み後に消さない（同じ入力の再要求に返す）。
+ *
  * <p>上限は未設定（無制限）。既定値は実測のうえで決める（P2-11）。
  */
 @Component
@@ -42,6 +45,9 @@ public class MapCheckpointStore {
 
     /** 計算の仕方（スライス単位の呼び出し・補間など）を変えたら上げる。 */
     static final String ENGINE_VERSION = "tex-ckpt-1";
+
+    /** ROI 特徴量表の計算の仕方（入力の組み立て・結果の形）を変えたら上げる。 */
+    static final String FEATURE_ENGINE_VERSION = "roi-features-1";
 
     private final Checkpoints checkpoints;
     private final String radiomicsjVersion;
@@ -107,6 +113,52 @@ public class MapCheckpointStore {
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    /**
+     * ROI 特徴量表のキー。{@code settings} は RadiomicsJ に渡す設定そのもの（上書きを済ませたもの）。
+     *
+     * @return キー。使えないときは null
+     */
+    String featureKey(Map<String, String> settings, RadiomicsMapEngine.LoadedVolume vol) {
+        return featureKey(FEATURE_ENGINE_VERSION, settings, vol);
+    }
+
+    String featureKey(String engineVersion, Map<String, String> settings, RadiomicsMapEngine.LoadedVolume vol) {
+        if (!enabled()) {
+            return null;
+        }
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            put(md, engineVersion);
+            put(md, radiomicsjVersion);
+            put(md, vol.label() + "/" + vol.hasMask());
+            put(md, vol.width() + "x" + vol.height() + "x" + vol.slices());
+            put(md, vol.calibration().pixelWidth + "," + vol.calibration().pixelHeight + ","
+                    + vol.calibration().pixelDepth);
+            for (Map.Entry<String, String> e : new TreeMap<>(settings).entrySet()) {
+                put(md, e.getKey() + "=" + e.getValue());
+            }
+            hashVolume(md, vol.image());
+            hashVolume(md, vol.mask());
+            return toHex(md.digest());
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** ROI 特徴量表の結果を保存する（置き換え）。 */
+    void saveFeatures(String key, byte[] json) {
+        checkpoints.save(key, 0, json);
+    }
+
+    /** 保存済みの ROI 特徴量表の結果。無い・壊れているときは empty。 */
+    Optional<byte[]> loadFeatures(String key) {
+        return checkpoints.load(key, 0);
+    }
+
+    String radiomicsjVersion() {
+        return radiomicsjVersion;
     }
 
     private static void hashVolume(MessageDigest md, ImagePlus imp) {

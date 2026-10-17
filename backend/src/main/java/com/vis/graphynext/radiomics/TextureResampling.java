@@ -167,9 +167,12 @@ final class TextureResampling {
         ImagePlus mask1 = relabel(mask, label, 1);
         mask1.setCalibration(cal.copy());
 
-        ImagePlus rImg = Utils.resample3D(img, false, target[0], target[1], target[2]);
-        ImagePlus rMask = Utils.resample3D(mask1, true, target[0], target[1], target[2],
-                RadiomicsJ.interpolation_mask3D);
+        // resample3D は補間の方式・部分体積のしきい値を RadiomicsJ の static から読む。
+        ImagePlus[] r = RadiomicsLock.get(() -> new ImagePlus[]{
+                Utils.resample3D(img, false, target[0], target[1], target[2]),
+                Utils.resample3D(mask1, true, target[0], target[1], target[2], RadiomicsJ.interpolation_mask3D)});
+        ImagePlus rImg = r[0];
+        ImagePlus rMask = r[1];
         if (rImg == null || rMask == null) {
             throw new IllegalStateException("リサンプリングに失敗しました（RadiomicsJ が null を返しました）。");
         }
