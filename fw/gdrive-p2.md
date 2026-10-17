@@ -87,3 +87,4 @@
 | P2-5 | 実 Drive 検証（小さな上限で追い出し→取得）・文書 | 実機で通し 28/1/0・復元 9/0/0。見つかった終了処理の不具合（ロック残り・スナップショット欠落）を修正し、実アプリで修正前後を確認（`fw/verify-db-gdrive.md` §5） |
 | P2-5b | プラグインへの公開 (a): `host.storage.ensureLocal/status`・JAR の `__ensureLocal`（H67） | 実装・テスト済み（実アプリでの確認は下記の記録） |
 | P2-7 | 汎用 `CacheStore` 本体＋`.cache/video` の載せ替え（[cache-store.md](cache-store.md)） | 実装・検証済み |
+| P2-8 | Radiomics マップのスライス単位の途中結果（[cache-store.md](cache-store.md)） | 実装・検証済み |

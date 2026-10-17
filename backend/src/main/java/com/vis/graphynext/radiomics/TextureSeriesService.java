@@ -69,7 +69,8 @@ public class TextureSeriesService {
         Attributes tmpl = readHeader(srcFiles.get(0));
 
         // マップ計算（重い）。
-        RadiomicsMapEngine.MapResult map = engine.compute(req, progress);
+        RadiomicsMapEngine.Computed computed = engine.computeResumable(req, progress);
+        RadiomicsMapEngine.MapResult map = computed.map();
 
         // 32bit float → 16bit unsigned のスケール係数（GRAPHY convertTo16BitWithCalibration 準拠）。
         double[] mm = minMax(map.data());
@@ -104,6 +105,8 @@ public class TextureSeriesService {
             sops.add(a.getString(Tag.SOPInstanceUID));
             ingest(a);
         }
+        // 派生シリーズは保管庫に入った。途中結果はもう要らない（失敗・キャンセルのときだけ残す）。
+        engine.discardCheckpoints(computed);
         log.info("texture series created: {} ({} instances) feature={} from {}",
                 newSeriesUid, sops.size(), featureName, req.sourceSeriesUid());
         return new Result(newSeriesUid, sops);

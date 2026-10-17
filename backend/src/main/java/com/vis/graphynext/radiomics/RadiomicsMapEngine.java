@@ -43,9 +43,18 @@ public class RadiomicsMapEngine {
     private static final Logger log = LoggerFactory.getLogger(RadiomicsMapEngine.class);
 
     private final DicomStorageService storage;
+    private final MapCheckpointStore checkpoints;
 
-    public RadiomicsMapEngine(DicomStorageService storage) {
+    public RadiomicsMapEngine(DicomStorageService storage, MapCheckpointStore checkpoints) {
         this.storage = storage;
+        this.checkpoints = checkpoints;
+    }
+
+    /**
+     * 計算結果と、その途中結果のキー。派生シリーズの取り込みが済んだら
+     * {@link #discardCheckpoints} で途中結果を消す（失敗・キャンセルでは残して、再投入で続きから）。
+     */
+    public record Computed(MapResult map, String checkpointKey, int checkpointSlices, int restoredSlices) {
     }
 
     /** マップ計算結果（source 次元の float ボリューム＋幾何）。 */
@@ -94,9 +103,19 @@ public class RadiomicsMapEngine {
 
     /** ターゲット（＋任意マスク）から 1 特徴のマップを計算する。 */
     public MapResult compute(TextureSeriesRequest req, TextureProgress progress) throws IOException {
+        return computeResumable(req, progress).map();
+    }
+
+    /** {@link #compute} と同じ計算。スライスごとの途中結果を使い（あれば続きから）、キーも返す。 */
+    public Computed computeResumable(TextureSeriesRequest req, TextureProgress progress) throws IOException {
         LoadedVolume vol = load(req.studyInstanceUid(), req.sourceSeriesUid(), req.channel(), req.timePoint(),
                 req.maskSeriesUid(), req.maskChannel(), parseLabel(req), req.settings());
         return computeFrom(req, progress, vol);
+    }
+
+    /** 取り込みが済んだ計算の途中結果を消す。 */
+    public void discardCheckpoints(Computed c) {
+        checkpoints.clear(c.checkpointKey(), c.checkpointSlices());
     }
 
     /**
@@ -231,7 +250,7 @@ public class RadiomicsMapEngine {
     }
 
     /** {@link #load} で揃えた材料からマップを計算する（compute の後半）。 */
-    private MapResult computeFrom(TextureSeriesRequest req, TextureProgress progress, LoadedVolume vol) {
+    Computed computeFrom(TextureSeriesRequest req, TextureProgress progress, LoadedVolume vol) {
         ImagePlus img = vol.image();
         ImagePlus mask = vol.mask();
         int w = vol.width();
@@ -270,9 +289,10 @@ public class RadiomicsMapEngine {
         final int mapH = h;
         long t0 = System.currentTimeMillis();
         TextureProgress sink = (progress != null) ? progress : TextureProgress.NONE;
-        float[][] full = runMap(glam, req, () -> (stride <= 1)
-                ? computeFullRes(img, mask, built, filterSize, d2, margin, sink)
-                : computeStrided(img, mask, built, filterSize, d2, stride, margin, mapW, mapH, nZ, sink));
+        String ckptKey = checkpoints.key(req, vol, filterSize, stride, d2, margin);
+        int[] restoredCount = new int[1];
+        float[][] full = runMap(glam, req, () -> computePerSlice(img, mask, built, filterSize, d2, stride, margin,
+                mapW, mapH, nZ, sink, ckptKey, restoredCount));
         log.info("[texture] map '{}' {}x{}x{} stride={} filter={} margin={} in {} ms",
                 built.displayName(), w, h, nZ, stride, filterSize, margin, System.currentTimeMillis() - t0);
 
@@ -296,11 +316,11 @@ public class RadiomicsMapEngine {
             ippList.add(ippByZ.get(z));
             sopList.add(sopPerZ[z]);
         }
-        return new MapResult(outW, outH, outZ, full,
+        return new Computed(new MapResult(outW, outH, outZ, full,
                 built.displayName(),
                 vol.imageOrientationPatient(),
                 vol.pixelSpacingRow(), vol.pixelSpacingCol(),
-                ippList, sopList, vol.frameOfReferenceUid());
+                ippList, sopList, vol.frameOfReferenceUid()), ckptKey, nZ, restoredCount[0]);
     }
 
     /**
@@ -357,49 +377,57 @@ public class RadiomicsMapEngine {
         return count;
     }
 
-    /** stride<=1: RadiomicsJ に全スライスを一括計算させる（等倍・補間なし）。 */
-    private float[][] computeFullRes(ImagePlus img, ImagePlus mask, TextureFeatureCatalog.BuiltFeature built,
-                                     int filterSize, boolean d2, int margin, TextureProgress progress) {
-        ImagePlus lo = FeatureVisualizationMap.generateFeatureMap(img, mask, -1, built.calculator(), filterSize, d2, 1,
-                margin, progress::update);
-        int s = lo.getNSlices();
-        float[][] out = new float[s][];
-        ImageStack st = lo.getStack();
-        for (int z = 0; z < s; z++) {
-            out[z] = (float[]) st.getProcessor(z + 1).convertToFloatProcessor().getPixels();
-        }
-        return out;
-    }
-
     /**
-     * stride&gt;1: XY のみ RadiomicsJ が間引く（<b>Z 方向は常に stride=1＝全スライス計算</b>）。
-     * 得られた各スライス（out_w×out_h）を <b>Bilinear 補間で source 次元（w×h）へ拡大</b>する。
-     * Z は 1:1 のため補間しない（ユーザー指定: Z stride は 1 固定）。
+     * 1 スライスずつ計算する（RadiomicsJ の {@code slice} 指定。<b>全スライス一括と全画素一致する</b>ことを
+     * 族 6＋GLAM × 2D/3D × stride × margin × マスクで確認済み: {@code fw/cache-store.md}）。
+     * 1 枚終わるごとに途中結果を保存し、同じ入力の再投入では保存済みの枚をそのまま使う。
+     *
+     * <p>stride&gt;1 は XY のみ RadiomicsJ が間引き（<b>Z は常に全スライス</b>）、得られた各スライス
+     * （outW×outH）を <b>Bilinear 補間で source 次元（w×h）へ拡大</b>する。保存するのは補間<b>前</b>の
+     * 計算結果。キャンセルは 1 枚終わって保存した<b>後</b>の {@code progress} から投げられる。
+     *
+     * @param key 途中結果のキー。null なら保存も復元もしない
      */
-    private float[][] computeStrided(ImagePlus img, ImagePlus mask, TextureFeatureCatalog.BuiltFeature built,
-                                     int filterSize, boolean d2, int stride, int margin, int w, int h, int s,
-                                     TextureProgress progress) {
+    private float[][] computePerSlice(ImagePlus img, ImagePlus mask, TextureFeatureCatalog.BuiltFeature built,
+                                      int filterSize, boolean d2, int stride, int margin, int w, int h, int s,
+                                      TextureProgress progress, String key, int[] restoredOut) {
         int outW = (int) Math.ceil((double) w / stride);
         int outH = (int) Math.ceil((double) h / stride);
-        // 全スライスを一括計算（XY のみ間引き）。
-        ImagePlus lo = FeatureVisualizationMap.generateFeatureMap(img, mask, -1, built.calculator(), filterSize, d2,
-                stride, margin, progress::update);
-        ImageStack st = lo.getStack();
-        int loN = lo.getNSlices();
-        float[][] full = new float[s][w * h];
-        for (int sz = 0; sz < s; sz++) {
-            // 万一スライス数が食い違っても範囲内に収める。
-            float[] lz = (float[]) st.getProcessor(Math.min(sz, loN - 1) + 1).convertToFloatProcessor().getPixels();
-            float[] dst = full[sz];
-            for (int sy = 0; sy < h; sy++) {
-                double fy = (double) sy / stride;
-                for (int sx = 0; sx < w; sx++) {
-                    double fx = (double) sx / stride;
-                    dst[sy * w + sx] = bilinear(lz, outW, outH, fx, fy);
+        float[][] full = new float[s][];
+        int restored = 0;
+        progress.update(0, s);
+        for (int z = 0; z < s; z++) {
+            float[] low = key == null ? null : checkpoints.load(key, z, outW * outH).orElse(null);
+            if (low != null) {
+                restored++;
+            } else {
+                ImagePlus one = FeatureVisualizationMap.generateFeatureMap(img, mask, z + 1, built.calculator(),
+                        filterSize, d2, stride, margin, (done, total) -> { });
+                low = (float[]) one.getStack().getProcessor(1).convertToFloatProcessor().getPixels();
+                if (key != null && low.length == outW * outH) {
+                    checkpoints.save(key, z, low);
                 }
             }
+            full[z] = (stride <= 1) ? low : expand(low, outW, outH, w, h, stride);
+            progress.update(z + 1, s);
+        }
+        restoredOut[0] = restored;
+        if (restored > 0) {
+            log.info("[texture] {} of {} slices restored from checkpoints", restored, s);
         }
         return full;
+    }
+
+    private static float[] expand(float[] low, int outW, int outH, int w, int h, int stride) {
+        float[] dst = new float[w * h];
+        for (int sy = 0; sy < h; sy++) {
+            double fy = (double) sy / stride;
+            for (int sx = 0; sx < w; sx++) {
+                double fx = (double) sx / stride;
+                dst[sy * w + sx] = bilinear(low, outW, outH, fx, fy);
+            }
+        }
+        return dst;
     }
 
     /** 低解像度スライス low[outW*outH] を Bilinear 補間サンプルする（XY のみ）。 */
