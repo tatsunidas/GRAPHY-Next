@@ -127,4 +127,10 @@ public final class Checkpoints {
             store.remove(name(jobKey, i));
         }
     }
+
+    /** その jobKey の項目を、添字を問わずすべて消す。消せた数を返す。 */
+    public int clearAll(String jobKey) {
+        name(jobKey, 0); // jobKey の検査
+        return store.removeByPrefix(jobKey + ".");
+    }
 }

@@ -49,6 +49,29 @@ Drive の保管庫のキャッシュ（`GdriveSyncService` の追い出し）と
 - **実アプリ**（パッケージ jar・専用ポート・合成 CT 風 96×96×24、GLCM_JointEntropy カーネル 5・3D）: 13 枚目でキャンセル（保存 14 件）→ 再投入で「14 of 24 slices restored from checkpoints」、完了後に途中結果 0 件。再開して作った派生シリーズと、途中結果なしで通しに作ったシリーズは、**24 枚すべて画素・RescaleSlope/Intercept が一致**。
 - 未検証: 実画像・大きなボリュームでの時間短縮の実測、GLAM を実アプリで中断→再開、アプリ終了（kill）をまたいだ再開（同じディスク上の保存なので成り立つ想定だが、プロセスを kill しての確認はしていない）、Windows/macOS 実機（CI の単体テストのみ）。
 
+## P2-9: プラグイン向け `host.cache`（H69）（2026-10-18）
+プラグインにも「消えてもよい派生データ」の置き場とチェックポイントを開いた。設計書 `fw/plugin-architecture.md` H69・作者ガイド §2-3c。
+
+### 仕組み
+- `PluginCacheService`（`<storageDir>/.cache/plugins`、`CacheStore` 上の `Checkpoints`）。名前は `p<sha256(プラグイン id) 16桁>-<sha256(種別+鍵) 32桁>`。**鍵の文字列はディスク上の名前にも URL にも出ない**。項目と checkpoint は種別が別（同じ文字列でも別の項目）。
+- REST `PluginCacheController`（H67 と同じ `guard`）: `PUT|GET|HEAD|DELETE /api/plugins/{id}/cache/item`、`PUT|GET|DELETE .../cache/checkpoint/{index}`、`DELETE .../cache/checkpoint`。鍵はヘッダ `X-Plugin-Cache-Key`。本体は読む前に Content-Length で上限を弾く。
+- 画面 `host.cache`（`pluginCacheApi.ts`、`m.id` に固定）、JAR `spi/PluginCache`（args の `__cache`、`PluginJobService.CACHE_KEY`。画面から同名キーが来ても上書き）。
+- `CacheStore.removeByPrefix`、`Checkpoints.loadAny`/`clearAll` を追加。
+
+### 1 件の上限を 64 MiB から 16 MiB に下げた経緯（計画からの変更）
+計画では 64 MiB（仮の値）だった。実アプリ（パッケージ版 Electron 31・Linux）で調べると、**画面（renderer）から約 40 MiB 以上のボディを 1 回の fetch で送るとウィンドウごと落ちる**（16・32 MiB は正常、40・44・48・64 MiB は落ちた。宛先が `/actuator/health` でも同じ＝backend は無関係。配列の確保だけなら 64 MiB でも落ちない。60 MiB のダウンロードは正常）。原因は未調査（Chromium 側と思われるが、この機械固有かどうかも不明）。ユーザーに諮り、**既定 16 MiB に下げる**とした。画面側は backend の上限を上げた環境でも 32 MiB 超は送らず `too-large`。大きなデータは checkpoint の添字で分割する。
+
+### 番号
+H68 は並行して別セッションが顕微鏡の取り込み（#323）に使ったため、この機能は **H69**。同時期に `Checkpoints.load(jobKey,index)`（長さを問わない読み出し、ROI 特徴量表用）も main に入ったので、こちらの `loadAny` は捨てて main のものを使い、`clearAll` だけ足した。
+
+### 検証記録
+- 単体: `PluginCacheServiceTest` 13 件（往復・上書き・削除、別プラグインの同じ鍵は見えず消せない、鍵がファイル名に出ない、不正な鍵、上限超過は何も残さない・上書き失敗は前の値が残る、破損は「無い」扱い、checkpoint が jobKey ごとに独立、JAR 口が値で返す、再起動後も読める）、`PluginCacheHttpTest` 6 件（実 HTTP: 3 MiB のバイナリがバイト一致、日本語・空白・`+` の鍵、別 id で 404、鍵なし・長すぎ・制御文字・不正エンコードで 400、4 MiB+1 は 413 で何も残らず・ちょうどは通る、checkpoint の往復と全消去）、`CheckpointsTest`/`CacheStoreTest` の追加、`PluginJobServiceTest` の `__cache` 注入と上書き。frontend `pluginCacheApi.test.ts` 7 件。backend 全体 1077 件・frontend 全体 2333 件・失敗 0（main の変更を取り込んだ後は backend 1106 件・frontend 2343 件・失敗 0）。
+- **変異確認**（backend 5 件・frontend 3 件、すべて該当テストが落ちた）: 名前にプラグイン id を入れない／上限検査を外す／`clearAll` が別の jobKey も消す／`__cache` の上書きを外す／項目と checkpoint の種別を区別しない、画面: URL の id を無エンコード／鍵を URL エンコードせずヘッダに／添字検査を外す。変異が効かない箇所: 本体を読む前の Content-Length 検査（外しても最終的に `TOO_LARGE` を返すので結果が同じ。守っているのはメモリ使用量で、テストでは観測できない）。
+- **実アプリ**（パッケージ版・専用ポート・実プラグイン［UI＋JAR を実際に置いた］をメニューから起動）: 1 回目 11/11 合格（3 MiB の SHA-256 一致、has、17 MiB は `too-large` で何も残らない、不正な鍵、別 id は 404・自分の id は 200、checkpoint 保存、**実 JAR のジョブが `__cache` を受け取り、画面が置いた項目を読め、往復・上限超は false・checkpoint・clear が動く**）。アプリを終了して再起動した 2 回目 3/3 合格（3 MiB の項目が SHA-256 まで一致、checkpoint が読め、保存していない添字は null）。H67 で未確認だった「実 JAR 経由」は今回確認した。
+  - 検証の落とし穴: 最初の実行は、前の実験のアプリが旧ビルドのままポートを握っていて、**旧版の backend に対して**走り、上限超の確認が誤って不合格になった。孤児プロセスを止めてから新ビルドだけで取り直した。
+- 未検証: Windows/macOS 実機（CI の単体・統合テストのみ）、web モードの 501（テストは standalone のみ）、32〜40 MiB の間の正確な閾値（画面側の上限は安全側の 32 MiB で固定）、プラグインのアンインストール時の項目の削除（今は上限の追い出し任せ）。
+
+
 ### ROI 特徴量表の結果（2026-10-18）
 - ROI 特徴量表（`RoiFeatureService`、RadiomicsJ の一括抽出）の結果も同じ置き場所（`.cache/radiomics/`）に **1 項目（添字 0）の JSON** で置く。マップの途中結果と違い**消さない**（同じ入力の再要求に返す）。消えても計算し直せる。
 - キー（`MapCheckpointStore.featureKey`）: エンジンの版定数 `roi-features-1`、RadiomicsJ の版、RadiomicsJ に渡す設定（上書き後・キー順）、ラベル、寸法、校正、画像とマスクの画素。シリーズ UID・説明は含めない。版が取れなければ使わない。

@@ -15,6 +15,7 @@ import type { PluginHost, PluginHostSeed, PluginManifest, PluginCategory, Plugin
 import { DEMO_MODULES, MOCK_ENABLED, MOCK_MANIFESTS } from "./mockPlugins";
 import { requestAiGeneration, type AiGenerationOptions } from "./pluginAiApi";
 import { pickDirectory, saveFileAs, saveJobArtifact, saveJobArtifactTo, writeToDirectory } from "./pluginFileApi";
+import { createPluginCache } from "./pluginCacheApi";
 import { ensureLocal, storageStatus } from "./pluginStorageApi";
 import { listVideos, notifyDbChanged, pickFiles, runBackendJob, searchPatients } from "./pluginCommonApi";
 import {
@@ -121,6 +122,8 @@ function withHostApis(m: PluginManifest, host: PluginHostSeed): PluginHost {
       ensureLocal: (req, opts) => ensureLocal(m.id, req, opts),
       status: () => storageStatus(m.id),
     },
+    // H69: 消えてもよい派生データの置き場。呼び出しはマニフェストの id に固定する
+    cache: createPluginCache(m.id),
     db: {
       searchPatients,
       listVideos,

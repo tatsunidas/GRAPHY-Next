@@ -106,4 +106,16 @@ class CheckpointsTest {
         assertTrue(c.save(KEY, 1, data));
         return c.load(KEY, 1).orElseThrow();
     }
+
+    @Test
+    void clearAllRemovesEveryIndexOfThatJobOnly(@TempDir Path dir) {
+        Checkpoints c = new Checkpoints(new CacheStore(dir, 0));
+        String other = "fedcba9876543210fedcba9876543210";
+        for (int i : new int[] {0, 5, 999}) { c.save(KEY, i, new byte[4]); c.save(other, i, new byte[4]); }
+        assertEquals(3, c.clearAll(KEY));
+        for (int i : new int[] {0, 5, 999}) {
+            assertTrue(c.load(KEY, i).isEmpty());
+            assertTrue(c.load(other, i).isPresent());
+        }
+    }
 }
