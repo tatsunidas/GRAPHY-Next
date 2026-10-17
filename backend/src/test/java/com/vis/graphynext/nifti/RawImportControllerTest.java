@@ -66,6 +66,15 @@ class RawImportControllerTest {
     }
 
     @Test
+    void probe_はファイルの大きさを返し_無ければ400() throws IOException {
+        Path f = Files.createTempFile("raw", ".raw");
+        Files.write(f, new byte[123]);
+        RawImportController c = new RawImportController(new CountingService());
+        assertThat(c.probe(new RawImportController.ProbeRequest(f.toString())).getBody().fileBytes()).isEqualTo(123);
+        assertThat(c.probe(new RawImportController.ProbeRequest(f + ".missing")).getStatusCode().value()).isEqualTo(400);
+    }
+
+    @Test
     void 申告の誤りとファイル無しは400() throws IOException {
         CountingService svc = new CountingService();
         RawImportController c = new RawImportController(svc);

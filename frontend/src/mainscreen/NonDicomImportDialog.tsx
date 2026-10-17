@@ -7,11 +7,15 @@ import { useEffect, useRef, useState } from "react";
 import {
   importNifti,
   importNonDicom,
+  importRaw,
   probeNifti,
+  probeRaw,
   type NiftiProbe,
   type NonDicomResult,
+  type RawSpec,
   type Study,
 } from "../api";
+import { RAW_TYPES, rawRequiredBytes, rawSizeStatus, type RawType } from "./rawSize";
 import { desktop } from "../desktopBridge";
 import { useI18n } from "../i18n/i18n";
 
@@ -83,7 +87,20 @@ export function NonDicomImportDialog({
   const [niftiUnitCustom, setNiftiUnitCustom] = useState("");
   const [metadataPath, setMetadataPath] = useState<string | null>(null);
   const [niftiSummary, setNiftiSummary] = useState<string | null>(null);
+  // Raw（拡張子で判定できない「その他」のファイル）は、利用者が申告した寸法・型・幾何で DICOM へ変換する（fw/nifti-import.md §8）
+  const [rawSizes, setRawSizes] = useState<Record<string, number>>({});
+  const [rawWidth, setRawWidth] = useState("");
+  const [rawHeight, setRawHeight] = useState("");
+  const [rawSlices, setRawSlices] = useState("1");
+  const [rawPhases, setRawPhases] = useState("1");
+  const [rawType, setRawType] = useState<RawType>("int16");
+  const [rawOrder, setRawOrder] = useState<"little" | "big">("little");
+  const [rawOffset, setRawOffset] = useState("0");
+  const [rawSpacing, setRawSpacing] = useState<[string, string, string]>(["1", "1", "1"]);
+  const [rawOrientation, setRawOrientation] = useState<"axial" | "coronal" | "sagittal">("axial");
+  const [rawSummary, setRawSummary] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const rawInputRef = useRef<HTMLInputElement>(null);
   const metaInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -105,6 +122,17 @@ export function NonDicomImportDialog({
     setNiftiUnitCustom("");
     setMetadataPath(null);
     setNiftiSummary(null);
+    setRawSizes({});
+    setRawWidth("");
+    setRawHeight("");
+    setRawSlices("1");
+    setRawPhases("1");
+    setRawType("int16");
+    setRawOrder("little");
+    setRawOffset("0");
+    setRawSpacing(["1", "1", "1"]);
+    setRawOrientation("axial");
+    setRawSummary(null);
   }, [open, study]);
 
   if (!open) return null;
@@ -129,6 +157,12 @@ export function NonDicomImportDialog({
         .then((probe) => setNiftiProbes((prev) => ({ ...prev, [p]: probe })))
         .catch(() => undefined);
     }
+    // Raw は大きさを読んでおく（必要なバイト数と比べ、足りなければ取り込ませない）
+    for (const p of picked.filter((x) => kindOf(x) === "other")) {
+      probeRaw(p)
+        .then((r) => setRawSizes((prev) => ({ ...prev, [p]: r.fileBytes })))
+        .catch((e) => setError(String(e)));
+    }
   };
 
   /** サイドカー JSON（dcm2niix / BIDS）を選ぶ。 */
@@ -142,12 +176,29 @@ export function NonDicomImportDialog({
   const removePath = (p: string) => setPaths((prev) => prev.filter((x) => x !== p));
 
   const effectivePatientId = target === "existing" ? study?.patientId ?? "" : pid;
-  const canRun = paths.length > 0 && effectivePatientId.trim() !== "" && !busy;
+  const rawPaths = paths.filter((p) => kindOf(p) === "other");
+  const rawRequired = rawRequiredBytes({
+    width: Number(rawWidth),
+    height: Number(rawHeight),
+    slices: Number(rawSlices),
+    phases: Number(rawPhases),
+    type: rawType,
+    offset: Number(rawOffset),
+  });
+  const rawSpacingNum = rawSpacing.map(Number) as [number, number, number];
+  const rawSpacingOk = rawSpacingNum.every((v) => Number.isFinite(v) && v > 0);
+  // 大きさを読めていない・足りないファイルが 1 つでもあれば取り込ませない
+  const rawReady =
+    rawPaths.length === 0 ||
+    (rawRequired !== null &&
+      rawSpacingOk &&
+      rawPaths.every((p) => rawSizes[p] !== undefined && rawSizeStatus(rawRequired, rawSizes[p]).kind !== "short"));
+  const canRun = paths.length > 0 && effectivePatientId.trim() !== "" && !busy && rawReady;
 
   const run = async () => {
     if (!canRun) return;
     // 一般画像・PDF・動画が混在している場合は中止して混在させないよう促す（種別ごとに取込）。
-    const kinds = new Set(paths.map(kindOf).filter((k) => k !== "other"));
+    const kinds = new Set(paths.map(kindOf));
     if (kinds.size > 1) {
       window.alert(t("nondicom.mixed"));
       return;
@@ -156,9 +207,14 @@ export function NonDicomImportDialog({
     setError(null);
     setResult(null);
     setNiftiSummary(null);
+    setRawSummary(null);
     try {
       if (kinds.has("nifti")) {
         await runNifti();
+        return;
+      }
+      if (kinds.has("other")) {
+        await runRaw();
         return;
       }
       const req =
@@ -241,6 +297,52 @@ export function NonDicomImportDialog({
       // （容積・スライス厚が桁で変わる。EMIDEC の LGE で実際に 10 倍ずれていた）
       setError(t("nifti.warn.spacing", { detail: spacingNotes[0] }));
     }
+    if (imported > 0) onImported?.();
+  }
+
+  /** Raw を 1 本ずつ変換して取り込む（1 ファイル＝1 シリーズ。読み方は全ファイル共通）。 */
+  async function runRaw(): Promise<void> {
+    if (rawRequired === null) return;
+    const valueUnit = niftiUnitCode(niftiUnit, niftiUnitCustom);
+    if (valueUnit === null) {
+      setError(t("nifti.unit.invalid"));
+      return;
+    }
+    const spec: RawSpec = {
+      width: Number(rawWidth),
+      height: Number(rawHeight),
+      slices: Number(rawSlices),
+      phases: Number(rawPhases),
+      type: rawType,
+      byteOrder: rawOrder,
+      offset: Number(rawOffset),
+      spacing: rawSpacingNum,
+      orientation: rawOrientation,
+    };
+    let imported = 0;
+    for (const p of rawPaths) {
+      try {
+        const r = await importRaw({
+          path: p,
+          spec,
+          modality: niftiModality,
+          valueUnit,
+          patientId: effectivePatientId,
+          patientName: target === "existing" ? study?.patientName ?? "" : pname,
+          patientBirthDate: target === "existing" ? "" : birth,
+          patientSex: target === "existing" ? "" : sex,
+          studyDescription: target === "existing" ? study?.studyDescription ?? "" : studyDesc,
+          seriesDescription: seriesDesc,
+          studyInstanceUid: target === "existing" ? study?.studyInstanceUid : undefined,
+        });
+        imported += r.result?.imported ?? 0;
+      } catch (e) {
+        setError(`${baseName(p)}: ${String(e)}`);
+        if (imported > 0) onImported?.();
+        return;
+      }
+    }
+    setRawSummary(t("raw.result", { files: String(rawPaths.length), instances: String(imported) }));
     if (imported > 0) onImported?.();
   }
 
@@ -371,6 +473,110 @@ export function NonDicomImportDialog({
             </Section>
           )}
 
+          {rawPaths.length > 0 && (
+            <Section title={t("raw.section")}>
+              <Field label={t("raw.size")}>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <input value={rawWidth} onChange={(e) => setRawWidth(e.target.value)} placeholder={t("raw.width")} style={input} data-testid="raw-width" />
+                  <input value={rawHeight} onChange={(e) => setRawHeight(e.target.value)} placeholder={t("raw.height")} style={input} data-testid="raw-height" />
+                  <input value={rawSlices} onChange={(e) => setRawSlices(e.target.value)} placeholder={t("raw.slices")} style={input} data-testid="raw-slices" />
+                  <input value={rawPhases} onChange={(e) => setRawPhases(e.target.value)} placeholder={t("raw.phases")} style={input} data-testid="raw-phases" />
+                </div>
+                <div style={{ fontSize: 11, color: "#667" }}>{t("raw.size.help")}</div>
+              </Field>
+              <Field label={t("raw.type")}>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <select value={rawType} onChange={(e) => setRawType(e.target.value as RawType)} style={input} data-testid="raw-type">
+                    {(Object.keys(RAW_TYPES) as RawType[]).map((k) => (
+                      <option key={k} value={k}>
+                        {k}
+                      </option>
+                    ))}
+                  </select>
+                  <select value={rawOrder} onChange={(e) => setRawOrder(e.target.value as "little" | "big")} style={input} data-testid="raw-order">
+                    <option value="little">{t("raw.order.little")}</option>
+                    <option value="big">{t("raw.order.big")}</option>
+                  </select>
+                </div>
+              </Field>
+              <Field label={t("raw.offset")}>
+                <input value={rawOffset} onChange={(e) => setRawOffset(e.target.value)} style={input} data-testid="raw-offset" />
+              </Field>
+              <Field label={t("raw.spacing")}>
+                <div style={{ display: "flex", gap: 6 }}>
+                  {(["x", "y", "z"] as const).map((ax, i) => (
+                    <input
+                      key={ax}
+                      value={rawSpacing[i]}
+                      onChange={(e) => setRawSpacing((prev) => prev.map((v, j) => (j === i ? e.target.value : v)) as [string, string, string])}
+                      placeholder={ax}
+                      style={input}
+                      data-testid={`raw-spacing-${ax}`}
+                    />
+                  ))}
+                </div>
+              </Field>
+              <Field label={t("raw.orientation")}>
+                <select value={rawOrientation} onChange={(e) => setRawOrientation(e.target.value as "axial" | "coronal" | "sagittal")} style={input} data-testid="raw-orientation">
+                  <option value="axial">{t("raw.orientation.axial")}</option>
+                  <option value="coronal">{t("raw.orientation.coronal")}</option>
+                  <option value="sagittal">{t("raw.orientation.sagittal")}</option>
+                </select>
+              </Field>
+              <Field label={t("nifti.modality")}>
+                <select value={niftiModality} onChange={(e) => setNiftiModality(e.target.value)} style={input} data-testid="raw-modality">
+                  <option value="MR">MR</option>
+                  <option value="CT">CT</option>
+                  <option value="PT">PT</option>
+                  <option value="NM">NM</option>
+                </select>
+              </Field>
+              <Field label={t("nifti.unit")}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <select value={niftiUnit} onChange={(e) => setNiftiUnit(e.target.value as NiftiUnitKey)} style={input}>
+                    {NIFTI_UNIT_OPTIONS.map((o) => (
+                      <option key={o.key} value={o.key}>
+                        {t(o.labelKey)}
+                      </option>
+                    ))}
+                  </select>
+                  {niftiUnit === "other" && (
+                    <input
+                      value={niftiUnitCustom}
+                      onChange={(e) => setNiftiUnitCustom(e.target.value)}
+                      placeholder={t("nifti.unit.otherPlaceholder")}
+                      maxLength={16}
+                      style={input}
+                    />
+                  )}
+                </div>
+              </Field>
+              <div data-testid="raw-size-status" style={{ fontSize: 12, marginTop: 4 }}>
+                {rawRequired === null ? (
+                  <div style={{ color: "#b00020" }}>{t("raw.size.invalid")}</div>
+                ) : (
+                  rawPaths.map((p) => {
+                    const size = rawSizes[p];
+                    if (size === undefined) return <div key={p}>{baseName(p)}: …</div>;
+                    const st = rawSizeStatus(rawRequired, size);
+                    return (
+                      <div key={p} style={{ color: st.kind === "short" ? "#b00020" : st.kind === "trailing" ? "#7a4a00" : "#2e7d32" }}>
+                        {baseName(p)}: {t("raw.size.compare", { required: rawRequired.toLocaleString(), file: size.toLocaleString() })}{" "}
+                        {st.kind === "exact"
+                          ? t("raw.size.exact")
+                          : st.kind === "short"
+                            ? t("raw.size.short", { missing: st.missing.toLocaleString() })
+                            : t("raw.size.trailing", { extra: st.extra.toLocaleString() })}
+                      </div>
+                    );
+                  })
+                )}
+                {!rawSpacingOk && <div style={{ color: "#b00020" }}>{t("raw.spacing.invalid")}</div>}
+              </div>
+              <div style={{ fontSize: 12, color: "#7a4a00", marginTop: 4 }}>{t("raw.warn.geometry")}</div>
+            </Section>
+          )}
+
           <Section title={t("nondicom.series")}>
             <Field label={t("field.description")}>
               <input value={seriesDesc} onChange={(e) => setSeriesDesc(e.target.value)} style={input} />
@@ -393,13 +599,18 @@ export function NonDicomImportDialog({
               <button onClick={pickFiles} disabled={!hasDesktop} style={btn}>
                 {t("nondicom.pickFiles")}
               </button>
+              {/* Raw は拡張子が決まっていない（.raw .img .bin・拡張子なし）ので、絞り込まない選択口を別に持つ */}
+              <input ref={rawInputRef} type="file" multiple onChange={onFilesChosen} style={{ display: "none" }} data-testid="raw-file-input" />
+              <button onClick={() => rawInputRef.current?.click()} disabled={!hasDesktop} style={btn} data-testid="raw-pick">
+                {t("raw.pick")}
+              </button>
               <span style={{ fontSize: 12, color: "#667" }}>{t("nondicom.supported")}</span>
             </div>
             {paths.length === 0 && <div style={{ color: "#8a98a6", fontSize: 12 }}>{t("nondicom.noFiles")}</div>}
             <div style={fileList}>
               {paths.map((p) => {
                 const k = kindOf(p);
-                const unsupported = k === "video" || k === "other";
+                const unsupported = k === "video";
                 return (
                   <div key={p} style={fileRow}>
                     <span title={p} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
@@ -421,6 +632,11 @@ export function NonDicomImportDialog({
           </Section>
 
           {niftiSummary && <div style={{ color: "#1c2733", marginTop: 6 }}>{niftiSummary}</div>}
+          {rawSummary && (
+            <div style={{ color: "#1c2733", marginTop: 6 }} data-testid="raw-summary">
+              {rawSummary}
+            </div>
+          )}
           {error && <div style={{ color: "#b00020", marginTop: 6 }}>{error}</div>}
 
           {result && (
@@ -453,6 +669,7 @@ export function NonDicomImportDialog({
           <button
             onClick={run}
             disabled={!canRun}
+            data-testid="nondicom-run"
             style={{
               ...btn,
               background: canRun ? "#0b5cad" : "#9fb6cf",
@@ -469,7 +686,7 @@ export function NonDicomImportDialog({
 }
 
 function kindIcon(k: FileKind): string {
-  return k === "pdf" ? "📄" : k === "image" ? "🖼" : k === "video" ? "🎞" : "❔";
+  return k === "pdf" ? "📄" : k === "image" ? "🖼" : k === "video" ? "🎞" : "▦";
 }
 function statusIcon(s: string): string {
   return s === "imported" ? "✅" : s === "failed" ? "⛔" : "⚠️";
