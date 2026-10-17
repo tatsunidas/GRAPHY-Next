@@ -356,7 +356,9 @@ function InstanceList({ study, series, mode }: { study: Study; series: Series; m
 }
 
 // シリーズプレビュー: 幅いっぱい、高さはウィンドウ高に追従（画像はこの枠の中央に Fit 表示。ツールは既定で畳む）。
-// 240px はメニュー・ツールバー・ステータスバー・余白の合計の目安。小さい窓でも 320px は確保する。
+// 240px の根拠（実測）: スクロール領域の高さは 100vh − 137px（メニュー・ツールバー・ステータスバー）で、
+// その上に表・見出しが 103px 分ある。末尾までスクロールすると窓高 600/900/1200 のいずれでも
+// プレビュー全体が領域内に収まる。小さい窓でも 320px は確保する。
 const previewBox: React.CSSProperties = {
   marginTop: 10,
   display: "flex",
