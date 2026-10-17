@@ -1,7 +1,7 @@
 # Texture（Radiomics 可視化マップ）設計（GRAPHY-Next）
 
 > 作成: 2026-07-02（調査・設計フェーズ）。旧 GRAPHY `com.vis.core.radiomics` パッケージ（Java/Swing, 計 8,684 行）を GRAPHY-Next へ移植。
-> 依存ライブラリ: **RadiomicsJ**（`io.github.tatsunidas:radiomicsj:2.1.18`、著者=本プロジェクト作者、Java パッケージは `io.github.tatsunidas.radiomics.*`）。RadiomicsJ は ImageJ1（`net.imagej:ij`）に依存。
+> 依存ライブラリ: **RadiomicsJ**（`io.github.tatsunidas:radiomicsj`、現行 **2.4.1**（2026-10-18〜。当初は 2.1.18）、ライセンス Apache-2.0、著者=本プロジェクト作者、Java パッケージは `io.github.tatsunidas.radiomics.*`）。RadiomicsJ は ImageJ1（`net.imagej:ij`）に依存。
 > 関連: `fw/suv-calibration-design.md`（ダイアログ駆動＋派生シリーズ DB 保存の先例）/ `fw/slicer-design.md`（セカンダリ派生シリーズ）/ `fw/dicom-data-layer.md`。
 > 旧実装: `GRAPHY/src/main/java/com/vis/core/radiomics/`（`RadiomicsVisualizationPanel`/`RadiomicsPipeline`/`RadiomicsSettings`/`RadiomicsWindow`/`SettingsContext`）。
 
@@ -527,7 +527,20 @@ standalone バックエンド（port 8090）＋ dev サーバー ＋ ブラウ�
    分かっているので、全域が見える窓を初期値として書き込むようにした（`TextureSeriesService`）。
    これは GLAM 固有ではなく **Texture 機能全体に元からあった穴**。
 
-### 未修正の問題（RadiomicsJ 側・要判断）
+### ✅ 解決済み: 非等方の警告がログを埋める問題（RadiomicsJ 2.4.1・2026-10-18）
+
+RadiomicsJ 2.4.1 は、警告を「同じ画素間隔なら 1 回だけ」にし、`generateFeatureMap` の呼び出しごとに出し直す。
+Next のマップは P2-8 から**スライス 1 枚ずつ** `generateFeatureMap` を呼ぶ（`RadiomicsMapEngine.computePerSlice`）ので、
+1 回の実行で **1 行ではなく計算したスライスの数だけ**出る（それでも窓の数よりずっと少ない）。1 行にするには RadiomicsJ 側で
+呼び出しをまたいで覚える口が要るが、いまの量で困っていないので手を付けていない。回帰の試験は `GlamAnisotropyWarningTest`。
+
+**2.4.0 → 2.4.1 の比較（2026-10-18、その場で両方の版を実行）**: 合成ファントム 20×20×6（等方 1×1×1 mm／非等方 0.7×0.7×2.0 mm）×
+マップ 4 種（GLCM_JointEntropy・FIRSTORDER_Mean・NGTDM_Coarseness・GLAM、3D・部分マスク・カーネル 5）× stride {1,3} の
+**16 組合せで全画素がビット一致**、ROI 全体の GLAM 特徴 150 個も等方・非等方とも一致。比較器の負例（カーネル 7 との比較）は 16/16 で不一致と出た。
+警告の行数は非等方の GLAM マップで **576 → 4（stride 1）、64 → 4（stride 3）**（4 は ROI のあるスライス数）。
+途中結果のキーには RadiomicsJ の版が入っているので、2.4.0 で作った途中結果は再利用されない（意図どおり）。
+
+以下は 2.4.0 当時の記録。
 
 🔴 **非等方の警告が窓ごとに出力され、1 回の実行で 64,000 行・9.5MB のログになる**。
 `GLAMFeatures.compute()` の `warnWhenVoxelsAreNotIsotropic()` が `IJ.log` を呼ぶため。
