@@ -31,7 +31,9 @@ class StandaloneOnlyEndpointsTest {
             NiftiImportController.class,
             RawImportController.class,
             UrlImportController.class,
-            ImportWatchController.class);
+            ImportWatchController.class,
+            com.vis.graphynext.microscopy.MicroscopyImportController.class,
+            com.vis.graphynext.microscopy.PluginMicroscopyController.class);
 
     @Test
     void パス指定の取り込みのコントローラは_standalone_だけ() {
