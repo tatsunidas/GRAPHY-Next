@@ -137,6 +137,7 @@ export function SeriesViewer({
   seriesUid,
   fillHeight = false,
   showControls: showControlsProp = true,
+  onShowControlsChange,
   syncEnabled = false,
   referenceLinesEnabled = false,
   referenceLabel,
@@ -160,6 +161,12 @@ export function SeriesViewer({
    * 既定 true（単独表示・StudyList では従来どおり）。
    */
   showControls?: boolean;
+  /**
+   * 指定すると開閉は**親が持つ**（制御モード）: 開閉の正は `showControls`、ボタンは本関数を呼ぶ。
+   * 2D ビューアのタイルが、Fusion バーなど画像外の部品を同じ開閉に束ねるのに使う。
+   * 未指定なら内部 state（`showControls` は初期値・追従元）。
+   */
+  onShowControlsChange?: (open: boolean) => void;
   /** シリーズ Sync: このタイルの Sync トグルが ON か。ON かつ SliderView 時のみ同期に参加。 */
   syncEnabled?: boolean;
   /** リファレンスライン: 他シリーズの現在スライス面の交差線をこのビューに描画する。 */
@@ -185,11 +192,15 @@ export function SeriesViewer({
   acceptsTaskLaunch?: boolean;
 }) {
   const { t } = useI18n();
-  // ツールパネルの開閉。親の showControls を初期値・追従元にし（一括開閉は親が上書き）、
-  // タイル単位のトグルボタンでも切り替える。
-  const [controlsOpen, setControlsOpen] = useState(showControlsProp);
-  useEffect(() => { setControlsOpen(showControlsProp); }, [showControlsProp]);
+  // ツールパネルの開閉。未制御のときは親の showControls を初期値・追従元にし（一括開閉は親が上書き）、
+  // タイル単位のトグルボタンでも切り替える。制御モード（onShowControlsChange あり）では親の値が正。
+  const [innerOpen, setInnerOpen] = useState(showControlsProp);
+  useEffect(() => { setInnerOpen(showControlsProp); }, [showControlsProp]);
+  const controlsOpen = onShowControlsChange ? showControlsProp : innerOpen;
+  const toggleControls = () => (onShowControlsChange ? onShowControlsChange(!controlsOpen) : setInnerOpen((v) => !v));
   const showControls = controlsOpen;
+  // XA のシネ（CineControls）は再生中。パネルを畳んでも再生は続くので、開閉ボタンに印を出す。
+  const [cinePlaying, setCinePlaying] = useState(false);
   // automator（自律検証ツール）用デバッグAPI。dev ビルドのみ、冪等（fw/HANDOFF.md 参照なし・
   // automator/checklist/10-viewer2d-core.md 参照）。
   useEffect(() => { installDebugApi(); }, []);
@@ -1412,15 +1423,18 @@ export function SeriesViewer({
           type="button"
           data-testid="series-controls-toggle"
           aria-pressed={controlsOpen}
-          onClick={() => setControlsOpen((v) => !v)}
+          onClick={toggleControls}
           title={t(controlsOpen ? "series.controls.collapse" : "series.controls.expand")}
           style={controlsToggle}
         >
           {controlsOpen ? "▾" : "▸"} <ToolIcon file={UI_ICON_FILES.settings} size={14} />
+          {(cinePlaying || playZ || playC || playT) && (
+            <span data-testid="series-controls-playing" title={t("series.controls.playing")}>▶</span>
+          )}
         </button>
       )}
-      {showControls && (
-      <div style={controls} data-testid="series-controls">
+      {/* 畳んでいる間も**マウントしたまま隠す**（display:none）。アンマウントすると CineControls の再生が止まる。 */}
+      <div style={showControls ? controls : { ...controls, display: "none" }} data-testid="series-controls">
         {/* GridView の操作バー（W/L・Pan・Zoom はドラッグ、回転/反転/Fit はボタン。全セルにリンク）。 */}
         {gridOn && (
           <div style={row}>
@@ -1453,6 +1467,7 @@ export function SeriesViewer({
                   onIndex={navLocked ? () => {} : setZ}
                   source={xaCineSource}
                   locked={navLocked}
+                  onPlayingChange={setCinePlaying}
                 />
               ) : (
                 <DimSlider
@@ -1957,7 +1972,6 @@ export function SeriesViewer({
           {gridDisabled && <span style={hint}>{t("series.grid.disabled")}</span>}
         </div>
       </div>
-      )}
       {prDialogOpen && (
         <XaPresentationDialog
           studyUid={studyUid}

@@ -20,6 +20,7 @@
  *
  * ⚠️ 判定は**数値で突き合わせる**（[[automator-verification-hygiene]]）。「動いた」で通さない。
  */
+import { dismissStartupDialogs } from "../common/dismissDialogs.js";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -128,30 +129,11 @@ async function viewportState(page: Page): Promise<ViewState | null> {
   });
 }
 
-/**
- * 起動時に前面へ出るダイアログを閉じる。
- *
- * <p>この環境では**アプリ内更新通知**（v0.1.12 → v0.1.16）が起動直後に出て、
- * 半透明オーバーレイ（z-index 1001）が検索ボタンのクリックを奪う。検証内容とは無関係なので閉じる。
- */
-async function dismissStartupDialogs(page: Page): Promise<void> {
-  for (let i = 0; i < 3; i++) {
-    const dialog = page.locator('[role="dialog"]');
-    if ((await dialog.count()) === 0) return;
-    const close = dialog.first().getByRole("button", { name: /閉じる|Close/ });
-    if ((await close.count()) > 0) {
-      await close.first().click().catch(() => {});
-    } else {
-      // 「あとで」等のボタンが無ければオーバーレイの外側クリックで閉じる。
-      await page.mouse.click(5, 5).catch(() => {});
-    }
-    await page.waitForTimeout(400);
-  }
-}
-
 /** 検査一覧から最初のスタディ→最初のシリーズを開く。 */
 async function openFirstSeries(page: Page): Promise<void> {
   await waitForMainScreenReady(page, 60_000);
+  // 更新通知は更新確認の応答後に出るので、出るまで少し待ってから閉じる。
+  await page.waitForTimeout(2500);
   await dismissStartupDialogs(page);
   page.once("dialog", (d) => void d.accept());
   const dateInputs = page.locator('input[type="date"]');
