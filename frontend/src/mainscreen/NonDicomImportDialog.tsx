@@ -60,11 +60,14 @@ export function NonDicomImportDialog({
   onClose,
   study,
   onImported,
+  initialPaths,
 }: {
   open: boolean;
   onClose: () => void;
   study: Study | null;
   onImported?: () => void;
+  /** 最初から選んでおくファイル（URL から落としたもの）。 */
+  initialPaths?: string[];
 }) {
   const { t } = useI18n();
   const hasDesktop = !!desktop();
@@ -137,7 +140,9 @@ export function NonDicomImportDialog({
     setRawSpacing(["1", "1", "1"]);
     setRawOrientation("axial");
     setRawSummary(null);
-  }, [open, study]);
+    if (open && initialPaths && initialPaths.length > 0) addPaths(initialPaths);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, study, initialPaths?.join("|")]);
 
   // 読み方・ファイルが変わったら古いプレビューを捨てる（別の読み方の画像を見て判断させない）
   const rawKey = [rawWidth, rawHeight, rawSlices, rawPhases, rawType, rawOrder, rawOffset, rawOrientation, ...rawSpacing,
@@ -164,6 +169,11 @@ export function NonDicomImportDialog({
       return;
     }
     setError(null);
+    addPaths(picked);
+  };
+
+  /** ファイルを足し、NIfTI はヘッダを、Raw は大きさを先に読む。 */
+  function addPaths(picked: string[]): void {
     setPaths((prev) => [...new Set([...prev, ...picked])]);
     // NIfTI は取り込み前にヘッダを読む（次元と「向きが入っているか」を先に見せる）
     for (const p of picked.filter(isNifti)) {
@@ -177,7 +187,7 @@ export function NonDicomImportDialog({
         .then((r) => setRawSizes((prev) => ({ ...prev, [p]: r.fileBytes })))
         .catch((e) => setError(String(e)));
     }
-  };
+  }
 
   /** サイドカー JSON（dcm2niix / BIDS）を選ぶ。 */
   const onMetadataChosen = (e: React.ChangeEvent<HTMLInputElement>) => {

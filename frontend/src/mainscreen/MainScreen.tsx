@@ -3,7 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { useRef, useState } from "react";
-import { importPaths, type AppStatus, type Study, type Series, type StudyFilters } from "../api";
+import { deleteUrlImportFile, importPaths, type AppStatus, type ImportResult, type Study, type Series, type StudyFilters } from "../api";
 import { desktop } from "../desktopBridge";
 import { droppedPaths, hasDroppedFiles } from "./droppedPaths";
 import { importedStudiesView, type ImportedView } from "./importedView";
@@ -21,6 +21,7 @@ import { ExportDialog } from "./ExportDialog";
 import { SendDialog } from "./SendDialog";
 import { TagViewerDialog } from "./TagViewerDialog";
 import { NonDicomImportDialog } from "./NonDicomImportDialog";
+import { UrlImportDialog } from "./UrlImportDialog";
 import { ReportEditorDialog } from "../report/ReportEditorDialog";
 import { ReportManagerDialog } from "../report/ReportManagerDialog";
 import { DoseReportDialog } from "./DoseReportDialog";
@@ -81,8 +82,11 @@ export function MainScreen({
     | "reportManager"
     | "dose"
     | "taskLauncher"
+    | "urlImport"
     | null
   >(null);
+  // URL から落とした非 DICOM のファイル。非DICOM取込をそのファイルで開き、閉じたら一時ファイルを消す
+  const [urlFile, setUrlFile] = useState<{ path: string; jobId: string } | null>(null);
   // ReportManagerDialog から特定レポートを開いたときだけ設定（新規/報告ボタンからの通常オープンは null=自動解決）。
   const [reportEditorId, setReportEditorId] = useState<string | null>(null);
 
@@ -113,7 +117,17 @@ export function MainScreen({
   const runImportOnce = async (paths: string[]) => {
     setImportMsg(t("main.import.running"));
     try {
-      const r = await importPaths(paths);
+      applyImportResult(await importPaths(paths));
+      return;
+    } catch (e) {
+      setImportMsg(t("common.fetchError", { error: String(e) }));
+    }
+    setTimeout(() => setImportMsg(null), 6000);
+  };
+
+  /** 取り込みの結果を一覧に反映する（ファイル・フォルダ・ドロップ・URL で共通）。 */
+  const applyImportResult = (r: ImportResult) => {
+    {
       const base = t("main.import.result", { imported: r.imported, skipped: r.skipped, failed: r.failed });
       // 検査日の無いスタディは既定の検索条件（今日）では出ない。取り込めているのに
       // 「失敗した」と読まれるため、件数があるときだけ理由と対処を添える。
@@ -130,11 +144,7 @@ export function MainScreen({
       setReloadKey((k) => k + 1);
       // 注意文つきのときは読む時間が要る（既定の 6 秒では消えるのが早い）。
       setTimeout(() => setImportMsg(null), r.studiesWithoutDate > 0 ? 20000 : 6000);
-      return;
-    } catch (e) {
-      setImportMsg(t("common.fetchError", { error: String(e) }));
     }
-    setTimeout(() => setImportMsg(null), 6000);
   };
 
   // 各ビューア起動。2D Viewer は別ウィンドウ（desktop）/ ハッシュ（web）で開く。3D/MPR/Slicer は順次。
@@ -290,6 +300,14 @@ export function MainScreen({
       setOpenTool("taskLauncher");
       return;
     }
+    if (kind === "urlImport") {
+      if (!canImport) {
+        window.alert(t("common.standaloneOnlyFeature"));
+        return;
+      }
+      setOpenTool("urlImport");
+      return;
+    }
     if (kind === "nonDicomImport") {
       if (!isStandalone) {
         // 非DICOM取込はローカルファイルパス（Electron専用）が前提のため standalone 専用。
@@ -440,9 +458,23 @@ export function MainScreen({
       />
       <NonDicomImportDialog
         open={openTool === "nonDicomImport"}
-        onClose={() => setOpenTool(null)}
+        onClose={() => {
+          setOpenTool(null);
+          if (urlFile) void deleteUrlImportFile(urlFile.jobId).catch(() => undefined);
+          setUrlFile(null);
+        }}
         study={selectedStudy}
+        initialPaths={urlFile ? [urlFile.path] : undefined}
         onImported={() => setReloadKey((k) => k + 1)}
+      />
+      <UrlImportDialog
+        open={openTool === "urlImport"}
+        onClose={() => setOpenTool(null)}
+        onDicomImported={(r) => applyImportResult(r)}
+        onFile={(path, jobId) => {
+          setUrlFile({ path, jobId });
+          setOpenTool("nonDicomImport");
+        }}
       />
       <ReportEditorDialog
         open={openTool === "report"}

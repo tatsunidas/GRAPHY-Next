@@ -88,6 +88,7 @@ export function MenuBar({
       label: t("main.menu.file"),
       items: [
         { label: t("main.import.action"), onClick: onImport, disabled: !canImport },
+        { label: t("urlImport.action"), onClick: () => onOpenTool("urlImport"), disabled: !canImport, testId: "menu-item-url-import" },
         ...(isDemo ? [] : [{ label: t("main.toolbar.export"), onClick: () => onOpenTool("export") }]),
         { label: t("main.toolbar.send"), onClick: () => onOpenTool("send"), testId: "menu-item-send" },
         ...(isDemo ? [] : [{ label: t("qr.title"), onClick: () => onOpenViewer("qr") }]),

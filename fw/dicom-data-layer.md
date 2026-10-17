@@ -215,6 +215,28 @@ Spring DI（`@Profile`）でプロファイルに応じて自動注入。
 - 未検証: Windows のローカル・ネットワーク共有・Google Drive for desktop の
   フォルダでの書き込み途中の判定。
 
+### 4.4 URL からの取り込み（standalone のみ・2026-10-17）
+
+ファイル＞「URL から取り込む…」。http/https の URL を backend が保管庫の作業フォルダ（`<root>/.import/url-<jobId>-<名前>`。取り込みの走査は `.import` に入らない）へ落とし、中身で振り分ける。
+
+| 中身 | 扱い |
+|---|---|
+| DICOM（先頭 128 バイトの後が "DICM"） | そのまま `ImportService.importPaths` に渡し、一時ファイルを消す。結果は通常の取り込みと同じく一覧に出す（`applyImportResult`） |
+| ZIP（`PK\x03\x04`） | 取り込み自体が未対応なので断り、消す |
+| それ以外（NIfTI・画像・PDF・動画・Raw） | パスを返し、画面が非 DICOM 取り込みのダイアログをそのファイルで開く。ダイアログを閉じたら `DELETE /api/import/url/{jobId}/file` で消す |
+
+- API: `POST /api/import/url {url}` → ジョブ（`TextureJobService` と同じ投入・問い合わせ・中止の形）、`GET /api/import/url/{jobId}`（受信バイト数・Content-Length）、
+  `POST …/{jobId}/cancel`、`DELETE …/{jobId}/file`。終わったジョブは 1 時間で忘れ、残った一時ファイルも消す。
+- **安全（OWASP A10 SSRF）**: コントローラもサービスも `@Profile("standalone")`——web モードでサーバーに任意の URL を取りに行かせない（web では 404）。
+  スキームは http/https だけ。リダイレクトは自前で辿り（`Redirect.NEVER`）、**毎回スキームを確かめる**（https → file: を断る。外すと単体テストが落ちることを確かめた）。
+  ユーザー情報付き（`user:pass@`）は断る。認証情報・Cookie は送らない。**ログには URL のクエリを出さない**（`redact`。秘密が混ざりうる）。
+- 空き容量: Content-Length が保管庫の空き（`getUsableSpace`）を超えていれば受け取る前に止める。長さが分からなければ、受信中に受け始めたときの空きを超えた時点で止める。
+  固定のサイズ上限は置かない。
+- タイムアウト: 接続 15 秒（`GdriveSyncService` と同じ）、応答の見出しまで 60 秒（`DriveClient` と同じ）。本文の受信には上限を置かない（大きな検査がある）。中止はいつでも効く。
+- 保存名: Content-Disposition → URL の末尾。英数字と `. _ -` 以外は `_`、パスは落とす。拡張子が無ければ Content-Type から補う（非 DICOM 取り込みは拡張子で種類を決めるため）。
+- 検証: `UrlImportServiceTest`（11 件。DICOM・非 DICOM・ZIP・スキーム・リダイレクト・HTTP エラー・空き不足（長さあり／なし）・中止・保存名・ログの伏せ字）、
+  自動スパイク `automator/src/spike/urlImportCheck.ts`（実アプリ 8 件: DICOM を URL で取り込むと一覧に出る、Raw は非DICOM取込がそのファイルで開き閉じると一時ファイルが消える、ftp:// は理由つきで断る）。
+
 ## 5. Web（BFF）仕様
 
 - frontend → `WebDicomDataService`(REST) → PACS の DICOMweb。
