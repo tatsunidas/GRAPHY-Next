@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<title>GRAPHY-Next v0.4.1 操作ガイド — DB フォルダ・Google Drive・自動取り込み</title>
+<title>GRAPHY-Next v0.5.0 操作ガイド — DB フォルダ・Google Drive・自動取り込み</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../guide.css">
 <style>
@@ -22,7 +22,7 @@
 
 <section class="page cover">
   <div class="left">
-    <p class="eyebrow">GRAPHY-NEXT v0.4.1 / 操作ガイド</p>
+    <p class="eyebrow">GRAPHY-NEXT v0.5.0 / 操作ガイド</p>
     <h1>DB フォルダを<br>使い分ける・<br>Drive に置く</h1>
     <p class="lead">検査の索引と画像をまとめた「DB フォルダ」を、研究ごと・外付けディスクなどに分けて使えるようになりました。検査を別の DB フォルダへコピー・移動でき、DB フォルダを Google Drive に置くこともできます。監視フォルダからの自動取り込み、2D の ROI を 3D で見る改良、ワンド・ROI 統計などの改良も入っています。</p>
     <div class="chips">
@@ -225,19 +225,20 @@
 <section class="page">
   <div>
     <p class="eyebrow">STEP 10 / ROI ツール ＞ 2D Wand</p>
-    <h2>ワンドを HU・SUV のしきい値で塗る</h2>
+    <h2>ワンドのしきい値が、どのモダリティでも使える</h2>
   </div>
   <div class="shot-row">
-    <figure class="shot" data-shot="wand"><img src="shots/wand.png" alt="2D Wand のパネル。方式で範囲を選び、下限 40 HU・上限 200 HU で肝臓を塗っている"></figure>
+    <figure class="shot" data-shot="wand"><img src="shots/wand.png" alt="2D Wand のパネル。判定値は HU、方式で範囲を選び、下限 40 HU・上限 200 HU で肝臓を塗っている"></figure>
     <div style="display:flex;flex-direction:column;gap:28px">
       <ol class="explain">
-        <li><span class="num">1</span><p>方式に<b>以上・以下・範囲</b>が加わりました。HU・SUV などの<b>校正値</b>で判定します</p></li>
-        <li><span class="num">2</span><p>下限（以上・範囲のとき）</p></li>
-        <li><span class="num">3</span><p>上限（以下・範囲のとき）</p></li>
-        <li><span class="num">4</span><p><b>塗ったボクセル</b>の数。上限（400 万）で打ち切ったときは警告が出ます</p></li>
+        <li><span class="num">1</span><p><b>判定値</b>。CT・PET は <b>HU・SUV</b>、Rescale の無い画像は<b>画素値</b>、カラーは<b>輝度</b>。どの方式もこの値で判定します</p></li>
+        <li><span class="num">2</span><p><b>以上・以下・範囲</b>がどの画像でも選べます</p></li>
+        <li><span class="num">3</span><p>下限（数値かスライダー）</p></li>
+        <li><span class="num">4</span><p>上限</p></li>
+        <li><span class="num">5</span><p><b>塗ったボクセル</b>の数</p></li>
       </ol>
-      <p class="callout">「許容差」（既定）は今までどおり<b>保存された画素値</b>で判定します。値の意味が違うので注意してください。</p>
-      <p class="note">シードが条件の外なら理由が出ます。校正の無い画像（カラーなど）では、以上・以下・範囲は選べません。</p>
+      <p class="callout">動画（XA シネなど）では 3D Wand は使えません。2D Wand は使えます。</p>
+      <p class="note">許容差（既定）も判定値の差で測ります。シードが条件の外なら理由が出ます。</p>
     </div>
   </div>
   <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg CC BY 4.0</span><span>11 / 22</span></div>
