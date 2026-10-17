@@ -117,6 +117,17 @@ public final class CacheStore {
         return target;
     }
 
+    /** あれば（{@code valid} が真なら）返す。作らない。 */
+    public java.util.Optional<Path> find(String name, Predicate<Path> valid) {
+        checkName(name);
+        Path target = dir.resolve(name);
+        if (usable(target, valid)) {
+            touch(name);
+            return java.util.Optional.of(target);
+        }
+        return java.util.Optional.empty();
+    }
+
     /** 1 件消す（無ければ何もしない）。消せなければ false。 */
     public boolean remove(String name) {
         checkName(name);
