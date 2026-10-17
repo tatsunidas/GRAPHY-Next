@@ -35,7 +35,8 @@ import { UI_ICON_FILES, ACTIVE_ICON_STYLE } from "../icons/toolIcons";
 import { emitToast } from "./toast";
 import { partitionByLock } from "./roiLock";
 import { installTrueMagnification } from "./magnifier";
-import { ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID } from "./toolIds";
+import { ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID, SCISSORS_TOOL_ID } from "./toolIds";
+import { getScissors, setScissorsActive, subscribeScissors, scissorsToolName, scissorsStrategy, SCISSORS_TOOL_NAMES } from "./scissorsStore";
 import { setViewerContext, clearViewerContext, getViewerContext, type ViewerContext } from "./viewerContext";
 import { getRoiMaskMeta, setRoiMaskMeta, subscribeRoiMaskStore } from "./roiMaskStore";
 import { noteFocusedTile } from "./focusedTile";
@@ -171,10 +172,10 @@ const MEASURE_TOOLS = [
   POINT_ROI_TOOL_NAME,
 ];
 // 左ドラッグに割り当て可能なツール一覧（操作＋計測＋ブラシ＋3D Wand＋Level Sets）。
-const PRIMARY_TOOLS = [WindowLevelTool.toolName, PanTool.toolName, ZoomTool.toolName, MagnifyTool.toolName, ...MEASURE_TOOLS, BrushTool.toolName, WandTool.toolName, LevelSetTool.toolName];
+const PRIMARY_TOOLS = [WindowLevelTool.toolName, PanTool.toolName, ZoomTool.toolName, MagnifyTool.toolName, ...MEASURE_TOOLS, BrushTool.toolName, WandTool.toolName, LevelSetTool.toolName, ...SCISSORS_TOOL_NAMES];
 // 描画/計測/セグメンテーション系ツール（左ドラッグ占有）。これらが有効な間は per-tile の Pan↔W/L 切替を抑止し、
 // 先にツールバーで解除するよう促す（グローバルツールが優先＝ナビ切替が黙って効かないのを避ける）。
-const BLOCKING_TOOLS = new Set<string>([...MEASURE_TOOLS, BrushTool.toolName, ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID]);
+const BLOCKING_TOOLS = new Set<string>([...MEASURE_TOOLS, BrushTool.toolName, ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID, SCISSORS_TOOL_ID]);
 
 // 単一の RenderingEngine を全ビューポートで共有する（WebGL コンテキストを 1 つに保つ＝省メモリ）。
 export const ENGINE_ID = "graphy-engine";
@@ -1253,6 +1254,11 @@ export function Viewer2D({
             // Level Sets（対話型・Fast Marching、L1 時点）。passive で追加、setActiveTool で Primary 割当。
             tg.addTool(LevelSetTool.toolName);
             tg.setToolPassive(LevelSetTool.toolName);
+            // Scissors（矩形・円・球）。3 種とも passive で追加、setActiveTool で形に応じた 1 つを Primary 割当。
+            for (const tn of SCISSORS_TOOL_NAMES) {
+              tg.addTool(tn);
+              tg.setToolPassive(tn);
+            }
             tg.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
             tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
             // 右クリック=Zoom に加えて、2 本指タッチでピンチ Zoom ＋ Pan（§3.3）。
@@ -2320,14 +2326,16 @@ export function Viewer2D({
     const isWand3d = toolName === WAND3D_TOOL_ID;
     const isWand = isWand2d || isWand3d;
     const isLevelSet = toolName === LEVELSET2D_TOOL_ID;
+    const isScissors = toolName === SCISSORS_TOOL_ID;
+    const scissors = getScissors();
     // ThickSlab（合成スライス）有効中は ROI・計測・ブラシ・Wand・Level Sets の作成/編集をブロックする。
     // 合成画像は単一の実スライス(SOP)に一意対応せず、描いた注釈を安全に保存できないため。
-    const isAnnotationTool = MEASURE_TOOLS.includes(toolName) || isBrush || isEraser || isWand || isLevelSet;
+    const isAnnotationTool = MEASURE_TOOLS.includes(toolName) || isBrush || isEraser || isWand || isLevelSet || isScissors;
     if (thickSlabRef.current && isAnnotationTool) {
       emitToast(t("series.thickSlab.roiBlocked"));
       return;
     }
-    const primary = isEraser ? BrushTool.toolName : isWand ? WandTool.toolName : isLevelSet ? LevelSetTool.toolName : toolName;
+    const primary = isEraser ? BrushTool.toolName : isWand ? WandTool.toolName : isLevelSet ? LevelSetTool.toolName : isScissors ? scissorsToolName(scissors.shape) : toolName;
     const applyBindings = () => {
       try {
         for (const tn of PRIMARY_TOOLS) {
@@ -2354,6 +2362,9 @@ export function Viewer2D({
             activeStrategy: isEraser ? "ERASE_INSIDE_CIRCLE" : "FILL_INSIDE_CIRCLE",
           });
         }
+        if (isScissors) {
+          tg.setToolConfiguration(primary, { activeStrategy: scissorsStrategy(scissors.op) });
+        }
         if (isWand) {
           tg.setToolConfiguration(WandTool.toolName, { mode: isWand3d ? "3d" : "2d" }, true);
         }
@@ -2372,11 +2383,19 @@ export function Viewer2D({
       emitToast(t("viewer2d.tool.needVolume"));
       return;
     }
+    // 球は前後のスライスにも及ぶので、3D Wand と同じく動画・規則的でないシリーズでは使えない。
+    if (isScissors && scissors.shape === "sphere") {
+      if (frameStackRef.current || !utilities.isValidVolume(imageIdsRef.current)) {
+        emitToast(t("viewer2d.tool.needVolume"));
+        return;
+      }
+    }
+    setScissorsActive(isScissors);
     // Wand/Level Sets 以外のツールへ切り替えるときは、開いているセッションを確定して閉じる。
     if (!isWand) commitWand();
     if (!isLevelSet) commitLevelSet();
     activeToolRef.current = toolName; // per-tile Pan↔W/L 切替の抑止判定＋スタック再構築時の復元に使う。
-    if (isBrush || isEraser || isWand || isLevelSet) {
+    if (isBrush || isEraser || isWand || isLevelSet || isScissors) {
       // Mask(labelmap) を現在スタックに対し保証してからブラシ/Wand/Level Sets を有効化。
       void ensureStackSegmentation(viewportIdRef.current, imageIdsRef.current).then(applyBindings);
     } else {
@@ -2384,6 +2403,17 @@ export function Viewer2D({
     }
   };
   setActiveToolRef.current = setActiveTool;
+  // ダイアログで形・操作を変えたら、Scissors が有効なタイルのツール割当を張り直す。
+  // active の切替（setActiveTool 自身が立てる）では張り直さない。ツール切替の途中で自分を呼び戻してしまう。
+  useEffect(() => {
+    let prev = getScissors();
+    return subscribeScissors(() => {
+      const cur = getScissors();
+      const changed = cur.shape !== prev.shape || cur.op !== prev.op;
+      prev = cur;
+      if (changed && activeToolRef.current === SCISSORS_TOOL_ID) setActiveToolRef.current?.(SCISSORS_TOOL_ID);
+    });
+  }, []);
 
   // ブラシ径（px）。
   const setBrushSize = (size: number) => {

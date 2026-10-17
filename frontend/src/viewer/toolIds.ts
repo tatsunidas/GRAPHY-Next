@@ -28,6 +28,8 @@ export const WAND2D_TOOL_ID = "__graphy_wand2d__";
 export const WAND3D_TOOL_ID = "__graphy_wand3d__";
 /** Level Sets（L1: Fast Marching のみ、2D）の合成 ID。実ツールは LevelSetTool（fw/level-sets-design.md）。 */
 export const LEVELSET2D_TOOL_ID = "__graphy_levelset2d__";
+/** Scissors（矩形・円・球で塗る／消す）の合成 ID。形と操作は scissorsStore（ダイアログ）で選ぶ。 */
+export const SCISSORS_TOOL_ID = "__graphy_scissors__";
 
 export const TOOL_IDS = {
   windowLevel: WindowLevelTool.toolName,
@@ -64,4 +66,6 @@ export const TOOL_IDS = {
   wand2d: WAND2D_TOOL_ID,
   /** Level Sets（対話型・Fast Marching。単一スライス、L1 時点）。 */
   levelset2d: LEVELSET2D_TOOL_ID,
+  /** Scissors（形・操作はダイアログで選ぶ。範囲の外は変えない）。 */
+  scissors: SCISSORS_TOOL_ID,
 } as const;
