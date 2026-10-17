@@ -55,6 +55,8 @@
 - ワークフローは各 OS で `npm run dist` の**直後・公開の前**に `desktop/scripts/check-packaged.js` を走らせ、
   **できたインストーラの `app.asar` に起動に要るファイルが全部あるか・画面の CSP に動画・接続・プラグインの許可があるか**を確かめる。足りなければその OS は公開されない。
   1 つの OS でも落ちたら公開しない（直して次の版で出す）
+- Mac 版は **arm64（`macos-latest`）と x64（`macos-15-intel`）の 2 本**を作る（v0.5.0 までは arm64 だけで、Intel Mac で入れられなかった）。
+  公開済みのリリースに x64 だけ足すときは `gh workflow run release.yml -f backfill_tag=vX.Y.Z`（既存の資産は上書きしない）。
 - Mac 版は、`npm run dist` の中（`desktop/scripts/afterPack.js`・dmg を作る前）で **app 全体を簡易署名**する。
   続けてワークフローが `desktop/scripts/check-mac-gatekeeper.sh` を走らせ、dmg を**ブラウザで落とした状態（隔離の印付き）**にして
   ① `codesign --verify --deep --strict` ② app 全体の封（`Sealed Resources`）③ `syspolicy_check` に「Known Malware」「revoked」が無いこと、を確かめる。
