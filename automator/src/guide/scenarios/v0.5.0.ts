@@ -1,12 +1,12 @@
 /*
- * v0.4.1 操作ガイド: DB フォルダの切り替えと、検査のコピー・移動。あわせて 2D・MPR の細かな改良。
+ * v0.5.0 操作ガイド: DB フォルダの切り替えと、検査のコピー・移動。あわせて 2D・MPR の細かな改良。
  *
  * DB フォルダはデスクトップ版だけの機能で、データの置き場（Electron の CWD）に `db-folders.json` を持つ。
- * 撮影では、利用者の開発用データに触れないよう、automator/.results/guide-v0.4.1 を置き場にしてデスクトップ版を起動し、
+ * 撮影では、利用者の開発用データに触れないよう、automator/.results/guide-v0.5.0 を置き場にしてデスクトップ版を起動し、
  * backend も main に起動させる（DB フォルダの引数は main が付けるため）。
  * - データ: HCC_001 の #2 PRE LIVER（他のガイドと同じ。GRAPHY_GUIDE_DATA の下の HCC_001）
  * - 画面に出るパスは、置き場より上を「…」にしてから撮る（公開する資料にマシンのパスを写さない）
- * 本文は docs/release-guides/v0.4.1/guide.html。番号の順はそちらの説明の順と合わせる。
+ * 本文は docs/release-guides/v0.5.0/guide.html。番号の順はそちらの説明の順と合わせる。
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import crypto from "node:crypto";
@@ -22,7 +22,7 @@ import type { MarkTarget, Scenario } from "../run.js";
 const REPO = path.resolve(AUTOMATOR_ROOT, "..");
 const DESKTOP_DIR = path.join(REPO, "desktop");
 const FRONTEND_DIR = path.join(REPO, "frontend");
-const ROOT = path.join(AUTOMATOR_ROOT, ".results", "guide-v0.4.1");
+const ROOT = path.join(AUTOMATOR_ROOT, ".results", "guide-v0.5.0");
 const APP_DIR = path.join(ROOT, "app");
 const OTHER_DB = path.join(ROOT, "DB-研究用");
 const DATA_DIR = process.env.GRAPHY_GUIDE_DATA ?? path.join(process.env.HOME ?? "", "graphy-demo-samples");
@@ -358,7 +358,7 @@ const scenario: Scenario = async ({ shot }) => {
     await statsDlg.getByTitle("閉じる").click();
     await viewer.waitForTimeout(500);
 
-    // 6. 2D Wand: 絶対値のしきい値（範囲）
+    // 6. 2D Wand: 判定値（HU）と、上限・下限のしきい値（範囲）
     // 肝臓が大きく写る Z 32 まで送る（先頭のスライスは骨盤寄りで肝臓が無い）
     await viewer.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     for (let k = 0; k < 31; k++) {
@@ -384,6 +384,7 @@ const scenario: Scenario = async ({ shot }) => {
     const count = await viewer.getByTestId("wand-count").innerText();
     console.log(`wand-count: ${count}`);
     await shot(viewer, "wand", [
+      { at: viewer.getByTestId("wand-value-kind"), side: "left" },
       { at: viewer.getByTestId("wand-method-range"), side: "left" },
       { at: viewer.getByTestId("wand-threshold-lower"), side: "left" },
       { at: viewer.getByTestId("wand-threshold-upper"), side: "left" },
