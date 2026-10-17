@@ -338,6 +338,39 @@ if (st.cacheMode) {
 
 重い計算を Java 側で行う例。`GraphyPlugin` を実装した JAR を同梱し、UI から `runBackend()` で呼ぶ。
 
+### 2-3c. 消えてもよい派生データを置く（`host.cache`・H68）
+
+再構成結果・特徴量・長い計算の途中経過のように、**作り直せるが作るのが高い**データを、再起動をまたいで置く場所です。
+**新しい権限・同意は要りません**（ローカルの `.cache` だけで外へは出ません）。
+
+```js
+const cache = host.cache;
+const hit = await cache.get(`recon:${seriesUid}`);          // Uint8Array | null
+if (!hit) {
+  const data = await expensiveReconstruction();            // 作り直せるもの
+  const r = await cache.put(`recon:${seriesUid}`, data);   // {ok:true} | {ok:false, error}
+  if (!r.ok) console.warn("キャッシュに置けませんでした", r.error);   // 置けなくても続けられる書き方にする
+}
+
+// 長い計算: 同じ jobKey で再実行すると、済んだ部分から続けられる
+const cp = cache.checkpoint(`features:${studyUid}`);
+for (let i = 0; i < n; i++) {
+  const done = await cp.load(i);
+  if (done) { parts[i] = done; continue; }
+  parts[i] = await computePart(i);
+  await cp.save(i, parts[i]);
+}
+await cp.clear();                                           // 完了したら消す
+```
+
+- 🔴 **いつでも消えます**（上限・再起動・アプリの更新・利用者の操作）。**唯一のコピーを置かないでください**。永続させたいものは `saveStore`（H8）へ。取れなければ作り直す書き方にします。
+- **1 件の大きさの上限は既定 16 MiB**（超えると `{ok:false, error:"too-large"}`）。大きなデータは `checkpoint` の添字（0〜999999）で分割して置きます。画面からは 1 回の送信が 32 MiB を超えないよう、本体が送る前に弾きます（実アプリで、約 40 MiB 以上を 1 回の fetch で送るとウィンドウごと落ちることを確認したための保護です）。
+- 失敗は例外でなく値です（`error`: `invalid-key`・`invalid-index`・`too-large`・`write-failed`・`desktop-only`・`network`）。鍵は 1〜256 文字（制御文字なし）。鍵は URL に載せず、ディスク上の名前にも出ません（ハッシュ化）。
+- 呼び出しはプラグインの id に固定され、**他のプラグインの項目は見えません**。ただしこれは誤接触の防止で、信頼境界ではありません（host API は直接叩けます）。
+- **全プラグインが 1 つの上限（LRU）を共有します**。上限が入ると、大量に置くプラグインは他のプラグインの項目を追い出します。必要な分だけ置いてください。上限が入るまでは、置いた分だけディスクを使います。
+- JAR からは `args` の `__cache`（下の表）で同じことができます。画面が置いた項目を JAR が読めます（同じプラグインの名前空間）。
+
+
 ### 3-1. SPI
 
 プラグイン JAR は次の 1 インターフェースだけ実装すればよい（JDK 標準型のみ）。
@@ -372,6 +405,7 @@ public class HelloPlugin implements GraphyPlugin {
 |---|---|---|
 | `__progress` | `BiConsumer<Double,String>` | 進み具合（0〜1）と短い説明 |
 | `__cancelled` | `BooleanSupplier` | 取り消されたら true |
+| `__cache` | `com.vis.graphynext.plugin.spi.PluginCache` | **消えてもよい派生データの置き場**（H68。API jar の `spi` に入っている JDK 型だけのインターフェース）: `get`/`put`/`has`/`remove`/`checkpoint(jobKey)`。プラグイン id に束縛済み。失敗は例外でなく `null`/`false`。同期の `run` では入らない |
 | `__ensureLocal` | `Function<String,String>` | **SOP UID → 手元のパス**。無い SOP は `null`。Drive が正本で手元に無ければ取り寄せてから返す。取れなければ `IllegalStateException("storage-unavailable: <理由>")`（H67） |
 
 ```java

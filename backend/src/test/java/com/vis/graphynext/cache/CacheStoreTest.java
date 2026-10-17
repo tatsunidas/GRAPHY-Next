@@ -254,4 +254,15 @@ class CacheStoreTest {
         assertEquals(0, c.entryCount());
         assertTrue(c.remove("a"), "無いものを消すのは成功扱い");
     }
+
+    @Test
+    void removeByPrefixRemovesOnlyMatchingEntries(@TempDir Path dir) throws IOException {
+        CacheStore c = new CacheStore(dir, 0);
+        for (String n : new String[] {"ab.1", "ab.2", "abc.1", "b.1"}) c.getOrCreate(n, f -> true, bytes(1));
+        assertEquals(2, c.removeByPrefix("ab."));
+        assertEquals(List.of("abc.1", "b.1"), names(dir));
+        assertEquals(2, c.entryCount());
+        assertThrows(IllegalArgumentException.class, () -> c.removeByPrefix(""));
+        assertThrows(IllegalArgumentException.class, () -> c.removeByPrefix("../x"));
+    }
 }

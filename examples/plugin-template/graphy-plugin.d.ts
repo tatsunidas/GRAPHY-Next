@@ -1240,6 +1240,15 @@ interface PluginHostBase {
     /** モード・手元の使用量と上限・Drive にだけある画像の数（読み取りのみ）。 */
     status: () => Promise<StorageStatus>;
   };
+  /**
+   * **消えてもよい派生データの置き場**（H68）。再構成結果・特徴量・長い計算の途中経過など、作り直せるが高いものを
+   * 再起動をまたいで置く。🔴 **いつでも消える**（上限・再起動・アプリの更新・利用者の操作）ので、唯一のコピーを
+   * 置かないこと。永続させたいものは `saveStore`（H8）へ。新しい権限・同意は要らない（ローカルだけで外へは出ない）。
+   * 呼び出しはプラグインの id に固定され、他のプラグインの項目は見えない（誤接触の防止で、信頼境界ではない）。
+   * 例外は投げず値で返す。鍵は 1〜256 文字（制御文字なし）。1 件の大きさに上限がある（既定 16 MiB。大きなデータは checkpoint の添字で分割する）。
+   * 全プラグインが 1 つの上限を共有するので、大量に置くと他のプラグインの項目を追い出しうる。デスクトップ専用。
+   */
+  cache: PluginCache;
   /** 本体の DB（H44・H46・H51・**0.3.0 以降**）。 */
   db: {
     /** 患者を ID・氏名の部分一致で探す（H44）。**読み取りのみ**。空文字は全件。 */
@@ -1422,6 +1431,29 @@ export interface PluginPickFilesOptions {
 export type PickFilesResult =
   | { ok: true; paths: string[] }
   | { ok: false; canceled?: boolean; error?: string };
+
+/** `host.cache.put()` などの結果（H68）。`error` は `invalid-key`・`invalid-index`・`too-large`・`write-failed`・`desktop-only`・`network`。 */
+export type CachePutOutcome = { ok: true } | { ok: false; error: string };
+
+/** `host.cache.checkpoint(jobKey)`（H68）。同じ `jobKey` で再実行したとき、済んだ部分を読んで続きから計算する。 */
+export interface PluginCacheCheckpoint {
+  /** `index`（0〜999999）番目の部分を保存する（上書き）。 */
+  save: (index: number, data: Uint8Array | ArrayBuffer) => Promise<CachePutOutcome>;
+  /** `index` 番目の部分。無い・消えた・壊れているときは null。 */
+  load: (index: number) => Promise<Uint8Array | null>;
+  /** この `jobKey` の途中結果をすべて消す（完了したときに呼ぶ）。 */
+  clear: () => Promise<void>;
+}
+
+/** `host.cache`（H68）。 */
+export interface PluginCache {
+  /** 保存した値。無い・消えたときは null。 */
+  get: (key: string) => Promise<Uint8Array | null>;
+  put: (key: string, data: Uint8Array | ArrayBuffer) => Promise<CachePutOutcome>;
+  has: (key: string) => Promise<boolean>;
+  remove: (key: string) => Promise<void>;
+  checkpoint: (jobKey: string) => PluginCacheCheckpoint;
+}
 
 /** `host.storage.ensureLocal()` の要求（H67）。 */
 export interface StorageEnsureRequest {

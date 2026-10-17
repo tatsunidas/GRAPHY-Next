@@ -102,6 +102,8 @@ import type { ComputeRunJobOptions, ComputeRunOutcome, ComputeEndpointStatus, Co
 export type { ComputeEndpointStatus, ComputeJobInput, ComputeOutputFile, ComputeReleaseOutcome, ComputeRunJobOptions, ComputeRunOutcome } from "./pluginComputeApi";
 import type { StorageEnsureOutcome, StorageEnsureRequest, StorageStatus } from "./pluginStorageApi";
 export type { StorageEnsureOutcome, StorageEnsureRequest, StorageStatus };
+import type { CachePutOutcome, PluginCache, PluginCacheCheckpoint } from "./pluginCacheApi";
+export type { CachePutOutcome, PluginCache, PluginCacheCheckpoint };
 import type { PickDirectoryResult, PluginSaveArtifactOptions, PluginSaveFileOptions } from "./pluginFileApi";
 export type { PickDirectoryResult, PluginSaveArtifactOptions };
 import type { SaveFileResult } from "../desktopBridge";
@@ -320,6 +322,17 @@ interface PluginHostBase {
     /** モード・手元の使用量と上限・Drive にだけある画像の数（読み取りのみ）。 */
     status: () => Promise<StorageStatus>;
   };
+  /**
+   * **消えてもよい派生データの置き場**（H68）。再構成結果・特徴量・長い計算の途中経過など、作り直せるが高いものを
+   * 再起動をまたいで置く。🔴 **いつでも消える**（上限・再起動・アプリの更新・利用者の操作）ので、唯一のコピーを
+   * 置かないこと。永続させたいものは `saveStore`（H8）へ。新しい権限・同意は要らない（ローカルだけで外へは出ない）。
+   *
+   * <p>呼び出しはプラグインの id に固定され、他のプラグインの項目は見えない（誤接触の防止で、信頼境界ではない）。
+   * 例外は投げず値で返す（`error`: `invalid-key`・`invalid-index`・`too-large`・`write-failed`・`desktop-only`・`network`）。
+   * 鍵は 1〜256 文字（制御文字なし）。1 件の大きさに上限がある（既定 16 MiB。大きなデータは checkpoint の添字で分割する）。デスクトップ専用。
+   * 全プラグインが 1 つの上限を共有するので、大量に置くと他のプラグインの項目を追い出しうる。
+   */
+  cache: PluginCache;
   /** 本体の DB（H44・H46・H51）。 */
   db: {
     /**
@@ -1098,7 +1111,7 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
  */
 export type PluginHostSeed = DistributiveOmit<
   PluginHost,
-  "ai" | "file" | "runBackendJob" | "db" | "video" | "apiBase" | "compute" | "storage"
+  "ai" | "file" | "runBackendJob" | "db" | "video" | "apiBase" | "compute" | "storage" | "cache"
 >;
 
 /**

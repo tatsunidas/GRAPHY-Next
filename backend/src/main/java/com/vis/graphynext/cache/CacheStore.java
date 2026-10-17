@@ -140,6 +140,20 @@ public final class CacheStore {
         }
     }
 
+    /** 名前が {@code prefix} で始まる項目をすべて消す。消せたものの数を返す（消せなかったものは残る）。 */
+    public int removeByPrefix(String prefix) {
+        if (prefix == null || prefix.isEmpty() || prefix.contains("/") || prefix.contains("\\")) {
+            throw new IllegalArgumentException("cache: 不正な接頭辞です");
+        }
+        int removed = 0;
+        for (String name : new ArrayList<>(lastAccess.keySet())) {
+            if (name.startsWith(prefix) && remove(name)) {
+                removed++;
+            }
+        }
+        return removed;
+    }
+
     /** 実ファイルの合計バイト数。 */
     public long totalBytes() {
         long sum = 0;

@@ -84,4 +84,29 @@ class CheckpointsTest {
         assertThrows(IllegalArgumentException.class, () -> c.save("../evil", 0, new byte[4]));
         assertThrows(IllegalArgumentException.class, () -> c.load("a/b/c/d/e/f/g/h", 0, 4));
     }
+
+    @Test
+    void loadAnyReadsTheLengthFromTheHeader(@TempDir Path dir) throws IOException {
+        Checkpoints c = new Checkpoints(new CacheStore(dir, 0));
+        byte[] data = {1, 2, 3, 4, 5};
+        c.save(KEY, 1, data);
+        assertArrayEquals(data, c.loadAny(KEY, 1).orElseThrow());
+        assertTrue(c.loadAny(KEY, 2).isEmpty());
+
+        byte[] raw = Files.readAllBytes(file(dir, 1));
+        Files.write(file(dir, 1), Arrays.copyOf(raw, raw.length - 2));
+        assertTrue(new Checkpoints(new CacheStore(dir, 0)).loadAny(KEY, 1).isEmpty(), "ヘッダの長さと実長が合わなければ無い");
+    }
+
+    @Test
+    void clearAllRemovesEveryIndexOfThatJobOnly(@TempDir Path dir) {
+        Checkpoints c = new Checkpoints(new CacheStore(dir, 0));
+        String other = "fedcba9876543210fedcba9876543210";
+        for (int i : new int[] {0, 5, 999}) { c.save(KEY, i, new byte[4]); c.save(other, i, new byte[4]); }
+        assertEquals(3, c.clearAll(KEY));
+        for (int i : new int[] {0, 5, 999}) {
+            assertTrue(c.loadAny(KEY, i).isEmpty());
+            assertTrue(c.loadAny(other, i).isPresent());
+        }
+    }
 }

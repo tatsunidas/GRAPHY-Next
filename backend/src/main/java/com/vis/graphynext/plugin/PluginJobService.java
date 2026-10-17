@@ -61,6 +61,11 @@ public class PluginJobService {
      * （メッセージは {@code storage-unavailable: <理由>}）を入れる args のキー。JDK の型だけで渡す。
      */
     public static final String ENSURE_LOCAL_KEY = "__ensureLocal";
+    /**
+     * 消えてもよい派生データの置き場（{@link com.vis.graphynext.plugin.spi.PluginCache}。H68）を入れる args のキー。
+     * プラグインの id に束縛して渡す。
+     */
+    public static final String CACHE_KEY = "__cache";
 
     /**
      * 同時に走らせるジョブの数（プラグインの計算・本体の書き込みそれぞれ）。動画の読み出しのように I/O と CPU を
@@ -127,6 +132,7 @@ public class PluginJobService {
     /** 手元へ取り寄せるジョブ（Drive から。長くなりうる）。取り込み・派生シリーズの列（hostPool）を塞がないよう別の列にする。 */
     private final ExecutorService storagePool;
     private volatile com.vis.graphynext.plugin.storage.PluginStorageService storage;
+    private volatile com.vis.graphynext.plugin.cache.PluginCacheService cache;
 
     /** テスト用（成果物は OS の一時フォルダへ）。 */
     public PluginJobService(PluginRegistry registry) {
@@ -164,6 +170,11 @@ public class PluginJobService {
 
     /** 手元への取り寄せの口（JAR の args に渡す）。無い構成（web など）では null のまま。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setCache(com.vis.graphynext.plugin.cache.PluginCacheService cache) {
+        this.cache = cache;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
     void setStorage(com.vis.graphynext.plugin.storage.PluginStorageService storage) {
         this.storage = storage;
     }
@@ -183,6 +194,8 @@ public class PluginJobService {
             // 画面から同名のキーが来ても上書きする（関数は JSON から作れない）
             args.remove(ENSURE_LOCAL_KEY);
             if (storage != null) args.put(ENSURE_LOCAL_KEY, storage.ensureLocalFunction());
+            args.remove(CACHE_KEY);
+            if (cache != null) args.put(CACHE_KEY, cache.forPlugin(pluginId));
             return registry.run(pluginId, args);
         });
     }
