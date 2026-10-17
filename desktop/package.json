@@ -36,7 +36,7 @@
     },
     "deb": { "afterInstall": "build/linux/after-install.sh", "afterRemove": "build/linux/after-remove.sh" },
     "win": { "target": ["nsis"] },
-    "mac": { "target": ["dmg"], "identity": null },
+    "mac": { "target": ["dmg"], "identity": null, "artifactName": "${productName}-${version}-${arch}.${ext}" },
     "nsis": {
       "oneClick": false,
       "perMachine": false,

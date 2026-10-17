@@ -7,6 +7,14 @@ on:
   # ビルドして「入れて起動して動画を再生する」スモークまで回し、インストーラは Artifact に置く
   # （`gh workflow run release.yml --ref <branch>`）。
   workflow_dispatch:
+    inputs:
+      # 公開済みのリリースに、Intel Mac（x64）の dmg だけを後から足す（`-f backfill_tag=v0.5.0`）。
+      # そのタグのソースを macos-15-intel でビルドし、同じ検査（署名・Gatekeeper・実機スモーク）を通してから、
+      # 既存の資産を上書きせずにそのリリースへ追加する。空なら従来どおりの予行演習。
+      backfill_tag:
+        description: "x64 の dmg を追加する公開済みタグ（例 v0.5.0）。空なら予行演習"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -121,12 +129,16 @@ jobs:
       # 1 つの OS が落ちても他の OS の結果は最後まで見る（OS ごとに落ち方が違うので）。
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # macos-latest は Apple Silicon（arm64）。Intel Mac 向け（x64）は macos-15-intel で作る
+        # （v0.5.0 まで Intel 版が無く、Intel Mac で「インストールできない」と連絡が来た）。
+        os: ${{ fromJSON(inputs.backfill_tag != '' && '["macos-15-intel"]' || '["ubuntu-latest","windows-latest","macos-latest","macos-15-intel"]') }}
     # 上限を切る（2026-08-27 に macOS で Maven の取得が詰まり 2h11m かかった。通常 5〜6 分）。
     timeout-minutes: 60
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.backfill_tag || github.sha }}
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -248,11 +260,16 @@ jobs:
         shell: bash
         # アップロードは gh release upload が担うため electron-builder 側は publish しない
         # （--publish never＋GH_TOKEN 非注入で app-update.yml 生成/repository 解決を回避）。
+        env:
+          BACKFILL_TAG: ${{ inputs.backfill_tag }}
         run: |
           npm install
           # 🚨 起動に要るファイルが build.files に全部あるか（v0.3.0〜0.3.2 は secretStore.js 等が抜けて起動直後に落ちた）
           node --test packagedFiles.test.js
-          npm run dist -- --publish never
+          # 旧いタグのソースは mac.artifactName を持たない。x64 が arm64 と区別できる名前（-x64.dmg）になるよう渡す。
+          extra=()
+          [ -n "$BACKFILL_TAG" ] && extra=('--config.mac.artifactName=${productName}-${version}-${arch}.${ext}')
+          npm run dist -- --publish never "${extra[@]}"
       # 🚨 **公開の前に、できたインストーラの中身（app.asar）を確かめる。** 足りなければここで落ち、この OS の
       #    インストーラはアップロードされない。開発起動（desktop/ をそのまま読む）と CI では気付けない壊れ方
       #    （2026-09-30・fw/release-checklist.md）。
@@ -312,7 +329,7 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
       - name: Upload installers (予行演習は Artifact へ)
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        if: ${{ !startsWith(github.ref, 'refs/tags/') && inputs.backfill_tag == '' }}
         uses: actions/upload-artifact@v4
         with:
           name: installer-${{ matrix.os }}
@@ -323,22 +340,28 @@ jobs:
             desktop/dist/*.dmg
           retention-days: 3
       - name: Upload installers
-        if: startsWith(github.ref, 'refs/tags/')
+        if: ${{ startsWith(github.ref, 'refs/tags/') || inputs.backfill_tag != '' }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          BACKFILL_TAG: ${{ inputs.backfill_tag }}
         run: |
           shopt -s nullglob
           files=(desktop/dist/*.AppImage desktop/dist/*.deb desktop/dist/*.exe desktop/dist/*.dmg)
           (( ${#files[@]} )) || { echo "no installer in desktop/dist"; exit 1; }
-          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber "${files[@]}"
+          if [ -n "$BACKFILL_TAG" ]; then
+            # 追加だけ。公開済みの資産は上書きしない（同名があれば gh が失敗する）。
+            gh release upload "$BACKFILL_TAG" --repo "$GITHUB_REPOSITORY" "${files[@]}"
+          else
+            gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber "${files[@]}"
+          fi
 
   # インストール手順書（docs/install.md）用の画面を、ブラウザで落とした状態から撮る。
   # 撮れなくてもリリースは止めない。取り込みは scripts/fetch-install-shots.sh <run-id>（fw/release-checklist.md）。
   install-shots:
     name: Install shots (${{ matrix.os }})
     needs: desktop
-    if: ${{ !cancelled() && needs.desktop.result == 'success' }}
+    if: ${{ !cancelled() && needs.desktop.result == 'success' && inputs.backfill_tag == '' }}
     continue-on-error: true
     strategy:
       fail-fast: false
@@ -360,7 +383,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          case "$RUNNER_OS" in macOS) pat='*.dmg';; Windows) pat='*.exe';; Linux) pat='*.deb';; esac
+          case "$RUNNER_OS" in macOS) pat='*-arm64.dmg';; Windows) pat='*.exe';; Linux) pat='*.deb';; esac
           gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" -p "$pat" -D in
       - name: Capture (macOS)
         if: runner.os == 'macOS'

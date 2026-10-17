@@ -77,7 +77,8 @@ scripts/    開発起動・バージョン更新スクリプト
 | OS | 成果物 | 備考 |
 |---|---|---|
 | Windows | `GRAPHY-Next.Setup.<ver>.exe`（NSIS） | 実行してインストール。初回は SmartScreen の警告が出るので「詳細情報 ＞ 実行」 |
-| macOS | `GRAPHY-Next-<ver>.dmg` | マウントして Applications へ。初回は「開いていません」と出るので、「システム設定 ＞ プライバシーとセキュリティ ＞ このまま開く」で開く（Apple の公証はまだ受けていない。画面つきの手順は docs/install.md） |
+| macOS（Apple Silicon） | `GRAPHY-Next-<ver>-arm64.dmg` | マウントして Applications へ。Intel Mac は下の行の `-x64.dmg`。初回は「開いていません」と出るので、「システム設定 ＞ プライバシーとセキュリティ ＞ このまま開く」で開く（Apple の公証はまだ受けていない。画面つきの手順は docs/install.md） |
+| macOS（Intel） | `GRAPHY-Next-<ver>-x64.dmg` | 手順は Apple Silicon 版と同じ。M1 以降の Mac には `-arm64.dmg`、Intel Mac には `-x64.dmg`（「このMacについて」のチップで確認） |
 | Linux（Ubuntu / Debian） | `graphy-next-desktop_<ver>_amd64.deb` | `sudo apt install ./graphy-next-desktop_<ver>_amd64.deb`（推奨） |
 | Linux（その他） | `GRAPHY-Next-<ver>.AppImage` | `chmod +x` して実行。libfuse2 が要る。Ubuntu 24.04 などでは sandbox の制限で起動しないことがあるので `.deb` を使う |
 

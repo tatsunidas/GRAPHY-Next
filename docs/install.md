@@ -9,7 +9,8 @@
 | OS | 成果物 | 導入方法 |
 |---|---|---|
 | Windows | `GRAPHY-Next.Setup.<ver>.exe`（NSIS） | 実行してインストール。初回は SmartScreen の警告が出る（下記） |
-| macOS | `GRAPHY-Next-<ver>-arm64.dmg` | マウントして Applications へ。初回は「開いていません」と出る（下記） |
+| macOS（Apple Silicon: M1 以降） | `GRAPHY-Next-<ver>-arm64.dmg` | マウントして Applications へ。初回は「開いていません」と出る（下記） |
+| macOS（Intel） | `GRAPHY-Next-<ver>-x64.dmg` | 同上。「このMacについて」のチップが Intel なら、こちらを選ぶ（v0.5.0 から） |
 | Linux（Ubuntu / Debian） | `graphy-next-desktop_<ver>_amd64.deb` | `sudo apt install ./graphy-next-desktop_<ver>_amd64.deb`（推奨） |
 | Linux（その他） | `GRAPHY-Next-<ver>.AppImage` | `chmod +x` して実行。libfuse2 が要る。Ubuntu 24.04 などでは起動しないことがある（下記） |
 
