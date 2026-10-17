@@ -34,6 +34,15 @@ export interface MemoryInfo {
   freeBytes: number;
 }
 
+/**
+ * Chromium が報告した GPU の状態（描画環境の自己診断用。`fw/render-environment-design.md`）。
+ * `featureStatus` は `app.getGPUFeatureStatus()`（例 `{ webgl2: "enabled" }`）。
+ */
+export interface GpuStatus {
+  featureStatus: Record<string, string>;
+  devices: { vendorId: number; deviceId: number; active: boolean }[];
+}
+
 /** 秘密情報の状態。**値そのものは決して返らない**（main プロセスから出さない設計）。 */
 export interface SecretStatus {
   /** 設定済みか。 */
@@ -262,6 +271,8 @@ export interface GraphyDesktop {
   openMemoryMonitor?: () => Promise<void>;
   /** OS の物理メモリ量を取得（ボリューム構築のバジェット決定用、デスクトップのみ）。 */
   getMemoryInfo?: () => Promise<MemoryInfo>;
+  /** Chromium の GPU 機能状態と GPU 一覧（描画環境の自己診断用、デスクトップのみ）。 */
+  getGpuStatus?: () => Promise<GpuStatus>;
   /** 外部 URL / mailto を OS の既定アプリ（ブラウザ・メーラ）で開く。 */
   openExternal?: (url: string) => void;
   /** GitHub Releases の最新リリース情報を取得（更新確認、デスクトップのみ）。失敗時 null。 */

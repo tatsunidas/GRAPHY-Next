@@ -764,6 +764,31 @@ ipcMain.handle("graphy:get-memory-info", () => {
   return { totalBytes, freeBytes };
 });
 
+// Chromium が報告した GPU の機能状態と GPU 一覧（設定＞描画環境。fw/render-environment-design.md）。
+// getGPUInfo('basic') は Promise、getGPUFeatureStatus() は同期。取れなければ空で返す
+// （renderer 側は「未取得」と表示する。0 や hardware で埋めない）。
+ipcMain.handle("graphy:gpu-status", async () => {
+  let featureStatus = {};
+  try {
+    featureStatus = app.getGPUFeatureStatus() || {};
+  } catch {
+    /* 取れなければ空のまま返す */
+  }
+  let devices = [];
+  try {
+    const info = await app.getGPUInfo("basic");
+    const list = Array.isArray(info?.gpuDevice) ? info.gpuDevice : [];
+    devices = list.map((g) => ({
+      vendorId: Number(g.vendorId) || 0,
+      deviceId: Number(g.deviceId) || 0,
+      active: g.active === true,
+    }));
+  } catch {
+    /* 同上 */
+  }
+  return { featureStatus, devices };
+});
+
 // 外部 URL / mailto を OS の既定アプリ（ブラウザ・メーラ）で開く（Help メニューのリンク等）。
 // URL スキームは http(s) / mailto のみ許可（任意コマンド実行を避ける）。
 ipcMain.on("graphy:open-external", (_e, url) => {

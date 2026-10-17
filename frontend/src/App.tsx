@@ -7,6 +7,7 @@ import { fetchStatus, fetchStudies, fetchSeries, type AppStatus, type Study, typ
 import { pollStatus } from "./statusPoll";
 import { parseIidLaunch } from "./iid";
 import { SettingsDialog } from "./settings/SettingsDialog";
+import { onOpenSettingsRequest } from "./settings/settingsOpenEvents";
 import { AiEgressConsentHost } from "./plugins/pluginAiApi";
 import { DbAdminDialog } from "./dbadmin/DbAdminDialog";
 import { KeyboardHelp } from "./shortcuts/KeyboardHelp";
@@ -41,6 +42,8 @@ export function App() {
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // 他画面（3D ビューアのソフトウェア描画の印など）から開くときに選んでおくカテゴリ。
+  const [settingsCategory, setSettingsCategory] = useState<string | undefined>(undefined);
   const [dbOpen, setDbOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   // DB 変更で同一ウィンドウの一覧を再読込するためのシグナル。
@@ -160,6 +163,15 @@ export function App() {
     return subscribeDbChanged(() => setDbVersion((v) => v + 1));
   }, []);
 
+  useEffect(
+    () =>
+      onOpenSettingsRequest((categoryId) => {
+        setSettingsCategory(categoryId);
+        setSettingsOpen(true);
+      }),
+    [],
+  );
+
   useGlobalShortcuts({
     "open-settings": () => setSettingsOpen(true),
     "open-db": () => {
@@ -233,7 +245,14 @@ export function App() {
         {status?.mode === "standalone" && <InboxNotice onImported={() => setDbVersion((v) => v + 1)} />}
         </>
       )}
-      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsDialog
+        open={settingsOpen}
+        onClose={() => {
+          setSettingsOpen(false);
+          setSettingsCategory(undefined);
+        }}
+        initialCategoryId={settingsCategory}
+      />
       {/* 外部 AI 送信の同意ダイアログ。2D ビューアは別ウィンドウ＝別ルートなので両方に要る。 */}
       <AiEgressConsentHost />
       {/* DB 管理。編集成功で同一ウィンドウの一覧を再読込（dbVersion）＋他ウィンドウへ通知（dbEvents）。 */}
