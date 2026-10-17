@@ -84,4 +84,26 @@ class CheckpointsTest {
         assertThrows(IllegalArgumentException.class, () -> c.save("../evil", 0, new byte[4]));
         assertThrows(IllegalArgumentException.class, () -> c.load("a/b/c/d/e/f/g/h", 0, 4));
     }
+
+    @Test
+    void variableLengthRoundTrip_andTruncationIsAbsent(@TempDir Path dir) throws IOException {
+        Checkpoints c = new Checkpoints(new CacheStore(dir, 0));
+        byte[] data = "{\"a\":1}".getBytes();
+        assertTrue(c.save(KEY, 0, data));
+        assertArrayEquals(data, c.load(KEY, 0).orElseThrow());
+        assertArrayEquals(new byte[0], saveAndLoad(c, new byte[0]));
+
+        assertTrue(c.save(KEY, 0, data));
+        byte[] raw = Files.readAllBytes(file(dir, 0));
+        Files.write(file(dir, 0), Arrays.copyOf(raw, raw.length - 1));
+        assertTrue(c.load(KEY, 0).isEmpty());
+        raw[0] ^= 0x7f;
+        Files.write(file(dir, 0), raw);
+        assertTrue(c.load(KEY, 0).isEmpty());
+    }
+
+    private static byte[] saveAndLoad(Checkpoints c, byte[] data) {
+        assertTrue(c.save(KEY, 1, data));
+        return c.load(KEY, 1).orElseThrow();
+    }
 }

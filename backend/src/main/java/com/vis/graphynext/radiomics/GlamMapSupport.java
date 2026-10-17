@@ -10,7 +10,6 @@ import org.slf4j.LoggerFactory;
 
 import java.util.Map;
 import java.util.concurrent.Callable;
-import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * GLAM（Gray Level Affinity Metrics）を可視化マップで回すための前提と後始末。
@@ -22,7 +21,7 @@ import java.util.concurrent.locks.ReentrantLock;
  *   <li><b>パラメータの大半が RadiomicsJ の static フィールド</b>にある（{@code RadiomicsJ.glam*}）。
  *       {@code Map} コンストラクタから渡せるのは {@code GLAM_MAX_RADIUS} だけなので、
  *       残りは計算前に static へ書き、終わったら必ず戻す。プロセス広域の状態なので
- *       {@link #runWithSettings} が<b>ロックで直列化</b>する。</li>
+ *       {@link #runWithSettings} が<b>ロックで直列化</b>する（{@link RadiomicsLock}）。</li>
  *   <li><b>既定の maxRadius は 100</b>。カーネル 7 の窓に 100 ボクセル先は存在しないうえ、
  *       {@code [maxRadius+1][nBins][nBins]} を 3 本確保するので 1 窓あたり約 620KB を捨てる。
  *       {@link #maxRadiusFor} が<b>カーネル半径で頭打ち</b>にする。</li>
@@ -50,12 +49,6 @@ final class GlamMapSupport {
 
     /** カーネル径に対する伸び。窓内の全ボクセル対を歩くので概ね 6 乗。 */
     private static final double KERNEL_EXPONENT = 6.0;
-
-    /**
-     * {@code RadiomicsJ.glam*} はプロセス広域なので、GLAM のマップ計算は一度に 1 本だけ走らせる。
-     * 他の族は static を読まないため影響を受けない。
-     */
-    private static final ReentrantLock GLAM_LOCK = new ReentrantLock();
 
     private GlamMapSupport() {}
 
@@ -120,10 +113,13 @@ final class GlamMapSupport {
 
     /**
      * {@code RadiomicsJ.glam*} を設定値で上書きして {@code body} を走らせ、<b>必ず元へ戻す</b>。
-     * static はプロセス広域なので、この間ほかの GLAM 計算は待たせる。
+     * static はプロセス広域なので、この間 RadiomicsJ を呼ぶほかの計算は待たせる。
      */
     static <T> T runWithSettings(Map<String, String> settings, Callable<T> body) throws Exception {
-        GLAM_LOCK.lock();
+        return RadiomicsLock.call(() -> runLocked(settings, body));
+    }
+
+    private static <T> T runLocked(Map<String, String> settings, Callable<T> body) throws Exception {
         Integer savedMaxRadius = RadiomicsJ.glamMaxRadius;
         Integer savedMaxReferenceVoxels = RadiomicsJ.glamMaxReferenceVoxels;
         Boolean savedBoundaryCorrection = RadiomicsJ.glamBoundaryCorrection;
@@ -160,7 +156,6 @@ final class GlamMapSupport {
             RadiomicsJ.glamSavitzkyGolayPolynomial = savedSavitzkyGolayPolynomial;
             RadiomicsJ.glamPeakProminence = savedPeakProminence;
             RadiomicsJ.glamMaxLocalShellRadius = savedMaxLocalShellRadius;
-            GLAM_LOCK.unlock();
         }
     }
 

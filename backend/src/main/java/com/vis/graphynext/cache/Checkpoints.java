@@ -79,9 +79,32 @@ public final class Checkpoints {
         }
     }
 
+    /**
+     * 長さの決まっていない項目を読み出す。長さはヘッダから取り、ファイルの大きさと食い違えば
+     * 壊れているものとして empty。
+     */
+    public Optional<byte[]> load(String jobKey, int index) {
+        try {
+            Optional<Path> p = store.find(name(jobKey, index), f -> valid(f, -1));
+            if (p.isEmpty()) {
+                return Optional.empty();
+            }
+            byte[] all = Files.readAllBytes(p.get());
+            byte[] out = new byte[all.length - HEADER];
+            System.arraycopy(all, HEADER, out, 0, out.length);
+            return Optional.of(out);
+        } catch (IOException e) {
+            log.warn("checkpoint: 読み出せませんでした index={}: {}", index, e.toString());
+            return Optional.empty();
+        }
+    }
+
+    /** @param expectedLen 負なら長さを問わない（ヘッダの長さとファイルの大きさが合えばよい） */
     private static boolean valid(Path f, int expectedLen) {
         try {
-            if (Files.size(f) != HEADER + (long) expectedLen) {
+            long size = Files.size(f);
+            if (expectedLen >= 0 ? size != HEADER + (long) expectedLen
+                    : size < HEADER || size - HEADER > Integer.MAX_VALUE) {
                 return false;
             }
             try (var ch = Files.newByteChannel(f)) {
@@ -91,7 +114,7 @@ public final class Checkpoints {
                 }
                 head.flip();
                 return head.remaining() == HEADER && head.getInt() == MAGIC && head.getInt() == VERSION
-                        && head.getLong() == expectedLen;
+                        && head.getLong() == size - HEADER;
             }
         } catch (IOException e) {
             return false;

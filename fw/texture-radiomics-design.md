@@ -766,3 +766,45 @@ GLAM 解析はマスクのチャンネルを **0 固定**で送っていたた�
   ROI にその濃度値が無い、など）。
 - CSV（`name,value` の 150 行）で保存できる。**複数症例をまとめるのは受け取った側の仕事**という線引きは
   §9 のまま変えていない（バッチ実行は RadiomicsJ 本体の CLI／ImageJ プラグインが担当する）。
+
+## 13. ROI 特徴量表（RadiomicsJ の一括抽出、2026-10-18）
+
+研究用の特徴量表を、RadiomicsJ の `extractAll` を ROI 全体に 1 回かけて出す。数値の定義は RadiomicsJ に一本化し、設定も **RadiomicsJ の設定キーそのまま**を受け取る（Next のマップ用のテクスチャ設定とは混ぜない）。同じ設定ファイルを RadiomicsJ の CLI・ImageJ に渡せば同じ値になる。
+
+### 13.1 API
+- `POST /api/radiomics/features/jobs`（`RoiFeatureRequest`: study・ターゲット・マスク（必須）・セグメント・C/T・`settings`・`recompute`）→ ジョブの状態。`GET`/`DELETE /api/radiomics/features/jobs/{id}` で問い合わせ・取り消し。web モードは 403、要求の誤りは 400（投入の時点で返す）。
+- 状態は `QUEUED → LOADING → EXTRACTING → DONE`。**`extractAll` には進み具合も取り消しの口も無い**ので、族ごとの進み具合は出せない。取り消しは結果を見せないだけで、計算は最後まで走り、結果はキャッシュに入る。
+- 結果（`RoiFeatureResult`）: 行は RadiomicsJ の結果表の列の並びのまま、`column`（例 `IntensityBasedStatistical_Kurtosis`）・族・特徴・IBSI コード（`*FeatureType.id()` が 4 文字のときだけ。それ以外は IBSI 外）・値（NaN は null）・注記の符号。抽出のときに効いていた離散化（固定ビン数/ビン幅・値、IVH の設定）、RadiomicsJ の版、計算時刻、キャッシュから返したか。
+- 注記は RadiomicsJ のコードで確かめた事実だけ: 一次統計とヒストグラムの Kurtosis は過剰尖度（`IntensityBasedStatisticalFeatures.getExcessKurtosis`、ヒストグラムは同じ計算を呼ぶ）、ヒストグラムの Entropy は log2（`IntensityHistogramFeatures.getEntropy`）。IBSI 外: GLAM・Fractal・Shape2D、一次統計の TotalEnergy・StandardDeviation・StandardError。
+
+### 13.2 設定の扱い
+- 受け付けるキーは RadiomicsJ の `SettingParams` の名前だけ（打ち間違いや Next のマップ用キーは 400）。
+- `BOOL_enableOperationalInfo` は常に 0（RadiomicsJ はここに患者名・ID・生年月日を DICOM から書く）。`INT_label` はマスクのラベル値で上書き。`BOOL_force2D=1`（1 ROI で複数行）は未対応で 400。
+- 入力は `RadiomicsMapEngine.load` で組み立てるが、Next のテクスチャ設定は渡さない（Next 側のリサンプリングを掛けず、RadiomicsJ の `DOUBLEARRAY_resamplingFactorXYZ` に一本化）。
+- 読み込んだマスクには校正が無い（マップは使わない）。形態特徴はマスクの校正で体積を測るため、抽出の前に画像の校正を写す。写さないと 1 mm 等方として黙って違う値になる（試験で検出: `Morphology_VolumeMesh` 416 → 592 mm³）。
+- ROI が 0 ボクセルなら 400（RadiomicsJ はラベルの無いマスクでも例外を投げず、前の画像のまま進む）。GLAM を有効にしたときは GLAM 解析と同じボクセル対の上限を掛ける。
+
+### 13.3 RadiomicsJ の static と共通ロック（`RadiomicsLock`）
+RadiomicsJ は設定と途中結果（`discretiseImp`）を static に持ち、特徴クラスは**窓ごとのコンストラクタ**でそれを読む。`new RadiomicsJ()` は `resetSettings()` を呼ぶ。抽出とマップが並行すると、マップが黙って違う値になる。そこで RadiomicsJ を呼ぶ経路をすべて 1 つのロックで直列化した（再入可）。
+- 抽出: ロックの中で `new RadiomicsJ()` → `loadSettings` → `extractAll`、`finally` で `resetSettings()` と `discretiseImp = null`（RadiomicsJ は例外で抜けると離散化画像を残す）。
+- GLAM 以外のマップ: スライス 1 枚ごとに取る（抽出はスライスの切れ目で割り込める）。GLAM のマップ・GLAM 解析: 従来どおり全体で取る（`GlamMapSupport.runWithSettings`、旧 `GLAM_LOCK` を載せ替え）。リサンプリング（`Utils.resample3D` が補間の static を読む）も取る。
+- 試験: ロックを握って static に抽出の途中と同じ偽の値を入れている間、マップは 1 枚も進まず、手放した後の値は単独の計算と全画素一致。マップ側のロックを外す変異では「6 枚進んだ」で落ちる。
+
+### 13.4 キャッシュ
+既存の `MapCheckpointStore`（`.cache/radiomics/`）に 1 項目の JSON で置く。詳細と検証は `fw/cache-store.md` の P2-8「ROI 特徴量表の結果」。
+
+### 13.5 所要時間（実測、2026-10-18、8 コア・既定の族（GLAM・Shape2D なし）・合成の球 ROI・1 mm 等方）
+| ROI ボクセル数 | ボリューム | ハッシュ（キー計算） | 抽出 |
+|---|---|---|---|
+| 515 | 18³ | 39 ms | 1.5 秒 |
+| 14,147 | 38³ | 58 ms | 12.5 秒 |
+| 113,081 | 68³ | 92 ms | 168 秒 |
+
+大きな ROI では抽出が分単位になる（族ごとの内訳は未測定）。キャッシュの照合は抽出よりずっと軽い。DICOM の読み込み（復号）の時間は別（13.6 の実アプリ確認で 1 例）。
+
+### 13.6 検証
+- `RoiFeatureIntegrationTest`: 保管庫の DICOM（0.75×0.75×1.25 mm、Rescale あり、患者名入り）からサービス経由で計算した値と、同じ画素・校正を試験の中で組み立てて RadiomicsJ を直接呼んだ値が、全特徴でビット一致（正例）。ビン数 16 の直接の呼び出しとは GLCM が一致しない（負例）。`OperationalInfo_` の列は無い（上書きしない直接の呼び出しでは出ることを `RoiFeatureServiceTest` で確認）。2 回目はキャッシュから。
+- `RoiFeatureServiceTest`: 定義の注記と IBSI、設定の検査、キャッシュ、取り消し、共通ロック。
+- 実アプリ（パッケージ jar・専用ポート・standalone、合成 CT 48×48×16・0.7×0.7×2.0 mm・Rescale −1000、箱マスク 24×24×10）: `POST /api/import/paths` で取り込み → ジョブ投入 200 → 4.5 秒で DONE・230 行・RadiomicsJ 2.4.1。ボクセル数 5760（理論値 24×24×10）・`Morphology_VolumeVoxelCounting` 5644.8 mm³（理論値 5760×0.7×0.7×2.0）。2 回目は 193 ms で `fromCache=true`・計算時刻が同じ・全値一致（この 193 ms が DICOM の読み込み＋キー計算）。知らない設定キーは 400、知らないジョブは 404。キャッシュの項目（37 KB）に患者名は無い（同じ検索で特徴の列名は見つかる）。
+- 画面は段 2（別 PR）。
+
