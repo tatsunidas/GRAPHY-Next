@@ -685,9 +685,52 @@ export interface RawImportResponse {
   error: string | null;
 }
 
+/** URL 取り込みのジョブの状態（fw/dicom-data-layer.md §4.4）。 */
+export interface UrlImportStatus {
+  jobId: string;
+  state: "QUEUED" | "DOWNLOADING" | "IMPORTING" | "DONE" | "FAILED" | "CANCELLED";
+  receivedBytes: number;
+  /** Content-Length。分からなければ −1。 */
+  totalBytes: number;
+  /** "dicom"（取り込み済み）/ "file"（path を非 DICOM 取り込みで続ける）。終わるまで null。 */
+  kind: "dicom" | "file" | null;
+  path: string | null;
+  filename: string | null;
+  importResult: ImportResult | null;
+  error: string | null;
+}
+
+/** URL から取り込む（standalone のみ）。http/https だけ。 */
+export const submitUrlImport = (url: string) => httpSend<UrlImportStatus>("/api/import/url", "POST", { url });
+export const getUrlImport = (jobId: string) => httpGet<UrlImportStatus>(`/api/import/url/${encodeURIComponent(jobId)}`);
+export const cancelUrlImport = (jobId: string) =>
+  httpSend<UrlImportStatus>(`/api/import/url/${encodeURIComponent(jobId)}/cancel`, "POST");
+/** 非 DICOM として返した一時ファイルを消す。 */
+export const deleteUrlImportFile = (jobId: string) =>
+  httpSend<void>(`/api/import/url/${encodeURIComponent(jobId)}/file`, "DELETE");
+
 /** Raw のファイルの大きさを読む（画面で必要なバイト数と比べる）。 */
 export const probeRaw = (path: string) =>
   httpSend<{ fileBytes: number; error: string | null }>("/api/raw/probe", "POST", { path });
+
+/** Raw の中央のスライス（時相 1）の PNG と、濃淡の範囲（そのスライスの有限値の最小・最大）。 */
+export const previewRaw = async (
+  path: string,
+  spec: RawSpec,
+): Promise<{ blob: Blob; min: number; max: number; slice: number }> => {
+  const res = await fetch(`${apiBase()}/api/raw/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, spec }),
+  });
+  if (!res.ok) throw new Error(await extractErrorMessage(res));
+  return {
+    blob: await res.blob(),
+    min: Number(res.headers.get("X-Raw-Min")),
+    max: Number(res.headers.get("X-Raw-Max")),
+    slice: Number(res.headers.get("X-Raw-Slice")),
+  };
+};
 
 /** Raw を DICOM 化して保管庫へ取り込む。画素がファイルに足りなければ 400。 */
 export const importRaw = (req: RawImportRequest) => httpSend<RawImportResponse>("/api/raw/import", "POST", req);

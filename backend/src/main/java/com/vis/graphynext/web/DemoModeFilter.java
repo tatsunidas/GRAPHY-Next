@@ -45,6 +45,9 @@ public class DemoModeFilter extends OncePerRequestFilter {
 
     private static final List<BlockedRoute> BLOCKED = List.of(
             new BlockedRoute(null, "/api/import/**"),
+            // web では standalone 専用で出ないが、多重の守りとして止める（サーバー上のパスを受ける）
+            new BlockedRoute(null, "/api/nifti/**"),
+            new BlockedRoute(null, "/api/raw/**"),
             new BlockedRoute(HttpMethod.POST, "/api/dicom/send"),
             new BlockedRoute(null, "/api/dicom/qr/**"),
             // POST /api/dicom/seg（SEG書き出し）は毎晩の自動リストア（reset-demo.sh）で確実に
