@@ -1,6 +1,6 @@
 # NIfTI インポート
 
-> 起票: 2026-08-11 ／ ステータス: **実装済み（backend ＋ MainScreen の非 DICOM インポート導線）。整数は可逆・それ以外は 32 bit float の Parametric Map（§3・§3.1・2026-10-07）**
+> 起票: 2026-08-11 ／ ステータス: **実装済み（backend ＋ MainScreen の非 DICOM インポート導線）。整数は可逆・それ以外は 32 bit float の Parametric Map（§3・§3.1・2026-10-07）。Raw データの取り込み（§8、2026-10-17〜）**
 > 参考: Swing 版 GRAPHY の `com.vis.core.media.NIfTIToDicomConverter` / `ImportNIfTIPanel`
 > 関連: [`nondicom-ffmpeg.md`](nondicom-ffmpeg.md)（同じダイアログの動画経路）／
 > [`dicom-data-layer.md`](dicom-data-layer.md)（保管庫）
@@ -274,6 +274,49 @@ gzip かどうかは**マジックバイト**で判定する（拡張子に頼�
 - **向きの推測**。`qform=sform=0` のときに「たぶん短軸」等と当てにいかない。合成した事実を残すだけ
 - **Analyze 7.5（.hdr/.img ペア）**。必要になったら別途
 
+
+## 8. Raw データ（ヘッダの無い画素配列）（2026-10-17〜）
+
+> 状態: **段 1（backend の変換と `POST /api/raw/import`）実装済み**。段 2 画面・段 3 中央スライスのプレビューは未着手。
+
+ファントム実験や他のソフトが書き出した、ヘッダの無い画素配列を取り込む。**NIfTI と同じ変換に、利用者の入力から作ったヘッダを渡す**
+（`NiftiHeader.raw(...)` → `NiftiToDicom.convert(Path, NiftiHeader, …)`）。型の変換・可逆の判定・Parametric Map・NaN の扱いは §3・§3.1 と同じ。
+NIfTI ファイルに包み直してから取り込む案は、画素を丸ごと複製して一時領域を 2 倍使うので採らない。
+
+### 入力（`RawSpec`）
+| 項目 | 内容 |
+|---|---|
+| 幅・高さ・枚数・時相 | 画素は x が最速 → y → z → t の順に並ぶ前提 |
+| 型 | uint8 / int8 / uint16 / int16 / uint32 / int32 / float32 / float64 |
+| バイト順 | little / big |
+| 読み飛ばし | 先頭のヘッダ相当のバイト数（= voxOffset） |
+| 画素間隔 | x・y・z（mm） |
+| 向き | 軸位・冠状・矢状（斜めは扱わない、2026-10-17 決定） |
+| 原点 | 先頭画素の中心の位置（LPS mm、既定 0,0,0） |
+
+### 幾何の約束
+- 向きは LPS の単位ベクトルで決める: 軸位 行(1,0,0)・列(0,1,0)／冠状 行(1,0,0)・列(0,0,−1)／矢状 行(0,1,0)・列(0,0,−1)。
+  **スライス方向は 行 × 列**（軸位 +z・冠状 +y＝後ろ向き・矢状 −x）。
+- LPS の行列を sform（RAS）に直して入れる（`sform_code=1`）。右手系なので §2 の列の反転は起きず、**画素は行 0 を上としてそのまま並ぶ**。
+  pixdim にも同じ間隔を入れ、§「アフィンが向きだけ」の照合で食い違わないようにする。
+- 向きと位置は**利用者の申告で、元データの情報ではない**。`ImageComments`（"Geometry from user input …"）と
+  `DerivationDescription`（"Converted from raw data (geometry from user input)"）に残す。
+
+### 画素ファイルの開き方
+- **Raw は gzip の判定をしない**（`NiftiToDicom.open(file, h)`）。画素の先頭がたまたま 0x1F 0x8B だと gzip と取り違えて読めなくなるため。
+  この判定を外すと `RawImportTest` の「先頭が gzip のマジックと同じ並び」が落ちることを確かめてある（2026-10-17）。
+
+### API（standalone のみ）
+| API | 内容 |
+|---|---|
+| `POST /api/raw/import` `{path, spec, modality, 患者情報…, valueUnit}` | 変換して取り込む。必要なバイト数（読み飛ばし＋幅×高さ×枚数×時相×型の大きさ）が**ファイルより大きければ 400**（変換に入らない）。小さいときは余り（`trailingBytes`）を返す——申告の誤りの手がかり |
+
+### 検証
+- `RawImportTest`（9 件）: int16 LE 64×48×10・読み飛ばし 512・0.5×0.5×2.0 mm で値の差 0・PixelSpacing・IPP の z=0…18 mm・IOP。
+  ビッグエンディアンの正例と、**バイト順・読み飛ばしを誤った負例で値が一致しない**こと。冠状・矢状の IOP と IPP、原点の指定、
+  float32 の非整数が Parametric Map で差 0、必要量の計算と申告の誤り、画素不足で変換が失敗すること。
+- `RawImportControllerTest`（3 件）: 1 バイト足りなければ変換に入らず 400、ちょうどなら余り 0、多ければ余りを返す。
+- NIfTI の既存テスト（`NiftiToDicomTest`・`NiftiPixelExactnessTest`・`ParametricMapRoundTripTest`・`NiftiMetadataMapperTest`）がそのまま通る。
 
 ## 実データで見つかった欠陥: アフィンが向きだけでスケールを持たない（2026-08-12）
 

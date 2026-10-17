@@ -54,6 +54,22 @@ public class NiftiImportService {
      * @param metadata サイドカー JSON の内容（無ければ null）
      */
     public Result importFile(Path nifti, Map<String, Object> metadata, NiftiToDicom.Options opts) {
+        NiftiToDicom.Options full = new NiftiToDicom.Options(
+                opts.modality(), opts.patientId(), opts.patientName(), opts.patientBirthDate(),
+                opts.patientSex(), opts.studyDate(), opts.studyDescription(), opts.seriesDescription(),
+                opts.seriesNumber(), opts.studyInstanceUid(), opts.seriesInstanceUid(), metadata, opts.valueUnit());
+        return run(nifti, null, full);
+    }
+
+    /**
+     * ヘッダの無い画素配列（Raw）を、利用者の入力から作ったヘッダ（{@link NiftiHeader#raw}）で変換して取り込む。
+     */
+    public Result importRaw(Path data, NiftiHeader header, NiftiToDicom.Options opts) {
+        return run(data, header, opts);
+    }
+
+    /** {@code header} が null ならファイルからヘッダを読む（NIfTI）。 */
+    private Result run(Path nifti, NiftiHeader header, NiftiToDicom.Options full) {
         Path tmpDir;
         try {
             tmpDir = Files.createTempDirectory("graphy-nifti-");
@@ -62,12 +78,7 @@ public class NiftiImportService {
         }
         int[] counts = { 0, 0 }; // imported, failed
         try {
-            NiftiToDicom.Options full = new NiftiToDicom.Options(
-                    opts.modality(), opts.patientId(), opts.patientName(), opts.patientBirthDate(),
-                    opts.patientSex(), opts.studyDate(), opts.studyDescription(), opts.seriesDescription(),
-                    opts.seriesNumber(), opts.studyInstanceUid(), opts.seriesInstanceUid(), metadata, opts.valueUnit());
-
-            NiftiToDicom.Summary summary = NiftiToDicom.convert(nifti, full, (ds, tsuid) -> {
+            NiftiToDicom.FrameSink sink = (ds, tsuid) -> {
                 Path tmp = Files.createTempFile(tmpDir, "frame-", ".dcm");
                 Attributes fmi = ds.createFileMetaInformation(tsuid);
                 try (DicomOutputStream dos = new DicomOutputStream(tmp.toFile())) {
@@ -82,7 +93,10 @@ public class NiftiImportService {
                 } finally {
                     Files.deleteIfExists(tmp);
                 }
-            });
+            };
+            NiftiToDicom.Summary summary = header == null
+                    ? NiftiToDicom.convert(nifti, full, sink)
+                    : NiftiToDicom.convert(nifti, header, full, sink);
 
             log.info("[nifti] 取り込み完了: {} 枚（{}×{}×{} slices × {} phases, geometry={}{}{}）",
                     counts[0], summary.columns(), summary.rows(), summary.slices(), summary.phases(),
