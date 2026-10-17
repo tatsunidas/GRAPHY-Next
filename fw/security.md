@@ -295,6 +295,18 @@ Study Instance UID 63 文字 × **131 件** ≒ **8,383 バイト**で破綻。
 ⚠ `AiGenerationRequest` は**プラグイン向けの公開契約**なので、提供元を増やすときに
 形を変えると既存プラグインが壊れる。**加算で拡張できる形**にしてから広げること。
 
+## web モードではサーバー上のパスを受ける API を出さない（2026-10-17）
+
+- **何を**: パスを受けて読み込む取り込み API は、standalone プロファイルだけで出す（`@Profile("standalone")`）。
+  対象は `/api/import/paths`・`/api/import/nondicom`・`/api/nifti/*`・`/api/raw/*`・`/api/import/url`・監視フォルダ（`/api/import/watch*`）。
+  回帰は `StandaloneOnlyEndpointsTest` で防ぐ（注釈を外すと落ちることを確かめてある）。公開デモでは `DemoModeFilter` でも止める。
+- **なぜ**: web は既定で認証が無く、全インターフェースで待ち受ける。パスを受ける API を出すと、ネットワーク上の誰でもサーバーのファイルを読み込ませたり、ファイルがあるかを確かめたりできる（OWASP A01）。
+  しかも web の検査一覧は PACS から読むので、取り込んだものはローカル保管庫に入るだけで利用者には見えない（2026-10-17 に NIfTI で実測）。
+- **ほかの経路（既に web では閉じている）**: プラグインの端末ファイルの口（動画の probe・validate・imports、保存領域）は `PluginRegistry#localFilesAllowed()` が web では false のため 501。
+  匿名化・シリーズ抽出のフォルダ出力は web では断る。
+- **今後**: web で取り込みを使えるようにするときは、パスではなくブラウザからのアップロードにし、取り込み先を STOW-RS（PACS）にする。
+  「取り込みを許可」の設定（既定はオフ）で開く（2026-10-17 ユーザー決定。計画は別途）。
+
 ## 監視フォルダの自動取り込みは standalone 限定（2026-10-15）
 
 `ImportWatchService` と `/api/import/watch/*` は `@Profile("standalone")`。web モードでは設定 API を利用者が書けるので、
