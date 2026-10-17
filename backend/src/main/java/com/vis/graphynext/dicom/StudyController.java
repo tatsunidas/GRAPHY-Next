@@ -295,7 +295,7 @@ public class StudyController {
                 return null;
             }
             // Parametric Map は float の単一フレームにする（fw/nifti-import.md §3.1）
-            if (ParametricMapFrameExpander.isParametricMap(ds)) {
+            if (ParametricMapFrameExpander.handles(ds)) {
                 return ParametricMapFrameExpander.extractFrame(ds, frame);
             }
             // NM 断層は per-frame の幾何を持たないので、そちらの経路で幾何を補う（H28）。

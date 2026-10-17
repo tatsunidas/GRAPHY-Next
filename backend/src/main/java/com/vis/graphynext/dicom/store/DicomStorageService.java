@@ -814,7 +814,7 @@ public class DicomStorageService {
                 return segBlankDicom(ds, rows, cols, ipp);
             }
             // Parametric Map は float の NaN で埋めた 1 フレーム（16 bit で書くと形式が食い違う）
-            if (com.vis.graphynext.dicom.ParametricMapFrameExpander.isParametricMap(ds)) {
+            if (com.vis.graphynext.dicom.ParametricMapFrameExpander.handles(ds)) {
                 return com.vis.graphynext.dicom.ParametricMapFrameExpander.blankFrame(ds, ipp);
             }
             int bits = ds.getInt(Tag.BitsAllocated, 16);
@@ -947,7 +947,7 @@ public class DicomStorageService {
             return mosaicTileDicom(sopUid, frame);
         }
         // Parametric Map は Float Pixel Data を float の単一フレームにして返す（fw/nifti-import.md §3.1）。
-        if (com.vis.graphynext.dicom.ParametricMapFrameExpander.isParametricMap(head)) {
+        if (com.vis.graphynext.dicom.ParametricMapFrameExpander.handles(head)) {
             return parametricMapFrameDicom(sopUid, frame);
         }
         // NM 断層は per-frame の幾何を持たないので、こちらで作って与える（H28）。
