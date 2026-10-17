@@ -6,6 +6,7 @@ import fs from "node:fs";
 import { killProcessTree } from "../common/processUtils.js";
 import { waitForHttp } from "../common/waitForHttp.js";
 import { waitForBackendReady } from "../backend/healthcheck.js";
+import { seedViewerSettings } from "../backend/seedSettings.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
 import type { Driver, DriverPorts } from "./types.js";
 import { DEFAULT_PORTS } from "./types.js";
@@ -66,6 +67,7 @@ export class WebDriver implements Driver {
     this.backendProc.stdout?.on("data", () => {});
     this.backendProc.stderr?.on("data", () => {});
     await waitForBackendReady(this.ports.http);
+    await seedViewerSettings(this.ports.http);
 
     this.viteProc = spawn(
       process.platform === "win32" ? "npm.cmd" : "npm",
