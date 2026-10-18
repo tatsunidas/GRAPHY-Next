@@ -38,7 +38,7 @@
 ## 2. 入力（本体の側で要ること）
 
 - 外部の計算機へは本体が作る npz（`VolumeAssembler`）で送る。DX/CR の 1 枚でも作れる（患者座標が無ければ NaN、グレースケールだけ）。値は Rescale 適用済み、`meta.json` に PhotometricInterpretation が入る。
-- **足りないもの: 表示の窓（WindowCenter/Width・VOI LUT・VOILUTFunction）**。胸部 X 線のモデルは表示に近い 8 bit 相当の画像で学習しているので、生の値を最大値で割るだけでは学習時と見え方がずれる（どれだけ効くかは実画像で確かめる）。→ **C1 で `meta.json` に VOI を足す**（本体の変更・後方互換）。
+- **表示の窓（WindowCenter/Width・VOILUTFunction）は C1 で `meta.json` に入った**（✅）: `windowCenter`・`windowWidth`（配列。多値は全部。先頭インスタンスの値で、volume と同じ Rescale 適用後の空間）、`voiLutFunction`（DICOM に無ければ欄ごと省く＝LINEAR）。窓が無い DICOM、または中心と幅の数が合わないときは 3 欄とも省く。**VOI LUT Sequence（ルックアップ表）は未対応**。以下は元の動機:胸部 X 線のモデルは表示に近い 8 bit 相当の画像で学習しているので、生の値を最大値で割るだけでは学習時と見え方がずれる（どれだけ効くかは実画像で確かめる）。→ **C1 で `meta.json` に VOI を足す**（本体の変更・後方互換）。
 - MONOCHROME1（白黒が反転）は計算機の上で反転してから入れる。
 - 焼き込みの文字（患者名など）は既存の `RemoteBurnPolicy` が扱う（送る前に止める・塗る）。
 
@@ -70,7 +70,7 @@
 | 段 | 内容 | 状態 |
 |---|---|---|
 | C0 | この設計書 | ✅ 2026-10-06 |
-| C1 | 本体: npz の `meta.json` に VOI（窓・LUT 関数）を足す | 未着手 |
+| C1 | 本体: npz の `meta.json` に VOI（窓・窓関数）を足す | ✅ 2026-10-18（JUnit。VOI LUT Sequence は未対応） |
 | C2 | プラグイン `vis-cxr-findings`（前処理・2 モデル・Grad-CAM・一覧・重ね表示・保存）と node --test | 未着手 |
 | C3 | 前処理と経路の一致、実機スパイク | 未着手 |
 | C4 | 精度の参考値（データの選定から） | 未着手 |
