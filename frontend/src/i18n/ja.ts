@@ -2292,7 +2292,7 @@ export const ja: Record<string, string> = {
   "settings.field.mprCrosshairColorMode.help": "設定を変えたら MPR を開き直すと反映されます。面の見出しの色は変わりません。",
   "settings.field.mprCrosshairColor": "単色のときの色",
   "settings.field.viewer3dRenderQuality": "3D の画質",
-  "settings.field.viewer3dRenderQuality.help": "自動: 回転・シネの操作中は画面を縮小して描き、止めると精細に戻します（静止画の画質は変わりません）。常に精細: 操作中も縮小しません。重いときは自動のままにしてください。設定を変えたら 3D ビューアを開き直すと反映されます。",
+  "settings.field.viewer3dRenderQuality.help": "自動: ドラッグで回している間は画面を縮小して描き、離すと精細に戻します（静止画の画質は変わりません）。常に精細: 操作中も縮小しません。重いときは自動のままにしてください。設定を変えたら 3D ビューアを開き直すと反映されます。",
   "settings.opt.viewer3dRenderQuality.auto": "自動（操作中は縮小）",
   "settings.opt.viewer3dRenderQuality.full": "常に精細",
   "settings.field.viewer3dBackground": "背景色",

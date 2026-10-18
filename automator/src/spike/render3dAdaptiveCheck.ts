@@ -10,8 +10,9 @@
  * 何を確かめるか（本物の Electron ＋ 本物の backend、CT 512×512×308）:
  *   A5  ドラッグ直後の interactionScale が interactionScaleFor(stillMs, 30) と一致 ／ ソフトウェア描画では 1.5 超 ／
  *       離して 500 ms 後に smallViewport=false。静止画の画素一致は結果ファイルを別の比較（新旧を同じ条件で撮る）で行う
- *   A6  full ではドラッグ中も smallViewport=false。シネ（SLAB の自動回転）の開始・停止でも同じことを見る
- *   A7  5 秒ドラッグ中の 1 フレームの時間（rAF の間隔）の中央値と四分位範囲を結果ファイルへ書く（新旧の比較は別）
+ *   A6  full ではドラッグ中も smallViewport=false
+ *   A7  ドラッグ開始（pointerdown）から 2 秒間の requestAnimationFrame の回数を結果ファイルへ書く。
+ *       新旧の判定は render3dAdaptiveCompare.ts（新の最小 > 旧の最大）。5 秒間の間隔の中央値・四分位範囲も参考に書く
  *   🔴 先に 3D が開いて getRender3dStats() が null でないことを確かめる。null なら「未達」に数える。
  *   🔴 ソフトウェア描画の指定が実際に効いたか（GPU 名が llvmpipe / SwiftShader）も先に確かめる。効いていなければ未達。
  *
@@ -238,7 +239,8 @@ async function main(): Promise<void> {
     console.log("\n[ドラッグ 5 秒]");
     // tsx が関数式へ __name を差し込み、ページ内で未定義になるので、文字列で渡す。
     await v3d.evaluate(`(() => {
-      window.__ft = { t: [], on: true };
+      window.__ft = { t: [], on: true, down: null };
+      window.addEventListener("pointerdown", (e) => { if (window.__ft.down === null) window.__ft.down = e.timeStamp; }, { capture: true });
       const loop = (n) => { if (!window.__ft.on) return; window.__ft.t.push(n); requestAnimationFrame(loop); };
       requestAnimationFrame(loop);
     })()`);
@@ -265,11 +267,12 @@ async function main(): Promise<void> {
     const lastDuring = BASELINE ? undefined : await readStats(v3d);
     await v3d.mouse.up();
     const tUp = Date.now();
-    const ft = await v3d.evaluate(() => {
-      const w = window as unknown as { __ft?: { t: number[]; on: boolean } };
+    const ftAll = await v3d.evaluate(() => {
+      const w = window as unknown as { __ft?: { t: number[]; on: boolean; down: number | null } };
       if (w.__ft) w.__ft.on = false;
-      return w.__ft?.t ?? [];
+      return { t: w.__ft?.t ?? [], down: w.__ft?.down ?? null };
     });
+    const ft = ftAll.t;
     await v3d.waitForTimeout(500);
     const afterRelease = BASELINE ? undefined : await readStats(v3d);
     console.log(`  mouse up から ${Date.now() - tUp} ms 後`);
@@ -283,6 +286,14 @@ async function main(): Promise<void> {
     result.frameMsLastHalf = half;
     console.log(`  フレーム間隔(ms): 中央値=${q.median.toFixed(1)} Q1=${q.q1.toFixed(1)} Q3=${q.q3.toFixed(1)} IQR=${q.iqr.toFixed(1)} n=${q.n}  （後半: 中央値=${half.median.toFixed(1)} IQR=${half.iqr.toFixed(1)}）`);
     check(q.n >= 3, "フレーム間隔を 3 点以上取れた", q.n);
+    if (ftAll.down === null) {
+      notReached("A7 ドラッグ開始から 2 秒のフレーム数", "pointerdown を捕まえられなかった");
+    } else {
+      const down = ftAll.down;
+      const first2s = ft.filter((x) => x > down && x <= down + 2000).length;
+      result.framesFirst2s = first2s;
+      console.log(`  ドラッグ開始から 2 秒のフレーム数: ${first2s}`);
+    }
 
     if (hasStats && rest) {
       result.atDragStart = at150 ?? null;
@@ -332,31 +343,6 @@ async function main(): Promise<void> {
     console.log(`[決まった経路のドラッグ後の静止画] ${await shot("still1")}`);
     await v3d.mouse.move(box.x + 5, box.y + 5);
 
-    // --- シネ（SLAB の自動回転）---
-    console.log("\n[シネ（SLAB の自動回転）]");
-    await v3d.getByTestId("viewer3d-mode-slab").click();
-    await v3d.waitForTimeout(SOFTWARE ? 4000 : 1500);
-    const spinBtn = v3d.getByTestId("viewer3d-slab-spin");
-    await spinBtn.waitFor({ state: "visible", timeout: 20_000 });
-    await spinBtn.click();
-    await v3d.waitForTimeout(SOFTWARE ? 3000 : 1500);
-    const spinning = BASELINE ? undefined : await readStats(v3d);
-    await v3d.screenshot({ path: path.join(OUT_DIR, "spin.png") });
-    await spinBtn.click(); // 停止
-    await v3d.waitForTimeout(SOFTWARE ? 2500 : 1000);
-    const spinStopped = BASELINE ? undefined : await readStats(v3d);
-    result.spinning = spinning ?? null;
-    result.spinStopped = spinStopped ?? null;
-    if (hasStats && rest) {
-      console.log(`  シネ中: ${JSON.stringify(spinning)}`);
-      console.log(`  停止後: ${JSON.stringify(spinStopped)}`);
-      const want = await expectedScale(v3d, rest.stillMs, QUALITY);
-      if (QUALITY === "full") check(spinning?.smallViewport === false, "A6 full ではシネ中も smallViewport=false", spinning);
-      else if (want > 1.5) check(spinning?.smallViewport === true, "A6 auto ではシネ中に縮小描画が効く（smallViewport=true）", spinning);
-      else check(spinning?.smallViewport === false, "A6 縮小が要らない速さではシネ中も smallViewport=false", spinning);
-      check(spinStopped?.smallViewport === false, "A6 シネを止めると smallViewport=false（精細に戻る）", spinStopped);
-    }
-    await v3d.screenshot({ path: path.join(OUT_DIR, "after-spin.png") });
     fs.writeFileSync(path.join(OUT_DIR, "frames.json"), JSON.stringify({ intervals }));
     await v3d.close().catch(() => {});
   } catch (e) {

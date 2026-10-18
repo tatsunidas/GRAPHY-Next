@@ -664,5 +664,5 @@ Actor 回転の蓄積はリセット（`vtkVolumeView.snapOrientation`・`viewer
 
 ### 操作中の縮小描画（2026-10-18）
 
-ドラッグ・シネの操作中だけ画面を縮小して描き、止めたら精細に戻す（静止画の画質は変えない）。設定「3D の画質」（自動／常に精細）。
-方式・限界（SLAB のシネは対象外ほか）は [`render-environment-design.md`](render-environment-design.md) §7。
+VR/MIP をドラッグしている間だけ画面を縮小して描き、離したら精細に戻す（静止画の画質は変えない）。設定「3D の画質」（自動／常に精細）。
+方式・限界（SLAB の自動回転は対象外ほか）は [`render-environment-design.md`](render-environment-design.md) §7。

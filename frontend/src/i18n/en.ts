@@ -2303,7 +2303,7 @@ export const en: Record<string, string> = {
   "settings.field.mprCrosshairColorMode.help": "Reopen MPR to apply. Plane title colors do not change.",
   "settings.field.mprCrosshairColor": "Single color",
   "settings.field.viewer3dRenderQuality": "3D quality",
-  "settings.field.viewer3dRenderQuality.help": "Auto: while rotating or playing cine, the view is drawn at a reduced size and returns to full detail when it stops (still images are unchanged). Always full: no reduction during interaction. Keep Auto on slower machines. Reopen the 3D viewer to apply.",
+  "settings.field.viewer3dRenderQuality.help": "Auto: while you drag to rotate, the view is drawn at a reduced size and returns to full detail when you release (still images are unchanged). Always full: no reduction during interaction. Keep Auto on slower machines. Reopen the 3D viewer to apply.",
   "settings.opt.viewer3dRenderQuality.auto": "Auto (reduced while interacting)",
   "settings.opt.viewer3dRenderQuality.full": "Always full detail",
   "settings.field.viewer3dBackground": "Background color",

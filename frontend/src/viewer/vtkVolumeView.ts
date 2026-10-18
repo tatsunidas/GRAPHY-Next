@@ -157,7 +157,7 @@ export interface VtkVolumeView {
   /** 背景色（0..1 の RGB）。 */
   setBackground(rgb: [number, number, number]): void;
   /**
-   * 3D の画質。auto=操作中（ドラッグ・シネ）は縮小して描き、止めたら精細に戻す。full=常に精細。
+   * 3D の画質。auto=ドラッグ中は縮小して描き、止めたら精細に戻す。full=常に精細。
    * 静止時の画質は auto でも full でも変わらない。
    */
   setRenderQuality(q: RenderQuality): void;
@@ -580,18 +580,10 @@ export function createVtkVolumeView(
   let parallelBeforeSlab: boolean | null = null;
   // 自動回転シネ（requestAnimationFrame）。
   let spinRaf = 0;
-  // interactor に「アニメーション中」と知らせる印。これが無いと vtk は縮小描画を使わない（isAnimating() が偽）。
-  const spinToken = { name: "graphy-spin" };
   const stopSpinLoop = (): boolean => {
     if (!spinRaf) return false;
     cancelAnimationFrame(spinRaf);
     spinRaf = 0;
-    try {
-      // 最後の要求者だった場合、vtk がここで精細な 1 フレームを描いて戻す。
-      interactor.cancelAnimation(spinToken, true);
-    } catch {
-      /* ignore */
-    }
     return true;
   };
 
@@ -1050,11 +1042,6 @@ export function createVtkVolumeView(
     },
     startSpin(opts) {
       stopSpinLoop();
-      try {
-        interactor.requestAnimation(spinToken);
-      } catch {
-        /* 縮小描画が効かないだけで、シネ自体は回る */
-      }
       let state: SpinState = { angle: 0, dir: 1 };
       let last = performance.now();
       const loop = (now: number) => {
@@ -1071,18 +1058,14 @@ export function createVtkVolumeView(
         } catch {
           /* ignore */
         }
-        // アニメーション中は interactor が毎フレーム描く。ここでも描くと 1 フレームに 2 回描いてしまう。
-        if (!interactor.isAnimating()) render();
+        render();
         spinRaf = requestAnimationFrame(loop);
       };
       spinRaf = requestAnimationFrame(loop);
       notifyState();
     },
     stopSpin() {
-      if (stopSpinLoop()) {
-        render(); // 縮小で描いた最後のフレームを精細に戻す（interactor が描いた後でも無害）
-        notifyState();
-      }
+      if (stopSpinLoop()) notifyState();
     },
     isSpinning: () => spinRaf !== 0,
     snapOrientation(kind, flip = false) {
