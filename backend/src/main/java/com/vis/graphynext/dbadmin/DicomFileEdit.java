@@ -17,7 +17,7 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * 複数の DICOM ファイルの書き換えを<b>全か無か</b>にする（患者情報の編集）。
+ * 複数の DICOM ファイルの書き換えを<b>全か無か</b>にする（患者情報の編集・タグの編集）。
  *
  * <ol>
  *   <li>{@link #prepare}: すべてのファイルの新しい内容を、走査・同期に見えない一時ファイル（{@code .<名前>.edit}）へ書く。
@@ -28,21 +28,37 @@ import java.util.UUID;
  * </ol>
  *
  * <p>入れ替え（2 番）の前に {@code <journalDir>/<id>.journal} を書き、完了で消す。入れ替えの途中や DB 更新の途中で
- * プロセスが落ちても、起動時に {@link PatientEditRecovery} が索引と突き合わせて整合を戻せるようにするため。
+ * プロセスが落ちても、起動時に {@link DicomEditRecovery} が索引と突き合わせて整合を戻せるようにするため。
  *
  * <p>失敗した操作の遅い部分（取り寄せ・リトライの待ち）は準備のあいだに済ませ、DB への書き込みは最後に短く行う
  * （DB の書き込みロックを握ったまま待たない）。
  */
-final class PatientFileEdit {
+final class DicomFileEdit {
 
-    private static final Logger log = LoggerFactory.getLogger(PatientFileEdit.class);
+    private static final Logger log = LoggerFactory.getLogger(DicomFileEdit.class);
 
-    /** 失敗した（患者の編集全体を取り消す）。{@code sop} は失敗したファイルの SOP UID（患者情報は含めない）。 */
+    /**
+     * 編集の種類。失敗の文言の接頭辞と、journal の 1 行目（起動時の復旧が判定のしかたを選ぶ）に使う。
+     * タグの編集は、触った索引の列（{@link IndexedTag} の名前）を journal に残す。
+     */
+    record Kind(String failPrefix, String journalHeader) {
+        static final Kind PATIENT = new Kind("patient-edit-failed", "#kind\tpatient");
+
+        static Kind tags(java.util.Collection<IndexedTag> indexColumns) {
+            return new Kind("tag-edit-failed", "#kind\ttags\t"
+                    + String.join(",", indexColumns.stream().map(Enum::name).toList()));
+        }
+    }
+
+    /** 入れ替えをすべて終えた印（journal の末尾）。タグの編集の復旧は、これが無ければ元へ戻す。 */
+    static final String SWAPPED_MARK = "#swapped";
+
+    /** 失敗した（編集全体を取り消す）。{@code sop} は失敗したファイルの SOP UID（患者情報は含めない）。 */
     static final class EditFailedException extends RuntimeException {
         private final String sop;
 
-        EditFailedException(String sop, String phase, Throwable cause) {
-            super("patient-edit-failed: " + phase + " sop=" + sop + " (" + cause.getClass().getSimpleName() + ")", cause);
+        EditFailedException(Kind kind, String sop, String phase, Throwable cause) {
+            super(kind.failPrefix() + ": " + phase + " sop=" + sop + " (" + cause.getClass().getSimpleName() + ")", cause);
             this.sop = sop;
         }
 
@@ -86,13 +102,15 @@ final class PatientFileEdit {
     private final Path journalDir;
     private final FileRetry retry;
     private final Ops ops;
+    private final Kind kind;
     private Path journal;
     private boolean finished;
 
-    private PatientFileEdit(Path journalDir, FileRetry retry, Ops ops) {
+    private DicomFileEdit(Path journalDir, FileRetry retry, Ops ops, Kind kind) {
         this.journalDir = journalDir;
         this.retry = retry;
         this.ops = ops;
+        this.kind = kind;
     }
 
     static Path editName(Path file) {
@@ -103,8 +121,13 @@ final class PatientFileEdit {
         return file.resolveSibling("." + file.getFileName() + ".orig");
     }
 
-    static PatientFileEdit prepare(List<Target> targets, Writer writer, Path journalDir, FileRetry retry, Ops ops) {
-        PatientFileEdit e = new PatientFileEdit(journalDir, retry, ops);
+    static DicomFileEdit prepare(List<Target> targets, Writer writer, Path journalDir, FileRetry retry, Ops ops) {
+        return prepare(targets, writer, journalDir, retry, ops, Kind.PATIENT);
+    }
+
+    static DicomFileEdit prepare(List<Target> targets, Writer writer, Path journalDir, FileRetry retry, Ops ops,
+                                 Kind kind) {
+        DicomFileEdit e = new DicomFileEdit(journalDir, retry, ops, kind);
         for (Target t : targets) {
             Item it = new Item(t.sop(), t.file(), editName(t.file()), origName(t.file()));
             e.items.add(it);
@@ -115,7 +138,7 @@ final class PatientFileEdit {
                 });
             } catch (IOException | RuntimeException ex) {
                 e.cleanupEdits();
-                throw new EditFailedException(t.sop(), "prepare", ex);
+                throw new EditFailedException(kind, t.sop(), "prepare", ex);
             }
         }
         return e;
@@ -145,8 +168,14 @@ final class PatientFileEdit {
                 });
             } catch (IOException | RuntimeException ex) {
                 rollback();
-                throw new EditFailedException(it.sop(), "swap", ex);
+                throw new EditFailedException(kind, it.sop(), "swap", ex);
             }
+        }
+        try {
+            Files.writeString(journal, SWAPPED_MARK + "\n", StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.APPEND);
+        } catch (IOException ex) {
+            rollback();
+            throw new EditFailedException(kind, items.isEmpty() ? "-" : items.get(0).sop(), "journal", ex);
         }
     }
 
@@ -168,7 +197,7 @@ final class PatientFileEdit {
                 }
             } catch (IOException | RuntimeException ex) {
                 // 戻せなかった。退避は消さずに残し（データを失わない）、journal も残して起動時の復旧に任せる
-                log.error("患者編集の巻き戻しに失敗: {} 退避 {} を残す", it.file(), it.orig(), ex);
+                log.error("編集の巻き戻しに失敗: {} 退避 {} を残す", it.file(), it.orig(), ex);
                 return;
             }
         }
@@ -207,14 +236,14 @@ final class PatientFileEdit {
         try {
             Files.createDirectories(journalDir);
             journal = journalDir.resolve(UUID.randomUUID() + ".journal");
-            StringBuilder sb = new StringBuilder();
+            StringBuilder sb = new StringBuilder(kind.journalHeader()).append('\n');
             for (Item it : items) {
                 sb.append(it.sop()).append('\t').append(it.file().toAbsolutePath()).append('\n');
             }
             Files.writeString(journal, sb.toString(), StandardCharsets.UTF_8);
         } catch (IOException ex) {
             cleanupEdits();
-            throw new EditFailedException(items.isEmpty() ? "-" : items.get(0).sop(), "journal", ex);
+            throw new EditFailedException(kind, items.isEmpty() ? "-" : items.get(0).sop(), "journal", ex);
         }
     }
 
