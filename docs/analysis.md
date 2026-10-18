@@ -30,7 +30,7 @@ ROI 全体を 1 つの領域として、RadiomicsJ で Radiomics 特徴量を計
 
 **手順**
 
-1. 対象シリーズと ROI マスクを選びます。マスクは DICOM SEG などのマスクシリーズです。SEG に複数のセグメントがあれば、セグメントを名前で選べます。塗りの ROI は、ROI マネージャーの「DICOM SEG で保存」でマスクシリーズにしてから選んでください。
+1. 対象シリーズと ROI マスクを選びます。必要なら「症例ラベル」（例 `case-012`）を入れます。CSV の `CaseLabel` 列とファイル名に入ります。症例を突き合わせるための番号などを入れ、患者名・患者 ID は入れないでください。マスクは DICOM SEG などのマスクシリーズです。SEG に複数のセグメントがあれば、セグメントを名前で選べます。塗りの ROI は、ROI マネージャーの「DICOM SEG で保存」でマスクシリーズにしてから選んでください。
 2. 設定を選びます。
     - 離散化: ビン数（既定 32）かビン幅（既定 25）。
     - リサンプリング: なし、または等方の画素間隔（mm）。
@@ -48,10 +48,24 @@ ROI 全体を 1 つの領域として、RadiomicsJ で Radiomics 特徴量を計
 
 **CSV に書き出す**
 
-2 つのファイルを保存します。
+2 つのファイルを保存します。ファイル名は、症例ラベルがあれば `<症例ラベル>-seg<セグメント>`、無ければ `roi-features-<シリーズ番号>-seg<セグメント>` で始まります。
 
-- `roi-features-<シリーズ番号>-seg<セグメント>.csv`: 1 行目が列名、2 行目が値（1 行 = 1 ROI）。列名は RadiomicsJ の結果表と同じです（例 `IntensityBasedStatistical_Kurtosis`）。計算できなかった値は `NaN` です。症例ごとのファイルを縦につなげば、そのまま統計ソフトに読み込めます。
-- `..._definitions.csv`: 列名ごとの族・特徴・IBSI の識別子・注記の符号（`EXCESS_KURTOSIS`・`LOG2_DISCRETISED`・`NON_IBSI`）・離散化。
+- `….csv`: 1 行目が列名、2 行目が値（1 行 = 1 ROI）。先頭の 5 列は記録です。
+    - `CaseLabel`: 症例ラベル（空のこともあります）。
+    - `Provenance_GraphyNextVersion`・`Provenance_RadiomicsJVersion`: 計算したソフトの版。
+    - `Provenance_ExtractedAt`: 計算した日時（ISO 8601、UTC）。
+    - `Provenance_SettingsSha256`: 計算に使った設定ファイルの SHA-256。設定が同じなら同じ値になるので、症例ごとの CSV を集めたときに設定の違いがこの列で分かります。
+
+    その後ろが特徴量の列で、列名は RadiomicsJ の結果表と同じです（例 `IntensityBasedStatistical_Kurtosis`）。計算できなかった値は `NaN` です。症例ごとのファイルを縦につなげば、そのまま統計ソフトに読み込めます。
+- `…_definitions.csv`: 列名ごとの族・特徴・IBSI の識別子・注記の符号（`EXCESS_KURTOSIS`・`LOG2_DISCRETISED`・`NON_IBSI`）・離散化。
+
+**設定ファイルを書き出す**
+
+表の上に、版と設定の要約（離散化・リサンプリング・有効な族の数）が出ます。「設定ファイルを書き出す」で、計算に実際に使った設定を RadiomicsJ の設定ファイル（`…_radiomicsj.properties`）として保存します。
+
+- 全部の設定を、既定値も含めて書きます。RadiomicsJ が範囲外の値を直した場合（ビン数 0 → 1 など）は、直した後の値です。
+- このファイルの SHA-256 が、CSV の `Provenance_SettingsSha256` と一致します。
+- 同じ画像とマスクで、このファイルを RadiomicsJ（ImageJ・コマンドライン）に読ませると、同じ値が出ます。
 
 患者名などの患者情報は、表にも CSV にも入りません。
 

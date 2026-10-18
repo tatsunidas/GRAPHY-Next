@@ -104,6 +104,7 @@ class RoiFeatureServiceTest {
     }
 
     private static final ObjectMapper JSON = new ObjectMapper().findAndRegisterModules();
+    private static final String NEXT_VERSION = "9.9.9-test";
 
     private final AtomicInteger extractions = new AtomicInteger();
 
@@ -112,7 +113,7 @@ class RoiFeatureServiceTest {
                 JSON, (rj, img, mask, label) -> {
                     extractions.incrementAndGet();
                     return rj.extractAll(img, mask, label);
-                });
+                }, NEXT_VERSION);
     }
 
     private static RoiFeatureRequest req(String series, Map<String, String> settings, boolean recompute) {
@@ -280,8 +281,11 @@ class RoiFeatureServiceTest {
         try (Stream<Path> s = Files.list(dir)) {
             f = s.filter(p -> p.toString().endsWith(".ckpt")).findFirst().orElseThrow();
         }
+        // JSON として読めなくする（本体の先頭の { を壊す）。文字列の中の 1 バイトでは JSON として読めてしまう。
         byte[] raw = Files.readAllBytes(f);
-        raw[raw.length / 2] = '#';
+        int body = new String(raw, java.nio.charset.StandardCharsets.ISO_8859_1).indexOf("{\"");
+        assertTrue(body >= 0);
+        raw[body] = '#';
         Files.write(f, raw);
 
         RoiFeatureResult second = svc.compute(req("1.2.9", Map.of(), false), p -> { });
@@ -331,7 +335,7 @@ class RoiFeatureServiceTest {
         assertEquals(0, extractions.get());
 
         RoiFeatureService web = new RoiFeatureService(new FixedEngine(volume(phantom(), mask(0))),
-                new MapCheckpointStore(new CacheStore(dir, 0), "t"), new RadiomicsMode(new MockEnvironment()), JSON);
+                new MapCheckpointStore(new CacheStore(dir, 0), "t"), new RadiomicsMode(new MockEnvironment()), JSON, NEXT_VERSION);
         assertThrows(IllegalStateException.class, () -> web.check(req("1.2.9", Map.of(), false)));
     }
 
@@ -346,7 +350,7 @@ class RoiFeatureServiceTest {
                     entered.countDown();
                     assertTrue(release.await(30, TimeUnit.SECONDS));
                     return rj.extractAll(img, mask, label);
-                });
+                }, NEXT_VERSION);
         RoiFeatureJobService jobs = new RoiFeatureJobService(blocking);
         RoiFeatureJobService.Status s = jobs.submit(req("1.2.9", Map.of(), false));
         assertTrue(entered.await(30, TimeUnit.SECONDS));
@@ -413,5 +417,58 @@ class RoiFeatureServiceTest {
         for (int z = 0; z < alone.length; z++) {
             assertArrayEquals(alone[z], during.get()[z], "slice " + z);
         }
+    }
+
+    @Test
+    void settingsRecordIsWhatRadiomicsJActuallyUses(@TempDir Path dir) throws Exception {
+        FixedEngine engine = new FixedEngine(volume(phantom(), mask(0)));
+        RoiFeatureService svc = service(engine, dir, "t");
+
+        // RadiomicsJ が黙って丸める値は、丸めた後の値で記録する
+        RoiFeatureResult clamped = svc.compute(req("1.2.9",
+                settings("INT_binCount", "0", "DOUBLE_Mask_PartialVolumeThareshold", "2"), false), p -> { });
+        Properties cp = new Properties();
+        cp.load(new java.io.StringReader(clamped.settingsProperties()));
+        assertEquals("1", cp.getProperty("INT_binCount"));
+        assertEquals("0.5", cp.getProperty("DOUBLE_Mask_PartialVolumeThareshold"));
+
+        // 冪等: 記録したファイルを読ませて取り直すと同じ本文
+        RoiFeatureResult a = svc.compute(req("1.2.9", settings("INT_binCount", "32"), false), p -> { });
+        Properties ap = new Properties();
+        ap.load(new java.io.StringReader(a.settingsProperties()));
+        String again = RadiomicsLock.call(() -> {
+            try {
+                RadiomicsJ rj = new RadiomicsJ();
+                rj.loadSettings(ap);
+                return RadiomicsJSettingsSnapshot.of(rj);
+            } finally {
+                RadiomicsJ.resetSettings();
+            }
+        });
+        assertEquals(a.settingsProperties(), again);
+        assertTrue(a.settingsProperties().contains("DOUBLEARRAY_resamplingFactorXYZ=\n"), "リサンプリングなしは空");
+        assertTrue(a.settingsProperties().contains("BOOL_enableGLCM=1\n"));
+        assertTrue(a.settingsProperties().contains("BOOL_enableGLAM=0\n"));
+
+        // リフレクションで読む値が設定に追従する（族の有効化とリサンプリング）
+        RoiFeatureResult b = svc.compute(req("1.2.9", settings("INT_binCount", "32", "BOOL_enableGLCM", "0",
+                "DOUBLEARRAY_resamplingFactorXYZ", "1,1,1"), false), p -> { });
+        assertTrue(b.settingsProperties().contains("BOOL_enableGLCM=0\n"));
+        assertTrue(b.settingsProperties().contains("DOUBLEARRAY_resamplingFactorXYZ=1.0,1.0,1.0\n"));
+        assertNotEquals(a.provenance().settingsSha256(), b.provenance().settingsSha256());
+
+        // 同じ設定は同じハッシュ（渡し方が違っても、RadiomicsJ が使う値が同じなら同じ）
+        RoiFeatureResult a2 = svc.compute(req("1.2.10", settings("INT_binCount", "32", "BOOL_enableGLCM", "true"),
+                false), p -> { });
+        assertEquals(a.provenance().settingsSha256(), a2.provenance().settingsSha256());
+
+        assertEquals(NEXT_VERSION, a.provenance().graphyNextVersion());
+        assertEquals(RadiomicsJ.version, a.provenance().radiomicsjVersion());
+
+        // キャッシュから返しても記録は最初の計算のもの
+        RoiFeatureResult cached = svc.compute(req("1.2.9", settings("INT_binCount", "32"), false), p -> { });
+        assertTrue(cached.fromCache());
+        assertEquals(a.provenance(), cached.provenance());
+        assertEquals(a.settingsProperties(), cached.settingsProperties());
     }
 }

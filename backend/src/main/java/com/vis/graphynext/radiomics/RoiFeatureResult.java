@@ -14,6 +14,9 @@ import java.util.List;
  * @param fromCache      キャッシュから返したか
  * @param label          マスクのラベル値
  * @param discretisation 抽出のときに効いていた離散化
+ * @param provenance     版と設定の記録（CSV の Provenance_* 列）
+ * @param settingsProperties 計算に実際に使った設定を正規化した RadiomicsJ の {@code .properties} 本文
+ *                       （{@link RadiomicsJSettingsSnapshot}）。{@code provenance.settingsSha256} はこの UTF-8 の SHA-256
  */
 public record RoiFeatureResult(
         String radiomicsjVersion,
@@ -21,7 +24,9 @@ public record RoiFeatureResult(
         boolean fromCache,
         int label,
         List<Row> rows,
-        Discretisation discretisation) {
+        Discretisation discretisation,
+        Provenance provenance,
+        String settingsProperties) {
 
     /**
      * @param column  RadiomicsJ の列名（例 {@code IntensityBasedStatistical_Kurtosis}）
@@ -35,7 +40,17 @@ public record RoiFeatureResult(
     public record Discretisation(boolean fixedBinNumber, int nBins, double binWidth,
                                  int ivhMode, int ivhBinCount, double ivhBinWidth) {}
 
+    /**
+     * @param graphyNextVersion 計算した GRAPHY-Next の版（{@code graphy.version}、開発中は dev）
+     * @param radiomicsjVersion {@code RadiomicsJ.version}
+     * @param extractedAt       抽出した時刻（キャッシュから返しても最初に計算した時刻）
+     * @param settingsSha256    {@code settingsProperties} の SHA-256（16 進小文字）
+     */
+    public record Provenance(String graphyNextVersion, String radiomicsjVersion, Instant extractedAt,
+                             String settingsSha256) {}
+
     RoiFeatureResult asCached() {
-        return new RoiFeatureResult(radiomicsjVersion, computedAt, true, label, rows, discretisation);
+        return new RoiFeatureResult(radiomicsjVersion, computedAt, true, label, rows, discretisation,
+                provenance, settingsProperties);
     }
 }

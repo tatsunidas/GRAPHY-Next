@@ -12,6 +12,7 @@ import io.github.tatsunidas.radiomics.main.SettingParams;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -68,20 +69,22 @@ public class RoiFeatureService {
     private final RadiomicsMode mode;
     private final ObjectMapper json;
     private final Extractor extractor;
+    private final String graphyVersion;
 
     @Autowired
     public RoiFeatureService(RadiomicsMapEngine engine, MapCheckpointStore cache, RadiomicsMode mode,
-                             ObjectMapper json) {
-        this(engine, cache, mode, json, (rj, img, mask, label) -> rj.extractAll(img, mask, label));
+                             ObjectMapper json, @Value("${graphy.version:dev}") String graphyVersion) {
+        this(engine, cache, mode, json, (rj, img, mask, label) -> rj.extractAll(img, mask, label), graphyVersion);
     }
 
     RoiFeatureService(RadiomicsMapEngine engine, MapCheckpointStore cache, RadiomicsMode mode,
-                      ObjectMapper json, Extractor extractor) {
+                      ObjectMapper json, Extractor extractor, String graphyVersion) {
         this.engine = engine;
         this.cache = cache;
         this.mode = mode;
         this.json = json;
         this.extractor = extractor;
+        this.graphyVersion = graphyVersion;
     }
 
     /** 投入の前に通す検査（web モード・必須項目・設定キー）。通らなければ例外。 */
@@ -190,6 +193,8 @@ public class RoiFeatureService {
             RoiFeatureResult.Discretisation disc = new RoiFeatureResult.Discretisation(
                     RadiomicsJ.BOOL_USE_FixedBinNumber, RadiomicsJ.nBins, RadiomicsJ.binWidth,
                     RadiomicsJ.IVH_mode, RadiomicsJ.IVH_binCount, RadiomicsJ.IVH_binWidth);
+            // 渡した設定ではなく読み込んだ後の状態を記録する（loadSettings は範囲外の値を黙って丸める）。
+            String properties = RadiomicsJSettingsSnapshot.of(radiomics);
             // 読み込んだマスクには校正が無い（マップは使わないため）。形態特徴はマスクの校正で体積を測るので、
             // 渡さないと 1 mm 等方として黙って違う値になる。
             ImagePlus mask = vol.mask();
@@ -198,7 +203,10 @@ public class RoiFeatureService {
             if (rt == null || rt.size() < 1) {
                 throw new IllegalStateException("RadiomicsJ が結果を返しませんでした。");
             }
-            return new RoiFeatureResult(RadiomicsJ.version, Instant.now(), false, label, rows(rt), disc);
+            Instant at = Instant.now();
+            RoiFeatureResult.Provenance provenance = new RoiFeatureResult.Provenance(
+                    graphyVersion, RadiomicsJ.version, at, RadiomicsJSettingsSnapshot.sha256(properties));
+            return new RoiFeatureResult(RadiomicsJ.version, at, false, label, rows(rt), disc, provenance, properties);
         } finally {
             RadiomicsJ.resetSettings();
             // 例外で抜けると RadiomicsJ は離散化画像を残す。マップの窓がそれを拾うので必ず消す。

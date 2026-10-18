@@ -35,6 +35,8 @@ for z in range(D):
     d.SOPInstanceUID = sop
     d.PatientName = "SYNTH^ROIFEAT"
     d.PatientID = "SYNTHROIFEAT"
+    d.PatientBirthDate = "19010203"
+    d.PatientSex = "O"
     d.StudyInstanceUID = study
     d.SeriesInstanceUID = series
     d.Modality = "CT"

@@ -814,7 +814,7 @@ RadiomicsJ は設定と途中結果（`discretiseImp`）を static に持ち、�
 - 進み具合は段階（読み込み中／計算中）と経過秒数、動き続ける棒。取り消しの横に「計算は最後まで続き、結果は保存される」。
 - 族の見出しの離散化: RadiomicsJ 2.4.1 の `extractAll` が `BOOL_USE_FixedBinNumber`・`nBins`・`binWidth` を渡す族（IntensityHistogram・GLCM・GLRLM・GLSZM・GLDZM・NGTDM・NGLDM・GLAM）にビン数かビン幅、IVH に IVH の設定。他の族には出さない。Diagnostics は特徴量でないので IBSI 欄を空にする。
 - CSV（`roiFeatureCsv.ts`）:
-  - データ表: 1 行目が列名、2 行目が値。列名と並びは RadiomicsJ の結果表のまま。値は `String(number)`（倍精度を往復で保つ）、NaN は `NaN`（R・pandas とも数値の NaN として読む）。改行 CRLF・**BOM なし**（中身は ASCII だけ。BOM があると R の `read.csv` が 1 列目の名前を `X.U.FEFF.…` に変える）。
+  - データ表: 1 行目が列名、2 行目が値。列名と並びは RadiomicsJ の結果表のまま。値は `String(number)`（倍精度を往復で保つ）、NaN は `NaN`（R・pandas とも数値の NaN として読む）。改行 CRLF・**BOM なし**（BOM があると R の `read.csv` が 1 列目の名前を `X.U.FEFF.…` に変える。§13.9 で足した症例ラベル以外は ASCII だけ）。
   - 定義表 `*_definitions.csv`: `column,family,feature,ibsi,notes,discretisation`。注記は言語に依らない符号を `;` でつなぐ。
 - 実アプリのスパイク（`automator/src/spike/roiFeatureCheck.ts`、合成 CT 48×48×16 を取り込み、アプリの SEG 書き出し API で 2 セグメントの SEG を作る）: 結果は §13.8。
 
@@ -822,3 +822,16 @@ RadiomicsJ は設定と途中結果（`discretiseImp`）を static に持ち、�
 - スパイク: 37/0（日本語表示）。表 230 行・注記・離散化の見出し・IBSI 外をスクリーンショットで判定。CSV のデータ表と、同じ要求本文で API を `recompute=true` で呼んだ結果が全列で差 0。2 回目はキャッシュの表示と計算日時、CSV は 1 回目と同一。「計算し直す」で新しく計算。負例: ビン数 16 の CSV は GLCM が不一致・形態は一致。2 つ目のセグメントでボクセル数 400（理論値 10×10×4）。取り消した計算（ビン数 24）は次の要求でキャッシュから返る。
 - CSV を Python の `csv`・pandas で読める（230 列すべて数値型）。R の `read.csv` は、この機械に R が無いので未確認（未達）。
 
+
+### 13.9 版と設定の記録（2026-10-18）
+- 結果に `provenance`（`graphyNextVersion`＝`graphy.version`・`radiomicsjVersion`＝`RadiomicsJ.version`・`extractedAt`・`settingsSha256`）と `settingsProperties` を足した。キャッシュのエンジン版は `roi-features-3`。
+- **設定は「渡した値」ではなく「読み込んだ後の RadiomicsJ の状態」から書く**（`RadiomicsJSettingsSnapshot`）。`loadSettings` は範囲外を黙って丸め（ビン数 0→1、部分体積のしきい値の範囲外→0.5）、数にならない値は既定のまま、空は読み飛ばすため。
+  - `SettingParams` の全キーを名前順に `KEY=value\n`（UTF-8、コメント行なし。`Properties.store` は日時を書くので使わない）。double は `Double.toString`、真偽は `1`/`0`、配列はカンマ区切り、null は空（新しいインスタンスの既定の null に戻る）。版はファイルに入れない（同じ設定は版によらず同じハッシュ）。
+  - 族の有効化（インスタンスのフィールド）と `resamplingFactorXYZ`（パッケージ内の static）は外から読めないのでリフレクションで読む。無ければ例外。`SettingParams` に読み出しの無いキーが増えても例外（記録から黙って抜けない）。
+- `RadiomicsJ.version` はクラスローダの `application.properties` の `version` を読む作り。Next は `application.yml` だけなので取り違えないが、別の依存が同名のファイルを持つと壊れる。試験でキャッシュのキーの版（`pom.properties`）との一致を、スパイクでパッケージの jar で `2.4.1` を確かめている。
+- CSV の先頭 5 列: `CaseLabel`（利用者の任意入力。空でも列を置く）・`Provenance_GraphyNextVersion`・`Provenance_RadiomicsJVersion`・`Provenance_ExtractedAt`・`Provenance_SettingsSha256`。ファイル名は症例ラベルがあれば `<ラベル>-seg<n>`。設定ファイル `…_radiomicsj.properties` は `settingsProperties` を一字も変えずに保存する。
+- 検証:
+  - `RoiFeatureIntegrationTest`（保管庫の DICOM、患者名・ID・生年月日・性別入り）: 書き出した設定ファイルを RadiomicsJ に読ませた直接抽出と全特徴がビット一致、ファイルのビン数だけ変えると不一致。キーの集合＝`SettingParams`。ハッシュ＝ファイルの SHA-256。保管庫の DICOM に 4 項目が入っていることを先に確かめ、設定ファイルと結果の JSON に含まれないこと。
+  - `RoiFeatureServiceTest`: 丸めた値で記録、冪等（読ませて取り直すと同じ本文）、族とリサンプリングの追従、渡し方が違っても使う値が同じなら同じハッシュ、キャッシュから返しても記録は最初の計算のもの。族の有効化を常に 1 と書く変異で落ちる。
+  - スパイク 56/0（日本語表示）: 症例ラベル・版（`/api/status` と同じ、RadiomicsJ 2.4.1）・ISO 8601・ハッシュ＝ダウンロードした設定ファイルの SHA-256、設定ファイル＝API の本文。書き出した設定ファイルをそのまま設定にして計算し直すと CSV と全列で差 0・同じハッシュ、ビン数 16 にすると GLCM 不一致。取り込んだ合成データに患者名・ID があることを `/api/studies` で確かめてから、3 本のファイルに患者名・ID・生年月日・性別の値も `Patient` 等の語も無いこと。表の上の 2 行をスクリーンショットで判定。
+- 気づいたこと（未対応）: キャッシュの項目は長さだけを確かめ、中身のチェックサムが無い。JSON の文字列や数値の中の 1 バイトが化けても、JSON として読めればそのまま返る（`Checkpoints` の作り。マップの途中結果も同じ）。試験は「JSON として読めない項目は計算し直す」を見る形に直した。
