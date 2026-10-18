@@ -492,6 +492,17 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
             default: "#000000",
             helpKey: "settings.field.viewer3dBackground.help",
           },
+          {
+            key: "viewer3d.renderQuality",
+            labelKey: "settings.field.viewer3dRenderQuality",
+            type: "select",
+            default: "auto",
+            helpKey: "settings.field.viewer3dRenderQuality.help",
+            options: [
+              { value: "auto", labelKey: "settings.opt.viewer3dRenderQuality.auto" },
+              { value: "full", labelKey: "settings.opt.viewer3dRenderQuality.full" },
+            ],
+          },
         ],
       },
       {

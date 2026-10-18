@@ -53,9 +53,18 @@ import { geomFromImageData, worldToVoxel } from "./labelVolume";
 import { makeUnprojector } from "../viewer3d/measure3d";
 import { defaultSlabThickness, type SlabProjection } from "./slabPresets";
 import actorRotateManipulator from "./actorRotateManipulator";
+import { STILL_MS_STORAGE_KEY, interactionScaleForQuality, type RenderQuality } from "./renderEnv";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
+
+/** {@link VtkVolumeView.getRenderStats} の値。 */
+export interface VtkRenderStats {
+  stillMs: number;
+  interactionScale: number;
+  smallViewport: boolean;
+  quality: RenderQuality;
+}
 
 /** レンダリングモード。 */
 export type VtkRenderMode = "VR" | "MIP" | "MINIP" | "ORTHO" | "SLAB";
@@ -147,6 +156,16 @@ export interface VtkVolumeView {
   snapOrientation(kind: SnapKind, flip?: boolean): void;
   /** 背景色（0..1 の RGB）。 */
   setBackground(rgb: [number, number, number]): void;
+  /**
+   * 3D の画質。auto=操作中（ドラッグ・シネ）は縮小して描き、止めたら精細に戻す。full=常に精細。
+   * 静止時の画質は auto でも full でも変わらない。
+   */
+  setRenderQuality(q: RenderQuality): void;
+  /**
+   * 描画の実測。stillMs=静止 1 フレームの時間、interactionScale・smallViewport=いま vtk が使っている縮小の倍率と状態。
+   * vtk の view node が取れない（vtk の版が変わった）か、静止時間が測れていなければ null。
+   */
+  getRenderStats(): VtkRenderStats | null;
   /** 色 LUT（256 の r/g/b 0..255）を適用。null でグレースケールへ。 */
   setColorLut(lut: { r: number[]; g: number[]; b: number[] } | null): void;
   /** VR プリセット（cornerstone VIEWPORT_PRESETS 名）を適用。null で解除（グレースケール/W-L へ）。 */
@@ -561,10 +580,18 @@ export function createVtkVolumeView(
   let parallelBeforeSlab: boolean | null = null;
   // 自動回転シネ（requestAnimationFrame）。
   let spinRaf = 0;
+  // interactor に「アニメーション中」と知らせる印。これが無いと vtk は縮小描画を使わない（isAnimating() が偽）。
+  const spinToken = { name: "graphy-spin" };
   const stopSpinLoop = (): boolean => {
     if (!spinRaf) return false;
     cancelAnimationFrame(spinRaf);
     spinRaf = 0;
+    try {
+      // 最後の要求者だった場合、vtk がここで精細な 1 フレームを描いて戻す。
+      interactor.cancelAnimation(spinToken, true);
+    } catch {
+      /* ignore */
+    }
     return true;
   };
 
@@ -694,6 +721,71 @@ export function createVtkVolumeView(
   rebuildOpacity();
   renderer.resetCamera();
   grw.resize();
+  render();
+
+  // ── 操作中の縮小描画 ──
+  // vtk.js は操作中（interactor がアニメーション中）だけ、OpenGL 側 mapper の `_lastScale`（面積倍率）で
+  // 縮小して描く。倍率の初期値は 1 なので、最初のドラッグは全解像度で走る。静止 1 フレームを測って初期値に渡す。
+  // 触る非公開の値は `_lastScale` だけ（get / set で）。view node が取れなければ何もしない。
+  const openGLRw = (): Any => {
+    try {
+      return (grw as Any).getApiSpecificRenderWindow?.() ?? null;
+    } catch {
+      return null;
+    }
+  };
+  const volumeViewNode = (): Any => {
+    try {
+      return openGLRw()?.getViewNodeFor?.(mapper) ?? null;
+    } catch {
+      return null;
+    }
+  };
+  /** 静止 1 フレームの時間（ms）。1×1 の readPixels で GPU の完了を待ち、3 回の中央値。測れなければ null。 */
+  const measureStillMs = (): number | null => {
+    try {
+      const gl: WebGL2RenderingContext | null = openGLRw()?.getContext?.() ?? null;
+      if (!gl) return null;
+      const px = new Uint8Array(4);
+      const times: number[] = [];
+      for (let i = 0; i < 3; i++) {
+        const t0 = performance.now();
+        renderWindow.render();
+        gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        times.push(performance.now() - t0);
+      }
+      times.sort((a, b) => a - b);
+      const med = times[1];
+      return Number.isFinite(med) && med > 0 ? med : null;
+    } catch {
+      return null;
+    }
+  };
+  let stillMs: number | null = null;
+  let quality: RenderQuality = "auto";
+  const applyInteractionScale = () => {
+    const node = volumeViewNode();
+    if (!node) return;
+    if (quality === "full") {
+      mapper.setAutoAdjustSampleDistances(false);
+      mapper.setInitialInteractionScale(1);
+      node.set({ _lastScale: 1 }, true);
+    } else {
+      mapper.setAutoAdjustSampleDistances(true);
+      const rate = Number(interactor.getDesiredUpdateRate?.());
+      mapper.setInitialInteractionScale(stillMs === null ? 1 : interactionScaleForQuality("auto", stillMs, rate));
+      node.set({ _lastScale: 0 }, true); // 0 にすると次の描画で初期値から読み直す
+    }
+  };
+  stillMs = measureStillMs();
+  if (stillMs !== null) {
+    try {
+      localStorage.setItem(STILL_MS_STORAGE_KEY, JSON.stringify({ stillMs, at: Date.now() }));
+    } catch {
+      /* 設定画面の表示用。書けなくても描画には関係しない */
+    }
+  }
+  applyInteractionScale();
   render();
 
   // ── interactor 割当（回転=左 / Pan=中 / Zoom=ホイール / W-L=右ドラッグ）──
@@ -861,6 +953,27 @@ export function createVtkVolumeView(
       renderer.setBackground(rgb[0], rgb[1], rgb[2]);
       render();
     },
+    setRenderQuality(q) {
+      if (q === quality) return;
+      quality = q;
+      applyInteractionScale();
+      render();
+    },
+    getRenderStats() {
+      const node = volumeViewNode();
+      if (!node || stillMs === null) return null;
+      try {
+        const v = node.get("_lastScale", "_useSmallViewport");
+        return {
+          stillMs,
+          interactionScale: Number(v._lastScale),
+          smallViewport: !!v._useSmallViewport,
+          quality,
+        };
+      } catch {
+        return null;
+      }
+    },
     setMode(next) {
       applyMode(next);
       applyCinematic(); // 陰影設定を維持
@@ -937,6 +1050,11 @@ export function createVtkVolumeView(
     },
     startSpin(opts) {
       stopSpinLoop();
+      try {
+        interactor.requestAnimation(spinToken);
+      } catch {
+        /* 縮小描画が効かないだけで、シネ自体は回る */
+      }
       let state: SpinState = { angle: 0, dir: 1 };
       let last = performance.now();
       const loop = (now: number) => {
@@ -953,14 +1071,18 @@ export function createVtkVolumeView(
         } catch {
           /* ignore */
         }
-        render();
+        // アニメーション中は interactor が毎フレーム描く。ここでも描くと 1 フレームに 2 回描いてしまう。
+        if (!interactor.isAnimating()) render();
         spinRaf = requestAnimationFrame(loop);
       };
       spinRaf = requestAnimationFrame(loop);
       notifyState();
     },
     stopSpin() {
-      if (stopSpinLoop()) notifyState();
+      if (stopSpinLoop()) {
+        render(); // 縮小で描いた最後のフレームを精細に戻す（interactor が描いた後でも無害）
+        notifyState();
+      }
     },
     isSpinning: () => spinRaf !== 0,
     snapOrientation(kind, flip = false) {

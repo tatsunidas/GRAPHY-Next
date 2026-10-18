@@ -205,3 +205,39 @@ export function probeMax3dTextureSizeForRender(): number | null {
   const p = probeRenderEnv();
   return p.highPerformanceCtx?.max3dTextureSize ?? p.defaultCtx?.max3dTextureSize ?? null;
 }
+
+// ── 操作中の縮小描画（設計: fw/render-environment-design.md「操作中の縮小描画」）──
+
+/** 3D の画質設定。auto=操作中は縮小描画、full=常に精細。 */
+export type RenderQuality = "auto" | "full";
+
+/** vtk.js の OpenGL VolumeMapper が、面積倍率をこの値未満なら全解像度のまま描く（Rendering/OpenGL/VolumeMapper.js）。 */
+export const MIN_INTERACTION_SCALE = 1.5;
+/** 同じく vtk.js が丸める上限（軸あたり 1/20）。 */
+export const MAX_INTERACTION_SCALE = 400;
+
+/**
+ * 操作中の面積倍率。静止 1 フレームが stillMs、目標の更新率が rate（回/秒）のとき、
+ * 画素数を 1/s にすれば（描画時間が画素数にほぼ比例するなら）1 フレームが 1/rate 秒に収まる。
+ * s = (stillMs/1000)·rate。1.5 未満なら縮小しない（1）、400 で頭打ち。
+ * 測れていない（NaN・0 以下）ときも 1（今までと同じ）。
+ */
+export function interactionScaleFor(stillMs: number, rate: number): number {
+  if (!Number.isFinite(stillMs) || !Number.isFinite(rate) || stillMs <= 0 || rate <= 0) return 1;
+  const s = (stillMs / 1000) * rate;
+  if (s < MIN_INTERACTION_SCALE) return 1;
+  return Math.min(s, MAX_INTERACTION_SCALE);
+}
+
+/** 画質設定を含めた倍率。full は常に 1（縮小しない）。 */
+export function interactionScaleForQuality(quality: RenderQuality, stillMs: number, rate: number): number {
+  return quality === "full" ? 1 : interactionScaleFor(stillMs, rate);
+}
+
+/** 設定値を RenderQuality に直す。auto・full 以外（未設定・不正値）は auto。 */
+export function parseRenderQuality(v: unknown): RenderQuality {
+  return v === "full" ? "full" : "auto";
+}
+
+/** 3D の静止 1 フレームの直近の実測を、別ウィンドウの設定画面へ渡すための localStorage キー。 */
+export const STILL_MS_STORAGE_KEY = "graphy.render3d.stillMs";

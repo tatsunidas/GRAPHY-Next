@@ -3,7 +3,15 @@
  * Author: Tatsuaki Kobayashi
  */
 import { describe, it, expect } from "vitest";
-import { classifyRenderer, detectHybrid, summarize, type ContextProbe } from "./renderEnv";
+import {
+  classifyRenderer,
+  detectHybrid,
+  summarize,
+  interactionScaleFor,
+  interactionScaleForQuality,
+  parseRenderQuality,
+  type ContextProbe,
+} from "./renderEnv";
 
 // 実機（開発機）で UNMASKED_RENDERER_WEBGL から読んだ文字列。
 const DEV_MACHINE = "ANGLE (Intel, Mesa Intel(R) Graphics (ARL), OpenGL 4.6)";
@@ -123,5 +131,50 @@ describe("summarize", () => {
     );
     expect(s.kind).toBe("software");
     expect(s.evidence).toBe("status");
+  });
+});
+
+describe("interactionScaleFor（操作中の縮小倍率 = 静止秒 × 目標更新率）", () => {
+  it("t·R が 1.5 未満なら 1（縮小しない）", () => {
+    expect(interactionScaleFor(10, 30)).toBe(1); // 0.3
+    expect(interactionScaleFor(49, 30)).toBe(1); // 1.47
+  });
+  it("境界: 1.5 ちょうどは縮小する", () => {
+    expect(interactionScaleFor(50, 30)).toBeCloseTo(1.5, 10);
+  });
+  it("t·R をそのまま返す", () => {
+    expect(interactionScaleFor(400, 30)).toBeCloseTo(12, 10);
+    expect(interactionScaleFor(1000, 60)).toBeCloseTo(60, 10);
+  });
+  it("400 で頭打ち", () => {
+    expect(interactionScaleFor(20000, 30)).toBe(400); // 600
+    expect(interactionScaleFor(400 / 30 * 1000, 30)).toBeCloseTo(400, 6);
+  });
+  it("目標の更新率に追従する（固定の 30 ではない）", () => {
+    expect(interactionScaleFor(100, 30)).toBeCloseTo(3, 10);
+    expect(interactionScaleFor(100, 60)).toBeCloseTo(6, 10);
+  });
+  it("負例: 測れていない・不正な値は 1", () => {
+    for (const bad of [NaN, 0, -5, Infinity]) expect(interactionScaleFor(bad, 30)).toBe(1);
+    expect(interactionScaleFor(100, 0)).toBe(1);
+    expect(interactionScaleFor(100, NaN)).toBe(1);
+  });
+});
+
+describe("interactionScaleForQuality", () => {
+  it("auto は interactionScaleFor と同じ", () => {
+    expect(interactionScaleForQuality("auto", 400, 30)).toBeCloseTo(12, 10);
+  });
+  it("full は遅くても常に 1", () => {
+    expect(interactionScaleForQuality("full", 400, 30)).toBe(1);
+    expect(interactionScaleForQuality("full", 20000, 30)).toBe(1);
+  });
+});
+
+describe("parseRenderQuality", () => {
+  it("full だけが full、それ以外（未設定・不正値）は auto", () => {
+    expect(parseRenderQuality("full")).toBe("full");
+    expect(parseRenderQuality("auto")).toBe("auto");
+    for (const v of [undefined, null, "", "FULL", 1]) expect(parseRenderQuality(v)).toBe("auto");
   });
 });

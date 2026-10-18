@@ -661,3 +661,8 @@ GRAPHY `view/D3/*`＋`centerline/*`＋`slicer/*` を GRAPHY-Next と照合した
 
 右パネル「向き」: Axial（足側から・上=A）/ Coronal（前から・上=S）/ Sagittal（左から・上=S）＋「反対」。焦点・距離・ズームは保持し、
 Actor 回転の蓄積はリセット（`vtkVolumeView.snapOrientation`・`viewer/cameraSnap.ts`）。Slab の回転中心・シネは [`slab-mip-design.md`](slab-mip-design.md) §7。
+
+### 操作中の縮小描画（2026-10-18）
+
+ドラッグ・シネの操作中だけ画面を縮小して描き、止めたら精細に戻す（静止画の画質は変えない）。設定「3D の画質」（自動／常に精細）。
+方式・限界（SLAB のシネは対象外ほか）は [`render-environment-design.md`](render-environment-design.md) §7。

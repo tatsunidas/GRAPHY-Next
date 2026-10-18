@@ -39,7 +39,8 @@ import { buildMprVolume } from "../viewer/mpr";
 import { SliceDuplicatesError, sopGridIndexMap, volumeDepthNote, type VolumeDepthNote } from "../viewer/depthVolume";
 import { VolumeDepthChip } from "../viewer/VolumeDepthChip";
 import { loadRenderEnvSummary } from "../viewer/renderEnvReport";
-import type { RenderKind } from "../viewer/renderEnv";
+import { parseRenderQuality, type RenderKind } from "../viewer/renderEnv";
+import { installDebugApi, publishRender3dStats } from "../viewer/debugApi";
 import { requestOpenSettings } from "../settings/settingsOpenEvents";
 import {
   createVtkVolumeView,
@@ -139,6 +140,12 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
     return () => {
       alive = false;
     };
+  }, []);
+  // automator 用: このウィンドウでも window.__graphyDebug を用意し、3D の描画の実測を読めるようにする（dev ビルドのみ）。
+  useEffect(() => {
+    installDebugApi();
+    publishRender3dStats(() => viewRef.current?.getRenderStats() ?? null);
+    return () => publishRender3dStats(null);
   }, []);
   const [mode, setMode] = useState<VtkRenderMode>("VR");
   const [orthoPos, setOrthoPos] = useState<{ x: number; y: number; z: number }>({ x: 0.5, y: 0.5, z: 0.5 });
@@ -376,7 +383,9 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
       // 背景色（環境設定）。読めなければ黒のまま。設定を変えたら開き直すと反映する（2D と同じ）。
       fetchSettings()
         .then((m) => {
-          if (viewRef.current === view) view.setBackground(hexToRgb01(m["viewer3d.background"]));
+          if (viewRef.current !== view) return;
+          view.setBackground(hexToRgb01(m["viewer3d.background"]));
+          view.setRenderQuality(parseRenderQuality(m["viewer3d.renderQuality"]));
         })
         .catch(() => undefined);
       // mesh / 3D ROI アクターを同一 vtk シーンへ重畳するため renderer を接続。

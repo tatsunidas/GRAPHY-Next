@@ -16,6 +16,7 @@ import { calibrationForImageId, loaderSpacingFor, setXaUserCalibration } from ".
 import { getViewerContext } from "./viewerContext";
 import { worldToImageCoords } from "./imageCoords";
 import type { Geometry3DPixelStats } from "./vtkGeometryView";
+import type { VtkRenderStats } from "./vtkVolumeView";
 
 /**
  * automator（自律検証ツール）専用のデバッグAPI。`window.__graphyDebug` として公開し、
@@ -754,6 +755,21 @@ export function publishGeometry3dProbe(fn: (() => Geometry3DPixelStats | null) |
   geometry3dProbe = fn;
 }
 
+/**
+ * 開いている 3D（vtk）の描画の実測（静止 1 フレームの時間・操作中の縮小倍率・縮小描画の状態）。
+ * 3D が開いていない・vtk の内部に届かない場合は null。
+ */
+let render3dProbe: (() => VtkRenderStats | null) | null = null;
+
+export function publishRender3dStats(fn: (() => VtkRenderStats | null) | null): void {
+  if (!import.meta.env.DEV) return;
+  render3dProbe = fn;
+}
+
+function getRender3dStats(): VtkRenderStats | null {
+  return render3dProbe ? render3dProbe() : null;
+}
+
 function getGeometry3dStats(): Geometry3DPixelStats | null {
   return geometry3dProbe ? geometry3dProbe() : null;
 }
@@ -1112,6 +1128,7 @@ declare global {
       getAnnotationCanvasPoints: typeof getAnnotationCanvasPoints;
       getImagePixelRange: typeof getImagePixelRange;
       getPixelStats: typeof getPixelStats;
+      getRender3dStats: typeof getRender3dStats;
       getViewportGeometry: typeof getViewportGeometry;
       getSegCounts: typeof getSegCounts;
       getImageCanvasRect: typeof getImageCanvasRect;
@@ -1264,6 +1281,7 @@ export function installDebugApi(): void {
     getAnnotationCanvasPoints,
     getImagePixelRange,
     getPixelStats,
+    getRender3dStats,
     getViewportGeometry,
     getSegCounts,
     getImageCanvasRect,
