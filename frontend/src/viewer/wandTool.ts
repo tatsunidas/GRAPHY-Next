@@ -54,7 +54,7 @@ function restoreTracked(labelmapIds: string[], cols: number, rows: number): Set<
 }
 
 /** 画像 1 枚の判定値の読み手（{@link makeValueReader}）。係数は `getModalityCalibration` の唯一の入口から取る。 */
-function valueReaderOf(img: AnyObj, imageId: string): (i: number) => number {
+export function valueReaderOf(img: AnyObj, imageId: string): (i: number) => number {
   const px = img.getPixelData() as ArrayLike<number>;
   const n = Number(img.columns ?? img.width) * Number(img.rows ?? img.height);
   const comps = Math.max(1, Math.round(px.length / n));

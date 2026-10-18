@@ -71,6 +71,7 @@ import { classifySeriesRenderability } from "../viewer/seriesRenderable";
 import { subscribeSeriesRefresh } from "../viewer/viewerRefresh";
 import { WandDialog } from "./WandDialog";
 import { ScissorsDialog } from "./ScissorsDialog";
+import { ThresholdDialog } from "./ThresholdDialog";
 import { LevelSetsDialog } from "./LevelSetsDialog";
 import { HistogramDialog } from "./HistogramDialog";
 import { ResampleDialog } from "./ResampleDialog";
@@ -1826,6 +1827,7 @@ function TileGrid({
       )}
       <WandDialog />
       <ScissorsDialog />
+      <ThresholdDialog />
       <LevelSetsDialog />
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
       {/* 単独表示のタイルは、このグリッドの外枠いっぱいに重ねる（他のタイルの大きさは変えない）。 */}
