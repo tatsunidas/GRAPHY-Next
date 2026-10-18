@@ -137,4 +137,55 @@ final class DatasetFixture {
         }
     }
 
+    static final String DX_SERIES = "1.2.3.100.5";
+
+    /**
+     * 4×3 の DX を 1 枚（患者座標なし）。画素値 = 10*y + x（格納値）。VOI 欄は null なら付けない。
+     * {@code windowCenter}/{@code windowWidth} は DS の文字列（多値は {@code \\} 区切り）。
+     */
+    void writeDx(String photometric, String windowCenter, String windowWidth, String voiLutFunction) throws IOException {
+        Attributes ds = new Attributes();
+        ds.setString(Tag.SOPClassUID, VR.UI, UID.DigitalXRayImageStorageForPresentation);
+        ds.setString(Tag.SOPInstanceUID, VR.UI, DX_SERIES + ".1");
+        ds.setString(Tag.StudyInstanceUID, VR.UI, STUDY);
+        ds.setString(Tag.SeriesInstanceUID, VR.UI, DX_SERIES);
+        ds.setString(Tag.PatientName, VR.PN, PHI_NAME);
+        ds.setString(Tag.PatientID, VR.LO, PHI_ID);
+        ds.setString(Tag.Modality, VR.CS, "DX");
+        ds.setInt(Tag.InstanceNumber, VR.IS, 1);
+        ds.setString(Tag.PhotometricInterpretation, VR.CS, photometric);
+        ds.setInt(Tag.SamplesPerPixel, VR.US, 1);
+        ds.setInt(Tag.Rows, VR.US, 3);
+        ds.setInt(Tag.Columns, VR.US, 4);
+        ds.setInt(Tag.BitsAllocated, VR.US, 16);
+        ds.setInt(Tag.BitsStored, VR.US, 12);
+        ds.setInt(Tag.HighBit, VR.US, 11);
+        ds.setInt(Tag.PixelRepresentation, VR.US, 0);
+        if (windowCenter != null) {
+            ds.setString(Tag.WindowCenter, VR.DS, windowCenter.split("\\\\"));
+        }
+        if (windowWidth != null) {
+            ds.setString(Tag.WindowWidth, VR.DS, windowWidth.split("\\\\"));
+        }
+        if (voiLutFunction != null) {
+            ds.setString(Tag.VOILUTFunction, VR.CS, voiLutFunction);
+        }
+        ByteBuffer px = ByteBuffer.allocate(3 * 4 * 2).order(ByteOrder.LITTLE_ENDIAN);
+        for (int y = 0; y < 3; y++) {
+            for (int x = 0; x < 4; x++) {
+                px.putShort((short) (10 * y + x));
+            }
+        }
+        ds.setBytes(Tag.PixelData, VR.OW, px.array());
+        Path f = dir.resolve("dx.dcm");
+        try (DicomOutputStream out = new DicomOutputStream(f.toFile())) {
+            out.writeDataset(ds.createFileMetaInformation(UID.ExplicitVRLittleEndian), ds);
+        }
+        index(DX_SERIES, DX_SERIES + ".1", f, "DX", UID.DigitalXRayImageStorageForPresentation);
+        // DX は焼き込みの規則でマスクが無いと送れない（本番どおり）。左上 2×2 を塗る
+        masks.put(new AnonymizeMaskStore.SeriesMask(DX_SERIES, List.of(), List.of(), List.of(
+                new AnonymizeMaskStore.MaskPolygon(new double[]{0, 2, 2, 0}, new double[]{0, 0, 2, 2},
+                        List.of(), List.of()))));
+    }
+
 }
