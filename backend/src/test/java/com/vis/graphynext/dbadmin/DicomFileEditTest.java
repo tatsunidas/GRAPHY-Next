@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 「全か無か」の入れ替え。失敗は準備・入れ替え・確定のどこで起きても、元のファイルは 1 つも失われず、
  * 一時ファイル・退避・journal が残らない。
  */
-class PatientFileEditTest {
+class DicomFileEditTest {
 
     @TempDir
     Path root;
@@ -43,7 +43,7 @@ class PatientFileEditTest {
     }
 
     /** 内容の末尾に "+new" を足すだけの書き手。{@code failOn} に当たるファイル名は失敗させる。 */
-    private PatientFileEdit.Writer writer(String failOn) {
+    private DicomFileEdit.Writer writer(String failOn) {
         return (src, dst) -> {
             if (failOn != null && src.getFileName().toString().equals(failOn)) {
                 throw new IOException("DICOM として読めない: " + src.getFileName());
@@ -59,15 +59,15 @@ class PatientFileEditTest {
         }
     }
 
-    private List<PatientFileEdit.Target> targets(Path... files) {
-        return java.util.Arrays.stream(files).map(f -> new PatientFileEdit.Target("sop-" + f.getFileName(), f)).toList();
+    private List<DicomFileEdit.Target> targets(Path... files) {
+        return java.util.Arrays.stream(files).map(f -> new DicomFileEdit.Target("sop-" + f.getFileName(), f)).toList();
     }
 
     @Test
     void 成功_全ファイルが新しい内容になり_確定で退避が消える() throws Exception {
         Path a = file("a.dcm", "A");
         Path b = file("b.dcm", "B");
-        PatientFileEdit e = PatientFileEdit.prepare(targets(a, b), writer(null), root.resolve("j"), noWait, PatientFileEdit.Ops.REAL);
+        DicomFileEdit e = DicomFileEdit.prepare(targets(a, b), writer(null), root.resolve("j"), noWait, DicomFileEdit.Ops.REAL);
         e.swap();
         assertEquals("A+new", read(a));
         assertEquals("B+new", read(b));
@@ -88,8 +88,8 @@ class PatientFileEditTest {
         Path a = file("a.dcm", "A");
         Path b = file("b.dcm", "B");
         Path c = file("c.dcm", "C");
-        var ex = assertThrows(PatientFileEdit.EditFailedException.class, () ->
-                PatientFileEdit.prepare(targets(a, b, c), writer("b.dcm"), root.resolve("j"), noWait, PatientFileEdit.Ops.REAL));
+        var ex = assertThrows(DicomFileEdit.EditFailedException.class, () ->
+                DicomFileEdit.prepare(targets(a, b, c), writer("b.dcm"), root.resolve("j"), noWait, DicomFileEdit.Ops.REAL));
         assertEquals("sop-b.dcm", ex.sop());
         assertEquals("A", read(a));
         assertEquals("B", read(b));
@@ -98,19 +98,19 @@ class PatientFileEditTest {
     }
 
     /** 失敗を注入する Ops: n 回目の move で失敗する（以降は通常）。 */
-    private static PatientFileEdit.Ops failingMove(int failAt, boolean permanent) {
+    private static DicomFileEdit.Ops failingMove(int failAt, boolean permanent) {
         int[] n = {0};
-        return new PatientFileEdit.Ops() {
+        return new DicomFileEdit.Ops() {
             @Override public void move(Path from, Path to) throws IOException {
                 n[0]++;
                 if (n[0] == failAt) {
                     throw permanent ? new java.nio.file.NoSuchFileException(from.toString()) : new AccessDeniedException(from.toString());
                 }
-                PatientFileEdit.Ops.REAL.move(from, to);
+                DicomFileEdit.Ops.REAL.move(from, to);
             }
 
             @Override public void delete(Path p) throws IOException {
-                PatientFileEdit.Ops.REAL.delete(p);
+                DicomFileEdit.Ops.REAL.delete(p);
             }
         };
     }
@@ -120,8 +120,8 @@ class PatientFileEditTest {
         Path a = file("a.dcm", "A");
         Path b = file("b.dcm", "B");
         // move: 1=a 退避, 2=a 入れ替え, 3=b 退避（ここで永続エラー）
-        PatientFileEdit e = PatientFileEdit.prepare(targets(a, b), writer(null), root.resolve("j"), noWait, failingMove(3, true));
-        var ex = assertThrows(PatientFileEdit.EditFailedException.class, e::swap);
+        DicomFileEdit e = DicomFileEdit.prepare(targets(a, b), writer(null), root.resolve("j"), noWait, failingMove(3, true));
+        var ex = assertThrows(DicomFileEdit.EditFailedException.class, e::swap);
         assertEquals("sop-b.dcm", ex.sop());
         assertEquals("A", read(a), "入れ替え済みだった a も元の内容へ戻る");
         assertEquals("B", read(b));
@@ -132,7 +132,7 @@ class PatientFileEditTest {
     void 入れ替えの一時的な失敗は_リトライで乗り切って成功する() throws Exception {
         Path a = file("a.dcm", "A");
         // 退避（1 回目）が一時的に失敗 → やり直して成功
-        PatientFileEdit e = PatientFileEdit.prepare(targets(a), writer(null), root.resolve("j"), noWait, failingMove(1, false));
+        DicomFileEdit e = DicomFileEdit.prepare(targets(a), writer(null), root.resolve("j"), noWait, failingMove(1, false));
         e.swap();
         assertEquals("A+new", read(a));
         e.commit();
@@ -143,7 +143,7 @@ class PatientFileEditTest {
     void DB更新の失敗を想定した巻き戻し_全ファイルが元の内容に戻り_何も残らない() throws Exception {
         Path a = file("a.dcm", "A");
         Path b = file("b.dcm", "B");
-        PatientFileEdit e = PatientFileEdit.prepare(targets(a, b), writer(null), root.resolve("j"), noWait, PatientFileEdit.Ops.REAL);
+        DicomFileEdit e = DicomFileEdit.prepare(targets(a, b), writer(null), root.resolve("j"), noWait, DicomFileEdit.Ops.REAL);
         e.swap();
         e.rollback();
         assertEquals("A", read(a));
@@ -157,16 +157,16 @@ class PatientFileEditTest {
     @Test
     void 巻き戻し自体が失敗したら_退避と_journal_を残す_データを失わない() throws Exception {
         Path a = file("a.dcm", "A");
-        PatientFileEdit e = PatientFileEdit.prepare(targets(a), writer(null), root.resolve("j"),
-                noWait, new PatientFileEdit.Ops() {
+        DicomFileEdit e = DicomFileEdit.prepare(targets(a), writer(null), root.resolve("j"),
+                noWait, new DicomFileEdit.Ops() {
                     int n;
                     @Override public void move(Path from, Path to) throws IOException {
                         if (++n == 3) { // 1=退避 2=入れ替え 3=復元（rollback）
                             throw new java.nio.file.NoSuchFileException("x");
                         }
-                        PatientFileEdit.Ops.REAL.move(from, to);
+                        DicomFileEdit.Ops.REAL.move(from, to);
                     }
-                    @Override public void delete(Path p) throws IOException { PatientFileEdit.Ops.REAL.delete(p); }
+                    @Override public void delete(Path p) throws IOException { DicomFileEdit.Ops.REAL.delete(p); }
                 });
         e.swap();
         e.rollback();
@@ -178,8 +178,8 @@ class PatientFileEditTest {
     @Test
     void 一時ファイルと退避は_走査に見えない名前() throws Exception {
         Path a = file("a.dcm", "A");
-        assertTrue(PatientFileEdit.editName(a).getFileName().toString().startsWith("."));
-        assertTrue(PatientFileEdit.origName(a).getFileName().toString().startsWith("."));
-        assertFalse(PatientFileEdit.editName(a).getFileName().toString().contains("~"));
+        assertTrue(DicomFileEdit.editName(a).getFileName().toString().startsWith("."));
+        assertTrue(DicomFileEdit.origName(a).getFileName().toString().startsWith("."));
+        assertFalse(DicomFileEdit.editName(a).getFileName().toString().contains("~"));
     }
 }

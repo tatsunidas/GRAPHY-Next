@@ -3,6 +3,7 @@
 > 作成日: 2026-06-30
 > ステータス: **Phase 1〜3 実装済**（シリーズ削除・スタディ単位の患者編集・ドリルダウン木 UI・横断通知・
 > シリーズ統合・シリーズ分割）。既存の患者編集・削除は実装済（`DbAdminService`）。
+> 任意タグの編集（§8）: backend 実装済（2026-10-19）、画面は次の段。
 > 関連: `fw/dicom-data-layer.md`（保管庫原則）, `fw/mainscreen-tools.md`。
 
 ## 0. 大原則
@@ -24,6 +25,7 @@
 | **シリーズ分割（1→N, 手動選択）** | 実装済（Phase 3, `splitSeries`） |
 | Patient→Study→Series ドリルダウン木 UI | 実装済（Phase 1） |
 | **シリーズ単位の患者情報編集** | **提供しない**（患者情報は患者全体 or スタディ単位のみ） |
+| **任意タグの編集**（タグビューアから。画像・シリーズ・スタディの範囲） | backend 実装済（§8）。画面は次の段 |
 
 ## 2. 確定した方針（要確認事項の回答）
 - **範囲 = 同一スタディ内のみ**: 統合/分割で **StudyInstanceUID はまたがない**。ファイル移動は
@@ -120,3 +122,29 @@
    - frontend: `DbAdminDialog` のシリーズ行に「シリーズ分割」（≥2 枚）、`SplitSeriesForm`（インスタンスを群へ割当・
      群数 2–5・未割当は残す）、`dbAdminApi.splitSeries`、成功で `series-split` 通知＋シリーズ再取得。i18n `dbadmin.split.*`。
 4. **Phase 4**: 大量操作の進捗表示・整合性検証強化（属性分割・別スタディ移動は将来）。
+
+## 8. 任意タグの編集（2026-10-19）
+- **入口**: タグビューアの「編集」（standalone のみ。web は PACS の値を書き換える標準の手段が DICOMweb に無いので読むだけ）。
+- **API**（`TagEditController`、`@Profile("standalone")`）:
+  - `POST /api/dbadmin/tags/preview` … 書かない。範囲の画像数・読めなかった数・タグごとに「今の値が画面に見えていた値（`before`）と異なる」画像数。
+  - `POST /api/dbadmin/tags/apply` … `{scope:{level:"instance"|"series"|"study", studyUid, seriesUid?, sopUid?}, edits:[{tag, vr?, op:"set"|"remove", before?, value?}]}`。
+    `tag` は `(gggg,eeee)` かキーワード。`set` は無ければ足す。複数値は `\` 区切り（LT・ST・UT・UR は区切らない）。
+    結果 `{updatedFiles, indexColumns[]}`。決まりに合わなければ 400 `{error:"invalid-tag-edit", problems:[{index, tag, reason}]}`（何も書かない）。
+- **編集できないタグ**（`TagEditRules.lockReason`、理由コード）: ファイルメタ 0002 群 `meta`、群長・コマンド・項目区切り `structure`、
+  患者タグ 4 つ `patient`（患者情報の編集が ROI などの記録を新しい患者キーへ運ぶため、そちらへ案内）、画素と構成 `pixel`、
+  幾何（IPP・IOP・PixelSpacing・SliceThickness）`geometry`（v1。誤ると計測・MPR・ROI の位置が知らせなしにずれる）、
+  Original Attributes Sequence `audit`、VR=UI `uid`（参照が切れる）、SQ `sequence`、バイナリ VR と VR 不明 `binary`、Private Creator `privateCreator`。
+- **値の決まり**（`TagEditRules.valueError`、PS3.5 6.2）: DA・TM・DT の形式と実在する日付、DS・IS の数値と長さ、CS の文字と 16、
+  AE・SH・LO・LT・ST・PN の長さ、整数・浮動小数の VR の範囲。理由コードは `format`・`tooLong`・`badChars`・`outOfRange`。
+  プライベートタグは VR を指定し、その番号を予約する Private Creator（gggg,00xx）が全ファイルに無いと `privateCreatorMissing`。
+- **書き換え**: 患者情報の編集と同じ `DicomFileEdit`（全か無か）。範囲に実体の無い画像があれば、一部だけ変わるのを避けて 409 で断る。
+  索引に写しのある列（`IndexedTag`: StudyDate・StudyDescription・AccessionNumber・Modality・SeriesNumber・SeriesDescription・InstanceNumber）は同じ取引で更新する。
+- **変更の記録**: 変えたファイルに Original Attributes Sequence（0400,0561）を 1 項目足す。Modified Attributes Sequence に前の値
+  （無かったタグは空の値。PS3.3 C.12.1.1.9 の「may be present ... with a zero length value」）、AttributeModificationDateTime、
+  ModifyingSystem=`GRAPHY-Next`、ReasonForTheAttributeModification=`CORRECT`、SourceOfPreviousValues は空。値が同じファイルには足さない。SOPInstanceUID は変えない。
+- **落ちたときの復旧**（`DicomEditRecovery`）: journal の 1 行目に種類（`#kind\tpatient` / `#kind\ttags\t<列>`）、入れ替えを終えたら `#swapped` を書く。
+  タグの編集は、`#swapped` が無ければ全ファイルを元へ戻す（索引に写しの無いタグは突き合わせで決められないため）。
+  あれば、触った索引の列が合っているほうを残す。列を触っていない編集は確定とする。1 行目の無い古い journal は患者情報の編集として扱う。
+- **テスト**: `TagEditRulesTest` 5、`TagEditTest` 11（シリーズ・スタディ・画像の範囲、索引外のタグの追加・変更・削除と記録、確認の数、
+  プライベートタグ、編集できないタグ 10 種と形の違う値で 1 ファイルも変わらない、入れ替えの途中の失敗、実体の無い画像、復旧 3 通り）。
+  変異確認 4 種（UID の禁止・`#swapped` の判定・索引の更新・変更の記録）を外すとそれぞれ落ちる。
