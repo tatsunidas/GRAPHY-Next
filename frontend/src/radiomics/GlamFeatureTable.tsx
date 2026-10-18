@@ -21,7 +21,7 @@ import { useI18n } from "../i18n/i18n";
 import { GLAM_MATRICES, GLAM_STATISTICS, glamFeatureString } from "../viewer/textureFeatures";
 
 /** 有効数字 4 桁。桁が飛ぶ（第二ビリアル係数は数千、占有率は 0.001 台）ので指数も許す。 */
-function format(v: number | null | undefined): string {
+export function formatFeatureValue(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return "";
   const a = Math.abs(v);
   if (a !== 0 && (a < 1e-3 || a >= 1e5)) return v.toExponential(3);
@@ -94,7 +94,7 @@ export function GlamFeatureTable({
                   const v = features[`${m.name}_${s}`];
                   return (
                     <td key={s} style={td} title={glamFeatureString(m.name, s)}>
-                      {format(v)}
+                      {formatFeatureValue(v)}
                     </td>
                   );
                 })}
