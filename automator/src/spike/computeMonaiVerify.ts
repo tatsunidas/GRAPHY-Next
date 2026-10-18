@@ -1,0 +1,227 @@
+/*
+ * MONAI Bundle の 1 本ずつの検証（fw/monai-verification.md）。本物の Google Colab（GPU T4）で Bundle を走らせ、
+ * 「SEG で保存」した DICOM SEG を取り出して、公開データの基準ラベルと採点する（automator/tools/monai_score.py）。
+ *
+ * 実行:  cd automator && npx tsx src/spike/computeMonaiVerify.ts <bundle> [--cases N|all] [--neg-input <nifti>]
+ *   --cases N   検証症例の先頭 N 件だけ（既定 1。all = 全部）。Colab の枠を使うので、まず 1 で配線を確かめる
+ *   --dicom     NIfTI を通さない DICOM シリーズ（ct-basic の PRE LIVER）でも走らせ、向きを解剖で確かめる（c）
+ *
+ * 🔴 前提: Colab にログイン済み。利用者の Colab の枠を使い、最後に解放する。
+ * 🔴 検証データ（git に入れない）: ~/monai-verify-data/（置き場の決定は fw/monai-verification.md）。
+ *    採点用の venv: ~/monai-verify-data/.venv（automator/tools/requirements.txt）。
+ *
+ * 数えるもの: 合格／失敗／未達／不明を分ける。閾値が無いので Dice は「不明」（verdict の lower=None）。合格と書かない。
+ */
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import type { Page } from "@playwright/test";
+
+import { resetDb } from "../backend/dbReset.js";
+import { DesktopDriver } from "../driver/desktopDriver.js";
+import { importFixtureCategory } from "../fixtures/importFixtures.js";
+import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
+import { installOfficialPlugin, openViewer, state } from "./computeMonaiShared.js";
+import { consentWindow, createChecker } from "./computeSpikeShared.js";
+
+const DATA_ROOT = path.join(os.homedir(), "monai-verify-data");
+const PY = path.join(DATA_ROOT, ".venv", "bin", "python");
+const SCORE_PY = path.join(AUTOMATOR_ROOT, "tools", "monai_score.py");
+const { check, summary } = createChecker();
+
+interface BundleSpec {
+  /** 画像と基準ラベルの置き場（imagesTr / labelsTr）。 */
+  dataset: string;
+  /** 検証症例（辞書順に並べた imagesTr の末尾 N 件など）を選ぶ。名前の配列を返す。 */
+  cases(files: string[]): string[];
+  /** SEG のセグメント名 → 基準ラベルの値。 */
+  labelMap: Record<string, number>;
+  /** 報告された指標（出典は fw/monai-verification/<bundle>.md）。比較は人が見る。 */
+  reported: { metric: string; value: number; note: string };
+}
+
+const BUNDLES: Record<string, BundleSpec> = {
+  spleen_ct_segmentation: {
+    dataset: path.join(DATA_ROOT, "msd", "x", "Task09_Spleen"),
+    // train.json の検証 = sorted(glob(imagesTr/*.nii.gz))[-9:]。辞書順（spleen_6 は spleen_60 の前）
+    cases: (files) => [...files].sort().slice(-9),
+    labelMap: { spleen: 1 },
+    reported: { metric: "mean Dice", value: 0.961, note: "検証 9 例の平均（学習中の検証に使用。独立性は限定的）" },
+  },
+};
+
+const numArg = (flag: string): string | undefined => {
+  const i = process.argv.indexOf(flag);
+  return i >= 0 ? process.argv[i + 1] : undefined;
+};
+
+function mean(xs: number[]): number {
+  return xs.reduce((a, b) => a + b, 0) / xs.length;
+}
+/** 標本標準偏差（n−1）。n=1 のときは null。 */
+function sd(xs: number[]): number | null {
+  if (xs.length < 2) return null;
+  const m = mean(xs);
+  return Math.sqrt(xs.reduce((a, b) => a + (b - m) ** 2, 0) / (xs.length - 1));
+}
+
+function score(segPath: string, refPath: string, labelMap: Record<string, number>, outPath: string): Record<string, any> {
+  const mapPath = `${outPath}.labelmap.json`;
+  fs.writeFileSync(mapPath, JSON.stringify(labelMap));
+  const r = spawnSync(PY, ["-I", SCORE_PY, "--seg", segPath, "--reference", refPath, "--label-map", mapPath, "--out", outPath], { encoding: "utf8" });
+  if (r.status !== 0) throw new Error(`採点に失敗: ${r.stderr || r.stdout}`);
+  return JSON.parse(fs.readFileSync(outPath, "utf8"));
+}
+
+async function main(): Promise<void> {
+  const bundle = process.argv[2];
+  const spec = BUNDLES[bundle ?? ""];
+  if (!spec) throw new Error(`使い方: computeMonaiVerify.ts <bundle>（対応: ${Object.keys(BUNDLES).join(", ")}）`);
+  const casesArg = numArg("--cases") ?? "1";
+  const withDicom = process.argv.includes("--dicom");
+  for (const p of [PY, SCORE_PY]) if (!fs.existsSync(p)) throw new Error(`見つかりません: ${p}`);
+
+  const imagesDir = path.join(spec.dataset, "imagesTr");
+  const files = fs.readdirSync(imagesDir).filter((f) => f.endsWith(".nii.gz") && !f.startsWith("._"));
+  let cases = spec.cases(files);
+  if (casesArg !== "all") cases = cases.slice(0, Number(casesArg));
+  console.log(`[${bundle}] 症例 ${cases.length} 件: ${cases.join(", ")}`);
+
+  const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "compute-monai-verify", bundle);
+  const RES_DIR = path.join(DATA_ROOT, "results", bundle);
+  fs.mkdirSync(OUT_DIR, { recursive: true });
+  fs.mkdirSync(RES_DIR, { recursive: true });
+  installOfficialPlugin();
+
+  const driver = new DesktopDriver();
+  let endpointsFile: string | null = null;
+  let endpointsBackup: string | null = null;
+  const endpointId = "colab-t4";
+  const rows: Record<string, unknown>[] = [];
+  try {
+    await driver.start();
+    const page = driver.page;
+    page.on("dialog", (d) => void d.accept());
+    await resetDb(driver.ports.http);
+    if (withDicom) await importFixtureCategory(driver.ports.http, "ct-basic");
+    const base = `http://localhost:${driver.ports.http}`;
+
+    // 症例を NIfTI で取り込む（取り込みの向きの誤りは画像と基準が同じ誤りになり Dice に出ない。向きは DICOM の c で見る）
+    const series: Record<string, { studyUid: string; seriesUid: string }> = {};
+    for (const c of cases) {
+      const id = c.replace(/\.nii\.gz$/, "");
+      const r = await fetch(`${base}/api/nifti/import`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: path.join(imagesDir, c), modality: "CT", patientId: `VERIFY-${id}`, patientName: `VERIFY^${id}`, seriesDescription: id }),
+      });
+      const j = (await r.json()) as { studyInstanceUid: string; seriesInstanceUid: string; error?: string };
+      if (!r.ok || j.error) throw new Error(`NIfTI の取り込みに失敗: ${c} ${JSON.stringify(j)}`);
+      series[id] = { studyUid: j.studyInstanceUid, seriesUid: j.seriesInstanceUid };
+    }
+    if (withDicom) {
+      const studies = (await (await fetch(`${base}/api/studies`)).json()) as { studyInstanceUid: string }[];
+      for (const st of studies) {
+        const ss = (await (await fetch(`${base}/api/studies/${st.studyInstanceUid}/series`)).json()) as { seriesInstanceUid: string; seriesDescription?: string }[];
+        const liver = ss.find((s) => /LIVER/i.test(s.seriesDescription ?? ""));
+        if (liver) series["DICOM-ct-basic"] = { studyUid: st.studyInstanceUid, seriesUid: liver.seriesInstanceUid };
+      }
+      check(!!series["DICOM-ct-basic"], "DICOM シリーズ（ct-basic の PRE LIVER）が見つかる");
+    }
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.getByTestId("search-patientid-input").waitFor({ state: "visible", timeout: 60_000 });
+
+    const cwd = await driver.app.evaluate(({ dialog }) => {
+      dialog.showMessageBoxSync = (() => 0) as typeof dialog.showMessageBoxSync;
+      return process.cwd();
+    });
+    endpointsFile = path.join(cwd, "compute-endpoints.json");
+    endpointsBackup = fs.existsSync(endpointsFile) ? fs.readFileSync(endpointsFile, "utf8") : null;
+    if (endpointsBackup !== null) fs.rmSync(endpointsFile);
+
+    let shotsTaken = 0; // 01 は最初の症例の実行前の 1 枚だけ
+    for (const [id, s] of Object.entries(series)) {
+      console.log(`\n[${bundle}] ${id}`);
+      const v: Page = await openViewer(driver, page, s.studyUid, s.seriesUid);
+      await v.getByTestId("monai-bundle").selectOption(bundle);
+      if (shotsTaken === 0) { await v.screenshot({ path: path.join(OUT_DIR, "01-before-run.png") }); shotsTaken++; }
+      const t0 = Date.now();
+      await v.getByTestId("monai-run").click();
+      // 同意の窓が出る前にプラグインが止まったとき（計算機が未登録・未ログインなど）は、その理由をそのまま出す
+      const w = await Promise.race([
+        consentWindow(driver, 300_000),
+        v.waitForFunction(() => {
+          const s = (window as unknown as { __monaiState?: { phase: string; error?: string } }).__monaiState;
+          return s?.error ? s : null;
+        }, null, { timeout: 300_000 }).then(async (h) => { throw new Error(`同意の窓の前に止まりました: ${JSON.stringify(await h.jsonValue())}`); }),
+      ]);
+      await w.getByTestId("consent-ack").check();
+      await w.getByTestId("consent-send").click();
+      await v.waitForFunction(() => (window as unknown as { __monaiState?: { phase: string } }).__monaiState?.phase === "idle", null, { timeout: 3_600_000 });
+      const st = await state(v);
+      const sec = Math.round((Date.now() - t0) / 1000);
+      const fg = Object.keys(st.summary?.labels ?? {}).filter((k) => k !== "0").length;
+      const ok = !!st.summary && !st.error;
+      check(ok, `${id}: 最後まで走る（${sec} 秒）`, st.error);
+      if (!ok) { rows.push({ id, ok, error: st.error }); await v.close(); continue; }
+      check(/T4/.test(st.summary?.gpu?.name ?? ""), `${id}: GPU T4`, st.summary?.gpu);
+      check(fg > 0, `${id}: 前景のあるラベルが返る（${fg}）`, st.summary?.labels);
+      check(st.shown?.ok === true && st.shown.segmentCount === fg, `${id}: ROI マネージャに読み込まれる`, st.shown);
+      if (id === Object.keys(series)[0]) await v.screenshot({ path: path.join(OUT_DIR, "02-result.png") });
+
+      // 保存（SEG）→ 実ファイルを取り出す
+      await v.getByTestId("monai-save").click();
+      await v.waitForFunction(() => !!(window as unknown as { __monaiState?: { saved?: unknown } }).__monaiState?.saved, null, { timeout: 600_000 });
+      const saved = (await state(v)).saved;
+      check(saved?.ok === true, `${id}: SEG が保存される`, saved);
+      if (id === Object.keys(series)[0]) await v.screenshot({ path: path.join(OUT_DIR, "03-after-save.png") });
+      const row: Record<string, unknown> = { id, ok: true, seconds: sec, gpu: st.summary?.gpu, labels: fg };
+      if (saved?.ok) {
+        const insts = (await (await fetch(`${base}/api/studies/${s.studyUid}/series/${saved.seriesInstanceUid}/instances`)).json()) as { sopInstanceUid: string }[];
+        check(insts.length === 1, `${id}: 保存した SEG のインスタンスが 1 つ`, insts.length);
+        const bytes = Buffer.from(await (await fetch(`${base}/api/instances/${insts[0].sopInstanceUid}/file`)).arrayBuffer());
+        check(bytes.length > 1000 && bytes.subarray(128, 132).toString("latin1") === "DICM", `${id}: SEG の実ファイルを取得（${bytes.length} B）`);
+        const segPath = path.join(RES_DIR, `${id}.dcm`);
+        fs.writeFileSync(segPath, bytes);
+        row.seg = segPath;
+        if (id !== "DICOM-ct-basic") {
+          const refPath = path.join(spec.dataset, "labelsTr", `${id}.nii.gz`);
+          const sc = score(segPath, refPath, spec.labelMap, path.join(RES_DIR, `${id}.score.json`));
+          row.score = sc;
+          for (const [name, r] of Object.entries(sc.labels as Record<string, any>)) {
+            check(r.dice !== null, `${id}: ${name} の Dice が出る（${r.dice}${r.reason ? `・${r.reason}` : ""}）`, r);
+          }
+          check((sc.seg_names_not_in_map as string[]).length === 0, `${id}: SEG に基準の表にない名前が無い`, sc.seg_names_not_in_map);
+        }
+      }
+      rows.push(row);
+      await v.close();
+    }
+
+    // 症例別 Dice の分布（閾値は無いので「不明」。報告値と並べるだけ）
+    for (const name of Object.keys(spec.labelMap)) {
+      const ds = rows.map((r) => (r.score as any)?.labels?.[name]?.dice).filter((d): d is number => typeof d === "number");
+      if (ds.length) {
+        const m = mean(ds);
+        console.log(`\n${name}: 症例 ${ds.length} 件 平均 ${m.toFixed(4)}  SD ${sd(ds)?.toFixed(4) ?? "n/a"}  最小 ${Math.min(...ds).toFixed(4)}  最大 ${Math.max(...ds).toFixed(4)}`);
+        console.log(`  報告値（${spec.reported.metric}）: ${spec.reported.value}（${spec.reported.note}）  判定: 不明（閾値なし）`);
+      }
+    }
+  } finally {
+    fs.writeFileSync(path.join(OUT_DIR, "results.json"), JSON.stringify(rows, null, 2));
+    await driver.page.evaluate((id) => (window as unknown as { graphyDesktop: any }).graphyDesktop.computeColabRelease(id), endpointId).catch(() => undefined);
+    await driver.stop();
+    if (endpointsFile) {
+      if (endpointsBackup !== null) fs.writeFileSync(endpointsFile, endpointsBackup);
+      else fs.rmSync(endpointsFile, { force: true });
+    }
+  }
+  if (summary() > 0) process.exitCode = 1;
+}
+
+main().catch((e) => {
+  console.error(e);
+  process.exitCode = 1;
+});
