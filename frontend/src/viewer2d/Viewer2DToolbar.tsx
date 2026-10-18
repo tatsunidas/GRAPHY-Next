@@ -253,6 +253,8 @@ export interface ViewerActions {
   openTexture(): void;
   /** GLAM 解析（ROI 全体の記述子）を別ウィンドウで開く。 */
   openGlamAnalysis(): void;
+  /** Radiomics 特徴量（ROI 全体の特徴量表）を別ウィンドウで開く。 */
+  openRoiFeatures(): void;
   /** 対象タイルのスタディでレポート編集ダイアログを開く。 */
   openReport(): void;
   /** 対象タイルの画像をクリップボードへコピーする（ROI・文字の重ね描きは含まない）。 */

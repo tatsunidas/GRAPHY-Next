@@ -149,7 +149,7 @@ class RoiFeatureServiceTest {
         assertTrue(r.rows().size() >= 150, "既定の族で 150 行以上: " + r.rows().size());
         assertTrue(r.rows().stream().noneMatch(x -> x.column().startsWith("OperationalInfo_")));
         for (RoiFeatureResult.Row x : r.rows()) {
-            assertTrue(x.ibsi() == null || x.ibsi().length() == 4, x.column());
+            assertTrue(x.ibsi() == null || x.ibsi().matches("[0-9A-Z]{4}(_[0-9]+)?"), x.column());
             assertEquals(x.ibsi() == null && !x.family().equals("Diagnostics"),
                     x.notes().contains(RoiFeatureDefinitions.NOTE_NON_IBSI), x.column());
         }
@@ -161,6 +161,11 @@ class RoiFeatureServiceTest {
         assertTrue(row(r, "IntensityHistogram_Entropy").notes().contains("LOG2_DISCRETISED"));
         assertEquals("Q4LE", row(r, "IntensityBasedStatistical_Mean").ibsi());
         assertTrue(row(r, "Fractal_Capacity").notes().contains("NON_IBSI"));
+        // パラメータ付きの IBSI 特徴（IVH の割合 10%/90%）は枝番付きで IBSI。独自量は IBSI 外のまま。
+        assertEquals("BC2M_1", row(r, "IntensityVolumeHistogram_VolumeAtIntensityFraction10").ibsi());
+        assertEquals("GBPN_2", row(r, "IntensityVolumeHistogram_IntensityAtVolumeFraction90").ibsi());
+        assertTrue(row(r, "IntensityVolumeHistogram_VolumeAtIntensityFraction10").notes().isEmpty());
+        assertNull(row(r, "IntensityBasedStatistical_TotalEnergy").ibsi());
         assertTrue(r.rows().stream().noneMatch(x -> x.family().equals("GLAM")), "GLAM は既定でオフ");
         assertTrue(r.discretisation().fixedBinNumber());
         assertEquals(32, r.discretisation().nBins());

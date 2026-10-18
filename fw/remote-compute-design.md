@@ -92,7 +92,7 @@ AI egress と同じ理由で、入口を本体に 1 つ持つ。
 
 | `format` | 中身 | 用途 |
 |---|---|---|
-| `npz` | `volume`（int16 / float32、リスケール済み）＋ `meta.json`（spacing・direction・origin・匿名化後の UID・モダリティ） | 研究コードがそのまま読める |
+| `npz` | `volume`（int16 / float32、リスケール済み）＋ `meta.json`（spacing・direction・origin・匿名化後の UID・モダリティ・表示の窓 `windowCenter`/`windowWidth`/`voiLutFunction`。窓が無ければ欄ごと省く） | 研究コードがそのまま読める |
 | `dicom-zip` | 匿名化済み DICOM の zip | pydicom / MONAI 等で読みたい場合 |
 
 ---
@@ -369,7 +369,7 @@ Java 側（`JupyterEndpoint.allowsPlainHttp`）も同じ表にそろえた（段
 | `AnonymizeService.seriesBurnFacts` | 元ファイルの `BurnedInAnnotation`（画素の手前まで読む）・モダリティ・SOP クラス・事前検査をまとめて返す |
 | `compute/RemoteBurnPolicy` | §3.2 の表。マスクで全部塗れる → 塗って送る／塗れない・半端 → 拒否／申告 YES・危ないモダリティ（US XA RF ES SC OT DX CR MG XC GM SM IVUS IVOCT DOC）・危ない SOP（二次キャプチャ・可視光・PDF）→ マスクが無ければ拒否／モダリティ不明 → 拒否 |
 | `compute/NpyWriter` | `.npy`（形式 1.0）の書き手。本体に npy / npz / NIfTI の書き手は無かった（`nifti` パッケージは読み込み専用） |
-| `compute/VolumeAssembler` | **匿名化の出力（Sink）だけ**からボリュームを組む（元ファイルを読み直さない＝塗る前の画素を出さない）。IPP を法線に射影して並べ、Rescale を適用した float32 `[z, y, x]`・`spacing [dz, dy, dx]`・`origin`（LPS）・`direction`・`meta.json`。元の画素 1GiB まで。グレースケールのみ |
+| `compute/VolumeAssembler` | **匿名化の出力（Sink）だけ**からボリュームを組む（元ファイルを読み直さない＝塗る前の画素を出さない）。IPP を法線に射影して並べ、Rescale を適用した float32 `[z, y, x]`・`spacing [dz, dy, dx]`・`origin`（LPS）・`direction`・`meta.json`（窓は先頭インスタンスから）。元の画素 1GiB まで。グレースケールのみ |
 | `compute/ComputeDatasetService` | 判定 → 既存の匿名化 → dicom-zip か npz を一時フォルダへ → SHA-256 → ハンドル `dsh_<uuid>`（中身はプラグインに渡さない）。**1 件でも匿名化に失敗・塗り残しがあれば作らない**。2 時間で消す |
 
 ### テスト

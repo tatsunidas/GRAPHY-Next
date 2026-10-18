@@ -774,7 +774,7 @@ GLAM 解析はマスクのチャンネルを **0 固定**で送っていたた�
 ### 13.1 API
 - `POST /api/radiomics/features/jobs`（`RoiFeatureRequest`: study・ターゲット・マスク（必須）・セグメント・C/T・`settings`・`recompute`）→ ジョブの状態。`GET`/`DELETE /api/radiomics/features/jobs/{id}` で問い合わせ・取り消し。web モードは 403、要求の誤りは 400（投入の時点で返す）。
 - 状態は `QUEUED → LOADING → EXTRACTING → DONE`。**`extractAll` には進み具合も取り消しの口も無い**ので、族ごとの進み具合は出せない。取り消しは結果を見せないだけで、計算は最後まで走り、結果はキャッシュに入る。
-- 結果（`RoiFeatureResult`）: 行は RadiomicsJ の結果表の列の並びのまま、`column`（例 `IntensityBasedStatistical_Kurtosis`）・族・特徴・IBSI コード（`*FeatureType.id()` が 4 文字のときだけ。それ以外は IBSI 外）・値（NaN は null）・注記の符号。抽出のときに効いていた離散化（固定ビン数/ビン幅・値、IVH の設定）、RadiomicsJ の版、計算時刻、キャッシュから返したか。
+- 結果（`RoiFeatureResult`）: 行は RadiomicsJ の結果表の列の並びのまま、`column`（例 `IntensityBasedStatistical_Kurtosis`）・族・特徴・IBSI コード（`*FeatureType.id()` が英数字 4 文字か、それに枝番が付いた形（IVH の割合 10%/90% の `BC2M_1`・`GBPN_2` など）のとき。それ以外は IBSI 外。当初は 4 文字だけを見ていて IVH の 4 特徴を IBSI 外としていた。段 2 の画面で見つけて直し、キャッシュのエンジン版を `roi-features-2` に上げた）・値（NaN は null）・注記の符号。抽出のときに効いていた離散化（固定ビン数/ビン幅・値、IVH の設定）、RadiomicsJ の版、計算時刻、キャッシュから返したか。
 - 注記は RadiomicsJ のコードで確かめた事実だけ: 一次統計とヒストグラムの Kurtosis は過剰尖度（`IntensityBasedStatisticalFeatures.getExcessKurtosis`、ヒストグラムは同じ計算を呼ぶ）、ヒストグラムの Entropy は log2（`IntensityHistogramFeatures.getEntropy`）。IBSI 外: GLAM・Fractal・Shape2D、一次統計の TotalEnergy・StandardDeviation・StandardError。
 
 ### 13.2 設定の扱い
@@ -806,5 +806,19 @@ RadiomicsJ は設定と途中結果（`discretiseImp`）を static に持ち、�
 - `RoiFeatureIntegrationTest`: 保管庫の DICOM（0.75×0.75×1.25 mm、Rescale あり、患者名入り）からサービス経由で計算した値と、同じ画素・校正を試験の中で組み立てて RadiomicsJ を直接呼んだ値が、全特徴でビット一致（正例）。ビン数 16 の直接の呼び出しとは GLCM が一致しない（負例）。`OperationalInfo_` の列は無い（上書きしない直接の呼び出しでは出ることを `RoiFeatureServiceTest` で確認）。2 回目はキャッシュから。
 - `RoiFeatureServiceTest`: 定義の注記と IBSI、設定の検査、キャッシュ、取り消し、共通ロック。
 - 実アプリ（パッケージ jar・専用ポート・standalone、合成 CT 48×48×16・0.7×0.7×2.0 mm・Rescale −1000、箱マスク 24×24×10）: `POST /api/import/paths` で取り込み → ジョブ投入 200 → 4.5 秒で DONE・230 行・RadiomicsJ 2.4.1。ボクセル数 5760（理論値 24×24×10）・`Morphology_VolumeVoxelCounting` 5644.8 mm³（理論値 5760×0.7×0.7×2.0）。2 回目は 193 ms で `fromCache=true`・計算時刻が同じ・全値一致（この 193 ms が DICOM の読み込み＋キー計算）。知らない設定キーは 400、知らないジョブは 404。キャッシュの項目（37 KB）に患者名は無い（同じ検索で特徴の列名は見つかる）。
-- 画面は段 2（別 PR）。
+
+### 13.7 画面と CSV（段 2）
+- 2D ビューアの 解析 ▸ Radiomics 特徴量（ROI）… → 別ウィンドウ `#radiomics-features`（`RoiFeatureScreen.tsx`）。対象は localStorage（`graphy-roifeat-ctx`）で渡す。
+- 画面の欄から **RadiomicsJ の設定キーだけ**を組み立てて送る（`roiFeatureSettings.ts`）: `BOOL_USE_FixedBinNumber`、`INT_binCount` か `DOUBLE_binWidth`、`DOUBLEARRAY_resamplingFactorXYZ`（「なし」なら送らない）、族 14 個の `BOOL_enable*`。既定は RadiomicsJ の既定。環境設定 ▸ テクスチャ（マップ用）は読まない。
+  - `DOUBLEARRAY_resamplingFactorXYZ` は名前に反して**目標の画素間隔（mm）**（`Utils.trilinearInterpolation` が `pixelWidth / 値` で新しい寸法を出す）。画面は「なし／等方 n mm」。
+- 進み具合は段階（読み込み中／計算中）と経過秒数、動き続ける棒。取り消しの横に「計算は最後まで続き、結果は保存される」。
+- 族の見出しの離散化: RadiomicsJ 2.4.1 の `extractAll` が `BOOL_USE_FixedBinNumber`・`nBins`・`binWidth` を渡す族（IntensityHistogram・GLCM・GLRLM・GLSZM・GLDZM・NGTDM・NGLDM・GLAM）にビン数かビン幅、IVH に IVH の設定。他の族には出さない。Diagnostics は特徴量でないので IBSI 欄を空にする。
+- CSV（`roiFeatureCsv.ts`）:
+  - データ表: 1 行目が列名、2 行目が値。列名と並びは RadiomicsJ の結果表のまま。値は `String(number)`（倍精度を往復で保つ）、NaN は `NaN`（R・pandas とも数値の NaN として読む）。改行 CRLF・**BOM なし**（中身は ASCII だけ。BOM があると R の `read.csv` が 1 列目の名前を `X.U.FEFF.…` に変える）。
+  - 定義表 `*_definitions.csv`: `column,family,feature,ibsi,notes,discretisation`。注記は言語に依らない符号を `;` でつなぐ。
+- 実アプリのスパイク（`automator/src/spike/roiFeatureCheck.ts`、合成 CT 48×48×16 を取り込み、アプリの SEG 書き出し API で 2 セグメントの SEG を作る）: 結果は §13.8。
+
+### 13.8 段 2 の検証
+- スパイク: 37/0（日本語表示）。表 230 行・注記・離散化の見出し・IBSI 外をスクリーンショットで判定。CSV のデータ表と、同じ要求本文で API を `recompute=true` で呼んだ結果が全列で差 0。2 回目はキャッシュの表示と計算日時、CSV は 1 回目と同一。「計算し直す」で新しく計算。負例: ビン数 16 の CSV は GLCM が不一致・形態は一致。2 つ目のセグメントでボクセル数 400（理論値 10×10×4）。取り消した計算（ビン数 24）は次の要求でキャッシュから返る。
+- CSV を Python の `csv`・pandas で読める（230 列すべて数値型）。R の `read.csv` は、この機械に R が無いので未確認（未達）。
 

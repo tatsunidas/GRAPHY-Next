@@ -1828,3 +1828,73 @@ export const saveGlamAnalysis = (body: {
 /** 保存された解析を消す。 */
 export const deleteGlamAnalysis = (id: string) =>
   httpSend<void>(`/api/radiomics/glam/saved/${encodeURIComponent(id)}`, "DELETE");
+
+// ── ROI 特徴量表（RadiomicsJ の一括抽出） ────────────────────────
+
+/** ROI 特徴量表の要求（backend: RoiFeatureRequest）。settings は RadiomicsJ の設定キーそのまま。 */
+export interface RoiFeatureRequest {
+  studyInstanceUid: string;
+  sourceSeriesUid: string;
+  maskSeriesUid: string;
+  maskChannel: number;
+  channel: number;
+  timePoint: number;
+  settings: Record<string, string>;
+  /** true ならキャッシュを使わずに計算し、結果でキャッシュを置き換える。 */
+  recompute: boolean;
+}
+
+/** 表の 1 行（backend: RoiFeatureResult.Row）。 */
+export interface RoiFeatureRow {
+  /** RadiomicsJ の結果表の列名（例 `IntensityBasedStatistical_Kurtosis`）。 */
+  column: string;
+  family: string;
+  feature: string;
+  /** IBSI の識別子。IBSI 外は null。 */
+  ibsi: string | null;
+  /** NaN は null で届く。 */
+  value: number | null;
+  /** 注記の符号（`EXCESS_KURTOSIS`・`LOG2_DISCRETISED`・`NON_IBSI`）。 */
+  notes: string[];
+}
+
+/** 抽出のときに効いていた離散化（backend: RoiFeatureResult.Discretisation）。 */
+export interface RoiFeatureDiscretisation {
+  fixedBinNumber: boolean;
+  nBins: number;
+  binWidth: number;
+  ivhMode: number;
+  ivhBinCount: number;
+  ivhBinWidth: number;
+}
+
+export interface RoiFeatureResult {
+  radiomicsjVersion: string | null;
+  /** ISO 8601。キャッシュから返ったときは最初に計算した日時。 */
+  computedAt: string;
+  fromCache: boolean;
+  label: number;
+  rows: RoiFeatureRow[];
+  discretisation: RoiFeatureDiscretisation;
+}
+
+export type RoiFeatureJobState = "QUEUED" | "LOADING" | "EXTRACTING" | "DONE" | "FAILED" | "CANCELLED";
+
+/** ROI 特徴量表のジョブの状態（backend: RoiFeatureJobService.Status）。進み具合の件数は無い。 */
+export interface RoiFeatureJobStatus {
+  jobId: string;
+  state: RoiFeatureJobState;
+  elapsedMs: number;
+  result?: RoiFeatureResult | null;
+  error?: string | null;
+}
+
+export const submitRoiFeatureJob = (req: RoiFeatureRequest) =>
+  httpSend<RoiFeatureJobStatus>("/api/radiomics/features/jobs", "POST", req);
+
+export const getRoiFeatureJob = (jobId: string) =>
+  httpGet<RoiFeatureJobStatus>(`/api/radiomics/features/jobs/${encodeURIComponent(jobId)}`);
+
+/** 取り消しは結果を返さなくするだけ。計算は最後まで走り、結果はキャッシュに入る。 */
+export const cancelRoiFeatureJob = (jobId: string) =>
+  httpSend<RoiFeatureJobStatus>(`/api/radiomics/features/jobs/${encodeURIComponent(jobId)}`, "DELETE");

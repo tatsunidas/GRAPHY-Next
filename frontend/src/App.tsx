@@ -26,6 +26,7 @@ import { CurvedMprScreen } from "./curvedmpr/CurvedMprScreen";
 import { QRScreen } from "./qr/QRScreen";
 import { MonitorQcScreen } from "./monitorqc/MonitorQcScreen";
 import { GlamAnalysisScreen } from "./radiomics/GlamAnalysisScreen";
+import { RoiFeatureScreen } from "./radiomics/RoiFeatureScreen";
 import { MobileScreen } from "./mobile/MobileScreen";
 import { mobileHash, parseMobileRoute, MOBILE_SHELL_READY } from "./mobile/mobileRoute";
 import { useDeviceClass } from "./mobile/useDeviceClass";
@@ -196,6 +197,10 @@ export function App() {
   // GLAM 解析は別ウィンドウ（#glam）。ROI 全体の記述子を見る画面で、2D ビューアとは独立。
   if (screen === "glam") {
     return <GlamAnalysisScreen />;
+  }
+  // Radiomics 特徴量（ROI）も別ウィンドウ（#radiomics-features）。
+  if (screen === "radiomics-features") {
+    return <RoiFeatureScreen />;
   }
 
   if (screen === "monitorqc") {
