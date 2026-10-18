@@ -8,7 +8,7 @@
 import { useEffect, useState } from "react";
 import { isDesktop } from "../desktopBridge";
 import { useI18n, type TFn } from "../i18n/i18n";
-import type { RenderEnvSummary } from "../viewer/renderEnv";
+import { STILL_MS_STORAGE_KEY, type RenderEnvSummary } from "../viewer/renderEnv";
 import { loadRenderEnvSummary } from "../viewer/renderEnvReport";
 
 const GB = 1024 * 1024 * 1024;
@@ -37,6 +37,8 @@ export function RenderEnvPanel() {
       setCopied("ng");
     }
   };
+
+  const still = readStillMs();
 
   if (!s) return <p style={muted}>…</p>;
 
@@ -86,6 +88,12 @@ export function RenderEnvPanel() {
           />
           <Row id="gpu-memory" k={t("renderenv.row.gpuMemory")} value="" text={t("renderenv.gpuMemoryUnknown")} />
           <Row
+            id="still3d"
+            k={t("renderenv.row.still3d")}
+            value={still === null ? "" : String(still)}
+            text={still === null ? t("renderenv.still3dNone") : t("renderenv.still3dText", { ms: still.toFixed(1) })}
+          />
+          <Row
             id="features"
             k={t("renderenv.row.features")}
             value={s.featureStatus?.webgl2 ?? ""}
@@ -111,6 +119,18 @@ export function RenderEnvPanel() {
       </div>
     </div>
   );
+}
+
+/** 3D ビューア（別ウィンドウのことが多い）が最後に測った静止 1 フレームの時間。同じ場所の localStorage 経由。 */
+function readStillMs(): number | null {
+  try {
+    const raw = localStorage.getItem(STILL_MS_STORAGE_KEY);
+    if (!raw) return null;
+    const v = (JSON.parse(raw) as { stillMs?: unknown }).stillMs;
+    return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
+  } catch {
+    return null;
+  }
 }
 
 function featuresText(s: RenderEnvSummary, desktopOnly: string, unknown: string): string {

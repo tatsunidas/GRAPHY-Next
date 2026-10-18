@@ -64,3 +64,47 @@ IPC `graphy:gpu-status`（`desktop/main.js`）が `app.getGPUFeatureStatus()`（
   負例ではまず GPU 名が実際に llvmpipe / SwiftShader になったことを確かめ、なっていなければ「未達」とする。
   結果は 合格・失敗・未達 に分けて数える。`DesktopDriver` の constructor が追加の Electron 引数・環境変数を受けられる。
 - 未実施: Windows・macOS の配布物での GPU 名と種別の確認。web 版の「未実施」表示の実機確認。
+
+## 7. 操作中の縮小描画（段 2）
+
+### 7.1 背景
+vtk.js の OpenGL VolumeMapper には、操作中（interactor が「アニメーション中」）だけ画面を縮小して描き、止めたら精細に戻す仕組みがある。
+縮小の倍率は mapper 内部の `_lastScale`（面積倍率）で、操作中の 1 秒ごとに実測の更新率から自動で学習される。本体では次の点で効いていなかった。
+倍率の初期値が 1 なので、**最初のドラッグは学習が入る 1〜2 秒間、全解像度で走る**（弱い環境ではここが固まる）。
+
+### 7.2 方式（静止時の画質は変えない）
+- **初期倍率**: 3D を開いた後の最初の静止描画のあと、静止 1 フレームの時間 t を測る（`render()` → 1×1 の `readPixels` で GPU の完了を待つ、を 3 回行った中央値）。
+  面積倍率は `s = t[秒] × R`（R は `interactor.getDesiredUpdateRate()` を実行時に読む。vtk の既定は 30）。
+  画素数を 1/s にすれば、描画時間が画素数にほぼ比例するとして 1 フレームが 1/R 秒に収まる、という量の意味から来る式で、調整した定数ではない。
+  `renderEnv.ts` の `interactionScaleFor(stillMs, rate)`（純関数）。1.5 未満は 1（全解像度）、400 で頭打ち。1.5 と 400 は vtk 自身が丸めに使う値（`OpenGL/VolumeMapper.js`）。
+  `mapper.setInitialInteractionScale()` に渡し、OpenGL 側 mapper の `_lastScale` を 0 にして次の描画で読み直させる。
+- **触る非公開の値は `_lastScale`（OpenGL 側 mapper）だけ**。`getApiSpecificRenderWindow().getViewNodeFor(mapper)` で取り、`get()` と `set({...}, true)` を使う。
+  view node が取れなければ何もせず（導入前と同じ）、`getRenderStats()` は null を返す。`_useSmallViewport` は読むだけ。
+- **設定「3D の画質」** `viewer3d.renderQuality`（`auto` 既定 / `full`）。`full` は `setAutoAdjustSampleDistances(false)` ＋倍率 1（操作中も縮小しない）。
+  3D を開いたときに読む（背景色と同じ。変えたら開き直すと反映）。
+- **静止時の画質は変えない**: サンプル間隔・`ImageSampleDistance` は触らない。操作中の間引き率 `interactionSampleDistanceFactor` も触らない。
+
+### 7.3 見える所
+- 設定 > 描画環境に「3D の静止 1 フレーム（直近の実測）」（`renderenv-row-still3d`）。3D ビューアが測った値を localStorage 経由で受ける（別ウィンドウのため）。無ければ「未計測」。
+- dev ビルドの `window.__graphyDebug.getRender3dStats()` → `{ stillMs, interactionScale, smallViewport, quality } | null`（3D のウィンドウ）。
+
+### 7.4 分かっていること・限界
+- **vtk の倍率の学習は、ドラッグをやめても残る**。同じ 3D を開いている間は、2 回目以降のドラッグは学習済みの倍率から始まる（初期値が効くのは最初のドラッグ）。
+- **自動回転（シネ）は対象外**。シネは SLAB でしか使えず、SLAB は体積レンダリングの mapper ではなく `vtkImageResliceMapper` で描く
+  （体積の actor は非表示）。縮小描画は体積 mapper の仕組みなので、interactor にアニメーション中と知らせても効かない（実測で確認）。
+  シネの負荷を下げるかは、SLAB の描画時間を測ってから別に考える。
+- ソフトウェア描画では、倍率を上限（400）まで効かせても 1 フレームの間隔の中央値は 50 ms 前後で、30 fps に届かない。縮小で減らない処理が残っている。
+- **効果が出るのは動かし始め**。導入前のコードでも vtk が 1〜2 秒で倍率を学習するので、5 秒間の 1 フレームの中央値では新旧の差がばらつきに埋もれる
+  （ソフトウェア描画で旧 66.7 ms・新 50.1 ms、差 16.6 ms は四分位範囲 33.3 ms 以下）。そのため効果は「ドラッグ開始から 2 秒に描けたフレーム数」で判定する（§7.5）。
+- 静止 1 フレームは、3D を開いた直後の VR・その時の画面の大きさで測った値。モードや窓の大きさを変えても測り直さない。
+- 同じコードでも起動のたびに VR の静止画の画素が変わる（vtk がレイの開始位置をずらす乱数テクスチャを `Math.random` で作るため）。
+  新旧の画素一致を見る検査は、`Math.random` を種つきにして起動をまたいで同じ画にしてから比べる。
+
+### 7.5 検証
+- 単体: `renderEnv.test.ts`（`interactionScaleFor` の境界・上限・負例、`interactionScaleForQuality`、`parseRenderQuality`）。
+- 実アプリ: `automator/src/spike/render3dAdaptiveCheck.ts <hw|sw> <auto|full> [--baseline]`。
+  CT（512×512×308）で、ドラッグ直後の倍率が式の値と一致すること・離したら精細に戻ること・full は縮小しないこと・フレーム時間を測る。
+  `--baseline` は導入前のコード用で、スクリーンショットとフレーム時間だけを取る。画素の比較は新旧を同じ条件で撮って別に行う。
+- 速さの判定: ソフトウェア描画・auto で新旧を各 5 回、交互に起動して測り、ドラッグ開始（pointerdown）から 2 秒間に来た
+  requestAnimationFrame の回数を比べる。**新の最小が旧の最大を上回れば合格**（固定のしきい値は置かない）。
+  `automator/src/spike/render3dAdaptiveCompare.ts` が各回の `result.json` を読んで判定する。
