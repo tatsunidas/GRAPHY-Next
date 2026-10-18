@@ -455,6 +455,7 @@ export function MainScreen({
         onClose={() => setOpenTool(null)}
         study={selectedStudy}
         series={selectedSeries}
+        editable={isStandalone}
       />
       <NonDicomImportDialog
         open={openTool === "nonDicomImport"}

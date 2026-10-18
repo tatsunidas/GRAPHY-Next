@@ -2021,6 +2021,7 @@ function TileGrid({
           open
           study={tagTarget.study}
           series={tagTarget.series}
+          editable={mode === "standalone"}
           onClose={() => setTagTarget(null)}
         />
       )}
