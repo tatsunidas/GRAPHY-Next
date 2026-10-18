@@ -232,7 +232,7 @@ GRAPHY `Image > Segmentation`（New/Import ROIs/Save SEG/Import SEG/Stop）は**
 | Brush（Alt=消去） | 手描き塗り/消去 | `BrushTool` FILL/ERASE（対象を選べるよう拡張） | ✅→拡張 |
 | Wand 2D（ImageJ Wand flood fill） | スライス内領域成長 | 自作 `WandTool`（mode 2d。`wandFlood.ts` のフラッドを書き込む。`PaintFillTool` は使っていない）。方式＝許容差／以上・以下・範囲。§6.1 | ✅ |
 | Wand 3D（BFS region grow） | ボリューム領域成長 | 自作 `WandTool`（mode 3d）。方式は 2D と同じ。§6.1 | 結線済（3D の実機検証は未実施） |
-| （しきい値ダイアログ相当） | しきい値塗り | `RectangleROIThresholdTool`＋`thresholdSegmentationByRange` | 登録済→未結線 |
+| （しきい値ダイアログ相当） | しきい値塗り | ダイアログ駆動の自作（`thresholdTool.ts`・`ThresholdDialog.tsx`。下限・上限は Wand と同じ判定値、範囲は現在スライス／全スライス、確定／取消）。Cornerstone の `thresholdSegmentationByRange` は同サイズ分岐が `getAtIndex[i]`（関数を添字で読む誤り）のため何も書かない（3.33.5）ので使わない | ✅ 結線済（Linux の Electron で自動検査: `automator/src/spike/thresholdCheck.ts`。期待値はファントムの定義から解析的に求めた。別 segment の不変と Windows・macOS は未確認） |
 | （Scissors 相当なし） | 矩形/円/球で fill-erase | `Rectangle/Circle/SphereScissorsTool`。メニュー「Scissors」＋ダイアログ（形・塗る／消す・対象 segment）。`scissorsStore.ts`・`ScissorsDialog.tsx` | ✅ 結線済（Linux の Electron で自動検査: `automator/src/spike/scissorsCheck.ts`。範囲内だけが塗られ／消え、範囲外・他スライスは不変。別 segment の不変と Windows・macOS は未確認） |
 | Import selected ROIs→mask | ROI ラスタ化→結合 | 既存 `roiToMask` を「アクティブ segment へ結合」に拡張・複数選択バッチ | ◐ |
 | New segmentation | 空マスク作成 | パネル「＋新規マスク」＝作成＋アクティブ | ✅ |
