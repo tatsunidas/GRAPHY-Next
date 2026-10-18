@@ -28,7 +28,13 @@ import {
   type Series,
 } from "../api";
 import { formatFeatureValue } from "./GlamFeatureTable";
-import { discretisationOf, roiFeatureDataCsv, roiFeatureDefinitionsCsv, roiFeatureFileBase } from "./roiFeatureCsv";
+import {
+  discretisationOf,
+  parseSettingsProperties,
+  roiFeatureDataCsv,
+  roiFeatureDefinitionsCsv,
+  roiFeatureFileBase,
+} from "./roiFeatureCsv";
 import {
   ROI_FEATURE_FAMILIES,
   anyFamilyOn,
@@ -55,8 +61,8 @@ function formatComputedAt(v: string | number): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-function download(text: string, filename: string) {
-  const url = URL.createObjectURL(new Blob([text], { type: "text/csv;charset=utf-8" }));
+function download(text: string, filename: string, type = "text/csv;charset=utf-8") {
+  const url = URL.createObjectURL(new Blob([text], { type }));
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
@@ -88,6 +94,8 @@ export function RoiFeatureScreen() {
   const [maskNC, setMaskNC] = useState(1);
   const [maskSegmentNames, setMaskSegmentNames] = useState<string[]>([]);
   const [form, setForm] = useState<RoiFeatureForm>(defaultRoiFeatureForm);
+  /** 症例を突き合わせるための任意の文字列（CSV の CaseLabel 列とファイル名）。患者情報は入れない。 */
+  const [caseLabel, setCaseLabel] = useState("");
 
   const [job, setJob] = useState<RoiFeatureJobStatus | null>(null);
   const jobIdRef = useRef<string | null>(null);
@@ -228,12 +236,34 @@ export function RoiFeatureScreen() {
       .catch(() => {});
   };
 
+  const fileBase = () => roiFeatureFileBase(resultFor?.seriesNumber, resultFor?.maskChannel ?? 0, caseLabel);
+
   const onCsv = () => {
-    if (!result || !resultFor) return;
-    const base = roiFeatureFileBase(resultFor.seriesNumber, resultFor.maskChannel);
-    download(roiFeatureDataCsv(result), `${base}.csv`);
+    if (!result) return;
+    const base = fileBase();
+    download(roiFeatureDataCsv(result, caseLabel.trim()), `${base}.csv`);
     download(roiFeatureDefinitionsCsv(result), `${base}_definitions.csv`);
   };
+
+  /** 設定ファイルは backend が正規化した本文を一字も変えずに保存する（CSV のハッシュと一致させる）。 */
+  const onSettingsFile = () => {
+    if (!result) return;
+    download(result.settingsProperties, `${fileBase()}_radiomicsj.properties`, "text/plain;charset=utf-8");
+  };
+
+  /** 表の上の要約。画面の欄ではなく、計算に実際に使った設定から作る。 */
+  const settingsSummary = useMemo(() => {
+    if (!result) return "";
+    const p = parseSettingsProperties(result.settingsProperties);
+    const disc = p.BOOL_USE_FixedBinNumber === "1"
+      ? t("roiFeat.disc.bins", { n: p.INT_binCount ?? "?" })
+      : t("roiFeat.disc.width", { w: p.DOUBLE_binWidth ?? "?" });
+    const rs = p.DOUBLEARRAY_resamplingFactorXYZ
+      ? t("roiFeat.summary.resampled", { mm: p.DOUBLEARRAY_resamplingFactorXYZ.split(",").map(Number).join(" × ") })
+      : t("roiFeat.summary.noResampling");
+    const on = ROI_FEATURE_FAMILIES.filter((f) => p[f.setting] === "1").length;
+    return t("roiFeat.summary.settings", { disc, resampling: rs, on, total: ROI_FEATURE_FAMILIES.length });
+  }, [result, t]);
 
   const setFamily = (key: string, on: boolean) =>
     setForm((f) => ({ ...f, families: { ...f.families, [key]: on } }));
@@ -321,6 +351,11 @@ export function RoiFeatureScreen() {
           </Field>
         )}
         <div style={note}>{t("roiFeat.mask.help")}</div>
+        <Field label={t("roiFeat.field.caseLabel")}>
+          <input value={caseLabel} onChange={(e) => setCaseLabel(e.target.value)} placeholder="case-012"
+            style={input} data-testid="roifeat-caselabel" />
+        </Field>
+        <div style={note}>{t("roiFeat.caseLabel.help")}</div>
 
         <Field label={t("roiFeat.field.discretisation")}>
           <span style={{ display: "inline-flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }}>
@@ -410,6 +445,20 @@ export function RoiFeatureScreen() {
               style={{ ...input, width: 200 }} />
             <button onClick={onCsv} style={btn} data-testid="roifeat-csv">{t("roiFeat.csv")}</button>
           </div>
+          <div style={{ ...summaryRow, marginTop: 6 }} data-testid="roifeat-provenance">
+            <span style={note}>
+              {t("roiFeat.summary.versions", {
+                next: result.provenance.graphyNextVersion,
+                rj: result.provenance.radiomicsjVersion ?? "?",
+                sha: `${result.provenance.settingsSha256.slice(0, 4)}…${result.provenance.settingsSha256.slice(-2)}`,
+              })}
+            </span>
+            <button onClick={onSettingsFile} style={miniBtn} data-testid="roifeat-settings-file"
+              title={result.provenance.settingsSha256}>
+              {t("roiFeat.settingsFile")}
+            </button>
+          </div>
+          <div style={note} data-testid="roifeat-settings-summary">{settingsSummary}</div>
           <div style={note}>{t("roiFeat.count", { n: result.rows.length })}</div>
 
           <table style={table} data-testid="roifeat-table">

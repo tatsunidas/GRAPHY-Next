@@ -11,12 +11,14 @@
  *   5. 負例: ビン数 16 の CSV は、ビン数 32 の値と GLCM が一致しない（形態は一致する）。
  *   6. 2 つ目のセグメントでボクセル数が理論値に変わる（セグメントの選択が効いている）。
  *   7. 取り消した計算の結果が、次の同じ要求でキャッシュから返る。
+ *   3b. 記録: 症例ラベル・版・抽出日時・設定の SHA-256 の列、設定ファイルの書き出しとアプリを通した往復、患者情報が無いこと。
  *
  * 前提: backend jar（今のビルド）・python3 と pydicom。
  */
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import type { Page } from "@playwright/test";
 
 import { DesktopDriver } from "../driver/desktopDriver.js";
@@ -52,7 +54,13 @@ interface Synth {
 }
 
 interface Row { column: string; family: string; feature: string; ibsi: string | null; value: number | null; notes: string[] }
-interface Result { fromCache: boolean; computedAt: string; rows: Row[] }
+interface Result {
+  fromCache: boolean;
+  computedAt: string;
+  rows: Row[];
+  provenance: { graphyNextVersion: string; radiomicsjVersion: string; extractedAt: string; settingsSha256: string };
+  settingsProperties: string;
+}
 
 /** 箱のセグメント（行・列・スライスの半開区間）。 */
 interface Box { r0: number; r1: number; c0: number; c1: number; z0: number; z1: number }
@@ -60,6 +68,7 @@ const SEG1: Box = { r0: 12, r1: 36, c0: 10, c1: 34, z0: 3, z1: 13 }; // 24×24×
 const SEG2: Box = { r0: 30, r1: 40, c0: 36, c1: 46, z0: 5, z1: 9 }; // 10×10×4 = 400
 const voxels = (b: Box) => (b.r1 - b.r0) * (b.c1 - b.c0) * (b.z1 - b.z0);
 const VOXEL_COLUMN = "Diagnostics_DiagnosticsInitialROIIntMaskVoxelCount";
+const CASE_LABEL = "case-012";
 
 function makeSynth(): Synth & { dir: string } {
   const dir = path.join(OUT_DIR, "synth");
@@ -116,10 +125,21 @@ function splitRow(line: string): string[] {
   return out;
 }
 
+/** 先頭の記録の列（症例ラベルと Provenance_*）。 */
+const NREC = 5;
+
+/** データ表の特徴量の列（先頭の記録の列を除く）。 */
 function readData(csv: string): { names: string[]; values: number[] } {
   const [h, v] = csv.split("\r\n");
-  return { names: splitRow(h), values: splitRow(v).map(Number) };
+  return { names: splitRow(h).slice(NREC), values: splitRow(v).slice(NREC).map(Number) };
 }
+
+function readRecord(csv: string): Record<string, string> {
+  const [h, v] = csv.split("\r\n").map(splitRow);
+  return Object.fromEntries(h.slice(0, NREC).map((n, i) => [n, v[i]]));
+}
+
+const sha256 = (text: string) => crypto.createHash("sha256").update(Buffer.from(text, "utf8")).digest("hex");
 
 /** CSV の値と結果の行が全列で一致する数（Object.is: NaN 同士は一致、-0 と 0 は区別）。 */
 function diffCount(csv: string, rows: Row[]): { mismatched: string[]; sameOrder: boolean } {
@@ -257,6 +277,7 @@ async function main(): Promise<void> {
     const segOptions = await page.locator("select").nth(2).locator("option").allInnerTexts().catch(() => []);
     check(segOptions.some((o) => o.includes("BigBox")) && segOptions.some((o) => o.includes("SmallBox")),
       "セグメントが名前で選べる", segOptions);
+    await page.getByTestId("roifeat-caselabel").fill(CASE_LABEL);
     await page.screenshot({ path: path.join(OUT_DIR, "01-form.png"), fullPage: true });
 
     const s1 = await runAndWait(page, async () => {
@@ -318,6 +339,55 @@ async function main(): Promise<void> {
         && by.get("IntensityVolumeHistogram_VolumeAtIntensityFraction10")?.[4] === "", "定義表: IVH の割合の特徴は枝番付きの IBSI");
     }
 
+    console.log("\n[3b] 記録（症例ラベル・版・設定ファイル）と患者情報");
+    await page.getByTestId("roifeat-provenance").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(OUT_DIR, "03d-provenance.png") });
+    const provText = await page.getByTestId("roifeat-provenance").innerText();
+    const summaryText = await page.getByTestId("roifeat-settings-summary").innerText();
+    await page.getByTestId("roifeat-settings-file").click();
+    const [propsDl] = await takeDownloads(page, 1);
+    check(!!propsDl && propsDl.name === `${CASE_LABEL}-seg0_radiomicsj.properties`, "設定ファイルの名前", propsDl?.name);
+    check(!!data1 && data1.name === `${CASE_LABEL}-seg0.csv`, "CSV の名前に症例ラベル", data1?.name);
+    const status = await api<{ version: string }>(base, "/api/status");
+    if (propsDl && data1) {
+      fs.writeFileSync(path.join(OUT_DIR, propsDl.name), propsDl.text);
+      const rec = readRecord(data1.text);
+      check(rec.CaseLabel === CASE_LABEL, "CaseLabel 列", rec.CaseLabel);
+      check(rec.Provenance_GraphyNextVersion === status.version, "GraphyNext の版が /api/status と同じ",
+        { csv: rec.Provenance_GraphyNextVersion, status: status.version });
+      check(rec.Provenance_RadiomicsJVersion === "2.4.1", "RadiomicsJ の版が 2.4.1（jar の中で取り違えていない）",
+        rec.Provenance_RadiomicsJVersion);
+      check(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/.test(rec.Provenance_ExtractedAt), "抽出日時は ISO 8601",
+        rec.Provenance_ExtractedAt);
+      check(rec.Provenance_SettingsSha256 === sha256(propsDl.text), "CSV のハッシュ = 設定ファイルの SHA-256");
+      check(propsDl.text === direct32.settingsProperties, "設定ファイルは API の本文と同じバイト列");
+      check(provText.includes(status.version) && provText.includes("2.4.1")
+        && provText.includes(rec.Provenance_SettingsSha256.slice(0, 4)), "表の上に版とハッシュ", provText);
+      check(/ビン数 32|32 bins/.test(summaryText) && /なし|no resampling/.test(summaryText) && summaryText.includes("12/14"),
+        "表の上に設定の要約", summaryText);
+
+      // アプリを通した往復: 書き出した設定ファイルをそのまま設定にして計算し直すと、CSV と全列で差 0・同じハッシュ
+      const fileSettings = Object.fromEntries(propsDl.text.split("\n").filter((l) => l.includes("="))
+        .map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
+      const viaFile = await apiFeatures(base, { ...body32, settings: fileSettings, recompute: true });
+      const dcf = diffCount(data1.text, viaFile.rows);
+      check(dcf.sameOrder && dcf.mismatched.length === 0, "設定ファイルで計算し直すと CSV と全列で差 0", dcf.mismatched.slice(0, 5));
+      check(viaFile.provenance.settingsSha256 === rec.Provenance_SettingsSha256, "設定ファイルで計算し直しても同じハッシュ");
+      const viaFile16 = await apiFeatures(base, { ...body32, settings: { ...fileSettings, INT_binCount: "16" }, recompute: true });
+      const glcm16 = diffCount(data1.text, viaFile16.rows).mismatched.filter((c) => c.startsWith("GLCM_"));
+      check(glcm16.length > 0, "負例: 設定ファイルのビン数を 16 にすると GLCM が一致しない", glcm16.length);
+
+      // 患者情報: 合成データに患者名・ID が入っていることを先に確かめてから、3 本のファイルに無いことを見る
+      const studies = await api<{ studyInstanceUid: string; patientName: string; patientId: string }[]>(
+        base, `/api/studies?studyInstanceUid=${encodeURIComponent(synth.studyInstanceUid)}`);
+      const st = studies.find((x) => x.studyInstanceUid === synth.studyInstanceUid);
+      check(!!st && /SYNTH/.test(st.patientName) && st.patientId === "SYNTHROIFEAT", "取り込んだデータに患者名・ID がある", st);
+      const all = [data1.text, defs1?.text ?? "", propsDl.text].join("\n");
+      check(all.includes("GLCM_JointEntropy"), "検索の対象にファイルの中身が入っている");
+      const found = ["SYNTH", "ROIFEAT", "19010203", "Patient", "Birth", "Sex"].filter((w) => all.includes(w));
+      check(found.length === 0, "CSV・定義表・設定ファイルに患者名・ID・生年月日・性別が無い", found);
+    }
+
     console.log("\n[4] もう一度計算（キャッシュ）と計算し直す");
     const s2 = await runAndWait(page, () => page.getByTestId("roifeat-run").click());
     check(/キャッシュ|Cached/.test(s2), "2 回目はキャッシュの結果と計算日時", s2);
@@ -325,7 +395,18 @@ async function main(): Promise<void> {
     await page.getByTestId("roifeat-csv").click();
     const dl2 = await takeDownloads(page, 2);
     const data2 = dl2.find((f) => !f.name.endsWith("_definitions.csv"));
-    check(!!data2 && data2.text === data1?.text, "キャッシュの CSV は 1 回目と同じ");
+    // [3] の API 直呼び（recompute=true）がキャッシュを置き換えているので、抽出日時はその計算のもの。
+    if (data2 && data1) {
+      fs.writeFileSync(path.join(OUT_DIR, `cached_${data2.name}`), data2.text);
+      const r1 = readRecord(data1.text);
+      const r2 = readRecord(data2.text);
+      check(data2.text.split("\r\n")[0] === data1.text.split("\r\n")[0], "キャッシュの CSV は列名が 1 回目と同じ");
+      check(diffCount(data2.text, direct32.rows).mismatched.length === 0, "キャッシュの CSV は値が 1 回目と差 0");
+      check(r2.Provenance_SettingsSha256 === r1.Provenance_SettingsSha256 && r2.CaseLabel === r1.CaseLabel,
+        "キャッシュの CSV は設定のハッシュ・症例ラベルが同じ");
+      check(r2.Provenance_ExtractedAt === direct32.provenance.extractedAt,
+        "抽出日時は置き換えた計算（API の recompute）のもの", { csv: r2.Provenance_ExtractedAt, api: direct32.provenance.extractedAt });
+    } else check(false, "キャッシュの CSV");
     const s3 = await runAndWait(page, () => page.getByTestId("roifeat-recompute").click());
     check(!/キャッシュ|Cached/.test(s3), "計算し直すと新しく計算した表示", s3);
     check(posted[posted.length - 1]?.recompute === true, "計算し直すは recompute=true");

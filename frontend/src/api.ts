@@ -1876,6 +1876,19 @@ export interface RoiFeatureResult {
   label: number;
   rows: RoiFeatureRow[];
   discretisation: RoiFeatureDiscretisation;
+  provenance: RoiFeatureProvenance;
+  /** 計算に実際に使った設定（RadiomicsJ の .properties、正規化済み）。書き出すときは一字も変えない。 */
+  settingsProperties: string;
+}
+
+/** 版と設定の記録（CSV の Provenance_* 列）。 */
+export interface RoiFeatureProvenance {
+  graphyNextVersion: string;
+  radiomicsjVersion: string | null;
+  /** ISO 8601。キャッシュから返したときも最初に計算した時刻。 */
+  extractedAt: string;
+  /** settingsProperties の UTF-8 の SHA-256（16 進）。 */
+  settingsSha256: string;
 }
 
 export type RoiFeatureJobState = "QUEUED" | "LOADING" | "EXTRACTING" | "DONE" | "FAILED" | "CANCELLED";

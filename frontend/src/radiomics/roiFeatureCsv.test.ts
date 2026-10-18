@@ -4,7 +4,13 @@
  */
 import { describe, expect, it } from "vitest";
 import type { RoiFeatureResult, RoiFeatureRow } from "../api";
-import { roiFeatureDataCsv, roiFeatureDefinitionsCsv, roiFeatureFileBase } from "./roiFeatureCsv";
+import {
+  parseSettingsProperties,
+  roiFeatureDataCsv,
+  roiFeatureDefinitionsCsv,
+  roiFeatureFileBase,
+  ROI_FEATURE_RECORD_COLUMNS,
+} from "./roiFeatureCsv";
 
 const row = (column: string, value: number | null, over: Partial<RoiFeatureRow> = {}): RoiFeatureRow => {
   const us = column.indexOf("_");
@@ -26,7 +32,15 @@ const result = (rows: RoiFeatureRow[], fixedBinNumber = true): RoiFeatureResult 
   label: 1,
   rows,
   discretisation: { fixedBinNumber, nBins: 32, binWidth: 25, ivhMode: 0, ivhBinCount: 1000, ivhBinWidth: 2.5 },
+  provenance: {
+    graphyNextVersion: "0.5.0",
+    radiomicsjVersion: "2.4.1",
+    extractedAt: "2026-10-18T05:03:00.123456789Z",
+    settingsSha256: "ab".repeat(32),
+  },
+  settingsProperties: "BOOL_USE_FixedBinNumber=1\nDOUBLEARRAY_resamplingFactorXYZ=\nINT_binCount=32\n",
 });
+const NREC = ROI_FEATURE_RECORD_COLUMNS.length;
 
 /** 引用付きの 1 行を RFC 4180 で分ける（試験用）。 */
 function splitRow(line: string): string[] {
@@ -47,11 +61,11 @@ function splitRow(line: string): string[] {
   return out;
 }
 
-/** データ表を「列名 → 数値」に読み戻す。 */
+/** データ表の特徴量の列を「列名 → 数値」に読み戻す（先頭の記録の列は除く）。 */
 function readBack(csv: string): Map<string, number> {
   const [h, v] = csv.split("\r\n");
-  const names = splitRow(h);
-  const values = splitRow(v);
+  const names = splitRow(h).slice(NREC);
+  const values = splitRow(v).slice(NREC);
   return new Map(names.map((n, i) => [n, Number(values[i])]));
 }
 
@@ -77,8 +91,8 @@ describe("roiFeatureDataCsv", () => {
     const lines = csv.split("\r\n");
     expect(lines).toHaveLength(3); // 末尾の改行で空の 3 つ目
     expect(lines[2]).toBe("");
-    expect(splitRow(lines[0])).toEqual(sample.map((r) => r.column));
-    expect(splitRow(lines[1])).toHaveLength(sample.length);
+    expect(splitRow(lines[0])).toEqual([...ROI_FEATURE_RECORD_COLUMNS, ...sample.map((r) => r.column)]);
+    expect(splitRow(lines[1])).toHaveLength(NREC + sample.length);
   });
 
   it("読み戻すと全列で値の差 0（倍精度の往復、NaN は NaN）", () => {
@@ -92,14 +106,14 @@ describe("roiFeatureDataCsv", () => {
     const csv = roiFeatureDataCsv(result(sample));
     const [h, v] = csv.split("\r\n");
     const swapped = v.split(",");
-    [swapped[1], swapped[2]] = [swapped[2], swapped[1]];
+    [swapped[NREC + 1], swapped[NREC + 2]] = [swapped[NREC + 2], swapped[NREC + 1]];
     expect(matches(`${h}\r\n${swapped.join(",")}\r\n`, sample)).toBe(false);
   });
 
   it("列名に , や \" があっても列がずれない", () => {
     const odd = [row('X_a,b "c"', 1), row("Y_d", 2)];
     const csv = roiFeatureDataCsv(result(odd));
-    expect(splitRow(csv.split("\r\n")[0])).toEqual(['X_a,b "c"', "Y_d"]);
+    expect(splitRow(csv.split("\r\n")[0]).slice(NREC)).toEqual(['X_a,b "c"', "Y_d"]);
     expect(matches(csv, odd)).toBe(true);
   });
 });
@@ -111,7 +125,9 @@ describe("roiFeatureDefinitionsCsv", () => {
   it("列は column,family,feature,ibsi,notes,discretisation で、行はデータ表の列と同じ並び", () => {
     const t = defs(sample);
     expect(t[0]).toEqual(["column", "family", "feature", "ibsi", "notes", "discretisation"]);
-    expect(t.slice(1).map((r) => r[0])).toEqual(sample.map((r) => r.column));
+    expect(t.slice(1).map((r) => r[0])).toEqual([...ROI_FEATURE_RECORD_COLUMNS, ...sample.map((r) => r.column)]);
+    expect(t[1].slice(0, 4)).toEqual(["CaseLabel", "Record", "CaseLabel", ""]);
+    expect(t[2].slice(0, 3)).toEqual(["Provenance_GraphyNextVersion", "Provenance", "GraphyNextVersion"]);
   });
 
   it("IBSI 外は空、注記は符号、離散化は使う族にだけ付く", () => {
@@ -133,7 +149,30 @@ describe("roiFeatureDefinitionsCsv", () => {
 
   it("注記が 2 つなら ; でつなぐ", () => {
     const t = defs([row("GLAM_X", 1, { ibsi: null, notes: ["NON_IBSI", "EXCESS_KURTOSIS"] })]);
-    expect(t[1][4]).toBe("NON_IBSI;EXCESS_KURTOSIS");
+    expect(t[1 + NREC][4]).toBe("NON_IBSI;EXCESS_KURTOSIS");
+  });
+});
+
+describe("記録の列", () => {
+  it("先頭 5 列が症例ラベルと版・抽出日時・設定の SHA-256", () => {
+    const csv = roiFeatureDataCsv(result(sample), "case-012");
+    const [h, v] = csv.split("\r\n").map(splitRow);
+    expect(h.slice(0, NREC)).toEqual([
+      "CaseLabel", "Provenance_GraphyNextVersion", "Provenance_RadiomicsJVersion",
+      "Provenance_ExtractedAt", "Provenance_SettingsSha256",
+    ]);
+    expect(v.slice(0, NREC)).toEqual(["case-012", "0.5.0", "2.4.1", "2026-10-18T05:03:00.123456789Z", "ab".repeat(32)]);
+  });
+
+  it("症例ラベルが空でも列はあり、, や \" や改行が入っても列がずれない", () => {
+    const empty = roiFeatureDataCsv(result(sample)).split("\r\n").map(splitRow);
+    expect(empty[0][0]).toBe("CaseLabel");
+    expect(empty[1][0]).toBe("");
+    const odd = 'a,b "c"';
+    const v = splitRow(roiFeatureDataCsv(result(sample), odd).split("\r\n")[1]);
+    expect(v[0]).toBe(odd);
+    expect(v).toHaveLength(NREC + sample.length);
+    expect(matches(roiFeatureDataCsv(result(sample), odd), sample)).toBe(true);
   });
 });
 
@@ -142,5 +181,20 @@ describe("roiFeatureFileBase", () => {
     expect(roiFeatureFileBase(3, 0)).toBe("roi-features-3-seg0");
     expect(roiFeatureFileBase(null, 2)).toBe("roi-features-roi-seg2");
     expect(roiFeatureFileBase("a/b", 1)).toBe("roi-features-a_b-seg1");
+  });
+
+  it("症例ラベルがあればそれとセグメント（使えない文字は _）", () => {
+    expect(roiFeatureFileBase(3, 0, "case-012")).toBe("case-012-seg0");
+    expect(roiFeatureFileBase(3, 1, " a/b:c ")).toBe("a_b_c-seg1");
+    expect(roiFeatureFileBase(3, 0, "   ")).toBe("roi-features-3-seg0");
+  });
+});
+
+describe("parseSettingsProperties", () => {
+  it("KEY=value の行を読み、空の値も残す", () => {
+    const p = parseSettingsProperties(result(sample).settingsProperties);
+    expect(p.INT_binCount).toBe("32");
+    expect(p.DOUBLEARRAY_resamplingFactorXYZ).toBe("");
+    expect(p.BOOL_USE_FixedBinNumber).toBe("1");
   });
 });
