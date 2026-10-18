@@ -1879,6 +1879,24 @@ export interface RoiFeatureResult {
   provenance: RoiFeatureProvenance;
   /** 計算に実際に使った設定（RadiomicsJ の .properties、正規化済み）。書き出すときは一字も変えない。 */
   settingsProperties: string;
+  /** ROI の大きさと小さい ROI の警告（返すたびに今の環境設定で判定し直す）。 */
+  roiSize: RoiFeatureRoiSize;
+}
+
+/** ボクセル数は RadiomicsJ の Diagnostics の値。 */
+export interface RoiFeatureRoiSize {
+  /** 読み込んだマスク（リサンプリング・再セグメントの前）。 */
+  initialVoxels: number | null;
+  /** 強度・テクスチャ特徴を計算したボクセル数（リサンプリング・範囲フィルタ・外れ値除去の後）。 */
+  intensityVoxels: number | null;
+  /** 形態特徴のマスク（リサンプリング後・再セグメントしない）。 */
+  morphVoxels: number | null;
+  /** morphVoxels × 計算格子のボクセル体積（mm³）。 */
+  volumeMm3: number | null;
+  /** 環境設定の基準値。未設定なら null。 */
+  smallRoiWarnVoxels: number | null;
+  /** intensityVoxels < 基準値。未設定なら null。 */
+  smallRoi: boolean | null;
 }
 
 /** 版と設定の記録（CSV の Provenance_* 列）。 */

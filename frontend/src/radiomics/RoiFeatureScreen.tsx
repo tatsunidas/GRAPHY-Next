@@ -459,6 +459,22 @@ export function RoiFeatureScreen() {
             </button>
           </div>
           <div style={note} data-testid="roifeat-settings-summary">{settingsSummary}</div>
+          {result.roiSize.smallRoi && (
+            <div style={warnBand} data-testid="roifeat-smallroi-warning">
+              ⚠ {t("roiFeat.smallRoiWarning", {
+                n: count(result.roiSize.intensityVoxels),
+                threshold: count(result.roiSize.smallRoiWarnVoxels),
+              })}
+            </div>
+          )}
+          <div style={note} data-testid="roifeat-roisize">
+            {t("roiFeat.roiSize", {
+              initial: count(result.roiSize.initialVoxels),
+              intensity: count(result.roiSize.intensityVoxels),
+              morph: count(result.roiSize.morphVoxels),
+              volume: result.roiSize.volumeMm3 == null ? "?" : result.roiSize.volumeMm3.toFixed(1),
+            })}
+          </div>
           <div style={note}>{t("roiFeat.count", { n: result.rows.length })}</div>
 
           <table style={table} data-testid="roifeat-table">
@@ -539,6 +555,11 @@ const input: React.CSSProperties = {
   width: "100%", boxSizing: "border-box", border: "1px solid #cdd5de", borderRadius: 4, fontSize: 12, padding: "3px 6px",
 };
 const note: React.CSSProperties = { color: "#6b7785", fontSize: 11, marginTop: 4, lineHeight: 1.5 };
+const warnBand: React.CSSProperties = {
+  marginTop: 6, padding: "6px 10px", fontSize: 12, color: "#7a4b00", background: "#fff4d6",
+  border: "1px solid #f0c36d", borderRadius: 4,
+};
+const count = (n: number | null): string => (n == null ? "?" : n.toLocaleString("en-US"));
 const errText: React.CSSProperties = { color: "#b00020", marginTop: 8, whiteSpace: "pre-wrap" };
 const summaryRow: React.CSSProperties = { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" };
 const infoPill: React.CSSProperties = {

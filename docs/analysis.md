@@ -45,6 +45,13 @@ ROI 全体を 1 つの領域として、RadiomicsJ で Radiomics 特徴量を計
     - 過剰尖度（−3 済み）: 一次統計と強度ヒストグラムの Kurtosis は、正規分布で 0 になる過剰尖度です。
     - log2・離散化後: 強度ヒストグラムの Entropy は、離散化した値の、底 2 のエントロピーです。
     - IBSI 外: IBSI の定義に無い特徴です（フラクタル、GLAM、2D 形状、一次統計の TotalEnergy・StandardDeviation・StandardError など）。
+    - Diagnostics の `ResegmentedROIMorphMaskVoxelCount` には、RadiomicsJ 2.4.1 では強度マスクの数が入ります。形態マスクの数は、表の上の「形態」か CSV の `Roi_MorphMaskVoxels` を見てください。
+- 表の上に ROI の大きさが出ます。
+    - 「ROI」: 選んだマスクのボクセル数。
+    - 「計算に使った数」: リサンプリング・範囲フィルタ・外れ値除去の後に、強度とテクスチャの特徴を計算したボクセル数。
+    - 「形態」: 形態特徴に使うマスクのボクセル数。リサンプリングの後の数で、範囲フィルタ・外れ値除去では減りません。
+    - 「体積」: 形態のボクセル数 × 計算に使った画素の体積（mm³）。
+- 環境設定 ▸ テクスチャの「小さい ROI の警告（ボクセル数）」に値を入れておくと、計算に使った数がそれより少ない ROI で、表の上に警告が出ます。空欄なら警告しません（[環境設定](settings.md)）。
 
 **CSV に書き出す**
 
@@ -56,8 +63,13 @@ ROI 全体を 1 つの領域として、RadiomicsJ で Radiomics 特徴量を計
     - `Provenance_ExtractedAt`: 計算した日時（ISO 8601、UTC）。
     - `Provenance_SettingsSha256`: 計算に使った設定ファイルの SHA-256。設定が同じなら同じ値になるので、症例ごとの CSV を集めたときに設定の違いがこの列で分かります。
 
+    続く 6 列は ROI の大きさです。体積を共変量として解析に入れるときに使います。
+    - `Roi_InitialVoxels`・`Roi_IntensityMaskVoxels`・`Roi_MorphMaskVoxels`・`Roi_VolumeMm3`: 表の上の「ROI」「計算に使った数」「形態」「体積」と同じ値。
+    - `Warning_SmallRoiThresholdVoxels`: 計算したときの警告の基準値。
+    - `Warning_SmallRoi`: 小さい ROI なら 1、そうでなければ 0。基準値が空欄なら、この 2 列は空です（0 ではありません）。
+
     その後ろが特徴量の列で、列名は RadiomicsJ の結果表と同じです（例 `IntensityBasedStatistical_Kurtosis`）。計算できなかった値は `NaN` です。症例ごとのファイルを縦につなげば、そのまま統計ソフトに読み込めます。
-- `…_definitions.csv`: 列名ごとの族・特徴・IBSI の識別子・注記の符号（`EXCESS_KURTOSIS`・`LOG2_DISCRETISED`・`NON_IBSI`）・離散化。
+- `…_definitions.csv`: 列名ごとの族・特徴・IBSI の識別子・注記の符号（`EXCESS_KURTOSIS`・`LOG2_DISCRETISED`・`NON_IBSI`・`RJ_MORPH_COUNT_IS_INTENSITY`）・離散化。
 
 **設定ファイルを書き出す**
 

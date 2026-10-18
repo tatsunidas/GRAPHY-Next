@@ -3,13 +3,14 @@
  * Author: Tatsuaki Kobayashi
  */
 import { describe, expect, it } from "vitest";
-import type { RoiFeatureResult, RoiFeatureRow } from "../api";
+import type { RoiFeatureResult, RoiFeatureRoiSize, RoiFeatureRow } from "../api";
 import {
   parseSettingsProperties,
   roiFeatureDataCsv,
   roiFeatureDefinitionsCsv,
   roiFeatureFileBase,
   ROI_FEATURE_RECORD_COLUMNS,
+  ROI_FEATURE_SIZE_COLUMNS,
 } from "./roiFeatureCsv";
 
 const row = (column: string, value: number | null, over: Partial<RoiFeatureRow> = {}): RoiFeatureRow => {
@@ -25,7 +26,12 @@ const row = (column: string, value: number | null, over: Partial<RoiFeatureRow> 
   };
 };
 
-const result = (rows: RoiFeatureRow[], fixedBinNumber = true): RoiFeatureResult => ({
+const UNSET: RoiFeatureRoiSize = {
+  initialVoxels: 1000, intensityVoxels: 982, morphVoxels: 1000, volumeMm3: 500,
+  smallRoiWarnVoxels: null, smallRoi: null,
+};
+
+const result = (rows: RoiFeatureRow[], fixedBinNumber = true, roiSize: RoiFeatureRoiSize = UNSET): RoiFeatureResult => ({
   radiomicsjVersion: "2.4.1",
   computedAt: "2026-10-18T05:03:00Z",
   fromCache: false,
@@ -39,8 +45,10 @@ const result = (rows: RoiFeatureRow[], fixedBinNumber = true): RoiFeatureResult 
     settingsSha256: "ab".repeat(32),
   },
   settingsProperties: "BOOL_USE_FixedBinNumber=1\nDOUBLEARRAY_resamplingFactorXYZ=\nINT_binCount=32\n",
+  roiSize,
 });
-const NREC = ROI_FEATURE_RECORD_COLUMNS.length;
+const HEAD = [...ROI_FEATURE_RECORD_COLUMNS, ...ROI_FEATURE_SIZE_COLUMNS];
+const NREC = HEAD.length;
 
 /** 引用付きの 1 行を RFC 4180 で分ける（試験用）。 */
 function splitRow(line: string): string[] {
@@ -91,7 +99,7 @@ describe("roiFeatureDataCsv", () => {
     const lines = csv.split("\r\n");
     expect(lines).toHaveLength(3); // 末尾の改行で空の 3 つ目
     expect(lines[2]).toBe("");
-    expect(splitRow(lines[0])).toEqual([...ROI_FEATURE_RECORD_COLUMNS, ...sample.map((r) => r.column)]);
+    expect(splitRow(lines[0])).toEqual([...HEAD, ...sample.map((r) => r.column)]);
     expect(splitRow(lines[1])).toHaveLength(NREC + sample.length);
   });
 
@@ -125,7 +133,7 @@ describe("roiFeatureDefinitionsCsv", () => {
   it("列は column,family,feature,ibsi,notes,discretisation で、行はデータ表の列と同じ並び", () => {
     const t = defs(sample);
     expect(t[0]).toEqual(["column", "family", "feature", "ibsi", "notes", "discretisation"]);
-    expect(t.slice(1).map((r) => r[0])).toEqual([...ROI_FEATURE_RECORD_COLUMNS, ...sample.map((r) => r.column)]);
+    expect(t.slice(1).map((r) => r[0])).toEqual([...HEAD, ...sample.map((r) => r.column)]);
     expect(t[1].slice(0, 4)).toEqual(["CaseLabel", "Record", "CaseLabel", ""]);
     expect(t[2].slice(0, 3)).toEqual(["Provenance_GraphyNextVersion", "Provenance", "GraphyNextVersion"]);
   });
@@ -157,11 +165,11 @@ describe("記録の列", () => {
   it("先頭 5 列が症例ラベルと版・抽出日時・設定の SHA-256", () => {
     const csv = roiFeatureDataCsv(result(sample), "case-012");
     const [h, v] = csv.split("\r\n").map(splitRow);
-    expect(h.slice(0, NREC)).toEqual([
+    expect(h.slice(0, 5)).toEqual([
       "CaseLabel", "Provenance_GraphyNextVersion", "Provenance_RadiomicsJVersion",
       "Provenance_ExtractedAt", "Provenance_SettingsSha256",
     ]);
-    expect(v.slice(0, NREC)).toEqual(["case-012", "0.5.0", "2.4.1", "2026-10-18T05:03:00.123456789Z", "ab".repeat(32)]);
+    expect(v.slice(0, 5)).toEqual(["case-012", "0.5.0", "2.4.1", "2026-10-18T05:03:00.123456789Z", "ab".repeat(32)]);
   });
 
   it("症例ラベルが空でも列はあり、, や \" や改行が入っても列がずれない", () => {
@@ -173,6 +181,41 @@ describe("記録の列", () => {
     expect(v[0]).toBe(odd);
     expect(v).toHaveLength(NREC + sample.length);
     expect(matches(roiFeatureDataCsv(result(sample), odd), sample)).toBe(true);
+  });
+});
+
+describe("ROI の大きさと小さい ROI の警告の列", () => {
+  const sizeCells = (size: RoiFeatureRoiSize) => {
+    const [h, v] = roiFeatureDataCsv(result(sample, true, size)).split("\r\n").map(splitRow);
+    const at = ROI_FEATURE_RECORD_COLUMNS.length;
+    return { names: h.slice(at, NREC), values: v.slice(at, NREC) };
+  };
+
+  it("記録の列の後に 6 列。基準値が未設定なら警告の 2 列は空（0 と書かない）", () => {
+    const { names, values } = sizeCells(UNSET);
+    expect(names).toEqual([
+      "Roi_InitialVoxels", "Roi_IntensityMaskVoxels", "Roi_MorphMaskVoxels", "Roi_VolumeMm3",
+      "Warning_SmallRoiThresholdVoxels", "Warning_SmallRoi",
+    ]);
+    expect(values).toEqual(["1000", "982", "1000", "500", "", ""]);
+  });
+
+  it("警告なら 1、基準値ちょうど・以上なら 0", () => {
+    expect(sizeCells({ ...UNSET, smallRoiWarnVoxels: 983, smallRoi: true }).values.slice(4)).toEqual(["983", "1"]);
+    expect(sizeCells({ ...UNSET, smallRoiWarnVoxels: 982, smallRoi: false }).values.slice(4)).toEqual(["982", "0"]);
+  });
+
+  it("定義表にも 6 列の行（族は Roi / Warning）", () => {
+    const t = roiFeatureDefinitionsCsv(result(sample)).split("\r\n").filter((l) => l).map(splitRow);
+    const at = 1 + ROI_FEATURE_RECORD_COLUMNS.length;
+    expect(t.slice(at, at + 6).map((r) => r.slice(0, 3))).toEqual([
+      ["Roi_InitialVoxels", "Roi", "InitialVoxels"],
+      ["Roi_IntensityMaskVoxels", "Roi", "IntensityMaskVoxels"],
+      ["Roi_MorphMaskVoxels", "Roi", "MorphMaskVoxels"],
+      ["Roi_VolumeMm3", "Roi", "VolumeMm3"],
+      ["Warning_SmallRoiThresholdVoxels", "Warning", "SmallRoiThresholdVoxels"],
+      ["Warning_SmallRoi", "Warning", "SmallRoi"],
+    ]);
   });
 });
 

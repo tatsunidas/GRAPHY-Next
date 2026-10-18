@@ -5,6 +5,7 @@
 package com.vis.graphynext.radiomics;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.vis.graphynext.settings.SettingsService;
 import ij.ImagePlus;
 import ij.measure.ResultsTable;
 import io.github.tatsunidas.radiomics.main.RadiomicsJ;
@@ -25,6 +26,7 @@ import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -51,6 +53,12 @@ public class RoiFeatureService {
     static final String LABEL_KEY = SettingParams.INT_label.name();
     static final String FORCE_2D_KEY = SettingParams.BOOL_force2D.name();
     static final String GLAM_KEY = SettingParams.BOOL_enableGLAM.name();
+    /** ROI の大きさの列が Diagnostics から来るので、常に入れる。 */
+    static final String DIAGNOSTICS_KEY = SettingParams.BOOL_enableDiagnostics.name();
+    /** 環境設定 ▸ テクスチャの「小さい ROI の警告（ボクセル数）」。空なら警告しない。 */
+    static final String SMALL_ROI_SETTING = "texture.SmallRoiWarnVoxels";
+
+    private static final String DIAG = RoiFeatureDefinitions.DIAGNOSTICS + "_";
 
     private static final Set<String> KNOWN_KEYS =
             Stream.of(SettingParams.values()).map(Enum::name).collect(Collectors.toUnmodifiableSet());
@@ -70,21 +78,25 @@ public class RoiFeatureService {
     private final ObjectMapper json;
     private final Extractor extractor;
     private final String graphyVersion;
+    private final Supplier<String> smallRoiSetting;
 
     @Autowired
     public RoiFeatureService(RadiomicsMapEngine engine, MapCheckpointStore cache, RadiomicsMode mode,
-                             ObjectMapper json, @Value("${graphy.version:dev}") String graphyVersion) {
-        this(engine, cache, mode, json, (rj, img, mask, label) -> rj.extractAll(img, mask, label), graphyVersion);
+                             ObjectMapper json, @Value("${graphy.version:dev}") String graphyVersion,
+                             SettingsService settingsService) {
+        this(engine, cache, mode, json, (rj, img, mask, label) -> rj.extractAll(img, mask, label), graphyVersion,
+                () -> settingsService.getAll().get(SMALL_ROI_SETTING));
     }
 
     RoiFeatureService(RadiomicsMapEngine engine, MapCheckpointStore cache, RadiomicsMode mode,
-                      ObjectMapper json, Extractor extractor, String graphyVersion) {
+                      ObjectMapper json, Extractor extractor, String graphyVersion, Supplier<String> smallRoiSetting) {
         this.engine = engine;
         this.cache = cache;
         this.mode = mode;
         this.json = json;
         this.extractor = extractor;
         this.graphyVersion = graphyVersion;
+        this.smallRoiSetting = smallRoiSetting;
     }
 
     /** 投入の前に通す検査（web モード・必須項目・設定キー）。通らなければ例外。 */
@@ -99,6 +111,50 @@ public class RoiFeatureService {
             throw new IllegalArgumentException("Radiomics 特徴量には ROI マスクシリーズが必要です。");
         }
         effectiveSettings(req.settings(), labelOf(req.settings()));
+        smallRoiThreshold();
+    }
+
+    /** 環境設定の基準値。空・未設定なら null。整数でない・1 未満なら例外（黙って警告を止めない）。 */
+    Integer smallRoiThreshold() {
+        String v = smallRoiSetting.get();
+        if (v == null || v.isBlank()) {
+            return null;
+        }
+        try {
+            int n = Integer.parseInt(v.trim());
+            if (n >= 1) {
+                return n;
+            }
+        } catch (NumberFormatException ignored) {
+            // 下の例外にまとめる
+        }
+        throw new IllegalArgumentException(
+                "環境設定の「小さい ROI の警告（ボクセル数）」は 1 以上の整数か空欄にしてください: " + v);
+    }
+
+    /** 行（Diagnostics）から ROI の大きさを読み、今の基準値で判定する。 */
+    static RoiFeatureResult.RoiSize roiSizeOf(List<RoiFeatureResult.Row> rows, Integer threshold) {
+        Map<String, Double> diag = new HashMap<>();
+        for (RoiFeatureResult.Row r : rows) {
+            if (r.column().startsWith(DIAG)) {
+                diag.put(r.column().substring(DIAG.length()), r.value());
+            }
+        }
+        Long initial = count(diag.get("DiagnosticsInitialROIIntMaskVoxelCount"));
+        Long intensity = count(diag.get("DiagnosticsResegmentedROIIntMaskVoxelCount"));
+        // RadiomicsJ 2.4.1 の ResegmentedROIMorphMaskVoxelCount は強度マスクの数になっている。形態マスクは
+        // 再セグメントしない（RadiomicsJ も形態特徴にはリサンプリング後のマスクを使う）ので、こちらを読む。
+        Long morph = count(diag.get("DiagnosticsInterpolatedROIMorphMaskVoxelCount"));
+        Double dx = diag.get("DiagnosticsInterpolatedImageVoxelDimensionX");
+        Double dy = diag.get("DiagnosticsInterpolatedImageVoxelDimensionY");
+        Double dz = diag.get("DiagnosticsInterpolatedImageVoxelDimensionZ");
+        Double volume = morph == null || dx == null || dy == null || dz == null ? null : morph * dx * dy * dz;
+        Boolean small = threshold == null || intensity == null ? null : intensity < threshold;
+        return new RoiFeatureResult.RoiSize(initial, intensity, morph, volume, threshold, small);
+    }
+
+    private static Long count(Double v) {
+        return v == null ? null : Math.round(v);
     }
 
     /**
@@ -125,6 +181,7 @@ public class RoiFeatureService {
                     "スライスごとの 2D 抽出（BOOL_force2D）には未対応です。1 ROI = 1 行の 3D 抽出だけを出します。");
         }
         out.put(OPERATIONAL_INFO_KEY, "0");
+        out.put(DIAGNOSTICS_KEY, "1");
         out.put(LABEL_KEY, Integer.toString(label));
         return out;
     }
@@ -133,6 +190,7 @@ public class RoiFeatureService {
     public RoiFeatureResult compute(RoiFeatureRequest req, java.util.function.Consumer<Phase> phase)
             throws IOException {
         check(req);
+        Integer threshold = smallRoiThreshold();
         int label = labelOf(req.settings());
         Map<String, String> settings = effectiveSettings(req.settings(), label);
 
@@ -161,7 +219,8 @@ public class RoiFeatureService {
             Optional<RoiFeatureResult> hit = readCache(key);
             if (hit.isPresent()) {
                 log.info("[roi-features] cache hit key={}", key.substring(0, 12));
-                return hit.get().asCached();
+                RoiFeatureResult cached = hit.get().asCached();
+                return cached.withRoiSize(roiSizeOf(cached.rows(), threshold));
             }
         }
 
@@ -180,7 +239,7 @@ public class RoiFeatureService {
         if (key != null) {
             cache.saveFeatures(key, json.writeValueAsBytes(result));
         }
-        return result;
+        return result.withRoiSize(roiSizeOf(result.rows(), threshold));
     }
 
     private RoiFeatureResult extractLocked(Map<String, String> settings, RadiomicsMapEngine.LoadedVolume vol,
@@ -206,7 +265,8 @@ public class RoiFeatureService {
             Instant at = Instant.now();
             RoiFeatureResult.Provenance provenance = new RoiFeatureResult.Provenance(
                     graphyVersion, RadiomicsJ.version, at, RadiomicsJSettingsSnapshot.sha256(properties));
-            return new RoiFeatureResult(RadiomicsJ.version, at, false, label, rows(rt), disc, provenance, properties);
+            return new RoiFeatureResult(RadiomicsJ.version, at, false, label, rows(rt), disc, provenance, properties,
+                    null);
         } finally {
             RadiomicsJ.resetSettings();
             // 例外で抜けると RadiomicsJ は離散化画像を残す。マップの窓がそれを拾うので必ず消す。
