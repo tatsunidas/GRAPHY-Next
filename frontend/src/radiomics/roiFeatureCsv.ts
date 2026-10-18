@@ -10,7 +10,8 @@
  * `read.csv` などで型が崩れるので、注記は定義表（列名・IBSI・注記・離散化）に分ける。
  *
  * <p>先頭の 5 列は記録（症例ラベル・版・抽出日時・設定ファイルの SHA-256）。症例ごとの CSV を縦に積んでも、
- * どの版・どの設定で出した値かが列で分かる。
+ * どの版・どの設定で出した値かが列で分かる。続く 6 列は ROI の大きさと小さい ROI の警告（面積を共変量に使うため）。
+ * 警告の 2 列は、基準値が未設定なら空（0 と書かない。「判定していない」と「警告なし」を分ける）。
  *
  * <p>BOM は付けない。BOM があると R の `read.csv` が 1 列目の名前を `X.U.FEFF.…` に変えてしまう。
  * 症例ラベル以外は ASCII だけ（症例ラベルに日本語を入れたときは UTF-8 として読む）。
@@ -34,15 +35,42 @@ export const ROI_FEATURE_RECORD_COLUMNS = [
   "Provenance_SettingsSha256",
 ] as const;
 
+/** 記録の列の後に置く、ROI の大きさの列。 */
+export const ROI_FEATURE_SIZE_COLUMNS = [
+  "Roi_InitialVoxels",
+  "Roi_IntensityMaskVoxels",
+  "Roi_MorphMaskVoxels",
+  "Roi_VolumeMm3",
+  "Warning_SmallRoiThresholdVoxels",
+  "Warning_SmallRoi",
+] as const;
+
 function recordValues(result: RoiFeatureResult, caseLabel: string): string[] {
   const p = result.provenance;
-  return [caseLabel, p.graphyNextVersion, p.radiomicsjVersion ?? "", p.extractedAt, p.settingsSha256];
+  return [caseLabel, p.graphyNextVersion, p.radiomicsjVersion ?? "", p.extractedAt, p.settingsSha256].map(cell);
+}
+
+function sizeValues(result: RoiFeatureResult): string[] {
+  const s = result.roiSize;
+  return [
+    value(s.initialVoxels),
+    value(s.intensityVoxels),
+    value(s.morphVoxels),
+    value(s.volumeMm3),
+    s.smallRoiWarnVoxels == null ? "" : String(s.smallRoiWarnVoxels),
+    s.smallRoi == null ? "" : s.smallRoi ? "1" : "0",
+  ];
 }
 
 /** データ表。症例ラベルは空でも列を置く（症例ごとの CSV を縦に積めるように）。 */
 export function roiFeatureDataCsv(result: RoiFeatureResult, caseLabel = ""): string {
-  const header = [...ROI_FEATURE_RECORD_COLUMNS, ...result.rows.map((r) => r.column)].map(cell).join(",");
-  const values = [...recordValues(result, caseLabel).map(cell), ...result.rows.map((r) => value(r.value))].join(",");
+  const header = [...ROI_FEATURE_RECORD_COLUMNS, ...ROI_FEATURE_SIZE_COLUMNS, ...result.rows.map((r) => r.column)]
+    .map(cell).join(",");
+  const values = [
+    ...recordValues(result, caseLabel),
+    ...sizeValues(result),
+    ...result.rows.map((r) => value(r.value)),
+  ].join(",");
   return `${header}\r\n${values}\r\n`;
 }
 
@@ -64,6 +92,10 @@ export function roiFeatureDefinitionsCsv(result: RoiFeatureResult): string {
   const lines = [ROI_FEATURE_DEFINITION_COLUMNS.join(",")];
   for (const c of ROI_FEATURE_RECORD_COLUMNS) {
     lines.push([cell(c), c === "CaseLabel" ? "Record" : "Provenance", cell(c.replace(/^Provenance_/, "")), "", "", ""].join(","));
+  }
+  for (const c of ROI_FEATURE_SIZE_COLUMNS) {
+    const [family, feature] = c.split("_");
+    lines.push([cell(c), cell(family), cell(feature), "", "", ""].join(","));
   }
   for (const r of result.rows) {
     lines.push([

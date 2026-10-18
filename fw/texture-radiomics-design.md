@@ -835,3 +835,12 @@ RadiomicsJ は設定と途中結果（`discretiseImp`）を static に持ち、�
   - `RoiFeatureServiceTest`: 丸めた値で記録、冪等（読ませて取り直すと同じ本文）、族とリサンプリングの追従、渡し方が違っても使う値が同じなら同じハッシュ、キャッシュから返しても記録は最初の計算のもの。族の有効化を常に 1 と書く変異で落ちる。
   - スパイク 56/0（日本語表示）: 症例ラベル・版（`/api/status` と同じ、RadiomicsJ 2.4.1）・ISO 8601・ハッシュ＝ダウンロードした設定ファイルの SHA-256、設定ファイル＝API の本文。書き出した設定ファイルをそのまま設定にして計算し直すと CSV と全列で差 0・同じハッシュ、ビン数 16 にすると GLCM 不一致。取り込んだ合成データに患者名・ID があることを `/api/studies` で確かめてから、3 本のファイルに患者名・ID・生年月日・性別の値も `Patient` 等の語も無いこと。表の上の 2 行をスクリーンショットで判定。
 - 気づいたこと（未対応）: キャッシュの項目は長さだけを確かめ、中身のチェックサムが無い。JSON の文字列や数値の中の 1 バイトが化けても、JSON として読めればそのまま返る（`Checkpoints` の作り。マップの途中結果も同じ）。試験は「JSON として読めない項目は計算し直す」を見る形に直した。
+
+### 13.10 ROI の大きさと小さい ROI の警告（2026-10-19）
+- 結果に `roiSize`（`initialVoxels`・`intensityVoxels`・`morphVoxels`・`volumeMm3`・`smallRoiWarnVoxels`・`smallRoi`）を足した。行の Diagnostics から導き、**返すたびに付け直す**（キャッシュには付ける前の結果を書く）。基準値は計算に影響しないのでキャッシュの鍵に入れず、エンジン版も上げない。
+  - 数は RadiomicsJ の Diagnostics をそのまま使う（数え直さない）。初期＝`InitialROIIntMaskVoxelCount`、計算に使った数＝`ResegmentedROIIntMaskVoxelCount`、形態＝`InterpolatedROIMorphMaskVoxelCount`。体積＝形態の数 × `InterpolatedImageVoxelDimensionX·Y·Z`。形態の族がオンなら `Morphology_VolumeVoxelCounting`（YEKZ）と一致する（試験）。YEKZ だけでは族を切ると出ないので列を別に持つ。
+  - **RadiomicsJ 2.4.1 の食い違い**: `DiagnosticsInfo` は `ResegmentedROIMorphMaskVoxelCount` に強度マスクの数を入れる。形態特徴は再セグメントしないマスク（`resampledMask`）で計算しているので、範囲フィルタ・外れ値除去を使うとこの列だけが実際と食い違う。値はそのまま残し、定義の注記 `RJ_MORPH_COUNT_IS_INTENSITY` を付けた。RadiomicsJ 側の修正は別途。
+  - 大きさは Diagnostics に依るので、`BOOL_enableDiagnostics` は `BOOL_enableOperationalInfo` と同じく上書きして常に 1（既定どおりなので、既定の設定の設定ファイル・ハッシュは変わらない）。
+- 小さい ROI の警告: 環境設定 `texture.SmallRoiWarnVoxels`（既定は空＝警告しない。基準値は文献ごとに違い、根拠のない既定値を推奨に見せないため）。判定は backend で `intensityVoxels < 基準値`。空・未設定なら null（CSV は空）、整数でない・1 未満なら要求を断る（黙って警告を止めない）。
+- CSV: 記録の 5 列の後に `Roi_InitialVoxels`・`Roi_IntensityMaskVoxels`・`Roi_MorphMaskVoxels`・`Roi_VolumeMm3`・`Warning_SmallRoiThresholdVoxels`・`Warning_SmallRoi`（1／0／空）。
+- 検証: `RoiFeatureServiceTest`（10×10×10 ボクセル・0.5×0.5×2.0 mm の箱で 1000 ボクセル・500 mm³・YEKZ と一致、範囲フィルタで計算に使った数 900／形態 1000 と Diagnostics の食い違いの再現、基準値 1001 で警告・1000 で警告なし、未設定は null、不正な値は断る、キャッシュから返しても今の基準値で判定）。スパイク 68/0（合成 CT の 2 セグメント: 未設定は列が空・帯なし、環境設定のダイアログで 401 を入れると 400 ボクセルで帯と 1・5760 ボクセルは 0、400 ちょうどは 0、体積は理論値。帯と大きさの行をスクリーンショットで判定）。

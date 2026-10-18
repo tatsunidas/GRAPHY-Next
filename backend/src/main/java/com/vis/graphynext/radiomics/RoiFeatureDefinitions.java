@@ -45,6 +45,12 @@ final class RoiFeatureDefinitions {
     /** IBSI の定義の外にある特徴。 */
     static final String NOTE_NON_IBSI = "NON_IBSI";
 
+    /**
+     * RadiomicsJ 2.4.1 の {@code DiagnosticsInfo} は、再セグメント後の形態マスクの数に強度マスクの数を入れている。
+     * 形態マスクは再セグメントしないので、範囲フィルタ・外れ値除去を使うと実際の形態マスクの数と食い違う。
+     */
+    static final String NOTE_RJ_MORPH_COUNT_IS_INTENSITY = "RJ_MORPH_COUNT_IS_INTENSITY";
+
     static final String DIAGNOSTICS = "Diagnostics";
 
     /** IBSI の識別子（4 文字）と、パラメータ付きの特徴の枝番。 */
@@ -81,7 +87,9 @@ final class RoiFeatureDefinitions {
         String family = column.substring(0, us);
         String feature = column.substring(us + 1);
         if (DIAGNOSTICS.equals(family)) {
-            return new RoiFeatureResult.Row(column, family, feature, null, value, List.of());
+            List<String> diagNotes = "DiagnosticsResegmentedROIMorphMaskVoxelCount".equals(feature)
+                    ? List.of(NOTE_RJ_MORPH_COUNT_IS_INTENSITY) : List.of();
+            return new RoiFeatureResult.Row(column, family, feature, null, value, diagNotes);
         }
         Function<String, String> idOf = FAMILIES.get(family);
         if (idOf == null) {

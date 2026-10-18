@@ -12,6 +12,7 @@
  *   6. 2 つ目のセグメントでボクセル数が理論値に変わる（セグメントの選択が効いている）。
  *   7. 取り消した計算の結果が、次の同じ要求でキャッシュから返る。
  *   3b. 記録: 症例ラベル・版・抽出日時・設定の SHA-256 の列、設定ファイルの書き出しとアプリを通した往復、患者情報が無いこと。
+ *   8. ROI の大きさ（ボクセル数・体積が理論値）と小さい ROI の警告（環境設定で基準値を入れる。境界の正例と負例、未設定は空）。
  *
  * 前提: backend jar（今のビルド）・python3 と pydicom。
  */
@@ -60,6 +61,8 @@ interface Result {
   rows: Row[];
   provenance: { graphyNextVersion: string; radiomicsjVersion: string; extractedAt: string; settingsSha256: string };
   settingsProperties: string;
+  roiSize: { initialVoxels: number; intensityVoxels: number; morphVoxels: number; volumeMm3: number;
+    smallRoiWarnVoxels: number | null; smallRoi: boolean | null };
 }
 
 /** 箱のセグメント（行・列・スライスの半開区間）。 */
@@ -67,6 +70,8 @@ interface Box { r0: number; r1: number; c0: number; c1: number; z0: number; z1: 
 const SEG1: Box = { r0: 12, r1: 36, c0: 10, c1: 34, z0: 3, z1: 13 }; // 24×24×10 = 5760
 const SEG2: Box = { r0: 30, r1: 40, c0: 36, c1: 46, z0: 5, z1: 9 }; // 10×10×4 = 400
 const voxels = (b: Box) => (b.r1 - b.r0) * (b.c1 - b.c0) * (b.z1 - b.z0);
+/** 合成 CT はスライス間隔 = スライス厚。 */
+const volumeOf = (s: Synth, b: Box) => voxels(b) * s.pixelSpacing[0] * s.pixelSpacing[1] * s.sliceThickness;
 const VOXEL_COLUMN = "Diagnostics_DiagnosticsInitialROIIntMaskVoxelCount";
 const CASE_LABEL = "case-012";
 
@@ -125,8 +130,8 @@ function splitRow(line: string): string[] {
   return out;
 }
 
-/** 先頭の記録の列（症例ラベルと Provenance_*）。 */
-const NREC = 5;
+/** 先頭の記録の列（症例ラベル・Provenance_* の 5 列と、ROI の大きさ・警告の 6 列）。 */
+const NREC = 11;
 
 /** データ表の特徴量の列（先頭の記録の列を除く）。 */
 function readData(csv: string): { names: string[]; values: number[] } {
@@ -365,6 +370,16 @@ async function main(): Promise<void> {
         && provText.includes(rec.Provenance_SettingsSha256.slice(0, 4)), "表の上に版とハッシュ", provText);
       check(/ビン数 32|32 bins/.test(summaryText) && /なし|no resampling/.test(summaryText) && summaryText.includes("12/14"),
         "表の上に設定の要約", summaryText);
+      // ROI の大きさ（基準値は未設定）
+      check(rec.Roi_InitialVoxels === "5760" && rec.Roi_IntensityMaskVoxels === "5760" && rec.Roi_MorphMaskVoxels === "5760",
+        "CSV の ROI のボクセル数が理論値 5760", rec);
+      check(Math.abs(Number(rec.Roi_VolumeMm3) - volumeOf(synth, SEG1)) < 1e-6, "CSV の体積 = 5760 × 0.7 × 0.7 × 2.0 mm³",
+        { csv: rec.Roi_VolumeMm3, expected: volumeOf(synth, SEG1) });
+      check(rec.Warning_SmallRoiThresholdVoxels === "" && rec.Warning_SmallRoi === "",
+        "基準値が未設定なら警告の 2 列は空（0 と書かない）", rec);
+      check((await page.getByTestId("roifeat-smallroi-warning").count()) === 0, "未設定なら警告の帯は出ない");
+      const sizeText = await page.getByTestId("roifeat-roisize").innerText();
+      check(sizeText.includes("5,760") && sizeText.includes(volumeOf(synth, SEG1).toFixed(1)), "表の上に大きさ", sizeText);
 
       // アプリを通した往復: 書き出した設定ファイルをそのまま設定にして計算し直すと、CSV と全列で差 0・同じハッシュ
       const fileSettings = Object.fromEntries(propsDl.text.split("\n").filter((l) => l.includes("="))
@@ -464,6 +479,59 @@ async function main(): Promise<void> {
     const s7 = await runAndWait(page, () => page.getByTestId("roifeat-run").click());
     check(/キャッシュ|Cached/.test(s7), "取り消した計算の結果が次の要求でキャッシュから返る", s7);
     await page.screenshot({ path: path.join(OUT_DIR, "08-after-cancel.png") });
+
+    console.log("\n[8] 小さい ROI の警告（環境設定で基準値を入れる）");
+    await mainPage.bringToFront();
+    await mainPage.getByTestId("mainscreen-menu-system").click();
+    await mainPage.getByTestId("menu-item-settings").click();
+    await mainPage.getByTestId("settings-dialog").waitFor({ state: "visible", timeout: 10_000 });
+    await mainPage.getByTestId("settings-cat-texture").click();
+    const warnLabel = mainPage.getByText(/^(小さい ROI の警告（ボクセル数）|Small-ROI warning \(voxels\))$/);
+    const warnInput = warnLabel.locator("xpath=../..").locator("input");
+    await warnInput.scrollIntoViewIfNeeded();
+    check((await warnInput.inputValue()) === "", "環境設定の既定は空欄");
+    await warnInput.fill("401");
+    await mainPage.waitForTimeout(800);
+    await mainPage.screenshot({ path: path.join(OUT_DIR, "09-settings.png") });
+    const saved = await api<Record<string, string>>(base, "/api/settings");
+    check(saved["texture.SmallRoiWarnVoxels"] === "401", "環境設定の値が保存される", saved["texture.SmallRoiWarnVoxels"]);
+    await mainPage.getByTestId("dialog-close-button").click();
+
+    const runSeg = async (seg: string) => {
+      await page.bringToFront();
+      await page.locator("select").nth(2).selectOption(seg);
+      await page.getByTestId("roifeat-bincount").locator("input").fill("32");
+      await page.getByTestId("roifeat-bincount").locator("input").blur();
+      await runAndWait(page, () => page.getByTestId("roifeat-run").click());
+      await page.getByTestId("roifeat-csv").click();
+      const dl = await takeDownloads(page, 2);
+      const data = dl.find((f) => !f.name.endsWith("_definitions.csv"));
+      return data ? readRecord(data.text) : null;
+    };
+    const small401 = await runSeg("1");
+    const band = page.getByTestId("roifeat-smallroi-warning");
+    const bandText = (await band.count()) > 0 ? await band.innerText() : "";
+    check(bandText.includes("400") && bandText.includes("401") && /エントロピー/.test(bandText),
+      "400 ボクセル < 401 で警告の帯（ボクセル数と基準値）", bandText);
+    await band.scrollIntoViewIfNeeded().catch(() => {});
+    await page.screenshot({ path: path.join(OUT_DIR, "10-smallroi-warning.png") });
+    check(small401?.Warning_SmallRoi === "1" && small401?.Warning_SmallRoiThresholdVoxels === "401",
+      "CSV の Warning_SmallRoi が 1・基準値 401", small401);
+    check(small401?.Roi_IntensityMaskVoxels === "400"
+      && Math.abs(Number(small401?.Roi_VolumeMm3) - volumeOf(synth, SEG2)) < 1e-6,
+      "小さい ROI のボクセル数 400・体積が理論値", small401);
+    const big401 = await runSeg("0");
+    check((await page.getByTestId("roifeat-smallroi-warning").count()) === 0 && big401?.Warning_SmallRoi === "0",
+      "5760 ボクセルは警告なし・CSV は 0", big401);
+
+    await api(base, "/api/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ "texture.SmallRoiWarnVoxels": "400" }),
+    });
+    const small400 = await runSeg("1");
+    check((await page.getByTestId("roifeat-smallroi-warning").count()) === 0 && small400?.Warning_SmallRoi === "0"
+      && small400?.Warning_SmallRoiThresholdVoxels === "400", "基準値ちょうど（400）は警告なし・CSV は 0", small400);
+    await page.screenshot({ path: path.join(OUT_DIR, "11-boundary.png") });
   } finally {
     await d.stop();
   }

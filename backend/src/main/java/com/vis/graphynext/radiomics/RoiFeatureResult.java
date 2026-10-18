@@ -17,6 +17,7 @@ import java.util.List;
  * @param provenance     版と設定の記録（CSV の Provenance_* 列）
  * @param settingsProperties 計算に実際に使った設定を正規化した RadiomicsJ の {@code .properties} 本文
  *                       （{@link RadiomicsJSettingsSnapshot}）。{@code provenance.settingsSha256} はこの UTF-8 の SHA-256
+ * @param roiSize        ROI の大きさと小さい ROI の警告。返すたびに行と今の環境設定から付け直す（キャッシュの値は使わない）
  */
 public record RoiFeatureResult(
         String radiomicsjVersion,
@@ -26,7 +27,8 @@ public record RoiFeatureResult(
         List<Row> rows,
         Discretisation discretisation,
         Provenance provenance,
-        String settingsProperties) {
+        String settingsProperties,
+        RoiSize roiSize) {
 
     /**
      * @param column  RadiomicsJ の列名（例 {@code IntensityBasedStatistical_Kurtosis}）
@@ -49,8 +51,26 @@ public record RoiFeatureResult(
     public record Provenance(String graphyNextVersion, String radiomicsjVersion, Instant extractedAt,
                              String settingsSha256) {}
 
+    /**
+     * ボクセル数は RadiomicsJ の Diagnostics の値。
+     *
+     * @param initialVoxels      読み込んだマスクのボクセル数（リサンプリング・再セグメントの前）
+     * @param intensityVoxels    強度・テクスチャ特徴を計算したボクセル数（リサンプリング・範囲フィルタ・外れ値除去の後）
+     * @param morphVoxels        形態特徴のマスク（リサンプリング後・再セグメントしない）のボクセル数
+     * @param volumeMm3          {@code morphVoxels} × 計算格子のボクセル体積
+     * @param smallRoiWarnVoxels 環境設定の基準値。未設定なら null
+     * @param smallRoi           {@code intensityVoxels < smallRoiWarnVoxels}。基準値が未設定なら null
+     */
+    public record RoiSize(Long initialVoxels, Long intensityVoxels, Long morphVoxels, Double volumeMm3,
+                          Integer smallRoiWarnVoxels, Boolean smallRoi) {}
+
     RoiFeatureResult asCached() {
         return new RoiFeatureResult(radiomicsjVersion, computedAt, true, label, rows, discretisation,
-                provenance, settingsProperties);
+                provenance, settingsProperties, roiSize);
+    }
+
+    RoiFeatureResult withRoiSize(RoiSize size) {
+        return new RoiFeatureResult(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation,
+                provenance, settingsProperties, size);
     }
 }
