@@ -141,7 +141,11 @@ class RoiFeatureServiceTest {
 
     private static long files(Path dir) throws Exception {
         if (!Files.isDirectory(dir)) return 0;
-        try (Stream<Path> s = Files.list(dir)) { return s.filter(p -> p.toString().endsWith(".ckpt")).count(); }
+        // 書き込み中の一時ファイル（.tmp-….ckpt）は数えない。数えると書き終わる前にキャッシュを読みに行く。
+        try (Stream<Path> s = Files.list(dir)) {
+            return s.map(p -> p.getFileName().toString())
+                    .filter(n -> n.endsWith(".ckpt") && !n.startsWith(CacheStore.TMP_PREFIX)).count();
+        }
     }
 
     @Test
