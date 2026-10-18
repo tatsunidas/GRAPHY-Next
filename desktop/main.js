@@ -126,6 +126,7 @@ const VIEWER_DEFAULTS = {
   geometry3d: { width: 1100, height: 800 },
   // GLAM 解析は図を横に並べるので、やや幅広を既定にする。
   glam: { width: 1250, height: 900 },
+  "radiomics-features": { width: 1250, height: 900 },
 };
 
 /** 同梱 / 開発時の backend jar のパスを解決する。 */

@@ -110,6 +110,7 @@ import { PluginSaveConfirmDialog, type PluginSaveRequest } from "./PluginSaveCon
 import { Viewer2DMenuBar } from "./Viewer2DMenuBar";
 import { RoiManagerPanel } from "./RoiManagerPanel";
 import { GLAM_CTX_KEY } from "../radiomics/GlamAnalysisScreen";
+import { ROI_FEATURE_CTX_KEY } from "../radiomics/RoiFeatureScreen";
 import { useI18n } from "../i18n/i18n";
 import { desktop } from "../desktopBridge";
 import { closeAllPluginWindows } from "../plugins/pluginWindowApi";
@@ -1700,6 +1701,19 @@ function TileGrid({
         const d = desktop();
         if (d?.openViewer) void d.openViewer("glam");
         else window.open(`${window.location.pathname}#glam`, "graphy-glam");
+      },
+      // Radiomics 特徴量（ROI）: GLAM 解析と同じく別ウィンドウ。キーは別にして取り合わない。
+      openRoiFeatures: () => {
+        const tid = resolveTargets()[0];
+        const tile = patient.tiles.find((tl) => tl.id === tid);
+        if (!tile) { comingSoon(t("roiFeat.menu")); return; }
+        localStorage.setItem(ROI_FEATURE_CTX_KEY, JSON.stringify({
+          studyInstanceUid: tile.study.studyInstanceUid,
+          seriesInstanceUid: tile.series.seriesInstanceUid,
+        }));
+        const d = desktop();
+        if (d?.openViewer) void d.openViewer("radiomics-features");
+        else window.open(`${window.location.pathname}#radiomics-features`, "graphy-radiomics-features");
       },
       // レポート: 対象（選択→無ければ先頭）タイルのスタディでレポート編集ダイアログを開く。
       copyImage: () => {

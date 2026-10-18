@@ -47,7 +47,7 @@ public class MapCheckpointStore {
     static final String ENGINE_VERSION = "tex-ckpt-1";
 
     /** ROI 特徴量表の計算の仕方（入力の組み立て・結果の形）を変えたら上げる。 */
-    static final String FEATURE_ENGINE_VERSION = "roi-features-1";
+    static final String FEATURE_ENGINE_VERSION = "roi-features-2";
 
     private final Checkpoints checkpoints;
     private final String radiomicsjVersion;
