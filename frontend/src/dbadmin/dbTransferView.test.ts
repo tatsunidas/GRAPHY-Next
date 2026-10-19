@@ -8,10 +8,11 @@ describe("dbTransferView", () => {
     expect(transferReasonKey("target-is-current")).toBe("dbTransfer.reason.targetIsCurrent");
     expect(transferReasonKey("study-not-found: 1.2.3")).toBe("dbTransfer.reason.studyNotFound");
     expect(transferReasonKey("not-enough-space: 10 / 5")).toBe("dbTransfer.reason.notEnoughSpace");
+    expect(transferReasonKey("cache-mode-unsupported")).toBe("dbTransfer.reason.cacheModeUnsupported");
     expect(transferReasonKey("DICOM ファイルが見つかりません: x")).toBeNull();
     for (const c of ["target-missing", "target-not-absolute", "target-not-found", "target-not-writable",
       "target-has-semicolon", "target-is-current", "target-not-db-folder", "not-enough-space",
-      "study-not-found", "local-only"]) {
+      "study-not-found", "local-only", "cache-mode-unsupported"]) {
       const k = transferReasonKey(c)!;
       expect(ja[k], `ja ${k}`).toBeTruthy();
       expect(en[k], `en ${k}`).toBeTruthy();

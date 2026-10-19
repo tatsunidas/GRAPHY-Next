@@ -24,6 +24,9 @@ public class DicomProperties {
     /** ローカル保管庫のルートディレクトリ（standalone）。受信 DICOM はこの下に保存する。 */
     private String storageDir = "./data/dicom";
 
+    /** 動画 MP4 キャッシュ（{@code .cache/video}）の上限バイト数。0 は無制限（既定）。 */
+    private long videoCacheMaxBytes = 0;
+
     /**
      * C-STORE で受理する Storage SOP Class 設定（クラスパスリソース）。
      * all-storage("*") ではなく明示列挙にすることで C-GET/C-MOVE SCP と整合させる。
@@ -64,6 +67,14 @@ public class DicomProperties {
 
     public void setStorageDir(String storageDir) {
         this.storageDir = storageDir;
+    }
+
+    public long getVideoCacheMaxBytes() {
+        return videoCacheMaxBytes;
+    }
+
+    public void setVideoCacheMaxBytes(long videoCacheMaxBytes) {
+        this.videoCacheMaxBytes = videoCacheMaxBytes;
     }
 
     public String getStorageSopClassesResource() {

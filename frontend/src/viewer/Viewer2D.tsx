@@ -16,6 +16,7 @@ import {
   CobbAngleTool,
   MagnifyTool,
   EllipticalROITool,
+  CircleROITool,
   RectangleROITool,
   ProbeTool,
   PlanarFreehandROITool,
@@ -28,12 +29,15 @@ import { ensureStackSegmentation, disposeViewportSegmentation, noteSegViewport }
 import { WandTool, commitWand } from "./wandTool";
 import { LevelSetTool, commitLevelSet } from "./levelSetsTool";
 import { TOOL_IDS } from "./toolIds";
+import { OverflowRow } from "./OverflowRow";
 import { ToolIcon } from "../icons/ToolIcon";
 import { UI_ICON_FILES, ACTIVE_ICON_STYLE } from "../icons/toolIcons";
 import { emitToast } from "./toast";
 import { partitionByLock } from "./roiLock";
 import { installTrueMagnification } from "./magnifier";
-import { ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID } from "./toolIds";
+import { ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID, SCISSORS_TOOL_ID } from "./toolIds";
+import { commitThreshold } from "./thresholdTool";
+import { getScissors, setScissorsActive, subscribeScissors, scissorsToolName, scissorsStrategy, SCISSORS_TOOL_NAMES } from "./scissorsStore";
 import { setViewerContext, clearViewerContext, getViewerContext, type ViewerContext } from "./viewerContext";
 import { getRoiMaskMeta, setRoiMaskMeta, subscribeRoiMaskStore } from "./roiMaskStore";
 import { noteFocusedTile } from "./focusedTile";
@@ -63,6 +67,9 @@ import { registerReferenceSource, bumpReference, subscribeReference, computeRefe
 import { registerViewerCommands, type ViewerCommands, type ViewerDerivedSeriesRequest, type ViewerDerivedSeriesResult, type ViewerOverlay, type ViewerPixelData, type ViewerSrRequest, type ViewerSrResult, type ViewerPixelDataOptions, type ViewerAngioReportRequest, type ViewerPresentationStateRequest, type ViewerRoi, type ViewerSpatialCalibration, type ViewerTargetInfo, type ViewerViewState, type ViewerXaState, type ViewerXaCine, ViewerLabelVolume, ViewerLabelVolumeResult } from "./viewerCommands";
 import { buildPluginMeta, computeCalipers, hasShapeCalipers, pickPluginMeta, readRoiStats, roiPointsPx } from "./roiRead";
 import { CONTOUR_TOOL_NAMES } from "./roiContourTools";
+import { POINT_ROI_TOOL_NAME } from "./pointRoiTool";
+import { annotationRoiKind } from "./roiKind";
+import { convertMeasureToRoi } from "./measureToRoi";
 import { installInteriorGrab, installSelectionGestures } from "./roiInteriorGrab";
 import { measureToolConfig } from "./roiStatsTextBox";
 import { useRoiStatsDisplay } from "./roiStatsDisplay";
@@ -154,6 +161,7 @@ const MEASURE_TOOLS = [
   AngleTool.toolName,
   CobbAngleTool.toolName,
   EllipticalROITool.toolName,
+  CircleROITool.toolName,
   RectangleROITool.toolName,
   ProbeTool.toolName,
   // 輪郭系（ポリゴン/フリーハンド × 閉じる/閉じない）。viewer/roiContourTools.ts
@@ -161,12 +169,14 @@ const MEASURE_TOOLS = [
   CONTOUR_TOOL_NAMES.polyline,
   CONTOUR_TOOL_NAMES.freehand,
   CONTOUR_TOOL_NAMES.freeLine,
+  // 点 ROI（Probe と同じ操作。計測ではなく ROI として扱う）。viewer/pointRoiTool.ts
+  POINT_ROI_TOOL_NAME,
 ];
 // 左ドラッグに割り当て可能なツール一覧（操作＋計測＋ブラシ＋3D Wand＋Level Sets）。
-const PRIMARY_TOOLS = [WindowLevelTool.toolName, PanTool.toolName, ZoomTool.toolName, MagnifyTool.toolName, ...MEASURE_TOOLS, BrushTool.toolName, WandTool.toolName, LevelSetTool.toolName];
+const PRIMARY_TOOLS = [WindowLevelTool.toolName, PanTool.toolName, ZoomTool.toolName, MagnifyTool.toolName, ...MEASURE_TOOLS, BrushTool.toolName, WandTool.toolName, LevelSetTool.toolName, ...SCISSORS_TOOL_NAMES];
 // 描画/計測/セグメンテーション系ツール（左ドラッグ占有）。これらが有効な間は per-tile の Pan↔W/L 切替を抑止し、
 // 先にツールバーで解除するよう促す（グローバルツールが優先＝ナビ切替が黙って効かないのを避ける）。
-const BLOCKING_TOOLS = new Set<string>([...MEASURE_TOOLS, BrushTool.toolName, ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID]);
+const BLOCKING_TOOLS = new Set<string>([...MEASURE_TOOLS, BrushTool.toolName, ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID, SCISSORS_TOOL_ID]);
 
 // 単一の RenderingEngine を全ビューポートで共有する（WebGL コンテキストを 1 つに保つ＝省メモリ）。
 export const ENGINE_ID = "graphy-engine";
@@ -481,6 +491,7 @@ export function Viewer2D({
   thickSlab,
   refreshKey,
   pendingImages = false,
+  frameStack = false,
 }: {
   imageIds: string[];
   imageIndex: number;
@@ -525,6 +536,8 @@ export function Viewer2D({
    * 逆に、本当に画像が無いときに待ち続けるのも嘘なので、区別は呼び出し側が持つ。
    */
   pendingImages?: boolean;
+  /** スタックが時間方向のフレーム（XA・US のシネ）か。3D Wand を弾くのに使う（z を空間とみなせない）。 */
+  frameStack?: boolean;
 }) {
   const { t } = useI18n();
   // 合成スライス上でのアノテーション作成をブロックする判定を、setActiveTool から最新参照する。
@@ -543,6 +556,8 @@ export function Viewer2D({
   const swapPendingRef = useRef(0);
   // 識別子は再レンダで変わるが init を再実行しないよう ref で最新を持つ。
   const imageIdsRef = useRef(imageIds);
+  const frameStackRef = useRef(frameStack);
+  frameStackRef.current = frameStack;
   imageIdsRef.current = imageIds;
   const indexRef = useRef(imageIndex);
   indexRef.current = imageIndex;
@@ -1240,6 +1255,11 @@ export function Viewer2D({
             // Level Sets（対話型・Fast Marching、L1 時点）。passive で追加、setActiveTool で Primary 割当。
             tg.addTool(LevelSetTool.toolName);
             tg.setToolPassive(LevelSetTool.toolName);
+            // Scissors（矩形・円・球）。3 種とも passive で追加、setActiveTool で形に応じた 1 つを Primary 割当。
+            for (const tn of SCISSORS_TOOL_NAMES) {
+              tg.addTool(tn);
+              tg.setToolPassive(tn);
+            }
             tg.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
             tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
             // 右クリック=Zoom に加えて、2 本指タッチでピンチ Zoom ＋ Pan（§3.3）。
@@ -2307,14 +2327,16 @@ export function Viewer2D({
     const isWand3d = toolName === WAND3D_TOOL_ID;
     const isWand = isWand2d || isWand3d;
     const isLevelSet = toolName === LEVELSET2D_TOOL_ID;
+    const isScissors = toolName === SCISSORS_TOOL_ID;
+    const scissors = getScissors();
     // ThickSlab（合成スライス）有効中は ROI・計測・ブラシ・Wand・Level Sets の作成/編集をブロックする。
     // 合成画像は単一の実スライス(SOP)に一意対応せず、描いた注釈を安全に保存できないため。
-    const isAnnotationTool = MEASURE_TOOLS.includes(toolName) || isBrush || isEraser || isWand || isLevelSet;
+    const isAnnotationTool = MEASURE_TOOLS.includes(toolName) || isBrush || isEraser || isWand || isLevelSet || isScissors;
     if (thickSlabRef.current && isAnnotationTool) {
       emitToast(t("series.thickSlab.roiBlocked"));
       return;
     }
-    const primary = isEraser ? BrushTool.toolName : isWand ? WandTool.toolName : isLevelSet ? LevelSetTool.toolName : toolName;
+    const primary = isEraser ? BrushTool.toolName : isWand ? WandTool.toolName : isLevelSet ? LevelSetTool.toolName : isScissors ? scissorsToolName(scissors.shape) : toolName;
     const applyBindings = () => {
       try {
         for (const tn of PRIMARY_TOOLS) {
@@ -2341,6 +2363,9 @@ export function Viewer2D({
             activeStrategy: isEraser ? "ERASE_INSIDE_CIRCLE" : "FILL_INSIDE_CIRCLE",
           });
         }
+        if (isScissors) {
+          tg.setToolConfiguration(primary, { activeStrategy: scissorsStrategy(scissors.op) });
+        }
         if (isWand) {
           tg.setToolConfiguration(WandTool.toolName, { mode: isWand3d ? "3d" : "2d" }, true);
         }
@@ -2349,16 +2374,30 @@ export function Viewer2D({
         /* ツールグループ未準備時は無視 */
       }
     };
+    // 3D Wand は動画（フレームが時間方向）では使えない。時間を z とみなして塗ってしまうため弾く。
+    if (isWand3d && frameStackRef.current) {
+      emitToast(t("viewer2d.tool.wand3dVideo"));
+      return;
+    }
     // 3D Wand は規則的ボリュームでないシリーズでは動かない（source を volume 走査できない）。UI で弾く。
     if (isWand3d && !utilities.isValidVolume(imageIdsRef.current)) {
       emitToast(t("viewer2d.tool.needVolume"));
       return;
     }
+    // 球は前後のスライスにも及ぶので、3D Wand と同じく動画・規則的でないシリーズでは使えない。
+    if (isScissors && scissors.shape === "sphere") {
+      if (frameStackRef.current || !utilities.isValidVolume(imageIdsRef.current)) {
+        emitToast(t("viewer2d.tool.needVolume"));
+        return;
+      }
+    }
+    setScissorsActive(isScissors);
     // Wand/Level Sets 以外のツールへ切り替えるときは、開いているセッションを確定して閉じる。
     if (!isWand) commitWand();
+    commitThreshold(); // 開いたままのしきい値ダイアログは確定して閉じる（Wand と同じ）
     if (!isLevelSet) commitLevelSet();
     activeToolRef.current = toolName; // per-tile Pan↔W/L 切替の抑止判定＋スタック再構築時の復元に使う。
-    if (isBrush || isEraser || isWand || isLevelSet) {
+    if (isBrush || isEraser || isWand || isLevelSet || isScissors) {
       // Mask(labelmap) を現在スタックに対し保証してからブラシ/Wand/Level Sets を有効化。
       void ensureStackSegmentation(viewportIdRef.current, imageIdsRef.current).then(applyBindings);
     } else {
@@ -2366,6 +2405,17 @@ export function Viewer2D({
     }
   };
   setActiveToolRef.current = setActiveTool;
+  // ダイアログで形・操作を変えたら、Scissors が有効なタイルのツール割当を張り直す。
+  // active の切替（setActiveTool 自身が立てる）では張り直さない。ツール切替の途中で自分を呼び戻してしまう。
+  useEffect(() => {
+    let prev = getScissors();
+    return subscribeScissors(() => {
+      const cur = getScissors();
+      const changed = cur.shape !== prev.shape || cur.op !== prev.op;
+      prev = cur;
+      if (changed && activeToolRef.current === SCISSORS_TOOL_ID) setActiveToolRef.current?.(SCISSORS_TOOL_ID);
+    });
+  }, []);
 
   // ブラシ径（px）。
   const setBrushSize = (size: number) => {
@@ -2501,12 +2551,14 @@ export function Viewer2D({
     return uid;
   };
 
-  // 注釈（計測 ROI）を全消去。ロック中の ROI は残す。
-  const clearAnnotations = () => {
+  // 注釈を種別ごとに全消去する（ROI だけ / 計測だけ）。ロック中は残す。
+  // 種別不明（矢印など）は ROI 側で消える——全消去で残り続けるものを作らない。
+  const clearAnnotations = (scope: "roi" | "measure") => {
     const v = vp();
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const uids = (csAnnotation.state.getAllAnnotations() as any[])
+        .filter((a) => (annotationRoiKind(a) === "measure") === (scope === "measure"))
         .map((a) => a?.annotationUID as string | undefined)
         .filter((u): u is string => !!u);
       const { removable, kept } = partitionByLock(uids);
@@ -2522,6 +2574,27 @@ export function Viewer2D({
     // 発火せず、全消去が保存されなかった。1 件ずつ消す今も、経路ごとの発火差に依存しない）。
     const pk = roiContextRef.current?.patientKey;
     if (pk) scheduleRoiSave(pk);
+  };
+
+  /** 計測を ROI に変える。失敗は理由つきでトーストに出し、null を返す。 */
+  const convertMeasureToRoiCmd = (measureUid: string): string | null => {
+    if (roiEditBlocked()) return null;
+    const v = vp();
+    if (!v) return null;
+    const r = convertMeasureToRoi(measureUid, {
+      viewport: v as unknown as Parameters<typeof convertMeasureToRoi>[1]["viewport"],
+      imageIds: imageIdsRef.current,
+      patientKey: roiContextRef.current?.patientKey ?? "",
+      seriesLabel: roiContextRef.current?.seriesLabel,
+    });
+    if (!r.ok) {
+      emitToast(t(`roi.toRoi.${r.reason}`));
+      return null;
+    }
+    const imageId = (csAnnotation.state.getAnnotation(r.uid) as { metadata?: { referencedImageId?: string } } | undefined)
+      ?.metadata?.referencedImageId;
+    if (imageId) afterPaste(r.uid, imageId);
+    return r.uid;
   };
 
   // H65: ラベルの volume を Mask として読み込む（格子は IPP で照合する。1 枚ずれていれば拒否）
@@ -2543,7 +2616,7 @@ export function Viewer2D({
     publishAnalysisResult: publishPluginAnalysis,
     setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
-    copyRoi, pasteRoi, duplicateRoi,
+    copyRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd,
     undo, redo,
   });
   commandsRef.current = {
@@ -2557,7 +2630,7 @@ export function Viewer2D({
     publishAnalysisResult: publishPluginAnalysis,
     setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
-    copyRoi, pasteRoi, duplicateRoi,
+    copyRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd,
     undo, redo,
   };
   useEffect(() => {
@@ -2600,7 +2673,8 @@ export function Viewer2D({
       getRois: () => commandsRef.current.getRois(),
       getRoiMeta: (u, p) => commandsRef.current.getRoiMeta(u, p),
       setRoiMeta: (u, p, patch) => commandsRef.current.setRoiMeta(u, p, patch),
-      clearAnnotations: () => commandsRef.current.clearAnnotations(),
+      clearAnnotations: (s) => commandsRef.current.clearAnnotations(s),
+      convertMeasureToRoi: (u) => commandsRef.current.convertMeasureToRoi(u),
       copyRoi: (u) => commandsRef.current.copyRoi(u),
       pasteRoi: () => commandsRef.current.pasteRoi(),
       duplicateRoi: (u) => commandsRef.current.duplicateRoi(u),
@@ -2928,6 +3002,7 @@ export function Viewer2D({
           <button
             onClick={() => setShowInfo((v) => !v)}
             aria-pressed={showInfo}
+            data-testid="viewer-info-toggle"
             title={t("viewer.info.toggle")}
             style={{ ...infoBtn, ...(showInfo ? infoBtnOn : null), flexShrink: 0, ...(compact ? infoBtnCompact : null) }}
           >
@@ -2940,7 +3015,7 @@ export function Viewer2D({
 
         {/* 操作バー（canvas の外＝ツール入力と競合しない）。showControls=false で畳む。 */}
         {showControls && (
-        <div style={toolbar}>
+        <OverflowRow style={toolbar} moreTestId="viewer-toolbar-more">
           <button onClick={fit} style={btn} title={t("viewer.fit")}><ToolIcon file={UI_ICON_FILES.fit} size={16} /></button>
           <button
             onClick={togglePan}
@@ -2973,10 +3048,10 @@ export function Viewer2D({
             {t("viewer.lut")}
           </button>
           <button onClick={reset} style={btn} title={t("viewer.reset")}><ToolIcon file={UI_ICON_FILES.reset} size={16} /></button>
-          <span style={{ width: 1, alignSelf: "stretch", background: "#dde4ea", margin: "0 2px" }} />
+          <span data-sep="" style={{ width: 1, alignSelf: "stretch", background: "#dde4ea", margin: "0 2px" }} />
           <button data-testid="viewer-undo-btn" onClick={undo} disabled={!canUndo} style={btn} title={t("viewer.undo")}>↶</button>
           <button data-testid="viewer-redo-btn" onClick={redo} disabled={!canRedo} style={btn} title={t("viewer.redo")}>↷</button>
-        </div>
+        </OverflowRow>
         )}
       </div>
 

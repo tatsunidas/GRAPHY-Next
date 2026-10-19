@@ -47,6 +47,14 @@ public final class ParametricMapFrameExpander {
     }
 
     /** Parametric Map か（SOP Class で判定する。ヘッダだけを読むと Float Pixel Data は除かれているため）。 */
+    /**
+     * この展開器で扱うか: Parametric Map と Confocal Microscopy Image（CFM、fw/microscopy-cfm.md）。
+     * どちらもマルチフレームで、値は Float Pixel Data（CFM は整数の Pixel Data もある）。
+     */
+    public static boolean handles(Attributes ds) {
+        return isParametricMap(ds) || ConfocalGeometry.isConfocal(ds);
+    }
+
     public static boolean isParametricMap(Attributes ds) {
         return ds != null && UID.ParametricMapStorage.equals(ds.getString(Tag.SOPClassUID));
     }
@@ -95,7 +103,7 @@ public final class ParametricMapFrameExpander {
         }
         List<Attributes> pm = new ArrayList<>();
         for (Attributes ds : instances) {
-            if (isParametricMap(ds)) {
+            if (handles(ds)) {
                 pm.add(ds);
             }
         }
@@ -105,7 +113,7 @@ public final class ParametricMapFrameExpander {
         Attributes first = pm.get(0);
         int rows = first.getInt(Tag.Rows, 0);
         int cols = first.getInt(Tag.Columns, 0);
-        double[] iop = SegFrameExpander.sharedIop(first);
+        double[] iop = ConfocalGeometry.orientation(first);
         if (rows <= 0 || cols <= 0 || iop == null || iop.length < 6) {
             return null;
         }
@@ -124,7 +132,7 @@ public final class ParametricMapFrameExpander {
             int nf = Math.max(1, ds.getInt(Tag.NumberOfFrames, 1));
             int c = ds.getInt(Tag.AcquisitionNumber, 1);
             for (int i = 0; i < nf; i++) {
-                double[] ipp = SegFrameExpander.perFrameIpp(ds, i);
+                double[] ipp = ConfocalGeometry.framePosition(ds, i);
                 if (ipp == null || ipp.length < 3) {
                     return null; // 幾何の無い PM はこの展開器では扱わない（通常の経路で 1 枚として出る）
                 }
@@ -176,7 +184,7 @@ public final class ParametricMapFrameExpander {
      * @param ipp    その位置（null なら先頭フレームの位置）
      */
     public static byte[] blankFrame(Attributes header, double[] ipp) {
-        if (!isParametricMap(header)) {
+        if (!handles(header)) {
             return null;
         }
         int rows = header.getInt(Tag.Rows, 0);
@@ -190,10 +198,19 @@ public final class ParametricMapFrameExpander {
         ds.setString(Tag.SOPInstanceUID, VR.UI, UIDUtils.createUID());
         ds.setInt(Tag.InstanceNumber, VR.IS, 0);
         if (ipp != null && ipp.length == 3) {
-            Attributes pp = new Attributes();
-            pp.setDouble(Tag.ImagePositionPatient, VR.DS, ipp);
             Attributes frame = new Attributes();
-            frame.newSequence(Tag.PlanePositionSequence, 1).add(pp);
+            if (ConfocalGeometry.isConfocal(header)) {
+                // 表示用の位置（mm）をスライド座標に戻す（Z は µm）
+                Attributes sp = new Attributes();
+                sp.setDouble(Tag.XOffsetInSlideCoordinateSystem, VR.DS, ipp[0]);
+                sp.setDouble(Tag.YOffsetInSlideCoordinateSystem, VR.DS, ipp[1]);
+                sp.setDouble(Tag.ZOffsetInSlideCoordinateSystem, VR.DS, ipp[2] * 1000.0);
+                frame.newSequence(Tag.PlanePositionSlideSequence, 1).add(sp);
+            } else {
+                Attributes pp = new Attributes();
+                pp.setDouble(Tag.ImagePositionPatient, VR.DS, ipp);
+                frame.newSequence(Tag.PlanePositionSequence, 1).add(pp);
+            }
             ds.newSequence(Tag.PerFrameFunctionalGroupsSequence, 1).add(frame);
         }
         ByteBuffer nan = ByteBuffer.allocate(rows * cols * 4).order(ByteOrder.LITTLE_ENDIAN);
@@ -270,6 +287,11 @@ public final class ParametricMapFrameExpander {
                 for (int i = 0; i < n; i++) {
                     v[i] = b.getFloat((int) (off + (long) i * 4));
                 }
+            } else if (!ds.contains(Tag.DoubleFloatPixelData) && ConfocalGeometry.isConfocal(ds)) {
+                // 規格どおりの整数の CFM（8 ビット。16 ビットも読む）
+                if (!readIntegerFrame(ds, frame, n, v)) {
+                    return null;
+                }
             } else {
                 byte[] dp = ds.getBytes(Tag.DoubleFloatPixelData);
                 if (dp == null) {
@@ -306,7 +328,7 @@ public final class ParametricMapFrameExpander {
      * @param ds 画素（Float Pixel Data）まで読んだデータセット
      */
     public static byte[] extractFrame(Attributes ds, int frame) {
-        if (!isParametricMap(ds)) {
+        if (!handles(ds)) {
             return null;
         }
         int rows = ds.getInt(Tag.Rows, 0);
@@ -356,8 +378,8 @@ public final class ParametricMapFrameExpander {
         out.setInt(Tag.BitsAllocated, VR.US, 32);
         // ★ PixelRepresentation・BitsStored・HighBit は書かない（Float Pixel Data には無い属性。
         //   書くと表示側が整数として読む）
-        double[] ipp = SegFrameExpander.perFrameIpp(ds, frame);
-        double[] iop = SegFrameExpander.sharedIop(ds);
+        double[] ipp = ConfocalGeometry.framePosition(ds, frame);
+        double[] iop = ConfocalGeometry.orientation(ds);
         double[] psp = SegFrameExpander.sharedPixelSpacing(ds);
         if (ipp != null) out.setDouble(Tag.ImagePositionPatient, VR.DS, ipp);
         if (iop != null && iop.length == 6) out.setDouble(Tag.ImageOrientationPatient, VR.DS, iop);
@@ -378,6 +400,11 @@ public final class ParametricMapFrameExpander {
             // （MPR が真っ白になった）。実数の値には LINEAR_EXACT（PS3.3 C.11.2.1.3.2）。
             out.setString(Tag.VOILUTFunction, VR.CS, "LINEAR_EXACT");
         }
+        if (ConfocalGeometry.isConfocal(ds)) {
+            String orig = ds.getString(Tag.ImageComments, "");
+            out.setString(Tag.ImageComments, VR.LT,
+                    (orig.isBlank() ? "" : orig + " / ") + ConfocalGeometry.DISPLAY_NOTE);
+        }
         out.setBytes(Tag.FloatPixelData, VR.OF, outPx.array());
         try {
             ByteArrayOutputStream bos = new ByteArrayOutputStream(n * 4 + 4096);
@@ -389,5 +416,31 @@ public final class ParametricMapFrameExpander {
         } catch (IOException e) {
             return null;
         }
+    }
+
+    /** 整数の Pixel Data（8・16 ビット、符号の有無）の 1 フレームを float に読む。 */
+    private static boolean readIntegerFrame(Attributes ds, int frame, int n, float[] out) throws IOException {
+        byte[] px = ds.getBytes(Tag.PixelData);
+        if (px == null) {
+            return false;
+        }
+        int bits = ds.getInt(Tag.BitsAllocated, 8);
+        boolean signed = ds.getInt(Tag.PixelRepresentation, 0) == 1;
+        int bpp = bits / 8;
+        long off = (long) frame * n * bpp;
+        if ((bits != 8 && bits != 16) || off + (long) n * bpp > px.length) {
+            return false;
+        }
+        ByteBuffer b = ByteBuffer.wrap(px).order(ds.bigEndian() ? ByteOrder.BIG_ENDIAN : ByteOrder.LITTLE_ENDIAN);
+        for (int i = 0; i < n; i++) {
+            int p = (int) (off + (long) i * bpp);
+            if (bits == 8) {
+                out[i] = signed ? px[p] : px[p] & 0xFF;
+            } else {
+                short s = b.getShort(p);
+                out[i] = signed ? s : s & 0xFFFF;
+            }
+        }
+        return true;
     }
 }

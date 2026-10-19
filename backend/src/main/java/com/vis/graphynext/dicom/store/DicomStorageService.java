@@ -41,11 +41,18 @@ public class DicomStorageService {
     private final DicomInstanceRepository repo;
     private final StorageLayout layout;
     private final Path storageDir;
+    /** Drive バックアップへの合図。無くても動く（テスト・web モード）。 */
+    private org.springframework.context.ApplicationEventPublisher events;
 
     public DicomStorageService(DicomInstanceRepository repo, StorageLayout layout) {
         this.repo = repo;
         this.layout = layout;
         this.storageDir = layout.root();
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setEvents(org.springframework.context.ApplicationEventPublisher events) {
+        this.events = events;
     }
 
     /**
@@ -133,6 +140,9 @@ public class DicomStorageService {
         if (backup != null) {
             Files.deleteIfExists(backup);
         }
+        if (events != null) {
+            events.publishEvent(new com.vis.graphynext.gdrive.StorageChanged(layout.toStored(dest)));
+        }
         log.debug("indexed sop={} study={} -> {}", iuid, studyUid, dest); // 検証済み: 大量取込で冗長なため DEBUG
         return saved;
     }
@@ -162,6 +172,50 @@ public class DicomStorageService {
         } catch (IOException e) {
             log.error("元のファイルを戻せません（退避先に残っています）: {} -> {}", backup, dest, e);
         }
+    }
+
+    /** 取り込み用の一時ファイルを作る（保管庫内 {@code .import}。同一ボリュームなので {@link #ingest} の移動がコピーにならない）。 */
+    public Path newImportTempFile() throws IOException {
+        Path tmpDir = storageDir.resolve(".import");
+        Files.createDirectories(tmpDir);
+        return Files.createTempFile(tmpDir, "imp-", ".dcm");
+    }
+
+    /** 一時ファイルの置き場（空き容量の確認用）。 */
+    public Path importTempDir() {
+        return storageDir.resolve(".import");
+    }
+
+    /**
+     * {@code .import} に残った一時ファイル（異常終了の取りこぼし）のうち、最終更新が {@code olderThan} より前のものを消す。
+     * 取り込み中のファイルを消さないよう、新しいものには触れない。消した数を返す。
+     */
+    public int sweepImportTemp(java.time.Duration olderThan) {
+        Path dir = importTempDir();
+        if (!Files.isDirectory(dir)) {
+            return 0;
+        }
+        java.time.Instant limit = java.time.Instant.now().minus(olderThan);
+        int n = 0;
+        try (java.util.stream.Stream<Path> s = Files.list(dir)) {
+            for (Path p : (Iterable<Path>) s::iterator) {
+                String name = p.getFileName().toString();
+                if (!name.startsWith("imp-") || !Files.isRegularFile(p)) {
+                    continue;
+                }
+                try {
+                    if (Files.getLastModifiedTime(p).toInstant().isBefore(limit)) {
+                        Files.deleteIfExists(p);
+                        n++;
+                    }
+                } catch (IOException e) {
+                    log.debug("一時ファイルを消せません: {}", p, e);
+                }
+            }
+        } catch (IOException e) {
+            log.warn(".import を走査できません", e);
+        }
+        return n;
     }
 
     /**
@@ -283,6 +337,7 @@ public class DicomStorageService {
                 insts.addAll(repo.findBySeries(studyUid, se));
             }
         }
+        layout.prefetch(insts, () -> false); // モード A: 手元に無いものを先にまとめて取り寄せる（失敗は例外）
         return insts.stream()
                 .map(layout::resolveForRead)
                 .filter(java.util.Objects::nonNull)
@@ -803,7 +858,7 @@ public class DicomStorageService {
                 return segBlankDicom(ds, rows, cols, ipp);
             }
             // Parametric Map は float の NaN で埋めた 1 フレーム（16 bit で書くと形式が食い違う）
-            if (com.vis.graphynext.dicom.ParametricMapFrameExpander.isParametricMap(ds)) {
+            if (com.vis.graphynext.dicom.ParametricMapFrameExpander.handles(ds)) {
                 return com.vis.graphynext.dicom.ParametricMapFrameExpander.blankFrame(ds, ipp);
             }
             int bits = ds.getInt(Tag.BitsAllocated, 16);
@@ -936,7 +991,7 @@ public class DicomStorageService {
             return mosaicTileDicom(sopUid, frame);
         }
         // Parametric Map は Float Pixel Data を float の単一フレームにして返す（fw/nifti-import.md §3.1）。
-        if (com.vis.graphynext.dicom.ParametricMapFrameExpander.isParametricMap(head)) {
+        if (com.vis.graphynext.dicom.ParametricMapFrameExpander.handles(head)) {
             return parametricMapFrameDicom(sopUid, frame);
         }
         // NM 断層は per-frame の幾何を持たないので、こちらで作って与える（H28）。

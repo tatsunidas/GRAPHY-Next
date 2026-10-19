@@ -3,7 +3,8 @@
  * Author: Tatsuaki Kobayashi
  */
 import { describe, it, expect } from "vitest";
-import { alignToStack, boolOn, scopeZFromForeground } from "./maskScope";
+import { alignToStack, boolOn, combineLabelSlices, scopeZFromForeground, withTemp } from "./maskScope";
+import { isSegmentForeground } from "./maskStatsCore";
 
 describe("scopeZFromForeground", () => {
   it("前景が無ければ null（メタを変えない）", () => {
@@ -65,5 +66,41 @@ describe("1 枚だけのマスク 3 つを OR すると、元の 3 スライス�
   });
   it("XOR は重なりが無いので OR と同じ", () => {
     expect(combine("xor", split)).toEqual(original);
+  });
+});
+
+describe("isSegmentForeground / combineLabelSlices", () => {
+  it("前景: segment 指定ならその値だけ、無ければ 0 より大きいすべて", () => {
+    expect(isSegmentForeground(2, 2)).toBe(true);
+    expect(isSegmentForeground(1, 2)).toBe(false);
+    expect(isSegmentForeground(0, 2)).toBe(false);
+    expect(isSegmentForeground(3)).toBe(true);
+    expect(isSegmentForeground(0)).toBe(false);
+  });
+
+  it("segment 指定の入力は、同じマスクの別 segment を前景に数えない", () => {
+    const a = { labels: [1, 2, 2, 0], segIndex: 2 };
+    const b = { labels: [2, 2, 1, 1] }; // マスク全体（非ゼロ）
+    expect(Array.from(combineLabelSlices("and", [a, b], 4))).toEqual([0, 1, 1, 0]);
+    expect(Array.from(combineLabelSlices("or", [a, b], 4))).toEqual([1, 1, 1, 1]);
+    expect(Array.from(combineLabelSlices("xor", [a, b], 4))).toEqual([1, 0, 0, 1]);
+  });
+
+  it("labels が null（そのスライスは背景）や短い配列は背景として数える", () => {
+    expect(Array.from(combineLabelSlices("or", [{ labels: null }, { labels: [1, 1] }], 3))).toEqual([1, 1, 0]);
+    expect(Array.from(combineLabelSlices("and", [{ labels: null }, { labels: [1, 1, 1] }], 3))).toEqual([0, 0, 0]);
+  });
+});
+
+describe("withTemp", () => {
+  it("成功でも失敗でも一時のものを片付ける。作れなければ fn を呼ばず null", async () => {
+    const disposed: string[] = [];
+    const dispose = (id: string) => disposed.push(id);
+    expect(await withTemp(async () => "t1", dispose, (id) => `done:${id}`)).toBe("done:t1");
+    await expect(withTemp(async () => "t2", dispose, () => { throw new Error("x"); })).rejects.toThrow("x");
+    let called = false;
+    expect(await withTemp(async () => null, dispose, () => { called = true; })).toBeNull();
+    expect(called).toBe(false);
+    expect(disposed).toEqual(["t1", "t2"]);
   });
 });

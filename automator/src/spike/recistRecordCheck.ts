@@ -172,7 +172,7 @@ async function clearPluginRecord(viewer: Page): Promise<void> {
 
 /** Bidirectional で 1 本測る（`dx` を変えると測定値が変わる＝判定を作れる）。 */
 async function measure(viewer: Page, dx: number): Promise<void> {
-  await viewer.getByTestId("viewer2d-menu-roi").click();
+  await viewer.getByTestId("viewer2d-menu-measure").click();
   await viewer.getByRole("button", { name: /長径・短径|Long\/short axis/ }).first().click();
   await viewer.waitForTimeout(300);
   await dragOnCanvasHost(viewer, "viewer2d-canvas-host", dx, 0, 0, 10, { fracX: 0.28, fracY: 0.5 });

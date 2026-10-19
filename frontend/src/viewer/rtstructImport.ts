@@ -3,23 +3,26 @@
  * Author: Tatsuaki Kobayashi
  */
 /**
- * DICOM RTSTRUCT 読込 → Cornerstone アノテーション復元（S3）。
+ * DICOM RTSTRUCT 読込 → 塗り（Mask）の復元。
  *
- * backend `/api/dicom/rtstruct` が返す ROI 輪郭（患者座標 mm）を、**表示中の source シリーズ**へ
- * PlanarFreehandROI（閉輪郭）として復元する。輪郭点は既に world 座標なので変換不要。スライスは
- * ContourImage の ReferencedSOPInstanceUID を表示中スタックの imageId に対応付けて決める。
+ * backend `/api/dicom/rtstruct` が返す構造（患者座標 mm の輪郭群）を、**表示中の source シリーズ**へ
+ * 構造ごとに 1 つの Mask（labelmap の segment 1）として復元する。穴は別の閉輪郭で入っているので、
+ * 輪郭ごとに ROI にして足すと穴が埋まる。同じスライスの閉輪郭をまとめて偶奇判定で塗る
+ * （`rtstructRaster.ts`）。スライスは ContourImage の ReferencedSOPInstanceUID を表示中スタックに
+ * 対応付けて決め、見つからない輪郭は別のスライスに置かず読み飛ばす。
  * 現在表示中スタディの RTSTRUCT シリーズ（Modality=RTSTRUCT）をまとめて取り込む。
  */
-import { getRenderingEngines } from "@cornerstonejs/core";
-import { annotation as csAnnotation, utilities as csToolsUtil } from "@cornerstonejs/tools";
+import { cache, getRenderingEngines } from "@cornerstonejs/core";
+import { segmentation as csSeg } from "@cornerstonejs/tools";
 import { getViewerContext } from "./viewerContext";
 import { setRoiMaskMeta } from "./roiMaskStore";
-import { roiToMask } from "./roiBooleanOps";
+import { createResultSeg, setScopeZFromForeground } from "./roiBooleanOps";
+import { worldToImageCoords } from "./imageCoords";
+import { rasterizeStructure } from "./rtstructRaster";
 import { fetchSeries, readDicomRtStruct, type RtStructImportRoi } from "../api";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
-type V3 = [number, number, number];
 
 function firstBaseViewport(): AnyObj | null {
   let fallback: AnyObj | null = null;
@@ -39,126 +42,92 @@ function sopOf(imageId: string): string | null {
   return m ? decodeURIComponent(m[1]) : null;
 }
 
-function emptyTextBox() {
-  return {
-    hasMoved: false,
-    worldPosition: [0, 0, 0],
-    worldBoundingBox: { topLeft: [0, 0, 0], topRight: [0, 0, 0], bottomLeft: [0, 0, 0], bottomRight: [0, 0, 0] },
-  };
+export interface RtStructImportResult {
+  /** 復元した構造（Mask）の数。 */
+  structureCount: number;
+  /** 閉輪郭ではないため塗らなかった輪郭数（OPEN_PLANAR / POINT など）。 */
+  skippedNotClosed: number;
+  /** 参照スライスが表示中シリーズに無く読み飛ばした輪郭数。 */
+  skippedNoSlice: number;
 }
 
-/** DTO 群を表示中ビューポートへ復元。復元した annotationUID 群を返す。 */
-function reconstruct(rois: RtStructImportRoi[]): string[] {
-  const vp = firstBaseViewport();
-  if (!vp) return [];
+/** 構造 1 つを表示中スタックへ Mask として復元。前景が無ければ null。 */
+async function restoreStructure(
+  roi: RtStructImportRoi,
+  vp: AnyObj,
+  res: RtStructImportResult,
+): Promise<boolean> {
   const imageIds = vp.getImageIds() as string[];
-  const camera = vp.getCamera();
   const ctx = getViewerContext(vp.id);
-  const sopToId = new Map<string, { id: string; z: number }>();
+  const sopToZ = new Map<string, number>();
   imageIds.forEach((id, z) => {
     const s = sopOf(id);
-    if (s) sopToId.set(s, { id, z });
+    if (s) sopToZ.set(s, z);
   });
+  const first = cache.getImage(imageIds[0]) as AnyObj | undefined;
+  const cols = (first?.columns ?? first?.width) as number;
+  const rows = (first?.rows ?? first?.height) as number;
+  if (!cols || !rows) return false;
 
-  const created: string[] = [];
-  for (const roi of rois) {
-    const colorStr = roi.color && roi.color.length >= 3 ? `rgb(${roi.color[0]}, ${roi.color[1]}, ${roi.color[2]})` : undefined;
-    for (const c of roi.contours) {
-      const pts = c.points;
-      if (!pts || pts.length < 9) continue;
-      const polyline: V3[] = [];
-      for (let i = 0; i + 2 < pts.length; i += 3) polyline.push([pts[i], pts[i + 1], pts[i + 2]]);
+  const r = rasterizeStructure(
+    roi.contours,
+    sopToZ,
+    (z, w) => worldToImageCoords(imageIds[z], w),
+    cols,
+    rows,
+  );
+  res.skippedNotClosed += r.skippedNotClosed;
+  res.skippedNoSlice += r.skippedNoSlice;
+  if (!r.slices.size) return false;
 
-      const hit = c.referencedSopInstanceUid ? sopToId.get(c.referencedSopInstanceUid) : undefined;
-      const target = hit ?? { id: imageIds[0], z: 0 };
-      if (!target.id) continue;
-
-      const annotationUID = csToolsUtilUuid();
-      const viewRef = vp.getViewReference ? vp.getViewReference({ sliceIndex: target.z }) : {};
-      const annotation = {
-        annotationUID,
-        highlighted: false,
-        invalidated: true,
-        isLocked: false,
-        isVisible: true,
-        metadata: {
-          ...viewRef,
-          toolName: "PlanarFreehandROI",
-          referencedImageId: target.id,
-          viewPlaneNormal: camera?.viewPlaneNormal,
-          viewUp: camera?.viewUp,
-          cameraPosition: camera?.position,
-          cameraFocalPoint: camera?.focalPoint,
-        },
-        data: {
-          handles: {
-            points: [polyline[0], polyline[polyline.length - 1]],
-            activeHandleIndex: null,
-            textBox: emptyTextBox(),
-          },
-          contour: { polyline, closed: true },
-          polyline,
-          isOpenContour: false,
-          cachedStats: {},
-        },
-      };
-      try {
-        (csAnnotation.state as AnyObj).addAnnotation(annotation, vp.element);
-      } catch {
-        continue;
-      }
-      try {
-        if (colorStr) (csAnnotation.config.style as AnyObj).setAnnotationStyles?.(annotationUID, { color: colorStr });
-      } catch { /* ignore */ }
-      if (ctx) {
-        const scope = { studyUid: ctx.studyUid, seriesUid: ctx.seriesUid, z: target.z, c: ctx.c, t: ctx.t };
-        setRoiMaskMeta(annotationUID, { patientKey: ctx.patientKey, seriesLabel: ctx.seriesLabel, scope, origin: scope, label: roi.name });
-      }
-      created.push(annotationUID);
-    }
+  const made = await createResultSeg(imageIds, [vp.id], roi.name, "");
+  if (!made) return false;
+  const zs: number[] = [];
+  for (const [z, fg] of r.slices) {
+    const vm = (cache.getImage(made.labelmapIds[z]) as AnyObj | undefined)?.voxelManager;
+    if (!vm) continue;
+    for (let i = 0; i < fg.length; i++) if (fg[i]) vm.setAtIndex(i, 1);
+    zs.push(z);
   }
-  if (created.length > 0) {
-    try { csToolsUtil.triggerAnnotationRenderForViewportIds([vp.id]); } catch { /* ignore */ }
+  if (!zs.length) return false;
+  csSeg.triggerSegmentationEvents.triggerSegmentationDataModified(made.segId, zs, 1);
+  const zMin = Math.min(...zs);
+  const scope = ctx
+    ? { studyUid: ctx.studyUid, seriesUid: ctx.seriesUid, z: zMin, c: ctx.c, t: ctx.t }
+    : undefined;
+  setRoiMaskMeta(made.segId, {
+    patientKey: ctx?.patientKey,
+    seriesLabel: ctx?.seriesLabel,
+    scope,
+    origin: scope,
+    label: roi.name,
+    segmentLabels: { "1": roi.name },
+  });
+  setScopeZFromForeground(made.segId, imageIds, zs);
+  if (roi.color && roi.color.length >= 3) {
+    try {
+      (csSeg.config.color as AnyObj).setSegmentIndexColor(vp.id, made.segId, 1, [roi.color[0], roi.color[1], roi.color[2], 255]);
+    } catch { /* ignore */ }
   }
-  return created;
-}
-
-// csToolsUtil.uuidv4 or core; use a simple uuid.
-function csToolsUtilUuid(): string {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const u = (csToolsUtil as any).uuidv4?.();
-  if (u) return u;
-  return "rtss-" + Math.random().toString(36).slice(2) + Date.now().toString(36);
-}
-
-export interface RtStructImportResult {
-  /** 復元した ROI（注釈）総数。 */
-  roiCount: number;
-  /** そのうち自動的に Mask 化できた数（3D Viewer/中心線解析/Volumetry へそのまま渡せる）。 */
-  maskCount: number;
+  return true;
 }
 
 /**
- * 表示中スタディの RTSTRUCT シリーズをすべて読み、表示中 source シリーズへ ROI を復元する。
- * 復元した各 ROI は続けて自動的に Mask 化する（従来は手動の「▦」操作が必要だった。
- * `fw/mask-driven-pipelines-gap-analysis.md` 課題#3）。roiCount=0 なら対象 RTSTRUCT 無し or 復元不可。
+ * 表示中スタディの RTSTRUCT シリーズをすべて読み、表示中 source シリーズへ構造ごとの Mask を復元する。
+ * structureCount=0 なら対象 RTSTRUCT 無し or 復元不可。
  */
 export async function importRtStructForCurrentView(): Promise<RtStructImportResult> {
+  const res: RtStructImportResult = { structureCount: 0, skippedNotClosed: 0, skippedNoSlice: 0 };
   const vp = firstBaseViewport();
   const ctx = vp ? getViewerContext(vp.id) : null;
-  if (!vp || !ctx?.studyUid) return { roiCount: 0, maskCount: 0 };
+  if (!vp || !ctx?.studyUid) return res;
   const seriesList = await fetchSeries(ctx.studyUid).catch(() => []);
   const rtSeries = seriesList.filter((s) => (s.modality ?? "").toUpperCase() === "RTSTRUCT");
-  if (!rtSeries.length) return { roiCount: 0, maskCount: 0 };
-  const createdUids: string[] = [];
   for (const s of rtSeries) {
     const rois = await readDicomRtStruct(ctx.studyUid, s.seriesInstanceUid).catch(() => []);
-    createdUids.push(...reconstruct(rois));
+    for (const roi of rois) {
+      if (await restoreStructure(roi, vp, res)) res.structureCount++;
+    }
   }
-  let maskCount = 0;
-  for (const uid of createdUids) {
-    const res = await roiToMask(uid).catch(() => null);
-    if (res) maskCount++;
-  }
-  return { roiCount: createdUids.length, maskCount };
+  return res;
 }

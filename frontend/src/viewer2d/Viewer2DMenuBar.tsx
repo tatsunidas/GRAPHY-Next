@@ -31,6 +31,7 @@ import { openDeveloperContact } from "../help/DeveloperContact";
 import { openUninstallGuide } from "../help/UninstallGuide";
 import { runUpdateCheck } from "../help/UpdateNotice";
 import { isDesktop } from "../desktopBridge";
+import { openThreshold } from "../viewer/thresholdTool";
 
 interface MenuItem {
   label: string;
@@ -330,6 +331,7 @@ export function Viewer2DMenuBar({
         { label: t("viewer.undo"), onClick: actions.undo },
         { label: t("viewer.redo"), onClick: actions.redo },
         { label: t("viewer2d.menu.resample"), onClick: () => actions.openResample(), testId: "menu-resample", separatorBefore: true },
+        { label: t("viewer2d.menu.stitch"), onClick: () => actions.openStitch(), testId: "menu-stitch" },
         {
           label: t("viewer2d.menu.sort"),
           submenu: [
@@ -345,11 +347,10 @@ export function Viewer2DMenuBar({
       id: "roi",
       label: t("viewer2d.menu.roi"),
       items: [
-        { label: t("viewer2d.roi.length"), onClick: () => actions.setTool(TOOL_IDS.length), checked: activeTool === TOOL_IDS.length },
-        { label: t("viewer2d.roi.bidirectional"), onClick: () => actions.setTool(TOOL_IDS.bidirectional), checked: activeTool === TOOL_IDS.bidirectional },
-        { label: t("viewer2d.roi.angle"), onClick: () => actions.setTool(TOOL_IDS.angle), checked: activeTool === TOOL_IDS.angle },
-        { label: t("viewer2d.roi.cobb"), onClick: () => actions.setTool(TOOL_IDS.cobbAngle), checked: activeTool === TOOL_IDS.cobbAngle },
+        // ROI は面（楕円・円・矩形・ポリゴン・フリーハンド）・線（ポリゴンライン・フリーライン）・点。
+        // 計測（長さ・角度など）は「計測」メニュー。計測はマスクにも RTSTRUCT にもならない。
         { label: t("viewer2d.roi.ellipse"), onClick: () => actions.setTool(TOOL_IDS.ellipse), checked: activeTool === TOOL_IDS.ellipse },
+        { label: t("viewer2d.roi.circle"), onClick: () => actions.setTool(TOOL_IDS.circle), checked: activeTool === TOOL_IDS.circle },
         { label: t("viewer2d.roi.rect"), onClick: () => actions.setTool(TOOL_IDS.rect), checked: activeTool === TOOL_IDS.rect },
         // 輪郭系（Swing 版の POLYGON / FREEHAND / POLYLINE / FREELINE 相当）。
         // **閉じる（面）と閉じない（線）を別項目にする**（後から閉じ忘れに気付けないため）。
@@ -357,8 +358,20 @@ export function Viewer2DMenuBar({
         { label: t("viewer2d.roi.freehand"), onClick: () => actions.setTool(TOOL_IDS.freehand), checked: activeTool === TOOL_IDS.freehand },
         { label: t("viewer2d.roi.polyline"), onClick: () => actions.setTool(TOOL_IDS.polyline), checked: activeTool === TOOL_IDS.polyline },
         { label: t("viewer2d.roi.freeLine"), onClick: () => actions.setTool(TOOL_IDS.freeLine), checked: activeTool === TOOL_IDS.freeLine },
+        { label: t("viewer2d.roi.point"), onClick: () => actions.setTool(TOOL_IDS.point), checked: activeTool === TOOL_IDS.point },
+        { label: t("viewer2d.roi.clear"), onClick: actions.clearRois, separatorBefore: true },
+      ],
+    },
+    {
+      id: "measure",
+      label: t("viewer2d.menu.measure"),
+      items: [
+        { label: t("viewer2d.roi.length"), onClick: () => actions.setTool(TOOL_IDS.length), checked: activeTool === TOOL_IDS.length },
+        { label: t("viewer2d.roi.bidirectional"), onClick: () => actions.setTool(TOOL_IDS.bidirectional), checked: activeTool === TOOL_IDS.bidirectional },
+        { label: t("viewer2d.roi.angle"), onClick: () => actions.setTool(TOOL_IDS.angle), checked: activeTool === TOOL_IDS.angle },
+        { label: t("viewer2d.roi.cobb"), onClick: () => actions.setTool(TOOL_IDS.cobbAngle), checked: activeTool === TOOL_IDS.cobbAngle },
         { label: t("viewer2d.roi.probe"), onClick: () => actions.setTool(TOOL_IDS.probe), checked: activeTool === TOOL_IDS.probe },
-        { label: t("viewer2d.roi.clear"), onClick: actions.clearRois },
+        { label: t("viewer2d.measure.clear"), onClick: actions.clearMeasurements, separatorBefore: true },
       ],
     },
     {
@@ -415,6 +428,8 @@ export function Viewer2DMenuBar({
         { label: t("viewer2d.tool.wand2d"), onClick: () => actions.setTool(TOOL_IDS.wand2d), checked: activeTool === TOOL_IDS.wand2d },
         { label: t("viewer2d.tool.region3d"), onClick: () => actions.setTool(TOOL_IDS.region3d), checked: activeTool === TOOL_IDS.region3d },
         { label: t("viewer2d.tool.levelset2d"), onClick: () => actions.setTool(TOOL_IDS.levelset2d), checked: activeTool === TOOL_IDS.levelset2d },
+        { label: t("viewer2d.tool.threshold"), onClick: () => void openThreshold() },
+        { label: t("viewer2d.tool.scissors"), onClick: () => actions.setTool(TOOL_IDS.scissors), checked: activeTool === TOOL_IDS.scissors },
       ],
     },
     {
@@ -433,6 +448,7 @@ export function Viewer2DMenuBar({
         { label: `${t("fourier.menu")}…`, onClick: () => actions.openFourier(), testId: "menu-fourier" },
         { label: `${t("texture.menu")}…`, onClick: () => actions.openTexture() },
         { label: `${t("glam.menu")}…`, onClick: () => actions.openGlamAnalysis() },
+        { label: `${t("roiFeat.menu")}…`, onClick: () => actions.openRoiFeatures(), testId: "menu-roi-features" },
         ...(isDemo ? [] : [{ label: t("viewer2d.menu.imagej"), onClick: () => actions.bridgeImageJ() }]),
         // 解析メニューは本体機能の並びなので、プラグイン由来は**必ず見分けられる形**で出す
         // （区切り線で分け、ラベルに印を付ける）。プラグインメニューに出ていたときは

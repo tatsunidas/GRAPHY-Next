@@ -43,10 +43,11 @@ function DimRow({
       </label>
       <input
         type="number"
-        min={0}
-        value={idx}
+        min={1}
+        value={idx + 1}
         disabled={isAll}
-        onChange={(e) => onChange(Math.max(0, Math.floor(Number(e.target.value) || 0)))}
+        // 表示は 1 始まり、保存は 0 始まり。
+        onChange={(e) => onChange(Math.max(1, Math.floor(Number(e.target.value) || 1)) - 1)}
         style={{ ...numInput, opacity: isAll ? 0.4 : 1 }}
       />
     </div>

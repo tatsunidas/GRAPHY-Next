@@ -25,7 +25,10 @@ import {
   withNormals,
   type MeshActor,
 } from "../viewer/mesh3d";
-import { labelVolumeToMesh, meshToLabelVolume } from "../viewer/roiMesh";
+import { labelVolumeToSlabSurface, meshToLabelVolume } from "../viewer/roiMesh";
+import { slabRanges } from "../viewer/slabMesh";
+import { labelVolumeMeshVolume } from "../viewer/depthVolume";
+import type { DepthSource, SliceLayoutKind } from "../viewer/sliceGeometry";
 import { Centerline3D } from "../viewer/centerline";
 import { extractCenterlineGraph, graphSummary, type CenterlineGraph } from "../viewer/centerlineGraph";
 import { createEndoController, type EndoController } from "../viewer/endoscopy";
@@ -34,7 +37,6 @@ import vtkTubeFilter from "@kitware/vtk.js/Filters/General/TubeFilter";
 import vtkDataArray from "@kitware/vtk.js/Common/Core/DataArray";
 import { resampleColorsNearest } from "./vesselColorMap";
 import { activateTubeColors, TUBE_COLOR_ARRAY } from "./tubeColors";
-import vtkSphereSource from "@kitware/vtk.js/Filters/Sources/SphereSource";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 import vtkClipClosedSurface from "@kitware/vtk.js/Filters/General/ClipClosedSurface";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -48,6 +50,7 @@ import {
   clearSceneObjects,
   getSceneObjects,
   type SceneObject,
+  type SceneObjectSource,
 } from "./scene3dStore";
 import { record, clearUndo } from "./undoStore";
 import {
@@ -439,10 +442,13 @@ export interface AddOptions {
   name?: string;
   color?: V3;
   opacity?: number;
-  /** ROI の体積算出方式。既定 "voxel"（ボクセルカウント確定計算）。
-   * "mesh" はメッシュ（平滑化後）から算出した体積を使う（セグメント単位インポート等、
-   * 表示メッシュと数値を一致させたい用途向け）。 */
-  volumeFrom?: "voxel" | "mesh";
+  /**
+   * ROI の体積（mm³）を 2D 側で求めた値で上書きする（2D から取り込んだ ROI。2D の Σ³ と同じ値になる）。
+   * 省略すると、この体積の奥行き（{@link setVolumeDepth}）から元のスライスの角柱で求める。
+   */
+  volumeOverride?: { volumeMm3?: number; depthSource?: DepthSource };
+  /** 取り込み元への参照（`SceneObject.source`）。 */
+  source?: SceneObjectSource;
   /**
    * 中心線を**点ごとの色**で描く（RGB 0..255・3 成分・近位→遠位）。A7 の解析値の可視化用。
    *
@@ -451,6 +457,68 @@ export interface AddOptions {
    * 省略時は従来どおり単色（`color`）。
    */
   pointColors?: Uint8Array;
+}
+
+/** 表示中の体積の奥行き（`fw/slice-depth-policy.md`）。ROI の体積を元のスライスの角柱で求めるのに使う。 */
+export interface VolumeDepthContext {
+  /** 奥行きの順の元スライスが当たる格子の面。無ければ全面を等幅で扱う。 */
+  gridIndexOf?: number[];
+  widths: number[];
+  /** 元スライスの奥行きの位置（mm、先頭を 0）。表示メッシュの層の範囲に使う。 */
+  positions?: number[];
+  /** 体積の格子の層の数。ROI の格子がこれと同じときだけ、元スライスの範囲で描く。 */
+  gridCount?: number;
+  source: DepthSource;
+  kind: SliceLayoutKind;
+}
+let volumeDepth: VolumeDepthContext | null = null;
+export function setVolumeDepth(c: VolumeDepthContext | null): void {
+  volumeDepth = c;
+}
+
+/** ROI の表示用メッシュ。体積と同じく、元スライスの位置と幅で立ち上げた形にする。 */
+function roiSurface(lv: LabelVolume, smooth = false): Any | null {
+  const c = volumeDepth;
+  const nz = lv.geom.dims[2];
+  const ranges =
+    c?.gridIndexOf && c.positions && c.gridCount === nz
+      ? slabRanges(nz, lv.geom.spacing[2], { gridIndexOf: c.gridIndexOf, positions: c.positions })
+      : undefined;
+  return labelVolumeToSlabSurface(lv, { ranges, smooth });
+}
+
+/** ROI の表示をなめらかにする／階段状に戻す。体積は変えない。 */
+export function setRoiSmooth(id: string, smooth: boolean): void {
+  const d = dataById.get(id);
+  if (!d?.labelVolume || !d.ma) return;
+  const surf = roiSurface(d.labelVolume, smooth);
+  d.polydata = surf ?? undefined;
+  try {
+    d.ma.mapper.setInputData(surf ?? vtkPolyData.newInstance());
+  } catch {
+    /* ignore */
+  }
+  const m = surf ? measureMesh(surf) : null;
+  updateSceneObject(id, {
+    smooth,
+    surfaceAreaMm2: m?.surfaceAreaMm2 ?? 0,
+    diameters: m?.diameters ?? [0, 0, 0],
+    numTriangles: m?.numTriangles ?? 0,
+  });
+  applyObjectClip(id);
+  render();
+}
+
+/** ROI の体積。メッシュ（元スライスの角柱）で求める。表示用の滑らかなメッシュの体積は使わない。奥行きが不明なら undefined。 */
+function roiMeshVolume(lv: LabelVolume): { volumeMm3?: number; source?: DepthSource } {
+  if (volumeDepth && (volumeDepth.source === "unknown" || volumeDepth.kind === "duplicates")) {
+    return { source: volumeDepth.source };
+  }
+  const depth = volumeDepth?.gridIndexOf
+    ? { gridIndexOf: volumeDepth.gridIndexOf, widths: volumeDepth.widths }
+    : undefined;
+  const r = labelVolumeMeshVolume(lv.data, lv.geom.dims, lv.geom.spacing, depth);
+  return { volumeMm3: r.volumeMm3, source: volumeDepth?.source };
 }
 
 /** メッシュ（`vtkPolyData`, LPS mm）をシーンに追加。追加した id を返す。 */
@@ -482,25 +550,11 @@ export function addMeshObject(polydata: Any, opts: AddOptions = {}): string | nu
 }
 
 /**
- * パラメトリック 3D 球（`sphere3dStore.ts` の `Sphere3D`）を、Mask への焼き込み・再インポートを
- * 経由せず直接メッシュとしてシーンへ追加する（`fw/mask-driven-pipelines-gap-analysis.md` 課題#7）。
- */
-export function addSphereObject(center: V3, radiusMm: number, opts: AddOptions = {}): string | null {
-  if (!(radiusMm > 0)) return null;
-  const src: Any = vtkSphereSource.newInstance();
-  src.setCenter(center[0], center[1], center[2]);
-  src.setRadius(radiusMm);
-  src.setThetaResolution(32);
-  src.setPhiResolution(32);
-  return addMeshObject(src.getOutputData(), opts);
-}
-
-/**
  * 3D ROI（LabelVolume, 実空間 labelmap）をシーンに追加。
- * 表面メッシュ（marching cubes）を生成して描画し、体積はボクセルから確定計算する。
+ * 表示メッシュも体積も、元のスライスの位置と幅で立ち上げた同じ形（slabMesh）から作る。
  */
 export function addRoiObject(lv: LabelVolume, opts: AddOptions = {}): string | null {
-  const surf = labelVolumeToMesh(lv);
+  const surf = roiSurface(lv);
   if (!surf) return null;
   const id = nextSceneId("roi");
   const color = nextColor(opts.color);
@@ -509,7 +563,10 @@ export function addRoiObject(lv: LabelVolume, opts: AddOptions = {}): string | n
   const data: SceneData = { polydata: surf, labelVolume: lv, ma };
   const voxels = countForeground(lv);
   const m = measureMesh(surf);
-  const volumeMm3 = opts.volumeFrom === "mesh" ? m.volumeMm3 : voxels * lv.voxelMm3;
+  const own = opts.volumeOverride
+    ? { volumeMm3: opts.volumeOverride.volumeMm3, source: opts.volumeOverride.depthSource }
+    : roiMeshVolume(lv);
+  const volumeMm3 = own.volumeMm3;
   const obj: SceneObject = {
     id,
     kind: "roi",
@@ -518,9 +575,11 @@ export function addRoiObject(lv: LabelVolume, opts: AddOptions = {}): string | n
     opacity,
     visible: true,
     displayMode: "float",
+    source: opts.source,
     voxels,
+    volumeDepthSource: own.source,
     volumeMm3,
-    volumeMl: volumeMm3 / 1000,
+    volumeMl: volumeMm3 === undefined ? undefined : volumeMm3 / 1000,
     surfaceAreaMm2: m.surfaceAreaMm2,
     diameters: m.diameters,
     numTriangles: m.numTriangles,
@@ -612,7 +671,7 @@ export function convertRoiToMesh(id: string): string | null {
   const d = dataById.get(id);
   const obj = getSceneObject(id);
   if (!d?.labelVolume) return null;
-  const mesh = labelVolumeToMesh(d.labelVolume);
+  const mesh = roiSurface(d.labelVolume, !!obj?.smooth);
   if (!mesh) return null;
   return addMeshObject(mesh, { name: `${obj?.name ?? "ROI"} → mesh` });
 }
@@ -646,7 +705,7 @@ function applyRoiVolumeInternal(id: string, data: Uint8Array): void {
   if (!d?.labelVolume || !d.ma) return;
   const lv: LabelVolume = { geom: d.labelVolume.geom, data, voxelMm3: d.labelVolume.voxelMm3 };
   d.labelVolume = lv;
-  const surf = labelVolumeToMesh(lv);
+  const surf = roiSurface(lv, !!getSceneObject(id)?.smooth);
   d.polydata = surf ?? undefined;
   try {
     d.ma.mapper.setInputData(surf ?? vtkPolyData.newInstance());
@@ -654,12 +713,14 @@ function applyRoiVolumeInternal(id: string, data: Uint8Array): void {
     /* ignore */
   }
   const voxels = countForeground(lv);
-  const volumeMm3 = voxels * lv.voxelMm3;
+  const own = roiMeshVolume(lv);
+  const volumeMm3 = own.volumeMm3;
   const m = surf ? measureMesh(surf) : null;
   updateSceneObject(id, {
     voxels,
+    volumeDepthSource: own.source,
     volumeMm3,
-    volumeMl: volumeMm3 / 1000,
+    volumeMl: volumeMm3 === undefined ? undefined : volumeMm3 / 1000,
     surfaceAreaMm2: m?.surfaceAreaMm2 ?? 0,
     diameters: m?.diameters ?? [0, 0, 0],
     numTriangles: m?.numTriangles ?? 0,

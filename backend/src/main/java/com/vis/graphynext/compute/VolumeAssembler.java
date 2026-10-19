@@ -36,7 +36,9 @@ import java.util.zip.ZipOutputStream;
  *   <li>{@code spacing}: float64 {@code [dz, dy, dx]}（mm）。分からなければ NaN</li>
  *   <li>{@code origin}: float64 {@code [x, y, z]}（患者座標 LPS・mm。先頭スライスの左上画素の中心）。分からなければ NaN</li>
  *   <li>{@code direction}: float64 {@code [3, 3]}。行 0/1/2 が volume の x/y/z 軸の向き（LPS の単位ベクトル）</li>
- *   <li>{@code meta.json}: モダリティ・光度解釈・匿名化後の UID・並べ方・値の単位（{@code numpy.load} では bytes で読める）</li>
+ *   <li>{@code meta.json}: モダリティ・光度解釈・匿名化後の UID・並べ方・値の単位・表示の窓
+ *       （{@code windowCenter}/{@code windowWidth}: 配列。先頭インスタンスの値で、volume と同じ Rescale 適用後の空間。
+ *       {@code voiLutFunction}: 無ければ欄ごと省く＝LINEAR。窓が無い DICOM では 3 欄とも省く。VOI LUT Sequence は出さない）（{@code numpy.load} では bytes で読める）</li>
  * </ul>
  *
  * <p>Parametric Map（NIfTI の float の取り込み・fw/nifti-import.md §3.1）は Float Pixel Data を RWVM で実際の量にして
@@ -72,6 +74,10 @@ final class VolumeAssembler implements AnonymizeService.Sink {
     /** Parametric Map（float の値）か。1 本のボリュームに整数の画像と混ぜない。 */
     private Boolean floatValues;
     private String valueUnit;
+    /** 先頭インスタンスの窓（Rescale 適用後の値の空間）。無ければ null。 */
+    private double[] windowCenter;
+    private double[] windowWidth;
+    private String voiLutFunction;
 
     VolumeAssembler(PixelCodec codec) {
         this.codec = codec;
@@ -101,7 +107,7 @@ final class VolumeAssembler implements AnonymizeService.Sink {
         if (org.dcm4che3.data.UID.ExplicitVRBigEndian.equals(tsuid)) {
             throw new UnsupportedLayout("npz-big-endian");
         }
-        if (ParametricMapFrameExpander.isParametricMap(ds)) {
+        if (ParametricMapFrameExpander.handles(ds)) {
             addParametricMap(ds);
             return;
         }
@@ -133,6 +139,7 @@ final class VolumeAssembler implements AnonymizeService.Sink {
             seriesUid = ds.getString(Tag.SeriesInstanceUID);
             studyUid = ds.getString(Tag.StudyInstanceUID);
             valueUnit = ds.getString(Tag.RescaleType, "");
+            readVoi(ds);
         } else if (r != rows || c != cols || ba != bitsAllocated) {
             throw new UnsupportedLayout("npz-mixed-geometry");
         }
@@ -160,6 +167,29 @@ final class VolumeAssembler implements AnonymizeService.Sink {
         }
     }
 
+    /**
+     * 窓（WindowCenter/Width、多値は全部）と VOILUTFunction。Enhanced は共有の FrameVOILUTSequence の先頭項目。
+     * 中心と幅の数が違う・片方が無いときは窓を持たない（片方だけでは窓にならない）。
+     * 説明文（WindowCenterWidthExplanation）は自由文なので読まない。
+     */
+    private void readVoi(Attributes ds) {
+        Attributes src = ds;
+        if (!ds.containsValue(Tag.WindowCenter)) {
+            Attributes shared = ds.getNestedDataset(Tag.SharedFunctionalGroupsSequence);
+            Attributes voi = shared == null ? null : shared.getNestedDataset(Tag.FrameVOILUTSequence);
+            if (voi != null) {
+                src = voi;
+            }
+        }
+        double[] wc = src.containsValue(Tag.WindowCenter) ? src.getDoubles(Tag.WindowCenter) : null;
+        double[] ww = src.containsValue(Tag.WindowWidth) ? src.getDoubles(Tag.WindowWidth) : null;
+        if (wc != null && ww != null && wc.length > 0 && wc.length == ww.length) {
+            windowCenter = wc;
+            windowWidth = ww;
+            voiLutFunction = src.getString(Tag.VOILUTFunction);
+        }
+    }
+
     /** Parametric Map: フレームごとに実際の量（float）と位置（フレームごとの PlanePosition）を積む。 */
     private void addParametricMap(Attributes ds) throws IOException {
         if (Boolean.FALSE.equals(floatValues)) {
@@ -174,7 +204,7 @@ final class VolumeAssembler implements AnonymizeService.Sink {
             bitsAllocated = 32;
             bitsStored = 32;
             signed = true;
-            iop = SegFrameExpander.sharedIop(ds);
+            iop = com.vis.graphynext.dicom.ConfocalGeometry.orientation(ds);
             pixelSpacing = SegFrameExpander.sharedPixelSpacing(ds);
             modality = ds.getString(Tag.Modality);
             photometric = ds.getString(Tag.PhotometricInterpretation, "MONOCHROME2");
@@ -195,7 +225,7 @@ final class VolumeAssembler implements AnonymizeService.Sink {
             if (v == null) {
                 throw new UnsupportedLayout("npz-pixels-unreadable");
             }
-            slices.add(new Slice(null, v, f, SegFrameExpander.perFrameIpp(ds, f), in, 1.0, 0.0));
+            slices.add(new Slice(null, v, f, com.vis.graphynext.dicom.ConfocalGeometry.framePosition(ds, f), in, 1.0, 0.0));
         }
     }
 
@@ -297,6 +327,15 @@ final class VolumeAssembler implements AnonymizeService.Sink {
                 .put("slices", sorted.size())
                 .put("anonymizedStudyInstanceUid", studyUid)
                 .put("anonymizedSeriesInstanceUid", seriesUid);
+        if (windowCenter != null) {
+            var wc = meta.putArray("windowCenter");
+            java.util.Arrays.stream(windowCenter).forEach(wc::add);
+            var ww = meta.putArray("windowWidth");
+            java.util.Arrays.stream(windowWidth).forEach(ww::add);
+            if (voiLutFunction != null && !voiLutFunction.isBlank()) {
+                meta.put("voiLutFunction", voiLutFunction);
+            }
+        }
         zip.putNextEntry(new ZipEntry("meta.json"));
         zip.write(mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(meta));
         zip.closeEntry();

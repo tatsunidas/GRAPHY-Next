@@ -176,7 +176,9 @@ export async function exportMaskAsSeg(
     // Volumetry（体積計測）結果を SegmentDescription として書き込み、SEG 単体で持ち運べるようにする
     // （`fw/mask-driven-pipelines-gap-analysis.md` 課題#4。SEG インポート側で meta.custom へ復元）。
     const vol = maskVolumeStats(segmentationId, segIndex);
-    const description = vol ? `Volume: ${vol.volumeMl.toFixed(2)} mL (${vol.voxels} voxels, ${vol.slices} slices)` : null;
+    const description = vol
+      ? `Volume: ${vol.volumeMl === undefined ? "n/a" : `${vol.volumeMl.toFixed(2)} mL`} (${vol.voxels} voxels, ${vol.slices} slices)`
+      : null;
     segments.push({ number: segIndex, label, color, description, frames });
   }
   if (!segments.length) return { ok: false, reason: "empty" };

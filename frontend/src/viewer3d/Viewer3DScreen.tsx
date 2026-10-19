@@ -31,9 +31,17 @@ import {
   isCacheSizeExceeded,
 } from "../viewer/volumeMemory";
 import { confirmVolumeMemory } from "../viewer/volumeMemoryGuard";
+import { MIN_SLAB_MM, finestVoxelMm, tooFineForVolumeRendering } from "../viewer/volumeScale";
 import { useDeviceClass } from "../mobile/useDeviceClass";
 import { imageIdForInstance, imageIdForCell } from "../viewer/imageId";
+import { metaData } from "@cornerstonejs/core";
 import { buildMprVolume } from "../viewer/mpr";
+import { SliceDuplicatesError, sopGridIndexMap, volumeDepthNote, type VolumeDepthNote } from "../viewer/depthVolume";
+import { VolumeDepthChip } from "../viewer/VolumeDepthChip";
+import { loadRenderEnvSummary } from "../viewer/renderEnvReport";
+import { parseRenderQuality, type RenderKind } from "../viewer/renderEnv";
+import { installDebugApi, publishRender3dStats } from "../viewer/debugApi";
+import { requestOpenSettings } from "../settings/settingsOpenEvents";
 import {
   createVtkVolumeView,
   vtkImageDataFromVolume,
@@ -61,11 +69,12 @@ import { SlabPanel } from "./SlabPanel";
 import { RepresentationStateDialog } from "./RepresentationStateDialog";
 import { ViewInfoOverlay } from "./ViewInfoOverlay";
 import { fetchLutData } from "../api";
-import { attachSceneRenderer, resetScene, setClipContext, updateClip, setOrthoSlice } from "./scene3d";
+import { attachSceneRenderer, resetScene, setClipContext, updateClip, setOrthoSlice, setVolumeDepth } from "./scene3d";
 import { geomFromImageData, type VolumeGeom } from "../viewer/labelVolume";
 import { useI18n } from "../i18n/i18n";
 import { fetchSettings } from "../settings/settingsApi";
 import { hexToRgb01 } from "../viewer/hexColor";
+import { VIEWER3D_CTX_KEY, parseViewer3dCtx, viewer3dCtxChanged } from "./viewer3dCtx";
 
 interface Viewer3DContext {
   study: Study;
@@ -118,6 +127,26 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
   const [message, setMessage] = useState<string>("");
   const [title, setTitle] = useState<string>("");
   const [tilt, setTilt] = useState<number | null>(null);
+  // 体積のスライス順の SOP → k（2D の ROI を描かれている画像に合わせて載せる）と、間隔が不均一なときの各間隔。
+  const [sopToK, setSopToK] = useState<Map<string, number> | undefined>(undefined);
+  const [depthNote, setDepthNote] = useState<VolumeDepthNote | null>(null);
+  // 描画の種別（ソフトウェア描画のときだけヘッダに印を出す。fw/render-environment-design.md）。
+  const [renderKind, setRenderKind] = useState<RenderKind | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void loadRenderEnvSummary().then((v) => {
+      if (alive) setRenderKind(v.kind);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  // automator 用: このウィンドウでも window.__graphyDebug を用意し、3D の描画の実測を読めるようにする（dev ビルドのみ）。
+  useEffect(() => {
+    installDebugApi();
+    publishRender3dStats(() => viewRef.current?.getRenderStats() ?? null);
+    return () => publishRender3dStats(null);
+  }, []);
   const [mode, setMode] = useState<VtkRenderMode>("VR");
   const [orthoPos, setOrthoPos] = useState<{ x: number; y: number; z: number }>({ x: 0.5, y: 0.5, z: 0.5 });
   const [lutName, setLutName] = useState<string | null>(null);
@@ -136,7 +165,9 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
   const [presetName, setPresetName] = useState<string>("none");
   const modalityRef = useRef<string | null>(null);
   // 派生シリーズ保存（CPR/ストレート化）用の study/series 識別子。
-  const seriesRef = useRef<{ studyUid: string; seriesUid: string; seriesDesc: string } | null>(null);
+  const seriesRef = useRef<{ studyUid: string; seriesUid: string; seriesDesc: string; c: number; t: number } | null>(null);
+  // 起動時に読んだコンテキスト。別シリーズ/C/T で 2D から再起動されたかの判定に使う。
+  const ctxRef = useRef<Viewer3DContext | null>(null);
   const [volumeId, setVolumeId] = useState<string>("");
   // 表示ボリュームの実空間幾何（mesh→ROI ボクセル化の対象）。
   const [sceneGeom, setSceneGeom] = useState<VolumeGeom | null>(null);
@@ -185,11 +216,11 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
   const start = useCallback(async () => {
     let ctx: Viewer3DContext | null = null;
     try {
-      const raw = localStorage.getItem("graphy-viewer3d-ctx");
-      if (raw) ctx = JSON.parse(raw) as Viewer3DContext;
+      ctx = parseViewer3dCtx<Viewer3DContext>(localStorage.getItem(VIEWER3D_CTX_KEY));
     } catch {
       ctx = null;
     }
+    ctxRef.current = ctx;
     if (!ctx?.study) {
       setPhase("error");
       setMessage(t("viewer3d.noContext"));
@@ -220,6 +251,8 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         studyUid: ctx.study.studyInstanceUid,
         seriesUid: series.seriesInstanceUid,
         seriesDesc: series.seriesDescription || series.seriesInstanceUid,
+        c: ctx.c ?? 0,
+        t: ctx.t ?? 0,
       };
 
       // 起動元タイルで表示中だった C/T のスタックのみをボリューム化する（マルチチャンネル/
@@ -232,6 +265,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         const c0 = Math.min(Math.max(0, ctx.c ?? 0), Math.max(0, layout.nC - 1));
         const t0 = Math.min(Math.max(0, ctx.t ?? 0), Math.max(0, layout.nT - 1));
         guardLayout = layout;
+        if (seriesRef.current) seriesRef.current = { ...seriesRef.current, c: c0, t: t0 };
         imageIds = imageIdsForCT(layout, mode2, c0, t0, ctx.study.studyInstanceUid, series.seriesInstanceUid);
         if (imageIds.length < 3 && layout.nC <= 1 && layout.nT <= 1) {
           const instances = await fetchInstances(ctx.study.studyInstanceUid, series.seriesInstanceUid);
@@ -248,6 +282,12 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
       if (imageIds.length < 3) {
         setPhase("error");
         setMessage(t("viewer3d.needVolume"));
+        return;
+      }
+      if (tooFineForVolumeRendering(guardLayout)) {
+        // ボクセルが描画ライブラリの最小のスラブより細かい（顕微鏡など）。組んでも真っ黒になるので、理由を出して止める
+        setPhase("error");
+        setMessage(t("volume.tooFine", { voxel: String(finestVoxelMm(guardLayout)?.toPrecision(3)), min: String(MIN_SLAB_MM) }));
         return;
       }
 
@@ -281,6 +321,24 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         maxBytes: memDecision.enforceMaxBytes,
       });
       setTilt(built.corrected ? (built.tiltAngleDeg ?? null) : null);
+      if (built.sortedImageIds) {
+        const ids = built.sortedImageIds;
+        // 体積のスライス順の SOP → 格子番号（2D の ROI を、描かれている画像と同じスライスに載せる。補間した面には載せない）。
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const sops = ids.map((id) => ((metaData.get("sopCommonModule", id) ?? {}) as any).sopInstanceUID as string | undefined);
+        setSopToK(sopGridIndexMap(sops, built.grid?.gridIndexOf));
+      } else {
+        setSopToK(undefined);
+      }
+      setDepthNote(volumeDepthNote(built.geometry, built.grid));
+      setVolumeDepth({
+        gridIndexOf: built.grid?.gridIndexOf ?? (built.sortedImageIds ? built.geometry.order.map((_, i) => i) : undefined),
+        widths: built.geometry.widths,
+        positions: built.geometry.positions.map((p) => p - built.geometry.positions[0]),
+        gridCount: built.grid?.count ?? built.geometry.positions.length,
+        source: built.geometry.source,
+        kind: built.geometry.kind,
+      });
       setVolumeId(volId);
 
       // Cornerstone が構築したボリュームから scalar 付き vtkImageData を組み立てて pure vtk へ渡す
@@ -325,7 +383,9 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
       // 背景色（環境設定）。読めなければ黒のまま。設定を変えたら開き直すと反映する（2D と同じ）。
       fetchSettings()
         .then((m) => {
-          if (viewRef.current === view) view.setBackground(hexToRgb01(m["viewer3d.background"]));
+          if (viewRef.current !== view) return;
+          view.setBackground(hexToRgb01(m["viewer3d.background"]));
+          view.setRenderQuality(parseRenderQuality(m["viewer3d.renderQuality"]));
         })
         .catch(() => undefined);
       // mesh / 3D ROI アクターを同一 vtk シーンへ重畳するため renderer を接続。
@@ -356,10 +416,24 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
           ? t("viewer3d.glLost")
           : isCacheSizeExceeded(e)
             ? t("common.volumeMemExceeded", { budgetMb: String(getAppliedVolumeMaxMb()) })
-            : `${t("viewer3d.error")}: ${String(e)}`,
+            : e instanceof SliceDuplicatesError
+              ? t("volumeDepth.duplicates")
+              : `${t("viewer3d.error")}: ${String(e)}`,
       );
     }
   }, [mode2, t]);
+
+  // 3D ウィンドウが開いたまま 2D から別のシリーズ/C/T で再起動されたら、新しいコンテキストで読み込み直す。
+  // 状態（ボリューム・シーンオブジェクト・各種オーバーレイ）が多いので、個別に初期化せず画面ごと再読込する。
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== VIEWER3D_CTX_KEY) return;
+      const next = parseViewer3dCtx<Viewer3DContext>(e.newValue);
+      if (viewer3dCtxChanged(ctxRef.current, next)) window.location.reload();
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   useEffect(() => {
     if (startedRef.current || !status) return;
@@ -564,6 +638,17 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         )}
         <span style={hTitle}>{t("main.toolbar.viewer3d")}</span>
         {title && <span style={hSeries}>{title}</span>}
+        {renderKind === "software" && (
+          <button
+            style={softwareBadge}
+            onClick={() => requestOpenSettings("renderEnv")}
+            title={t("viewer3d.softwareBadgeHint")}
+            data-testid="viewer3d-software-badge"
+          >
+            ⚠ {t("viewer3d.softwareBadge")}
+          </button>
+        )}
+        <VolumeDepthChip note={depthNote} style={tiltChip} />
         {tilt !== null && (
           <span style={tiltChip} title={t("mpr.tiltCorrectedHint")}>
             {t("mpr.tiltCorrected", { deg: tilt.toFixed(1) })}
@@ -831,6 +916,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
             <div style={panelSection}>
               <SceneObjectPanel
                 geom={sceneGeom}
+                sopToK={sopToK}
                 onStartCut={startCut}
                 onAnalyzeCenterline={analyzeCenterline}
                 onRepairMesh={(id, name) => setRepairTarget({ id, name })}
@@ -840,6 +926,8 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
                 onToggleEndoPath={toggleEndoPath}
                 studyUid={seriesRef.current?.studyUid}
                 seriesUid={seriesRef.current?.seriesUid}
+                ctxC={seriesRef.current?.c}
+                ctxT={seriesRef.current?.t}
                 isDemo={isDemo}
               />
             </div>
@@ -904,6 +992,12 @@ const tiltChip: React.CSSProperties = {
   background: "#2a220f",
   borderRadius: 4,
   padding: "1px 7px",
+};
+// ソフトウェア描画の印。tiltChip と同じ警告色。押せる（設定＞描画環境を開く）。
+const softwareBadge: React.CSSProperties = {
+  ...tiltChip,
+  marginLeft: 8,
+  cursor: "pointer",
 };
 const bodyWrap: React.CSSProperties = { position: "relative", flex: 1, display: "flex", minHeight: 0 };
 const body: React.CSSProperties = { position: "relative", flex: 1, minWidth: 0 };

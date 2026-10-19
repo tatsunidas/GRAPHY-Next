@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # デスクトップモード開発起動: Vite dev を裏で起動し、Electron を GRAPHY_DEV=1 で起動。
 # Electron 側が backend(jar, standalone) を spawn するため、backend jar が必要。
+# データ（DB・保管庫・プラグイン・設定）は既定では desktop/ 直下に作られ、worktree ごとに別になる。
+# 1 か所にまとめたいときは、既存のフォルダの絶対パスを GRAPHY_DEV_DATA_DIR に指定する（自動では作らない）。
+# 同じフォルダを開く dev Next は 1 つだけにする（ポートを分けても DB・保管庫は共有になる）。
 # 古い jar による 404 を避けるため、毎回 最新コードで再ビルドする（UI は Vite が配信するので frontend はスキップ）。
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

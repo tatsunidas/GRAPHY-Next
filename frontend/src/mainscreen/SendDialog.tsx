@@ -15,6 +15,7 @@ import {
   type Study,
 } from "../api";
 import { useI18n } from "../i18n/i18n";
+import { selectionHasCfm } from "./cfmNotice";
 
 /**
  * DICOM Send: MainScreen で選択中のスタディ<b>の患者</b>のスタディ/シリーズをツリー表示し、
@@ -226,6 +227,8 @@ export function SendDialog({
 
   const run = async () => {
     const selections = buildSelections();
+    // 本体が作る CFM は 32 ビット（規格外）。相手が受け付けないことがあるので、黙って出さない（fw/microscopy-cfm.md）
+    if (selections.length > 0 && selectionHasCfm(seriesByStudy, checkedSeries) && !window.confirm(t("cfm.nonStandardConfirm"))) return;
     if (selections.length === 0 || !destReady) return;
     setBusy(true);
     setError(null);

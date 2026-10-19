@@ -118,7 +118,7 @@ async function main(): Promise<void> {
     );
     await viewer.getByTestId("series-viewer-root").first().waitFor({ state: "visible", timeout: 30_000 });
     await viewer.waitForTimeout(3_000);
-    await viewer.getByTestId("viewer2d-menu-roi").click();
+    await viewer.getByTestId("viewer2d-menu-measure").click();
     await viewer.waitForTimeout(250);
     await viewer.getByText("長さ", { exact: true }).first().click();
     await viewer.waitForTimeout(300);

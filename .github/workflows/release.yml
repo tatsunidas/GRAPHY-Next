@@ -7,6 +7,14 @@ on:
   # ビルドして「入れて起動して動画を再生する」スモークまで回し、インストーラは Artifact に置く
   # （`gh workflow run release.yml --ref <branch>`）。
   workflow_dispatch:
+    inputs:
+      # 公開済みのリリースに、Intel Mac（x64）の dmg だけを後から足す（`-f backfill_tag=v0.5.0`）。
+      # そのタグのソースを macos-15-intel でビルドし、同じ検査（署名・Gatekeeper・実機スモーク）を通してから、
+      # 既存の資産を上書きせずにそのリリースへ追加する。空なら従来どおりの予行演習。
+      backfill_tag:
+        description: "x64 の dmg を追加する公開済みタグ（例 v0.5.0）。空なら予行演習"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -121,12 +129,25 @@ jobs:
       # 1 つの OS が落ちても他の OS の結果は最後まで見る（OS ごとに落ち方が違うので）。
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # macos-latest は Apple Silicon（arm64）。Intel Mac 向け（x64）は macos-15-intel で作る
+        # （v0.5.0 まで Intel 版が無く、Intel Mac で「インストールできない」と連絡が来た）。
+        os: ${{ fromJSON(inputs.backfill_tag != '' && '["macos-15-intel"]' || '["ubuntu-latest","windows-latest","macos-latest","macos-15-intel"]') }}
     # 上限を切る（2026-08-27 に macOS で Maven の取得が詰まり 2h11m かかった。通常 5〜6 分）。
     timeout-minutes: 60
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.backfill_tag || github.sha }}
+      # 後から足すときは、検査の仕組みだけ現行（ログを残す版）にする。製品のソースはタグのまま。
+      - if: ${{ inputs.backfill_tag != '' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: _current
+      - if: ${{ inputs.backfill_tag != '' }}
+        shell: bash
+        run: cp _current/automator/src/smoke/installedSmoke.ts automator/src/smoke/installedSmoke.ts && rm -rf _current
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -190,6 +211,23 @@ jobs:
           printf '%s' "$COLAB_CLIENT" > desktop/colab-oauth-client.json
           node -e "const j=require('./desktop/colab-oauth-client.json'); if(!j.installed||!j.installed.client_id||!j.installed.client_secret){console.error('::error::colab-oauth-client.json に installed.client_id / client_secret がありません（デスクトップ アプリ型の JSON を登録してください）');process.exit(1)}"
           echo "GRAPHY_REQUIRE_COLAB_CLIENT=1" >> "$GITHUB_ENV"
+      # Google Drive バックアップに使う OAuth クライアント（デスクトップ アプリ型）と、フォルダ選択（Picker）の API キー。
+      # 公開リポジトリには置かない（.gitignore）。secrets.GRAPHY_GDRIVE_OAUTH_CLIENT に、Google からダウンロードした
+      # JSON（"installed"）のトップレベルへ "picker_api_key" を足したものをそのまま登録する。設計: fw/gdrive-p0.md。
+      # 無ければ入れずに進む（Drive バックアップだけが「設定がありません」になる配布物）。あれば中身を確かめ、
+      # 入ったことを check-packaged.js にも確かめさせる。
+      - name: Write Google Drive OAuth client
+        shell: bash
+        env:
+          GDRIVE_CLIENT: ${{ secrets.GRAPHY_GDRIVE_OAUTH_CLIENT }}
+        run: |
+          if [ -z "$GDRIVE_CLIENT" ]; then
+            echo "::warning::secrets.GRAPHY_GDRIVE_OAUTH_CLIENT がありません。この配布物では Google Drive バックアップを使えません。"
+            exit 0
+          fi
+          printf '%s' "$GDRIVE_CLIENT" > desktop/gdrive-oauth-client.json
+          node -e "const j=require('./desktop/gdrive-oauth-client.json'); if(!j.installed||!j.installed.client_id||!j.installed.client_secret){console.error('::error::gdrive-oauth-client.json に installed.client_id / client_secret がありません（デスクトップ アプリ型の JSON を登録してください）');process.exit(1)} if(typeof j.picker_api_key!=='string'||j.picker_api_key.length<20){console.error('::error::gdrive-oauth-client.json に picker_api_key がありません（フォルダ選択の API キーをトップレベルに足してください）');process.exit(1)}"
+          echo "GRAPHY_REQUIRE_GDRIVE_CLIENT=1" >> "$GITHUB_ENV"
       # 同梱の公式プラグイン（desktop/bundled-plugins.json）。GitHub Release から zip・sha256・minisig を取り、
       # **公式鍵の署名を確かめてから** desktop/resources/bundled-plugins に置く（起動時に backend がもう一度確かめて入れる）。
       # 署名の無い版は入れない（公式プラグインを署名なしで配らない）。取れなければ警告して同梱なしで進む。
@@ -231,11 +269,16 @@ jobs:
         shell: bash
         # アップロードは gh release upload が担うため electron-builder 側は publish しない
         # （--publish never＋GH_TOKEN 非注入で app-update.yml 生成/repository 解決を回避）。
+        env:
+          BACKFILL_TAG: ${{ inputs.backfill_tag }}
         run: |
           npm install
           # 🚨 起動に要るファイルが build.files に全部あるか（v0.3.0〜0.3.2 は secretStore.js 等が抜けて起動直後に落ちた）
           node --test packagedFiles.test.js
-          npm run dist -- --publish never
+          # 旧いタグのソースは mac.artifactName を持たない。x64 が arm64 と区別できる名前（-x64.dmg）になるよう渡す。
+          extra=()
+          [ -n "$BACKFILL_TAG" ] && extra=('--config.mac.artifactName=${productName}-${version}-${arch}.${ext}')
+          npm run dist -- --publish never "${extra[@]}"
       # 🚨 **公開の前に、できたインストーラの中身（app.asar）を確かめる。** 足りなければここで落ち、この OS の
       #    インストーラはアップロードされない。開発起動（desktop/ をそのまま読む）と CI では気付けない壊れ方
       #    （2026-09-30・fw/release-checklist.md）。
@@ -243,6 +286,14 @@ jobs:
         working-directory: desktop
         shell: bash
         run: node scripts/check-packaged.js dist
+      # 🚨 **Mac 版は、ブラウザで落とした状態（隔離の印付き）にして署名と macOS の判定を確かめる。** 不合格ならこの
+      #    dmg は公開されない。v0.4.0 は app 全体の署名が無く「マルウェアがブロックされました」で開けなかった
+      #    （2026-10-16）。下の実機検査は隔離の印が付かないので Gatekeeper を通らず、これに気付けない。
+      #    署名は desktop/scripts/afterPack.js（簡易署名。Apple の開発者証明書・公証はまだ無い）。
+      - name: Check macOS signature / Gatekeeper (ネットから落とした状態の判定)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: bash desktop/scripts/check-mac-gatekeeper.sh desktop/dist
       # 🚨 **できたインストーラを実際に入れて、起動して、動画を再生する**（automator/src/smoke/installedSmoke.ts）。
       #    check-packaged は app.asar の中身（静的）しか見ない。v0.3.0〜0.3.2（起動直後に落ちる）・
       #    v0.3.3（製品版だけ動画が真っ黒＝CSP）は、これが無かったので公開後に分かった。
@@ -266,31 +317,100 @@ jobs:
           else
             npx tsx src/smoke/installedSmoke.ts --dist ../desktop/dist
           fi
+      # .deb は apt で実際に入れ、--no-sandbox なしで起動する。Ubuntu 24.04 の AppArmor の下で Chromium の
+      # sandbox が動くこと（desktop/build/linux/after-install.sh のプロファイル）の検査を兼ねる。
+      - name: Smoke test (.deb を apt で入れる → 起動 → 動画再生)
+        if: runner.os == 'Linux'
+        timeout-minutes: 20
+        shell: bash
+        run: |
+          cd automator
+          xvfb-run -a --server-args="-screen 0 1600x1000x24" npx tsx src/smoke/installedSmoke.ts --dist ../desktop/dist \
+            --linux-package deb --out .results/installed-smoke-deb --port 18191
       - name: Upload smoke screenshots & logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: installed-smoke-${{ matrix.os }}
-          path: automator/.results/installed-smoke
+          path: |
+            automator/.results/installed-smoke
+            automator/.results/installed-smoke-deb
           retention-days: 14
           if-no-files-found: ignore
       - name: Upload installers (予行演習は Artifact へ)
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        if: ${{ !startsWith(github.ref, 'refs/tags/') && inputs.backfill_tag == '' }}
         uses: actions/upload-artifact@v4
         with:
           name: installer-${{ matrix.os }}
           path: |
             desktop/dist/*.AppImage
+            desktop/dist/*.deb
             desktop/dist/*.exe
             desktop/dist/*.dmg
           retention-days: 3
       - name: Upload installers
+        if: ${{ startsWith(github.ref, 'refs/tags/') || inputs.backfill_tag != '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BACKFILL_TAG: ${{ inputs.backfill_tag }}
+        run: |
+          shopt -s nullglob
+          files=(desktop/dist/*.AppImage desktop/dist/*.deb desktop/dist/*.exe desktop/dist/*.dmg)
+          (( ${#files[@]} )) || { echo "no installer in desktop/dist"; exit 1; }
+          if [ -n "$BACKFILL_TAG" ]; then
+            # 追加だけ。公開済みの資産は上書きしない（同名があれば gh が失敗する）。
+            gh release upload "$BACKFILL_TAG" --repo "$GITHUB_REPOSITORY" "${files[@]}"
+          else
+            gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber "${files[@]}"
+          fi
+
+  # インストール手順書（docs/install.md）用の画面を、ブラウザで落とした状態から撮る。
+  # 撮れなくてもリリースは止めない。取り込みは scripts/fetch-install-shots.sh <run-id>（fw/release-checklist.md）。
+  install-shots:
+    name: Install shots (${{ matrix.os }})
+    needs: desktop
+    if: ${{ !cancelled() && needs.desktop.result == 'success' && inputs.backfill_tag == '' }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get installer (予行演習は Artifact から)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/download-artifact@v4
+        with:
+          name: installer-${{ matrix.os }}
+          path: in
+      - name: Get installer (下書きリリースから)
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          shopt -s nullglob
-          files=(desktop/dist/*.AppImage desktop/dist/*.exe desktop/dist/*.dmg)
-          (( ${#files[@]} )) || { echo "no installer in desktop/dist"; exit 1; }
-          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber "${files[@]}"
+          case "$RUNNER_OS" in macOS) pat='*-arm64.dmg';; Windows) pat='*.exe';; Linux) pat='*.deb';; esac
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" -p "$pat" -D in
+      - name: Capture (macOS)
+        if: runner.os == 'macOS'
+        run: bash desktop/scripts/install-shots/mac.sh "$(ls in/*.dmg | head -1)" shots
+      - name: Capture (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $exe = (Get-ChildItem in\*.exe | Where-Object { $_.Name -notmatch 'uninstall' } | Select-Object -First 1).FullName
+          .\desktop\scripts\install-shots\win.ps1 -Exe $exe -Out (Join-Path $PWD 'shots')
+      - name: Capture (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb imagemagick fonts-noto-cjk >/dev/null
+          xvfb-run -a --server-args="-screen 0 1600x1000x24" bash desktop/scripts/install-shots/linux.sh "$(ls in/*.deb | head -1)" shots
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: install-shots-${{ matrix.os }}
+          path: shots/
+          retention-days: 30

@@ -11,6 +11,7 @@ import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Profile;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -35,6 +36,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  */
 @RestController
 @RequestMapping("/api/nifti")
+@Profile("standalone") // サーバー上のパスを受けるので web では出さない（fw/security.md「サーバー上のパス」）
 public class NiftiImportController {
 
     private static final Logger log = LoggerFactory.getLogger(NiftiImportController.class);
@@ -56,7 +58,11 @@ public class NiftiImportController {
             double spacingX, double spacingY, double spacingZ,
             int datatype, String pixelConversion,
             String geometrySource, boolean geometrySynthesized,
-            String description, boolean supported, String error) {
+            String description, boolean supported, String error,
+            /** "NIfTI" / "NIfTI pair" / "ANALYZE"（fw/nifti-import.md §9）。 */
+            String format,
+            /** bitpix が datatype と食い違っていたときの説明。 */
+            String bitpixNote) {
     }
 
     /** 取り込みの要求。患者情報が空なら変換側が既定で埋める（**推測はしない**）。 */
@@ -84,7 +90,7 @@ public class NiftiImportController {
             return ResponseEntity.badRequest().body(error("ファイルが見つかりません"));
         }
         try {
-            NiftiHeader h = NiftiToDicom.readHeader(file);
+            NiftiHeader h = NiftiPair.isPairPath(file) ? NiftiPair.resolve(file).readHeader() : NiftiToDicom.readHeader(file);
             NiftiGeometry geom = NiftiGeometry.of(h);
             String conversion;
             boolean supported;
@@ -98,7 +104,7 @@ public class NiftiImportController {
             return ResponseEntity.ok(new Probe(h.nx(), h.ny(), h.nz(), h.nt(), h.nc(),
                     h.spacingX() * h.spatialUnitToMm(), h.spacingY() * h.spatialUnitToMm(),
                     h.spacingZ() * h.spatialUnitToMm(), h.datatype, conversion,
-                    geom.source, geom.synthesized, h.description, supported, null));
+                    geom.source, geom.synthesized, h.description, supported, null, formatOf(h), h.bitpixNote));
         } catch (IOException e) {
             return ResponseEntity.badRequest().body(error(e.getMessage()));
         }
@@ -121,7 +127,18 @@ public class NiftiImportController {
                 req.studyDate(), req.studyDescription(), req.seriesDescription(),
                 req.seriesNumber() == null ? 1 : req.seriesNumber(),
                 req.studyInstanceUid(), null, meta, req.valueUnit());
-        NiftiImportService.Result result = service.importFile(file, meta, opts);
+        NiftiImportService.Result result;
+        if (NiftiPair.isPairPath(file)) {
+            // .hdr／.img（ANALYZE・NIfTI の 2 ファイル形式）。どちらを選んでも同じ対になる
+            try {
+                NiftiPair pair = NiftiPair.resolve(file);
+                result = service.importWithHeader(pair.data(), pair.readHeader(), opts);
+            } catch (IOException e) {
+                return ResponseEntity.badRequest().body(NiftiImportService.failure(e.getMessage()));
+            }
+        } else {
+            result = service.importFile(file, meta, opts);
+        }
         return result.error() == null ? ResponseEntity.ok(result) : ResponseEntity.badRequest().body(result);
     }
 
@@ -148,6 +165,13 @@ public class NiftiImportController {
     }
 
     private static Probe error(String message) {
-        return new Probe(0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, false, null, false, message);
+        return new Probe(0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, false, null, false, message, null, null);
+    }
+
+    private static String formatOf(NiftiHeader h) {
+        if (h.pairKind == NiftiHeader.PairKind.ANALYZE) {
+            return "ANALYZE";
+        }
+        return h.pairKind == NiftiHeader.PairKind.NIFTI_PAIR ? "NIfTI pair" : "NIfTI";
     }
 }

@@ -34,6 +34,15 @@ export interface MemoryInfo {
   freeBytes: number;
 }
 
+/**
+ * Chromium が報告した GPU の状態（描画環境の自己診断用。`fw/render-environment-design.md`）。
+ * `featureStatus` は `app.getGPUFeatureStatus()`（例 `{ webgl2: "enabled" }`）。
+ */
+export interface GpuStatus {
+  featureStatus: Record<string, string>;
+  devices: { vendorId: number; deviceId: number; active: boolean }[];
+}
+
 /** 秘密情報の状態。**値そのものは決して返らない**（main プロセスから出さない設計）。 */
 export interface SecretStatus {
   /** 設定済みか。 */
@@ -200,7 +209,37 @@ export interface DbFolderRow {
   isDefault: boolean;
   exists: boolean;
   active: boolean;
+  /** この DB に Drive バックアップが設定されている。 */
+  gdrive?: boolean;
 }
+
+/** Drive バックアップ: main が返す状態（トークン・API キーは返らない）。 */
+export interface GdriveDesktopStatus {
+  /** OAuth クライアントがこのアプリに入っているか。 */
+  configured: boolean;
+  /** Picker に使う API キーがあるか。 */
+  pickerReady: boolean;
+  signedIn: boolean;
+  email: string | null;
+  /** 使用中の DB に設定された保存先。無ければ null。 */
+  folder: {
+    name: string;
+    shared: boolean;
+    email: string | null;
+    /** "backup"＝ローカルが正本（Drive にバックアップ）／"cache"＝Drive が正本（手元は上限つきキャッシュ）。 */
+    mode: GdriveMode;
+    /** モード A の手元の上限（バイト）。 */
+    cacheLimitBytes: number;
+  } | null;
+  /** 上限の既定（15 GB）と、画面から選べる下限（1 GB）。バイト。 */
+  defaultCacheLimitBytes: number;
+  minCacheLimitBytes: number;
+}
+
+export type GdriveMode = "backup" | "cache";
+
+export type GdriveActionResult = { ok: true; name?: string; parentName?: string; shared?: boolean; email?: string | null }
+  | { ok: false; error?: string; canceled?: boolean };
 
 export interface DbFolderList {
   /** この起動で使っている DB。 */
@@ -232,6 +271,8 @@ export interface GraphyDesktop {
   openMemoryMonitor?: () => Promise<void>;
   /** OS の物理メモリ量を取得（ボリューム構築のバジェット決定用、デスクトップのみ）。 */
   getMemoryInfo?: () => Promise<MemoryInfo>;
+  /** Chromium の GPU 機能状態と GPU 一覧（描画環境の自己診断用、デスクトップのみ）。 */
+  getGpuStatus?: () => Promise<GpuStatus>;
   /** 外部 URL / mailto を OS の既定アプリ（ブラウザ・メーラ）で開く。 */
   openExternal?: (url: string) => void;
   /** GitHub Releases の最新リリース情報を取得（更新確認、デスクトップのみ）。失敗時 null。 */
@@ -263,6 +304,22 @@ export interface GraphyDesktop {
   dbFoldersSwitch?: (folder: string) => Promise<DbFolderPickResult>;
   /** 最近使った一覧から外す（フォルダの中身には触れない）。 */
   dbFoldersForget?: (folder: string) => Promise<{ ok: boolean; reason?: string }>;
+  /** Drive バックアップ: 状態 / ログイン / ログアウト / 保存先を選んで有効化 / 解除（確認は main）。 */
+  gdriveStatus?: () => Promise<GdriveDesktopStatus>;
+  gdriveSignIn?: () => Promise<{ ok: boolean; email?: string | null; error?: string }>;
+  gdriveSignOut?: () => Promise<{ ok: boolean; error?: string }>;
+  /** mode を省くと "backup"（従来どおり）。 */
+  gdriveEnable?: (mode?: GdriveMode) => Promise<GdriveActionResult>;
+  /** モードの切替。条件（同期済み／全件が手元）を満たさなければ { ok:false, error } を返す（main が検査）。 */
+  gdriveSetMode?: (mode: GdriveMode) => Promise<{ ok: boolean; error?: string }>;
+  /** モード A の手元の上限（バイト）。下限未満は { ok:false, error:"invalid-limit" }。 */
+  gdriveSetCacheLimit?: (bytes: number) => Promise<{ ok: boolean; error?: string }>;
+  gdriveDisable?: () => Promise<{ ok: boolean; canceled?: boolean; error?: string }>;
+  /** Drive のバックアップを選び、空のフォルダへ取り戻し始める。進み具合は backend の /api/gdrive/restore。 */
+  gdriveRestore?: (
+    title: string,
+    mode?: GdriveMode,
+  ) => Promise<{ ok: true; folder: string; mode?: GdriveMode } | { ok: false; error?: string; canceled?: boolean }>;
   /** ネイティブダイアログ（confirm/alert/prompt）後にレンダラのキーボードフォーカスを復帰させる。 */
   refocus?: () => void;
   /** 秘密情報を OS のキーチェーンで暗号化して保存する（デスクトップのみ）。 */

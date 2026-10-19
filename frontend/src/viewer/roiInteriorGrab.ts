@@ -47,7 +47,7 @@ export function pointInPolygon(poly: Vec2[], p: Vec2): boolean {
  * 注釈が閉じた面を持つ ROI なら、canvas 点 `p` がその内側かを返す。面を持たない注釈は false。
  *
  * <p>矩形の `handles.points` は 0↔3・1↔2 が対角（上流 `RectangleROITool._dragCallback`）なので 0,1,3,2 の順で一周する。
- * 楕円は [bottom, top, left, right]。輪郭系は `data.contour.polyline` を `contour.closed` のときだけ使う。
+ * 楕円は [bottom, top, left, right]。円は [中心, 縁の 1 点]。輪郭系は `data.contour.polyline` を `contour.closed` のときだけ使う。
  */
 export function isInsideClosedRoi(annotation: Any, toCanvas: (w: Vec3) => Vec2, p: Vec2): boolean {
   const tool = annotation?.metadata?.toolName as string | undefined;
@@ -74,6 +74,14 @@ export function isInsideClosedRoi(annotation: Any, toCanvas: (w: Vec3) => Vec2, 
     const s = (dx * ux + dy * uy) / a;
     const t = (-dx * uy + dy * ux) / b;
     return s * s + t * t <= 1;
+  }
+  if (tool === "CircleROI") {
+    const pts = data.handles?.points;
+    if (!pts || pts.length < 2) return false;
+    const c = toCanvas(pts[0]);
+    const e = toCanvas(pts[1]);
+    const r = Math.hypot(e[0] - c[0], e[1] - c[1]);
+    return r > 0 && Math.hypot(p[0] - c[0], p[1] - c[1]) <= r;
   }
   const contour = data.contour;
   if (contour?.closed && Array.isArray(contour.polyline) && contour.polyline.length >= 3) {

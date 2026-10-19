@@ -44,6 +44,39 @@ public class StorageLayout {
         return root;
     }
 
+    private org.springframework.context.ApplicationEventPublisher events;
+    private volatile StorageBackend backend = StorageBackend.NONE;
+
+    /** モード A の取り寄せ口を登録する（{@code GdriveSyncService} が自分を登録する）。null なら何もしない実装に戻す。 */
+    public void setBackend(StorageBackend backend) {
+        this.backend = backend == null ? StorageBackend.NONE : backend;
+    }
+
+    /** モード A（Drive 正本・手元はキャッシュ）か。 */
+    public boolean cacheMode() {
+        return backend.cacheMode();
+    }
+
+    @Autowired(required = false)
+    void setEvents(org.springframework.context.ApplicationEventPublisher events) {
+        this.events = events;
+    }
+
+    /**
+     * 保管庫のファイルを消した・書き換えた（しようとした）あとに呼ぶ。Drive 同期へ、利用者の操作であることを伝える。
+     * モード A では手元に無いこと自体は削除を意味しないので、削除はこの通知が Drive 側へ伝わる唯一の経路になる。
+     */
+    public void notifyChanged(Path file) {
+        if (events == null || file == null) {
+            return;
+        }
+        try {
+            events.publishEvent(new com.vis.graphynext.gdrive.StorageChanged(toStored(file)));
+        } catch (IllegalArgumentException ignore) {
+            // 保管庫の外のファイルは同期の対象ではない
+        }
+    }
+
     /** 規約パス {@code <root>/<studyUid>/<seriesUid>/<sopUid>.dcm}。UID が区切りや {@code ..} を含めば拒否する。 */
     public Path instancePath(String studyUid, String seriesUid, String sopUid) {
         return root.resolve(segment(studyUid)).resolve(segment(seriesUid)).resolve(segment(sopUid) + ".dcm");
@@ -70,6 +103,50 @@ public class StorageLayout {
      * 順序: 索引の値が指すルート配下のファイル → 規約パス → ルート外の旧来パス（読み取りのみ）。
      */
     public Path resolveForRead(DicomInstance inst) {
+        Path local = resolveLocal(inst);
+        if (!backend.cacheMode()) {
+            return local;
+        }
+        if (local != null) {
+            if (local.startsWith(root)) {
+                backend.touch(toStored(local));
+            }
+            return local;
+        }
+        // 手元に無い。Drive が正本のファイルなら取り寄せる（失敗は null にせず例外）
+        Path target = resolveForWrite(inst);
+        return target == null ? null : backend.ensureLocal(toStored(target));
+    }
+
+    /**
+     * {@code insts} のうち手元に無いものを、先にまとめて取り寄せる（モード A）。一括で解決する呼び出し側
+     * （送信・エクスポート・線量・RT/SEG）が、1 件ずつ遅い取得を直列に待たないため。失敗は例外。
+     */
+    public void prefetch(java.util.Collection<DicomInstance> insts, java.util.function.BooleanSupplier cancelled) {
+        if (!backend.cacheMode()) {
+            return;
+        }
+        java.util.List<String> rels = new java.util.ArrayList<>();
+        for (DicomInstance inst : insts) {
+            if (resolveLocal(inst) == null) {
+                Path target = resolveForWrite(inst);
+                if (target != null) {
+                    rels.add(toStored(target));
+                }
+            }
+        }
+        if (!rels.isEmpty()) {
+            backend.prefetch(rels, cancelled);
+        }
+    }
+
+    /** このインスタンスのファイルが手元にあるか（取り寄せはしない）。 */
+    public boolean isLocal(DicomInstance inst) {
+        return resolveLocal(inst) != null;
+    }
+
+    /** 手元にある実在のファイル（無ければ null）。取り寄せはしない。 */
+    private Path resolveLocal(DicomInstance inst) {
         String uri = inst.getUri();
         if (uri != null && !isLegacy(uri)) {
             Path p = fromRelative(uri);

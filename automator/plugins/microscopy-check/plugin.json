@@ -1,0 +1,12 @@
+{
+  "id": "microscopy-check",
+  "name": "Microscopy Import Check",
+  "version": "0.1.0",
+  "engines": { "graphy": ">0.5.0", "os": ["win32", "darwin", "linux"] },
+  "description": "Verifies H68 (host.microscopy.importVolume): the plugin's own job writes raw channels into its temp folder and the host imports them after its consent dialog.",
+  "author": "automator",
+  "license": "MIT",
+  "contributes": ["mainscreen.menu"],
+  "ui": "ui.js",
+  "entrypoint": "automator.MicroscopyProbe"
+}

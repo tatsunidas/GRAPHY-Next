@@ -324,7 +324,7 @@ async function main(): Promise<void> {
     await viewer.waitForTimeout(1_500);
 
     // 解析区間を Length で指定する（既存 A4 と同じ導線）。
-    await viewer.getByTestId("viewer2d-menu-roi").click();
+    await viewer.getByTestId("viewer2d-menu-measure").click();
     await viewer.waitForTimeout(300);
     await viewer.getByText("長さ", { exact: true }).first().click();
     await viewer.waitForTimeout(400);

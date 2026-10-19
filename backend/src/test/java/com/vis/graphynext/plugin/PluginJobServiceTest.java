@@ -127,4 +127,75 @@ class PluginJobServiceTest {
         assertThrows(NoSuchElementException.class, () -> s.submit("nope", Map.of()));
         assertFalse(s.status("unknown").isPresent());
     }
+
+    // ── H67: JAR に渡す __ensureLocal ──
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void 取り寄せの関数を_JAR_の_args_に渡す_画面から同名のキーが来ても上書きする() throws Exception {
+        Object[] seen = new Object[1];
+        PluginJobService s = new PluginJobService(registry(args -> {
+            seen[0] = args.get(PluginJobService.ENSURE_LOCAL_KEY);
+            return Map.of("ok", true);
+        }, true), new PluginArtifacts());
+        Function<String, String> fn = sop -> "/local/" + sop;
+        com.vis.graphynext.plugin.storage.PluginStorageService storage = org.mockito.Mockito.mock(com.vis.graphynext.plugin.storage.PluginStorageService.class);
+        org.mockito.Mockito.when(storage.ensureLocalFunction()).thenReturn(fn);
+        s.setStorage(storage);
+        // 画面から送られた同名のキー（文字列）は本体の関数で上書きされる
+        PluginJobService.Status st = await(s, s.submit("p", Map.of(PluginJobService.ENSURE_LOCAL_KEY, "evil")).jobId());
+        assertEquals(PluginJobService.State.DONE, st.state());
+        assertTrue(seen[0] instanceof Function, "文字列ではなく関数が入る");
+        assertEquals("/local/x", ((Function<String, String>) seen[0]).apply("x"));
+        s.shutdown();
+    }
+
+    @Test
+    void 取り寄せの口が無い構成では_キーを渡さず_画面からの同名のキーも消す() throws Exception {
+        Object[] seen = {"unset"};
+        PluginJobService s = new PluginJobService(registry(args -> {
+            seen[0] = args.get(PluginJobService.ENSURE_LOCAL_KEY);
+            return Map.of();
+        }, true), new PluginArtifacts());
+        PluginJobService.Status st = await(s, s.submit("p", Map.of(PluginJobService.ENSURE_LOCAL_KEY, "evil")).jobId());
+        assertEquals(PluginJobService.State.DONE, st.state());
+        assertEquals(null, seen[0], "無い構成では、画面から来た文字列も渡さない");
+        s.shutdown();
+    }
+
+    // ── H69: JAR に渡す __cache ──
+
+    @Test
+    void 置き場を_JAR_の_args_に渡す_プラグインに束縛され_画面から同名のキーが来ても上書きする() throws Exception {
+        Object[] seen = new Object[1];
+        PluginJobService s = new PluginJobService(registry(args -> {
+            seen[0] = args.get(PluginJobService.CACHE_KEY);
+            return Map.of("ok", true);
+        }, true), new PluginArtifacts());
+        java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("pcache");
+        com.vis.graphynext.plugin.cache.PluginCacheService cache =
+                new com.vis.graphynext.plugin.cache.PluginCacheService(new com.vis.graphynext.cache.CacheStore(dir, 0), 1024);
+        s.setCache(cache);
+        PluginJobService.Status st = await(s, s.submit("p", Map.of(PluginJobService.CACHE_KEY, "evil")).jobId());
+        assertEquals(PluginJobService.State.DONE, st.state());
+        assertTrue(seen[0] instanceof com.vis.graphynext.plugin.spi.PluginCache, "文字列ではなく置き場が入る");
+        com.vis.graphynext.plugin.spi.PluginCache c = (com.vis.graphynext.plugin.spi.PluginCache) seen[0];
+        assertTrue(c.put("k", new byte[] {1, 2, 3}));
+        assertTrue(cache.get("p", "k").isPresent(), "束縛された id（p）の名前で入る");
+        assertTrue(cache.get("other", "k").isEmpty(), "別の id からは見えない");
+        s.shutdown();
+    }
+
+    @Test
+    void 置き場の口が無い構成では_キーを渡さず_画面からの同名のキーも消す() throws Exception {
+        Object[] seen = {"unset"};
+        PluginJobService s = new PluginJobService(registry(args -> {
+            seen[0] = args.get(PluginJobService.CACHE_KEY);
+            return Map.of();
+        }, true), new PluginArtifacts());
+        PluginJobService.Status st = await(s, s.submit("p", Map.of(PluginJobService.CACHE_KEY, "evil")).jobId());
+        assertEquals(PluginJobService.State.DONE, st.state());
+        assertEquals(null, seen[0]);
+        s.shutdown();
+    }
 }

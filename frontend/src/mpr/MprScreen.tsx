@@ -10,6 +10,7 @@
  * ボリューム構築・チルト補正・ビューポート配線は `viewer/mpr.ts`。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { MIN_SLAB_MM, finestVoxelMm, tooFineForVolumeRendering } from "../viewer/volumeScale";
 import { RenderingEngine, Enums, eventTarget } from "@cornerstonejs/core";
 import {
   fetchSeries,
@@ -44,6 +45,8 @@ import {
   type MprProbe,
   type MprTouchTool,
 } from "../viewer/mpr";
+import { SliceDuplicatesError, volumeDepthNote, type VolumeDepthNote } from "../viewer/depthVolume";
+import { VolumeDepthChip } from "../viewer/VolumeDepthChip";
 import { presetLabel } from "../viewer2d/wlPresets";
 import { useWlPresets } from "../viewer2d/wlPresetStore";
 import { useI18n } from "../i18n/i18n";
@@ -101,6 +104,7 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
   const [message, setMessage] = useState<string>("");
   const [title, setTitle] = useState<string>("");
   const [tilt, setTilt] = useState<number | null>(null);
+  const [depthNote, setDepthNote] = useState<VolumeDepthNote | null>(null);
   const [overlays, setOverlays] = useState<Record<string, MprOverlay>>({});
   const [probe, setProbe] = useState<MprProbe | null>(null);
   // Slab MIP（fw/slab-mip-design.md §B）。null=通常 MPR。厚みは全幅 mm。
@@ -193,6 +197,12 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
         ctx.study.studyInstanceUid,
         series.seriesInstanceUid,
       ).catch(() => null);
+      if (tooFineForVolumeRendering(guardLayout)) {
+        // ボクセルが描画ライブラリの最小のスラブより細かい（顕微鏡など）。組んでも正しく描けないので、理由を出して止める
+        setPhase("error");
+        setMessage(t("volume.tooFine", { voxel: String(finestVoxelMm(guardLayout)?.toPrecision(3)), min: String(MIN_SLAB_MM) }));
+        return;
+      }
       let imageIds = guardLayout
         ? imageIdsForLayoutStack(guardLayout.cells, mode, 0, 0, ctx.study.studyInstanceUid, series.seriesInstanceUid)
         : [];
@@ -236,6 +246,7 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
         maxBytes: memDecision.enforceMaxBytes,
       });
       setTilt(built.corrected ? (built.tiltAngleDeg ?? null) : null);
+      setDepthNote(volumeDepthNote(built.geometry, built.grid));
 
       const els = axialRef.current && sagittalRef.current && coronalRef.current;
       if (!els) {
@@ -268,7 +279,9 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
       setMessage(
         isCacheSizeExceeded(e)
           ? t("common.volumeMemExceeded", { budgetMb: String(getAppliedVolumeMaxMb()) })
-          : `${t("mpr.error")}: ${String(e)}`,
+          : e instanceof SliceDuplicatesError
+            ? t("volumeDepth.duplicates")
+            : `${t("mpr.error")}: ${String(e)}`,
       );
     }
   }, [mode, t]);
@@ -433,6 +446,7 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
             <span style={wlLabel}>mm</span>
           </label>
         )}
+        <VolumeDepthChip note={depthNote} style={tiltChip} />
         {tilt !== null && (
           <span style={tiltChip} title={t("mpr.tiltCorrectedHint")}>
             {t("mpr.tiltCorrected", { deg: tilt.toFixed(1) })}

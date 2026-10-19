@@ -11,21 +11,21 @@
  *  - 選択 ROI → メッシュ生成 / 選択メッシュ → 3D ROI 生成（表示ボリューム幾何へボクセル化）
  *  - 選択オブジェクト → STL 書き出し
  */
-import { useEffect, useMemo, useRef, useState } from "react";
-import { segmentation as csSeg } from "@cornerstonejs/tools";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n/i18n";
-import { getRoiMaskMeta, getMaskSegments } from "../viewer/roiMaskStore";
-import { buildLabelVolumeFromSegmentation, type VolumeGeom } from "../viewer/labelVolume";
+import { buildLabelVolumeFromSegmentation, type LabelVolume, type VolumeGeom } from "../viewer/labelVolume";
 import { exportStlBinary, importObj, importStl } from "../viewer/mesh3d";
-import { listSpheres3D, subscribeSphere3D } from "../viewer/sphere3dStore";
 import { framesToLabelVolume } from "../viewer/maskFrames";
 import { rtStructRoiToLabelVolume } from "../viewer/rtstructToLabelVolume";
-import { requestRemoteMasks, requestRemoteMaskFrames, type RemoteMask } from "../viewer/maskBridge";
-import { fetchSeries, readDicomSeg, readDicomRtStruct } from "../api";
+import { rasterizeSphereToLabelVolume } from "../viewer/sphereRaster";
+import { collectLocalRois, requestRemoteRois, requestRemoteMaskFrames } from "../viewer/maskBridge";
+import { withTempMask } from "../viewer/roiBooleanOps";
+import { announceKey, dedupeAnnounce, type AnnounceEntry } from "../viewer/maskBridgeCore";
+import { filterRtRois, filterSegSegments } from "../viewer/serverRoiFilter";
+import { fetchInstances, fetchSeries, readDicomSeg, readDicomRtStruct } from "../api";
 import {
   addMeshObject,
   addRoiObject,
-  addSphereObject,
   convertMeshToRoi,
   convertRoiToMesh,
   extractCenterlineFromObject,
@@ -33,6 +33,7 @@ import {
   removeObject,
   setObjectColor,
   setObjectDisplayMode,
+  setRoiSmooth,
   setObjectOpacity,
   setObjectVisible,
   startEndoscopy,
@@ -44,11 +45,16 @@ import { removeMeasurement3D } from "./scene3d";
 import { useMeasurements } from "./measureStore";
 import { undo, redo, useUndoState } from "./undoStore";
 import {
+  sceneSourceKey,
   selectSceneObject,
   useSceneObjects,
   type SceneDisplayMode,
   type SceneObject,
+  type SceneObjectSource,
 } from "./scene3dStore";
+
+/** 取り込み候補の 2D ROI。windowId が null ならこのウィンドウ自身が持つもの。 */
+type ListedRoi = AnnounceEntry & { windowId: string | null };
 
 /** [0..1] RGB → #rrggbb。 */
 function rgbToHex(c: [number, number, number]): string {
@@ -65,24 +71,6 @@ function hexToRgb(hex: string): [number, number, number] {
   return [parseInt(m[1], 16) / 255, parseInt(m[2], 16) / 255, parseInt(m[3], 16) / 255];
 }
 
-/** Cornerstone 上のセグメント表示色（0–255 RGBA）を [0..1] RGB へ変換して取得。無ければ undefined。 */
-function segColor01(segmentationId: string, segIndex: number): [number, number, number] | undefined {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const vps = (csSeg.state as any).getViewportIdsWithSegmentation(segmentationId) as string[] | undefined;
-    const vp = vps?.[0];
-    if (!vp) return undefined;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const c = (csSeg.config.color as any).getSegmentIndexColor(vp, segmentationId, segIndex) as
-      | number[]
-      | undefined;
-    if (!c || c.length < 3) return undefined;
-    return [c[0] / 255, c[1] / 255, c[2] / 255];
-  } catch {
-    return undefined;
-  }
-}
-
 function download(name: string, buf: ArrayBuffer): void {
   const blob = new Blob([buf], { type: "application/octet-stream" });
   const url = URL.createObjectURL(blob);
@@ -97,6 +85,7 @@ function download(name: string, buf: ArrayBuffer): void {
 
 export function SceneObjectPanel({
   geom,
+  sopToK,
   onStartCut,
   onAnalyzeCenterline,
   onRepairMesh,
@@ -106,9 +95,13 @@ export function SceneObjectPanel({
   onToggleEndoPath,
   studyUid,
   seriesUid,
+  ctxC,
+  ctxT,
   isDemo,
 }: {
   geom: VolumeGeom | null;
+  /** 体積のスライス順の SOP → k。2D の ROI を、描かれている画像と同じスライスに載せる。 */
+  sopToK?: ReadonlyMap<string, number>;
   onStartCut?: (id: string) => void;
   onAnalyzeCenterline?: (id: string, name: string) => void;
   onRepairMesh?: (id: string, name: string) => void;
@@ -120,6 +113,9 @@ export function SceneObjectPanel({
    * `fw/mask-driven-pipelines-gap-analysis.md` 課題#1。 */
   studyUid?: string;
   seriesUid?: string;
+  /** 3D で表示中のチャンネル/タイムフレーム（2D の ROI を C/T で絞る）。 */
+  ctxC?: number;
+  ctxT?: number;
   /** 公開デモ。クライアント完結でバックエンドに来ないため DemoModeFilter では止められない
    * STL/OBJ インポートボタンを隠す。 */
   isDemo?: boolean;
@@ -160,45 +156,32 @@ export function SceneObjectPanel({
 
   const selected = objects.find((o) => o.selected) ?? null;
 
-  // 利用可能なマスク（Cornerstone segmentation）。
-  const masks = useMemo(() => {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const segs = ((csSeg.state as any).getSegmentations?.() ?? []) as {
-        segmentationId: string;
-        label?: string;
-      }[];
-      return segs.map((s) => ({
-        id: s.segmentationId,
-        label: getRoiMaskMeta(s.segmentationId)?.label ?? s.label ?? s.segmentationId,
-      }));
-    } catch {
-      return [];
-    }
-    // objects を依存に入れて、ROI 追加後にも再評価（新規マスク生成に追従）。
-  }, [objects.length]);
-
-  // パラメトリック 3D 球（2D ビューアで定義、`sphere3dStore.ts`）。Mask 焼き込み→再インポートを経ずに直接追加できる。
-  const [sphereTick, setSphereTick] = useState(0);
-  useEffect(() => subscribeSphere3D(() => setSphereTick((n) => n + 1)), []);
-  const spheres = useMemo(() => listSpheres3D(), [sphereTick]);
-
-  // 他ウィンドウ（2D Viewer 等）が保持するマスク（ウィンドウ間同期, `maskBridge.ts`）。
-  const [remoteMasks, setRemoteMasks] = useState<RemoteMask[]>([]);
-  useEffect(() => {
+  // 2D ビューアの ROI（塗りは segment 単位・パラメトリック球）。別ウィンドウは BroadcastChannel、
+  // 同じウィンドウ（モバイル等）はローカルの状態から作り、同じ一覧にまとめる。
+  const [roiList, setRoiList] = useState<ListedRoi[]>([]);
+  const [roiOpen, setRoiOpen] = useState(false);
+  const refreshRois = useCallback(async () => {
     if (!studyUid || !seriesUid) {
-      setRemoteMasks([]);
+      setRoiList([]);
       return;
     }
-    let cancelled = false;
-    requestRemoteMasks(studyUid, seriesUid).then((list) => {
-      if (!cancelled) setRemoteMasks(list);
-    });
-    return () => {
-      cancelled = true;
-    };
-    // objects.length: 他パネル操作でマスクが増減した後の再チェックに追従。
-  }, [studyUid, seriesUid, objects.length]);
+    const q = { studyUid, seriesUid, c: ctxC, t: ctxT };
+    const local: ListedRoi[] = collectLocalRois(q).map((e) => ({ ...e, windowId: null }));
+    const remote = await requestRemoteRois(q);
+    setRoiList(dedupeAnnounce([...local, ...remote]));
+  }, [studyUid, seriesUid, ctxC, ctxT]);
+  useEffect(() => {
+    void refreshRois();
+  }, [refreshRois]);
+
+  const importedKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const o of objects) {
+      const k = sceneSourceKey(o.source);
+      if (k) keys.add(k);
+    }
+    return keys;
+  }, [objects]);
 
   const withBusy = async (fn: () => void | Promise<void>) => {
     setBusy(true);
@@ -214,85 +197,88 @@ export function SceneObjectPanel({
     }
   };
 
-  // セグメントごとに独立した SceneObject（ROI）を作成する。1 セグメントのみの Mask でも
-  // このループで 1 回だけ回り、挙動は従来と変わらない。
-  const onAddRoiFromMask = (segmentationId: string) => {
-    if (!segmentationId) return;
-    void withBusy(() => {
-      const meta = getRoiMaskMeta(segmentationId);
-      const segIndices = getMaskSegments(segmentationId);
-      let added = 0;
-      for (const segIndex of segIndices) {
-        const lv = buildLabelVolumeFromSegmentation(segmentationId, segIndex);
-        if (!lv) continue;
-        const segLabel = meta?.custom?.[String(segIndex)];
-        const name = segLabel || (meta?.label ? `${meta.label} #${segIndex}` : undefined);
-        const color = segColor01(segmentationId, segIndex);
-        const id = addRoiObject(lv, { name, color, volumeFrom: "mesh" });
-        if (id) added++;
+  const rgb01 = (c: [number, number, number] | null): [number, number, number] | undefined =>
+    c ? [c[0] / 255, c[1] / 255, c[2] / 255] : undefined;
+
+  // 2D の ROI 1 件を 3D ROI として追加する。名前と色は 2D の行と同じ。成功なら true。
+  const importRoiEntry = async (e: ListedRoi): Promise<boolean> => {
+    if (!geom || !seriesUid) return false;
+    let lv: LabelVolume | null = null;
+    // 2D 側で求めた体積（2D の Σ³ と同じ値）。ウィンドウ間で受け取ったときだけ。
+    let vol2d: { volumeMm3?: number; depthSource?: SceneObject["volumeDepthSource"] } | null = null;
+    if (e.kind === "sphere") {
+      lv = rasterizeSphereToLabelVolume(geom, e.center, e.radiusMm);
+    } else if (e.kind === "shape") {
+      // 形の ROI は 2D 側で一時的に塗りへ変えて受け取る（2D のパネルに塗りの行は残らない）。
+      if (e.windowId == null) {
+        lv = await withTempMask(e.annotationUid, (tmp) => buildLabelVolumeFromSegmentation(tmp));
+      } else {
+        const frames = await requestRemoteMaskFrames(e.windowId, "", undefined, 8000, e.annotationUid);
+        lv = frames ? framesToLabelVolume(frames, geom, 1, sopToK) : null;
+        if (frames?.depthSource) vol2d = { volumeMm3: frames.volumeMm3, depthSource: frames.depthSource };
       }
-      if (added === 0) setStatus(t("scene3d.error"));
+    } else if (e.windowId == null) {
+      lv = buildLabelVolumeFromSegmentation(e.segmentationId, e.segmentIndex);
+    } else {
+      const frames = await requestRemoteMaskFrames(e.windowId, e.segmentationId, e.segmentIndex);
+      lv = frames ? framesToLabelVolume(frames, geom, e.segmentIndex, sopToK) : null;
+      if (frames?.depthSource) vol2d = { volumeMm3: frames.volumeMm3, depthSource: frames.depthSource };
+    }
+    if (!lv) return false;
+    const base = { origin: "2d" as const, seriesUid, c: e.c, t: e.t };
+    const source: SceneObjectSource =
+      e.kind === "sphere"
+        ? { ...base, sphereId: e.sphereId }
+        : e.kind === "shape"
+          ? { ...base, annotationUid: e.annotationUid }
+          : { ...base, segmentationId: e.segmentationId, segmentIndex: e.segmentIndex };
+    return !!addRoiObject(lv, {
+      name: e.label,
+      color: rgb01(e.color),
+      source,
+      ...(vol2d ? { volumeOverride: vol2d } : {}),
     });
   };
 
-  // 他ウィンドウのマスクを取り込む（`value` は remoteMasks の index）。
-  // マスク内のセグメントごとに独立した SceneObject を作成する。
-  const onAddRoiFromRemoteMask = (value: string) => {
-    const idx = Number(value);
-    const rm = remoteMasks[idx];
-    if (!rm) return;
+  const onAddRoi = (e: ListedRoi) => {
     void withBusy(async () => {
-      if (!geom) {
-        setStatus(t("scene3d.error"));
-        return;
-      }
-      const frames = await requestRemoteMaskFrames(rm.windowId, rm.segmentationId);
-      if (!frames) {
-        setStatus(t("scene3d.remoteMaskFailed"));
-        return;
-      }
-      let added = 0;
-      for (const seg of frames.segments) {
-        const lv = framesToLabelVolume(frames, geom, seg.number);
-        if (!lv) continue;
-        const color: [number, number, number] | undefined = seg.color
-          ? [seg.color[0] / 255, seg.color[1] / 255, seg.color[2] / 255]
-          : undefined;
-        const id = addRoiObject(lv, {
-          name: seg.label || seg.description || undefined,
-          color,
-          volumeFrom: "mesh",
-        });
-        if (id) added++;
-      }
-      if (added === 0) setStatus(t("scene3d.remoteMaskFailed"));
+      if (!(await importRoiEntry(e))) setStatus(t("scene3d.remoteMaskFailed"));
     });
   };
 
-  // 表示中スタディの SEG/RTSTRUCT シリーズをサーバ（dcm4chee 経由）からまとめて取り込む。
-  // 他ウィンドウが開いている必要がある BroadcastChannel 同期（remoteMasks）と異なり、永続化済みの
-  // SEG/RTSTRUCT があれば 3D Viewer 単体で取得できる。
+  // 取り込み済み（source が同じ）は飛ばす。
+  const onAddAllRois = () => {
+    void withBusy(async () => {
+      let failed = 0;
+      for (const e of roiList) {
+        if (importedKeys.has(announceKey(e))) continue;
+        if (!(await importRoiEntry(e))) failed++;
+      }
+      if (failed > 0) setStatus(t("scene3d.remoteMaskFailed"));
+    });
+  };
+
+  // 表示中スタディの SEG/RTSTRUCT のうち、表示中シリーズを参照するものをサーバ（dcm4chee 経由）から取り込む。
+  // 参照の判定は SOP Instance UID（backend が返すフレーム/輪郭の参照）と表示中シリーズのインスタンス集合の突き合わせ。
   const onFetchServerMasks = () => {
-    if (!studyUid || !geom) return;
+    if (!studyUid || !seriesUid || !geom) return;
     void withBusy(async () => {
       let added = 0;
-      const seriesList = await fetchSeries(studyUid).catch(() => []);
+      const source: SceneObjectSource = { origin: "server", seriesUid };
+      const [seriesList, instances] = await Promise.all([
+        fetchSeries(studyUid).catch(() => []),
+        fetchInstances(studyUid, seriesUid).catch(() => []),
+      ]);
+      const sops = new Set(instances.map((i) => i.sopInstanceUid));
 
       const segSeries = seriesList.filter((s) => (s.modality ?? "").toUpperCase() === "SEG");
       for (const s of segSeries) {
         const result = await readDicomSeg(studyUid, s.seriesInstanceUid).catch(() => null);
         if (!result?.segments.length) continue;
-        for (const seg of result.segments) {
-          const lv = framesToLabelVolume(result, geom, seg.number);
+        for (const seg of filterSegSegments(result.segments, sops)) {
+          const lv = framesToLabelVolume(result, geom, seg.number, sopToK);
           if (!lv) continue;
-          const color: [number, number, number] | undefined = seg.color
-            ? [seg.color[0] / 255, seg.color[1] / 255, seg.color[2] / 255]
-            : undefined;
-          const id = addRoiObject(lv, {
-            name: seg.label || seg.description || undefined,
-            color,
-            volumeFrom: "mesh",
-          });
+          const id = addRoiObject(lv, { name: seg.label || seg.description || undefined, color: rgb01(seg.color), source });
           if (id) added++;
         }
       }
@@ -300,29 +286,17 @@ export function SceneObjectPanel({
       const rtSeries = seriesList.filter((s) => (s.modality ?? "").toUpperCase() === "RTSTRUCT");
       for (const s of rtSeries) {
         const rois = await readDicomRtStruct(studyUid, s.seriesInstanceUid).catch(() => []);
-        for (const roi of rois) {
-          const lv = rtStructRoiToLabelVolume(roi, geom);
+        for (const roi of filterRtRois(rois, sops)) {
+          const lv = rtStructRoiToLabelVolume(roi, geom, 1, sopToK);
           if (!lv) continue;
-          const color: [number, number, number] | undefined =
-            roi.color && roi.color.length >= 3
-              ? [roi.color[0] / 255, roi.color[1] / 255, roi.color[2] / 255]
-              : undefined;
-          const id = addRoiObject(lv, { name: roi.name, color, volumeFrom: "mesh" });
+          const color: [number, number, number] | null =
+            roi.color && roi.color.length >= 3 ? [roi.color[0], roi.color[1], roi.color[2]] : null;
+          const id = addRoiObject(lv, { name: roi.name, color: rgb01(color), source });
           if (id) added++;
         }
       }
 
       setStatus(added > 0 ? t("scene3d.serverFetchDone", { count: String(added) }) : t("scene3d.serverFetchEmpty"));
-    });
-  };
-
-  const onAddSphereObject = (sphereId: string) => {
-    if (!sphereId) return;
-    const s = spheres.find((v) => v.id === sphereId);
-    if (!s) return;
-    void withBusy(() => {
-      const id = addSphereObject(s.center, s.radiusMm, { name: s.label || undefined });
-      if (!id) setStatus(t("scene3d.error"));
     });
   };
 
@@ -431,62 +405,59 @@ export function SceneObjectPanel({
         </div>
       </div>
 
-      {/* アクション: マスク→ROI, STL インポート */}
+      {/* アクション: 2D の ROI → 3D ROI, サーバの SEG/RTSTRUCT, STL インポート */}
       <div style={actionsCol}>
-        {masks.length > 0 && (
-          <select
-            style={select}
-            value=""
-            disabled={busy}
-            onChange={(e) => {
-              onAddRoiFromMask(e.target.value);
-              e.currentTarget.value = "";
-            }}
-          >
-            <option value="">{t("scene3d.importRoi")}</option>
-            {masks.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label}
-              </option>
-            ))}
-          </select>
+        {studyUid && seriesUid && (
+          <>
+            <button
+              style={btn}
+              disabled={busy}
+              onClick={() => {
+                if (!roiOpen) void refreshRois();
+                setRoiOpen((v) => !v);
+              }}
+            >
+              {t("scene3d.importRoi")} {roiOpen ? "▴" : "▾"}
+            </button>
+            {roiOpen && (
+              <div style={roiBox}>
+                <div style={roiBoxHead}>
+                  <button style={btnSm} disabled={busy || !geom || roiList.length === 0} onClick={onAddAllRois}>
+                    {t("scene3d.addAllRois")}
+                  </button>
+                  <button style={btnSm} disabled={busy} title={t("scene3d.refreshRois")} onClick={() => void refreshRois()}>
+                    ⟳
+                  </button>
+                </div>
+                {roiList.length === 0 ? (
+                  <div style={empty}>{t("scene3d.noRoisIn2d")}</div>
+                ) : (
+                  roiList.map((e) => {
+                    const done = importedKeys.has(announceKey(e));
+                    const col = e.color ? `rgb(${e.color[0]},${e.color[1]},${e.color[2]})` : "#8a96a3";
+                    return (
+                      <div key={announceKey(e)} style={roiItem}>
+                        <span style={{ color: col }} title={e.kind}>
+                          {e.kind === "sphere" ? "◍" : e.kind === "shape" ? "▭" : "▨"}
+                        </span>
+                        <span style={roiItemName} title={e.label}>
+                          {e.label}
+                        </span>
+                        {done ? (
+                          <span style={roiDone}>{t("scene3d.imported")}</span>
+                        ) : (
+                          <button style={btnSm} disabled={busy || !geom} onClick={() => onAddRoi(e)}>
+                            {t("scene3d.addRoi")}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
+          </>
         )}
-        {remoteMasks.length > 0 && (
-          <select
-            style={select}
-            value=""
-            disabled={busy}
-            onChange={(e) => {
-              onAddRoiFromRemoteMask(e.target.value);
-              e.currentTarget.value = "";
-            }}
-          >
-            <option value="">{t("scene3d.importRemoteRoi")}</option>
-            {remoteMasks.map((m, idx) => (
-              <option key={`${m.windowId}-${m.segmentationId}`} value={idx}>
-                🔗 {m.label}
-              </option>
-            ))}
-          </select>
-        )}
-        <select
-          style={select}
-          value=""
-          disabled={busy || spheres.length === 0}
-          onChange={(e) => {
-            onAddSphereObject(e.target.value);
-            e.currentTarget.value = "";
-          }}
-        >
-          <option value="">
-            {spheres.length ? t("scene3d.importSphere") : t("scene3d.noSpheres")}
-          </option>
-          {spheres.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.label || s.id}
-            </option>
-          ))}
-        </select>
         {studyUid && geom && (
           <button style={btn} disabled={busy} title={t("scene3d.fetchServerMasks.hint")} onClick={onFetchServerMasks}>
             {t("scene3d.fetchServerMasks")}
@@ -550,6 +521,17 @@ export function SceneObjectPanel({
               </button>
             ))}
           </div>
+          {selected.kind === "roi" && (
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, margin: "4px 0" }} title={t("scene3d.smoothHint")}>
+              <input
+                type="checkbox"
+                data-testid="roi3d-smooth"
+                checked={!!selected.smooth}
+                onChange={(e) => setRoiSmooth(selected.id, e.target.checked)}
+              />
+              {t("scene3d.smooth")}
+            </label>
+          )}
           <div style={detailActions}>
             {selected.kind === "roi" && (
               <button style={btnSm} disabled={busy} onClick={onRoiToMesh}>
@@ -620,7 +602,14 @@ export function SceneObjectPanel({
                 {selected.voxels != null && (
                   <Stat k={t("scene3d.voxels")} v={num(selected.voxels, 0)} />
                 )}
-                <Stat k={t("scene3d.volume")} v={`${num(selected.volumeMl, 2)} mL`} />
+                <Stat
+                  k={t("scene3d.volume")}
+                  v={
+                    selected.volumeMl === undefined
+                      ? "—"
+                      : `${num(selected.volumeMl, 2)} mL${selected.kind === "roi" && selected.volumeDepthSource === "thickness" ? ` (${t("scene3d.volumeEstimated")})` : ""}${selected.kind === "roi" && selected.smooth ? ` (${t("scene3d.volumeBeforeSmooth")})` : ""}`
+                  }
+                />
                 <Stat k={t("scene3d.area")} v={`${num(selected.surfaceAreaMm2, 0)} mm²`} />
                 {selected.diameters && (
                   <Stat
@@ -760,14 +749,6 @@ const label: React.CSSProperties = {
   letterSpacing: 0.4,
 };
 const actionsCol: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 6 };
-const select: React.CSSProperties = {
-  background: "#1b2126",
-  color: "#e6eaee",
-  border: "1px solid #2c343b",
-  borderRadius: 5,
-  fontSize: 12,
-  padding: "5px 6px",
-};
 const btn: React.CSSProperties = {
   padding: "6px 8px",
   background: "#1b2126",
@@ -846,6 +827,11 @@ const delBtn: React.CSSProperties = {
   fontSize: 12,
   padding: 0,
 };
+const roiBox: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 4, padding: 6, border: "1px solid #dbe2ea", borderRadius: 6, background: "#f8fafc" };
+const roiBoxHead: React.CSSProperties = { display: "flex", gap: 4 };
+const roiItem: React.CSSProperties = { display: "flex", alignItems: "center", gap: 6, fontSize: 12 };
+const roiItemName: React.CSSProperties = { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#33404d" };
+const roiDone: React.CSSProperties = { fontSize: 11, color: "#7a8794" };
 const empty: React.CSSProperties = { fontSize: 11, color: "#5a6672", lineHeight: 1.5 };
 const detailBox: React.CSSProperties = {
   borderTop: "1px solid #23292f",

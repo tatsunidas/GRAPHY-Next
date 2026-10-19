@@ -32,6 +32,7 @@ const aiGateway = require("./aiGateway");
 const aiProviders = require("./aiProviders");
 const computeEndpoints = require("./computeEndpoints");
 const dbFolders = require("./dbFolders");
+const { resolveDevDataDir } = require("./devDataDir");
 const tlsPasswords = require("./tlsPasswords");
 const { waitPortFree } = require("./portWait");
 const { ensureDefaultEndpoint } = require("./computeDefault");
@@ -40,6 +41,10 @@ const computeConsent = require("./computeConsent");
 const { createColabAuth, REFRESH_KEY: COLAB_REFRESH_KEY } = require("./colabAuth");
 const { createColabApi } = require("./colabApi");
 const { createColabRuntimes } = require("./colabRuntimes");
+const { createGdriveAuth, REFRESH_KEY: GDRIVE_REFRESH_KEY } = require("./gdriveAuth");
+const gdrivePicker = require("./gdrivePicker");
+const { createBackupFolder, describeBackupFolder } = require("./gdriveFolder");
+const gdriveMode = require("./gdriveMode");
 
 const PORT = process.env.GRAPHY_BACKEND_PORT || String(cfg.backend.port);
 const PROFILE = process.env.GRAPHY_BACKEND_PROFILE || cfg.backend.profile;
@@ -122,6 +127,7 @@ const VIEWER_DEFAULTS = {
   geometry3d: { width: 1100, height: 800 },
   // GLAM 解析は図を横に並べるので、やや幅広を既定にする。
   glam: { width: 1250, height: 900 },
+  "radiomics-features": { width: 1250, height: 900 },
 };
 
 /** 同梱 / 開発時の backend jar のパスを解決する。 */
@@ -164,10 +170,22 @@ function resolveJava() {
  *   productName を変える場合はこれら 4 箇所を同時に更新すること。
  *
  * 開発時: 従来どおり CWD（通常 desktop/）をそのまま使い、既存の開発用 desktop/data を壊さない。
+ *   環境変数 GRAPHY_DEV_DATA_DIR（絶対パス・既存のフォルダ）を指定すると、DB・プラグイン・設定をそこに固定する
+ *   （worktree を作るたびに空の DB になるのを避ける。devDataDir.js）。
  */
 const APP_DATA_FOLDER = "GRAPHY-Next";
 function resolveDataDir() {
-  if (!app.isPackaged) return process.cwd();
+  if (!app.isPackaged) {
+    try {
+      // GRAPHY_DEV_DATA_DIR があれば開発のデータをそこに固定する（worktree ごとに空の DB にならない）。
+      return resolveDevDataDir(process.env, false, process.cwd());
+    } catch (e) {
+      console.error(`[backend] ${e.message}`);
+      dialog.showErrorBox("開発用データフォルダの指定が正しくありません", e.message);
+      app.exit(1);
+      throw e;
+    }
+  }
   const dir = path.join(app.getPath("appData"), APP_DATA_FOLDER);
   try {
     fs.mkdirSync(dir, { recursive: true });
@@ -760,6 +778,31 @@ ipcMain.handle("graphy:get-memory-info", () => {
   return { totalBytes, freeBytes };
 });
 
+// Chromium が報告した GPU の機能状態と GPU 一覧（設定＞描画環境。fw/render-environment-design.md）。
+// getGPUInfo('basic') は Promise、getGPUFeatureStatus() は同期。取れなければ空で返す
+// （renderer 側は「未取得」と表示する。0 や hardware で埋めない）。
+ipcMain.handle("graphy:gpu-status", async () => {
+  let featureStatus = {};
+  try {
+    featureStatus = app.getGPUFeatureStatus() || {};
+  } catch {
+    /* 取れなければ空のまま返す */
+  }
+  let devices = [];
+  try {
+    const info = await app.getGPUInfo("basic");
+    const list = Array.isArray(info?.gpuDevice) ? info.gpuDevice : [];
+    devices = list.map((g) => ({
+      vendorId: Number(g.vendorId) || 0,
+      deviceId: Number(g.deviceId) || 0,
+      active: g.active === true,
+    }));
+  } catch {
+    /* 同上 */
+  }
+  return { featureStatus, devices };
+});
+
 // 外部 URL / mailto を OS の既定アプリ（ブラウザ・メーラ）で開く（Help メニューのリンク等）。
 // URL スキームは http(s) / mailto のみ許可（任意コマンド実行を避ける）。
 ipcMain.on("graphy:open-external", (_e, url) => {
@@ -1051,9 +1094,10 @@ ipcMain.on("graphy:refocus", (e) => {
  * main だけが書く鍵。🔴 **レンダラ（＝同じ realm のプラグイン）から書かせない。**
  * Colab の refresh token を差し替えられると、ランタイムが**別人の Google アカウント**に作られ、
  * 匿名化したデータとコードがそこへ送られる。書くのはログインの流れ（colabAuth）だけ。
+ * Drive の refresh token も同じ（差し替えられると、バックアップ（患者データ）が**別人の Drive**へ送られる。gdriveAuth だけが書く）。
  */
 // TLS のパスワードは tlsPasswords の経路だけで扱う（backend への受け渡しと、キーチェーンが無いときの代わりの経路があるため）
-const MAIN_ONLY_SECRET_KEYS = new Set([COLAB_REFRESH_KEY, ...Object.values(tlsPasswords.KEYS)]);
+const MAIN_ONLY_SECRET_KEYS = new Set([COLAB_REFRESH_KEY, GDRIVE_REFRESH_KEY, ...Object.values(tlsPasswords.KEYS)]);
 
 ipcMain.handle("graphy:secret-set", async (_e, payload) => {
   const key = payload && payload.key;
@@ -1094,6 +1138,7 @@ ipcMain.handle("graphy:tls-password-status", () =>
 function afterBackendReady() {
   // 外部の計算機の接続先を backend へ（失敗してもアプリの起動は止めない）
   pushComputeEndpoints().catch((err) => console.error("[compute] push failed:", err));
+  pushGdriveConfig().catch((err) => console.error("[gdrive] push failed:", err));
   // 設定に平文で残っている TLS のパスワードをキーチェーンへ移す（失敗しても起動は止めない・平文は消さない）
   migrateTlsPasswords();
 }
@@ -1266,6 +1311,252 @@ async function pushComputeEndpoints() {
   const colab = colabRuntimes ? colabRuntimes.endpoints().filter((e) => colabIds.has(e.id)) : [];
   return computeBridge.pushEndpoints([...jupyter, ...colab]);
 }
+
+// ── Google Drive バックアップ（計画: ~/.claude/plans/graphy-next-db-googledrive-agile-cupcake.md、実測: fw/gdrive-p0.md）──
+// ログイン・Picker・保存先フォルダの作成は main。同期そのものは backend（refresh token は内部経路でメモリにだけ渡す）。
+// 設定は DB フォルダごと（db-folders.json）。有効にできるのは今開いている DB だけ。
+let gdriveAuth = null;
+
+function initGdrive() {
+  gdriveAuth = createGdriveAuth({
+    dirs: [__dirname, resolveDataDir()],
+    secrets: secretStore,
+    openExternal: (url) => shell.openExternal(url),
+  });
+}
+
+/** backend へ Drive の設定を入れ直す（起動時・ログイン／ログアウト・有効化／解除のあと）。トークンは backend のメモリにだけ置かれる。 */
+/** この PC の識別子（排他ロックの持ち主を区別する）。DB フォルダを別の PC へ移しても付いていかないよう、データ置き場に持つ。 */
+function gdriveDeviceId() {
+  const file = path.join(resolveDataDir(), "gdrive-device-id");
+  try {
+    const v = fs.readFileSync(file, "utf8").trim();
+    if (/^[A-Za-z0-9-]{8,64}$/.test(v)) return v;
+  } catch {
+    // 初回
+  }
+  const id = require("node:crypto").randomUUID();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, id, { mode: 0o600 });
+  return id;
+}
+
+async function pushGdriveConfig() {
+  if (!computeBridge.enabled()) return { ok: false, error: "main-channel-disabled" };
+  const cfg = activeDbFolder ? dbFolders.getGdrive(activeDbFolder) : null;
+  const client = gdriveAuth && gdriveAuth.clientInfo();
+  const refresh = secretStore.getSecret(GDRIVE_REFRESH_KEY);
+  const enabled = !!(cfg && client);
+  const body = enabled
+    ? {
+        enabled: true,
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+        refreshToken: refresh || null, // 無ければ backend は「要ログイン」状態で待つ
+        folderId: cfg.driveFolderId,
+        driveId: cfg.driveId,
+        email: cfg.email,
+        name: cfg.name,
+        deviceId: gdriveDeviceId(),
+        host: os.hostname(),
+        cache: cfg.mode === "cache",
+        cacheLimitBytes: cfg.cacheLimitBytes || dbFolders.DEFAULT_CACHE_LIMIT_BYTES,
+      }
+    : { enabled: false };
+  const r = await computeBridge.call("PUT", "/api/internal/gdrive/config", body);
+  if (!r.ok) console.error(`[gdrive] backend への設定の登録に失敗 (status=${r.status} ${r.error || ""})`);
+  return r;
+}
+
+/** 画面へ返す状態（トークン・API キーは返さない）。 */
+ipcMain.handle("graphy:gdrive-status", async () => {
+  const client = gdriveAuth && gdriveAuth.clientInfo();
+  const cfg = activeDbFolder ? dbFolders.getGdrive(activeDbFolder) : null;
+  return {
+    configured: !!client,
+    pickerReady: !!(client && client.pickerApiKey),
+    signedIn: !!gdriveAuth && gdriveAuth.signedIn(),
+    email: gdriveAuth ? await gdriveAuth.ensureEmail() : null,
+    folder: cfg
+      ? {
+          name: cfg.name,
+          shared: !!cfg.driveId,
+          email: cfg.email,
+          mode: cfg.mode || "backup",
+          cacheLimitBytes: cfg.cacheLimitBytes || dbFolders.DEFAULT_CACHE_LIMIT_BYTES,
+        }
+      : null,
+    defaultCacheLimitBytes: dbFolders.DEFAULT_CACHE_LIMIT_BYTES,
+    minCacheLimitBytes: dbFolders.MIN_CACHE_LIMIT_BYTES,
+  };
+});
+
+/** backend の Drive 同期の状態（取れなければ null）。切替・解除の条件の判断に使う。 */
+async function gdriveBackendStatus() {
+  const r = await computeBridge.call("GET", "/api/gdrive/status");
+  return r.ok && r.body && typeof r.body === "object" ? r.body : null;
+}
+
+// モードの切替（ローカル正本のバックアップ ↔ Drive 正本のキャッシュ）。条件は gdriveMode.canSwitchMode。
+ipcMain.handle("graphy:gdrive-set-mode", async (e, payload) => {
+  const cfg = activeDbFolder ? dbFolders.getGdrive(activeDbFolder) : null;
+  if (!cfg) return { ok: false, error: "not-enabled" };
+  const verdict = gdriveMode.canSwitchMode(cfg.mode || "backup", payload && payload.mode, await gdriveBackendStatus());
+  if (!verdict.ok) return { ok: false, error: verdict.error };
+  if (verdict.noop) return { ok: true };
+  const saved = dbFolders.setGdriveMode(activeDbFolder, payload.mode);
+  if (!saved.ok) return { ok: false, error: saved.reason };
+  await pushGdriveConfig();
+  return { ok: true };
+});
+
+// モード A のキャッシュ上限（バイト）。下限未満・モード A でないときは受け付けない。
+ipcMain.handle("graphy:gdrive-set-cache-limit", async (e, payload) => {
+  if (!activeDbFolder) return { ok: false, error: "not-ready" };
+  const saved = dbFolders.setGdriveCacheLimit(activeDbFolder, payload && payload.bytes);
+  if (!saved.ok) return { ok: false, error: saved.reason };
+  await pushGdriveConfig();
+  return { ok: true };
+});
+
+ipcMain.handle("graphy:gdrive-signin", async () => {
+  if (!gdriveAuth) return { ok: false, error: "not-ready" };
+  const r = await gdriveAuth.signIn();
+  if (r.ok) await pushGdriveConfig();
+  return r;
+});
+
+ipcMain.handle("graphy:gdrive-signout", async () => {
+  if (!gdriveAuth) return { ok: false, error: "not-ready" };
+  const r = await gdriveAuth.signOut();
+  await pushGdriveConfig();
+  return r;
+});
+
+// 有効にする: Picker で保存先の親を選ぶ → 直下にバックアップ用フォルダを作る → 記録して backend へ。
+ipcMain.handle("graphy:gdrive-enable", async (e, payload) => {
+  if (!gdriveAuth || !activeDbFolder) return { ok: false, error: "not-ready" };
+  const mode = payload && payload.mode ? payload.mode : "backup";
+  if (!dbFolders.GDRIVE_MODES.includes(mode)) return { ok: false, error: "invalid-mode" };
+  const client = gdriveAuth.clientInfo();
+  if (!client) return { ok: false, error: "no-oauth-client" };
+  if (!client.pickerApiKey) return { ok: false, error: "no-picker-key" };
+  if (!gdriveAuth.signedIn()) return { ok: false, error: "not-signed-in" };
+  if (dbFolders.getGdrive(activeDbFolder)) return { ok: false, error: "already-enabled" };
+  const token = await gdriveAuth.accessToken();
+  if (!token) return { ok: false, error: "token" };
+  const locale = String(app.getLocale() || "").startsWith("ja") ? "ja" : "en";
+  // 利用者の既定ブラウザで開く（Picker は Google のセッションを使う。gdrivePicker.js）
+  const picked = await gdrivePicker.pick({
+    token,
+    apiKey: client.pickerApiKey,
+    projectNumber: client.projectNumber,
+    locale,
+    openExternal: (url) => shell.openExternal(url),
+  });
+  if (!picked.ok) return { ok: false, error: picked.error, canceled: picked.error === "cancelled" };
+  const made = await createBackupFolder({ token, parentId: picked.id, dbName: path.basename(activeDbFolder) });
+  if (!made.ok) return { ok: false, error: made.error };
+  const saved = dbFolders.setGdrive(activeDbFolder, {
+    driveFolderId: made.folderId,
+    driveId: made.driveId,
+    name: made.name,
+    email: gdriveAuth.email(),
+    mode,
+    cacheLimitBytes: mode === "cache" ? dbFolders.DEFAULT_CACHE_LIMIT_BYTES : null,
+  });
+  if (!saved.ok) return { ok: false, error: saved.reason };
+  await pushGdriveConfig();
+  return { ok: true, name: made.name, parentName: made.parentName, shared: !!made.driveId };
+});
+
+// 復元: Drive のバックアップ（GRAPHY-DB-… フォルダ）を Picker で選び、空のフォルダへ取り戻す。
+// 取り戻しは backend が行う（進み具合は画面が /api/gdrive/restore で見る）。終わったら画面が通常の切替を呼ぶ。
+ipcMain.handle("graphy:gdrive-restore", async (e, payload) => {
+  if (!gdriveAuth) return { ok: false, error: "not-ready" };
+  const client = gdriveAuth.clientInfo();
+  if (!client) return { ok: false, error: "no-oauth-client" };
+  if (!client.pickerApiKey) return { ok: false, error: "no-picker-key" };
+  if (!gdriveAuth.signedIn()) return { ok: false, error: "not-signed-in" };
+  const token = await gdriveAuth.accessToken();
+  const refresh = secretStore.getSecret(GDRIVE_REFRESH_KEY);
+  if (!token || !refresh) return { ok: false, error: "token" };
+  const locale = String(app.getLocale() || "").startsWith("ja") ? "ja" : "en";
+  const picked = await gdrivePicker.pick({
+    token,
+    apiKey: client.pickerApiKey,
+    projectNumber: client.projectNumber,
+    locale,
+    openExternal: (url) => shell.openExternal(url),
+  });
+  if (!picked.ok) return { ok: false, error: picked.error, canceled: picked.error === "cancelled" };
+  const dest = await pickDbDirectory(e, String((payload && payload.title) || ""));
+  if (!dest) return { ok: false, canceled: true };
+  const made = dbFolders.create(dest); // 空のフォルダだけを受け付け、目印を書く
+  if (!made.ok) return { ok: false, error: made.reason };
+  const cacheMode = payload && payload.mode === "cache";
+  const r = await computeBridge.call("POST", "/api/internal/gdrive/restore", {
+    clientId: client.clientId,
+    clientSecret: client.clientSecret,
+    refreshToken: refresh,
+    sourceFolderId: picked.id,
+    destDir: made.folder,
+    indexOnly: cacheMode, // モード A: 索引だけ取り、DICOM は必要なときに取り寄せる
+  });
+  if (!r.ok) return { ok: false, error: (r.body && r.body.error) || r.error || "restore-start" };
+  if (cacheMode) {
+    // 復元先を同じ Drive フォルダへ紐付ける（索引の台帳が指すのはこのフォルダ）。
+    // 開始時に紐付けるのは、途中でアプリが閉じても「Drive につながっていない DB」を残さないため
+    // （つながっていれば、足りない分は最初の同期で Drive から索引へ戻る）。失敗したら外す。
+    const meta = await describeBackupFolder({ token, folderId: picked.id });
+    dbFolders.setGdrive(made.folder, {
+      driveFolderId: picked.id,
+      driveId: meta.ok ? meta.driveId : null,
+      name: meta.ok && meta.name ? meta.name : picked.name,
+      email: gdriveAuth.email(),
+      mode: "cache",
+      cacheLimitBytes: dbFolders.DEFAULT_CACHE_LIMIT_BYTES,
+    });
+    gdriveMode
+      .watchRestore({
+        getProgress: async () => {
+          const pr = await computeBridge.call("GET", "/api/gdrive/restore");
+          return pr.ok ? pr.body : null;
+        },
+        onFailed: () => dbFolders.clearGdrive(made.folder),
+      })
+      .catch((err) => console.error("[gdrive] restore watch failed:", err));
+  }
+  return { ok: true, folder: made.folder, mode: cacheMode ? "cache" : "backup" };
+});
+
+// 解除: Drive のデータには触れない（消さない）。確認してから設定を外す。
+ipcMain.handle("graphy:gdrive-disable", async (e) => {
+  const cfgNow = activeDbFolder ? dbFolders.getGdrive(activeDbFolder) : null;
+  if (!cfgNow) return { ok: false, error: "not-enabled" };
+  // モード A で手元に無いファイルがあるうちは解除しない（解除すると、取り寄せる手段を失う）。先に「すべてローカルに保存」
+  const allowed = gdriveMode.canDisable(cfgNow.mode || "backup", cfgNow.mode === "cache" ? await gdriveBackendStatus() : null);
+  if (!allowed.ok) return { ok: false, error: allowed.error };
+  const ja = String(app.getLocale() || "").startsWith("ja");
+  const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
+  const choice = dialog.showMessageBoxSync(win, {
+    type: "question",
+    buttons: ja ? ["バックアップを止める", "取り消す"] : ["Stop backing up", "Cancel"],
+    defaultId: 1,
+    cancelId: 1,
+    title: ja ? "Drive バックアップの解除" : "Stop Drive backup",
+    message: ja ? "この DB の Drive バックアップを止めます。" : "Drive backup of this database will stop.",
+    detail: cfgNow.mode === "cache"
+      ? ja
+        ? "この DB の全データは手元にあります。解除すると、Drive ではなく手元が正本になります。Drive にあるデータは消しません。"
+        : "All data of this database is on this computer. After stopping, this computer (not Drive) holds the master copy. Data on Drive is not deleted."
+      : ja ? "Drive にあるデータは消しません。" : "Data already on Drive is not deleted.",
+  });
+  if (choice !== 0) return { ok: false, canceled: true };
+  dbFolders.clearGdrive(activeDbFolder);
+  await pushGdriveConfig();
+  return { ok: true };
+});
 
 // ── Colab（fw/remote-compute-design.md §15）──────────────────────────────────
 // ログインは colabAuth（refresh token は secretStore・main だけ）、API は colabApi（公式 v1beta だけ）、
@@ -1564,6 +1855,7 @@ app.whenReady().then(async () => {
   aiProviders.init(resolveDataDir());
   computeEndpoints.init(resolveDataDir());
   initColab();
+  initGdrive();
   if (MAIN_SECRET) computeBridge.init({ secret: MAIN_SECRET, apiBase: API_BASE });
   dbFolders.init(resolveDataDir());
   activeDbFolder = resolveStartupDbFolder();

@@ -45,6 +45,7 @@ import {
 } from "@cornerstonejs/tools";
 import { reapplyModeRendering, removeVolumeSafe } from "../viewer/volumeRender";
 import { geomFromIndexToWorld } from "./pluginMeshApi";
+import { transposeDirection } from "../viewer/labelVolume";
 import { createValueStack, releaseValueStack, autoWindow } from "./pluginVolumeScheme";
 import { installWheelSliceGate } from "../viewer/wheelScroll";
 
@@ -775,7 +776,7 @@ export async function mountVolumeView(
     dimensions: geom.dims,
     spacing: geom.spacing,
     origin: geom.origin,
-    direction: geom.direction,
+    direction: transposeDirection(geom.direction), // Cornerstone は先頭 3 つが i 軸
     scalarData,
   });
 

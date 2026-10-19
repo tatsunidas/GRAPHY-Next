@@ -8,6 +8,7 @@ import fs from "node:fs";
 import { killProcessTree } from "../common/processUtils.js";
 import { waitForHttp } from "../common/waitForHttp.js";
 import { waitForBackendReady } from "../backend/healthcheck.js";
+import { seedViewerSettings } from "../backend/seedSettings.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
 import type { Driver, DriverPorts } from "./types.js";
 import { DEFAULT_PORTS } from "./types.js";
@@ -22,6 +23,14 @@ const DESKTOP_DIR = path.join(ROOT, "desktop");
 const FRONTEND_DIR = path.join(ROOT, "frontend");
 const BACKEND_JAR = path.join(ROOT, "backend", "target", "graphy-next-backend.jar");
 
+/** Electron の起動を、既定から変えたいスパイク向けの追加指定。 */
+export interface DesktopLaunchOptions {
+  /** `electron.launch` の `args` の末尾へ足す Electron のコマンドライン引数（例 `--disable-gpu`）。 */
+  extraElectronArgs?: string[];
+  /** Electron プロセスの環境変数へ足す（例 `LIBGL_ALWAYS_SOFTWARE=1`）。固定の GRAPHY_* より優先はしない。 */
+  extraEnv?: Record<string, string>;
+}
+
 export class DesktopDriver implements Driver {
   readonly mode = "desktop" as const;
   readonly ports: DriverPorts;
@@ -31,8 +40,11 @@ export class DesktopDriver implements Driver {
   private electronApp: ElectronApplication | null = null;
   private mainPage: Page | null = null;
 
-  constructor(ports: Partial<DriverPorts> = {}) {
+  private readonly launchOptions: DesktopLaunchOptions;
+
+  constructor(ports: Partial<DriverPorts> = {}, launchOptions: DesktopLaunchOptions = {}) {
     this.ports = { ...DEFAULT_PORTS, ...ports };
+    this.launchOptions = launchOptions;
   }
 
   get page(): Page {
@@ -77,6 +89,9 @@ export class DesktopDriver implements Driver {
     this.backendProc = spawn(
       "java",
       [
+        // desktop/main.js の jvmArgs と同じ。無いと圧縮画像の伸長（PixelCodec）が使えず、製品と違う挙動になる
+        "--add-opens", "java.base/java.io=ALL-UNNAMED",
+        "--add-opens", "java.desktop/javax.imageio.stream=ALL-UNNAMED",
         "-jar", BACKEND_JAR,
         "--spring.profiles.active=standalone",
         `--server.port=${this.ports.http}`,
@@ -93,6 +108,7 @@ export class DesktopDriver implements Driver {
     this.backendProc.stdout?.on("data", () => {});
     this.backendProc.stderr?.on("data", () => {});
     await waitForBackendReady(this.ports.http);
+    await seedViewerSettings(this.ports.http);
 
     this.viteProc = spawn(
       process.platform === "win32" ? "npm.cmd" : "npm",
@@ -108,18 +124,23 @@ export class DesktopDriver implements Driver {
     const requireFromDesktop = createRequire(path.join(DESKTOP_DIR, "package.json"));
     const electronPath = requireFromDesktop("electron") as unknown as string;
 
+    const launchEnv: Record<string, string | undefined> = {
+      ...process.env,
+      ...this.launchOptions.extraEnv,
+      GRAPHY_DEV: "1",
+      GRAPHY_BACKEND_EXTERNAL: "1",
+      GRAPHY_BACKEND_PORT: String(this.ports.http),
+      GRAPHY_DEV_SERVER_URL: `http://localhost:${this.ports.vite}`,
+      GRAPHY_MAIN_SECRET: mainSecret,
+    };
+    // 開発者の共通データ置き場（GRAPHY_DEV_DATA_DIR）を引き継がない。自動検証は DESKTOP_RUN_DATA_DIR で隔離して動かす。
+    delete launchEnv.GRAPHY_DEV_DATA_DIR;
+
     this.electronApp = await electron.launch({
       executablePath: electronPath,
-      args: [DESKTOP_DIR],
+      args: [DESKTOP_DIR, ...(this.launchOptions.extraElectronArgs ?? [])],
       cwd: DESKTOP_DIR,
-      env: {
-        ...process.env,
-        GRAPHY_DEV: "1",
-        GRAPHY_BACKEND_EXTERNAL: "1",
-        GRAPHY_BACKEND_PORT: String(this.ports.http),
-        GRAPHY_DEV_SERVER_URL: `http://localhost:${this.ports.vite}`,
-        GRAPHY_MAIN_SECRET: mainSecret,
-      },
+      env: launchEnv as Record<string, string>,
     });
 
     const viteOrigin = `http://localhost:${this.ports.vite}`;

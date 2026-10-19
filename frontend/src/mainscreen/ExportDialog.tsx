@@ -4,18 +4,28 @@
  */
 import { useEffect, useRef, useState } from "react";
 import {
+  cancelExportJob,
   exportZip,
   fetchSeries,
   fetchStudies,
+  getExportJob,
+  submitExportJob,
+  type ExportJobStatus,
   type ExportSelection,
   type Series,
   type Study,
 } from "../api";
 import { useI18n } from "../i18n/i18n";
+import { desktop } from "../desktopBridge";
+import { selectionHasCfm } from "./cfmNotice";
+import { exportPercent, runExportJob } from "./exportJob";
 
 /**
  * Export: MainScreen で選択中のスタディ<b>の患者</b>のスタディ/シリーズをツリー表示し、
- * 選択シリーズを DICOM 交換メディア（PS3.10）形式の ZIP として書き出す。
+ * 選択シリーズを DICOM 交換メディア（PS3.10）形式で書き出す。
+ *
+ * オプションは「2D Viewer (portable) を同梱」（DICOMDIR・README も付く）と「ZIP にまとめる」の 2 つだけ。
+ * デスクトップは出力先フォルダを選んでジョブ（進捗・中止つき）で書き出す。Web 版は従来どおり ZIP のダウンロード。
  *
  * Export 対象の粒度は<b>シリーズ</b>。スタディのチェックは配下シリーズの一括選択トグル
  * （スタディが選択されていても、実際に Export されるのは選択中シリーズのみ）。
@@ -42,12 +52,15 @@ export function ExportDialog({
   const seriesStudy = useRef<Map<string, string>>(new Map());
 
   // オプション
-  const [includeDicomDir, setIncludeDicomDir] = useState(false);
   const [includePortable, setIncludePortable] = useState(false);
-  const [includeReadme, setIncludeReadme] = useState(true);
+  const [zip, setZip] = useState(false);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [job, setJob] = useState<ExportJobStatus | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const cancelRequested = useRef(false);
+  const [doneMsg, setDoneMsg] = useState<string | null>(null);
 
   const patientId = study?.patientId ?? null;
   const patientName = study?.patientName ?? null;
@@ -164,17 +177,75 @@ export function ExportDialog({
     return [...byStudy].map(([studyUid, seriesUids]) => ({ studyUid, seriesUids }));
   };
 
-  const run = async () => {
-    const selections = buildSelections();
-    if (selections.length === 0) return;
+  /** 完了・中止・失敗の通知（ダイアログ内表示 + OS 通知。権限が無ければ前者だけ）。 */
+  const announce = (msg: string) => {
+    setDoneMsg(msg);
+    try {
+      if (typeof Notification !== "undefined") {
+        const fire = () => new Notification(t("export.notify.title"), { body: msg });
+        if (Notification.permission === "granted") fire();
+        else if (Notification.permission !== "denied") void Notification.requestPermission().then((p) => p === "granted" && fire());
+      }
+    } catch {
+      // 通知が使えない環境ではダイアログ内の表示だけ
+    }
+  };
+
+  const runJob = async (selections: ExportSelection[], pickDirectory: () => Promise<string | null>) => {
+    const destination = await pickDirectory();
+    if (!destination) return; // 出力先の選択を取り消した
+    cancelRequested.current = false;
+    setCancelling(false);
     setBusy(true);
     setError(null);
+    setDoneMsg(null);
+    try {
+      const last = await runExportJob(
+        {
+          submit: () => submitExportJob({ selections, includePortableViewer: includePortable, zip, destination }),
+          get: getExportJob,
+          cancel: cancelExportJob,
+        },
+        setJob,
+        () => cancelRequested.current,
+      );
+      if (last.state === "DONE") announce(t("export.done", { path: last.outputPath ?? "" }));
+      else if (last.state === "CANCELLED") announce(t("export.cancelled"));
+      else setError(t("export.failed", { error: last.error ?? "" }));
+    } catch (e) {
+      setError(t("common.fetchError", { error: String(e) }));
+    } finally {
+      setBusy(false);
+      setJob(null);
+      setCancelling(false);
+    }
+  };
+
+  const requestCancel = () => {
+    cancelRequested.current = true;
+    setCancelling(true);
+  };
+
+  const run = async () => {
+    const selections = buildSelections();
+    // 本体が作る CFM は 32 ビット（規格外）。相手が受け付けないことがあるので、黙って出さない（fw/microscopy-cfm.md）
+    if (selections.length > 0 && selectionHasCfm(seriesByStudy, checkedSeries) && !window.confirm(t("cfm.nonStandardConfirm"))) return;
+    if (selections.length === 0) return;
+    const pick = desktop()?.pickDirectory;
+    if (pick) {
+      await runJob(selections, pick);
+      return;
+    }
+    // Web 版: 従来どおり ZIP をダウンロード（フォルダを選べない・進捗なし）
+    setBusy(true);
+    setError(null);
+    setDoneMsg(null);
     try {
       const { blob, filename } = await exportZip({
         selections,
-        includeDicomDir,
+        includeDicomDir: includePortable,
         includePortableViewer: includePortable,
-        includeReadme,
+        includeReadme: includePortable,
       });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -192,14 +263,18 @@ export function ExportDialog({
   };
 
   const selectedSeriesCount = checkedSeries.size;
-  const dicomDirForced = includePortable; // portable viewer は DICOMDIR を必須化
+  const isDesktop = !!desktop()?.pickDirectory;
+  const safeClose = () => {
+    if (!busy) onClose();
+  };
+  const pct = job ? exportPercent(job) : null;
 
   return (
-    <div style={overlay} onClick={onClose}>
+    <div style={overlay} onClick={safeClose}>
       <div style={dialog} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
           <span style={{ fontWeight: 700 }}>{t("export.title")}</span>
-          <button style={closeBtn} onClick={onClose} aria-label={t("common.close")}>
+          <button style={closeBtn} onClick={safeClose} disabled={busy} aria-label={t("common.close")}>
             ✕
           </button>
         </div>
@@ -263,42 +338,34 @@ export function ExportDialog({
 
         {/* オプション + 実行 */}
         <div style={footer}>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 16px", flex: 1 }}>
-            <label style={opt}>
-              <input
-                type="checkbox"
-                checked={includeDicomDir || dicomDirForced}
-                disabled={dicomDirForced}
-                onChange={(e) => setIncludeDicomDir(e.target.checked)}
-              />
-              {t("export.opt.dicomdir")}
-            </label>
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px 16px", flex: 1 }}>
             <label style={opt}>
               <input
                 type="checkbox"
                 checked={includePortable}
+                disabled={busy}
                 onChange={(e) => setIncludePortable(e.target.checked)}
               />
               {t("export.opt.portable")}
+              <span style={{ color: "#8a98a6", fontSize: 11 }}>{t("export.opt.portableHint")}</span>
             </label>
-            <label style={opt}>
-              <input
-                type="checkbox"
-                checked={includeReadme}
-                onChange={(e) => setIncludeReadme(e.target.checked)}
-              />
-              {t("export.opt.readme")}
-            </label>
+            {isDesktop && (
+              <label style={opt}>
+                <input type="checkbox" checked={zip} disabled={busy} onChange={(e) => setZip(e.target.checked)} data-testid="export-zip" />
+                {t("export.opt.zip")}
+              </label>
+            )}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <span style={{ fontSize: 12, color: "#556" }}>
               {t("export.selectedCount", { count: selectedSeriesCount })}
             </span>
-            <button onClick={onClose} style={btn}>
+            <button onClick={safeClose} disabled={busy} style={btn}>
               {t("common.close")}
             </button>
             <button
               onClick={run}
+              data-testid="export-run"
               disabled={busy || selectedSeriesCount === 0}
               style={{
                 ...btn,
@@ -311,6 +378,26 @@ export function ExportDialog({
             </button>
           </div>
         </div>
+        {job && (
+          <div style={progressRow} data-testid="export-progress">
+            <span style={{ whiteSpace: "nowrap" }}>
+              {cancelling
+                ? t("export.cancelling")
+                : t(job.total > 0 ? "export.progress" : "export.progressNoTotal", { processed: job.processed, total: job.total })}
+            </span>
+            <div style={track} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct ?? undefined}>
+              <div style={{ height: "100%", background: "#0b5cad", width: pct === null ? "30%" : `${pct}%`, opacity: pct === null ? 0.6 : 1, transition: "width 0.2s" }} />
+            </div>
+            <button onClick={requestCancel} disabled={cancelling} style={btn} data-testid="export-cancel">
+              {t("export.cancel")}
+            </button>
+          </div>
+        )}
+        {doneMsg && !busy && (
+          <div style={{ color: "#2e5d27", padding: "0 16px 10px" }} data-testid="export-done">
+            {doneMsg}
+          </div>
+        )}
         {error && <div style={{ color: "#b00020", padding: "0 16px 10px" }}>{error}</div>}
       </div>
     </div>
@@ -380,6 +467,8 @@ const footer: React.CSSProperties = {
   padding: "10px 16px",
   borderTop: "1px solid #eee",
 };
+const progressRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 12, padding: "0 16px 10px", fontSize: 13 };
+const track: React.CSSProperties = { flex: 1, height: 8, background: "#dbe4ee", borderRadius: 4, overflow: "hidden" };
 const opt: React.CSSProperties = { display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" };
 const closeBtn: React.CSSProperties = { border: "none", background: "transparent", fontSize: 16, cursor: "pointer", color: "#666" };
 const btn: React.CSSProperties = { padding: "6px 14px", border: "1px solid #cdd5de", borderRadius: 6, background: "#fff", cursor: "pointer", fontSize: 13 };

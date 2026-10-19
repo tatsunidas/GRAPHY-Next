@@ -46,6 +46,8 @@ export interface CineControlsProps {
    * 錠が掛かっている間は**押せなくする**。理由は錠を掛けた側が画面に出している。
    */
   locked?: boolean;
+  /** 再生中かどうかの通知。パネルを畳んでいる間も再生を続けるので、親が「再生中」の印を出すのに使う。 */
+  onPlayingChange?: (playing: boolean) => void;
 }
 
 /** 秒を m:ss.s 表記に。 */
@@ -61,6 +63,7 @@ export default function CineControls({
   source,
   showSeek = true,
   locked = false,
+  onPlayingChange,
 }: CineControlsProps): React.ReactElement {
   const { t } = useI18n();
   const [playing, setPlaying] = useState(false);
@@ -86,6 +89,14 @@ export default function CineControls({
   onIndexRef.current = onIndex;
 
   const stop = useCallback(() => setPlaying(false), []);
+
+  const onPlayingChangeRef = useRef(onPlayingChange);
+  onPlayingChangeRef.current = onPlayingChange;
+  useEffect(() => {
+    onPlayingChangeRef.current?.(playing);
+    // アンマウント（別シリーズへの切替など）で再生は止まるので、印も消す。
+    return () => onPlayingChangeRef.current?.(false);
+  }, [playing]);
 
   // 総フレーム数や時間軸が変わったら停止（別ランへ切り替えた時に走り続けない）。
   useEffect(() => {

@@ -19,6 +19,8 @@ describe("imagejRoiType", () => {
     expect(imagejRoiType("Length")).toBe("polyline");
     expect(imagejRoiType("Bidirectional")).toBe("polyline");
     expect(imagejRoiType("Probe")).toBe("point");
+    expect(imagejRoiType("GraphyPointROI")).toBe("point");
+    expect(imagejRoiType("GraphyPolylineROI")).toBe("polyline");
     expect(imagejRoiType("Unknown")).toBe("polygon");
   });
 });

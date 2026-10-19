@@ -1,9 +1,9 @@
 /*
- * 3D 球の中心を数値で指定する機能の実機検証スパイク（`fw/roi-manager-design.md` §5）。
+ * 3D 球の中心を数値で指定する機能の実機検証スパイク。
  *
  * 実行:  cd automator && npx tsx src/spike/paramVoiCheck.ts   （fixture ct-basic）
  *
- * ⚠ 円 ROI を描く UI（CircleROI ツール）がこのブランチには無いので、球の行は
+ * ⚠ 球の行は
  *   DEV 限定の `__graphyDebug.seedSphere3D` で作る（◎ の押下は検査できていない）。
  *
  * 正解は解析式で出す（スライス位置は画面のビューポートの origin/direction から実行時に取り、
@@ -118,7 +118,7 @@ async function main(): Promise<void> {
     await v.waitForTimeout(500);
     await v.evaluate(`window.__graphyDebug.seedSphere3D(${JSON.stringify(c0)}, ${R})`);
     await v.waitForTimeout(500);
-    check((await v.getByTestId("sphere-row").count()) === 1, "球の行が 1 行できる");
+    check((await v.locator('[data-testid="roi-row"][data-kind="sphere"]').count()) === 1, "球の行が 1 行できる");
     for (let i = 0; i < 3; i++) await typeCenter(v, axes[i], c0[i]); // 値を明示（表示の丸めに頼らない）
     await v.getByTestId("sphere-radius").fill(String(R));
     await v.waitForTimeout(300);

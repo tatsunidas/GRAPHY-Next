@@ -53,11 +53,49 @@ function loadState() {
     const s = JSON.parse(fs.readFileSync(path.join(dataDir, STATE_FILE), "utf8"));
     const recent = Array.isArray(s.recent) ? s.recent.filter((p) => typeof p === "string" && path.isAbsolute(p)) : [];
     const current = typeof s.current === "string" && path.isAbsolute(s.current) ? s.current : null;
-    return { current, recent };
+    // Drive バックアップの設定は DB フォルダごと。ここで落とすと select() の保存で消えるので必ず持ち回る
+    const gdrive = {};
+    if (s.gdrive && typeof s.gdrive === "object") {
+      for (const [k, v] of Object.entries(s.gdrive)) {
+        if (path.isAbsolute(k) && validGdrive(v)) gdrive[k] = v;
+      }
+    }
+    return { current, recent, gdrive };
   } catch {
     // 無い・壊れている → 既定の DB で起動する（データは失わない: 各 DB フォルダはそのまま）
-    return { current: null, recent: [] };
+    return { current: null, recent: [], gdrive: {} };
   }
+}
+
+/** Drive の ID（フォルダ・共有ドライブ）の形。Picker の結果と保存済みの値の両方をこれで通す。 */
+const DRIVE_ID_RE = /^[A-Za-z0-9_-]{10,128}$/;
+
+/**
+ * Drive バックアップの設定。driveFolderId＝アプリが作った `GRAPHY-DB-…` フォルダ、
+ * parentId＝利用者が Picker で選んだ親（共有ドライブかどうかは driveId で表す）。
+ */
+function validGdrive(v) {
+  return (
+    !!v &&
+    typeof v === "object" &&
+    DRIVE_ID_RE.test(v.driveFolderId || "") &&
+    (v.driveId == null || DRIVE_ID_RE.test(v.driveId)) &&
+    typeof v.name === "string" &&
+    (v.email == null || typeof v.email === "string") &&
+    (v.mode == null || GDRIVE_MODES.includes(v.mode)) &&
+    (v.cacheLimitBytes == null || validCacheLimit(v.cacheLimitBytes))
+  );
+}
+
+/** "backup"＝ローカルが正本（Drive にバックアップ）、"cache"＝Drive が正本（ローカルは上限つきキャッシュ）。 */
+const GDRIVE_MODES = ["backup", "cache"];
+const GIB = 1024 * 1024 * 1024;
+/** モード A のキャッシュ上限の既定（利用者の決定: 15 GB）と、設定画面から選べる下限。 */
+const DEFAULT_CACHE_LIMIT_BYTES = 15 * GIB;
+const MIN_CACHE_LIMIT_BYTES = 1 * GIB;
+
+function validCacheLimit(n) {
+  return Number.isSafeInteger(n) && n > 0;
 }
 
 function saveState(state) {
@@ -153,6 +191,72 @@ function forget(folder) {
   return { ok: true };
 }
 
+function gdriveKey(state, folder) {
+  return Object.keys(state.gdrive).find((k) => samePath(k, folder)) || null;
+}
+
+/** この DB フォルダの Drive バックアップ設定。無ければ null。 */
+function getGdrive(folder) {
+  const s = loadState();
+  const k = gdriveKey(s, folder);
+  return k ? s.gdrive[k] : null;
+}
+
+/** 設定する。形が合わなければ { ok:false, reason:"invalid" }。 */
+function setGdrive(folder, cfg) {
+  if (!validGdrive(cfg)) return { ok: false, reason: "invalid" };
+  const s = loadState();
+  const k = gdriveKey(s, folder) || norm(folder);
+  s.gdrive[k] = {
+    driveFolderId: cfg.driveFolderId,
+    driveId: cfg.driveId || null,
+    name: cfg.name,
+    email: cfg.email || null,
+    mode: cfg.mode || "backup",
+    cacheLimitBytes: cfg.cacheLimitBytes || null,
+  };
+  saveState(s);
+  return { ok: true };
+}
+
+/**
+ * モード A（cache）のキャッシュ上限を変える。画面から選べる下限は MIN_CACHE_LIMIT_BYTES。
+ * モード A でない設定・下限未満は受け付けない。
+ */
+function setGdriveCacheLimit(folder, bytes) {
+  const s = loadState();
+  const k = gdriveKey(s, folder);
+  if (!k) return { ok: false, reason: "not-enabled" };
+  if (s.gdrive[k].mode !== "cache") return { ok: false, reason: "not-cache-mode" };
+  if (!validCacheLimit(bytes) || bytes < MIN_CACHE_LIMIT_BYTES) return { ok: false, reason: "invalid-limit" };
+  s.gdrive[k].cacheLimitBytes = bytes;
+  saveState(s);
+  return { ok: true };
+}
+
+/** モードを変える（backup ↔ cache）。条件（同期済み・全件が手元）の検査は呼び出し側（main）。cache にするとき上限が無ければ既定を入れる。 */
+function setGdriveMode(folder, mode) {
+  if (!GDRIVE_MODES.includes(mode)) return { ok: false, reason: "invalid-mode" };
+  const s = loadState();
+  const k = gdriveKey(s, folder);
+  if (!k) return { ok: false, reason: "not-enabled" };
+  s.gdrive[k].mode = mode;
+  if (mode === "cache" && !s.gdrive[k].cacheLimitBytes) s.gdrive[k].cacheLimitBytes = DEFAULT_CACHE_LIMIT_BYTES;
+  saveState(s);
+  return { ok: true };
+}
+
+/** 設定を外す（Drive 側のデータには触れない）。 */
+function clearGdrive(folder) {
+  const s = loadState();
+  const k = gdriveKey(s, folder);
+  if (k) {
+    delete s.gdrive[k];
+    saveState(s);
+  }
+  return { ok: true };
+}
+
 /** 画面に出す一覧。active は今 backend が使っている DB。 */
 function list(active) {
   const s = loadState();
@@ -162,7 +266,13 @@ function list(active) {
   for (const p of [defaultFolder(), ...s.recent]) {
     if (seen.some((q) => samePath(q, p))) continue;
     seen.push(p);
-    rows.push({ path: p, isDefault: isDefault(p), exists: isDefault(p) || exists(p), active: samePath(p, active) });
+    rows.push({
+      path: p,
+      isDefault: isDefault(p),
+      exists: isDefault(p) || exists(p),
+      active: samePath(p, active),
+      gdrive: gdriveKey(s, p) !== null,
+    });
   }
   return { active, next: s.current || defaultFolder(), folders: rows };
 }
@@ -225,6 +335,15 @@ module.exports = {
   list,
   springArgs,
   loadState,
+  getGdrive,
+  setGdrive,
+  setGdriveCacheLimit,
+  setGdriveMode,
+  clearGdrive,
+  GDRIVE_MODES,
+  DEFAULT_CACHE_LIMIT_BYTES,
+  MIN_CACHE_LIMIT_BYTES,
+  DRIVE_ID_RE,
   messages,
   MARKER,
 };

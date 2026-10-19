@@ -313,7 +313,7 @@ public class AnonymizeService {
         if (!applies) {
             return "このインスタンスに適用されるマスクがありません";
         }
-        if (ParametricMapFrameExpander.isParametricMap(ds)) {
+        if (ParametricMapFrameExpander.handles(ds)) {
             return "float の画素（Parametric Map）は焼き込みで塗れません";
         }
         if (geometryOf(ds) == null) {
@@ -601,7 +601,7 @@ public class AnonymizeService {
         // 🔴 float の画素（Parametric Map の Float Pixel Data）は塗る処理が読まない（PixelData だけを塗る）。
         // 事前検査で「塗れる」と答えると「検査は通ったのに塗れなかった」になるので対象外にする。
         // ヘッダだけを読むと Float Pixel Data 自体は除かれているので SOP Class でも見る。
-        if (ParametricMapFrameExpander.isParametricMap(ds) || ParametricMapFrameExpander.hasFloatPixels(ds)) {
+        if (ParametricMapFrameExpander.handles(ds) || ParametricMapFrameExpander.hasFloatPixels(ds)) {
             return null;
         }
         int bits = ds.getInt(Tag.BitsAllocated, 8);

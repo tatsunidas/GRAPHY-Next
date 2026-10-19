@@ -74,6 +74,26 @@ class AutomatorServiceResetTest {
         assertEquals("true", settings.getAll().get(SettingsService.DEBUG_MODE_KEY));
     }
 
+    @Autowired
+    com.vis.graphynext.importer.ImportWatchRepository importWatchRepo;
+
+    @Test
+    void reset_deletesImportWatchSettingsAndLedger() {
+        // 監視取り込みを有効にしたまま次の実行へ持ち越すと、前の実行の台帳が「取り込み済み」を覚えていて
+        // 検証が黙って汚染される。
+        settings.putAll(java.util.Map.of(
+                SettingsService.IMPORT_WATCH_PREFIX + "enabled", "true",
+                SettingsService.IMPORT_WATCH_PREFIX + "folder", "/some/folder"));
+        importWatchRepo.save(new com.vis.graphynext.importer.ImportWatchItem("/some/folder/a.dcm", 1, 2, "IMPORTED", 3, null));
+        assertEquals(1, importWatchRepo.count(), "前提: 台帳がある");
+
+        automator.reset();
+
+        assertEquals(0, importWatchRepo.count(), "台帳が消える");
+        assertNull(settings.getAll().get(SettingsService.IMPORT_WATCH_PREFIX + "enabled"));
+        assertNull(settings.getAll().get(SettingsService.IMPORT_WATCH_PREFIX + "folder"));
+    }
+
     @Test
     void reset_deletesRoiDocuments() {
         roiService.save("PAT-RESET", new SaveRoiDocumentRequest(JSON, 1, null));

@@ -27,6 +27,8 @@ import java.util.Set;
  * standalone のローカルインポート。指定パス（ファイル/フォルダ）を再帰走査し、
  * DICOM ファイルを索引へ取り込む。原本は保持（{@link DicomStorageService#importFromFile} がコピー）。
  *
+ * <p>ZIP は {@link ZipDicomImporter} が 1 エントリずつ展開して取り込む（全展開しない）。
+ *
  * <p>DICOMDIR は索引対象外（実体は同フォルダ内にあり走査で拾う）。非 DICOM はスキップ。
  *
  * <p>🔴 走査は {@link Files#walkFileTree} で行う。{@code Files.walk()} は途中で読めない
@@ -57,7 +59,55 @@ public class ImportService {
             List<String> studyInstanceUids) {
     }
 
+    /**
+     * 取り込みジョブの進捗と中止の窓口。取り込みを回すスレッドが書き、状態を返すスレッドが読む。
+     * 件数は「1 件の処理が終わるたび」に更新される（ファイル 1 つ、または ZIP のエントリ 1 つが 1 件）。
+     */
+    public static class Progress {
+        static final Progress NONE = new Progress();
+
+        private final java.util.concurrent.atomic.AtomicBoolean cancelled = new java.util.concurrent.atomic.AtomicBoolean();
+        private volatile long total = -1;
+        private volatile int imported;
+        private volatile int skipped;
+        private volatile int failed;
+
+        public void cancel() {
+            cancelled.set(true);
+        }
+
+        public boolean isCancelled() {
+            return cancelled.get();
+        }
+
+        /** 処理対象の総数。数えていない・数えられなかったときは −1。 */
+        public long total() {
+            return total;
+        }
+
+        public void setTotal(long total) {
+            this.total = total;
+        }
+
+        public int imported() {
+            return imported;
+        }
+
+        public int skipped() {
+            return skipped;
+        }
+
+        public int failed() {
+            return failed;
+        }
+
+        public long processed() {
+            return (long) imported + skipped + failed;
+        }
+    }
+
     private final DicomStorageService storage;
+    private final ZipDicomImporter zip;
     /**
      * 走査で中に入らないフォルダ（保管庫の作業用と、DB フォルダの受け取り箱）。保管庫や DB フォルダごと
      * 取り込んだとき、受信途中・一時ファイル・キャッシュ・他 DB からの荷物を拾わないため。
@@ -67,6 +117,7 @@ public class ImportService {
 
     public ImportService(DicomStorageService storage, StorageLayout layout) {
         this.storage = storage;
+        this.zip = new ZipDicomImporter(storage);
         Path root = layout.root();
         Set<Path> skip = new java.util.HashSet<>();
         for (String n : List.of("incoming", ".import", ".cache")) {
@@ -78,10 +129,35 @@ public class ImportService {
         this.skipDirs = Set.copyOf(skip);
     }
 
+    /** 異常終了で {@code .import} に残った一時ファイルを起動時に掃除する（新しいものは取り込み中かもしれないので残す）。 */
+    @jakarta.annotation.PostConstruct
+    void sweepStaleTemp() {
+        int n = storage.sweepImportTemp(java.time.Duration.ofHours(24));
+        if (n > 0) {
+            log.info("取り込みの一時ファイルを {} 件掃除しました", n);
+        }
+    }
+
+    /** 取り込みの走査が中に入らないフォルダか（監視の走査も同じ規則で避ける）。 */
+    boolean isSkippedDir(Path dir) {
+        return skipDirs.contains(dir.toAbsolutePath().normalize());
+    }
+
     public ImportResult importPaths(List<String> paths) {
-        Counter c = new Counter();
+        return importPaths(paths, Progress.NONE);
+    }
+
+    /**
+     * 取り込む。{@code progress} が中止されたら、次の 1 件の前で止まる（処理中の 1 件は最後までやる）。
+     * 中止までに取り込んだ分はそのまま残り、結果にも数えられる。
+     */
+    public ImportResult importPaths(List<String> paths, Progress progress) {
+        Counter c = new Counter(progress);
         if (paths != null) {
             for (String p : paths) {
+                if (c.cancelled()) {
+                    break;
+                }
                 if (p == null || p.isBlank()) {
                     continue;
                 }
@@ -91,7 +167,7 @@ public class ImportService {
                 } else if (Files.isRegularFile(path)) {
                     handle(path, c);
                 } else {
-                    c.skipped++;
+                    c.skip();
                 }
             }
         }
@@ -99,6 +175,58 @@ public class ImportService {
                 c.imported, c.skipped, c.failed, c.studiesWithoutDate.size());
         return new ImportResult(c.imported, c.skipped, c.failed, c.studiesWithoutDate.size(), c.errors,
                 List.copyOf(c.studies));
+    }
+
+    /**
+     * 取り込み対象の総数（進捗バーの分母）。フォルダは通常ファイルの数、ZIP はディレクトリを除いたエントリ数。
+     * ファイルの中身は読まない。数えている途中で中止されたら、そこまでの数を返す。
+     */
+    public long countFiles(List<String> paths, Progress progress) {
+        long[] n = { 0 };
+        if (paths == null) {
+            return 0;
+        }
+        for (String p : paths) {
+            if (progress.isCancelled()) {
+                break;
+            }
+            if (p == null || p.isBlank()) {
+                continue;
+            }
+            Path path = Path.of(p);
+            if (Files.isDirectory(path)) {
+                try {
+                    Files.walkFileTree(path, new SimpleFileVisitor<>() {
+                        @Override
+                        public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+                            return skipDirs.contains(dir.toAbsolutePath().normalize())
+                                    ? FileVisitResult.SKIP_SUBTREE : FileVisitResult.CONTINUE;
+                        }
+
+                        @Override
+                        public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                            n[0] += attrs.isRegularFile() ? zipOrOne(file) : 1;
+                            return progress.isCancelled() ? FileVisitResult.TERMINATE : FileVisitResult.CONTINUE;
+                        }
+
+                        @Override
+                        public FileVisitResult visitFileFailed(Path file, IOException e) {
+                            return FileVisitResult.CONTINUE;
+                        }
+                    });
+                } catch (IOException e) {
+                    log.debug("数えられませんでした: {}", path, e);
+                }
+            } else {
+                n[0] += Files.isRegularFile(path) ? zipOrOne(path) : 1;
+            }
+        }
+        return n[0];
+    }
+
+    /** ZIP なら中のファイル数、そうでなければ 1。読めない ZIP は 1（取り込みで失敗 1 件になる）。 */
+    private static long zipOrOne(Path file) {
+        return ZipDicomImporter.looksZip(file) ? Math.max(1, ZipDicomImporter.countEntries(file)) : 1;
     }
 
     /** フォルダを再帰走査する。読めない要素は 1 件の失敗として数え、走査は続ける。 */
@@ -113,12 +241,15 @@ public class ImportService {
 
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                    if (c.cancelled()) {
+                        return FileVisitResult.TERMINATE;
+                    }
                     if (attrs.isRegularFile()) {
                         handle(file, c);
                     } else {
                         // シンボリックリンク等（walkFileTree は既定でリンクを辿らない）。
                         // 無言の「取込 0 / スキップ 0 / 失敗 0」を避けるため、スキップとして数える。
-                        c.skipped++;
+                        c.skip();
                     }
                     return FileVisitResult.CONTINUE;
                 }
@@ -146,13 +277,20 @@ public class ImportService {
     }
 
     private void handle(Path file, Counter c) {
+        if (c.cancelled()) {
+            return;
+        }
+        if (ZipDicomImporter.looksZip(file)) {
+            zip.importZip(file, new Sink(c));
+            return;
+        }
         if (isDicomDir(file) || !looksDicom(file)) {
-            c.skipped++;
+            c.skip();
             return;
         }
         try {
             DicomInstance saved = storage.importFromFile(file);
-            c.imported++;
+            c.imp();
             if (saved != null && saved.getStudyInstanceUid() != null) {
                 c.studies.add(saved.getStudyInstanceUid());
             }
@@ -186,7 +324,42 @@ public class ImportService {
         return file.getFileName().toString().equalsIgnoreCase("DICOMDIR");
     }
 
+    private final class Sink implements ZipDicomImporter.Sink {
+        private final Counter c;
+
+        Sink(Counter c) {
+            this.c = c;
+        }
+
+        @Override
+        public boolean cancelled() {
+            return c.cancelled();
+        }
+
+        @Override
+        public void imported(DicomInstance saved) {
+            c.imp();
+            if (saved != null && saved.getStudyInstanceUid() != null) {
+                c.studies.add(saved.getStudyInstanceUid());
+                if (isBlank(saved.getStudyDate())) {
+                    c.studiesWithoutDate.add(saved.getStudyInstanceUid());
+                }
+            }
+        }
+
+        @Override
+        public void skipped() {
+            c.skip();
+        }
+
+        @Override
+        public void failed(String what, Exception e) {
+            c.failed(what, e);
+        }
+    }
+
     private static final class Counter {
+        final Progress p;
         int imported;
         int skipped;
         int failed;
@@ -195,13 +368,33 @@ public class ImportService {
         final Set<String> studies = new LinkedHashSet<>();
         final List<String> errors = new ArrayList<>();
 
-        void fail(Path path, Exception e) {
-            failed++;
+        Counter(Progress p) {
+            this.p = p;
+        }
+
+        boolean cancelled() {
+            return p.isCancelled();
+        }
+
+        void imp() {
+            p.imported = ++imported;
+        }
+
+        void skip() {
+            p.skipped = ++skipped;
+        }
+
+        void failed(String what, Exception e) {
+            p.failed = ++failed;
             if (errors.size() < MAX_ERRORS) {
-                errors.add(path + ": " + e.getMessage());
+                errors.add(what + ": " + e.getMessage());
             } else if (errors.size() == MAX_ERRORS) {
                 errors.add("… 以降の失敗は省略 / further errors omitted");
             }
+        }
+
+        void fail(Path path, Exception e) {
+            failed(path.toString(), e);
         }
     }
 }

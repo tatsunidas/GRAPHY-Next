@@ -55,6 +55,17 @@ public class PluginJobService {
     public static final String PROGRESS_KEY = "__progress";
     /** 取り消しの問い合わせ（{@code BooleanSupplier}）を入れる args のキー。 */
     public static final String CANCELLED_KEY = "__cancelled";
+    /**
+     * 手元に無い画像（Drive が正本のモード）を取り寄せて、手元のパスを返す関数（{@code Function<String,String>}。
+     * SOP Instance UID → 絶対パス。その SOP が無ければ null、取り寄せに失敗したら {@code IllegalStateException}
+     * （メッセージは {@code storage-unavailable: <理由>}）を入れる args のキー。JDK の型だけで渡す。
+     */
+    public static final String ENSURE_LOCAL_KEY = "__ensureLocal";
+    /**
+     * 消えてもよい派生データの置き場（{@link com.vis.graphynext.plugin.spi.PluginCache}。H69）を入れる args のキー。
+     * プラグインの id に束縛して渡す。
+     */
+    public static final String CACHE_KEY = "__cache";
 
     /**
      * 同時に走らせるジョブの数（プラグインの計算・本体の書き込みそれぞれ）。動画の読み出しのように I/O と CPU を
@@ -118,6 +129,10 @@ public class PluginJobService {
     private final Map<String, Job> jobs = new ConcurrentHashMap<>();
     private final ExecutorService pool;
     private final ExecutorService hostPool;
+    /** 手元へ取り寄せるジョブ（Drive から。長くなりうる）。取り込み・派生シリーズの列（hostPool）を塞がないよう別の列にする。 */
+    private final ExecutorService storagePool;
+    private volatile com.vis.graphynext.plugin.storage.PluginStorageService storage;
+    private volatile com.vis.graphynext.plugin.cache.PluginCacheService cache;
 
     /** テスト用（成果物は OS の一時フォルダへ）。 */
     public PluginJobService(PluginRegistry registry) {
@@ -139,12 +154,29 @@ public class PluginJobService {
             t.setDaemon(true);
             return t;
         });
+        this.storagePool = Executors.newFixedThreadPool(1, r -> {
+            Thread t = new Thread(r, "plugin-storage");
+            t.setDaemon(true);
+            return t;
+        });
     }
 
     @PreDestroy
     void shutdown() {
         pool.shutdownNow();
         hostPool.shutdownNow();
+        storagePool.shutdownNow();
+    }
+
+    /** 手元への取り寄せの口（JAR の args に渡す）。無い構成（web など）では null のまま。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setCache(com.vis.graphynext.plugin.cache.PluginCacheService cache) {
+        this.cache = cache;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setStorage(com.vis.graphynext.plugin.storage.PluginStorageService storage) {
+        this.storage = storage;
     }
 
     /**
@@ -159,6 +191,11 @@ public class PluginJobService {
         return enqueue(pool, pluginId, ctx -> {
             args.put(PROGRESS_KEY, ctx.progress());
             args.put(CANCELLED_KEY, ctx.cancelled());
+            // 画面から同名のキーが来ても上書きする（関数は JSON から作れない）
+            args.remove(ENSURE_LOCAL_KEY);
+            if (storage != null) args.put(ENSURE_LOCAL_KEY, storage.ensureLocalFunction());
+            args.remove(CACHE_KEY);
+            if (cache != null) args.put(CACHE_KEY, cache.forPlugin(pluginId));
             return registry.run(pluginId, args);
         });
     }
@@ -182,6 +219,11 @@ public class PluginJobService {
      */
     public Status submitTask(String pluginId, Task task) {
         return enqueue(hostPool, pluginId, task);
+    }
+
+    /** 手元への取り寄せ（Drive が正本のモード）をジョブとして走らせる。専用の列（取り込みを待たせない）。 */
+    public Status submitStorageTask(String pluginId, Task task) {
+        return enqueue(storagePool, pluginId, task);
     }
 
     private Status enqueue(ExecutorService lane, String pluginId, Task task) {

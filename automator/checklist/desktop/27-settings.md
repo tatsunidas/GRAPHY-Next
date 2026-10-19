@@ -16,6 +16,12 @@
 | 3 | ROI・マスク/計測ROIの既定スタイル設定 | 未着手 | |
 | 4 | セキュリティ設定（Context Isolation等の状態表示、read-only） | 未着手 | |
 | 5 | 言語切替（i18n ja/en）が即時反映される | 未着手 | |
+| 6 | Google Drive バックアップ: ログイン → 保存先を選んで有効化 → 取り込みが Drive に増分で反映される | 要人間確認 | |
+| 7 | Google Drive バックアップ: ネット断 → 復帰で残件が空になる。ローカル削除は Drive のゴミ箱へ移る | 要人間確認 | |
+| 8 | Google Drive バックアップ: 別の端末が使用中のときは同期せず、確認して引き継げる | 要人間確認 | |
+| 9 | Google Drive から新しい DB フォルダへ復元し、件数・md5・索引が一致する | 要人間確認 | |
+| 10 | Google Drive を正本にする（モード A）: 上限を超えた分が手元から消え、手元に無い画像を開くと Drive から取り寄せられ、ネット断では理由つきで開けない | 要人間確認 | |
+| 11 | モード A: 「すべてローカルに保存」の完了後に、手元を正本に戻す・Drive 連携を解除できる（手元に無い画像があるうちは断られる） | 要人間確認 | |
 
 ## 小項目詳細
 
@@ -64,3 +70,63 @@
 （未実装 — automator run で自動記録される手順ログがここに入る）
 <!-- AUTOMATOR:END 27-settings.item-05 -->
 
+### 6. Google Drive バックアップ: ログイン → 保存先を選んで有効化 → 取り込みが Drive に増分で反映される
+
+- ソース: fw/gdrive-p0.md, fw/verify-db-gdrive.md
+- 対応 fixture: (未定義)
+- requiresHuman: **必須**（Google のログイン画面とフォルダ選択（Picker）が利用者のブラウザで開く。自動化しない）。
+  それ以外は `fw/verify-db-gdrive.md` の手順どおり。
+
+<!-- AUTOMATOR:BEGIN 27-settings.item-06 -->
+（未実装 — 手順は fw/verify-db-gdrive.md §1〜2）
+<!-- AUTOMATOR:END 27-settings.item-06 -->
+
+### 7. Google Drive バックアップ: ネット断 → 復帰で残件が空になる。ローカル削除は Drive のゴミ箱へ移る
+
+- ソース: fw/verify-db-gdrive.md §3〜4
+- 対応 fixture: (未定義)
+- requiresHuman: 通信を切る操作が要る（OS のネットワークを切る）。
+
+<!-- AUTOMATOR:BEGIN 27-settings.item-07 -->
+（未実装）
+<!-- AUTOMATOR:END 27-settings.item-07 -->
+
+### 8. Google Drive バックアップ: 別の端末が使用中のときは同期せず、確認して引き継げる
+
+- ソース: fw/verify-db-gdrive.md §5
+- 対応 fixture: (未定義)
+- requiresHuman: 2 台目の端末（または別のデータ置き場）が要る。
+
+<!-- AUTOMATOR:BEGIN 27-settings.item-08 -->
+（未実装）
+<!-- AUTOMATOR:END 27-settings.item-08 -->
+
+### 9. Google Drive から新しい DB フォルダへ復元し、件数・md5・索引が一致する
+
+- ソース: fw/verify-db-gdrive.md §6
+- 対応 fixture: (未定義)
+- requiresHuman: Picker でバックアップのフォルダを選ぶ操作が要る。
+
+<!-- AUTOMATOR:BEGIN 27-settings.item-09 -->
+（未実装）
+<!-- AUTOMATOR:END 27-settings.item-09 -->
+
+### 10. Google Drive を正本にする（モード A）: 追い出し・取り寄せ・ネット断
+
+- ソース: fw/gdrive-p2.md
+- 対応 fixture: (未定義)
+- requiresHuman: Google のログインと Picker（保存先の選択）が要る。上限は設定で小さく（1 GB）して試す。
+
+<!-- AUTOMATOR:BEGIN 27-settings.item-10 -->
+（未実装 — 手順は fw/verify-db-gdrive.md の「モード A」）
+<!-- AUTOMATOR:END 27-settings.item-10 -->
+
+### 11. モード A: すべてローカルに保存 → 手元を正本に戻す・解除
+
+- ソース: fw/gdrive-p2.md
+- 対応 fixture: (未定義)
+- requiresHuman: 実 Drive が要る。
+
+<!-- AUTOMATOR:BEGIN 27-settings.item-11 -->
+（未実装）
+<!-- AUTOMATOR:END 27-settings.item-11 -->

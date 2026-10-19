@@ -13,11 +13,13 @@ import {
   CobbAngleTool,
   MagnifyTool,
   EllipticalROITool,
+  CircleROITool,
   RectangleROITool,
   ProbeTool,
   BrushTool,
 } from "@cornerstonejs/tools";
 import { CONTOUR_TOOL_NAMES } from "./roiContourTools";
+import { POINT_ROI_TOOL_NAME } from "./pointRoiTool";
 
 /** 消しゴムの合成ツール ID（BrushTool の ERASE ストラテジに対応する内部値）。 */
 export const ERASER_TOOL_ID = "__graphy_eraser__";
@@ -26,6 +28,8 @@ export const WAND2D_TOOL_ID = "__graphy_wand2d__";
 export const WAND3D_TOOL_ID = "__graphy_wand3d__";
 /** Level Sets（L1: Fast Marching のみ、2D）の合成 ID。実ツールは LevelSetTool（fw/level-sets-design.md）。 */
 export const LEVELSET2D_TOOL_ID = "__graphy_levelset2d__";
+/** Scissors（矩形・円・球で塗る／消す）の合成 ID。形と操作は scissorsStore（ダイアログ）で選ぶ。 */
+export const SCISSORS_TOOL_ID = "__graphy_scissors__";
 
 export const TOOL_IDS = {
   windowLevel: WindowLevelTool.toolName,
@@ -40,6 +44,8 @@ export const TOOL_IDS = {
   /** 拡大レンズ（押している間だけカーソルのまわりを拡大。ROI にはならない）。 */
   magnify: MagnifyTool.toolName,
   ellipse: EllipticalROITool.toolName,
+  /** 円 ROI（中心＋半径）。◎ でパラメトリック球、⬤ で塗りの球にできる。 */
+  circle: CircleROITool.toolName,
   rect: RectangleROITool.toolName,
   probe: ProbeTool.toolName,
   /** ポリゴン（閉）。クリックで頂点、ダブルクリック or 始点で閉じる。 */
@@ -50,6 +56,8 @@ export const TOOL_IDS = {
   freehand: CONTOUR_TOOL_NAMES.freehand,
   /** フリーライン（開）。ドラッグで描き、閉じない。 */
   freeLine: CONTOUR_TOOL_NAMES.freeLine,
+  /** 点 ROI（Probe は計測、こちらは ROI）。 */
+  point: POINT_ROI_TOOL_NAME,
   brush: BrushTool.toolName,
   eraser: ERASER_TOOL_ID,
   /** 3D Wand（対話型・輝度領域成長。ダイアログで seed/connectivity/threshold）。 */
@@ -58,4 +66,6 @@ export const TOOL_IDS = {
   wand2d: WAND2D_TOOL_ID,
   /** Level Sets（対話型・Fast Marching。単一スライス、L1 時点）。 */
   levelset2d: LEVELSET2D_TOOL_ID,
+  /** Scissors（形・操作はダイアログで選ぶ。範囲の外は変えない）。 */
+  scissors: SCISSORS_TOOL_ID,
 } as const;

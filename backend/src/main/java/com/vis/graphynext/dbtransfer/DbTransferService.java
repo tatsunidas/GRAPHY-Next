@@ -80,6 +80,10 @@ public class DbTransferService {
         if (studyUids == null || studyUids.isEmpty()) {
             throw new IllegalArgumentException("no-studies");
         }
+        if (layout.cacheMode()) {
+            // 追い出し済みの検査が手元に無いまま「移動」が元を消す事故を防ぐ。先に全件をローカルに保存してもらう
+            throw new IllegalArgumentException("cache-mode-unsupported");
+        }
         Set<String> studies = new LinkedHashSet<>(studyUids);
         Path target = checkTarget(targetFolder);
 
