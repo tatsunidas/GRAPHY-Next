@@ -737,7 +737,7 @@ export const en: Record<string, string> = {
   "align.hint": "Move each series to correct offsets and differences in orientation or scale. Axes are patient coordinates (X=left-right, Y=anterior-posterior, Z=head-foot); rotation, scale and flip act about each series' center.",
   "align.reference": "Reference",
   "align.makeReference": "Use as reference",
-  "align.refNote": "The output orientation and grid follow the reference series (it cannot be moved).",
+  "align.refNote": "The output orientation and grid follow the reference series (it cannot be moved). Pressing 'Use as reference' also takes the output spacing and attributes (patient, study, Frame of Reference, etc.) from it. Until then, behavior is unchanged (spacing = finest input, attributes from the frontmost series). Inputs finer than the reference are coarsened to its spacing.",
   "align.translate": "Translate [mm]",
   "align.rotate": "Rotate [deg]",
   "align.scale": "Scale [%]",

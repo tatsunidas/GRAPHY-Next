@@ -112,6 +112,19 @@ export function placementFromRigid(move: Float64Array, c: readonly number[]): Pl
   return { ...IDENTITY_PLACEMENT, tx: mx - c[0], ty: my - c[1], tz: mz - c[2], rx: rx * toDeg, ry: ry * toDeg, rz: rz * toDeg };
 }
 
+/**
+ * 出力の間隔の既定 `[列, 行, スライス]` [mm]。基準を明示したときはその元の間隔、そうでなければ位置合わせ前の各入力の
+ * 軸ごとの最小値（従来の既定。拡大で実寸を変えても影響を受けない）。`bases` は位置合わせ前の入力。
+ */
+export function defaultOutputSpacing(bases: readonly StitchInput[], refIdx: number | null): [number, number, number] {
+  if (bases.length === 0) throw new Error("stitchAlign: 入力が無い");
+  if (refIdx !== null) {
+    const s = bases[refIdx].volume.spacing;
+    return [s[0], s[1], s[2]];
+  }
+  return [0, 1, 2].map((a) => Math.min(...bases.map((b) => b.volume.spacing[a]))) as [number, number, number];
+}
+
 /** 派生シリーズの記述に残す文字列。恒等なら空。 */
 export function describePlacement(p: Placement | null | undefined): string {
   if (!p || isIdentityPlacement(p)) return "";

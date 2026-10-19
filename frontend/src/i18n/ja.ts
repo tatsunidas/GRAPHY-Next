@@ -739,7 +739,7 @@ export const ja: Record<string, string> = {
   "align.hint": "座標のずれや向き・拡大率の違いを、シリーズごとに動かして合わせます。軸は患者座標（X=左右、Y=前後、Z=頭尾）で、回転・拡大・反転は各シリーズの中心が基準です。",
   "align.reference": "基準",
   "align.makeReference": "基準にする",
-  "align.refNote": "出力の向きと格子は基準のシリーズに合わせます（基準は動かせません）。",
+  "align.refNote": "出力の向きと格子は基準のシリーズに合わせます（基準は動かせません）。「基準にする」を押すと、出力の間隔と属性（患者・検査・Frame of Reference など）も基準から引き継ぎます。押さない間は従来どおり（間隔は入力の最小値、属性は最も手前のシリーズ）です。基準より細かい入力は、基準の間隔で粗くなります。",
   "align.translate": "平行移動 [mm]",
   "align.rotate": "回転 [°]",
   "align.scale": "拡大 [%]",

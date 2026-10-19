@@ -27,6 +27,7 @@ def texture(x, y, z):
 
 out2, tru2, out1, tru1 = [], [], [], []
 deriv = ""
+first = pydicom.dcmread(fs[0]) if fs else None
 for f in fs:
     ds = pydicom.dcmread(f)
     deriv = str(getattr(ds, "DerivationDescription", deriv))
@@ -53,5 +54,9 @@ rel2 = float(np.sqrt(np.mean((o2 - t2) ** 2)) / sd) if t2.size else float("nan")
 rel1 = float(np.sqrt(np.mean((o1 - t1) ** 2)) / float(np.std(t1))) if t1.size else float("nan")
 print(json.dumps({
     "files": len(fs), "voxels2": int(t2.size), "voxels1": int(t1.size),
-    "rel2": rel2, "rel1": rel1, "alignmentRecorded": "alignment" in deriv, "deriv": deriv[:300],
+    "rel2": rel2, "rel1": rel1,
+    "seriesDescription": str(first.SeriesDescription) if first is not None else "",
+    "pixelSpacing": [float(x) for x in first.PixelSpacing] if first is not None else [],
+    "spacingBetweenSlices": float(first.SpacingBetweenSlices) if first is not None and "SpacingBetweenSlices" in first else None,
+    "iop": [float(x) for x in first.ImageOrientationPatient] if first is not None else [], "alignmentRecorded": "alignment" in deriv, "deriv": deriv[:300],
 }))

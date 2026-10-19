@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { makeVolume } from "./regGeometry";
 import {
   IDENTITY_PLACEMENT,
+  defaultOutputSpacing,
   describePlacement,
   iopAngleDeg,
   isIdentityPlacement,
@@ -225,5 +226,31 @@ describe("向きの違う入力（再サンプル）", () => {
     // 同じ行・スライスで、列が逆順になっている
     for (let i = 0; i < nx; i++) expect(Math.abs(sl[3][2 * nx + i] - o[3][2 * nx + (nx - 1 - i)])).toBeLessThan(1e-3);
     expect(ny).toBe(unionGrid([a]).dims[1]);
+  });
+});
+
+describe("defaultOutputSpacing（出力の間隔の既定）", () => {
+  const a = input(12, 10, 8, [0, 0, 0], 1, 1.5, 2);
+  const b = input(12, 10, 8, [0, 0, 20], 0.8, 2, 3);
+
+  it("基準なしは位置合わせ前の各軸の最小値", () => {
+    expect(defaultOutputSpacing([a, b], null)).toEqual([0.8, 1.5, 2]);
+  });
+
+  it("基準ありは、その入力の間隔（他に細かいものがあっても）", () => {
+    expect(defaultOutputSpacing([a, b], 0)).toEqual([1, 1.5, 2]);
+    expect(defaultOutputSpacing([a, b], 1)).toEqual([0.8, 2, 3]);
+  });
+
+  it("拡大した入力の実寸変化は、既定に影響しない（位置合わせ前の入力から求める）", () => {
+    const scaled = placeInput(b, P({ sx: 0.5, sy: 0.5, sz: 0.5 }));
+    expect(Array.from(scaled.volume.spacing)).toEqual([0.4, 1, 1.5]); // 実寸は変わっている
+    expect(defaultOutputSpacing([a, b], null)).toEqual([0.8, 1.5, 2]); // 既定は変わらない
+    expect(Array.from(unionGrid([a, scaled], undefined, 0).spacing)).not.toEqual([0.8, 1.5, 2]); // 従来の既定なら変わっていた
+    expect(Array.from(unionGrid([a, scaled], defaultOutputSpacing([a, b], null), 0).spacing)).toEqual([0.8, 1.5, 2]);
+  });
+
+  it("入力が無ければ例外", () => {
+    expect(() => defaultOutputSpacing([], null)).toThrow();
   });
 });

@@ -17,6 +17,7 @@ import { saveDerivedVolume } from "../viewer/derivedVolumeSave";
 import { runRigidInWorker } from "../viewer/regWorkerClient";
 import {
   IDENTITY_PLACEMENT,
+  defaultOutputSpacing,
   describePlacement,
   iopAngleDeg,
   placeInput,
@@ -249,6 +250,12 @@ export function StitchDialog({
   const overlapUsable = perPair ? pairsValid : overlapValid;
   const pairKey = pairVals.join("|");
   const refIdx = Math.max(0, selected.findIndex((c) => c.id === refId));
+  // 基準を明示して選んだときだけ、出力の間隔と属性のテンプレートを基準から引き継ぐ（選ばない間は従来どおり）。
+  const explicitRef = refId !== null && selected.some((c) => c.id === refId);
+  const outSpacing = useMemo(
+    () => (bases.length > 0 ? defaultOutputSpacing(bases, explicitRef ? refIdx : null) : undefined),
+    [bases, explicitRef, refIdx],
+  );
   const normal = useMemo(
     () => (bases.length > 0 ? normalOfIop(bases[Math.min(refIdx, bases.length - 1)].iop) : ([0, 0, 1] as [number, number, number])),
     [bases, refIdx],
@@ -294,7 +301,7 @@ export function StitchDialog({
     if (placeMode === "overlap" && !overlapUsable) return { grid: null, base: null, reason: t("stitch.invalidOverlap") };
     if (blendMode === "linear" && !rangeValid) return { grid: null, base: null, reason: t("stitch.invalidRange") };
     try {
-      const base = unionGrid(inputs, undefined, refIdx);
+      const base = unionGrid(inputs, outSpacing, refIdx);
       if (!spOver) return { grid: base, base, reason: "" };
       const sp = spOver.map(parsePositive);
       if (sp.some((v) => v === null)) return { grid: null, base, reason: t("stitch.invalidSpacing") };
@@ -302,7 +309,7 @@ export function StitchDialog({
     } catch (e) {
       return { grid: null, base: null, reason: String(e) };
     }
-  }, [check, inputs, spOver, t, placeMode, overlapUsable, blendMode, rangeValid, refIdx, alignErr]);
+  }, [check, inputs, spOver, t, placeMode, overlapUsable, blendMode, rangeValid, refIdx, alignErr, outSpacing]);
 
   const defaultBg = useMemo(() => (check.ok ? stitchBackground(inputs) : 0), [check.ok, inputs]);
   const bgText = bgOver ?? String(defaultBg);
@@ -473,10 +480,10 @@ export function StitchDialog({
     try {
       await tick();
       const data = concatSlices(stitchSlices(inputs, grid, blend), grid);
-      // テンプレート（属性を引き継ぐ 1 本）は法線方向で最も手前の入力。
+      // テンプレート（属性を引き継ぐ 1 本）は、基準を明示したときはその基準、そうでなければ法線方向で最も手前の入力。
       let front = 0;
       grid.intervals.forEach((iv, n) => { if (iv[0] < grid.intervals[front][0]) front = n; });
-      const tpl = selected[front];
+      const tpl = explicitRef ? selected[refIdx] : selected[front];
       const first = (entries[tpl.id] as Extract<Entry, { state: "ready" }>).loaded.firstImageId ?? undefined;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const plane = first ? (metaData.get("imagePlaneModule", first) as any) : null;

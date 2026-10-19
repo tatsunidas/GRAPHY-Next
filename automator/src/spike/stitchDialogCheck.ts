@@ -282,7 +282,7 @@ async function perPairChecks(v: Page, d: DesktopDriver, s: any, studyUid: string
 }
 
 /** 位置合わせ後の出力を align 真値と照合する（2 本目だけが覆う位置の相対 RMS）。 */
-function alignRms(dir: string, setName: string): { rel2: number; rel1: number; alignmentRecorded: boolean; voxels2: number } | null {
+function alignRms(dir: string, setName: string): { rel2: number; rel1: number; alignmentRecorded: boolean; voxels2: number; seriesDescription: string; pixelSpacing: number[]; spacingBetweenSlices: number | null; iop: number[] } | null {
   const r = spawnSync(PY, ["-I", path.join(AUTOMATOR_ROOT, "scripts", "verify-stitch-align.py"), path.join(root, "truth.json"), setName, dir], { encoding: "utf8" });
   if (r.status !== 0) { check(false, `位置合わせの照合スクリプトが動く（${setName}）`, r.stderr); return null; }
   console.log(`  位置合わせ照合: ${r.stdout.trim().slice(0, 400)}`);
@@ -379,6 +379,44 @@ async function alignChecks(v: Page, d: DesktopDriver, s: any, studyUid: string):
   await v.screenshot({ path: path.join(OUT_DIR, `${tag}-align-warn.png`) });
 }
 
+/** 基準シリーズの引き継ぎ: 基準を選ばない間は従来どおり、明示すると出力の間隔・向き・説明（属性）が基準のものになる。 */
+async function refInheritChecks(v: Page, d: DesktopDriver, s: any, studyUid: string): Promise<void> {
+  const tag = s.set;
+  await v.getByTestId("stitch-align-toggle").click();
+  await v.getByTestId("stitch-align").waitFor({ timeout: 5000 });
+  const rows = v.locator('[data-testid^="align-row-"]');
+  const idOf = async (name: string) => (((await rows.filter({ hasText: `${tag} ${name}` }).getAttribute("data-testid")) ?? "").replace("align-row-", ""));
+  const id1 = await idOf("bed1"), id2 = await idOf("bed2");
+  const [col, row] = [truth0.spacingMm.col as number, truth0.spacingMm.row as number];
+  // 既定: 基準を選ばない。基準でない側を 95% にしても、間隔は拡大前の最小値のまま・説明は最も手前（bed1）
+  const moving = (await v.getByTestId(`align-ref-${id1}`).count()) === 1 ? id2 : id1;
+  await v.getByTestId(`align-s-${moving}`).fill("95");
+  await v.waitForTimeout(600);
+  const outTxt = (await v.getByTestId("stitch-sp-col").inputValue()) + "/" + (await v.getByTestId("stitch-sp-row").inputValue());
+  console.log(`  既定の出力の間隔欄: ${outTxt}`);
+  check(Number(await v.getByTestId("stitch-sp-col").inputValue()) === col && Number(await v.getByTestId("stitch-sp-row").inputValue()) === row, "【基準】基準を選ばないとき、拡大しても出力の間隔は拡大前の最小値のまま", outTxt);
+  const dA = await saveAndDownload(v, d, studyUid, `${tag}-ref-default`);
+  const a = dA ? alignRms(dA, tag) : null;
+  if (a) {
+    check(a.seriesDescription.includes("bed1"), "【基準】基準を選ばないと、属性は最も手前のシリーズ（bed1）から引き継ぐ", a.seriesDescription);
+    check(Math.abs(a.pixelSpacing[0] - row) < 1e-6 && Math.abs(a.pixelSpacing[1] - col) < 1e-6, "【基準】保存した PixelSpacing が拡大前の最小値", a.pixelSpacing);
+  }
+  // 明示: bed2 を基準にして bed1 を 95%
+  if ((await v.getByTestId(`align-make-ref-${id1}`).count()) === 1) await v.getByTestId(`align-make-ref-${id1}`).click();
+  await v.getByTestId(`align-make-ref-${id2}`).click(); // 明示的な選択（bed2 が基準）
+  await v.getByTestId(`align-s-${id1}`).fill("95");
+  await v.waitForTimeout(600);
+  check((await v.getByTestId(`align-ref-${id2}`).count()) === 1, "【基準】bed2 を基準にできる");
+  const dB = await saveAndDownload(v, d, studyUid, `${tag}-ref-bed2`);
+  const b = dB ? alignRms(dB, tag) : null;
+  if (b) {
+    check(b.seriesDescription.includes("bed2"), "【基準】基準にした bed2 から属性（シリーズ名）を引き継ぐ", b.seriesDescription);
+    check(Math.abs(b.pixelSpacing[0] - row) < 1e-6 && Math.abs(b.pixelSpacing[1] - col) < 1e-6 && b.pixelSpacing[1] !== col * 0.95, "【基準】bed1 を 95% にしても、PixelSpacing は基準（bed2）の元の値", b.pixelSpacing);
+    check(b.spacingBetweenSlices !== null && Math.abs(b.spacingBetweenSlices - (truth0.spacingMm.slice as number)) < 1e-6, "【基準】スライス間隔も基準の元の値", b.spacingBetweenSlices);
+    check(b.iop.every((x: number, i: number) => Math.abs(x - [1, 0, 0, 0, 1, 0][i]) < 1e-6), "【基準】IOP は基準の向き", b.iop);
+  }
+}
+
 /** 向きが違う入力: 既定では結合できず、許可すると結合できる。 */
 async function obliqueChecks(v: Page): Promise<void> {
   check((await v.getByTestId("stitch-orientation-hint").count()) === 1, "【向き】向きが違うと、位置合わせで許可できるという案内が出る");
@@ -396,8 +434,10 @@ async function obliqueChecks(v: Page): Promise<void> {
   check(!(await v.getByTestId("stitch-save").isEnabled()), "【向き】許可を外すとまた保存できない");
 }
 
+let truth0: any = null;
 async function main(): Promise<void> {
   fs.mkdirSync(OUT_DIR, { recursive: true });
+  if (kind === "phantom") truth0 = JSON.parse(fs.readFileSync(path.join(root, "truth.json"), "utf8"));
   const d = new DesktopDriver({ http: 18190, scp: 18191 }, { extraElectronArgs: process.env.STITCH_ELECTRON_ARGS ? process.env.STITCH_ELECTRON_ARGS.split(" ") : [] }); // 開発版 Next（18090）と並行して動かせるよう別ポート
   await d.start();
   try {
@@ -419,6 +459,11 @@ async function main(): Promise<void> {
         if (s.align) {
           await alignChecks(v, d, s, studyUid);
           await v.getByTestId("stitch-close").click();
+          if (s.set === "align-shift") {
+            const v2 = await openDialog(d, `${s.set}-ref`, undefined, 2);
+            await refInheritChecks(v2, d, s, studyUid);
+            await v2.getByTestId("stitch-close").click();
+          }
           continue;
         }
         if (s.set === "neg-rot5") await obliqueChecks(v);
