@@ -14,6 +14,27 @@ import type { ViewerMode } from "../viewer/imageId";
 import { loadRegVolume, type LoadedRegVolume } from "../viewer/regVolumeLoader";
 import { estimateGridBytes } from "../viewer/gridResample";
 import { saveDerivedVolume } from "../viewer/derivedVolumeSave";
+import { runRigidInWorker } from "../viewer/regWorkerClient";
+import {
+  IDENTITY_PLACEMENT,
+  describePlacement,
+  iopAngleDeg,
+  placeInput,
+  placementError,
+  placementFromRigid,
+  volumeCenter,
+  type Placement,
+} from "../viewer/stitchAlign";
+import {
+  accepted,
+  buildAlignRequest,
+  moveFromRegistration,
+  overlapCrops,
+  overlapNcc,
+  pairOverlay,
+  type AlignScope,
+  type PairOverlay,
+} from "../viewer/stitchAutoAlign";
 import { suvForImageId } from "../viewer/suvStore";
 import { extractSuvParams } from "../viewer/suv";
 import { getAppliedVolumeMaxMb } from "../viewer/volumeMemory";
@@ -45,6 +66,7 @@ import {
   toStitchInput,
 } from "../viewer/stitchInputs";
 import { StitchMip } from "./StitchMip";
+import { StitchAlignPanel, type AlignRow, type AutoLine } from "./StitchAlignPanel";
 
 export interface StitchCandidate {
   id: string;
@@ -97,6 +119,21 @@ export function StitchDialog({
   const [pairTexts, setPairTexts] = useState<string[]>([]);
   const [reverse, setReverse] = useState(false);
   const [orderOver, setOrderOver] = useState<string[] | null>(null);
+  // 位置合わせ（シリーズ ID ごと）。基準のシリーズは動かさない。
+  const [placements, setPlacements] = useState<Record<string, Placement>>({});
+  const [refId, setRefId] = useState<string | null>(null);
+  const [oblique, setOblique] = useState(false);
+  const [alignOpen, setAlignOpen] = useState(false);
+  const [autoScope, setAutoScope] = useState<AlignScope>("rigid");
+  const [autoBusy, setAutoBusy] = useState(false);
+  const [autoProgress, setAutoProgress] = useState("");
+  const [autoLines, setAutoLines] = useState<AutoLine[]>([]);
+  const autoStop = useRef(false);
+  const autoHandle = useRef<{ abort(): void } | null>(null);
+  const [checkPair, setCheckPair] = useState(0);
+  const [overlay, setOverlay] = useState<PairOverlay | null>(null);
+  const [overlayBusy, setOverlayBusy] = useState(false);
+  const overlayGen = useRef(0);
   const [mip, setMip] = useState<{ images: MipImages; spacing: [number, number, number] } | null>(null);
   const [mipBusy, setMipBusy] = useState(false);
   const mipGen = useRef(0);
@@ -145,7 +182,7 @@ export function StitchDialog({
         await tick();
       }
     })();
-    return () => { alive.current = false; };
+    return () => { alive.current = false; autoStop.current = true; autoHandle.current?.abort(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -211,17 +248,36 @@ export function StitchDialog({
   const pairsValid = pairVals.every((v) => Number.isFinite(v));
   const overlapUsable = perPair ? pairsValid : overlapValid;
   const pairKey = pairVals.join("|");
-  const normal = useMemo(() => (bases.length > 0 ? normalOfIop(bases[0].iop) : ([0, 0, 1] as [number, number, number])), [bases]);
+  const refIdx = Math.max(0, selected.findIndex((c) => c.id === refId));
+  const normal = useMemo(
+    () => (bases.length > 0 ? normalOfIop(bases[Math.min(refIdx, bases.length - 1)].iop) : ([0, 0, 1] as [number, number, number])),
+    [bases, refIdx],
+  );
   const shifts = useMemo(
     () => (placeMode === "overlap" && overlapUsable && bases.length > 1
-      ? placeAlongNormal(bases, perPair ? pairKey.split("|").map(Number) : overlapVal, reverse)
+      ? placeAlongNormal(bases, perPair ? pairKey.split("|").map(Number) : overlapVal, reverse, refIdx)
       : bases.map(() => 0)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [placeMode, overlapUsable, perPair, pairKey, overlapVal, bases, reverse],
+    [placeMode, overlapUsable, perPair, pairKey, overlapVal, bases, reverse, refIdx],
   );
-  const inputs = useMemo(() => bases.map((b, n) => shiftInput(b, shifts[n], normal)), [bases, shifts, normal]);
+  const shifted = useMemo(() => bases.map((b, n) => shiftInput(b, shifts[n], normal)), [bases, shifts, normal]);
+  const plOf = (id: string): Placement => placements[id] ?? IDENTITY_PLACEMENT;
+  const alignErr = selected.some((c, n) => n !== refIdx && placementError(plOf(c.id)) !== null);
+  const rotated = selected.some((c, n) => {
+    const p = plOf(c.id);
+    return n !== refIdx && (p.rx !== 0 || p.ry !== 0 || p.rz !== 0 || p.flipX || p.flipY || p.flipZ);
+  });
+  const placementsKey = selected.map((c) => JSON.stringify(plOf(c.id))).join("|");
+  const inputs = useMemo(
+    () => shifted.map((b, n) => (n === refIdx || alignErr ? b : placeInput(b, plOf(selected[n].id)))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [shifted, refIdx, alignErr, placementsKey],
+  );
 
-  const check = useMemo(() => checkStitchInputs(inputs), [inputs]);
+  const check = useMemo(
+    () => checkStitchInputs(inputs, { orientation: oblique || rotated ? "resample" : "strict" }),
+    [inputs, oblique, rotated],
+  );
 
   const rangeVal = Number(rangeText.trim());
   const rangeValid = rangeText.trim() !== "" && Number.isFinite(rangeVal) && rangeVal > 0 && rangeVal <= 100;
@@ -234,18 +290,19 @@ export function StitchDialog({
   // 条件を満たすときだけ格子を作る（違反があれば何も計算しない）。
   const plan = useMemo((): { grid: StitchGrid | null; base: StitchGrid | null; reason: string } => {
     if (!check.ok) return { grid: null, base: null, reason: "" };
+    if (alignErr) return { grid: null, base: null, reason: t("stitch.invalidAlign") };
     if (placeMode === "overlap" && !overlapUsable) return { grid: null, base: null, reason: t("stitch.invalidOverlap") };
     if (blendMode === "linear" && !rangeValid) return { grid: null, base: null, reason: t("stitch.invalidRange") };
     try {
-      const base = unionGrid(inputs);
+      const base = unionGrid(inputs, undefined, refIdx);
       if (!spOver) return { grid: base, base, reason: "" };
       const sp = spOver.map(parsePositive);
       if (sp.some((v) => v === null)) return { grid: null, base, reason: t("stitch.invalidSpacing") };
-      return { grid: unionGrid(inputs, sp as [number, number, number]), base, reason: "" };
+      return { grid: unionGrid(inputs, sp as [number, number, number], refIdx), base, reason: "" };
     } catch (e) {
       return { grid: null, base: null, reason: String(e) };
     }
-  }, [check, inputs, spOver, t, placeMode, overlapUsable, blendMode, rangeValid]);
+  }, [check, inputs, spOver, t, placeMode, overlapUsable, blendMode, rangeValid, refIdx, alignErr]);
 
   const defaultBg = useMemo(() => (check.ok ? stitchBackground(inputs) : 0), [check.ok, inputs]);
   const bgText = bgOver ?? String(defaultBg);
@@ -264,7 +321,7 @@ export function StitchDialog({
       await new Promise((r) => setTimeout(r, 150));
       if (gen !== mipGen.current) return;
       const sp = previewSpacing(grid, Math.round(box * (window.devicePixelRatio || 1)));
-      const pg = unionGrid(inputs, sp);
+      const pg = unionGrid(inputs, sp, refIdx);
       const acc = new MipAccumulator(pg.dims);
       let k = 0;
       for (const s of stitchSlices(inputs, pg, blend)) {
@@ -279,7 +336,108 @@ export function StitchDialog({
       setMipBusy(false);
     })().catch((e) => { if (gen === mipGen.current) { setMip(null); setMipBusy(false); setMsg(String(e)); } });
     return () => { mipGen.current++; };
-  }, [grid, check.ok, inputs, box, blend]);
+  }, [grid, check.ok, inputs, box, blend, refIdx]);
+
+  // ずれの確認: 隣り合う 2 本の重なり部分を別々に引いて色で重ねる。位置合わせ欄を開いているときだけ計算する。
+  const pairIdx = Math.min(checkPair, Math.max(0, inputs.length - 2));
+  const pairNcc = useMemo(
+    () => (alignOpen && check.ok && inputs.length >= 2 ? overlapNcc(inputs[pairIdx], inputs[pairIdx + 1]) : null),
+    [alignOpen, check.ok, inputs, pairIdx],
+  );
+  useEffect(() => {
+    const gen = ++overlayGen.current;
+    if (!alignOpen || !check.ok || inputs.length < 2 || box <= 0) { setOverlay(null); setOverlayBusy(false); return; }
+    setOverlayBusy(true);
+    (async () => {
+      await new Promise((r) => setTimeout(r, 200));
+      if (gen !== overlayGen.current) return;
+      const ov = await pairOverlay(
+        inputs[pairIdx], inputs[pairIdx + 1], Math.round(box * (window.devicePixelRatio || 1)),
+        pairIdx + 1 === refIdx ? 1 : 0, () => gen === overlayGen.current, tick,
+      );
+      if (gen !== overlayGen.current) return;
+      setOverlay(ov);
+      setOverlayBusy(false);
+    })().catch((e) => { if (gen === overlayGen.current) { setOverlay(null); setOverlayBusy(false); setMsg(String(e)); } });
+    return () => { overlayGen.current++; };
+  }, [alignOpen, check.ok, inputs, pairIdx, box, refIdx]);
+
+  // 自動で合わせる: 基準から外へ、隣り合う組を順に（固定 = 合わせ済みの隣、移動 = 次）。重なり部分の相関が上がったときだけ採る。
+  const runAuto = async () => {
+    if (autoBusy || selected.length < 2 || !check.ok) return;
+    setAutoBusy(true);
+    setAutoLines([]);
+    autoStop.current = false;
+    const lines: AutoLine[] = [];
+    const cur = inputs.slice();
+    const next: Record<string, Placement> = { ...placements };
+    const order: Array<[number, number]> = [];
+    for (let m = refIdx + 1; m < selected.length; m++) order.push([m, m - 1]);
+    for (let m = refIdx - 1; m >= 0; m--) order.push([m, m + 1]);
+    const forOf = (id: string) => (entries[id] as Extract<Entry, { state: "ready" }>).loaded.frameOfReferenceUid;
+    try {
+      for (let s = 0; s < order.length && !autoStop.current; s++) {
+        const [m, f] = order[s];
+        const id = selected[m].id, fid = selected[f].id;
+        const key = `${fid}>${id}`;
+        setAutoProgress(t("align.auto.running", { name: nameOf(id), n: s + 1, total: order.length }));
+        await tick();
+        const cp = next[id] ?? IDENTITY_PLACEMENT;
+        const keep = { ...IDENTITY_PLACEMENT, sx: cp.sx, sy: cp.sy, sz: cp.sz, flipX: cp.flipX, flipY: cp.flipY, flipZ: cp.flipZ };
+        const mov = placeInput(shifted[m], keep);
+        const fixed = cur[f];
+        const crops = overlapCrops(fixed, mov);
+        const base0 = overlapNcc(fixed, mov);
+        if (!crops || !base0) { lines.push({ key, kind: "noOverlap", a: fid, b: id }); setAutoLines([...lines]); continue; }
+        const sameFor = forOf(fid) === forOf(id);
+        if (!sameFor) lines.push({ key: `${key}-for`, kind: "forDiff", a: fid, b: id });
+        const handle = runRigidInWorker(
+          buildAlignRequest(crops.a, crops.b, { scope: autoScope, sameFrameOfReference: sameFor }),
+          (p) => setAutoProgress(`${t("align.auto.running", { name: nameOf(id), n: s + 1, total: order.length })} ${Math.round(p.fraction * 100)}%`),
+        );
+        autoHandle.current = handle;
+        let done;
+        try {
+          done = await handle.promise;
+        } catch (e) {
+          if (autoStop.current) break;
+          lines.push({ key, kind: "failed", a: fid, b: id, err: String(e) });
+          setAutoLines([...lines]);
+          continue;
+        } finally {
+          autoHandle.current = null;
+        }
+        const move = moveFromRegistration(done.matrix);
+        if (!move || done.aborted) { lines.push({ key, kind: "failed", a: fid, b: id, err: "no result" }); setAutoLines([...lines]); continue; }
+        const pl: Placement = { ...placementFromRigid(move, volumeCenter(shifted[m])), sx: cp.sx, sy: cp.sy, sz: cp.sz, flipX: cp.flipX, flipY: cp.flipY, flipZ: cp.flipZ };
+        const placed = placeInput(shifted[m], pl);
+        const after = overlapNcc(fixed, placed);
+        const before = Math.max(base0.ncc, overlapNcc(fixed, cur[m])?.ncc ?? -Infinity);
+        if (after && accepted(before, after.ncc, after.count)) {
+          next[id] = pl;
+          cur[m] = placed;
+          setPlacements({ ...next });
+          lines.push({ key, kind: "applied", a: fid, b: id, before, after: after.ncc });
+        } else {
+          lines.push({ key, kind: "rejected", a: fid, b: id, before, after: after?.ncc ?? NaN });
+        }
+        setAutoLines([...lines]);
+      }
+    } catch (e) {
+      setMsg(String(e));
+    } finally {
+      autoHandle.current = null;
+      if (alive.current) { setAutoBusy(false); setAutoProgress(""); setAutoLines([...lines]); }
+    }
+  };
+
+  const alignRows: AlignRow[] = selected.map((c, n) => ({
+    id: c.id,
+    name: c.series.seriesDescription || c.series.seriesInstanceUid,
+    isRef: n === refIdx,
+    placement: plOf(c.id),
+    angleDeg: iopAngleDeg(bases[refIdx].iop, bases[n].iop),
+  }));
 
   const move = (n: number, d: -1 | 1) => {
     const ids = selected.map((c) => c.id);
@@ -308,6 +466,8 @@ export function StitchDialog({
     const totalMb = outMb + inMb;
     const limitMb = getAppliedVolumeMaxMb();
     if (totalMb > limitMb && !window.confirm(t("stitch.confirmMemory", { mb: totalMb, limit: limitMb }))) return;
+    const flipped = selected.some((c, n) => n !== refIdx && (plOf(c.id).flipX || plOf(c.id).flipY || plOf(c.id).flipZ));
+    if (flipped && !window.confirm(t("align.confirmFlip"))) return;
     setBusy(true);
     setMsg(t("stitch.saving"));
     try {
@@ -327,7 +487,10 @@ export function StitchDialog({
         studyUid: tpl.study.studyInstanceUid,
         seriesUid: tpl.series.seriesInstanceUid,
         seriesDescription: `${tpl.series.seriesDescription || "Series"} Stitched`,
-        derivationDescription: stitchDerivation(selected.map((c) => c.series.seriesInstanceUid), grid, blend),
+        derivationDescription: stitchDerivation(
+          selected.map((c) => c.series.seriesInstanceUid), grid, blend,
+          selected.map((c, n) => (n === refIdx ? "" : describePlacement(plOf(c.id)))),
+        ),
         sourceSliceThickness: Number.isFinite(th) && th > 0 ? th : null,
         suvScale: null,
         background: bgValue,
@@ -456,6 +619,41 @@ export function StitchDialog({
                   ))}
                 </div>
               </>
+            )}
+          </div>
+        )}
+
+        {picked.length >= 2 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <button type="button" style={{ ...btn, alignSelf: "flex-start" }} onClick={() => setAlignOpen((v) => !v)} data-testid="stitch-align-toggle">
+              {alignOpen ? "▾" : "▸"} {t("align.title")}
+            </button>
+            {check.violations.includes("orientation") && !oblique && !rotated && (
+              <div style={{ fontSize: 12, color: "#e8c88a" }} data-testid="stitch-orientation-hint">{t("align.orientationHint")}</div>
+            )}
+            {alignOpen && (
+              <StitchAlignPanel
+                rows={alignRows}
+                onChange={(id, p) => setPlacements((o) => ({ ...o, [id]: p }))}
+                onMakeReference={(id) => { setRefId(id); setPlacements((o) => ({ ...o, [id]: { ...IDENTITY_PLACEMENT } })); }}
+                oblique={oblique}
+                onOblique={setOblique}
+                obliqueNeeded={rotated}
+                autoScope={autoScope}
+                onAutoScope={setAutoScope}
+                autoBusy={autoBusy}
+                autoProgress={autoProgress}
+                onAuto={runAuto}
+                onStop={() => { autoStop.current = true; autoHandle.current?.abort(); }}
+                autoLines={autoLines}
+                check={overlay}
+                checkNcc={pairNcc}
+                checkPair={pairIdx}
+                pairCount={Math.max(0, selected.length - 1)}
+                onCheckPair={setCheckPair}
+                checkBusy={overlayBusy}
+                checkBox={box}
+              />
             )}
           </div>
         )}

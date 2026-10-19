@@ -83,7 +83,10 @@ function petComplete(p: StitchPetInfo | undefined): p is Required<StitchPetInfo>
 }
 
 /** 結合できる入力の組かを判定する。違反した条件をすべて返す（黙って通さない）。 */
-export function checkStitchInputs(inputs: readonly StitchInput[]): StitchCheck {
+export function checkStitchInputs(
+  inputs: readonly StitchInput[],
+  opts: { orientation?: "strict" | "resample" } = {},
+): StitchCheck {
   const v = new Set<StitchViolation>();
   if (inputs.length < 2) v.add("tooFew");
   if (inputs.length > 0) {
@@ -99,6 +102,8 @@ export function checkStitchInputs(inputs: readonly StitchInput[]): StitchCheck {
         v.add("orientation");
         continue;
       }
+      // 向きの違いを許す指定では、基準の軸への再サンプルに任せる（IOP が有限であることだけ見る）。
+      if (opts.orientation === "resample") continue;
       const r = unit(x.iop[0], x.iop[1], x.iop[2]);
       const c = unit(x.iop[3], x.iop[4], x.iop[5]);
       if (!(angleBetween(r0, r) <= tol && angleBetween(c0, c) <= tol)) v.add("orientation");
@@ -203,9 +208,10 @@ function coverage(intervals: ReadonlyArray<[number, number]>): { overlap: number
 export function unionGrid(
   inputs: readonly StitchInput[],
   spacingOverride?: readonly [number, number, number],
+  ref = 0,
 ): StitchGrid {
   if (inputs.length === 0) throw new Error("volumeStitch: 入力が無い");
-  const iop = inputs[0].iop;
+  const iop = inputs[ref].iop;
   const rc = unit(iop[0], iop[1], iop[2]);
   const rr = unit(iop[3], iop[4], iop[5]);
   const n: [number, number, number] = [
@@ -237,10 +243,10 @@ export function unionGrid(
   for (let a = 0; a < 3; a++) {
     const lo = Math.min(...ranges.map((r) => r[a][0]));
     const hi = Math.max(...ranges.map((r) => r[a][1]));
-    const ref = ranges[front][a][0];
+    const r0 = ranges[front][a][0];
     const s = spacing[a];
-    const shift = a === 2 ? 0 : Math.ceil((ref - lo) / s - 1e-9);
-    org[a] = ref - shift * s;
+    const shift = a === 2 ? 0 : Math.ceil((r0 - lo) / s - 1e-9);
+    org[a] = r0 - shift * s;
     dims[a] = Math.floor((hi - org[a]) / s + 1e-9) + 1;
   }
 
@@ -371,7 +377,9 @@ export function* stitchSlices(
   if (blend.gains && blend.gains.length !== inputs.length) throw new Error("volumeStitch: gains の数が入力と合わない");
   const [nx, ny, nz] = grid.dims;
   const m = grid.indexToWorld;
-  const n = normalOfIop(inputs[0].iop);
+  // 法線は格子から取る（基準シリーズの向き）。
+  const gn = unit(m[2], m[6], m[10]);
+  const n: [number, number, number] = [gn[0], gn[1], gn[2]];
   const edges = inputs.map((x) => normalEdges(x, n));
   for (let k = 0; k < nz; k++) {
     const out = new Float32Array(nx * ny);
@@ -441,12 +449,13 @@ export function placeAlongNormal(
   inputs: readonly StitchInput[],
   overlapMm: number | readonly number[],
   reverse: boolean,
+  ref = 0,
 ): number[] {
   if (inputs.length === 0) return [];
   if (typeof overlapMm !== "number" && overlapMm.length !== inputs.length - 1) {
     throw new Error(`overlapMm の数 ${overlapMm.length} が組の数 ${inputs.length - 1} と合わない`);
   }
-  const n = normalOfIop(inputs[0].iop);
+  const n = normalOfIop(inputs[ref].iop);
   const shifts: number[] = [0];
   let [lo, hi] = normalEdges(inputs[0], n);
   for (let t = 1; t < inputs.length; t++) {

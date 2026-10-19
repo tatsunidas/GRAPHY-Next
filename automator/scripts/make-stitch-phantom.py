@@ -72,11 +72,25 @@ def f(p):
 
 
 def make(setname, bedname, *, z0, iop=IOP0, add=0.0, modality="CT", patient, study, frame,
-         series_time="120000", pet=False, desc="", nz=NZ, value_z0=None, field="lin", mul=1.0):
+         series_time="120000", pet=False, desc="", nz=NZ, value_z0=None, field="lin", mul=1.0, err=None):
     # z0 は IPP の先頭 z。value_z0 は値を計算する位置（装置がステーションごとに座標を原点へ戻した状態を作るとき、
     # IPP は同じでも値は本来の位置の解剖になる）。field は値の場（lin: 線形、tex: 構造を持つ場）。
     val = texture if field == "tex" else f
     vz0 = z0 if value_z0 is None else value_z0
+    # err: 内容が本来の位置から {t: 平行移動 mm, rotz: z まわりの回転 度} だけずれて記録された状態（位置合わせの検査用）。
+    # 内容 g(P) = field(err⁻¹ P)。回転の中心はこの入力の体積中心。
+    ctr = np.array([X0, Y0, 0.0]) + np.cross(IOP0[:3], IOP0[3:]) * (z0 + (nz - 1) * DZ / 2)         + (COLS - 1) / 2 * COL_MM * np.array(iop[:3]) + (ROWS - 1) / 2 * ROW_MM * np.array(iop[3:])
+    def displace(pv):
+        if not err:
+            return pv
+        th = math.radians(err.get("rotz", 0.0))
+        c, s_ = math.cos(th), math.sin(th)
+        q = pv - ctr - np.array(err["t"])
+        out = np.empty_like(q)
+        out[..., 0] = c * q[..., 0] + s_ * q[..., 1]
+        out[..., 1] = -s_ * q[..., 0] + c * q[..., 1]
+        out[..., 2] = q[..., 2]
+        return out + ctr
     rc = np.array(iop[:3])
     rr = np.array(iop[3:])
     n = np.cross(rc, rr)
@@ -90,7 +104,7 @@ def make(setname, bedname, *, z0, iop=IOP0, add=0.0, modality="CT", patient, stu
         # 法線方向の位置（軸位なら患者 LPS の z）が z0 + k·DZ になる位置を先頭 IPP とする（傾いた向きでも法線に沿って進む）
         ipp = base + n * (z0 + k * DZ)
         pos = ipp + ii[..., None] * COL_MM * rc + jj[..., None] * ROW_MM * rr
-        posv = pos + n * (vz0 - z0)
+        posv = displace(pos + n * (vz0 - z0))
         stored = np.rint(((val(posv) + add) * mul - INTERCEPT) / SLOPE)
         assert np.all(np.abs(stored) < 32767)
         stored = stored.astype(np.int16)
@@ -142,11 +156,11 @@ def make(setname, bedname, *, z0, iop=IOP0, add=0.0, modality="CT", patient, stu
         assert np.allclose([float(x) for x in ds.ImageOrientationPatient], iop, atol=1e-6), "IOP"
         assert np.array_equal(ds.pixel_array, stored), "pixels"
         pos = ipp + ii[..., None] * COL_MM * rc + jj[..., None] * ROW_MM * rr
-        posv = pos + n * (vz0 - z0)
+        posv = displace(pos + n * (vz0 - z0))
         assert np.max(np.abs(ds.pixel_array * SLOPE + INTERCEPT - (val(posv) + add) * mul)) <= SLOPE / 2 + 1e-9, "values"
     return {
         "dir": setname + "/" + bedname, "seriesUid": str(series), "modality": modality,
-        "z0": z0, "z1": z0 + (nz - 1) * DZ, "add": add, "mul": mul, "iop": list(iop),
+        "z0": z0, "z1": z0 + (nz - 1) * DZ, "add": add, "mul": mul, "iop": list(iop), "err": err,
     }
 
 
@@ -233,6 +247,21 @@ def matched(setname, overlap, true_z0):
             "expectedOrder": [int(i) for i in np.argsort(true_z0)]}
 
 
+def aligned(setname, err2, overlap=12.0, nz=24):
+    """位置合わせの検査用: 座標（IPP）は正しく重なりは overlap mm、ただし 2 本目の内容が err2 だけずれて記録された状態。
+    値は構造を持つ場（tex）。FoR は同じ。"""
+    patient = "STITCH-" + setname.upper()
+    study = generate_uid()
+    frame = generate_uid()
+    b1 = make(setname, "bed1", z0=Z_BED1, nz=nz, field="tex", patient=patient, study=study, frame=frame, series_time="120000")
+    z0_2 = b1["z1"] + DZ / 2 - overlap + DZ / 2
+    b2 = make(setname, "bed2", z0=z0_2, nz=nz, field="tex", patient=patient, study=study, frame=frame, series_time="120100", err=err2)
+    beds = [b1, b2]
+    ov, gp = coverage(beds)
+    return {"set": setname, "expectOk": True, "beds": beds, "overlapMm": ov, "gapMm": gp, "field": "tex", "align": err2}
+
+
+sets += [aligned("align-shift", {"t": [3.0, -2.0, 1.5], "rotz": 0.0}), aligned("align-rot", {"t": [2.0, 1.0, -1.0], "rotz": 3.0})]
 sets += [stations("stations2", 2, 8.0, [0.0, 20.0]), stations("stations3", 3, 8.0, [0.0, 20.0, 40.0])]
 # 重なり 12 mm（縁で測る）= 6 枚。1 本あたり 24 枚（48 mm）。本来の上下は bed3（下）・bed1・bed2（上）。
 sets += [matched("match3", 12.0, [-64.0, -28.0, -100.0])]

@@ -281,6 +281,121 @@ async function perPairChecks(v: Page, d: DesktopDriver, s: any, studyUid: string
   check(back[0] === before[0] && back[1] === before[1], "【組ごと】「共通」に戻すと共通の値（8 mm）の結果に戻る", [before, back]);
 }
 
+/** 位置合わせ後の出力を align 真値と照合する（2 本目だけが覆う位置の相対 RMS）。 */
+function alignRms(dir: string, setName: string): { rel2: number; rel1: number; alignmentRecorded: boolean; voxels2: number } | null {
+  const r = spawnSync(PY, ["-I", path.join(AUTOMATOR_ROOT, "scripts", "verify-stitch-align.py"), path.join(root, "truth.json"), setName, dir], { encoding: "utf8" });
+  if (r.status !== 0) { check(false, `位置合わせの照合スクリプトが動く（${setName}）`, r.stderr); return null; }
+  console.log(`  位置合わせ照合: ${r.stdout.trim().slice(0, 400)}`);
+  return JSON.parse(r.stdout);
+}
+
+async function waitAlignIdle(v: Page): Promise<void> {
+  await v.waitForTimeout(400);
+  for (let t = 0; t < 240; t++) {
+    const busy = await v.getByTestId("align-check").getAttribute("data-busy");
+    const ncc = await v.getByTestId("align-check-ncc").getAttribute("data-ncc");
+    if (busy === "false" && ncc !== null && (await v.getByTestId("align-check-cor").count()) > 0) return;
+    await v.waitForTimeout(250);
+  }
+}
+async function nccNow(v: Page): Promise<number> {
+  await waitAlignIdle(v);
+  return Number((await v.getByTestId("align-check-ncc").getAttribute("data-ncc")) || "NaN");
+}
+
+/** 位置合わせ: 既知のずれの内容を、自動・手動で戻し、保存した画素が真値に一致する。負例（ずれたまま）と対で見る。 */
+async function alignChecks(v: Page, d: DesktopDriver, s: any, studyUid: string): Promise<void> {
+  const tag = s.set;
+  await v.getByTestId("stitch-align-toggle").click();
+  await v.getByTestId("stitch-align").waitFor({ timeout: 5000 });
+  const rows = v.locator('[data-testid^="align-row-"]');
+  check((await rows.count()) === 2, "【位置合わせ】シリーズごとの行が出る", await rows.count());
+  const row1 = rows.filter({ hasText: `${tag} bed1` });
+  const row2 = rows.filter({ hasText: `${tag} bed2` });
+  const mk = row1.locator('[data-testid^="align-make-ref-"]');
+  if ((await mk.count()) > 0) await mk.click();
+  const id2 = ((await row2.getAttribute("data-testid")) ?? "").replace("align-row-", "");
+  check((await v.getByTestId(`align-ref-${(((await row1.getAttribute("data-testid")) ?? "").replace("align-row-", ""))}`).count()) === 1, "【位置合わせ】bed1 が基準になる");
+  check((await v.getByTestId(`align-make-ref-${id2}`).count()) === 1 && (await v.getByTestId(`align-tx-${id2}`).count()) === 1, "【位置合わせ】基準以外には入力欄がある");
+  const before = await nccNow(v);
+  console.log(`  ずれたままの重なりの相関: ${before}`);
+  await v.screenshot({ path: path.join(OUT_DIR, `${tag}-align-before.png`) });
+  await v.getByTestId("align-check").screenshot({ path: path.join(OUT_DIR, `${tag}-overlay-before.png`) });
+  const dirNeg = await saveAndDownload(v, d, studyUid, `${tag}-unaligned`);
+  const neg = dirNeg ? alignRms(dirNeg, tag) : null;
+  if (neg) check(neg.rel2 > 0.3 && !neg.alignmentRecorded, "【負例】ずれたまま保存すると 2 本目の値は真値から大きく外れる（位置合わせの記述なし）", neg);
+  // 自動
+  const rotSet = Math.abs(s.align.rotz) > 0;
+  await v.getByTestId(rotSet ? "align-auto-rigid" : "align-auto-translation").check();
+  await v.getByTestId("align-auto-run").click();
+  await v.getByTestId("align-auto-result").waitFor({ timeout: 180_000 });
+  for (let t = 0; t < 240 && (await v.getByTestId("align-auto-run").isDisabled()); t++) await v.waitForTimeout(500);
+  const kind = await v.getByTestId("align-auto-result").locator("[data-kind]").first().getAttribute("data-kind");
+  check(kind === "applied", "【位置合わせ】自動で合わせると「適用」になる", kind);
+  const field = async (k: string) => Number(await v.getByTestId(`align-${k}-${id2}`).inputValue());
+  const [tx, ty, tz, rz] = [await field("tx"), await field("ty"), await field("tz"), await field("rz")];
+  console.log(`  自動の結果: t=(${tx}, ${ty}, ${tz}) rz=${rz}`);
+  if (!rotSet) {
+    const e = s.align.t as number[];
+    check(Math.abs(tx + e[0]) < 0.8 && Math.abs(ty + e[1]) < 0.8 && Math.abs(tz + e[2]) < 0.8, "【位置合わせ】自動の平行移動が、与えたずれの逆", [tx, ty, tz]);
+    check(rz === 0, "【位置合わせ】「平行移動のみ」では回転しない", rz);
+  } else {
+    check(Math.abs(rz + s.align.rotz) < 1.0, "【位置合わせ】自動の回転が、与えたずれの逆（z まわり）", rz);
+  }
+  const after = await nccNow(v);
+  check(after > 0.99 && after > before + 0.02, "【位置合わせ】重なりの相関が上がって 0.99 を超える", [before, after]);
+  await v.screenshot({ path: path.join(OUT_DIR, `${tag}-align-after.png`) });
+  await v.getByTestId("align-check").screenshot({ path: path.join(OUT_DIR, `${tag}-overlay-after.png`) });
+  const dirOk = await saveAndDownload(v, d, studyUid, `${tag}-aligned`);
+  const ok = dirOk ? alignRms(dirOk, tag) : null;
+  if (ok) check(ok.rel2 < (rotSet ? 0.25 : 0.12) && ok.alignmentRecorded, `【位置合わせ】合わせて保存した 2 本目の値が真値に一致（相対 RMS ${ok.rel2.toFixed(3)}）し、記述が残る`, ok);
+  if (neg && ok) check(ok.rel2 < neg.rel2 / 3, "【位置合わせ】合わせた方が、ずれたままより誤差が 1/3 未満", [neg.rel2, ok.rel2]);
+  if (rotSet) return;
+  // 手動: リセット → 逆のずれを欄に入れる
+  await v.getByTestId("align-reset-all").click();
+  const back = await nccNow(v);
+  check(Math.abs(back - before) < 1e-3, "【位置合わせ】リセットでずれたままに戻る", [before, back]);
+  const e = s.align.t as number[];
+  await v.getByTestId(`align-tx-${id2}`).fill(String(-e[0]));
+  await v.getByTestId(`align-ty-${id2}`).fill(String(-e[1]));
+  await v.getByTestId(`align-tz-${id2}`).fill(String(-e[2]));
+  const man = await nccNow(v);
+  check(man > 0.999, "【位置合わせ】手で逆のずれを入れると相関がほぼ 1", man);
+  await v.getByTestId(`align-tx-${id2}-plus`).click();
+  const off = await nccNow(v);
+  check(off < man - 0.003, "【位置合わせ】＋ボタンで 1 mm 動かすと相関が下がる（操作が効いている）", [man, off]);
+  await v.getByTestId(`align-tx-${id2}-minus`).click();
+  // 反転・拡大の警告と不正値
+  await v.getByTestId(`align-flipX-${id2}`).check();
+  check((await v.getByTestId(`align-warn-flip-${id2}`).count()) === 1, "【位置合わせ】反転を指定すると警告が出る");
+  await v.getByTestId(`align-flipX-${id2}`).uncheck();
+  check((await v.getByTestId(`align-warn-flip-${id2}`).count()) === 0, "【位置合わせ】反転を外すと警告が消える");
+  await v.getByTestId(`align-s-${id2}`).fill("0");
+  await v.waitForTimeout(300);
+  check(!(await v.getByTestId("stitch-save").isEnabled()), "【負例】拡大率が 0 だと [保存] が押せない");
+  await v.getByTestId(`align-s-${id2}`).fill("120");
+  await v.waitForTimeout(300);
+  check((await v.getByTestId(`align-warn-scale-${id2}`).count()) === 1, "【位置合わせ】拡大率が 5% を超えると警告が出る");
+  await v.screenshot({ path: path.join(OUT_DIR, `${tag}-align-warn.png`) });
+}
+
+/** 向きが違う入力: 既定では結合できず、許可すると結合できる。 */
+async function obliqueChecks(v: Page): Promise<void> {
+  check((await v.getByTestId("stitch-orientation-hint").count()) === 1, "【向き】向きが違うと、位置合わせで許可できるという案内が出る");
+  check(!(await v.getByTestId("stitch-save").isEnabled()), "【向き】既定では保存できない");
+  await v.getByTestId("stitch-align-toggle").click();
+  const rows = v.locator('[data-testid^="align-row-"]');
+  check((await v.locator('[data-testid^="align-angle-"]').count()) >= 1, "【向き】基準との角度が出る");
+  await v.getByTestId("align-oblique").check();
+  await v.waitForTimeout(800);
+  check(await v.getByTestId("stitch-save").isEnabled(), "【向き】向きの違いを許すと保存できる", await v.getByTestId("stitch-output").textContent());
+  console.log(`  向き違いの出力欄: ${await v.getByTestId("stitch-output").textContent()} / 行 ${await rows.count()}`);
+  await v.screenshot({ path: path.join(OUT_DIR, "oblique-allowed.png") });
+  await v.getByTestId("align-oblique").uncheck();
+  await v.waitForTimeout(500);
+  check(!(await v.getByTestId("stitch-save").isEnabled()), "【向き】許可を外すとまた保存できない");
+}
+
 async function main(): Promise<void> {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const d = new DesktopDriver({ http: 18190, scp: 18191 }, { extraElectronArgs: process.env.STITCH_ELECTRON_ARGS ? process.env.STITCH_ELECTRON_ARGS.split(" ") : [] }); // 開発版 Next（18090）と並行して動かせるよう別ポート
@@ -301,6 +416,12 @@ async function main(): Promise<void> {
         const petRows = await v.getByTestId("stitch-cond-petReference").count();
         check(petRows === (s.set === "neg-pet" ? 1 : 0), `PET/NM の行は PET のときだけ出る（${petRows} 行）`);
         await waitMip(v);
+        if (s.align) {
+          await alignChecks(v, d, s, studyUid);
+          await v.getByTestId("stitch-close").click();
+          continue;
+        }
+        if (s.set === "neg-rot5") await obliqueChecks(v);
         if (s.set === "match3") await matchChecks(v, s);
         else if (s.placement) await placementChecks(v, s);
         if (s.set === "stations3") await perPairChecks(v, d, s, studyUid, truth);
