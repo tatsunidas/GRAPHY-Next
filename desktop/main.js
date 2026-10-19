@@ -32,6 +32,7 @@ const aiGateway = require("./aiGateway");
 const aiProviders = require("./aiProviders");
 const computeEndpoints = require("./computeEndpoints");
 const dbFolders = require("./dbFolders");
+const { resolveDevDataDir } = require("./devDataDir");
 const tlsPasswords = require("./tlsPasswords");
 const { waitPortFree } = require("./portWait");
 const { ensureDefaultEndpoint } = require("./computeDefault");
@@ -169,10 +170,22 @@ function resolveJava() {
  *   productName を変える場合はこれら 4 箇所を同時に更新すること。
  *
  * 開発時: 従来どおり CWD（通常 desktop/）をそのまま使い、既存の開発用 desktop/data を壊さない。
+ *   環境変数 GRAPHY_DEV_DATA_DIR（絶対パス・既存のフォルダ）を指定すると、DB・プラグイン・設定をそこに固定する
+ *   （worktree を作るたびに空の DB になるのを避ける。devDataDir.js）。
  */
 const APP_DATA_FOLDER = "GRAPHY-Next";
 function resolveDataDir() {
-  if (!app.isPackaged) return process.cwd();
+  if (!app.isPackaged) {
+    try {
+      // GRAPHY_DEV_DATA_DIR があれば開発のデータをそこに固定する（worktree ごとに空の DB にならない）。
+      return resolveDevDataDir(process.env, false, process.cwd());
+    } catch (e) {
+      console.error(`[backend] ${e.message}`);
+      dialog.showErrorBox("開発用データフォルダの指定が正しくありません", e.message);
+      app.exit(1);
+      throw e;
+    }
+  }
   const dir = path.join(app.getPath("appData"), APP_DATA_FOLDER);
   try {
     fs.mkdirSync(dir, { recursive: true });
