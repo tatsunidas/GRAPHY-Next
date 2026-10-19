@@ -174,6 +174,50 @@ public class DicomStorageService {
         }
     }
 
+    /** 取り込み用の一時ファイルを作る（保管庫内 {@code .import}。同一ボリュームなので {@link #ingest} の移動がコピーにならない）。 */
+    public Path newImportTempFile() throws IOException {
+        Path tmpDir = storageDir.resolve(".import");
+        Files.createDirectories(tmpDir);
+        return Files.createTempFile(tmpDir, "imp-", ".dcm");
+    }
+
+    /** 一時ファイルの置き場（空き容量の確認用）。 */
+    public Path importTempDir() {
+        return storageDir.resolve(".import");
+    }
+
+    /**
+     * {@code .import} に残った一時ファイル（異常終了の取りこぼし）のうち、最終更新が {@code olderThan} より前のものを消す。
+     * 取り込み中のファイルを消さないよう、新しいものには触れない。消した数を返す。
+     */
+    public int sweepImportTemp(java.time.Duration olderThan) {
+        Path dir = importTempDir();
+        if (!Files.isDirectory(dir)) {
+            return 0;
+        }
+        java.time.Instant limit = java.time.Instant.now().minus(olderThan);
+        int n = 0;
+        try (java.util.stream.Stream<Path> s = Files.list(dir)) {
+            for (Path p : (Iterable<Path>) s::iterator) {
+                String name = p.getFileName().toString();
+                if (!name.startsWith("imp-") || !Files.isRegularFile(p)) {
+                    continue;
+                }
+                try {
+                    if (Files.getLastModifiedTime(p).toInstant().isBefore(limit)) {
+                        Files.deleteIfExists(p);
+                        n++;
+                    }
+                } catch (IOException e) {
+                    log.debug("一時ファイルを消せません: {}", p, e);
+                }
+            }
+        } catch (IOException e) {
+            log.warn(".import を走査できません", e);
+        }
+        return n;
+    }
+
     /**
      * ローカルファイルを取り込む（原本はコピーして保持。ingest は temp を消費するため一時複製を使う）。
      */

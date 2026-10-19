@@ -1160,7 +1160,7 @@ export const ja: Record<string, string> = {
   "viewer2d.drop.center": "Fusion オーバーレイ",
   "main.import.action": "インポート",
   "main.import.running": "インポート中…",
-  "main.import.dropHint": "ここにドロップして取り込み",
+  "main.import.dropHint": "ここにドロップして取り込み（フォルダ・DICOM・ZIP）",
   "main.import.dropNoPath": "ファイルの場所を読めませんでした。「インポート」から選んでください。",
   "main.import.result": "取込 {{imported}} 件 / スキップ {{skipped}} / 失敗 {{failed}}",
   "main.import.showingImported": "取り込んだ検査 {{count}} 件を表示しています（検索条件は使っていません）",

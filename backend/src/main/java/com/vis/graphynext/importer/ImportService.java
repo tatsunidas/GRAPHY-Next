@@ -27,6 +27,8 @@ import java.util.Set;
  * standalone のローカルインポート。指定パス（ファイル/フォルダ）を再帰走査し、
  * DICOM ファイルを索引へ取り込む。原本は保持（{@link DicomStorageService#importFromFile} がコピー）。
  *
+ * <p>ZIP は {@link ZipDicomImporter} が 1 エントリずつ展開して取り込む（全展開しない）。
+ *
  * <p>DICOMDIR は索引対象外（実体は同フォルダ内にあり走査で拾う）。非 DICOM はスキップ。
  *
  * <p>🔴 走査は {@link Files#walkFileTree} で行う。{@code Files.walk()} は途中で読めない
@@ -58,6 +60,7 @@ public class ImportService {
     }
 
     private final DicomStorageService storage;
+    private final ZipDicomImporter zip;
     /**
      * 走査で中に入らないフォルダ（保管庫の作業用と、DB フォルダの受け取り箱）。保管庫や DB フォルダごと
      * 取り込んだとき、受信途中・一時ファイル・キャッシュ・他 DB からの荷物を拾わないため。
@@ -67,6 +70,7 @@ public class ImportService {
 
     public ImportService(DicomStorageService storage, StorageLayout layout) {
         this.storage = storage;
+        this.zip = new ZipDicomImporter(storage);
         Path root = layout.root();
         Set<Path> skip = new java.util.HashSet<>();
         for (String n : List.of("incoming", ".import", ".cache")) {
@@ -76,6 +80,15 @@ public class ImportService {
             skip.add(root.getParent().resolve("inbox").normalize());
         }
         this.skipDirs = Set.copyOf(skip);
+    }
+
+    /** 異常終了で {@code .import} に残った一時ファイルを起動時に掃除する（新しいものは取り込み中かもしれないので残す）。 */
+    @jakarta.annotation.PostConstruct
+    void sweepStaleTemp() {
+        int n = storage.sweepImportTemp(java.time.Duration.ofHours(24));
+        if (n > 0) {
+            log.info("取り込みの一時ファイルを {} 件掃除しました", n);
+        }
     }
 
     /** 取り込みの走査が中に入らないフォルダか（監視の走査も同じ規則で避ける）。 */
@@ -151,6 +164,10 @@ public class ImportService {
     }
 
     private void handle(Path file, Counter c) {
+        if (ZipDicomImporter.looksZip(file)) {
+            zip.importZip(file, new Sink(c));
+            return;
+        }
         if (isDicomDir(file) || !looksDicom(file)) {
             c.skipped++;
             return;
@@ -189,6 +206,40 @@ public class ImportService {
 
     private static boolean isDicomDir(Path file) {
         return file.getFileName().toString().equalsIgnoreCase("DICOMDIR");
+    }
+
+    private final class Sink implements ZipDicomImporter.Sink {
+        private final Counter c;
+
+        Sink(Counter c) {
+            this.c = c;
+        }
+
+        @Override
+        public void imported(DicomInstance saved) {
+            c.imported++;
+            if (saved != null && saved.getStudyInstanceUid() != null) {
+                c.studies.add(saved.getStudyInstanceUid());
+                if (isBlank(saved.getStudyDate())) {
+                    c.studiesWithoutDate.add(saved.getStudyInstanceUid());
+                }
+            }
+        }
+
+        @Override
+        public void skipped() {
+            c.skipped++;
+        }
+
+        @Override
+        public void failed(String what, Exception e) {
+            c.failed++;
+            if (c.errors.size() < MAX_ERRORS) {
+                c.errors.add(what + ": " + e.getMessage());
+            } else if (c.errors.size() == MAX_ERRORS) {
+                c.errors.add("… 以降の失敗は省略 / further errors omitted");
+            }
+        }
     }
 
     private static final class Counter {
