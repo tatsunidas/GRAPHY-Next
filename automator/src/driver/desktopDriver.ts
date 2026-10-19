@@ -89,6 +89,9 @@ export class DesktopDriver implements Driver {
     this.backendProc = spawn(
       "java",
       [
+        // desktop/main.js の jvmArgs と同じ。無いと圧縮画像の伸長（PixelCodec）が使えず、製品と違う挙動になる
+        "--add-opens", "java.base/java.io=ALL-UNNAMED",
+        "--add-opens", "java.desktop/javax.imageio.stream=ALL-UNNAMED",
         "-jar", BACKEND_JAR,
         "--spring.profiles.active=standalone",
         `--server.port=${this.ports.http}`,

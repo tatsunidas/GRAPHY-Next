@@ -22,6 +22,13 @@
 - Time-Intensity Curve
 - テクスチャ解析（Radiomics）— RadiomicsJ 連携
 
+**テクスチャ解析に使える画像**（テクスチャマップ・GLAM 解析・Radiomics 特徴量（ROI）に共通）
+
+- 非圧縮と圧縮の DICOM を読めます。圧縮は JPEG Lossless・JPEG-LS・JPEG 2000・RLE などで、可逆圧縮なら非圧縮と同じ値になります。
+- 非可逆圧縮の画像（JPEG Baseline・JPEG 2000・JPEG-LS Near-Lossless など、または LossyImageCompression が 01）も計算しますが、結果の上に「非可逆圧縮の画像です。特徴量は圧縮の影響を受けます」と出ます。テクスチャマップでは、派生シリーズの DerivationDescription にも `source: lossy compressed` と残ります。
+- 圧縮画像の伸長には、同梱の dcm4che の部品（OpenCV）を使います。部品が使えない環境では「圧縮画像の伸長に必要な部品がありません（理由）」と出て止まります。
+- カラー画像と、圧縮されたマルチフレーム画像（Enhanced CT・MR など 1 ファイルに複数枚）は対象外です。理由を示して止まります。
+
 ### Radiomics 特徴量（ROI）
 
 ROI 全体を 1 つの領域として、RadiomicsJ で Radiomics 特徴量を計算し、表と CSV に出します。研究用（Research Use Only）で、診断には使いません。

@@ -220,7 +220,7 @@ public class RoiFeatureService {
             if (hit.isPresent()) {
                 log.info("[roi-features] cache hit key={}", key.substring(0, 12));
                 RoiFeatureResult cached = hit.get().asCached();
-                return cached.withRoiSize(roiSizeOf(cached.rows(), threshold));
+                return cached.withPerRequest(roiSizeOf(cached.rows(), threshold), vol.lossyCompressed());
             }
         }
 
@@ -239,7 +239,7 @@ public class RoiFeatureService {
         if (key != null) {
             cache.saveFeatures(key, json.writeValueAsBytes(result));
         }
-        return result.withRoiSize(roiSizeOf(result.rows(), threshold));
+        return result.withPerRequest(roiSizeOf(result.rows(), threshold), vol.lossyCompressed());
     }
 
     private RoiFeatureResult extractLocked(Map<String, String> settings, RadiomicsMapEngine.LoadedVolume vol,
@@ -266,7 +266,7 @@ public class RoiFeatureService {
             RoiFeatureResult.Provenance provenance = new RoiFeatureResult.Provenance(
                     graphyVersion, RadiomicsJ.version, at, RadiomicsJSettingsSnapshot.sha256(properties));
             return new RoiFeatureResult(RadiomicsJ.version, at, false, label, rows(rt), disc, provenance, properties,
-                    null);
+                    null, false);
         } finally {
             RadiomicsJ.resetSettings();
             // 例外で抜けると RadiomicsJ は離散化画像を残す。マップの窓がそれを拾うので必ず消す。

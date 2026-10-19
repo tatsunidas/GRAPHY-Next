@@ -46,6 +46,7 @@ const result = (rows: RoiFeatureRow[], fixedBinNumber = true, roiSize: RoiFeatur
   },
   settingsProperties: "BOOL_USE_FixedBinNumber=1\nDOUBLEARRAY_resamplingFactorXYZ=\nINT_binCount=32\n",
   roiSize,
+  lossyCompressed: false,
 });
 const HEAD = [...ROI_FEATURE_RECORD_COLUMNS, ...ROI_FEATURE_SIZE_COLUMNS];
 const NREC = HEAD.length;

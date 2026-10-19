@@ -54,12 +54,12 @@ class GlamAnisotropyWarningTest {
         String[] sops = new String[D];
         for (int z = 0; z < D; z++) sops[z] = "1.2.3." + z;
         RadiomicsMapEngine.LoadedVolume vol = new RadiomicsMapEngine.LoadedVolume(img, new ImagePlus("m", ms),
-                W, H, D, 1, true, c, null, 0.7, 0.7, new HashMap<>(), sops, null, null);
+                W, H, D, 1, true, c, null, 0.7, 0.7, new HashMap<>(), sops, null, null, false);
         Map<String, String> settings = new HashMap<>();
         settings.put("MASK_LABEL_INT", "1");
         TextureSeriesRequest req = new TextureSeriesRequest("1.2", "1.2.9", "1.2.8", 0,
                 "GLAM_" + GLAMFeatureType.values()[0].name(), 5, 1, false, 0, 0, settings, 0, null, null);
-        RadiomicsMapEngine eng = new RadiomicsMapEngine(null, new MapCheckpointStore(new CacheStore(dir, 0), null));
+        RadiomicsMapEngine eng = new RadiomicsMapEngine(null, new MapCheckpointStore(new CacheStore(dir, 0), null), null);
 
         PrintStream orig = System.out;
         ByteArrayOutputStream cap = new ByteArrayOutputStream();
