@@ -114,7 +114,25 @@ async function mipState(v: Page, key: string): Promise<{ px: string; hash: strin
 }
 
 /** 座標が全部同じステーション: 自動で「重なりを指定」になり、重なりを変えると MIP が追従する。 */
+/** 並びを bed1, bed2, ... の順に手で直す（どのステーションも同じ内容の合成データでは、端の一致度では順序が決まらない）。 */
+async function forceOrder(v: Page, s: any): Promise<void> {
+  const names = async () => (await v.getByTestId("stitch-order").locator("span").allTextContents()).map((t) => t.replace(/^\d+\.\s*/, ""));
+  for (let t = 0; t < 40 && (await v.getByTestId("stitch-match").count()) === 0 && (await v.getByTestId("stitch-match-busy").count()) > 0; t++) await v.waitForTimeout(250);
+  for (let i = 0; i < s.beds.length; i++) {
+    const want = `${s.set} bed${i + 1}`;
+    let cur = await names();
+    for (let g = 0; g < 10 && cur[i] !== want; g++) {
+      const j = cur.indexOf(want);
+      await v.getByTestId(`stitch-up-${j}`).click();
+      await v.waitForTimeout(300);
+      cur = await names();
+    }
+  }
+  await waitMip(v);
+}
+
 async function placementChecks(v: Page, s: any): Promise<void> {
+  await forceOrder(v, s);
   check(await v.getByTestId("stitch-place-overlap").isChecked(), "座標が全部同じなので自動で「重なりを指定」になる");
   check((await v.getByTestId("stitch-place-note").count()) === 1, "その旨の注記が出る");
   const ov = String(s.placement.overlapMm);
@@ -146,6 +164,62 @@ async function placementChecks(v: Page, s: any): Promise<void> {
   await waitMip(v);
 }
 
+/** [保存] を押し、新しくできた派生シリーズの画素を、真値（blend・gains の期待値）と照合する。 */
+async function saveAndVerify(v: Page, d: DesktopDriver, s: any, studyUid: string, blend: "linear" | "mean", gains: boolean, tag: string): Promise<void> {
+  const before = (await getJson<any[]>(d.ports.http, `/api/studies/${studyUid}/series`)).map((x) => x.seriesInstanceUid);
+  await v.getByTestId("stitch-save").click();
+  await v.getByTestId("stitch-message").filter({ hasText: /\d+/ }).waitFor({ timeout: 120_000 });
+  console.log(`  保存メッセージ(${tag}): ${await v.getByTestId("stitch-message").textContent()}`);
+  await v.screenshot({ path: path.join(OUT_DIR, `${tag}-saved.png`) });
+  const after = await getJson<any[]>(d.ports.http, `/api/studies/${studyUid}/series`);
+  const derived = after.filter((x) => !before.includes(x.seriesInstanceUid));
+  check(derived.length === 1, `派生シリーズが 1 本できる（${tag}）`, derived.length);
+  if (derived.length !== 1) return;
+  const dsUid = derived[0].seriesInstanceUid;
+  const inst = await getJson<Array<{ sopInstanceUid: string }>>(d.ports.http, `/api/studies/${studyUid}/series/${dsUid}/instances`);
+  const dir = path.join(OUT_DIR, `${tag}-derived`);
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  for (const [n, i] of inst.entries()) {
+    const res = await fetch(`http://127.0.0.1:${d.ports.http}/api/studies/${studyUid}/series/${dsUid}/instances/${i.sopInstanceUid}/file`);
+    fs.writeFileSync(path.join(dir, `o${String(n).padStart(4, "0")}.dcm`), Buffer.from(await res.arrayBuffer()));
+  }
+  const args = ["-I", path.join(AUTOMATOR_ROOT, "scripts", "verify-stitch-output.py"), path.join(root, "truth.json"), s.set, dir, blend];
+  if (gains) args.push("gains");
+  const ver = spawnSync(PY, args, { encoding: "utf8" });
+  if (ver.status !== 0) { check(false, `照合スクリプトが動く（${tag}）`, ver.stderr); return; }
+  const r = JSON.parse(ver.stdout);
+  console.log(`  照合(${tag}): ${ver.stdout.trim()}`);
+  check(r.voxels > 0 && r.bad === 0, `保存した画素が真値（${blend}${gains ? "・信号合わせ" : ""}）と一致（${tag}）`, r);
+}
+
+/** 端の一致度: 自動で正しい並び順・重なりになり、手で並べ替えた後は上書きされない。 */
+async function matchChecks(v: Page, s: any): Promise<void> {
+  const names = async () => (await v.getByTestId("stitch-order").locator("span").allTextContents()).map((t) => t.replace(/^\d+\.\s*/, ""));
+  for (let t = 0; t < 40 && (await v.getByTestId("stitch-match").count()) === 0; t++) await v.waitForTimeout(250);
+  const expectNames = (s.expectedOrder as number[]).map((i) => `${s.set} bed${i + 1}`);
+  const got = await names();
+  console.log(`  自動の並び: ${got.join(" → ")}（期待 ${expectNames.join(" → ")}）`);
+  check(JSON.stringify(got) === JSON.stringify(expectNames), "端の一致度で並び順が自動で正しくなる（シリーズ番号の順ではない）", got);
+  const ovText = await v.getByTestId("stitch-overlap-input").inputValue();
+  check(Math.abs(Number(ovText) - s.placement.overlapMm) < 0.06, `重なりの初期値が推定値（${s.placement.overlapMm} mm）になる`, ovText);
+  for (const n of [0, 1]) {
+    const pair = v.getByTestId(`stitch-match-pair-${n}`);
+    const score = Number(await pair.getAttribute("data-score"));
+    const ov = Number(await pair.getAttribute("data-overlap"));
+    check(score > 0.9 && Math.abs(ov - s.placement.overlapMm) < 0.06, `組 ${n + 1} の一致度 ${score}・重なり ${ov} mm`, [score, ov]);
+  }
+  await v.screenshot({ path: path.join(OUT_DIR, `${s.set}-match.png`) });
+  // 手で並べ替えたら、その順が保たれる（自動で上書きされない）
+  await v.getByTestId("stitch-down-0").click();
+  await v.waitForTimeout(1500);
+  const manual = await names();
+  check(manual[0] === got[1] && manual[1] === got[0], "手で並べ替えた順が保たれる（上書きされない）", manual);
+  await v.getByTestId("stitch-up-1").click(); // 元に戻す
+  await v.waitForTimeout(500);
+  check(JSON.stringify(await names()) === JSON.stringify(got), "元の順に戻せる");
+}
+
 async function main(): Promise<void> {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const d = new DesktopDriver({ http: 18190, scp: 18191 }); // 開発版 Next（18090）と並行して動かせるよう別ポート
@@ -166,7 +240,8 @@ async function main(): Promise<void> {
         const petRows = await v.getByTestId("stitch-cond-petReference").count();
         check(petRows === (s.set === "neg-pet" ? 1 : 0), `PET/NM の行は PET のときだけ出る（${petRows} 行）`);
         await waitMip(v);
-        if (s.placement) await placementChecks(v, s);
+        if (s.set === "match3") await matchChecks(v, s);
+        else if (s.placement) await placementChecks(v, s);
         await waitMip(v);
         const saveOk = (await v.getByTestId("stitch-save").isEnabled()) === s.expectOk;
         if (s.set === "neg-pid" && !saveOk) {
@@ -187,32 +262,24 @@ async function main(): Promise<void> {
           console.log(`  出力欄: ${await v.getByTestId("stitch-output").textContent()}`);
         }
         if (s.expectOk) {
-          const before = (await getJson<any[]>(d.ports.http, `/api/studies/${studyUid}/series`)).map((x) => x.seriesInstanceUid);
-          await v.getByTestId("stitch-save").click();
-          await v.getByTestId("stitch-message").waitFor({ timeout: 120_000 });
-          const msg = (await v.getByTestId("stitch-message").textContent()) ?? "";
-          console.log(`  保存メッセージ: ${msg}`);
-          await v.screenshot({ path: path.join(OUT_DIR, `${s.set}-saved.png`) });
-          const after = await getJson<any[]>(d.ports.http, `/api/studies/${studyUid}/series`);
-          const derived = after.filter((x) => !before.includes(x.seriesInstanceUid));
-          check(derived.length === 1, "派生シリーズが 1 本できる", derived.length);
-          if (derived.length === 1) {
-            const dsUid = derived[0].seriesInstanceUid;
-            const inst = await getJson<Array<{ sopInstanceUid: string }>>(d.ports.http, `/api/studies/${studyUid}/series/${dsUid}/instances`);
-            const dir = path.join(OUT_DIR, `${s.set}-derived`);
-            fs.rmSync(dir, { recursive: true, force: true });
-            fs.mkdirSync(dir, { recursive: true });
-            for (const [n, i] of inst.entries()) {
-              const res = await fetch(`http://127.0.0.1:${d.ports.http}/api/studies/${studyUid}/series/${dsUid}/instances/${i.sopInstanceUid}/file`);
-              fs.writeFileSync(path.join(dir, `o${String(n).padStart(4, "0")}.dcm`), Buffer.from(await res.arrayBuffer()));
-            }
-            const ver = spawnSync(PY, ["-I", path.join(AUTOMATOR_ROOT, "scripts", "verify-stitch-output.py"), path.join(root, "truth.json"), s.set, dir], { encoding: "utf8" });
-            if (ver.status !== 0) check(false, "照合スクリプトが動く", ver.stderr);
-            else {
-              const r = JSON.parse(ver.stdout);
-              console.log(`  照合: ${ver.stdout.trim()}`);
-              check(r.voxels > 0 && r.bad === 0, "保存した画素が真値（1 次関数・重なりは平均）と一致", r);
-            }
+          await saveAndVerify(v, d, s, studyUid, "linear", false, `${s.set}-linear`);
+          if (s.set === "c") {
+            // 重なりの扱いを「平均」に切り替えて保存し、平均の期待値と照合する（切替で結果が変わることも確かめる）。
+            await v.getByTestId("stitch-blend-mean").check();
+            await waitMip(v);
+            await saveAndVerify(v, d, s, studyUid, "mean", false, `${s.set}-mean`);
+            await v.getByTestId("stitch-blend-linear").check();
+          }
+          if (s.set === "gain") {
+            await v.getByTestId("stitch-gain").check();
+            await waitMip(v);
+            const gl = v.getByTestId("stitch-gains").locator("[data-gain]");
+            const got = [] as number[];
+            for (let i = 0; i < (await gl.count()); i++) got.push(Number(await gl.nth(i).getAttribute("data-gain")));
+            console.log(`  推定した倍率: ${got.join(", ")}`);
+            const exp = s.beds.map((b: any) => b.gainExpected);
+            check(got.length === exp.length && got.every((g, i) => Math.abs(g - exp[i]) < 2e-3), "推定した倍率が真値（1, 0.8）と一致", got);
+            await saveAndVerify(v, d, s, studyUid, "linear", true, `${s.set}-gains`);
           }
         }
         await v.getByTestId("stitch-close").click();
@@ -225,12 +292,47 @@ async function main(): Promise<void> {
       console.log(`  条件: ${await v.getByTestId("stitch-conditions").textContent()}`);
       console.log(`  保存可: ${await v.getByTestId("stitch-save").isEnabled()}`);
       console.log(`  出力欄: ${await v.getByTestId("stitch-output").textContent()}`);
-      // 重なりの正解は DICOM から分からないので、値ごとに画面を残して目で見る（REAL_OVERLAPS=0,20,30）。
-      for (const ov of (process.env.REAL_OVERLAPS ?? "0").split(",")) {
-        await v.getByTestId("stitch-overlap-input").fill(ov);
+      // 端の一致度による自動判定の結果（並び順・重なり）
+      for (let t = 0; t < 60 && (await v.getByTestId("stitch-match").count()) === 0; t++) await v.waitForTimeout(500);
+      console.log(`  自動の並び: ${(await v.getByTestId("stitch-order").locator("span").allTextContents()).join(" → ")}`);
+      console.log(`  端の一致度: ${(await v.getByTestId("stitch-match").textContent())?.replace(/\s+/g, " ")}`);
+      console.log(`  重なり欄の初期値: ${await v.getByTestId("stitch-overlap-input").inputValue()} mm`);
+      // 重なりの正解は DICOM から分からないので、REAL_OVERLAP があればそれを入れ、無ければ自動の値のまま
+      if (process.env.REAL_OVERLAP) await v.getByTestId("stitch-overlap-input").fill(process.env.REAL_OVERLAP);
+      // 境目の段差の指標: COR 画像の行ごとの平均輝度（0〜255）の、隣り合う行の差の最大を、2 つの境目（重なりの中心 ± 重なり/2 ± 1 行）に限って測る。
+      // ステーションは 3 本・各 REAL_STATION_MM（既定 300 mm）・重なりは欄の値。小さいほど滑らか。
+      const step = async () => {
+        const ov = Number(await v.getByTestId("stitch-overlap-input").inputValue());
+        const len = Number(process.env.REAL_STATION_MM ?? "300");
+        return (await v.getByTestId("stitch-mip-cor").evaluate((c: HTMLCanvasElement, a: { ov: number; len: number }) => {
+          const ctx = c.getContext("2d")!;
+          const { data, width, height } = ctx.getImageData(0, 0, c.width, c.height);
+          const means: number[] = [];
+          for (let y = 0; y < height; y++) {
+            let sum = 0;
+            for (let x = 0; x < width; x++) sum += data[(y * width + x) * 4];
+            means.push(sum / width);
+          }
+          const total = 3 * a.len - 2 * a.ov;
+          const mmPerRow = total / height;
+          let mx = 0;
+          for (const k of [1, 2]) {
+            const centerFromBottom = k * a.len - (k - 0.5) * a.ov; // k 番目の境目の重なりの中心（下端から）
+            const lo = Math.floor((total - (centerFromBottom + a.ov / 2)) / mmPerRow) - 1;
+            const hi = Math.ceil((total - (centerFromBottom - a.ov / 2)) / mmPerRow) + 1;
+            for (let y = Math.max(1, lo); y <= Math.min(height - 1, hi); y++) mx = Math.max(mx, Math.abs(means[y] - means[y - 1]));
+          }
+          return mx;
+        }, { ov, len })) as number;
+      };
+      const variants: Array<[string, "mean" | "linear", boolean]> = [["mean", "mean", false], ["linear", "linear", false], ["linear+gain", "linear", true]];
+      for (const [name, mode, gain] of variants) {
+        await v.getByTestId(`stitch-blend-${mode}`).check();
+        if ((await v.getByTestId("stitch-gain").isChecked()) !== gain) await v.getByTestId("stitch-gain").click();
         await waitMip(v);
-        console.log(`  重なり ${ov}: ${await v.getByTestId("stitch-overlap").textContent()} / ${await v.getByTestId("stitch-output").textContent()}`);
-        await v.screenshot({ path: path.join(OUT_DIR, `real-overlap-${ov}.png`) });
+        const gains = gain ? (await v.getByTestId("stitch-gains").textContent())?.replace(/\s+/g, " ") : "";
+        console.log(`  [${name}] 段差の指標 ${(await step()).toFixed(2)} ${gains ?? ""}`);
+        await v.screenshot({ path: path.join(OUT_DIR, `real-${name}.png`) });
       }
     }
   } finally {

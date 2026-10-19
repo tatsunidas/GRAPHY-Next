@@ -8,7 +8,7 @@
  */
 import type { RegVolume } from "./regGeometry";
 import type { SuvParams } from "./suv";
-import type { StitchGrid, StitchInput, StitchPetInfo } from "./volumeStitch";
+import { BLEND_MEAN, type BlendOptions, type StitchGrid, type StitchInput, type StitchPetInfo } from "./volumeStitch";
 
 /** `LoadedRegVolume` のうち結合が使う部分（loader を import しないための構造的な型）。 */
 export interface StitchLoaded {
@@ -76,11 +76,17 @@ export function stitchBackground(inputs: readonly StitchInput[]): number {
   return Number.isFinite(m) ? m : 0;
 }
 
-export function stitchDerivation(seriesUids: readonly string[], grid: Pick<StitchGrid, "dims" | "spacing">): string {
+export function stitchDerivation(
+  seriesUids: readonly string[],
+  grid: Pick<StitchGrid, "dims" | "spacing">,
+  blend: BlendOptions = BLEND_MEAN,
+): string {
   const [nx, ny, nz] = grid.dims;
   const [a, b, k] = grid.spacing;
+  const how = blend.mode === "linear" ? `linear, range ${((blend.fraction ?? 1) * 100).toFixed(0)}%` : "mean";
+  const gains = blend.gains ? `, gains [${blend.gains.map((g) => g.toFixed(3)).join(", ")}]` : "";
   return (
-    `Stitched (overlap: mean) from ${seriesUids.length} series [${seriesUids.join(", ")}] ` +
+    `Stitched (overlap: ${how}${gains}) from ${seriesUids.length} series [${seriesUids.join(", ")}] ` +
     `to ${nx}x${ny}x${nz}, spacing ${a.toFixed(3)}x${b.toFixed(3)}x${k.toFixed(3)} mm (col x row x slice)`
   );
 }

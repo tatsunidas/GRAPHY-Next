@@ -300,28 +300,79 @@ function sampleInput(vol: RegVolume, x: number, y: number, z: number, tol: numbe
   return sampleTrilinear(vol, i, j, k);
 }
 
-function meanAt(inputs: readonly StitchInput[], x: number, y: number, z: number, tol: number): number {
-  let sum = 0;
-  let cnt = 0;
-  for (const inp of inputs) {
-    const s = sampleInput(inp.volume, x, y, z, tol);
-    if (!Number.isNaN(s)) { sum += s; cnt++; }
+/**
+ * 重なりの扱い。
+ * - mean: 覆っている入力の算術平均（従来）。
+ * - linear: 各入力の法線方向の縁からの距離で重みを付ける（羽毛化）。縁に近い入力は弱く、内側の入力は強い。
+ *   `fraction`（0 < f ≤ 1）は重みが切り替わる範囲で、1 なら重なり全体で線形、小さいほど中央で急に切り替わる。
+ * - gains: 入力ごとの倍率（信号の拡大率の違いを合わせる）。サンプルに掛ける。
+ */
+export interface BlendOptions {
+  mode: "mean" | "linear";
+  fraction?: number;
+  gains?: readonly number[];
+}
+
+export const BLEND_MEAN: BlendOptions = { mode: "mean" };
+
+/**
+ * 点 (x,y,z) を覆う入力から値を作る。覆う入力が無ければ NaN。
+ * `lo`/`hi` は入力ごとの法線方向の縁（ボクセル中心 ± 間隔/2）、`n` は法線。
+ */
+function blendAt(
+  inputs: readonly StitchInput[],
+  edges: ReadonlyArray<readonly [number, number]>,
+  n: readonly number[],
+  blend: BlendOptions,
+  x: number, y: number, z: number, tol: number,
+): number {
+  const s: number[] = [];
+  const d: number[] = [];
+  const w = n[0] * x + n[1] * y + n[2] * z;
+  for (let t = 0; t < inputs.length; t++) {
+    const v = sampleInput(inputs[t].volume, x, y, z, tol);
+    if (Number.isNaN(v)) continue;
+    s.push(blend.gains ? v * blend.gains[t] : v);
+    d.push(Math.max(0, Math.min(w - edges[t][0], edges[t][1] - w)));
   }
-  return cnt > 0 ? sum / cnt : NaN;
+  const cnt = s.length;
+  if (cnt === 0) return NaN;
+  if (cnt === 1) return s[0];
+  let wsum = 0;
+  let vsum = 0;
+  if (blend.mode === "linear") {
+    const f = blend.fraction ?? 1;
+    const dsum = d.reduce((a, b) => a + b, 0);
+    for (let t = 0; t < cnt; t++) {
+      const others = (dsum - d[t]) / (cnt - 1);
+      const tot = d[t] + others;
+      const q = tot > 0 ? (d[t] - others) / tot : 0;
+      const wt = Math.min(1, Math.max(0, 0.5 + q / (2 * f)));
+      wsum += wt;
+      vsum += wt * s[t];
+    }
+  }
+  if (wsum <= 0) return s.reduce((a, b) => a + b, 0) / cnt;
+  return vsum / wsum;
 }
 
 /**
- * 格子の各点を各入力から引き、覆っている入力の算術平均をスライスごとに 1 枚ずつ返す。
+ * 格子の各点を各入力から引き、重なりを `blend` に従って混ぜたものをスライスごとに 1 枚ずつ返す。
  * どの入力も覆わない点は NaN（0 では空気と区別できない）。全スライスを一度に持たずに符号化へ渡せる。
  */
 export function* stitchSlices(
   inputs: readonly StitchInput[],
   grid: StitchGrid,
-  overlap: "mean",
+  blend: BlendOptions,
 ): Generator<Float32Array, void, undefined> {
-  if (overlap !== "mean") throw new Error(`volumeStitch: 未対応の重なりの扱い ${overlap}`);
+  if (blend.mode !== "mean" && blend.mode !== "linear") throw new Error(`volumeStitch: 未対応の重なりの扱い ${String(blend.mode)}`);
+  const f = blend.fraction ?? 1;
+  if (blend.mode === "linear" && !(f > 0 && f <= 1)) throw new Error("volumeStitch: ブレンドの範囲は 0 より大きく 1 以下");
+  if (blend.gains && blend.gains.length !== inputs.length) throw new Error("volumeStitch: gains の数が入力と合わない");
   const [nx, ny, nz] = grid.dims;
   const m = grid.indexToWorld;
+  const n = normalOfIop(inputs[0].iop);
+  const edges = inputs.map((x) => normalEdges(x, n));
   for (let k = 0; k < nz; k++) {
     const out = new Float32Array(nx * ny);
     for (let j = 0; j < ny; j++) {
@@ -329,10 +380,10 @@ export function* stitchSlices(
         const x = m[0] * i + m[1] * j + m[2] * k + m[3];
         const y = m[4] * i + m[5] * j + m[6] * k + m[7];
         const z = m[8] * i + m[9] * j + m[10] * k + m[11];
-        // 中心の範囲に入る入力だけで平均する。どれも覆わない点に限り、ボクセルの縁（半ボクセル）まで
-        // 端の値で受ける。重なりの中で端の複製を平均に混ぜると、傾きのある値で継ぎ目に偏りが出る。
-        let value = meanAt(inputs, x, y, z, ROUNDING_INDEX);
-        if (Number.isNaN(value)) value = meanAt(inputs, x, y, z, HALF_VOXEL_INDEX);
+        // 中心の範囲に入る入力だけで混ぜる。どれも覆わない点に限り、ボクセルの縁（半ボクセル）まで
+        // 端の値で受ける。重なりの中で端の複製を混ぜると、傾きのある値で継ぎ目に偏りが出る。
+        let value = blendAt(inputs, edges, n, blend, x, y, z, ROUNDING_INDEX);
+        if (Number.isNaN(value)) value = blendAt(inputs, edges, n, blend, x, y, z, HALF_VOXEL_INDEX);
         out[j * nx + i] = value;
       }
     }
@@ -344,9 +395,9 @@ export function* stitchSlices(
 export function stitchToGrid(
   inputs: readonly StitchInput[],
   grid: StitchGrid,
-  overlap: "mean",
+  blend: BlendOptions,
 ): Float32Array[] {
-  return [...stitchSlices(inputs, grid, overlap)];
+  return [...stitchSlices(inputs, grid, blend)];
 }
 
 /** IOP から求めた法線（行方向 × 列方向）。`unionGrid` が使う軸と同じ。 */
@@ -465,4 +516,237 @@ export class MipAccumulator {
     const fix = (a: Float32Array) => a.map((v) => (v === -Infinity ? NaN : v));
     return { dims: this.dims, ax: fix(this.ax), cor: fix(this.cor), sag: fix(this.sag) };
   }
+}
+
+export interface GainEstimate {
+  /** 入力と同じ順の倍率。基準（法線方向の最も手前）の入力は 1。推定できない入力は前の入力の倍率のまま。 */
+  gains: number[];
+  /** 入力ごとに、手前の入力との重なりから倍率を推定できたか（基準は true）。 */
+  estimable: boolean[];
+}
+
+/**
+ * ステーション間の信号の拡大率（ゲイン）の違いを、重なり領域の比で推定する。
+ * 法線方向の位置順に並べ、隣り合う 2 本の重なりで両方から引いた値の和の比 gain_next = gain_prev · Σa / Σb を連鎖させる
+ * （大きい信号に自然に重みが乗り、雑音床の影響が小さい）。重なりが無い・和が正でない組は推定不可（倍率は 1 倍のまま連鎖）。
+ */
+export function estimateGains(inputs: readonly StitchInput[]): GainEstimate {
+  const gains = inputs.map(() => 1);
+  const estimable = inputs.map(() => false);
+  if (inputs.length === 0) return { gains, estimable };
+  const n = normalOfIop(inputs[0].iop);
+  const edges = inputs.map((x) => normalEdges(x, n));
+  const order = inputs.map((_, t) => t).sort((a, b) => edges[a][0] - edges[b][0]);
+  estimable[order[0]] = true;
+  const grid = unionGrid(inputs);
+  const [nx, ny, nz] = grid.dims;
+  // 面内は約 64 画素に間引く（和の比には十分。表示サイズと同じ考え方）。
+  const stride = Math.max(1, Math.floor(Math.min(nx, ny) / 64));
+  const m = grid.indexToWorld;
+  for (let q = 1; q < order.length; q++) {
+    const a = order[q - 1];
+    const b = order[q];
+    const lo = Math.max(edges[a][0], edges[b][0]);
+    const hi = Math.min(edges[a][1], edges[b][1]);
+    gains[b] = gains[a];
+    if (!(hi > lo)) continue;
+    let sa = 0;
+    let sb = 0;
+    for (let k = 0; k < nz; k++) {
+      for (let j = 0; j < ny; j += stride) {
+        for (let i = 0; i < nx; i += stride) {
+          const x = m[0] * i + m[1] * j + m[2] * k + m[3];
+          const y = m[4] * i + m[5] * j + m[6] * k + m[7];
+          const z = m[8] * i + m[9] * j + m[10] * k + m[11];
+          const w = n[0] * x + n[1] * y + n[2] * z;
+          if (w < lo || w > hi) continue;
+          const va = sampleInput(inputs[a].volume, x, y, z, ROUNDING_INDEX);
+          const vb = sampleInput(inputs[b].volume, x, y, z, ROUNDING_INDEX);
+          if (Number.isNaN(va) || Number.isNaN(vb)) continue;
+          sa += va;
+          sb += vb;
+        }
+      }
+    }
+    if (sa > 0 && sb > 0) {
+      gains[b] = gains[a] * (sa / sb);
+      estimable[b] = true;
+    }
+  }
+  return { gains, estimable };
+}
+
+export interface EndMatchPair {
+  /** `order` の中での位置（from → to が隣り合う）。 */
+  from: number;
+  to: number;
+  /** 端の一致度（重なり部分のピアソン相関の最大値）。 */
+  score: number;
+  /** その相関が最大になった重なり [mm]。 */
+  overlapMm: number;
+}
+
+export interface EndMatch {
+  /** 面内の格子・間隔が揃わず比較できなかったとき false（order は入力の並びのまま）。 */
+  comparable: boolean;
+  /** 入力の添字を、法線方向の + 向きに並べた順。 */
+  order: number[];
+  /** 隣り合う組ごとの一致度と重なり。 */
+  pairs: EndMatchPair[];
+  /** 最良の順序と次点の順序の、一致度の総和の差（大きいほど確からしい）。入力が 2 本未満なら null。 */
+  margin: number | null;
+}
+
+/** 面内を `b` 画素ずつのブロック平均で縮めた各スライス（法線方向に昇順）。 */
+function endSlices(input: StitchInput, n: readonly number[], b: number): Float32Array[] {
+  const [nx, ny, nz] = input.volume.dims;
+  const m = input.volume.indexToWorld;
+  const ascending = m[2] * n[0] + m[6] * n[1] + m[10] * n[2] > 0;
+  const rx = Math.floor(nx / b);
+  const ry = Math.floor(ny / b);
+  const out: Float32Array[] = [];
+  for (let s = 0; s < nz; s++) {
+    const k = ascending ? s : nz - 1 - s;
+    const img = new Float32Array(rx * ry);
+    for (let j = 0; j < ry; j++) {
+      for (let i = 0; i < rx; i++) {
+        let sum = 0;
+        for (let dj = 0; dj < b; dj++) {
+          for (let di = 0; di < b; di++) sum += input.volume.data[k * nx * ny + (j * b + dj) * nx + (i * b + di)];
+        }
+        img[j * rx + i] = sum / (b * b);
+      }
+    }
+    out.push(img);
+  }
+  return out;
+}
+
+/** A の末尾 m 枚と B の先頭 m 枚（同じ解剖として対応）のピアソン相関を m = 2..上限で求め、最大の m を返す。 */
+function bestEndOverlap(a: Float32Array[], b: Float32Array[]): { score: number; slices: number } {
+  const na = a.length;
+  const mMax = Math.min(na, b.length) - 1;
+  let best = { score: -Infinity, slices: 0 };
+  for (let mm = 2; mm <= mMax; mm++) {
+    let sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0, cnt = 0;
+    for (let i = 0; i < mm; i++) {
+      const pa = a[na - mm + i];
+      const pb = b[i];
+      for (let p = 0; p < pa.length; p++) {
+        const x = pa[p];
+        const y = pb[p];
+        sa += x; sb += y; saa += x * x; sbb += y * y; sab += x * y;
+      }
+      cnt += pa.length;
+    }
+    const va = saa - (sa * sa) / cnt;
+    const vb = sbb - (sb * sb) / cnt;
+    if (!(va > 0 && vb > 0)) continue; // 一定の値（相関が定義できない）
+    const rho = (sab - (sa * sb) / cnt) / Math.sqrt(va * vb);
+    if (rho > best.score) best = { score: rho, slices: mm };
+  }
+  return best;
+}
+
+function permutations(n: number): number[][] {
+  const out: number[][] = [];
+  const cur: number[] = [];
+  const used = new Array<boolean>(n).fill(false);
+  const rec = () => {
+    if (cur.length === n) { out.push([...cur]); return; }
+    for (let t = 0; t < n; t++) {
+      if (used[t]) continue;
+      used[t] = true; cur.push(t); rec(); cur.pop(); used[t] = false;
+    }
+  };
+  rec();
+  return out;
+}
+
+/** 全順列を試す入力数の上限（8! = 40320）。これを超えたら貪欲法。 */
+const EXHAUSTIVE_MAX = 8;
+
+/**
+ * 読み込んだ入力の並び順を、ボリュームの端同士の一致度で決める。
+ * 各入力のスライスを法線方向に昇順に並べ、「A の末尾 m 枚」と「B の先頭 m 枚」の相関を全 m で求めて、
+ * 隣り合う一致度の総和が最大の順序を選ぶ（相関なのでゲイン・オフセットの違いに依らない）。
+ * 面内の格子（列数・行数・間隔・面内の位置）やスライス間隔が揃わない入力があるときは比較しない。
+ */
+export function matchEnds(inputs: readonly StitchInput[]): EndMatch {
+  const idle = inputs.map((_, t) => t);
+  const none: EndMatch = { comparable: false, order: idle, pairs: [], margin: null };
+  if (inputs.length < 2) return { ...none, comparable: inputs.length === 1 };
+  const f = inputs[0];
+  const n = normalOfIop(f.iop);
+  const rc = unit(f.iop[0], f.iop[1], f.iop[2]);
+  const rr = unit(f.iop[3], f.iop[4], f.iop[5]);
+  const inPlane = (x: StitchInput) => {
+    const m = x.volume.indexToWorld;
+    const p = [m[3], m[7], m[11]];
+    return [dot3(rc, p), dot3(rr, p)];
+  };
+  const o0 = inPlane(f);
+  for (const x of inputs) {
+    const [nx, ny] = x.volume.dims;
+    const [sx, sy, sz] = x.volume.spacing;
+    const same = (u: number, v: number) => Math.abs(u - v) <= 1e-3 * Math.max(Math.abs(u), Math.abs(v), 1e-9);
+    const o = inPlane(x);
+    if (
+      nx !== f.volume.dims[0] || ny !== f.volume.dims[1] ||
+      !same(sx, f.volume.spacing[0]) || !same(sy, f.volume.spacing[1]) || !same(sz, f.volume.spacing[2]) ||
+      Math.abs(o[0] - o0[0]) > sx / 2 || Math.abs(o[1] - o0[1]) > sy / 2
+    ) return none;
+  }
+  const b = Math.max(1, Math.floor(Math.min(f.volume.dims[0], f.volume.dims[1]) / 64));
+  const sl = inputs.map((x) => endSlices(x, n, b));
+  const N = inputs.length;
+  const score: number[][] = Array.from({ length: N }, () => new Array<number>(N).fill(-Infinity));
+  const slices: number[][] = Array.from({ length: N }, () => new Array<number>(N).fill(0));
+  for (let p = 0; p < N; p++) {
+    for (let q = 0; q < N; q++) {
+      if (p === q) continue;
+      const r = bestEndOverlap(sl[p], sl[q]);
+      score[p][q] = r.score;
+      slices[p][q] = r.slices;
+    }
+  }
+  const total = (perm: number[]) => {
+    let s = 0;
+    for (let t = 0; t + 1 < perm.length; t++) s += score[perm[t]][perm[t + 1]];
+    return s;
+  };
+  let order: number[];
+  let margin: number | null = null;
+  if (N <= EXHAUSTIVE_MAX) {
+    const scored = permutations(N).map((perm) => ({ perm, s: total(perm) })).sort((u, v) => v.s - u.s);
+    order = scored[0].perm;
+    margin = scored.length > 1 ? scored[0].s - scored[1].s : null;
+  } else {
+    // 貪欲: 最も一致する組から鎖を伸ばす。
+    let bp = 0, bq = 1;
+    for (let p = 0; p < N; p++) for (let q = 0; q < N; q++) if (p !== q && score[p][q] > score[bp][bq]) { bp = p; bq = q; }
+    order = [bp, bq];
+    const left = new Set(idle.filter((t) => t !== bp && t !== bq));
+    while (left.size > 0) {
+      let bt = -1, bs = -Infinity, atEnd = true;
+      for (const t of left) {
+        const e = score[order[order.length - 1]][t];
+        const h = score[t][order[0]];
+        if (e > bs) { bs = e; bt = t; atEnd = true; }
+        if (h > bs) { bs = h; bt = t; atEnd = false; }
+      }
+      if (atEnd) order.push(bt); else order.unshift(bt);
+      left.delete(bt);
+    }
+  }
+  const dz = f.volume.spacing[2];
+  const pairs: EndMatchPair[] = [];
+  for (let t = 0; t + 1 < order.length; t++) {
+    pairs.push({
+      from: order[t], to: order[t + 1],
+      score: score[order[t]][order[t + 1]],
+      overlapMm: slices[order[t]][order[t + 1]] * dz,
+    });
+  }
+  return { comparable: true, order, pairs, margin };
 }

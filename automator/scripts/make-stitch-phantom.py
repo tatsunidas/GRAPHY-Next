@@ -8,6 +8,8 @@
   負例  neg-rot5（2 本目の IOP を 5° 回す）/ neg-pid（PatientID 違い）
         neg-modality（2 本目が MR）/ neg-pet（PET で SeriesTime だけ違う。放射性医薬品の情報付き）
   FoR は条件にしない  for-diff（FoR だけ違う正例）
+  端の一致度        match3（構造を持つ場。3 ステーション・IPP 同一・シリーズ番号と上下の順序がずれている。重なり 12 mm）
+  信号の拡大率      gain（2 本目だけ ×1.25。信号を合わせると倍率 0.8 になる）
   座標が全部同じ    stations2・stations3（IPP が同一で FoR が別。装置がステーションごとに座標を原点へ戻した状態。
                     重なり 8 mm で + 方向へ並べたときの配置を truth.json の shift・placement に記録する）
 と、真値の材料 truth.json。
@@ -48,6 +50,19 @@ X0, Y0 = 5.0, -7.0
 Z_BED1 = -100.0
 IOP0 = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
 
+# 端の一致度の検査用: 世界座標（LPS mm）の構造を持つ場（固定シードの正弦の和。線形だと全ての組が似てしまう）。
+TEX_AMP = 10.0
+_rng = np.random.RandomState(7)
+TEX_TERMS = [
+    {"kx": float((_rng.rand() - 0.5) * 0.9), "ky": float((_rng.rand() - 0.5) * 0.9), "kz": float((_rng.rand() - 0.5) * 1.2),
+     "ph": float(_rng.rand() * 6.28), "a": float(0.5 + _rng.rand())}
+    for _ in range(16)
+]
+
+
+def texture(p):
+    return TEX_AMP * sum(t["a"] * np.sin(t["kx"] * p[..., 0] + t["ky"] * p[..., 1] + t["kz"] * p[..., 2] + t["ph"]) for t in TEX_TERMS)
+
 SOP_CLASS = {"CT": CTImageStorage, "MR": MRImageStorage, "PT": PositronEmissionTomographyImageStorage}
 
 
@@ -56,7 +71,11 @@ def f(p):
 
 
 def make(setname, bedname, *, z0, iop=IOP0, add=0.0, modality="CT", patient, study, frame,
-         series_time="120000", pet=False, desc=""):
+         series_time="120000", pet=False, desc="", nz=NZ, value_z0=None, field="lin", mul=1.0):
+    # z0 は IPP の先頭 z。value_z0 は値を計算する位置（装置がステーションごとに座標を原点へ戻した状態を作るとき、
+    # IPP は同じでも値は本来の位置の解剖になる）。field は値の場（lin: 線形、tex: 構造を持つ場）。
+    val = texture if field == "tex" else f
+    vz0 = z0 if value_z0 is None else value_z0
     rc = np.array(iop[:3])
     rr = np.array(iop[3:])
     n = np.cross(rc, rr)
@@ -66,11 +85,12 @@ def make(setname, bedname, *, z0, iop=IOP0, add=0.0, modality="CT", patient, stu
     jj, ii = np.meshgrid(np.arange(ROWS), np.arange(COLS), indexing="ij")
     base = np.array([X0, Y0, 0.0]) + n * 0.0
     expected = []
-    for k in range(NZ):
+    for k in range(nz):
         # 世界の z（= 患者 LPS の z）が z0 + k·DZ になる位置を先頭 IPP とする
         ipp = np.array([X0, Y0, z0 + k * DZ])
         pos = ipp + ii[..., None] * COL_MM * rc + jj[..., None] * ROW_MM * rr
-        stored = np.rint((f(pos) + add - INTERCEPT) / SLOPE)
+        posv = pos + np.array([0.0, 0.0, vz0 - z0])
+        stored = np.rint(((val(posv) + add) * mul - INTERCEPT) / SLOPE)
         assert np.all(np.abs(stored) < 32767)
         stored = stored.astype(np.int16)
         meta = FileMetaDataset()
@@ -114,17 +134,18 @@ def make(setname, bedname, *, z0, iop=IOP0, add=0.0, modality="CT", patient, stu
         ds.save_as(os.path.join(d, "img%03d.dcm" % k), enforce_file_format=True)
         expected.append((ipp, stored))
     # ── 自己検証: 読み戻して生成時の値と比べる ──
-    for k in range(NZ):
+    for k in range(nz):
         ds = pydicom.dcmread(os.path.join(d, "img%03d.dcm" % k))
         ipp, stored = expected[k]
         assert np.allclose([float(x) for x in ds.ImagePositionPatient], ipp, atol=1e-6), "IPP"
         assert np.allclose([float(x) for x in ds.ImageOrientationPatient], iop, atol=1e-6), "IOP"
         assert np.array_equal(ds.pixel_array, stored), "pixels"
         pos = ipp + ii[..., None] * COL_MM * rc + jj[..., None] * ROW_MM * rr
-        assert np.max(np.abs(ds.pixel_array * SLOPE + INTERCEPT - (f(pos) + add))) <= SLOPE / 2 + 1e-9, "values"
+        posv = pos + np.array([0.0, 0.0, vz0 - z0])
+        assert np.max(np.abs(ds.pixel_array * SLOPE + INTERCEPT - (val(posv) + add) * mul)) <= SLOPE / 2 + 1e-9, "values"
     return {
         "dir": setname + "/" + bedname, "seriesUid": str(series), "modality": modality,
-        "z0": z0, "z1": z0 + (NZ - 1) * DZ, "add": add, "iop": list(iop),
+        "z0": z0, "z1": z0 + (nz - 1) * DZ, "add": add, "mul": mul, "iop": list(iop),
     }
 
 
@@ -143,14 +164,14 @@ def coverage(beds):
     return overlap, gap
 
 
-def pair(setname, *, z0_2=Z_BED1 + (NZ - 1) * DZ - 8 * DZ - DZ, add2=0.0, iop2=IOP0, frame2=None,
+def pair(setname, *, z0_2=Z_BED1 + (NZ - 1) * DZ - 8 * DZ - DZ, add1=0.0, add2=0.0, mul2=1.0, iop2=IOP0, frame2=None,
          patient2=None, modality2="CT", modality1="CT", pet=False, time2="120000", expect_ok=True):
     # 既定の z0_2 は 1 本目の末尾 9 枚と同じ位置（先頭を 1 枚進めた値）
     patient = "STITCH-" + setname.upper()
     study, frame = generate_uid(), generate_uid()
-    b1 = make(setname, "bed1", z0=Z_BED1, patient=patient, study=study, frame=frame,
+    b1 = make(setname, "bed1", z0=Z_BED1, add=add1, patient=patient, study=study, frame=frame,
               modality=modality1, pet=pet)
-    b2 = make(setname, "bed2", z0=z0_2, iop=iop2, add=add2, patient=patient2 or patient, study=study,
+    b2 = make(setname, "bed2", z0=z0_2, iop=iop2, add=add2, mul=mul2, patient=patient2 or patient, study=study,
               frame=frame2 or frame, modality=modality2, pet=pet, series_time=time2)
     ov, gp = coverage([b1, b2])
     return {"set": setname, "expectOk": expect_ok, "beds": [b1, b2], "overlapMm": ov, "gapMm": gp}
@@ -194,12 +215,39 @@ def stations(setname, nbeds, overlap, adds):
             "placement": {"overlapMm": overlap, "reverse": False}}
 
 
+def matched(setname, overlap, true_z0):
+    """端の一致度の検査用: 3 ステーション・IPP は全部同じ・FoR は別・値は本来の位置の構造（tex）。
+    true_z0 は bed1・bed2・bed3 の本来の先頭 z。シリーズ番号（bed の番号）と上下の順序をずらして渡す。"""
+    nz = 24
+    patient = "STITCH-" + setname.upper()
+    study = generate_uid()
+    beds = [make(setname, "bed%d" % (n + 1), z0=Z_BED1, nz=nz, value_z0=true_z0[n], field="tex", patient=patient,
+                 study=study, frame=generate_uid(), series_time="12%02d00" % n) for n in range(len(true_z0))]
+    for b, tz in zip(beds, true_z0):
+        b["shift"] = tz - b["z0"]
+        b["z0"], b["z1"] = tz, tz + (nz - 1) * DZ
+    ov, gp = coverage(beds)
+    return {"set": setname, "expectOk": True, "beds": beds, "overlapMm": ov, "gapMm": gp, "field": "tex",
+            "placement": {"overlapMm": overlap, "reverse": False},
+            "expectedOrder": [int(i) for i in np.argsort(true_z0)]}
+
+
 sets += [stations("stations2", 2, 8.0, [0.0, 20.0]), stations("stations3", 3, 8.0, [0.0, 20.0, 40.0])]
+# 重なり 12 mm（縁で測る）= 6 枚。1 本あたり 24 枚（48 mm）。本来の上下は bed3（下）・bed1・bed2（上）。
+sets += [matched("match3", 12.0, [-64.0, -28.0, -100.0])]
+# 信号の拡大率: 2 本目だけ ×1.25（同じ位置・同じ関数）。基準に合わせる倍率は 1 と 0.8。
+gain_set = pair("gain", z0_2=Z2_A, add1=200.0, add2=200.0, mul2=1.25)
+gain_set["beds"][0]["gainExpected"] = 1.0
+gain_set["beds"][1]["gainExpected"] = 0.8
+sets += [gain_set]
 a = sets[0]
 assert abs(a["overlapMm"] - 18.0) < 1e-9 and abs(a["gapMm"]) < 1e-9, (a["overlapMm"], a["gapMm"])
 assert abs(sets[3]["gapMm"] - 10.0) < 1e-9, sets[3]["gapMm"]
 st2 = next(x for x in sets if x["set"] == "stations2")
 assert abs(st2["overlapMm"] - 8.0) < 1e-9 and abs(st2["gapMm"]) < 1e-9, (st2["overlapMm"], st2["gapMm"])
+m3 = next(x for x in sets if x["set"] == "match3")
+# 隣り合う 2 組の重なり（各 12 mm）の合計
+assert abs(m3["overlapMm"] - 24.0) < 1e-9 and abs(m3["gapMm"]) < 1e-9, (m3["overlapMm"], m3["gapMm"])
 st3 = next(x for x in sets if x["set"] == "stations3")
 assert abs(st3["overlapMm"] - 16.0) < 1e-9 and abs(st3["gapMm"]) < 1e-9, (st3["overlapMm"], st3["gapMm"])
 
@@ -208,6 +256,7 @@ truth = {
     "rows": ROWS, "cols": COLS, "slices": NZ,
     "spacingMm": {"col": COL_MM, "row": ROW_MM, "slice": DZ},
     "origin": [X0, Y0, Z_BED1], "slope": SLOPE, "sets": sets,
+    "texture": {"amp": TEX_AMP, "terms": TEX_TERMS},
 }
 with open(os.path.join(out, "truth.json"), "w") as fh:
     json.dump(truth, fh, indent=1)

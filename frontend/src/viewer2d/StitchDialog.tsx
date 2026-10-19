@@ -21,12 +21,16 @@ import {
   MipAccumulator,
   checkStitchInputs,
   coordinatesCoincide,
+  estimateGains,
+  matchEnds,
   normalOfIop,
   placeAlongNormal,
   previewSpacing,
   shiftInput,
   stitchSlices,
   unionGrid,
+  type BlendOptions,
+  type EndMatch,
   type MipImages,
   type StitchGrid,
   type StitchInput,
@@ -93,6 +97,16 @@ export function StitchDialog({
   const [mip, setMip] = useState<{ images: MipImages; spacing: [number, number, number] } | null>(null);
   const [mipBusy, setMipBusy] = useState(false);
   const mipGen = useRef(0);
+  // 重なりの扱い（線形ブレンドの範囲 %、信号合わせ）。
+  const [blendMode, setBlendMode] = useState<"mean" | "linear">("linear");
+  const [rangeText, setRangeText] = useState("100");
+  const [gainOn, setGainOn] = useState(false);
+  // 端の一致度による並び順・重なりの自動判定。手で触った後は上書きしない。
+  const [match, setMatch] = useState<{ res: EndMatch; ids: string[] } | null>(null);
+  const [matchBusy, setMatchBusy] = useState(false);
+  const matchGen = useRef(0);
+  const touchedOrder = useRef(false);
+  const touchedOverlap = useRef(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState(0);
   useLayoutEffect(() => {
@@ -146,13 +160,42 @@ export function StitchDialog({
   useEffect(() => { setSpOver(null); setBgOver(null); }, [pickedKey]);
 
   // SUV の乗数がかかっている入力は、入力ごとの乗数でモダリティ値へ戻す（保存・プレビューとも同じ値で結合する）。
-  const bases = useMemo(
-    () => selected.map((c) => {
+  const baseById = useMemo(
+    () => new Map(picked.map((c) => {
       const e = entries[c.id] as Extract<Entry, { state: "ready" }>;
-      return e.suvScale != null ? divideInput(e.input, e.suvScale) : e.input;
-    }),
-    [selected, entries],
+      return [c.id, e.suvScale != null ? divideInput(e.input, e.suvScale) : e.input] as const;
+    })),
+    [picked, entries],
   );
+  const bases = useMemo(() => selected.map((c) => baseById.get(c.id) as StitchInput), [selected, baseById]);
+
+  // 選択が変わったら、端の一致度で並び順と重なりを決め直す（読み込み直後に並べ替えなくて済むように）。
+  useEffect(() => {
+    const gen = ++matchGen.current;
+    touchedOrder.current = false;
+    touchedOverlap.current = false;
+    if (picked.length < 2) { setMatch(null); setMatchBusy(false); return; }
+    setMatchBusy(true);
+    const ids = picked.map((c) => c.id);
+    const ins = ids.map((id) => baseById.get(id) as StitchInput);
+    (async () => {
+      await tick();
+      if (gen !== matchGen.current) return;
+      const res = matchEnds(ins);
+      if (gen !== matchGen.current) return;
+      setMatch({ res, ids });
+      setMatchBusy(false);
+      if (!res.comparable) return;
+      if (!touchedOrder.current) { setOrderOver(res.order.map((i) => ids[i])); setReverse(false); }
+      if (!touchedOverlap.current && res.pairs.length > 0) {
+        const mm = res.pairs.map((p) => p.overlapMm).sort((a, b) => a - b);
+        const med = mm.length % 2 ? mm[(mm.length - 1) / 2] : (mm[mm.length / 2 - 1] + mm[mm.length / 2]) / 2;
+        setOverlapText(String(Math.round(med * 10) / 10));
+      }
+    })().catch((e) => { if (gen === matchGen.current) { setMatch(null); setMatchBusy(false); setMsg(String(e)); } });
+    return () => { matchGen.current++; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickedKey]);
 
   const coincide = useMemo(() => coordinatesCoincide(bases), [bases]);
   const placeMode = modeOver ?? (coincide ? "overlap" : "coord");
@@ -167,10 +210,19 @@ export function StitchDialog({
 
   const check = useMemo(() => checkStitchInputs(inputs), [inputs]);
 
+  const rangeVal = Number(rangeText.trim());
+  const rangeValid = rangeText.trim() !== "" && Number.isFinite(rangeVal) && rangeVal > 0 && rangeVal <= 100;
+  const gainInfo = useMemo(() => (gainOn && check.ok ? estimateGains(inputs) : null), [gainOn, check.ok, inputs]);
+  const blend = useMemo<BlendOptions>(
+    () => ({ mode: blendMode, fraction: rangeValid ? rangeVal / 100 : 1, gains: gainInfo?.gains }),
+    [blendMode, rangeValid, rangeVal, gainInfo],
+  );
+
   // 条件を満たすときだけ格子を作る（違反があれば何も計算しない）。
   const plan = useMemo((): { grid: StitchGrid | null; base: StitchGrid | null; reason: string } => {
     if (!check.ok) return { grid: null, base: null, reason: "" };
     if (placeMode === "overlap" && !overlapValid) return { grid: null, base: null, reason: t("stitch.invalidOverlap") };
+    if (blendMode === "linear" && !rangeValid) return { grid: null, base: null, reason: t("stitch.invalidRange") };
     try {
       const base = unionGrid(inputs);
       if (!spOver) return { grid: base, base, reason: "" };
@@ -180,7 +232,7 @@ export function StitchDialog({
     } catch (e) {
       return { grid: null, base: null, reason: String(e) };
     }
-  }, [check, inputs, spOver, t, placeMode, overlapValid]);
+  }, [check, inputs, spOver, t, placeMode, overlapValid, blendMode, rangeValid]);
 
   const defaultBg = useMemo(() => (check.ok ? stitchBackground(inputs) : 0), [check.ok, inputs]);
   const bgText = bgOver ?? String(defaultBg);
@@ -202,7 +254,7 @@ export function StitchDialog({
       const pg = unionGrid(inputs, sp);
       const acc = new MipAccumulator(pg.dims);
       let k = 0;
-      for (const s of stitchSlices(inputs, pg, "mean")) {
+      for (const s of stitchSlices(inputs, pg, blend)) {
         acc.add(k++, s);
         if (k % 2 === 0) {
           await tick();
@@ -214,18 +266,23 @@ export function StitchDialog({
       setMipBusy(false);
     })().catch((e) => { if (gen === mipGen.current) { setMip(null); setMipBusy(false); setMsg(String(e)); } });
     return () => { mipGen.current++; };
-  }, [grid, check.ok, inputs, box]);
+  }, [grid, check.ok, inputs, box, blend]);
 
   const move = (n: number, d: -1 | 1) => {
     const ids = selected.map((c) => c.id);
     const m = n + d;
     if (m < 0 || m >= ids.length) return;
     [ids[n], ids[m]] = [ids[m], ids[n]];
+    touchedOrder.current = true;
     setOrderOver(ids);
   };
   const dom = normal.map(Math.abs).indexOf(Math.max(...normal.map(Math.abs)));
   const sign = reverse ? -1 : 1;
   const dirLabel = dom === 2 ? (normal[2] * sign > 0 ? t("stitch.dir.head") : t("stitch.dir.foot")) : (sign > 0 ? t("stitch.dir.plus") : t("stitch.dir.minus"));
+  const nameOf = (id: string) => {
+    const c = candidates.find((x) => x.id === id);
+    return c ? c.series.seriesDescription || c.series.seriesInstanceUid : id;
+  };
   const hasPet = selected.some((c) => {
     const m = (entries[c.id] as Extract<Entry, { state: "ready" }>).loaded.modality;
     return m === "PT" || m === "NM";
@@ -242,7 +299,7 @@ export function StitchDialog({
     setMsg(t("stitch.saving"));
     try {
       await tick();
-      const data = concatSlices(stitchSlices(inputs, grid, "mean"), grid);
+      const data = concatSlices(stitchSlices(inputs, grid, blend), grid);
       // テンプレート（属性を引き継ぐ 1 本）は法線方向で最も手前の入力。
       let front = 0;
       grid.intervals.forEach((iv, n) => { if (iv[0] < grid.intervals[front][0]) front = n; });
@@ -257,7 +314,7 @@ export function StitchDialog({
         studyUid: tpl.study.studyInstanceUid,
         seriesUid: tpl.series.seriesInstanceUid,
         seriesDescription: `${tpl.series.seriesDescription || "Series"} Stitched`,
-        derivationDescription: stitchDerivation(selected.map((c) => c.series.seriesInstanceUid), grid),
+        derivationDescription: stitchDerivation(selected.map((c) => c.series.seriesInstanceUid), grid, blend),
         sourceSliceThickness: Number.isFinite(th) && th > 0 ? th : null,
         suvScale: null,
         background: bgValue,
@@ -341,13 +398,26 @@ export function StitchDialog({
                 {coincide && modeOver === null && <div style={{ color: "#9fd0ff" }} data-testid="stitch-place-note">{t("stitch.placeNote")}</div>}
                 <label style={row}>
                   {t("stitch.overlapInput")}
-                  <input style={num} value={overlapText} onChange={(e) => setOverlapText(e.target.value)} data-testid="stitch-overlap-input" />
+                  <input style={num} value={overlapText} onChange={(e) => { touchedOverlap.current = true; setOverlapText(e.target.value); }} data-testid="stitch-overlap-input" />
                   {t("stitch.overlapHint")}
                 </label>
                 <label style={row}>
                   {t("stitch.dir")}
                   <button type="button" style={btn} onClick={() => setReverse((r) => !r)} data-testid="stitch-reverse">{dirLabel}</button>
                 </label>
+                {matchBusy && <div style={{ color: "#8a98a6" }} data-testid="stitch-match-busy">{t("stitch.matchBusy")}</div>}
+                {!matchBusy && match && !match.res.comparable && <div style={{ color: "#8a98a6" }} data-testid="stitch-match-none">{t("stitch.matchNone")}</div>}
+                {!matchBusy && match && match.res.comparable && match.res.pairs.length > 0 && (
+                  <div style={{ color: "#c8d2dc" }} data-testid="stitch-match">
+                    {t("stitch.match")}
+                    {match.res.pairs.map((p, n) => (
+                      <div key={n} style={{ paddingLeft: 8 }} data-testid={`stitch-match-pair-${n}`} data-score={p.score.toFixed(3)} data-overlap={p.overlapMm}>
+                        {nameOf(match.ids[p.from])} → {nameOf(match.ids[p.to])}: {t("stitch.matchLine", { score: p.score.toFixed(2), mm: String(Math.round(p.overlapMm * 10) / 10) })}
+                      </div>
+                    ))}
+                    {match.res.margin !== null && <div style={{ paddingLeft: 8 }} data-testid="stitch-match-margin">{t("stitch.matchMargin", { margin: match.res.margin.toFixed(2) })}</div>}
+                  </div>
+                )}
                 <div style={{ display: "flex", flexDirection: "column", gap: 2 }} data-testid="stitch-order">
                   {t("stitch.order")}
                   {selected.map((c, n) => (
@@ -386,8 +456,27 @@ export function StitchDialog({
         </div>
         <label style={row}>
           {t("stitch.overlapMode")}:
-          <input type="radio" checked readOnly data-testid="stitch-mode-mean" /> {t("stitch.mean")}
+          <input type="radio" name="stitch-blend" checked={blendMode === "linear"} onChange={() => setBlendMode("linear")} data-testid="stitch-blend-linear" /> {t("stitch.linear")}
+          <input type="radio" name="stitch-blend" checked={blendMode === "mean"} onChange={() => setBlendMode("mean")} data-testid="stitch-blend-mean" /> {t("stitch.mean")}
+          {blendMode === "linear" && (
+            <>
+              <span style={{ marginLeft: 12 }}>{t("stitch.range")}</span>
+              <input style={num} value={rangeText} onChange={(e) => setRangeText(e.target.value)} data-testid="stitch-range" /> %
+            </>
+          )}
         </label>
+        <label style={row} title={t("stitch.gainNote")}>
+          <input type="checkbox" checked={gainOn} onChange={(e) => setGainOn(e.target.checked)} data-testid="stitch-gain" /> {t("stitch.gain")}
+        </label>
+        {gainOn && gainInfo && (
+          <div style={{ fontSize: 12, color: "#c8d2dc" }} data-testid="stitch-gains">
+            {selected.map((c, n) => (
+              <div key={c.id} style={{ paddingLeft: 8 }} data-gain={gainInfo.gains[n].toFixed(4)} data-estimable={gainInfo.estimable[n]}>
+                {c.series.seriesDescription || c.series.seriesInstanceUid}: {gainInfo.estimable[n] ? `×${gainInfo.gains[n].toFixed(3)}` : t("stitch.gainNone")}
+              </div>
+            ))}
+          </div>
+        )}
         <label style={row}>
           {t("stitch.spacing")}
           {t("stitch.col")}<input style={num} value={spText[0]} disabled={!plan.base} onChange={(e) => setSp(0, e.target.value)} data-testid="stitch-sp-col" />

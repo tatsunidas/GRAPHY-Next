@@ -5,7 +5,11 @@
 import { describe, expect, it } from "vitest";
 import { makeVolume, sampleTrilinear } from "./regGeometry";
 import {
+  BLEND_MEAN,
   MipAccumulator,
+  estimateGains,
+  matchEnds,
+  type BlendOptions,
   checkStitchInputs,
   coordinatesCoincide,
   normalOfIop,
@@ -120,7 +124,7 @@ describe("unionGrid / stitchToGrid（正例）", () => {
     expect(g.dims[1]).toBe(10);
     // 原点 = 手前の入力の先頭 IPP
     for (let r = 0; r < 3; r++) expect(Math.abs(g.indexToWorld[r * 4 + 3] - a.volume.indexToWorld[r * 4 + 3])).toBeLessThan(1e-3);
-    const cs = cells(g, stitchToGrid([a, b], g, "mean"));
+    const cs = cells(g, stitchToGrid([a, b], g, BLEND_MEAN));
     expect(cs.every((c) => Number.isFinite(c.value))).toBe(true);
     expect(maxErr(cs, () => 0)).toBeLessThan(EPS);
   });
@@ -130,7 +134,7 @@ describe("unionGrid / stitchToGrid（正例）", () => {
     const b = makeInput({ w0: -80, nz: 20, frameTilt: 20, tilt: 20 });
     const g = unionGrid([a, b]);
     expect(g.overlapMm).toBeCloseTo(20.0, 2);
-    const cs = cells(g, stitchToGrid([a, b], g, "mean"), frame(20));
+    const cs = cells(g, stitchToGrid([a, b], g, BLEND_MEAN), frame(20));
     expect(cs.every((c) => Number.isFinite(c.value))).toBe(true);
     expect(maxErr(cs, () => 0)).toBeLessThan(EPS);
   });
@@ -139,7 +143,7 @@ describe("unionGrid / stitchToGrid（正例）", () => {
     const a = makeInput({ w0: -100, nz: 20 });
     const b = makeInput({ w0: -80 + 0.4 * 2, nz: 20 });
     const g = unionGrid([a, b]);
-    const sl = stitchToGrid([a, b], g, "mean");
+    const sl = stitchToGrid([a, b], g, BLEND_MEAN);
     const cs = cells(g, sl);
     expect(cs.every((c) => Number.isFinite(c.value))).toBe(true);
     expect(maxErr(cs, () => 0)).toBeLessThan(EPS);
@@ -156,7 +160,7 @@ describe("unionGrid / stitchToGrid（正例）", () => {
     const a = makeInput({ w0: -100, nz: 20 });
     const b = makeInput({ w0: -80, nz: 20, add: 100 });
     const g = unionGrid([a, b]);
-    const cs = cells(g, stitchToGrid([a, b], g, "mean"));
+    const cs = cells(g, stitchToGrid([a, b], g, BLEND_MEAN));
     expect(maxErr(cs, expectedC)).toBeLessThan(EPS);
     // 3 区分とも実在する
     expect(cs.some((c) => expectedC(c.w) === 0)).toBe(true);
@@ -170,7 +174,7 @@ describe("unionGrid / stitchToGrid（正例）", () => {
     const g = unionGrid([a, b]);
     expect(g.gapMm).toBeCloseTo(8.0, 2); // 中心間 10 − 半スライス 1 × 2
     expect(g.overlapMm).toBeCloseTo(0.0, 2);
-    const cs = cells(g, stitchToGrid([a, b], g, "mean"));
+    const cs = cells(g, stitchToGrid([a, b], g, BLEND_MEAN));
     const inGap = (w: number) => w > -62 + 1e-6 && w < -52 - 1e-6;
     expect(cs.filter((c) => inGap(c.w)).length).toBeGreaterThan(0);
     for (const c of cs) {
@@ -295,7 +299,7 @@ describe("縁（半ボクセル）の扱い: 重なりなしで隣り合う入�
     const a = makeInput({ w0: -100 });
     const b = makeInput({ w0: -80 + delta });
     const g = unionGrid([a, b]);
-    return { a, b, g, cs: cells(g, stitchToGrid([a, b], g, "mean")) };
+    return { a, b, g, cs: cells(g, stitchToGrid([a, b], g, BLEND_MEAN)) };
   };
 
   // ずれ δ が半スライス（1 mm = 0.5 × 間隔）以内なら、継ぎ目の格子点は 2 本目のボクセルの縁に入る。
@@ -333,7 +337,7 @@ describe("縁（半ボクセル）の扱い: 重なりなしで隣り合う入�
     const b = makeInput({ w0: -80 + 6 }); // -74 から。-80, -78, -76 が空く
     const g = unionGrid([a, b]);
     expect(g.gapMm).toBeCloseTo(6, 2);
-    const sl = stitchToGrid([a, b], g, "mean");
+    const sl = stitchToGrid([a, b], g, BLEND_MEAN);
     const nanSlices = sl.map((s, k) => (Number.isNaN(s[0]) ? k : -1)).filter((k) => k >= 0);
     expect(nanSlices).toEqual([10, 11, 12]);
     // それ以外のスライスは全画素が有限
@@ -344,7 +348,7 @@ describe("縁（半ボクセル）の扱い: 重なりなしで隣り合う入�
     const a = makeInput({ w0: -100, nz: 20 });
     const b = makeInput({ w0: -80 + 0.7, nz: 20 });
     const g = unionGrid([a, b]);
-    expect(maxErr(cells(g, stitchToGrid([a, b], g, "mean")), () => 0)).toBeLessThan(EPS);
+    expect(maxErr(cells(g, stitchToGrid([a, b], g, BLEND_MEAN)), () => 0)).toBeLessThan(EPS);
   });
 });
 
@@ -361,8 +365,8 @@ describe("格子の大きさ・スライスごとの出力", () => {
     const a = makeInput({ w0: -100, nz: 20 });
     const b = makeInput({ w0: -80 + 0.7, nz: 20 });
     const g = unionGrid([a, b]);
-    const all = stitchToGrid([a, b], g, "mean");
-    const it = stitchSlices([a, b], g, "mean");
+    const all = stitchToGrid([a, b], g, BLEND_MEAN);
+    const it = stitchSlices([a, b], g, BLEND_MEAN);
     const first = it.next();
     expect(first.done).toBe(false);
     expect(Array.from(first.value as Float32Array)).toEqual(Array.from(all[0]));
@@ -436,10 +440,10 @@ describe("MIP プレビュー", () => {
   it("3 方向の最大が、全体を作って総当たりで取った値と一致する", () => {
     const ins = [makeInput({ w0: -100 }), makeInput({ w0: -84, add: 30 })];
     const g = unionGrid(ins);
-    const all = stitchToGrid(ins, g, "mean");
+    const all = stitchToGrid(ins, g, BLEND_MEAN);
     const [nx, ny, nz] = g.dims;
     const acc = new MipAccumulator(g.dims);
-    [...stitchSlices(ins, g, "mean")].forEach((s, k) => acc.add(k, s));
+    [...stitchSlices(ins, g, BLEND_MEAN)].forEach((s, k) => acc.add(k, s));
     const r = acc.result();
     for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
       let m = -Infinity;
@@ -462,7 +466,7 @@ describe("MIP プレビュー", () => {
     const g = unionGrid(ins);
     const [nx, ny, nz] = g.dims;
     const acc = new MipAccumulator(g.dims);
-    [...stitchSlices(ins, g, "mean")].forEach((s, k) => acc.add(k, s));
+    [...stitchSlices(ins, g, BLEND_MEAN)].forEach((s, k) => acc.add(k, s));
     const r = acc.result();
     const m = g.indexToWorld;
     const at = (i: number, j: number, k: number) =>
@@ -475,7 +479,7 @@ describe("MIP プレビュー", () => {
     const ins = [makeInput({ w0: -100 }), makeInput({ w0: -60 })];
     const g = unionGrid(ins);
     const acc = new MipAccumulator(g.dims);
-    [...stitchSlices(ins, g, "mean")].forEach((s, k) => acc.add(k, s));
+    [...stitchSlices(ins, g, BLEND_MEAN)].forEach((s, k) => acc.add(k, s));
     const nanRows = Array.from({ length: g.dims[2] }, (_, k) => Number.isNaN(acc.result().cor[k * g.dims[0]]));
     expect(nanRows.some(Boolean)).toBe(true);
     expect(nanRows[0]).toBe(false);
@@ -486,5 +490,191 @@ describe("MIP プレビュー", () => {
     expect(sp[2]).toBeCloseTo(4, 9);
     const fine = previewSpacing({ dims: [10, 10, 10], spacing: [1, 1, 1] }, 1000);
     expect(fine).toEqual([1, 1, 1]);
+  });
+});
+
+describe("ブレンド（線形）", () => {
+  // 重なりが各入力の半分より短いとき、縁からの距離は重なりに面した縁までの距離になる（標準の羽毛化）。
+  const A2 = () => makeInput({ w0: -100, nz: 30 }); // -100..-42
+  const B2 = () => makeInput({ w0: -62, nz: 30, add: 100 }); // -62..-4（2 本目だけ +100）
+  // 縁で測った重なりは -63..-41（O = 22）。重なり内の位置 s = w + 63、2 本目の重みは s / O。
+  const weight2 = (w: number, f: number) => Math.min(1, Math.max(0, 0.5 + ((w + 63) / 22 - 0.5) / f));
+  const run = (blend: BlendOptions) => {
+    const ins = [A2(), B2()];
+    const g = unionGrid(ins);
+    return cells(g, stitchToGrid(ins, g, blend));
+  };
+
+  it("範囲 100%: 重なり内で 2 本目の重みが s/O（解析式）。端では 1 本目に近い", () => {
+    const cs = run({ mode: "linear", fraction: 1 });
+    const inOverlap = cs.filter((c) => c.w >= -62 - 1e-6 && c.w <= -42 + 1e-6);
+    expect(inOverlap.length).toBeGreaterThan(0);
+    for (const c of inOverlap) expect(c.value).toBeCloseTo(c.truthV + 100 * weight2(c.w, 1), 3);
+    const first = cs.find((c) => Math.abs(c.w - -62) < 1e-6)!;
+    expect(first.value - first.truthV).toBeCloseTo(100 / 22, 3); // 2 本目の寄与は端で 1/22
+  });
+  it("範囲を狭めると中央で切り替わる（10%: 端は片方だけ、中央は 50:50）", () => {
+    const cs = run({ mode: "linear", fraction: 0.1 });
+    for (const c of cs.filter((c) => c.w >= -62 - 1e-6 && c.w <= -42 + 1e-6)) {
+      expect(c.value).toBeCloseTo(c.truthV + 100 * weight2(c.w, 0.1), 3);
+    }
+    const mid = cs.find((c) => Math.abs(c.w - -52) < 1e-6)!;
+    expect(mid.value - mid.truthV).toBeCloseTo(50, 3);
+    const near = cs.find((c) => Math.abs(c.w - -60) < 1e-6)!;
+    expect(near.value - near.truthV).toBeCloseTo(0, 3);
+  });
+  it("重なりの外（1 本だけが覆う点）は真値のまま・平均は従来どおり", () => {
+    const cs = run({ mode: "linear", fraction: 1 });
+    for (const c of cs.filter((c) => c.w < -62 - 1e-6)) expect(c.value).toBeCloseTo(c.truthV, 3);
+    for (const c of cs.filter((c) => c.w > -42 + 1e-6)) expect(c.value).toBeCloseTo(c.truthV + 100, 3);
+    const mean = run(BLEND_MEAN);
+    for (const c of mean.filter((c) => c.w >= -62 - 1e-6 && c.w <= -42 + 1e-6)) expect(c.value).toBeCloseTo(c.truthV + 50, 3);
+  });
+  it("3 本が重なっても、同じ値なら真値のまま（重みは正規化される・NaN にならない）", () => {
+    const ins = [makeInput({ w0: -100 }), makeInput({ w0: -98 }), makeInput({ w0: -96 })];
+    const g = unionGrid(ins);
+    for (const c of cells(g, stitchToGrid(ins, g, { mode: "linear", fraction: 1 }))) expect(c.value).toBeCloseTo(c.truthV, 3);
+  });
+  it("範囲が不正（0・1 超）なら例外", () => {
+    const ins = [A2(), B2()];
+    const g = unionGrid(ins);
+    expect(() => stitchToGrid(ins, g, { mode: "linear", fraction: 0 })).toThrow();
+    expect(() => stitchToGrid(ins, g, { mode: "linear", fraction: 1.5 })).toThrow();
+  });
+  it("検査が効く: 重みの向きを逆にした期待値とは合わない", () => {
+    const cs = run({ mode: "linear", fraction: 1 });
+    const wrong = cs.filter((c) => c.w >= -62 - 1e-6 && c.w <= -42 + 1e-6).map((c) => Math.abs(c.value - (c.truthV + 100 * (1 - weight2(c.w, 1)))));
+    expect(Math.max(...wrong)).toBeGreaterThan(10);
+  });
+});
+
+// 世界座標で構造を持つ関数（ステーションを切り出す元。端同士の照合と信号合わせの検査用）。
+// 周期的な少数の正弦だと遠い位置同士でも相関が出る（実際の解剖は繰り返さない）ので、固定シードで多数の正弦を足す。
+function makeTex(seed: number, terms = 16): (x: number, y: number, z: number) => number {
+  let st = seed;
+  const rnd = () => ((st = (st * 1664525 + 1013904223) >>> 0) / 4294967296);
+  const ps = Array.from({ length: terms }, () => ({
+    kx: (rnd() - 0.5) * 0.9, ky: (rnd() - 0.5) * 0.9, kz: (rnd() - 0.5) * 1.2, ph: rnd() * 6.28, a: 0.5 + rnd(),
+  }));
+  return (x, y, z) => ps.reduce((sum, p) => sum + p.a * Math.sin(p.kx * x + p.ky * y + p.kz * z + p.ph), 0);
+}
+const tex = makeTex(11);
+const tex2 = makeTex(23);
+
+function texInput(w0: number, o: { nz?: number; desc?: boolean; fn?: (x: number, y: number, z: number) => number; mul?: number; add?: number; nx?: number } = {}): StitchInput {
+  const nx = o.nx ?? 64, ny = 64, nz = o.nz ?? 20, sz = 2;
+  const fn = o.fn ?? tex;
+  const f = frame(0);
+  const top = w0 + (nz - 1) * sz;
+  const ipp0: [number, number, number] = o.desc ? [5, -7, top] : [5, -7, w0];
+  const step: [number, number, number] = [0, 0, o.desc ? -sz : sz];
+  const data = new Float32Array(nx * ny * nz);
+  const vol0 = makeVolume(data, [nx, ny, nz], f.iop, ipp0, 1, 1.5, step);
+  const m = vol0.indexToWorld;
+  for (let k = 0; k < nz; k++)
+    for (let j = 0; j < ny; j++)
+      for (let i = 0; i < nx; i++) {
+        data[k * nx * ny + j * nx + i] =
+          fn(m[0] * i + m[1] * j + m[2] * k + m[3], m[4] * i + m[5] * j + m[6] * k + m[7], m[8] * i + m[9] * j + m[10] * k + m[11]) * (o.mul ?? 1) + (o.add ?? 0);
+      }
+  return { volume: vol0, iop: f.iop, modality: "MR", patientId: "P1" };
+}
+
+describe("信号合わせ（ゲイン）", () => {
+  const pos = (x: number, y: number, z: number) => 40 + tex(x, y, z); // 正の信号
+  it("2 本目だけ ×1.25 → 倍率は 0.8（和の比）、基準は 1", () => {
+    const ins = [texInput(-100, { fn: pos }), texInput(-70, { fn: pos, mul: 1.25 })]; // 重なり 5 枚
+    const e = estimateGains(ins);
+    expect(e.gains[0]).toBe(1);
+    expect(e.gains[1]).toBeCloseTo(0.8, 2);
+    expect(e.estimable).toEqual([true, true]);
+  });
+  it("3 本の連鎖: ×1.25、×1.5 → 0.8、0.8/1.2。順序を入れ替えて渡しても同じ", () => {
+    const a = texInput(-100, { fn: pos });
+    const b = texInput(-70, { fn: pos, mul: 1.25 });
+    const c = texInput(-40, { fn: pos, mul: 1.5 });
+    const e = estimateGains([c, a, b]); // 位置順は a, b, c
+    expect(e.gains[1]).toBe(1);
+    expect(e.gains[2]).toBeCloseTo(0.8, 2);
+    expect(e.gains[0]).toBeCloseTo(1 / 1.5, 2);
+  });
+  it("隙間（重なりなし）・信号が負の組は推定不可（倍率 1 のまま）", () => {
+    const gap = estimateGains([texInput(-100, { fn: pos }), texInput(-40, { fn: pos, mul: 1.25 })]);
+    expect(gap.estimable).toEqual([true, false]);
+    expect(gap.gains[1]).toBe(1);
+    const neg = estimateGains([texInput(-100, { fn: (x, y, z) => -pos(x, y, z) }), texInput(-70, { fn: (x, y, z) => -pos(x, y, z) })]);
+    expect(neg.estimable[1]).toBe(false);
+  });
+  it("gains を渡すと重なりの値が基準側に揃う", () => {
+    const ins = [texInput(-100, { fn: pos }), texInput(-70, { fn: pos, mul: 1.25 })];
+    const g = unionGrid(ins);
+    const e = estimateGains(ins);
+    const [nx, ny] = g.dims;
+    const sl = stitchToGrid(ins, g, { mode: "linear", fraction: 1, gains: e.gains });
+    const m = g.indexToWorld;
+    let worst = 0;
+    sl.forEach((s, k) => {
+      for (let j = 0; j < ny; j += 7) for (let i = 0; i < nx; i += 7) {
+        const x = m[0] * i + m[1] * j + m[2] * k + m[3], y = m[4] * i + m[5] * j + m[6] * k + m[7], z = m[8] * i + m[9] * j + m[10] * k + m[11];
+        worst = Math.max(worst, Math.abs(s[j * nx + i] - pos(x, y, z)));
+      }
+    });
+    expect(worst).toBeLessThan(0.05);
+    const without = stitchToGrid(ins, g, { mode: "linear", fraction: 1 });
+    let w2 = 0;
+    without.forEach((s, k) => {
+      for (let j = 0; j < ny; j += 7) for (let i = 0; i < nx; i += 7) {
+        const x = m[0] * i + m[1] * j + m[2] * k + m[3], y = m[4] * i + m[5] * j + m[6] * k + m[7], z = m[8] * i + m[9] * j + m[10] * k + m[11];
+        w2 = Math.max(w2, Math.abs(s[j * nx + i] - pos(x, y, z)));
+      }
+    });
+    expect(w2).toBeGreaterThan(0.3); // 補正しないと 2 本目側が 25% 大きいまま
+  });
+  it("gains の数が入力と違えば例外", () => {
+    const ins = [texInput(-100), texInput(-70)];
+    expect(() => stitchToGrid(ins, unionGrid(ins), { mode: "mean", gains: [1] })).toThrow();
+  });
+});
+
+describe("端の一致度（並び順・重なりの自動判定）", () => {
+  // 3 本のステーション（各 20 枚 × 2 mm）。隣り合う 2 本が 5 枚（10 mm）重なる。
+  const stations = (o: { desc?: boolean; fn?: (x: number, y: number, z: number) => number } = {}) => [
+    texInput(-100, o), texInput(-70, { ...o, mul: 1.25, add: 7 }), texInput(-40, o),
+  ];
+  it("シャッフルして渡しても、昇順の順序と重なり 10 mm を返す（ゲイン・オフセットが違っても）", () => {
+    const s = stations();
+    const r = matchEnds([s[2], s[0], s[1]]);
+    expect(r.comparable).toBe(true);
+    expect(r.order).toEqual([1, 2, 0]);
+    expect(r.pairs.map((p) => p.overlapMm)).toEqual([10, 10]);
+    for (const p of r.pairs) expect(p.score).toBeGreaterThan(0.95);
+    expect(r.margin).not.toBeNull();
+    expect(r.margin!).toBeGreaterThan(0.5);
+  });
+  it("k 軸が降順の入力でも同じ結果", () => {
+    const s = stations({ desc: true });
+    const r = matchEnds([s[1], s[2], s[0]]);
+    expect(r.order).toEqual([2, 0, 1]);
+    expect(r.pairs.map((p) => p.overlapMm)).toEqual([10, 10]);
+  });
+  it("負例: 互いに無関係な 3 本は一致度が低く、正しい鎖の一致度より十分小さい", () => {
+    const un = [texInput(-100), texInput(-70, { fn: tex2 }), texInput(-40, { fn: makeTex(37) })];
+    const bad = matchEnds(un);
+    const good = matchEnds(stations());
+    expect(Math.max(...bad.pairs.map((p) => p.score))).toBeLessThan(0.6);
+    expect(Math.min(...good.pairs.map((p) => p.score))).toBeGreaterThan(0.95);
+  });
+  it("面内の格子が違う入力があれば比較しない（順序は入力のまま）", () => {
+    const r = matchEnds([texInput(-100), texInput(-70, { nx: 32 })]);
+    expect(r.comparable).toBe(false);
+    expect(r.order).toEqual([0, 1]);
+    expect(r.pairs).toEqual([]);
+  });
+  it("検査が効く: 末尾と先頭を取り違えた鎖（逆順）の一致度は低い", () => {
+    const s = stations();
+    const r = matchEnds([s[0], s[1], s[2]]);
+    const rev = matchEnds([s[2], s[1], s[0]]);
+    expect(r.order).toEqual([0, 1, 2]);
+    expect(rev.order).toEqual([2, 1, 0]); // 並べ替えられて、逆順のままにはならない
   });
 });

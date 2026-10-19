@@ -14,7 +14,7 @@ import {
   toStitchInput,
 } from "./stitchInputs";
 import type { SuvParams } from "./suv";
-import { checkStitchInputs, stitchSlices, unionGrid, type StitchGrid, type StitchInput } from "./volumeStitch";
+import { BLEND_MEAN, checkStitchInputs, stitchSlices, unionGrid, type BlendOptions, type StitchGrid, type StitchInput } from "./volumeStitch";
 
 // 真値: 世界座標の 1 次関数（volumeStitch.test.ts と同じ式。入力はここから切り出す）。
 const A = 0.5, B = -0.3, C = 0.8, D = 12;
@@ -49,7 +49,7 @@ function decode(pixels: string): Int16Array {
 /** 結合 → 連結 → 保存要求。要求の値を slope・intercept で戻し、(w, 戻した値, 真値, 格納値) を返す。 */
 function viaSave(inputs: StitchInput[], background: number, slicesFn = stitchSlices) {
   const grid: StitchGrid = unionGrid(inputs);
-  const data = concatSlices(slicesFn(inputs, grid, "mean"), grid);
+  const data = concatSlices(slicesFn(inputs, grid, BLEND_MEAN), grid);
   const req = buildDerivedVolumeRequest({
     grid, data, studyUid: "S", seriesUid: "E", seriesDescription: "d",
     derivationDescription: stitchDerivation(["a", "b"], grid), suvScale: null, background,
@@ -96,7 +96,7 @@ describe("つなぎ合わせ → 保存要求（正例）", () => {
   });
 
   it("(c) 検査が効く: 平均を「後勝ち」に差し替えると重なりの検査が落ちる", () => {
-    function* lastWins(inputs: readonly StitchInput[], grid: StitchGrid, o: "mean") {
+    function* lastWins(inputs: readonly StitchInput[], grid: StitchGrid, o: BlendOptions) {
       const mean = [...stitchSlices(inputs, grid, o)];
       const last = [...stitchSlices([inputs[inputs.length - 1]], grid, o)];
       const first = [...stitchSlices([inputs[0]], grid, o)];
