@@ -239,6 +239,48 @@ async function matchChecks(v: Page, s: any): Promise<void> {
   check(JSON.stringify(await names()) === JSON.stringify(got), "元の順に戻せる");
 }
 
+/** 重なりの指定「組ごと」: 既定は共通・切替直後は結果が同じ・組ごとの値がそのまま出力の長さに出る・不正値で保存できない。 */
+async function perPairChecks(v: Page, d: DesktopDriver, s: any, studyUid: string, truth: any): Promise<void> {
+  const total = async () => {
+    const nums = ((await v.getByTestId("stitch-overlap").textContent()) ?? "").match(/-?\d+(\.\d+)?/g)?.map(Number) ?? [];
+    return nums;
+  };
+  const dz = truth.spacingMm.slice as number, nz = truth.slices as number, nb = s.beds.length as number;
+  check(await v.getByTestId("stitch-scope-common").isChecked(), "【組ごと】既定は「共通」");
+  check((await v.getByTestId("stitch-pair-input-0").count()) === 0, "【組ごと】共通のときは組ごとの欄が出ない");
+  const before = await total();
+  await v.getByTestId("stitch-scope-pair").check();
+  await waitMip(v);
+  const vals = [] as string[];
+  for (let i = 0; i < nb - 1; i++) vals.push(await v.getByTestId(`stitch-pair-input-${i}`).inputValue());
+  check(vals.length === nb - 1 && vals.every((x) => Number(x) === s.placement.overlapMm), "【組ごと】切替直後は各組が共通の値で初期化される", vals);
+  const same = await total();
+  check(same[0] === before[0] && same[1] === before[1], "【組ごと】切替直後は重なり・隙間が変わらない", [before, same]);
+  // 8 mm と 4 mm: 合計 12 mm。出力の枚数 = (全長 − 12) / DZ
+  await v.getByTestId("stitch-pair-input-0").fill("8");
+  await v.getByTestId("stitch-pair-input-1").fill("4");
+  await waitMip(v);
+  const t1 = await total();
+  check(Math.abs(t1[0] - 12) < 0.06 && Math.abs(t1[1]) < 0.06, "【組ごと】組ごとの重なりの合計（8+4=12 mm）が表示される", t1);
+  const dir = await saveAndDownload(v, d, studyUid, `${s.set}-pair`);
+  if (dir) {
+    const n = fs.readdirSync(dir).filter((f) => f.endsWith(".dcm")).length;
+    const exp = (nb * nz * dz - 12) / dz;
+    check(Math.abs(n - exp) < 0.51, `【組ごと】保存した枚数が期待（${exp}）どおり`, n);
+  }
+  await v.getByTestId("stitch-pair-input-1").fill("-4");
+  await waitMip(v);
+  const t2 = await total();
+  check(Math.abs(t2[0] - 8) < 0.06 && Math.abs(t2[1] - 4) < 0.06, "【組ごと】負の値はその組だけ隙間（8 mm 重なり・4 mm 隙間）", t2);
+  await v.getByTestId("stitch-pair-input-1").fill("abc");
+  check(!(await v.getByTestId("stitch-save").isEnabled()), "【負例】組ごとの欄が数値でないと [保存] が押せない");
+  await v.getByTestId("stitch-pair-input-1").fill("8");
+  await v.getByTestId("stitch-scope-common").check();
+  await waitMip(v);
+  const back = await total();
+  check(back[0] === before[0] && back[1] === before[1], "【組ごと】「共通」に戻すと共通の値（8 mm）の結果に戻る", [before, back]);
+}
+
 async function main(): Promise<void> {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const d = new DesktopDriver({ http: 18190, scp: 18191 }, { extraElectronArgs: process.env.STITCH_ELECTRON_ARGS ? process.env.STITCH_ELECTRON_ARGS.split(" ") : [] }); // 開発版 Next（18090）と並行して動かせるよう別ポート
@@ -261,6 +303,7 @@ async function main(): Promise<void> {
         await waitMip(v);
         if (s.set === "match3") await matchChecks(v, s);
         else if (s.placement) await placementChecks(v, s);
+        if (s.set === "stations3") await perPairChecks(v, d, s, studyUid, truth);
         await waitMip(v);
         const saveOk = (await v.getByTestId("stitch-save").isEnabled()) === s.expectOk;
         if (s.set === "neg-pid" && !saveOk) {

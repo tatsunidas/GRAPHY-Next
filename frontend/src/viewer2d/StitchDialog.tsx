@@ -92,6 +92,9 @@ export function StitchDialog({
   // 位置の指定（座標が位置関係を表さないデータ用）。null は自動（座標が全部同じなら「重なりを指定」）。
   const [modeOver, setModeOver] = useState<"coord" | "overlap" | null>(null);
   const [overlapText, setOverlapText] = useState("0");
+  // 重なりの指定: 共通（全部の組で同じ値・既定）／組ごと（並べた順の隣り合う組に 1 つずつ）。
+  const [perPair, setPerPair] = useState(false);
+  const [pairTexts, setPairTexts] = useState<string[]>([]);
   const [reverse, setReverse] = useState(false);
   const [orderOver, setOrderOver] = useState<string[] | null>(null);
   const [mip, setMip] = useState<{ images: MipImages; spacing: [number, number, number] } | null>(null);
@@ -157,7 +160,7 @@ export function StitchDialog({
     const rank = new Map(orderOver.map((id, n) => [id, n] as const));
     return [...picked].sort((a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity));
   }, [picked, orderOver]);
-  useEffect(() => { setSpOver(null); setBgOver(null); }, [pickedKey]);
+  useEffect(() => { setSpOver(null); setBgOver(null); setPairTexts([]); }, [pickedKey]);
 
   // SUV の乗数がかかっている入力は、入力ごとの乗数でモダリティ値へ戻す（保存・プレビューとも同じ値で結合する）。
   const baseById = useMemo(
@@ -201,10 +204,20 @@ export function StitchDialog({
   const placeMode = modeOver ?? (coincide ? "overlap" : "coord");
   const overlapVal = Number(overlapText.trim());
   const overlapValid = overlapText.trim() !== "" && Number.isFinite(overlapVal);
+  // 組ごとの欄は、まだ触っていなければ共通の値を使う（切り替えた直後は結果が変わらない）。
+  const pairCount = Math.max(0, bases.length - 1);
+  const pairText = (i: number) => pairTexts[i] ?? overlapText;
+  const pairVals = Array.from({ length: pairCount }, (_, i) => pairText(i).trim() === "" ? NaN : Number(pairText(i).trim()));
+  const pairsValid = pairVals.every((v) => Number.isFinite(v));
+  const overlapUsable = perPair ? pairsValid : overlapValid;
+  const pairKey = pairVals.join("|");
   const normal = useMemo(() => (bases.length > 0 ? normalOfIop(bases[0].iop) : ([0, 0, 1] as [number, number, number])), [bases]);
   const shifts = useMemo(
-    () => (placeMode === "overlap" && overlapValid && bases.length > 1 ? placeAlongNormal(bases, overlapVal, reverse) : bases.map(() => 0)),
-    [placeMode, overlapValid, overlapVal, bases, reverse],
+    () => (placeMode === "overlap" && overlapUsable && bases.length > 1
+      ? placeAlongNormal(bases, perPair ? pairKey.split("|").map(Number) : overlapVal, reverse)
+      : bases.map(() => 0)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [placeMode, overlapUsable, perPair, pairKey, overlapVal, bases, reverse],
   );
   const inputs = useMemo(() => bases.map((b, n) => shiftInput(b, shifts[n], normal)), [bases, shifts, normal]);
 
@@ -221,7 +234,7 @@ export function StitchDialog({
   // 条件を満たすときだけ格子を作る（違反があれば何も計算しない）。
   const plan = useMemo((): { grid: StitchGrid | null; base: StitchGrid | null; reason: string } => {
     if (!check.ok) return { grid: null, base: null, reason: "" };
-    if (placeMode === "overlap" && !overlapValid) return { grid: null, base: null, reason: t("stitch.invalidOverlap") };
+    if (placeMode === "overlap" && !overlapUsable) return { grid: null, base: null, reason: t("stitch.invalidOverlap") };
     if (blendMode === "linear" && !rangeValid) return { grid: null, base: null, reason: t("stitch.invalidRange") };
     try {
       const base = unionGrid(inputs);
@@ -232,7 +245,7 @@ export function StitchDialog({
     } catch (e) {
       return { grid: null, base: null, reason: String(e) };
     }
-  }, [check, inputs, spOver, t, placeMode, overlapValid, blendMode, rangeValid]);
+  }, [check, inputs, spOver, t, placeMode, overlapUsable, blendMode, rangeValid]);
 
   const defaultBg = useMemo(() => (check.ok ? stitchBackground(inputs) : 0), [check.ok, inputs]);
   const bgText = bgOver ?? String(defaultBg);
@@ -397,10 +410,24 @@ export function StitchDialog({
               <>
                 {coincide && modeOver === null && <div style={{ color: "#9fd0ff" }} data-testid="stitch-place-note">{t("stitch.placeNote")}</div>}
                 <label style={row}>
-                  {t("stitch.overlapInput")}
-                  <input style={num} value={overlapText} onChange={(e) => { touchedOverlap.current = true; setOverlapText(e.target.value); }} data-testid="stitch-overlap-input" />
-                  {t("stitch.overlapHint")}
+                  {t("stitch.overlapScope")}:
+                  <input type="radio" name="stitch-overlap-scope" checked={!perPair} onChange={() => setPerPair(false)} data-testid="stitch-scope-common" /> {t("stitch.scope.common")}
+                  <input type="radio" name="stitch-overlap-scope" checked={perPair} onChange={() => { setPairTexts(Array.from({ length: pairCount }, () => overlapText)); setPerPair(true); }} data-testid="stitch-scope-pair" /> {t("stitch.scope.pair")}
                 </label>
+                {!perPair && (
+                  <label style={row}>
+                    {t("stitch.overlapInput")}
+                    <input style={num} value={overlapText} onChange={(e) => { touchedOverlap.current = true; setOverlapText(e.target.value); }} data-testid="stitch-overlap-input" />
+                    {t("stitch.overlapHint")}
+                  </label>
+                )}
+                {perPair && selected.slice(0, -1).map((c, i) => (
+                  <label key={i} style={{ ...row, paddingLeft: 8 }}>
+                    {t("stitch.pairLabel", { a: String(i + 1), b: String(i + 2) })}
+                    <input style={num} value={pairText(i)} onChange={(e) => setPairTexts((old) => Array.from({ length: pairCount }, (_, k) => (k === i ? e.target.value : old[k] ?? overlapText)))} data-testid={`stitch-pair-input-${i}`} />
+                    {t("stitch.overlapHint")}
+                  </label>
+                ))}
                 <label style={row}>
                   {t("stitch.dir")}
                   <button type="button" style={btn} onClick={() => setReverse((r) => !r)} data-testid="stitch-reverse">{dirLabel}</button>

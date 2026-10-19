@@ -412,6 +412,45 @@ describe("位置の指定（重なり mm）", () => {
     expect(g.overlapMm).toBeCloseTo(8, 6);
     expect(g.intervals[1][1]).toBeLessThan(g.intervals[0][1]);
   });
+  // 各組の重なり・隙間は、その 2 本だけで格子を作って縁で測る。
+  const pairOf = (ins: StitchInput[], sh: number[], t: number) => {
+    const g = unionGrid([shiftInput(ins[t], sh[t], n), shiftInput(ins[t + 1], sh[t + 1], n)]);
+    return { overlap: g.overlapMm, gap: g.gapMm };
+  };
+  it("組ごとの重なり: 3 本で 8 mm と 3 mm（各組を縁で測る）", () => {
+    const ins = [0, 1, 2].map(() => makeInput({ w0: -100 }));
+    const sh = placeAlongNormal(ins, [8, 3], false);
+    expect(pairOf(ins, sh, 0).overlap).toBeCloseTo(8, 6);
+    expect(pairOf(ins, sh, 1).overlap).toBeCloseTo(3, 6);
+    expect(unionGrid(ins.map((x, t) => shiftInput(x, sh[t], n))).overlapMm).toBeCloseTo(11, 6);
+  });
+  it("組ごとの重なり: 負の値はその組だけ隙間になる", () => {
+    const ins = [0, 1, 2].map(() => makeInput({ w0: -100 }));
+    const sh = placeAlongNormal(ins, [8, -2], false);
+    expect(pairOf(ins, sh, 0).overlap).toBeCloseTo(8, 6);
+    expect(pairOf(ins, sh, 1).gap).toBeCloseTo(2, 6);
+    expect(pairOf(ins, sh, 1).overlap).toBeCloseTo(0, 6);
+  });
+  it("組ごとの重なり: 同じ値の配列は数の指定と同じ（両向き）", () => {
+    const ins = [0, 1, 2].map(() => makeInput({ w0: -100 }));
+    for (const rev of [false, true]) {
+      const a = placeAlongNormal(ins, 5, rev), b = placeAlongNormal(ins, [5, 5], rev);
+      b.forEach((v, t) => expect(v).toBeCloseTo(a[t], 9));
+    }
+  });
+  it("組ごとの重なり: 向きを反転しても各組の重なりが指定どおり（− 側へ並ぶ）", () => {
+    const ins = [0, 1, 2].map(() => makeInput({ w0: -100 }));
+    const sh = placeAlongNormal(ins, [8, 3], true);
+    expect(pairOf(ins, sh, 0).overlap).toBeCloseTo(8, 6);
+    expect(pairOf(ins, sh, 1).overlap).toBeCloseTo(3, 6);
+    expect(sh[1]).toBeLessThan(0);
+    expect(sh[2]).toBeLessThan(sh[1]);
+  });
+  it("組ごとの重なり: 個数が組の数と合わなければ例外", () => {
+    const ins = [0, 1, 2].map(() => makeInput({ w0: -100 }));
+    expect(() => placeAlongNormal(ins, [8], false)).toThrow();
+    expect(() => placeAlongNormal(ins, [8, 3, 1], false)).toThrow();
+  });
   it("shiftInput は元を変えず、世界座標だけ d·n 動く", () => {
     const a = makeInput({ w0: -100 });
     const before = Array.from(a.volume.indexToWorld);

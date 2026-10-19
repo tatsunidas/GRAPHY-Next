@@ -434,20 +434,25 @@ export function coordinatesCoincide(inputs: readonly StitchInput[]): boolean {
 
 /**
  * 入力を並べた順に、隣り合う 2 本の重なりが `overlapMm`（負なら隙間）になる法線方向のずらし量 [mm] を返す。
+ * `overlapMm` が数なら全部の組で同じ値、配列なら組ごと（長さ `inputs.length - 1`、t 番目が t → t+1 番目の組）。
  * 1 本目は動かさない。`reverse` なら法線の − 方向へ並べる。結果は `inputs` と同じ順。
  */
 export function placeAlongNormal(
   inputs: readonly StitchInput[],
-  overlapMm: number,
+  overlapMm: number | readonly number[],
   reverse: boolean,
 ): number[] {
   if (inputs.length === 0) return [];
+  if (typeof overlapMm !== "number" && overlapMm.length !== inputs.length - 1) {
+    throw new Error(`overlapMm の数 ${overlapMm.length} が組の数 ${inputs.length - 1} と合わない`);
+  }
   const n = normalOfIop(inputs[0].iop);
   const shifts: number[] = [0];
   let [lo, hi] = normalEdges(inputs[0], n);
   for (let t = 1; t < inputs.length; t++) {
     const [a, b] = normalEdges(inputs[t], n);
-    const d = reverse ? lo + overlapMm - b : hi - overlapMm - a;
+    const ov = typeof overlapMm === "number" ? overlapMm : overlapMm[t - 1];
+    const d = reverse ? lo + ov - b : hi - ov - a;
     shifts.push(d);
     lo = a + d;
     hi = b + d;
