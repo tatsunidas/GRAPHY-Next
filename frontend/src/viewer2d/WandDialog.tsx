@@ -44,14 +44,23 @@ export function ValueSlider({ value, min, max, onChange }: { value: number; min:
 }
 
 /** 数値入力（下書きを持ち、Enter/フォーカスアウトで確定。不正入力は元へ戻す）。 */
-export function NumField({ value, onCommit, testid, title }: { value: number; onCommit: (v: number) => void; testid: string; title?: string }) {
-  const [text, setText] = useState(fmt(value));
-  useEffect(() => setText(fmt(value)), [value]);
+export function NumField({ value, onCommit, testid, title, style = numInput, format = fmt }: {
+  value: number;
+  onCommit: (v: number) => void;
+  testid: string;
+  title?: string;
+  style?: React.CSSProperties;
+  format?: (v: number) => string;
+}) {
+  const [text, setText] = useState(format(value));
+  useEffect(() => setText(format(value)), [value]); // eslint-disable-line react-hooks/exhaustive-deps
   const apply = () => {
-    if (text === fmt(value)) return; // 触っていない（表示は丸めてあるので、そのまま確定すると値が変わる）
+    if (text === format(value)) return; // 触っていない（表示は丸めてあるので、そのまま確定すると値が変わる）
     const v = Number(text);
-    if (text.trim() !== "" && Number.isFinite(v)) onCommit(v);
-    else setText(fmt(value));
+    if (text.trim() !== "" && Number.isFinite(v)) {
+      onCommit(v);
+      setText(format(v)); // 値が変わらないと effect が走らず、打ったままの文字が残る
+    } else setText(format(value));
   };
   return (
     <input
@@ -62,7 +71,7 @@ export function NumField({ value, onCommit, testid, title }: { value: number; on
       onChange={(e) => setText(e.target.value)}
       onKeyDown={(e) => { if (e.key === "Enter") { apply(); (e.target as HTMLInputElement).blur(); } }}
       onBlur={apply}
-      style={numInput}
+      style={style}
     />
   );
 }
