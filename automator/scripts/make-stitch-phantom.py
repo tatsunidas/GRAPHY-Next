@@ -9,6 +9,7 @@
         neg-modality（2 本目が MR）/ neg-pet（PET で SeriesTime だけ違う。放射性医薬品の情報付き）
   FoR は条件にしない  for-diff（FoR だけ違う正例）
   端の一致度        match3（構造を持つ場。3 ステーション・IPP 同一・シリーズ番号と上下の順序がずれている。重なり 12 mm）
+  傾いた向き        oblique（IOP を x 軸まわりに 20° 傾ける）
   信号の拡大率      gain（2 本目だけ ×1.25。信号を合わせると倍率 0.8 になる）
   座標が全部同じ    stations2・stations3（IPP が同一で FoR が別。装置がステーションごとに座標を原点へ戻した状態。
                     重なり 8 mm で + 方向へ並べたときの配置を truth.json の shift・placement に記録する）
@@ -83,13 +84,13 @@ def make(setname, bedname, *, z0, iop=IOP0, add=0.0, modality="CT", patient, stu
     d = os.path.join(out, setname, bedname)
     os.makedirs(d, exist_ok=True)
     jj, ii = np.meshgrid(np.arange(ROWS), np.arange(COLS), indexing="ij")
-    base = np.array([X0, Y0, 0.0]) + n * 0.0
+    base = np.array([X0, Y0, 0.0])
     expected = []
     for k in range(nz):
-        # 世界の z（= 患者 LPS の z）が z0 + k·DZ になる位置を先頭 IPP とする
-        ipp = np.array([X0, Y0, z0 + k * DZ])
+        # 法線方向の位置（軸位なら患者 LPS の z）が z0 + k·DZ になる位置を先頭 IPP とする（傾いた向きでも法線に沿って進む）
+        ipp = base + n * (z0 + k * DZ)
         pos = ipp + ii[..., None] * COL_MM * rc + jj[..., None] * ROW_MM * rr
-        posv = pos + np.array([0.0, 0.0, vz0 - z0])
+        posv = pos + n * (vz0 - z0)
         stored = np.rint(((val(posv) + add) * mul - INTERCEPT) / SLOPE)
         assert np.all(np.abs(stored) < 32767)
         stored = stored.astype(np.int16)
@@ -141,7 +142,7 @@ def make(setname, bedname, *, z0, iop=IOP0, add=0.0, modality="CT", patient, stu
         assert np.allclose([float(x) for x in ds.ImageOrientationPatient], iop, atol=1e-6), "IOP"
         assert np.array_equal(ds.pixel_array, stored), "pixels"
         pos = ipp + ii[..., None] * COL_MM * rc + jj[..., None] * ROW_MM * rr
-        posv = pos + np.array([0.0, 0.0, vz0 - z0])
+        posv = pos + n * (vz0 - z0)
         assert np.max(np.abs(ds.pixel_array * SLOPE + INTERCEPT - (val(posv) + add) * mul)) <= SLOPE / 2 + 1e-9, "values"
     return {
         "dir": setname + "/" + bedname, "seriesUid": str(series), "modality": modality,
@@ -164,12 +165,12 @@ def coverage(beds):
     return overlap, gap
 
 
-def pair(setname, *, z0_2=Z_BED1 + (NZ - 1) * DZ - 8 * DZ - DZ, add1=0.0, add2=0.0, mul2=1.0, iop2=IOP0, frame2=None,
+def pair(setname, *, z0_2=Z_BED1 + (NZ - 1) * DZ - 8 * DZ - DZ, iop1=IOP0, add1=0.0, add2=0.0, mul2=1.0, iop2=IOP0, frame2=None,
          patient2=None, modality2="CT", modality1="CT", pet=False, time2="120000", expect_ok=True):
     # 既定の z0_2 は 1 本目の末尾 9 枚と同じ位置（先頭を 1 枚進めた値）
     patient = "STITCH-" + setname.upper()
     study, frame = generate_uid(), generate_uid()
-    b1 = make(setname, "bed1", z0=Z_BED1, add=add1, patient=patient, study=study, frame=frame,
+    b1 = make(setname, "bed1", z0=Z_BED1, iop=iop1, add=add1, patient=patient, study=study, frame=frame,
               modality=modality1, pet=pet)
     b2 = make(setname, "bed2", z0=z0_2, iop=iop2, add=add2, mul=mul2, patient=patient2 or patient, study=study,
               frame=frame2 or frame, modality=modality2, pet=pet, series_time=time2)
@@ -236,6 +237,10 @@ sets += [stations("stations2", 2, 8.0, [0.0, 20.0]), stations("stations3", 3, 8.
 # 重なり 12 mm（縁で測る）= 6 枚。1 本あたり 24 枚（48 mm）。本来の上下は bed3（下）・bed1・bed2（上）。
 sets += [matched("match3", 12.0, [-64.0, -28.0, -100.0])]
 # 信号の拡大率: 2 本目だけ ×1.25（同じ位置・同じ関数）。基準に合わせる倍率は 1 と 0.8。
+# 傾いた向き（x 軸まわりに 20°）。IOP・IPP が法線に沿って正しく書かれることの検査。
+tl = math.radians(20)
+OBL = [1.0, 0.0, 0.0, 0.0, math.cos(tl), math.sin(tl)]
+sets += [pair("oblique", z0_2=Z2_A, iop1=OBL, iop2=OBL)]
 gain_set = pair("gain", z0_2=Z2_A, add1=200.0, add2=200.0, mul2=1.25)
 gain_set["beds"][0]["gainExpected"] = 1.0
 gain_set["beds"][1]["gainExpected"] = 0.8

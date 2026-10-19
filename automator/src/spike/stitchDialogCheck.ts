@@ -164,8 +164,8 @@ async function placementChecks(v: Page, s: any): Promise<void> {
   await waitMip(v);
 }
 
-/** [保存] を押し、新しくできた派生シリーズの画素を、真値（blend・gains の期待値）と照合する。 */
-async function saveAndVerify(v: Page, d: DesktopDriver, s: any, studyUid: string, blend: "linear" | "mean", gains: boolean, tag: string): Promise<void> {
+/** [保存] を押し、新しくできた派生シリーズをフォルダへ取り出して返す（できなければ null）。 */
+async function saveAndDownload(v: Page, d: DesktopDriver, studyUid: string, tag: string): Promise<string | null> {
   const before = (await getJson<any[]>(d.ports.http, `/api/studies/${studyUid}/series`)).map((x) => x.seriesInstanceUid);
   await v.getByTestId("stitch-save").click();
   await v.getByTestId("stitch-message").filter({ hasText: /\d+/ }).waitFor({ timeout: 120_000 });
@@ -174,7 +174,7 @@ async function saveAndVerify(v: Page, d: DesktopDriver, s: any, studyUid: string
   const after = await getJson<any[]>(d.ports.http, `/api/studies/${studyUid}/series`);
   const derived = after.filter((x) => !before.includes(x.seriesInstanceUid));
   check(derived.length === 1, `派生シリーズが 1 本できる（${tag}）`, derived.length);
-  if (derived.length !== 1) return;
+  if (derived.length !== 1) return null;
   const dsUid = derived[0].seriesInstanceUid;
   const inst = await getJson<Array<{ sopInstanceUid: string }>>(d.ports.http, `/api/studies/${studyUid}/series/${dsUid}/instances`);
   const dir = path.join(OUT_DIR, `${tag}-derived`);
@@ -184,6 +184,24 @@ async function saveAndVerify(v: Page, d: DesktopDriver, s: any, studyUid: string
     const res = await fetch(`http://127.0.0.1:${d.ports.http}/api/studies/${studyUid}/series/${dsUid}/instances/${i.sopInstanceUid}/file`);
     fs.writeFileSync(path.join(dir, `o${String(n).padStart(4, "0")}.dcm`), Buffer.from(await res.arrayBuffer()));
   }
+  return dir;
+}
+
+/** DICOM タグ（IOP・IPP・間隔・ピクセル間隔・識別子）の照合結果を数える。 */
+function reportTags(out: string, status: number | null, err: string, tag: string): void {
+  if (status !== 0) { check(false, `タグの照合スクリプトが動く（${tag}）`, err); return; }
+  const r = JSON.parse(out) as { checks: Array<[string, boolean, string]>; pass: number; fail: number };
+  console.log(`  タグ照合(${tag}): ${r.pass} 合格 / ${r.fail} 失敗`);
+  for (const [name, ok, detail] of r.checks) if (!ok) check(false, `タグ: ${name}（${tag}）`, detail);
+  check(r.fail === 0 && r.pass > 0, `保存したタグが期待どおり（${tag}・${r.pass} 項目）`);
+}
+
+/** [保存] を押し、新しくできた派生シリーズの画素を真値（blend・gains の期待値）と、DICOM タグを入力側の値と照合する。 */
+async function saveAndVerify(v: Page, d: DesktopDriver, s: any, studyUid: string, blend: "linear" | "mean", gains: boolean, tag: string): Promise<void> {
+  const dir = await saveAndDownload(v, d, studyUid, tag);
+  if (!dir) return;
+  const tg = spawnSync(PY, ["-I", path.join(AUTOMATOR_ROOT, "scripts", "verify-stitch-tags.py"), "phantom", path.join(root, "truth.json"), s.set, dir], { encoding: "utf8" });
+  reportTags(tg.stdout, tg.status, tg.stderr, tag);
   const args = ["-I", path.join(AUTOMATOR_ROOT, "scripts", "verify-stitch-output.py"), path.join(root, "truth.json"), s.set, dir, blend];
   if (gains) args.push("gains");
   const ver = spawnSync(PY, args, { encoding: "utf8" });
@@ -222,7 +240,7 @@ async function matchChecks(v: Page, s: any): Promise<void> {
 
 async function main(): Promise<void> {
   fs.mkdirSync(OUT_DIR, { recursive: true });
-  const d = new DesktopDriver({ http: 18190, scp: 18191 }); // 開発版 Next（18090）と並行して動かせるよう別ポート
+  const d = new DesktopDriver({ http: 18190, scp: 18191 }, { extraElectronArgs: process.env.STITCH_ELECTRON_ARGS ? process.env.STITCH_ELECTRON_ARGS.split(" ") : [] }); // 開発版 Next（18090）と並行して動かせるよう別ポート
   await d.start();
   try {
     if (kind === "phantom") {
@@ -287,16 +305,26 @@ async function main(): Promise<void> {
     } else {
       console.log(`\n== 実データ ${root} シリーズ ${rest.join(",")}`);
       await resetDb(d.ports.http);
-      console.log(`  取り込み: ${JSON.stringify(await importPaths(d.ports.http, [root])).slice(0, 200)}`);
+      const impR = await importPaths(d.ports.http, [root]);
+      console.log(`  取り込み: ${JSON.stringify(impR).slice(0, 200)}`);
       const v = await openDialog(d, `real-${rest.join("-")}`, rest, rest.length);
       console.log(`  条件: ${await v.getByTestId("stitch-conditions").textContent()}`);
       console.log(`  保存可: ${await v.getByTestId("stitch-save").isEnabled()}`);
       console.log(`  出力欄: ${await v.getByTestId("stitch-output").textContent()}`);
       // 端の一致度による自動判定の結果（並び順・重なり）
-      for (let t = 0; t < 60 && (await v.getByTestId("stitch-match").count()) === 0; t++) await v.waitForTimeout(500);
+      for (let t = 0; t < 240 && (await v.getByTestId("stitch-match").count()) === 0; t++) await v.waitForTimeout(500);
       console.log(`  自動の並び: ${(await v.getByTestId("stitch-order").locator("span").allTextContents()).join(" → ")}`);
       console.log(`  端の一致度: ${(await v.getByTestId("stitch-match").textContent())?.replace(/\s+/g, " ")}`);
       console.log(`  重なり欄の初期値: ${await v.getByTestId("stitch-overlap-input").inputValue()} mm`);
+      if (process.env.REAL_COORD) {
+        // 「座標どおり」: 座標が全部同じ実データで何が起きるか（エラーになるのか、意味のない結果になるのか）を確かめる。
+        await v.getByTestId("stitch-place-coord").check();
+        await waitMip(v);
+        console.log(`  [座標どおり] ${await v.getByTestId("stitch-overlap").textContent()} / ${await v.getByTestId("stitch-output").textContent()} / 保存可 ${await v.getByTestId("stitch-save").isEnabled()}`);
+        console.log(`  [座標どおり] 並び: ${(await v.getByTestId("stitch-ranges").textContent())?.replace(/\s+/g, " ")}`);
+        await v.screenshot({ path: path.join(OUT_DIR, "real-coord.png") });
+        return;
+      }
       // 重なりの正解は DICOM から分からないので、REAL_OVERLAP があればそれを入れ、無ければ自動の値のまま
       if (process.env.REAL_OVERLAP) await v.getByTestId("stitch-overlap-input").fill(process.env.REAL_OVERLAP);
       // 境目の段差の指標: COR 画像の行ごとの平均輝度（0〜255）の、隣り合う行の差の最大を、2 つの境目（重なりの中心 ± 重なり/2 ± 1 行）に限って測る。
@@ -326,13 +354,30 @@ async function main(): Promise<void> {
         }, { ov, len })) as number;
       };
       const variants: Array<[string, "mean" | "linear", boolean]> = [["mean", "mean", false], ["linear", "linear", false], ["linear+gain", "linear", true]];
-      for (const [name, mode, gain] of variants) {
+      for (const [name, mode, gain] of process.env.REAL_SKIP_VARIANTS ? [] : variants) {
         await v.getByTestId(`stitch-blend-${mode}`).check();
         if ((await v.getByTestId("stitch-gain").isChecked()) !== gain) await v.getByTestId("stitch-gain").click();
         await waitMip(v);
         const gains = gain ? (await v.getByTestId("stitch-gains").textContent())?.replace(/\s+/g, " ") : "";
         console.log(`  [${name}] 段差の指標 ${(await step()).toFixed(2)} ${gains ?? ""}`);
         await v.screenshot({ path: path.join(OUT_DIR, `real-${name}.png`) });
+      }
+      if (process.env.REAL_SAVE) {
+        // 実データを保存し、DICOM タグを入力のシリーズ（rest）から独立に計算した期待値と照合する。
+        const studyUid = (impR as any).studyInstanceUids[0] as string;
+        await v.getByTestId("stitch-blend-linear").check();
+        if (await v.getByTestId("stitch-gain").isChecked()) await v.getByTestId("stitch-gain").click();
+        await waitMip(v);
+        v.on("console", (m) => { if (/error|crash|memory/i.test(m.text())) console.log(`  [renderer] ${m.text().slice(0, 200)}`); });
+        v.on("crash", () => console.log("  [renderer] crash イベント"));
+        const dir = await saveAndDownload(v, d, studyUid, "real");
+        if (dir) {
+          const tg = spawnSync(PY, ["-I", path.join(AUTOMATOR_ROOT, "scripts", "verify-stitch-tags.py"), "source", dir, root, rest.join(","), process.env.REAL_N ?? "0"], { encoding: "utf8" });
+          reportTags(tg.stdout, tg.status, tg.stderr, "real");
+          const info = JSON.parse(tg.stdout).info;
+          console.log(`  入力にあって出力に無いタグ: ${(info["入力にあって出力に無いタグ"] ?? []).join(", ")}`);
+          console.log(`  SOPClass: ${info["SOPClass（入力 → 出力）"]} / FoR: ${info["FrameOfReferenceUID（入力の先頭 → 出力）"]}`);
+        }
       }
     }
   } finally {

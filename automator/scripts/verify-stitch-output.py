@@ -50,17 +50,19 @@ for f in fs:
     jj, ii = np.meshgrid(np.arange(cols), np.arange(rows))
     pos = ipp[None, None, :] + jj[..., None] * dc * r + ii[..., None] * dr * c
     x, y, z = pos[..., 0], pos[..., 1], pos[..., 2]
+    nrm = np.cross(np.array(beds[0]["iop"][:3]), np.array(beds[0]["iop"][3:]))
+    w_ = x * nrm[0] + y * nrm[1] + z * nrm[2]  # 法線方向の位置（軸位なら z）
     vals, ds_, cnt = [], [], np.zeros_like(x)
     for b in beds:
         base = texture(x, y, z) if field == "tex" else A * x + B * y + C * (z - b.get("shift", 0.0)) + D
         v = (base + b["add"]) * b.get("mul", 1.0) * (b.get("gainExpected", 1.0) if use_gains else 1.0)
         lo, hi = b["z0"] - dz / 2, b["z1"] + dz / 2
-        inside = (z >= b["z0"] - 1e-6) & (z <= b["z1"] + 1e-6)
+        inside = (w_ >= b["z0"] - 1e-6) & (w_ <= b["z1"] + 1e-6)
         vals.append(np.where(inside, v, 0.0))
-        ds_.append(np.where(inside, np.minimum(z - lo, hi - z), 0.0))
+        ds_.append(np.where(inside, np.minimum(w_ - lo, hi - w_), 0.0))
         cnt += inside
     if mode == "mean":
-        w = [np.where((z >= b["z0"] - 1e-6) & (z <= b["z1"] + 1e-6), 1.0, 0.0) for b in beds]
+        w = [np.where((w_ >= b["z0"] - 1e-6) & (w_ <= b["z1"] + 1e-6), 1.0, 0.0) for b in beds]
     else:
         w = ds_
     wsum = sum(w)
