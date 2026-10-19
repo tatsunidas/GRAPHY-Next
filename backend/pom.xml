@@ -112,6 +112,12 @@
             <artifactId>dcm4che-imageio-opencv</artifactId>
             <version>${dcm4che.version}</version>
         </dependency>
+        <!-- RLE Lossless の伸長（純 Java）。上の OpenCV は RLE を扱わない。 -->
+        <dependency>
+            <groupId>org.dcm4che</groupId>
+            <artifactId>dcm4che-imageio-rle</artifactId>
+            <version>${dcm4che.version}</version>
+        </dependency>
         <!-- DICOM JSON (QIDO/WADO-RS metadata の dicom+json 解析) -->
         <dependency>
             <groupId>org.dcm4che</groupId>

@@ -3083,6 +3083,7 @@ export const en: Record<string, string> = {
   "roiFeat.note.EXCESS_KURTOSIS": "Excess kurtosis (−3 applied)",
   "roiFeat.note.LOG2_DISCRETISED": "log2, after discretisation",
   "roiFeat.note.NON_IBSI": "Non-IBSI",
+  "radiomics.lossyWarning": "Lossy-compressed image: features are affected by the compression",
   "roiFeat.note.RJ_MORPH_COUNT_IS_INTENSITY": "In RadiomicsJ 2.4.1 this is the intensity-mask count (the morphological mask is not re-segmented)",
   "roiFeat.roiSize": "ROI {{initial}} voxels ({{intensity}} used for calculation), morphological {{morph}}, volume {{volume}} mm³",
   "roiFeat.smallRoiWarning": "Small ROI ({{n}} voxels < setting {{threshold}}): texture features such as entropy may be unstable",

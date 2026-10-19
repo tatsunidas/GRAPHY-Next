@@ -202,7 +202,7 @@ public class GlamAnalysisService {
 
         return new GlamAnalysis(GLAMFeatureType.values().length, bins, radius, roiVoxels, occupancy, radii,
                 self, selfRandom, cross, crossOmitted, matrices, diagonalOnly, features,
-                spacing, isotropic, resampledFrom, used);
+                spacing, isotropic, resampledFrom, used, vol.lossyCompressed());
     }
 
     /**

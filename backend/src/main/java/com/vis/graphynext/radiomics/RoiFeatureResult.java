@@ -18,6 +18,7 @@ import java.util.List;
  * @param settingsProperties 計算に実際に使った設定を正規化した RadiomicsJ の {@code .properties} 本文
  *                       （{@link RadiomicsJSettingsSnapshot}）。{@code provenance.settingsSha256} はこの UTF-8 の SHA-256
  * @param roiSize        ROI の大きさと小さい ROI の警告。返すたびに行と今の環境設定から付け直す（キャッシュの値は使わない）
+ * @param lossyCompressed 元画像が非可逆圧縮（特徴量は圧縮の影響を受ける）。返すたびに読み込んだ画像から付ける
  */
 public record RoiFeatureResult(
         String radiomicsjVersion,
@@ -28,7 +29,8 @@ public record RoiFeatureResult(
         Discretisation discretisation,
         Provenance provenance,
         String settingsProperties,
-        RoiSize roiSize) {
+        RoiSize roiSize,
+        boolean lossyCompressed) {
 
     /**
      * @param column  RadiomicsJ の列名（例 {@code IntensityBasedStatistical_Kurtosis}）
@@ -66,11 +68,12 @@ public record RoiFeatureResult(
 
     RoiFeatureResult asCached() {
         return new RoiFeatureResult(radiomicsjVersion, computedAt, true, label, rows, discretisation,
-                provenance, settingsProperties, roiSize);
+                provenance, settingsProperties, roiSize, lossyCompressed);
     }
 
-    RoiFeatureResult withRoiSize(RoiSize size) {
+    /** 返すたびに付け直す欄（キャッシュに無い・古いかもしれない値）。 */
+    RoiFeatureResult withPerRequest(RoiSize size, boolean lossy) {
         return new RoiFeatureResult(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation,
-                provenance, settingsProperties, size);
+                provenance, settingsProperties, size, lossy);
     }
 }
