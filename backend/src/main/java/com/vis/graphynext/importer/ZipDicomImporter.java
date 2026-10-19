@@ -38,6 +38,9 @@ class ZipDicomImporter {
 
     /** 受け取り側（{@link ImportService} の集計）。 */
     interface Sink {
+        /** 中止が求められているか（エントリ 1 件ごとに見る）。 */
+        boolean cancelled();
+
         void imported(DicomInstance saved);
 
         void skipped();
@@ -73,6 +76,22 @@ class ZipDicomImporter {
         }
     }
 
+    /** ディレクトリを除いたエントリ数。開けなければ 0。 */
+    static long countEntries(Path zip) {
+        try (ZipFile zf = open(zip)) {
+            long n = 0;
+            Enumeration<? extends ZipEntry> en = zf.entries();
+            while (en.hasMoreElements()) {
+                if (!en.nextElement().isDirectory()) {
+                    n++;
+                }
+            }
+            return n;
+        } catch (IOException e) {
+            return 0;
+        }
+    }
+
     void importZip(Path zip, Sink sink) {
         ZipFile zf;
         try {
@@ -89,6 +108,9 @@ class ZipDicomImporter {
             long total = 0;
             Enumeration<? extends ZipEntry> en = zf.entries();
             while (en.hasMoreElements()) {
+                if (sink.cancelled()) {
+                    return;
+                }
                 ZipEntry e = en.nextElement();
                 if (e.isDirectory()) {
                     continue;
