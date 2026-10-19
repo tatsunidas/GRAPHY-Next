@@ -25,7 +25,7 @@ import {
 } from "./volumeStitch";
 
 /** 切り出しに足す余白（法線方向、スライス間隔の何倍か）。探索する平行移動の分を含める。 */
-const MARGIN_SLICES = 3;
+export const MARGIN_SLICES = 3;
 
 /** 入力のスライス中心の法線方向位置（k ごと）。 */
 function sliceWs(input: StitchInput, n: readonly number[]): number[] {
@@ -111,6 +111,12 @@ export function overlapNcc(a: StitchInput, b: StitchInput, maxSamples = 30000): 
   return { ncc: ncc({ fixed: f, moving: g, count: c, patchSize: 1 }), count: c };
 }
 
+/** 探索範囲の上限。Frame of Reference が同じなら狭く（ツールチップの説明と同じ値）。 */
+export const ALIGN_LIMITS = {
+  sameFrame: { translationMm: 30, rotationDeg: 10 },
+  otherFrame: { translationMm: 200, rotationDeg: 45 },
+} as const;
+
 export type AlignScope = "translation" | "rigid";
 
 export interface AlignOptions {
@@ -129,7 +135,7 @@ export function buildAlignRequest(
     const m = x.volume.indexToWorld;
     return [m[2], m[6], m[10]];
   };
-  const base = opts.sameFrameOfReference ? { translationMm: 30, rotationDeg: 10 } : { translationMm: 200, rotationDeg: 45 };
+  const base = opts.sameFrameOfReference ? ALIGN_LIMITS.sameFrame : ALIGN_LIMITS.otherFrame;
   return {
     fixed: toPayload(fixed.volume, fixed.iop, step(fixed)),
     moving: toPayload(moving.volume, moving.iop, step(moving)),

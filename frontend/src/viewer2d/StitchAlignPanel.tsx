@@ -57,12 +57,12 @@ function NumField({ value, onChange, testid, width = 62 }: {
   );
 }
 
-function Stepper({ value, step, onChange, testid }: {
-  value: number; step: number; onChange: (v: number) => void; testid: string;
+function Stepper({ value, step, onChange, testid, tip }: {
+  value: number; step: number; onChange: (v: number) => void; testid: string; tip: string;
 }) {
   const r = (v: number) => Math.round(v * 1e6) / 1e6;
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 2 }} title={tip}>
       <button type="button" style={mini} onClick={() => onChange(r(value - step))} data-testid={`${testid}-minus`}>−</button>
       <NumField value={value} onChange={onChange} testid={testid} />
       <button type="button" style={mini} onClick={() => onChange(r(value + step))} data-testid={`${testid}-plus`}>＋</button>
@@ -112,7 +112,7 @@ export function StitchAlignPanel({
   return (
     <div style={box} data-testid="stitch-align">
       <div style={{ color: "#8a98a6" }}>{t("align.hint")}</div>
-      <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }} title={t("align.tip.step")}>
         <span>
           {t("align.step")}:
           {TR_STEPS.map((s) => (
@@ -128,7 +128,7 @@ export function StitchAlignPanel({
             </label>
           ))}
         </span>
-        <button type="button" style={btn} disabled={!anyPlaced || autoBusy} onClick={() => rows.forEach((r) => onChange(r.id, { ...IDENTITY_PLACEMENT }))} data-testid="align-reset-all">{t("align.resetAll")}</button>
+        <button type="button" style={btn} disabled={!anyPlaced || autoBusy} onClick={() => rows.forEach((r) => onChange(r.id, { ...IDENTITY_PLACEMENT }))} title={t("align.tip.resetAll")} data-testid="align-reset-all">{t("align.resetAll")}</button>
       </div>
 
       {rows.map((r) => {
@@ -148,9 +148,9 @@ export function StitchAlignPanel({
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <b>{r.name}</b>
               {r.isRef
-                ? <span style={{ color: "#9fd0ff" }} data-testid={`align-ref-${r.id}`}>{t("align.reference")}</span>
-                : <button type="button" style={btn} disabled={autoBusy} onClick={() => onMakeReference(r.id)} data-testid={`align-make-ref-${r.id}`}>{t("align.makeReference")}</button>}
-              {r.angleDeg > 0.05 && <span style={{ color: "#e8c88a" }} data-testid={`align-angle-${r.id}`}>{t("align.angle", { deg: r.angleDeg.toFixed(1) })}</span>}
+                ? <span style={{ color: "#9fd0ff" }} title={t("align.tip.makeRef")} data-testid={`align-ref-${r.id}`}>{t("align.reference")}</span>
+                : <button type="button" style={btn} disabled={autoBusy} onClick={() => onMakeReference(r.id)} title={t("align.tip.makeRef")} data-testid={`align-make-ref-${r.id}`}>{t("align.makeReference")}</button>}
+              {r.angleDeg > 0.05 && <span style={{ color: "#e8c88a" }} title={t("align.tip.angle")} data-testid={`align-angle-${r.id}`}>{t("align.angle", { deg: r.angleDeg.toFixed(1) })}</span>}
             </div>
             {r.isRef ? (
               <div style={{ color: "#8a98a6" }}>{t("align.refNote")}</div>
@@ -158,40 +158,40 @@ export function StitchAlignPanel({
               <div style={{ display: "grid", gridTemplateColumns: "92px repeat(3, auto)", gap: "4px 10px", alignItems: "center" }}>
                 <span />
                 {AXES.map((a) => <span key={a} style={{ color: "#8a98a6" }}>{t(`align.axis${a}`)}</span>)}
-                <span>{t("align.translate")}</span>
+                <span title={t("align.tip.translate")}>{t("align.translate")}</span>
                 {AXES.map((a, n) => (
-                  <Stepper key={a} value={tr[n]} step={trStep} testid={`align-t${a.toLowerCase()}-${r.id}`}
+                  <Stepper key={a} value={tr[n]} step={trStep} testid={`align-t${a.toLowerCase()}-${r.id}`} tip={t("align.tip.translate")}
                     onChange={(v) => set(n === 0 ? { tx: v } : n === 1 ? { ty: v } : { tz: v })} />
                 ))}
-                <span>{t("align.rotate")}</span>
+                <span title={t("align.tip.rotate")}>{t("align.rotate")}</span>
                 {AXES.map((a, n) => (
-                  <Stepper key={a} value={ro[n]} step={rotStep} testid={`align-r${a.toLowerCase()}-${r.id}`}
+                  <Stepper key={a} value={ro[n]} step={rotStep} testid={`align-r${a.toLowerCase()}-${r.id}`} tip={t("align.tip.rotate")}
                     onChange={(v) => set(n === 0 ? { rx: v } : n === 1 ? { ry: v } : { rz: v })} />
                 ))}
-                <span>{t("align.scale")}</span>
+                <span title={t("align.tip.scale")}>{t("align.scale")}</span>
                 {locked(r.id)
                   ? (
                     <span style={{ gridColumn: "2 / span 3", display: "inline-flex", alignItems: "center", gap: 10 }}>
-                      <Stepper value={Math.round(sc[0] * 1e6) / 1e4} step={1} testid={`align-s-${r.id}`} onChange={(v) => setScale(0, v)} />
-                      <label><input type="checkbox" checked onChange={() => setLock((o) => ({ ...o, [r.id]: false }))} data-testid={`align-lock-${r.id}`} /> {t("align.scaleLock")}</label>
+                      <Stepper value={Math.round(sc[0] * 1e6) / 1e4} step={1} testid={`align-s-${r.id}`} tip={t("align.tip.scale")} onChange={(v) => setScale(0, v)} />
+                      <label title={t("align.tip.lock")}><input type="checkbox" checked onChange={() => setLock((o) => ({ ...o, [r.id]: false }))} data-testid={`align-lock-${r.id}`} /> {t("align.scaleLock")}</label>
                     </span>
                   )
                   : (
                     <>
                       {AXES.map((a, n) => (
-                        <Stepper key={a} value={Math.round(sc[n] * 1e6) / 1e4} step={1} testid={`align-s${a.toLowerCase()}-${r.id}`} onChange={(v) => setScale(n as 0 | 1 | 2, v)} />
+                        <Stepper key={a} value={Math.round(sc[n] * 1e6) / 1e4} step={1} testid={`align-s${a.toLowerCase()}-${r.id}`} tip={t("align.tip.scale")} onChange={(v) => setScale(n as 0 | 1 | 2, v)} />
                       ))}
                       <span />
-                      <label style={{ gridColumn: "2 / span 3" }}><input type="checkbox" checked={false} onChange={() => setLock((o) => ({ ...o, [r.id]: true }))} data-testid={`align-lock-${r.id}`} /> {t("align.scaleLock")}</label>
+                      <label style={{ gridColumn: "2 / span 3" }} title={t("align.tip.lock")}><input type="checkbox" checked={false} onChange={() => setLock((o) => ({ ...o, [r.id]: true }))} data-testid={`align-lock-${r.id}`} /> {t("align.scaleLock")}</label>
                     </>
                   )}
-                <span>{t("align.flip")}</span>
+                <span title={t("align.tip.flip")}>{t("align.flip")}</span>
                 {AXES.map((a, n) => (
-                  <label key={a}>
+                  <label key={a} title={t("align.tip.flip")}>
                     <input type="checkbox" checked={fl[n]} onChange={(e) => set(n === 0 ? { flipX: e.target.checked } : n === 1 ? { flipY: e.target.checked } : { flipZ: e.target.checked })} data-testid={`align-flip${a}-${r.id}`} /> {a}
                   </label>
                 ))}
-                <button type="button" style={btn} disabled={isIdentityPlacement(p) || autoBusy} onClick={() => onChange(r.id, { ...IDENTITY_PLACEMENT })} data-testid={`align-reset-${r.id}`}>{t("align.reset")}</button>
+                <button type="button" style={btn} disabled={isIdentityPlacement(p) || autoBusy} onClick={() => onChange(r.id, { ...IDENTITY_PLACEMENT })} title={t("align.tip.resetRow")} data-testid={`align-reset-${r.id}`}>{t("align.reset")}</button>
               </div>
             )}
           </div>
@@ -203,23 +203,23 @@ export function StitchAlignPanel({
         <div key={r.id} style={{ color: "#e8c88a" }} data-testid={`align-warn-scale-${r.id}`}>⚠ {t("align.warn.scale", { name: r.name, pct: String(Math.round(Math.max(r.placement.sx, r.placement.sy, r.placement.sz) * 1000) / 10) })}</div>
       ))}
 
-      <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+      <label style={{ display: "flex", gap: 6, alignItems: "center" }} title={t("align.tip.oblique")}>
         <input type="checkbox" checked={oblique || obliqueNeeded} disabled={obliqueNeeded} onChange={(e) => onOblique(e.target.checked)} data-testid="align-oblique" /> {t("align.oblique")}
       </label>
       {(oblique || obliqueNeeded) && <div style={{ color: "#8a98a6" }}>{t("align.obliqueNote")}</div>}
 
       <div style={sep} />
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <b>{t("align.auto.scope")}</b>
-        <label><input type="radio" name="align-auto-scope" checked={autoScope === "translation"} disabled={autoBusy} onChange={() => onAutoScope("translation")} data-testid="align-auto-translation" /> {t("align.auto.scope.translation")}</label>
-        <label><input type="radio" name="align-auto-scope" checked={autoScope === "rigid"} disabled={autoBusy} onChange={() => onAutoScope("rigid")} data-testid="align-auto-rigid" /> {t("align.auto.scope.rigid")}</label>
-        <button type="button" style={btnPrimary} disabled={autoBusy || rows.length < 2} onClick={onAuto} data-testid="align-auto-run">{t("align.auto.run")}</button>
-        {autoBusy && <button type="button" style={btn} onClick={onStop} data-testid="align-auto-stop">{t("align.auto.stop")}</button>}
-        {autoBusy && <span style={{ color: "#9fd0ff" }} data-testid="align-auto-progress">{autoProgress}</span>}
+        <b title={t("align.tip.autoScope")}>{t("align.auto.scope")}</b>
+        <label title={t("align.tip.autoScope")}><input type="radio" name="align-auto-scope" checked={autoScope === "translation"} disabled={autoBusy} onChange={() => onAutoScope("translation")} data-testid="align-auto-translation" /> {t("align.auto.scope.translation")}</label>
+        <label title={t("align.tip.autoScope")}><input type="radio" name="align-auto-scope" checked={autoScope === "rigid"} disabled={autoBusy} onChange={() => onAutoScope("rigid")} data-testid="align-auto-rigid" /> {t("align.auto.scope.rigid")}</label>
+        <button type="button" style={btnPrimary} disabled={autoBusy || rows.length < 2} onClick={onAuto} title={t("align.tip.auto")} data-testid="align-auto-run">{t("align.auto.run")}</button>
+        {autoBusy && <button type="button" style={btn} onClick={onStop} title={t("align.tip.stop")} data-testid="align-auto-stop">{t("align.auto.stop")}</button>}
+        {autoBusy && <span style={{ color: "#9fd0ff" }} title={t("align.tip.auto")} data-testid="align-auto-progress">{autoProgress}</span>}
       </div>
-      <div style={{ color: "#8a98a6" }}>{t("align.auto.note")}</div>
+      <div style={{ color: "#8a98a6" }} title={t("align.tip.auto")}>{t("align.auto.note")}</div>
       {autoLines.length > 0 && (
-        <div data-testid="align-auto-result">
+        <div title={t("align.tip.auto")} data-testid="align-auto-result">
           {autoLines.map((l) => (
             <div key={l.key} style={{ color: l.kind === "applied" ? "#a8e0b0" : "#e8c88a" }} data-kind={l.kind}>
               {t(`align.auto.${l.kind}`, {
@@ -235,15 +235,15 @@ export function StitchAlignPanel({
         <>
           <div style={sep} />
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <b>{t("align.check")}</b>
+            <b title={t("align.tip.check")}>{t("align.check")}</b>
             {pairCount > 1 && Array.from({ length: pairCount }, (_, n) => (
-              <label key={n}><input type="radio" name="align-check-pair" checked={checkPair === n} onChange={() => onCheckPair(n)} data-testid={`align-check-pair-${n}`} /> {n + 1}→{n + 2}</label>
+              <label key={n} title={t("align.tip.pair")}><input type="radio" name="align-check-pair" checked={checkPair === n} onChange={() => onCheckPair(n)} data-testid={`align-check-pair-${n}`} /> {n + 1}→{n + 2}</label>
             ))}
           </div>
-          <div style={{ color: checkNcc ? "#c8d2dc" : "#8a98a6" }} data-testid="align-check-ncc" data-ncc={checkNcc ? checkNcc.ncc.toFixed(4) : ""}>
+          <div style={{ color: checkNcc ? "#c8d2dc" : "#8a98a6" }} title={t("align.tip.check")} data-testid="align-check-ncc" data-ncc={checkNcc ? checkNcc.ncc.toFixed(4) : ""}>
             {checkNcc ? t("align.check.ncc", { ncc: checkNcc.ncc.toFixed(3), n: String(checkNcc.count) }) : t("align.check.none")}
           </div>
-          <div style={{ display: "flex", gap: 6, opacity: checkBusy ? 0.6 : 1 }} data-testid="align-check" data-busy={checkBusy}>
+          <div style={{ display: "flex", gap: 6, opacity: checkBusy ? 0.6 : 1 }} title={t("align.tip.check")} data-testid="align-check" data-busy={checkBusy}>
             {check
               ? (["cor", "sag"] as const).map((v) => <Overlay key={v} ov={check} view={v} box={checkBox} />)
               : null}

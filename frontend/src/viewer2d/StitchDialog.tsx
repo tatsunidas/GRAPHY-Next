@@ -541,7 +541,7 @@ export function StitchDialog({
             else if (e.state === "failed") info = `${t("stitch.loadFailed")}: ${e.error}`;
             else if (v) info = `${e.loaded.modality}  ${v.dims[0]}×${v.dims[1]}×${v.dims[2]}  ${f2(v.spacing[0])}×${f2(v.spacing[1])}×${f2(v.spacing[2])} mm`;
             return (
-              <label key={c.id} style={row} data-testid={`stitch-candidate-${c.series.seriesInstanceUid}`}>
+              <label key={c.id} style={row} title={t("stitch.tip.candidate")} data-testid={`stitch-candidate-${c.series.seriesInstanceUid}`}>
                 <input
                   type="checkbox"
                   checked={!!checked[c.id]}
@@ -556,13 +556,13 @@ export function StitchDialog({
           })}
         </div>
 
-        <div style={{ fontSize: 12 }} data-testid="stitch-conditions">
+        <div style={{ fontSize: 12 }} title={t("stitch.tip.conditions")} data-testid="stitch-conditions">
           {VIOLATIONS.filter((k) => k !== "petReference" || hasPet).map((k) => {
             const bad = check.violations.includes(k);
             const noInput = selected.length === 0;
             const mark = noInput ? "–" : bad ? "✗" : "✓";
             return (
-              <div key={k} style={{ color: bad ? "#e8a0a0" : "#c8d2dc" }} data-testid={`stitch-cond-${k}`} data-ok={!noInput && !bad}>
+              <div key={k} style={{ color: bad ? "#e8a0a0" : "#c8d2dc" }} title={t(`stitch.tip.cond.${k}`)} data-testid={`stitch-cond-${k}`} data-ok={!noInput && !bad}>
                 {mark} {bad ? t(`stitch.reason.${k}`) : t(`stitch.ok.${k}`)}
               </div>
             );
@@ -571,7 +571,7 @@ export function StitchDialog({
 
         {picked.length >= 2 && (
           <div style={{ fontSize: 12, display: "flex", flexDirection: "column", gap: 4 }} data-testid="stitch-place">
-            <label style={row}>
+            <label style={row} title={t("stitch.tip.place")}>
               {t("stitch.place")}:
               <input type="radio" name="stitch-place" checked={placeMode === "coord"} onChange={() => setModeOver("coord")} data-testid="stitch-place-coord" /> {t("stitch.place.coord")}
               <input type="radio" name="stitch-place" checked={placeMode === "overlap"} onChange={() => setModeOver("overlap")} data-testid="stitch-place-overlap" /> {t("stitch.place.overlap")}
@@ -579,33 +579,33 @@ export function StitchDialog({
             {placeMode === "overlap" && (
               <>
                 {coincide && modeOver === null && <div style={{ color: "#9fd0ff" }} data-testid="stitch-place-note">{t("stitch.placeNote")}</div>}
-                <label style={row}>
+                <label style={row} title={t("stitch.tip.scope")}>
                   {t("stitch.overlapScope")}:
                   <input type="radio" name="stitch-overlap-scope" checked={!perPair} onChange={() => setPerPair(false)} data-testid="stitch-scope-common" /> {t("stitch.scope.common")}
                   <input type="radio" name="stitch-overlap-scope" checked={perPair} onChange={() => { setPairTexts(Array.from({ length: pairCount }, () => overlapText)); setPerPair(true); }} data-testid="stitch-scope-pair" /> {t("stitch.scope.pair")}
                 </label>
                 {!perPair && (
-                  <label style={row}>
+                  <label style={row} title={t("stitch.tip.overlap")}>
                     {t("stitch.overlapInput")}
                     <input style={num} value={overlapText} onChange={(e) => { touchedOverlap.current = true; setOverlapText(e.target.value); }} data-testid="stitch-overlap-input" />
                     {t("stitch.overlapHint")}
                   </label>
                 )}
                 {perPair && selected.slice(0, -1).map((_, i) => (
-                  <label key={i} style={{ ...row, paddingLeft: 8 }}>
+                  <label key={i} style={{ ...row, paddingLeft: 8 }} title={t("stitch.tip.pair")}>
                     {t("stitch.pairLabel", { a: String(i + 1), b: String(i + 2) })}
                     <input style={num} value={pairText(i)} onChange={(e) => setPairTexts((old) => Array.from({ length: pairCount }, (_, k) => (k === i ? e.target.value : old[k] ?? overlapText)))} data-testid={`stitch-pair-input-${i}`} />
                     {t("stitch.overlapHint")}
                   </label>
                 ))}
-                <label style={row}>
+                <label style={row} title={t("stitch.tip.dir")}>
                   {t("stitch.dir")}
                   <button type="button" style={btn} onClick={() => setReverse((r) => !r)} data-testid="stitch-reverse">{dirLabel}</button>
                 </label>
-                {matchBusy && <div style={{ color: "#8a98a6" }} data-testid="stitch-match-busy">{t("stitch.matchBusy")}</div>}
-                {!matchBusy && match && !match.res.comparable && <div style={{ color: "#8a98a6" }} data-testid="stitch-match-none">{t("stitch.matchNone")}</div>}
+                {matchBusy && <div style={{ color: "#8a98a6" }} title={t("stitch.tip.match")} data-testid="stitch-match-busy">{t("stitch.matchBusy")}</div>}
+                {!matchBusy && match && !match.res.comparable && <div style={{ color: "#8a98a6" }} title={t("stitch.tip.match")} data-testid="stitch-match-none">{t("stitch.matchNone")}</div>}
                 {!matchBusy && match && match.res.comparable && match.res.pairs.length > 0 && (
-                  <div style={{ color: "#c8d2dc" }} data-testid="stitch-match">
+                  <div style={{ color: "#c8d2dc" }} title={t("stitch.tip.match")} data-testid="stitch-match">
                     {t("stitch.match")}
                     {match.res.pairs.map((p, n) => (
                       <div key={n} style={{ paddingLeft: 8 }} data-testid={`stitch-match-pair-${n}`} data-score={p.score.toFixed(3)} data-overlap={p.overlapMm}>
@@ -615,7 +615,7 @@ export function StitchDialog({
                     {match.res.margin !== null && <div style={{ paddingLeft: 8 }} data-testid="stitch-match-margin">{t("stitch.matchMargin", { margin: match.res.margin.toFixed(2) })}</div>}
                   </div>
                 )}
-                <div style={{ display: "flex", flexDirection: "column", gap: 2 }} data-testid="stitch-order">
+                <div style={{ display: "flex", flexDirection: "column", gap: 2 }} title={t("stitch.tip.order")} data-testid="stitch-order">
                   {t("stitch.order")}
                   {selected.map((c, n) => (
                     <div key={c.id} style={{ ...row, paddingLeft: 8 }}>
@@ -632,7 +632,7 @@ export function StitchDialog({
 
         {picked.length >= 2 && (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            <button type="button" style={{ ...btn, alignSelf: "flex-start" }} onClick={() => setAlignOpen((v) => !v)} data-testid="stitch-align-toggle">
+            <button type="button" style={{ ...btn, alignSelf: "flex-start" }} onClick={() => setAlignOpen((v) => !v)} title={t("align.tip.toggle")} data-testid="stitch-align-toggle">
               {alignOpen ? "▾" : "▸"} {t("align.title")}
             </button>
             {check.violations.includes("orientation") && !oblique && !rotated && (
@@ -667,17 +667,17 @@ export function StitchDialog({
 
         {plan.base && (
           <div style={{ fontSize: 12, color: "#c8d2dc" }}>
-            <div data-testid="stitch-ranges">
+            <div title={t("stitch.tip.ranges")} data-testid="stitch-ranges">
               {t("stitch.ranges")}
               {rangeLines.map((l, n) => <div key={n} style={{ paddingLeft: 8 }}>{l}</div>)}
             </div>
-            <div data-testid="stitch-overlap">
+            <div title={t("stitch.tip.overlapGap")} data-testid="stitch-overlap">
               {t("stitch.overlapGap", { overlap: f1(plan.base.overlapMm), gap: f1(plan.base.gapMm) })}
             </div>
           </div>
         )}
 
-        <div ref={wrapRef}>
+        <div ref={wrapRef} title={t("stitch.tip.mip")}>
           <StitchMip
             mip={mip ? mip.images : null}
             spacing={mip ? mip.spacing : null}
@@ -686,7 +686,7 @@ export function StitchDialog({
             busy={mipBusy}
           />
         </div>
-        <label style={row}>
+        <label style={row} title={t("stitch.tip.blend")}>
           {t("stitch.overlapMode")}:
           <input type="radio" name="stitch-blend" checked={blendMode === "linear"} onChange={() => setBlendMode("linear")} data-testid="stitch-blend-linear" /> {t("stitch.linear")}
           <input type="radio" name="stitch-blend" checked={blendMode === "mean"} onChange={() => setBlendMode("mean")} data-testid="stitch-blend-mean" /> {t("stitch.mean")}
@@ -697,7 +697,7 @@ export function StitchDialog({
             </>
           )}
         </label>
-        <label style={row} title={t("stitch.gainNote")}>
+        <label style={row} title={t("stitch.tip.gain")}>
           <input type="checkbox" checked={gainOn} onChange={(e) => setGainOn(e.target.checked)} data-testid="stitch-gain" /> {t("stitch.gain")}
         </label>
         {gainOn && gainInfo && (
@@ -709,18 +709,18 @@ export function StitchDialog({
             ))}
           </div>
         )}
-        <label style={row}>
+        <label style={row} title={t("stitch.tip.spacing")}>
           {t("stitch.spacing")}
           {t("stitch.col")}<input style={num} value={spText[0]} disabled={!plan.base} onChange={(e) => setSp(0, e.target.value)} data-testid="stitch-sp-col" />
           {t("stitch.row")}<input style={num} value={spText[1]} disabled={!plan.base} onChange={(e) => setSp(1, e.target.value)} data-testid="stitch-sp-row" />
           {t("stitch.slice")}<input style={num} value={spText[2]} disabled={!plan.base} onChange={(e) => setSp(2, e.target.value)} data-testid="stitch-sp-slice" /> mm
         </label>
-        <label style={row}>
+        <label style={row} title={t("stitch.tip.background")}>
           {t("stitch.background")}
           <input style={num} value={bgText} disabled={!plan.base} onChange={(e) => setBgOver(e.target.value)} data-testid="stitch-background" />
         </label>
 
-        <div style={{ fontSize: 12, color: grid && bgValid ? "#c8d2dc" : "#e8a0a0" }} data-testid="stitch-output">
+        <div style={{ fontSize: 12, color: grid && bgValid ? "#c8d2dc" : "#e8a0a0" }} title={t("stitch.tip.output")} data-testid="stitch-output">
           {grid
             ? bgValid
               ? t("stitch.output", { cols: grid.dims[0], rows: grid.dims[1], n: grid.dims[2], mb: outMb })
@@ -729,8 +729,8 @@ export function StitchDialog({
         </div>
         {msg && <div style={{ fontSize: 12, color: "#9fd0ff" }} data-testid="stitch-message">{msg}</div>}
         <div style={footer}>
-          <button type="button" onClick={onClose} style={btn} data-testid="stitch-close">{t("stitch.close")}</button>
-          <button type="button" onClick={onSave} disabled={!grid || !check.ok || !bgValid || busy} style={btnPrimary} data-testid="stitch-save">
+          <button type="button" onClick={onClose} style={btn} title={t("stitch.tip.close")} data-testid="stitch-close">{t("stitch.close")}</button>
+          <button type="button" onClick={onSave} disabled={!grid || !check.ok || !bgValid || busy} style={btnPrimary} title={t("stitch.tip.save")} data-testid="stitch-save">
             {t("stitch.save")}
           </button>
         </div>

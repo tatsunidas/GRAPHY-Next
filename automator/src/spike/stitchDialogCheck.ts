@@ -247,6 +247,7 @@ async function perPairChecks(v: Page, d: DesktopDriver, s: any, studyUid: string
   };
   const dz = truth.spacingMm.slice as number, nz = truth.slices as number, nb = s.beds.length as number;
   check(await v.getByTestId("stitch-scope-common").isChecked(), "【組ごと】既定は「共通」");
+  await tipCoverage(v, `${s.set}・重なりを指定`);
   check((await v.getByTestId("stitch-pair-input-0").count()) === 0, "【組ごと】共通のときは組ごとの欄が出ない");
   const before = await total();
   await v.getByTestId("stitch-scope-pair").check();
@@ -254,6 +255,7 @@ async function perPairChecks(v: Page, d: DesktopDriver, s: any, studyUid: string
   const vals = [] as string[];
   for (let i = 0; i < nb - 1; i++) vals.push(await v.getByTestId(`stitch-pair-input-${i}`).inputValue());
   check(vals.length === nb - 1 && vals.every((x) => Number(x) === s.placement.overlapMm), "【組ごと】切替直後は各組が共通の値で初期化される", vals);
+  await tipCoverage(v, `${s.set}・組ごと`);
   const same = await total();
   check(same[0] === before[0] && same[1] === before[1], "【組ごと】切替直後は重なり・隙間が変わらない", [before, same]);
   // 8 mm と 4 mm: 合計 12 mm。出力の枚数 = (全長 − 12) / DZ
@@ -303,6 +305,57 @@ async function nccNow(v: Page): Promise<number> {
   return Number((await v.getByTestId("align-check-ncc").getAttribute("data-ncc")) || "NaN");
 }
 
+/** ダイアログ内の操作要素（input・button）のうち、自分にも祖先にも title が無いものを返す。 */
+async function scanTitles(v: Page): Promise<{ n: number; bad: string[] }> {
+  return v.getByTestId("stitch-dialog").evaluate((root) => {
+    const bad: string[] = [];
+    let n = 0;
+    root.querySelectorAll("input, button, select, textarea").forEach((el) => {
+      n++;
+      let e: Element | null = el;
+      let ok = false;
+      while (e && e !== root.parentElement) {
+        if ((e.getAttribute("title") ?? "").trim()) { ok = true; break; }
+        e = e.parentElement;
+      }
+      if (!ok) bad.push(el.getAttribute("data-testid") ?? el.outerHTML.slice(0, 80));
+    });
+    return { n, bad };
+  });
+}
+
+/** ツールチップの網羅: 操作要素のすべてに説明がある。負例: title の無い要素を足すと検出される。 */
+async function tipCoverage(v: Page, label: string): Promise<void> {
+  const r = await scanTitles(v);
+  console.log(`  ツールチップ網羅(${label}): 操作要素 ${r.n} 個・説明なし ${r.bad.length} 個 ${r.bad.slice(0, 5).join(",")}`);
+  check(r.n > 3 && r.bad.length === 0, `【ツールチップ】操作要素のすべてに説明がある（${label}・${r.n} 個）`, r.bad);
+  await v.getByTestId("stitch-dialog").evaluate((root) => {
+    const b = document.createElement("button");
+    b.setAttribute("data-testid", "tip-negative-control");
+    b.textContent = "x";
+    root.appendChild(b);
+  });
+  const neg = await scanTitles(v);
+  check(neg.bad.includes("tip-negative-control") && neg.bad.length === r.bad.length + 1, `【負例】title の無い要素を足すと検出される（${label}）`, neg.bad);
+  await v.getByTestId("tip-negative-control").evaluate((e) => e.remove());
+}
+
+/** 主な要素の説明の中身（取り違えの検出）。 */
+async function tipContents(v: Page): Promise<void> {
+  // 要素自身か、最も近い祖先の title（ブラウザが実際に出すもの）
+  const t = async (id: string) => v.getByTestId(id).first().evaluate((el) => {
+    let e: Element | null = el;
+    while (e) { const x = e.getAttribute("title"); if (x) return x; e = e.parentElement; }
+    return "";
+  });
+  const auto = await t("align-auto-run");
+  check(["対象", "方法", "採用の条件", "NCC", "隣り合う"].every((w) => auto.includes(w)), "【ツールチップ】自動で合わせるの説明に、対象・方法・採用の条件がある", auto.slice(0, 80));
+  check((await t("stitch-save")).includes("派生シリーズ"), "【ツールチップ】保存の説明が保存の内容");
+  check((await t("align-auto-translation")).includes("平行移動のみ"), "【ツールチップ】自動の範囲の説明");
+  check((await t("stitch-conditions")).includes("✓"), "【ツールチップ】条件の説明");
+  check((await t("align-reset-all")).includes("動かさない"), "【ツールチップ】すべてリセットの説明");
+}
+
 /** 位置合わせ: 既知のずれの内容を、自動・手動で戻し、保存した画素が真値に一致する。負例（ずれたまま）と対で見る。 */
 async function alignChecks(v: Page, d: DesktopDriver, s: any, studyUid: string): Promise<void> {
   const tag = s.set;
@@ -310,6 +363,8 @@ async function alignChecks(v: Page, d: DesktopDriver, s: any, studyUid: string):
   await v.getByTestId("stitch-align").waitFor({ timeout: 5000 });
   const rows = v.locator('[data-testid^="align-row-"]');
   check((await rows.count()) === 2, "【位置合わせ】シリーズごとの行が出る", await rows.count());
+  await tipCoverage(v, `${tag}・位置合わせ欄`);
+  await tipContents(v);
   const row1 = rows.filter({ hasText: `${tag} bed1` });
   const row2 = rows.filter({ hasText: `${tag} bed2` });
   const mk = row1.locator('[data-testid^="align-make-ref-"]');
@@ -467,7 +522,7 @@ async function main(): Promise<void> {
           continue;
         }
         if (s.set === "neg-rot5") await obliqueChecks(v);
-        if (s.set === "match3") await matchChecks(v, s);
+        if (s.set === "match3") { await tipCoverage(v, "match3・端の一致度"); await matchChecks(v, s); }
         else if (s.placement) await placementChecks(v, s);
         if (s.set === "stations3") await perPairChecks(v, d, s, studyUid, truth);
         await waitMip(v);
