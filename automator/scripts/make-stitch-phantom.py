@@ -5,8 +5,11 @@
 
 出力フォルダの下に、組ごと（別の患者）に 2 本のシリーズ（bed1/・bed2/）を作る:
   正例  a 重なり 9 枚 × 2.0 mm / b 2 本目を 0.4 間隔ずらす / c 2 本目だけ +100 / d 10 mm の隙間
-  負例  neg-rot5（2 本目の IOP を 5° 回す）/ neg-for（FoR 違い）/ neg-pid（PatientID 違い）
+  負例  neg-rot5（2 本目の IOP を 5° 回す）/ neg-pid（PatientID 違い）
         neg-modality（2 本目が MR）/ neg-pet（PET で SeriesTime だけ違う。放射性医薬品の情報付き）
+  FoR は条件にしない  for-diff（FoR だけ違う正例）
+  座標が全部同じ    stations2・stations3（IPP が同一で FoR が別。装置がステーションごとに座標を原点へ戻した状態。
+                    重なり 8 mm で + 方向へ並べたときの配置を truth.json の shift・placement に記録する）
 と、真値の材料 truth.json。
 
 値は **世界座標（LPS mm）の 1 次関数** v(x,y,z) = A·x + B·y + C·z + D を 1 つの連続した範囲で定義し、そこから
@@ -86,7 +89,7 @@ def make(setname, bedname, *, z0, iop=IOP0, add=0.0, modality="CT", patient, stu
         ds.AcquisitionTime = "130000"
         ds.Modality = modality
         ds.SeriesDescription = desc or (setname + " " + bedname)
-        ds.SeriesNumber, ds.InstanceNumber = (1 if bedname == "bed1" else 2), k + 1
+        ds.SeriesNumber, ds.InstanceNumber = int(bedname[3:]), k + 1
         ds.ImageOrientationPatient = [float(x) for x in iop]
         ds.ImagePositionPatient = [float(x) for x in ipp]
         ds.SliceThickness = DZ
@@ -164,14 +167,41 @@ sets = [
 th = math.radians(5)
 sets += [
     pair("neg-rot5", z0_2=Z2_A, iop2=[1.0, 0.0, 0.0, 0.0, math.cos(th), math.sin(th)], expect_ok=False),
-    pair("neg-for", z0_2=Z2_A, frame2=str(generate_uid()), expect_ok=False),
+    pair("for-diff", z0_2=Z2_A, frame2=str(generate_uid()), expect_ok=True),  # FoR は条件にしない
     pair("neg-pid", z0_2=Z2_A, patient2="STITCH-OTHER", expect_ok=False),
     pair("neg-modality", z0_2=Z2_A, modality2="MR", expect_ok=False),
     pair("neg-pet", z0_2=Z2_A, modality1="PT", modality2="PT", pet=True, time2="120100", expect_ok=False),
 ]
+
+
+def stations(setname, nbeds, overlap, adds):
+    """装置がステーションごとに座標を原点へ戻して書き出した状態（IPP が全部同じ・FoR が別）。
+    重なりを指定して並べたときの配置と真値を計算する（1 本目は動かさず、法線の + 方向へ、縁 = 中心 ± DZ/2 で測る）。"""
+    patient = "STITCH-" + setname.upper()
+    study = generate_uid()
+    beds = [make(setname, "bed%d" % (n + 1), z0=Z_BED1, add=adds[n], patient=patient, study=study,
+                 frame=generate_uid(), series_time="12%02d00" % n) for n in range(nbeds)]
+    hi = beds[0]["z1"] + DZ / 2
+    for b in beds[1:]:
+        lo = b["z0"] - DZ / 2
+        d = (hi - overlap) - lo
+        b["shift"] = d
+        b["z0"] += d
+        b["z1"] += d
+        hi = b["z1"] + DZ / 2
+    ov, gp = coverage(beds)
+    return {"set": setname, "expectOk": True, "beds": beds, "overlapMm": ov, "gapMm": gp,
+            "placement": {"overlapMm": overlap, "reverse": False}}
+
+
+sets += [stations("stations2", 2, 8.0, [0.0, 20.0]), stations("stations3", 3, 8.0, [0.0, 20.0, 40.0])]
 a = sets[0]
 assert abs(a["overlapMm"] - 18.0) < 1e-9 and abs(a["gapMm"]) < 1e-9, (a["overlapMm"], a["gapMm"])
 assert abs(sets[3]["gapMm"] - 10.0) < 1e-9, sets[3]["gapMm"]
+st2 = next(x for x in sets if x["set"] == "stations2")
+assert abs(st2["overlapMm"] - 8.0) < 1e-9 and abs(st2["gapMm"]) < 1e-9, (st2["overlapMm"], st2["gapMm"])
+st3 = next(x for x in sets if x["set"] == "stations3")
+assert abs(st3["overlapMm"] - 16.0) < 1e-9 and abs(st3["gapMm"]) < 1e-9, (st3["overlapMm"], st3["gapMm"])
 
 truth = {
     "func": {"A": A, "B": B, "C": C, "D": D},

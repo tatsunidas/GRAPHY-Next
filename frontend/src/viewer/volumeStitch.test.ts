@@ -5,7 +5,13 @@
 import { describe, expect, it } from "vitest";
 import { makeVolume, sampleTrilinear } from "./regGeometry";
 import {
+  MipAccumulator,
   checkStitchInputs,
+  coordinatesCoincide,
+  normalOfIop,
+  placeAlongNormal,
+  previewSpacing,
+  shiftInput,
   stitchSlices,
   stitchToGrid,
   unionGrid,
@@ -38,7 +44,6 @@ interface Opts {
   sz?: number;
   add?: number;
   tilt?: number; // この入力が持つ IOP の傾き（既定 0）
-  fr?: string;
   patient?: string;
   modality?: string;
   pet?: StitchPetInfo;
@@ -70,7 +75,6 @@ function makeInput(o: Opts): StitchInput {
   return {
     volume: vol0,
     iop,
-    frameOfReferenceUid: o.fr ?? "1.2.3",
     modality: o.modality ?? "CT",
     patientId: o.patient ?? "P1",
     pet: o.pet,
@@ -247,11 +251,8 @@ describe("checkStitchInputs（負例）", () => {
     b.iop = [1, 0, 0, 0, 1.0000005, 1e-7];
     expect(checkStitchInputs([makeInput({ w0: -100 }), b]).ok).toBe(true);
   });
-  it("FoR が違う → frameOfReference", () => {
-    expect(checkStitchInputs([makeInput({ w0: -100 }), makeInput({ w0: -60, fr: "9.9" })]).violations).toEqual(["frameOfReference"]);
-  });
-  it("FoR が空 → frameOfReference", () => {
-    expect(checkStitchInputs([makeInput({ w0: -100, fr: "" }), makeInput({ w0: -60, fr: "" })]).violations).toEqual(["frameOfReference"]);
+  it("FoR は条件にしない（装置がステーションごとに別の FoR を付ける）", () => {
+    expect(checkStitchInputs([makeInput({ w0: -100 }), makeInput({ w0: -60 })]).ok).toBe(true);
   });
   it("PatientID が違う → patient", () => {
     expect(checkStitchInputs([makeInput({ w0: -100 }), makeInput({ w0: -60, patient: "P2" })]).violations).toEqual(["patient"]);
@@ -375,5 +376,115 @@ describe("向きの許容差は大きさと間隔から導く", () => {
   it("許容角の内側（1°）は通し、外側（2°）は orientation", () => {
     expect(withTilt(1).ok).toBe(true);
     expect(withTilt(2).violations).toEqual(["orientation"]);
+  });
+});
+
+describe("位置の指定（重なり mm）", () => {
+  const n = normalOfIop(frame(0).iop);
+  const place = (ins: StitchInput[], ov: number, rev = false) =>
+    ins.map((x, t) => shiftInput(x, placeAlongNormal(ins, ov, rev)[t], n));
+
+  it("座標が全部同じ 2 本でも、指定した重なりになる（縁で測る）", () => {
+    const ins = place([makeInput({ w0: -100 }), makeInput({ w0: -100 })], 8);
+    const g = unionGrid(ins);
+    expect(g.overlapMm).toBeCloseTo(8, 6);
+    expect(g.gapMm).toBeCloseTo(0, 6);
+  });
+  it("負の重なりは隙間になる", () => {
+    const g = unionGrid(place([makeInput({ w0: -100 }), makeInput({ w0: -100 })], -6));
+    expect(g.overlapMm).toBeCloseTo(0, 6);
+    expect(g.gapMm).toBeCloseTo(6, 6);
+  });
+  it("3 本は隣り合うごとに同じ重なり（全体の長さ = 3L − 2·重なり）", () => {
+    const ins = place([0, 1, 2].map(() => makeInput({ w0: -100 })), 8);
+    const g = unionGrid(ins);
+    expect(g.overlapMm).toBeCloseTo(16, 6);
+    expect(g.gapMm).toBeCloseTo(0, 6);
+    expect(g.intervals[1][0]).toBeGreaterThan(g.intervals[0][0]);
+    expect(g.intervals[2][0]).toBeGreaterThan(g.intervals[1][0]);
+  });
+  it("向きを反転すると 2 本目が − 側に並ぶ（重なりは同じ）", () => {
+    const g = unionGrid(place([makeInput({ w0: -100 }), makeInput({ w0: -100 })], 8, true));
+    expect(g.overlapMm).toBeCloseTo(8, 6);
+    expect(g.intervals[1][1]).toBeLessThan(g.intervals[0][1]);
+  });
+  it("shiftInput は元を変えず、世界座標だけ d·n 動く", () => {
+    const a = makeInput({ w0: -100 });
+    const before = Array.from(a.volume.indexToWorld);
+    const b = shiftInput(a, 7, n);
+    expect(Array.from(a.volume.indexToWorld)).toEqual(before);
+    expect(b.volume.data).toBe(a.volume.data);
+    const w = (v: StitchInput, i: number, j: number, k: number) => {
+      const m = v.volume.indexToWorld;
+      return [0, 1, 2].map((r) => m[r * 4] * i + m[r * 4 + 1] * j + m[r * 4 + 2] * k + m[r * 4 + 3]);
+    };
+    const p = w(a, 3, 4, 5), q = w(b, 3, 4, 5);
+    [0, 1, 2].forEach((r) => expect(q[r] - p[r]).toBeCloseTo(7 * n[r], 9));
+    // world → index が index → world の逆になっている
+    const wi = b.volume.worldToIndex;
+    const idx = [0, 1, 2].map((r) => wi[r * 4] * q[0] + wi[r * 4 + 1] * q[1] + wi[r * 4 + 2] * q[2] + wi[r * 4 + 3]);
+    [3, 4, 5].forEach((v, r) => expect(idx[r]).toBeCloseTo(v, 6));
+  });
+  it("座標が一致しているかの判定（正例・負例）", () => {
+    expect(coordinatesCoincide([makeInput({ w0: -100 }), makeInput({ w0: -100 })])).toBe(true);
+    expect(coordinatesCoincide([makeInput({ w0: -100 }), makeInput({ w0: -80 })])).toBe(false);
+    expect(coordinatesCoincide([makeInput({ w0: -100 })])).toBe(false);
+  });
+});
+
+describe("MIP プレビュー", () => {
+  it("3 方向の最大が、全体を作って総当たりで取った値と一致する", () => {
+    const ins = [makeInput({ w0: -100 }), makeInput({ w0: -84, add: 30 })];
+    const g = unionGrid(ins);
+    const all = stitchToGrid(ins, g, "mean");
+    const [nx, ny, nz] = g.dims;
+    const acc = new MipAccumulator(g.dims);
+    [...stitchSlices(ins, g, "mean")].forEach((s, k) => acc.add(k, s));
+    const r = acc.result();
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      let m = -Infinity;
+      for (let k = 0; k < nz; k++) m = Math.max(m, all[k][j * nx + i]);
+      expect(r.ax[j * nx + i]).toBeCloseTo(m, 4);
+    }
+    for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) {
+      let m = -Infinity;
+      for (let j = 0; j < ny; j++) m = Math.max(m, all[k][j * nx + i]);
+      expect(r.cor[k * nx + i]).toBeCloseTo(m, 4);
+    }
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) {
+      let m = -Infinity;
+      for (let i = 0; i < nx; i++) m = Math.max(m, all[k][j * nx + i]);
+      expect(r.sag[k * ny + j]).toBeCloseTo(m, 4);
+    }
+  });
+  it("1 次関数なら MIP は解析的な端の値（A>0・B<0・C>0）", () => {
+    const ins = [makeInput({ w0: -100 }), makeInput({ w0: -84 })];
+    const g = unionGrid(ins);
+    const [nx, ny, nz] = g.dims;
+    const acc = new MipAccumulator(g.dims);
+    [...stitchSlices(ins, g, "mean")].forEach((s, k) => acc.add(k, s));
+    const r = acc.result();
+    const m = g.indexToWorld;
+    const at = (i: number, j: number, k: number) =>
+      truth(m[0] * i + m[1] * j + m[2] * k + m[3], m[4] * i + m[5] * j + m[6] * k + m[7], m[8] * i + m[9] * j + m[10] * k + m[11]);
+    expect(r.ax[3 * nx + 2]).toBeCloseTo(at(2, 3, nz - 1), 3); // z が最大の面
+    expect(r.cor[4 * nx + 5]).toBeCloseTo(at(5, 0, 4), 3); //     y（B<0）が最小の j=0
+    expect(r.sag[4 * ny + 5]).toBeCloseTo(at(nx - 1, 5, 4), 3); // x（A>0）が最大の i
+  });
+  it("覆われない画素は NaN（隙間）", () => {
+    const ins = [makeInput({ w0: -100 }), makeInput({ w0: -60 })];
+    const g = unionGrid(ins);
+    const acc = new MipAccumulator(g.dims);
+    [...stitchSlices(ins, g, "mean")].forEach((s, k) => acc.add(k, s));
+    const nanRows = Array.from({ length: g.dims[2] }, (_, k) => Number.isNaN(acc.result().cor[k * g.dims[0]]));
+    expect(nanRows.some(Boolean)).toBe(true);
+    expect(nanRows[0]).toBe(false);
+  });
+  it("プレビューの間隔: 最長辺が maxPx に収まり、出力より細かくならない", () => {
+    const sp = previewSpacing({ dims: [100, 100, 200], spacing: [1, 1, 2] }, 100);
+    expect(sp[0]).toBeCloseTo(4, 9); // 最長 400 mm / 100 px
+    expect(sp[2]).toBeCloseTo(4, 9);
+    const fine = previewSpacing({ dims: [10, 10, 10], spacing: [1, 1, 1] }, 1000);
+    expect(fine).toEqual([1, 1, 1]);
   });
 });

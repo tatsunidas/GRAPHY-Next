@@ -36,7 +36,7 @@ function makeInput(w0: number, add = 0, nz = 10): StitchInput {
             m[4] * i + m[5] * j + m[6] * k + m[7],
             m[8] * i + m[9] * j + m[10] * k + m[11],
           ) + add;
-  return { volume: vol0, iop: IOP, frameOfReferenceUid: "1.2.3", modality: "CT", patientId: "P1" };
+  return { volume: vol0, iop: IOP, modality: "CT", patientId: "P1" };
 }
 
 function decode(pixels: string): Int16Array {
@@ -127,12 +127,11 @@ describe("つなぎ合わせ → 保存要求（正例）", () => {
 });
 
 describe("入力の組み立て", () => {
-  it("toStitchInput は iop・FoR・モダリティ・体積をそのまま写す", () => {
+  it("toStitchInput は iop・モダリティ・体積をそのまま写す", () => {
     const v = makeInput(0).volume;
-    const x = toStitchInput({ volume: v, iop: IOP, frameOfReferenceUid: "F", modality: "MR" }, "PID");
+    const x = toStitchInput({ volume: v, iop: IOP, modality: "MR" }, "PID");
     expect(x.volume).toBe(v);
     expect(x.iop).toBe(IOP);
-    expect(x.frameOfReferenceUid).toBe("F");
     expect(x.modality).toBe("MR");
     expect(x.patientId).toBe("PID");
   });
@@ -209,10 +208,9 @@ describe("負例", () => {
     expect(() => concatSlices([1, 2, 3].map(() => new Float32Array(3)), g)).toThrow();
   });
 
-  it("患者・FoR・モダリティ・向き違いは理由つきで拒否される", () => {
+  it("患者・モダリティ・向き違いは理由つきで拒否される", () => {
     const a = makeInput(-100);
     expect(checkStitchInputs([a, { ...makeInput(-98), patientId: "P2" }]).violations).toEqual(["patient"]);
-    expect(checkStitchInputs([a, { ...makeInput(-98), frameOfReferenceUid: "9" }]).violations).toEqual(["frameOfReference"]);
     expect(checkStitchInputs([a, { ...makeInput(-98), modality: "MR" }]).violations).toEqual(["modality"]);
     const t = (5 * Math.PI) / 180;
     expect(

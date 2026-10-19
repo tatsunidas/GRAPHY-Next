@@ -6,7 +6,7 @@
  * つなぎ合わせダイアログ（第 1 段: 同じ座標系・同じ向きの部分シリーズを、重なりは平均で 1 本の派生シリーズにする）。
  * 設計: `fw/volume-regrid-design.md`「結合」。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { metaData } from "@cornerstonejs/core";
 import { useI18n } from "../i18n/i18n";
 import type { Study, Series, Instance } from "../api";
@@ -18,9 +18,16 @@ import { suvForImageId } from "../viewer/suvStore";
 import { extractSuvParams } from "../viewer/suv";
 import { getAppliedVolumeMaxMb } from "../viewer/volumeMemory";
 import {
+  MipAccumulator,
   checkStitchInputs,
+  coordinatesCoincide,
+  normalOfIop,
+  placeAlongNormal,
+  previewSpacing,
+  shiftInput,
   stitchSlices,
   unionGrid,
+  type MipImages,
   type StitchGrid,
   type StitchInput,
   type StitchViolation,
@@ -33,6 +40,7 @@ import {
   stitchDerivation,
   toStitchInput,
 } from "../viewer/stitchInputs";
+import { StitchMip } from "./StitchMip";
 
 export interface StitchCandidate {
   id: string;
@@ -49,7 +57,7 @@ type Entry =
   | { state: "unsupported" }
   | { state: "failed"; error: string };
 
-const VIOLATIONS: StitchViolation[] = ["tooFew", "patient", "frameOfReference", "orientation", "modality", "petReference"];
+const VIOLATIONS: StitchViolation[] = ["tooFew", "patient", "orientation", "modality", "petReference"];
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 const MB = 1024 * 1024;
 
@@ -77,6 +85,20 @@ export function StitchDialog({
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const alive = useRef(true);
+  // 位置の指定（座標が位置関係を表さないデータ用）。null は自動（座標が全部同じなら「重なりを指定」）。
+  const [modeOver, setModeOver] = useState<"coord" | "overlap" | null>(null);
+  const [overlapText, setOverlapText] = useState("0");
+  const [reverse, setReverse] = useState(false);
+  const [orderOver, setOrderOver] = useState<string[] | null>(null);
+  const [mip, setMip] = useState<{ images: MipImages; spacing: [number, number, number] } | null>(null);
+  const [mipBusy, setMipBusy] = useState(false);
+  const mipGen = useRef(0);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState(0);
+  useLayoutEffect(() => {
+    const w = wrapRef.current?.clientWidth ?? 0;
+    setBox(Math.max(0, Math.floor((w - 12) / 3)));
+  }, []);
 
   useEffect(() => {
     alive.current = true;
@@ -110,23 +132,45 @@ export function StitchDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const selected = useMemo(
+  const picked = useMemo(
     () => candidates.filter((c) => checked[c.id] && entries[c.id]?.state === "ready"),
     [candidates, checked, entries],
   );
-  const selectedKey = selected.map((c) => c.id).join("|");
-  useEffect(() => { setSpOver(null); setBgOver(null); }, [selectedKey]);
+  const pickedKey = picked.map((c) => c.id).join("|");
+  // 並べる順（↑↓で変えたもの。無いものは候補の順のまま後ろ）。
+  const selected = useMemo(() => {
+    if (!orderOver) return picked;
+    const rank = new Map(orderOver.map((id, n) => [id, n] as const));
+    return [...picked].sort((a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity));
+  }, [picked, orderOver]);
+  useEffect(() => { setSpOver(null); setBgOver(null); }, [pickedKey]);
 
-  const inputs = useMemo(
-    () => selected.map((c) => (entries[c.id] as Extract<Entry, { state: "ready" }>).input),
+  // SUV の乗数がかかっている入力は、入力ごとの乗数でモダリティ値へ戻す（保存・プレビューとも同じ値で結合する）。
+  const bases = useMemo(
+    () => selected.map((c) => {
+      const e = entries[c.id] as Extract<Entry, { state: "ready" }>;
+      return e.suvScale != null ? divideInput(e.input, e.suvScale) : e.input;
+    }),
     [selected, entries],
   );
+
+  const coincide = useMemo(() => coordinatesCoincide(bases), [bases]);
+  const placeMode = modeOver ?? (coincide ? "overlap" : "coord");
+  const overlapVal = Number(overlapText.trim());
+  const overlapValid = overlapText.trim() !== "" && Number.isFinite(overlapVal);
+  const normal = useMemo(() => (bases.length > 0 ? normalOfIop(bases[0].iop) : ([0, 0, 1] as [number, number, number])), [bases]);
+  const shifts = useMemo(
+    () => (placeMode === "overlap" && overlapValid && bases.length > 1 ? placeAlongNormal(bases, overlapVal, reverse) : bases.map(() => 0)),
+    [placeMode, overlapValid, overlapVal, bases, reverse],
+  );
+  const inputs = useMemo(() => bases.map((b, n) => shiftInput(b, shifts[n], normal)), [bases, shifts, normal]);
 
   const check = useMemo(() => checkStitchInputs(inputs), [inputs]);
 
   // 条件を満たすときだけ格子を作る（違反があれば何も計算しない）。
   const plan = useMemo((): { grid: StitchGrid | null; base: StitchGrid | null; reason: string } => {
     if (!check.ok) return { grid: null, base: null, reason: "" };
+    if (placeMode === "overlap" && !overlapValid) return { grid: null, base: null, reason: t("stitch.invalidOverlap") };
     try {
       const base = unionGrid(inputs);
       if (!spOver) return { grid: base, base, reason: "" };
@@ -136,7 +180,7 @@ export function StitchDialog({
     } catch (e) {
       return { grid: null, base: null, reason: String(e) };
     }
-  }, [check, inputs, spOver, t]);
+  }, [check, inputs, spOver, t, placeMode, overlapValid]);
 
   const defaultBg = useMemo(() => (check.ok ? stitchBackground(inputs) : 0), [check.ok, inputs]);
   const bgText = bgOver ?? String(defaultBg);
@@ -144,6 +188,48 @@ export function StitchDialog({
   const bgValid = bgText.trim() !== "" && Number.isFinite(bgValue);
 
   const grid = plan.grid;
+
+  // MIP プレビュー: 表示する大きさに合わせた粗い格子で結合し、3 方向の最大を集計する。設定が変わるたびに計算し直す
+  // （入力の途中で何度も走らないよう少し待ち、古い計算は世代番号で捨てる）。
+  useEffect(() => {
+    const gen = ++mipGen.current;
+    if (!grid || !check.ok || box <= 0) { setMip(null); setMipBusy(false); return; }
+    setMipBusy(true);
+    (async () => {
+      await new Promise((r) => setTimeout(r, 150));
+      if (gen !== mipGen.current) return;
+      const sp = previewSpacing(grid, Math.round(box * (window.devicePixelRatio || 1)));
+      const pg = unionGrid(inputs, sp);
+      const acc = new MipAccumulator(pg.dims);
+      let k = 0;
+      for (const s of stitchSlices(inputs, pg, "mean")) {
+        acc.add(k++, s);
+        if (k % 2 === 0) {
+          await tick();
+          if (gen !== mipGen.current) return;
+        }
+      }
+      if (gen !== mipGen.current) return;
+      setMip({ images: acc.result(), spacing: pg.spacing });
+      setMipBusy(false);
+    })().catch((e) => { if (gen === mipGen.current) { setMip(null); setMipBusy(false); setMsg(String(e)); } });
+    return () => { mipGen.current++; };
+  }, [grid, check.ok, inputs, box]);
+
+  const move = (n: number, d: -1 | 1) => {
+    const ids = selected.map((c) => c.id);
+    const m = n + d;
+    if (m < 0 || m >= ids.length) return;
+    [ids[n], ids[m]] = [ids[m], ids[n]];
+    setOrderOver(ids);
+  };
+  const dom = normal.map(Math.abs).indexOf(Math.max(...normal.map(Math.abs)));
+  const sign = reverse ? -1 : 1;
+  const dirLabel = dom === 2 ? (normal[2] * sign > 0 ? t("stitch.dir.head") : t("stitch.dir.foot")) : (sign > 0 ? t("stitch.dir.plus") : t("stitch.dir.minus"));
+  const hasPet = selected.some((c) => {
+    const m = (entries[c.id] as Extract<Entry, { state: "ready" }>).loaded.modality;
+    return m === "PT" || m === "NM";
+  });
   const outMb = grid ? Math.round(estimateGridBytes(grid) / MB) : 0;
   const inMb = Math.round(inputs.reduce((s, x) => s + x.volume.data.byteLength, 0) / MB);
 
@@ -156,12 +242,7 @@ export function StitchDialog({
     setMsg(t("stitch.saving"));
     try {
       await tick();
-      // SUV の乗数がかかっている入力は、入力ごとの乗数でモダリティ値へ戻してから結合する。
-      const prepared = selected.map((c) => {
-        const e = entries[c.id] as Extract<Entry, { state: "ready" }>;
-        return e.suvScale != null ? divideInput(e.input, e.suvScale) : e.input;
-      });
-      const data = concatSlices(stitchSlices(prepared, grid, "mean"), grid);
+      const data = concatSlices(stitchSlices(inputs, grid, "mean"), grid);
       // テンプレート（属性を引き継ぐ 1 本）は法線方向で最も手前の入力。
       let front = 0;
       grid.intervals.forEach((iv, n) => { if (iv[0] < grid.intervals[front][0]) front = n; });
@@ -236,7 +317,7 @@ export function StitchDialog({
         </div>
 
         <div style={{ fontSize: 12 }} data-testid="stitch-conditions">
-          {VIOLATIONS.map((k) => {
+          {VIOLATIONS.filter((k) => k !== "petReference" || hasPet).map((k) => {
             const bad = check.violations.includes(k);
             const noInput = selected.length === 0;
             const mark = noInput ? "–" : bad ? "✗" : "✓";
@@ -247,6 +328,40 @@ export function StitchDialog({
             );
           })}
         </div>
+
+        {picked.length >= 2 && (
+          <div style={{ fontSize: 12, display: "flex", flexDirection: "column", gap: 4 }} data-testid="stitch-place">
+            <label style={row}>
+              {t("stitch.place")}:
+              <input type="radio" name="stitch-place" checked={placeMode === "coord"} onChange={() => setModeOver("coord")} data-testid="stitch-place-coord" /> {t("stitch.place.coord")}
+              <input type="radio" name="stitch-place" checked={placeMode === "overlap"} onChange={() => setModeOver("overlap")} data-testid="stitch-place-overlap" /> {t("stitch.place.overlap")}
+            </label>
+            {placeMode === "overlap" && (
+              <>
+                {coincide && modeOver === null && <div style={{ color: "#9fd0ff" }} data-testid="stitch-place-note">{t("stitch.placeNote")}</div>}
+                <label style={row}>
+                  {t("stitch.overlapInput")}
+                  <input style={num} value={overlapText} onChange={(e) => setOverlapText(e.target.value)} data-testid="stitch-overlap-input" />
+                  {t("stitch.overlapHint")}
+                </label>
+                <label style={row}>
+                  {t("stitch.dir")}
+                  <button type="button" style={btn} onClick={() => setReverse((r) => !r)} data-testid="stitch-reverse">{dirLabel}</button>
+                </label>
+                <div style={{ display: "flex", flexDirection: "column", gap: 2 }} data-testid="stitch-order">
+                  {t("stitch.order")}
+                  {selected.map((c, n) => (
+                    <div key={c.id} style={{ ...row, paddingLeft: 8 }}>
+                      <span>{n + 1}. {c.series.seriesDescription || c.series.seriesInstanceUid}</span>
+                      <button type="button" style={btn} disabled={n === 0} onClick={() => move(n, -1)} title={t("stitch.up")} data-testid={`stitch-up-${n}`}>↑</button>
+                      <button type="button" style={btn} disabled={n === selected.length - 1} onClick={() => move(n, 1)} title={t("stitch.down")} data-testid={`stitch-down-${n}`}>↓</button>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         {plan.base && (
           <div style={{ fontSize: 12, color: "#c8d2dc" }}>
@@ -260,6 +375,15 @@ export function StitchDialog({
           </div>
         )}
 
+        <div ref={wrapRef}>
+          <StitchMip
+            mip={mip ? mip.images : null}
+            spacing={mip ? mip.spacing : null}
+            box={box}
+            labels={{ ax: t("stitch.mip.ax"), sag: t("stitch.mip.sag"), cor: t("stitch.mip.cor") }}
+            busy={mipBusy}
+          />
+        </div>
         <label style={row}>
           {t("stitch.overlapMode")}:
           <input type="radio" checked readOnly data-testid="stitch-mode-mean" /> {t("stitch.mean")}
@@ -300,14 +424,17 @@ const backdrop: React.CSSProperties = {
 };
 const panel: React.CSSProperties = {
   background: "#1a2129", border: "1px solid #2c3742", borderRadius: 8, padding: 14,
-  minWidth: 520, maxWidth: 680, display: "flex", flexDirection: "column", gap: 10, color: "#e8edf2",
+  minWidth: 640, maxWidth: 760, maxHeight: "92vh", overflowY: "auto", display: "flex", flexDirection: "column", gap: 10, color: "#e8edf2",
 };
 const header: React.CSSProperties = { fontWeight: 600, fontSize: 14 };
 const row: React.CSSProperties = { display: "flex", alignItems: "center", gap: 6, fontSize: 12 };
 const num: React.CSSProperties = {
   width: 70, background: "#0f151b", color: "#e8edf2", border: "1px solid #2c3742", borderRadius: 4, padding: "2px 4px",
 };
-const footer: React.CSSProperties = { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 };
+const footer: React.CSSProperties = {
+  display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2,
+  position: "sticky", bottom: -14, background: "#1a2129", padding: "8px 0 0",
+};
 const btn: React.CSSProperties = {
   background: "#26303a", color: "#e8edf2", border: "1px solid #2c3742", borderRadius: 4, padding: "4px 12px", cursor: "pointer",
 };

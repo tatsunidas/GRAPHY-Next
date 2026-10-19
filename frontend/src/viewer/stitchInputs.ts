@@ -14,7 +14,6 @@ import type { StitchGrid, StitchInput, StitchPetInfo } from "./volumeStitch";
 export interface StitchLoaded {
   readonly volume: RegVolume;
   readonly iop: number[];
-  readonly frameOfReferenceUid: string;
   readonly modality: string;
 }
 
@@ -22,7 +21,6 @@ export function toStitchInput(loaded: StitchLoaded, patientId: string, pet?: Sti
   return {
     volume: loaded.volume,
     iop: loaded.iop,
-    frameOfReferenceUid: loaded.frameOfReferenceUid,
     modality: loaded.modality,
     patientId,
     pet,

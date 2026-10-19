@@ -23,7 +23,6 @@ export interface StitchInput {
   volume: RegVolume;
   /** DICOM の IOP（行方向 3, 列方向 3 の順で DICOM の並びそのまま）。 */
   iop: number[];
-  frameOfReferenceUid: string;
   modality: string;
   patientId: string;
   pet?: StitchPetInfo;
@@ -31,7 +30,6 @@ export interface StitchInput {
 
 export type StitchViolation =
   | "patient"
-  | "frameOfReference"
   | "orientation"
   | "modality"
   | "petReference"
@@ -91,9 +89,6 @@ export function checkStitchInputs(inputs: readonly StitchInput[]): StitchCheck {
   if (inputs.length > 0) {
     const f = inputs[0];
     if (inputs.some((x) => x.patientId !== f.patientId)) v.add("patient");
-    if (!f.frameOfReferenceUid || inputs.some((x) => x.frameOfReferenceUid !== f.frameOfReferenceUid)) {
-      v.add("frameOfReference");
-    }
     if (inputs.some((x) => x.modality !== f.modality)) v.add("modality");
 
     const r0 = unit(f.iop[0], f.iop[1], f.iop[2]);
@@ -130,7 +125,7 @@ export function checkStitchInputs(inputs: readonly StitchInput[]): StitchCheck {
     }
   }
   const order: StitchViolation[] = [
-    "tooFew", "patient", "frameOfReference", "orientation", "modality", "petReference",
+    "tooFew", "patient", "orientation", "modality", "petReference",
   ];
   const violations = order.filter((k) => v.has(k));
   return { ok: violations.length === 0, violations };
@@ -352,4 +347,122 @@ export function stitchToGrid(
   overlap: "mean",
 ): Float32Array[] {
   return [...stitchSlices(inputs, grid, overlap)];
+}
+
+/** IOP から求めた法線（行方向 × 列方向）。`unionGrid` が使う軸と同じ。 */
+export function normalOfIop(iop: readonly number[]): [number, number, number] {
+  const rc = unit(iop[0], iop[1], iop[2]);
+  const rr = unit(iop[3], iop[4], iop[5]);
+  return [
+    rc[1] * rr[2] - rc[2] * rr[1],
+    rc[2] * rr[0] - rc[0] * rr[2],
+    rc[0] * rr[1] - rc[1] * rr[0],
+  ];
+}
+
+/** 入力の法線方向の縁（ボクセル中心 ± スライス間隔/2）。 */
+function normalEdges(input: StitchInput, n: readonly number[]): [number, number] {
+  const iop = input.iop;
+  const [, , r] = projectedRanges(input.volume, unit(iop[0], iop[1], iop[2]), unit(iop[3], iop[4], iop[5]), n);
+  const h = input.volume.spacing[2] / 2;
+  return [r[0] - h, r[1] + h];
+}
+
+/**
+ * 全入力の法線方向の位置がほぼ同じ（= 座標が位置関係を表していない）か。
+ * 装置がステーションごとに座標を原点に戻して書き出すと、IPP が全部同じになる。
+ * 区間の端のずれが全入力の最小スライス間隔の半分以内なら「同じ」とみなす。
+ */
+export function coordinatesCoincide(inputs: readonly StitchInput[]): boolean {
+  if (inputs.length < 2) return false;
+  const n = normalOfIop(inputs[0].iop);
+  const edges = inputs.map((x) => normalEdges(x, n));
+  const tol = Math.min(...inputs.map((x) => x.volume.spacing[2])) / 2;
+  return edges.every((e) => Math.abs(e[0] - edges[0][0]) <= tol && Math.abs(e[1] - edges[0][1]) <= tol);
+}
+
+/**
+ * 入力を並べた順に、隣り合う 2 本の重なりが `overlapMm`（負なら隙間）になる法線方向のずらし量 [mm] を返す。
+ * 1 本目は動かさない。`reverse` なら法線の − 方向へ並べる。結果は `inputs` と同じ順。
+ */
+export function placeAlongNormal(
+  inputs: readonly StitchInput[],
+  overlapMm: number,
+  reverse: boolean,
+): number[] {
+  if (inputs.length === 0) return [];
+  const n = normalOfIop(inputs[0].iop);
+  const shifts: number[] = [0];
+  let [lo, hi] = normalEdges(inputs[0], n);
+  for (let t = 1; t < inputs.length; t++) {
+    const [a, b] = normalEdges(inputs[t], n);
+    const d = reverse ? lo + overlapMm - b : hi - overlapMm - a;
+    shifts.push(d);
+    lo = a + d;
+    hi = b + d;
+  }
+  return shifts;
+}
+
+/** 法線方向に `d` mm 平行移動した入力（データは共有。元は変えない）。 */
+export function shiftInput(input: StitchInput, d: number, n: readonly number[]): StitchInput {
+  if (d === 0) return input;
+  const v = input.volume;
+  const i2w = Float64Array.from(v.indexToWorld);
+  const w2i = Float64Array.from(v.worldToIndex);
+  for (let r = 0; r < 3; r++) {
+    i2w[r * 4 + 3] += d * n[r];
+    w2i[r * 4 + 3] -= d * (w2i[r * 4] * n[0] + w2i[r * 4 + 1] * n[1] + w2i[r * 4 + 2] * n[2]);
+  }
+  return { ...input, volume: { ...v, indexToWorld: i2w, worldToIndex: w2i } };
+}
+
+/**
+ * プレビュー用の間隔。最長の辺が `maxPx` 画素に収まるよう、軸ごとに「出力の間隔」と「最長の辺 / maxPx」の大きい方を採る
+ * （出力より細かくはしない）。
+ */
+export function previewSpacing(grid: Pick<StitchGrid, "dims" | "spacing">, maxPx: number): [number, number, number] {
+  const ext = grid.dims.map((d, a) => d * grid.spacing[a]);
+  const iso = Math.max(...ext) / Math.max(1, maxPx);
+  return [0, 1, 2].map((a) => Math.max(grid.spacing[a], iso)) as [number, number, number];
+}
+
+export interface MipImages {
+  dims: [number, number, number];
+  /** 軸位断（k 方向の最大）。幅 nx・高さ ny。`ax[j·nx + i]`。 */
+  ax: Float32Array;
+  /** 冠状断（j 方向の最大）。幅 nx・高さ nz。`cor[k·nx + i]`。 */
+  cor: Float32Array;
+  /** 矢状断（i 方向の最大）。幅 ny・高さ nz。`sag[k·ny + j]`。 */
+  sag: Float32Array;
+}
+
+/** `stitchSlices` のスライスを 1 枚ずつ受けて 3 方向の MIP を集計する（全体を保持しない）。NaN は無視。 */
+export class MipAccumulator {
+  private readonly ax: Float32Array;
+  private readonly cor: Float32Array;
+  private readonly sag: Float32Array;
+  constructor(private readonly dims: [number, number, number]) {
+    const [nx, ny, nz] = dims;
+    this.ax = new Float32Array(nx * ny).fill(-Infinity);
+    this.cor = new Float32Array(nx * nz).fill(-Infinity);
+    this.sag = new Float32Array(ny * nz).fill(-Infinity);
+  }
+  add(k: number, slice: Float32Array): void {
+    const [nx, ny] = this.dims;
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        const v = slice[j * nx + i];
+        if (Number.isNaN(v)) continue;
+        if (v > this.ax[j * nx + i]) this.ax[j * nx + i] = v;
+        if (v > this.cor[k * nx + i]) this.cor[k * nx + i] = v;
+        if (v > this.sag[k * ny + j]) this.sag[k * ny + j] = v;
+      }
+    }
+  }
+  /** どの入力も覆わなかった画素は NaN。 */
+  result(): MipImages {
+    const fix = (a: Float32Array) => a.map((v) => (v === -Infinity ? NaN : v));
+    return { dims: this.dims, ax: fix(this.ax), cor: fix(this.cor), sag: fix(this.sag) };
+  }
 }
