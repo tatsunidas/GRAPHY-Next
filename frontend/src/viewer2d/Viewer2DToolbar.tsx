@@ -243,6 +243,8 @@ export interface ViewerActions {
   openHistogram(): void;
   /** 対象タイルのシリーズでリサンプル・切り抜きダイアログを開く。 */
   openResample(): void;
+  /** 開いている患者のタイルを候補に、つなぎ合わせダイアログを開く。 */
+  openStitch(): void;
   /** 対象タイルの表示中スライス 1 枚でフーリエ解析（2D-DFT）ダイアログを開く。 */
   openFourier(): void;
   /** 対象タイル（PET のみ）で SUV 校正ダイアログを開く。 */
