@@ -9,6 +9,7 @@
  * real は真値が無いので、画面の判定を表示するだけ（合否は付けない）。
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { Page } from "@playwright/test";
 
@@ -381,6 +382,7 @@ async function main(): Promise<void> {
           dir = await saveAndDownload(v, d, studyUid, "real");
         } catch (err) {
           console.log(`  [保存で例外] ${String(err).split("\n")[0]}`);
+          console.log(`  [空きメモリ] ${Math.round(os.freemem() / 1048576)} MB / ${Math.round(os.totalmem() / 1048576)} MB`);
           await new Promise((r) => setTimeout(r, 1500));
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           console.log(`  [render-process-gone] ${JSON.stringify(await d.app.evaluate(() => (globalThis as any).__gone))}`);
