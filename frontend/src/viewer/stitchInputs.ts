@@ -80,13 +80,19 @@ export function stitchDerivation(
   seriesUids: readonly string[],
   grid: Pick<StitchGrid, "dims" | "spacing">,
   blend: BlendOptions = BLEND_MEAN,
+  /** 入力と同じ順の位置合わせの記述（`describePlacement`）。空文字は動かしていない入力。 */
+  placements: readonly string[] = [],
 ): string {
   const [nx, ny, nz] = grid.dims;
   const [a, b, k] = grid.spacing;
   const how = blend.mode === "linear" ? `linear, range ${((blend.fraction ?? 1) * 100).toFixed(0)}%` : "mean";
   const gains = blend.gains ? `, gains [${blend.gains.map((g) => g.toFixed(3)).join(", ")}]` : "";
+  const moved = placements
+    .map((d, n) => (d ? `${seriesUids[n]}: ${d}` : ""))
+    .filter(Boolean);
+  const align = moved.length > 0 ? `, alignment {${moved.join("; ")}}` : "";
   return (
-    `Stitched (overlap: ${how}${gains}) from ${seriesUids.length} series [${seriesUids.join(", ")}] ` +
+    `Stitched (overlap: ${how}${gains}${align}) from ${seriesUids.length} series [${seriesUids.join(", ")}] ` +
     `to ${nx}x${ny}x${nz}, spacing ${a.toFixed(3)}x${b.toFixed(3)}x${k.toFixed(3)} mm (col x row x slice)`
   );
 }
