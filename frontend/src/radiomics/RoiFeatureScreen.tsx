@@ -459,6 +459,9 @@ export function RoiFeatureScreen() {
             </button>
           </div>
           <div style={note} data-testid="roifeat-settings-summary">{settingsSummary}</div>
+          {result.lossyCompressed && (
+            <div style={warnBand} data-testid="roifeat-lossy-warning">⚠ {t("radiomics.lossyWarning")}</div>
+          )}
           {result.roiSize.smallRoi && (
             <div style={warnBand} data-testid="roifeat-smallroi-warning">
               ⚠ {t("roiFeat.smallRoiWarning", {

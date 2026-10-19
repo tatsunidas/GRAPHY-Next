@@ -75,6 +75,8 @@ export function TextureDialog({
   const [busy, setBusy] = useState(false);
   const [job, setJob] = useState<TextureJobStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** 非可逆圧縮の画像から作り終えた（警告を見せるため、閉じずに残す）。 */
+  const [lossyDone, setLossyDone] = useState(false);
   const jobIdRef = useRef<string | null>(null);
 
   const isGlam = familyKey === GLAM_FAMILY_KEY;
@@ -195,7 +197,12 @@ export function TextureDialog({
           setJob(next);
           if (next.state === "DONE" && next.result) {
             onCreated(next.result.seriesInstanceUid);
-            onClose();
+            if (next.result.lossyCompressed) {
+              setBusy(false);
+              setLossyDone(true);
+            } else {
+              onClose();
+            }
           } else if (next.state === "FAILED") {
             setBusy(false);
             setError(next.error ?? t("texture.err.failed"));
@@ -376,6 +383,9 @@ export function TextureDialog({
 
         <div style={{ color: "#6b7785", fontSize: 11, marginTop: 6 }}>{t("texture.paramsNote")}</div>
         {error && <div style={errText}>{error}</div>}
+        {lossyDone && (
+          <div style={warnText} data-testid="texture-lossy-warning">⚠ {t("radiomics.lossyWarning")}</div>
+        )}
 
         {/* 計算中の進み具合。backend がスライス単位で報告する。 */}
         {busy && (

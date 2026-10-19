@@ -1131,6 +1131,8 @@ export interface TextureMapRequest {
 export interface TextureMapResult {
   seriesInstanceUid: string;
   sopInstanceUids: string[];
+  /** 元画像が非可逆圧縮（マップの値は圧縮の影響を受ける）。 */
+  lossyCompressed: boolean;
 }
 /**
  * Texture 可視化マップを計算し派生シリーズとして保存する（**終わるまで待つ**）。
@@ -1788,6 +1790,8 @@ export interface GlamAnalysis {
   /** リサンプリングした場合の**元の**ボクセル間隔 (x,y,z) mm。していなければ null。 */
   resampledFrom: number[] | null;
   settings: Record<string, string>;
+  /** 元画像が非可逆圧縮（特徴量は圧縮の影響を受ける）。保存済みの古い解析には無い。 */
+  lossyCompressed?: boolean;
 }
 
 /** 保存された解析の一覧行（JSON 本体は含まない）。 */
@@ -1881,6 +1885,8 @@ export interface RoiFeatureResult {
   settingsProperties: string;
   /** ROI の大きさと小さい ROI の警告（返すたびに今の環境設定で判定し直す）。 */
   roiSize: RoiFeatureRoiSize;
+  /** 元画像が非可逆圧縮（特徴量は圧縮の影響を受ける）。 */
+  lossyCompressed: boolean;
 }
 
 /** ボクセル数は RadiomicsJ の Diagnostics の値。 */

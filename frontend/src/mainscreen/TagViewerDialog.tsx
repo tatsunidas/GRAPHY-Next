@@ -4,6 +4,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { fetchInstances, fetchInstanceTags, type Series, type Study, type TagDumpRow } from "../api";
+import { instanceLabel, instanceWindow, resolveInitialSop, shiftWindow, TREE_WINDOW, type TagTreeSeries } from "./tagViewerTree";
 import { emitDbChanged } from "../dbEvents";
 import { HttpError } from "../http";
 import { useI18n } from "../i18n/i18n";
@@ -20,8 +21,9 @@ import { addedKey, affectsRouting, buildEdits, rowKey, rowLock, type AddedRow, t
  * - `editable`（standalone）のとき「編集」で値の変更・削除・追加ができる。範囲（この画像／このシリーズ／このスタディ）の
  *   全ファイルを書き換える（backend の TagEditService。全か無か・変更の記録付き）。UID・画素・幾何・患者タグなどは鍵付きで変えない。
  *
- * 注: 現在のスライス番号は SeriesViewer 内部状態のため、ここでは<b>シリーズ先頭</b>の
- * インスタンスを対象にする（exact-slice 連動は将来課題）。「この画像」もその 1 枚。
+ * 対象の画像: `sopInstanceUid` があればその 1 枚、無ければシリーズ先頭。`tree` を渡すと左にシリーズ・インスタンスの
+ * ツリーが出て、いまどの画像のタグか分かり、別の画像へ移れる（2D ビューア用。MainScreen は渡さない）。
+ * 編集の「この画像」は、いま表示している画像。
  */
 export function TagViewerDialog({
   open,
@@ -29,6 +31,8 @@ export function TagViewerDialog({
   study,
   series,
   editable = false,
+  sopInstanceUid = null,
+  tree,
 }: {
   open: boolean;
   onClose: () => void;
@@ -36,8 +40,17 @@ export function TagViewerDialog({
   series: Series | null;
   /** standalone のときだけ true（web は PACS の値を書き換えないので読むだけ）。 */
   editable?: boolean;
+  /** 最初に出す画像（無ければシリーズ先頭）。 */
+  sopInstanceUid?: string | null;
+  /** 左のツリーに出すシリーズ。省略するとツリーを出さない。 */
+  tree?: TagTreeSeries[];
 }) {
   const { t } = useI18n();
+  // ツリーで選び直した対象。null の間は props（study・series・sopInstanceUid）に従う。
+  const [picked, setPicked] = useState<{ study: Study; series: Series; sop: string } | null>(null);
+  const curStudy = picked?.study ?? study;
+  const curSeries = picked?.series ?? series;
+  const curSop = picked ? picked.sop : sopInstanceUid;
   const [rows, setRows] = useState<TagDumpRow[] | null>(null);
   const [sopUid, setSopUid] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -52,24 +65,30 @@ export function TagViewerDialog({
   const [busy, setBusy] = useState(false);
   const [notice, setNoticeState] = useState<{ text: string; error: boolean } | null>(null);
 
+  // 開き直したら・対象の props が変わったら、ツリーでの選び直しと検索語を捨てる。
   useEffect(() => {
-    if (!open || !study || !series) return;
+    setPicked(null);
+    setQuery("");
+  }, [open, study, series, sopInstanceUid]);
+
+  useEffect(() => {
+    if (!open || !curStudy || !curSeries) return;
     setRows(null);
     setError(null);
     setSopUid(null);
-    if (reloadKey === 0) setQuery("");
     let cancelled = false;
     (async () => {
       try {
-        const insts = await fetchInstances(study.studyInstanceUid, series.seriesInstanceUid);
+        const known = tree?.find((g) => g.series.seriesInstanceUid === curSeries.seriesInstanceUid)?.instances;
+        const insts = known ?? (await fetchInstances(curStudy.studyInstanceUid, curSeries.seriesInstanceUid));
         if (cancelled) return;
-        if (!insts || insts.length === 0) {
+        const sop = insts ? resolveInitialSop(insts, curSop) : null;
+        if (!sop) {
           setError(t("tagview.noImage"));
           return;
         }
-        const sop = insts[0].sopInstanceUid;
         setSopUid(sop);
-        const dump = await fetchInstanceTags(study.studyInstanceUid, series.seriesInstanceUid, sop);
+        const dump = await fetchInstanceTags(curStudy.studyInstanceUid, curSeries.seriesInstanceUid, sop);
         if (cancelled) return;
         setRows(dump);
       } catch (e) {
@@ -79,7 +98,7 @@ export function TagViewerDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, study, series, t, reloadKey]);
+  }, [open, curStudy, curSeries, curSop, tree, t, reloadKey]);
 
   const matchCount = useMemo(() => {
     if (!rows || !query) return 0;
@@ -116,8 +135,8 @@ export function TagViewerDialog({
   };
 
   const scopeOf = (): TagEditScope | null => {
-    if (!study || !series || !sopUid) return null;
-    return { level: scopeLevel, studyUid: study.studyInstanceUid, seriesUid: series.seriesInstanceUid, sopUid };
+    if (!curStudy || !curSeries || !sopUid) return null;
+    return { level: scopeLevel, studyUid: curStudy.studyInstanceUid, seriesUid: curSeries.seriesInstanceUid, sopUid };
   };
 
   /** サーバーの理由を行へ戻す。 */
@@ -148,11 +167,11 @@ export function TagViewerDialog({
   };
 
   const onApply = async () => {
-    if (!confirm || !study) return;
+    if (!confirm || !curStudy) return;
     setBusy(true);
     try {
       const r = await applyTagEdit(confirm.scope, confirm.built.edits);
-      emitDbChanged({ reason: "tag-edit", studyUids: [study.studyInstanceUid] }, { includeSelf: true });
+      emitDbChanged({ reason: "tag-edit", studyUids: [curStudy.studyInstanceUid] }, { includeSelf: true });
       resetEdit();
       setEditing(false);
       setNotice(t("tagedit.saved", { count: r.updatedFiles }), false);
@@ -176,9 +195,22 @@ export function TagViewerDialog({
     return added.find((a) => addedKey(a) === k)?.tag ?? "";
   };
 
+  const currentInstance =
+    tree?.find((g) => g.series.seriesInstanceUid === curSeries?.seriesInstanceUid)?.instances.find((i) => i.sopInstanceUid === sopUid) ?? null;
+
+  /** ツリーで別の画像へ移る。編集中の下書きは行の位置に結びついているので捨てる（あれば確認する）。 */
+  const onPick = (g: TagTreeSeries, sop: string) => {
+    if (g.series.seriesInstanceUid === curSeries?.seriesInstanceUid && sop === sopUid) return;
+    if ((Object.keys(drafts).length > 0 || added.length > 0) && !window.confirm(t("tagview.discardEdit"))) return;
+    resetEdit();
+    setEditing(false);
+    setNotice(null);
+    setPicked({ study: g.study, series: g.series, sop });
+  };
+
   return (
     <div style={overlay} onClick={onClose}>
-      <div data-testid="tag-viewer-dialog" style={dialog} onClick={(e) => e.stopPropagation()}>
+      <div data-testid="tag-viewer-dialog" style={tree && tree.length > 0 ? { ...dialog, width: 1120 } : dialog} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
           <span style={{ fontWeight: 700 }}>{t("tagview.title")}</span>
           <button style={closeBtn} onClick={onClose} aria-label={t("common.close")}>
@@ -189,8 +221,12 @@ export function TagViewerDialog({
         {/* 対象画像 + 検索 */}
         <div style={toolbar}>
           <div style={{ fontSize: 12, color: "#556", marginRight: "auto" }}>
-            {series?.seriesDescription || series?.modality || ""}
-            {sopUid && <span style={{ color: "#8a98a6" }}> · SOP {sopUid}</span>}
+            {curSeries?.seriesDescription || curSeries?.modality || ""}
+            {sopUid && (
+              <span data-testid="tag-current" data-sop={sopUid} style={{ color: "#8a98a6" }}>
+                {" "}· {currentInstance ? `#${currentInstance.instanceNumber ?? "-"} · ` : ""}SOP {sopUid}
+              </span>
+            )}
           </div>
           <label style={{ fontSize: 13, color: "#445" }}>{t("tagview.search")}</label>
           <input
@@ -211,11 +247,20 @@ export function TagViewerDialog({
           )}
         </div>
 
-        <div style={tableWrap}>
+        <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+        {tree && tree.length > 0 && (
+          <TagTree
+            tree={tree}
+            currentSeries={curSeries?.seriesInstanceUid ?? null}
+            currentSop={sopUid}
+            onPick={onPick}
+          />
+        )}
+        <div style={{ ...tableWrap, flex: 1, minWidth: 0 }}>
           {!rows && !error && <div style={{ padding: 14, color: "#888" }}>{t("common.loading")}</div>}
           {error && <div style={{ padding: 14, color: "#b00020" }}>{error}</div>}
           {rows && (
-            <table data-testid="tag-viewer-table" style={table}>
+            <table data-testid="tag-viewer-table" style={tree && tree.length > 0 ? { ...table, minWidth: 640 } : table}>
               <thead>
                 <tr>
                   <Th w={170}>{t("tagview.col.tag")}</Th>
@@ -345,6 +390,7 @@ export function TagViewerDialog({
             </div>
           )}
         </div>
+        </div>
 
         {confirm && (
           <div data-testid="tag-edit-confirm" style={confirmBox}>
@@ -423,6 +469,98 @@ export function TagViewerDialog({
   );
 }
 
+/**
+ * 左のツリー: シリーズ → インスタンス。現在の画像の行を強調する。
+ * インスタンスは現在位置（または先頭）を含む {@link TREE_WINDOW} 行だけ描き、前後にずらせる。
+ */
+function TagTree({
+  tree,
+  currentSeries,
+  currentSop,
+  onPick,
+}: {
+  tree: TagTreeSeries[];
+  currentSeries: string | null;
+  currentSop: string | null;
+  onPick: (g: TagTreeSeries, sop: string) => void;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState<Set<string>>(() => new Set(currentSeries ? [currentSeries] : []));
+  const [starts, setStarts] = useState<Record<string, number>>({});
+  // 現在のシリーズは常に開く（ツリーで選び直した・外から対象が変わったとき）。
+  useEffect(() => {
+    if (currentSeries) setOpen((o) => (o.has(currentSeries) ? o : new Set(o).add(currentSeries)));
+  }, [currentSeries]);
+  // 現在の画像が窓の外に出たら、窓をそこへ寄せる。
+  useEffect(() => {
+    if (!currentSeries || !currentSop) return;
+    const g = tree.find((x) => x.series.seriesInstanceUid === currentSeries);
+    if (!g) return;
+    const idx = g.instances.findIndex((i) => i.sopInstanceUid === currentSop);
+    setStarts((m) => {
+      const cur = m[currentSeries];
+      if (cur !== undefined && idx >= cur && idx < cur + TREE_WINDOW) return m;
+      return { ...m, [currentSeries]: instanceWindow(g.instances.length, idx).start };
+    });
+  }, [tree, currentSeries, currentSop]);
+
+  return (
+    <div data-testid="tag-tree" style={treeBox}>
+      <div style={{ padding: "6px 10px", fontSize: 12, fontWeight: 600, color: "#445" }}>{t("tagview.tree.title")}</div>
+      {tree.map((g) => {
+        const uid = g.series.seriesInstanceUid;
+        const isOpen = open.has(uid);
+        const n = g.instances.length;
+        const start = starts[uid] ?? instanceWindow(n, g.instances.findIndex((i) => i.sopInstanceUid === currentSop)).start;
+        const shown = g.instances.slice(start, start + TREE_WINDOW);
+        return (
+          <div key={`${g.study.studyInstanceUid}|${uid}`}>
+            <div
+              data-testid="tag-tree-series"
+              data-series={uid}
+              style={{ ...treeRow, fontWeight: uid === currentSeries ? 700 : 500, background: uid === currentSeries ? "#eef4fb" : undefined }}
+              onClick={() => setOpen((o) => { const x = new Set(o); if (x.has(uid)) x.delete(uid); else x.add(uid); return x; })}
+            >
+              <span style={{ width: 12, display: "inline-block" }}>{isOpen ? "▾" : "▸"}</span>
+              {g.series.modality ?? ""} {g.series.seriesNumber ?? ""} {g.series.seriesDescription ?? ""}
+              <span style={{ color: "#8a98a6" }}> ({n})</span>
+            </div>
+            {isOpen && (
+              <div>
+                {start > 0 && (
+                  <div style={{ ...treeRow, paddingLeft: 22, color: "#1f5fa8" }} onClick={() => setStarts((m) => ({ ...m, [uid]: shiftWindow(n, start, -TREE_WINDOW) }))}>
+                    ▲ {t("tagview.tree.prev", { count: TREE_WINDOW })}
+                  </div>
+                )}
+                {shown.map((i) => {
+                  const cur = uid === currentSeries && i.sopInstanceUid === currentSop;
+                  return (
+                    <div
+                      key={i.sopInstanceUid}
+                      data-testid="tag-tree-instance"
+                      data-sop={i.sopInstanceUid}
+                      data-current={cur ? "1" : undefined}
+                      style={{ ...treeRow, paddingLeft: 22, fontFamily: "ui-monospace, monospace", background: cur ? "#cfe3f8" : undefined, fontWeight: cur ? 700 : 400 }}
+                      onClick={() => onPick(g, i.sopInstanceUid)}
+                    >
+                      {instanceLabel(i)}
+                    </div>
+                  );
+                })}
+                {start + TREE_WINDOW < n && (
+                  <div style={{ ...treeRow, paddingLeft: 22, color: "#1f5fa8" }} onClick={() => setStarts((m) => ({ ...m, [uid]: shiftWindow(n, start, TREE_WINDOW) }))}>
+                    ▼ {t("tagview.tree.next", { count: TREE_WINDOW })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function rowMatches(r: TagDumpRow, qLower: string): boolean {
   return (
     r.tag.toLowerCase().includes(qLower) ||
@@ -494,6 +632,8 @@ function Td({ children, mono }: { children: React.ReactNode; mono?: boolean }) {
   );
 }
 
+const treeBox: React.CSSProperties = { width: 220, flex: "none", overflow: "auto", borderRight: "1px solid #e3e8ee", background: "#fafbfc" };
+const treeRow: React.CSSProperties = { padding: "3px 10px", fontSize: 12, cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
 const markStyle: React.CSSProperties = { background: "#ffe27a", color: "inherit", padding: 0 };
 const overlay: React.CSSProperties = {
   position: "fixed",

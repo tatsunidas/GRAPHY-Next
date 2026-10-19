@@ -2806,6 +2806,11 @@ export const ja: Record<string, string> = {
   "qr.phase.error": "エラー",
 
   // TagViewer（DICOM 属性ダンプ・Read only）
+  "tagview.tree.title": "ツリー",
+  "tagview.tree.prev": "前の {{count}} 枚",
+  "tagview.tree.next": "次の {{count}} 枚",
+  "tagview.discardEdit": "別の画像に移ります。編集中の内容は破棄されます。よろしいですか？",
+  "viewer2d.ctx.showTags": "この画像のタグを表示",
   "tagview.title": "タグ表示（DICOM 属性）",
   "tagview.noImage": "表示中の画像がありません。先に一覧でシリーズを選択して画像を表示してください。",
   "tagview.search": "検索:",
@@ -3140,6 +3145,7 @@ export const ja: Record<string, string> = {
   "roiFeat.note.EXCESS_KURTOSIS": "過剰尖度（−3 済み）",
   "roiFeat.note.LOG2_DISCRETISED": "log2・離散化後",
   "roiFeat.note.NON_IBSI": "IBSI 外",
+  "radiomics.lossyWarning": "非可逆圧縮の画像です。特徴量は圧縮の影響を受けます",
   "roiFeat.note.RJ_MORPH_COUNT_IS_INTENSITY": "RadiomicsJ 2.4.1 では強度マスクの数（形態マスクは再セグメントしない）",
   "roiFeat.roiSize": "ROI {{initial}} ボクセル（計算に使った数 {{intensity}}）・形態 {{morph}}・体積 {{volume}} mm³",
   "roiFeat.smallRoiWarning": "ROI が小さいため（{{n}} ボクセル < 設定 {{threshold}}）、エントロピーなどのテクスチャ特徴は不安定になりえます",

@@ -34,6 +34,7 @@ import java.util.Map;
  * @param isotropic       等方ボクセルか
  * @param resampledFrom   リサンプリングした場合の<b>元の</b>ボクセル間隔 (x,y,z) mm。していなければ null
  * @param settings        実際に使われた GLAM の設定（後から値の意味を辿れるように）
+ * @param lossyCompressed 元画像が非可逆圧縮（特徴量は圧縮の影響を受ける）
  */
 public record GlamAnalysis(
         int featureCount,
@@ -52,5 +53,6 @@ public record GlamAnalysis(
         double[] voxelSpacing,
         boolean isotropic,
         double[] resampledFrom,
-        Map<String, String> settings) {
+        Map<String, String> settings,
+        boolean lossyCompressed) {
 }

@@ -2815,6 +2815,11 @@ export const en: Record<string, string> = {
   "qr.phase.error": "Error",
 
   // TagViewer (DICOM attribute dump, read-only)
+  "tagview.tree.title": "Series / images",
+  "tagview.tree.prev": "Previous {{count}}",
+  "tagview.tree.next": "Next {{count}}",
+  "tagview.discardEdit": "Move to another image? Unsaved edits will be discarded.",
+  "viewer2d.ctx.showTags": "Show tags of this image",
   "tagview.title": "Tag Viewer (DICOM attributes)",
   "tagview.noImage": "No image is displayed. Select a series in the list first to show an image.",
   "tagview.search": "Search:",
@@ -3149,6 +3154,7 @@ export const en: Record<string, string> = {
   "roiFeat.note.EXCESS_KURTOSIS": "Excess kurtosis (−3 applied)",
   "roiFeat.note.LOG2_DISCRETISED": "log2, after discretisation",
   "roiFeat.note.NON_IBSI": "Non-IBSI",
+  "radiomics.lossyWarning": "Lossy-compressed image: features are affected by the compression",
   "roiFeat.note.RJ_MORPH_COUNT_IS_INTENSITY": "In RadiomicsJ 2.4.1 this is the intensity-mask count (the morphological mask is not re-segmented)",
   "roiFeat.roiSize": "ROI {{initial}} voxels ({{intensity}} used for calculation), morphological {{morph}}, volume {{volume}} mm³",
   "roiFeat.smallRoiWarning": "Small ROI ({{n}} voxels < setting {{threshold}}): texture features such as entropy may be unstable",

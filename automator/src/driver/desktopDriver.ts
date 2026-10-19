@@ -89,6 +89,9 @@ export class DesktopDriver implements Driver {
     this.backendProc = spawn(
       "java",
       [
+        // desktop/main.js の jvmArgs と同じ。無いと圧縮画像の伸長（PixelCodec）が使えず、製品と違う挙動になる
+        "--add-opens", "java.base/java.io=ALL-UNNAMED",
+        "--add-opens", "java.desktop/javax.imageio.stream=ALL-UNNAMED",
         "-jar", BACKEND_JAR,
         "--spring.profiles.active=standalone",
         `--server.port=${this.ports.http}`,
@@ -121,19 +124,23 @@ export class DesktopDriver implements Driver {
     const requireFromDesktop = createRequire(path.join(DESKTOP_DIR, "package.json"));
     const electronPath = requireFromDesktop("electron") as unknown as string;
 
+    const launchEnv: Record<string, string | undefined> = {
+      ...process.env,
+      ...this.launchOptions.extraEnv,
+      GRAPHY_DEV: "1",
+      GRAPHY_BACKEND_EXTERNAL: "1",
+      GRAPHY_BACKEND_PORT: String(this.ports.http),
+      GRAPHY_DEV_SERVER_URL: `http://localhost:${this.ports.vite}`,
+      GRAPHY_MAIN_SECRET: mainSecret,
+    };
+    // 開発者の共通データ置き場（GRAPHY_DEV_DATA_DIR）を引き継がない。自動検証は DESKTOP_RUN_DATA_DIR で隔離して動かす。
+    delete launchEnv.GRAPHY_DEV_DATA_DIR;
+
     this.electronApp = await electron.launch({
       executablePath: electronPath,
       args: [DESKTOP_DIR, ...(this.launchOptions.extraElectronArgs ?? [])],
       cwd: DESKTOP_DIR,
-      env: {
-        ...process.env,
-        ...this.launchOptions.extraEnv,
-        GRAPHY_DEV: "1",
-        GRAPHY_BACKEND_EXTERNAL: "1",
-        GRAPHY_BACKEND_PORT: String(this.ports.http),
-        GRAPHY_DEV_SERVER_URL: `http://localhost:${this.ports.vite}`,
-        GRAPHY_MAIN_SECRET: mainSecret,
-      },
+      env: launchEnv as Record<string, string>,
     });
 
     const viteOrigin = `http://localhost:${this.ports.vite}`;

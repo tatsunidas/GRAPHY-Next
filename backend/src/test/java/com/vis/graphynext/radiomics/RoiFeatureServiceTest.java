@@ -77,7 +77,7 @@ class RoiFeatureServiceTest {
         for (int z = 0; z < D; z++) sops[z] = "1.2.3." + z;
         // 実際の読み込みと同じく、マスクには校正を付けない
         return new RadiomicsMapEngine.LoadedVolume(img, mask, W, H, D, 1, true, img.getCalibration(),
-                null, 0.8, 0.8, new HashMap<>(), sops, null, null);
+                null, 0.8, 0.8, new HashMap<>(), sops, null, null, false);
     }
 
     /** 読み込みの代わりに、決めたボリュームを返すエンジン。 */
@@ -85,7 +85,7 @@ class RoiFeatureServiceTest {
         volatile LoadedVolume vol;
 
         FixedEngine(LoadedVolume vol) {
-            super(null, new MapCheckpointStore(new CacheStore(Path.of("unused"), 0), null));
+            super(null, new MapCheckpointStore(new CacheStore(Path.of("unused"), 0), null), null);
             this.vol = vol;
         }
 
@@ -382,7 +382,7 @@ class RoiFeatureServiceTest {
     void mapWaitsWhileTheLockIsHeld(@TempDir Path dir) throws Exception {
         ImagePlus img = phantom();
         RadiomicsMapEngine.LoadedVolume vol = volume(img, mask(0));
-        RadiomicsMapEngine engine = new RadiomicsMapEngine(null, new MapCheckpointStore(new CacheStore(dir, 0), null));
+        RadiomicsMapEngine engine = new RadiomicsMapEngine(null, new MapCheckpointStore(new CacheStore(dir, 0), null), null);
         Map<String, String> s = settings("MASK_LABEL_INT", "1");
         TextureSeriesRequest map = new TextureSeriesRequest("1.2", "1.2.9", "1.2.8", 0, "GLCM_JointEntropy", 5, 1,
                 false, 0, 0, s, null, null, null);
@@ -501,7 +501,7 @@ class RoiFeatureServiceTest {
         String[] sops = new String[d];
         for (int z = 0; z < d; z++) sops[z] = "1.2.4." + z;
         return new RadiomicsMapEngine.LoadedVolume(image, new ImagePlus("m", msk), w, h, d, 1, true, c,
-                null, 0.5, 0.5, new HashMap<>(), sops, null, null);
+                null, 0.5, 0.5, new HashMap<>(), sops, null, null, false);
     }
 
     @Test
