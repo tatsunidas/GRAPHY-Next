@@ -57,6 +57,11 @@ public class ExportService {
         public boolean effectiveDicomDir() {
             return includeDicomDir || includePortableViewer;
         }
+
+        /** エクスポートダイアログの規則: Viewer を同梱するときだけ DICOMDIR と README も付く。 */
+        public static Options forViewer(boolean withViewer) {
+            return new Options(withViewer, withViewer, withViewer);
+        }
     }
 
     /**
@@ -85,15 +90,191 @@ public class ExportService {
         this.layout = layout;
     }
 
+    /** 書き出し先（ZIP のエントリ、またはフォルダ配下のファイル）。 */
+    public interface Sink extends AutoCloseable {
+        void put(String name, java.io.InputStream in) throws IOException;
+
+        default void put(String name, Path file) throws IOException {
+            try (java.io.InputStream in = Files.newInputStream(file)) {
+                put(name, in);
+            }
+        }
+
+        default void put(String name, byte[] bytes) throws IOException {
+            put(name, new java.io.ByteArrayInputStream(bytes));
+        }
+
+        @Override
+        void close() throws IOException;
+    }
+
+    /** ZIP への書き出し。 */
+    public static final class ZipSink implements Sink {
+        private final ZipOutputStream zip;
+
+        public ZipSink(ZipOutputStream zip) {
+            this.zip = zip;
+        }
+
+        @Override
+        public void put(String name, java.io.InputStream in) throws IOException {
+            zip.putNextEntry(new ZipEntry(name));
+            in.transferTo(zip);
+            zip.closeEntry();
+        }
+
+        @Override
+        public void close() throws IOException {
+            zip.close();
+        }
+    }
+
+    /** フォルダへの書き出し。ルートの外へ出る名前は拒否する。 */
+    public static final class DirSink implements Sink {
+        private final Path root;
+
+        public DirSink(Path root) throws IOException {
+            this.root = Files.createDirectories(root).toAbsolutePath().normalize();
+        }
+
+        @Override
+        public void put(String name, java.io.InputStream in) throws IOException {
+            Path target = root.resolve(name).normalize();
+            if (!target.startsWith(root) || target.equals(root)) {
+                throw new IOException("出力先の外を指す名前です: " + name);
+            }
+            Files.createDirectories(target.getParent());
+            Files.copy(in, target);
+        }
+
+        @Override
+        public void close() {
+            // 何も持たない
+        }
+    }
+
+    /** 進捗と中止（{@code ImportService.Progress} と同じ流儀）。 */
+    public static class Progress {
+        private volatile boolean cancelled;
+        private volatile long total = -1;
+        private final java.util.concurrent.atomic.AtomicLong processed = new java.util.concurrent.atomic.AtomicLong();
+
+        public void cancel() {
+            cancelled = true;
+        }
+
+        public boolean isCancelled() {
+            return cancelled;
+        }
+
+        public long total() {
+            return total;
+        }
+
+        public void setTotal(long n) {
+            total = n;
+        }
+
+        public long processed() {
+            return processed.get();
+        }
+
+        void advance() {
+            processed.incrementAndGet();
+        }
+    }
+
+    /** 中止で書き出しを打ち切ったことを呼び出し側へ伝える。 */
+    public static final class CancelledException extends RuntimeException {
+        public CancelledException() {
+            super("cancelled", null, false, false);
+        }
+    }
+
+    /** 書き出した内容（含まれる患者 ID は挿入順）。 */
+    public record BuildInfo(List<String> patientIds, Summary summary) {}
+
+    /** 選択に含まれるインスタンスの総数（進捗の分母）。 */
+    @Transactional(readOnly = true)
+    public long countInstances(List<Selection> selections) {
+        long n = 0;
+        for (Selection sel : selections) {
+            if (sel == null || sel.studyUid() == null || sel.seriesUids() == null) {
+                continue;
+            }
+            for (String seriesUid : sel.seriesUids()) {
+                n += repo.findBySeries(sel.studyUid(), seriesUid).size();
+            }
+        }
+        return n;
+    }
+
+    /** 選択に含まれる患者 ID（挿入順・空は除く）。出力名の決定に使う。 */
+    @Transactional(readOnly = true)
+    public List<String> patientIds(List<Selection> selections) {
+        java.util.Set<String> ids = new java.util.LinkedHashSet<>();
+        for (Selection sel : selections) {
+            if (sel == null || sel.studyUid() == null || sel.seriesUids() == null) {
+                continue;
+            }
+            for (String seriesUid : sel.seriesUids()) {
+                List<DicomInstance> insts = repo.findBySeries(sel.studyUid(), seriesUid);
+                if (!insts.isEmpty() && insts.get(0).getPatientId() != null && !insts.get(0).getPatientId().isEmpty()) {
+                    ids.add(insts.get(0).getPatientId());
+                }
+            }
+        }
+        return new java.util.ArrayList<>(ids);
+    }
+
+    /** 選択に含まれる原本ファイルの合計バイト数（空き容量の見積り用）。 */
+    @Transactional(readOnly = true)
+    public long estimateBytes(List<Selection> selections) {
+        long n = 0;
+        for (Selection sel : selections) {
+            if (sel == null || sel.studyUid() == null || sel.seriesUids() == null) {
+                continue;
+            }
+            for (String seriesUid : sel.seriesUids()) {
+                for (DicomInstance inst : repo.findBySeries(sel.studyUid(), seriesUid)) {
+                    Path src = resolveFile(inst);
+                    try {
+                        if (src != null) {
+                            n += Files.size(src);
+                        }
+                    } catch (IOException ignore) {
+                        // 見積りなので読めないものは数えない
+                    }
+                }
+            }
+        }
+        return n;
+    }
+
     /**
      * 一時 ZIP ファイルを生成し、パスと含まれる患者 ID（挿入順）を返す
      * （呼び出し側がストリーム後に ZIP を削除する）。
      */
-    @Transactional(readOnly = true)
     public BuildResult buildZip(List<Selection> selections, Options opts) throws IOException {
+        Path zipPath = Files.createTempFile("graphy-export-", ".zip");
+        try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(zipPath));
+                Sink sink = new ZipSink(zip)) {
+            BuildInfo info = write(selections, opts, sink, new Progress());
+            return new BuildResult(zipPath, info.patientIds());
+        } catch (IOException | RuntimeException e) {
+            Files.deleteIfExists(zipPath);
+            throw e;
+        }
+    }
+
+    /**
+     * 選択シリーズを {@code sink} へ書く。階層は {@code DICOM/<患者>/<検査>/<シリーズ>/<連番>}。
+     * 中止されたら {@link CancelledException}（書きかけの後始末は呼び出し側）。
+     */
+    @Transactional(readOnly = true)
+    public BuildInfo write(List<Selection> selections, Options opts, Sink sink, Progress progress) throws IOException {
         boolean withDicomDir = opts.effectiveDicomDir();
         Path work = Files.createTempDirectory("graphy-export-");
-        Path zipPath = Files.createTempFile("graphy-export-", ".zip");
 
         DicomDirWriter dir = null;
         RecordFactory rf = null;
@@ -111,9 +292,8 @@ public class ExportService {
         java.util.Set<String> studyUidsExported = new java.util.LinkedHashSet<>();
         int seriesCount = 0;
         int instanceCount = 0;
-        int videoCount = 0; // 媒体へ同梱した再生可能 MP4 の数（VIDEO/{sop}.mp4）
 
-        try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(zipPath))) {
+        try {
             for (Selection sel : selections) {
                 if (sel == null || sel.studyUid() == null || sel.seriesUids() == null) {
                     continue;
@@ -128,8 +308,12 @@ public class ExportService {
                     String serDir = null; // 最初の解決済みインスタンスで確定（可読名はヘッダ依存）
                     int img = 0;
                     for (DicomInstance inst : insts) {
+                        if (progress.isCancelled()) {
+                            throw new CancelledException();
+                        }
                         Path src = resolveFile(inst);
                         if (src == null) {
+                            progress.advance();
                             continue;
                         }
                         Attributes fmi;
@@ -140,6 +324,7 @@ public class ExportService {
                             ds = in.readDatasetUntilPixelData();
                         } catch (IOException e) {
                             log.warn("export: header 読取失敗 {}", inst.getSopInstanceUid(), e);
+                            progress.advance();
                             continue;
                         }
 
@@ -156,11 +341,7 @@ public class ExportService {
                         }
                         String imgName = ExportNaming.imageName(++img);
                         String[] fileIDs = {"DICOM", patDir, styDir, serDir, imgName};
-                        String entryPath = String.join("/", fileIDs);
-
-                        zip.putNextEntry(new ZipEntry(entryPath));
-                        Files.copy(src, zip);
-                        zip.closeEntry();
+                        sink.put(String.join("/", fileIDs), src);
                         instanceCount++;
 
                         if (dir != null) {
@@ -171,8 +352,9 @@ public class ExportService {
                         // /rendered が使えない）ため、再生可能な MP4 を VIDEO/{sop}.mp4 として同梱する。
                         if (opts.includePortableViewer()
                                 && VIDEO_SOP_CLASSES.contains(ds.getString(Tag.SOPClassUID, ""))) {
-                            videoCount += copyPlayableVideo(zip, src, inst.getSopInstanceUid()) ? 1 : 0;
+                            copyPlayableVideo(sink, src, inst.getSopInstanceUid());
                         }
+                        progress.advance();
                     }
                 }
             }
@@ -181,21 +363,18 @@ public class ExportService {
                 dir.commit();
                 dir.close();
                 dir = null;
-                zip.putNextEntry(new ZipEntry("DICOMDIR"));
-                Files.copy(dicomdirFile, zip);
-                zip.closeEntry();
+                sink.put("DICOMDIR", dicomdirFile);
             }
 
             if (opts.includePortableViewer()) {
-                copyPortableViewer(zip);
+                copyPortableViewer(sink);
             }
 
             Summary summary = new Summary(layout.patDir.size(), studyUidsExported.size(), seriesCount, instanceCount);
             if (opts.includeReadme()) {
-                zip.putNextEntry(new ZipEntry("README.txt"));
-                zip.write(readme(opts, summary).getBytes(StandardCharsets.UTF_8));
-                zip.closeEntry();
+                sink.put("README.txt", readme(opts, summary).getBytes(StandardCharsets.UTF_8));
             }
+            return new BuildInfo(new java.util.ArrayList<>(patientIds), summary);
         } finally {
             if (dir != null) {
                 try {
@@ -206,7 +385,6 @@ public class ExportService {
             }
             deleteRecursively(work);
         }
-        return new BuildResult(zipPath, new java.util.ArrayList<>(patientIds));
     }
 
     /**
@@ -298,11 +476,13 @@ public class ExportService {
      * @return 同梱できたら true
      */
     boolean copyPlayableVideo(ZipOutputStream zip, Path src, String sopUid) {
+        return copyPlayableVideo(new ZipSink(zip), src, sopUid);
+    }
+
+    boolean copyPlayableVideo(Sink sink, Path src, String sopUid) {
         try {
             Path mp4 = videoRender.ensureRendered(src, sopUid);
-            zip.putNextEntry(new ZipEntry("VIDEO/" + sopUid + ".mp4"));
-            Files.copy(mp4, zip);
-            zip.closeEntry();
+            sink.put("VIDEO/" + sopUid + ".mp4", mp4);
             return true;
         } catch (IOException e) {
             log.warn("export: 動画の MP4 同梱に失敗しました（DICOM 本体のみ同梱） sop={}: {}", sopUid, e.toString());
@@ -311,6 +491,10 @@ public class ExportService {
     }
 
     static void copyPortableViewer(ZipOutputStream zip) throws IOException {
+        copyPortableViewer(new ZipSink(zip));
+    }
+
+    static void copyPortableViewer(Sink sink) throws IOException {
         var resolver = new org.springframework.core.io.support.PathMatchingResourcePatternResolver();
         org.springframework.core.io.Resource[] resources;
         try {
@@ -341,11 +525,9 @@ public class ExportService {
                 log.debug("export: portable viewer の重複エントリを無視: {}", rel);
                 continue;
             }
-            zip.putNextEntry(new ZipEntry("VIEWER/" + rel));
             try (java.io.InputStream in = res.getInputStream()) {
-                in.transferTo(zip);
+                sink.put("VIEWER/" + rel, in);
             }
-            zip.closeEntry();
             copied++;
         }
         if (copied == 0) {

@@ -846,6 +846,32 @@ export interface ExportSelection {
   seriesUids: string[];
 }
 
+/** デスクトップのフォルダ出力ジョブ（POST /api/export/jobs）。Viewer 同梱時だけ DICOMDIR・README も付く。 */
+export interface ExportJobRequest {
+  selections: ExportSelection[];
+  includePortableViewer: boolean;
+  zip: boolean;
+  destination: string;
+}
+
+export interface ExportJobStatus {
+  jobId: string;
+  state: "QUEUED" | "RUNNING" | "DONE" | "FAILED" | "CANCELLED";
+  /** 総数。数え終わるまでは -1。 */
+  total: number;
+  processed: number;
+  /** 完了したときの出力（フォルダまたは ZIP の絶対パス）。 */
+  outputPath: string | null;
+  error: string | null;
+}
+
+export const submitExportJob = (req: ExportJobRequest) =>
+  httpSend<ExportJobStatus>("/api/export/jobs", "POST", req);
+export const getExportJob = (jobId: string) =>
+  httpGet<ExportJobStatus>(`/api/export/jobs/${encodeURIComponent(jobId)}`);
+export const cancelExportJob = (jobId: string) =>
+  httpSend<ExportJobStatus>(`/api/export/jobs/${encodeURIComponent(jobId)}/cancel`, "POST");
+
 export interface ExportRequest {
   selections: ExportSelection[];
   /** DICOMDIR を同梱する（portable viewer ON 時は backend 側で強制 ON）。 */
