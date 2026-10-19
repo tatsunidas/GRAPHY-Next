@@ -370,7 +370,21 @@ async function main(): Promise<void> {
         await waitMip(v);
         v.on("console", (m) => { if (/error|crash|memory/i.test(m.text())) console.log(`  [renderer] ${m.text().slice(0, 200)}`); });
         v.on("crash", () => console.log("  [renderer] crash イベント"));
-        const dir = await saveAndDownload(v, d, studyUid, "real");
+        // レンダラが落ちたとき、Electron の main が受ける理由（oom / crashed / killed など）を残す。
+        await d.app.evaluate(({ app }) => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (globalThis as any).__gone = [];
+          app.on("render-process-gone", (_e: unknown, _wc: unknown, det: unknown) => { (globalThis as any).__gone.push(det); });
+        });
+        let dir: string | null = null;
+        try {
+          dir = await saveAndDownload(v, d, studyUid, "real");
+        } catch (err) {
+          console.log(`  [保存で例外] ${String(err).split("\n")[0]}`);
+          await new Promise((r) => setTimeout(r, 1500));
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          console.log(`  [render-process-gone] ${JSON.stringify(await d.app.evaluate(() => (globalThis as any).__gone))}`);
+        }
         if (dir) {
           const tg = spawnSync(PY, ["-I", path.join(AUTOMATOR_ROOT, "scripts", "verify-stitch-tags.py"), "source", dir, root, rest.join(","), process.env.REAL_N ?? "0"], { encoding: "utf8" });
           reportTags(tg.stdout, tg.status, tg.stderr, "real");
