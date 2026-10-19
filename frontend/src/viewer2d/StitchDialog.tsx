@@ -421,7 +421,7 @@ export function StitchDialog({
                     {t("stitch.overlapHint")}
                   </label>
                 )}
-                {perPair && selected.slice(0, -1).map((c, i) => (
+                {perPair && selected.slice(0, -1).map((_, i) => (
                   <label key={i} style={{ ...row, paddingLeft: 8 }}>
                     {t("stitch.pairLabel", { a: String(i + 1), b: String(i + 2) })}
                     <input style={num} value={pairText(i)} onChange={(e) => setPairTexts((old) => Array.from({ length: pairCount }, (_, k) => (k === i ? e.target.value : old[k] ?? overlapText)))} data-testid={`stitch-pair-input-${i}`} />
