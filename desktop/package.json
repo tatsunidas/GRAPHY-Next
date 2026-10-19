@@ -1,9 +1,11 @@
 {
   "name": "graphy-next-desktop",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "private": true,
   "license": "AGPL-3.0-or-later",
   "description": "GRAPHY-Next desktop (Electron) — standalone mode",
+  "author": { "name": "Visionary Imaging Services", "email": "customerservices@vis-ionary.com" },
+  "homepage": "https://github.com/tatsunidas/GRAPHY-Next",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -27,9 +29,14 @@
       { "from": "resources/bundled-plugins", "to": "bundled-plugins" },
       { "from": "uninstall", "to": "uninstall" }
     ],
-    "linux": { "target": ["AppImage"] },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "category": "Graphics;MedicalSoftware",
+      "extraResources": [{ "from": "build/linux/apparmor-profile", "to": "apparmor-profile" }]
+    },
+    "deb": { "afterInstall": "build/linux/after-install.sh", "afterRemove": "build/linux/after-remove.sh" },
     "win": { "target": ["nsis"] },
-    "mac": { "target": ["dmg"], "identity": null },
+    "mac": { "target": ["dmg"], "identity": null, "artifactName": "${productName}-${version}-${arch}.${ext}" },
     "nsis": {
       "oneClick": false,
       "perMachine": false,

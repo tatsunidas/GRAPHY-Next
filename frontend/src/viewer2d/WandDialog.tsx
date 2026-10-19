@@ -6,7 +6,7 @@
  * Wand（対話型リージョングロー）ダイアログ。
  * `wandStore` のセッションが有効な間だけ表示。シード（制御点）の座標・信号値を表示し、
  * 方式（許容差／以上／以下／範囲）・Connectivity・しきい値を変更すると、同じシードから再フラッドして結果を置換（Update）する。
- * 許容差は生値、以上・以下・範囲は校正値（HU・SUV 等）で判定する（`fw/segmentation-tools-design.md` §6.1）。
+ * どの方式も同じ判定値（Rescale 適用値／保存値／カラーの輝度）で判定する（`fw/segmentation-tools-design.md` §6.1）。
  */
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n/i18n";
@@ -25,14 +25,33 @@ const CONN_3D = [
 ];
 const METHODS: WandMethod[] = ["tolerance", "ge", "le", "range"];
 
+/** 表示用の数値（整数はそのまま、小数は有効数字 5 桁）。 */
+const fmt = (v: number) => (Number.isInteger(v) ? String(v) : String(Number(v.toPrecision(5))));
+
+/** 判定値のスライダー（値域の外の値は端に寄せて表示。数値入力は値域の外も受け付ける）。 */
+export function ValueSlider({ value, min, max, onChange }: { value: number; min: number; max: number; onChange: (v: number) => void }) {
+  return (
+    <input
+      type="range"
+      min={min}
+      max={max}
+      step="any"
+      value={Math.min(Math.max(value, min), max)}
+      onChange={(e) => onChange(Number(e.target.value))}
+      style={{ flex: 1 }}
+    />
+  );
+}
+
 /** 数値入力（下書きを持ち、Enter/フォーカスアウトで確定。不正入力は元へ戻す）。 */
-function NumField({ value, onCommit, testid, title }: { value: number; onCommit: (v: number) => void; testid: string; title?: string }) {
-  const [text, setText] = useState(String(value));
-  useEffect(() => setText(String(value)), [value]);
+export function NumField({ value, onCommit, testid, title }: { value: number; onCommit: (v: number) => void; testid: string; title?: string }) {
+  const [text, setText] = useState(fmt(value));
+  useEffect(() => setText(fmt(value)), [value]);
   const apply = () => {
+    if (text === fmt(value)) return; // 触っていない（表示は丸めてあるので、そのまま確定すると値が変わる）
     const v = Number(text);
     if (text.trim() !== "" && Number.isFinite(v)) onCommit(v);
-    else setText(String(value));
+    else setText(fmt(value));
   };
   return (
     <input
@@ -58,20 +77,18 @@ export function WandDialog() {
   const sessThreshold = s?.threshold;
   const seedKey = s ? `${s.seedX},${s.seedY},${s.seedZ}` : "";
   useEffect(() => {
-    if (sessThreshold !== undefined) setThText(String(sessThreshold));
+    if (sessThreshold !== undefined) setThText(fmt(sessThreshold));
   }, [sessThreshold, seedKey]);
   if (!s) return null;
 
   const conns = s.mode === "2d" ? CONN_2D : CONN_3D;
-  const sliderMax = Math.max(1, Math.ceil(s.rangeMax - s.rangeMin));
   const method: WandMethod = s.method ?? "tolerance";
   const unit = s.unit ?? "";
-  const noCal = unit === "raw"; // 校正値が無い（未校正・カラー）。絶対値の方式は選べない。
-  const lower = s.lower ?? s.seedCal ?? 0;
-  const upper = s.upper ?? s.seedCal ?? 0;
-  const calMin = s.calMin ?? 0;
-  const calMax = s.calMax ?? 0;
-  const calStep = Math.max((calMax - calMin) / 1000, 1e-6);
+  const kind = s.valueKind ?? "calibrated";
+  const lower = s.lower ?? s.seedValue;
+  const upper = s.upper ?? s.seedValue;
+  const vMin = s.rangeMin;
+  const vMax = s.rangeMax;
 
   const rerun = () => {
     const cur = getWandSession();
@@ -83,20 +100,20 @@ export function WandDialog() {
     rerun();
   };
   const applyThText = () => {
+    if (thText === fmt(s.threshold)) return;
     const v = Number(thText);
     if (Number.isFinite(v) && v >= 0) setThreshold(v);
-    else setThText(String(s.threshold)); // 不正入力は元に戻す
+    else setThText(fmt(s.threshold)); // 不正入力は元に戻す
   };
   const setMethod = (m: WandMethod) => {
-    if (m !== "tolerance" && noCal) return;
-    const seedCal = s.seedCal ?? 0;
-    // 切替直後の初期値はシードの校正値（シードが必ず条件を満たす）。範囲は上端を値域の最大へ。
+    const seedCal = s.seedValue;
+    // 切替直後の初期値はシードの判定値（シードが必ず条件を満たす）。範囲は上端を値域の最大へ。
     const patch: Partial<WandSession> = { method: m };
     if (m === "ge") patch.lower = seedCal;
     if (m === "le") patch.upper = seedCal;
     if (m === "range") {
       patch.lower = seedCal;
-      patch.upper = Math.max(calMax, seedCal);
+      patch.upper = Math.max(vMax, seedCal);
     }
     updateWandSession(patch);
     rerun();
@@ -128,29 +145,26 @@ export function WandDialog() {
       )}
       <div style={rowInfo}>
         <span style={label}>{t("wand.seedValue")}</span>
-        <span style={mono}>{s.seedValue}</span>
+        <span style={mono}>{fmt(s.seedValue)}{unit ? ` ${unit}` : ""}</span>
       </div>
+      <div data-testid="wand-value-kind" style={note}>{t(`wand.valueKind.${kind === "calibrated" && !unit ? "calibratedNoUnit" : kind}`, { unit })}</div>
 
       <div style={block}>
         <div style={label}>{t("wand.method")}</div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 3 }}>
           {METHODS.map((m) => {
-            const disabled = m !== "tolerance" && noCal;
             return (
               <button
                 key={m}
                 data-testid={`wand-method-${m}`}
-                disabled={disabled}
                 onClick={() => setMethod(m)}
-                style={{ ...(m === method ? chipOn : chip), ...(disabled ? chipOff : null) }}
+                style={m === method ? chipOn : chip}
               >
                 {t(`wand.method.${m}`)}
               </button>
             );
           })}
         </div>
-        {noCal && <div data-testid="wand-no-calibration" style={warn}>{t("wand.noCalibration")}</div>}
-        <div style={note}>{t("wand.noteTolerance")}</div>
       </div>
 
       <div style={block}>
@@ -173,15 +187,7 @@ export function WandDialog() {
         <div style={block}>
           <div style={label}>{t("wand.threshold")}</div>
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3 }}>
-            <input
-              type="range"
-              min={0}
-              max={sliderMax}
-              step={1}
-              value={Math.min(s.threshold, sliderMax)}
-              onChange={(e) => setThreshold(Number(e.target.value))}
-              style={{ flex: 1 }}
-            />
+            <ValueSlider value={s.threshold} min={0} max={Math.max(vMax - vMin, 0)} onChange={setThreshold} />
             <input
               type="number"
               min={0}
@@ -193,22 +199,20 @@ export function WandDialog() {
               title={t("wand.thresholdInput")}
               style={numInput}
             />
+            <span style={label}>{unit}</span>
           </div>
         </div>
       )}
 
       {(method === "ge" || method === "le") && (
         <div style={block}>
-          <div style={label}>{t("wand.value")}（{unit}）</div>
+          <div style={label}>{t("wand.value")}</div>
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3 }}>
-            <input
-              type="range"
-              min={calMin}
-              max={calMax}
-              step={calStep}
-              value={Math.min(Math.max(method === "ge" ? lower : upper, calMin), calMax)}
-              onChange={(e) => setBound(method === "ge" ? "lower" : "upper", Number(e.target.value))}
-              style={{ flex: 1 }}
+            <ValueSlider
+              value={method === "ge" ? lower : upper}
+              min={vMin}
+              max={vMax}
+              onChange={(v) => setBound(method === "ge" ? "lower" : "upper", v)}
             />
             <NumField
               testid="wand-threshold"
@@ -225,11 +229,13 @@ export function WandDialog() {
         <div style={block}>
           <div style={rangeRow}>
             <span style={label}>{t("wand.lower")}</span>
+            <ValueSlider value={lower} min={vMin} max={vMax} onChange={(v) => setBound("lower", v)} />
             <NumField testid="wand-threshold-lower" value={lower} onCommit={(v) => setBound("lower", v)} title={t("wand.thresholdInput")} />
             <span style={label}>{unit}</span>
           </div>
           <div style={rangeRow}>
             <span style={label}>{t("wand.upper")}</span>
+            <ValueSlider value={upper} min={vMin} max={vMax} onChange={(v) => setBound("upper", v)} />
             <NumField testid="wand-threshold-upper" value={upper} onCommit={(v) => setBound("upper", v)} title={t("wand.thresholdInput")} />
             <span style={label}>{unit}</span>
           </div>
@@ -267,7 +273,6 @@ const chip: React.CSSProperties = {
   fontSize: 11, padding: "2px 7px",
 };
 const chipOn: React.CSSProperties = { ...chip, background: "#2b8aef", color: "#fff", border: "1px solid #2b8aef" };
-const chipOff: React.CSSProperties = { opacity: 0.45, cursor: "not-allowed" };
 const warn: React.CSSProperties = { marginTop: 6, color: "#b45309", background: "#fff7e6", border: "1px solid #f3d19e", borderRadius: 4, padding: "3px 6px" };
 const note: React.CSSProperties = { marginTop: 5, color: "#7a8591", fontSize: 11 };
 const numInput: React.CSSProperties = { width: 72, border: "1px solid #cdd5de", borderRadius: 4, fontSize: 12, padding: "1px 4px" };

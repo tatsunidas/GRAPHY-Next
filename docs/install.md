@@ -1,8 +1,5 @@
 # インストールと起動
 
-!!! note "このページは作成中です"
-    導入に必要な要点は書いてありますが、画面つきの手順は順次追加します。
-
 ## デスクトップ版（スタンドアロン）
 
 [Releases](https://github.com/tatsunidas/GRAPHY-Next/releases) から OS 別のインストーラを
@@ -11,9 +8,86 @@
 
 | OS | 成果物 | 導入方法 |
 |---|---|---|
-| Windows | `GRAPHY-Next Setup <ver>.exe`（NSIS） | 実行してインストール |
-| macOS | `GRAPHY-Next-<ver>.dmg` | マウントして Applications へ。初回は「確認できません」と出るので、「システム設定 ＞ プライバシーとセキュリティ ＞ このまま開く」で開く（Apple の公証はまだ受けていない） |
-| Linux | `GRAPHY-Next-<ver>.AppImage` | `chmod +x` して実行 |
+| Windows | `GRAPHY-Next.Setup.<ver>.exe`（NSIS） | 実行してインストール。初回は SmartScreen の警告が出る（下記） |
+| macOS（Apple Silicon: M1 以降） | `GRAPHY-Next-<ver>-arm64.dmg` | マウントして Applications へ。初回は「開いていません」と出る（下記） |
+| macOS（Intel） | `GRAPHY-Next-<ver>-x64.dmg` | 同上。「このMacについて」のチップが Intel なら、こちらを選ぶ（v0.5.0 から） |
+| Linux（Ubuntu / Debian） | `graphy-next-desktop_<ver>_amd64.deb` | `sudo apt install ./graphy-next-desktop_<ver>_amd64.deb`（推奨） |
+| Linux（その他） | `GRAPHY-Next-<ver>.AppImage` | `chmod +x` して実行。libfuse2 が要る。Ubuntu 24.04 などでは起動しないことがある（下記） |
+
+GRAPHY-Next は、Microsoft・Apple の有料の署名をまだ受けていません。そのため Windows と macOS では、
+初回だけ次の警告が出ます。手順どおりに進めれば開けます。画面は、配布物をブラウザで落とした状態から
+リリースのたびに自動で撮ったものです。
+
+### Windows: SmartScreen の警告
+
+1. インストーラを開くと「Windows によって PC が保護されました」と出ます。**詳細情報**（More info）を押します。
+
+    ![SmartScreen の警告](images/install/win-1-smartscreen.png){ width="480" }
+
+2. **実行**（Run anyway）を押します。
+
+    ![詳細情報を押した後](images/install/win-2-smartscreen-more.png){ width="480" }
+
+3. インストーラが始まります。インストールの範囲（自分だけ／すべてのユーザー）を選んで **次へ**（Next）を押します。
+
+    ![インストールの範囲](images/install/win-3-options.png){ width="480" }
+
+4. インストール先を確かめて **インストール**（Install）を押します。
+
+    ![インストール先](images/install/win-4-folder.png){ width="480" }
+
+5. **完了**（Finish）を押すと GRAPHY-Next が起動します。
+
+    ![完了](images/install/win-5-finish.png){ width="480" }
+
+    ![起動した画面](images/install/win-6-launched.png){ width="640" }
+
+!!! note "画面の言語"
+    画面は英語版の Windows で撮っています。日本語版では括弧の外の表記になります。
+
+### macOS: 「開いていません」の警告
+
+1. dmg を開き、GRAPHY-Next を Applications へドラッグします。
+
+    ![dmg の窓](images/install/mac-1-dmg.png){ width="560" }
+
+2. Applications から開くと「“GRAPHY-Next”は開いていません」と出ます。**完了** を押して閉じます
+   （**ゴミ箱に入れる** は押さない）。
+
+    ![開いていません](images/install/mac-2-blocked.png){ width="560" }
+
+3. **システム設定 ＞ プライバシーとセキュリティ** を開き、一番下の「セキュリティ」にある
+   **このまま開く** を押します。
+
+    ![このまま開く](images/install/mac-3-settings.png){ width="560" }
+
+4. 確認が出たら、もう一度 **このまま開く** を押します。
+
+    ![確認](images/install/mac-4-confirm.png){ width="560" }
+
+5. Mac の管理者のユーザ名とパスワードを入れて **OK** を押します（Apple の手順では、これで開けるようになります）。
+   次回からは普通に開けます。
+
+    ![パスワードの確認](images/install/mac-5-after-open.png){ width="560" }
+
+### Linux
+
+Ubuntu / Debian 系は `.deb` を使ってください。apt が必要なライブラリをそろえ、Ubuntu 24.04 以降で
+Chromium の sandbox が動くための設定（AppArmor のプロファイル）も入れます。
+
+```bash
+sudo apt install ./graphy-next-desktop_<ver>_amd64.deb
+graphy-next-desktop    # アプリの一覧からも起動できます
+```
+
+![起動した画面](images/install/linux-1-launched-deb.png){ width="640" }
+
+!!! warning "AppImage について"
+    AppImage は、そのまま実行すると Ubuntu 22.04 以降で次の 2 か所で止まることがあります。
+
+    - `dlopen(): error loading libfuse.so.2` … `sudo apt install libfuse2t64`（22.04 は `libfuse2`）で解消します。
+    - `The SUID sandbox helper binary was found, but is not configured correctly` … Ubuntu 24.04 などの
+      AppArmor の制限によるものです。`.deb` を使ってください。
 
 初回起動時に、DICOM 保管フォルダと H2 データベースを作成します。DICOM 受信（SCP）・
 ローカル保管・全ビューア機能がオフラインで動作します。
@@ -46,7 +120,7 @@
 |---|---|
 | Windows | 設定 ＞ アプリ ＞ GRAPHY-Next ＞ アンインストール。ウィザードが保存データも削除するか確認します |
 | macOS | GRAPHY-Next.app をゴミ箱へ。保存データも消すには同梱スクリプト `Contents/Resources/uninstall/uninstall-macos.command` を実行 |
-| Linux | `.AppImage` を削除。保存データ / デスクトップ統合も消すには同梱スクリプト `resources/uninstall/uninstall-linux.sh` を実行 |
+| Linux | `.deb`: `sudo apt remove graphy-next-desktop`。AppImage: `.AppImage` を削除。保存データ / デスクトップ統合も消すには同梱スクリプト `resources/uninstall/uninstall-linux.sh` を実行 |
 
 ## Web 版（外部 PACS 連携）
 

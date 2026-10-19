@@ -1,0 +1,10 @@
+# GRAPHY-Next（.deb）用。この実行ファイルにだけ user namespace を許し、Chromium の sandbox を動かす。
+# 制限はかけない（unconfined）。after-install.sh が /etc/apparmor.d/ に置く。
+abi <abi/4.0>,
+include <tunables/global>
+
+profile graphy-next-desktop /opt/GRAPHY-Next/graphy-next-desktop flags=(unconfined) {
+  userns,
+
+  include if exists <local/graphy-next-desktop>
+}

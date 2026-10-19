@@ -5,16 +5,21 @@
 /**
  * Wand（対話型リージョングロー）のセッション状態。
  *
- * クリックした点を **シード（制御点）** として記憶し、ダイアログの Threshold（シード輝度からの許容差）・
+ * クリックした点を **シード（制御点）** として記憶し、ダイアログの方式・しきい値・
  * Connectivity を変えると、同じシードから再度フラッドして**結果を置換（追加ではなく Update）**する。
  * 実際のフラッド/labelmap 書込は `wandTool.ts`（`runWand`）。ダイアログは `WandDialog.tsx`。
  */
 export type WandMode = "2d" | "3d";
 /**
- * 判定方式。tolerance＝シード値からの許容差（**生値**、従来どおり）。
- * ge / le / range＝絶対しきい値（**校正値**。HU・SUV など。`lower` / `upper` で持つ）。
+ * 判定方式。tolerance＝シード値からの許容差。ge / le / range＝絶対しきい値（`lower` / `upper` で持つ）。
+ * どの方式も同じ「判定値」で判定する（{@link WandValueKind}。`fw/segmentation-tools-design.md` §6.1）。
  */
 export type WandMethod = "tolerance" | "ge" | "le" | "range";
+/**
+ * 判定値の種類。calibrated＝Rescale Slope/Intercept を掛けた値（HU・SUV 等）、
+ * stored＝Rescale のタグが無く保存値そのもの（XA・US・CR/DX・多くの MR）、luminance＝カラーの輝度。
+ */
+export type WandValueKind = "calibrated" | "stored" | "luminance";
 
 export interface WandSession {
   mode: WandMode;
@@ -27,19 +32,17 @@ export interface WandSession {
   seedZ: number; // シードのスライス index（stack 内）
   seedX: number; // 列
   seedY: number; // 行
-  seedValue: number; // シード画素の輝度（raw）
-  threshold: number; // 許容差（|value - seedValue| <= threshold）
+  seedValue: number; // シード画素の判定値
+  threshold: number; // 許容差（|value - seedValue| <= threshold、判定値で）
   connectivity: number; // 2D: 4/8, 3D: 6/8/12/26
-  rangeMin: number; // シードスライスの輝度 min（スライダー範囲）
-  rangeMax: number; // シードスライスの輝度 max
+  rangeMin: number; // シードスライスの判定値 min（スライダー範囲）
+  rangeMax: number; // シードスライスの判定値 max
   // ---- 以下は任意（保存しない）。未指定は従来どおり（method="tolerance"）。 ----
   method?: WandMethod;
-  lower?: number; // 校正値。ge と range の下端（両端を含む）
-  upper?: number; // 校正値。le と range の上端（両端を含む）
-  unit?: string; // 校正値の単位（"HU"・"SUV" など。校正が無ければ "raw"）
-  seedCal?: number; // シード画素の校正値
-  calMin?: number; // シードスライスの校正値 min（スライダー範囲）
-  calMax?: number; // シードスライスの校正値 max
+  lower?: number; // 判定値。ge と range の下端（両端を含む）
+  upper?: number; // 判定値。le と range の上端（両端を含む）
+  unit?: string; // 判定値の単位（"HU"・"SUV" など。calibrated のときだけ。不明なら空）
+  valueKind?: WandValueKind;
   seedWorld?: [number, number, number]; // シード画素中心の LPS mm（表示用。判定は格子）
   count?: number; // 直近のフラッドで塗ったボクセル数
   truncated?: boolean; // 上限で打ち切った

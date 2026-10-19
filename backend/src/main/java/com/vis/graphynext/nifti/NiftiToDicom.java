@@ -115,6 +115,20 @@ public final class NiftiToDicom {
         }
     }
 
+    /**
+     * 画素を読むために開く。Raw は gzip の判定をしない——画素の先頭がたまたま 0x1F 0x8B だと
+     * gzip と取り違えて読めなくなるため。
+     */
+    static InputStream open(Path file, NiftiHeader h) throws IOException {
+        if (h.raw || Boolean.FALSE.equals(h.dataGzip)) {
+            return new java.io.BufferedInputStream(Files.newInputStream(file), 1 << 16);
+        }
+        if (Boolean.TRUE.equals(h.dataGzip)) {
+            return new GZIPInputStream(Files.newInputStream(file), 1 << 16);
+        }
+        return open(file);
+    }
+
     /** gzip かどうかをマジックで判定して開く（拡張子には頼らない）。 */
     static InputStream open(Path file) throws IOException {
         byte[] magic = new byte[2];
@@ -136,7 +150,15 @@ public final class NiftiToDicom {
      * @param sink  出力先
      */
     public static Summary convert(Path file, Options opts, FrameSink sink) throws IOException {
-        NiftiHeader h = readHeader(file);
+        return convert(file, readHeader(file), opts, sink);
+    }
+
+    /**
+     * ヘッダを外から渡して変換する。Raw データ（{@link NiftiHeader#raw}）は利用者の入力から作ったヘッダを渡す。
+     *
+     * @param file 画素データのファイル（{@code h.voxOffset} バイト目から画素が並ぶ）
+     */
+    public static Summary convert(Path file, NiftiHeader h, Options opts, FrameSink sink) throws IOException {
         NiftiGeometry geom = NiftiGeometry.of(h);
 
         int nx = h.nx();
@@ -168,7 +190,7 @@ public final class NiftiToDicom {
 
         int metaApplied = 0;
         int instance = 1;
-        try (InputStream in = open(file)) {
+        try (InputStream in = open(file, h)) {
             skipFully(in, h.voxOffset);
             // NIfTI は x が最速 → z → t → c の順で並ぶ。読み進めながら 1 フレームずつ出す。
             for (int c = 0; c < nc; c++) {
@@ -233,20 +255,26 @@ public final class NiftiToDicom {
         ds.setString(Tag.FrameOfReferenceUID, VR.UI, frameOfRef);
         ds.setString(Tag.Modality, VR.CS, opts.modality() == null ? "MR" : opts.modality());
 
-        ds.setString(Tag.PatientID, VR.LO, nvl(opts.patientId(), "NIFTI"));
-        ds.setString(Tag.PatientName, VR.PN, nvl(opts.patientName(), nvl(opts.patientId(), "NIFTI")));
+        String fallbackId = h.raw ? "RAW" : "NIFTI";
+        ds.setString(Tag.PatientID, VR.LO, nvl(opts.patientId(), fallbackId));
+        ds.setString(Tag.PatientName, VR.PN, nvl(opts.patientName(), nvl(opts.patientId(), fallbackId)));
         ds.setString(Tag.PatientBirthDate, VR.DA, nvl(opts.patientBirthDate(), ""));
         ds.setString(Tag.PatientSex, VR.CS, nvl(opts.patientSex(), ""));
         ds.setString(Tag.StudyDate, VR.DA, studyDate);
         ds.setString(Tag.SeriesDate, VR.DA, studyDate);
-        ds.setString(Tag.StudyDescription, VR.LO, nvl(opts.studyDescription(), "Imported from NIfTI"));
+        ds.setString(Tag.StudyDescription, VR.LO,
+                nvl(opts.studyDescription(), h.raw ? "Imported from raw data" : "Imported from NIfTI"));
         ds.setString(Tag.SeriesDescription, VR.LO,
-                nvl(opts.seriesDescription(), h.description.isBlank() ? "NIfTI" : h.description));
+                nvl(opts.seriesDescription(), h.description.isBlank() ? (h.raw ? "RAW" : "NIfTI") : h.description));
         ds.setInt(Tag.SeriesNumber, VR.IS, opts.seriesNumber() > 0 ? opts.seriesNumber() : 1);
         ds.setInt(Tag.InstanceNumber, VR.IS, instance);
         ds.setString(Tag.ConversionType, VR.CS, "WSD"); // Workstation で作られた画像
-        ds.setString(Tag.DerivationDescription, VR.ST,
-                "Converted from NIfTI (geometry from " + geom.source + (geom.synthesized ? ", SYNTHESIZED" : "") + ")");
+        ds.setString(Tag.DerivationDescription, VR.ST, h.raw
+                ? "Converted from raw data (geometry from user input)"
+                : h.pairKind == NiftiHeader.PairKind.ANALYZE
+                ? "Converted from ANALYZE 7.5 (geometry SYNTHESIZED)"
+                : "Converted from NIfTI" + (h.pairKind == NiftiHeader.PairKind.NIFTI_PAIR ? " pair" : "")
+                        + " (geometry from " + geom.source + (geom.synthesized ? ", SYNTHESIZED" : "") + ")");
 
         // --- 幾何 ---
         double[] ipp = geom.positionOf(z);
@@ -258,7 +286,14 @@ public final class NiftiToDicom {
         ds.setDouble(Tag.SliceThickness, VR.DS, geom.sliceSpacing());
         ds.setDouble(Tag.SpacingBetweenSlices, VR.DS, geom.sliceSpacing());
         ds.setDouble(Tag.SliceLocation, VR.DS, geom.sliceSpacing() * z);
-        if (geom.synthesized) {
+        if (h.raw) {
+            // Raw には向き・位置の情報が無い。入力された値であることを画像自身に残す
+            ds.setString(Tag.ImageComments, VR.LT,
+                    "Geometry from user input: raw data has no orientation or position (NOT from the source)");
+        } else if (h.pairKind == NiftiHeader.PairKind.ANALYZE) {
+            ds.setString(Tag.ImageComments, VR.LT, "Geometry synthesized: ANALYZE 7.5 has no patient coordinates; orient="
+                    + h.analyzeOrient + " is not used (orientation is NOT from the source)");
+        } else if (geom.synthesized) {
             // 「向きは合成」であることを画像自身に残す（後から見た人が誤解しないため）
             ds.setString(Tag.ImageComments, VR.LT,
                     "Geometry synthesized: NIfTI had qform_code=sform_code=0 (orientation is NOT from the source)");
@@ -616,7 +651,7 @@ public final class NiftiToDicom {
             long nonFinite = 0;
             double maxFloatError = 0;
             byte[] buf = new byte[unit * 8192];
-            try (InputStream in = open(file)) {
+            try (InputStream in = open(file, h)) {
                 skipFully(in, h.voxOffset);
                 long remaining = voxels;
                 while (remaining > 0) {

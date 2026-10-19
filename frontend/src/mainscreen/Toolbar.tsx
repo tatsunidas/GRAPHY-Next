@@ -20,7 +20,9 @@ export type ToolKind =
   /** 被ばく線量レポート（RDSR）。fw/angio-design.md §14.2 */
   | "dose"
   /** 解析タスク・ランチャー。fw/angio-design.md §21.2（A13-2） */
-  | "taskLauncher";
+  | "taskLauncher"
+  /** URL を指定して取り込む（standalone のみ）。fw/dicom-data-layer.md §4.4 */
+  | "urlImport";
 
 export function Toolbar({
   isStandalone,

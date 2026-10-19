@@ -17,6 +17,7 @@ import { useSeries } from "./hooks/useSeries";
 import { useInstances } from "./hooks/useInstances";
 import { useI18n } from "./i18n/i18n";
 import { SeriesViewer } from "./viewer/SeriesViewer";
+import { useToolPanelDefault } from "./viewer/toolPanelDefault";
 import { classifySeriesRenderability, type SeriesRenderability } from "./viewer/seriesRenderable";
 import { VideoViewer } from "./viewer/VideoViewer";
 import { type ViewerMode } from "./viewer/imageId";
@@ -41,19 +42,22 @@ const STUDY_SORT: Record<string, Accessor<Study>> = {
 export function StudyList({
   filters,
   reloadKey,
+  connecting = false,
   mode,
   onSelectStudy,
   onSelectSeries,
 }: {
   filters?: StudyFilters | null;
   reloadKey?: number;
+  /** backend にまだつながっていない（起動の待ち）。検索せず「接続中…」を出す。 */
+  connecting?: boolean;
   mode: ViewerMode;
   onSelectStudy?: (s: Study | null) => void;
   onSelectSeries?: (s: Series | null) => void;
 }) {
   const { t } = useI18n();
   // 取得は hooks/useStudies に集約（モバイルシェルと共有。fw/mobile-ui-design.md §3.5）。
-  const { studies, reportCounts, error } = useStudies(filters, { reloadKey, withReportCounts: true });
+  const { studies, reportCounts, error } = useStudies(connecting ? null : filters, { reloadKey, withReportCounts: true });
   const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
   const [page, setPage] = useState(0);
   const { sort, toggleSort } = useTableSort();
@@ -91,9 +95,10 @@ export function StudyList({
         {studies && <span style={{ fontSize: 13, color: "#5a6672" }}>{t("study.list.total", { n: total })}</span>}
       </div>
 
-      {filters == null && <div style={{ color: "#888" }}>{t("study.prompt")}</div>}
+      {connecting && <div style={{ color: "#888" }}>{t("app.connecting")}</div>}
+      {!connecting && filters == null && <div style={{ color: "#888" }}>{t("study.prompt")}</div>}
       {error && <div style={{ color: "#b00020" }}>{t("common.fetchError", { error })}</div>}
-      {filters != null && !error && !studies && <div>{t("common.loading")}</div>}
+      {!connecting && filters != null && !error && !studies && <div>{t("common.loading")}</div>}
       {studies && studies.length === 0 && <div style={{ color: "#666" }}>{t("study.empty")}</div>}
 
       {studies && studies.length > 0 && (
@@ -268,6 +273,7 @@ function InstanceList({ study, series, mode }: { study: Study; series: Series; m
   // wadouri の画像ビューアでは表示できず、専用の VideoViewer（/rendered の video/mp4 を
   // <video> 再生）で表示する。
   const isVideo = hasImages && isVideoInstance(instances![0]);
+  const toolPanelDefault = useToolPanelDefault();
 
   return (
     <div style={{ marginTop: 10, color: "#445" }}>
@@ -333,19 +339,32 @@ function InstanceList({ study, series, mode }: { study: Study; series: Series; m
 
       {/* シリーズビューア（スライス送り・シネ・5D・オーバーレイ On/Off のコントローラ）。 */}
       {hasImages && !isPdf && !isVideo && nonImage.renderable && instances && (
-        <div style={{ marginTop: 10, maxWidth: 900 }}>
+        <div style={previewBox}>
           {/* web はピクセルを BFF(WADO-RS)経由で取得して表示（standalone と同一の StackViewport 経路）。 */}
           <SeriesViewer
             instances={instances}
             mode={mode}
             studyUid={study.studyInstanceUid}
             seriesUid={series.seriesInstanceUid}
+            fillHeight
+            showControls={toolPanelDefault ?? false}
           />
         </div>
       )}
     </div>
   );
 }
+
+// シリーズプレビュー: 幅いっぱい、高さはウィンドウ高に追従（画像はこの枠の中央に Fit 表示。ツールは既定で畳む）。
+// 240px の根拠（実測）: スクロール領域の高さは 100vh − 137px（メニュー・ツールバー・ステータスバー）で、
+// その上に表・見出しが 103px 分ある。末尾までスクロールすると窓高 600/900/1200 のいずれでも
+// プレビュー全体が領域内に収まる。小さい窓でも 320px は確保する。
+const previewBox: React.CSSProperties = {
+  marginTop: 10,
+  display: "flex",
+  flexDirection: "column",
+  height: "max(320px, calc(100vh - 240px))",
+};
 
 /** ピクセルを持たないシリーズの説明ボックス（PDF / 動画の案内と同じ調子）。 */
 const nonImageNotice: React.CSSProperties = {

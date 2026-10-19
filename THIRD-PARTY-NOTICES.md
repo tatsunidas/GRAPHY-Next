@@ -17,7 +17,7 @@ trees can be generated from the build manifests:
 | H2 Database Engine (`com.h2database:h2`) | — | EPL-1.0 / MPL-2.0 (dual) |
 | dcm4che (`org.dcm4che:dcm4che-core/-net/-imageio/-json`) | 5.34.3 | MPL-1.1 / LGPL-3.0 / GPL-3.0 (tri-license; used under LGPL) |
 | Bouncy Castle (`bcprov`) | — | Bouncy Castle License (MIT-style) |
-| RadiomicsJ (`radiomicsj`) | 2.1.18 | Visionary Imaging Services, Inc. — see the RadiomicsJ project |
+| RadiomicsJ (`radiomicsj`) | 2.4.1 | Apache-2.0 |
 
 ## Frontend / Desktop (JavaScript)
 
