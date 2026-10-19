@@ -2740,6 +2740,11 @@ export const ja: Record<string, string> = {
   "qr.phase.error": "エラー",
 
   // TagViewer（DICOM 属性ダンプ・Read only）
+  "tagview.tree.title": "ツリー",
+  "tagview.tree.prev": "前の {{count}} 枚",
+  "tagview.tree.next": "次の {{count}} 枚",
+  "tagview.discardEdit": "別の画像に移ります。編集中の内容は破棄されます。よろしいですか？",
+  "viewer2d.ctx.showTags": "この画像のタグを表示",
   "tagview.title": "タグ表示（DICOM 属性）",
   "tagview.noImage": "表示中の画像がありません。先に一覧でシリーズを選択して画像を表示してください。",
   "tagview.search": "検索:",
