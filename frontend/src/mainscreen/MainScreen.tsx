@@ -2,10 +2,12 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import { useRef, useState } from "react";
-import { deleteUrlImportFile, importPaths, type AppStatus, type ImportResult, type Study, type Series, type StudyFilters } from "../api";
+import { useEffect, useRef, useState } from "react";
+import { cancelImportJob, deleteUrlImportFile, getImportJob, submitImportJob, type AppStatus, type ImportJobStatus, type ImportResult, type Study, type Series, type StudyFilters } from "../api";
 import { desktop } from "../desktopBridge";
 import { droppedPaths, hasDroppedFiles } from "./droppedPaths";
+import { ImportProgressBanner } from "./ImportProgressBanner";
+import { runImportJob } from "./importJob";
 import { importedStudiesView, type ImportedView } from "./importedView";
 import { useI18n } from "../i18n/i18n";
 import { StudyList } from "../StudyList";
@@ -92,6 +94,12 @@ export function MainScreen({
 
   // ボタン・メニューとドロップの両方から使う。取り込み中は次を受けない。
   const importingRef = useRef(false);
+  // 進捗つきの取り込みジョブ（null＝取り込んでいない）と、中止の求め。
+  const [importJob, setImportJob] = useState<ImportJobStatus | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const cancelRequested = useRef(false);
+  // 画面が閉じられたら取り込みも止める（裏で続けない）。
+  useEffect(() => () => { cancelRequested.current = true; }, []);
   const [dropActive, setDropActive] = useState(false);
   // dragenter/dragleave は子要素の出入りでも飛ぶので、入った回数で数える。
   const dragDepth = useRef(0);
@@ -115,20 +123,37 @@ export function MainScreen({
   };
 
   const runImportOnce = async (paths: string[]) => {
-    setImportMsg(t("main.import.running"));
+    setImportMsg(null);
+    cancelRequested.current = false;
+    setCancelling(false);
     try {
-      applyImportResult(await importPaths(paths));
-      return;
+      const job = await runImportJob(
+        { submit: submitImportJob, get: getImportJob, cancel: cancelImportJob },
+        paths,
+        setImportJob,
+        () => cancelRequested.current,
+      );
+      if (job.state === "FAILED" || !job.result) {
+        setImportMsg(t("common.fetchError", { error: job.error ?? "import failed" }));
+        setTimeout(() => setImportMsg(null), 6000);
+      } else {
+        applyImportResult(job.result, job.state === "CANCELLED");
+      }
     } catch (e) {
       setImportMsg(t("common.fetchError", { error: String(e) }));
+      setTimeout(() => setImportMsg(null), 6000);
+    } finally {
+      setImportJob(null);
+      setCancelling(false);
     }
-    setTimeout(() => setImportMsg(null), 6000);
   };
 
   /** 取り込みの結果を一覧に反映する（ファイル・フォルダ・ドロップ・URL で共通）。 */
-  const applyImportResult = (r: ImportResult) => {
+  const applyImportResult = (r: ImportResult, cancelled = false) => {
     {
-      const base = t("main.import.result", { imported: r.imported, skipped: r.skipped, failed: r.failed });
+      const base =
+        (cancelled ? t("main.import.cancelled") : "") +
+        t("main.import.result", { imported: r.imported, skipped: r.skipped, failed: r.failed });
       // 検査日の無いスタディは既定の検索条件（今日）では出ない。取り込めているのに
       // 「失敗した」と読まれるため、件数があるときだけ理由と対処を添える。
       const view = importedStudiesView(r.studyInstanceUids);
@@ -387,6 +412,16 @@ export function MainScreen({
         onOpenSettings={onOpenSettings}
         onOpenHelp={onOpenHelp}
       />
+      {importJob && (
+        <ImportProgressBanner
+          status={importJob}
+          cancelling={cancelling}
+          onCancel={() => {
+            cancelRequested.current = true;
+            setCancelling(true);
+          }}
+        />
+      )}
       {importMsg && <div style={banner}>{importMsg}</div>}
       <div style={middle}>
         {/* status（isDemo）は非同期取得のため、確定後に isDemo が変わったら SearchPanel を

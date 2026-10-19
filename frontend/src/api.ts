@@ -547,6 +547,27 @@ export interface ImportResult {
 export const importPaths = (paths: string[]) =>
   httpSend<ImportResult>("/api/import/paths", "POST", { paths });
 
+/** 進捗と中止つきの取り込みジョブ（POST /api/import/paths/jobs）。 */
+export interface ImportJobStatus {
+  jobId: string;
+  state: "QUEUED" | "SCANNING" | "IMPORTING" | "DONE" | "FAILED" | "CANCELLED";
+  /** 総数。数え終わるまでは -1。 */
+  total: number;
+  processed: number;
+  imported: number;
+  skipped: number;
+  failed: number;
+  result: ImportResult | null;
+  error: string | null;
+}
+
+export const submitImportJob = (paths: string[]) =>
+  httpSend<ImportJobStatus>("/api/import/paths/jobs", "POST", { paths });
+export const getImportJob = (jobId: string) =>
+  httpGet<ImportJobStatus>(`/api/import/paths/jobs/${encodeURIComponent(jobId)}`);
+export const cancelImportJob = (jobId: string) =>
+  httpSend<ImportJobStatus>(`/api/import/paths/jobs/${encodeURIComponent(jobId)}/cancel`, "POST");
+
 // ── NonDicomImport（PDF/画像/動画を DICOM 化して取込） ───────────
 
 export interface NonDicomRequest {
