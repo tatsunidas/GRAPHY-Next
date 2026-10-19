@@ -58,6 +58,12 @@ class ZipImportTest {
         int imported;
         int skipped;
         final List<String> failed = new ArrayList<>();
+        int cancelAfterImported = -1;
+
+        @Override
+        public boolean cancelled() {
+            return cancelAfterImported >= 0 && imported >= cancelAfterImported;
+        }
 
         @Override
         public void imported(DicomInstance saved) {
