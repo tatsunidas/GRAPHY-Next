@@ -355,6 +355,31 @@ async function main(): Promise<void> {
     const p3 = (await seekState(viewer)).value;
     check((await playBtn.getAttribute("data-playing")) === "0" && p2 === p3, "[5] もう一度押すと止まり、フレームが進まない", { p2, p3 });
 
+    // ── 6. 設定＞計算機＞この PC（Python と GPU の検出）────────────
+    // 3 OS の実ランナーで「節が開き、結果が返る（落ちない）」を見る。結果の JSON（候補ごとの所要時間つき）を記録する。
+    // 偽物は使わない: ランナーに Python が無ければ state は none になりうる（それも正常な結果として記録する）。
+    await main.bringToFront();
+    await main.getByTestId("mainscreen-menu-system").click();
+    await main.getByTestId("menu-item-settings").click();
+    await main.getByTestId("settings-dialog").waitFor({ state: "visible", timeout: 30_000 });
+    await main.getByTestId("settings-cat-compute").click();
+    await main.getByTestId("compute-local").waitFor({ state: "visible", timeout: 30_000 });
+    const localShown = await main
+      .getByTestId("compute-local-headline")
+      .waitFor({ state: "visible", timeout: 180_000 })
+      .then(() => true, () => false);
+    check(localShown, "[6] ★設定＞計算機＞この PC が開き、確認の結果（見出し）が出る");
+    const local = (await main.evaluate(
+      `window.graphyDesktop.computeLocalDetect({ force: false }).then((r) => JSON.stringify(r))`,
+    )) as string;
+    const localJson = JSON.parse(local) as { state: string; candidates: { path: string; status: string; elapsedMs?: number }[]; elapsedMs: number; reasons: string[] };
+    check(localJson.state === "ok" || localJson.state === "none", "[6] 検出がエラーにならずに結果を返す", { state: localJson.state, reasons: localJson.reasons });
+    console.log(`  [情報] この PC の検出: state=${localJson.state} candidates=${localJson.candidates.length} elapsedMs=${localJson.elapsedMs}`);
+    // ホームのパスは記録に残さない（公開の CI ログ・Artifact に載るため）
+    const scrub = (v: string): string => v.split(os.homedir()).join("<home>");
+    fs.writeFileSync(path.join(OUT, "local-detect.json"), scrub(JSON.stringify(localJson, null, 2)));
+    await main.screenshot({ path: path.join(OUT, "3-compute-local.png") }).catch(() => {});
+
     // ── 3. 画面の異常 ───────────────────────────────────────
     check(pageProblems.length === 0, "[3] ★★画面に CSP 違反・未捕捉エラーが出ていない", pageProblems.slice(0, 5));
   } catch (e) {

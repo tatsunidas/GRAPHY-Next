@@ -1,0 +1,1 @@
+__graphy_local_probe__{"schema": 1, "executable": "/home/<user>/anaconda3/bin/python", "version": "3.13.5", "prefix": "/home/<user>/anaconda3", "venv": false, "conda": true, "externallyManaged": false, "jupyterServer": "2.15.0", "ipykernel": "6.29.5", "torchVersion": null}

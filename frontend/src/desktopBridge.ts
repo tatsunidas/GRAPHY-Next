@@ -397,6 +397,12 @@ export interface GraphyDesktop {
    * 既定の計算機を用意する（計算機が 1 つも無く、Google にログイン済みなら Colab の GPU T4 を足す。足すのは main）。
    * error: colab-not-configured / colab-signin-required / t4-not-available / config-unreadable
    */
+  /** この PC の Python と GPU の検出（見て出すだけ）。`force` が無ければ覚えている結果。 */
+  computeLocalDetect?: (opts?: { force?: boolean }) => Promise<LocalDetectResult>;
+  computeLocalCancel?: () => Promise<{ ok: boolean; running?: boolean }>;
+  /** main のファイル選択と確認を通ったときだけ保存する。Python のパスを文字列で渡す口は無い。 */
+  computeLocalPickPython?: () => Promise<{ ok: true; path: string } | { ok: false; canceled?: boolean; error?: string }>;
+  computeLocalUseAuto?: () => Promise<{ ok: true } | { ok: false; canceled?: boolean; error?: string }>;
   computeEnsureDefault?: () => Promise<{ ok: true; endpointId: string; added: boolean } | { ok: false; error: string }>;
   /** 名前を付けて保存（OS ダイアログ）。**上書き確認は OS が出す。** */
   saveFile?: (payload: {
@@ -460,9 +466,71 @@ export type ColabSpecsResult =
   | { ok: true; tier: string | null; specs: (ColabRuntimeSpec & { eligible: boolean })[] }
   | { ok: false; error: string };
 
+/** この PC の Python の設定（`compute-endpoints.json` の最上位 `local`）。 */
+export interface LocalPythonSetting {
+  mode: "auto" | "path";
+  path?: string;
+}
+
+export type LocalCandidateStatus = "selected" | "usable" | "missing" | "excluded" | "probe-failed";
+
+export interface LocalCandidate {
+  path: string;
+  /** setting / py-launcher / path / conda-base */
+  source: string;
+  status: LocalCandidateStatus;
+  /** 理由コード（excluded-windowsapps / excluded-no-clt / missing-jupyter-server など） */
+  reasons: string[];
+  /** probe-failed の詳細（exit:1 など） */
+  detail?: string;
+  versions: { python: string | null; jupyterServer: string | null; ipykernel: string | null; torch: string | null; cuda: string | null } | null;
+  conda?: boolean;
+  venv?: boolean;
+  externallyManaged?: boolean;
+  elapsedMs?: number;
+}
+
+export interface LocalGpuDevice {
+  name: string | null;
+  /** nvidia-smi の memory.total（MiB）。表示はこちら。 */
+  memoryMiB: number | null;
+  /** torch の total_memory（記録のみ）。 */
+  memoryBytes: number | null;
+  capability: number[] | null;
+  /** そのビルドの get_arch_list() に含まれるか（判定できなければ null）。 */
+  archSupported: boolean | null;
+  /** PyTorch 側のデバイスと対応づいたか。 */
+  torchDevice?: boolean;
+}
+
+export interface LocalCapabilities {
+  accelerator: "cuda" | "mps" | "cpu" | null;
+  devices: LocalGpuDevice[];
+  torch: string | null;
+  cudaRuntime: string | null;
+  driver: string | null;
+}
+
+export interface LocalDetectResult {
+  state: "ok" | "none" | "canceled" | "error";
+  error?: string;
+  python: LocalPythonSetting;
+  selected: LocalCandidate | null;
+  /** 選んだ Python が jupyter_server と ipykernel を持つか。 */
+  usable: boolean;
+  candidates: LocalCandidate[];
+  searched: string[];
+  nvidia: { found: boolean; path: string | null; gpus: { name: string; memoryMiB: number | null; driver: string | null; uuid: string | null }[]; error: string | null; unparsed: number };
+  capabilities: LocalCapabilities | null;
+  reasons: string[];
+  guidance: { missing: string[]; commands: { shell: string; text: string }[]; links: string[] };
+  elapsedMs: number;
+}
+
 export interface ComputeEndpointsConfig {
   endpoints: ComputeEndpointEntry[];
   problems: string[];
+  local?: { python: LocalPythonSetting };
   /** main と backend の内部経路が使えるか（backend を別に起動した開発では false）。 */
   available: boolean;
 }

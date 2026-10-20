@@ -54,15 +54,20 @@ jobs:
         run: python3 scripts/check-shell-vars.py
 
   desktop:
-    name: Desktop (window geometry)
-    runs-on: ubuntu-latest
+    name: Desktop (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      # ウィンドウ位置の検証は Electron 非依存の純関数に切り出してある（windowGeometry.js）。
-      # 依存が無いので npm install も要らない。
+      # ウィンドウ位置の検証や、この PC の Python の検出（localPython.js）は Electron 非依存の純関数に切り出してある。
+      # 依存が無いので npm install も要らない。3 OS で回すのは、execFile の実際の振る舞い
+      # （.exe の解決・コマンド行の通り方・取り消し）を実 OS で見るため。
       - name: Test
         working-directory: desktop
         run: node --test

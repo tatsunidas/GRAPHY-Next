@@ -113,3 +113,101 @@ test("Colab: URL を持たずランタイムの種類だけ持つ・種類の値
   assert.equal(c.destinationOf(a), c.destinationOf({ ...a, spec: { ...a.spec, accelerator: "A100" } }),
     "GPU の種類を変えても送り先（Google の Colab）は同じ");
 });
+
+// ── schema 2: 「この PC」の Python の設定（最上位の local）──────────────────────
+const readJson = (dir) => JSON.parse(fs.readFileSync(path.join(dir, "compute-endpoints.json"), "utf8"));
+const lab = { id: "lab", label: "Lab", kind: "jupyter", url: "https://gpu.example.org/" };
+
+test("v1 のファイル: local は auto として読み、読むだけでは書き換えない・接続先は変わらない", () => {
+  const dir = tmp();
+  const file = path.join(dir, "compute-endpoints.json");
+  const v1 = JSON.stringify({ schemaVersion: 1, endpoints: [{ id: "lab", label: "Lab", kind: "jupyter", url: "https://gpu.example.org/" }] }, null, 2);
+  fs.writeFileSync(file, v1);
+  const c = fresh(dir);
+  const g = c.get();
+  assert.deepEqual(g.local, { python: { mode: "auto" } });
+  assert.deepEqual(g.endpoints, [lab]);
+  assert.deepEqual(g.problems, []);
+  assert.equal(fs.readFileSync(file, "utf8"), v1, "読むだけでは書き換えない");
+  // schemaVersion が無い古いファイルも同じ
+  fs.writeFileSync(file, JSON.stringify({ endpoints: [lab] }));
+  assert.deepEqual(fresh(dir).get().local, { python: { mode: "auto" } });
+});
+
+test("v2 のファイル: local を読む／不正な local は problems に積んで auto（黙って消さない）", () => {
+  const dir = tmp();
+  const file = path.join(dir, "compute-endpoints.json");
+  const abs = path.resolve("/opt/py/bin/python");
+  fs.writeFileSync(file, JSON.stringify({ schemaVersion: 2, endpoints: [], local: { python: { mode: "path", path: abs } } }));
+  assert.deepEqual(fresh(dir).get().local, { python: { mode: "path", path: abs } });
+  for (const [bad, code] of [
+    [{ python: { mode: "path", path: "relative/python" } }, "local:bad-python-path"],
+    [{ python: { mode: "path" } }, "local:bad-python-path"],
+    [{ python: { mode: "path", path: "/a\0b" } }, "local:bad-python-path"],
+    [{ python: { mode: "weird" } }, "local:bad-python-mode"],
+    [{ python: "x" }, "local:bad-python"],
+  ]) {
+    fs.writeFileSync(file, JSON.stringify({ schemaVersion: 2, endpoints: [lab], local: bad }));
+    const g = fresh(dir).get();
+    assert.deepEqual(g.problems, [code], JSON.stringify(bad));
+    assert.deepEqual(g.local, { python: { mode: "auto" } });
+    assert.deepEqual(g.endpoints, [lab], "接続先は影響を受けない");
+  }
+});
+
+test("v3 以上は schema-too-new を出し、保存で上書きしない", () => {
+  const dir = tmp();
+  const file = path.join(dir, "compute-endpoints.json");
+  const v3 = JSON.stringify({ schemaVersion: 3, endpoints: [lab], future: true });
+  fs.writeFileSync(file, v3);
+  const c = fresh(dir);
+  assert.deepEqual(c.get().problems, ["config:schema-too-new:3"]);
+  assert.deepEqual(c.save({ endpoints: [lab] }), { ok: false, problems: ["config:schema-too-new:3"] });
+  assert.deepEqual(c.setLocalPython({ mode: "auto" }), { ok: false, problems: ["config:schema-too-new:3"] });
+  assert.equal(fs.readFileSync(file, "utf8"), v3);
+});
+
+test("接続先を保存しても local が残る（旧実装の save は渡されなかった local を捨てる）", () => {
+  const dir = tmp();
+  const c = fresh(dir);
+  const abs = path.resolve("/opt/py/bin/python");
+  assert.equal(c.setLocalPython({ mode: "path", path: abs }).ok, true);
+  assert.equal(c.save({ endpoints: [lab] }).ok, true, "local を渡さない保存");
+  assert.deepEqual(readJson(dir).local, { python: { mode: "path", path: abs } });
+  assert.deepEqual(fresh(dir).get().local, { python: { mode: "path", path: abs } });
+  assert.equal(readJson(dir).schemaVersion, 2);
+  // 接続先をもう一度編集しても残る
+  assert.equal(c.save({ endpoints: [{ ...lab, label: "Lab2" }] }).ok, true);
+  assert.deepEqual(readJson(dir).local.python.path, abs);
+});
+
+test("Python の設定を変えても、接続先の件数・URL は変わらない（トークンは secretStore でここには無い）", () => {
+  const dir = tmp();
+  const c = fresh(dir);
+  c.save({ endpoints: [lab, { id: "colab", label: "C", kind: "colab", spec: { variant: "VARIANT_GPU", accelerator: "T4", shape: "SHAPE_STANDARD" } }] });
+  const before = JSON.stringify(readJson(dir).endpoints);
+  c.setLocalPython({ mode: "path", path: path.resolve("/opt/py/bin/python") });
+  assert.equal(JSON.stringify(readJson(dir).endpoints), before);
+  c.setLocalPython({ mode: "auto" });
+  assert.deepEqual(readJson(dir).local, { python: { mode: "auto" } });
+  assert.equal(JSON.stringify(readJson(dir).endpoints), before);
+});
+
+test("setLocalPython: 不正な設定・読めないファイルには書かない", () => {
+  const dir = tmp();
+  const c = fresh(dir);
+  assert.deepEqual(c.setLocalPython({ mode: "path", path: "rel" }).problems, ["local:bad-python-path"]);
+  assert.equal(fs.existsSync(path.join(dir, "compute-endpoints.json")), false);
+  fs.writeFileSync(path.join(dir, "compute-endpoints.json"), "{ broken");
+  const c2 = fresh(dir);
+  assert.match(c2.setLocalPython({ mode: "auto" }).problems[0], /^config:parse-error/);
+  assert.equal(fs.readFileSync(path.join(dir, "compute-endpoints.json"), "utf8"), "{ broken");
+});
+
+test("local を渡した save: 検査して書く／不正なら何も書かない。接続先の検査は local の影響を受けない", () => {
+  const dir = tmp();
+  const c = fresh(dir);
+  assert.equal(c.save({ endpoints: [lab], local: { python: { mode: "path", path: "rel" } } }).ok, false);
+  assert.equal(fs.existsSync(path.join(dir, "compute-endpoints.json")), false);
+  assert.equal(c.validate({ endpoints: [lab], local: "ignored" }).ok, true);
+});

@@ -31,6 +31,7 @@ const secretStore = require("./secretStore");
 const aiGateway = require("./aiGateway");
 const aiProviders = require("./aiProviders");
 const computeEndpoints = require("./computeEndpoints");
+const localPython = require("./localPython");
 const dbFolders = require("./dbFolders");
 const { resolveDevDataDir } = require("./devDataDir");
 const tlsPasswords = require("./tlsPasswords");
@@ -1648,6 +1649,7 @@ ipcMain.handle("graphy:compute-endpoints-get", () => {
           },
     ),
     problems: c.problems,
+    local: c.local,
     // 内部経路が使えない（backend を別に起動した開発など）ときは画面が理由を出す
     available: computeBridge.enabled(),
   };
@@ -1700,6 +1702,61 @@ ipcMain.handle("graphy:compute-endpoints-set", async (e, cfg) => {
     await pushComputeEndpoints();
   }
   return result;
+});
+
+// ── この PC の Python と GPU（見て出すだけ。計算はまだ自機に向かない）──────────────────
+// 🔴 Python のパスを文字列で受ける口は作らない。指定は main のファイル選択 → 確認を通ったものだけ保存する。
+//    実行するのは固定の確認コードだけ（localPython.PROBE）。renderer から来た文字列は子プロセスの引数に入らない。
+ipcMain.handle("graphy:compute-local-detect", (_e, opts) => localPython.detect({ force: !!(opts && opts.force === true) }));
+ipcMain.handle("graphy:compute-local-cancel", () => localPython.cancel());
+
+ipcMain.handle("graphy:compute-local-pick-python", async (e) => {
+  const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
+  const r = await dialog.showOpenDialog(win, {
+    title: "Python",
+    properties: ["openFile"],
+    filters: process.platform === "win32" ? [{ name: "python.exe", extensions: ["exe"] }] : [],
+  });
+  if (r.canceled || r.filePaths.length === 0) return { ok: false, canceled: true };
+  const p = r.filePaths[0];
+  const v = localPython.validatePythonPath(p);
+  let isFile = false;
+  try { isFile = fs.statSync(p).isFile(); } catch { /* 下で拒否 */ }
+  if (!v.ok || !isFile) return { ok: false, error: v.ok ? "path-not-file" : v.reason };
+  // 選んだ Python はこのあとプラグインのコードを実行する先になるので、保存の前に確認する
+  const choice = dialog.showMessageBoxSync(win, {
+    type: "warning",
+    buttons: ["許可する", "取り消す"],
+    defaultId: 1,
+    cancelId: 1,
+    title: "この PC の Python を指定します",
+    message: "この Python でプラグインのコードを実行します。",
+    detail: p,
+  });
+  if (choice !== 0) return { ok: false, canceled: true };
+  const saved = computeEndpoints.setLocalPython({ mode: "path", path: p });
+  if (!saved.ok) return { ok: false, error: saved.problems[0] };
+  localPython.invalidate();
+  console.log("[compute] local python set by user");
+  return { ok: true, path: p };
+});
+
+ipcMain.handle("graphy:compute-local-use-auto", async (e) => {
+  const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
+  const choice = dialog.showMessageBoxSync(win, {
+    type: "warning",
+    buttons: ["許可する", "取り消す"],
+    defaultId: 1,
+    cancelId: 1,
+    title: "Python を自動で探します",
+    message: "指定した Python をやめ、この PC で見つかった Python を使います。",
+    detail: "見つかった Python でプラグインのコードを実行します。",
+  });
+  if (choice !== 0) return { ok: false, canceled: true };
+  const saved = computeEndpoints.setLocalPython({ mode: "auto" });
+  if (!saved.ok) return { ok: false, error: saved.problems[0] };
+  localPython.invalidate();
+  return { ok: true };
 });
 
 /**
@@ -1854,6 +1911,7 @@ app.whenReady().then(async () => {
   secretStore.init(resolveDataDir());
   aiProviders.init(resolveDataDir());
   computeEndpoints.init(resolveDataDir());
+  localPython.init({ dataDir: resolveDataDir(), getSetting: () => computeEndpoints.get().local.python });
   initColab();
   initGdrive();
   if (MAIN_SECRET) computeBridge.init({ secret: MAIN_SECRET, apiBase: API_BASE });
@@ -1912,6 +1970,7 @@ app.on("before-quit", (event) => {
   colabReleasedOnQuit = true;
   Promise.race([colabRuntimes.releaseAll(), new Promise((r) => setTimeout(r, 10000))]).finally(() => app.quit());
 });
+app.on("before-quit", () => localPython.cancel());
 app.on("before-quit", stopBackend);
 process.on("exit", stopBackend);
 
