@@ -4,6 +4,7 @@
  */
 package com.vis.graphynext.anonymize;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -42,16 +43,37 @@ public class AnonymizeJobController {
     private static final int MAX_MASK_SERIES = 1000;
 
     private final AnonymizeJobService jobs;
+    private final boolean importEnabled;
 
-    public AnonymizeJobController(AnonymizeJobService jobs) {
+    public AnonymizeJobController(AnonymizeJobService jobs,
+            @Value("${graphy.web.import-enabled:false}") boolean importEnabled) {
         this.jobs = jobs;
+        this.importEnabled = importEnabled;
+    }
+
+    public record Capabilities(boolean importEnabled) {
+    }
+
+    /** 画面が「PACS に保存」を出すかの判断に使う。サーバー設定のみで、画面からは変えられない。 */
+    @GetMapping("/config")
+    public Capabilities config() {
+        return new Capabilities(importEnabled);
     }
 
     @PostMapping
     public AnonymizeJobService.Status submit(@RequestBody JobRequest req) {
         String output = req.output() == null || req.output().isBlank() ? "zip" : req.output();
-        if (!"zip".equals(output)) {
+        boolean stow = "stow".equals(output);
+        if (!stow && !"zip".equals(output)) {
             throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "出力先 " + output + " は未対応です");
+        }
+        if (stow && !importEnabled) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "このサーバーでは PACS への保存が許可されていません（graphy.web.import-enabled）");
+        }
+        if (stow && req.options() != null && req.options().contains("RetainUIDs")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "UID を保持したまま PACS へ保存すると元のスタディと混ざるため、RetainUIDs は使えません");
         }
         AnonymizeController.AnonRequest base = new AnonymizeController.AnonRequest(req.studyUids(), req.options(),
                 req.replacePatientName(), req.replacePatientId(), req.randomSeed(), req.manualRetainTags(),
@@ -72,7 +94,7 @@ public class AnonymizeJobController {
             }
         }
         try {
-            return jobs.submit(req.studyUids(), cfg, req.burnIn(), masks);
+            return jobs.submit(req.studyUids(), cfg, req.burnIn(), masks, stow);
         } catch (IOException e) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "ジョブを開始できません: " + e.getMessage());
         }

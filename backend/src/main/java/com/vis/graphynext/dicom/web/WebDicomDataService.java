@@ -509,26 +509,74 @@ public class WebDicomDataService {
         storeInstances(parts);
     }
 
+    /** STOW-RS の結果。{@code failures} は PACS が拒否した SOP（理由つき）。 */
+    public record StowResult(int sent, List<String> failures) {
+        public int stored() {
+            return sent - failures.size();
+        }
+    }
+
+    /** 保存して、1 枚でも PACS に拒否されたら例外にする（拒否を黙って成功扱いにしない）。 */
     public void storeInstances(List<byte[]> dicoms) {
+        StowResult r = storeInstancesChecked(dicoms);
+        if (!r.failures().isEmpty()) {
+            throw new IllegalStateException("PACS が " + r.failures().size() + " 枚の保存を拒否しました: "
+                    + String.join(" / ", r.failures().subList(0, Math.min(5, r.failures().size()))));
+        }
+    }
+
+    /** STOW-RS。応答の {@code FailedSOPSequence} を読んで返す（HTTP エラーは従来どおり例外）。 */
+    public StowResult storeInstancesChecked(List<byte[]> dicoms) {
         if (baseUrl.isEmpty()) {
             throw new IllegalStateException(
                     "DICOMweb 接続先が未設定です（graphy.dicom.dicomweb.base-url）。");
         }
         if (dicoms == null || dicoms.isEmpty()) {
-            return;
+            return new StowResult(0, List.of());
         }
         String boundary = "graphyStow" + Integer.toHexString(System.identityHashCode(dicoms));
         byte[] payload = buildMultipartRelated(dicoms, boundary, "application/dicom");
         MediaType contentType = MediaType.parseMediaType(
                 "multipart/related; type=\"application/dicom\"; boundary=" + boundary);
         log.debug("STOW-RS store: {} instances ({} bytes)", dicoms.size(), payload.length);
-        client.post()
+        byte[] resp = client.post()
                 .uri("/studies")
                 .contentType(contentType)
                 .accept(DICOM_JSON)
                 .body(payload)
                 .retrieve()
-                .toBodilessEntity();
+                .body(byte[].class);
+        return new StowResult(dicoms.size(), stowFailures(resp));
+    }
+
+    /** STOW 応答は配列でなく 1 つのオブジェクトで返る。{@link #parseDatasets} は配列を読むので包む。 */
+    private static byte[] asArray(byte[] json) {
+        if (json == null || new String(json, StandardCharsets.UTF_8).trim().startsWith("[")) {
+            return json;
+        }
+        return ("[" + new String(json, StandardCharsets.UTF_8) + "]").getBytes(StandardCharsets.UTF_8);
+    }
+
+    /** STOW 応答（DICOM JSON）の {@code FailedSOPSequence} から「SOP: 理由コード」を集める。空・読めない本文は失敗なし。 */
+    static List<String> stowFailures(byte[] json) {
+        List<String> out = new ArrayList<>();
+        List<Attributes> ds;
+        try {
+            ds = parseDatasets(asArray(json));
+        } catch (RuntimeException e) {
+            return out;
+        }
+        for (Attributes a : ds) {
+            org.dcm4che3.data.Sequence failed = a.getSequence(Tag.FailedSOPSequence);
+            if (failed == null) {
+                continue;
+            }
+            for (Attributes f : failed) {
+                out.add(f.getString(Tag.ReferencedSOPInstanceUID, "?") + ": 理由 "
+                        + Integer.toHexString(f.getInt(Tag.FailureReason, 0)));
+            }
+        }
+        return out;
     }
 
     /**
