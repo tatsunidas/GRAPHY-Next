@@ -32,6 +32,7 @@ const aiGateway = require("./aiGateway");
 const aiProviders = require("./aiProviders");
 const computeEndpoints = require("./computeEndpoints");
 const dbFolders = require("./dbFolders");
+const { resolveDevDataDir } = require("./devDataDir");
 const tlsPasswords = require("./tlsPasswords");
 const { waitPortFree } = require("./portWait");
 const { ensureDefaultEndpoint } = require("./computeDefault");
@@ -126,6 +127,7 @@ const VIEWER_DEFAULTS = {
   geometry3d: { width: 1100, height: 800 },
   // GLAM 解析は図を横に並べるので、やや幅広を既定にする。
   glam: { width: 1250, height: 900 },
+  "radiomics-features": { width: 1250, height: 900 },
 };
 
 /** 同梱 / 開発時の backend jar のパスを解決する。 */
@@ -168,10 +170,22 @@ function resolveJava() {
  *   productName を変える場合はこれら 4 箇所を同時に更新すること。
  *
  * 開発時: 従来どおり CWD（通常 desktop/）をそのまま使い、既存の開発用 desktop/data を壊さない。
+ *   環境変数 GRAPHY_DEV_DATA_DIR（絶対パス・既存のフォルダ）を指定すると、DB・プラグイン・設定をそこに固定する
+ *   （worktree を作るたびに空の DB になるのを避ける。devDataDir.js）。
  */
 const APP_DATA_FOLDER = "GRAPHY-Next";
 function resolveDataDir() {
-  if (!app.isPackaged) return process.cwd();
+  if (!app.isPackaged) {
+    try {
+      // GRAPHY_DEV_DATA_DIR があれば開発のデータをそこに固定する（worktree ごとに空の DB にならない）。
+      return resolveDevDataDir(process.env, false, process.cwd());
+    } catch (e) {
+      console.error(`[backend] ${e.message}`);
+      dialog.showErrorBox("開発用データフォルダの指定が正しくありません", e.message);
+      app.exit(1);
+      throw e;
+    }
+  }
   const dir = path.join(app.getPath("appData"), APP_DATA_FOLDER);
   try {
     fs.mkdirSync(dir, { recursive: true });
@@ -762,6 +776,31 @@ ipcMain.handle("graphy:get-memory-info", () => {
     }
   }
   return { totalBytes, freeBytes };
+});
+
+// Chromium が報告した GPU の機能状態と GPU 一覧（設定＞描画環境。fw/render-environment-design.md）。
+// getGPUInfo('basic') は Promise、getGPUFeatureStatus() は同期。取れなければ空で返す
+// （renderer 側は「未取得」と表示する。0 や hardware で埋めない）。
+ipcMain.handle("graphy:gpu-status", async () => {
+  let featureStatus = {};
+  try {
+    featureStatus = app.getGPUFeatureStatus() || {};
+  } catch {
+    /* 取れなければ空のまま返す */
+  }
+  let devices = [];
+  try {
+    const info = await app.getGPUInfo("basic");
+    const list = Array.isArray(info?.gpuDevice) ? info.gpuDevice : [];
+    devices = list.map((g) => ({
+      vendorId: Number(g.vendorId) || 0,
+      deviceId: Number(g.deviceId) || 0,
+      active: g.active === true,
+    }));
+  } catch {
+    /* 同上 */
+  }
+  return { featureStatus, devices };
 });
 
 // 外部 URL / mailto を OS の既定アプリ（ブラウザ・メーラ）で開く（Help メニューのリンク等）。

@@ -31,12 +31,17 @@ import {
   isCacheSizeExceeded,
 } from "../viewer/volumeMemory";
 import { confirmVolumeMemory } from "../viewer/volumeMemoryGuard";
+import { MIN_SLAB_MM, finestVoxelMm, tooFineForVolumeRendering } from "../viewer/volumeScale";
 import { useDeviceClass } from "../mobile/useDeviceClass";
 import { imageIdForInstance, imageIdForCell } from "../viewer/imageId";
 import { metaData } from "@cornerstonejs/core";
 import { buildMprVolume } from "../viewer/mpr";
 import { SliceDuplicatesError, sopGridIndexMap, volumeDepthNote, type VolumeDepthNote } from "../viewer/depthVolume";
 import { VolumeDepthChip } from "../viewer/VolumeDepthChip";
+import { loadRenderEnvSummary } from "../viewer/renderEnvReport";
+import { parseRenderQuality, type RenderKind } from "../viewer/renderEnv";
+import { installDebugApi, publishRender3dStats } from "../viewer/debugApi";
+import { requestOpenSettings } from "../settings/settingsOpenEvents";
 import {
   createVtkVolumeView,
   vtkImageDataFromVolume,
@@ -125,6 +130,23 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
   // 体積のスライス順の SOP → k（2D の ROI を描かれている画像に合わせて載せる）と、間隔が不均一なときの各間隔。
   const [sopToK, setSopToK] = useState<Map<string, number> | undefined>(undefined);
   const [depthNote, setDepthNote] = useState<VolumeDepthNote | null>(null);
+  // 描画の種別（ソフトウェア描画のときだけヘッダに印を出す。fw/render-environment-design.md）。
+  const [renderKind, setRenderKind] = useState<RenderKind | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void loadRenderEnvSummary().then((v) => {
+      if (alive) setRenderKind(v.kind);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  // automator 用: このウィンドウでも window.__graphyDebug を用意し、3D の描画の実測を読めるようにする（dev ビルドのみ）。
+  useEffect(() => {
+    installDebugApi();
+    publishRender3dStats(() => viewRef.current?.getRenderStats() ?? null);
+    return () => publishRender3dStats(null);
+  }, []);
   const [mode, setMode] = useState<VtkRenderMode>("VR");
   const [orthoPos, setOrthoPos] = useState<{ x: number; y: number; z: number }>({ x: 0.5, y: 0.5, z: 0.5 });
   const [lutName, setLutName] = useState<string | null>(null);
@@ -262,6 +284,12 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         setMessage(t("viewer3d.needVolume"));
         return;
       }
+      if (tooFineForVolumeRendering(guardLayout)) {
+        // ボクセルが描画ライブラリの最小のスラブより細かい（顕微鏡など）。組んでも真っ黒になるので、理由を出して止める
+        setPhase("error");
+        setMessage(t("volume.tooFine", { voxel: String(finestVoxelMm(guardLayout)?.toPrecision(3)), min: String(MIN_SLAB_MM) }));
+        return;
+      }
 
       // ボリューム構築で確保しようとする量を先に見積もり、バジェットを超えるなら確認する
       // （fw/volume-memory-guard.md V2）。予測不能・警告 OFF・利用者が続行なら素通り。
@@ -355,7 +383,9 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
       // 背景色（環境設定）。読めなければ黒のまま。設定を変えたら開き直すと反映する（2D と同じ）。
       fetchSettings()
         .then((m) => {
-          if (viewRef.current === view) view.setBackground(hexToRgb01(m["viewer3d.background"]));
+          if (viewRef.current !== view) return;
+          view.setBackground(hexToRgb01(m["viewer3d.background"]));
+          view.setRenderQuality(parseRenderQuality(m["viewer3d.renderQuality"]));
         })
         .catch(() => undefined);
       // mesh / 3D ROI アクターを同一 vtk シーンへ重畳するため renderer を接続。
@@ -608,6 +638,16 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         )}
         <span style={hTitle}>{t("main.toolbar.viewer3d")}</span>
         {title && <span style={hSeries}>{title}</span>}
+        {renderKind === "software" && (
+          <button
+            style={softwareBadge}
+            onClick={() => requestOpenSettings("renderEnv")}
+            title={t("viewer3d.softwareBadgeHint")}
+            data-testid="viewer3d-software-badge"
+          >
+            ⚠ {t("viewer3d.softwareBadge")}
+          </button>
+        )}
         <VolumeDepthChip note={depthNote} style={tiltChip} />
         {tilt !== null && (
           <span style={tiltChip} title={t("mpr.tiltCorrectedHint")}>
@@ -952,6 +992,12 @@ const tiltChip: React.CSSProperties = {
   background: "#2a220f",
   borderRadius: 4,
   padding: "1px 7px",
+};
+// ソフトウェア描画の印。tiltChip と同じ警告色。押せる（設定＞描画環境を開く）。
+const softwareBadge: React.CSSProperties = {
+  ...tiltChip,
+  marginLeft: 8,
+  cursor: "pointer",
 };
 const bodyWrap: React.CSSProperties = { position: "relative", flex: 1, display: "flex", minHeight: 0 };
 const body: React.CSSProperties = { position: "relative", flex: 1, minWidth: 0 };

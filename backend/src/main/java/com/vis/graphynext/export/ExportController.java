@@ -80,6 +80,22 @@ public class ExportController {
      * 複数なら {@code graphy-export_<pid>_+N.zip}。ファイル名に使えない文字は {@code _} へ置換。
      */
     static String exportFilename(List<String> patientIds) {
+        return exportBaseName(patientIds) + ".zip";
+    }
+
+    /**
+     * デスクトップのフォルダ出力名（ZIP 化しても同じ名前）。単一患者は患者 ID そのもの、
+     * 複数患者・患者 ID なしは従来の {@code graphy-export_...}。
+     */
+    static String outputName(List<String> patientIds) {
+        List<String> clean = patientIds == null ? List.of()
+                : patientIds.stream().filter(p -> p != null && !p.isBlank()).map(ExportController::sanitize)
+                        .filter(s -> !s.isEmpty()).toList();
+        return clean.size() == 1 ? clean.get(0) : exportBaseName(patientIds);
+    }
+
+    /** 拡張子なしの従来名。 */
+    static String exportBaseName(List<String> patientIds) {
         List<String> clean = patientIds == null ? List.of()
                 : patientIds.stream()
                         .filter(p -> p != null && !p.isBlank())
@@ -87,12 +103,12 @@ public class ExportController {
                         .filter(s -> !s.isEmpty())
                         .toList();
         if (clean.isEmpty()) {
-            return "graphy-export.zip";
+            return "graphy-export";
         }
         if (clean.size() == 1) {
-            return "graphy-export_" + clean.get(0) + ".zip";
+            return "graphy-export_" + clean.get(0);
         }
-        return "graphy-export_" + clean.get(0) + "_+" + (clean.size() - 1) + ".zip";
+        return "graphy-export_" + clean.get(0) + "_+" + (clean.size() - 1);
     }
 
     private static String sanitize(String s) {

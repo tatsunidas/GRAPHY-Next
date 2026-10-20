@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSyntheticVolume, findBlobs, judge, type Expected, type SelfTestRow } from "./render3dSelfTest";
+import { buildSyntheticVolume, edgeSpan, findBlobs, hardwareRow, judge, type Expected, type SelfTestRow } from "./render3dSelfTest";
 
 const W = 256;
 const H = 256;
@@ -27,7 +27,10 @@ const REF: Rect = [20, 59, 50, 149];
 const MARK: Rect = [94, 105, 80, 119];
 
 const status = (rows: SelfTestRow[], id: string) => rows.find((r) => r.id === id)?.status;
-const run = (rects: Rect[], exp = EXP) => judge(findBlobs(paint(rects), W, H), exp);
+const run = (rects: Rect[], exp = EXP) => {
+  const buf = paint(rects);
+  return judge(findBlobs(buf, W, H), exp, { rgba: buf, w: W, h: H });
+};
 
 describe("findBlobs", () => {
   it("2 つの離れた矩形を面積順に分ける", () => {
@@ -77,6 +80,12 @@ describe("judge 負例", () => {
     expect(status(rows, "distance")).toBe("fail");
     expect(status(rows, "spacing")).toBe("pass");
   });
+  it("右下に向きのキューブ大の像が増えると、向きと距離比は失敗（目印と取り違えない）", () => {
+    const rows = run([REF, MARK, [220, 245, 220, 245]]);
+    expect(status(rows, "orientation")).toBe("fail");
+    expect(status(rows, "distance")).toBe("fail");
+    expect(rows.find((r) => r.id === "orientation")?.reason).toBe("extraBlobs");
+  });
   it("距離比がずれると距離比が失敗", () => {
     const rows = run([REF, [150, 161, 80, 119]]);
     expect(status(rows, "distance")).toBe("fail");
@@ -120,5 +129,62 @@ describe("buildSyntheticVolume", () => {
     expect(nz * sp[2]).toBeCloseTo(v.expected.refHeightMm);
     expect(v.expected.centerDistMm).toBe(58);
     expect(sp).toEqual([1, 1, 2.5]);
+  });
+});
+
+describe("hardwareRow（描画環境の判定を写す）", () => {
+  it("GPU で描いていれば合格", () => {
+    expect(hardwareRow("hardware")).toMatchObject({ status: "pass", reason: "hardwareYes" });
+  });
+  it("ソフトウェア描画なら失敗", () => {
+    expect(hardwareRow("software")).toMatchObject({ status: "fail", reason: "softwareRender" });
+  });
+  it("判定できなければ未実施（合格にしない）", () => {
+    expect(hardwareRow("unknown")).toMatchObject({ status: "pending", reason: "kindUnknown" });
+  });
+});
+
+/** 縁を幅 2R の直線でぼかした箱（境界 x0-0.5・x1+0.5 でちょうど半値。補間で描いた縁を模す）。 */
+function paintBlurred(rects: Rect[], R: number): Uint8Array {
+  const buf = new Uint8Array(W * H * 4);
+  const clamp = (v: number) => Math.min(1, Math.max(0, v));
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      let v = 0;
+      for (const [x0, x1, y0, y1] of rects) {
+        const fx = clamp(0.5 + Math.min(x - (x0 - 0.5), x1 + 0.5 - x) / (2 * R));
+        const fy = clamp(0.5 + Math.min(y - (y0 - 0.5), y1 + 0.5 - y) / (2 * R));
+        v = Math.max(v, Math.min(fx, fy));
+      }
+      const o = (y * W + x) * 4;
+      buf[o] = buf[o + 1] = buf[o + 2] = Math.round(255 * v);
+      buf[o + 3] = 255;
+    }
+  }
+  return buf;
+}
+
+describe("半値幅（縁のぼけに左右されない幅）", () => {
+  it("ぼけた縁でも、半値幅は真の幅に 0.05 px 以内で合う", () => {
+    const buf = paintBlurred([REF], 5);
+    const y = 100;
+    const row = Array.from({ length: W }, (_, x) => buf[(y * W + x) * 4]);
+    const span = edgeSpan(row, 0, W - 1)!;
+    expect(Math.abs(span.width - 40)).toBeLessThan(0.05);
+    expect(Math.abs(span.start - 19.5)).toBeLessThan(0.05);
+  });
+  it("ぼけた縁でも、正しい比なら画素間隔と距離比は合格（外接矩形だと縁の分だけ広く測って失敗する）", () => {
+    const buf = paintBlurred([REF, MARK], 5);
+    const blobs = findBlobs(buf, W, H);
+    // 前提: 外接矩形は背景の閾値までの縁を含み、真の幅 40 より広い（この差で旧実装は失敗していた）
+    expect(blobs[0].maxX - blobs[0].minX + 1).toBeGreaterThanOrEqual(44);
+    const rows = judge(blobs, EXP, { rgba: buf, w: W, h: H });
+    expect(status(rows, "spacing")).toBe("pass");
+    expect(status(rows, "distance")).toBe("pass");
+  });
+  it("ぼけた縁でも、距離がずれていれば距離比は失敗", () => {
+    const buf = paintBlurred([REF, [150, 161, 80, 119]], 5);
+    const rows = judge(findBlobs(buf, W, H), EXP, { rgba: buf, w: W, h: H });
+    expect(status(rows, "distance")).toBe("fail");
   });
 });

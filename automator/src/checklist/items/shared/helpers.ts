@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test";
 import type { StepRecorder } from "../../types.js";
+import { dismissStartupDialogs } from "../../../common/dismissDialogs.js";
 
 /**
  * MainScreen の React マウントが完了していることを検地する（driver.start() 直後や reload 直後は
@@ -17,6 +18,10 @@ export async function waitForMainScreenReady(page: Page, timeoutMs = 20_000): Pr
 export async function selectFirstStudy(page: Page, recorder: StepRecorder): Promise<void> {
   await waitForMainScreenReady(page);
   recorder.step("MainScreen の初期マウントを確認");
+  // アプリ内更新通知（新しい版が公開されると毎回出る）が前面を覆い、以降のクリックを吸うので閉じる。
+  // 通知は更新確認の応答後に出るため、出るまで少し待ってから探す。
+  await page.waitForTimeout(2500);
+  await dismissStartupDialogs(page);
 
   page.once("dialog", (d) => void d.accept());
   const dateInputs = page.locator('input[type="date"]');

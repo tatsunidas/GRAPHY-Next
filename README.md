@@ -14,8 +14,7 @@ Spring Boot バックエンド ＋ React フロントエンドを、**Web アプ
 **ユーザーマニュアル**: <https://tatsunidas.github.io/GRAPHY-Next/>（作成中。ソースは
 [`docs/`](docs/)、`mkdocs build` で生成し GitHub Pages へ公開）
 
-> 詳細設計は [`fw/`](fw/) を参照（`fw/HANDOFF.md` が起点）。開発計画は
-> [`fw/development-phases.md`](fw/development-phases.md)。
+> 詳細設計と開発計画は、非公開の資料で管理しています。コードやコメントにある `fw/xxx.md` は、その設計資料のファイル名です。
 
 ## 主な機能
 
@@ -41,7 +40,7 @@ Spring Boot バックエンド ＋ React フロントエンドを、**Web アプ
 - **Art of Imaging** — 表示中の画像をパブリックドメインの画家の作風へ翻案する（別リポジトリのプラグイン・**0.3.0 以降**）。下記参照。
 
 > 座標・計測の実装方針は
-> [`fw/cornerstone-3d-geometry-caveat.md`](fw/cornerstone-3d-geometry-caveat.md) を必読
+> 設計資料 `fw/cornerstone-3d-geometry-caveat.md` を必読
 > （3D ジオメトリは自前の患者 LPS mm 幾何で計算、cornerstone は表示のみ）。
 
 ## 構成
@@ -50,7 +49,6 @@ Spring Boot バックエンド ＋ React フロントエンドを、**Web アプ
 backend/    Spring Boot (Java 21)  — profile: web / standalone
 frontend/   React + TypeScript + Vite — UI 全体
 desktop/    Electron — standalone backend を spawn して UI をラップ
-fw/         設計ドキュメント（ソース・オブ・トゥルース）
 scripts/    開発起動・バージョン更新スクリプト
 ```
 
@@ -77,7 +75,8 @@ scripts/    開発起動・バージョン更新スクリプト
 | OS | 成果物 | 備考 |
 |---|---|---|
 | Windows | `GRAPHY-Next.Setup.<ver>.exe`（NSIS） | 実行してインストール。初回は SmartScreen の警告が出るので「詳細情報 ＞ 実行」 |
-| macOS | `GRAPHY-Next-<ver>.dmg` | マウントして Applications へ。初回は「開いていません」と出るので、「システム設定 ＞ プライバシーとセキュリティ ＞ このまま開く」で開く（Apple の公証はまだ受けていない。画面つきの手順は docs/install.md） |
+| macOS（Apple Silicon） | `GRAPHY-Next-<ver>-arm64.dmg` | マウントして Applications へ。Intel Mac は下の行の `-x64.dmg`。初回は「開いていません」と出るので、「システム設定 ＞ プライバシーとセキュリティ ＞ このまま開く」で開く（Apple の公証はまだ受けていない。画面つきの手順は docs/install.md） |
+| macOS（Intel） | `GRAPHY-Next-<ver>-x64.dmg` | 手順は Apple Silicon 版と同じ。M1 以降の Mac には `-arm64.dmg`、Intel Mac には `-x64.dmg`（「このMacについて」のチップで確認） |
 | Linux（Ubuntu / Debian） | `graphy-next-desktop_<ver>_amd64.deb` | `sudo apt install ./graphy-next-desktop_<ver>_amd64.deb`（推奨） |
 | Linux（その他） | `GRAPHY-Next-<ver>.AppImage` | `chmod +x` して実行。libfuse2 が要る。Ubuntu 24.04 などでは sandbox の制限で起動しないことがあるので `.deb` を使う |
 
@@ -192,8 +191,7 @@ java -jar graphy-next-backend.jar \
   扱ってください。
 - 院内規程・倫理審査・患者同意の範囲内でご判断ください。
 
-設計の詳細は [`fw/art-of-imaging-design.md`](fw/art-of-imaging-design.md)、
-外部送信の設計判断は [`fw/security.md`](fw/security.md) にあります。
+設計の詳細と外部送信の設計判断は、設計資料（`fw/art-of-imaging-design.md`、`fw/security.md`）にあります。
 
 ## クイックスタート（開発）
 

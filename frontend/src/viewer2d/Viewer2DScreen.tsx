@@ -17,6 +17,7 @@ import {
   type LutData,
 } from "../api";
 import { SeriesViewer } from "../viewer/SeriesViewer";
+import { useToolPanelDefault } from "../viewer/toolPanelDefault";
 import { FusionImageViewer } from "../viewer/FusionOverlayViewer";
 import { ZERO_ADJUST, isZeroAdjust, type ManualAdjust } from "../viewer/regTransform";
 import { registrationToTransform, type RegistrationResult } from "../viewer/regResult";
@@ -53,7 +54,7 @@ import { subscribeRoiMaskStore } from "../viewer/roiMaskStore";
 import { getLoadedRois, registerRoiCollector, scheduleRoiSave } from "../viewer/roiSaveStore";
 import { collectRoisForPatient, sopOfImageId } from "../viewer/roiRestore";
 import { emitRoiReveal } from "../viewer/roiReveal";
-import { frameOfImageId } from "../viewer/imageId";
+import { frameOfImageId, sopFromImageId } from "../viewer/imageId";
 import { derivePatientKey } from "../viewer/patientKey";
 import { getFocusedTile } from "../viewer/focusedTile";
 import { hasClipboardRoi } from "../viewer/roiClipboard";
@@ -69,9 +70,12 @@ import { askCopyWithRoi, CopyImageAskHost } from "./CopyImageAsk";
 import { classifySeriesRenderability } from "../viewer/seriesRenderable";
 import { subscribeSeriesRefresh } from "../viewer/viewerRefresh";
 import { WandDialog } from "./WandDialog";
+import { ScissorsDialog } from "./ScissorsDialog";
+import { ThresholdDialog } from "./ThresholdDialog";
 import { LevelSetsDialog } from "./LevelSetsDialog";
 import { HistogramDialog } from "./HistogramDialog";
 import { ResampleDialog } from "./ResampleDialog";
+import { StitchDialog } from "./StitchDialog";
 import { FourierDialog } from "./FourierDialog";
 import { SUVCalibrationDialog } from "../viewer/SUVCalibrationDialog";
 import { getSuv, subscribeSuvStore } from "../viewer/suvStore";
@@ -107,6 +111,7 @@ import { PluginSaveConfirmDialog, type PluginSaveRequest } from "./PluginSaveCon
 import { Viewer2DMenuBar } from "./Viewer2DMenuBar";
 import { RoiManagerPanel } from "./RoiManagerPanel";
 import { GLAM_CTX_KEY } from "../radiomics/GlamAnalysisScreen";
+import { ROI_FEATURE_CTX_KEY } from "../radiomics/RoiFeatureScreen";
 import { useI18n } from "../i18n/i18n";
 import { desktop } from "../desktopBridge";
 import { closeAllPluginWindows } from "../plugins/pluginWindowApi";
@@ -129,6 +134,9 @@ interface FusionOverlay {
   /** ドロップ元タイルで適用中だった LUT。fusion オーバーレイの初期 LUT に引き継ぐ（無ければグレースケール）。 */
   initialLut?: LutData | null;
 }
+
+/** 右クリックとみなす、押下位置からの最大移動量（px）。これを超えたら右ドラッグ（Zoom）。 */
+const RIGHT_CLICK_SLOP_PX = 4;
 
 interface Tile {
   id: string;        // `${studyUid}|${seriesUid}`
@@ -797,9 +805,10 @@ function TileGrid({
   // Histogram 解析ダイアログの対象（開いている時のみ non-null）。
   const [histo, setHisto] = useState<{ tile: Tile; z: number; c: number; t: number } | null>(null);
   const [resample, setResample] = useState<{ tile: Tile; c: number; t: number } | null>(null);
+  const [stitchOpen, setStitchOpen] = useState(false);
   const [fourier, setFourier] = useState<{ tileId: string; label: string } | null>(null);
   const [suvTarget, setSuvTarget] = useState<{ imageId: string; seriesUid: string } | null>(null);
-  const [tagTarget, setTagTarget] = useState<Tile | null>(null);
+  const [tagTarget, setTagTarget] = useState<{ tile: Tile; sop: string | null } | null>(null);
   const [reportTarget, setReportTarget] = useState<Tile | null>(null);
   const [textureTarget, setTextureTarget] = useState<Tile | null>(null);
   // コントラスト調整（W/L）ダイアログの対象（開いている時のみ non-null）。
@@ -811,13 +820,25 @@ function TileGrid({
   // 画像下のツールパネル（操作バー＋スライダー群＋Fusion バー）の表示 ON/OFF（このタブ内の全タイルに適用）。
   // OFF にすると全タイルが同一サイズの画像パネルになり、次元数の違うシリーズも同じ大きさで比較できる。
   // View メニューと右クリックメニューはこの単一の状態を共有するため、常に表示が一致する。
-  const [panelVisible, setPanelVisible] = useState(true);
+  // 初期値は環境設定 viewer.toolPanelDefault（既定: 閉＝画像のみ）。設定の取得が済んだ時点で一度だけ反映する。
+  const [panelVisible, setPanelVisible] = useState(false);
+  const toolPanelDefault = useToolPanelDefault();
+  useEffect(() => {
+    if (toolPanelDefault !== null) setPanelVisible(toolPanelDefault);
+  }, [toolPanelDefault]);
 
   // タイル枠の右クリックメニュー（画面座標）。null=非表示。
-  const [frameMenu, setFrameMenu] = useState<{ x: number; y: number } | null>(null);
+  const [frameMenu, setFrameMenu] = useState<{ x: number; y: number; tileId: string } | null>(null);
+  // 右ボタンを押した位置。動かさずに離したクリックだけをメニューにする（右ドラッグは cornerstone の Zoom）。
+  const rightDownRef = useRef<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    const down = (e: MouseEvent) => { if (e.button === 2) rightDownRef.current = { x: e.clientX, y: e.clientY }; };
+    window.addEventListener("mousedown", down, true);
+    return () => window.removeEventListener("mousedown", down, true);
+  }, []);
   /** ROI の上での右クリックメニュー（スプライン Fit）。null=非表示。 */
   const [roiMenu, setRoiMenu] = useState<{ x: number; y: number; uid: string; fitted: boolean; splineable: boolean; measure: boolean; convertible: boolean } | null>(null);
-  const openFrameMenu = useCallback((e: React.MouseEvent) => {
+  const openFrameMenu = useCallback((e: React.MouseEvent, tileId: string) => {
     // 画像キャンバス上は cornerstone の右ドラッグ Zoom を優先し、原則メニューを出さない。
     // **ただし ROI の上だけは例外**（その ROI への操作を出す。空きスペースでは従来どおり Zoom）。
     const panel = (e.target as HTMLElement).closest?.("[data-graphy-image-panel]") as HTMLElement | null;
@@ -836,11 +857,18 @@ function TileGrid({
           measure: annotationRoiKind(hit) === "measure",
           convertible: canConvertMeasureToRoi(hit?.metadata?.toolName),
         });
+        return;
+      }
+      // ROI の外: 動かさない右クリックなら「この画像のタグを表示」などのメニュー。ドラッグ（Zoom）では出さない。
+      const down = rightDownRef.current;
+      if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) <= RIGHT_CLICK_SLOP_PX) {
+        e.preventDefault();
+        setFrameMenu({ x: e.clientX, y: e.clientY, tileId });
       }
       return;
     }
     e.preventDefault();
-    setFrameMenu({ x: e.clientX, y: e.clientY });
+    setFrameMenu({ x: e.clientX, y: e.clientY, tileId });
   }, []);
   useEffect(() => {
     if (!roiMenu) return;
@@ -972,6 +1000,15 @@ function TileGrid({
   );
 
   // メニュー/ツールバーのコマンド対象: 選択タイル → 無ければ全タイル。
+  /** タイルの表示中の画像を初期位置にしてタグビューアを開く。タイルが無ければ false。 */
+  const openTagsOf = (tileId: string | undefined): boolean => {
+    const tile = patient.tiles.find((tl) => tl.id === tileId);
+    if (!tile) return false;
+    // 表示中の imageId から SOP を引く。引けなければ（blank など）シリーズ先頭＝null（誤った SOP を載せない）。
+    const imageId = queryViewerCommand(tile.id, (c) => c.getSuvContext())?.imageId;
+    setTagTarget({ tile, sop: imageId ? sopFromImageId(imageId) : null });
+    return true;
+  };
   const resolveTargets = useCallback(
     () => (selectedIds.size > 0 ? [...selectedIds] : patient.tiles.map((tl) => tl.id)),
     [selectedIds, patient.tiles],
@@ -1648,6 +1685,8 @@ function TileGrid({
         const dims = tileDimsRef.current.get(tile.id);
         setResample({ tile, c: dims?.c ?? 0, t: dims?.t ?? 0 });
       },
+      // 今の患者のタイル全部を候補に、つなぎ合わせダイアログを開く（2 未満でも開き、理由を出す）。
+      openStitch: () => setStitchOpen(true),
       // 対象（選択→無ければ先頭）タイルの**表示中スライス 1 枚**でフーリエ解析ダイアログを開く。
       openFourier: () => {
         const tid = resolveTargets()[0];
@@ -1668,9 +1707,7 @@ function TileGrid({
       // Tag Viewer: 対象（選択→無ければ先頭）タイルのシリーズで既存の DICOM 属性ビューアを開く。
       openTagViewer: () => {
         const tid = resolveTargets()[0];
-        const tile = patient.tiles.find((tl) => tl.id === tid);
-        if (!tile) { comingSoon(t("main.toolbar.tagViewer")); return; }
-        setTagTarget(tile);
+        if (!openTagsOf(tid)) comingSoon(t("main.toolbar.tagViewer"));
       },
       // Texture: 対象（選択→無ければ先頭）タイルのシリーズで Radiomics 可視化マップダイアログを開く。
       openTexture: () => {
@@ -1692,6 +1729,19 @@ function TileGrid({
         const d = desktop();
         if (d?.openViewer) void d.openViewer("glam");
         else window.open(`${window.location.pathname}#glam`, "graphy-glam");
+      },
+      // Radiomics 特徴量（ROI）: GLAM 解析と同じく別ウィンドウ。キーは別にして取り合わない。
+      openRoiFeatures: () => {
+        const tid = resolveTargets()[0];
+        const tile = patient.tiles.find((tl) => tl.id === tid);
+        if (!tile) { comingSoon(t("roiFeat.menu")); return; }
+        localStorage.setItem(ROI_FEATURE_CTX_KEY, JSON.stringify({
+          studyInstanceUid: tile.study.studyInstanceUid,
+          seriesInstanceUid: tile.series.seriesInstanceUid,
+        }));
+        const d = desktop();
+        if (d?.openViewer) void d.openViewer("radiomics-features");
+        else window.open(`${window.location.pathname}#radiomics-features`, "graphy-radiomics-features");
       },
       // レポート: 対象（選択→無ければ先頭）タイルのスタディでレポート編集ダイアログを開く。
       copyImage: () => {
@@ -1818,6 +1868,8 @@ function TileGrid({
         </div>
       )}
       <WandDialog />
+      <ScissorsDialog />
+      <ThresholdDialog />
       <LevelSetsDialog />
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
       {/* 単独表示のタイルは、このグリッドの外枠いっぱいに重ねる（他のタイルの大きさは変えない）。 */}
@@ -1855,7 +1907,7 @@ function TileGrid({
             syncEnabled={tile.syncEnabled}
             referenceLinesEnabled={refLines}
             showControls={panelVisible}
-            onFrameContextMenu={openFrameMenu}
+            onFrameContextMenu={(e) => openFrameMenu(e, tile.id)}
             commandKey={tile.id}
             selected={selectedIds.has(tile.id)}
             onToggleSelect={() => toggleSelect(tile.id)}
@@ -1873,6 +1925,14 @@ function TileGrid({
       {/* タイル枠の右クリックメニュー。View メニューと同じ panelVisible を操作するため表示は常に一致。 */}
       {frameMenu && (
         <div style={{ ...ctxMenuBox, left: frameMenu.x, top: frameMenu.y }} onClick={(e) => e.stopPropagation()}>
+          <button
+            style={ctxMenuItem}
+            data-testid="frame-ctx-tags"
+            onClick={() => { openTagsOf(frameMenu.tileId); setFrameMenu(null); }}
+          >
+            <span style={{ width: 14, display: "inline-block" }} />
+            {t("viewer2d.ctx.showTags")}
+          </button>
           <button
             style={ctxMenuItem}
             onClick={() => { setPanelVisible((v) => !v); setFrameMenu(null); }}
@@ -1982,6 +2042,17 @@ function TileGrid({
           onClose={() => setResample(null)}
         />
       )}
+      {stitchOpen && (
+        <StitchDialog
+          patientId={patient.patientId}
+          mode={mode}
+          candidates={patient.tiles.map((tl) => {
+            const d = tileDimsRef.current.get(tl.id);
+            return { id: tl.id, study: tl.study, series: tl.series, instances: tl.instances, c: d?.c ?? 0, t: d?.t ?? 0 };
+          })}
+          onClose={() => setStitchOpen(false)}
+        />
+      )}
       {suvTarget && (
         <SUVCalibrationDialog
           key={suvTarget.seriesUid}
@@ -1993,10 +2064,13 @@ function TileGrid({
       )}
       {tagTarget && (
         <TagViewerDialog
-          key={tagTarget.id}
+          key={tagTarget.tile.id}
           open
-          study={tagTarget.study}
-          series={tagTarget.series}
+          study={tagTarget.tile.study}
+          series={tagTarget.tile.series}
+          sopInstanceUid={tagTarget.sop}
+          tree={patient.tiles.map((tl) => ({ study: tl.study, series: tl.series, instances: tl.instances }))}
+          editable={mode === "standalone"}
           onClose={() => setTagTarget(null)}
         />
       )}
@@ -2103,6 +2177,10 @@ function TileCell({
   // 動画タイル（表示の操作だけを受けるタイル）。同期（🔗）の対象外
   const isVideoTile = useIsDisplayOnlyTile(commandKey);
   // ドラッグオーバー中のゾーン（ビジュアルオーバーレイ制御用）
+  // タイル単位のツールパネル開閉。画面全体の panelVisible（View メニュー・右クリックの一括切替）が変わったら
+  // それで上書きし、タイルの開閉ボタンで個別にも切り替える。Fusion バーも同じ開閉に束ねる。
+  const [panelOpen, setPanelOpen] = useState(showControls);
+  useEffect(() => { setPanelOpen(showControls); }, [showControls]);
   const [dropZone, setDropZone] = useState<"before" | "after" | "center" | "none" | null>(null);
 
   // Fusion: オーバーレイの C/T インデックス（ユーザーが任意に選択）
@@ -2536,7 +2614,8 @@ function TileCell({
           studyUid={tile.study.studyInstanceUid}
           seriesUid={tile.series.seriesInstanceUid}
           fillHeight
-          showControls={showControls}
+          showControls={panelOpen}
+          onShowControlsChange={setPanelOpen}
           syncEnabled={syncEnabled}
           referenceLinesEnabled={referenceLinesEnabled}
           referenceLabel={seriesLabel}
@@ -2551,10 +2630,10 @@ function TileCell({
         />
       </div>
 
-      {/* Fusion コントロールバー。ツールパネルの一部として扱い、showControls に追従させる
+      {/* Fusion コントロールバー。ツールパネルの一部として扱い、タイルの開閉（panelOpen）に追従させる
           （Fusion 直後でもパネル非表示中はツールとして出さない）。
-          今後、画像に付随するツールパネルを追加する場合も同様に showControls で束ねること。 */}
-      {showControls && tile.fusion && (
+          今後、画像に付随するツールパネルを追加する場合も同様に panelOpen で束ねること。 */}
+      {panelOpen && tile.fusion && (
         <FusionControlBar
           seriesLabel={
             tile.fusion.series.seriesDescription ||
@@ -2587,7 +2666,7 @@ function TileCell({
       )}
 
       {/* 保存済みの位置合わせの状態。★ stale は「当てていない」ことを必ず見せる。 */}
-      {showControls && tile.fusion && restoreState.kind !== "none" && (
+      {panelOpen && tile.fusion && restoreState.kind !== "none" && (
         <div style={restoreState.kind === "stale" ? restoreStaleBar : restoreBar}>
           {restoreState.kind === "restored" ? (
             <span>

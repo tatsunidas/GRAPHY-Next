@@ -136,7 +136,8 @@ export function SeriesViewer({
   studyUid,
   seriesUid,
   fillHeight = false,
-  showControls = true,
+  showControls: showControlsProp = true,
+  onShowControlsChange,
   syncEnabled = false,
   referenceLinesEnabled = false,
   referenceLabel,
@@ -160,6 +161,12 @@ export function SeriesViewer({
    * 既定 true（単独表示・StudyList では従来どおり）。
    */
   showControls?: boolean;
+  /**
+   * 指定すると開閉は**親が持つ**（制御モード）: 開閉の正は `showControls`、ボタンは本関数を呼ぶ。
+   * 2D ビューアのタイルが、Fusion バーなど画像外の部品を同じ開閉に束ねるのに使う。
+   * 未指定なら内部 state（`showControls` は初期値・追従元）。
+   */
+  onShowControlsChange?: (open: boolean) => void;
   /** シリーズ Sync: このタイルの Sync トグルが ON か。ON かつ SliderView 時のみ同期に参加。 */
   syncEnabled?: boolean;
   /** リファレンスライン: 他シリーズの現在スライス面の交差線をこのビューに描画する。 */
@@ -185,6 +192,15 @@ export function SeriesViewer({
   acceptsTaskLaunch?: boolean;
 }) {
   const { t } = useI18n();
+  // ツールパネルの開閉。未制御のときは親の showControls を初期値・追従元にし（一括開閉は親が上書き）、
+  // タイル単位のトグルボタンでも切り替える。制御モード（onShowControlsChange あり）では親の値が正。
+  const [innerOpen, setInnerOpen] = useState(showControlsProp);
+  useEffect(() => { setInnerOpen(showControlsProp); }, [showControlsProp]);
+  const controlsOpen = onShowControlsChange ? showControlsProp : innerOpen;
+  const toggleControls = () => (onShowControlsChange ? onShowControlsChange(!controlsOpen) : setInnerOpen((v) => !v));
+  const showControls = controlsOpen;
+  // XA のシネ（CineControls）は再生中。パネルを畳んでも再生は続くので、開閉ボタンに印を出す。
+  const [cinePlaying, setCinePlaying] = useState(false);
   // automator（自律検証ツール）用デバッグAPI。dev ビルドのみ、冪等（fw/HANDOFF.md 参照なし・
   // automator/checklist/10-viewer2d-core.md 参照）。
   useEffect(() => { installDebugApi(); }, []);
@@ -1399,11 +1415,26 @@ export function SeriesViewer({
           </div>
         </div>
       ) : (
-        <Viewer2D imageIds={displayImageIds} imageIndex={zc} overlays={overlays} fill={fillHeight} showControls={showControls} viewSyncEnabled={syncOn} referenceLinesEnabled={referenceLinesEnabled} referenceLabel={referenceLabel} commandKey={commandKey} roiContext={roiContext} renderOverlay={renderFusionOverlay} thickSlab={effectiveThick} refreshKey={calibVersion} pendingImages={!xaReady} frameStack={!spatialStack} />
+        <Viewer2D imageIds={displayImageIds} imageIndex={zc} overlays={overlays} fill={fillHeight} viewSyncEnabled={syncOn} referenceLinesEnabled={referenceLinesEnabled} referenceLabel={referenceLabel} commandKey={commandKey} roiContext={roiContext} renderOverlay={renderFusionOverlay} thickSlab={effectiveThick} refreshKey={calibVersion} pendingImages={!xaReady} frameStack={!spatialStack} />
       )}
 
-      {showControls && (
-      <div style={controls} data-testid="series-controls">
+      {layoutReady && (
+        <button
+          type="button"
+          data-testid="series-controls-toggle"
+          aria-pressed={controlsOpen}
+          onClick={toggleControls}
+          title={t(controlsOpen ? "series.controls.collapse" : "series.controls.expand")}
+          style={controlsToggle}
+        >
+          {controlsOpen ? "▾" : "▸"} <ToolIcon file={UI_ICON_FILES.settings} size={14} />
+          {(cinePlaying || playZ || playC || playT) && (
+            <span data-testid="series-controls-playing" title={t("series.controls.playing")}>▶</span>
+          )}
+        </button>
+      )}
+      {/* 畳んでいる間も**マウントしたまま隠す**（display:none）。アンマウントすると CineControls の再生が止まる。 */}
+      <div style={showControls ? controls : { ...controls, display: "none" }} data-testid="series-controls">
         {/* GridView の操作バー（W/L・Pan・Zoom はドラッグ、回転/反転/Fit はボタン。全セルにリンク）。 */}
         {gridOn && (
           <div style={row}>
@@ -1436,6 +1467,7 @@ export function SeriesViewer({
                   onIndex={navLocked ? () => {} : setZ}
                   source={xaCineSource}
                   locked={navLocked}
+                  onPlayingChange={setCinePlaying}
                 />
               ) : (
                 <DimSlider
@@ -1940,7 +1972,6 @@ export function SeriesViewer({
           {gridDisabled && <span style={hint}>{t("series.grid.disabled")}</span>}
         </div>
       </div>
-      )}
       {prDialogOpen && (
         <XaPresentationDialog
           studyUid={studyUid}
@@ -2146,6 +2177,21 @@ function Check({
 }
 
 const root: React.CSSProperties = { outline: "none" };
+// ツールパネル（スライダー群）の開閉バー。画像・ツールボタン群の下に全幅で置く。
+const controlsToggle: React.CSSProperties = {
+  marginTop: 6,
+  alignSelf: "flex-start",
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+  padding: "2px 8px",
+  fontSize: 12,
+  border: "1px solid #cdd5de",
+  borderRadius: 4,
+  background: "#f7f9fb",
+  color: "#33404d",
+  cursor: "pointer",
+};
 // レイアウト解決待ちのプレースホルダ（Viewer と同じ黒背景。生モザイクを描かないためのゲート）。
 const layoutPending: React.CSSProperties = {
   flex: 1,
@@ -2168,7 +2214,6 @@ const controls: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: 8,
-  maxWidth: 560,
 };
 /**
  * 操作行。**必ず折り返す**（`flexWrap`）。

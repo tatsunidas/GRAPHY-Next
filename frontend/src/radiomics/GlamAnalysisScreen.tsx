@@ -339,6 +339,9 @@ export function GlamAnalysisScreen() {
                 })}
               </span>
             )}
+            {analysis.lossyCompressed && (
+              <span style={warnPill} data-testid="glam-lossy-warning">⚠ {t("radiomics.lossyWarning")}</span>
+            )}
             {analysis.resampledFrom && (
               <span style={infoPill}>
                 {t("glam.resampled", {

@@ -386,12 +386,12 @@ public class DbAdminService {
      * 患者レベルのタグ編集を rows へ適用（設定 ON でファイルも書換）。newId 非 null で PatientID 変更。
      *
      * <p><b>全か無か</b>: ファイルの書き換えが 1 つでも失敗したら、編集全体を失敗にして、ファイルも索引も編集前のままにする
-     * （一部だけ古いタグのまま索引だけ新しい、という食い違いを残さない）。{@link PatientFileEdit} を参照。
+     * （一部だけ古いタグのまま索引だけ新しい、という食い違いを残さない）。{@link DicomFileEdit} を参照。
      */
     private int applyPatientEdit(List<DicomInstance> rows, String patientName, String birthDate, String sex,
                                  String newId) {
         boolean applyToFiles = boolSetting("data.applyPatientEditToFiles", true);
-        PatientFileEdit edit = applyToFiles ? prepareFileEdit(rows, patientName, birthDate, sex, newId) : null;
+        DicomFileEdit edit = applyToFiles ? prepareFileEdit(rows, patientName, birthDate, sex, newId) : null;
         try {
             for (DicomInstance r : rows) {
                 r.setPatientName(patientName);
@@ -418,17 +418,17 @@ public class DbAdminService {
      * 準備（取り寄せ・一時ファイルの作成。DB にはまだ何も書かない）→ 入れ替え。失敗は {@code 409}（編集全体が取り消される）。
      * 遅い処理（Drive からの取り寄せ・リトライの待ち）はここで済ませ、DB への書き込みを最後に短く行う。
      */
-    private PatientFileEdit prepareFileEdit(List<DicomInstance> rows, String patientName, String birthDate, String sex,
+    private DicomFileEdit prepareFileEdit(List<DicomInstance> rows, String patientName, String birthDate, String sex,
                                             String newId) {
         layout.prefetch(rows, () -> false); // モード A: 手元に無いものを先に取り寄せる（失敗は例外＝何も変えずに中止）
-        List<PatientFileEdit.Target> targets = new ArrayList<>();
+        List<DicomFileEdit.Target> targets = new ArrayList<>();
         for (DicomInstance r : rows) {
             Path file = layout.resolveForWrite(r);
             if (file == null) {
                 continue;
             }
             if (Files.isRegularFile(file)) {
-                targets.add(new PatientFileEdit.Target(r.getSopInstanceUid(), file));
+                targets.add(new DicomFileEdit.Target(r.getSopInstanceUid(), file));
             } else {
                 // 索引にあるが実ファイルが無い（書き換える物が無いので食い違いは生じない）。従来どおり警告だけ
                 log.warn("DICOM ファイルが無いため書換を省略: sop={}", r.getSopInstanceUid());
@@ -438,14 +438,14 @@ public class DbAdminService {
             return null;
         }
         try {
-            PatientFileEdit edit = PatientFileEdit.prepare(targets,
+            DicomFileEdit edit = DicomFileEdit.prepare(targets,
                     (src, dst) -> writeRewritten(src, dst, patientName, birthDate, sex, newId),
-                    layout.root().resolve(".edit-journal"), fileRetry, PatientFileEdit.Ops.REAL);
+                    layout.root().resolve(".edit-journal"), fileRetry, DicomFileEdit.Ops.REAL);
             edit.swap();
             // 変更を Drive 同期へ通知する（コミットされたときだけ届く。ロールバックなら破棄される）
             edit.files().forEach(layout::notifyChanged);
             return edit;
-        } catch (PatientFileEdit.EditFailedException e) {
+        } catch (DicomFileEdit.EditFailedException e) {
             log.warn("患者編集を中止（ファイル・索引は編集前のまま）: {}", e.getMessage());
             throw new org.springframework.web.server.ResponseStatusException(
                     org.springframework.http.HttpStatus.CONFLICT, e.getMessage(), e);
@@ -453,7 +453,7 @@ public class DbAdminService {
     }
 
     /** 取引の結果で、確定（退避を消す）か巻き戻し（退避から戻す）。コミット時の失敗もここで拾える。 */
-    private static void settleWithTransaction(PatientFileEdit edit) {
+    static void settleWithTransaction(DicomFileEdit edit) {
         if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
             org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
                     new org.springframework.transaction.support.TransactionSynchronization() {

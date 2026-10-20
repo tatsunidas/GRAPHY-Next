@@ -49,7 +49,8 @@ public class TextureSeriesService {
     }
 
     /** 生成結果。 */
-    public record Result(String seriesInstanceUid, List<String> sopInstanceUids) {}
+    /** @param lossyCompressed 元画像が非可逆圧縮（マップの値は圧縮の影響を受ける） */
+    public record Result(String seriesInstanceUid, List<String> sopInstanceUids, boolean lossyCompressed) {}
 
     /** マップを計算し派生シリーズとして保存する（進み具合は見ない）。 */
     public Result create(TextureSeriesRequest req) throws IOException {
@@ -69,7 +70,8 @@ public class TextureSeriesService {
         Attributes tmpl = readHeader(srcFiles.get(0));
 
         // マップ計算（重い）。
-        RadiomicsMapEngine.MapResult map = engine.compute(req, progress);
+        RadiomicsMapEngine.Computed computed = engine.computeResumable(req, progress);
+        RadiomicsMapEngine.MapResult map = computed.map();
 
         // 32bit float → 16bit unsigned のスケール係数（GRAPHY convertTo16BitWithCalibration 準拠）。
         double[] mm = minMax(map.data());
@@ -94,7 +96,7 @@ public class TextureSeriesService {
         double sliceThickness = tmpl.getDouble(Tag.SliceThickness, 0.0);
         double spacingBetween = tmpl.getDouble(Tag.SpacingBetweenSlices,
                 spacingFromIpp(map.ippPerZ(), sliceThickness));
-        String derivation = derivationDescription(req, featureName);
+        String derivation = derivationDescription(req, featureName, map.lossyCompressed());
 
         List<String> sops = new ArrayList<>(map.slices());
         for (int z = 0; z < map.slices(); z++) {
@@ -104,16 +106,18 @@ public class TextureSeriesService {
             sops.add(a.getString(Tag.SOPInstanceUID));
             ingest(a);
         }
+        // 派生シリーズは保管庫に入った。途中結果はもう要らない（失敗・キャンセルのときだけ残す）。
+        engine.discardCheckpoints(computed);
         log.info("texture series created: {} ({} instances) feature={} from {}",
                 newSeriesUid, sops.size(), featureName, req.sourceSeriesUid());
-        return new Result(newSeriesUid, sops);
+        return new Result(newSeriesUid, sops, map.lossyCompressed());
     }
 
     /**
      * DerivationDescription。<b>マップの値の意味を決めるパラメータを、シリーズ自身に書き残す</b>。
      * 特に GLAM は maxRadius と境界補正で数値の意味が変わり、後から設定を辿る術が無い。
      */
-    private static String derivationDescription(TextureSeriesRequest req, String featureName) {
+    static String derivationDescription(TextureSeriesRequest req, String featureName, boolean lossy) {
         StringBuilder sb = new StringBuilder("Texture map ").append(featureName)
                 .append(" (GRAPHY-Next Radiomics; kernel=").append(req.filterSize())
                 .append(", stride=").append(req.stride())
@@ -126,6 +130,10 @@ public class TextureSeriesService {
                     .append(GlamMapSupport.maxRadiusFor(Math.max(1, req.filterSize()), req.settings()))
                     .append(", boundaryCorrection=").append(setting(req, "BOOL_GLAM_boundaryCorrection", "1"))
                     .append(", randomisations=").append(setting(req, "INT_GLAM_numRandomisations", "0"));
+        }
+        if (lossy) {
+            // 元画像が非可逆圧縮なら、値は圧縮の影響を受けている。派生シリーズだけ見ても分かるように残す
+            sb.append(", source: lossy compressed");
         }
         return sb.append(")").toString();
     }

@@ -7,6 +7,7 @@
 import vtkImageData from "@kitware/vtk.js/Common/DataModel/ImageData";
 import vtkDataArray from "@kitware/vtk.js/Common/Core/DataArray";
 import { getMax3dTextureSize } from "./volumeMemory";
+import type { RenderKind } from "./renderEnv";
 import type { createVtkVolumeView as CreateVtkVolumeView } from "./vtkVolumeView";
 
 export type SelfTestStatus = "pass" | "fail" | "pending";
@@ -156,8 +157,53 @@ export const MIN_REF_PX = 40;
 
 const relDiff = (measured: number, expected: number) => Math.abs(measured - expected) / expected;
 
+/** 読み返した画像（RGBA、行は readPixels の並び）。 */
+export interface ReadbackImage {
+  rgba: ArrayLike<number>;
+  w: number;
+  h: number;
+}
+
+/**
+ * 1 本の輝度の並びで、`lo..hi` の像の両端が半値（像の中の最大の 1/2）を横切る位置を線形補間で返す。
+ * 外接矩形の画素数は、補間でぼけた縁を背景の閾値まで含むので幅を広く測る（実測で約 2%）。
+ * 縁のぼけが左右対称なら、半値の位置は箱の境界に一致する。
+ */
+export function edgeSpan(profile: ArrayLike<number>, lo: number, hi: number): { start: number; end: number; width: number } | null {
+  let peak = 0;
+  for (let i = lo; i <= hi; i++) peak = Math.max(peak, profile[i]);
+  const half = peak / 2;
+  if (!(half > 0)) return null;
+  let i = lo;
+  while (i <= hi && profile[i] < half) i++;
+  if (i > hi) return null;
+  let j = hi;
+  while (j >= lo && profile[j] < half) j--;
+  const before = i > 0 ? profile[i - 1] : 0;
+  const after = j < profile.length - 1 ? profile[j + 1] : 0;
+  const start = i - 1 + (half - before) / (profile[i] - before);
+  const end = j + (profile[j] - half) / (profile[j] - after);
+  return { start, end, width: end - start };
+}
+
+const luminance = (img: ReadbackImage, x: number, y: number) => {
+  const o = (y * img.w + x) * 4;
+  return Math.max(img.rgba[o], img.rgba[o + 1], img.rgba[o + 2]);
+};
+
+/** 像の中心を通る横 1 行・縦 1 列の半値幅（取れなければ外接矩形の画素数）。 */
+function halfMaxSize(b: Blob, img: ReadbackImage): { w: number; h: number } {
+  const y = Math.round(b.cy);
+  const x = Math.round(b.cx);
+  const row = Array.from({ length: img.w }, (_, i) => luminance(img, i, y));
+  const col = Array.from({ length: img.h }, (_, i) => luminance(img, x, i));
+  const sw = edgeSpan(row, Math.max(0, b.minX - 1), Math.min(img.w - 1, b.maxX + 1));
+  const sh = edgeSpan(col, Math.max(0, b.minY - 1), Math.min(img.h - 1, b.maxY + 1));
+  return { w: sw?.width ?? b.maxX - b.minX + 1, h: sh?.width ?? b.maxY - b.minY + 1 };
+}
+
 /** render 以降の 4 行を返す。成分が無ければ render は fail、後続は pending。 */
-export function judge(blobs: Blob[], expected: Expected): SelfTestRow[] {
+export function judge(blobs: Blob[], expected: Expected, img: ReadbackImage): SelfTestRow[] {
   if (blobs.length === 0) {
     const pend = (id: SelfTestRowId): SelfTestRow => ({ id, status: "pending", reason: "needsRender" });
     return [
@@ -169,17 +215,20 @@ export function judge(blobs: Blob[], expected: Expected): SelfTestRow[] {
   }
   const ref = blobs[0];
   const mark = blobs.length > 1 ? blobs[1] : null;
-  const refW = ref.maxX - ref.minX + 1;
-  const refH = ref.maxY - ref.minY + 1;
+  // 基準と目印の 2 つより多いときは、どれが目印か決められない（合格にしない）。
+  const extra = blobs.length > 2;
+  const { w: refW, h: refH } = halfMaxSize(ref, img);
   const s = Math.min(refW, refH);
   const tol = 2 / s;
   const rows: SelfTestRow[] = [
-    { id: "render", status: "pass", reason: "drawn", values: { blobs: blobs.length, refWidthPx: refW, refHeightPx: refH } },
+    { id: "render", status: "pass", reason: "drawn", values: { blobs: blobs.length, refWidthPx: round(refW), refHeightPx: round(refH) } },
   ];
 
   // 向き
   if (!mark) {
     rows.push({ id: "orientation", status: "fail", reason: "markerMissing" });
+  } else if (extra) {
+    rows.push({ id: "orientation", status: "fail", reason: "extraBlobs", values: { blobs: blobs.length } });
   } else {
     const right = mark.cx > ref.cx;
     rows.push({
@@ -192,7 +241,7 @@ export function judge(blobs: Blob[], expected: Expected): SelfTestRow[] {
 
   // 画素間隔
   if (s < MIN_REF_PX) {
-    rows.push({ id: "spacing", status: "pending", reason: "tooSmall", values: { shortSidePx: s } });
+    rows.push({ id: "spacing", status: "pending", reason: "tooSmall", values: { shortSidePx: round(s) } });
   } else {
     const pxAspect = refW / refH;
     const mmAspect = expected.refWidthMm / expected.refHeightMm;
@@ -207,9 +256,11 @@ export function judge(blobs: Blob[], expected: Expected): SelfTestRow[] {
 
   // 距離比
   if (s < MIN_REF_PX) {
-    rows.push({ id: "distance", status: "pending", reason: "tooSmall", values: { shortSidePx: s } });
+    rows.push({ id: "distance", status: "pending", reason: "tooSmall", values: { shortSidePx: round(s) } });
   } else if (!mark) {
     rows.push({ id: "distance", status: "fail", reason: "markerMissing" });
+  } else if (extra) {
+    rows.push({ id: "distance", status: "fail", reason: "extraBlobs", values: { blobs: blobs.length } });
   } else {
     const pxRatio = Math.abs(mark.cx - ref.cx) / refW;
     const mmRatio = expected.centerDistMm / expected.refWidthMm;
@@ -249,11 +300,18 @@ function gpuName(gl: WebGL2RenderingContext | WebGLRenderingContext | null): str
 
 const PENDING_REST: SelfTestRowId[] = ["render", "orientation", "spacing", "distance"];
 
-export async function runRender3dSelfTest(container: HTMLDivElement): Promise<SelfTestRun> {
+/** ハードウェア支援の行は、描画環境の判定（`classifyRenderer`）をそのまま写す。 */
+export function hardwareRow(kind: RenderKind): SelfTestRow {
+  if (kind === "hardware") return { id: "hardware", status: "pass", reason: "hardwareYes" };
+  if (kind === "software") return { id: "hardware", status: "fail", reason: "softwareRender" };
+  return { id: "hardware", status: "pending", reason: "kindUnknown" };
+}
+
+export async function runRender3dSelfTest(container: HTMLDivElement, kind: RenderKind): Promise<SelfTestRun> {
   // vtk.js の描画系は import 時に window を要る。純関数のテスト（node）を妨げないよう遅延 import する。
   const { createVtkVolumeView } = await import("./vtkVolumeView");
   const max = getMax3dTextureSize();
-  const hardware: SelfTestRow = { id: "hardware", status: "pending", reason: "stage2" };
+  const hardware = hardwareRow(kind);
   if (max == null) {
     return {
       rows: [
@@ -275,6 +333,9 @@ export async function runRender3dSelfTest(container: HTMLDivElement): Promise<Se
   try {
     view = createVtkVolumeView(container, vol.imageData, { mode: "MIP", center: vol.value / 2, width: vol.value });
     view.snapOrientation("COR");
+    view.setAxesEnabled(false); // 向きのキューブも同じ canvas に描かれ、目印と取り違える
+    // 透視では奥行きのある箱の前面が大きく写り、mm の比が崩れる。診断は mm の扱いだけを測る。
+    view.setParallelProjection(true);
     view.render();
     // 描いた直後に、同じ実行単位で読み返す（描画バッファの保持設定に依らないため）。
     const canvas = container.querySelector("canvas") as HTMLCanvasElement | null;
@@ -290,7 +351,7 @@ export async function runRender3dSelfTest(container: HTMLDivElement): Promise<Se
     const h = canvas.height;
     const buf = new Uint8Array(w * h * 4);
     gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
-    const rows = judge(findBlobs(buf, w, h), vol.expected);
+    const rows = judge(findBlobs(buf, w, h), vol.expected, { rgba: buf, w, h });
     return { rows: [...head, ...rows, hardware], gpu: gpuName(gl), image: { rgba: new Uint8ClampedArray(buf), w, h } };
   } catch (e) {
     return {

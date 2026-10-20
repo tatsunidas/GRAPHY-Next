@@ -147,6 +147,61 @@ class ComputeDatasetServiceTest {
         }
     }
 
+    // ── VOI（表示の窓）。胸部 X 線の前処理で使う（fw/cxr-findings-design.md C1）──
+
+    private JsonNode dxMeta(String photometric, String wc, String ww, String fn) throws Exception {
+        fx.writeDx(photometric, wc, ww, fn);
+        ComputeDatasetService.Dataset d = service().create(STUDY, DatasetFixture.DX_SERIES, ComputeDatasetService.Format.NPZ);
+        return mapper.readTree(unzip(d.file()).get("meta.json"));
+    }
+
+    @Test
+    void npzCarriesTheWindowAndFunction() throws Exception {
+        JsonNode m = dxMeta("MONOCHROME2", "2048", "4096", "LINEAR_EXACT");
+        assertEquals(1, m.path("windowCenter").size());
+        assertEquals(2048.0, m.path("windowCenter").get(0).asDouble(), 0);
+        assertEquals(4096.0, m.path("windowWidth").get(0).asDouble(), 0);
+        assertEquals("LINEAR_EXACT", m.path("voiLutFunction").asText());
+    }
+
+    @Test
+    void npzCarriesEveryWindowOfAMultiValuedPair() throws Exception {
+        JsonNode m = dxMeta("MONOCHROME2", "2048\\1000", "4096\\500", null);
+        assertEquals(2, m.path("windowCenter").size());
+        assertEquals(1000.0, m.path("windowCenter").get(1).asDouble(), 0);
+        assertEquals(500.0, m.path("windowWidth").get(1).asDouble(), 0);
+        assertFalse(m.has("voiLutFunction"), "DICOM に無ければ欄ごと省く（省略＝LINEAR）");
+    }
+
+    @Test
+    void npzKeepsMonochrome1AndItsWindowAsIs() throws Exception {
+        JsonNode m = dxMeta("MONOCHROME1", "2048", "4096", null);
+        assertEquals("MONOCHROME1", m.path("photometricInterpretation").asText());
+        assertEquals(2048.0, m.path("windowCenter").get(0).asDouble(), 0, "窓は反転しない");
+    }
+
+    @Test
+    void npzOmitsTheWindowWhenTheDicomHasNone() throws Exception {
+        // 先に、窓ありで同じ検査が「ある」と言うことを確かめる（検査器が効いている）
+        assertTrue(dxMeta("MONOCHROME2", "40", "400", "LINEAR").has("windowCenter"));
+        JsonNode none = dxMeta("MONOCHROME2", null, null, null);
+        assertFalse(none.has("windowCenter"));
+        assertFalse(none.has("windowWidth"));
+        assertFalse(none.has("voiLutFunction"));
+        assertEquals("DX", none.path("modality").asText(), "他の欄は変わらない");
+    }
+
+    @Test
+    void npzOmitsTheWindowWhenCenterAndWidthDoNotPair() throws Exception {
+        for (String[] bad : new String[][]{{"40\\50", "400"}, {"40", null}, {null, "400"}}) {
+            JsonNode m = dxMeta("MONOCHROME2", bad[0], bad[1], "LINEAR");
+            assertFalse(m.has("windowCenter"), String.join("/", String.valueOf(bad[0]), String.valueOf(bad[1])));
+            assertFalse(m.has("windowWidth"));
+            assertFalse(m.has("voiLutFunction"), "窓が無いなら関数も出さない");
+            fx.bySeries.clear();
+        }
+    }
+
     // ── Parametric Map（NIfTI の float の取り込み・fw/nifti-import.md §3.1・F4）──
 
     private static final String PM_SERIES = "1.2.3.100.9";

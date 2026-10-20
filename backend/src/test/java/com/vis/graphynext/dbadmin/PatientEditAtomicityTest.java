@@ -75,7 +75,7 @@ class PatientEditAtomicityTest {
     @Autowired
     ApplicationEvents events;
     @Autowired
-    PatientEditRecovery recovery;
+    DicomEditRecovery recovery;
     @SpyBean
     PatientRecordMover records;
 
@@ -231,9 +231,9 @@ class PatientEditAtomicityTest {
     /** 編集を「入れ替え済み・未確定」の状態で止める（commit も rollback もしない）。 */
     private Path crashAfterSwap(String sop, String newName) throws Exception {
         Path f = fileOf(sop);
-        PatientFileEdit e = PatientFileEdit.prepare(List.of(new PatientFileEdit.Target(sop, f)),
+        DicomFileEdit e = DicomFileEdit.prepare(List.of(new DicomFileEdit.Target(sop, f)),
                 (src, dst) -> DbAdminService.writeRewritten(src, dst, newName, null, null, null),
-                layout.root().resolve(".edit-journal"), new FileRetry(ms -> { }), PatientFileEdit.Ops.REAL);
+                layout.root().resolve(".edit-journal"), new FileRetry(ms -> { }), DicomFileEdit.Ops.REAL);
         e.swap();
         return f;
     }
@@ -278,11 +278,11 @@ class PatientEditAtomicityTest {
         row.setPatientName("Third^Name");
         repo.save(row);
         recovery.recover(layout.root().resolve(".edit-journal"));
-        assertTrue(Files.exists(PatientFileEdit.origName(f)), "退避は残す（データを失わない）");
+        assertTrue(Files.exists(DicomFileEdit.origName(f)), "退避は残す（データを失わない）");
         assertEquals("New^Name", patientNameInFile(f));
         assertTrue(leftovers().stream().anyMatch(n -> n.endsWith(".journal")), "journal も残す");
         // 他のテストの「残骸なし」の検査に混ざらないよう、この試験で意図的に残したものを片付ける
-        Files.deleteIfExists(PatientFileEdit.origName(f));
+        Files.deleteIfExists(DicomFileEdit.origName(f));
         try (Stream<Path> js = Files.list(layout.root().resolve(".edit-journal"))) {
             for (Path j : js.toList()) {
                 Files.deleteIfExists(j);

@@ -4,6 +4,7 @@
  */
 package com.vis.graphynext.dicom.video;
 
+import com.vis.graphynext.cache.CacheStore;
 import com.vis.graphynext.dicom.DicomProperties;
 import com.vis.graphynext.nondicom.FfmpegLocator;
 import org.slf4j.Logger;
@@ -18,8 +19,6 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -40,9 +39,8 @@ import java.util.concurrent.TimeUnit;
  * 2/3 は ffmpeg（{@link FfmpegLocator}）が要る。無ければ {@link TranscodeUnavailableException} を投げ、
  * 呼び側（{@code /rendered}）が 415 を返して UI が案内を出す。
  *
- * <p>キャッシュは {@code <storageDir>/.cache/video/{sop}.mp4}。同じ SOP への同時要求は SOP 単位のロックで
- * 直列化し、ffmpeg を二重に走らせない。書き込みは一時ファイル → 原子的 move なので、途中の壊れた MP4 を
- * 配信することはない。
+ * <p>キャッシュは {@code <storageDir>/.cache/video/{sop}.<版>.mp4}（{@link CacheStore}）。同じ SOP への同時要求は
+ * 直列化され ffmpeg は二重に走らず、書き込みは一時ファイル → 原子的 move なので途中の壊れた MP4 を配信しない。
  */
 @Service
 public class VideoRenderService {
@@ -80,12 +78,11 @@ public class VideoRenderService {
     }
 
     private final FfmpegLocator ffmpegLocator;
-    private final Path cacheDir;
-    private final Map<String, Object> locks = new ConcurrentHashMap<>();
+    private final CacheStore cache;
 
     public VideoRenderService(FfmpegLocator ffmpegLocator, DicomProperties props) {
         this.ffmpegLocator = ffmpegLocator;
-        this.cacheDir = Paths.get(props.getStorageDir(), ".cache", "video");
+        this.cache = new CacheStore(Paths.get(props.getStorageDir(), ".cache", "video"), props.getVideoCacheMaxBytes());
     }
 
     /**
@@ -97,52 +94,47 @@ public class VideoRenderService {
      * @throws IOException                   抽出/変換の失敗
      */
     public Path ensureRendered(Path dcm, String sopUid) throws IOException {
-        Path mp4 = cacheDir.resolve(cacheName(sopUid) + "." + CACHE_VERSION + ".mp4");
-        if (isUsable(mp4, dcm)) {
-            return mp4;
+        // 同じ SOP の同時要求の直列化（同じ動画を複数タブで開くと ffmpeg が二重に走る）、一時ファイル経由の
+        // 原子的な確定、上限による追い出しは CacheStore が担う。
+        return cache.getOrCreate(cacheName(sopUid) + "." + CACHE_VERSION + ".mp4",
+                mp4 -> usable(mp4, dcm), mp4 -> render(dcm, sopUid, mp4));
+    }
+
+    private static boolean usable(Path mp4, Path dcm) {
+        try {
+            return isUsable(mp4, dcm);
+        } catch (IOException e) {
+            return false; // 読めないものは作り直す側に倒す
         }
-        // SOP 単位で直列化（同じ動画を複数タブで開くと同時要求になり、ffmpeg が二重に走る）。
-        Object lock = locks.computeIfAbsent(sopUid, k -> new Object());
-        synchronized (lock) {
-            if (isUsable(mp4, dcm)) {
-                return mp4;
+    }
+
+    private void render(Path dcm, String sopUid, Path mp4) throws IOException {
+        Path raw = Files.createTempFile(mp4.getParent(), CacheStore.TMP_PREFIX + "raw-", ".bin");
+        try {
+            VideoFragmentExtractor.extractTo(dcm, raw);
+            Payload kind = sniff(raw);
+            if (kind == Payload.MP4) {
+                // 主経路: 取込済み動画は MP4 そのもの。move するだけ（ffmpeg 不要）。
+                // ただし DICOM は値を偶数長にするため、奇数長の MP4 には末尾に 0 が 1 バイト足されている。外して返す。
+                trimDicomPad(raw);
+                move(raw, mp4);
+                log.debug("rendered: MP4 をそのまま配信 sop={}", sopUid);
+                return;
             }
-            Files.createDirectories(cacheDir);
-            Path raw = Files.createTempFile(cacheDir, "raw-", ".bin");
-            try {
-                VideoFragmentExtractor.extractTo(dcm, raw);
-                Payload kind = sniff(raw);
-                if (kind == Payload.MP4) {
-                    // 主経路: 取込済み動画は MP4 そのもの。move するだけ（ffmpeg 不要）。
-                    // ただし DICOM は値を偶数長にするため、奇数長の MP4 には末尾に 0 が 1 バイト足されている。外して返す。
-                    trimDicomPad(raw);
-                    move(raw, mp4);
-                    log.debug("rendered: MP4 をそのまま配信 sop={}", sopUid);
-                    return mp4;
-                }
-                String ffmpeg = ffmpegLocator.resolve();
-                if (!ffmpegAvailable(ffmpeg)) {
-                    throw new TranscodeUnavailableException(
-                            "ffmpeg が無いため " + kind + " を MP4 に変換できません (sop=" + sopUid + ")");
-                }
-                // 基本ストリームには時間情報が無いので、DICOM 側の fps を ffmpeg に教える（下記 buildCommand 参照）。
-                double fps = VideoFragmentExtractor.readMeta(dcm).fps();
-                Path out = Files.createTempFile(cacheDir, "conv-", ".mp4");
-                try {
-                    runFfmpeg(buildCommand(ffmpeg, kind, raw, out, fps), sopUid, kind);
-                    if (!Files.exists(out) || Files.size(out) == 0) {
-                        throw new IOException("ffmpeg produced no output (sop=" + sopUid + ")");
-                    }
-                    move(out, mp4);
-                } finally {
-                    Files.deleteIfExists(out);
-                }
-                log.info("rendered: {} を MP4 に変換しキャッシュしました sop={}", kind, sopUid);
-                return mp4;
-            } finally {
-                Files.deleteIfExists(raw);
-                locks.remove(sopUid, lock);
+            String ffmpeg = ffmpegLocator.resolve();
+            if (!ffmpegAvailable(ffmpeg)) {
+                throw new TranscodeUnavailableException(
+                        "ffmpeg が無いため " + kind + " を MP4 に変換できません (sop=" + sopUid + ")");
             }
+            // 基本ストリームには時間情報が無いので、DICOM 側の fps を ffmpeg に教える（下記 buildCommand 参照）。
+            double fps = VideoFragmentExtractor.readMeta(dcm).fps();
+            runFfmpeg(buildCommand(ffmpeg, kind, raw, mp4, fps), sopUid, kind);
+            if (!Files.exists(mp4) || Files.size(mp4) == 0) {
+                throw new IOException("ffmpeg produced no output (sop=" + sopUid + ")");
+            }
+            log.info("rendered: {} を MP4 に変換しキャッシュしました sop={}", kind, sopUid);
+        } finally {
+            Files.deleteIfExists(raw);
         }
     }
 

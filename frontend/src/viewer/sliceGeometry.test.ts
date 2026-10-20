@@ -89,3 +89,24 @@ describe("regularGrid", () => {
     expect(r.gridIndexOf).toEqual([0, 4, 5]);
   });
 });
+
+describe("許容幅は IPP の桁と間隔に合わせる（2026-10-18）", () => {
+  const iop = [1, 0, 0, 0, 1, 0];
+  const stack = (zs: number[]) => zs.map((z, i) => ({ id: String(i), ipp: [0, 0, z], iop }));
+
+  it("顕微鏡の Z 2 µm（0.002 mm）を等間隔と判定する（0.01 mm 固定では全部が同じ位置になっていた）", () => {
+    const g = sliceGeometry(stack(Array.from({ length: 20 }, (_, i) => i * 0.002)));
+    expect(g.kind).toBe("uniform");
+  });
+
+  it("細かい間隔でも、本当に同じ位置のスライスは重複と判定する", () => {
+    const zs = Array.from({ length: 20 }, (_, i) => i * 0.002);
+    zs.splice(5, 0, zs[5]);
+    expect(sliceGeometry(stack(zs)).kind).toBe("duplicates");
+  });
+
+  it("小数 2 桁で書かれた 0.625 mm の CT は、旧来どおり等間隔（丸めで 0.62・0.63 が混ざっても）", () => {
+    const zs = Array.from({ length: 60 }, (_, i) => Math.round((-120.3 + i * 0.625) * 100) / 100);
+    expect(sliceGeometry(stack(zs)).kind).toBe("uniform");
+  });
+});

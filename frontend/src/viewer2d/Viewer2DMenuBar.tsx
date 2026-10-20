@@ -31,6 +31,7 @@ import { openDeveloperContact } from "../help/DeveloperContact";
 import { openUninstallGuide } from "../help/UninstallGuide";
 import { runUpdateCheck } from "../help/UpdateNotice";
 import { isDesktop } from "../desktopBridge";
+import { openThreshold } from "../viewer/thresholdTool";
 
 interface MenuItem {
   label: string;
@@ -330,6 +331,7 @@ export function Viewer2DMenuBar({
         { label: t("viewer.undo"), onClick: actions.undo },
         { label: t("viewer.redo"), onClick: actions.redo },
         { label: t("viewer2d.menu.resample"), onClick: () => actions.openResample(), testId: "menu-resample", separatorBefore: true },
+        { label: t("viewer2d.menu.stitch"), onClick: () => actions.openStitch(), testId: "menu-stitch" },
         {
           label: t("viewer2d.menu.sort"),
           submenu: [
@@ -426,6 +428,8 @@ export function Viewer2DMenuBar({
         { label: t("viewer2d.tool.wand2d"), onClick: () => actions.setTool(TOOL_IDS.wand2d), checked: activeTool === TOOL_IDS.wand2d },
         { label: t("viewer2d.tool.region3d"), onClick: () => actions.setTool(TOOL_IDS.region3d), checked: activeTool === TOOL_IDS.region3d },
         { label: t("viewer2d.tool.levelset2d"), onClick: () => actions.setTool(TOOL_IDS.levelset2d), checked: activeTool === TOOL_IDS.levelset2d },
+        { label: t("viewer2d.tool.threshold"), onClick: () => void openThreshold() },
+        { label: t("viewer2d.tool.scissors"), onClick: () => actions.setTool(TOOL_IDS.scissors), checked: activeTool === TOOL_IDS.scissors },
       ],
     },
     {
@@ -444,6 +448,7 @@ export function Viewer2DMenuBar({
         { label: `${t("fourier.menu")}…`, onClick: () => actions.openFourier(), testId: "menu-fourier" },
         { label: `${t("texture.menu")}…`, onClick: () => actions.openTexture() },
         { label: `${t("glam.menu")}…`, onClick: () => actions.openGlamAnalysis() },
+        { label: `${t("roiFeat.menu")}…`, onClick: () => actions.openRoiFeatures(), testId: "menu-roi-features" },
         ...(isDemo ? [] : [{ label: t("viewer2d.menu.imagej"), onClick: () => actions.bridgeImageJ() }]),
         // 解析メニューは本体機能の並びなので、プラグイン由来は**必ず見分けられる形**で出す
         // （区切り線で分け、ラベルに印を付ける）。プラグインメニューに出ていたときは

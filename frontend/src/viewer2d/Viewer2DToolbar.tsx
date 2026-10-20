@@ -25,6 +25,7 @@ import type {
   PluginRtDoseResult,
 } from "../plugins/pluginTypes";
 import { ToolIcon } from "../icons/ToolIcon";
+import { OverflowRow } from "../viewer/OverflowRow";
 import { UI_ICON_FILES } from "../icons/toolIcons";
 
 // アクティブ（青背景）時に黒アイコンが埋もれないよう白へ反転させる。
@@ -242,6 +243,8 @@ export interface ViewerActions {
   openHistogram(): void;
   /** 対象タイルのシリーズでリサンプル・切り抜きダイアログを開く。 */
   openResample(): void;
+  /** 開いている患者のタイルを候補に、つなぎ合わせダイアログを開く。 */
+  openStitch(): void;
   /** 対象タイルの表示中スライス 1 枚でフーリエ解析（2D-DFT）ダイアログを開く。 */
   openFourier(): void;
   /** 対象タイル（PET のみ）で SUV 校正ダイアログを開く。 */
@@ -252,6 +255,8 @@ export interface ViewerActions {
   openTexture(): void;
   /** GLAM 解析（ROI 全体の記述子）を別ウィンドウで開く。 */
   openGlamAnalysis(): void;
+  /** Radiomics 特徴量（ROI 全体の特徴量表）を別ウィンドウで開く。 */
+  openRoiFeatures(): void;
   /** 対象タイルのスタディでレポート編集ダイアログを開く。 */
   openReport(): void;
   /** 対象タイルの画像をクリップボードへコピーする（ROI・文字の重ね描きは含まない）。 */
@@ -277,7 +282,7 @@ export function Viewer2DToolbar({
   const { t } = useI18n();
   const presets = useWlPresets();
   return (
-    <div style={bar}>
+    <OverflowRow style={bar} moreTestId="viewer2d-toolbar-more">
       {/* レイアウト */}
       <select
         value={layoutCols}
@@ -358,17 +363,17 @@ export function Viewer2DToolbar({
       <button onClick={actions.undo} style={btn} title={t("viewer.undo")}>↶</button>
       <button onClick={actions.redo} style={btn} title={t("viewer.redo")}>↷</button>
 
-      <span style={{ marginLeft: "auto", fontSize: 11, color: "#6b7785" }}>
+      <span style={{ marginLeft: "auto", fontSize: 11, color: "#6b7785", whiteSpace: "nowrap", flexShrink: 0 }}>
         {selectedCount > 0
           ? t("viewer2d.tb.targetSelected", { n: selectedCount })
           : t("viewer2d.tb.targetAll", { n: targetCount })}
       </span>
-    </div>
+    </OverflowRow>
   );
 }
 
 function Sep() {
-  return <span style={{ width: 1, alignSelf: "stretch", background: "#dde4ea", margin: "0 3px" }} />;
+  return <span data-sep="" style={{ width: 1, alignSelf: "stretch", background: "#dde4ea", margin: "0 3px" }} />;
 }
 
 const bar: React.CSSProperties = {

@@ -547,6 +547,27 @@ export interface ImportResult {
 export const importPaths = (paths: string[]) =>
   httpSend<ImportResult>("/api/import/paths", "POST", { paths });
 
+/** 進捗と中止つきの取り込みジョブ（POST /api/import/paths/jobs）。 */
+export interface ImportJobStatus {
+  jobId: string;
+  state: "QUEUED" | "SCANNING" | "IMPORTING" | "DONE" | "FAILED" | "CANCELLED";
+  /** 総数。数え終わるまでは -1。 */
+  total: number;
+  processed: number;
+  imported: number;
+  skipped: number;
+  failed: number;
+  result: ImportResult | null;
+  error: string | null;
+}
+
+export const submitImportJob = (paths: string[]) =>
+  httpSend<ImportJobStatus>("/api/import/paths/jobs", "POST", { paths });
+export const getImportJob = (jobId: string) =>
+  httpGet<ImportJobStatus>(`/api/import/paths/jobs/${encodeURIComponent(jobId)}`);
+export const cancelImportJob = (jobId: string) =>
+  httpSend<ImportJobStatus>(`/api/import/paths/jobs/${encodeURIComponent(jobId)}/cancel`, "POST");
+
 // ── NonDicomImport（PDF/画像/動画を DICOM 化して取込） ───────────
 
 export interface NonDicomRequest {
@@ -608,6 +629,10 @@ export interface NiftiProbe {
   description: string | null;
   supported: boolean;
   error: string | null;
+  /** "NIfTI" / "NIfTI pair" / "ANALYZE"（fw/nifti-import.md §9）。 */
+  format?: string | null;
+  /** bitpix が datatype と食い違っていたときの説明。 */
+  bitpixNote?: string | null;
 }
 
 export interface NiftiImportRequest {
@@ -655,6 +680,85 @@ export const probeNifti = (path: string) =>
 /** NIfTI を DICOM 化して保管庫へ取り込む。 */
 export const importNifti = (req: NiftiImportRequest) =>
   httpSend<NiftiImportResult>("/api/nifti/import", "POST", req);
+
+/** Raw データ（ヘッダの無い画素配列）の読み方。fw/nifti-import.md §8 */
+export interface RawSpec {
+  width: number;
+  height: number;
+  slices: number;
+  phases: number;
+  type: string;
+  byteOrder: "little" | "big";
+  offset: number;
+  /** [x, y, z] mm */
+  spacing: [number, number, number];
+  orientation: "axial" | "coronal" | "sagittal";
+  /** 先頭画素の中心（LPS mm）。省略で原点。 */
+  origin?: [number, number, number] | null;
+}
+
+export interface RawImportRequest extends Omit<NiftiImportRequest, "metadataPath"> {
+  spec: RawSpec;
+}
+
+export interface RawImportResponse {
+  result: NiftiImportResult | null;
+  requiredBytes: number;
+  fileBytes: number;
+  /** 読まずに残るバイト数（申告の誤りの手がかり）。 */
+  trailingBytes: number;
+  error: string | null;
+}
+
+/** URL 取り込みのジョブの状態（fw/dicom-data-layer.md §4.4）。 */
+export interface UrlImportStatus {
+  jobId: string;
+  state: "QUEUED" | "DOWNLOADING" | "IMPORTING" | "DONE" | "FAILED" | "CANCELLED";
+  receivedBytes: number;
+  /** Content-Length。分からなければ −1。 */
+  totalBytes: number;
+  /** "dicom"（取り込み済み）/ "file"（path を非 DICOM 取り込みで続ける）。終わるまで null。 */
+  kind: "dicom" | "file" | null;
+  path: string | null;
+  filename: string | null;
+  importResult: ImportResult | null;
+  error: string | null;
+}
+
+/** URL から取り込む（standalone のみ）。http/https だけ。 */
+export const submitUrlImport = (url: string) => httpSend<UrlImportStatus>("/api/import/url", "POST", { url });
+export const getUrlImport = (jobId: string) => httpGet<UrlImportStatus>(`/api/import/url/${encodeURIComponent(jobId)}`);
+export const cancelUrlImport = (jobId: string) =>
+  httpSend<UrlImportStatus>(`/api/import/url/${encodeURIComponent(jobId)}/cancel`, "POST");
+/** 非 DICOM として返した一時ファイルを消す。 */
+export const deleteUrlImportFile = (jobId: string) =>
+  httpSend<void>(`/api/import/url/${encodeURIComponent(jobId)}/file`, "DELETE");
+
+/** Raw のファイルの大きさを読む（画面で必要なバイト数と比べる）。 */
+export const probeRaw = (path: string) =>
+  httpSend<{ fileBytes: number; error: string | null }>("/api/raw/probe", "POST", { path });
+
+/** Raw の中央のスライス（時相 1）の PNG と、濃淡の範囲（そのスライスの有限値の最小・最大）。 */
+export const previewRaw = async (
+  path: string,
+  spec: RawSpec,
+): Promise<{ blob: Blob; min: number; max: number; slice: number }> => {
+  const res = await fetch(`${apiBase()}/api/raw/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, spec }),
+  });
+  if (!res.ok) throw new Error(await extractErrorMessage(res));
+  return {
+    blob: await res.blob(),
+    min: Number(res.headers.get("X-Raw-Min")),
+    max: Number(res.headers.get("X-Raw-Max")),
+    slice: Number(res.headers.get("X-Raw-Slice")),
+  };
+};
+
+/** Raw を DICOM 化して保管庫へ取り込む。画素がファイルに足りなければ 400。 */
+export const importRaw = (req: RawImportRequest) => httpSend<RawImportResponse>("/api/raw/import", "POST", req);
 
 // ── LUT ────────────────────────────────────────────────────────
 
@@ -741,6 +845,32 @@ export interface ExportSelection {
   studyUid: string;
   seriesUids: string[];
 }
+
+/** デスクトップのフォルダ出力ジョブ（POST /api/export/jobs）。Viewer 同梱時だけ DICOMDIR・README も付く。 */
+export interface ExportJobRequest {
+  selections: ExportSelection[];
+  includePortableViewer: boolean;
+  zip: boolean;
+  destination: string;
+}
+
+export interface ExportJobStatus {
+  jobId: string;
+  state: "QUEUED" | "RUNNING" | "DONE" | "FAILED" | "CANCELLED";
+  /** 総数。数え終わるまでは -1。 */
+  total: number;
+  processed: number;
+  /** 完了したときの出力（フォルダまたは ZIP の絶対パス）。 */
+  outputPath: string | null;
+  error: string | null;
+}
+
+export const submitExportJob = (req: ExportJobRequest) =>
+  httpSend<ExportJobStatus>("/api/export/jobs", "POST", req);
+export const getExportJob = (jobId: string) =>
+  httpGet<ExportJobStatus>(`/api/export/jobs/${encodeURIComponent(jobId)}`);
+export const cancelExportJob = (jobId: string) =>
+  httpSend<ExportJobStatus>(`/api/export/jobs/${encodeURIComponent(jobId)}/cancel`, "POST");
 
 export interface ExportRequest {
   selections: ExportSelection[];
@@ -1048,6 +1178,8 @@ export interface TextureMapRequest {
 export interface TextureMapResult {
   seriesInstanceUid: string;
   sopInstanceUids: string[];
+  /** 元画像が非可逆圧縮（マップの値は圧縮の影響を受ける）。 */
+  lossyCompressed: boolean;
 }
 /**
  * Texture 可視化マップを計算し派生シリーズとして保存する（**終わるまで待つ**）。
@@ -1705,6 +1837,8 @@ export interface GlamAnalysis {
   /** リサンプリングした場合の**元の**ボクセル間隔 (x,y,z) mm。していなければ null。 */
   resampledFrom: number[] | null;
   settings: Record<string, string>;
+  /** 元画像が非可逆圧縮（特徴量は圧縮の影響を受ける）。保存済みの古い解析には無い。 */
+  lossyCompressed?: boolean;
 }
 
 /** 保存された解析の一覧行（JSON 本体は含まない）。 */
@@ -1745,3 +1879,106 @@ export const saveGlamAnalysis = (body: {
 /** 保存された解析を消す。 */
 export const deleteGlamAnalysis = (id: string) =>
   httpSend<void>(`/api/radiomics/glam/saved/${encodeURIComponent(id)}`, "DELETE");
+
+// ── ROI 特徴量表（RadiomicsJ の一括抽出） ────────────────────────
+
+/** ROI 特徴量表の要求（backend: RoiFeatureRequest）。settings は RadiomicsJ の設定キーそのまま。 */
+export interface RoiFeatureRequest {
+  studyInstanceUid: string;
+  sourceSeriesUid: string;
+  maskSeriesUid: string;
+  maskChannel: number;
+  channel: number;
+  timePoint: number;
+  settings: Record<string, string>;
+  /** true ならキャッシュを使わずに計算し、結果でキャッシュを置き換える。 */
+  recompute: boolean;
+}
+
+/** 表の 1 行（backend: RoiFeatureResult.Row）。 */
+export interface RoiFeatureRow {
+  /** RadiomicsJ の結果表の列名（例 `IntensityBasedStatistical_Kurtosis`）。 */
+  column: string;
+  family: string;
+  feature: string;
+  /** IBSI の識別子。IBSI 外は null。 */
+  ibsi: string | null;
+  /** NaN は null で届く。 */
+  value: number | null;
+  /** 注記の符号（`EXCESS_KURTOSIS`・`LOG2_DISCRETISED`・`NON_IBSI`）。 */
+  notes: string[];
+}
+
+/** 抽出のときに効いていた離散化（backend: RoiFeatureResult.Discretisation）。 */
+export interface RoiFeatureDiscretisation {
+  fixedBinNumber: boolean;
+  nBins: number;
+  binWidth: number;
+  ivhMode: number;
+  ivhBinCount: number;
+  ivhBinWidth: number;
+}
+
+export interface RoiFeatureResult {
+  radiomicsjVersion: string | null;
+  /** ISO 8601。キャッシュから返ったときは最初に計算した日時。 */
+  computedAt: string;
+  fromCache: boolean;
+  label: number;
+  rows: RoiFeatureRow[];
+  discretisation: RoiFeatureDiscretisation;
+  provenance: RoiFeatureProvenance;
+  /** 計算に実際に使った設定（RadiomicsJ の .properties、正規化済み）。書き出すときは一字も変えない。 */
+  settingsProperties: string;
+  /** ROI の大きさと小さい ROI の警告（返すたびに今の環境設定で判定し直す）。 */
+  roiSize: RoiFeatureRoiSize;
+  /** 元画像が非可逆圧縮（特徴量は圧縮の影響を受ける）。 */
+  lossyCompressed: boolean;
+}
+
+/** ボクセル数は RadiomicsJ の Diagnostics の値。 */
+export interface RoiFeatureRoiSize {
+  /** 読み込んだマスク（リサンプリング・再セグメントの前）。 */
+  initialVoxels: number | null;
+  /** 強度・テクスチャ特徴を計算したボクセル数（リサンプリング・範囲フィルタ・外れ値除去の後）。 */
+  intensityVoxels: number | null;
+  /** 形態特徴のマスク（リサンプリング後・再セグメントしない）。 */
+  morphVoxels: number | null;
+  /** morphVoxels × 計算格子のボクセル体積（mm³）。 */
+  volumeMm3: number | null;
+  /** 環境設定の基準値。未設定なら null。 */
+  smallRoiWarnVoxels: number | null;
+  /** intensityVoxels < 基準値。未設定なら null。 */
+  smallRoi: boolean | null;
+}
+
+/** 版と設定の記録（CSV の Provenance_* 列）。 */
+export interface RoiFeatureProvenance {
+  graphyNextVersion: string;
+  radiomicsjVersion: string | null;
+  /** ISO 8601。キャッシュから返したときも最初に計算した時刻。 */
+  extractedAt: string;
+  /** settingsProperties の UTF-8 の SHA-256（16 進）。 */
+  settingsSha256: string;
+}
+
+export type RoiFeatureJobState = "QUEUED" | "LOADING" | "EXTRACTING" | "DONE" | "FAILED" | "CANCELLED";
+
+/** ROI 特徴量表のジョブの状態（backend: RoiFeatureJobService.Status）。進み具合の件数は無い。 */
+export interface RoiFeatureJobStatus {
+  jobId: string;
+  state: RoiFeatureJobState;
+  elapsedMs: number;
+  result?: RoiFeatureResult | null;
+  error?: string | null;
+}
+
+export const submitRoiFeatureJob = (req: RoiFeatureRequest) =>
+  httpSend<RoiFeatureJobStatus>("/api/radiomics/features/jobs", "POST", req);
+
+export const getRoiFeatureJob = (jobId: string) =>
+  httpGet<RoiFeatureJobStatus>(`/api/radiomics/features/jobs/${encodeURIComponent(jobId)}`);
+
+/** 取り消しは結果を返さなくするだけ。計算は最後まで走り、結果はキャッシュに入る。 */
+export const cancelRoiFeatureJob = (jobId: string) =>
+  httpSend<RoiFeatureJobStatus>(`/api/radiomics/features/jobs/${encodeURIComponent(jobId)}`, "DELETE");

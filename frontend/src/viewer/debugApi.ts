@@ -5,7 +5,7 @@
 import { cache, getRenderingEngine, metaData } from "@cornerstonejs/core";
 import { ENGINE_ID } from "./Viewer2D";
 import { readCamera, readColormapName, readInvert, readVoiWindow } from "./viewportRead";
-import { annotation as csAnnotation, utilities as csToolsUtilities } from "@cornerstonejs/tools";
+import { annotation as csAnnotation, segmentation as csSegmentation, utilities as csToolsUtilities } from "@cornerstonejs/tools";
 import { getRoiStats, getRoiStatsByData } from "./roiStatsStore";
 import {
   getVesselModel,
@@ -16,6 +16,7 @@ import { calibrationForImageId, loaderSpacingFor, setXaUserCalibration } from ".
 import { getViewerContext } from "./viewerContext";
 import { worldToImageCoords } from "./imageCoords";
 import type { Geometry3DPixelStats } from "./vtkGeometryView";
+import type { VtkRenderStats } from "./vtkVolumeView";
 
 /**
  * automator（自律検証ツール）専用のデバッグAPI。`window.__graphyDebug` として公開し、
@@ -754,6 +755,21 @@ export function publishGeometry3dProbe(fn: (() => Geometry3DPixelStats | null) |
   geometry3dProbe = fn;
 }
 
+/**
+ * 開いている 3D（vtk）の描画の実測（静止 1 フレームの時間・操作中の縮小倍率・縮小描画の状態）。
+ * 3D が開いていない・vtk の内部に届かない場合は null。
+ */
+let render3dProbe: (() => VtkRenderStats | null) | null = null;
+
+export function publishRender3dStats(fn: (() => VtkRenderStats | null) | null): void {
+  if (!import.meta.env.DEV) return;
+  render3dProbe = fn;
+}
+
+function getRender3dStats(): VtkRenderStats | null {
+  return render3dProbe ? render3dProbe() : null;
+}
+
 function getGeometry3dStats(): Geometry3DPixelStats | null {
   return geometry3dProbe ? geometry3dProbe() : null;
 }
@@ -941,6 +957,168 @@ function probeUserCalibration(mmPerPx: number) {
   }
 }
 
+/** アクティブ segmentation の labelmap を数える（スライスごと・segment 値ごと）。Scissors などの塗り範囲の検証用。 */
+export interface SegCounts {
+  viewportId: string;
+  segmentationId: string | null;
+  /** stack labelmap: スライスごとの {segment 値: 個数}（0 は除く）。 */
+  slices: { index: number; counts: Record<string, number> }[];
+  /** 全スライスの合計 {segment 値: 個数}（0 は除く）。 */
+  total: Record<string, number>;
+}
+
+function getSegCounts(viewportId?: string): SegCounts | null {
+  const engine = getRenderingEngine(ENGINE_ID);
+  if (!engine) return null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const cs = csSegmentation as any;
+  for (const vp of engine.getViewports()) {
+    if (viewportId && vp.id !== viewportId) continue;
+    const segId: string | undefined = cs.activeSegmentation.getActiveSegmentation?.(vp.id)?.segmentationId;
+    if (!segId) continue;
+    const ids: string[] = cs.state.getSegmentation?.(segId)?.representationData?.Labelmap?.imageIds ?? [];
+    const total: Record<string, number> = {};
+    const slices: SegCounts["slices"] = [];
+    ids.forEach((id, index) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const img = cache.getImage(id) as any;
+      const data = img?.voxelManager?.getScalarData?.() as ArrayLike<number> | undefined;
+      if (!data) return;
+      const counts: Record<string, number> = {};
+      for (let i = 0; i < data.length; i++) {
+        const v = data[i];
+        if (v) counts[v] = (counts[v] ?? 0) + 1;
+      }
+      for (const [k, n] of Object.entries(counts)) total[k] = (total[k] ?? 0) + n;
+      if (Object.keys(counts).length) slices.push({ index, counts });
+    });
+    return { viewportId: vp.id, segmentationId: segId, slices, total };
+  }
+  return null;
+}
+
+/** 現在表示中のビューポートと画像の幾何（Scissors の期待値の計算用）。 */
+function imageGrid(viewportId: string) {
+  const engine = getRenderingEngine(ENGINE_ID);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const vp = engine?.getViewports().find((v) => v.id === viewportId) as any;
+  const d = vp?.getImageData?.();
+  if (!d) return null;
+  const [cols, rows] = d.dimensions as number[];
+  const [colSp, rowSp] = d.spacing as number[];
+  const o = d.origin as number[];
+  const dir = Array.from(d.direction as number[]);
+  const world = (i: number, j: number) => [0, 1, 2].map((k) => o[k] + dir[k] * colSp * i + dir[3 + k] * rowSp * j);
+  const canvasOf = (i: number, j: number) => vp.worldToCanvas(world(i, j)) as number[];
+  return { vp, cols, rows, canvasOf };
+}
+
+/** 画像全体が canvas 上で占める範囲 [x0, y0, x1, y1]（CSS px、canvas 左上が原点）。 */
+function getImageCanvasRect(viewportId: string): number[] | null {
+  const g = imageGrid(viewportId);
+  if (!g) return null;
+  const c = [g.canvasOf(-0.5, -0.5), g.canvasOf(g.cols - 0.5, g.rows - 0.5)];
+  return [Math.min(c[0][0], c[1][0]), Math.min(c[0][1], c[1][1]), Math.max(c[0][0], c[1][0]), Math.max(c[0][1], c[1][1])];
+}
+
+/** canvas 上の点に最も近い画素の添字（j * cols + i）。 */
+function canvasToPixelIndex(viewportId: string, p: [number, number]): number | null {
+  const g = imageGrid(viewportId);
+  if (!g) return null;
+  // 最近傍を全探索で探す（128×112 程度なので十分）。
+  let best = -1;
+  let bd = Infinity;
+  for (let j = 0; j < g.rows; j++) {
+    for (let i = 0; i < g.cols; i++) {
+      const c = g.canvasOf(i, j);
+      const dd = (c[0] - p[0]) ** 2 + (c[1] - p[1]) ** 2;
+      if (dd < bd) {
+        bd = dd;
+        best = j * g.cols + i;
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * canvas 上の矩形／円に対する画素集合の下限・上限（Scissors の期待範囲）。添字は j * cols + i。
+ * 下限＝画素の四角（画素の幅の分だけ広がる）がすべて内側に入るもの。上限＝四角が少しでも重なるもの。
+ * ツールが画素のどの扱い方をしても、結果は下限 ⊆ 結果 ⊆ 上限になる。ツール内部の計算とは別に、canvas 位置だけで求める。
+ */
+function getShapePixelSets(
+  viewportId: string,
+  shape: "rect" | "circle",
+  p0: [number, number],
+  p1: [number, number],
+): { inner: number[]; outer: number[] } | null {
+  const g = imageGrid(viewportId);
+  if (!g) return null;
+  const xMin = Math.min(p0[0], p1[0]);
+  const xMax = Math.max(p0[0], p1[0]);
+  const yMin = Math.min(p0[1], p1[1]);
+  const yMax = Math.max(p0[1], p1[1]);
+  const r = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]);
+  const inner: number[] = [];
+  const outer: number[] = [];
+  for (let j = 0; j < g.rows; j++) {
+    for (let i = 0; i < g.cols; i++) {
+      const cs = [g.canvasOf(i - 0.5, j - 0.5), g.canvasOf(i + 0.5, j - 0.5), g.canvasOf(i - 0.5, j + 0.5), g.canvasOf(i + 0.5, j + 0.5)];
+      const bx0 = Math.min(...cs.map((c) => c[0]));
+      const bx1 = Math.max(...cs.map((c) => c[0]));
+      const by0 = Math.min(...cs.map((c) => c[1]));
+      const by1 = Math.max(...cs.map((c) => c[1]));
+      let isIn: boolean;
+      let isTouch: boolean;
+      if (shape === "rect") {
+        isIn = bx0 >= xMin && bx1 <= xMax && by0 >= yMin && by1 <= yMax;
+        isTouch = bx1 >= xMin && bx0 <= xMax && by1 >= yMin && by0 <= yMax;
+      } else {
+        const far = Math.max(...cs.map((c) => Math.hypot(c[0] - p0[0], c[1] - p0[1])));
+        const nx = Math.min(Math.max(p0[0], bx0), bx1);
+        const ny = Math.min(Math.max(p0[1], by0), by1);
+        isIn = far <= r;
+        isTouch = Math.hypot(nx - p0[0], ny - p0[1]) <= r;
+      }
+      if (isIn) inner.push(j * g.cols + i);
+      if (isTouch) outer.push(j * g.cols + i);
+    }
+  }
+  return { inner, outer };
+}
+
+/** アクティブ segmentation の指定スライスで、値が segment 値と一致する画素の添字（j * cols + i）。 */
+function getSegSlicePixels(sliceIndex: number, value = 1, viewportId?: string): number[] | null {
+  const engine = getRenderingEngine(ENGINE_ID);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const cs = csSegmentation as any;
+  for (const vp of engine?.getViewports() ?? []) {
+    if (viewportId && vp.id !== viewportId) continue;
+    const segId: string | undefined = cs.activeSegmentation.getActiveSegmentation?.(vp.id)?.segmentationId;
+    if (!segId) continue;
+    const ids: string[] = cs.state.getSegmentation?.(segId)?.representationData?.Labelmap?.imageIds ?? [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const img = cache.getImage(ids[sliceIndex]) as any;
+    const data = img?.voxelManager?.getScalarData?.() as ArrayLike<number> | undefined;
+    if (!data) return null;
+    const out: number[] = [];
+    for (let i = 0; i < data.length; i++) if (data[i] === value) out.push(i);
+    return out;
+  }
+  return null;
+}
+
+/** canvas 上で 1 mm が何 CSS px か（球の半径を mm に直すため）。 */
+function getCanvasPxPerMm(viewportId: string): number | null {
+  const g = imageGrid(viewportId);
+  if (!g) return null;
+  const a = g.canvasOf(0, 0);
+  const b = g.canvasOf(10, 0);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const spacing = (g.vp.getImageData() as any).spacing[0] as number;
+  return Math.hypot(b[0] - a[0], b[1] - a[1]) / (10 * spacing);
+}
+
 declare global {
   interface Window {
     __graphyDebug?: {
@@ -950,7 +1128,14 @@ declare global {
       getAnnotationCanvasPoints: typeof getAnnotationCanvasPoints;
       getImagePixelRange: typeof getImagePixelRange;
       getPixelStats: typeof getPixelStats;
+      getRender3dStats: typeof getRender3dStats;
       getViewportGeometry: typeof getViewportGeometry;
+      getSegCounts: typeof getSegCounts;
+      getImageCanvasRect: typeof getImageCanvasRect;
+      canvasToPixelIndex: typeof canvasToPixelIndex;
+      getShapePixelSets: typeof getShapePixelSets;
+      getSegSlicePixels: typeof getSegSlicePixels;
+      getCanvasPxPerMm: typeof getCanvasPxPerMm;
       getViewportProperties: typeof getViewportProperties;
       getXaCineStats: typeof getXaCineStats;
       getQcaState: typeof getQcaState;
@@ -1096,7 +1281,14 @@ export function installDebugApi(): void {
     getAnnotationCanvasPoints,
     getImagePixelRange,
     getPixelStats,
+    getRender3dStats,
     getViewportGeometry,
+    getSegCounts,
+    getImageCanvasRect,
+    canvasToPixelIndex,
+    getShapePixelSets,
+    getSegSlicePixels,
+    getCanvasPxPerMm,
     getViewportProperties,
     getXaCineStats,
     getQcaState,

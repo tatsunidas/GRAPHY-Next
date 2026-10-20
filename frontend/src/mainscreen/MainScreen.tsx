@@ -2,10 +2,12 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import { useRef, useState } from "react";
-import { importPaths, type AppStatus, type Study, type Series, type StudyFilters } from "../api";
+import { useEffect, useRef, useState } from "react";
+import { cancelImportJob, deleteUrlImportFile, getImportJob, submitImportJob, type AppStatus, type ImportJobStatus, type ImportResult, type Study, type Series, type StudyFilters } from "../api";
 import { desktop } from "../desktopBridge";
 import { droppedPaths, hasDroppedFiles } from "./droppedPaths";
+import { ImportProgressBanner } from "./ImportProgressBanner";
+import { runImportJob } from "./importJob";
 import { importedStudiesView, type ImportedView } from "./importedView";
 import { useI18n } from "../i18n/i18n";
 import { StudyList } from "../StudyList";
@@ -21,6 +23,7 @@ import { ExportDialog } from "./ExportDialog";
 import { SendDialog } from "./SendDialog";
 import { TagViewerDialog } from "./TagViewerDialog";
 import { NonDicomImportDialog } from "./NonDicomImportDialog";
+import { UrlImportDialog } from "./UrlImportDialog";
 import { ReportEditorDialog } from "../report/ReportEditorDialog";
 import { ReportManagerDialog } from "../report/ReportManagerDialog";
 import { DoseReportDialog } from "./DoseReportDialog";
@@ -81,13 +84,22 @@ export function MainScreen({
     | "reportManager"
     | "dose"
     | "taskLauncher"
+    | "urlImport"
     | null
   >(null);
+  // URL から落とした非 DICOM のファイル。非DICOM取込をそのファイルで開き、閉じたら一時ファイルを消す
+  const [urlFile, setUrlFile] = useState<{ path: string; jobId: string } | null>(null);
   // ReportManagerDialog から特定レポートを開いたときだけ設定（新規/報告ボタンからの通常オープンは null=自動解決）。
   const [reportEditorId, setReportEditorId] = useState<string | null>(null);
 
   // ボタン・メニューとドロップの両方から使う。取り込み中は次を受けない。
   const importingRef = useRef(false);
+  // 進捗つきの取り込みジョブ（null＝取り込んでいない）と、中止の求め。
+  const [importJob, setImportJob] = useState<ImportJobStatus | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const cancelRequested = useRef(false);
+  // 画面が閉じられたら取り込みも止める（裏で続けない）。
+  useEffect(() => () => { cancelRequested.current = true; }, []);
   const [dropActive, setDropActive] = useState(false);
   // dragenter/dragleave は子要素の出入りでも飛ぶので、入った回数で数える。
   const dragDepth = useRef(0);
@@ -111,10 +123,37 @@ export function MainScreen({
   };
 
   const runImportOnce = async (paths: string[]) => {
-    setImportMsg(t("main.import.running"));
+    setImportMsg(null);
+    cancelRequested.current = false;
+    setCancelling(false);
     try {
-      const r = await importPaths(paths);
-      const base = t("main.import.result", { imported: r.imported, skipped: r.skipped, failed: r.failed });
+      const job = await runImportJob(
+        { submit: submitImportJob, get: getImportJob, cancel: cancelImportJob },
+        paths,
+        setImportJob,
+        () => cancelRequested.current,
+      );
+      if (job.state === "FAILED" || !job.result) {
+        setImportMsg(t("common.fetchError", { error: job.error ?? "import failed" }));
+        setTimeout(() => setImportMsg(null), 6000);
+      } else {
+        applyImportResult(job.result, job.state === "CANCELLED");
+      }
+    } catch (e) {
+      setImportMsg(t("common.fetchError", { error: String(e) }));
+      setTimeout(() => setImportMsg(null), 6000);
+    } finally {
+      setImportJob(null);
+      setCancelling(false);
+    }
+  };
+
+  /** 取り込みの結果を一覧に反映する（ファイル・フォルダ・ドロップ・URL で共通）。 */
+  const applyImportResult = (r: ImportResult, cancelled = false) => {
+    {
+      const base =
+        (cancelled ? t("main.import.cancelled") : "") +
+        t("main.import.result", { imported: r.imported, skipped: r.skipped, failed: r.failed });
       // 検査日の無いスタディは既定の検索条件（今日）では出ない。取り込めているのに
       // 「失敗した」と読まれるため、件数があるときだけ理由と対処を添える。
       const view = importedStudiesView(r.studyInstanceUids);
@@ -130,11 +169,7 @@ export function MainScreen({
       setReloadKey((k) => k + 1);
       // 注意文つきのときは読む時間が要る（既定の 6 秒では消えるのが早い）。
       setTimeout(() => setImportMsg(null), r.studiesWithoutDate > 0 ? 20000 : 6000);
-      return;
-    } catch (e) {
-      setImportMsg(t("common.fetchError", { error: String(e) }));
     }
-    setTimeout(() => setImportMsg(null), 6000);
   };
 
   // 各ビューア起動。2D Viewer は別ウィンドウ（desktop）/ ハッシュ（web）で開く。3D/MPR/Slicer は順次。
@@ -290,6 +325,14 @@ export function MainScreen({
       setOpenTool("taskLauncher");
       return;
     }
+    if (kind === "urlImport") {
+      if (!canImport) {
+        window.alert(t("common.standaloneOnlyFeature"));
+        return;
+      }
+      setOpenTool("urlImport");
+      return;
+    }
     if (kind === "nonDicomImport") {
       if (!isStandalone) {
         // 非DICOM取込はローカルファイルパス（Electron専用）が前提のため standalone 専用。
@@ -369,6 +412,16 @@ export function MainScreen({
         onOpenSettings={onOpenSettings}
         onOpenHelp={onOpenHelp}
       />
+      {importJob && (
+        <ImportProgressBanner
+          status={importJob}
+          cancelling={cancelling}
+          onCancel={() => {
+            cancelRequested.current = true;
+            setCancelling(true);
+          }}
+        />
+      )}
       {importMsg && <div style={banner}>{importMsg}</div>}
       <div style={middle}>
         {/* status（isDemo）は非同期取得のため、確定後に isDemo が変わったら SearchPanel を
@@ -396,6 +449,7 @@ export function MainScreen({
           <StudyList
             filters={filters}
             reloadKey={reloadKey + dbVersion}
+            connecting={!status}
             mode={isStandalone ? "standalone" : "web"}
             onSelectStudy={(s) => { setSelectedStudy(s); setSelectedSeries(null); }}
             onSelectSeries={setSelectedSeries}
@@ -436,12 +490,27 @@ export function MainScreen({
         onClose={() => setOpenTool(null)}
         study={selectedStudy}
         series={selectedSeries}
+        editable={isStandalone}
       />
       <NonDicomImportDialog
         open={openTool === "nonDicomImport"}
-        onClose={() => setOpenTool(null)}
+        onClose={() => {
+          setOpenTool(null);
+          if (urlFile) void deleteUrlImportFile(urlFile.jobId).catch(() => undefined);
+          setUrlFile(null);
+        }}
         study={selectedStudy}
+        initialPaths={urlFile ? [urlFile.path] : undefined}
         onImported={() => setReloadKey((k) => k + 1)}
+      />
+      <UrlImportDialog
+        open={openTool === "urlImport"}
+        onClose={() => setOpenTool(null)}
+        onDicomImported={(r) => applyImportResult(r)}
+        onFile={(path, jobId) => {
+          setUrlFile({ path, jobId });
+          setOpenTool("nonDicomImport");
+        }}
       />
       <ReportEditorDialog
         open={openTool === "report"}

@@ -9,7 +9,7 @@
 // コールバックで直接処理する想定）。
 
 export interface DbChangedDetail {
-  /** 変更種別（"patient-edit" | "study-patient-edit" | "study-delete" | "series-delete" | ...）。 */
+  /** 変更種別（"patient-edit" | "study-patient-edit" | "tag-edit" | "study-delete" | "series-delete" | ...）。 */
   reason: string;
   patientId?: string;
   /** 影響を受けたスタディ（受信側が「当該スタディが利用中か」を判定する手掛かり）。 */

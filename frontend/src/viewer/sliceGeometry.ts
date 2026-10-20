@@ -15,7 +15,11 @@
  * SliceLocation は基準点が実装ごとに違うので使わない。
  *
  * <h3>並びの分類</h3>
- * 許容値 = max(0.01 mm, 公称間隔の 1%)。0.01 mm は IPP の DS 値の丸め誤差の大きさ、1% は 1 ボクセルの 1/100。
+ * 丸めの許容 r = min(0.01 mm, max(q, 公称間隔の 1%))。q は IPP が実際に書かれている桁の刻み（小数 2 桁なら 0.01 mm）、
+ * 0.01 mm は小数 2 桁で書く装置の丸め（2026-10-18 まで固定だった値）、1% は 1 ボクセルの 1/100。
+ * 同じ位置 = 間隔が r 以下。等間隔 = 等間隔からのずれが max(r, 公称間隔の 1%) 以下。
+ * 小数 2 桁で書かれたデータと、間隔 1 mm 以上のデータでは、旧来の固定値と同じ判定になる。
+ * 細かい桁で書かれた細かい間隔（顕微鏡の Z 2 µm など）では、0.01 mm 固定だと隣どうしが全部「同じ位置」になってしまうため、こうした。
  */
 
 export type V3 = [number, number, number];
@@ -89,6 +93,20 @@ function fallbackSpacing(slices: ReadonlyArray<SliceInfo>): { spacing: number; s
 }
 
 /** 1 つのスタック（同じ series・C/T）の奥行きを決める。 */
+/**
+ * IPP が実際に書かれている桁の刻み（mm）。全成分が 0.01 の倍数なら 0.01、0.001 の倍数なら 0.001 … 1e-6 まで。
+ * それより細かければ 0（丸めの許容は間隔の 1% に任せる）。IPP が無ければ 0.01（旧来の固定値）。
+ */
+function ippQuantum(slices: ReadonlyArray<SliceInfo>): number {
+  const vals: number[] = [];
+  for (const s of slices) if (finite3(s.ipp)) vals.push(s.ipp![0], s.ipp![1], s.ipp![2]);
+  if (vals.length === 0) return POS_TOL_MM;
+  for (const q of [1e-2, 1e-3, 1e-4, 1e-5, 1e-6]) {
+    if (vals.every((v) => Math.abs(v / q - Math.round(v / q)) < 1e-6)) return q;
+  }
+  return 0;
+}
+
 export function sliceGeometry(slices: ReadonlyArray<SliceInfo>): SliceGeometry {
   const n = slices.length;
   const firstIop = slices.find((s) => finite6(s.iop))?.iop ?? null;
@@ -120,16 +138,18 @@ export function sliceGeometry(slices: ReadonlyArray<SliceInfo>): SliceGeometry {
   const steps: number[] = [];
   for (let i = 1; i < positions.length; i++) steps.push(positions[i] - positions[i - 1]);
   const nominalSpacing = n >= 2 ? (positions[n - 1] - positions[0]) / (n - 1) : fb.spacing;
-  const tol = Math.max(POS_TOL_MM, Math.abs(nominalSpacing) * REL_TOL);
+  const quantum = ippQuantum(slices);
+  const roundTol = Math.min(POS_TOL_MM, Math.max(quantum, Math.abs(nominalSpacing) * REL_TOL));
+  const tol = Math.max(roundTol, Math.abs(nominalSpacing) * REL_TOL);
 
   let kind: SliceLayoutKind;
   let maxDeviationMm = 0;
   let missingCount = 0;
-  const nonDup = steps.filter((s) => Math.abs(s) > POS_TOL_MM);
+  const nonDup = steps.filter((s) => Math.abs(s) > roundTol);
   const minSpacing = nonDup.length ? Math.min(...nonDup.map(Math.abs)) : Math.abs(nominalSpacing) || fb.spacing;
   if (n < 2) {
     kind = "single";
-  } else if (steps.some((s) => Math.abs(s) <= POS_TOL_MM)) {
+  } else if (steps.some((s) => Math.abs(s) <= roundTol)) {
     kind = "duplicates";
   } else {
     for (let i = 0; i < n; i++) {
