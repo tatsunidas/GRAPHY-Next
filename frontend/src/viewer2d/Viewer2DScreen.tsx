@@ -116,6 +116,7 @@ import { ROI_FEATURE_CTX_KEY } from "../radiomics/RoiFeatureScreen";
 import { useI18n } from "../i18n/i18n";
 import { desktop } from "../desktopBridge";
 import { closeAllPluginWindows } from "../plugins/pluginWindowApi";
+import { roiTimeSeries as pluginRoiTimeSeries } from "../plugins/pluginRoiTimeSeriesApi";
 import { mountSeriesPanel, closeAllSeriesPanels, PluginSeriesPanels } from "../plugins/pluginSeriesPanelApi";
 import { AiEgressConsentHost } from "../plugins/pluginAiApi";
 
@@ -1229,6 +1230,30 @@ function TileGrid({
           return (rois ?? []).map((r) => ({ tileId: id, ...r }));
         });
       },
+      // 全時相への当てはめ。ROI の取得・レイアウト・画素の読み出しは pluginRoiTimeSeriesApi に閉じる。
+      roiTimeSeries: (tileId, roiUid) =>
+        pluginRoiTimeSeries(
+          {
+            mode,
+            getRois: (id) => {
+              const ids = id ? [id] : resolveTargets();
+              return ids.flatMap((tid) =>
+                (queryViewerCommand(tid, (c) => c.getRois()) ?? []).map((r) => ({ tileId: tid, ...r })),
+              );
+            },
+            closedOf: (uid) => {
+              try {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                return (csAnnotation.state.getAnnotation(uid) as any)?.data?.contour?.closed as boolean | undefined;
+              } catch {
+                return undefined;
+              }
+            },
+            studyUidOfSeries,
+          },
+          tileId,
+          roiUid,
+        ),
       // ROI メタはタイルに依存しない（annotation は本体でグローバル）。登録済みタイルのどれかで解決できればよい。
       getRoiMeta: (roiUid, pluginId) => {
         for (const id of resolveTargets()) {

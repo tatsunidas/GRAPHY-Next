@@ -8,6 +8,7 @@ import { useWlPresets } from "./wlPresetStore";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { type SortMode } from "../viewer/seriesSort";
 import type { SlabProjection } from "../viewer/slabPresets";
+import type { PluginRoiTimeSeriesResult } from "../plugins/pluginRoiTimeSeriesApi";
 import { type ViewerDerivedSeriesRequest, type ViewerDerivedSeriesResult, type ViewerOverlay, type ViewerPixelDataOptions, type ViewerSrRequest, type ViewerSrResult, type ViewerTarget, type ViewerAngioReportRequest, type ViewerPresentationStateRequest, type ViewerTilePixelData, type ViewerTileSpatialCalibration, type ViewerTileXaState, type ViewerTileXaCine, type ViewerTileRoi, type ViewerTileViewState, ViewerLabelVolume, ViewerLabelVolumeResult } from "../viewer/viewerCommands";
 import type { PluginAnalysisInput } from "../report/analysisResults";
 import type {
@@ -78,6 +79,8 @@ export interface ViewerActions {
    * tileId 省略時は**対象タイル全部**（ベースラインと追跡を並べて開いている場合に両方読めるよう）。
    */
   getRois(tileId?: string): ViewerTileRoi[];
+  /** ROI の形を 4D シリーズの全時相に当てた時相ごとの統計（`plugins/pluginRoiTimeSeriesApi.ts`）。 */
+  roiTimeSeries(tileId: string | undefined, roiUid: string): Promise<PluginRoiTimeSeriesResult>;
   /**
    * **シリーズ 1 本をボリュームとして読む**（H10）。校正済み値＋患者 LPS の幾何。
    * 開いていないシリーズも読める（`studyUid` 省略時は開いているタイルから解決）。

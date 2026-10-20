@@ -29,6 +29,9 @@ import type { ViewerDerivedSeriesRequest, ViewerDerivedSeriesResult, ViewerOverl
 
 export type { PluginStoreDoc, PluginStoreSaveResult };
 
+import type { PluginRoiTimeSeriesResult } from "./pluginRoiTimeSeriesApi";
+export type { PluginRoiTimePoint, PluginRoiTimeSeries, PluginRoiTimeSeriesResult } from "./pluginRoiTimeSeriesApi";
+
 import type {
   VesselAnalysisResult,
   XaVesselAnalysisInput,
@@ -840,6 +843,23 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * スナップショットを持ち回らないこと。
    */
   getRois: (tileId?: string) => ViewerTileRoi[];
+  /**
+   * **ROI の形を 4D シリーズの全時相に当てた、時相ごとの統計**。灌流の時間-信号曲線の土台。
+   *
+   * <p>ROI（面型のみ）が乗っているスライス・チャンネルの全時相に、**同じ画素領域**を当てて平均・SD・
+   * 画素数・経過秒を返す。統計は本体の ROI 統計エンジンで計算する（画面の値と一致する）。
+   * `read-pixels` を `permissions` に宣言すること。
+   *
+   * <p>🔴 **欠損は欠損のまま。** 読めない時相・領域に画素が無い時相は `mean/sd = null`・`n = 0` で、
+   * `warnings` に `unreadable@t` / `no-pixels@t` が入る。0 や隣の時相で埋めないこと。
+   * 経過秒は 4D の時刻タグ（`timeSource`）から決まり、**時刻が無ければ `timeSec = null`**。
+   * 秒を使う指標（傾き・曲線下面積）は、null のときは出さないこと。
+   *
+   * <p>⚠ **動き補正はしない。** 体動のある検査では領域内の組織が時相ごとに変わる。
+   * ROI が画像の外にはみ出す時相は `roi-exceeds-image@t` が付く（残った画素だけで平均が出る）。
+   * `zScope === "all"` の ROI・線や点の ROI・単一時相のシリーズ・シネは `{ ok: false, error }`。
+   */
+  roiTimeSeries: (tileId: string | undefined, roiUid: string) => Promise<PluginRoiTimeSeriesResult>;
   /**
    * ROI に紐付けた**このプラグインの属性**を読む（H5）。未設定なら空オブジェクト。
    * キーは自動で `plugin.<pluginId>.` 名前空間に置かれるので、他プラグインや本体の属性とは混ざらない。
