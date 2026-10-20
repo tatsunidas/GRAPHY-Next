@@ -111,6 +111,7 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   computeLocalPickPython: () => ipcRenderer.invoke("graphy:compute-local-pick-python"),
   computeLocalUseAuto: () => ipcRenderer.invoke("graphy:compute-local-use-auto"),
   // 既定の計算機（未登録で Google にログイン済みなら Colab の T4 を足す。足すのは main）
+  computeDefaultSet: (id) => ipcRenderer.invoke("graphy:compute-default-set", id ?? null),
   computeEnsureDefault: () => ipcRenderer.invoke("graphy:compute-ensure-default"),
   // 名前を付けて保存。上書き確認は OS のダイアログが出す。
   saveFile: (payload) => ipcRenderer.invoke("graphy:save-file", payload),

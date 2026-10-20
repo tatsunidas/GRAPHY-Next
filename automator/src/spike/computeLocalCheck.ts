@@ -191,7 +191,7 @@ async function main(): Promise<void> {
       const t1 = await panelText(page);
       const missingText = (await page.getByTestId("compute-local-missing").count()) > 0 ? ((await page.getByTestId("compute-local-missing").textContent()) ?? "") : "";
       check(!/jupyter_server|ipykernel/.test(missingText), "正例: 足りない案内に jupyter_server・ipykernel が出ない", missingText);
-      check(/準備中|not available yet/.test(t1), "「準備中です。今の既定の計算機は変わりません」の一行が出る");
+      check((await page.getByTestId("compute-local-make-default").count()) === 1 && (await page.getByTestId("compute-local-default").count()) === 0, "この PC は既定ではなく、［既定にする］がある（CUDA 可の GPU が無い PATH）");
       check((await page.getByTestId("compute-local-detect").count()) === 1, "再検出ボタンがある");
 
       console.log("[A2] 検出しただけでは何も書かない");
@@ -343,7 +343,7 @@ async function main(): Promise<void> {
       await page.getByTestId("compute-local-candidates-summary").click();
       const s = (await page.getByTestId("compute-local-searched").textContent()) ?? "";
       check(s.includes("python3") && s.includes("anaconda3"), "探した場所の一覧（python3・conda の base）が画面に出る", s.slice(0, 200));
-      check(/準備中|not available yet/.test(t), "既定の計算機は変わらない旨の一行が出る");
+      check((await page.getByTestId("compute-local-make-default").isDisabled()), "Python が無いので［既定にする］は押せない");
       await shot(driver, "C-no-python");
     });
   } finally {

@@ -22,6 +22,9 @@ const SPEC_VALUE_RE = /^[A-Z0-9_]{1,32}$/;
 /** 「この PC」の Python の設定。接続先の配列ではなく最上位の `local` に置く（接続先の選び方・backend への送り先に乗せない）。 */
 const AUTO_LOCAL = Object.freeze({ python: Object.freeze({ mode: "auto" }) });
 
+/** 既定の計算機に「この PC」を選ぶときの id（接続先の一覧には載らない。起動ごとに URL とトークンが変わる）。 */
+const LOCAL_ID = "local";
+
 let filePath = null;
 let config = null;
 
@@ -133,6 +136,18 @@ function normalizeLocal(raw) {
   return { local: { python: { mode: "auto" } }, problems: ["local:bad-python-mode"] };
 }
 
+/**
+ * `defaultId`（利用者が「既定にする」で選んだ計算機）を検査する。
+ * undefined＝キーが無い（未移行。移行の判定は computeDefault 側が旧規則で行う）／null＝自動／文字列＝その id。
+ * 形が不正なら自動として扱い、理由を problems に積む（黙って消さない）。
+ */
+function normalizeDefaultId(raw) {
+  if (raw === undefined) return { defaultId: undefined, problems: [] };
+  if (raw === null) return { defaultId: null, problems: [] };
+  if (typeof raw === "string" && (raw === LOCAL_ID || ID_RE.test(raw))) return { defaultId: raw, problems: [] };
+  return { defaultId: null, problems: ["default:bad-id"] };
+}
+
 /** 現在の構成。ファイルが無ければ空（出荷時の接続先は持たない）。 */
 function get() {
   if (config) return config;
@@ -152,7 +167,8 @@ function get() {
   const v = raw && typeof raw === "object" ? raw.schemaVersion : undefined;
   const tooNew = typeof v === "number" && v > SCHEMA_VERSION;
   const loc = v === undefined || v === 1 ? { local: AUTO_LOCAL, problems: [] } : normalizeLocal(raw.local);
-  config = { ...config, local: loc.local, problems: [...(loadError ? [loadError] : []), ...(tooNew ? [`config:schema-too-new:${v}`] : []), ...config.problems, ...loc.problems] };
+  const def = normalizeDefaultId(raw && typeof raw === "object" ? raw.defaultId : undefined);
+  config = { ...config, local: loc.local, defaultId: def.defaultId, problems: [...(loadError ? [loadError] : []), ...(tooNew ? [`config:schema-too-new:${v}`] : []), ...config.problems, ...loc.problems, ...def.problems] };
   return config;
 }
 
@@ -175,20 +191,33 @@ function save(raw) {
     if (l.problems.length > 0) return { ok: false, problems: l.problems };
     local = l.local;
   }
-  return write(next, local);
+  // 🔴 同じく、渡されなかった `defaultId` は今の値を引き継ぐ（未移行＝undefined のままなら書かない）
+  let defaultId = cur.defaultId;
+  if (raw && raw.defaultId !== undefined) {
+    const d = normalizeDefaultId(raw.defaultId);
+    if (d.problems.length > 0) return { ok: false, problems: d.problems };
+    defaultId = d.defaultId;
+  }
+  // 消した接続先を指したままにしない（宙に浮いた id は自動として扱うが、ファイルにも残さない）
+  if (typeof defaultId === "string" && defaultId !== LOCAL_ID && !next.endpoints.some((e) => e.id === defaultId)) defaultId = null;
+  return write(next, local, defaultId);
 }
 
-function write(next, local) {
+function write(next, local, defaultId) {
   try {
     fs.writeFileSync(
       filePath,
-      JSON.stringify({ schemaVersion: SCHEMA_VERSION, endpoints: next.endpoints.map(toStored), local }, null, 2),
+      JSON.stringify(
+        { schemaVersion: SCHEMA_VERSION, endpoints: next.endpoints.map(toStored), local, ...(defaultId === undefined ? {} : { defaultId }) },
+        null,
+        2,
+      ),
       { encoding: "utf8", mode: 0o600 },
     );
   } catch (e) {
     return { ok: false, problems: [`config:write-failed:${e.message}`] };
   }
-  config = { ...next, local };
+  config = { ...next, local, defaultId };
   return { ok: true, problems: [] };
 }
 
@@ -203,7 +232,24 @@ function setLocalPython(py) {
   if (blocked) return { ok: false, problems: [blocked] };
   const l = normalizeLocal({ python: py });
   if (l.problems.length > 0) return { ok: false, problems: l.problems };
-  return write({ endpoints: cur.endpoints, problems: cur.problems }, l.local);
+  return write({ endpoints: cur.endpoints, problems: cur.problems }, l.local, cur.defaultId);
+}
+
+/**
+ * 既定の計算機だけを書く（null＝自動）。接続先・Python の設定は今の値を引き継ぐ。ファイルが読めない・新しい版のときは書かない。
+ * 新しい送り先は増えないので確認は要らないが、登録簿に在る id か "local" だけ受ける。
+ */
+function setDefaultId(id) {
+  if (!filePath) return { ok: false, problems: ["config:no-destination"] };
+  const cur = get();
+  const blocked = cur.problems.find((p) => p.startsWith("config:"));
+  if (blocked) return { ok: false, problems: [blocked] };
+  const d = normalizeDefaultId(id === undefined ? null : id);
+  if (d.problems.length > 0) return { ok: false, problems: d.problems };
+  if (typeof d.defaultId === "string" && d.defaultId !== LOCAL_ID && !cur.endpoints.some((e) => e.id === d.defaultId)) {
+    return { ok: false, problems: ["default:unknown-endpoint"] };
+  }
+  return write({ endpoints: cur.endpoints, problems: cur.problems }, cur.local, d.defaultId);
 }
 
 function toStored(e) {
@@ -232,11 +278,13 @@ function destinationOf(e) {
 
 module.exports = {
   FILE_NAME,
+  LOCAL_ID,
   MAX_ENDPOINTS,
   init,
   get,
   save,
   setLocalPython,
+  setDefaultId,
   validate,
   byId,
   normalize,

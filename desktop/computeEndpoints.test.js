@@ -211,3 +211,81 @@ test("local を渡した save: 検査して書く／不正なら何も書かな�
   assert.equal(fs.existsSync(path.join(dir, "compute-endpoints.json")), false);
   assert.equal(c.validate({ endpoints: [lab], local: "ignored" }).ok, true);
 });
+
+// ── defaultId（既定の計算機）の保存と移行 ───────────────────────────────
+const LAB = { id: "lab", label: "Lab", kind: "jupyter", url: "https://lab.example/" };
+const T4 = { id: "colab-t4", label: "Colab T4", kind: "colab", spec: { variant: "VARIANT_GPU", accelerator: "T4", shape: "SHAPE_STANDARD" } };
+const writeFile = (dir, obj) => fs.writeFileSync(path.join(dir, "compute-endpoints.json"), typeof obj === "string" ? obj : JSON.stringify(obj));
+const readRaw = (dir) => fs.readFileSync(path.join(dir, "compute-endpoints.json"), "utf8");
+
+test("defaultId: キーが無い（未移行）は undefined のまま読み、読むだけではファイルを書き換えない", () => {
+  const dir = tmp();
+  writeFile(dir, { schemaVersion: 1, endpoints: [LAB] });
+  const before = readRaw(dir);
+  const c = fresh(dir);
+  assert.equal(c.get().defaultId, undefined);
+  assert.equal(c.get().endpoints.length, 1);
+  assert.equal(readRaw(dir), before, "読んだだけで書いていない（バイト列が同じ）");
+});
+
+test("defaultId: null（自動）・id・\"local\" を読む／形が不正なら自動にして理由を残す", () => {
+  for (const [v, want] of [[null, null], ["lab", "lab"], ["local", "local"]]) {
+    const dir = tmp();
+    writeFile(dir, { schemaVersion: 2, endpoints: [LAB], defaultId: v });
+    assert.equal(fresh(dir).get().defaultId, want);
+  }
+  const dir = tmp();
+  writeFile(dir, { schemaVersion: 2, endpoints: [LAB], defaultId: 42 });
+  const c = fresh(dir);
+  assert.equal(c.get().defaultId, null);
+  assert.ok(c.get().problems.includes("default:bad-id"));
+});
+
+test("defaultId: save は渡されなければ今の値を引き継ぎ、未移行なら書かないまま（移行を勝手に確定させない）", () => {
+  const dir = tmp();
+  writeFile(dir, { schemaVersion: 1, endpoints: [LAB] });
+  const c = fresh(dir);
+  assert.equal(c.save({ endpoints: [LAB, T4] }).ok, true);
+  assert.equal("defaultId" in JSON.parse(readRaw(dir)), false);
+  assert.equal(c.save({ endpoints: [LAB, T4], defaultId: "lab" }).ok, true);
+  assert.equal(JSON.parse(readRaw(dir)).defaultId, "lab");
+  assert.equal(c.save({ endpoints: [LAB] }).ok, true);
+  assert.equal(JSON.parse(readRaw(dir)).defaultId, "lab", "渡さなければ保たれる");
+});
+
+test("defaultId: 選んだ接続先を消すと null（自動）になる。\"local\" は消えない", () => {
+  const dir = tmp();
+  writeFile(dir, { schemaVersion: 2, endpoints: [LAB, T4], defaultId: "lab" });
+  const c = fresh(dir);
+  assert.equal(c.save({ endpoints: [T4] }).ok, true);
+  assert.equal(JSON.parse(readRaw(dir)).defaultId, null);
+  assert.equal(c.setDefaultId("local").ok, true);
+  assert.equal(c.save({ endpoints: [] }).ok, true);
+  assert.equal(JSON.parse(readRaw(dir)).defaultId, "local");
+});
+
+test("setDefaultId: 登録に在る id・local・null だけ。知らない id・不正な形は書かない／接続先と Python の設定は保つ", () => {
+  const dir = tmp();
+  writeFile(dir, { schemaVersion: 2, endpoints: [LAB], local: { python: { mode: "path", path: path.resolve("/opt/py/bin/python") } } });
+  const c = fresh(dir);
+  assert.deepEqual(c.setDefaultId("nope"), { ok: false, problems: ["default:unknown-endpoint"] });
+  assert.equal(c.setDefaultId("../x").ok, false);
+  assert.equal(c.setDefaultId("lab").ok, true);
+  const f = JSON.parse(readRaw(dir));
+  assert.equal(f.defaultId, "lab");
+  assert.equal(f.endpoints.length, 1);
+  assert.equal(f.local.python.mode, "path");
+  assert.equal(c.setDefaultId(null).ok, true);
+  assert.equal(JSON.parse(readRaw(dir)).defaultId, null);
+});
+
+test("setDefaultId: 読めないファイル・新しい版は書かない（負例）", () => {
+  const dir = tmp();
+  writeFile(dir, "{ broken");
+  const c = fresh(dir);
+  assert.equal(c.setDefaultId(null).ok, false);
+  assert.equal(readRaw(dir), "{ broken");
+  const dir2 = tmp();
+  writeFile(dir2, { schemaVersion: 3, endpoints: [] });
+  assert.equal(fresh(dir2).setDefaultId(null).ok, false);
+});

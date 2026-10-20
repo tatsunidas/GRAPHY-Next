@@ -6,7 +6,7 @@
  * H61（計算機の状態・Colab のランタイムの解放）。確認の画面（ask）は DOM が要るので実機で確かめる。
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { computeStatus, defaultEndpoint, releaseComputeRuntime, runComputeJob } from "./pluginComputeApi";
+import { computeStatus, releaseComputeRuntime, runComputeJob } from "./pluginComputeApi";
 import type { PluginManifest } from "./pluginTypes";
 
 const plugin = { id: "p", name: "P", version: "1", permissions: ["remote-compute"] } as unknown as PluginManifest;
@@ -75,18 +75,26 @@ describe("H61 compute.releaseRuntime", () => {
   });
 });
 
-describe("既定の計算機（Colab の GPU T4）", () => {
-  const t4 = { id: "colab-t4", kind: "colab" as const, hasToken: true, spec: { variant: "VARIANT_GPU", accelerator: "T4", shape: "SHAPE_STANDARD" } };
-  const cpu = { id: "colab-cpu", kind: "colab" as const, hasToken: true, spec: { variant: "VARIANT_CPU", accelerator: "NONE", shape: "SHAPE_STANDARD" } };
-  const lab = { id: "lab", kind: "jupyter" as const, hasToken: true };
-  const labNoToken = { id: "lab0", kind: "jupyter" as const, hasToken: false };
+describe("既定の計算機（main が決める。規則は desktop/computeDefault.js だけ）", () => {
+  const stub = (g: Record<string, unknown>) => vi.stubGlobal("window", { graphyDesktop: { computeConfirm: vi.fn(), computeEndpointsGet: async () => ({ available: true, problems: [], endpoints: [] }), ...g } });
 
-  it("prefers the Colab T4, then the first with a token, then the first", () => {
-    expect(defaultEndpoint([labNoToken, lab, cpu, t4])?.id).toBe("colab-t4");
-    expect(defaultEndpoint([labNoToken, lab, cpu])?.id).toBe("lab");
-    expect(defaultEndpoint([labNoToken])?.id).toBe("lab0");
-    // ログアウト中の T4 は既定にしない（トークンの入った Jupyter があればそちら）
-    expect(defaultEndpoint([{ ...t4, hasToken: false }, lab])?.id).toBe("lab");
+  it("starts this PC when main's default is local, and reports why it could not", async () => {
+    const localEnsure = vi.fn(async () => ({ ok: false, error: "local-unavailable" }));
+    stub({ computeEnsureDefault: async () => ({ ok: true as const, endpointId: "local", added: false }), computeLocalEnsure: localEnsure });
+    expect(await runComputeJob(plugin, { script: "print(1)", inputs: [] })).toEqual({ ok: false, error: "local-unavailable" });
+    expect(localEnsure).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start this PC when main's default is a registered endpoint (negative)", async () => {
+    const localEnsure = vi.fn();
+    stub({ computeEnsureDefault: async () => ({ ok: true as const, endpointId: "lab", added: false }), computeLocalEnsure: localEnsure });
+    expect(await runComputeJob(plugin, { script: "print(1)", inputs: [] })).toEqual({ ok: false, error: "no-endpoint" });
+    expect(localEnsure).not.toHaveBeenCalled();
+  });
+
+  it("refuses without the main-side default (no local fallback in the renderer)", async () => {
+    stub({});
+    expect(await runComputeJob(plugin, { script: "print(1)", inputs: [] })).toEqual({ ok: false, error: "desktop-only" });
   });
 
   it("asks main to add the default when nothing is registered, and reports why it could not", async () => {

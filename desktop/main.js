@@ -37,7 +37,7 @@ const dbFolders = require("./dbFolders");
 const { resolveDevDataDir } = require("./devDataDir");
 const tlsPasswords = require("./tlsPasswords");
 const { waitPortFree } = require("./portWait");
-const { ensureDefaultEndpoint } = require("./computeDefault");
+const { ensureDefaultEndpoint, resolveDefault, effectiveDefaultId, LOCAL_ID } = require("./computeDefault");
 const computeBridge = require("./computeBridge");
 const computeConsent = require("./computeConsent");
 const { createColabAuth, REFRESH_KEY: COLAB_REFRESH_KEY } = require("./colabAuth");
@@ -1646,7 +1646,13 @@ ipcMain.handle("graphy:compute-colab-release", async (_e, id) => colabRuntimes.r
  * （毎回の実行で同意画面に送り先が出る）。任意の URL を足せる口ではないので、compute-endpoints-set の確認とは別に扱う。
  */
 ipcMain.handle("graphy:compute-ensure-default", async () => {
-  const r = await ensureDefaultEndpoint({ endpoints: computeEndpoints, colabAuth, colabApi });
+  const r = await ensureDefaultEndpoint({
+    endpoints: computeEndpoints,
+    enrich: withHasToken,
+    local: localSummary,
+    colabAuth,
+    colabApi,
+  });
   if (r.ok && r.added) {
     console.log(`[compute] default endpoint added: ${r.endpointId}`);
     await pushComputeEndpoints();
@@ -1654,24 +1660,66 @@ ipcMain.handle("graphy:compute-ensure-default", async () => {
   return r;
 });
 
+/** 登録に「トークンが入っているか」（Colab は Google にログイン済みか）を付ける。トークン自体は渡さない。 */
+function withHasToken(e) {
+  return e.kind === "colab"
+    ? { ...e, hasToken: !!colabAuth && colabAuth.signedIn() }
+    : { ...e, hasToken: secretStore.statusOf(computeEndpoints.secretKeyFor(e.id)).hasValue };
+}
+
+/**
+ * 「この PC」を既定にできるか: usable＝使える Python がある／cuda＝その PyTorch が CUDA の GPU を使える（MPS は数えない）。
+ * 検出は走らせる（初回は PyTorch の import で数秒かかりうる。結果は覚える）。
+ */
+async function localSummary() {
+  const d = await localPython.detect({});
+  const usable = !!(d && d.selected && d.usable);
+  return { usable, cuda: usable && !!d.capabilities && d.capabilities.accelerator === "cuda" };
+}
+
+/** 覚えている検出結果だけから同じ形を作る（走らせない）。まだ無ければ null。 */
+function localSummaryPeek() {
+  const d = localPython.peek();
+  if (!d) return null;
+  const usable = !!(d.selected && d.usable);
+  return { usable, cuda: usable && !!d.capabilities && d.capabilities.accelerator === "cuda" };
+}
+
 // 接続先の一覧。**トークンは含まない**（入っているかだけ）。
-ipcMain.handle("graphy:compute-endpoints-get", () => {
+ipcMain.handle("graphy:compute-endpoints-get", async () => {
   const c = computeEndpoints.get();
+  const endpoints = c.endpoints.map((e) =>
+    e.kind === "colab"
+      ? { ...withHasToken(e), runtime: colabRuntimes ? colabRuntimes.status(e.id) : { allocated: false } }
+      : { ...withHasToken(e), secretKey: computeEndpoints.secretKeyFor(e.id) },
+  );
+  // 既定の計算機（★の印）。**検出は走らせない**（設定を開くたびに PyTorch の import を待たせない）。
+  // 検出がまだなら defaultPending で返し、画面は検出が終わってから取り直す。
+  const peeked = localSummaryPeek();
+  const chosen = effectiveDefaultId(c.defaultId, endpoints);
+  const def = await resolveDefault({ endpoints, defaultId: c.defaultId, local: peeked || { usable: false, cuda: false } });
+  const defaultPending = !peeked && (chosen === LOCAL_ID || !endpoints.some((e) => e.id === chosen));
   return {
-    endpoints: c.endpoints.map((e) =>
-      e.kind === "colab"
-        ? { ...e, hasToken: !!colabAuth && colabAuth.signedIn(), runtime: colabRuntimes ? colabRuntimes.status(e.id) : { allocated: false } }
-        : {
-            ...e,
-            secretKey: computeEndpoints.secretKeyFor(e.id),
-            hasToken: secretStore.statusOf(computeEndpoints.secretKeyFor(e.id)).hasValue,
-          },
-    ),
+    endpoints,
+    // 解決した既定（"local" を含む）。null＝まだ決まらない（登録が無く自機も使えない）／defaultError＝選んだ先が使えない
+    defaultId: def.ok ? def.id : null,
+    defaultMode: chosen === null || chosen === undefined ? "auto" : "chosen",
+    defaultError: def.ok || defaultPending ? null : def.error,
+    defaultPending,
     problems: c.problems,
     local: c.local,
     // 内部経路が使えない（backend を別に起動した開発など）ときは画面が理由を出す
     available: computeBridge.enabled(),
   };
+});
+
+/**
+ * 既定の計算機を選ぶ（null＝自動に戻す）。登録簿に在る id か "local" だけ受ける。
+ * 新しい送り先は増えない（選べるのは既に登録済みのものと「この PC」）ので確認は出さない。毎回の実行の同意は変わらない。
+ */
+ipcMain.handle("graphy:compute-default-set", (_e, id) => {
+  const r = computeEndpoints.setDefaultId(typeof id === "string" ? id : null);
+  return r.ok ? { ok: true } : { ok: false, problems: r.problems };
 });
 
 // 検査だけ（書かない）。🔴 検査規則をレンダラ側に書き写さない。
@@ -1711,7 +1759,10 @@ ipcMain.handle("graphy:compute-endpoints-set", async (e, cfg) => {
   // 消した接続先のトークンは残さない
   const keep = new Set(checked.endpoints.map((x) => x.id));
   const removed = computeEndpoints.get().endpoints.filter((x) => !keep.has(x.id));
-  const result = computeEndpoints.save({ endpoints: checked.endpoints });
+  // 未移行のファイルは、この保存で初めて既定（旧い規則で今効いているもの）を書く。読むだけでは書き換えない。
+  const cur = computeEndpoints.get();
+  const migrate = cur.defaultId === undefined ? { defaultId: effectiveDefaultId(undefined, cur.endpoints.map(withHasToken)) } : {};
+  const result = computeEndpoints.save({ endpoints: checked.endpoints, ...migrate });
   if (result.ok) {
     for (const x of removed) {
       if (x.kind === "colab") await colabRuntimes.release(x.id);
