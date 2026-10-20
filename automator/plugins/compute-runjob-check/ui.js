@@ -38,6 +38,8 @@ export async function activate(host) {
     hasCompute: !!(host.compute && host.compute.runJob),
     progress: [],
   });
+  // 続けて何回か起動する検証（computeJobsCheck）用に、起動ごとの結果を別に残す
+  (window.__computeRuns = window.__computeRuns || []).push(run);
   const r = await host.compute.runJob(
     {
       endpointId: input.endpointId,

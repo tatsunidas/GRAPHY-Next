@@ -103,6 +103,12 @@ public class ComputeDatasetService {
     private final PixelCodec codec;
     private final ObjectMapper mapper;
     private final Map<String, Dataset> datasets = new ConcurrentHashMap<>();
+    /** 匿名化済みデータの一時フォルダの置き場（OS の一時フォルダ。テストだけが差し替える）。 */
+    private volatile Path tmpRoot = Path.of(System.getProperty("java.io.tmpdir"));
+
+    void useTempRoot(Path root) {
+        this.tmpRoot = root;
+    }
 
     public ComputeDatasetService(AnonymizeService anonymizer, PixelCodec codec, ObjectMapper mapper) {
         this.anonymizer = anonymizer;
@@ -131,7 +137,7 @@ public class ComputeDatasetService {
         String handle = "dsh_" + UUID.randomUUID();
         Path dir = null;
         try {
-            dir = Files.createTempDirectory("graphy-compute-");
+            dir = Files.createTempDirectory(tmpRoot, "graphy-compute-");
             Path file = dir.resolve("dataset" + format.extension);
             MessageDigest sha = MessageDigest.getInstance("SHA-256");
             AnonymizeService.Result r;
@@ -224,6 +230,48 @@ public class ComputeDatasetService {
             throw new DatasetRefused("burnin-incomplete",
                     r.burnedInstances() + "/" + r.instances());
         }
+    }
+
+    /**
+     * 異常終了で残った一時フォルダ・ファイル（{@code graphy-compute-*}）を消す。起動時に呼ぶ。
+     * メモリの表にあるものと、{@link #TTL} より新しいものは消さない——同じ PC で別のアプリ（開発版とインストール版など）が
+     * 同時に動いていても、そちらのデータを消さないため。取り残しのうち新しいものは、次の掃除で消える。
+     *
+     * @return 消した件数
+     */
+    public int sweepOrphans() {
+        return sweepOrphans(TTL);
+    }
+
+    int sweepOrphans(Duration minAge) {
+        java.util.Set<Path> live = new java.util.HashSet<>();
+        for (Dataset d : datasets.values()) {
+            if (d.file() != null && d.file().getParent() != null) {
+                live.add(d.file().getParent().toAbsolutePath().normalize());
+            }
+        }
+        int n = 0;
+        try (var s = Files.newDirectoryStream(tmpRoot, "graphy-compute-*")) {
+            for (Path p : s) {
+                try {
+                    if (live.contains(p.toAbsolutePath().normalize())
+                            || Instant.now().minus(minAge).isBefore(Files.getLastModifiedTime(p).toInstant())) {
+                        continue;
+                    }
+                    if (Files.isDirectory(p)) {
+                        deleteDir(p);
+                    } else {
+                        Files.deleteIfExists(p);
+                    }
+                    n++;
+                } catch (IOException e) {
+                    log.debug("[compute] cannot remove leftover {}: {}", p, e.toString());
+                }
+            }
+        } catch (IOException e) {
+            log.debug("[compute] cannot scan {}: {}", tmpRoot, e.toString());
+        }
+        return n;
     }
 
     private void sweep() {

@@ -44,12 +44,19 @@ public class PluginArtifacts {
     public static final String ARTIFACT_KEY = "__artifact";
     /** 利用者に見せるファイル名の候補（任意）。 */
     public static final String ARTIFACT_NAME_KEY = "__artifactName";
+    /** {@link #trustRoot} の下のファイルを移さず指すための合言葉のキー（{@link #trustNonce()}）。 */
+    public static final String TRUST_KEY = "__artifactTrust";
 
     private static final long TTL_MS = 24L * 60 * 60 * 1000;
     private static final Pattern SAFE_NAME = Pattern.compile("[^A-Za-z0-9._\\-]");
 
     private final Path root;
     private final Path tmp;
+    /** 本体が自分で置く場所（計算ジョブのフォルダ）。ここにあるファイルは移さず、その場所を指す。 */
+    private volatile Path trustedRoot;
+    /** 本体の計算ジョブだけが知る合言葉（プラグインの返すパスが特例に乗れないようにする）。 */
+    private final String trustNonce = java.util.UUID.randomUUID().toString();
+    private final java.util.Map<String, Path> inPlace = new java.util.concurrent.ConcurrentHashMap<>();
 
     public PluginArtifacts() {
         this(Path.of(System.getProperty("java.io.tmpdir")));
@@ -58,6 +65,20 @@ public class PluginArtifacts {
     PluginArtifacts(Path tmpDir) {
         this.tmp = realOrSelf(tmpDir);
         this.root = this.tmp.resolve("graphy-plugin-artifacts");
+    }
+
+    /**
+     * 本体が自分で管理するフォルダ（計算ジョブの結果の置き場）を、一時フォルダのほかに受け取ってよい場所にする。
+     * そこにある成果物は移動せず（台帳が持ち続ける）、その場所を配る。プラグインが返すパスにはこの特例は効かない
+     * ——結果の {@value #ARTIFACT_KEY} を決めるのは本体の計算ジョブだけだが、念のため実在の普通のファイルに限る。
+     */
+    public void trustRoot(Path dir) {
+        this.trustedRoot = realOrSelf(dir);
+    }
+
+    /** 結果の {@value #TRUST_KEY} に入れる合言葉。本体の計算ジョブだけがこれを使う。 */
+    public String trustNonce() {
+        return trustNonce;
     }
 
     /** 成果物の外向きの姿（結果の {@value #ARTIFACT_KEY} をこれに差し替える）。 */
@@ -75,16 +96,24 @@ public class PluginArtifacts {
             throw new IOException("成果物が見つかりません: " + src.getFileName());
         }
         Path real = src.toRealPath();
-        if (!real.startsWith(tmp) || real.startsWith(root)) {
+        Path trusted = trustedRoot;
+        boolean inTrusted = trusted != null && real.startsWith(trusted) && trustNonce.equals(m.get(TRUST_KEY));
+        if (!inTrusted && (!real.startsWith(tmp) || real.startsWith(root))) {
             throw new IOException("成果物は一時フォルダの下のファイルに限ります");
         }
         String name = m.get(ARTIFACT_NAME_KEY) instanceof String n && !n.isBlank() ? n : real.getFileName().toString();
-        Path dst = place(jobId, name);
-        Files.move(real, dst, StandardCopyOption.REPLACE_EXISTING);
+        Path dst;
+        if (inTrusted) {
+            dst = real;
+            inPlace.put(jobId, real);
+        } else {
+            dst = place(jobId, name);
+            Files.move(real, dst, StandardCopyOption.REPLACE_EXISTING);
+        }
         Map<String, Object> out = new LinkedHashMap<>();
         for (Map.Entry<?, ?> e : m.entrySet()) {
             String k = String.valueOf(e.getKey());
-            if (!ARTIFACT_NAME_KEY.equals(k)) out.put(k, e.getValue());
+            if (!ARTIFACT_NAME_KEY.equals(k) && !TRUST_KEY.equals(k)) out.put(k, e.getValue());
         }
         out.put(ARTIFACT_KEY, new Artifact(jobId, dst.getFileName().toString(), Files.size(dst)));
         log.info("[plugins] artifact of job {}: {} ({} bytes)", jobId, dst.getFileName(), Files.size(dst));
@@ -101,6 +130,10 @@ public class PluginArtifacts {
 
     /** 預かっている成果物（ジョブにつき 1 つ）。 */
     public Optional<Path> find(String jobId) {
+        Path held = inPlace.get(jobId);
+        if (held != null) {
+            return Files.isRegularFile(held) ? Optional.of(held) : Optional.empty();
+        }
         Path dir = root.resolve(safe(jobId));
         if (!Files.isDirectory(dir)) return Optional.empty();
         try (Stream<Path> s = Files.list(dir)) {
