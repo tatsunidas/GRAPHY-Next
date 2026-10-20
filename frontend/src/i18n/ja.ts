@@ -129,6 +129,12 @@ export const ja: Record<string, string> = {
   "consent.decline": "同意しない",
   "consent.declined": "同意いただけない場合は、このウィンドウを閉じてください。",
   "consent.saveFailed": "同意を記録できませんでした。もう一度お試しください。",
+  // 検査共有リンクの受け手の画面
+  "share.title": "共有された検査",
+  "share.notice": "研究・教育用の閲覧です。診断・治療方針の決定には用いないでください。このリンクには有効期限があります。",
+  "share.invalid": "このリンクは無効か、期限が切れています。送信元に新しいリンクを依頼してください。",
+  "share.retry": "再試行",
+  "share.backToSeries": "シリーズ一覧",
   "help.uninstall": "アンインストール",
   "help.uninstall.title": "GRAPHY-Next のアンインストール",
   "help.uninstall.intro": "GRAPHY-Next の削除方法と、各プラットフォームでのアンインストーラの場所です。",

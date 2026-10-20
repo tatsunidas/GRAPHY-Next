@@ -8,6 +8,7 @@ import com.vis.graphynext.web.RateLimitFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -25,6 +26,12 @@ import java.time.Clock;
 @RestController
 @ConditionalOnProperty(prefix = "graphy.share", name = "enabled", havingValue = "true")
 public class ShareEntryController {
+
+    private static final String INVALID_PAGE = "<!doctype html><html lang=\"ja\"><head><meta charset=\"utf-8\">"
+            + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>GRAPHY-Next</title></head>"
+            + "<body style=\"font-family:system-ui,sans-serif;margin:2rem;line-height:1.6\">"
+            + "<p>このリンクは無効か、期限が切れています。送信元に新しいリンクを依頼してください。</p>"
+            + "<p>This link is invalid or has expired. Please ask the sender for a new link.</p></body></html>";
 
     private final ShareService service;
     private final FailureLimiter limiter;
@@ -44,6 +51,10 @@ public class ShareEntryController {
         ShareGrant grant = service.redeem(token).orElse(null);
         if (grant == null) {
             limiter.recordFailure(ip);
+            // ブラウザで開かれた無効リンクに生の JSON を見せない。状態は 404 のまま（理由は区別しない）。
+            if (wantsHtml(request)) {
+                return ResponseEntity.status(404).contentType(MediaType.TEXT_HTML).body(INVALID_PAGE);
+            }
             return ResponseEntity.status(404).body("{\"error\":\"not found\"}");
         }
         StringBuilder cookie = new StringBuilder(ShareAccessFilter.COOKIE_NAME).append('=')
@@ -54,5 +65,10 @@ public class ShareEntryController {
             cookie.append("; Secure");
         }
         return ResponseEntity.status(302).header("Set-Cookie", cookie.toString()).header("Location", "/#share").build();
+    }
+
+    private static boolean wantsHtml(HttpServletRequest request) {
+        String accept = request.getHeader("Accept");
+        return accept != null && accept.contains("text/html");
     }
 }
