@@ -2193,6 +2193,9 @@ function TileCell({
   // Fusion: オーバーレイ W/L の上書き（null で DICOM 既定/自動）と、その既定値（入力の初期表示用）。
   const [fusionWL, setFusionWL] = useState<{ center: number; width: number } | null>(null);
   const [fusionAutoWL, setFusionAutoWL] = useState<{ center: number; width: number } | null>(null);
+  // Fusion: 等値線（前景の表示単位の値 1 本）。保存しないタイルの UI 状態（前景 W/L と同じ扱い）。
+  const [isolineOn, setIsolineOn] = useState(false);
+  const [isolineLevel, setIsolineLevel] = useState<number | null>(null);
   // Fusion: 手動位置合わせ（`fw/registration-design.md` R1）。moving をどう動かすかの 6 パラメータ。
   // 座標・回転中心は持たない（幾何は FusionImageViewer 側で前景ボリュームから算出する）。
   const [fusionAdjust, setFusionAdjust] = useState<ManualAdjust>(ZERO_ADJUST);
@@ -2244,6 +2247,8 @@ function TileCell({
       setFusionLut(tile.fusion?.initialLut ?? null);
       setFusionWL(null);
       setFusionAutoWL(null);
+      setIsolineOn(false);
+      setIsolineLevel(null);
       fusionAutoWLSeeded.current = false;
       // 別シリーズの調整量を引きずらない（前のシリーズ向けのズレが黙って適用される事故を防ぐ）。
       // 自動位置合わせの結果も同じ理由で必ず捨てる — こちらは「前のシリーズに対して
@@ -2417,6 +2422,7 @@ function TileCell({
         blend={fusion.blend}
         windowCenter={fusionWL?.center ?? null}
         windowWidth={fusionWL?.width ?? null}
+        isolineLevel={isolineOn ? isolineLevel : null}
         adjust={fusionAdjust}
         registration={registrationTransform}
         onAutoWL={handleFusionAutoWL}
@@ -2424,7 +2430,7 @@ function TileCell({
         onLayoutChange={setFusionLayout}
       />
     );
-  }, [tile.fusion, mode, fusionC, fusionT, fusionLut, fusionWL, fusionAdjust,
+  }, [tile.fusion, mode, fusionC, fusionT, fusionLut, fusionWL, isolineOn, isolineLevel, fusionAdjust,
       registrationTransform, handleFusionAutoWL]);
 
   // ── タイルヘッダー DnD（タイル並び替え） ──
@@ -2648,6 +2654,14 @@ function TileCell({
           tDimension={fusionLayout.tDimension}
           fusionLut={fusionLut}
           wl={fusionWL ?? fusionAutoWL}
+          isolineOn={isolineOn}
+          isolineLevel={isolineLevel}
+          isolineEnabled={fusionSpatial}
+          onIsolineToggle={(on, seed) => {
+            setIsolineOn(on);
+            if (on && isolineLevel == null) setIsolineLevel(seed);
+          }}
+          onIsolineLevelChange={setIsolineLevel}
           adjust={fusionAdjust}
           adjustEnabled={fusionSpatial}
           onOpacityChange={(v) => onFusionChange({ ...tile.fusion!, opacity: v })}
@@ -2767,6 +2781,11 @@ function FusionControlBar({
   tDimension,
   fusionLut,
   wl,
+  isolineOn,
+  isolineLevel,
+  isolineEnabled,
+  onIsolineToggle,
+  onIsolineLevelChange,
   adjust,
   adjustEnabled,
   registered,
@@ -2793,6 +2812,13 @@ function FusionControlBar({
   fusionLut: LutData | null;
   /** 現在のオーバーレイ W/L（上書き値 or 既定値）。 */
   wl: { center: number; width: number } | null;
+  /** 等値線（前景の表示単位の値で 1 本）。空間 Fusion のときだけ効く。 */
+  isolineOn: boolean;
+  isolineLevel: number | null;
+  isolineEnabled: boolean;
+  /** ON にするとき、値が未設定なら seed（現在の W/L の中心）を初期値にする。 */
+  onIsolineToggle: (on: boolean, seed: number | null) => void;
+  onIsolineLevelChange: (v: number) => void;
   /** 手動位置合わせの 6 パラメータ（`fw/registration-design.md` R1）。 */
   adjust: ManualAdjust;
   /** 空間 Fusion のときだけ位置合わせが効く。false ならコントロールを無効化する。 */
@@ -2830,6 +2856,15 @@ function FusionControlBar({
     const c = Number(wlText);
     const w = Number(wwText);
     if (Number.isFinite(c) && Number.isFinite(w) && w > 0) onWLChange(c, w);
+  };
+  // 等値線の値の下書き（確定は Enter・blur）。
+  const [isoText, setIsoText] = useState("");
+  useEffect(() => {
+    setIsoText(isolineLevel != null ? String(Math.round(isolineLevel * 1000) / 1000) : "");
+  }, [isolineLevel]);
+  const applyIso = () => {
+    const v = Number(isoText);
+    if (isoText.trim() !== "" && Number.isFinite(v) && v !== isolineLevel) onIsolineLevelChange(v);
   };
   return (
     <div style={fusionBar}>
@@ -2946,6 +2981,33 @@ function FusionControlBar({
         <button onClick={onWLAuto} title={t("viewer2d.fusion.wlAuto")} style={fusionAutoBtn}>
           {t("viewer2d.wl.adjust.auto")}
         </button>
+      </div>
+
+      {/* 等値線（前景が指定値をとる位置に線を重ねる。前景の表示単位で入力） */}
+      <div
+        style={{ display: "flex", alignItems: "center", gap: 4, flex: "none", opacity: isolineEnabled ? 1 : 0.5 }}
+        title={isolineEnabled ? t("viewer2d.fusion.isolineNote") : t("viewer2d.fusion.isoline.unavailable")}
+      >
+        <label style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11, color: "#5a6672" }}>
+          <input
+            type="checkbox"
+            data-testid="fusion-isoline-toggle"
+            checked={isolineOn && isolineEnabled}
+            disabled={!isolineEnabled}
+            onChange={(e) => onIsolineToggle(e.target.checked, wl ? wl.center : null)}
+          />
+          {t("viewer2d.fusion.isoline")}
+        </label>
+        <input
+          type="number"
+          data-testid="fusion-isoline-value"
+          value={isoText}
+          disabled={!isolineEnabled || !isolineOn}
+          onChange={(e) => setIsoText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") applyIso(); }}
+          onBlur={applyIso}
+          style={fusionNumInput}
+        />
       </div>
 
       {/* 手動位置合わせ（fw/registration-design.md R1） */}
