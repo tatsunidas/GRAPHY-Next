@@ -3,13 +3,16 @@ const $ = (id) => document.getElementById(id);
 const fmt = (s, vars) => s.replace(/\{(\w+)\}/g, (_, k) => String(vars[k] ?? ""));
 const size = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? (n / 1024).toFixed(1) + " KB" : n + " B");
 window.graphyConsent.onShow(({ detail, strings: s }) => {
-  document.title = s.title;
-  $("title").textContent = s.title;
-  $("lead").textContent = fmt(s.lead, { plugin: detail.pluginName });
+  const local = detail.endpointKind === "local";
+  document.title = local ? s.titleLocal : s.title;
+  $("title").textContent = local ? s.titleLocal : s.title;
+  $("lead").textContent = fmt(local ? s.leadLocal : s.lead, { plugin: detail.pluginName });
   $("k-dest").textContent = s.destination;
-  $("dest-label").textContent = detail.endpointLabel;
+  $("dest-label").textContent = local ? s.thisPc : detail.endpointLabel;
   $("dest-url").textContent = detail.endpointUrl;
-  if (detail.plaintext) { $("plaintext").hidden = false; $("plaintext").textContent = s.plaintext; }
+  // 127.0.0.1 の http は暗号化の話ではない（外へ出ない）。代わりに「コードはこの PC で動く」を言い切らずに出す
+  if (local) { $("plaintext").hidden = false; $("plaintext").textContent = s.localNote; }
+  else if (detail.plaintext) { $("plaintext").hidden = false; $("plaintext").textContent = s.plaintext; }
   $("k-anon").textContent = s.anonymization;
   $("anon").textContent = detail.anonymization;
   $("k-data").textContent = s.datasets;

@@ -613,3 +613,124 @@ test("平文の宛先はそう申告する（画面が警告を出せる）", as
     assert.match(r.requestLine, /^POST http:\/\/localhost:11434\//);
   } finally { s.restore(); }
 });
+
+// ── モデル一覧の取得（設定画面の選択肢） ─────────────────────────────────────
+//
+// 🔴 この機能の危険は「鍵を、任意の宛先へ送れる口になること」。ここで固定するのは
+//   宛先が絞られていること・鍵が結果に出ないこと・読めない応答を成功にしないこと。
+
+/** GET を横取りして記録する。`reply` は関数でもよい（ページ送りの検査用）。 */
+function stubGet(dir, config, reply) {
+  const g = freshGateway(dir, config);
+  const aiHttp = require("./aiHttp");
+  const calls = [];
+  const original = aiHttp.get;
+  aiHttp.get = async (target, path, headers) => {
+    calls.push({ target, path, headers });
+    return typeof reply === "function" ? reply(calls.length) : reply;
+  };
+  return { ...g, calls, restore: () => { aiHttp.get = original; } };
+}
+
+const OPENAI_LIST = { statusCode: 200, text: "", json: { data: [{ id: "model-b" }, { id: "model-a" }, { id: "model-a" }, { id: "bad name" }] } };
+
+test("🔑 OpenAI 系: 保存済みの鍵で /v1/models を GET し、名前を重複なく並べる（不正な名前は出さない）", async () => {
+  const dir = freshDir();
+  const s = stubGet(dir, { providers: [OPENAI] }, OPENAI_LIST);
+  try {
+    s.secretStore.setSecret("ai.provider.oa.apiKey", "KEY");
+    const r = await s.aiGateway.listModels({ providerId: "oa" });
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.models, ["model-a", "model-b"]);
+    assert.equal(s.calls.length, 1);
+    assert.equal(s.calls[0].path, "/v1/models");
+    assert.equal(s.calls[0].headers.Authorization, "Bearer KEY");
+    assert.equal(JSON.stringify(r).includes("KEY"), false, "🔴 戻りに鍵が出ない");
+  } finally { s.restore(); }
+});
+
+test("Gemini: generateContent を扱えるものだけ、models/ を外して、ページ送りを追う", async () => {
+  const dir = freshDir();
+  const pages = [
+    { statusCode: 200, text: "", json: { models: [
+      { name: "models/gem-1", supportedGenerationMethods: ["generateContent"] },
+      { name: "models/embed-1", supportedGenerationMethods: ["embedContent"] },
+    ], nextPageToken: "T2" } },
+    { statusCode: 200, text: "", json: { models: [{ name: "models/gem-2", supportedGenerationMethods: ["generateContent", "countTokens"] }] } },
+  ];
+  const s = stubGet(dir, { providers: [GEMINI_A] }, (n) => pages[n - 1]);
+  try {
+    s.secretStore.setSecret("ai.provider.prov-a.apiKey", "KEY");
+    const r = await s.aiGateway.listModels({ providerId: "prov-a" });
+    assert.deepEqual(r.models, ["gem-1", "gem-2"], "🔴 埋め込み専用は出さない");
+    assert.equal(s.calls.length, 2);
+    assert.equal(s.calls[0].path, "/v1beta/models?pageSize=1000");
+    assert.equal(s.calls[1].path, "/v1beta/models?pageSize=1000&pageToken=T2");
+    assert.equal(s.calls[0].headers["x-goog-api-key"], "KEY");
+  } finally { s.restore(); }
+});
+
+test("🔴 未保存の候補は公式ホストだけ。任意の宛先へは鍵を送らない（負例）", async () => {
+  const dir = freshDir();
+  const s = stubGet(dir, { providers: [OPENAI] }, OPENAI_LIST);
+  try {
+    for (const endpoint of ["https://evil.example.test", "http://api.openai.com", "https://api.openai.com:8443", "https://api.openai.com.evil.test", "not a url"]) {
+      const r = await s.aiGateway.listModels({ kind: "openai", endpoint, apiKey: "KEY" });
+      assert.equal(r.ok, false, endpoint);
+      assert.equal(r.error, "unsupported-endpoint", endpoint);
+    }
+    // 種別と宛先の食い違い（Gemini の鍵を OpenAI のホストへ）も通さない。
+    assert.equal((await s.aiGateway.listModels({ kind: "gemini", endpoint: "https://api.openai.com", apiKey: "KEY" })).error, "unsupported-endpoint");
+    assert.equal(s.calls.length, 0, "🔴 1 度も送出していない");
+  } finally { s.restore(); }
+});
+
+test("未保存の候補: 公式ホストなら入力中の鍵で取れる（正例。上の負例の対照）", async () => {
+  const dir = freshDir();
+  const s = stubGet(dir, { providers: [OPENAI] }, OPENAI_LIST);
+  try {
+    const r = await s.aiGateway.listModels({ kind: "openai", endpoint: "https://api.openai.com", apiKey: " KEY " });
+    assert.equal(r.ok, true);
+    assert.equal(s.calls[0].target.hostname, "api.openai.com");
+    assert.equal(s.calls[0].headers.Authorization, "Bearer KEY");
+    assert.equal((await s.aiGateway.listModels({ kind: "openai", endpoint: "https://api.openai.com", apiKey: "KEY" })).error, "too-soon", "（連打の抑止が効く）");
+    assert.equal((await s.aiGateway.listModels({ kind: "openai", endpoint: "https://api.openai.com", apiKey: "" })).error, "no-api-key", "鍵が空なら送らない");
+  } finally { s.restore(); }
+});
+
+test("鍵が無ければ no-api-key、Azure は手入力（送出しない）", async () => {
+  const dir = freshDir();
+  const AZURE = { id: "az", label: "Azure", kind: "azure-openai", endpoint: "https://r.openai.azure.com", models: { "image-to-text": "dep1" } };
+  const s = stubGet(dir, { providers: [OPENAI, AZURE] }, OPENAI_LIST);
+  try {
+    assert.equal((await s.aiGateway.listModels({ providerId: "oa" })).verdict, "no-api-key");
+    s.secretStore.setSecret("ai.provider.az.apiKey", "KEY");
+    const r = await s.aiGateway.listModels({ providerId: "az" });
+    assert.equal(r.verdict, "manual");
+    assert.equal(s.calls.length, 0);
+  } finally { s.restore(); }
+});
+
+test("🔴 401 を成功にしない。エラー文に鍵を出さない。読めない応答は成功にしない", async () => {
+  const dir = freshDir();
+  const s = stubGet(dir, { providers: [OPENAI] }, { statusCode: 401, text: "", json: { error: { message: "bad key KEY here" } } });
+  try {
+    s.secretStore.setSecret("ai.provider.oa.apiKey", "KEY");
+    const r = await s.aiGateway.listModels({ providerId: "oa" });
+    assert.equal(r.ok, false);
+    assert.equal(r.verdict, "auth-failed");
+    assert.equal(JSON.stringify(r).includes("KEY"), false);
+  } finally { s.restore(); }
+  const s2 = stubGet(freshDir(), { providers: [OPENAI] }, { statusCode: 200, text: "<html>", json: null });
+  try {
+    s2.secretStore.setSecret("ai.provider.oa.apiKey", "KEY");
+    assert.equal((await s2.aiGateway.listModels({ providerId: "oa" })).verdict, "unreadable-response");
+  } finally { s2.restore(); }
+});
+
+test("知らない提供元 id は unknown-provider", async () => {
+  const s = stubGet(freshDir(), { providers: [OPENAI] }, OPENAI_LIST);
+  try {
+    assert.equal((await s.aiGateway.listModels({ providerId: "nope" })).error, "unknown-provider");
+  } finally { s.restore(); }
+});

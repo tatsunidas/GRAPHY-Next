@@ -90,7 +90,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
         windows.entrySet().removeIf(entry -> now - entry.getValue().windowStart >= WINDOW_MILLIS * 2);
     }
 
-    private static String clientIp(HttpServletRequest request) {
+    public static String clientIp(HttpServletRequest request) {
         String cfIp = request.getHeader("CF-Connecting-IP");
         if (cfIp != null && !cfIp.isBlank()) {
             return cfIp;

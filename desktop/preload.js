@@ -36,6 +36,8 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   openMemoryMonitor: () => ipcRenderer.invoke("graphy:open-memory-monitor"),
   // OS の物理メモリ量を取得（ボリューム構築のバジェット決定用）。
   getMemoryInfo: () => ipcRenderer.invoke("graphy:get-memory-info"),
+  // Chromium の GPU 機能状態と GPU 一覧（描画環境の自己診断用）。
+  getGpuStatus: () => ipcRenderer.invoke("graphy:gpu-status"),
   // 外部 URL / mailto を OS の既定アプリで開く。
   openExternal: (url) => ipcRenderer.send("graphy:open-external", url),
   // GitHub Releases の最新版情報を取得（更新確認）。失敗時 null。
@@ -74,6 +76,8 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   // 疎通確認。送る内容は main が決める（呼び出し側は提供元と用途だけ）。
   aiTestConnection: (providerId, capability) =>
     ipcRenderer.invoke("graphy:ai-test-connection", { providerId, capability }),
+  // モデル名の一覧。保存済みなら providerId、追加フォームなら { kind, endpoint, apiKey }（公式ホストだけ通る）。
+  aiListModels: (args) => ipcRenderer.invoke("graphy:ai-list-models", args),
   // 外部の計算機（Jupyter Server）。トークンの値は返らない（有無だけ）。fw/remote-compute-design.md
   computeEndpointsGet: () => ipcRenderer.invoke("graphy:compute-endpoints-get"),
   // 送信先が増える・変わる保存は main が確認ダイアログを出す
@@ -90,6 +94,8 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   computeColabSpecs: () => ipcRenderer.invoke("graphy:compute-colab-specs"),
   computeColabEnsure: (id) => ipcRenderer.invoke("graphy:compute-colab-ensure", id),
   computeColabRelease: (id) => ipcRenderer.invoke("graphy:compute-colab-release", id),
+  // この PC: 検出した Python で Jupyter Server を起動して計算機に入れる（データは送らない）
+  computeLocalEnsure: () => ipcRenderer.invoke("graphy:compute-local-ensure"),
   // Drive バックアップ（Google でログイン・保存先を Picker で選ぶ・解除）。トークンは返らない
   gdriveStatus: () => ipcRenderer.invoke("graphy:gdrive-status"),
   gdriveSignIn: () => ipcRenderer.invoke("graphy:gdrive-signin"),
@@ -99,6 +105,11 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   gdriveDisable: () => ipcRenderer.invoke("graphy:gdrive-disable"),
   gdriveRestore: (title, mode) => ipcRenderer.invoke("graphy:gdrive-restore", { title, mode }),
   gdriveSetMode: (mode) => ipcRenderer.invoke("graphy:gdrive-set-mode", { mode }),
+  // この PC の Python と GPU（見て出すだけ）。Python のパスを文字列で渡す口は無い——指定は main のファイル選択と確認を通る
+  computeLocalDetect: (opts) => ipcRenderer.invoke("graphy:compute-local-detect", { force: !!(opts && opts.force) }),
+  computeLocalCancel: () => ipcRenderer.invoke("graphy:compute-local-cancel"),
+  computeLocalPickPython: () => ipcRenderer.invoke("graphy:compute-local-pick-python"),
+  computeLocalUseAuto: () => ipcRenderer.invoke("graphy:compute-local-use-auto"),
   // 既定の計算機（未登録で Google にログイン済みなら Colab の T4 を足す。足すのは main）
   computeEnsureDefault: () => ipcRenderer.invoke("graphy:compute-ensure-default"),
   // 名前を付けて保存。上書き確認は OS のダイアログが出す。

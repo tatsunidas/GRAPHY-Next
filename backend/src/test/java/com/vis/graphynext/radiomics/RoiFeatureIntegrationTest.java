@@ -11,11 +11,14 @@ import ij.measure.Calibration;
 import ij.measure.ResultsTable;
 import ij.process.ByteProcessor;
 import ij.process.FloatProcessor;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.tatsunidas.radiomics.main.RadiomicsJ;
+import io.github.tatsunidas.radiomics.main.SettingParams;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.UID;
 import org.dcm4che3.data.VR;
+import org.dcm4che3.io.DicomInputStream;
 import org.dcm4che3.io.DicomOutputStream;
 import org.dcm4che3.util.UIDUtils;
 import org.junit.jupiter.api.BeforeAll;
@@ -27,6 +30,10 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
 import java.io.IOException;
+import java.io.StringReader;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
@@ -65,7 +72,11 @@ class RoiFeatureIntegrationTest {
     @Autowired
     RoiFeatureService service;
 
+    @Autowired
+    ObjectMapper json;
+
     private static final int COLS = 20, ROWS = 18, SLICES = 8;
+    private static final String BIRTH_DATE = "19010203";
     private static final double PIXEL_SPACING = 0.75, SLICE_SPACING = 1.25;
 
     private static final String STUDY_UID = UIDUtils.createUID();
@@ -90,6 +101,8 @@ class RoiFeatureIntegrationTest {
         Attributes a = new Attributes();
         a.setString(Tag.PatientID, VR.LO, "ROIFEAT^TEST");
         a.setString(Tag.PatientName, VR.PN, "PHANTOM^ROIFEAT");
+        a.setString(Tag.PatientBirthDate, VR.DA, BIRTH_DATE);
+        a.setString(Tag.PatientSex, VR.CS, "O");
         a.setString(Tag.StudyInstanceUID, VR.UI, STUDY_UID);
         a.setString(Tag.SeriesInstanceUID, VR.UI, series);
         a.setString(Tag.SOPInstanceUID, VR.UI, UIDUtils.createUID());
@@ -178,6 +191,28 @@ class RoiFeatureIntegrationTest {
         });
     }
 
+    /** 書き出した設定ファイルの本文をそのまま RadiomicsJ に読ませて直接抽出する。 */
+    private static ResultsTable directFromFile(String properties) throws Exception {
+        Properties p = new Properties();
+        p.load(new StringReader(properties));
+        Map<String, String> m = new HashMap<>();
+        p.stringPropertyNames().forEach(k -> m.put(k, p.getProperty(k)));
+        return direct(m);
+    }
+
+    private static int compareAll(RoiFeatureResult r, ResultsTable d) {
+        int same = 0;
+        for (RoiFeatureResult.Row row : r.rows()) {
+            double v = d.getValue(row.column(), d.size() - 1);
+            Double got = row.value();
+            if (Double.isNaN(v) ? got == null : got != null
+                    && Double.doubleToLongBits(v) == Double.doubleToLongBits(got)) {
+                same++;
+            }
+        }
+        return same;
+    }
+
     private static RoiFeatureRequest req(Map<String, String> settings, boolean recompute) {
         return new RoiFeatureRequest(STUDY_UID, SOURCE_SERIES_UID, MASK_SERIES_UID, 0, 0, 0, settings, recompute);
     }
@@ -225,5 +260,50 @@ class RoiFeatureIntegrationTest {
         RoiFeatureResult again = service.compute(req(s, false), p -> { });
         assertTrue(again.fromCache());
         assertEquals(r.computedAt(), again.computedAt());
+    }
+
+    @Test
+    void settingsFileReproducesTheTableAndCarriesNoPatientInfo() throws Exception {
+        ingestPhantom();
+        RoiFeatureResult r = service.compute(req(new HashMap<>(Map.of("INT_binCount", "24")), true), p -> { });
+        String file = r.settingsProperties();
+
+        // 往復（正例）: 書き出した設定ファイルを RadiomicsJ に読ませた直接抽出と全特徴でビット一致
+        ResultsTable d = directFromFile(file);
+        assertEquals(r.rows().size(), compareAll(r, d), "全特徴が一致");
+        // 負例: ファイルの 1 項目（ビン数）だけ変えると一致しない
+        ResultsTable d16 = directFromFile(file.replace("INT_binCount=24\n", "INT_binCount=16\n"));
+        assertTrue(compareAll(r, d16) < r.rows().size(), "ビン数を変えたファイルでは一致しない");
+
+        // 網羅と記録
+        Properties p = new Properties();
+        p.load(new StringReader(file));
+        assertEquals(Stream.of(SettingParams.values()).map(Enum::name).collect(Collectors.toSet()),
+                p.stringPropertyNames());
+        assertEquals("24", p.getProperty("INT_binCount"));
+        assertEquals("0", p.getProperty("BOOL_enableOperationalInfo"));
+        String sha = HexFormat.of().formatHex(
+                MessageDigest.getInstance("SHA-256").digest(file.getBytes(StandardCharsets.UTF_8)));
+        assertEquals(sha, r.provenance().settingsSha256());
+        assertEquals(RadiomicsJ.version, r.provenance().radiomicsjVersion());
+        assertEquals(MapCheckpointStore.detectRadiomicsjVersion(), r.provenance().radiomicsjVersion(),
+                "RadiomicsJ.version とキャッシュのキーの版（pom.properties）が同じ");
+        assertEquals(r.computedAt(), r.provenance().extractedAt());
+
+        // 患者情報: 検査が効いていること（保管庫の DICOM に患者名・ID・生年月日・性別が入っている）を先に見る
+        Path stored = storage.resolveFiles(STUDY_UID, List.of(SOURCE_SERIES_UID)).get(0);
+        Attributes header;
+        try (DicomInputStream in = new DicomInputStream(stored.toFile())) {
+            header = in.readDataset();
+        }
+        assertEquals("PHANTOM^ROIFEAT", header.getString(Tag.PatientName));
+        assertEquals("ROIFEAT^TEST", header.getString(Tag.PatientID));
+        assertEquals(BIRTH_DATE, header.getString(Tag.PatientBirthDate));
+        assertEquals("O", header.getString(Tag.PatientSex));
+        String all = file + new String(json.writeValueAsBytes(r), StandardCharsets.UTF_8);
+        assertTrue(all.contains("GLCM_JointEntropy"), "検索の対象に結果が入っている");
+        for (String pii : List.of("PHANTOM", "ROIFEAT^TEST", BIRTH_DATE, "Patient", "Sex", "Birth")) {
+            assertFalse(all.contains(pii), pii);
+        }
     }
 }

@@ -34,6 +34,15 @@ export interface MemoryInfo {
   freeBytes: number;
 }
 
+/**
+ * Chromium が報告した GPU の状態（描画環境の自己診断用。`fw/render-environment-design.md`）。
+ * `featureStatus` は `app.getGPUFeatureStatus()`（例 `{ webgl2: "enabled" }`）。
+ */
+export interface GpuStatus {
+  featureStatus: Record<string, string>;
+  devices: { vendorId: number; deviceId: number; active: boolean }[];
+}
+
 /** 秘密情報の状態。**値そのものは決して返らない**（main プロセスから出さない設計）。 */
 export interface SecretStatus {
   /** 設定済みか。 */
@@ -124,6 +133,10 @@ export interface AiProviderEntry {
  * <p>🔴 **ヘッダは名前だけ**（値は返ってこない）。認証ヘッダ名は設定で選べるので、
  * どのヘッダに鍵が載るかは固定できない。
  */
+export type AiListModelsResult =
+  | { ok: true; models: string[]; truncated?: boolean }
+  | { ok: false; verdict: string; error: string; status?: number };
+
 export type AiTestResult = {
   ok: boolean;
   verdict:
@@ -262,6 +275,8 @@ export interface GraphyDesktop {
   openMemoryMonitor?: () => Promise<void>;
   /** OS の物理メモリ量を取得（ボリューム構築のバジェット決定用、デスクトップのみ）。 */
   getMemoryInfo?: () => Promise<MemoryInfo>;
+  /** Chromium の GPU 機能状態と GPU 一覧（描画環境の自己診断用、デスクトップのみ）。 */
+  getGpuStatus?: () => Promise<GpuStatus>;
   /** 外部 URL / mailto を OS の既定アプリ（ブラウザ・メーラ）で開く。 */
   openExternal?: (url: string) => void;
   /** GitHub Releases の最新リリース情報を取得（更新確認、デスクトップのみ）。失敗時 null。 */
@@ -342,6 +357,11 @@ export interface GraphyDesktop {
    */
   aiTestConnection?: (providerId: string, capability: AiCapability) => Promise<AiTestResult>;
   /**
+   * モデル名の一覧を取る（GET のみ）。保存済みの提供元は `providerId`、追加フォームは
+   * `{kind, endpoint, apiKey}`（組み込みの公式ホストだけ通る。それ以外は `verdict:"manual"`）。
+   */
+  aiListModels?: (args: { providerId?: string; kind?: string; endpoint?: string; apiKey?: string }) => Promise<AiListModelsResult>;
+  /**
    * 用途ごとの既定だけを差し替える。**確認ダイアログは出ない**
    * （提供元の一覧を送らないので、この口からは新しい送信先が生えない）。
    */
@@ -380,12 +400,23 @@ export interface GraphyDesktop {
   computeColabSpecs?: () => Promise<ColabSpecsResult>;
   /** Colab: その接続先のランタイムを確保する（済んでいれば何もしない）。データは送らない。 */
   computeColabEnsure?: (id: string) => Promise<{ ok: boolean; error?: string; allocated?: boolean; expireTime?: string }>;
+  /**
+   * この PC: 検出した Python で Jupyter Server を起動し、接続先 id `local` として使える状態にする。データは送らない。
+   * error: local-unavailable（`reasons` に理由）/ server-exited / canceled / push-failed ほか
+   */
+  computeLocalEnsure?: () => Promise<{ ok: boolean; endpointId?: string; error?: string; reasons?: string[] }>;
   /** Colab: ランタイムを解放する。 */
   computeColabRelease?: (id: string) => Promise<{ ok: boolean; released?: boolean; error?: string }>;
   /**
    * 既定の計算機を用意する（計算機が 1 つも無く、Google にログイン済みなら Colab の GPU T4 を足す。足すのは main）。
    * error: colab-not-configured / colab-signin-required / t4-not-available / config-unreadable
    */
+  /** この PC の Python と GPU の検出（見て出すだけ）。`force` が無ければ覚えている結果。 */
+  computeLocalDetect?: (opts?: { force?: boolean }) => Promise<LocalDetectResult>;
+  computeLocalCancel?: () => Promise<{ ok: boolean; running?: boolean }>;
+  /** main のファイル選択と確認を通ったときだけ保存する。Python のパスを文字列で渡す口は無い。 */
+  computeLocalPickPython?: () => Promise<{ ok: true; path: string } | { ok: false; canceled?: boolean; error?: string }>;
+  computeLocalUseAuto?: () => Promise<{ ok: true } | { ok: false; canceled?: boolean; error?: string }>;
   computeEnsureDefault?: () => Promise<{ ok: true; endpointId: string; added: boolean } | { ok: false; error: string }>;
   /** 名前を付けて保存（OS ダイアログ）。**上書き確認は OS が出す。** */
   saveFile?: (payload: {
@@ -449,9 +480,71 @@ export type ColabSpecsResult =
   | { ok: true; tier: string | null; specs: (ColabRuntimeSpec & { eligible: boolean })[] }
   | { ok: false; error: string };
 
+/** この PC の Python の設定（`compute-endpoints.json` の最上位 `local`）。 */
+export interface LocalPythonSetting {
+  mode: "auto" | "path";
+  path?: string;
+}
+
+export type LocalCandidateStatus = "selected" | "usable" | "missing" | "excluded" | "probe-failed";
+
+export interface LocalCandidate {
+  path: string;
+  /** setting / py-launcher / path / conda-base */
+  source: string;
+  status: LocalCandidateStatus;
+  /** 理由コード（excluded-windowsapps / excluded-no-clt / missing-jupyter-server など） */
+  reasons: string[];
+  /** probe-failed の詳細（exit:1 など） */
+  detail?: string;
+  versions: { python: string | null; jupyterServer: string | null; ipykernel: string | null; torch: string | null; cuda: string | null } | null;
+  conda?: boolean;
+  venv?: boolean;
+  externallyManaged?: boolean;
+  elapsedMs?: number;
+}
+
+export interface LocalGpuDevice {
+  name: string | null;
+  /** nvidia-smi の memory.total（MiB）。表示はこちら。 */
+  memoryMiB: number | null;
+  /** torch の total_memory（記録のみ）。 */
+  memoryBytes: number | null;
+  capability: number[] | null;
+  /** そのビルドの get_arch_list() に含まれるか（判定できなければ null）。 */
+  archSupported: boolean | null;
+  /** PyTorch 側のデバイスと対応づいたか。 */
+  torchDevice?: boolean;
+}
+
+export interface LocalCapabilities {
+  accelerator: "cuda" | "mps" | "cpu" | null;
+  devices: LocalGpuDevice[];
+  torch: string | null;
+  cudaRuntime: string | null;
+  driver: string | null;
+}
+
+export interface LocalDetectResult {
+  state: "ok" | "none" | "canceled" | "error";
+  error?: string;
+  python: LocalPythonSetting;
+  selected: LocalCandidate | null;
+  /** 選んだ Python が jupyter_server と ipykernel を持つか。 */
+  usable: boolean;
+  candidates: LocalCandidate[];
+  searched: string[];
+  nvidia: { found: boolean; path: string | null; gpus: { name: string; memoryMiB: number | null; driver: string | null; uuid: string | null }[]; error: string | null; unparsed: number };
+  capabilities: LocalCapabilities | null;
+  reasons: string[];
+  guidance: { missing: string[]; commands: { shell: string; text: string }[]; links: string[] };
+  elapsedMs: number;
+}
+
 export interface ComputeEndpointsConfig {
   endpoints: ComputeEndpointEntry[];
   problems: string[];
+  local?: { python: LocalPythonSetting };
   /** main と backend の内部経路が使えるか（backend を別に起動した開発では false）。 */
   available: boolean;
 }

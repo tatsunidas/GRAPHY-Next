@@ -33,10 +33,11 @@ class StandaloneOnlyEndpointsTest {
             UrlImportController.class,
             ImportWatchController.class,
             com.vis.graphynext.microscopy.MicroscopyImportController.class,
-            com.vis.graphynext.microscopy.PluginMicroscopyController.class);
+            com.vis.graphynext.microscopy.PluginMicroscopyController.class,
+            com.vis.graphynext.dbadmin.TagEditController.class);
 
     @Test
-    void パス指定の取り込みのコントローラは_standalone_だけ() {
+    void ローカルのファイルを読み書きするコントローラは_standalone_だけ() {
         for (Class<?> c : STANDALONE_ONLY) {
             Profile p = c.getAnnotation(Profile.class);
             assertThat(p).as(c.getSimpleName() + " に @Profile が無い").isNotNull();

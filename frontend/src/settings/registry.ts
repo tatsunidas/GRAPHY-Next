@@ -77,6 +77,11 @@ const TEXTURE_CATEGORY: CategoryDef = {
       titleKey: "settings.sec.tex.mask",
       fields: [
         { key: "texture.MASK_LABEL_INT", labelKey: "settings.tex.maskLabel", type: "number", default: 1, min: 1, max: 255 },
+        // 既定は空（警告しない）。基準値は文献ごとに違い、根拠のない数を推奨に見せないため。
+        {
+          key: "texture.SmallRoiWarnVoxels", labelKey: "settings.tex.smallRoiWarn", type: "number", default: "",
+          min: 1, step: 1, helpKey: "settings.tex.smallRoiWarn.help",
+        },
         { key: "texture.RemoveOutliers_BOOL", labelKey: "settings.tex.removeOutliers", type: "toggle", default: false },
         { key: "texture.Sigma_INT", labelKey: "settings.tex.sigma", type: "number", default: 3, min: 1, max: 10 },
         { key: "texture.RangeFiltering_BOOL", labelKey: "settings.tex.rangeFilter", type: "toggle", default: false },
@@ -492,6 +497,17 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
             default: "#000000",
             helpKey: "settings.field.viewer3dBackground.help",
           },
+          {
+            key: "viewer3d.renderQuality",
+            labelKey: "settings.field.viewer3dRenderQuality",
+            type: "select",
+            default: "auto",
+            helpKey: "settings.field.viewer3dRenderQuality.help",
+            options: [
+              { value: "auto", labelKey: "settings.opt.viewer3dRenderQuality.auto" },
+              { value: "full", labelKey: "settings.opt.viewer3dRenderQuality.full" },
+            ],
+          },
         ],
       },
       {
@@ -635,6 +651,14 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
     id: "monitor",
     labelKey: "settings.cat.monitor",
     icon: "🖥️",
+    sections: [],
+  },
+  {
+    // 描画環境（GPU 名・ソフトウェア描画か・3D テクスチャ上限）は専用パネル。SettingsDialog で特別扱い。
+    // 設計: fw/render-environment-design.md
+    id: "renderEnv",
+    labelKey: "settings.cat.renderEnv",
+    icon: "🧪",
     sections: [],
   },
   {

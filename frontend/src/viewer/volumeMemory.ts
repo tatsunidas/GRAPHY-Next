@@ -18,6 +18,8 @@
  * 3D テクスチャ寸法ガード（V4）は同設計書の後続フェーズ。
  */
 
+import { probeMax3dTextureSizeForRender } from "./renderEnv";
+
 /** 設定 `viewer.volumeMaxMb` の既定値（MB）。`settings/registry.ts` の default と一致させること。 */
 export const DEFAULT_VOLUME_MAX_MB = 2048;
 /** 設定 `viewer.volumeMaxMb` の下限（MB）。 */
@@ -247,25 +249,13 @@ let cachedMax3dTextureSize: number | null | undefined;
  * GPU の 3D テクスチャ寸法上限（WebGL2 の `MAX_3D_TEXTURE_SIZE`。GPU により 1024〜16384、
  * 多くは 2048）。取得できなければ null。
  *
- * <p>問い合わせ専用の使い捨てコンテキストを 1 度だけ作り、値をキャッシュする。WebGL の同時
+ * <p>問い合わせ専用の使い捨てコンテキストを 1 度だけ作り、値をキャッシュする（読み出しは
+ * `viewer/renderEnv.ts` の `probeRenderEnv`。3D が使う `high-performance` 側の値）。WebGL の同時
  * コンテキスト数には上限（多くのブラウザで 16）があるため、取得後すぐ `WEBGL_lose_context` で解放する。
  * 判定の流儀は `viewer/cinematicPathTracer.ts` の GPU ケーパビリティ判定（取れなければ null）に倣う。
  */
 export function getMax3dTextureSize(): number | null {
   if (cachedMax3dTextureSize !== undefined) return cachedMax3dTextureSize;
-  cachedMax3dTextureSize = probeMax3dTextureSize();
+  cachedMax3dTextureSize = probeMax3dTextureSizeForRender();
   return cachedMax3dTextureSize;
-}
-
-function probeMax3dTextureSize(): number | null {
-  try {
-    if (typeof document === "undefined") return null; // 単体テスト（node 環境）
-    const gl = document.createElement("canvas").getContext("webgl2");
-    if (!gl) return null;
-    const v = gl.getParameter(gl.MAX_3D_TEXTURE_SIZE) as unknown;
-    gl.getExtension("WEBGL_lose_context")?.loseContext();
-    return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
-  } catch {
-    return null;
-  }
 }

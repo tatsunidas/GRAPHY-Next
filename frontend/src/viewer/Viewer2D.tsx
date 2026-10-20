@@ -36,6 +36,7 @@ import { emitToast } from "./toast";
 import { partitionByLock } from "./roiLock";
 import { installTrueMagnification } from "./magnifier";
 import { ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID, SCISSORS_TOOL_ID } from "./toolIds";
+import { commitThreshold } from "./thresholdTool";
 import { getScissors, setScissorsActive, subscribeScissors, scissorsToolName, scissorsStrategy, SCISSORS_TOOL_NAMES } from "./scissorsStore";
 import { setViewerContext, clearViewerContext, getViewerContext, type ViewerContext } from "./viewerContext";
 import { getRoiMaskMeta, setRoiMaskMeta, subscribeRoiMaskStore } from "./roiMaskStore";
@@ -2393,6 +2394,7 @@ export function Viewer2D({
     setScissorsActive(isScissors);
     // Wand/Level Sets 以外のツールへ切り替えるときは、開いているセッションを確定して閉じる。
     if (!isWand) commitWand();
+    commitThreshold(); // 開いたままのしきい値ダイアログは確定して閉じる（Wand と同じ）
     if (!isLevelSet) commitLevelSet();
     activeToolRef.current = toolName; // per-tile Pan↔W/L 切替の抑止判定＋スタック再構築時の復元に使う。
     if (isBrush || isEraser || isWand || isLevelSet || isScissors) {
@@ -2827,7 +2829,7 @@ export function Viewer2D({
             <svg style={refLineSvg}>
               {sphereCircles.map((c, i) => (
                 <g key={i}>
-                  <circle cx={c.cx} cy={c.cy} r={c.r} fill="none" stroke={c.color} strokeWidth={1.5} strokeDasharray="4 3" opacity={0.9} />
+                  <circle data-testid="sphere-preview" cx={c.cx} cy={c.cy} r={c.r} fill="none" stroke={c.color} strokeWidth={1.5} strokeDasharray="4 3" opacity={0.9} />
                   <circle cx={c.cx} cy={c.cy} r={1.5} fill={c.color} />
                   {c.label && <text x={c.cx + c.r + 4} y={c.cy} fill={c.color} fontSize={11} style={refLineText}>{c.label}</text>}
                 </g>

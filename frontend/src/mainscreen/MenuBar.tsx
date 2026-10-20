@@ -13,6 +13,7 @@ import { openMemoryMonitor } from "../system/memoryMonitor";
 import { openUsersCommunity } from "../help/links";
 import { openDeveloperContact } from "../help/DeveloperContact";
 import { openUninstallGuide } from "../help/UninstallGuide";
+import { openResearchUseTerms } from "../help/ResearchUseConsent";
 import { runUpdateCheck } from "../help/UpdateNotice";
 import { isDesktop } from "../desktopBridge";
 
@@ -155,6 +156,7 @@ export function MenuBar({
         ...(isDesktop() ? [{ label: t("help.update"), onClick: () => void runUpdateCheck(true) }] : []),
         { label: t("help.community"), onClick: openUsersCommunity },
         { label: t("help.contact"), onClick: openDeveloperContact },
+        { label: t("help.terms"), onClick: openResearchUseTerms },
         { label: t("help.uninstall"), onClick: openUninstallGuide },
       ],
     },

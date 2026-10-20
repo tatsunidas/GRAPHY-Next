@@ -31,7 +31,10 @@ const secretStore = require("./secretStore");
 const aiGateway = require("./aiGateway");
 const aiProviders = require("./aiProviders");
 const computeEndpoints = require("./computeEndpoints");
+const localPython = require("./localPython");
+const localJupyter = require("./localJupyter");
 const dbFolders = require("./dbFolders");
+const { resolveDevDataDir } = require("./devDataDir");
 const tlsPasswords = require("./tlsPasswords");
 const { waitPortFree } = require("./portWait");
 const { ensureDefaultEndpoint } = require("./computeDefault");
@@ -126,6 +129,7 @@ const VIEWER_DEFAULTS = {
   geometry3d: { width: 1100, height: 800 },
   // GLAM 解析は図を横に並べるので、やや幅広を既定にする。
   glam: { width: 1250, height: 900 },
+  "radiomics-features": { width: 1250, height: 900 },
 };
 
 /** 同梱 / 開発時の backend jar のパスを解決する。 */
@@ -168,10 +172,22 @@ function resolveJava() {
  *   productName を変える場合はこれら 4 箇所を同時に更新すること。
  *
  * 開発時: 従来どおり CWD（通常 desktop/）をそのまま使い、既存の開発用 desktop/data を壊さない。
+ *   環境変数 GRAPHY_DEV_DATA_DIR（絶対パス・既存のフォルダ）を指定すると、DB・プラグイン・設定をそこに固定する
+ *   （worktree を作るたびに空の DB になるのを避ける。devDataDir.js）。
  */
 const APP_DATA_FOLDER = "GRAPHY-Next";
 function resolveDataDir() {
-  if (!app.isPackaged) return process.cwd();
+  if (!app.isPackaged) {
+    try {
+      // GRAPHY_DEV_DATA_DIR があれば開発のデータをそこに固定する（worktree ごとに空の DB にならない）。
+      return resolveDevDataDir(process.env, false, process.cwd());
+    } catch (e) {
+      console.error(`[backend] ${e.message}`);
+      dialog.showErrorBox("開発用データフォルダの指定が正しくありません", e.message);
+      app.exit(1);
+      throw e;
+    }
+  }
   const dir = path.join(app.getPath("appData"), APP_DATA_FOLDER);
   try {
     fs.mkdirSync(dir, { recursive: true });
@@ -764,6 +780,31 @@ ipcMain.handle("graphy:get-memory-info", () => {
   return { totalBytes, freeBytes };
 });
 
+// Chromium が報告した GPU の機能状態と GPU 一覧（設定＞描画環境。fw/render-environment-design.md）。
+// getGPUInfo('basic') は Promise、getGPUFeatureStatus() は同期。取れなければ空で返す
+// （renderer 側は「未取得」と表示する。0 や hardware で埋めない）。
+ipcMain.handle("graphy:gpu-status", async () => {
+  let featureStatus = {};
+  try {
+    featureStatus = app.getGPUFeatureStatus() || {};
+  } catch {
+    /* 取れなければ空のまま返す */
+  }
+  let devices = [];
+  try {
+    const info = await app.getGPUInfo("basic");
+    const list = Array.isArray(info?.gpuDevice) ? info.gpuDevice : [];
+    devices = list.map((g) => ({
+      vendorId: Number(g.vendorId) || 0,
+      deviceId: Number(g.deviceId) || 0,
+      active: g.active === true,
+    }));
+  } catch {
+    /* 同上 */
+  }
+  return { featureStatus, devices };
+});
+
 // 外部 URL / mailto を OS の既定アプリ（ブラウザ・メーラ）で開く（Help メニューのリンク等）。
 // URL スキームは http(s) / mailto のみ許可（任意コマンド実行を避ける）。
 ipcMain.on("graphy:open-external", (_e, url) => {
@@ -1249,6 +1290,22 @@ ipcMain.handle("graphy:ai-test-connection", async (e, payload) => {
   return aiGateway.testConnection({ providerId, capability });
 });
 
+/**
+ * モデル名の一覧を取る。GET だけで、課金も患者データの送信も無いので確認は出さない。
+ *
+ * <p>🔴 宛先は main が決める（保存済みの提供元＝保存済みの接続先と鍵／未保存＝組み込みの公式ホストだけ）。
+ * レンダラ（＝プラグイン）が渡せるのは提供元の id か、追加フォームの候補だけ。
+ */
+ipcMain.handle("graphy:ai-list-models", async (_e, payload) => {
+  const p = payload && typeof payload === "object" ? payload : {};
+  return aiGateway.listModels({
+    providerId: typeof p.providerId === "string" ? p.providerId : undefined,
+    kind: typeof p.kind === "string" ? p.kind : undefined,
+    endpoint: typeof p.endpoint === "string" ? p.endpoint : undefined,
+    apiKey: typeof p.apiKey === "string" ? p.apiKey : undefined,
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 外部の計算機（Jupyter Server）— fw/remote-compute-design.md
 //
@@ -1270,7 +1327,9 @@ async function pushComputeEndpoints() {
   // Colab は確保したランタイムだけ（URL とトークンはランタイムごとに Colab が決める）
   const colabIds = new Set(all.filter((e) => e.kind === "colab").map((e) => e.id));
   const colab = colabRuntimes ? colabRuntimes.endpoints().filter((e) => colabIds.has(e.id)) : [];
-  return computeBridge.pushEndpoints([...jupyter, ...colab]);
+  // 「この PC」は main が起動しているあいだだけ（URL とトークンは起動のたびに変わる。保存しない）
+  const local = localJupyter.endpoint();
+  return computeBridge.pushEndpoints([...jupyter, ...colab, ...(local ? [local] : [])]);
 }
 
 // ── Google Drive バックアップ（計画: ~/.claude/plans/graphy-next-db-googledrive-agile-cupcake.md、実測: fw/gdrive-p0.md）──
@@ -1609,6 +1668,7 @@ ipcMain.handle("graphy:compute-endpoints-get", () => {
           },
     ),
     problems: c.problems,
+    local: c.local,
     // 内部経路が使えない（backend を別に起動した開発など）ときは画面が理由を出す
     available: computeBridge.enabled(),
   };
@@ -1663,12 +1723,91 @@ ipcMain.handle("graphy:compute-endpoints-set", async (e, cfg) => {
   return result;
 });
 
+// ── この PC の Python と GPU（見て出すだけ。計算はまだ自機に向かない）──────────────────
+// 🔴 Python のパスを文字列で受ける口は作らない。指定は main のファイル選択 → 確認を通ったものだけ保存する。
+//    実行するのは固定の確認コードだけ（localPython.PROBE）。renderer から来た文字列は子プロセスの引数に入らない。
+ipcMain.handle("graphy:compute-local-detect", (_e, opts) => localPython.detect({ force: !!(opts && opts.force === true) }));
+ipcMain.handle("graphy:compute-local-cancel", () => {
+  localJupyter.cancelStart();
+  return localPython.cancel();
+});
+
+/**
+ * 「この PC」で計算する用意をする: 検出した Python で Jupyter Server を起動し、backend の登録簿へ入れる。
+ * 確認ダイアログは出さない——送り先は 127.0.0.1 に固定で、起動しただけでは何も送らない
+ * （毎回の実行で同意画面に「この PC」とコードの全文が出る）。使う Python は利用者が設定したか、検出して選ばれたもの。
+ */
+async function ensureLocalCompute() {
+  const d = await localPython.detect({});
+  if (!d.selected || !d.usable) return { ok: false, error: "local-unavailable", reasons: d.reasons || [] };
+  const r = await localJupyter.ensure(d.selected.path);
+  if (!r.ok) return { ok: false, error: r.error, log: r.log };
+  const pushed = await pushComputeEndpoints();
+  if (pushed && pushed.ok === false) return { ok: false, error: pushed.error || "push-failed" };
+  return { ok: true, endpointId: localJupyter.ENDPOINT_ID };
+}
+ipcMain.handle("graphy:compute-local-ensure", () => ensureLocalCompute());
+
+ipcMain.handle("graphy:compute-local-pick-python", async (e) => {
+  const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
+  const r = await dialog.showOpenDialog(win, {
+    title: "Python",
+    properties: ["openFile"],
+    filters: process.platform === "win32" ? [{ name: "python.exe", extensions: ["exe"] }] : [],
+  });
+  if (r.canceled || r.filePaths.length === 0) return { ok: false, canceled: true };
+  const p = r.filePaths[0];
+  const v = localPython.validatePythonPath(p);
+  let isFile = false;
+  try { isFile = fs.statSync(p).isFile(); } catch { /* 下で拒否 */ }
+  if (!v.ok || !isFile) return { ok: false, error: v.ok ? "path-not-file" : v.reason };
+  // 選んだ Python はこのあとプラグインのコードを実行する先になるので、保存の前に確認する
+  const choice = dialog.showMessageBoxSync(win, {
+    type: "warning",
+    buttons: ["許可する", "取り消す"],
+    defaultId: 1,
+    cancelId: 1,
+    title: "この PC の Python を指定します",
+    message: "この Python でプラグインのコードを実行します。",
+    detail: p,
+  });
+  if (choice !== 0) return { ok: false, canceled: true };
+  const saved = computeEndpoints.setLocalPython({ mode: "path", path: p });
+  if (!saved.ok) return { ok: false, error: saved.problems[0] };
+  localPython.invalidate();
+  console.log("[compute] local python set by user");
+  return { ok: true, path: p };
+});
+
+ipcMain.handle("graphy:compute-local-use-auto", async (e) => {
+  const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
+  const choice = dialog.showMessageBoxSync(win, {
+    type: "warning",
+    buttons: ["許可する", "取り消す"],
+    defaultId: 1,
+    cancelId: 1,
+    title: "Python を自動で探します",
+    message: "指定した Python をやめ、この PC で見つかった Python を使います。",
+    detail: "見つかった Python でプラグインのコードを実行します。",
+  });
+  if (choice !== 0) return { ok: false, canceled: true };
+  const saved = computeEndpoints.setLocalPython({ mode: "auto" });
+  if (!saved.ok) return { ok: false, error: saved.problems[0] };
+  localPython.invalidate();
+  return { ok: true };
+});
+
 /**
  * 接続テスト。渡せるのは接続先の id だけ——実行するコードは backend の定数
  * （ComputeConnectionTester.PROBE）で、患者のデータもプラグインのコードも送らない。
  */
 ipcMain.handle("graphy:compute-test-connection", async (_e, id) => {
-  if (!computeEndpoints.byId(String(id || ""))) return { ok: false, stage: "bridge", error: "unknown-endpoint" };
+  if (String(id || "") === localJupyter.ENDPOINT_ID) {
+    const r = await ensureLocalCompute();
+    if (!r.ok) return { ok: false, stage: "local", error: r.error };
+  } else if (!computeEndpoints.byId(String(id || ""))) {
+    return { ok: false, stage: "bridge", error: "unknown-endpoint" };
+  }
   await pushComputeEndpoints(); // backend が再起動していても最新を入れてから試す
   return computeBridge.testEndpoint(String(id));
 });
@@ -1815,6 +1954,14 @@ app.whenReady().then(async () => {
   secretStore.init(resolveDataDir());
   aiProviders.init(resolveDataDir());
   computeEndpoints.init(resolveDataDir());
+  localPython.init({ dataDir: resolveDataDir(), getSetting: () => computeEndpoints.get().local.python });
+  localJupyter.init({ dataDir: resolveDataDir() });
+  try {
+    const swept = localJupyter.sweepStale(); // 前回 Electron が落ちて残ったものがあれば止める（目印が一致したものだけ）
+    if (swept.swept) console.log(`[compute] stopped a leftover local jupyter (pid ${swept.pid})`);
+  } catch (e) {
+    console.error("[compute] local jupyter sweep failed:", e && e.message);
+  }
   initColab();
   initGdrive();
   if (MAIN_SECRET) computeBridge.init({ secret: MAIN_SECRET, apiBase: API_BASE });
@@ -1864,15 +2011,22 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-// 確保した Colab のランタイムは閉じる前に解放する（利用者の Colab の利用枠を使い続けない）。
-// 解放は非同期なので一度だけ終了を止めて待つ（最大 10 秒）。
-let colabReleasedOnQuit = false;
+// 確保した Colab のランタイムと、この PC で起動した Jupyter は閉じる前に止める
+// （Colab は利用者の利用枠を使い続けない・Jupyter はカーネルが GPU メモリを握ったまま残らない）。
+// どちらも非同期なので一度だけ終了を止め、並べて待つ（最大 10 秒。直列にすると終了が延びる）。
+let releasedOnQuit = false;
 app.on("before-quit", (event) => {
-  if (colabReleasedOnQuit || !colabRuntimes || colabRuntimes.endpoints().length === 0) return;
+  const hasColab = !!colabRuntimes && colabRuntimes.endpoints().length > 0;
+  const hasLocal = localJupyter.endpoint() !== null;
+  if (releasedOnQuit || (!hasColab && !hasLocal)) return;
   event.preventDefault();
-  colabReleasedOnQuit = true;
-  Promise.race([colabRuntimes.releaseAll(), new Promise((r) => setTimeout(r, 10000))]).finally(() => app.quit());
+  releasedOnQuit = true;
+  const jobs = [];
+  if (hasColab) jobs.push(colabRuntimes.releaseAll());
+  if (hasLocal) jobs.push(localJupyter.stop());
+  Promise.race([Promise.allSettled(jobs), new Promise((r) => setTimeout(r, 10000))]).finally(() => app.quit());
 });
+app.on("before-quit", () => localPython.cancel());
 app.on("before-quit", stopBackend);
 process.on("exit", stopBackend);
 

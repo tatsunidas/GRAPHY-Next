@@ -93,6 +93,13 @@ public class ComputeJobRunner {
         long t0 = System.nanoTime();
         JupyterServerClient c = endpoints.client(r.endpointId(), mapper)
                 .orElseThrow(() -> new IllegalStateException("endpoint no longer registered: " + r.endpointId()));
+        // 承認した送り先と実行時の接続先が同じか。違えば（承認のあとに登録簿が入れ替わった）送らない。
+        // 自機では Jupyter の起動し直しでポートが変わるので、起こりやすい
+        if (!c.endpoint().base().toString().equals(r.endpointUrl())) {
+            audit.append(event("egress-destination-changed", r).put("approvedHost", hostOf(r.endpointUrl()))
+                    .put("actualHost", c.endpoint().base().getAuthority()));
+            throw new IllegalStateException("destination-changed");
+        }
         String runDir = c.endpoint().workRoot() + "/" + UUID.randomUUID().toString().substring(0, 12);
         String kernelId = null;
         String outcome = "failed";
@@ -123,6 +130,7 @@ public class ComputeJobRunner {
             kernelId = c.startKernel(null, runDir);
             ExecutionResult er;
             try (KernelChannel ch = c.connect(kernelId, Duration.ofSeconds(120))) {
+                checkKernelPython(ch, r.endpointId());
                 String root = c.endpoint().contentsRootInKernel();
                 if (root != null) {
                     // 作業フォルダへ移る（本体の固定コード。データには触れない・同意画面のコードには含めない）
@@ -286,6 +294,41 @@ public class ComputeJobRunner {
             if (out.size() > MAX_OUTPUT_FILES) {
                 return;
             }
+        }
+    }
+
+    /**
+     * 「この PC」では、カーネルの Python が main の選んだ Python と同じかを確かめる（kernelspec の取り違えで
+     * 別の Python——torch が CPU 版など——で走るのを防ぐ）。違えば推測で通さず止める。
+     */
+    private void checkKernelPython(KernelChannel ch, String endpointId) throws Exception {
+        String expected = endpoints.get(endpointId).map(ComputeEndpointRegistry.Entry::expectedExecutable).orElse(null);
+        if (expected == null) {
+            return;
+        }
+        ExecutionResult er = ch.execute("import sys; print(sys.executable)", null).get(60, TimeUnit.SECONDS);
+        String actual = er.ok() ? er.stdout().strip() : "";
+        if (!samePython(expected, actual)) {
+            throw new IllegalStateException("kernel-python-mismatch: expected=" + expected + " actual=" + actual);
+        }
+    }
+
+    static boolean samePython(String expected, String actual) {
+        if (expected == null || actual == null || actual.isBlank()) {
+            return false;
+        }
+        try {
+            return Path.of(expected).toRealPath().equals(Path.of(actual).toRealPath());
+        } catch (java.io.IOException | RuntimeException e) {
+            return expected.equals(actual);
+        }
+    }
+
+    private static String hostOf(String url) {
+        try {
+            return java.net.URI.create(url).getAuthority();
+        } catch (RuntimeException e) {
+            return "?";
         }
     }
 

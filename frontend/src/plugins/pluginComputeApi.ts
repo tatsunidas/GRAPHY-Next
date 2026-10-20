@@ -74,6 +74,9 @@ interface EgressCreated {
   requestId: string;
 }
 
+/** この PC（main が起動した Jupyter）の接続先 id。`opts.endpointId` に名指しされたときだけ使う。 */
+const LOCAL_ENDPOINT_ID = "local";
+
 /** H59。 */
 export async function runComputeJob(
   m: PluginManifest,
@@ -84,22 +87,32 @@ export async function runComputeJob(
   if (!d?.computeConfirm || !d.computeEndpointsGet) return { ok: false, error: "desktop-only" };
   if (!(m.permissions ?? []).includes(REMOTE_COMPUTE_PERMISSION)) return { ok: false, error: "permission-denied" };
 
-  let cfg = await d.computeEndpointsGet();
-  // 1 つも登録が無ければ、main に既定の計算機（Colab の GPU T4）を用意してもらう（ログイン済みのときだけ足せる）
-  if (!opts.endpointId && cfg.endpoints.length === 0 && d.computeEnsureDefault) {
-    const ensured = await d.computeEnsureDefault();
-    if (!ensured.ok) return { ok: false, error: ensured.error };
-    cfg = await d.computeEndpointsGet();
-  }
-  const endpoint = opts.endpointId ? cfg.endpoints.find((e) => e.id === opts.endpointId) : defaultEndpoint(cfg.endpoints);
-  if (!endpoint) return { ok: false, error: opts.endpointId ? "unknown-endpoint" : "no-endpoint" };
-  const endpointId = endpoint.id;
-  // Colab はランタイムを確保してから要求を作る（同意画面に実際の送り先が出るように）。
-  // 確保だけでは患者のデータもコードも出ない——送るのは同意のあと。
-  if (endpoint.kind === "colab") {
-    if (!d.computeColabEnsure) return { ok: false, error: "desktop-only" };
-    const rt = await d.computeColabEnsure(endpointId);
-    if (!rt.ok) return { ok: false, error: rt.error ?? "colab-runtime-failed" };
+  // 「この PC」は名指ししたときだけ使う（既定の計算機はまだ替えない）。main が Jupyter を起動して登録簿へ入れる。
+  // 登録された接続先の一覧には載らない（起動のたびに URL とトークンが変わる）。
+  let endpointId: string;
+  if (opts.endpointId === LOCAL_ENDPOINT_ID) {
+    if (!d.computeLocalEnsure) return { ok: false, error: "desktop-only" };
+    const local = await d.computeLocalEnsure();
+    if (!local.ok) return { ok: false, error: local.error ?? "local-failed" };
+    endpointId = LOCAL_ENDPOINT_ID;
+  } else {
+    let cfg = await d.computeEndpointsGet();
+    // 1 つも登録が無ければ、main に既定の計算機（Colab の GPU T4）を用意してもらう（ログイン済みのときだけ足せる）
+    if (!opts.endpointId && cfg.endpoints.length === 0 && d.computeEnsureDefault) {
+      const ensured = await d.computeEnsureDefault();
+      if (!ensured.ok) return { ok: false, error: ensured.error };
+      cfg = await d.computeEndpointsGet();
+    }
+    const endpoint = opts.endpointId ? cfg.endpoints.find((e) => e.id === opts.endpointId) : defaultEndpoint(cfg.endpoints);
+    if (!endpoint) return { ok: false, error: opts.endpointId ? "unknown-endpoint" : "no-endpoint" };
+    endpointId = endpoint.id;
+    // Colab はランタイムを確保してから要求を作る（同意画面に実際の送り先が出るように）。
+    // 確保だけでは患者のデータもコードも出ない——送るのは同意のあと。
+    if (endpoint.kind === "colab") {
+      if (!d.computeColabEnsure) return { ok: false, error: "desktop-only" };
+      const rt = await d.computeColabEnsure(endpointId);
+      if (!rt.ok) return { ok: false, error: rt.error ?? "colab-runtime-failed" };
+    }
   }
   const id = encodeURIComponent(m.id);
 

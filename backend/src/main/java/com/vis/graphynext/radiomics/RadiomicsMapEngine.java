@@ -4,6 +4,7 @@
  */
 package com.vis.graphynext.radiomics;
 
+import com.vis.graphynext.anonymize.PixelCodec;
 import com.vis.graphynext.dicom.ParametricMapFrameExpander;
 import com.vis.graphynext.dicom.SeriesLayout;
 import com.vis.graphynext.dicom.store.DicomStorageService;
@@ -16,6 +17,7 @@ import ij.process.ImageProcessor;
 import io.github.tatsunidas.radiomics.main.FeatureVisualizationMap;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
+import org.dcm4che3.data.UID;
 import org.dcm4che3.io.DicomInputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,6 +30,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * RadiomicsJ による Texture 可視化マップ計算エンジン。
@@ -44,11 +47,21 @@ public class RadiomicsMapEngine {
 
     private final DicomStorageService storage;
     private final MapCheckpointStore checkpoints;
+    private final PixelCodec codec;
 
-    public RadiomicsMapEngine(DicomStorageService storage, MapCheckpointStore checkpoints) {
+    public RadiomicsMapEngine(DicomStorageService storage, MapCheckpointStore checkpoints, PixelCodec codec) {
         this.storage = storage;
         this.checkpoints = checkpoints;
+        this.codec = codec;
     }
+
+    /**
+     * 非可逆になりうる転送構文。JPEG 2000（.91）・HTJ2K（.203）・JPEG XL（.112）は可逆の符号も入れられるが、
+     * 転送構文からは区別できないので非可逆として扱う（警告を出しすぎる側に倒す）。
+     */
+    static final Set<String> LOSSY_TRANSFER_SYNTAXES = Set.of(
+            UID.JPEGBaseline8Bit, UID.JPEGExtended12Bit, UID.JPEGLSNearLossless,
+            UID.JPEG2000, UID.HTJ2K, UID.JPEGXL);
 
     /**
      * 計算結果と、その途中結果のキー。派生シリーズの取り込みが済んだら
@@ -66,7 +79,8 @@ public class RadiomicsMapEngine {
             double pixelSpacingRow, double pixelSpacingCol,
             List<double[]> ippPerZ,         // z ごとの ImagePositionPatient（無ければ null 要素）
             List<String> srcSopPerZ,        // z ごとの元 SOPInstanceUID（SourceImageSequence 用）
-            String frameOfReferenceUid) {
+            String frameOfReferenceUid,
+            boolean lossyCompressed) {      // 元画像が非可逆圧縮（特徴量は圧縮の影響を受ける）
     }
 
     /** ターゲット（＋任意マスク）から 1 特徴のマップを計算する（進み具合は見ない）。 */
@@ -98,7 +112,8 @@ public class RadiomicsMapEngine {
             Map<Integer, double[]> ippByZ,
             String[] sopPerZ,
             String frameOfReferenceUid,
-            TextureResampling.Grid resampling) {
+            TextureResampling.Grid resampling,
+            boolean lossyCompressed) {
     }
 
     /** ターゲット（＋任意マスク）から 1 特徴のマップを計算する。 */
@@ -161,16 +176,18 @@ public class RadiomicsMapEngine {
             if (ipp != null) ippByZ.put(k, ipp);
         }
 
-        // ターゲットボリュームを積む（dcm4che でネイティブ画素をデコード）。
+        // ターゲットボリュームを積む（dcm4che で画素をデコード。圧縮なら PixelCodec で伸長）。
         int w = 0, h = 0;
+        boolean lossy = false;
         Calibration cal = null;
         List<ImageProcessor> procs = new ArrayList<>(nZ);
         for (int z = 0; z < nZ; z++) {
             Loaded loaded = openBySop(sopPerZ[z], framePerZ[z]);
             if (loaded == null) {
                 throw new IllegalArgumentException("スライスをデコードできません z=" + z + " sop=" + sopPerZ[z]
-                        + "（圧縮転送構文の可能性。backend ログを確認してください）");
+                        + "（backend ログを確認してください）");
             }
+            lossy |= loaded.lossy();
             long nan = countNaN(loaded.ip());
             if (nan > 0) {
                 // 窓の中の NaN を離散化がどう扱うか（RadiomicsJ）を確かめられていないので、黙って計算しない
@@ -246,7 +263,7 @@ public class RadiomicsMapEngine {
 
         return new LoadedVolume(img, mask, w, h, nZ, label, hasMask, finalCal,
                 layout.imageOrientationPatient(), layout.pixelSpacingRow(), layout.pixelSpacingCol(),
-                ippByZ, sopPerZ, layout.frameOfReferenceUID(), grid);
+                ippByZ, sopPerZ, layout.frameOfReferenceUID(), grid, lossy);
     }
 
     /** {@link #load} で揃えた材料からマップを計算する（compute の後半）。 */
@@ -320,7 +337,7 @@ public class RadiomicsMapEngine {
                 built.displayName(),
                 vol.imageOrientationPatient(),
                 vol.pixelSpacingRow(), vol.pixelSpacingCol(),
-                ippList, sopList, vol.frameOfReferenceUid()), ckptKey, nZ, restoredCount[0]);
+                ippList, sopList, vol.frameOfReferenceUid(), vol.lossyCompressed()), ckptKey, nZ, restoredCount[0]);
     }
 
     /**
@@ -635,62 +652,117 @@ public class RadiomicsMapEngine {
         return 1;
     }
 
-    /** 読み込んだ 1 枚。 */
-    private record Loaded(ImageProcessor ip, Calibration cal) {}
+    /** 読み込んだ 1 枚。{@code lossy} は非可逆圧縮の画像（転送構文か LossyImageCompression=01）。 */
+    record Loaded(ImageProcessor ip, Calibration cal, boolean lossy) {}
 
     /**
      * SOP（＋モザイクフレーム）から ImageProcessor を得る。ImageJ の Opener はヘッドレス backend では
-     * DICOM を開けないことがあるため、<b>dcm4che でデータセットを読み、ネイティブ（非圧縮）画素を
-     * 直接デコード</b>する。Rescale を適用してモダリティ値（HU/SUV 等）の FloatProcessor を返す。
+     * DICOM を開けないことがあるため、<b>dcm4che でデータセットを読んで画素を直接デコード</b>する。
+     * Rescale を適用してモダリティ値（HU/SUV 等）の FloatProcessor を返す。
      */
     private Loaded openBySop(String sop, int frame) throws IOException {
         if (sop == null) return null;
-        Attributes ds;
         if (frame >= 0) {
             byte[] dicom = storage.frameDicom(sop, frame);
-            if (dicom == null) return null;
+            if (dicom == null) {
+                Path path = storage.resolveInstanceFile(sop);
+                String ts = path == null ? null : transferSyntaxOf(path);
+                if (ts != null && !PixelCodec.isUncompressed(ts)) {
+                    // フレームの切り出しはビューアと共通で、圧縮のままでは切り出せない
+                    throw new IllegalArgumentException("圧縮されたマルチフレーム画像には未対応です（転送構文 "
+                            + UID.nameOf(ts) + "）。sop=" + sop);
+                }
+                return null;
+            }
+            Attributes ds;
             try (DicomInputStream in = new DicomInputStream(new ByteArrayInputStream(dicom))) {
                 in.setIncludeBulkData(DicomInputStream.IncludeBulkData.YES);
                 ds = in.readDataset();
             }
-        } else {
-            Path path = storage.resolveInstanceFile(sop);
-            if (path == null) return null;
-            try (DicomInputStream in = new DicomInputStream(path.toFile())) {
-                in.setIncludeBulkData(DicomInputStream.IncludeBulkData.YES);
-                ds = in.readDataset();
-            }
+            return processorFrom(ds, sop, ds.getBytes(Tag.PixelData), isLossy(ds, null));
         }
-        return processorFrom(ds, sop);
+        Path path = storage.resolveInstanceFile(sop);
+        if (path == null) return null;
+        return readSlice(path, sop, codec);
     }
 
-    /** dcm4che データセットのネイティブ画素 → モダリティ値(Rescale 適用)の FloatProcessor。 */
-    private Loaded processorFrom(Attributes ds, String sop) throws IOException {
+    /**
+     * 1 枚 1 ファイルの画像を読む。圧縮（カプセル化）なら {@link PixelCodec} で伸長してから、
+     * 非圧縮と同じ変換（BitsStored・符号・Rescale）に通す。
+     */
+    static Loaded readSlice(Path path, String sop, PixelCodec codec) throws IOException {
+        Attributes ds;
+        String ts;
+        try (DicomInputStream in = new DicomInputStream(path.toFile())) {
+            in.setIncludeBulkData(DicomInputStream.IncludeBulkData.YES);
+            ds = in.readDataset();
+            ts = in.getTransferSyntax();
+        }
+        if (PixelCodec.isUncompressed(ts)) {
+            return processorFrom(ds, sop, ds.getBytes(Tag.PixelData), isLossy(ds, ts));
+        }
+        requireGrayscale(ds, sop);
+        if (!codec.available()) {
+            throw new IllegalArgumentException("圧縮画像の伸長に必要な部品がありません（" + codec.unavailableReason()
+                    + "）。転送構文 " + UID.nameOf(ts));
+        }
+        // 伸長は PixelData が元ファイルへの参照（BulkData）であることを要求する（PixelCodec.decompress）
+        Attributes ref;
+        try (DicomInputStream in = new DicomInputStream(path.toFile())) {
+            in.setIncludeBulkData(DicomInputStream.IncludeBulkData.URI);
+            ref = in.readDataset();
+        }
+        byte[] px = codec.decompress(ref, ts);
+        if (px == null) {
+            throw new IllegalArgumentException("圧縮画像を伸長できませんでした（転送構文 " + UID.nameOf(ts)
+                    + "）。sop=" + sop + "。backend ログを確認してください");
+        }
+        return processorFrom(ref, sop, px, isLossy(ds, ts));
+    }
+
+    static boolean isLossy(Attributes ds, String ts) {
+        return (ts != null && LOSSY_TRANSFER_SYNTAXES.contains(ts))
+                || "01".equals(ds.getString(Tag.LossyImageCompression));
+    }
+
+    private static String transferSyntaxOf(Path path) {
+        try (DicomInputStream in = new DicomInputStream(path.toFile())) {
+            in.readFileMetaInformation(); // 読む前の getTransferSyntax() は推定値（Explicit VR LE）
+            return in.getTransferSyntax();
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    private static void requireGrayscale(Attributes ds, String sop) {
+        int spp = ds.getInt(Tag.SamplesPerPixel, 1);
+        if (spp != 1) {
+            throw new IllegalArgumentException("カラー画像（SamplesPerPixel=" + spp
+                    + "）はテクスチャ解析の対象外です。sop=" + sop);
+        }
+    }
+
+    /** dcm4che データセットと（伸長済みの）画素 → モダリティ値(Rescale 適用)の FloatProcessor。 */
+    static Loaded processorFrom(Attributes ds, String sop, byte[] px, boolean lossy) {
         int rows = ds.getInt(Tag.Rows, 0);
         int cols = ds.getInt(Tag.Columns, 0);
         if (rows <= 0 || cols <= 0) {
             log.warn("[texture] no Rows/Columns for {}", sop);
             return null;
         }
-        int spp = ds.getInt(Tag.SamplesPerPixel, 1);
-        if (spp != 1) {
-            log.warn("[texture] SamplesPerPixel={} (color) not supported: {}", spp, sop);
-            return null;
-        }
+        requireGrayscale(ds, sop);
         if (ParametricMapFrameExpander.hasFloatPixels(ds)) {
             // Parametric Map から切り出した float のフレーム（値は実際の量）。NaN は呼び出し側で断る
             float[] v = ParametricMapFrameExpander.frameValues(ds, 0);
-            return v == null ? null : new Loaded(new FloatProcessor(cols, rows, v, null), null);
+            return v == null ? null : new Loaded(new FloatProcessor(cols, rows, v, null), null, lossy);
         }
         int ba = ds.getInt(Tag.BitsAllocated, 16);
         int bs = ds.getInt(Tag.BitsStored, ba);
         int pr = ds.getInt(Tag.PixelRepresentation, 0);
         double slope = ds.getDouble(Tag.RescaleSlope, 1.0);
         double intercept = ds.getDouble(Tag.RescaleIntercept, 0.0);
-        byte[] px = ds.getBytes(Tag.PixelData);
         if (px == null) {
-            // 圧縮（カプセル化）画素はネイティブデコード不可。
-            log.warn("[texture] PixelData missing/encapsulated (compressed transfer syntax?) for {}", sop);
+            log.warn("[texture] PixelData missing for {}", sop);
             return null;
         }
         int n = rows * cols;
@@ -722,7 +794,7 @@ public class RadiomicsMapEngine {
         }
         // 値は既にモダリティ値（HU/SUV 等）。Calibration は identity 扱い（radiomicsj は画素値で離散化）。
         FloatProcessor fp = new FloatProcessor(cols, rows, f, null);
-        return new Loaded(fp, null);
+        return new Loaded(fp, null, lossy);
     }
 
     private static long countNaN(ImageProcessor ip) {

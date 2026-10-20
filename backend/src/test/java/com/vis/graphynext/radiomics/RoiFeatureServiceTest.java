@@ -77,7 +77,7 @@ class RoiFeatureServiceTest {
         for (int z = 0; z < D; z++) sops[z] = "1.2.3." + z;
         // 実際の読み込みと同じく、マスクには校正を付けない
         return new RadiomicsMapEngine.LoadedVolume(img, mask, W, H, D, 1, true, img.getCalibration(),
-                null, 0.8, 0.8, new HashMap<>(), sops, null, null);
+                null, 0.8, 0.8, new HashMap<>(), sops, null, null, false);
     }
 
     /** 読み込みの代わりに、決めたボリュームを返すエンジン。 */
@@ -85,7 +85,7 @@ class RoiFeatureServiceTest {
         volatile LoadedVolume vol;
 
         FixedEngine(LoadedVolume vol) {
-            super(null, new MapCheckpointStore(new CacheStore(Path.of("unused"), 0), null));
+            super(null, new MapCheckpointStore(new CacheStore(Path.of("unused"), 0), null), null);
             this.vol = vol;
         }
 
@@ -104,15 +104,18 @@ class RoiFeatureServiceTest {
     }
 
     private static final ObjectMapper JSON = new ObjectMapper().findAndRegisterModules();
+    private static final String NEXT_VERSION = "9.9.9-test";
 
     private final AtomicInteger extractions = new AtomicInteger();
+    /** 環境設定の「小さい ROI の警告」の値（null＝未設定）。 */
+    private final AtomicReference<String> smallRoi = new AtomicReference<>();
 
     private RoiFeatureService service(FixedEngine engine, Path dir, String version) {
         return new RoiFeatureService(engine, new MapCheckpointStore(new CacheStore(dir, 0), version), standalone(),
                 JSON, (rj, img, mask, label) -> {
                     extractions.incrementAndGet();
                     return rj.extractAll(img, mask, label);
-                });
+                }, NEXT_VERSION, smallRoi::get);
     }
 
     private static RoiFeatureRequest req(String series, Map<String, String> settings, boolean recompute) {
@@ -138,7 +141,11 @@ class RoiFeatureServiceTest {
 
     private static long files(Path dir) throws Exception {
         if (!Files.isDirectory(dir)) return 0;
-        try (Stream<Path> s = Files.list(dir)) { return s.filter(p -> p.toString().endsWith(".ckpt")).count(); }
+        // 書き込み中の一時ファイル（.tmp-….ckpt）は数えない。数えると書き終わる前にキャッシュを読みに行く。
+        try (Stream<Path> s = Files.list(dir)) {
+            return s.map(p -> p.getFileName().toString())
+                    .filter(n -> n.endsWith(".ckpt") && !n.startsWith(CacheStore.TMP_PREFIX)).count();
+        }
     }
 
     @Test
@@ -149,7 +156,7 @@ class RoiFeatureServiceTest {
         assertTrue(r.rows().size() >= 150, "既定の族で 150 行以上: " + r.rows().size());
         assertTrue(r.rows().stream().noneMatch(x -> x.column().startsWith("OperationalInfo_")));
         for (RoiFeatureResult.Row x : r.rows()) {
-            assertTrue(x.ibsi() == null || x.ibsi().length() == 4, x.column());
+            assertTrue(x.ibsi() == null || x.ibsi().matches("[0-9A-Z]{4}(_[0-9]+)?"), x.column());
             assertEquals(x.ibsi() == null && !x.family().equals("Diagnostics"),
                     x.notes().contains(RoiFeatureDefinitions.NOTE_NON_IBSI), x.column());
         }
@@ -161,6 +168,11 @@ class RoiFeatureServiceTest {
         assertTrue(row(r, "IntensityHistogram_Entropy").notes().contains("LOG2_DISCRETISED"));
         assertEquals("Q4LE", row(r, "IntensityBasedStatistical_Mean").ibsi());
         assertTrue(row(r, "Fractal_Capacity").notes().contains("NON_IBSI"));
+        // パラメータ付きの IBSI 特徴（IVH の割合 10%/90%）は枝番付きで IBSI。独自量は IBSI 外のまま。
+        assertEquals("BC2M_1", row(r, "IntensityVolumeHistogram_VolumeAtIntensityFraction10").ibsi());
+        assertEquals("GBPN_2", row(r, "IntensityVolumeHistogram_IntensityAtVolumeFraction90").ibsi());
+        assertTrue(row(r, "IntensityVolumeHistogram_VolumeAtIntensityFraction10").notes().isEmpty());
+        assertNull(row(r, "IntensityBasedStatistical_TotalEnergy").ibsi());
         assertTrue(r.rows().stream().noneMatch(x -> x.family().equals("GLAM")), "GLAM は既定でオフ");
         assertTrue(r.discretisation().fixedBinNumber());
         assertEquals(32, r.discretisation().nBins());
@@ -275,8 +287,11 @@ class RoiFeatureServiceTest {
         try (Stream<Path> s = Files.list(dir)) {
             f = s.filter(p -> p.toString().endsWith(".ckpt")).findFirst().orElseThrow();
         }
+        // JSON として読めなくする（本体の先頭の { を壊す）。文字列の中の 1 バイトでは JSON として読めてしまう。
         byte[] raw = Files.readAllBytes(f);
-        raw[raw.length / 2] = '#';
+        int body = new String(raw, java.nio.charset.StandardCharsets.ISO_8859_1).indexOf("{\"");
+        assertTrue(body >= 0);
+        raw[body] = '#';
         Files.write(f, raw);
 
         RoiFeatureResult second = svc.compute(req("1.2.9", Map.of(), false), p -> { });
@@ -326,7 +341,8 @@ class RoiFeatureServiceTest {
         assertEquals(0, extractions.get());
 
         RoiFeatureService web = new RoiFeatureService(new FixedEngine(volume(phantom(), mask(0))),
-                new MapCheckpointStore(new CacheStore(dir, 0), "t"), new RadiomicsMode(new MockEnvironment()), JSON);
+                new MapCheckpointStore(new CacheStore(dir, 0), "t"), new RadiomicsMode(new MockEnvironment()), JSON,
+                (rj, img, mask, label) -> rj.extractAll(img, mask, label), NEXT_VERSION, smallRoi::get);
         assertThrows(IllegalStateException.class, () -> web.check(req("1.2.9", Map.of(), false)));
     }
 
@@ -341,7 +357,7 @@ class RoiFeatureServiceTest {
                     entered.countDown();
                     assertTrue(release.await(30, TimeUnit.SECONDS));
                     return rj.extractAll(img, mask, label);
-                });
+                }, NEXT_VERSION, smallRoi::get);
         RoiFeatureJobService jobs = new RoiFeatureJobService(blocking);
         RoiFeatureJobService.Status s = jobs.submit(req("1.2.9", Map.of(), false));
         assertTrue(entered.await(30, TimeUnit.SECONDS));
@@ -366,7 +382,7 @@ class RoiFeatureServiceTest {
     void mapWaitsWhileTheLockIsHeld(@TempDir Path dir) throws Exception {
         ImagePlus img = phantom();
         RadiomicsMapEngine.LoadedVolume vol = volume(img, mask(0));
-        RadiomicsMapEngine engine = new RadiomicsMapEngine(null, new MapCheckpointStore(new CacheStore(dir, 0), null));
+        RadiomicsMapEngine engine = new RadiomicsMapEngine(null, new MapCheckpointStore(new CacheStore(dir, 0), null), null);
         Map<String, String> s = settings("MASK_LABEL_INT", "1");
         TextureSeriesRequest map = new TextureSeriesRequest("1.2", "1.2.9", "1.2.8", 0, "GLCM_JointEntropy", 5, 1,
                 false, 0, 0, s, null, null, null);
@@ -408,5 +424,151 @@ class RoiFeatureServiceTest {
         for (int z = 0; z < alone.length; z++) {
             assertArrayEquals(alone[z], during.get()[z], "slice " + z);
         }
+    }
+
+    @Test
+    void settingsRecordIsWhatRadiomicsJActuallyUses(@TempDir Path dir) throws Exception {
+        FixedEngine engine = new FixedEngine(volume(phantom(), mask(0)));
+        RoiFeatureService svc = service(engine, dir, "t");
+
+        // RadiomicsJ が黙って丸める値は、丸めた後の値で記録する
+        RoiFeatureResult clamped = svc.compute(req("1.2.9",
+                settings("INT_binCount", "0", "DOUBLE_Mask_PartialVolumeThareshold", "2"), false), p -> { });
+        Properties cp = new Properties();
+        cp.load(new java.io.StringReader(clamped.settingsProperties()));
+        assertEquals("1", cp.getProperty("INT_binCount"));
+        assertEquals("0.5", cp.getProperty("DOUBLE_Mask_PartialVolumeThareshold"));
+
+        // 冪等: 記録したファイルを読ませて取り直すと同じ本文
+        RoiFeatureResult a = svc.compute(req("1.2.9", settings("INT_binCount", "32"), false), p -> { });
+        Properties ap = new Properties();
+        ap.load(new java.io.StringReader(a.settingsProperties()));
+        String again = RadiomicsLock.call(() -> {
+            try {
+                RadiomicsJ rj = new RadiomicsJ();
+                rj.loadSettings(ap);
+                return RadiomicsJSettingsSnapshot.of(rj);
+            } finally {
+                RadiomicsJ.resetSettings();
+            }
+        });
+        assertEquals(a.settingsProperties(), again);
+        assertTrue(a.settingsProperties().contains("DOUBLEARRAY_resamplingFactorXYZ=\n"), "リサンプリングなしは空");
+        assertTrue(a.settingsProperties().contains("BOOL_enableGLCM=1\n"));
+        assertTrue(a.settingsProperties().contains("BOOL_enableGLAM=0\n"));
+
+        // リフレクションで読む値が設定に追従する（族の有効化とリサンプリング）
+        RoiFeatureResult b = svc.compute(req("1.2.9", settings("INT_binCount", "32", "BOOL_enableGLCM", "0",
+                "DOUBLEARRAY_resamplingFactorXYZ", "1,1,1"), false), p -> { });
+        assertTrue(b.settingsProperties().contains("BOOL_enableGLCM=0\n"));
+        assertTrue(b.settingsProperties().contains("DOUBLEARRAY_resamplingFactorXYZ=1.0,1.0,1.0\n"));
+        assertNotEquals(a.provenance().settingsSha256(), b.provenance().settingsSha256());
+
+        // 同じ設定は同じハッシュ（渡し方が違っても、RadiomicsJ が使う値が同じなら同じ）
+        RoiFeatureResult a2 = svc.compute(req("1.2.10", settings("INT_binCount", "32", "BOOL_enableGLCM", "true"),
+                false), p -> { });
+        assertEquals(a.provenance().settingsSha256(), a2.provenance().settingsSha256());
+
+        assertEquals(NEXT_VERSION, a.provenance().graphyNextVersion());
+        assertEquals(RadiomicsJ.version, a.provenance().radiomicsjVersion());
+
+        // キャッシュから返しても記録は最初の計算のもの
+        RoiFeatureResult cached = svc.compute(req("1.2.9", settings("INT_binCount", "32"), false), p -> { });
+        assertTrue(cached.fromCache());
+        assertEquals(a.provenance(), cached.provenance());
+        assertEquals(a.settingsProperties(), cached.settingsProperties());
+    }
+
+    /** 14×14×12 の画像に 10×10×10 の ROI（0.5×0.5×2.0 mm）。ROI の一番下の層だけ値が高い（範囲フィルタで外す）。 */
+    private static RadiomicsMapEngine.LoadedVolume box() {
+        int w = 14, h = 14, d = 12;
+        ImageStack img = new ImageStack(w, h);
+        ImageStack msk = new ImageStack(w, h);
+        for (int z = 0; z < d; z++) {
+            FloatProcessor ip = new FloatProcessor(w, h);
+            ByteProcessor mp = new ByteProcessor(w, h);
+            for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
+                boolean in = x >= 2 && x < 12 && y >= 2 && y < 12 && z >= 1 && z < 11;
+                ip.setf(x, y, (z == 1 ? 500 : 100) + (x * 7 + y * 3 + z * 5) % 20);
+                mp.set(x, y, in ? 1 : 0);
+            }
+            img.addSlice(ip);
+            msk.addSlice(mp);
+        }
+        ImagePlus image = new ImagePlus("box", img);
+        Calibration c = image.getCalibration();
+        c.pixelWidth = 0.5; c.pixelHeight = 0.5; c.pixelDepth = 2.0;
+        String[] sops = new String[d];
+        for (int z = 0; z < d; z++) sops[z] = "1.2.4." + z;
+        return new RadiomicsMapEngine.LoadedVolume(image, new ImagePlus("m", msk), w, h, d, 1, true, c,
+                null, 0.5, 0.5, new HashMap<>(), sops, null, null, false);
+    }
+
+    @Test
+    void roiSizeMatchesTheKnownBox(@TempDir Path dir) throws Exception {
+        RoiFeatureService svc = service(new FixedEngine(box()), dir, "t");
+        RoiFeatureResult r = svc.compute(req("1.2.10", Map.of(), false), p -> { });
+        RoiFeatureResult.RoiSize s = r.roiSize();
+        assertEquals(1000L, s.initialVoxels());
+        assertEquals(1000L, s.intensityVoxels());
+        assertEquals(1000L, s.morphVoxels());
+        assertEquals(500.0, s.volumeMm3(), 1e-9);
+        assertEquals(500.0, row(r, "Morphology_VolumeVoxelCounting").value(), 1e-9, "IBSI YEKZ と同じ体積");
+        assertNull(s.smallRoiWarnVoxels(), "未設定");
+        assertNull(s.smallRoi(), "未設定なら判定しない");
+
+        // 形態の族を切っても、大きさは Diagnostics から出る。Diagnostics を切る指定は上書きする。
+        RoiFeatureResult noMorph = svc.compute(req("1.2.10",
+                settings("BOOL_enableMorphological", "0", "BOOL_enableDiagnostics", "0"), false), p -> { });
+        assertTrue(noMorph.rows().stream().noneMatch(x -> x.family().equals("Morphology")));
+        assertEquals(500.0, noMorph.roiSize().volumeMm3(), 1e-9);
+        assertTrue(noMorph.settingsProperties().contains("BOOL_enableDiagnostics=1\n"));
+    }
+
+    @Test
+    void resegmentationShowsBothCountsAndTheRadiomicsJMorphCountQuirk(@TempDir Path dir) throws Exception {
+        RoiFeatureService svc = service(new FixedEngine(box()), dir, "t");
+        RoiFeatureResult r = svc.compute(req("1.2.10",
+                settings("DOUBLE_rangeMin", "0", "DOUBLE_rangeMax", "300"), false), p -> { });
+        RoiFeatureResult.RoiSize s = r.roiSize();
+        assertEquals(1000L, s.initialVoxels());
+        assertEquals(900L, s.intensityVoxels(), "値の高い 1 層（100 ボクセル）が外れる");
+        assertEquals(1000L, s.morphVoxels(), "形態マスクは再セグメントしない");
+        assertEquals(500.0, s.volumeMm3(), 1e-9);
+        assertEquals(500.0, row(r, "Morphology_VolumeVoxelCounting").value(), 1e-9);
+        // RadiomicsJ 2.4.1 の食い違い: 再セグメント後の「形態マスク」の数が強度マスクの数になっている
+        RoiFeatureResult.Row quirk = row(r, "Diagnostics_DiagnosticsResegmentedROIMorphMaskVoxelCount");
+        assertEquals(900.0, quirk.value());
+        assertEquals(List.of(RoiFeatureDefinitions.NOTE_RJ_MORPH_COUNT_IS_INTENSITY), quirk.notes());
+        assertTrue(row(r, "Diagnostics_DiagnosticsResegmentedROIIntMaskVoxelCount").notes().isEmpty());
+    }
+
+    @Test
+    void smallRoiWarningBoundaryAndCacheUsesTheCurrentSetting(@TempDir Path dir) throws Exception {
+        RoiFeatureService svc = service(new FixedEngine(box()), dir, "t");
+        smallRoi.set("1001");
+        RoiFeatureResult warn = svc.compute(req("1.2.10", Map.of(), false), p -> { });
+        assertEquals(1001, warn.roiSize().smallRoiWarnVoxels());
+        assertEquals(Boolean.TRUE, warn.roiSize().smallRoi(), "1000 < 1001");
+        assertEquals(1, extractions.get());
+
+        smallRoi.set("1000");
+        RoiFeatureResult boundary = svc.compute(req("1.2.10", Map.of(), false), p -> { });
+        assertTrue(boundary.fromCache(), "基準値はキャッシュの鍵に入らない");
+        assertEquals(1, extractions.get());
+        assertEquals(Boolean.FALSE, boundary.roiSize().smallRoi(), "基準値ちょうどは警告しない");
+
+        smallRoi.set(" ");
+        RoiFeatureResult unset = svc.compute(req("1.2.10", Map.of(), false), p -> { });
+        assertNull(unset.roiSize().smallRoi());
+        assertNull(unset.roiSize().smallRoiWarnVoxels());
+
+        for (String bad : List.of("abc", "0", "-3", "1.5")) {
+            smallRoi.set(bad);
+            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                    () -> svc.check(req("1.2.10", Map.of(), false)), bad);
+            assertTrue(e.getMessage().contains("小さい ROI"), e.getMessage());
+        }
+        assertEquals(1, extractions.get());
     }
 }

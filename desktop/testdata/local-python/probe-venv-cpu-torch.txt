@@ -1,0 +1,1 @@
+__graphy_local_probe__{"schema": 1, "executable": "/tmp/venv-cpu/bin/python", "version": "3.13.5", "prefix": "/tmp/venv-cpu", "venv": true, "conda": false, "externallyManaged": false, "jupyterServer": "2.21.1", "ipykernel": "7.4.0", "torchVersion": "2.14.1+cpu", "torch": {"version": "2.14.1+cpu", "cuda": null, "available": false, "archList": [], "mps": false, "devices": []}}

@@ -24,12 +24,14 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 
 /**
  * RadiomicsJ の結果表の列名から、族・特徴名・IBSI コード・定義の注記を引く。
  *
  * <p>列名は {@code <族の接頭辞>_<enum の名前>}（接頭辞は RadiomicsJ {@code compute()} の文字列そのもの）。
- * IBSI コードは各 {@code *FeatureType} の {@code id()}。IBSI の識別子は 4 文字で、それ以外の id
+ * IBSI コードは各 {@code *FeatureType} の {@code id()}。IBSI の識別子は英数字 4 文字で、パラメータ付きの
+ * 特徴は枝番が付く（IVH の {@code BC2M_1}・{@code GBPN_2} など、割合 10%/90%）。それ以外の id
  * （Fractal・Shape2D の連番、GLAM の名前、一次統計の独自量 "1"〜"3"）は IBSI 外として扱う。
  *
  * <p>注記は RadiomicsJ のコードで確かめた事実だけを置く。訳は画面側の辞書で引く。
@@ -43,7 +45,16 @@ final class RoiFeatureDefinitions {
     /** IBSI の定義の外にある特徴。 */
     static final String NOTE_NON_IBSI = "NON_IBSI";
 
+    /**
+     * RadiomicsJ 2.4.1 の {@code DiagnosticsInfo} は、再セグメント後の形態マスクの数に強度マスクの数を入れている。
+     * 形態マスクは再セグメントしないので、範囲フィルタ・外れ値除去を使うと実際の形態マスクの数と食い違う。
+     */
+    static final String NOTE_RJ_MORPH_COUNT_IS_INTENSITY = "RJ_MORPH_COUNT_IS_INTENSITY";
+
     static final String DIAGNOSTICS = "Diagnostics";
+
+    /** IBSI の識別子（4 文字）と、パラメータ付きの特徴の枝番。 */
+    private static final Pattern IBSI_ID = Pattern.compile("[0-9A-Z]{4}(_[0-9]+)?");
 
     /** 接頭辞 → enum の名前から id を引く関数。並びは RadiomicsJ の計算順。 */
     private static final Map<String, Function<String, String>> FAMILIES = new LinkedHashMap<>();
@@ -76,14 +87,16 @@ final class RoiFeatureDefinitions {
         String family = column.substring(0, us);
         String feature = column.substring(us + 1);
         if (DIAGNOSTICS.equals(family)) {
-            return new RoiFeatureResult.Row(column, family, feature, null, value, List.of());
+            List<String> diagNotes = "DiagnosticsResegmentedROIMorphMaskVoxelCount".equals(feature)
+                    ? List.of(NOTE_RJ_MORPH_COUNT_IS_INTENSITY) : List.of();
+            return new RoiFeatureResult.Row(column, family, feature, null, value, diagNotes);
         }
         Function<String, String> idOf = FAMILIES.get(family);
         if (idOf == null) {
             throw new IllegalStateException("RadiomicsJ の族を解釈できません: " + column);
         }
         String id = idOf.apply(feature);
-        String ibsi = id != null && id.length() == 4 ? id : null;
+        String ibsi = id != null && IBSI_ID.matcher(id).matches() ? id : null;
         List<String> notes = new ArrayList<>();
         if (ibsi == null) {
             notes.add(NOTE_NON_IBSI);

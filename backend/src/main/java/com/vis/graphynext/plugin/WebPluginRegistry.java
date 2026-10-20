@@ -21,7 +21,7 @@ import java.util.Map;
  * UI 完結（フロント面のみ）のプラグインは web でもそのまま動作する。
  */
 @Service
-@Profile("web")
+@Profile({"web", "share"}) // share（検査共有サービス）も共有 JVM。任意 JAR は載せない
 public class WebPluginRegistry extends FileSystemPluginRegistry {
 
     public WebPluginRegistry(ObjectMapper mapper, PluginProperties props) {

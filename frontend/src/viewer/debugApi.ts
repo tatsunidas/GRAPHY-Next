@@ -14,8 +14,10 @@ import {
 } from "../plugins/pluginVesselApi";
 import { calibrationForImageId, loaderSpacingFor, setXaUserCalibration } from "./xaCalibrationProvider";
 import { getViewerContext } from "./viewerContext";
+import { addSphere3D } from "./sphere3dStore";
 import { worldToImageCoords } from "./imageCoords";
 import type { Geometry3DPixelStats } from "./vtkGeometryView";
+import type { VtkRenderStats } from "./vtkVolumeView";
 
 /**
  * automator（自律検証ツール）専用のデバッグAPI。`window.__graphyDebug` として公開し、
@@ -754,6 +756,21 @@ export function publishGeometry3dProbe(fn: (() => Geometry3DPixelStats | null) |
   geometry3dProbe = fn;
 }
 
+/**
+ * 開いている 3D（vtk）の描画の実測（静止 1 フレームの時間・操作中の縮小倍率・縮小描画の状態）。
+ * 3D が開いていない・vtk の内部に届かない場合は null。
+ */
+let render3dProbe: (() => VtkRenderStats | null) | null = null;
+
+export function publishRender3dStats(fn: (() => VtkRenderStats | null) | null): void {
+  if (!import.meta.env.DEV) return;
+  render3dProbe = fn;
+}
+
+function getRender3dStats(): VtkRenderStats | null {
+  return render3dProbe ? render3dProbe() : null;
+}
+
 function getGeometry3dStats(): Geometry3DPixelStats | null {
   return geometry3dProbe ? geometry3dProbe() : null;
 }
@@ -1106,12 +1123,14 @@ function getCanvasPxPerMm(viewportId: string): number | null {
 declare global {
   interface Window {
     __graphyDebug?: {
+      seedSphere3D: typeof seedSphere3D;
       getSpacingProbe: typeof getSpacingProbe;
       probeUserCalibration: typeof probeUserCalibration;
       getRoiStatsPair: typeof getRoiStatsPair;
       getAnnotationCanvasPoints: typeof getAnnotationCanvasPoints;
       getImagePixelRange: typeof getImagePixelRange;
       getPixelStats: typeof getPixelStats;
+      getRender3dStats: typeof getRender3dStats;
       getViewportGeometry: typeof getViewportGeometry;
       getSegCounts: typeof getSegCounts;
       getImageCanvasRect: typeof getImageCanvasRect;
@@ -1255,15 +1274,33 @@ function getXaCalibration(): XaCalibrationProbe[] {
 let installed = false;
 
 /** 冪等: 何度呼んでも安全（SeriesViewer マウントの都度呼ばれる想定）。 */
+/**
+ * 球（Sphere3D）を、いま表示中のスライスを参照スタックとして直接作る（DEV 限定）。
+ * 円 ROI を描く UI が無い（CircleROI ツールは未登録）ため、自動検査が球の行を作る口として使う。
+ */
+function seedSphere3D(center: [number, number, number], radiusMm: number): string | null {
+  const engine = getRenderingEngine(ENGINE_ID);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const vp = engine?.getViewports()[0] as any;
+  const refImageId = vp?.getCurrentImageId?.() as string | undefined;
+  if (!refImageId) return null;
+  return addSphere3D({
+    studyUid: "", seriesUid: "", refImageId, center, radiusMm,
+    c: "all", t: "all", patientKey: "", label: "Sphere", color: "#00e5ff", visible: true,
+  });
+}
+
 export function installDebugApi(): void {
   if (installed || !import.meta.env.DEV) return;
   window.__graphyDebug = {
+    seedSphere3D,
     getSpacingProbe,
     probeUserCalibration,
     getRoiStatsPair,
     getAnnotationCanvasPoints,
     getImagePixelRange,
     getPixelStats,
+    getRender3dStats,
     getViewportGeometry,
     getSegCounts,
     getImageCanvasRect,

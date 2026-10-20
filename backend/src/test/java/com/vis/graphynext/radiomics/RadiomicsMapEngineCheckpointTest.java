@@ -59,7 +59,7 @@ class RadiomicsMapEngineCheckpointTest {
         String[] sops = new String[D];
         for (int z = 0; z < D; z++) sops[z] = "1.2.3." + z;
         return new RadiomicsMapEngine.LoadedVolume(img, mask(), W, H, D, 1, true, img.getCalibration(),
-                null, 1d, 1d, new HashMap<>(), sops, null, null);
+                null, 1d, 1d, new HashMap<>(), sops, null, null, false);
     }
 
     private static TextureSeriesRequest req(String feature, int stride, boolean d2, Integer margin, String desc) {
@@ -70,7 +70,7 @@ class RadiomicsMapEngineCheckpointTest {
     }
 
     private static RadiomicsMapEngine engine(Path dir) {
-        return new RadiomicsMapEngine(null, new MapCheckpointStore(new CacheStore(dir, 0), "2.4.0-test"));
+        return new RadiomicsMapEngine(null, new MapCheckpointStore(new CacheStore(dir, 0), "2.4.0-test"), null);
     }
 
     private static long files(Path dir) throws Exception {
@@ -168,7 +168,7 @@ class RadiomicsMapEngineCheckpointTest {
 
     @Test
     void withoutKnownRadiomicsjVersionNothingIsReused(@TempDir Path dir) throws Exception {
-        RadiomicsMapEngine eng = new RadiomicsMapEngine(null, new MapCheckpointStore(new CacheStore(dir, 0), null));
+        RadiomicsMapEngine eng = new RadiomicsMapEngine(null, new MapCheckpointStore(new CacheStore(dir, 0), null), null);
         TextureSeriesRequest r = req("GLCM_JointEntropy", 1, false, 0, null);
         eng.computeFrom(r, TextureProgress.NONE, volume(phantom(0)));
         assertEquals(0, files(dir), "版が分からなければ保存しない");

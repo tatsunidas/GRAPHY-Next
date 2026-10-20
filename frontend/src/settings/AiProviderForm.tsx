@@ -59,6 +59,27 @@ const DEFAULTS: Record<string, { auth: string; prefix: string; apiVersion: strin
   },
 };
 
+/**
+ * 取得した名前を、用途ごとの候補に分ける。
+ *
+ * <p>🔴 **名前だけで判定する提案であって、制限ではない**（各社が名前の付け方を変えると外れる）。
+ * だから候補を絞るだけで、手入力と保存は止めない。絞って空になるときは全件に戻す。
+ * 一覧の API は能力（画像を編集できるか）を返さない提供元が多く、チャット用を画像用の欄に選んで
+ * 「モデルが存在しない」と 400 になる取り違えが実際に起きた。
+ */
+export function modelCandidates(all: string[], capability: string): string[] {
+  const tokens = (m: string) => m.toLowerCase().split(/[-_./:]/);
+  const isImage = (m: string) => m.toLowerCase().startsWith("dall-e") || tokens(m).includes("image");
+  const NOT_CHAT = new Set(["embedding", "tts", "whisper", "transcribe", "moderation", "realtime", "audio", "sora", "live"]);
+  const pick = (pred: (m: string) => boolean) => {
+    const r = all.filter(pred);
+    return r.length > 0 ? r : all;
+  };
+  if (capability === "image-to-image") return pick(isImage);
+  if (capability === "image-to-text") return pick((m) => !isImage(m) && !tokens(m).some((t) => NOT_CHAT.has(t)));
+  return all;
+}
+
 export function emptyDraft(capabilities: string[]): ProviderDraft {
   const models: Record<string, string> = {};
   const paths: Record<string, string> = {};
@@ -67,6 +88,26 @@ export function emptyDraft(capabilities: string[]): ProviderDraft {
     paths[c] = "";
   }
   return { id: "", label: "", kind: "openai", endpoint: "", pathStyle: "", apiVersion: "", authHeader: "", authPrefix: "", models, paths };
+}
+
+/** 追加時に選べる提供元。`endpoint` が空のものは利用者ごとに違う（Azure）か自由入力（その他）。 */
+export const PRESETS = [
+  { key: "openai", label: "OpenAI", id: "openai", kind: "openai", endpoint: "https://api.openai.com" },
+  { key: "gemini", label: "Google Gemini", id: "gemini", kind: "gemini", endpoint: "https://generativelanguage.googleapis.com" },
+  { key: "azure", label: "Azure OpenAI", id: "azure-openai", kind: "azure-openai", endpoint: "" },
+  { key: "other", label: "", id: "", kind: "openai", endpoint: "" },
+] as const;
+export type PresetKey = (typeof PRESETS)[number]["key"];
+
+/**
+ * プリセットから新規の下書きを作る。id が既存と重なれば `-2`, `-3` … を付ける。
+ * 🔑 **モデル名は入れない**——使うモデルは利用者が決める（仮の値を置かない）。
+ */
+export function presetDraft(key: PresetKey, existingIds: string[], capabilities: string[]): ProviderDraft {
+  const p = PRESETS.find((x) => x.key === key) ?? PRESETS[PRESETS.length - 1];
+  let id: string = p.id;
+  for (let n = 2; id && existingIds.includes(id); n++) id = `${p.id}-${n}`;
+  return { ...emptyDraft(capabilities), id, label: p.label, kind: p.kind, endpoint: p.endpoint };
 }
 
 export function toDraft(p: AiProviderEntry, capabilities: string[]): ProviderDraft {
@@ -117,14 +158,24 @@ interface Props {
   defaults: Record<string, string>;
   busy: boolean;
   onCancel: () => void;
-  onSave: (entry: AiProviderEntry) => void;
+  /** 編集のとき、保存済みの鍵があるか（一覧の取得は保存済みの鍵を使う）。 */
+  hasApiKey?: boolean;
+  /** `apiKey` は追加フォームで入れたときだけ（空なら渡さない）。 */
+  onSave: (entry: AiProviderEntry, apiKey?: string) => void;
 }
 
-export function AiProviderForm({ draft: initial, isNew, capabilities, others, defaults, busy, onCancel, onSave }: Props) {
+export function AiProviderForm({ draft: initial, isNew, capabilities, others, defaults, busy, hasApiKey, onCancel, onSave }: Props) {
   const { t } = useI18n();
   const d = desktop();
   const [draft, setDraft] = useState<ProviderDraft>(initial);
   const [problems, setProblems] = useState<string[]>([]);
+  /** 新規のときの選択（"" ＝ まだ選んでいない）。編集では使わない。 */
+  const [preset, setPreset] = useState<PresetKey | "">("");
+  const [endpointCustom, setEndpointCustom] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  /** 提供元の API から取った、選べるモデル名（空＝まだ取っていない）。 */
+  const [modelOptions, setModelOptions] = useState<string[]>([]);
+  const [listState, setListState] = useState<"idle" | "loading" | { error: string }>("idle");
 
   const entry = useMemo(() => fromDraft(draft), [draft]);
   const hint = DEFAULTS[draft.kind] ?? DEFAULTS.openai;
@@ -152,12 +203,71 @@ export function AiProviderForm({ draft: initial, isNew, capabilities, others, de
   const set = (patch: Partial<ProviderDraft>) => setDraft((s) => ({ ...s, ...patch }));
   const idOk = /^[a-z0-9-]{1,32}$/.test(draft.id.trim());
   const usable = Object.values(draft.models).some((m) => m.trim());
-  const canSave = idOk && usable && draft.endpoint.trim().length > 0 && problems.length === 0;
+  const chosen = !isNew || preset !== "";
+  const fixed = isNew && preset !== "" && preset !== "other" ? PRESETS.find((x) => x.key === preset) : undefined;
+  const canSave = chosen && idOk && usable && draft.endpoint.trim().length > 0 && problems.length === 0;
+
+  // 一覧を取れるか。Azure は一覧の API が無い／公式以外の接続先は鍵を送れない（main が決める）ので手入力。
+  const listable = isNew
+    ? (preset === "openai" || preset === "gemini") && !endpointCustom
+    : hasApiKey === true && draft.kind !== "azure-openai" && draft.pathStyle !== "azure-deployment";
+  /** 直近に一覧を取った鍵（新規のみ）。同じ鍵で何度も取らない。 */
+  const [fetchedKey, setFetchedKey] = useState<string | null>(null);
+  const fetchModels = async () => {
+    if (!d?.aiListModels) return;
+    const key = apiKey.trim();
+    if (isNew) setFetchedKey(key);
+    setListState("loading");
+    try {
+      const r = await d.aiListModels(isNew ? { kind: draft.kind, endpoint: draft.endpoint, apiKey: key } : { providerId: draft.id });
+      if (r.ok) {
+        setModelOptions(r.models);
+        setListState("idle");
+      } else {
+        setModelOptions([]);
+        setListState({ error: t(`settings.ai.test.verdict.${r.verdict}`) });
+      }
+    } catch (e) {
+      setListState({ error: String(e) });
+    }
+  };
+  // 編集: 開いたときに自動で取る（保存済みの鍵がある場合だけ）。
+  useEffect(() => {
+    if (!isNew && listable) void fetchModels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // 新規: 鍵の欄から離れたときに取る。**入力の途中では送らない**（途中までの鍵を提供元へ送らない）。
+  const onKeyBlur = () => {
+    const key = apiKey.trim();
+    if (isNew && listable && key && key !== fetchedKey && listState !== "loading") void fetchModels();
+  };
+
+  const choose = (key: PresetKey | "") => {
+    setPreset(key);
+    setModelOptions([]);
+    setListState("idle");
+    setFetchedKey(null);
+    setEndpointCustom(false);
+    if (key) setDraft(presetDraft(key, others.map((x) => x.id), capabilities));
+  };
 
   return (
     <div style={form} data-testid="ai-provider-form">
+      {isNew ? (
+        <Field label={t("settings.ai.provider.preset")}>
+          <select style={{ ...input, maxWidth: 360 }} value={preset}
+                  onChange={(e) => choose(e.target.value as PresetKey | "")} data-testid="ai-provider-preset">
+            <option value="">{t("settings.ai.provider.preset.choose")}</option>
+            {PRESETS.map((x) => (
+              <option key={x.key} value={x.key}>{x.key === "other" ? t("settings.ai.provider.preset.other") : x.label}</option>
+            ))}
+          </select>
+        </Field>
+      ) : null}
+      {!chosen ? <p style={helpBlock}>{t("settings.ai.provider.preset.help")}</p> : null}
+      {chosen ? (<>
       <Field label={t("settings.ai.provider.id")}>
-        {isNew ? (
+        {isNew && !fixed ? (
           <input
             style={input}
             value={draft.id}
@@ -169,9 +279,11 @@ export function AiProviderForm({ draft: initial, isNew, capabilities, others, de
         ) : (
           <>
             <span style={mono} data-testid="ai-provider-field-id">{draft.id}</span>
+            {fixed ? null : (<>
             {/* 🔴 id を変えられるようにしない。鍵の名前に入っているので、変えると鍵が
                 消えたように見える（削除して作り直す＝鍵も入れ直す、が正しい）。 */}
             <span style={helpInline}>{t("settings.ai.provider.id.immutable")}</span>
+            </>)}
           </>
         )}
       </Field>
@@ -182,25 +294,45 @@ export function AiProviderForm({ draft: initial, isNew, capabilities, others, de
                placeholder={draft.id || "xAI Grok"} data-testid="ai-provider-field-label" />
       </Field>
 
-      <Field label={t("settings.ai.provider.kind")}>
+      {fixed ? null : <Field label={t("settings.ai.provider.kind")}>
         <select style={{ ...input, maxWidth: 200 }} value={draft.kind}
                 onChange={(e) => set({ kind: e.target.value })} data-testid="ai-provider-field-kind">
           <option value="openai">{t("settings.ai.provider.kind.openai")}</option>
           <option value="gemini">{t("settings.ai.provider.kind.gemini")}</option>
           <option value="azure-openai">{t("settings.ai.provider.kind.azure")}</option>
         </select>
-      </Field>
+      </Field>}
 
       <Field label={t("settings.ai.provider.endpoint")}>
-        <input style={input} value={draft.endpoint} onChange={(e) => set({ endpoint: e.target.value })}
-               placeholder="https://api.x.ai" spellCheck={false} data-testid="ai-provider-field-endpoint" />
+        {fixed && fixed.endpoint && !endpointCustom ? (
+          <select style={{ ...input, maxWidth: 360 }} value={fixed.endpoint} data-testid="ai-provider-field-endpoint-select"
+                  onChange={(e) => { if (e.target.value === "__custom__") { setEndpointCustom(true); setModelOptions([]); setListState("idle"); } }}>
+            <option value={fixed.endpoint}>{fixed.endpoint}</option>
+            <option value="__custom__">{t("settings.ai.provider.endpoint.custom")}</option>
+          </select>
+        ) : (
+          <input style={input} value={draft.endpoint} onChange={(e) => set({ endpoint: e.target.value })}
+                 placeholder={preset === "azure" ? "https://<resource>.openai.azure.com" : "https://api.x.ai"}
+                 spellCheck={false} data-testid="ai-provider-field-endpoint" />
+        )}
       </Field>
       <p style={helpBlock}>{t("settings.ai.provider.endpoint.help")}</p>
+
+      {isNew ? (
+        <>
+          <Field label={t("settings.ai.key")}>
+            <input type="password" style={input} value={apiKey} onChange={(e) => setApiKey(e.target.value)} onBlur={onKeyBlur}
+                   spellCheck={false} autoComplete="off" data-testid="ai-provider-field-apikey" />
+          </Field>
+          <p style={helpBlock}>{t("settings.ai.provider.key.help")}</p>
+        </>
+      ) : null}
 
       {capabilities.map((cap) => (
         <Field key={cap} label={t(`settings.ai.cap.${cap}`)}>
           <input
             style={input}
+            list={`ai-model-options-${cap}`}
             value={draft.models[cap] ?? ""}
             onChange={(e) => set({ models: { ...draft.models, [cap]: e.target.value } })}
             placeholder={t("settings.ai.provider.models.unused")}
@@ -209,7 +341,32 @@ export function AiProviderForm({ draft: initial, isNew, capabilities, others, de
           />
         </Field>
       ))}
+      {capabilities.map((cap) => (
+        <datalist key={cap} id={`ai-model-options-${cap}`}>
+          {modelCandidates(modelOptions, cap).map((m) => <option key={m} value={m} />)}
+        </datalist>
+      ))}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 8, margin: "2px 0 4px 148px", flexWrap: "wrap", minHeight: 30 }}>
+        {listState === "loading" ? (
+          <span style={helpInline} data-testid="ai-provider-models-loading">{t("settings.ai.models.fetching")}</span>
+        ) : listState !== "idle" ? (
+          <>
+            <span style={{ ...helpInline, color: "#b00020" }} data-testid="ai-provider-models-error">{listState.error}</span>
+            <button style={smallLink} disabled={busy} onClick={() => void fetchModels()} data-testid="ai-provider-models-retry">
+              {t("settings.ai.models.retry")}
+            </button>
+          </>
+        ) : modelOptions.length > 0 ? (
+          <span style={helpInline} data-testid="ai-provider-models-count">{t("settings.ai.models.count", { n: modelOptions.length })}</span>
+        ) : !listable || isNew ? (
+          <span style={helpInline} data-testid="ai-provider-models-hint">{t(isNew && listable ? "settings.ai.models.hint.key" : isNew ? "settings.ai.models.hint.new" : "settings.ai.models.hint.edit")}</span>
+        ) : null}
+      </div>
+      {modelOptions.length > 0 && Object.values(draft.models).some((m) => m.trim() && !modelOptions.includes(m.trim())) ? (
+        <p style={{ ...helpBlock, color: "#8a4b00" }} data-testid="ai-provider-models-notinlist">{t("settings.ai.models.notInList")}</p>
+      ) : null}
       <p style={helpBlock}>{t("settings.ai.provider.models.help")}</p>
+      <p style={helpBlock}>{t("settings.ai.models.noCapability")}</p>
 
       <details style={{ margin: "6px 0" }}>
         <summary style={{ fontSize: 12, cursor: "pointer" }} data-testid="ai-provider-advanced">
@@ -263,13 +420,20 @@ export function AiProviderForm({ draft: initial, isNew, capabilities, others, de
       ) : null}
 
       <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-        <button style={primary} disabled={busy || !canSave} onClick={() => onSave(entry)} data-testid="ai-provider-form-save">
+        <button style={primary} disabled={busy || !canSave} onClick={() => onSave(entry, apiKey.trim() || undefined)} data-testid="ai-provider-form-save">
           {t("common.save")}
         </button>
         <button style={btn} disabled={busy} onClick={onCancel} data-testid="ai-provider-form-cancel">
           {t("common.cancel")}
         </button>
       </div>
+      </>) : (
+        <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+          <button style={btn} disabled={busy} onClick={onCancel} data-testid="ai-provider-form-cancel">
+            {t("common.cancel")}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -316,6 +480,9 @@ const helpInline: React.CSSProperties = { fontSize: 11, color: "#6b7785" };
 const helpBlock: React.CSSProperties = { fontSize: 11, color: "#6b7785", margin: "2px 0 8px 148px" };
 const err: React.CSSProperties = { fontSize: 11, color: "#b00020", margin: "0 0 4px 148px" };
 const errList: React.CSSProperties = { fontSize: 11, color: "#b00020", margin: "6px 0 0 148px", paddingLeft: 16 };
+const smallLink: React.CSSProperties = {
+  padding: 0, border: "none", background: "none", color: "#0b5cad", fontSize: 11, cursor: "pointer", textDecoration: "underline",
+};
 const btn: React.CSSProperties = {
   padding: "3px 10px", border: "1px solid #cdd5de", borderRadius: 3, background: "#fff", fontSize: 12, cursor: "pointer",
 };

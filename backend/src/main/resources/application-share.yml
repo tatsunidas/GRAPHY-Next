@@ -1,0 +1,19 @@
+# share プロファイル: 検査共有サービス（期限つきの閲覧リンク）。
+# `--spring.profiles.active=share` で起動する。ローカル保管庫（H2 ＋ファイル）に置いた検査を、
+# 共有トークンを持つ受け手だけに、許可リスト方式（ShareAccessFilter）で見せる。
+# admin-key / session-secret は秘密なのでここに書かない。環境変数 GRAPHY_SHARE_ADMIN_KEY・
+# GRAPHY_SHARE_SESSION_SECRET（どちらも 32 文字以上）から束縛する。未設定だと起動時に落ちる。
+graphy:
+  mode-description: "Study sharing service (token-scoped read-only viewing)"
+  share:
+    enabled: true
+    # public-base-url: https://share.example.com   # 発行の応答に入れるリンクの根（環境変数 GRAPHY_SHARE_PUBLIC_BASE_URL でも可）
+  ratelimit:
+    enabled: true
+    requests-per-minute: 300
+
+# 🔴 org.springframework.web を DEBUG にしない。リクエスト行（GET /s/<token>）や応答本体（発行の応答のリンク）が
+# ログに出て、共有リンクの生トークンがログに残る（実測: DEBUG で出る・INFO では出ない）。
+logging:
+  level:
+    org.springframework.web: INFO

@@ -55,11 +55,11 @@ public class ComputeEgressService {
      */
     public record EgressRequest(String id, String pluginId, String pluginName, String endpointId,
                                 String endpointLabel, String endpointUrl, boolean plaintext,
-                                List<DatasetSummary> datasets, String code, String codeSha256,
+                                String endpointKind, List<DatasetSummary> datasets, String code, String codeSha256,
                                 String anonymization, String contentHash, Instant createdAt, Status status) {
         EgressRequest with(Status s) {
             return new EgressRequest(id, pluginId, pluginName, endpointId, endpointLabel, endpointUrl, plaintext,
-                    datasets, code, codeSha256, anonymization, contentHash, createdAt, s);
+                    endpointKind, datasets, code, codeSha256, anonymization, contentHash, createdAt, s);
         }
     }
 
@@ -117,7 +117,7 @@ public class ComputeEgressService {
         String id = "egr_" + UUID.randomUUID();
         String hash = contentHash(pluginId, endpointId, url, ds, codeSha);
         EgressRequest r = new EgressRequest(id, pluginId, pluginName == null ? pluginId : pluginName, endpointId,
-                ep.label(), url, plaintext, List.copyOf(ds), code, codeSha, ANONYMIZATION, hash, Instant.now(),
+                ep.label(), url, plaintext, ep.kind(), List.copyOf(ds), code, codeSha, ANONYMIZATION, hash, Instant.now(),
                 Status.PENDING);
         requests.put(id, r);
         ObjectNode line = base("egress-requested", r);
@@ -248,6 +248,7 @@ public class ComputeEgressService {
                 .put("endpointId", r.endpointId())
                 .put("host", hostOf(r.endpointUrl()))
                 .put("plaintext", r.plaintext())
+                .put("endpointKind", r.endpointKind())
                 .put("codeSha256", r.codeSha256())
                 .put("contentHash", r.contentHash());
         ArrayNode arr = line.putArray("datasets");

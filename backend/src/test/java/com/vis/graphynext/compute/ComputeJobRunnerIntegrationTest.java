@@ -38,6 +38,7 @@ class ComputeJobRunnerIntegrationTest {
     Path dir;
 
     private DatasetFixture fx;
+    private ComputeEndpointRegistry endpoints;
     private ComputeEgressService egress;
     private ComputeJobRunner runner;
     private PluginJobService jobs;
@@ -59,7 +60,7 @@ class ComputeJobRunnerIntegrationTest {
     void setUp() throws Exception {
         fx = new DatasetFixture(dir);
         fx.writeCtSeries();
-        ComputeEndpointRegistry endpoints = new ComputeEndpointRegistry();
+        endpoints = new ComputeEndpointRegistry();
         endpoints.replaceAll(List.of(new ComputeEndpointRegistry.Incoming("local", "Local", jupyter.url, jupyter.token)));
         ComputeDatasetService datasets = fx.service();
         ComputeAuditLog audit = new ComputeAuditLog(dir.resolve("audit.jsonl").toString(), fx.mapper);
@@ -185,5 +186,55 @@ class ComputeJobRunnerIntegrationTest {
         String audit = Files.readString(dir.resolve("audit.jsonl"));
         assertTrue(audit.contains("\"compute-uploaded\"") && audit.contains("\"compute-finished\""), audit);
         assertFalse(audit.contains(DatasetFixture.PHI_NAME));
+    }
+
+    @Test
+    void refusesToSendWhenTheDestinationChangedAfterApproval() throws Exception {
+        String id = approved("print(1)");
+        // 承認のあとに登録簿が入れ替わった（自機では Jupyter の起動し直しでポートが変わる）
+        assertTrue(endpoints.replaceAll(List.of(new ComputeEndpointRegistry.Incoming("local", "Local",
+                jupyter.url + "/moved/", jupyter.token))).isEmpty());
+        PluginJobService.Status st = runner.submit("seg", id, 60);
+        PluginJobService.Status end = waitEnd(st.jobId());
+        assertEquals(PluginJobService.State.FAILED, end.state());
+        assertTrue(String.valueOf(end.error()).contains("destination-changed"), String.valueOf(end.error()));
+        String audit = Files.readString(dir.resolve("audit.jsonl"));
+        assertTrue(audit.contains("\"egress-destination-changed\""), audit);
+        assertFalse(audit.contains("\"compute-uploaded\""), "🔴 何も送っていない");
+        assertRemoteClean();
+    }
+
+    @Test
+    void localEndpointRunsOnlyWhenTheKernelPythonIsTheChosenOne() throws Exception {
+        // カーネルが実際に使う Python を先に測る（利用者の kernelspec 次第で、サーバの Python とは限らない）
+        PluginJobService.Status probe = waitEnd(runner.submit("seg",
+                approved("import sys; print('PY=' + sys.executable)"), 60).jobId());
+        assertEquals(PluginJobService.State.DONE, probe.state(), String.valueOf(probe.error()));
+        @SuppressWarnings("unchecked")
+        String out = String.valueOf(((Map<String, Object>) probe.result()).get("stdout"));
+        String kernelPython = out.lines().filter(l -> l.startsWith("PY=")).findFirst().orElseThrow().substring(3).strip();
+
+        // 正例: 選んだ Python とカーネルの Python が同じ
+        endpoints.replaceAll(List.of(new ComputeEndpointRegistry.Incoming("local", "this-pc", jupyter.url + "/",
+                jupyter.token, "local", kernelPython)));
+        PluginJobService.Status ok = waitEnd(runner.submit("seg", approved("print('hello')"), 60).jobId());
+        assertEquals(PluginJobService.State.DONE, ok.state(), String.valueOf(ok.error()));
+        // 負例: 別の Python を「選んだもの」にすると、コードを走らせずに止める
+        endpoints.replaceAll(List.of(new ComputeEndpointRegistry.Incoming("local", "this-pc", jupyter.url + "/",
+                jupyter.token, "local", dir.resolve("other-python").toString())));
+        PluginJobService.Status ng = waitEnd(runner.submit("seg", approved("print('hello')"), 60).jobId());
+        assertEquals(PluginJobService.State.FAILED, ng.state());
+        assertTrue(String.valueOf(ng.error()).contains("kernel-python-mismatch"), String.valueOf(ng.error()));
+        assertRemoteClean();
+    }
+
+    @Test
+    void samePythonComparesRealPaths() throws Exception {
+        Path real = Files.createFile(dir.resolve("python-real"));
+        Path link = Files.createSymbolicLink(dir.resolve("python-link"), real);
+        assertTrue(ComputeJobRunner.samePython(real.toString(), link.toString()), "正例: 同じ実体");
+        assertFalse(ComputeJobRunner.samePython(real.toString(), dir.resolve("nope").toString()), "負例: 別のパス");
+        assertFalse(ComputeJobRunner.samePython(real.toString(), ""), "負例: 空");
+        assertFalse(ComputeJobRunner.samePython(null, real.toString()));
     }
 }

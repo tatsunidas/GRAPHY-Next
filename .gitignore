@@ -78,3 +78,7 @@ PRICING-PLAN.md
 
 # Google Drive 用の OAuth クライアント（デスクトップ アプリ型）。公開リポジトリには入れない。
 desktop/gdrive-oauth-client.json
+
+# この PC の Python 検出が作る確認用の空フォルダと、開発起動（CWD=desktop）の接続先設定
+desktop/compute-local/
+desktop/compute-endpoints.json
