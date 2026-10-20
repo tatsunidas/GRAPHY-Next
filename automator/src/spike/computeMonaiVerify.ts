@@ -141,6 +141,19 @@ async function main(): Promise<void> {
     endpointsBackup = fs.existsSync(endpointsFile) ? fs.readFileSync(endpointsFile, "utf8") : null;
     if (endpointsBackup !== null) fs.rmSync(endpointsFile);
 
+    // 未ログインなら、既定のブラウザで Google のログインを開いて待つ（ログインは利用者本人が行う。保存先は OS のキーチェーン）
+    type ColabStatus = { signedIn?: boolean; ok?: boolean; error?: string };
+    const colab = (fn: "computeColabStatus" | "computeColabSignIn"): Promise<ColabStatus> =>
+      page.evaluate((f) => (window as unknown as { graphyDesktop: Record<string, () => Promise<ColabStatus>> }).graphyDesktop[f](), fn);
+    const status = await colab("computeColabStatus");
+    console.log(`Colab 状態: ${JSON.stringify(status)}`);
+    if (!status.signedIn) {
+      console.log("Google のログインを開きます。ブラウザで完了してください（最大 5 分）");
+      const r = await colab("computeColabSignIn");
+      if (!r.ok) throw new Error(`Google のログインに失敗: ${JSON.stringify(r)}`);
+      console.log("ログイン完了");
+    }
+
     let shotsTaken = 0; // 01 は最初の症例の実行前の 1 枚だけ
     for (const [id, s] of Object.entries(series)) {
       console.log(`\n[${bundle}] ${id}`);
