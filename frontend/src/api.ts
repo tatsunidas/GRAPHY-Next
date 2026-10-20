@@ -1250,7 +1250,13 @@ export interface AnonRequest {
   burnIn: boolean;
   /** standalone copy の出力先絶対パス。 */
   destination?: string;
+  /** web のジョブ: 出力先（既定 zip。stow は PACS へ新しいスタディとして保存）。 */
+  output?: AnonJobOutput;
+  /** web のジョブ: 焼き込みマスク（ジョブごとに渡す。サーバー側には登録しない）。 */
+  masks?: AnonSeriesMask[];
 }
+
+export type AnonJobOutput = "zip" | "stow";
 
 export interface AnonResult {
   studies: number;
@@ -1352,6 +1358,66 @@ export const anonymizeZip = async (
     burned: Number(res.headers.get("X-Anonymize-Burn") ?? 0),
     unmasked: Number(res.headers.get("X-Anonymize-Unmasked") ?? 0),
   };
+};
+
+/** web の匿名化ジョブ（/api/anonymizer/jobs）の状態。backend の AnonymizeJobService.Status と同じ形。 */
+export interface AnonJobStatus {
+  jobId: string;
+  state: "QUEUED" | "RUNNING" | "DONE" | "FAILED" | "CANCELLED";
+  /** 総数。数え終わるまでは -1。 */
+  total: number;
+  processed: number;
+  instances: number;
+  burnedInstances: number;
+  notBurnedInstances: number;
+  partiallyBurnedInstances: number;
+  usedSeed: number | null;
+  errorCount: number;
+  errors: string[];
+  error: string | null;
+  /** ZIP の受け取り期限（epoch ms）。終了前は 0。 */
+  expiresAt: number;
+  output: AnonJobOutput;
+  /** stow: PACS に保存できた枚数（取り消せない）。 */
+  stored: number;
+}
+
+/**
+ * 🔴 web の書き込み API は `X-Graphy-Request` ヘッダを要求する（`WebWriteGuardFilter`。
+ * 他サイトのページからの送信を弾く）。`httpSend` は付けないので、ジョブの書き込みはここを通す。
+ */
+async function anonJobFetch(path: string, method: "GET" | "POST" | "DELETE", body?: unknown): Promise<Response> {
+  const headers: Record<string, string> = { "X-Graphy-Request": "1" };
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  const res = await fetch(`${apiBase()}/api/anonymizer/jobs${path}`, {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) throw new HttpError(await extractErrorMessage(res), res.status);
+  return res;
+}
+
+/** サーバー設定で「PACS に保存」が許可されているか。 */
+export const fetchAnonJobConfig = async (): Promise<{ importEnabled: boolean }> =>
+  (await anonJobFetch("/config", "GET")).json();
+
+export const submitAnonJob = async (req: AnonRequest): Promise<AnonJobStatus> =>
+  (await anonJobFetch("", "POST", req)).json();
+
+export const getAnonJob = async (jobId: string): Promise<AnonJobStatus> =>
+  (await anonJobFetch(`/${encodeURIComponent(jobId)}`, "GET")).json();
+
+export const cancelAnonJob = async (jobId: string): Promise<void> => {
+  await anonJobFetch(`/${encodeURIComponent(jobId)}`, "DELETE");
+};
+
+/** ZIP を受け取る。⚠ 受け取れるのは 1 回だけ（渡し終えるとジョブごと消える）。 */
+export const downloadAnonJobZip = async (jobId: string): Promise<{ blob: Blob; filename: string }> => {
+  const res = await anonJobFetch(`/${encodeURIComponent(jobId)}/zip`, "GET");
+  const blob = await res.blob();
+  const m = /filename="?([^"]+)"?/.exec(res.headers.get("content-disposition") ?? "");
+  return { blob, filename: m ? m[1] : "anonymized.zip" };
 };
 
 /** standalone: 匿名化してフォルダへ書き出す。 */
