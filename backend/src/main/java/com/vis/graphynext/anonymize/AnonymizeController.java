@@ -85,11 +85,33 @@ public class AnonymizeController {
 
         AnonymizeConfig cfg = toConfig(req);
         AnonymizeService.BurnPreflight burn = requireBurnableIfCleanPixelData(cfg, req.burnIn(), req.studyUids());
+        // 🔴 ストリームに直接書くと、途中で読めなかった画像は errors に入るだけで ZIP から黙って抜ける
+        // （受け取り側は欠けた ZIP を全件と信じる）。先に一時ファイルへ作り、全件成功のときだけ渡す。
+        java.nio.file.Path tmp;
+        try {
+            tmp = java.nio.file.Files.createTempFile("anon-zip-", ".zip");
+        } catch (java.io.IOException e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "一時ファイルを作れません: " + e.getMessage());
+        }
+        tmp.toFile().deleteOnExit();
+        AnonymizeService.Result built;
+        try (java.io.OutputStream fo = java.nio.file.Files.newOutputStream(tmp)) {
+            built = service.anonymizeToZip(req.studyUids(), cfg, req.burnIn(), fo);
+        } catch (Exception e) {
+            deleteQuietly(tmp);
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "匿名化に失敗しました: " + e.getMessage());
+        }
+        if (!built.errors().isEmpty()) {
+            deleteQuietly(tmp);
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "匿名化できなかった画像が " + built.errors().size() + " 枚あるため、ZIP は作りませんでした: "
+                            + String.join(" / ", built.errors().subList(0, Math.min(5, built.errors().size()))));
+        }
         StreamingResponseBody body = out -> {
-            try {
-                service.anonymizeToZip(req.studyUids(), cfg, req.burnIn(), out);
-            } catch (Exception e) {
-                throw new java.io.IOException(e);
+            try (java.io.InputStream in = java.nio.file.Files.newInputStream(tmp)) {
+                in.transferTo(out);
+            } finally {
+                deleteQuietly(tmp);
             }
         };
         return ResponseEntity.ok()
@@ -252,6 +274,14 @@ public class AnonymizeController {
                     "登録されている焼き込みマスクは、今回の対象シリーズのものではありません"
                             + "（対象 " + burn.unmasked() + " 件はいずれもマスク未登録）。"
                             + "このまま出力しても 1 画素も塗られないため中止しました。");
+        }
+    }
+
+    private static void deleteQuietly(java.nio.file.Path p) {
+        try {
+            java.nio.file.Files.deleteIfExists(p);
+        } catch (java.io.IOException ignored) {
+            // deleteOnExit に任せる
         }
     }
 
