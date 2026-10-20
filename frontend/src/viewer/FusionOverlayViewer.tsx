@@ -13,7 +13,7 @@ import {
 import { overlayPlacement, type ImageRect } from "./overlayPlacement";
 import { imageIdForInstance, type ViewerMode } from "./imageId";
 import { getModalityCalibration } from "./pixelCalibration";
-import { calibratedUnit, readImageInfo } from "./imageInfo";
+import { probeMetaOf } from "./fusionProbeMeta";
 import { registerFusionProbe, setFusionProbeData, unregisterFusionProbe } from "./fusionProbe";
 import { fetchSeriesLayout, type Instance, type SeriesLayoutDto } from "../api";
 import {
@@ -75,16 +75,6 @@ function buildFgSkeleton(dto: SeriesLayoutDto): {
     rows: dto.imageHeight || 512,
     zSpatialByZ,
   };
-}
-
-/**
- * 前景のカーソル値表示に添えるメタ（単位・SUV 乗数）を、実際に読んだ前景スライスから解決する。
- * 校正の解釈は `readImageInfo`／`calibratedUnit` に任せ、ここで slope/intercept を触らない。
- */
-function probeMetaOf(fgImageId: string): { unit: string; scale: number; suv: boolean } {
-  const info = readImageInfo(fgImageId);
-  if (info.suvScale !== undefined) return { unit: info.suvUnit ?? "SUV", scale: info.suvScale, suv: true };
-  return { unit: calibratedUnit(info), scale: 1, suv: false };
 }
 
 /** imageId → loaded FusionSlice のモジュールレベルキャッシュ。 */
