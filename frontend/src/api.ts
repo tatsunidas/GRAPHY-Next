@@ -221,6 +221,11 @@ export interface SeriesLayoutDto {
   pixelFormat?: SeriesPixelFormat | null;
   /** 軸の提示とスタック軸。null なら既定（Z/C/T・stackAxis="z"）＝ CT/MR の従来動作。`fw/angio-design.md` §5.7。 */
   axes?: SeriesAxesDto | null;
+  /**
+   * T 次元の**経過時間**（セル＝SOP ごとの、先頭の取得からの秒）。T が順序でしかないシリーズは null/省略。
+   * `source` は秒が何の時計か（"AcquisitionTime" / "TriggerTime"。TriggerTime は心臓 cine では R 波からの時間）。
+   */
+  timeAxis?: { source: "AcquisitionTime" | "TriggerTime"; secBySop: Record<string, number> } | null;
 }
 
 /** 1 つの軸の提示（UI ラベルと種別）。 */
