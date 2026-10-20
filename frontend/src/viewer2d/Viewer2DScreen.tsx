@@ -74,6 +74,7 @@ import { ScissorsDialog } from "./ScissorsDialog";
 import { ThresholdDialog } from "./ThresholdDialog";
 import { LevelSetsDialog } from "./LevelSetsDialog";
 import { HistogramDialog } from "./HistogramDialog";
+import { ValueInspectorDialog } from "./ValueInspectorDialog";
 import { ResampleDialog } from "./ResampleDialog";
 import { StitchDialog } from "./StitchDialog";
 import { FourierDialog } from "./FourierDialog";
@@ -804,6 +805,7 @@ function TileGrid({
   const tileDimsRef = useRef<Map<string, { c: number; t: number; z: number }>>(new Map());
   // Histogram 解析ダイアログの対象（開いている時のみ non-null）。
   const [histo, setHisto] = useState<{ tile: Tile; z: number; c: number; t: number } | null>(null);
+  const [valueInsp, setValueInsp] = useState<{ tile: Tile } | null>(null);
   const [resample, setResample] = useState<{ tile: Tile; c: number; t: number } | null>(null);
   const [stitchOpen, setStitchOpen] = useState(false);
   const [fourier, setFourier] = useState<{ tileId: string; label: string } | null>(null);
@@ -1677,6 +1679,13 @@ function TileGrid({
         const dims = tileDimsRef.current.get(tile.id);
         setHisto({ tile, z: dims?.z ?? 0, c: dims?.c ?? 0, t: dims?.t ?? 0 });
       },
+      // 対象（選択→無ければ先頭）タイルのシリーズで値の点検（Probe の点の時間曲線）ダイアログを開く。
+      openValueInspector: () => {
+        const tid = resolveTargets()[0];
+        const tile = patient.tiles.find((tl) => tl.id === tid);
+        if (!tile) { comingSoon(t("vi.menu")); return; }
+        setValueInsp({ tile });
+      },
       // 対象（選択→無ければ先頭）タイルのシリーズでリサンプル・切り抜きダイアログを開く。
       openResample: () => {
         const tid = resolveTargets()[0];
@@ -2015,6 +2024,17 @@ function TileGrid({
           seriesLabel={fourier.label}
           loadPixels={() => actions.getPixelData(fourier.tileId)}
           onClose={() => setFourier(null)}
+        />
+      )}
+      {valueInsp && (
+        <ValueInspectorDialog
+          key={valueInsp.tile.id}
+          study={valueInsp.tile.study}
+          series={valueInsp.tile.series}
+          instances={valueInsp.tile.instances}
+          mode={mode}
+          getProbes={() => queryViewerCommand(valueInsp.tile.id, (c) => c.getRois()) ?? []}
+          onClose={() => setValueInsp(null)}
         />
       )}
       {histo && (
