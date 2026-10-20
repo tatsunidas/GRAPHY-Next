@@ -80,6 +80,22 @@ describe("buildDerivedVolumeRequest", () => {
     expect(Math.abs(v - data[5])).toBeGreaterThan(req.rescaleSlope);
   });
 
+  it("SUV 校正あり: 背景は data と同じ単位（SUV）で渡し、割り戻しは 1 回だけ", () => {
+    const src = source(() => 1);
+    const grid = axisGrid(src, [1, 1, 1]);
+    const data = new Float32Array(grid.dims[0] * grid.dims[1] * grid.dims[2]).fill(5);
+    data[0] = NaN;
+    const base = { grid, data, studyUid: "S", seriesUid: "E", seriesDescription: "d", derivationDescription: "x", suvScale: 0.25 };
+    // SUV での背景 -4 は、保存値（Bq/mL）では -4/0.25 = -16。
+    const req = buildDerivedVolumeRequest({ ...base, background: -4 });
+    const v = decode(req.frames[0].pixels)[0] * req.rescaleSlope + req.rescaleIntercept;
+    expect(Math.abs(v - -16)).toBeLessThanOrEqual(req.rescaleSlope / 2 + 1e-6);
+    // 【負例】呼び出し側が先に割ってしまう（-16 を渡す）と、もう一度割られて -64 になる＝契約違反の症状。
+    const bad = buildDerivedVolumeRequest({ ...base, background: -16 });
+    const vb = decode(bad.frames[0].pixels)[0] * bad.rescaleSlope + bad.rescaleIntercept;
+    expect(Math.abs(vb - -64)).toBeLessThanOrEqual(bad.rescaleSlope / 2 + 1e-6);
+  });
+
   it("NaN は背景で埋め、PixelPaddingValue に記録する／背景が無いと拒否", () => {
     const src = source(() => 1);
     const grid = axisGrid(src, [1, 1, 1]);

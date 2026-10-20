@@ -44,6 +44,88 @@ class AnonymizeRealPacsTest {
     Path dir;
 
     @Test
+    void real_pacs_stow_output_rejection_and_compressed_return() throws Exception {
+        String url = System.getenv("GRAPHY_REAL_PACS_URL");
+        Assumptions.assumeTrue(url != null && !url.isBlank(), "GRAPHY_REAL_PACS_URL 未設定のため実 PACS の確認は skip");
+        DicomProperties props = new DicomProperties();
+        props.getDicomweb().setBaseUrl(url);
+        WebDicomDataService web = new WebDicomDataService(props);
+        String root = "1.2.826.0.1.3680043.10.1339." + System.currentTimeMillis();
+
+        // (a) 圧縮（JPEG Baseline）で保存したスタディを WADO-RS が返すときの転送構文
+        Path jf = TestDicomFiles.writeJpegBaseline(dir.resolve("j.dcm"), root + ".1", root + ".2", root + ".3", 1, 120);
+        web.storeInstances(List.of(Files.readAllBytes(jf)));
+        for (int i = 0; i < 20 && web.searchStudyInstances(root + ".1", Map.of()).isEmpty(); i++) {
+            Thread.sleep(500);
+        }
+        byte[] back = web.fetchInstanceUncached(root + ".1", root + ".2", root + ".3");
+        try (DicomInputStream in = new DicomInputStream(new ByteArrayInputStream(back))) {
+            System.out.println("REAL-PACS compressed stored -> returned transfer syntax = "
+                    + in.readFileMetaInformation().getString(Tag.TransferSyntaxUID));
+        }
+
+        // (b) PACS が拒否したときの応答の形（壊れた Part-10 を送る）
+        try {
+            WebDicomDataService.StowResult r = web.storeInstancesChecked(List.of(new byte[] { 1, 2, 3, 4, 5 }));
+            System.out.println("REAL-PACS garbage STOW -> result sent=" + r.sent() + " failures=" + r.failures());
+        } catch (RuntimeException e) {
+            System.out.println("REAL-PACS garbage STOW -> exception " + e.getClass().getSimpleName() + ": " + e.getMessage());
+        }
+
+        // (c) STOW 出力のジョブ: 合成スタディ → 匿名化 → 新しいスタディとして PACS へ
+        String study = root + ".10";
+        String[] sops = { root + ".11", root + ".12", root + ".13" };
+        List<Attributes> stored = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            Path f = TestDicomFiles.writeUncompressed(dir.resolve("s" + i + ".dcm"), study, root + ".2" + i, sops[i], 3,
+                    100 + 10 * i);
+            try (DicomInputStream in = new DicomInputStream(f.toFile())) {
+                in.readFileMetaInformation();
+                stored.add(in.readDataset());
+            }
+        }
+        web.storeDatasets(stored);
+        for (int i = 0; i < 20 && web.searchStudyInstances(study, Map.of()).size() < 3; i++) {
+            Thread.sleep(500);
+        }
+        ObjectProvider<WebDicomDataService> provider = Mockito.mock(ObjectProvider.class);
+        Mockito.when(provider.getIfAvailable()).thenReturn(web);
+        AnonymizeService svc = new AnonymizeService(Mockito.mock(DicomInstanceRepository.class),
+                new AnonymizeMaskStore(), provider, new PixelCodec(props),
+                new StorageLayout(Path.of("target", "no-storage-root")));
+        AnonymizeJobService jobs = new AnonymizeJobService(svc, web, dir.resolve("jobs"), 2, 60_000);
+        try {
+            String newPid = "STOWCHK" + System.currentTimeMillis();
+            AnonymizeConfig cfg = new AnonymizeConfig();
+            cfg.setRandomSeed(7L);
+            cfg.setReplacePatientId(newPid);
+            String id = jobs.submit(List.of(study), cfg, false, Map.of(), true).jobId();
+            AnonymizeJobService.Status st = null;
+            for (int i = 0; i < 200; i++) {
+                st = jobs.status(id);
+                if (st.state() == AnonymizeJobService.State.DONE || st.state() == AnonymizeJobService.State.FAILED) {
+                    break;
+                }
+                Thread.sleep(100);
+            }
+            assertEquals(AnonymizeJobService.State.DONE, st.state(), st.toString());
+            assertEquals(3, st.stored());
+            List<Attributes> found = List.of();
+            for (int i = 0; i < 20 && found.isEmpty(); i++) {
+                found = web.searchStudies(Map.of("PatientID", newPid));
+                Thread.sleep(500);
+            }
+            assertEquals(1, found.size(), "匿名化した新しいスタディが PACS に入った");
+            String newStudy = found.get(0).getString(Tag.StudyInstanceUID);
+            assertNotEquals(study, newStudy);
+            assertEquals(3, web.searchStudyInstances(newStudy, Map.of()).size());
+            assertEquals(3, web.searchStudyInstances(study, Map.of()).size(), "元のスタディはそのまま");
+        } finally {
+            jobs.shutdown();
+        }
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     void real_pacs_roundtrip() throws Exception {
         String url = System.getenv("GRAPHY_REAL_PACS_URL");
