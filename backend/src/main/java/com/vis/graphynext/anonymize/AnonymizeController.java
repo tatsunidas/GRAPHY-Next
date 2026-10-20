@@ -146,6 +146,7 @@ public class AnonymizeController {
     // ── 焼き込みマスク（2D viewer から登録、Anonymizer が参照） ──
     @PostMapping("/masks")
     public void registerMask(@RequestBody AnonymizeMaskStore.SeriesMask mask) {
+        requireNotWeb();
         if (mask == null || mask.seriesUid() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "seriesUid が必要です");
         }
@@ -197,6 +198,9 @@ public class AnonymizeController {
 
     @GetMapping("/masks")
     public List<AnonymizeMaskStore.SeriesMask> masks(@RequestParam String seriesUids) {
+        if (service.isWeb()) {
+            return List.of(); // web のマスクはジョブの要求ごとに持つ（共有の表は使わない）
+        }
         List<String> ids = new ArrayList<>();
         for (String s : seriesUids.split(",")) {
             if (!s.isBlank()) {
@@ -208,6 +212,7 @@ public class AnonymizeController {
 
     @DeleteMapping("/masks")
     public void clearMask(@RequestParam(required = false) String seriesUid) {
+        requireNotWeb();
         if (seriesUid == null || seriesUid.isBlank()) {
             maskStore.clear();
         } else {
@@ -274,6 +279,17 @@ public class AnonymizeController {
                     "登録されている焼き込みマスクは、今回の対象シリーズのものではありません"
                             + "（対象 " + burn.unmasked() + " 件はいずれもマスク未登録）。"
                             + "このまま出力しても 1 画素も塗られないため中止しました。");
+        }
+    }
+
+    /**
+     * web ではマスクの共有表（サーバー全体で1つ）を使わない。複数の利用者がいると登録も全消去も全員に効いて
+     * 混ざるため、マスクは匿名化ジョブの要求に載せて渡す。
+     */
+    private void requireNotWeb() {
+        if (service.isWeb()) {
+            throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
+                    "web ではマスクをサーバーに登録しません。匿名化ジョブの要求に載せて渡してください。");
         }
     }
 

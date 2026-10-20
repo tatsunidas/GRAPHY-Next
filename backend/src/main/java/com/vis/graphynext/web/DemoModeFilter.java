@@ -79,6 +79,8 @@ public class DemoModeFilter extends OncePerRequestFilter {
             new BlockedRoute(null, "/api/series-extract/**"),
             new BlockedRoute(HttpMethod.POST, "/api/anonymizer/zip"),
             new BlockedRoute(HttpMethod.POST, "/api/anonymizer/copy"),
+            new BlockedRoute(null, "/api/anonymizer/jobs"),
+            new BlockedRoute(null, "/api/anonymizer/jobs/**"),
             new BlockedRoute(HttpMethod.POST, "/api/anonymizer/masks"),
             new BlockedRoute(HttpMethod.DELETE, "/api/anonymizer/masks"),
             new BlockedRoute(HttpMethod.POST, "/api/dicom/echo"),

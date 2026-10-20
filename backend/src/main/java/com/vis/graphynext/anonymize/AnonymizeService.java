@@ -303,6 +303,12 @@ public class AnonymizeService {
         } catch (Exception e) {
             return "読み込めません (" + e.getMessage() + ")";
         }
+        return burnBlockerOf(ds, tsuid, mask, sopInstanceUid);
+    }
+
+    /** {@link #burnBlocker} の判定本体（ヘッダを読んだ後。web のジョブも同じ判定を通す）。 */
+    private String burnBlockerOf(Attributes ds, String tsuid, AnonymizeMaskStore.SeriesMask mask,
+            String sopInstanceUid) {
         boolean applies = false;
         for (AnonymizeMaskStore.MaskPolygon p : mask.allPolygons()) {
             if (p.appliesTo(sopInstanceUid)) {
@@ -338,7 +344,7 @@ public class AnonymizeService {
             all.addAll(repo.findByStudyInstanceUid(su));
             studySet.add(su);
         }
-        return runOn(new LocalAnonymizeSource(all, this::fileOf), studySet, cfg, burnIn, sink);
+        return runOn(new LocalAnonymizeSource(all, this::fileOf), studySet, cfg, burnIn, maskStore::get, false, sink);
     }
 
     private Result runOn(List<DicomInstance> all, AnonymizeConfig cfg, boolean burnIn, Sink sink) {
@@ -346,7 +352,7 @@ public class AnonymizeService {
         for (DicomInstance i : all) {
             studySet.add(i.getStudyInstanceUid());
         }
-        return runOn(new LocalAnonymizeSource(all, this::fileOf), studySet, cfg, burnIn, sink);
+        return runOn(new LocalAnonymizeSource(all, this::fileOf), studySet, cfg, burnIn, maskStore::get, false, sink);
     }
 
     /**
@@ -354,16 +360,29 @@ public class AnonymizeService {
      * 匿名化・焼き込みは standalone と同じ {@link #runOn} を通る。
      */
     public Result anonymize(AnonymizeSource source, AnonymizeConfig cfg, boolean burnIn, Sink sink) {
+        return anonymize(source, cfg, burnIn, maskStore::get, false, sink);
+    }
+
+    /**
+     * 焼き込みマスクを呼び出し側が持つ版（web のジョブ。マスクはサーバー全体の表ではなく要求ごとに持つ）。
+     *
+     * @param strictBurn true なら、マスクがあるのに塗れない画像をその画像の失敗に数える
+     *                   （standalone が書き出す前の事前検査で止めているのと同じ判定。
+     *                   塗れていない画像が混ざった出力を渡さないため）
+     */
+    public Result anonymize(AnonymizeSource source, AnonymizeConfig cfg, boolean burnIn,
+            java.util.function.Function<String, AnonymizeMaskStore.SeriesMask> maskOf, boolean strictBurn, Sink sink) {
         java.util.Set<String> studySet = new java.util.LinkedHashSet<>();
         for (AnonymizeSource.Item i : source.list()) {
             studySet.add(i.studyUid());
         }
-        return runOn(source, studySet, cfg, burnIn, sink);
+        return runOn(source, studySet, cfg, burnIn, maskOf, strictBurn, sink);
     }
 
     /** 渡された読み元の全インスタンスを匿名化する（検査単位・シリーズ単位の共通部分）。 */
     private Result runOn(AnonymizeSource source, java.util.Set<String> studySet, AnonymizeConfig cfg,
-            boolean burnIn, Sink sink) {
+            boolean burnIn, java.util.function.Function<String, AnonymizeMaskStore.SeriesMask> maskOf,
+            boolean strictBurn, Sink sink) {
         List<AnonymizeSource.Item> all = source.list();
         List<String> errors = new ArrayList<>();
         java.util.Set<String> seriesSet = new java.util.LinkedHashSet<>();
@@ -378,6 +397,9 @@ public class AnonymizeService {
         int notBurned = 0;
         int partiallyBurned = 0;
         for (AnonymizeSource.Item inst : all) {
+            if (Thread.currentThread().isInterrupted()) {
+                throw new java.util.concurrent.CancellationException("匿名化が中止されました");
+            }
             // 読み元の後始末（web の一時ファイル）は、出力（sink）まで終えてから行う
             try (AnonymizeSource.Opened opened = source.open(inst)) {
                 Attributes ds = opened.dataset();
@@ -399,7 +421,13 @@ public class AnonymizeService {
                 boolean pixelCleaned = false;
                 String outTs = tsuid;
                 if (cleanPixel) {
-                    AnonymizeMaskStore.SeriesMask mask = maskStore.get(inst.seriesUid());
+                    AnonymizeMaskStore.SeriesMask mask = maskOf.apply(inst.seriesUid());
+                    if (strictBurn && mask != null) {
+                        String why = burnBlockerOf(ds, tsuid, mask, inst.sopUid());
+                        if (why != null) {
+                            throw new IOException("焼き込めません: " + why);
+                        }
+                    }
                     BurnOutcome b = mask == null ? BurnOutcome.notAttempted()
                             : burnInto(ds, tsuid, mask, inst.sopUid(), cfg.getBurnDilatePx());
                     if (b.decompressed()) {
