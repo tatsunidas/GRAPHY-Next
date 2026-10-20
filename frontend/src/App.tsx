@@ -34,6 +34,7 @@ import { subscribeDbChanged, type DbChangedDetail } from "./dbEvents";
 import { LogViewerHost } from "./system/LogViewer";
 import { DeveloperContactHost } from "./help/DeveloperContact";
 import { UninstallGuideHost } from "./help/UninstallGuide";
+import { ResearchUseConsentHost } from "./help/ResearchUseConsent";
 import { UpdateNoticeHost, runUpdateCheck } from "./help/UpdateNotice";
 import { restartRequiredReason, subscribeRestartRequired, clearRestartRequired } from "./restartRequiredEvents";
 import { desktop } from "./desktopBridge";
@@ -273,6 +274,8 @@ export function App() {
       <DeveloperContactHost />
       {/* Help メニューの「Uninstall」ガイド（アンインストーラの場所・手順）。 */}
       <UninstallGuideHost />
+      {/* 起動時の利用条件の同意（未同意なら閉じられないダイアログ）と Help の「利用条件」。 */}
+      <ResearchUseConsentHost />
       {/* Help メニューの「更新を確認」／起動時チェックの通知ダイアログ。 */}
       <UpdateNoticeHost />
       {/* 別ウィンドウ（2D Viewer）では DB 変更時に再読込/開き直しをポップアップで促す。 */}
