@@ -31,6 +31,8 @@ const PORTS = { http: 19290, scp: 19291, vite: 19293 };
 const PROVIDER_ID = "spike-openai";
 const MODEL = "spike-model";
 const CAP = "image-to-text";
+/** main プロセスが読み込んでいる aiHttp を引くための基点（同じファイルなら同じモジュールが返る）。 */
+const MAIN_JS = path.join(AUTOMATOR_ROOT, "..", "desktop", "main.js");
 const SPIKE_KEY = `spike-${crypto.randomBytes(12).toString("hex")}`;
 const GEMINI_KEY = process.env.GRAPHY_SPIKE_GEMINI_KEY ?? "";
 
@@ -267,16 +269,13 @@ async function main(): Promise<void> {
 
     // --- 6b. モデル一覧の取得（保存済みの提供元） ---
     console.log("\n[6b] モデル一覧");
+    const seen0 = fake.seen.length;
     await page.getByTestId(`ai-provider-edit-${PROVIDER_ID}`).click();
     check((await page.getByTestId("ai-provider-field-apikey").count()) === 0, "編集フォームには API キー欄が出ない（負例）");
-    const fetchBtn = page.getByTestId("ai-provider-models-fetch");
-    check(await fetchBtn.isEnabled(), "鍵のある保存済みの提供元では一覧を取得できる");
-    const seen0 = fake.seen.length;
-    check((await page.locator("#ai-model-options option").count()) === 0, "取得の前は候補が空（検査の前提）");
-    await fetchBtn.click();
     await page.getByTestId("ai-provider-models-count").waitFor({ state: "visible", timeout: 10_000 });
-    const gets = fake.seen.slice(seen0);
-    check(gets.length === 1 && gets[0].method === "GET" && gets[0].url === "/v1/models", "偽サーバーへ GET /v1/models が 1 回届く", gets.map((g) => `${g.method} ${g.url}`));
+    check((await page.getByTestId("ai-provider-models-fetch").count()) === 0, "🔴 「モデル一覧を取得」ボタンは無い");
+    const gets = fake.seen.slice(seen0).filter((g) => g.method === "GET");
+    check(seen0 > 0 && gets.length === 1 && gets[0].url === "/v1/models", "編集を開くだけで GET /v1/models が 1 回届く（開く前は 0 回）", gets.map((g) => `${g.method} ${g.url}`));
     check(gets[0]?.headers.authorization === `Bearer ${SPIKE_KEY}`, "🔴 保存済みの鍵で認証している");
     const opts = await page.locator("#ai-model-options option").evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value));
     check(JSON.stringify(opts) === JSON.stringify(["fake-model-a", "fake-model-b"]), "候補に一覧が並ぶ（名前順）", opts);
@@ -286,14 +285,20 @@ async function main(): Promise<void> {
     await page.getByTestId(`ai-provider-field-model-${CAP}`).fill("zzz-not-listed");
     check((await page.getByTestId("ai-provider-models-notinlist").count()) === 1, "🔴 一覧にない名前には注意が出る（負例）");
     await page.screenshot({ path: path.join(OUT_DIR, "8-model-list.png") });
+    // 失敗: 401 のとき成功表示にせず、直ったあと「再試行」で復帰する
+    await page.getByTestId("ai-provider-form-cancel").click();
     await sleep(1200); // main が続けて取るのを 1 秒空けさせる
     fake.mode.value = "401";
-    await fetchBtn.click();
+    await page.getByTestId(`ai-provider-edit-${PROVIDER_ID}`).click();
     await page.getByTestId("ai-provider-models-error").waitFor({ state: "visible", timeout: 10_000 });
     check((await page.getByTestId("ai-provider-models-count").count()) === 0, "🔴 401 を成功（件数）と表示しない");
-    check((await page.locator("#ai-model-options option").count()) === 0, "失敗したら古い候補を残さない");
+    check((await page.locator("#ai-model-options option").count()) === 0, "失敗したら候補は空");
     check(!((await page.getByTestId("ai-panel").textContent()) ?? "").includes(SPIKE_KEY), "🔴 失敗表示にも鍵が出ない");
     fake.mode.value = "ok";
+    await sleep(1200);
+    await page.getByTestId("ai-provider-models-retry").click();
+    await page.getByTestId("ai-provider-models-count").waitFor({ state: "visible", timeout: 10_000 });
+    check((await page.getByTestId("ai-provider-models-retry").count()) === 0, "再試行で復帰し、再試行の表示も消える");
     await page.getByTestId("ai-provider-form-cancel").click();
 
     // --- 7. 再起動しても残る（正例の対照）---
@@ -354,6 +359,16 @@ async function main(): Promise<void> {
     const pg = driver.page;
     pg.on("dialog", (dlg) => void dlg.accept()); // 再起動で作り直したページには、window.confirm の受け皿が無い
     check(!(await secretHasValue(driver, OPENAI_SECRET)), "追加の前に openai の鍵は無い（検査の前提）");
+ // 公式ホストへ実際には出さない: main の aiHttp.get を差し替えて、渡された宛先と鍵を記録する
+    await driver.app.evaluate(`(function () {
+      var g = globalThis; var m = process.getBuiltinModule("module").createRequire(${JSON.stringify(MAIN_JS)})("./aiHttp");
+      g.__getCalls = []; g.__origGet = m.get;
+      m.get = async function (target, p, headers) {
+        g.__getCalls.push({ host: target.hostname, path: p, auth: headers.Authorization });
+        return { statusCode: 200, json: { data: [{ id: "stub-model-2" }, { id: "stub-model-1" }] }, text: "" };
+      };
+    })()`);
+    const getCalls = () => driver.app.evaluate(`globalThis.__getCalls`) as Promise<{ host: string; path: string; auth: string }[]>;
     await pg.getByTestId("ai-provider-add").click();
     await pg.getByTestId("ai-provider-preset").selectOption("openai");
     check(((await pg.getByTestId("ai-provider-field-id").textContent()) ?? "").trim() === "openai", "OpenAI を選ぶと識別子が入る");
@@ -371,9 +386,20 @@ async function main(): Promise<void> {
       return { epKey: before(ep, key), keyModel: before(key, model) };
     })()`) as { epKey: boolean; keyModel: boolean };
     check(order.epKey && order.keyModel, "🔴 追加フォームの順序は Endpoint → API キー → モデル", order);
-    check(await pg.getByTestId("ai-provider-models-fetch").isDisabled(), "鍵が空のうちは一覧を取得できない（公式ホストへも送らない）");
+    check((await pg.getByTestId("ai-provider-models-fetch").count()) === 0, "🔴 追加フォームにも一覧取得ボタンは無い");
+    check((await getCalls()).length === 0, "鍵を入れる前は一覧を取りに行かない（検査の前提）");
     await pg.getByTestId("ai-provider-field-apikey").fill(FORM_KEY);
-    check(await pg.getByTestId("ai-provider-models-fetch").isEnabled(), "OpenAI＋鍵ありで一覧を取得できる（ここでは押さない＝実ネットワークに出さない）");
+    await sleep(1500);
+    check((await getCalls()).length === 0, "🔴 鍵の欄を離れるまでは送らない（入力の途中の鍵を送らない）");
+    await pg.getByTestId("ai-provider-field-apikey").blur();
+    await pg.getByTestId("ai-provider-models-count").waitFor({ state: "visible", timeout: 10_000 });
+    const c1 = await getCalls();
+    check(c1.length === 1 && c1[0].host === "api.openai.com" && c1[0].path === "/v1/models" && c1[0].auth === `Bearer ${FORM_KEY}`, "鍵の欄を離れると 1 回だけ、公式ホストへ、入れた鍵で取りに行く", c1.map((c) => `${c.host}${c.path}`));
+    check(JSON.stringify(await pg.locator("#ai-model-options option").evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value))) === JSON.stringify(["stub-model-1", "stub-model-2"]), "候補に一覧が並ぶ");
+    await pg.getByTestId("ai-provider-field-apikey").focus();
+    await pg.getByTestId("ai-provider-field-apikey").blur();
+    await sleep(500);
+    check((await getCalls()).length === 1, "同じ鍵で離れ直しても取り直さない");
     await pg.getByTestId(`ai-provider-field-model-${CAP}`).fill("spike-model-b");
     // 負例: 確認ダイアログを「取り消す」にすると、提供元も鍵も保存されない
     await driver.app.evaluate(({ dialog }) => { dialog.showMessageBoxSync = (() => 1) as typeof dialog.showMessageBoxSync; });
@@ -405,15 +431,21 @@ async function main(): Promise<void> {
     await pg.getByTestId("ai-provider-preset").selectOption("openai");
     check(((await pg.getByTestId("ai-provider-field-id").textContent()) ?? "").trim() === "openai-2", "🔴 識別子が重なれば openai-2 になる（既存の鍵を上書きしない）");
     // 負例: その他 + パス付きの接続先は弾かれる
+    const callsBeforeOther = (await getCalls()).length;
     await pg.getByTestId("ai-provider-preset").selectOption("other");
     await pg.getByTestId("ai-provider-field-id").fill("bad-path");
-    check(await pg.getByTestId("ai-provider-models-fetch").isDisabled(), "🔴 「その他」の新規では一覧を取得できない（任意の宛先へ鍵を送らない）");
+    await pg.getByTestId("ai-provider-field-endpoint").fill("https://example.com");
+    await pg.getByTestId("ai-provider-field-apikey").fill("other-key-must-not-be-sent");
+    await pg.getByTestId("ai-provider-field-apikey").blur();
+    await sleep(800);
+    check((await getCalls()).length === callsBeforeOther, "🔴 「その他」の新規では鍵を入れても一覧を取りに行かない（任意の宛先へ鍵を送らない）");
     await pg.getByTestId("ai-provider-field-endpoint").fill("https://example.com/v1");
     await pg.getByTestId(`ai-provider-field-model-${CAP}`).fill("m");
     await pg.getByTestId("ai-provider-form-error").waitFor({ state: "visible", timeout: 5_000 });
     check(await pg.getByTestId("ai-provider-form-save").isDisabled(), "🔴 パス付きの接続先は保存できない");
     await pg.screenshot({ path: path.join(OUT_DIR, "7-other-badpath.png") });
     await pg.getByTestId("ai-provider-form-cancel").click();
+    await driver.app.evaluate(`(function () { process.getBuiltinModule("module").createRequire(${JSON.stringify(MAIN_JS)})("./aiHttp").get = globalThis.__origGet; })()`);
     // 後始末: 鍵ごと消えること
     await pg.getByTestId("ai-provider-delete-openai").click();
     await pg.getByTestId("ai-provider-openai").waitFor({ state: "detached", timeout: 10_000 });
