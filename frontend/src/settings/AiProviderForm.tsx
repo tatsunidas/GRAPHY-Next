@@ -137,11 +137,13 @@ interface Props {
   defaults: Record<string, string>;
   busy: boolean;
   onCancel: () => void;
+  /** 編集のとき、保存済みの鍵があるか（一覧の取得は保存済みの鍵を使う）。 */
+  hasApiKey?: boolean;
   /** `apiKey` は追加フォームで入れたときだけ（空なら渡さない）。 */
   onSave: (entry: AiProviderEntry, apiKey?: string) => void;
 }
 
-export function AiProviderForm({ draft: initial, isNew, capabilities, others, defaults, busy, onCancel, onSave }: Props) {
+export function AiProviderForm({ draft: initial, isNew, capabilities, others, defaults, busy, hasApiKey, onCancel, onSave }: Props) {
   const { t } = useI18n();
   const d = desktop();
   const [draft, setDraft] = useState<ProviderDraft>(initial);
@@ -150,6 +152,9 @@ export function AiProviderForm({ draft: initial, isNew, capabilities, others, de
   const [preset, setPreset] = useState<PresetKey | "">("");
   const [endpointCustom, setEndpointCustom] = useState(false);
   const [apiKey, setApiKey] = useState("");
+  /** 提供元の API から取った、選べるモデル名（空＝まだ取っていない）。 */
+  const [modelOptions, setModelOptions] = useState<string[]>([]);
+  const [listState, setListState] = useState<"idle" | "loading" | { error: string }>("idle");
 
   const entry = useMemo(() => fromDraft(draft), [draft]);
   const hint = DEFAULTS[draft.kind] ?? DEFAULTS.openai;
@@ -181,8 +186,31 @@ export function AiProviderForm({ draft: initial, isNew, capabilities, others, de
   const fixed = isNew && preset !== "" && preset !== "other" ? PRESETS.find((x) => x.key === preset) : undefined;
   const canSave = chosen && idOk && usable && draft.endpoint.trim().length > 0 && problems.length === 0;
 
+  // 一覧を取れるか。Azure は一覧の API が無い／公式以外の接続先は鍵を送れない（main が決める）ので手入力。
+  const listable = isNew
+    ? (preset === "openai" || preset === "gemini") && !endpointCustom && apiKey.trim().length > 0
+    : hasApiKey === true && draft.kind !== "azure-openai" && draft.pathStyle !== "azure-deployment";
+  const fetchModels = async () => {
+    if (!d?.aiListModels) return;
+    setListState("loading");
+    try {
+      const r = await d.aiListModels(isNew ? { kind: draft.kind, endpoint: draft.endpoint, apiKey: apiKey.trim() } : { providerId: draft.id });
+      if (r.ok) {
+        setModelOptions(r.models);
+        setListState("idle");
+      } else {
+        setModelOptions([]);
+        setListState({ error: t(`settings.ai.test.verdict.${r.verdict}`) });
+      }
+    } catch (e) {
+      setListState({ error: String(e) });
+    }
+  };
+
   const choose = (key: PresetKey | "") => {
     setPreset(key);
+    setModelOptions([]);
+    setListState("idle");
     setEndpointCustom(false);
     if (key) setDraft(presetDraft(key, others.map((x) => x.id), capabilities));
   };
@@ -258,6 +286,7 @@ export function AiProviderForm({ draft: initial, isNew, capabilities, others, de
         <Field key={cap} label={t(`settings.ai.cap.${cap}`)}>
           <input
             style={input}
+            list="ai-model-options"
             value={draft.models[cap] ?? ""}
             onChange={(e) => set({ models: { ...draft.models, [cap]: e.target.value } })}
             placeholder={t("settings.ai.provider.models.unused")}
@@ -266,7 +295,27 @@ export function AiProviderForm({ draft: initial, isNew, capabilities, others, de
           />
         </Field>
       ))}
+      <datalist id="ai-model-options">
+        {modelOptions.map((m) => <option key={m} value={m} />)}
+      </datalist>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "2px 0 4px 148px", flexWrap: "wrap" }}>
+        <button style={btn} disabled={busy || !listable || listState === "loading"} onClick={() => void fetchModels()}
+                data-testid="ai-provider-models-fetch">
+          {listState === "loading" ? t("settings.ai.models.fetching") : t("settings.ai.models.fetch")}
+        </button>
+        {listState !== "idle" && listState !== "loading" ? (
+          <span style={{ ...helpInline, color: "#b00020" }} data-testid="ai-provider-models-error">{listState.error}</span>
+        ) : modelOptions.length > 0 ? (
+          <span style={helpInline} data-testid="ai-provider-models-count">{t("settings.ai.models.count", { n: modelOptions.length })}</span>
+        ) : !listable ? (
+          <span style={helpInline} data-testid="ai-provider-models-hint">{t(isNew ? "settings.ai.models.hint.new" : "settings.ai.models.hint.edit")}</span>
+        ) : null}
+      </div>
+      {modelOptions.length > 0 && Object.values(draft.models).some((m) => m.trim() && !modelOptions.includes(m.trim())) ? (
+        <p style={{ ...helpBlock, color: "#8a4b00" }} data-testid="ai-provider-models-notinlist">{t("settings.ai.models.notInList")}</p>
+      ) : null}
       <p style={helpBlock}>{t("settings.ai.provider.models.help")}</p>
+      <p style={helpBlock}>{t("settings.ai.models.noCapability")}</p>
 
       <details style={{ margin: "6px 0" }}>
         <summary style={{ fontSize: 12, cursor: "pointer" }} data-testid="ai-provider-advanced">

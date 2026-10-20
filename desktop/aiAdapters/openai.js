@@ -233,6 +233,27 @@ function normalize(json) {
   return out;
 }
 
+/**
+ * モデル一覧の要求（`GET /v1/models`）。
+ *
+ * <p>🔑 Azure は**データ面にデプロイ名の一覧が無い**（管理面の別 API）ので出さない＝手入力にする。
+ * 公開 API の一覧は能力の情報を持たない（名前だけ）ので、用途では絞らない。
+ */
+function buildListRequest(req) {
+  if (isAzure(req)) return { error: "list-unsupported" };
+  return {
+    path: "/v1/models",
+    headers: wire.mergeHeaders({ Accept: "application/json", ...authHeaders(req) }, req.provider && req.provider.headers),
+  };
+}
+
+/** `{data:[{id}]}` → 名前の配列。形が違えば空（呼び出し側が「読めない」と言う）。 */
+function parseModelList(json) {
+  const data = asRecord(json) && Array.isArray(json.data) ? json.data : null;
+  if (!data) return null;
+  return { ids: data.map((m) => (asRecord(m) && typeof m.id === "string" ? m.id : null)).filter(Boolean), next: null };
+}
+
 module.exports = {
   KIND,
   KIND_AZURE,
@@ -242,5 +263,7 @@ module.exports = {
   DEFAULT_AZURE_API_VERSION,
   supports,
   buildRequest,
+  buildListRequest,
+  parseModelList,
   normalize,
 };

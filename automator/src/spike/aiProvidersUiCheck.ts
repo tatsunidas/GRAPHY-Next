@@ -59,6 +59,9 @@ function startFake(port: number): { server: http.Server; seen: Seen[]; mode: { v
         res.statusCode = 401;
         return void res.end(JSON.stringify({ error: { message: "Incorrect API key provided" } }));
       }
+      if (req.method === "GET" && req.url === "/v1/models") {
+        return void res.end(JSON.stringify({ data: [{ id: "fake-model-b" }, { id: "fake-model-a" }] }));
+      }
       res.end(JSON.stringify({ choices: [{ message: { content: "OK" } }] }));
     });
   });
@@ -246,6 +249,36 @@ async function main(): Promise<void> {
     check(JSON.parse(fs.readFileSync(providersFile, "utf8")).defaults?.[CAP] === PROVIDER_ID, "ファイルにも既定が書かれる");
     pend("既定を切り替えた先へ、プラグイン経由の実呼び出しが向く", "本スパイクは設定への反映までを確かめた（呼び出し側は Art of Imaging 等のプラグインで別に確かめる）");
 
+    // --- 6b. モデル一覧の取得（保存済みの提供元） ---
+    console.log("\n[6b] モデル一覧");
+    await page.getByTestId(`ai-provider-edit-${PROVIDER_ID}`).click();
+    const fetchBtn = page.getByTestId("ai-provider-models-fetch");
+    check(await fetchBtn.isEnabled(), "鍵のある保存済みの提供元では一覧を取得できる");
+    const seen0 = fake.seen.length;
+    check((await page.locator("#ai-model-options option").count()) === 0, "取得の前は候補が空（検査の前提）");
+    await fetchBtn.click();
+    await page.getByTestId("ai-provider-models-count").waitFor({ state: "visible", timeout: 10_000 });
+    const gets = fake.seen.slice(seen0);
+    check(gets.length === 1 && gets[0].method === "GET" && gets[0].url === "/v1/models", "偽サーバーへ GET /v1/models が 1 回届く", gets.map((g) => `${g.method} ${g.url}`));
+    check(gets[0]?.headers.authorization === `Bearer ${SPIKE_KEY}`, "🔴 保存済みの鍵で認証している");
+    const opts = await page.locator("#ai-model-options option").evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value));
+    check(JSON.stringify(opts) === JSON.stringify(["fake-model-a", "fake-model-b"]), "候補に一覧が並ぶ（名前順）", opts);
+    check(!((await page.getByTestId("ai-panel").textContent()) ?? "").includes(SPIKE_KEY), "🔴 画面に鍵が出ない");
+    await page.getByTestId(`ai-provider-field-model-${CAP}`).fill("fake-model-a");
+    check((await page.getByTestId("ai-provider-models-notinlist").count()) === 0, "一覧にある名前では注意が出ない");
+    await page.getByTestId(`ai-provider-field-model-${CAP}`).fill("zzz-not-listed");
+    check((await page.getByTestId("ai-provider-models-notinlist").count()) === 1, "🔴 一覧にない名前には注意が出る（負例）");
+    await page.screenshot({ path: path.join(OUT_DIR, "8-model-list.png") });
+    await sleep(1200); // main が続けて取るのを 1 秒空けさせる
+    fake.mode.value = "401";
+    await fetchBtn.click();
+    await page.getByTestId("ai-provider-models-error").waitFor({ state: "visible", timeout: 10_000 });
+    check((await page.getByTestId("ai-provider-models-count").count()) === 0, "🔴 401 を成功（件数）と表示しない");
+    check((await page.locator("#ai-model-options option").count()) === 0, "失敗したら古い候補を残さない");
+    check(!((await page.getByTestId("ai-panel").textContent()) ?? "").includes(SPIKE_KEY), "🔴 失敗表示にも鍵が出ない");
+    fake.mode.value = "ok";
+    await page.getByTestId("ai-provider-form-cancel").click();
+
     // --- 7. 再起動しても残る（正例の対照）---
     console.log("\n[7] 再起動（残る側）");
     await driver.stop();
@@ -311,8 +344,10 @@ async function main(): Promise<void> {
     check(await pg.getByTestId("ai-provider-field-kind").count() === 0, "選んだ提供元では種別の欄を出さない");
     check(await pg.getByTestId("ai-provider-form-save").isDisabled(), "🔴 モデル名が空のうちは保存できない（仮のモデル名を入れていない）");
     await pg.screenshot({ path: path.join(OUT_DIR, "6-preset-openai.png") });
-    await pg.getByTestId(`ai-provider-field-model-${CAP}`).fill("spike-model-b");
+    check(await pg.getByTestId("ai-provider-models-fetch").isDisabled(), "鍵が空のうちは一覧を取得できない（公式ホストへも送らない）");
     await pg.getByTestId("ai-provider-field-apikey").fill(FORM_KEY);
+    check(await pg.getByTestId("ai-provider-models-fetch").isEnabled(), "OpenAI＋鍵ありで一覧を取得できる（ここでは押さない＝実ネットワークに出さない）");
+    await pg.getByTestId(`ai-provider-field-model-${CAP}`).fill("spike-model-b");
     // 負例: 確認ダイアログを「取り消す」にすると、提供元も鍵も保存されない
     await driver.app.evaluate(({ dialog }) => { dialog.showMessageBoxSync = (() => 1) as typeof dialog.showMessageBoxSync; });
     await pg.getByTestId("ai-provider-form-save").click();
@@ -345,6 +380,7 @@ async function main(): Promise<void> {
     // 負例: その他 + パス付きの接続先は弾かれる
     await pg.getByTestId("ai-provider-preset").selectOption("other");
     await pg.getByTestId("ai-provider-field-id").fill("bad-path");
+    check(await pg.getByTestId("ai-provider-models-fetch").isDisabled(), "🔴 「その他」の新規では一覧を取得できない（任意の宛先へ鍵を送らない）");
     await pg.getByTestId("ai-provider-field-endpoint").fill("https://example.com/v1");
     await pg.getByTestId(`ai-provider-field-model-${CAP}`).fill("m");
     await pg.getByTestId("ai-provider-form-error").waitFor({ state: "visible", timeout: 5_000 });

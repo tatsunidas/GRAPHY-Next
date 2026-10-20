@@ -163,6 +163,41 @@ function normalize(json) {
   return out;
 }
 
+/**
+ * モデル一覧の要求（`GET /<版>/models`）。ページ送りは `pageToken`。
+ *
+ * <p>`pageSize` は上限に近い値を付ける（既定は 50 件で、モデルが増えると 1 ページで足りない）。
+ */
+function buildListRequest(req) {
+  const apiVersion = req.apiVersion || DEFAULT_API_VERSION;
+  const provider = req.provider || {};
+  const q = `?pageSize=1000${req.pageToken ? `&pageToken=${encodeURIComponent(req.pageToken)}` : ""}`;
+  return {
+    path: `/${apiVersion}/models${q}`,
+    headers: wire.mergeHeaders({ Accept: "application/json", ...wire.authHeaders(provider, req.apiKey, DEFAULT_AUTH) }, provider.headers),
+  };
+}
+
+/**
+ * `{models:[{name:"models/x", supportedGenerationMethods:[...]}], nextPageToken}` → 名前の配列。
+ *
+ * <p>🔑 Gemini の一覧は**能力の情報を持つ**ので、`generateContent` を扱えるものだけに絞る
+ * （埋め込み専用のモデルなどを選ばせない）。名前の部分一致では絞らない。
+ */
+function parseModelList(json) {
+  const models = asRecord(json) && Array.isArray(json.models) ? json.models : null;
+  if (!models) return null;
+  const ids = [];
+  for (const m of models) {
+    const r = asRecord(m);
+    if (!r || typeof r.name !== "string") continue;
+    const methods = Array.isArray(r.supportedGenerationMethods) ? r.supportedGenerationMethods : [];
+    if (!methods.includes("generateContent")) continue;
+    ids.push(r.name.replace(/^models\//, ""));
+  }
+  return { ids, next: typeof json.nextPageToken === "string" && json.nextPageToken ? json.nextPageToken : null };
+}
+
 module.exports = {
   KIND,
   DEFAULT_AUTH,
@@ -178,5 +213,7 @@ module.exports = {
   acceptsLegacyRequest: true,
   supports,
   buildRequest,
+  buildListRequest,
+  parseModelList,
   normalize,
 };

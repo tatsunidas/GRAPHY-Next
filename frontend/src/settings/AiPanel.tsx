@@ -302,6 +302,7 @@ export function AiPanel() {
                 isNew={false}
                 capabilities={capabilities}
                 others={(config?.providers ?? []).filter((x) => x.id !== p.id)}
+                hasApiKey={p.hasApiKey}
                 defaults={config?.defaults ?? {}}
                 busy={busy}
                 onCancel={() => setEditing(null)}
