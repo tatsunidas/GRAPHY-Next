@@ -1868,6 +1868,23 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    */
   getRois: (tileId?: string) => ViewerRoi[];
   /**
+   * **ROI の形を 4D シリーズの全時相に当てた、時相ごとの統計**（灌流の時間-信号曲線の土台）。
+   * **0.5.0 より後の版**。`plugin.json` の `permissions` に `read-pixels` を宣言すること。
+   *
+   * <p>面型の ROI が乗っているスライス・チャンネルの全時相に**同じ画素領域**を当てて、平均・SD・画素数・
+   * 経過秒を返す。統計は本体の ROI 統計と同じエンジンで計算する。
+   *
+   * <p>**欠損は欠損のまま。** 読めない時相・領域に画素が無い時相は `mean` / `sd` が `null`・`n` が 0 で、
+   * `warnings` に `unreadable@t` / `no-pixels@t` が入る。0 や隣の時相で埋めないこと。経過秒は 4D の時刻タグ
+   * （`timeSource`）から決まり、**時刻が無ければ `timeSec` は `null`**——秒を使う指標（傾き・曲線下面積）は
+   * そのとき出さないこと。
+   *
+   * <p>**動き補正はしない**（体動のある検査では領域内の組織が時相ごとに変わる）。ROI が画像の外へ
+   * はみ出す時相は `roi-exceeds-image@t` が付く。`zScope === "all"` の ROI・線や点の ROI・単一時相の
+   * シリーズ・シネは `{ ok: false, error }`。
+   */
+  roiTimeSeries: (tileId: string | undefined, roiUid: string) => Promise<RoiTimeSeriesResult>;
+  /**
    * **シリーズ 1 本をボリュームとして読む**。校正済みの値と**患者 LPS の幾何**が付く。
    * **0.2.0 以降**。
    *
@@ -2425,3 +2442,35 @@ export interface PluginMicroscopyImported {
 export type PluginMicroscopyImportOutcome =
   | { ok: true; studyInstanceUid?: string; imported: PluginMicroscopyImported[] }
   | { ok: false; error?: string; cancelled?: boolean; studyInstanceUid?: string; imported: PluginMicroscopyImported[] };
+
+/** `host.roiTimeSeries()` の 1 時相。 */
+export interface RoiTimePoint {
+  /** 0 始まりの時相番号。 */
+  t: number;
+  /** 先頭の取得からの経過秒。時刻が無いシリーズでは `null`。 */
+  timeSec: number | null;
+  /** 領域内の平均。読めない・画素が無い時相は `null`。 */
+  mean: number | null;
+  sd: number | null;
+  /** 領域内の画素数。欠損の時相は 0。 */
+  n: number;
+}
+
+/** `host.roiTimeSeries()` の結果。失敗は `ok: false`。 */
+export type RoiTimeSeriesResult =
+  | {
+      ok: true;
+      roiUid: string;
+      tileId: string;
+      c: number;
+      /** ROI が乗っているスライス（0 始まり）。 */
+      z: number;
+      /** 値の単位（"HU" / "raw" 等）。 */
+      unit: string;
+      /** 経過秒の出所（"AcquisitionTime" / "TriggerTime"）。無ければ `null`。 */
+      timeSource: string | null;
+      points: RoiTimePoint[];
+      /** `unreadable@t` / `no-pixels@t` / `roi-exceeds-image@t`。 */
+      warnings: string[];
+    }
+  | { ok: false; error: string };

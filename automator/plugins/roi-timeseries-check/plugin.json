@@ -1,0 +1,23 @@
+{
+  "id": "roi-timeseries-check",
+  "name": "ROI Time Series Check",
+  "version": "0.1.0",
+  "engines": {
+    "graphy": ">=0.5.0",
+    "os": [
+      "win32",
+      "darwin",
+      "linux"
+    ]
+  },
+  "description": "Verifies host.roiTimeSeries(): a ROI applied to every time point of a 4D series.",
+  "author": "automator",
+  "license": "MIT",
+  "contributes": [
+    "viewer2d.menu"
+  ],
+  "ui": "ui.js",
+  "permissions": [
+    "read-pixels"
+  ]
+}

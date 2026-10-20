@@ -151,6 +151,7 @@ export function Viewer2DMenuBar({
     // H5: ROI の読み出しと、ROI に紐付くプラグイン属性。**pluginId は host が入れる**ので、
     // プラグインは他プラグイン（や本体）の属性名前空間に触れない。
     getRois: (tileId) => actions.getRois(tileId),
+    roiTimeSeries: (tileId, roiUid) => actions.roiTimeSeries(tileId, roiUid),
     // H10 / H21: ボリュームの読み出しと位置合わせ。**プラグインに計算を持たせない**
     // （位置合わせの答えが 2 つになるのを避ける。fw/registration-design.md）。
     loadVolume: (ref, onProgress) => actions.loadVolume(ref, onProgress),
