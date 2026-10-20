@@ -382,6 +382,29 @@ public class WebDicomDataService {
         if (cached != null) {
             return cached;
         }
+        byte[] dicom = wadoInstance(studyUid, seriesUid, sopUid);
+        if (dicom != null) {
+            cachePut(sopUid, dicom);
+        }
+        return dicom;
+    }
+
+    /**
+     * {@link #retrieveInstance} と同じ WADO-RS 取得だが、<b>キャッシュを読まず・書かない</b>。
+     * 匿名化のように 1 枚ずつ全枚数を取る用途で、ビューアの LRU（512MB）を押し流さず、
+     * 患者データをキャッシュに増やさないための入口。
+     *
+     * @throws IllegalStateException 取得できなかった（空応答・接続先未設定など）。{@code null} は返さない
+     */
+    public byte[] fetchInstanceUncached(String studyUid, String seriesUid, String sopUid) {
+        byte[] dicom = wadoInstance(studyUid, seriesUid, sopUid);
+        if (dicom == null || dicom.length == 0) {
+            throw new IllegalStateException("WADO-RS が空の応答を返しました: " + sopUid);
+        }
+        return dicom;
+    }
+
+    private byte[] wadoInstance(String studyUid, String seriesUid, String sopUid) {
         if (baseUrl.isEmpty()) {
             throw new IllegalStateException(
                     "DICOMweb 接続先が未設定です（graphy.dicom.dicomweb.base-url）。");
@@ -402,9 +425,6 @@ public class WebDicomDataService {
         byte[] dicom = firstMultipartPart(body, boundary);
         log.debug("WADO-RS instance: {} -> {} bytes (part {} bytes)", path, body.length,
                 dicom == null ? 0 : dicom.length);
-        if (dicom != null) {
-            cachePut(sopUid, dicom);
-        }
         return dicom;
     }
 

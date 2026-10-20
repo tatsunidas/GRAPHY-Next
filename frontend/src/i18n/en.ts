@@ -129,6 +129,12 @@ export const en: Record<string, string> = {
   "consent.decline": "Decline",
   "consent.declined": "If you do not agree, please close this window.",
   "consent.saveFailed": "The agreement could not be recorded. Please try again.",
+  // Recipient screen for a shared-study link
+  "share.title": "Shared study",
+  "share.notice": "For research and education only. Do not use for diagnosis or treatment decisions. This link expires.",
+  "share.invalid": "This link is invalid or has expired. Please ask the sender for a new link.",
+  "share.retry": "Retry",
+  "share.backToSeries": "Series",
   "help.uninstall": "Uninstall",
   "help.uninstall.title": "Uninstall GRAPHY-Next",
   "help.uninstall.intro": "How to remove GRAPHY-Next, and where the uninstaller is located on each platform.",

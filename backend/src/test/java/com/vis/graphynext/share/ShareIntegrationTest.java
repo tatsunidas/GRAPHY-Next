@@ -209,6 +209,21 @@ class ShareIntegrationTest {
 
     @Test
     @Order(4)
+    void invalidLinkInABrowserGetsAReadablePageButTheSameStatus() throws Exception {
+        HttpRequest req = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/s/" + "B".repeat(43)))
+                .header("Accept", "text/html,application/xhtml+xml").GET().build();
+        HttpResponse<String> r = http.send(req, HttpResponse.BodyHandlers.ofString());
+        assertThat(r.statusCode()).isEqualTo(404);
+        assertThat(r.headers().firstValue("Content-Type").orElse("")).startsWith("text/html");
+        assertThat(r.body()).contains("無効か、期限が切れています").doesNotContain("B".repeat(43));
+        // API 向け（Accept 指定なし）は従来どおり JSON
+        HttpResponse<byte[]> api = send("GET", "/s/" + "B".repeat(43), null, null, null);
+        assertThat(api.statusCode()).isEqualTo(404);
+        assertThat(new String(api.body(), StandardCharsets.UTF_8)).contains("not found");
+    }
+
+    @Test
+    @Order(5)
     void guessingTokensIsThrottled() throws Exception {
         seed();
         JsonNode issued = issue(STUDY_A);

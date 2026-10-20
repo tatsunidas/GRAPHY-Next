@@ -338,7 +338,7 @@ public class AnonymizeService {
             all.addAll(repo.findByStudyInstanceUid(su));
             studySet.add(su);
         }
-        return runOn(all, studySet, cfg, burnIn, sink);
+        return runOn(new LocalAnonymizeSource(all, this::fileOf), studySet, cfg, burnIn, sink);
     }
 
     private Result runOn(List<DicomInstance> all, AnonymizeConfig cfg, boolean burnIn, Sink sink) {
@@ -346,12 +346,25 @@ public class AnonymizeService {
         for (DicomInstance i : all) {
             studySet.add(i.getStudyInstanceUid());
         }
-        return runOn(all, studySet, cfg, burnIn, sink);
+        return runOn(new LocalAnonymizeSource(all, this::fileOf), studySet, cfg, burnIn, sink);
     }
 
-    /** 渡されたインスタンスを匿名化する（検査単位・シリーズ単位の共通部分）。 */
-    private Result runOn(List<DicomInstance> all, java.util.Set<String> studySet, AnonymizeConfig cfg,
+    /**
+     * 読み元を指定して匿名化する（web: PACS から取る {@link WebAnonymizeSource}）。
+     * 匿名化・焼き込みは standalone と同じ {@link #runOn} を通る。
+     */
+    public Result anonymize(AnonymizeSource source, AnonymizeConfig cfg, boolean burnIn, Sink sink) {
+        java.util.Set<String> studySet = new java.util.LinkedHashSet<>();
+        for (AnonymizeSource.Item i : source.list()) {
+            studySet.add(i.studyUid());
+        }
+        return runOn(source, studySet, cfg, burnIn, sink);
+    }
+
+    /** 渡された読み元の全インスタンスを匿名化する（検査単位・シリーズ単位の共通部分）。 */
+    private Result runOn(AnonymizeSource source, java.util.Set<String> studySet, AnonymizeConfig cfg,
             boolean burnIn, Sink sink) {
+        List<AnonymizeSource.Item> all = source.list();
         List<String> errors = new ArrayList<>();
         java.util.Set<String> seriesSet = new java.util.LinkedHashSet<>();
         // 患者マッピングを事前構築
@@ -364,26 +377,12 @@ public class AnonymizeService {
         int burned = 0;
         int notBurned = 0;
         int partiallyBurned = 0;
-        for (DicomInstance inst : all) {
-            try {
-                Path src = fileOf(inst);
-                if (src == null) {
-                    errors.add("ファイル無し: " + inst.getSopInstanceUid());
-                    continue;
-                }
-                Attributes ds;
-                String tsuid;
-                try (DicomInputStream in = new DicomInputStream(src.toFile())) {
-                    // 🔴 URI（YES ではなく）。PixelData を**元ファイルへの参照**として持たせる。
-                    //    圧縮画素の伸長（PixelCodec）は Decompressor が BulkData を要求するため、
-                    //    YES で読んで byte[] にしてしまうと ClassCastException になる。
-                    //    非圧縮の経路では getBytes() が従来どおり実体を返すので影響しない。
-                    in.setIncludeBulkData(IncludeBulkData.URI);
-                    in.readFileMetaInformation();
-                    ds = in.readDataset(-1, -1);
-                    tsuid = in.getTransferSyntax();
-                }
-                String origPat = inst.getPatientId() == null ? "" : inst.getPatientId();
+        for (AnonymizeSource.Item inst : all) {
+            // 読み元の後始末（web の一時ファイル）は、出力（sink）まで終えてから行う
+            try (AnonymizeSource.Opened opened = source.open(inst)) {
+                Attributes ds = opened.dataset();
+                String tsuid = opened.transferSyntax();
+                String origPat = inst.patientId() == null ? "" : inst.patientId();
                 DicomAnonymizerEngine.PatientMapping pm = pmap.get(origPat);
                 if (pm == null) {
                     // 索引に患者 ID が無い等でマッピングを引けない場合。日付シフトは
@@ -400,9 +399,9 @@ public class AnonymizeService {
                 boolean pixelCleaned = false;
                 String outTs = tsuid;
                 if (cleanPixel) {
-                    AnonymizeMaskStore.SeriesMask mask = maskStore.get(inst.getSeriesInstanceUid());
+                    AnonymizeMaskStore.SeriesMask mask = maskStore.get(inst.seriesUid());
                     BurnOutcome b = mask == null ? BurnOutcome.notAttempted()
-                            : burnInto(ds, tsuid, mask, inst.getSopInstanceUid(), cfg.getBurnDilatePx());
+                            : burnInto(ds, tsuid, mask, inst.sopUid(), cfg.getBurnDilatePx());
                     if (b.decompressed()) {
                         // 伸長したものは非圧縮として書き出す（再圧縮は lossy 再エンコードの劣化を持ち込む）。
                         outTs = UID.ExplicitVRLittleEndian;
@@ -422,8 +421,10 @@ public class AnonymizeService {
                 seriesSet.add(ds.getString(Tag.SeriesInstanceUID));
                 sink.accept(ds, outTs);
                 instances++;
+            } catch (AnonymizeSource.Missing e) {
+                errors.add(e.getMessage());
             } catch (Exception e) {
-                errors.add(inst.getSopInstanceUid() + ": " + e.getMessage());
+                errors.add(inst.sopUid() + ": " + e.getMessage());
             }
         }
         log.info("Anonymize: studies={} instances={} burned={} partial={} notBurned={} errors={}",
@@ -454,10 +455,10 @@ public class AnonymizeService {
 
     /** 患者ごとの新 ID/Name を決める（単一→置換文字列、複数→連番。randomSeed で順序撹拌）。 */
     private static Map<String, DicomAnonymizerEngine.PatientMapping> buildPatientMappings(
-            List<DicomInstance> all, AnonymizeConfig cfg, long dateSeed) {
+            List<AnonymizeSource.Item> all, AnonymizeConfig cfg, long dateSeed) {
         java.util.LinkedHashSet<String> pids = new java.util.LinkedHashSet<>();
-        for (DicomInstance i : all) {
-            pids.add(i.getPatientId() == null ? "" : i.getPatientId());
+        for (AnonymizeSource.Item i : all) {
+            pids.add(i.patientId() == null ? "" : i.patientId());
         }
         List<String> list = new ArrayList<>(pids);
         Collections.sort(list);

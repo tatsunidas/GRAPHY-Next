@@ -38,10 +38,10 @@ export function MobileToolbar({
   activeTool: string;
   onChangeTool: (toolId: string) => void;
   onOpenSeriesDrawer: () => void;
-  /** 3D / MPR を同一タブで開く（M5）。 */
-  onLaunchVolumeViewer: (kind: "mpr" | "viewer3d") => void;
-  /** いま見ている画像をキー画像としてレポートへ添付し、エディタへ移動する（M8・§5.4）。 */
-  onAttachToReport: () => void;
+  /** 3D / MPR を同一タブで開く（M5）。渡さなければボタンを出さない（検査共有の読み取り専用表示）。 */
+  onLaunchVolumeViewer?: (kind: "mpr" | "viewer3d") => void;
+  /** いま見ている画像をキー画像としてレポートへ添付し、エディタへ移動する（M8・§5.4）。渡さなければ出さない。 */
+  onAttachToReport?: () => void;
 }) {
   const { t } = useI18n();
   const presets = useWlPresets();
@@ -106,26 +106,34 @@ export function MobileToolbar({
           {t("mobile.title.series")}
         </button>
 
-        <span style={sep} />
+        {onLaunchVolumeViewer && (
+          <>
+            <span style={sep} />
 
-        {/* ボリューム系は同一タブで開く。メモリガード（V2）が必要量を見て確認を出す。 */}
-        <button style={tab} onClick={() => onLaunchVolumeViewer("mpr")} data-testid="mobile-open-mpr">
-          {t("main.toolbar.mpr")}
-        </button>
-        <button style={tab} onClick={() => onLaunchVolumeViewer("viewer3d")} data-testid="mobile-open-3d">
-          {t("main.toolbar.viewer3d")}
-        </button>
+            {/* ボリューム系は同一タブで開く。メモリガード（V2）が必要量を見て確認を出す。 */}
+            <button style={tab} onClick={() => onLaunchVolumeViewer("mpr")} data-testid="mobile-open-mpr">
+              {t("main.toolbar.mpr")}
+            </button>
+            <button style={tab} onClick={() => onLaunchVolumeViewer("viewer3d")} data-testid="mobile-open-3d">
+              {t("main.toolbar.viewer3d")}
+            </button>
+          </>
+        )}
 
-        <span style={sep} />
+        {onAttachToReport && (
+          <>
+            <span style={sep} />
 
-        {/*
-         * §5.4: 現状デスクトップには「表示中の画像から直接キー画像を追加する」導線が無い
-         * （一覧のインスタンスから選ぶ方式のみ）。単画面ビューアでは「いま見ている画像を添付」が
-         * 最も自然なので、ここで新規に用意する。
-         */}
-        <button style={tab} onClick={onAttachToReport} data-testid="mobile-attach-report">
-          {t("mobile.report.attach")}
-        </button>
+            {/*
+             * §5.4: 現状デスクトップには「表示中の画像から直接キー画像を追加する」導線が無い
+             * （一覧のインスタンスから選ぶ方式のみ）。単画面ビューアでは「いま見ている画像を添付」が
+             * 最も自然なので、ここで新規に用意する。
+             */}
+            <button style={tab} onClick={onAttachToReport} data-testid="mobile-attach-report">
+              {t("mobile.report.attach")}
+            </button>
+          </>
+        )}
       </div>
 
       {showPresets && (
