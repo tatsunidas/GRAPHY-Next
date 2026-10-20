@@ -162,6 +162,22 @@ async function main(): Promise<void> {
     check(await page.getByTestId("ai-privacy-notice").isVisible(), "送信に関する注意書きが畳まれず出ている");
     await page.screenshot({ path: path.join(OUT_DIR, "1-default.png") });
 
+    // --- 1b. ダイアログの外側をクリックしても閉じない ---
+    console.log("\n[1b] 外側のクリック");
+    await page.getByTestId("ai-key-input-gemini-public").fill("outside-click-draft");
+    const outside = { x: 30, y: 300 };
+    check(await page.evaluate(({ x, y }) => !document.querySelector('[data-testid="settings-dialog"]')?.contains(document.elementFromPoint(x, y)), outside),
+      "クリックする位置はダイアログの外（検査の前提）");
+    await page.mouse.click(outside.x, outside.y);
+    await sleep(400);
+    check(await page.getByTestId("settings-dialog").isVisible(), "🔴 外側をクリックしてもダイアログは閉じない");
+    check((await page.getByTestId("ai-key-input-gemini-public").inputValue()) === "outside-click-draft", "入力途中の内容が残る");
+    await page.getByTestId("ai-key-input-gemini-public").fill("");
+    await page.getByTestId("dialog-close-button").click();
+    await page.getByTestId("settings-dialog").waitFor({ state: "detached", timeout: 5_000 });
+    check(true, "✕ では閉じる（閉じる経路は生きている）");
+    await openAiPanel(driver);
+
     // --- 2. 提供元を追加 ---
     console.log("\n[2] 提供元の追加");
     await page.getByTestId("ai-provider-add").click();

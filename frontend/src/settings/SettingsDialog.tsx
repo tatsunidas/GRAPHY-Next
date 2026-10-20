@@ -91,7 +91,7 @@ export function SettingsDialog({
   };
 
   return (
-    <div style={overlay} onClick={onClose}>
+    <div style={overlay}>
       <div data-testid="settings-dialog" style={dialog} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
           <span style={{ fontWeight: 700 }}>{t("settings.title")}</span>
