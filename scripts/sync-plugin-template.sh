@@ -44,6 +44,6 @@ if [ "$apply" -ne 1 ]; then
 fi
 
 src_rev=$(git -C "$repo_root" rev-parse --short HEAD)
-git commit --quiet -m "本体 examples/plugin-template から同期（$src_rev）"
+git commit --quiet -m "本体 examples/plugin-template から同期（${src_rev}）"
 git push --quiet origin main
 echo "反映した: $(git rev-parse --short HEAD)"
