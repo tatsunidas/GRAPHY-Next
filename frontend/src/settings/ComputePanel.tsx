@@ -16,6 +16,7 @@
  */
 import React, { useCallback, useEffect, useState } from "react";
 import { useI18n, type TFn } from "../i18n/i18n";
+import { LocalComputeSection } from "./LocalComputeSection";
 import { defaultEndpoint } from "../plugins/pluginComputeApi";
 import {
   desktop,
@@ -231,6 +232,8 @@ export function ComputePanel() {
           ))}
         </ul>
       ) : null}
+
+      <LocalComputeSection config={config} />
 
       {colab ? (
         <section style={{ marginBottom: 22 }} data-testid="compute-colab">

@@ -12,12 +12,15 @@ const path = require("node:path");
 const { ID_RE, allowsPlainHttp } = require("./aiProviders");
 
 const FILE_NAME = "compute-endpoints.json";
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const MAX_ENDPOINTS = 16;
 const MAX_LABEL = 64;
 const KINDS = new Set(["jupyter", "colab"]);
 /** Colab の RuntimeSpec の値（VARIANT_GPU・T4・SHAPE_STANDARD など）。 */
 const SPEC_VALUE_RE = /^[A-Z0-9_]{1,32}$/;
+
+/** 「この PC」の Python の設定。接続先の配列ではなく最上位の `local` に置く（接続先の選び方・backend への送り先に乗せない）。 */
+const AUTO_LOCAL = Object.freeze({ python: Object.freeze({ mode: "auto" }) });
 
 let filePath = null;
 let config = null;
@@ -111,6 +114,25 @@ function normalize(raw) {
   return { endpoints, problems };
 }
 
+/**
+ * `local` を検査して正規形へ。不正なら auto として扱い、理由を problems に積む（黙って消さない）。
+ * Python のパスは絶対パス・NUL なしだけ。通常ファイルかどうかは選んだ時点で main が確かめる。
+ */
+function normalizeLocal(raw) {
+  if (raw === undefined || raw === null) return { local: { python: { mode: "auto" } }, problems: [] };
+  const py = raw && typeof raw === "object" && !Array.isArray(raw) ? raw.python : undefined;
+  if (py === undefined) return { local: { python: { mode: "auto" } }, problems: [] };
+  if (!py || typeof py !== "object" || Array.isArray(py)) return { local: { python: { mode: "auto" } }, problems: ["local:bad-python"] };
+  if (py.mode === "auto") return { local: { python: { mode: "auto" } }, problems: [] };
+  if (py.mode === "path") {
+    const p = py.path;
+    const ok = typeof p === "string" && p.length > 0 && p.length <= 1024 && !p.includes("\0") && (path.isAbsolute(p) || path.win32.isAbsolute(p));
+    if (!ok) return { local: { python: { mode: "auto" } }, problems: ["local:bad-python-path"] };
+    return { local: { python: { mode: "path", path: p } }, problems: [] };
+  }
+  return { local: { python: { mode: "auto" } }, problems: ["local:bad-python-mode"] };
+}
+
 /** 現在の構成。ファイルが無ければ空（出荷時の接続先は持たない）。 */
 function get() {
   if (config) return config;
@@ -126,7 +148,11 @@ function get() {
     }
   }
   config = normalize(raw);
-  if (loadError) config = { ...config, problems: [loadError, ...config.problems] };
+  // v1（schemaVersion 無し）の `local` は無いので auto。読むだけでは書き換えない
+  const v = raw && typeof raw === "object" ? raw.schemaVersion : undefined;
+  const tooNew = typeof v === "number" && v > SCHEMA_VERSION;
+  const loc = v === undefined || v === 1 ? { local: AUTO_LOCAL, problems: [] } : normalizeLocal(raw.local);
+  config = { ...config, local: loc.local, problems: [...(loadError ? [loadError] : []), ...(tooNew ? [`config:schema-too-new:${v}`] : []), ...config.problems, ...loc.problems] };
   return config;
 }
 
@@ -138,17 +164,46 @@ function save(raw) {
   const next = normalize(raw);
   if (next.problems.length > 0) return { ok: false, problems: next.problems };
   if (!filePath) return { ok: false, problems: ["config:no-destination"] };
+  // 新しい版のファイルを古い形で上書きしない
+  const cur = get();
+  const tooNew = cur.problems.find((p) => p.startsWith("config:schema-too-new"));
+  if (tooNew) return { ok: false, problems: [tooNew] };
+  // 🔴 渡されなかった `local` は今の値を引き継ぐ（接続先を編集しただけで Python の設定が消えない）
+  let local = cur.local;
+  if (raw && raw.local !== undefined) {
+    const l = normalizeLocal(raw.local);
+    if (l.problems.length > 0) return { ok: false, problems: l.problems };
+    local = l.local;
+  }
+  return write(next, local);
+}
+
+function write(next, local) {
   try {
     fs.writeFileSync(
       filePath,
-      JSON.stringify({ schemaVersion: SCHEMA_VERSION, endpoints: next.endpoints.map(toStored) }, null, 2),
+      JSON.stringify({ schemaVersion: SCHEMA_VERSION, endpoints: next.endpoints.map(toStored), local }, null, 2),
       { encoding: "utf8", mode: 0o600 },
     );
   } catch (e) {
     return { ok: false, problems: [`config:write-failed:${e.message}`] };
   }
-  config = next;
+  config = { ...next, local };
   return { ok: true, problems: [] };
+}
+
+/**
+ * Python の設定だけを書く（接続先は今の値を引き継ぐ）。ファイルが読めない・新しい版のときは書かない。
+ * 🔴 送り先の確認は呼び出し側（main）が済ませてから呼ぶ。
+ */
+function setLocalPython(py) {
+  if (!filePath) return { ok: false, problems: ["config:no-destination"] };
+  const cur = get();
+  const blocked = cur.problems.find((p) => p.startsWith("config:"));
+  if (blocked) return { ok: false, problems: [blocked] };
+  const l = normalizeLocal({ python: py });
+  if (l.problems.length > 0) return { ok: false, problems: l.problems };
+  return write({ endpoints: cur.endpoints, problems: cur.problems }, l.local);
 }
 
 function toStored(e) {
@@ -181,6 +236,7 @@ module.exports = {
   init,
   get,
   save,
+  setLocalPython,
   validate,
   byId,
   normalize,

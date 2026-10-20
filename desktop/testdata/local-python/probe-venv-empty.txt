@@ -1,0 +1,1 @@
+__graphy_local_probe__{"schema": 1, "executable": "/tmp/venv-empty/bin/python", "version": "3.13.5", "prefix": "/tmp/venv-empty", "venv": true, "conda": false, "externallyManaged": false, "jupyterServer": null, "ipykernel": null, "torchVersion": null}

@@ -101,6 +101,11 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   gdriveDisable: () => ipcRenderer.invoke("graphy:gdrive-disable"),
   gdriveRestore: (title, mode) => ipcRenderer.invoke("graphy:gdrive-restore", { title, mode }),
   gdriveSetMode: (mode) => ipcRenderer.invoke("graphy:gdrive-set-mode", { mode }),
+  // この PC の Python と GPU（見て出すだけ）。Python のパスを文字列で渡す口は無い——指定は main のファイル選択と確認を通る
+  computeLocalDetect: (opts) => ipcRenderer.invoke("graphy:compute-local-detect", { force: !!(opts && opts.force) }),
+  computeLocalCancel: () => ipcRenderer.invoke("graphy:compute-local-cancel"),
+  computeLocalPickPython: () => ipcRenderer.invoke("graphy:compute-local-pick-python"),
+  computeLocalUseAuto: () => ipcRenderer.invoke("graphy:compute-local-use-auto"),
   // 既定の計算機（未登録で Google にログイン済みなら Colab の T4 を足す。足すのは main）
   computeEnsureDefault: () => ipcRenderer.invoke("graphy:compute-ensure-default"),
   // 名前を付けて保存。上書き確認は OS のダイアログが出す。
