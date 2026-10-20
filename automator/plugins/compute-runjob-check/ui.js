@@ -42,7 +42,7 @@ export async function activate(host) {
     {
       endpointId: input.endpointId,
       inputs: [{ studyUid: input.studyUid, seriesUid: input.seriesUid, format: "npz" }],
-      script: SCRIPT,
+      script: input.script || SCRIPT,
       timeoutSec: 300,
     },
     { onProgress: (p, m) => run.progress.push([p, m]) },
