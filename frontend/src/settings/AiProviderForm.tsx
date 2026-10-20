@@ -59,6 +59,27 @@ const DEFAULTS: Record<string, { auth: string; prefix: string; apiVersion: strin
   },
 };
 
+/**
+ * 取得した名前を、用途ごとの候補に分ける。
+ *
+ * <p>🔴 **名前だけで判定する提案であって、制限ではない**（各社が名前の付け方を変えると外れる）。
+ * だから候補を絞るだけで、手入力と保存は止めない。絞って空になるときは全件に戻す。
+ * 一覧の API は能力（画像を編集できるか）を返さない提供元が多く、チャット用を画像用の欄に選んで
+ * 「モデルが存在しない」と 400 になる取り違えが実際に起きた。
+ */
+export function modelCandidates(all: string[], capability: string): string[] {
+  const tokens = (m: string) => m.toLowerCase().split(/[-_./:]/);
+  const isImage = (m: string) => m.toLowerCase().startsWith("dall-e") || tokens(m).includes("image");
+  const NOT_CHAT = new Set(["embedding", "tts", "whisper", "transcribe", "moderation", "realtime", "audio", "sora", "live"]);
+  const pick = (pred: (m: string) => boolean) => {
+    const r = all.filter(pred);
+    return r.length > 0 ? r : all;
+  };
+  if (capability === "image-to-image") return pick(isImage);
+  if (capability === "image-to-text") return pick((m) => !isImage(m) && !tokens(m).some((t) => NOT_CHAT.has(t)));
+  return all;
+}
+
 export function emptyDraft(capabilities: string[]): ProviderDraft {
   const models: Record<string, string> = {};
   const paths: Record<string, string> = {};
@@ -311,7 +332,7 @@ export function AiProviderForm({ draft: initial, isNew, capabilities, others, de
         <Field key={cap} label={t(`settings.ai.cap.${cap}`)}>
           <input
             style={input}
-            list="ai-model-options"
+            list={`ai-model-options-${cap}`}
             value={draft.models[cap] ?? ""}
             onChange={(e) => set({ models: { ...draft.models, [cap]: e.target.value } })}
             placeholder={t("settings.ai.provider.models.unused")}
@@ -320,9 +341,11 @@ export function AiProviderForm({ draft: initial, isNew, capabilities, others, de
           />
         </Field>
       ))}
-      <datalist id="ai-model-options">
-        {modelOptions.map((m) => <option key={m} value={m} />)}
-      </datalist>
+      {capabilities.map((cap) => (
+        <datalist key={cap} id={`ai-model-options-${cap}`}>
+          {modelCandidates(modelOptions, cap).map((m) => <option key={m} value={m} />)}
+        </datalist>
+      ))}
       <div style={{ display: "flex", alignItems: "flex-start", gap: 8, margin: "2px 0 4px 148px", flexWrap: "wrap", minHeight: 30 }}>
         {listState === "loading" ? (
           <span style={helpInline} data-testid="ai-provider-models-loading">{t("settings.ai.models.fetching")}</span>

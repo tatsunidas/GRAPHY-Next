@@ -3539,7 +3539,7 @@ export const ja: Record<string, string> = {
   "settings.ai.models.retry": "再試行",
   "settings.ai.models.hint.edit": "保存済みの API キーがある OpenAI 系・Gemini では、候補が自動で出ます。Azure はデプロイ名を手入力してください。",
   "settings.ai.models.notInList": "一覧にない名前が入っています。新しいモデルなら問題ありません。つづりを確かめてください。",
-  "settings.ai.models.noCapability": "一覧は名前だけで、画像を扱えるモデルかどうかは分かりません（画像→画像は画像編集用のモデルを選んでください）。",
+  "settings.ai.models.noCapability": "候補は名前から画像用・文章用に分けて出しています。判定は名前だけなので、新しい名前が出ないことがあります。そのときは手入力してください（画像→画像には画像編集用のモデルを選びます）。",
   "settings.ai.test.verdict.manual": "この接続先では一覧を取得できません。モデル名を手入力してください",
 "settings.ai.provider.preset": "提供元",
   "settings.ai.provider.preset.choose": "選んでください",

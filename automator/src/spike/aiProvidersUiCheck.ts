@@ -62,7 +62,7 @@ function startFake(port: number): { server: http.Server; seen: Seen[]; mode: { v
         return void res.end(JSON.stringify({ error: { message: "Incorrect API key provided" } }));
       }
       if (req.method === "GET" && req.url === "/v1/models") {
-        return void res.end(JSON.stringify({ data: [{ id: "fake-model-b" }, { id: "fake-model-a" }] }));
+        return void res.end(JSON.stringify({ data: [{ id: "fake-model-b" }, { id: "fake-image-1" }, { id: "fake-model-a" }, { id: "fake-tts-1" }] }));
       }
       res.end(JSON.stringify({ choices: [{ message: { content: "OK" } }] }));
     });
@@ -277,8 +277,10 @@ async function main(): Promise<void> {
     const gets = fake.seen.slice(seen0).filter((g) => g.method === "GET");
     check(seen0 > 0 && gets.length === 1 && gets[0].url === "/v1/models", "編集を開くだけで GET /v1/models が 1 回届く（開く前は 0 回）", gets.map((g) => `${g.method} ${g.url}`));
     check(gets[0]?.headers.authorization === `Bearer ${SPIKE_KEY}`, "🔴 保存済みの鍵で認証している");
-    const opts = await page.locator("#ai-model-options option").evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value));
-    check(JSON.stringify(opts) === JSON.stringify(["fake-model-a", "fake-model-b"]), "候補に一覧が並ぶ（名前順）", opts);
+    const opts = await page.locator("#ai-model-options-image-to-text option").evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value));
+    check(JSON.stringify(opts) === JSON.stringify(["fake-model-a", "fake-model-b"]), "画像→文章の候補: チャット用だけ（画像用・音声用は入らない）", opts);
+    const imgOpts = await page.locator("#ai-model-options-image-to-image option").evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value));
+    check(JSON.stringify(imgOpts) === JSON.stringify(["fake-image-1"]), "🔴 画像→画像の候補: 画像用だけ（チャット用を選べない）", imgOpts);
     check(!((await page.getByTestId("ai-panel").textContent()) ?? "").includes(SPIKE_KEY), "🔴 画面に鍵が出ない");
     await page.getByTestId(`ai-provider-field-model-${CAP}`).fill("fake-model-a");
     check((await page.getByTestId("ai-provider-models-notinlist").count()) === 0, "一覧にある名前では注意が出ない");
@@ -292,7 +294,7 @@ async function main(): Promise<void> {
     await page.getByTestId(`ai-provider-edit-${PROVIDER_ID}`).click();
     await page.getByTestId("ai-provider-models-error").waitFor({ state: "visible", timeout: 10_000 });
     check((await page.getByTestId("ai-provider-models-count").count()) === 0, "🔴 401 を成功（件数）と表示しない");
-    check((await page.locator("#ai-model-options option").count()) === 0, "失敗したら候補は空");
+    check((await page.locator("#ai-model-options-image-to-text option").count()) === 0, "失敗したら候補は空");
     check(!((await page.getByTestId("ai-panel").textContent()) ?? "").includes(SPIKE_KEY), "🔴 失敗表示にも鍵が出ない");
     fake.mode.value = "ok";
     await sleep(1200);
@@ -395,7 +397,7 @@ async function main(): Promise<void> {
     await pg.getByTestId("ai-provider-models-count").waitFor({ state: "visible", timeout: 10_000 });
     const c1 = await getCalls();
     check(c1.length === 1 && c1[0].host === "api.openai.com" && c1[0].path === "/v1/models" && c1[0].auth === `Bearer ${FORM_KEY}`, "鍵の欄を離れると 1 回だけ、公式ホストへ、入れた鍵で取りに行く", c1.map((c) => `${c.host}${c.path}`));
-    check(JSON.stringify(await pg.locator("#ai-model-options option").evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value))) === JSON.stringify(["stub-model-1", "stub-model-2"]), "候補に一覧が並ぶ");
+    check(JSON.stringify(await pg.locator("#ai-model-options-image-to-text option").evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value))) === JSON.stringify(["stub-model-1", "stub-model-2"]), "候補に一覧が並ぶ");
     await pg.getByTestId("ai-provider-field-apikey").focus();
     await pg.getByTestId("ai-provider-field-apikey").blur();
     await sleep(500);

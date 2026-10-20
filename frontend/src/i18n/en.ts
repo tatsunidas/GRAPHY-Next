@@ -3548,7 +3548,7 @@ export const en: Record<string, string> = {
   "settings.ai.models.retry": "Retry",
   "settings.ai.models.hint.edit": "For OpenAI-style providers and Gemini with a saved API key, names appear automatically. For Azure, type the deployment name.",
   "settings.ai.models.notInList": "A name that is not in the list is entered. That is fine for a newer model; otherwise check the spelling.",
-  "settings.ai.models.noCapability": "The list has names only; it cannot tell which models handle images (for image to image, choose an image-editing model).",
+  "settings.ai.models.noCapability": "Candidates are split into image and text models by name only, so a newer name may be missing; type it in that case (choose an image-editing model for image to image).",
   "settings.ai.test.verdict.manual": "The list cannot be fetched from this endpoint. Type the model name.",
 "settings.ai.provider.preset": "Provider",
   "settings.ai.provider.preset.choose": "Choose…",
