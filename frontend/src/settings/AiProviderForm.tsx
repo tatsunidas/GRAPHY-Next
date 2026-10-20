@@ -188,13 +188,17 @@ export function AiProviderForm({ draft: initial, isNew, capabilities, others, de
 
   // 一覧を取れるか。Azure は一覧の API が無い／公式以外の接続先は鍵を送れない（main が決める）ので手入力。
   const listable = isNew
-    ? (preset === "openai" || preset === "gemini") && !endpointCustom && apiKey.trim().length > 0
+    ? (preset === "openai" || preset === "gemini") && !endpointCustom
     : hasApiKey === true && draft.kind !== "azure-openai" && draft.pathStyle !== "azure-deployment";
+  /** 直近に一覧を取った鍵（新規のみ）。同じ鍵で何度も取らない。 */
+  const [fetchedKey, setFetchedKey] = useState<string | null>(null);
   const fetchModels = async () => {
     if (!d?.aiListModels) return;
+    const key = apiKey.trim();
+    if (isNew) setFetchedKey(key);
     setListState("loading");
     try {
-      const r = await d.aiListModels(isNew ? { kind: draft.kind, endpoint: draft.endpoint, apiKey: apiKey.trim() } : { providerId: draft.id });
+      const r = await d.aiListModels(isNew ? { kind: draft.kind, endpoint: draft.endpoint, apiKey: key } : { providerId: draft.id });
       if (r.ok) {
         setModelOptions(r.models);
         setListState("idle");
@@ -206,11 +210,22 @@ export function AiProviderForm({ draft: initial, isNew, capabilities, others, de
       setListState({ error: String(e) });
     }
   };
+  // 編集: 開いたときに自動で取る（保存済みの鍵がある場合だけ）。
+  useEffect(() => {
+    if (!isNew && listable) void fetchModels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // 新規: 鍵の欄から離れたときに取る。**入力の途中では送らない**（途中までの鍵を提供元へ送らない）。
+  const onKeyBlur = () => {
+    const key = apiKey.trim();
+    if (isNew && listable && key && key !== fetchedKey && listState !== "loading") void fetchModels();
+  };
 
   const choose = (key: PresetKey | "") => {
     setPreset(key);
     setModelOptions([]);
     setListState("idle");
+    setFetchedKey(null);
     setEndpointCustom(false);
     if (key) setDraft(presetDraft(key, others.map((x) => x.id), capabilities));
   };
@@ -270,7 +285,7 @@ export function AiProviderForm({ draft: initial, isNew, capabilities, others, de
       <Field label={t("settings.ai.provider.endpoint")}>
         {fixed && fixed.endpoint && !endpointCustom ? (
           <select style={{ ...input, maxWidth: 360 }} value={fixed.endpoint} data-testid="ai-provider-field-endpoint-select"
-                  onChange={(e) => { if (e.target.value === "__custom__") setEndpointCustom(true); }}>
+                  onChange={(e) => { if (e.target.value === "__custom__") { setEndpointCustom(true); setModelOptions([]); setListState("idle"); } }}>
             <option value={fixed.endpoint}>{fixed.endpoint}</option>
             <option value="__custom__">{t("settings.ai.provider.endpoint.custom")}</option>
           </select>
@@ -285,7 +300,7 @@ export function AiProviderForm({ draft: initial, isNew, capabilities, others, de
       {isNew ? (
         <>
           <Field label={t("settings.ai.key")}>
-            <input type="password" style={input} value={apiKey} onChange={(e) => setApiKey(e.target.value)}
+            <input type="password" style={input} value={apiKey} onChange={(e) => setApiKey(e.target.value)} onBlur={onKeyBlur}
                    spellCheck={false} autoComplete="off" data-testid="ai-provider-field-apikey" />
           </Field>
           <p style={helpBlock}>{t("settings.ai.provider.key.help")}</p>
@@ -308,17 +323,20 @@ export function AiProviderForm({ draft: initial, isNew, capabilities, others, de
       <datalist id="ai-model-options">
         {modelOptions.map((m) => <option key={m} value={m} />)}
       </datalist>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "2px 0 4px 148px", flexWrap: "wrap" }}>
-        <button style={btn} disabled={busy || !listable || listState === "loading"} onClick={() => void fetchModels()}
-                data-testid="ai-provider-models-fetch">
-          {listState === "loading" ? t("settings.ai.models.fetching") : t("settings.ai.models.fetch")}
-        </button>
-        {listState !== "idle" && listState !== "loading" ? (
-          <span style={{ ...helpInline, color: "#b00020" }} data-testid="ai-provider-models-error">{listState.error}</span>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 8, margin: "2px 0 4px 148px", flexWrap: "wrap", minHeight: 30 }}>
+        {listState === "loading" ? (
+          <span style={helpInline} data-testid="ai-provider-models-loading">{t("settings.ai.models.fetching")}</span>
+        ) : listState !== "idle" ? (
+          <>
+            <span style={{ ...helpInline, color: "#b00020" }} data-testid="ai-provider-models-error">{listState.error}</span>
+            <button style={smallLink} disabled={busy} onClick={() => void fetchModels()} data-testid="ai-provider-models-retry">
+              {t("settings.ai.models.retry")}
+            </button>
+          </>
         ) : modelOptions.length > 0 ? (
           <span style={helpInline} data-testid="ai-provider-models-count">{t("settings.ai.models.count", { n: modelOptions.length })}</span>
-        ) : !listable ? (
-          <span style={helpInline} data-testid="ai-provider-models-hint">{t(isNew ? "settings.ai.models.hint.new" : "settings.ai.models.hint.edit")}</span>
+        ) : !listable || isNew ? (
+          <span style={helpInline} data-testid="ai-provider-models-hint">{t(isNew && listable ? "settings.ai.models.hint.key" : isNew ? "settings.ai.models.hint.new" : "settings.ai.models.hint.edit")}</span>
         ) : null}
       </div>
       {modelOptions.length > 0 && Object.values(draft.models).some((m) => m.trim() && !modelOptions.includes(m.trim())) ? (
@@ -439,6 +457,9 @@ const helpInline: React.CSSProperties = { fontSize: 11, color: "#6b7785" };
 const helpBlock: React.CSSProperties = { fontSize: 11, color: "#6b7785", margin: "2px 0 8px 148px" };
 const err: React.CSSProperties = { fontSize: 11, color: "#b00020", margin: "0 0 4px 148px" };
 const errList: React.CSSProperties = { fontSize: 11, color: "#b00020", margin: "6px 0 0 148px", paddingLeft: 16 };
+const smallLink: React.CSSProperties = {
+  padding: 0, border: "none", background: "none", color: "#0b5cad", fontSize: 11, cursor: "pointer", textDecoration: "underline",
+};
 const btn: React.CSSProperties = {
   padding: "3px 10px", border: "1px solid #cdd5de", borderRadius: 3, background: "#fff", fontSize: 12, cursor: "pointer",
 };
